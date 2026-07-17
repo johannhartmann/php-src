@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 from validate_manifest import ManifestError, load_and_validate
 
@@ -99,16 +99,18 @@ def external_empty_artifact_dir(value: Path) -> Path:
     return artifact_dir
 
 
-def deterministic_environment(reference_php: Path) -> Dict[str, str]:
-    environment = os.environ.copy()
-    environment.update({
+def deterministic_environment(reference_php: Path, php_config_dir: Path) -> Dict[str, str]:
+    environment = {
         "LANG": "C",
         "LC_ALL": "C",
         "NO_INTERACTION": "1",
+        "PATH": os.defpath,
+        "PHPRC": str(php_config_dir),
+        "PHP_INI_SCAN_DIR": "",
         "REPORT_EXIT_STATUS": "1",
         "TEST_PHP_EXECUTABLE": str(reference_php),
         "TZ": "UTC",
-    })
+    }
     return environment
 
 
@@ -122,12 +124,16 @@ def required_capabilities(manifest: Mapping[str, Any]) -> Tuple[List[str], bool]
     return extensions, require_zts
 
 
-def verify_capabilities(reference_php: Path, manifest: Mapping[str, Any]) -> Dict[str, Any]:
+def verify_capabilities(
+    reference_php: Path,
+    manifest: Mapping[str, Any],
+    environment: Mapping[str, str],
+) -> Dict[str, Any]:
     extensions, require_zts = required_capabilities(manifest)
     completed = subprocess.run(
         [str(reference_php), "-n", "-r", CAPABILITY_SCRIPT, json.dumps(extensions)],
         cwd=str(REPOSITORY_ROOT),
-        env=deterministic_environment(reference_php),
+        env=dict(environment),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
@@ -208,15 +214,59 @@ def phpt_fixture_paths(manifest: Mapping[str, Any]) -> List[str]:
     })
 
 
+def semantic_input_paths(manifest: Mapping[str, Any]) -> List[Path]:
+    inputs = {
+        REPOSITORY_ROOT / fixture["source_path"]
+        for fixture in manifest["fixtures"]
+    }
+    corpus_root = Path(__file__).with_name("corpus")
+    inputs.update(path for path in corpus_root.rglob("*") if path.is_file())
+    return sorted(inputs, key=lambda path: path.relative_to(REPOSITORY_ROOT).as_posix().encode("utf-8"))
+
+
+def repository_identity(environment: Mapping[str, str]) -> Dict[str, Any]:
+    commit = subprocess.run(
+        ["git", "-C", str(REPOSITORY_ROOT), "rev-parse", "HEAD"],
+        env=dict(environment),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        text=True,
+        timeout=10,
+    )
+    status = subprocess.run(
+        [
+            "git", "-C", str(REPOSITORY_ROOT), "status", "--porcelain=v1",
+            "--untracked-files=all", "--", "tests/native/semantics",
+        ],
+        env=dict(environment),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        text=True,
+        timeout=10,
+    )
+    if commit.returncode != 0 or status.returncode != 0:
+        raise CaptureError("unable to capture semantic corpus Git identity")
+    status_lines = status.stdout.splitlines()
+    return {
+        "commit": commit.stdout.strip(),
+        "dirty": bool(status_lines),
+        "status": status_lines,
+    }
+
+
 def capture(reference_php_value: str, artifact_dir_value: Path) -> Path:
     reference_php = explicit_executable(reference_php_value)
     artifact_dir = external_empty_artifact_dir(artifact_dir_value)
+    php_config_dir = artifact_dir / "php-config"
+    php_config_dir.mkdir()
+    environment = deterministic_environment(reference_php, php_config_dir)
     try:
         manifest = load_and_validate(MANIFEST_PATH, REPOSITORY_ROOT)
     except (OSError, json.JSONDecodeError, ManifestError) as error:
         raise CaptureError("semantic manifest is invalid: {}".format(error))
-    capabilities = verify_capabilities(reference_php, manifest)
-    environment = deterministic_environment(reference_php)
+    capabilities = verify_capabilities(reference_php, manifest, environment)
 
     binary_manifest = artifact_dir / "reference-binary-manifest.json"
     run_checked([
@@ -244,14 +294,7 @@ def capture(reference_php_value: str, artifact_dir_value: Path) -> Path:
         "binary_manifest": "reference-binary-manifest.json",
         "capabilities": capabilities,
         "command": phpt_command,
-        "deterministic_environment": {
-            "LANG": "C",
-            "LC_ALL": "C",
-            "NO_INTERACTION": "1",
-            "REPORT_EXIT_STATUS": "1",
-            "TEST_PHP_EXECUTABLE": str(reference_php),
-            "TZ": "UTC",
-        },
+        "deterministic_environment": dict(sorted(environment.items())),
         "duration_ns": phpt_process["duration_ns"],
         "fixture_count": len(phpt_paths),
         "fixtures": phpt_paths,
@@ -289,12 +332,14 @@ def capture(reference_php_value: str, artifact_dir_value: Path) -> Path:
     bundle_index = {
         "artifacts": [file_record(path, artifact_dir) for path in payloads],
         "format_version": "1.0.0",
+        "inputs": [file_record(path, REPOSITORY_ROOT) for path in semantic_input_paths(manifest)],
         "manifest": {
             "path": MANIFEST_PATH.relative_to(REPOSITORY_ROOT).as_posix(),
             "sha256": sha256_file(MANIFEST_PATH),
         },
         "purpose": "reference determinism and provenance evidence; not native equivalence",
         "reference_binary": str(reference_php),
+        "repository": repository_identity(environment),
         "result_type": "w01_semantic_reference_bundle",
     }
     bundle_index_path = artifact_dir / "bundle-index.json"
