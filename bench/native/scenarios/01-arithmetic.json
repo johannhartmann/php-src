@@ -1,0 +1,11 @@
+{
+  "config": {
+    "iterations": 2000
+  },
+  "expected_checksum": "9b6fac42d8e5f4885dede61e05b831b52d85e9824b5ae86df7e537ce9d0c2a77",
+  "php_file": "php/arithmetic.php",
+  "scenario_id": "arithmetic_loop",
+  "schema_version": 1,
+  "title": "Integer and double arithmetic loop",
+  "warmup_calls": 2
+}

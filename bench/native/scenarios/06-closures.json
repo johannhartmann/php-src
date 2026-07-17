@@ -1,0 +1,11 @@
+{
+  "config": {
+    "iterations": 600
+  },
+  "expected_checksum": "51ca43e81ee4fbc22ee8050bb30a211f8bfdf8321f040c1c8620800bff82f945",
+  "php_file": "php/closures.php",
+  "scenario_id": "closure_callback",
+  "schema_version": 1,
+  "title": "Closure capture and callback invocation",
+  "warmup_calls": 2
+}

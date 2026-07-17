@@ -1,0 +1,11 @@
+{
+  "config": {
+    "iterations": 1000
+  },
+  "expected_checksum": "8633931b313915d44657aae1b57e22f43c1a673b04221f5205bd45ae43247df2",
+  "php_file": "php/dynamic_calls.php",
+  "scenario_id": "dynamic_function_call",
+  "schema_version": 1,
+  "title": "Dynamic function calls",
+  "warmup_calls": 2
+}

@@ -1,0 +1,11 @@
+{
+  "config": {
+    "iterations": 500
+  },
+  "expected_checksum": "40a71d22672dea6fa7ab7c9b2f5a00d9d1bfcdc0572013498c091406adcc7bf1",
+  "php_file": "php/arrays.php",
+  "scenario_id": "packed_hash_arrays",
+  "schema_version": 1,
+  "title": "Packed and hash-like arrays",
+  "warmup_calls": 2
+}

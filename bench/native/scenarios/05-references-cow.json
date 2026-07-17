@@ -1,0 +1,11 @@
+{
+  "config": {
+    "iterations": 400
+  },
+  "expected_checksum": "eb1d92160a3389985f1e834382ddc271e78ef43da3bfbe78c99691d99a227d09",
+  "php_file": "php/references_cow.php",
+  "scenario_id": "references_copy_on_write",
+  "schema_version": 1,
+  "title": "References and array copy-on-write",
+  "warmup_calls": 2
+}

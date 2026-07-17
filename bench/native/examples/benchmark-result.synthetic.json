@@ -1,0 +1,54 @@
+{
+  "result_type": "benchmark_result",
+  "run_manifest": {
+    "binary": {
+      "binary": {"canonical_path": "/synthetic/php", "elf_build_id": {"source": null, "unsupported_reason": "synthetic", "value": null}, "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "size_bytes": 1},
+      "generated_at_utc": "1970-01-01T00:00:00Z",
+      "host": {"platform": "synthetic; not measured"},
+      "php": {
+        "facts": {"architecture": "x86_64", "debug": false, "opcache_loaded": false, "php_version": "synthetic", "thread_safety": "NTS", "zend_version": "synthetic"},
+        "info": {"Server API": "Command Line Interface"},
+        "version_command": {
+          "argv": ["/synthetic/php", "-v"],
+          "duration_ns": 0,
+          "stderr": {"base64": "", "length": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+          "stdout": {"base64": "", "length": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+          "termination": {"exit_code": 0, "kind": "exit", "signal": null, "timeout": false}
+        }
+      },
+      "provenance": {"commit": "0000000000000000000000000000000000000000", "dirty": false, "reason": null, "repository_root": "/synthetic"},
+      "result_type": "binary_manifest",
+      "schema_version": 1
+    },
+    "configuration": {"repetitions": 1, "run_mode": "synthetic", "scenario_count": 1, "steady_state_calls": 0, "timeout_seconds": 1},
+    "generated_at_utc": "1970-01-01T00:00:00Z",
+    "host": {"platform": "synthetic; not measured"}
+  },
+  "scenarios": [
+    {
+      "aggregate": {"call_ns": {"count": 10, "max": 0, "median": 0, "min": 0, "p90": 0, "p95": 0}},
+      "code_size": {"binary_bytes": 1, "binary_source": "synthetic", "elf_text": {"bytes": null, "source": null, "unsupported_reason": "synthetic"}},
+      "descriptor": "synthetic.json",
+      "native_code_size": {"bytes": null, "source": null, "unsupported_reason": "W00 has no native engine code-size source"},
+      "samples": [
+        {
+          "call_ns": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+          "compile_phase": null,
+          "compile_phase_unsupported_reason": "synthetic",
+          "opcache": {"after_calls": null, "before_calls": null, "source": null},
+          "process": {"max_rss_bytes": 0, "metric_scope": "synthetic", "metric_sources": {}, "system_ns": 0, "user_ns": 0, "wall_ns": 0},
+          "repetition": 1,
+          "result_checksum": "0000000000000000000000000000000000000000000000000000000000000000",
+          "steady_state_ns": []
+        }
+      ],
+      "scenario_id": "synthetic",
+      "title": "Synthetic shape example; not measured",
+      "warmup": {"calls": 0, "config": {}}
+    }
+  ],
+  "schema_version": 1,
+  "summary": {"failed": 0, "samples": 1, "scenarios": 1, "status": "synthetic"},
+  "synthetic": true,
+  "volatile_fields": []
+}

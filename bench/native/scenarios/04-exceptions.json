@@ -1,0 +1,11 @@
+{
+  "config": {
+    "iterations": 250
+  },
+  "expected_checksum": "a8d4a7c5111476ef31def0f1dccdfec625d901568ede858e69230074f95fdd9d",
+  "php_file": "php/exceptions.php",
+  "scenario_id": "exceptions_finally",
+  "schema_version": 1,
+  "title": "Normal and thrown exception paths with finally",
+  "warmup_calls": 1
+}

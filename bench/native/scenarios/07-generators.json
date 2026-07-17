@@ -1,0 +1,11 @@
+{
+  "config": {
+    "iterations": 300
+  },
+  "expected_checksum": "549e7a569d4327243c92dbdc2d22ac55ee81c071f84865898bb8e19380fb1ec0",
+  "php_file": "php/generators.php",
+  "scenario_id": "generator_resume",
+  "schema_version": 1,
+  "title": "Generator yield and resume",
+  "warmup_calls": 2
+}

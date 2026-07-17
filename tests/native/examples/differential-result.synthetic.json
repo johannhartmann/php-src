@@ -1,0 +1,32 @@
+{
+  "binaries": {"candidate": "/synthetic/php", "reference": "/synthetic/php"},
+  "cases": [
+    {
+      "candidate": {
+        "duration_ns": 0,
+        "stderr": {"artifact": "artifacts/example.candidate.stderr.bin", "length": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+        "stdout": {"artifact": "artifacts/example.candidate.stdout.bin", "length": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+        "termination": {"exit_code": 0, "kind": "exit", "signal": null, "timeout": false}
+      },
+      "case_id": "example.php",
+      "differences": [],
+      "fixture": "example.php",
+      "reference": {
+        "duration_ns": 0,
+        "stderr": {"artifact": "artifacts/example.reference.stderr.bin", "length": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+        "stdout": {"artifact": "artifacts/example.reference.stdout.bin", "length": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+        "termination": {"exit_code": 0, "kind": "exit", "signal": null, "timeout": false}
+      },
+      "status": "EQUIVALENT"
+    }
+  ],
+  "comparison": {"normalization": {"enabled": false, "rules": []}, "outputs": "byte_exact"},
+  "exit_code": 0,
+  "generated_at_utc": "1970-01-01T00:00:00Z",
+  "overall_status": "equivalent",
+  "result_type": "differential_result",
+  "schema_version": 1,
+  "summary": {"different": 0, "equivalent": 1, "harness_error": 0, "timeout": 0, "total": 1},
+  "synthetic": true,
+  "volatile_fields": []
+}
