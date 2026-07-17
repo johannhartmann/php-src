@@ -1,0 +1,43 @@
+{
+  "acceptance_criteria": [
+    {
+      "criterion_id": "schema-selftest",
+      "description": "Valid and invalid fixtures exercise the structural validator.",
+      "status": "pass"
+    }
+  ],
+  "actual_base_commit": "47355da494ba696b1bdb6d10448a225e742bd316",
+  "blockers": [],
+  "branch": "fixture/w00-d",
+  "changed_paths": [
+    "docs/native-engine/waves/waves.json",
+    "scripts/native/wave-gate.py"
+  ],
+  "expected_base_commit": "47355da494ba696b1bdb6d10448a225e742bd316",
+  "format_version": "1.0.0",
+  "gate_evidence": [
+    {
+      "artifact": {"kind": "ci", "reference": "fixture-artifact/schema-selftest"},
+      "format_version": "1.0.0",
+      "gate_id": "W00-D-schema-selftest",
+      "status": "pass",
+      "summary": "Definition, result, evidence, and summary structures passed self-tests.",
+      "wave_id": "W00"
+    }
+  ],
+  "head_commit": "dddddddddddddddddddddddddddddddddddddddd",
+  "risks": [],
+  "status": "pass",
+  "task_id": "W00-D-schema-selftest",
+  "tests": [
+    {
+      "artifact": {"kind": "local", "reference": "artifacts/w00-d/unittest.log"},
+      "command": "python3 -m unittest discover -s docs/native-engine/waves/tests",
+      "duration_ms": 320,
+      "exit_code": 0,
+      "status": "pass"
+    }
+  ],
+  "timestamp": "2026-07-17T08:03:00Z",
+  "worktree_clean": true
+}

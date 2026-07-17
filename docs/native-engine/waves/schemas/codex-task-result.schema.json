@@ -1,0 +1,124 @@
+{
+  "$id": "https://php.net/schemas/native-engine/codex-task-result-1.0.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "acceptance_criteria": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "criterion_id": {"minLength": 1, "type": "string"},
+          "description": {"minLength": 1, "type": "string"},
+          "status": {"$ref": "#/$defs/status"}
+        },
+        "required": ["criterion_id", "description", "status"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "actual_base_commit": {"$ref": "#/$defs/commit"},
+    "blockers": {"items": {"minLength": 1, "type": "string"}, "type": "array"},
+    "branch": {"minLength": 1, "type": "string"},
+    "changed_paths": {"items": {"$ref": "#/$defs/relativePath"}, "type": "array"},
+    "expected_base_commit": {"$ref": "#/$defs/commit"},
+    "format_version": {"const": "1.0.0"},
+    "gate_evidence": {
+      "items": {"$ref": "#/$defs/gateEvidence"},
+      "type": "array"
+    },
+    "head_commit": {
+      "oneOf": [
+        {"$ref": "#/$defs/commit"},
+        {"type": "null"}
+      ]
+    },
+    "risks": {"items": {"minLength": 1, "type": "string"}, "type": "array"},
+    "status": {"$ref": "#/$defs/status"},
+    "task_id": {
+      "pattern": "^W(?:0[0-9]|1[0-8])-[A-Za-z0-9][A-Za-z0-9-]*$",
+      "type": "string"
+    },
+    "tests": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact": {"$ref": "#/$defs/artifact"},
+          "command": {"minLength": 1, "type": "string"},
+          "duration_ms": {"minimum": 0, "type": ["integer", "null"]},
+          "exit_code": {"type": ["integer", "null"]},
+          "status": {"$ref": "#/$defs/status"}
+        },
+        "required": ["command", "status", "exit_code", "duration_ms", "artifact"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "timestamp": {"format": "date-time", "type": "string"},
+    "worktree_clean": {"type": "boolean"}
+  },
+  "required": [
+    "format_version",
+    "task_id",
+    "status",
+    "expected_base_commit",
+    "actual_base_commit",
+    "head_commit",
+    "branch",
+    "changed_paths",
+    "tests",
+    "acceptance_criteria",
+    "gate_evidence",
+    "risks",
+    "blockers",
+    "worktree_clean",
+    "timestamp"
+  ],
+  "title": "Codex native-engine task result",
+  "type": "object",
+  "$defs": {
+    "artifact": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "local"}}, "required": ["kind"]},
+          "then": {
+            "properties": {
+              "reference": {
+                "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$)).+$"
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "kind": {"enum": ["local", "ci"]},
+        "reference": {"minLength": 1, "type": "string"}
+      },
+      "required": ["kind", "reference"],
+      "type": "object"
+    },
+    "commit": {"pattern": "^[0-9a-f]{40}$", "type": "string"},
+    "gateEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {"$ref": "#/$defs/artifact"},
+        "format_version": {"const": "1.0.0"},
+        "gate_id": {
+          "pattern": "^W(?:0[0-9]|1[0-8])-[A-Za-z0-9][A-Za-z0-9-]*$",
+          "type": "string"
+        },
+        "status": {"$ref": "#/$defs/status"},
+        "summary": {"minLength": 1, "type": "string"},
+        "wave_id": {"pattern": "^W(?:0[0-9]|1[0-8])$", "type": "string"}
+      },
+      "required": ["format_version", "wave_id", "gate_id", "status", "summary", "artifact"],
+      "type": "object"
+    },
+    "relativePath": {
+      "minLength": 1,
+      "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$)).+$",
+      "type": "string"
+    },
+    "status": {"enum": ["pending", "running", "pass", "fail", "blocked", "skipped"]}
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "acceptance_criteria": [
+    {
+      "criterion_id": "debug-nts-built",
+      "description": "Debug NTS build and smoke tests passed.",
+      "status": "pass"
+    }
+  ],
+  "actual_base_commit": "47355da494ba696b1bdb6d10448a225e742bd316",
+  "blockers": [],
+  "branch": "fixture/w00-b",
+  "changed_paths": ["scripts/native/build.sh"],
+  "expected_base_commit": "47355da494ba696b1bdb6d10448a225e742bd316",
+  "format_version": "1.0.0",
+  "gate_evidence": [
+    {
+      "artifact": {"kind": "ci", "reference": "fixture-artifact/debug-nts-manifest"},
+      "format_version": "1.0.0",
+      "gate_id": "W00-B-build-debug-nts",
+      "status": "pass",
+      "summary": "Debug NTS build manifest and smoke summary are parseable.",
+      "wave_id": "W00"
+    }
+  ],
+  "head_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "risks": [],
+  "status": "pass",
+  "task_id": "W00-B-build-debug-nts",
+  "tests": [
+    {
+      "artifact": {"kind": "local", "reference": "artifacts/w00-b/debug-nts-smoke.json"},
+      "command": "scripts/native/test-smoke.sh --profile debug-nts",
+      "duration_ms": 42000,
+      "exit_code": 0,
+      "status": "pass"
+    }
+  ],
+  "timestamp": "2026-07-17T08:01:00Z",
+  "worktree_clean": true
+}

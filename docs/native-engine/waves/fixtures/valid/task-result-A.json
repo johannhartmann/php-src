@@ -1,0 +1,43 @@
+{
+  "acceptance_criteria": [
+    {
+      "criterion_id": "contracts-reviewed",
+      "description": "Repository contracts are present and independently reviewed.",
+      "status": "pass"
+    }
+  ],
+  "actual_base_commit": "47355da494ba696b1bdb6d10448a225e742bd316",
+  "blockers": [],
+  "branch": "fixture/w00-a",
+  "changed_paths": [
+    "AGENTS.md",
+    "docs/native-engine/README.md"
+  ],
+  "expected_base_commit": "47355da494ba696b1bdb6d10448a225e742bd316",
+  "format_version": "1.0.0",
+  "gate_evidence": [
+    {
+      "artifact": {"kind": "ci", "reference": "fixture-artifact/w00-a-review"},
+      "format_version": "1.0.0",
+      "gate_id": "W00-A-repository-contracts",
+      "status": "pass",
+      "summary": "Contract link and scope checks passed.",
+      "wave_id": "W00"
+    }
+  ],
+  "head_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "risks": [],
+  "status": "pass",
+  "task_id": "W00-A-repository-contracts",
+  "tests": [
+    {
+      "artifact": {"kind": "local", "reference": "artifacts/w00-a/link-check.log"},
+      "command": "python3 docs/native-engine/check-links.py",
+      "duration_ms": 125,
+      "exit_code": 0,
+      "status": "pass"
+    }
+  ],
+  "timestamp": "2026-07-17T08:00:00Z",
+  "worktree_clean": true
+}
