@@ -13,7 +13,7 @@ before the production arena exists.
 
 ## Decision
 
-ZNMIR has one target-neutral internal C contract at version 1.0. Module,
+ZNMIR has one target-neutral internal C contract at version 1.1. Module,
 function, block, instruction, value, and frame-state storage stays opaque.
 Consumers use immutable record snapshots through `zend_mir_view`; construction
 uses `zend_mir_mutator`. Allocation is supplied by a context-bearing vtable and
@@ -67,6 +67,11 @@ frame-state, source-position, cleanup, continuation, resume, and diagnostic
 locations contain IDs and scalar values only. No persistent identity contains
 a raw pointer.
 
+Version 1.1 adds an independent source-map record. It associates a stable
+source-position ID and op-array ID with an opline index, opline phase, and
+owning frame-state ID. The table contains neither a generated-code location
+nor a process address, and it does not alter the canonical 1.0 MIR text form.
+
 A fixed-array fixture host implements the frozen callbacks under
 `tests/native/mir/contracts`. It is test-only, has finite capacities, returns
 failure without partial mutation, and provides neither execution semantics nor
@@ -75,7 +80,8 @@ opcode dispatch.
 ## Decisions introduced beyond W01
 
 - The 32-bit invalid sentinel, high-bit value namespace, and exact maxima.
-- Contract version 1.0 and the same-major/additive-minor compatibility rule.
+- Contract version 1.1 and the same-major/additive-minor compatibility rule;
+  1.1 adds the stable source-map view and mutator table.
 - The minimal core opcode and target-neutral representation catalogs.
 - The tagged target-neutral constant pool and CFG/PHI ordering rules.
 - Allocator, immutable view, controlled mutator, and opaque storage boundaries.

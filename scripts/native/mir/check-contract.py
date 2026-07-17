@@ -102,6 +102,7 @@ INVALID_ENUM_CONSTANTS = (
 SERIALIZABLE_STRUCTS = (
     "zend_mir_span",
     "zend_mir_source_position_ref",
+    "zend_mir_source_map_ref",
     "zend_mir_frame_slot_ref",
     "zend_mir_cleanup_ref",
     "zend_mir_continuation_ref",
