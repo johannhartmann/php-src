@@ -65,6 +65,21 @@ W00 passes only when all required IDs in `waves.json` pass. They cover repositor
 
 The AArch64 runner is optional in W00 and becomes a later platform gate. Linux/ELF x86-64 is the primary W00 platform.
 
+## W01 hard gate
+
+W01 passes only when all seven required semantic-contract results pass. Every
+executable Zend opcode must be catalogued exactly once with a conservative
+effect and ownership description; the accepted frame, safepoint, bailout, and
+resume contracts must cover every observable boundary; and every pinned TPDE
+gap must have a source-backed classification. Each required opcode family must
+also have deterministic semantic-oracle evidence.
+
+References, exceptions, and destructors may not contain unresolved semantic
+placeholders. Missing A--E results, unregistered cross-track identifiers,
+unresolved critical blockers, or a missing integration result prevent W01 from
+passing. W01 inventories and freezes contracts only; it must not change PHP
+runtime semantics, the public ABI, or the build system.
+
 ## Codex and CI result capture
 
 Codex event output and the final task result are different artifacts. Capture the JSONL event stream for execution diagnostics while writing the schema-constrained final response separately:
