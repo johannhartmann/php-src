@@ -1,0 +1,62 @@
+{
+  "$id": "https://php.net/schemas/native/differential-result-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "binaries": {"type": "object"},
+    "cases": {
+      "items": {
+        "properties": {
+          "candidate": {"$ref": "#/$defs/process"},
+          "case_id": {"minLength": 1, "type": "string"},
+          "differences": {"items": {"enum": ["stdout", "stderr", "termination"]}, "uniqueItems": true, "type": "array"},
+          "fixture": {"type": "string"},
+          "reference": {"$ref": "#/$defs/process"},
+          "status": {"enum": ["EQUIVALENT", "DIFFERENT", "TIMEOUT", "HARNESS_ERROR"]}
+        },
+        "required": ["candidate", "case_id", "differences", "fixture", "reference", "status"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "comparison": {"type": "object"},
+    "exit_code": {"enum": [0, 1, 2, 3]},
+    "generated_at_utc": {"format": "date-time", "type": "string"},
+    "overall_status": {"enum": ["equivalent", "different", "timeout", "harness_error"]},
+    "result_type": {"const": "differential_result"},
+    "schema_version": {"const": 1},
+    "summary": {"type": "object"}
+  },
+  "required": ["cases", "exit_code", "generated_at_utc", "overall_status", "result_type", "schema_version", "summary"],
+  "type": "object",
+  "$defs": {
+    "process": {
+      "properties": {
+        "duration_ns": {"minimum": 0, "type": "integer"},
+        "stderr": {"$ref": "#/$defs/rawArtifact"},
+        "stdout": {"$ref": "#/$defs/rawArtifact"},
+        "termination": {"$ref": "#/$defs/termination"}
+      },
+      "required": ["duration_ns", "stderr", "stdout", "termination"],
+      "type": "object"
+    },
+    "rawArtifact": {
+      "properties": {
+        "artifact": {"type": "string"},
+        "length": {"minimum": 0, "type": "integer"},
+        "sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"}
+      },
+      "required": ["artifact", "length", "sha256"],
+      "type": "object"
+    },
+    "termination": {
+      "properties": {
+        "exit_code": {"type": ["integer", "null"]},
+        "kind": {"enum": ["exit", "signal", "timeout"]},
+        "signal": {"type": ["integer", "null"]},
+        "timeout": {"type": "boolean"}
+      },
+      "required": ["exit_code", "kind", "signal", "timeout"],
+      "type": "object"
+    }
+  }
+}

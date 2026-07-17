@@ -1,0 +1,47 @@
+{
+  "binary": {
+    "canonical_path": "/synthetic/php",
+    "elf_build_id": {"source": null, "unsupported_reason": "synthetic", "value": null},
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "size_bytes": 1
+  },
+  "generated_at_utc": "1970-01-01T00:00:00Z",
+  "host": {
+    "cpu": {"logical_count": 1, "model": "synthetic"},
+    "kernel": {"machine": "x86_64", "release": "synthetic", "system": "Linux", "version": "synthetic"},
+    "platform": "synthetic; not a measured baseline"
+  },
+  "php": {
+    "facts": {
+      "architecture": "x86_64",
+      "debug": false,
+      "integer_size_bytes": 8,
+      "opcache_enable_cli": "0",
+      "opcache_loaded": false,
+      "os_family": "Linux",
+      "php_binary": "/synthetic/php",
+      "php_sapi": "cli",
+      "php_version": "0.0.0-synthetic",
+      "thread_safety": "NTS",
+      "zend_version": "0.0.0-synthetic"
+    },
+    "info": {"Server API": "Command Line Interface"},
+    "version_command": {
+      "argv": ["/synthetic/php", "-v"],
+      "duration_ns": 0,
+      "stderr": {"base64": "", "length": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+      "stdout": {"base64": "", "length": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+      "termination": {"exit_code": 0, "kind": "exit", "signal": null, "timeout": false}
+    }
+  },
+  "provenance": {
+    "commit": "0000000000000000000000000000000000000000",
+    "dirty": false,
+    "reason": null,
+    "repository_root": "/synthetic"
+  },
+  "result_type": "binary_manifest",
+  "schema_version": 1,
+  "synthetic": true,
+  "volatile_fields": []
+}

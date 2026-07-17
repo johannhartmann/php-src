@@ -1,0 +1,85 @@
+{
+  "$id": "https://php.net/schemas/native/binary-manifest-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "binary": {
+      "additionalProperties": false,
+      "properties": {
+        "canonical_path": {"minLength": 1, "type": "string"},
+        "elf_build_id": {
+          "properties": {
+            "source": {"type": ["string", "null"]},
+            "unsupported_reason": {"type": ["string", "null"]},
+            "value": {"type": ["string", "null"]}
+          },
+          "required": ["source", "unsupported_reason", "value"],
+          "type": "object"
+        },
+        "sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+        "size_bytes": {"minimum": 1, "type": "integer"}
+      },
+      "required": ["canonical_path", "elf_build_id", "sha256", "size_bytes"],
+      "type": "object"
+    },
+    "generated_at_utc": {"format": "date-time", "type": "string"},
+    "host": {"type": "object"},
+    "php": {
+      "properties": {
+        "facts": {
+          "properties": {
+            "architecture": {"type": "string"},
+            "debug": {"type": "boolean"},
+            "opcache_loaded": {"type": "boolean"},
+            "php_version": {"type": "string"},
+            "thread_safety": {"enum": ["NTS", "ZTS"]},
+            "zend_version": {"type": "string"}
+          },
+          "required": ["architecture", "debug", "opcache_loaded", "php_version", "thread_safety", "zend_version"],
+          "type": "object"
+        },
+        "info": {"additionalProperties": {"type": "string"}, "type": "object"},
+        "version_command": {"$ref": "#/$defs/commandCapture"}
+      },
+      "required": ["facts", "info", "version_command"],
+      "type": "object"
+    },
+    "provenance": {
+      "properties": {
+        "commit": {"oneOf": [{"pattern": "^[0-9a-f]{40,64}$", "type": "string"}, {"type": "null"}]},
+        "dirty": {"type": ["boolean", "null"]},
+        "reason": {"type": ["string", "null"]},
+        "repository_root": {"type": ["string", "null"]}
+      },
+      "required": ["commit", "dirty", "reason", "repository_root"],
+      "type": "object"
+    },
+    "result_type": {"const": "binary_manifest"},
+    "schema_version": {"const": 1},
+    "volatile_fields": {"items": {"type": "string"}, "type": "array"}
+  },
+  "required": ["binary", "generated_at_utc", "host", "php", "provenance", "result_type", "schema_version"],
+  "type": "object",
+  "$defs": {
+    "commandCapture": {
+      "properties": {
+        "argv": {"items": {"type": "string"}, "type": "array"},
+        "duration_ns": {"minimum": 0, "type": "integer"},
+        "stderr": {"$ref": "#/$defs/rawBytes"},
+        "stdout": {"$ref": "#/$defs/rawBytes"},
+        "termination": {"type": "object"}
+      },
+      "required": ["argv", "duration_ns", "stderr", "stdout", "termination"],
+      "type": "object"
+    },
+    "rawBytes": {
+      "properties": {
+        "base64": {"type": "string"},
+        "length": {"minimum": 0, "type": "integer"},
+        "sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"}
+      },
+      "required": ["length", "sha256"],
+      "type": "object"
+    }
+  }
+}
