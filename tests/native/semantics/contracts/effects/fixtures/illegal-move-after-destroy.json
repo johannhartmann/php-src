@@ -1,0 +1,11 @@
+{
+  "id": "illegal-move-after-destroy",
+  "operations": [
+    {
+      "op": "append",
+      "path": ["ownership_actions", "move", "allowed_from"],
+      "value": "destroyed"
+    }
+  ],
+  "expected_error": "action move: terminal revival"
+}

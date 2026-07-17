@@ -1,0 +1,11 @@
+{
+  "id": "unregistered-memory-domain",
+  "operations": [
+    {
+      "op": "append",
+      "path": ["ownership_actions", "cow_separate", "writes"],
+      "value": "heap.unregistered"
+    }
+  ],
+  "expected_error": "action cow_separate writes: unresolved IDs"
+}
