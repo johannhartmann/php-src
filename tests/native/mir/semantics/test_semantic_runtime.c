@@ -37,6 +37,13 @@ static int test_effect_closure(void)
 	CHECK(!summary.modeled);
 	CHECK(!zend_mir_effect_summary_is_pure(&summary));
 	CHECK(summary.effects == UINT16_C(0x7fff));
+	CHECK(summary.reads == UINT32_C(0x000fffff));
+	CHECK(summary.writes == UINT32_C(0x000fffff));
+	CHECK(summary.barriers == UINT8_C(0xff));
+	CHECK(summary.predicates == UINT8_C(0x7f));
+	CHECK(summary.ownership_actions == UINT16_C(0x03ff));
+	CHECK(summary.applied_rules == UINT16_C(0x07ff));
+	CHECK(!summary.normal_return);
 	CHECK(!zend_mir_effect_summary_from_effect(ZEND_MIR_EFFECT_CALL_INTERNAL, &summary));
 	CHECK(!summary.modeled);
 
@@ -47,11 +54,25 @@ static int test_effect_closure(void)
 	CHECK((summary.effects & ZEND_MIR_EFFECT_MASK(ZEND_MIR_EFFECT_THROW)) != 0);
 	CHECK((summary.effects & ZEND_MIR_EFFECT_MASK(ZEND_MIR_EFFECT_OBSERVE_FRAME)) != 0);
 	CHECK((summary.barriers & ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_DESTRUCTOR)) != 0);
+	CHECK((summary.applied_rules
+		& ZEND_MIR_COMPOSITION_RULE_MASK(
+			ZEND_MIR_COMPOSITION_RULE_EXCEPTION_CLEANUP_ORDER)) != 0);
 
 	CHECK(zend_mir_effect_summary_from_effect(ZEND_MIR_EFFECT_CALL_PHP, &summary));
 	CHECK((summary.effects & ZEND_MIR_EFFECT_MASK(ZEND_MIR_EFFECT_REENTER_PHP)) != 0);
 	CHECK((summary.effects & ZEND_MIR_EFFECT_MASK(ZEND_MIR_EFFECT_THROW)) != 0);
 	CHECK((summary.barriers & ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_REENTRANCY)) != 0);
+
+	CHECK(zend_mir_effect_summary_init(&summary, 0, 0, 0, 0,
+		ZEND_MIR_PREDICATE_MASK(ZEND_MIR_PREDICATE_MAY_INVOKE_MAGIC), 0));
+	CHECK((summary.applied_rules
+		& ZEND_MIR_COMPOSITION_RULE_MASK(
+			ZEND_MIR_COMPOSITION_RULE_MAGIC_HANDLER_CLOSURE)) != 0);
+	CHECK((summary.applied_rules
+		& ZEND_MIR_COMPOSITION_RULE_MASK(
+			ZEND_MIR_COMPOSITION_RULE_PHP_CALL_CLOSURE)) != 0);
+	CHECK((summary.writes
+		& ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_RUNTIME_CACHE)) != 0);
 
 	CHECK(zend_mir_effect_summary_init(&summary, 0, 0, 0, 0,
 		ZEND_MIR_PREDICATE_MASK(ZEND_MIR_PREDICATE_MAY_OBSERVE_FRAME)
@@ -79,6 +100,33 @@ static int test_effect_closure(void)
 
 	CHECK(!zend_mir_effect_summary_init(&summary, UINT16_C(0x8000), 0, 0, 0, 0, 0));
 	CHECK(!summary.modeled);
+	CHECK(!zend_mir_effect_summary_init(&summary, 0, UINT32_C(0x00100000),
+		0, 0, 0, 0));
+	CHECK(!summary.modeled);
+	CHECK(!zend_mir_effect_summary_init(&summary, 0, 0,
+		UINT32_C(0x00100000), 0, 0, 0));
+	CHECK(!summary.modeled);
+	CHECK(!zend_mir_effect_summary_init(&summary, 0, 0, 0, 0,
+		UINT8_C(0x80), 0));
+	CHECK(!summary.modeled);
+	CHECK(!zend_mir_effect_summary_init(&summary, 0, 0, 0, 0, 0,
+		UINT16_C(0x0400)));
+	CHECK(!summary.modeled);
+
+	/*
+	 * A caller-provided applied_rules bitmap must not suppress closure.
+	 * close() recomputes the bitmap and restores every omitted implication.
+	 */
+	zend_mir_effect_summary_empty(&summary);
+	summary.effects = ZEND_MIR_EFFECT_MASK(ZEND_MIR_EFFECT_CALL_PHP);
+	summary.applied_rules =
+		ZEND_MIR_COMPOSITION_RULE_MASK(ZEND_MIR_COMPOSITION_RULE_PHP_CALL_CLOSURE);
+	CHECK(zend_mir_effect_summary_close(&summary));
+	CHECK((summary.effects & ZEND_MIR_EFFECT_MASK(ZEND_MIR_EFFECT_REENTER_PHP)) != 0);
+	CHECK((summary.effects & ZEND_MIR_EFFECT_MASK(ZEND_MIR_EFFECT_THROW)) != 0);
+	CHECK((summary.effects & ZEND_MIR_EFFECT_MASK(ZEND_MIR_EFFECT_OBSERVE_FRAME)) != 0);
+	CHECK((summary.writes
+		& ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_RUNTIME_CACHE)) != 0);
 
 	for (index = 0; index < ZEND_MIR_COMPOSITION_RULE_COUNT; index++) {
 		const zend_mir_composition_rule_descriptor *rule =
@@ -121,6 +169,8 @@ static int test_alias_and_ownership(void)
 	CHECK(zend_mir_domains_may_alias(ZEND_MIR_MEMORY_DOMAIN_INVALID,
 		ZEND_MIR_MEMORY_DOMAIN_INVALID));
 	CHECK(!zend_mir_domain_masks_may_alias(0,
+		ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_HEAP_ZVAL)));
+	CHECK(zend_mir_domain_masks_may_alias(UINT32_C(0x00100000),
 		ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_HEAP_ZVAL)));
 	CHECK(zend_mir_domain_masks_may_alias(
 		ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_HEAP_STRING),
