@@ -1,0 +1,8 @@
+znmir 1.0 module m1
+function f0 symbol s100 entry b0 flags 0x00000000
+block b0 function f0 predecessors [] successors []
+value v0 representation zval ownership borrowed
+value v2147483648 representation zval ownership owned
+instruction i0 block b0 opcode copy representation zval result v2147483648 operands [v0] effects 0x0002 reads 0x00000000 writes 0x00000040 barriers 0x00 ownership-actions 0x0002 frame invalid source invalid
+instruction i1 block b0 opcode return representation void result invalid operands [v2147483648] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source invalid
+end

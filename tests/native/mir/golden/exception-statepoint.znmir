@@ -1,0 +1,9 @@
+znmir 1.0 module m1
+function f0 symbol s100 entry b0 flags 0x00000000
+block b0 function f0 predecessors [] successors []
+value v0 representation zval ownership owned
+source p0 file s200 line 44 columns 1:8
+frame fs0 function f0 parent invalid function-kind user opline 0 phase before slots 0+0 roots 0+0 cleanups 0+0 return terminal:invalid:invalid exception zend_exception:invalid:invalid bailout nonlocal_bailout:invalid:invalid suspend none:invalid code-version 1 resume false:none:invalid:invalid:invalid safepoint exception_edge canonical true
+instruction i0 block b0 opcode statepoint representation void result invalid operands [] effects 0x0018 reads 0x00001000 writes 0x00000000 barriers 0x09 ownership-actions 0x0000 frame fs0 source p0
+instruction i1 block b0 opcode throw representation void result invalid operands [v0] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source invalid
+end
