@@ -1,0 +1,11 @@
+{
+  "artifact": {
+    "kind": "local",
+    "reference": "/tmp/private-agent-output.log"
+  },
+  "format_version": "1.0.0",
+  "gate_id": "W00-D-schema-selftest",
+  "status": "pass",
+  "summary": "Absolute local paths are forbidden.",
+  "wave_id": "W00"
+}

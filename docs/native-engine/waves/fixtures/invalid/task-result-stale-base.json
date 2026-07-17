@@ -1,0 +1,36 @@
+{
+  "acceptance_criteria": [
+    {"criterion_id": "schema-selftest", "description": "Schema tests passed.", "status": "pass"}
+  ],
+  "actual_base_commit": "1111111111111111111111111111111111111111",
+  "blockers": [],
+  "branch": "fixture/stale-base",
+  "changed_paths": ["scripts/native/wave-gate.py"],
+  "expected_base_commit": "1111111111111111111111111111111111111111",
+  "format_version": "1.0.0",
+  "gate_evidence": [
+    {
+      "artifact": {"kind": "ci", "reference": "fixture-artifact/stale-base"},
+      "format_version": "1.0.0",
+      "gate_id": "W00-D-schema-selftest",
+      "status": "pass",
+      "summary": "Structurally valid but based on a stale commit.",
+      "wave_id": "W00"
+    }
+  ],
+  "head_commit": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "risks": [],
+  "status": "pass",
+  "task_id": "W00-D-schema-selftest",
+  "tests": [
+    {
+      "artifact": {"kind": "local", "reference": "artifacts/stale/test.log"},
+      "command": "python3 -m unittest",
+      "duration_ms": 1,
+      "exit_code": 0,
+      "status": "pass"
+    }
+  ],
+  "timestamp": "2026-07-17T08:07:00Z",
+  "worktree_clean": true
+}
