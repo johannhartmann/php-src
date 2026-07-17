@@ -1,0 +1,26 @@
+{
+  "$id": "https://php.net/schemas/native-engine/wave-summary-1.0.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "format_version": {"const": "1.0.0"},
+    "gate_statuses": {
+      "additionalProperties": {"$ref": "#/$defs/taskStatus"},
+      "propertyNames": {"pattern": "^W(?:0[0-9]|1[0-8])-[A-Za-z0-9][A-Za-z0-9-]*$"},
+      "type": "object"
+    },
+    "missing_gate_ids": {"items": {"$ref": "#/$defs/taskId"}, "type": "array"},
+    "optional_gate_ids": {"items": {"$ref": "#/$defs/taskId"}, "type": "array"},
+    "reasons": {"items": {"minLength": 1, "type": "string"}, "type": "array"},
+    "required_gate_ids": {"items": {"$ref": "#/$defs/taskId"}, "type": "array"},
+    "status": {"enum": ["pending", "running", "pass", "fail", "blocked", "skipped", "missing"]},
+    "wave_id": {"pattern": "^W(?:0[0-9]|1[0-8])$", "type": "string"}
+  },
+  "required": ["format_version", "wave_id", "status", "required_gate_ids", "optional_gate_ids", "missing_gate_ids", "gate_statuses", "reasons"],
+  "title": "Native engine wave summary",
+  "type": "object",
+  "$defs": {
+    "taskId": {"pattern": "^W(?:0[0-9]|1[0-8])-[A-Za-z0-9][A-Za-z0-9-]*$", "type": "string"},
+    "taskStatus": {"enum": ["pending", "running", "pass", "fail", "blocked", "skipped"]}
+  }
+}

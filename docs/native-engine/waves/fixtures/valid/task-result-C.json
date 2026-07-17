@@ -1,0 +1,40 @@
+{
+  "acceptance_criteria": [
+    {
+      "criterion_id": "differential-selftest",
+      "description": "Differential runner classifies equality, differences, signals, and timeouts.",
+      "status": "pass"
+    }
+  ],
+  "actual_base_commit": "47355da494ba696b1bdb6d10448a225e742bd316",
+  "blockers": [],
+  "branch": "fixture/w00-c",
+  "changed_paths": ["tests/native/diff_runner.py"],
+  "expected_base_commit": "47355da494ba696b1bdb6d10448a225e742bd316",
+  "format_version": "1.0.0",
+  "gate_evidence": [
+    {
+      "artifact": {"kind": "ci", "reference": "fixture-artifact/differential-selftest"},
+      "format_version": "1.0.0",
+      "gate_id": "W00-C-differential-selftest",
+      "status": "pass",
+      "summary": "All differential harness self-tests passed.",
+      "wave_id": "W00"
+    }
+  ],
+  "head_commit": "cccccccccccccccccccccccccccccccccccccccc",
+  "risks": [],
+  "status": "pass",
+  "task_id": "W00-C-differential-selftest",
+  "tests": [
+    {
+      "artifact": {"kind": "local", "reference": "artifacts/w00-c/selftest.json"},
+      "command": "python3 -m unittest discover tests/native",
+      "duration_ms": 815,
+      "exit_code": 0,
+      "status": "pass"
+    }
+  ],
+  "timestamp": "2026-07-17T08:02:00Z",
+  "worktree_clean": true
+}

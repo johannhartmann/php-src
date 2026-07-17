@@ -1,0 +1,402 @@
+{
+  "format_version": "1.0.0",
+  "migration_policy": "IDs are immutable within format_version 1.x. Incompatible field or ID changes require a new major format_version, a migration note, and dual-read support during one integration wave.",
+  "waves": [
+    {
+      "dependencies": [],
+      "expected_base_commit": "47355da494ba696b1bdb6d10448a225e742bd316",
+      "goal": "Freeze repository contracts and establish reproducible build, differential benchmark, and machine-readable gate infrastructure without changing PHP runtime semantics.",
+      "optional_gate_ids": [
+        "W00-optional-aarch64-runner"
+      ],
+      "parallel_tracks": [
+        "A: repository contracts",
+        "B: reproducible build",
+        "C: reference and benchmark harness",
+        "D: wave status automation"
+      ],
+      "required_gate_ids": [
+        "W00-A-repository-contracts",
+        "W00-B-build-debug-nts",
+        "W00-B-build-release-nts",
+        "W00-B-build-debug-zts",
+        "W00-B-build-release-zts",
+        "W00-B-sanitizer-asan-nts",
+        "W00-B-sanitizer-ubsan-nts",
+        "W00-B-worktree-isolation",
+        "W00-C-differential-selftest",
+        "W00-C-warm-call-baseline",
+        "W00-C-reference-manifest",
+        "W00-D-schema-selftest",
+        "W00-D-dashboard-determinism",
+        "W00-integration-existing-tests",
+        "W00-integration-no-functional-change"
+      ],
+      "responsible_paths": [
+        "AGENTS.md",
+        "docs/native-engine/**",
+        "scripts/native/**",
+        "bench/native/**",
+        "tests/native/**",
+        ".github/workflows/**"
+      ],
+      "roles": [
+        "contract agent",
+        "build and CI agent",
+        "benchmark agent",
+        "gate automation agent",
+        "integration agent"
+      ],
+      "tasks": [
+        {
+          "owned_paths": ["AGENTS.md", "Zend/**/AGENTS.md", "ext/opcache/**/AGENTS.md", "tests/native/AGENTS.md", "docs/native-engine/README.md", "docs/native-engine/adr/**", "docs/native-engine/codex-task-template.md", "docs/native-engine/codex-review-template.md", "docs/native-engine/pr-conventions.md", "docs/native-engine/test-command-contract.md"],
+          "requires_clean_worktree": true,
+          "role": "contract agent",
+          "task_id": "W00-A-repository-contracts",
+          "title": "Repository contracts are present and reviewed"
+        },
+        {
+          "owned_paths": ["scripts/native/lib/**", "scripts/native/configure-dev.sh", "scripts/native/build.sh", "scripts/native/test-smoke.sh", "scripts/native/test-sanitizers.sh", "scripts/native/README.md", ".github/workflows/**"],
+          "requires_clean_worktree": true,
+          "role": "build and CI agent",
+          "task_id": "W00-B-build-debug-nts",
+          "title": "Debug NTS build and smoke tests"
+        },
+        {
+          "owned_paths": ["scripts/native/lib/**", "scripts/native/configure-dev.sh", "scripts/native/build.sh", "scripts/native/test-smoke.sh", "scripts/native/test-sanitizers.sh", "scripts/native/README.md", ".github/workflows/**"],
+          "requires_clean_worktree": true,
+          "role": "build and CI agent",
+          "task_id": "W00-B-build-release-nts",
+          "title": "Release NTS build and smoke tests"
+        },
+        {
+          "owned_paths": ["scripts/native/lib/**", "scripts/native/configure-dev.sh", "scripts/native/build.sh", "scripts/native/test-smoke.sh", "scripts/native/test-sanitizers.sh", "scripts/native/README.md", ".github/workflows/**"],
+          "requires_clean_worktree": true,
+          "role": "build and CI agent",
+          "task_id": "W00-B-build-debug-zts",
+          "title": "Debug ZTS build and smoke tests"
+        },
+        {
+          "owned_paths": ["scripts/native/lib/**", "scripts/native/configure-dev.sh", "scripts/native/build.sh", "scripts/native/test-smoke.sh", "scripts/native/test-sanitizers.sh", "scripts/native/README.md", ".github/workflows/**"],
+          "requires_clean_worktree": true,
+          "role": "build and CI agent",
+          "task_id": "W00-B-build-release-zts",
+          "title": "Release ZTS build and smoke tests"
+        },
+        {
+          "owned_paths": ["scripts/native/lib/**", "scripts/native/configure-dev.sh", "scripts/native/build.sh", "scripts/native/test-smoke.sh", "scripts/native/test-sanitizers.sh", "scripts/native/README.md", ".github/workflows/**"],
+          "requires_clean_worktree": true,
+          "role": "build and CI agent",
+          "task_id": "W00-B-sanitizer-asan-nts",
+          "title": "ASan NTS sanitizer smoke tests"
+        },
+        {
+          "owned_paths": ["scripts/native/lib/**", "scripts/native/configure-dev.sh", "scripts/native/build.sh", "scripts/native/test-smoke.sh", "scripts/native/test-sanitizers.sh", "scripts/native/README.md", ".github/workflows/**"],
+          "requires_clean_worktree": true,
+          "role": "build and CI agent",
+          "task_id": "W00-B-sanitizer-ubsan-nts",
+          "title": "UBSan NTS sanitizer smoke tests"
+        },
+        {
+          "owned_paths": ["scripts/native/lib/**", "scripts/native/configure-dev.sh", "scripts/native/build.sh", "scripts/native/test-smoke.sh", "scripts/native/test-sanitizers.sh", "scripts/native/README.md"],
+          "requires_clean_worktree": true,
+          "role": "build and CI agent",
+          "task_id": "W00-B-worktree-isolation",
+          "title": "Build roots are isolated by worktree identity"
+        },
+        {
+          "owned_paths": ["tests/native/**", "bench/native/**"],
+          "requires_clean_worktree": true,
+          "role": "benchmark agent",
+          "task_id": "W00-C-differential-selftest",
+          "title": "Differential harness self-tests"
+        },
+        {
+          "owned_paths": ["bench/native/**"],
+          "requires_clean_worktree": true,
+          "role": "benchmark agent",
+          "task_id": "W00-C-warm-call-baseline",
+          "title": "Warm call 1-through-10 baseline artifact"
+        },
+        {
+          "owned_paths": ["tests/native/**", "bench/native/**"],
+          "requires_clean_worktree": true,
+          "role": "benchmark agent",
+          "task_id": "W00-C-reference-manifest",
+          "title": "Pinned reference binary manifest"
+        },
+        {
+          "owned_paths": ["docs/native-engine/waves/**", "scripts/native/wave-gate.py"],
+          "requires_clean_worktree": true,
+          "role": "gate automation agent",
+          "task_id": "W00-D-schema-selftest",
+          "title": "Wave schemas and structural validator self-tests"
+        },
+        {
+          "owned_paths": ["docs/native-engine/waves/**", "scripts/native/wave-gate.py"],
+          "requires_clean_worktree": true,
+          "role": "gate automation agent",
+          "task_id": "W00-D-dashboard-determinism",
+          "title": "Byte-identical dashboard projection"
+        },
+        {
+          "owned_paths": ["tests/**"],
+          "requires_clean_worktree": true,
+          "role": "integration agent",
+          "task_id": "W00-integration-existing-tests",
+          "title": "Existing php-src tests remain green relative to base"
+        },
+        {
+          "owned_paths": ["**"],
+          "requires_clean_worktree": true,
+          "role": "integration agent",
+          "task_id": "W00-integration-no-functional-change",
+          "title": "No functional PHP runtime change in W00"
+        },
+        {
+          "owned_paths": [".github/workflows/**", "docs/native-engine/**"],
+          "requires_clean_worktree": true,
+          "role": "platform agent",
+          "task_id": "W00-optional-aarch64-runner",
+          "title": "Documented AArch64 runner evidence"
+        }
+      ],
+      "title": "Contracts and reproducible evidence",
+      "wave_id": "W00"
+    },
+    {
+      "dependencies": ["W00"],
+      "expected_base_commit": null,
+      "goal": "Establish the native-engine ABI boundary, core ownership model, and verified runtime substrate.",
+      "optional_gate_ids": [],
+      "parallel_tracks": ["ABI boundary", "runtime substrate", "verification"],
+      "required_gate_ids": ["W01-integration-gate"],
+      "responsible_paths": ["Zend/Native/**", "tests/native/**"],
+      "roles": ["native runtime agent", "integration agent"],
+      "tasks": [{"owned_paths": ["Zend/Native/**", "tests/native/**"], "requires_clean_worktree": true, "role": "integration agent", "task_id": "W01-integration-gate", "title": "Native substrate integration gate"}],
+      "title": "Native substrate and ABI boundary",
+      "wave_id": "W01"
+    },
+    {
+      "dependencies": ["W01"],
+      "expected_base_commit": null,
+      "goal": "Define architecture-independent MIR, explicit effects, ownership, frame states, and verifier invariants.",
+      "optional_gate_ids": [],
+      "parallel_tracks": ["MIR model", "verifier", "fixtures"],
+      "required_gate_ids": ["W02-integration-gate"],
+      "responsible_paths": ["Zend/Native/MIR/**", "tests/native/**"],
+      "roles": ["MIR agent", "verification agent"],
+      "tasks": [{"owned_paths": ["Zend/Native/MIR/**", "tests/native/**"], "requires_clean_worktree": true, "role": "integration agent", "task_id": "W02-integration-gate", "title": "MIR contracts integration gate"}],
+      "title": "MIR contracts and verifier",
+      "wave_id": "W02"
+    },
+    {
+      "dependencies": ["W02"],
+      "expected_base_commit": null,
+      "goal": "Lower scalar operations and straight-line control into verified MIR with reference-equivalent behavior.",
+      "optional_gate_ids": [],
+      "parallel_tracks": ["scalar lowering", "differential tests"],
+      "required_gate_ids": ["W03-integration-gate"],
+      "responsible_paths": ["Zend/Native/**", "tests/native/**"],
+      "roles": ["lowering agent", "differential test agent"],
+      "tasks": [{"owned_paths": ["Zend/Native/**", "tests/native/**"], "requires_clean_worktree": true, "role": "integration agent", "task_id": "W03-integration-gate", "title": "Scalar lowering integration gate"}],
+      "title": "Scalar and straight-line lowering",
+      "wave_id": "W03"
+    },
+    {
+      "dependencies": ["W03"],
+      "expected_base_commit": null,
+      "goal": "Implement structured control flow, phi construction, and loop semantics without a production VM fallback.",
+      "optional_gate_ids": [],
+      "parallel_tracks": ["control flow", "loops", "verification"],
+      "required_gate_ids": ["W04-integration-gate"],
+      "responsible_paths": ["Zend/Native/**", "tests/native/**"],
+      "roles": ["control-flow agent", "verification agent"],
+      "tasks": [{"owned_paths": ["Zend/Native/**", "tests/native/**"], "requires_clean_worktree": true, "role": "integration agent", "task_id": "W04-integration-gate", "title": "Control-flow integration gate"}],
+      "title": "Control flow and loops",
+      "wave_id": "W04"
+    },
+    {
+      "dependencies": ["W04"],
+      "expected_base_commit": null,
+      "goal": "Lower PHP call frames, argument passing, returns, and C-ABI runtime calls with explicit frame-state evidence.",
+      "optional_gate_ids": [],
+      "parallel_tracks": ["call frames", "runtime calls", "ABI tests"],
+      "required_gate_ids": ["W05-integration-gate"],
+      "responsible_paths": ["Zend/Native/**", "tests/native/**"],
+      "roles": ["call-lowering agent", "runtime agent"],
+      "tasks": [{"owned_paths": ["Zend/Native/**", "tests/native/**"], "requires_clean_worktree": true, "role": "integration agent", "task_id": "W05-integration-gate", "title": "Calls and frames integration gate"}],
+      "title": "Calls, frames, and runtime ABI",
+      "wave_id": "W05"
+    },
+    {
+      "dependencies": ["W05"],
+      "expected_base_commit": null,
+      "goal": "Implement reference and copy-on-write semantics with explicit ownership and aliasing rules.",
+      "optional_gate_ids": [],
+      "parallel_tracks": ["references", "copy-on-write", "alias verification"],
+      "required_gate_ids": ["W06-integration-gate"],
+      "responsible_paths": ["Zend/Native/**", "tests/native/**"],
+      "roles": ["value-semantics agent", "verification agent"],
+      "tasks": [{"owned_paths": ["Zend/Native/**", "tests/native/**"], "requires_clean_worktree": true, "role": "integration agent", "task_id": "W06-integration-gate", "title": "References and COW integration gate"}],
+      "title": "References and copy-on-write",
+      "wave_id": "W06"
+    },
+    {
+      "dependencies": ["W06"],
+      "expected_base_commit": null,
+      "goal": "Support packed and hash arrays with equivalent key, iteration, mutation, and lifetime behavior.",
+      "optional_gate_ids": [],
+      "parallel_tracks": ["packed arrays", "hash arrays", "iteration"],
+      "required_gate_ids": ["W07-integration-gate"],
+      "responsible_paths": ["Zend/Native/**", "tests/native/**"],
+      "roles": ["array-semantics agent", "differential test agent"],
+      "tasks": [{"owned_paths": ["Zend/Native/**", "tests/native/**"], "requires_clean_worktree": true, "role": "integration agent", "task_id": "W07-integration-gate", "title": "Array semantics integration gate"}],
+      "title": "Array semantics",
+      "wave_id": "W07"
+    },
+    {
+      "dependencies": ["W07"],
+      "expected_base_commit": null,
+      "goal": "Support object properties, method dispatch, visibility, and lifecycle with reference-equivalent semantics.",
+      "optional_gate_ids": [],
+      "parallel_tracks": ["properties", "method dispatch", "object lifecycle"],
+      "required_gate_ids": ["W08-integration-gate"],
+      "responsible_paths": ["Zend/Native/**", "tests/native/**"],
+      "roles": ["object-semantics agent", "differential test agent"],
+      "tasks": [{"owned_paths": ["Zend/Native/**", "tests/native/**"], "requires_clean_worktree": true, "role": "integration agent", "task_id": "W08-integration-gate", "title": "Object semantics integration gate"}],
+      "title": "Objects and method dispatch",
+      "wave_id": "W08"
+    },
+    {
+      "dependencies": ["W08"],
+      "expected_base_commit": null,
+      "goal": "Implement exceptions, finally, bailout, and reentrancy while preserving cleanup and observable ordering.",
+      "optional_gate_ids": [],
+      "parallel_tracks": ["exceptions", "finally and cleanup", "bailout and reentrancy"],
+      "required_gate_ids": ["W09-integration-gate"],
+      "responsible_paths": ["Zend/Native/**", "tests/native/**"],
+      "roles": ["exception agent", "runtime safety agent"],
+      "tasks": [{"owned_paths": ["Zend/Native/**", "tests/native/**"], "requires_clean_worktree": true, "role": "integration agent", "task_id": "W09-integration-gate", "title": "Exception semantics integration gate"}],
+      "title": "Exceptions, bailout, and reentrancy",
+      "wave_id": "W09"
+    },
+    {
+      "dependencies": ["W09"],
+      "expected_base_commit": null,
+      "goal": "Support closures, callbacks, dynamic calls, and callable resolution with stable ownership and frame state.",
+      "optional_gate_ids": [],
+      "parallel_tracks": ["closures", "callbacks", "dynamic calls"],
+      "required_gate_ids": ["W10-integration-gate"],
+      "responsible_paths": ["Zend/Native/**", "tests/native/**"],
+      "roles": ["dynamic-call agent", "differential test agent"],
+      "tasks": [{"owned_paths": ["Zend/Native/**", "tests/native/**"], "requires_clean_worktree": true, "role": "integration agent", "task_id": "W10-integration-gate", "title": "Dynamic call integration gate"}],
+      "title": "Closures and dynamic calls",
+      "wave_id": "W10"
+    },
+    {
+      "dependencies": ["W10"],
+      "expected_base_commit": null,
+      "goal": "Implement generator suspension and resume with verifiable frame-state and cleanup semantics.",
+      "optional_gate_ids": [],
+      "parallel_tracks": ["generator frames", "suspend and resume", "cleanup"],
+      "required_gate_ids": ["W11-integration-gate"],
+      "responsible_paths": ["Zend/Native/**", "tests/native/**"],
+      "roles": ["generator agent", "frame-state agent"],
+      "tasks": [{"owned_paths": ["Zend/Native/**", "tests/native/**"], "requires_clean_worktree": true, "role": "integration agent", "task_id": "W11-integration-gate", "title": "Generator integration gate"}],
+      "title": "Generators and suspended frames",
+      "wave_id": "W11"
+    },
+    {
+      "dependencies": ["W11"],
+      "expected_base_commit": null,
+      "goal": "Integrate TPDE target code behind a strict C-ABI boundary with architecture-independent MIR inputs.",
+      "optional_gate_ids": [],
+      "parallel_tracks": ["TPDE adapter", "code emission", "link and load"],
+      "required_gate_ids": ["W12-integration-gate"],
+      "responsible_paths": ["Zend/Native/TPDE/**", "tests/native/**"],
+      "roles": ["TPDE agent", "target-code agent"],
+      "tasks": [{"owned_paths": ["Zend/Native/TPDE/**", "tests/native/**"], "requires_clean_worktree": true, "role": "integration agent", "task_id": "W12-integration-gate", "title": "TPDE integration gate"}],
+      "title": "TPDE code generation",
+      "wave_id": "W12"
+    },
+    {
+      "dependencies": ["W12"],
+      "expected_base_commit": null,
+      "goal": "Define versioned persistent native images without process-local raw pointers and verify reload behavior.",
+      "optional_gate_ids": [],
+      "parallel_tracks": ["image format", "pointer relocation", "reload verification"],
+      "required_gate_ids": ["W13-integration-gate"],
+      "responsible_paths": ["ext/opcache/**", "Zend/Native/**", "tests/native/**"],
+      "roles": ["persistence agent", "OPcache agent"],
+      "tasks": [{"owned_paths": ["ext/opcache/**", "Zend/Native/**", "tests/native/**"], "requires_clean_worktree": true, "role": "integration agent", "task_id": "W13-integration-gate", "title": "Persistence integration gate"}],
+      "title": "OPcache persistence and reload",
+      "wave_id": "W13"
+    },
+    {
+      "dependencies": ["W13"],
+      "expected_base_commit": null,
+      "goal": "Validate Linux/ELF x86-64 production behavior and close the documented AArch64 portability gate.",
+      "optional_gate_ids": [],
+      "parallel_tracks": ["x86-64", "AArch64", "platform ABI"],
+      "required_gate_ids": ["W14-integration-gate"],
+      "responsible_paths": ["Zend/Native/TPDE/**", "tests/native/**", ".github/workflows/**"],
+      "roles": ["platform agent", "CI agent"],
+      "tasks": [{"owned_paths": ["Zend/Native/TPDE/**", "tests/native/**", ".github/workflows/**"], "requires_clean_worktree": true, "role": "integration agent", "task_id": "W14-integration-gate", "title": "Platform integration gate"}],
+      "title": "Platform enablement",
+      "wave_id": "W14"
+    },
+    {
+      "dependencies": ["W14"],
+      "expected_base_commit": null,
+      "goal": "Verify extension and internal-function interoperability across the native/runtime ABI boundary.",
+      "optional_gate_ids": [],
+      "parallel_tracks": ["internal functions", "extensions", "ABI compatibility"],
+      "required_gate_ids": ["W15-integration-gate"],
+      "responsible_paths": ["Zend/Native/**", "ext/**", "tests/native/**"],
+      "roles": ["extension compatibility agent", "ABI agent"],
+      "tasks": [{"owned_paths": ["Zend/Native/**", "ext/**", "tests/native/**"], "requires_clean_worktree": true, "role": "integration agent", "task_id": "W15-integration-gate", "title": "Extension interoperability integration gate"}],
+      "title": "Extension interoperability",
+      "wave_id": "W15"
+    },
+    {
+      "dependencies": ["W15"],
+      "expected_base_commit": null,
+      "goal": "Converge differential behavior and performance across the supported language and runtime matrix.",
+      "optional_gate_ids": [],
+      "parallel_tracks": ["differential closure", "performance", "sanitizers"],
+      "required_gate_ids": ["W16-integration-gate"],
+      "responsible_paths": ["tests/native/**", "bench/native/**", "Zend/Native/**"],
+      "roles": ["convergence agent", "performance agent"],
+      "tasks": [{"owned_paths": ["tests/native/**", "bench/native/**", "Zend/Native/**"], "requires_clean_worktree": true, "role": "integration agent", "task_id": "W16-integration-gate", "title": "Convergence integration gate"}],
+      "title": "Differential and performance convergence",
+      "wave_id": "W16"
+    },
+    {
+      "dependencies": ["W16"],
+      "expected_base_commit": null,
+      "goal": "Prove release readiness, rollback boundaries, observability, and operational support for full cutover.",
+      "optional_gate_ids": [],
+      "parallel_tracks": ["release qualification", "operations", "rollback"],
+      "required_gate_ids": ["W17-integration-gate"],
+      "responsible_paths": ["docs/native-engine/**", "tests/native/**", ".github/workflows/**"],
+      "roles": ["release agent", "operations agent"],
+      "tasks": [{"owned_paths": ["docs/native-engine/**", "tests/native/**", ".github/workflows/**"], "requires_clean_worktree": true, "role": "integration agent", "task_id": "W17-integration-gate", "title": "Cutover readiness integration gate"}],
+      "title": "Cutover readiness",
+      "wave_id": "W17"
+    },
+    {
+      "dependencies": ["W17"],
+      "expected_base_commit": null,
+      "goal": "Complete the native-engine full cutover only after all required evidence is green and no production VM fallback remains.",
+      "optional_gate_ids": [],
+      "parallel_tracks": ["full cutover", "final verification", "release handoff"],
+      "required_gate_ids": ["W18-integration-gate"],
+      "responsible_paths": ["Zend/**", "ext/opcache/**", "tests/**", "docs/native-engine/**"],
+      "roles": ["cutover agent", "integration agent", "release agent"],
+      "tasks": [{"owned_paths": ["Zend/**", "ext/opcache/**", "tests/**", "docs/native-engine/**"], "requires_clean_worktree": true, "role": "integration agent", "task_id": "W18-integration-gate", "title": "Full cutover integration gate"}],
+      "title": "Full native-engine cutover",
+      "wave_id": "W18"
+    }
+  ]
+}
