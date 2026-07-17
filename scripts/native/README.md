@@ -49,8 +49,9 @@ failure, PHPT failure, or sanitizer diagnostic returns non-zero.
 
 `NATIVE_JOBS` sets the default parallelism. `CC`, `CFLAGS`, `CPPFLAGS`, and
 `LDFLAGS` are honored and included in the configuration fingerprint and build
-manifest. `NATIVE_BASE_COMMIT` may explicitly pin the worktree-ID input; by
-default the merge-base with `origin/master` is used when available, then HEAD.
+manifest. `NATIVE_BASE_COMMIT` may explicitly override the worktree-ID input;
+by default the W00 base `47355da494ba696b1bdb6d10448a225e742bd316` is used,
+including in shallow CI checkouts.
 
 ## Isolation and artifacts
 
