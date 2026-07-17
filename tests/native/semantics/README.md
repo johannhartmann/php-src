@@ -82,10 +82,16 @@ W01_E_REFERENCE_PHP="$REFERENCE_PHP" \
     -s tests/native/semantics/contracts/corpus -p 'test_*.py' -v
 ```
 
-The capture tool validates the manifest and binary capabilities first, invokes
+The capture tool starts every child from a minimal fixed environment, points
+`PHPRC` at an empty external directory, disables INI scanning, and records that
+effective environment. Caller PHP configuration, preload settings, and test
+arguments are not inherited. It then validates the manifest and binary
+capabilities, invokes
 the W00 binary-manifest tool, runs every PHPT referenced by the manifest, runs
 the differential directory reference-versus-reference, and writes raw output,
-termination, hashes, and `bundle-index.json`. The bundle stores absolute binary
+termination, hashes, and `bundle-index.json`. The index hashes every manifest
+fixture and every auxiliary corpus input in addition to all generated payloads,
+and records the corpus Git commit/dirty state. The bundle stores absolute binary
 identity only in the external evidence. No golden output or local absolute path
 is checked into the repository.
 
