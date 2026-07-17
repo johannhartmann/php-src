@@ -1,0 +1,141 @@
+{
+    "$id": "https://php.net/schemas/native-engine/semantic-corpus-manifest-1.0.0.json",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+        "fixtures": {
+            "items": {"$ref": "#/$defs/fixture"},
+            "minItems": 1,
+            "type": "array"
+        },
+        "format_version": {"const": "1.0.0"},
+        "php_src_semantics_commit": {"$ref": "#/$defs/commit"},
+        "required_opcode_families": {
+            "items": {"$ref": "#/$defs/identifier"},
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+        },
+        "required_semantic_risks": {
+            "items": {"$ref": "#/$defs/identifier"},
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+        },
+        "wave_base_commit": {"$ref": "#/$defs/commit"}
+    },
+    "required": [
+        "format_version",
+        "wave_base_commit",
+        "php_src_semantics_commit",
+        "required_opcode_families",
+        "required_semantic_risks",
+        "fixtures"
+    ],
+    "title": "W01 semantic test corpus manifest",
+    "type": "object",
+    "$defs": {
+        "boundary": {
+            "additionalProperties": false,
+            "properties": {
+                "boundary": {"$ref": "#/$defs/identifier"},
+                "mechanism": {"minLength": 1, "type": "string"},
+                "source_anchors": {
+                    "items": {
+                        "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])[^:]+:[1-9][0-9]*(?:-[1-9][0-9]*)?$",
+                        "type": "string"
+                    },
+                    "minItems": 1,
+                    "type": "array",
+                    "uniqueItems": true
+                }
+            },
+            "required": ["boundary", "mechanism", "source_anchors"],
+            "type": "object"
+        },
+        "commit": {"pattern": "^[0-9a-f]{40}$", "type": "string"},
+        "fixture": {
+            "additionalProperties": false,
+            "properties": {
+                "determinism_constraints": {
+                    "items": {"$ref": "#/$defs/identifier"},
+                    "minItems": 1,
+                    "type": "array",
+                    "uniqueItems": true
+                },
+                "fixture_id": {"$ref": "#/$defs/identifier"},
+                "forced_boundaries": {
+                    "items": {"$ref": "#/$defs/boundary"},
+                    "type": "array"
+                },
+                "kind": {
+                    "enum": ["differential_php", "existing_phpt", "new_phpt"]
+                },
+                "observable_channels": {
+                    "items": {"$ref": "#/$defs/identifier"},
+                    "minItems": 1,
+                    "type": "array",
+                    "uniqueItems": true
+                },
+                "opcode_families": {
+                    "items": {"$ref": "#/$defs/identifier"},
+                    "minItems": 1,
+                    "type": "array",
+                    "uniqueItems": true
+                },
+                "opcodes": {
+                    "items": {"pattern": "^ZEND_[A-Z0-9_]+$", "type": "string"},
+                    "type": "array",
+                    "uniqueItems": true
+                },
+                "owner": {"const": "W01-E"},
+                "reference_provenance_required": {"const": true},
+                "repeat_calls": {
+                    "items": {"maximum": 10, "minimum": 1, "type": "integer"},
+                    "type": "array",
+                    "uniqueItems": true
+                },
+                "required_extensions": {
+                    "items": {"minLength": 1, "type": "string"},
+                    "type": "array",
+                    "uniqueItems": true
+                },
+                "required_modes": {
+                    "items": {"$ref": "#/$defs/identifier"},
+                    "minItems": 1,
+                    "type": "array",
+                    "uniqueItems": true
+                },
+                "semantic_risks": {
+                    "items": {"$ref": "#/$defs/identifier"},
+                    "type": "array",
+                    "uniqueItems": true
+                },
+                "source_path": {"$ref": "#/$defs/relativePath"}
+            },
+            "required": [
+                "fixture_id",
+                "kind",
+                "source_path",
+                "opcode_families",
+                "opcodes",
+                "semantic_risks",
+                "required_extensions",
+                "required_modes",
+                "observable_channels",
+                "repeat_calls",
+                "forced_boundaries",
+                "reference_provenance_required",
+                "determinism_constraints",
+                "owner"
+            ],
+            "type": "object"
+        },
+        "identifier": {"pattern": "^[a-z][a-z0-9_]*$", "type": "string"},
+        "relativePath": {
+            "minLength": 1,
+            "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$)).+$",
+            "type": "string"
+        }
+    }
+}
