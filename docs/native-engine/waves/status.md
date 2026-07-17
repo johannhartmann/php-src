@@ -30,16 +30,22 @@ Freeze repository contracts and establish reproducible build, differential bench
 | W00-integration-no-functional-change | yes | missing | — | — | — | — |
 | W00-optional-aarch64-runner | no | missing | — | — | — | — |
 
-## W01 — Native substrate and ABI boundary
+## W01 — Semantic inventory and binding contracts
 
 **Status:** `MISSING`
 
-Establish the native-engine ABI boundary, core ownership model, and verified runtime substrate.
+Freeze complete, source-backed semantic, effect, frame, TPDE, and test contracts before MIR implementation.
 
-**Missing required gates:** `W01-integration-gate`
+**Missing required gates:** `W01-0-contract-freeze`, `W01-A-opcode-coverage`, `W01-B-effect-ownership-model`, `W01-C-frame-safepoint-contract`, `W01-D-tpde-gap-analysis`, `W01-E-semantics-test-corpus`, `W01-integration-gate`
 
 | Task | Required | Status | Base | Head | Evidence | Blockers |
 | --- | --- | --- | --- | --- | --- | --- |
+| W01-0-contract-freeze | yes | missing | — | — | — | — |
+| W01-A-opcode-coverage | yes | missing | — | — | — | — |
+| W01-B-effect-ownership-model | yes | missing | — | — | — | — |
+| W01-C-frame-safepoint-contract | yes | missing | — | — | — | — |
+| W01-D-tpde-gap-analysis | yes | missing | — | — | — | — |
+| W01-E-semantics-test-corpus | yes | missing | — | — | — | — |
 | W01-integration-gate | yes | missing | — | — | — | — |
 
 ## W02 — MIR contracts and verifier

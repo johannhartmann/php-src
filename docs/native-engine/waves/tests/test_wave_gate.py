@@ -54,6 +54,11 @@ class WaveGateTests(unittest.TestCase):
         for task_id in self.waves["W00"]["required_gate_ids"]:
             self.write_result(results_dir, self.make_result(task_id))
 
+    def write_wave_result(self, results_dir, wave_id, result):
+        destination = results_dir / wave_id / (result["task_id"] + ".json")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
     def test_definition_has_all_waves_and_stable_w00_tasks(self):
         self.assertEqual([], wave_gate.validate_definition(self.definition))
         self.assertEqual(["W%02d" % number for number in range(19)], [wave["wave_id"] for wave in self.definition["waves"]])
@@ -66,6 +71,37 @@ class WaveGateTests(unittest.TestCase):
             "W00-integration-no-functional-change",
         }
         self.assertEqual(expected, set(self.waves["W00"]["required_gate_ids"]))
+
+    def test_w01_has_all_semantic_contract_gates(self):
+        expected = [
+            "W01-0-contract-freeze",
+            "W01-A-opcode-coverage",
+            "W01-B-effect-ownership-model",
+            "W01-C-frame-safepoint-contract",
+            "W01-D-tpde-gap-analysis",
+            "W01-E-semantics-test-corpus",
+            "W01-integration-gate",
+        ]
+        self.assertEqual(expected, self.waves["W01"]["required_gate_ids"])
+        self.assertEqual(expected, [task["task_id"] for task in self.waves["W01"]["tasks"]])
+        self.assertEqual("dc6e34b56846c38dc2475d6c962c2b9b7ada6df4", self.waves["W01"]["expected_base_commit"])
+
+    def test_w01_cannot_pass_with_missing_specialist_result(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            results_dir = Path(temporary)
+            for task_id in self.waves["W01"]["required_gate_ids"]:
+                if task_id != "W01-E-semantics-test-corpus":
+                    result = self.make_result(task_id)
+                    result["expected_base_commit"] = self.waves["W01"]["expected_base_commit"]
+                    result["actual_base_commit"] = self.waves["W01"]["expected_base_commit"]
+                    result["gate_evidence"][0]["wave_id"] = "W01"
+                    self.write_wave_result(results_dir, "W01", result)
+            summary = wave_gate.aggregate_wave(
+                self.waves["W01"],
+                wave_gate.load_wave_results(results_dir, "W01", self.definition),
+            )
+            self.assertEqual("missing", summary["status"])
+            self.assertEqual(["W01-E-semantics-test-corpus"], summary["missing_gate_ids"])
 
     def test_valid_task_fixtures(self):
         for name in ("A", "B", "C", "D"):
