@@ -16,6 +16,7 @@ NATIVE_REPO_ROOT="$(git -C "$NATIVE_LIB_DIR" rev-parse --show-toplevel 2>/dev/nu
 NATIVE_SCRIPTS_DIR="$NATIVE_REPO_ROOT/scripts/native"
 NATIVE_PROFILES_DIR="$NATIVE_SCRIPTS_DIR/profiles"
 NATIVE_HELPER="$NATIVE_SCRIPTS_DIR/capture-build-manifest.py"
+NATIVE_W00_BASE_COMMIT=47355da494ba696b1bdb6d10448a225e742bd316
 export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git -C "$NATIVE_REPO_ROOT" show -s --format=%ct HEAD)}
 
 native_error() {
@@ -50,10 +51,8 @@ native_commit() {
 native_base_commit() {
     if [[ -n ${NATIVE_BASE_COMMIT:-} ]]; then
         git -C "$NATIVE_REPO_ROOT" rev-parse --verify "${NATIVE_BASE_COMMIT}^{commit}"
-    elif git -C "$NATIVE_REPO_ROOT" show-ref --verify --quiet refs/remotes/origin/master; then
-        git -C "$NATIVE_REPO_ROOT" merge-base HEAD refs/remotes/origin/master
     else
-        native_commit
+        printf '%s\n' "$NATIVE_W00_BASE_COMMIT"
     fi
 }
 
