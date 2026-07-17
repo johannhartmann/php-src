@@ -1,0 +1,11 @@
+{
+  "config": {
+    "iterations": 1000
+  },
+  "expected_checksum": "a137b3f3df15c775a6e2ad1dec1c2ff17113f9db0d627290c5a3183f0a935950",
+  "php_file": "php/objects.php",
+  "scenario_id": "object_property_method",
+  "schema_version": 1,
+  "title": "Object property access and method calls",
+  "warmup_calls": 2
+}

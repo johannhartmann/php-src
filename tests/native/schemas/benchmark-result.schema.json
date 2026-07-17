@@ -1,0 +1,103 @@
+{
+  "$id": "https://php.net/schemas/native/benchmark-result-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "result_type": {"const": "benchmark_result"},
+    "run_manifest": {
+      "properties": {
+        "binary": {"$ref": "#/$defs/binaryManifest"},
+        "configuration": {"type": "object"},
+        "generated_at_utc": {"format": "date-time", "type": "string"},
+        "host": {"type": "object"}
+      },
+      "required": ["binary", "configuration", "generated_at_utc", "host"],
+      "type": "object"
+    },
+    "scenarios": {
+      "items": {
+        "properties": {
+          "aggregate": {"type": "object"},
+          "code_size": {"type": "object"},
+          "native_code_size": {
+            "properties": {
+              "bytes": {"type": "null"},
+              "source": {"type": "null"},
+              "unsupported_reason": {"minLength": 1, "type": "string"}
+            },
+            "required": ["bytes", "source", "unsupported_reason"],
+            "type": "object"
+          },
+          "samples": {
+            "items": {
+              "properties": {
+                "call_ns": {
+                  "items": {"minimum": 0, "type": "integer"},
+                  "maxItems": 10,
+                  "minItems": 10,
+                  "type": "array"
+                },
+                "compile_phase": {"type": "null"},
+                "process": {
+                  "properties": {
+                    "max_rss_bytes": {"minimum": 0, "type": "integer"},
+                    "system_ns": {"minimum": 0, "type": "integer"},
+                    "user_ns": {"minimum": 0, "type": "integer"},
+                    "wall_ns": {"minimum": 0, "type": "integer"}
+                  },
+                  "required": ["max_rss_bytes", "system_ns", "user_ns", "wall_ns"],
+                  "type": "object"
+                },
+                "result_checksum": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+                "steady_state_ns": {"items": {"minimum": 0, "type": "integer"}, "type": "array"}
+              },
+              "required": ["call_ns", "compile_phase", "process", "result_checksum", "steady_state_ns"],
+              "type": "object"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "scenario_id": {"minLength": 1, "type": "string"},
+          "warmup": {"type": "object"}
+        },
+        "required": ["aggregate", "native_code_size", "samples", "scenario_id", "warmup"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schema_version": {"const": 1},
+    "summary": {"type": "object"}
+  },
+  "required": ["result_type", "run_manifest", "scenarios", "schema_version", "summary"],
+  "type": "object",
+  "$defs": {
+    "binaryManifest": {
+      "properties": {
+        "binary": {
+          "properties": {
+            "canonical_path": {"minLength": 1, "type": "string"},
+            "elf_build_id": {"type": "object"},
+            "sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+            "size_bytes": {"minimum": 1, "type": "integer"}
+          },
+          "required": ["canonical_path", "elf_build_id", "sha256", "size_bytes"],
+          "type": "object"
+        },
+        "host": {"type": "object"},
+        "php": {
+          "properties": {
+            "facts": {"type": "object"},
+            "info": {"type": "object"},
+            "version_command": {"type": "object"}
+          },
+          "required": ["facts", "info", "version_command"],
+          "type": "object"
+        },
+        "provenance": {"type": "object"},
+        "result_type": {"const": "binary_manifest"},
+        "schema_version": {"const": 1}
+      },
+      "required": ["binary", "host", "php", "provenance", "result_type", "schema_version"],
+      "type": "object"
+    }
+  }
+}
