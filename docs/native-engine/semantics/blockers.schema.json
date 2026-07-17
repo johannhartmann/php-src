@@ -1,0 +1,86 @@
+{
+  "$id": "https://php.net/schemas/native-engine/w01-blockers-1.0.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "const": "./blockers.schema.json"
+    },
+    "blockers": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "affected_waves": {
+            "items": {
+              "pattern": "^W[0-9]{2}$",
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "blocker_id": {
+            "pattern": "^W01-BLOCK-[0-9]{3}$",
+            "type": "string"
+          },
+          "decision": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "github_issue_url": {
+            "type": ["string", "null"]
+          },
+          "issue_ready": {
+            "type": "boolean"
+          },
+          "owner": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "severity": {
+            "enum": ["critical", "high", "medium", "low"]
+          },
+          "source_refs": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "status": {
+            "enum": ["resolved", "unresolved"]
+          },
+          "title": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "blocker_id",
+          "title",
+          "severity",
+          "status",
+          "source_refs",
+          "owner",
+          "affected_waves",
+          "decision",
+          "github_issue_url",
+          "issue_ready"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "format_version": {
+      "const": "1.0.0"
+    },
+    "wave_id": {
+      "const": "W01"
+    }
+  },
+  "required": ["$schema", "format_version", "wave_id", "blockers"],
+  "title": "W01 semantic architecture blockers",
+  "type": "object"
+}

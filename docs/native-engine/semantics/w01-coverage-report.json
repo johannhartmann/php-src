@@ -1,0 +1,164 @@
+{
+  "blockers": {
+    "resolved": 0,
+    "total": 0,
+    "unresolved_critical": []
+  },
+  "cross_links": {
+    "barrier_ids": 8,
+    "effect_ids": 15,
+    "memory_domain_ids": 20,
+    "missing": [],
+    "ownership_action_ids": 10
+  },
+  "format_version": "1.0.0",
+  "frame_contract": {
+    "required_safepoints": [
+      "allocation",
+      "bailout_helper",
+      "deopt_resume",
+      "destructor",
+      "exception_edge",
+      "fiber_switch",
+      "function_entry",
+      "generator_resume",
+      "generator_suspend",
+      "internal_call",
+      "interrupt",
+      "observer",
+      "user_call"
+    ],
+    "valid_examples": [
+      "destructor-reentry",
+      "exception-edge",
+      "fiber-suspend",
+      "generator-suspend",
+      "normal-call"
+    ]
+  },
+  "opcode_coverage": {
+    "catalogued": 210,
+    "first_number": 0,
+    "last_number": 211,
+    "unique_ids": 210
+  },
+  "semantic_risk_coverage": {
+    "bailout_nonlocal_transfer": [
+      "bailout_nonlocal_transfer"
+    ],
+    "destructor_reentrancy": [
+      "destructor_reentrancy"
+    ],
+    "exception_finally_order": [
+      "exception_finally_control_flow"
+    ],
+    "fiber_suspend_resume": [
+      "fiber_suspend_resume"
+    ],
+    "generator_suspend_resume_close": [
+      "generator_lifecycle"
+    ],
+    "indirect_reference_aliasing": [
+      "reference_indirect_aliasing"
+    ],
+    "observer_begin_end": [
+      "observer_boundaries"
+    ]
+  },
+  "status": "pass",
+  "test_family_coverage": {
+    "arrays_cow": [
+      "array_string_cow",
+      "existing_array_append_cow"
+    ],
+    "assignments_temps": [
+      "calls_repeat_01",
+      "calls_repeat_02",
+      "calls_repeat_03",
+      "calls_repeat_04",
+      "calls_repeat_05",
+      "calls_repeat_06",
+      "calls_repeat_07",
+      "calls_repeat_08",
+      "calls_repeat_09",
+      "calls_repeat_10",
+      "existing_assign_to_var"
+    ],
+    "calls_arguments_returns": [
+      "calls_named_byref_variadic_dynamic",
+      "calls_repeat_01",
+      "calls_repeat_02",
+      "calls_repeat_03",
+      "calls_repeat_04",
+      "calls_repeat_05",
+      "calls_repeat_06",
+      "calls_repeat_07",
+      "calls_repeat_08",
+      "calls_repeat_09",
+      "calls_repeat_10",
+      "destructor_reentrancy",
+      "existing_function_argument_count"
+    ],
+    "closures_dynamic_calls": [
+      "calls_named_byref_variadic_dynamic",
+      "existing_closure_baseline"
+    ],
+    "compare_branch_switch": [
+      "existing_switch_numeric_strings"
+    ],
+    "eval_include_require": [
+      "dynamic_definitions"
+    ],
+    "exceptions_finally": [
+      "bailout_nonlocal_transfer",
+      "destructor_throw",
+      "exception_finally_control_flow"
+    ],
+    "fibers": [
+      "fiber_suspend_resume"
+    ],
+    "generators": [
+      "existing_generator_yield_from",
+      "generator_lifecycle"
+    ],
+    "interrupt_ticks": [
+      "existing_ticks"
+    ],
+    "objects_properties_magic": [
+      "destructor_reentrancy",
+      "destructor_throw",
+      "existing_magic_property_reentrancy"
+    ],
+    "observer_user_opcode_hooks": [
+      "observer_boundaries"
+    ],
+    "references_indirects": [
+      "calls_named_byref_variadic_dynamic",
+      "existing_array_append_cow",
+      "reference_indirect_aliasing"
+    ],
+    "scalars_type_juggling": [
+      "existing_switch_numeric_strings"
+    ],
+    "strings": [
+      "array_string_cow"
+    ],
+    "zts_relevant_paths": [
+      "zts_fiber_reference"
+    ]
+  },
+  "tpde_contract": {
+    "capabilities": 27,
+    "required_integration_capabilities": [
+      "custom-mapper",
+      "force-materialize",
+      "frame-stackmap-metadata",
+      "resume-osr",
+      "statepoint-code-offset",
+      "value-location-snapshot"
+    ],
+    "tpde_commit": "338d41890e424b058e2053b6a5787e1348e3dd57"
+  },
+  "wave_base_commit": "dc6e34b56846c38dc2475d6c962c2b9b7ada6df4",
+  "wave_id": "W01"
+}
