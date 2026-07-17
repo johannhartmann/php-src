@@ -1,0 +1,19 @@
+znmir 1.0 module m1
+function f0 symbol s100 entry b0 flags 0x00000000
+block b0 function f0 predecessors [] successors [b1, b2]
+block b1 function f0 predecessors [b0] successors [b3]
+block b2 function f0 predecessors [b0] successors [b3]
+block b3 function f0 predecessors [b2, b1] successors []
+value v0 representation i1 ownership borrowed
+value v1 representation i64 ownership owned
+value v2 representation i64 ownership owned
+value v3 representation i64 ownership owned
+constant v0 representation i1 kind signed_integer_bits payload 0x0000000000000001 symbol invalid
+constant v1 representation i64 kind signed_integer_bits payload 0x000000000000000b symbol invalid
+constant v2 representation i64 kind signed_integer_bits payload 0x0000000000000016 symbol invalid
+instruction i0 block b0 opcode cond_branch representation control result invalid operands [v0] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source invalid
+instruction i1 block b1 opcode branch representation control result invalid operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source invalid
+instruction i2 block b2 opcode branch representation control result invalid operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source invalid
+instruction i3 block b3 opcode phi representation i64 result v3 operands [v1, v2] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source invalid
+instruction i4 block b3 opcode return representation void result invalid operands [v3] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source invalid
+end

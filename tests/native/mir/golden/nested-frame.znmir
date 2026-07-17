@@ -1,0 +1,12 @@
+znmir 1.0 module m1
+function f0 symbol s100 entry b0 flags 0x00000000
+block b0 function f0 predecessors [] successors []
+value v0 representation zval ownership owned
+slot 7 value v0 index 0 kind cv representation canonical_zval materialization materialized ownership frame_owned rooted true cleanup true
+root 7
+cleanup 7 action destroy state pending
+frame fs0 function f0 parent invalid function-kind user opline 0 phase before slots 0+1 roots 0+1 cleanups 0+1 return terminal:invalid:invalid exception zend_exception:invalid:invalid bailout nonlocal_bailout:invalid:invalid suspend none:invalid code-version 1 resume false:none:invalid:invalid:invalid safepoint function_entry canonical true
+frame fs1 function f0 parent fs0 function-kind user opline 7 phase before slots 0+1 roots 0+1 cleanups 0+1 return native:fs0:8 exception zend_exception:invalid:invalid bailout nonlocal_bailout:invalid:invalid suspend generator:3 code-version 1 resume true:single_entry_dispatcher:r9:1:8 safepoint generator_suspend canonical true
+instruction i0 block b0 opcode statepoint representation void result invalid operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame fs1 source invalid
+instruction i1 block b0 opcode return representation void result invalid operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source invalid
+end
