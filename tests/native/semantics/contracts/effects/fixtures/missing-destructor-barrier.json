@@ -1,0 +1,11 @@
+{
+  "id": "missing-destructor-barrier",
+  "operations": [
+    {
+      "op": "remove",
+      "path": ["composition_rules", "destructor_closure", "implies", "barriers"],
+      "value": "observer"
+    }
+  ],
+  "expected_error": "destructor closure barriers: missing required IDs"
+}
