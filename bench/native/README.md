@@ -71,6 +71,11 @@ All repetitions and every raw call remain in `samples`; no outlier is removed.
 Microbenchmark timings are host-, load-, build-, and clock-dependent and are not
 portable performance claims.
 
+Linux/ELF x86-64 is the W00 primary runner. Linux AArch64 is a documented
+secondary runner using the same CLI and schemas, but it was not executed for
+this implementation commit; AArch64 result comparison remains a later CI/wave
+gate and must not be inferred from x86-64 artifacts.
+
 The resource probe measures the PHP child, not its own Python startup. The outer
 wall metric cannot isolate PHP process startup, parsing, OPcache compilation,
 JIT compilation, warmup, or teardown. It must not be renamed to any one of those
