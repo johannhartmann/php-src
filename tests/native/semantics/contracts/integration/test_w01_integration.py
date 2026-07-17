@@ -1,4 +1,3 @@
-import copy
 import importlib.util
 import json
 from pathlib import Path
@@ -54,7 +53,7 @@ class W01IntegrationTests(unittest.TestCase):
         self.assert_invalid_mutation(
             "opcodes",
             lambda document: document["opcodes"].pop(),
-            "does not cover every executable opcode",
+            "opcode matrix differs from the specialist generator output",
         )
 
     def test_unregistered_effect_fails_closed(self):
@@ -64,7 +63,7 @@ class W01IntegrationTests(unittest.TestCase):
                 slice(None),
                 [effect for effect in document["atomic_effects"] if effect["id"] != "read_memory"],
             ),
-            "effects omit frozen IDs",
+            "effect specialist validation failed",
         )
 
     def test_missing_frame_safepoint_fails_closed(self):
@@ -81,7 +80,7 @@ class W01IntegrationTests(unittest.TestCase):
                 slice(None),
                 [capability for capability in document["capabilities"] if capability["id"] != "statepoint-code-offset"],
             ),
-            "TPDE analysis omits integration capabilities",
+            "TPDE specialist validation failed",
         )
 
     def test_uncovered_manifest_family_fails_closed(self):
@@ -91,7 +90,27 @@ class W01IntegrationTests(unittest.TestCase):
                     family for family in fixture["opcode_families"] if family != "strings"
                 ]
 
-        self.assert_invalid_mutation("manifest", remove_family_coverage, "opcode families lack fixtures")
+        self.assert_invalid_mutation("manifest", remove_family_coverage, "manifest specialist validation failed")
+
+    def test_added_malformed_effect_fails_closed(self):
+        def add_effect(document):
+            document["atomic_effects"].append({"id": "synthetic_extra"})
+            document["catalog"]["effects"].append("synthetic_extra")
+
+        self.assert_invalid_mutation("effects", add_effect, "effect specialist validation failed")
+
+    def test_label_only_fixture_fails_closed(self):
+        def add_label_only_fixture(document):
+            for fixture in document["fixtures"]:
+                fixture["opcode_families"] = [
+                    family for family in fixture["opcode_families"] if family != "strings"
+                ]
+            document["fixtures"].append({
+                "fixture_id": "synthetic_strings_label",
+                "opcode_families": ["strings"],
+            })
+
+        self.assert_invalid_mutation("manifest", add_label_only_fixture, "manifest specialist validation failed")
 
     def test_unresolved_critical_blocker_fails_closed(self):
         def add_blocker(document):
@@ -114,7 +133,7 @@ class W01IntegrationTests(unittest.TestCase):
         def add_placeholder(document):
             document["opcodes"][0]["reason"] = "TBD"
 
-        self.assert_invalid_mutation("opcodes", add_placeholder, "semantic placeholder")
+        self.assert_invalid_mutation("opcodes", add_placeholder, "opcode matrix differs from the specialist generator output")
 
 
 if __name__ == "__main__":

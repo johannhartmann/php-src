@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import importlib.util
+import io
 import json
 import re
 import sys
@@ -20,6 +23,7 @@ ARTIFACTS = {
     "blockers": Path("docs/native-engine/semantics/blockers.json"),
     "cross_contract": Path("docs/native-engine/waves/w01-cross-track-contract.md"),
     "effects": Path("docs/native-engine/semantics/effects/effect-model.json"),
+    "effects_schema": Path("docs/native-engine/semantics/effects/effect-model.schema.json"),
     "frame_examples": Path("docs/native-engine/semantics/frames/frame-state.examples.json"),
     "frame_schema": Path("docs/native-engine/semantics/frames/frame-state.schema.json"),
     "manifest": Path("tests/native/semantics/manifest.json"),
@@ -80,6 +84,33 @@ IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 class ValidationError(ValueError):
     """A deterministic W01 cross-contract validation failure."""
+
+
+def load_specialist_module(name: str, relative: str) -> Any:
+    path = ROOT / relative
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ValidationError(f"cannot load specialist validator {relative}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+OPCODE_VALIDATOR = load_specialist_module(
+    "w01_opcode_validator", "scripts/native/semantics/generate-opcode-matrix.py"
+)
+EFFECT_VALIDATOR = load_specialist_module(
+    "w01_effect_validator", "scripts/native/semantics/validate-effect-model.py"
+)
+FRAME_VALIDATOR = load_specialist_module(
+    "w01_frame_validator", "scripts/native/semantics/validate-frame-contract.py"
+)
+TPDE_VALIDATOR = load_specialist_module(
+    "w01_tpde_validator", "scripts/native/semantics/validate-tpde-gap.py"
+)
+MANIFEST_VALIDATOR = load_specialist_module(
+    "w01_manifest_validator", "tests/native/semantics/validate_manifest.py"
+)
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -205,6 +236,37 @@ def build_report(root: Path = ROOT) -> dict[str, Any]:
         raise ValidationError(f"cannot load {root / ARTIFACTS['cross_contract']}: {exc}") from exc
 
     matrix = documents["opcodes"]
+    specialist_root = root if (root / "Zend/zend_vm_opcodes.h").is_file() else ROOT
+    try:
+        generated_matrix = OPCODE_VALIDATOR.build_matrix(
+            specialist_root,
+            specialist_root / "Zend/zend_vm_opcodes.h",
+            specialist_root / "Zend/zend_vm_def.h",
+            specialist_root / "docs/native-engine/semantics/opcodes/opcode-overrides.json",
+        )
+    except OPCODE_VALIDATOR.MatrixError as exc:
+        raise ValidationError(f"opcode specialist validation failed: {exc}") from exc
+    require(matrix == generated_matrix, "opcode matrix differs from the specialist generator output")
+
+    try:
+        EFFECT_VALIDATOR.validate_model(documents["effects"], documents["effects_schema"])
+    except EFFECT_VALIDATOR.ValidationError as exc:
+        raise ValidationError(f"effect specialist validation failed: {exc}") from exc
+
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        frame_status = FRAME_VALIDATOR.check(
+            root / ARTIFACTS["frame_schema"], root / ARTIFACTS["frame_examples"]
+        )
+    require(frame_status == 0, "frame specialist validation failed")
+
+    tpde_errors = TPDE_VALIDATOR.validate_document(documents["tpde"])
+    require(not tpde_errors, f"TPDE specialist validation failed: {tpde_errors}")
+
+    try:
+        MANIFEST_VALIDATOR.validate_document(documents["manifest"], specialist_root)
+    except MANIFEST_VALIDATOR.ManifestError as exc:
+        raise ValidationError(f"manifest specialist validation failed: {exc}") from exc
+
     require(matrix.get("format_version") == "1.0.0", "opcode matrix format_version must be 1.0.0")
     require(matrix.get("source_commit") == WAVE_BASE, "opcode matrix source commit is stale")
     opcodes = matrix.get("opcodes")
