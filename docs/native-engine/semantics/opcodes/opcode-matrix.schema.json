@@ -1,0 +1,198 @@
+{
+  "$id": "https://php.net/schemas/native-engine/opcode-matrix-1.0.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "format_version": {"const": "1.0.0"},
+    "opcodes": {
+      "items": {"$ref": "#/$defs/opcode"},
+      "minItems": 1,
+      "type": "array"
+    },
+    "reserved_opcode_numbers": {
+      "items": {"minimum": 0, "type": "integer"},
+      "type": "array",
+      "uniqueItems": true
+    },
+    "sentinel": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {"const": "ZEND_VM_LAST_OPCODE"},
+        "value": {"minimum": 0, "type": "integer"}
+      },
+      "required": ["name", "value"],
+      "type": "object"
+    },
+    "source_commit": {
+      "const": "dc6e34b56846c38dc2475d6c962c2b9b7ada6df4"
+    },
+    "source_files": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {"minLength": 1, "type": "string"},
+          "sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"}
+        },
+        "required": ["path", "sha256"],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": [
+    "format_version",
+    "source_commit",
+    "source_files",
+    "sentinel",
+    "reserved_opcode_numbers",
+    "opcodes"
+  ],
+  "title": "W01 Zend opcode semantic coverage matrix",
+  "type": "object",
+  "$defs": {
+    "barrier": {
+      "enum": [
+        "bailout", "destructor", "exception", "interrupt", "observer",
+        "reentrancy", "safepoint", "suspend"
+      ]
+    },
+    "domain": {
+      "enum": [
+        "engine.class_table", "engine.exception", "engine.fiber",
+        "engine.function_table", "engine.generator", "engine.interrupt",
+        "engine.observer", "external.state", "frame.args",
+        "frame.call_chain", "frame.locals", "frame.temps", "gc.metadata",
+        "heap.array", "heap.object", "heap.reference", "heap.string",
+        "heap.zval", "runtime.cache", "runtime.symbol_table"
+      ]
+    },
+    "effect": {
+      "enum": [
+        "allocate", "bailout", "call_internal", "call_php", "external_io",
+        "interrupt_boundary", "observe_frame", "read_memory", "reenter_php",
+        "resume", "run_destructor", "suspend", "terminate", "throw",
+        "write_memory"
+      ]
+    },
+    "jitSupport": {
+      "enum": ["none", "function", "trace", "both", "partial"]
+    },
+    "opcode": {
+      "additionalProperties": false,
+      "properties": {
+        "barrier_ids": {"items": {"$ref": "#/$defs/barrier"}, "type": "array", "uniqueItems": true},
+        "effect_ids": {"items": {"$ref": "#/$defs/effect"}, "type": "array", "uniqueItems": true},
+        "existing_jit_support": {"$ref": "#/$defs/jitSupport"},
+        "interrupt_boundary": {"$ref": "#/$defs/tristate"},
+        "may_bailout": {"$ref": "#/$defs/tristate"},
+        "may_call_php": {"$ref": "#/$defs/tristate"},
+        "may_run_dtor": {"$ref": "#/$defs/tristate"},
+        "may_throw": {"$ref": "#/$defs/tristate"},
+        "n0_a64": {"$ref": "#/$defs/targetState"},
+        "n0_x64": {"$ref": "#/$defs/targetState"},
+        "number": {"minimum": 0, "type": "integer"},
+        "observer_boundary": {"$ref": "#/$defs/tristate"},
+        "opcode": {"pattern": "^ZEND_[A-Z0-9_]+$", "type": "string"},
+        "operands": {"$ref": "#/$defs/operands"},
+        "ownership_actions": {"items": {"$ref": "#/$defs/ownership"}, "type": "array", "uniqueItems": true},
+        "planned_znmir_lowering": {"pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$", "type": "string"},
+        "read_domains": {"items": {"$ref": "#/$defs/domain"}, "type": "array", "uniqueItems": true},
+        "reason": {"minLength": 1, "type": "string"},
+        "reference_semantics": {"minLength": 1, "type": "string"},
+        "result": {
+          "enum": [
+            "none", "temporary", "in_place", "control", "call_frame",
+            "return", "exception", "suspend", "metadata"
+          ]
+        },
+        "source_refs": {"items": {"$ref": "#/$defs/sourceRef"}, "minItems": 1, "type": "array"},
+        "special_cases": {"items": {"$ref": "#/$defs/specialCase"}, "type": "array", "uniqueItems": true},
+        "tests": {"items": {"minLength": 1, "type": "string"}, "minItems": 1, "type": "array", "uniqueItems": true},
+        "write_domains": {"items": {"$ref": "#/$defs/domain"}, "type": "array", "uniqueItems": true}
+      },
+      "required": [
+        "opcode", "number", "operands", "result", "may_throw",
+        "may_bailout", "may_call_php", "may_run_dtor",
+        "reference_semantics", "observer_boundary", "interrupt_boundary",
+        "existing_jit_support", "planned_znmir_lowering", "n0_x64",
+        "n0_a64", "special_cases", "effect_ids", "read_domains",
+        "write_domains", "ownership_actions", "barrier_ids", "tests",
+        "source_refs", "reason"
+      ],
+      "type": "object"
+    },
+    "operands": {
+      "additionalProperties": false,
+      "properties": {
+        "dispatches": {"items": {"$ref": "#/$defs/dispatch"}, "type": "array"},
+        "extended": {"items": {"minLength": 1, "type": "string"}, "type": "array"},
+        "handler_style": {"pattern": "^ZEND_VM_[A-Z0-9_]+$", "type": "string"},
+        "op1": {"items": {"minLength": 1, "type": "string"}, "minItems": 1, "type": "array"},
+        "op2": {"items": {"minLength": 1, "type": "string"}, "minItems": 1, "type": "array"},
+        "spec": {"items": {"minLength": 1, "type": "string"}, "type": "array"},
+        "variants": {"items": {"$ref": "#/$defs/variant"}, "type": "array"}
+      },
+      "required": ["handler_style", "op1", "op2", "extended", "spec", "variants", "dispatches"],
+      "type": "object"
+    },
+    "dispatch": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"enum": ["handler", "helper"]},
+        "source_line": {"minimum": 1, "type": "integer"},
+        "target": {"minLength": 1, "type": "string"},
+        "target_end_line": {"minimum": 1, "type": "integer"},
+        "target_start_line": {"minimum": 1, "type": "integer"}
+      },
+      "required": ["kind", "target", "source_line", "target_start_line", "target_end_line"],
+      "type": "object"
+    },
+    "ownership": {
+      "enum": [
+        "borrow", "canonicalize", "conditional_destroy", "copy_addref",
+        "cow_separate", "destroy", "move", "produce_borrowed",
+        "produce_owned", "transfer"
+      ]
+    },
+    "sourceRef": {
+      "additionalProperties": false,
+      "properties": {
+        "end_line": {"minimum": 1, "type": "integer"},
+        "path": {"minLength": 1, "type": "string"},
+        "start_line": {"minimum": 1, "type": "integer"},
+        "symbol": {"minLength": 1, "type": "string"}
+      },
+      "required": ["path", "symbol", "start_line", "end_line"],
+      "type": "object"
+    },
+    "specialCase": {
+      "enum": [
+        "call", "destructor", "exception", "external_io", "fiber",
+        "finally", "generator", "interrupt", "observer", "reference",
+        "zts"
+      ]
+    },
+    "targetState": {
+      "enum": ["not_started", "planned", "blocked", "not_applicable"]
+    },
+    "tristate": {
+      "enum": ["never", "conditional", "always"]
+    },
+    "variant": {
+      "additionalProperties": false,
+      "properties": {
+        "condition": {"minLength": 1, "type": "string"},
+        "extended": {"items": {"minLength": 1, "type": "string"}, "type": "array"},
+        "handler_style": {"minLength": 1, "type": "string"},
+        "name": {"minLength": 1, "type": "string"},
+        "op1": {"items": {"minLength": 1, "type": "string"}, "type": "array"},
+        "op2": {"items": {"minLength": 1, "type": "string"}, "type": "array"},
+        "source_line": {"minimum": 1, "type": "integer"},
+        "spec": {"items": {"minLength": 1, "type": "string"}, "type": "array"}
+      },
+      "required": ["handler_style", "condition", "name", "op1", "op2", "extended", "spec", "source_line"],
+      "type": "object"
+    }
+  }
+}
