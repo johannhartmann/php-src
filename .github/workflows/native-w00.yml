@@ -1,0 +1,62 @@
+name: Native W00 build harness
+
+on:
+  pull_request:
+    paths:
+      - scripts/native/**
+      - .github/workflows/native-w00.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-w00:
+    name: ${{ matrix.profile }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        profile:
+          - debug-nts
+          - release-nts
+          - debug-zts
+          - release-zts
+          - asan-nts
+          - ubsan-nts
+    env:
+      NATIVE_WORK_ROOT: ${{ runner.temp }}/php-native-w00
+      NATIVE_JOBS: 2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install existing php-src Linux prerequisites
+        uses: ./.github/actions/apt-x64
+        with:
+          asan: ${{ matrix.profile == 'asan-nts' && 'true' || 'false' }}
+
+      - name: Build profile
+        run: scripts/native/build.sh --profile "${{ matrix.profile }}"
+
+      - name: Smoke regular profile
+        if: ${{ !endsWith(matrix.profile, 'san-nts') }}
+        run: scripts/native/test-smoke.sh --profile "${{ matrix.profile }}"
+
+      - name: Smoke sanitizer profile
+        if: ${{ endsWith(matrix.profile, 'san-nts') }}
+        run: scripts/native/test-sanitizers.sh --profile "${{ matrix.profile }}"
+
+      - name: Upload logs and manifests
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: native-w00-${{ matrix.profile }}
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/php-native-w00/**/buildconf.log
+            ${{ runner.temp }}/php-native-w00/**/logs/**
+            ${{ runner.temp }}/php-native-w00/**/artifacts/**
+            ${{ runner.temp }}/php-native-w00/**/configure-state.json
+            ${{ runner.temp }}/php-native-w00/**/build-manifest.json
