@@ -2,7 +2,8 @@
 
 This directory records the architecture and working contracts for the native
 engine full-cutover project. W00 establishes rules, build/test command names,
-and gates only; it does not add a compiler or change PHP runtime behavior.
+and gates; W01 freezes semantic contracts. Neither wave adds a compiler or
+changes PHP runtime behavior.
 
 Repository-wide and path-specific agent rules live in:
 
@@ -24,6 +25,8 @@ Repository-wide and path-specific agent rules live in:
 6. [Primary and secondary target platforms](adr/0006-target-platforms.md)
 7. [Relocatable OPcache persistence](adr/0007-opcache-persistence.md)
 8. [Differential testing as the semantic oracle](adr/0008-differential-oracle.md)
+9. [Native frame state and safepoints](adr/0009-native-frame-state-and-safepoints.md)
+10. [Bailout, exception, suspend, and resume ABI](adr/0010-bailout-exception-suspend-resume-abi.md)
 
 ## Delivery contracts
 
@@ -31,6 +34,7 @@ Repository-wide and path-specific agent rules live in:
 - [Codex review template](codex-review-template.md)
 - [Pull-request conventions](pr-conventions.md)
 - [Native test-command contract](test-command-contract.md)
+- [Native frame semantics](semantics/frames/README.md)
 
 The generated wave status subtree, `docs/native-engine/waves/`, is owned by the
 wave-gate work and is intentionally outside W00-A.

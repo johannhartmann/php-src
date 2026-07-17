@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://php.net/schemas/native-engine/frame-state-1.0.0.json",
+  "title": "Native baseline frame state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "frame_id",
+    "function",
+    "opline",
+    "parent_frame_id",
+    "slots",
+    "roots",
+    "cleanup_obligations",
+    "continuations",
+    "suspend",
+    "code_version",
+    "resume",
+    "safepoint"
+  ],
+  "properties": {
+    "format_version": {"const": "1.0.0"},
+    "frame_id": {"type": "string", "minLength": 1},
+    "function": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name", "op_array_id"],
+      "properties": {
+        "kind": {"enum": ["user", "internal", "main"]},
+        "name": {"type": "string", "minLength": 1},
+        "op_array_id": {"type": ["string", "null"]}
+      }
+    },
+    "opline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "phase", "owner_frame_id"],
+      "properties": {
+        "index": {"type": ["integer", "null"], "minimum": 0},
+        "phase": {"enum": ["before", "after", "exception", "suspended"]},
+        "owner_frame_id": {"type": "string", "minLength": 1}
+      }
+    },
+    "parent_frame_id": {"type": ["string", "null"]},
+    "slots": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/slot"}
+    },
+    "roots": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "cleanup_obligations": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/cleanup"}
+    },
+    "continuations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["return", "exception", "bailout"],
+      "properties": {
+        "return": {"$ref": "#/$defs/continuation"},
+        "exception": {"$ref": "#/$defs/continuation"},
+        "bailout": {"$ref": "#/$defs/continuation"}
+      }
+    },
+    "suspend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "state_id"],
+      "properties": {
+        "kind": {"enum": ["none", "generator", "fiber", "deopt"]},
+        "state_id": {"type": ["string", "null"]}
+      }
+    },
+    "code_version": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "immutable", "active"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "immutable": {"const": true},
+        "active": {"type": "boolean"}
+      }
+    },
+    "resume": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allowed",
+        "entry_kind",
+        "resume_id",
+        "code_version_id",
+        "target_opline_index",
+        "machine_offset",
+        "vm_dispatch"
+      ],
+      "properties": {
+        "allowed": {"type": "boolean"},
+        "entry_kind": {"enum": ["none", "single_entry_dispatcher"]},
+        "resume_id": {"type": ["string", "null"]},
+        "code_version_id": {"type": ["string", "null"]},
+        "target_opline_index": {"type": ["integer", "null"], "minimum": 0},
+        "machine_offset": {"type": "null"},
+        "vm_dispatch": {"const": false}
+      }
+    },
+    "safepoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class", "canonical"],
+      "properties": {
+        "class": {
+          "enum": [
+            "function_entry",
+            "user_call",
+            "internal_call",
+            "allocation",
+            "destructor",
+            "exception_edge",
+            "bailout_helper",
+            "observer",
+            "interrupt",
+            "generator_suspend",
+            "generator_resume",
+            "fiber_switch",
+            "deopt_resume"
+          ]
+        },
+        "canonical": {"const": true}
+      }
+    }
+  },
+  "$defs": {
+    "slot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slot_id",
+        "kind",
+        "index",
+        "representation",
+        "materialization",
+        "ownership",
+        "rooted",
+        "cleanup_required"
+      ],
+      "properties": {
+        "slot_id": {"type": "string", "minLength": 1},
+        "kind": {
+          "enum": [
+            "argument",
+            "cv",
+            "tmp",
+            "var",
+            "return_value",
+            "this",
+            "extra_argument",
+            "extra_named_argument",
+            "pending_call"
+          ]
+        },
+        "index": {"type": ["integer", "null"], "minimum": 0},
+        "representation": {"enum": ["canonical_zval", "execute_data_field", "persistent_suspend_state"]},
+        "materialization": {"enum": ["materialized", "undef", "borrowed_pointer"]},
+        "ownership": {
+          "enum": [
+            "borrowed",
+            "copied_refcounted",
+            "moved",
+            "frame_owned",
+            "caller_owned",
+            "suspend_state_owned"
+          ]
+        },
+        "rooted": {"type": "boolean"},
+        "cleanup_required": {"type": "boolean"}
+      }
+    },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slot_id", "action", "state"],
+      "properties": {
+        "slot_id": {"type": "string", "minLength": 1},
+        "action": {"enum": ["destroy", "release", "transfer", "none"]},
+        "state": {"enum": ["pending", "complete", "transferred"]}
+      }
+    },
+    "continuation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "frame_id", "opline_index"],
+      "properties": {
+        "kind": {"enum": ["native", "zend_exception", "nonlocal_bailout", "terminal"]},
+        "frame_id": {"type": ["string", "null"]},
+        "opline_index": {"type": ["integer", "null"], "minimum": 0}
+      }
+    }
+  }
+}
