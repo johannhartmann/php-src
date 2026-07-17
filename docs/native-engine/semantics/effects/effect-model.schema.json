@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://php.net/schemas/native-engine/effect-model-1.0.0.json",
+  "title": "PHP native engine effect and ownership model",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "model_id",
+    "source_basis",
+    "catalog",
+    "unmodeled_semantics_policy",
+    "atomic_effects",
+    "memory_domains",
+    "alias_relations",
+    "ownership_states",
+    "ownership_actions",
+    "phi_policy",
+    "predicates",
+    "barriers",
+    "guard_facts",
+    "composition_rules"
+  ],
+  "properties": {
+    "$schema": {"const": "./effect-model.schema.json"},
+    "format_version": {"const": "1.0.0"},
+    "model_id": {"const": "php-native-effect-ownership-v1"},
+    "source_basis": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/sourceRef"}
+    },
+    "catalog": {"$ref": "#/$defs/catalog"},
+    "unmodeled_semantics_policy": {"$ref": "#/$defs/unmodeledPolicy"},
+    "atomic_effects": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/effect"}},
+    "memory_domains": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/domain"}},
+    "alias_relations": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/alias"}},
+    "ownership_states": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/state"}},
+    "ownership_actions": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/action"}},
+    "phi_policy": {"$ref": "#/$defs/phiPolicy"},
+    "predicates": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/predicate"}},
+    "barriers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/barrier"}},
+    "guard_facts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/guard"}},
+    "composition_rules": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/rule"}}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*$"},
+    "text": {"type": "string", "minLength": 1},
+    "sourceRef": {"type": "string", "pattern": "^[A-Za-z0-9_./+-]+:[1-9][0-9]*(-[1-9][0-9]*)?$"},
+    "idList": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+    "sources": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/sourceRef"}},
+    "common": {
+      "type": "object",
+      "required": ["id", "definition", "observable_behavior", "conservative_default", "source_refs"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "definition": {"$ref": "#/$defs/text"},
+        "observable_behavior": {"$ref": "#/$defs/text"},
+        "conservative_default": {"$ref": "#/$defs/text"},
+        "source_refs": {"$ref": "#/$defs/sources"}
+      }
+    },
+    "catalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["effects", "memory_domains", "ownership_states", "ownership_actions", "predicates", "barriers", "guard_facts", "composition_rules"],
+      "properties": {
+        "effects": {"$ref": "#/$defs/idList"},
+        "memory_domains": {"$ref": "#/$defs/idList"},
+        "ownership_states": {"$ref": "#/$defs/idList"},
+        "ownership_actions": {"$ref": "#/$defs/idList"},
+        "predicates": {"$ref": "#/$defs/idList"},
+        "barriers": {"$ref": "#/$defs/idList"},
+        "guard_facts": {"$ref": "#/$defs/idList"},
+        "composition_rules": {"$ref": "#/$defs/idList"}
+      }
+    },
+    "unmodeledPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classification", "pure", "optimization", "publication", "ownership", "effects", "reads", "writes", "barriers"],
+      "properties": {
+        "classification": {"const": "fail_closed"},
+        "pure": {"const": false},
+        "optimization": {"const": "blocked"},
+        "publication": {"const": "rejected"},
+        "ownership": {"const": "rejected"},
+        "effects": {"$ref": "#/$defs/idList"},
+        "reads": {"$ref": "#/$defs/idList"},
+        "writes": {"$ref": "#/$defs/idList"},
+        "barriers": {"$ref": "#/$defs/idList"}
+      }
+    },
+    "effect": {
+      "allOf": [{"$ref": "#/$defs/common"}],
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "definition", "observable_behavior", "conservative_default", "source_refs", "reads", "writes", "barriers"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"}, "definition": {"$ref": "#/$defs/text"}, "observable_behavior": {"$ref": "#/$defs/text"},
+        "conservative_default": {"$ref": "#/$defs/text"}, "source_refs": {"$ref": "#/$defs/sources"},
+        "reads": {"$ref": "#/$defs/idList"}, "writes": {"$ref": "#/$defs/idList"}, "barriers": {"$ref": "#/$defs/idList"}
+      }
+    },
+    "domain": {
+      "allOf": [{"$ref": "#/$defs/common"}],
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "definition", "observable_behavior", "conservative_default", "source_refs", "materialized_at"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"}, "definition": {"$ref": "#/$defs/text"}, "observable_behavior": {"$ref": "#/$defs/text"},
+        "conservative_default": {"$ref": "#/$defs/text"}, "source_refs": {"$ref": "#/$defs/sources"}, "materialized_at": {"$ref": "#/$defs/idList"}
+      }
+    },
+    "alias": {
+      "type": "object", "additionalProperties": false,
+      "required": ["left", "right", "kind", "reason", "source_refs"],
+      "properties": {
+        "left": {"$ref": "#/$defs/id"}, "right": {"$ref": "#/$defs/id"},
+        "kind": {"enum": ["may_alias", "contains_reference", "indirect_access", "shares_pointee"]},
+        "reason": {"$ref": "#/$defs/text"}, "source_refs": {"$ref": "#/$defs/sources"}
+      }
+    },
+    "state": {
+      "allOf": [{"$ref": "#/$defs/common"}],
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "definition", "observable_behavior", "conservative_default", "source_refs", "terminal", "cleanup_obligations"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"}, "definition": {"$ref": "#/$defs/text"}, "observable_behavior": {"$ref": "#/$defs/text"},
+        "conservative_default": {"$ref": "#/$defs/text"}, "source_refs": {"$ref": "#/$defs/sources"},
+        "terminal": {"type": "boolean"}, "cleanup_obligations": {"enum": ["none", "exactly_one_release"]}
+      }
+    },
+    "action": {
+      "allOf": [{"$ref": "#/$defs/common"}],
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "definition", "observable_behavior", "conservative_default", "source_refs", "allowed_from", "source_after", "result_state", "effects", "reads", "writes", "barriers"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"}, "definition": {"$ref": "#/$defs/text"}, "observable_behavior": {"$ref": "#/$defs/text"},
+        "conservative_default": {"$ref": "#/$defs/text"}, "source_refs": {"$ref": "#/$defs/sources"},
+        "allowed_from": {"$ref": "#/$defs/idList"}, "source_after": {"$ref": "#/$defs/id"},
+        "result_state": {"type": ["string", "null"]}, "effects": {"$ref": "#/$defs/idList"},
+        "reads": {"$ref": "#/$defs/idList"}, "writes": {"$ref": "#/$defs/idList"}, "barriers": {"$ref": "#/$defs/idList"}
+      }
+    },
+    "phiPolicy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["allowed_inputs", "implicit_merges", "edge_conversion_required", "terminal_inputs", "merged_cleanup", "exit_kinds", "cleanup_order"],
+      "properties": {
+        "allowed_inputs": {"$ref": "#/$defs/idList"},
+        "implicit_merges": {"type": "array", "uniqueItems": true, "items": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/id"}}},
+        "edge_conversion_required": {"const": true},
+        "terminal_inputs": {"const": "forbidden"},
+        "merged_cleanup": {"const": "exactly_one_obligation"},
+        "exit_kinds": {"type": "array", "uniqueItems": true, "items": {"enum": ["normal", "exception", "bailout", "suspend"]}},
+        "cleanup_order": {"const": "source_order"}
+      }
+    },
+    "predicate": {
+      "allOf": [{"$ref": "#/$defs/common"}],
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "definition", "observable_behavior", "conservative_default", "source_refs", "default_when_unproven"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"}, "definition": {"$ref": "#/$defs/text"}, "observable_behavior": {"$ref": "#/$defs/text"},
+        "conservative_default": {"$ref": "#/$defs/text"}, "source_refs": {"$ref": "#/$defs/sources"}, "default_when_unproven": {"const": true}
+      }
+    },
+    "barrier": {
+      "allOf": [{"$ref": "#/$defs/common"}],
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "definition", "observable_behavior", "conservative_default", "source_refs", "materialize", "forbids_motion_across"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"}, "definition": {"$ref": "#/$defs/text"}, "observable_behavior": {"$ref": "#/$defs/text"},
+        "conservative_default": {"$ref": "#/$defs/text"}, "source_refs": {"$ref": "#/$defs/sources"},
+        "materialize": {"$ref": "#/$defs/idList"}, "forbids_motion_across": {"$ref": "#/$defs/idList"}
+      }
+    },
+    "invalidation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["effects", "writes", "barriers", "predicates"],
+      "properties": {"effects": {"$ref": "#/$defs/idList"}, "writes": {"$ref": "#/$defs/idList"}, "barriers": {"$ref": "#/$defs/idList"}, "predicates": {"$ref": "#/$defs/idList"}}
+    },
+    "guard": {
+      "allOf": [{"$ref": "#/$defs/common"}],
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "definition", "observable_behavior", "conservative_default", "source_refs", "required_proof", "stable_across", "invalidated_by"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"}, "definition": {"$ref": "#/$defs/text"}, "observable_behavior": {"$ref": "#/$defs/text"},
+        "conservative_default": {"$ref": "#/$defs/text"}, "source_refs": {"$ref": "#/$defs/sources"},
+        "required_proof": {"$ref": "#/$defs/text"}, "stable_across": {"$ref": "#/$defs/idList"}, "invalidated_by": {"$ref": "#/$defs/invalidation"}
+      }
+    },
+    "condition": {
+      "type": "object", "additionalProperties": false,
+      "required": ["predicates", "effects", "actions", "barriers"],
+      "properties": {"predicates": {"$ref": "#/$defs/idList"}, "effects": {"$ref": "#/$defs/idList"}, "actions": {"$ref": "#/$defs/idList"}, "barriers": {"$ref": "#/$defs/idList"}}
+    },
+    "consequence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["effects", "reads", "writes", "barriers", "normal_return"],
+      "properties": {
+        "effects": {"$ref": "#/$defs/idList"}, "reads": {"$ref": "#/$defs/idList"}, "writes": {"$ref": "#/$defs/idList"},
+        "barriers": {"$ref": "#/$defs/idList"}, "normal_return": {"enum": ["permitted", "forbidden", "unchanged"]}
+      }
+    },
+    "rule": {
+      "allOf": [{"$ref": "#/$defs/common"}],
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "definition", "observable_behavior", "conservative_default", "source_refs", "when", "implies"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"}, "definition": {"$ref": "#/$defs/text"}, "observable_behavior": {"$ref": "#/$defs/text"},
+        "conservative_default": {"$ref": "#/$defs/text"}, "source_refs": {"$ref": "#/$defs/sources"},
+        "when": {"$ref": "#/$defs/condition"}, "implies": {"$ref": "#/$defs/consequence"}
+      }
+    }
+  }
+}

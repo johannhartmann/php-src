@@ -1,0 +1,11 @@
+{
+  "id": "falsely-stable-guard",
+  "operations": [
+    {
+      "op": "append",
+      "path": ["guard_facts", "array_packed_layout", "stable_across"],
+      "value": "call_php"
+    }
+  ],
+  "expected_error": "guard array_packed_layout: falsely stable"
+}
