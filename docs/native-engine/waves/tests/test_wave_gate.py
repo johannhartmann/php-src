@@ -11,6 +11,9 @@ import unittest
 from unittest import mock
 
 
+sys.dont_write_bytecode = True
+
+
 ROOT = Path(__file__).resolve().parents[4]
 SCRIPT = ROOT / "scripts/native/wave-gate.py"
 DEFINITION_PATH = ROOT / "docs/native-engine/waves/waves.json"
