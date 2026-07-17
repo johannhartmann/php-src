@@ -93,6 +93,12 @@ bool zend_mir_effect_summary_close(zend_mir_effect_summary *summary)
 		return false;
 	}
 
+	/*
+	 * applied_rules is derived closure state, not caller-supplied evidence.
+	 * Recompute it so a malformed summary cannot suppress required implications.
+	 */
+	summary->applied_rules = 0;
+
 	if ((summary->effects & (ZEND_MIR_EFFECT_MASK(ZEND_MIR_EFFECT_BAILOUT)
 			| ZEND_MIR_EFFECT_MASK(ZEND_MIR_EFFECT_TERMINATE))) != 0) {
 		summary->normal_return = false;
