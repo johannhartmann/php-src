@@ -166,15 +166,129 @@
     },
     {
       "dependencies": ["W00"],
-      "expected_base_commit": null,
-      "goal": "Establish the native-engine ABI boundary, core ownership model, and verified runtime substrate.",
+      "expected_base_commit": "dc6e34b56846c38dc2475d6c962c2b9b7ada6df4",
+      "goal": "Freeze complete, source-backed semantic, effect, frame, TPDE, and test contracts before MIR implementation.",
       "optional_gate_ids": [],
-      "parallel_tracks": ["ABI boundary", "runtime substrate", "verification"],
-      "required_gate_ids": ["W01-integration-gate"],
-      "responsible_paths": ["Zend/Native/**", "tests/native/**"],
-      "roles": ["native runtime agent", "integration agent"],
-      "tasks": [{"owned_paths": ["Zend/Native/**", "tests/native/**"], "requires_clean_worktree": true, "role": "integration agent", "task_id": "W01-integration-gate", "title": "Native substrate integration gate"}],
-      "title": "Native substrate and ABI boundary",
+      "parallel_tracks": [
+        "A: opcode coverage matrix",
+        "B: effect, alias, and ownership model",
+        "C: frame, safepoint, bailout, and resume contract",
+        "D: TPDE capability and gap analysis",
+        "E: semantic PHPT corpus and oracle evidence"
+      ],
+      "required_gate_ids": [
+        "W01-0-contract-freeze",
+        "W01-A-opcode-coverage",
+        "W01-B-effect-ownership-model",
+        "W01-C-frame-safepoint-contract",
+        "W01-D-tpde-gap-analysis",
+        "W01-E-semantics-test-corpus",
+        "W01-integration-gate"
+      ],
+      "responsible_paths": [
+        "docs/native-engine/README.md",
+        "docs/native-engine/adr/0009-*.md",
+        "docs/native-engine/adr/0010-*.md",
+        "docs/native-engine/semantics/**",
+        "docs/native-engine/tpde/**",
+        "docs/native-engine/waves/**",
+        "scripts/native/semantics/**",
+        "tests/native/semantics/**"
+      ],
+      "roles": [
+        "wave contract agent",
+        "opcode semantics agent",
+        "effect and ownership contract agent",
+        "frame and control-transfer contract agent",
+        "TPDE capability research agent",
+        "semantic oracle agent",
+        "semantic integration agent"
+      ],
+      "tasks": [
+        {
+          "owned_paths": ["docs/native-engine/waves/**"],
+          "requires_clean_worktree": true,
+          "role": "wave contract agent",
+          "task_id": "W01-0-contract-freeze",
+          "title": "Freeze W01 semantic task and gate contracts"
+        },
+        {
+          "owned_paths": [
+            "docs/native-engine/semantics/opcodes/**",
+            "scripts/native/semantics/generate-opcode-matrix.py",
+            "tests/native/semantics/contracts/opcodes/**"
+          ],
+          "requires_clean_worktree": true,
+          "role": "opcode semantics agent",
+          "task_id": "W01-A-opcode-coverage",
+          "title": "Inventory executable Zend opcode semantics"
+        },
+        {
+          "owned_paths": [
+            "docs/native-engine/semantics/effects/**",
+            "scripts/native/semantics/validate-effect-model.py",
+            "tests/native/semantics/contracts/effects/**"
+          ],
+          "requires_clean_worktree": true,
+          "role": "effect and ownership contract agent",
+          "task_id": "W01-B-effect-ownership-model",
+          "title": "Define effect, alias, and ownership contracts"
+        },
+        {
+          "owned_paths": [
+            "docs/native-engine/README.md",
+            "docs/native-engine/adr/0009-*.md",
+            "docs/native-engine/adr/0010-*.md",
+            "docs/native-engine/semantics/frames/**",
+            "scripts/native/semantics/validate-frame-contract.py",
+            "tests/native/semantics/contracts/frames/**"
+          ],
+          "requires_clean_worktree": true,
+          "role": "frame and control-transfer contract agent",
+          "task_id": "W01-C-frame-safepoint-contract",
+          "title": "Freeze frame, safepoint, bailout, and resume contracts"
+        },
+        {
+          "owned_paths": [
+            "docs/native-engine/tpde/**",
+            "scripts/native/semantics/validate-tpde-gap.py",
+            "tests/native/semantics/contracts/tpde/**"
+          ],
+          "requires_clean_worktree": true,
+          "role": "TPDE capability research agent",
+          "task_id": "W01-D-tpde-gap-analysis",
+          "title": "Map pinned TPDE capabilities and gaps"
+        },
+        {
+          "owned_paths": [
+            "tests/native/semantics/README.md",
+            "tests/native/semantics/capture_reference.py",
+            "tests/native/semantics/contracts/corpus/**",
+            "tests/native/semantics/corpus/**",
+            "tests/native/semantics/manifest*.json",
+            "tests/native/semantics/validate_manifest.py"
+          ],
+          "requires_clean_worktree": true,
+          "role": "semantic oracle agent",
+          "task_id": "W01-E-semantics-test-corpus",
+          "title": "Build the semantic PHPT and oracle corpus"
+        },
+        {
+          "owned_paths": [
+            "docs/native-engine/semantics/README.md",
+            "docs/native-engine/semantics/blockers*.json",
+            "docs/native-engine/semantics/w01-coverage-report.json",
+            "docs/native-engine/waves/**",
+            "scripts/native/semantics/validate-w01.py",
+            "tests/native/semantics/contracts/integration/**"
+          ],
+          "requires_clean_worktree": true,
+          "role": "semantic integration agent",
+          "task_id": "W01-integration-gate",
+          "title": "Close the W01 semantic contract hard gate"
+        }
+      ],
+      "title": "Semantic inventory and binding contracts",
       "wave_id": "W01"
     },
     {
