@@ -39,4 +39,4 @@ semantics.
 Run the task-specific checks and the applicable php-src tests before completion.
 Run `git diff --check` and inspect `git status --short`. Report every command and
 its real result; never hide failures or claim an unavailable check passed. Leave
-the worktree clean unless the task explicitly requests an uncommitted handoff.
+the worktree clean at completion.
