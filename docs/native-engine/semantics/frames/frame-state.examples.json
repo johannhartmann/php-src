@@ -1,0 +1,324 @@
+{
+  "format_version": "1.0.0",
+  "schema": "frame-state.schema.json",
+  "examples": [
+    {
+      "example_id": "normal-call",
+      "description": "A caller and callee at the canonical user-call boundary.",
+      "expected_valid": true,
+      "expected_errors": [],
+      "frames": [
+        {
+          "format_version": "1.0.0",
+          "frame_id": "normal-caller",
+          "function": {"kind": "user", "name": "main", "op_array_id": "oparray:main"},
+          "opline": {"index": 4, "phase": "before", "owner_frame_id": "normal-caller"},
+          "parent_frame_id": null,
+          "slots": [
+            {"slot_id": "normal-caller:cv0", "kind": "cv", "index": 0, "representation": "canonical_zval", "materialization": "materialized", "ownership": "frame_owned", "rooted": true, "cleanup_required": true},
+            {"slot_id": "normal-caller:retval", "kind": "return_value", "index": null, "representation": "canonical_zval", "materialization": "undef", "ownership": "caller_owned", "rooted": false, "cleanup_required": false}
+          ],
+          "roots": ["normal-caller:cv0"],
+          "cleanup_obligations": [
+            {"slot_id": "normal-caller:cv0", "action": "destroy", "state": "pending"}
+          ],
+          "continuations": {
+            "return": {"kind": "native", "frame_id": "normal-caller", "opline_index": 5},
+            "exception": {"kind": "zend_exception", "frame_id": "normal-caller", "opline_index": 4},
+            "bailout": {"kind": "nonlocal_bailout", "frame_id": null, "opline_index": null}
+          },
+          "suspend": {"kind": "none", "state_id": null},
+          "code_version": {"id": "code:main:v1", "immutable": true, "active": true},
+          "resume": {"allowed": false, "entry_kind": "none", "resume_id": null, "code_version_id": null, "target_opline_index": null, "machine_offset": null, "vm_dispatch": false},
+          "safepoint": {"class": "user_call", "canonical": true}
+        },
+        {
+          "format_version": "1.0.0",
+          "frame_id": "normal-callee",
+          "function": {"kind": "user", "name": "addOne", "op_array_id": "oparray:addOne"},
+          "opline": {"index": 1, "phase": "before", "owner_frame_id": "normal-callee"},
+          "parent_frame_id": "normal-caller",
+          "slots": [
+            {"slot_id": "normal-callee:arg0", "kind": "argument", "index": 0, "representation": "canonical_zval", "materialization": "materialized", "ownership": "frame_owned", "rooted": true, "cleanup_required": true}
+          ],
+          "roots": ["normal-callee:arg0"],
+          "cleanup_obligations": [
+            {"slot_id": "normal-callee:arg0", "action": "destroy", "state": "pending"}
+          ],
+          "continuations": {
+            "return": {"kind": "native", "frame_id": "normal-caller", "opline_index": 5},
+            "exception": {"kind": "zend_exception", "frame_id": "normal-callee", "opline_index": 1},
+            "bailout": {"kind": "nonlocal_bailout", "frame_id": null, "opline_index": null}
+          },
+          "suspend": {"kind": "none", "state_id": null},
+          "code_version": {"id": "code:addOne:v1", "immutable": true, "active": true},
+          "resume": {"allowed": false, "entry_kind": "none", "resume_id": null, "code_version_id": null, "target_opline_index": null, "machine_offset": null, "vm_dispatch": false},
+          "safepoint": {"class": "function_entry", "canonical": true}
+        }
+      ]
+    },
+    {
+      "example_id": "exception-edge",
+      "description": "An exception records the throwing opline while EG(exception) selects the Zend exception continuation.",
+      "expected_valid": true,
+      "expected_errors": [],
+      "frames": [
+        {
+          "format_version": "1.0.0",
+          "frame_id": "thrower",
+          "function": {"kind": "user", "name": "thrower", "op_array_id": "oparray:thrower"},
+          "opline": {"index": 7, "phase": "exception", "owner_frame_id": "thrower"},
+          "parent_frame_id": null,
+          "slots": [
+            {"slot_id": "thrower:cv0", "kind": "cv", "index": 0, "representation": "canonical_zval", "materialization": "materialized", "ownership": "frame_owned", "rooted": true, "cleanup_required": true}
+          ],
+          "roots": ["thrower:cv0"],
+          "cleanup_obligations": [
+            {"slot_id": "thrower:cv0", "action": "destroy", "state": "pending"}
+          ],
+          "continuations": {
+            "return": {"kind": "terminal", "frame_id": null, "opline_index": null},
+            "exception": {"kind": "zend_exception", "frame_id": "thrower", "opline_index": 7},
+            "bailout": {"kind": "nonlocal_bailout", "frame_id": null, "opline_index": null}
+          },
+          "suspend": {"kind": "none", "state_id": null},
+          "code_version": {"id": "code:thrower:v1", "immutable": true, "active": true},
+          "resume": {"allowed": false, "entry_kind": "none", "resume_id": null, "code_version_id": null, "target_opline_index": null, "machine_offset": null, "vm_dispatch": false},
+          "safepoint": {"class": "exception_edge", "canonical": true}
+        }
+      ]
+    },
+    {
+      "example_id": "destructor-reentry",
+      "description": "A destructor-capable helper sees all live zvals rooted and cleanup owned by the frame.",
+      "expected_valid": true,
+      "expected_errors": [],
+      "frames": [
+        {
+          "format_version": "1.0.0",
+          "frame_id": "destructor-owner",
+          "function": {"kind": "user", "name": "replaceObject", "op_array_id": "oparray:replaceObject"},
+          "opline": {"index": 9, "phase": "before", "owner_frame_id": "destructor-owner"},
+          "parent_frame_id": null,
+          "slots": [
+            {"slot_id": "destructor-owner:old", "kind": "tmp", "index": 0, "representation": "canonical_zval", "materialization": "materialized", "ownership": "frame_owned", "rooted": true, "cleanup_required": true},
+            {"slot_id": "destructor-owner:new", "kind": "cv", "index": 1, "representation": "canonical_zval", "materialization": "materialized", "ownership": "frame_owned", "rooted": true, "cleanup_required": true}
+          ],
+          "roots": ["destructor-owner:old", "destructor-owner:new"],
+          "cleanup_obligations": [
+            {"slot_id": "destructor-owner:old", "action": "destroy", "state": "pending"},
+            {"slot_id": "destructor-owner:new", "action": "destroy", "state": "pending"}
+          ],
+          "continuations": {
+            "return": {"kind": "native", "frame_id": "destructor-owner", "opline_index": 10},
+            "exception": {"kind": "zend_exception", "frame_id": "destructor-owner", "opline_index": 9},
+            "bailout": {"kind": "nonlocal_bailout", "frame_id": null, "opline_index": null}
+          },
+          "suspend": {"kind": "none", "state_id": null},
+          "code_version": {"id": "code:replaceObject:v1", "immutable": true, "active": true},
+          "resume": {"allowed": false, "entry_kind": "none", "resume_id": null, "code_version_id": null, "target_opline_index": null, "machine_offset": null, "vm_dispatch": false},
+          "safepoint": {"class": "destructor", "canonical": true}
+        }
+      ]
+    },
+    {
+      "example_id": "generator-suspend",
+      "description": "A generator yield transfers frame-owned values into persistent suspend state and resumes through a versioned ID.",
+      "expected_valid": true,
+      "expected_errors": [],
+      "frames": [
+        {
+          "format_version": "1.0.0",
+          "frame_id": "generator-frame",
+          "function": {"kind": "user", "name": "numbers", "op_array_id": "oparray:numbers"},
+          "opline": {"index": 12, "phase": "suspended", "owner_frame_id": "generator-frame"},
+          "parent_frame_id": null,
+          "slots": [
+            {"slot_id": "generator-frame:value", "kind": "tmp", "index": 0, "representation": "persistent_suspend_state", "materialization": "materialized", "ownership": "suspend_state_owned", "rooted": true, "cleanup_required": true}
+          ],
+          "roots": ["generator-frame:value"],
+          "cleanup_obligations": [
+            {"slot_id": "generator-frame:value", "action": "release", "state": "transferred"}
+          ],
+          "continuations": {
+            "return": {"kind": "native", "frame_id": "generator-frame", "opline_index": 13},
+            "exception": {"kind": "zend_exception", "frame_id": "generator-frame", "opline_index": 12},
+            "bailout": {"kind": "nonlocal_bailout", "frame_id": null, "opline_index": null}
+          },
+          "suspend": {"kind": "generator", "state_id": "generator-state:42"},
+          "code_version": {"id": "code:numbers:v1", "immutable": true, "active": true},
+          "resume": {"allowed": true, "entry_kind": "single_entry_dispatcher", "resume_id": "resume:yield:12", "code_version_id": "code:numbers:v1", "target_opline_index": 13, "machine_offset": null, "vm_dispatch": false},
+          "safepoint": {"class": "generator_suspend", "canonical": true}
+        }
+      ]
+    },
+    {
+      "example_id": "fiber-suspend",
+      "description": "A fiber switch persists the active frame and resumes through the same versioned native entry.",
+      "expected_valid": true,
+      "expected_errors": [],
+      "frames": [
+        {
+          "format_version": "1.0.0",
+          "frame_id": "fiber-frame",
+          "function": {"kind": "user", "name": "fiberBody", "op_array_id": "oparray:fiberBody"},
+          "opline": {"index": 6, "phase": "suspended", "owner_frame_id": "fiber-frame"},
+          "parent_frame_id": null,
+          "slots": [
+            {"slot_id": "fiber-frame:cv0", "kind": "cv", "index": 0, "representation": "persistent_suspend_state", "materialization": "materialized", "ownership": "suspend_state_owned", "rooted": true, "cleanup_required": true}
+          ],
+          "roots": ["fiber-frame:cv0"],
+          "cleanup_obligations": [
+            {"slot_id": "fiber-frame:cv0", "action": "release", "state": "transferred"}
+          ],
+          "continuations": {
+            "return": {"kind": "native", "frame_id": "fiber-frame", "opline_index": 7},
+            "exception": {"kind": "zend_exception", "frame_id": "fiber-frame", "opline_index": 6},
+            "bailout": {"kind": "nonlocal_bailout", "frame_id": null, "opline_index": null}
+          },
+          "suspend": {"kind": "fiber", "state_id": "fiber-state:7"},
+          "code_version": {"id": "code:fiberBody:v1", "immutable": true, "active": true},
+          "resume": {"allowed": true, "entry_kind": "single_entry_dispatcher", "resume_id": "resume:fiber:6", "code_version_id": "code:fiberBody:v1", "target_opline_index": 7, "machine_offset": null, "vm_dispatch": false},
+          "safepoint": {"class": "fiber_switch", "canonical": true}
+        }
+      ]
+    },
+    {
+      "example_id": "invalid-parent-cycle",
+      "description": "Two frames cannot name each other as parents.",
+      "expected_valid": false,
+      "expected_errors": ["parent-cycle"],
+      "frames": [
+        {
+          "format_version": "1.0.0",
+          "frame_id": "cycle-a",
+          "function": {"kind": "user", "name": "a", "op_array_id": "oparray:a"},
+          "opline": {"index": 0, "phase": "before", "owner_frame_id": "cycle-a"},
+          "parent_frame_id": "cycle-b",
+          "slots": [],
+          "roots": [],
+          "cleanup_obligations": [],
+          "continuations": {"return": {"kind": "terminal", "frame_id": null, "opline_index": null}, "exception": {"kind": "zend_exception", "frame_id": "cycle-a", "opline_index": 0}, "bailout": {"kind": "nonlocal_bailout", "frame_id": null, "opline_index": null}},
+          "suspend": {"kind": "none", "state_id": null},
+          "code_version": {"id": "code:a:v1", "immutable": true, "active": true},
+          "resume": {"allowed": false, "entry_kind": "none", "resume_id": null, "code_version_id": null, "target_opline_index": null, "machine_offset": null, "vm_dispatch": false},
+          "safepoint": {"class": "function_entry", "canonical": true}
+        },
+        {
+          "format_version": "1.0.0",
+          "frame_id": "cycle-b",
+          "function": {"kind": "user", "name": "b", "op_array_id": "oparray:b"},
+          "opline": {"index": 0, "phase": "before", "owner_frame_id": "cycle-b"},
+          "parent_frame_id": "cycle-a",
+          "slots": [],
+          "roots": [],
+          "cleanup_obligations": [],
+          "continuations": {"return": {"kind": "terminal", "frame_id": null, "opline_index": null}, "exception": {"kind": "zend_exception", "frame_id": "cycle-b", "opline_index": 0}, "bailout": {"kind": "nonlocal_bailout", "frame_id": null, "opline_index": null}},
+          "suspend": {"kind": "none", "state_id": null},
+          "code_version": {"id": "code:b:v1", "immutable": true, "active": true},
+          "resume": {"allowed": false, "entry_kind": "none", "resume_id": null, "code_version_id": null, "target_opline_index": null, "machine_offset": null, "vm_dispatch": false},
+          "safepoint": {"class": "function_entry", "canonical": true}
+        }
+      ]
+    },
+    {
+      "example_id": "invalid-duplicate-slot",
+      "description": "Slot identifiers are unique within a frame.",
+      "expected_valid": false,
+      "expected_errors": ["duplicate-slot"],
+      "frames": [
+        {
+          "format_version": "1.0.0",
+          "frame_id": "duplicate-frame",
+          "function": {"kind": "user", "name": "duplicate", "op_array_id": "oparray:duplicate"},
+          "opline": {"index": 2, "phase": "before", "owner_frame_id": "duplicate-frame"},
+          "parent_frame_id": null,
+          "slots": [
+            {"slot_id": "duplicate-frame:cv0", "kind": "cv", "index": 0, "representation": "canonical_zval", "materialization": "materialized", "ownership": "frame_owned", "rooted": false, "cleanup_required": false},
+            {"slot_id": "duplicate-frame:cv0", "kind": "tmp", "index": 1, "representation": "canonical_zval", "materialization": "undef", "ownership": "frame_owned", "rooted": false, "cleanup_required": false}
+          ],
+          "roots": [],
+          "cleanup_obligations": [],
+          "continuations": {"return": {"kind": "terminal", "frame_id": null, "opline_index": null}, "exception": {"kind": "zend_exception", "frame_id": "duplicate-frame", "opline_index": 2}, "bailout": {"kind": "nonlocal_bailout", "frame_id": null, "opline_index": null}},
+          "suspend": {"kind": "none", "state_id": null},
+          "code_version": {"id": "code:duplicate:v1", "immutable": true, "active": true},
+          "resume": {"allowed": false, "entry_kind": "none", "resume_id": null, "code_version_id": null, "target_opline_index": null, "machine_offset": null, "vm_dispatch": false},
+          "safepoint": {"class": "allocation", "canonical": true}
+        }
+      ]
+    },
+    {
+      "example_id": "invalid-missing-root",
+      "description": "A live refcounted slot cannot remain unrooted at a safepoint.",
+      "expected_valid": false,
+      "expected_errors": ["missing-root"],
+      "frames": [
+        {
+          "format_version": "1.0.0",
+          "frame_id": "unrooted-frame",
+          "function": {"kind": "user", "name": "allocate", "op_array_id": "oparray:allocate"},
+          "opline": {"index": 3, "phase": "before", "owner_frame_id": "unrooted-frame"},
+          "parent_frame_id": null,
+          "slots": [
+            {"slot_id": "unrooted-frame:tmp0", "kind": "tmp", "index": 0, "representation": "canonical_zval", "materialization": "materialized", "ownership": "frame_owned", "rooted": true, "cleanup_required": false}
+          ],
+          "roots": [],
+          "cleanup_obligations": [],
+          "continuations": {"return": {"kind": "native", "frame_id": "unrooted-frame", "opline_index": 4}, "exception": {"kind": "zend_exception", "frame_id": "unrooted-frame", "opline_index": 3}, "bailout": {"kind": "nonlocal_bailout", "frame_id": null, "opline_index": null}},
+          "suspend": {"kind": "none", "state_id": null},
+          "code_version": {"id": "code:allocate:v1", "immutable": true, "active": true},
+          "resume": {"allowed": false, "entry_kind": "none", "resume_id": null, "code_version_id": null, "target_opline_index": null, "machine_offset": null, "vm_dispatch": false},
+          "safepoint": {"class": "allocation", "canonical": true}
+        }
+      ]
+    },
+    {
+      "example_id": "invalid-missing-cleanup",
+      "description": "A frame-owned slot requiring cleanup must have one pending obligation.",
+      "expected_valid": false,
+      "expected_errors": ["missing-cleanup"],
+      "frames": [
+        {
+          "format_version": "1.0.0",
+          "frame_id": "cleanup-frame",
+          "function": {"kind": "user", "name": "cleanup", "op_array_id": "oparray:cleanup"},
+          "opline": {"index": 8, "phase": "before", "owner_frame_id": "cleanup-frame"},
+          "parent_frame_id": null,
+          "slots": [
+            {"slot_id": "cleanup-frame:cv0", "kind": "cv", "index": 0, "representation": "canonical_zval", "materialization": "materialized", "ownership": "frame_owned", "rooted": true, "cleanup_required": true}
+          ],
+          "roots": ["cleanup-frame:cv0"],
+          "cleanup_obligations": [],
+          "continuations": {"return": {"kind": "native", "frame_id": "cleanup-frame", "opline_index": 9}, "exception": {"kind": "zend_exception", "frame_id": "cleanup-frame", "opline_index": 8}, "bailout": {"kind": "nonlocal_bailout", "frame_id": null, "opline_index": null}},
+          "suspend": {"kind": "none", "state_id": null},
+          "code_version": {"id": "code:cleanup:v1", "immutable": true, "active": true},
+          "resume": {"allowed": false, "entry_kind": "none", "resume_id": null, "code_version_id": null, "target_opline_index": null, "machine_offset": null, "vm_dispatch": false},
+          "safepoint": {"class": "destructor", "canonical": true}
+        }
+      ]
+    },
+    {
+      "example_id": "invalid-resume-target",
+      "description": "Resume cannot enter an arbitrary machine offset or bypass code-version identity.",
+      "expected_valid": false,
+      "expected_errors": ["invalid-resume-target", "resume-version-mismatch", "schema-validation"],
+      "frames": [
+        {
+          "format_version": "1.0.0",
+          "frame_id": "bad-resume-frame",
+          "function": {"kind": "user", "name": "suspended", "op_array_id": "oparray:suspended"},
+          "opline": {"index": 5, "phase": "suspended", "owner_frame_id": "bad-resume-frame"},
+          "parent_frame_id": null,
+          "slots": [],
+          "roots": [],
+          "cleanup_obligations": [],
+          "continuations": {"return": {"kind": "native", "frame_id": "bad-resume-frame", "opline_index": 6}, "exception": {"kind": "zend_exception", "frame_id": "bad-resume-frame", "opline_index": 5}, "bailout": {"kind": "nonlocal_bailout", "frame_id": null, "opline_index": null}},
+          "suspend": {"kind": "generator", "state_id": "generator-state:bad"},
+          "code_version": {"id": "code:suspended:v2", "immutable": true, "active": true},
+          "resume": {"allowed": true, "entry_kind": "none", "resume_id": "resume:bad", "code_version_id": "code:suspended:v1", "target_opline_index": 6, "machine_offset": 4096, "vm_dispatch": true},
+          "safepoint": {"class": "generator_resume", "canonical": true}
+        }
+      ]
+    }
+  ]
+}
