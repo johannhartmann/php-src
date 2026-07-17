@@ -54,6 +54,9 @@ Conditional branches use successor 0 for true and successor 1 for false.
 ## Versioning
 
 `ZEND_MIR_CONTRACT_VERSION` encodes a 16-bit major and 16-bit minor version.
+Version 1.1 adds a stable source-map table associating a source-position ID,
+op-array ID, opline index and phase with its owning frame-state ID. It carries
+no generated-code location and does not change the canonical 1.0 text grammar.
 Consumers accept the same major and a minor no newer than they implement.
 Within major version 1, extensions are additive only: existing numbers,
 meanings, callback signatures, and record fields cannot be removed, reordered,

@@ -105,6 +105,8 @@ typedef struct _zend_mir_view {
 	uint32_t (*predecessor_count)(const void *context, zend_mir_block_id block_id);
 	bool (*predecessor_at)(const void *context, zend_mir_block_id block_id, uint32_t index,
 		zend_mir_block_id *out);
+	uint32_t (*source_map_count)(const void *context);
+	bool (*source_map_at)(const void *context, uint32_t index, zend_mir_source_map_ref *out);
 } zend_mir_view;
 
 typedef struct _zend_mir_mutator {
@@ -129,6 +131,8 @@ typedef struct _zend_mir_mutator {
 	bool (*add_frame_state)(void *context, const zend_mir_frame_state_ref *frame_state,
 		zend_mir_frame_state_id *out);
 	bool (*seal_function)(void *context, zend_mir_function_id function_id);
+	bool (*add_source_map)(void *context, const zend_mir_source_map_ref *source_map,
+		zend_mir_source_map_id *out);
 } zend_mir_mutator;
 
 /*

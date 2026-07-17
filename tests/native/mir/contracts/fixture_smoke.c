@@ -34,6 +34,9 @@ int main(void)
 	zend_mir_source_position_ref source_position;
 	zend_mir_source_position_ref observed_position;
 	zend_mir_source_position_id source_position_id;
+	zend_mir_source_map_ref source_map;
+	zend_mir_source_map_ref observed_source_map;
+	zend_mir_source_map_id source_map_id;
 	zend_mir_frame_slot_ref slot;
 	zend_mir_frame_slot_ref observed_slot;
 	zend_mir_cleanup_ref cleanup;
@@ -52,6 +55,7 @@ int main(void)
 
 	memset(&instruction, 0, sizeof(instruction));
 	memset(&source_position, 0, sizeof(source_position));
+	memset(&source_map, 0, sizeof(source_map));
 	memset(&constant, 0, sizeof(constant));
 	memset(&slot, 0, sizeof(slot));
 	memset(&cleanup, 0, sizeof(cleanup));
@@ -120,6 +124,15 @@ int main(void)
 	frame_state.safepoint_class = ZEND_MIR_SAFEPOINT_CLASS_FUNCTION_ENTRY;
 	frame_state.canonical = true;
 	assert(host.mutator.add_frame_state(host.mutator.context, &frame_state, &frame_state_id));
+	source_map.source_position_id = source_position_id;
+	source_map.op_array_id = function_id;
+	source_map.opline_index = frame_state.opline_index;
+	source_map.opline_phase = frame_state.opline_phase;
+	source_map.owner_frame_id = frame_state_id;
+	assert(host.mutator.add_source_map(host.mutator.context, &source_map, &source_map_id));
+	source_map.owner_frame_id = ZEND_MIR_ID_INVALID;
+	assert(!host.mutator.add_source_map(host.mutator.context, &source_map, &source_map_id));
+	source_map.owner_frame_id = frame_state_id;
 
 	instruction.block_id = entry_id;
 	instruction.opcode = ZEND_MIR_OPCODE_COND_BRANCH;
@@ -195,6 +208,9 @@ int main(void)
 	assert(host.view.source_position_count(host.view.context) == 1);
 	assert(host.view.source_position_at(host.view.context, 0, &observed_position));
 	assert(observed_position.id == source_position_id);
+	assert(host.view.source_map_count(host.view.context) == 1);
+	assert(host.view.source_map_at(host.view.context, source_map_id, &observed_source_map));
+	assert(observed_source_map.owner_frame_id == frame_state_id);
 	assert(host.view.frame_slot_count(host.view.context) == 1);
 	assert(host.view.frame_slot_at(host.view.context, slot_index, &observed_slot));
 	assert(observed_slot.slot_id == slot.slot_id);
