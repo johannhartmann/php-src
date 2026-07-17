@@ -1,0 +1,9 @@
+znmir 1.0 module m1
+function f0 symbol s100 entry b0 flags 0x00000000
+block b0 function f0 predecessors [] successors []
+value v0 representation i64 ownership owned
+constant v0 representation i64 kind signed_integer_bits payload 0x000000000000002a symbol invalid
+source p0 file s200 line 10 columns 1:8
+instruction i0 block b0 opcode constant representation i64 result v0 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i1 block b0 opcode return representation void result invalid operands [v0] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+end
