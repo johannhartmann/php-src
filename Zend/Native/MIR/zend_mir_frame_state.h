@@ -189,6 +189,16 @@ typedef struct _zend_mir_source_position_ref {
 	uint32_t column_end;
 } zend_mir_source_position_ref;
 
+/* Stable source association; no process address or generated-code location. */
+typedef struct _zend_mir_source_map_ref {
+	zend_mir_source_map_id id;
+	zend_mir_source_position_id source_position_id;
+	zend_mir_op_array_id op_array_id;
+	uint32_t opline_index;
+	zend_mir_opline_phase opline_phase;
+	zend_mir_frame_state_id owner_frame_id;
+} zend_mir_source_map_ref;
+
 typedef struct _zend_mir_frame_slot_ref {
 	uint32_t slot_id;
 	zend_mir_value_id value_id;

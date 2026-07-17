@@ -80,6 +80,7 @@ ZEND_MIR_FIXTURE_COUNT_FN(zend_mir_fixture_value_count, value_count)
 ZEND_MIR_FIXTURE_COUNT_FN(zend_mir_fixture_constant_count, constant_count)
 ZEND_MIR_FIXTURE_COUNT_FN(zend_mir_fixture_frame_state_count, frame_state_count)
 ZEND_MIR_FIXTURE_COUNT_FN(zend_mir_fixture_source_position_count, source_position_count)
+ZEND_MIR_FIXTURE_COUNT_FN(zend_mir_fixture_source_map_count, source_map_count)
 ZEND_MIR_FIXTURE_COUNT_FN(zend_mir_fixture_frame_slot_count, frame_slot_count)
 ZEND_MIR_FIXTURE_COUNT_FN(zend_mir_fixture_root_count, root_count)
 ZEND_MIR_FIXTURE_COUNT_FN(zend_mir_fixture_cleanup_count, cleanup_count)
@@ -105,6 +106,8 @@ ZEND_MIR_FIXTURE_AT_FN(zend_mir_fixture_constant_at, zend_mir_constant_record, c
 ZEND_MIR_FIXTURE_AT_FN(zend_mir_fixture_frame_state_at, zend_mir_frame_state_ref, frame_states, frame_state_count)
 ZEND_MIR_FIXTURE_AT_FN(zend_mir_fixture_source_position_at, zend_mir_source_position_ref,
 	source_positions, source_position_count)
+ZEND_MIR_FIXTURE_AT_FN(zend_mir_fixture_source_map_at, zend_mir_source_map_ref,
+	source_maps, source_map_count)
 ZEND_MIR_FIXTURE_AT_FN(zend_mir_fixture_frame_slot_at, zend_mir_frame_slot_ref, frame_slots, frame_slot_count)
 ZEND_MIR_FIXTURE_AT_FN(zend_mir_fixture_cleanup_at, zend_mir_cleanup_ref, cleanups, cleanup_count)
 
@@ -470,6 +473,35 @@ static bool zend_mir_fixture_add_frame_state(void *context,
 	return true;
 }
 
+static bool zend_mir_fixture_add_source_map(void *context,
+		const zend_mir_source_map_ref *requested, zend_mir_source_map_id *out)
+{
+	zend_mir_fixture_host *host = (zend_mir_fixture_host *) context;
+	zend_mir_source_map_ref record;
+	zend_mir_frame_state_ref owner;
+
+	if (requested == NULL || out == NULL
+			|| host->source_map_count >= ZEND_MIR_FIXTURE_MAX_SOURCE_MAPS
+			|| !zend_mir_id_is_valid(requested->source_position_id)
+			|| requested->source_position_id >= host->source_position_count
+			|| !zend_mir_id_is_valid(requested->owner_frame_id)
+			|| requested->owner_frame_id >= host->frame_state_count
+			|| !zend_mir_id_is_valid(requested->op_array_id)
+			|| requested->opline_phase >= ZEND_MIR_OPLINE_PHASE_COUNT) {
+		return false;
+	}
+	owner = host->frame_states[requested->owner_frame_id];
+	if (owner.opline_index != requested->opline_index
+			|| owner.opline_phase != requested->opline_phase) {
+		return false;
+	}
+	record = *requested;
+	record.id = host->source_map_count;
+	host->source_maps[host->source_map_count++] = record;
+	*out = record.id;
+	return true;
+}
+
 static bool zend_mir_fixture_seal_function(void *context, zend_mir_function_id function_id)
 {
 	zend_mir_fixture_host *host = (zend_mir_fixture_host *) context;
@@ -517,6 +549,8 @@ void zend_mir_fixture_host_init(zend_mir_fixture_host *host, zend_mir_module_id 
 	host->view.successor_at = zend_mir_fixture_successor_at;
 	host->view.predecessor_count = zend_mir_fixture_predecessor_count;
 	host->view.predecessor_at = zend_mir_fixture_predecessor_at;
+	host->view.source_map_count = zend_mir_fixture_source_map_count;
+	host->view.source_map_at = zend_mir_fixture_source_map_at;
 
 	host->mutator.contract_version = ZEND_MIR_CONTRACT_VERSION;
 	host->mutator.context = host;
@@ -535,4 +569,5 @@ void zend_mir_fixture_host_init(zend_mir_fixture_host *host, zend_mir_module_id 
 	host->mutator.add_cleanup = zend_mir_fixture_add_cleanup;
 	host->mutator.add_frame_state = zend_mir_fixture_add_frame_state;
 	host->mutator.seal_function = zend_mir_fixture_seal_function;
+	host->mutator.add_source_map = zend_mir_fixture_add_source_map;
 }

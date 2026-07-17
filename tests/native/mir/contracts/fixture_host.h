@@ -12,6 +12,7 @@
 #define ZEND_MIR_FIXTURE_MAX_INSTRUCTIONS 128
 #define ZEND_MIR_FIXTURE_MAX_FRAME_STATES 32
 #define ZEND_MIR_FIXTURE_MAX_SOURCE_POSITIONS 64
+#define ZEND_MIR_FIXTURE_MAX_SOURCE_MAPS 64
 #define ZEND_MIR_FIXTURE_MAX_FRAME_SLOTS 128
 #define ZEND_MIR_FIXTURE_MAX_ROOTS 128
 #define ZEND_MIR_FIXTURE_MAX_CLEANUPS 128
@@ -37,6 +38,7 @@ typedef struct _zend_mir_fixture_host {
 	zend_mir_instruction_record instructions[ZEND_MIR_FIXTURE_MAX_INSTRUCTIONS];
 	zend_mir_frame_state_ref frame_states[ZEND_MIR_FIXTURE_MAX_FRAME_STATES];
 	zend_mir_source_position_ref source_positions[ZEND_MIR_FIXTURE_MAX_SOURCE_POSITIONS];
+	zend_mir_source_map_ref source_maps[ZEND_MIR_FIXTURE_MAX_SOURCE_MAPS];
 	zend_mir_frame_slot_ref frame_slots[ZEND_MIR_FIXTURE_MAX_FRAME_SLOTS];
 	uint32_t roots[ZEND_MIR_FIXTURE_MAX_ROOTS];
 	zend_mir_cleanup_ref cleanups[ZEND_MIR_FIXTURE_MAX_CLEANUPS];
@@ -50,6 +52,7 @@ typedef struct _zend_mir_fixture_host {
 	uint32_t instruction_count;
 	uint32_t frame_state_count;
 	uint32_t source_position_count;
+	uint32_t source_map_count;
 	uint32_t frame_slot_count;
 	uint32_t root_count;
 	uint32_t cleanup_count;
