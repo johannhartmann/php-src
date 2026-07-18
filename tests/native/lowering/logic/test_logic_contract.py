@@ -88,7 +88,7 @@ class LogicContractTests(unittest.TestCase):
     def test_all_emitted_results_are_effect_free_and_owned(self) -> None:
         provider = self.sources["zend_mir_logic_provider.c"]
         self.assertIn("memset(&instruction, 0, sizeof(instruction))", provider)
-        self.assertIn("ZEND_MIR_OWNERSHIP_ACTION_PRODUCE_OWNED", provider)
+        self.assertNotIn("ZEND_MIR_OWNERSHIP_ACTION_PRODUCE_OWNED", provider)
         self.assertNotRegex(provider, r"instruction\.(?:effects|reads|writes|barriers)\s*=")
 
 

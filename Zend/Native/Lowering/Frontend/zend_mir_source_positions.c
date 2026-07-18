@@ -15,7 +15,11 @@ bool zend_mir_frontend_source_position_at(
 	out->id = index;
 	out->file_symbol_id = source->file_symbol_id;
 	out->line = op_array->opcodes[index].lineno;
-	out->column_start = 0;
-	out->column_end = 0;
+	/*
+	 * Zend opcodes expose line information, but not source columns. MIR uses
+	 * one-based columns, so represent the unknown column as a valid point span.
+	 */
+	out->column_start = 1;
+	out->column_end = 1;
 	return true;
 }

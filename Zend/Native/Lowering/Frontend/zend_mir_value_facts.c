@@ -79,10 +79,6 @@ bool zend_mir_frontend_fact_for_ssa(
 		? (uint32_t) ssa->vars[ssa_variable_id].definition
 		: (op_array->last == 0 ? ZEND_MIR_ID_INVALID : 0);
 
-	if (exact_type == ZEND_MIR_SCALAR_TYPE_I1
-			&& info->type == MAY_BE_TRUE) {
-		out->flags |= ZEND_MIR_VALUE_FACT_NONZERO;
-	}
 	if (exact_type == ZEND_MIR_SCALAR_TYPE_I64 && info->has_range
 			&& !info->range.underflow && !info->range.overflow) {
 		if (info->range.min > info->range.max) {

@@ -608,6 +608,144 @@ static bool test_empty_and_full_view_surface(void)
 	return true;
 }
 
+static bool test_frame_and_source_surface(void)
+{
+	test_allocator allocator = { { 0 }, 0, 0, 0, 0 };
+	zend_mir_allocator vtable = test_allocator_vtable(&allocator);
+	zend_mir_module *module = zend_mir_module_create(15, &vtable, 128, NULL, NULL);
+	zend_mir_mutator *mutator;
+	const zend_mir_view *view;
+	zend_mir_function_id function;
+	zend_mir_block_id block;
+	zend_mir_source_position_ref source;
+	zend_mir_source_position_ref source_out;
+	zend_mir_source_position_id source_id;
+	zend_mir_frame_slot_ref slot;
+	zend_mir_frame_slot_ref slot_out;
+	zend_mir_cleanup_ref cleanup;
+	zend_mir_cleanup_ref cleanup_out;
+	zend_mir_frame_state_ref frame;
+	zend_mir_frame_state_ref frame_out;
+	zend_mir_frame_state_id frame_id;
+	zend_mir_source_map_ref source_map;
+	zend_mir_source_map_ref source_map_out;
+	zend_mir_source_map_id source_map_id;
+	uint32_t index;
+	uint32_t root_slot;
+
+	CHECK(module != NULL);
+	mutator = zend_mir_module_get_mutator(module);
+	CHECK(mutator != NULL);
+	CHECK(mutator->add_function(mutator->context, 10, &function));
+	CHECK(mutator->add_block(mutator->context, function, &block));
+	CHECK(mutator->set_entry_block(mutator->context, function, block));
+	CHECK(mutator->add_value(mutator->context, 0,
+		ZEND_MIR_REPRESENTATION_I64, ZEND_MIR_OWNERSHIP_STATE_OWNED));
+
+	memset(&source, 0, sizeof(source));
+	source.id = 0;
+	source.file_symbol_id = 20;
+	source.line = 7;
+	source.column_start = 1;
+	source.column_end = 2;
+	CHECK(mutator->add_source_position(
+		mutator->context, &source, &source_id));
+	CHECK(source_id == 0);
+	CHECK(mutator->add_source_position(
+		mutator->context, &source, &source_id));
+	CHECK(source_id == 0);
+	source.id = 1;
+	CHECK(mutator->add_source_position(
+		mutator->context, &source, &source_id));
+	CHECK(source_id == 1);
+
+	memset(&slot, 0, sizeof(slot));
+	slot.slot_id = 30;
+	slot.value_id = 0;
+	slot.kind = ZEND_MIR_FRAME_SLOT_KIND_TMP;
+	slot.representation = ZEND_MIR_FRAME_SLOT_REPRESENTATION_CANONICAL_ZVAL;
+	slot.materialization = ZEND_MIR_MATERIALIZATION_MATERIALIZED;
+	slot.ownership = ZEND_MIR_FRAME_SLOT_OWNERSHIP_FRAME_OWNED;
+	slot.rooted = true;
+	slot.cleanup_required = true;
+	CHECK(mutator->add_frame_slot(mutator->context, &slot, &index));
+	CHECK(index == 0);
+	CHECK(mutator->add_root(mutator->context, slot.slot_id, &index));
+	CHECK(index == 0);
+	cleanup.slot_id = slot.slot_id;
+	cleanup.action = ZEND_MIR_CLEANUP_ACTION_RELEASE;
+	cleanup.state = ZEND_MIR_CLEANUP_STATE_PENDING;
+	CHECK(mutator->add_cleanup(mutator->context, &cleanup, &index));
+	CHECK(index == 0);
+
+	memset(&frame, 0, sizeof(frame));
+	frame.id = 0;
+	frame.function_id = function;
+	frame.parent_id = ZEND_MIR_ID_INVALID;
+	frame.function_kind = ZEND_MIR_FUNCTION_KIND_USER;
+	frame.opline_phase = ZEND_MIR_OPLINE_PHASE_BEFORE;
+	frame.slots.count = 1;
+	frame.roots.count = 1;
+	frame.cleanup_obligations.count = 1;
+	frame.return_continuation.kind = ZEND_MIR_CONTINUATION_KIND_TERMINAL;
+	frame.return_continuation.frame_state_id = ZEND_MIR_ID_INVALID;
+	frame.return_continuation.opline_index = ZEND_MIR_ID_INVALID;
+	frame.exception_continuation.kind =
+		ZEND_MIR_CONTINUATION_KIND_ZEND_EXCEPTION;
+	frame.exception_continuation.frame_state_id = ZEND_MIR_ID_INVALID;
+	frame.exception_continuation.opline_index = ZEND_MIR_ID_INVALID;
+	frame.bailout_continuation.kind =
+		ZEND_MIR_CONTINUATION_KIND_NONLOCAL_BAILOUT;
+	frame.bailout_continuation.frame_state_id = ZEND_MIR_ID_INVALID;
+	frame.bailout_continuation.opline_index = ZEND_MIR_ID_INVALID;
+	frame.suspend_kind = ZEND_MIR_SUSPEND_KIND_NONE;
+	frame.suspend_state_id = ZEND_MIR_ID_INVALID;
+	frame.code_version_id = 1;
+	frame.resume.entry_kind = ZEND_MIR_RESUME_ENTRY_KIND_NONE;
+	frame.resume.resume_id = ZEND_MIR_ID_INVALID;
+	frame.resume.code_version_id = ZEND_MIR_ID_INVALID;
+	frame.resume.target_opline_index = ZEND_MIR_ID_INVALID;
+	frame.safepoint_class = ZEND_MIR_SAFEPOINT_CLASS_FUNCTION_ENTRY;
+	frame.canonical = true;
+	CHECK(mutator->add_frame_state(mutator->context, &frame, &frame_id));
+	CHECK(frame_id == 0);
+
+	memset(&source_map, 0, sizeof(source_map));
+	source_map.id = 0;
+	source_map.source_position_id = 1;
+	source_map.op_array_id = 40;
+	source_map.opline_phase = ZEND_MIR_OPLINE_PHASE_BEFORE;
+	source_map.owner_frame_id = frame_id;
+	CHECK(mutator->add_source_map(
+		mutator->context, &source_map, &source_map_id));
+	CHECK(source_map_id == 0);
+	CHECK(mutator->seal_function(mutator->context, function));
+	CHECK(zend_mir_module_finalize(module));
+
+	view = zend_mir_module_get_view(module);
+	CHECK(view != NULL);
+	CHECK(view->source_position_count(view->context) == 2);
+	CHECK(view->source_position_at(view->context, 1, &source_out));
+	CHECK(source_out.id == 1 && source_out.line == 7);
+	CHECK(view->frame_slot_count(view->context) == 1);
+	CHECK(view->frame_slot_at(view->context, 0, &slot_out));
+	CHECK(slot_out.slot_id == slot.slot_id);
+	CHECK(view->root_count(view->context) == 1);
+	CHECK(view->root_at(view->context, 0, &root_slot));
+	CHECK(root_slot == slot.slot_id);
+	CHECK(view->cleanup_count(view->context) == 1);
+	CHECK(view->cleanup_at(view->context, 0, &cleanup_out));
+	CHECK(cleanup_out.slot_id == slot.slot_id);
+	CHECK(view->frame_state_count(view->context) == 1);
+	CHECK(view->frame_state_at(view->context, 0, &frame_out));
+	CHECK(frame_out.id == frame_id);
+	CHECK(view->source_map_count(view->context) == 1);
+	CHECK(view->source_map_at(view->context, 0, &source_map_out));
+	CHECK(source_map_out.source_position_id == 1);
+	zend_mir_module_destroy(module);
+	return true;
+}
+
 int main(void)
 {
 	if (!test_ids()
@@ -615,7 +753,8 @@ int main(void)
 			|| !test_chunk_determinism_and_oom()
 			|| !test_lifecycle_and_limits()
 			|| !test_invalid_enum_sentinels()
-			|| !test_empty_and_full_view_surface()) {
+			|| !test_empty_and_full_view_surface()
+			|| !test_frame_and_source_surface()) {
 		return EXIT_FAILURE;
 	}
 	puts("core MIR tests passed");

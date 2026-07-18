@@ -88,9 +88,9 @@
     "verifier_nonmutation": "bytewise fixture snapshots before and after"
   },
   "production_inventory": {
-    "combined_sha256": "da9449bd1ed685ed7123465281e81e71144994f1584ec5f6d9068c564ab791b8",
-    "header_count": 23,
-    "source_count": 21,
+    "combined_sha256": "6fc33d344d9ed37463011b39db123249ca140987637abbe78b3e043dfde05a99",
+    "header_count": 25,
+    "source_count": 24,
     "sources": [
       "Zend/Native/MIR/CFG/zend_mir_cfg.c",
       "Zend/Native/MIR/CFG/zend_mir_dominance.c",
@@ -102,6 +102,9 @@
       "Zend/Native/MIR/Frame/zend_mir_frame_intern.c",
       "Zend/Native/MIR/Frame/zend_mir_frame_state.c",
       "Zend/Native/MIR/Frame/zend_mir_source_map.c",
+      "Zend/Native/MIR/Scalar/zend_mir_scalar_descriptors.c",
+      "Zend/Native/MIR/Scalar/zend_mir_value_facts.c",
+      "Zend/Native/MIR/Scalar/zend_mir_verify_scalar.c",
       "Zend/Native/MIR/Semantics/zend_mir_alias.c",
       "Zend/Native/MIR/Semantics/zend_mir_effect_summary.c",
       "Zend/Native/MIR/Semantics/zend_mir_ownership.c",

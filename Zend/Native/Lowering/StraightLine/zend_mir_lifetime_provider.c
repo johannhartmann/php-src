@@ -10,13 +10,14 @@
 
 static uint32_t zend_mir_lifetime_claim_count(const void *context)
 {
-	return context != NULL ? 2 : 0;
+	return context != NULL ? 3 : 0;
 }
 
 static bool zend_mir_lifetime_claim_at(
 	const void *context, uint32_t index, zend_mir_lowering_claim *out)
 {
 	static const uint32_t opcodes[] = {
+		ZEND_MIR_STRAIGHT_LINE_OPCODE_QM_ASSIGN,
 		ZEND_MIR_STRAIGHT_LINE_OPCODE_RETURN,
 		ZEND_MIR_STRAIGHT_LINE_OPCODE_FREE
 	};
@@ -44,6 +45,10 @@ static zend_mir_lowering_status zend_mir_lifetime_lower(
 	if (provider_context == NULL || source_opcode == NULL) {
 		status = ZEND_MIR_LOWERING_FAILED;
 		diagnostic = ZEND_MIRL_UNKNOWN_PROVIDER;
+	} else if (source_opcode->zend_opcode_number
+			== ZEND_MIR_STRAIGHT_LINE_OPCODE_QM_ASSIGN) {
+		status = zend_mir_lower_copy_move(
+			context, source_opcode, mutator, provider_context, &diagnostic);
 	} else if (source_opcode->zend_opcode_number
 			== ZEND_MIR_STRAIGHT_LINE_OPCODE_RETURN) {
 		status = zend_mir_lower_return(

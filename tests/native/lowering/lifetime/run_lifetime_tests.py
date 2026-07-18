@@ -34,6 +34,9 @@ SEMANTIC_SOURCES = (
     "Zend/Native/MIR/Semantics/zend_mir_alias.c",
     "Zend/Native/MIR/Semantics/zend_mir_ownership.c",
 )
+SCALAR_SOURCES = (
+    "Zend/Native/MIR/Scalar/zend_mir_scalar_descriptors.c",
+)
 
 
 def compiler(value: str) -> list[str]:
@@ -72,6 +75,7 @@ def main() -> int:
             + list(LOWERING_SOURCES)
             + list(VERIFY_SOURCES)
             + list(SEMANTIC_SOURCES)
+            + list(SCALAR_SOURCES)
             + [
                 "tests/native/mir/contracts/fixture_host.c",
                 "tests/native/lowering/lifetime/test_lifetime.c",

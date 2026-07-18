@@ -783,12 +783,14 @@ static void test_structural_and_provider_claims(void)
 	assert(code == ZEND_MIRL_MISSING_PROOF);
 	assert(zend_mir_lifetime_provider_init(
 		&test.provider_context, &provider));
-	assert(provider.claim_count(provider.context) == 2);
+	assert(provider.claim_count(provider.context) == 3);
 	assert(provider.claim_at(provider.context, 0, &claim));
-	assert(claim.zend_opcode_number == ZEND_MIR_STRAIGHT_LINE_OPCODE_RETURN);
+	assert(claim.zend_opcode_number == ZEND_MIR_STRAIGHT_LINE_OPCODE_QM_ASSIGN);
 	assert(provider.claim_at(provider.context, 1, &claim));
+	assert(claim.zend_opcode_number == ZEND_MIR_STRAIGHT_LINE_OPCODE_RETURN);
+	assert(provider.claim_at(provider.context, 2, &claim));
 	assert(claim.zend_opcode_number == ZEND_MIR_STRAIGHT_LINE_OPCODE_FREE);
-	assert(!provider.claim_at(provider.context, 2, &claim));
+	assert(!provider.claim_at(provider.context, 3, &claim));
 	test.source_view.contract_version++;
 	assert(!zend_mir_lifetime_provider_init(
 		&test.provider_context, &provider));

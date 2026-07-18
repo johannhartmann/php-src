@@ -27,10 +27,18 @@ class LifetimePolicyTests(unittest.TestCase):
             owned,
         )
         provider = (STRAIGHT_LINE / "zend_mir_lifetime_provider.c").read_text()
+        self.assertIn("ZEND_MIR_STRAIGHT_LINE_OPCODE_QM_ASSIGN,", provider)
         self.assertIn("ZEND_MIR_STRAIGHT_LINE_OPCODE_RETURN", provider)
         self.assertIn("ZEND_MIR_STRAIGHT_LINE_OPCODE_FREE", provider)
-        self.assertNotIn("ZEND_MIR_STRAIGHT_LINE_OPCODE_QM_ASSIGN,", provider)
         self.assertNotIn("ZEND_MIR_STRAIGHT_LINE_OPCODE_NOP,", provider)
+        self.assertRegex(
+            provider,
+            re.compile(
+                r"ZEND_MIR_STRAIGHT_LINE_OPCODE_QM_ASSIGN\).*?"
+                r"zend_mir_lower_copy_move",
+                re.DOTALL,
+            ),
+        )
 
     def test_no_runtime_or_target_dependency(self) -> None:
         combined = "\n".join(
