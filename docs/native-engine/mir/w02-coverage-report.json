@@ -1,0 +1,119 @@
+{
+  "architecture_independence": {
+    "forbidden_include_families": [
+      "DynASM",
+      "TPDE",
+      "architecture",
+      "object-format",
+      "register",
+      "runtime-VM"
+    ],
+    "leak_count": 0,
+    "status": "pass"
+  },
+  "contract": {
+    "format": "znmir-text-v1",
+    "mir_version": "1.0",
+    "product_runtime_activation": false,
+    "target_neutral": true,
+    "wave": "W02"
+  },
+  "determinism": {
+    "axes": [
+      "allocator-chunk-size",
+      "record-insertion-order",
+      "repeat-execution",
+      "writer-chunk-size"
+    ],
+    "golden_sha256": {
+      "diamond.znmir": "46e4d746739a3ae86d8d95a6d4748972d220116c32becbcad5d22ee902f20748",
+      "exception-statepoint.znmir": "23e681fe4654cc7b46c3312374272921ca55d5d36302ad6b64a1a69640175520",
+      "linear.znmir": "2c6b3a8030b0a718dc9dbea74e646c830581f7caee149033a8e0415973f16439",
+      "loop.znmir": "bc88ec05cfc2772a51c527a7eb60fac7c32ecdb7adfa976e7d11ec27c646ad50",
+      "nested-frame.znmir": "795e77e3d831c907403fc550eb0b67ddacc8afc9ca30b77dc2924462f96c6f3e",
+      "ownership.znmir": "b5e2db267d8628f3e509d06da1dd1103db309d1b15808d2289b3fda32afc3f10"
+    },
+    "report_has_timestamp": false
+  },
+  "gates": [
+    "python3 scripts/native/semantics/validate-w01.py --check",
+    "python3 scripts/native/mir/check-contract.py --check",
+    "python3 scripts/native/mir/generate-semantic-ids.py --check",
+    "python3 scripts/native/mir/test-w02.py --cc ${CC:-cc}",
+    "python3 scripts/native/mir/test-w02.py --cc ${CC:-cc} --sanitizer address",
+    "python3 scripts/native/mir/test-w02.py --cc ${CC:-cc} --sanitizer undefined",
+    "python3 tests/native/mir/fuzz/run_mutation_fuzz.py --seed 20260717 --cases 20000",
+    "python3 -m unittest discover -s tests/native/mir -p test_*.py -v",
+    "scripts/native/build.sh --profile debug-nts",
+    "scripts/native/test-smoke.sh --profile debug-nts",
+    "scripts/native/build.sh --profile debug-zts",
+    "scripts/native/test-smoke.sh --profile debug-zts"
+  ],
+  "integration_programs": {
+    "negative": [
+      {
+        "diagnostic": "MIRV0404",
+        "name": "invalid-double-destroy"
+      },
+      {
+        "diagnostic": "MIRV0507",
+        "name": "invalid-missing-frame-state"
+      },
+      {
+        "diagnostic": "MIRV0208",
+        "name": "invalid-phi-slot"
+      },
+      {
+        "diagnostic": "MIRV0102",
+        "name": "invalid-unknown-op"
+      },
+      {
+        "diagnostic": "MIRV0300",
+        "name": "invalid-use-before-def"
+      }
+    ],
+    "positive": [
+      "linear-values",
+      "diamond-with-phi",
+      "loop-with-backedge-phi",
+      "critical-edge-split",
+      "ownership-move-destroy",
+      "canonicalize-before-phi",
+      "exception-statepoint",
+      "bailout-terminal",
+      "nested-frame-state",
+      "generator-suspend-metadata",
+      "fiber-switch-metadata"
+    ],
+    "verifier_nonmutation": "bytewise fixture snapshots before and after"
+  },
+  "production_inventory": {
+    "combined_sha256": "c7c4d9fbc88b31a4544e8255c87c80e9e4fe09297bfb7d2d07f173b1b2f1ae1c",
+    "header_count": 22,
+    "source_count": 21,
+    "sources": [
+      "Zend/Native/MIR/CFG/zend_mir_cfg.c",
+      "Zend/Native/MIR/CFG/zend_mir_dominance.c",
+      "Zend/Native/MIR/CFG/zend_mir_phi.c",
+      "Zend/Native/MIR/Core/zend_mir_arena.c",
+      "Zend/Native/MIR/Core/zend_mir_ids.c",
+      "Zend/Native/MIR/Core/zend_mir_module.c",
+      "Zend/Native/MIR/Core/zend_mir_view.c",
+      "Zend/Native/MIR/Frame/zend_mir_frame_intern.c",
+      "Zend/Native/MIR/Frame/zend_mir_frame_state.c",
+      "Zend/Native/MIR/Frame/zend_mir_source_map.c",
+      "Zend/Native/MIR/Semantics/zend_mir_alias.c",
+      "Zend/Native/MIR/Semantics/zend_mir_effect_summary.c",
+      "Zend/Native/MIR/Semantics/zend_mir_ownership.c",
+      "Zend/Native/MIR/Semantics/zend_mir_semantic_catalog.c",
+      "Zend/Native/MIR/Text/zend_mir_dump.c",
+      "Zend/Native/MIR/Verify/zend_mir_verify.c",
+      "Zend/Native/MIR/Verify/zend_mir_verify_cfg.c",
+      "Zend/Native/MIR/Verify/zend_mir_verify_dominance.c",
+      "Zend/Native/MIR/Verify/zend_mir_verify_frames.c",
+      "Zend/Native/MIR/Verify/zend_mir_verify_ids.c",
+      "Zend/Native/MIR/Verify/zend_mir_verify_semantics.c"
+    ]
+  },
+  "schema_version": 1
+}
