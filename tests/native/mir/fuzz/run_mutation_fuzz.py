@@ -20,6 +20,23 @@ SOURCES = (
 )
 
 
+def c_warning_flags(compiler: str) -> list[str]:
+    flags = ["-Wall", "-Wextra", "-Wpedantic", "-Werror"]
+    version = subprocess.run(
+        [compiler, "--version"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if "Apple clang" in version.stdout + version.stderr:
+        # Match the W01 contract compiler for the pinned UINT32_MAX enum
+        # sentinels without weakening diagnostics for the W02-E sources.
+        flags.append("-Wno-c23-extensions")
+    return flags
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, required=True)
@@ -36,10 +53,7 @@ def main() -> int:
                 args.cc,
                 "-std=c11",
                 "-O2",
-                "-Wall",
-                "-Wextra",
-                "-Wpedantic",
-                "-Werror",
+                *c_warning_flags(args.cc),
                 "-I.",
                 *SOURCES,
                 "-o",
