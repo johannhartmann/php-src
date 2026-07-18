@@ -89,6 +89,19 @@ static bool zend_mir_dump_u32(zend_mir_dump_context *dump, uint32_t value)
 	return zend_mir_dump_u64(dump, value);
 }
 
+static bool zend_mir_dump_i64(zend_mir_dump_context *dump, int64_t value)
+{
+	uint64_t magnitude;
+
+	if (value >= 0) {
+		return zend_mir_dump_u64(dump, (uint64_t) value);
+	}
+	magnitude = (uint64_t) (-(value + 1));
+	magnitude++;
+	return zend_mir_dump_literal(dump, "-")
+		&& zend_mir_dump_u64(dump, magnitude);
+}
+
 static bool zend_mir_dump_hex(zend_mir_dump_context *dump, uint64_t value, uint32_t digits)
 {
 	static const char hex[] = "0123456789abcdef";
@@ -131,6 +144,7 @@ static const char *zend_mir_opcode_label(uint32_t value)
 {
 	switch (value) {
 		ZEND_MIR_OPCODE_CATALOG(ZEND_MIR_LABEL_CASE)
+		ZEND_MIR_SCALAR_OPCODE_CATALOG(ZEND_MIR_LABEL_CASE)
 		default: return NULL;
 	}
 }
@@ -255,6 +269,29 @@ static const char *zend_mir_safepoint_class_label(uint32_t value)
 	}
 }
 
+static const char *zend_mir_scalar_type_label(uint32_t value)
+{
+	switch (value) {
+		case ZEND_MIR_SCALAR_TYPE_NULL: return "null";
+		case ZEND_MIR_SCALAR_TYPE_I1: return "i1";
+		case ZEND_MIR_SCALAR_TYPE_I64: return "i64";
+		case ZEND_MIR_SCALAR_TYPE_F64: return "f64";
+		default: return NULL;
+	}
+}
+
+static const char *zend_mir_fact_provenance_label(uint32_t value)
+{
+	switch (value) {
+		case ZEND_MIR_FACT_PROVENANCE_SSA: return "ssa";
+		case ZEND_MIR_FACT_PROVENANCE_LITERAL: return "literal";
+		case ZEND_MIR_FACT_PROVENANCE_RANGE_ANALYSIS: return "range_analysis";
+		case ZEND_MIR_FACT_PROVENANCE_TYPE_ANALYSIS: return "type_analysis";
+		case ZEND_MIR_FACT_PROVENANCE_CONTRACT: return "contract";
+		default: return NULL;
+	}
+}
+
 #undef ZEND_MIR_LABEL_CASE
 
 static bool zend_mir_dump_label(
@@ -373,6 +410,19 @@ static bool zend_mir_constant_id_at(const zend_mir_view *view, uint32_t index, u
 	return true;
 }
 
+static bool zend_mir_value_fact_id_at(
+		const zend_mir_view *view, uint32_t index, uint32_t *id_out)
+{
+	zend_mir_value_fact_ref record;
+
+	if (view->value_fact_at == NULL
+			|| !view->value_fact_at(view->context, index, &record)) {
+		return false;
+	}
+	*id_out = record.value_id;
+	return true;
+}
+
 static bool zend_mir_source_id_at(const zend_mir_view *view, uint32_t index, uint32_t *id_out)
 {
 	zend_mir_source_position_ref record;
@@ -479,6 +529,44 @@ static bool zend_mir_dump_constant(zend_mir_dump_context *dump, uint32_t index)
 		&& zend_mir_dump_hex(dump, record.payload_bits, 16)
 		&& zend_mir_dump_literal(dump, " symbol ")
 		&& zend_mir_dump_id(dump, "s", record.symbol_id)
+		&& zend_mir_dump_literal(dump, "\n");
+}
+
+static bool zend_mir_dump_value_fact(zend_mir_dump_context *dump, uint32_t index)
+{
+	zend_mir_value_fact_ref record;
+
+	if (dump->view->value_fact_at == NULL
+			|| !dump->view->value_fact_at(dump->view->context, index, &record)) {
+		return false;
+	}
+	if (!zend_mir_dump_literal(dump, "fact ")
+			|| !zend_mir_dump_id(dump, "vf", record.id)
+			|| !zend_mir_dump_literal(dump, " value ")
+			|| !zend_mir_dump_id(dump, "v", record.value_id)
+			|| !zend_mir_dump_literal(dump, " type ")
+			|| !zend_mir_dump_label(dump, zend_mir_scalar_type_label,
+				record.exact_type)
+			|| !zend_mir_dump_literal(dump, " flags 0x")
+			|| !zend_mir_dump_hex(dump, record.flags, 8)
+			|| !zend_mir_dump_literal(dump, " range ")) {
+		return false;
+	}
+	if ((record.flags & ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) != 0) {
+		if (!zend_mir_dump_i64(dump, record.integer_min)
+				|| !zend_mir_dump_literal(dump, ":")
+				|| !zend_mir_dump_i64(dump, record.integer_max)) {
+			return false;
+		}
+	} else if (!zend_mir_dump_literal(dump, "none")) {
+		return false;
+	}
+	return zend_mir_dump_literal(dump, " provenance ")
+		&& zend_mir_dump_label(dump, zend_mir_fact_provenance_label,
+			record.provenance)
+		&& zend_mir_dump_literal(dump, " source ")
+		&& zend_mir_dump_id(dump, "p",
+			record.provenance_source_position_id)
 		&& zend_mir_dump_literal(dump, "\n");
 }
 
@@ -771,6 +859,15 @@ bool zend_mir_dump_text(const zend_mir_view *view, zend_mir_text_writer *writer,
 		zend_mir_dump_diagnostic(&dump, "unsupported ZNMIR contract version");
 		return false;
 	}
+	if ((view->value_fact_count == NULL) != (view->value_fact_at == NULL)) {
+		zend_mir_dump_diagnostic(&dump, "incomplete scalar value-fact view");
+		return false;
+	}
+	if (view->value_fact_count != NULL
+			&& view->value_fact_count(view->context) > UINT32_C(1048576)) {
+		zend_mir_dump_diagnostic(&dump, "scalar value-fact count exceeds hard limit");
+		return false;
+	}
 	if (!zend_mir_dump_literal(&dump, "znmir 1.0 module ")
 			|| !zend_mir_dump_id(&dump, "m", view->module_id(view->context))
 			|| !zend_mir_dump_literal(&dump, "\n")
@@ -782,6 +879,11 @@ bool zend_mir_dump_text(const zend_mir_view *view, zend_mir_text_writer *writer,
 				zend_mir_value_id_at, zend_mir_dump_value, "value")
 			|| !zend_mir_dump_sorted(&dump, view->constant_count(view->context),
 				zend_mir_constant_id_at, zend_mir_dump_constant, "constant")
+			|| (view->value_fact_count != NULL
+				&& !zend_mir_dump_sorted(&dump,
+					view->value_fact_count(view->context),
+					zend_mir_value_fact_id_at,
+					zend_mir_dump_value_fact, "fact"))
 			|| !zend_mir_dump_sorted(&dump, view->source_position_count(view->context),
 				zend_mir_source_id_at, zend_mir_dump_source, "source")
 			|| !zend_mir_dump_pool(&dump, view->frame_slot_count(view->context), zend_mir_dump_slot)

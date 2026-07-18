@@ -52,6 +52,7 @@ struct _zend_mir_module {
 	zend_mir_core_table instructions;
 	zend_mir_core_table values;
 	zend_mir_core_table constants;
+	zend_mir_core_table value_facts;
 	uint32_t operand_count;
 	uint32_t *value_index;
 	uint32_t value_index_capacity;
@@ -72,6 +73,8 @@ bool zend_mir_module_find_value(const zend_mir_module *module, zend_mir_value_id
 bool zend_mir_module_prepare_value_index(zend_mir_module *module);
 void zend_mir_module_insert_value_index(zend_mir_module *module,
 	zend_mir_value_id id, uint32_t index);
+bool zend_mir_core_add_value_fact(void *context,
+	const zend_mir_value_fact_ref *requested, zend_mir_value_fact_id *out);
 
 void zend_mir_module_init_view(zend_mir_module *module);
 void zend_mir_module_init_mutator(zend_mir_module *module);

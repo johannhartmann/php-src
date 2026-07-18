@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strict standalone build and runtime driver for the W02-F verifier."""
+"""Build and run the strict standalone W03 scalar MIR suite."""
 
 from __future__ import annotations
 
@@ -12,86 +12,87 @@ import sys
 import tempfile
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
-VERIFY_SOURCES = (
+ROOT = Path(__file__).resolve().parents[4]
+SOURCES = (
+    "Zend/Native/MIR/Core/zend_mir_arena.c",
+    "Zend/Native/MIR/Core/zend_mir_ids.c",
+    "Zend/Native/MIR/Core/zend_mir_module.c",
+    "Zend/Native/MIR/Core/zend_mir_view.c",
     "Zend/Native/MIR/Scalar/zend_mir_scalar_descriptors.c",
+    "Zend/Native/MIR/Scalar/zend_mir_value_facts.c",
+    "Zend/Native/MIR/Scalar/zend_mir_verify_scalar.c",
+    "Zend/Native/MIR/Text/zend_mir_dump.c",
     "Zend/Native/MIR/Verify/zend_mir_verify.c",
     "Zend/Native/MIR/Verify/zend_mir_verify_ids.c",
     "Zend/Native/MIR/Verify/zend_mir_verify_cfg.c",
     "Zend/Native/MIR/Verify/zend_mir_verify_dominance.c",
     "Zend/Native/MIR/Verify/zend_mir_verify_semantics.c",
     "Zend/Native/MIR/Verify/zend_mir_verify_frames.c",
-)
-SEMANTIC_SOURCES = (
     "Zend/Native/MIR/Semantics/zend_mir_semantic_catalog.c",
     "Zend/Native/MIR/Semantics/zend_mir_effect_summary.c",
     "Zend/Native/MIR/Semantics/zend_mir_alias.c",
     "Zend/Native/MIR/Semantics/zend_mir_ownership.c",
-)
-TEST_SOURCES = (
     "tests/native/mir/contracts/fixture_host.c",
     "tests/native/mir/verify/fixtures/verify_fixtures.c",
-    "tests/native/mir/verify/test_verify.c",
+    "tests/native/mir/text/mir_test_parser.c",
+    "tests/native/lowering/mir/test_scalar_mir.c",
 )
 
 
-def compiler_command(value: str) -> list[str]:
-    command = shlex.split(value)
-    if not command:
+def command(value: str) -> list[str]:
+    parsed = shlex.split(value)
+    if not parsed:
         raise ValueError("compiler command must not be empty")
-    return command
+    return parsed
 
 
-def run(command: list[str], environment: dict[str, str]) -> None:
-    print("+ " + " ".join(shlex.quote(part) for part in command), flush=True)
-    subprocess.run(
-        command,
-        cwd=REPOSITORY_ROOT,
-        env=environment,
-        check=True,
-    )
+def run(arguments: list[str], environment: dict[str, str]) -> None:
+    print("+ " + " ".join(shlex.quote(part) for part in arguments), flush=True)
+    subprocess.run(arguments, cwd=ROOT, env=environment, check=True)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cc", default=os.environ.get("CC", "cc"))
-    arguments = parser.parse_args()
+    args = parser.parse_args()
     try:
-        cc = compiler_command(arguments.cc)
-        cxx = compiler_command(os.environ.get("CXX", "c++"))
+        cc = command(args.cc)
+        cxx = command(os.environ.get("CXX", "c++"))
     except ValueError as error:
         parser.error(str(error))
 
     environment = os.environ.copy()
     environment.update({"LC_ALL": "C", "TZ": "UTC"})
-    common = ["-Wall", "-Wextra", "-Wpedantic", "-Werror", "-I."]
+    warnings = ["-Wall", "-Wextra", "-Wpedantic", "-Werror", "-I."]
 
-    with tempfile.TemporaryDirectory(prefix="zend-mir-verify-") as directory:
+    with tempfile.TemporaryDirectory(prefix="zend-mir-scalar-") as directory:
         temporary = Path(directory)
-        executable = temporary / "test_verify"
+        executable = temporary / "test_scalar_mir"
         run(
             cc
             + ["-std=c11", "-DZEND_MIR_VERIFY_TESTING"]
-            + common
-            + list(VERIFY_SOURCES)
-            + list(SEMANTIC_SOURCES)
-            + list(TEST_SOURCES)
+            + warnings
+            + list(SOURCES)
             + ["-o", str(executable)],
             environment,
         )
         run([str(executable)], environment)
 
-        header_object = temporary / "test_verify_header.o"
+        header_object = temporary / "test_scalar_headers.o"
         run(
             cxx
             + ["-std=c++20"]
-            + common
-            + ["-c", "tests/native/mir/verify/test_verify_header.cpp",
-               "-o", str(header_object)],
+            + warnings
+            + [
+                "-c",
+                "tests/native/lowering/mir/test_scalar_headers.cpp",
+                "-o",
+                str(header_object),
+            ],
             environment,
         )
 
-    print("W02-F verifier tests passed")
+    print("W03 scalar MIR C11, C++20, text, and verifier suite passed")
     return 0
 
 
