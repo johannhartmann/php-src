@@ -61,6 +61,7 @@ def main() -> int:
         cxx_source = temporary_dir / "test_frontend_header.cpp"
         cxx_source.write_text(
             """
+#include "Zend/Native/MIR/zend_mir.h"
 #include "Zend/Native/Lowering/Frontend/zend_mir_zend_source.h"
 #include <type_traits>
 static_assert(std::is_standard_layout_v<zend_mir_zend_source>);

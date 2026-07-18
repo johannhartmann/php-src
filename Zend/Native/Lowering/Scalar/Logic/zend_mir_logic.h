@@ -17,8 +17,8 @@
 
 #include "../../zend_mir_lowering.h"
 
-#define ZEND_MIR_LOGIC_PROVIDER_ID UINT32_C(3)
-#define ZEND_MIR_LOGIC_SEMANTIC_FAMILY_ID UINT32_C(3)
+#define ZEND_MIR_LOGIC_PROVIDER_ID UINT32_C(4)
+#define ZEND_MIR_LOGIC_SEMANTIC_FAMILY_ID UINT32_C(4)
 
 /* Stable source-opcode numbers from the frozen W01 matrix. */
 enum {

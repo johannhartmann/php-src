@@ -18,6 +18,7 @@
 
 #include "../zend_mir_lowering_diagnostic.h"
 #include "../zend_mir_lowering_source.h"
+#include "../../MIR/zend_mir_frame_state.h"
 #include "../../MIR/zend_mir_scalar.h"
 
 struct _zend_op_array;
@@ -39,14 +40,6 @@ typedef struct _zend_mir_source_slot_ref {
 	zend_mir_source_slot_kind kind;
 	uint32_t kind_index;
 } zend_mir_source_slot_ref;
-
-typedef struct _zend_mir_source_position_ref {
-	zend_mir_source_position_id id;
-	zend_mir_symbol_id file_symbol_id;
-	uint32_t line;
-	uint32_t column_start;
-	uint32_t column_end;
-} zend_mir_source_position_ref;
 
 /*
  * Process-local, caller-owned adapter state. The input pointers are borrowed

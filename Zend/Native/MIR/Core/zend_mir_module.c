@@ -625,48 +625,263 @@ static bool zend_mir_add_source_position(void *context,
 		const zend_mir_source_position_ref *source_position,
 		zend_mir_source_position_id *out)
 {
-	(void) source_position;
-	(void) out;
-	return zend_mir_unmodeled_mutation(context);
+	zend_mir_module *module = context;
+	zend_mir_source_position_ref *records;
+	zend_mir_source_position_ref record;
+	uint32_t index;
+
+	if (!zend_mir_module_require_building(module)
+			|| source_position == NULL || out == NULL
+			|| !zend_mir_id_is_valid(source_position->file_symbol_id)
+			|| source_position->line == 0
+			|| source_position->column_start == 0
+			|| source_position->column_start > source_position->column_end) {
+		return zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_INVALID_ID,
+			"invalid source position");
+	}
+	records = ZEND_MIR_CORE_ITEMS(
+		module, source_positions, zend_mir_source_position_ref);
+	if (source_position->id != ZEND_MIR_ID_INVALID
+			&& source_position->id < module->source_positions.count) {
+		const zend_mir_source_position_ref *existing =
+			&records[source_position->id];
+
+		if (existing->file_symbol_id != source_position->file_symbol_id
+				|| existing->line != source_position->line
+				|| existing->column_start != source_position->column_start
+				|| existing->column_end != source_position->column_end) {
+			return zend_mir_module_fail(
+				module, ZEND_MIR_DIAGNOSTIC_DUPLICATE_ID,
+				"source position ID conflicts with existing record");
+		}
+		*out = existing->id;
+		return true;
+	}
+	if (source_position->id == ZEND_MIR_ID_INVALID) {
+		for (index = 0; index < module->source_positions.count; index++) {
+			if (records[index].file_symbol_id
+						== source_position->file_symbol_id
+					&& records[index].line == source_position->line
+					&& records[index].column_start
+						== source_position->column_start
+					&& records[index].column_end
+						== source_position->column_end) {
+				*out = records[index].id;
+				return true;
+			}
+		}
+	}
+	if (source_position->id != ZEND_MIR_ID_INVALID
+			&& source_position->id != module->source_positions.count) {
+		return zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_INVALID_ID,
+			"source position IDs must be canonical");
+	}
+	if (!zend_mir_module_grow_table(
+			module, &module->source_positions,
+			sizeof(zend_mir_source_position_ref),
+			alignof(zend_mir_source_position_ref), UINT32_MAX)) {
+		return false;
+	}
+	records = ZEND_MIR_CORE_ITEMS(
+		module, source_positions, zend_mir_source_position_ref);
+	record = *source_position;
+	record.id = module->source_positions.count;
+	records[module->source_positions.count++] = record;
+	*out = record.id;
+	return true;
 }
 
 static bool zend_mir_add_frame_slot(void *context,
 		const zend_mir_frame_slot_ref *slot, uint32_t *index_out)
 {
-	(void) slot;
-	(void) index_out;
-	return zend_mir_unmodeled_mutation(context);
+	zend_mir_module *module = context;
+	zend_mir_frame_slot_ref *records;
+
+	if (!zend_mir_module_require_building(module) || slot == NULL
+			|| index_out == NULL || !zend_mir_id_is_valid(slot->slot_id)
+			|| slot->kind < 0 || slot->kind >= ZEND_MIR_FRAME_SLOT_KIND_COUNT
+			|| slot->representation < 0
+			|| slot->representation
+				>= ZEND_MIR_FRAME_SLOT_REPRESENTATION_COUNT
+			|| slot->materialization < 0
+			|| slot->materialization >= ZEND_MIR_MATERIALIZATION_COUNT
+			|| slot->ownership < 0
+			|| slot->ownership >= ZEND_MIR_FRAME_SLOT_OWNERSHIP_COUNT
+			|| (slot->materialization == ZEND_MIR_MATERIALIZATION_UNDEF
+				? zend_mir_id_is_valid(slot->value_id)
+				: !zend_mir_module_find_value(
+					module, slot->value_id, NULL))) {
+		return zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_INVALID_ID,
+			"invalid frame slot");
+	}
+	if (!zend_mir_module_grow_table(
+			module, &module->frame_slots, sizeof(zend_mir_frame_slot_ref),
+			alignof(zend_mir_frame_slot_ref), UINT32_MAX)) {
+		return false;
+	}
+	records = ZEND_MIR_CORE_ITEMS(module, frame_slots, zend_mir_frame_slot_ref);
+	*index_out = module->frame_slots.count;
+	records[module->frame_slots.count++] = *slot;
+	return true;
+}
+
+static bool zend_mir_has_frame_slot_id(
+	const zend_mir_module *module, uint32_t slot_id)
+{
+	const zend_mir_frame_slot_ref *records = ZEND_MIR_CORE_ITEMS(
+		module, frame_slots, zend_mir_frame_slot_ref);
+	uint32_t index;
+
+	for (index = 0; index < module->frame_slots.count; index++) {
+		if (records[index].slot_id == slot_id) {
+			return true;
+		}
+	}
+	return false;
 }
 
 static bool zend_mir_add_root(void *context, uint32_t slot_id, uint32_t *index_out)
 {
-	(void) slot_id;
-	(void) index_out;
-	return zend_mir_unmodeled_mutation(context);
+	zend_mir_module *module = context;
+	uint32_t *records;
+
+	if (!zend_mir_module_require_building(module) || index_out == NULL
+			|| !zend_mir_id_is_valid(slot_id)
+			|| !zend_mir_has_frame_slot_id(module, slot_id)) {
+		return zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_INVALID_ID,
+			"invalid frame root");
+	}
+	if (!zend_mir_module_grow_table(
+			module, &module->roots, sizeof(uint32_t), alignof(uint32_t),
+			UINT32_MAX)) {
+		return false;
+	}
+	records = ZEND_MIR_CORE_ITEMS(module, roots, uint32_t);
+	*index_out = module->roots.count;
+	records[module->roots.count++] = slot_id;
+	return true;
 }
 
 static bool zend_mir_add_cleanup(void *context,
 		const zend_mir_cleanup_ref *cleanup, uint32_t *index_out)
 {
-	(void) cleanup;
-	(void) index_out;
-	return zend_mir_unmodeled_mutation(context);
+	zend_mir_module *module = context;
+	zend_mir_cleanup_ref *records;
+
+	if (!zend_mir_module_require_building(module) || cleanup == NULL
+			|| index_out == NULL || !zend_mir_id_is_valid(cleanup->slot_id)
+			|| !zend_mir_has_frame_slot_id(module, cleanup->slot_id)
+			|| cleanup->action < 0
+			|| cleanup->action >= ZEND_MIR_CLEANUP_ACTION_COUNT
+			|| cleanup->state < 0
+			|| cleanup->state >= ZEND_MIR_CLEANUP_STATE_COUNT) {
+		return zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_INVALID_ID,
+			"invalid cleanup record");
+	}
+	if (!zend_mir_module_grow_table(
+			module, &module->cleanups, sizeof(zend_mir_cleanup_ref),
+			alignof(zend_mir_cleanup_ref), UINT32_MAX)) {
+		return false;
+	}
+	records = ZEND_MIR_CORE_ITEMS(module, cleanups, zend_mir_cleanup_ref);
+	*index_out = module->cleanups.count;
+	records[module->cleanups.count++] = *cleanup;
+	return true;
 }
 
 static bool zend_mir_add_frame_state(void *context,
 		const zend_mir_frame_state_ref *frame_state, zend_mir_frame_state_id *out)
 {
-	(void) frame_state;
-	(void) out;
-	return zend_mir_unmodeled_mutation(context);
+	zend_mir_module *module = context;
+	zend_mir_frame_state_ref *records;
+	zend_mir_frame_state_ref record;
+
+	if (!zend_mir_module_require_building(module) || frame_state == NULL
+			|| out == NULL
+			|| (frame_state->id != ZEND_MIR_ID_INVALID
+				&& frame_state->id != module->frame_states.count)
+			|| zend_mir_find_function(module, frame_state->function_id) == NULL
+			|| (frame_state->parent_id != ZEND_MIR_ID_INVALID
+				&& frame_state->parent_id >= module->frame_states.count)
+			|| frame_state->function_kind < 0
+			|| frame_state->function_kind >= ZEND_MIR_FUNCTION_KIND_COUNT
+			|| frame_state->opline_phase < 0
+			|| frame_state->opline_phase >= ZEND_MIR_OPLINE_PHASE_COUNT
+			|| frame_state->slots.offset > module->frame_slots.count
+			|| frame_state->slots.count
+				> module->frame_slots.count - frame_state->slots.offset
+			|| frame_state->roots.offset > module->roots.count
+			|| frame_state->roots.count
+				> module->roots.count - frame_state->roots.offset
+			|| frame_state->cleanup_obligations.offset
+				> module->cleanups.count
+			|| frame_state->cleanup_obligations.count
+				> module->cleanups.count
+					- frame_state->cleanup_obligations.offset
+			|| frame_state->return_continuation.kind < 0
+			|| frame_state->return_continuation.kind
+				>= ZEND_MIR_CONTINUATION_KIND_COUNT
+			|| frame_state->exception_continuation.kind < 0
+			|| frame_state->exception_continuation.kind
+				>= ZEND_MIR_CONTINUATION_KIND_COUNT
+			|| frame_state->bailout_continuation.kind < 0
+			|| frame_state->bailout_continuation.kind
+				>= ZEND_MIR_CONTINUATION_KIND_COUNT
+			|| frame_state->suspend_kind < 0
+			|| frame_state->suspend_kind >= ZEND_MIR_SUSPEND_KIND_COUNT
+			|| frame_state->resume.entry_kind < 0
+			|| frame_state->resume.entry_kind
+				>= ZEND_MIR_RESUME_ENTRY_KIND_COUNT
+			|| frame_state->safepoint_class < 0
+			|| frame_state->safepoint_class >= ZEND_MIR_SAFEPOINT_CLASS_COUNT) {
+		return zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_INVALID_ID,
+			"invalid frame state");
+	}
+	if (!zend_mir_module_grow_table(
+			module, &module->frame_states, sizeof(zend_mir_frame_state_ref),
+			alignof(zend_mir_frame_state_ref), UINT32_MAX)) {
+		return false;
+	}
+	records = ZEND_MIR_CORE_ITEMS(
+		module, frame_states, zend_mir_frame_state_ref);
+	record = *frame_state;
+	record.id = module->frame_states.count;
+	records[module->frame_states.count++] = record;
+	*out = record.id;
+	return true;
 }
 
 static bool zend_mir_add_source_map(void *context,
 		const zend_mir_source_map_ref *source_map, zend_mir_source_map_id *out)
 {
-	(void) source_map;
-	(void) out;
-	return zend_mir_unmodeled_mutation(context);
+	zend_mir_module *module = context;
+	zend_mir_source_map_ref *records;
+	zend_mir_source_map_ref record;
+
+	if (!zend_mir_module_require_building(module) || source_map == NULL
+			|| out == NULL
+			|| (source_map->id != ZEND_MIR_ID_INVALID
+				&& source_map->id != module->source_maps.count)
+			|| source_map->source_position_id
+				>= module->source_positions.count
+			|| !zend_mir_id_is_valid(source_map->op_array_id)
+			|| source_map->opline_phase < 0
+			|| source_map->opline_phase >= ZEND_MIR_OPLINE_PHASE_COUNT
+			|| source_map->owner_frame_id >= module->frame_states.count) {
+		return zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_INVALID_ID,
+			"invalid source map");
+	}
+	if (!zend_mir_module_grow_table(
+			module, &module->source_maps, sizeof(zend_mir_source_map_ref),
+			alignof(zend_mir_source_map_ref), UINT32_MAX)) {
+		return false;
+	}
+	records = ZEND_MIR_CORE_ITEMS(module, source_maps, zend_mir_source_map_ref);
+	record = *source_map;
+	record.id = module->source_maps.count;
+	records[module->source_maps.count++] = record;
+	*out = record.id;
+	return true;
 }
 
 static bool zend_mir_seal_function(void *context,

@@ -1,0 +1,159 @@
+{
+  "$id": "https://php.net/schemas/native-engine/w03-lowering-corpus-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cases": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]*$",
+            "type": "string"
+          },
+          "deferred_wave": {
+            "enum": [
+              "W04",
+              "W05",
+              "W06",
+              null
+            ]
+          },
+          "disposition": {
+            "enum": [
+              "accepted",
+              "rejected"
+            ]
+          },
+          "expected_mirl": {
+            "pattern": "^MIRL[0-9]{4}$",
+            "type": "string"
+          },
+          "family": {
+            "enum": [
+              "arithmetic",
+              "arrays",
+              "bitwise",
+              "booleans",
+              "branches",
+              "calls",
+              "casts",
+              "comparisons",
+              "constants",
+              "copy_move_return",
+              "missing_proofs",
+              "objects",
+              "references",
+              "strings",
+              "w04_control_flow",
+              "w05_runtime_effect",
+              "w06_reference_semantics"
+            ]
+          },
+          "function": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "golden_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "golden_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reference_path": {
+            "type": "string"
+          },
+          "repeat_calls": {
+            "items": {
+              "maximum": 10,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maxItems": 10,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "source_path": {
+            "type": "string"
+          },
+          "source_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "case_id",
+          "deferred_wave",
+          "disposition",
+          "expected_mirl",
+          "family",
+          "function",
+          "golden_path",
+          "golden_sha256",
+          "reference_path",
+          "repeat_calls",
+          "source_path",
+          "source_sha256"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "environment": {
+      "additionalProperties": false,
+      "properties": {
+        "LANG": {
+          "const": "C"
+        },
+        "LC_ALL": {
+          "const": "C"
+        },
+        "SOURCE_DATE_EPOCH": {
+          "const": "0"
+        },
+        "TZ": {
+          "const": "UTC"
+        },
+        "random_seed": {
+          "const": 0
+        }
+      },
+      "required": [
+        "LANG",
+        "LC_ALL",
+        "SOURCE_DATE_EPOCH",
+        "TZ",
+        "random_seed"
+      ],
+      "type": "object"
+    },
+    "format_version": {
+      "const": "1.0.0"
+    },
+    "manifest_id": {
+      "const": "w03-compile-dump-differential-v1"
+    }
+  },
+  "required": [
+    "cases",
+    "environment",
+    "format_version",
+    "manifest_id"
+  ],
+  "type": "object"
+}

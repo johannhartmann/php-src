@@ -53,6 +53,12 @@ struct _zend_mir_module {
 	zend_mir_core_table values;
 	zend_mir_core_table constants;
 	zend_mir_core_table value_facts;
+	zend_mir_core_table frame_states;
+	zend_mir_core_table source_positions;
+	zend_mir_core_table frame_slots;
+	zend_mir_core_table roots;
+	zend_mir_core_table cleanups;
+	zend_mir_core_table source_maps;
 	uint32_t operand_count;
 	uint32_t *value_index;
 	uint32_t value_index_capacity;
