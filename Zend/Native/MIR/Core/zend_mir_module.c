@@ -23,6 +23,28 @@ static bool zend_mir_checked_multiply_size(size_t left, size_t right, size_t *ou
 	return true;
 }
 
+static bool zend_mir_representation_is_valid(
+		zend_mir_representation representation)
+{
+	return representation >= 0 && representation < ZEND_MIR_REPRESENTATION_COUNT;
+}
+
+static bool zend_mir_ownership_state_is_valid(
+		zend_mir_ownership_state ownership)
+{
+	return ownership >= 0 && ownership < ZEND_MIR_OWNERSHIP_STATE_COUNT;
+}
+
+static bool zend_mir_constant_kind_is_valid(zend_mir_constant_kind kind)
+{
+	return kind >= 0 && kind < ZEND_MIR_CONSTANT_KIND_COUNT;
+}
+
+static bool zend_mir_opcode_is_valid(zend_mir_opcode opcode)
+{
+	return opcode >= 0 && opcode < ZEND_MIR_OPCODE_COUNT;
+}
+
 static void zend_mir_emit_diagnostic(zend_mir_diagnostic_sink *sink,
 		zend_mir_module_id module_id, zend_mir_diagnostic_code code,
 		const char *message)
@@ -392,8 +414,8 @@ static bool zend_mir_add_value(void *context, zend_mir_value_id requested_id,
 		return false;
 	}
 	if (!zend_mir_core_id_validate(requested_id)
-			|| representation >= ZEND_MIR_REPRESENTATION_COUNT
-			|| ownership >= ZEND_MIR_OWNERSHIP_STATE_COUNT) {
+			|| !zend_mir_representation_is_valid(representation)
+			|| !zend_mir_ownership_state_is_valid(ownership)) {
 		return zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_INVALID_ID,
 			"invalid value record");
 	}
@@ -430,8 +452,8 @@ static bool zend_mir_add_constant(void *context,
 		return false;
 	}
 	if (constant == NULL
-			|| constant->representation >= ZEND_MIR_REPRESENTATION_COUNT
-			|| constant->kind >= ZEND_MIR_CONSTANT_KIND_COUNT
+			|| !zend_mir_representation_is_valid(constant->representation)
+			|| !zend_mir_constant_kind_is_valid(constant->kind)
 			|| !zend_mir_module_find_value(module, constant->value_id, &value_index)) {
 		return zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_INVALID_ID,
 			"invalid constant record");
@@ -473,8 +495,8 @@ static bool zend_mir_add_instruction(void *context,
 	}
 	block = zend_mir_find_block(module, record->block_id);
 	if (block == NULL || !zend_mir_function_is_open(module, block->function_id)
-			|| record->opcode >= ZEND_MIR_OPCODE_COUNT
-			|| record->representation >= ZEND_MIR_REPRESENTATION_COUNT
+			|| !zend_mir_opcode_is_valid(record->opcode)
+			|| !zend_mir_representation_is_valid(record->representation)
 			|| (record->result_id != ZEND_MIR_ID_INVALID
 				&& !zend_mir_module_find_value(module, record->result_id, NULL))) {
 		return zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_INVALID_OPCODE,
@@ -639,6 +661,14 @@ static bool zend_mir_add_frame_state(void *context,
 	return zend_mir_unmodeled_mutation(context);
 }
 
+static bool zend_mir_add_source_map(void *context,
+		const zend_mir_source_map_ref *source_map, zend_mir_source_map_id *out)
+{
+	(void) source_map;
+	(void) out;
+	return zend_mir_unmodeled_mutation(context);
+}
+
 static bool zend_mir_seal_function(void *context,
 		zend_mir_function_id function_id)
 {
@@ -677,6 +707,7 @@ void zend_mir_module_init_mutator(zend_mir_module *module)
 	module->mutator.add_cleanup = zend_mir_add_cleanup;
 	module->mutator.add_frame_state = zend_mir_add_frame_state;
 	module->mutator.seal_function = zend_mir_seal_function;
+	module->mutator.add_source_map = zend_mir_add_source_map;
 }
 
 bool zend_mir_module_finalize(zend_mir_module *module)

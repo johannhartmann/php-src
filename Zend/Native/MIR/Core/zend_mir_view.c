@@ -256,6 +256,15 @@ static bool zend_mir_view_predecessor_at(const void *context,
 	return false;
 }
 
+static bool zend_mir_view_source_map_at(const void *context, uint32_t index,
+		zend_mir_source_map_ref *out)
+{
+	(void) context;
+	(void) index;
+	(void) out;
+	return false;
+}
+
 void zend_mir_module_init_view(zend_mir_module *module)
 {
 	module->view.contract_version = ZEND_MIR_CONTRACT_VERSION;
@@ -287,4 +296,6 @@ void zend_mir_module_init_view(zend_mir_module *module)
 	module->view.successor_at = zend_mir_view_successor_at;
 	module->view.predecessor_count = zend_mir_view_predecessor_count;
 	module->view.predecessor_at = zend_mir_view_predecessor_at;
+	module->view.source_map_count = zend_mir_view_empty_count;
+	module->view.source_map_at = zend_mir_view_source_map_at;
 }
