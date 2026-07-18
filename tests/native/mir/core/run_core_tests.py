@@ -16,6 +16,10 @@ CORE_SOURCES = (
     "zend_mir_module.c",
     "zend_mir_view.c",
 )
+SCALAR_SOURCES = (
+    "zend_mir_scalar_descriptors.c",
+    "zend_mir_value_facts.c",
+)
 
 
 def run(command: list[str], cwd: Path) -> None:
@@ -29,6 +33,7 @@ def main() -> int:
 
     repo = Path(__file__).resolve().parents[4]
     core = repo / "Zend" / "Native" / "MIR" / "Core"
+    scalar = repo / "Zend" / "Native" / "MIR" / "Scalar"
     mir = repo / "Zend" / "Native" / "MIR"
     test_source = Path(__file__).with_name("test_core.c")
     compiler = shlex.split(args.cc)
@@ -46,10 +51,13 @@ def main() -> int:
             "-Wpedantic",
             "-Werror",
             "-I",
+            str(repo),
+            "-I",
             str(mir),
             "-I",
             str(core),
             *(str(core / source) for source in CORE_SOURCES),
+            *(str(scalar / source) for source in SCALAR_SOURCES),
             str(test_source),
             "-o",
             str(executable),

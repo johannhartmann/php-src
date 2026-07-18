@@ -265,6 +265,28 @@ static bool zend_mir_view_source_map_at(const void *context, uint32_t index,
 	return false;
 }
 
+static uint32_t zend_mir_view_value_fact_count(const void *context)
+{
+	const zend_mir_module *module = context;
+
+	return zend_mir_view_is_available(module) ? module->value_facts.count : 0;
+}
+
+static bool zend_mir_view_value_fact_at(const void *context, uint32_t index,
+		zend_mir_value_fact_ref *out)
+{
+	const zend_mir_module *module = context;
+	zend_mir_value_fact_ref *facts;
+
+	if (!zend_mir_view_is_available(module) || out == NULL
+			|| index >= module->value_facts.count) {
+		return false;
+	}
+	facts = ZEND_MIR_CORE_ITEMS(module, value_facts, zend_mir_value_fact_ref);
+	*out = facts[index];
+	return true;
+}
+
 void zend_mir_module_init_view(zend_mir_module *module)
 {
 	module->view.contract_version = ZEND_MIR_CONTRACT_VERSION;
@@ -298,4 +320,6 @@ void zend_mir_module_init_view(zend_mir_module *module)
 	module->view.predecessor_at = zend_mir_view_predecessor_at;
 	module->view.source_map_count = zend_mir_view_empty_count;
 	module->view.source_map_at = zend_mir_view_source_map_at;
+	module->view.value_fact_count = zend_mir_view_value_fact_count;
+	module->view.value_fact_at = zend_mir_view_value_fact_at;
 }
