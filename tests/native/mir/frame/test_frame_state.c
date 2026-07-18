@@ -85,12 +85,19 @@ typedef struct _test_frame_options {
 	zend_mir_function_id function_id;
 	zend_mir_symbol_id name_symbol_id;
 	zend_mir_op_array_id op_array_id;
+	zend_mir_function_kind function_kind;
 	uint32_t opline_index;
 	zend_mir_opline_phase phase;
 	zend_mir_frame_state_id parent_id;
 	zend_mir_safepoint_class safepoint_class;
 	zend_mir_suspend_kind suspend_kind;
 	uint32_t slot_id;
+	zend_mir_frame_slot_kind slot_kind;
+	zend_mir_frame_slot_representation slot_representation;
+	zend_mir_materialization slot_materialization;
+	zend_mir_frame_slot_ownership slot_ownership;
+	zend_mir_cleanup_action cleanup_action;
+	zend_mir_cleanup_state cleanup_state;
 	uint32_t root_copies;
 	uint32_t cleanup_copies;
 	bool duplicate_slot;
@@ -107,17 +114,36 @@ static test_frame_options normal_options(uint32_t discriminator)
 	options.function_id = 10 + discriminator;
 	options.name_symbol_id = 100 + discriminator;
 	options.op_array_id = 200 + discriminator;
+	options.function_kind = ZEND_MIR_FUNCTION_KIND_USER;
 	options.opline_index = 4 + discriminator;
 	options.phase = ZEND_MIR_OPLINE_PHASE_BEFORE;
 	options.parent_id = ZEND_MIR_ID_INVALID;
 	options.safepoint_class = ZEND_MIR_SAFEPOINT_CLASS_USER_CALL;
 	options.suspend_kind = ZEND_MIR_SUSPEND_KIND_NONE;
 	options.slot_id = 300 + discriminator;
+	options.slot_kind = ZEND_MIR_FRAME_SLOT_KIND_CV;
+	options.slot_representation = ZEND_MIR_FRAME_SLOT_REPRESENTATION_CANONICAL_ZVAL;
+	options.slot_materialization = ZEND_MIR_MATERIALIZATION_MATERIALIZED;
+	options.slot_ownership = ZEND_MIR_FRAME_SLOT_OWNERSHIP_FRAME_OWNED;
+	options.cleanup_action = ZEND_MIR_CLEANUP_ACTION_DESTROY;
+	options.cleanup_state = ZEND_MIR_CLEANUP_STATE_PENDING;
 	options.root_copies = 1;
 	options.cleanup_copies = 1;
 	options.canonical = true;
 	options.immutable_code = true;
 	return options;
+}
+
+static void make_persistent(test_frame_options *options,
+		zend_mir_suspend_kind suspend_kind, zend_mir_safepoint_class safepoint_class)
+{
+	options->phase = ZEND_MIR_OPLINE_PHASE_SUSPENDED;
+	options->safepoint_class = safepoint_class;
+	options->suspend_kind = suspend_kind;
+	options->slot_representation = ZEND_MIR_FRAME_SLOT_REPRESENTATION_PERSISTENT_SUSPEND_STATE;
+	options->slot_ownership = ZEND_MIR_FRAME_SLOT_OWNERSHIP_SUSPEND_STATE_OWNED;
+	options->cleanup_action = ZEND_MIR_CLEANUP_ACTION_RELEASE;
+	options->cleanup_state = ZEND_MIR_CLEANUP_STATE_TRANSFERRED;
 }
 
 static zend_mir_frame_builder *build_frame(
@@ -134,7 +160,7 @@ static zend_mir_frame_builder *build_frame(
 
 	assert(builder != NULL);
 	assert(zend_mir_frame_builder_set_function(builder, options.function_id,
-		options.name_symbol_id, options.op_array_id, ZEND_MIR_FUNCTION_KIND_USER)
+		options.name_symbol_id, options.op_array_id, options.function_kind)
 		== ZEND_MIR_FRAME_STATUS_OK);
 	assert(zend_mir_frame_builder_set_opline(builder, options.opline_index, options.phase)
 		== ZEND_MIR_FRAME_STATUS_OK);
@@ -144,14 +170,10 @@ static zend_mir_frame_builder *build_frame(
 	slot.slot_id = options.slot_id;
 	slot.value_id = 500 + options.function_id;
 	slot.index = 0;
-	slot.kind = ZEND_MIR_FRAME_SLOT_KIND_CV;
-	slot.representation = options.suspend_kind == ZEND_MIR_SUSPEND_KIND_NONE
-		? ZEND_MIR_FRAME_SLOT_REPRESENTATION_CANONICAL_ZVAL
-		: ZEND_MIR_FRAME_SLOT_REPRESENTATION_PERSISTENT_SUSPEND_STATE;
-	slot.materialization = ZEND_MIR_MATERIALIZATION_MATERIALIZED;
-	slot.ownership = options.suspend_kind == ZEND_MIR_SUSPEND_KIND_NONE
-		? ZEND_MIR_FRAME_SLOT_OWNERSHIP_FRAME_OWNED
-		: ZEND_MIR_FRAME_SLOT_OWNERSHIP_SUSPEND_STATE_OWNED;
+	slot.kind = options.slot_kind;
+	slot.representation = options.slot_representation;
+	slot.materialization = options.slot_materialization;
+	slot.ownership = options.slot_ownership;
 	slot.rooted = true;
 	slot.cleanup_required = true;
 	assert(zend_mir_frame_builder_add_slot(builder, &slot) == ZEND_MIR_FRAME_STATUS_OK);
@@ -163,10 +185,8 @@ static zend_mir_frame_builder *build_frame(
 			== ZEND_MIR_FRAME_STATUS_OK);
 	}
 	cleanup.slot_id = slot.slot_id;
-	cleanup.action = options.suspend_kind == ZEND_MIR_SUSPEND_KIND_NONE
-		? ZEND_MIR_CLEANUP_ACTION_DESTROY : ZEND_MIR_CLEANUP_ACTION_RELEASE;
-	cleanup.state = options.suspend_kind == ZEND_MIR_SUSPEND_KIND_NONE
-		? ZEND_MIR_CLEANUP_STATE_PENDING : ZEND_MIR_CLEANUP_STATE_TRANSFERRED;
+	cleanup.action = options.cleanup_action;
+	cleanup.state = options.cleanup_state;
 	for (i = 0; i < options.cleanup_copies; i++) {
 		assert(zend_mir_frame_builder_add_cleanup(builder, &cleanup)
 			== ZEND_MIR_FRAME_STATUS_OK);
@@ -208,6 +228,15 @@ static zend_mir_frame_builder *build_frame(
 	return builder;
 }
 
+static void assert_intern_rejected(zend_mir_frame_table *table,
+		zend_mir_frame_builder *builder, zend_mir_frame_status expected)
+{
+	zend_mir_frame_state_id id = 1234;
+
+	assert(zend_mir_frame_table_intern(table, builder, &id) == expected);
+	assert(id == 1234);
+}
+
 static void test_w01_examples_and_deduplication(void)
 {
 	test_arena table_arena;
@@ -219,8 +248,11 @@ static void test_w01_examples_and_deduplication(void)
 	zend_mir_frame_builder *first;
 	zend_mir_frame_builder *duplicate;
 	zend_mir_frame_state_record record;
+	zend_mir_frame_state_ref flat_record;
 	zend_mir_frame_slot_ref slot;
+	zend_mir_frame_slot_ref flat_slot;
 	zend_mir_cleanup_ref cleanup;
+	zend_mir_cleanup_ref flat_cleanup;
 	zend_mir_frame_state_id first_id;
 	zend_mir_frame_state_id duplicate_id;
 	zend_mir_frame_state_id example_id;
@@ -236,16 +268,68 @@ static void test_w01_examples_and_deduplication(void)
 	assert(first_id == duplicate_id);
 	assert(zend_mir_frame_table_count(table) == 1);
 	assert(zend_mir_frame_table_at(table, first_id, &record));
+	assert(record.ref.id == first_id);
+	assert(record.ref.function_id == options.function_id);
+	assert(record.ref.parent_id == ZEND_MIR_ID_INVALID);
+	assert(record.ref.function_kind == ZEND_MIR_FUNCTION_KIND_USER);
+	assert(record.ref.opline_index == options.opline_index);
+	assert(record.ref.opline_phase == options.phase);
+	assert(record.ref.slots.offset == 0 && record.ref.slots.count == 1);
+	assert(record.ref.roots.offset == 0 && record.ref.roots.count == 1);
+	assert(record.ref.cleanup_obligations.offset == 0
+		&& record.ref.cleanup_obligations.count == 1);
+	assert(record.ref.return_continuation.kind == ZEND_MIR_CONTINUATION_KIND_NATIVE);
+	assert(record.ref.return_continuation.frame_state_id == first_id);
+	assert(record.ref.return_continuation.opline_index == options.opline_index + 1);
+	assert(record.ref.exception_continuation.kind
+		== ZEND_MIR_CONTINUATION_KIND_ZEND_EXCEPTION);
+	assert(record.ref.exception_continuation.frame_state_id == first_id);
+	assert(record.ref.exception_continuation.opline_index == options.opline_index);
+	assert(record.ref.bailout_continuation.kind
+		== ZEND_MIR_CONTINUATION_KIND_NONLOCAL_BAILOUT);
+	assert(record.ref.bailout_continuation.frame_state_id == ZEND_MIR_ID_INVALID);
+	assert(record.ref.bailout_continuation.opline_index == ZEND_MIR_ID_INVALID);
+	assert(record.ref.suspend_kind == ZEND_MIR_SUSPEND_KIND_NONE);
+	assert(record.ref.suspend_state_id == ZEND_MIR_ID_INVALID);
+	assert(record.ref.code_version_id == 400 + options.function_id);
+	assert(!record.ref.resume.allowed);
+	assert(record.ref.resume.entry_kind == ZEND_MIR_RESUME_ENTRY_KIND_NONE);
+	assert(record.ref.resume.resume_id == ZEND_MIR_ID_INVALID);
+	assert(record.ref.resume.code_version_id == ZEND_MIR_ID_INVALID);
+	assert(record.ref.resume.target_opline_index == ZEND_MIR_ID_INVALID);
+	assert(record.ref.safepoint_class == options.safepoint_class);
+	assert(record.ref.canonical);
+	assert(record.function_name_symbol_id == options.name_symbol_id);
 	assert(record.owner_frame_id == first_id);
 	assert(record.op_array_id == options.op_array_id);
 	assert(record.code_version_immutable && record.code_version_active);
-	assert(record.ref.return_continuation.frame_state_id == first_id);
 	assert(zend_mir_frame_table_slot_at(table, first_id, 0, &slot));
 	assert(slot.slot_id == options.slot_id);
+	assert(slot.value_id == 500 + options.function_id);
+	assert(slot.index == 0);
+	assert(slot.kind == options.slot_kind);
+	assert(slot.representation == options.slot_representation);
+	assert(slot.materialization == options.slot_materialization);
+	assert(slot.ownership == options.slot_ownership);
+	assert(slot.rooted && slot.cleanup_required);
 	assert(zend_mir_frame_table_root_at(table, first_id, 0, &root));
 	assert(root == options.slot_id);
 	assert(zend_mir_frame_table_cleanup_at(table, first_id, 0, &cleanup));
 	assert(cleanup.slot_id == options.slot_id);
+	assert(cleanup.action == options.cleanup_action);
+	assert(cleanup.state == options.cleanup_state);
+	assert(zend_mir_frame_table_frame_state_count(table) == 1);
+	assert(zend_mir_frame_table_frame_state_at(table, 0, &flat_record));
+	assert(flat_record.id == first_id);
+	assert(zend_mir_frame_table_frame_slot_count(table) == 1);
+	assert(zend_mir_frame_table_frame_slot_at(table, 0, &flat_slot));
+	assert(flat_slot.slot_id == options.slot_id);
+	assert(zend_mir_frame_table_root_count(table) == 1);
+	assert(zend_mir_frame_table_flat_root_at(table, 0, &root));
+	assert(root == options.slot_id);
+	assert(zend_mir_frame_table_cleanup_count(table) == 1);
+	assert(zend_mir_frame_table_flat_cleanup_at(table, 0, &flat_cleanup));
+	assert(flat_cleanup.slot_id == options.slot_id);
 	assert(zend_mir_frame_builder_set_parent(first, ZEND_MIR_ID_INVALID)
 		== ZEND_MIR_FRAME_STATUS_FINALIZED);
 
@@ -259,15 +343,24 @@ static void test_w01_examples_and_deduplication(void)
 	assert(zend_mir_frame_table_intern(table,
 		build_frame(builder_allocator, options), &example_id) == ZEND_MIR_FRAME_STATUS_OK);
 	options = normal_options(3);
-	options.phase = ZEND_MIR_OPLINE_PHASE_SUSPENDED;
-	options.safepoint_class = ZEND_MIR_SAFEPOINT_CLASS_GENERATOR_SUSPEND;
-	options.suspend_kind = ZEND_MIR_SUSPEND_KIND_GENERATOR;
+	make_persistent(&options, ZEND_MIR_SUSPEND_KIND_GENERATOR,
+		ZEND_MIR_SAFEPOINT_CLASS_GENERATOR_SUSPEND);
 	assert(zend_mir_frame_table_intern(table,
 		build_frame(builder_allocator, options), &example_id) == ZEND_MIR_FRAME_STATUS_OK);
+	assert(zend_mir_frame_table_at(table, example_id, &record));
+	assert(record.ref.suspend_kind == ZEND_MIR_SUSPEND_KIND_GENERATOR);
+	assert(record.ref.suspend_state_id == 600 + options.function_id);
+	assert(record.ref.resume.allowed);
+	assert(record.ref.resume.entry_kind
+		== ZEND_MIR_RESUME_ENTRY_KIND_SINGLE_ENTRY_DISPATCHER);
+	assert(record.ref.resume.resume_id == 700 + options.function_id);
+	assert(record.ref.resume.code_version_id == record.ref.code_version_id);
+	assert(record.ref.resume.target_opline_index == options.opline_index + 1);
+	assert(record.ref.opline_phase == ZEND_MIR_OPLINE_PHASE_SUSPENDED);
+	assert(record.ref.safepoint_class == ZEND_MIR_SAFEPOINT_CLASS_GENERATOR_SUSPEND);
 	options = normal_options(4);
-	options.phase = ZEND_MIR_OPLINE_PHASE_SUSPENDED;
-	options.safepoint_class = ZEND_MIR_SAFEPOINT_CLASS_FIBER_SWITCH;
-	options.suspend_kind = ZEND_MIR_SUSPEND_KIND_FIBER;
+	make_persistent(&options, ZEND_MIR_SUSPEND_KIND_FIBER,
+		ZEND_MIR_SAFEPOINT_CLASS_FIBER_SWITCH);
 	assert(zend_mir_frame_table_intern(table,
 		build_frame(builder_allocator, options), &example_id) == ZEND_MIR_FRAME_STATUS_OK);
 
@@ -302,6 +395,14 @@ static void test_w01_examples_and_deduplication(void)
 	assert(record.op_array_id == ZEND_MIR_ID_INVALID);
 	assert(record.ref.opline_index == ZEND_MIR_ID_INVALID);
 	assert(zend_mir_frame_table_count(table) == 6);
+	assert(zend_mir_frame_table_frame_state_count(table) == 6);
+	assert(zend_mir_frame_table_frame_slot_count(table) == 5);
+	assert(zend_mir_frame_table_root_count(table) == 5);
+	assert(zend_mir_frame_table_cleanup_count(table) == 5);
+	assert(zend_mir_frame_table_frame_state_at(table, 5, &flat_record));
+	assert(flat_record.id == example_id);
+	assert(zend_mir_frame_table_frame_slot_at(table, 4, &flat_slot));
+	assert(flat_slot.slot_id == normal_options(4).slot_id);
 	test_reset(&builder_arena);
 	test_reset(&table_arena);
 }
@@ -364,9 +465,8 @@ static void test_collisions_parents_and_negative_cases(void)
 	assert(zend_mir_frame_table_intern(table,
 		build_frame(builder_allocator, options), &second_id) == ZEND_MIR_FRAME_STATUS_NONCANONICAL);
 	options = normal_options(20);
-	options.phase = ZEND_MIR_OPLINE_PHASE_SUSPENDED;
-	options.safepoint_class = ZEND_MIR_SAFEPOINT_CLASS_GENERATOR_SUSPEND;
-	options.suspend_kind = ZEND_MIR_SUSPEND_KIND_GENERATOR;
+	make_persistent(&options, ZEND_MIR_SUSPEND_KIND_GENERATOR,
+		ZEND_MIR_SAFEPOINT_CLASS_GENERATOR_SUSPEND);
 	options.malformed_resume = true;
 	assert(zend_mir_frame_table_intern(table,
 		build_frame(builder_allocator, options), &second_id) == ZEND_MIR_FRAME_STATUS_INVALID_RESUME);
@@ -380,6 +480,105 @@ static void test_collisions_parents_and_negative_cases(void)
 	assert(zend_mir_frame_table_intern(table, builder, &second_id)
 		== ZEND_MIR_FRAME_STATUS_MISSING_REQUIRED);
 	assert(zend_mir_frame_table_count(table) == 3);
+	test_reset(&builder_arena);
+	test_reset(&table_arena);
+}
+
+static void test_invalid_enum_sentinels_and_bailout_shape(void)
+{
+	test_arena table_arena;
+	test_arena builder_arena;
+	zend_mir_allocator table_allocator = test_allocator(&table_arena);
+	zend_mir_allocator builder_allocator = test_allocator(&builder_arena);
+	zend_mir_frame_table *table = zend_mir_frame_table_create(table_allocator, UINT64_MAX);
+	test_frame_options options;
+	zend_mir_frame_builder *builder;
+	zend_mir_frame_continuation_spec continuation;
+	zend_mir_resume_ref resume;
+
+	assert(table != NULL);
+	options = normal_options(50);
+	options.function_kind = ZEND_MIR_FUNCTION_KIND_INVALID;
+	assert_intern_rejected(table, build_frame(builder_allocator, options),
+		ZEND_MIR_FRAME_STATUS_INVALID_ENUM);
+	options = normal_options(51);
+	options.phase = ZEND_MIR_OPLINE_PHASE_INVALID;
+	assert_intern_rejected(table, build_frame(builder_allocator, options),
+		ZEND_MIR_FRAME_STATUS_INVALID_ENUM);
+	options = normal_options(52);
+	options.safepoint_class = ZEND_MIR_SAFEPOINT_CLASS_INVALID;
+	assert_intern_rejected(table, build_frame(builder_allocator, options),
+		ZEND_MIR_FRAME_STATUS_INVALID_ENUM);
+	options = normal_options(53);
+	options.suspend_kind = ZEND_MIR_SUSPEND_KIND_INVALID;
+	assert_intern_rejected(table, build_frame(builder_allocator, options),
+		ZEND_MIR_FRAME_STATUS_INVALID_SUSPEND);
+	options = normal_options(54);
+	options.slot_kind = ZEND_MIR_FRAME_SLOT_KIND_INVALID;
+	assert_intern_rejected(table, build_frame(builder_allocator, options),
+		ZEND_MIR_FRAME_STATUS_INVALID_ENUM);
+	options = normal_options(55);
+	options.slot_representation = ZEND_MIR_FRAME_SLOT_REPRESENTATION_INVALID;
+	assert_intern_rejected(table, build_frame(builder_allocator, options),
+		ZEND_MIR_FRAME_STATUS_INVALID_ENUM);
+	options = normal_options(56);
+	options.slot_materialization = ZEND_MIR_MATERIALIZATION_INVALID;
+	assert_intern_rejected(table, build_frame(builder_allocator, options),
+		ZEND_MIR_FRAME_STATUS_INVALID_ENUM);
+	options = normal_options(57);
+	options.slot_ownership = ZEND_MIR_FRAME_SLOT_OWNERSHIP_INVALID;
+	assert_intern_rejected(table, build_frame(builder_allocator, options),
+		ZEND_MIR_FRAME_STATUS_INVALID_ENUM);
+	options = normal_options(58);
+	options.cleanup_action = ZEND_MIR_CLEANUP_ACTION_INVALID;
+	assert_intern_rejected(table, build_frame(builder_allocator, options),
+		ZEND_MIR_FRAME_STATUS_INVALID_ENUM);
+	options = normal_options(59);
+	options.cleanup_state = ZEND_MIR_CLEANUP_STATE_INVALID;
+	assert_intern_rejected(table, build_frame(builder_allocator, options),
+		ZEND_MIR_FRAME_STATUS_INVALID_ENUM);
+
+	builder = build_frame(builder_allocator, normal_options(60));
+	continuation = self_continuation(ZEND_MIR_CONTINUATION_KIND_INVALID, 65);
+	assert(zend_mir_frame_builder_set_continuations(builder,
+		continuation,
+		self_continuation(ZEND_MIR_CONTINUATION_KIND_ZEND_EXCEPTION, 64),
+		no_continuation(ZEND_MIR_CONTINUATION_KIND_NONLOCAL_BAILOUT))
+		== ZEND_MIR_FRAME_STATUS_OK);
+	assert_intern_rejected(table, builder, ZEND_MIR_FRAME_STATUS_INVALID_CONTINUATION);
+
+	builder = build_frame(builder_allocator, normal_options(61));
+	continuation = self_continuation(ZEND_MIR_CONTINUATION_KIND_NATIVE, 66);
+	continuation.target_kind = (zend_mir_frame_target_kind) -1;
+	assert(zend_mir_frame_builder_set_continuations(builder,
+		continuation,
+		self_continuation(ZEND_MIR_CONTINUATION_KIND_ZEND_EXCEPTION, 65),
+		no_continuation(ZEND_MIR_CONTINUATION_KIND_NONLOCAL_BAILOUT))
+		== ZEND_MIR_FRAME_STATUS_OK);
+	assert_intern_rejected(table, builder, ZEND_MIR_FRAME_STATUS_INVALID_CONTINUATION);
+
+	builder = build_frame(builder_allocator, normal_options(62));
+	assert(zend_mir_frame_builder_set_continuations(builder,
+		self_continuation(ZEND_MIR_CONTINUATION_KIND_NATIVE, 67),
+		self_continuation(ZEND_MIR_CONTINUATION_KIND_ZEND_EXCEPTION, 66),
+		no_continuation(ZEND_MIR_CONTINUATION_KIND_TERMINAL))
+		== ZEND_MIR_FRAME_STATUS_OK);
+	assert_intern_rejected(table, builder, ZEND_MIR_FRAME_STATUS_INVALID_CONTINUATION);
+
+	options = normal_options(63);
+	make_persistent(&options, ZEND_MIR_SUSPEND_KIND_GENERATOR,
+		ZEND_MIR_SAFEPOINT_CLASS_GENERATOR_SUSPEND);
+	builder = build_frame(builder_allocator, options);
+	memset(&resume, 0, sizeof(resume));
+	resume.allowed = true;
+	resume.entry_kind = ZEND_MIR_RESUME_ENTRY_KIND_INVALID;
+	resume.resume_id = 773;
+	resume.code_version_id = 400 + options.function_id;
+	resume.target_opline_index = options.opline_index + 1;
+	assert(zend_mir_frame_builder_set_resume(builder, resume) == ZEND_MIR_FRAME_STATUS_OK);
+	assert_intern_rejected(table, builder, ZEND_MIR_FRAME_STATUS_INVALID_RESUME);
+
+	assert(zend_mir_frame_table_count(table) == 0);
 	test_reset(&builder_arena);
 	test_reset(&table_arena);
 }
@@ -418,10 +617,18 @@ static void test_builder_failure_atomicity(void)
 		== ZEND_MIR_FRAME_STATUS_OUT_OF_MEMORY);
 	builder_arena.fail_at = TEST_NO_FAILURE;
 	assert(zend_mir_frame_builder_add_slot(builder, &slot) == ZEND_MIR_FRAME_STATUS_OK);
+	builder_arena.fail_at = builder_arena.allocation_count;
+	assert(zend_mir_frame_builder_add_root(builder, slot.slot_id)
+		== ZEND_MIR_FRAME_STATUS_OUT_OF_MEMORY);
+	builder_arena.fail_at = TEST_NO_FAILURE;
 	assert(zend_mir_frame_builder_add_root(builder, slot.slot_id) == ZEND_MIR_FRAME_STATUS_OK);
 	cleanup.slot_id = slot.slot_id;
 	cleanup.action = ZEND_MIR_CLEANUP_ACTION_DESTROY;
 	cleanup.state = ZEND_MIR_CLEANUP_STATE_PENDING;
+	builder_arena.fail_at = builder_arena.allocation_count;
+	assert(zend_mir_frame_builder_add_cleanup(builder, &cleanup)
+		== ZEND_MIR_FRAME_STATUS_OUT_OF_MEMORY);
+	builder_arena.fail_at = TEST_NO_FAILURE;
 	assert(zend_mir_frame_builder_add_cleanup(builder, &cleanup) == ZEND_MIR_FRAME_STATUS_OK);
 	assert(zend_mir_frame_builder_finish_layout(builder) == ZEND_MIR_FRAME_STATUS_OK);
 	assert(zend_mir_frame_builder_set_continuations(builder,
@@ -449,24 +656,37 @@ static void test_builder_failure_atomicity(void)
 
 static void test_failure_atomicity(void)
 {
-	test_arena table_arena;
-	test_arena builder_arena;
-	zend_mir_allocator table_allocator = test_allocator(&table_arena);
-	zend_mir_allocator builder_allocator = test_allocator(&builder_arena);
-	zend_mir_frame_table *table = zend_mir_frame_table_create(table_allocator, UINT64_MAX);
-	zend_mir_frame_builder *builder = build_frame(builder_allocator, normal_options(30));
-	zend_mir_frame_state_id id;
+	uint32_t fail_offset;
 
-	assert(table != NULL);
-	table_arena.fail_at = table_arena.allocation_count + 1;
-	assert(zend_mir_frame_table_intern(table, builder, &id)
-		== ZEND_MIR_FRAME_STATUS_OUT_OF_MEMORY);
-	assert(zend_mir_frame_table_count(table) == 0);
-	table_arena.fail_at = TEST_NO_FAILURE;
-	assert(zend_mir_frame_table_intern(table, builder, &id) == ZEND_MIR_FRAME_STATUS_OK);
-	assert(id == 0 && zend_mir_frame_table_count(table) == 1);
-	test_reset(&builder_arena);
-	test_reset(&table_arena);
+	for (fail_offset = 0; fail_offset < 4; fail_offset++) {
+		test_arena table_arena;
+		test_arena builder_arena;
+		zend_mir_allocator table_allocator = test_allocator(&table_arena);
+		zend_mir_allocator builder_allocator = test_allocator(&builder_arena);
+		zend_mir_frame_table *table =
+			zend_mir_frame_table_create(table_allocator, UINT64_MAX);
+		zend_mir_frame_builder *builder =
+			build_frame(builder_allocator, normal_options(30 + fail_offset));
+		zend_mir_frame_state_id id = 1234;
+
+		assert(table != NULL);
+		table_arena.fail_at = table_arena.allocation_count + fail_offset;
+		assert(zend_mir_frame_table_intern(table, builder, &id)
+			== ZEND_MIR_FRAME_STATUS_OUT_OF_MEMORY);
+		assert(id == 1234);
+		assert(zend_mir_frame_table_count(table) == 0);
+		assert(zend_mir_frame_table_frame_slot_count(table) == 0);
+		assert(zend_mir_frame_table_root_count(table) == 0);
+		assert(zend_mir_frame_table_cleanup_count(table) == 0);
+		table_arena.fail_at = TEST_NO_FAILURE;
+		assert(zend_mir_frame_table_intern(table, builder, &id) == ZEND_MIR_FRAME_STATUS_OK);
+		assert(id == 0 && zend_mir_frame_table_count(table) == 1);
+		assert(zend_mir_frame_table_frame_slot_count(table) == 1);
+		assert(zend_mir_frame_table_root_count(table) == 1);
+		assert(zend_mir_frame_table_cleanup_count(table) == 1);
+		test_reset(&builder_arena);
+		test_reset(&table_arena);
+	}
 }
 
 static void test_source_maps(void)
@@ -499,8 +719,10 @@ static void test_source_maps(void)
 	requested.opline_phase = options.phase;
 	requested.owner_frame_id = owner;
 	source_arena.fail_at = source_arena.allocation_count;
+	first = 1234;
 	assert(zend_mir_source_map_table_intern(maps, &requested, &first)
 		== ZEND_MIR_FRAME_STATUS_OUT_OF_MEMORY);
+	assert(first == 1234);
 	assert(zend_mir_source_map_table_count(maps) == 0);
 	source_arena.fail_at = TEST_NO_FAILURE;
 	assert(zend_mir_source_map_table_intern(maps, &requested, &first)
@@ -513,10 +735,22 @@ static void test_source_maps(void)
 	assert(second != first);
 	assert(zend_mir_source_map_table_count(maps) == 2);
 	assert(zend_mir_source_map_table_at(maps, 0, &observed));
+	assert(observed.id == first);
 	assert(observed.source_position_id == 7);
+	assert(observed.op_array_id == options.op_array_id);
+	assert(observed.opline_index == options.opline_index);
+	assert(observed.opline_phase == options.phase);
+	assert(observed.owner_frame_id == owner);
 	requested.opline_index++;
 	assert(zend_mir_source_map_table_intern(maps, &requested, &second)
 		== ZEND_MIR_FRAME_STATUS_NONCANONICAL);
+	assert(zend_mir_source_map_table_count(maps) == 2);
+	requested.opline_index = options.opline_index;
+	requested.opline_phase = ZEND_MIR_OPLINE_PHASE_INVALID;
+	second = 1234;
+	assert(zend_mir_source_map_table_intern(maps, &requested, &second)
+		== ZEND_MIR_FRAME_STATUS_INVALID_ENUM);
+	assert(second == 1234);
 	assert(zend_mir_source_map_table_count(maps) == 2);
 	test_reset(&source_arena);
 	test_reset(&builder_arena);
@@ -527,6 +761,7 @@ int main(void)
 {
 	test_w01_examples_and_deduplication();
 	test_collisions_parents_and_negative_cases();
+	test_invalid_enum_sentinels_and_bailout_shape();
 	test_builder_failure_atomicity();
 	test_failure_atomicity();
 	test_source_maps();
