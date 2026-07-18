@@ -124,7 +124,8 @@ static zend_mir_frame_status zend_mir_source_map_validate(
 			|| !zend_mir_id_is_valid(requested->owner_frame_id)) {
 		return ZEND_MIR_FRAME_STATUS_INVALID_ID;
 	}
-	if (requested->opline_phase >= ZEND_MIR_OPLINE_PHASE_COUNT) {
+	if ((int) requested->opline_phase < 0
+			|| requested->opline_phase >= ZEND_MIR_OPLINE_PHASE_COUNT) {
 		return ZEND_MIR_FRAME_STATUS_INVALID_ENUM;
 	}
 	if (!zend_mir_frame_table_at(table->frames, requested->owner_frame_id, &owner)) {

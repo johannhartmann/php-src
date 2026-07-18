@@ -31,6 +31,11 @@ static zend_mir_frame_status zend_mir_frame_builder_mutable(zend_mir_frame_build
 	return ZEND_MIR_FRAME_STATUS_OK;
 }
 
+static bool zend_mir_frame_enum_is_valid(int value, int count)
+{
+	return value >= 0 && value < count;
+}
+
 static zend_mir_frame_status zend_mir_frame_builder_reserve(zend_mir_frame_builder *builder,
 		void **items, uint32_t *capacity, uint32_t count, size_t element_size, size_t alignment)
 {
@@ -330,13 +335,19 @@ static zend_mir_frame_status zend_mir_frame_validate_layout(
 		const zend_mir_frame_slot_ref *slot = &builder->slots[i];
 
 		if (!zend_mir_id_is_valid(slot->slot_id)
-				|| slot->kind >= ZEND_MIR_FRAME_SLOT_KIND_COUNT
-				|| slot->representation >= ZEND_MIR_FRAME_SLOT_REPRESENTATION_COUNT
-				|| slot->materialization >= ZEND_MIR_MATERIALIZATION_COUNT
-				|| slot->ownership >= ZEND_MIR_FRAME_SLOT_OWNERSHIP_COUNT
 				|| (slot->materialization != ZEND_MIR_MATERIALIZATION_UNDEF
 					&& !zend_mir_id_is_valid(slot->value_id))) {
 			return ZEND_MIR_FRAME_STATUS_INVALID_ID;
+		}
+		if (!zend_mir_frame_enum_is_valid(
+				slot->kind, ZEND_MIR_FRAME_SLOT_KIND_COUNT)
+				|| !zend_mir_frame_enum_is_valid(
+					slot->representation, ZEND_MIR_FRAME_SLOT_REPRESENTATION_COUNT)
+				|| !zend_mir_frame_enum_is_valid(
+					slot->materialization, ZEND_MIR_MATERIALIZATION_COUNT)
+				|| !zend_mir_frame_enum_is_valid(
+					slot->ownership, ZEND_MIR_FRAME_SLOT_OWNERSHIP_COUNT)) {
+			return ZEND_MIR_FRAME_STATUS_INVALID_ENUM;
 		}
 		for (j = 0; j < i; j++) {
 			if (builder->slots[j].slot_id == slot->slot_id) {
@@ -357,10 +368,14 @@ static zend_mir_frame_status zend_mir_frame_validate_layout(
 	for (i = 0; i < builder->cleanup_count; i++) {
 		const zend_mir_cleanup_ref *cleanup = &builder->cleanups[i];
 
-		if (!zend_mir_frame_slot_exists(builder, cleanup->slot_id)
-				|| cleanup->action >= ZEND_MIR_CLEANUP_ACTION_COUNT
-				|| cleanup->state >= ZEND_MIR_CLEANUP_STATE_COUNT) {
+		if (!zend_mir_frame_slot_exists(builder, cleanup->slot_id)) {
 			return ZEND_MIR_FRAME_STATUS_CLEANUP_MISMATCH;
+		}
+		if (!zend_mir_frame_enum_is_valid(
+				cleanup->action, ZEND_MIR_CLEANUP_ACTION_COUNT)
+				|| !zend_mir_frame_enum_is_valid(
+					cleanup->state, ZEND_MIR_CLEANUP_STATE_COUNT)) {
+			return ZEND_MIR_FRAME_STATUS_INVALID_ENUM;
 		}
 		for (j = 0; j < i; j++) {
 			if (builder->cleanups[j].slot_id == cleanup->slot_id) {
@@ -385,8 +400,10 @@ static zend_mir_frame_status zend_mir_frame_validate_layout(
 static zend_mir_frame_status zend_mir_frame_validate_continuation(
 		const zend_mir_frame_table *table, zend_mir_frame_continuation_spec continuation)
 {
-	if (continuation.kind >= ZEND_MIR_CONTINUATION_KIND_COUNT
-			|| continuation.target_kind > ZEND_MIR_FRAME_TARGET_EXISTING) {
+	if (!zend_mir_frame_enum_is_valid(
+			continuation.kind, ZEND_MIR_CONTINUATION_KIND_COUNT)
+			|| !zend_mir_frame_enum_is_valid(
+				continuation.target_kind, ZEND_MIR_FRAME_TARGET_EXISTING + 1)) {
 		return ZEND_MIR_FRAME_STATUS_INVALID_CONTINUATION;
 	}
 	if (continuation.target_kind == ZEND_MIR_FRAME_TARGET_NONE) {
@@ -418,7 +435,8 @@ static zend_mir_frame_status zend_mir_frame_validate_suspend_resume(
 	const zend_mir_frame_state_ref *ref = &builder->record.ref;
 	const zend_mir_resume_ref *resume = &ref->resume;
 
-	if (ref->suspend_kind >= ZEND_MIR_SUSPEND_KIND_COUNT) {
+	if (!zend_mir_frame_enum_is_valid(
+			ref->suspend_kind, ZEND_MIR_SUSPEND_KIND_COUNT)) {
 		return ZEND_MIR_FRAME_STATUS_INVALID_SUSPEND;
 	}
 	if ((ref->suspend_kind == ZEND_MIR_SUSPEND_KIND_NONE)
@@ -470,9 +488,12 @@ zend_mir_frame_status zend_mir_frame_validate_builder(
 			|| !zend_mir_id_is_valid(builder->record.ref.code_version_id)) {
 		return ZEND_MIR_FRAME_STATUS_INVALID_ID;
 	}
-	if (builder->record.ref.function_kind >= ZEND_MIR_FUNCTION_KIND_COUNT
-			|| builder->record.ref.opline_phase >= ZEND_MIR_OPLINE_PHASE_COUNT
-			|| builder->record.ref.safepoint_class >= ZEND_MIR_SAFEPOINT_CLASS_COUNT) {
+	if (!zend_mir_frame_enum_is_valid(
+			builder->record.ref.function_kind, ZEND_MIR_FUNCTION_KIND_COUNT)
+			|| !zend_mir_frame_enum_is_valid(
+				builder->record.ref.opline_phase, ZEND_MIR_OPLINE_PHASE_COUNT)
+			|| !zend_mir_frame_enum_is_valid(
+				builder->record.ref.safepoint_class, ZEND_MIR_SAFEPOINT_CLASS_COUNT)) {
 		return ZEND_MIR_FRAME_STATUS_INVALID_ENUM;
 	}
 	if (builder->record.ref.function_kind == ZEND_MIR_FUNCTION_KIND_INTERNAL) {
@@ -504,6 +525,10 @@ zend_mir_frame_status zend_mir_frame_validate_builder(
 		if (status != ZEND_MIR_FRAME_STATUS_OK) {
 			return status;
 		}
+	}
+	if (builder->continuations[2].kind != ZEND_MIR_CONTINUATION_KIND_NONLOCAL_BAILOUT
+			|| builder->continuations[2].target_kind != ZEND_MIR_FRAME_TARGET_NONE) {
+		return ZEND_MIR_FRAME_STATUS_INVALID_CONTINUATION;
 	}
 	status = zend_mir_frame_validate_suspend_resume(builder);
 	if (status != ZEND_MIR_FRAME_STATUS_OK) {
