@@ -66,22 +66,20 @@ Define architecture-independent MIR, explicit effects, ownership, frame states, 
 
 ## W03 — Scalar and straight-line lowering
 
-**Status:** `MISSING`
+**Status:** `PASS`
 
 Lower scalar operations and straight-line control into verified MIR with reference-equivalent behavior.
 
-**Missing required gates:** `W03-A-lowering-core-registry`, `W03-B-frontend-operands-facts`, `W03-C-numeric-arithmetic-bitwise`, `W03-D-comparison-boolean-casts`, `W03-E-straight-line-lifetime-return`, `W03-F-mir-scalar-verifier-text`, `W03-G-compile-dump-differential`, `W03-integration-gate`
-
 | Task | Required | Status | Base | Head | Evidence | Blockers |
 | --- | --- | --- | --- | --- | --- | --- |
-| W03-A-lowering-core-registry | yes | missing | — | — | — | — |
-| W03-B-frontend-operands-facts | yes | missing | — | — | — | — |
-| W03-C-numeric-arithmetic-bitwise | yes | missing | — | — | — | — |
-| W03-D-comparison-boolean-casts | yes | missing | — | — | — | — |
-| W03-E-straight-line-lifetime-return | yes | missing | — | — | — | — |
-| W03-F-mir-scalar-verifier-text | yes | missing | — | — | — | — |
-| W03-G-compile-dump-differential | yes | missing | — | — | — | — |
-| W03-integration-gate | yes | missing | — | — | — | — |
+| W03-A-lowering-core-registry | yes | pass | e310e29c4e71 | 6129913936a2 | Integrated W03 hard-gate evidence passed. (w03-artifacts/W03-A-lowering-core-registry.log) | — |
+| W03-B-frontend-operands-facts | yes | pass | e310e29c4e71 | 6129913936a2 | Integrated W03 hard-gate evidence passed. (w03-artifacts/W03-B-frontend-operands-facts.log) | — |
+| W03-C-numeric-arithmetic-bitwise | yes | pass | e310e29c4e71 | 6129913936a2 | Integrated W03 hard-gate evidence passed. (w03-artifacts/W03-C-numeric-arithmetic-bitwise.log) | — |
+| W03-D-comparison-boolean-casts | yes | pass | e310e29c4e71 | 6129913936a2 | Integrated W03 hard-gate evidence passed. (w03-artifacts/W03-D-comparison-boolean-casts.log) | — |
+| W03-E-straight-line-lifetime-return | yes | pass | e310e29c4e71 | 6129913936a2 | Integrated W03 hard-gate evidence passed. (w03-artifacts/W03-E-straight-line-lifetime-return.log) | — |
+| W03-F-mir-scalar-verifier-text | yes | pass | e310e29c4e71 | 6129913936a2 | Integrated W03 hard-gate evidence passed. (w03-artifacts/W03-F-mir-scalar-verifier-text.log) | — |
+| W03-G-compile-dump-differential | yes | pass | e310e29c4e71 | 6129913936a2 | Integrated W03 hard-gate evidence passed. (w03-artifacts/W03-G-compile-dump-differential.log) | — |
+| W03-integration-gate | yes | pass | e310e29c4e71 | 6129913936a2 | Integrated W03 hard-gate evidence passed. (w03-artifacts/W03-integration-gate.log) | — |
 
 ## W04 — Control flow and loops
 
