@@ -1,7 +1,9 @@
 # W01 Zend opcode coverage matrix
 
-This directory inventories every executable Zend opcode at W01 base commit
-`dc6e34b56846c38dc2475d6c962c2b9b7ada6df4`. It changes no PHP behavior and
+This directory inventories every executable Zend opcode at source commit
+`b7c524a19fa815799a858b98d39f176ca88648b1`. The W01 wave base remains
+`dc6e34b56846c38dc2475d6c962c2b9b7ada6df4`; the source pin advances when
+upstream adds executable opcodes. The inventory changes no PHP behavior and
 does not claim that the planned native engine exists.
 
 ## Files

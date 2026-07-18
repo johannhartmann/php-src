@@ -24,7 +24,7 @@
       "type": "object"
     },
     "source_commit": {
-      "const": "dc6e34b56846c38dc2475d6c962c2b9b7ada6df4"
+      "const": "b7c524a19fa815799a858b98d39f176ca88648b1"
     },
     "source_files": {
       "items": {

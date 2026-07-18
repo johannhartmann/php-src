@@ -17,6 +17,7 @@ from typing import Any, Iterable
 ROOT = Path(__file__).resolve().parents[3]
 REPORT_PATH = Path("docs/native-engine/semantics/w01-coverage-report.json")
 WAVE_BASE = "dc6e34b56846c38dc2475d6c962c2b9b7ada6df4"
+OPCODE_SOURCE_COMMIT = "b7c524a19fa815799a858b98d39f176ca88648b1"
 TPDE_PIN = "338d41890e424b058e2053b6a5787e1348e3dd57"
 
 ARTIFACTS = {
@@ -268,7 +269,10 @@ def build_report(root: Path = ROOT) -> dict[str, Any]:
         raise ValidationError(f"manifest specialist validation failed: {exc}") from exc
 
     require(matrix.get("format_version") == "1.0.0", "opcode matrix format_version must be 1.0.0")
-    require(matrix.get("source_commit") == WAVE_BASE, "opcode matrix source commit is stale")
+    require(
+        matrix.get("source_commit") == OPCODE_SOURCE_COMMIT,
+        "opcode matrix source commit is stale",
+    )
     opcodes = matrix.get("opcodes")
     require(isinstance(opcodes, list) and opcodes, "opcode matrix must contain opcodes")
     opcode_names = [opcode.get("opcode") for opcode in opcodes if isinstance(opcode, dict)]
