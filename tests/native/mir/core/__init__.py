@@ -1,0 +1,1 @@
+"""ZNMIR core tests."""

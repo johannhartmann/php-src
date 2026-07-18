@@ -1,0 +1,1 @@
+"""ZNMIR verifier tests."""
