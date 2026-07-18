@@ -1,0 +1,91 @@
+/*
+  +----------------------------------------------------------------------+
+  | Copyright © The PHP Group and Contributors.                          |
+  +----------------------------------------------------------------------+
+  | This source file is subject to the Modified BSD License that is      |
+  | bundled with this package in the file LICENSE, and is available      |
+  | through the World Wide Web at <https://www.php.net/license/>.        |
+  |                                                                      |
+  | SPDX-License-Identifier: BSD-3-Clause                                |
+  +----------------------------------------------------------------------+
+*/
+
+#ifndef ZEND_MIR_VERIFY_H
+#define ZEND_MIR_VERIFY_H
+
+#include "Zend/Native/MIR/zend_mir.h"
+
+#define ZEND_MIR_VERIFY_DIAGNOSTIC_HARD_LIMIT UINT32_C(64)
+#define ZEND_MIR_VERIFY_ENTITY_HARD_LIMIT UINT32_C(1048576)
+#define ZEND_MIR_VERIFY_RELATION_HARD_LIMIT UINT32_C(4194304)
+#define ZEND_MIR_VERIFY_DOMINANCE_BLOCK_HARD_LIMIT UINT32_C(4096)
+
+/*
+ * The generic diagnostic code remains the frozen W02 contract code. The
+ * verifier-specific code below is emitted as the leading token in message.
+ */
+typedef enum _zend_mir_verify_code {
+	ZEND_MIR_VERIFY_OK = 0,
+	ZEND_MIR_VERIFY_INVALID_ARGUMENT = 1,
+	ZEND_MIR_VERIFY_ALLOCATION_FAILED = 2,
+	ZEND_MIR_VERIFY_DIAGNOSTIC_LIMIT = 3,
+	ZEND_MIR_VERIFY_UNSUPPORTED_VERSION = 4,
+	ZEND_MIR_VERIFY_INCOMPLETE_VIEW = 5,
+	ZEND_MIR_VERIFY_CALLBACK_FAILED = 6,
+	ZEND_MIR_VERIFY_CAPACITY_EXCEEDED = 7,
+
+	ZEND_MIR_VERIFY_INVALID_ID = 100,
+	ZEND_MIR_VERIFY_DUPLICATE_ID = 101,
+	ZEND_MIR_VERIFY_UNKNOWN_ENUM = 102,
+	ZEND_MIR_VERIFY_UNKNOWN_VALUE = 103,
+	ZEND_MIR_VERIFY_DUPLICATE_DEFINITION = 104,
+	ZEND_MIR_VERIFY_INVALID_CONSTANT = 105,
+	ZEND_MIR_VERIFY_INVALID_REPRESENTATION = 106,
+
+	ZEND_MIR_VERIFY_INVALID_FUNCTION = 200,
+	ZEND_MIR_VERIFY_INVALID_ENTRY = 201,
+	ZEND_MIR_VERIFY_INVALID_EDGE = 202,
+	ZEND_MIR_VERIFY_DUPLICATE_EDGE = 203,
+	ZEND_MIR_VERIFY_EDGE_MISMATCH = 204,
+	ZEND_MIR_VERIFY_MISSING_TERMINATOR = 205,
+	ZEND_MIR_VERIFY_INVALID_TERMINATOR = 206,
+	ZEND_MIR_VERIFY_INVALID_OPERAND_COUNT = 207,
+	ZEND_MIR_VERIFY_INVALID_PHI = 208,
+
+	ZEND_MIR_VERIFY_USE_BEFORE_DEFINITION = 300,
+	ZEND_MIR_VERIFY_DEFINITION_NOT_DOMINATING = 301,
+	ZEND_MIR_VERIFY_PHI_EDGE_NOT_DOMINATING = 302,
+
+	ZEND_MIR_VERIFY_UNKNOWN_SEMANTICS = 400,
+	ZEND_MIR_VERIFY_INCOMPLETE_SEMANTICS = 401,
+	ZEND_MIR_VERIFY_INVALID_OWNERSHIP = 402,
+	ZEND_MIR_VERIFY_TERMINAL_VALUE_USE = 403,
+	ZEND_MIR_VERIFY_DOUBLE_CONSUME = 404,
+
+	ZEND_MIR_VERIFY_INVALID_FRAME = 500,
+	ZEND_MIR_VERIFY_PARENT_CYCLE = 501,
+	ZEND_MIR_VERIFY_INVALID_SLOT = 502,
+	ZEND_MIR_VERIFY_INVALID_ROOT = 503,
+	ZEND_MIR_VERIFY_INVALID_CLEANUP = 504,
+	ZEND_MIR_VERIFY_INVALID_CONTINUATION = 505,
+	ZEND_MIR_VERIFY_INVALID_RESUME = 506,
+	ZEND_MIR_VERIFY_MISSING_FRAME = 507,
+	ZEND_MIR_VERIFY_FRAME_CLASS_MISMATCH = 508,
+	ZEND_MIR_VERIFY_INVALID_SOURCE = 509,
+	ZEND_MIR_VERIFY_MISSING_SOURCE = 510,
+	ZEND_MIR_VERIFY_INVALID_SOURCE_MAP = 511,
+
+	ZEND_MIR_VERIFY_CODE_INVALID = -1
+} zend_mir_verify_code;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+const char *zend_mir_verify_code_name(zend_mir_verify_code code);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* ZEND_MIR_VERIFY_H */
