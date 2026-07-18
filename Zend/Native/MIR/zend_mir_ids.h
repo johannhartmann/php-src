@@ -25,7 +25,7 @@
 #endif
 
 #define ZEND_MIR_CONTRACT_VERSION_MAJOR UINT32_C(1)
-#define ZEND_MIR_CONTRACT_VERSION_MINOR UINT32_C(1)
+#define ZEND_MIR_CONTRACT_VERSION_MINOR UINT32_C(2)
 #define ZEND_MIR_CONTRACT_VERSION \
 	((ZEND_MIR_CONTRACT_VERSION_MAJOR << 16) | ZEND_MIR_CONTRACT_VERSION_MINOR)
 
@@ -45,6 +45,7 @@ typedef uint32_t zend_mir_value_id;
 typedef uint32_t zend_mir_frame_state_id;
 typedef uint32_t zend_mir_source_position_id;
 typedef uint32_t zend_mir_source_map_id;
+typedef uint32_t zend_mir_value_fact_id;
 typedef uint32_t zend_mir_op_array_id;
 typedef uint32_t zend_mir_resume_id;
 typedef uint32_t zend_mir_symbol_id;

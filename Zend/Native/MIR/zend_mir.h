@@ -12,6 +12,7 @@
 #include "zend_mir_frame_state.h"
 #include "zend_mir_ids.h"
 #include "zend_mir_opcodes.h"
+#include "zend_mir_scalar.h"
 
 typedef struct _zend_mir_module zend_mir_module;
 typedef struct _zend_mir_function zend_mir_function;
@@ -107,6 +108,8 @@ typedef struct _zend_mir_view {
 		zend_mir_block_id *out);
 	uint32_t (*source_map_count)(const void *context);
 	bool (*source_map_at)(const void *context, uint32_t index, zend_mir_source_map_ref *out);
+	uint32_t (*value_fact_count)(const void *context);
+	bool (*value_fact_at)(const void *context, uint32_t index, zend_mir_value_fact_ref *out);
 } zend_mir_view;
 
 typedef struct _zend_mir_mutator {
@@ -133,6 +136,8 @@ typedef struct _zend_mir_mutator {
 	bool (*seal_function)(void *context, zend_mir_function_id function_id);
 	bool (*add_source_map)(void *context, const zend_mir_source_map_ref *source_map,
 		zend_mir_source_map_id *out);
+	bool (*add_value_fact)(void *context, const zend_mir_value_fact_ref *fact,
+		zend_mir_value_fact_id *out);
 } zend_mir_mutator;
 
 /*
@@ -157,6 +162,10 @@ bool zend_mir_parse_text(const char *text, size_t length, zend_mir_mutator *muta
 
 /* W02-F rejects malformed input before any target lowering. */
 bool zend_mir_verify_stage1(const zend_mir_view *view, zend_mir_diagnostic_sink *diagnostics);
+
+/* W03-F implements the fail-closed scalar fact and opcode verifier. */
+bool zend_mir_verify_w03_scalar(const zend_mir_view *view,
+	zend_mir_diagnostic_sink *diagnostics);
 
 static inline bool zend_mir_contract_is_compatible(uint32_t version)
 {

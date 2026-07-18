@@ -27,6 +27,10 @@ Repository-wide and path-specific agent rules live in:
 8. [Differential testing as the semantic oracle](adr/0008-differential-oracle.md)
 9. [Native frame state and safepoints](adr/0009-native-frame-state-and-safepoints.md)
 10. [Bailout, exception, suspend, and resume ABI](adr/0010-bailout-exception-suspend-resume-abi.md)
+11. [Canonical ZNMIR core contract](adr/0011-canonical-znmir-core-contract.md)
+12. [ZNMIR text, diagnostics, and verification](adr/0012-znmir-text-diagnostics-verification.md)
+13. [Proof-closed scalar lowering](adr/0013-w03-proof-closed-scalar-profile.md)
+14. [Deterministic lowering boundary](adr/0014-lowering-source-view-and-registry.md)
 
 ## Delivery contracts
 
@@ -35,6 +39,7 @@ Repository-wide and path-specific agent rules live in:
 - [Pull-request conventions](pr-conventions.md)
 - [Native test-command contract](test-command-contract.md)
 - [Native frame semantics](semantics/frames/README.md)
+- [W03 lowering profile](lowering/README.md)
 
 The generated wave status subtree, `docs/native-engine/waves/`, is owned by the
 wave-gate work and is intentionally outside W00-A.
