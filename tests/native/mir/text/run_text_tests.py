@@ -34,6 +34,24 @@ def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[byt
     return subprocess.run(command, cwd=ROOT, check=True, timeout=60, **kwargs)
 
 
+def c_warning_flags(compiler: str) -> list[str]:
+    flags = ["-Wall", "-Wextra", "-Wpedantic", "-Werror"]
+    version = subprocess.run(
+        [compiler, "--version"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if "Apple clang" in version.stdout + version.stderr:
+        # The pinned W01 headers use UINT32_MAX enum sentinels. Apple Clang
+        # diagnoses those as a C23 extension, while the W01 contract compiler
+        # intentionally accepts them in C11 mode.
+        flags.append("-Wno-c23-extensions")
+    return flags
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cc", default=os.environ.get("CC", "cc"))
@@ -45,10 +63,7 @@ def main() -> int:
         command = [
             args.cc,
             "-std=c11",
-            "-Wall",
-            "-Wextra",
-            "-Wpedantic",
-            "-Werror",
+            *c_warning_flags(args.cc),
             "-I.",
             *SOURCES,
             "-o",

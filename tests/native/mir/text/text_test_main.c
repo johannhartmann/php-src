@@ -161,6 +161,12 @@ static int test_failures(void)
 		"znmir 1.0 module m1\n"
 		"block b0 function f0 predecessors [] successors []\n"
 		"function f0 symbol s1 entry b0 flags 0x00000000\nend\n";
+	static const char unknown_field[] =
+		"znmir 1.0 module m1\n"
+		"value v0 representation i64 ownership owned mystery 0\nend\n";
+	static const char duplicate_field[] =
+		"znmir 1.0 module m1\n"
+		"value v0 representation i64 ownership owned ownership owned\nend\n";
 	char invalid_byte[sizeof(valid)];
 	char count_input[16384];
 	char list_input[4096];
@@ -179,6 +185,10 @@ static int test_failures(void)
 	if (expect_parse_error(numeric_sentinel, sizeof(numeric_sentinel) - 1, ZEND_MIR_TEST_TEXT_NONCANONICAL)) return 1;
 	if (expect_parse_error(trailing, sizeof(trailing) - 1, ZEND_MIR_TEST_TEXT_NONCANONICAL)) return 1;
 	if (expect_parse_error(out_of_order, sizeof(out_of_order) - 1, ZEND_MIR_TEST_TEXT_NONCANONICAL)) return 1;
+	if (expect_parse_error(unknown_field, sizeof(unknown_field) - 1,
+			ZEND_MIR_TEST_TEXT_NONCANONICAL)) return 1;
+	if (expect_parse_error(duplicate_field, sizeof(duplicate_field) - 1,
+			ZEND_MIR_TEST_TEXT_NONCANONICAL)) return 1;
 	if (expect_parse_error(invalid_byte, sizeof(valid) - 1, ZEND_MIR_TEST_TEXT_INVALID_BYTE)) return 1;
 	if (expect_parse_error(valid, ZEND_MIR_TEST_TEXT_MAX_BYTES + 1U, ZEND_MIR_TEST_TEXT_LIMIT)) return 1;
 	count_length = (size_t) snprintf(count_input, sizeof(count_input), "znmir 1.0 module m1\n");
