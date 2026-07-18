@@ -418,14 +418,125 @@
     },
     {
       "dependencies": ["W02"],
-      "expected_base_commit": null,
+      "expected_base_commit": "e310e29c4e71c1ac5f4cda526ce88b86d8e82c91",
       "goal": "Lower scalar operations and straight-line control into verified MIR with reference-equivalent behavior.",
       "optional_gate_ids": [],
-      "parallel_tracks": ["scalar lowering", "differential tests"],
-      "required_gate_ids": ["W03-integration-gate"],
-      "responsible_paths": ["Zend/Native/**", "tests/native/**"],
-      "roles": ["lowering agent", "differential test agent"],
-      "tasks": [{"owned_paths": ["Zend/Native/**", "tests/native/**"], "requires_clean_worktree": true, "role": "integration agent", "task_id": "W03-integration-gate", "title": "Scalar lowering integration gate"}],
+      "parallel_tracks": [
+        "A: lowering core and provider registry",
+        "B: frontend operands and value facts",
+        "C: numeric arithmetic and bitwise lowering",
+        "D: comparison, boolean, and cast lowering",
+        "E: straight-line lifetime and return lowering",
+        "F: scalar MIR, stage-2 verifier, and text",
+        "G: compile, dump, and differential orchestration"
+      ],
+      "required_gate_ids": [
+        "W03-A-lowering-core-registry",
+        "W03-B-frontend-operands-facts",
+        "W03-C-numeric-arithmetic-bitwise",
+        "W03-D-comparison-boolean-casts",
+        "W03-E-straight-line-lifetime-return",
+        "W03-F-mir-scalar-verifier-text",
+        "W03-G-compile-dump-differential",
+        "W03-integration-gate"
+      ],
+      "responsible_paths": [
+        "Zend/Native/Lowering/**",
+        "Zend/Native/MIR/**",
+        "docs/native-engine/lowering/**",
+        "scripts/native/lowering/**",
+        "tests/native/lowering/**",
+        "docs/native-engine/waves/**"
+      ],
+      "roles": [
+        "lowering core agent",
+        "frontend fact agent",
+        "numeric lowering agent",
+        "scalar semantics agent",
+        "lifetime and return agent",
+        "MIR scalar verification agent",
+        "differential integration agent",
+        "W03 integration agent"
+      ],
+      "tasks": [
+        {
+          "owned_paths": ["Zend/Native/Lowering/Core/**", "tests/native/lowering/core/**"],
+          "requires_clean_worktree": true,
+          "role": "lowering core agent",
+          "task_id": "W03-A-lowering-core-registry",
+          "title": "Implement deterministic lowering core and provider registry"
+        },
+        {
+          "owned_paths": ["Zend/Native/Lowering/Frontend/**", "tests/native/lowering/frontend/**"],
+          "requires_clean_worktree": true,
+          "role": "frontend fact agent",
+          "task_id": "W03-B-frontend-operands-facts",
+          "title": "Bind source operands, SSA identities, literals, and value facts"
+        },
+        {
+          "owned_paths": ["Zend/Native/Lowering/Numeric/**", "tests/native/lowering/numeric/**"],
+          "requires_clean_worktree": true,
+          "role": "numeric lowering agent",
+          "task_id": "W03-C-numeric-arithmetic-bitwise",
+          "title": "Lower proof-closed arithmetic, shifts, and bitwise operations"
+        },
+        {
+          "owned_paths": ["Zend/Native/Lowering/Scalar/**", "tests/native/lowering/scalar/**"],
+          "requires_clean_worktree": true,
+          "role": "scalar semantics agent",
+          "task_id": "W03-D-comparison-boolean-casts",
+          "title": "Lower exact scalar comparisons, booleans, and safe casts"
+        },
+        {
+          "owned_paths": ["Zend/Native/Lowering/Lifetime/**", "tests/native/lowering/lifetime/**"],
+          "requires_clean_worktree": true,
+          "role": "lifetime and return agent",
+          "task_id": "W03-E-straight-line-lifetime-return",
+          "title": "Lower non-refcounted lifetime operations and scalar returns"
+        },
+        {
+          "owned_paths": [
+            "Zend/Native/MIR/zend_mir.h",
+            "Zend/Native/MIR/zend_mir_ids.h",
+            "Zend/Native/MIR/zend_mir_opcodes.h",
+            "Zend/Native/MIR/zend_mir_diagnostic.h",
+            "Zend/Native/MIR/zend_mir_scalar.h",
+            "Zend/Native/MIR/Scalar/**",
+            "Zend/Native/MIR/Text/**",
+            "Zend/Native/MIR/Verify/**",
+            "tests/native/lowering/mir/**"
+          ],
+          "requires_clean_worktree": true,
+          "role": "MIR scalar verification agent",
+          "task_id": "W03-F-mir-scalar-verifier-text",
+          "title": "Implement scalar MIR construction, text, and stage-2 verification"
+        },
+        {
+          "owned_paths": [
+            "Zend/Native/Lowering/Integration/**",
+            "tests/native/lowering/integration/**",
+            "tests/native/lowering/differential/**"
+          ],
+          "requires_clean_worktree": true,
+          "role": "differential integration agent",
+          "task_id": "W03-G-compile-dump-differential",
+          "title": "Orchestrate compile, dump, and differential W03 evidence"
+        },
+        {
+          "owned_paths": [
+            "Zend/Native/Lowering/**",
+            "Zend/Native/MIR/**",
+            "docs/native-engine/lowering/**",
+            "scripts/native/lowering/**",
+            "tests/native/lowering/**",
+            "docs/native-engine/waves/**"
+          ],
+          "requires_clean_worktree": true,
+          "role": "W03 integration agent",
+          "task_id": "W03-integration-gate",
+          "title": "Close the W03 proof-closed scalar lowering gate"
+        }
+      ],
       "title": "Scalar and straight-line lowering",
       "wave_id": "W03"
     },

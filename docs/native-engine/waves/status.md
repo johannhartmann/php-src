@@ -70,10 +70,17 @@ Define architecture-independent MIR, explicit effects, ownership, frame states, 
 
 Lower scalar operations and straight-line control into verified MIR with reference-equivalent behavior.
 
-**Missing required gates:** `W03-integration-gate`
+**Missing required gates:** `W03-A-lowering-core-registry`, `W03-B-frontend-operands-facts`, `W03-C-numeric-arithmetic-bitwise`, `W03-D-comparison-boolean-casts`, `W03-E-straight-line-lifetime-return`, `W03-F-mir-scalar-verifier-text`, `W03-G-compile-dump-differential`, `W03-integration-gate`
 
 | Task | Required | Status | Base | Head | Evidence | Blockers |
 | --- | --- | --- | --- | --- | --- | --- |
+| W03-A-lowering-core-registry | yes | missing | — | — | — | — |
+| W03-B-frontend-operands-facts | yes | missing | — | — | — | — |
+| W03-C-numeric-arithmetic-bitwise | yes | missing | — | — | — | — |
+| W03-D-comparison-boolean-casts | yes | missing | — | — | — | — |
+| W03-E-straight-line-lifetime-return | yes | missing | — | — | — | — |
+| W03-F-mir-scalar-verifier-text | yes | missing | — | — | — | — |
+| W03-G-compile-dump-differential | yes | missing | — | — | — | — |
 | W03-integration-gate | yes | missing | — | — | — | — |
 
 ## W04 — Control flow and loops
