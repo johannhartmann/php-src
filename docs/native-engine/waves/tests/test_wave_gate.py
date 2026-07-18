@@ -145,6 +145,59 @@ class WaveGateTests(unittest.TestCase):
             self.assertEqual("missing", summary["status"])
             self.assertEqual(["W02-F-verifier-stage1"], summary["missing_gate_ids"])
 
+    def test_w03_has_pinned_base_and_all_specialist_gates(self):
+        expected = [
+            "W03-A-lowering-core-registry",
+            "W03-B-frontend-operands-facts",
+            "W03-C-numeric-arithmetic-bitwise",
+            "W03-D-comparison-boolean-casts",
+            "W03-E-straight-line-lifetime-return",
+            "W03-F-mir-scalar-verifier-text",
+            "W03-G-compile-dump-differential",
+            "W03-integration-gate",
+        ]
+        self.assertEqual(expected, self.waves["W03"]["required_gate_ids"])
+        self.assertEqual(expected, [task["task_id"] for task in self.waves["W03"]["tasks"]])
+        self.assertEqual(
+            "e310e29c4e71c1ac5f4cda526ce88b86d8e82c91",
+            self.waves["W03"]["expected_base_commit"],
+        )
+
+    def test_w03_specialist_owned_paths_are_disjoint(self):
+        specialist_tasks = self.waves["W03"]["tasks"][:7]
+        owners = {}
+        for task in specialist_tasks:
+            for path in task["owned_paths"]:
+                self.assertNotIn(path, owners, "%s is also owned by %s" % (path, owners.get(path)))
+                owners[path] = task["task_id"]
+
+    def test_w03_cannot_pass_with_missing_specialist_result(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            results_dir = Path(temporary)
+            for task_id in self.waves["W03"]["required_gate_ids"]:
+                if task_id != "W03-D-comparison-boolean-casts":
+                    result = self.make_result(task_id)
+                    result["expected_base_commit"] = self.waves["W03"]["expected_base_commit"]
+                    result["actual_base_commit"] = self.waves["W03"]["expected_base_commit"]
+                    result["gate_evidence"][0]["wave_id"] = "W03"
+                    self.write_wave_result(results_dir, "W03", result)
+            summary = wave_gate.aggregate_wave(
+                self.waves["W03"],
+                wave_gate.load_wave_results(results_dir, "W03", self.definition),
+            )
+            self.assertEqual("missing", summary["status"])
+            self.assertEqual(["W03-D-comparison-boolean-casts"], summary["missing_gate_ids"])
+
+    def test_w03_empty_dashboard_is_deterministic(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            first = wave_gate.render_dashboard(self.definition, Path(temporary), False)
+            second = wave_gate.render_dashboard(self.definition, Path(temporary), False)
+            self.assertEqual(first.encode("utf-8"), second.encode("utf-8"))
+            w03 = first[first.index("## W03"):first.index("## W04")]
+            for task_id in self.waves["W03"]["required_gate_ids"]:
+                self.assertIn(task_id, w03)
+            self.assertIn("**Status:** `MISSING`", w03)
+
     def test_valid_task_fixtures(self):
         for name in ("A", "B", "C", "D"):
             result = json.loads((FIXTURES / ("valid/task-result-%s.json" % name)).read_text(encoding="utf-8"))
