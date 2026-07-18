@@ -37,10 +37,10 @@
     ]
   },
   "opcode_coverage": {
-    "catalogued": 210,
+    "catalogued": 212,
     "first_number": 0,
-    "last_number": 211,
-    "unique_ids": 210
+    "last_number": 213,
+    "unique_ids": 212
   },
   "semantic_risk_coverage": {
     "bailout_nonlocal_transfer": [
