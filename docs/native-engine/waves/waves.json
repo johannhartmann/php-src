@@ -293,14 +293,126 @@
     },
     {
       "dependencies": ["W01"],
-      "expected_base_commit": null,
+      "expected_base_commit": "b2d0e87766fce3659a3de41ff72f06655d896aae",
       "goal": "Define architecture-independent MIR, explicit effects, ownership, frame states, and verifier invariants.",
       "optional_gate_ids": [],
-      "parallel_tracks": ["MIR model", "verifier", "fixtures"],
-      "required_gate_ids": ["W02-integration-gate"],
-      "responsible_paths": ["Zend/Native/MIR/**", "tests/native/**"],
-      "roles": ["MIR agent", "verification agent"],
-      "tasks": [{"owned_paths": ["Zend/Native/MIR/**", "tests/native/**"], "requires_clean_worktree": true, "role": "integration agent", "task_id": "W02-integration-gate", "title": "MIR contracts integration gate"}],
+      "parallel_tracks": [
+        "A: core storage, arena, and IDs",
+        "B: CFG, PHI, and dominance",
+        "C: effects and ownership binding",
+        "D: frame state and source maps",
+        "E: canonical text dump and parser",
+        "F: stage-one verifier"
+      ],
+      "required_gate_ids": [
+        "W02-A-core-arena-ids",
+        "W02-B-cfg-phi-dominance",
+        "W02-C-effects-ownership-binding",
+        "W02-D-frame-state-source-map",
+        "W02-E-text-dump-parser",
+        "W02-F-verifier-stage1",
+        "W02-integration-gate"
+      ],
+      "responsible_paths": [
+        "Zend/Native/MIR/**",
+        "scripts/native/mir/**",
+        "tests/native/mir/**",
+        "docs/native-engine/waves/**"
+      ],
+      "roles": [
+        "MIR core agent",
+        "CFG analysis agent",
+        "effect and ownership binding agent",
+        "frame-state agent",
+        "MIR text agent",
+        "MIR verification agent",
+        "MIR integration agent"
+      ],
+      "tasks": [
+        {
+          "owned_paths": [
+            "Zend/Native/MIR/zend_mir.c",
+            "Zend/Native/MIR/zend_mir_arena.c",
+            "Zend/Native/MIR/zend_mir_arena.h",
+            "Zend/Native/MIR/zend_mir_ids.c",
+            "tests/native/mir/core/**"
+          ],
+          "requires_clean_worktree": true,
+          "role": "MIR core agent",
+          "task_id": "W02-A-core-arena-ids",
+          "title": "Implement core storage, arena allocation, and stable IDs"
+        },
+        {
+          "owned_paths": [
+            "Zend/Native/MIR/zend_mir_cfg.c",
+            "Zend/Native/MIR/zend_mir_cfg.h",
+            "Zend/Native/MIR/zend_mir_phi.c",
+            "Zend/Native/MIR/zend_mir_dominance.c",
+            "tests/native/mir/cfg/**"
+          ],
+          "requires_clean_worktree": true,
+          "role": "CFG analysis agent",
+          "task_id": "W02-B-cfg-phi-dominance",
+          "title": "Implement CFG, PHI, and dominance analysis"
+        },
+        {
+          "owned_paths": [
+            "Zend/Native/MIR/zend_mir_effects.c",
+            "Zend/Native/MIR/zend_mir_ownership.c",
+            "tests/native/mir/effects/**"
+          ],
+          "requires_clean_worktree": true,
+          "role": "effect and ownership binding agent",
+          "task_id": "W02-C-effects-ownership-binding",
+          "title": "Bind W01 effects and ownership to MIR"
+        },
+        {
+          "owned_paths": [
+            "Zend/Native/MIR/zend_mir_frame_state.c",
+            "Zend/Native/MIR/zend_mir_source_map.c",
+            "tests/native/mir/frame-state/**"
+          ],
+          "requires_clean_worktree": true,
+          "role": "frame-state agent",
+          "task_id": "W02-D-frame-state-source-map",
+          "title": "Implement immutable frame states and source maps"
+        },
+        {
+          "owned_paths": [
+            "Zend/Native/MIR/zend_mir_text.c",
+            "Zend/Native/MIR/zend_mir_text.h",
+            "Zend/Native/MIR/zend_mir_parser.c",
+            "tests/native/mir/text/**"
+          ],
+          "requires_clean_worktree": true,
+          "role": "MIR text agent",
+          "task_id": "W02-E-text-dump-parser",
+          "title": "Implement deterministic MIR text dump and strict parser"
+        },
+        {
+          "owned_paths": [
+            "Zend/Native/MIR/zend_mir_verify.c",
+            "Zend/Native/MIR/zend_mir_verify.h",
+            "tests/native/mir/verifier/**"
+          ],
+          "requires_clean_worktree": true,
+          "role": "MIR verification agent",
+          "task_id": "W02-F-verifier-stage1",
+          "title": "Implement fail-closed stage-one MIR verification"
+        },
+        {
+          "owned_paths": [
+            "Zend/Native/MIR/**",
+            "scripts/native/mir/**",
+            "tests/native/mir/**",
+            "docs/native-engine/waves/**"
+          ],
+          "requires_clean_worktree": true,
+          "role": "MIR integration agent",
+          "task_id": "W02-integration-gate",
+          "title": "Close the W02 MIR contracts integration gate"
+        }
+      ],
       "title": "MIR contracts and verifier",
       "wave_id": "W02"
     },
