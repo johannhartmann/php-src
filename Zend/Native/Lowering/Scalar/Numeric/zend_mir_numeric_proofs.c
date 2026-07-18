@@ -113,16 +113,46 @@ bool zend_mir_numeric_range_multiply(
 	return true;
 }
 
+bool zend_mir_numeric_range_modulo(
+	zend_mir_numeric_range dividend, zend_mir_numeric_range divisor,
+	zend_mir_numeric_range *result)
+{
+	uint64_t minimum_magnitude;
+	uint64_t maximum_magnitude;
+	uint64_t divisor_magnitude;
+	int64_t remainder_magnitude;
+
+	if (!zend_mir_numeric_range_is_valid(dividend)
+			|| !zend_mir_numeric_range_is_valid(divisor)
+			|| result == NULL
+			|| (divisor.minimum <= 0 && divisor.maximum >= 0)
+			|| (dividend.minimum == INT64_MIN
+				&& divisor.minimum <= -1 && divisor.maximum >= -1)) {
+		return false;
+	}
+	minimum_magnitude = divisor.minimum == INT64_MIN
+		? UINT64_C(1) << 63
+		: (uint64_t) (divisor.minimum < 0
+			? -divisor.minimum : divisor.minimum);
+	maximum_magnitude = divisor.maximum == INT64_MIN
+		? UINT64_C(1) << 63
+		: (uint64_t) (divisor.maximum < 0
+			? -divisor.maximum : divisor.maximum);
+	divisor_magnitude = minimum_magnitude > maximum_magnitude
+		? minimum_magnitude : maximum_magnitude;
+	remainder_magnitude = divisor_magnitude > (uint64_t) INT64_MAX
+		? INT64_MAX : (int64_t) divisor_magnitude - 1;
+	result->minimum = dividend.minimum >= 0 ? 0 : -remainder_magnitude;
+	result->maximum = dividend.maximum <= 0 ? 0 : remainder_magnitude;
+	return true;
+}
+
 bool zend_mir_numeric_modulo_is_safe(
 	zend_mir_numeric_range dividend, zend_mir_numeric_range divisor)
 {
-	if (!zend_mir_numeric_range_is_valid(dividend)
-			|| !zend_mir_numeric_range_is_valid(divisor)
-			|| (divisor.minimum <= 0 && divisor.maximum >= 0)) {
-		return false;
-	}
-	return !(dividend.minimum == INT64_MIN
-		&& divisor.minimum <= -1 && divisor.maximum >= -1);
+	zend_mir_numeric_range result;
+
+	return zend_mir_numeric_range_modulo(dividend, divisor, &result);
 }
 
 static bool zend_mir_numeric_power_of_two(

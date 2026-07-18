@@ -363,7 +363,12 @@ static zend_mir_lowering_status zend_mir_numeric_prepare_integer(
 	switch (zend_opcode_number) {
 		case ZEND_MIR_NUMERIC_OPCODE_MOD:
 			plan->opcode = ZEND_MIR_OPCODE_I64_MOD_NONZERO;
-			proven = zend_mir_numeric_modulo_is_safe(left, right);
+			proven = zend_mir_numeric_range_modulo(
+				left, right, &plan->result_range);
+			if (proven) {
+				plan->fact_flags |=
+					ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE;
+			}
 			break;
 		case ZEND_MIR_NUMERIC_OPCODE_SL:
 			plan->opcode = ZEND_MIR_OPCODE_I64_SHL_CHECKED;

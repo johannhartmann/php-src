@@ -411,6 +411,18 @@ static void test_range_proofs(void)
 	assert(zend_mir_numeric_modulo_is_safe(
 		(zend_mir_numeric_range) {INT64_MIN + 1, INT64_MAX},
 		(zend_mir_numeric_range) {-1, -1}));
+	assert(zend_mir_numeric_range_modulo(
+		(zend_mir_numeric_range) {INT64_MIN, INT64_MAX},
+		(zend_mir_numeric_range) {2, 2}, &result));
+	assert(result.minimum == -1 && result.maximum == 1);
+	assert(zend_mir_numeric_range_modulo(
+		(zend_mir_numeric_range) {0, INT64_MAX},
+		(zend_mir_numeric_range) {INT64_MIN, INT64_MIN}, &result));
+	assert(result.minimum == 0 && result.maximum == INT64_MAX);
+	assert(zend_mir_numeric_range_modulo(
+		(zend_mir_numeric_range) {INT64_MIN, 0},
+		(zend_mir_numeric_range) {2, 4}, &result));
+	assert(result.minimum == -3 && result.maximum == 0);
 	assert(!zend_mir_numeric_modulo_is_safe(
 		(zend_mir_numeric_range) {INT64_MIN, INT64_MAX},
 		(zend_mir_numeric_range) {-1, -1}));
@@ -533,6 +545,12 @@ static void test_integer_special_operations(void)
 		test_assert_success(
 			&test, operations[index].mir_opcode,
 			ZEND_MIR_REPRESENTATION_I64, 2);
+		assert((test.host.emitted_fact.flags
+			& ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) != 0);
+		if (operations[index].source_opcode == ZEND_MIR_NUMERIC_OPCODE_MOD) {
+			assert(test.host.emitted_fact.integer_min == -3);
+			assert(test.host.emitted_fact.integer_max == 3);
+		}
 	}
 }
 

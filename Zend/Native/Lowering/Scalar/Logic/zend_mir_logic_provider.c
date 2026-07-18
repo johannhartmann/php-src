@@ -93,8 +93,6 @@ static zend_mir_lowering_status zend_mir_logic_commit_plan(
 		instruction.result_id = step->result_id;
 		instruction.frame_state_id = ZEND_MIR_ID_INVALID;
 		instruction.source_position_id = plan->source_position_id;
-		instruction.ownership_actions = ZEND_MIR_OWNERSHIP_ACTION_MASK(
-			ZEND_MIR_OWNERSHIP_ACTION_PRODUCE_OWNED);
 		if (!mutator->add_instruction(
 				mutator->context, &instruction, &instruction_id)) {
 			return zend_mir_logic_fail(

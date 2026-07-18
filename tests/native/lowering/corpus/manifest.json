@@ -1,0 +1,316 @@
+{
+  "cases": [
+    {
+      "case_id": "arithmetic",
+      "deferred_wave": null,
+      "disposition": "accepted",
+      "expected_mirl": "MIRL0000",
+      "family": "arithmetic",
+      "function": "w03_arithmetic",
+      "golden_path": "tests/native/lowering/corpus/golden/arithmetic.znmir",
+      "golden_sha256": "77351e0b0c88dd643ff1ad72a79625cbf93ecde761f51aee63499434d57fcb8d",
+      "reference_path": "tests/native/lowering/corpus/accepted/arithmetic.php",
+      "repeat_calls": [
+        1,
+        2,
+        3
+      ],
+      "source_path": "tests/native/lowering/corpus/accepted/arithmetic.php",
+      "source_sha256": "fdb07a77e9d50c15587f461447cb03644f3f2918bb32d068c7176a2cb9855b6e"
+    },
+    {
+      "case_id": "arrays",
+      "deferred_wave": "W05",
+      "disposition": "rejected",
+      "expected_mirl": "MIRL0013",
+      "family": "arrays",
+      "function": "w03_rejected_arrays",
+      "golden_path": null,
+      "golden_sha256": null,
+      "reference_path": "tests/native/lowering/corpus/rejected/arrays.php",
+      "repeat_calls": [
+        1,
+        2
+      ],
+      "source_path": "tests/native/lowering/corpus/rejected/arrays.php",
+      "source_sha256": "e2b2fc9e7c67b57d9a2c9c6fbe167ddfe51692b66542df1fa2ad672e6098044b"
+    },
+    {
+      "case_id": "bitwise",
+      "deferred_wave": null,
+      "disposition": "accepted",
+      "expected_mirl": "MIRL0000",
+      "family": "bitwise",
+      "function": "w03_bitwise",
+      "golden_path": "tests/native/lowering/corpus/golden/bitwise.znmir",
+      "golden_sha256": "26cef508a322fd3ab7003d0eb156cd6eb29074a336c1f423a92d608d93527194",
+      "reference_path": "tests/native/lowering/corpus/accepted/bitwise.php",
+      "repeat_calls": [
+        1,
+        2,
+        3
+      ],
+      "source_path": "tests/native/lowering/corpus/accepted/bitwise.php",
+      "source_sha256": "589aedaa1b71de5fa5e9e018c702643466e556c019a7a2eb4bfc958f55aeea35"
+    },
+    {
+      "case_id": "booleans",
+      "deferred_wave": null,
+      "disposition": "accepted",
+      "expected_mirl": "MIRL0000",
+      "family": "booleans",
+      "function": "w03_booleans",
+      "golden_path": "tests/native/lowering/corpus/golden/booleans.znmir",
+      "golden_sha256": "57d563a511d7fb02c45c141ee5dde225722ac09a077616c1b200b3fb17640480",
+      "reference_path": "tests/native/lowering/corpus/accepted/booleans.php",
+      "repeat_calls": [
+        1,
+        2,
+        3
+      ],
+      "source_path": "tests/native/lowering/corpus/accepted/booleans.php",
+      "source_sha256": "89b2f9a9f778bf4488933ef009d9a3fcc82ccc95baedd974a6c5cb8a5138e376"
+    },
+    {
+      "case_id": "branches",
+      "deferred_wave": "W04",
+      "disposition": "rejected",
+      "expected_mirl": "MIRL0011",
+      "family": "branches",
+      "function": "w03_rejected_branches",
+      "golden_path": null,
+      "golden_sha256": null,
+      "reference_path": "tests/native/lowering/corpus/rejected/branches.php",
+      "repeat_calls": [
+        1,
+        2
+      ],
+      "source_path": "tests/native/lowering/corpus/rejected/branches.php",
+      "source_sha256": "f2414ae758ecf08e47a06b28446eb98b4774b582d233e0f33c31d1460cce3e6c"
+    },
+    {
+      "case_id": "calls",
+      "deferred_wave": "W05",
+      "disposition": "rejected",
+      "expected_mirl": "MIRL0012",
+      "family": "calls",
+      "function": "w03_rejected_calls",
+      "golden_path": null,
+      "golden_sha256": null,
+      "reference_path": "tests/native/lowering/corpus/rejected/calls.php",
+      "repeat_calls": [
+        1,
+        2
+      ],
+      "source_path": "tests/native/lowering/corpus/rejected/calls.php",
+      "source_sha256": "0b0e6dd45f72abceb46c87d0e3ddd724772d65f2b70805abc6a04456a364fa3a"
+    },
+    {
+      "case_id": "casts",
+      "deferred_wave": null,
+      "disposition": "accepted",
+      "expected_mirl": "MIRL0000",
+      "family": "casts",
+      "function": "w03_casts",
+      "golden_path": "tests/native/lowering/corpus/golden/casts.znmir",
+      "golden_sha256": "5654debc3716f0aab7e039559e23043ea70eff200dcab96b77b66a8c18941993",
+      "reference_path": "tests/native/lowering/corpus/accepted/casts.php",
+      "repeat_calls": [
+        1,
+        2,
+        3
+      ],
+      "source_path": "tests/native/lowering/corpus/accepted/casts.php",
+      "source_sha256": "6f249e3be2dcec294116c5d47eeeda79baea5ab77f12cf6b951be22919668f8e"
+    },
+    {
+      "case_id": "comparisons",
+      "deferred_wave": null,
+      "disposition": "accepted",
+      "expected_mirl": "MIRL0000",
+      "family": "comparisons",
+      "function": "w03_comparisons",
+      "golden_path": "tests/native/lowering/corpus/golden/comparisons.znmir",
+      "golden_sha256": "448a284fe4b8a86d66e315a83ffdf7aaa9d2cd731d33d1da103c2d3530839039",
+      "reference_path": "tests/native/lowering/corpus/accepted/comparisons.php",
+      "repeat_calls": [
+        1,
+        2,
+        3
+      ],
+      "source_path": "tests/native/lowering/corpus/accepted/comparisons.php",
+      "source_sha256": "4eb9866585a1654784bcbc986617ec9947ba7a782f7d641493aece8499d62170"
+    },
+    {
+      "case_id": "constants",
+      "deferred_wave": null,
+      "disposition": "accepted",
+      "expected_mirl": "MIRL0000",
+      "family": "constants",
+      "function": "w03_constants",
+      "golden_path": "tests/native/lowering/corpus/golden/constants.znmir",
+      "golden_sha256": "5c814f9804962eda59a24c7ec7e24f6482d621d4c8e4614129375fa3cc92cdac",
+      "reference_path": "tests/native/lowering/corpus/accepted/constants.php",
+      "repeat_calls": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "source_path": "tests/native/lowering/corpus/accepted/constants.php",
+      "source_sha256": "de87631350b5955750596d087576dec6b914fb7bf3a04fedf729cf13e72ef956"
+    },
+    {
+      "case_id": "copy_move_return",
+      "deferred_wave": null,
+      "disposition": "accepted",
+      "expected_mirl": "MIRL0000",
+      "family": "copy_move_return",
+      "function": "w03_copy_move_return",
+      "golden_path": "tests/native/lowering/corpus/golden/copy_move_return.znmir",
+      "golden_sha256": "ba3dee3a610979365dd538e1b4655e02f6383eeda1a864f1195617bfdd84ce7d",
+      "reference_path": "tests/native/lowering/corpus/accepted/copy_move_return.php",
+      "repeat_calls": [
+        1,
+        2,
+        3
+      ],
+      "source_path": "tests/native/lowering/corpus/accepted/copy_move_return.php",
+      "source_sha256": "43f8e2f9ea035ead22e9637bba06ad121fb70903ca8c72775e3e50be6777175f"
+    },
+    {
+      "case_id": "missing_proofs",
+      "deferred_wave": null,
+      "disposition": "rejected",
+      "expected_mirl": "MIRL0013",
+      "family": "missing_proofs",
+      "function": "w03_rejected_missing_proofs",
+      "golden_path": null,
+      "golden_sha256": null,
+      "reference_path": "tests/native/lowering/corpus/rejected/missing_proofs.php",
+      "repeat_calls": [
+        1,
+        2
+      ],
+      "source_path": "tests/native/lowering/corpus/rejected/missing_proofs.php",
+      "source_sha256": "f8e083ebae0bba376d58f609ac2a60f779b6f8125425d1944659a679f5970f97"
+    },
+    {
+      "case_id": "objects",
+      "deferred_wave": "W05",
+      "disposition": "rejected",
+      "expected_mirl": "MIRL0013",
+      "family": "objects",
+      "function": "w03_rejected_objects",
+      "golden_path": null,
+      "golden_sha256": null,
+      "reference_path": "tests/native/lowering/corpus/rejected/objects.php",
+      "repeat_calls": [
+        1,
+        2
+      ],
+      "source_path": "tests/native/lowering/corpus/rejected/objects.php",
+      "source_sha256": "31aeb1ab9d0d736e788c84b090618755d96e2551810ae99dcba917f396e3e1a9"
+    },
+    {
+      "case_id": "references",
+      "deferred_wave": "W06",
+      "disposition": "rejected",
+      "expected_mirl": "MIRL0013",
+      "family": "references",
+      "function": "w03_rejected_references",
+      "golden_path": null,
+      "golden_sha256": null,
+      "reference_path": "tests/native/lowering/corpus/rejected/references.php",
+      "repeat_calls": [
+        1,
+        2
+      ],
+      "source_path": "tests/native/lowering/corpus/rejected/references.php",
+      "source_sha256": "b66ccdf38ce9f281370532d110671adadeb60361ae3736b11076d3af99193b4f"
+    },
+    {
+      "case_id": "strings",
+      "deferred_wave": "W05",
+      "disposition": "rejected",
+      "expected_mirl": "MIRL0013",
+      "family": "strings",
+      "function": "w03_rejected_strings",
+      "golden_path": null,
+      "golden_sha256": null,
+      "reference_path": "tests/native/lowering/corpus/rejected/strings.php",
+      "repeat_calls": [
+        1,
+        2
+      ],
+      "source_path": "tests/native/lowering/corpus/rejected/strings.php",
+      "source_sha256": "dcd5f51ba6c598253d1d18c685b8c5853ccb83e343fc7e07a1705711072fcf39"
+    },
+    {
+      "case_id": "w04_control_flow",
+      "deferred_wave": "W04",
+      "disposition": "rejected",
+      "expected_mirl": "MIRL0011",
+      "family": "w04_control_flow",
+      "function": "w03_rejected_w04",
+      "golden_path": null,
+      "golden_sha256": null,
+      "reference_path": "tests/native/lowering/corpus/rejected/w04_control_flow.php",
+      "repeat_calls": [
+        1,
+        2
+      ],
+      "source_path": "tests/native/lowering/corpus/rejected/w04_control_flow.php",
+      "source_sha256": "67bddcea5bf25c7852112a6f16d8a601b0803ef2878fef124517589ff279f0e8"
+    },
+    {
+      "case_id": "w05_runtime_effect",
+      "deferred_wave": "W05",
+      "disposition": "rejected",
+      "expected_mirl": "MIRL0013",
+      "family": "w05_runtime_effect",
+      "function": "w03_rejected_w05",
+      "golden_path": null,
+      "golden_sha256": null,
+      "reference_path": "tests/native/lowering/corpus/rejected/w05_runtime_effect.php",
+      "repeat_calls": [
+        1,
+        2
+      ],
+      "source_path": "tests/native/lowering/corpus/rejected/w05_runtime_effect.php",
+      "source_sha256": "a0cf54e1f813bab5b3dbd807259558dc91d398299f5c15486b015eb88c8021f2"
+    },
+    {
+      "case_id": "w06_reference_semantics",
+      "deferred_wave": "W06",
+      "disposition": "rejected",
+      "expected_mirl": "MIRL0006",
+      "family": "w06_reference_semantics",
+      "function": "w03_rejected_w06",
+      "golden_path": null,
+      "golden_sha256": null,
+      "reference_path": "tests/native/lowering/corpus/rejected/w06_reference_semantics.php",
+      "repeat_calls": [
+        1,
+        2
+      ],
+      "source_path": "tests/native/lowering/corpus/rejected/w06_reference_semantics.php",
+      "source_sha256": "3b0df8645c19729b154b533301c577a82519a26819630e083aa803c746d257e6"
+    }
+  ],
+  "environment": {
+    "LANG": "C",
+    "LC_ALL": "C",
+    "SOURCE_DATE_EPOCH": "0",
+    "TZ": "UTC",
+    "random_seed": 0
+  },
+  "format_version": "1.0.0",
+  "manifest_id": "w03-compile-dump-differential-v1"
+}

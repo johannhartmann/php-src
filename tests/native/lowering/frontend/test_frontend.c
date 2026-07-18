@@ -170,8 +170,8 @@ static void test_source_view_and_ids(void)
 	assert(zend_mir_zend_source_position_count(&source) == 2);
 	assert(zend_mir_zend_source_position_at(&source, 1, &position));
 	assert(position.id == 1 && position.file_symbol_id == 23);
-	assert(position.line == 11 && position.column_start == 0
-		&& position.column_end == 0);
+	assert(position.line == 11 && position.column_start == 1
+		&& position.column_end == 1);
 
 	assert(zend_mir_zend_source_value_fact_count(&source) == 2);
 	assert(zend_mir_zend_source_value_fact_at(&source, 0, &fact));
@@ -210,7 +210,7 @@ static void test_exact_scalar_fact_mapping(void)
 	fixture.ssa.vars[2].definition = -1;
 	fixture.ssa.var_info[0].type = MAY_BE_NULL;
 	fixture.ssa.var_info[0].has_range = false;
-	fixture.ssa.var_info[1].type = MAY_BE_BOOL;
+	fixture.ssa.var_info[1].type = MAY_BE_TRUE;
 	fixture.ssa.var_info[1].has_range = false;
 	fixture.ssa.var_info[2].type = MAY_BE_DOUBLE;
 	fixture.ssa.var_info[2].has_range = false;
@@ -222,6 +222,7 @@ static void test_exact_scalar_fact_mapping(void)
 	assert(fact.value_id == 0 && fact.exact_type == ZEND_MIR_SCALAR_TYPE_NULL);
 	assert(zend_mir_zend_source_value_fact_at(&source, 1, &fact));
 	assert(fact.value_id == 1 && fact.exact_type == ZEND_MIR_SCALAR_TYPE_I1);
+	assert((fact.flags & ZEND_MIR_VALUE_FACT_NONZERO) == 0);
 	assert(zend_mir_zend_source_value_fact_at(&source, 2, &fact));
 	assert(fact.value_id == 2 && fact.exact_type == ZEND_MIR_SCALAR_TYPE_F64);
 	assert((fact.flags & ZEND_MIR_VALUE_FACT_FINITE) == 0);

@@ -134,55 +134,117 @@ static bool zend_mir_view_constant_at(const void *context, uint32_t index,
 	return true;
 }
 
-static uint32_t zend_mir_view_empty_count(const void *context)
+static uint32_t zend_mir_view_frame_state_count(const void *context)
 {
-	(void) context;
-	return 0;
+	const zend_mir_module *module = context;
+
+	return zend_mir_view_is_available(module) ? module->frame_states.count : 0;
 }
 
 static bool zend_mir_view_frame_state_at(const void *context, uint32_t index,
 		zend_mir_frame_state_ref *out)
 {
-	(void) context;
-	(void) index;
-	(void) out;
-	return false;
+	const zend_mir_module *module = context;
+	zend_mir_frame_state_ref *records;
+
+	if (!zend_mir_view_is_available(module) || out == NULL
+			|| index >= module->frame_states.count) {
+		return false;
+	}
+	records = ZEND_MIR_CORE_ITEMS(
+		module, frame_states, zend_mir_frame_state_ref);
+	*out = records[index];
+	return true;
+}
+
+static uint32_t zend_mir_view_source_position_count(const void *context)
+{
+	const zend_mir_module *module = context;
+
+	return zend_mir_view_is_available(module)
+		? module->source_positions.count : 0;
 }
 
 static bool zend_mir_view_source_position_at(const void *context, uint32_t index,
 		zend_mir_source_position_ref *out)
 {
-	(void) context;
-	(void) index;
-	(void) out;
-	return false;
+	const zend_mir_module *module = context;
+	zend_mir_source_position_ref *records;
+
+	if (!zend_mir_view_is_available(module) || out == NULL
+			|| index >= module->source_positions.count) {
+		return false;
+	}
+	records = ZEND_MIR_CORE_ITEMS(
+		module, source_positions, zend_mir_source_position_ref);
+	*out = records[index];
+	return true;
+}
+
+static uint32_t zend_mir_view_frame_slot_count(const void *context)
+{
+	const zend_mir_module *module = context;
+
+	return zend_mir_view_is_available(module) ? module->frame_slots.count : 0;
 }
 
 static bool zend_mir_view_frame_slot_at(const void *context, uint32_t index,
 		zend_mir_frame_slot_ref *out)
 {
-	(void) context;
-	(void) index;
-	(void) out;
-	return false;
+	const zend_mir_module *module = context;
+	zend_mir_frame_slot_ref *records;
+
+	if (!zend_mir_view_is_available(module) || out == NULL
+			|| index >= module->frame_slots.count) {
+		return false;
+	}
+	records = ZEND_MIR_CORE_ITEMS(module, frame_slots, zend_mir_frame_slot_ref);
+	*out = records[index];
+	return true;
+}
+
+static uint32_t zend_mir_view_root_count(const void *context)
+{
+	const zend_mir_module *module = context;
+
+	return zend_mir_view_is_available(module) ? module->roots.count : 0;
 }
 
 static bool zend_mir_view_root_at(const void *context, uint32_t index,
 		uint32_t *slot_id_out)
 {
-	(void) context;
-	(void) index;
-	(void) slot_id_out;
-	return false;
+	const zend_mir_module *module = context;
+	uint32_t *records;
+
+	if (!zend_mir_view_is_available(module) || slot_id_out == NULL
+			|| index >= module->roots.count) {
+		return false;
+	}
+	records = ZEND_MIR_CORE_ITEMS(module, roots, uint32_t);
+	*slot_id_out = records[index];
+	return true;
+}
+
+static uint32_t zend_mir_view_cleanup_count(const void *context)
+{
+	const zend_mir_module *module = context;
+
+	return zend_mir_view_is_available(module) ? module->cleanups.count : 0;
 }
 
 static bool zend_mir_view_cleanup_at(const void *context, uint32_t index,
 		zend_mir_cleanup_ref *out)
 {
-	(void) context;
-	(void) index;
-	(void) out;
-	return false;
+	const zend_mir_module *module = context;
+	zend_mir_cleanup_ref *records;
+
+	if (!zend_mir_view_is_available(module) || out == NULL
+			|| index >= module->cleanups.count) {
+		return false;
+	}
+	records = ZEND_MIR_CORE_ITEMS(module, cleanups, zend_mir_cleanup_ref);
+	*out = records[index];
+	return true;
 }
 
 static uint32_t zend_mir_view_instruction_operand_count(const void *context,
@@ -259,10 +321,23 @@ static bool zend_mir_view_predecessor_at(const void *context,
 static bool zend_mir_view_source_map_at(const void *context, uint32_t index,
 		zend_mir_source_map_ref *out)
 {
-	(void) context;
-	(void) index;
-	(void) out;
-	return false;
+	const zend_mir_module *module = context;
+	zend_mir_source_map_ref *records;
+
+	if (!zend_mir_view_is_available(module) || out == NULL
+			|| index >= module->source_maps.count) {
+		return false;
+	}
+	records = ZEND_MIR_CORE_ITEMS(module, source_maps, zend_mir_source_map_ref);
+	*out = records[index];
+	return true;
+}
+
+static uint32_t zend_mir_view_source_map_count(const void *context)
+{
+	const zend_mir_module *module = context;
+
+	return zend_mir_view_is_available(module) ? module->source_maps.count : 0;
 }
 
 static uint32_t zend_mir_view_value_fact_count(const void *context)
@@ -302,15 +377,15 @@ void zend_mir_module_init_view(zend_mir_module *module)
 	module->view.value_at = zend_mir_view_value_at;
 	module->view.constant_count = zend_mir_view_constant_count;
 	module->view.constant_at = zend_mir_view_constant_at;
-	module->view.frame_state_count = zend_mir_view_empty_count;
+	module->view.frame_state_count = zend_mir_view_frame_state_count;
 	module->view.frame_state_at = zend_mir_view_frame_state_at;
-	module->view.source_position_count = zend_mir_view_empty_count;
+	module->view.source_position_count = zend_mir_view_source_position_count;
 	module->view.source_position_at = zend_mir_view_source_position_at;
-	module->view.frame_slot_count = zend_mir_view_empty_count;
+	module->view.frame_slot_count = zend_mir_view_frame_slot_count;
 	module->view.frame_slot_at = zend_mir_view_frame_slot_at;
-	module->view.root_count = zend_mir_view_empty_count;
+	module->view.root_count = zend_mir_view_root_count;
 	module->view.root_at = zend_mir_view_root_at;
-	module->view.cleanup_count = zend_mir_view_empty_count;
+	module->view.cleanup_count = zend_mir_view_cleanup_count;
 	module->view.cleanup_at = zend_mir_view_cleanup_at;
 	module->view.instruction_operand_count = zend_mir_view_instruction_operand_count;
 	module->view.instruction_operand_at = zend_mir_view_instruction_operand_at;
@@ -318,7 +393,7 @@ void zend_mir_module_init_view(zend_mir_module *module)
 	module->view.successor_at = zend_mir_view_successor_at;
 	module->view.predecessor_count = zend_mir_view_predecessor_count;
 	module->view.predecessor_at = zend_mir_view_predecessor_at;
-	module->view.source_map_count = zend_mir_view_empty_count;
+	module->view.source_map_count = zend_mir_view_source_map_count;
 	module->view.source_map_at = zend_mir_view_source_map_at;
 	module->view.value_fact_count = zend_mir_view_value_fact_count;
 	module->view.value_fact_at = zend_mir_view_value_fact_at;

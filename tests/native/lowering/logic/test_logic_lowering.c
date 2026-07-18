@@ -458,9 +458,7 @@ static void test_compare_opcodes_and_facts(void)
 		assert(instruction->reads == 0);
 		assert(instruction->writes == 0);
 		assert(instruction->barriers == 0);
-		assert(instruction->ownership_actions
-			== ZEND_MIR_OWNERSHIP_ACTION_MASK(
-				ZEND_MIR_OWNERSHIP_ACTION_PRODUCE_OWNED));
+			assert(instruction->ownership_actions == 0);
 		assert(fact->value_id == 3);
 		assert(fact->provenance == ZEND_MIR_FACT_PROVENANCE_CONTRACT);
 		assert(fact->provenance_source_position_id == 9);

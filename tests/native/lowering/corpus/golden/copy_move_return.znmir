@@ -1,0 +1,26 @@
+znmir 1.0 module m0
+function f0 symbol s0 entry b0 flags 0x00000000
+block b0 function f0 predecessors [] successors []
+value v1 representation i64 ownership owned
+value v2 representation i64 ownership owned
+value v2147483648 representation i64 ownership owned
+constant v2147483648 representation i64 kind signed_integer_bits payload 0x0000000000000000 symbol invalid
+fact vf1 value v1 type i64 flags 0x00000009 range -9223372036854775808:9223372036854775807 provenance range_analysis source p0
+fact vf2 value v2 type i64 flags 0x00000008 range none provenance type_analysis source p1
+fact vf0 value v2147483648 type i64 flags 0x00000009 range 0:0 provenance literal source p0
+source p0 file s0 line 3 columns 1:1
+source p1 file s0 line 5 columns 1:1
+source p2 file s0 line 5 columns 1:1
+slot 0 value v1 index 0 kind cv representation canonical_zval materialization materialized ownership frame_owned rooted false cleanup false
+slot 1 value invalid index 0 kind tmp representation canonical_zval materialization undef ownership frame_owned rooted false cleanup false
+slot 2 value invalid index 0 kind var representation canonical_zval materialization undef ownership frame_owned rooted false cleanup false
+slot 0 value v1 index 0 kind cv representation canonical_zval materialization materialized ownership frame_owned rooted false cleanup false
+slot 1 value invalid index 0 kind tmp representation canonical_zval materialization undef ownership frame_owned rooted false cleanup false
+slot 2 value invalid index 0 kind var representation canonical_zval materialization undef ownership frame_owned rooted false cleanup false
+frame fs0 function f0 parent invalid function-kind user opline 0 phase before slots 0+3 roots 0+0 cleanups 0+0 return terminal:invalid:invalid exception terminal:invalid:invalid bailout nonlocal_bailout:invalid:invalid suspend none:invalid code-version 1 resume false:none:invalid:invalid:invalid safepoint function_entry canonical true
+frame fs1 function f0 parent invalid function-kind user opline 2 phase before slots 3+3 roots 0+0 cleanups 0+0 return terminal:invalid:invalid exception terminal:invalid:invalid bailout nonlocal_bailout:invalid:invalid suspend none:invalid code-version 1 resume false:none:invalid:invalid:invalid safepoint function_entry canonical true
+instruction i0 block b0 opcode statepoint representation void result invalid operands [v1] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame fs0 source p0
+instruction i1 block b0 opcode constant representation i64 result v2147483648 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i2 block b0 opcode i64_bit_xor representation i64 result v2 operands [v1, v2147483648] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p1
+instruction i3 block b0 opcode return representation void result invalid operands [v2] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame fs1 source p2
+end

@@ -123,6 +123,9 @@ bool zend_mir_numeric_range_subtract(
 bool zend_mir_numeric_range_multiply(
 	zend_mir_numeric_range left, zend_mir_numeric_range right,
 	zend_mir_numeric_range *result);
+bool zend_mir_numeric_range_modulo(
+	zend_mir_numeric_range dividend, zend_mir_numeric_range divisor,
+	zend_mir_numeric_range *result);
 bool zend_mir_numeric_modulo_is_safe(
 	zend_mir_numeric_range dividend, zend_mir_numeric_range divisor);
 bool zend_mir_numeric_shift_left(
