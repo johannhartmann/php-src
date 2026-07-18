@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://php.net/schema/native-engine/lowering/w03-blockers-v1.json",
+  "title": "W03 semantic blockers",
+  "type": "object",
+  "required": ["format_version", "blockers"],
+  "properties": {
+    "format_version": {"const": 1},
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "opcode", "question", "owner"],
+        "properties": {
+          "id": {"type": "string"},
+          "opcode": {"type": "string"},
+          "question": {"type": "string"},
+          "owner": {"type": "string"}
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}

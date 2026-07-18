@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://php.net/schema/native-engine/lowering/opcode-profile-v1.json",
+  "title": "W03 ZNMIR opcode lowering profile",
+  "type": "object",
+  "required": [
+    "format_version",
+    "mir_contract_version",
+    "source_commit",
+    "source_matrix",
+    "active_opcode_count",
+    "proof_catalog",
+    "opcodes"
+  ],
+  "properties": {
+    "format_version": {"const": 1},
+    "mir_contract_version": {"const": "1.2"},
+    "active_opcode_count": {"type": "integer", "minimum": 1},
+    "proof_catalog": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "opcodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "number",
+          "opcode",
+          "classification",
+          "owner",
+          "proofs",
+          "mir_opcodes",
+          "w01",
+          "source_refs"
+        ],
+        "properties": {
+          "number": {"type": "integer", "minimum": 0},
+          "opcode": {"type": "string", "pattern": "^ZEND_[A-Z0-9_]+$"},
+          "classification": {"enum": ["required", "conditional", "deferred"]},
+          "deferred_wave": {"type": ["string", "null"], "pattern": "^W[0-9]{2}$"},
+          "proofs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "mir_opcodes": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}
