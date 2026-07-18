@@ -16,7 +16,7 @@
 typedef enum _zend_mir_function_kind {
 	ZEND_MIR_FUNCTION_KIND_CATALOG(ZEND_MIR_FUNCTION_KIND_ENUM)
 	ZEND_MIR_FUNCTION_KIND_COUNT = 3,
-	ZEND_MIR_FUNCTION_KIND_INVALID = UINT32_MAX
+	ZEND_MIR_FUNCTION_KIND_INVALID = -1
 } zend_mir_function_kind;
 #undef ZEND_MIR_FUNCTION_KIND_ENUM
 
@@ -29,7 +29,7 @@ typedef enum _zend_mir_function_kind {
 typedef enum _zend_mir_opline_phase {
 	ZEND_MIR_OPLINE_PHASE_CATALOG(ZEND_MIR_OPLINE_PHASE_ENUM)
 	ZEND_MIR_OPLINE_PHASE_COUNT = 4,
-	ZEND_MIR_OPLINE_PHASE_INVALID = UINT32_MAX
+	ZEND_MIR_OPLINE_PHASE_INVALID = -1
 } zend_mir_opline_phase;
 #undef ZEND_MIR_OPLINE_PHASE_ENUM
 
@@ -42,7 +42,7 @@ typedef enum _zend_mir_opline_phase {
 typedef enum _zend_mir_suspend_kind {
 	ZEND_MIR_SUSPEND_KIND_CATALOG(ZEND_MIR_SUSPEND_KIND_ENUM)
 	ZEND_MIR_SUSPEND_KIND_COUNT = 4,
-	ZEND_MIR_SUSPEND_KIND_INVALID = UINT32_MAX
+	ZEND_MIR_SUSPEND_KIND_INVALID = -1
 } zend_mir_suspend_kind;
 #undef ZEND_MIR_SUSPEND_KIND_ENUM
 
@@ -53,7 +53,7 @@ typedef enum _zend_mir_suspend_kind {
 typedef enum _zend_mir_resume_entry_kind {
 	ZEND_MIR_RESUME_ENTRY_KIND_CATALOG(ZEND_MIR_RESUME_ENTRY_KIND_ENUM)
 	ZEND_MIR_RESUME_ENTRY_KIND_COUNT = 2,
-	ZEND_MIR_RESUME_ENTRY_KIND_INVALID = UINT32_MAX
+	ZEND_MIR_RESUME_ENTRY_KIND_INVALID = -1
 } zend_mir_resume_entry_kind;
 #undef ZEND_MIR_RESUME_ENTRY_KIND_ENUM
 
@@ -75,7 +75,7 @@ typedef enum _zend_mir_resume_entry_kind {
 typedef enum _zend_mir_safepoint_class {
 	ZEND_MIR_SAFEPOINT_CLASS_CATALOG(ZEND_MIR_SAFEPOINT_CLASS_ENUM)
 	ZEND_MIR_SAFEPOINT_CLASS_COUNT = 13,
-	ZEND_MIR_SAFEPOINT_CLASS_INVALID = UINT32_MAX
+	ZEND_MIR_SAFEPOINT_CLASS_INVALID = -1
 } zend_mir_safepoint_class;
 #undef ZEND_MIR_SAFEPOINT_CLASS_ENUM
 
@@ -93,7 +93,7 @@ typedef enum _zend_mir_safepoint_class {
 typedef enum _zend_mir_frame_slot_kind {
 	ZEND_MIR_FRAME_SLOT_KIND_CATALOG(ZEND_MIR_FRAME_SLOT_KIND_ENUM)
 	ZEND_MIR_FRAME_SLOT_KIND_COUNT = 9,
-	ZEND_MIR_FRAME_SLOT_KIND_INVALID = UINT32_MAX
+	ZEND_MIR_FRAME_SLOT_KIND_INVALID = -1
 } zend_mir_frame_slot_kind;
 #undef ZEND_MIR_FRAME_SLOT_KIND_ENUM
 
@@ -106,7 +106,7 @@ typedef enum _zend_mir_frame_slot_kind {
 typedef enum _zend_mir_frame_slot_representation {
 	ZEND_MIR_FRAME_SLOT_REPRESENTATION_CATALOG(ZEND_MIR_FRAME_SLOT_REPRESENTATION_ENUM)
 	ZEND_MIR_FRAME_SLOT_REPRESENTATION_COUNT = 3,
-	ZEND_MIR_FRAME_SLOT_REPRESENTATION_INVALID = UINT32_MAX
+	ZEND_MIR_FRAME_SLOT_REPRESENTATION_INVALID = -1
 } zend_mir_frame_slot_representation;
 #undef ZEND_MIR_FRAME_SLOT_REPRESENTATION_ENUM
 
@@ -118,7 +118,7 @@ typedef enum _zend_mir_frame_slot_representation {
 typedef enum _zend_mir_materialization {
 	ZEND_MIR_MATERIALIZATION_CATALOG(ZEND_MIR_MATERIALIZATION_ENUM)
 	ZEND_MIR_MATERIALIZATION_COUNT = 3,
-	ZEND_MIR_MATERIALIZATION_INVALID = UINT32_MAX
+	ZEND_MIR_MATERIALIZATION_INVALID = -1
 } zend_mir_materialization;
 #undef ZEND_MIR_MATERIALIZATION_ENUM
 
@@ -134,7 +134,7 @@ typedef enum _zend_mir_materialization {
 typedef enum _zend_mir_frame_slot_ownership {
 	ZEND_MIR_FRAME_SLOT_OWNERSHIP_CATALOG(ZEND_MIR_FRAME_SLOT_OWNERSHIP_ENUM)
 	ZEND_MIR_FRAME_SLOT_OWNERSHIP_COUNT = 6,
-	ZEND_MIR_FRAME_SLOT_OWNERSHIP_INVALID = UINT32_MAX
+	ZEND_MIR_FRAME_SLOT_OWNERSHIP_INVALID = -1
 } zend_mir_frame_slot_ownership;
 #undef ZEND_MIR_FRAME_SLOT_OWNERSHIP_ENUM
 
@@ -147,7 +147,7 @@ typedef enum _zend_mir_frame_slot_ownership {
 typedef enum _zend_mir_cleanup_action {
 	ZEND_MIR_CLEANUP_ACTION_CATALOG(ZEND_MIR_CLEANUP_ACTION_ENUM)
 	ZEND_MIR_CLEANUP_ACTION_COUNT = 4,
-	ZEND_MIR_CLEANUP_ACTION_INVALID = UINT32_MAX
+	ZEND_MIR_CLEANUP_ACTION_INVALID = -1
 } zend_mir_cleanup_action;
 #undef ZEND_MIR_CLEANUP_ACTION_ENUM
 
@@ -159,7 +159,7 @@ typedef enum _zend_mir_cleanup_action {
 typedef enum _zend_mir_cleanup_state {
 	ZEND_MIR_CLEANUP_STATE_CATALOG(ZEND_MIR_CLEANUP_STATE_ENUM)
 	ZEND_MIR_CLEANUP_STATE_COUNT = 3,
-	ZEND_MIR_CLEANUP_STATE_INVALID = UINT32_MAX
+	ZEND_MIR_CLEANUP_STATE_INVALID = -1
 } zend_mir_cleanup_state;
 #undef ZEND_MIR_CLEANUP_STATE_ENUM
 
@@ -172,7 +172,7 @@ typedef enum _zend_mir_cleanup_state {
 typedef enum _zend_mir_continuation_kind {
 	ZEND_MIR_CONTINUATION_KIND_CATALOG(ZEND_MIR_CONTINUATION_KIND_ENUM)
 	ZEND_MIR_CONTINUATION_KIND_COUNT = 4,
-	ZEND_MIR_CONTINUATION_KIND_INVALID = UINT32_MAX
+	ZEND_MIR_CONTINUATION_KIND_INVALID = -1
 } zend_mir_continuation_kind;
 #undef ZEND_MIR_CONTINUATION_KIND_ENUM
 

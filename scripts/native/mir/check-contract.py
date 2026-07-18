@@ -244,7 +244,7 @@ def validate_explicit_enum(text: str, enum_name: str) -> None:
 
 def validate_enum_sentinels(text: str) -> None:
     for name in INVALID_ENUM_CONSTANTS:
-        definitions = re.findall(rf"^\s*{name}\s*=\s*UINT32_MAX\s*,?\s*$", text, re.MULTILINE)
+        definitions = re.findall(rf"^\s*{name}\s*=\s*-1\s*,?\s*$", text, re.MULTILINE)
         if len(definitions) != 1:
             raise ContractError(f"invalid or duplicate enum sentinel {name}")
 
@@ -322,9 +322,9 @@ def compile_contract() -> None:
             include = f'#include "Zend/Native/MIR/{header}"\nint main(void) {{ return 0; }}\n'
             c_source.write_text(include, encoding="utf-8")
             cxx_source.write_text(include, encoding="utf-8")
-            run([cc, "-std=c11", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT), "-c",
+            run([cc, "-std=c11", "-pedantic-errors", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT), "-c",
                  str(c_source), "-o", str(temp / f"{stem}.o")])
-            run([cxx, "-std=c++20", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT), "-c",
+            run([cxx, "-std=c++20", "-pedantic-errors", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT), "-c",
                  str(cxx_source), "-o", str(temp / f"{stem}.opp")])
 
         c_fixture = temp / "fixture-c"
@@ -333,9 +333,10 @@ def compile_contract() -> None:
             "-Wall", "-Wextra", "-Werror", "-I", str(ROOT), "-I", str(FIXTURES),
             str(FIXTURES / "fixture_host.c"), str(FIXTURES / "fixture_smoke.c"),
         ]
-        run([cc, "-std=c11", *fixture_args, "-o", str(c_fixture)])
+        run([cc, "-std=c11", "-pedantic-errors", *fixture_args, "-o", str(c_fixture)])
         run([str(c_fixture)])
-        run([cxx, "-std=c++20", "-x", "c++", *fixture_args, "-o", str(cxx_fixture)])
+        run([cxx, "-std=c++20", "-pedantic-errors", "-x", "c++",
+             *fixture_args, "-o", str(cxx_fixture)])
         run([str(cxx_fixture)])
 
 

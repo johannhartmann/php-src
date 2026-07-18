@@ -19,7 +19,7 @@ class ContractTests(unittest.TestCase):
     def test_frozen_contract_passes(self) -> None:
         CHECKER.validate_sources()
 
-    def test_headers_and_fixture_compile_as_c_and_cxx(self) -> None:
+    def test_headers_and_fixture_compile_as_strict_c11_and_cxx20(self) -> None:
         CHECKER.compile_contract()
 
     def test_duplicate_catalog_id_is_rejected(self) -> None:
@@ -87,7 +87,7 @@ class ContractTests(unittest.TestCase):
             (ROOT / "Zend" / "Native" / "MIR" / name).read_text(encoding="utf-8")
             for name in CHECKER.HEADERS
         )
-        mutated = sources.replace("ZEND_MIR_OPCODE_INVALID = UINT32_MAX",
+        mutated = sources.replace("ZEND_MIR_OPCODE_INVALID = -1",
                                   "ZEND_MIR_OPCODE_INVALID = 10", 1)
         with self.assertRaisesRegex(CHECKER.ContractError, "ZEND_MIR_OPCODE_INVALID"):
             CHECKER.validate_enum_sentinels(mutated)
