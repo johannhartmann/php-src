@@ -306,8 +306,12 @@ static bool test_ids(void)
 		== ZEND_MIR_VALUE_ORIGINAL_MAX);
 	CHECK(zend_mir_value_from_original_ssa(ZEND_MIR_VALUE_SYNTHETIC_BIT)
 		== ZEND_MIR_ID_INVALID);
+	CHECK(zend_mir_value_from_synthetic(0) == ZEND_MIR_VALUE_SYNTHETIC_BIT);
 	id = zend_mir_value_from_synthetic(ZEND_MIR_VALUE_SYNTHETIC_PAYLOAD_MAX);
 	CHECK(id == ZEND_MIR_VALUE_SYNTHETIC_MAX);
+	CHECK(zend_mir_value_from_synthetic(
+		ZEND_MIR_VALUE_SYNTHETIC_PAYLOAD_MAX + UINT32_C(1))
+		== ZEND_MIR_ID_INVALID);
 	CHECK(zend_mir_core_value_id_decode(id, &synthetic, &payload));
 	CHECK(synthetic);
 	CHECK(payload == ZEND_MIR_VALUE_SYNTHETIC_PAYLOAD_MAX);
@@ -468,18 +472,122 @@ static bool test_lifecycle_and_limits(void)
 	return true;
 }
 
+static bool test_invalid_enum_sentinels(void)
+{
+	test_allocator allocator = { { 0 }, 0, 0, 0, 0 };
+	test_diagnostics diagnostics = { 0, ZEND_MIR_DIAGNOSTIC_NONE };
+	zend_mir_allocator vtable = test_allocator_vtable(&allocator);
+	zend_mir_diagnostic_sink sink = test_diagnostic_sink(&diagnostics);
+	zend_mir_module *module;
+	zend_mir_mutator *mutator;
+	zend_mir_function_id function;
+	zend_mir_block_id block;
+	zend_mir_instruction_id instruction_id = 91;
+	zend_mir_constant_record constant;
+	zend_mir_instruction_record instruction;
+
+	module = zend_mir_module_create(10, &vtable, 128, NULL, &sink);
+	CHECK(module != NULL);
+	mutator = zend_mir_module_get_mutator(module);
+	CHECK(!mutator->add_value(mutator->context, 0,
+		ZEND_MIR_REPRESENTATION_INVALID, ZEND_MIR_OWNERSHIP_STATE_OWNED));
+	CHECK(zend_mir_module_get_state(module) == ZEND_MIR_MODULE_FAILED);
+	zend_mir_module_destroy(module);
+
+	memset(&allocator, 0, sizeof(allocator));
+	memset(&diagnostics, 0, sizeof(diagnostics));
+	vtable = test_allocator_vtable(&allocator);
+	sink = test_diagnostic_sink(&diagnostics);
+	module = zend_mir_module_create(11, &vtable, 128, NULL, &sink);
+	CHECK(module != NULL);
+	mutator = zend_mir_module_get_mutator(module);
+	CHECK(!mutator->add_value(mutator->context, 0,
+		ZEND_MIR_REPRESENTATION_I64, ZEND_MIR_OWNERSHIP_STATE_INVALID));
+	CHECK(zend_mir_module_get_state(module) == ZEND_MIR_MODULE_FAILED);
+	zend_mir_module_destroy(module);
+
+	memset(&allocator, 0, sizeof(allocator));
+	memset(&diagnostics, 0, sizeof(diagnostics));
+	vtable = test_allocator_vtable(&allocator);
+	sink = test_diagnostic_sink(&diagnostics);
+	module = zend_mir_module_create(12, &vtable, 128, NULL, &sink);
+	CHECK(module != NULL);
+	mutator = zend_mir_module_get_mutator(module);
+	CHECK(mutator->add_value(mutator->context, 0,
+		ZEND_MIR_REPRESENTATION_I64, ZEND_MIR_OWNERSHIP_STATE_OWNED));
+	memset(&constant, 0, sizeof(constant));
+	constant.value_id = 0;
+	constant.representation = ZEND_MIR_REPRESENTATION_I64;
+	constant.kind = ZEND_MIR_CONSTANT_KIND_INVALID;
+	constant.symbol_id = ZEND_MIR_ID_INVALID;
+	CHECK(!mutator->add_constant(mutator->context, &constant));
+	CHECK(zend_mir_module_get_state(module) == ZEND_MIR_MODULE_FAILED);
+	zend_mir_module_destroy(module);
+
+	memset(&allocator, 0, sizeof(allocator));
+	memset(&diagnostics, 0, sizeof(diagnostics));
+	vtable = test_allocator_vtable(&allocator);
+	sink = test_diagnostic_sink(&diagnostics);
+	module = zend_mir_module_create(13, &vtable, 128, NULL, &sink);
+	CHECK(module != NULL);
+	mutator = zend_mir_module_get_mutator(module);
+	CHECK(mutator->add_function(mutator->context, 1, &function));
+	CHECK(mutator->add_block(mutator->context, function, &block));
+	memset(&instruction, 0, sizeof(instruction));
+	instruction.block_id = block;
+	instruction.opcode = ZEND_MIR_OPCODE_INVALID;
+	instruction.representation = ZEND_MIR_REPRESENTATION_VOID;
+	instruction.result_id = ZEND_MIR_ID_INVALID;
+	instruction.frame_state_id = ZEND_MIR_ID_INVALID;
+	instruction.source_position_id = ZEND_MIR_ID_INVALID;
+	CHECK(!mutator->add_instruction(
+		mutator->context, &instruction, &instruction_id));
+	CHECK(instruction_id == 91);
+	CHECK(zend_mir_module_get_state(module) == ZEND_MIR_MODULE_FAILED);
+	zend_mir_module_destroy(module);
+
+	memset(&allocator, 0, sizeof(allocator));
+	memset(&diagnostics, 0, sizeof(diagnostics));
+	vtable = test_allocator_vtable(&allocator);
+	sink = test_diagnostic_sink(&diagnostics);
+	module = zend_mir_module_create(14, &vtable, 128, NULL, &sink);
+	CHECK(module != NULL);
+	mutator = zend_mir_module_get_mutator(module);
+	CHECK(mutator->add_function(mutator->context, 1, &function));
+	CHECK(mutator->add_block(mutator->context, function, &block));
+	memset(&instruction, 0, sizeof(instruction));
+	instruction.block_id = block;
+	instruction.opcode = ZEND_MIR_OPCODE_COPY;
+	instruction.representation = ZEND_MIR_REPRESENTATION_INVALID;
+	instruction.result_id = ZEND_MIR_ID_INVALID;
+	instruction.frame_state_id = ZEND_MIR_ID_INVALID;
+	instruction.source_position_id = ZEND_MIR_ID_INVALID;
+	CHECK(!mutator->add_instruction(
+		mutator->context, &instruction, &instruction_id));
+	CHECK(instruction_id == 91);
+	CHECK(zend_mir_module_get_state(module) == ZEND_MIR_MODULE_FAILED);
+	zend_mir_module_destroy(module);
+	return true;
+}
+
 static bool test_empty_and_full_view_surface(void)
 {
 	test_allocator allocator = { { 0 }, 0, 0, 0, 0 };
 	zend_mir_allocator vtable = test_allocator_vtable(&allocator);
 	zend_mir_module *module = zend_mir_module_create(9, &vtable, 0, NULL, NULL);
 	const zend_mir_view *view;
+	zend_mir_mutator *mutator;
 	zend_mir_frame_state_ref frame_state;
+	zend_mir_source_map_ref source_map;
 
 	CHECK(module != NULL);
 	view = zend_mir_module_get_view(module);
-	CHECK(view != NULL);
+	mutator = zend_mir_module_get_mutator(module);
+	CHECK(view != NULL && mutator != NULL);
 	CHECK(view->contract_version == ZEND_MIR_CONTRACT_VERSION);
+	CHECK(view->source_map_count != NULL);
+	CHECK(view->source_map_at != NULL);
+	CHECK(mutator->add_source_map != NULL);
 	CHECK(view->function_count(view->context) == 0);
 	CHECK(view->block_count(view->context) == 0);
 	CHECK(view->instruction_count(view->context) == 0);
@@ -493,6 +601,8 @@ static bool test_empty_and_full_view_surface(void)
 	CHECK(view->cleanup_count(view->context) == 0);
 	CHECK(view->successor_count(view->context, 0) == 0);
 	CHECK(view->predecessor_count(view->context, 0) == 0);
+	CHECK(view->source_map_count(view->context) == 0);
+	CHECK(!view->source_map_at(view->context, 0, &source_map));
 	CHECK(zend_mir_module_finalize(module));
 	zend_mir_module_destroy(module);
 	return true;
@@ -504,6 +614,7 @@ int main(void)
 			|| !test_arena_alignment_and_overflow()
 			|| !test_chunk_determinism_and_oom()
 			|| !test_lifecycle_and_limits()
+			|| !test_invalid_enum_sentinels()
 			|| !test_empty_and_full_view_surface()) {
 		return EXIT_FAILURE;
 	}
