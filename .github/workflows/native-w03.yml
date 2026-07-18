@@ -38,7 +38,7 @@ jobs:
       PYTHONDONTWRITEBYTECODE: "1"
       NATIVE_JOBS: "2"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
