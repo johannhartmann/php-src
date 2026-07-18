@@ -67,8 +67,10 @@ def stable_json_write(value: Any, destination: Path | None) -> None:
     os.replace(temporary, destination)
 
 
-def deterministic_environment() -> dict[str, str]:
-    environment = os.environ.copy()
+def deterministic_environment(
+    base: dict[str, str] | None = None,
+) -> dict[str, str]:
+    environment = (base if base is not None else os.environ).copy()
     environment.update(
         {
             "LANG": "C",
@@ -218,8 +220,11 @@ def invoke(
     function: str | None = None,
     repeat: int = 1,
     diagnostic_limit: int = 32,
+    arena_chunk_size: int = 4096,
     fault: str | None = None,
+    opcache_enabled: bool = False,
     timeout: float = 30.0,
+    environment: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], int]:
     candidate = canonical_executable(candidate_value)
     if not filename or "\x00" in filename:
@@ -228,11 +233,14 @@ def invoke(
         raise DumpError("repeat must be between 1 and 10")
     if diagnostic_limit < 1 or diagnostic_limit > 256:
         raise DumpError("diagnostic limit must be between 1 and 256")
+    if arena_chunk_size < 64 or arena_chunk_size > 1024 * 1024:
+        raise DumpError("arena chunk size must be between 64 and 1048576")
     if timeout <= 0:
         raise DumpError("timeout must be greater than zero")
     request = {
         "filename": filename,
         "options": {
+            "arena_chunk_size": arena_chunk_size,
             "diagnostic_limit": diagnostic_limit,
             "fault": fault,
             "function": function,
@@ -249,6 +257,8 @@ def invoke(
                 "date.timezone=UTC",
                 "-d",
                 "display_errors=stderr",
+                "-d",
+                "opcache.enable_cli={}".format(1 if opcache_enabled else 0),
                 str(INVOKER),
             ],
             input=json.dumps(request, sort_keys=True).encode("utf-8"),
@@ -256,7 +266,7 @@ def invoke(
             stderr=subprocess.PIPE,
             check=False,
             timeout=timeout,
-            env=deterministic_environment(),
+            env=deterministic_environment(environment),
             cwd=ROOT,
         )
     except subprocess.TimeoutExpired as error:
@@ -324,6 +334,8 @@ def main() -> int:
     parser.add_argument("--function", help="optional compiled function to lower")
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--diagnostic-limit", type=int, default=32)
+    parser.add_argument("--arena-chunk-size", type=int, default=4096)
+    parser.add_argument("--opcache", choices=("on", "off"), default="off")
     parser.add_argument(
         "--fault",
         choices=[
@@ -346,7 +358,9 @@ def main() -> int:
             function=args.function,
             repeat=args.repeat,
             diagnostic_limit=args.diagnostic_limit,
+            arena_chunk_size=args.arena_chunk_size,
             fault=args.fault,
+            opcache_enabled=args.opcache == "on",
             timeout=args.timeout,
         )
         stable_json_write(document, args.json_out)
