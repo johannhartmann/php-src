@@ -15,7 +15,7 @@ typedef enum _zend_mir_diagnostic_severity {
 	ZEND_MIR_DIAGNOSTIC_NOTE = 0,
 	ZEND_MIR_DIAGNOSTIC_ERROR = 1,
 	ZEND_MIR_DIAGNOSTIC_FATAL = 2,
-	ZEND_MIR_DIAGNOSTIC_SEVERITY_INVALID = UINT32_MAX
+	ZEND_MIR_DIAGNOSTIC_SEVERITY_INVALID = -1
 } zend_mir_diagnostic_severity;
 
 typedef enum _zend_mir_diagnostic_code {
@@ -34,7 +34,7 @@ typedef enum _zend_mir_diagnostic_code {
 	ZEND_MIR_DIAGNOSTIC_UNSUPPORTED_CONTRACT_VERSION = 12,
 	ZEND_MIR_DIAGNOSTIC_UNMODELED_SEMANTICS = 13,
 	ZEND_MIR_DIAGNOSTIC_COUNT = 14,
-	ZEND_MIR_DIAGNOSTIC_CODE_INVALID = UINT32_MAX
+	ZEND_MIR_DIAGNOSTIC_CODE_INVALID = -1
 } zend_mir_diagnostic_code;
 
 typedef struct _zend_mir_diagnostic_location {

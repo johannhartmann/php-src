@@ -28,7 +28,7 @@
 typedef enum _zend_mir_effect {
 	ZEND_MIR_EFFECT_CATALOG(ZEND_MIR_EFFECT_ENUM)
 	ZEND_MIR_EFFECT_COUNT = 15,
-	ZEND_MIR_EFFECT_INVALID = UINT32_MAX
+	ZEND_MIR_EFFECT_INVALID = -1
 } zend_mir_effect;
 #undef ZEND_MIR_EFFECT_ENUM
 
@@ -58,7 +58,7 @@ typedef enum _zend_mir_effect {
 typedef enum _zend_mir_memory_domain {
 	ZEND_MIR_MEMORY_DOMAIN_CATALOG(ZEND_MIR_MEMORY_DOMAIN_ENUM)
 	ZEND_MIR_MEMORY_DOMAIN_COUNT = 20,
-	ZEND_MIR_MEMORY_DOMAIN_INVALID = UINT32_MAX
+	ZEND_MIR_MEMORY_DOMAIN_INVALID = -1
 } zend_mir_memory_domain;
 #undef ZEND_MIR_MEMORY_DOMAIN_ENUM
 
@@ -75,7 +75,7 @@ typedef enum _zend_mir_memory_domain {
 typedef enum _zend_mir_ownership_state {
 	ZEND_MIR_OWNERSHIP_STATE_CATALOG(ZEND_MIR_OWNERSHIP_STATE_ENUM)
 	ZEND_MIR_OWNERSHIP_STATE_COUNT = 7,
-	ZEND_MIR_OWNERSHIP_STATE_INVALID = UINT32_MAX
+	ZEND_MIR_OWNERSHIP_STATE_INVALID = -1
 } zend_mir_ownership_state;
 #undef ZEND_MIR_OWNERSHIP_STATE_ENUM
 
@@ -95,7 +95,7 @@ typedef enum _zend_mir_ownership_state {
 typedef enum _zend_mir_ownership_action {
 	ZEND_MIR_OWNERSHIP_ACTION_CATALOG(ZEND_MIR_OWNERSHIP_ACTION_ENUM)
 	ZEND_MIR_OWNERSHIP_ACTION_COUNT = 10,
-	ZEND_MIR_OWNERSHIP_ACTION_INVALID = UINT32_MAX
+	ZEND_MIR_OWNERSHIP_ACTION_INVALID = -1
 } zend_mir_ownership_action;
 #undef ZEND_MIR_OWNERSHIP_ACTION_ENUM
 
@@ -113,7 +113,7 @@ typedef enum _zend_mir_ownership_action {
 typedef enum _zend_mir_barrier {
 	ZEND_MIR_BARRIER_CATALOG(ZEND_MIR_BARRIER_ENUM)
 	ZEND_MIR_BARRIER_COUNT = 8,
-	ZEND_MIR_BARRIER_INVALID = UINT32_MAX
+	ZEND_MIR_BARRIER_INVALID = -1
 } zend_mir_barrier;
 #undef ZEND_MIR_BARRIER_ENUM
 
@@ -130,7 +130,7 @@ typedef enum _zend_mir_barrier {
 typedef enum _zend_mir_predicate {
 	ZEND_MIR_PREDICATE_CATALOG(ZEND_MIR_PREDICATE_ENUM)
 	ZEND_MIR_PREDICATE_COUNT = 7,
-	ZEND_MIR_PREDICATE_INVALID = UINT32_MAX
+	ZEND_MIR_PREDICATE_INVALID = -1
 } zend_mir_predicate;
 #undef ZEND_MIR_PREDICATE_ENUM
 
@@ -152,7 +152,7 @@ typedef enum _zend_mir_predicate {
 typedef enum _zend_mir_guard_fact {
 	ZEND_MIR_GUARD_FACT_CATALOG(ZEND_MIR_GUARD_FACT_ENUM)
 	ZEND_MIR_GUARD_FACT_COUNT = 12,
-	ZEND_MIR_GUARD_FACT_INVALID = UINT32_MAX
+	ZEND_MIR_GUARD_FACT_INVALID = -1
 } zend_mir_guard_fact;
 #undef ZEND_MIR_GUARD_FACT_ENUM
 
@@ -173,7 +173,7 @@ typedef enum _zend_mir_guard_fact {
 typedef enum _zend_mir_composition_rule {
 	ZEND_MIR_COMPOSITION_RULE_CATALOG(ZEND_MIR_COMPOSITION_RULE_ENUM)
 	ZEND_MIR_COMPOSITION_RULE_COUNT = 11,
-	ZEND_MIR_COMPOSITION_RULE_INVALID = UINT32_MAX
+	ZEND_MIR_COMPOSITION_RULE_INVALID = -1
 } zend_mir_composition_rule;
 #undef ZEND_MIR_COMPOSITION_RULE_ENUM
 

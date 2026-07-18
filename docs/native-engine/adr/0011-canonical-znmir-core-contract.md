@@ -30,6 +30,10 @@ identity and high-half IDs are synthetic. Synthetic payload `0x7fffffff` is
 reserved because it would produce the invalid sentinel. Overflow fails before
 mutation and may emit a bounded diagnostic.
 
+Catalog enums use contiguous non-negative values and the strictly C11-valid
+sentinel `-1`. Enum sentinels do not represent persistent identity and therefore
+remain distinct from the 32-bit ID sentinel.
+
 The initial opcode catalog contains constants, PHI, copy, canonicalization,
 statepoints, and the branch, conditional branch, return, throw, and unreachable
 terminators. Representations are void, control, fixed integer widths, double,
@@ -80,6 +84,7 @@ opcode dispatch.
 ## Decisions introduced beyond W01
 
 - The 32-bit invalid sentinel, high-bit value namespace, and exact maxima.
+- The `-1` invalid sentinel shared by the non-identity catalog enums.
 - Contract version 1.1 and the same-major/additive-minor compatibility rule;
   1.1 adds the stable source-map view and mutator table.
 - The minimal core opcode and target-neutral representation catalogs.
