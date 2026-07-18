@@ -1,0 +1,1 @@
+"""ZNMIR text-format tests."""

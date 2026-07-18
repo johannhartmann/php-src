@@ -1,0 +1,1 @@
+"""ZNMIR CFG tests."""
