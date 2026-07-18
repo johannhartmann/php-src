@@ -24,6 +24,7 @@ repetition. Spaces inside literals are mandatory.
 
 ```text
 u32       = "0" | nonzero-digit digit*
+hex2      = 2 lowercase hexadecimal digits
 hex4      = 4 lowercase hexadecimal digits
 hex8      = 8 lowercase hexadecimal digits
 hex16     = 16 lowercase hexadecimal digits
