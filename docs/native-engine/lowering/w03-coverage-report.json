@@ -1,0 +1,453 @@
+{
+  "architecture_independence": {
+    "forbidden_families": [
+      "DynASM",
+      "TPDE",
+      "architecture-specific headers",
+      "executor",
+      "VM handler"
+    ],
+    "leak_count": 0,
+    "product_runtime_activation": false,
+    "status": "pass",
+    "test_extension_default_off": true
+  },
+  "blockers": {
+    "open_count": 0,
+    "resolved_contract_drifts": [
+      {
+        "id": "W03-PROFILE-ACTIVE-COUNT",
+        "resolution": "The live validated W01 matrix contains 212 active opcodes; it supersedes the prompt snapshot count of 210.",
+        "source": "docs/native-engine/semantics/opcodes/opcode-matrix.json"
+      }
+    ]
+  },
+  "corpus": {
+    "accepted": [
+      "arithmetic",
+      "bitwise",
+      "booleans",
+      "casts",
+      "comparisons",
+      "constants",
+      "copy_move_return"
+    ],
+    "accepted_count": 7,
+    "diagnostic_coverage": {
+      "MIRL0000": 7,
+      "MIRL0006": 1,
+      "MIRL0011": 2,
+      "MIRL0012": 1,
+      "MIRL0013": 6
+    },
+    "golden_sha256": {
+      "arithmetic": "77351e0b0c88dd643ff1ad72a79625cbf93ecde761f51aee63499434d57fcb8d",
+      "bitwise": "26cef508a322fd3ab7003d0eb156cd6eb29074a336c1f423a92d608d93527194",
+      "booleans": "57d563a511d7fb02c45c141ee5dde225722ac09a077616c1b200b3fb17640480",
+      "casts": "5654debc3716f0aab7e039559e23043ea70eff200dcab96b77b66a8c18941993",
+      "comparisons": "448a284fe4b8a86d66e315a83ffdf7aaa9d2cd731d33d1da103c2d3530839039",
+      "constants": "5c814f9804962eda59a24c7ec7e24f6482d621d4c8e4614129375fa3cc92cdac",
+      "copy_move_return": "ba3dee3a610979365dd538e1b4655e02f6383eeda1a864f1195617bfdd84ce7d"
+    },
+    "rejected": [
+      "arrays",
+      "branches",
+      "calls",
+      "missing_proofs",
+      "objects",
+      "references",
+      "strings",
+      "w04_control_flow",
+      "w05_runtime_effect",
+      "w06_reference_semantics"
+    ],
+    "rejected_count": 10
+  },
+  "determinism": {
+    "axes": [
+      "arena-chunk-size",
+      "opcache-disabled",
+      "opcache-enabled",
+      "registry-registration-order",
+      "repeat-calls-1-through-10",
+      "stable-source-identity"
+    ],
+    "normalization": {
+      "enabled": false,
+      "rules": []
+    },
+    "report_has_timestamp": false
+  },
+  "gates": [
+    "python3 scripts/native/semantics/validate-w01.py --check",
+    "python3 scripts/native/mir/validate-w02.py --check",
+    "python3 scripts/native/lowering/check-contract.py --check",
+    "python3 scripts/native/lowering/validate-w03.py --check",
+    "python3 scripts/native/lowering/test-w03.py --reference-php ${REFERENCE_PHP} --candidate-php ${CANDIDATE_PHP}",
+    "python3 scripts/native/lowering/test-w03.py --reference-php ${REFERENCE_PHP} --candidate-php ${ASAN_CANDIDATE_PHP} --sanitizer address",
+    "python3 scripts/native/lowering/test-w03.py --reference-php ${REFERENCE_PHP} --candidate-php ${UBSAN_CANDIDATE_PHP} --sanitizer undefined",
+    "python3 -m unittest discover -s tests/native/lowering -p test_*.py -v",
+    "python3 tests/native/lowering/fuzz/run_fuzz.py --seed 20260718 --cases 20000",
+    "scripts/native/build.sh --profile debug-nts",
+    "scripts/native/test-smoke.sh --profile debug-nts",
+    "scripts/native/build.sh --profile debug-zts",
+    "scripts/native/test-smoke.sh --profile debug-zts"
+  ],
+  "profile": {
+    "accepted_opcode_count": 25,
+    "active_opcode_count": 212,
+    "classification_counts": {
+      "conditional": 24,
+      "deferred": 187,
+      "required": 1
+    },
+    "deferred_opcode_count": 187,
+    "deferred_opcodes": [
+      "ZEND_DIV",
+      "ZEND_CONCAT",
+      "ZEND_POW",
+      "ZEND_ASSIGN",
+      "ZEND_ASSIGN_DIM",
+      "ZEND_ASSIGN_OBJ",
+      "ZEND_ASSIGN_STATIC_PROP",
+      "ZEND_ASSIGN_OP",
+      "ZEND_ASSIGN_DIM_OP",
+      "ZEND_ASSIGN_OBJ_OP",
+      "ZEND_ASSIGN_STATIC_PROP_OP",
+      "ZEND_ASSIGN_REF",
+      "ZEND_ASSIGN_OBJ_REF",
+      "ZEND_ASSIGN_STATIC_PROP_REF",
+      "ZEND_PRE_INC",
+      "ZEND_PRE_DEC",
+      "ZEND_POST_INC",
+      "ZEND_POST_DEC",
+      "ZEND_PRE_INC_STATIC_PROP",
+      "ZEND_PRE_DEC_STATIC_PROP",
+      "ZEND_POST_INC_STATIC_PROP",
+      "ZEND_POST_DEC_STATIC_PROP",
+      "ZEND_JMP",
+      "ZEND_JMPZ",
+      "ZEND_JMPNZ",
+      "ZEND_JMPZ_EX",
+      "ZEND_JMPNZ_EX",
+      "ZEND_CASE",
+      "ZEND_CHECK_VAR",
+      "ZEND_SEND_VAR_NO_REF_EX",
+      "ZEND_FAST_CONCAT",
+      "ZEND_ROPE_INIT",
+      "ZEND_ROPE_ADD",
+      "ZEND_ROPE_END",
+      "ZEND_BEGIN_SILENCE",
+      "ZEND_END_SILENCE",
+      "ZEND_INIT_FCALL_BY_NAME",
+      "ZEND_DO_FCALL",
+      "ZEND_INIT_FCALL",
+      "ZEND_RECV",
+      "ZEND_RECV_INIT",
+      "ZEND_SEND_VAL",
+      "ZEND_SEND_VAR_EX",
+      "ZEND_SEND_REF",
+      "ZEND_NEW",
+      "ZEND_INIT_NS_FCALL_BY_NAME",
+      "ZEND_INIT_ARRAY",
+      "ZEND_ADD_ARRAY_ELEMENT",
+      "ZEND_INCLUDE_OR_EVAL",
+      "ZEND_UNSET_VAR",
+      "ZEND_UNSET_DIM",
+      "ZEND_UNSET_OBJ",
+      "ZEND_FE_RESET_R",
+      "ZEND_FE_FETCH_R",
+      "ZEND_FETCH_R",
+      "ZEND_FETCH_DIM_R",
+      "ZEND_FETCH_OBJ_R",
+      "ZEND_FETCH_W",
+      "ZEND_FETCH_DIM_W",
+      "ZEND_FETCH_OBJ_W",
+      "ZEND_FETCH_RW",
+      "ZEND_FETCH_DIM_RW",
+      "ZEND_FETCH_OBJ_RW",
+      "ZEND_FETCH_IS",
+      "ZEND_FETCH_DIM_IS",
+      "ZEND_FETCH_OBJ_IS",
+      "ZEND_FETCH_FUNC_ARG",
+      "ZEND_FETCH_DIM_FUNC_ARG",
+      "ZEND_FETCH_OBJ_FUNC_ARG",
+      "ZEND_FETCH_UNSET",
+      "ZEND_FETCH_DIM_UNSET",
+      "ZEND_FETCH_OBJ_UNSET",
+      "ZEND_FETCH_LIST_R",
+      "ZEND_FETCH_CONSTANT",
+      "ZEND_CHECK_FUNC_ARG",
+      "ZEND_EXT_STMT",
+      "ZEND_EXT_FCALL_BEGIN",
+      "ZEND_EXT_FCALL_END",
+      "ZEND_EXT_NOP",
+      "ZEND_TICKS",
+      "ZEND_SEND_VAR_NO_REF",
+      "ZEND_CATCH",
+      "ZEND_THROW",
+      "ZEND_FETCH_CLASS",
+      "ZEND_CLONE",
+      "ZEND_RETURN_BY_REF",
+      "ZEND_INIT_METHOD_CALL",
+      "ZEND_INIT_STATIC_METHOD_CALL",
+      "ZEND_ISSET_ISEMPTY_VAR",
+      "ZEND_ISSET_ISEMPTY_DIM_OBJ",
+      "ZEND_SEND_VAL_EX",
+      "ZEND_SEND_VAR",
+      "ZEND_INIT_USER_CALL",
+      "ZEND_SEND_ARRAY",
+      "ZEND_SEND_USER",
+      "ZEND_STRLEN",
+      "ZEND_DEFINED",
+      "ZEND_TYPE_CHECK",
+      "ZEND_VERIFY_RETURN_TYPE",
+      "ZEND_FE_RESET_RW",
+      "ZEND_FE_FETCH_RW",
+      "ZEND_FE_FREE",
+      "ZEND_INIT_DYNAMIC_CALL",
+      "ZEND_DO_ICALL",
+      "ZEND_DO_UCALL",
+      "ZEND_DO_FCALL_BY_NAME",
+      "ZEND_PRE_INC_OBJ",
+      "ZEND_PRE_DEC_OBJ",
+      "ZEND_POST_INC_OBJ",
+      "ZEND_POST_DEC_OBJ",
+      "ZEND_ECHO",
+      "ZEND_OP_DATA",
+      "ZEND_INSTANCEOF",
+      "ZEND_GENERATOR_CREATE",
+      "ZEND_MAKE_REF",
+      "ZEND_DECLARE_FUNCTION",
+      "ZEND_DECLARE_LAMBDA_FUNCTION",
+      "ZEND_DECLARE_CONST",
+      "ZEND_DECLARE_CLASS",
+      "ZEND_DECLARE_CLASS_DELAYED",
+      "ZEND_DECLARE_ANON_CLASS",
+      "ZEND_ADD_ARRAY_UNPACK",
+      "ZEND_ISSET_ISEMPTY_PROP_OBJ",
+      "ZEND_HANDLE_EXCEPTION",
+      "ZEND_USER_OPCODE",
+      "ZEND_ASSERT_CHECK",
+      "ZEND_JMP_SET",
+      "ZEND_UNSET_CV",
+      "ZEND_ISSET_ISEMPTY_CV",
+      "ZEND_FETCH_LIST_W",
+      "ZEND_SEPARATE",
+      "ZEND_FETCH_CLASS_NAME",
+      "ZEND_CALL_TRAMPOLINE",
+      "ZEND_DISCARD_EXCEPTION",
+      "ZEND_YIELD",
+      "ZEND_GENERATOR_RETURN",
+      "ZEND_FAST_CALL",
+      "ZEND_FAST_RET",
+      "ZEND_RECV_VARIADIC",
+      "ZEND_SEND_UNPACK",
+      "ZEND_YIELD_FROM",
+      "ZEND_COPY_TMP",
+      "ZEND_BIND_GLOBAL",
+      "ZEND_COALESCE",
+      "ZEND_FUNC_NUM_ARGS",
+      "ZEND_FUNC_GET_ARGS",
+      "ZEND_FETCH_STATIC_PROP_R",
+      "ZEND_FETCH_STATIC_PROP_W",
+      "ZEND_FETCH_STATIC_PROP_RW",
+      "ZEND_FETCH_STATIC_PROP_IS",
+      "ZEND_FETCH_STATIC_PROP_FUNC_ARG",
+      "ZEND_FETCH_STATIC_PROP_UNSET",
+      "ZEND_UNSET_STATIC_PROP",
+      "ZEND_ISSET_ISEMPTY_STATIC_PROP",
+      "ZEND_FETCH_CLASS_CONSTANT",
+      "ZEND_BIND_LEXICAL",
+      "ZEND_BIND_STATIC",
+      "ZEND_FETCH_THIS",
+      "ZEND_SEND_FUNC_ARG",
+      "ZEND_ISSET_ISEMPTY_THIS",
+      "ZEND_SWITCH_LONG",
+      "ZEND_SWITCH_STRING",
+      "ZEND_IN_ARRAY",
+      "ZEND_COUNT",
+      "ZEND_GET_CLASS",
+      "ZEND_GET_CALLED_CLASS",
+      "ZEND_GET_TYPE",
+      "ZEND_ARRAY_KEY_EXISTS",
+      "ZEND_MATCH",
+      "ZEND_CASE_STRICT",
+      "ZEND_MATCH_ERROR",
+      "ZEND_JMP_NULL",
+      "ZEND_CHECK_UNDEF_ARGS",
+      "ZEND_FETCH_GLOBALS",
+      "ZEND_VERIFY_NEVER_TYPE",
+      "ZEND_CALLABLE_CONVERT",
+      "ZEND_BIND_INIT_STATIC_OR_JMP",
+      "ZEND_FRAMELESS_ICALL_0",
+      "ZEND_FRAMELESS_ICALL_1",
+      "ZEND_FRAMELESS_ICALL_2",
+      "ZEND_FRAMELESS_ICALL_3",
+      "ZEND_JMP_FRAMELESS",
+      "ZEND_INIT_PARENT_PROPERTY_HOOK_CALL",
+      "ZEND_DECLARE_ATTRIBUTED_CONST",
+      "ZEND_TYPE_ASSERT",
+      "ZEND_CALLABLE_CONVERT_PARTIAL",
+      "ZEND_SEND_PLACEHOLDER"
+    ],
+    "format_version": 1,
+    "mir_contract_version": "1.2"
+  },
+  "proof_coverage": {
+    "exact_scalar_types": {
+      "accepted_opcode_count": 24,
+      "status": "covered"
+    },
+    "finite_f64": {
+      "accepted_opcode_count": 8,
+      "status": "covered"
+    },
+    "no_calls": {
+      "accepted_opcode_count": 25,
+      "status": "covered"
+    },
+    "no_destructor": {
+      "accepted_opcode_count": 6,
+      "status": "covered"
+    },
+    "no_exception": {
+      "accepted_opcode_count": 6,
+      "status": "covered"
+    },
+    "no_observer": {
+      "accepted_opcode_count": 1,
+      "status": "covered"
+    },
+    "no_overflow": {
+      "accepted_opcode_count": 5,
+      "status": "covered"
+    },
+    "no_reentry": {
+      "accepted_opcode_count": 25,
+      "status": "covered"
+    },
+    "non_refcounted": {
+      "accepted_opcode_count": 3,
+      "status": "covered"
+    },
+    "nonzero_divisor": {
+      "accepted_opcode_count": 1,
+      "status": "covered"
+    },
+    "not_return_by_reference": {
+      "accepted_opcode_count": 1,
+      "status": "covered"
+    },
+    "safe_scalar_cast": {
+      "accepted_opcode_count": 2,
+      "status": "covered"
+    },
+    "same_exact_type": {
+      "accepted_opcode_count": 7,
+      "status": "covered"
+    },
+    "single_reachable_block": {
+      "accepted_opcode_count": 25,
+      "status": "covered"
+    },
+    "valid_shift_count": {
+      "accepted_opcode_count": 2,
+      "status": "covered"
+    }
+  },
+  "provider_coverage": {
+    "W03-A-lowering-core-registry": {
+      "claimed_opcode_count": 1,
+      "implementation_paths": [
+        "Zend/Native/Lowering/Core/zend_mir_lowering_registry.c",
+        "Zend/Native/Lowering/Core/zend_mir_lowering_providers.c"
+      ],
+      "status": "covered"
+    },
+    "W03-B-frontend-operands-facts": {
+      "claimed_opcode_count": 1,
+      "implementation_paths": [
+        "Zend/Native/Lowering/Frontend/zend_mir_zend_source.c",
+        "Zend/Native/Lowering/Frontend/zend_mir_value_facts.c"
+      ],
+      "status": "covered"
+    },
+    "W03-C-numeric-arithmetic-bitwise": {
+      "claimed_opcode_count": 10,
+      "implementation_paths": [
+        "Zend/Native/Lowering/Scalar/Numeric/zend_mir_numeric_provider.c"
+      ],
+      "status": "covered"
+    },
+    "W03-D-comparison-boolean-casts": {
+      "claimed_opcode_count": 11,
+      "implementation_paths": [
+        "Zend/Native/Lowering/Scalar/Logic/zend_mir_logic_provider.c"
+      ],
+      "status": "covered"
+    },
+    "W03-E-straight-line-lifetime-return": {
+      "claimed_opcode_count": 2,
+      "implementation_paths": [
+        "Zend/Native/Lowering/StraightLine/zend_mir_lifetime_provider.c"
+      ],
+      "status": "covered"
+    }
+  },
+  "regressions": {
+    "required_waves": [
+      "W00",
+      "W01",
+      "W02"
+    ],
+    "standard_build_runtime_path": false
+  },
+  "schema_version": 1,
+  "source_inventory": {
+    "combined_sha256": "409c87e8b229dd729b15ab68f36c7adff5c7bd1c3f6cda204125832501832449",
+    "path_count": 39,
+    "paths": [
+      "Zend/Native/Lowering/Core/zend_mir_lowering.c",
+      "Zend/Native/Lowering/Core/zend_mir_lowering_context.c",
+      "Zend/Native/Lowering/Core/zend_mir_lowering_diagnostics.c",
+      "Zend/Native/Lowering/Core/zend_mir_lowering_internal.h",
+      "Zend/Native/Lowering/Core/zend_mir_lowering_providers.c",
+      "Zend/Native/Lowering/Core/zend_mir_lowering_registry.c",
+      "Zend/Native/Lowering/Frontend/zend_mir_literal_pool.c",
+      "Zend/Native/Lowering/Frontend/zend_mir_operand_map.c",
+      "Zend/Native/Lowering/Frontend/zend_mir_slot_map.c",
+      "Zend/Native/Lowering/Frontend/zend_mir_source_positions.c",
+      "Zend/Native/Lowering/Frontend/zend_mir_value_facts.c",
+      "Zend/Native/Lowering/Frontend/zend_mir_zend_source.c",
+      "Zend/Native/Lowering/Frontend/zend_mir_zend_source.h",
+      "Zend/Native/Lowering/Frontend/zend_mir_zend_source_internal.h",
+      "Zend/Native/Lowering/Scalar/Logic/zend_mir_logic.h",
+      "Zend/Native/Lowering/Scalar/Logic/zend_mir_logic_internal.h",
+      "Zend/Native/Lowering/Scalar/Logic/zend_mir_logic_proofs.c",
+      "Zend/Native/Lowering/Scalar/Logic/zend_mir_logic_provider.c",
+      "Zend/Native/Lowering/Scalar/Logic/zend_mir_lower_boolean.c",
+      "Zend/Native/Lowering/Scalar/Logic/zend_mir_lower_cast.c",
+      "Zend/Native/Lowering/Scalar/Logic/zend_mir_lower_compare.c",
+      "Zend/Native/Lowering/Scalar/Numeric/zend_mir_lower_numeric.c",
+      "Zend/Native/Lowering/Scalar/Numeric/zend_mir_lower_numeric.h",
+      "Zend/Native/Lowering/Scalar/Numeric/zend_mir_numeric_proofs.c",
+      "Zend/Native/Lowering/Scalar/Numeric/zend_mir_numeric_provider.c",
+      "Zend/Native/Lowering/StraightLine/zend_mir_lifetime_provider.c",
+      "Zend/Native/Lowering/StraightLine/zend_mir_lower_copy_move.c",
+      "Zend/Native/Lowering/StraightLine/zend_mir_lower_entry_state.c",
+      "Zend/Native/Lowering/StraightLine/zend_mir_lower_return.c",
+      "Zend/Native/Lowering/StraightLine/zend_mir_lower_structural.c",
+      "Zend/Native/Lowering/StraightLine/zend_mir_straight_line.h",
+      "Zend/Native/Lowering/StraightLine/zend_mir_straight_line_internal.h",
+      "Zend/Native/Lowering/zend_mir_lowering.h",
+      "Zend/Native/Lowering/zend_mir_lowering_diagnostic.h",
+      "Zend/Native/Lowering/zend_mir_lowering_registry.h",
+      "Zend/Native/Lowering/zend_mir_lowering_source.h",
+      "ext/native_mir_test/config.m4",
+      "ext/native_mir_test/native_mir_test.c",
+      "ext/native_mir_test/native_mir_test.stub.php"
+    ]
+  },
+  "wave": "W03"
+}

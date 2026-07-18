@@ -18,6 +18,12 @@
  *     }>,
  *     mir: ?string
  * }
+ * @param array{
+ *     function?: ?string,
+ *     diagnostic_limit?: int,
+ *     arena_chunk_size?: int,
+ *     fault?: ?string
+ * } $options
  */
 function native_mir_test_compile_dump(
     string $source,

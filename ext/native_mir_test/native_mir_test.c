@@ -41,6 +41,8 @@
 #define NATIVE_MIR_TEST_DEFAULT_DIAGNOSTIC_LIMIT 32
 #define NATIVE_MIR_TEST_MAX_DIAGNOSTIC_LIMIT 256
 #define NATIVE_MIR_TEST_ARENA_SIZE (64 * 1024)
+#define NATIVE_MIR_TEST_MIN_MIR_CHUNK_SIZE 64
+#define NATIVE_MIR_TEST_MAX_MIR_CHUNK_SIZE (1024 * 1024)
 #define NATIVE_MIR_TEST_OPTIMIZATION_LEVEL ((zend_long) 0x7FFEBFFF)
 
 typedef enum _native_mir_test_phase {
@@ -102,6 +104,7 @@ typedef struct _native_mir_test_state {
 	native_mir_test_diagnostic *diagnostics;
 	uint32_t diagnostic_count;
 	uint32_t diagnostic_limit;
+	size_t mir_chunk_size;
 	const char *diagnostic_stage;
 	native_mir_test_module_host module_host;
 	zend_mir_module *module;
@@ -340,6 +343,13 @@ static bool native_mir_test_parse_options(
 				goto invalid_value;
 			}
 			state->diagnostic_limit = (uint32_t) Z_LVAL_P(value);
+		} else if (zend_string_equals_literal(key, "arena_chunk_size")) {
+			if (Z_TYPE_P(value) != IS_LONG
+					|| Z_LVAL_P(value) < NATIVE_MIR_TEST_MIN_MIR_CHUNK_SIZE
+					|| Z_LVAL_P(value) > NATIVE_MIR_TEST_MAX_MIR_CHUNK_SIZE) {
+				goto invalid_value;
+			}
+			state->mir_chunk_size = (size_t) Z_LVAL_P(value);
 		} else if (zend_string_equals_literal(key, "fault")) {
 			if (Z_TYPE_P(value) == IS_NULL) {
 				continue;
@@ -516,7 +526,7 @@ static zend_mir_module *native_mir_test_module_create(
 	allocator.allocate = native_mir_test_module_allocate;
 	allocator.reset = native_mir_test_module_reset;
 	return zend_mir_module_create(
-		module_id, &allocator, ZEND_MIR_CORE_DEFAULT_CHUNK_SIZE,
+		module_id, &allocator, state->mir_chunk_size,
 		NULL, diagnostics);
 }
 
@@ -849,6 +859,7 @@ ZEND_FUNCTION(native_mir_test_compile_dump)
 	state->source = source;
 	state->filename = filename;
 	state->diagnostic_limit = NATIVE_MIR_TEST_DEFAULT_DIAGNOSTIC_LIMIT;
+	state->mir_chunk_size = ZEND_MIR_CORE_DEFAULT_CHUNK_SIZE;
 	state->phase = NATIVE_MIR_TEST_PHASE_COMPILE;
 	state->status = NATIVE_MIR_TEST_STATUS_ERROR;
 	state->diagnostics = ecalloc(
