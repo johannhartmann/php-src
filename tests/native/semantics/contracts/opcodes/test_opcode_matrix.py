@@ -145,16 +145,46 @@ class OpcodeMatrixTests(unittest.TestCase):
             DOC_DIR / "opcode-overrides.json",
         )
         rows = matrix["opcodes"]
-        self.assertEqual(210, len(rows))
-        self.assertEqual(210, len({row["opcode"] for row in rows}))
-        self.assertEqual(210, len({row["number"] for row in rows}))
+        self.assertEqual(212, len(rows))
+        self.assertEqual(212, len({row["opcode"] for row in rows}))
+        self.assertEqual(212, len({row["number"] for row in rows}))
         self.assertEqual([45, 79], matrix["reserved_opcode_numbers"])
-        self.assertEqual({"name": "ZEND_VM_LAST_OPCODE", "value": 211}, matrix["sentinel"])
+        self.assertEqual({"name": "ZEND_VM_LAST_OPCODE", "value": 213}, matrix["sentinel"])
         self.assertEqual("ZEND_OP_DATA", next(row["opcode"] for row in rows if row["number"] == 137))
         self.assertNotIn("ZEND_VM_LAST_OPCODE", {row["opcode"] for row in rows})
         self.assertEqual(set(generator.SOURCE_PATHS), {item["path"] for item in matrix["source_files"]})
         self.assertTrue(all(row["n0_x64"] == "not_started" for row in rows))
         self.assertTrue(all(row["n0_a64"] == "not_started" for row in rows))
+
+    def test_partial_application_opcodes_have_source_backed_semantics(self) -> None:
+        matrix = generator.build_matrix(
+            ROOT,
+            ROOT / "Zend/zend_vm_opcodes.h",
+            ROOT / "Zend/zend_vm_def.h",
+            DOC_DIR / "opcode-overrides.json",
+        )
+        rows = {row["opcode"]: row for row in matrix["opcodes"]}
+
+        partial = rows["ZEND_CALLABLE_CONVERT_PARTIAL"]
+        self.assertEqual(212, partial["number"])
+        self.assertEqual("temporary", partial["result"])
+        self.assertEqual("partial", partial["existing_jit_support"])
+        self.assertIn("allocate", partial["effect_ids"])
+        self.assertIn("run_destructor", partial["effect_ids"])
+        self.assertIn(
+            "zend_partial_create",
+            {ref["symbol"] for ref in partial["source_refs"]},
+        )
+
+        placeholder = rows["ZEND_SEND_PLACEHOLDER"]
+        self.assertEqual(213, placeholder["number"])
+        self.assertEqual("none", placeholder["result"])
+        self.assertEqual("none", placeholder["existing_jit_support"])
+        self.assertIn("allocate", placeholder["effect_ids"])
+        self.assertIn(
+            "zend_handle_named_arg",
+            {ref["symbol"] for ref in placeholder["source_refs"]},
+        )
 
     def test_high_risk_annotations_have_direct_handler_evidence(self) -> None:
         matrix = generator.build_matrix(
@@ -441,7 +471,7 @@ class OpcodeMatrixTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(0, completed.returncode, completed.stderr)
-        self.assertIn("210 opcodes", completed.stdout)
+        self.assertIn("212 opcodes", completed.stdout)
 
 
 if __name__ == "__main__":

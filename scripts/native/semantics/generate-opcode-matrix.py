@@ -19,7 +19,7 @@ from typing import Any, Iterable
 
 
 FORMAT_VERSION = "1.0.0"
-SOURCE_COMMIT = "dc6e34b56846c38dc2475d6c962c2b9b7ada6df4"
+SOURCE_COMMIT = "b7c524a19fa815799a858b98d39f176ca88648b1"
 
 SOURCE_PATHS = (
     "Zend/zend_vm_opcodes.h",
@@ -28,6 +28,7 @@ SOURCE_PATHS = (
     "Zend/zend_compile.h",
     "Zend/zend_execute.c",
     "Zend/zend_execute.h",
+    "Zend/zend_partial.c",
     "Zend/Optimizer/zend_ssa.h",
     "ext/opcache/jit/README.md",
     "ext/opcache/jit/zend_jit.c",
