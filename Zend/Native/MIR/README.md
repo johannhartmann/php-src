@@ -38,6 +38,10 @@ original Zend SSA values; values from `0x80000000` through `0xfffffffe` are
 synthetic. Construction that would overflow either namespace returns the
 invalid sentinel.
 
+Catalog enums use contiguous non-negative values and `-1` as their invalid
+sentinel. This keeps their declarations strictly valid in C11; enum sentinels
+are not persistent MIR identities and are distinct from `ZEND_MIR_ID_INVALID`.
+
 View callbacks return `false` for an invalid index or ID. Mutator callbacks
 return `false` before committing a partial change when an ID, capacity,
 relationship, or allocation cannot be represented. Implementations should
