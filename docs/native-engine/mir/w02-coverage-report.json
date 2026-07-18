@@ -88,8 +88,8 @@
     "verifier_nonmutation": "bytewise fixture snapshots before and after"
   },
   "production_inventory": {
-    "combined_sha256": "c7c4d9fbc88b31a4544e8255c87c80e9e4fe09297bfb7d2d07f173b1b2f1ae1c",
-    "header_count": 22,
+    "combined_sha256": "da9449bd1ed685ed7123465281e81e71144994f1584ec5f6d9068c564ab791b8",
+    "header_count": 23,
     "source_count": 21,
     "sources": [
       "Zend/Native/MIR/CFG/zend_mir_cfg.c",
