@@ -54,10 +54,16 @@ Freeze complete, source-backed semantic, effect, frame, TPDE, and test contracts
 
 Define architecture-independent MIR, explicit effects, ownership, frame states, and verifier invariants.
 
-**Missing required gates:** `W02-integration-gate`
+**Missing required gates:** `W02-A-core-arena-ids`, `W02-B-cfg-phi-dominance`, `W02-C-effects-ownership-binding`, `W02-D-frame-state-source-map`, `W02-E-text-dump-parser`, `W02-F-verifier-stage1`, `W02-integration-gate`
 
 | Task | Required | Status | Base | Head | Evidence | Blockers |
 | --- | --- | --- | --- | --- | --- | --- |
+| W02-A-core-arena-ids | yes | missing | — | — | — | — |
+| W02-B-cfg-phi-dominance | yes | missing | — | — | — | — |
+| W02-C-effects-ownership-binding | yes | missing | — | — | — | — |
+| W02-D-frame-state-source-map | yes | missing | — | — | — | — |
+| W02-E-text-dump-parser | yes | missing | — | — | — | — |
+| W02-F-verifier-stage1 | yes | missing | — | — | — | — |
 | W02-integration-gate | yes | missing | — | — | — | — |
 
 ## W03 — Scalar and straight-line lowering
