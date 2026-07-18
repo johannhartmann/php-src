@@ -708,6 +708,7 @@ void zend_mir_module_init_mutator(zend_mir_module *module)
 	module->mutator.add_frame_state = zend_mir_add_frame_state;
 	module->mutator.seal_function = zend_mir_seal_function;
 	module->mutator.add_source_map = zend_mir_add_source_map;
+	module->mutator.add_value_fact = zend_mir_core_add_value_fact;
 }
 
 bool zend_mir_module_finalize(zend_mir_module *module)

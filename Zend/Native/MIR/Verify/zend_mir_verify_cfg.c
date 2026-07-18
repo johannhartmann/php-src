@@ -12,6 +12,7 @@
 
 #include "zend_mir_verify_internal.h"
 
+#include "Zend/Native/MIR/Scalar/zend_mir_scalar_descriptors.h"
 #include "Zend/Native/MIR/Semantics/zend_mir_ownership.h"
 
 static uint32_t zend_mir_verify_edge_occurrences(
@@ -212,8 +213,12 @@ static uint32_t zend_mir_verify_expected_operands(zend_mir_opcode opcode,
 		case ZEND_MIR_OPCODE_STATEPOINT:
 			*variable = true;
 			return UINT32_MAX;
-		default:
-			return UINT32_MAX;
+		default: {
+			const zend_mir_scalar_descriptor *descriptor =
+				zend_mir_scalar_descriptor_at(opcode);
+
+			return descriptor != NULL ? descriptor->operand_count : UINT32_MAX;
+		}
 	}
 }
 
@@ -238,8 +243,21 @@ static bool zend_mir_verify_result_contract(
 		case ZEND_MIR_OPCODE_UNREACHABLE:
 			return !zend_mir_id_is_valid(instruction->result_id)
 				&& instruction->representation == ZEND_MIR_REPRESENTATION_VOID;
-		default:
-			return false;
+		default: {
+			const zend_mir_scalar_descriptor *descriptor =
+				zend_mir_scalar_descriptor_at(instruction->opcode);
+
+			if (descriptor == NULL) {
+				return false;
+			}
+			return descriptor->has_result
+				? zend_mir_id_is_valid(instruction->result_id)
+					&& instruction->representation
+						== descriptor->result.representation
+				: !zend_mir_id_is_valid(instruction->result_id)
+					&& instruction->representation
+						== ZEND_MIR_REPRESENTATION_VOID;
+		}
 	}
 }
 

@@ -31,6 +31,7 @@ typedef struct _zend_mir_test_enum_entry {
 #define ZEND_MIR_TEST_ENUM_ENTRY(symbol, label, value) { label, value },
 static const zend_mir_test_enum_entry opcode_entries[] = {
 	ZEND_MIR_OPCODE_CATALOG(ZEND_MIR_TEST_ENUM_ENTRY)
+	ZEND_MIR_SCALAR_OPCODE_CATALOG(ZEND_MIR_TEST_ENUM_ENTRY)
 };
 static const zend_mir_test_enum_entry representation_entries[] = {
 	ZEND_MIR_REPRESENTATION_CATALOG(ZEND_MIR_TEST_ENUM_ENTRY)
@@ -77,6 +78,19 @@ static const zend_mir_test_enum_entry resume_entries[] = {
 static const zend_mir_test_enum_entry safepoint_entries[] = {
 	ZEND_MIR_SAFEPOINT_CLASS_CATALOG(ZEND_MIR_TEST_ENUM_ENTRY)
 };
+static const zend_mir_test_enum_entry scalar_type_entries[] = {
+	{ "null", ZEND_MIR_SCALAR_TYPE_NULL },
+	{ "i1", ZEND_MIR_SCALAR_TYPE_I1 },
+	{ "i64", ZEND_MIR_SCALAR_TYPE_I64 },
+	{ "f64", ZEND_MIR_SCALAR_TYPE_F64 },
+};
+static const zend_mir_test_enum_entry fact_provenance_entries[] = {
+	{ "ssa", ZEND_MIR_FACT_PROVENANCE_SSA },
+	{ "literal", ZEND_MIR_FACT_PROVENANCE_LITERAL },
+	{ "range_analysis", ZEND_MIR_FACT_PROVENANCE_RANGE_ANALYSIS },
+	{ "type_analysis", ZEND_MIR_FACT_PROVENANCE_TYPE_ANALYSIS },
+	{ "contract", ZEND_MIR_FACT_PROVENANCE_CONTRACT },
+};
 #undef ZEND_MIR_TEST_ENUM_ENTRY
 
 typedef struct _zend_mir_test_line {
@@ -100,9 +114,11 @@ typedef struct _zend_mir_test_parser {
 	uint32_t successor_counts[ZEND_MIR_FIXTURE_MAX_BLOCKS];
 	zend_mir_block_id predecessors[ZEND_MIR_FIXTURE_MAX_BLOCKS][ZEND_MIR_FIXTURE_MAX_BLOCKS];
 	uint32_t predecessor_counts[ZEND_MIR_FIXTURE_MAX_BLOCKS];
+	zend_mir_value_fact_ref facts[ZEND_MIR_FIXTURE_MAX_VALUES];
+	uint32_t fact_count;
 	uint32_t section;
-	uint32_t last_ids[11];
-	bool have_last_id[11];
+	uint32_t last_ids[12];
+	bool have_last_id[12];
 	uint32_t depth;
 } zend_mir_test_parser;
 
@@ -205,6 +221,50 @@ static bool zend_mir_test_hex(zend_mir_test_line *line, uint32_t digits, uint64_
 		value = (value << 4) | nibble;
 	}
 	*out = value;
+	return true;
+}
+
+static bool zend_mir_test_i64(zend_mir_test_line *line, int64_t *out)
+{
+	uint64_t value = 0;
+	uint64_t limit = (uint64_t) INT64_MAX;
+	size_t start;
+	bool negative = false;
+
+	if (line->position < line->length
+			&& line->begin[line->position] == '-') {
+		negative = true;
+		limit++;
+		line->position++;
+	}
+	start = line->position;
+	while (line->position < line->length) {
+		unsigned char byte = (unsigned char) line->begin[line->position];
+		if (byte < '0' || byte > '9') {
+			break;
+		}
+		if (line->position != start && value == 0) {
+			return zend_mir_test_fail(line,
+				ZEND_MIR_TEST_TEXT_NONCANONICAL,
+				"leading zero in signed decimal integer");
+		}
+		if (value > (limit - (uint64_t) (byte - '0')) / 10) {
+			return zend_mir_test_fail(line, ZEND_MIR_TEST_TEXT_LIMIT,
+				"64-bit signed integer overflow");
+		}
+		value = value * 10 + (uint64_t) (byte - '0');
+		line->position++;
+	}
+	if (line->position == start || (negative && value == 0)) {
+		return zend_mir_test_fail(line, ZEND_MIR_TEST_TEXT_NONCANONICAL,
+			"invalid signed decimal integer");
+	}
+	if (negative) {
+		*out = value == (UINT64_C(1) << 63)
+			? INT64_MIN : -(int64_t) value;
+	} else {
+		*out = (int64_t) value;
+	}
 	return true;
 }
 
@@ -428,6 +488,83 @@ static bool zend_mir_test_parse_constant(zend_mir_test_parser *parser, zend_mir_
 			"numeric constant has a symbol");
 	}
 	parser->host->constants[parser->host->constant_count++] = record;
+	return true;
+}
+
+static bool zend_mir_test_parse_fact(
+		zend_mir_test_parser *parser, zend_mir_test_line *line)
+{
+	zend_mir_value_fact_ref record;
+	uint64_t flags;
+	uint32_t index;
+	const zend_mir_value_fact_flags known_flags =
+		ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE
+		| ZEND_MIR_VALUE_FACT_NONZERO
+		| ZEND_MIR_VALUE_FACT_FINITE
+		| ZEND_MIR_VALUE_FACT_NON_REFCOUNTED;
+
+	if (parser->fact_count >= ZEND_MIR_FIXTURE_MAX_VALUES) {
+		return zend_mir_test_fail(line, ZEND_MIR_TEST_TEXT_LIMIT,
+			"value-fact limit exceeded");
+	}
+	memset(&record, 0, sizeof(record));
+	if (!zend_mir_test_expect(line, "fact ")
+			|| !zend_mir_test_id(line, "vf", &record.id)
+			|| !zend_mir_test_expect(line, " value ")
+			|| !zend_mir_test_id(line, "v", &record.value_id)
+			|| !zend_mir_test_expect(line, " type ")
+			|| !ZEND_MIR_TEST_ENUM(line, scalar_type_entries, &record.exact_type)
+			|| !zend_mir_test_expect(line, " flags 0x")
+			|| !zend_mir_test_hex(line, 8, &flags)
+			|| !zend_mir_test_expect(line, " range ")) {
+		return false;
+	}
+	record.flags = (zend_mir_value_fact_flags) flags;
+	if ((record.flags & ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) != 0) {
+		if (!zend_mir_test_i64(line, &record.integer_min)
+				|| !zend_mir_test_expect(line, ":")
+				|| !zend_mir_test_i64(line, &record.integer_max)) {
+			return false;
+		}
+	} else if (!zend_mir_test_expect(line, "none")) {
+		return false;
+	}
+	if (!zend_mir_test_expect(line, " provenance ")
+			|| !ZEND_MIR_TEST_ENUM(line, fact_provenance_entries,
+				&record.provenance)
+			|| !zend_mir_test_expect(line, " source ")
+			|| !zend_mir_test_id(line, "p",
+				&record.provenance_source_position_id)
+			|| !zend_mir_test_end(line)) {
+		return false;
+	}
+	if ((record.flags & ~known_flags) != 0
+			|| !zend_mir_scalar_type_is_exact(record.exact_type)
+			|| ((record.flags & ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) != 0
+				&& (record.exact_type != ZEND_MIR_SCALAR_TYPE_I64
+					|| record.integer_min > record.integer_max))
+			|| ((record.flags & ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) == 0
+				&& (record.integer_min != 0 || record.integer_max != 0))
+			|| ((record.flags & ZEND_MIR_VALUE_FACT_NONZERO) != 0
+				&& (record.exact_type != ZEND_MIR_SCALAR_TYPE_I64
+					|| ((record.flags
+							& ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) != 0
+						&& record.integer_min <= 0
+						&& record.integer_max >= 0)))
+			|| ((record.flags & ZEND_MIR_VALUE_FACT_FINITE) != 0
+				&& record.exact_type != ZEND_MIR_SCALAR_TYPE_F64)) {
+		return zend_mir_test_fail(line, ZEND_MIR_TEST_TEXT_NONCANONICAL,
+			"invalid scalar value fact");
+	}
+	for (index = 0; index < parser->fact_count; index++) {
+		if (parser->facts[index].id == record.id
+				|| parser->facts[index].value_id == record.value_id) {
+			return zend_mir_test_fail(line,
+				ZEND_MIR_TEST_TEXT_DUPLICATE_ID,
+				"duplicate value-fact ID or value");
+		}
+	}
+	parser->facts[parser->fact_count++] = record;
 	return true;
 }
 
@@ -706,6 +843,19 @@ static bool zend_mir_test_finalize(zend_mir_test_parser *parser, zend_mir_test_l
 		if (parser->host->constants[index].value_id == ZEND_MIR_ID_INVALID
 				|| !zend_mir_test_has_value(parser->host, parser->host->constants[index].value_id)) return zend_mir_test_fail(line, ZEND_MIR_TEST_TEXT_REFERENCE, "constant value does not exist");
 	}
+	for (index = 0; index < parser->fact_count; index++) {
+		if (parser->facts[index].id == ZEND_MIR_ID_INVALID
+				|| parser->facts[index].value_id == ZEND_MIR_ID_INVALID
+				|| !zend_mir_test_has_value(
+					parser->host, parser->facts[index].value_id)
+				|| !zend_mir_test_has_source(parser->host,
+					parser->facts[index]
+						.provenance_source_position_id)) {
+			return zend_mir_test_fail(line,
+				ZEND_MIR_TEST_TEXT_REFERENCE,
+				"invalid scalar value-fact reference");
+		}
+	}
 	for (index = 0; index < parser->host->source_position_count; index++) {
 		if (parser->host->source_positions[index].id == ZEND_MIR_ID_INVALID
 				|| parser->host->source_positions[index].file_symbol_id == ZEND_MIR_ID_INVALID) return zend_mir_test_fail(line, ZEND_MIR_TEST_TEXT_REFERENCE, "source identity must be valid");
@@ -825,31 +975,36 @@ bool zend_mir_test_parse_text(const char *text, size_t length,
 					|| !zend_mir_test_accept_order(&parser, &line, 4, true,
 						parser.host->constants[parser.host->constant_count - 1].value_id)) return false;
 		}
+		else if (zend_mir_test_has_prefix(&line, "fact ")) {
+			if (!zend_mir_test_parse_fact(&parser, &line)
+					|| !zend_mir_test_accept_order(&parser, &line, 5, true,
+						parser.facts[parser.fact_count - 1].value_id)) return false;
+		}
 		else if (zend_mir_test_has_prefix(&line, "source ")) {
 			if (!zend_mir_test_parse_source(&parser, &line)
-					|| !zend_mir_test_accept_order(&parser, &line, 5, true,
+					|| !zend_mir_test_accept_order(&parser, &line, 6, true,
 						parser.host->source_positions[parser.host->source_position_count - 1].id)) return false;
 		}
 		else if (zend_mir_test_has_prefix(&line, "slot ")) {
 			if (!zend_mir_test_parse_slot(&parser, &line)
-					|| !zend_mir_test_accept_order(&parser, &line, 6, false, 0)) return false;
+					|| !zend_mir_test_accept_order(&parser, &line, 7, false, 0)) return false;
 		}
 		else if (zend_mir_test_has_prefix(&line, "root ")) {
 			if (!zend_mir_test_parse_root(&parser, &line)
-					|| !zend_mir_test_accept_order(&parser, &line, 7, false, 0)) return false;
+					|| !zend_mir_test_accept_order(&parser, &line, 8, false, 0)) return false;
 		}
 		else if (zend_mir_test_has_prefix(&line, "cleanup ")) {
 			if (!zend_mir_test_parse_cleanup(&parser, &line)
-					|| !zend_mir_test_accept_order(&parser, &line, 8, false, 0)) return false;
+					|| !zend_mir_test_accept_order(&parser, &line, 9, false, 0)) return false;
 		}
 		else if (zend_mir_test_has_prefix(&line, "frame ")) {
 			if (!zend_mir_test_parse_frame(&parser, &line)
-					|| !zend_mir_test_accept_order(&parser, &line, 9, true,
+					|| !zend_mir_test_accept_order(&parser, &line, 10, true,
 						parser.host->frame_states[parser.host->frame_state_count - 1].id)) return false;
 		}
 		else if (zend_mir_test_has_prefix(&line, "instruction ")) {
 			if (!zend_mir_test_parse_instruction(&parser, &line)
-					|| !zend_mir_test_accept_order(&parser, &line, 10, true,
+					|| !zend_mir_test_accept_order(&parser, &line, 11, true,
 						parser.host->instructions[parser.host->instruction_count - 1].id)) return false;
 		}
 		else return zend_mir_test_fail(&line, ZEND_MIR_TEST_TEXT_SYNTAX, "unknown record kind");

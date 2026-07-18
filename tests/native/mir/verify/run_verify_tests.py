@@ -14,6 +14,7 @@ import tempfile
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 VERIFY_SOURCES = (
+    "Zend/Native/MIR/Scalar/zend_mir_scalar_descriptors.c",
     "Zend/Native/MIR/Verify/zend_mir_verify.c",
     "Zend/Native/MIR/Verify/zend_mir_verify_ids.c",
     "Zend/Native/MIR/Verify/zend_mir_verify_cfg.c",

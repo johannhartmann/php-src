@@ -200,6 +200,23 @@ static int test_failures(void)
 	}
 	memcpy(count_input + count_length, "end\n", 4); count_length += 4;
 	if (expect_parse_error(count_input, count_length, ZEND_MIR_TEST_TEXT_LIMIT)) return 1;
+	count_length = (size_t) snprintf(count_input, sizeof(count_input),
+		"znmir 1.0 module m1\n");
+	for (count_index = 0; count_index <= ZEND_MIR_FIXTURE_MAX_VALUES; count_index++) {
+		int written = snprintf(count_input + count_length,
+			sizeof(count_input) - count_length,
+			"fact vf%u value v%u type i64 flags 0x00000009 range 0:0 "
+			"provenance range_analysis source invalid\n",
+			count_index, count_index);
+		if (written < 0
+				|| (size_t) written >= sizeof(count_input) - count_length) {
+			return fail("fact-count-limit fixture overflow");
+		}
+		count_length += (size_t) written;
+	}
+	memcpy(count_input + count_length, "end\n", 4); count_length += 4;
+	if (expect_parse_error(count_input, count_length,
+			ZEND_MIR_TEST_TEXT_LIMIT)) return 1;
 	list_length = (size_t) snprintf(list_input, sizeof(list_input),
 		"znmir 1.0 module m1\nfunction f0 symbol s1 entry b0 flags 0x00000000\n"
 		"block b0 function f0 predecessors [] successors []\n"
