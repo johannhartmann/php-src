@@ -103,6 +103,48 @@ class WaveGateTests(unittest.TestCase):
             self.assertEqual("missing", summary["status"])
             self.assertEqual(["W01-E-semantics-test-corpus"], summary["missing_gate_ids"])
 
+    def test_w02_has_pinned_base_and_all_specialist_gates(self):
+        expected = [
+            "W02-A-core-arena-ids",
+            "W02-B-cfg-phi-dominance",
+            "W02-C-effects-ownership-binding",
+            "W02-D-frame-state-source-map",
+            "W02-E-text-dump-parser",
+            "W02-F-verifier-stage1",
+            "W02-integration-gate",
+        ]
+        self.assertEqual(expected, self.waves["W02"]["required_gate_ids"])
+        self.assertEqual(expected, [task["task_id"] for task in self.waves["W02"]["tasks"]])
+        self.assertEqual(
+            "b2d0e87766fce3659a3de41ff72f06655d896aae",
+            self.waves["W02"]["expected_base_commit"],
+        )
+
+    def test_w02_specialist_owned_paths_are_disjoint(self):
+        specialist_tasks = self.waves["W02"]["tasks"][:6]
+        owners = {}
+        for task in specialist_tasks:
+            for path in task["owned_paths"]:
+                self.assertNotIn(path, owners, "%s is also owned by %s" % (path, owners.get(path)))
+                owners[path] = task["task_id"]
+
+    def test_w02_cannot_pass_with_missing_specialist_result(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            results_dir = Path(temporary)
+            for task_id in self.waves["W02"]["required_gate_ids"]:
+                if task_id != "W02-F-verifier-stage1":
+                    result = self.make_result(task_id)
+                    result["expected_base_commit"] = self.waves["W02"]["expected_base_commit"]
+                    result["actual_base_commit"] = self.waves["W02"]["expected_base_commit"]
+                    result["gate_evidence"][0]["wave_id"] = "W02"
+                    self.write_wave_result(results_dir, "W02", result)
+            summary = wave_gate.aggregate_wave(
+                self.waves["W02"],
+                wave_gate.load_wave_results(results_dir, "W02", self.definition),
+            )
+            self.assertEqual("missing", summary["status"])
+            self.assertEqual(["W02-F-verifier-stage1"], summary["missing_gate_ids"])
+
     def test_valid_task_fixtures(self):
         for name in ("A", "B", "C", "D"):
             result = json.loads((FIXTURES / ("valid/task-result-%s.json" % name)).read_text(encoding="utf-8"))
