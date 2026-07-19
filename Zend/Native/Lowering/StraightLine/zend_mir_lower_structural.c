@@ -14,8 +14,7 @@ zend_mir_lowering_status zend_mir_lower_structural(
 	zend_mir_lowering_diagnostic_code *diagnostic_out)
 {
 	const zend_mir_straight_line_proof_mask required =
-		ZEND_MIR_STRAIGHT_LINE_PROOF_SINGLE_BLOCK
-		| ZEND_MIR_STRAIGHT_LINE_PROOF_NO_CALLS
+		ZEND_MIR_STRAIGHT_LINE_PROOF_NO_CALLS
 		| ZEND_MIR_STRAIGHT_LINE_PROOF_NO_REENTRY;
 	zend_mir_straight_line_hazard_mask observable =
 		ZEND_MIR_STRAIGHT_LINE_HAZARD_OBSERVER
@@ -29,7 +28,9 @@ zend_mir_lowering_status zend_mir_lower_structural(
 				!= ZEND_MIR_STRAIGHT_LINE_OPCODE_NOP) {
 		return ZEND_MIR_LOWERING_REJECTED;
 	}
-	if ((provider_context->proofs & required) != required) {
+	if ((provider_context->proofs & required) != required
+			|| !zend_mir_straight_line_has_cfg_proof(
+				provider_context->proofs)) {
 		if (diagnostic_out != NULL) {
 			*diagnostic_out = ZEND_MIRL_MISSING_PROOF;
 		}

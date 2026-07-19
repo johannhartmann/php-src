@@ -155,8 +155,7 @@ zend_mir_lowering_status zend_mir_lower_copy_move(
 	zend_mir_lowering_diagnostic_code *diagnostic_out)
 {
 	const zend_mir_straight_line_proof_mask required =
-		ZEND_MIR_STRAIGHT_LINE_PROOF_SINGLE_BLOCK
-		| ZEND_MIR_STRAIGHT_LINE_PROOF_NO_CALLS
+		ZEND_MIR_STRAIGHT_LINE_PROOF_NO_CALLS
 		| ZEND_MIR_STRAIGHT_LINE_PROOF_NO_REENTRY
 		| ZEND_MIR_STRAIGHT_LINE_PROOF_EXACT_SCALAR
 		| ZEND_MIR_STRAIGHT_LINE_PROOF_NON_REFCOUNTED;
@@ -196,7 +195,9 @@ zend_mir_lowering_status zend_mir_lower_copy_move(
 			|| mutator->add_value_fact == NULL) {
 		return ZEND_MIR_LOWERING_REJECTED;
 	}
-	if ((provider_context->proofs & required) != required) {
+	if ((provider_context->proofs & required) != required
+			|| !zend_mir_straight_line_has_cfg_proof(
+				provider_context->proofs)) {
 		if (diagnostic_out != NULL) {
 			*diagnostic_out = ZEND_MIRL_MISSING_PROOF;
 		}
@@ -288,8 +289,9 @@ zend_mir_lowering_status zend_mir_lower_copy_move(
 		}
 		return ZEND_MIR_LOWERING_FAILED;
 	}
-	if (!mutator->add_value(mutator->context, result_id,
-			result.representation, result.ownership)) {
+	if (!provider_context->values_predeclared
+			&& !mutator->add_value(mutator->context, result_id,
+				result.representation, result.ownership)) {
 		zend_mir_straight_line_restore_entry_state(
 			provider_context->lifetime, prior_entry_emitted,
 			prior_entry_frame_id);
@@ -332,7 +334,8 @@ zend_mir_lowering_status zend_mir_lower_copy_move(
 	fact.integer_max = result.integer_max;
 	fact.provenance = ZEND_MIR_FACT_PROVENANCE_SSA;
 	fact.provenance_source_position_id = source_position_id;
-	if (!mutator->add_value_fact(mutator->context, &fact, &fact_id)) {
+	if (!provider_context->values_predeclared
+			&& !mutator->add_value_fact(mutator->context, &fact, &fact_id)) {
 		zend_mir_straight_line_restore_entry_state(
 			provider_context->lifetime, prior_entry_emitted,
 			prior_entry_frame_id);

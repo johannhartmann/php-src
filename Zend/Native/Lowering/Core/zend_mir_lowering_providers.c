@@ -23,8 +23,10 @@
 #include "Zend/Native/Lowering/Scalar/Logic/zend_mir_logic.h"
 #include "Zend/Native/Lowering/Scalar/Numeric/zend_mir_lower_numeric.h"
 #include "Zend/Native/Lowering/StraightLine/zend_mir_straight_line.h"
+#include "Zend/Native/Lowering/zend_mir_lowering_zend.h"
 
 #include "zend_mir_lowering_internal.h"
+#include "zend_mir_lowering_w04.h"
 
 #define ZEND_MIR_W03_MODULE_ID UINT32_C(0)
 #define ZEND_MIR_W03_OP_ARRAY_ID UINT32_C(0)
@@ -68,6 +70,7 @@ struct _zend_mir_w03_integration {
 	zend_mir_mutator *target_mutator;
 	zend_mir_mutator mutator;
 	bool module_seeded;
+	bool w04;
 };
 
 static zend_mir_lowering_result zend_mir_w03_result(
@@ -566,6 +569,11 @@ static bool zend_mir_w03_prepare_logic(
 		proof = &integration->logic_proofs[integration->logic_proof_count++];
 		proof->opline_index = opcode.opline_index;
 		proof->proofs = ZEND_MIR_LOGIC_PROOF_ALL;
+		if (integration->w04) {
+			proof->proofs &=
+				~ZEND_MIR_LOGIC_PROOF_SINGLE_REACHABLE_BLOCK;
+			proof->proofs |= ZEND_MIR_LOGIC_PROOF_SOURCE_CFG;
+		}
 		proof->temporary_value_id =
 			zend_mir_value_from_synthetic(temporary_payload);
 		if (!zend_mir_id_is_valid(proof->temporary_value_id)) {
@@ -578,6 +586,7 @@ static bool zend_mir_w03_prepare_logic(
 	integration->logic_context.opcode_proofs = integration->logic_proofs;
 	integration->logic_context.opcode_proof_count =
 		integration->logic_proof_count;
+	integration->logic_context.values_predeclared = integration->w04;
 	zend_mir_logic_provider_init(
 		&integration->logic_provider, &integration->logic_context);
 	return true;
@@ -774,12 +783,19 @@ static bool zend_mir_w03_prepare_providers(
 	integration->numeric_context.resolve_operand = zend_mir_w03_resolve_operand;
 	integration->numeric_context.value_fact = zend_mir_w03_value_fact;
 	integration->numeric_context.source_position = zend_mir_w03_source_position;
+	integration->numeric_context.values_predeclared = integration->w04;
 	integration->numeric_context.proofs =
 		ZEND_MIR_NUMERIC_PROOF_SINGLE_BLOCK
 		| ZEND_MIR_NUMERIC_PROOF_NO_CALLS
 		| ZEND_MIR_NUMERIC_PROOF_NO_REENTRY
 		| ZEND_MIR_NUMERIC_PROOF_NO_DESTRUCTOR
 		| ZEND_MIR_NUMERIC_PROOF_NO_EXCEPTION;
+	if (integration->w04) {
+		integration->numeric_context.proofs &=
+			~ZEND_MIR_NUMERIC_PROOF_SINGLE_BLOCK;
+		integration->numeric_context.proofs |=
+			ZEND_MIR_NUMERIC_PROOF_SOURCE_CFG;
+	}
 	if (!zend_mir_numeric_provider_set_init(
 			&integration->numeric_context,
 			&integration->numeric_providers)) {
@@ -791,6 +807,7 @@ static bool zend_mir_w03_prepare_providers(
 	integration->lifetime_context.source = &integration->source_view;
 	integration->lifetime_context.lifetime = &integration->lifetime;
 	integration->lifetime_context.entry = &integration->entry;
+	integration->lifetime_context.values_predeclared = integration->w04;
 	integration->lifetime_context.proofs =
 		ZEND_MIR_STRAIGHT_LINE_PROOF_SINGLE_BLOCK
 		| ZEND_MIR_STRAIGHT_LINE_PROOF_NO_CALLS
@@ -801,6 +818,12 @@ static bool zend_mir_w03_prepare_providers(
 		| ZEND_MIR_STRAIGHT_LINE_PROOF_NO_OBSERVER
 		| ZEND_MIR_STRAIGHT_LINE_PROOF_NO_DESTRUCTOR
 		| ZEND_MIR_STRAIGHT_LINE_PROOF_NO_EXCEPTION;
+	if (integration->w04) {
+		integration->lifetime_context.proofs &=
+			~ZEND_MIR_STRAIGHT_LINE_PROOF_SINGLE_BLOCK;
+		integration->lifetime_context.proofs |=
+			ZEND_MIR_STRAIGHT_LINE_PROOF_SOURCE_CFG;
+	}
 	if (!zend_mir_lifetime_provider_init(
 			&integration->lifetime_context,
 			&integration->lifetime_provider)
@@ -1119,6 +1142,9 @@ static bool zend_mir_w03_seed_module(zend_mir_w03_integration *integration)
 		const zend_mir_value_fact_ref *fact;
 		zend_mir_value_fact_id fact_id;
 
+		if (integration->w04) {
+			break;
+		}
 		if (!integration->source_view.ssa_at(
 				integration->source_view.context, index, &ssa)) {
 			return false;
@@ -1304,12 +1330,102 @@ zend_mir_lowering_result zend_mir_lower_w03_zend_source(
 	if (!zend_mir_lowering_context_init(
 			&integration.lowering_context, &integration.source_view, &shape,
 			&integration.registry, &integration.module_ops, diagnostics,
-			ZEND_MIR_W03_MODULE_ID, ZEND_MIR_W03_FUNCTION_SYMBOL_ID, NULL)) {
+			ZEND_MIR_W03_MODULE_ID, ZEND_MIR_W03_FUNCTION_SYMBOL_ID, NULL)
+			|| !zend_mir_lowering_context_set_value_fact_resolver(
+				&integration.lowering_context, &integration,
+				zend_mir_w03_value_fact)) {
 		zend_mir_w03_release(&integration);
 		return zend_mir_w03_result(
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_INVALID_SOURCE);
 	}
 	result = zend_mir_lower_source(&integration.lowering_context, NULL);
+	zend_mir_w03_release(&integration);
+	return result;
+}
+
+zend_mir_lowering_result zend_mir_lower_w04_zend_op_array(
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	const zend_mir_lowering_module_ops *module_ops,
+	zend_mir_diagnostic_sink *diagnostics)
+{
+	zend_mir_w03_integration integration;
+	zend_mir_frontend_diagnostic frontend_diagnostic;
+	zend_mir_lowering_source_shape shape;
+	zend_mir_lowering_status status;
+	zend_mir_lowering_result result;
+	zend_mir_control_flow_map map;
+	const zend_op_array *source_op_array;
+	const zend_ssa *source_ssa;
+	uint32_t index;
+
+	memset(&integration, 0, sizeof(integration));
+	memset(&frontend_diagnostic, 0, sizeof(frontend_diagnostic));
+	memset(&map, 0, sizeof(map));
+	if (module_ops == NULL) {
+		return zend_mir_w03_result(
+			ZEND_MIR_LOWERING_REJECTED, ZEND_MIRL_INVALID_SOURCE);
+	}
+	integration.w04 = true;
+	if (!zend_mir_w03_prepare_source(
+			&integration, op_array, ssa, &source_op_array, &source_ssa)) {
+		zend_mir_w03_release(&integration);
+		return zend_mir_w03_result(
+			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
+	}
+	status = zend_mir_zend_source_init_w04(
+		&integration.source, source_op_array, source_ssa,
+		ZEND_MIR_W03_OP_ARRAY_ID, ZEND_MIR_W03_FILE_SYMBOL_ID,
+		&frontend_diagnostic);
+	if (status != ZEND_MIR_LOWERING_SUCCESS) {
+		zend_mir_w03_release(&integration);
+		return zend_mir_w03_result(status, frontend_diagnostic.code);
+	}
+	if (!zend_mir_zend_source_view(
+			&integration.source, &integration.source_view)
+			|| !zend_mir_w03_prepare_facts(&integration)
+			|| !zend_mir_w03_track_lifetime_values(&integration)
+			|| !zend_mir_w03_prepare_slots(&integration, source_op_array)
+			|| !zend_mir_w03_prepare_logic(&integration)
+			|| !zend_mir_w03_prepare_providers(&integration)) {
+		zend_mir_w03_release(&integration);
+		return zend_mir_w03_result(
+			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
+	}
+	zend_mir_w03_prepare_module_ops(&integration, module_ops);
+	memset(&shape, 0, sizeof(shape));
+	for (index = 0;
+			index < integration.source_view.block_count(
+				integration.source_view.context);
+			index++) {
+		zend_mir_source_block_ref block;
+		if (!integration.source_view.block_at(
+				integration.source_view.context, index, &block)) {
+			zend_mir_w03_release(&integration);
+			return zend_mir_w03_result(
+				ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_W04_MALFORMED_CFG);
+		}
+		if ((block.flags & ZEND_MIR_SOURCE_BLOCK_REACHABLE) != 0) {
+			shape.reachable_block_count++;
+		}
+	}
+	shape.has_control_flow = true;
+	shape.ssa_complete = true;
+	if (!zend_mir_lowering_context_init(
+			&integration.lowering_context, &integration.source_view, &shape,
+			&integration.registry, &integration.module_ops, diagnostics,
+			ZEND_MIR_W03_MODULE_ID, ZEND_MIR_W03_FUNCTION_SYMBOL_ID, NULL)
+			|| !zend_mir_lowering_context_set_value_fact_resolver(
+				&integration.lowering_context, &integration,
+				zend_mir_w03_value_fact)
+			|| !zend_mir_lowering_context_set_zend_source(
+				&integration.lowering_context, &integration.source)) {
+		zend_mir_w03_release(&integration);
+		return zend_mir_w03_result(
+			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_INVALID_SOURCE);
+	}
+	result = zend_mir_lower_w04_zend_source(
+		&integration.lowering_context, NULL, &map);
 	zend_mir_w03_release(&integration);
 	return result;
 }

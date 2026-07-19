@@ -84,14 +84,30 @@ zend_mir_lowering_status zend_mir_frontend_validate_operands(
 	zend_mir_frontend_diagnostic *diagnostic,
 	uint32_t *use_count,
 	uint32_t *def_count);
+zend_mir_lowering_status zend_mir_frontend_validate_operands_w04(
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	zend_mir_op_array_id op_array_id,
+	zend_mir_frontend_diagnostic *diagnostic,
+	uint32_t *use_count,
+	uint32_t *def_count);
 
 zend_mir_lowering_status zend_mir_frontend_validate_eligibility(
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,
 	zend_mir_op_array_id op_array_id,
 	zend_mir_frontend_diagnostic *diagnostic);
+zend_mir_lowering_status zend_mir_frontend_validate_eligibility_w04(
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	zend_mir_op_array_id op_array_id,
+	zend_mir_frontend_diagnostic *diagnostic);
 
 zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope(
+	const zend_op_array *op_array,
+	zend_mir_op_array_id op_array_id,
+	zend_mir_frontend_diagnostic *diagnostic);
+zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w04(
 	const zend_op_array *op_array,
 	zend_mir_op_array_id op_array_id,
 	zend_mir_frontend_diagnostic *diagnostic);

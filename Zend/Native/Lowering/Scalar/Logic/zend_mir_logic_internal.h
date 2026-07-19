@@ -61,7 +61,6 @@ bool zend_mir_lowering_context_set_provider_failure(
 	zend_mir_lowering_context *context,
 	zend_mir_lowering_status status,
 	zend_mir_lowering_diagnostic_code diagnostic);
-
 zend_mir_lowering_status zend_mir_logic_fail(
 	zend_mir_lowering_context *context,
 	zend_mir_lowering_status status,
