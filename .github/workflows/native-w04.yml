@@ -1,0 +1,236 @@
+name: Native W04 control flow
+
+on:
+  push:
+    paths:
+      - "Zend/Native/Lowering/**"
+      - "Zend/Native/MIR/**"
+      - "docs/native-engine/control-flow/**"
+      - "docs/native-engine/waves/**"
+      - "ext/native_mir_test/**"
+      - "scripts/native/control-flow/**"
+      - "scripts/native/profiles/w04-*.env"
+      - "tests/native/control-flow/**"
+      - ".github/workflows/native-w04.yml"
+  pull_request:
+    paths:
+      - "Zend/Native/Lowering/**"
+      - "Zend/Native/MIR/**"
+      - "docs/native-engine/control-flow/**"
+      - "docs/native-engine/waves/**"
+      - "ext/native_mir_test/**"
+      - "scripts/native/control-flow/**"
+      - "scripts/native/profiles/w04-*.env"
+      - "tests/native/control-flow/**"
+      - ".github/workflows/native-w04.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  hard-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      LANG: C
+      LC_ALL: C
+      TZ: UTC
+      PYTHONDONTWRITEBYTECODE: "1"
+      NATIVE_JOBS: "2"
+      W04_A_HEAD: "3a3c3218f8fa52ffc1d477f56f6faff132b0e1ab"
+      W04_B_HEAD: "acd393a6eb8f1bb05f797368e34fc97cf9e884a7"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch audited specialist heads
+        run: |
+          git fetch origin \
+            codex/w04-production-control-flow \
+            codex/w04-control-flow-evidence
+
+      - name: Install php-src build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bison re2c
+
+      - name: Prepare evidence directory
+        run: mkdir -p "$RUNNER_TEMP/w04-artifacts"
+
+      - name: Validate contracts, ownership, and frozen evidence
+        run: |
+          {
+            python3 scripts/native/semantics/validate-w01.py --check
+            python3 scripts/native/mir/validate-w02.py --check
+            python3 scripts/native/lowering/validate-w03.py --check
+            python3 scripts/native/control-flow/generate-w04-profile.py --check
+            python3 scripts/native/control-flow/check-contract.py --check
+            python3 scripts/native/control-flow/check-ownership.py \
+              --task W04-A-production-control-flow \
+              --base 01e51448e2bc9423d7dc1254ae5e4d34fc236eb4 \
+              --head "$W04_A_HEAD"
+            python3 scripts/native/control-flow/check-ownership.py \
+              --task W04-B-control-flow-evidence \
+              --base 01e51448e2bc9423d7dc1254ae5e4d34fc236eb4 \
+              --head "$W04_B_HEAD"
+            python3 scripts/native/control-flow/validate-w04.py --check
+            python3 scripts/native/control-flow/test-w04.py --self-test
+          } 2>&1 | tee -a "$RUNNER_TEMP/w04-artifacts/hard-gate.log"
+
+      - name: Build explicit reference PHP
+        run: |
+          reference_root="$RUNNER_TEMP/php-w04-reference"
+          git worktree add --detach "$reference_root" 47355da494ba696b1bdb6d10448a225e742bd316
+          (
+            cd "$reference_root"
+            ./buildconf --force
+            ./configure \
+              --disable-all \
+              --enable-cli \
+              --disable-cgi \
+              --disable-phpdbg \
+              --without-pear
+            make -j"$NATIVE_JOBS" sapi/cli/php
+          ) 2>&1 | tee -a "$RUNNER_TEMP/w04-artifacts/hard-gate.log"
+          echo "REFERENCE_PHP=$reference_root/sapi/cli/php" >> "$GITHUB_ENV"
+
+      - name: Build and test debug NTS W04 candidate
+        run: |
+          build_log="$RUNNER_TEMP/w04-debug-nts-build.log"
+          scripts/native/build.sh \
+            --profile w04-debug-nts \
+            --print-binary 2>&1 | tee "$build_log"
+          cat "$build_log" >> "$RUNNER_TEMP/w04-artifacts/hard-gate.log"
+          candidate_php=$(tail -n 1 "$build_log")
+          echo "CANDIDATE_PHP=$candidate_php" >> "$GITHUB_ENV"
+          python3 scripts/native/control-flow/test-w04.py \
+            --reference-php "$REFERENCE_PHP" \
+            --candidate-php "$candidate_php" \
+            --json-out "$RUNNER_TEMP/w04-artifacts/normal.json" \
+            2>&1 | tee -a "$RUNNER_TEMP/w04-artifacts/hard-gate.log"
+          python3 scripts/native/lowering/test-w03.py \
+            --reference-php "$REFERENCE_PHP" \
+            --candidate-php "$candidate_php" \
+            --json-out "$RUNNER_TEMP/w04-artifacts/w03-regression.json" \
+            2>&1 | tee -a "$RUNNER_TEMP/w04-artifacts/hard-gate.log"
+
+      - name: Build and test ASan W04 candidate
+        run: |
+          build_log="$RUNNER_TEMP/w04-asan-build.log"
+          scripts/native/build.sh \
+            --profile w04-asan-nts \
+            --print-binary 2>&1 | tee "$build_log"
+          cat "$build_log" >> "$RUNNER_TEMP/w04-artifacts/hard-gate.log"
+          candidate_php=$(tail -n 1 "$build_log")
+          python3 scripts/native/control-flow/test-w04.py \
+            --reference-php "$REFERENCE_PHP" \
+            --candidate-php "$candidate_php" \
+            --sanitizer address \
+            --json-out "$RUNNER_TEMP/w04-artifacts/address.json" \
+            2>&1 | tee -a "$RUNNER_TEMP/w04-artifacts/hard-gate.log"
+
+      - name: Build and test UBSan W04 candidate
+        run: |
+          build_log="$RUNNER_TEMP/w04-ubsan-build.log"
+          scripts/native/build.sh \
+            --profile w04-ubsan-nts \
+            --print-binary 2>&1 | tee "$build_log"
+          cat "$build_log" >> "$RUNNER_TEMP/w04-artifacts/hard-gate.log"
+          candidate_php=$(tail -n 1 "$build_log")
+          python3 scripts/native/control-flow/test-w04.py \
+            --reference-php "$REFERENCE_PHP" \
+            --candidate-php "$candidate_php" \
+            --sanitizer undefined \
+            --json-out "$RUNNER_TEMP/w04-artifacts/undefined.json" \
+            2>&1 | tee -a "$RUNNER_TEMP/w04-artifacts/hard-gate.log"
+
+      - name: Build and test debug ZTS W04 candidate
+        run: |
+          build_log="$RUNNER_TEMP/w04-debug-zts-build.log"
+          scripts/native/build.sh \
+            --profile w04-debug-zts \
+            --print-binary 2>&1 | tee "$build_log"
+          cat "$build_log" >> "$RUNNER_TEMP/w04-artifacts/hard-gate.log"
+          candidate_php=$(tail -n 1 "$build_log")
+          python3 scripts/native/control-flow/test-w04.py \
+            --reference-php "$REFERENCE_PHP" \
+            --candidate-php "$candidate_php" \
+            --json-out "$RUNNER_TEMP/w04-artifacts/zts.json" \
+            2>&1 | tee -a "$RUNNER_TEMP/w04-artifacts/hard-gate.log"
+
+      - name: Run fixed-seed fuzz gate
+        run: |
+          python3 tests/native/control-flow/fuzz/run_fuzz.py \
+            --seed 20260719 \
+            --cases 20000 \
+            2>&1 | tee -a "$RUNNER_TEMP/w04-artifacts/hard-gate.log"
+
+      - name: Prove standard NTS and ZTS builds remain default-off
+        run: |
+          {
+            scripts/native/build.sh --profile debug-nts
+            scripts/native/test-smoke.sh --profile debug-nts
+            scripts/native/build.sh --profile debug-zts
+            scripts/native/test-smoke.sh --profile debug-zts
+            nts_build=$(scripts/native/configure-dev.sh \
+              --profile debug-nts --print-build-dir | tail -n 1)
+            zts_build=$(scripts/native/configure-dev.sh \
+              --profile debug-zts --print-build-dir | tail -n 1)
+            test "$("$nts_build/sapi/cli/php" -n -r \
+              'echo extension_loaded("native_mir_test") ? "yes" : "no";')" = no
+            test "$("$zts_build/sapi/cli/php" -n -r \
+              'echo extension_loaded("native_mir_test") ? "yes" : "no";')" = no
+          } 2>&1 | tee -a "$RUNNER_TEMP/w04-artifacts/hard-gate.log"
+
+      - name: Run exact discovery and prior-wave regressions
+        run: |
+          {
+            python3 -m unittest discover \
+              -s tests/native/control-flow -p 'test_*.py' -v
+            python3 -m unittest discover \
+              -s tests/native/lowering -p 'test_*.py' -v
+            python3 scripts/native/wave-gate.py validate-definition
+          } 2>&1 | tee -a "$RUNNER_TEMP/w04-artifacts/hard-gate.log"
+
+      - name: Record and close the W04 wave gate
+        run: |
+          git restore --worktree ext/native_mir_test/native_mir_test_arginfo.h
+          git diff --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          for task_id in \
+            W04-A-production-control-flow \
+            W04-B-control-flow-evidence \
+            W04-integration-gate
+          do
+            cp "$RUNNER_TEMP/w04-artifacts/hard-gate.log" \
+              "$RUNNER_TEMP/w04-artifacts/$task_id.log"
+          done
+          python3 scripts/native/control-flow/record-w04-results.py \
+            --artifact-dir "$RUNNER_TEMP/w04-artifacts" \
+            --results-dir "$RUNNER_TEMP/wave-results"
+          python3 scripts/native/wave-gate.py check \
+            --wave W04 \
+            --results-dir "$RUNNER_TEMP/wave-results"
+          python3 scripts/native/wave-gate.py render \
+            --results-dir "$RUNNER_TEMP/wave-results" \
+            --output "$RUNNER_TEMP/w04-artifacts/status.md"
+          for task_id in \
+            W04-A-production-control-flow \
+            W04-B-control-flow-evidence \
+            W04-integration-gate
+          do
+            cp "$RUNNER_TEMP/w04-artifacts/hard-gate.log" \
+              "$RUNNER_TEMP/w04-artifacts/$task_id.log"
+          done
+
+      - name: Upload W04 hard-gate evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: native-w04-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/w04-artifacts
+            ${{ runner.temp }}/wave-results
+          if-no-files-found: error
+          retention-days: 14

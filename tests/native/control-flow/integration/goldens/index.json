@@ -1,0 +1,138 @@
+{
+  "cases": {
+    "do_while_counter": {
+      "cfg": {
+        "backedges": 1,
+        "blocks": 4,
+        "edges": 4,
+        "phis": 0,
+        "statepoints": 2
+      },
+      "path": "tests/native/control-flow/integration/goldens/do_while_counter.znmir",
+      "sha256": "2730c18f125c0f5844cfdf432ce4cd912da3279088e637127342388c398f75ea"
+    },
+    "early_return": {
+      "cfg": {
+        "backedges": 0,
+        "blocks": 3,
+        "edges": 2,
+        "phis": 0,
+        "statepoints": 1
+      },
+      "path": "tests/native/control-flow/integration/goldens/early_return.znmir",
+      "sha256": "314bdf7ecb4e61148208a5d9584602421ef6681ca1d4381e9f606a1f9459c787"
+    },
+    "empty_fallthrough": {
+      "cfg": {
+        "backedges": 0,
+        "blocks": 1,
+        "edges": 0,
+        "phis": 0,
+        "statepoints": 1
+      },
+      "path": "tests/native/control-flow/integration/goldens/empty_fallthrough.znmir",
+      "sha256": "6387d514b19704cbdd7ddd534911d48a65a7d9f54dfbde96ccb2203ba3df54a0"
+    },
+    "for_loop_counter": {
+      "cfg": {
+        "backedges": 1,
+        "blocks": 4,
+        "edges": 4,
+        "phis": 0,
+        "statepoints": 2
+      },
+      "path": "tests/native/control-flow/integration/goldens/for_loop_counter.znmir",
+      "sha256": "6a5736c2ec1cf4f96da84ea37dcf814b7641ad70716adc01b1e02724c755d91b"
+    },
+    "if_else_int": {
+      "cfg": {
+        "backedges": 0,
+        "blocks": 3,
+        "edges": 2,
+        "phis": 0,
+        "statepoints": 1
+      },
+      "path": "tests/native/control-flow/integration/goldens/if_else_int.znmir",
+      "sha256": "137d6a9ff2b86c7b64e1d1451cd96674f128ff88df1be50d8a43b9f487e2675e"
+    },
+    "loop_carried_phi": {
+      "cfg": {
+        "backedges": 1,
+        "blocks": 6,
+        "edges": 7,
+        "phis": 1,
+        "statepoints": 2
+      },
+      "path": "tests/native/control-flow/integration/goldens/loop_carried_phi.znmir",
+      "sha256": "3e40822d669f03b1da9242cf6d94dbb169f2fa97663ef622e21120db4b39700a"
+    },
+    "multiple_backedges_reducible": {
+      "cfg": {
+        "backedges": 2,
+        "blocks": 6,
+        "edges": 7,
+        "phis": 0,
+        "statepoints": 3
+      },
+      "path": "tests/native/control-flow/integration/goldens/multiple_backedges_reducible.znmir",
+      "sha256": "7bc942acc40be63fd23136e64260dd19c1b8c430b24125983931bf62a4b6679e"
+    },
+    "nested_if_bool": {
+      "cfg": {
+        "backedges": 0,
+        "blocks": 5,
+        "edges": 4,
+        "phis": 0,
+        "statepoints": 1
+      },
+      "path": "tests/native/control-flow/integration/goldens/nested_if_bool.znmir",
+      "sha256": "eee20d1b854ec13c16d99d97e3de2aaf35f07ba7430921c6dd0adecc7e3d91ab"
+    },
+    "short_circuit_and": {
+      "cfg": {
+        "backedges": 0,
+        "blocks": 3,
+        "edges": 3,
+        "phis": 1,
+        "statepoints": 1
+      },
+      "path": "tests/native/control-flow/integration/goldens/short_circuit_and.znmir",
+      "sha256": "48f2645526dd522bcf3860017bd1c2c7d0b41d38301d355a9ed1922af2b953ee"
+    },
+    "short_circuit_or": {
+      "cfg": {
+        "backedges": 0,
+        "blocks": 3,
+        "edges": 3,
+        "phis": 1,
+        "statepoints": 1
+      },
+      "path": "tests/native/control-flow/integration/goldens/short_circuit_or.znmir",
+      "sha256": "bb9871934166746c87b081949799fa47fae6e3f0d1e847b4f2af0c3751710810"
+    },
+    "ternary_scalar": {
+      "cfg": {
+        "backedges": 0,
+        "blocks": 3,
+        "edges": 2,
+        "phis": 0,
+        "statepoints": 1
+      },
+      "path": "tests/native/control-flow/integration/goldens/ternary_scalar.znmir",
+      "sha256": "055dfeb9bb303acf68ae9aa0051d26a479a7dd7575e69b02cee8a2f1761fd423"
+    },
+    "while_loop_counter": {
+      "cfg": {
+        "backedges": 1,
+        "blocks": 4,
+        "edges": 4,
+        "phis": 0,
+        "statepoints": 2
+      },
+      "path": "tests/native/control-flow/integration/goldens/while_loop_counter.znmir",
+      "sha256": "8ec28afc065fe2f796311ba335f3d5330e6ea9a8ce6369c7561886476aaabea2"
+    }
+  },
+  "format_version": 1,
+  "normalization": false
+}
