@@ -522,16 +522,25 @@ static bool zend_mir_w04_verify_edges(
 						view, statepoint.frame_state_id, &frame)
 					|| !frame.canonical
 					|| frame.safepoint_class
-						!= ZEND_MIR_SAFEPOINT_CLASS_INTERRUPT
+						!= ZEND_MIR_SAFEPOINT_CLASS_OBSERVER
 					|| (statepoint.effects
 						& ZEND_MIR_EFFECT_MASK(
 							ZEND_MIR_EFFECT_INTERRUPT_BOUNDARY)) == 0
 					|| (statepoint.reads
 						& ZEND_MIR_MEMORY_DOMAIN_MASK(
+							ZEND_MIR_MEMORY_DOMAIN_FRAME_CALL_CHAIN)) == 0
+					|| (statepoint.reads
+						& ZEND_MIR_MEMORY_DOMAIN_MASK(
+							ZEND_MIR_MEMORY_DOMAIN_ENGINE_INTERRUPT)) == 0
+					|| (statepoint.writes
+						& ZEND_MIR_MEMORY_DOMAIN_MASK(
 							ZEND_MIR_MEMORY_DOMAIN_ENGINE_INTERRUPT)) == 0
 					|| (statepoint.barriers
 						& ZEND_MIR_BARRIER_MASK(
 							ZEND_MIR_BARRIER_SAFEPOINT)) == 0
+					|| (statepoint.barriers
+						& ZEND_MIR_BARRIER_MASK(
+							ZEND_MIR_BARRIER_OBSERVER)) == 0
 					|| (statepoint.barriers
 						& ZEND_MIR_BARRIER_MASK(
 							ZEND_MIR_BARRIER_INTERRUPT)) == 0
