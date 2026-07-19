@@ -1,0 +1,230 @@
+{
+  "format_version": 1,
+  "phases": [
+    {
+      "commands_provided": [
+        "scripts/native/verify-wave-receipt.py",
+        "scripts/native/wave-gate.py"
+      ],
+      "commands_used": [],
+      "order": 0,
+      "paths": [
+        "docs/native-engine/adr/0017-durable-wave-receipts.md",
+        "docs/native-engine/adr/0018-capability-roadmap.md",
+        "docs/native-engine/roadmap/**",
+        "docs/native-engine/waves/ledger.json",
+        "docs/native-engine/waves/ledger.schema.json",
+        "docs/native-engine/waves/receipts/W04.json",
+        "docs/native-engine/waves/schemas/codex-task-result.schema.json",
+        "docs/native-engine/waves/schemas/wave-receipt.schema.json",
+        "docs/native-engine/waves/status.md",
+        "docs/native-engine/mir/w02-coverage-report.json",
+        "scripts/native/mir/validate-w02.py",
+        "scripts/native/wave-gate.py",
+        "scripts/native/verify-wave-receipt.py",
+        "scripts/native/revalidate-wave.py",
+        "tests/native/mir/test_validate_w02_evidence.py",
+        "tests/native/waves/**"
+      ],
+      "phase_id": "program",
+      "root_contracts_mutable": false,
+      "task_ids": [
+        "W05-00"
+      ],
+      "write_mode": "single_writer"
+    },
+    {
+      "commands_provided": [
+        "scripts/native/calls/generate-w05-profile.py",
+        "scripts/native/calls/check-contract.py",
+        "scripts/native/calls/check-phases.py"
+      ],
+      "commands_used": [
+        "scripts/native/verify-wave-receipt.py"
+      ],
+      "order": 1,
+      "paths": [
+        "Zend/Native/Calls/AGENTS.md",
+        "Zend/Native/Calls/Contracts/**",
+        "Zend/Native/MIR/zend_mir_ids.h",
+        "Zend/Native/MIR/zend_mir_opcodes.h",
+        "Zend/Native/MIR/zend_mir_call.h",
+        "Zend/Native/Lowering/zend_mir_lowering.h",
+        "Zend/Native/Lowering/zend_mir_lowering_diagnostic.h",
+        "Zend/Native/Lowering/zend_mir_lowering_zend.h",
+        "docs/native-engine/README.md",
+        "docs/native-engine/adr/0019-w05-call-sequence-model.md",
+        "docs/native-engine/adr/0020-capability-receipts-not-stage-numbers.md",
+        "docs/native-engine/calls/contracts/**",
+        "docs/native-engine/calls/w05-opcode-profile.json",
+        "docs/native-engine/calls/w05-opcode-profile.schema.json",
+        "docs/native-engine/calls/w05-sequence-profile.json",
+        "docs/native-engine/calls/w05-sequence-profile.schema.json",
+        "docs/native-engine/calls/w05-reclassification.json",
+        "docs/native-engine/calls/w05-phase-manifest.json",
+        "docs/native-engine/calls/w05-phase-manifest.schema.json",
+        "scripts/native/calls/generate-w05-profile.py",
+        "scripts/native/calls/check-contract.py",
+        "scripts/native/calls/check-phases.py",
+        "tests/native/calls/contracts/**"
+      ],
+      "phase_id": "contract-H",
+      "root_contracts_mutable": true,
+      "task_ids": [
+        "W05-0"
+      ],
+      "write_mode": "single_writer"
+    },
+    {
+      "commands_provided": [],
+      "commands_used": [
+        "scripts/native/calls/check-phases.py"
+      ],
+      "order": 2,
+      "paths": [
+        "docs/native-engine/waves/waves.json",
+        "docs/native-engine/waves/w05-cross-track-contract.md",
+        "docs/native-engine/waves/tests/test_w05_definition.py"
+      ],
+      "phase_id": "wave-P",
+      "root_contracts_mutable": false,
+      "task_ids": [
+        "W05-0"
+      ],
+      "write_mode": "single_writer"
+    },
+    {
+      "commands_provided": [
+        "scripts/native/build/update-native-test-sources.py",
+        "scripts/native/calls/dump-w05.py",
+        "scripts/native/calls/run-w05-differential.py"
+      ],
+      "commands_used": [
+        "scripts/native/calls/check-contract.py",
+        "scripts/native/calls/check-phases.py"
+      ],
+      "order": 3,
+      "paths": [
+        "Zend/zend_compile.c",
+        "Zend/Native/Calls/Model/**",
+        "Zend/Native/Lowering/Core/zend_mir_lowering_context.c",
+        "Zend/Native/Lowering/Core/zend_mir_lowering_internal.h",
+        "Zend/Native/Lowering/Core/zend_mir_lowering_providers.c",
+        "Zend/Native/Lowering/Frontend/zend_mir_zend_source.c",
+        "Zend/Native/Lowering/Frontend/zend_mir_zend_source.h",
+        "Zend/Native/Lowering/Frontend/zend_mir_zend_source_internal.h",
+        "Zend/Native/MIR/Core/zend_mir_module.c",
+        "Zend/Native/MIR/Core/zend_mir_module_internal.h",
+        "Zend/Native/MIR/Core/zend_mir_view.c",
+        "Zend/Native/MIR/Text/zend_mir_dump.c",
+        "ext/native_mir_test/config.m4",
+        "ext/native_mir_test/native_mir_test.c",
+        "ext/native_mir_test/native_mir_test.stub.php",
+        "ext/native_mir_test/native_mir_test_arginfo.h",
+        "docs/native-engine/build/native-source-manifest.json",
+        "docs/native-engine/build/native-source-manifest.schema.json",
+        "scripts/native/build/update-native-test-sources.py",
+        "scripts/native/calls/dump-w05.py",
+        "scripts/native/calls/run-w05-differential.py",
+        "scripts/native/profiles/w05-*.env",
+        "tests/native/calls/unit/**",
+        "tests/native/calls/bridge/**",
+        "tests/native/calls/corpus/**",
+        "tests/native/calls/fuzz/**"
+      ],
+      "phase_id": "implementation",
+      "root_contracts_mutable": false,
+      "task_ids": [
+        "W05-A",
+        "W05-AR"
+      ],
+      "write_mode": "single_writer"
+    },
+    {
+      "commands_provided": [],
+      "commands_used": [
+        "scripts/native/calls/check-contract.py",
+        "scripts/native/calls/check-phases.py"
+      ],
+      "order": 4,
+      "paths": [],
+      "phase_id": "review-R1",
+      "root_contracts_mutable": false,
+      "task_ids": [
+        "W05-R1"
+      ],
+      "write_mode": "read_only"
+    },
+    {
+      "commands_provided": [],
+      "commands_used": [
+        "scripts/native/calls/check-contract.py",
+        "scripts/native/calls/check-phases.py"
+      ],
+      "order": 4,
+      "paths": [],
+      "phase_id": "review-R2",
+      "root_contracts_mutable": false,
+      "task_ids": [
+        "W05-R2"
+      ],
+      "write_mode": "read_only"
+    },
+    {
+      "commands_provided": [
+        "scripts/native/calls/validate-w05.py",
+        "scripts/native/calls/test-w05.py",
+        "scripts/native/calls/build-review-manifest.py",
+        "scripts/native/calls/seal-w05.py"
+      ],
+      "commands_used": [
+        "scripts/native/calls/dump-w05.py",
+        "scripts/native/calls/run-w05-differential.py"
+      ],
+      "order": 5,
+      "paths": [
+        ".github/workflows/native-w05.yml",
+        "scripts/native/calls/validate-w05.py",
+        "scripts/native/calls/test-w05.py",
+        "scripts/native/calls/build-review-manifest.py",
+        "scripts/native/calls/seal-w05.py",
+        "docs/native-engine/calls/README.md",
+        "docs/native-engine/calls/w05-review-manifest.json",
+        "docs/native-engine/calls/w05-coverage-report.json",
+        "tests/native/calls/integration/**"
+      ],
+      "phase_id": "gate",
+      "root_contracts_mutable": false,
+      "task_ids": [
+        "W05-I"
+      ],
+      "write_mode": "single_writer"
+    },
+    {
+      "commands_provided": [],
+      "commands_used": [
+        "scripts/native/calls/seal-w05.py",
+        "scripts/native/verify-wave-receipt.py",
+        "scripts/native/wave-gate.py"
+      ],
+      "order": 6,
+      "paths": [
+        "docs/native-engine/waves/receipts/W05.json",
+        "docs/native-engine/waves/results/W05-integration-gate.json",
+        "docs/native-engine/waves/ledger.json",
+        "docs/native-engine/waves/status.md"
+      ],
+      "phase_id": "seal",
+      "root_contracts_mutable": false,
+      "task_ids": [
+        "W05-S"
+      ],
+      "write_mode": "single_writer"
+    }
+  ],
+  "shared_serial_paths": [
+    "docs/native-engine/waves/ledger.json",
+    "docs/native-engine/waves/status.md"
+  ],
+  "writer_branch": "integration/wave-05"
+}

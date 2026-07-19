@@ -33,6 +33,8 @@ Repository-wide and path-specific agent rules live in:
 14. [Deterministic lowering boundary](adr/0014-lowering-source-view-and-registry.md)
 15. [W04 control-flow source contract](adr/0015-w04-control-flow-source-contract.md)
 16. [Reducible CFGs and edge statepoints](adr/0016-w04-reducible-cfg-and-edge-statepoints.md)
+17. [W05 atomic call-sequence model](adr/0019-w05-call-sequence-model.md)
+18. [Capability receipts instead of stage numbers](adr/0020-capability-receipts-not-stage-numbers.md)
 
 ## Delivery contracts
 
@@ -43,6 +45,7 @@ Repository-wide and path-specific agent rules live in:
 - [Native frame semantics](semantics/frames/README.md)
 - [W03 lowering profile](lowering/README.md)
 - [W04 control-flow contracts](control-flow/contracts/source-cfg.md)
+- [W05 direct-user-call contracts](calls/contracts/call-sequence.md)
 
 The generated wave status subtree, `docs/native-engine/waves/`, is owned by the
 wave-gate work and is intentionally outside W00-A.

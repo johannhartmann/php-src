@@ -1,0 +1,81 @@
+{
+  "accepted_grammar": {
+    "argument": {
+      "mode": "by_value",
+      "opcodes": [
+        "ZEND_SEND_VAL",
+        "ZEND_SEND_VAL_EX",
+        "ZEND_SEND_VAR",
+        "ZEND_SEND_VAR_EX"
+      ],
+      "ordinal": "strictly_increasing_zero_based",
+      "types": [
+        "null",
+        "bool",
+        "long",
+        "double"
+      ]
+    },
+    "callee_entry": {
+      "opcode": "ZEND_RECV",
+      "required_equals_declared": true
+    },
+    "finish": {
+      "opcodes": [
+        "ZEND_DO_UCALL",
+        "ZEND_DO_FCALL"
+      ],
+      "proof": "exact_user_target"
+    },
+    "init": {
+      "opcode": "ZEND_INIT_FCALL",
+      "target": "exact_direct_same_script_user_function"
+    },
+    "nesting": "balanced_lifo_init_send_do",
+    "result": "unused_or_exact_non_refcounted_scalar_summary"
+  },
+  "atomicity": "plan_complete_sequence_before_mir_mutation",
+  "capabilities": [
+    "scalar_semantics",
+    "reducible_control_flow",
+    "direct_user_call_model",
+    "caller_frame_model",
+    "callee_entry_model"
+  ],
+  "codegen_eligible": false,
+  "debts": [
+    "call_runtime_binding",
+    "call_exception_propagation",
+    "call_bailout_reentry",
+    "call_observer_integration",
+    "call_result_ownership",
+    "internal_c_abi"
+  ],
+  "format_version": 1,
+  "modeled": true,
+  "proofs": [
+    "complete_reachable_call_scan",
+    "atomic_init_send_do_plan",
+    "exact_direct_same_script_user_target",
+    "balanced_nested_call_stack",
+    "positional_by_value_arguments",
+    "exact_non_refcounted_scalar_arguments",
+    "exact_argument_count",
+    "no_defaults_named_unpack_variadic_placeholder",
+    "compiler_preserved_named_syntax",
+    "no_by_reference",
+    "result_unused_or_exact_scalar",
+    "complete_caller_callee_frames",
+    "no_protected_region"
+  ],
+  "rejections": [
+    {"case": "orphan_send_or_do", "diagnostic": "MIRL0022"},
+    {"case": "malformed_or_unbalanced_nesting", "diagnostic": "MIRL0021"},
+    {"case": "dynamic_method_or_internal_target", "diagnostic": "MIRL0023"},
+    {"case": "by_ref_named_unpack_variadic_placeholder_or_refcounted_argument", "diagnostic": "MIRL0024"},
+    {"case": "argument_count_mismatch_or_default", "diagnostic": "MIRL0025"},
+    {"case": "unproved_or_refcounted_result", "diagnostic": "MIRL0026"},
+    {"case": "protected_region", "diagnostic": "MIRL0027"},
+    {"case": "allocation_or_plan_publication_failure", "diagnostic": "MIRL0028"}
+  ]
+}

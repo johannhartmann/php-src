@@ -1,0 +1,123 @@
+{
+  "format_version": 1,
+  "cases": [
+    {
+      "name": "simple-direct-user",
+      "decision": "accepted",
+      "atomic": true,
+      "events": [
+        {"kind": "INIT", "site": 0},
+        {"kind": "SEND", "site": 0, "ordinal": 0, "type": "long"},
+        {"kind": "DO", "site": 0}
+      ]
+    },
+    {
+      "name": "nested-direct-user",
+      "decision": "accepted",
+      "atomic": true,
+      "events": [
+        {"kind": "INIT", "site": 0},
+        {"kind": "INIT", "site": 1},
+        {"kind": "SEND", "site": 1, "ordinal": 0, "type": "bool"},
+        {"kind": "DO", "site": 1},
+        {"kind": "SEND", "site": 0, "ordinal": 0, "type": "long"},
+        {"kind": "DO", "site": 0}
+      ]
+    },
+    {
+      "name": "orphan-send",
+      "decision": "rejected",
+      "atomic": false,
+      "diagnostic": "MIRL0022",
+      "events": [{"kind": "SEND", "site": 0, "ordinal": 0, "type": "long"}]
+    },
+    {
+      "name": "orphan-do",
+      "decision": "rejected",
+      "atomic": false,
+      "diagnostic": "MIRL0022",
+      "events": [{"kind": "DO", "site": 0}]
+    },
+    {
+      "name": "dynamic-target",
+      "decision": "deferred",
+      "atomic": false,
+      "diagnostic": "MIRL0023",
+      "deferred_wave": "W10",
+      "target_kind": "dynamic_user"
+    },
+    {
+      "name": "internal-target",
+      "decision": "deferred",
+      "atomic": false,
+      "diagnostic": "MIRL0023",
+      "deferred_wave": "W15",
+      "target_kind": "internal"
+    },
+    {
+      "name": "by-reference",
+      "decision": "deferred",
+      "atomic": false,
+      "diagnostic": "MIRL0024",
+      "deferred_wave": "W06",
+      "argument_mode": "by_reference"
+    },
+    {
+      "name": "named-argument",
+      "decision": "deferred",
+      "atomic": false,
+      "diagnostic": "MIRL0024",
+      "deferred_wave": "W07",
+      "argument_mode": "named"
+    },
+    {
+      "name": "named-argument-normalized-position",
+      "decision": "deferred",
+      "atomic": false,
+      "diagnostic": "MIRL0024",
+      "deferred_wave": "W07",
+      "argument_mode": "by_value",
+      "normalized_to_position": true,
+      "source_flags": ["syntactic_named"]
+    },
+    {
+      "name": "unpack",
+      "decision": "deferred",
+      "atomic": false,
+      "diagnostic": "MIRL0024",
+      "deferred_wave": "W07",
+      "argument_mode": "unpack"
+    },
+    {
+      "name": "default-argument",
+      "decision": "deferred",
+      "atomic": false,
+      "diagnostic": "MIRL0025",
+      "deferred_wave": "W07",
+      "uses_default": true
+    },
+    {
+      "name": "refcounted-result",
+      "decision": "deferred",
+      "atomic": false,
+      "diagnostic": "MIRL0026",
+      "deferred_wave": "W06",
+      "result_type": "string"
+    },
+    {
+      "name": "protected-call",
+      "decision": "deferred",
+      "atomic": false,
+      "diagnostic": "MIRL0027",
+      "deferred_wave": "W09",
+      "protected_region": true
+    },
+    {
+      "name": "allocation-failure",
+      "decision": "rejected",
+      "atomic": false,
+      "diagnostic": "MIRL0028",
+      "published_entries": 0
+    }
+  ]
+}

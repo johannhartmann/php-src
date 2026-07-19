@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "accepted_grammar": {"type": "object"},
+    "atomicity": {"const": "plan_complete_sequence_before_mir_mutation"},
+    "capabilities": {"items": {"type": "string"}, "type": "array"},
+    "codegen_eligible": {"const": false},
+    "debts": {"items": {"type": "string"}, "type": "array"},
+    "format_version": {"const": 1},
+    "modeled": {"const": true},
+    "proofs": {"items": {"type": "string"}, "type": "array"},
+    "rejections": {"items": {"type": "object"}, "type": "array"}
+  },
+  "required": ["accepted_grammar", "atomicity", "capabilities", "codegen_eligible", "debts", "format_version", "modeled", "proofs", "rejections"],
+  "type": "object"
+}
