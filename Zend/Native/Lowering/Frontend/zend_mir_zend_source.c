@@ -491,10 +491,119 @@ malformed:
 	return ZEND_MIR_LOWERING_REJECTED;
 }
 
-zend_mir_lowering_status zend_mir_zend_source_init_w04(
+static bool zend_mir_frontend_w05_original_result_slot(
+	const zend_op_array *projected_op_array, const zend_ssa *projected_ssa,
+	const zend_op_array *original_op_array, const zend_ssa *original_ssa,
+	uint32_t ssa_variable_id, uint32_t *slot,
+	zend_mir_source_slot_kind *slot_kind)
+{
+	const zend_ssa_var *variable;
+	uint32_t opline_index;
+	uint32_t physical_slot;
+	uint32_t physical_count;
+	uint32_t cv_count;
+
+	if (projected_op_array == NULL || projected_ssa == NULL
+			|| original_op_array == NULL || original_ssa == NULL
+			|| slot == NULL || slot_kind == NULL
+			|| projected_ssa->vars_count != original_ssa->vars_count
+			|| ssa_variable_id >= (uint32_t) projected_ssa->vars_count
+			|| projected_ssa->vars == NULL || original_ssa->vars == NULL
+			|| original_ssa->ops == NULL || original_op_array->opcodes == NULL
+			|| projected_op_array->last_var < 0
+			|| original_op_array->last_var != projected_op_array->last_var
+			|| original_op_array->T != projected_op_array->T) {
+		return false;
+	}
+	cv_count = (uint32_t) projected_op_array->last_var;
+	if (cv_count > ZEND_MIR_ID_MAX - projected_op_array->T) {
+		return false;
+	}
+	physical_count = cv_count + projected_op_array->T;
+	variable = &projected_ssa->vars[ssa_variable_id];
+	if (variable->var < projected_op_array->last_var
+			|| (uint32_t) variable->var >= physical_count
+			|| original_ssa->vars[ssa_variable_id].var != variable->var
+			|| variable->definition != -1
+			|| variable->definition_phi != NULL
+			|| variable->use_chain != -1
+			|| variable->phi_use_chain != NULL
+			|| variable->sym_use_chain != NULL) {
+		return false;
+	}
+	physical_slot =
+		(uint32_t) variable->var - (uint32_t) projected_op_array->last_var;
+	for (opline_index = 0; opline_index < original_op_array->last;
+			opline_index++) {
+		const zend_op *opline = &original_op_array->opcodes[opline_index];
+
+		if (original_ssa->ops[opline_index].result_def
+					!= (int) ssa_variable_id
+				|| (opline->opcode != ZEND_DO_UCALL
+					&& opline->opcode != ZEND_DO_FCALL)
+				|| !zend_mir_frontend_decode_slot(
+					original_op_array, &opline->result, opline->result_type,
+					slot, slot_kind)) {
+			continue;
+		}
+		return *slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+			&& *slot == physical_slot;
+	}
+	return false;
+}
+
+static zend_mir_lowering_status zend_mir_frontend_validate_slots_w05(
+	const zend_op_array *projected_op_array, const zend_ssa *projected_ssa,
+	const zend_op_array *original_op_array, const zend_ssa *original_ssa,
+	zend_mir_op_array_id op_array_id,
+	zend_mir_frontend_diagnostic *diagnostic, uint32_t *slot_count)
+{
+	uint32_t cv_count;
+	uint32_t index;
+	uint32_t ignored_slot;
+	zend_mir_source_slot_kind ignored_kind;
+
+	if (slot_count == NULL || projected_op_array == NULL
+			|| projected_ssa == NULL || original_op_array == NULL
+			|| original_ssa == NULL || projected_op_array->last_var < 0
+			|| projected_ssa->vars_count != original_ssa->vars_count) {
+		goto invalid;
+	}
+	cv_count = (uint32_t) projected_op_array->last_var;
+	if (projected_op_array->T > (ZEND_MIR_ID_MAX - cv_count) / 2) {
+		goto invalid;
+	}
+	*slot_count = cv_count + projected_op_array->T * 2;
+	for (index = 0; index < (uint32_t) projected_ssa->vars_count; index++) {
+		if (!zend_mir_frontend_ssa_slot(
+				projected_op_array, projected_ssa, index,
+				&ignored_slot, &ignored_kind)
+				&& !zend_mir_frontend_w05_original_result_slot(
+					projected_op_array, projected_ssa,
+					original_op_array, original_ssa, index,
+					&ignored_slot, &ignored_kind)) {
+			zend_mir_frontend_set_diagnostic(
+				diagnostic, ZEND_MIR_LOWERING_REJECTED,
+				ZEND_MIRL_INVALID_SOURCE, op_array_id,
+				ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE, index);
+			return ZEND_MIR_LOWERING_REJECTED;
+		}
+	}
+	return ZEND_MIR_LOWERING_SUCCESS;
+
+invalid:
+	zend_mir_frontend_set_diagnostic(
+		diagnostic, ZEND_MIR_LOWERING_REJECTED, ZEND_MIRL_INVALID_SOURCE,
+		op_array_id, ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE,
+		ZEND_MIR_ID_INVALID);
+	return ZEND_MIR_LOWERING_REJECTED;
+}
+
+static zend_mir_lowering_status zend_mir_zend_source_init_w04_impl(
 	zend_mir_zend_source *source, const zend_op_array *op_array,
 	const zend_ssa *ssa, zend_mir_op_array_id op_array_id,
-	zend_mir_symbol_id file_symbol_id, zend_mir_frontend_diagnostic *diagnostic)
+	zend_mir_symbol_id file_symbol_id, zend_mir_frontend_diagnostic *diagnostic,
+	const zend_op_array *original_op_array, const zend_ssa *original_ssa)
 {
 	zend_mir_zend_source candidate;
 	zend_mir_lowering_status status;
@@ -511,8 +620,12 @@ zend_mir_lowering_status zend_mir_zend_source_init_w04(
 			|| (status = zend_mir_frontend_validate_operands_w04(
 				op_array, ssa, op_array_id, diagnostic, &uses, &defs))
 				!= ZEND_MIR_LOWERING_SUCCESS
-			|| (status = zend_mir_frontend_validate_slots(
-				op_array, ssa, op_array_id, diagnostic, &slots))
+			|| (status = original_op_array == NULL && original_ssa == NULL
+				? zend_mir_frontend_validate_slots(
+					op_array, ssa, op_array_id, diagnostic, &slots)
+				: zend_mir_frontend_validate_slots_w05(
+					op_array, ssa, original_op_array, original_ssa,
+					op_array_id, diagnostic, &slots))
 				!= ZEND_MIR_LOWERING_SUCCESS
 			|| (status = zend_mir_frontend_validate_opcode_scope_w04(
 				op_array, op_array_id, diagnostic))
@@ -551,6 +664,28 @@ zend_mir_lowering_status zend_mir_zend_source_init_w04(
 	return ZEND_MIR_LOWERING_SUCCESS;
 }
 
+zend_mir_lowering_status zend_mir_zend_source_init_w04(
+	zend_mir_zend_source *source, const zend_op_array *op_array,
+	const zend_ssa *ssa, zend_mir_op_array_id op_array_id,
+	zend_mir_symbol_id file_symbol_id, zend_mir_frontend_diagnostic *diagnostic)
+{
+	return zend_mir_zend_source_init_w04_impl(
+		source, op_array, ssa, op_array_id, file_symbol_id, diagnostic,
+		NULL, NULL);
+}
+
+zend_mir_lowering_status zend_mir_zend_source_init_w05_projection(
+	zend_mir_zend_source *source,
+	const zend_op_array *projected_op_array, const zend_ssa *projected_ssa,
+	const zend_op_array *original_op_array, const zend_ssa *original_ssa,
+	zend_mir_op_array_id op_array_id, zend_mir_symbol_id file_symbol_id,
+	zend_mir_frontend_diagnostic *diagnostic)
+{
+	return zend_mir_zend_source_init_w04_impl(
+		source, projected_op_array, projected_ssa, op_array_id, file_symbol_id,
+		diagnostic, original_op_array, original_ssa);
+}
+
 static uint32_t zend_mir_frontend_view_opcode_count(const void *context)
 {
 	const zend_mir_zend_source *source = context;
@@ -574,7 +709,26 @@ static uint32_t zend_mir_frontend_view_ssa_count(const void *context)
 static bool zend_mir_frontend_view_ssa_at(
 	const void *context, uint32_t index, zend_mir_source_ssa_ref *out)
 {
-	return zend_mir_frontend_ssa_at(context, index, out);
+	const zend_mir_zend_source *source = context;
+	const zend_op_array *projected_op_array;
+	const zend_ssa *projected_ssa;
+
+	if (zend_mir_frontend_ssa_at(source, index, out)) {
+		return true;
+	}
+	if (!zend_mir_source_is_initialized(source) || !source->w05
+			|| source->call_op_array == NULL || source->call_ssa == NULL
+			|| out == NULL || index >= source->ssa_count) {
+		return false;
+	}
+	projected_op_array = zend_mir_source_op_array(source);
+	projected_ssa = zend_mir_source_ssa(source);
+	out->ssa_variable_id = index;
+	out->definition_opline_index = ZEND_MIR_ID_INVALID;
+	return zend_mir_frontend_w05_original_result_slot(
+		projected_op_array, projected_ssa,
+		source->call_op_array, source->call_ssa, index,
+		&out->source_slot, &out->source_slot_kind);
 }
 
 static uint32_t zend_mir_frontend_view_ssa_use_count(const void *context)

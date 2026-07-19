@@ -943,9 +943,6 @@ bool zend_mir_frontend_ssa_at(
 {
 	const zend_op_array *op_array;
 	const zend_ssa *ssa;
-	const zend_op_array *call_op_array;
-	const zend_ssa *call_ssa;
-	uint32_t opline_index;
 
 	if (!zend_mir_source_is_initialized(source) || out == NULL
 			|| index >= source->ssa_count) {
@@ -956,35 +953,8 @@ bool zend_mir_frontend_ssa_at(
 	out->ssa_variable_id = index;
 	out->definition_opline_index = ssa->vars[index].definition < 0
 		? ZEND_MIR_ID_INVALID : (uint32_t) ssa->vars[index].definition;
-	if (zend_mir_frontend_ssa_slot(
-			op_array, ssa, index,
-			&out->source_slot, &out->source_slot_kind)) {
-		return true;
-	}
-	if (!source->w05 || source->call_op_array == NULL
-			|| source->call_ssa == NULL) {
-		return false;
-	}
-	call_op_array = source->call_op_array;
-	call_ssa = source->call_ssa;
-	if (call_op_array->last != 0
-			&& (call_op_array->opcodes == NULL || call_ssa->ops == NULL)) {
-		return false;
-	}
-	for (opline_index = 0; opline_index < call_op_array->last;
-			opline_index++) {
-		const zend_op *opline = &call_op_array->opcodes[opline_index];
-
-		if (call_ssa->ops[opline_index].result_def != (int) index
-				|| (opline->opcode != ZEND_DO_UCALL
-					&& opline->opcode != ZEND_DO_FCALL)) {
-			continue;
-		}
-		return zend_mir_frontend_decode_slot(
-			call_op_array, &opline->result, opline->result_type,
-			&out->source_slot, &out->source_slot_kind);
-	}
-	return false;
+	return zend_mir_frontend_ssa_slot(
+		op_array, ssa, index, &out->source_slot, &out->source_slot_kind);
 }
 
 static bool zend_mir_frontend_nth_use_or_def(
