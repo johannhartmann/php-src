@@ -46,6 +46,7 @@ struct _zend_mir_w03_integration {
 	zend_ssa_var *projected_ssa_vars;
 	zend_mir_zend_source source;
 	zend_mir_lowering_source_view source_view;
+	zend_mir_lowering_source_view provider_source_view;
 	zend_mir_value_fact_ref *facts;
 	uint32_t fact_count;
 	zend_mir_logic_value_binding *logic_bindings;
@@ -776,9 +777,18 @@ static bool zend_mir_w03_prepare_providers(
 	zend_mir_lowering_provider provider;
 	uint32_t index;
 
+	/*
+	 * W04 extends the source-view tail while reusing the frozen W03 scalar
+	 * providers. Present those providers with their 1.2 prefix contract;
+	 * the W04 lowering context retains the full 1.3 view for CFG callbacks.
+	 */
+	integration->provider_source_view = integration->source_view;
+	integration->provider_source_view.contract_version =
+		ZEND_MIR_CONTRACT_VERSION;
+
 	memset(&integration->numeric_context, 0,
 		sizeof(integration->numeric_context));
-	integration->numeric_context.source = &integration->source_view;
+	integration->numeric_context.source = &integration->provider_source_view;
 	integration->numeric_context.source_context = integration;
 	integration->numeric_context.resolve_operand = zend_mir_w03_resolve_operand;
 	integration->numeric_context.value_fact = zend_mir_w03_value_fact;
@@ -804,7 +814,7 @@ static bool zend_mir_w03_prepare_providers(
 
 	memset(&integration->lifetime_context, 0,
 		sizeof(integration->lifetime_context));
-	integration->lifetime_context.source = &integration->source_view;
+	integration->lifetime_context.source = &integration->provider_source_view;
 	integration->lifetime_context.lifetime = &integration->lifetime;
 	integration->lifetime_context.entry = &integration->entry;
 	integration->lifetime_context.values_predeclared = integration->w04;
