@@ -1,0 +1,173 @@
+{
+  "architecture_independence": {
+    "forbidden_families": [
+      "DynASM",
+      "TPDE",
+      "executor",
+      "MIR interpreter",
+      "VM opcode handler"
+    ],
+    "leak_count": 0,
+    "product_runtime_activation": false,
+    "status": "pass",
+    "test_extension_default_off": true
+  },
+  "build_wiring": {
+    "config_matches_source_manifest": true,
+    "source_count": 5,
+    "source_manifest_sha256": "eae16f58fc6d2cc757118cc4aed2339b9a97763072358de3dc197c42bd07438a"
+  },
+  "corpus": {
+    "accepted": [
+      "do_while_counter",
+      "early_return",
+      "empty_fallthrough",
+      "for_loop_counter",
+      "if_else_int",
+      "loop_carried_phi",
+      "multiple_backedges_reducible",
+      "nested_if_bool",
+      "short_circuit_and",
+      "short_circuit_or",
+      "ternary_scalar",
+      "while_loop_counter"
+    ],
+    "accepted_count": 12,
+    "diagnostic_coverage": {
+      "MIRL0000": 12,
+      "MIRL0011": 1,
+      "MIRL0012": 1,
+      "MIRL0013": 7,
+      "MIRL0015": 1,
+      "MIRL0016": 1,
+      "MIRL0017": 1
+    },
+    "rejected": [
+      "array_condition",
+      "call_inside_branch",
+      "coalesce_reference_semantics",
+      "goto_irreducible",
+      "missing_condition_type_proof",
+      "nullsafe_jump",
+      "object_condition",
+      "reference_loop_phi",
+      "string_condition_without_profile",
+      "switch_or_match_if_not_profiled",
+      "try_catch_finally",
+      "unsupported_pi_constraint"
+    ],
+    "rejected_count": 12
+  },
+  "determinism": {
+    "axes": [
+      "arena-chunk-size",
+      "opcache-disabled",
+      "opcache-enabled",
+      "registry-registration-order",
+      "repeat-calls-1-through-10",
+      "stable-source-identity"
+    ],
+    "normalization": {
+      "enabled": false,
+      "rules": []
+    },
+    "report_has_timestamp": false
+  },
+  "gates": [
+    "python3 scripts/native/semantics/validate-w01.py --check",
+    "python3 scripts/native/mir/validate-w02.py --check",
+    "python3 scripts/native/lowering/validate-w03.py --check",
+    "python3 scripts/native/control-flow/check-contract.py --check",
+    "python3 scripts/native/control-flow/validate-w04.py --check",
+    "python3 scripts/native/control-flow/test-w04.py --reference-php ${REFERENCE_PHP} --candidate-php ${CANDIDATE_PHP}",
+    "python3 scripts/native/control-flow/test-w04.py --reference-php ${REFERENCE_PHP} --candidate-php ${ASAN_PHP} --sanitizer address",
+    "python3 scripts/native/control-flow/test-w04.py --reference-php ${REFERENCE_PHP} --candidate-php ${UBSAN_PHP} --sanitizer undefined",
+    "python3 -m unittest discover -s tests/native/control-flow -p test_*.py -v",
+    "python3 tests/native/control-flow/fuzz/run_fuzz.py --seed 20260719 --cases 20000",
+    "scripts/native/build.sh --profile debug-nts",
+    "scripts/native/test-smoke.sh --profile debug-nts",
+    "scripts/native/build.sh --profile debug-zts",
+    "scripts/native/test-smoke.sh --profile debug-zts"
+  ],
+  "goldens": {
+    "cfg_totals": {
+      "backedges": 6,
+      "blocks": 45,
+      "edges": 42,
+      "phis": 3,
+      "statepoints": 18
+    },
+    "sha256": {
+      "do_while_counter": "2730c18f125c0f5844cfdf432ce4cd912da3279088e637127342388c398f75ea",
+      "early_return": "314bdf7ecb4e61148208a5d9584602421ef6681ca1d4381e9f606a1f9459c787",
+      "empty_fallthrough": "6387d514b19704cbdd7ddd534911d48a65a7d9f54dfbde96ccb2203ba3df54a0",
+      "for_loop_counter": "6a5736c2ec1cf4f96da84ea37dcf814b7641ad70716adc01b1e02724c755d91b",
+      "if_else_int": "137d6a9ff2b86c7b64e1d1451cd96674f128ff88df1be50d8a43b9f487e2675e",
+      "loop_carried_phi": "3e40822d669f03b1da9242cf6d94dbb169f2fa97663ef622e21120db4b39700a",
+      "multiple_backedges_reducible": "7bc942acc40be63fd23136e64260dd19c1b8c430b24125983931bf62a4b6679e",
+      "nested_if_bool": "eee20d1b854ec13c16d99d97e3de2aaf35f07ba7430921c6dd0adecc7e3d91ab",
+      "short_circuit_and": "48f2645526dd522bcf3860017bd1c2c7d0b41d38301d355a9ed1922af2b953ee",
+      "short_circuit_or": "bb9871934166746c87b081949799fa47fae6e3f0d1e847b4f2af0c3751710810",
+      "ternary_scalar": "055dfeb9bb303acf68ae9aa0051d26a479a7dd7575e69b02cee8a2f1761fd423",
+      "while_loop_counter": "8ec28afc065fe2f796311ba335f3d5330e6ea9a8ce6369c7561886476aaabea2"
+    }
+  },
+  "ownership": {
+    "manifest_task_count": 2,
+    "specialist_heads": {
+      "W04-A-production-control-flow": "3a3c3218f8fa52ffc1d477f56f6faff132b0e1ab",
+      "W04-B-control-flow-evidence": "acd393a6eb8f1bb05f797368e34fc97cf9e884a7"
+    },
+    "status": "pass"
+  },
+  "profile": {
+    "accepted_opcode_count": 30,
+    "active_opcode_count": 212,
+    "classification_counts": {
+      "conditional": 28,
+      "deferred": 182,
+      "required": 2
+    },
+    "deferred_by_wave": {
+      "W05": 40,
+      "W06": 97,
+      "W07": 14,
+      "W08": 24,
+      "W09": 2,
+      "W11": 5
+    },
+    "deferred_opcode_count": 182,
+    "format_version": 1,
+    "mir_contract_version": "1.3",
+    "unresolved_w04_count": 0
+  },
+  "sanitizer_fuzz_regression": {
+    "address_sanitizer": "required",
+    "fixed_seed": 20260719,
+    "fuzz_cases": 20000,
+    "prior_waves": [
+      "W00",
+      "W01",
+      "W02",
+      "W03"
+    ],
+    "undefined_behavior_sanitizer": "required",
+    "zts": "required"
+  },
+  "schema_version": 1,
+  "stage_verification": {
+    "branch_mapping": true,
+    "edge_mapping": true,
+    "edge_statepoints": true,
+    "loop_mapping": true,
+    "phi_predecessor_order": true,
+    "stages": [
+      1,
+      2,
+      3
+    ],
+    "status": "pass"
+  },
+  "status": "pass",
+  "wave": "W04"
+}
