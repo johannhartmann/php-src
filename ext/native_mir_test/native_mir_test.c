@@ -126,6 +126,17 @@ extern zend_mir_lowering_result zend_mir_lower_w03_zend_source(
 	const zend_mir_lowering_module_ops *module_ops,
 	zend_mir_diagnostic_sink *diagnostics);
 
+/*
+ * A-owned process-local W04 integration wrapper. W04-B supplies a
+ * failure-atomic link stub for standalone bridge tests; W04-I links this
+ * declaration to the production implementation without duplicating providers.
+ */
+extern zend_mir_lowering_result zend_mir_lower_w04_zend_op_array(
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	const zend_mir_lowering_module_ops *module_ops,
+	zend_mir_diagnostic_sink *diagnostics);
+
 static const char *native_mir_test_phase_name(native_mir_test_phase phase)
 {
 	switch (phase) {
@@ -704,18 +715,28 @@ static bool native_mir_test_lower_w03_and_dump(native_mir_test_state *state)
 	return native_mir_test_publish_lowering_result(state, result, false);
 }
 
-/*
- * W04-A is deliberately absent from the specialist branch. The branch-local
- * bridge tests link the frozen entry symbol to a failure-atomic test stub.
- * W04-I must replace this stub-only invocation with A-owned source/context
- * setup when it wires the production files; this test extension does not
- * implement CFG semantics.
- */
 static bool native_mir_test_lower_w04_and_dump(native_mir_test_state *state)
 {
+	zend_mir_lowering_module_ops module_ops;
+	zend_mir_diagnostic_sink diagnostics;
 	zend_mir_lowering_result result;
 
-	result = zend_mir_lower_w04_zend_source(NULL, NULL, NULL);
+	memset(&module_ops, 0, sizeof(module_ops));
+	module_ops.context = state;
+	module_ops.create = native_mir_test_module_create;
+	module_ops.destroy = native_mir_test_module_destroy;
+	module_ops.mutator = native_mir_test_module_mutator;
+	module_ops.view = native_mir_test_module_view;
+	module_ops.finalize = native_mir_test_module_finalize;
+	module_ops.verify_stage1 = native_mir_test_verify_stage1;
+	module_ops.verify_stage2 = native_mir_test_verify_stage2;
+
+	memset(&diagnostics, 0, sizeof(diagnostics));
+	diagnostics.context = state;
+	diagnostics.emit = native_mir_test_emit_mir_diagnostic;
+	diagnostics.limit = state->diagnostic_limit;
+	result = zend_mir_lower_w04_zend_op_array(
+		state->selected, &state->ssa, &module_ops, &diagnostics);
 	return native_mir_test_publish_lowering_result(state, result, true);
 }
 
