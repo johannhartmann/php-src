@@ -453,7 +453,6 @@ static bool zend_mir_w04_emit_edge_statepoint(
 	record.writes =
 		ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_ENGINE_INTERRUPT);
 	record.barriers = ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_SAFEPOINT)
-		| ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_OBSERVER)
 		| ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_INTERRUPT);
 	if (!mutator->add_instruction(mutator->context, &record, statepoint_id)) {
 		return false;
