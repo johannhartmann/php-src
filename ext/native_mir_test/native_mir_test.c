@@ -36,6 +36,7 @@
 #include "Zend/Native/MIR/Core/zend_mir_arena.h"
 #include "Zend/Native/MIR/zend_mir.h"
 #include "Zend/Native/Lowering/Core/zend_mir_lowering_internal.h"
+#include "Zend/Native/Lowering/zend_mir_lowering_zend.h"
 
 #define NATIVE_MIR_TEST_SCHEMA_VERSION 1
 #define NATIVE_MIR_TEST_DEFAULT_DIAGNOSTIC_LIMIT 32
@@ -104,6 +105,7 @@ typedef struct _native_mir_test_state {
 	native_mir_test_diagnostic *diagnostics;
 	uint32_t diagnostic_count;
 	uint32_t diagnostic_limit;
+	uint32_t wave;
 	size_t mir_chunk_size;
 	const char *diagnostic_stage;
 	native_mir_test_module_host module_host;
@@ -343,6 +345,12 @@ static bool native_mir_test_parse_options(
 				goto invalid_value;
 			}
 			state->diagnostic_limit = (uint32_t) Z_LVAL_P(value);
+		} else if (zend_string_equals_literal(key, "wave")) {
+			if (Z_TYPE_P(value) != IS_LONG
+					|| (Z_LVAL_P(value) != 3 && Z_LVAL_P(value) != 4)) {
+				goto invalid_value;
+			}
+			state->wave = (uint32_t) Z_LVAL_P(value);
 		} else if (zend_string_equals_literal(key, "arena_chunk_size")) {
 			if (Z_TYPE_P(value) != IS_LONG
 					|| Z_LVAL_P(value) < NATIVE_MIR_TEST_MIN_MIR_CHUNK_SIZE
@@ -601,42 +609,23 @@ static bool native_mir_test_dump_write(
  * providers have been merged. Keeping it private to the test extension
  * prevents a public production orchestration API from being introduced.
  */
-static bool native_mir_test_lower_and_dump(native_mir_test_state *state)
+static bool native_mir_test_publish_lowering_result(
+	native_mir_test_state *state,
+	zend_mir_lowering_result result,
+	bool w04)
 {
-	zend_mir_lowering_module_ops module_ops;
 	zend_mir_diagnostic_sink diagnostics;
-	zend_mir_lowering_result result;
 	const zend_mir_view *view;
 	zend_mir_text_writer writer;
 	char code[16];
-
-	state->phase = NATIVE_MIR_TEST_PHASE_LOWERING;
-	state->diagnostic_stage = "MIRL";
-	if (state->fault == NATIVE_MIR_TEST_FAULT_LOWER_FAILURE) {
-		native_mir_test_fail(
-			state, NATIVE_MIR_TEST_STATUS_ERROR,
-			NATIVE_MIR_TEST_PHASE_LOWERING, "MIRL", "MIRL0007",
-			"injected lowering failure");
-		return false;
-	}
-
-	memset(&module_ops, 0, sizeof(module_ops));
-	module_ops.context = state;
-	module_ops.create = native_mir_test_module_create;
-	module_ops.destroy = native_mir_test_module_destroy;
-	module_ops.mutator = native_mir_test_module_mutator;
-	module_ops.view = native_mir_test_module_view;
-	module_ops.finalize = native_mir_test_module_finalize;
-	module_ops.verify_stage1 = native_mir_test_verify_stage1;
-	module_ops.verify_stage2 = native_mir_test_verify_stage2;
 
 	memset(&diagnostics, 0, sizeof(diagnostics));
 	diagnostics.context = state;
 	diagnostics.emit = native_mir_test_emit_mir_diagnostic;
 	diagnostics.limit = state->diagnostic_limit;
-	result = zend_mir_lower_w03_zend_source(
-		state->selected, &state->ssa, &module_ops, &diagnostics);
-	if (!zend_mir_lowering_result_is_failure_atomic(&result)) {
+	if (!(w04
+			? zend_mir_lowering_result_is_w04_failure_atomic(&result)
+			: zend_mir_lowering_result_is_failure_atomic(&result))) {
 		if (result.module != NULL) {
 			native_mir_test_module_destroy(state, result.module);
 		}
@@ -684,9 +673,66 @@ static bool native_mir_test_lower_and_dump(native_mir_test_state *state)
 	state->status = NATIVE_MIR_TEST_STATUS_ACCEPTED;
 	state->phase = NATIVE_MIR_TEST_PHASE_COMPLETE;
 	native_mir_test_add_diagnostic(
-		state, "MIRL", "MIRL0000", "W03 lowering completed",
+		state, "MIRL", "MIRL0000",
+		w04 ? "W04 lowering completed" : "W03 lowering completed",
 		false, 0);
 	return true;
+}
+
+static bool native_mir_test_lower_w03_and_dump(native_mir_test_state *state)
+{
+	zend_mir_lowering_module_ops module_ops;
+	zend_mir_diagnostic_sink diagnostics;
+	zend_mir_lowering_result result;
+
+	memset(&module_ops, 0, sizeof(module_ops));
+	module_ops.context = state;
+	module_ops.create = native_mir_test_module_create;
+	module_ops.destroy = native_mir_test_module_destroy;
+	module_ops.mutator = native_mir_test_module_mutator;
+	module_ops.view = native_mir_test_module_view;
+	module_ops.finalize = native_mir_test_module_finalize;
+	module_ops.verify_stage1 = native_mir_test_verify_stage1;
+	module_ops.verify_stage2 = native_mir_test_verify_stage2;
+
+	memset(&diagnostics, 0, sizeof(diagnostics));
+	diagnostics.context = state;
+	diagnostics.emit = native_mir_test_emit_mir_diagnostic;
+	diagnostics.limit = state->diagnostic_limit;
+	result = zend_mir_lower_w03_zend_source(
+		state->selected, &state->ssa, &module_ops, &diagnostics);
+	return native_mir_test_publish_lowering_result(state, result, false);
+}
+
+/*
+ * W04-A is deliberately absent from the specialist branch. The branch-local
+ * bridge tests link the frozen entry symbol to a failure-atomic test stub.
+ * W04-I must replace this stub-only invocation with A-owned source/context
+ * setup when it wires the production files; this test extension does not
+ * implement CFG semantics.
+ */
+static bool native_mir_test_lower_w04_and_dump(native_mir_test_state *state)
+{
+	zend_mir_lowering_result result;
+
+	result = zend_mir_lower_w04_zend_source(NULL, NULL, NULL);
+	return native_mir_test_publish_lowering_result(state, result, true);
+}
+
+static bool native_mir_test_lower_and_dump(native_mir_test_state *state)
+{
+	state->phase = NATIVE_MIR_TEST_PHASE_LOWERING;
+	state->diagnostic_stage = "MIRL";
+	if (state->fault == NATIVE_MIR_TEST_FAULT_LOWER_FAILURE) {
+		native_mir_test_fail(
+			state, NATIVE_MIR_TEST_STATUS_ERROR,
+			NATIVE_MIR_TEST_PHASE_LOWERING, "MIRL", "MIRL0007",
+			"injected lowering failure");
+		return false;
+	}
+	return state->wave == 4
+		? native_mir_test_lower_w04_and_dump(state)
+		: native_mir_test_lower_w03_and_dump(state);
 }
 
 static bool native_mir_test_compile(native_mir_test_state *state)
@@ -792,6 +838,9 @@ static void native_mir_test_build_result(
 	array_init(return_value);
 	add_assoc_long(
 		return_value, "schema_version", NATIVE_MIR_TEST_SCHEMA_VERSION);
+	if (state->wave == 4) {
+		add_assoc_long(return_value, "wave", 4);
+	}
 	add_assoc_string(
 		return_value, "status",
 		(char *) native_mir_test_status_name(state->status));
@@ -859,6 +908,7 @@ ZEND_FUNCTION(native_mir_test_compile_dump)
 	state->source = source;
 	state->filename = filename;
 	state->diagnostic_limit = NATIVE_MIR_TEST_DEFAULT_DIAGNOSTIC_LIMIT;
+	state->wave = 3;
 	state->mir_chunk_size = ZEND_MIR_CORE_DEFAULT_CHUNK_SIZE;
 	state->phase = NATIVE_MIR_TEST_PHASE_COMPILE;
 	state->status = NATIVE_MIR_TEST_STATUS_ERROR;

@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "tests/native/control-flow/corpus/manifest.schema.json",
+  "additionalProperties": false,
+  "properties": {
+    "cases": {
+      "items": {
+        "$ref": "#/$defs/case"
+      },
+      "minItems": 24,
+      "type": "array"
+    },
+    "environment": {
+      "additionalProperties": false,
+      "properties": {
+        "lang": {
+          "const": "C"
+        },
+        "lc_all": {
+          "const": "C"
+        },
+        "seed": {
+          "const": 20260719
+        },
+        "source_date_epoch": {
+          "const": "0"
+        },
+        "timezone": {
+          "const": "UTC"
+        }
+      },
+      "required": [
+        "lang",
+        "lc_all",
+        "seed",
+        "source_date_epoch",
+        "timezone"
+      ],
+      "type": "object"
+    },
+    "format_version": {
+      "const": 1
+    },
+    "normalization": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "const": false
+        },
+        "rules": {
+          "maxItems": 0,
+          "type": "array"
+        }
+      },
+      "required": [
+        "enabled",
+        "rules"
+      ],
+      "type": "object"
+    },
+    "schema_path": {
+      "const": "tests/native/control-flow/corpus/manifest.schema.json"
+    },
+    "wave": {
+      "const": "W04"
+    }
+  },
+  "required": [
+    "cases",
+    "environment",
+    "format_version",
+    "normalization",
+    "schema_path",
+    "wave"
+  ],
+  "type": "object",
+  "$defs": {
+    "case": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "pattern": "^[a-z][a-z0-9_]+$",
+          "type": "string"
+        },
+        "deferred_wave": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expected_cfg": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "expected_mirl": {
+          "pattern": "^MIRL[0-9]{4}$",
+          "type": "string"
+        },
+        "expected_status": {
+          "enum": [
+            "accepted",
+            "rejected"
+          ],
+          "type": "string"
+        },
+        "function": {
+          "pattern": "^w04_[a-z0-9_]+$",
+          "type": "string"
+        },
+        "reference_inputs": {
+          "items": {
+            "type": "array"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "repeat_calls": {
+          "items": {
+            "maximum": 10,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "maxItems": 10,
+          "minItems": 10,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "required_source_opcodes": {
+          "items": {
+            "pattern": "^ZEND_[A-Z0-9_]+$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "semantic_family": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "source_path": {
+          "pattern": "^tests/native/control-flow/corpus/(accepted|rejected)/[a-z0-9_]+\\.php$",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "deferred_wave",
+        "expected_cfg",
+        "expected_mirl",
+        "expected_status",
+        "function",
+        "reference_inputs",
+        "repeat_calls",
+        "required_source_opcodes",
+        "semantic_family",
+        "source_path",
+        "source_sha256"
+      ],
+      "type": "object"
+    }
+  }
+}
