@@ -53,13 +53,15 @@ Lower scalar operations and straight-line control into verified MIR with referen
 
 ## W04 — Control flow and loops
 
-**Status:** `UNSEALED`
+**Status:** `REVALIDATED`
 
 Lower source-backed reducible Zend control flow, preserve exact successor/PHI order, and verify stage-3 block, edge, loop, and edge-statepoint mappings.
 
-**Capabilities:** none recorded
+**Receipt:** `docs/native-engine/waves/receipts/W04.json` (`7648662dd4a7676d6cf2d145bc870b1ad63f000705fa75bf99cd6d1cdd23fb0a`)
 
-**Semantic debts:** none recorded
+**Capabilities:** `reducible_control_flow`
+
+**Semantic debts:** `call_execution`, `references_and_cow`, `dynamic_call_targets`, `protected_call_continuations`, `target_emission`, `internal_c_abi_interop`
 
 **Codegen eligible:** `false`
 
