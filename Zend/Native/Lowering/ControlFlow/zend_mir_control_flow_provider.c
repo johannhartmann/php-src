@@ -270,17 +270,24 @@ static bool zend_mir_w04_ssa_definition(
 }
 
 static bool zend_mir_w04_current_slot_value(
-	const zend_mir_lowering_source_view *source,
+	const zend_mir_lowering_context *context,
 	const zend_mir_source_slot_ref *slot,
 	zend_mir_source_block_id at_block,
 	zend_mir_value_id *value_out)
 {
+	const zend_mir_lowering_source_view *source;
 	bool found = false;
 	zend_mir_source_block_id selected_block = ZEND_MIR_ID_INVALID;
 	uint32_t selected_rank = 0;
 	uint32_t i;
+	if (context == NULL || context->source == NULL) {
+		return false;
+	}
+	source = context->source;
 	for (i = 0; i < source->ssa_count(source->context); i++) {
 		zend_mir_source_ssa_ref ssa;
+		zend_mir_value_fact_ref fact;
+		zend_mir_representation representation;
 		zend_mir_source_block_id definition_block;
 		uint32_t definition_rank;
 		bool later;
@@ -289,6 +296,10 @@ static bool zend_mir_w04_current_slot_value(
 		}
 		if (ssa.source_slot_kind != slot->kind
 				|| ssa.source_slot != slot->kind_index) {
+			continue;
+		}
+		if (!zend_mir_w04_value_fact(
+				context, ssa.ssa_variable_id, &fact, &representation)) {
 			continue;
 		}
 		if (!zend_mir_w04_ssa_definition(
@@ -359,7 +370,7 @@ static bool zend_mir_w04_emit_edge_statepoint(
 		zend_mir_value_id value_id = ZEND_MIR_ID_INVALID;
 		uint32_t slot_index;
 		if (!zend_mir_zend_source_slot_at(zend_source, i, &source_slot)
-				|| !zend_mir_w04_current_slot_value(context->source,
+				|| !zend_mir_w04_current_slot_value(context,
 					&source_slot, source_block_id, &value_id)) {
 			return false;
 		}
@@ -446,7 +457,7 @@ static bool zend_mir_w04_emit_edge_statepoint(
 		zend_mir_source_slot_ref source_slot;
 		zend_mir_value_id value_id = ZEND_MIR_ID_INVALID;
 		if (!zend_mir_zend_source_slot_at(zend_source, i, &source_slot)
-				|| !zend_mir_w04_current_slot_value(context->source,
+				|| !zend_mir_w04_current_slot_value(context,
 					&source_slot, source_block_id, &value_id)
 				|| (zend_mir_id_is_valid(value_id)
 					&& (mutator->add_operand == NULL
