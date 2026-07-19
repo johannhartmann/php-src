@@ -1011,6 +1011,8 @@ static bool builder_fact_at(
 			out->id = ZEND_MIR_ID_INVALID;
 			out->value_id = value_id;
 			out->exact_type = source->ssa[i].ssa_variable_id == 3
+					|| source->ssa[i].source_slot_kind
+						== ZEND_MIR_SOURCE_SLOT_TMP
 				? ZEND_MIR_SCALAR_TYPE_I1 : ZEND_MIR_SCALAR_TYPE_I64;
 			out->flags = ZEND_MIR_VALUE_FACT_NON_REFCOUNTED
 				| ZEND_MIR_VALUE_FACT_FINITE
@@ -1117,6 +1119,70 @@ static zend_mir_lowering_result run_provider_builder(builder_fault fault)
 		assert(host.destroy_count == 1);
 	}
 	return result;
+}
+
+static void test_bool_identity_builder(void)
+{
+	test_source source = empty_fallthrough_source();
+	zend_mir_lowering_source_view source_view;
+	zend_mir_lowering_source_shape shape;
+	zend_mir_lowering_registry registry;
+	zend_mir_lowering_module_ops ops;
+	zend_mir_lowering_context context;
+	zend_mir_control_flow_map map;
+	builder_host host;
+	zend_mir_lowering_result result;
+
+	source.opcode_count = 1;
+	source.blocks[0].opcode_count = 1;
+	source.blocks[1].first_opcode_ordinal = 1;
+	source.ssa_count = 2;
+	source.ssa[0].ssa_variable_id = 0;
+	source.ssa[0].definition_opline_index = ZEND_MIR_ID_INVALID;
+	source.ssa[0].source_slot_kind = ZEND_MIR_SOURCE_SLOT_TMP;
+	source.ssa[1] = source.ssa[0];
+	source.ssa[1].ssa_variable_id = 1;
+	source.ssa[1].definition_opline_index = 0;
+	source.opcodes[0].opline_index = 0;
+	source.opcodes[0].zend_opcode_number = 52;
+	source.opcodes[0].block_id = 0;
+	source.opcodes[0].source_position_id = 0;
+	source.opcodes[0].op1.kind = ZEND_MIR_SOURCE_OPERAND_SSA;
+	source.opcodes[0].op1.ssa_variable_id = 0;
+	source.opcodes[0].result.kind = ZEND_MIR_SOURCE_OPERAND_SSA;
+	source.opcodes[0].result.ssa_variable_id = 1;
+	source_view = test_view(&source);
+	memset(&shape, 0, sizeof(shape));
+	shape.reachable_block_count = 2;
+	shape.has_control_flow = true;
+	shape.ssa_complete = true;
+	memset(&registry, 0, sizeof(registry));
+	registry.complete = true;
+	builder_host_init(&host, &ops, BUILDER_FAULT_NONE);
+	assert(zend_mir_lowering_context_init(
+		&context, &source_view, &shape, &registry, &ops, NULL, 9, 7, NULL));
+	assert(zend_mir_lowering_context_set_value_fact_resolver(
+		&context, &source, builder_fact_at));
+	result = zend_mir_lower_w04_zend_source(&context, NULL, &map);
+	if (result.status != ZEND_MIR_LOWERING_SUCCESS) {
+		fprintf(stderr,
+			"bool identity failed: status=%u diagnostic=%u "
+			"instructions=%u values=%u facts=%u destroys=%u\n",
+			(unsigned int) result.status,
+			(unsigned int) result.diagnostic_code,
+			host.fixture.instruction_count, host.fixture.value_count,
+			host.value_fact_count, host.destroy_count);
+	}
+	assert(result.status == ZEND_MIR_LOWERING_SUCCESS);
+	assert(result.guarantees == ZEND_MIR_LOWERING_GUARANTEE_W04_ALL);
+	assert(host.fixture.instruction_count == 3);
+	assert(host.fixture.instructions[0].opcode == ZEND_MIR_OPCODE_COPY);
+	assert(host.fixture.instructions[0].result_id
+		== zend_mir_value_from_original_ssa(1));
+	assert(host.fixture.operands[0].value_id
+		== zend_mir_value_from_original_ssa(0));
+	builder_destroy(&host, result.module);
+	assert(host.destroy_count == 1);
 }
 
 static zend_mir_lowering_result run_builder(
@@ -1373,6 +1439,8 @@ static void test_builder_and_failure_atomicity(void)
 	result = run_provider_builder(BUILDER_FAULT_PROVIDER);
 	assert(result.status == ZEND_MIR_LOWERING_FAILED);
 	assert(result.diagnostic_code == ZEND_MIRL_MUTATION_FAILED);
+
+	test_bool_identity_builder();
 
 	result = run_builder(
 		BUILDER_FAULT_FINALIZE, ZEND_MIR_W04_OPCODE_JMPZ, false, false);
