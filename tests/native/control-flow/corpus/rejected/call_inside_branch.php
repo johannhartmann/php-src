@@ -1,5 +1,5 @@
 <?php
-function w04_call_inside_branch(bool $condition, string $value): int {
+function w04_call_inside_branch(bool $condition, string $value) {
     if ($condition) {
         return strlen($value);
     }

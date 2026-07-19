@@ -1,5 +1,5 @@
 <?php
-function w04_empty_fallthrough(bool $condition, int $value): int {
+function w04_empty_fallthrough(bool $condition, int $value) {
     if ($condition) {
     }
     return $value;

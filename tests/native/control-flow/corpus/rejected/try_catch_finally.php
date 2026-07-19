@@ -1,5 +1,5 @@
 <?php
-function w04_try_catch_finally(int $value): int {
+function w04_try_catch_finally(int $value) {
     try {
         if ($value < 0) {
             throw new RuntimeException("negative");

@@ -1,5 +1,5 @@
 <?php
-function w04_nullsafe_jump(?object $value): int {
+function w04_nullsafe_jump(?object $value) {
     if ($value?->enabled) {
         return 1;
     }

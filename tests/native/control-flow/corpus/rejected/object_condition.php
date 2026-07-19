@@ -1,5 +1,5 @@
 <?php
-function w04_object_condition(object $value): int {
+function w04_object_condition(object $value) {
     if ($value) {
         return 1;
     }

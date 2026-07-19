@@ -1,5 +1,5 @@
 <?php
-function w04_loop_carried_phi(int $limit): int {
+function w04_loop_carried_phi(int $limit) {
     $value = 1;
     $counter = 0;
     while ($counter < $limit) {

@@ -1,5 +1,5 @@
 <?php
-function w04_unsupported_pi_constraint(int $value, int $limit): int {
+function w04_unsupported_pi_constraint(int $value, int $limit) {
     if ($value >= 0 && $value < $limit) {
         return $value;
     }

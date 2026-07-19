@@ -1,5 +1,5 @@
 <?php
-function w04_reference_loop_phi(array &$values): int {
+function w04_reference_loop_phi(array &$values) {
     $total = 0;
     foreach ($values as &$value) {
         $value++;

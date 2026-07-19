@@ -1,5 +1,5 @@
 <?php
-function w04_do_while_counter(int $limit): int {
+function w04_do_while_counter(int $limit) {
     $counter = 0;
     do {
         $counter++;

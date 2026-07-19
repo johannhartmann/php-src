@@ -1,5 +1,5 @@
 <?php
-function w04_for_loop_counter(int $limit): int {
+function w04_for_loop_counter(int $limit) {
     $total = 0;
     for ($counter = 0; $counter < $limit; $counter++) {
         $total += $counter;
