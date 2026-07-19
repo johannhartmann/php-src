@@ -55,7 +55,7 @@ class ExtensionContractTests(unittest.TestCase):
         )
         self.assertNotIn('add_assoc_long(return_value, "wave", state->wave)', self.extension)
 
-    def test_w04_path_calls_only_the_frozen_entry(self) -> None:
+    def test_w04_path_calls_only_the_a_owned_wrapper(self) -> None:
         match = re.search(
             r"static bool native_mir_test_lower_w04_and_dump.*?^}",
             self.extension,
@@ -63,7 +63,8 @@ class ExtensionContractTests(unittest.TestCase):
         )
         self.assertIsNotNone(match)
         body = match.group(0)
-        self.assertEqual(body.count("zend_mir_lower_w04_zend_source("), 1)
+        self.assertEqual(body.count("zend_mir_lower_w04_zend_op_array("), 1)
+        self.assertNotIn("zend_mir_lower_w04_zend_source(", body)
         self.assertNotRegex(body, r"\bzend_mir_(?:lower_source|emit|append|add)_")
         self.assertIn("zend_mir_lowering_result_is_w04_failure_atomic", self.extension)
 
