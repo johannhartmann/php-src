@@ -13,6 +13,7 @@
 #include "../../../zend_type_info.h"
 #include "../../../zend_vm_opcodes.h"
 #include "../../../Optimizer/zend_ssa.h"
+#include "../../../Optimizer/zend_optimizer_internal.h"
 
 #define ZEND_MIR_ZEND_SOURCE_MAGIC UINT32_C(0x5a4d4653)
 
@@ -161,5 +162,11 @@ bool zend_mir_frontend_source_position_at(
 	const zend_mir_zend_source *source,
 	uint32_t index,
 	zend_mir_source_position_ref *out);
+
+zend_mir_lowering_status zend_mir_zend_source_preflight_w05(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	zend_mir_frontend_diagnostic *diagnostic);
 
 #endif /* ZEND_MIR_ZEND_SOURCE_INTERNAL_H */

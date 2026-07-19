@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "zend_mir_arena.h"
+#include "../zend_mir_call.h"
 
 typedef struct _zend_mir_core_function {
 	zend_mir_function_record record;
@@ -46,6 +47,22 @@ typedef struct _zend_mir_core_table {
 	uint32_t capacity;
 } zend_mir_core_table;
 
+typedef struct _zend_mir_core_call_staging {
+	zend_mir_call_target_ref *targets;
+	zend_mir_call_argument_ref *arguments;
+	zend_mir_call_continuation_ref *continuations;
+	zend_mir_call_site_ref *sites;
+	uint32_t target_count;
+	uint32_t target_capacity;
+	uint32_t argument_count;
+	uint32_t argument_capacity;
+	uint32_t continuation_count;
+	uint32_t continuation_capacity;
+	uint32_t site_count;
+	uint32_t site_capacity;
+	bool committed;
+} zend_mir_core_call_staging;
+
 struct _zend_mir_module {
 	zend_mir_module_id id;
 	zend_mir_module_state state;
@@ -65,11 +82,19 @@ struct _zend_mir_module {
 	zend_mir_core_table roots;
 	zend_mir_core_table cleanups;
 	zend_mir_core_table source_maps;
+	zend_mir_core_table call_targets;
+	zend_mir_core_table call_arguments;
+	zend_mir_core_table call_continuations;
+	zend_mir_core_table call_sites;
+	zend_mir_core_table call_receipts;
+	zend_mir_core_call_staging call_staging;
 	uint32_t operand_count;
 	uint32_t *value_index;
 	uint32_t value_index_capacity;
 	zend_mir_view view;
 	zend_mir_mutator mutator;
+	zend_mir_call_view call_view;
+	zend_mir_call_mutator call_mutator;
 };
 
 bool zend_mir_core_next_id(uint32_t count, uint32_t *out);
@@ -90,6 +115,33 @@ bool zend_mir_core_add_value_fact(void *context,
 
 void zend_mir_module_init_view(zend_mir_module *module);
 void zend_mir_module_init_mutator(zend_mir_module *module);
+void zend_mir_module_init_call_view(zend_mir_module *module);
+void zend_mir_module_init_call_mutator(zend_mir_module *module);
+
+zend_mir_call_mutator *zend_mir_module_get_call_mutator(
+	zend_mir_module *module);
+const zend_mir_call_view *zend_mir_module_get_call_view(
+	const zend_mir_module *module);
+static inline const zend_mir_call_view *
+zend_mir_module_call_view_from_view(const zend_mir_view *view)
+{
+	const zend_mir_module *module;
+	uintptr_t view_address;
+
+	if (view == NULL || view->context == NULL) {
+		return NULL;
+	}
+	view_address = (uintptr_t) (const void *) view;
+	if (view_address < offsetof(zend_mir_module, view)) {
+		return NULL;
+	}
+	module = (const zend_mir_module *)
+		(view_address - offsetof(zend_mir_module, view));
+	return (const void *) module == view->context
+		&& module->state != ZEND_MIR_MODULE_FAILED
+		&& module->call_staging.committed
+		? &module->call_view : NULL;
+}
 
 #define ZEND_MIR_CORE_ITEMS(module, field, type) \
 	((type *) (module)->field.items)

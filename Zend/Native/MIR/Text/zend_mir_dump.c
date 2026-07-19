@@ -16,6 +16,8 @@
 
 #include <string.h>
 
+#include "../Core/zend_mir_module_internal.h"
+
 typedef struct _zend_mir_dump_context {
 	const zend_mir_view *view;
 	zend_mir_text_writer *writer;
@@ -145,7 +147,36 @@ static const char *zend_mir_opcode_label(uint32_t value)
 	switch (value) {
 		ZEND_MIR_OPCODE_CATALOG(ZEND_MIR_LABEL_CASE)
 		ZEND_MIR_SCALAR_OPCODE_CATALOG(ZEND_MIR_LABEL_CASE)
+		ZEND_MIR_CALL_OPCODE_CATALOG(ZEND_MIR_LABEL_CASE)
 		default: return NULL;
+	}
+}
+
+static const char *zend_mir_call_target_kind_label(uint32_t value)
+{
+	return value == ZEND_MIR_CALL_TARGET_DIRECT_USER
+		? "direct_user" : NULL;
+}
+
+static const char *zend_mir_call_argument_ownership_label(uint32_t value)
+{
+	return value == ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR
+		? "borrowed_scalar" : NULL;
+}
+
+static const char *zend_mir_call_continuation_kind_label(uint32_t value)
+{
+	switch (value) {
+		case ZEND_MIR_CALL_CONTINUATION_NORMAL:
+			return "normal";
+		case ZEND_MIR_CALL_CONTINUATION_EXCEPTION_DEBT:
+			return "exception_debt";
+		case ZEND_MIR_CALL_CONTINUATION_BAILOUT_REENTRY_DEBT:
+			return "bailout_reentry_debt";
+		case ZEND_MIR_CALL_CONTINUATION_OBSERVER_DEBT:
+			return "observer_debt";
+		default:
+			return NULL;
 	}
 }
 
@@ -748,6 +779,198 @@ static bool zend_mir_dump_instruction(zend_mir_dump_context *dump, uint32_t inde
 		&& zend_mir_dump_literal(dump, "\n");
 }
 
+static bool zend_mir_dump_call_frame(zend_mir_dump_context *dump,
+	const char *label, const zend_mir_call_frame_descriptor *frame)
+{
+	return zend_mir_dump_literal(dump, label)
+		&& zend_mir_dump_literal(dump, " frame ")
+		&& zend_mir_dump_id(dump, "fs", frame->frame_state_id)
+		&& zend_mir_dump_literal(dump, " function ")
+		&& zend_mir_dump_id(dump, "f", frame->function_id)
+		&& zend_mir_dump_literal(dump, " symbol ")
+		&& zend_mir_dump_id(dump, "s", frame->function_symbol_id)
+		&& zend_mir_dump_literal(dump, " op-array ")
+		&& zend_mir_dump_id(dump, "oa", frame->op_array_id)
+		&& zend_mir_dump_literal(dump, " slots ")
+		&& zend_mir_dump_u32(dump, frame->slots.offset)
+		&& zend_mir_dump_literal(dump, "+")
+		&& zend_mir_dump_u32(dump, frame->slots.count)
+		&& zend_mir_dump_literal(dump, " pending ")
+		&& zend_mir_dump_scalar_id(dump, frame->pending_call_slot_id);
+}
+
+static bool zend_mir_dump_call_model(zend_mir_dump_context *dump)
+{
+	const zend_mir_call_view *calls =
+		zend_mir_module_call_view_from_view(dump->view);
+	uint32_t count;
+	uint32_t index;
+
+	if (calls == NULL) {
+		return true;
+	}
+	if (calls->contract_version != ZEND_MIR_W05_CONTRACT_VERSION
+			|| calls->call_target_count == NULL
+			|| calls->call_target_at == NULL
+			|| calls->call_argument_count == NULL
+			|| calls->call_argument_at == NULL
+			|| calls->call_continuation_count == NULL
+			|| calls->call_continuation_at == NULL
+			|| calls->call_site_count == NULL
+			|| calls->call_site_at == NULL
+			|| calls->call_capability_receipt_count == NULL
+			|| calls->call_capability_receipt_at == NULL) {
+		zend_mir_dump_diagnostic(dump, "incomplete W05 call view");
+		return false;
+	}
+	count = calls->call_target_count(calls->context);
+	if (count > UINT32_C(1048576)) {
+		zend_mir_dump_diagnostic(dump, "W05 call-target count exceeds hard limit");
+		return false;
+	}
+	for (index = 0; index < count; index++) {
+		zend_mir_call_target_ref target;
+		if (!calls->call_target_at(calls->context, index, &target)
+				|| !zend_mir_dump_literal(dump, "call-target ")
+				|| !zend_mir_dump_id(dump, "ct", target.id)
+				|| !zend_mir_dump_literal(dump, " kind ")
+				|| !zend_mir_dump_label(
+					dump, zend_mir_call_target_kind_label, target.kind)
+				|| !zend_mir_dump_literal(dump, " symbol ")
+				|| !zend_mir_dump_id(
+					dump, "s", target.function_symbol_id)
+				|| !zend_mir_dump_literal(dump, " op-array ")
+				|| !zend_mir_dump_id(dump, "oa", target.op_array_id)
+				|| !zend_mir_dump_literal(dump, " args ")
+				|| !zend_mir_dump_u32(dump, target.num_args)
+				|| !zend_mir_dump_literal(dump, " required ")
+				|| !zend_mir_dump_u32(dump, target.required_num_args)
+				|| !zend_mir_dump_literal(dump, " flags 0x")
+				|| !zend_mir_dump_hex(
+					dump, target.function_flags_snapshot, 8)
+				|| !zend_mir_dump_literal(dump, "\n")) {
+			return false;
+		}
+	}
+	count = calls->call_argument_count(calls->context);
+	if (count > UINT32_C(1048576)) {
+		zend_mir_dump_diagnostic(dump, "W05 call-argument count exceeds hard limit");
+		return false;
+	}
+	for (index = 0; index < count; index++) {
+		zend_mir_call_argument_ref argument;
+		if (!calls->call_argument_at(calls->context, index, &argument)
+				|| !zend_mir_dump_literal(dump, "call-argument ")
+				|| !zend_mir_dump_id(dump, "ca", argument.id)
+				|| !zend_mir_dump_literal(dump, " site ")
+				|| !zend_mir_dump_id(dump, "cs", argument.call_site_id)
+				|| !zend_mir_dump_literal(dump, " ordinal ")
+				|| !zend_mir_dump_u32(dump, argument.ordinal)
+				|| !zend_mir_dump_literal(dump, " value ")
+				|| !zend_mir_dump_id(dump, "v", argument.value_id)
+				|| !zend_mir_dump_literal(dump, " ownership ")
+				|| !zend_mir_dump_label(
+					dump, zend_mir_call_argument_ownership_label,
+					argument.ownership)
+				|| !zend_mir_dump_literal(dump, "\n")) {
+			return false;
+		}
+	}
+	count = calls->call_continuation_count(calls->context);
+	if (count > UINT32_C(1048576)) {
+		zend_mir_dump_diagnostic(
+			dump, "W05 call-continuation count exceeds hard limit");
+		return false;
+	}
+	for (index = 0; index < count; index++) {
+		zend_mir_call_continuation_ref continuation;
+		if (!calls->call_continuation_at(
+				calls->context, index, &continuation)
+				|| !zend_mir_dump_literal(dump, "call-continuation ")
+				|| !zend_mir_dump_id(dump, "cc", continuation.id)
+				|| !zend_mir_dump_literal(dump, " site ")
+				|| !zend_mir_dump_id(
+					dump, "cs", continuation.call_site_id)
+				|| !zend_mir_dump_literal(dump, " kind ")
+				|| !zend_mir_dump_label(
+					dump, zend_mir_call_continuation_kind_label,
+					continuation.kind)
+				|| !zend_mir_dump_literal(dump, " block ")
+				|| !zend_mir_dump_id(dump, "b", continuation.block_id)
+				|| !zend_mir_dump_literal(dump, " debt 0x")
+				|| !zend_mir_dump_hex(
+					dump, continuation.semantic_debt, 8)
+				|| !zend_mir_dump_literal(dump, "\n")) {
+			return false;
+		}
+	}
+	count = calls->call_site_count(calls->context);
+	if (count > UINT32_C(1048576)) {
+		zend_mir_dump_diagnostic(dump, "W05 call-site count exceeds hard limit");
+		return false;
+	}
+	for (index = 0; index < count; index++) {
+		zend_mir_call_site_ref site;
+		if (!calls->call_site_at(calls->context, index, &site)
+				|| !zend_mir_dump_literal(dump, "call-site ")
+				|| !zend_mir_dump_id(dump, "cs", site.id)
+				|| !zend_mir_dump_literal(dump, " source ")
+				|| !zend_mir_dump_id(
+					dump, "sc", site.source_call_site_id)
+				|| !zend_mir_dump_literal(dump, " instruction ")
+				|| !zend_mir_dump_id(dump, "i", site.instruction_id)
+				|| !zend_mir_dump_literal(dump, " target ")
+				|| !zend_mir_dump_id(dump, "ct", site.target_id)
+				|| !zend_mir_dump_literal(dump, " arguments ")
+				|| !zend_mir_dump_u32(dump, site.arguments.offset)
+				|| !zend_mir_dump_literal(dump, "+")
+				|| !zend_mir_dump_u32(dump, site.arguments.count)
+				|| !zend_mir_dump_call_frame(
+					dump, " caller", &site.caller_frame)
+				|| !zend_mir_dump_call_frame(
+					dump, " callee", &site.callee_entry_frame)
+				|| !zend_mir_dump_literal(dump, " continuations ")
+				|| !zend_mir_dump_u32(dump, site.continuations.offset)
+				|| !zend_mir_dump_literal(dump, "+")
+				|| !zend_mir_dump_u32(dump, site.continuations.count)
+				|| !zend_mir_dump_literal(dump, " effects 0x")
+				|| !zend_mir_dump_hex(dump, site.effects, 4)
+				|| !zend_mir_dump_literal(dump, " reads 0x")
+				|| !zend_mir_dump_hex(dump, site.reads, 8)
+				|| !zend_mir_dump_literal(dump, " writes 0x")
+				|| !zend_mir_dump_hex(dump, site.writes, 8)
+				|| !zend_mir_dump_literal(dump, " barriers 0x")
+				|| !zend_mir_dump_hex(dump, site.barriers, 2)
+				|| !zend_mir_dump_literal(dump, "\n")) {
+			return false;
+		}
+	}
+	count = calls->call_capability_receipt_count(calls->context);
+	if (count > UINT32_C(1048576)) {
+		zend_mir_dump_diagnostic(dump, "W05 receipt count exceeds hard limit");
+		return false;
+	}
+	for (index = 0; index < count; index++) {
+		zend_mir_call_capability_receipt_ref receipt;
+		if (!calls->call_capability_receipt_at(
+				calls->context, index, &receipt)
+				|| !zend_mir_dump_literal(dump, "call-receipt ")
+				|| !zend_mir_dump_id(dump, "cr", receipt.id)
+				|| !zend_mir_dump_literal(dump, " capabilities 0x")
+				|| !zend_mir_dump_hex(dump, receipt.capabilities, 8)
+				|| !zend_mir_dump_literal(dump, " debts 0x")
+				|| !zend_mir_dump_hex(dump, receipt.semantic_debts, 8)
+				|| !zend_mir_dump_literal(dump, " modeled ")
+				|| !zend_mir_dump_bool(dump, receipt.modeled)
+				|| !zend_mir_dump_literal(dump, " codegen-eligible ")
+				|| !zend_mir_dump_bool(dump, receipt.codegen_eligible)
+				|| !zend_mir_dump_literal(dump, "\n")) {
+			return false;
+		}
+	}
+	return true;
+}
+
 static bool zend_mir_dump_invalid_record(
 		zend_mir_dump_context *dump, const char *kind, uint32_t index)
 {
@@ -893,6 +1116,7 @@ bool zend_mir_dump_text(const zend_mir_view *view, zend_mir_text_writer *writer,
 				zend_mir_frame_id_at, zend_mir_dump_frame, "frame")
 			|| !zend_mir_dump_sorted(&dump, view->instruction_count(view->context),
 				zend_mir_instruction_id_at, zend_mir_dump_instruction, "instruction")
+			|| !zend_mir_dump_call_model(&dump)
 			|| !zend_mir_dump_literal(&dump, "end\n")) {
 		return false;
 	}
