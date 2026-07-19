@@ -1,9 +1,10 @@
 <?php
-function w04_for_loop_counter(int $limit) {
-    $total = 0;
-    for ($counter = 0; $counter < $limit; $counter++) {
-        $total += $counter;
+function w04_for_loop_counter(bool $repeat) {
+    for (;;) {
+        if (!$repeat) {
+            break;
+        }
     }
-    return $total;
+    return 0;
 }
-echo w04_for_loop_counter(0), ",", w04_for_loop_counter(5), "\n";
+echo w04_for_loop_counter(false), "\n";

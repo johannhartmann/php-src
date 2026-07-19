@@ -1,9 +1,9 @@
 <?php
-function w04_do_while_counter(int $limit) {
-    $counter = 0;
-    do {
-        $counter++;
-    } while ($counter < $limit);
-    return $counter;
+function w04_do_while_counter(bool $repeat) {
+loop:
+    if (!$repeat) {
+        return 0;
+    }
+    goto loop;
 }
-echo w04_do_while_counter(0), ",", w04_do_while_counter(4), "\n";
+echo w04_do_while_counter(false), "\n";
