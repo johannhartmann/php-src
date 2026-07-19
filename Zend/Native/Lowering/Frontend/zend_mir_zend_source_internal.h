@@ -147,6 +147,18 @@ bool zend_mir_frontend_value_fact_at(
 	uint32_t index,
 	zend_mir_value_fact_ref *out);
 
+bool zend_mir_frontend_w05_result_fact_at(
+	const zend_mir_zend_source *source,
+	uint32_t index,
+	zend_mir_value_fact_ref *out);
+
+zend_mir_lowering_status zend_mir_frontend_project_w05_result_facts(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	zend_ssa *projected_ssa,
+	zend_mir_frontend_diagnostic *diagnostic);
+
 bool zend_mir_frontend_fact_for_ssa(
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,

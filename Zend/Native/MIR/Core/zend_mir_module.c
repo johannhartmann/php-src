@@ -1102,6 +1102,9 @@ static bool zend_mir_core_stage_call_site(
 	staging = &module->call_staging;
 	if (staging->committed || site->id != staging->site_count
 			|| site->target_id >= staging->target_count
+			|| (zend_mir_id_is_valid(site->result_id)
+				&& !zend_mir_module_find_value(
+					module, site->result_id, NULL))
 			|| site->arguments.offset > staging->argument_count
 			|| site->arguments.count
 				> staging->argument_count - site->arguments.offset
@@ -1188,7 +1191,9 @@ static bool zend_mir_core_append_call_instruction(
 	zend_mir_call_site_ref *site = &staging->sites[site_index];
 	zend_mir_core_instruction *instruction =
 		&instructions[*instruction_count];
+	zend_mir_core_value *values;
 	zend_mir_value_id *operands = NULL;
+	uint32_t result_index;
 	uint32_t index;
 
 	if (site->arguments.count != 0) {
@@ -1210,8 +1215,22 @@ static bool zend_mir_core_append_call_instruction(
 	instruction->record.id = *instruction_count;
 	instruction->record.block_id = block_id;
 	instruction->record.opcode = ZEND_MIR_OPCODE_CALL_DIRECT_USER;
-	instruction->record.representation = ZEND_MIR_REPRESENTATION_VOID;
-	instruction->record.result_id = ZEND_MIR_ID_INVALID;
+	if (zend_mir_id_is_valid(site->result_id)) {
+		if (!zend_mir_module_find_value(
+				module, site->result_id, &result_index)) {
+			return zend_mir_module_fail(module,
+				ZEND_MIR_DIAGNOSTIC_INVALID_ID,
+				"call result value is absent");
+		}
+		values = ZEND_MIR_CORE_ITEMS(
+			module, values, zend_mir_core_value);
+		instruction->record.representation =
+			values[result_index].record.representation;
+		instruction->record.result_id = site->result_id;
+	} else {
+		instruction->record.representation = ZEND_MIR_REPRESENTATION_VOID;
+		instruction->record.result_id = ZEND_MIR_ID_INVALID;
+	}
 	instruction->record.frame_state_id =
 		site->caller_frame.frame_state_id;
 	/*
@@ -1231,6 +1250,51 @@ static bool zend_mir_core_append_call_instruction(
 	site->instruction_id = *instruction_count;
 	(*instruction_count)++;
 	return true;
+}
+
+static bool zend_mir_core_append_calls_before(
+	zend_mir_module *module, zend_mir_core_instruction *instructions,
+	uint32_t *instruction_count, zend_mir_block_id block_id,
+	zend_mir_source_position_id source_position, bool flush_block,
+	bool *inserted)
+{
+	zend_mir_core_call_staging *staging = &module->call_staging;
+
+	for (;;) {
+		uint32_t selected = ZEND_MIR_ID_INVALID;
+		uint32_t selected_position = ZEND_MIR_ID_INVALID;
+		uint32_t site_index;
+
+		for (site_index = 0; site_index < staging->site_count; site_index++) {
+			zend_mir_block_id candidate_block;
+			const zend_mir_call_site_ref *site = &staging->sites[site_index];
+
+			if (inserted[site_index]
+					|| !zend_mir_core_call_site_block(
+						staging, site_index, &candidate_block)
+					|| candidate_block != block_id
+					|| (!flush_block
+						&& site->instruction_id > source_position)) {
+				continue;
+			}
+			if (!zend_mir_id_is_valid(selected)
+					|| site->instruction_id < selected_position
+					|| (site->instruction_id == selected_position
+						&& site_index < selected)) {
+				selected = site_index;
+				selected_position = site->instruction_id;
+			}
+		}
+		if (!zend_mir_id_is_valid(selected)) {
+			return true;
+		}
+		if (!zend_mir_core_append_call_instruction(
+				module, instructions, instruction_count,
+				selected, block_id)) {
+			return false;
+		}
+		inserted[selected] = true;
+	}
 }
 
 static bool zend_mir_core_commit_call_model(
@@ -1434,26 +1498,18 @@ static bool zend_mir_core_commit_call_model(
 			ZEND_MIR_ID_INVALID;
 	}
 	for (index = 0; index < module->instructions.count; index++) {
-		if (zend_mir_opcode_is_terminator(
-				old_instructions[index].record.opcode)) {
-			for (site_index = 0;
-				site_index < staging->site_count; site_index++) {
-				zend_mir_block_id block_id;
-				if (!inserted[site_index]
-						&& zend_mir_core_call_site_block(
-							staging, site_index, &block_id)
-						&& block_id
-							== old_instructions[index].record.block_id) {
-					if (!zend_mir_core_append_call_instruction(
-							module, new_instructions,
-							&new_instruction_count,
-							site_index, block_id)) {
-						free(inserted);
-						return false;
-					}
-					inserted[site_index] = true;
-				}
-			}
+		bool terminator = zend_mir_opcode_is_terminator(
+			old_instructions[index].record.opcode);
+		if ((terminator
+				|| zend_mir_id_is_valid(
+					old_instructions[index].record.source_position_id))
+				&& !zend_mir_core_append_calls_before(
+					module, new_instructions, &new_instruction_count,
+					old_instructions[index].record.block_id,
+					old_instructions[index].record.source_position_id,
+					terminator, inserted)) {
+			free(inserted);
+			return false;
 		}
 		new_instructions[new_instruction_count] = old_instructions[index];
 		new_instructions[new_instruction_count].record.id =
@@ -1465,9 +1521,9 @@ static bool zend_mir_core_commit_call_model(
 		if (!inserted[site_index]) {
 			(void) zend_mir_core_call_site_block(
 				staging, site_index, &block_id);
-			if (!zend_mir_core_append_call_instruction(
+			if (!zend_mir_core_append_calls_before(
 					module, new_instructions, &new_instruction_count,
-					site_index, block_id)) {
+					block_id, ZEND_MIR_ID_INVALID, true, inserted)) {
 				free(inserted);
 				return false;
 			}

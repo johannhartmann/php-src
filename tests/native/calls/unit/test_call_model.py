@@ -60,6 +60,23 @@ class CallModelTests(unittest.TestCase):
         self.assertIn("staging->committed = true;", text)
         self.assertIn("free(module->call_staging.targets);", text)
 
+    def test_call_results_and_source_order_are_published_exactly(self) -> None:
+        model = MODEL.read_text(encoding="utf-8")
+        module = MODULE.read_text(encoding="utf-8")
+        self.assertIn("zend_mir_w05_result_value", model)
+        self.assertIn("site.result_id = plan->results[index];", model)
+        self.assertIn("zend_mir_w05_verify_source_order", model)
+        self.assertIn("zend_mir_core_append_calls_before", module)
+        self.assertIn("site->result_id, &result_index", module)
+
+    def test_declaration_identity_rejects_recursive_self_calls(self) -> None:
+        model = MODEL.read_text(encoding="utf-8")
+        frontend = FRONTEND.read_text(encoding="utf-8")
+        self.assertIn("zend_mir_frontend_declaration_id", frontend)
+        self.assertIn("&function->op_array == caller", frontend)
+        self.assertIn("resolved.function_symbol_id", model)
+        self.assertIn("context->function_symbol_id", model)
+
     def test_model_contains_no_runtime_or_target_backend(self) -> None:
         text = MODEL.read_text(encoding="utf-8").lower()
         for token in (
@@ -85,6 +102,16 @@ class CallModelTests(unittest.TestCase):
         self.assertIn("stack[stack_count - 1]", validator)
         self.assertIn("seen_arguments", validator)
         self.assertIn("argument->flags != 0", validator)
+
+    def test_nested_call_result_is_rejected_before_mutation(self) -> None:
+        model = MODEL.read_text(encoding="utf-8")
+        frontend = FRONTEND.read_text(encoding="utf-8")
+        self.assertIn(
+            "zend_mir_frontend_w05_argument_is_call_result", frontend
+        )
+        self.assertIn(
+            "return ZEND_MIRL_W05_UNSUPPORTED_RESULT;", model
+        )
 
     def test_named_syntax_survives_positional_normalization(self) -> None:
         compiler = COMPILER.read_text(encoding="utf-8")

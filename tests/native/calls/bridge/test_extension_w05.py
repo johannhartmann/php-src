@@ -269,6 +269,103 @@ class RealCandidateTests(unittest.TestCase):
         self.assertIn("ZEND_DO_FCALL", result["source_opcodes"])
         self.assertNotIn("ZEND_DO_UCALL", result["source_opcodes"])
 
+    def test_exact_scalar_call_results_are_modeled_as_instruction_results(self) -> None:
+        candidate = os.environ.get("TEST_PHP_EXECUTABLE")
+        if not candidate:
+            self.skipTest("TEST_PHP_EXECUTABLE is not set")
+        import importlib.util
+
+        specification = importlib.util.spec_from_file_location(
+            "w05_scalar_result_dump", ROOT / "scripts/native/calls/dump-w05.py"
+        )
+        assert specification is not None and specification.loader is not None
+        module = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(module)
+        expected = {
+            "int": "i64",
+            "bool": "i1",
+            "float": "double",
+            "null": "zval",
+        }
+        for kind, representation in expected.items():
+            with self.subTest(kind=kind):
+                source = (
+                    ROOT
+                    / "tests/native/calls/corpus/cases"
+                    / f"direct_user_scalar_result_{kind}.php"
+                ).read_bytes()
+                result = module.invoke(
+                    module.candidate_path(candidate),
+                    source,
+                    f"direct-user-scalar-result-{kind}.php",
+                    "w05_case",
+                )["calls"][0]
+                self.assertEqual(result["status"], "accepted")
+                self.assertRegex(
+                    result["mir"],
+                    rf"opcode call_direct_user representation {representation} "
+                    rf"result v\d+",
+                )
+                self.assertRegex(result["mir"], r"call-site cs0 .* result v\d+")
+
+    def test_recursive_self_call_reuses_caller_identity_and_is_rejected(self) -> None:
+        candidate = os.environ.get("TEST_PHP_EXECUTABLE")
+        if not candidate:
+            self.skipTest("TEST_PHP_EXECUTABLE is not set")
+        import importlib.util
+
+        specification = importlib.util.spec_from_file_location(
+            "w05_recursive_dump", ROOT / "scripts/native/calls/dump-w05.py"
+        )
+        assert specification is not None and specification.loader is not None
+        module = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(module)
+        source = (
+            ROOT / "tests/native/calls/corpus/cases/recursive_self_call.php"
+        ).read_bytes()
+        result = module.invoke(
+            module.candidate_path(candidate),
+            source,
+            "recursive-self-call.php",
+            "w05_case",
+        )["calls"][0]
+        self.assertEqual(result["status"], "rejected")
+        self.assertIn(
+            "MIRL0023",
+            {diagnostic["code"] for diagnostic in result["diagnostics"]},
+        )
+
+    def test_call_instruction_preserves_source_opline_order_after_phi(self) -> None:
+        candidate = os.environ.get("TEST_PHP_EXECUTABLE")
+        if not candidate:
+            self.skipTest("TEST_PHP_EXECUTABLE is not set")
+        import importlib.util
+
+        specification = importlib.util.spec_from_file_location(
+            "w05_source_order_dump", ROOT / "scripts/native/calls/dump-w05.py"
+        )
+        assert specification is not None and specification.loader is not None
+        module = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(module)
+        source = (
+            ROOT / "tests/native/calls/corpus/cases/direct_call_after_phi.php"
+        ).read_bytes()
+        result = module.invoke(
+            module.candidate_path(candidate),
+            source,
+            "direct-call-after-phi.php",
+            "w05_case",
+        )["calls"][0]
+        self.assertEqual(result["status"], "accepted")
+        by_block: dict[str, list[int]] = {}
+        for line in result["mir"].splitlines():
+            match = re.match(r"instruction i\d+ block (b\d+) .* source p(\d+)$", line)
+            if match:
+                by_block.setdefault(match.group(1), []).append(int(match.group(2)))
+        self.assertTrue(by_block)
+        for positions in by_block.values():
+            self.assertEqual(positions, sorted(positions))
+
     def test_w05_module_oom_is_failure_atomic(self) -> None:
         candidate = os.environ.get("TEST_PHP_EXECUTABLE")
         if not candidate:
