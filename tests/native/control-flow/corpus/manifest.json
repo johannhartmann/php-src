@@ -12,7 +12,7 @@
       "required_source_opcodes": ["ZEND_IS_SMALLER", "ZEND_JMPZ", "ZEND_ADD", "ZEND_SUB"],
       "semantic_family": "conditional_integer",
       "source_path": "tests/native/control-flow/corpus/accepted/if_else_int.php",
-      "source_sha256": "84d66869860e7637db271dc6f4b3462dd1463c9afd8d3bf67f3d2cace5d014b0"
+      "source_sha256": "e1270c5ca917bf6620a0cc3af0650bc0e1e8a7ce4523b8c7357167b3f98ee635"
     },
     {
       "case_id": "nested_if_bool",
@@ -26,7 +26,7 @@
       "required_source_opcodes": ["ZEND_JMPZ", "ZEND_RETURN"],
       "semantic_family": "nested_conditional",
       "source_path": "tests/native/control-flow/corpus/accepted/nested_if_bool.php",
-      "source_sha256": "7f3f2ba94b1de0825503708e27fc2439cd7684b7c0954ecfc7e7341a72bf392d"
+      "source_sha256": "efe32738dc142b9b4d5d0dc868177ab3fccb1703d40771092bfab01fb41d1ed9"
     },
     {
       "case_id": "ternary_scalar",
@@ -40,7 +40,7 @@
       "required_source_opcodes": ["ZEND_JMPZ", "ZEND_QM_ASSIGN"],
       "semantic_family": "conditional_value_merge",
       "source_path": "tests/native/control-flow/corpus/accepted/ternary_scalar.php",
-      "source_sha256": "0d892dc1f3bef43fd7a849ca20bb1b0d8a8076cd2c001ba3b516a146b5f0cee9"
+      "source_sha256": "69d0b56b8170b41cccf39b66192568ba68631502d8f77e50b334ea8fa16abba8"
     },
     {
       "case_id": "short_circuit_and",
@@ -54,7 +54,7 @@
       "required_source_opcodes": ["ZEND_JMPZ_EX", "ZEND_BOOL"],
       "semantic_family": "short_circuit_boolean",
       "source_path": "tests/native/control-flow/corpus/accepted/short_circuit_and.php",
-      "source_sha256": "dbd205ac62959b5e325e6645a37754387e21489ee7a1f99b81f7e6129153b62a"
+      "source_sha256": "19d78390038d430a3f6181014d668f1ab410cb8c8f295d8eac119001d875ea06"
     },
     {
       "case_id": "short_circuit_or",
@@ -68,7 +68,7 @@
       "required_source_opcodes": ["ZEND_JMPNZ_EX", "ZEND_BOOL"],
       "semantic_family": "short_circuit_boolean",
       "source_path": "tests/native/control-flow/corpus/accepted/short_circuit_or.php",
-      "source_sha256": "7ddbecedb67443a250e8394c66a0e0e7796384f1c80ade998d0f2257f729cb31"
+      "source_sha256": "1a18d05ddc097bfdabe1f3e5ca16cae46e38b67575455331e4364c96f5433289"
     },
     {
       "case_id": "early_return",
@@ -82,7 +82,7 @@
       "required_source_opcodes": ["ZEND_IS_SMALLER", "ZEND_JMPZ", "ZEND_RETURN"],
       "semantic_family": "early_exit",
       "source_path": "tests/native/control-flow/corpus/accepted/early_return.php",
-      "source_sha256": "0655d5f8d7da2435bddef95b5259f20a915bb741075aceb404d9f08f0f4ce13a"
+      "source_sha256": "f0fef01715a102509004254e99fcbf58fca7e3ef1a2170f4034d7a50d7d78588"
     },
     {
       "case_id": "empty_fallthrough",
@@ -96,7 +96,7 @@
       "required_source_opcodes": ["ZEND_JMPZ", "ZEND_RETURN"],
       "semantic_family": "empty_branch_fallthrough",
       "source_path": "tests/native/control-flow/corpus/accepted/empty_fallthrough.php",
-      "source_sha256": "1c846217853290267361577d86cf70178bf9984aea9039b7becef28a83438fba"
+      "source_sha256": "9d4dee9e4fc27ff09bab537860b7fca911d1de5ef473a357acbdaedcd9d31c6d"
     },
     {
       "case_id": "while_loop_counter",
@@ -110,7 +110,7 @@
       "required_source_opcodes": ["ZEND_IS_SMALLER", "ZEND_JMPNZ", "ZEND_PRE_INC"],
       "semantic_family": "while_loop",
       "source_path": "tests/native/control-flow/corpus/accepted/while_loop_counter.php",
-      "source_sha256": "8b6b502ed7175da59e5a916b70891f6dc5a7f4f54d7282bad20a8b487e12a663"
+      "source_sha256": "cea337e50591693d880162c82b693c88124f0b17282b9700dd36b798880aa2f0"
     },
     {
       "case_id": "do_while_counter",
@@ -124,7 +124,7 @@
       "required_source_opcodes": ["ZEND_PRE_INC", "ZEND_IS_SMALLER", "ZEND_JMPNZ"],
       "semantic_family": "do_while_loop",
       "source_path": "tests/native/control-flow/corpus/accepted/do_while_counter.php",
-      "source_sha256": "b2671e6202f0e810646dcdd1c321ecc94f07e7504b62ffe296e280a1f11e178c"
+      "source_sha256": "5e39a559c7d0295aa56c6ebf0a4550d201376e311a9afd9cb08b51d091e4837d"
     },
     {
       "case_id": "for_loop_counter",
@@ -138,7 +138,7 @@
       "required_source_opcodes": ["ZEND_IS_SMALLER", "ZEND_JMPNZ", "ZEND_PRE_INC", "ZEND_ADD"],
       "semantic_family": "for_loop",
       "source_path": "tests/native/control-flow/corpus/accepted/for_loop_counter.php",
-      "source_sha256": "abc23a4a9663d130c18608358d8cc48f4c6cc099a2016a4e285a6ae2162da49b"
+      "source_sha256": "b437decdd46db63847edfad635f58fd530a726df49d6339f5dff1acc3c54d10f"
     },
     {
       "case_id": "loop_carried_phi",
@@ -152,7 +152,7 @@
       "required_source_opcodes": ["ZEND_IS_SMALLER", "ZEND_JMPNZ", "ZEND_ADD", "ZEND_PRE_INC"],
       "semantic_family": "loop_phi",
       "source_path": "tests/native/control-flow/corpus/accepted/loop_carried_phi.php",
-      "source_sha256": "8136e1dc5a2a65e2bdf9feaa5704813193f092b31228354e499f0ee2506b745d"
+      "source_sha256": "54f5b9dca2df72fc2183c5573b4c1ad8eadfc941acf15869e6d7d5aaefe643f6"
     },
     {
       "case_id": "multiple_backedges_reducible",
@@ -166,7 +166,7 @@
       "required_source_opcodes": ["ZEND_JMP", "ZEND_JMPZ", "ZEND_BW_AND", "ZEND_ADD"],
       "semantic_family": "reducible_multi_backedge_loop",
       "source_path": "tests/native/control-flow/corpus/accepted/multiple_backedges_reducible.php",
-      "source_sha256": "adb9bda024cdd0712bc674ebf401d337a406ea3b7c904029743e8b66e5dd40f0"
+      "source_sha256": "c9e88bde8aa048951b873d8a594709134518bfea2a2cd6fe3e63c9977b408977"
     },
     {
       "case_id": "try_catch_finally",
@@ -180,7 +180,7 @@
       "required_source_opcodes": ["ZEND_THROW", "ZEND_FAST_CALL", "ZEND_CATCH"],
       "semantic_family": "protected_region",
       "source_path": "tests/native/control-flow/corpus/rejected/try_catch_finally.php",
-      "source_sha256": "7faa0e7d4dec476f0bca2a226e377593c776e259949fe0429337d1dd98dc19cd"
+      "source_sha256": "5f7ba6d27297af77b52a7e09a2b42491efb4f62f61e09b2dca021234eb6e39db"
     },
     {
       "case_id": "call_inside_branch",
@@ -194,7 +194,7 @@
       "required_source_opcodes": ["ZEND_JMPZ", "ZEND_INIT_FCALL", "ZEND_DO_ICALL"],
       "semantic_family": "runtime_call_boundary",
       "source_path": "tests/native/control-flow/corpus/rejected/call_inside_branch.php",
-      "source_sha256": "01cf9de441fbe60243d6139db1af44e6f1fb661761ad3186164fe489f677b80b"
+      "source_sha256": "d5fa03ad7cf88a3af038543d6eb059b0c28f5e9ae71b88c6f471e6e97d8c8903"
     },
     {
       "case_id": "reference_loop_phi",
@@ -208,7 +208,7 @@
       "required_source_opcodes": ["ZEND_FE_RESET_RW", "ZEND_FE_FETCH_RW", "ZEND_ASSIGN_REF"],
       "semantic_family": "reference_loop_phi",
       "source_path": "tests/native/control-flow/corpus/rejected/reference_loop_phi.php",
-      "source_sha256": "a3b3d35a16d70160d77ae3940f1a60e4d1fc4da25fe331257fe3b86b32a8290d"
+      "source_sha256": "81284a0e73dfae9b0e3106117ab021b7663a53726656b296817de483924a7588"
     },
     {
       "case_id": "array_condition",
@@ -222,7 +222,7 @@
       "required_source_opcodes": ["ZEND_JMPZ"],
       "semantic_family": "array_truthiness",
       "source_path": "tests/native/control-flow/corpus/rejected/array_condition.php",
-      "source_sha256": "315950b1a05014bf61e8ab739043d7ce4cfe809dcecec7e090d2d4fc35413293"
+      "source_sha256": "38480823e7bc801ccbc9cf0b0b52819a4f7efb7e67740e387a870b24449eb062"
     },
     {
       "case_id": "object_condition",
@@ -236,7 +236,7 @@
       "required_source_opcodes": ["ZEND_JMPZ"],
       "semantic_family": "object_truthiness",
       "source_path": "tests/native/control-flow/corpus/rejected/object_condition.php",
-      "source_sha256": "7bbf2cc3f2086f5ee052c98c6189a961e8cfb5b95164ae215d6c7e136df05cc3"
+      "source_sha256": "d8b08814ad13862e1ba316bce1205afc598bd40c88381693199f137630f31931"
     },
     {
       "case_id": "string_condition_without_profile",
@@ -250,7 +250,7 @@
       "required_source_opcodes": ["ZEND_JMPZ"],
       "semantic_family": "unproved_string_truthiness",
       "source_path": "tests/native/control-flow/corpus/rejected/string_condition_without_profile.php",
-      "source_sha256": "02f4bdca196f975cdf86fdea037f5ce630392a554f7873ba3a9db39c3eff9ce2"
+      "source_sha256": "58ae90e5e2a788e972702fb2cf08697029f85c926a58c6123a933cac90c68a84"
     },
     {
       "case_id": "switch_or_match_if_not_profiled",
@@ -264,7 +264,7 @@
       "required_source_opcodes": ["ZEND_MATCH", "ZEND_MATCH_ERROR"],
       "semantic_family": "multiway_branch",
       "source_path": "tests/native/control-flow/corpus/rejected/switch_or_match_if_not_profiled.php",
-      "source_sha256": "73bf7f994180dc7d8b97f31d08397cb21c5351630040f80e6b80f458d36f06bb"
+      "source_sha256": "f320008f59eb1166e3c38b007ba39c5e2fbea93e724a34851a23590524625707"
     },
     {
       "case_id": "goto_irreducible",
@@ -278,7 +278,7 @@
       "required_source_opcodes": ["ZEND_JMP", "ZEND_JMPZ"],
       "semantic_family": "irreducible_cfg",
       "source_path": "tests/native/control-flow/corpus/rejected/goto_irreducible.php",
-      "source_sha256": "1390ca8694092ff46492a7c2e8a4db7aa228bd571f98bb264bb41a6de7ed1ba6"
+      "source_sha256": "8e1b93c97521ae09427c1ffb618bcfac8cdcb3463f687c65e7e712ed398accb2"
     },
     {
       "case_id": "unsupported_pi_constraint",
@@ -292,7 +292,7 @@
       "required_source_opcodes": ["ZEND_IS_SMALLER", "ZEND_JMPZ_EX"],
       "semantic_family": "unsupported_pi_constraint",
       "source_path": "tests/native/control-flow/corpus/rejected/unsupported_pi_constraint.php",
-      "source_sha256": "1797aff60f7824135d49f4df3b4e39db9199084eea86d7100027dc83377489a3"
+      "source_sha256": "21630d22df22b821e96fef2a542185e294ab28d80b6b63af11f39eece00300bf"
     },
     {
       "case_id": "missing_condition_type_proof",
@@ -306,7 +306,7 @@
       "required_source_opcodes": ["ZEND_JMPZ"],
       "semantic_family": "missing_branch_type_proof",
       "source_path": "tests/native/control-flow/corpus/rejected/missing_condition_type_proof.php",
-      "source_sha256": "c9505e334bcc6db1402f7b3ab6c18cf61a8de626a43b26bae89dee316f3a4dfa"
+      "source_sha256": "bc0c4d7d6844ae9990ee8569f6861dbaa8f0d932cced83911b14e48c173257fc"
     },
     {
       "case_id": "coalesce_reference_semantics",
@@ -320,7 +320,7 @@
       "required_source_opcodes": ["ZEND_COALESCE", "ZEND_ASSIGN"],
       "semantic_family": "coalesce_reference",
       "source_path": "tests/native/control-flow/corpus/rejected/coalesce_reference_semantics.php",
-      "source_sha256": "132e703c551c8464571e91498486657c03c7bd8ed25206e5f73b047b815609c7"
+      "source_sha256": "92a27b66c6fc7b240a082b67dba8019991b3046136e316dfad836d939838d12d"
     },
     {
       "case_id": "nullsafe_jump",
@@ -334,7 +334,7 @@
       "required_source_opcodes": ["ZEND_JMP_NULL", "ZEND_FETCH_OBJ_R", "ZEND_JMPZ"],
       "semantic_family": "nullsafe_control_flow",
       "source_path": "tests/native/control-flow/corpus/rejected/nullsafe_jump.php",
-      "source_sha256": "b39c75a615d045e8bbdb4389c474ccde028613c196eb5fd23cd80e4b165aee54"
+      "source_sha256": "87d1e5c14ecbaa01421d648b0b62d4f89e638165c4e62a077067c3e44ba61bc4"
     }
   ],
   "environment": {

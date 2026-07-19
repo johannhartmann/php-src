@@ -1,5 +1,5 @@
 <?php
-function w04_switch_or_match_if_not_profiled(int $value): int {
+function w04_switch_or_match_if_not_profiled(int $value) {
     return match ($value) {
         0 => 10,
         1 => 20,

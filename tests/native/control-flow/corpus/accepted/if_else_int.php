@@ -1,5 +1,5 @@
 <?php
-function w04_if_else_int(int $value): int {
+function w04_if_else_int(int $value) {
     if ($value > 0) {
         return $value + 1;
     } else {

@@ -1,5 +1,5 @@
 <?php
-function w04_missing_condition_type_proof(mixed $value): int {
+function w04_missing_condition_type_proof(mixed $value) {
     if ($value) {
         return 1;
     }

@@ -1,5 +1,5 @@
 <?php
-function w04_multiple_backedges_reducible(int $limit): int {
+function w04_multiple_backedges_reducible(int $limit) {
     $counter = 0;
     $total = 0;
     while ($counter < $limit) {

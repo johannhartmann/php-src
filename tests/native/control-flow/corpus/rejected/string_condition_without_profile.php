@@ -1,5 +1,5 @@
 <?php
-function w04_string_condition_without_profile(string $value): int {
+function w04_string_condition_without_profile(string $value) {
     if ($value) {
         return 1;
     }
