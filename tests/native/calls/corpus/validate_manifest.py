@@ -26,6 +26,7 @@ REQUIRED_DEFERRED = {
     "refcounted_argument": "W06",
     "used_unknown_return": "W06",
     "named_argument": "W07",
+    "named_argument_normalized_position": "W07",
     "unpack_argument": "W07",
     "variadic_target": "W07",
     "method_call": "W08",

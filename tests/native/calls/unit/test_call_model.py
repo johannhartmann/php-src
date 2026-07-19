@@ -11,6 +11,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[4]
 MODEL = ROOT / "Zend/Native/Calls/Model/zend_mir_call_model.c"
 MODULE = ROOT / "Zend/Native/MIR/Core/zend_mir_module.c"
+COMPILER = ROOT / "Zend/zend_compile.c"
+FRONTEND = ROOT / "Zend/Native/Lowering/Frontend/zend_mir_zend_source.c"
 W01_MATRIX = ROOT / "docs/native-engine/semantics/opcodes/opcode-matrix.json"
 SOURCE = Path(__file__).with_name("test_call_contract.c")
 
@@ -82,6 +84,27 @@ class CallModelTests(unittest.TestCase):
         self.assertIn("ZEND_MIR_SOURCE_CALL_SITE_NESTED", validator)
         self.assertIn("stack[stack_count - 1]", validator)
         self.assertIn("seen_arguments", validator)
+        self.assertIn("argument->flags != 0", validator)
+
+    def test_named_syntax_survives_positional_normalization(self) -> None:
+        compiler = COMPILER.read_text(encoding="utf-8")
+        frontend = FRONTEND.read_text(encoding="utf-8")
+        self.assertIn(
+            "#define ZEND_SEND_SYNTACTIC_NAMED (1u << 31)",
+            compiler,
+        )
+        self.assertGreaterEqual(
+            compiler.count(
+                "opline->extended_value |= ZEND_SEND_SYNTACTIC_NAMED;"
+            ),
+            2,
+        )
+        self.assertIn("ZEND_MIR_ZEND_SEND_SYNTACTIC_NAMED", frontend)
+        self.assertIn(
+            "ZEND_MIR_SOURCE_CALL_ARGUMENT_SYNTACTIC_NAMED",
+            frontend,
+        )
+        self.assertIn("argument->flags != 0", frontend)
 
     def test_call_effect_summary_is_a_w01_sequence_superset(self) -> None:
         text = MODEL.read_text(encoding="utf-8")
