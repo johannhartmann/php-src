@@ -727,7 +727,7 @@ static void test_stage3_loop_statepoint(void)
 	frame.resume.resume_id = ZEND_MIR_ID_INVALID;
 	frame.resume.code_version_id = ZEND_MIR_ID_INVALID;
 	frame.resume.target_opline_index = ZEND_MIR_ID_INVALID;
-	frame.safepoint_class = ZEND_MIR_SAFEPOINT_CLASS_INTERRUPT;
+	frame.safepoint_class = ZEND_MIR_SAFEPOINT_CLASS_OBSERVER;
 	frame.canonical = true;
 	assert(host.mutator.add_frame_state(
 		host.mutator.context, &frame, &frame_id));
@@ -751,8 +751,13 @@ static void test_stage3_loop_statepoint(void)
 	record.effects =
 		ZEND_MIR_EFFECT_MASK(ZEND_MIR_EFFECT_INTERRUPT_BOUNDARY);
 	record.reads =
+		ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_FRAME_CALL_CHAIN)
+		| ZEND_MIR_MEMORY_DOMAIN_MASK(
+			ZEND_MIR_MEMORY_DOMAIN_ENGINE_INTERRUPT);
+	record.writes =
 		ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_ENGINE_INTERRUPT);
 	record.barriers = ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_SAFEPOINT)
+		| ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_OBSERVER)
 		| ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_INTERRUPT);
 	assert(host.mutator.add_instruction(
 		host.mutator.context, &record, &statepoint));
