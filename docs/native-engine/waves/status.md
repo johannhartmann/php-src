@@ -50,47 +50,53 @@ Freeze complete, source-backed semantic, effect, frame, TPDE, and test contracts
 
 ## W02 — MIR contracts and verifier
 
-**Status:** `PASS`
+**Status:** `MISSING`
 
 Define architecture-independent MIR, explicit effects, ownership, frame states, and verifier invariants.
 
+**Missing required gates:** `W02-A-core-arena-ids`, `W02-B-cfg-phi-dominance`, `W02-C-effects-ownership-binding`, `W02-D-frame-state-source-map`, `W02-E-text-dump-parser`, `W02-F-verifier-stage1`, `W02-integration-gate`
+
 | Task | Required | Status | Base | Head | Evidence | Blockers |
 | --- | --- | --- | --- | --- | --- | --- |
-| W02-A-core-arena-ids | yes | pass | b2d0e87766fc | c13c78793f13 | Core storage, arena allocation, stable IDs, and fail-closed validation passed. (logs/core.log) | — |
-| W02-B-cfg-phi-dominance | yes | pass | b2d0e87766fc | 0b327d66ae47 | Transactional CFG, PHI, critical-edge, and dominance tests passed. (logs/cfg.log) | — |
-| W02-C-effects-ownership-binding | yes | pass | b2d0e87766fc | f643cb01af6f | Effect summaries, alias classes, ownership transitions, and generated semantic IDs passed. (logs/semantics.log) | — |
-| W02-D-frame-state-source-map | yes | pass | b2d0e87766fc | 22ddc569255a | Frame-state interning, source maps, and invalid metadata rejection passed. (logs/frame.log) | — |
-| W02-E-text-dump-parser | yes | pass | b2d0e87766fc | 98dd738b4ac2 | Canonical text, strict parsing, golden hashes, and malformed-input rejection passed. (logs/text.log) | — |
-| W02-F-verifier-stage1 | yes | pass | b2d0e87766fc | cabcb379a579 | Stage-one verifier success paths, precise failures, and nonmutation checks passed. (logs/verify.log) | — |
-| W02-integration-gate | yes | pass | b2d0e87766fc | 9dd42b5a86a7 | Strict C11/C++20 integration, deterministic dumps, precise diagnostics, sanitizers, fuzzing, and W00/W01 regressions passed. (logs/wave-gate-check.log) | — |
+| W02-A-core-arena-ids | yes | missing | — | — | — | — |
+| W02-B-cfg-phi-dominance | yes | missing | — | — | — | — |
+| W02-C-effects-ownership-binding | yes | missing | — | — | — | — |
+| W02-D-frame-state-source-map | yes | missing | — | — | — | — |
+| W02-E-text-dump-parser | yes | missing | — | — | — | — |
+| W02-F-verifier-stage1 | yes | missing | — | — | — | — |
+| W02-integration-gate | yes | missing | — | — | — | — |
 
 ## W03 — Scalar and straight-line lowering
 
-**Status:** `PASS`
+**Status:** `MISSING`
 
 Lower scalar operations and straight-line control into verified MIR with reference-equivalent behavior.
 
+**Missing required gates:** `W03-A-lowering-core-registry`, `W03-B-frontend-operands-facts`, `W03-C-numeric-arithmetic-bitwise`, `W03-D-comparison-boolean-casts`, `W03-E-straight-line-lifetime-return`, `W03-F-mir-scalar-verifier-text`, `W03-G-compile-dump-differential`, `W03-integration-gate`
+
 | Task | Required | Status | Base | Head | Evidence | Blockers |
 | --- | --- | --- | --- | --- | --- | --- |
-| W03-A-lowering-core-registry | yes | pass | e310e29c4e71 | 6129913936a2 | Integrated W03 hard-gate evidence passed. (w03-artifacts/W03-A-lowering-core-registry.log) | — |
-| W03-B-frontend-operands-facts | yes | pass | e310e29c4e71 | 6129913936a2 | Integrated W03 hard-gate evidence passed. (w03-artifacts/W03-B-frontend-operands-facts.log) | — |
-| W03-C-numeric-arithmetic-bitwise | yes | pass | e310e29c4e71 | 6129913936a2 | Integrated W03 hard-gate evidence passed. (w03-artifacts/W03-C-numeric-arithmetic-bitwise.log) | — |
-| W03-D-comparison-boolean-casts | yes | pass | e310e29c4e71 | 6129913936a2 | Integrated W03 hard-gate evidence passed. (w03-artifacts/W03-D-comparison-boolean-casts.log) | — |
-| W03-E-straight-line-lifetime-return | yes | pass | e310e29c4e71 | 6129913936a2 | Integrated W03 hard-gate evidence passed. (w03-artifacts/W03-E-straight-line-lifetime-return.log) | — |
-| W03-F-mir-scalar-verifier-text | yes | pass | e310e29c4e71 | 6129913936a2 | Integrated W03 hard-gate evidence passed. (w03-artifacts/W03-F-mir-scalar-verifier-text.log) | — |
-| W03-G-compile-dump-differential | yes | pass | e310e29c4e71 | 6129913936a2 | Integrated W03 hard-gate evidence passed. (w03-artifacts/W03-G-compile-dump-differential.log) | — |
-| W03-integration-gate | yes | pass | e310e29c4e71 | 6129913936a2 | Integrated W03 hard-gate evidence passed. (w03-artifacts/W03-integration-gate.log) | — |
+| W03-A-lowering-core-registry | yes | missing | — | — | — | — |
+| W03-B-frontend-operands-facts | yes | missing | — | — | — | — |
+| W03-C-numeric-arithmetic-bitwise | yes | missing | — | — | — | — |
+| W03-D-comparison-boolean-casts | yes | missing | — | — | — | — |
+| W03-E-straight-line-lifetime-return | yes | missing | — | — | — | — |
+| W03-F-mir-scalar-verifier-text | yes | missing | — | — | — | — |
+| W03-G-compile-dump-differential | yes | missing | — | — | — | — |
+| W03-integration-gate | yes | missing | — | — | — | — |
 
 ## W04 — Control flow and loops
 
 **Status:** `MISSING`
 
-Implement structured control flow, phi construction, and loop semantics without a production VM fallback.
+Lower source-backed reducible Zend control flow, preserve exact successor/PHI order, and verify stage-3 block, edge, loop, and edge-statepoint mappings.
 
-**Missing required gates:** `W04-integration-gate`
+**Missing required gates:** `W04-A-production-control-flow`, `W04-B-control-flow-evidence`, `W04-integration-gate`
 
 | Task | Required | Status | Base | Head | Evidence | Blockers |
 | --- | --- | --- | --- | --- | --- | --- |
+| W04-A-production-control-flow | yes | missing | — | — | — | — |
+| W04-B-control-flow-evidence | yes | missing | — | — | — | — |
 | W04-integration-gate | yes | missing | — | — | — | — |
 
 ## W05 — Calls, frames, and runtime ABI

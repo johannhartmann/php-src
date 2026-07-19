@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[4]
 SCRIPT = ROOT / "scripts/native/wave-gate.py"
 DEFINITION_PATH = ROOT / "docs/native-engine/waves/waves.json"
 FIXTURES = ROOT / "docs/native-engine/waves/fixtures"
+W04_OWNERSHIP_PATH = ROOT / "docs/native-engine/control-flow/w04-ownership.json"
 
 SPEC = importlib.util.spec_from_file_location("wave_gate", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
@@ -197,6 +198,73 @@ class WaveGateTests(unittest.TestCase):
             for task_id in self.waves["W03"]["required_gate_ids"]:
                 self.assertIn(task_id, w03)
             self.assertIn("**Status:** `MISSING`", w03)
+
+    def test_w04_is_generated_from_ownership_and_pinned_to_h(self):
+        ownership = json.loads(W04_OWNERSHIP_PATH.read_text(encoding="utf-8"))
+        expected_tasks = [
+            *ownership["specialist_tasks"],
+            ownership["integration_task"],
+        ]
+        wave = self.waves["W04"]
+        self.assertEqual(
+            "01e51448e2bc9423d7dc1254ae5e4d34fc236eb4",
+            wave["expected_base_commit"],
+        )
+        self.assertEqual(2, len(wave["parallel_tracks"]))
+        self.assertEqual(
+            [task["task_id"] for task in expected_tasks],
+            wave["required_gate_ids"],
+        )
+        for generated, source in zip(wave["tasks"], expected_tasks):
+            self.assertEqual(source["task_id"], generated["task_id"])
+            self.assertEqual(source["owned_paths"], generated["owned_paths"])
+
+    def test_w04_specialist_paths_are_disjoint_and_integration_reserved(self):
+        wave = self.waves["W04"]
+        specialists = wave["tasks"][:2]
+        self.assertEqual(2, len(specialists))
+        self.assertTrue(
+            set(specialists[0]["owned_paths"]).isdisjoint(
+                specialists[1]["owned_paths"]
+            )
+        )
+        integration_paths = set(wave["tasks"][2]["owned_paths"])
+        for specialist in specialists:
+            self.assertTrue(
+                set(specialist["owned_paths"]).isdisjoint(integration_paths)
+            )
+
+    def test_w04_cannot_pass_with_missing_specialist_result(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            results_dir = Path(temporary)
+            wave = self.waves["W04"]
+            for task_id in wave["required_gate_ids"]:
+                if task_id == "W04-B-control-flow-evidence":
+                    continue
+                result = self.make_result(task_id)
+                result["expected_base_commit"] = wave["expected_base_commit"]
+                result["actual_base_commit"] = wave["expected_base_commit"]
+                result["gate_evidence"][0]["wave_id"] = "W04"
+                self.write_wave_result(results_dir, "W04", result)
+            summary = wave_gate.aggregate_wave(
+                wave,
+                wave_gate.load_wave_results(results_dir, "W04", self.definition),
+            )
+            self.assertEqual("missing", summary["status"])
+            self.assertEqual(
+                ["W04-B-control-flow-evidence"],
+                summary["missing_gate_ids"],
+            )
+
+    def test_w04_empty_dashboard_is_deterministic(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            first = wave_gate.render_dashboard(self.definition, Path(temporary), False)
+            second = wave_gate.render_dashboard(self.definition, Path(temporary), False)
+            self.assertEqual(first.encode("utf-8"), second.encode("utf-8"))
+            w04 = first[first.index("## W04"):first.index("## W05")]
+            for task_id in self.waves["W04"]["required_gate_ids"]:
+                self.assertIn(task_id, w04)
+            self.assertIn("**Status:** `MISSING`", w04)
 
     def test_valid_task_fixtures(self):
         for name in ("A", "B", "C", "D"):
