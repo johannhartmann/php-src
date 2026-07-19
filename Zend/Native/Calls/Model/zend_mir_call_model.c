@@ -350,6 +350,7 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_source_sequence(
 					|| !calls->call_argument_at(
 						calls->context, argument_id, argument)
 					|| seen_arguments[argument->id]
+					|| argument->flags != 0
 					|| stack_count == 0
 					|| stack[stack_count - 1] != argument->call_site_id) {
 				result = zend_mir_w05_is_call_send(
@@ -449,6 +450,7 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 		if (plan->arguments[index].id != index
 				|| plan->arguments[index].mode
 					!= ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE
+				|| plan->arguments[index].flags != 0
 				|| zend_mir_id_is_valid(
 					plan->arguments[index].name_symbol_id)
 				|| !zend_mir_w05_argument_value(context,
@@ -878,6 +880,7 @@ bool zend_mir_verify_w05_calls(
 					|| source_argument.ordinal != operand
 					|| source_argument.mode
 						!= ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE
+					|| source_argument.flags != 0
 					|| zend_mir_id_is_valid(
 						source_argument.name_symbol_id)
 					|| argument.id != source_argument.id

@@ -1364,6 +1364,10 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 			argument->name_symbol_id = ZEND_MIR_ID_INVALID;
 			argument->mode =
 				zend_mir_frontend_call_argument_mode(opline);
+			argument->flags =
+				(opline->extended_value
+					& ZEND_MIR_ZEND_SEND_SYNTACTIC_NAMED) != 0
+				? ZEND_MIR_SOURCE_CALL_ARGUMENT_SYNTACTIC_NAMED : 0;
 			argument->value_ssa_variable_id =
 				ssa->ops[index].op1_use >= 0
 					? (uint32_t) ssa->ops[index].op1_use
@@ -1509,6 +1513,7 @@ zend_mir_lowering_status zend_mir_zend_source_preflight_w05(
 		const zend_mir_source_call_argument_ref *argument =
 			&inventory->arguments[index];
 		if (argument->mode != ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE
+				|| argument->flags != 0
 				|| zend_mir_id_is_valid(argument->name_symbol_id)
 				|| !zend_mir_frontend_w05_argument_is_scalar(
 					op_array, ssa, argument)) {

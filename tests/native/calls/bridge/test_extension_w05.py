@@ -183,6 +183,38 @@ class RealCandidateTests(unittest.TestCase):
             {diagnostic["code"] for diagnostic in result["diagnostics"]},
         )
 
+    def test_normalized_named_argument_is_deferred_to_w07(self) -> None:
+        candidate = os.environ.get("TEST_PHP_EXECUTABLE")
+        if not candidate:
+            self.skipTest("TEST_PHP_EXECUTABLE is not set")
+        import importlib.util
+
+        specification = importlib.util.spec_from_file_location(
+            "w05_normalized_named_dump",
+            ROOT / "scripts/native/calls/dump-w05.py",
+        )
+        assert specification is not None and specification.loader is not None
+        module = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(module)
+        source = (
+            ROOT
+            / (
+                "tests/native/calls/corpus/cases/"
+                "named_argument_normalized_position.php"
+            )
+        ).read_bytes()
+        result = module.invoke(
+            module.candidate_path(candidate),
+            source,
+            "named-argument-normalized-position.php",
+            "w05_case",
+        )["calls"][0]
+        self.assertEqual(result["status"], "rejected")
+        self.assertIn(
+            "MIRL0024",
+            {diagnostic["code"] for diagnostic in result["diagnostics"]},
+        )
+
     def test_64_by_value_parameters_remain_supported(self) -> None:
         candidate = os.environ.get("TEST_PHP_EXECUTABLE")
         if not candidate:
