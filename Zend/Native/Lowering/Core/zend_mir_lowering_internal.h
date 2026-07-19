@@ -20,6 +20,8 @@
 #define ZEND_MIR_LOWERING_MAX_PROVIDERS UINT32_C(32)
 #define ZEND_MIR_LOWERING_MAX_CLAIMS UINT32_C(64)
 
+struct _zend_mir_zend_source;
+
 typedef enum _zend_mir_lowering_profile_disposition {
 	ZEND_MIR_LOWERING_PROFILE_ACCEPTED = 0,
 	ZEND_MIR_LOWERING_PROFILE_DEFERRED_W04 = 1,
@@ -111,7 +113,12 @@ struct _zend_mir_lowering_context {
 	zend_mir_lowering_status provider_status;
 	zend_mir_lowering_diagnostic_code provider_diagnostic;
 	uint32_t last_diagnostic_opline;
+	const void *value_fact_context;
+	bool (*value_fact_at)(const void *context, zend_mir_value_id value_id,
+		zend_mir_value_fact_ref *fact_out);
+	const struct _zend_mir_zend_source *zend_source;
 	bool has_last_diagnostic_opline;
+	bool values_predeclared;
 	bool busy;
 };
 
@@ -148,6 +155,18 @@ zend_mir_function_id zend_mir_lowering_context_function_id(
 	const zend_mir_lowering_context *context);
 zend_mir_block_id zend_mir_lowering_context_block_id(
 	const zend_mir_lowering_context *context);
+bool zend_mir_lowering_context_set_block_id(
+	zend_mir_lowering_context *context, zend_mir_block_id block_id);
+bool zend_mir_lowering_context_set_value_fact_resolver(
+	zend_mir_lowering_context *context, const void *resolver_context,
+	bool (*value_fact_at)(const void *resolver_context,
+		zend_mir_value_id value_id, zend_mir_value_fact_ref *fact_out));
+bool zend_mir_lowering_context_set_zend_source(
+	zend_mir_lowering_context *context,
+	const struct _zend_mir_zend_source *source);
+bool zend_mir_lowering_context_value_fact(
+	const zend_mir_lowering_context *context, zend_mir_value_id value_id,
+	zend_mir_value_fact_ref *fact_out);
 bool zend_mir_lowering_context_set_provider_failure(
 	zend_mir_lowering_context *context,
 	zend_mir_lowering_status status,

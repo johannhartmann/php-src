@@ -186,6 +186,267 @@ zend_mir_lowering_status zend_mir_zend_source_init(
 	return ZEND_MIR_LOWERING_SUCCESS;
 }
 
+static bool zend_mir_frontend_cfg_dominates(
+	const zend_cfg *cfg, uint32_t dominator, uint32_t block);
+
+static zend_mir_lowering_status zend_mir_frontend_validate_cfg_w04(
+	const zend_op_array *op_array, const zend_ssa *ssa,
+	zend_mir_op_array_id op_array_id, zend_mir_frontend_diagnostic *diagnostic,
+	uint32_t *phi_count, uint32_t *phi_input_count)
+{
+	uint32_t i;
+	uint32_t edges = 0;
+	uint32_t phis = 0;
+	uint32_t inputs = 0;
+	if (op_array == NULL || ssa == NULL || ssa->cfg.blocks_count == 0
+			|| ssa->cfg.blocks_count > ZEND_MIR_ID_MAX
+			|| ssa->cfg.edges_count > ZEND_MIR_ID_MAX
+			|| ssa->cfg.blocks == NULL || ssa->blocks == NULL
+			|| (op_array->last != 0 && ssa->cfg.map == NULL)
+			|| (ssa->cfg.flags & ZEND_CFG_STACKLESS) != 0) {
+		goto malformed;
+	}
+	if (op_array->last_try_catch != 0) {
+		zend_mir_frontend_set_diagnostic(diagnostic,
+			ZEND_MIR_LOWERING_DEFERRED, ZEND_MIRL_W04_PROTECTED_REGION,
+			op_array_id, ZEND_MIR_ID_INVALID,
+			ZEND_MIR_FRONTEND_OPERAND_NONE, ZEND_MIR_ID_INVALID);
+		return ZEND_MIR_LOWERING_DEFERRED;
+	}
+	for (i = 0; i < ssa->cfg.blocks_count; i++) {
+		const zend_basic_block *block = &ssa->cfg.blocks[i];
+		zend_ssa_phi *phi;
+		uint32_t j;
+		if ((block->flags & ZEND_BB_REACHABLE) == 0) {
+			continue;
+		}
+		if ((block->flags & ZEND_BB_PROTECTED) != 0) {
+			zend_mir_frontend_set_diagnostic(diagnostic,
+				ZEND_MIR_LOWERING_DEFERRED, ZEND_MIRL_W04_PROTECTED_REGION,
+				op_array_id, ZEND_MIR_ID_INVALID,
+				ZEND_MIR_FRONTEND_OPERAND_NONE, ZEND_MIR_ID_INVALID);
+			return ZEND_MIR_LOWERING_DEFERRED;
+		}
+		if ((block->flags & ZEND_BB_IRREDUCIBLE_LOOP) != 0) {
+			zend_mir_frontend_set_diagnostic(diagnostic,
+				ZEND_MIR_LOWERING_DEFERRED, ZEND_MIRL_W04_IRREDUCIBLE_LOOP,
+				op_array_id, ZEND_MIR_ID_INVALID,
+				ZEND_MIR_FRONTEND_OPERAND_NONE, ZEND_MIR_ID_INVALID);
+			return ZEND_MIR_LOWERING_DEFERRED;
+		}
+		if (block->start > op_array->last
+				|| block->len > op_array->last - block->start
+				|| (block->successors_count != 0 && block->successors == NULL)
+				|| block->idom < -1
+				|| (block->idom >= 0
+					&& ((uint32_t) block->idom >= ssa->cfg.blocks_count
+						|| (uint32_t) block->idom == i))
+				|| (i == 0 ? block->idom != -1 : block->idom < 0)
+				|| block->loop_header < -1
+				|| (block->loop_header >= 0
+					&& ((uint32_t) block->loop_header
+							>= ssa->cfg.blocks_count
+						|| (ssa->cfg.blocks[block->loop_header].flags
+							& ZEND_BB_LOOP_HEADER) == 0
+						|| !zend_mir_frontend_cfg_dominates(
+							&ssa->cfg, (uint32_t) block->loop_header, i)))
+				|| (block->predecessors_count != 0
+					&& (ssa->cfg.predecessors == NULL
+						|| block->predecessor_offset < 0
+						|| (uint32_t) block->predecessor_offset
+							> ssa->cfg.edges_count
+						|| block->predecessors_count
+							> ssa->cfg.edges_count
+								- (uint32_t) block->predecessor_offset))) {
+			goto malformed;
+		}
+		for (j = 0; j < block->successors_count; j++) {
+			if (block->successors[j] < 0
+					|| (uint32_t) block->successors[j]
+						>= ssa->cfg.blocks_count
+					|| (ssa->cfg.blocks[block->successors[j]].flags
+						& ZEND_BB_REACHABLE) == 0) {
+				goto malformed;
+			}
+		}
+		for (j = 0; j < block->predecessors_count; j++) {
+			uint32_t offset = (uint32_t) block->predecessor_offset + j;
+			int predecessor = ssa->cfg.predecessors[offset];
+			uint32_t successor;
+			bool reciprocal = false;
+			if (predecessor < 0
+					|| (uint32_t) predecessor >= ssa->cfg.blocks_count
+					|| (ssa->cfg.blocks[predecessor].flags
+						& ZEND_BB_REACHABLE) == 0) {
+				goto malformed;
+			}
+			for (successor = 0;
+				successor < ssa->cfg.blocks[predecessor].successors_count;
+				successor++) {
+				if (ssa->cfg.blocks[predecessor].successors[successor]
+						== (int) i) {
+					reciprocal = true;
+					break;
+				}
+			}
+			if (!reciprocal) {
+				goto malformed;
+			}
+		}
+		for (j = 0; j < block->len; j++) {
+			if (ssa->cfg.map[block->start + j] != i) {
+				goto malformed;
+			}
+		}
+		if (edges > UINT32_MAX - block->successors_count) {
+			goto malformed;
+		}
+		edges += block->successors_count;
+		for (phi = ssa->blocks[i].phis; phi != NULL; phi = phi->next) {
+			uint32_t phi_inputs = phi->pi >= 0 ? 1 : block->predecessors_count;
+			uint32_t input;
+			if (phi->block != i || phi->ssa_var < 0
+					|| (uint32_t) phi->ssa_var >= (uint32_t) ssa->vars_count
+					|| phi->sources == NULL
+					|| (phi->pi >= 0
+						&& ((uint32_t) phi->pi >= ssa->cfg.blocks_count
+							|| (ssa->cfg.blocks[phi->pi].flags
+								& ZEND_BB_REACHABLE) == 0))
+					|| (phi->has_range_constraint
+						&& ((phi->constraint.range.min_ssa_var >= 0
+								&& (uint32_t)
+									phi->constraint.range.min_ssa_var
+									>= (uint32_t) ssa->vars_count)
+							|| (phi->constraint.range.max_ssa_var >= 0
+								&& (uint32_t)
+									phi->constraint.range.max_ssa_var
+									>= (uint32_t) ssa->vars_count)))
+					|| phis == UINT32_MAX
+					|| inputs > UINT32_MAX - phi_inputs) {
+				goto malformed;
+			}
+			if (phi->pi >= 0
+					&& ((!phi->has_range_constraint
+							&& (phi->constraint.type.ce != NULL
+								|| phi->constraint.type.type_mask == 0)))) {
+				goto unsupported_phi;
+			}
+			for (input = 0; input < phi_inputs; input++) {
+				if (phi->sources[input] < 0
+						|| (uint32_t) phi->sources[input]
+							>= (uint32_t) ssa->vars_count) {
+					goto malformed;
+				}
+			}
+			if (phi->pi >= 0) {
+				bool predecessor_found = false;
+				for (input = 0; input < block->predecessors_count; input++) {
+					uint32_t offset =
+						(uint32_t) block->predecessor_offset + input;
+					if (ssa->cfg.predecessors[offset] == phi->pi) {
+						predecessor_found = true;
+						break;
+					}
+				}
+				if (!predecessor_found) {
+					goto malformed;
+				}
+			}
+			phis++;
+			inputs += phi_inputs;
+		}
+	}
+	if (edges != ssa->cfg.edges_count) {
+		goto malformed;
+	}
+	for (i = 0; i < ssa->cfg.blocks_count; i++) {
+		if ((ssa->cfg.blocks[i].flags & ZEND_BB_REACHABLE) != 0
+				&& !zend_mir_frontend_cfg_dominates(&ssa->cfg, 0, i)) {
+			goto malformed;
+		}
+	}
+	for (i = 0; i < op_array->last; i++) {
+		if (ssa->cfg.map[i] >= ssa->cfg.blocks_count) {
+			goto malformed;
+		}
+	}
+	*phi_count = phis;
+	*phi_input_count = inputs;
+	return ZEND_MIR_LOWERING_SUCCESS;
+unsupported_phi:
+	zend_mir_frontend_set_diagnostic(diagnostic,
+		ZEND_MIR_LOWERING_DEFERRED, ZEND_MIRL_W04_UNSUPPORTED_PHI_PI,
+		op_array_id, ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE,
+		ZEND_MIR_ID_INVALID);
+	return ZEND_MIR_LOWERING_DEFERRED;
+malformed:
+	zend_mir_frontend_set_diagnostic(diagnostic,
+		ZEND_MIR_LOWERING_REJECTED, ZEND_MIRL_W04_MALFORMED_CFG,
+		op_array_id, ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE,
+		ZEND_MIR_ID_INVALID);
+	return ZEND_MIR_LOWERING_REJECTED;
+}
+
+zend_mir_lowering_status zend_mir_zend_source_init_w04(
+	zend_mir_zend_source *source, const zend_op_array *op_array,
+	const zend_ssa *ssa, zend_mir_op_array_id op_array_id,
+	zend_mir_symbol_id file_symbol_id, zend_mir_frontend_diagnostic *diagnostic)
+{
+	zend_mir_zend_source candidate;
+	zend_mir_lowering_status status;
+	uint32_t slots, uses, defs, facts, phis, inputs;
+	if (source == NULL || op_array == NULL || ssa == NULL
+			|| !zend_mir_id_is_valid(op_array_id)
+			|| !zend_mir_id_is_valid(file_symbol_id)) {
+		return ZEND_MIR_LOWERING_REJECTED;
+	}
+	zend_mir_zend_source_reset(source);
+	status = zend_mir_frontend_validate_cfg_w04(
+		op_array, ssa, op_array_id, diagnostic, &phis, &inputs);
+	if (status != ZEND_MIR_LOWERING_SUCCESS
+			|| (status = zend_mir_frontend_validate_operands_w04(
+				op_array, ssa, op_array_id, diagnostic, &uses, &defs))
+				!= ZEND_MIR_LOWERING_SUCCESS
+			|| (status = zend_mir_frontend_validate_slots(
+				op_array, ssa, op_array_id, diagnostic, &slots))
+				!= ZEND_MIR_LOWERING_SUCCESS
+			|| (status = zend_mir_frontend_validate_opcode_scope_w04(
+				op_array, op_array_id, diagnostic))
+				!= ZEND_MIR_LOWERING_SUCCESS
+			|| (status = zend_mir_frontend_validate_literals(
+				op_array, op_array_id, diagnostic))
+				!= ZEND_MIR_LOWERING_SUCCESS
+			|| (status = zend_mir_frontend_validate_facts(
+				op_array, ssa, op_array_id, diagnostic, &facts))
+				!= ZEND_MIR_LOWERING_SUCCESS
+			|| (status = zend_mir_frontend_validate_eligibility_w04(
+				op_array, ssa, op_array_id, diagnostic))
+				!= ZEND_MIR_LOWERING_SUCCESS) {
+		return status;
+	}
+	memset(&candidate, 0, sizeof(candidate));
+	candidate.op_array = op_array;
+	candidate.ssa = ssa;
+	candidate.op_array_id = op_array_id;
+	candidate.file_symbol_id = file_symbol_id;
+	candidate.opcode_count = op_array->last;
+	candidate.ssa_count = (uint32_t) ssa->vars_count;
+	candidate.ssa_use_count = uses;
+	candidate.ssa_def_count = defs;
+	candidate.literal_count = op_array->last_literal;
+	candidate.slot_count = slots;
+	candidate.value_fact_count = facts;
+	candidate.source_position_count = op_array->last;
+	candidate.block_count = ssa->cfg.blocks_count;
+	candidate.edge_count = ssa->cfg.edges_count;
+	candidate.phi_count = phis;
+	candidate.phi_input_count = inputs;
+	candidate.w04 = true;
+	candidate.initialized = ZEND_MIR_ZEND_SOURCE_MAGIC;
+	*source = candidate;
+	return ZEND_MIR_LOWERING_SUCCESS;
+}
+
 static uint32_t zend_mir_frontend_view_opcode_count(const void *context)
 {
 	const zend_mir_zend_source *source = context;
@@ -251,6 +512,368 @@ static bool zend_mir_frontend_view_literal_at(
 	return zend_mir_frontend_literal_at(context, index, out);
 }
 
+static uint32_t zend_mir_frontend_view_block_count(const void *context)
+{
+	const zend_mir_zend_source *source = context;
+	return zend_mir_source_is_initialized(source) && source->w04
+		? source->block_count : 0;
+}
+
+static uint32_t zend_mir_frontend_view_edge_count(const void *context)
+{
+	const zend_mir_zend_source *source = context;
+	return zend_mir_source_is_initialized(source) && source->w04
+		? source->edge_count : 0;
+}
+
+static uint32_t zend_mir_frontend_view_phi_count(const void *context)
+{
+	const zend_mir_zend_source *source = context;
+	return zend_mir_source_is_initialized(source) && source->w04
+		? source->phi_count : 0;
+}
+
+static uint32_t zend_mir_frontend_view_phi_input_count(const void *context)
+{
+	const zend_mir_zend_source *source = context;
+	return zend_mir_source_is_initialized(source) && source->w04
+		? source->phi_input_count : 0;
+}
+
+static bool zend_mir_frontend_view_block_at(
+	const void *context, uint32_t index, zend_mir_source_block_ref *out)
+{
+	const zend_mir_zend_source *source = context;
+	const zend_ssa *ssa;
+	const zend_basic_block *block;
+	if (!zend_mir_source_is_initialized(source) || !source->w04
+			|| out == NULL || index >= source->block_count) {
+		return false;
+	}
+	ssa = zend_mir_source_ssa(source);
+	block = &ssa->cfg.blocks[index];
+	memset(out, 0, sizeof(*out));
+	out->id = index;
+	out->first_opcode_ordinal = block->start;
+	out->opcode_count = block->len;
+	if (index == 0) {
+		out->flags |= ZEND_MIR_SOURCE_BLOCK_ENTRY;
+	}
+	if ((block->flags & ZEND_BB_REACHABLE) != 0) {
+		out->flags |= ZEND_MIR_SOURCE_BLOCK_REACHABLE;
+	}
+	if ((block->flags & ZEND_BB_LOOP_HEADER) != 0) {
+		out->flags |= ZEND_MIR_SOURCE_BLOCK_LOOP_HEADER;
+	}
+	if ((block->flags & ZEND_BB_PROTECTED) != 0) {
+		out->flags |= ZEND_MIR_SOURCE_BLOCK_PROTECTED;
+	}
+	if ((block->flags & ZEND_BB_IRREDUCIBLE_LOOP) != 0) {
+		out->flags |= ZEND_MIR_SOURCE_BLOCK_IRREDUCIBLE;
+	}
+	out->immediate_dominator =
+		block->idom < 0 ? ZEND_MIR_ID_INVALID : (uint32_t) block->idom;
+	out->loop_header =
+		block->loop_header < 0 ? ZEND_MIR_ID_INVALID : (uint32_t) block->loop_header;
+	return true;
+}
+
+static bool zend_mir_frontend_cfg_dominates(
+	const zend_cfg *cfg, uint32_t dominator, uint32_t block)
+{
+	uint32_t remaining = cfg->blocks_count;
+	while (remaining-- != 0) {
+		int idom;
+		if (block == dominator) {
+			return true;
+		}
+		idom = cfg->blocks[block].idom;
+		if (idom < 0 || (uint32_t) idom == block
+				|| (uint32_t) idom >= cfg->blocks_count) {
+			return false;
+		}
+		block = (uint32_t) idom;
+	}
+	return false;
+}
+
+static bool zend_mir_frontend_view_edge_at(
+	const void *context, uint32_t index, zend_mir_source_edge_ref *out)
+{
+	const zend_mir_zend_source *source = context;
+	const zend_op_array *op_array;
+	const zend_ssa *ssa;
+	uint32_t current = 0;
+	uint32_t from;
+	if (!zend_mir_source_is_initialized(source) || !source->w04
+			|| out == NULL || index >= source->edge_count) {
+		return false;
+	}
+	op_array = zend_mir_source_op_array(source);
+	ssa = zend_mir_source_ssa(source);
+	for (from = 0; from < ssa->cfg.blocks_count; from++) {
+		const zend_basic_block *block = &ssa->cfg.blocks[from];
+		uint32_t successor;
+		if ((block->flags & ZEND_BB_REACHABLE) == 0) {
+			continue;
+		}
+		for (successor = 0; successor < block->successors_count; successor++) {
+			uint32_t to = (uint32_t) block->successors[successor];
+			uint32_t predecessor;
+			if (current++ != index) {
+				continue;
+			}
+			memset(out, 0, sizeof(*out));
+			out->id = index;
+			out->from_block_id = from;
+			out->to_block_id = to;
+			out->successor_index = successor;
+			out->predecessor_index = ZEND_MIR_ID_INVALID;
+			for (predecessor = 0;
+				predecessor < ssa->cfg.blocks[to].predecessors_count;
+				predecessor++) {
+				uint32_t offset =
+					(uint32_t) ssa->cfg.blocks[to].predecessor_offset
+						+ predecessor;
+				if ((uint32_t) ssa->cfg.predecessors[offset] == from) {
+					out->predecessor_index = predecessor;
+					break;
+				}
+			}
+			if (out->predecessor_index == ZEND_MIR_ID_INVALID) {
+				return false;
+			}
+			out->flags = successor + 1 == block->successors_count
+				? ZEND_MIR_SOURCE_EDGE_FALLTHROUGH
+				: ZEND_MIR_SOURCE_EDGE_EXPLICIT_JUMP;
+			if (block->len != 0) {
+				uint8_t opcode =
+					op_array->opcodes[block->start + block->len - 1].opcode;
+				if (opcode == ZEND_JMP || successor == 0) {
+					out->flags &= ~ZEND_MIR_SOURCE_EDGE_FALLTHROUGH;
+					out->flags |= ZEND_MIR_SOURCE_EDGE_EXPLICIT_JUMP;
+				}
+			}
+			if (zend_mir_frontend_cfg_dominates(&ssa->cfg, to, from)) {
+				out->flags |= ZEND_MIR_SOURCE_EDGE_BACKEDGE
+					| ZEND_MIR_SOURCE_EDGE_INTERRUPT_BOUNDARY;
+			}
+			return true;
+		}
+	}
+	return false;
+}
+
+static zend_ssa_phi *zend_mir_frontend_phi_at_index(
+	const zend_mir_zend_source *source, uint32_t index,
+	uint32_t *block_id_out)
+{
+	const zend_op_array *op_array = zend_mir_source_op_array(source);
+	const zend_ssa *ssa = zend_mir_source_ssa(source);
+	zend_ssa_phi *selected = NULL;
+	uint32_t selected_block = ZEND_MIR_ID_INVALID;
+	uint32_t selected_category = ZEND_MIR_ID_INVALID;
+	zend_mir_source_slot_kind selected_kind =
+		ZEND_MIR_SOURCE_SLOT_KIND_INVALID;
+	uint32_t selected_slot = ZEND_MIR_ID_INVALID;
+	uint32_t selected_result = ZEND_MIR_ID_INVALID;
+	uint32_t ordinal;
+	for (ordinal = 0; ordinal <= index; ordinal++) {
+		zend_ssa_phi *next = NULL;
+		uint32_t next_block = ZEND_MIR_ID_INVALID;
+		uint32_t next_category = ZEND_MIR_ID_INVALID;
+		zend_mir_source_slot_kind next_kind =
+			ZEND_MIR_SOURCE_SLOT_KIND_INVALID;
+		uint32_t next_slot = ZEND_MIR_ID_INVALID;
+		uint32_t next_result = ZEND_MIR_ID_INVALID;
+		uint32_t block;
+		for (block = 0; block < ssa->cfg.blocks_count; block++) {
+			zend_ssa_phi *phi;
+			if ((ssa->cfg.blocks[block].flags & ZEND_BB_REACHABLE) == 0) {
+				continue;
+			}
+			for (phi = ssa->blocks[block].phis;
+					phi != NULL; phi = phi->next) {
+				zend_mir_source_slot_kind kind;
+				uint32_t slot;
+				uint32_t result;
+				uint32_t category;
+				bool after_selected;
+				bool before_next;
+				if (phi->ssa_var < 0
+						|| !zend_mir_frontend_ssa_slot(
+							op_array, ssa, (uint32_t) phi->ssa_var,
+							&slot, &kind)) {
+					return NULL;
+				}
+				result = (uint32_t) phi->ssa_var;
+				category = phi->pi < 0 ? 0 : 1;
+				after_selected = selected == NULL
+					|| block > selected_block
+					|| (block == selected_block
+						&& (category > selected_category
+							|| (category == selected_category
+								&& (kind > selected_kind
+									|| (kind == selected_kind
+										&& (slot > selected_slot
+											|| (slot == selected_slot
+												&& result
+													> selected_result)))))));
+				before_next = next == NULL
+					|| block < next_block
+					|| (block == next_block
+						&& (category < next_category
+							|| (category == next_category
+								&& (kind < next_kind
+									|| (kind == next_kind
+										&& (slot < next_slot
+											|| (slot == next_slot
+												&& result < next_result)))))));
+				if (after_selected && before_next) {
+					next = phi;
+					next_block = block;
+					next_category = category;
+					next_kind = kind;
+					next_slot = slot;
+					next_result = result;
+				}
+			}
+		}
+		if (next == NULL) {
+			return NULL;
+		}
+		selected = next;
+		selected_block = next_block;
+		selected_category = next_category;
+		selected_kind = next_kind;
+		selected_slot = next_slot;
+		selected_result = next_result;
+	}
+	*block_id_out = selected_block;
+	return selected;
+}
+
+static bool zend_mir_frontend_view_phi_at(
+	const void *context, uint32_t index, zend_mir_source_phi_ref *out)
+{
+	const zend_mir_zend_source *source = context;
+	const zend_op_array *op_array;
+	const zend_ssa *ssa;
+	zend_ssa_phi *phi;
+	uint32_t block;
+	if (!zend_mir_source_is_initialized(source) || !source->w04
+			|| out == NULL || index >= source->phi_count) {
+		return false;
+	}
+	op_array = zend_mir_source_op_array(source);
+	ssa = zend_mir_source_ssa(source);
+	phi = zend_mir_frontend_phi_at_index(source, index, &block);
+	if (phi == NULL || !zend_mir_frontend_ssa_slot(op_array, ssa,
+			(uint32_t) phi->ssa_var, &out->source_slot_index,
+			&out->source_slot_kind)) {
+		return false;
+	}
+	memset(&out->constraint, 0, sizeof(out->constraint));
+	out->constraint.min_ssa_variable_id = ZEND_MIR_ID_INVALID;
+	out->constraint.max_ssa_variable_id = ZEND_MIR_ID_INVALID;
+	out->id = index;
+	out->block_id = block;
+	out->result_ssa_variable_id = (uint32_t) phi->ssa_var;
+	if (phi->pi < 0) {
+		out->kind = ZEND_MIR_SOURCE_PHI_MERGE;
+	} else if (phi->has_range_constraint) {
+		out->kind = ZEND_MIR_SOURCE_PHI_PI_RANGE;
+		out->constraint.range_min = (int64_t) phi->constraint.range.range.min;
+		out->constraint.range_max = (int64_t) phi->constraint.range.range.max;
+		if (phi->constraint.range.min_ssa_var >= 0) {
+			out->constraint.min_ssa_variable_id =
+				(uint32_t) phi->constraint.range.min_ssa_var;
+		}
+		if (phi->constraint.range.max_ssa_var >= 0) {
+			out->constraint.max_ssa_variable_id =
+				(uint32_t) phi->constraint.range.max_ssa_var;
+		}
+		if (phi->constraint.range.range.underflow) {
+			out->constraint.flags |=
+				ZEND_MIR_SOURCE_PHI_RANGE_MIN_UNBOUNDED;
+		}
+		if (phi->constraint.range.range.overflow) {
+			out->constraint.flags |=
+				ZEND_MIR_SOURCE_PHI_RANGE_MAX_UNBOUNDED;
+		}
+		if (phi->constraint.range.negative != NEG_NONE) {
+			out->constraint.flags |= ZEND_MIR_SOURCE_PHI_RANGE_NEGATED;
+		}
+	} else {
+		if (phi->constraint.type.ce != NULL) {
+			return false;
+		}
+		out->kind = ZEND_MIR_SOURCE_PHI_PI_TYPE;
+		out->constraint.type_mask = phi->constraint.type.type_mask;
+	}
+	return true;
+}
+
+static bool zend_mir_frontend_view_phi_input_at(
+	const void *context, uint32_t index, zend_mir_source_phi_input_ref *out)
+{
+	const zend_mir_zend_source *source = context;
+	const zend_ssa *ssa;
+	uint32_t current = 0;
+	uint32_t phi_id;
+	if (!zend_mir_source_is_initialized(source) || !source->w04
+			|| out == NULL || index >= source->phi_input_count) {
+		return false;
+	}
+	ssa = zend_mir_source_ssa(source);
+	for (phi_id = 0; phi_id < source->phi_count; phi_id++) {
+		uint32_t block;
+		zend_ssa_phi *phi =
+			zend_mir_frontend_phi_at_index(source, phi_id, &block);
+		if (phi == NULL) {
+			return false;
+		}
+		uint32_t count = phi->pi >= 0
+			? 1 : ssa->cfg.blocks[block].predecessors_count;
+		uint32_t input;
+		for (input = 0; input < count; input++) {
+			uint32_t predecessor_index = input;
+			if (current++ != index) {
+				continue;
+			}
+			if (phi->sources[input] < 0) {
+				return false;
+			}
+			if (phi->pi >= 0) {
+				for (predecessor_index = 0;
+					predecessor_index
+						< ssa->cfg.blocks[block].predecessors_count;
+					predecessor_index++) {
+					uint32_t offset =
+						(uint32_t) ssa->cfg.blocks[block].predecessor_offset
+							+ predecessor_index;
+					if (ssa->cfg.predecessors[offset] == phi->pi) {
+						break;
+					}
+				}
+				if (predecessor_index
+						>= ssa->cfg.blocks[block].predecessors_count) {
+					return false;
+				}
+			}
+			out->phi_id = phi_id;
+			out->input_index = predecessor_index;
+			out->predecessor_block_id = (uint32_t)
+				ssa->cfg.predecessors[
+					(uint32_t) ssa->cfg.blocks[block].predecessor_offset
+						+ predecessor_index];
+			out->source_ssa_variable_id = (uint32_t) phi->sources[input];
+			return true;
+		}
+	}
+	return false;
+}
+
 bool zend_mir_zend_source_view(
 	const zend_mir_zend_source *source,
 	zend_mir_lowering_source_view *out)
@@ -258,6 +881,7 @@ bool zend_mir_zend_source_view(
 	if (!zend_mir_source_is_initialized(source) || out == NULL) {
 		return false;
 	}
+	memset(out, 0, sizeof(*out));
 	out->contract_version = ZEND_MIR_CONTRACT_VERSION;
 	out->context = source;
 	out->opcode_count = zend_mir_frontend_view_opcode_count;
@@ -270,6 +894,17 @@ bool zend_mir_zend_source_view(
 	out->ssa_def_at = zend_mir_frontend_view_ssa_def_at;
 	out->literal_count = zend_mir_frontend_view_literal_count;
 	out->literal_at = zend_mir_frontend_view_literal_at;
+	out->block_count = zend_mir_frontend_view_block_count;
+	out->block_at = zend_mir_frontend_view_block_at;
+	out->edge_count = zend_mir_frontend_view_edge_count;
+	out->edge_at = zend_mir_frontend_view_edge_at;
+	out->phi_count = zend_mir_frontend_view_phi_count;
+	out->phi_at = zend_mir_frontend_view_phi_at;
+	out->phi_input_count = zend_mir_frontend_view_phi_input_count;
+	out->phi_input_at = zend_mir_frontend_view_phi_input_at;
+	if (source->w04) {
+		out->contract_version = ZEND_MIR_W04_CONTRACT_VERSION;
+	}
 	return true;
 }
 

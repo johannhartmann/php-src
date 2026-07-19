@@ -62,9 +62,12 @@ static zend_mir_lowering_status zend_mir_logic_commit_plan(
 	const zend_mir_logic_plan *plan,
 	zend_mir_mutator *mutator)
 {
+	const zend_mir_logic_context *logic_context =
+		zend_mir_lowering_context_provider_context(context);
 	uint32_t step_index;
 
-	if (!zend_mir_logic_mutator_valid(mutator) || plan == NULL
+	if (!zend_mir_logic_mutator_valid(mutator) || logic_context == NULL
+			|| plan == NULL
 			|| plan->step_count == 0
 			|| plan->step_count > ZEND_MIR_LOGIC_MAX_PLAN_STEPS) {
 		return zend_mir_logic_fail(
@@ -78,9 +81,10 @@ static zend_mir_lowering_status zend_mir_logic_commit_plan(
 		zend_mir_value_fact_id fact_id;
 		uint32_t operand_index;
 
-		if (!mutator->add_value(
+		if ((!logic_context->values_predeclared
+				&& !mutator->add_value(
 				mutator->context, step->result_id, step->representation,
-				ZEND_MIR_OWNERSHIP_STATE_OWNED)) {
+				ZEND_MIR_OWNERSHIP_STATE_OWNED))) {
 			return zend_mir_logic_fail(
 				context, ZEND_MIR_LOWERING_FAILED,
 				ZEND_MIRL_MUTATION_FAILED);
@@ -109,7 +113,8 @@ static zend_mir_lowering_status zend_mir_logic_commit_plan(
 					ZEND_MIRL_MUTATION_FAILED);
 			}
 		}
-		if (!mutator->add_value_fact(
+		if (!logic_context->values_predeclared
+				&& !mutator->add_value_fact(
 				mutator->context, &step->result_fact, &fact_id)) {
 			return zend_mir_logic_fail(
 				context, ZEND_MIR_LOWERING_FAILED,

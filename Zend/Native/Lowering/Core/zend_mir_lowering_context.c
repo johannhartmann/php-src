@@ -94,6 +94,53 @@ zend_mir_block_id zend_mir_lowering_context_block_id(
 	return context != NULL ? context->block_id : ZEND_MIR_ID_INVALID;
 }
 
+bool zend_mir_lowering_context_set_block_id(
+	zend_mir_lowering_context *context, zend_mir_block_id block_id)
+{
+	if (context == NULL || !zend_mir_id_is_valid(block_id)) {
+		return false;
+	}
+	context->block_id = block_id;
+	return true;
+}
+
+bool zend_mir_lowering_context_set_value_fact_resolver(
+	zend_mir_lowering_context *context, const void *resolver_context,
+	bool (*value_fact_at)(const void *resolver_context,
+		zend_mir_value_id value_id, zend_mir_value_fact_ref *fact_out))
+{
+	if (context == NULL || resolver_context == NULL || value_fact_at == NULL
+			|| context->busy) {
+		return false;
+	}
+	context->value_fact_context = resolver_context;
+	context->value_fact_at = value_fact_at;
+	return true;
+}
+
+bool zend_mir_lowering_context_set_zend_source(
+	zend_mir_lowering_context *context,
+	const struct _zend_mir_zend_source *source)
+{
+	if (context == NULL || source == NULL || context->busy) {
+		return false;
+	}
+	context->zend_source = source;
+	return true;
+}
+
+bool zend_mir_lowering_context_value_fact(
+	const zend_mir_lowering_context *context, zend_mir_value_id value_id,
+	zend_mir_value_fact_ref *fact_out)
+{
+	return context != NULL && context->value_fact_at != NULL
+		&& fact_out != NULL
+		&& context->value_fact_at(
+			context->value_fact_context, value_id, fact_out)
+		&& fact_out->value_id == value_id
+		&& zend_mir_scalar_type_is_exact(fact_out->exact_type);
+}
+
 bool zend_mir_lowering_context_set_provider_failure(
 	zend_mir_lowering_context *context,
 	zend_mir_lowering_status status,

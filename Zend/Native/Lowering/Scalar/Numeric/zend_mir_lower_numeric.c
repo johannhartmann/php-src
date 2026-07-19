@@ -156,8 +156,7 @@ static zend_mir_numeric_proof_mask zend_mir_numeric_required_proofs(
 	uint32_t zend_opcode_number)
 {
 	zend_mir_numeric_proof_mask required =
-		ZEND_MIR_NUMERIC_PROOF_SINGLE_BLOCK
-		| ZEND_MIR_NUMERIC_PROOF_NO_CALLS
+		ZEND_MIR_NUMERIC_PROOF_NO_CALLS
 		| ZEND_MIR_NUMERIC_PROOF_NO_REENTRY;
 
 	switch (zend_opcode_number) {
@@ -190,7 +189,10 @@ static zend_mir_lowering_status zend_mir_numeric_check_environment(
 	zend_mir_numeric_proof_mask required =
 		zend_mir_numeric_required_proofs(zend_opcode_number);
 
-	if ((provider_context->proofs & required) != required) {
+	if ((provider_context->proofs & required) != required
+			|| (provider_context->proofs
+				& (ZEND_MIR_NUMERIC_PROOF_SINGLE_BLOCK
+					| ZEND_MIR_NUMERIC_PROOF_SOURCE_CFG)) == 0) {
 		zend_mir_numeric_set_diagnostic(
 			diagnostic_out, ZEND_MIRL_MISSING_PROOF);
 		return ZEND_MIR_LOWERING_REJECTED;
@@ -511,6 +513,7 @@ static zend_mir_lowering_status zend_mir_numeric_emit(
 	zend_mir_lowering_context *context,
 	const zend_mir_source_opcode_ref *source_opcode,
 	zend_mir_mutator *mutator, const zend_mir_numeric_plan *plan,
+	const zend_mir_numeric_provider_context *provider_context,
 	zend_mir_lowering_diagnostic_code *diagnostic_out)
 {
 	zend_mir_instruction_record instruction = {
@@ -545,9 +548,10 @@ static zend_mir_lowering_status zend_mir_numeric_emit(
 	if (!mutator->add_source_position(
 			mutator->context, &plan->source_position, &source_position_id)
 			|| source_position_id != source_opcode->source_position_id
-			|| !mutator->add_value(
+			|| (!provider_context->values_predeclared
+				&& !mutator->add_value(
 				mutator->context, plan->result_id, plan->representation,
-				ZEND_MIR_OWNERSHIP_STATE_OWNED)) {
+				ZEND_MIR_OWNERSHIP_STATE_OWNED))) {
 		zend_mir_numeric_set_diagnostic(
 			diagnostic_out, ZEND_MIRL_MUTATION_FAILED);
 		return ZEND_MIR_LOWERING_FAILED;
@@ -582,7 +586,8 @@ static zend_mir_lowering_status zend_mir_numeric_emit(
 		? ZEND_MIR_FACT_PROVENANCE_RANGE_ANALYSIS
 		: ZEND_MIR_FACT_PROVENANCE_TYPE_ANALYSIS;
 	fact.provenance_source_position_id = source_position_id;
-	if (!mutator->add_value_fact(mutator->context, &fact, &fact_id)) {
+	if (!provider_context->values_predeclared
+			&& !mutator->add_value_fact(mutator->context, &fact, &fact_id)) {
 		zend_mir_numeric_set_diagnostic(
 			diagnostic_out, ZEND_MIRL_MUTATION_FAILED);
 		return ZEND_MIR_LOWERING_FAILED;
@@ -629,5 +634,6 @@ zend_mir_lowering_status zend_mir_lower_numeric(
 		return status;
 	}
 	return zend_mir_numeric_emit(
-		context, source_opcode, mutator, &plan, diagnostic_out);
+		context, source_opcode, mutator, &plan, provider_context,
+		diagnostic_out);
 }

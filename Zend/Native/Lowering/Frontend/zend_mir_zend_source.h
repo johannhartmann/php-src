@@ -58,12 +58,25 @@ typedef struct _zend_mir_zend_source {
 	uint32_t slot_count;
 	uint32_t value_fact_count;
 	uint32_t source_position_count;
+	uint32_t block_count;
+	uint32_t edge_count;
+	uint32_t phi_count;
+	uint32_t phi_input_count;
+	bool w04;
 	uint32_t initialized;
 } zend_mir_zend_source;
 
 void zend_mir_zend_source_reset(zend_mir_zend_source *source);
 
 zend_mir_lowering_status zend_mir_zend_source_init(
+	zend_mir_zend_source *source,
+	const struct _zend_op_array *op_array,
+	const struct _zend_ssa *ssa,
+	zend_mir_op_array_id op_array_id,
+	zend_mir_symbol_id file_symbol_id,
+	zend_mir_frontend_diagnostic *diagnostic);
+
+zend_mir_lowering_status zend_mir_zend_source_init_w04(
 	zend_mir_zend_source *source,
 	const struct _zend_op_array *op_array,
 	const struct _zend_ssa *ssa,

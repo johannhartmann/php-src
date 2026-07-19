@@ -41,7 +41,8 @@ enum {
 	ZEND_MIR_NUMERIC_PROOF_NO_CALLS = UINT32_C(1) << 1,
 	ZEND_MIR_NUMERIC_PROOF_NO_REENTRY = UINT32_C(1) << 2,
 	ZEND_MIR_NUMERIC_PROOF_NO_DESTRUCTOR = UINT32_C(1) << 3,
-	ZEND_MIR_NUMERIC_PROOF_NO_EXCEPTION = UINT32_C(1) << 4
+	ZEND_MIR_NUMERIC_PROOF_NO_EXCEPTION = UINT32_C(1) << 4,
+	ZEND_MIR_NUMERIC_PROOF_SOURCE_CFG = UINT32_C(1) << 5
 };
 
 typedef uint32_t zend_mir_numeric_hazard_mask;
@@ -82,6 +83,7 @@ typedef struct _zend_mir_numeric_provider_context {
 	zend_mir_numeric_source_position_fn source_position;
 	zend_mir_numeric_proof_mask proofs;
 	zend_mir_numeric_hazard_mask hazards;
+	bool values_predeclared;
 } zend_mir_numeric_provider_context;
 
 typedef enum _zend_mir_numeric_provider_group {
@@ -113,7 +115,6 @@ zend_mir_block_id zend_mir_lowering_context_block_id(
 bool zend_mir_lowering_context_set_provider_failure(
 	zend_mir_lowering_context *context, zend_mir_lowering_status status,
 	zend_mir_lowering_diagnostic_code diagnostic);
-
 bool zend_mir_numeric_range_add(
 	zend_mir_numeric_range left, zend_mir_numeric_range right,
 	zend_mir_numeric_range *result);

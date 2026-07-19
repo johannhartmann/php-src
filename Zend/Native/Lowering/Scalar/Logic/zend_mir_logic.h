@@ -52,6 +52,7 @@ enum {
 	ZEND_MIR_LOGIC_PROOF_SAFE_SCALAR_CAST = UINT32_C(1) << 5,
 	ZEND_MIR_LOGIC_PROOF_NO_DESTRUCTOR = UINT32_C(1) << 6,
 	ZEND_MIR_LOGIC_PROOF_NO_EXCEPTION = UINT32_C(1) << 7,
+	ZEND_MIR_LOGIC_PROOF_SOURCE_CFG = UINT32_C(1) << 8,
 	ZEND_MIR_LOGIC_PROOF_ALL = (UINT32_C(1) << 8) - UINT32_C(1)
 };
 
@@ -82,6 +83,7 @@ typedef struct _zend_mir_logic_context {
 	uint32_t binding_count;
 	const zend_mir_logic_opcode_proof *opcode_proofs;
 	uint32_t opcode_proof_count;
+	bool values_predeclared;
 } zend_mir_logic_context;
 
 void zend_mir_logic_provider_init(

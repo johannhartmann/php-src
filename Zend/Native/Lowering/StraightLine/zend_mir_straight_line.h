@@ -36,8 +36,16 @@ enum {
 	ZEND_MIR_STRAIGHT_LINE_PROOF_NOT_BY_REFERENCE = UINT32_C(1) << 5,
 	ZEND_MIR_STRAIGHT_LINE_PROOF_NO_OBSERVER = UINT32_C(1) << 6,
 	ZEND_MIR_STRAIGHT_LINE_PROOF_NO_DESTRUCTOR = UINT32_C(1) << 7,
-	ZEND_MIR_STRAIGHT_LINE_PROOF_NO_EXCEPTION = UINT32_C(1) << 8
+	ZEND_MIR_STRAIGHT_LINE_PROOF_NO_EXCEPTION = UINT32_C(1) << 8,
+	ZEND_MIR_STRAIGHT_LINE_PROOF_SOURCE_CFG = UINT32_C(1) << 9
 };
+
+static inline bool zend_mir_straight_line_has_cfg_proof(
+	zend_mir_straight_line_proof_mask proofs)
+{
+	return (proofs & (ZEND_MIR_STRAIGHT_LINE_PROOF_SINGLE_BLOCK
+		| ZEND_MIR_STRAIGHT_LINE_PROOF_SOURCE_CFG)) != 0;
+}
 
 typedef uint32_t zend_mir_straight_line_hazard_mask;
 
@@ -106,6 +114,7 @@ typedef struct _zend_mir_straight_line_provider_context {
 	zend_mir_straight_line_entry *entry;
 	zend_mir_straight_line_proof_mask proofs;
 	zend_mir_straight_line_hazard_mask hazards;
+	bool values_predeclared;
 } zend_mir_straight_line_provider_context;
 
 #ifdef __cplusplus
@@ -126,7 +135,6 @@ zend_mir_block_id zend_mir_lowering_context_block_id(
 bool zend_mir_lowering_context_set_provider_failure(
 	zend_mir_lowering_context *context, zend_mir_lowering_status status,
 	zend_mir_lowering_diagnostic_code diagnostic);
-
 bool zend_mir_straight_line_lifetime_init(
 	zend_mir_straight_line_lifetime *lifetime,
 	zend_mir_straight_line_value *storage, uint32_t capacity);

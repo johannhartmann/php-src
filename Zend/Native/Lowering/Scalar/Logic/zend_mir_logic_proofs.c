@@ -227,10 +227,19 @@ bool zend_mir_logic_require_proofs(
 	zend_mir_logic_proof_mask required,
 	zend_mir_lowering_diagnostic_code *diagnostic_out)
 {
+	zend_mir_logic_proof_mask exact;
+	bool cfg_required;
 	if (proof == NULL || diagnostic_out == NULL) {
 		return false;
 	}
-	if ((proof->proofs & required) != required) {
+	exact = required & ~ZEND_MIR_LOGIC_PROOF_SINGLE_REACHABLE_BLOCK;
+	cfg_required =
+		(required & ZEND_MIR_LOGIC_PROOF_SINGLE_REACHABLE_BLOCK) != 0;
+	if ((proof->proofs & exact) != exact
+			|| (cfg_required
+				&& (proof->proofs
+					& (ZEND_MIR_LOGIC_PROOF_SINGLE_REACHABLE_BLOCK
+						| ZEND_MIR_LOGIC_PROOF_SOURCE_CFG)) == 0)) {
 		*diagnostic_out = ZEND_MIRL_MISSING_PROOF;
 		return false;
 	}
