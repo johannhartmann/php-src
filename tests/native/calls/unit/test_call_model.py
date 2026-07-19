@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -9,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[4]
 MODEL = ROOT / "Zend/Native/Calls/Model/zend_mir_call_model.c"
 MODULE = ROOT / "Zend/Native/MIR/Core/zend_mir_module.c"
+W01_MATRIX = ROOT / "docs/native-engine/semantics/opcodes/opcode-matrix.json"
 SOURCE = Path(__file__).with_name("test_call_contract.c")
 
 
@@ -67,6 +70,94 @@ class CallModelTests(unittest.TestCase):
             "aarch64",
         ):
             self.assertNotIn(token, text)
+
+    def test_source_sequence_validation_proves_send_and_lifo_nesting(self) -> None:
+        text = MODEL.read_text(encoding="utf-8")
+        start = text.index("zend_mir_w05_source_sequence(")
+        end = text.index("\nstatic ", start + 1)
+        validator = text[start:end]
+        self.assertIn("source_opcode_count(calls->context)", validator)
+        self.assertIn("send_opline_index", validator)
+        self.assertIn("site->parent_call_site_id", validator)
+        self.assertIn("ZEND_MIR_SOURCE_CALL_SITE_NESTED", validator)
+        self.assertIn("stack[stack_count - 1]", validator)
+        self.assertIn("seen_arguments", validator)
+
+    def test_call_effect_summary_is_a_w01_sequence_superset(self) -> None:
+        text = MODEL.read_text(encoding="utf-8")
+        matrix = json.loads(W01_MATRIX.read_text(encoding="utf-8"))
+        accepted = {
+            "ZEND_INIT_FCALL",
+            "ZEND_SEND_VAL",
+            "ZEND_SEND_VAL_EX",
+            "ZEND_SEND_VAR",
+            "ZEND_SEND_VAR_EX",
+            "ZEND_DO_UCALL",
+            "ZEND_DO_FCALL",
+        }
+        entries = [
+            entry for entry in matrix["opcodes"] if entry["opcode"] in accepted
+        ]
+        self.assertEqual({entry["opcode"] for entry in entries}, accepted)
+
+        def macro(name: str) -> str:
+            start = text.index(f"#define {name}")
+            endings = [
+                position
+                for marker in ("\n#define ", "\nstatic ")
+                if (position := text.find(marker, start + 1)) >= 0
+            ]
+            self.assertTrue(endings, name)
+            return text[start : min(endings)]
+
+        effect_body = macro("W05_EFFECTS")
+        barrier_body = macro("W05_BARRIERS")
+        read_body = macro("W05_READS")
+        write_body = macro("W05_WRITES")
+        effects = {
+            token.lower()
+            for token in re.findall(r"ZEND_MIR_EFFECT_([A-Z_]+)", effect_body)
+        }
+        barriers = {
+            token.lower()
+            for token in re.findall(r"ZEND_MIR_BARRIER_([A-Z_]+)", barrier_body)
+        }
+        def domain_name(token: str) -> str:
+            namespace, name = token.lower().split("_", 1)
+            return f"{namespace}.{name}"
+
+        reads = {
+            domain_name(token)
+            for token in re.findall(
+                r"ZEND_MIR_MEMORY_DOMAIN_([A-Z_]+)", read_body
+            )
+            if "_" in token
+        }
+        writes = set(reads) if "W05_READS" in write_body else set()
+        writes.update(
+            domain_name(token)
+            for token in re.findall(
+                r"ZEND_MIR_MEMORY_DOMAIN_([A-Z_]+)", write_body
+            )
+            if "_" in token
+        )
+        self.assertFalse("~" in write_body, "W05 writes must not subtract W01 domains")
+        self.assertTrue(
+            set().union(*(set(entry["effect_ids"]) for entry in entries))
+            <= effects
+        )
+        self.assertTrue(
+            set().union(*(set(entry["barrier_ids"]) for entry in entries))
+            <= barriers
+        )
+        self.assertTrue(
+            set().union(*(set(entry["read_domains"]) for entry in entries))
+            <= reads
+        )
+        self.assertTrue(
+            set().union(*(set(entry["write_domains"]) for entry in entries))
+            <= writes
+        )
 
 
 if __name__ == "__main__":
