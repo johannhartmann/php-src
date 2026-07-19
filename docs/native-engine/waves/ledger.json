@@ -6,7 +6,7 @@
     {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unsealed", "wave_id": "W01"},
     {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unsealed", "wave_id": "W02"},
     {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unsealed", "wave_id": "W03"},
-    {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unsealed", "wave_id": "W04"},
+    {"capabilities_provided": ["reducible_control_flow"], "codegen_eligible": false, "receipt_path": "docs/native-engine/waves/receipts/W04.json", "receipt_sha256": "7648662dd4a7676d6cf2d145bc870b1ad63f000705fa75bf99cd6d1cdd23fb0a", "semantic_debts": ["call_execution", "references_and_cow", "dynamic_call_targets", "protected_call_continuations", "target_emission", "internal_c_abi_interop"], "state": "revalidated", "wave_id": "W04"},
     {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "pending", "wave_id": "W05"},
     {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unstarted", "wave_id": "W06"},
     {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unstarted", "wave_id": "W07"},
