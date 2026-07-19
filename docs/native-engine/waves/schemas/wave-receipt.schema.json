@@ -1,0 +1,121 @@
+{
+  "$id": "https://php.net/schemas/native-engine/wave-receipt-1.0.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifact_digests": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {"minLength": 1, "type": "string"},
+          "command_id": {"minLength": 1, "type": "string"},
+          "path": {"$ref": "#/$defs/relativePath"},
+          "sha256": {"$ref": "#/$defs/sha256"},
+          "size_bytes": {"minimum": 1, "type": "integer"}
+        },
+        "required": ["artifact_id", "command_id", "path", "sha256", "size_bytes"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "capabilities_provided": {
+      "items": {"pattern": "^[a-z][a-z0-9_]*$", "type": "string"},
+      "type": "array"
+    },
+    "codegen_eligible": {"const": false},
+    "command_manifest": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {"minLength": 1, "type": "string"},
+          "command": {"minLength": 1, "type": "string"},
+          "command_id": {"pattern": "^[a-z0-9][a-z0-9-]*$", "type": "string"},
+          "exit_code": {"const": 0}
+        },
+        "required": ["command_id", "command", "exit_code", "artifact_id"],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "coverage_report_path": {"$ref": "#/$defs/relativePath"},
+    "coverage_report_sha256": {"$ref": "#/$defs/sha256"},
+    "created_at": {"format": "date-time", "type": "string"},
+    "definition_path": {"$ref": "#/$defs/relativePath"},
+    "definition_sha256": {"$ref": "#/$defs/sha256"},
+    "dependency_receipts": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "receipt_sha256": {"$ref": "#/$defs/sha256"},
+          "wave_id": {"$ref": "#/$defs/waveId"}
+        },
+        "required": ["wave_id", "receipt_sha256"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "format_version": {"const": "1.0.0"},
+    "profile_paths": {
+      "items": {"$ref": "#/$defs/relativePath"},
+      "type": "array"
+    },
+    "profile_sha256": {
+      "items": {"$ref": "#/$defs/sha256"},
+      "type": "array"
+    },
+    "review_digests": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "review_id": {"minLength": 1, "type": "string"},
+          "sha256": {"$ref": "#/$defs/sha256"}
+        },
+        "required": ["review_id", "sha256"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "semantic_debts": {
+      "items": {"pattern": "^[a-z][a-z0-9_]*$", "type": "string"},
+      "type": "array"
+    },
+    "state": {"enum": ["unsealed", "revalidated", "sealed", "invalid"]},
+    "subject_commit": {"$ref": "#/$defs/commit"},
+    "subject_tree": {"$ref": "#/$defs/commit"},
+    "wave_id": {"$ref": "#/$defs/waveId"}
+  },
+  "required": [
+    "format_version",
+    "wave_id",
+    "state",
+    "subject_commit",
+    "subject_tree",
+    "definition_path",
+    "definition_sha256",
+    "profile_paths",
+    "profile_sha256",
+    "coverage_report_path",
+    "coverage_report_sha256",
+    "command_manifest",
+    "artifact_digests",
+    "review_digests",
+    "dependency_receipts",
+    "capabilities_provided",
+    "semantic_debts",
+    "codegen_eligible",
+    "created_at"
+  ],
+  "title": "Native-engine durable wave receipt",
+  "type": "object",
+  "$defs": {
+    "commit": {"pattern": "^[0-9a-f]{40}$", "type": "string"},
+    "relativePath": {
+      "minLength": 1,
+      "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$)).+$",
+      "type": "string"
+    },
+    "sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "waveId": {"pattern": "^W(?:0[0-9]|1[0-8])$", "type": "string"}
+  }
+}

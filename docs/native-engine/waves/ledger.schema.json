@@ -1,0 +1,72 @@
+{
+  "$id": "https://php.net/schemas/native-engine/wave-ledger-1.0.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "format_version": {"const": "1.0.0"},
+    "migration_policy": {"minLength": 1, "type": "string"},
+    "waves": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilities_provided": {
+            "items": {"pattern": "^[a-z][a-z0-9_]*$", "type": "string"},
+            "type": "array"
+          },
+          "codegen_eligible": {"const": false},
+          "receipt_path": {
+            "oneOf": [
+              {"$ref": "#/$defs/relativePath"},
+              {"type": "null"}
+            ]
+          },
+          "receipt_sha256": {
+            "oneOf": [
+              {"$ref": "#/$defs/sha256"},
+              {"type": "null"}
+            ]
+          },
+          "semantic_debts": {
+            "items": {"pattern": "^[a-z][a-z0-9_]*$", "type": "string"},
+            "type": "array"
+          },
+          "state": {
+            "enum": [
+              "unsealed",
+              "revalidated",
+              "sealed",
+              "invalid",
+              "pending",
+              "unstarted"
+            ]
+          },
+          "wave_id": {"pattern": "^W(?:0[0-9]|1[0-8])$", "type": "string"}
+        },
+        "required": [
+          "wave_id",
+          "state",
+          "receipt_path",
+          "receipt_sha256",
+          "capabilities_provided",
+          "semantic_debts",
+          "codegen_eligible"
+        ],
+        "type": "object"
+      },
+      "maxItems": 19,
+      "minItems": 19,
+      "type": "array"
+    }
+  },
+  "required": ["format_version", "migration_policy", "waves"],
+  "title": "Native-engine durable wave ledger",
+  "type": "object",
+  "$defs": {
+    "relativePath": {
+      "minLength": 1,
+      "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$)).+$",
+      "type": "string"
+    },
+    "sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"}
+  }
+}
