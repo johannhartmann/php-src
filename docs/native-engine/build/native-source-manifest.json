@@ -1,0 +1,27 @@
+{
+  "format_version": 1,
+  "consumer": "ext/native_mir_test/config.m4",
+  "groups": {
+    "mir": [
+      "Zend/Native/MIR/CFG/zend_mir_cfg.c", "Zend/Native/MIR/CFG/zend_mir_dominance.c", "Zend/Native/MIR/CFG/zend_mir_phi.c",
+      "Zend/Native/MIR/Core/zend_mir_arena.c", "Zend/Native/MIR/Core/zend_mir_ids.c", "Zend/Native/MIR/Core/zend_mir_module.c", "Zend/Native/MIR/Core/zend_mir_view.c",
+      "Zend/Native/MIR/Frame/zend_mir_frame_intern.c", "Zend/Native/MIR/Frame/zend_mir_frame_state.c", "Zend/Native/MIR/Frame/zend_mir_source_map.c",
+      "Zend/Native/MIR/Scalar/zend_mir_scalar_descriptors.c", "Zend/Native/MIR/Scalar/zend_mir_value_facts.c", "Zend/Native/MIR/Scalar/zend_mir_verify_scalar.c",
+      "Zend/Native/MIR/Semantics/zend_mir_alias.c", "Zend/Native/MIR/Semantics/zend_mir_effect_summary.c", "Zend/Native/MIR/Semantics/zend_mir_ownership.c", "Zend/Native/MIR/Semantics/zend_mir_semantic_catalog.c",
+      "Zend/Native/MIR/Text/zend_mir_dump.c",
+      "Zend/Native/MIR/Verify/zend_mir_verify.c", "Zend/Native/MIR/Verify/zend_mir_verify_cfg.c", "Zend/Native/MIR/Verify/zend_mir_verify_dominance.c", "Zend/Native/MIR/Verify/zend_mir_verify_frames.c", "Zend/Native/MIR/Verify/zend_mir_verify_ids.c", "Zend/Native/MIR/Verify/zend_mir_verify_semantics.c"
+    ],
+    "lowering": [
+      "Zend/Native/Lowering/Core/zend_mir_lowering.c", "Zend/Native/Lowering/Core/zend_mir_lowering_context.c", "Zend/Native/Lowering/Core/zend_mir_lowering_diagnostics.c", "Zend/Native/Lowering/Core/zend_mir_lowering_providers.c", "Zend/Native/Lowering/Core/zend_mir_lowering_registry.c",
+      "Zend/Native/Lowering/Frontend/zend_mir_literal_pool.c", "Zend/Native/Lowering/Frontend/zend_mir_operand_map.c", "Zend/Native/Lowering/Frontend/zend_mir_slot_map.c", "Zend/Native/Lowering/Frontend/zend_mir_source_positions.c", "Zend/Native/Lowering/Frontend/zend_mir_value_facts.c", "Zend/Native/Lowering/Frontend/zend_mir_zend_source.c",
+      "Zend/Native/Lowering/Scalar/Logic/zend_mir_logic_proofs.c", "Zend/Native/Lowering/Scalar/Logic/zend_mir_logic_provider.c", "Zend/Native/Lowering/Scalar/Logic/zend_mir_lower_boolean.c", "Zend/Native/Lowering/Scalar/Logic/zend_mir_lower_cast.c", "Zend/Native/Lowering/Scalar/Logic/zend_mir_lower_compare.c",
+      "Zend/Native/Lowering/Scalar/Numeric/zend_mir_lower_numeric.c", "Zend/Native/Lowering/Scalar/Numeric/zend_mir_numeric_proofs.c", "Zend/Native/Lowering/Scalar/Numeric/zend_mir_numeric_provider.c",
+      "Zend/Native/Lowering/StraightLine/zend_mir_lifetime_provider.c", "Zend/Native/Lowering/StraightLine/zend_mir_lower_copy_move.c", "Zend/Native/Lowering/StraightLine/zend_mir_lower_entry_state.c", "Zend/Native/Lowering/StraightLine/zend_mir_lower_return.c", "Zend/Native/Lowering/StraightLine/zend_mir_lower_structural.c"
+    ],
+    "control_flow": [
+      "Zend/Native/Lowering/ControlFlow/zend_mir_control_flow_proofs.c", "Zend/Native/Lowering/ControlFlow/zend_mir_control_flow_provider.c", "Zend/Native/Lowering/ControlFlow/zend_mir_lower_control_flow.c",
+      "Zend/Native/MIR/ControlFlow/zend_mir_control_flow_map.c", "Zend/Native/MIR/ControlFlow/zend_mir_verify_control_flow.c"
+    ],
+    "calls": ["Zend/Native/Calls/Model/zend_mir_call_model.c"]
+  }
+}

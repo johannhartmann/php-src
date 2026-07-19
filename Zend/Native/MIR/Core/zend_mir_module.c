@@ -13,6 +13,7 @@
 #include "zend_mir_module_internal.h"
 
 #include <stdint.h>
+#include <stdlib.h>
 
 static bool zend_mir_checked_multiply_size(size_t left, size_t right, size_t *out)
 {
@@ -139,6 +140,8 @@ zend_mir_module *zend_mir_module_create(zend_mir_module_id module_id,
 	module->diagnostics = diagnostics;
 	zend_mir_module_init_view(module);
 	zend_mir_module_init_mutator(module);
+	zend_mir_module_init_call_view(module);
+	zend_mir_module_init_call_mutator(module);
 	return module;
 }
 
@@ -928,6 +931,594 @@ static bool zend_mir_seal_function(void *context,
 	return true;
 }
 
+static bool zend_mir_core_reserve_table(zend_mir_module *module,
+	zend_mir_core_table *table, uint32_t required, size_t item_size,
+	size_t alignment, uint32_t limit)
+{
+	uint32_t capacity;
+	void *items;
+
+	if (!zend_mir_module_require_building(module) || table == NULL
+			|| required > limit || required < table->count) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
+			"call-model table capacity overflow");
+	}
+	if (required <= table->capacity) {
+		return true;
+	}
+	capacity = table->capacity == 0 ? UINT32_C(4) : table->capacity;
+	while (capacity < required) {
+		if (capacity > limit / 2) {
+			capacity = limit;
+		} else {
+			capacity *= 2;
+		}
+		if (capacity == 0) {
+			return zend_mir_module_fail(module,
+				ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
+				"call-model table capacity overflow");
+		}
+	}
+	if ((size_t) capacity > SIZE_MAX / item_size) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
+			"call-model table byte size overflow");
+	}
+	items = zend_mir_arena_allocate(
+		&module->arena, (size_t) capacity * item_size, alignment);
+	if (items == NULL) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_ALLOCATION_FAILED,
+			"call-model table allocation failed");
+	}
+	if (table->count != 0) {
+		memcpy(items, table->items, (size_t) table->count * item_size);
+	}
+	table->items = items;
+	table->capacity = capacity;
+	return true;
+}
+
+static bool zend_mir_core_grow_staging(void **items, uint32_t count,
+	uint32_t *capacity, size_t item_size)
+{
+	uint32_t new_capacity;
+	void *new_items;
+
+	if (items == NULL || capacity == NULL || count == UINT32_MAX) {
+		return false;
+	}
+	if (count < *capacity) {
+		return true;
+	}
+	new_capacity = *capacity == 0 ? UINT32_C(4) : *capacity;
+	while (new_capacity <= count) {
+		if (new_capacity > UINT32_MAX / 2) {
+			return false;
+		}
+		new_capacity *= 2;
+	}
+	if ((size_t) new_capacity > SIZE_MAX / item_size) {
+		return false;
+	}
+	new_items = realloc(*items, (size_t) new_capacity * item_size);
+	if (new_items == NULL) {
+		return false;
+	}
+	*items = new_items;
+	*capacity = new_capacity;
+	return true;
+}
+
+static bool zend_mir_core_stage_call_target(
+	void *context, const zend_mir_call_target_ref *target)
+{
+	zend_mir_module *module = context;
+	zend_mir_core_call_staging *staging;
+
+	if (!zend_mir_module_require_building(module) || target == NULL) {
+		return false;
+	}
+	staging = &module->call_staging;
+	if (staging->committed || target->id != staging->target_count
+			|| target->kind != ZEND_MIR_CALL_TARGET_DIRECT_USER
+			|| !zend_mir_id_is_valid(target->function_symbol_id)
+			|| !zend_mir_id_is_valid(target->op_array_id)
+			|| target->required_num_args != target->num_args
+			|| !zend_mir_core_grow_staging(
+				(void **) &staging->targets, staging->target_count,
+				&staging->target_capacity, sizeof(*staging->targets))) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_ALLOCATION_FAILED,
+			"invalid or unallocatable call target");
+	}
+	staging->targets[staging->target_count++] = *target;
+	return true;
+}
+
+static bool zend_mir_core_stage_call_argument(
+	void *context, const zend_mir_call_argument_ref *argument)
+{
+	zend_mir_module *module = context;
+	zend_mir_core_call_staging *staging;
+
+	if (!zend_mir_module_require_building(module) || argument == NULL) {
+		return false;
+	}
+	staging = &module->call_staging;
+	if (staging->committed || argument->id != staging->argument_count
+			|| argument->ownership
+				!= ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR
+			|| !zend_mir_module_find_value(module, argument->value_id, NULL)
+			|| !zend_mir_core_grow_staging(
+				(void **) &staging->arguments, staging->argument_count,
+				&staging->argument_capacity, sizeof(*staging->arguments))) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_ALLOCATION_FAILED,
+			"invalid or unallocatable call argument");
+	}
+	staging->arguments[staging->argument_count++] = *argument;
+	return true;
+}
+
+static bool zend_mir_core_stage_call_continuation(
+	void *context, const zend_mir_call_continuation_ref *continuation)
+{
+	zend_mir_module *module = context;
+	zend_mir_core_call_staging *staging;
+
+	if (!zend_mir_module_require_building(module) || continuation == NULL) {
+		return false;
+	}
+	staging = &module->call_staging;
+	if (staging->committed
+			|| continuation->id != staging->continuation_count
+			|| continuation->kind < 0
+			|| continuation->kind
+				> ZEND_MIR_CALL_CONTINUATION_OBSERVER_DEBT
+			|| !zend_mir_core_grow_staging(
+				(void **) &staging->continuations,
+				staging->continuation_count,
+				&staging->continuation_capacity,
+				sizeof(*staging->continuations))) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_ALLOCATION_FAILED,
+			"invalid or unallocatable call continuation");
+	}
+	staging->continuations[staging->continuation_count++] = *continuation;
+	return true;
+}
+
+static bool zend_mir_core_stage_call_site(
+	void *context, const zend_mir_call_site_ref *site)
+{
+	zend_mir_module *module = context;
+	zend_mir_core_call_staging *staging;
+
+	if (!zend_mir_module_require_building(module) || site == NULL) {
+		return false;
+	}
+	staging = &module->call_staging;
+	if (staging->committed || site->id != staging->site_count
+			|| site->target_id >= staging->target_count
+			|| site->arguments.offset > staging->argument_count
+			|| site->arguments.count
+				> staging->argument_count - site->arguments.offset
+			|| site->continuations.offset > staging->continuation_count
+			|| site->continuations.count
+				> staging->continuation_count - site->continuations.offset
+			|| !zend_mir_core_grow_staging(
+				(void **) &staging->sites, staging->site_count,
+				&staging->site_capacity, sizeof(*staging->sites))) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_ALLOCATION_FAILED,
+			"invalid or unallocatable call site");
+	}
+	staging->sites[staging->site_count++] = *site;
+	return true;
+}
+
+static bool zend_mir_core_call_site_block(
+	const zend_mir_core_call_staging *staging, uint32_t site_index,
+	zend_mir_block_id *block_out)
+{
+	const zend_mir_call_site_ref *site = &staging->sites[site_index];
+	uint32_t index;
+
+	for (index = 0; index < site->continuations.count; index++) {
+		const zend_mir_call_continuation_ref *continuation =
+			&staging->continuations[site->continuations.offset + index];
+		if (continuation->kind == ZEND_MIR_CALL_CONTINUATION_NORMAL
+				&& zend_mir_id_is_valid(continuation->block_id)) {
+			*block_out = continuation->block_id;
+			return true;
+		}
+	}
+	return false;
+}
+
+static void zend_mir_core_init_frame_state(
+	zend_mir_frame_state_ref *frame, zend_mir_frame_state_id id,
+	zend_mir_function_id function_id,
+	zend_mir_frame_state_id parent_id, uint32_t opline,
+	zend_mir_span slots, zend_mir_safepoint_class safepoint)
+{
+	memset(frame, 0, sizeof(*frame));
+	frame->id = id;
+	frame->function_id = function_id;
+	frame->parent_id = parent_id;
+	frame->function_kind = ZEND_MIR_FUNCTION_KIND_USER;
+	frame->opline_index = opline;
+	frame->opline_phase = ZEND_MIR_OPLINE_PHASE_BEFORE;
+	frame->slots = slots;
+	frame->roots.offset = 0;
+	frame->roots.count = 0;
+	frame->cleanup_obligations.offset = 0;
+	frame->cleanup_obligations.count = 0;
+	frame->return_continuation.kind = ZEND_MIR_CONTINUATION_KIND_NATIVE;
+	frame->return_continuation.frame_state_id = ZEND_MIR_ID_INVALID;
+	frame->return_continuation.opline_index = opline + 1;
+	frame->exception_continuation.kind =
+		ZEND_MIR_CONTINUATION_KIND_ZEND_EXCEPTION;
+	frame->exception_continuation.frame_state_id = ZEND_MIR_ID_INVALID;
+	frame->exception_continuation.opline_index = opline;
+	frame->bailout_continuation.kind =
+		ZEND_MIR_CONTINUATION_KIND_NONLOCAL_BAILOUT;
+	frame->bailout_continuation.frame_state_id = ZEND_MIR_ID_INVALID;
+	frame->bailout_continuation.opline_index = opline;
+	frame->suspend_kind = ZEND_MIR_SUSPEND_KIND_NONE;
+	frame->suspend_state_id = ZEND_MIR_ID_INVALID;
+	frame->code_version_id = 1;
+	frame->resume.allowed = false;
+	frame->resume.entry_kind = ZEND_MIR_RESUME_ENTRY_KIND_NONE;
+	frame->resume.resume_id = ZEND_MIR_ID_INVALID;
+	frame->resume.code_version_id = ZEND_MIR_ID_INVALID;
+	frame->resume.target_opline_index = ZEND_MIR_ID_INVALID;
+	frame->safepoint_class = safepoint;
+	frame->canonical = true;
+}
+
+static bool zend_mir_core_append_call_instruction(
+	zend_mir_module *module, zend_mir_core_instruction *instructions,
+	uint32_t *instruction_count, uint32_t site_index,
+	zend_mir_block_id block_id)
+{
+	zend_mir_core_call_staging *staging = &module->call_staging;
+	zend_mir_call_site_ref *site = &staging->sites[site_index];
+	zend_mir_core_instruction *instruction =
+		&instructions[*instruction_count];
+	zend_mir_value_id *operands = NULL;
+	uint32_t index;
+
+	if (site->arguments.count != 0) {
+		operands = zend_mir_arena_allocate(
+			&module->arena,
+			(size_t) site->arguments.count * sizeof(*operands),
+			alignof(zend_mir_value_id));
+		if (operands == NULL) {
+			return zend_mir_module_fail(module,
+				ZEND_MIR_DIAGNOSTIC_ALLOCATION_FAILED,
+				"call operand allocation failed");
+		}
+		for (index = 0; index < site->arguments.count; index++) {
+			operands[index] = staging->arguments[
+				site->arguments.offset + index].value_id;
+		}
+	}
+	memset(instruction, 0, sizeof(*instruction));
+	instruction->record.id = *instruction_count;
+	instruction->record.block_id = block_id;
+	instruction->record.opcode = ZEND_MIR_OPCODE_CALL_DIRECT_USER;
+	instruction->record.representation = ZEND_MIR_REPRESENTATION_VOID;
+	instruction->record.result_id = ZEND_MIR_ID_INVALID;
+	instruction->record.frame_state_id =
+		site->caller_frame.frame_state_id;
+	/*
+	 * During staging, instruction_id carries the source DO opline. It is
+	 * replaced below with the persistent MIR instruction ID.
+	 */
+	instruction->record.source_position_id = site->instruction_id;
+	instruction->record.effects = site->effects;
+	instruction->record.reads = site->reads;
+	instruction->record.writes = site->writes;
+	instruction->record.barriers = site->barriers;
+	instruction->record.ownership_actions =
+		ZEND_MIR_OWNERSHIP_ACTION_MASK(ZEND_MIR_OWNERSHIP_ACTION_BORROW);
+	instruction->operands = operands;
+	instruction->operand_count = site->arguments.count;
+	instruction->operand_capacity = site->arguments.count;
+	site->instruction_id = *instruction_count;
+	(*instruction_count)++;
+	return true;
+}
+
+static bool zend_mir_core_commit_call_model(
+	zend_mir_module *module,
+	const zend_mir_call_capability_receipt_ref *receipt)
+{
+	zend_mir_core_call_staging *staging = &module->call_staging;
+	zend_mir_core_instruction *old_instructions;
+	zend_mir_core_instruction *new_instructions;
+	zend_mir_frame_slot_ref *slots;
+	zend_mir_frame_state_ref *frames;
+	bool *inserted;
+	size_t new_instruction_bytes;
+	uint32_t total_slots = module->frame_slots.count;
+	uint32_t total_frames;
+	uint32_t total_instructions;
+	uint32_t next_slot_id = 0;
+	uint32_t new_instruction_count = 0;
+	uint32_t site_index;
+	uint32_t index;
+
+	if (!zend_mir_module_require_building(module) || receipt == NULL
+			|| staging->committed || staging->site_count == 0
+			|| receipt->id != 0
+			|| receipt->capabilities != ZEND_MIR_W05_REQUIRED_CAPABILITIES
+			|| receipt->semantic_debts != ZEND_MIR_W05_REQUIRED_DEBTS
+			|| !receipt->modeled || receipt->codegen_eligible
+			|| staging->target_count == 0
+			|| module->frame_states.count
+				> UINT32_MAX - staging->site_count
+			|| module->instructions.count
+				> UINT32_MAX - staging->site_count) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_INVALID_ID,
+			"invalid W05 capability receipt");
+	}
+	for (site_index = 0; site_index < staging->site_count; site_index++) {
+		const zend_mir_call_site_ref *site = &staging->sites[site_index];
+		zend_mir_block_id block_id;
+		if (total_slots == UINT32_MAX
+				|| site->arguments.count
+					> (UINT32_MAX - total_slots - 1) / 2
+				|| !zend_mir_core_call_site_block(
+					staging, site_index, &block_id)
+				|| zend_mir_find_block(module, block_id) == NULL) {
+			return zend_mir_module_fail(module,
+				ZEND_MIR_DIAGNOSTIC_INVALID_ID,
+				"invalid W05 call-site shape");
+		}
+		total_slots += site->arguments.count * 2 + 1;
+	}
+	total_frames = module->frame_states.count + staging->site_count;
+	total_instructions = module->instructions.count + staging->site_count;
+	if (module->operand_count > module->limits.operands
+			|| staging->argument_count
+				> module->limits.operands - module->operand_count
+			|| !zend_mir_checked_multiply_size(
+				total_instructions, sizeof(*new_instructions),
+				&new_instruction_bytes)
+			|| !zend_mir_core_reserve_table(
+				module, &module->frame_slots, total_slots,
+				sizeof(zend_mir_frame_slot_ref),
+				alignof(zend_mir_frame_slot_ref), UINT32_MAX)
+			|| !zend_mir_core_reserve_table(
+				module, &module->frame_states, total_frames,
+				sizeof(zend_mir_frame_state_ref),
+				alignof(zend_mir_frame_state_ref), UINT32_MAX)
+			|| !zend_mir_core_reserve_table(
+				module, &module->call_targets, staging->target_count,
+				sizeof(zend_mir_call_target_ref),
+				alignof(zend_mir_call_target_ref), UINT32_MAX)
+			|| !zend_mir_core_reserve_table(
+				module, &module->call_arguments, staging->argument_count,
+				sizeof(zend_mir_call_argument_ref),
+				alignof(zend_mir_call_argument_ref), UINT32_MAX)
+			|| !zend_mir_core_reserve_table(
+				module, &module->call_continuations,
+				staging->continuation_count,
+				sizeof(zend_mir_call_continuation_ref),
+				alignof(zend_mir_call_continuation_ref), UINT32_MAX)
+			|| !zend_mir_core_reserve_table(
+				module, &module->call_sites, staging->site_count,
+				sizeof(zend_mir_call_site_ref),
+				alignof(zend_mir_call_site_ref), UINT32_MAX)
+			|| !zend_mir_core_reserve_table(
+				module, &module->call_receipts, 1,
+				sizeof(zend_mir_call_capability_receipt_ref),
+				alignof(zend_mir_call_capability_receipt_ref), 1)) {
+		return false;
+	}
+	new_instructions = zend_mir_arena_allocate(
+		&module->arena, new_instruction_bytes,
+		alignof(zend_mir_core_instruction));
+	inserted = calloc(staging->site_count, sizeof(*inserted));
+	if (new_instructions == NULL || inserted == NULL) {
+		free(inserted);
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_ALLOCATION_FAILED,
+			"call instruction publication failed");
+	}
+	old_instructions = ZEND_MIR_CORE_ITEMS(
+		module, instructions, zend_mir_core_instruction);
+	slots = ZEND_MIR_CORE_ITEMS(
+		module, frame_slots, zend_mir_frame_slot_ref);
+	frames = ZEND_MIR_CORE_ITEMS(
+		module, frame_states, zend_mir_frame_state_ref);
+	for (index = 0; index < module->frame_slots.count; index++) {
+		if (slots[index].slot_id >= next_slot_id) {
+			if (slots[index].slot_id == ZEND_MIR_ID_MAX) {
+				free(inserted);
+				return zend_mir_module_fail(module,
+					ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
+					"call frame slot ID overflow");
+			}
+			next_slot_id = slots[index].slot_id + 1;
+		}
+	}
+	if (total_slots - module->frame_slots.count
+			> (ZEND_MIR_ID_MAX - next_slot_id) + 1) {
+		free(inserted);
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
+			"call frame slot ID overflow");
+	}
+	for (site_index = 0; site_index < staging->site_count; site_index++) {
+		zend_mir_call_site_ref *site = &staging->sites[site_index];
+		uint32_t caller_offset = module->frame_slots.count;
+		uint32_t argument_index;
+		uint32_t pending_slot_id;
+		zend_mir_span caller_span;
+		zend_mir_span callee_span;
+		zend_mir_frame_state_id caller_frame_id =
+			module->frame_states.count;
+		uint32_t opline = site->instruction_id;
+
+		for (argument_index = 0;
+			argument_index < site->arguments.count; argument_index++) {
+			const zend_mir_call_argument_ref *argument =
+				&staging->arguments[
+					site->arguments.offset + argument_index];
+			zend_mir_frame_slot_ref *slot =
+				&slots[module->frame_slots.count++];
+			memset(slot, 0, sizeof(*slot));
+			slot->slot_id = next_slot_id++;
+			slot->value_id = argument->value_id;
+			slot->index = argument_index;
+			slot->kind = ZEND_MIR_FRAME_SLOT_KIND_ARGUMENT;
+			slot->representation =
+				ZEND_MIR_FRAME_SLOT_REPRESENTATION_CANONICAL_ZVAL;
+			slot->materialization = ZEND_MIR_MATERIALIZATION_MATERIALIZED;
+			slot->ownership = ZEND_MIR_FRAME_SLOT_OWNERSHIP_CALLER_OWNED;
+		}
+		pending_slot_id = next_slot_id++;
+		memset(&slots[module->frame_slots.count], 0,
+			sizeof(slots[module->frame_slots.count]));
+		slots[module->frame_slots.count].slot_id = pending_slot_id;
+		slots[module->frame_slots.count].value_id = ZEND_MIR_ID_INVALID;
+		slots[module->frame_slots.count].index = 0;
+		slots[module->frame_slots.count].kind =
+			ZEND_MIR_FRAME_SLOT_KIND_PENDING_CALL;
+		slots[module->frame_slots.count].representation =
+			ZEND_MIR_FRAME_SLOT_REPRESENTATION_EXECUTE_DATA_FIELD;
+		slots[module->frame_slots.count].materialization =
+			ZEND_MIR_MATERIALIZATION_UNDEF;
+		slots[module->frame_slots.count].ownership =
+			ZEND_MIR_FRAME_SLOT_OWNERSHIP_FRAME_OWNED;
+		module->frame_slots.count++;
+		caller_span.offset = caller_offset;
+		caller_span.count = site->arguments.count + 1;
+		callee_span.offset = module->frame_slots.count;
+		callee_span.count = site->arguments.count;
+		for (argument_index = 0;
+			argument_index < site->arguments.count; argument_index++) {
+			const zend_mir_call_argument_ref *argument =
+				&staging->arguments[
+					site->arguments.offset + argument_index];
+			zend_mir_frame_slot_ref *slot =
+				&slots[module->frame_slots.count++];
+			memset(slot, 0, sizeof(*slot));
+			slot->slot_id = next_slot_id++;
+			slot->value_id = argument->value_id;
+			slot->index = argument_index;
+			slot->kind = ZEND_MIR_FRAME_SLOT_KIND_ARGUMENT;
+			slot->representation =
+				ZEND_MIR_FRAME_SLOT_REPRESENTATION_CANONICAL_ZVAL;
+			slot->materialization = ZEND_MIR_MATERIALIZATION_MATERIALIZED;
+			slot->ownership = ZEND_MIR_FRAME_SLOT_OWNERSHIP_BORROWED;
+		}
+		zend_mir_core_init_frame_state(
+			&frames[module->frame_states.count++], caller_frame_id,
+			site->caller_frame.function_id,
+			ZEND_MIR_ID_INVALID, opline, caller_span,
+			ZEND_MIR_SAFEPOINT_CLASS_USER_CALL);
+		site->caller_frame.frame_state_id = caller_frame_id;
+		site->caller_frame.slots = caller_span;
+		site->caller_frame.pending_call_slot_id = pending_slot_id;
+		site->callee_entry_frame.frame_state_id = ZEND_MIR_ID_INVALID;
+		site->callee_entry_frame.function_id = ZEND_MIR_ID_INVALID;
+		site->callee_entry_frame.slots = callee_span;
+		site->callee_entry_frame.pending_call_slot_id =
+			ZEND_MIR_ID_INVALID;
+	}
+	for (index = 0; index < module->instructions.count; index++) {
+		if (zend_mir_opcode_is_terminator(
+				old_instructions[index].record.opcode)) {
+			for (site_index = 0;
+				site_index < staging->site_count; site_index++) {
+				zend_mir_block_id block_id;
+				if (!inserted[site_index]
+						&& zend_mir_core_call_site_block(
+							staging, site_index, &block_id)
+						&& block_id
+							== old_instructions[index].record.block_id) {
+					if (!zend_mir_core_append_call_instruction(
+							module, new_instructions,
+							&new_instruction_count,
+							site_index, block_id)) {
+						free(inserted);
+						return false;
+					}
+					inserted[site_index] = true;
+				}
+			}
+		}
+		new_instructions[new_instruction_count] = old_instructions[index];
+		new_instructions[new_instruction_count].record.id =
+			new_instruction_count;
+		new_instruction_count++;
+	}
+	for (site_index = 0; site_index < staging->site_count; site_index++) {
+		zend_mir_block_id block_id;
+		if (!inserted[site_index]) {
+			(void) zend_mir_core_call_site_block(
+				staging, site_index, &block_id);
+			if (!zend_mir_core_append_call_instruction(
+					module, new_instructions, &new_instruction_count,
+					site_index, block_id)) {
+				free(inserted);
+				return false;
+			}
+		}
+	}
+	free(inserted);
+	module->instructions.items = new_instructions;
+	module->instructions.count = total_instructions;
+	module->instructions.capacity = total_instructions;
+	module->operand_count += staging->argument_count;
+	memcpy(module->call_targets.items, staging->targets,
+		(size_t) staging->target_count * sizeof(*staging->targets));
+	memcpy(module->call_arguments.items, staging->arguments,
+		(size_t) staging->argument_count * sizeof(*staging->arguments));
+	memcpy(module->call_continuations.items, staging->continuations,
+		(size_t) staging->continuation_count
+			* sizeof(*staging->continuations));
+	memcpy(module->call_sites.items, staging->sites,
+		(size_t) staging->site_count * sizeof(*staging->sites));
+	memcpy(module->call_receipts.items, receipt, sizeof(*receipt));
+	module->call_targets.count = staging->target_count;
+	module->call_arguments.count = staging->argument_count;
+	module->call_continuations.count = staging->continuation_count;
+	module->call_sites.count = staging->site_count;
+	module->call_receipts.count = 1;
+	staging->committed = true;
+	return true;
+}
+
+static bool zend_mir_core_stage_call_receipt(
+	void *context, const zend_mir_call_capability_receipt_ref *receipt)
+{
+	return zend_mir_core_commit_call_model(context, receipt);
+}
+
+void zend_mir_module_init_call_mutator(zend_mir_module *module)
+{
+	memset(&module->call_mutator, 0, sizeof(module->call_mutator));
+	module->call_mutator.contract_version = ZEND_MIR_W05_CONTRACT_VERSION;
+	module->call_mutator.context = module;
+	module->call_mutator.add_call_target =
+		zend_mir_core_stage_call_target;
+	module->call_mutator.add_call_argument =
+		zend_mir_core_stage_call_argument;
+	module->call_mutator.add_call_continuation =
+		zend_mir_core_stage_call_continuation;
+	module->call_mutator.add_call_site = zend_mir_core_stage_call_site;
+	module->call_mutator.add_call_capability_receipt =
+		zend_mir_core_stage_call_receipt;
+}
+
 void zend_mir_module_init_mutator(zend_mir_module *module)
 {
 	module->mutator.contract_version = ZEND_MIR_CONTRACT_VERSION;
@@ -973,6 +1564,10 @@ bool zend_mir_module_finalize(zend_mir_module *module)
 void zend_mir_module_destroy(zend_mir_module *module)
 {
 	if (module != NULL) {
+		free(module->call_staging.targets);
+		free(module->call_staging.arguments);
+		free(module->call_staging.continuations);
+		free(module->call_staging.sites);
 		zend_mir_arena_release(&module->arena);
 	}
 }
@@ -991,4 +1586,20 @@ const zend_mir_view *zend_mir_module_get_view(const zend_mir_module *module)
 zend_mir_mutator *zend_mir_module_get_mutator(zend_mir_module *module)
 {
 	return zend_mir_module_require_building(module) ? &module->mutator : NULL;
+}
+
+zend_mir_call_mutator *zend_mir_module_get_call_mutator(
+	zend_mir_module *module)
+{
+	return zend_mir_module_require_building(module)
+		&& !module->call_staging.committed
+		? &module->call_mutator : NULL;
+}
+
+const zend_mir_call_view *zend_mir_module_get_call_view(
+	const zend_mir_module *module)
+{
+	return module != NULL && module->state != ZEND_MIR_MODULE_FAILED
+		&& module->call_staging.committed
+		? &module->call_view : NULL;
 }

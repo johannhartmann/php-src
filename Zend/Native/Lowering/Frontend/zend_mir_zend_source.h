@@ -18,11 +18,13 @@
 
 #include "../zend_mir_lowering_diagnostic.h"
 #include "../zend_mir_lowering_source.h"
+#include "../../Calls/Contracts/zend_mir_call_source.h"
 #include "../../MIR/zend_mir_frame_state.h"
 #include "../../MIR/zend_mir_scalar.h"
 
 struct _zend_op_array;
 struct _zend_ssa;
+struct _zend_script;
 
 #define ZEND_MIR_FRONTEND_OPERAND_NONE ZEND_MIR_ID_INVALID
 
@@ -48,6 +50,10 @@ typedef struct _zend_mir_source_slot_ref {
 typedef struct _zend_mir_zend_source {
 	const void *op_array;
 	const void *ssa;
+	const void *call_op_array;
+	const void *call_ssa;
+	const void *script;
+	void *call_inventory;
 	zend_mir_op_array_id op_array_id;
 	zend_mir_symbol_id file_symbol_id;
 	uint32_t opcode_count;
@@ -62,7 +68,11 @@ typedef struct _zend_mir_zend_source {
 	uint32_t edge_count;
 	uint32_t phi_count;
 	uint32_t phi_input_count;
+	uint32_t call_site_count;
+	uint32_t call_target_count;
+	uint32_t call_argument_count;
 	bool w04;
+	bool w05;
 	uint32_t initialized;
 } zend_mir_zend_source;
 
@@ -83,6 +93,27 @@ zend_mir_lowering_status zend_mir_zend_source_init_w04(
 	zend_mir_op_array_id op_array_id,
 	zend_mir_symbol_id file_symbol_id,
 	zend_mir_frontend_diagnostic *diagnostic);
+
+/*
+ * Add the process-local W05 call inventory to an initialized W04 source.
+ * The original (unprojected) op-array and SSA remain borrowed until release.
+ */
+zend_mir_lowering_status zend_mir_zend_source_enable_w05(
+	zend_mir_zend_source *source,
+	const struct _zend_script *script,
+	const struct _zend_op_array *op_array,
+	const struct _zend_ssa *ssa,
+	zend_mir_frontend_diagnostic *diagnostic);
+
+void zend_mir_zend_source_release_w05(zend_mir_zend_source *source);
+
+bool zend_mir_zend_source_call_view(
+	const zend_mir_zend_source *source,
+	zend_mir_source_call_view *out);
+
+bool zend_mir_zend_source_call_target_resolver(
+	const zend_mir_zend_source *source,
+	zend_mir_source_call_target_resolver *out);
 
 bool zend_mir_zend_source_view(
 	const zend_mir_zend_source *source,
