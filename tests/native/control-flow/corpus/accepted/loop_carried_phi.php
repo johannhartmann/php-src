@@ -1,9 +1,9 @@
 <?php
-function w04_loop_carried_phi(bool $left, bool $right) {
+function w04_loop_carried_phi(bool $repeat, bool $left, bool $right) {
 loop:
-    if ($left && $right) {
+    if ($repeat) {
         goto loop;
     }
-    return 0;
+    return $left && $right;
 }
-echo w04_loop_carried_phi(false, false), "\n";
+echo w04_loop_carried_phi(false, false, false), "\n";
