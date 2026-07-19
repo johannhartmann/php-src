@@ -1042,6 +1042,16 @@ static bool builder_fact_at(
 	return false;
 }
 
+static bool builder_no_fact(
+	const void *context, zend_mir_value_id value_id,
+	zend_mir_value_fact_ref *out)
+{
+	(void) context;
+	(void) value_id;
+	(void) out;
+	return false;
+}
+
 static zend_mir_lowering_status builder_test_provider_lower(
 	zend_mir_lowering_context *context,
 	const zend_mir_source_opcode_ref *source_opcode,
@@ -1283,6 +1293,10 @@ static void test_empty_fallthrough_builder(void)
 	builder_host host;
 	zend_mir_lowering_result result;
 
+	source.ssa_count = 1;
+	source.ssa[0].ssa_variable_id = 0;
+	source.ssa[0].definition_opline_index = ZEND_MIR_ID_INVALID;
+	source.ssa[0].source_slot_kind = ZEND_MIR_SOURCE_SLOT_CV;
 	memset(&shape, 0, sizeof(shape));
 	shape.reachable_block_count = 2;
 	shape.has_control_flow = true;
@@ -1293,8 +1307,13 @@ static void test_empty_fallthrough_builder(void)
 	assert(zend_mir_lowering_context_init(
 		&context, &source_view, &shape, &registry, &ops, NULL, 9, 7, NULL));
 	assert(zend_mir_lowering_context_set_value_fact_resolver(
-		&context, &source, builder_fact_at));
+		&context, &source, builder_no_fact));
 	result = zend_mir_lower_w04_zend_source(&context, NULL, &map);
+	if (result.status != ZEND_MIR_LOWERING_SUCCESS) {
+		fprintf(stderr, "factless builder failed: status=%u diagnostic=%u\n",
+			(unsigned int) result.status,
+			(unsigned int) result.diagnostic_code);
+	}
 	assert(result.status == ZEND_MIR_LOWERING_SUCCESS);
 	assert(result.guarantees == ZEND_MIR_LOWERING_GUARANTEE_W04_ALL);
 	assert(host.fixture.edge_count == 1);
