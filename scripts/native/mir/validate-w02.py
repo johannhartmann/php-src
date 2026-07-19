@@ -12,6 +12,7 @@ import re
 import shlex
 import subprocess
 import sys
+from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -58,6 +59,7 @@ FORBIDDEN_INCLUDE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 FORBIDDEN_TOKEN = re.compile(r"\b(?:TPDE|DynASM)\b", re.IGNORECASE)
+COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 class W02Error(RuntimeError):
@@ -88,6 +90,53 @@ def relative(path: Path) -> str:
     return path.relative_to(ROOT).as_posix()
 
 
+def git_output(*arguments: str) -> bytes:
+    return subprocess.run(
+        ["git", *arguments],
+        cwd=ROOT,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    ).stdout
+
+
+def resolve_commit(value: str) -> str:
+    resolved = git_output("rev-parse", "--verify", f"{value}^{{commit}}").decode(
+        "ascii"
+    ).strip()
+    if COMMIT_RE.fullmatch(resolved) is None:
+        raise W02Error(f"invalid W02 evidence subject: {value}")
+    return resolved
+
+
+def subject_tree(subject: str) -> str:
+    return git_output("rev-parse", f"{subject}^{{tree}}").decode("ascii").strip()
+
+
+def subject_paths(subject: str, suffix: str) -> tuple[str, ...]:
+    prefix = relative(MIR)
+    lines = git_output(
+        "ls-tree",
+        "-r",
+        "--name-only",
+        subject,
+        "--",
+        prefix,
+    ).decode("utf-8").splitlines()
+    return tuple(
+        sorted(
+            path
+            for path in lines
+            if path.endswith(suffix)
+            and "ControlFlow" not in Path(path).relative_to(prefix).parts
+        )
+    )
+
+
+def subject_bytes(subject: str, path: str) -> bytes:
+    return git_output("show", f"{subject}:{path}")
+
+
 def tree_digest(paths: tuple[Path, ...]) -> str:
     digest = hashlib.sha256()
     for path in paths:
@@ -98,10 +147,29 @@ def tree_digest(paths: tuple[Path, ...]) -> str:
     return digest.hexdigest()
 
 
+def subject_tree_digest(subject: str, paths: tuple[str, ...]) -> str:
+    digest = hashlib.sha256()
+    for path in paths:
+        digest.update(path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(subject_bytes(subject, path))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 def golden_digests() -> dict[str, str]:
     sums = ROOT / "tests/native/mir/golden/SHA256SUMS"
     result: dict[str, str] = {}
     for line in sums.read_text(encoding="ascii").splitlines():
+        digest, filename = line.split("  ", 1)
+        result[filename] = digest
+    return dict(sorted(result.items()))
+
+
+def subject_golden_digests(subject: str) -> dict[str, str]:
+    data = subject_bytes(subject, "tests/native/mir/golden/SHA256SUMS")
+    result: dict[str, str] = {}
+    for line in data.decode("ascii").splitlines():
         digest, filename = line.split("  ", 1)
         result[filename] = digest
     return dict(sorted(result.items()))
@@ -120,9 +188,43 @@ def architecture_leaks() -> list[str]:
     return leaks
 
 
-def report_bytes() -> bytes:
-    sources = production_sources()
-    headers = production_headers()
+def subject_architecture_leaks(
+    subject: str, paths: tuple[str, ...]
+) -> list[str]:
+    leaks: list[str] = []
+    for path in paths:
+        text = subject_bytes(subject, path).decode("utf-8")
+        include = FORBIDDEN_INCLUDE.search(text)
+        token = FORBIDDEN_TOKEN.search(text)
+        if include is not None:
+            leaks.append(f"{path}: forbidden include {include.group(0).strip()}")
+        elif token is not None:
+            leaks.append(f"{path}: forbidden token {token.group(0)}")
+    return leaks
+
+
+def report_subject(document: dict[str, Any] | None = None) -> str:
+    if document is None:
+        if not REPORT.exists():
+            return resolve_commit("HEAD")
+        try:
+            document = json.loads(REPORT.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise W02Error(f"invalid deterministic report: {error}") from error
+    evidence = document.get("evidence")
+    if not isinstance(evidence, dict):
+        raise W02Error("W02 coverage report lacks historical evidence binding")
+    subject = evidence.get("subject_commit")
+    if not isinstance(subject, str) or COMMIT_RE.fullmatch(subject) is None:
+        raise W02Error("W02 coverage report has invalid subject_commit")
+    return resolve_commit(subject)
+
+
+def report_bytes(subject: str | None = None) -> bytes:
+    resolved = resolve_commit(subject) if subject is not None else report_subject()
+    sources = subject_paths(resolved, ".c")
+    headers = subject_paths(resolved, ".h")
+    leaks = subject_architecture_leaks(resolved, (*sources, *headers))
     report = {
         "architecture_independence": {
             "forbidden_include_families": [
@@ -133,8 +235,8 @@ def report_bytes() -> bytes:
                 "register",
                 "runtime-VM",
             ],
-            "leak_count": len(architecture_leaks()),
-            "status": "pass" if not architecture_leaks() else "fail",
+            "leak_count": len(leaks),
+            "status": "pass" if not leaks else "fail",
         },
         "contract": {
             "format": "znmir-text-v1",
@@ -150,8 +252,13 @@ def report_bytes() -> bytes:
                 "repeat-execution",
                 "writer-chunk-size",
             ],
-            "golden_sha256": golden_digests(),
+            "golden_sha256": subject_golden_digests(resolved),
             "report_has_timestamp": False,
+        },
+        "evidence": {
+            "scope": "historical-source-snapshot",
+            "subject_commit": resolved,
+            "subject_tree": subject_tree(resolved),
         },
         "gates": list(COMMANDS),
         "integration_programs": {
@@ -163,12 +270,14 @@ def report_bytes() -> bytes:
             "verifier_nonmutation": "bytewise fixture snapshots before and after",
         },
         "production_inventory": {
-            "combined_sha256": tree_digest((*sources, *headers)),
+            "combined_sha256": subject_tree_digest(
+                resolved, (*sources, *headers)
+            ),
             "header_count": len(headers),
             "source_count": len(sources),
-            "sources": [relative(path) for path in sources],
+            "sources": list(sources),
         },
-        "schema_version": 1,
+        "schema_version": 2,
     }
     return (json.dumps(report, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
@@ -185,16 +294,24 @@ def run(command: list[str], environment: dict[str, str]) -> None:
 
 
 def validate_report() -> None:
-    expected = report_bytes()
     if not REPORT.exists():
         raise W02Error(f"missing deterministic report: {relative(REPORT)}")
+    try:
+        document = json.loads(REPORT.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise W02Error(f"invalid deterministic report: {error}") from error
+    subject = report_subject(document)
+    evidence = document.get("evidence")
+    if evidence.get("subject_tree") != subject_tree(subject):
+        raise W02Error("W02 coverage report subject_tree does not match subject")
+    expected = report_bytes(subject)
     actual = REPORT.read_bytes()
     if actual != expected:
         raise W02Error(
             "W02 coverage report is stale; run "
             "python3 scripts/native/mir/validate-w02.py --write-report"
         )
-    if expected != report_bytes():
+    if expected != report_bytes(subject):
         raise W02Error("W02 report generation is nondeterministic")
 
 
@@ -240,11 +357,15 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true")
     mode.add_argument("--write-report", action="store_true")
+    parser.add_argument(
+        "--subject",
+        help="committed source snapshot for --write-report (default: HEAD)",
+    )
     arguments = parser.parse_args()
     try:
         if arguments.write_report:
             REPORT.parent.mkdir(parents=True, exist_ok=True)
-            REPORT.write_bytes(report_bytes())
+            REPORT.write_bytes(report_bytes(arguments.subject or "HEAD"))
             print(f"wrote {relative(REPORT)}")
         else:
             validate()

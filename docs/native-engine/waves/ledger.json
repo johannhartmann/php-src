@@ -1,0 +1,25 @@
+{
+  "format_version": "1.0.0",
+  "migration_policy": "Historical result files remain valid in explicit results mode. A wave is sealed or revalidated only by a committed receipt; missing historical receipts remain unsealed.",
+  "waves": [
+    {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unsealed", "wave_id": "W00"},
+    {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unsealed", "wave_id": "W01"},
+    {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unsealed", "wave_id": "W02"},
+    {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unsealed", "wave_id": "W03"},
+    {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unsealed", "wave_id": "W04"},
+    {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "pending", "wave_id": "W05"},
+    {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unstarted", "wave_id": "W06"},
+    {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unstarted", "wave_id": "W07"},
+    {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unstarted", "wave_id": "W08"},
+    {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unstarted", "wave_id": "W09"},
+    {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unstarted", "wave_id": "W10"},
+    {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unstarted", "wave_id": "W11"},
+    {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unstarted", "wave_id": "W12"},
+    {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unstarted", "wave_id": "W13"},
+    {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unstarted", "wave_id": "W14"},
+    {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unstarted", "wave_id": "W15"},
+    {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unstarted", "wave_id": "W16"},
+    {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unstarted", "wave_id": "W17"},
+    {"capabilities_provided": [], "codegen_eligible": false, "receipt_path": null, "receipt_sha256": null, "semantic_debts": [], "state": "unstarted", "wave_id": "W18"}
+  ]
+}

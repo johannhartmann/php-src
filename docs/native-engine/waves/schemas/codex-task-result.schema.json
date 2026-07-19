@@ -2,6 +2,18 @@
   "$id": "https://php.net/schemas/native-engine/codex-task-result-1.0.0.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {"task_id": {"const": "W05-integration-gate"}},
+        "required": ["task_id"]
+      },
+      "then": {
+        "properties": {"head_commit": {"type": "null"}},
+        "required": ["tested_head_commit", "seal_subject"]
+      }
+    }
+  ],
   "properties": {
     "acceptance_criteria": {
       "items": {
@@ -32,6 +44,8 @@
         {"type": "null"}
       ]
     },
+    "seal_subject": {"$ref": "#/$defs/sealSubject"},
+    "tested_head_commit": {"$ref": "#/$defs/commit"},
     "risks": {"items": {"minLength": 1, "type": "string"}, "type": "array"},
     "status": {"$ref": "#/$defs/status"},
     "task_id": {
@@ -119,6 +133,16 @@
       "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$)).+$",
       "type": "string"
     },
+    "sealSubject": {
+      "additionalProperties": false,
+      "properties": {
+        "receipt_path": {"$ref": "#/$defs/relativePath"},
+        "receipt_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "required": ["receipt_path", "receipt_sha256"],
+      "type": "object"
+    },
+    "sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
     "status": {"enum": ["pending", "running", "pass", "fail", "blocked", "skipped"]}
   }
 }
