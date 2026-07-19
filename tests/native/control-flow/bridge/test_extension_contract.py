@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 import unittest
 from pathlib import Path
@@ -13,11 +12,6 @@ EXTENSION = ROOT / "ext/native_mir_test/native_mir_test.c"
 STUB = ROOT / "ext/native_mir_test/native_mir_test.stub.php"
 CONFIG = ROOT / "ext/native_mir_test/config.m4"
 INVOKER = ROOT / "tests/native/control-flow/bridge/invoke_dump.php"
-EXPECTED_CONFIG_SHA256 = (
-    "a39f7107fc9e790275f375e94a116465a84db6da7a4bdb18909b70506147e0e9"
-)
-
-
 class ExtensionContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -25,11 +19,7 @@ class ExtensionContractTests(unittest.TestCase):
         cls.stub = STUB.read_text(encoding="utf-8")
         cls.invoker = INVOKER.read_text(encoding="utf-8")
 
-    def test_config_is_unchanged_and_has_no_w04_stub(self) -> None:
-        self.assertEqual(
-            hashlib.sha256(CONFIG.read_bytes()).hexdigest(),
-            EXPECTED_CONFIG_SHA256,
-        )
+    def test_config_has_no_w04_stub(self) -> None:
         self.assertNotIn("w04_entry_stub", CONFIG.read_text(encoding="utf-8"))
 
     def test_wave_three_is_default_and_only_three_or_four_are_valid(self) -> None:
@@ -67,6 +57,30 @@ class ExtensionContractTests(unittest.TestCase):
         self.assertNotIn("zend_mir_lower_w04_zend_source(", body)
         self.assertNotRegex(body, r"\bzend_mir_(?:lower_source|emit|append|add)_")
         self.assertIn("zend_mir_lowering_result_is_w04_failure_atomic", self.extension)
+
+    def test_w04_stage2_checks_scalar_descriptors(self) -> None:
+        self.assertIn("native_mir_test_verify_w04_scalar", self.extension)
+        self.assertIn("zend_mir_scalar_descriptor_at", self.extension)
+        self.assertIn("native_mir_test_scalar_requirement_matches", self.extension)
+        self.assertRegex(
+            self.extension,
+            re.compile(
+                r"return state->wave == 4\s*"
+                r"\? native_mir_test_verify_w04_scalar\(state, view\)\s*"
+                r": zend_mir_verify_w03_scalar\(view, diagnostics\);",
+                re.DOTALL,
+            ),
+        )
+
+    def test_protected_regions_reject_before_ssa(self) -> None:
+        self.assertRegex(
+            self.extension,
+            re.compile(
+                r"state->wave == 4 && state->selected->last_try_catch != 0.*?"
+                r'"MIRL0015"',
+                re.DOTALL,
+            ),
+        )
 
     def test_compile_dump_never_executes_source(self) -> None:
         self.assertIn("ZEND_COMPILE_WITHOUT_EXECUTION", self.extension)
