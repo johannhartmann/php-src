@@ -420,7 +420,7 @@ static bool zend_mir_w04_emit_edge_statepoint(
 	frame.resume.resume_id = ZEND_MIR_ID_INVALID;
 	frame.resume.code_version_id = ZEND_MIR_ID_INVALID;
 	frame.resume.target_opline_index = ZEND_MIR_ID_INVALID;
-	frame.safepoint_class = ZEND_MIR_SAFEPOINT_CLASS_INTERRUPT;
+	frame.safepoint_class = ZEND_MIR_SAFEPOINT_CLASS_OBSERVER;
 	frame.canonical = true;
 	if (!mutator->add_frame_state(mutator->context, &frame, &frame_id)) {
 		return false;
@@ -453,6 +453,7 @@ static bool zend_mir_w04_emit_edge_statepoint(
 	record.writes =
 		ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_ENGINE_INTERRUPT);
 	record.barriers = ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_SAFEPOINT)
+		| ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_OBSERVER)
 		| ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_INTERRUPT);
 	if (!mutator->add_instruction(mutator->context, &record, statepoint_id)) {
 		return false;
