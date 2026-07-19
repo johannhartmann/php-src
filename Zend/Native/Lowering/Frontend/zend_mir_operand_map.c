@@ -201,13 +201,14 @@ static bool zend_mir_frontend_definition_is_complete(
 		? occurrences == 0 : occurrences == 1;
 }
 
-zend_mir_lowering_status zend_mir_frontend_validate_operands(
+static zend_mir_lowering_status zend_mir_frontend_validate_operands_impl(
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,
 	zend_mir_op_array_id op_array_id,
 	zend_mir_frontend_diagnostic *diagnostic,
 	uint32_t *use_count,
-	uint32_t *def_count)
+	uint32_t *def_count,
+	bool allow_phi_definitions)
 {
 	uint32_t i;
 	uint32_t operand_index;
@@ -227,7 +228,11 @@ zend_mir_lowering_status zend_mir_frontend_validate_operands(
 		if (ssa->vars[i].definition < -1
 				|| (ssa->vars[i].definition >= 0
 					&& (uint32_t) ssa->vars[i].definition >= op_array->last)
-				|| ssa->vars[i].definition_phi != NULL) {
+				|| (!allow_phi_definitions
+					&& ssa->vars[i].definition_phi != NULL)
+				|| (ssa->vars[i].definition_phi != NULL
+					&& (ssa->vars[i].definition != -1
+						|| ssa->vars[i].definition_phi->ssa_var != (int) i))) {
 			zend_mir_frontend_set_diagnostic(
 				diagnostic, ZEND_MIR_LOWERING_REJECTED,
 				ZEND_MIRL_INVALID_SOURCE, op_array_id, ZEND_MIR_ID_INVALID,
@@ -273,6 +278,30 @@ invalid:
 		op_array_id, ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE,
 		ZEND_MIR_ID_INVALID);
 	return ZEND_MIR_LOWERING_REJECTED;
+}
+
+zend_mir_lowering_status zend_mir_frontend_validate_operands(
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	zend_mir_op_array_id op_array_id,
+	zend_mir_frontend_diagnostic *diagnostic,
+	uint32_t *use_count,
+	uint32_t *def_count)
+{
+	return zend_mir_frontend_validate_operands_impl(
+		op_array, ssa, op_array_id, diagnostic, use_count, def_count, false);
+}
+
+zend_mir_lowering_status zend_mir_frontend_validate_operands_w04(
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	zend_mir_op_array_id op_array_id,
+	zend_mir_frontend_diagnostic *diagnostic,
+	uint32_t *use_count,
+	uint32_t *def_count)
+{
+	return zend_mir_frontend_validate_operands_impl(
+		op_array, ssa, op_array_id, diagnostic, use_count, def_count, true);
 }
 
 static bool zend_mir_frontend_opcode_is_supported(uint8_t opcode)
@@ -613,6 +642,61 @@ zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope(
 	return ZEND_MIR_LOWERING_SUCCESS;
 }
 
+static bool zend_mir_frontend_w04_branch(uint8_t opcode)
+{
+	return opcode == ZEND_JMP || opcode == ZEND_JMPZ
+		|| opcode == ZEND_JMPNZ || opcode == ZEND_JMPZ_EX
+		|| opcode == ZEND_JMPNZ_EX;
+}
+
+zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w04(
+	const zend_op_array *op_array, zend_mir_op_array_id op_array_id,
+	zend_mir_frontend_diagnostic *diagnostic)
+{
+	uint32_t i;
+	if (op_array == NULL || op_array->last > ZEND_MIR_ID_MAX
+			|| (op_array->last != 0 && op_array->opcodes == NULL)) {
+		return ZEND_MIR_LOWERING_REJECTED;
+	}
+	for (i = 0; i < op_array->last; i++) {
+		const zend_op *opline = &op_array->opcodes[i];
+		bool valid;
+		if (opline->opcode > ZEND_VM_LAST_OPCODE
+				|| (!zend_mir_frontend_opcode_is_supported(opline->opcode)
+					&& !zend_mir_frontend_w04_branch(opline->opcode))) {
+			zend_mir_frontend_set_diagnostic(diagnostic,
+				ZEND_MIR_LOWERING_DEFERRED,
+				zend_mir_frontend_deferred_code(opline->opcode),
+				op_array_id, i, ZEND_MIR_FRONTEND_OPERAND_NONE,
+				ZEND_MIR_ID_INVALID);
+			return ZEND_MIR_LOWERING_DEFERRED;
+		}
+		if (!zend_mir_frontend_w04_branch(opline->opcode)) {
+			valid = zend_mir_frontend_opcode_operands_match(opline);
+		} else if (opline->opcode == ZEND_JMP) {
+			valid = opline->op1_type == IS_UNUSED
+				&& opline->op2_type == IS_UNUSED
+				&& opline->result_type == IS_UNUSED;
+		} else {
+			valid = zend_mir_frontend_is_scalar_source_type(opline->op1_type)
+				&& opline->op2_type == IS_UNUSED
+				&& ((opline->opcode == ZEND_JMPZ_EX
+						|| opline->opcode == ZEND_JMPNZ_EX)
+					? zend_mir_frontend_is_scalar_result_type(
+						opline->result_type)
+					: opline->result_type == IS_UNUSED);
+		}
+		if (!valid) {
+			zend_mir_frontend_set_diagnostic(diagnostic,
+				ZEND_MIR_LOWERING_REJECTED,
+				ZEND_MIRL_W04_BRANCH_PROOF_FAILED, op_array_id, i,
+				ZEND_MIR_FRONTEND_OPERAND_NONE, ZEND_MIR_ID_INVALID);
+			return ZEND_MIR_LOWERING_REJECTED;
+		}
+	}
+	return ZEND_MIR_LOWERING_SUCCESS;
+}
+
 static bool zend_mir_frontend_operand_has_exact_scalar(
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,
@@ -691,6 +775,38 @@ zend_mir_lowering_status zend_mir_frontend_validate_eligibility(
 	return ZEND_MIR_LOWERING_SUCCESS;
 }
 
+zend_mir_lowering_status zend_mir_frontend_validate_eligibility_w04(
+	const zend_op_array *op_array, const zend_ssa *ssa,
+	zend_mir_op_array_id op_array_id,
+	zend_mir_frontend_diagnostic *diagnostic)
+{
+	uint32_t i;
+	for (i = 0; i < op_array->last; i++) {
+		uint32_t operand_index;
+		if (!zend_mir_frontend_opcode_is_supported(op_array->opcodes[i].opcode)
+				&& !zend_mir_frontend_w04_branch(
+					op_array->opcodes[i].opcode)) {
+			return ZEND_MIR_LOWERING_DEFERRED;
+		}
+		if (op_array->opcodes[i].opcode == ZEND_NOP
+				|| op_array->opcodes[i].opcode == ZEND_JMP) {
+			continue;
+		}
+		for (operand_index = 0; operand_index < 3; operand_index++) {
+			uint32_t missing_ssa_id = ZEND_MIR_ID_INVALID;
+			if (!zend_mir_frontend_operand_has_exact_scalar(
+					op_array, ssa, i, operand_index, &missing_ssa_id)) {
+				zend_mir_frontend_set_diagnostic(diagnostic,
+					ZEND_MIR_LOWERING_DEFERRED,
+					ZEND_MIRL_MISSING_PROOF, op_array_id, i, operand_index,
+					missing_ssa_id);
+				return ZEND_MIR_LOWERING_DEFERRED;
+			}
+		}
+	}
+	return ZEND_MIR_LOWERING_SUCCESS;
+}
+
 bool zend_mir_frontend_opcode_at(
 	const zend_mir_zend_source *source,
 	uint32_t index,
@@ -711,6 +827,8 @@ bool zend_mir_frontend_opcode_at(
 	out->zend_opcode_number = opline->opcode;
 	out->extended_value = opline->extended_value;
 	out->source_position_id = index;
+	out->block_id = source->w04 && ssa->cfg.map != NULL
+		? ssa->cfg.map[index] : 0;
 	return zend_mir_frontend_operand_ref(
 			op_array, ssa, index, ZEND_MIR_FRONTEND_OP1, -1, &out->op1)
 		&& zend_mir_frontend_operand_ref(

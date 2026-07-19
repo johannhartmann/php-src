@@ -84,8 +84,7 @@ zend_mir_lowering_status zend_mir_lower_return(
 	zend_mir_lowering_diagnostic_code *diagnostic_out)
 {
 	const zend_mir_straight_line_proof_mask required =
-		ZEND_MIR_STRAIGHT_LINE_PROOF_SINGLE_BLOCK
-		| ZEND_MIR_STRAIGHT_LINE_PROOF_NO_CALLS
+		ZEND_MIR_STRAIGHT_LINE_PROOF_NO_CALLS
 		| ZEND_MIR_STRAIGHT_LINE_PROOF_NO_REENTRY
 		| ZEND_MIR_STRAIGHT_LINE_PROOF_EXACT_SCALAR
 		| ZEND_MIR_STRAIGHT_LINE_PROOF_NON_REFCOUNTED
@@ -116,7 +115,9 @@ zend_mir_lowering_status zend_mir_lower_return(
 			|| mutator->add_operand == NULL) {
 		return ZEND_MIR_LOWERING_REJECTED;
 	}
-	if ((provider_context->proofs & required) != required) {
+	if ((provider_context->proofs & required) != required
+			|| !zend_mir_straight_line_has_cfg_proof(
+				provider_context->proofs)) {
 		if (diagnostic_out != NULL) {
 			*diagnostic_out = ZEND_MIRL_MISSING_PROOF;
 		}
@@ -188,8 +189,7 @@ zend_mir_lowering_status zend_mir_lower_free(
 	zend_mir_lowering_diagnostic_code *diagnostic_out)
 {
 	const zend_mir_straight_line_proof_mask required =
-		ZEND_MIR_STRAIGHT_LINE_PROOF_SINGLE_BLOCK
-		| ZEND_MIR_STRAIGHT_LINE_PROOF_NO_CALLS
+		ZEND_MIR_STRAIGHT_LINE_PROOF_NO_CALLS
 		| ZEND_MIR_STRAIGHT_LINE_PROOF_NO_REENTRY
 		| ZEND_MIR_STRAIGHT_LINE_PROOF_EXACT_SCALAR
 		| ZEND_MIR_STRAIGHT_LINE_PROOF_NON_REFCOUNTED
@@ -220,7 +220,9 @@ zend_mir_lowering_status zend_mir_lower_free(
 			|| mutator->add_source_position == NULL) {
 		return ZEND_MIR_LOWERING_REJECTED;
 	}
-	if ((provider_context->proofs & required) != required) {
+	if ((provider_context->proofs & required) != required
+			|| !zend_mir_straight_line_has_cfg_proof(
+				provider_context->proofs)) {
 		if (diagnostic_out != NULL) {
 			*diagnostic_out = ZEND_MIRL_MISSING_PROOF;
 		}
