@@ -308,6 +308,60 @@ class RealCandidateTests(unittest.TestCase):
                 )
                 self.assertRegex(result["mir"], r"call-site cs0 .* result v\d+")
 
+    def test_scalar_call_result_can_feed_followup_scalar_lowering(self) -> None:
+        candidate = os.environ.get("TEST_PHP_EXECUTABLE")
+        if not candidate:
+            self.skipTest("TEST_PHP_EXECUTABLE is not set")
+        import importlib.util
+
+        specification = importlib.util.spec_from_file_location(
+            "w05_scalar_followup_dump", ROOT / "scripts/native/calls/dump-w05.py"
+        )
+        assert specification is not None and specification.loader is not None
+        module = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(module)
+        source = (
+            ROOT
+            / "tests/native/calls/corpus/cases/"
+            "direct_user_scalar_result_followup.php"
+        ).read_bytes()
+        result = module.invoke(
+            module.candidate_path(candidate),
+            source,
+            "direct-user-scalar-result-followup.php",
+            "w05_case",
+        )["calls"][0]
+        self.assertEqual(result["status"], "accepted")
+        self.assertIn("opcode call_direct_user", result["mir"])
+        self.assertIn("opcode i64_add_no_overflow", result["mir"])
+
+    def test_default_bearing_target_is_deferred_to_w07(self) -> None:
+        candidate = os.environ.get("TEST_PHP_EXECUTABLE")
+        if not candidate:
+            self.skipTest("TEST_PHP_EXECUTABLE is not set")
+        import importlib.util
+
+        specification = importlib.util.spec_from_file_location(
+            "w05_default_argument_dump", ROOT / "scripts/native/calls/dump-w05.py"
+        )
+        assert specification is not None and specification.loader is not None
+        module = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(module)
+        source = (
+            ROOT / "tests/native/calls/corpus/cases/default_argument.php"
+        ).read_bytes()
+        result = module.invoke(
+            module.candidate_path(candidate),
+            source,
+            "default-argument.php",
+            "w05_case",
+        )["calls"][0]
+        self.assertEqual(result["status"], "rejected")
+        self.assertIn(
+            "MIRL0025",
+            {diagnostic["code"] for diagnostic in result["diagnostics"]},
+        )
+
     def test_recursive_self_call_reuses_caller_identity_and_is_rejected(self) -> None:
         candidate = os.environ.get("TEST_PHP_EXECUTABLE")
         if not candidate:

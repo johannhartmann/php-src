@@ -1852,13 +1852,21 @@ zend_mir_lowering_status zend_mir_zend_source_preflight_w05(
 		if (target->kind != ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
 				|| target->variadic || target->returns_by_reference
 				|| target->by_ref_mask != 0
-				|| target->num_args != target->required_num_args
 				|| (target->function_symbol_id == 0
 					&& target->op_array_id == 0)) {
 			zend_mir_zend_source_release_w05(&source);
 			zend_mir_frontend_set_diagnostic(
 				diagnostic, ZEND_MIR_LOWERING_DEFERRED,
 				ZEND_MIRL_W05_UNSUPPORTED_TARGET, 0,
+				ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE,
+				ZEND_MIR_ID_INVALID);
+			return ZEND_MIR_LOWERING_DEFERRED;
+		}
+		if (target->num_args != target->required_num_args) {
+			zend_mir_zend_source_release_w05(&source);
+			zend_mir_frontend_set_diagnostic(
+				diagnostic, ZEND_MIR_LOWERING_DEFERRED,
+				ZEND_MIRL_W05_ARGUMENT_COUNT_MISMATCH, 0,
 				ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE,
 				ZEND_MIR_ID_INVALID);
 			return ZEND_MIR_LOWERING_DEFERRED;

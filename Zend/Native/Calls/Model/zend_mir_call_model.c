@@ -509,13 +509,15 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 				|| resolved.kind != ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
 				|| resolved.variadic || resolved.returns_by_reference
 				|| resolved.by_ref_mask != 0
-				|| resolved.num_args != resolved.required_num_args
 				|| (resolved.function_symbol_id
 						== context->function_symbol_id
 					&& context->zend_source != NULL
 					&& resolved.op_array_id
 						== context->zend_source->op_array_id)) {
 			return ZEND_MIRL_W05_UNSUPPORTED_TARGET;
+		}
+		if (resolved.num_args != resolved.required_num_args) {
+			return ZEND_MIRL_W05_ARGUMENT_COUNT_MISMATCH;
 		}
 		if (resolved.num_args > 64) {
 			return ZEND_MIRL_W05_UNSUPPORTED_ARGUMENT;
