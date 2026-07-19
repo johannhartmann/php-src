@@ -608,6 +608,99 @@ static bool test_empty_and_full_view_surface(void)
 	return true;
 }
 
+static bool test_cfg_edge_storage_and_order(void)
+{
+	test_allocator allocator = { { 0 }, 0, 0, 0, 0 };
+	test_diagnostics diagnostics = { 0, ZEND_MIR_DIAGNOSTIC_NONE };
+	zend_mir_allocator vtable = test_allocator_vtable(&allocator);
+	zend_mir_diagnostic_sink sink = test_diagnostic_sink(&diagnostics);
+	zend_mir_module *module =
+		zend_mir_module_create(16, &vtable, 128, NULL, &sink);
+	zend_mir_mutator *mutator;
+	const zend_mir_view *view;
+	zend_mir_function_id function;
+	zend_mir_block_id entry;
+	zend_mir_block_id false_block;
+	zend_mir_block_id true_block;
+	zend_mir_block_id merge;
+	zend_mir_block_id adjacent;
+
+	CHECK(module != NULL);
+	mutator = zend_mir_module_get_mutator(module);
+	view = zend_mir_module_get_view(module);
+	CHECK(mutator != NULL && view != NULL);
+	CHECK(mutator->add_function(mutator->context, 16, &function));
+	CHECK(mutator->add_block(mutator->context, function, &entry));
+	CHECK(mutator->add_block(mutator->context, function, &false_block));
+	CHECK(mutator->add_block(mutator->context, function, &true_block));
+	CHECK(mutator->add_block(mutator->context, function, &merge));
+	CHECK(mutator->set_entry_block(mutator->context, function, entry));
+
+	/* Insertion order is semantic for branch successors and PHI predecessors. */
+	CHECK(mutator->add_edge(mutator->context, entry, true_block));
+	CHECK(mutator->add_edge(mutator->context, entry, false_block));
+	CHECK(mutator->add_edge(mutator->context, false_block, merge));
+	CHECK(mutator->add_edge(mutator->context, true_block, merge));
+	CHECK(view->successor_count(view->context, entry) == 2);
+	CHECK(view->successor_at(view->context, entry, 0, &adjacent));
+	CHECK(adjacent == true_block);
+	CHECK(view->successor_at(view->context, entry, 1, &adjacent));
+	CHECK(adjacent == false_block);
+	CHECK(!view->successor_at(view->context, entry, 2, &adjacent));
+	CHECK(view->predecessor_count(view->context, merge) == 2);
+	CHECK(view->predecessor_at(view->context, merge, 0, &adjacent));
+	CHECK(adjacent == false_block);
+	CHECK(view->predecessor_at(view->context, merge, 1, &adjacent));
+	CHECK(adjacent == true_block);
+	CHECK(!view->predecessor_at(view->context, merge, 2, &adjacent));
+	CHECK(view->successor_count(view->context, ZEND_MIR_ID_INVALID) == 0);
+	CHECK(!view->successor_at(
+		view->context, ZEND_MIR_ID_INVALID, 0, &adjacent));
+	CHECK(mutator->seal_function(mutator->context, function));
+	CHECK(zend_mir_module_finalize(module));
+	CHECK(view->successor_count(view->context, entry) == 2);
+	CHECK(view->predecessor_count(view->context, merge) == 2);
+	zend_mir_module_destroy(module);
+
+	memset(&allocator, 0, sizeof(allocator));
+	memset(&diagnostics, 0, sizeof(diagnostics));
+	vtable = test_allocator_vtable(&allocator);
+	sink = test_diagnostic_sink(&diagnostics);
+	module = zend_mir_module_create(17, &vtable, 128, NULL, &sink);
+	CHECK(module != NULL);
+	mutator = zend_mir_module_get_mutator(module);
+	CHECK(mutator->add_function(mutator->context, 17, &function));
+	CHECK(mutator->add_block(mutator->context, function, &entry));
+	CHECK(mutator->add_block(mutator->context, function, &merge));
+	CHECK(mutator->add_edge(mutator->context, entry, merge));
+	CHECK(!mutator->add_edge(mutator->context, entry, merge));
+	CHECK(zend_mir_module_get_state(module) == ZEND_MIR_MODULE_FAILED);
+	CHECK(diagnostics.last_code == ZEND_MIR_DIAGNOSTIC_DUPLICATE_ID);
+	zend_mir_module_destroy(module);
+
+	memset(&allocator, 0, sizeof(allocator));
+	memset(&diagnostics, 0, sizeof(diagnostics));
+	vtable = test_allocator_vtable(&allocator);
+	sink = test_diagnostic_sink(&diagnostics);
+	module = zend_mir_module_create(18, &vtable, 128, NULL, &sink);
+	CHECK(module != NULL);
+	mutator = zend_mir_module_get_mutator(module);
+	CHECK(mutator->add_function(mutator->context, 18, &function));
+	CHECK(mutator->add_block(mutator->context, function, &entry));
+	{
+		zend_mir_function_id other_function;
+
+		CHECK(mutator->add_function(mutator->context, 19, &other_function));
+		CHECK(mutator->add_block(
+			mutator->context, other_function, &false_block));
+		CHECK(!mutator->add_edge(mutator->context, entry, false_block));
+	}
+	CHECK(zend_mir_module_get_state(module) == ZEND_MIR_MODULE_FAILED);
+	CHECK(diagnostics.last_code == ZEND_MIR_DIAGNOSTIC_INVALID_ID);
+	zend_mir_module_destroy(module);
+	return true;
+}
+
 static bool test_frame_and_source_surface(void)
 {
 	test_allocator allocator = { { 0 }, 0, 0, 0, 0 };
@@ -754,6 +847,7 @@ int main(void)
 			|| !test_lifecycle_and_limits()
 			|| !test_invalid_enum_sentinels()
 			|| !test_empty_and_full_view_surface()
+			|| !test_cfg_edge_storage_and_order()
 			|| !test_frame_and_source_surface()) {
 		return EXIT_FAILURE;
 	}

@@ -40,8 +40,14 @@ class W03IntegrationGateTests(unittest.TestCase):
         ).read_bytes()
         self.assertEqual(actual, expected)
         document = json.loads(actual)
+        self.assertEqual(document["schema_version"], 2)
         self.assertNotIn("timestamp", document)
         self.assertFalse(document["determinism"]["report_has_timestamp"])
+        self.assertIn(
+            "contract_evidence_sha256", document["source_inventory"]
+        )
+        self.assertIn("path_set_sha256", document["source_inventory"])
+        self.assertNotIn("combined_sha256", document["source_inventory"])
 
     def test_profile_has_exact_provider_and_proof_coverage(self) -> None:
         document = validator.report_document()
@@ -132,6 +138,24 @@ class W03IntegrationGateTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.loads(completed.stdout)["status"], "pass")
+
+    def test_hard_gate_harness_self_test(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "scripts/native/lowering/test-w03.py",
+                "--self-test",
+            ],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn(
+            "W03 hard-gate harness self-test passed", completed.stdout
+        )
 
 
 if __name__ == "__main__":

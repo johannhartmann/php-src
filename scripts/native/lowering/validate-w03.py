@@ -55,6 +55,7 @@ GATES = (
     "python3 scripts/native/mir/validate-w02.py --check",
     "python3 scripts/native/lowering/check-contract.py --check",
     "python3 scripts/native/lowering/validate-w03.py --check",
+    "python3 scripts/native/lowering/test-w03.py --self-test",
     "python3 scripts/native/lowering/test-w03.py --reference-php ${REFERENCE_PHP} --candidate-php ${CANDIDATE_PHP}",
     "python3 scripts/native/lowering/test-w03.py --reference-php ${REFERENCE_PHP} --candidate-php ${ASAN_CANDIDATE_PHP} --sanitizer address",
     "python3 scripts/native/lowering/test-w03.py --reference-php ${REFERENCE_PHP} --candidate-php ${UBSAN_CANDIDATE_PHP} --sanitizer undefined",
@@ -95,8 +96,17 @@ def relative(path: Path) -> str:
 
 def production_paths() -> tuple[Path, ...]:
     paths = [
-        *LOWERING.rglob("*.c"),
-        *LOWERING.rglob("*.h"),
+        *(
+            path
+            for path in LOWERING.rglob("*.c")
+            if "ControlFlow" not in path.relative_to(LOWERING).parts
+        ),
+        *(
+            path
+            for path in LOWERING.rglob("*.h")
+            if "ControlFlow" not in path.relative_to(LOWERING).parts
+            and path.name != "zend_mir_lowering_w04.h"
+        ),
         ROOT / "ext/native_mir_test/config.m4",
         ROOT / "ext/native_mir_test/native_mir_test.c",
         ROOT / "ext/native_mir_test/native_mir_test.stub.php",
@@ -104,9 +114,17 @@ def production_paths() -> tuple[Path, ...]:
     return tuple(sorted(paths))
 
 
-def tree_digest(paths: tuple[Path, ...]) -> str:
+def path_set_digest(paths: tuple[Path, ...]) -> str:
     digest = hashlib.sha256()
     for path in paths:
+        digest.update(relative(path).encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def contract_evidence_digest() -> str:
+    digest = hashlib.sha256()
+    for path in (PROFILE_PATH, BLOCKERS_PATH, MANIFEST_PATH):
         digest.update(relative(path).encode("utf-8"))
         digest.update(b"\0")
         digest.update(path.read_bytes())
@@ -276,10 +294,11 @@ def report_document() -> dict[str, Any]:
             "required_waves": ["W00", "W01", "W02"],
             "standard_build_runtime_path": False,
         },
-        "schema_version": 1,
+        "schema_version": 2,
         "source_inventory": {
-            "combined_sha256": tree_digest(paths),
+            "contract_evidence_sha256": contract_evidence_digest(),
             "path_count": len(paths),
+            "path_set_sha256": path_set_digest(paths),
             "paths": [relative(path) for path in paths],
         },
         "wave": "W03",

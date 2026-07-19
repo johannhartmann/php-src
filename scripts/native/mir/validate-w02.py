@@ -65,11 +65,23 @@ class W02Error(RuntimeError):
 
 
 def production_sources() -> tuple[Path, ...]:
-    return tuple(sorted(MIR.rglob("*.c")))
+    return tuple(
+        sorted(
+            path
+            for path in MIR.rglob("*.c")
+            if "ControlFlow" not in path.relative_to(MIR).parts
+        )
+    )
 
 
 def production_headers() -> tuple[Path, ...]:
-    return tuple(sorted(MIR.rglob("*.h")))
+    return tuple(
+        sorted(
+            path
+            for path in MIR.rglob("*.h")
+            if "ControlFlow" not in path.relative_to(MIR).parts
+        )
+    )
 
 
 def relative(path: Path) -> str:

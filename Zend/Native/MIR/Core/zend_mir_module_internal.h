@@ -35,6 +35,11 @@ typedef struct _zend_mir_core_value {
 	uint32_t constant_index;
 } zend_mir_core_value;
 
+typedef struct _zend_mir_core_edge {
+	zend_mir_block_id from;
+	zend_mir_block_id to;
+} zend_mir_core_edge;
+
 typedef struct _zend_mir_core_table {
 	void *items;
 	uint32_t count;
@@ -49,6 +54,7 @@ struct _zend_mir_module {
 	zend_mir_diagnostic_sink *diagnostics;
 	zend_mir_core_table functions;
 	zend_mir_core_table blocks;
+	zend_mir_core_table edges;
 	zend_mir_core_table instructions;
 	zend_mir_core_table values;
 	zend_mir_core_table constants;

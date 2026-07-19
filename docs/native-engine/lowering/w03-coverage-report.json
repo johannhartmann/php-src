@@ -83,6 +83,7 @@
     "python3 scripts/native/mir/validate-w02.py --check",
     "python3 scripts/native/lowering/check-contract.py --check",
     "python3 scripts/native/lowering/validate-w03.py --check",
+    "python3 scripts/native/lowering/test-w03.py --self-test",
     "python3 scripts/native/lowering/test-w03.py --reference-php ${REFERENCE_PHP} --candidate-php ${CANDIDATE_PHP}",
     "python3 scripts/native/lowering/test-w03.py --reference-php ${REFERENCE_PHP} --candidate-php ${ASAN_CANDIDATE_PHP} --sanitizer address",
     "python3 scripts/native/lowering/test-w03.py --reference-php ${REFERENCE_PHP} --candidate-php ${UBSAN_CANDIDATE_PHP} --sanitizer undefined",
@@ -403,10 +404,11 @@
     ],
     "standard_build_runtime_path": false
   },
-  "schema_version": 1,
+  "schema_version": 2,
   "source_inventory": {
-    "combined_sha256": "409c87e8b229dd729b15ab68f36c7adff5c7bd1c3f6cda204125832501832449",
-    "path_count": 39,
+    "contract_evidence_sha256": "ab5e2907475eb6ebcd4d623919f2c7ed22d193e817dae35ef1d39b98156f4052",
+    "path_count": 41,
+    "path_set_sha256": "0c97ad4a8773e1ad5871b60db987b549fcc4084c1806d77aef2462c03fdb89a0",
     "paths": [
       "Zend/Native/Lowering/Core/zend_mir_lowering.c",
       "Zend/Native/Lowering/Core/zend_mir_lowering_context.c",
@@ -440,10 +442,12 @@
       "Zend/Native/Lowering/StraightLine/zend_mir_lower_structural.c",
       "Zend/Native/Lowering/StraightLine/zend_mir_straight_line.h",
       "Zend/Native/Lowering/StraightLine/zend_mir_straight_line_internal.h",
+      "Zend/Native/Lowering/zend_mir_control_flow.h",
       "Zend/Native/Lowering/zend_mir_lowering.h",
       "Zend/Native/Lowering/zend_mir_lowering_diagnostic.h",
       "Zend/Native/Lowering/zend_mir_lowering_registry.h",
       "Zend/Native/Lowering/zend_mir_lowering_source.h",
+      "Zend/Native/Lowering/zend_mir_lowering_zend.h",
       "ext/native_mir_test/config.m4",
       "ext/native_mir_test/native_mir_test.c",
       "ext/native_mir_test/native_mir_test.stub.php"
