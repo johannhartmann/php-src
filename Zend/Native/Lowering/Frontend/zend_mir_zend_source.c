@@ -1,5 +1,107 @@
 #include "zend_mir_zend_source_internal.h"
 
+typedef struct _zend_mir_frontend_call_target {
+	zend_mir_source_call_target_ref record;
+	const zend_function *function;
+} zend_mir_frontend_call_target;
+
+typedef struct _zend_mir_frontend_call_inventory {
+	zend_mir_source_call_site_ref *sites;
+	zend_mir_frontend_call_target *targets;
+	zend_mir_source_call_argument_ref *arguments;
+	uint32_t site_count;
+	uint32_t target_count;
+	uint32_t argument_count;
+} zend_mir_frontend_call_inventory;
+
+static bool zend_mir_frontend_is_call_init(uint8_t opcode)
+{
+	switch (opcode) {
+		case ZEND_INIT_FCALL:
+		case ZEND_INIT_FCALL_BY_NAME:
+		case ZEND_INIT_NS_FCALL_BY_NAME:
+		case ZEND_INIT_DYNAMIC_CALL:
+		case ZEND_INIT_USER_CALL:
+		case ZEND_INIT_METHOD_CALL:
+		case ZEND_INIT_STATIC_METHOD_CALL:
+		case ZEND_NEW:
+			return true;
+		default:
+			return false;
+	}
+}
+
+static bool zend_mir_frontend_is_call_do(uint8_t opcode)
+{
+	switch (opcode) {
+		case ZEND_DO_UCALL:
+		case ZEND_DO_FCALL:
+		case ZEND_DO_FCALL_BY_NAME:
+		case ZEND_DO_ICALL:
+			return true;
+		default:
+			return false;
+	}
+}
+
+static bool zend_mir_frontend_is_call_send(uint8_t opcode)
+{
+	switch (opcode) {
+		case ZEND_SEND_VAL:
+		case ZEND_SEND_VAL_EX:
+		case ZEND_SEND_VAR:
+		case ZEND_SEND_VAR_EX:
+		case ZEND_SEND_REF:
+		case ZEND_SEND_UNPACK:
+		case ZEND_SEND_ARRAY:
+		case ZEND_SEND_USER:
+		case ZEND_SEND_FUNC_ARG:
+		case ZEND_SEND_VAR_NO_REF:
+		case ZEND_SEND_VAR_NO_REF_EX:
+			return true;
+		default:
+			return false;
+	}
+}
+
+static zend_mir_source_call_argument_mode
+zend_mir_frontend_call_argument_mode(const zend_op *opline)
+{
+	if (opline->op2_type == IS_CONST) {
+		return ZEND_MIR_SOURCE_CALL_ARGUMENT_NAMED;
+	}
+	switch (opline->opcode) {
+		case ZEND_SEND_VAL:
+		case ZEND_SEND_VAL_EX:
+		case ZEND_SEND_VAR:
+		case ZEND_SEND_VAR_EX:
+			return ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE;
+		case ZEND_SEND_REF:
+		case ZEND_SEND_VAR_NO_REF:
+		case ZEND_SEND_VAR_NO_REF_EX:
+		case ZEND_SEND_FUNC_ARG:
+			return ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_REFERENCE;
+		case ZEND_SEND_UNPACK:
+		case ZEND_SEND_ARRAY:
+		case ZEND_SEND_USER:
+			return ZEND_MIR_SOURCE_CALL_ARGUMENT_UNPACK;
+		default:
+			return ZEND_MIR_SOURCE_CALL_ARGUMENT_MODE_INVALID;
+	}
+}
+
+static void zend_mir_frontend_release_call_inventory(
+	zend_mir_frontend_call_inventory *inventory)
+{
+	if (inventory == NULL) {
+		return;
+	}
+	free(inventory->arguments);
+	free(inventory->targets);
+	free(inventory->sites);
+	free(inventory);
+}
+
 const zend_op_array *zend_mir_source_op_array(const zend_mir_zend_source *source)
 {
 	return source == NULL ? NULL : (const zend_op_array *) source->op_array;
@@ -948,4 +1050,736 @@ bool zend_mir_zend_source_position_at(
 	zend_mir_source_position_ref *out)
 {
 	return zend_mir_frontend_source_position_at(source, index, out);
+}
+
+static bool zend_mir_frontend_function_is_in_script(
+	const zend_script *script, const zend_function *function)
+{
+	zend_function *candidate;
+
+	if (script == NULL || function == NULL) {
+		return false;
+	}
+	ZEND_HASH_FOREACH_PTR(&script->function_table, candidate) {
+		if (candidate == function) {
+			return true;
+		}
+	} ZEND_HASH_FOREACH_END();
+	return false;
+}
+
+static zend_function *zend_mir_frontend_canonical_script_function(
+	const zend_script *script, zend_function *function)
+{
+	zend_function *candidate;
+
+	if (script == NULL || function == NULL
+			|| function->type != ZEND_USER_FUNCTION
+			|| function->common.function_name == NULL) {
+		return function;
+	}
+	candidate = zend_hash_find_ptr(
+		&script->function_table, function->common.function_name);
+	if (candidate == NULL || candidate->type != ZEND_USER_FUNCTION
+			|| candidate->op_array.filename == NULL
+			|| function->op_array.filename == NULL
+			|| !zend_string_equals(
+				candidate->op_array.filename, function->op_array.filename)) {
+		return function;
+	}
+	return candidate;
+}
+
+static zend_mir_source_call_target_kind
+zend_mir_frontend_target_kind(uint8_t opcode, const zend_function *function,
+	const zend_script *script, const zend_op_array *caller)
+{
+	if (opcode == ZEND_INIT_METHOD_CALL
+			|| opcode == ZEND_INIT_STATIC_METHOD_CALL
+			|| opcode == ZEND_NEW) {
+		return ZEND_MIR_SOURCE_CALL_TARGET_METHOD;
+	}
+	if (opcode != ZEND_INIT_FCALL) {
+		return ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER;
+	}
+	if (function == NULL || function->type != ZEND_USER_FUNCTION) {
+		return function != NULL && function->type == ZEND_INTERNAL_FUNCTION
+			? ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL
+			: ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER;
+	}
+	if (!zend_mir_frontend_function_is_in_script(script, function)
+			|| function->op_array.filename == NULL || caller->filename == NULL
+			|| !zend_string_equals(
+				function->op_array.filename, caller->filename)) {
+		return ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER;
+	}
+	return ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER;
+}
+
+static void zend_mir_frontend_snapshot_target(
+	zend_mir_frontend_call_target *target,
+	zend_mir_source_call_target_id id,
+	zend_mir_source_call_target_kind kind,
+	const zend_function *function)
+{
+	uint32_t argument;
+
+	memset(target, 0, sizeof(*target));
+	target->record.id = id;
+	target->record.kind = kind;
+	target->record.function_symbol_id = id + 1;
+	target->record.op_array_id = id + 1;
+	target->function = function;
+	if (function == NULL) {
+		return;
+	}
+	target->record.num_args = function->common.num_args;
+	target->record.required_num_args = function->common.required_num_args;
+	target->record.function_flags_snapshot = function->common.fn_flags;
+	target->record.variadic =
+		(function->common.fn_flags & ZEND_ACC_VARIADIC) != 0;
+	target->record.returns_by_reference =
+		(function->common.fn_flags & ZEND_ACC_RETURN_REFERENCE) != 0;
+	for (argument = 1;
+			argument <= function->common.num_args && argument <= 64;
+			argument++) {
+		if (ARG_MUST_BE_SENT_BY_REF(function, argument)) {
+			target->record.by_ref_mask |=
+				UINT64_C(1) << (argument - 1);
+		}
+	}
+}
+
+static bool zend_mir_frontend_target_for_call(
+	zend_mir_frontend_call_inventory *inventory,
+	const zend_script *script, const zend_op_array *op_array,
+	const zend_op *opline, zend_mir_source_call_target_id *target_id)
+{
+	zend_function *function = NULL;
+	zend_mir_source_call_target_kind kind;
+	bool is_prototype = false;
+	uint32_t index;
+
+	if (opline->opcode == ZEND_INIT_FCALL
+			|| opline->opcode == ZEND_INIT_FCALL_BY_NAME
+			|| opline->opcode == ZEND_INIT_NS_FCALL_BY_NAME
+			|| opline->opcode == ZEND_INIT_METHOD_CALL
+			|| opline->opcode == ZEND_INIT_STATIC_METHOD_CALL
+			|| opline->opcode == ZEND_NEW) {
+		function = zend_optimizer_get_called_func(
+			script, op_array, (zend_op *) opline, &is_prototype);
+		if (is_prototype) {
+			function = NULL;
+		}
+		function = zend_mir_frontend_canonical_script_function(
+			script, function);
+	}
+	kind = zend_mir_frontend_target_kind(
+		opline->opcode, function, script, op_array);
+	for (index = 0; index < inventory->target_count; index++) {
+		if (inventory->targets[index].function == function
+				&& inventory->targets[index].record.kind == kind
+				&& function != NULL) {
+			*target_id = index;
+			return true;
+		}
+	}
+	if (inventory->target_count == ZEND_MIR_ID_INVALID) {
+		return false;
+	}
+	*target_id = inventory->target_count;
+	zend_mir_frontend_snapshot_target(
+		&inventory->targets[inventory->target_count],
+		inventory->target_count, kind, function);
+	inventory->target_count++;
+	return true;
+}
+
+static bool zend_mir_frontend_reorder_arguments(
+	zend_mir_frontend_call_inventory *inventory)
+{
+	zend_mir_source_call_argument_ref *ordered;
+	uint32_t output = 0;
+	uint32_t site_id;
+
+	if (inventory->argument_count == 0) {
+		for (site_id = 0; site_id < inventory->site_count; site_id++) {
+			inventory->sites[site_id].argument_span.offset = 0;
+			inventory->sites[site_id].argument_span.count = 0;
+		}
+		return true;
+	}
+	ordered = calloc(inventory->argument_count, sizeof(*ordered));
+	if (ordered == NULL) {
+		return false;
+	}
+	for (site_id = 0; site_id < inventory->site_count; site_id++) {
+		uint32_t ordinal;
+		uint32_t matched = 0;
+		uint32_t index;
+
+		inventory->sites[site_id].argument_span.offset = output;
+		for (ordinal = 0; ordinal < inventory->argument_count; ordinal++) {
+			for (index = 0; index < inventory->argument_count; index++) {
+				const zend_mir_source_call_argument_ref *argument =
+					&inventory->arguments[index];
+
+				if (argument->call_site_id == site_id
+						&& argument->ordinal == ordinal) {
+					ordered[output] = *argument;
+					ordered[output].id = output;
+					output++;
+					matched++;
+					break;
+				}
+			}
+		}
+		inventory->sites[site_id].argument_span.count = matched;
+	}
+	free(inventory->arguments);
+	inventory->arguments = ordered;
+	return output == inventory->argument_count;
+}
+
+static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
+	zend_mir_zend_source *source, const zend_script *script,
+	const zend_op_array *op_array, const zend_ssa *ssa,
+	zend_mir_frontend_diagnostic *diagnostic)
+{
+	zend_mir_frontend_call_inventory *inventory;
+	zend_mir_source_call_site_id *stack;
+	uint32_t stack_count = 0;
+	uint32_t index;
+
+	if (op_array->last != 0
+			&& (op_array->opcodes == NULL || ssa->ops == NULL
+				|| ssa->cfg.map == NULL)) {
+		return ZEND_MIR_LOWERING_REJECTED;
+	}
+	inventory = calloc(1, sizeof(*inventory));
+	stack = calloc(op_array->last == 0 ? 1 : op_array->last, sizeof(*stack));
+	if (inventory == NULL || stack == NULL) {
+		free(stack);
+		zend_mir_frontend_release_call_inventory(inventory);
+		zend_mir_frontend_set_diagnostic(
+			diagnostic, ZEND_MIR_LOWERING_FAILED,
+			ZEND_MIRL_W05_CALL_PLAN_FAILED, source->op_array_id,
+			ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE,
+			ZEND_MIR_ID_INVALID);
+		return ZEND_MIR_LOWERING_FAILED;
+	}
+	inventory->sites = calloc(
+		op_array->last == 0 ? 1 : op_array->last,
+		sizeof(*inventory->sites));
+	inventory->targets = calloc(
+		op_array->last == 0 ? 1 : op_array->last,
+		sizeof(*inventory->targets));
+	inventory->arguments = calloc(
+		op_array->last == 0 ? 1 : op_array->last,
+		sizeof(*inventory->arguments));
+	if (inventory->sites == NULL || inventory->targets == NULL
+			|| inventory->arguments == NULL) {
+		free(stack);
+		zend_mir_frontend_release_call_inventory(inventory);
+		zend_mir_frontend_set_diagnostic(
+			diagnostic, ZEND_MIR_LOWERING_FAILED,
+			ZEND_MIRL_W05_CALL_PLAN_FAILED, source->op_array_id,
+			ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE,
+			ZEND_MIR_ID_INVALID);
+		return ZEND_MIR_LOWERING_FAILED;
+	}
+
+	for (index = 0; index < op_array->last; index++) {
+		const zend_op *opline = &op_array->opcodes[index];
+		uint32_t block_id = ssa->cfg.map[index];
+		if (block_id >= ssa->cfg.blocks_count
+				|| (ssa->cfg.blocks[block_id].flags
+					& ZEND_BB_REACHABLE) == 0) {
+			continue;
+		}
+		if (zend_mir_frontend_is_call_init(opline->opcode)) {
+			zend_mir_source_call_site_ref *site;
+			zend_mir_source_call_target_id target_id;
+
+			if (inventory->site_count >= op_array->last
+					|| !zend_mir_frontend_target_for_call(
+						inventory, script, op_array, opline, &target_id)) {
+				goto allocation_failed;
+			}
+			site = &inventory->sites[inventory->site_count];
+			memset(site, 0, sizeof(*site));
+			site->id = inventory->site_count;
+			site->parent_call_site_id = stack_count == 0
+				? ZEND_MIR_ID_INVALID : stack[stack_count - 1];
+			site->init_opline_index = index;
+			site->do_opline_index = ZEND_MIR_ID_INVALID;
+			site->source_block_id = block_id;
+			site->target_id = target_id;
+			site->result_ssa_variable_id = ZEND_MIR_ID_INVALID;
+			if (stack_count != 0) {
+				site->flags |= ZEND_MIR_SOURCE_CALL_SITE_NESTED;
+			}
+			if ((ssa->cfg.blocks[block_id].flags
+					& ZEND_BB_PROTECTED) != 0) {
+				site->flags |= ZEND_MIR_SOURCE_CALL_SITE_PROTECTED;
+			}
+			stack[stack_count++] = inventory->site_count++;
+			continue;
+		}
+		if (zend_mir_frontend_is_call_send(opline->opcode)) {
+			zend_mir_source_call_argument_ref *argument;
+			zend_mir_source_opcode_ref source_opcode;
+			zend_mir_zend_source original_source;
+			zend_mir_source_call_site_id call_site_id;
+			uint32_t next_ordinal = 0;
+			uint32_t argument_index;
+
+			if (stack_count == 0) {
+				zend_mir_frontend_set_diagnostic(
+					diagnostic, ZEND_MIR_LOWERING_REJECTED,
+					ZEND_MIRL_W05_ORPHAN_CALL_FRAGMENT,
+					source->op_array_id, index,
+					ZEND_MIR_FRONTEND_OPERAND_NONE,
+					ZEND_MIR_ID_INVALID);
+				goto rejected;
+			}
+			argument = &inventory->arguments[inventory->argument_count];
+			memset(argument, 0, sizeof(*argument));
+			argument->id = inventory->argument_count;
+			call_site_id = stack[stack_count - 1];
+			argument->call_site_id = call_site_id;
+			argument->send_opline_index = index;
+			for (argument_index = 0;
+					argument_index < inventory->argument_count;
+					argument_index++) {
+				if (inventory->arguments[argument_index].call_site_id
+						== call_site_id) {
+					next_ordinal++;
+				}
+			}
+			argument->ordinal = opline->op2_type == IS_CONST
+				? next_ordinal
+				: (opline->op2.num == 0
+					? next_ordinal : opline->op2.num - 1);
+			argument->name_symbol_id = ZEND_MIR_ID_INVALID;
+			argument->mode =
+				zend_mir_frontend_call_argument_mode(opline);
+			argument->value_ssa_variable_id =
+				ssa->ops[index].op1_use >= 0
+					? (uint32_t) ssa->ops[index].op1_use
+					: ZEND_MIR_ID_INVALID;
+			original_source = *source;
+			original_source.op_array = op_array;
+			original_source.ssa = ssa;
+			original_source.opcode_count = op_array->last;
+			if (!zend_mir_frontend_opcode_at(
+					&original_source, index, &source_opcode)) {
+				goto malformed;
+			}
+			argument->source_operand = source_opcode.op1;
+			inventory->argument_count++;
+			continue;
+		}
+		if (zend_mir_frontend_is_call_do(opline->opcode)) {
+			zend_mir_source_call_site_ref *site;
+
+			if (stack_count == 0) {
+				zend_mir_frontend_set_diagnostic(
+					diagnostic, ZEND_MIR_LOWERING_REJECTED,
+					ZEND_MIRL_W05_ORPHAN_CALL_FRAGMENT,
+					source->op_array_id, index,
+					ZEND_MIR_FRONTEND_OPERAND_NONE,
+					ZEND_MIR_ID_INVALID);
+				goto rejected;
+			}
+			site = &inventory->sites[stack[--stack_count]];
+			site->do_opline_index = index;
+			site->source_block_id = block_id;
+			if (RESULT_UNUSED(opline)) {
+				site->flags |= ZEND_MIR_SOURCE_CALL_SITE_RESULT_UNUSED;
+			} else if (ssa->ops[index].result_def >= 0) {
+				site->flags |= ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR;
+				site->result_ssa_variable_id =
+					(uint32_t) ssa->ops[index].result_def;
+			}
+		}
+	}
+	if (stack_count != 0) {
+		zend_mir_frontend_set_diagnostic(
+			diagnostic, ZEND_MIR_LOWERING_REJECTED,
+			ZEND_MIRL_W05_MALFORMED_CALL_SEQUENCE, source->op_array_id,
+			inventory->sites[stack[stack_count - 1]].init_opline_index,
+			ZEND_MIR_FRONTEND_OPERAND_NONE, ZEND_MIR_ID_INVALID);
+		goto rejected;
+	}
+	if (!zend_mir_frontend_reorder_arguments(inventory)) {
+		goto malformed;
+	}
+	free(stack);
+	source->call_inventory = inventory;
+	source->call_op_array = op_array;
+	source->call_ssa = ssa;
+	source->script = script;
+	source->call_site_count = inventory->site_count;
+	source->call_target_count = inventory->target_count;
+	source->call_argument_count = inventory->argument_count;
+	source->w05 = true;
+	return ZEND_MIR_LOWERING_SUCCESS;
+
+malformed:
+	zend_mir_frontend_set_diagnostic(
+		diagnostic, ZEND_MIR_LOWERING_REJECTED,
+		ZEND_MIRL_W05_MALFORMED_CALL_SEQUENCE, source->op_array_id,
+		index, ZEND_MIR_FRONTEND_OPERAND_NONE, ZEND_MIR_ID_INVALID);
+rejected:
+	free(stack);
+	zend_mir_frontend_release_call_inventory(inventory);
+	return ZEND_MIR_LOWERING_REJECTED;
+
+allocation_failed:
+	zend_mir_frontend_set_diagnostic(
+		diagnostic, ZEND_MIR_LOWERING_FAILED,
+		ZEND_MIRL_W05_CALL_PLAN_FAILED, source->op_array_id,
+		index, ZEND_MIR_FRONTEND_OPERAND_NONE, ZEND_MIR_ID_INVALID);
+	free(stack);
+	zend_mir_frontend_release_call_inventory(inventory);
+	return ZEND_MIR_LOWERING_FAILED;
+}
+
+static bool zend_mir_frontend_w05_argument_is_scalar(
+	const zend_op_array *op_array, const zend_ssa *ssa,
+	const zend_mir_source_call_argument_ref *argument)
+{
+	zend_mir_value_fact_ref fact;
+	zend_mir_source_literal_ref literal;
+
+	if (argument->value_ssa_variable_id != ZEND_MIR_ID_INVALID) {
+		return zend_mir_frontend_fact_for_ssa(
+				op_array, ssa, argument->value_ssa_variable_id, &fact)
+			&& zend_mir_scalar_type_is_exact(fact.exact_type)
+			&& (fact.flags & ZEND_MIR_VALUE_FACT_NON_REFCOUNTED) != 0;
+	}
+	return argument->source_operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+		&& zend_mir_frontend_canonical_literal_for_index(
+			op_array, argument->source_operand.index, &literal);
+}
+
+zend_mir_lowering_status zend_mir_zend_source_preflight_w05(
+	const zend_script *script, const zend_op_array *op_array,
+	const zend_ssa *ssa, zend_mir_frontend_diagnostic *diagnostic)
+{
+	zend_mir_zend_source source;
+	zend_mir_frontend_call_inventory *inventory;
+	zend_mir_lowering_status status;
+	uint32_t index;
+
+	if (script == NULL || op_array == NULL || ssa == NULL
+			|| ssa->cfg.blocks == NULL) {
+		zend_mir_frontend_set_diagnostic(
+			diagnostic, ZEND_MIR_LOWERING_REJECTED,
+			ZEND_MIRL_INVALID_SOURCE, ZEND_MIR_ID_INVALID,
+			ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE,
+			ZEND_MIR_ID_INVALID);
+		return ZEND_MIR_LOWERING_REJECTED;
+	}
+	memset(&source, 0, sizeof(source));
+	source.op_array = op_array;
+	source.ssa = ssa;
+	source.op_array_id = 0;
+	source.file_symbol_id = 0;
+	source.opcode_count = op_array->last;
+	source.w04 = true;
+	source.initialized = ZEND_MIR_ZEND_SOURCE_MAGIC;
+	status = zend_mir_frontend_build_call_inventory(
+		&source, script, op_array, ssa, diagnostic);
+	if (status != ZEND_MIR_LOWERING_SUCCESS) {
+		return status;
+	}
+	inventory = source.call_inventory;
+	if (inventory->site_count == 0 || inventory->target_count == 0) {
+		zend_mir_zend_source_release_w05(&source);
+		zend_mir_frontend_set_diagnostic(
+			diagnostic, ZEND_MIR_LOWERING_DEFERRED,
+			ZEND_MIRL_W05_RUNTIME_EFFECT_DEFERRED, 0,
+			ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE,
+			ZEND_MIR_ID_INVALID);
+		return ZEND_MIR_LOWERING_DEFERRED;
+	}
+	for (index = 0; index < inventory->argument_count; index++) {
+		const zend_mir_source_call_argument_ref *argument =
+			&inventory->arguments[index];
+		if (argument->mode != ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE
+				|| zend_mir_id_is_valid(argument->name_symbol_id)
+				|| !zend_mir_frontend_w05_argument_is_scalar(
+					op_array, ssa, argument)) {
+			uint32_t opline_index = argument->send_opline_index;
+			uint32_t ssa_variable_id = argument->value_ssa_variable_id;
+			zend_mir_zend_source_release_w05(&source);
+			zend_mir_frontend_set_diagnostic(
+				diagnostic, ZEND_MIR_LOWERING_DEFERRED,
+				ZEND_MIRL_W05_UNSUPPORTED_ARGUMENT, 0, opline_index,
+				ZEND_MIR_FRONTEND_OP1, ssa_variable_id);
+			return ZEND_MIR_LOWERING_DEFERRED;
+		}
+	}
+	for (index = 0; index < inventory->target_count; index++) {
+		const zend_mir_source_call_target_ref *target =
+			&inventory->targets[index].record;
+		if (target->num_args > 64) {
+			zend_mir_zend_source_release_w05(&source);
+			zend_mir_frontend_set_diagnostic(
+				diagnostic, ZEND_MIR_LOWERING_DEFERRED,
+				ZEND_MIRL_W05_UNSUPPORTED_ARGUMENT, 0,
+				ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE,
+				ZEND_MIR_ID_INVALID);
+			return ZEND_MIR_LOWERING_DEFERRED;
+		}
+		if (target->kind != ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
+				|| target->variadic || target->returns_by_reference
+				|| target->by_ref_mask != 0
+				|| target->num_args != target->required_num_args) {
+			zend_mir_zend_source_release_w05(&source);
+			zend_mir_frontend_set_diagnostic(
+				diagnostic, ZEND_MIR_LOWERING_DEFERRED,
+				ZEND_MIRL_W05_UNSUPPORTED_TARGET, 0,
+				ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE,
+				ZEND_MIR_ID_INVALID);
+			return ZEND_MIR_LOWERING_DEFERRED;
+		}
+	}
+	for (index = 0; index < inventory->site_count; index++) {
+		const zend_mir_source_call_site_ref *site = &inventory->sites[index];
+		const zend_mir_source_call_target_ref *target;
+		zend_mir_lowering_diagnostic_code code = ZEND_MIRL_OK;
+
+		if (site->init_opline_index >= op_array->last
+				|| site->do_opline_index >= op_array->last) {
+			code = ZEND_MIRL_W05_MALFORMED_CALL_SEQUENCE;
+		} else if (op_array->opcodes[site->init_opline_index].opcode
+				!= ZEND_INIT_FCALL
+				|| (op_array->opcodes[site->do_opline_index].opcode
+						!= ZEND_DO_UCALL
+					&& op_array->opcodes[site->do_opline_index].opcode
+						!= ZEND_DO_FCALL)) {
+			code = ZEND_MIRL_W05_UNSUPPORTED_TARGET;
+		} else if (site->target_id >= inventory->target_count) {
+			code = ZEND_MIRL_W05_MALFORMED_CALL_SEQUENCE;
+		} else {
+			target = &inventory->targets[site->target_id].record;
+			if ((site->flags & ZEND_MIR_SOURCE_CALL_SITE_PROTECTED) != 0) {
+				code = ZEND_MIRL_W05_PROTECTED_CALL;
+			} else if ((site->flags
+					& ZEND_MIR_SOURCE_CALL_SITE_RESULT_UNUSED) == 0
+					|| zend_mir_id_is_valid(
+						site->result_ssa_variable_id)) {
+				code = ZEND_MIRL_W05_UNSUPPORTED_RESULT;
+			} else if (site->argument_span.count != target->num_args) {
+				code = ZEND_MIRL_W05_ARGUMENT_COUNT_MISMATCH;
+			}
+		}
+		if (code != ZEND_MIRL_OK) {
+			uint32_t opline_index = site->do_opline_index;
+			zend_mir_zend_source_release_w05(&source);
+			zend_mir_frontend_set_diagnostic(
+				diagnostic, ZEND_MIR_LOWERING_DEFERRED, code, 0,
+				opline_index, ZEND_MIR_FRONTEND_OPERAND_NONE,
+				ZEND_MIR_ID_INVALID);
+			return ZEND_MIR_LOWERING_DEFERRED;
+		}
+	}
+	zend_mir_zend_source_release_w05(&source);
+	return ZEND_MIR_LOWERING_SUCCESS;
+}
+
+zend_mir_lowering_status zend_mir_zend_source_enable_w05(
+	zend_mir_zend_source *source, const zend_script *script,
+	const zend_op_array *op_array, const zend_ssa *ssa,
+	zend_mir_frontend_diagnostic *diagnostic)
+{
+	if (!zend_mir_source_is_initialized(source) || !source->w04
+			|| source->w05 || script == NULL || op_array == NULL || ssa == NULL
+			|| ssa->cfg.blocks == NULL) {
+		zend_mir_frontend_set_diagnostic(
+			diagnostic, ZEND_MIR_LOWERING_REJECTED,
+			ZEND_MIRL_INVALID_SOURCE,
+			source != NULL ? source->op_array_id : ZEND_MIR_ID_INVALID,
+			ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE,
+			ZEND_MIR_ID_INVALID);
+		return ZEND_MIR_LOWERING_REJECTED;
+	}
+	return zend_mir_frontend_build_call_inventory(
+		source, script, op_array, ssa, diagnostic);
+}
+
+void zend_mir_zend_source_release_w05(zend_mir_zend_source *source)
+{
+	if (source == NULL) {
+		return;
+	}
+	zend_mir_frontend_release_call_inventory(source->call_inventory);
+	source->call_inventory = NULL;
+	source->call_op_array = NULL;
+	source->call_ssa = NULL;
+	source->script = NULL;
+	source->call_site_count = 0;
+	source->call_target_count = 0;
+	source->call_argument_count = 0;
+	source->w05 = false;
+}
+
+static uint32_t zend_mir_frontend_call_site_count(const void *context)
+{
+	const zend_mir_zend_source *source = context;
+	return zend_mir_source_is_initialized(source) && source->w05
+		? source->call_site_count : 0;
+}
+
+static bool zend_mir_frontend_call_site_at(
+	const void *context, uint32_t index, zend_mir_source_call_site_ref *out)
+{
+	const zend_mir_zend_source *source = context;
+	const zend_mir_frontend_call_inventory *inventory;
+	if (!zend_mir_source_is_initialized(source) || !source->w05
+			|| out == NULL || index >= source->call_site_count) {
+		return false;
+	}
+	inventory = source->call_inventory;
+	*out = inventory->sites[index];
+	return true;
+}
+
+static uint32_t zend_mir_frontend_call_target_count(const void *context)
+{
+	const zend_mir_zend_source *source = context;
+	return zend_mir_source_is_initialized(source) && source->w05
+		? source->call_target_count : 0;
+}
+
+static bool zend_mir_frontend_call_target_at(
+	const void *context, uint32_t index, zend_mir_source_call_target_ref *out)
+{
+	const zend_mir_zend_source *source = context;
+	const zend_mir_frontend_call_inventory *inventory;
+	if (!zend_mir_source_is_initialized(source) || !source->w05
+			|| out == NULL || index >= source->call_target_count) {
+		return false;
+	}
+	inventory = source->call_inventory;
+	*out = inventory->targets[index].record;
+	return true;
+}
+
+static uint32_t zend_mir_frontend_call_argument_count(const void *context)
+{
+	const zend_mir_zend_source *source = context;
+	return zend_mir_source_is_initialized(source) && source->w05
+		? source->call_argument_count : 0;
+}
+
+static bool zend_mir_frontend_call_argument_at(
+	const void *context, uint32_t index,
+	zend_mir_source_call_argument_ref *out)
+{
+	const zend_mir_zend_source *source = context;
+	const zend_mir_frontend_call_inventory *inventory;
+	if (!zend_mir_source_is_initialized(source) || !source->w05
+			|| out == NULL || index >= source->call_argument_count) {
+		return false;
+	}
+	inventory = source->call_inventory;
+	*out = inventory->arguments[index];
+	return true;
+}
+
+static bool zend_mir_frontend_resolve_call_target(
+	const void *context, zend_mir_source_call_target_id target_id,
+	zend_mir_source_call_target_ref *out)
+{
+	const zend_mir_zend_source *source = context;
+	const zend_mir_frontend_call_inventory *inventory;
+	if (!zend_mir_source_is_initialized(source) || !source->w05
+			|| out == NULL || target_id >= source->call_target_count) {
+		return false;
+	}
+	inventory = source->call_inventory;
+	if (inventory->targets[target_id].record.kind
+			!= ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
+			|| inventory->targets[target_id].function == NULL
+			|| (inventory->targets[target_id].record.function_flags_snapshot
+				& (ZEND_ACC_CLOSURE | ZEND_ACC_GENERATOR)) != 0) {
+		return false;
+	}
+	*out = inventory->targets[target_id].record;
+	return true;
+}
+
+static uint32_t zend_mir_frontend_call_source_opcode_count(const void *context)
+{
+	const zend_mir_zend_source *source = context;
+	const zend_op_array *op_array;
+
+	if (!zend_mir_source_is_initialized(source) || !source->w05
+			|| source->call_op_array == NULL || source->call_ssa == NULL) {
+		return 0;
+	}
+	op_array = source->call_op_array;
+	return op_array->last;
+}
+
+static bool zend_mir_frontend_call_source_opcode_at(
+	const void *context, uint32_t index, zend_mir_source_opcode_ref *out)
+{
+	const zend_mir_zend_source *source = context;
+	const zend_op_array *op_array;
+	zend_mir_zend_source original;
+
+	if (!zend_mir_source_is_initialized(source) || !source->w05
+			|| source->call_op_array == NULL || source->call_ssa == NULL) {
+		return false;
+	}
+	op_array = source->call_op_array;
+	if (index >= op_array->last) {
+		return false;
+	}
+	original = *source;
+	original.op_array = source->call_op_array;
+	original.ssa = source->call_ssa;
+	original.opcode_count = op_array->last;
+	return zend_mir_frontend_opcode_at(&original, index, out);
+}
+
+bool zend_mir_zend_source_call_view(
+	const zend_mir_zend_source *source, zend_mir_source_call_view *out)
+{
+	if (!zend_mir_source_is_initialized(source) || !source->w05
+			|| out == NULL) {
+		return false;
+	}
+	memset(out, 0, sizeof(*out));
+	out->contract_version = ZEND_MIR_W05_CONTRACT_VERSION;
+	out->context = source;
+	out->call_site_count = zend_mir_frontend_call_site_count;
+	out->call_site_at = zend_mir_frontend_call_site_at;
+	out->call_target_count = zend_mir_frontend_call_target_count;
+	out->call_target_at = zend_mir_frontend_call_target_at;
+	out->call_argument_count = zend_mir_frontend_call_argument_count;
+	out->call_argument_at = zend_mir_frontend_call_argument_at;
+	out->source_opcode_count = zend_mir_frontend_call_source_opcode_count;
+	out->source_opcode_at = zend_mir_frontend_call_source_opcode_at;
+	return true;
+}
+
+bool zend_mir_zend_source_call_target_resolver(
+	const zend_mir_zend_source *source,
+	zend_mir_source_call_target_resolver *out)
+{
+	if (!zend_mir_source_is_initialized(source) || !source->w05
+			|| out == NULL) {
+		return false;
+	}
+	memset(out, 0, sizeof(*out));
+	out->context = source;
+	out->resolve_exact_direct_user =
+		zend_mir_frontend_resolve_call_target;
+	return true;
 }

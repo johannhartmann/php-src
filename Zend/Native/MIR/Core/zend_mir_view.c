@@ -414,6 +414,145 @@ static bool zend_mir_view_value_fact_at(const void *context, uint32_t index,
 	return true;
 }
 
+static bool zend_mir_call_view_is_available(const zend_mir_module *module)
+{
+	return zend_mir_view_is_available(module)
+		&& module->call_staging.committed;
+}
+
+static uint32_t zend_mir_call_view_site_count(const void *context)
+{
+	const zend_mir_module *module = context;
+	return zend_mir_call_view_is_available(module)
+		? module->call_sites.count : 0;
+}
+
+static bool zend_mir_call_view_site_at(
+	const void *context, uint32_t index, zend_mir_call_site_ref *out)
+{
+	const zend_mir_module *module = context;
+	zend_mir_call_site_ref *records;
+	if (!zend_mir_call_view_is_available(module) || out == NULL
+			|| index >= module->call_sites.count) {
+		return false;
+	}
+	records = ZEND_MIR_CORE_ITEMS(module, call_sites, zend_mir_call_site_ref);
+	*out = records[index];
+	return true;
+}
+
+static uint32_t zend_mir_call_view_argument_count(const void *context)
+{
+	const zend_mir_module *module = context;
+	return zend_mir_call_view_is_available(module)
+		? module->call_arguments.count : 0;
+}
+
+static bool zend_mir_call_view_argument_at(
+	const void *context, uint32_t index, zend_mir_call_argument_ref *out)
+{
+	const zend_mir_module *module = context;
+	zend_mir_call_argument_ref *records;
+	if (!zend_mir_call_view_is_available(module) || out == NULL
+			|| index >= module->call_arguments.count) {
+		return false;
+	}
+	records = ZEND_MIR_CORE_ITEMS(
+		module, call_arguments, zend_mir_call_argument_ref);
+	*out = records[index];
+	return true;
+}
+
+static uint32_t zend_mir_call_view_target_count(const void *context)
+{
+	const zend_mir_module *module = context;
+	return zend_mir_call_view_is_available(module)
+		? module->call_targets.count : 0;
+}
+
+static bool zend_mir_call_view_target_at(
+	const void *context, uint32_t index, zend_mir_call_target_ref *out)
+{
+	const zend_mir_module *module = context;
+	zend_mir_call_target_ref *records;
+	if (!zend_mir_call_view_is_available(module) || out == NULL
+			|| index >= module->call_targets.count) {
+		return false;
+	}
+	records = ZEND_MIR_CORE_ITEMS(
+		module, call_targets, zend_mir_call_target_ref);
+	*out = records[index];
+	return true;
+}
+
+static uint32_t zend_mir_call_view_continuation_count(const void *context)
+{
+	const zend_mir_module *module = context;
+	return zend_mir_call_view_is_available(module)
+		? module->call_continuations.count : 0;
+}
+
+static bool zend_mir_call_view_continuation_at(
+	const void *context, uint32_t index,
+	zend_mir_call_continuation_ref *out)
+{
+	const zend_mir_module *module = context;
+	zend_mir_call_continuation_ref *records;
+	if (!zend_mir_call_view_is_available(module) || out == NULL
+			|| index >= module->call_continuations.count) {
+		return false;
+	}
+	records = ZEND_MIR_CORE_ITEMS(
+		module, call_continuations, zend_mir_call_continuation_ref);
+	*out = records[index];
+	return true;
+}
+
+static uint32_t zend_mir_call_view_receipt_count(const void *context)
+{
+	const zend_mir_module *module = context;
+	return zend_mir_call_view_is_available(module)
+		? module->call_receipts.count : 0;
+}
+
+static bool zend_mir_call_view_receipt_at(
+	const void *context, uint32_t index,
+	zend_mir_call_capability_receipt_ref *out)
+{
+	const zend_mir_module *module = context;
+	zend_mir_call_capability_receipt_ref *records;
+	if (!zend_mir_call_view_is_available(module) || out == NULL
+			|| index >= module->call_receipts.count) {
+		return false;
+	}
+	records = ZEND_MIR_CORE_ITEMS(
+		module, call_receipts, zend_mir_call_capability_receipt_ref);
+	*out = records[index];
+	return true;
+}
+
+void zend_mir_module_init_call_view(zend_mir_module *module)
+{
+	memset(&module->call_view, 0, sizeof(module->call_view));
+	module->call_view.contract_version = ZEND_MIR_W05_CONTRACT_VERSION;
+	module->call_view.context = module;
+	module->call_view.call_site_count = zend_mir_call_view_site_count;
+	module->call_view.call_site_at = zend_mir_call_view_site_at;
+	module->call_view.call_argument_count =
+		zend_mir_call_view_argument_count;
+	module->call_view.call_argument_at = zend_mir_call_view_argument_at;
+	module->call_view.call_target_count = zend_mir_call_view_target_count;
+	module->call_view.call_target_at = zend_mir_call_view_target_at;
+	module->call_view.call_continuation_count =
+		zend_mir_call_view_continuation_count;
+	module->call_view.call_continuation_at =
+		zend_mir_call_view_continuation_at;
+	module->call_view.call_capability_receipt_count =
+		zend_mir_call_view_receipt_count;
+	module->call_view.call_capability_receipt_at =
+		zend_mir_call_view_receipt_at;
+}
+
 void zend_mir_module_init_view(zend_mir_module *module)
 {
 	module->view.contract_version = ZEND_MIR_CONTRACT_VERSION;

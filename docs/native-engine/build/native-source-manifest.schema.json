@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format_version", "consumer", "groups"],
+  "properties": {
+    "format_version": {"const": 1},
+    "consumer": {"const": "ext/native_mir_test/config.m4"},
+    "groups": {
+      "type": "object",
+      "additionalProperties": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^Zend/Native/.+\\.c$"}}
+    }
+  }
+}

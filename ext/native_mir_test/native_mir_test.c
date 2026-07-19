@@ -29,6 +29,7 @@
 #include "Zend/zend_compile.h"
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_smart_str.h"
+#include "Zend/zend_vm_opcodes.h"
 #include "Zend/Optimizer/zend_func_info.h"
 #include "Zend/Optimizer/zend_optimizer.h"
 #include "Zend/Optimizer/zend_optimizer_internal.h"
@@ -92,12 +93,15 @@ typedef struct _native_mir_test_state {
 	zend_string *function_name;
 	zend_op_array *compiled;
 	zend_op_array *selected;
+	uint8_t *source_opcodes;
+	uint32_t source_opcode_count;
 	zend_arena *ssa_arena;
 	zend_ssa ssa;
 	zend_script script;
 	bool script_initialized;
 	uint32_t original_compiler_options;
 	bool compiler_options_saved;
+	bool ignore_user_functions;
 	uint32_t function_table_used_before;
 	bool function_table_snapshot;
 	native_mir_test_phase phase;
@@ -133,6 +137,13 @@ extern zend_mir_lowering_result zend_mir_lower_w03_zend_source(
  * declaration to the production implementation without duplicating providers.
  */
 extern zend_mir_lowering_result zend_mir_lower_w04_zend_op_array(
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	const zend_mir_lowering_module_ops *module_ops,
+	zend_mir_diagnostic_sink *diagnostics);
+
+extern zend_mir_w05_lowering_result zend_mir_lower_w05_zend_op_array(
+	const zend_script *script,
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,
 	const zend_mir_lowering_module_ops *module_ops,
@@ -359,7 +370,8 @@ static bool native_mir_test_parse_options(
 			state->diagnostic_limit = (uint32_t) Z_LVAL_P(value);
 		} else if (zend_string_equals_literal(key, "wave")) {
 			if (Z_TYPE_P(value) != IS_LONG
-					|| (Z_LVAL_P(value) != 3 && Z_LVAL_P(value) != 4)) {
+					|| (Z_LVAL_P(value) != 3 && Z_LVAL_P(value) != 4
+						&& Z_LVAL_P(value) != 5)) {
 				goto invalid_value;
 			}
 			state->wave = (uint32_t) Z_LVAL_P(value);
@@ -379,6 +391,13 @@ static bool native_mir_test_parse_options(
 						Z_STR_P(value), &state->fault)) {
 				goto invalid_value;
 			}
+		} else if (zend_string_equals_literal(key, "compiler_mode")) {
+			if (Z_TYPE_P(value) != IS_STRING
+					|| !zend_string_equals_literal(
+						Z_STR_P(value), "ignore_user_functions")) {
+				goto invalid_value;
+			}
+			state->ignore_user_functions = true;
 		} else {
 			native_mir_test_fail(
 				state, NATIVE_MIR_TEST_STATUS_ERROR,
@@ -432,6 +451,7 @@ static zend_op_array *native_mir_test_select_op_array(
 
 static void native_mir_test_init_script(native_mir_test_state *state)
 {
+	HashTable *function_table;
 	uint32_t index;
 
 	memset(&state->script, 0, sizeof(state->script));
@@ -452,6 +472,31 @@ static void native_mir_test_init_script(native_mir_test_state *state)
 				function->function_name, function);
 		}
 	}
+	function_table = CG(function_table);
+	if (state->function_table_snapshot && function_table != NULL) {
+		for (index = state->function_table_used_before;
+				index < function_table->nNumUsed; index++) {
+			Bucket *bucket = &function_table->arData[index];
+			zend_function *function;
+
+			if (Z_TYPE(bucket->val) != IS_PTR || bucket->key == NULL) {
+				continue;
+			}
+			function = Z_PTR(bucket->val);
+			if (function == NULL || function->type != ZEND_USER_FUNCTION
+					|| function->op_array.function_name == NULL
+					|| function->op_array.filename == NULL
+					|| state->compiled->filename == NULL
+					|| !zend_string_equals(
+						function->op_array.filename,
+						state->compiled->filename)) {
+				continue;
+			}
+			(void) zend_hash_update_ptr(
+				&state->script.function_table,
+				function->op_array.function_name, function);
+		}
+	}
 	if (state->selected != state->compiled
 			&& state->selected->function_name != NULL) {
 		(void) zend_hash_update_ptr(
@@ -465,7 +510,7 @@ static bool native_mir_test_build_ssa(native_mir_test_state *state)
 	zend_optimizer_ctx optimizer;
 
 	state->phase = NATIVE_MIR_TEST_PHASE_SSA;
-	if (state->wave == 4 && state->selected->last_try_catch != 0) {
+	if (state->wave >= 4 && state->selected->last_try_catch != 0) {
 		native_mir_test_fail(
 			state, NATIVE_MIR_TEST_STATUS_REJECTED,
 			NATIVE_MIR_TEST_PHASE_LOWERING, "MIRL", "MIRL0015",
@@ -480,9 +525,27 @@ static bool native_mir_test_build_ssa(native_mir_test_state *state)
 		return false;
 	}
 	native_mir_test_init_script(state);
+	state->original_compiler_options = CG(compiler_options);
+	state->compiler_options_saved = true;
+	if (state->ignore_user_functions) {
+		CG(compiler_options) |= ZEND_COMPILE_IGNORE_USER_FUNCTIONS;
+	}
 	zend_optimize_script(
 		&state->script, NATIVE_MIR_TEST_OPTIMIZATION_LEVEL, 0);
+	CG(compiler_options) = state->original_compiler_options;
+	state->compiler_options_saved = false;
 	*state->compiled = state->script.main_op_array;
+	if (state->selected->last != 0) {
+		uint32_t index;
+
+		state->source_opcodes =
+			emalloc(state->selected->last * sizeof(*state->source_opcodes));
+		state->source_opcode_count = state->selected->last;
+		for (index = 0; index < state->source_opcode_count; index++) {
+			state->source_opcodes[index] =
+				state->selected->opcodes[index].opcode;
+		}
+	}
 	state->ssa_arena = zend_arena_create(NATIVE_MIR_TEST_ARENA_SIZE);
 	if (state->ssa_arena == NULL) {
 		native_mir_test_fail(
@@ -766,7 +829,7 @@ static bool native_mir_test_verify_stage2(
 
 	state->phase = NATIVE_MIR_TEST_PHASE_VERIFY;
 	state->diagnostic_stage = "MIRV";
-	return state->wave == 4
+	return state->wave >= 4
 		? native_mir_test_verify_w04_scalar(state, view)
 		: zend_mir_verify_w03_scalar(view, diagnostics);
 }
@@ -795,20 +858,32 @@ static bool native_mir_test_dump_write(
 static bool native_mir_test_publish_lowering_result(
 	native_mir_test_state *state,
 	zend_mir_lowering_result result,
-	bool w04)
+	uint32_t wave)
 {
 	zend_mir_diagnostic_sink diagnostics;
 	const zend_mir_view *view;
 	zend_mir_text_writer writer;
 	char code[16];
+	char message[32];
 
 	memset(&diagnostics, 0, sizeof(diagnostics));
 	diagnostics.context = state;
 	diagnostics.emit = native_mir_test_emit_mir_diagnostic;
 	diagnostics.limit = state->diagnostic_limit;
-	if (!(w04
-			? zend_mir_lowering_result_is_w04_failure_atomic(&result)
-			: zend_mir_lowering_result_is_failure_atomic(&result))) {
+	if (!(wave == 5
+			? ((result.status == ZEND_MIR_LOWERING_SUCCESS
+					&& result.diagnostic_code == ZEND_MIRL_OK
+					&& result.guarantees
+						== ZEND_MIR_LOWERING_GUARANTEE_FINALIZED
+					&& result.module != NULL)
+				|| (result.status != ZEND_MIR_LOWERING_STATUS_INVALID
+					&& result.status != ZEND_MIR_LOWERING_SUCCESS
+					&& result.diagnostic_code != ZEND_MIRL_OK
+					&& result.guarantees == 0
+					&& result.module == NULL))
+			: (wave >= 4
+				? zend_mir_lowering_result_is_w04_failure_atomic(&result)
+				: zend_mir_lowering_result_is_failure_atomic(&result)))) {
 		if (result.module != NULL) {
 			native_mir_test_module_destroy(state, result.module);
 		}
@@ -855,10 +930,9 @@ static bool native_mir_test_publish_lowering_result(
 	smart_str_0(&state->dump);
 	state->status = NATIVE_MIR_TEST_STATUS_ACCEPTED;
 	state->phase = NATIVE_MIR_TEST_PHASE_COMPLETE;
+	snprintf(message, sizeof(message), "W%02u lowering completed", wave);
 	native_mir_test_add_diagnostic(
-		state, "MIRL", "MIRL0000",
-		w04 ? "W04 lowering completed" : "W03 lowering completed",
-		false, 0);
+		state, "MIRL", "MIRL0000", message, false, 0);
 	return true;
 }
 
@@ -884,7 +958,7 @@ static bool native_mir_test_lower_w03_and_dump(native_mir_test_state *state)
 	diagnostics.limit = state->diagnostic_limit;
 	result = zend_mir_lower_w03_zend_source(
 		state->selected, &state->ssa, &module_ops, &diagnostics);
-	return native_mir_test_publish_lowering_result(state, result, false);
+	return native_mir_test_publish_lowering_result(state, result, 3);
 }
 
 static bool native_mir_test_lower_w04_and_dump(native_mir_test_state *state)
@@ -909,7 +983,60 @@ static bool native_mir_test_lower_w04_and_dump(native_mir_test_state *state)
 	diagnostics.limit = state->diagnostic_limit;
 	result = zend_mir_lower_w04_zend_op_array(
 		state->selected, &state->ssa, &module_ops, &diagnostics);
-	return native_mir_test_publish_lowering_result(state, result, true);
+	return native_mir_test_publish_lowering_result(state, result, 4);
+}
+
+static bool native_mir_test_lower_w05_and_dump(native_mir_test_state *state)
+{
+	zend_mir_lowering_module_ops module_ops;
+	zend_mir_diagnostic_sink diagnostics;
+	zend_mir_w05_lowering_result result;
+
+	memset(&module_ops, 0, sizeof(module_ops));
+	module_ops.context = state;
+	module_ops.create = native_mir_test_module_create;
+	module_ops.destroy = native_mir_test_module_destroy;
+	module_ops.mutator = native_mir_test_module_mutator;
+	module_ops.view = native_mir_test_module_view;
+	module_ops.finalize = native_mir_test_module_finalize;
+	module_ops.verify_stage1 = native_mir_test_verify_stage1;
+	module_ops.verify_stage2 = native_mir_test_verify_stage2;
+	memset(&diagnostics, 0, sizeof(diagnostics));
+	diagnostics.context = state;
+	diagnostics.emit = native_mir_test_emit_mir_diagnostic;
+	diagnostics.limit = state->diagnostic_limit;
+	result = zend_mir_lower_w05_zend_op_array(
+		&state->script, state->selected, &state->ssa,
+		&module_ops, &diagnostics);
+	if (!zend_mir_lowering_result_is_w05_failure_atomic(&result)) {
+		char detail[256];
+
+		snprintf(
+			detail, sizeof(detail),
+			"W05 lowering returned a non-atomic result "
+			"(status=%u diagnostic=%u guarantees=%u prerequisite=%u "
+			"capabilities=%u debts=%u modeled=%u codegen=%u module=%u)",
+			(unsigned int) result.lowering.status,
+			(unsigned int) result.lowering.diagnostic_code,
+			(unsigned int) result.lowering.guarantees,
+			(unsigned int) result.prerequisite_guarantees,
+			(unsigned int) result.capabilities,
+			(unsigned int) result.semantic_debts,
+			(unsigned int) result.modeled,
+			(unsigned int) result.codegen_eligible,
+			(unsigned int) (result.lowering.module != NULL));
+		if (result.lowering.module != NULL) {
+			native_mir_test_module_destroy(
+				state, result.lowering.module);
+		}
+		native_mir_test_fail(
+			state, NATIVE_MIR_TEST_STATUS_ERROR,
+			NATIVE_MIR_TEST_PHASE_LOWERING, "MIRL", "MIRL0007",
+			detail);
+		return false;
+	}
+	return native_mir_test_publish_lowering_result(
+		state, result.lowering, 5);
 }
 
 static bool native_mir_test_lower_and_dump(native_mir_test_state *state)
@@ -922,6 +1049,9 @@ static bool native_mir_test_lower_and_dump(native_mir_test_state *state)
 			NATIVE_MIR_TEST_PHASE_LOWERING, "MIRL", "MIRL0007",
 			"injected lowering failure");
 		return false;
+	}
+	if (state->wave == 5) {
+		return native_mir_test_lower_w05_and_dump(state);
 	}
 	return state->wave == 4
 		? native_mir_test_lower_w04_and_dump(state)
@@ -937,6 +1067,9 @@ static bool native_mir_test_compile(native_mir_test_state *state)
 	state->function_table_snapshot = true;
 	CG(compiler_options) =
 		state->original_compiler_options | ZEND_COMPILE_WITHOUT_EXECUTION;
+	if (state->ignore_user_functions) {
+		CG(compiler_options) |= ZEND_COMPILE_IGNORE_USER_FUNCTIONS;
+	}
 	if (state->fault == NATIVE_MIR_TEST_FAULT_COMPILE_BAILOUT) {
 		zend_bailout();
 	}
@@ -1015,6 +1148,7 @@ static void native_mir_test_build_result(
 {
 	zval source;
 	zval diagnostics;
+	zval source_opcodes;
 	uint64_t hash;
 	char source_id[sizeof("fnv1a64:") + 16];
 	uint32_t index;
@@ -1031,8 +1165,8 @@ static void native_mir_test_build_result(
 	array_init(return_value);
 	add_assoc_long(
 		return_value, "schema_version", NATIVE_MIR_TEST_SCHEMA_VERSION);
-	if (state->wave == 4) {
-		add_assoc_long(return_value, "wave", 4);
+	if (state->wave >= 4) {
+		add_assoc_long(return_value, "wave", state->wave);
 	}
 	add_assoc_string(
 		return_value, "status",
@@ -1069,6 +1203,14 @@ static void native_mir_test_build_result(
 		add_next_index_zval(&diagnostics, &diagnostic);
 	}
 	add_assoc_zval(return_value, "diagnostics", &diagnostics);
+	array_init(&source_opcodes);
+	for (index = 0; index < state->source_opcode_count; index++) {
+		const char *name = zend_get_opcode_name(state->source_opcodes[index]);
+
+		add_next_index_string(
+			&source_opcodes, name != NULL ? (char *) name : "UNKNOWN");
+	}
+	add_assoc_zval(return_value, "source_opcodes", &source_opcodes);
 	if (state->status == NATIVE_MIR_TEST_STATUS_ACCEPTED
 			&& state->dump.s != NULL) {
 		add_assoc_str(
@@ -1140,6 +1282,7 @@ ZEND_FUNCTION(native_mir_test_compile_dump)
 	native_mir_test_cleanup(state);
 	native_mir_test_build_result(state, return_value);
 	smart_str_free(&state->dump);
+	efree(state->source_opcodes);
 	efree(state->diagnostics);
 	efree(state);
 }
