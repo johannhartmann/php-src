@@ -688,12 +688,32 @@ static bool zend_mir_w03_initial_slot_value(
 
 	for (index = 0; index < ssa_count; index++) {
 		zend_mir_source_ssa_ref ssa;
+		bool phi_result = false;
+		uint32_t phi_index;
 
 		if (!integration->source_view.ssa_at(
 				integration->source_view.context, index, &ssa)) {
 			return false;
 		}
+		if (integration->w04) {
+			uint32_t phi_count = integration->source_view.phi_count(
+				integration->source_view.context);
+
+			for (phi_index = 0; phi_index < phi_count; phi_index++) {
+				zend_mir_source_phi_ref phi;
+
+				if (!integration->source_view.phi_at(
+						integration->source_view.context, phi_index, &phi)) {
+					return false;
+				}
+				if (phi.result_ssa_variable_id == ssa.ssa_variable_id) {
+					phi_result = true;
+					break;
+				}
+			}
+		}
 		if (ssa.definition_opline_index == ZEND_MIR_ID_INVALID
+				&& !phi_result
 				&& ssa.source_slot_kind == source_slot->kind
 				&& ssa.source_slot == source_slot->kind_index) {
 			zend_mir_value_id candidate =
