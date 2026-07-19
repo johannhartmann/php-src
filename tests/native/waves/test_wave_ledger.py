@@ -30,10 +30,15 @@ class WaveLedgerTests(unittest.TestCase):
             ["W%02d" % number for number in range(19)],
             sorted(entries),
         )
-        for wave_id in ("W00", "W01", "W02", "W03", "W04"):
+        for wave_id in ("W00", "W01", "W02", "W03"):
             self.assertEqual("unsealed", entries[wave_id]["state"])
             self.assertIsNone(entries[wave_id]["receipt_path"])
             self.assertIsNone(entries[wave_id]["receipt_sha256"])
+        self.assertEqual("revalidated", entries["W04"]["state"])
+        self.assertEqual(
+            "docs/native-engine/waves/receipts/W04.json",
+            entries["W04"]["receipt_path"],
+        )
         self.assertEqual("pending", entries["W05"]["state"])
         for number in range(6, 19):
             self.assertEqual("unstarted", entries["W%02d" % number]["state"])
