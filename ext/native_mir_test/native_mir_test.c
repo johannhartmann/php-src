@@ -34,6 +34,7 @@
 #include "Zend/Optimizer/zend_optimizer_internal.h"
 
 #include "Zend/Native/MIR/Core/zend_mir_arena.h"
+#include "Zend/Native/MIR/Scalar/zend_mir_scalar_descriptors.h"
 #include "Zend/Native/MIR/zend_mir.h"
 #include "Zend/Native/Lowering/Core/zend_mir_lowering_internal.h"
 #include "Zend/Native/Lowering/zend_mir_lowering_zend.h"
@@ -464,6 +465,13 @@ static bool native_mir_test_build_ssa(native_mir_test_state *state)
 	zend_optimizer_ctx optimizer;
 
 	state->phase = NATIVE_MIR_TEST_PHASE_SSA;
+	if (state->wave == 4 && state->selected->last_try_catch != 0) {
+		native_mir_test_fail(
+			state, NATIVE_MIR_TEST_STATUS_REJECTED,
+			NATIVE_MIR_TEST_PHASE_LOWERING, "MIRL", "MIRL0015",
+			"W04 rejects protected source regions before SSA analysis");
+		return false;
+	}
 	if (state->fault == NATIVE_MIR_TEST_FAULT_SSA_FAILURE) {
 		native_mir_test_fail(
 			state, NATIVE_MIR_TEST_STATUS_REJECTED,
@@ -588,6 +596,168 @@ static bool native_mir_test_verify_stage1(
 	return zend_mir_verify_stage1(view, diagnostics);
 }
 
+static bool native_mir_test_find_value(
+	const zend_mir_view *view, zend_mir_value_id value_id,
+	zend_mir_value_record *out)
+{
+	uint32_t index;
+
+	for (index = 0; index < view->value_count(view->context); index++) {
+		zend_mir_value_record value;
+		if (!view->value_at(view->context, index, &value)) {
+			return false;
+		}
+		if (value.id == value_id) {
+			*out = value;
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool native_mir_test_find_fact(
+	const zend_mir_view *view, zend_mir_value_id value_id,
+	zend_mir_value_fact_ref *out)
+{
+	uint32_t index;
+
+	for (index = 0; index < view->value_fact_count(view->context); index++) {
+		zend_mir_value_fact_ref fact;
+		if (!view->value_fact_at(view->context, index, &fact)) {
+			return false;
+		}
+		if (fact.value_id == value_id) {
+			*out = fact;
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool native_mir_test_scalar_requirement_matches(
+	const zend_mir_scalar_value_requirement *requirement,
+	const zend_mir_value_record *value,
+	const zend_mir_value_fact_ref *fact)
+{
+	return zend_mir_scalar_fact_is_well_formed(fact)
+		&& (requirement->representation == ZEND_MIR_REPRESENTATION_INVALID
+			|| value->representation == requirement->representation)
+		&& (requirement->exact_type == ZEND_MIR_SCALAR_TYPE_NONE
+			|| fact->exact_type == requirement->exact_type)
+		&& (fact->flags & requirement->required_flags)
+			== requirement->required_flags
+		&& value->ownership == requirement->ownership;
+}
+
+static bool native_mir_test_verify_w04_scalar(
+	native_mir_test_state *state, const zend_mir_view *view)
+{
+	uint32_t instruction_index;
+
+	if (view->instruction_count == NULL || view->instruction_at == NULL
+			|| view->instruction_operand_count == NULL
+			|| view->instruction_operand_at == NULL
+			|| view->value_count == NULL || view->value_at == NULL
+			|| view->value_fact_count == NULL || view->value_fact_at == NULL) {
+		native_mir_test_add_diagnostic(
+			state, "MIRV", "MIRV0601",
+			"W04 scalar verifier view is incomplete", false, 0);
+		return false;
+	}
+	for (instruction_index = 0;
+			instruction_index < view->instruction_count(view->context);
+			instruction_index++) {
+		zend_mir_instruction_record instruction;
+		const zend_mir_scalar_descriptor *descriptor;
+		uint32_t operand_count;
+		uint32_t operand_index;
+
+		if (!view->instruction_at(
+				view->context, instruction_index, &instruction)) {
+			native_mir_test_add_diagnostic(
+				state, "MIRV", "MIRV0604",
+				"W04 scalar instruction callback failed", false, 0);
+			return false;
+		}
+		descriptor = zend_mir_scalar_descriptor_at(instruction.opcode);
+		if (descriptor == NULL) {
+			continue;
+		}
+		operand_count = view->instruction_operand_count(
+			view->context, instruction.id);
+		if (descriptor->opcode != instruction.opcode
+				|| operand_count != descriptor->operand_count
+				|| instruction.effects != descriptor->effects
+				|| instruction.reads != descriptor->reads
+				|| instruction.writes != descriptor->writes
+				|| instruction.barriers != descriptor->barriers
+				|| instruction.ownership_actions
+					!= descriptor->ownership_actions
+				|| (descriptor->requires_source
+					&& !zend_mir_id_is_valid(
+						instruction.source_position_id))
+				|| (!descriptor->requires_frame
+					&& zend_mir_id_is_valid(
+						instruction.frame_state_id))) {
+			native_mir_test_add_diagnostic(
+				state, "MIRV", "MIRV0624",
+				"W04 scalar instruction violates its descriptor",
+				false, 0);
+			return false;
+		}
+		for (operand_index = 0; operand_index < operand_count;
+				operand_index++) {
+			zend_mir_value_id operand_id;
+			zend_mir_value_record value;
+			zend_mir_value_fact_ref fact;
+			if (!view->instruction_operand_at(
+					view->context, instruction.id, operand_index,
+					&operand_id)
+					|| !native_mir_test_find_value(
+						view, operand_id, &value)
+					|| !native_mir_test_find_fact(
+						view, operand_id, &fact)
+					|| !native_mir_test_scalar_requirement_matches(
+						&descriptor->operands[operand_index],
+						&value, &fact)) {
+				native_mir_test_add_diagnostic(
+					state, "MIRV", "MIRV0621",
+					"W04 scalar operand lacks its exact proof",
+					false, 0);
+				return false;
+			}
+		}
+		if (descriptor->has_result) {
+			zend_mir_value_record value;
+			zend_mir_value_fact_ref fact;
+			if (!zend_mir_id_is_valid(instruction.result_id)
+					|| instruction.representation
+						!= descriptor->result.representation
+					|| !native_mir_test_find_value(
+						view, instruction.result_id, &value)
+					|| !native_mir_test_find_fact(
+						view, instruction.result_id, &fact)
+					|| !native_mir_test_scalar_requirement_matches(
+						&descriptor->result, &value, &fact)) {
+				native_mir_test_add_diagnostic(
+					state, "MIRV", "MIRV0622",
+					"W04 scalar result lacks its exact proof",
+					false, 0);
+				return false;
+			}
+		} else if (zend_mir_id_is_valid(instruction.result_id)
+				|| instruction.representation
+					!= ZEND_MIR_REPRESENTATION_VOID) {
+			native_mir_test_add_diagnostic(
+				state, "MIRV", "MIRV0622",
+				"W04 scalar drop defines an unexpected result",
+				false, 0);
+			return false;
+		}
+	}
+	return true;
+}
+
 static bool native_mir_test_verify_stage2(
 	void *context, const zend_mir_view *view,
 	zend_mir_diagnostic_sink *diagnostics)
@@ -596,7 +766,9 @@ static bool native_mir_test_verify_stage2(
 
 	state->phase = NATIVE_MIR_TEST_PHASE_VERIFY;
 	state->diagnostic_stage = "MIRV";
-	return zend_mir_verify_w03_scalar(view, diagnostics);
+	return state->wave == 4
+		? native_mir_test_verify_w04_scalar(state, view)
+		: zend_mir_verify_w03_scalar(view, diagnostics);
 }
 
 static bool native_mir_test_dump_write(
