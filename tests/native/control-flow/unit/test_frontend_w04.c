@@ -256,6 +256,27 @@ static void test_w04_pi_and_fail_closed_projection(void)
 		&source, &fixture.op_array, &fixture.ssa, 17, 23, &diagnostic)
 		== ZEND_MIR_LOWERING_DEFERRED);
 	assert(diagnostic.code == ZEND_MIRL_W06_REFERENCE_SEMANTICS_DEFERRED);
+
+	w04_init_diamond(&fixture);
+	fixture.opcodes[0].opcode = ZEND_COALESCE;
+	assert(zend_mir_zend_source_init_w04(
+		&source, &fixture.op_array, &fixture.ssa, 17, 23, &diagnostic)
+		== ZEND_MIR_LOWERING_DEFERRED);
+	assert(diagnostic.code == ZEND_MIRL_W06_REFERENCE_SEMANTICS_DEFERRED);
+
+	w04_init_diamond(&fixture);
+	fixture.opcodes[0].opcode = ZEND_JMP_NULL;
+	assert(zend_mir_zend_source_init_w04(
+		&source, &fixture.op_array, &fixture.ssa, 17, 23, &diagnostic)
+		== ZEND_MIR_LOWERING_DEFERRED);
+	assert(diagnostic.code == ZEND_MIRL_W06_REFERENCE_SEMANTICS_DEFERRED);
+
+	w04_init_diamond(&fixture);
+	fixture.opcodes[0].opcode = ZEND_ASSERT_CHECK;
+	assert(zend_mir_zend_source_init_w04(
+		&source, &fixture.op_array, &fixture.ssa, 17, 23, &diagnostic)
+		== ZEND_MIR_LOWERING_DEFERRED);
+	assert(diagnostic.code == ZEND_MIRL_W05_RUNTIME_EFFECT_DEFERRED);
 }
 
 static void test_w04_smart_branch_result_type(void)
