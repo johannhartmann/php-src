@@ -1,5 +1,30 @@
 #include "zend_mir_zend_source_internal.h"
 
+bool zend_mir_frontend_normalize_operand_type(
+	uint8_t operand_type,
+	uint32_t operand_index,
+	uint8_t *normalized_type)
+{
+	uint8_t smart_branch_flags =
+		operand_type & (IS_SMART_BRANCH_JMPZ | IS_SMART_BRANCH_JMPNZ);
+	uint8_t base_type =
+		operand_type & ~(IS_SMART_BRANCH_JMPZ | IS_SMART_BRANCH_JMPNZ);
+
+	if (normalized_type == NULL
+			|| (smart_branch_flags != 0
+				&& (operand_index != ZEND_MIR_FRONTEND_RESULT
+					|| base_type != IS_TMP_VAR
+					|| smart_branch_flags
+						== (IS_SMART_BRANCH_JMPZ | IS_SMART_BRANCH_JMPNZ)))
+			|| (base_type != IS_UNUSED && base_type != IS_CONST
+				&& base_type != IS_CV && base_type != IS_TMP_VAR
+				&& base_type != IS_VAR)) {
+		return false;
+	}
+	*normalized_type = base_type;
+	return true;
+}
+
 static bool zend_mir_frontend_valid_ssa_id(const zend_ssa *ssa, int id)
 {
 	return id == -1 || (id >= 0 && id < ssa->vars_count
@@ -22,19 +47,28 @@ static bool zend_mir_frontend_operand_parts(
 	switch (operand_index) {
 		case ZEND_MIR_FRONTEND_OP1:
 			*node = &opline->op1;
-			*operand_type = opline->op1_type;
+			if (!zend_mir_frontend_normalize_operand_type(
+					opline->op1_type, operand_index, operand_type)) {
+				return false;
+			}
 			*use = ssa_op->op1_use;
 			*def = ssa_op->op1_def;
 			return true;
 		case ZEND_MIR_FRONTEND_OP2:
 			*node = &opline->op2;
-			*operand_type = opline->op2_type;
+			if (!zend_mir_frontend_normalize_operand_type(
+					opline->op2_type, operand_index, operand_type)) {
+				return false;
+			}
 			*use = ssa_op->op2_use;
 			*def = ssa_op->op2_def;
 			return true;
 		case ZEND_MIR_FRONTEND_RESULT:
 			*node = &opline->result;
-			*operand_type = opline->result_type;
+			if (!zend_mir_frontend_normalize_operand_type(
+					opline->result_type, operand_index, operand_type)) {
+				return false;
+			}
 			*use = ssa_op->result_use;
 			*def = ssa_op->result_def;
 			return true;
@@ -346,7 +380,11 @@ static bool zend_mir_frontend_is_scalar_source_type(uint8_t operand_type)
 
 static bool zend_mir_frontend_is_scalar_result_type(uint8_t operand_type)
 {
-	return operand_type == IS_TMP_VAR || operand_type == IS_VAR;
+	uint8_t normalized_type;
+
+	return zend_mir_frontend_normalize_operand_type(
+			operand_type, ZEND_MIR_FRONTEND_RESULT, &normalized_type)
+		&& (normalized_type == IS_TMP_VAR || normalized_type == IS_VAR);
 }
 
 static bool zend_mir_frontend_opcode_operands_match(const zend_op *opline)
@@ -649,6 +687,42 @@ static bool zend_mir_frontend_w04_branch(uint8_t opcode)
 		|| opcode == ZEND_JMPNZ_EX;
 }
 
+static bool zend_mir_frontend_w04_smart_branch(
+	const zend_op_array *op_array, uint32_t opline_index)
+{
+	const zend_op *producer = &op_array->opcodes[opline_index];
+	const zend_op *branch;
+	uint8_t smart_branch_flags =
+		producer->result_type & (IS_SMART_BRANCH_JMPZ | IS_SMART_BRANCH_JMPNZ);
+	uint8_t expected_opcode;
+
+	if (smart_branch_flags == 0) {
+		return true;
+	}
+	if (opline_index + 1 >= op_array->last
+			|| (smart_branch_flags
+				== (IS_SMART_BRANCH_JMPZ | IS_SMART_BRANCH_JMPNZ))) {
+		return false;
+	}
+	switch (producer->opcode) {
+		case ZEND_IS_IDENTICAL:
+		case ZEND_IS_NOT_IDENTICAL:
+		case ZEND_IS_EQUAL:
+		case ZEND_IS_NOT_EQUAL:
+		case ZEND_IS_SMALLER:
+		case ZEND_IS_SMALLER_OR_EQUAL:
+			break;
+		default:
+			return false;
+	}
+	expected_opcode = smart_branch_flags == IS_SMART_BRANCH_JMPZ
+		? ZEND_JMPZ : ZEND_JMPNZ;
+	branch = &op_array->opcodes[opline_index + 1];
+	return branch->opcode == expected_opcode
+		&& branch->op1_type == IS_TMP_VAR
+		&& branch->op1.var == producer->result.var;
+}
+
 zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w04(
 	const zend_op_array *op_array, zend_mir_op_array_id op_array_id,
 	zend_mir_frontend_diagnostic *diagnostic)
@@ -670,6 +744,13 @@ zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w04(
 				op_array_id, i, ZEND_MIR_FRONTEND_OPERAND_NONE,
 				ZEND_MIR_ID_INVALID);
 			return ZEND_MIR_LOWERING_DEFERRED;
+		}
+		if (!zend_mir_frontend_w04_smart_branch(op_array, i)) {
+			zend_mir_frontend_set_diagnostic(diagnostic,
+				ZEND_MIR_LOWERING_REJECTED,
+				ZEND_MIRL_W04_BRANCH_PROOF_FAILED, op_array_id, i,
+				ZEND_MIR_FRONTEND_RESULT, ZEND_MIR_ID_INVALID);
+			return ZEND_MIR_LOWERING_REJECTED;
 		}
 		if (!zend_mir_frontend_w04_branch(opline->opcode)) {
 			valid = zend_mir_frontend_opcode_operands_match(opline);

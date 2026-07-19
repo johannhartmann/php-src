@@ -92,25 +92,34 @@ static bool zend_mir_frontend_match_ssa_operand(
 
 	opline = &op_array->opcodes[opline_index];
 	ssa_op = &ssa->ops[opline_index];
-	switch (operand_index) {
-		case ZEND_MIR_FRONTEND_OP1:
-			node = &opline->op1;
-			operand_type = opline->op1_type;
-			use = ssa_op->op1_use;
-			def = ssa_op->op1_def;
-			break;
-		case ZEND_MIR_FRONTEND_OP2:
-			node = &opline->op2;
-			operand_type = opline->op2_type;
-			use = ssa_op->op2_use;
-			def = ssa_op->op2_def;
-			break;
-		case ZEND_MIR_FRONTEND_RESULT:
-			node = &opline->result;
-			operand_type = opline->result_type;
-			use = ssa_op->result_use;
-			def = ssa_op->result_def;
-			break;
+		switch (operand_index) {
+			case ZEND_MIR_FRONTEND_OP1:
+				node = &opline->op1;
+				if (!zend_mir_frontend_normalize_operand_type(
+						opline->op1_type, operand_index, &operand_type)) {
+					return false;
+				}
+				use = ssa_op->op1_use;
+				def = ssa_op->op1_def;
+				break;
+			case ZEND_MIR_FRONTEND_OP2:
+				node = &opline->op2;
+				if (!zend_mir_frontend_normalize_operand_type(
+						opline->op2_type, operand_index, &operand_type)) {
+					return false;
+				}
+				use = ssa_op->op2_use;
+				def = ssa_op->op2_def;
+				break;
+			case ZEND_MIR_FRONTEND_RESULT:
+				node = &opline->result;
+				if (!zend_mir_frontend_normalize_operand_type(
+						opline->result_type, operand_index, &operand_type)) {
+					return false;
+				}
+				use = ssa_op->result_use;
+				def = ssa_op->result_def;
+				break;
 		default:
 			return false;
 	}

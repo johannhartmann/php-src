@@ -22,6 +22,11 @@ typedef enum _zend_mir_frontend_operand_index {
 	ZEND_MIR_FRONTEND_RESULT = 2
 } zend_mir_frontend_operand_index;
 
+bool zend_mir_frontend_normalize_operand_type(
+	uint8_t operand_type,
+	uint32_t operand_index,
+	uint8_t *normalized_type);
+
 const zend_op_array *zend_mir_source_op_array(const zend_mir_zend_source *source);
 const zend_ssa *zend_mir_source_ssa(const zend_mir_zend_source *source);
 bool zend_mir_source_is_initialized(const zend_mir_zend_source *source);

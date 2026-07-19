@@ -258,10 +258,49 @@ static void test_w04_pi_and_fail_closed_projection(void)
 	assert(diagnostic.code == ZEND_MIRL_W06_REFERENCE_SEMANTICS_DEFERRED);
 }
 
+static void test_w04_smart_branch_result_type(void)
+{
+	w04_frontend_fixture fixture;
+	zend_mir_zend_source source;
+	zend_mir_frontend_diagnostic diagnostic;
+
+	w04_init_diamond(&fixture);
+	fixture.opcodes[0].opcode = ZEND_IS_SMALLER;
+	fixture.opcodes[0].op1_type = IS_CV;
+	fixture.opcodes[0].op1.var = EX_NUM_TO_VAR(0);
+	fixture.opcodes[0].op2_type = IS_CV;
+	fixture.opcodes[0].op2.var = EX_NUM_TO_VAR(0);
+	fixture.opcodes[0].result_type = IS_TMP_VAR | IS_SMART_BRANCH_JMPZ;
+	fixture.opcodes[0].result.var = EX_NUM_TO_VAR(1);
+	fixture.ssa_ops[0].op1_use = 0;
+	fixture.ssa_ops[0].op2_use = 0;
+	fixture.ssa_ops[0].result_def = 1;
+	fixture.ssa_vars[1].definition = 0;
+
+	fixture.opcodes[1].opcode = ZEND_JMPZ;
+	fixture.opcodes[1].op1_type = IS_TMP_VAR;
+	fixture.opcodes[1].op1.var = EX_NUM_TO_VAR(1);
+	fixture.opcodes[1].op2_type = IS_UNUSED;
+	fixture.opcodes[1].result_type = IS_UNUSED;
+	w04_init_ssa_op(&fixture.ssa_ops[1]);
+	fixture.ssa_ops[1].op1_use = 1;
+
+	assert(zend_mir_zend_source_init_w04(
+		&source, &fixture.op_array, &fixture.ssa, 17, 23, &diagnostic)
+		== ZEND_MIR_LOWERING_SUCCESS);
+
+	fixture.opcodes[1].opcode = ZEND_JMPNZ;
+	assert(zend_mir_zend_source_init_w04(
+		&source, &fixture.op_array, &fixture.ssa, 17, 23, &diagnostic)
+		== ZEND_MIR_LOWERING_REJECTED);
+	assert(diagnostic.code == ZEND_MIRL_W04_BRANCH_PROOF_FAILED);
+}
+
 int main(void)
 {
 	test_w04_diamond_projection();
 	test_w04_pi_and_fail_closed_projection();
+	test_w04_smart_branch_result_type();
 	puts("W04 frontend projection tests: ok");
 	return 0;
 }
