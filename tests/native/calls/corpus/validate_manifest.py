@@ -14,6 +14,10 @@ MANIFEST = Path(__file__).with_name("manifest.json")
 REQUIRED_MODELED = {
     "direct_user_zero_args_unused_return",
     "direct_user_scalar_literals",
+    "direct_user_scalar_result_bool",
+    "direct_user_scalar_result_float",
+    "direct_user_scalar_result_int",
+    "direct_user_scalar_result_null",
     "direct_user_scalar_variables",
     "two_direct_calls_same_block",
     "direct_call_in_if",
@@ -36,6 +40,7 @@ REQUIRED_DEFERRED = {
     "dynamic_call": "W10",
     "by_name_call": "W10",
     "closure_callback": "W10",
+    "recursive_self_call": "W10",
     "internal_function": "W15",
     "frameless_icall": "W15",
     "observer_specific_marker": "W15",

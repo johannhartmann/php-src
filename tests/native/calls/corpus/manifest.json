@@ -4,6 +4,10 @@
     {"id":"direct_user_zero_args_unused_return","source":"tests/native/calls/corpus/cases/direct_user_zero_args_unused_return.php","function":"w05_case","status":"accepted","mirl":"MIRL0000","wave":null},
     {"id":"direct_user_scalar_literals","source":"tests/native/calls/corpus/cases/direct_user_scalar_literals.php","function":"w05_case","status":"accepted","mirl":"MIRL0000","wave":null},
     {"id":"direct_user_scalar_variables","source":"tests/native/calls/corpus/cases/direct_user_scalar_variables.php","function":"w05_case","status":"accepted","mirl":"MIRL0000","wave":null},
+    {"id":"direct_user_scalar_result_int","source":"tests/native/calls/corpus/cases/direct_user_scalar_result_int.php","function":"w05_case","status":"accepted","mirl":"MIRL0000","wave":null},
+    {"id":"direct_user_scalar_result_bool","source":"tests/native/calls/corpus/cases/direct_user_scalar_result_bool.php","function":"w05_case","status":"accepted","mirl":"MIRL0000","wave":null},
+    {"id":"direct_user_scalar_result_float","source":"tests/native/calls/corpus/cases/direct_user_scalar_result_float.php","function":"w05_case","status":"accepted","mirl":"MIRL0000","wave":null},
+    {"id":"direct_user_scalar_result_null","source":"tests/native/calls/corpus/cases/direct_user_scalar_result_null.php","function":"w05_case","status":"accepted","mirl":"MIRL0000","wave":null},
     {"id":"two_direct_calls_same_block","source":"tests/native/calls/corpus/cases/two_direct_calls_same_block.php","function":"w05_case","status":"accepted","mirl":"MIRL0000","wave":null},
     {"id":"direct_call_in_if","source":"tests/native/calls/corpus/cases/direct_call_in_if.php","function":"w05_case","status":"accepted","mirl":"MIRL0000","wave":null},
     {"id":"direct_call_in_reducible_loop","source":"tests/native/calls/corpus/cases/direct_call_in_reducible_loop.php","function":"w05_case","status":"accepted","mirl":"MIRL0000","wave":null},
@@ -28,6 +32,7 @@
     {"id":"by_name_call","source":"tests/native/calls/corpus/cases/by_name_call.php","function":"w05_case","status":"rejected","mirl":"MIRL0023","wave":"W10"},
     {"id":"no_discard_by_name_finish","source":"tests/native/calls/corpus/cases/no_discard_by_name_finish.php","function":"w05_case","status":"rejected","mirl":"MIRL0023","wave":"W10"},
     {"id":"closure_callback","source":"tests/native/calls/corpus/cases/closure_callback.php","function":"w05_case","status":"rejected","mirl":"MIRL0023","wave":"W10"},
+    {"id":"recursive_self_call","source":"tests/native/calls/corpus/cases/recursive_self_call.php","function":"w05_case","status":"rejected","mirl":"MIRL0023","wave":"W10"},
     {"id":"internal_function","source":"tests/native/calls/corpus/cases/internal_function.php","function":"w05_case","status":"rejected","mirl":"MIRL0023","wave":"W15"},
     {"id":"frameless_icall","source":"tests/native/calls/corpus/cases/frameless_icall.php","function":"w05_case","status":"rejected","mirl":"MIRL0012","wave":"W15"},
     {"id":"observer_specific_marker","source":"tests/native/calls/corpus/cases/observer_specific_marker.php","function":"w05_case","status":"rejected","mirl":"MIRL0024","wave":"W15"}

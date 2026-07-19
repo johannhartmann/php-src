@@ -925,6 +925,8 @@ static bool zend_mir_dump_call_model(zend_mir_dump_context *dump)
 				|| !zend_mir_dump_u32(dump, site.arguments.offset)
 				|| !zend_mir_dump_literal(dump, "+")
 				|| !zend_mir_dump_u32(dump, site.arguments.count)
+				|| !zend_mir_dump_literal(dump, " result ")
+				|| !zend_mir_dump_id(dump, "v", site.result_id)
 				|| !zend_mir_dump_call_frame(
 					dump, " caller", &site.caller_frame)
 				|| !zend_mir_dump_call_frame(
