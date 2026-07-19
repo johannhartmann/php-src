@@ -2,6 +2,7 @@
 
 #include "../zend_mir_lowering_zend.h"
 #include "../Frontend/zend_mir_zend_source.h"
+#include "../Scalar/Logic/zend_mir_logic.h"
 #include "../../MIR/Verify/zend_mir_verify_control_flow.h"
 #include "../../MIR/Scalar/zend_mir_scalar_descriptors.h"
 #include "zend_mir_control_flow_internal.h"
@@ -303,6 +304,55 @@ static bool zend_mir_w04_emit_phis(
 	return true;
 }
 
+static bool zend_mir_w04_emit_bool_identity(
+	zend_mir_lowering_context *context, zend_mir_mutator *mutator,
+	const zend_mir_source_opcode_ref *opcode)
+{
+	zend_mir_value_fact_ref input_fact;
+	zend_mir_value_fact_ref result_fact;
+	zend_mir_representation input_representation;
+	zend_mir_representation result_representation;
+	zend_mir_instruction_record record;
+	zend_mir_instruction_id instruction_id;
+	zend_mir_value_id input_id;
+	if (context == NULL || mutator == NULL || opcode == NULL
+			|| opcode->zend_opcode_number != ZEND_MIR_LOGIC_ZEND_BOOL
+			|| opcode->op1.kind != ZEND_MIR_SOURCE_OPERAND_SSA
+			|| opcode->op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
+			|| opcode->result.kind != ZEND_MIR_SOURCE_OPERAND_SSA
+			|| !zend_mir_w04_fact_for_operand(context, &opcode->op1,
+				&input_fact, &input_representation)
+			|| !zend_mir_w04_fact_for_ssa(context,
+				opcode->result.ssa_variable_id, &result_fact,
+				&result_representation)
+			|| input_fact.exact_type != ZEND_MIR_SCALAR_TYPE_I1
+			|| result_fact.exact_type != ZEND_MIR_SCALAR_TYPE_I1
+			|| input_representation != ZEND_MIR_REPRESENTATION_I1
+			|| result_representation != ZEND_MIR_REPRESENTATION_I1
+			|| (input_fact.flags & ZEND_MIR_VALUE_FACT_NON_REFCOUNTED) == 0
+			|| (result_fact.flags & ZEND_MIR_VALUE_FACT_NON_REFCOUNTED) == 0) {
+		return false;
+	}
+	input_id = zend_mir_value_from_original_ssa(opcode->op1.ssa_variable_id);
+	memset(&record, 0, sizeof(record));
+	record.id = ZEND_MIR_ID_INVALID;
+	record.block_id = zend_mir_lowering_context_block_id(context);
+	record.opcode = ZEND_MIR_OPCODE_COPY;
+	record.representation = ZEND_MIR_REPRESENTATION_I1;
+	record.result_id =
+		zend_mir_value_from_original_ssa(opcode->result.ssa_variable_id);
+	record.frame_state_id = ZEND_MIR_ID_INVALID;
+	record.source_position_id = opcode->source_position_id;
+	return zend_mir_id_is_valid(input_id)
+		&& zend_mir_id_is_valid(record.result_id)
+		&& mutator->add_instruction != NULL
+		&& mutator->add_operand != NULL
+		&& mutator->add_instruction(
+			mutator->context, &record, &instruction_id)
+		&& mutator->add_operand(
+			mutator->context, instruction_id, input_id);
+}
+
 static bool zend_mir_w04_lower_blocks(
 	zend_mir_lowering_context *context, zend_mir_mutator *mutator,
 	zend_mir_control_flow_map_storage *storage)
@@ -338,6 +388,11 @@ static bool zend_mir_w04_lower_blocks(
 					return false;
 				}
 				terminator_source = &opcode;
+				continue;
+			}
+			if (opcode.zend_opcode_number == ZEND_MIR_LOGIC_ZEND_BOOL
+					&& zend_mir_w04_emit_bool_identity(
+						context, mutator, &opcode)) {
 				continue;
 			}
 			provider = zend_mir_lowering_registry_find(
