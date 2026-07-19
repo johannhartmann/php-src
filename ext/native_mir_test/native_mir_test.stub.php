@@ -5,7 +5,8 @@
 /**
  * Compile source without executing it and return a canonical W03/W04 MIR result.
  *
- * @return array{
+ * Result shape:
+ * array{
  *     schema_version: int,
  *     wave?: 4,
  *     status: "accepted"|"rejected"|"error",
@@ -19,13 +20,18 @@
  *     }>,
  *     mir: ?string
  * }
- * @param array{
+ *
+ * Options shape:
+ * array{
  *     function?: ?string,
  *     diagnostic_limit?: int,
  *     wave?: 3|4,
  *     arena_chunk_size?: int,
  *     fault?: ?string
- * } $options
+ * }
+ *
+ * @return array
+ * @param array $options
  */
 function native_mir_test_compile_dump(
     string $source,

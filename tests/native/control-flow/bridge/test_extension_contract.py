@@ -34,6 +34,12 @@ class ExtensionContractTests(unittest.TestCase):
         )
         self.assertIn("wave?: 3|4", self.stub)
 
+    def test_stub_annotations_are_generator_compatible(self) -> None:
+        self.assertIn("@return array", self.stub)
+        self.assertIn("@param array $options", self.stub)
+        self.assertNotIn("@return array{", self.stub)
+        self.assertNotIn("@param array{", self.stub)
+
     def test_w03_schema_has_no_new_field(self) -> None:
         self.assertRegex(
             self.extension,
