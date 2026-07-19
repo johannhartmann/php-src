@@ -169,11 +169,15 @@ static bool zend_mir_w04_predeclare_values(
 			return false;
 		}
 		if (!zend_mir_w04_fact_for_ssa(context, ssa.ssa_variable_id,
-					&fact, &representation)
-				|| !mutator->add_value(mutator->context,
-					zend_mir_value_from_original_ssa(ssa.ssa_variable_id),
-					representation, ZEND_MIR_OWNERSHIP_STATE_OWNED)
-				|| mutator->add_value_fact == NULL
+				&fact, &representation)) {
+			continue;
+		}
+		if (!mutator->add_value(mutator->context,
+				zend_mir_value_from_original_ssa(ssa.ssa_variable_id),
+				representation, ZEND_MIR_OWNERSHIP_STATE_OWNED)) {
+			return false;
+		}
+		if (mutator->add_value_fact == NULL
 				|| !mutator->add_value_fact(
 					mutator->context, &fact, &fact_id)) {
 			return false;
