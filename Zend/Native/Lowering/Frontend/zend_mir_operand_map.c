@@ -447,15 +447,20 @@ static zend_mir_lowering_diagnostic_code zend_mir_frontend_deferred_code(
 		case ZEND_JMPNZ:
 		case ZEND_JMPZ_EX:
 		case ZEND_JMPNZ_EX:
+		case ZEND_RETURN_BY_REF:
+		case ZEND_ASSERT_CHECK:
+		case ZEND_JMP_SET:
 		case ZEND_FAST_CALL:
 		case ZEND_FAST_RET:
+		case ZEND_COALESCE:
 		case ZEND_GENERATOR_RETURN:
 		case ZEND_SWITCH_LONG:
 		case ZEND_SWITCH_STRING:
 		case ZEND_MATCH:
-			return ZEND_MIRL_W04_CONTROL_FLOW_DEFERRED;
-		case ZEND_ASSERT_CHECK:
+		case ZEND_JMP_NULL:
+		case ZEND_BIND_INIT_STATIC_OR_JMP:
 		case ZEND_JMP_FRAMELESS:
+			return ZEND_MIRL_W04_CONTROL_FLOW_DEFERRED;
 		case ZEND_INIT_FCALL_BY_NAME:
 		case ZEND_DO_FCALL:
 		case ZEND_INIT_FCALL:
@@ -499,11 +504,6 @@ static zend_mir_lowering_diagnostic_code zend_mir_frontend_deferred_code(
 		case ZEND_YIELD:
 		case ZEND_YIELD_FROM:
 			return ZEND_MIRL_W05_RUNTIME_EFFECT_DEFERRED;
-		case ZEND_RETURN_BY_REF:
-		case ZEND_JMP_SET:
-		case ZEND_COALESCE:
-		case ZEND_JMP_NULL:
-		case ZEND_BIND_INIT_STATIC_OR_JMP:
 		case ZEND_DIV:
 		case ZEND_CONCAT:
 		case ZEND_POW:
@@ -680,6 +680,24 @@ zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope(
 	return ZEND_MIR_LOWERING_SUCCESS;
 }
 
+static zend_mir_lowering_diagnostic_code zend_mir_frontend_deferred_code_w04(
+	uint8_t opcode)
+{
+	switch (opcode) {
+		case ZEND_ASSERT_CHECK:
+		case ZEND_JMP_FRAMELESS:
+			return ZEND_MIRL_W05_RUNTIME_EFFECT_DEFERRED;
+		case ZEND_RETURN_BY_REF:
+		case ZEND_JMP_SET:
+		case ZEND_COALESCE:
+		case ZEND_JMP_NULL:
+		case ZEND_BIND_INIT_STATIC_OR_JMP:
+			return ZEND_MIRL_W06_REFERENCE_SEMANTICS_DEFERRED;
+		default:
+			return zend_mir_frontend_deferred_code(opcode);
+	}
+}
+
 static bool zend_mir_frontend_w04_branch(uint8_t opcode)
 {
 	return opcode == ZEND_JMP || opcode == ZEND_JMPZ
@@ -740,7 +758,7 @@ zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w04(
 					&& !zend_mir_frontend_w04_branch(opline->opcode))) {
 			zend_mir_frontend_set_diagnostic(diagnostic,
 				ZEND_MIR_LOWERING_DEFERRED,
-				zend_mir_frontend_deferred_code(opline->opcode),
+				zend_mir_frontend_deferred_code_w04(opline->opcode),
 				op_array_id, i, ZEND_MIR_FRONTEND_OPERAND_NONE,
 				ZEND_MIR_ID_INVALID);
 			return ZEND_MIR_LOWERING_DEFERRED;
