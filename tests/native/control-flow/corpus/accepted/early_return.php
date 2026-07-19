@@ -1,5 +1,5 @@
 <?php
-function w04_early_return(int $value): int {
+function w04_early_return(int $value) {
     if ($value < 0) {
         return 0;
     }

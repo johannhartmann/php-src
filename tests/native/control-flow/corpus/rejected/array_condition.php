@@ -1,5 +1,5 @@
 <?php
-function w04_array_condition(array $value): int {
+function w04_array_condition(array $value) {
     if ($value) {
         return 1;
     }

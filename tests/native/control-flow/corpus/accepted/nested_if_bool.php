@@ -1,5 +1,5 @@
 <?php
-function w04_nested_if_bool(bool $left, bool $right): int {
+function w04_nested_if_bool(bool $left, bool $right) {
     if ($left) {
         if ($right) {
             return 3;

@@ -1,5 +1,5 @@
 <?php
-function w04_goto_irreducible(int $value): int {
+function w04_goto_irreducible(int $value) {
     $steps = 0;
     if ($value > 0) {
         goto left;
