@@ -20,6 +20,7 @@ AS_VAR_IF([PHP_NATIVE_MIR_TEST], [no], [], [
 
   PHP_ADD_BUILD_DIR([
     Zend/Native/MIR/CFG
+    Zend/Native/MIR/ControlFlow
     Zend/Native/MIR/Core
     Zend/Native/MIR/Frame
     Zend/Native/MIR/Scalar
@@ -27,6 +28,7 @@ AS_VAR_IF([PHP_NATIVE_MIR_TEST], [no], [], [
     Zend/Native/MIR/Text
     Zend/Native/MIR/Verify
     Zend/Native/Lowering/Core
+    Zend/Native/Lowering/ControlFlow
     Zend/Native/Lowering/Frontend
     Zend/Native/Lowering/Scalar/Logic
     Zend/Native/Lowering/Scalar/Numeric
@@ -37,6 +39,9 @@ AS_VAR_IF([PHP_NATIVE_MIR_TEST], [no], [], [
     [zend_mir_cfg.c
      zend_mir_dominance.c
      zend_mir_phi.c])
+  PHP_ADD_SOURCES_X([Zend/Native/MIR/ControlFlow],
+    [zend_mir_control_flow_map.c
+     zend_mir_verify_control_flow.c],, [PHP_GLOBAL_OBJS])
   PHP_ADD_SOURCES([Zend/Native/MIR/Core],
     [zend_mir_arena.c
      zend_mir_ids.c
@@ -71,6 +76,10 @@ AS_VAR_IF([PHP_NATIVE_MIR_TEST], [no], [], [
      zend_mir_lowering_diagnostics.c
      zend_mir_lowering_providers.c
      zend_mir_lowering_registry.c])
+  PHP_ADD_SOURCES_X([Zend/Native/Lowering/ControlFlow],
+    [zend_mir_control_flow_proofs.c
+     zend_mir_control_flow_provider.c
+     zend_mir_lower_control_flow.c],, [PHP_GLOBAL_OBJS])
   PHP_ADD_SOURCES([Zend/Native/Lowering/Frontend],
     [zend_mir_literal_pool.c
      zend_mir_operand_map.c

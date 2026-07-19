@@ -1,0 +1,43 @@
+znmir 1.0 module m0
+function f0 symbol s0 entry b0 flags 0x00000000
+block b0 function f0 predecessors [] successors [b1]
+block b1 function f0 predecessors [b0, b4, b5] successors [b4, b2]
+block b2 function f0 predecessors [b1] successors [b5, b3]
+block b3 function f0 predecessors [b2] successors []
+block b4 function f0 predecessors [b1] successors [b1]
+block b5 function f0 predecessors [b2] successors [b1]
+value v2 representation i1 ownership owned
+value v3 representation i1 ownership owned
+value v2147483648 representation i64 ownership owned
+constant v2147483648 representation i64 kind signed_integer_bits payload 0x0000000000000000 symbol invalid
+fact vf1 value v2 type i1 flags 0x00000008 range none provenance type_analysis source p0
+fact vf2 value v3 type i1 flags 0x00000008 range none provenance type_analysis source p0
+fact vf0 value v2147483648 type i64 flags 0x00000009 range 0:0 provenance literal source p0
+source p0 file s0 line 2 columns 1:1
+source p1 file s0 line 2 columns 1:1
+source p2 file s0 line 4 columns 1:1
+source p3 file s0 line 7 columns 1:1
+source p4 file s0 line 10 columns 1:1
+slot 0 value v2 index 0 kind cv representation canonical_zval materialization materialized ownership frame_owned rooted false cleanup false
+slot 1 value v3 index 1 kind cv representation canonical_zval materialization materialized ownership frame_owned rooted false cleanup false
+slot 0 value v2 index 0 kind cv representation canonical_zval materialization materialized ownership frame_owned rooted false cleanup false
+slot 1 value v3 index 1 kind cv representation canonical_zval materialization materialized ownership frame_owned rooted false cleanup false
+slot 0 value v2 index 0 kind cv representation canonical_zval materialization materialized ownership frame_owned rooted false cleanup false
+slot 1 value v3 index 1 kind cv representation canonical_zval materialization materialized ownership frame_owned rooted false cleanup false
+slot 0 value v2 index 0 kind cv representation canonical_zval materialization materialized ownership frame_owned rooted false cleanup false
+slot 1 value v3 index 1 kind cv representation canonical_zval materialization materialized ownership frame_owned rooted false cleanup false
+frame fs0 function f0 parent invalid function-kind user opline 0 phase before slots 0+2 roots 0+0 cleanups 0+0 return terminal:invalid:invalid exception terminal:invalid:invalid bailout nonlocal_bailout:invalid:invalid suspend none:invalid code-version 1 resume false:none:invalid:invalid:invalid safepoint function_entry canonical true
+frame fs1 function f0 parent invalid function-kind user opline 2 phase before slots 2+2 roots 0+0 cleanups 0+0 return terminal:invalid:invalid exception terminal:invalid:invalid bailout nonlocal_bailout:invalid:invalid suspend none:invalid code-version 0 resume false:none:invalid:invalid:invalid safepoint observer canonical true
+frame fs2 function f0 parent invalid function-kind user opline 3 phase before slots 4+2 roots 0+0 cleanups 0+0 return terminal:invalid:invalid exception terminal:invalid:invalid bailout nonlocal_bailout:invalid:invalid suspend none:invalid code-version 0 resume false:none:invalid:invalid:invalid safepoint observer canonical true
+frame fs3 function f0 parent invalid function-kind user opline 4 phase before slots 6+2 roots 0+0 cleanups 0+0 return terminal:invalid:invalid exception terminal:invalid:invalid bailout nonlocal_bailout:invalid:invalid suspend none:invalid code-version 1 resume false:none:invalid:invalid:invalid safepoint function_entry canonical true
+instruction i0 block b0 opcode statepoint representation void result invalid operands [v2, v3] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame fs0 source p0
+instruction i1 block b0 opcode constant representation i64 result v2147483648 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i2 block b0 opcode branch representation control result invalid operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source invalid
+instruction i3 block b1 opcode cond_branch representation control result invalid operands [v2] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p2
+instruction i4 block b4 opcode statepoint representation void result invalid operands [v2, v3] effects 0x0400 reads 0x00004008 writes 0x00004000 barriers 0x61 ownership-actions 0x0000 frame fs1 source p2
+instruction i5 block b4 opcode branch representation control result invalid operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p2
+instruction i6 block b2 opcode cond_branch representation control result invalid operands [v3] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p3
+instruction i7 block b5 opcode statepoint representation void result invalid operands [v2, v3] effects 0x0400 reads 0x00004008 writes 0x00004000 barriers 0x61 ownership-actions 0x0000 frame fs2 source p3
+instruction i8 block b5 opcode branch representation control result invalid operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p3
+instruction i9 block b3 opcode return representation void result invalid operands [v2147483648] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame fs3 source p4
+end
