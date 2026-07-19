@@ -1,7 +1,11 @@
 <?php
+function w04_called_helper(string $value) {
+    return strlen($value);
+}
+
 function w04_call_inside_branch(bool $condition, string $value) {
     if ($condition) {
-        return strlen($value);
+        return w04_called_helper($value);
     }
     return 0;
 }

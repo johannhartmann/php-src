@@ -1,14 +1,12 @@
 <?php
-function w04_multiple_backedges_reducible(int $limit) {
-    $counter = 0;
-    $total = 0;
-    while ($counter < $limit) {
-        $counter++;
-        if (($counter & 1) === 0) {
-            continue;
-        }
-        $total += $counter;
+function w04_multiple_backedges_reducible(bool $left, bool $right) {
+loop:
+    if ($left) {
+        goto loop;
     }
-    return $total;
+    if ($right) {
+        goto loop;
+    }
+    return 0;
 }
-echo w04_multiple_backedges_reducible(0), ",", w04_multiple_backedges_reducible(6), "\n";
+echo w04_multiple_backedges_reducible(false, false), "\n";

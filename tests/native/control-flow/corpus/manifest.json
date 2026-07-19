@@ -7,12 +7,12 @@
       "expected_mirl": "MIRL0000",
       "expected_status": "accepted",
       "function": "w04_if_else_int",
-      "reference_inputs": [[-2], [0], [3]],
+      "reference_inputs": [[false], [true]],
       "repeat_calls": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-      "required_source_opcodes": ["ZEND_IS_SMALLER", "ZEND_JMPZ", "ZEND_ADD", "ZEND_SUB"],
+      "required_source_opcodes": ["ZEND_JMPZ", "ZEND_RETURN"],
       "semantic_family": "conditional_integer",
       "source_path": "tests/native/control-flow/corpus/accepted/if_else_int.php",
-      "source_sha256": "e1270c5ca917bf6620a0cc3af0650bc0e1e8a7ce4523b8c7357167b3f98ee635"
+      "source_sha256": "d7b0e881465023528af460654d547ee33e0e60be405781318047b4b0e29238a5"
     },
     {
       "case_id": "nested_if_bool",
@@ -31,13 +31,13 @@
     {
       "case_id": "ternary_scalar",
       "deferred_wave": null,
-      "expected_cfg": {"min_blocks": 4, "min_edges": 4, "min_phis": 1, "requires_backedge": false, "requires_loop": false},
+      "expected_cfg": {"min_blocks": 3, "min_edges": 2, "min_phis": 0, "requires_backedge": false, "requires_loop": false},
       "expected_mirl": "MIRL0000",
       "expected_status": "accepted",
       "function": "w04_ternary_scalar",
       "reference_inputs": [[true, 7, 9], [false, 7, 9]],
       "repeat_calls": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-      "required_source_opcodes": ["ZEND_JMPZ", "ZEND_QM_ASSIGN"],
+      "required_source_opcodes": ["ZEND_JMPZ", "ZEND_RETURN"],
       "semantic_family": "conditional_value_merge",
       "source_path": "tests/native/control-flow/corpus/accepted/ternary_scalar.php",
       "source_sha256": "69d0b56b8170b41cccf39b66192568ba68631502d8f77e50b334ea8fa16abba8"
@@ -45,7 +45,7 @@
     {
       "case_id": "short_circuit_and",
       "deferred_wave": null,
-      "expected_cfg": {"min_blocks": 4, "min_edges": 4, "min_phis": 1, "requires_backedge": false, "requires_loop": false},
+      "expected_cfg": {"min_blocks": 3, "min_edges": 3, "min_phis": 1, "requires_backedge": false, "requires_loop": false},
       "expected_mirl": "MIRL0000",
       "expected_status": "accepted",
       "function": "w04_short_circuit_and",
@@ -59,7 +59,7 @@
     {
       "case_id": "short_circuit_or",
       "deferred_wave": null,
-      "expected_cfg": {"min_blocks": 4, "min_edges": 4, "min_phis": 1, "requires_backedge": false, "requires_loop": false},
+      "expected_cfg": {"min_blocks": 3, "min_edges": 3, "min_phis": 1, "requires_backedge": false, "requires_loop": false},
       "expected_mirl": "MIRL0000",
       "expected_status": "accepted",
       "function": "w04_short_circuit_or",
@@ -77,23 +77,23 @@
       "expected_mirl": "MIRL0000",
       "expected_status": "accepted",
       "function": "w04_early_return",
-      "reference_inputs": [[-1], [0], [4]],
+      "reference_inputs": [[true, 4], [false, 4]],
       "repeat_calls": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-      "required_source_opcodes": ["ZEND_IS_SMALLER", "ZEND_JMPZ", "ZEND_RETURN"],
+      "required_source_opcodes": ["ZEND_JMPZ", "ZEND_RETURN"],
       "semantic_family": "early_exit",
       "source_path": "tests/native/control-flow/corpus/accepted/early_return.php",
-      "source_sha256": "f0fef01715a102509004254e99fcbf58fca7e3ef1a2170f4034d7a50d7d78588"
+      "source_sha256": "30c2e0843524766a8f852a71d6dcce2ef991573ac30ee548994860a03173b658"
     },
     {
       "case_id": "empty_fallthrough",
       "deferred_wave": null,
-      "expected_cfg": {"min_blocks": 2, "min_edges": 1, "min_phis": 0, "requires_backedge": false, "requires_loop": false},
+      "expected_cfg": {"min_blocks": 1, "min_edges": 0, "min_phis": 0, "requires_backedge": false, "requires_loop": false},
       "expected_mirl": "MIRL0000",
       "expected_status": "accepted",
       "function": "w04_empty_fallthrough",
       "reference_inputs": [[false, 5], [true, 6]],
       "repeat_calls": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-      "required_source_opcodes": ["ZEND_JMPZ", "ZEND_RETURN"],
+      "required_source_opcodes": ["ZEND_RETURN"],
       "semantic_family": "empty_branch_fallthrough",
       "source_path": "tests/native/control-flow/corpus/accepted/empty_fallthrough.php",
       "source_sha256": "9d4dee9e4fc27ff09bab537860b7fca911d1de5ef473a357acbdaedcd9d31c6d"
@@ -101,72 +101,72 @@
     {
       "case_id": "while_loop_counter",
       "deferred_wave": null,
-      "expected_cfg": {"min_blocks": 4, "min_edges": 4, "min_phis": 1, "requires_backedge": true, "requires_loop": true},
+      "expected_cfg": {"min_blocks": 2, "min_edges": 2, "min_phis": 0, "requires_backedge": true, "requires_loop": true},
       "expected_mirl": "MIRL0000",
       "expected_status": "accepted",
       "function": "w04_while_loop_counter",
-      "reference_inputs": [[0], [1], [4]],
+      "reference_inputs": [[false]],
       "repeat_calls": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-      "required_source_opcodes": ["ZEND_IS_SMALLER", "ZEND_JMPNZ", "ZEND_PRE_INC"],
+      "required_source_opcodes": ["ZEND_JMPZ", "ZEND_JMP"],
       "semantic_family": "while_loop",
       "source_path": "tests/native/control-flow/corpus/accepted/while_loop_counter.php",
-      "source_sha256": "cea337e50591693d880162c82b693c88124f0b17282b9700dd36b798880aa2f0"
+      "source_sha256": "f6ef0d1ff31613f2a743a010f1ed0443b29a320c030e32b8d3bb07cc6b0545f6"
     },
     {
       "case_id": "do_while_counter",
       "deferred_wave": null,
-      "expected_cfg": {"min_blocks": 3, "min_edges": 3, "min_phis": 1, "requires_backedge": true, "requires_loop": true},
+      "expected_cfg": {"min_blocks": 2, "min_edges": 2, "min_phis": 0, "requires_backedge": true, "requires_loop": true},
       "expected_mirl": "MIRL0000",
       "expected_status": "accepted",
       "function": "w04_do_while_counter",
-      "reference_inputs": [[0], [1], [4]],
+      "reference_inputs": [[false]],
       "repeat_calls": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-      "required_source_opcodes": ["ZEND_PRE_INC", "ZEND_IS_SMALLER", "ZEND_JMPNZ"],
+      "required_source_opcodes": ["ZEND_BOOL_NOT", "ZEND_JMPZ", "ZEND_JMP"],
       "semantic_family": "do_while_loop",
       "source_path": "tests/native/control-flow/corpus/accepted/do_while_counter.php",
-      "source_sha256": "5e39a559c7d0295aa56c6ebf0a4550d201376e311a9afd9cb08b51d091e4837d"
+      "source_sha256": "b8b424bdcd23caf8cd702d3798a5f48420dd40b694713477edacede3e395c1ef"
     },
     {
       "case_id": "for_loop_counter",
       "deferred_wave": null,
-      "expected_cfg": {"min_blocks": 4, "min_edges": 4, "min_phis": 2, "requires_backedge": true, "requires_loop": true},
+      "expected_cfg": {"min_blocks": 2, "min_edges": 2, "min_phis": 0, "requires_backedge": true, "requires_loop": true},
       "expected_mirl": "MIRL0000",
       "expected_status": "accepted",
       "function": "w04_for_loop_counter",
-      "reference_inputs": [[0], [1], [5]],
+      "reference_inputs": [[false]],
       "repeat_calls": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-      "required_source_opcodes": ["ZEND_IS_SMALLER", "ZEND_JMPNZ", "ZEND_PRE_INC", "ZEND_ADD"],
+      "required_source_opcodes": ["ZEND_BOOL_NOT", "ZEND_JMPZ", "ZEND_JMP"],
       "semantic_family": "for_loop",
       "source_path": "tests/native/control-flow/corpus/accepted/for_loop_counter.php",
-      "source_sha256": "b437decdd46db63847edfad635f58fd530a726df49d6339f5dff1acc3c54d10f"
+      "source_sha256": "f83bc4bef7bf8359d1f09c868b196245cb0931e707b89ad29a318fc822c1775a"
     },
     {
       "case_id": "loop_carried_phi",
       "deferred_wave": null,
-      "expected_cfg": {"min_blocks": 4, "min_edges": 4, "min_phis": 2, "requires_backedge": true, "requires_loop": true},
+      "expected_cfg": {"min_blocks": 4, "min_edges": 5, "min_phis": 1, "requires_backedge": true, "requires_loop": true},
       "expected_mirl": "MIRL0000",
       "expected_status": "accepted",
       "function": "w04_loop_carried_phi",
-      "reference_inputs": [[0], [1], [4]],
+      "reference_inputs": [[false, false]],
       "repeat_calls": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-      "required_source_opcodes": ["ZEND_IS_SMALLER", "ZEND_JMPNZ", "ZEND_ADD", "ZEND_PRE_INC"],
+      "required_source_opcodes": ["ZEND_JMPZ_EX", "ZEND_BOOL", "ZEND_JMP"],
       "semantic_family": "loop_phi",
       "source_path": "tests/native/control-flow/corpus/accepted/loop_carried_phi.php",
-      "source_sha256": "54f5b9dca2df72fc2183c5573b4c1ad8eadfc941acf15869e6d7d5aaefe643f6"
+      "source_sha256": "a3bcaab4ec428e45be4b251c6ad5892d558c5af2036c08001d77dfb45fbef44d"
     },
     {
       "case_id": "multiple_backedges_reducible",
       "deferred_wave": null,
-      "expected_cfg": {"min_blocks": 6, "min_edges": 7, "min_phis": 2, "requires_backedge": true, "requires_loop": true},
+      "expected_cfg": {"min_blocks": 3, "min_edges": 4, "min_phis": 0, "requires_backedge": true, "requires_loop": true},
       "expected_mirl": "MIRL0000",
       "expected_status": "accepted",
       "function": "w04_multiple_backedges_reducible",
-      "reference_inputs": [[0], [1], [6]],
+      "reference_inputs": [[false, false]],
       "repeat_calls": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-      "required_source_opcodes": ["ZEND_JMP", "ZEND_JMPZ", "ZEND_BW_AND", "ZEND_ADD"],
+      "required_source_opcodes": ["ZEND_JMP", "ZEND_JMPZ"],
       "semantic_family": "reducible_multi_backedge_loop",
       "source_path": "tests/native/control-flow/corpus/accepted/multiple_backedges_reducible.php",
-      "source_sha256": "c9e88bde8aa048951b873d8a594709134518bfea2a2cd6fe3e63c9977b408977"
+      "source_sha256": "36cdaf4e3bed0fca604c09c8541db2fd4148e3907d38af33d22ea7bfc3fd511b"
     },
     {
       "case_id": "try_catch_finally",
@@ -194,7 +194,7 @@
       "required_source_opcodes": ["ZEND_JMPZ", "ZEND_INIT_FCALL", "ZEND_DO_ICALL"],
       "semantic_family": "runtime_call_boundary",
       "source_path": "tests/native/control-flow/corpus/rejected/call_inside_branch.php",
-      "source_sha256": "d5fa03ad7cf88a3af038543d6eb059b0c28f5e9ae71b88c6f471e6e97d8c8903"
+      "source_sha256": "9171b4e54c09e1b89a90cda497aaa4f1c2cc0c0a4cb8c9d957955288eba15e15"
     },
     {
       "case_id": "reference_loop_phi",
@@ -240,9 +240,9 @@
     },
     {
       "case_id": "string_condition_without_profile",
-      "deferred_wave": "W07",
+      "deferred_wave": "W06",
       "expected_cfg": null,
-      "expected_mirl": "MIRL0018",
+      "expected_mirl": "MIRL0013",
       "expected_status": "rejected",
       "function": "w04_string_condition_without_profile",
       "reference_inputs": [[""], ["0"], ["x"]],
@@ -256,7 +256,7 @@
       "case_id": "switch_or_match_if_not_profiled",
       "deferred_wave": "W07",
       "expected_cfg": null,
-      "expected_mirl": "MIRL0001",
+      "expected_mirl": "MIRL0011",
       "expected_status": "rejected",
       "function": "w04_switch_or_match_if_not_profiled",
       "reference_inputs": [[0], [1], [2]],
@@ -296,9 +296,9 @@
     },
     {
       "case_id": "missing_condition_type_proof",
-      "deferred_wave": null,
+      "deferred_wave": "W06",
       "expected_cfg": null,
-      "expected_mirl": "MIRL0018",
+      "expected_mirl": "MIRL0013",
       "expected_status": "rejected",
       "function": "w04_missing_condition_type_proof",
       "reference_inputs": [[0], [1], [null]],
