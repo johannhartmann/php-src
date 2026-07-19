@@ -1,11 +1,9 @@
 <?php
-function w04_loop_carried_phi(int $limit) {
-    $value = 1;
-    $counter = 0;
-    while ($counter < $limit) {
-        $value = $value + $counter;
-        $counter++;
+function w04_loop_carried_phi(bool $left, bool $right) {
+loop:
+    if ($left && $right) {
+        goto loop;
     }
-    return $value;
+    return 0;
 }
-echo w04_loop_carried_phi(0), ",", w04_loop_carried_phi(4), "\n";
+echo w04_loop_carried_phi(false, false), "\n";

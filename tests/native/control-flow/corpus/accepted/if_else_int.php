@@ -1,9 +1,9 @@
 <?php
-function w04_if_else_int(int $value) {
-    if ($value > 0) {
-        return $value + 1;
+function w04_if_else_int(bool $positive) {
+    if ($positive) {
+        return 1;
     } else {
-        return $value - 1;
+        return -1;
     }
 }
-echo w04_if_else_int(-2), ",", w04_if_else_int(3), "\n";
+echo w04_if_else_int(false), ",", w04_if_else_int(true), "\n";
