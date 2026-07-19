@@ -19,6 +19,9 @@
 	X(THROW, "throw", 8) \
 	X(UNREACHABLE, "unreachable", 9)
 
+#define ZEND_MIR_CALL_OPCODE_CATALOG(X) \
+	X(CALL_DIRECT_USER, "call_direct_user", 41)
+
 #define ZEND_MIR_SCALAR_OPCODE_CATALOG(X) \
 	X(I64_ADD_NO_OVERFLOW, "i64_add_no_overflow", 10) \
 	X(I64_SUB_NO_OVERFLOW, "i64_sub_no_overflow", 11) \
@@ -56,7 +59,13 @@
 typedef enum _zend_mir_opcode {
 	ZEND_MIR_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
 	ZEND_MIR_SCALAR_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
+	ZEND_MIR_CALL_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
+	/*
+	 * Keep the W03 scalar range boundary stable. W05 is modeling-only and
+	 * publishes its additive table boundary separately.
+	 */
 	ZEND_MIR_OPCODE_COUNT = 41,
+	ZEND_MIR_W05_OPCODE_COUNT = 42,
 	ZEND_MIR_OPCODE_INVALID = -1
 } zend_mir_opcode;
 #undef ZEND_MIR_OPCODE_ENUM
@@ -109,5 +118,9 @@ static inline bool zend_mir_opcode_is_terminator(zend_mir_opcode opcode)
 
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_COUNT < UINT32_MAX,
 	"opcode invalid value remains unique");
+ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_CALL_DIRECT_USER == ZEND_MIR_OPCODE_COUNT,
+	"W05 call opcode begins after the frozen W03 scalar range");
+ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W05_OPCODE_COUNT == ZEND_MIR_OPCODE_CALL_DIRECT_USER + 1,
+	"W05 call opcode has an additive table boundary");
 
 #endif /* ZEND_MIR_OPCODES_H */

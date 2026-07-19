@@ -38,6 +38,20 @@
 #define ZEND_MIR_W04_CONTRACT_VERSION \
 	((ZEND_MIR_CONTRACT_VERSION_MAJOR << 16) | ZEND_MIR_W04_CONTRACT_VERSION_MINOR)
 
+/*
+ * W05 adds pointer-free call-model tables without changing W01-W04 records.
+ * Minor 1.5 distinguishes final-module guarantees from the prerequisite W04
+ * receipt and gives unlowered callees a stable declaration identity. Minor
+ * 1.6 adds an original-opcode proof table to the process-local call source
+ * view so W03 projection cannot erase the W05 call-sequence proof. Minor 1.7
+ * carries compiler-preserved named-argument syntax into the pointer-free call
+ * source view even when Zend normalizes the argument position. Minor 1.8 adds
+ * the exact mapped scalar result ID to each immutable MIR call site.
+ */
+#define ZEND_MIR_W05_CONTRACT_VERSION_MINOR UINT32_C(8)
+#define ZEND_MIR_W05_CONTRACT_VERSION \
+	((ZEND_MIR_CONTRACT_VERSION_MAJOR << 16) | ZEND_MIR_W05_CONTRACT_VERSION_MINOR)
+
 #define ZEND_MIR_ID_INVALID UINT32_C(0xffffffff)
 #define ZEND_MIR_ID_MAX UINT32_C(0xfffffffe)
 
@@ -61,6 +75,14 @@ typedef uint32_t zend_mir_symbol_id;
 typedef uint32_t zend_mir_source_block_id;
 typedef uint32_t zend_mir_source_edge_id;
 typedef uint32_t zend_mir_source_phi_id;
+typedef uint32_t zend_mir_call_site_id;
+typedef uint32_t zend_mir_call_argument_id;
+typedef uint32_t zend_mir_call_target_id;
+typedef uint32_t zend_mir_call_continuation_id;
+typedef uint32_t zend_mir_call_capability_receipt_id;
+typedef uint32_t zend_mir_source_call_site_id;
+typedef uint32_t zend_mir_source_call_argument_id;
+typedef uint32_t zend_mir_source_call_target_id;
 
 static inline bool zend_mir_id_is_valid(uint32_t id)
 {
@@ -97,6 +119,10 @@ ZEND_MIR_STATIC_ASSERT(sizeof(zend_mir_source_edge_id) == 4,
 	"source edge IDs are 32-bit");
 ZEND_MIR_STATIC_ASSERT(sizeof(zend_mir_source_phi_id) == 4,
 	"source PHI IDs are 32-bit");
+ZEND_MIR_STATIC_ASSERT(sizeof(zend_mir_call_site_id) == 4,
+	"call-site IDs are 32-bit");
+ZEND_MIR_STATIC_ASSERT(sizeof(zend_mir_source_call_site_id) == 4,
+	"source call-site IDs are 32-bit");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_VALUE_SYNTHETIC_MAX < ZEND_MIR_ID_INVALID,
 	"invalid value ID is outside both value namespaces");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_VALUE_ORIGINAL_MAX + UINT32_C(1) == ZEND_MIR_VALUE_SYNTHETIC_BIT,

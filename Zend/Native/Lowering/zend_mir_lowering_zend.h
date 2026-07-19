@@ -2,6 +2,8 @@
 #define ZEND_MIR_LOWERING_ZEND_H
 
 #include "../MIR/zend_mir_control_flow.h"
+#include "../MIR/zend_mir_call.h"
+#include "../Calls/Contracts/zend_mir_call_plan.h"
 #include "zend_mir_lowering.h"
 
 /*
@@ -12,5 +14,18 @@ zend_mir_lowering_result zend_mir_lower_w04_zend_source(
 	zend_mir_lowering_context *context,
 	zend_mir_mutator *mutator,
 	zend_mir_control_flow_map *map);
+
+/*
+ * Internal modeling-only W05 entry. The complete immutable plan is validated
+ * before either mutator is called. Resolver and source views remain
+ * process-local through named call verification.
+ */
+zend_mir_w05_lowering_result zend_mir_lower_w05_zend_source(
+	zend_mir_lowering_context *context,
+	zend_mir_mutator *mutator,
+	zend_mir_control_flow_map *control_flow_map,
+	const zend_mir_source_call_view *source_calls,
+	const zend_mir_source_call_target_resolver *resolver,
+	zend_mir_call_mutator *call_mutator);
 
 #endif /* ZEND_MIR_LOWERING_ZEND_H */

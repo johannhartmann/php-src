@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "active_opcode_count": {"minimum": 1, "type": "integer"},
+    "call_adjacent_opcode_count": {"minimum": 1, "type": "integer"},
+    "format_version": {"const": 1},
+    "mir_contract_version": {"const": "1.7"},
+    "opcodes": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "classification": {"enum": ["inherited", "conditional", "deferred"]},
+          "deferred_wave": {"type": ["string", "null"]},
+          "mir_opcodes": {"items": {"type": "string"}, "type": "array"},
+          "number": {"minimum": 0, "type": "integer"},
+          "opcode": {"pattern": "^ZEND_[A-Z0-9_]+$", "type": "string"},
+          "proofs": {"items": {"type": "string"}, "type": "array"},
+          "rationale": {"minLength": 1, "type": "string"},
+          "source_refs": {"items": {"type": "object"}, "minItems": 1, "type": "array"},
+          "w04_classification": {"enum": ["required", "conditional", "deferred"]},
+          "w04_deferred_wave": {"type": ["string", "null"]}
+        },
+        "required": ["classification", "deferred_wave", "mir_opcodes", "number", "opcode", "proofs", "rationale", "source_refs", "w04_classification", "w04_deferred_wave"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "proof_catalog": {"items": {"type": "string"}, "type": "array"},
+    "reserved_opcode_numbers": {"items": {"minimum": 0, "type": "integer"}, "type": "array"},
+    "sources": {"type": "object"},
+    "unresolved_w05_count": {"const": 0}
+  },
+  "required": ["active_opcode_count", "call_adjacent_opcode_count", "format_version", "mir_contract_version", "opcodes", "proof_catalog", "reserved_opcode_numbers", "sources", "unresolved_w05_count"],
+  "type": "object"
+}
