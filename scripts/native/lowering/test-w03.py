@@ -258,16 +258,80 @@ def stable_write(document: dict[str, Any], destination: Path) -> None:
     os.replace(temporary, destination)
 
 
+def self_test() -> None:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "LANG": "C",
+            "LC_ALL": "C",
+            "TZ": "UTC",
+            "SOURCE_DATE_EPOCH": "0",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+    )
+    run(
+        [
+            sys.executable,
+            str(DIFFERENTIAL_PATH.relative_to(ROOT)),
+            "--self-test",
+        ],
+        environment,
+        timeout=60,
+    )
+    with tempfile.TemporaryDirectory(prefix="w03-gate-selftest-") as directory:
+        output = Path(directory) / "result.json"
+        document = {
+            "axes": list(ARENA_CHUNK_SIZES),
+            "modes": list(OPCACHE_MODES),
+            "schema_version": 1,
+            "status": "pass",
+        }
+        stable_write(document, output)
+        first = output.read_bytes()
+        stable_write(document, output)
+        if output.read_bytes() != first:
+            raise W03TestError("stable result writer is nondeterministic")
+        if output.with_name(output.name + ".tmp").exists():
+            raise W03TestError("stable result writer left a temporary file")
+    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    cases = manifest.get("cases")
+    if not isinstance(cases, list) or not cases:
+        raise W03TestError("W03 corpus manifest has no cases")
+    case_ids = [case.get("case_id") for case in cases]
+    if any(not isinstance(case_id, str) or not case_id for case_id in case_ids):
+        raise W03TestError("W03 corpus contains an invalid case ID")
+    if len(case_ids) != len(set(case_ids)):
+        raise W03TestError("W03 corpus contains duplicate case IDs")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--reference-php", required=True)
-    parser.add_argument("--candidate-php", required=True)
+    parser.add_argument("--reference-php")
+    parser.add_argument("--candidate-php")
     parser.add_argument(
         "--sanitizer", choices=("address", "undefined"), default=None
     )
     parser.add_argument("--json-out", type=Path)
+    parser.add_argument("--self-test", action="store_true")
     arguments = parser.parse_args()
     try:
+        if arguments.self_test:
+            if (
+                arguments.reference_php is not None
+                or arguments.candidate_php is not None
+                or arguments.sanitizer is not None
+                or arguments.json_out is not None
+            ):
+                raise W03TestError(
+                    "--self-test does not accept PHP, sanitizer, or output arguments"
+                )
+            self_test()
+            print("W03 hard-gate harness self-test passed")
+            return 0
+        if arguments.reference_php is None or arguments.candidate_php is None:
+            raise W03TestError(
+                "--reference-php and --candidate-php are required"
+            )
         reference = canonical_binary(arguments.reference_php, "reference")
         candidate = canonical_binary(arguments.candidate_php, "candidate")
         if os.path.samefile(reference, candidate):

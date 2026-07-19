@@ -31,6 +31,8 @@ Repository-wide and path-specific agent rules live in:
 12. [ZNMIR text, diagnostics, and verification](adr/0012-znmir-text-diagnostics-verification.md)
 13. [Proof-closed scalar lowering](adr/0013-w03-proof-closed-scalar-profile.md)
 14. [Deterministic lowering boundary](adr/0014-lowering-source-view-and-registry.md)
+15. [W04 control-flow source contract](adr/0015-w04-control-flow-source-contract.md)
+16. [Reducible CFGs and edge statepoints](adr/0016-w04-reducible-cfg-and-edge-statepoints.md)
 
 ## Delivery contracts
 
@@ -40,6 +42,7 @@ Repository-wide and path-specific agent rules live in:
 - [Native test-command contract](test-command-contract.md)
 - [Native frame semantics](semantics/frames/README.md)
 - [W03 lowering profile](lowering/README.md)
+- [W04 control-flow contracts](control-flow/contracts/source-cfg.md)
 
 The generated wave status subtree, `docs/native-engine/waves/`, is owned by the
 wave-gate work and is intentionally outside W00-A.

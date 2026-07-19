@@ -1,0 +1,92 @@
+{
+  "format_version": 1,
+  "wave": "W04",
+  "specialist_tasks": [
+    {
+      "task_id": "W04-A-production-control-flow",
+      "role": "production control-flow specialist",
+      "title": "Production source-backed control-flow lowering",
+      "owned_paths": [
+        "Zend/Native/Lowering/Core/**",
+        "Zend/Native/Lowering/Frontend/**",
+        "Zend/Native/Lowering/Scalar/**",
+        "Zend/Native/Lowering/StraightLine/**",
+        "Zend/Native/Lowering/ControlFlow/**",
+        "Zend/Native/MIR/ControlFlow/**",
+        "tests/native/control-flow/unit/**"
+      ]
+    },
+    {
+      "task_id": "W04-B-control-flow-evidence",
+      "role": "control-flow evidence specialist",
+      "title": "Control-flow bridge, corpus, fuzz, and differential evidence",
+      "owned_paths": [
+        "ext/native_mir_test/native_mir_test.c",
+        "ext/native_mir_test/native_mir_test.stub.php",
+        "scripts/native/control-flow/dump-w04.py",
+        "scripts/native/control-flow/run-w04-differential.py",
+        "scripts/native/profiles/w04-*.env",
+        "tests/native/control-flow/bridge/**",
+        "tests/native/control-flow/corpus/**",
+        "tests/native/control-flow/fuzz/**"
+      ]
+    }
+  ],
+  "integration_task": {
+    "task_id": "W04-integration-gate",
+    "role": "integration agent",
+    "title": "W04 integration, build wiring, CI, and hard gate",
+    "owned_paths": [
+      "ext/native_mir_test/config.m4",
+      ".github/workflows/native-w04.yml",
+      "scripts/native/control-flow/validate-w04.py",
+      "scripts/native/control-flow/test-w04.py",
+      "scripts/native/control-flow/record-w04-results.py",
+      "docs/native-engine/control-flow/README.md",
+      "docs/native-engine/control-flow/w04-coverage-report.json",
+      "tests/native/control-flow/integration/**",
+      "docs/native-engine/waves/status.md"
+    ]
+  },
+  "contract_reserved_paths": [
+    "Zend/Native/MIR/Core/zend_mir_module_internal.h",
+    "Zend/Native/MIR/Core/zend_mir_module.c",
+    "Zend/Native/MIR/Core/zend_mir_view.c",
+    "Zend/Native/Lowering/AGENTS.md",
+    "Zend/Native/Lowering/zend_mir_lowering.h",
+    "Zend/Native/Lowering/zend_mir_lowering_source.h",
+    "Zend/Native/Lowering/zend_mir_lowering_diagnostic.h",
+    "Zend/Native/Lowering/zend_mir_control_flow.h",
+    "Zend/Native/Lowering/zend_mir_lowering_zend.h",
+    "Zend/Native/MIR/zend_mir_ids.h",
+    "Zend/Native/MIR/zend_mir_control_flow.h",
+    "Zend/Native/MIR/Verify/zend_mir_verify_control_flow.h",
+    "docs/native-engine/README.md",
+    "docs/native-engine/adr/0015-w04-control-flow-source-contract.md",
+    "docs/native-engine/adr/0016-w04-reducible-cfg-and-edge-statepoints.md",
+    "docs/native-engine/control-flow/contracts/**",
+    "docs/native-engine/control-flow/w04-opcode-profile.json",
+    "docs/native-engine/control-flow/w04-opcode-profile.schema.json",
+    "docs/native-engine/control-flow/w04-ownership.json",
+    "docs/native-engine/control-flow/w04-ownership.schema.json",
+    "docs/native-engine/control-flow/w04-source-files.json",
+    "docs/native-engine/control-flow/w04-source-files.schema.json",
+    "docs/native-engine/control-flow/w04-blockers.json",
+    "docs/native-engine/control-flow/w04-blockers.schema.json",
+    "docs/native-engine/mir/w02-coverage-report.json",
+    "docs/native-engine/lowering/w03-coverage-report.json",
+    "scripts/native/mir/validate-w02.py",
+    "scripts/native/lowering/validate-w03.py",
+    "scripts/native/lowering/test-w03.py",
+    "scripts/native/control-flow/generate-w04-profile.py",
+    "scripts/native/control-flow/check-contract.py",
+    "scripts/native/control-flow/check-ownership.py",
+    "tests/native/mir/core/test_core.c",
+    "tests/native/lowering/integration/test_w03_gate.py",
+    "tests/native/control-flow/contracts/**",
+    "docs/native-engine/waves/waves.json",
+    "docs/native-engine/waves/w04-cross-track-contract.md",
+    "docs/native-engine/waves/status.md",
+    "docs/native-engine/waves/tests/test_wave_gate.py"
+  ]
+}
