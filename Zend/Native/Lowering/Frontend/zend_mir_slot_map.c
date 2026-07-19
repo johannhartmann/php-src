@@ -16,28 +16,6 @@ static bool zend_mir_frontend_total_physical_slots(
 	return true;
 }
 
-static bool zend_mir_frontend_dead_ssa_has_physical_slot(
-	const zend_op_array *op_array, const zend_ssa *ssa, uint32_t index)
-{
-	uint32_t physical_count;
-	const zend_ssa_var *variable;
-
-	if (op_array == NULL || ssa == NULL
-			|| index >= (uint32_t) ssa->vars_count
-			|| !zend_mir_frontend_total_physical_slots(
-				op_array, &physical_count)) {
-		return false;
-	}
-	variable = &ssa->vars[index];
-	return variable->var >= 0
-		&& (uint32_t) variable->var < physical_count
-		&& variable->definition == -1
-		&& variable->definition_phi == NULL
-		&& variable->use_chain == -1
-		&& variable->phi_use_chain == NULL
-		&& variable->sym_use_chain == NULL;
-}
-
 bool zend_mir_frontend_decode_slot(
 	const zend_op_array *op_array,
 	const znode_op *node,
@@ -227,9 +205,7 @@ zend_mir_lowering_status zend_mir_frontend_validate_slots(
 	*slot_count = cv_count + op_array->T * 2;
 	for (i = 0; i < (uint32_t) ssa->vars_count; i++) {
 		if (!zend_mir_frontend_ssa_slot(
-				op_array, ssa, i, &ignored_slot, &ignored_kind)
-				&& !zend_mir_frontend_dead_ssa_has_physical_slot(
-					op_array, ssa, i)) {
+				op_array, ssa, i, &ignored_slot, &ignored_kind)) {
 			zend_mir_frontend_set_diagnostic(
 				diagnostic, ZEND_MIR_LOWERING_REJECTED,
 				ZEND_MIRL_INVALID_SOURCE, op_array_id, ZEND_MIR_ID_INVALID,

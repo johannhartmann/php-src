@@ -1612,8 +1612,8 @@ zend_mir_w05_lowering_result zend_mir_lower_w05_zend_op_array(
 		return zend_mir_w05_integration_result(
 			status, frontend_diagnostic.code);
 	}
-	status = zend_mir_zend_source_init_w04(
-		&integration.source, source_op_array, source_ssa,
+	status = zend_mir_zend_source_init_w05_projection(
+		&integration.source, source_op_array, source_ssa, op_array, ssa,
 		ZEND_MIR_W03_OP_ARRAY_ID, ZEND_MIR_W03_FILE_SYMBOL_ID,
 		&frontend_diagnostic);
 	if (status == ZEND_MIR_LOWERING_SUCCESS) {
