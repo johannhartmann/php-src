@@ -47,6 +47,7 @@ struct _zend_mir_w03_integration {
 	zval *projected_literals;
 	zend_ssa_op *projected_ssa_ops;
 	zend_ssa_var *projected_ssa_vars;
+	zend_ssa_var_info *projected_ssa_var_info;
 	zend_mir_zend_source source;
 	zend_mir_lowering_source_view source_view;
 	zend_mir_lowering_source_view provider_source_view;
@@ -249,10 +250,15 @@ static bool zend_mir_w03_prepare_source(
 		op_array->last, sizeof(*integration->projected_ssa_ops));
 	integration->projected_ssa_vars = zend_mir_w03_calloc(
 		(uint32_t) ssa->vars_count, sizeof(*integration->projected_ssa_vars));
+	integration->projected_ssa_var_info = zend_mir_w03_calloc(
+		(uint32_t) ssa->vars_count,
+		sizeof(*integration->projected_ssa_var_info));
 	if (integration->projected_opcodes == NULL
 			|| integration->projected_ssa_ops == NULL
 			|| (ssa->vars_count != 0
-				&& integration->projected_ssa_vars == NULL)) {
+				&& (integration->projected_ssa_vars == NULL
+					|| integration->projected_ssa_var_info == NULL
+					|| ssa->var_info == NULL))) {
 		return false;
 	}
 	memcpy(
@@ -265,6 +271,10 @@ static bool zend_mir_w03_prepare_source(
 		memcpy(
 			integration->projected_ssa_vars, ssa->vars,
 			(size_t) ssa->vars_count * sizeof(*integration->projected_ssa_vars));
+		memcpy(
+			integration->projected_ssa_var_info, ssa->var_info,
+			(size_t) ssa->vars_count
+				* sizeof(*integration->projected_ssa_var_info));
 	}
 	integration->projected_op_array = *op_array;
 	integration->projected_op_array.opcodes = integration->projected_opcodes;
@@ -278,6 +288,8 @@ static bool zend_mir_w03_prepare_source(
 	integration->projected_ssa = *ssa;
 	integration->projected_ssa.ops = integration->projected_ssa_ops;
 	integration->projected_ssa.vars = integration->projected_ssa_vars;
+	integration->projected_ssa.var_info =
+		integration->projected_ssa_var_info;
 
 	for (index = 0; index < op_array->last; index++) {
 		const zend_op *original_opline = &op_array->opcodes[index];
@@ -1392,6 +1404,7 @@ static void zend_mir_w03_release(zend_mir_w03_integration *integration)
 	free(integration->logic_proofs);
 	free(integration->logic_bindings);
 	free(integration->facts);
+	free(integration->projected_ssa_var_info);
 	free(integration->projected_ssa_vars);
 	free(integration->projected_ssa_ops);
 	free(integration->projected_opcodes);
@@ -1590,6 +1603,14 @@ zend_mir_w05_lowering_result zend_mir_lower_w05_zend_op_array(
 		zend_mir_w03_release(&integration);
 		return zend_mir_w05_integration_result(
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
+	}
+	status = zend_mir_frontend_project_w05_result_facts(
+		script, op_array, ssa, &integration.projected_ssa,
+		&frontend_diagnostic);
+	if (status != ZEND_MIR_LOWERING_SUCCESS) {
+		zend_mir_w03_release(&integration);
+		return zend_mir_w05_integration_result(
+			status, frontend_diagnostic.code);
 	}
 	status = zend_mir_zend_source_init_w04(
 		&integration.source, source_op_array, source_ssa,

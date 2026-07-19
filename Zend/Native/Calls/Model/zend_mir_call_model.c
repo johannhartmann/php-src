@@ -15,6 +15,7 @@ typedef struct _zend_mir_w05_plan {
 	zend_mir_source_call_target_ref *targets;
 	zend_mir_source_call_argument_ref *arguments;
 	zend_mir_value_id *values;
+	zend_mir_value_id *results;
 	zend_mir_block_id *blocks;
 	uint32_t site_count;
 	uint32_t target_count;
@@ -105,6 +106,7 @@ static void zend_mir_w05_plan_release(zend_mir_w05_plan *plan)
 	free(plan->targets);
 	free(plan->arguments);
 	free(plan->values);
+	free(plan->results);
 	free(plan->blocks);
 	memset(plan, 0, sizeof(*plan));
 }
@@ -155,6 +157,41 @@ static bool zend_mir_w05_argument_value(
 	} else {
 		return false;
 	}
+	if (!zend_mir_lowering_context_value_fact(context, value, &fact)
+			|| fact.value_id != value
+			|| !zend_mir_scalar_type_is_exact(fact.exact_type)
+			|| (fact.flags & ZEND_MIR_VALUE_FACT_NON_REFCOUNTED) == 0) {
+		return false;
+	}
+	*out = value;
+	return true;
+}
+
+static bool zend_mir_w05_result_value(
+	const zend_mir_lowering_context *context,
+	const zend_mir_source_call_site_ref *site,
+	zend_mir_value_id *out)
+{
+	zend_mir_value_fact_ref fact;
+	zend_mir_value_id value;
+	uint32_t result_flags;
+
+	result_flags = site->flags
+		& (ZEND_MIR_SOURCE_CALL_SITE_RESULT_UNUSED
+			| ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR);
+	if (result_flags == ZEND_MIR_SOURCE_CALL_SITE_RESULT_UNUSED) {
+		if (zend_mir_id_is_valid(site->result_ssa_variable_id)) {
+			return false;
+		}
+		*out = ZEND_MIR_ID_INVALID;
+		return true;
+	}
+	if (result_flags != ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR
+			|| !zend_mir_id_is_valid(site->result_ssa_variable_id)) {
+		return false;
+	}
+	value = zend_mir_value_from_original_ssa(
+		site->result_ssa_variable_id);
 	if (!zend_mir_lowering_context_value_fact(context, value, &fact)
 			|| fact.value_id != value
 			|| !zend_mir_scalar_type_is_exact(fact.exact_type)
@@ -434,12 +471,14 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 		plan->argument_count, sizeof(*plan->arguments));
 	plan->values = zend_mir_w05_calloc(
 		plan->argument_count, sizeof(*plan->values));
+	plan->results = zend_mir_w05_calloc(
+		plan->site_count, sizeof(*plan->results));
 	plan->blocks = zend_mir_w05_calloc(
 		plan->site_count, sizeof(*plan->blocks));
 	if (plan->entries == NULL || plan->sites == NULL || plan->targets == NULL
 			|| (plan->argument_count != 0
 				&& (plan->arguments == NULL || plan->values == NULL))
-			|| plan->blocks == NULL) {
+			|| plan->results == NULL || plan->blocks == NULL) {
 		return ZEND_MIRL_W05_CALL_PLAN_FAILED;
 	}
 	for (index = 0; index < plan->argument_count; index++) {
@@ -470,7 +509,12 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 				|| resolved.kind != ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
 				|| resolved.variadic || resolved.returns_by_reference
 				|| resolved.by_ref_mask != 0
-				|| resolved.num_args != resolved.required_num_args) {
+				|| resolved.num_args != resolved.required_num_args
+				|| (resolved.function_symbol_id
+						== context->function_symbol_id
+					&& context->zend_source != NULL
+					&& resolved.op_array_id
+						== context->zend_source->op_array_id)) {
 			return ZEND_MIRL_W05_UNSUPPORTED_TARGET;
 		}
 		if (resolved.num_args > 64) {
@@ -491,8 +535,15 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 		if ((site->flags & ZEND_MIR_SOURCE_CALL_SITE_PROTECTED) != 0) {
 			return ZEND_MIRL_W05_PROTECTED_CALL;
 		}
-		if ((site->flags & ZEND_MIR_SOURCE_CALL_SITE_RESULT_UNUSED) == 0
-				|| zend_mir_id_is_valid(site->result_ssa_variable_id)) {
+		if ((site->flags
+				& (ZEND_MIR_SOURCE_CALL_SITE_NESTED
+					| ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR))
+				== (ZEND_MIR_SOURCE_CALL_SITE_NESTED
+					| ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR)) {
+			return ZEND_MIRL_W05_UNSUPPORTED_RESULT;
+		}
+		if (!zend_mir_w05_result_value(
+				context, site, &plan->results[index])) {
 			return ZEND_MIRL_W05_UNSUPPORTED_RESULT;
 		}
 		if (site->argument_span.count
@@ -518,6 +569,20 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 		entry->decision = ZEND_MIR_CALL_PLAN_ACCEPTED;
 		entry->diagnostic_code = ZEND_MIRL_OK;
 		entry->argument_span = site->argument_span;
+	}
+	for (index = 0; index < plan->argument_count; index++) {
+		uint32_t site_index;
+
+		if (!zend_mir_id_is_valid(
+				plan->arguments[index].value_ssa_variable_id)) {
+			continue;
+		}
+		for (site_index = 0; site_index < plan->site_count; site_index++) {
+			if (plan->sites[site_index].result_ssa_variable_id
+					== plan->arguments[index].value_ssa_variable_id) {
+				return ZEND_MIRL_W05_UNSUPPORTED_RESULT;
+			}
+		}
 	}
 	{
 		zend_mir_lowering_diagnostic_code grammar =
@@ -610,6 +675,7 @@ static bool zend_mir_w05_emit_calls(
 		site.instruction_id = source->do_opline_index;
 		site.target_id = source->target_id;
 		site.arguments = source->argument_span;
+		site.result_id = plan->results[index];
 		site.caller_frame.frame_state_id = ZEND_MIR_ID_INVALID;
 		site.caller_frame.function_id = context->function_id;
 		site.caller_frame.function_symbol_id = context->function_symbol_id;
@@ -666,6 +732,73 @@ static bool zend_mir_w05_verify_emit(zend_mir_diagnostic_sink *diagnostics,
 static bool zend_mir_w05_span_equal(zend_mir_span left, zend_mir_span right)
 {
 	return left.offset == right.offset && left.count == right.count;
+}
+
+static bool zend_mir_w05_verify_scalar_result(
+	const zend_mir_view *view, zend_mir_value_id value_id,
+	zend_mir_representation *representation_out)
+{
+	zend_mir_value_record value;
+	zend_mir_value_fact_ref fact;
+	bool found_value = false;
+	bool found_fact = false;
+	uint32_t index;
+
+	for (index = 0; index < view->value_count(view->context); index++) {
+		if (!view->value_at(view->context, index, &value)) {
+			return false;
+		}
+		if (value.id == value_id) {
+			found_value = true;
+			break;
+		}
+	}
+	for (index = 0; index < view->value_fact_count(view->context); index++) {
+		if (!view->value_fact_at(view->context, index, &fact)) {
+			return false;
+		}
+		if (fact.value_id == value_id) {
+			found_fact = true;
+			break;
+		}
+	}
+	if (!found_value || !found_fact
+			|| !zend_mir_scalar_type_is_exact(fact.exact_type)
+			|| (fact.flags & ZEND_MIR_VALUE_FACT_NON_REFCOUNTED) == 0) {
+		return false;
+	}
+	*representation_out = value.representation;
+	return true;
+}
+
+static bool zend_mir_w05_verify_source_order(
+	const zend_mir_view *view,
+	const zend_mir_instruction_record *call,
+	uint32_t do_opline_index)
+{
+	uint32_t index;
+
+	if (call->source_position_id != do_opline_index) {
+		return false;
+	}
+	for (index = 0; index < view->instruction_count(view->context); index++) {
+		zend_mir_instruction_record candidate;
+		if (!view->instruction_at(view->context, index, &candidate)) {
+			return false;
+		}
+		if (candidate.block_id != call->block_id
+				|| !zend_mir_id_is_valid(candidate.source_position_id)
+				|| candidate.id == call->id) {
+			continue;
+		}
+		if ((candidate.id < call->id
+					&& candidate.source_position_id > do_opline_index)
+				|| (candidate.id > call->id
+					&& candidate.source_position_id < do_opline_index)) {
+			return false;
+		}
+	}
+	return true;
 }
 
 static bool zend_mir_w05_verify_frame_shape(
@@ -742,6 +875,8 @@ bool zend_mir_verify_w05_calls(
 			|| view->instruction_at == NULL
 			|| view->instruction_operand_count == NULL
 			|| view->instruction_operand_at == NULL
+			|| view->value_count == NULL || view->value_at == NULL
+			|| view->value_fact_count == NULL || view->value_fact_at == NULL
 			|| view->frame_state_count == NULL
 			|| view->frame_state_at == NULL
 			|| view->frame_slot_count == NULL
@@ -803,9 +938,28 @@ bool zend_mir_verify_w05_calls(
 		zend_mir_function_record caller_function;
 		zend_mir_frame_state_ref caller_frame;
 		zend_mir_call_continuation_ref normal_continuation;
+		zend_mir_value_id expected_result;
+		zend_mir_representation expected_representation;
+		uint32_t result_flags;
 		uint32_t operand;
-		if (!source_calls->call_site_at(source_calls->context, index, &source)
-				|| !calls->call_site_at(calls->context, index, &site)
+		if (!source_calls->call_site_at(
+				source_calls->context, index, &source)) {
+			zend_mir_w05_verify_emit(diagnostics,
+				ZEND_MIR_VERIFY_W05_SITE_MISMATCH,
+				ZEND_MIRV_TOKEN_W05_SITE_MISMATCH);
+			return false;
+		}
+		result_flags = source.flags
+			& (ZEND_MIR_SOURCE_CALL_SITE_RESULT_UNUSED
+				| ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR);
+		expected_result =
+			result_flags == ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR
+				&& zend_mir_id_is_valid(source.result_ssa_variable_id)
+			? zend_mir_value_from_original_ssa(
+				source.result_ssa_variable_id)
+			: ZEND_MIR_ID_INVALID;
+		expected_representation = ZEND_MIR_REPRESENTATION_VOID;
+		if (!calls->call_site_at(calls->context, index, &site)
 				|| source.target_id >= source_target_count
 				|| !source_calls->call_target_at(
 					source_calls->context, source.target_id, &source_target)
@@ -829,8 +983,26 @@ bool zend_mir_verify_w05_calls(
 				|| !view->instruction_at(view->context, site.instruction_id,
 					&instruction)
 				|| instruction.opcode != ZEND_MIR_OPCODE_CALL_DIRECT_USER
-				|| instruction.result_id != ZEND_MIR_ID_INVALID
-				|| instruction.representation != ZEND_MIR_REPRESENTATION_VOID
+				|| (result_flags
+						!= ZEND_MIR_SOURCE_CALL_SITE_RESULT_UNUSED
+					&& result_flags
+						!= ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR)
+				|| (result_flags
+						== ZEND_MIR_SOURCE_CALL_SITE_RESULT_UNUSED
+					&& zend_mir_id_is_valid(
+						source.result_ssa_variable_id))
+				|| (result_flags
+						== ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR
+					&& (!zend_mir_id_is_valid(
+							source.result_ssa_variable_id)
+						|| !zend_mir_w05_verify_scalar_result(
+							view, expected_result,
+							&expected_representation)))
+				|| site.result_id != expected_result
+				|| instruction.result_id != expected_result
+				|| instruction.representation != expected_representation
+				|| !zend_mir_w05_verify_source_order(
+					view, &instruction, source.do_opline_index)
 				|| view->instruction_operand_count(
 					view->context, instruction.id) != site.arguments.count
 				|| !calls->call_continuation_at(calls->context,
@@ -903,6 +1075,10 @@ bool zend_mir_verify_w05_calls(
 					!= source_target.op_array_id
 				|| site.callee_entry_frame.function_symbol_id
 					!= source_target.function_symbol_id
+				|| (site.caller_frame.function_symbol_id
+						== site.callee_entry_frame.function_symbol_id
+					&& site.caller_frame.op_array_id
+						== site.callee_entry_frame.op_array_id)
 				|| site.caller_frame.function_id
 					>= view->function_count(view->context)
 				|| !view->function_at(
