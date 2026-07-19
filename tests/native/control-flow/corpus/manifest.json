@@ -143,16 +143,16 @@
     {
       "case_id": "loop_carried_phi",
       "deferred_wave": null,
-      "expected_cfg": {"min_blocks": 4, "min_edges": 5, "min_phis": 1, "requires_backedge": true, "requires_loop": true},
+      "expected_cfg": {"min_blocks": 6, "min_edges": 7, "min_phis": 1, "requires_backedge": true, "requires_loop": true},
       "expected_mirl": "MIRL0000",
       "expected_status": "accepted",
       "function": "w04_loop_carried_phi",
-      "reference_inputs": [[false, false]],
+      "reference_inputs": [[false, false, false]],
       "repeat_calls": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-      "required_source_opcodes": ["ZEND_JMPZ_EX", "ZEND_BOOL", "ZEND_JMP"],
+      "required_source_opcodes": ["ZEND_JMPZ", "ZEND_JMPZ_EX", "ZEND_BOOL", "ZEND_JMP"],
       "semantic_family": "loop_phi",
       "source_path": "tests/native/control-flow/corpus/accepted/loop_carried_phi.php",
-      "source_sha256": "a3bcaab4ec428e45be4b251c6ad5892d558c5af2036c08001d77dfb45fbef44d"
+      "source_sha256": "d3db8059036305f72bdcf8b158fc3b943859f9f230c7ee958fecd253de264098"
     },
     {
       "case_id": "multiple_backedges_reducible",
@@ -203,12 +203,12 @@
       "expected_mirl": "MIRL0013",
       "expected_status": "rejected",
       "function": "w04_reference_loop_phi",
-      "reference_inputs": [[[1, 2]], [[]]],
+      "reference_inputs": [[[1, 2], false], [[], false]],
       "repeat_calls": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-      "required_source_opcodes": ["ZEND_FE_RESET_RW", "ZEND_FE_FETCH_RW", "ZEND_ASSIGN_REF"],
+      "required_source_opcodes": ["ZEND_JMPZ", "ZEND_JMP"],
       "semantic_family": "reference_loop_phi",
       "source_path": "tests/native/control-flow/corpus/rejected/reference_loop_phi.php",
-      "source_sha256": "81284a0e73dfae9b0e3106117ab021b7663a53726656b296817de483924a7588"
+      "source_sha256": "c8b69b2a3889d962a60378af055438a2ad91f9c037ca30ea14d464cf448cb361"
     },
     {
       "case_id": "array_condition",

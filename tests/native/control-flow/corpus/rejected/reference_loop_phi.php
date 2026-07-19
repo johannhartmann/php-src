@@ -1,12 +1,10 @@
 <?php
-function w04_reference_loop_phi(array &$values) {
-    $total = 0;
-    foreach ($values as &$value) {
-        $value++;
-        $total += $value;
+function w04_reference_loop_phi(array &$values, bool $repeat) {
+loop:
+    if ($repeat) {
+        goto loop;
     }
-    unset($value);
-    return $total;
+    return 0;
 }
 $values = [1, 2];
-echo w04_reference_loop_phi($values), "\n";
+echo w04_reference_loop_phi($values, false), "\n";
