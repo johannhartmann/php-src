@@ -1,0 +1,469 @@
+{
+  "format_version": 1,
+  "reclassifications": [
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 59,
+      "opcode": "ZEND_INIT_FCALL_BY_NAME",
+      "rationale": "By-name target resolution.",
+      "to_classification": "deferred",
+      "to_wave": "W10"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 60,
+      "opcode": "ZEND_DO_FCALL",
+      "rationale": "Accepted only as a fragment of a fully planned exact direct same-script user-call sequence; never published independently.",
+      "to_classification": "conditional",
+      "to_wave": null
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 61,
+      "opcode": "ZEND_INIT_FCALL",
+      "rationale": "Accepted only as a fragment of a fully planned exact direct same-script user-call sequence; never published independently.",
+      "to_classification": "conditional",
+      "to_wave": null
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 63,
+      "opcode": "ZEND_RECV",
+      "rationale": "Accepted only as a fragment of a fully planned exact direct same-script user-call sequence; never published independently.",
+      "to_classification": "conditional",
+      "to_wave": null
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 64,
+      "opcode": "ZEND_RECV_INIT",
+      "rationale": "Default argument materialization.",
+      "to_classification": "deferred",
+      "to_wave": "W07"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 65,
+      "opcode": "ZEND_SEND_VAL",
+      "rationale": "Accepted only as a fragment of a fully planned exact direct same-script user-call sequence; never published independently.",
+      "to_classification": "conditional",
+      "to_wave": null
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 66,
+      "opcode": "ZEND_SEND_VAR_EX",
+      "rationale": "Accepted only as a fragment of a fully planned exact direct same-script user-call sequence; never published independently.",
+      "to_classification": "conditional",
+      "to_wave": null
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 69,
+      "opcode": "ZEND_INIT_NS_FCALL_BY_NAME",
+      "rationale": "Namespace by-name target resolution.",
+      "to_classification": "deferred",
+      "to_wave": "W10"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 73,
+      "opcode": "ZEND_INCLUDE_OR_EVAL",
+      "rationale": "Dynamic declaration and include/eval semantics.",
+      "to_classification": "deferred",
+      "to_wave": "W10"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 102,
+      "opcode": "ZEND_EXT_FCALL_BEGIN",
+      "rationale": "Observer and extension ABI boundary.",
+      "to_classification": "deferred",
+      "to_wave": "W15"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 103,
+      "opcode": "ZEND_EXT_FCALL_END",
+      "rationale": "Observer and extension ABI boundary.",
+      "to_classification": "deferred",
+      "to_wave": "W15"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 105,
+      "opcode": "ZEND_TICKS",
+      "rationale": "Observer/runtime interoperability.",
+      "to_classification": "deferred",
+      "to_wave": "W15"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 107,
+      "opcode": "ZEND_CATCH",
+      "rationale": "Protected exception continuation.",
+      "to_classification": "deferred",
+      "to_wave": "W09"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 108,
+      "opcode": "ZEND_THROW",
+      "rationale": "Call exception propagation and cleanup.",
+      "to_classification": "deferred",
+      "to_wave": "W09"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 112,
+      "opcode": "ZEND_INIT_METHOD_CALL",
+      "rationale": "Object method target resolution.",
+      "to_classification": "deferred",
+      "to_wave": "W08"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 113,
+      "opcode": "ZEND_INIT_STATIC_METHOD_CALL",
+      "rationale": "Static method target resolution.",
+      "to_classification": "deferred",
+      "to_wave": "W08"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 116,
+      "opcode": "ZEND_SEND_VAL_EX",
+      "rationale": "Accepted only as a fragment of a fully planned exact direct same-script user-call sequence; never published independently.",
+      "to_classification": "conditional",
+      "to_wave": null
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 117,
+      "opcode": "ZEND_SEND_VAR",
+      "rationale": "Accepted only as a fragment of a fully planned exact direct same-script user-call sequence; never published independently.",
+      "to_classification": "conditional",
+      "to_wave": null
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 118,
+      "opcode": "ZEND_INIT_USER_CALL",
+      "rationale": "Dynamic user-call target resolution.",
+      "to_classification": "deferred",
+      "to_wave": "W10"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 119,
+      "opcode": "ZEND_SEND_ARRAY",
+      "rationale": "Array argument containers.",
+      "to_classification": "deferred",
+      "to_wave": "W07"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 120,
+      "opcode": "ZEND_SEND_USER",
+      "rationale": "Dynamic user-call argument semantics.",
+      "to_classification": "deferred",
+      "to_wave": "W10"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 128,
+      "opcode": "ZEND_INIT_DYNAMIC_CALL",
+      "rationale": "Dynamic callable resolution.",
+      "to_classification": "deferred",
+      "to_wave": "W10"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 129,
+      "opcode": "ZEND_DO_ICALL",
+      "rationale": "Internal handler and C-ABI interoperability.",
+      "to_classification": "deferred",
+      "to_wave": "W15"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 130,
+      "opcode": "ZEND_DO_UCALL",
+      "rationale": "Accepted only as a fragment of a fully planned exact direct same-script user-call sequence; never published independently.",
+      "to_classification": "conditional",
+      "to_wave": null
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 131,
+      "opcode": "ZEND_DO_FCALL_BY_NAME",
+      "rationale": "By-name target resolution.",
+      "to_classification": "deferred",
+      "to_wave": "W10"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 141,
+      "opcode": "ZEND_DECLARE_FUNCTION",
+      "rationale": "Function declaration and target identity.",
+      "to_classification": "deferred",
+      "to_wave": "W10"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 142,
+      "opcode": "ZEND_DECLARE_LAMBDA_FUNCTION",
+      "rationale": "Lambda declaration and target identity.",
+      "to_classification": "deferred",
+      "to_wave": "W10"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 143,
+      "opcode": "ZEND_DECLARE_CONST",
+      "rationale": "Dynamic declaration ordering.",
+      "to_classification": "deferred",
+      "to_wave": "W10"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 144,
+      "opcode": "ZEND_DECLARE_CLASS",
+      "rationale": "Class and method target identity.",
+      "to_classification": "deferred",
+      "to_wave": "W08"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 145,
+      "opcode": "ZEND_DECLARE_CLASS_DELAYED",
+      "rationale": "Delayed class target identity.",
+      "to_classification": "deferred",
+      "to_wave": "W08"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 146,
+      "opcode": "ZEND_DECLARE_ANON_CLASS",
+      "rationale": "Anonymous class target identity.",
+      "to_classification": "deferred",
+      "to_wave": "W08"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 149,
+      "opcode": "ZEND_HANDLE_EXCEPTION",
+      "rationale": "Exception dispatch and cleanup.",
+      "to_classification": "deferred",
+      "to_wave": "W09"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 151,
+      "opcode": "ZEND_ASSERT_CHECK",
+      "rationale": "Assertion exception semantics.",
+      "to_classification": "deferred",
+      "to_wave": "W09"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 158,
+      "opcode": "ZEND_CALL_TRAMPOLINE",
+      "rationale": "Trampoline and callback resolution.",
+      "to_classification": "deferred",
+      "to_wave": "W10"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 159,
+      "opcode": "ZEND_DISCARD_EXCEPTION",
+      "rationale": "Protected exception cleanup.",
+      "to_classification": "deferred",
+      "to_wave": "W09"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 164,
+      "opcode": "ZEND_RECV_VARIADIC",
+      "rationale": "Variadic argument container.",
+      "to_classification": "deferred",
+      "to_wave": "W07"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 165,
+      "opcode": "ZEND_SEND_UNPACK",
+      "rationale": "Unpacked argument container.",
+      "to_classification": "deferred",
+      "to_wave": "W07"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 192,
+      "opcode": "ZEND_GET_CALLED_CLASS",
+      "rationale": "Late-bound class target resolution.",
+      "to_classification": "deferred",
+      "to_wave": "W08"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 197,
+      "opcode": "ZEND_MATCH_ERROR",
+      "rationale": "Exception creation and propagation.",
+      "to_classification": "deferred",
+      "to_wave": "W09"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 201,
+      "opcode": "ZEND_VERIFY_NEVER_TYPE",
+      "rationale": "Return exception propagation.",
+      "to_classification": "deferred",
+      "to_wave": "W09"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 202,
+      "opcode": "ZEND_CALLABLE_CONVERT",
+      "rationale": "Callable conversion and dynamic resolution.",
+      "to_classification": "deferred",
+      "to_wave": "W10"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 204,
+      "opcode": "ZEND_FRAMELESS_ICALL_0",
+      "rationale": "Frameless internal C-ABI call.",
+      "to_classification": "deferred",
+      "to_wave": "W15"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 205,
+      "opcode": "ZEND_FRAMELESS_ICALL_1",
+      "rationale": "Frameless internal C-ABI call.",
+      "to_classification": "deferred",
+      "to_wave": "W15"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 206,
+      "opcode": "ZEND_FRAMELESS_ICALL_2",
+      "rationale": "Frameless internal C-ABI call.",
+      "to_classification": "deferred",
+      "to_wave": "W15"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 207,
+      "opcode": "ZEND_FRAMELESS_ICALL_3",
+      "rationale": "Frameless internal C-ABI call.",
+      "to_classification": "deferred",
+      "to_wave": "W15"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 208,
+      "opcode": "ZEND_JMP_FRAMELESS",
+      "rationale": "Frameless internal C-ABI control transfer.",
+      "to_classification": "deferred",
+      "to_wave": "W15"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 209,
+      "opcode": "ZEND_INIT_PARENT_PROPERTY_HOOK_CALL",
+      "rationale": "Property-hook method target.",
+      "to_classification": "deferred",
+      "to_wave": "W08"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 210,
+      "opcode": "ZEND_DECLARE_ATTRIBUTED_CONST",
+      "rationale": "Attributed declaration ordering.",
+      "to_classification": "deferred",
+      "to_wave": "W10"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 212,
+      "opcode": "ZEND_CALLABLE_CONVERT_PARTIAL",
+      "rationale": "Partial callable conversion.",
+      "to_classification": "deferred",
+      "to_wave": "W10"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W05",
+      "number": 213,
+      "opcode": "ZEND_SEND_PLACEHOLDER",
+      "rationale": "Placeholder and named argument grammar.",
+      "to_classification": "deferred",
+      "to_wave": "W07"
+    }
+  ],
+  "sources": {
+    "w01": {
+      "active_opcode_count": 212,
+      "path": "docs/native-engine/semantics/opcodes/opcode-matrix.json",
+      "sha256": "96406ddd2fc7a0a58903c1d1f79cef61b0f6ad5a49801426779d26984942b60e",
+      "source_commit": "b7c524a19fa815799a858b98d39f176ca88648b1"
+    },
+    "w04": {
+      "active_opcode_count": 212,
+      "path": "docs/native-engine/control-flow/w04-opcode-profile.json",
+      "sha256": "48e140fb1abb14da2eafc58ae3b1e8a3a5462d973dcccd26c414e6291c9a73e6"
+    }
+  },
+  "unresolved_w05_count": 0
+}

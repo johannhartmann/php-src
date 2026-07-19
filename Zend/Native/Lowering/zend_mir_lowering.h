@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "../MIR/zend_mir.h"
+#include "../MIR/zend_mir_call.h"
 #include "zend_mir_lowering_diagnostic.h"
 #include "zend_mir_lowering_registry.h"
 #include "zend_mir_lowering_source.h"
@@ -31,6 +32,23 @@ typedef struct _zend_mir_lowering_result {
 	uint32_t guarantees;
 	zend_mir_module *module;
 } zend_mir_lowering_result;
+
+/*
+ * W05 preserves the W03/W04 result layout and adds named capabilities and
+ * debts in a wrapper. prerequisite_guarantees records the verified W04 input
+ * projection. The nested lowering.guarantees field describes the final W05
+ * module and therefore contains FINALIZED only: CALL_DIRECT_USER is outside
+ * the frozen W03 generic opcode boundary and is verified by the named W05
+ * verifier. W05 does not invent a generic Stage 4 guarantee.
+ */
+typedef struct _zend_mir_w05_lowering_result {
+	zend_mir_lowering_result lowering;
+	uint32_t prerequisite_guarantees;
+	uint32_t capabilities;
+	uint32_t semantic_debts;
+	bool modeled;
+	bool codegen_eligible;
+} zend_mir_w05_lowering_result;
 
 static inline bool zend_mir_lowering_result_is_failure_atomic(
 	const zend_mir_lowering_result *result)
@@ -64,6 +82,35 @@ static inline bool zend_mir_lowering_result_is_w04_failure_atomic(
 		&& result->diagnostic_code != ZEND_MIRL_OK
 		&& result->guarantees == 0
 		&& result->module == NULL;
+}
+
+static inline bool zend_mir_lowering_result_is_w05_failure_atomic(
+	const zend_mir_w05_lowering_result *result)
+{
+	if (result == NULL) {
+		return false;
+	}
+	if (result->lowering.status == ZEND_MIR_LOWERING_SUCCESS) {
+		return result->lowering.diagnostic_code == ZEND_MIRL_OK
+			&& result->lowering.guarantees
+				== ZEND_MIR_LOWERING_GUARANTEE_FINALIZED
+			&& result->lowering.module != NULL
+			&& result->prerequisite_guarantees
+				== ZEND_MIR_LOWERING_GUARANTEE_W04_ALL
+			&& result->capabilities == ZEND_MIR_W05_REQUIRED_CAPABILITIES
+			&& result->semantic_debts == ZEND_MIR_W05_REQUIRED_DEBTS
+			&& result->modeled
+			&& !result->codegen_eligible;
+	}
+	return result->lowering.status != ZEND_MIR_LOWERING_STATUS_INVALID
+		&& result->lowering.diagnostic_code != ZEND_MIRL_OK
+		&& result->lowering.guarantees == 0
+		&& result->lowering.module == NULL
+		&& result->prerequisite_guarantees == 0
+		&& result->capabilities == 0
+		&& result->semantic_debts == 0
+		&& !result->modeled
+		&& !result->codegen_eligible;
 }
 
 zend_mir_lowering_result zend_mir_lower_source(
