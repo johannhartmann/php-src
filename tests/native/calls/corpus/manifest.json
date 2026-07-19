@@ -17,6 +17,7 @@
     {"id":"used_unknown_return","source":"tests/native/calls/corpus/cases/used_unknown_return.php","function":"w05_case","status":"rejected","mirl":"MIRL0026","wave":"W06"},
     {"id":"nested_direct_call_result","source":"tests/native/calls/corpus/cases/nested_direct_call_result.php","function":"w05_case","status":"rejected","mirl":"MIRL0026","wave":"W06"},
     {"id":"named_argument","source":"tests/native/calls/corpus/cases/named_argument.php","function":"w05_case","status":"rejected","mirl":"MIRL0024","wave":"W07"},
+    {"id":"named_argument_normalized_position","source":"tests/native/calls/corpus/cases/named_argument_normalized_position.php","function":"w05_case","status":"rejected","mirl":"MIRL0024","wave":"W07"},
     {"id":"unpack_argument","source":"tests/native/calls/corpus/cases/unpack_argument.php","function":"w05_case","status":"rejected","mirl":"MIRL0024","wave":"W07"},
     {"id":"variadic_target","source":"tests/native/calls/corpus/cases/variadic_target.php","function":"w05_case","status":"rejected","mirl":"MIRL0023","wave":"W07"},
     {"id":"method_call","source":"tests/native/calls/corpus/cases/method_call.php","function":"w05_case","status":"rejected","mirl":"MIRL0023","wave":"W08"},

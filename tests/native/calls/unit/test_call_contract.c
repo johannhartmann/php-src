@@ -14,11 +14,15 @@ int main(void)
 	assert(ZEND_MIR_OPCODE_CALL_DIRECT_USER == 41);
 	assert(ZEND_MIR_W05_OPCODE_COUNT == 42);
 	assert(ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE == 0);
+	assert(ZEND_MIR_SOURCE_CALL_ARGUMENT_SYNTACTIC_NAMED == (1u << 0));
+	assert(ZEND_MIR_ZEND_SEND_SYNTACTIC_NAMED == (1u << 31));
 	assert(ZEND_MIR_CALL_PLAN_ACCEPTED == 0);
 	argument.ordinal = 0;
 	argument.mode = ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE;
+	argument.flags = ZEND_MIR_SOURCE_CALL_ARGUMENT_SYNTACTIC_NAMED;
 	assert(argument.ordinal == 0);
 	assert(argument.mode == ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE);
+	assert(argument.flags == ZEND_MIR_SOURCE_CALL_ARGUMENT_SYNTACTIC_NAMED);
 	receipt.capabilities = ZEND_MIR_W05_REQUIRED_CAPABILITIES;
 	receipt.semantic_debts = ZEND_MIR_W05_REQUIRED_DEBTS;
 	receipt.modeled = true;
