@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://php.net/native-engine/w04-ownership.schema.json",
+  "title": "W04 path ownership",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "wave",
+    "specialist_tasks",
+    "integration_task",
+    "contract_reserved_paths"
+  ],
+  "properties": {
+    "format_version": {
+      "const": 1
+    },
+    "wave": {
+      "const": "W04"
+    },
+    "specialist_tasks": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "$ref": "#/$defs/task"
+      }
+    },
+    "integration_task": {
+      "$ref": "#/$defs/task"
+    },
+    "contract_reserved_paths": {
+      "$ref": "#/$defs/paths"
+    }
+  },
+  "$defs": {
+    "paths": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "role",
+        "title",
+        "owned_paths"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "pattern": "^W04-[A-Za-z0-9-]+$"
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owned_paths": {
+          "$ref": "#/$defs/paths"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,92 @@
+{
+  "format_version": 1,
+  "wave": "W04",
+  "open_blockers": [],
+  "resolved_w04_deferrals": [
+    {
+      "opcode": "ZEND_JMP",
+      "decision": "accepted"
+    },
+    {
+      "opcode": "ZEND_JMPZ",
+      "decision": "accepted"
+    },
+    {
+      "opcode": "ZEND_JMPNZ",
+      "decision": "accepted"
+    },
+    {
+      "opcode": "ZEND_JMPZ_EX",
+      "decision": "accepted"
+    },
+    {
+      "opcode": "ZEND_JMPNZ_EX",
+      "decision": "accepted"
+    },
+    {
+      "opcode": "ZEND_RETURN_BY_REF",
+      "decision": "deferred",
+      "deferred_wave": "W06"
+    },
+    {
+      "opcode": "ZEND_ASSERT_CHECK",
+      "decision": "deferred",
+      "deferred_wave": "W05"
+    },
+    {
+      "opcode": "ZEND_JMP_SET",
+      "decision": "deferred",
+      "deferred_wave": "W06"
+    },
+    {
+      "opcode": "ZEND_GENERATOR_RETURN",
+      "decision": "deferred",
+      "deferred_wave": "W11"
+    },
+    {
+      "opcode": "ZEND_FAST_CALL",
+      "decision": "deferred",
+      "deferred_wave": "W09"
+    },
+    {
+      "opcode": "ZEND_FAST_RET",
+      "decision": "deferred",
+      "deferred_wave": "W09"
+    },
+    {
+      "opcode": "ZEND_COALESCE",
+      "decision": "deferred",
+      "deferred_wave": "W06"
+    },
+    {
+      "opcode": "ZEND_SWITCH_LONG",
+      "decision": "deferred",
+      "deferred_wave": "W07"
+    },
+    {
+      "opcode": "ZEND_SWITCH_STRING",
+      "decision": "deferred",
+      "deferred_wave": "W07"
+    },
+    {
+      "opcode": "ZEND_MATCH",
+      "decision": "deferred",
+      "deferred_wave": "W07"
+    },
+    {
+      "opcode": "ZEND_JMP_NULL",
+      "decision": "deferred",
+      "deferred_wave": "W06"
+    },
+    {
+      "opcode": "ZEND_BIND_INIT_STATIC_OR_JMP",
+      "decision": "deferred",
+      "deferred_wave": "W06"
+    },
+    {
+      "opcode": "ZEND_JMP_FRAMELESS",
+      "decision": "deferred",
+      "deferred_wave": "W05"
+    }
+  ]
+}

@@ -29,6 +29,15 @@
 #define ZEND_MIR_CONTRACT_VERSION \
 	((ZEND_MIR_CONTRACT_VERSION_MAJOR << 16) | ZEND_MIR_CONTRACT_VERSION_MINOR)
 
+/*
+ * W03 remains frozen at MIR contract 1.2. The additive W04 source/control-flow
+ * boundary is 1.3 and is negotiated independently until W04 implementation
+ * replaces the W03-only entry point.
+ */
+#define ZEND_MIR_W04_CONTRACT_VERSION_MINOR UINT32_C(3)
+#define ZEND_MIR_W04_CONTRACT_VERSION \
+	((ZEND_MIR_CONTRACT_VERSION_MAJOR << 16) | ZEND_MIR_W04_CONTRACT_VERSION_MINOR)
+
 #define ZEND_MIR_ID_INVALID UINT32_C(0xffffffff)
 #define ZEND_MIR_ID_MAX UINT32_C(0xfffffffe)
 
@@ -49,6 +58,9 @@ typedef uint32_t zend_mir_value_fact_id;
 typedef uint32_t zend_mir_op_array_id;
 typedef uint32_t zend_mir_resume_id;
 typedef uint32_t zend_mir_symbol_id;
+typedef uint32_t zend_mir_source_block_id;
+typedef uint32_t zend_mir_source_edge_id;
+typedef uint32_t zend_mir_source_phi_id;
 
 static inline bool zend_mir_id_is_valid(uint32_t id)
 {
@@ -79,6 +91,12 @@ static inline zend_mir_value_id zend_mir_value_from_synthetic(uint32_t payload)
 
 ZEND_MIR_STATIC_ASSERT(sizeof(zend_mir_module_id) == 4, "MIR IDs are 32-bit");
 ZEND_MIR_STATIC_ASSERT(sizeof(zend_mir_value_id) == 4, "MIR value IDs are 32-bit");
+ZEND_MIR_STATIC_ASSERT(sizeof(zend_mir_source_block_id) == 4,
+	"source block IDs are 32-bit");
+ZEND_MIR_STATIC_ASSERT(sizeof(zend_mir_source_edge_id) == 4,
+	"source edge IDs are 32-bit");
+ZEND_MIR_STATIC_ASSERT(sizeof(zend_mir_source_phi_id) == 4,
+	"source PHI IDs are 32-bit");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_VALUE_SYNTHETIC_MAX < ZEND_MIR_ID_INVALID,
 	"invalid value ID is outside both value namespaces");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_VALUE_ORIGINAL_MAX + UINT32_C(1) == ZEND_MIR_VALUE_SYNTHETIC_BIT,

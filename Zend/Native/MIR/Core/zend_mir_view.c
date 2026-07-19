@@ -285,36 +285,88 @@ static bool zend_mir_view_instruction_operand_at(const void *context,
 static uint32_t zend_mir_view_successor_count(const void *context,
 		zend_mir_block_id block_id)
 {
-	(void) context;
-	(void) block_id;
-	return 0;
+	const zend_mir_module *module = context;
+	zend_mir_core_edge *edges;
+	uint32_t count = 0;
+	uint32_t index;
+
+	if (!zend_mir_view_is_available(module) || block_id >= module->blocks.count) {
+		return 0;
+	}
+	edges = ZEND_MIR_CORE_ITEMS(module, edges, zend_mir_core_edge);
+	for (index = 0; index < module->edges.count; index++) {
+		if (edges[index].from == block_id) {
+			count++;
+		}
+	}
+	return count;
 }
 
 static bool zend_mir_view_successor_at(const void *context,
 		zend_mir_block_id block_id, uint32_t index, zend_mir_block_id *out)
 {
-	(void) context;
-	(void) block_id;
-	(void) index;
-	(void) out;
+	const zend_mir_module *module = context;
+	zend_mir_core_edge *edges;
+	uint32_t edge_index;
+
+	if (!zend_mir_view_is_available(module) || out == NULL
+			|| block_id >= module->blocks.count) {
+		return false;
+	}
+	edges = ZEND_MIR_CORE_ITEMS(module, edges, zend_mir_core_edge);
+	for (edge_index = 0; edge_index < module->edges.count; edge_index++) {
+		if (edges[edge_index].from == block_id) {
+			if (index == 0) {
+				*out = edges[edge_index].to;
+				return true;
+			}
+			index--;
+		}
+	}
 	return false;
 }
 
 static uint32_t zend_mir_view_predecessor_count(const void *context,
 		zend_mir_block_id block_id)
 {
-	(void) context;
-	(void) block_id;
-	return 0;
+	const zend_mir_module *module = context;
+	zend_mir_core_edge *edges;
+	uint32_t count = 0;
+	uint32_t index;
+
+	if (!zend_mir_view_is_available(module) || block_id >= module->blocks.count) {
+		return 0;
+	}
+	edges = ZEND_MIR_CORE_ITEMS(module, edges, zend_mir_core_edge);
+	for (index = 0; index < module->edges.count; index++) {
+		if (edges[index].to == block_id) {
+			count++;
+		}
+	}
+	return count;
 }
 
 static bool zend_mir_view_predecessor_at(const void *context,
 		zend_mir_block_id block_id, uint32_t index, zend_mir_block_id *out)
 {
-	(void) context;
-	(void) block_id;
-	(void) index;
-	(void) out;
+	const zend_mir_module *module = context;
+	zend_mir_core_edge *edges;
+	uint32_t edge_index;
+
+	if (!zend_mir_view_is_available(module) || out == NULL
+			|| block_id >= module->blocks.count) {
+		return false;
+	}
+	edges = ZEND_MIR_CORE_ITEMS(module, edges, zend_mir_core_edge);
+	for (edge_index = 0; edge_index < module->edges.count; edge_index++) {
+		if (edges[edge_index].to == block_id) {
+			if (index == 0) {
+				*out = edges[edge_index].from;
+				return true;
+			}
+			index--;
+		}
+	}
 	return false;
 }
 

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://php.net/native-engine/w04-blockers.schema.json",
+  "title": "W04 blockers and resolved opcode decisions",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "wave",
+    "open_blockers",
+    "resolved_w04_deferrals"
+  ],
+  "properties": {
+    "format_version": {
+      "const": 1
+    },
+    "wave": {
+      "const": "W04"
+    },
+    "open_blockers": {
+      "type": "array",
+      "maxItems": 0
+    },
+    "resolved_w04_deferrals": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "opcode",
+          "decision"
+        ],
+        "properties": {
+          "opcode": {
+            "type": "string",
+            "pattern": "^ZEND_[A-Z0-9_]+$"
+          },
+          "decision": {
+            "enum": [
+              "accepted",
+              "deferred"
+            ]
+          },
+          "deferred_wave": {
+            "type": "string",
+            "pattern": "^W(?!04)[0-9]{2}$"
+          }
+        }
+      }
+    }
+  }
+}

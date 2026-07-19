@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://php.net/native-engine/w04-source-files.schema.json",
+  "title": "W04 production source manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "consumer",
+    "existing_production_sources",
+    "w04_production_sources"
+  ],
+  "properties": {
+    "format_version": {
+      "const": 1
+    },
+    "consumer": {
+      "const": "ext/native_mir_test/config.m4"
+    },
+    "existing_production_sources": {
+      "$ref": "#/$defs/sources"
+    },
+    "w04_production_sources": {
+      "$ref": "#/$defs/sources"
+    }
+  },
+  "$defs": {
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^Zend/Native/.+\\.c$"
+      }
+    }
+  }
+}

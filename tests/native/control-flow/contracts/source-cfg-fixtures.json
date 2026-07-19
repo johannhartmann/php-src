@@ -1,0 +1,91 @@
+{
+  "format_version": 1,
+  "cases": [
+    {
+      "name": "diamond",
+      "valid": true,
+      "blocks": [
+        {"id": 0, "first_opcode_ordinal": 0, "opcode_count": 1, "flags": ["entry", "reachable"], "immediate_dominator": 4294967295, "loop_header": 4294967295},
+        {"id": 1, "first_opcode_ordinal": 1, "opcode_count": 1, "flags": ["reachable"], "immediate_dominator": 0, "loop_header": 4294967295},
+        {"id": 2, "first_opcode_ordinal": 2, "opcode_count": 1, "flags": ["reachable"], "immediate_dominator": 0, "loop_header": 4294967295},
+        {"id": 3, "first_opcode_ordinal": 3, "opcode_count": 1, "flags": ["reachable"], "immediate_dominator": 0, "loop_header": 4294967295}
+      ],
+      "edges": [
+        {"id": 0, "from_block_id": 0, "to_block_id": 1, "successor_index": 0, "predecessor_index": 0, "flags": ["explicit_jump"]},
+        {"id": 1, "from_block_id": 0, "to_block_id": 2, "successor_index": 1, "predecessor_index": 0, "flags": ["fallthrough"]},
+        {"id": 2, "from_block_id": 1, "to_block_id": 3, "successor_index": 0, "predecessor_index": 0, "flags": ["fallthrough"]},
+        {"id": 3, "from_block_id": 2, "to_block_id": 3, "successor_index": 0, "predecessor_index": 1, "flags": ["fallthrough"]}
+      ],
+      "phis": [
+        {"id": 0, "block_id": 3, "result_ssa_variable_id": 9, "source_slot_kind": "tmp", "source_slot_index": 0, "kind": "merge"}
+      ],
+      "phi_inputs": [
+        {"phi_id": 0, "input_index": 0, "predecessor_block_id": 1, "source_ssa_variable_id": 7},
+        {"phi_id": 0, "input_index": 1, "predecessor_block_id": 2, "source_ssa_variable_id": 8}
+      ]
+    },
+    {
+      "name": "loop",
+      "valid": true,
+      "blocks": [
+        {"id": 0, "first_opcode_ordinal": 0, "opcode_count": 1, "flags": ["entry", "reachable"], "immediate_dominator": 4294967295, "loop_header": 4294967295},
+        {"id": 1, "first_opcode_ordinal": 1, "opcode_count": 1, "flags": ["reachable", "loop_header"], "immediate_dominator": 0, "loop_header": 1},
+        {"id": 2, "first_opcode_ordinal": 2, "opcode_count": 1, "flags": ["reachable"], "immediate_dominator": 1, "loop_header": 1},
+        {"id": 3, "first_opcode_ordinal": 3, "opcode_count": 1, "flags": ["reachable"], "immediate_dominator": 1, "loop_header": 4294967295}
+      ],
+      "edges": [
+        {"id": 0, "from_block_id": 0, "to_block_id": 1, "successor_index": 0, "predecessor_index": 0, "flags": ["fallthrough"]},
+        {"id": 1, "from_block_id": 1, "to_block_id": 2, "successor_index": 0, "predecessor_index": 0, "flags": ["fallthrough"]},
+        {"id": 2, "from_block_id": 1, "to_block_id": 3, "successor_index": 1, "predecessor_index": 0, "flags": ["explicit_jump"]},
+        {"id": 3, "from_block_id": 2, "to_block_id": 1, "successor_index": 0, "predecessor_index": 1, "flags": ["explicit_jump", "backedge", "interrupt_boundary"]}
+      ],
+      "phis": [
+        {"id": 0, "block_id": 1, "result_ssa_variable_id": 4, "source_slot_kind": "cv", "source_slot_index": 0, "kind": "merge"}
+      ],
+      "phi_inputs": [
+        {"phi_id": 0, "input_index": 0, "predecessor_block_id": 0, "source_ssa_variable_id": 0},
+        {"phi_id": 0, "input_index": 1, "predecessor_block_id": 2, "source_ssa_variable_id": 3}
+      ]
+    },
+    {
+      "name": "pi-type-and-range",
+      "valid": true,
+      "blocks": [
+        {"id": 0, "first_opcode_ordinal": 0, "opcode_count": 1, "flags": ["entry", "reachable"], "immediate_dominator": 4294967295, "loop_header": 4294967295},
+        {"id": 1, "first_opcode_ordinal": 1, "opcode_count": 1, "flags": ["reachable"], "immediate_dominator": 0, "loop_header": 4294967295}
+      ],
+      "edges": [
+        {"id": 0, "from_block_id": 0, "to_block_id": 1, "successor_index": 0, "predecessor_index": 0, "flags": ["explicit_jump"]}
+      ],
+      "phis": [
+        {"id": 0, "block_id": 1, "result_ssa_variable_id": 2, "source_slot_kind": "cv", "source_slot_index": 0, "kind": "pi_type", "constraint": {"type_mask": 4}},
+        {"id": 1, "block_id": 1, "result_ssa_variable_id": 3, "source_slot_kind": "cv", "source_slot_index": 1, "kind": "pi_range", "constraint": {"range_min": 0, "range_max": 10}}
+      ],
+      "phi_inputs": [
+        {"phi_id": 0, "input_index": 0, "predecessor_block_id": 0, "source_ssa_variable_id": 0},
+        {"phi_id": 1, "input_index": 0, "predecessor_block_id": 0, "source_ssa_variable_id": 1}
+      ]
+    },
+    {
+      "name": "malformed-phi-predecessor-order",
+      "valid": false,
+      "expected_error": "phi-predecessor-order",
+      "blocks": [
+        {"id": 0, "first_opcode_ordinal": 0, "opcode_count": 1, "flags": ["entry", "reachable"], "immediate_dominator": 4294967295, "loop_header": 4294967295},
+        {"id": 1, "first_opcode_ordinal": 1, "opcode_count": 1, "flags": ["reachable"], "immediate_dominator": 0, "loop_header": 4294967295},
+        {"id": 2, "first_opcode_ordinal": 2, "opcode_count": 1, "flags": ["reachable"], "immediate_dominator": 0, "loop_header": 4294967295}
+      ],
+      "edges": [
+        {"id": 0, "from_block_id": 0, "to_block_id": 2, "successor_index": 0, "predecessor_index": 0, "flags": ["explicit_jump"]},
+        {"id": 1, "from_block_id": 1, "to_block_id": 2, "successor_index": 0, "predecessor_index": 1, "flags": ["fallthrough"]}
+      ],
+      "phis": [
+        {"id": 0, "block_id": 2, "result_ssa_variable_id": 3, "source_slot_kind": "tmp", "source_slot_index": 0, "kind": "merge"}
+      ],
+      "phi_inputs": [
+        {"phi_id": 0, "input_index": 0, "predecessor_block_id": 1, "source_ssa_variable_id": 1},
+        {"phi_id": 0, "input_index": 1, "predecessor_block_id": 0, "source_ssa_variable_id": 2}
+      ]
+    }
+  ]
+}
