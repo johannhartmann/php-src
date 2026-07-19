@@ -30,6 +30,11 @@ WAVE_RE = re.compile(r"^W(?:0[0-9]|1[0-8])$")
 TASK_RE = re.compile(r"^W(?:0[0-9]|1[0-8])-[A-Za-z0-9][A-Za-z0-9-]*$")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DEFINITION = REPO_ROOT / "docs/native-engine/waves/waves.json"
+DEFAULT_LEDGER = REPO_ROOT / "docs/native-engine/waves/ledger.json"
+LEDGER_STATES = {
+    "unsealed", "revalidated", "sealed", "invalid", "pending", "unstarted",
+}
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class UsageParser(argparse.ArgumentParser):
@@ -187,6 +192,21 @@ def validate_artifact(value: Any, path: str, issues: List[str]) -> None:
         check_relative_path(obj["reference"], "%s.reference" % path, issues)
 
 
+def validate_seal_subject(value: Any, path: str, issues: List[str]) -> None:
+    obj = require_object(value, path, issues)
+    if obj is None:
+        return
+    require_keys(obj, ("receipt_path", "receipt_sha256"), path, issues)
+    unknown = set(obj) - {"receipt_path", "receipt_sha256"}
+    if unknown:
+        issues.append("%s has unknown fields: %s" % (path, ", ".join(sorted(unknown))))
+    if "receipt_path" in obj:
+        check_relative_path(obj["receipt_path"], "%s.receipt_path" % path, issues)
+    digest = obj.get("receipt_sha256")
+    if not is_string(digest) or SHA256_RE.fullmatch(digest) is None:
+        issues.append("%s.receipt_sha256 must be a lowercase SHA-256" % path)
+
+
 def validate_gate_evidence(value: Any) -> List[str]:
     issues: List[str] = []
     obj = require_object(value, "$", issues)
@@ -311,6 +331,10 @@ def validate_result(value: Any, definition: Dict[str, Any]) -> List[str]:
         "worktree_clean", "timestamp",
     )
     require_keys(obj, required, "$", issues)
+    allowed = set(required) | {"tested_head_commit", "seal_subject"}
+    unknown = set(obj) - allowed
+    if unknown:
+        issues.append("$ has unknown fields: %s" % ", ".join(sorted(unknown)))
     check_format_version(obj, "$", issues)
     task_id = obj.get("task_id")
     _, task_index = definition_indexes(definition)
@@ -323,6 +347,16 @@ def validate_result(value: Any, definition: Dict[str, Any]) -> List[str]:
     check_commit(obj.get("expected_base_commit"), "$.expected_base_commit", issues)
     check_commit(obj.get("actual_base_commit"), "$.actual_base_commit", issues)
     check_commit(obj.get("head_commit"), "$.head_commit", issues, nullable=True)
+    if "tested_head_commit" in obj:
+        check_commit(obj.get("tested_head_commit"), "$.tested_head_commit", issues)
+    if "seal_subject" in obj:
+        validate_seal_subject(obj.get("seal_subject"), "$.seal_subject", issues)
+    if task_id == "W05-integration-gate":
+        require_keys(obj, ("tested_head_commit", "seal_subject"), "$", issues)
+        if obj.get("head_commit") is not None:
+            issues.append(
+                "$.head_commit must be null for the sealed W05 result"
+            )
     require_string(obj, "branch", "$", issues)
     require_string_array(obj, "changed_paths", "$", issues)
     for index, item in enumerate(obj.get("changed_paths", []) if isinstance(obj.get("changed_paths"), list) else []):
@@ -410,6 +444,73 @@ def load_definition(path: Path) -> Dict[str, Any]:
     return value
 
 
+def validate_ledger(value: Any, definition: Dict[str, Any]) -> List[str]:
+    issues: List[str] = []
+    obj = require_object(value, "$", issues)
+    if obj is None:
+        return issues
+    require_keys(obj, ("format_version", "migration_policy", "waves"), "$", issues)
+    check_format_version(obj, "$", issues)
+    require_string(obj, "migration_policy", "$", issues)
+    entries = require_array(obj.get("waves"), "$.waves", issues)
+    if entries is None:
+        return issues
+    if len(entries) != 19:
+        issues.append("$.waves must contain exactly W00 through W18")
+    expected = {wave["wave_id"] for wave in definition["waves"]}
+    seen = set()
+    for index, item in enumerate(entries):
+        path = "$.waves[%d]" % index
+        entry = require_object(item, path, issues)
+        if entry is None:
+            continue
+        require_keys(
+            entry,
+            (
+                "wave_id", "state", "receipt_path", "receipt_sha256",
+                "capabilities_provided", "semantic_debts", "codegen_eligible",
+            ),
+            path,
+            issues,
+        )
+        wave_id = entry.get("wave_id")
+        if wave_id not in expected:
+            issues.append("%s.wave_id is unknown" % path)
+        elif wave_id in seen:
+            issues.append("%s.wave_id is duplicated" % path)
+        else:
+            seen.add(wave_id)
+        state = entry.get("state")
+        if state not in LEDGER_STATES:
+            issues.append("%s.state is invalid" % path)
+        receipt_path = entry.get("receipt_path")
+        receipt_sha256 = entry.get("receipt_sha256")
+        if state in {"revalidated", "sealed"}:
+            check_relative_path(receipt_path, "%s.receipt_path" % path, issues)
+            if not is_string(receipt_sha256) or not SHA256_RE.fullmatch(receipt_sha256):
+                issues.append("%s.receipt_sha256 must be a lowercase SHA-256" % path)
+        elif receipt_path is not None or receipt_sha256 is not None:
+            issues.append("%s may bind a receipt only when revalidated or sealed" % path)
+        for key in ("capabilities_provided", "semantic_debts"):
+            require_string_array(entry, key, path, issues)
+            values = entry.get(key)
+            if isinstance(values, list) and len(values) != len(set(values)):
+                issues.append("%s.%s must not contain duplicates" % (path, key))
+        if entry.get("codegen_eligible") is not False:
+            issues.append("%s.codegen_eligible must be false" % path)
+    if seen != expected:
+        issues.append("$.waves IDs must be exactly W00 through W18")
+    return issues
+
+
+def load_ledger(path: Path, definition: Dict[str, Any]) -> Dict[str, Any]:
+    value = read_json(path)
+    issues = validate_ledger(value, definition)
+    if issues:
+        raise ValidationError("ledger", issues)
+    return value
+
+
 def load_result(path: Path, definition: Dict[str, Any]) -> Dict[str, Any]:
     value = read_json(path)
     issues = validate_result(value, definition)
@@ -421,8 +522,21 @@ def load_result(path: Path, definition: Dict[str, Any]) -> Dict[str, Any]:
 def result_identity(result: Dict[str, Any]) -> Dict[str, Any]:
     return {
         key: result[key]
-        for key in ("task_id", "expected_base_commit", "actual_base_commit", "head_commit", "branch")
+        for key in (
+            "task_id",
+            "expected_base_commit",
+            "actual_base_commit",
+            "head_commit",
+            "tested_head_commit",
+            "seal_subject",
+            "branch",
+        )
+        if key in result
     }
+
+
+def result_tested_head(result: Dict[str, Any]) -> Any:
+    return result.get("tested_head_commit") or result.get("head_commit")
 
 
 def result_wave(task_id: str, task_index: Dict[str, Tuple[Dict[str, Any], Dict[str, Any]]]) -> str:
@@ -456,8 +570,8 @@ def task_failures(result: Dict[str, Any], wave: Dict[str, Any], task: Dict[str, 
         failures.append("%s declares stale expected base %s" % (task_id, result["expected_base_commit"]))
     if result["actual_base_commit"] != result["expected_base_commit"]:
         failures.append("%s actual base does not match expected base" % task_id)
-    if result["head_commit"] is None:
-        failures.append("%s has no head commit" % task_id)
+    if result_tested_head(result) is None:
+        failures.append("%s has no tested head commit" % task_id)
     if task["requires_clean_worktree"] and not result["worktree_clean"]:
         failures.append("%s implementation worktree is dirty" % task_id)
     if not result["tests"]:
@@ -592,7 +706,7 @@ def command_record(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def command_check(args: argparse.Namespace) -> int:
+def command_check_results(args: argparse.Namespace) -> int:
     definition = load_definition(args.definition)
     waves, _ = definition_indexes(definition)
     results = load_wave_results(args.results_dir, args.wave, definition)
@@ -602,6 +716,16 @@ def command_check(args: argparse.Namespace) -> int:
         raise ValidationError("summary", summary_issues)
     json_stdout(summary)
     return EXIT_OK if summary["status"] == "pass" else EXIT_GATE_FAIL
+
+
+def command_check(args: argparse.Namespace) -> int:
+    if args.results_dir is not None:
+        return command_check_results(args)
+    definition = load_definition(args.definition)
+    ledger = load_ledger(args.ledger, definition)
+    entry = next(item for item in ledger["waves"] if item["wave_id"] == args.wave)
+    json_stdout(entry)
+    return EXIT_OK if entry["state"] in {"revalidated", "sealed"} else EXIT_GATE_FAIL
 
 
 def command_list_missing(args: argparse.Namespace) -> int:
@@ -672,7 +796,7 @@ def render_dashboard(definition: Dict[str, Any], results_dir: Path, include_time
                     "yes" if task_id in required_set else "no",
                     result["status"],
                     short_commit(result["actual_base_commit"]),
-                    short_commit(result["head_commit"]),
+                    short_commit(result_tested_head(result)),
                     evidence_text,
                     "; ".join(result["blockers"]) or "—",
                 ]
@@ -683,9 +807,63 @@ def render_dashboard(definition: Dict[str, Any], results_dir: Path, include_time
     return "\n".join(lines).rstrip() + "\n"
 
 
-def command_render(args: argparse.Namespace) -> int:
+def render_ledger_dashboard(definition: Dict[str, Any], ledger: Dict[str, Any]) -> str:
+    definition_waves, _ = definition_indexes(definition)
+    lines = [
+        "<!-- Generated by scripts/native/wave-gate.py; do not edit. -->",
+        "# Native engine wave status",
+        "",
+        "This dashboard is a deterministic projection of committed `ledger.json` receipts.",
+        "",
+    ]
+    for entry in sorted(ledger["waves"], key=lambda item: item["wave_id"]):
+        wave = definition_waves[entry["wave_id"]]
+        lines.extend([
+            "## %s — %s" % (entry["wave_id"], wave["title"]),
+            "",
+            "**Status:** `%s`" % entry["state"].upper(),
+            "",
+            wave["goal"],
+            "",
+        ])
+        if entry["receipt_path"] is not None:
+            lines.extend([
+                "**Receipt:** `%s` (`%s`)" % (
+                    entry["receipt_path"], entry["receipt_sha256"],
+                ),
+                "",
+            ])
+        capabilities = entry["capabilities_provided"]
+        debts = entry["semantic_debts"]
+        lines.extend([
+            "**Capabilities:** %s" % (
+                ", ".join("`%s`" % item for item in capabilities) if capabilities else "none recorded"
+            ),
+            "",
+            "**Semantic debts:** %s" % (
+                ", ".join("`%s`" % item for item in debts) if debts else "none recorded"
+            ),
+            "",
+            "**Codegen eligible:** `false`",
+            "",
+        ])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def command_render_results(args: argparse.Namespace) -> int:
     definition = load_definition(args.definition)
     dashboard = render_dashboard(definition, args.results_dir, args.include_timestamps)
+    write_text_atomic(args.output, dashboard)
+    print("rendered %s" % args.output)
+    return EXIT_OK
+
+
+def command_render(args: argparse.Namespace) -> int:
+    if args.results_dir is not None:
+        return command_render_results(args)
+    definition = load_definition(args.definition)
+    ledger = load_ledger(args.ledger, definition)
+    dashboard = render_ledger_dashboard(definition, ledger)
     write_text_atomic(args.output, dashboard)
     print("rendered %s" % args.output)
     return EXIT_OK
@@ -721,18 +899,33 @@ def build_parser() -> UsageParser:
     add_common_definition_argument(record_parser)
     record_parser.set_defaults(handler=command_record)
 
-    check_parser = subparsers.add_parser("check", help="evaluate a wave gate")
+    check_parser = subparsers.add_parser("check", help="evaluate a committed ledger entry")
     check_parser.add_argument("--wave", required=True, choices=["W%02d" % number for number in range(19)])
-    check_parser.add_argument("--results-dir", required=True, type=Path)
+    check_parser.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
+    check_parser.add_argument("--results-dir", type=Path, help=argparse.SUPPRESS)
     add_common_definition_argument(check_parser)
     check_parser.set_defaults(handler=command_check)
 
-    render_parser = subparsers.add_parser("render", help="render deterministic Markdown dashboard")
-    render_parser.add_argument("--results-dir", required=True, type=Path)
+    check_results_parser = subparsers.add_parser("check-results", help="evaluate external task results")
+    check_results_parser.add_argument("--wave", required=True, choices=["W%02d" % number for number in range(19)])
+    check_results_parser.add_argument("--results-dir", required=True, type=Path)
+    add_common_definition_argument(check_results_parser)
+    check_results_parser.set_defaults(handler=command_check_results)
+
+    render_parser = subparsers.add_parser("render", help="render committed ledger dashboard")
+    render_parser.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
+    render_parser.add_argument("--results-dir", type=Path, help=argparse.SUPPRESS)
     render_parser.add_argument("--output", required=True, type=Path)
     render_parser.add_argument("--include-timestamps", action="store_true")
     add_common_definition_argument(render_parser)
     render_parser.set_defaults(handler=command_render)
+
+    render_results_parser = subparsers.add_parser("render-results", help="render external task-result dashboard")
+    render_results_parser.add_argument("--results-dir", required=True, type=Path)
+    render_results_parser.add_argument("--output", required=True, type=Path)
+    render_results_parser.add_argument("--include-timestamps", action="store_true")
+    add_common_definition_argument(render_results_parser)
+    render_results_parser.set_defaults(handler=command_render_results)
 
     missing_parser = subparsers.add_parser("list-missing", help="list missing required gate IDs")
     missing_parser.add_argument("--wave", required=True, choices=["W%02d" % number for number in range(19)])

@@ -35,6 +35,11 @@
     },
     "report_has_timestamp": false
   },
+  "evidence": {
+    "scope": "historical-source-snapshot",
+    "subject_commit": "9834dee77132f789dc6dcb1a6b42aade3a19b843",
+    "subject_tree": "d69ae74054350128436ab1cf4ca3fbb08afd7315"
+  },
   "gates": [
     "python3 scripts/native/semantics/validate-w01.py --check",
     "python3 scripts/native/mir/check-contract.py --check",
@@ -118,5 +123,5 @@
       "Zend/Native/MIR/Verify/zend_mir_verify_semantics.c"
     ]
   },
-  "schema_version": 1
+  "schema_version": 2
 }

@@ -1,0 +1,131 @@
+{
+  "capabilities": [
+    {
+      "capability_id": "architecture_independent_mir",
+      "description": "Provide stable architecture-independent MIR records and verifier stages.",
+      "open_debts": [],
+      "prerequisites": [],
+      "wave_id": "W02"
+    },
+    {
+      "capability_id": "scalar_semantics",
+      "description": "Lower the accepted scalar and straight-line subset into verified MIR.",
+      "open_debts": [],
+      "prerequisites": ["architecture_independent_mir"],
+      "wave_id": "W03"
+    },
+    {
+      "capability_id": "reducible_control_flow",
+      "description": "Lower source-backed reducible CFG, PHI, loop, and edge-statepoint structure.",
+      "open_debts": [],
+      "prerequisites": ["scalar_semantics"],
+      "wave_id": "W04"
+    },
+    {
+      "capability_id": "direct_user_call_sequence",
+      "description": "Model a proof-closed direct same-script INIT/SEND/DO call sequence without execution.",
+      "open_debts": ["call_execution", "exception_cleanup", "refcounted_transfer"],
+      "prerequisites": ["reducible_control_flow", "scalar_semantics"],
+      "wave_id": "W05"
+    },
+    {
+      "capability_id": "caller_frame_descriptor",
+      "description": "Describe caller slots, continuation, and conservative call effects.",
+      "open_debts": ["call_execution", "protected_continuation"],
+      "prerequisites": ["direct_user_call_sequence"],
+      "wave_id": "W05"
+    },
+    {
+      "capability_id": "callee_entry_descriptor",
+      "description": "Describe the direct user callee entry without a runtime address.",
+      "open_debts": ["call_execution", "dynamic_target_resolution"],
+      "prerequisites": ["direct_user_call_sequence"],
+      "wave_id": "W05"
+    },
+    {
+      "capability_id": "abstract_call_effects",
+      "description": "Conservatively model call effects while execution remains unavailable.",
+      "open_debts": ["call_execution", "exception_cleanup", "observer_interop"],
+      "prerequisites": ["caller_frame_descriptor", "callee_entry_descriptor"],
+      "wave_id": "W05"
+    },
+    {
+      "capability_id": "reference_argument_transfer",
+      "description": "Model by-reference and refcounted argument and return ownership.",
+      "open_debts": ["cow_indirect_semantics"],
+      "prerequisites": ["abstract_call_effects"],
+      "wave_id": "W06"
+    },
+    {
+      "capability_id": "cow_indirect_semantics",
+      "description": "Model copy-on-write and indirect/reference semantics for call-visible values.",
+      "open_debts": [],
+      "prerequisites": ["reference_argument_transfer"],
+      "wave_id": "W06"
+    },
+    {
+      "capability_id": "argument_containers",
+      "description": "Model named, unpacked, variadic, and array argument containers.",
+      "open_debts": [],
+      "prerequisites": ["cow_indirect_semantics"],
+      "wave_id": "W07"
+    },
+    {
+      "capability_id": "object_call_targets",
+      "description": "Resolve method, static-method, constructor, and object targets.",
+      "open_debts": [],
+      "prerequisites": ["argument_containers"],
+      "wave_id": "W08"
+    },
+    {
+      "capability_id": "protected_call_continuations",
+      "description": "Model exception, bailout, reentry, cleanup, and protected continuations.",
+      "open_debts": [],
+      "prerequisites": ["abstract_call_effects"],
+      "wave_id": "W09"
+    },
+    {
+      "capability_id": "dynamic_callable_resolution",
+      "description": "Resolve dynamic and by-name calls, closures, callbacks, trampolines, declarations, and callable conversions.",
+      "open_debts": [],
+      "prerequisites": ["protected_call_continuations", "object_call_targets"],
+      "wave_id": "W10"
+    },
+    {
+      "capability_id": "suspended_call_frames",
+      "description": "Preserve generator suspension, resume, and cleanup semantics across modeled calls.",
+      "open_debts": [],
+      "prerequisites": ["dynamic_callable_resolution", "protected_call_continuations"],
+      "wave_id": "W11"
+    },
+    {
+      "capability_id": "target_emission",
+      "description": "Emit target code only for modules with every required capability and an empty semantic-debt set.",
+      "open_debts": [],
+      "prerequisites": ["suspended_call_frames", "protected_call_continuations", "cow_indirect_semantics"],
+      "wave_id": "W12"
+    },
+    {
+      "capability_id": "persistent_native_images",
+      "description": "Persist and reload versioned native images without process-local pointers.",
+      "open_debts": [],
+      "prerequisites": ["target_emission"],
+      "wave_id": "W13"
+    },
+    {
+      "capability_id": "platform_enablement",
+      "description": "Validate target emission on the declared production platforms.",
+      "open_debts": [],
+      "prerequisites": ["persistent_native_images"],
+      "wave_id": "W14"
+    },
+    {
+      "capability_id": "internal_c_abi_interop",
+      "description": "Support internal functions, frameless ICALL, zif_handler, extensions, observers, and C-ABI interoperability.",
+      "open_debts": [],
+      "prerequisites": ["platform_enablement"],
+      "wave_id": "W15"
+    }
+  ],
+  "format_version": "1.0.0"
+}
