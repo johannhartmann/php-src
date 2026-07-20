@@ -65,15 +65,17 @@ Lower source-backed reducible Zend control flow, preserve exact successor/PHI or
 
 **Codegen eligible:** `false`
 
-## W05 — Calls, frames, and runtime ABI
+## W05 — Direct user call-site and frame modeling
 
-**Status:** `PENDING`
+**Status:** `SEALED`
 
-Lower PHP call frames, argument passing, returns, and C-ABI runtime calls with explicit frame-state evidence.
+Model atomic exact direct same-script user-call sequences and Zend-compatible caller/callee frame descriptors without execution, C-ABI, target lowering, or codegen eligibility.
 
-**Capabilities:** none recorded
+**Receipt:** `docs/native-engine/waves/receipts/W05.json` (`9f98bcd7cbfdb6208e76f34f8c1979fbc1c93b8374ac969c80a26762cddfc0ee`)
 
-**Semantic debts:** none recorded
+**Capabilities:** `scalar_semantics`, `reducible_control_flow`, `direct_user_call_model`, `caller_frame_model`, `callee_entry_model`
+
+**Semantic debts:** `call_runtime_binding`, `call_exception_propagation`, `call_bailout_reentry`, `call_observer_integration`, `call_result_ownership`, `internal_c_abi`
 
 **Codegen eligible:** `false`
 
