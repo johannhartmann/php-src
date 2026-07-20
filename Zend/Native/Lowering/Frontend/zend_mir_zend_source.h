@@ -71,6 +71,7 @@ typedef struct _zend_mir_zend_source {
 	uint32_t call_site_count;
 	uint32_t call_target_count;
 	uint32_t call_argument_count;
+	uint32_t call_parameter_mode_count;
 	bool w04;
 	bool w05;
 	uint32_t initialized;

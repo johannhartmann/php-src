@@ -78,7 +78,11 @@ typedef enum _native_mir_test_fault {
 	NATIVE_MIR_TEST_FAULT_FINALIZE_FAILURE,
 	NATIVE_MIR_TEST_FAULT_STAGE1_VERIFIER_FAILURE,
 	NATIVE_MIR_TEST_FAULT_STAGE2_VERIFIER_FAILURE,
+	NATIVE_MIR_TEST_FAULT_STRUCTURAL_VERIFIER_FAILURE,
+	NATIVE_MIR_TEST_FAULT_SCALAR_VERIFIER_FAILURE,
+	NATIVE_MIR_TEST_FAULT_CONTROL_FLOW_VERIFIER_FAILURE,
 	NATIVE_MIR_TEST_FAULT_CALL_VERIFIER_FAILURE,
+	NATIVE_MIR_TEST_FAULT_FINGERPRINT_RECOMPUTE_FAILURE,
 	NATIVE_MIR_TEST_FAULT_DUMP_FAILURE
 } native_mir_test_fault;
 
@@ -357,8 +361,20 @@ static bool native_mir_test_fault_from_string(
 		*out = NATIVE_MIR_TEST_FAULT_STAGE1_VERIFIER_FAILURE;
 	} else if (zend_string_equals_literal(value, "stage2_verifier_failure")) {
 		*out = NATIVE_MIR_TEST_FAULT_STAGE2_VERIFIER_FAILURE;
+	} else if (zend_string_equals_literal(
+			value, "structural_verifier_failure")) {
+		*out = NATIVE_MIR_TEST_FAULT_STRUCTURAL_VERIFIER_FAILURE;
+	} else if (zend_string_equals_literal(
+			value, "scalar_verifier_failure")) {
+		*out = NATIVE_MIR_TEST_FAULT_SCALAR_VERIFIER_FAILURE;
+	} else if (zend_string_equals_literal(
+			value, "control_flow_verifier_failure")) {
+		*out = NATIVE_MIR_TEST_FAULT_CONTROL_FLOW_VERIFIER_FAILURE;
 	} else if (zend_string_equals_literal(value, "call_verifier_failure")) {
 		*out = NATIVE_MIR_TEST_FAULT_CALL_VERIFIER_FAILURE;
+	} else if (zend_string_equals_literal(
+			value, "fingerprint_recompute_failure")) {
+		*out = NATIVE_MIR_TEST_FAULT_FINGERPRINT_RECOMPUTE_FAILURE;
 	} else if (zend_string_equals_literal(value, "dump_failure")) {
 		*out = NATIVE_MIR_TEST_FAULT_DUMP_FAILURE;
 	} else {
@@ -1065,6 +1081,18 @@ static bool native_mir_test_lower_w05_and_dump(native_mir_test_state *state)
 			break;
 		case NATIVE_MIR_TEST_FAULT_CALL_VERIFIER_FAILURE:
 			call_fault = ZEND_MIR_W05_TEST_FAULT_CALL_VERIFIER;
+			break;
+		case NATIVE_MIR_TEST_FAULT_STRUCTURAL_VERIFIER_FAILURE:
+			call_fault = ZEND_MIR_W05_TEST_FAULT_STRUCTURAL_VERIFIER;
+			break;
+		case NATIVE_MIR_TEST_FAULT_SCALAR_VERIFIER_FAILURE:
+			call_fault = ZEND_MIR_W05_TEST_FAULT_SCALAR_VERIFIER;
+			break;
+		case NATIVE_MIR_TEST_FAULT_CONTROL_FLOW_VERIFIER_FAILURE:
+			call_fault = ZEND_MIR_W05_TEST_FAULT_CONTROL_FLOW_VERIFIER;
+			break;
+		case NATIVE_MIR_TEST_FAULT_FINGERPRINT_RECOMPUTE_FAILURE:
+			call_fault = ZEND_MIR_W05_TEST_FAULT_FINGERPRINT_RECOMPUTE;
 			break;
 		default:
 			break;
