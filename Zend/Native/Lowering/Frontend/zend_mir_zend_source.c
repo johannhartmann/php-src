@@ -1775,6 +1775,46 @@ static uint32_t zend_mir_frontend_w05_return_type_mask(
 	}
 }
 
+bool zend_mir_zend_source_w06_call_return_type(
+	const zend_mir_zend_source *source,
+	zend_mir_source_call_target_id target_id,
+	uint32_t *type_mask)
+{
+	const zend_mir_frontend_call_inventory *inventory;
+	const zend_mir_frontend_call_target *target;
+	uint32_t type;
+
+	if (!zend_mir_source_is_initialized(source) || !source->w05
+			|| type_mask == NULL || target_id >= source->call_target_count
+			|| source->call_inventory == NULL) {
+		return false;
+	}
+	inventory = source->call_inventory;
+	target = &inventory->targets[target_id];
+	if (target->record.kind != ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
+			|| target->function == NULL
+			|| target->function->type != ZEND_USER_FUNCTION
+			|| target->function->common.arg_info == NULL
+			|| (target->function->common.fn_flags
+				& ZEND_ACC_HAS_RETURN_TYPE) == 0) {
+		return false;
+	}
+	type = ZEND_TYPE_PURE_MASK(target->function->common.arg_info[-1].type);
+	switch (type) {
+		case MAY_BE_NULL:
+		case MAY_BE_FALSE:
+		case MAY_BE_TRUE:
+		case MAY_BE_BOOL:
+		case MAY_BE_LONG:
+		case MAY_BE_DOUBLE:
+		case MAY_BE_STRING:
+			*type_mask = type;
+			return true;
+		default:
+			return false;
+	}
+}
+
 static zend_mir_scalar_type_mask zend_mir_frontend_w05_return_scalar_type(
 	const zend_function *function)
 {

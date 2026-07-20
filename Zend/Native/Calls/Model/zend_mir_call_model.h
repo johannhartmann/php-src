@@ -29,4 +29,21 @@ zend_mir_w05_lowering_result zend_mir_lower_w05_zend_source(
 	const zend_mir_source_call_target_resolver *resolver,
 	zend_mir_call_mutator *call_mutator);
 
+/*
+ * W06 reuses the frozen W05 record layouts for its scalar prerequisite
+ * projection, but must commit the call and value tables in one final module.
+ * This helper performs only the already-frozen W05 planning and emission
+ * steps. The caller owns finalization and every named verifier.
+ */
+zend_mir_lowering_diagnostic_code zend_mir_w05_plan_and_emit_calls(
+	zend_mir_lowering_context *context,
+	const zend_mir_source_call_view *source_calls,
+	const zend_mir_source_call_target_resolver *resolver,
+	zend_mir_call_mutator *call_mutator);
+
+zend_mir_lowering_diagnostic_code zend_mir_w05_validate_call_plan(
+	zend_mir_lowering_context *context,
+	const zend_mir_source_call_view *source_calls,
+	const zend_mir_source_call_target_resolver *resolver);
+
 #endif /* ZEND_MIR_CALL_MODEL_H */

@@ -14,6 +14,16 @@ CONFIG = ROOT / "ext/native_mir_test/config.m4"
 BEGIN = "  dnl BEGIN GENERATED NATIVE SOURCES"
 END = "  dnl END GENERATED NATIVE SOURCES"
 GROUPS = ("mir", "lowering", "control_flow", "calls")
+EXTENSION_TEST_FLAGS = (
+    "-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1 "
+    "-DZEND_MIR_W05_TEST_FAULTS=1 "
+    "-DZEND_MIR_W06_TEST_FAULTS=1"
+)
+W06_VALUE_SOURCES = (
+    "Zend/Native/MIR/Values/zend_mir_verify_values.c",
+    "Zend/Native/Values/Core/zend_mir_value_core.c",
+    "Zend/Native/Values/Lowering/zend_mir_value_lowering.c",
+)
 
 
 def rendered() -> str:
@@ -24,7 +34,10 @@ def rendered() -> str:
         or tuple(data.get("groups", {})) != GROUPS
     ):
         raise SystemExit("native source manifest envelope or group order is invalid")
-    paths = [path for group in GROUPS for path in data["groups"][group]]
+    paths = (
+        [path for group in GROUPS for path in data["groups"][group]]
+        + list(W06_VALUE_SOURCES)
+    )
     if len(paths) != len(set(paths)):
         raise SystemExit("native source manifest contains duplicate paths")
     if any(
@@ -42,7 +55,8 @@ def rendered() -> str:
         historical["existing_production_sources"]
         + historical["w04_production_sources"]
     )
-    if paths[:-len(data["groups"]["calls"])] != inherited:
+    inherited_prefix = len(data["groups"]["mir"]) + len(data["groups"]["lowering"]) + len(data["groups"]["control_flow"])
+    if paths[:inherited_prefix] != inherited:
         raise SystemExit("native source manifest drifted from the live W04 source list")
     if data["groups"]["calls"] != [
         "Zend/Native/Calls/Model/zend_mir_call_model.c"
@@ -56,11 +70,16 @@ def rendered() -> str:
             "PHP_ADD_SOURCES_X"
             if path in data["groups"]["control_flow"]
             or path in data["groups"]["calls"]
+            or path in W06_VALUE_SOURCES
             else "PHP_ADD_SOURCES"
         )
         if path in data["groups"]["calls"]:
             suffix = (
                 ", [-DZEND_MIR_W05_TEST_FAULTS=1], [PHP_GLOBAL_OBJS]"
+            )
+        elif path.endswith("zend_mir_value_lowering.c"):
+            suffix = (
+                ", [-DZEND_MIR_W06_TEST_FAULTS=1], [PHP_GLOBAL_OBJS]"
             )
         else:
             suffix = ",, [PHP_GLOBAL_OBJS]" if macro.endswith("_X") else ""
@@ -76,6 +95,11 @@ def main() -> int:
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     text = CONFIG.read_text()
+    extension_flags = (
+        "    [" + EXTENSION_TEST_FLAGS + "])"
+    )
+    if extension_flags not in text:
+        raise SystemExit("config.m4 native test extension flags are stale")
     start = text.index(BEGIN)
     end = text.index(END, start) + len(END)
     expected = text[:start] + rendered() + text[end:]
