@@ -1,351 +1,555 @@
 {
-  "artifact_digests": [
+  "binary_manifests": [
     {
-      "artifact_id": "check-contract-log",
-      "command_id": "check-contract",
-      "path": "check-contract.log",
-      "sha256": "8181c4f18b2ca382fe874b272596d095e78717b42e3c5daefeba9e87e41b3a0c",
-      "size_bytes": 102
+      "artifact_path": "binaries/reference-php-php",
+      "binary_id": "reference-php",
+      "configure_args": [
+        "--disable-all",
+        "--enable-cli"
+      ],
+      "git_commit": "47355da494ba696b1bdb6d10448a225e742bd316",
+      "git_tree": "e51a84a0ed6a97a49277af006f2524556ae6d07c",
+      "role": "reference",
+      "sha256": "493ebaca4a493802d019d4cba7d4ba0d4abc9c673bff23f4650b16818580a334",
+      "toolchain": "Apple clang version 21.0.0 (clang-2100.1.1.101)"
     },
     {
-      "artifact_id": "check-phases-log",
-      "command_id": "check-phases",
-      "path": "check-phases.log",
-      "sha256": "fb05df0a9f49570b83a0d33312c0de610f990695005478be821ad6b401fc28fb",
-      "size_bytes": 68
+      "artifact_path": "binaries/candidate-debug-nts-php",
+      "binary_id": "candidate-debug-nts",
+      "configure_args": [
+        "--profile",
+        "w05-debug-nts"
+      ],
+      "git_commit": "4e304ffb41a03e555ca7dc290edf7a1466ec5c14",
+      "git_tree": "de3e3897b2c474d7975e9680719ce8f8180d2690",
+      "role": "candidate",
+      "sha256": "423859d4df84388d160c018fc513ab84c7d33788b8b6fcd3088efbb2e2cdfa0d",
+      "toolchain": "Apple clang version 21.0.0 (clang-2100.1.1.101)"
     },
     {
-      "artifact_id": "validate-w05-log",
-      "command_id": "validate-w05",
-      "path": "validate-w05.log",
-      "sha256": "199c0d47ed50108c7cf6922d5b98575f69577873471a1996dced1c64b77485ad",
-      "size_bytes": 70
+      "artifact_path": "binaries/candidate-debug-zts-php",
+      "binary_id": "candidate-debug-zts",
+      "configure_args": [
+        "--profile",
+        "w05-debug-zts"
+      ],
+      "git_commit": "4e304ffb41a03e555ca7dc290edf7a1466ec5c14",
+      "git_tree": "de3e3897b2c474d7975e9680719ce8f8180d2690",
+      "role": "candidate",
+      "sha256": "f0bba1bf952897b46a255cadbd5243c679cc2c0c8cb30023dd5083862ea5cf3f",
+      "toolchain": "Apple clang version 21.0.0 (clang-2100.1.1.101)"
     },
     {
-      "artifact_id": "build-w05-debug-nts-log",
-      "command_id": "build-w05-debug-nts",
-      "path": "build-w05-debug-nts.log",
-      "sha256": "65e04f1d481e14ca9f973074c58be8ab0cb93d047e73114c479f6536e7a6453f",
-      "size_bytes": 1059478
+      "artifact_path": "binaries/candidate-asan-nts-php",
+      "binary_id": "candidate-asan-nts",
+      "configure_args": [
+        "--profile",
+        "w05-asan-nts"
+      ],
+      "git_commit": "4e304ffb41a03e555ca7dc290edf7a1466ec5c14",
+      "git_tree": "de3e3897b2c474d7975e9680719ce8f8180d2690",
+      "role": "candidate",
+      "sha256": "f4ab340b9a0ced3ddb53ceaeedb7a452c6f7c9a3cbb3819f103c86f7153a1793",
+      "toolchain": "Apple clang version 21.0.0 (clang-2100.1.1.101)"
     },
     {
-      "artifact_id": "test-w05-debug-nts-log",
-      "command_id": "test-w05-debug-nts",
-      "path": "test-w05-debug-nts.log",
-      "sha256": "1d89c6e51efd90ae16106d1284e0c64a680752a78317541059e66d76c7f853ce",
-      "size_bytes": 63
-    },
-    {
-      "artifact_id": "build-w05-debug-zts-log",
-      "command_id": "build-w05-debug-zts",
-      "path": "build-w05-debug-zts.log",
-      "sha256": "4b19a5e6e9c4d2622047bf01170cd1f41bb27c4ce5bf497d3399f00ab73ed244",
-      "size_bytes": 1075296
-    },
-    {
-      "artifact_id": "test-w05-debug-zts-log",
-      "command_id": "test-w05-debug-zts",
-      "path": "test-w05-debug-zts.log",
-      "sha256": "1d89c6e51efd90ae16106d1284e0c64a680752a78317541059e66d76c7f853ce",
-      "size_bytes": 63
-    },
-    {
-      "artifact_id": "build-w05-asan-nts-log",
-      "command_id": "build-w05-asan-nts",
-      "path": "build-w05-asan-nts.log",
-      "sha256": "8b2da06b7306e6f9bc0564a6b1fb0a3a6774632517ed343b55c2e18fd3ceba4c",
-      "size_bytes": 1083697
-    },
-    {
-      "artifact_id": "test-w05-asan-nts-log",
-      "command_id": "test-w05-asan-nts",
-      "path": "test-w05-asan-nts.log",
-      "sha256": "1d89c6e51efd90ae16106d1284e0c64a680752a78317541059e66d76c7f853ce",
-      "size_bytes": 63
-    },
-    {
-      "artifact_id": "build-w05-ubsan-nts-log",
-      "command_id": "build-w05-ubsan-nts",
-      "path": "build-w05-ubsan-nts.log",
-      "sha256": "414dad23e6d1eaeece1e932450535fc5e5314daf1beb5ff802f88e24a7602061",
-      "size_bytes": 1120780
-    },
-    {
-      "artifact_id": "test-w05-ubsan-nts-log",
-      "command_id": "test-w05-ubsan-nts",
-      "path": "test-w05-ubsan-nts.log",
-      "sha256": "1d89c6e51efd90ae16106d1284e0c64a680752a78317541059e66d76c7f853ce",
-      "size_bytes": 63
-    },
-    {
-      "artifact_id": "calls-unittest-log",
-      "command_id": "calls-unittest",
-      "path": "calls-unittest.log",
-      "sha256": "62a0ea0dbd69d50eb1deb195ba9c8da5b06133f49a10d0e4106fbb25c1f466c1",
-      "size_bytes": 5412
-    },
-    {
-      "artifact_id": "fuzz-20000-log",
-      "command_id": "fuzz-20000",
-      "path": "fuzz-20000.log",
-      "sha256": "27064204f6921103554cbad3c2194734692c90c9bc7b87c9287bdd8f65ec49db",
-      "size_bytes": 113
-    },
-    {
-      "artifact_id": "validate-w01-log",
-      "command_id": "validate-w01",
-      "path": "validate-w01.log",
-      "sha256": "a2c99af5f1c652581ffb7f6d6502857938d5478a74a4e10c3cb52c34521cbbfe",
-      "size_bytes": 55
-    },
-    {
-      "artifact_id": "validate-w02-log",
-      "command_id": "validate-w02",
-      "path": "validate-w02.log",
-      "sha256": "b184657ca1fa2e752dd1fb4788f97c87febeea46e34007f2498a64d80cfd58c8",
-      "size_bytes": 8126
-    },
-    {
-      "artifact_id": "validate-w03-log",
-      "command_id": "validate-w03",
-      "path": "validate-w03.log",
-      "sha256": "20ff54391a69c42b2348d53ad3a1dde3933f98ed1412bcc6bbd8102311eacc03",
-      "size_bytes": 373
-    },
-    {
-      "artifact_id": "validate-w04-log",
-      "command_id": "validate-w04",
-      "path": "validate-w04.log",
-      "sha256": "76b6975ebc79fde45cf48d19c1e2c7d2b71a38a5ccd9be47e334f2f34e182425",
-      "size_bytes": 92
-    },
-    {
-      "artifact_id": "build-debug-nts-log",
-      "command_id": "build-debug-nts",
-      "path": "build-debug-nts.log",
-      "sha256": "458a9c8f3a4ce69974058e7557e7b3419692214fbe9e66ec3f88bcb0512f1d28",
-      "size_bytes": 949439
-    },
-    {
-      "artifact_id": "smoke-debug-nts-log",
-      "command_id": "smoke-debug-nts",
-      "path": "smoke-debug-nts.log",
-      "sha256": "561f1e37dc4499810aa08f7a8ac935e958fd18cf6cd48b888b84ad2d94feac6f",
-      "size_bytes": 2559
-    },
-    {
-      "artifact_id": "build-debug-zts-log",
-      "command_id": "build-debug-zts",
-      "path": "build-debug-zts.log",
-      "sha256": "7531e1dba7ff1480dfbd2a0c80ebc6f6ff60039b9ddacdc2b303c7f7925b7e08",
-      "size_bytes": 963913
-    },
-    {
-      "artifact_id": "smoke-debug-zts-log",
-      "command_id": "smoke-debug-zts",
-      "path": "smoke-debug-zts.log",
-      "sha256": "1e1c62ef0c5d4f4fce1dd4fbf4f7e49ba060afc98e03f0aedcde28e0933c355c",
-      "size_bytes": 2559
+      "artifact_path": "binaries/candidate-ubsan-nts-php",
+      "binary_id": "candidate-ubsan-nts",
+      "configure_args": [
+        "--profile",
+        "w05-ubsan-nts"
+      ],
+      "git_commit": "4e304ffb41a03e555ca7dc290edf7a1466ec5c14",
+      "git_tree": "de3e3897b2c474d7975e9680719ce8f8180d2690",
+      "role": "candidate",
+      "sha256": "fa4e886fea2876740fafd660f8504c7e1277e347d1fb138e2d31fe2029e5a714",
+      "toolchain": "Apple clang version 21.0.0 (clang-2100.1.1.101)"
     }
   ],
-  "capabilities_provided": [
-    "scalar_semantics",
+  "capability_ids": [
+    "abstract_call_effects",
+    "callee_entry_descriptor",
+    "caller_frame_descriptor",
+    "direct_user_call_sequence",
     "reducible_control_flow",
-    "direct_user_call_model",
-    "caller_frame_model",
-    "callee_entry_model"
+    "scalar_semantics"
   ],
   "codegen_eligible": false,
-  "command_manifest": [
+  "command_summaries": [
     {
-      "artifact_id": "check-contract-log",
-      "command": "python3 scripts/native/calls/check-contract.py --check",
-      "command_id": "check-contract",
-      "exit_code": 0
-    },
-    {
-      "artifact_id": "check-phases-log",
-      "command": "python3 scripts/native/calls/check-phases.py --check",
-      "command_id": "check-phases",
-      "exit_code": 0
-    },
-    {
-      "artifact_id": "validate-w05-log",
-      "command": "python3 scripts/native/calls/validate-w05.py --check",
-      "command_id": "validate-w05",
-      "exit_code": 0
-    },
-    {
-      "artifact_id": "build-w05-debug-nts-log",
-      "command": "scripts/native/build.sh --profile w05-debug-nts",
-      "command_id": "build-w05-debug-nts",
-      "exit_code": 0
-    },
-    {
-      "artifact_id": "test-w05-debug-nts-log",
-      "command": "python3 scripts/native/calls/test-w05.py --reference-php /Volumes/CrucialMusic/src/php/php-src/sapi/cli/php --candidate-php /var/folders/p7/wnljx3ss3hn3dhkmk_0nt27c0000gn/T/php-native-w00/php-src-A-16a405aa927f37c5/w05-debug-nts/build/sapi/cli/php",
-      "command_id": "test-w05-debug-nts",
-      "exit_code": 0
-    },
-    {
-      "artifact_id": "build-w05-debug-zts-log",
-      "command": "scripts/native/build.sh --profile w05-debug-zts",
-      "command_id": "build-w05-debug-zts",
-      "exit_code": 0
-    },
-    {
-      "artifact_id": "test-w05-debug-zts-log",
-      "command": "python3 scripts/native/calls/test-w05.py --reference-php /Volumes/CrucialMusic/src/php/php-src/sapi/cli/php --candidate-php /var/folders/p7/wnljx3ss3hn3dhkmk_0nt27c0000gn/T/php-native-w00/php-src-A-16a405aa927f37c5/w05-debug-zts/build/sapi/cli/php",
-      "command_id": "test-w05-debug-zts",
-      "exit_code": 0
-    },
-    {
-      "artifact_id": "build-w05-asan-nts-log",
-      "command": "scripts/native/build.sh --profile w05-asan-nts",
-      "command_id": "build-w05-asan-nts",
-      "exit_code": 0
-    },
-    {
-      "artifact_id": "test-w05-asan-nts-log",
-      "command": "python3 scripts/native/calls/test-w05.py --reference-php /Volumes/CrucialMusic/src/php/php-src/sapi/cli/php --candidate-php /var/folders/p7/wnljx3ss3hn3dhkmk_0nt27c0000gn/T/php-native-w00/php-src-A-16a405aa927f37c5/w05-asan-nts/build/sapi/cli/php --sanitizer address",
-      "command_id": "test-w05-asan-nts",
-      "exit_code": 0
-    },
-    {
-      "artifact_id": "build-w05-ubsan-nts-log",
-      "command": "scripts/native/build.sh --profile w05-ubsan-nts",
-      "command_id": "build-w05-ubsan-nts",
-      "exit_code": 0
-    },
-    {
-      "artifact_id": "test-w05-ubsan-nts-log",
-      "command": "python3 scripts/native/calls/test-w05.py --reference-php /Volumes/CrucialMusic/src/php/php-src/sapi/cli/php --candidate-php /var/folders/p7/wnljx3ss3hn3dhkmk_0nt27c0000gn/T/php-native-w00/php-src-A-16a405aa927f37c5/w05-ubsan-nts/build/sapi/cli/php --sanitizer undefined",
-      "command_id": "test-w05-ubsan-nts",
-      "exit_code": 0
-    },
-    {
-      "artifact_id": "calls-unittest-log",
-      "command": "TEST_PHP_EXECUTABLE=/var/folders/p7/wnljx3ss3hn3dhkmk_0nt27c0000gn/T/php-native-w00/php-src-A-16a405aa927f37c5/w05-debug-nts/build/sapi/cli/php python3 -m unittest discover -s tests/native/calls -p 'test_*.py' -v",
-      "command_id": "calls-unittest",
-      "exit_code": 0
-    },
-    {
-      "artifact_id": "fuzz-20000-log",
-      "command": "python3 tests/native/calls/fuzz/run_fuzz.py --seed 20260719 --cases 20000 --candidate-php /var/folders/p7/wnljx3ss3hn3dhkmk_0nt27c0000gn/T/php-native-w00/php-src-A-16a405aa927f37c5/w05-debug-nts/build/sapi/cli/php",
-      "command_id": "fuzz-20000",
-      "exit_code": 0
-    },
-    {
-      "artifact_id": "validate-w01-log",
-      "command": "python3 scripts/native/semantics/validate-w01.py --check",
-      "command_id": "validate-w01",
-      "exit_code": 0
-    },
-    {
-      "artifact_id": "validate-w02-log",
-      "command": "python3 scripts/native/mir/validate-w02.py --check",
-      "command_id": "validate-w02",
-      "exit_code": 0
-    },
-    {
-      "artifact_id": "validate-w03-log",
-      "command": "python3 scripts/native/lowering/validate-w03.py --check",
-      "command_id": "validate-w03",
-      "exit_code": 0
-    },
-    {
-      "artifact_id": "validate-w04-log",
-      "command": "python3 scripts/native/control-flow/validate-w04.py --check",
-      "command_id": "validate-w04",
-      "exit_code": 0
-    },
-    {
-      "artifact_id": "build-debug-nts-log",
-      "command": "scripts/native/build.sh --profile debug-nts",
       "command_id": "build-debug-nts",
-      "exit_code": 0
+      "path": "tests/native/calls/integration/commands/build-debug-nts.json",
+      "sha256": "40c168a6d61080eb12a05e1128bf40ecf491dd7eda60a1853c5a66ed7dbf9fb0"
     },
     {
-      "artifact_id": "smoke-debug-nts-log",
-      "command": "scripts/native/test-smoke.sh --profile debug-nts",
-      "command_id": "smoke-debug-nts",
-      "exit_code": 0
-    },
-    {
-      "artifact_id": "build-debug-zts-log",
-      "command": "scripts/native/build.sh --profile debug-zts",
       "command_id": "build-debug-zts",
-      "exit_code": 0
+      "path": "tests/native/calls/integration/commands/build-debug-zts.json",
+      "sha256": "2e26e599cc05d4ebf28cab77efa724c6676dba7c622d19ffe98bfaa330a20d3d"
     },
     {
-      "artifact_id": "smoke-debug-zts-log",
-      "command": "scripts/native/test-smoke.sh --profile debug-zts",
+      "command_id": "build-w05-asan-nts",
+      "path": "tests/native/calls/integration/commands/build-w05-asan-nts.json",
+      "sha256": "6fd6014477b6e6c1c0bc7e579ccbbb5a9d591a1f2452f3e0457d189cf5fbcff0"
+    },
+    {
+      "command_id": "build-w05-debug-nts",
+      "path": "tests/native/calls/integration/commands/build-w05-debug-nts.json",
+      "sha256": "7a7b053cc38bdc39ce3ccff03e426440759d980fbcac99f0dccc4d91733727f7"
+    },
+    {
+      "command_id": "build-w05-debug-zts",
+      "path": "tests/native/calls/integration/commands/build-w05-debug-zts.json",
+      "sha256": "3b03d3a3d2b45584dc380d69375eec94325ba9840de4f40295a08a5d3c84643e"
+    },
+    {
+      "command_id": "build-w05-ubsan-nts",
+      "path": "tests/native/calls/integration/commands/build-w05-ubsan-nts.json",
+      "sha256": "3e50bcbf33755edb2697cd042d0be806c2d2e387f5d7370d8bfd0131715fedf3"
+    },
+    {
+      "command_id": "calls-unittest",
+      "path": "tests/native/calls/integration/commands/calls-unittest.json",
+      "sha256": "64b0e1e2afc09ba12be43bd04e5c3c4f2cce7623adbc68ca1bde52ecffef7e37"
+    },
+    {
+      "command_id": "check-contract",
+      "path": "tests/native/calls/integration/commands/check-contract.json",
+      "sha256": "7e90452ef9ea7c94ffcb62247ddbdaa410afcdc23c0013fdbba7d0fcfa3ca33a"
+    },
+    {
+      "command_id": "check-phase-history",
+      "path": "tests/native/calls/integration/commands/check-phase-history.json",
+      "sha256": "ae38afe7d01d3d047a4b2bf74290d06c2c21a091537557032920ded0d6f10e26"
+    },
+    {
+      "command_id": "check-phases",
+      "path": "tests/native/calls/integration/commands/check-phases.json",
+      "sha256": "c08d8869b7b94c9e8c18347786a574e2d12834ea9f390dd5db2844fd756d5520"
+    },
+    {
+      "command_id": "check-reviews",
+      "path": "tests/native/calls/integration/commands/check-reviews.json",
+      "sha256": "e13d53c1331eb2482abb124b6794f2f1a789081e14e51ec335a1d8fcfc1f88fe"
+    },
+    {
+      "command_id": "fuzz-20000",
+      "path": "tests/native/calls/integration/commands/fuzz-20000.json",
+      "sha256": "efb49983678560507e11b615a6c8165767135e1baf5cf6d248d2b91d082e0199"
+    },
+    {
+      "command_id": "smoke-debug-nts",
+      "path": "tests/native/calls/integration/commands/smoke-debug-nts.json",
+      "sha256": "cc9945af1260247158837105236eb67588b08b3f75bf1e0700d5353185208c50"
+    },
+    {
       "command_id": "smoke-debug-zts",
-      "exit_code": 0
+      "path": "tests/native/calls/integration/commands/smoke-debug-zts.json",
+      "sha256": "f9efe6280642edfbeeb6f74161e3661841e7c3fcbb43f0d66f018503b7bf980a"
+    },
+    {
+      "command_id": "test-w05-asan-nts",
+      "path": "tests/native/calls/integration/commands/test-w05-asan-nts.json",
+      "sha256": "38722b4889c3583a09f8bb8dbd3fd06b328ef31f8633e17ec7bbd01d0bd53f61"
+    },
+    {
+      "command_id": "test-w05-debug-nts",
+      "path": "tests/native/calls/integration/commands/test-w05-debug-nts.json",
+      "sha256": "a82cf874f6fa241b3045270d147e9a2e50a3b34a7b5a846ed78c7a113d884c30"
+    },
+    {
+      "command_id": "test-w05-debug-zts",
+      "path": "tests/native/calls/integration/commands/test-w05-debug-zts.json",
+      "sha256": "e3ffe7e111ff0ecb3892f76485df3d02e7069bd0eafaa0636dd4ca659c1824a5"
+    },
+    {
+      "command_id": "test-w05-ubsan-nts",
+      "path": "tests/native/calls/integration/commands/test-w05-ubsan-nts.json",
+      "sha256": "aa88a953f63a0caabbceb9732b5da2d52381b4ebf09d2294d031fa8adc097f44"
+    },
+    {
+      "command_id": "validate-w01",
+      "path": "tests/native/calls/integration/commands/validate-w01.json",
+      "sha256": "a9bb347c93336813bf05b7b753df9bf106f8150243c0dbb7d83bcb3781bbb764"
+    },
+    {
+      "command_id": "validate-w02",
+      "path": "tests/native/calls/integration/commands/validate-w02.json",
+      "sha256": "b96fa35ab9a6c5f8bec1a2dd37cdca417857adadf29cc83c69597ddb5c29a9e4"
+    },
+    {
+      "command_id": "validate-w03",
+      "path": "tests/native/calls/integration/commands/validate-w03.json",
+      "sha256": "4dae9f07effb3b1a6101f5ab7b3d878bdf3cc54fac08f95a5cf853125b000c1d"
+    },
+    {
+      "command_id": "validate-w04",
+      "path": "tests/native/calls/integration/commands/validate-w04.json",
+      "sha256": "79ed842ef582cf82521b40d656b85cd6647278100836162049b35e83a0a7a9fd"
+    },
+    {
+      "command_id": "validate-w05",
+      "path": "tests/native/calls/integration/commands/validate-w05.json",
+      "sha256": "7c81205fc29e1d3f2dc14f89d3cbf05fe9462ba061fe2ce713864d59b14424c6"
+    },
+    {
+      "command_id": "verify-w04",
+      "path": "tests/native/calls/integration/commands/verify-w04.json",
+      "sha256": "9a5b0a9f295e4131fe5e13f1420d72519acc659fe326d87f32b8a60019d86f2b"
+    },
+    {
+      "command_id": "waves-unittest",
+      "path": "tests/native/calls/integration/commands/waves-unittest.json",
+      "sha256": "40822215b67c0c4e3fad3c5bc8846fa309affc75deeda066a7037d1facc894a3"
     }
   ],
-  "coverage_report_path": "docs/native-engine/calls/w05-coverage-report.json",
-  "coverage_report_sha256": "5d8b7337e9ee7f515526c2b9fd91846f471dd0fe60b8ab713032a31b4a998714",
-  "created_at": "2026-07-20T07:36:45Z",
-  "definition_path": "docs/native-engine/waves/waves.json",
-  "definition_sha256": "38e6bb0263cce05201a88807fc094b2cdb0ca1890b27044d4026463c7f617829",
+  "coverage": {
+    "path": "docs/native-engine/calls/w05-coverage-report.json",
+    "sha256": "530f1e489e7f25d8ec46de3ab9d43067a3945692a33db9e38229fc8428930e38"
+  },
+  "definition": {
+    "path": "docs/native-engine/waves/waves.json",
+    "sha256": "972ad0180969f032125e4e73fc2a5f4c5ab9793348fedbc7eab138efed5a0edb"
+  },
   "dependency_receipts": [
     {
-      "receipt_sha256": "7648662dd4a7676d6cf2d145bc870b1ad63f000705fa75bf99cd6d1cdd23fb0a",
+      "path": "docs/native-engine/waves/receipts/W04.json",
+      "sha256": "7648662dd4a7676d6cf2d145bc870b1ad63f000705fa75bf99cd6d1cdd23fb0a",
       "wave_id": "W04"
     }
   ],
-  "format_version": "1.0.0",
-  "profile_paths": [
-    "docs/native-engine/calls/w05-opcode-profile.json",
-    "docs/native-engine/calls/w05-sequence-profile.json",
-    "docs/native-engine/calls/w05-reclassification.json",
-    "docs/native-engine/calls/w05-phase-manifest.json",
-    "docs/native-engine/calls/w05-review-manifest.json",
-    "tests/native/calls/integration/goldens/index.json",
-    "docs/native-engine/build/native-source-manifest.json"
-  ],
-  "profile_sha256": [
-    "9e25da8c49c0f40bc4fa6aeca0e48694a5a5ac65278a7e943b2dafdc6af959fc",
-    "883a7d60d7fdd5bf61285c879eaf6c30d925daf5cb8a074c4bc127f12420b397",
-    "6d3f8d7a7c23d92ef739bb934e494d2ebe537abfa943a8e2b10c63eb05fbf433",
-    "887e5b6ae71ddd3ab41e332830efd79c9346c058e43fed386acab2e13d3d09c7",
-    "58e5501e1f5918565bd12f320235b7a2d0343e6c35f8b124865eea72cab58c4e",
-    "f2dc1c657ea34ae880feca539cebd15ac3443818fc4e381f31edf31e46813e78",
-    "d5238c1b63aceec4ff5c244a7b8286a066af2c7701f76924cc2bf4903e830f5e"
-  ],
-  "review_digests": [
+  "format_version": "2.0.0",
+  "phase_receipts": [
     {
-      "review_id": "W05-review-manifest",
-      "sha256": "58e5501e1f5918565bd12f320235b7a2d0343e6c35f8b124865eea72cab58c4e"
+      "changed_paths": [
+        "Zend/Native/Calls/Contracts/zend_mir_call_source.h",
+        "Zend/Native/MIR/zend_mir_call.h",
+        "Zend/Native/MIR/zend_mir_capability.h",
+        "Zend/Native/MIR/zend_mir_verification.h",
+        "docs/native-engine/adr/0021-w05-v2-evidence-and-capability-registry.md",
+        "docs/native-engine/calls/contracts/call-sequence.md",
+        "docs/native-engine/calls/w05-phase-manifest.json",
+        "docs/native-engine/calls/w05-sequence-profile.json",
+        "docs/native-engine/roadmap/capability-registry.json",
+        "docs/native-engine/roadmap/capability-registry.schema.json",
+        "docs/native-engine/waves/schemas/codex-task-result.schema.json",
+        "docs/native-engine/waves/schemas/command-summary.schema.json",
+        "docs/native-engine/waves/schemas/phase-receipt.schema.json",
+        "docs/native-engine/waves/schemas/review-evidence.schema.json",
+        "docs/native-engine/waves/schemas/wave-receipt-v2.schema.json",
+        "scripts/native/calls/check-contract.py",
+        "scripts/native/calls/check-phases.py",
+        "scripts/native/check-phase-history.py",
+        "scripts/native/verify-wave-receipt.py",
+        "scripts/native/wave-gate.py",
+        "tests/native/calls/contracts/call-sequence-fixtures.json",
+        "tests/native/calls/contracts/test_contract.c",
+        "tests/native/calls/contracts/test_w05_contract.py",
+        "tests/native/waves/test_sealed_task_result.py",
+        "tests/native/waves/test_w05_v2_contract.py",
+        "tests/native/waves/test_wave_ledger.py"
+      ],
+      "command_summary_digests": [],
+      "commit": "e164f851875a621858058fa5d641cdf1477c1466",
+      "format_version": "1.0.0",
+      "parent": "31cac4a51b51c91ad9e25b72c9312775405e2cf4",
+      "phase_id": "W05-v2-contract",
+      "tree": "247d4eccc0b3e1c461b01aa905ad314067e2344c"
     },
     {
-      "review_id": "W05-R1-json",
-      "sha256": "cc4d175fcdf1228c1aadbebdef005abb7468a2c8cfca10c71c82c775c8074a8b"
+      "changed_paths": [
+        "docs/native-engine/waves/tests/test_w05_definition.py",
+        "docs/native-engine/waves/w05-cross-track-contract.md",
+        "docs/native-engine/waves/waves.json"
+      ],
+      "command_summary_digests": [],
+      "commit": "62c21bcab034185eef7c5c88a2d73e9eee108421",
+      "format_version": "1.0.0",
+      "parent": "e164f851875a621858058fa5d641cdf1477c1466",
+      "phase_id": "W05-v2-wave-pin",
+      "tree": "e5df205c7dff5b7536bcb05628c8ddff26e1904c"
     },
     {
-      "review_id": "W05-R1-markdown",
-      "sha256": "9b7b062a9fceb430530fc8e4f99b405077855821774d1ae529449a66735aef39"
+      "changed_paths": [
+        "Zend/Native/Calls/Model/zend_mir_call_model.c",
+        "Zend/Native/Calls/Model/zend_mir_call_model.h",
+        "Zend/Native/Lowering/Frontend/zend_mir_zend_source.c",
+        "Zend/Native/Lowering/Frontend/zend_mir_zend_source.h",
+        "Zend/Native/MIR/Core/zend_mir_module.c",
+        "Zend/Native/MIR/Core/zend_mir_module_internal.h",
+        "Zend/Native/MIR/Core/zend_mir_view.c",
+        "Zend/Native/MIR/Text/zend_mir_dump.c",
+        "Zend/zend_compile.c",
+        "ext/native_mir_test/native_mir_test.c",
+        "tests/native/calls/bridge/test_extension_w05.py",
+        "tests/native/calls/corpus/cases/by_value_parameter_1.php",
+        "tests/native/calls/corpus/cases/by_value_parameter_128.php",
+        "tests/native/calls/corpus/cases/by_value_parameter_65.php",
+        "tests/native/calls/corpus/cases/default_argument_missing.php",
+        "tests/native/calls/corpus/manifest.json",
+        "tests/native/calls/corpus/validate_manifest.py",
+        "tests/native/calls/unit/test_call_contract.c",
+        "tests/native/calls/unit/test_call_model.py"
+      ],
+      "command_summary_digests": [],
+      "commit": "950a69b384ad82bc7792c0f8654753a3e32b7d18",
+      "format_version": "1.0.0",
+      "parent": "62c21bcab034185eef7c5c88a2d73e9eee108421",
+      "phase_id": "W05-v2-implementation",
+      "tree": "37fe0c0dfb4d47d612a107e47c00b45416151c69"
     },
     {
-      "review_id": "W05-R2-json",
-      "sha256": "a7e4e52b5eed1990f31406f4ad2c37c3e850552fa615fe181845995653b6e782"
-    },
-    {
-      "review_id": "W05-R2-markdown",
-      "sha256": "dafe312bc844531ef7d4e15940014b7812cb2caf7d419c68acbefdd58764be55"
+      "changed_paths": [
+        ".github/workflows/native-w05.yml",
+        "docs/native-engine/calls/README.md",
+        "docs/native-engine/calls/w05-coverage-report.json",
+        "docs/native-engine/calls/w05-review-manifest.json",
+        "docs/native-engine/reviews/W05-v2/evidence-history-capability.json",
+        "docs/native-engine/reviews/W05-v2/semantics.json",
+        "scripts/native/calls/build-review-manifest.py",
+        "scripts/native/calls/seal-w05.py",
+        "scripts/native/calls/test-w05.py",
+        "scripts/native/calls/validate-w05.py",
+        "tests/native/calls/integration/commands/build-debug-nts.json",
+        "tests/native/calls/integration/commands/build-debug-zts.json",
+        "tests/native/calls/integration/commands/build-w05-asan-nts.json",
+        "tests/native/calls/integration/commands/build-w05-debug-nts.json",
+        "tests/native/calls/integration/commands/build-w05-debug-zts.json",
+        "tests/native/calls/integration/commands/build-w05-ubsan-nts.json",
+        "tests/native/calls/integration/commands/calls-unittest.json",
+        "tests/native/calls/integration/commands/check-contract.json",
+        "tests/native/calls/integration/commands/check-phase-history.json",
+        "tests/native/calls/integration/commands/check-phases.json",
+        "tests/native/calls/integration/commands/check-reviews.json",
+        "tests/native/calls/integration/commands/fuzz-20000.json",
+        "tests/native/calls/integration/commands/smoke-debug-nts.json",
+        "tests/native/calls/integration/commands/smoke-debug-zts.json",
+        "tests/native/calls/integration/commands/test-w05-asan-nts.json",
+        "tests/native/calls/integration/commands/test-w05-debug-nts.json",
+        "tests/native/calls/integration/commands/test-w05-debug-zts.json",
+        "tests/native/calls/integration/commands/test-w05-ubsan-nts.json",
+        "tests/native/calls/integration/commands/validate-w01.json",
+        "tests/native/calls/integration/commands/validate-w02.json",
+        "tests/native/calls/integration/commands/validate-w03.json",
+        "tests/native/calls/integration/commands/validate-w04.json",
+        "tests/native/calls/integration/commands/validate-w05.json",
+        "tests/native/calls/integration/commands/verify-w04.json",
+        "tests/native/calls/integration/commands/waves-unittest.json",
+        "tests/native/calls/integration/gate-evidence.json",
+        "tests/native/calls/integration/goldens/by_value_parameter_1.znmir",
+        "tests/native/calls/integration/goldens/by_value_parameter_128.znmir",
+        "tests/native/calls/integration/goldens/by_value_parameter_64.znmir",
+        "tests/native/calls/integration/goldens/by_value_parameter_65.znmir",
+        "tests/native/calls/integration/goldens/default_argument.znmir",
+        "tests/native/calls/integration/goldens/direct_call_after_phi.znmir",
+        "tests/native/calls/integration/goldens/direct_call_exact_user_do_fcall.znmir",
+        "tests/native/calls/integration/goldens/direct_call_exact_user_do_ucall.znmir",
+        "tests/native/calls/integration/goldens/direct_call_in_if.znmir",
+        "tests/native/calls/integration/goldens/direct_call_in_reducible_loop.znmir",
+        "tests/native/calls/integration/goldens/direct_user_scalar_literals.znmir",
+        "tests/native/calls/integration/goldens/direct_user_scalar_result_bool.znmir",
+        "tests/native/calls/integration/goldens/direct_user_scalar_result_float.znmir",
+        "tests/native/calls/integration/goldens/direct_user_scalar_result_followup.znmir",
+        "tests/native/calls/integration/goldens/direct_user_scalar_result_int.znmir",
+        "tests/native/calls/integration/goldens/direct_user_scalar_result_null.znmir",
+        "tests/native/calls/integration/goldens/direct_user_scalar_variables.znmir",
+        "tests/native/calls/integration/goldens/direct_user_zero_args_unused_return.znmir",
+        "tests/native/calls/integration/goldens/index.json",
+        "tests/native/calls/integration/goldens/named_argument_normalized_position.znmir",
+        "tests/native/calls/integration/goldens/recursive_self_call.znmir",
+        "tests/native/calls/integration/goldens/two_direct_calls_same_block.znmir",
+        "tests/native/calls/integration/test_w05_gate.py"
+      ],
+      "command_summary_digests": [
+        {
+          "command_id": "build-debug-nts",
+          "path": "tests/native/calls/integration/commands/build-debug-nts.json",
+          "sha256": "40c168a6d61080eb12a05e1128bf40ecf491dd7eda60a1853c5a66ed7dbf9fb0"
+        },
+        {
+          "command_id": "build-debug-zts",
+          "path": "tests/native/calls/integration/commands/build-debug-zts.json",
+          "sha256": "2e26e599cc05d4ebf28cab77efa724c6676dba7c622d19ffe98bfaa330a20d3d"
+        },
+        {
+          "command_id": "build-w05-asan-nts",
+          "path": "tests/native/calls/integration/commands/build-w05-asan-nts.json",
+          "sha256": "6fd6014477b6e6c1c0bc7e579ccbbb5a9d591a1f2452f3e0457d189cf5fbcff0"
+        },
+        {
+          "command_id": "build-w05-debug-nts",
+          "path": "tests/native/calls/integration/commands/build-w05-debug-nts.json",
+          "sha256": "7a7b053cc38bdc39ce3ccff03e426440759d980fbcac99f0dccc4d91733727f7"
+        },
+        {
+          "command_id": "build-w05-debug-zts",
+          "path": "tests/native/calls/integration/commands/build-w05-debug-zts.json",
+          "sha256": "3b03d3a3d2b45584dc380d69375eec94325ba9840de4f40295a08a5d3c84643e"
+        },
+        {
+          "command_id": "build-w05-ubsan-nts",
+          "path": "tests/native/calls/integration/commands/build-w05-ubsan-nts.json",
+          "sha256": "3e50bcbf33755edb2697cd042d0be806c2d2e387f5d7370d8bfd0131715fedf3"
+        },
+        {
+          "command_id": "calls-unittest",
+          "path": "tests/native/calls/integration/commands/calls-unittest.json",
+          "sha256": "64b0e1e2afc09ba12be43bd04e5c3c4f2cce7623adbc68ca1bde52ecffef7e37"
+        },
+        {
+          "command_id": "check-contract",
+          "path": "tests/native/calls/integration/commands/check-contract.json",
+          "sha256": "7e90452ef9ea7c94ffcb62247ddbdaa410afcdc23c0013fdbba7d0fcfa3ca33a"
+        },
+        {
+          "command_id": "check-phase-history",
+          "path": "tests/native/calls/integration/commands/check-phase-history.json",
+          "sha256": "ae38afe7d01d3d047a4b2bf74290d06c2c21a091537557032920ded0d6f10e26"
+        },
+        {
+          "command_id": "check-phases",
+          "path": "tests/native/calls/integration/commands/check-phases.json",
+          "sha256": "c08d8869b7b94c9e8c18347786a574e2d12834ea9f390dd5db2844fd756d5520"
+        },
+        {
+          "command_id": "check-reviews",
+          "path": "tests/native/calls/integration/commands/check-reviews.json",
+          "sha256": "e13d53c1331eb2482abb124b6794f2f1a789081e14e51ec335a1d8fcfc1f88fe"
+        },
+        {
+          "command_id": "fuzz-20000",
+          "path": "tests/native/calls/integration/commands/fuzz-20000.json",
+          "sha256": "efb49983678560507e11b615a6c8165767135e1baf5cf6d248d2b91d082e0199"
+        },
+        {
+          "command_id": "smoke-debug-nts",
+          "path": "tests/native/calls/integration/commands/smoke-debug-nts.json",
+          "sha256": "cc9945af1260247158837105236eb67588b08b3f75bf1e0700d5353185208c50"
+        },
+        {
+          "command_id": "smoke-debug-zts",
+          "path": "tests/native/calls/integration/commands/smoke-debug-zts.json",
+          "sha256": "f9efe6280642edfbeeb6f74161e3661841e7c3fcbb43f0d66f018503b7bf980a"
+        },
+        {
+          "command_id": "test-w05-asan-nts",
+          "path": "tests/native/calls/integration/commands/test-w05-asan-nts.json",
+          "sha256": "38722b4889c3583a09f8bb8dbd3fd06b328ef31f8633e17ec7bbd01d0bd53f61"
+        },
+        {
+          "command_id": "test-w05-debug-nts",
+          "path": "tests/native/calls/integration/commands/test-w05-debug-nts.json",
+          "sha256": "a82cf874f6fa241b3045270d147e9a2e50a3b34a7b5a846ed78c7a113d884c30"
+        },
+        {
+          "command_id": "test-w05-debug-zts",
+          "path": "tests/native/calls/integration/commands/test-w05-debug-zts.json",
+          "sha256": "e3ffe7e111ff0ecb3892f76485df3d02e7069bd0eafaa0636dd4ca659c1824a5"
+        },
+        {
+          "command_id": "test-w05-ubsan-nts",
+          "path": "tests/native/calls/integration/commands/test-w05-ubsan-nts.json",
+          "sha256": "aa88a953f63a0caabbceb9732b5da2d52381b4ebf09d2294d031fa8adc097f44"
+        },
+        {
+          "command_id": "validate-w01",
+          "path": "tests/native/calls/integration/commands/validate-w01.json",
+          "sha256": "a9bb347c93336813bf05b7b753df9bf106f8150243c0dbb7d83bcb3781bbb764"
+        },
+        {
+          "command_id": "validate-w02",
+          "path": "tests/native/calls/integration/commands/validate-w02.json",
+          "sha256": "b96fa35ab9a6c5f8bec1a2dd37cdca417857adadf29cc83c69597ddb5c29a9e4"
+        },
+        {
+          "command_id": "validate-w03",
+          "path": "tests/native/calls/integration/commands/validate-w03.json",
+          "sha256": "4dae9f07effb3b1a6101f5ab7b3d878bdf3cc54fac08f95a5cf853125b000c1d"
+        },
+        {
+          "command_id": "validate-w04",
+          "path": "tests/native/calls/integration/commands/validate-w04.json",
+          "sha256": "79ed842ef582cf82521b40d656b85cd6647278100836162049b35e83a0a7a9fd"
+        },
+        {
+          "command_id": "validate-w05",
+          "path": "tests/native/calls/integration/commands/validate-w05.json",
+          "sha256": "7c81205fc29e1d3f2dc14f89d3cbf05fe9462ba061fe2ce713864d59b14424c6"
+        },
+        {
+          "command_id": "verify-w04",
+          "path": "tests/native/calls/integration/commands/verify-w04.json",
+          "sha256": "9a5b0a9f295e4131fe5e13f1420d72519acc659fe326d87f32b8a60019d86f2b"
+        },
+        {
+          "command_id": "waves-unittest",
+          "path": "tests/native/calls/integration/commands/waves-unittest.json",
+          "sha256": "40822215b67c0c4e3fad3c5bc8846fa309affc75deeda066a7037d1facc894a3"
+        }
+      ],
+      "commit": "4e304ffb41a03e555ca7dc290edf7a1466ec5c14",
+      "format_version": "1.0.0",
+      "parent": "950a69b384ad82bc7792c0f8654753a3e32b7d18",
+      "phase_id": "W05-v2-gate",
+      "tree": "de3e3897b2c474d7975e9680719ce8f8180d2690"
     }
   ],
-  "semantic_debts": [
-    "call_runtime_binding",
-    "call_exception_propagation",
-    "call_bailout_reentry",
-    "call_observer_integration",
-    "call_result_ownership",
-    "internal_c_abi"
+  "profiles": [
+    {
+      "path": "docs/native-engine/calls/w05-opcode-profile.json",
+      "sha256": "9e25da8c49c0f40bc4fa6aeca0e48694a5a5ac65278a7e943b2dafdc6af959fc"
+    },
+    {
+      "path": "docs/native-engine/calls/w05-sequence-profile.json",
+      "sha256": "32d5ab11466df6dc16e6bee2b423199268c4bad4396e38dc4823efe3fde10e0e"
+    },
+    {
+      "path": "docs/native-engine/calls/w05-reclassification.json",
+      "sha256": "6d3f8d7a7c23d92ef739bb934e494d2ebe537abfa943a8e2b10c63eb05fbf433"
+    },
+    {
+      "path": "docs/native-engine/calls/w05-phase-manifest.json",
+      "sha256": "f0083fba803f471af337442966853ce15805c694b9765d0dbeaec9da2b713d1e"
+    },
+    {
+      "path": "docs/native-engine/calls/w05-review-manifest.json",
+      "sha256": "c2b89557fb4c707933dbcba633140613531d639e3883060a8cabfe61fe7d3dfb"
+    },
+    {
+      "path": "tests/native/calls/integration/goldens/index.json",
+      "sha256": "fbecae6832967731ee14340947906d8a3b2fb569c57cae1eaa3d6f57b36b9222"
+    },
+    {
+      "path": "tests/native/calls/integration/gate-evidence.json",
+      "sha256": "0a4fd1a86c2952af4796545de6b7a5b1bff68d9714d4dce8b02c1835fe627162"
+    },
+    {
+      "path": "docs/native-engine/build/native-source-manifest.json",
+      "sha256": "d5238c1b63aceec4ff5c244a7b8286a066af2c7701f76924cc2bf4903e830f5e"
+    }
+  ],
+  "reviews": [
+    {
+      "path": "docs/native-engine/reviews/W05-v2/semantics.json",
+      "sha256": "77cdbcd0b2f94dca4aec4c6c02bfdc936a98f8cc7ac0910eaef3b164246fe904"
+    },
+    {
+      "path": "docs/native-engine/reviews/W05-v2/evidence-history-capability.json",
+      "sha256": "33419a7f70b53997dc1402392605e9e6980dcd1e9e0d1e35c6a89d99cc771897"
+    }
+  ],
+  "semantic_debt_ids": [
+    "call_execution",
+    "cow_indirect_semantics",
+    "dynamic_target_resolution",
+    "exception_cleanup",
+    "internal_c_abi_interop",
+    "observer_interop",
+    "protected_continuation",
+    "refcounted_transfer"
   ],
   "state": "sealed",
-  "subject_commit": "c3bdcb26d5ed2d94a67e831ae32335fecb7b8d84",
-  "subject_tree": "8c71adc558be46160c2f3a5d9b244f1159eb29d4",
+  "subject_commit": "4e304ffb41a03e555ca7dc290edf7a1466ec5c14",
+  "subject_tree": "de3e3897b2c474d7975e9680719ce8f8180d2690",
+  "verification_level": "full",
   "wave_id": "W05"
 }
