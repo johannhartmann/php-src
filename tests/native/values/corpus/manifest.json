@@ -14,7 +14,24 @@
       "function": "f",
       "expected_status": "accepted",
       "required_source_opcodes": ["ZEND_ASSIGN_REF"],
-      "required_mir_tokens": ["reference-cell rc0", "alias-relation ac0"]
+      "required_mir_tokens": ["reference-cell rc0", "alias-relation ac0"],
+      "exact_mir_token_counts": {
+        "reference-cell ": 1,
+        "alias-relation ": 1
+      }
+    },
+    {
+      "name": "local_reference_rebinding",
+      "runtime": true,
+      "source": "<?php function f(int $x,int $y,int $z){$x =& $y; $y =& $z; return $x;}",
+      "function": "f",
+      "expected_status": "accepted",
+      "required_source_opcodes": ["ZEND_ASSIGN_REF"],
+      "required_mir_tokens": ["reference-cell rc0", "reference-cell rc1"],
+      "exact_mir_token_counts": {
+        "reference-cell ": 2,
+        "alias-relation ": 2
+      }
     },
     {
       "name": "local_alias_write_scalar",

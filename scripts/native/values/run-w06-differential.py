@@ -137,6 +137,22 @@ def verify_case(php: Path, case: dict[str, object]) -> None:
         for token in case.get("required_mir_tokens", []):
             if token not in mir:
                 raise RuntimeError(f"{case['name']}: missing MIR token {token!r}")
+        exact_counts = case.get("exact_mir_token_counts", {})
+        if not isinstance(exact_counts, dict):
+            raise RuntimeError(
+                f"{case['name']}: exact MIR token counts are not an object"
+            )
+        for token, expected_count in exact_counts.items():
+            if not isinstance(token, str) or not isinstance(expected_count, int):
+                raise RuntimeError(
+                    f"{case['name']}: invalid exact MIR token count"
+                )
+            actual_count = mir.count(token)
+            if actual_count != expected_count:
+                raise RuntimeError(
+                    f"{case['name']}: MIR token {token!r} occurs "
+                    f"{actual_count} times, expected {expected_count}"
+                )
     elif mir is not None:
         raise RuntimeError(f"{case['name']}: non-accepted result published MIR")
 

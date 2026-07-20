@@ -13,6 +13,7 @@ PROFILE = ROOT.parents[3] / "docs/native-engine/values/w06-opcode-profile.json"
 EXPECTED_MODELED = {
     "local_make_ref",
     "local_assign_ref",
+    "local_reference_rebinding",
     "local_alias_write_scalar",
     "local_unset_and_isset",
     "copy_tmp_refcounted_string",
@@ -75,6 +76,18 @@ def validate() -> dict[str, object]:
                 raise SystemExit(f"{entry['name']}: missing source opcode evidence")
             if not entry.get("required_mir_tokens"):
                 raise SystemExit(f"{entry['name']}: missing MIR property evidence")
+            exact_counts = entry.get("exact_mir_token_counts", {})
+            if not isinstance(exact_counts, dict) or any(
+                not isinstance(token, str)
+                or not token
+                or not isinstance(expected, int)
+                or isinstance(expected, bool)
+                or expected < 0
+                for token, expected in exact_counts.items()
+            ):
+                raise SystemExit(
+                    f"{entry['name']}: invalid exact MIR token counts"
+                )
         else:
             if entry.get("profile_opcode") not in accepted:
                 raise SystemExit(
