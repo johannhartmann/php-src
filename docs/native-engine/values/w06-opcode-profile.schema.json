@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["active_opcode_count", "accepted_variant_count", "capabilities_provided", "codegen_eligible", "format_version", "live_w06_deferred_count", "mir_contract_version", "opcodes", "proof_catalog", "reserved_opcode_numbers", "semantic_debts_remaining", "sources", "unresolved_w06_count", "w06_accepted_count"],
+  "properties": {
+    "active_opcode_count": {"type": "integer", "minimum": 1},
+    "accepted_variant_count": {"type": "integer", "minimum": 1},
+    "capabilities_provided": {"type": "array", "minItems": 8, "uniqueItems": true, "items": {"type": "string"}},
+    "codegen_eligible": {"const": false},
+    "format_version": {"const": 1},
+    "live_w06_deferred_count": {"type": "integer", "minimum": 1},
+    "mir_contract_version": {"const": "1.9"},
+    "opcodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["decision", "later_wave", "number", "opcode", "proofs", "rationale", "source_refs", "transition_family", "w05_classification", "w05_deferred_wave"],
+        "properties": {
+          "decision": {"enum": ["inherited", "accepted", "accepted_variant", "deferred", "owner_sequence"]},
+          "later_wave": {"type": ["string", "null"]},
+          "number": {"type": "integer", "minimum": 0},
+          "opcode": {"type": "string", "pattern": "^ZEND_[A-Z0-9_]+$"},
+          "proofs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "rationale": {"type": "string", "minLength": 1},
+          "source_refs": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+          "transition_family": {"type": "string", "minLength": 1},
+          "w05_classification": {"enum": ["inherited", "conditional", "deferred"]},
+          "w05_deferred_wave": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "proof_catalog": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "reserved_opcode_numbers": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+    "semantic_debts_remaining": {"type": "array", "minItems": 8, "uniqueItems": true, "items": {"type": "string"}},
+    "sources": {"type": "object"},
+    "unresolved_w06_count": {"const": 0},
+    "w06_accepted_count": {"type": "integer", "minimum": 1}
+  }
+}

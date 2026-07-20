@@ -10,6 +10,7 @@ typedef enum _zend_mir_verifier_id {
 	ZEND_MIR_VERIFIER_SCALAR = 2,
 	ZEND_MIR_VERIFIER_CONTROL_FLOW = 3,
 	ZEND_MIR_VERIFIER_CALL_MODEL = 4,
+	ZEND_MIR_VERIFIER_VALUE_REFERENCE = 5,
 	ZEND_MIR_VERIFIER_ID_INVALID = -1
 } zend_mir_verifier_id;
 
@@ -21,8 +22,10 @@ typedef enum _zend_mir_verifier_status {
 
 /*
  * Fingerprints and diagnostic digests are stable 128-bit values represented as
- * four words in network order. Every successful W05 verifier receipt must bind
- * the same final module and source fingerprints.
+ * four words in network order. Every successful receipt in one result must
+ * bind the same final module and source fingerprints. W06 requires structural,
+ * scalar, control-flow and value/reference receipts, plus call-model whenever
+ * calls are present.
  */
 typedef struct _zend_mir_verifier_receipt_ref {
 	zend_mir_verifier_id verifier_id;

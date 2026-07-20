@@ -6,6 +6,7 @@
 
 #include "../MIR/zend_mir.h"
 #include "../MIR/zend_mir_call.h"
+#include "../MIR/zend_mir_values.h"
 #include "zend_mir_lowering_diagnostic.h"
 #include "zend_mir_lowering_registry.h"
 #include "zend_mir_lowering_source.h"
@@ -49,6 +50,21 @@ typedef struct _zend_mir_w05_lowering_result {
 	bool modeled;
 	bool codegen_eligible;
 } zend_mir_w05_lowering_result;
+
+/*
+ * W06 is a named-capability result, not a new generic stage bit. The W05
+ * result remains an immutable prerequisite receipt. canonical contains sorted
+ * registry transport IDs, verifier_receipts identifies the same final module
+ * fingerprint for the required verifier pipeline, and codegen remains false
+ * while any semantic debt is open.
+ */
+typedef struct _zend_mir_w06_lowering_result {
+	zend_mir_w05_lowering_result prerequisite;
+	zend_mir_capability_set_ref canonical;
+	zend_mir_span verifier_receipts;
+	bool modeled;
+	bool codegen_eligible;
+} zend_mir_w06_lowering_result;
 
 static inline bool zend_mir_lowering_result_is_failure_atomic(
 	const zend_mir_lowering_result *result)
@@ -109,6 +125,39 @@ static inline bool zend_mir_lowering_result_is_w05_failure_atomic(
 		&& result->prerequisite_guarantees == 0
 		&& result->capabilities == 0
 		&& result->semantic_debts == 0
+		&& !result->modeled
+		&& !result->codegen_eligible;
+}
+
+static inline bool zend_mir_lowering_result_is_w06_failure_atomic(
+	const zend_mir_w06_lowering_result *result)
+{
+	if (result == NULL) {
+		return false;
+	}
+	if (result->prerequisite.lowering.status == ZEND_MIR_LOWERING_SUCCESS) {
+		return zend_mir_lowering_result_is_w05_failure_atomic(&result->prerequisite)
+			&& result->canonical.capability_ids.count != 0
+			&& result->canonical.semantic_debt_ids.count != 0
+			&& !result->canonical.codegen_eligible
+			&& result->verifier_receipts.count >= 4
+			&& result->modeled
+			&& !result->codegen_eligible;
+	}
+	return result->prerequisite.lowering.status
+			!= ZEND_MIR_LOWERING_STATUS_INVALID
+		&& result->prerequisite.lowering.diagnostic_code != ZEND_MIRL_OK
+		&& result->prerequisite.lowering.guarantees == 0
+		&& result->prerequisite.lowering.module == NULL
+		&& result->prerequisite.prerequisite_guarantees == 0
+		&& result->prerequisite.capabilities == 0
+		&& result->prerequisite.semantic_debts == 0
+		&& !result->prerequisite.modeled
+		&& !result->prerequisite.codegen_eligible
+		&& result->canonical.capability_ids.count == 0
+		&& result->canonical.semantic_debt_ids.count == 0
+		&& !result->canonical.codegen_eligible
+		&& result->verifier_receipts.count == 0
 		&& !result->modeled
 		&& !result->codegen_eligible;
 }
