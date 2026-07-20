@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[4]
 DEFINITION_PATH = ROOT / "docs/native-engine/waves/waves.json"
 MANIFEST_PATH = ROOT / "docs/native-engine/calls/w05-phase-manifest.json"
 WAVE_GATE_PATH = ROOT / "scripts/native/wave-gate.py"
-H = "63a5070daa91da9e702d0ff52ea4d77c20ad89e6"
+H = "e164f851875a621858058fa5d641cdf1477c1466"
 
 SPEC = importlib.util.spec_from_file_location("w05_wave_gate", WAVE_GATE_PATH)
 assert SPEC is not None and SPEC.loader is not None
@@ -41,7 +41,11 @@ class W05DefinitionTests(unittest.TestCase):
 
     def test_task_paths_are_generated_from_serial_writing_phases(self) -> None:
         expected: list[str] = []
-        for phase_id in ("implementation", "gate", "seal"):
+        for phase_id in (
+            "W05-v2-implementation",
+            "W05-v2-gate",
+            "W05-v2-seal",
+        ):
             phase = next(
                 item for item in self.manifest["phases"]
                 if item["phase_id"] == phase_id
