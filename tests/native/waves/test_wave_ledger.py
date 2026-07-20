@@ -39,7 +39,11 @@ class WaveLedgerTests(unittest.TestCase):
             "docs/native-engine/waves/receipts/W04.json",
             entries["W04"]["receipt_path"],
         )
-        self.assertEqual("pending", entries["W05"]["state"])
+        self.assertEqual("sealed", entries["W05"]["state"])
+        self.assertEqual(
+            "docs/native-engine/waves/receipts/W05.json",
+            entries["W05"]["receipt_path"],
+        )
         for number in range(6, 19):
             self.assertEqual("unstarted", entries["W%02d" % number]["state"])
 
@@ -61,7 +65,7 @@ class WaveLedgerTests(unittest.TestCase):
         self.assertNotIn("created_at", first)
         self.assertNotIn("Timestamp", first)
         self.assertIn("**Status:** `UNSEALED`", first)
-        self.assertIn("**Status:** `PENDING`", first)
+        self.assertIn("**Status:** `SEALED`", first)
         self.assertIn("**Status:** `UNSTARTED`", first)
 
     def test_explicit_results_commands_preserve_existing_result_mode(self):

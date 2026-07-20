@@ -31,16 +31,17 @@ enum {
 	ZEND_MIR_SOURCE_CALL_SITE_NESTED = UINT32_C(1) << 3
 };
 
-enum {
-	ZEND_MIR_SOURCE_CALL_ARGUMENT_SYNTACTIC_NAMED = UINT32_C(1) << 0
-};
+typedef enum _zend_mir_source_parameter_mode {
+	ZEND_MIR_SOURCE_PARAMETER_BY_VALUE = 0,
+	ZEND_MIR_SOURCE_PARAMETER_BY_REFERENCE = 1,
+	ZEND_MIR_SOURCE_PARAMETER_MODE_INVALID = -1
+} zend_mir_source_parameter_mode;
 
-/*
- * Private zend_compile.c SEND metadata translated into the source-view flag
- * above. This freezes the producer/consumer bit without adding it to a public
- * Zend header or changing the zend_op layout.
- */
-#define ZEND_MIR_ZEND_SEND_SYNTACTIC_NAMED (UINT32_C(1) << 31)
+typedef struct _zend_mir_source_parameter_mode_ref {
+	zend_mir_source_call_target_id target_id;
+	uint32_t ordinal;
+	zend_mir_source_parameter_mode mode;
+} zend_mir_source_parameter_mode_ref;
 
 typedef struct _zend_mir_source_call_site_ref {
 	zend_mir_source_call_site_id id;
@@ -62,7 +63,7 @@ typedef struct _zend_mir_source_call_target_ref {
 	uint32_t num_args;
 	uint32_t required_num_args;
 	uint32_t function_flags_snapshot;
-	uint64_t by_ref_mask;
+	zend_mir_span parameter_modes;
 	bool variadic;
 	bool returns_by_reference;
 } zend_mir_source_call_target_ref;
@@ -82,9 +83,10 @@ typedef struct _zend_mir_source_call_argument_ref {
 /*
  * Table order is semantic. Call sites are ordered by INIT opline, arguments by
  * (call_site_id, ordinal), and targets by stable source ID. Parent IDs encode
- * nesting. The SYNTACTIC_NAMED flag is copied from compiler-preserved SEND
- * metadata and remains set even if target resolution rewrote op2 to a numeric
- * position. No callback may expose a process address as identity.
+ * nesting. A named call that the compiler normalized into a complete ordered
+ * argument list is indistinguishable from its positional form and needs no
+ * syntax-history side channel. No callback may expose a process address as
+ * identity.
  */
 typedef struct _zend_mir_source_call_view {
 	uint32_t contract_version;
@@ -98,6 +100,9 @@ typedef struct _zend_mir_source_call_view {
 	uint32_t (*call_argument_count)(const void *context);
 	bool (*call_argument_at)(const void *context, uint32_t index,
 		zend_mir_source_call_argument_ref *out);
+	uint32_t (*parameter_mode_count)(const void *context);
+	bool (*parameter_mode_at)(const void *context, uint32_t index,
+		zend_mir_source_parameter_mode_ref *out);
 	uint32_t (*source_opcode_count)(const void *context);
 	bool (*source_opcode_at)(const void *context, uint32_t index,
 		zend_mir_source_opcode_ref *out);

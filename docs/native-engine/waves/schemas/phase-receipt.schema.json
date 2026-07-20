@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://php.net/schemas/native-engine/phase-receipt-1.0.0.json",
+  "title": "Native-engine phase receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format_version", "phase_id", "commit", "tree", "parent", "changed_paths", "command_summary_digests"],
+  "properties": {
+    "format_version": {"const": "1.0.0"},
+    "phase_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*$"},
+    "commit": {"$ref": "#/$defs/commit"},
+    "tree": {"$ref": "#/$defs/commit"},
+    "parent": {"$ref": "#/$defs/commit"},
+    "changed_paths": {"type": "array", "items": {"$ref": "#/$defs/relativePath"}},
+    "command_summary_digests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command_id", "path", "sha256"],
+        "properties": {
+          "command_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+          "path": {"$ref": "#/$defs/relativePath"},
+          "sha256": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "relativePath": {"type": "string", "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$)).+$"}
+  }
+}

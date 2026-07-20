@@ -24,6 +24,12 @@ SPEC.loader.exec_module(WAVE_GATE)
 
 def sealed_result() -> dict:
     result = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+    phases = (
+        "W05-v2-contract",
+        "W05-v2-wave-pin",
+        "W05-v2-implementation",
+        "W05-v2-gate",
+    )
     result.update(
         {
             "task_id": "W05-integration-gate",
@@ -33,6 +39,18 @@ def sealed_result() -> dict:
                 "receipt_path": "docs/native-engine/waves/receipts/W05.json",
                 "receipt_sha256": "b" * 64,
             },
+            "phase_receipts": [
+                {
+                    "format_version": "1.0.0",
+                    "phase_id": phase,
+                    "commit": ("%x" % (index + 1)) * 40,
+                    "tree": ("%x" % (index + 5)) * 40,
+                    "parent": ("%x" % (index + 9)) * 40,
+                    "changed_paths": ["path/file.c"],
+                    "command_summary_digests": [],
+                }
+                for index, phase in enumerate(phases)
+            ],
         }
     )
     for evidence in result["gate_evidence"]:
@@ -53,7 +71,9 @@ class SealedTaskResultTests(unittest.TestCase):
         )
 
     def test_w05_result_requires_tested_head_and_receipt_binding(self) -> None:
-        for missing in ("tested_head_commit", "seal_subject"):
+        for missing in (
+            "tested_head_commit", "seal_subject", "phase_receipts",
+        ):
             with self.subTest(missing=missing):
                 result = sealed_result()
                 del result[missing]

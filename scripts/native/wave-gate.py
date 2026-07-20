@@ -129,6 +129,17 @@ def require_keys(value: Dict[str, Any], keys: Iterable[str], path: str, issues: 
             issues.append("%s.%s is required" % (path, key))
 
 
+def reject_unknown(
+    value: Dict[str, Any], keys: Iterable[str], path: str, issues: List[str]
+) -> None:
+    unknown = set(value) - set(keys)
+    if unknown:
+        issues.append(
+            "%s has unknown fields: %s"
+            % (path, ", ".join(sorted(unknown)))
+        )
+
+
 def require_string(value: Dict[str, Any], key: str, path: str, issues: List[str], nonempty: bool = True) -> None:
     if key not in value:
         return
@@ -184,7 +195,9 @@ def validate_artifact(value: Any, path: str, issues: List[str]) -> None:
     obj = require_object(value, path, issues)
     if obj is None:
         return
-    require_keys(obj, ("kind", "reference"), path, issues)
+    required = ("kind", "reference")
+    require_keys(obj, required, path, issues)
+    reject_unknown(obj, required, path, issues)
     if obj.get("kind") not in {"local", "ci"}:
         issues.append("%s.kind must be local or ci" % path)
     require_string(obj, "reference", path, issues)
@@ -207,6 +220,89 @@ def validate_seal_subject(value: Any, path: str, issues: List[str]) -> None:
         issues.append("%s.receipt_sha256 must be a lowercase SHA-256" % path)
 
 
+def validate_phase_receipts(value: Any, path: str, issues: List[str]) -> None:
+    receipts = require_array(value, path, issues)
+    if receipts is None:
+        return
+    actual = []
+    for index, item in enumerate(receipts):
+        item_path = "%s[%d]" % (path, index)
+        receipt = require_object(item, item_path, issues)
+        if receipt is None:
+            continue
+        required = (
+            "format_version", "phase_id", "commit", "tree", "parent",
+            "changed_paths", "command_summary_digests",
+        )
+        require_keys(receipt, required, item_path, issues)
+        unknown = set(receipt) - set(required)
+        if unknown:
+            issues.append(
+                "%s has unknown fields: %s"
+                % (item_path, ", ".join(sorted(unknown)))
+            )
+        if receipt.get("format_version") != "1.0.0":
+            issues.append("%s.format_version must be 1.0.0" % item_path)
+        actual.append(receipt.get("phase_id"))
+        require_string(receipt, "phase_id", item_path, issues)
+        for field in ("commit", "tree", "parent"):
+            check_commit(receipt.get(field), "%s.%s" % (item_path, field), issues)
+        require_string_array(receipt, "changed_paths", item_path, issues)
+        changed_paths = receipt.get("changed_paths")
+        if isinstance(changed_paths, list):
+            for changed_index, changed_path in enumerate(changed_paths):
+                check_relative_path(
+                    changed_path,
+                    "%s.changed_paths[%d]" % (item_path, changed_index),
+                    issues,
+                )
+        digests = require_array(
+            receipt.get("command_summary_digests"),
+            "%s.command_summary_digests" % item_path,
+            issues,
+        )
+        if digests is not None:
+            for digest_index, digest_value in enumerate(digests):
+                digest_path = "%s.command_summary_digests[%d]" % (
+                    item_path, digest_index,
+                )
+                digest = require_object(digest_value, digest_path, issues)
+                if digest is None:
+                    continue
+                required_digest = ("command_id", "path", "sha256")
+                require_keys(digest, required_digest, digest_path, issues)
+                unknown_digest = set(digest) - set(required_digest)
+                if unknown_digest:
+                    issues.append(
+                        "%s has unknown fields: %s"
+                        % (
+                            digest_path,
+                            ", ".join(sorted(unknown_digest)),
+                        )
+                    )
+                command_id = digest.get("command_id")
+                if (
+                    not is_string(command_id)
+                    or re.fullmatch(
+                        r"[a-z0-9][a-z0-9-]*", command_id
+                    ) is None
+                ):
+                    issues.append(digest_path + ".command_id is invalid")
+                check_relative_path(digest.get("path"), digest_path + ".path", issues)
+                if not is_string(digest.get("sha256")) or SHA256_RE.fullmatch(digest.get("sha256", "")) is None:
+                    issues.append(digest_path + ".sha256 must be a lowercase SHA-256")
+    if (
+        len(actual) < 4
+        or actual[:2] != ["W05-v2-contract", "W05-v2-wave-pin"]
+        or actual[-1:] != ["W05-v2-gate"]
+        or any(
+            phase_id != "W05-v2-implementation"
+            for phase_id in actual[2:-1]
+        )
+    ):
+        issues.append("%s must contain QH, QP, QM, and QG in order" % path)
+
+
 def validate_gate_evidence(value: Any) -> List[str]:
     issues: List[str] = []
     obj = require_object(value, "$", issues)
@@ -214,6 +310,7 @@ def validate_gate_evidence(value: Any) -> List[str]:
         return issues
     required = ("format_version", "wave_id", "gate_id", "status", "summary", "artifact")
     require_keys(obj, required, "$", issues)
+    reject_unknown(obj, required, "$", issues)
     check_format_version(obj, "$", issues)
     if not is_string(obj.get("wave_id")) or not WAVE_RE.fullmatch(obj.get("wave_id", "")):
         issues.append("$.wave_id must be W00 through W18")
@@ -331,7 +428,7 @@ def validate_result(value: Any, definition: Dict[str, Any]) -> List[str]:
         "worktree_clean", "timestamp",
     )
     require_keys(obj, required, "$", issues)
-    allowed = set(required) | {"tested_head_commit", "seal_subject"}
+    allowed = set(required) | {"tested_head_commit", "seal_subject", "phase_receipts"}
     unknown = set(obj) - allowed
     if unknown:
         issues.append("$ has unknown fields: %s" % ", ".join(sorted(unknown)))
@@ -351,8 +448,15 @@ def validate_result(value: Any, definition: Dict[str, Any]) -> List[str]:
         check_commit(obj.get("tested_head_commit"), "$.tested_head_commit", issues)
     if "seal_subject" in obj:
         validate_seal_subject(obj.get("seal_subject"), "$.seal_subject", issues)
+    if "phase_receipts" in obj:
+        validate_phase_receipts(obj.get("phase_receipts"), "$.phase_receipts", issues)
     if task_id == "W05-integration-gate":
-        require_keys(obj, ("tested_head_commit", "seal_subject"), "$", issues)
+        require_keys(
+            obj,
+            ("tested_head_commit", "seal_subject", "phase_receipts"),
+            "$",
+            issues,
+        )
         if obj.get("head_commit") is not None:
             issues.append(
                 "$.head_commit must be null for the sealed W05 result"
@@ -368,7 +472,11 @@ def validate_result(value: Any, definition: Dict[str, Any]) -> List[str]:
             test = require_object(item, path, issues)
             if test is None:
                 continue
-            require_keys(test, ("command", "status", "exit_code", "duration_ms", "artifact"), path, issues)
+            required_test = (
+                "command", "status", "exit_code", "duration_ms", "artifact",
+            )
+            require_keys(test, required_test, path, issues)
+            reject_unknown(test, required_test, path, issues)
             require_string(test, "command", path, issues)
             if test.get("status") not in STATUSES:
                 issues.append("%s.status has an invalid status" % path)
@@ -386,7 +494,9 @@ def validate_result(value: Any, definition: Dict[str, Any]) -> List[str]:
             criterion = require_object(item, path, issues)
             if criterion is None:
                 continue
-            require_keys(criterion, ("criterion_id", "description", "status"), path, issues)
+            required_criterion = ("criterion_id", "description", "status")
+            require_keys(criterion, required_criterion, path, issues)
+            reject_unknown(criterion, required_criterion, path, issues)
             require_string(criterion, "criterion_id", path, issues)
             require_string(criterion, "description", path, issues)
             if criterion.get("status") not in STATUSES:
