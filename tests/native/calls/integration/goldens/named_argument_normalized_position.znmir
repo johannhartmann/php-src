@@ -5,10 +5,10 @@ value v2147483648 representation zval ownership owned
 value v2147483649 representation i64 ownership owned
 value v2147483650 representation zval ownership owned
 constant v2147483648 representation zval kind null payload 0x0000000000000000 symbol invalid
-constant v2147483649 representation i64 kind signed_integer_bits payload 0x0000000000000007 symbol invalid
+constant v2147483649 representation i64 kind signed_integer_bits payload 0x0000000000000001 symbol invalid
 constant v2147483650 representation zval kind null payload 0x0000000000000000 symbol invalid
 fact vf0 value v2147483648 type null flags 0x00000008 range none provenance literal source p0
-fact vf1 value v2147483649 type i64 flags 0x0000000b range 7:7 provenance literal source p0
+fact vf1 value v2147483649 type i64 flags 0x0000000b range 1:1 provenance literal source p0
 fact vf2 value v2147483650 type null flags 0x00000008 range none provenance literal source p0
 source p0 file s0 line 3 columns 1:1
 source p1 file s0 line 3 columns 1:1
@@ -26,7 +26,7 @@ instruction i2 block b0 opcode constant representation i64 result v2147483649 op
 instruction i3 block b0 opcode constant representation zval result v2147483650 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
 instruction i4 block b0 opcode call_direct_user representation void result invalid operands [v2147483649] effects 0x07ff reads 0x00017fff writes 0x00017fff barriers 0x7f ownership-actions 0x0001 frame fs2 source p2
 instruction i5 block b0 opcode return representation void result invalid operands [v2147483650] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame fs1 source p3
-call-target ct0 kind direct_user symbol s1 op-array oa1 args 1 required 1 flags 0x02002200
+call-target ct0 kind direct_user symbol s1 op-array oa1 args 1 required 1 flags 0x02002300
 call-argument ca0 site cs0 ordinal 0 value v2147483649 ownership borrowed_scalar
 call-continuation cc0 site cs0 kind normal block b0 debt 0x00000000
 call-continuation cc1 site cs0 kind exception_debt block invalid debt 0x00000002
@@ -34,8 +34,8 @@ call-continuation cc2 site cs0 kind bailout_reentry_debt block invalid debt 0x00
 call-continuation cc3 site cs0 kind observer_debt block invalid debt 0x00000008
 call-site cs0 source sc0 instruction i4 target ct0 arguments 0+1 result invalid caller frame fs2 function f0 symbol s0 op-array oa0 slots 0+2 pending 1 callee frame invalid function invalid symbol s1 op-array oa1 slots 2+1 pending invalid continuations 0+4 effects 0x07ff reads 0x00017fff writes 0x00017fff barriers 0x7f
 call-receipt cr0 capabilities 0x0000001f capability-ids 0+6 debts 0x0000003f debt-ids 0+8 modeled true codegen-eligible false
-verifier-receipt 1 contract 0x00010002 module 3c8af9025716095ee2f1b17ec7932e4a source 754ef1409a711f3eaecc272965d31d41 status 0
-verifier-receipt 2 contract 0x00010002 module 3c8af9025716095ee2f1b17ec7932e4a source 754ef1409a711f3eaecc272965d31d41 status 0
-verifier-receipt 3 contract 0x00010003 module 3c8af9025716095ee2f1b17ec7932e4a source 754ef1409a711f3eaecc272965d31d41 status 0
-verifier-receipt 4 contract 0x00010008 module 3c8af9025716095ee2f1b17ec7932e4a source 754ef1409a711f3eaecc272965d31d41 status 0
+verifier-receipt 1 contract 0x00010002 module eaac8a89c09bff4910c83da9cc7b5385 source 11d61187dda2c971c2614a626778571a status 0
+verifier-receipt 2 contract 0x00010002 module eaac8a89c09bff4910c83da9cc7b5385 source 11d61187dda2c971c2614a626778571a status 0
+verifier-receipt 3 contract 0x00010003 module eaac8a89c09bff4910c83da9cc7b5385 source 11d61187dda2c971c2614a626778571a status 0
+verifier-receipt 4 contract 0x00010008 module eaac8a89c09bff4910c83da9cc7b5385 source 11d61187dda2c971c2614a626778571a status 0
 end

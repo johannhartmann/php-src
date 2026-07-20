@@ -1,15 +1,15 @@
 {
-  "accepted_case_count": 15,
+  "accepted_case_count": 21,
   "candidate_kind": "debug",
   "deferred_by_wave": {
     "W06": 5,
-    "W07": 5,
+    "W07": 4,
     "W08": 3,
     "W09": 1,
-    "W10": 5,
+    "W10": 4,
     "W15": 3
   },
-  "deferred_case_count": 22,
+  "deferred_case_count": 20,
   "determinism_axes": [
     "repeat-1-through-10",
     "arena-chunk-size",
@@ -18,15 +18,15 @@
     "source-identity"
   ],
   "diagnostic_coverage": {
-    "MIRL0000": 15,
+    "MIRL0000": 21,
     "MIRL0012": 1,
     "MIRL0015": 1,
-    "MIRL0023": 10,
-    "MIRL0024": 7,
+    "MIRL0023": 9,
+    "MIRL0024": 6,
     "MIRL0025": 1,
     "MIRL0026": 2
   },
-  "execution_comparisons": 37,
+  "execution_comparisons": 41,
   "fault_atomicity": {
     "argument_table": {
       "diagnostic": "MIRL0028",
@@ -44,12 +44,20 @@
       "diagnostic": "BAILOUT",
       "phase": "compile"
     },
+    "control_flow_verifier_failure": {
+      "diagnostic": "MIRL0029",
+      "phase": "lowering"
+    },
     "dump_failure": {
       "diagnostic": "MIRV0011",
       "phase": "dump"
     },
     "finalize_failure": {
       "diagnostic": "MIRL0028",
+      "phase": "lowering"
+    },
+    "fingerprint_recompute_failure": {
+      "diagnostic": "MIRL0029",
       "phase": "lowering"
     },
     "frame_state": {
@@ -68,6 +76,10 @@
       "diagnostic": "MIRL0028",
       "phase": "lowering"
     },
+    "scalar_verifier_failure": {
+      "diagnostic": "MIRL0029",
+      "phase": "lowering"
+    },
     "ssa_failure": {
       "diagnostic": "SSA0001",
       "phase": "ssa"
@@ -80,13 +92,17 @@
       "diagnostic": "MIRL0010",
       "phase": "lowering"
     },
+    "structural_verifier_failure": {
+      "diagnostic": "MIRL0029",
+      "phase": "lowering"
+    },
     "target_snapshot": {
       "diagnostic": "MIRL0028",
       "phase": "lowering"
     }
   },
   "format_version": "1.0.0",
-  "golden_index_sha256": "f2dc1c657ea34ae880feca539cebd15ac3443818fc4e381f31edf31e46813e78",
+  "golden_index_sha256": "fbecae6832967731ee14340947906d8a3b2fb569c57cae1eaa3d6f57b36b9222",
   "mir_executed": false,
   "normalization": false,
   "status": "pass"

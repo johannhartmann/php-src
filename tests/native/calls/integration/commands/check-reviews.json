@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "python3",
+    "scripts/native/calls/build-review-manifest.py",
+    "--check"
+  ],
+  "command_id": "check-reviews",
+  "duration_ms": 86,
+  "environment_profile": "review",
+  "exit_code": 0,
+  "format_version": "2.0.0",
+  "raw_log": "logs/check-reviews.log",
+  "raw_log_sha256": "b8ded745c3fd5b1a1d8290c55965e3c1ee0d41078f711b60b6b0d95ee02773a4",
+  "raw_log_size_bytes": 43,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "1826063549fea777c0e3825f5138b309ee19d654b6b4c29d87aca11eb5fb2021"
+}

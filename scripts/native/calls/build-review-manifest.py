@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Build or validate the deterministic W05 independent-review manifest."""
+"""Build or validate the deterministic W05-v2 review manifest."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -14,24 +15,26 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[3]
 OUTPUT = ROOT / "docs/native-engine/calls/w05-review-manifest.json"
-CONTRACT_COMMIT = "63a5070daa91da9e702d0ff52ea4d77c20ad89e6"
-WAVE_PIN_COMMIT = "8833e6a7be1bd5fa8b9b5da972512ba798db4e33"
-CONTRACT_INPUTS = {
-    "call_sequence_contract": ROOT
-    / "docs/native-engine/calls/contracts/call-sequence.md",
-    "opcode_profile": ROOT
-    / "docs/native-engine/calls/w05-opcode-profile.json",
-    "sequence_profile": ROOT
-    / "docs/native-engine/calls/w05-sequence-profile.json",
-    "reclassification": ROOT
-    / "docs/native-engine/calls/w05-reclassification.json",
-    "phase_manifest": ROOT
-    / "docs/native-engine/calls/w05-phase-manifest.json",
-}
+REVIEW_ROOT = ROOT / "docs/native-engine/reviews/W05-v2"
+SEMANTICS = REVIEW_ROOT / "semantics.json"
+EVIDENCE = REVIEW_ROOT / "evidence-history-capability.json"
+CONTRACT_COMMIT = "e164f851875a621858058fa5d641cdf1477c1466"
+WAVE_PIN_COMMIT = "62c21bcab034185eef7c5c88a2d73e9eee108421"
+IMPLEMENTATION_HEAD = "950a69b384ad82bc7792c0f8654753a3e32b7d18"
+REVIEW_KINDS = (
+    ("semantics", SEMANTICS),
+    ("evidence-history-capability", EVIDENCE),
+)
 
 
 class ReviewManifestError(RuntimeError):
-    """The external reviews cannot authorize the W05 gate."""
+    """The external reviews cannot authorize the W05-v2 gate."""
+
+
+def stable_bytes(value: Any) -> bytes:
+    return (
+        json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    ).encode("utf-8")
 
 
 def sha256(path: Path) -> str:
@@ -54,224 +57,116 @@ def load_object(path: Path) -> dict[str, Any]:
     return value
 
 
-def stable_bytes(value: Any) -> bytes:
-    return (
-        json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
-    ).encode("utf-8")
-
-
-def is_ancestor(ancestor: str, descendant: str) -> bool:
+def git(*arguments: str) -> str:
     completed = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        ["git", *arguments],
         cwd=ROOT,
         check=False,
-        stdout=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        text=True,
     )
-    if completed.returncode not in (0, 1):
+    if completed.returncode:
         raise ReviewManifestError(
-            completed.stderr.decode(errors="replace").strip()
-            or "git merge-base failed"
+            completed.stderr.strip() or "git command failed"
         )
-    return completed.returncode == 0
+    return completed.stdout.strip()
 
 
-def reviewed_head(document: dict[str, Any]) -> str | None:
-    """Return the unambiguous implementation head named by a review."""
-    candidates = (
-        document.get("reviewed_head"),
-        document.get("commit"),
-        document.get("implementation_head"),
-        document.get("commit_chain", {}).get("implementation_head_m")
-        if isinstance(document.get("commit_chain"), dict)
-        else None,
-    )
-    heads = {
-        value
-        for value in candidates
-        if isinstance(value, str)
-        and len(value) == 40
-        and not set(value) - set("0123456789abcdef")
-    }
-    if len(heads) != 1:
-        return None
-    return heads.pop()
-
-
-def review_entry(
-    review_id: str,
-    json_path: Path,
-    markdown_path: Path,
-    implementation_head: str,
+def validate_review(
+    path: Path, kind: str, implementation_head: str
 ) -> dict[str, Any]:
-    document = load_object(json_path)
-    if document.get("approved") is not True:
-        raise ReviewManifestError(f"{review_id} is not approved")
-    if reviewed_head(document) != implementation_head:
-        raise ReviewManifestError(
-            f"{review_id} review commit does not match implementation_head"
-        )
-    findings = document.get("findings")
-    if not isinstance(findings, list) or findings:
-        raise ReviewManifestError(f"{review_id} retains review findings")
-    markdown_digest = sha256(markdown_path)
-    json_digest = sha256(json_path)
-    embedded = document.get("artifact")
-    if isinstance(embedded, dict):
-        expected = embedded.get("markdown_sha256")
-        if expected is not None and expected != markdown_digest:
-            raise ReviewManifestError(
-                f"{review_id} embedded Markdown digest does not match"
-            )
-    hashes = document.get("hashes")
-    if isinstance(hashes, dict):
-        expected = hashes.get("markdown_review")
-        if expected is not None and expected != markdown_digest:
-            raise ReviewManifestError(
-                f"{review_id} embedded Markdown digest does not match"
-            )
-    return {
-        "approved": True,
-        "artifact_names": {
-            "json": json_path.name,
-            "markdown": markdown_path.name,
-        },
-        "json_sha256": json_digest,
-        "markdown_sha256": markdown_digest,
-        "review_id": review_id,
-        "reviewed_head": implementation_head,
+    document = load_object(path)
+    required = {
+        "format_version",
+        "review_id",
+        "review_kind",
+        "subject_commit",
+        "subject_tree",
+        "reviewer",
+        "status",
+        "findings",
     }
+    if set(document) != required:
+        raise ReviewManifestError(f"{path}: invalid review field set")
+    if document["format_version"] != "2.0.0":
+        raise ReviewManifestError(f"{path}: review format is not v2")
+    if document["review_kind"] != kind:
+        raise ReviewManifestError(f"{path}: unexpected review kind")
+    if document["subject_commit"] != implementation_head:
+        raise ReviewManifestError(f"{path}: review subject differs from QM")
+    if document["subject_tree"] != git(
+        "rev-parse", f"{implementation_head}^{{tree}}"
+    ):
+        raise ReviewManifestError(f"{path}: review tree differs from QM")
+    if document["status"] != "pass" or document["findings"] != []:
+        raise ReviewManifestError(f"{path}: review is not blocker-free")
+    if not isinstance(document["reviewer"], str) or not document["reviewer"]:
+        raise ReviewManifestError(f"{path}: reviewer is empty")
+    return document
 
 
 def build_document(
-    implementation_head: str,
-    r1_json: Path,
-    r1_markdown: Path,
-    r2_json: Path,
-    r2_markdown: Path,
+    implementation_head: str = IMPLEMENTATION_HEAD,
 ) -> dict[str, Any]:
-    if len(implementation_head) != 40 or any(
-        character not in "0123456789abcdef" for character in implementation_head
-    ):
-        raise ReviewManifestError("implementation_head must be a full Git hash")
-    if (
-        not is_ancestor(WAVE_PIN_COMMIT, implementation_head)
-        or not is_ancestor(implementation_head, "HEAD")
-    ):
-        raise ReviewManifestError(
-            "implementation_head is outside the current W05 history"
+    if implementation_head != IMPLEMENTATION_HEAD:
+        raise ReviewManifestError("implementation_head must equal reviewed QM")
+    if git("rev-parse", f"{WAVE_PIN_COMMIT}^") != CONTRACT_COMMIT:
+        raise ReviewManifestError("QH/QP history is not linear")
+    if git("merge-base", "--is-ancestor", WAVE_PIN_COMMIT, implementation_head):
+        raise ReviewManifestError("QP is not an ancestor of QM")
+    reviews = []
+    ids: set[str] = set()
+    for kind, path in REVIEW_KINDS:
+        document = validate_review(path, kind, implementation_head)
+        review_id = document["review_id"]
+        if review_id in ids:
+            raise ReviewManifestError("review IDs must be unique")
+        ids.add(review_id)
+        reviews.append(
+            {
+                "path": path.relative_to(ROOT).as_posix(),
+                "review_id": review_id,
+                "review_kind": kind,
+                "sha256": sha256(path),
+            }
         )
-    inputs = {
-        name: {
-            "path": path.relative_to(ROOT).as_posix(),
-            "sha256": sha256(path),
-        }
-        for name, path in sorted(CONTRACT_INPUTS.items())
-    }
     return {
         "contract_commit": CONTRACT_COMMIT,
-        "contract_inputs": inputs,
-        "format_version": "1.0.0",
+        "format_version": "2.0.0",
         "implementation_head": implementation_head,
-        "reviews": [
-            review_entry(
-                "W05-R1", r1_json, r1_markdown, implementation_head
-            ),
-            review_entry(
-                "W05-R2", r2_json, r2_markdown, implementation_head
-            ),
-        ],
+        "implementation_tree": git(
+            "rev-parse", f"{implementation_head}^{{tree}}"
+        ),
+        "reviews": reviews,
         "wave_pin_commit": WAVE_PIN_COMMIT,
     }
 
 
-def validate_committed(document: dict[str, Any]) -> None:
-    if document.get("format_version") != "1.0.0":
-        raise ReviewManifestError("review manifest format_version drifted")
-    if document.get("contract_commit") != CONTRACT_COMMIT:
-        raise ReviewManifestError("review manifest contract commit drifted")
-    if document.get("wave_pin_commit") != WAVE_PIN_COMMIT:
-        raise ReviewManifestError("review manifest wave pin commit drifted")
-    implementation_head = document.get("implementation_head")
-    if not isinstance(implementation_head, str) or len(implementation_head) != 40:
-        raise ReviewManifestError("review manifest implementation_head is invalid")
-    if (
-        not is_ancestor(WAVE_PIN_COMMIT, implementation_head)
-        or not is_ancestor(implementation_head, "HEAD")
-    ):
-        raise ReviewManifestError(
-            "review manifest implementation_head is outside W05 history"
-        )
-    reviews = document.get("reviews")
-    if not isinstance(reviews, list) or [item.get("review_id") for item in reviews] != [
-        "W05-R1",
-        "W05-R2",
-    ]:
-        raise ReviewManifestError("review manifest must bind R1 and R2 exactly")
-    for review in reviews:
-        if (
-            review.get("approved") is not True
-            or review.get("reviewed_head") != implementation_head
-        ):
-            raise ReviewManifestError("review approval/head binding is invalid")
-        for key in ("json_sha256", "markdown_sha256"):
-            value = review.get(key)
-            if (
-                not isinstance(value, str)
-                or len(value) != 64
-                or set(value) - set("0123456789abcdef")
-            ):
-                raise ReviewManifestError(f"review {key} is invalid")
-    expected_inputs = {
-        name: {
-            "path": path.relative_to(ROOT).as_posix(),
-            "sha256": sha256(path),
-        }
-        for name, path in sorted(CONTRACT_INPUTS.items())
-    }
-    if document.get("contract_inputs") != expected_inputs:
-        raise ReviewManifestError("review manifest contract input drift")
-
-
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--implementation-head")
-    parser.add_argument("--r1-json", type=Path)
-    parser.add_argument("--r1-markdown", type=Path)
-    parser.add_argument("--r2-json", type=Path)
-    parser.add_argument("--r2-markdown", type=Path)
-    parser.add_argument("--output", type=Path, default=OUTPUT)
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--write", action="store_true")
+    parser.add_argument("--output", type=Path, default=OUTPUT)
     arguments = parser.parse_args()
+    if arguments.check == arguments.write:
+        parser.error("choose exactly one of --check or --write")
     try:
-        if arguments.check:
-            validate_committed(load_object(arguments.output))
-            print("W05 review manifest: PASS")
-            return 0
-        required = (
-            arguments.implementation_head,
-            arguments.r1_json,
-            arguments.r1_markdown,
-            arguments.r2_json,
-            arguments.r2_markdown,
-        )
-        if any(value is None for value in required):
-            parser.error(
-                "generation requires --implementation-head and all R1/R2 paths"
-            )
-        document = build_document(
-            arguments.implementation_head,
-            arguments.r1_json,
-            arguments.r1_markdown,
-            arguments.r2_json,
-            arguments.r2_markdown,
-        )
-        arguments.output.parent.mkdir(parents=True, exist_ok=True)
-        arguments.output.write_bytes(stable_bytes(document))
-        print(f"wrote {arguments.output}")
+        expected = stable_bytes(build_document())
+        if arguments.write:
+            arguments.output.parent.mkdir(parents=True, exist_ok=True)
+            temporary = arguments.output.with_name(arguments.output.name + ".tmp")
+            temporary.write_bytes(expected)
+            os.replace(temporary, arguments.output)
+        elif (
+            not arguments.output.is_file()
+            or arguments.output.read_bytes() != expected
+        ):
+            raise ReviewManifestError("committed review manifest is stale")
+        print("W05-v2 review manifest: PASS")
         return 0
-    except ReviewManifestError as error:
-        print(f"W05 review manifest: FAIL: {error}", file=sys.stderr)
+    except (ReviewManifestError, OSError, TypeError, KeyError) as error:
+        print(f"W05-v2 review manifest: FAIL: {error}", file=sys.stderr)
         return 1
 
 

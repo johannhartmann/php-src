@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "python3",
+    "scripts/native/check-phase-history.py",
+    "--wave",
+    "W05-v2",
+    "--check"
+  ],
+  "command_id": "check-phase-history",
+  "duration_ms": 179,
+  "environment_profile": "contract",
+  "exit_code": 0,
+  "format_version": "2.0.0",
+  "raw_log": "logs/check-phase-history.log",
+  "raw_log_sha256": "bf5e006e8dbbb1d384ec8dd7b4a1ad80fc5617d0323b324ffd578f425647f135",
+  "raw_log_size_bytes": 77,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "6b2e979cc22651f094baa98f12b9a75fd07372b6b2a05d5ae576b8307a5fc53c"
+}
