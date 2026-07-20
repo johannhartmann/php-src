@@ -1,0 +1,22 @@
+{
+  "argv": [
+    "python3",
+    "scripts/native/calls/test-w05.py",
+    "--reference-php",
+    "${REFERENCE_PHP}",
+    "--candidate-php",
+    "${UBSAN_PHP}",
+    "--sanitizer",
+    "undefined"
+  ],
+  "command_id": "test-w05-ubsan-nts",
+  "duration_ms": 1872,
+  "environment_profile": "w05-ubsan-nts",
+  "exit_code": 0,
+  "format_version": "2.0.0",
+  "raw_log": "logs/test-w05-ubsan-nts.log",
+  "raw_log_sha256": "10297781c9fbcd211382728fe50665e3af8c5880fcefebd9a85bdf1cd757787b",
+  "raw_log_size_bytes": 77,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "d150f4ba74d3c2151759dc6c3a69ffecf28e39f4a6b24557ce2ec97589e9d606"
+}

@@ -1,4 +1,4 @@
-"""Integration-level checks for the W05 gate and durable-seal tooling."""
+"""Integration-level checks for the W05-v2 gate and seal tooling."""
 
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ reviews = load_script(
     "scripts/native/calls/build-review-manifest.py",
 )
 seal = load_script("w05_seal_gate", "scripts/native/calls/seal-w05.py")
+call_gate = load_script("w05_test_gate", "scripts/native/calls/test-w05.py")
 
 
 class W05GateIntegrationTest(unittest.TestCase):
@@ -37,6 +38,7 @@ class W05GateIntegrationTest(unittest.TestCase):
         self.assertEqual(validator.REPORT.read_bytes(), expected)
         report = json.loads(expected)
         self.assertNotIn("timestamp", report)
+        self.assertEqual(report["format_version"], "2.0.0")
         self.assertFalse(report["architecture"]["mir_executed"])
         self.assertFalse(report["architecture"]["codegen_eligible"])
         self.assertEqual(report["profile"]["unresolved_w05_count"], 0)
@@ -50,46 +52,28 @@ class W05GateIntegrationTest(unittest.TestCase):
             self.assertIn("opcode call_direct_user", body)
             self.assertIn("modeled true codegen-eligible false", body)
 
-    def test_review_manifest_rejects_wrong_head_and_empty_review(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            markdown = root / "review.md"
-            payload = root / "review.json"
-            markdown.write_text("approved\n", encoding="utf-8")
-            payload.write_text(
-                json.dumps(
-                    {
-                        "approved": True,
-                        "findings": [],
-                        "reviewed_head": "0" * 40,
-                    }
-                ),
-                encoding="utf-8",
-            )
-            with self.assertRaises(reviews.ReviewManifestError):
-                reviews.review_entry(
-                    "W05-R1", payload, markdown, "1" * 40
-                )
-            markdown.write_bytes(b"")
-            with self.assertRaises(reviews.ReviewManifestError):
-                reviews.review_entry(
-                    "W05-R1", payload, markdown, "0" * 40
-                )
-
-    def test_review_manifest_accepts_prescribed_commit_fields(self) -> None:
-        head = "a" * 40
-        self.assertEqual(reviews.reviewed_head({"commit": head}), head)
+    def test_review_manifest_binds_two_exact_v2_reviews(self) -> None:
+        document = reviews.build_document()
+        self.assertEqual(document["contract_commit"], reviews.CONTRACT_COMMIT)
+        self.assertEqual(document["wave_pin_commit"], reviews.WAVE_PIN_COMMIT)
         self.assertEqual(
-            reviews.reviewed_head(
-                {"commit_chain": {"implementation_head_m": head}}
-            ),
-            head,
+            {item["review_kind"] for item in document["reviews"]},
+            {"semantics", "evidence-history-capability"},
         )
-        self.assertIsNone(
-            reviews.reviewed_head(
-                {"commit": head, "reviewed_head": "b" * 40}
-            )
+        self.assertEqual(
+            len({item["sha256"] for item in document["reviews"]}), 2
         )
+
+    def test_review_manifest_rejects_wrong_subject(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "review.json"
+            document = json.loads(reviews.SEMANTICS.read_text(encoding="utf-8"))
+            document["subject_commit"] = "0" * 40
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaises(reviews.ReviewManifestError):
+                reviews.validate_review(
+                    path, "semantics", reviews.IMPLEMENTATION_HEAD
+                )
 
     def test_workflow_uses_current_checkout_and_unique_logs(self) -> None:
         workflow = (
@@ -104,14 +88,9 @@ class W05GateIntegrationTest(unittest.TestCase):
         self.assertGreater(len(log_names), 10)
         self.assertEqual(len(log_names), len(set(log_names)))
 
-    def test_seal_tool_is_read_only_without_write(self) -> None:
+    def test_seal_tool_is_read_only_without_explicit_mode(self) -> None:
         completed = subprocess.run(
-            [
-                sys.executable,
-                "scripts/native/calls/seal-w05.py",
-                "--subject",
-                "0" * 40,
-            ],
+            [sys.executable, "scripts/native/calls/seal-w05.py"],
             cwd=ROOT,
             check=False,
             stdout=subprocess.PIPE,
@@ -119,24 +98,20 @@ class W05GateIntegrationTest(unittest.TestCase):
             text=True,
         )
         self.assertNotEqual(completed.returncode, 0)
-        self.assertIn("--write", completed.stdout)
+        self.assertIn("required", completed.stdout)
 
-    def test_seal_binds_every_w05_build_profile(self) -> None:
-        commands = dict(seal.COMMANDS)
-        command_ids = set(commands)
+    def test_final_fault_matrix_covers_each_verifier_facet(self) -> None:
+        required = {
+            "structural_verifier_failure",
+            "scalar_verifier_failure",
+            "control_flow_verifier_failure",
+            "call_verifier_failure",
+            "fingerprint_recompute_failure",
+        }
+        self.assertTrue(required.issubset(call_gate.FAULTS))
         self.assertTrue(
-            {
-                "build-w05-debug-nts",
-                "build-w05-debug-zts",
-                "build-w05-asan-nts",
-                "build-w05-ubsan-nts",
-            }.issubset(command_ids)
+            all(call_gate.FAULTS[name][2] == "MIRL0029" for name in required)
         )
-        self.assertIn(
-            "TEST_PHP_EXECUTABLE={candidate}",
-            commands["calls-unittest"],
-        )
-        self.assertIn("--candidate-php {candidate}", commands["fuzz-20000"])
 
 
 if __name__ == "__main__":

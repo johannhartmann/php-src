@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "python3",
+    "scripts/native/verify-wave-receipt.py",
+    "W04",
+    "--level",
+    "reproducible"
+  ],
+  "command_id": "verify-w04",
+  "duration_ms": 83,
+  "environment_profile": "reproducible",
+  "exit_code": 0,
+  "format_version": "2.0.0",
+  "raw_log": "logs/verify-w04.log",
+  "raw_log_sha256": "a9e16a6b0c68269f1d27555d686e559dda34287180eb3cf501bcb2497bfb921c",
+  "raw_log_size_bytes": 89,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "b78e817d9bd4fd781ed7ceca0478ef98ead1da6ba795081733fe9743b1423b18"
+}

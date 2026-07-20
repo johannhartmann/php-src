@@ -1,52 +1,21 @@
 {
-  "contract_commit": "63a5070daa91da9e702d0ff52ea4d77c20ad89e6",
-  "contract_inputs": {
-    "call_sequence_contract": {
-      "path": "docs/native-engine/calls/contracts/call-sequence.md",
-      "sha256": "b65c53f16e67813cd49702abd483085fa8d23f0446e81a6660762c51f49ddc73"
-    },
-    "opcode_profile": {
-      "path": "docs/native-engine/calls/w05-opcode-profile.json",
-      "sha256": "9e25da8c49c0f40bc4fa6aeca0e48694a5a5ac65278a7e943b2dafdc6af959fc"
-    },
-    "phase_manifest": {
-      "path": "docs/native-engine/calls/w05-phase-manifest.json",
-      "sha256": "887e5b6ae71ddd3ab41e332830efd79c9346c058e43fed386acab2e13d3d09c7"
-    },
-    "reclassification": {
-      "path": "docs/native-engine/calls/w05-reclassification.json",
-      "sha256": "6d3f8d7a7c23d92ef739bb934e494d2ebe537abfa943a8e2b10c63eb05fbf433"
-    },
-    "sequence_profile": {
-      "path": "docs/native-engine/calls/w05-sequence-profile.json",
-      "sha256": "883a7d60d7fdd5bf61285c879eaf6c30d925daf5cb8a074c4bc127f12420b397"
-    }
-  },
-  "format_version": "1.0.0",
-  "implementation_head": "4603862bb5c5155931774c0ef5e587c14392b2e5",
+  "contract_commit": "e164f851875a621858058fa5d641cdf1477c1466",
+  "format_version": "2.0.0",
+  "implementation_head": "950a69b384ad82bc7792c0f8654753a3e32b7d18",
+  "implementation_tree": "37fe0c0dfb4d47d612a107e47c00b45416151c69",
   "reviews": [
     {
-      "approved": true,
-      "artifact_names": {
-        "json": "W05-R1-semantic-review.json",
-        "markdown": "W05-R1-semantic-review.md"
-      },
-      "json_sha256": "cc4d175fcdf1228c1aadbebdef005abb7468a2c8cfca10c71c82c775c8074a8b",
-      "markdown_sha256": "9b7b062a9fceb430530fc8e4f99b405077855821774d1ae529449a66735aef39",
-      "review_id": "W05-R1",
-      "reviewed_head": "4603862bb5c5155931774c0ef5e587c14392b2e5"
+      "path": "docs/native-engine/reviews/W05-v2/semantics.json",
+      "review_id": "W05-v2-QR-semantics-950a69b3",
+      "review_kind": "semantics",
+      "sha256": "77cdbcd0b2f94dca4aec4c6c02bfdc936a98f8cc7ac0910eaef3b164246fe904"
     },
     {
-      "approved": true,
-      "artifact_names": {
-        "json": "W05-R2-consistency-review.json",
-        "markdown": "W05-R2-consistency-review.md"
-      },
-      "json_sha256": "a7e4e52b5eed1990f31406f4ad2c37c3e850552fa615fe181845995653b6e782",
-      "markdown_sha256": "dafe312bc844531ef7d4e15940014b7812cb2caf7d419c68acbefdd58764be55",
-      "review_id": "W05-R2",
-      "reviewed_head": "4603862bb5c5155931774c0ef5e587c14392b2e5"
+      "path": "docs/native-engine/reviews/W05-v2/evidence-history-capability.json",
+      "review_id": "W05-v2-EHC-QM-950a69b3",
+      "review_kind": "evidence-history-capability",
+      "sha256": "33419a7f70b53997dc1402392605e9e6980dcd1e9e0d1e35c6a89d99cc771897"
     }
   ],
-  "wave_pin_commit": "8833e6a7be1bd5fa8b9b5da972512ba798db4e33"
+  "wave_pin_commit": "62c21bcab034185eef7c5c88a2d73e9eee108421"
 }

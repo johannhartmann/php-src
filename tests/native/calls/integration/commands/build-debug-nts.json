@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "scripts/native/build.sh",
+    "--profile",
+    "debug-nts"
+  ],
+  "command_id": "build-debug-nts",
+  "duration_ms": 61645,
+  "environment_profile": "debug-nts",
+  "exit_code": 0,
+  "format_version": "2.0.0",
+  "raw_log": "logs/build-debug-nts.log",
+  "raw_log_sha256": "aeeb3a0fbd19e09c44fec7317ea1c04220a2cfbb35eba7387e32ab4f7f32817c",
+  "raw_log_size_bytes": 932807,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "2955bc6bcee665e0209d6e23418c56e90768b556002e267f9fe8beff8ddd61b7"
+}

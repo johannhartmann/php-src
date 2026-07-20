@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "scripts/native/build.sh",
+    "--profile",
+    "w05-debug-zts",
+    "--print-binary"
+  ],
+  "command_id": "build-w05-debug-zts",
+  "duration_ms": 59907,
+  "environment_profile": "w05-debug-zts",
+  "exit_code": 0,
+  "format_version": "2.0.0",
+  "raw_log": "logs/build-w05-debug-zts.log",
+  "raw_log_sha256": "ca590d9227eca34156495d1077dd09021b2015928ccadf6325465210fc1aa833",
+  "raw_log_size_bytes": 1057389,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "49c2d52491769a458364aededcef74a4b035c44acf6fe5af63dd59daeedd87f0"
+}

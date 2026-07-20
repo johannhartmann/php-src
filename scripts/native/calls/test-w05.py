@@ -35,7 +35,11 @@ FAULTS = {
     "finalize_failure": ("error", "lowering", "MIRL0028"),
     "stage1_verifier_failure": ("error", "lowering", "MIRL0009"),
     "stage2_verifier_failure": ("error", "lowering", "MIRL0010"),
+    "structural_verifier_failure": ("error", "lowering", "MIRL0029"),
+    "scalar_verifier_failure": ("error", "lowering", "MIRL0029"),
+    "control_flow_verifier_failure": ("error", "lowering", "MIRL0029"),
     "call_verifier_failure": ("error", "lowering", "MIRL0029"),
+    "fingerprint_recompute_failure": ("error", "lowering", "MIRL0029"),
     "dump_failure": ("error", "dump", "MIRV0011"),
 }
 
