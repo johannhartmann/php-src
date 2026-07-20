@@ -4,6 +4,7 @@
 #include "../MIR/zend_mir_control_flow.h"
 #include "../MIR/zend_mir_call.h"
 #include "../Calls/Contracts/zend_mir_call_plan.h"
+#include "../Values/Contracts/zend_mir_value_plan.h"
 #include "zend_mir_lowering.h"
 
 /*
@@ -27,5 +28,22 @@ zend_mir_w05_lowering_result zend_mir_lower_w05_zend_source(
 	const zend_mir_source_call_view *source_calls,
 	const zend_mir_source_call_target_resolver *resolver,
 	zend_mir_call_mutator *call_mutator);
+
+/*
+ * Internal modeling-only W06 entry. Source inventory and the complete value
+ * plan are validated before either mutator is called. All source, call and
+ * value views remain process-local until every receipt is emitted for one
+ * final module fingerprint.
+ */
+zend_mir_w06_lowering_result zend_mir_lower_w06_zend_source(
+	zend_mir_lowering_context *context,
+	zend_mir_mutator *mutator,
+	zend_mir_control_flow_map *control_flow_map,
+	const zend_mir_source_call_view *source_calls,
+	const zend_mir_source_call_target_resolver *resolver,
+	zend_mir_call_mutator *call_mutator,
+	const zend_mir_source_value_view *source_values,
+	const zend_mir_value_plan *value_plan,
+	zend_mir_value_mutator *value_mutator);
 
 #endif /* ZEND_MIR_LOWERING_ZEND_H */

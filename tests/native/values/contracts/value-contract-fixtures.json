@@ -1,0 +1,27 @@
+{
+  "alias_cases": [
+    {"left_cell": 1, "right_cell": 1, "fresh_proof": false, "expected": "must_alias"},
+    {"left_cell": 1, "right_cell": 2, "fresh_proof": true, "expected": "no_alias"},
+    {"left_cell": 1, "right_cell": 2, "fresh_proof": false, "expected": "may_alias"}
+  ],
+  "invalid_records": [
+    "reference_without_payload_storage",
+    "indirect_cycle",
+    "double_release",
+    "read_after_move",
+    "no_alias_without_proof",
+    "required_separation_reuses_payload",
+    "mismatched_module_fingerprint"
+  ],
+  "parameter_ordinals": [0, 64, 65, 127, 128, 4294967294],
+  "phi_merges": [
+    {"left": "unique", "right": "shared", "expected": "shared"},
+    {"left": "direct", "right": "reference", "expected": "invalid_without_canonicalization"},
+    {"left": "unknown", "right": "unique", "expected": "unknown"}
+  ],
+  "separation_cases": [
+    {"required": "yes", "source_payload": 1, "result_payload": 2, "valid": true},
+    {"required": "yes", "source_payload": 1, "result_payload": 1, "valid": false},
+    {"required": "unknown", "source_payload": 3, "result_payload": 4, "valid": true}
+  ]
+}

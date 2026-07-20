@@ -1,0 +1,1004 @@
+{
+  "format_version": 1,
+  "reclassifications": [
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 4,
+      "opcode": "ZEND_DIV",
+      "rationale": "Unrelated scalar arithmetic gap.",
+      "to_decision": "deferred",
+      "to_wave": "W16",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 8,
+      "opcode": "ZEND_CONCAT",
+      "rationale": "Concrete string concatenation and allocation.",
+      "to_decision": "deferred",
+      "to_wave": "W07",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 12,
+      "opcode": "ZEND_POW",
+      "rationale": "Unrelated scalar arithmetic gap.",
+      "to_decision": "deferred",
+      "to_wave": "W16",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 22,
+      "opcode": "ZEND_ASSIGN",
+      "rationale": "Local storage assignment with a complete old-value transition.",
+      "to_decision": "accepted",
+      "to_wave": null,
+      "transition_family": "storage_write"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 24,
+      "opcode": "ZEND_ASSIGN_OBJ",
+      "rationale": "Object property storage and lifecycle.",
+      "to_decision": "deferred",
+      "to_wave": "W08",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 26,
+      "opcode": "ZEND_ASSIGN_OP",
+      "rationale": "Generic compound-operation semantics.",
+      "to_decision": "deferred",
+      "to_wave": "W16",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 27,
+      "opcode": "ZEND_ASSIGN_DIM_OP",
+      "rationale": "Array/dimension container update.",
+      "to_decision": "deferred",
+      "to_wave": "W07",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 28,
+      "opcode": "ZEND_ASSIGN_OBJ_OP",
+      "rationale": "Object property update and lifecycle.",
+      "to_decision": "deferred",
+      "to_wave": "W08",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 29,
+      "opcode": "ZEND_ASSIGN_STATIC_PROP_OP",
+      "rationale": "Static property storage and lifecycle.",
+      "to_decision": "deferred",
+      "to_wave": "W08",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 30,
+      "opcode": "ZEND_ASSIGN_REF",
+      "rationale": "Local binding to an exact stable reference cell.",
+      "to_decision": "accepted",
+      "to_wave": null,
+      "transition_family": "reference_bind"
+    },
+    {
+      "from_classification": "inherited",
+      "from_wave": null,
+      "number": 31,
+      "opcode": "ZEND_QM_ASSIGN",
+      "rationale": "Existing scalar lowering retained with an explicit refcounted copy/move variant.",
+      "to_decision": "accepted_variant",
+      "to_wave": null,
+      "transition_family": "refcount_copy_variant"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 32,
+      "opcode": "ZEND_ASSIGN_OBJ_REF",
+      "rationale": "Object property reference binding.",
+      "to_decision": "deferred",
+      "to_wave": "W08",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 33,
+      "opcode": "ZEND_ASSIGN_STATIC_PROP_REF",
+      "rationale": "Static property reference binding.",
+      "to_decision": "deferred",
+      "to_wave": "W08",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 34,
+      "opcode": "ZEND_PRE_INC",
+      "rationale": "Generic increment semantics.",
+      "to_decision": "deferred",
+      "to_wave": "W16",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 35,
+      "opcode": "ZEND_PRE_DEC",
+      "rationale": "Generic decrement semantics.",
+      "to_decision": "deferred",
+      "to_wave": "W16",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 36,
+      "opcode": "ZEND_POST_INC",
+      "rationale": "Generic increment semantics.",
+      "to_decision": "deferred",
+      "to_wave": "W16",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 37,
+      "opcode": "ZEND_POST_DEC",
+      "rationale": "Generic decrement semantics.",
+      "to_decision": "deferred",
+      "to_wave": "W16",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 48,
+      "opcode": "ZEND_CASE",
+      "rationale": "Unrelated comparison semantics.",
+      "to_decision": "deferred",
+      "to_wave": "W16",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 49,
+      "opcode": "ZEND_CHECK_VAR",
+      "rationale": "Local undef/direct/reference observation.",
+      "to_decision": "accepted",
+      "to_wave": null,
+      "transition_family": "storage_observe"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 50,
+      "opcode": "ZEND_SEND_VAR_NO_REF_EX",
+      "rationale": "Exact direct-user-call no-ref argument transfer.",
+      "to_decision": "accepted",
+      "to_wave": null,
+      "transition_family": "call_argument_transfer"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 53,
+      "opcode": "ZEND_FAST_CONCAT",
+      "rationale": "Concrete string concatenation.",
+      "to_decision": "deferred",
+      "to_wave": "W07",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 54,
+      "opcode": "ZEND_ROPE_INIT",
+      "rationale": "Concrete rope/string container construction.",
+      "to_decision": "deferred",
+      "to_wave": "W07",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 55,
+      "opcode": "ZEND_ROPE_ADD",
+      "rationale": "Concrete rope/string container construction.",
+      "to_decision": "deferred",
+      "to_wave": "W07",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 56,
+      "opcode": "ZEND_ROPE_END",
+      "rationale": "Concrete rope/string container construction.",
+      "to_decision": "deferred",
+      "to_wave": "W07",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 57,
+      "opcode": "ZEND_BEGIN_SILENCE",
+      "rationale": "Runtime error-reporting boundary.",
+      "to_decision": "deferred",
+      "to_wave": "W15",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 58,
+      "opcode": "ZEND_END_SILENCE",
+      "rationale": "Runtime error-reporting boundary.",
+      "to_decision": "deferred",
+      "to_wave": "W15",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "conditional",
+      "from_wave": null,
+      "number": 60,
+      "opcode": "ZEND_DO_FCALL",
+      "rationale": "W05 call fragment retained with an additional proof-closed refcount/reference transfer variant.",
+      "to_decision": "accepted_variant",
+      "to_wave": null,
+      "transition_family": "call_sequence_refcount_variant"
+    },
+    {
+      "from_classification": "conditional",
+      "from_wave": null,
+      "number": 61,
+      "opcode": "ZEND_INIT_FCALL",
+      "rationale": "W05 call fragment retained with an additional proof-closed refcount/reference transfer variant.",
+      "to_decision": "accepted_variant",
+      "to_wave": null,
+      "transition_family": "call_sequence_refcount_variant"
+    },
+    {
+      "from_classification": "inherited",
+      "from_wave": null,
+      "number": 62,
+      "opcode": "ZEND_RETURN",
+      "rationale": "Existing scalar return retained with an explicit refcounted result-transfer variant.",
+      "to_decision": "accepted_variant",
+      "to_wave": null,
+      "transition_family": "refcount_return_variant"
+    },
+    {
+      "from_classification": "conditional",
+      "from_wave": null,
+      "number": 63,
+      "opcode": "ZEND_RECV",
+      "rationale": "W05 call fragment retained with an additional proof-closed refcount/reference transfer variant.",
+      "to_decision": "accepted_variant",
+      "to_wave": null,
+      "transition_family": "call_sequence_refcount_variant"
+    },
+    {
+      "from_classification": "conditional",
+      "from_wave": null,
+      "number": 65,
+      "opcode": "ZEND_SEND_VAL",
+      "rationale": "W05 call fragment retained with an additional proof-closed refcount/reference transfer variant.",
+      "to_decision": "accepted_variant",
+      "to_wave": null,
+      "transition_family": "call_sequence_refcount_variant"
+    },
+    {
+      "from_classification": "conditional",
+      "from_wave": null,
+      "number": 66,
+      "opcode": "ZEND_SEND_VAR_EX",
+      "rationale": "W05 call fragment retained with an additional proof-closed refcount/reference transfer variant.",
+      "to_decision": "accepted_variant",
+      "to_wave": null,
+      "transition_family": "call_sequence_refcount_variant"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 67,
+      "opcode": "ZEND_SEND_REF",
+      "rationale": "Exact direct-user-call by-reference transfer.",
+      "to_decision": "accepted",
+      "to_wave": null,
+      "transition_family": "call_argument_transfer"
+    },
+    {
+      "from_classification": "inherited",
+      "from_wave": null,
+      "number": 70,
+      "opcode": "ZEND_FREE",
+      "rationale": "Existing scalar lowering retained with an explicit refcounted release variant.",
+      "to_decision": "accepted_variant",
+      "to_wave": null,
+      "transition_family": "refcount_release_variant"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 72,
+      "opcode": "ZEND_ADD_ARRAY_ELEMENT",
+      "rationale": "Array container materialization.",
+      "to_decision": "deferred",
+      "to_wave": "W07",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 74,
+      "opcode": "ZEND_UNSET_VAR",
+      "rationale": "Dynamic variable and symbol-table aliasing.",
+      "to_decision": "deferred",
+      "to_wave": "W10",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 75,
+      "opcode": "ZEND_UNSET_DIM",
+      "rationale": "Array/dimension container mutation.",
+      "to_decision": "deferred",
+      "to_wave": "W07",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 80,
+      "opcode": "ZEND_FETCH_R",
+      "rationale": "General variable fetch may use dynamic storage.",
+      "to_decision": "deferred",
+      "to_wave": "W10",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 81,
+      "opcode": "ZEND_FETCH_DIM_R",
+      "rationale": "Array/dimension lookup semantics.",
+      "to_decision": "deferred",
+      "to_wave": "W07",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 82,
+      "opcode": "ZEND_FETCH_OBJ_R",
+      "rationale": "Object property lookup.",
+      "to_decision": "deferred",
+      "to_wave": "W08",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 83,
+      "opcode": "ZEND_FETCH_W",
+      "rationale": "General writable variable fetch may use dynamic storage.",
+      "to_decision": "deferred",
+      "to_wave": "W10",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 86,
+      "opcode": "ZEND_FETCH_RW",
+      "rationale": "General read/write variable fetch may use dynamic storage.",
+      "to_decision": "deferred",
+      "to_wave": "W10",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 89,
+      "opcode": "ZEND_FETCH_IS",
+      "rationale": "General isset fetch may use dynamic storage.",
+      "to_decision": "deferred",
+      "to_wave": "W10",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 90,
+      "opcode": "ZEND_FETCH_DIM_IS",
+      "rationale": "Array/dimension isset lookup semantics.",
+      "to_decision": "deferred",
+      "to_wave": "W07",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 91,
+      "opcode": "ZEND_FETCH_OBJ_IS",
+      "rationale": "Object property isset lookup.",
+      "to_decision": "deferred",
+      "to_wave": "W08",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 92,
+      "opcode": "ZEND_FETCH_FUNC_ARG",
+      "rationale": "General call-argument fetch may use dynamic storage.",
+      "to_decision": "deferred",
+      "to_wave": "W10",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 93,
+      "opcode": "ZEND_FETCH_DIM_FUNC_ARG",
+      "rationale": "Array/dimension call-argument lookup.",
+      "to_decision": "deferred",
+      "to_wave": "W07",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 94,
+      "opcode": "ZEND_FETCH_OBJ_FUNC_ARG",
+      "rationale": "Object property call-argument lookup.",
+      "to_decision": "deferred",
+      "to_wave": "W08",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 95,
+      "opcode": "ZEND_FETCH_UNSET",
+      "rationale": "General unset fetch may use dynamic storage.",
+      "to_decision": "deferred",
+      "to_wave": "W10",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 98,
+      "opcode": "ZEND_FETCH_LIST_R",
+      "rationale": "List/array container extraction.",
+      "to_decision": "deferred",
+      "to_wave": "W07",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 99,
+      "opcode": "ZEND_FETCH_CONSTANT",
+      "rationale": "Dynamic constant resolution.",
+      "to_decision": "deferred",
+      "to_wave": "W10",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 100,
+      "opcode": "ZEND_CHECK_FUNC_ARG",
+      "rationale": "Exact scalable parameter-mode lookup.",
+      "to_decision": "accepted",
+      "to_wave": null,
+      "transition_family": "call_parameter_mode"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 101,
+      "opcode": "ZEND_EXT_STMT",
+      "rationale": "Observer/extension runtime boundary.",
+      "to_decision": "deferred",
+      "to_wave": "W15",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 104,
+      "opcode": "ZEND_EXT_NOP",
+      "rationale": "Observer/extension runtime boundary.",
+      "to_decision": "deferred",
+      "to_wave": "W15",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 106,
+      "opcode": "ZEND_SEND_VAR_NO_REF",
+      "rationale": "Exact direct-user-call no-ref argument transfer.",
+      "to_decision": "accepted",
+      "to_wave": null,
+      "transition_family": "call_argument_transfer"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 109,
+      "opcode": "ZEND_FETCH_CLASS",
+      "rationale": "Class identity resolution.",
+      "to_decision": "deferred",
+      "to_wave": "W08",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 111,
+      "opcode": "ZEND_RETURN_BY_REF",
+      "rationale": "Exact variable reference return, modeled without runtime binding.",
+      "to_decision": "accepted",
+      "to_wave": null,
+      "transition_family": "call_return_reference"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 114,
+      "opcode": "ZEND_ISSET_ISEMPTY_VAR",
+      "rationale": "Dynamic variable and symbol-table lookup.",
+      "to_decision": "deferred",
+      "to_wave": "W10",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "conditional",
+      "from_wave": null,
+      "number": 116,
+      "opcode": "ZEND_SEND_VAL_EX",
+      "rationale": "W05 call fragment retained with an additional proof-closed refcount/reference transfer variant.",
+      "to_decision": "accepted_variant",
+      "to_wave": null,
+      "transition_family": "call_sequence_refcount_variant"
+    },
+    {
+      "from_classification": "conditional",
+      "from_wave": null,
+      "number": 117,
+      "opcode": "ZEND_SEND_VAR",
+      "rationale": "W05 call fragment retained with an additional proof-closed refcount/reference transfer variant.",
+      "to_decision": "accepted_variant",
+      "to_wave": null,
+      "transition_family": "call_sequence_refcount_variant"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 121,
+      "opcode": "ZEND_STRLEN",
+      "rationale": "Concrete string operation semantics.",
+      "to_decision": "deferred",
+      "to_wave": "W07",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 122,
+      "opcode": "ZEND_DEFINED",
+      "rationale": "Dynamic constant resolution.",
+      "to_decision": "deferred",
+      "to_wave": "W10",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 123,
+      "opcode": "ZEND_TYPE_CHECK",
+      "rationale": "Unrelated runtime type-check semantics.",
+      "to_decision": "deferred",
+      "to_wave": "W16",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 124,
+      "opcode": "ZEND_VERIFY_RETURN_TYPE",
+      "rationale": "Observable type-error and cleanup path.",
+      "to_decision": "deferred",
+      "to_wave": "W09",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 126,
+      "opcode": "ZEND_FE_FETCH_RW",
+      "rationale": "Writable iteration and container aliasing.",
+      "to_decision": "deferred",
+      "to_wave": "W07",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 127,
+      "opcode": "ZEND_FE_FREE",
+      "rationale": "Iterator/container cleanup.",
+      "to_decision": "deferred",
+      "to_wave": "W07",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "conditional",
+      "from_wave": null,
+      "number": 130,
+      "opcode": "ZEND_DO_UCALL",
+      "rationale": "W05 call fragment retained with an additional proof-closed refcount/reference transfer variant.",
+      "to_decision": "accepted_variant",
+      "to_wave": null,
+      "transition_family": "call_sequence_refcount_variant"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 136,
+      "opcode": "ZEND_ECHO",
+      "rationale": "Observable runtime output boundary.",
+      "to_decision": "deferred",
+      "to_wave": "W15",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 137,
+      "opcode": "ZEND_OP_DATA",
+      "rationale": "Owned by its immediately preceding opcode sequence; never lowered independently.",
+      "to_decision": "owner_sequence",
+      "to_wave": null,
+      "transition_family": "owner_sequence"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 138,
+      "opcode": "ZEND_INSTANCEOF",
+      "rationale": "Class/object semantics.",
+      "to_decision": "deferred",
+      "to_wave": "W08",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 140,
+      "opcode": "ZEND_MAKE_REF",
+      "rationale": "Creates a stable abstract local reference cell.",
+      "to_decision": "accepted",
+      "to_wave": null,
+      "transition_family": "reference_create"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 152,
+      "opcode": "ZEND_JMP_SET",
+      "rationale": "Unrelated value-producing control-flow semantics.",
+      "to_decision": "deferred",
+      "to_wave": "W16",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 153,
+      "opcode": "ZEND_UNSET_CV",
+      "rationale": "Local storage release with explicit cleanup debt.",
+      "to_decision": "accepted",
+      "to_wave": null,
+      "transition_family": "storage_release"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 154,
+      "opcode": "ZEND_ISSET_ISEMPTY_CV",
+      "rationale": "Local undef/direct/reference observation.",
+      "to_decision": "accepted",
+      "to_wave": null,
+      "transition_family": "storage_observe"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 155,
+      "opcode": "ZEND_FETCH_LIST_W",
+      "rationale": "List/array container write.",
+      "to_decision": "deferred",
+      "to_wave": "W07",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 156,
+      "opcode": "ZEND_SEPARATE",
+      "rationale": "Abstract separation requirement only; no clone execution.",
+      "to_decision": "accepted",
+      "to_wave": null,
+      "transition_family": "separation_protocol"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 157,
+      "opcode": "ZEND_FETCH_CLASS_NAME",
+      "rationale": "Class identity and name semantics.",
+      "to_decision": "deferred",
+      "to_wave": "W08",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 167,
+      "opcode": "ZEND_COPY_TMP",
+      "rationale": "Explicit copy-addref or move transition.",
+      "to_decision": "accepted",
+      "to_wave": null,
+      "transition_family": "refcount_transfer"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 168,
+      "opcode": "ZEND_BIND_GLOBAL",
+      "rationale": "Global symbol-table reference binding.",
+      "to_decision": "deferred",
+      "to_wave": "W10",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 169,
+      "opcode": "ZEND_COALESCE",
+      "rationale": "Container/string-aware coalescing semantics.",
+      "to_decision": "deferred",
+      "to_wave": "W07",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 171,
+      "opcode": "ZEND_FUNC_NUM_ARGS",
+      "rationale": "Runtime frame argument introspection.",
+      "to_decision": "deferred",
+      "to_wave": "W10",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 172,
+      "opcode": "ZEND_FUNC_GET_ARGS",
+      "rationale": "Runtime frame argument container materialization.",
+      "to_decision": "deferred",
+      "to_wave": "W10",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 181,
+      "opcode": "ZEND_FETCH_CLASS_CONSTANT",
+      "rationale": "Class constant resolution.",
+      "to_decision": "deferred",
+      "to_wave": "W08",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 182,
+      "opcode": "ZEND_BIND_LEXICAL",
+      "rationale": "Lexical binding and closure storage.",
+      "to_decision": "deferred",
+      "to_wave": "W10",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 183,
+      "opcode": "ZEND_BIND_STATIC",
+      "rationale": "Static variable binding.",
+      "to_decision": "deferred",
+      "to_wave": "W10",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 184,
+      "opcode": "ZEND_FETCH_THIS",
+      "rationale": "Object identity and frame semantics.",
+      "to_decision": "deferred",
+      "to_wave": "W08",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 185,
+      "opcode": "ZEND_SEND_FUNC_ARG",
+      "rationale": "Target-proven exact direct-user-call argument transfer.",
+      "to_decision": "accepted",
+      "to_wave": null,
+      "transition_family": "call_argument_transfer"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 186,
+      "opcode": "ZEND_ISSET_ISEMPTY_THIS",
+      "rationale": "Object identity observation.",
+      "to_decision": "deferred",
+      "to_wave": "W08",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 189,
+      "opcode": "ZEND_IN_ARRAY",
+      "rationale": "Concrete array operation semantics.",
+      "to_decision": "deferred",
+      "to_wave": "W07",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 190,
+      "opcode": "ZEND_COUNT",
+      "rationale": "Concrete array/countable operation semantics.",
+      "to_decision": "deferred",
+      "to_wave": "W07",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 191,
+      "opcode": "ZEND_GET_CLASS",
+      "rationale": "Class/object semantics.",
+      "to_decision": "deferred",
+      "to_wave": "W08",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 193,
+      "opcode": "ZEND_GET_TYPE",
+      "rationale": "Unrelated runtime type query.",
+      "to_decision": "deferred",
+      "to_wave": "W16",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 196,
+      "opcode": "ZEND_CASE_STRICT",
+      "rationale": "Unrelated comparison semantics.",
+      "to_decision": "deferred",
+      "to_wave": "W16",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 198,
+      "opcode": "ZEND_JMP_NULL",
+      "rationale": "Unrelated value-producing control-flow semantics.",
+      "to_decision": "deferred",
+      "to_wave": "W16",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 199,
+      "opcode": "ZEND_CHECK_UNDEF_ARGS",
+      "rationale": "Runtime frame argument state.",
+      "to_decision": "deferred",
+      "to_wave": "W10",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 200,
+      "opcode": "ZEND_FETCH_GLOBALS",
+      "rationale": "Global symbol-table aliasing.",
+      "to_decision": "deferred",
+      "to_wave": "W10",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 203,
+      "opcode": "ZEND_BIND_INIT_STATIC_OR_JMP",
+      "rationale": "Static variable binding and initialization.",
+      "to_decision": "deferred",
+      "to_wave": "W10",
+      "transition_family": "none"
+    },
+    {
+      "from_classification": "deferred",
+      "from_wave": "W06",
+      "number": 211,
+      "opcode": "ZEND_TYPE_ASSERT",
+      "rationale": "Observable type-error and cleanup path.",
+      "to_decision": "deferred",
+      "to_wave": "W09",
+      "transition_family": "none"
+    }
+  ],
+  "sources": {
+    "w01": {
+      "active_opcode_count": 212,
+      "path": "docs/native-engine/semantics/opcodes/opcode-matrix.json",
+      "sha256": "96406ddd2fc7a0a58903c1d1f79cef61b0f6ad5a49801426779d26984942b60e",
+      "source_commit": "b7c524a19fa815799a858b98d39f176ca88648b1"
+    },
+    "w04": {
+      "active_opcode_count": 212,
+      "path": "docs/native-engine/control-flow/w04-opcode-profile.json",
+      "sha256": "48e140fb1abb14da2eafc58ae3b1e8a3a5462d973dcccd26c414e6291c9a73e6"
+    },
+    "w05_v2": {
+      "active_opcode_count": 212,
+      "path": "docs/native-engine/calls/w05-opcode-profile.json",
+      "sha256": "9e25da8c49c0f40bc4fa6aeca0e48694a5a5ac65278a7e943b2dafdc6af959fc"
+    }
+  },
+  "unresolved_w06_count": 0
+}

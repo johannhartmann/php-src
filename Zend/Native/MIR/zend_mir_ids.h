@@ -52,6 +52,15 @@
 #define ZEND_MIR_W05_CONTRACT_VERSION \
 	((ZEND_MIR_CONTRACT_VERSION_MAJOR << 16) | ZEND_MIR_W05_CONTRACT_VERSION_MINOR)
 
+/*
+ * W06 adds pointer-free storage, payload, reference, alias, ownership,
+ * separation, parameter-mode and verifier-receipt identities. Existing
+ * W01-W05 identities and record layouts remain unchanged.
+ */
+#define ZEND_MIR_W06_CONTRACT_VERSION_MINOR UINT32_C(9)
+#define ZEND_MIR_W06_CONTRACT_VERSION \
+	((ZEND_MIR_CONTRACT_VERSION_MAJOR << 16) | ZEND_MIR_W06_CONTRACT_VERSION_MINOR)
+
 #define ZEND_MIR_ID_INVALID UINT32_C(0xffffffff)
 #define ZEND_MIR_ID_MAX UINT32_C(0xfffffffe)
 
@@ -83,6 +92,14 @@ typedef uint32_t zend_mir_call_capability_receipt_id;
 typedef uint32_t zend_mir_source_call_site_id;
 typedef uint32_t zend_mir_source_call_argument_id;
 typedef uint32_t zend_mir_source_call_target_id;
+typedef uint32_t zend_mir_storage_id;
+typedef uint32_t zend_mir_payload_id;
+typedef uint32_t zend_mir_reference_cell_id;
+typedef uint32_t zend_mir_alias_class_id;
+typedef uint32_t zend_mir_ownership_event_id;
+typedef uint32_t zend_mir_separation_plan_id;
+typedef uint32_t zend_mir_parameter_mode_id;
+typedef uint32_t zend_mir_verifier_receipt_id;
 
 static inline bool zend_mir_id_is_valid(uint32_t id)
 {
@@ -123,6 +140,22 @@ ZEND_MIR_STATIC_ASSERT(sizeof(zend_mir_call_site_id) == 4,
 	"call-site IDs are 32-bit");
 ZEND_MIR_STATIC_ASSERT(sizeof(zend_mir_source_call_site_id) == 4,
 	"source call-site IDs are 32-bit");
+ZEND_MIR_STATIC_ASSERT(sizeof(zend_mir_storage_id) == 4,
+	"storage IDs are 32-bit");
+ZEND_MIR_STATIC_ASSERT(sizeof(zend_mir_payload_id) == 4,
+	"payload IDs are 32-bit");
+ZEND_MIR_STATIC_ASSERT(sizeof(zend_mir_reference_cell_id) == 4,
+	"reference-cell IDs are 32-bit");
+ZEND_MIR_STATIC_ASSERT(sizeof(zend_mir_alias_class_id) == 4,
+	"alias-class IDs are 32-bit");
+ZEND_MIR_STATIC_ASSERT(sizeof(zend_mir_ownership_event_id) == 4,
+	"ownership-event IDs are 32-bit");
+ZEND_MIR_STATIC_ASSERT(sizeof(zend_mir_separation_plan_id) == 4,
+	"separation-plan IDs are 32-bit");
+ZEND_MIR_STATIC_ASSERT(sizeof(zend_mir_parameter_mode_id) == 4,
+	"parameter-mode IDs are 32-bit");
+ZEND_MIR_STATIC_ASSERT(sizeof(zend_mir_verifier_receipt_id) == 4,
+	"verifier-receipt IDs are 32-bit");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_VALUE_SYNTHETIC_MAX < ZEND_MIR_ID_INVALID,
 	"invalid value ID is outside both value namespaces");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_VALUE_ORIGINAL_MAX + UINT32_C(1) == ZEND_MIR_VALUE_SYNTHETIC_BIT,
