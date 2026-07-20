@@ -58,22 +58,25 @@
     },
     {
       "capabilities_provided": [
-        "scalar_semantics",
+        "abstract_call_effects",
+        "callee_entry_descriptor",
+        "caller_frame_descriptor",
+        "direct_user_call_sequence",
         "reducible_control_flow",
-        "direct_user_call_model",
-        "caller_frame_model",
-        "callee_entry_model"
+        "scalar_semantics"
       ],
       "codegen_eligible": false,
       "receipt_path": "docs/native-engine/waves/receipts/W05.json",
-      "receipt_sha256": "9f98bcd7cbfdb6208e76f34f8c1979fbc1c93b8374ac969c80a26762cddfc0ee",
+      "receipt_sha256": "19cfcbe51fb54f26a9f4d29beb59a2a5f6b40b29e61e49b47f40048e7b75f949",
       "semantic_debts": [
-        "call_runtime_binding",
-        "call_exception_propagation",
-        "call_bailout_reentry",
-        "call_observer_integration",
-        "call_result_ownership",
-        "internal_c_abi"
+        "call_execution",
+        "cow_indirect_semantics",
+        "dynamic_target_resolution",
+        "exception_cleanup",
+        "internal_c_abi_interop",
+        "observer_interop",
+        "protected_continuation",
+        "refcounted_transfer"
       ],
       "state": "sealed",
       "wave_id": "W05"
