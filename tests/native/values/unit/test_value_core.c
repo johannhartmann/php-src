@@ -77,7 +77,14 @@ typedef enum _test_case {
 	TEST_RELEASE_UNIQUE_STAYS_UNIQUE,
 	TEST_ALIAS_STORAGE_USE_AFTER_MOVE,
 	TEST_TABLE_COUNT_OVERFLOW,
-	TEST_VALID_CALL_TRANSFER
+	TEST_VALID_CALL_TRANSFER,
+	TEST_CALL_TRANSFER_WITHOUT_MODEL,
+	TEST_CALL_MODEL_WITHOUT_TRANSFER,
+	TEST_CALL_TRANSFER_WRONG_SITE,
+	TEST_CALL_TRANSFER_WRONG_ORDINAL,
+	TEST_CALL_TRANSFER_WRONG_DEBT,
+	TEST_VERIFIER_CALL_TRANSFER_MUTATION,
+	TEST_VALID_ZERO_ARGUMENT_CALL
 } test_case;
 
 static const zend_mir_capability_id test_capabilities[] = {
@@ -170,6 +177,88 @@ static zend_mir_diagnostic_sink test_diagnostic_sink(
 	return result;
 }
 
+static bool test_stage_call_model(
+	zend_mir_module *module, zend_mir_function_id function,
+	zend_mir_block_id block, bool with_argument)
+{
+	zend_mir_mutator *core_mutator = zend_mir_module_get_mutator(module);
+	zend_mir_call_mutator *call_mutator =
+		zend_mir_module_get_call_mutator(module);
+	zend_mir_call_target_ref target;
+	zend_mir_call_argument_ref argument;
+	zend_mir_call_continuation_ref continuation;
+	zend_mir_call_site_ref site;
+	zend_mir_call_capability_receipt_ref receipt;
+
+	CHECK(core_mutator != NULL && call_mutator != NULL);
+	CHECK(core_mutator->add_value(
+		core_mutator->context, 0, ZEND_MIR_REPRESENTATION_ZVAL,
+		ZEND_MIR_OWNERSHIP_STATE_BORROWED));
+
+	memset(&target, 0, sizeof(target));
+	target.id = 0;
+	target.kind = ZEND_MIR_CALL_TARGET_DIRECT_USER;
+	target.function_symbol_id = 9;
+	target.op_array_id = 10;
+	target.num_args = with_argument ? 1 : 0;
+	target.required_num_args = with_argument ? 1 : 0;
+	CHECK(call_mutator->add_call_target(call_mutator->context, &target));
+
+	if (with_argument) {
+		memset(&argument, 0, sizeof(argument));
+		argument.id = 0;
+		argument.call_site_id = 0;
+		argument.ordinal = 0;
+		argument.value_id = 0;
+		argument.ownership = ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR;
+		CHECK(call_mutator->add_call_argument(
+			call_mutator->context, &argument));
+	}
+
+	memset(&continuation, 0, sizeof(continuation));
+	continuation.id = 0;
+	continuation.call_site_id = 0;
+	continuation.kind = ZEND_MIR_CALL_CONTINUATION_NORMAL;
+	continuation.block_id = block;
+	CHECK(call_mutator->add_call_continuation(
+		call_mutator->context, &continuation));
+
+	memset(&site, 0, sizeof(site));
+	site.id = 0;
+	site.source_call_site_id = 0;
+	site.instruction_id = 0;
+	site.target_id = 0;
+	site.arguments.offset = 0;
+	site.arguments.count = with_argument ? 1 : 0;
+	site.result_id = ZEND_MIR_ID_INVALID;
+	site.caller_frame.frame_state_id = ZEND_MIR_ID_INVALID;
+	site.caller_frame.function_id = function;
+	site.caller_frame.function_symbol_id = 7;
+	site.caller_frame.op_array_id = 11;
+	site.caller_frame.pending_call_slot_id = ZEND_MIR_ID_INVALID;
+	site.callee_entry_frame.frame_state_id = ZEND_MIR_ID_INVALID;
+	site.callee_entry_frame.function_id = ZEND_MIR_ID_INVALID;
+	site.callee_entry_frame.function_symbol_id = target.function_symbol_id;
+	site.callee_entry_frame.op_array_id = target.op_array_id;
+	site.callee_entry_frame.pending_call_slot_id = ZEND_MIR_ID_INVALID;
+	site.continuations.offset = 0;
+	site.continuations.count = 1;
+	CHECK(call_mutator->add_call_site(call_mutator->context, &site));
+
+	memset(&receipt, 0, sizeof(receipt));
+	receipt.id = 0;
+	receipt.canonical.capability_ids.offset = 0;
+	receipt.canonical.capability_ids.count = 6;
+	receipt.canonical.semantic_debt_ids.offset = 0;
+	receipt.canonical.semantic_debt_ids.count = 8;
+	receipt.capabilities = ZEND_MIR_W05_REQUIRED_CAPABILITIES;
+	receipt.semantic_debts = ZEND_MIR_W05_REQUIRED_DEBTS;
+	receipt.modeled = true;
+	CHECK(call_mutator->add_call_capability_receipt(
+		call_mutator->context, &receipt));
+	return true;
+}
+
 static bool test_write(void *context, const char *bytes, size_t length)
 {
 	test_text *text = (test_text *) context;
@@ -242,6 +331,20 @@ static bool test_stage_model(
 	storage.payload_id = 0;
 	storage.indirect_target_id = ZEND_MIR_ID_INVALID;
 	CHECK(mutator->add_storage(mutator->context, &storage));
+	if (mode == TEST_VALID_CALL_TRANSFER
+			|| mode == TEST_CALL_TRANSFER_WITHOUT_MODEL
+			|| mode == TEST_CALL_TRANSFER_WRONG_SITE
+			|| mode == TEST_CALL_TRANSFER_WRONG_ORDINAL
+			|| mode == TEST_CALL_TRANSFER_WRONG_DEBT
+			|| mode == TEST_VERIFIER_CALL_TRANSFER_MUTATION) {
+		storage.id = 4;
+		storage.kind = ZEND_MIR_STORAGE_CALL_RETURN_SLOT;
+		storage.state = ZEND_MIR_STORAGE_REFERENCE;
+		storage.category = ZEND_MIR_VALUE_REFERENCE_CELL;
+		storage.payload_id = ZEND_MIR_ID_INVALID;
+		storage.reference_cell_id = 0;
+		CHECK(mutator->add_storage(mutator->context, &storage));
+	}
 	if (mode == TEST_SEPARATION_SOURCE_MISMATCH) {
 		storage.id = 4;
 		storage.payload_id = 1;
@@ -378,26 +481,34 @@ static bool test_stage_model(
 
 	if (mode == TEST_CALL_SPAN_OVERFLOW
 			|| mode == TEST_DEBT_SPAN_OVERFLOW
-			|| mode == TEST_VALID_CALL_TRANSFER) {
+			|| mode == TEST_VALID_CALL_TRANSFER
+			|| mode == TEST_CALL_TRANSFER_WITHOUT_MODEL
+			|| mode == TEST_CALL_TRANSFER_WRONG_SITE
+			|| mode == TEST_CALL_TRANSFER_WRONG_ORDINAL
+			|| mode == TEST_CALL_TRANSFER_WRONG_DEBT
+			|| mode == TEST_VERIFIER_CALL_TRANSFER_MUTATION) {
 		zend_mir_call_transfer_ref transfer;
 		memset(&transfer, 0, sizeof(transfer));
-		transfer.call_site_id = 1;
+		transfer.call_site_id =
+			mode == TEST_CALL_TRANSFER_WITHOUT_MODEL
+					|| mode == TEST_CALL_TRANSFER_WRONG_SITE
+				? 1 : 0;
 		transfer.parameter_modes.offset =
 			mode == TEST_CALL_SPAN_OVERFLOW ? UINT32_MAX : 0;
 		transfer.parameter_modes.count =
 			mode == TEST_CALL_SPAN_OVERFLOW ? 2 : 1;
-		transfer.argument_storage_id =
-			mode == TEST_VALID_CALL_TRANSFER ? 1 : 0;
+		transfer.argument_ordinal =
+			mode == TEST_CALL_TRANSFER_WRONG_ORDINAL ? 1 : 0;
+		transfer.argument_storage_id = 1;
 		transfer.argument_reference_cell_id =
-			mode == TEST_VALID_CALL_TRANSFER
-				? 0 : ZEND_MIR_ID_INVALID;
-		transfer.argument_action = ZEND_MIR_TRANSFER_BORROW;
-		transfer.return_storage_id =
-			mode == TEST_VALID_CALL_TRANSFER ? 1 : 3;
-		transfer.return_reference_cell_id =
-			mode == TEST_VALID_CALL_TRANSFER
-				? 0 : ZEND_MIR_ID_INVALID;
+			0;
+		transfer.argument_action = ZEND_MIR_TRANSFER_TO_CALLEE;
+		transfer.return_storage_id = 4;
+		transfer.return_reference_cell_id = 0;
 		transfer.return_action = ZEND_MIR_TRANSFER_FROM_CALLEE;
+		transfer.resolved_debt_ids.offset =
+			mode == TEST_CALL_TRANSFER_WRONG_DEBT ? 0 : 2;
+		transfer.resolved_debt_ids.count = 1;
 		if (mode == TEST_DEBT_SPAN_OVERFLOW) {
 			transfer.resolved_debt_ids.offset = UINT32_MAX;
 			transfer.resolved_debt_ids.count = 2;
@@ -461,7 +572,17 @@ static bool test_build_case(
 	source.column_end = 2;
 	if (!core_mutator->add_source_position(
 			core_mutator->context, &source, &source_id)
-			|| source_id != 0 || !test_stage_model(value_mutator, mode)) {
+			|| source_id != 0
+			|| ((mode == TEST_VALID_CALL_TRANSFER
+					|| mode == TEST_CALL_MODEL_WITHOUT_TRANSFER
+					|| mode == TEST_CALL_TRANSFER_WRONG_SITE
+					|| mode == TEST_CALL_TRANSFER_WRONG_ORDINAL
+					|| mode == TEST_CALL_TRANSFER_WRONG_DEBT
+					|| mode == TEST_VERIFIER_CALL_TRANSFER_MUTATION
+					|| mode == TEST_VALID_ZERO_ARGUMENT_CALL)
+				&& !test_stage_call_model(module, function, block,
+					mode != TEST_VALID_ZERO_ARGUMENT_CALL))
+			|| !test_stage_model(value_mutator, mode)) {
 		goto destroy;
 	}
 	if (mode == TEST_TABLE_COUNT_OVERFLOW) {
@@ -478,7 +599,13 @@ static bool test_build_case(
 			|| !zend_mir_module_finalize(module)) {
 		goto destroy;
 	}
-	if (mode == TEST_VALID_CALL_TRANSFER) {
+	if (mode == TEST_VALID_CALL_TRANSFER
+			|| mode == TEST_CALL_TRANSFER_WITHOUT_MODEL
+			|| mode == TEST_CALL_TRANSFER_WRONG_SITE
+			|| mode == TEST_CALL_TRANSFER_WRONG_ORDINAL
+			|| mode == TEST_CALL_TRANSFER_WRONG_DEBT
+			|| mode == TEST_VERIFIER_CALL_TRANSFER_MUTATION
+			|| mode == TEST_VALID_ZERO_ARGUMENT_CALL) {
 		verified_facets |= ZEND_MIR_W06_VERIFIED_CALL_MODEL;
 	}
 	if (!zend_mir_value_compute_module_fingerprint(
@@ -502,6 +629,10 @@ static bool test_build_case(
 		zend_mir_payload_ref *payloads = ZEND_MIR_CORE_ITEMS(
 			module, value_payloads, zend_mir_payload_ref);
 		payloads[1].cleanup_obligation = false;
+	} else if (mode == TEST_VERIFIER_CALL_TRANSFER_MUTATION) {
+		zend_mir_call_transfer_ref *transfers = ZEND_MIR_CORE_ITEMS(
+			module, value_call_transfers, zend_mir_call_transfer_ref);
+		transfers[0].call_site_id = 1;
 	}
 	if (before_verify != NULL) {
 		zend_mir_text_writer writer = { before_verify, test_write };
@@ -516,7 +647,8 @@ static bool test_build_case(
 		if (mode == TEST_VERIFIER_INDIRECT_MUTATION
 				|| mode == TEST_VERIFIER_FINGERPRINT_MUTATION
 				|| mode == TEST_VERIFIER_PAYLOAD_MUTATION
-				|| mode == TEST_FINGERPRINT_MISMATCH) {
+				|| mode == TEST_FINGERPRINT_MISMATCH
+				|| mode == TEST_VERIFIER_CALL_TRANSFER_MUTATION) {
 			success = true;
 		}
 		goto destroy;
@@ -524,7 +656,8 @@ static bool test_build_case(
 	if (mode == TEST_VERIFIER_INDIRECT_MUTATION
 			|| mode == TEST_VERIFIER_FINGERPRINT_MUTATION
 			|| mode == TEST_VERIFIER_PAYLOAD_MUTATION
-			|| mode == TEST_FINGERPRINT_MISMATCH) {
+			|| mode == TEST_FINGERPRINT_MISMATCH
+			|| mode == TEST_VERIFIER_CALL_TRANSFER_MUTATION) {
 		goto destroy;
 	}
 	if (after_verify != NULL) {
@@ -591,6 +724,11 @@ static bool test_rejections(void)
 		TEST_RELEASE_UNIQUE_STAYS_UNIQUE,
 		TEST_ALIAS_STORAGE_USE_AFTER_MOVE,
 		TEST_TABLE_COUNT_OVERFLOW,
+		TEST_CALL_TRANSFER_WITHOUT_MODEL,
+		TEST_CALL_MODEL_WITHOUT_TRANSFER,
+		TEST_CALL_TRANSFER_WRONG_SITE,
+		TEST_CALL_TRANSFER_WRONG_ORDINAL,
+		TEST_CALL_TRANSFER_WRONG_DEBT,
 		TEST_MISSING_CAPABILITY
 	};
 	uint32_t index;
@@ -651,6 +789,9 @@ static bool test_verifier_rejections(void)
 	CHECK(test_build_case(TEST_VERIFIER_PAYLOAD_MUTATION,
 		0, NULL, NULL, NULL, &diagnostics));
 	CHECK(strstr(diagnostics.last_message, "MIRV0807") != NULL);
+	CHECK(test_build_case(TEST_VERIFIER_CALL_TRANSFER_MUTATION,
+		0, NULL, NULL, NULL, &diagnostics));
+	CHECK(strstr(diagnostics.last_message, "MIRV0806") != NULL);
 	return true;
 }
 
@@ -663,6 +804,16 @@ static bool test_call_transfer_dump_is_complete(void)
 		TEST_VALID_CALL_TRANSFER, 0, &text, NULL, NULL, &diagnostics));
 	CHECK(strstr(text.bytes, "argument-reference rc0") != NULL);
 	CHECK(strstr(text.bytes, "return-reference rc0") != NULL);
+	return true;
+}
+
+static bool test_zero_argument_call_requires_call_receipt(void)
+{
+	test_diagnostics diagnostics;
+
+	CHECK(test_build_case(TEST_VALID_ZERO_ARGUMENT_CALL,
+		0, NULL, NULL, NULL, &diagnostics));
+	CHECK(diagnostics.count == 0);
 	return true;
 }
 
@@ -688,6 +839,7 @@ int main(void)
 			|| !test_merge_rules()
 			|| !test_verifier_rejections()
 			|| !test_call_transfer_dump_is_complete()
+			|| !test_zero_argument_call_requires_call_receipt()
 			|| !test_every_arena_allocation_failure()) {
 		return 1;
 	}
