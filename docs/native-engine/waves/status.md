@@ -69,13 +69,13 @@ Lower source-backed reducible Zend control flow, preserve exact successor/PHI or
 
 **Status:** `SEALED`
 
-Model atomic exact direct same-script user-call sequences and Zend-compatible caller/callee frame descriptors without execution, C-ABI, target lowering, or codegen eligibility.
+Reseal W05 with scalable call contracts, canonical capabilities, verifier receipts, and reproducible evidence while remaining model-only.
 
-**Receipt:** `docs/native-engine/waves/receipts/W05.json` (`9f98bcd7cbfdb6208e76f34f8c1979fbc1c93b8374ac969c80a26762cddfc0ee`)
+**Receipt:** `docs/native-engine/waves/receipts/W05.json` (`19cfcbe51fb54f26a9f4d29beb59a2a5f6b40b29e61e49b47f40048e7b75f949`)
 
-**Capabilities:** `scalar_semantics`, `reducible_control_flow`, `direct_user_call_model`, `caller_frame_model`, `callee_entry_model`
+**Capabilities:** `abstract_call_effects`, `callee_entry_descriptor`, `caller_frame_descriptor`, `direct_user_call_sequence`, `reducible_control_flow`, `scalar_semantics`
 
-**Semantic debts:** `call_runtime_binding`, `call_exception_propagation`, `call_bailout_reentry`, `call_observer_integration`, `call_result_ownership`, `internal_c_abi`
+**Semantic debts:** `call_execution`, `cow_indirect_semantics`, `dynamic_target_resolution`, `exception_cleanup`, `internal_c_abi_interop`, `observer_interop`, `protected_continuation`, `refcounted_transfer`
 
 **Codegen eligible:** `false`
 
