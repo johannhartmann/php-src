@@ -149,6 +149,7 @@ static const char *zend_mir_opcode_label(uint32_t value)
 		ZEND_MIR_OPCODE_CATALOG(ZEND_MIR_LABEL_CASE)
 		ZEND_MIR_SCALAR_OPCODE_CATALOG(ZEND_MIR_LABEL_CASE)
 		ZEND_MIR_CALL_OPCODE_CATALOG(ZEND_MIR_LABEL_CASE)
+		ZEND_MIR_VALUE_OPCODE_CATALOG(ZEND_MIR_LABEL_CASE)
 		default: return NULL;
 	}
 }
@@ -1028,6 +1029,291 @@ static bool zend_mir_dump_call_model(zend_mir_dump_context *dump)
 	return true;
 }
 
+static bool zend_mir_dump_value_receipt(
+	zend_mir_dump_context *dump,
+	const zend_mir_value_verifier_receipt_ref *wrapped)
+{
+	const zend_mir_verifier_receipt_ref *receipt = &wrapped->receipt;
+
+	return zend_mir_dump_literal(dump, "value-verifier-receipt ")
+		&& zend_mir_dump_id(dump, "vr", wrapped->id)
+		&& zend_mir_dump_literal(dump, " verifier ")
+		&& zend_mir_dump_u32(dump, receipt->verifier_id)
+		&& zend_mir_dump_literal(dump, " contract 0x")
+		&& zend_mir_dump_hex(
+			dump, receipt->verifier_contract_version, 8)
+		&& zend_mir_dump_literal(dump, " module ")
+		&& zend_mir_dump_hex(dump, receipt->module_fingerprint[0], 8)
+		&& zend_mir_dump_hex(dump, receipt->module_fingerprint[1], 8)
+		&& zend_mir_dump_hex(dump, receipt->module_fingerprint[2], 8)
+		&& zend_mir_dump_hex(dump, receipt->module_fingerprint[3], 8)
+		&& zend_mir_dump_literal(dump, " source ")
+		&& zend_mir_dump_hex(dump, receipt->source_fingerprint[0], 8)
+		&& zend_mir_dump_hex(dump, receipt->source_fingerprint[1], 8)
+		&& zend_mir_dump_hex(dump, receipt->source_fingerprint[2], 8)
+		&& zend_mir_dump_hex(dump, receipt->source_fingerprint[3], 8)
+		&& zend_mir_dump_literal(dump, " status ")
+		&& zend_mir_dump_u32(dump, receipt->status)
+		&& zend_mir_dump_literal(dump, "\n");
+}
+
+static bool zend_mir_dump_value_model(zend_mir_dump_context *dump)
+{
+	const zend_mir_value_view *values =
+		zend_mir_module_value_view_from_view(dump->view);
+	const zend_mir_module *module;
+	uint32_t count;
+	uint32_t index;
+
+	if (values == NULL) {
+		return true;
+	}
+	module = zend_mir_module_from_value_view(values);
+	if (module == NULL
+			|| values->contract_version != ZEND_MIR_W06_CONTRACT_VERSION
+			|| values->storage_count == NULL || values->storage_at == NULL
+			|| values->payload_count == NULL || values->payload_at == NULL
+			|| values->reference_cell_count == NULL
+			|| values->reference_cell_at == NULL
+			|| values->alias_relation_count == NULL
+			|| values->alias_relation_at == NULL
+			|| values->ownership_event_count == NULL
+			|| values->ownership_event_at == NULL
+			|| values->separation_plan_count == NULL
+			|| values->separation_plan_at == NULL
+			|| values->call_transfer_count == NULL
+			|| values->call_transfer_at == NULL
+			|| values->verifier_receipt_count == NULL
+			|| values->verifier_receipt_at == NULL) {
+		zend_mir_dump_diagnostic(dump, "incomplete W06 value view");
+		return false;
+	}
+#define ZEND_MIR_VALUE_COUNT(field) \
+	count = values->field##_count(values->context); \
+	if (count > UINT32_C(1048576)) { \
+		zend_mir_dump_diagnostic(dump, \
+			"W06 value table count exceeds hard limit"); \
+		return false; \
+	}
+	ZEND_MIR_VALUE_COUNT(payload)
+	for (index = 0; index < count; index++) {
+		zend_mir_payload_ref record;
+		if (!values->payload_at(values->context, index, &record)
+				|| !zend_mir_dump_literal(dump, "value-payload ")
+				|| !zend_mir_dump_id(dump, "vp", record.id)
+				|| !zend_mir_dump_literal(dump, " category ")
+				|| !zend_mir_dump_u32(dump, (uint32_t) record.category)
+				|| !zend_mir_dump_literal(dump, " refcount ")
+				|| !zend_mir_dump_u32(
+					dump, (uint32_t) record.refcount_state)
+				|| !zend_mir_dump_literal(dump, " cleanup ")
+				|| !zend_mir_dump_bool(
+					dump, record.cleanup_obligation)
+				|| !zend_mir_dump_literal(dump, "\n")) {
+			return false;
+		}
+	}
+	ZEND_MIR_VALUE_COUNT(storage)
+	for (index = 0; index < count; index++) {
+		zend_mir_storage_ref record;
+		if (!values->storage_at(values->context, index, &record)
+				|| !zend_mir_dump_literal(dump, "value-storage ")
+				|| !zend_mir_dump_id(dump, "vs", record.id)
+				|| !zend_mir_dump_literal(dump, " kind ")
+				|| !zend_mir_dump_u32(dump, (uint32_t) record.kind)
+				|| !zend_mir_dump_literal(dump, " state ")
+				|| !zend_mir_dump_u32(dump, (uint32_t) record.state)
+				|| !zend_mir_dump_literal(dump, " category ")
+				|| !zend_mir_dump_u32(dump, (uint32_t) record.category)
+				|| !zend_mir_dump_literal(dump, " payload ")
+				|| !zend_mir_dump_id(dump, "vp", record.payload_id)
+				|| !zend_mir_dump_literal(dump, " reference ")
+				|| !zend_mir_dump_id(
+					dump, "rc", record.reference_cell_id)
+				|| !zend_mir_dump_literal(dump, " indirect ")
+				|| !zend_mir_dump_id(
+					dump, "vs", record.indirect_target_id)
+				|| !zend_mir_dump_literal(dump, "\n")) {
+			return false;
+		}
+	}
+	ZEND_MIR_VALUE_COUNT(reference_cell)
+	for (index = 0; index < count; index++) {
+		zend_mir_reference_cell_ref record;
+		if (!values->reference_cell_at(values->context, index, &record)
+				|| !zend_mir_dump_literal(dump, "reference-cell ")
+				|| !zend_mir_dump_id(dump, "rc", record.id)
+				|| !zend_mir_dump_literal(dump, " storage ")
+				|| !zend_mir_dump_id(
+					dump, "vs", record.payload_storage_id)
+				|| !zend_mir_dump_literal(dump, " alias ")
+				|| !zend_mir_dump_id(
+					dump, "ac", record.alias_class_id)
+				|| !zend_mir_dump_literal(dump, " source ")
+				|| !zend_mir_dump_id(
+					dump, "p", record.creation_source_id)
+				|| !zend_mir_dump_literal(dump, " ownership ")
+				|| !zend_mir_dump_u32(
+					dump, (uint32_t) record.ownership)
+				|| !zend_mir_dump_literal(dump, " cleanup ")
+				|| !zend_mir_dump_bool(
+					dump, record.cleanup_obligation)
+				|| !zend_mir_dump_literal(dump, "\n")) {
+			return false;
+		}
+	}
+	ZEND_MIR_VALUE_COUNT(alias_relation)
+	for (index = 0; index < count; index++) {
+		zend_mir_alias_relation_ref record;
+		if (!values->alias_relation_at(values->context, index, &record)
+				|| !zend_mir_dump_literal(dump, "alias-relation ")
+				|| !zend_mir_dump_id(dump, "ac", record.left_id)
+				|| !zend_mir_dump_literal(dump, " ")
+				|| !zend_mir_dump_id(dump, "ac", record.right_id)
+				|| !zend_mir_dump_literal(dump, " relation ")
+				|| !zend_mir_dump_u32(
+					dump, (uint32_t) record.relation)
+				|| !zend_mir_dump_literal(dump, " proof ")
+				|| !zend_mir_dump_u32(dump, record.proof_id)
+				|| !zend_mir_dump_literal(dump, "\n")) {
+			return false;
+		}
+	}
+	ZEND_MIR_VALUE_COUNT(ownership_event)
+	for (index = 0; index < count; index++) {
+		zend_mir_ownership_event_ref record;
+		if (!values->ownership_event_at(
+				values->context, index, &record)
+				|| !zend_mir_dump_literal(dump, "ownership-event ")
+				|| !zend_mir_dump_id(dump, "oe", record.id)
+				|| !zend_mir_dump_literal(dump, " source ")
+				|| !zend_mir_dump_id(
+					dump, "vs", record.source_storage_id)
+				|| !zend_mir_dump_literal(dump, " target ")
+				|| !zend_mir_dump_id(
+					dump, "vs", record.target_storage_id)
+				|| !zend_mir_dump_literal(dump, " payload ")
+				|| !zend_mir_dump_id(dump, "vp", record.payload_id)
+				|| !zend_mir_dump_literal(dump, " action ")
+				|| !zend_mir_dump_u32(dump, (uint32_t) record.action)
+				|| !zend_mir_dump_literal(dump, " transition ")
+				|| !zend_mir_dump_u32(
+					dump, (uint32_t) record.before_state)
+				|| !zend_mir_dump_literal(dump, "->")
+				|| !zend_mir_dump_u32(
+					dump, (uint32_t) record.after_state)
+				|| !zend_mir_dump_literal(dump, " cleanup ")
+				|| !zend_mir_dump_bool(
+					dump, record.cleanup_obligation)
+				|| !zend_mir_dump_literal(dump, "\n")) {
+			return false;
+		}
+	}
+	ZEND_MIR_VALUE_COUNT(separation_plan)
+	for (index = 0; index < count; index++) {
+		zend_mir_separation_plan_ref record;
+		if (!values->separation_plan_at(
+				values->context, index, &record)
+				|| !zend_mir_dump_literal(dump, "separation-plan ")
+				|| !zend_mir_dump_id(dump, "sp", record.id)
+				|| !zend_mir_dump_literal(dump, " source-payload ")
+				|| !zend_mir_dump_id(
+					dump, "vp", record.source_payload_id)
+				|| !zend_mir_dump_literal(dump, " source-storage ")
+				|| !zend_mir_dump_id(
+					dump, "vs", record.source_storage_id)
+				|| !zend_mir_dump_literal(dump, " reason ")
+				|| !zend_mir_dump_u32(dump, (uint32_t) record.reason)
+				|| !zend_mir_dump_literal(dump, " uniqueness ")
+				|| !zend_mir_dump_u32(
+					dump, (uint32_t) record.uniqueness_fact)
+				|| !zend_mir_dump_literal(dump, " required ")
+				|| !zend_mir_dump_u32(
+					dump, (uint32_t) record.required)
+				|| !zend_mir_dump_literal(dump, " result ")
+				|| !zend_mir_dump_id(
+					dump, "vp", record.result_payload_id)
+				|| !zend_mir_dump_literal(dump, " debt ")
+				|| !zend_mir_dump_u32(
+					dump, record.container_execution_debt)
+				|| !zend_mir_dump_literal(dump, "\n")) {
+			return false;
+		}
+	}
+	ZEND_MIR_VALUE_COUNT(call_transfer)
+	for (index = 0; index < count; index++) {
+		zend_mir_call_transfer_ref record;
+		if (!values->call_transfer_at(values->context, index, &record)
+				|| !zend_mir_dump_literal(dump, "call-transfer ")
+				|| !zend_mir_dump_id(
+					dump, "cs", record.call_site_id)
+				|| !zend_mir_dump_literal(dump, " parameter-modes ")
+				|| !zend_mir_dump_u32(
+					dump, record.parameter_modes.offset)
+				|| !zend_mir_dump_literal(dump, "+")
+				|| !zend_mir_dump_u32(
+					dump, record.parameter_modes.count)
+				|| !zend_mir_dump_literal(dump, " argument ")
+				|| !zend_mir_dump_u32(dump, record.argument_ordinal)
+				|| !zend_mir_dump_literal(dump, " storage ")
+				|| !zend_mir_dump_id(
+					dump, "vs", record.argument_storage_id)
+				|| !zend_mir_dump_literal(dump, " action ")
+				|| !zend_mir_dump_u32(
+					dump, (uint32_t) record.argument_action)
+				|| !zend_mir_dump_literal(dump, " return-storage ")
+				|| !zend_mir_dump_id(
+					dump, "vs", record.return_storage_id)
+				|| !zend_mir_dump_literal(dump, " return-action ")
+				|| !zend_mir_dump_u32(
+					dump, (uint32_t) record.return_action)
+				|| !zend_mir_dump_literal(dump, " resolved-debts ")
+				|| !zend_mir_dump_u32(
+					dump, record.resolved_debt_ids.offset)
+				|| !zend_mir_dump_literal(dump, "+")
+				|| !zend_mir_dump_u32(
+					dump, record.resolved_debt_ids.count)
+				|| !zend_mir_dump_literal(dump, "\n")) {
+			return false;
+		}
+	}
+#undef ZEND_MIR_VALUE_COUNT
+	for (index = 0; index < module->value_capability_ids.count; index++) {
+		uint32_t *records = ZEND_MIR_CORE_ITEMS(
+			module, value_capability_ids, uint32_t);
+		if (!zend_mir_dump_literal(dump, "value-capability ")
+				|| !zend_mir_dump_u32(dump, records[index])
+				|| !zend_mir_dump_literal(dump, "\n")) {
+			return false;
+		}
+	}
+	for (index = 0; index < module->value_semantic_debt_ids.count; index++) {
+		uint32_t *records = ZEND_MIR_CORE_ITEMS(
+			module, value_semantic_debt_ids, uint32_t);
+		if (!zend_mir_dump_literal(dump, "value-debt ")
+				|| !zend_mir_dump_u32(dump, records[index])
+				|| !zend_mir_dump_literal(dump, "\n")) {
+			return false;
+		}
+	}
+	count = dump->omit_verifier_receipts
+		? 0 : values->verifier_receipt_count(values->context);
+	if (count > 5) {
+		zend_mir_dump_diagnostic(
+			dump, "W06 verifier receipt count exceeds hard limit");
+		return false;
+	}
+	for (index = 0; index < count; index++) {
+		zend_mir_value_verifier_receipt_ref record;
+		if (!values->verifier_receipt_at(
+				values->context, index, &record)
+				|| !zend_mir_dump_value_receipt(dump, &record)) {
+			return false;
+		}
+	}
+	return true;
+}
+
 static bool zend_mir_dump_invalid_record(
 		zend_mir_dump_context *dump, const char *kind, uint32_t index)
 {
@@ -1176,6 +1462,7 @@ static bool zend_mir_dump_text_internal(
 			|| !zend_mir_dump_sorted(&dump, view->instruction_count(view->context),
 				zend_mir_instruction_id_at, zend_mir_dump_instruction, "instruction")
 			|| !zend_mir_dump_call_model(&dump)
+			|| !zend_mir_dump_value_model(&dump)
 			|| !zend_mir_dump_literal(&dump, "end\n")) {
 		return false;
 	}
