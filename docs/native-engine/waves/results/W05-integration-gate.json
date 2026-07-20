@@ -1,0 +1,409 @@
+{
+  "acceptance_criteria": [
+    {
+      "criterion_id": "W05-I-AC1",
+      "description": "Both approved reviews bind the same implementation head.",
+      "status": "pass"
+    },
+    {
+      "criterion_id": "W05-I-AC2",
+      "description": "The modeled corpus passes every prerequisite verifier.",
+      "status": "pass"
+    },
+    {
+      "criterion_id": "W05-I-AC3",
+      "description": "Every deferred case has an exact later wave and MIRL code.",
+      "status": "pass"
+    },
+    {
+      "criterion_id": "W05-I-AC4",
+      "description": "Reference and candidate execution are separate and byte-identical.",
+      "status": "pass"
+    },
+    {
+      "criterion_id": "W05-I-AC5",
+      "description": "No W05 evidence claims MIR execution.",
+      "status": "pass"
+    },
+    {
+      "criterion_id": "W05-I-AC6",
+      "description": "Canonical integration goldens are deterministic and unnormalized.",
+      "status": "pass"
+    },
+    {
+      "criterion_id": "W05-I-AC7",
+      "description": "Injected failures publish no module or partial call model.",
+      "status": "pass"
+    },
+    {
+      "criterion_id": "W05-I-AC8",
+      "description": "NTS, ZTS, ASan, UBSan, and fixed-seed fuzzing pass.",
+      "status": "pass"
+    },
+    {
+      "criterion_id": "W05-I-AC9",
+      "description": "W01 through W04 regressions pass.",
+      "status": "pass"
+    },
+    {
+      "criterion_id": "W05-I-AC10",
+      "description": "The workflow uses immutable checkout state and unique logs.",
+      "status": "pass"
+    },
+    {
+      "criterion_id": "W05-I-AC11",
+      "description": "The gate commit changes only gate-owned paths.",
+      "status": "pass"
+    }
+  ],
+  "actual_base_commit": "63a5070daa91da9e702d0ff52ea4d77c20ad89e6",
+  "blockers": [],
+  "branch": "integration/wave-05",
+  "changed_paths": [
+    ".github/workflows/native-w05.yml",
+    "Zend/Native/Calls/Model/zend_mir_call_model.c",
+    "Zend/Native/Calls/Model/zend_mir_call_model.h",
+    "Zend/Native/Lowering/Core/zend_mir_lowering_providers.c",
+    "Zend/Native/Lowering/Frontend/zend_mir_zend_source.c",
+    "Zend/Native/Lowering/Frontend/zend_mir_zend_source.h",
+    "Zend/Native/Lowering/Frontend/zend_mir_zend_source_internal.h",
+    "Zend/Native/MIR/Core/zend_mir_module.c",
+    "Zend/Native/MIR/Core/zend_mir_module_internal.h",
+    "Zend/Native/MIR/Core/zend_mir_view.c",
+    "Zend/Native/MIR/Text/zend_mir_dump.c",
+    "Zend/zend_compile.c",
+    "docs/native-engine/build/native-source-manifest.json",
+    "docs/native-engine/build/native-source-manifest.schema.json",
+    "docs/native-engine/calls/README.md",
+    "docs/native-engine/calls/w05-coverage-report.json",
+    "docs/native-engine/calls/w05-review-manifest.json",
+    "docs/native-engine/waves/ledger.json",
+    "docs/native-engine/waves/receipts/W05.json",
+    "docs/native-engine/waves/results/W05-integration-gate.json",
+    "docs/native-engine/waves/status.md",
+    "docs/native-engine/waves/tests/test_w05_definition.py",
+    "docs/native-engine/waves/w05-cross-track-contract.md",
+    "docs/native-engine/waves/waves.json",
+    "ext/native_mir_test/config.m4",
+    "ext/native_mir_test/native_mir_test.c",
+    "ext/native_mir_test/native_mir_test.stub.php",
+    "ext/native_mir_test/native_mir_test_arginfo.h",
+    "scripts/native/build/update-native-test-sources.py",
+    "scripts/native/calls/build-review-manifest.py",
+    "scripts/native/calls/dump-w05.py",
+    "scripts/native/calls/run-w05-differential.py",
+    "scripts/native/calls/seal-w05.py",
+    "scripts/native/calls/test-w05.py",
+    "scripts/native/calls/validate-w05.py",
+    "scripts/native/profiles/w05-asan-nts.env",
+    "scripts/native/profiles/w05-debug-nts.env",
+    "scripts/native/profiles/w05-debug-zts.env",
+    "scripts/native/profiles/w05-ubsan-nts.env",
+    "tests/native/calls/bridge/__init__.py",
+    "tests/native/calls/bridge/test_dump_w05.py",
+    "tests/native/calls/bridge/test_extension_w05.py",
+    "tests/native/calls/bridge/test_source_manifest.py",
+    "tests/native/calls/corpus/cases/by_name_call.php",
+    "tests/native/calls/corpus/cases/by_ref_argument.php",
+    "tests/native/calls/corpus/cases/by_ref_parameter_65.php",
+    "tests/native/calls/corpus/cases/by_value_parameter_64.php",
+    "tests/native/calls/corpus/cases/closure_callback.php",
+    "tests/native/calls/corpus/cases/constructor_call.php",
+    "tests/native/calls/corpus/cases/default_argument.php",
+    "tests/native/calls/corpus/cases/direct_call_after_phi.php",
+    "tests/native/calls/corpus/cases/direct_call_exact_user_do_fcall.php",
+    "tests/native/calls/corpus/cases/direct_call_exact_user_do_fcall_proof.php",
+    "tests/native/calls/corpus/cases/direct_call_in_if.php",
+    "tests/native/calls/corpus/cases/direct_call_in_reducible_loop.php",
+    "tests/native/calls/corpus/cases/direct_user_scalar_literals.php",
+    "tests/native/calls/corpus/cases/direct_user_scalar_result_bool.php",
+    "tests/native/calls/corpus/cases/direct_user_scalar_result_float.php",
+    "tests/native/calls/corpus/cases/direct_user_scalar_result_followup.php",
+    "tests/native/calls/corpus/cases/direct_user_scalar_result_int.php",
+    "tests/native/calls/corpus/cases/direct_user_scalar_result_null.php",
+    "tests/native/calls/corpus/cases/direct_user_scalar_variables.php",
+    "tests/native/calls/corpus/cases/direct_user_zero_args_unused_return.php",
+    "tests/native/calls/corpus/cases/dynamic_call.php",
+    "tests/native/calls/corpus/cases/frameless_icall.php",
+    "tests/native/calls/corpus/cases/internal_function.php",
+    "tests/native/calls/corpus/cases/method_call.php",
+    "tests/native/calls/corpus/cases/named_argument.php",
+    "tests/native/calls/corpus/cases/named_argument_normalized_position.php",
+    "tests/native/calls/corpus/cases/nested_direct_call_result.php",
+    "tests/native/calls/corpus/cases/no_discard_by_name_finish.php",
+    "tests/native/calls/corpus/cases/observer_specific_marker.php",
+    "tests/native/calls/corpus/cases/recursive_self_call.php",
+    "tests/native/calls/corpus/cases/refcounted_argument.php",
+    "tests/native/calls/corpus/cases/static_method_call.php",
+    "tests/native/calls/corpus/cases/try_catch_around_call.php",
+    "tests/native/calls/corpus/cases/two_direct_calls_same_block.php",
+    "tests/native/calls/corpus/cases/unpack_argument.php",
+    "tests/native/calls/corpus/cases/used_unknown_return.php",
+    "tests/native/calls/corpus/cases/variadic_target.php",
+    "tests/native/calls/corpus/manifest.json",
+    "tests/native/calls/corpus/manifest.schema.json",
+    "tests/native/calls/corpus/validate_manifest.py",
+    "tests/native/calls/fuzz/invoke_fuzz.php",
+    "tests/native/calls/fuzz/run_fuzz.py",
+    "tests/native/calls/integration/gate-evidence.json",
+    "tests/native/calls/integration/goldens/by_value_parameter_64.znmir",
+    "tests/native/calls/integration/goldens/direct_call_after_phi.znmir",
+    "tests/native/calls/integration/goldens/direct_call_exact_user_do_fcall.znmir",
+    "tests/native/calls/integration/goldens/direct_call_exact_user_do_ucall.znmir",
+    "tests/native/calls/integration/goldens/direct_call_in_if.znmir",
+    "tests/native/calls/integration/goldens/direct_call_in_reducible_loop.znmir",
+    "tests/native/calls/integration/goldens/direct_user_scalar_literals.znmir",
+    "tests/native/calls/integration/goldens/direct_user_scalar_result_bool.znmir",
+    "tests/native/calls/integration/goldens/direct_user_scalar_result_float.znmir",
+    "tests/native/calls/integration/goldens/direct_user_scalar_result_followup.znmir",
+    "tests/native/calls/integration/goldens/direct_user_scalar_result_int.znmir",
+    "tests/native/calls/integration/goldens/direct_user_scalar_result_null.znmir",
+    "tests/native/calls/integration/goldens/direct_user_scalar_variables.znmir",
+    "tests/native/calls/integration/goldens/direct_user_zero_args_unused_return.znmir",
+    "tests/native/calls/integration/goldens/index.json",
+    "tests/native/calls/integration/goldens/two_direct_calls_same_block.znmir",
+    "tests/native/calls/integration/test_w05_gate.py",
+    "tests/native/calls/unit/__init__.py",
+    "tests/native/calls/unit/test_call_contract.c",
+    "tests/native/calls/unit/test_call_model.py",
+    "tests/native/calls/unit/test_differential_environment.py"
+  ],
+  "expected_base_commit": "63a5070daa91da9e702d0ff52ea4d77c20ad89e6",
+  "format_version": "1.0.0",
+  "gate_evidence": [
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "validate-w05.log"
+      },
+      "format_version": "1.0.0",
+      "gate_id": "W05-integration-gate",
+      "status": "pass",
+      "summary": "W05 call modeling passed without MIR execution.",
+      "wave_id": "W05"
+    }
+  ],
+  "head_commit": null,
+  "risks": [],
+  "seal_subject": {
+    "receipt_path": "docs/native-engine/waves/receipts/W05.json",
+    "receipt_sha256": "9f98bcd7cbfdb6208e76f34f8c1979fbc1c93b8374ac969c80a26762cddfc0ee"
+  },
+  "status": "pass",
+  "task_id": "W05-integration-gate",
+  "tested_head_commit": "c3bdcb26d5ed2d94a67e831ae32335fecb7b8d84",
+  "tests": [
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "check-contract.log"
+      },
+      "command": "python3 scripts/native/calls/check-contract.py --check",
+      "duration_ms": null,
+      "exit_code": 0,
+      "status": "pass"
+    },
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "check-phases.log"
+      },
+      "command": "python3 scripts/native/calls/check-phases.py --check",
+      "duration_ms": null,
+      "exit_code": 0,
+      "status": "pass"
+    },
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "validate-w05.log"
+      },
+      "command": "python3 scripts/native/calls/validate-w05.py --check",
+      "duration_ms": null,
+      "exit_code": 0,
+      "status": "pass"
+    },
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "build-w05-debug-nts.log"
+      },
+      "command": "scripts/native/build.sh --profile w05-debug-nts",
+      "duration_ms": null,
+      "exit_code": 0,
+      "status": "pass"
+    },
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "test-w05-debug-nts.log"
+      },
+      "command": "python3 scripts/native/calls/test-w05.py --reference-php /Volumes/CrucialMusic/src/php/php-src/sapi/cli/php --candidate-php /var/folders/p7/wnljx3ss3hn3dhkmk_0nt27c0000gn/T/php-native-w00/php-src-A-16a405aa927f37c5/w05-debug-nts/build/sapi/cli/php",
+      "duration_ms": null,
+      "exit_code": 0,
+      "status": "pass"
+    },
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "build-w05-debug-zts.log"
+      },
+      "command": "scripts/native/build.sh --profile w05-debug-zts",
+      "duration_ms": null,
+      "exit_code": 0,
+      "status": "pass"
+    },
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "test-w05-debug-zts.log"
+      },
+      "command": "python3 scripts/native/calls/test-w05.py --reference-php /Volumes/CrucialMusic/src/php/php-src/sapi/cli/php --candidate-php /var/folders/p7/wnljx3ss3hn3dhkmk_0nt27c0000gn/T/php-native-w00/php-src-A-16a405aa927f37c5/w05-debug-zts/build/sapi/cli/php",
+      "duration_ms": null,
+      "exit_code": 0,
+      "status": "pass"
+    },
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "build-w05-asan-nts.log"
+      },
+      "command": "scripts/native/build.sh --profile w05-asan-nts",
+      "duration_ms": null,
+      "exit_code": 0,
+      "status": "pass"
+    },
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "test-w05-asan-nts.log"
+      },
+      "command": "python3 scripts/native/calls/test-w05.py --reference-php /Volumes/CrucialMusic/src/php/php-src/sapi/cli/php --candidate-php /var/folders/p7/wnljx3ss3hn3dhkmk_0nt27c0000gn/T/php-native-w00/php-src-A-16a405aa927f37c5/w05-asan-nts/build/sapi/cli/php --sanitizer address",
+      "duration_ms": null,
+      "exit_code": 0,
+      "status": "pass"
+    },
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "build-w05-ubsan-nts.log"
+      },
+      "command": "scripts/native/build.sh --profile w05-ubsan-nts",
+      "duration_ms": null,
+      "exit_code": 0,
+      "status": "pass"
+    },
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "test-w05-ubsan-nts.log"
+      },
+      "command": "python3 scripts/native/calls/test-w05.py --reference-php /Volumes/CrucialMusic/src/php/php-src/sapi/cli/php --candidate-php /var/folders/p7/wnljx3ss3hn3dhkmk_0nt27c0000gn/T/php-native-w00/php-src-A-16a405aa927f37c5/w05-ubsan-nts/build/sapi/cli/php --sanitizer undefined",
+      "duration_ms": null,
+      "exit_code": 0,
+      "status": "pass"
+    },
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "calls-unittest.log"
+      },
+      "command": "TEST_PHP_EXECUTABLE=/var/folders/p7/wnljx3ss3hn3dhkmk_0nt27c0000gn/T/php-native-w00/php-src-A-16a405aa927f37c5/w05-debug-nts/build/sapi/cli/php python3 -m unittest discover -s tests/native/calls -p 'test_*.py' -v",
+      "duration_ms": null,
+      "exit_code": 0,
+      "status": "pass"
+    },
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "fuzz-20000.log"
+      },
+      "command": "python3 tests/native/calls/fuzz/run_fuzz.py --seed 20260719 --cases 20000 --candidate-php /var/folders/p7/wnljx3ss3hn3dhkmk_0nt27c0000gn/T/php-native-w00/php-src-A-16a405aa927f37c5/w05-debug-nts/build/sapi/cli/php",
+      "duration_ms": null,
+      "exit_code": 0,
+      "status": "pass"
+    },
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "validate-w01.log"
+      },
+      "command": "python3 scripts/native/semantics/validate-w01.py --check",
+      "duration_ms": null,
+      "exit_code": 0,
+      "status": "pass"
+    },
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "validate-w02.log"
+      },
+      "command": "python3 scripts/native/mir/validate-w02.py --check",
+      "duration_ms": null,
+      "exit_code": 0,
+      "status": "pass"
+    },
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "validate-w03.log"
+      },
+      "command": "python3 scripts/native/lowering/validate-w03.py --check",
+      "duration_ms": null,
+      "exit_code": 0,
+      "status": "pass"
+    },
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "validate-w04.log"
+      },
+      "command": "python3 scripts/native/control-flow/validate-w04.py --check",
+      "duration_ms": null,
+      "exit_code": 0,
+      "status": "pass"
+    },
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "build-debug-nts.log"
+      },
+      "command": "scripts/native/build.sh --profile debug-nts",
+      "duration_ms": null,
+      "exit_code": 0,
+      "status": "pass"
+    },
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "smoke-debug-nts.log"
+      },
+      "command": "scripts/native/test-smoke.sh --profile debug-nts",
+      "duration_ms": null,
+      "exit_code": 0,
+      "status": "pass"
+    },
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "build-debug-zts.log"
+      },
+      "command": "scripts/native/build.sh --profile debug-zts",
+      "duration_ms": null,
+      "exit_code": 0,
+      "status": "pass"
+    },
+    {
+      "artifact": {
+        "kind": "local",
+        "reference": "smoke-debug-zts.log"
+      },
+      "command": "scripts/native/test-smoke.sh --profile debug-zts",
+      "duration_ms": null,
+      "exit_code": 0,
+      "status": "pass"
+    }
+  ],
+  "timestamp": "2026-07-20T07:36:45Z",
+  "worktree_clean": true
+}
