@@ -1,0 +1,44 @@
+{
+  "format_version": 1,
+  "mir_contract_version": "1.9",
+  "alias_merge": {
+    "different_fresh_with_proof": "no_alias",
+    "same_reference_cell": "must_alias",
+    "unknown_or_conflicting": "may_alias"
+  },
+  "call_transfer": {
+    "parameter_mode_storage": "span",
+    "parameter_ordinal_max": 4294967294,
+    "required_actions": ["borrow", "copy_addref", "move", "release", "transfer_to_callee", "transfer_from_callee"],
+    "runtime_binding": false
+  },
+  "invalid_transitions": [
+    "read_after_move",
+    "read_after_release",
+    "double_release",
+    "destroy_borrowed",
+    "reference_without_payload_storage",
+    "indirect_cycle",
+    "no_alias_without_proof",
+    "required_separation_reuses_payload"
+  ],
+  "ownership_merge": {
+    "borrowed_and_owned": "unknown",
+    "moved_or_released_with_live": "invalid_without_canonicalization",
+    "unique_and_shared": "shared"
+  },
+  "separation": {
+    "clone_execution": false,
+    "reasons": ["explicit", "write", "call_boundary"],
+    "requirements": ["no", "yes", "unknown"],
+    "required_debt": "container_clone_execution"
+  },
+  "transitions": [
+    {"action": "borrow", "from": ["immortal", "unique", "shared", "unknown"], "to": "unchanged", "cleanup_obligation": false},
+    {"action": "copy_addref", "from": ["immortal", "unique", "shared", "unknown"], "to": "shared_or_unknown", "cleanup_obligation": true},
+    {"action": "move", "from": ["unique", "shared", "unknown"], "to": "transferred", "cleanup_obligation": false},
+    {"action": "release", "from": ["unique", "shared", "unknown"], "to": "released_or_shared", "cleanup_obligation": true},
+    {"action": "transfer_to_callee", "from": ["immortal", "unique", "shared", "unknown"], "to": "transferred_or_shared", "cleanup_obligation": true},
+    {"action": "transfer_from_callee", "from": ["unique", "shared", "unknown"], "to": "owned", "cleanup_obligation": true}
+  ]
+}

@@ -1,0 +1,124 @@
+{
+  "format_version": 1,
+  "wave": "W06",
+  "start_commit": "5814a296961a1619827d6525cd63c83531a8ca53",
+  "writer_branch": "integration/wave-06",
+  "phases": [
+    {
+      "phase_id": "W06-contract-H",
+      "order": 0,
+      "paths": [
+        "Zend/Native/Values/AGENTS.md",
+        "Zend/Native/Values/Contracts/**",
+        "Zend/Native/MIR/zend_mir_ids.h",
+        "Zend/Native/MIR/zend_mir_opcodes.h",
+        "Zend/Native/MIR/zend_mir_values.h",
+        "Zend/Native/MIR/zend_mir_capability.h",
+        "Zend/Native/MIR/zend_mir_verification.h",
+        "Zend/Native/Lowering/zend_mir_lowering.h",
+        "Zend/Native/Lowering/zend_mir_lowering_diagnostic.h",
+        "Zend/Native/Lowering/zend_mir_lowering_zend.h",
+        "docs/native-engine/README.md",
+        "docs/native-engine/adr/0022-w06-storage-reference-alias-model.md",
+        "docs/native-engine/adr/0023-w06-separation-protocol-not-container-clone.md",
+        "docs/native-engine/roadmap/capability-registry.json",
+        "docs/native-engine/roadmap/capability-registry.schema.json",
+        "docs/native-engine/values/contracts/**",
+        "docs/native-engine/values/w06-opcode-profile.json",
+        "docs/native-engine/values/w06-opcode-profile.schema.json",
+        "docs/native-engine/values/w06-transition-profile.json",
+        "docs/native-engine/values/w06-transition-profile.schema.json",
+        "docs/native-engine/values/w06-reclassification.json",
+        "docs/native-engine/values/w06-phase-manifest.json",
+        "docs/native-engine/values/w06-phase-manifest.schema.json",
+        "scripts/native/values/generate-w06-profile.py",
+        "scripts/native/values/check-contract.py",
+        "scripts/native/values/check-history.py",
+        "tests/native/values/contracts/**"
+      ]
+    },
+    {
+      "phase_id": "W06-wave-P",
+      "order": 1,
+      "paths": [
+        "docs/native-engine/waves/waves.json",
+        "docs/native-engine/waves/w06-cross-track-contract.md",
+        "docs/native-engine/waves/tests/test_w06_definition.py"
+      ]
+    },
+    {
+      "phase_id": "W06-core-A1",
+      "order": 2,
+      "paths": [
+        "Zend/Native/Values/Core/**",
+        "Zend/Native/MIR/Values/**",
+        "Zend/Native/MIR/Core/zend_mir_module.c",
+        "Zend/Native/MIR/Core/zend_mir_module_internal.h",
+        "Zend/Native/MIR/Core/zend_mir_view.c",
+        "Zend/Native/MIR/Text/zend_mir_dump.c",
+        "tests/native/values/unit/**"
+      ]
+    },
+    {
+      "phase_id": "W06-lowering-A2",
+      "order": 3,
+      "paths": [
+        "Zend/Native/Values/Lowering/**",
+        "Zend/Native/Lowering/Core/zend_mir_lowering_context.c",
+        "Zend/Native/Lowering/Core/zend_mir_lowering_internal.h",
+        "Zend/Native/Lowering/Core/zend_mir_lowering_providers.c",
+        "Zend/Native/Lowering/Frontend/zend_mir_operand_map.c",
+        "Zend/Native/Lowering/Frontend/zend_mir_slot_map.c",
+        "Zend/Native/Lowering/Frontend/zend_mir_value_facts.c",
+        "Zend/Native/Lowering/Frontend/zend_mir_zend_source.c",
+        "Zend/Native/Lowering/Frontend/zend_mir_zend_source.h",
+        "Zend/Native/Lowering/Frontend/zend_mir_zend_source_internal.h",
+        "Zend/Native/Calls/Model/zend_mir_call_model.c",
+        "Zend/Native/Calls/Model/zend_mir_call_model.h",
+        "ext/native_mir_test/config.m4",
+        "ext/native_mir_test/native_mir_test.c",
+        "ext/native_mir_test/native_mir_test.stub.php",
+        "ext/native_mir_test/native_mir_test_arginfo.h",
+        "docs/native-engine/build/native-source-manifest.json",
+        "scripts/native/build/update-native-test-sources.py",
+        "scripts/native/values/dump-w06.py",
+        "scripts/native/values/run-w06-differential.py",
+        "scripts/native/profiles/w06-*.env",
+        "tests/native/values/bridge/**",
+        "tests/native/values/corpus/**",
+        "tests/native/values/fuzz/**"
+      ]
+    },
+    {
+      "phase_id": "W06-gate-I",
+      "order": 4,
+      "paths": [
+        ".github/workflows/native-w06.yml",
+        "scripts/native/values/validate-w06.py",
+        "scripts/native/values/test-w06.py",
+        "scripts/native/values/build-review-manifest.py",
+        "scripts/native/values/seal-w06.py",
+        "docs/native-engine/values/README.md",
+        "docs/native-engine/values/w06-review-manifest.json",
+        "docs/native-engine/values/w06-coverage-report.json",
+        "docs/native-engine/reviews/W06/**",
+        "tests/native/values/integration/**"
+      ]
+    },
+    {
+      "phase_id": "W06-seal-S",
+      "order": 5,
+      "paths": [
+        "docs/native-engine/waves/receipts/W06.json",
+        "docs/native-engine/waves/results/W06-integration-gate.json",
+        "docs/native-engine/waves/ledger.json",
+        "docs/native-engine/waves/status.md"
+      ]
+    }
+  ],
+  "read_only_phases": ["W06-core-review-read-only", "W06-semantic-review-read-only"],
+  "repair_phase_aliases": {
+    "W06-core-A1-repair": "W06-core-A1",
+    "W06-lowering-A2-repair": "W06-lowering-A2"
+  }
+}
