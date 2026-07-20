@@ -87,6 +87,9 @@ struct _zend_mir_module {
 	zend_mir_core_table call_continuations;
 	zend_mir_core_table call_sites;
 	zend_mir_core_table call_receipts;
+	zend_mir_core_table capability_ids;
+	zend_mir_core_table semantic_debt_ids;
+	zend_mir_core_table verifier_receipts;
 	zend_mir_core_call_staging call_staging;
 	uint32_t operand_count;
 	uint32_t *value_index;
@@ -122,6 +125,27 @@ zend_mir_call_mutator *zend_mir_module_get_call_mutator(
 	zend_mir_module *module);
 const zend_mir_call_view *zend_mir_module_get_call_view(
 	const zend_mir_module *module);
+bool zend_mir_module_w05_capability_ids_are_canonical(
+	const zend_mir_module *module);
+enum {
+	ZEND_MIR_W05_VERIFIED_STRUCTURAL = UINT32_C(1) << 0,
+	ZEND_MIR_W05_VERIFIED_SCALAR = UINT32_C(1) << 1,
+	ZEND_MIR_W05_VERIFIED_CONTROL_FLOW = UINT32_C(1) << 2,
+	ZEND_MIR_W05_VERIFIED_CALL_MODEL = UINT32_C(1) << 3,
+	ZEND_MIR_W05_VERIFIED_ALL =
+		ZEND_MIR_W05_VERIFIED_STRUCTURAL
+		| ZEND_MIR_W05_VERIFIED_SCALAR
+		| ZEND_MIR_W05_VERIFIED_CONTROL_FLOW
+		| ZEND_MIR_W05_VERIFIED_CALL_MODEL
+};
+bool zend_mir_module_publish_w05_verifier_receipts(
+	zend_mir_module *module,
+	const uint32_t module_fingerprint[4],
+	const uint32_t source_fingerprint[4],
+	uint32_t verified_facets);
+bool zend_mir_dump_w05_fingerprint_projection(
+	const zend_mir_view *view, zend_mir_text_writer *writer,
+	zend_mir_diagnostic_sink *diagnostics);
 static inline const zend_mir_call_view *
 zend_mir_module_call_view_from_view(const zend_mir_view *view)
 {

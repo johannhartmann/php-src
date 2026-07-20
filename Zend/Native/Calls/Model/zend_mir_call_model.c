@@ -119,9 +119,42 @@ static bool zend_mir_w05_target_equals(
 		&& left->num_args == right->num_args
 		&& left->required_num_args == right->required_num_args
 		&& left->function_flags_snapshot == right->function_flags_snapshot
-		&& left->by_ref_mask == right->by_ref_mask
+		&& left->parameter_modes.offset == right->parameter_modes.offset
+		&& left->parameter_modes.count == right->parameter_modes.count
 		&& left->variadic == right->variadic
 		&& left->returns_by_reference == right->returns_by_reference;
+}
+
+static bool zend_mir_w05_target_parameter_modes_are_by_value(
+	const zend_mir_source_call_view *calls,
+	const zend_mir_source_call_target_ref *target)
+{
+	uint32_t count;
+	uint32_t index;
+
+	if (calls->parameter_mode_count == NULL
+			|| calls->parameter_mode_at == NULL) {
+		return false;
+	}
+	count = calls->parameter_mode_count(calls->context);
+	if (target->parameter_modes.offset > count
+			|| target->parameter_modes.count
+				> count - target->parameter_modes.offset
+			|| target->parameter_modes.count != target->num_args) {
+		return false;
+	}
+	for (index = 0; index < target->parameter_modes.count; index++) {
+		zend_mir_source_parameter_mode_ref mode;
+		if (!calls->parameter_mode_at(
+				calls->context, target->parameter_modes.offset + index,
+				&mode)
+				|| mode.target_id != target->id
+				|| mode.ordinal != index
+				|| mode.mode != ZEND_MIR_SOURCE_PARAMETER_BY_VALUE) {
+			return false;
+		}
+	}
+	return true;
 }
 
 static zend_mir_w05_lowering_result zend_mir_w05_failure(
@@ -307,6 +340,8 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_source_sequence(
 			|| calls->call_site_at == NULL
 			|| calls->call_argument_count == NULL
 			|| calls->call_argument_at == NULL
+			|| calls->parameter_mode_count == NULL
+			|| calls->parameter_mode_at == NULL
 			|| calls->source_opcode_count == NULL
 			|| calls->source_opcode_at == NULL) {
 		return result;
@@ -555,19 +590,9 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 					&resolved, &plan->targets[index])
 				|| resolved.kind != ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
 				|| resolved.variadic || resolved.returns_by_reference
-				|| resolved.by_ref_mask != 0
-				|| (resolved.function_symbol_id
-						== context->function_symbol_id
-					&& context->zend_source != NULL
-					&& resolved.op_array_id
-						== context->zend_source->op_array_id)) {
+				|| !zend_mir_w05_target_parameter_modes_are_by_value(
+					calls, &resolved)) {
 			return ZEND_MIRL_W05_UNSUPPORTED_TARGET;
-		}
-		if (resolved.num_args != resolved.required_num_args) {
-			return ZEND_MIRL_W05_ARGUMENT_COUNT_MISMATCH;
-		}
-		if (resolved.num_args > 64) {
-			return ZEND_MIRL_W05_UNSUPPORTED_ARGUMENT;
 		}
 	}
 	for (index = 0; index < plan->site_count; index++) {
@@ -763,6 +788,11 @@ static bool zend_mir_w05_emit_calls(
 		zend_mir_call_capability_receipt_ref receipt;
 		memset(&receipt, 0, sizeof(receipt));
 		receipt.id = 0;
+		receipt.canonical.capability_ids.offset = 0;
+		receipt.canonical.capability_ids.count = 6;
+		receipt.canonical.semantic_debt_ids.offset = 0;
+		receipt.canonical.semantic_debt_ids.count = 8;
+		receipt.canonical.codegen_eligible = false;
 		receipt.capabilities = ZEND_MIR_W05_REQUIRED_CAPABILITIES;
 		receipt.semantic_debts = ZEND_MIR_W05_REQUIRED_DEBTS;
 		receipt.modeled = true;
@@ -793,6 +823,386 @@ static bool zend_mir_w05_verify_emit(zend_mir_diagnostic_sink *diagnostics,
 static bool zend_mir_w05_span_equal(zend_mir_span left, zend_mir_span right)
 {
 	return left.offset == right.offset && left.count == right.count;
+}
+
+typedef struct _zend_mir_w05_fingerprint_digest {
+	uint32_t words[4];
+} zend_mir_w05_fingerprint_digest;
+
+static zend_mir_w05_fingerprint_digest zend_mir_w05_fingerprint_init(void)
+{
+	zend_mir_w05_fingerprint_digest digest = {{
+		UINT32_C(2166136261),
+		UINT32_C(3339451269),
+		UINT32_C(2593831049),
+		UINT32_C(1268118805)
+	}};
+	return digest;
+}
+
+static zend_mir_w05_fingerprint_digest zend_mir_w05_fingerprint_mix(
+	zend_mir_w05_fingerprint_digest digest, uint32_t value)
+{
+	static const uint32_t domains[4] = {
+		UINT32_C(0x243f6a88), UINT32_C(0x85a308d3),
+		UINT32_C(0x13198a2e), UINT32_C(0x03707344)
+	};
+	uint32_t word;
+	uint32_t byte;
+	for (word = 0; word < 4; word++) {
+		uint32_t domain_value = value ^ domains[word];
+		for (byte = 0; byte < 4; byte++) {
+			digest.words[word] ^= domain_value & UINT32_C(0xff);
+			digest.words[word] *= UINT32_C(16777619);
+			domain_value >>= 8;
+		}
+	}
+	return digest;
+}
+
+static zend_mir_w05_fingerprint_digest zend_mir_w05_fingerprint_mix_u64(
+	zend_mir_w05_fingerprint_digest digest, uint64_t value)
+{
+	digest = zend_mir_w05_fingerprint_mix(digest, (uint32_t) value);
+	return zend_mir_w05_fingerprint_mix(
+		digest, (uint32_t) (value >> 32));
+}
+
+typedef struct _zend_mir_w05_fingerprint_writer {
+	zend_mir_w05_fingerprint_digest digest;
+} zend_mir_w05_fingerprint_writer;
+
+static bool zend_mir_w05_fingerprint_write(
+	void *context, const char *bytes, size_t length)
+{
+	zend_mir_w05_fingerprint_writer *writer = context;
+	size_t index;
+
+	if (writer == NULL || (bytes == NULL && length != 0)) {
+		return false;
+	}
+	for (index = 0; index < length; index++) {
+		writer->digest = zend_mir_w05_fingerprint_mix(
+			writer->digest, (unsigned char) bytes[index]);
+	}
+	return true;
+}
+
+static zend_mir_w05_fingerprint_digest
+zend_mir_w05_fingerprint_source_operand(
+	zend_mir_w05_fingerprint_digest digest,
+	const zend_mir_source_operand_ref *operand)
+{
+	digest = zend_mir_w05_fingerprint_mix(
+		digest, (uint32_t) operand->kind);
+	digest = zend_mir_w05_fingerprint_mix(
+		digest, (uint32_t) operand->slot_kind);
+	digest = zend_mir_w05_fingerprint_mix(digest, operand->index);
+	return zend_mir_w05_fingerprint_mix(
+		digest, operand->ssa_variable_id);
+}
+
+static bool zend_mir_w05_build_fingerprints(
+	const zend_mir_view *view,
+	const zend_mir_lowering_source_view *source,
+	const zend_mir_source_call_view *source_calls,
+	const zend_mir_call_view *calls,
+	zend_mir_diagnostic_sink *diagnostics,
+	uint32_t module_fingerprint[4],
+	uint32_t source_fingerprint[4])
+{
+	zend_mir_w05_fingerprint_writer module_writer;
+	zend_mir_text_writer writer;
+	zend_mir_w05_fingerprint_digest source_seed =
+		zend_mir_w05_fingerprint_init();
+	uint32_t index;
+
+	if (view == NULL || source == NULL || source_calls == NULL || calls == NULL
+			|| diagnostics == NULL
+			|| source->opcode_count == NULL || source->opcode_at == NULL
+			|| source->ssa_count == NULL || source->ssa_at == NULL
+			|| source->ssa_use_count == NULL || source->ssa_use_at == NULL
+			|| source->ssa_def_count == NULL || source->ssa_def_at == NULL
+			|| source->literal_count == NULL || source->literal_at == NULL
+			|| source->block_count == NULL || source->block_at == NULL
+			|| source->edge_count == NULL || source->edge_at == NULL
+			|| source->phi_count == NULL || source->phi_at == NULL
+			|| source->phi_input_count == NULL
+			|| source->phi_input_at == NULL
+			|| source_calls->source_opcode_count == NULL
+			|| source_calls->source_opcode_at == NULL
+			|| source_calls->call_site_count == NULL
+			|| source_calls->call_site_at == NULL
+			|| source_calls->call_target_count == NULL
+			|| source_calls->call_target_at == NULL
+			|| source_calls->call_argument_count == NULL
+			|| source_calls->call_argument_at == NULL
+			|| source_calls->parameter_mode_count == NULL
+			|| source_calls->parameter_mode_at == NULL
+			|| calls->call_site_count == NULL
+			|| calls->call_target_count == NULL
+			|| calls->call_argument_count == NULL
+			|| calls->call_continuation_count == NULL) {
+		return false;
+	}
+	module_writer.digest = zend_mir_w05_fingerprint_init();
+	writer.context = &module_writer;
+	writer.write = zend_mir_w05_fingerprint_write;
+	if (!zend_mir_dump_w05_fingerprint_projection(
+			view, &writer, diagnostics)) {
+		return false;
+	}
+
+#define W05_MIX(record, field) \
+	source_seed = zend_mir_w05_fingerprint_mix_u64( \
+		source_seed, (uint64_t) (record).field)
+#define W05_MIX_OPERAND(record, field) \
+	source_seed = zend_mir_w05_fingerprint_source_operand( \
+		source_seed, &(record).field)
+
+	source_seed = zend_mir_w05_fingerprint_mix(
+		source_seed, source->opcode_count(source->context));
+	for (index = 0; index < source->opcode_count(source->context); index++) {
+		zend_mir_source_opcode_ref record;
+		if (!source->opcode_at(source->context, index, &record)) {
+			return false;
+		}
+		W05_MIX(record, opline_index);
+		W05_MIX(record, zend_opcode_number);
+		W05_MIX_OPERAND(record, op1);
+		W05_MIX_OPERAND(record, op2);
+		W05_MIX_OPERAND(record, result);
+		W05_MIX(record, extended_value);
+		W05_MIX(record, source_position_id);
+		W05_MIX(record, block_id);
+	}
+	source_seed = zend_mir_w05_fingerprint_mix(
+		source_seed, source->ssa_count(source->context));
+	for (index = 0; index < source->ssa_count(source->context); index++) {
+		zend_mir_source_ssa_ref record;
+		if (!source->ssa_at(source->context, index, &record)) {
+			return false;
+		}
+		W05_MIX(record, ssa_variable_id);
+		W05_MIX(record, definition_opline_index);
+		W05_MIX(record, source_slot);
+		W05_MIX(record, source_slot_kind);
+	}
+	source_seed = zend_mir_w05_fingerprint_mix(
+		source_seed, source->ssa_use_count(source->context));
+	for (index = 0; index < source->ssa_use_count(source->context); index++) {
+		zend_mir_source_ssa_use_ref record;
+		if (!source->ssa_use_at(source->context, index, &record)) {
+			return false;
+		}
+		W05_MIX(record, ssa_variable_id);
+		W05_MIX(record, opline_index);
+		W05_MIX(record, operand_index);
+	}
+	source_seed = zend_mir_w05_fingerprint_mix(
+		source_seed, source->ssa_def_count(source->context));
+	for (index = 0; index < source->ssa_def_count(source->context); index++) {
+		zend_mir_source_ssa_def_ref record;
+		if (!source->ssa_def_at(source->context, index, &record)) {
+			return false;
+		}
+		W05_MIX(record, ssa_variable_id);
+		W05_MIX(record, opline_index);
+		W05_MIX_OPERAND(record, destination);
+	}
+	source_seed = zend_mir_w05_fingerprint_mix(
+		source_seed, source->literal_count(source->context));
+	for (index = 0; index < source->literal_count(source->context); index++) {
+		zend_mir_source_literal_ref record;
+		if (!source->literal_at(source->context, index, &record)) {
+			return false;
+		}
+		W05_MIX(record, literal_index);
+		W05_MIX(record, kind);
+		W05_MIX(record, payload_bits);
+	}
+	source_seed = zend_mir_w05_fingerprint_mix(
+		source_seed, source->block_count(source->context));
+	for (index = 0; index < source->block_count(source->context); index++) {
+		zend_mir_source_block_ref record;
+		if (!source->block_at(source->context, index, &record)) {
+			return false;
+		}
+		W05_MIX(record, id);
+		W05_MIX(record, first_opcode_ordinal);
+		W05_MIX(record, opcode_count);
+		W05_MIX(record, flags);
+		W05_MIX(record, immediate_dominator);
+		W05_MIX(record, loop_header);
+	}
+	source_seed = zend_mir_w05_fingerprint_mix(
+		source_seed, source->edge_count(source->context));
+	for (index = 0; index < source->edge_count(source->context); index++) {
+		zend_mir_source_edge_ref record;
+		if (!source->edge_at(source->context, index, &record)) {
+			return false;
+		}
+		W05_MIX(record, id);
+		W05_MIX(record, from_block_id);
+		W05_MIX(record, to_block_id);
+		W05_MIX(record, successor_index);
+		W05_MIX(record, predecessor_index);
+		W05_MIX(record, flags);
+	}
+	source_seed = zend_mir_w05_fingerprint_mix(
+		source_seed, source->phi_count(source->context));
+	for (index = 0; index < source->phi_count(source->context); index++) {
+		zend_mir_source_phi_ref record;
+		if (!source->phi_at(source->context, index, &record)) {
+			return false;
+		}
+		W05_MIX(record, id);
+		W05_MIX(record, block_id);
+		W05_MIX(record, result_ssa_variable_id);
+		W05_MIX(record, source_slot_kind);
+		W05_MIX(record, source_slot_index);
+		W05_MIX(record, kind);
+		W05_MIX(record, constraint.type_mask);
+		W05_MIX(record, constraint.range_min);
+		W05_MIX(record, constraint.range_max);
+		W05_MIX(record, constraint.min_ssa_variable_id);
+		W05_MIX(record, constraint.max_ssa_variable_id);
+		W05_MIX(record, constraint.flags);
+	}
+	source_seed = zend_mir_w05_fingerprint_mix(
+		source_seed, source->phi_input_count(source->context));
+	for (index = 0;
+			index < source->phi_input_count(source->context); index++) {
+		zend_mir_source_phi_input_ref record;
+		if (!source->phi_input_at(source->context, index, &record)) {
+			return false;
+		}
+		W05_MIX(record, phi_id);
+		W05_MIX(record, input_index);
+		W05_MIX(record, predecessor_block_id);
+		W05_MIX(record, source_ssa_variable_id);
+	}
+
+	source_seed = zend_mir_w05_fingerprint_mix(
+		source_seed, source_calls->source_opcode_count(source_calls->context));
+	for (index = 0;
+			index < source_calls->source_opcode_count(source_calls->context);
+			index++) {
+		zend_mir_source_opcode_ref record;
+		if (!source_calls->source_opcode_at(
+				source_calls->context, index, &record)) {
+			return false;
+		}
+		W05_MIX(record, opline_index);
+		W05_MIX(record, zend_opcode_number);
+		W05_MIX_OPERAND(record, op1);
+		W05_MIX_OPERAND(record, op2);
+		W05_MIX_OPERAND(record, result);
+		W05_MIX(record, extended_value);
+		W05_MIX(record, source_position_id);
+		W05_MIX(record, block_id);
+	}
+	source_seed = zend_mir_w05_fingerprint_mix(
+		source_seed, source_calls->call_site_count(source_calls->context));
+	for (index = 0;
+			index < source_calls->call_site_count(source_calls->context);
+			index++) {
+		zend_mir_source_call_site_ref record;
+		if (!source_calls->call_site_at(
+				source_calls->context, index, &record)) {
+			return false;
+		}
+		W05_MIX(record, id);
+		W05_MIX(record, parent_call_site_id);
+		W05_MIX(record, init_opline_index);
+		W05_MIX(record, do_opline_index);
+		W05_MIX(record, source_block_id);
+		W05_MIX(record, target_id);
+		W05_MIX(record, argument_span.offset);
+		W05_MIX(record, argument_span.count);
+		W05_MIX(record, result_ssa_variable_id);
+		W05_MIX(record, flags);
+	}
+	source_seed = zend_mir_w05_fingerprint_mix(
+		source_seed, source_calls->call_target_count(source_calls->context));
+	for (index = 0;
+			index < source_calls->call_target_count(source_calls->context);
+			index++) {
+		zend_mir_source_call_target_ref record;
+		if (!source_calls->call_target_at(
+				source_calls->context, index, &record)) {
+			return false;
+		}
+		W05_MIX(record, id);
+		W05_MIX(record, kind);
+		W05_MIX(record, function_symbol_id);
+		W05_MIX(record, op_array_id);
+		W05_MIX(record, num_args);
+		W05_MIX(record, required_num_args);
+		W05_MIX(record, function_flags_snapshot);
+		W05_MIX(record, parameter_modes.offset);
+		W05_MIX(record, parameter_modes.count);
+		W05_MIX(record, variadic);
+		W05_MIX(record, returns_by_reference);
+	}
+	source_seed = zend_mir_w05_fingerprint_mix(
+		source_seed, source_calls->call_argument_count(source_calls->context));
+	for (index = 0;
+			index < source_calls->call_argument_count(source_calls->context);
+			index++) {
+		zend_mir_source_call_argument_ref record;
+		if (!source_calls->call_argument_at(
+				source_calls->context, index, &record)) {
+			return false;
+		}
+		W05_MIX(record, id);
+		W05_MIX(record, call_site_id);
+		W05_MIX(record, send_opline_index);
+		W05_MIX(record, ordinal);
+		W05_MIX(record, name_symbol_id);
+		W05_MIX(record, mode);
+		W05_MIX(record, flags);
+		W05_MIX(record, value_ssa_variable_id);
+		W05_MIX_OPERAND(record, source_operand);
+	}
+	source_seed = zend_mir_w05_fingerprint_mix(
+		source_seed, source_calls->parameter_mode_count(source_calls->context));
+	for (index = 0;
+			index < source_calls->parameter_mode_count(source_calls->context);
+			index++) {
+		zend_mir_source_parameter_mode_ref record;
+		if (!source_calls->parameter_mode_at(
+				source_calls->context, index, &record)) {
+			return false;
+		}
+		W05_MIX(record, target_id);
+		W05_MIX(record, ordinal);
+		W05_MIX(record, mode);
+	}
+#undef W05_MIX_OPERAND
+#undef W05_MIX
+
+	module_writer.digest = zend_mir_w05_fingerprint_mix(
+		module_writer.digest, ZEND_MIR_W05_CONTRACT_VERSION);
+	source_seed = zend_mir_w05_fingerprint_mix(
+		source_seed, ZEND_MIR_W05_CONTRACT_VERSION);
+	memcpy(module_fingerprint, module_writer.digest.words,
+		sizeof(module_writer.digest.words));
+	memcpy(source_fingerprint, source_seed.words,
+		sizeof(source_seed.words));
+	return true;
+}
+
+static bool zend_mir_w05_words_equal(
+	const uint32_t left[4], const uint32_t right[4])
+{
+	return memcmp(left, right, 4 * sizeof(uint32_t)) == 0;
+}
+
+static bool zend_mir_w05_words_zero(const uint32_t words[4])
+{
+	static const uint32_t zero[4] = {0, 0, 0, 0};
+	return zend_mir_w05_words_equal(words, zero);
 }
 
 static bool zend_mir_w05_verify_scalar_result(
@@ -920,6 +1330,12 @@ bool zend_mir_verify_w05_calls(
 			|| source_calls->contract_version != ZEND_MIR_W05_CONTRACT_VERSION
 			|| source_calls->call_site_count == NULL
 			|| source_calls->call_site_at == NULL
+			|| source_calls->call_target_count == NULL
+			|| source_calls->call_target_at == NULL
+			|| source_calls->call_argument_count == NULL
+			|| source_calls->call_argument_at == NULL
+			|| source_calls->parameter_mode_count == NULL
+			|| source_calls->parameter_mode_at == NULL
 			|| source_calls->source_opcode_count == NULL
 			|| source_calls->source_opcode_at == NULL
 			|| calls->call_site_count == NULL || calls->call_site_at == NULL
@@ -983,8 +1399,8 @@ bool zend_mir_verify_w05_calls(
 				|| target.function_flags_snapshot
 					!= source.function_flags_snapshot
 				|| source.variadic || source.returns_by_reference
-				|| source.by_ref_mask != 0
-				|| source.num_args != source.required_num_args) {
+				|| !zend_mir_w05_target_parameter_modes_are_by_value(
+					source_calls, &source)) {
 			zend_mir_w05_verify_emit(diagnostics,
 				ZEND_MIR_VERIFY_W05_TARGET_MISMATCH,
 				ZEND_MIRV_TOKEN_W05_TARGET_MISMATCH);
@@ -1136,10 +1552,6 @@ bool zend_mir_verify_w05_calls(
 					!= source_target.op_array_id
 				|| site.callee_entry_frame.function_symbol_id
 					!= source_target.function_symbol_id
-				|| (site.caller_frame.function_symbol_id
-						== site.callee_entry_frame.function_symbol_id
-					&& site.caller_frame.op_array_id
-						== site.callee_entry_frame.op_array_id)
 				|| site.caller_frame.function_id
 					>= view->function_count(view->context)
 				|| !view->function_at(
@@ -1294,6 +1706,11 @@ bool zend_mir_verify_w05_calls(
 		zend_mir_call_capability_receipt_ref receipt;
 		if (!calls->call_capability_receipt_at(calls->context, 0, &receipt)
 				|| receipt.id != 0
+				|| receipt.canonical.capability_ids.offset != 0
+				|| receipt.canonical.capability_ids.count != 6
+				|| receipt.canonical.semantic_debt_ids.offset != 0
+				|| receipt.canonical.semantic_debt_ids.count != 8
+				|| receipt.canonical.codegen_eligible
 				|| receipt.capabilities != ZEND_MIR_W05_REQUIRED_CAPABILITIES
 				|| receipt.semantic_debts != ZEND_MIR_W05_REQUIRED_DEBTS
 				|| !receipt.modeled || receipt.codegen_eligible) {
@@ -1304,6 +1721,450 @@ bool zend_mir_verify_w05_calls(
 		}
 	}
 	return true;
+}
+
+static bool zend_mir_w05_verify_receipts(
+	const zend_mir_call_view *calls,
+	const uint32_t module_fingerprint[4],
+	const uint32_t source_fingerprint[4],
+	zend_mir_diagnostic_sink *diagnostics)
+{
+	uint32_t index;
+
+	if (calls == NULL || module_fingerprint == NULL
+			|| source_fingerprint == NULL
+			|| calls->verifier_receipt_count == NULL
+			|| calls->verifier_receipt_at == NULL
+			|| calls->verifier_receipt_count(calls->context) != 4) {
+		zend_mir_w05_verify_emit(diagnostics,
+			ZEND_MIR_VERIFY_W05_CAPABILITY_DEBT_MISMATCH,
+			ZEND_MIRV_TOKEN_W05_CAPABILITY_DEBT_MISMATCH);
+		return false;
+	}
+	for (index = 0; index < 4; index++) {
+		zend_mir_verifier_receipt_ref receipt;
+		uint32_t expected_version =
+			index == 2 ? ZEND_MIR_W04_CONTRACT_VERSION
+				: index == 3 ? ZEND_MIR_W05_CONTRACT_VERSION
+				: ZEND_MIR_CONTRACT_VERSION;
+		if (!calls->verifier_receipt_at(
+				calls->context, index, &receipt)
+				|| receipt.verifier_id
+					!= (zend_mir_verifier_id) (index + 1)
+				|| receipt.verifier_contract_version != expected_version
+				|| receipt.status != ZEND_MIR_VERIFIER_STATUS_PASS
+				|| !zend_mir_w05_words_zero(receipt.diagnostic_digest)
+				|| !zend_mir_w05_words_equal(
+					receipt.module_fingerprint, module_fingerprint)
+				|| !zend_mir_w05_words_equal(
+					receipt.source_fingerprint, source_fingerprint)) {
+			zend_mir_w05_verify_emit(diagnostics,
+				ZEND_MIR_VERIFY_W05_CAPABILITY_DEBT_MISMATCH,
+				ZEND_MIRV_TOKEN_W05_CAPABILITY_DEBT_MISMATCH);
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool zend_mir_w05_find_function(
+	const zend_mir_view *view, zend_mir_function_id id,
+	zend_mir_function_record *out)
+{
+	uint32_t index;
+	for (index = 0; index < view->function_count(view->context); index++) {
+		zend_mir_function_record record;
+		if (!view->function_at(view->context, index, &record)) {
+			return false;
+		}
+		if (record.id == id) {
+			if (out != NULL) {
+				*out = record;
+			}
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool zend_mir_w05_find_block(
+	const zend_mir_view *view, zend_mir_block_id id,
+	zend_mir_block_record *out)
+{
+	uint32_t index;
+	for (index = 0; index < view->block_count(view->context); index++) {
+		zend_mir_block_record record;
+		if (!view->block_at(view->context, index, &record)) {
+			return false;
+		}
+		if (record.id == id) {
+			if (out != NULL) {
+				*out = record;
+			}
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool zend_mir_w05_find_value(
+	const zend_mir_view *view, zend_mir_value_id id)
+{
+	uint32_t index;
+	for (index = 0; index < view->value_count(view->context); index++) {
+		zend_mir_value_record record;
+		if (!view->value_at(view->context, index, &record)) {
+			return false;
+		}
+		if (record.id == id) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool zend_mir_w05_find_frame_state(
+	const zend_mir_view *view, zend_mir_frame_state_id id)
+{
+	uint32_t index;
+	for (index = 0; index < view->frame_state_count(view->context); index++) {
+		zend_mir_frame_state_ref record;
+		if (!view->frame_state_at(view->context, index, &record)) {
+			return false;
+		}
+		if (record.id == id) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool zend_mir_w05_find_source_position(
+	const zend_mir_view *view, zend_mir_source_position_id id)
+{
+	uint32_t index;
+	for (index = 0;
+		index < view->source_position_count(view->context); index++) {
+		zend_mir_source_position_ref record;
+		if (!view->source_position_at(
+				view->context, index, &record)) {
+			return false;
+		}
+		if (record.id == id) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool zend_mir_w05_verify_final_structural(
+	const zend_mir_view *view, zend_mir_diagnostic_sink *diagnostics)
+{
+	uint32_t index;
+
+	if (zend_mir_w05_test_fault_is(
+			ZEND_MIR_W05_TEST_FAULT_STRUCTURAL_VERIFIER)
+			|| view == NULL
+			|| view->function_count == NULL || view->function_at == NULL
+			|| view->block_count == NULL || view->block_at == NULL
+			|| view->instruction_count == NULL
+			|| view->instruction_at == NULL
+			|| view->instruction_operand_count == NULL
+			|| view->instruction_operand_at == NULL
+			|| view->value_count == NULL || view->value_at == NULL
+			|| view->frame_state_count == NULL
+			|| view->frame_state_at == NULL
+			|| view->source_position_count == NULL
+			|| view->source_position_at == NULL) {
+		goto failure;
+	}
+	for (index = 0; index < view->function_count(view->context); index++) {
+		zend_mir_function_record function;
+		zend_mir_block_record entry;
+		if (!view->function_at(view->context, index, &function)
+				|| !zend_mir_w05_find_block(
+					view, function.entry_block_id, &entry)
+				|| entry.function_id != function.id) {
+			goto failure;
+		}
+	}
+	for (index = 0; index < view->block_count(view->context); index++) {
+		zend_mir_block_record block;
+		if (!view->block_at(view->context, index, &block)
+				|| !zend_mir_w05_find_function(
+					view, block.function_id, NULL)) {
+			goto failure;
+		}
+	}
+	for (index = 0;
+		index < view->instruction_count(view->context); index++) {
+		zend_mir_instruction_record instruction;
+		uint32_t operand_index;
+		uint32_t operand_count;
+		if (!view->instruction_at(view->context, index, &instruction)
+				|| !zend_mir_w05_find_block(
+					view, instruction.block_id, NULL)
+				|| (uint32_t) instruction.opcode
+					>= ZEND_MIR_W05_OPCODE_COUNT
+				|| (uint32_t) instruction.representation
+					>= ZEND_MIR_REPRESENTATION_COUNT
+				|| (zend_mir_id_is_valid(instruction.result_id)
+					&& !zend_mir_w05_find_value(
+						view, instruction.result_id))
+				|| (zend_mir_id_is_valid(instruction.frame_state_id)
+					&& !zend_mir_w05_find_frame_state(
+						view, instruction.frame_state_id))
+				|| (zend_mir_id_is_valid(
+						instruction.source_position_id)
+					&& !zend_mir_w05_find_source_position(
+						view, instruction.source_position_id))) {
+			goto failure;
+		}
+		operand_count = view->instruction_operand_count(
+			view->context, instruction.id);
+		if (operand_count > view->value_count(view->context)) {
+			goto failure;
+		}
+		for (operand_index = 0;
+			operand_index < operand_count; operand_index++) {
+			zend_mir_value_id operand;
+			if (!view->instruction_operand_at(
+					view->context, instruction.id,
+					operand_index, &operand)
+					|| !zend_mir_w05_find_value(view, operand)) {
+				goto failure;
+			}
+		}
+	}
+	return true;
+
+failure:
+	zend_mir_w05_verify_emit(diagnostics,
+		ZEND_MIR_VERIFY_W05_SITE_MISMATCH,
+		ZEND_MIRV_TOKEN_W05_SITE_MISMATCH);
+	return false;
+}
+
+static bool zend_mir_w05_verify_final_scalar(
+	const zend_mir_view *view, const zend_mir_call_view *calls,
+	zend_mir_diagnostic_sink *diagnostics)
+{
+	uint32_t index;
+
+	if (zend_mir_w05_test_fault_is(
+			ZEND_MIR_W05_TEST_FAULT_SCALAR_VERIFIER)
+			|| view == NULL || calls == NULL
+			|| calls->call_argument_count == NULL
+			|| calls->call_argument_at == NULL
+			|| calls->call_site_count == NULL
+			|| calls->call_site_at == NULL) {
+		goto failure;
+	}
+	for (index = 0;
+		index < calls->call_argument_count(calls->context); index++) {
+		zend_mir_call_argument_ref argument;
+		zend_mir_representation representation;
+		if (!calls->call_argument_at(
+				calls->context, index, &argument)
+				|| argument.ownership
+					!= ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR
+				|| !zend_mir_w05_verify_scalar_result(
+					view, argument.value_id, &representation)
+				|| representation == ZEND_MIR_REPRESENTATION_VOID) {
+			goto failure;
+		}
+	}
+	for (index = 0; index < calls->call_site_count(calls->context); index++) {
+		zend_mir_call_site_ref site;
+		zend_mir_representation representation;
+		if (!calls->call_site_at(calls->context, index, &site)) {
+			goto failure;
+		}
+		if (zend_mir_id_is_valid(site.result_id)
+				&& (!zend_mir_w05_verify_scalar_result(
+						view, site.result_id, &representation)
+					|| representation
+						== ZEND_MIR_REPRESENTATION_VOID)) {
+			goto failure;
+		}
+	}
+	return true;
+
+failure:
+	zend_mir_w05_verify_emit(diagnostics,
+		ZEND_MIR_VERIFY_W05_ARGUMENT_MISMATCH,
+		ZEND_MIRV_TOKEN_W05_ARGUMENT_MISMATCH);
+	return false;
+}
+
+static bool zend_mir_w05_block_has_predecessor(
+	const zend_mir_view *view, zend_mir_block_id block_id,
+	zend_mir_block_id predecessor)
+{
+	uint32_t index;
+	uint32_t count = view->predecessor_count(view->context, block_id);
+	if (count > view->block_count(view->context)) {
+		return false;
+	}
+	for (index = 0; index < count; index++) {
+		zend_mir_block_id candidate;
+		if (!view->predecessor_at(
+				view->context, block_id, index, &candidate)) {
+			return false;
+		}
+		if (candidate == predecessor) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool zend_mir_w05_block_has_successor(
+	const zend_mir_view *view, zend_mir_block_id block_id,
+	zend_mir_block_id successor)
+{
+	uint32_t index;
+	uint32_t count = view->successor_count(view->context, block_id);
+	if (count > view->block_count(view->context)) {
+		return false;
+	}
+	for (index = 0; index < count; index++) {
+		zend_mir_block_id candidate;
+		if (!view->successor_at(
+				view->context, block_id, index, &candidate)) {
+			return false;
+		}
+		if (candidate == successor) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool zend_mir_w05_verify_final_control_flow(
+	const zend_mir_view *view, const zend_mir_call_view *calls,
+	zend_mir_diagnostic_sink *diagnostics)
+{
+	uint32_t index;
+
+	if (zend_mir_w05_test_fault_is(
+			ZEND_MIR_W05_TEST_FAULT_CONTROL_FLOW_VERIFIER)
+			|| view == NULL || calls == NULL
+			|| view->block_count == NULL || view->block_at == NULL
+			|| view->successor_count == NULL
+			|| view->successor_at == NULL
+			|| view->predecessor_count == NULL
+			|| view->predecessor_at == NULL
+			|| calls->call_site_count == NULL
+			|| calls->call_site_at == NULL
+			|| calls->call_continuation_at == NULL) {
+		goto failure;
+	}
+	for (index = 0; index < view->block_count(view->context); index++) {
+		zend_mir_block_record block;
+		uint32_t edge_index;
+		uint32_t successor_count;
+		uint32_t predecessor_count;
+		if (!view->block_at(view->context, index, &block)) {
+			goto failure;
+		}
+		successor_count = view->successor_count(
+			view->context, block.id);
+		predecessor_count = view->predecessor_count(
+			view->context, block.id);
+		if (successor_count > view->block_count(view->context)
+				|| predecessor_count
+					> view->block_count(view->context)) {
+			goto failure;
+		}
+		for (edge_index = 0;
+			edge_index < successor_count; edge_index++) {
+			zend_mir_block_id successor;
+			if (!view->successor_at(
+					view->context, block.id, edge_index, &successor)
+					|| !zend_mir_w05_find_block(
+						view, successor, NULL)
+					|| !zend_mir_w05_block_has_predecessor(
+						view, successor, block.id)) {
+				goto failure;
+			}
+		}
+		for (edge_index = 0;
+			edge_index < predecessor_count; edge_index++) {
+			zend_mir_block_id predecessor;
+			if (!view->predecessor_at(
+					view->context, block.id, edge_index,
+					&predecessor)
+					|| !zend_mir_w05_find_block(
+						view, predecessor, NULL)
+					|| !zend_mir_w05_block_has_successor(
+						view, predecessor, block.id)) {
+				goto failure;
+			}
+		}
+	}
+	for (index = 0; index < calls->call_site_count(calls->context); index++) {
+		zend_mir_call_site_ref site;
+		zend_mir_call_continuation_ref continuation;
+		zend_mir_instruction_record instruction;
+		if (!calls->call_site_at(calls->context, index, &site)
+				|| !view->instruction_at(
+					view->context, site.instruction_id, &instruction)
+				|| instruction.opcode
+					!= ZEND_MIR_OPCODE_CALL_DIRECT_USER
+				|| zend_mir_opcode_is_terminator(instruction.opcode)
+				|| !calls->call_continuation_at(
+					calls->context, site.continuations.offset,
+					&continuation)
+				|| continuation.kind
+					!= ZEND_MIR_CALL_CONTINUATION_NORMAL
+				|| continuation.block_id != instruction.block_id) {
+			goto failure;
+		}
+	}
+	return true;
+
+failure:
+	zend_mir_w05_verify_emit(diagnostics,
+		ZEND_MIR_VERIFY_W05_CONTINUATION_MISMATCH,
+		ZEND_MIRV_TOKEN_W05_CONTINUATION_MISMATCH);
+	return false;
+}
+
+static bool zend_mir_w05_verify_final_composition(
+	const zend_mir_view *view,
+	const zend_mir_source_call_view *source_calls,
+	const zend_mir_call_view *calls,
+	zend_mir_diagnostic_sink *diagnostics,
+	uint32_t *verified_facets)
+{
+	uint32_t facets = 0;
+
+	if (verified_facets == NULL
+			|| !zend_mir_w05_verify_final_structural(
+				view, diagnostics)) {
+		return false;
+	}
+	facets |= ZEND_MIR_W05_VERIFIED_STRUCTURAL;
+	if (!zend_mir_w05_verify_final_scalar(
+			view, calls, diagnostics)) {
+		return false;
+	}
+	facets |= ZEND_MIR_W05_VERIFIED_SCALAR;
+	if (!zend_mir_w05_verify_final_control_flow(
+			view, calls, diagnostics)) {
+		return false;
+	}
+	facets |= ZEND_MIR_W05_VERIFIED_CONTROL_FLOW;
+	if (zend_mir_w05_test_fault_is(
+			ZEND_MIR_W05_TEST_FAULT_CALL_VERIFIER)
+			|| !zend_mir_verify_w05_calls(
+				view, source_calls, calls, diagnostics)) {
+		return false;
+	}
+	facets |= ZEND_MIR_W05_VERIFIED_CALL_MODEL;
+	*verified_facets = facets;
+	return facets == ZEND_MIR_W05_VERIFIED_ALL;
 }
 
 zend_mir_w05_lowering_result zend_mir_lower_w05_zend_source(
@@ -1319,6 +2180,11 @@ zend_mir_w05_lowering_result zend_mir_lower_w05_zend_source(
 	zend_mir_lowering_diagnostic_code code;
 	const zend_mir_view *view;
 	const zend_mir_call_view *calls;
+	uint32_t module_fingerprint[4];
+	uint32_t source_fingerprint[4];
+	uint32_t recomputed_module_fingerprint[4];
+	uint32_t recomputed_source_fingerprint[4];
+	uint32_t verified_facets = 0;
 	zend_mir_w05_lowering_result result;
 
 	code = zend_mir_w05_plan_calls(
@@ -1336,6 +2202,12 @@ zend_mir_w05_lowering_result zend_mir_lower_w05_zend_source(
 		zend_mir_w05_plan_release(&plan);
 		result = zend_mir_w05_failure(w04.status, w04.diagnostic_code);
 		return result;
+	}
+	if (!zend_mir_lowering_result_is_w04_failure_atomic(&w04)) {
+		context->module_ops.destroy(context->module_ops.context, w04.module);
+		zend_mir_w05_plan_release(&plan);
+		return zend_mir_w05_failure(
+			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_W05_CALL_VERIFY_FAILED);
 	}
 	if (call_mutator == NULL) {
 		call_mutator = zend_mir_module_get_call_mutator(w04.module);
@@ -1356,12 +2228,43 @@ zend_mir_w05_lowering_result zend_mir_lower_w05_zend_source(
 	view = context->module_ops.view(context->module_ops.context, w04.module);
 	calls = zend_mir_module_get_call_view(w04.module);
 	if (view == NULL || calls == NULL
+			|| !zend_mir_module_w05_capability_ids_are_canonical(w04.module)
+			|| !zend_mir_w05_verify_final_composition(
+				view, source_calls, calls, context->diagnostics,
+				&verified_facets)) {
+		context->module_ops.destroy(context->module_ops.context, w04.module);
+		zend_mir_w05_plan_release(&plan);
+		return zend_mir_w05_failure(
+			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_W05_CALL_VERIFY_FAILED);
+	}
+	/*
+	 * The named final verifier independently earns all four receipt facets
+	 * over the extension-aware returned module. Frozen W03/W04 verifiers
+	 * remain the prerequisite proof for the pre-W05 projection.
+	 */
+	if (!zend_mir_w05_build_fingerprints(
+				view, context->source, source_calls, calls,
+				context->diagnostics,
+				module_fingerprint, source_fingerprint)
+			|| !zend_mir_module_publish_w05_verifier_receipts(
+				w04.module, module_fingerprint, source_fingerprint,
+				verified_facets)
+			|| !zend_mir_w05_build_fingerprints(
+				view, context->source, source_calls, calls,
+				context->diagnostics,
+				recomputed_module_fingerprint,
+				recomputed_source_fingerprint)
 #ifdef ZEND_MIR_W05_TEST_FAULTS
 			|| zend_mir_w05_test_fault_is(
-				ZEND_MIR_W05_TEST_FAULT_CALL_VERIFIER)
+				ZEND_MIR_W05_TEST_FAULT_FINGERPRINT_RECOMPUTE)
 #endif
-			|| !zend_mir_verify_w05_calls(
-				view, source_calls, calls, context->diagnostics)) {
+			|| !zend_mir_w05_words_equal(
+				module_fingerprint, recomputed_module_fingerprint)
+			|| !zend_mir_w05_words_equal(
+				source_fingerprint, recomputed_source_fingerprint)
+			|| !zend_mir_w05_verify_receipts(
+				calls, module_fingerprint, source_fingerprint,
+				context->diagnostics)) {
 		context->module_ops.destroy(context->module_ops.context, w04.module);
 		zend_mir_w05_plan_release(&plan);
 		return zend_mir_w05_failure(

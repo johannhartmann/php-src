@@ -9,9 +9,12 @@ typedef struct _zend_mir_frontend_call_inventory {
 	zend_mir_source_call_site_ref *sites;
 	zend_mir_frontend_call_target *targets;
 	zend_mir_source_call_argument_ref *arguments;
+	zend_mir_source_parameter_mode_ref *parameter_modes;
 	uint32_t site_count;
 	uint32_t target_count;
 	uint32_t argument_count;
+	uint32_t parameter_mode_count;
+	uint32_t parameter_mode_capacity;
 	uint32_t base_value_fact_count;
 	uint32_t result_fact_count;
 } zend_mir_frontend_call_inventory;
@@ -99,6 +102,7 @@ static void zend_mir_frontend_release_call_inventory(
 		return;
 	}
 	free(inventory->arguments);
+	free(inventory->parameter_modes);
 	free(inventory->targets);
 	free(inventory->sites);
 	free(inventory);
@@ -1315,14 +1319,67 @@ static bool zend_mir_frontend_declaration_id(
 	return false;
 }
 
-static void zend_mir_frontend_snapshot_target(
+static bool zend_mir_frontend_append_parameter_modes(
+	zend_mir_frontend_call_inventory *inventory,
+	zend_mir_source_call_target_ref *target,
+	const zend_function *function)
+{
+	zend_mir_source_parameter_mode_ref *modes;
+	uint32_t required;
+	uint32_t capacity;
+	uint32_t argument;
+
+	target->parameter_modes.offset = inventory->parameter_mode_count;
+	target->parameter_modes.count =
+		function == NULL ? 0 : function->common.num_args;
+	if (target->parameter_modes.count == 0) {
+		return true;
+	}
+	if (inventory->parameter_mode_count
+			> UINT32_MAX - target->parameter_modes.count) {
+		return false;
+	}
+	required = inventory->parameter_mode_count + target->parameter_modes.count;
+	if (required > inventory->parameter_mode_capacity) {
+		capacity = inventory->parameter_mode_capacity == 0
+			? UINT32_C(8) : inventory->parameter_mode_capacity;
+		while (capacity < required) {
+			if (capacity > UINT32_MAX / 2) {
+				capacity = required;
+				break;
+			}
+			capacity *= 2;
+		}
+		if ((size_t) capacity > SIZE_MAX / sizeof(*modes)) {
+			return false;
+		}
+		modes = realloc(inventory->parameter_modes,
+			(size_t) capacity * sizeof(*modes));
+		if (modes == NULL) {
+			return false;
+		}
+		inventory->parameter_modes = modes;
+		inventory->parameter_mode_capacity = capacity;
+	}
+	for (argument = 0; argument < target->parameter_modes.count; argument++) {
+		zend_mir_source_parameter_mode_ref *mode =
+			&inventory->parameter_modes[inventory->parameter_mode_count++];
+		mode->target_id = target->id;
+		mode->ordinal = argument;
+		mode->mode = ARG_MUST_BE_SENT_BY_REF(function, argument + 1)
+			? ZEND_MIR_SOURCE_PARAMETER_BY_REFERENCE
+			: ZEND_MIR_SOURCE_PARAMETER_BY_VALUE;
+	}
+	return true;
+}
+
+static bool zend_mir_frontend_snapshot_target(
+	zend_mir_frontend_call_inventory *inventory,
 	zend_mir_frontend_call_target *target,
 	zend_mir_source_call_target_id id,
 	zend_mir_source_call_target_kind kind,
 	const zend_function *function, uint32_t declaration_id)
 {
-	uint32_t argument;
-
 	memset(target, 0, sizeof(*target));
 	target->record.id = id;
 	target->record.kind = kind;
@@ -1330,7 +1387,8 @@ static void zend_mir_frontend_snapshot_target(
 	target->record.op_array_id = declaration_id;
 	target->function = function;
 	if (function == NULL) {
-		return;
+		return zend_mir_frontend_append_parameter_modes(
+			inventory, &target->record, function);
 	}
 	target->record.num_args = function->common.num_args;
 	target->record.required_num_args = function->common.required_num_args;
@@ -1339,14 +1397,8 @@ static void zend_mir_frontend_snapshot_target(
 		(function->common.fn_flags & ZEND_ACC_VARIADIC) != 0;
 	target->record.returns_by_reference =
 		(function->common.fn_flags & ZEND_ACC_RETURN_REFERENCE) != 0;
-	for (argument = 1;
-			argument <= function->common.num_args && argument <= 64;
-			argument++) {
-		if (ARG_MUST_BE_SENT_BY_REF(function, argument)) {
-			target->record.by_ref_mask |=
-				UINT64_C(1) << (argument - 1);
-		}
-	}
+	return zend_mir_frontend_append_parameter_modes(
+		inventory, &target->record, function);
 }
 
 static bool zend_mir_frontend_target_for_call(
@@ -1394,9 +1446,12 @@ static bool zend_mir_frontend_target_for_call(
 				script, op_array, function, &declaration_id)) {
 		return false;
 	}
-	zend_mir_frontend_snapshot_target(
+	if (!zend_mir_frontend_snapshot_target(
+		inventory,
 		&inventory->targets[inventory->target_count],
-		inventory->target_count, kind, function, declaration_id);
+		inventory->target_count, kind, function, declaration_id)) {
+		return false;
+	}
 	inventory->target_count++;
 	return true;
 }
@@ -1570,10 +1625,7 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 			argument->name_symbol_id = ZEND_MIR_ID_INVALID;
 			argument->mode =
 				zend_mir_frontend_call_argument_mode(opline);
-			argument->flags =
-				(opline->extended_value
-					& ZEND_MIR_ZEND_SEND_SYNTACTIC_NAMED) != 0
-				? ZEND_MIR_SOURCE_CALL_ARGUMENT_SYNTACTIC_NAMED : 0;
+			argument->flags = 0;
 			argument->value_ssa_variable_id =
 				ssa->ops[index].op1_use >= 0
 					? (uint32_t) ssa->ops[index].op1_use
@@ -1633,6 +1685,7 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 	source->call_site_count = inventory->site_count;
 	source->call_target_count = inventory->target_count;
 	source->call_argument_count = inventory->argument_count;
+	source->call_parameter_mode_count = inventory->parameter_mode_count;
 	source->w05 = true;
 	return ZEND_MIR_LOWERING_SUCCESS;
 
@@ -1994,20 +2047,8 @@ zend_mir_lowering_status zend_mir_zend_source_preflight_w05(
 	for (index = 0; index < inventory->target_count; index++) {
 		const zend_mir_source_call_target_ref *target =
 			&inventory->targets[index].record;
-		if (target->num_args > 64) {
-			zend_mir_zend_source_release_w05(&source);
-			zend_mir_frontend_set_diagnostic(
-				diagnostic, ZEND_MIR_LOWERING_DEFERRED,
-				ZEND_MIRL_W05_UNSUPPORTED_ARGUMENT, 0,
-				ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE,
-				ZEND_MIR_ID_INVALID);
-			return ZEND_MIR_LOWERING_DEFERRED;
-		}
 		if (target->kind != ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
-				|| target->variadic || target->returns_by_reference
-				|| target->by_ref_mask != 0
-				|| (target->function_symbol_id == 0
-					&& target->op_array_id == 0)) {
+				|| target->variadic || target->returns_by_reference) {
 			zend_mir_zend_source_release_w05(&source);
 			zend_mir_frontend_set_diagnostic(
 				diagnostic, ZEND_MIR_LOWERING_DEFERRED,
@@ -2016,14 +2057,50 @@ zend_mir_lowering_status zend_mir_zend_source_preflight_w05(
 				ZEND_MIR_ID_INVALID);
 			return ZEND_MIR_LOWERING_DEFERRED;
 		}
-		if (target->num_args != target->required_num_args) {
+		if (target->parameter_modes.offset
+				> inventory->parameter_mode_count
+				|| target->parameter_modes.count
+					> inventory->parameter_mode_count
+						- target->parameter_modes.offset
+				|| target->parameter_modes.count != target->num_args) {
 			zend_mir_zend_source_release_w05(&source);
 			zend_mir_frontend_set_diagnostic(
-				diagnostic, ZEND_MIR_LOWERING_DEFERRED,
-				ZEND_MIRL_W05_ARGUMENT_COUNT_MISMATCH, 0,
+				diagnostic, ZEND_MIR_LOWERING_FAILED,
+				ZEND_MIRL_W05_CALL_PLAN_FAILED, 0,
 				ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE,
 				ZEND_MIR_ID_INVALID);
-			return ZEND_MIR_LOWERING_DEFERRED;
+			return ZEND_MIR_LOWERING_FAILED;
+		}
+		{
+			uint32_t mode_index;
+			for (mode_index = 0;
+					mode_index < target->parameter_modes.count;
+					mode_index++) {
+				const zend_mir_source_parameter_mode_ref *mode =
+					&inventory->parameter_modes[
+						target->parameter_modes.offset + mode_index];
+				if (mode->target_id != target->id
+						|| mode->ordinal != mode_index) {
+					zend_mir_zend_source_release_w05(&source);
+					zend_mir_frontend_set_diagnostic(
+						diagnostic, ZEND_MIR_LOWERING_FAILED,
+						ZEND_MIRL_W05_CALL_PLAN_FAILED, 0,
+						ZEND_MIR_ID_INVALID,
+						ZEND_MIR_FRONTEND_OPERAND_NONE,
+						ZEND_MIR_ID_INVALID);
+					return ZEND_MIR_LOWERING_FAILED;
+				}
+				if (mode->mode != ZEND_MIR_SOURCE_PARAMETER_BY_VALUE) {
+					zend_mir_zend_source_release_w05(&source);
+					zend_mir_frontend_set_diagnostic(
+						diagnostic, ZEND_MIR_LOWERING_DEFERRED,
+						ZEND_MIRL_W05_UNSUPPORTED_ARGUMENT, 0,
+						ZEND_MIR_ID_INVALID,
+						ZEND_MIR_FRONTEND_OPERAND_NONE,
+						ZEND_MIR_ID_INVALID);
+					return ZEND_MIR_LOWERING_DEFERRED;
+				}
+			}
 		}
 	}
 	for (index = 0; index < inventory->site_count; index++) {
@@ -2150,6 +2227,7 @@ void zend_mir_zend_source_release_w05(zend_mir_zend_source *source)
 	source->call_site_count = 0;
 	source->call_target_count = 0;
 	source->call_argument_count = 0;
+	source->call_parameter_mode_count = 0;
 	source->w05 = false;
 }
 
@@ -2214,6 +2292,28 @@ static bool zend_mir_frontend_call_argument_at(
 	}
 	inventory = source->call_inventory;
 	*out = inventory->arguments[index];
+	return true;
+}
+
+static uint32_t zend_mir_frontend_parameter_mode_count(const void *context)
+{
+	const zend_mir_zend_source *source = context;
+	return zend_mir_source_is_initialized(source) && source->w05
+		? source->call_parameter_mode_count : 0;
+}
+
+static bool zend_mir_frontend_parameter_mode_at(
+	const void *context, uint32_t index,
+	zend_mir_source_parameter_mode_ref *out)
+{
+	const zend_mir_zend_source *source = context;
+	const zend_mir_frontend_call_inventory *inventory;
+	if (!zend_mir_source_is_initialized(source) || !source->w05
+			|| out == NULL || index >= source->call_parameter_mode_count) {
+		return false;
+	}
+	inventory = source->call_inventory;
+	*out = inventory->parameter_modes[index];
 	return true;
 }
 
@@ -2290,6 +2390,8 @@ bool zend_mir_zend_source_call_view(
 	out->call_target_at = zend_mir_frontend_call_target_at;
 	out->call_argument_count = zend_mir_frontend_call_argument_count;
 	out->call_argument_at = zend_mir_frontend_call_argument_at;
+	out->parameter_mode_count = zend_mir_frontend_parameter_mode_count;
+	out->parameter_mode_at = zend_mir_frontend_parameter_mode_at;
 	out->source_opcode_count = zend_mir_frontend_call_source_opcode_count;
 	out->source_opcode_at = zend_mir_frontend_call_source_opcode_at;
 	return true;

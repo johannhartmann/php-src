@@ -1025,7 +1025,6 @@ static bool zend_mir_core_stage_call_target(
 			|| target->kind != ZEND_MIR_CALL_TARGET_DIRECT_USER
 			|| !zend_mir_id_is_valid(target->function_symbol_id)
 			|| !zend_mir_id_is_valid(target->op_array_id)
-			|| target->required_num_args != target->num_args
 			|| !zend_mir_core_grow_staging(
 				(void **) &staging->targets, staging->target_count,
 				&staging->target_capacity, sizeof(*staging->targets))) {
@@ -1319,6 +1318,11 @@ static bool zend_mir_core_commit_call_model(
 	if (!zend_mir_module_require_building(module) || receipt == NULL
 			|| staging->committed || staging->site_count == 0
 			|| receipt->id != 0
+			|| receipt->canonical.capability_ids.offset != 0
+			|| receipt->canonical.capability_ids.count != 6
+			|| receipt->canonical.semantic_debt_ids.offset != 0
+			|| receipt->canonical.semantic_debt_ids.count != 8
+			|| receipt->canonical.codegen_eligible
 			|| receipt->capabilities != ZEND_MIR_W05_REQUIRED_CAPABILITIES
 			|| receipt->semantic_debts != ZEND_MIR_W05_REQUIRED_DEBTS
 			|| !receipt->modeled || receipt->codegen_eligible
@@ -1382,7 +1386,19 @@ static bool zend_mir_core_commit_call_model(
 			|| !zend_mir_core_reserve_table(
 				module, &module->call_receipts, 1,
 				sizeof(zend_mir_call_capability_receipt_ref),
-				alignof(zend_mir_call_capability_receipt_ref), 1)) {
+				alignof(zend_mir_call_capability_receipt_ref), 1)
+			|| !zend_mir_core_reserve_table(
+				module, &module->capability_ids, 6,
+				sizeof(zend_mir_capability_id),
+				alignof(zend_mir_capability_id), 6)
+			|| !zend_mir_core_reserve_table(
+				module, &module->semantic_debt_ids, 8,
+				sizeof(zend_mir_semantic_debt_id),
+				alignof(zend_mir_semantic_debt_id), 8)
+			|| !zend_mir_core_reserve_table(
+				module, &module->verifier_receipts, 4,
+				sizeof(zend_mir_verifier_receipt_ref),
+				alignof(zend_mir_verifier_receipt_ref), 4)) {
 		return false;
 	}
 	new_instructions = zend_mir_arena_allocate(
@@ -1544,12 +1560,109 @@ static bool zend_mir_core_commit_call_model(
 	memcpy(module->call_sites.items, staging->sites,
 		(size_t) staging->site_count * sizeof(*staging->sites));
 	memcpy(module->call_receipts.items, receipt, sizeof(*receipt));
+	{
+		static const zend_mir_capability_id capabilities[6] = {
+			ZEND_MIR_CAP_SCALAR_SEMANTICS,
+			ZEND_MIR_CAP_REDUCIBLE_CONTROL_FLOW,
+			ZEND_MIR_CAP_DIRECT_USER_CALL_SEQUENCE,
+			ZEND_MIR_CAP_CALLER_FRAME_DESCRIPTOR,
+			ZEND_MIR_CAP_CALLEE_ENTRY_DESCRIPTOR,
+			ZEND_MIR_CAP_ABSTRACT_CALL_EFFECTS
+		};
+		static const zend_mir_semantic_debt_id debts[8] = {
+			ZEND_MIR_DEBT_CALL_EXECUTION,
+			ZEND_MIR_DEBT_EXCEPTION_CLEANUP,
+			ZEND_MIR_DEBT_REFCOUNTED_TRANSFER,
+			ZEND_MIR_DEBT_PROTECTED_CONTINUATION,
+			ZEND_MIR_DEBT_DYNAMIC_TARGET_RESOLUTION,
+			ZEND_MIR_DEBT_OBSERVER_INTEROP,
+			ZEND_MIR_DEBT_COW_INDIRECT_SEMANTICS,
+			ZEND_MIR_DEBT_INTERNAL_C_ABI_INTEROP
+		};
+		memcpy(module->capability_ids.items, capabilities,
+			sizeof(capabilities));
+		memcpy(module->semantic_debt_ids.items, debts, sizeof(debts));
+	}
 	module->call_targets.count = staging->target_count;
 	module->call_arguments.count = staging->argument_count;
 	module->call_continuations.count = staging->continuation_count;
 	module->call_sites.count = staging->site_count;
 	module->call_receipts.count = 1;
+	module->capability_ids.count = 6;
+	module->semantic_debt_ids.count = 8;
 	staging->committed = true;
+	return true;
+}
+
+bool zend_mir_module_w05_capability_ids_are_canonical(
+	const zend_mir_module *module)
+{
+	static const zend_mir_capability_id capabilities[6] = {
+		ZEND_MIR_CAP_SCALAR_SEMANTICS,
+		ZEND_MIR_CAP_REDUCIBLE_CONTROL_FLOW,
+		ZEND_MIR_CAP_DIRECT_USER_CALL_SEQUENCE,
+		ZEND_MIR_CAP_CALLER_FRAME_DESCRIPTOR,
+		ZEND_MIR_CAP_CALLEE_ENTRY_DESCRIPTOR,
+		ZEND_MIR_CAP_ABSTRACT_CALL_EFFECTS
+	};
+	static const zend_mir_semantic_debt_id debts[8] = {
+		ZEND_MIR_DEBT_CALL_EXECUTION,
+		ZEND_MIR_DEBT_EXCEPTION_CLEANUP,
+		ZEND_MIR_DEBT_REFCOUNTED_TRANSFER,
+		ZEND_MIR_DEBT_PROTECTED_CONTINUATION,
+		ZEND_MIR_DEBT_DYNAMIC_TARGET_RESOLUTION,
+		ZEND_MIR_DEBT_OBSERVER_INTEROP,
+		ZEND_MIR_DEBT_COW_INDIRECT_SEMANTICS,
+		ZEND_MIR_DEBT_INTERNAL_C_ABI_INTEROP
+	};
+
+	return module != NULL
+		&& module->call_staging.committed
+		&& module->capability_ids.count == 6
+		&& module->semantic_debt_ids.count == 8
+		&& module->capability_ids.items != NULL
+		&& module->semantic_debt_ids.items != NULL
+		&& memcmp(module->capability_ids.items, capabilities,
+			sizeof(capabilities)) == 0
+		&& memcmp(module->semantic_debt_ids.items, debts, sizeof(debts)) == 0;
+}
+
+bool zend_mir_module_publish_w05_verifier_receipts(
+	zend_mir_module *module,
+	const uint32_t module_fingerprint[4],
+	const uint32_t source_fingerprint[4],
+	uint32_t verified_facets)
+{
+	zend_mir_verifier_receipt_ref *receipts;
+	uint32_t index;
+
+	if (module == NULL || module_fingerprint == NULL
+			|| source_fingerprint == NULL
+			|| verified_facets != ZEND_MIR_W05_VERIFIED_ALL
+			|| module->state != ZEND_MIR_MODULE_FINALIZED
+			|| !module->call_staging.committed
+			|| module->verifier_receipts.items == NULL
+			|| module->verifier_receipts.capacity != 4
+			|| module->verifier_receipts.count != 0) {
+		return false;
+	}
+	receipts = ZEND_MIR_CORE_ITEMS(
+		module, verifier_receipts, zend_mir_verifier_receipt_ref);
+	for (index = 0; index < 4; index++) {
+		zend_mir_verifier_receipt_ref *receipt = &receipts[index];
+		memset(receipt, 0, sizeof(*receipt));
+		receipt->verifier_id = (zend_mir_verifier_id) (index + 1);
+		receipt->verifier_contract_version =
+			index == 2 ? ZEND_MIR_W04_CONTRACT_VERSION
+				: index == 3 ? ZEND_MIR_W05_CONTRACT_VERSION
+				: ZEND_MIR_CONTRACT_VERSION;
+		memcpy(receipt->module_fingerprint, module_fingerprint,
+			sizeof(receipt->module_fingerprint));
+		memcpy(receipt->source_fingerprint, source_fingerprint,
+			sizeof(receipt->source_fingerprint));
+		receipt->status = ZEND_MIR_VERIFIER_STATUS_PASS;
+	}
+	module->verifier_receipts.count = 4;
 	return true;
 }
 
