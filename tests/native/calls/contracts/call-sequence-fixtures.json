@@ -72,13 +72,10 @@
     },
     {
       "name": "named-argument-normalized-position",
-      "decision": "deferred",
-      "atomic": false,
-      "diagnostic": "MIRL0024",
-      "deferred_wave": "W07",
+      "decision": "accepted",
+      "atomic": true,
       "argument_mode": "by_value",
-      "normalized_to_position": true,
-      "source_flags": ["syntactic_named"]
+      "normalized_to_position": true
     },
     {
       "name": "unpack",
@@ -95,6 +92,28 @@
       "diagnostic": "MIRL0025",
       "deferred_wave": "W07",
       "uses_default": true
+    },
+    {
+      "name": "default-fully-supplied",
+      "decision": "accepted",
+      "atomic": true,
+      "declared_arguments": 2,
+      "required_arguments": 1,
+      "explicit_arguments": 2
+    },
+    {
+      "name": "exact-self-call",
+      "decision": "accepted",
+      "atomic": true,
+      "function_symbol_id": 0,
+      "op_array_id": 0
+    },
+    {
+      "name": "parameter-mode-boundaries",
+      "decision": "accepted",
+      "atomic": true,
+      "ordinals": [0, 63, 64, 127],
+      "modes": ["by_value", "by_value", "by_value", "by_value"]
     },
     {
       "name": "refcounted-result",

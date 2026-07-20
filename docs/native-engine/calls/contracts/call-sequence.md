@@ -27,17 +27,19 @@ source block.
 
 The target resolver is process-local. It may inspect a `zend_function *`, but
 returns only a pointer-free target snapshot. That snapshot must prove a direct
-user function from the same compiled script, exact required and declared
-argument counts, no by-reference slots, no variadic flag, and no
-by-reference return.
+user function from the same compiled script, an explicit argument count
+between required and declared counts, no by-reference slots, no variadic flag,
+and no by-reference return. The zero symbol/op-array pair identifies the
+currently lowered declaration and is an exact direct self-call.
 
 The caller frame descriptor references its lowered MIR function and frame
 state. Because W05 does not lower the callee body, the callee entry descriptor
 uses invalid lowered `function_id` and `frame_state_id` values and identifies
 the target declaration by its stable `function_symbol_id` and `op_array_id`.
 It is not a generic MIR function or frame record. The named W05 verifier must
-match both declaration IDs to the call target and reject a caller identity
-reused as the callee identity.
+match both declaration IDs to the call target. For an exact direct self-call,
+the declaration IDs intentionally equal the caller declaration while the
+callee's lowered `function_id` and `frame_state_id` remain invalid.
 
 ## Atomic planning
 
@@ -64,30 +66,37 @@ INIT_FCALL
 DO_UCALL | proved-user DO_FCALL
 ```
 
-Arguments are positional, by-value, defined, and exactly `null`, `bool`,
-`long`, or `double`. No default, named, unpacked, variadic, placeholder,
-reference, indirect, COW, object, method, internal, or protected semantics are
-accepted. The result is unused or has an exact non-refcounted scalar summary.
+Arguments are ordered, by-value, defined, and exactly `null`, `bool`, `long`,
+or `double`. A named call is accepted after the compiler has fully normalized
+it into a complete static ordinal sequence, provided no runtime named
+container, placeholder, or default materialization remains. A default-bearing
+target is accepted when every argument is explicitly supplied. Unpacked,
+variadic, reference, indirect, COW, object, method, internal, or protected
+semantics are not accepted. The result is unused or has an exact
+non-refcounted scalar summary.
 A used result is mapped from its original source SSA ID into the call site's
 `result_id`; W05 never synthesizes or guesses a call-result identity.
 
-Named syntax is a source property, not something W05 may infer from the final
-argument position. A private compiler marker tags every SEND produced from
-`ZEND_AST_NAMED_ARG`, including arguments whose exact target lets Zend
-normalize `op2` to a numeric position. The Native contract freezes that
-`extended_value` bit as `ZEND_MIR_ZEND_SEND_SYNTACTIC_NAMED`; the source view
-copies it to
-`ZEND_MIR_SOURCE_CALL_ARGUMENT_SYNTACTIC_NAMED`; W05 must return `MIRL0024`
-with deferred wave W07 whenever it is set. The bit lives in the existing
-`zend_op.extended_value` field, changes no record layout, public header, or
-public ABI, and is ignored by the VM.
+Parameter modes are an ordered table keyed by stable target ID and zero-based
+ordinal, without a 64-parameter ceiling. W05 still rejects a by-reference mode
+from the exact record. It does not preserve named source spelling in a private
+compiler bit.
 
 ## Verification and execution status
 
 `zend_mir_verify_w05_calls()` checks call sites, targets, arguments, frames,
 continuations, capabilities, and debts with stable `MIRV0700` through
-`MIRV0705` codes. Planning and lowering failures use `MIRL0021` through
-`MIRL0029`.
+`MIRV0705` codes. A final composition verifier independently checks the
+extension-aware structural records, exact scalar facts, reciprocal CFG edges
+and nonterminating call placement, and the complete call model. Only the
+facets actually checked earn passing structural, scalar, control-flow, and
+call-model receipts.
+
+All receipts bind the same four-domain, 128-bit module and source
+fingerprints. The canonical module projection excludes verifier-receipt
+records because those records contain the fingerprint itself. The projection
+is recomputed after receipt publication and must remain identical. Planning
+and lowering failures use `MIRL0021` through `MIRL0029`.
 
 W04 Stage 1/2/3 guarantees describe the pre-mutation W04 projection and are
 stored separately as W05 `prerequisite_guarantees`. The final W05 module
