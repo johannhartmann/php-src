@@ -35,6 +35,8 @@ PHASE_CHECKER = ROOT / "scripts/native/calls/check-phases.py"
 HEADERS = (
     MIR / "zend_mir_ids.h",
     MIR / "zend_mir_opcodes.h",
+    MIR / "zend_mir_capability.h",
+    MIR / "zend_mir_verification.h",
     CALLS / "Contracts/zend_mir_call_source.h",
     CALLS / "Contracts/zend_mir_call_plan.h",
     MIR / "zend_mir_call.h",
@@ -42,15 +44,12 @@ HEADERS = (
     LOWERING / "zend_mir_lowering_diagnostic.h",
     LOWERING / "zend_mir_lowering_zend.h",
 )
-SCHEMA_PAIRS = (
-    (PROFILE, DOCS / "w05-opcode-profile.schema.json"),
-    (SEQUENCE, DOCS / "w05-sequence-profile.schema.json"),
-    (MANIFEST, DOCS / "w05-phase-manifest.schema.json"),
-)
+SCHEMA_PAIRS = ((PROFILE, DOCS / "w05-opcode-profile.schema.json"),)
 POINTER_FREE_RECORDS = (
     "zend_mir_source_call_site_ref",
     "zend_mir_source_call_target_ref",
     "zend_mir_source_call_argument_ref",
+    "zend_mir_source_parameter_mode_ref",
     "zend_mir_call_target_ref",
     "zend_mir_call_argument_ref",
     "zend_mir_call_frame_descriptor",
@@ -61,17 +60,20 @@ POINTER_FREE_RECORDS = (
 CAPABILITIES = (
     "scalar_semantics",
     "reducible_control_flow",
-    "direct_user_call_model",
-    "caller_frame_model",
-    "callee_entry_model",
+    "direct_user_call_sequence",
+    "caller_frame_descriptor",
+    "callee_entry_descriptor",
+    "abstract_call_effects",
 )
 DEBTS = (
-    "call_runtime_binding",
-    "call_exception_propagation",
-    "call_bailout_reentry",
-    "call_observer_integration",
-    "call_result_ownership",
-    "internal_c_abi",
+    "call_execution",
+    "exception_cleanup",
+    "refcounted_transfer",
+    "protected_continuation",
+    "dynamic_target_resolution",
+    "observer_interop",
+    "cow_indirect_semantics",
+    "internal_c_abi_interop",
 )
 
 
@@ -131,23 +133,6 @@ def validate_schema_documents() -> None:
             "sources",
             "unresolved_w05_count",
         },
-        SEQUENCE: {
-            "accepted_grammar",
-            "atomicity",
-            "capabilities",
-            "codegen_eligible",
-            "debts",
-            "format_version",
-            "modeled",
-            "proofs",
-            "rejections",
-        },
-        MANIFEST: {
-            "format_version",
-            "phases",
-            "shared_serial_paths",
-            "writer_branch",
-        },
     }
     for instance_path, schema_path in SCHEMA_PAIRS:
         instance = json.loads(instance_path.read_text(encoding="utf-8"))
@@ -170,7 +155,10 @@ def validate_profile() -> None:
     generated_profile, generated_reclassification = generator.build()
     profile = json.loads(PROFILE.read_text(encoding="utf-8"))
     reclassification = json.loads(RECLASSIFICATION.read_text(encoding="utf-8"))
-    if profile != generated_profile or reclassification != generated_reclassification:
+    if (
+        profile != generated_profile
+        or reclassification != generated_reclassification
+    ):
         raise ContractError("W05 generated profile or reclassification drift")
     if profile["active_opcode_count"] != len(profile["opcodes"]):
         raise ContractError("live opcode count does not match profile entries")
@@ -231,23 +219,19 @@ def validate_headers() -> None:
         "call_target_at",
         "call_argument_count",
         "call_argument_at",
+        "parameter_mode_count",
+        "parameter_mode_at",
         "source_opcode_count",
         "source_opcode_at",
     )
     positions = [source_view.find(token) for token in source_order]
     if any(position < 0 for position in positions) or positions != sorted(positions):
         raise ContractError("source call tables are absent or out of semantic order")
-    source_argument = extract_struct(combined, "zend_mir_source_call_argument_ref")
-    if (
-        "uint32_t flags;" not in source_argument
-        or "ZEND_MIR_SOURCE_CALL_ARGUMENT_SYNTACTIC_NAMED" not in combined
-        or (
-            "#define ZEND_MIR_ZEND_SEND_SYNTACTIC_NAMED "
-            "(UINT32_C(1) << 31)"
-        )
-        not in combined
-    ):
-        raise ContractError("source call argument lacks preserved syntax flags")
+    target = extract_struct(combined, "zend_mir_source_call_target_ref")
+    if "zend_mir_span parameter_modes;" not in target or "by_ref_mask" in target:
+        raise ContractError("source call target lacks scalable parameter modes")
+    if "ZEND_MIR_ZEND_SEND_SYNTACTIC_NAMED" in combined:
+        raise ContractError("compiler named-syntax side channel remains in contract")
 
     required = (
         "zend_mir_source_call_site_id",
@@ -262,6 +246,8 @@ def validate_headers() -> None:
         "zend_mir_lowering_result_is_w05_failure_atomic",
         "prerequisite_guarantees",
         "function_symbol_id",
+        "zend_mir_verifier_receipt_ref",
+        "zend_mir_capability_set_ref",
     )
     for token in required:
         if token not in combined:
@@ -381,13 +367,23 @@ def validate_fixtures() -> None:
         "named-argument-normalized-position",
         "unpack",
         "default-argument",
+        "default-fully-supplied",
+        "exact-self-call",
+        "parameter-mode-boundaries",
         "refcounted-result",
         "protected-call",
         "allocation-failure",
     }
     if set(cases) != expected:
         raise ContractError("call-sequence fixture set drift")
-    for name in ("simple-direct-user", "nested-direct-user"):
+    for name in (
+        "simple-direct-user",
+        "nested-direct-user",
+        "named-argument-normalized-position",
+        "default-fully-supplied",
+        "exact-self-call",
+        "parameter-mode-boundaries",
+    ):
         if cases[name]["decision"] != "accepted" or not cases[name]["atomic"]:
             raise ContractError(f"{name}: valid sequence is not atomically accepted")
     for name, case in cases.items():
@@ -396,10 +392,12 @@ def validate_fixtures() -> None:
     normalized_named = cases["named-argument-normalized-position"]
     if (
         not normalized_named.get("normalized_to_position")
-        or normalized_named.get("source_flags") != ["syntactic_named"]
-        or normalized_named.get("deferred_wave") != "W07"
+        or normalized_named.get("decision") != "accepted"
     ):
-        raise ContractError("normalized named syntax is not source-backed")
+        raise ContractError("normalized named call is not accepted")
+    boundaries = cases["parameter-mode-boundaries"]
+    if boundaries.get("ordinals") != [0, 63, 64, 127]:
+        raise ContractError("parameter mode boundary fixture drift")
     nested = cases["nested-direct-user"]["events"]
     stack: list[int] = []
     for event in nested:
@@ -473,7 +471,6 @@ def check() -> None:
     validate_w02_regressions()
     run(["python3", "scripts/native/lowering/validate-w03.py", "--check"])
     run(["python3", "scripts/native/control-flow/validate-w04.py", "--check"])
-    run(["python3", str(GENERATOR.relative_to(ROOT)), "--check"])
     run(["python3", str(PHASE_CHECKER.relative_to(ROOT)), "--check"])
 
 

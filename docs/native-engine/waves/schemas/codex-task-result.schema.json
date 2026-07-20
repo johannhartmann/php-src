@@ -10,7 +10,7 @@
       },
       "then": {
         "properties": {"head_commit": {"type": "null"}},
-        "required": ["tested_head_commit", "seal_subject"]
+        "required": ["tested_head_commit", "seal_subject", "phase_receipts"]
       }
     }
   ],
@@ -43,6 +43,11 @@
         {"$ref": "#/$defs/commit"},
         {"type": "null"}
       ]
+    },
+    "phase_receipts": {
+      "items": {"$ref": "#/$defs/phaseReceipt"},
+      "minItems": 4,
+      "type": "array"
     },
     "seal_subject": {"$ref": "#/$defs/sealSubject"},
     "tested_head_commit": {"$ref": "#/$defs/commit"},
@@ -132,6 +137,49 @@
       "minLength": 1,
       "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$)).+$",
       "type": "string"
+    },
+    "phaseReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "changed_paths": {
+          "items": {"$ref": "#/$defs/relativePath"},
+          "type": "array"
+        },
+        "command_summary_digests": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "command_id": {
+                "pattern": "^[a-z0-9][a-z0-9-]*$",
+                "type": "string"
+              },
+              "path": {"$ref": "#/$defs/relativePath"},
+              "sha256": {"$ref": "#/$defs/sha256"}
+            },
+            "required": ["command_id", "path", "sha256"],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "commit": {"$ref": "#/$defs/commit"},
+        "format_version": {"const": "1.0.0"},
+        "parent": {"$ref": "#/$defs/commit"},
+        "phase_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*$",
+          "type": "string"
+        },
+        "tree": {"$ref": "#/$defs/commit"}
+      },
+      "required": [
+        "format_version",
+        "phase_id",
+        "commit",
+        "tree",
+        "parent",
+        "changed_paths",
+        "command_summary_digests"
+      ],
+      "type": "object"
     },
     "sealSubject": {
       "additionalProperties": false,

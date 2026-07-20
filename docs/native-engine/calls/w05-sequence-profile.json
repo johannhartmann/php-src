@@ -18,7 +18,8 @@
     },
     "callee_entry": {
       "opcode": "ZEND_RECV",
-      "required_equals_declared": true
+      "explicit_argument_count": "required_num_args_through_num_args",
+      "parameter_modes": "ordered_unbounded_table"
     },
     "finish": {
       "opcodes": [
@@ -38,20 +39,23 @@
   "capabilities": [
     "scalar_semantics",
     "reducible_control_flow",
-    "direct_user_call_model",
-    "caller_frame_model",
-    "callee_entry_model"
+    "direct_user_call_sequence",
+    "caller_frame_descriptor",
+    "callee_entry_descriptor",
+    "abstract_call_effects"
   ],
   "codegen_eligible": false,
   "debts": [
-    "call_runtime_binding",
-    "call_exception_propagation",
-    "call_bailout_reentry",
-    "call_observer_integration",
-    "call_result_ownership",
-    "internal_c_abi"
+    "call_execution",
+    "exception_cleanup",
+    "refcounted_transfer",
+    "protected_continuation",
+    "dynamic_target_resolution",
+    "observer_interop",
+    "cow_indirect_semantics",
+    "internal_c_abi_interop"
   ],
-  "format_version": 1,
+  "format_version": 2,
   "modeled": true,
   "proofs": [
     "complete_reachable_call_scan",
@@ -60,9 +64,10 @@
     "balanced_nested_call_stack",
     "positional_by_value_arguments",
     "exact_non_refcounted_scalar_arguments",
-    "exact_argument_count",
-    "no_defaults_named_unpack_variadic_placeholder",
-    "compiler_preserved_named_syntax",
+    "all_arguments_explicitly_supplied",
+    "normalized_named_arguments_have_complete_static_ordinals",
+    "no_runtime_named_container_unpack_variadic_placeholder_or_default_materialization",
+    "exact_self_target_is_direct",
     "no_by_reference",
     "result_unused_or_exact_scalar",
     "complete_caller_callee_frames",

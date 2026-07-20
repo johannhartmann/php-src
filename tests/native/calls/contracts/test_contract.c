@@ -12,12 +12,16 @@ int main(void)
 	zend_mir_call_frame_descriptor callee;
 	zend_mir_call_site_ref site;
 	zend_mir_call_plan plan;
+	zend_mir_source_parameter_mode_ref parameter_mode;
+	zend_mir_verifier_receipt_ref verifier_receipt;
 
 	memset(&result, 0, sizeof(result));
 	memset(&receipt, 0, sizeof(receipt));
 	memset(&callee, 0, sizeof(callee));
 	memset(&site, 0, sizeof(site));
 	memset(&plan, 0, sizeof(plan));
+	memset(&parameter_mode, 0, sizeof(parameter_mode));
+	memset(&verifier_receipt, 0, sizeof(verifier_receipt));
 
 	assert(ZEND_MIR_CONTRACT_VERSION == UINT32_C(0x00010002));
 	assert(ZEND_MIR_W04_CONTRACT_VERSION == UINT32_C(0x00010003));
@@ -32,8 +36,10 @@ int main(void)
 		> offsetof(zend_mir_source_call_argument_ref, ordinal));
 	assert(offsetof(zend_mir_source_call_argument_ref, flags)
 		> offsetof(zend_mir_source_call_argument_ref, mode));
-	assert(ZEND_MIR_SOURCE_CALL_ARGUMENT_SYNTACTIC_NAMED
-		== UINT32_C(1));
+	parameter_mode.ordinal = 127;
+	parameter_mode.mode = ZEND_MIR_SOURCE_PARAMETER_BY_VALUE;
+	assert(parameter_mode.ordinal == 127);
+	assert(parameter_mode.mode == ZEND_MIR_SOURCE_PARAMETER_BY_VALUE);
 	assert(offsetof(zend_mir_call_frame_descriptor, function_symbol_id)
 		> offsetof(zend_mir_call_frame_descriptor, function_id));
 	assert(offsetof(zend_mir_call_site_ref, result_id)
@@ -60,6 +66,9 @@ int main(void)
 	receipt.modeled = true;
 	receipt.codegen_eligible = false;
 	assert(receipt.modeled && !receipt.codegen_eligible);
+	verifier_receipt.verifier_id = ZEND_MIR_VERIFIER_CALL_MODEL;
+	verifier_receipt.status = ZEND_MIR_VERIFIER_STATUS_PASS;
+	assert(verifier_receipt.verifier_id == ZEND_MIR_VERIFIER_CALL_MODEL);
 
 	result.lowering.status = ZEND_MIR_LOWERING_SUCCESS;
 	result.lowering.diagnostic_code = ZEND_MIRL_OK;

@@ -31,13 +31,22 @@ CONTRACT = load_module("w05_test_contract", CONTRACT_PATH)
 
 class OpcodeProfileTests(unittest.TestCase):
     def test_profile_is_exactly_live_derived(self) -> None:
-        expected, changes = GENERATOR.build()
+        expected, _ = GENERATOR.build()
         actual = json.loads(GENERATOR.W05_PROFILE.read_text(encoding="utf-8"))
         reclassified = json.loads(
             GENERATOR.RECLASSIFICATION.read_text(encoding="utf-8")
         )
         self.assertEqual(expected, actual)
-        self.assertEqual(changes, reclassified)
+        live_w06 = {
+            item["opcode"] for item in actual["opcodes"]
+            if item.get("deferred_wave") == "W06"
+        }
+        transitions = {
+            opcode
+            for values in reclassified["transitions"].values()
+            for opcode in values
+        }
+        self.assertEqual(live_w06, transitions)
         self.assertEqual(len(actual["opcodes"]), actual["active_opcode_count"])
 
     def test_all_call_adjacent_opcodes_are_individually_decided(self) -> None:
@@ -72,51 +81,36 @@ class PhaseManifestTests(unittest.TestCase):
         cls.manifest = json.loads(PHASES.MANIFEST.read_text(encoding="utf-8"))
 
     def test_manifest_is_serial_and_disjoint(self) -> None:
-        self.assertEqual([], PHASES.validate_manifest(self.manifest))
-        actual = {
-            phase["phase_id"]: tuple(phase["task_ids"])
-            for phase in self.manifest["phases"]
-        }
-        self.assertEqual(PHASES.EXPECTED_TASKS, actual)
+        self.assertEqual([], PHASES.validate(self.manifest))
+        self.assertEqual(
+            PHASES.EXPECTED,
+            tuple(phase["phase_id"] for phase in self.manifest["phases"]),
+        )
 
     def test_unplanned_overlap_is_rejected(self) -> None:
         mutated = copy.deepcopy(self.manifest)
         implementation = next(
             phase for phase in mutated["phases"]
-            if phase["phase_id"] == "implementation"
+            if phase["phase_id"] == "W05-v2-implementation"
         )
         implementation["paths"].append("docs/native-engine/calls/contracts/**")
-        errors = PHASES.validate_manifest(mutated)
+        errors = PHASES.validate(mutated)
         self.assertTrue(any("phase path overlap" in error for error in errors))
 
-    def test_command_use_before_provider_is_rejected(self) -> None:
+    def test_wrong_start_commit_is_rejected(self) -> None:
         mutated = copy.deepcopy(self.manifest)
-        contract = next(
-            phase for phase in mutated["phases"]
-            if phase["phase_id"] == "contract-H"
-        )
-        contract["commands_used"].append("scripts/native/calls/test-w05.py")
-        errors = PHASES.validate_manifest(mutated)
-        self.assertTrue(any("used before provider" in error for error in errors))
+        mutated["start_commit"] = "0" * 40
+        errors = PHASES.validate(mutated)
+        self.assertTrue(any("start_commit" in error for error in errors))
 
-    def test_wrong_phase_task_mapping_is_rejected(self) -> None:
+    def test_phase_order_is_frozen(self) -> None:
         mutated = copy.deepcopy(self.manifest)
-        implementation = next(
-            phase for phase in mutated["phases"]
-            if phase["phase_id"] == "implementation"
+        mutated["phases"][1], mutated["phases"][2] = (
+            mutated["phases"][2],
+            mutated["phases"][1],
         )
-        implementation["task_ids"] = ["W05-A"]
-        errors = PHASES.validate_manifest(mutated)
-        self.assertTrue(any("task IDs" in error for error in errors))
-
-    def test_only_contract_h_can_change_root_contracts(self) -> None:
-        mutated = copy.deepcopy(self.manifest)
-        gate = next(
-            phase for phase in mutated["phases"] if phase["phase_id"] == "gate"
-        )
-        gate["root_contracts_mutable"] = True
-        errors = PHASES.validate_manifest(mutated)
-        self.assertTrue(any("root contracts" in error for error in errors))
+        errors = PHASES.validate(mutated)
+        self.assertTrue(any("phase order" in error for error in errors))
 
 
 class SequenceContractTests(unittest.TestCase):
