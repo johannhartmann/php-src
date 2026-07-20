@@ -3775,13 +3775,6 @@ static uint32_t zend_get_arg_num(const zend_function *fn, const zend_string *arg
 	return (uint32_t) -1;
 }
 
-/*
- * Private source-provenance bit consumed only by the experimental Native
- * source view. SEND handlers ignore extended_value, so this does not change
- * execution semantics or a public Zend contract.
- */
-#define ZEND_SEND_SYNTACTIC_NAMED (1u << 31)
-
 static uint32_t zend_compile_args_ex(
 		zend_ast *ast, const zend_function *fbc,
 		bool *may_have_extra_named_args,
@@ -3806,7 +3799,6 @@ static uint32_t zend_compile_args_ex(
 		zend_ast *arg = args->child[i];
 		zend_string *arg_name = NULL;
 		uint32_t arg_num = i + 1;
-		bool syntactically_named = false;
 
 		znode arg_node;
 		zend_op *opline;
@@ -3841,7 +3833,6 @@ static uint32_t zend_compile_args_ex(
 		}
 
 		if (arg->kind == ZEND_AST_NAMED_ARG) {
-			syntactically_named = true;
 			uses_named_args = true;
 			arg_name = zval_make_interned_string(zend_ast_get_zval(arg->child[0]));
 			arg = arg->child[1];
@@ -3922,9 +3913,6 @@ static uint32_t zend_compile_args_ex(
 			}
 
 			opline = zend_emit_op(NULL, ZEND_SEND_PLACEHOLDER, NULL, NULL);
-			if (syntactically_named) {
-				opline->extended_value |= ZEND_SEND_SYNTACTIC_NAMED;
-			}
 			if (arg_name) {
 				opline->op2_type = IS_CONST;
 				zend_string_addref(arg_name);
@@ -4039,9 +4027,6 @@ static uint32_t zend_compile_args_ex(
 		}
 
 		opline = zend_emit_op(NULL, opcode, &arg_node, NULL);
-		if (syntactically_named) {
-			opline->extended_value |= ZEND_SEND_SYNTACTIC_NAMED;
-		}
 		if (arg_name) {
 			opline->op2_type = IS_CONST;
 			zend_string_addref(arg_name);
@@ -4064,8 +4049,6 @@ static uint32_t zend_compile_args_ex(
 	return arg_count;
 }
 /* }}} */
-
-#undef ZEND_SEND_SYNTACTIC_NAMED
 
 static uint32_t zend_compile_args(zend_ast *ast, const zend_function *fbc, bool *may_have_extra_named_args)
 {

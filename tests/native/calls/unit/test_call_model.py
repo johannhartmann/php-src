@@ -69,13 +69,15 @@ class CallModelTests(unittest.TestCase):
         self.assertIn("zend_mir_core_append_calls_before", module)
         self.assertIn("site->result_id, &result_index", module)
 
-    def test_declaration_identity_rejects_recursive_self_calls(self) -> None:
+    def test_declaration_identity_accepts_exact_recursive_self_calls(self) -> None:
         model = MODEL.read_text(encoding="utf-8")
         frontend = FRONTEND.read_text(encoding="utf-8")
         self.assertIn("zend_mir_frontend_declaration_id", frontend)
         self.assertIn("&function->op_array == caller", frontend)
-        self.assertIn("resolved.function_symbol_id", model)
-        self.assertIn("context->function_symbol_id", model)
+        self.assertNotIn(
+            "resolved.function_symbol_id\n\t\t\t\t\t\t== context->function_symbol_id",
+            model,
+        )
 
     def test_model_contains_no_runtime_or_target_backend(self) -> None:
         text = MODEL.read_text(encoding="utf-8").lower()
@@ -113,25 +115,77 @@ class CallModelTests(unittest.TestCase):
             "return ZEND_MIRL_W05_UNSUPPORTED_RESULT;", model
         )
 
-    def test_named_syntax_survives_positional_normalization(self) -> None:
+    def test_normalized_named_call_needs_no_compiler_side_channel(self) -> None:
         compiler = COMPILER.read_text(encoding="utf-8")
         frontend = FRONTEND.read_text(encoding="utf-8")
-        self.assertIn(
-            "#define ZEND_SEND_SYNTACTIC_NAMED (1u << 31)",
-            compiler,
-        )
-        self.assertGreaterEqual(
-            compiler.count(
-                "opline->extended_value |= ZEND_SEND_SYNTACTIC_NAMED;"
-            ),
-            2,
-        )
-        self.assertIn("ZEND_MIR_ZEND_SEND_SYNTACTIC_NAMED", frontend)
-        self.assertIn(
+        self.assertNotIn("ZEND_SEND_SYNTACTIC_NAMED", compiler)
+        self.assertNotIn("ZEND_MIR_ZEND_SEND_SYNTACTIC_NAMED", frontend)
+        self.assertNotIn(
             "ZEND_MIR_SOURCE_CALL_ARGUMENT_SYNTACTIC_NAMED",
             frontend,
         )
+        self.assertIn("argument->flags = 0;", frontend)
         self.assertIn("argument->flags != 0", frontend)
+
+    def test_parameter_modes_are_scalable_and_ordered(self) -> None:
+        frontend = FRONTEND.read_text(encoding="utf-8")
+        model = MODEL.read_text(encoding="utf-8")
+        self.assertIn("zend_mir_frontend_append_parameter_modes", frontend)
+        self.assertIn("parameter_mode_capacity", frontend)
+        self.assertIn("mode->ordinal = argument;", frontend)
+        self.assertIn(
+            "zend_mir_w05_target_parameter_modes_are_by_value", model
+        )
+        self.assertNotIn("num_args > 64", model)
+        self.assertNotIn("by_ref_mask", model)
+
+    def test_final_verifier_precedes_content_bound_receipt_publication(self) -> None:
+        model = MODEL.read_text(encoding="utf-8")
+        lower = model[model.index("zend_mir_lower_w05_zend_source(") :]
+        final_verify = lower.index("zend_mir_w05_verify_final_composition(")
+        fingerprint = lower.index("zend_mir_w05_build_fingerprints(")
+        publish = lower.index("zend_mir_module_publish_w05_verifier_receipts(")
+        recompute = lower.index(
+            "zend_mir_w05_build_fingerprints(", fingerprint + 1
+        )
+        receipt_verify = lower.index("zend_mir_w05_verify_receipts(")
+        self.assertEqual(
+            [final_verify, fingerprint, publish, recompute, receipt_verify],
+            sorted(
+                [final_verify, fingerprint, publish, recompute, receipt_verify]
+            ),
+        )
+        self.assertNotIn("module_ops.verify_stage1(", lower)
+        self.assertNotIn("module_ops.verify_stage2(", lower)
+        self.assertNotIn("zend_mir_verify_w04_control_flow(", lower)
+        self.assertIn(
+            "zend_mir_dump_w05_fingerprint_projection(", model
+        )
+        self.assertIn(
+            "zend_mir_w05_verify_final_structural(", model
+        )
+        self.assertIn("zend_mir_w05_verify_final_scalar(", model)
+        self.assertIn(
+            "zend_mir_w05_verify_final_control_flow(", model
+        )
+        self.assertIn("zend_mir_verify_w05_calls(", model)
+        self.assertIn("source->opcode_at", model)
+        self.assertIn("source->edge_at", model)
+        self.assertIn("source_calls->call_argument_at", model)
+        self.assertIn("zend_mir_module_w05_capability_ids_are_canonical", model)
+        self.assertIn("zend_mir_lowering_result_is_w04_failure_atomic(&w04)", model)
+
+    def test_fingerprint_has_independent_words_and_excludes_receipts(self) -> None:
+        model = MODEL.read_text(encoding="utf-8")
+        dump = (
+            ROOT / "Zend/Native/MIR/Text/zend_mir_dump.c"
+        ).read_text(encoding="utf-8")
+        self.assertIn("uint32_t words[4];", model)
+        self.assertIn("static const uint32_t domains[4]", model)
+        self.assertNotIn("module_writer.hash", model)
+        self.assertIn("omit_verifier_receipts", dump)
+        self.assertIn("zend_mir_dump_w05_fingerprint_projection", dump)
+        self.assertIn("recomputed_module_fingerprint", model)
 
     def test_call_effect_summary_is_a_w01_sequence_superset(self) -> None:
         text = MODEL.read_text(encoding="utf-8")

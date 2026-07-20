@@ -184,7 +184,7 @@ class RealCandidateTests(unittest.TestCase):
             {diagnostic["code"] for diagnostic in result["diagnostics"]},
         )
 
-    def test_normalized_named_argument_is_deferred_to_w07(self) -> None:
+    def test_normalized_named_argument_is_accepted(self) -> None:
         candidate = os.environ.get("TEST_PHP_EXECUTABLE")
         if not candidate:
             self.skipTest("TEST_PHP_EXECUTABLE is not set")
@@ -210,13 +210,10 @@ class RealCandidateTests(unittest.TestCase):
             "named-argument-normalized-position.php",
             "w05_case",
         )["calls"][0]
-        self.assertEqual(result["status"], "rejected")
-        self.assertIn(
-            "MIRL0024",
-            {diagnostic["code"] for diagnostic in result["diagnostics"]},
-        )
+        self.assertEqual(result["status"], "accepted")
+        self.assertIn("opcode call_direct_user", result["mir"])
 
-    def test_64_by_value_parameters_remain_supported(self) -> None:
+    def test_by_value_parameter_boundaries_are_supported(self) -> None:
         candidate = os.environ.get("TEST_PHP_EXECUTABLE")
         if not candidate:
             self.skipTest("TEST_PHP_EXECUTABLE is not set")
@@ -229,17 +226,26 @@ class RealCandidateTests(unittest.TestCase):
         assert specification is not None and specification.loader is not None
         module = importlib.util.module_from_spec(specification)
         specification.loader.exec_module(module)
-        source = (
-            ROOT
-            / "tests/native/calls/corpus/cases/by_value_parameter_64.php"
-        ).read_bytes()
-        result = module.invoke(
-            module.candidate_path(candidate),
-            source,
-            "by-value-parameter-64.php",
-            "w05_case",
-        )["calls"][0]
-        self.assertEqual(result["status"], "accepted")
+        for parameter_count in (1, 64, 65, 128):
+            with self.subTest(parameter_count=parameter_count):
+                source = (
+                    ROOT
+                    / (
+                        "tests/native/calls/corpus/cases/"
+                        f"by_value_parameter_{parameter_count}.php"
+                    )
+                ).read_bytes()
+                result = module.invoke(
+                    module.candidate_path(candidate),
+                    source,
+                    f"by-value-parameter-{parameter_count}.php",
+                    "w05_case",
+                )["calls"][0]
+                self.assertEqual(result["status"], "accepted")
+                self.assertEqual(
+                    result["mir"].count("call-argument ca"),
+                    parameter_count,
+                )
 
     def test_proved_user_do_fcall_has_real_source_opcode_evidence(self) -> None:
         candidate = os.environ.get("TEST_PHP_EXECUTABLE")
@@ -336,7 +342,7 @@ class RealCandidateTests(unittest.TestCase):
         self.assertIn("opcode call_direct_user", result["mir"])
         self.assertIn("opcode i64_add_no_overflow", result["mir"])
 
-    def test_default_bearing_target_is_deferred_to_w07(self) -> None:
+    def test_fully_supplied_default_bearing_target_is_accepted(self) -> None:
         candidate = os.environ.get("TEST_PHP_EXECUTABLE")
         if not candidate:
             self.skipTest("TEST_PHP_EXECUTABLE is not set")
@@ -357,13 +363,39 @@ class RealCandidateTests(unittest.TestCase):
             "default-argument.php",
             "w05_case",
         )["calls"][0]
+        self.assertEqual(result["status"], "accepted")
+        self.assertIn("opcode call_direct_user", result["mir"])
+
+    def test_missing_default_argument_is_deferred_to_w07(self) -> None:
+        candidate = os.environ.get("TEST_PHP_EXECUTABLE")
+        if not candidate:
+            self.skipTest("TEST_PHP_EXECUTABLE is not set")
+        import importlib.util
+
+        specification = importlib.util.spec_from_file_location(
+            "w05_missing_default_dump",
+            ROOT / "scripts/native/calls/dump-w05.py",
+        )
+        assert specification is not None and specification.loader is not None
+        module = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(module)
+        source = (
+            ROOT
+            / "tests/native/calls/corpus/cases/default_argument_missing.php"
+        ).read_bytes()
+        result = module.invoke(
+            module.candidate_path(candidate),
+            source,
+            "default-argument-missing.php",
+            "w05_case",
+        )["calls"][0]
         self.assertEqual(result["status"], "rejected")
         self.assertIn(
             "MIRL0025",
             {diagnostic["code"] for diagnostic in result["diagnostics"]},
         )
 
-    def test_recursive_self_call_reuses_caller_identity_and_is_rejected(self) -> None:
+    def test_recursive_self_call_reuses_caller_identity(self) -> None:
         candidate = os.environ.get("TEST_PHP_EXECUTABLE")
         if not candidate:
             self.skipTest("TEST_PHP_EXECUTABLE is not set")
@@ -384,10 +416,9 @@ class RealCandidateTests(unittest.TestCase):
             "recursive-self-call.php",
             "w05_case",
         )["calls"][0]
-        self.assertEqual(result["status"], "rejected")
+        self.assertEqual(result["status"], "accepted")
         self.assertIn(
-            "MIRL0023",
-            {diagnostic["code"] for diagnostic in result["diagnostics"]},
+            "caller frame", result["mir"]
         )
 
     def test_call_instruction_preserves_source_opline_order_after_phi(self) -> None:
@@ -481,7 +512,11 @@ class RealCandidateTests(unittest.TestCase):
             "finalize_failure": "MIRL0028",
             "stage1_verifier_failure": "MIRL0009",
             "stage2_verifier_failure": "MIRL0010",
+            "structural_verifier_failure": "MIRL0029",
+            "scalar_verifier_failure": "MIRL0029",
+            "control_flow_verifier_failure": "MIRL0029",
             "call_verifier_failure": "MIRL0029",
+            "fingerprint_recompute_failure": "MIRL0029",
         }
         for fault, code in expected.items():
             with self.subTest(fault=fault):
