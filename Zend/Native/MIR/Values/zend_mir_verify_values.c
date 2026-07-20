@@ -804,61 +804,138 @@ static bool zend_mir_w06_verify_call_transfers(
 	const zend_mir_view *view, const zend_mir_value_view *values,
 	zend_mir_diagnostic_sink *diagnostics)
 {
+	const zend_mir_module *module = zend_mir_module_from_value_view(values);
+	const zend_mir_call_view *calls =
+		zend_mir_module_call_view_from_view(view);
 	uint32_t count = values->call_transfer_count(values->context);
 	uint32_t storage_count = values->storage_count(values->context);
 	uint32_t reference_count =
 		values->reference_cell_count(values->context);
 	uint32_t index;
 
+	if (module == NULL
+			|| ((calls == NULL) != (module->call_sites.count == 0))
+			|| (calls != NULL && calls != &module->call_view)
+			|| count != module->call_arguments.count
+			|| (module->call_staging.committed
+				&& (module->call_sites.items == NULL
+					|| (module->call_arguments.count != 0
+						&& module->call_arguments.items == NULL)
+					|| module->call_targets.items == NULL
+					|| module->semantic_debt_ids.count <= 2
+					|| module->semantic_debt_ids.items == NULL))
+			|| (!module->call_staging.committed && count != 0)) {
+		return zend_mir_w06_emit(view, diagnostics,
+			ZEND_MIR_VERIFY_W06_CALL_TRANSFER_MISMATCH,
+			ZEND_MIRV_TOKEN_W06_CALL_TRANSFER_MISMATCH,
+			"call-transfer table is not bound to the W05 call model");
+	}
 	for (index = 0; index < count; index++) {
 		zend_mir_call_transfer_ref transfer;
+		zend_mir_call_argument_ref argument;
+		zend_mir_call_site_ref site;
+		zend_mir_call_target_ref target;
 		zend_mir_storage_ref argument_storage;
 		zend_mir_storage_ref return_storage;
+		zend_mir_semantic_debt_id *debts = ZEND_MIR_CORE_ITEMS(
+			module, semantic_debt_ids, zend_mir_semantic_debt_id);
+		bool argument_is_reference;
+		bool return_is_reference;
 		if (!values->call_transfer_at(values->context, index, &transfer)
-				|| !zend_mir_id_is_valid(transfer.call_site_id)
-				|| transfer.parameter_modes.count == 0
+				|| !calls->call_argument_at(
+					calls->context, index, &argument)
+				|| argument.id != index
+				|| argument.call_site_id
+					>= calls->call_site_count(calls->context)
+				|| !calls->call_site_at(
+					calls->context, argument.call_site_id, &site)
+				|| site.id != argument.call_site_id
+				|| site.target_id
+					>= calls->call_target_count(calls->context)
+				|| !calls->call_target_at(
+					calls->context, site.target_id, &target)
+				|| target.id != site.target_id
+				|| site.arguments.offset > index
+				|| argument.ordinal >= site.arguments.count
+				|| site.arguments.offset + argument.ordinal != index
+				|| transfer.call_site_id != site.id
+				|| transfer.argument_ordinal != argument.ordinal
+				|| transfer.parameter_modes.count != target.num_args
+				|| argument.ordinal >= transfer.parameter_modes.count
 				|| transfer.parameter_modes.offset
 					> UINT32_MAX - transfer.parameter_modes.count
-				|| transfer.resolved_debt_ids.offset
-					> UINT32_MAX - transfer.resolved_debt_ids.count
+				|| transfer.resolved_debt_ids.offset != 2
+				|| transfer.resolved_debt_ids.count != 1
+				|| debts[2] != ZEND_MIR_DEBT_REFCOUNTED_TRANSFER
 				|| transfer.argument_storage_id >= storage_count
 				|| !values->storage_at(values->context,
 					transfer.argument_storage_id, &argument_storage)
-				|| (zend_mir_id_is_valid(
-						transfer.argument_reference_cell_id)
-					&& transfer.argument_reference_cell_id
-						>= reference_count)
-				|| (zend_mir_id_is_valid(
-						transfer.argument_reference_cell_id)
-					&& (argument_storage.state
-							!= ZEND_MIR_STORAGE_REFERENCE
-						|| argument_storage.reference_cell_id
-							!= transfer
-								.argument_reference_cell_id))
-				|| transfer.argument_action < ZEND_MIR_TRANSFER_BORROW
-				|| transfer.argument_action
-					> ZEND_MIR_TRANSFER_FROM_CALLEE
 				|| transfer.return_storage_id >= storage_count
 				|| !values->storage_at(values->context,
-					transfer.return_storage_id, &return_storage)
-				|| (zend_mir_id_is_valid(
-						transfer.return_reference_cell_id)
-					&& transfer.return_reference_cell_id
-						>= reference_count)
-				|| (zend_mir_id_is_valid(
-						transfer.return_reference_cell_id)
-					&& (return_storage.state
-							!= ZEND_MIR_STORAGE_REFERENCE
-						|| return_storage.reference_cell_id
-							!= transfer
-								.return_reference_cell_id))
-				|| transfer.return_action < ZEND_MIR_TRANSFER_BORROW
-				|| transfer.return_action
-					> ZEND_MIR_TRANSFER_FROM_CALLEE) {
+					transfer.return_storage_id, &return_storage)) {
 			return zend_mir_w06_emit(view, diagnostics,
 				ZEND_MIR_VERIFY_W06_CALL_TRANSFER_MISMATCH,
 				ZEND_MIRV_TOKEN_W06_CALL_TRANSFER_MISMATCH,
 				"invalid call-transfer span or identity");
+		}
+		argument_is_reference =
+			argument_storage.state == ZEND_MIR_STORAGE_REFERENCE;
+		return_is_reference =
+			return_storage.state == ZEND_MIR_STORAGE_REFERENCE;
+		if (argument_is_reference
+					!= zend_mir_id_is_valid(
+						transfer.argument_reference_cell_id)
+				|| (argument_is_reference
+					&& (transfer.argument_reference_cell_id
+							>= reference_count
+						|| argument_storage.reference_cell_id
+							!= transfer
+								.argument_reference_cell_id))
+				|| (argument_is_reference
+					? transfer.argument_action
+						!= ZEND_MIR_TRANSFER_TO_CALLEE
+					: argument_storage.category
+							== ZEND_MIR_VALUE_NON_REFCOUNTED_SCALAR
+						? transfer.argument_action
+							!= ZEND_MIR_TRANSFER_BORROW
+						: transfer.argument_action
+							!= ZEND_MIR_TRANSFER_COPY_ADDREF)
+				|| return_storage.kind
+					!= ZEND_MIR_STORAGE_CALL_RETURN_SLOT
+				|| return_is_reference
+					!= zend_mir_id_is_valid(
+						transfer.return_reference_cell_id)
+				|| (return_is_reference
+					&& (transfer.return_reference_cell_id
+							>= reference_count
+						|| return_storage.reference_cell_id
+							!= transfer.return_reference_cell_id))
+				|| transfer.return_action
+					!= ZEND_MIR_TRANSFER_FROM_CALLEE) {
+			return zend_mir_w06_emit(view, diagnostics,
+				ZEND_MIR_VERIFY_W06_CALL_TRANSFER_MISMATCH,
+				ZEND_MIRV_TOKEN_W06_CALL_TRANSFER_MISMATCH,
+				"call-transfer action does not match value storage");
+		}
+		if (argument.ordinal != 0) {
+			zend_mir_call_transfer_ref first;
+			if (!values->call_transfer_at(
+					values->context, index - argument.ordinal, &first)
+					|| first.call_site_id != transfer.call_site_id
+					|| first.parameter_modes.offset
+						!= transfer.parameter_modes.offset
+					|| first.parameter_modes.count
+						!= transfer.parameter_modes.count
+					|| first.return_storage_id
+						!= transfer.return_storage_id
+					|| first.return_reference_cell_id
+						!= transfer.return_reference_cell_id
+					|| first.return_action != transfer.return_action) {
+				return zend_mir_w06_emit(view, diagnostics,
+					ZEND_MIR_VERIFY_W06_CALL_TRANSFER_MISMATCH,
+					ZEND_MIRV_TOKEN_W06_CALL_TRANSFER_MISMATCH,
+					"inconsistent per-site call-transfer projection");
+			}
 		}
 	}
 	return true;
@@ -893,6 +970,8 @@ static bool zend_mir_w06_verify_receipts(
 	const zend_mir_view *view, const zend_mir_value_view *values,
 	zend_mir_diagnostic_sink *diagnostics)
 {
+	const zend_mir_call_view *calls =
+		zend_mir_module_call_view_from_view(view);
 	bool seen[6] = { false, false, false, false, false, false };
 	zend_mir_verifier_receipt_ref first;
 	bool have_first = false;
@@ -948,7 +1027,8 @@ static bool zend_mir_w06_verify_receipts(
 			|| !seen[ZEND_MIR_VERIFIER_SCALAR]
 			|| !seen[ZEND_MIR_VERIFIER_CONTROL_FLOW]
 			|| !seen[ZEND_MIR_VERIFIER_VALUE_REFERENCE]
-			|| (values->call_transfer_count(values->context) != 0
+			|| (calls != NULL
+				&& calls->call_site_count(calls->context) != 0
 				&& !seen[ZEND_MIR_VERIFIER_CALL_MODEL])) {
 		return zend_mir_w06_emit(view, diagnostics,
 			ZEND_MIR_VERIFY_W06_RECEIPT_MISMATCH,
