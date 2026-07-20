@@ -13,6 +13,7 @@
 #include "zend_mir_value_core.h"
 
 #include <stdalign.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "../../MIR/Core/zend_mir_module_internal.h"
@@ -111,6 +112,233 @@ static bool zend_mir_value_refcount_valid(zend_mir_refcount_state state)
 {
 	return state >= ZEND_MIR_REFCOUNT_IMMORTAL
 		&& state <= ZEND_MIR_REFCOUNT_UNKNOWN;
+}
+
+static bool zend_mir_value_resolve_staged_payload(
+	const zend_mir_core_value_staging *staging,
+	zend_mir_storage_id storage_id,
+	zend_mir_payload_id *payload_id)
+{
+	uint32_t hops;
+
+	if (staging == NULL || payload_id == NULL
+			|| storage_id >= staging->storage_count) {
+		return false;
+	}
+	for (hops = 0; hops <= staging->storage_count; hops++) {
+		const zend_mir_storage_ref *storage = &staging->storages[storage_id];
+		if (storage->state == ZEND_MIR_STORAGE_DIRECT) {
+			*payload_id = storage->payload_id;
+			return *payload_id < staging->payload_count;
+		}
+		if (storage->state == ZEND_MIR_STORAGE_REFERENCE) {
+			const zend_mir_reference_cell_ref *cell;
+			if (storage->reference_cell_id >= staging->reference_cell_count) {
+				return false;
+			}
+			cell = &staging->reference_cells[storage->reference_cell_id];
+			storage_id = cell->payload_storage_id;
+			continue;
+		}
+		if (storage->state != ZEND_MIR_STORAGE_INDIRECT
+				|| storage->indirect_target_id
+					>= staging->storage_count) {
+			return false;
+		}
+		storage_id = storage->indirect_target_id;
+	}
+	return false;
+}
+
+bool zend_mir_value_transition_valid(
+	zend_mir_transfer_action action,
+	zend_mir_refcount_state before_state,
+	zend_mir_refcount_state after_state,
+	bool cleanup_obligation)
+{
+	if (!zend_mir_value_refcount_valid(before_state)
+			|| !zend_mir_value_refcount_valid(after_state)) {
+		return false;
+	}
+	switch (action) {
+		case ZEND_MIR_TRANSFER_BORROW:
+			return before_state == after_state && !cleanup_obligation;
+		case ZEND_MIR_TRANSFER_COPY_ADDREF:
+			return cleanup_obligation
+				&& ((before_state == ZEND_MIR_REFCOUNT_IMMORTAL
+						&& after_state == ZEND_MIR_REFCOUNT_IMMORTAL)
+					|| (before_state == ZEND_MIR_REFCOUNT_UNIQUE
+						&& after_state == ZEND_MIR_REFCOUNT_SHARED)
+					|| (before_state == ZEND_MIR_REFCOUNT_SHARED
+						&& after_state == ZEND_MIR_REFCOUNT_SHARED)
+					|| (before_state == ZEND_MIR_REFCOUNT_UNKNOWN
+						&& after_state == ZEND_MIR_REFCOUNT_UNKNOWN));
+		case ZEND_MIR_TRANSFER_MOVE:
+			return before_state != ZEND_MIR_REFCOUNT_IMMORTAL
+				&& before_state == after_state && !cleanup_obligation;
+		case ZEND_MIR_TRANSFER_RELEASE:
+			return before_state != ZEND_MIR_REFCOUNT_IMMORTAL
+				&& cleanup_obligation
+				&& ((before_state == ZEND_MIR_REFCOUNT_UNIQUE
+						&& after_state == ZEND_MIR_REFCOUNT_UNKNOWN)
+					|| (before_state == ZEND_MIR_REFCOUNT_SHARED
+						&& after_state == ZEND_MIR_REFCOUNT_SHARED)
+					|| (before_state == ZEND_MIR_REFCOUNT_UNKNOWN
+						&& after_state == ZEND_MIR_REFCOUNT_UNKNOWN));
+		case ZEND_MIR_TRANSFER_TO_CALLEE:
+			return cleanup_obligation && before_state == after_state;
+		case ZEND_MIR_TRANSFER_FROM_CALLEE:
+			return before_state != ZEND_MIR_REFCOUNT_IMMORTAL
+				&& after_state != ZEND_MIR_REFCOUNT_IMMORTAL
+				&& cleanup_obligation;
+		default:
+			return false;
+	}
+}
+
+static int zend_mir_value_compare_u32(const void *left, const void *right)
+{
+	uint32_t lhs = *(const uint32_t *) left;
+	uint32_t rhs = *(const uint32_t *) right;
+	return lhs < rhs ? -1 : lhs > rhs;
+}
+
+static uint32_t zend_mir_value_find_id(
+	const uint32_t *ids, uint32_t count, uint32_t id)
+{
+	const uint32_t *match = bsearch(
+		&id, ids, count, sizeof(*ids), zend_mir_value_compare_u32);
+	return match != NULL ? (uint32_t) (match - ids) : UINT32_MAX;
+}
+
+static uint32_t zend_mir_value_alias_root(uint32_t *parents, uint32_t id)
+{
+	while (parents[id] != id) {
+		parents[id] = parents[parents[id]];
+		id = parents[id];
+	}
+	return id;
+}
+
+typedef struct _zend_mir_value_alias_key {
+	uint32_t left_id;
+	uint32_t right_id;
+	zend_mir_alias_relation relation;
+} zend_mir_value_alias_key;
+
+static int zend_mir_value_compare_alias_key(
+	const void *left, const void *right)
+{
+	const zend_mir_value_alias_key *lhs = left;
+	const zend_mir_value_alias_key *rhs = right;
+	if (lhs->left_id != rhs->left_id) {
+		return lhs->left_id < rhs->left_id ? -1 : 1;
+	}
+	if (lhs->right_id != rhs->right_id) {
+		return lhs->right_id < rhs->right_id ? -1 : 1;
+	}
+	return 0;
+}
+
+static bool zend_mir_value_alias_relations_valid(
+	zend_mir_module *module,
+	const zend_mir_alias_relation_ref *relations, uint32_t count)
+{
+	uint32_t *allocation;
+	uint32_t *ids;
+	uint32_t *parents;
+	zend_mir_value_alias_key *keys;
+	uint32_t id_count = 0;
+	uint32_t index;
+	bool valid = false;
+
+	if (module == NULL || (relations == NULL && count != 0)
+			|| count > UINT32_C(1048576)) {
+		return false;
+	}
+	if (count == 0) {
+		return true;
+	}
+	allocation = zend_mir_arena_allocate(
+		&module->arena, (size_t) count * sizeof(uint32_t) * 4,
+		alignof(uint32_t));
+	if (allocation == NULL) {
+		return false;
+	}
+	keys = zend_mir_arena_allocate(
+		&module->arena, (size_t) count * sizeof(*keys),
+		alignof(zend_mir_value_alias_key));
+	if (keys == NULL) {
+		return false;
+	}
+	ids = allocation;
+	parents = allocation + count * 2;
+	for (index = 0; index < count; index++) {
+		const zend_mir_alias_relation_ref *relation = &relations[index];
+		if (!zend_mir_id_is_valid(relation->left_id)
+				|| !zend_mir_id_is_valid(relation->right_id)
+				|| relation->relation < ZEND_MIR_ALIAS_MUST
+				|| relation->relation > ZEND_MIR_ALIAS_NONE
+				|| (relation->left_id == relation->right_id
+					&& relation->relation != ZEND_MIR_ALIAS_MUST)
+				|| (relation->relation == ZEND_MIR_ALIAS_NONE
+					&& relation->proof_id == 0)) {
+			goto done;
+		}
+		ids[index * 2] = relation->left_id;
+		ids[index * 2 + 1] = relation->right_id;
+		keys[index].left_id = relation->left_id < relation->right_id
+			? relation->left_id : relation->right_id;
+		keys[index].right_id = relation->left_id < relation->right_id
+			? relation->right_id : relation->left_id;
+		keys[index].relation = relation->relation;
+	}
+	qsort(keys, count, sizeof(*keys), zend_mir_value_compare_alias_key);
+	for (index = 1; index < count; index++) {
+		if (keys[index - 1].left_id == keys[index].left_id
+				&& keys[index - 1].right_id == keys[index].right_id
+				&& keys[index - 1].relation
+					!= keys[index].relation) {
+			goto done;
+		}
+	}
+	qsort(ids, count * 2, sizeof(*ids), zend_mir_value_compare_u32);
+	for (index = 0; index < count * 2; index++) {
+		if (id_count == 0 || ids[index] != ids[id_count - 1]) {
+			ids[id_count++] = ids[index];
+		}
+	}
+	for (index = 0; index < id_count; index++) {
+		parents[index] = index;
+	}
+	for (index = 0; index < count; index++) {
+		const zend_mir_alias_relation_ref *relation = &relations[index];
+		if (relation->relation == ZEND_MIR_ALIAS_MUST) {
+			uint32_t left = zend_mir_value_alias_root(
+				parents, zend_mir_value_find_id(
+					ids, id_count, relation->left_id));
+			uint32_t right = zend_mir_value_alias_root(
+				parents, zend_mir_value_find_id(
+					ids, id_count, relation->right_id));
+			parents[right] = left;
+		}
+	}
+	for (index = 0; index < count; index++) {
+		const zend_mir_alias_relation_ref *relation = &relations[index];
+		if (relation->relation == ZEND_MIR_ALIAS_NONE
+				&& zend_mir_value_alias_root(
+					parents, zend_mir_value_find_id(
+						ids, id_count, relation->left_id))
+					== zend_mir_value_alias_root(
+						parents, zend_mir_value_find_id(
+							ids, id_count,
+							relation->right_id))) {
+			goto done;
+		}
+	}
+	valid = true;
+done:
+	return valid;
 }
 
 static bool zend_mir_value_validate_payloads(
@@ -230,7 +458,8 @@ static bool zend_mir_value_validate_references(
 				|| !zend_mir_id_is_valid(cell->alias_class_id)
 				|| !zend_mir_id_is_valid(cell->creation_source_id)
 				|| cell->ownership < 0
-				|| cell->ownership >= ZEND_MIR_OWNERSHIP_STATE_COUNT) {
+				|| cell->ownership >= ZEND_MIR_OWNERSHIP_STATE_COUNT
+				|| !cell->cleanup_obligation) {
 			return false;
 		}
 	}
@@ -238,93 +467,97 @@ static bool zend_mir_value_validate_references(
 }
 
 static bool zend_mir_value_validate_aliases(
+	zend_mir_module *module,
 	const zend_mir_core_value_staging *staging)
 {
-	uint32_t index;
-	uint32_t other;
-
-	for (index = 0; index < staging->alias_relation_count; index++) {
-		const zend_mir_alias_relation_ref *relation =
-			&staging->alias_relations[index];
-		if (!zend_mir_id_is_valid(relation->left_id)
-				|| !zend_mir_id_is_valid(relation->right_id)
-				|| relation->relation < ZEND_MIR_ALIAS_MUST
-				|| relation->relation > ZEND_MIR_ALIAS_NONE
-				|| (relation->left_id == relation->right_id
-					&& relation->relation != ZEND_MIR_ALIAS_MUST)
-				|| (relation->relation == ZEND_MIR_ALIAS_NONE
-					&& relation->proof_id == 0)) {
-			return false;
-		}
-		for (other = 0; other < index; other++) {
-			const zend_mir_alias_relation_ref *previous =
-				&staging->alias_relations[other];
-			bool same_pair =
-				(previous->left_id == relation->left_id
-					&& previous->right_id == relation->right_id)
-				|| (previous->left_id == relation->right_id
-					&& previous->right_id == relation->left_id);
-			if (same_pair && previous->relation != relation->relation) {
-				return false;
-			}
-		}
-	}
-	return true;
+	return zend_mir_value_alias_relations_valid(
+		module, staging->alias_relations, staging->alias_relation_count);
 }
 
 static bool zend_mir_value_validate_events(
+	zend_mir_module *module,
 	const zend_mir_core_value_staging *staging)
 {
+	zend_mir_refcount_state *states;
+	bool *borrowed;
+	bool *consumed;
+	size_t state_bytes;
 	uint32_t index;
 
+	if (staging->ownership_event_count == 0) {
+		return true;
+	}
+	if (staging->payload_count == 0) {
+		return false;
+	}
+	state_bytes = (size_t) staging->payload_count * sizeof(*states);
+	states = zend_mir_arena_allocate(
+		&module->arena, state_bytes, alignof(zend_mir_refcount_state));
+	borrowed = zend_mir_arena_allocate(
+		&module->arena, staging->payload_count, alignof(bool));
+	consumed = zend_mir_arena_allocate(
+		&module->arena, staging->payload_count, alignof(bool));
+	if (states == NULL || borrowed == NULL || consumed == NULL) {
+		return false;
+	}
+	memset(borrowed, 0, staging->payload_count);
+	memset(consumed, 0, staging->payload_count);
+	for (index = 0; index < staging->payload_count; index++) {
+		states[index] = staging->payloads[index].refcount_state;
+	}
 	for (index = 0; index < staging->ownership_event_count; index++) {
 		const zend_mir_ownership_event_ref *event =
 			&staging->ownership_events[index];
+		zend_mir_payload_id source_payload;
+		zend_mir_payload_id target_payload = ZEND_MIR_ID_INVALID;
 		bool target_required =
 			event->action == ZEND_MIR_TRANSFER_COPY_ADDREF
 			|| event->action == ZEND_MIR_TRANSFER_MOVE
 			|| event->action == ZEND_MIR_TRANSFER_FROM_CALLEE;
-		bool borrowed = false;
-		bool consumed = false;
-		uint32_t previous_index;
-
-		for (previous_index = 0; previous_index < index;
-				previous_index++) {
-			const zend_mir_ownership_event_ref *previous =
-				&staging->ownership_events[previous_index];
-			if (previous->source_storage_id
-					!= event->source_storage_id) {
-				continue;
-			}
-			if (previous->action == ZEND_MIR_TRANSFER_BORROW) {
-				borrowed = true;
-			}
-			if (previous->action == ZEND_MIR_TRANSFER_MOVE
-					|| previous->action == ZEND_MIR_TRANSFER_RELEASE
-					|| previous->action
-						== ZEND_MIR_TRANSFER_TO_CALLEE) {
-				consumed = true;
-			}
-		}
 		if (event->id != index
 				|| event->source_storage_id >= staging->storage_count
 				|| event->payload_id >= staging->payload_count
 				|| event->action < ZEND_MIR_TRANSFER_BORROW
 				|| event->action > ZEND_MIR_TRANSFER_FROM_CALLEE
-				|| !zend_mir_value_refcount_valid(event->before_state)
-				|| !zend_mir_value_refcount_valid(event->after_state)
-				|| consumed
+				|| !zend_mir_value_resolve_staged_payload(
+					staging, event->source_storage_id,
+					&source_payload)
+				|| source_payload != event->payload_id
+				|| states[event->payload_id] != event->before_state
+				|| !zend_mir_value_transition_valid(
+					event->action, event->before_state,
+					event->after_state, event->cleanup_obligation)
+				|| (event->cleanup_obligation
+					&& !staging->payloads[
+						event->payload_id].cleanup_obligation)
+				|| consumed[event->payload_id]
 				|| (target_required
 					&& (event->target_storage_id
 							>= staging->storage_count
 						|| event->target_storage_id
-							== event->source_storage_id))
+							== event->source_storage_id
+						|| !zend_mir_value_resolve_staged_payload(
+							staging, event->target_storage_id,
+							&target_payload)
+						|| target_payload != event->payload_id))
+				|| (!target_required
+					&& zend_mir_id_is_valid(
+						event->target_storage_id))
 				|| ((event->action == ZEND_MIR_TRANSFER_RELEASE
 						|| event->action == ZEND_MIR_TRANSFER_MOVE
 						|| event->action
 							== ZEND_MIR_TRANSFER_TO_CALLEE)
-					&& borrowed)) {
+					&& borrowed[event->payload_id])) {
 			return false;
+		}
+		states[event->payload_id] = event->after_state;
+		if (event->action == ZEND_MIR_TRANSFER_BORROW) {
+			borrowed[event->payload_id] = true;
+		}
+		if (event->action == ZEND_MIR_TRANSFER_MOVE
+				|| event->action == ZEND_MIR_TRANSFER_RELEASE
+				|| event->action == ZEND_MIR_TRANSFER_TO_CALLEE) {
+			consumed[event->payload_id] = true;
 		}
 	}
 	return true;
@@ -338,6 +571,8 @@ static bool zend_mir_value_validate_separations(
 	for (index = 0; index < staging->separation_plan_count; index++) {
 		const zend_mir_separation_plan_ref *plan =
 			&staging->separation_plans[index];
+		const zend_mir_payload_ref *source;
+		zend_mir_payload_id source_payload;
 		if (plan->id != index
 				|| plan->source_payload_id >= staging->payload_count
 				|| plan->source_storage_id >= staging->storage_count
@@ -347,20 +582,56 @@ static bool zend_mir_value_validate_separations(
 					plan->uniqueness_fact)
 				|| plan->required < ZEND_MIR_SEPARATION_REQUIRED_NO
 				|| plan->required
-					> ZEND_MIR_SEPARATION_REQUIRED_UNKNOWN) {
+					> ZEND_MIR_SEPARATION_REQUIRED_UNKNOWN
+				|| !zend_mir_value_resolve_staged_payload(
+					staging, plan->source_storage_id,
+					&source_payload)
+				|| source_payload != plan->source_payload_id) {
+			return false;
+		}
+		source = &staging->payloads[plan->source_payload_id];
+		if (source->refcount_state != plan->uniqueness_fact
+				|| (plan->uniqueness_fact
+						== ZEND_MIR_REFCOUNT_UNIQUE
+					&& plan->required
+						!= ZEND_MIR_SEPARATION_REQUIRED_NO)
+				|| (plan->uniqueness_fact
+						== ZEND_MIR_REFCOUNT_SHARED
+					&& plan->required
+						!= ZEND_MIR_SEPARATION_REQUIRED_YES)
+				|| ((plan->uniqueness_fact
+							== ZEND_MIR_REFCOUNT_UNKNOWN
+						|| plan->uniqueness_fact
+							== ZEND_MIR_REFCOUNT_IMMORTAL)
+					&& plan->required
+						!= ZEND_MIR_SEPARATION_REQUIRED_UNKNOWN)) {
 			return false;
 		}
 		if (plan->required == ZEND_MIR_SEPARATION_REQUIRED_YES) {
 			if (plan->result_payload_id >= staging->payload_count
 					|| plan->result_payload_id
 						== plan->source_payload_id
+					|| staging->payloads[
+						plan->result_payload_id].category
+						!= source->category
+					|| staging->payloads[
+						plan->result_payload_id].refcount_state
+						!= ZEND_MIR_REFCOUNT_UNIQUE
 					|| plan->container_execution_debt
 						!= ZEND_MIR_DEBT_CONTAINER_CLONE_EXECUTION) {
 				return false;
 			}
-		} else if (zend_mir_id_is_valid(plan->result_payload_id)
-				|| (zend_mir_id_is_valid(plan->container_execution_debt)
-					&& plan->container_execution_debt
+		} else if (plan->required == ZEND_MIR_SEPARATION_REQUIRED_NO
+				&& ((zend_mir_id_is_valid(plan->result_payload_id)
+						&& plan->result_payload_id
+							!= plan->source_payload_id)
+					|| zend_mir_id_is_valid(
+						plan->container_execution_debt))) {
+			return false;
+		} else if (plan->required
+					== ZEND_MIR_SEPARATION_REQUIRED_UNKNOWN
+				&& (zend_mir_id_is_valid(plan->result_payload_id)
+					|| plan->container_execution_debt
 						!= ZEND_MIR_DEBT_CONTAINER_CLONE_EXECUTION)) {
 			return false;
 		}
@@ -388,6 +659,16 @@ static bool zend_mir_value_validate_call_transfers(
 						transfer->argument_reference_cell_id)
 					&& transfer->argument_reference_cell_id
 						>= staging->reference_cell_count)
+				|| (zend_mir_id_is_valid(
+						transfer->argument_reference_cell_id)
+					&& (staging->storages[
+							transfer->argument_storage_id].state
+							!= ZEND_MIR_STORAGE_REFERENCE
+						|| staging->storages[
+							transfer->argument_storage_id]
+							.reference_cell_id
+							!= transfer
+								->argument_reference_cell_id))
 				|| transfer->argument_action < ZEND_MIR_TRANSFER_BORROW
 				|| transfer->argument_action
 					> ZEND_MIR_TRANSFER_FROM_CALLEE
@@ -396,6 +677,16 @@ static bool zend_mir_value_validate_call_transfers(
 						transfer->return_reference_cell_id)
 					&& transfer->return_reference_cell_id
 						>= staging->reference_cell_count)
+				|| (zend_mir_id_is_valid(
+						transfer->return_reference_cell_id)
+					&& (staging->storages[
+							transfer->return_storage_id].state
+							!= ZEND_MIR_STORAGE_REFERENCE
+						|| staging->storages[
+							transfer->return_storage_id]
+							.reference_cell_id
+							!= transfer
+								->return_reference_cell_id))
 				|| transfer->return_action < ZEND_MIR_TRANSFER_BORROW
 				|| transfer->return_action
 					> ZEND_MIR_TRANSFER_FROM_CALLEE) {
@@ -412,6 +703,9 @@ static bool zend_mir_value_validate_receipts(
 	const zend_mir_verifier_receipt_ref *first = NULL;
 	uint32_t index;
 
+	if (staging->verifier_receipt_count == 0) {
+		return true;
+	}
 	for (index = 0; index < staging->verifier_receipt_count; index++) {
 		const zend_mir_value_verifier_receipt_ref *wrapped =
 			&staging->verifier_receipts[index];
@@ -457,6 +751,36 @@ static bool zend_mir_value_validate_receipts(
 			|| seen[ZEND_MIR_VERIFIER_CALL_MODEL]);
 }
 
+static bool zend_mir_value_prepare_receipt_table(
+	zend_mir_module *module,
+	const zend_mir_core_value_staging *staging)
+{
+	const uint32_t capacity = UINT32_C(5);
+	zend_mir_core_table *table = &module->value_verifier_receipts;
+	size_t bytes = (size_t) capacity
+		* sizeof(zend_mir_value_verifier_receipt_ref);
+
+	if (staging->verifier_receipt_count > capacity) {
+		return false;
+	}
+	table->items = zend_mir_arena_allocate(
+		&module->arena, bytes, alignof(zend_mir_value_verifier_receipt_ref));
+	if (table->items == NULL) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_ALLOCATION_FAILED,
+			"W06 verifier-receipt reservation failed");
+	}
+	memset(table->items, 0, bytes);
+	if (staging->verifier_receipt_count != 0) {
+		memcpy(table->items, staging->verifier_receipts,
+			(size_t) staging->verifier_receipt_count
+				* sizeof(zend_mir_value_verifier_receipt_ref));
+	}
+	table->count = staging->verifier_receipt_count;
+	table->capacity = capacity;
+	return true;
+}
+
 static bool zend_mir_value_validate_capabilities(
 	const zend_mir_capability_id *capabilities, uint32_t capability_count,
 	const zend_mir_semantic_debt_id *debts, uint32_t debt_count)
@@ -491,6 +815,20 @@ static bool zend_mir_value_validate_capabilities(
 		&& memcmp(capabilities, expected_capabilities,
 			sizeof(expected_capabilities)) == 0
 		&& memcmp(debts, expected_debts, sizeof(expected_debts)) == 0;
+}
+
+static bool zend_mir_value_staging_counts_bounded(
+	const zend_mir_core_value_staging *staging)
+{
+	const uint32_t limit = UINT32_C(1048576);
+	return staging->storage_count <= limit
+		&& staging->payload_count <= limit
+		&& staging->reference_cell_count <= limit
+		&& staging->alias_relation_count <= limit
+		&& staging->ownership_event_count <= limit
+		&& staging->separation_plan_count <= limit
+		&& staging->call_transfer_count <= limit
+		&& staging->verifier_receipt_count <= 5;
 }
 
 static bool zend_mir_value_copy_table(
@@ -530,14 +868,15 @@ bool zend_mir_module_commit_value_model(
 	}
 	staging = &module->value_staging;
 	if (staging->committed
+			|| !zend_mir_value_staging_counts_bounded(staging)
 			|| !zend_mir_value_validate_capabilities(
 				capability_ids, capability_count,
 				semantic_debt_ids, semantic_debt_count)
 			|| !zend_mir_value_validate_payloads(staging)
 			|| !zend_mir_value_validate_storages(staging)
 			|| !zend_mir_value_validate_references(staging)
-			|| !zend_mir_value_validate_aliases(staging)
-			|| !zend_mir_value_validate_events(staging)
+			|| !zend_mir_value_validate_aliases(module, staging)
+			|| !zend_mir_value_validate_events(module, staging)
 			|| !zend_mir_value_validate_separations(staging)
 			|| !zend_mir_value_validate_call_transfers(staging)
 			|| !zend_mir_value_validate_receipts(staging)) {
@@ -565,10 +904,10 @@ bool zend_mir_module_commit_value_model(
 		separation_plan_count, zend_mir_separation_plan_ref)
 	ZEND_MIR_VALUE_COPY(value_call_transfers, call_transfers,
 		call_transfer_count, zend_mir_call_transfer_ref)
-	ZEND_MIR_VALUE_COPY(value_verifier_receipts, verifier_receipts,
-		verifier_receipt_count, zend_mir_value_verifier_receipt_ref)
 #undef ZEND_MIR_VALUE_COPY
-	if (!zend_mir_value_copy_table(module, &module->value_capability_ids,
+	if (!zend_mir_value_prepare_receipt_table(module, staging)
+			|| !zend_mir_value_copy_table(
+				module, &module->value_capability_ids,
 			capability_ids, capability_count,
 			sizeof(*capability_ids), alignof(zend_mir_capability_id))
 			|| !zend_mir_value_copy_table(
@@ -579,6 +918,149 @@ bool zend_mir_module_commit_value_model(
 		return false;
 	}
 	staging->committed = true;
+	return true;
+}
+
+typedef struct _zend_mir_w06_fingerprint_writer {
+	uint32_t words[4];
+} zend_mir_w06_fingerprint_writer;
+
+static void zend_mir_w06_fingerprint_mix(
+	zend_mir_w06_fingerprint_writer *writer, uint32_t value)
+{
+	static const uint32_t domains[4] = {
+		UINT32_C(0x243f6a88), UINT32_C(0x85a308d3),
+		UINT32_C(0x13198a2e), UINT32_C(0x03707344)
+	};
+	uint32_t word;
+	uint32_t byte;
+
+	for (word = 0; word < 4; word++) {
+		uint32_t domain_value = value ^ domains[word];
+		for (byte = 0; byte < 4; byte++) {
+			writer->words[word] ^= domain_value & UINT32_C(0xff);
+			writer->words[word] *= UINT32_C(16777619);
+			domain_value >>= 8;
+		}
+	}
+}
+
+static bool zend_mir_w06_fingerprint_write(
+	void *context, const char *bytes, size_t length)
+{
+	zend_mir_w06_fingerprint_writer *writer = context;
+	size_t index;
+
+	if (writer == NULL || (bytes == NULL && length != 0)) {
+		return false;
+	}
+	for (index = 0; index < length; index++) {
+		zend_mir_w06_fingerprint_mix(
+			writer, (unsigned char) bytes[index]);
+	}
+	return true;
+}
+
+bool zend_mir_value_compute_module_fingerprint(
+	const zend_mir_view *view,
+	zend_mir_diagnostic_sink *diagnostics,
+	uint32_t fingerprint[4])
+{
+	zend_mir_w06_fingerprint_writer digest = {{
+		UINT32_C(2166136261),
+		UINT32_C(3339451269),
+		UINT32_C(2593831049),
+		UINT32_C(1268118805)
+	}};
+	zend_mir_text_writer writer = {
+		&digest, zend_mir_w06_fingerprint_write
+	};
+
+	if (view == NULL || diagnostics == NULL || fingerprint == NULL
+			|| !zend_mir_dump_w05_fingerprint_projection(
+				view, &writer, diagnostics)) {
+		return false;
+	}
+	memcpy(fingerprint, digest.words, sizeof(digest.words));
+	return true;
+}
+
+bool zend_mir_module_publish_w06_verifier_receipts(
+	zend_mir_module *module,
+	const uint32_t module_fingerprint[4],
+	const uint32_t source_fingerprint[4],
+	uint32_t verified_facets)
+{
+	static const zend_mir_verifier_id verifier_ids[] = {
+		ZEND_MIR_VERIFIER_STRUCTURAL,
+		ZEND_MIR_VERIFIER_SCALAR,
+		ZEND_MIR_VERIFIER_CONTROL_FLOW,
+		ZEND_MIR_VERIFIER_CALL_MODEL,
+		ZEND_MIR_VERIFIER_VALUE_REFERENCE
+	};
+	const uint32_t required_without_calls =
+		ZEND_MIR_W06_VERIFIED_STRUCTURAL
+		| ZEND_MIR_W06_VERIFIED_SCALAR
+		| ZEND_MIR_W06_VERIFIED_CONTROL_FLOW
+		| ZEND_MIR_W06_VERIFIED_VALUE_REFERENCE;
+	const uint32_t required_with_calls =
+		required_without_calls | ZEND_MIR_W06_VERIFIED_CALL_MODEL;
+	zend_mir_value_verifier_receipt_ref *receipts;
+	uint32_t required;
+	uint32_t index;
+	uint32_t output = 0;
+
+	if (module == NULL
+			|| module->state != ZEND_MIR_MODULE_FINALIZED
+			|| !module->value_staging.committed
+			|| module_fingerprint == NULL || source_fingerprint == NULL
+			|| module->value_verifier_receipts.count != 0
+			|| module->value_verifier_receipts.capacity < 5
+			|| module->value_verifier_receipts.items == NULL) {
+		return false;
+	}
+	required = module->value_call_transfers.count == 0
+		? required_without_calls : required_with_calls;
+	if (verified_facets != required) {
+		return false;
+	}
+	receipts = ZEND_MIR_CORE_ITEMS(
+		module, value_verifier_receipts,
+		zend_mir_value_verifier_receipt_ref);
+	for (index = 0;
+			index < sizeof(verifier_ids) / sizeof(verifier_ids[0]);
+			index++) {
+		zend_mir_verifier_id verifier = verifier_ids[index];
+		uint32_t facet = UINT32_C(1) << (uint32_t) verifier;
+		zend_mir_verifier_receipt_ref *receipt;
+
+		/*
+		 * Verifier ids are one-based, while the facet bit positions are
+		 * zero-based and deliberately stable.
+		 */
+		facet >>= 1;
+		if ((required & facet) == 0) {
+			continue;
+		}
+		receipts[output].id = output;
+		receipt = &receipts[output].receipt;
+		receipt->verifier_id = verifier;
+		receipt->verifier_contract_version =
+			verifier == ZEND_MIR_VERIFIER_CONTROL_FLOW
+				? ZEND_MIR_W04_CONTRACT_VERSION
+			: verifier == ZEND_MIR_VERIFIER_CALL_MODEL
+				? ZEND_MIR_W05_CONTRACT_VERSION
+			: verifier == ZEND_MIR_VERIFIER_VALUE_REFERENCE
+				? ZEND_MIR_W06_CONTRACT_VERSION
+				: ZEND_MIR_CONTRACT_VERSION;
+		receipt->status = ZEND_MIR_VERIFIER_STATUS_PASS;
+		memcpy(receipt->module_fingerprint, module_fingerprint,
+			sizeof(receipt->module_fingerprint));
+		memcpy(receipt->source_fingerprint, source_fingerprint,
+			sizeof(receipt->source_fingerprint));
+		output++;
+	}
+	module->value_verifier_receipts.count = output;
 	return true;
 }
 
@@ -631,7 +1113,11 @@ zend_mir_alias_relation zend_mir_value_merge_alias_relation(
 			|| right < ZEND_MIR_ALIAS_MUST || right > ZEND_MIR_ALIAS_NONE) {
 		return ZEND_MIR_ALIAS_RELATION_INVALID;
 	}
-	return left == right ? left : ZEND_MIR_ALIAS_MAY;
+	if (left == ZEND_MIR_ALIAS_MUST && right == ZEND_MIR_ALIAS_MUST) {
+		return ZEND_MIR_ALIAS_MUST;
+	}
+	/* A no-alias merge needs a proof that this helper does not carry. */
+	return ZEND_MIR_ALIAS_MAY;
 }
 
 zend_mir_refcount_state zend_mir_value_merge_refcount_state(
@@ -641,7 +1127,16 @@ zend_mir_refcount_state zend_mir_value_merge_refcount_state(
 			|| !zend_mir_value_refcount_valid(right)) {
 		return ZEND_MIR_REFCOUNT_STATE_INVALID;
 	}
-	return left == right ? left : ZEND_MIR_REFCOUNT_UNKNOWN;
+	if (left == right) {
+		return left;
+	}
+	if ((left == ZEND_MIR_REFCOUNT_UNIQUE
+			&& right == ZEND_MIR_REFCOUNT_SHARED)
+			|| (left == ZEND_MIR_REFCOUNT_SHARED
+				&& right == ZEND_MIR_REFCOUNT_UNIQUE)) {
+		return ZEND_MIR_REFCOUNT_SHARED;
+	}
+	return ZEND_MIR_REFCOUNT_UNKNOWN;
 }
 
 bool zend_mir_value_merge_storage_state(
@@ -652,19 +1147,13 @@ bool zend_mir_value_merge_storage_state(
 	if (left == NULL || right == NULL || out == NULL
 			|| left->kind != right->kind
 			|| left->state != right->state
-			|| left->category != right->category) {
+			|| left->category != right->category
+			|| left->payload_id != right->payload_id
+			|| left->reference_cell_id != right->reference_cell_id
+			|| left->indirect_target_id != right->indirect_target_id) {
 		return false;
 	}
 	*out = *left;
 	out->id = ZEND_MIR_ID_INVALID;
-	if (left->payload_id != right->payload_id) {
-		out->payload_id = ZEND_MIR_ID_INVALID;
-	}
-	if (left->reference_cell_id != right->reference_cell_id) {
-		out->reference_cell_id = ZEND_MIR_ID_INVALID;
-	}
-	if (left->indirect_target_id != right->indirect_target_id) {
-		out->indirect_target_id = ZEND_MIR_ID_INVALID;
-	}
 	return true;
 }

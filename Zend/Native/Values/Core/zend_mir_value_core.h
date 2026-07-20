@@ -32,6 +32,29 @@ bool zend_mir_module_commit_value_model(
 	const zend_mir_semantic_debt_id *semantic_debt_ids,
 	uint32_t semantic_debt_count);
 
+enum {
+	ZEND_MIR_W06_VERIFIED_STRUCTURAL = UINT32_C(1) << 0,
+	ZEND_MIR_W06_VERIFIED_SCALAR = UINT32_C(1) << 1,
+	ZEND_MIR_W06_VERIFIED_CONTROL_FLOW = UINT32_C(1) << 2,
+	ZEND_MIR_W06_VERIFIED_CALL_MODEL = UINT32_C(1) << 3,
+	ZEND_MIR_W06_VERIFIED_VALUE_REFERENCE = UINT32_C(1) << 4
+};
+
+bool zend_mir_value_compute_module_fingerprint(
+	const zend_mir_view *view,
+	zend_mir_diagnostic_sink *diagnostics,
+	uint32_t fingerprint[4]);
+bool zend_mir_module_publish_w06_verifier_receipts(
+	zend_mir_module *module,
+	const uint32_t module_fingerprint[4],
+	const uint32_t source_fingerprint[4],
+	uint32_t verified_facets);
+bool zend_mir_value_transition_valid(
+	zend_mir_transfer_action action,
+	zend_mir_refcount_state before_state,
+	zend_mir_refcount_state after_state,
+	bool cleanup_obligation);
+
 zend_mir_alias_relation zend_mir_value_merge_alias_relation(
 	zend_mir_alias_relation left, zend_mir_alias_relation right);
 zend_mir_refcount_state zend_mir_value_merge_refcount_state(

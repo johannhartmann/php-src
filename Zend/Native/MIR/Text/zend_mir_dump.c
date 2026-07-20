@@ -1258,12 +1258,22 @@ static bool zend_mir_dump_value_model(zend_mir_dump_context *dump)
 				|| !zend_mir_dump_literal(dump, " storage ")
 				|| !zend_mir_dump_id(
 					dump, "vs", record.argument_storage_id)
+				|| !zend_mir_dump_literal(
+					dump, " argument-reference ")
+				|| !zend_mir_dump_id(
+					dump, "rc",
+					record.argument_reference_cell_id)
 				|| !zend_mir_dump_literal(dump, " action ")
 				|| !zend_mir_dump_u32(
 					dump, (uint32_t) record.argument_action)
 				|| !zend_mir_dump_literal(dump, " return-storage ")
 				|| !zend_mir_dump_id(
 					dump, "vs", record.return_storage_id)
+				|| !zend_mir_dump_literal(
+					dump, " return-reference ")
+				|| !zend_mir_dump_id(
+					dump, "rc",
+					record.return_reference_cell_id)
 				|| !zend_mir_dump_literal(dump, " return-action ")
 				|| !zend_mir_dump_u32(
 					dump, (uint32_t) record.return_action)
