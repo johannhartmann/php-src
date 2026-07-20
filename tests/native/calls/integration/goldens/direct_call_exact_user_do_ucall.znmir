@@ -1,0 +1,37 @@
+znmir 1.0 module m0
+function f0 symbol s0 entry b0 flags 0x00000000
+block b0 function f0 predecessors [] successors []
+value v2147483648 representation zval ownership owned
+value v2147483649 representation i64 ownership owned
+value v2147483650 representation zval ownership owned
+constant v2147483648 representation zval kind null payload 0x0000000000000000 symbol invalid
+constant v2147483649 representation i64 kind signed_integer_bits payload 0x0000000000000009 symbol invalid
+constant v2147483650 representation zval kind null payload 0x0000000000000000 symbol invalid
+fact vf0 value v2147483648 type null flags 0x00000008 range none provenance literal source p0
+fact vf1 value v2147483649 type i64 flags 0x0000000b range 9:9 provenance literal source p0
+fact vf2 value v2147483650 type null flags 0x00000008 range none provenance literal source p0
+source p0 file s0 line 3 columns 1:1
+source p1 file s0 line 3 columns 1:1
+source p2 file s0 line 3 columns 1:1
+source p3 file s0 line 3 columns 1:1
+slot 0 value v2147483649 index 0 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 1 value invalid index 0 kind pending_call representation execute_data_field materialization undef ownership frame_owned rooted false cleanup false
+slot 2 value v2147483649 index 0 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+frame fs0 function f0 parent invalid function-kind user opline 0 phase before slots 0+0 roots 0+0 cleanups 0+0 return terminal:invalid:invalid exception terminal:invalid:invalid bailout nonlocal_bailout:invalid:invalid suspend none:invalid code-version 1 resume false:none:invalid:invalid:invalid safepoint function_entry canonical true
+frame fs1 function f0 parent invalid function-kind user opline 3 phase before slots 0+0 roots 0+0 cleanups 0+0 return terminal:invalid:invalid exception terminal:invalid:invalid bailout nonlocal_bailout:invalid:invalid suspend none:invalid code-version 1 resume false:none:invalid:invalid:invalid safepoint function_entry canonical true
+frame fs2 function f0 parent invalid function-kind user opline 2 phase before slots 0+2 roots 0+0 cleanups 0+0 return native:invalid:3 exception zend_exception:invalid:2 bailout nonlocal_bailout:invalid:2 suspend none:invalid code-version 1 resume false:none:invalid:invalid:invalid safepoint user_call canonical true
+instruction i0 block b0 opcode statepoint representation void result invalid operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame fs0 source p0
+instruction i1 block b0 opcode constant representation zval result v2147483648 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i2 block b0 opcode constant representation i64 result v2147483649 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i3 block b0 opcode constant representation zval result v2147483650 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i4 block b0 opcode call_direct_user representation void result invalid operands [v2147483649] effects 0x07ff reads 0x00017fff writes 0x00017fff barriers 0x7f ownership-actions 0x0001 frame fs2 source p2
+instruction i5 block b0 opcode return representation void result invalid operands [v2147483650] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame fs1 source p3
+call-target ct0 kind direct_user symbol s1 op-array oa1 args 1 required 1 flags 0x02002200
+call-argument ca0 site cs0 ordinal 0 value v2147483649 ownership borrowed_scalar
+call-continuation cc0 site cs0 kind normal block b0 debt 0x00000000
+call-continuation cc1 site cs0 kind exception_debt block invalid debt 0x00000002
+call-continuation cc2 site cs0 kind bailout_reentry_debt block invalid debt 0x00000004
+call-continuation cc3 site cs0 kind observer_debt block invalid debt 0x00000008
+call-site cs0 source sc0 instruction i4 target ct0 arguments 0+1 result invalid caller frame fs2 function f0 symbol s0 op-array oa0 slots 0+2 pending 1 callee frame invalid function invalid symbol s1 op-array oa1 slots 2+1 pending invalid continuations 0+4 effects 0x07ff reads 0x00017fff writes 0x00017fff barriers 0x7f
+call-receipt cr0 capabilities 0x0000001f debts 0x0000003f modeled true codegen-eligible false
+end

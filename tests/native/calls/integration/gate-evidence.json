@@ -1,0 +1,93 @@
+{
+  "accepted_case_count": 15,
+  "candidate_kind": "debug",
+  "deferred_by_wave": {
+    "W06": 5,
+    "W07": 5,
+    "W08": 3,
+    "W09": 1,
+    "W10": 5,
+    "W15": 3
+  },
+  "deferred_case_count": 22,
+  "determinism_axes": [
+    "repeat-1-through-10",
+    "arena-chunk-size",
+    "opcache-on-off",
+    "call-site-enumeration",
+    "source-identity"
+  ],
+  "diagnostic_coverage": {
+    "MIRL0000": 15,
+    "MIRL0012": 1,
+    "MIRL0015": 1,
+    "MIRL0023": 10,
+    "MIRL0024": 7,
+    "MIRL0025": 1,
+    "MIRL0026": 2
+  },
+  "execution_comparisons": 37,
+  "fault_atomicity": {
+    "argument_table": {
+      "diagnostic": "MIRL0028",
+      "phase": "lowering"
+    },
+    "call_record": {
+      "diagnostic": "MIRL0028",
+      "phase": "lowering"
+    },
+    "call_verifier_failure": {
+      "diagnostic": "MIRL0029",
+      "phase": "lowering"
+    },
+    "compile_bailout": {
+      "diagnostic": "BAILOUT",
+      "phase": "compile"
+    },
+    "dump_failure": {
+      "diagnostic": "MIRV0011",
+      "phase": "dump"
+    },
+    "finalize_failure": {
+      "diagnostic": "MIRL0028",
+      "phase": "lowering"
+    },
+    "frame_state": {
+      "diagnostic": "MIRL0028",
+      "phase": "lowering"
+    },
+    "lower_failure": {
+      "diagnostic": "MIRL0007",
+      "phase": "lowering"
+    },
+    "module_oom": {
+      "diagnostic": "MIRL0007",
+      "phase": "lowering"
+    },
+    "planner_allocation": {
+      "diagnostic": "MIRL0028",
+      "phase": "lowering"
+    },
+    "ssa_failure": {
+      "diagnostic": "SSA0001",
+      "phase": "ssa"
+    },
+    "stage1_verifier_failure": {
+      "diagnostic": "MIRL0009",
+      "phase": "lowering"
+    },
+    "stage2_verifier_failure": {
+      "diagnostic": "MIRL0010",
+      "phase": "lowering"
+    },
+    "target_snapshot": {
+      "diagnostic": "MIRL0028",
+      "phase": "lowering"
+    }
+  },
+  "format_version": "1.0.0",
+  "golden_index_sha256": "f2dc1c657ea34ae880feca539cebd15ac3443818fc4e381f31edf31e46813e78",
+  "mir_executed": false,
+  "normalization": false,
+  "status": "pass"
+}

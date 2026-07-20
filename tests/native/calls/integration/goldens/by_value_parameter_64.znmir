@@ -1,0 +1,541 @@
+znmir 1.0 module m0
+function f0 symbol s0 entry b0 flags 0x00000000
+block b0 function f0 predecessors [] successors []
+value v2147483648 representation zval ownership owned
+value v2147483649 representation i64 ownership owned
+value v2147483650 representation i64 ownership owned
+value v2147483651 representation i64 ownership owned
+value v2147483652 representation i64 ownership owned
+value v2147483653 representation i64 ownership owned
+value v2147483654 representation i64 ownership owned
+value v2147483655 representation i64 ownership owned
+value v2147483656 representation i64 ownership owned
+value v2147483657 representation i64 ownership owned
+value v2147483658 representation i64 ownership owned
+value v2147483659 representation i64 ownership owned
+value v2147483660 representation i64 ownership owned
+value v2147483661 representation i64 ownership owned
+value v2147483662 representation i64 ownership owned
+value v2147483663 representation i64 ownership owned
+value v2147483664 representation i64 ownership owned
+value v2147483665 representation i64 ownership owned
+value v2147483666 representation i64 ownership owned
+value v2147483667 representation i64 ownership owned
+value v2147483668 representation i64 ownership owned
+value v2147483669 representation i64 ownership owned
+value v2147483670 representation i64 ownership owned
+value v2147483671 representation i64 ownership owned
+value v2147483672 representation i64 ownership owned
+value v2147483673 representation i64 ownership owned
+value v2147483674 representation i64 ownership owned
+value v2147483675 representation i64 ownership owned
+value v2147483676 representation i64 ownership owned
+value v2147483677 representation i64 ownership owned
+value v2147483678 representation i64 ownership owned
+value v2147483679 representation i64 ownership owned
+value v2147483680 representation i64 ownership owned
+value v2147483681 representation i64 ownership owned
+value v2147483682 representation i64 ownership owned
+value v2147483683 representation i64 ownership owned
+value v2147483684 representation i64 ownership owned
+value v2147483685 representation i64 ownership owned
+value v2147483686 representation i64 ownership owned
+value v2147483687 representation i64 ownership owned
+value v2147483688 representation i64 ownership owned
+value v2147483689 representation i64 ownership owned
+value v2147483690 representation i64 ownership owned
+value v2147483691 representation i64 ownership owned
+value v2147483692 representation i64 ownership owned
+value v2147483693 representation i64 ownership owned
+value v2147483694 representation i64 ownership owned
+value v2147483695 representation i64 ownership owned
+value v2147483696 representation i64 ownership owned
+value v2147483697 representation i64 ownership owned
+value v2147483698 representation i64 ownership owned
+value v2147483699 representation i64 ownership owned
+value v2147483700 representation i64 ownership owned
+value v2147483701 representation i64 ownership owned
+value v2147483702 representation i64 ownership owned
+value v2147483703 representation i64 ownership owned
+value v2147483704 representation i64 ownership owned
+value v2147483705 representation i64 ownership owned
+value v2147483706 representation i64 ownership owned
+value v2147483707 representation i64 ownership owned
+value v2147483708 representation i64 ownership owned
+value v2147483709 representation i64 ownership owned
+value v2147483710 representation i64 ownership owned
+value v2147483711 representation i64 ownership owned
+value v2147483712 representation i64 ownership owned
+value v2147483713 representation zval ownership owned
+constant v2147483648 representation zval kind null payload 0x0000000000000000 symbol invalid
+constant v2147483649 representation i64 kind signed_integer_bits payload 0x0000000000000001 symbol invalid
+constant v2147483650 representation i64 kind signed_integer_bits payload 0x0000000000000002 symbol invalid
+constant v2147483651 representation i64 kind signed_integer_bits payload 0x0000000000000003 symbol invalid
+constant v2147483652 representation i64 kind signed_integer_bits payload 0x0000000000000004 symbol invalid
+constant v2147483653 representation i64 kind signed_integer_bits payload 0x0000000000000005 symbol invalid
+constant v2147483654 representation i64 kind signed_integer_bits payload 0x0000000000000006 symbol invalid
+constant v2147483655 representation i64 kind signed_integer_bits payload 0x0000000000000007 symbol invalid
+constant v2147483656 representation i64 kind signed_integer_bits payload 0x0000000000000008 symbol invalid
+constant v2147483657 representation i64 kind signed_integer_bits payload 0x0000000000000009 symbol invalid
+constant v2147483658 representation i64 kind signed_integer_bits payload 0x000000000000000a symbol invalid
+constant v2147483659 representation i64 kind signed_integer_bits payload 0x000000000000000b symbol invalid
+constant v2147483660 representation i64 kind signed_integer_bits payload 0x000000000000000c symbol invalid
+constant v2147483661 representation i64 kind signed_integer_bits payload 0x000000000000000d symbol invalid
+constant v2147483662 representation i64 kind signed_integer_bits payload 0x000000000000000e symbol invalid
+constant v2147483663 representation i64 kind signed_integer_bits payload 0x000000000000000f symbol invalid
+constant v2147483664 representation i64 kind signed_integer_bits payload 0x0000000000000010 symbol invalid
+constant v2147483665 representation i64 kind signed_integer_bits payload 0x0000000000000011 symbol invalid
+constant v2147483666 representation i64 kind signed_integer_bits payload 0x0000000000000012 symbol invalid
+constant v2147483667 representation i64 kind signed_integer_bits payload 0x0000000000000013 symbol invalid
+constant v2147483668 representation i64 kind signed_integer_bits payload 0x0000000000000014 symbol invalid
+constant v2147483669 representation i64 kind signed_integer_bits payload 0x0000000000000015 symbol invalid
+constant v2147483670 representation i64 kind signed_integer_bits payload 0x0000000000000016 symbol invalid
+constant v2147483671 representation i64 kind signed_integer_bits payload 0x0000000000000017 symbol invalid
+constant v2147483672 representation i64 kind signed_integer_bits payload 0x0000000000000018 symbol invalid
+constant v2147483673 representation i64 kind signed_integer_bits payload 0x0000000000000019 symbol invalid
+constant v2147483674 representation i64 kind signed_integer_bits payload 0x000000000000001a symbol invalid
+constant v2147483675 representation i64 kind signed_integer_bits payload 0x000000000000001b symbol invalid
+constant v2147483676 representation i64 kind signed_integer_bits payload 0x000000000000001c symbol invalid
+constant v2147483677 representation i64 kind signed_integer_bits payload 0x000000000000001d symbol invalid
+constant v2147483678 representation i64 kind signed_integer_bits payload 0x000000000000001e symbol invalid
+constant v2147483679 representation i64 kind signed_integer_bits payload 0x000000000000001f symbol invalid
+constant v2147483680 representation i64 kind signed_integer_bits payload 0x0000000000000020 symbol invalid
+constant v2147483681 representation i64 kind signed_integer_bits payload 0x0000000000000021 symbol invalid
+constant v2147483682 representation i64 kind signed_integer_bits payload 0x0000000000000022 symbol invalid
+constant v2147483683 representation i64 kind signed_integer_bits payload 0x0000000000000023 symbol invalid
+constant v2147483684 representation i64 kind signed_integer_bits payload 0x0000000000000024 symbol invalid
+constant v2147483685 representation i64 kind signed_integer_bits payload 0x0000000000000025 symbol invalid
+constant v2147483686 representation i64 kind signed_integer_bits payload 0x0000000000000026 symbol invalid
+constant v2147483687 representation i64 kind signed_integer_bits payload 0x0000000000000027 symbol invalid
+constant v2147483688 representation i64 kind signed_integer_bits payload 0x0000000000000028 symbol invalid
+constant v2147483689 representation i64 kind signed_integer_bits payload 0x0000000000000029 symbol invalid
+constant v2147483690 representation i64 kind signed_integer_bits payload 0x000000000000002a symbol invalid
+constant v2147483691 representation i64 kind signed_integer_bits payload 0x000000000000002b symbol invalid
+constant v2147483692 representation i64 kind signed_integer_bits payload 0x000000000000002c symbol invalid
+constant v2147483693 representation i64 kind signed_integer_bits payload 0x000000000000002d symbol invalid
+constant v2147483694 representation i64 kind signed_integer_bits payload 0x000000000000002e symbol invalid
+constant v2147483695 representation i64 kind signed_integer_bits payload 0x000000000000002f symbol invalid
+constant v2147483696 representation i64 kind signed_integer_bits payload 0x0000000000000030 symbol invalid
+constant v2147483697 representation i64 kind signed_integer_bits payload 0x0000000000000031 symbol invalid
+constant v2147483698 representation i64 kind signed_integer_bits payload 0x0000000000000032 symbol invalid
+constant v2147483699 representation i64 kind signed_integer_bits payload 0x0000000000000033 symbol invalid
+constant v2147483700 representation i64 kind signed_integer_bits payload 0x0000000000000034 symbol invalid
+constant v2147483701 representation i64 kind signed_integer_bits payload 0x0000000000000035 symbol invalid
+constant v2147483702 representation i64 kind signed_integer_bits payload 0x0000000000000036 symbol invalid
+constant v2147483703 representation i64 kind signed_integer_bits payload 0x0000000000000037 symbol invalid
+constant v2147483704 representation i64 kind signed_integer_bits payload 0x0000000000000038 symbol invalid
+constant v2147483705 representation i64 kind signed_integer_bits payload 0x0000000000000039 symbol invalid
+constant v2147483706 representation i64 kind signed_integer_bits payload 0x000000000000003a symbol invalid
+constant v2147483707 representation i64 kind signed_integer_bits payload 0x000000000000003b symbol invalid
+constant v2147483708 representation i64 kind signed_integer_bits payload 0x000000000000003c symbol invalid
+constant v2147483709 representation i64 kind signed_integer_bits payload 0x000000000000003d symbol invalid
+constant v2147483710 representation i64 kind signed_integer_bits payload 0x000000000000003e symbol invalid
+constant v2147483711 representation i64 kind signed_integer_bits payload 0x000000000000003f symbol invalid
+constant v2147483712 representation i64 kind signed_integer_bits payload 0x0000000000000040 symbol invalid
+constant v2147483713 representation zval kind null payload 0x0000000000000000 symbol invalid
+fact vf0 value v2147483648 type null flags 0x00000008 range none provenance literal source p0
+fact vf1 value v2147483649 type i64 flags 0x0000000b range 1:1 provenance literal source p0
+fact vf2 value v2147483650 type i64 flags 0x0000000b range 2:2 provenance literal source p0
+fact vf3 value v2147483651 type i64 flags 0x0000000b range 3:3 provenance literal source p0
+fact vf4 value v2147483652 type i64 flags 0x0000000b range 4:4 provenance literal source p0
+fact vf5 value v2147483653 type i64 flags 0x0000000b range 5:5 provenance literal source p0
+fact vf6 value v2147483654 type i64 flags 0x0000000b range 6:6 provenance literal source p0
+fact vf7 value v2147483655 type i64 flags 0x0000000b range 7:7 provenance literal source p0
+fact vf8 value v2147483656 type i64 flags 0x0000000b range 8:8 provenance literal source p0
+fact vf9 value v2147483657 type i64 flags 0x0000000b range 9:9 provenance literal source p0
+fact vf10 value v2147483658 type i64 flags 0x0000000b range 10:10 provenance literal source p0
+fact vf11 value v2147483659 type i64 flags 0x0000000b range 11:11 provenance literal source p0
+fact vf12 value v2147483660 type i64 flags 0x0000000b range 12:12 provenance literal source p0
+fact vf13 value v2147483661 type i64 flags 0x0000000b range 13:13 provenance literal source p0
+fact vf14 value v2147483662 type i64 flags 0x0000000b range 14:14 provenance literal source p0
+fact vf15 value v2147483663 type i64 flags 0x0000000b range 15:15 provenance literal source p0
+fact vf16 value v2147483664 type i64 flags 0x0000000b range 16:16 provenance literal source p0
+fact vf17 value v2147483665 type i64 flags 0x0000000b range 17:17 provenance literal source p0
+fact vf18 value v2147483666 type i64 flags 0x0000000b range 18:18 provenance literal source p0
+fact vf19 value v2147483667 type i64 flags 0x0000000b range 19:19 provenance literal source p0
+fact vf20 value v2147483668 type i64 flags 0x0000000b range 20:20 provenance literal source p0
+fact vf21 value v2147483669 type i64 flags 0x0000000b range 21:21 provenance literal source p0
+fact vf22 value v2147483670 type i64 flags 0x0000000b range 22:22 provenance literal source p0
+fact vf23 value v2147483671 type i64 flags 0x0000000b range 23:23 provenance literal source p0
+fact vf24 value v2147483672 type i64 flags 0x0000000b range 24:24 provenance literal source p0
+fact vf25 value v2147483673 type i64 flags 0x0000000b range 25:25 provenance literal source p0
+fact vf26 value v2147483674 type i64 flags 0x0000000b range 26:26 provenance literal source p0
+fact vf27 value v2147483675 type i64 flags 0x0000000b range 27:27 provenance literal source p0
+fact vf28 value v2147483676 type i64 flags 0x0000000b range 28:28 provenance literal source p0
+fact vf29 value v2147483677 type i64 flags 0x0000000b range 29:29 provenance literal source p0
+fact vf30 value v2147483678 type i64 flags 0x0000000b range 30:30 provenance literal source p0
+fact vf31 value v2147483679 type i64 flags 0x0000000b range 31:31 provenance literal source p0
+fact vf32 value v2147483680 type i64 flags 0x0000000b range 32:32 provenance literal source p0
+fact vf33 value v2147483681 type i64 flags 0x0000000b range 33:33 provenance literal source p0
+fact vf34 value v2147483682 type i64 flags 0x0000000b range 34:34 provenance literal source p0
+fact vf35 value v2147483683 type i64 flags 0x0000000b range 35:35 provenance literal source p0
+fact vf36 value v2147483684 type i64 flags 0x0000000b range 36:36 provenance literal source p0
+fact vf37 value v2147483685 type i64 flags 0x0000000b range 37:37 provenance literal source p0
+fact vf38 value v2147483686 type i64 flags 0x0000000b range 38:38 provenance literal source p0
+fact vf39 value v2147483687 type i64 flags 0x0000000b range 39:39 provenance literal source p0
+fact vf40 value v2147483688 type i64 flags 0x0000000b range 40:40 provenance literal source p0
+fact vf41 value v2147483689 type i64 flags 0x0000000b range 41:41 provenance literal source p0
+fact vf42 value v2147483690 type i64 flags 0x0000000b range 42:42 provenance literal source p0
+fact vf43 value v2147483691 type i64 flags 0x0000000b range 43:43 provenance literal source p0
+fact vf44 value v2147483692 type i64 flags 0x0000000b range 44:44 provenance literal source p0
+fact vf45 value v2147483693 type i64 flags 0x0000000b range 45:45 provenance literal source p0
+fact vf46 value v2147483694 type i64 flags 0x0000000b range 46:46 provenance literal source p0
+fact vf47 value v2147483695 type i64 flags 0x0000000b range 47:47 provenance literal source p0
+fact vf48 value v2147483696 type i64 flags 0x0000000b range 48:48 provenance literal source p0
+fact vf49 value v2147483697 type i64 flags 0x0000000b range 49:49 provenance literal source p0
+fact vf50 value v2147483698 type i64 flags 0x0000000b range 50:50 provenance literal source p0
+fact vf51 value v2147483699 type i64 flags 0x0000000b range 51:51 provenance literal source p0
+fact vf52 value v2147483700 type i64 flags 0x0000000b range 52:52 provenance literal source p0
+fact vf53 value v2147483701 type i64 flags 0x0000000b range 53:53 provenance literal source p0
+fact vf54 value v2147483702 type i64 flags 0x0000000b range 54:54 provenance literal source p0
+fact vf55 value v2147483703 type i64 flags 0x0000000b range 55:55 provenance literal source p0
+fact vf56 value v2147483704 type i64 flags 0x0000000b range 56:56 provenance literal source p0
+fact vf57 value v2147483705 type i64 flags 0x0000000b range 57:57 provenance literal source p0
+fact vf58 value v2147483706 type i64 flags 0x0000000b range 58:58 provenance literal source p0
+fact vf59 value v2147483707 type i64 flags 0x0000000b range 59:59 provenance literal source p0
+fact vf60 value v2147483708 type i64 flags 0x0000000b range 60:60 provenance literal source p0
+fact vf61 value v2147483709 type i64 flags 0x0000000b range 61:61 provenance literal source p0
+fact vf62 value v2147483710 type i64 flags 0x0000000b range 62:62 provenance literal source p0
+fact vf63 value v2147483711 type i64 flags 0x0000000b range 63:63 provenance literal source p0
+fact vf64 value v2147483712 type i64 flags 0x0000000b range 64:64 provenance literal source p0
+fact vf65 value v2147483713 type null flags 0x00000008 range none provenance literal source p0
+source p0 file s0 line 13 columns 1:1
+source p1 file s0 line 14 columns 1:1
+source p2 file s0 line 14 columns 1:1
+source p3 file s0 line 14 columns 1:1
+source p4 file s0 line 14 columns 1:1
+source p5 file s0 line 14 columns 1:1
+source p6 file s0 line 14 columns 1:1
+source p7 file s0 line 14 columns 1:1
+source p8 file s0 line 14 columns 1:1
+source p9 file s0 line 15 columns 1:1
+source p10 file s0 line 15 columns 1:1
+source p11 file s0 line 15 columns 1:1
+source p12 file s0 line 15 columns 1:1
+source p13 file s0 line 15 columns 1:1
+source p14 file s0 line 15 columns 1:1
+source p15 file s0 line 15 columns 1:1
+source p16 file s0 line 15 columns 1:1
+source p17 file s0 line 16 columns 1:1
+source p18 file s0 line 16 columns 1:1
+source p19 file s0 line 16 columns 1:1
+source p20 file s0 line 16 columns 1:1
+source p21 file s0 line 16 columns 1:1
+source p22 file s0 line 16 columns 1:1
+source p23 file s0 line 16 columns 1:1
+source p24 file s0 line 16 columns 1:1
+source p25 file s0 line 17 columns 1:1
+source p26 file s0 line 17 columns 1:1
+source p27 file s0 line 17 columns 1:1
+source p28 file s0 line 17 columns 1:1
+source p29 file s0 line 17 columns 1:1
+source p30 file s0 line 17 columns 1:1
+source p31 file s0 line 17 columns 1:1
+source p32 file s0 line 17 columns 1:1
+source p33 file s0 line 18 columns 1:1
+source p34 file s0 line 18 columns 1:1
+source p35 file s0 line 18 columns 1:1
+source p36 file s0 line 18 columns 1:1
+source p37 file s0 line 18 columns 1:1
+source p38 file s0 line 18 columns 1:1
+source p39 file s0 line 18 columns 1:1
+source p40 file s0 line 18 columns 1:1
+source p41 file s0 line 19 columns 1:1
+source p42 file s0 line 19 columns 1:1
+source p43 file s0 line 19 columns 1:1
+source p44 file s0 line 19 columns 1:1
+source p45 file s0 line 19 columns 1:1
+source p46 file s0 line 19 columns 1:1
+source p47 file s0 line 19 columns 1:1
+source p48 file s0 line 19 columns 1:1
+source p49 file s0 line 20 columns 1:1
+source p50 file s0 line 20 columns 1:1
+source p51 file s0 line 20 columns 1:1
+source p52 file s0 line 20 columns 1:1
+source p53 file s0 line 20 columns 1:1
+source p54 file s0 line 20 columns 1:1
+source p55 file s0 line 20 columns 1:1
+source p56 file s0 line 20 columns 1:1
+source p57 file s0 line 21 columns 1:1
+source p58 file s0 line 21 columns 1:1
+source p59 file s0 line 21 columns 1:1
+source p60 file s0 line 21 columns 1:1
+source p61 file s0 line 21 columns 1:1
+source p62 file s0 line 21 columns 1:1
+source p63 file s0 line 21 columns 1:1
+source p64 file s0 line 21 columns 1:1
+source p65 file s0 line 13 columns 1:1
+source p66 file s0 line 23 columns 1:1
+slot 0 value v2147483649 index 0 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 1 value v2147483650 index 1 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 2 value v2147483651 index 2 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 3 value v2147483652 index 3 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 4 value v2147483653 index 4 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 5 value v2147483654 index 5 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 6 value v2147483655 index 6 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 7 value v2147483656 index 7 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 8 value v2147483657 index 8 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 9 value v2147483658 index 9 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 10 value v2147483659 index 10 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 11 value v2147483660 index 11 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 12 value v2147483661 index 12 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 13 value v2147483662 index 13 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 14 value v2147483663 index 14 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 15 value v2147483664 index 15 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 16 value v2147483665 index 16 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 17 value v2147483666 index 17 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 18 value v2147483667 index 18 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 19 value v2147483668 index 19 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 20 value v2147483669 index 20 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 21 value v2147483670 index 21 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 22 value v2147483671 index 22 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 23 value v2147483672 index 23 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 24 value v2147483673 index 24 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 25 value v2147483674 index 25 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 26 value v2147483675 index 26 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 27 value v2147483676 index 27 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 28 value v2147483677 index 28 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 29 value v2147483678 index 29 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 30 value v2147483679 index 30 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 31 value v2147483680 index 31 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 32 value v2147483681 index 32 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 33 value v2147483682 index 33 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 34 value v2147483683 index 34 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 35 value v2147483684 index 35 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 36 value v2147483685 index 36 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 37 value v2147483686 index 37 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 38 value v2147483687 index 38 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 39 value v2147483688 index 39 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 40 value v2147483689 index 40 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 41 value v2147483690 index 41 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 42 value v2147483691 index 42 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 43 value v2147483692 index 43 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 44 value v2147483693 index 44 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 45 value v2147483694 index 45 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 46 value v2147483695 index 46 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 47 value v2147483696 index 47 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 48 value v2147483697 index 48 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 49 value v2147483698 index 49 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 50 value v2147483699 index 50 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 51 value v2147483700 index 51 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 52 value v2147483701 index 52 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 53 value v2147483702 index 53 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 54 value v2147483703 index 54 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 55 value v2147483704 index 55 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 56 value v2147483705 index 56 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 57 value v2147483706 index 57 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 58 value v2147483707 index 58 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 59 value v2147483708 index 59 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 60 value v2147483709 index 60 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 61 value v2147483710 index 61 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 62 value v2147483711 index 62 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 63 value v2147483712 index 63 kind argument representation canonical_zval materialization materialized ownership caller_owned rooted false cleanup false
+slot 64 value invalid index 0 kind pending_call representation execute_data_field materialization undef ownership frame_owned rooted false cleanup false
+slot 65 value v2147483649 index 0 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 66 value v2147483650 index 1 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 67 value v2147483651 index 2 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 68 value v2147483652 index 3 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 69 value v2147483653 index 4 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 70 value v2147483654 index 5 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 71 value v2147483655 index 6 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 72 value v2147483656 index 7 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 73 value v2147483657 index 8 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 74 value v2147483658 index 9 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 75 value v2147483659 index 10 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 76 value v2147483660 index 11 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 77 value v2147483661 index 12 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 78 value v2147483662 index 13 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 79 value v2147483663 index 14 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 80 value v2147483664 index 15 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 81 value v2147483665 index 16 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 82 value v2147483666 index 17 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 83 value v2147483667 index 18 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 84 value v2147483668 index 19 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 85 value v2147483669 index 20 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 86 value v2147483670 index 21 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 87 value v2147483671 index 22 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 88 value v2147483672 index 23 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 89 value v2147483673 index 24 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 90 value v2147483674 index 25 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 91 value v2147483675 index 26 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 92 value v2147483676 index 27 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 93 value v2147483677 index 28 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 94 value v2147483678 index 29 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 95 value v2147483679 index 30 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 96 value v2147483680 index 31 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 97 value v2147483681 index 32 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 98 value v2147483682 index 33 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 99 value v2147483683 index 34 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 100 value v2147483684 index 35 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 101 value v2147483685 index 36 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 102 value v2147483686 index 37 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 103 value v2147483687 index 38 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 104 value v2147483688 index 39 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 105 value v2147483689 index 40 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 106 value v2147483690 index 41 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 107 value v2147483691 index 42 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 108 value v2147483692 index 43 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 109 value v2147483693 index 44 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 110 value v2147483694 index 45 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 111 value v2147483695 index 46 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 112 value v2147483696 index 47 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 113 value v2147483697 index 48 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 114 value v2147483698 index 49 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 115 value v2147483699 index 50 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 116 value v2147483700 index 51 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 117 value v2147483701 index 52 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 118 value v2147483702 index 53 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 119 value v2147483703 index 54 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 120 value v2147483704 index 55 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 121 value v2147483705 index 56 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 122 value v2147483706 index 57 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 123 value v2147483707 index 58 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 124 value v2147483708 index 59 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 125 value v2147483709 index 60 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 126 value v2147483710 index 61 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 127 value v2147483711 index 62 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+slot 128 value v2147483712 index 63 kind argument representation canonical_zval materialization materialized ownership borrowed rooted false cleanup false
+frame fs0 function f0 parent invalid function-kind user opline 0 phase before slots 0+0 roots 0+0 cleanups 0+0 return terminal:invalid:invalid exception terminal:invalid:invalid bailout nonlocal_bailout:invalid:invalid suspend none:invalid code-version 1 resume false:none:invalid:invalid:invalid safepoint function_entry canonical true
+frame fs1 function f0 parent invalid function-kind user opline 66 phase before slots 0+0 roots 0+0 cleanups 0+0 return terminal:invalid:invalid exception terminal:invalid:invalid bailout nonlocal_bailout:invalid:invalid suspend none:invalid code-version 1 resume false:none:invalid:invalid:invalid safepoint function_entry canonical true
+frame fs2 function f0 parent invalid function-kind user opline 65 phase before slots 0+65 roots 0+0 cleanups 0+0 return native:invalid:66 exception zend_exception:invalid:65 bailout nonlocal_bailout:invalid:65 suspend none:invalid code-version 1 resume false:none:invalid:invalid:invalid safepoint user_call canonical true
+instruction i0 block b0 opcode statepoint representation void result invalid operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame fs0 source p0
+instruction i1 block b0 opcode constant representation zval result v2147483648 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i2 block b0 opcode constant representation i64 result v2147483649 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i3 block b0 opcode constant representation i64 result v2147483650 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i4 block b0 opcode constant representation i64 result v2147483651 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i5 block b0 opcode constant representation i64 result v2147483652 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i6 block b0 opcode constant representation i64 result v2147483653 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i7 block b0 opcode constant representation i64 result v2147483654 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i8 block b0 opcode constant representation i64 result v2147483655 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i9 block b0 opcode constant representation i64 result v2147483656 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i10 block b0 opcode constant representation i64 result v2147483657 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i11 block b0 opcode constant representation i64 result v2147483658 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i12 block b0 opcode constant representation i64 result v2147483659 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i13 block b0 opcode constant representation i64 result v2147483660 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i14 block b0 opcode constant representation i64 result v2147483661 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i15 block b0 opcode constant representation i64 result v2147483662 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i16 block b0 opcode constant representation i64 result v2147483663 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i17 block b0 opcode constant representation i64 result v2147483664 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i18 block b0 opcode constant representation i64 result v2147483665 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i19 block b0 opcode constant representation i64 result v2147483666 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i20 block b0 opcode constant representation i64 result v2147483667 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i21 block b0 opcode constant representation i64 result v2147483668 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i22 block b0 opcode constant representation i64 result v2147483669 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i23 block b0 opcode constant representation i64 result v2147483670 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i24 block b0 opcode constant representation i64 result v2147483671 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i25 block b0 opcode constant representation i64 result v2147483672 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i26 block b0 opcode constant representation i64 result v2147483673 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i27 block b0 opcode constant representation i64 result v2147483674 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i28 block b0 opcode constant representation i64 result v2147483675 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i29 block b0 opcode constant representation i64 result v2147483676 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i30 block b0 opcode constant representation i64 result v2147483677 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i31 block b0 opcode constant representation i64 result v2147483678 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i32 block b0 opcode constant representation i64 result v2147483679 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i33 block b0 opcode constant representation i64 result v2147483680 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i34 block b0 opcode constant representation i64 result v2147483681 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i35 block b0 opcode constant representation i64 result v2147483682 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i36 block b0 opcode constant representation i64 result v2147483683 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i37 block b0 opcode constant representation i64 result v2147483684 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i38 block b0 opcode constant representation i64 result v2147483685 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i39 block b0 opcode constant representation i64 result v2147483686 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i40 block b0 opcode constant representation i64 result v2147483687 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i41 block b0 opcode constant representation i64 result v2147483688 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i42 block b0 opcode constant representation i64 result v2147483689 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i43 block b0 opcode constant representation i64 result v2147483690 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i44 block b0 opcode constant representation i64 result v2147483691 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i45 block b0 opcode constant representation i64 result v2147483692 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i46 block b0 opcode constant representation i64 result v2147483693 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i47 block b0 opcode constant representation i64 result v2147483694 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i48 block b0 opcode constant representation i64 result v2147483695 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i49 block b0 opcode constant representation i64 result v2147483696 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i50 block b0 opcode constant representation i64 result v2147483697 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i51 block b0 opcode constant representation i64 result v2147483698 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i52 block b0 opcode constant representation i64 result v2147483699 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i53 block b0 opcode constant representation i64 result v2147483700 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i54 block b0 opcode constant representation i64 result v2147483701 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i55 block b0 opcode constant representation i64 result v2147483702 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i56 block b0 opcode constant representation i64 result v2147483703 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i57 block b0 opcode constant representation i64 result v2147483704 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i58 block b0 opcode constant representation i64 result v2147483705 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i59 block b0 opcode constant representation i64 result v2147483706 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i60 block b0 opcode constant representation i64 result v2147483707 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i61 block b0 opcode constant representation i64 result v2147483708 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i62 block b0 opcode constant representation i64 result v2147483709 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i63 block b0 opcode constant representation i64 result v2147483710 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i64 block b0 opcode constant representation i64 result v2147483711 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i65 block b0 opcode constant representation i64 result v2147483712 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i66 block b0 opcode constant representation zval result v2147483713 operands [] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame invalid source p0
+instruction i67 block b0 opcode call_direct_user representation void result invalid operands [v2147483649, v2147483650, v2147483651, v2147483652, v2147483653, v2147483654, v2147483655, v2147483656, v2147483657, v2147483658, v2147483659, v2147483660, v2147483661, v2147483662, v2147483663, v2147483664, v2147483665, v2147483666, v2147483667, v2147483668, v2147483669, v2147483670, v2147483671, v2147483672, v2147483673, v2147483674, v2147483675, v2147483676, v2147483677, v2147483678, v2147483679, v2147483680, v2147483681, v2147483682, v2147483683, v2147483684, v2147483685, v2147483686, v2147483687, v2147483688, v2147483689, v2147483690, v2147483691, v2147483692, v2147483693, v2147483694, v2147483695, v2147483696, v2147483697, v2147483698, v2147483699, v2147483700, v2147483701, v2147483702, v2147483703, v2147483704, v2147483705, v2147483706, v2147483707, v2147483708, v2147483709, v2147483710, v2147483711, v2147483712] effects 0x07ff reads 0x00017fff writes 0x00017fff barriers 0x7f ownership-actions 0x0001 frame fs2 source p65
+instruction i68 block b0 opcode return representation void result invalid operands [v2147483713] effects 0x0000 reads 0x00000000 writes 0x00000000 barriers 0x00 ownership-actions 0x0000 frame fs1 source p66
+call-target ct0 kind direct_user symbol s1 op-array oa1 args 64 required 64 flags 0x02002200
+call-argument ca0 site cs0 ordinal 0 value v2147483649 ownership borrowed_scalar
+call-argument ca1 site cs0 ordinal 1 value v2147483650 ownership borrowed_scalar
+call-argument ca2 site cs0 ordinal 2 value v2147483651 ownership borrowed_scalar
+call-argument ca3 site cs0 ordinal 3 value v2147483652 ownership borrowed_scalar
+call-argument ca4 site cs0 ordinal 4 value v2147483653 ownership borrowed_scalar
+call-argument ca5 site cs0 ordinal 5 value v2147483654 ownership borrowed_scalar
+call-argument ca6 site cs0 ordinal 6 value v2147483655 ownership borrowed_scalar
+call-argument ca7 site cs0 ordinal 7 value v2147483656 ownership borrowed_scalar
+call-argument ca8 site cs0 ordinal 8 value v2147483657 ownership borrowed_scalar
+call-argument ca9 site cs0 ordinal 9 value v2147483658 ownership borrowed_scalar
+call-argument ca10 site cs0 ordinal 10 value v2147483659 ownership borrowed_scalar
+call-argument ca11 site cs0 ordinal 11 value v2147483660 ownership borrowed_scalar
+call-argument ca12 site cs0 ordinal 12 value v2147483661 ownership borrowed_scalar
+call-argument ca13 site cs0 ordinal 13 value v2147483662 ownership borrowed_scalar
+call-argument ca14 site cs0 ordinal 14 value v2147483663 ownership borrowed_scalar
+call-argument ca15 site cs0 ordinal 15 value v2147483664 ownership borrowed_scalar
+call-argument ca16 site cs0 ordinal 16 value v2147483665 ownership borrowed_scalar
+call-argument ca17 site cs0 ordinal 17 value v2147483666 ownership borrowed_scalar
+call-argument ca18 site cs0 ordinal 18 value v2147483667 ownership borrowed_scalar
+call-argument ca19 site cs0 ordinal 19 value v2147483668 ownership borrowed_scalar
+call-argument ca20 site cs0 ordinal 20 value v2147483669 ownership borrowed_scalar
+call-argument ca21 site cs0 ordinal 21 value v2147483670 ownership borrowed_scalar
+call-argument ca22 site cs0 ordinal 22 value v2147483671 ownership borrowed_scalar
+call-argument ca23 site cs0 ordinal 23 value v2147483672 ownership borrowed_scalar
+call-argument ca24 site cs0 ordinal 24 value v2147483673 ownership borrowed_scalar
+call-argument ca25 site cs0 ordinal 25 value v2147483674 ownership borrowed_scalar
+call-argument ca26 site cs0 ordinal 26 value v2147483675 ownership borrowed_scalar
+call-argument ca27 site cs0 ordinal 27 value v2147483676 ownership borrowed_scalar
+call-argument ca28 site cs0 ordinal 28 value v2147483677 ownership borrowed_scalar
+call-argument ca29 site cs0 ordinal 29 value v2147483678 ownership borrowed_scalar
+call-argument ca30 site cs0 ordinal 30 value v2147483679 ownership borrowed_scalar
+call-argument ca31 site cs0 ordinal 31 value v2147483680 ownership borrowed_scalar
+call-argument ca32 site cs0 ordinal 32 value v2147483681 ownership borrowed_scalar
+call-argument ca33 site cs0 ordinal 33 value v2147483682 ownership borrowed_scalar
+call-argument ca34 site cs0 ordinal 34 value v2147483683 ownership borrowed_scalar
+call-argument ca35 site cs0 ordinal 35 value v2147483684 ownership borrowed_scalar
+call-argument ca36 site cs0 ordinal 36 value v2147483685 ownership borrowed_scalar
+call-argument ca37 site cs0 ordinal 37 value v2147483686 ownership borrowed_scalar
+call-argument ca38 site cs0 ordinal 38 value v2147483687 ownership borrowed_scalar
+call-argument ca39 site cs0 ordinal 39 value v2147483688 ownership borrowed_scalar
+call-argument ca40 site cs0 ordinal 40 value v2147483689 ownership borrowed_scalar
+call-argument ca41 site cs0 ordinal 41 value v2147483690 ownership borrowed_scalar
+call-argument ca42 site cs0 ordinal 42 value v2147483691 ownership borrowed_scalar
+call-argument ca43 site cs0 ordinal 43 value v2147483692 ownership borrowed_scalar
+call-argument ca44 site cs0 ordinal 44 value v2147483693 ownership borrowed_scalar
+call-argument ca45 site cs0 ordinal 45 value v2147483694 ownership borrowed_scalar
+call-argument ca46 site cs0 ordinal 46 value v2147483695 ownership borrowed_scalar
+call-argument ca47 site cs0 ordinal 47 value v2147483696 ownership borrowed_scalar
+call-argument ca48 site cs0 ordinal 48 value v2147483697 ownership borrowed_scalar
+call-argument ca49 site cs0 ordinal 49 value v2147483698 ownership borrowed_scalar
+call-argument ca50 site cs0 ordinal 50 value v2147483699 ownership borrowed_scalar
+call-argument ca51 site cs0 ordinal 51 value v2147483700 ownership borrowed_scalar
+call-argument ca52 site cs0 ordinal 52 value v2147483701 ownership borrowed_scalar
+call-argument ca53 site cs0 ordinal 53 value v2147483702 ownership borrowed_scalar
+call-argument ca54 site cs0 ordinal 54 value v2147483703 ownership borrowed_scalar
+call-argument ca55 site cs0 ordinal 55 value v2147483704 ownership borrowed_scalar
+call-argument ca56 site cs0 ordinal 56 value v2147483705 ownership borrowed_scalar
+call-argument ca57 site cs0 ordinal 57 value v2147483706 ownership borrowed_scalar
+call-argument ca58 site cs0 ordinal 58 value v2147483707 ownership borrowed_scalar
+call-argument ca59 site cs0 ordinal 59 value v2147483708 ownership borrowed_scalar
+call-argument ca60 site cs0 ordinal 60 value v2147483709 ownership borrowed_scalar
+call-argument ca61 site cs0 ordinal 61 value v2147483710 ownership borrowed_scalar
+call-argument ca62 site cs0 ordinal 62 value v2147483711 ownership borrowed_scalar
+call-argument ca63 site cs0 ordinal 63 value v2147483712 ownership borrowed_scalar
+call-continuation cc0 site cs0 kind normal block b0 debt 0x00000000
+call-continuation cc1 site cs0 kind exception_debt block invalid debt 0x00000002
+call-continuation cc2 site cs0 kind bailout_reentry_debt block invalid debt 0x00000004
+call-continuation cc3 site cs0 kind observer_debt block invalid debt 0x00000008
+call-site cs0 source sc0 instruction i67 target ct0 arguments 0+64 result invalid caller frame fs2 function f0 symbol s0 op-array oa0 slots 0+65 pending 64 callee frame invalid function invalid symbol s1 op-array oa1 slots 65+64 pending invalid continuations 0+4 effects 0x07ff reads 0x00017fff writes 0x00017fff barriers 0x7f
+call-receipt cr0 capabilities 0x0000001f debts 0x0000003f modeled true codegen-eligible false
+end
