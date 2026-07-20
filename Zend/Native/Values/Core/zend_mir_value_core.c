@@ -639,58 +639,130 @@ static bool zend_mir_value_validate_separations(
 	return true;
 }
 
+static bool zend_mir_value_validate_call_transfer_storage(
+	const zend_mir_core_value_staging *staging,
+	const zend_mir_call_transfer_ref *transfer)
+{
+	const zend_mir_storage_ref *argument_storage;
+	const zend_mir_storage_ref *return_storage;
+	bool argument_is_reference;
+	bool return_is_reference;
+
+	if (transfer->argument_storage_id >= staging->storage_count
+			|| transfer->return_storage_id >= staging->storage_count) {
+		return false;
+	}
+	argument_storage = &staging->storages[transfer->argument_storage_id];
+	return_storage = &staging->storages[transfer->return_storage_id];
+	argument_is_reference =
+		argument_storage->state == ZEND_MIR_STORAGE_REFERENCE;
+	return_is_reference = return_storage->state == ZEND_MIR_STORAGE_REFERENCE;
+	return argument_is_reference
+			== zend_mir_id_is_valid(transfer->argument_reference_cell_id)
+		&& (!argument_is_reference
+			|| (transfer->argument_reference_cell_id
+					< staging->reference_cell_count
+				&& argument_storage->reference_cell_id
+					== transfer->argument_reference_cell_id))
+		&& (argument_is_reference
+			? transfer->argument_action == ZEND_MIR_TRANSFER_TO_CALLEE
+			: argument_storage->category
+					== ZEND_MIR_VALUE_NON_REFCOUNTED_SCALAR
+				? transfer->argument_action == ZEND_MIR_TRANSFER_BORROW
+				: transfer->argument_action
+					== ZEND_MIR_TRANSFER_COPY_ADDREF)
+		&& return_storage->kind == ZEND_MIR_STORAGE_CALL_RETURN_SLOT
+		&& return_is_reference
+			== zend_mir_id_is_valid(transfer->return_reference_cell_id)
+		&& (!return_is_reference
+			|| (transfer->return_reference_cell_id
+					< staging->reference_cell_count
+				&& return_storage->reference_cell_id
+					== transfer->return_reference_cell_id))
+		&& transfer->return_action == ZEND_MIR_TRANSFER_FROM_CALLEE;
+}
+
 static bool zend_mir_value_validate_call_transfers(
+	const zend_mir_module *module,
 	const zend_mir_core_value_staging *staging)
 {
+	const zend_mir_call_site_ref *sites;
+	const zend_mir_call_argument_ref *arguments;
+	const zend_mir_call_target_ref *targets;
+	const zend_mir_semantic_debt_id *debts;
 	uint32_t index;
 
+	if (!module->call_staging.committed) {
+		return staging->call_transfer_count == 0;
+	}
+	if (staging->call_transfer_count != module->call_arguments.count
+			|| module->call_sites.items == NULL
+			|| (module->call_arguments.count != 0
+				&& module->call_arguments.items == NULL)
+			|| module->call_targets.items == NULL
+			|| module->semantic_debt_ids.count <= 2
+			|| module->semantic_debt_ids.items == NULL) {
+		return false;
+	}
+	sites = ZEND_MIR_CORE_ITEMS(
+		module, call_sites, zend_mir_call_site_ref);
+	arguments = ZEND_MIR_CORE_ITEMS(
+		module, call_arguments, zend_mir_call_argument_ref);
+	targets = ZEND_MIR_CORE_ITEMS(
+		module, call_targets, zend_mir_call_target_ref);
+	debts = ZEND_MIR_CORE_ITEMS(
+		module, semantic_debt_ids, zend_mir_semantic_debt_id);
 	for (index = 0; index < staging->call_transfer_count; index++) {
 		const zend_mir_call_transfer_ref *transfer =
 			&staging->call_transfers[index];
-		if (!zend_mir_id_is_valid(transfer->call_site_id)
-				|| transfer->parameter_modes.count == 0
+		const zend_mir_call_argument_ref *argument = &arguments[index];
+		const zend_mir_call_site_ref *site;
+		const zend_mir_call_target_ref *target;
+		uint32_t site_first_transfer;
+
+		if (argument->id != index
+				|| argument->call_site_id >= module->call_sites.count) {
+			return false;
+		}
+		site = &sites[argument->call_site_id];
+		if (site->id != argument->call_site_id
+				|| site->target_id >= module->call_targets.count
+				|| site->arguments.offset > index
+				|| argument->ordinal >= site->arguments.count
+				|| site->arguments.offset + argument->ordinal != index
+				|| transfer->call_site_id != site->id
+				|| transfer->argument_ordinal != argument->ordinal) {
+			return false;
+		}
+		target = &targets[site->target_id];
+		if (target->id != site->target_id
+				|| transfer->parameter_modes.count != target->num_args
+				|| argument->ordinal >= transfer->parameter_modes.count
 				|| transfer->parameter_modes.offset
 					> UINT32_MAX - transfer->parameter_modes.count
-				|| transfer->resolved_debt_ids.offset
-					> UINT32_MAX - transfer->resolved_debt_ids.count
-				|| transfer->argument_storage_id
-					>= staging->storage_count
-				|| (zend_mir_id_is_valid(
-						transfer->argument_reference_cell_id)
-					&& transfer->argument_reference_cell_id
-						>= staging->reference_cell_count)
-				|| (zend_mir_id_is_valid(
-						transfer->argument_reference_cell_id)
-					&& (staging->storages[
-							transfer->argument_storage_id].state
-							!= ZEND_MIR_STORAGE_REFERENCE
-						|| staging->storages[
-							transfer->argument_storage_id]
-							.reference_cell_id
-							!= transfer
-								->argument_reference_cell_id))
-				|| transfer->argument_action < ZEND_MIR_TRANSFER_BORROW
-				|| transfer->argument_action
-					> ZEND_MIR_TRANSFER_FROM_CALLEE
-				|| transfer->return_storage_id >= staging->storage_count
-				|| (zend_mir_id_is_valid(
-						transfer->return_reference_cell_id)
-					&& transfer->return_reference_cell_id
-						>= staging->reference_cell_count)
-				|| (zend_mir_id_is_valid(
-						transfer->return_reference_cell_id)
-					&& (staging->storages[
-							transfer->return_storage_id].state
-							!= ZEND_MIR_STORAGE_REFERENCE
-						|| staging->storages[
-							transfer->return_storage_id]
-							.reference_cell_id
-							!= transfer
-								->return_reference_cell_id))
-				|| transfer->return_action < ZEND_MIR_TRANSFER_BORROW
-				|| transfer->return_action
-					> ZEND_MIR_TRANSFER_FROM_CALLEE) {
+				|| transfer->resolved_debt_ids.offset != 2
+				|| transfer->resolved_debt_ids.count != 1
+				|| debts[2] != ZEND_MIR_DEBT_REFCOUNTED_TRANSFER
+				|| !zend_mir_value_validate_call_transfer_storage(
+					staging, transfer)) {
 			return false;
+		}
+		site_first_transfer = index - argument->ordinal;
+		if (argument->ordinal != 0) {
+			const zend_mir_call_transfer_ref *first =
+				&staging->call_transfers[site_first_transfer];
+			if (first->call_site_id != transfer->call_site_id
+					|| first->parameter_modes.offset
+						!= transfer->parameter_modes.offset
+					|| first->parameter_modes.count
+						!= transfer->parameter_modes.count
+					|| first->return_storage_id
+						!= transfer->return_storage_id
+					|| first->return_reference_cell_id
+						!= transfer->return_reference_cell_id
+					|| first->return_action != transfer->return_action) {
+				return false;
+			}
 		}
 	}
 	return true;
@@ -878,7 +950,7 @@ bool zend_mir_module_commit_value_model(
 			|| !zend_mir_value_validate_aliases(module, staging)
 			|| !zend_mir_value_validate_events(module, staging)
 			|| !zend_mir_value_validate_separations(staging)
-			|| !zend_mir_value_validate_call_transfers(staging)
+			|| !zend_mir_value_validate_call_transfers(module, staging)
 			|| !zend_mir_value_validate_receipts(staging)) {
 		return zend_mir_module_fail(module,
 			ZEND_MIR_DIAGNOSTIC_INVALID_OWNERSHIP,
@@ -1019,7 +1091,7 @@ bool zend_mir_module_publish_w06_verifier_receipts(
 			|| module->value_verifier_receipts.items == NULL) {
 		return false;
 	}
-	required = module->value_call_transfers.count == 0
+	required = module->call_sites.count == 0
 		? required_without_calls : required_with_calls;
 	if (verified_facets != required) {
 		return false;
