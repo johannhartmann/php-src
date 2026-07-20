@@ -244,98 +244,102 @@ static bool zend_mir_w06_operand_storage(
 	return *storage_id < (uint32_t) op_array->last_var + op_array->T;
 }
 
-static bool zend_mir_w06_mark_reference(
+static bool zend_mir_w06_ensure_reference(
 	const zend_op_array *op_array,
 	const zend_mir_source_operand_ref *operand,
 	uint32_t source_position_id,
-	bool *reference_slots,
+	uint32_t *reference_origins,
 	uint32_t *creation_sources)
 {
 	uint32_t storage_id;
 	if (!zend_mir_w06_operand_storage(op_array, operand, &storage_id)) {
 		return false;
 	}
-	reference_slots[storage_id] = true;
-	if (!zend_mir_id_is_valid(creation_sources[storage_id])) {
+	if (!zend_mir_id_is_valid(reference_origins[storage_id])) {
+		reference_origins[storage_id] = storage_id;
 		creation_sources[storage_id] = source_position_id;
 	}
 	return true;
 }
 
-static bool zend_mir_w06_mark_optional_reference(
+static bool zend_mir_w06_adopt_reference(
 	const zend_op_array *op_array,
-	const zend_mir_source_operand_ref *operand,
-	uint32_t source_position_id,
-	bool *reference_slots,
-	uint32_t *creation_sources)
+	const zend_mir_source_operand_ref *target,
+	const zend_mir_source_operand_ref *source,
+	bool optional_target,
+	uint32_t *reference_origins)
 {
-	if (operand->kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+	uint32_t source_storage;
+	uint32_t target_storage;
+
+	if (optional_target
+			&& target->kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
 		return true;
 	}
-	return zend_mir_w06_mark_reference(
-		op_array, operand, source_position_id,
-		reference_slots, creation_sources);
+	if (!zend_mir_w06_operand_storage(
+			op_array, source, &source_storage)
+			|| !zend_mir_w06_operand_storage(
+				op_array, target, &target_storage)
+			|| !zend_mir_id_is_valid(
+				reference_origins[source_storage])) {
+		return false;
+	}
+	reference_origins[target_storage] =
+		reference_origins[source_storage];
+	return true;
 }
 
 static bool zend_mir_w06_inventory_opcode(
 	const zend_op_array *op_array,
 	const zend_mir_source_opcode_ref *opcode,
-	bool *reference_slots,
+	uint32_t *reference_origins,
 	uint32_t *creation_sources)
 {
 	switch (opcode->zend_opcode_number) {
 		case ZEND_MAKE_REF:
-			return zend_mir_w06_mark_reference(
+			return zend_mir_w06_ensure_reference(
 					op_array, &opcode->op1, opcode->source_position_id,
-					reference_slots, creation_sources)
-				&& zend_mir_w06_mark_optional_reference(
-					op_array, &opcode->result,
-					opcode->source_position_id,
-					reference_slots, creation_sources);
+					reference_origins, creation_sources)
+				&& zend_mir_w06_adopt_reference(
+					op_array, &opcode->result, &opcode->op1, true,
+					reference_origins);
 		case ZEND_ASSIGN_REF:
-			return zend_mir_w06_mark_reference(
-					op_array, &opcode->op1, opcode->source_position_id,
-					reference_slots, creation_sources)
-				&& zend_mir_w06_mark_reference(
+			return zend_mir_w06_ensure_reference(
 					op_array, &opcode->op2, opcode->source_position_id,
-					reference_slots, creation_sources)
-				&& zend_mir_w06_mark_optional_reference(
-					op_array, &opcode->result,
-					opcode->source_position_id,
-					reference_slots, creation_sources);
+					reference_origins, creation_sources)
+				&& zend_mir_w06_adopt_reference(
+					op_array, &opcode->op1, &opcode->op2, false,
+					reference_origins)
+				&& zend_mir_w06_adopt_reference(
+					op_array, &opcode->result, &opcode->op2, true,
+					reference_origins);
 		case ZEND_SEND_REF:
 		case ZEND_RETURN_BY_REF:
-			return zend_mir_w06_mark_reference(
+			return zend_mir_w06_ensure_reference(
 				op_array, &opcode->op1, opcode->source_position_id,
-				reference_slots, creation_sources);
+				reference_origins, creation_sources);
+		case ZEND_COPY_TMP:
+		{
+			uint32_t source_storage;
+			if (!zend_mir_w06_operand_storage(
+					op_array, &opcode->op1, &source_storage)
+					|| !zend_mir_id_is_valid(
+						reference_origins[source_storage])) {
+				return true;
+			}
+			return zend_mir_w06_adopt_reference(
+				op_array, &opcode->result, &opcode->op1, false,
+				reference_origins);
+		}
 		default:
 			return true;
 	}
 }
 
-static bool zend_mir_w06_propagate_reference_result(
-	const zend_op_array *op_array,
-	const zend_mir_source_opcode_ref *opcode,
-	bool *reference_slots,
-	uint32_t *creation_sources)
-{
-	uint32_t source_storage;
-
-	if (opcode->zend_opcode_number != ZEND_COPY_TMP
-			|| !zend_mir_w06_operand_storage(
-				op_array, &opcode->op1, &source_storage)
-			|| !reference_slots[source_storage]) {
-		return true;
-	}
-	return zend_mir_w06_mark_reference(
-		op_array, &opcode->result, opcode->source_position_id,
-		reference_slots, creation_sources);
-}
-
 static bool zend_mir_w06_inventory_parameters(
 	const zend_op_array *op_array,
 	const zend_mir_w06_records *records,
-	bool *reference_slots,
+	uint32_t *reference_origins,
 	uint32_t *creation_sources)
 {
 	uint32_t parameter;
@@ -350,7 +354,7 @@ static bool zend_mir_w06_inventory_parameters(
 				& ZEND_SEND_BY_REF) == 0) {
 			continue;
 		}
-		reference_slots[parameter] = true;
+		reference_origins[parameter] = parameter;
 		for (opcode_index = 0;
 				opcode_index < records->source_opcode_count;
 				opcode_index++) {
@@ -369,6 +373,34 @@ static bool zend_mir_w06_inventory_parameters(
 		}
 		if (!zend_mir_id_is_valid(creation_sources[parameter])) {
 			return false;
+		}
+	}
+	return true;
+}
+
+static bool zend_mir_w06_finalize_reference_ids(
+	uint32_t storage_count,
+	const uint32_t *reference_origins,
+	const uint32_t *creation_sources,
+	uint32_t *reference_ids)
+{
+	uint32_t next_id = 0;
+	uint32_t storage_id;
+
+	for (storage_id = 0; storage_id < storage_count; storage_id++) {
+		uint32_t origin = reference_origins[storage_id];
+		if (!zend_mir_id_is_valid(origin)) {
+			continue;
+		}
+		if (origin >= storage_count
+				|| !zend_mir_id_is_valid(creation_sources[origin])) {
+			return false;
+		}
+		if (!zend_mir_id_is_valid(reference_ids[origin])) {
+			if (next_id == ZEND_MIR_ID_INVALID) {
+				return false;
+			}
+			reference_ids[origin] = next_id++;
 		}
 	}
 	return true;
@@ -1139,7 +1171,8 @@ static bool zend_mir_w06_build_storages(
 	const zend_mir_zend_source *zend_source,
 	const zend_mir_source_call_view *source_calls,
 	zend_mir_w06_records *records,
-	const bool *reference_slots,
+	const uint32_t *reference_origins,
+	const uint32_t *reference_ids,
 	const uint32_t *creation_sources)
 {
 	uint32_t base_count =
@@ -1160,7 +1193,11 @@ static bool zend_mir_w06_build_storages(
 	uint32_t reference_index = 0;
 
 	for (index = 0; index < base_count; index++) {
-		if (reference_slots[index]) {
+		if (zend_mir_id_is_valid(reference_ids[index])) {
+			if (reference_ids[index] != local_reference_count
+					|| !zend_mir_id_is_valid(creation_sources[index])) {
+				return false;
+			}
 			local_reference_count++;
 		}
 	}
@@ -1251,10 +1288,17 @@ static bool zend_mir_w06_build_storages(
 			&records->source_storages[index];
 		zend_mir_storage_ref *storage = &records->storages[index];
 		zend_mir_payload_ref *payload = &records->payloads[index];
-		bool reference = reference_slots[index];
+		bool reference =
+			zend_mir_id_is_valid(reference_origins[index]);
 		zend_mir_value_category category =
 			zend_mir_w06_storage_category(ssa, index);
 
+		if (reference
+				&& (reference_origins[index] >= base_count
+					|| !zend_mir_id_is_valid(
+						reference_ids[reference_origins[index]]))) {
+			return false;
+		}
 		if (category == ZEND_MIR_VALUE_CATEGORY_UNKNOWN) {
 			category = zend_mir_w06_storage_call_return_category(
 				ssa, zend_source, source_calls, index);
@@ -1282,7 +1326,8 @@ static bool zend_mir_w06_build_storages(
 		storage->payload_id = reference
 			? ZEND_MIR_ID_INVALID : index;
 		storage->reference_cell_id = reference
-			? reference_index : ZEND_MIR_ID_INVALID;
+			? reference_ids[reference_origins[index]]
+			: ZEND_MIR_ID_INVALID;
 		storage->indirect_target_id = ZEND_MIR_ID_INVALID;
 
 		payload->id = index;
@@ -1293,56 +1338,59 @@ static bool zend_mir_w06_build_storages(
 				: ZEND_MIR_REFCOUNT_UNKNOWN;
 		payload->cleanup_obligation =
 			category != ZEND_MIR_VALUE_NON_REFCOUNTED_SCALAR;
+	}
+	for (index = 0; index < base_count; index++) {
+		uint32_t payload_storage_id;
+		uint32_t reference_id = reference_ids[index];
+		zend_mir_source_storage_ref *payload_source;
+		zend_mir_storage_ref *payload_storage;
+		zend_mir_source_reference_ref *source_reference;
+		zend_mir_reference_cell_ref *reference_record;
 
-		if (reference) {
-			uint32_t payload_storage_id =
-				local_payload_base + reference_index;
-			zend_mir_source_storage_ref *payload_source =
-				&records->source_storages[payload_storage_id];
-			zend_mir_storage_ref *payload_storage =
-				&records->storages[payload_storage_id];
-			zend_mir_source_reference_ref *source_reference =
-				&records->source_references[reference_index];
-			zend_mir_reference_cell_ref *reference_record =
-				&records->references[reference_index];
-
-			*payload_source = *source;
-			payload_source->id = payload_storage_id;
-			payload_source->kind =
-				ZEND_MIR_STORAGE_REFERENCE_PAYLOAD_SLOT;
-			payload_source->state = ZEND_MIR_STORAGE_DIRECT;
-			payload_source->category =
-				category;
-
-			memset(payload_storage, 0, sizeof(*payload_storage));
-			payload_storage->id = payload_storage_id;
-			payload_storage->kind =
-				ZEND_MIR_STORAGE_REFERENCE_PAYLOAD_SLOT;
-			payload_storage->state = ZEND_MIR_STORAGE_DIRECT;
-			payload_storage->category =
-				category;
-			payload_storage->payload_id = index;
-			payload_storage->reference_cell_id = ZEND_MIR_ID_INVALID;
-			payload_storage->indirect_target_id = ZEND_MIR_ID_INVALID;
-
-			source_reference->id = reference_index;
-			source_reference->payload_storage_id = payload_storage_id;
-			source_reference->alias_class_id = reference_index;
-			source_reference->creation_opline_index =
-				creation_sources[index];
-			source_reference->ownership = ZEND_MIR_OWNERSHIP_STATE_OWNED;
-			source_reference->cleanup_obligation = true;
-
-			reference_record->id = reference_index;
-			reference_record->payload_storage_id = payload_storage_id;
-			reference_record->alias_class_id = reference_index;
-			reference_record->creation_source_id =
-				creation_sources[index];
-			reference_record->ownership =
-				ZEND_MIR_OWNERSHIP_STATE_OWNED;
-			reference_record->cleanup_obligation = true;
-			reference_index++;
+		if (!zend_mir_id_is_valid(reference_id)) {
+			continue;
 		}
+		payload_storage_id = local_payload_base + reference_id;
+		payload_source = &records->source_storages[payload_storage_id];
+		payload_storage = &records->storages[payload_storage_id];
+		source_reference = &records->source_references[reference_id];
+		reference_record = &records->references[reference_id];
+
+		*payload_source = records->source_storages[index];
+		payload_source->id = payload_storage_id;
+		payload_source->kind =
+			ZEND_MIR_STORAGE_REFERENCE_PAYLOAD_SLOT;
+		payload_source->state = ZEND_MIR_STORAGE_DIRECT;
+		payload_source->category = records->payloads[index].category;
+
+		memset(payload_storage, 0, sizeof(*payload_storage));
+		payload_storage->id = payload_storage_id;
+		payload_storage->kind =
+			ZEND_MIR_STORAGE_REFERENCE_PAYLOAD_SLOT;
+		payload_storage->state = ZEND_MIR_STORAGE_DIRECT;
+		payload_storage->category = records->payloads[index].category;
+		payload_storage->payload_id = index;
+		payload_storage->reference_cell_id = ZEND_MIR_ID_INVALID;
+		payload_storage->indirect_target_id = ZEND_MIR_ID_INVALID;
+
+		source_reference->id = reference_id;
+		source_reference->payload_storage_id = payload_storage_id;
+		source_reference->alias_class_id = reference_id;
+		source_reference->creation_opline_index =
+			creation_sources[index];
+		source_reference->ownership = ZEND_MIR_OWNERSHIP_STATE_OWNED;
+		source_reference->cleanup_obligation = true;
+
+		reference_record->id = reference_id;
+		reference_record->payload_storage_id = payload_storage_id;
+		reference_record->alias_class_id = reference_id;
+		reference_record->creation_source_id = creation_sources[index];
+		reference_record->ownership = ZEND_MIR_OWNERSHIP_STATE_OWNED;
+		reference_record->cleanup_obligation = true;
+		reference_index++;
+	}
+	if (reference_index != local_reference_count) {
+		return false;
 	}
 	for (index = 0; index < site_count; index++) {
 		zend_mir_source_call_site_ref site;
@@ -1602,119 +1650,11 @@ static bool zend_mir_w06_build_storages(
 	return true;
 }
 
-static bool zend_mir_w06_relink_storage(
-	zend_mir_w06_records *records,
-	uint32_t target_id,
-	uint32_t source_id)
-{
-	zend_mir_storage_ref *target;
-	const zend_mir_storage_ref *source;
-
-	if (target_id >= records->storage_count
-			|| source_id >= records->storage_count) {
-		return false;
-	}
-	target = &records->storages[target_id];
-	source = &records->storages[source_id];
-	target->state = source->state;
-	target->category = source->category;
-	target->payload_id = source->payload_id;
-	target->reference_cell_id = source->reference_cell_id;
-	target->indirect_target_id = source->indirect_target_id;
-	records->source_storages[target_id].state = target->state;
-	records->source_storages[target_id].category = target->category;
-	return true;
-}
-
-static bool zend_mir_w06_apply_local_transitions(
-	const zend_op_array *op_array, zend_mir_w06_records *records)
+static bool zend_mir_w06_build_aliases(zend_mir_w06_records *records)
 {
 	uint32_t index;
 
-	for (index = 0; index < records->source_opcode_count; index++) {
-		const zend_mir_source_opcode_ref *opcode =
-			&records->source_opcodes[index];
-		uint32_t source_id;
-		uint32_t target_id;
-
-		switch (opcode->zend_opcode_number) {
-			case ZEND_MAKE_REF:
-				if (!zend_mir_w06_operand_storage(
-						op_array, &opcode->op1, &source_id)
-						|| !zend_mir_w06_operand_storage(
-							op_array, &opcode->result, &target_id)
-						|| !zend_mir_w06_relink_storage(
-							records, target_id, source_id)) {
-					return false;
-				}
-				break;
-			case ZEND_ASSIGN_REF:
-				if (!zend_mir_w06_operand_storage(
-						op_array, &opcode->op2, &source_id)
-						|| !zend_mir_w06_operand_storage(
-							op_array, &opcode->op1, &target_id)
-						|| !zend_mir_w06_relink_storage(
-							records, target_id, source_id)) {
-					return false;
-				}
-				if (opcode->result.kind
-						!= ZEND_MIR_SOURCE_OPERAND_UNUSED) {
-					if (!zend_mir_w06_operand_storage(
-							op_array, &opcode->result, &target_id)
-							|| !zend_mir_w06_relink_storage(
-								records, target_id, source_id)) {
-						return false;
-					}
-				}
-				break;
-			case ZEND_COPY_TMP:
-				if (!zend_mir_w06_operand_storage(
-						op_array, &opcode->op1, &source_id)
-						|| !zend_mir_w06_operand_storage(
-							op_array, &opcode->result, &target_id)
-						|| !zend_mir_w06_relink_storage(
-							records, target_id, source_id)) {
-					return false;
-				}
-				break;
-			default:
-				break;
-		}
-	}
-	return true;
-}
-
-static bool zend_mir_w06_build_aliases(
-	const zend_op_array *op_array, zend_mir_w06_records *records)
-{
-	uint32_t assign_ref_count = 0;
-	uint32_t index;
-	uint32_t output;
-
-	for (index = 0; index < records->source_opcode_count; index++) {
-		const zend_mir_source_opcode_ref *opcode =
-			&records->source_opcodes[index];
-		uint32_t left_storage;
-		uint32_t right_storage;
-		if (opcode->zend_opcode_number == ZEND_ASSIGN_REF
-				&& zend_mir_w06_operand_storage(
-					op_array, &opcode->op1, &left_storage)
-				&& zend_mir_w06_operand_storage(
-					op_array, &opcode->op2, &right_storage)
-				&& left_storage < records->storage_count
-				&& right_storage < records->storage_count
-				&& records->storages[left_storage].state
-					== ZEND_MIR_STORAGE_REFERENCE
-				&& records->storages[right_storage].state
-					== ZEND_MIR_STORAGE_REFERENCE) {
-			assign_ref_count++;
-		}
-	}
-	if (records->reference_count
-			> ZEND_MIR_W06_LIMIT - assign_ref_count) {
-		return false;
-	}
-	records->alias_count = records->reference_count + assign_ref_count;
+	records->alias_count = records->reference_count;
 	records->aliases = zend_mir_w06_calloc(
 		records->alias_count, sizeof(*records->aliases));
 	if (records->alias_count != 0 && records->aliases == NULL) {
@@ -1728,36 +1668,6 @@ static bool zend_mir_w06_build_aliases(
 		records->aliases[index].relation = ZEND_MIR_ALIAS_MUST;
 		records->aliases[index].proof_id =
 			records->references[index].creation_source_id;
-	}
-	output = records->reference_count;
-	for (index = 0; index < records->source_opcode_count; index++) {
-		const zend_mir_source_opcode_ref *opcode =
-			&records->source_opcodes[index];
-		uint32_t left_storage;
-		uint32_t right_storage;
-		zend_mir_alias_relation_ref *relation;
-		if (opcode->zend_opcode_number != ZEND_ASSIGN_REF
-				|| !zend_mir_w06_operand_storage(
-					op_array, &opcode->op1, &left_storage)
-				|| !zend_mir_w06_operand_storage(
-					op_array, &opcode->op2, &right_storage)
-				|| left_storage >= records->storage_count
-				|| right_storage >= records->storage_count
-				|| records->storages[left_storage].state
-					!= ZEND_MIR_STORAGE_REFERENCE
-				|| records->storages[right_storage].state
-					!= ZEND_MIR_STORAGE_REFERENCE) {
-			continue;
-		}
-		relation = &records->aliases[output++];
-		relation->left_id = records->references[
-			records->storages[left_storage].reference_cell_id]
-				.alias_class_id;
-		relation->right_id = records->references[
-			records->storages[right_storage].reference_cell_id]
-				.alias_class_id;
-		relation->relation = ZEND_MIR_ALIAS_MUST;
-		relation->proof_id = opcode->source_position_id;
 	}
 	return true;
 }
@@ -2084,7 +1994,8 @@ zend_mir_lowering_diagnostic_code zend_mir_w06_build_value_snapshot(
 	zend_mir_w06_value_snapshot *snapshot)
 {
 	zend_mir_w06_records *records;
-	bool *reference_slots;
+	uint32_t *reference_origins;
+	uint32_t *reference_ids;
 	uint32_t *creation_sources;
 	uint32_t base_count;
 	uint32_t index;
@@ -2112,18 +2023,24 @@ zend_mir_lowering_diagnostic_code zend_mir_w06_build_value_snapshot(
 	}
 	base_count = (uint32_t) op_array->last_var + op_array->T;
 	records = calloc(1, sizeof(*records));
-	reference_slots = zend_mir_w06_calloc(
-		base_count, sizeof(*reference_slots));
+	reference_origins = zend_mir_w06_calloc(
+		base_count, sizeof(*reference_origins));
+	reference_ids = zend_mir_w06_calloc(
+		base_count, sizeof(*reference_ids));
 	creation_sources = zend_mir_w06_calloc(
 		base_count, sizeof(*creation_sources));
 	if (records == NULL || (base_count != 0
-			&& (reference_slots == NULL || creation_sources == NULL))) {
-		free(reference_slots);
+			&& (reference_origins == NULL || reference_ids == NULL
+				|| creation_sources == NULL))) {
+		free(reference_origins);
+		free(reference_ids);
 		free(creation_sources);
 		zend_mir_w06_release_records(records);
 		return ZEND_MIRL_W05_CALL_PLAN_FAILED;
 	}
 	for (index = 0; index < base_count; index++) {
+		reference_origins[index] = ZEND_MIR_ID_INVALID;
+		reference_ids[index] = ZEND_MIR_ID_INVALID;
 		creation_sources[index] = ZEND_MIR_ID_INVALID;
 	}
 	if (!zend_mir_w06_copy_source_opcodes(source_calls, records)) {
@@ -2133,7 +2050,8 @@ zend_mir_lowering_diagnostic_code zend_mir_w06_build_value_snapshot(
 		zend_mir_lowering_diagnostic_code literal_code =
 			zend_mir_w06_validate_literals(op_array, records);
 		if (literal_code != ZEND_MIRL_OK) {
-			free(reference_slots);
+			free(reference_origins);
+			free(reference_ids);
 			free(creation_sources);
 			zend_mir_w06_release_records(records);
 			return literal_code;
@@ -2148,7 +2066,8 @@ zend_mir_lowering_diagnostic_code zend_mir_w06_build_value_snapshot(
 			zend_mir_w06_preflight_transitions(
 				op_array, ssa, records);
 		if (transition_code != ZEND_MIRL_OK) {
-			free(reference_slots);
+			free(reference_origins);
+			free(reference_ids);
 			free(creation_sources);
 			zend_mir_w06_release_records(records);
 			return transition_code;
@@ -2159,36 +2078,34 @@ zend_mir_lowering_diagnostic_code zend_mir_w06_build_value_snapshot(
 			zend_mir_w06_preflight_call_returns(
 				ssa, zend_source, source_calls);
 		if (return_code != ZEND_MIRL_OK) {
-			free(reference_slots);
+			free(reference_origins);
+			free(reference_ids);
 			free(creation_sources);
 			zend_mir_w06_release_records(records);
 			return return_code;
 		}
 	}
 	if (!zend_mir_w06_inventory_parameters(
-			op_array, records, reference_slots, creation_sources)) {
+			op_array, records, reference_origins, creation_sources)) {
 		goto invalid;
 	}
 	for (index = 0; index < records->source_opcode_count; index++) {
 		if (!zend_mir_w06_inventory_opcode(
 				op_array, &records->source_opcodes[index],
-				reference_slots, creation_sources)) {
+				reference_origins, creation_sources)) {
 			goto invalid;
 		}
 	}
-	for (index = 0; index < records->source_opcode_count; index++) {
-		if (!zend_mir_w06_propagate_reference_result(
-				op_array, &records->source_opcodes[index],
-				reference_slots, creation_sources)) {
-			goto invalid;
-		}
+	if (!zend_mir_w06_finalize_reference_ids(
+			base_count, reference_origins, creation_sources,
+			reference_ids)) {
+		goto invalid;
 	}
 	if (zend_mir_w06_fault_is(ZEND_MIR_W06_TEST_FAULT_PLAN)
 			|| !zend_mir_w06_build_storages(
 				op_array, ssa, zend_source, source_calls, records,
-				reference_slots, creation_sources)
-			|| !zend_mir_w06_apply_local_transitions(op_array, records)
-			|| !zend_mir_w06_build_aliases(op_array, records)
+				reference_origins, reference_ids, creation_sources)
+			|| !zend_mir_w06_build_aliases(records)
 			|| !zend_mir_w06_build_events(op_array, records)
 			|| !zend_mir_w06_build_separations(op_array, records)
 			|| !zend_mir_w06_build_transfers(
@@ -2196,7 +2113,8 @@ zend_mir_lowering_diagnostic_code zend_mir_w06_build_value_snapshot(
 			|| !zend_mir_w06_build_plan_entries(op_array, records)) {
 		goto invalid;
 	}
-	free(reference_slots);
+	free(reference_origins);
+	free(reference_ids);
 	free(creation_sources);
 	records->magic = ZEND_MIR_W06_SNAPSHOT_MAGIC;
 	snapshot->records = records;
@@ -2221,7 +2139,8 @@ zend_mir_lowering_diagnostic_code zend_mir_w06_build_value_snapshot(
 	return ZEND_MIRL_OK;
 
 invalid:
-	free(reference_slots);
+	free(reference_origins);
+	free(reference_ids);
 	free(creation_sources);
 	zend_mir_w06_release_records(records);
 	return ZEND_MIRL_W06_INVALID_STORAGE;
