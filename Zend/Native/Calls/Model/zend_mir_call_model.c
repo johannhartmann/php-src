@@ -61,11 +61,50 @@ typedef struct _zend_mir_w05_plan {
 	| ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_OBSERVER) \
 	| ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_INTERRUPT))
 
-static void *zend_mir_w05_calloc(uint32_t count, size_t size)
+typedef enum _zend_mir_w05_allocation_kind {
+	ZEND_MIR_W05_ALLOCATION_PLANNER,
+	ZEND_MIR_W05_ALLOCATION_TARGET_SNAPSHOT,
+	ZEND_MIR_W05_ALLOCATION_ARGUMENT_TABLE
+} zend_mir_w05_allocation_kind;
+
+#ifdef ZEND_MIR_W05_TEST_FAULTS
+static zend_mir_w05_test_fault zend_mir_w05_test_fault_state =
+	ZEND_MIR_W05_TEST_FAULT_NONE;
+
+void zend_mir_w05_test_set_fault(zend_mir_w05_test_fault fault)
+{
+	zend_mir_w05_test_fault_state = fault;
+}
+
+static bool zend_mir_w05_test_fault_is(zend_mir_w05_test_fault fault)
+{
+	return zend_mir_w05_test_fault_state == fault;
+}
+#else
+# define zend_mir_w05_test_fault_is(fault) false
+#endif
+
+static void *zend_mir_w05_calloc(
+	uint32_t count, size_t size, zend_mir_w05_allocation_kind kind)
 {
 	if (size != 0 && (size_t) count > SIZE_MAX / size) {
 		return NULL;
 	}
+#ifdef ZEND_MIR_W05_TEST_FAULTS
+	if ((kind == ZEND_MIR_W05_ALLOCATION_PLANNER
+			&& zend_mir_w05_test_fault_is(
+				ZEND_MIR_W05_TEST_FAULT_PLANNER_ALLOCATION))
+			|| (kind == ZEND_MIR_W05_ALLOCATION_TARGET_SNAPSHOT
+				&& zend_mir_w05_test_fault_is(
+					ZEND_MIR_W05_TEST_FAULT_TARGET_SNAPSHOT))
+			|| (kind == ZEND_MIR_W05_ALLOCATION_ARGUMENT_TABLE
+				&& zend_mir_w05_test_fault_is(
+					ZEND_MIR_W05_TEST_FAULT_ARGUMENT_TABLE))) {
+		return NULL;
+	}
+#else
+	(void) kind;
+#endif
 	return calloc(count, size);
 }
 
@@ -278,10 +317,11 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_source_sequence(
 	if (source_count == 0 || site_count == 0) {
 		return result;
 	}
-	stack = zend_mir_w05_calloc(site_count, sizeof(*stack));
+	stack = zend_mir_w05_calloc(
+		site_count, sizeof(*stack), ZEND_MIR_W05_ALLOCATION_PLANNER);
 	seen_arguments = zend_mir_w05_calloc(
 		argument_count == 0 ? 1 : argument_count,
-		sizeof(*seen_arguments));
+		sizeof(*seen_arguments), ZEND_MIR_W05_ALLOCATION_PLANNER);
 	if (stack == NULL || seen_arguments == NULL) {
 		result = ZEND_MIRL_W05_CALL_PLAN_FAILED;
 		goto done;
@@ -462,19 +502,26 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 		return ZEND_MIRL_W05_CALL_PLAN_FAILED;
 	}
 	plan->entries = zend_mir_w05_calloc(
-		plan->site_count, sizeof(*plan->entries));
+		plan->site_count, sizeof(*plan->entries),
+		ZEND_MIR_W05_ALLOCATION_PLANNER);
 	plan->sites = zend_mir_w05_calloc(
-		plan->site_count, sizeof(*plan->sites));
+		plan->site_count, sizeof(*plan->sites),
+		ZEND_MIR_W05_ALLOCATION_PLANNER);
 	plan->targets = zend_mir_w05_calloc(
-		plan->target_count, sizeof(*plan->targets));
+		plan->target_count, sizeof(*plan->targets),
+		ZEND_MIR_W05_ALLOCATION_TARGET_SNAPSHOT);
 	plan->arguments = zend_mir_w05_calloc(
-		plan->argument_count, sizeof(*plan->arguments));
+		plan->argument_count, sizeof(*plan->arguments),
+		ZEND_MIR_W05_ALLOCATION_ARGUMENT_TABLE);
 	plan->values = zend_mir_w05_calloc(
-		plan->argument_count, sizeof(*plan->values));
+		plan->argument_count, sizeof(*plan->values),
+		ZEND_MIR_W05_ALLOCATION_ARGUMENT_TABLE);
 	plan->results = zend_mir_w05_calloc(
-		plan->site_count, sizeof(*plan->results));
+		plan->site_count, sizeof(*plan->results),
+		ZEND_MIR_W05_ALLOCATION_PLANNER);
 	plan->blocks = zend_mir_w05_calloc(
-		plan->site_count, sizeof(*plan->blocks));
+		plan->site_count, sizeof(*plan->blocks),
+		ZEND_MIR_W05_ALLOCATION_PLANNER);
 	if (plan->entries == NULL || plan->sites == NULL || plan->targets == NULL
 			|| (plan->argument_count != 0
 				&& (plan->arguments == NULL || plan->values == NULL))
@@ -651,6 +698,12 @@ static bool zend_mir_w05_emit_calls(
 		zend_mir_call_site_ref site;
 		uint32_t continuation_index;
 		memset(&site, 0, sizeof(site));
+#ifdef ZEND_MIR_W05_TEST_FAULTS
+		if (zend_mir_w05_test_fault_is(
+				ZEND_MIR_W05_TEST_FAULT_FRAME_STATE)) {
+			return false;
+		}
+#endif
 		for (continuation_index = 0; continuation_index < 4;
 				continuation_index++) {
 			zend_mir_call_continuation_ref continuation;
@@ -696,6 +749,12 @@ static bool zend_mir_w05_emit_calls(
 		site.reads = W05_READS;
 		site.writes = W05_WRITES;
 		site.barriers = W05_BARRIERS;
+#ifdef ZEND_MIR_W05_TEST_FAULTS
+		if (zend_mir_w05_test_fault_is(
+				ZEND_MIR_W05_TEST_FAULT_CALL_RECORD)) {
+			return false;
+		}
+#endif
 		if (!mutator->add_call_site(mutator->context, &site)) {
 			return false;
 		}
@@ -1297,6 +1356,10 @@ zend_mir_w05_lowering_result zend_mir_lower_w05_zend_source(
 	view = context->module_ops.view(context->module_ops.context, w04.module);
 	calls = zend_mir_module_get_call_view(w04.module);
 	if (view == NULL || calls == NULL
+#ifdef ZEND_MIR_W05_TEST_FAULTS
+			|| zend_mir_w05_test_fault_is(
+				ZEND_MIR_W05_TEST_FAULT_CALL_VERIFIER)
+#endif
 			|| !zend_mir_verify_w05_calls(
 				view, source_calls, calls, context->diagnostics)) {
 		context->module_ops.destroy(context->module_ops.context, w04.module);

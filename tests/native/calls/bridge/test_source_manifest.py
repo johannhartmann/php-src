@@ -31,7 +31,8 @@ class SourceManifestTests(unittest.TestCase):
         self.assertEqual(
             first.count(
                 "PHP_ADD_SOURCES_X([Zend/Native/Calls/Model], "
-                "[zend_mir_call_model.c],, [PHP_GLOBAL_OBJS])"
+                "[zend_mir_call_model.c], "
+                "[-DZEND_MIR_W05_TEST_FAULTS=1], [PHP_GLOBAL_OBJS])"
             ),
             1,
         )
