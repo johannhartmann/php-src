@@ -1,0 +1,186 @@
+{
+  "cases": {
+    "by_value_parameter_64": {
+      "path": "tests/native/calls/integration/goldens/by_value_parameter_64.znmir",
+      "properties": {
+        "arguments": 64,
+        "continuations": 4,
+        "frames": 3,
+        "receipts": 1,
+        "sites": 1,
+        "targets": 1
+      },
+      "sha256": "86388c6ca37eaebf55fcd9bc82cbe862e57d09fde77b284a6491e38197e4d2f7"
+    },
+    "direct_call_after_phi": {
+      "path": "tests/native/calls/integration/goldens/direct_call_after_phi.znmir",
+      "properties": {
+        "arguments": 0,
+        "continuations": 4,
+        "frames": 4,
+        "receipts": 1,
+        "sites": 1,
+        "targets": 1
+      },
+      "sha256": "bcc599d2f0a8302a3826653f09557da49e0700dbee82c9e31cd987cae85a31aa"
+    },
+    "direct_call_exact_user_do_fcall": {
+      "path": "tests/native/calls/integration/goldens/direct_call_exact_user_do_fcall.znmir",
+      "properties": {
+        "arguments": 1,
+        "continuations": 4,
+        "frames": 3,
+        "receipts": 1,
+        "sites": 1,
+        "targets": 1
+      },
+      "sha256": "6f0b8dd21af50a38ab66d56d4ccc58707e4a0bad39d9fbbae972d8952e9fda39"
+    },
+    "direct_call_exact_user_do_ucall": {
+      "path": "tests/native/calls/integration/goldens/direct_call_exact_user_do_ucall.znmir",
+      "properties": {
+        "arguments": 1,
+        "continuations": 4,
+        "frames": 3,
+        "receipts": 1,
+        "sites": 1,
+        "targets": 1
+      },
+      "sha256": "6b82ca5de4d06d9a75f7598af835360b2134e5762a2c5516f95d16251a2051cd"
+    },
+    "direct_call_in_if": {
+      "path": "tests/native/calls/integration/goldens/direct_call_in_if.znmir",
+      "properties": {
+        "arguments": 0,
+        "continuations": 4,
+        "frames": 3,
+        "receipts": 1,
+        "sites": 1,
+        "targets": 1
+      },
+      "sha256": "fb587dbda4540aa78e810f0b22ab1295649254c93ca640354a496168f6a8137a"
+    },
+    "direct_call_in_reducible_loop": {
+      "path": "tests/native/calls/integration/goldens/direct_call_in_reducible_loop.znmir",
+      "properties": {
+        "arguments": 0,
+        "continuations": 4,
+        "frames": 4,
+        "receipts": 1,
+        "sites": 1,
+        "targets": 1
+      },
+      "sha256": "59857234869d07e668be94900ce17afb889b16ce6b9e458f4a3cf1f17e501dba"
+    },
+    "direct_user_scalar_literals": {
+      "path": "tests/native/calls/integration/goldens/direct_user_scalar_literals.znmir",
+      "properties": {
+        "arguments": 4,
+        "continuations": 4,
+        "frames": 3,
+        "receipts": 1,
+        "sites": 1,
+        "targets": 1
+      },
+      "sha256": "0a9e1cb77cc96612a9dcec729742d4b80878d6b33d1d12353f303fe3037f2d98"
+    },
+    "direct_user_scalar_result_bool": {
+      "path": "tests/native/calls/integration/goldens/direct_user_scalar_result_bool.znmir",
+      "properties": {
+        "arguments": 0,
+        "continuations": 4,
+        "frames": 3,
+        "receipts": 1,
+        "sites": 1,
+        "targets": 1
+      },
+      "sha256": "b3664cecacdfdc7cf14093b3114b5d0ea0b8abacb950bcf9a1f22ea0d19f39af"
+    },
+    "direct_user_scalar_result_float": {
+      "path": "tests/native/calls/integration/goldens/direct_user_scalar_result_float.znmir",
+      "properties": {
+        "arguments": 0,
+        "continuations": 4,
+        "frames": 3,
+        "receipts": 1,
+        "sites": 1,
+        "targets": 1
+      },
+      "sha256": "f214c46e7329bbee9340e120acb40ed8546101ef4179a8599929d442ece9b5a6"
+    },
+    "direct_user_scalar_result_followup": {
+      "path": "tests/native/calls/integration/goldens/direct_user_scalar_result_followup.znmir",
+      "properties": {
+        "arguments": 0,
+        "continuations": 4,
+        "frames": 3,
+        "receipts": 1,
+        "sites": 1,
+        "targets": 1
+      },
+      "sha256": "496759b4edaa626deb7581aa85c72624bb023485500dfb753306152807cd0b0a"
+    },
+    "direct_user_scalar_result_int": {
+      "path": "tests/native/calls/integration/goldens/direct_user_scalar_result_int.znmir",
+      "properties": {
+        "arguments": 0,
+        "continuations": 4,
+        "frames": 3,
+        "receipts": 1,
+        "sites": 1,
+        "targets": 1
+      },
+      "sha256": "cd6318baf6a02f263bec68f0a04d149b2debfbbf8f2ac10501cfcb9986b16587"
+    },
+    "direct_user_scalar_result_null": {
+      "path": "tests/native/calls/integration/goldens/direct_user_scalar_result_null.znmir",
+      "properties": {
+        "arguments": 0,
+        "continuations": 4,
+        "frames": 3,
+        "receipts": 1,
+        "sites": 1,
+        "targets": 1
+      },
+      "sha256": "e97c6f7c9b0d329199fe29eda1fa8fa77018bf5fd3b014400fbc7ca7e7c7ef98"
+    },
+    "direct_user_scalar_variables": {
+      "path": "tests/native/calls/integration/goldens/direct_user_scalar_variables.znmir",
+      "properties": {
+        "arguments": 2,
+        "continuations": 4,
+        "frames": 3,
+        "receipts": 1,
+        "sites": 1,
+        "targets": 1
+      },
+      "sha256": "ea7b20676e2d5165435e295049600cd1bf5e422607c530e371e6b8c63f0ae1c9"
+    },
+    "direct_user_zero_args_unused_return": {
+      "path": "tests/native/calls/integration/goldens/direct_user_zero_args_unused_return.znmir",
+      "properties": {
+        "arguments": 0,
+        "continuations": 4,
+        "frames": 3,
+        "receipts": 1,
+        "sites": 1,
+        "targets": 1
+      },
+      "sha256": "dddabfc79d9a09612a874c304db7371f9a5eafb6bf5b96e6b22431f52fffeeaf"
+    },
+    "two_direct_calls_same_block": {
+      "path": "tests/native/calls/integration/goldens/two_direct_calls_same_block.znmir",
+      "properties": {
+        "arguments": 2,
+        "continuations": 8,
+        "frames": 4,
+        "receipts": 1,
+        "sites": 2,
+        "targets": 1
+      },
+      "sha256": "bfd7b9c938c27b2cdc8fa57fbd095ca8109ed985268766bf12a540a41ed1d637"
+    }
+  },
+  "format_version": "1.0.0",
+  "normalization": false
+}
