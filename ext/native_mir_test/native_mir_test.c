@@ -37,6 +37,7 @@
 #include "Zend/Native/MIR/Core/zend_mir_arena.h"
 #include "Zend/Native/MIR/Scalar/zend_mir_scalar_descriptors.h"
 #include "Zend/Native/MIR/zend_mir.h"
+#include "Zend/Native/Calls/Model/zend_mir_call_model.h"
 #include "Zend/Native/Lowering/Core/zend_mir_lowering_internal.h"
 #include "Zend/Native/Lowering/zend_mir_lowering_zend.h"
 
@@ -69,6 +70,15 @@ typedef enum _native_mir_test_fault {
 	NATIVE_MIR_TEST_FAULT_SSA_FAILURE,
 	NATIVE_MIR_TEST_FAULT_LOWER_FAILURE,
 	NATIVE_MIR_TEST_FAULT_MODULE_OOM,
+	NATIVE_MIR_TEST_FAULT_PLANNER_ALLOCATION,
+	NATIVE_MIR_TEST_FAULT_TARGET_SNAPSHOT,
+	NATIVE_MIR_TEST_FAULT_ARGUMENT_TABLE,
+	NATIVE_MIR_TEST_FAULT_FRAME_STATE,
+	NATIVE_MIR_TEST_FAULT_CALL_RECORD,
+	NATIVE_MIR_TEST_FAULT_FINALIZE_FAILURE,
+	NATIVE_MIR_TEST_FAULT_STAGE1_VERIFIER_FAILURE,
+	NATIVE_MIR_TEST_FAULT_STAGE2_VERIFIER_FAILURE,
+	NATIVE_MIR_TEST_FAULT_CALL_VERIFIER_FAILURE,
 	NATIVE_MIR_TEST_FAULT_DUMP_FAILURE
 } native_mir_test_fault;
 
@@ -331,6 +341,24 @@ static bool native_mir_test_fault_from_string(
 		*out = NATIVE_MIR_TEST_FAULT_LOWER_FAILURE;
 	} else if (zend_string_equals_literal(value, "module_oom")) {
 		*out = NATIVE_MIR_TEST_FAULT_MODULE_OOM;
+	} else if (zend_string_equals_literal(value, "planner_allocation")) {
+		*out = NATIVE_MIR_TEST_FAULT_PLANNER_ALLOCATION;
+	} else if (zend_string_equals_literal(value, "target_snapshot")) {
+		*out = NATIVE_MIR_TEST_FAULT_TARGET_SNAPSHOT;
+	} else if (zend_string_equals_literal(value, "argument_table")) {
+		*out = NATIVE_MIR_TEST_FAULT_ARGUMENT_TABLE;
+	} else if (zend_string_equals_literal(value, "frame_state")) {
+		*out = NATIVE_MIR_TEST_FAULT_FRAME_STATE;
+	} else if (zend_string_equals_literal(value, "call_record")) {
+		*out = NATIVE_MIR_TEST_FAULT_CALL_RECORD;
+	} else if (zend_string_equals_literal(value, "finalize_failure")) {
+		*out = NATIVE_MIR_TEST_FAULT_FINALIZE_FAILURE;
+	} else if (zend_string_equals_literal(value, "stage1_verifier_failure")) {
+		*out = NATIVE_MIR_TEST_FAULT_STAGE1_VERIFIER_FAILURE;
+	} else if (zend_string_equals_literal(value, "stage2_verifier_failure")) {
+		*out = NATIVE_MIR_TEST_FAULT_STAGE2_VERIFIER_FAILURE;
+	} else if (zend_string_equals_literal(value, "call_verifier_failure")) {
+		*out = NATIVE_MIR_TEST_FAULT_CALL_VERIFIER_FAILURE;
 	} else if (zend_string_equals_literal(value, "dump_failure")) {
 		*out = NATIVE_MIR_TEST_FAULT_DUMP_FAILURE;
 	} else {
@@ -644,7 +672,11 @@ static const zend_mir_view *native_mir_test_module_view(
 static bool native_mir_test_module_finalize(
 	void *context, zend_mir_module *module)
 {
-	(void) context;
+	native_mir_test_state *state = context;
+
+	if (state->fault == NATIVE_MIR_TEST_FAULT_FINALIZE_FAILURE) {
+		return false;
+	}
 	return zend_mir_module_finalize(module);
 }
 
@@ -656,6 +688,9 @@ static bool native_mir_test_verify_stage1(
 
 	state->phase = NATIVE_MIR_TEST_PHASE_VERIFY;
 	state->diagnostic_stage = "MIRV";
+	if (state->fault == NATIVE_MIR_TEST_FAULT_STAGE1_VERIFIER_FAILURE) {
+		return false;
+	}
 	return zend_mir_verify_stage1(view, diagnostics);
 }
 
@@ -829,6 +864,9 @@ static bool native_mir_test_verify_stage2(
 
 	state->phase = NATIVE_MIR_TEST_PHASE_VERIFY;
 	state->diagnostic_stage = "MIRV";
+	if (state->fault == NATIVE_MIR_TEST_FAULT_STAGE2_VERIFIER_FAILURE) {
+		return false;
+	}
 	return state->wave >= 4
 		? native_mir_test_verify_w04_scalar(state, view)
 		: zend_mir_verify_w03_scalar(view, diagnostics);
@@ -991,6 +1029,9 @@ static bool native_mir_test_lower_w05_and_dump(native_mir_test_state *state)
 	zend_mir_lowering_module_ops module_ops;
 	zend_mir_diagnostic_sink diagnostics;
 	zend_mir_w05_lowering_result result;
+#ifdef ZEND_MIR_W05_TEST_FAULTS
+	zend_mir_w05_test_fault call_fault = ZEND_MIR_W05_TEST_FAULT_NONE;
+#endif
 
 	memset(&module_ops, 0, sizeof(module_ops));
 	module_ops.context = state;
@@ -1005,9 +1046,37 @@ static bool native_mir_test_lower_w05_and_dump(native_mir_test_state *state)
 	diagnostics.context = state;
 	diagnostics.emit = native_mir_test_emit_mir_diagnostic;
 	diagnostics.limit = state->diagnostic_limit;
+#ifdef ZEND_MIR_W05_TEST_FAULTS
+	switch (state->fault) {
+		case NATIVE_MIR_TEST_FAULT_PLANNER_ALLOCATION:
+			call_fault = ZEND_MIR_W05_TEST_FAULT_PLANNER_ALLOCATION;
+			break;
+		case NATIVE_MIR_TEST_FAULT_TARGET_SNAPSHOT:
+			call_fault = ZEND_MIR_W05_TEST_FAULT_TARGET_SNAPSHOT;
+			break;
+		case NATIVE_MIR_TEST_FAULT_ARGUMENT_TABLE:
+			call_fault = ZEND_MIR_W05_TEST_FAULT_ARGUMENT_TABLE;
+			break;
+		case NATIVE_MIR_TEST_FAULT_FRAME_STATE:
+			call_fault = ZEND_MIR_W05_TEST_FAULT_FRAME_STATE;
+			break;
+		case NATIVE_MIR_TEST_FAULT_CALL_RECORD:
+			call_fault = ZEND_MIR_W05_TEST_FAULT_CALL_RECORD;
+			break;
+		case NATIVE_MIR_TEST_FAULT_CALL_VERIFIER_FAILURE:
+			call_fault = ZEND_MIR_W05_TEST_FAULT_CALL_VERIFIER;
+			break;
+		default:
+			break;
+	}
+	zend_mir_w05_test_set_fault(call_fault);
+#endif
 	result = zend_mir_lower_w05_zend_op_array(
 		&state->script, state->selected, &state->ssa,
 		&module_ops, &diagnostics);
+#ifdef ZEND_MIR_W05_TEST_FAULTS
+	zend_mir_w05_test_set_fault(ZEND_MIR_W05_TEST_FAULT_NONE);
+#endif
 	if (!zend_mir_lowering_result_is_w05_failure_atomic(&result)) {
 		char detail[256];
 

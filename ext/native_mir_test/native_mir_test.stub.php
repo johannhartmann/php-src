@@ -29,7 +29,11 @@
  *     wave?: 3|4|5,
  *     arena_chunk_size?: int,
  *     compiler_mode?: "ignore_user_functions",
- *     fault?: ?string
+ *     fault?: null|"compile_bailout"|"ssa_failure"|"lower_failure"|
+ *         "module_oom"|"planner_allocation"|"target_snapshot"|
+ *         "argument_table"|"frame_state"|"call_record"|"finalize_failure"|
+ *         "stage1_verifier_failure"|"stage2_verifier_failure"|
+ *         "call_verifier_failure"|"dump_failure"
  * }
  *
  * @return array

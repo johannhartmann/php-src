@@ -58,7 +58,12 @@ def rendered() -> str:
             or path in data["groups"]["calls"]
             else "PHP_ADD_SOURCES"
         )
-        suffix = ",, [PHP_GLOBAL_OBJS]" if macro.endswith("_X") else ""
+        if path in data["groups"]["calls"]:
+            suffix = (
+                ", [-DZEND_MIR_W05_TEST_FAULTS=1], [PHP_GLOBAL_OBJS]"
+            )
+        else:
+            suffix = ",, [PHP_GLOBAL_OBJS]" if macro.endswith("_X") else ""
         lines.append(
             f"  {macro}([{directory}], [{filename}]{suffix})"
         )

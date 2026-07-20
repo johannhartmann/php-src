@@ -49,7 +49,8 @@ class ExtensionW05Tests(unittest.TestCase):
         self.assertEqual(config.count("END GENERATED NATIVE SOURCES"), 1)
         self.assertIn(
             "PHP_ADD_SOURCES_X([Zend/Native/Calls/Model], "
-            "[zend_mir_call_model.c],, [PHP_GLOBAL_OBJS])",
+            "[zend_mir_call_model.c], "
+            "[-DZEND_MIR_W05_TEST_FAULTS=1], [PHP_GLOBAL_OBJS])",
             config,
         )
 
@@ -452,6 +453,55 @@ class RealCandidateTests(unittest.TestCase):
                 "MIRL0001",
                 {diagnostic["code"] for diagnostic in result["diagnostics"]},
             )
+
+    def test_w05_stage_faults_are_failure_atomic(self) -> None:
+        candidate = os.environ.get("TEST_PHP_EXECUTABLE")
+        if not candidate:
+            self.skipTest("TEST_PHP_EXECUTABLE is not set")
+        import importlib.util
+
+        specification = importlib.util.spec_from_file_location(
+            "w05_real_stage_fault_dump",
+            ROOT / "scripts/native/calls/dump-w05.py",
+        )
+        assert specification is not None and specification.loader is not None
+        module = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(module)
+        source = (
+            b"<?php function w05_fault_target(int $value): int { "
+            b"return $value; } function w05_fault_case(): int { "
+            b"return w05_fault_target(7); }"
+        )
+        expected = {
+            "planner_allocation": "MIRL0028",
+            "target_snapshot": "MIRL0028",
+            "argument_table": "MIRL0028",
+            "frame_state": "MIRL0028",
+            "call_record": "MIRL0028",
+            "finalize_failure": "MIRL0028",
+            "stage1_verifier_failure": "MIRL0009",
+            "stage2_verifier_failure": "MIRL0010",
+            "call_verifier_failure": "MIRL0029",
+        }
+        for fault, code in expected.items():
+            with self.subTest(fault=fault):
+                result = module.invoke(
+                    module.candidate_path(candidate),
+                    source,
+                    f"real-{fault}.php",
+                    "w05_fault_case",
+                    fault=fault,
+                )["calls"][0]
+                self.assertEqual(result["status"], "error")
+                self.assertIn(result["phase"], {"lowering", "verify"})
+                self.assertIsNone(result["mir"])
+                self.assertIn(
+                    code,
+                    {
+                        diagnostic["code"]
+                        for diagnostic in result["diagnostics"]
+                    },
+                )
 
 
 if __name__ == "__main__":
