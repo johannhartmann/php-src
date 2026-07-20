@@ -61,9 +61,23 @@ typedef enum _test_case {
 	TEST_INVALID_SEPARATION,
 	TEST_FINGERPRINT_MISMATCH,
 	TEST_CALL_SPAN_OVERFLOW,
+	TEST_DEBT_SPAN_OVERFLOW,
 	TEST_MISSING_CAPABILITY,
 	TEST_VERIFIER_INDIRECT_MUTATION,
-	TEST_VERIFIER_FINGERPRINT_MUTATION
+	TEST_VERIFIER_FINGERPRINT_MUTATION,
+	TEST_VERIFIER_PAYLOAD_MUTATION,
+	TEST_COPY_ADDREF_UNIQUE_STAYS_UNIQUE,
+	TEST_RELEASE_LOST_CLEANUP,
+	TEST_EVENT_PAYLOAD_MISMATCH,
+	TEST_REFERENCE_LOST_CLEANUP,
+	TEST_ALIAS_TRANSITIVE_CONTRADICTION,
+	TEST_SEPARATION_SOURCE_MISMATCH,
+	TEST_SEPARATION_RESULT_CATEGORY_MISMATCH,
+	TEST_STORAGE_ID_OVERFLOW,
+	TEST_RELEASE_UNIQUE_STAYS_UNIQUE,
+	TEST_ALIAS_STORAGE_USE_AFTER_MOVE,
+	TEST_TABLE_COUNT_OVERFLOW,
+	TEST_VALID_CALL_TRANSFER
 } test_case;
 
 static const zend_mir_capability_id test_capabilities[] = {
@@ -169,36 +183,6 @@ static bool test_write(void *context, const char *bytes, size_t length)
 	return true;
 }
 
-static bool test_add_receipt(
-	zend_mir_value_mutator *mutator, uint32_t id,
-	zend_mir_verifier_id verifier, test_case mode)
-{
-	zend_mir_value_verifier_receipt_ref wrapped;
-	uint32_t index;
-
-	memset(&wrapped, 0, sizeof(wrapped));
-	wrapped.id = id;
-	wrapped.receipt.verifier_id = verifier;
-	wrapped.receipt.verifier_contract_version =
-		verifier == ZEND_MIR_VERIFIER_CONTROL_FLOW
-			? ZEND_MIR_W04_CONTRACT_VERSION
-		: verifier == ZEND_MIR_VERIFIER_VALUE_REFERENCE
-			? ZEND_MIR_W06_CONTRACT_VERSION
-			: ZEND_MIR_CONTRACT_VERSION;
-	for (index = 0; index < 4; index++) {
-		wrapped.receipt.module_fingerprint[index] =
-			UINT32_C(0x10203040) + index;
-		wrapped.receipt.source_fingerprint[index] =
-			UINT32_C(0x50607080) + index;
-	}
-	if (mode == TEST_FINGERPRINT_MISMATCH
-			&& verifier == ZEND_MIR_VERIFIER_VALUE_REFERENCE) {
-		wrapped.receipt.module_fingerprint[3]++;
-	}
-	wrapped.receipt.status = ZEND_MIR_VERIFIER_STATUS_PASS;
-	return mutator->add_verifier_receipt(mutator->context, &wrapped);
-}
-
 static bool test_stage_model(
 	zend_mir_value_mutator *mutator, test_case mode)
 {
@@ -212,12 +196,21 @@ static bool test_stage_model(
 	memset(&payload, 0, sizeof(payload));
 	payload.id = 0;
 	payload.category = ZEND_MIR_VALUE_REFCOUNTED_STRING;
-	payload.refcount_state = ZEND_MIR_REFCOUNT_SHARED;
+	payload.refcount_state =
+		mode == TEST_COPY_ADDREF_UNIQUE_STAYS_UNIQUE
+				|| mode == TEST_RELEASE_UNIQUE_STAYS_UNIQUE
+			? ZEND_MIR_REFCOUNT_UNIQUE : ZEND_MIR_REFCOUNT_SHARED;
 	payload.cleanup_obligation = true;
 	CHECK(mutator->add_payload(mutator->context, &payload));
 	payload.id = 1;
 	payload.refcount_state = ZEND_MIR_REFCOUNT_UNIQUE;
 	CHECK(mutator->add_payload(mutator->context, &payload));
+	if (mode == TEST_SEPARATION_RESULT_CATEGORY_MISMATCH) {
+		payload.id = 2;
+		payload.category = ZEND_MIR_VALUE_REFCOUNTED_CONTAINER_ABSTRACT;
+		payload.refcount_state = ZEND_MIR_REFCOUNT_UNIQUE;
+		CHECK(mutator->add_payload(mutator->context, &payload));
+	}
 
 	memset(&storage, 0, sizeof(storage));
 	storage.id = 0;
@@ -246,9 +239,18 @@ static bool test_stage_model(
 	storage.kind = ZEND_MIR_STORAGE_TEMPORARY;
 	storage.state = ZEND_MIR_STORAGE_DIRECT;
 	storage.category = ZEND_MIR_VALUE_REFCOUNTED_STRING;
-	storage.payload_id = 1;
+	storage.payload_id = 0;
 	storage.indirect_target_id = ZEND_MIR_ID_INVALID;
 	CHECK(mutator->add_storage(mutator->context, &storage));
+	if (mode == TEST_SEPARATION_SOURCE_MISMATCH) {
+		storage.id = 4;
+		storage.payload_id = 1;
+		CHECK(mutator->add_storage(mutator->context, &storage));
+	}
+	if (mode == TEST_STORAGE_ID_OVERFLOW) {
+		storage.id = ZEND_MIR_ID_INVALID;
+		CHECK(mutator->add_storage(mutator->context, &storage));
+	}
 	if (mode == TEST_INDIRECT_CYCLE) {
 		storage.id = 4;
 		storage.kind = ZEND_MIR_STORAGE_INDIRECT_SLOT;
@@ -266,7 +268,7 @@ static bool test_stage_model(
 	cell.alias_class_id = 1;
 	cell.creation_source_id = 0;
 	cell.ownership = ZEND_MIR_OWNERSHIP_STATE_OWNED;
-	cell.cleanup_obligation = true;
+	cell.cleanup_obligation = mode != TEST_REFERENCE_LOST_CLEANUP;
 	CHECK(mutator->add_reference_cell(mutator->context, &cell));
 
 	memset(&alias, 0, sizeof(alias));
@@ -284,6 +286,20 @@ static bool test_stage_model(
 		alias.relation = ZEND_MIR_ALIAS_MAY;
 		alias.proof_id = 0;
 		CHECK(mutator->add_alias_relation(mutator->context, &alias));
+	} else if (mode == TEST_ALIAS_TRANSITIVE_CONTRADICTION) {
+		alias.left_id = 1;
+		alias.right_id = 2;
+		alias.relation = ZEND_MIR_ALIAS_MUST;
+		alias.proof_id = 0;
+		CHECK(mutator->add_alias_relation(mutator->context, &alias));
+		alias.left_id = 2;
+		alias.right_id = 3;
+		CHECK(mutator->add_alias_relation(mutator->context, &alias));
+		alias.left_id = 1;
+		alias.right_id = 3;
+		alias.relation = ZEND_MIR_ALIAS_NONE;
+		alias.proof_id = 9;
+		CHECK(mutator->add_alias_relation(mutator->context, &alias));
 	}
 
 	memset(&event, 0, sizeof(event));
@@ -297,15 +313,41 @@ static bool test_stage_model(
 	event.before_state = ZEND_MIR_REFCOUNT_SHARED;
 	event.after_state = ZEND_MIR_REFCOUNT_SHARED;
 	event.cleanup_obligation = true;
+	if (mode == TEST_COPY_ADDREF_UNIQUE_STAYS_UNIQUE) {
+		event.before_state = ZEND_MIR_REFCOUNT_UNIQUE;
+		event.after_state = ZEND_MIR_REFCOUNT_UNIQUE;
+	} else if (mode == TEST_RELEASE_UNIQUE_STAYS_UNIQUE) {
+		event.action = ZEND_MIR_TRANSFER_RELEASE;
+		event.target_storage_id = ZEND_MIR_ID_INVALID;
+		event.before_state = ZEND_MIR_REFCOUNT_UNIQUE;
+		event.after_state = ZEND_MIR_REFCOUNT_UNIQUE;
+	} else if (mode == TEST_ALIAS_STORAGE_USE_AFTER_MOVE) {
+		event.action = ZEND_MIR_TRANSFER_MOVE;
+		event.cleanup_obligation = false;
+	} else if (mode == TEST_DOUBLE_RELEASE) {
+		event.target_storage_id = ZEND_MIR_ID_INVALID;
+	} else if (mode == TEST_RELEASE_LOST_CLEANUP) {
+		event.action = ZEND_MIR_TRANSFER_RELEASE;
+		event.target_storage_id = ZEND_MIR_ID_INVALID;
+		event.cleanup_obligation = false;
+	} else if (mode == TEST_EVENT_PAYLOAD_MISMATCH) {
+		event.payload_id = 1;
+	}
 	if (mode == TEST_DESTROY_BORROWED) {
 		event.action = ZEND_MIR_TRANSFER_BORROW;
 		event.target_storage_id = ZEND_MIR_ID_INVALID;
+		event.cleanup_obligation = false;
 	}
 	CHECK(mutator->add_ownership_event(mutator->context, &event));
-	if (mode == TEST_DOUBLE_RELEASE || mode == TEST_DESTROY_BORROWED) {
+	if (mode == TEST_DOUBLE_RELEASE || mode == TEST_DESTROY_BORROWED
+			|| mode == TEST_ALIAS_STORAGE_USE_AFTER_MOVE) {
 		event.id = 1;
 		event.action = ZEND_MIR_TRANSFER_RELEASE;
 		event.target_storage_id = ZEND_MIR_ID_INVALID;
+		event.cleanup_obligation = true;
+		if (mode == TEST_ALIAS_STORAGE_USE_AFTER_MOVE) {
+			event.source_storage_id = 3;
+		}
 		CHECK(mutator->add_ownership_event(mutator->context, &event));
 	}
 
@@ -318,33 +360,51 @@ static bool test_stage_model(
 	separation.required = ZEND_MIR_SEPARATION_REQUIRED_YES;
 	separation.result_payload_id =
 		mode == TEST_INVALID_SEPARATION ? 0 : 1;
+	if (mode == TEST_SEPARATION_SOURCE_MISMATCH) {
+		separation.source_storage_id = 4;
+	} else if (mode == TEST_SEPARATION_RESULT_CATEGORY_MISMATCH) {
+		separation.result_payload_id = 2;
+	}
 	separation.container_execution_debt =
 		ZEND_MIR_DEBT_CONTAINER_CLONE_EXECUTION;
+	if (mode == TEST_COPY_ADDREF_UNIQUE_STAYS_UNIQUE
+			|| mode == TEST_RELEASE_UNIQUE_STAYS_UNIQUE) {
+		separation.uniqueness_fact = ZEND_MIR_REFCOUNT_UNIQUE;
+		separation.required = ZEND_MIR_SEPARATION_REQUIRED_NO;
+		separation.result_payload_id = ZEND_MIR_ID_INVALID;
+		separation.container_execution_debt = ZEND_MIR_ID_INVALID;
+	}
 	CHECK(mutator->add_separation_plan(mutator->context, &separation));
 
-	if (mode == TEST_CALL_SPAN_OVERFLOW) {
+	if (mode == TEST_CALL_SPAN_OVERFLOW
+			|| mode == TEST_DEBT_SPAN_OVERFLOW
+			|| mode == TEST_VALID_CALL_TRANSFER) {
 		zend_mir_call_transfer_ref transfer;
 		memset(&transfer, 0, sizeof(transfer));
 		transfer.call_site_id = 1;
-		transfer.parameter_modes.offset = UINT32_MAX;
-		transfer.parameter_modes.count = 2;
-		transfer.argument_storage_id = 0;
-		transfer.argument_reference_cell_id = ZEND_MIR_ID_INVALID;
+		transfer.parameter_modes.offset =
+			mode == TEST_CALL_SPAN_OVERFLOW ? UINT32_MAX : 0;
+		transfer.parameter_modes.count =
+			mode == TEST_CALL_SPAN_OVERFLOW ? 2 : 1;
+		transfer.argument_storage_id =
+			mode == TEST_VALID_CALL_TRANSFER ? 1 : 0;
+		transfer.argument_reference_cell_id =
+			mode == TEST_VALID_CALL_TRANSFER
+				? 0 : ZEND_MIR_ID_INVALID;
 		transfer.argument_action = ZEND_MIR_TRANSFER_BORROW;
-		transfer.return_storage_id = 3;
-		transfer.return_reference_cell_id = ZEND_MIR_ID_INVALID;
+		transfer.return_storage_id =
+			mode == TEST_VALID_CALL_TRANSFER ? 1 : 3;
+		transfer.return_reference_cell_id =
+			mode == TEST_VALID_CALL_TRANSFER
+				? 0 : ZEND_MIR_ID_INVALID;
 		transfer.return_action = ZEND_MIR_TRANSFER_FROM_CALLEE;
+		if (mode == TEST_DEBT_SPAN_OVERFLOW) {
+			transfer.resolved_debt_ids.offset = UINT32_MAX;
+			transfer.resolved_debt_ids.count = 2;
+		}
 		CHECK(mutator->add_call_transfer(mutator->context, &transfer));
 	}
 
-	CHECK(test_add_receipt(
-		mutator, 0, ZEND_MIR_VERIFIER_STRUCTURAL, mode));
-	CHECK(test_add_receipt(
-		mutator, 1, ZEND_MIR_VERIFIER_SCALAR, mode));
-	CHECK(test_add_receipt(
-		mutator, 2, ZEND_MIR_VERIFIER_CONTROL_FLOW, mode));
-	CHECK(test_add_receipt(
-		mutator, 3, ZEND_MIR_VERIFIER_VALUE_REFERENCE, mode));
 	return true;
 }
 
@@ -365,6 +425,16 @@ static bool test_build_case(
 	zend_mir_block_id block;
 	zend_mir_source_position_ref source;
 	zend_mir_source_position_id source_id;
+	uint32_t module_fingerprint[4];
+	const uint32_t source_fingerprint[4] = {
+		UINT32_C(0x50607080), UINT32_C(0x50607081),
+		UINT32_C(0x50607082), UINT32_C(0x50607083)
+	};
+	uint32_t verified_facets =
+		ZEND_MIR_W06_VERIFIED_STRUCTURAL
+		| ZEND_MIR_W06_VERIFIED_SCALAR
+		| ZEND_MIR_W06_VERIFIED_CONTROL_FLOW
+		| ZEND_MIR_W06_VERIFIED_VALUE_REFERENCE;
 	bool committed;
 	bool success = false;
 
@@ -394,6 +464,9 @@ static bool test_build_case(
 			|| source_id != 0 || !test_stage_model(value_mutator, mode)) {
 		goto destroy;
 	}
+	if (mode == TEST_TABLE_COUNT_OVERFLOW) {
+		module->value_staging.payload_count = UINT32_C(1048577);
+	}
 	committed = zend_mir_module_commit_value_model(
 		module, test_capabilities,
 		mode == TEST_MISSING_CAPABILITY ? 7 : 8,
@@ -405,15 +478,30 @@ static bool test_build_case(
 			|| !zend_mir_module_finalize(module)) {
 		goto destroy;
 	}
+	if (mode == TEST_VALID_CALL_TRANSFER) {
+		verified_facets |= ZEND_MIR_W06_VERIFIED_CALL_MODEL;
+	}
+	if (!zend_mir_value_compute_module_fingerprint(
+			zend_mir_module_get_view(module), &sink, module_fingerprint)
+			|| !zend_mir_module_publish_w06_verifier_receipts(
+				module, module_fingerprint, source_fingerprint,
+				verified_facets)) {
+		goto destroy;
+	}
 	if (mode == TEST_VERIFIER_INDIRECT_MUTATION) {
 		zend_mir_storage_ref *records = ZEND_MIR_CORE_ITEMS(
 			module, value_storages, zend_mir_storage_ref);
 		records[2].indirect_target_id = 2;
-	} else if (mode == TEST_VERIFIER_FINGERPRINT_MUTATION) {
+	} else if (mode == TEST_VERIFIER_FINGERPRINT_MUTATION
+			|| mode == TEST_FINGERPRINT_MISMATCH) {
 		zend_mir_value_verifier_receipt_ref *records =
 			ZEND_MIR_CORE_ITEMS(module, value_verifier_receipts,
 				zend_mir_value_verifier_receipt_ref);
 		records[3].receipt.module_fingerprint[3]++;
+	} else if (mode == TEST_VERIFIER_PAYLOAD_MUTATION) {
+		zend_mir_payload_ref *payloads = ZEND_MIR_CORE_ITEMS(
+			module, value_payloads, zend_mir_payload_ref);
+		payloads[1].cleanup_obligation = false;
 	}
 	if (before_verify != NULL) {
 		zend_mir_text_writer writer = { before_verify, test_write };
@@ -426,13 +514,17 @@ static bool test_build_case(
 			zend_mir_module_get_view(module),
 			zend_mir_module_get_value_view(module), &sink)) {
 		if (mode == TEST_VERIFIER_INDIRECT_MUTATION
-				|| mode == TEST_VERIFIER_FINGERPRINT_MUTATION) {
+				|| mode == TEST_VERIFIER_FINGERPRINT_MUTATION
+				|| mode == TEST_VERIFIER_PAYLOAD_MUTATION
+				|| mode == TEST_FINGERPRINT_MISMATCH) {
 			success = true;
 		}
 		goto destroy;
 	}
 	if (mode == TEST_VERIFIER_INDIRECT_MUTATION
-			|| mode == TEST_VERIFIER_FINGERPRINT_MUTATION) {
+			|| mode == TEST_VERIFIER_FINGERPRINT_MUTATION
+			|| mode == TEST_VERIFIER_PAYLOAD_MUTATION
+			|| mode == TEST_FINGERPRINT_MISMATCH) {
 		goto destroy;
 	}
 	if (after_verify != NULL) {
@@ -486,8 +578,19 @@ static bool test_rejections(void)
 		TEST_DOUBLE_RELEASE,
 		TEST_DESTROY_BORROWED,
 		TEST_INVALID_SEPARATION,
-		TEST_FINGERPRINT_MISMATCH,
 		TEST_CALL_SPAN_OVERFLOW,
+		TEST_DEBT_SPAN_OVERFLOW,
+		TEST_COPY_ADDREF_UNIQUE_STAYS_UNIQUE,
+		TEST_RELEASE_LOST_CLEANUP,
+		TEST_EVENT_PAYLOAD_MISMATCH,
+		TEST_REFERENCE_LOST_CLEANUP,
+		TEST_ALIAS_TRANSITIVE_CONTRADICTION,
+		TEST_SEPARATION_SOURCE_MISMATCH,
+		TEST_SEPARATION_RESULT_CATEGORY_MISMATCH,
+		TEST_STORAGE_ID_OVERFLOW,
+		TEST_RELEASE_UNIQUE_STAYS_UNIQUE,
+		TEST_ALIAS_STORAGE_USE_AFTER_MOVE,
+		TEST_TABLE_COUNT_OVERFLOW,
 		TEST_MISSING_CAPABILITY
 	};
 	uint32_t index;
@@ -511,10 +614,10 @@ static bool test_merge_rules(void)
 	CHECK(zend_mir_value_merge_alias_relation(
 		ZEND_MIR_ALIAS_MUST, ZEND_MIR_ALIAS_NONE) == ZEND_MIR_ALIAS_MAY);
 	CHECK(zend_mir_value_merge_alias_relation(
-		ZEND_MIR_ALIAS_NONE, ZEND_MIR_ALIAS_NONE) == ZEND_MIR_ALIAS_NONE);
+		ZEND_MIR_ALIAS_NONE, ZEND_MIR_ALIAS_NONE) == ZEND_MIR_ALIAS_MAY);
 	CHECK(zend_mir_value_merge_refcount_state(
 		ZEND_MIR_REFCOUNT_UNIQUE,
-		ZEND_MIR_REFCOUNT_SHARED) == ZEND_MIR_REFCOUNT_UNKNOWN);
+		ZEND_MIR_REFCOUNT_SHARED) == ZEND_MIR_REFCOUNT_SHARED);
 	memset(&left, 0, sizeof(left));
 	left.id = 1;
 	left.kind = ZEND_MIR_STORAGE_TEMPORARY;
@@ -526,9 +629,7 @@ static bool test_merge_rules(void)
 	right = left;
 	right.id = 2;
 	right.payload_id = 2;
-	CHECK(zend_mir_value_merge_storage_state(&left, &right, &merged));
-	CHECK(merged.id == ZEND_MIR_ID_INVALID);
-	CHECK(merged.payload_id == ZEND_MIR_ID_INVALID);
+	CHECK(!zend_mir_value_merge_storage_state(&left, &right, &merged));
 	right.state = ZEND_MIR_STORAGE_REFERENCE;
 	CHECK(!zend_mir_value_merge_storage_state(&left, &right, &merged));
 	return true;
@@ -544,6 +645,24 @@ static bool test_verifier_rejections(void)
 	CHECK(test_build_case(TEST_VERIFIER_FINGERPRINT_MUTATION,
 		0, NULL, NULL, NULL, &diagnostics));
 	CHECK(strstr(diagnostics.last_message, "MIRV0807") != NULL);
+	CHECK(test_build_case(TEST_FINGERPRINT_MISMATCH,
+		0, NULL, NULL, NULL, &diagnostics));
+	CHECK(strstr(diagnostics.last_message, "MIRV0807") != NULL);
+	CHECK(test_build_case(TEST_VERIFIER_PAYLOAD_MUTATION,
+		0, NULL, NULL, NULL, &diagnostics));
+	CHECK(strstr(diagnostics.last_message, "MIRV0807") != NULL);
+	return true;
+}
+
+static bool test_call_transfer_dump_is_complete(void)
+{
+	test_text text = { { 0 }, 0 };
+	test_diagnostics diagnostics;
+
+	CHECK(test_build_case(
+		TEST_VALID_CALL_TRANSFER, 0, &text, NULL, NULL, &diagnostics));
+	CHECK(strstr(text.bytes, "argument-reference rc0") != NULL);
+	CHECK(strstr(text.bytes, "return-reference rc0") != NULL);
 	return true;
 }
 
@@ -568,6 +687,7 @@ int main(void)
 			|| !test_rejections()
 			|| !test_merge_rules()
 			|| !test_verifier_rejections()
+			|| !test_call_transfer_dump_is_complete()
 			|| !test_every_arena_allocation_failure()) {
 		return 1;
 	}
