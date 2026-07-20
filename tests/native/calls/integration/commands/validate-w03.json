@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "python3",
+    "scripts/native/lowering/validate-w03.py",
+    "--check"
+  ],
+  "command_id": "validate-w03",
+  "duration_ms": 1030,
+  "environment_profile": "regression",
+  "exit_code": 0,
+  "format_version": "2.0.0",
+  "raw_log": "logs/validate-w03.log",
+  "raw_log_sha256": "4f73d4862a0d30032100aadbaa03a031ae9fd1a7b0b9ede0ca24d1d6d202d937",
+  "raw_log_size_bytes": 387,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "20ff54391a69c42b2348d53ad3a1dde3933f98ed1412bcc6bbd8102311eacc03"
+}

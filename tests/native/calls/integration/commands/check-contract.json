@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "python3",
+    "scripts/native/calls/check-contract.py",
+    "--check"
+  ],
+  "command_id": "check-contract",
+  "duration_ms": 10500,
+  "environment_profile": "contract",
+  "exit_code": 0,
+  "format_version": "2.0.0",
+  "raw_log": "logs/check-contract.log",
+  "raw_log_sha256": "b427eb8663644d4a0dcc7e7cb824497799bf1f3754cdd5e3867daaa354b396cd",
+  "raw_log_size_bytes": 116,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "8181c4f18b2ca382fe874b272596d095e78717b42e3c5daefeba9e87e41b3a0c"
+}

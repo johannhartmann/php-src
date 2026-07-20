@@ -1,10 +1,12 @@
 # W05 direct user-call model
 
 W05 models, but does not execute, exact direct calls to user functions declared
-in the same compiled script. The accepted slice is deliberately narrow:
-positional by-value `null`, `bool`, `long`, and `double` arguments; complete
-reachable INIT/SEND/DO sequences; exact argument counts; and unused or
-source-proved non-refcounted scalar results.
+in the same compiled script. The accepted slice includes complete reachable
+INIT/SEND/DO sequences, ordered scalable parameter-mode records, exact direct
+self-calls, default-bearing targets when every argument is supplied, and
+compile-normalized named calls whose final target and ordinal mapping are fully
+static. Runtime named containers, missing defaults, unpacking, by-reference
+transfers, dynamic targets, and refcounted transfers remain deferred.
 
 The modeled result contains pointer-free call targets, arguments, caller and
 callee frames, continuations, receipts, and the capability/debt boundary. It is
@@ -45,15 +47,22 @@ review manifest and the global native source manifest. `validate-w05.py
 
 ## Durable seal
 
-After the gate commit has passed, `seal-w05.py --subject <gate-commit> --write`
-binds the gate tree, W04 receipt, profiles, reviews, coverage report, command
-logs, goldens, and source manifest. The receipt subject is the gate commit, not
-the containing seal commit. The committed task result therefore uses
-`tested_head_commit` and a receipt digest while leaving `head_commit` null.
+Each required command is captured with `seal-w05.py run`; its committed v2
+summary contains normalized repository-relative arguments, independent
+stdout/stderr digests, duration, and a digest-bound raw log below the external
+artifact root. The gate commit contains every summary and the two unchanged
+read-only review JSON files.
 
-The generic receipt schema frozen by W05-00 has no wave-specific base, pin, or
-implementation-head fields. W05 binds those values without extending that
-sealed schema: the receipt hashes `w05-review-manifest.json`, and the seal tool
-requires that manifest to name the exact H and P commits, two approved reviews
-of one implementation head, and an ancestry chain from P through that head to
-the gate subject.
+After QG has passed, `seal-w05.py seal --subject <QG> --write ...` archives the
+v1 receipt and creates the v2 receipt. It binds the exact QH/QP/QM/QG phase
+chain, W04 dependency receipt, profiles, reviews, coverage, summaries, and
+reference/candidate binary manifests. The receipt subject is QG, not the
+containing QS commit. The task result therefore uses `tested_head_commit` and
+a receipt digest while leaving `head_commit` null.
+
+Full verification rehashes every external raw log and binary:
+
+```sh
+python3 scripts/native/verify-wave-receipt.py W05 \
+  --level full --artifact-root /absolute/path/to/w05-v2-artifacts
+```

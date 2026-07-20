@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "python3",
+    "scripts/native/calls/check-phases.py",
+    "--check"
+  ],
+  "command_id": "check-phases",
+  "duration_ms": 34,
+  "environment_profile": "contract",
+  "exit_code": 0,
+  "format_version": "2.0.0",
+  "raw_log": "logs/check-phases.log",
+  "raw_log_sha256": "4b5de08632a2ee524ad058d5127e7458a356a13f9111a626f8b41aea45aec2d7",
+  "raw_log_size_bytes": 70,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "f400e5d9e2713d7c63467eb29dcef62be128ec79728dcb9a2e51010eb79ba71a"
+}

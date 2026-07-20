@@ -26,6 +26,7 @@ CORPUS = ROOT / "tests/native/calls/corpus/manifest.json"
 GOLDEN_INDEX = ROOT / "tests/native/calls/integration/goldens/index.json"
 GATE_EVIDENCE = ROOT / "tests/native/calls/integration/gate-evidence.json"
 REPORT = ROOT / "docs/native-engine/calls/w05-coverage-report.json"
+COMMAND_SUMMARIES = ROOT / "tests/native/calls/integration/commands"
 ARCHITECTURE_PATHS = (
     ROOT / "Zend/Native/Calls/Model/zend_mir_call_model.c",
     ROOT / "Zend/Native/Calls/Model/zend_mir_call_model.h",
@@ -37,16 +38,31 @@ FORBIDDEN_RUNTIME = re.compile(
     re.IGNORECASE,
 )
 REQUIRED_RUNS = (
-    "debug-nts",
-    "debug-zts",
-    "asan-nts",
-    "ubsan-nts",
+    "check-phase-history",
+    "verify-w04",
+    "check-contract",
+    "check-phases",
+    "check-reviews",
+    "validate-w05",
+    "validate-w01",
+    "validate-w02",
+    "validate-w03",
+    "validate-w04",
+    "waves-unittest",
+    "build-w05-debug-nts",
+    "test-w05-debug-nts",
+    "build-w05-debug-zts",
+    "test-w05-debug-zts",
+    "build-w05-asan-nts",
+    "test-w05-asan-nts",
+    "build-w05-ubsan-nts",
+    "test-w05-ubsan-nts",
+    "calls-unittest",
     "fuzz-20000",
-    "w00-smoke",
-    "w01-regression",
-    "w02-regression",
-    "w03-regression",
-    "w04-regression",
+    "build-debug-nts",
+    "smoke-debug-nts",
+    "build-debug-zts",
+    "smoke-debug-zts",
 )
 
 
@@ -198,6 +214,93 @@ def validate_reviews() -> dict[str, Any]:
     return reviews
 
 
+def validate_command_summaries() -> dict[str, dict[str, Any]]:
+    documents: dict[str, dict[str, Any]] = {}
+    paths = sorted(COMMAND_SUMMARIES.glob("*.json"))
+    if not paths:
+        raise ValidationError("W05 command summaries are missing")
+    required_fields = {
+        "format_version",
+        "command_id",
+        "argv",
+        "environment_profile",
+        "exit_code",
+        "stdout_sha256",
+        "stderr_sha256",
+        "raw_log",
+        "raw_log_sha256",
+        "raw_log_size_bytes",
+        "duration_ms",
+    }
+    sha_pattern = re.compile(r"^[0-9a-f]{64}$")
+    id_pattern = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+    for path in paths:
+        document = load(path)
+        command_id = document.get("command_id")
+        if set(document) != required_fields:
+            raise ValidationError(f"{path.name}: invalid command field set")
+        if (
+            document.get("format_version") != "2.0.0"
+            or not isinstance(command_id, str)
+            or id_pattern.fullmatch(command_id) is None
+            or path.stem != command_id
+            or command_id in documents
+        ):
+            raise ValidationError(f"{path.name}: invalid command identity")
+        argv = document.get("argv")
+        if (
+            not isinstance(argv, list)
+            or not argv
+            or any(
+                not isinstance(token, str)
+                or token.startswith("/")
+                or (
+                    "=" in token
+                    and token.split("=", 1)[1].startswith("/")
+                )
+                for token in argv
+            )
+        ):
+            raise ValidationError(f"{path.name}: argv is not relocatable")
+        if (
+            not isinstance(document.get("environment_profile"), str)
+            or id_pattern.fullmatch(document["environment_profile"]) is None
+            or not isinstance(document.get("exit_code"), int)
+            or isinstance(document.get("exit_code"), bool)
+            or document["exit_code"] != 0
+            or not isinstance(document.get("duration_ms"), int)
+            or isinstance(document.get("duration_ms"), bool)
+            or document["duration_ms"] < 0
+            or not isinstance(document.get("raw_log_size_bytes"), int)
+            or isinstance(document.get("raw_log_size_bytes"), bool)
+            or document["raw_log_size_bytes"] < 1
+        ):
+            raise ValidationError(f"{path.name}: command did not pass")
+        for field in ("stdout_sha256", "stderr_sha256", "raw_log_sha256"):
+            if (
+                not isinstance(document.get(field), str)
+                or sha_pattern.fullmatch(document[field]) is None
+            ):
+                raise ValidationError(f"{path.name}: {field} is invalid")
+        raw_log = document.get("raw_log")
+        if (
+            not isinstance(raw_log, str)
+            or raw_log.startswith("/")
+            or ".." in Path(raw_log).parts
+        ):
+            raise ValidationError(f"{path.name}: raw log path is invalid")
+        documents[command_id] = document
+    if set(documents) != set(REQUIRED_RUNS):
+        missing = sorted(set(REQUIRED_RUNS) - set(documents))
+        extra = sorted(set(documents) - set(REQUIRED_RUNS))
+        raise ValidationError(
+            "command summary set drift: missing={} extra={}".format(
+                ",".join(missing), ",".join(extra)
+            )
+        )
+    return documents
+
+
 def validate_goldens(corpus: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     index = load(GOLDEN_INDEX)
     evidence = load(GATE_EVIDENCE)
@@ -245,6 +348,7 @@ def architecture_leaks() -> list[str]:
 def report_document() -> dict[str, Any]:
     profile, sequence, reclassification = validate_profiles()
     reviews = validate_reviews()
+    commands = validate_command_summaries()
     source_manifest = check_source_manifest()
     corpus = load(CORPUS)
     index, evidence = validate_goldens(corpus)
@@ -288,7 +392,7 @@ def report_document() -> dict[str, Any]:
             "timestamp_free": True,
         },
         "fault_atomicity": evidence["fault_atomicity"],
-        "format_version": "1.0.0",
+        "format_version": "2.0.0",
         "goldens": {
             "index_sha256": digest(GOLDEN_INDEX),
             "properties": dict(sorted(property_totals.items())),
@@ -313,19 +417,20 @@ def report_document() -> dict[str, Any]:
         "reclassifications": reclassification["reclassifications"],
         "reviews": {
             "implementation_head": reviews["implementation_head"],
+            "implementation_tree": reviews["implementation_tree"],
             "manifest_sha256": digest(REVIEWS),
             "review_digests": [
                 {
-                    "approved": item["approved"],
-                    "json_sha256": item["json_sha256"],
-                    "markdown_sha256": item["markdown_sha256"],
+                    "path": item["path"],
                     "review_id": item["review_id"],
+                    "review_kind": item["review_kind"],
+                    "sha256": item["sha256"],
                 }
                 for item in reviews["reviews"]
             ],
         },
         "run_matrix": {
-            name: "pass" for name in REQUIRED_RUNS
+            name: "pass" for name in sorted(commands)
         },
         "source_manifest": source_manifest,
     }

@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "scripts/native/build.sh",
+    "--profile",
+    "w05-ubsan-nts",
+    "--print-binary"
+  ],
+  "command_id": "build-w05-ubsan-nts",
+  "duration_ms": 97025,
+  "environment_profile": "w05-ubsan-nts",
+  "exit_code": 0,
+  "format_version": "2.0.0",
+  "raw_log": "logs/build-w05-ubsan-nts.log",
+  "raw_log_sha256": "2cd5c9002b75c768a6ff9f12a47ad8b5566bd6744da045fbd6895a9afab7bebf",
+  "raw_log_size_bytes": 1102903,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "85dea92536870952891b1ff8ea3ae78dc492f9a9071611988235487ab26f0563"
+}

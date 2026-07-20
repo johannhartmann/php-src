@@ -64,6 +64,8 @@ jobs:
             >"$W05_ARTIFACT_ROOT/check-contract.log" 2>&1
           python3 scripts/native/calls/check-phases.py --check \
             >"$W05_ARTIFACT_ROOT/check-phases.log" 2>&1
+          python3 scripts/native/calls/build-review-manifest.py --check \
+            >"$W05_ARTIFACT_ROOT/check-reviews.log" 2>&1
           python3 scripts/native/calls/validate-w05.py --check \
             >"$W05_ARTIFACT_ROOT/validate-w05.log" 2>&1
 
@@ -152,6 +154,11 @@ jobs:
 
       - name: Bind command artifacts
         run: |
+          if test "$(jq -r .format_version docs/native-engine/waves/receipts/W05.json)" = "2.0.0"; then
+            python3 scripts/native/verify-wave-receipt.py W05 \
+              --level reproducible \
+              >"$W05_ARTIFACT_ROOT/verify-w05-reproducible.log" 2>&1
+          fi
           git diff --exit-code
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
           (
