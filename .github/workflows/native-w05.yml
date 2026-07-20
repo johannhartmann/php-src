@@ -1,0 +1,171 @@
+name: Native W05 call model
+
+on:
+  push:
+    paths:
+      - "Zend/Native/Calls/**"
+      - "Zend/Native/Lowering/**"
+      - "Zend/Native/MIR/**"
+      - "docs/native-engine/build/**"
+      - "docs/native-engine/calls/**"
+      - "docs/native-engine/waves/**"
+      - "ext/native_mir_test/**"
+      - "scripts/native/build/**"
+      - "scripts/native/calls/**"
+      - "scripts/native/profiles/w05-*.env"
+      - "tests/native/calls/**"
+      - ".github/workflows/native-w05.yml"
+  pull_request:
+    paths:
+      - "Zend/Native/Calls/**"
+      - "Zend/Native/Lowering/**"
+      - "Zend/Native/MIR/**"
+      - "docs/native-engine/build/**"
+      - "docs/native-engine/calls/**"
+      - "docs/native-engine/waves/**"
+      - "ext/native_mir_test/**"
+      - "scripts/native/build/**"
+      - "scripts/native/calls/**"
+      - "scripts/native/profiles/w05-*.env"
+      - "tests/native/calls/**"
+      - ".github/workflows/native-w05.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  hard-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      LANG: C
+      LC_ALL: C
+      TZ: UTC
+      PYTHONDONTWRITEBYTECODE: "1"
+      NATIVE_JOBS: "2"
+      W05_ARTIFACT_ROOT: ${{ runner.temp }}/w05-artifacts
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Verify immutable checkout and local prerequisites
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          command -v bison
+          command -v re2c
+          mkdir -p "$W05_ARTIFACT_ROOT"
+          cp docs/native-engine/calls/w05-review-manifest.json \
+            "$W05_ARTIFACT_ROOT/review-manifest.json"
+
+      - name: Validate W05 contracts
+        run: |
+          python3 scripts/native/calls/check-contract.py --check \
+            >"$W05_ARTIFACT_ROOT/check-contract.log" 2>&1
+          python3 scripts/native/calls/check-phases.py --check \
+            >"$W05_ARTIFACT_ROOT/check-phases.log" 2>&1
+          python3 scripts/native/calls/validate-w05.py --check \
+            >"$W05_ARTIFACT_ROOT/validate-w05.log" 2>&1
+
+      - name: Build explicit reference PHP
+        run: |
+          reference_root="$RUNNER_TEMP/php-w05-reference"
+          git worktree add --detach "$reference_root" \
+            47355da494ba696b1bdb6d10448a225e742bd316
+          (
+            cd "$reference_root"
+            ./buildconf --force
+            ./configure --disable-all --enable-cli --disable-cgi \
+              --disable-phpdbg --without-pear
+            make -j"$NATIVE_JOBS" sapi/cli/php
+          ) >"$W05_ARTIFACT_ROOT/build-reference.log" 2>&1
+          echo "REFERENCE_PHP=$reference_root/sapi/cli/php" >> "$GITHUB_ENV"
+
+      - name: Build and test W05 debug NTS
+        run: |
+          scripts/native/build.sh --profile w05-debug-nts --print-binary \
+            >"$W05_ARTIFACT_ROOT/build-w05-debug-nts.log" 2>&1
+          candidate=$(tail -n 1 "$W05_ARTIFACT_ROOT/build-w05-debug-nts.log")
+          echo "W05_NTS_PHP=$candidate" >> "$GITHUB_ENV"
+          python3 scripts/native/calls/test-w05.py \
+            --reference-php "$REFERENCE_PHP" --candidate-php "$candidate" \
+            >"$W05_ARTIFACT_ROOT/test-w05-debug-nts.log" 2>&1
+
+      - name: Build and test W05 debug ZTS
+        run: |
+          scripts/native/build.sh --profile w05-debug-zts --print-binary \
+            >"$W05_ARTIFACT_ROOT/build-w05-debug-zts.log" 2>&1
+          candidate=$(tail -n 1 "$W05_ARTIFACT_ROOT/build-w05-debug-zts.log")
+          python3 scripts/native/calls/test-w05.py \
+            --reference-php "$REFERENCE_PHP" --candidate-php "$candidate" \
+            >"$W05_ARTIFACT_ROOT/test-w05-debug-zts.log" 2>&1
+
+      - name: Build and test W05 ASan
+        run: |
+          scripts/native/build.sh --profile w05-asan-nts --print-binary \
+            >"$W05_ARTIFACT_ROOT/build-w05-asan-nts.log" 2>&1
+          candidate=$(tail -n 1 "$W05_ARTIFACT_ROOT/build-w05-asan-nts.log")
+          python3 scripts/native/calls/test-w05.py \
+            --reference-php "$REFERENCE_PHP" --candidate-php "$candidate" \
+            --sanitizer address \
+            >"$W05_ARTIFACT_ROOT/test-w05-asan-nts.log" 2>&1
+
+      - name: Build and test W05 UBSan
+        run: |
+          scripts/native/build.sh --profile w05-ubsan-nts --print-binary \
+            >"$W05_ARTIFACT_ROOT/build-w05-ubsan-nts.log" 2>&1
+          candidate=$(tail -n 1 "$W05_ARTIFACT_ROOT/build-w05-ubsan-nts.log")
+          python3 scripts/native/calls/test-w05.py \
+            --reference-php "$REFERENCE_PHP" --candidate-php "$candidate" \
+            --sanitizer undefined \
+            >"$W05_ARTIFACT_ROOT/test-w05-ubsan-nts.log" 2>&1
+
+      - name: Run fixed-seed fuzz and regressions
+        run: |
+          python3 tests/native/calls/fuzz/run_fuzz.py \
+              --seed 20260719 --cases 20000 \
+              --candidate-php "$W05_NTS_PHP" \
+            >"$W05_ARTIFACT_ROOT/fuzz-20000.log" 2>&1
+          TEST_PHP_EXECUTABLE="$W05_NTS_PHP" \
+            python3 -m unittest discover -s tests/native/calls \
+              -p 'test_*.py' -v \
+            >"$W05_ARTIFACT_ROOT/calls-unittest.log" 2>&1
+          python3 scripts/native/semantics/validate-w01.py --check \
+            >"$W05_ARTIFACT_ROOT/validate-w01.log" 2>&1
+          python3 scripts/native/mir/validate-w02.py --check \
+            >"$W05_ARTIFACT_ROOT/validate-w02.log" 2>&1
+          python3 scripts/native/lowering/validate-w03.py --check \
+            >"$W05_ARTIFACT_ROOT/validate-w03.log" 2>&1
+          python3 scripts/native/control-flow/validate-w04.py --check \
+            >"$W05_ARTIFACT_ROOT/validate-w04.log" 2>&1
+
+      - name: Prove standard builds remain default-off
+        run: |
+          scripts/native/build.sh --profile debug-nts \
+            >"$W05_ARTIFACT_ROOT/build-debug-nts.log" 2>&1
+          scripts/native/test-smoke.sh --profile debug-nts \
+            >"$W05_ARTIFACT_ROOT/smoke-debug-nts.log" 2>&1
+          scripts/native/build.sh --profile debug-zts \
+            >"$W05_ARTIFACT_ROOT/build-debug-zts.log" 2>&1
+          scripts/native/test-smoke.sh --profile debug-zts \
+            >"$W05_ARTIFACT_ROOT/smoke-debug-zts.log" 2>&1
+
+      - name: Bind command artifacts
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          (
+            cd "$W05_ARTIFACT_ROOT"
+            find . -type f -name '*.log' -print0 |
+              sort -z | xargs -0 sha256sum
+            sha256sum review-manifest.json
+          ) >"$W05_ARTIFACT_ROOT/SHA256SUMS"
+
+      - name: Upload W05 hard-gate evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: native-w05-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/w05-artifacts
+          if-no-files-found: error
+          retention-days: 14
