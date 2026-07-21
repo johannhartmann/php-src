@@ -41,6 +41,8 @@ struct zend_native_image {
 	size_t text_capacity;
 	uint32_t slot_count;
 	uint32_t argument_count;
+	void *target_state;
+	void (*destroy_target_state)(void *);
 };
 
 typedef void (*zend_native_entry)(
@@ -55,6 +57,8 @@ struct zend_native_code {
 	uint32_t argument_count;
 	bool writable;
 	bool executable;
+	void *target_state;
+	void (*destroy_target_state)(void *);
 };
 
 void zend_tpde_set_diagnostic(
@@ -82,6 +86,14 @@ zend_result zend_tpde_emit_darwin_arm64(
 zend_result zend_tpde_emit_linux_x64(
 	const zend_tpde_plan *plan,
 	zend_native_image *image,
+	zend_native_diagnostic *diag);
+zend_result zend_tpde_map_linux_x64(
+	const zend_native_image *image,
+	zend_native_code *code,
+	zend_native_diagnostic *diag);
+zend_result zend_tpde_map_darwin_arm64(
+	const zend_native_image *image,
+	zend_native_code *code,
 	zend_native_diagnostic *diag);
 
 zend_result zend_native_publish_darwin_arm64(
