@@ -140,6 +140,16 @@
   ],
   "deferred": [
     {
+      "name": "return_by_ref_non_lvalue_temporary",
+      "runtime": true,
+      "later_wave": "W10",
+      "source": "<?php function &f(int $x){return +$x;}",
+      "function": "f",
+      "expected_status": "rejected",
+      "expected_code": "MIRL0013",
+      "required_source_opcodes": ["ZEND_MUL", "ZEND_RETURN_BY_REF"]
+    },
+    {
       "name": "array_write_or_clone",
       "runtime": true,
       "later_wave": "W07",
