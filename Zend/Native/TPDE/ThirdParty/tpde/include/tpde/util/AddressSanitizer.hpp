@@ -4,6 +4,10 @@
 
 #include <cstddef>
 
+#ifndef __has_feature
+  #define __has_feature(feature) 0
+#endif
+
 #if __has_feature(address_sanitizer) || defined(__SANITIZE_ADDRESS__)
   #define TPDE_ASAN_BUILD
 extern "C" void __asan_poison_memory_region(void const volatile *p,
