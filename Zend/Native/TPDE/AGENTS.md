@@ -7,7 +7,7 @@ These instructions apply to `Zend/Native/TPDE/**`.
 - Cross the Zend/native boundary through an explicit C ABI. Do not expose C++
   types in Zend public headers.
 - Pin imported TPDE material to reference commit
-  `338d41890e424b058e2053b6a5787e1348e3dd57` and record its provenance.
+  `d19a36fe9a3657f36b6bf6777d87c5cec0cfce5b` and record its provenance.
 - Do not change vendored TPDE core code without updating its pin or documented
   patch provenance and running backend plus differential verification.
 - Reject unsupported targets explicitly. Do not claim a target is supported

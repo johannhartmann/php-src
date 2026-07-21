@@ -82,9 +82,6 @@ def production_paths() -> tuple[Path, ...]:
             if "ControlFlow" not in path.relative_to(LOWERING).parts
             and path.name != "zend_mir_lowering_w04.h"
         ),
-        ROOT / "ext/native_mir_test/config.m4",
-        ROOT / "ext/native_mir_test/native_mir_test.c",
-        ROOT / "ext/native_mir_test/native_mir_test.stub.php",
     ]
     return tuple(sorted(paths))
 

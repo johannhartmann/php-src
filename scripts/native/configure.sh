@@ -6,6 +6,7 @@ IFS=$'\n\t'
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
+trap native_release_lock EXIT
 
 usage() {
     cat <<'EOF'
@@ -54,7 +55,7 @@ while (($#)); do
     esac
 done
 
-for tool in git sha256sum python3 autoconf autoheader bison re2c make pkg-config flock; do
+for tool in git python3 autoconf autoheader bison re2c make pkg-config; do
     native_require_tool "$tool"
 done
 compiler=${CC:-cc}
@@ -81,7 +82,7 @@ if [[ ! -x $NATIVE_REPO_ROOT/configure || $recorded_buildconf_fingerprint != "$s
     ((buildconf_status == 0)) || native_die "buildconf failed; see $buildconf_log"
     printf '%s\n' "$source_fingerprint" >"$buildconf_stamp"
 fi
-flock -u "$NATIVE_LOCK_FD"
+native_release_lock
 
 fingerprint=$(native_configuration_fingerprint "$compiler")
 if ((force == 0)) && [[ -f $NATIVE_BUILD_DIR/Makefile ]] && \
@@ -112,7 +113,7 @@ else
             --commit "$(native_commit)" \
             --source-fingerprint "$source_fingerprint"
     fi
-    flock -u "$NATIVE_LOCK_FD"
+    native_release_lock
 fi
 
 if ((print_build_dir)); then

@@ -44,3 +44,18 @@ function native_mir_test_compile_dump(
     string $filename,
     array $options = [],
 ): array {}
+
+/**
+ * Compile source through SSA and verified W03/W04 ZNMIR, publish native code,
+ * and execute that code without entering a VM opcode handler.
+ *
+ * @return array
+ * @param list<null|bool|int|float> $arguments
+ * @param array $options
+ */
+function native_mir_test_compile_execute(
+    string $source,
+    string $filename,
+    array $arguments = [],
+    array $options = [],
+): array {}

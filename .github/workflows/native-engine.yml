@@ -45,35 +45,125 @@ jobs:
           python3 -m unittest discover -s tests/native/control-flow -p 'test_*.py' -v
           python3 -m unittest discover -s tests/native/calls -p 'test_*.py' -v
 
-  build-smoke:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
+  darwin-arm64:
+    runs-on: macos-26
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        profile: [debug-nts, debug-zts, asan-nts, ubsan-nts]
+        profile:
+          - darwin-arm64-native-debug-nts
+          - darwin-arm64-native-debug-zts
+          - darwin-arm64-native-asan-nts
+          - darwin-arm64-native-ubsan-nts
     env:
-      NATIVE_WORK_ROOT: ${{ runner.temp }}/php-native
+      NATIVE_WORK_ROOT: /tmp/php-native
       NATIVE_JOBS: 2
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Install native build tools
+        run: |
+          brew install autoconf bison llvm pkg-config re2c
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+      - name: Verify native Apple Silicon
+        run: |
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          translated=$(sysctl -in sysctl.proc_translated 2>/dev/null || printf 0)
+          test "$translated" = 0
+      - name: Build reference PHP
+        run: |
+          reference_root="$RUNNER_TEMP/php-reference"
+          git worktree add --detach "$reference_root" 47355da494ba696b1bdb6d10448a225e742bd316
+          cd "$reference_root"
+          ./buildconf --force
+          ./configure --disable-all --enable-cli --disable-cgi --disable-phpdbg --without-pear
+          make -j"$NATIVE_JOBS" sapi/cli/php
+          echo "REFERENCE_PHP=$reference_root/sapi/cli/php" >> "$GITHUB_ENV"
+      - name: Build and execute native AArch64
+        run: |
+          profile="${{ matrix.profile }}"
+          candidate=$(scripts/native/build.sh \
+            --profile "$profile" --print-binary | tail -n 1)
+          case "$profile" in
+            *-asan-*|*-ubsan-*)
+              scripts/native/test-sanitizers.sh --profile "$profile"
+              ;;
+            *)
+              scripts/native/test-smoke.sh --profile "$profile"
+              ;;
+          esac
+          source scripts/native/lib/common.sh
+          native_load_profile "$profile"
+          native_export_sanitizer_environment
+          python3 scripts/native/test-native-execution.py \
+            --target darwin-arm64-dev \
+            --reference "$REFERENCE_PHP" \
+            --candidate "$candidate"
+
+  linux-amd64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        profile:
+          - linux-amd64-native-debug-nts
+          - linux-amd64-native-debug-zts
+          - linux-amd64-native-asan-nts
+          - linux-amd64-native-ubsan-nts
+          - linux-amd64-native-release-nts
+    env:
+      NATIVE_WORK_ROOT: /tmp/php-native
+      NATIVE_JOBS: 2
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: ./.github/actions/apt-x64
         with:
-          asan: ${{ matrix.profile == 'asan-nts' && 'true' || 'false' }}
-      - name: Build
-        run: scripts/native/build.sh --profile "${{ matrix.profile }}"
-      - name: Smoke test
-        if: ${{ !endsWith(matrix.profile, 'san-nts') }}
-        run: scripts/native/test-smoke.sh --profile "${{ matrix.profile }}"
-      - name: Sanitizer test
-        if: ${{ endsWith(matrix.profile, 'san-nts') }}
-        run: scripts/native/test-sanitizers.sh --profile "${{ matrix.profile }}"
+          asan: ${{ contains(matrix.profile, 'asan') && 'true' || 'false' }}
+      - name: Verify native Linux AMD64
+        run: |
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = x86_64
+      - name: Build reference PHP
+        run: |
+          reference_root="$RUNNER_TEMP/php-reference"
+          git worktree add --detach "$reference_root" 47355da494ba696b1bdb6d10448a225e742bd316
+          cd "$reference_root"
+          ./buildconf --force
+          ./configure --disable-all --enable-cli --disable-cgi --disable-phpdbg --without-pear
+          make -j"$NATIVE_JOBS" sapi/cli/php
+          echo "REFERENCE_PHP=$reference_root/sapi/cli/php" >> "$GITHUB_ENV"
+      - name: Build and execute native x86-64
+        run: |
+          profile="${{ matrix.profile }}"
+          candidate=$(scripts/native/build.sh \
+            --profile "$profile" --print-binary | tail -n 1)
+          case "$profile" in
+            *-asan-*|*-ubsan-*)
+              scripts/native/test-sanitizers.sh --profile "$profile"
+              ;;
+            *)
+              scripts/native/test-smoke.sh --profile "$profile"
+              ;;
+          esac
+          source scripts/native/lib/common.sh
+          native_load_profile "$profile"
+          native_export_sanitizer_environment
+          python3 scripts/native/test-native-execution.py \
+            --target linux-amd64-prod \
+            --reference "$REFERENCE_PHP" \
+            --candidate "$candidate"
 
   call-model:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
-      NATIVE_WORK_ROOT: ${{ runner.temp }}/php-native
+      NATIVE_WORK_ROOT: /tmp/php-native
       NATIVE_JOBS: 2
     steps:
       - uses: actions/checkout@v6

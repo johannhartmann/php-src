@@ -13,10 +13,53 @@ AS_VAR_IF([PHP_NATIVE_MIR_TEST], [no], [], [
   AC_DEFINE([HAVE_NATIVE_MIR_TEST], [1],
     [Define to 1 if the test-only native MIR bridge is enabled.])
 
+  PHP_REQUIRE_CXX()
+  PHP_CXX_COMPILE_STDCXX([20], [mandatory], [PHP_NATIVE_MIR_TEST_STDCXX])
+  PHP_NATIVE_MIR_TEST_CXXFLAGS="$PHP_NATIVE_MIR_TEST_STDCXX -fno-exceptions -fno-rtti"
+
+  AC_PATH_PROG([NATIVE_MIR_TEST_PYTHON], [python3])
+  AS_IF([test -z "$NATIVE_MIR_TEST_PYTHON"], [
+    AC_MSG_ERROR([python3 is required to generate the vendored TPDE/Fadec encoder])
+  ])
+  NATIVE_MIR_TEST_FADEC_BUILD_DIR="$abs_builddir/Zend/Native/TPDE/ThirdParty/tpde/fadec/generated"
+  AS_MKDIR_P([$NATIVE_MIR_TEST_FADEC_BUILD_DIR])
+  AC_MSG_NOTICE([generating the pinned TPDE/Fadec x86-64 encoder])
+  AS_IF([! "$NATIVE_MIR_TEST_PYTHON" \
+      "$abs_srcdir/Zend/Native/TPDE/ThirdParty/tpde/fadec/parseinstrs.py" \
+      encode2 \
+      "$abs_srcdir/Zend/Native/TPDE/ThirdParty/tpde/fadec/instrs.txt" \
+      "$NATIVE_MIR_TEST_FADEC_BUILD_DIR/fadec-encode2-public.inc" \
+      "$NATIVE_MIR_TEST_FADEC_BUILD_DIR/fadec-encode2-private.inc" \
+      --64], [
+    AC_MSG_ERROR([failed to generate the pinned TPDE/Fadec x86-64 encoder])
+  ])
+  PHP_ADD_INCLUDE([$abs_srcdir/Zend/Native/TPDE/ThirdParty/tpde/fadec])
+  PHP_ADD_INCLUDE([$NATIVE_MIR_TEST_FADEC_BUILD_DIR])
+
   PHP_NEW_EXTENSION([native_mir_test],
     [native_mir_test.c],
     [no],,
-    [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1 -DZEND_MIR_W05_TEST_FAULTS=1])
+    [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1 -DZEND_MIR_W05_TEST_FAULTS=1],
+    [cxx])
+
+  PHP_ADD_BUILD_DIR([Zend/Native/TPDE/Common])
+  PHP_ADD_SOURCES_X([Zend/Native/TPDE/Common], [zend_tpde_backend.cpp],
+    [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
+  PHP_ADD_BUILD_DIR([Zend/Native/TPDE/DarwinA64])
+  PHP_ADD_SOURCES_X([Zend/Native/TPDE/DarwinA64], [zend_tpde_darwin_arm64.cpp],
+    [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
+  PHP_ADD_BUILD_DIR([Zend/Native/TPDE/LinuxX64])
+  PHP_ADD_SOURCES_X([Zend/Native/TPDE/LinuxX64], [zend_tpde_linux_x64.cpp],
+    [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
+  PHP_ADD_BUILD_DIR([Zend/Native/TPDE/ThirdParty/tpde/fadec])
+  PHP_ADD_SOURCES([Zend/Native/TPDE/ThirdParty/tpde/fadec], [encode2.c],
+    [-Wno-overlength-strings])
+  PHP_ADD_BUILD_DIR([Zend/Native/Runtime/DarwinA64])
+  PHP_ADD_SOURCES_X([Zend/Native/Runtime/DarwinA64], [zend_native_publish_darwin_arm64.cpp],
+    [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
+  PHP_ADD_BUILD_DIR([Zend/Native/Runtime/LinuxX64])
+  PHP_ADD_SOURCES_X([Zend/Native/Runtime/LinuxX64], [zend_native_publish_linux_x64.cpp],
+    [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
 
   dnl BEGIN GENERATED NATIVE SOURCES
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/CFG])

@@ -1350,9 +1350,11 @@ static bool zend_mir_frontend_append_parameter_modes(
 			}
 			capacity *= 2;
 		}
+#if SIZE_MAX <= UINT32_MAX
 		if ((size_t) capacity > SIZE_MAX / sizeof(*modes)) {
 			return false;
 		}
+#endif
 		modes = realloc(inventory->parameter_modes,
 			(size_t) capacity * sizeof(*modes));
 		if (modes == NULL) {

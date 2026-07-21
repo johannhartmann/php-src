@@ -1,6 +1,8 @@
 name: apt
+description: Install native PHP build and test dependencies on Ubuntu x86-64
 inputs:
   asan:
+    description: Skip packages that conflict with the address-sanitizer job
     default: false
     required: false
 runs:
