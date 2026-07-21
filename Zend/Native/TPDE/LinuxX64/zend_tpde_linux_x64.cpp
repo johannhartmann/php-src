@@ -413,6 +413,8 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 				builder.add_arg(ValuePart{call.operand_count, 4,
 					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+				builder.add_arg(ValuePart{call.record.source_position_id, 4,
+					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 				builder.call(ValuePart{
 					reinterpret_cast<uintptr_t>(&zend_native_call_begin), 8,
 					tpde::x64::PlatformConfig::GP_BANK});

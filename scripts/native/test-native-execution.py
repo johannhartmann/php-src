@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute the accepted W03/W04 scalar slice as native machine code."""
+"""Execute the accepted W03-W07 slice as native machine code."""
 
 from __future__ import annotations
 
@@ -29,6 +29,15 @@ class Case:
     function: str
     wave: int
     inputs: tuple[tuple[Any, ...], ...]
+
+
+@dataclass(frozen=True)
+class CallCase:
+    identifier: str
+    source: Path
+    function: str
+    inputs: tuple[Any, ...]
+    compiler_mode: str | None = None
 
 
 CASES = (
@@ -125,6 +134,77 @@ echo json_encode(
 );
 """
 
+W07_REFERENCE_RUNNER = r"""
+$source = base64_decode(getenv("NATIVE_SOURCE"), true);
+$arguments = json_decode(getenv("NATIVE_ARGUMENTS"), true, 512, JSON_THROW_ON_ERROR);
+$function = getenv("NATIVE_FUNCTION");
+if ($source === false || !str_starts_with($source, "<?php")) {
+    throw new RuntimeException("invalid source");
+}
+ob_start();
+try {
+    eval(substr($source, 5));
+    $returnValue = $function(...$arguments);
+    $output = ob_get_contents();
+} finally {
+    ob_end_clean();
+}
+echo json_encode(
+    ["output" => $output, "return_value" => $returnValue],
+    JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR
+);
+"""
+
+W07_CANDIDATE_RUNNER = r"""
+$source = base64_decode(getenv("NATIVE_SOURCE"), true);
+$arguments = json_decode(getenv("NATIVE_ARGUMENTS"), true, 512, JSON_THROW_ON_ERROR);
+$options = [
+    "wave" => 7,
+    "function" => getenv("NATIVE_FUNCTION"),
+    "target" => getenv("NATIVE_TARGET"),
+    "repeat" => (int) getenv("NATIVE_REPEAT"),
+];
+$compilerMode = getenv("NATIVE_COMPILER_MODE");
+if ($compilerMode !== "") {
+    $options["compiler_mode"] = $compilerMode;
+}
+if (getenv("NATIVE_STACK_PROBE") === "1") {
+    $options["stack_probe"] = true;
+}
+ob_start();
+try {
+    $result = native_mir_test_compile_execute(
+        $source, getenv("NATIVE_FILENAME"), $arguments, $options
+    );
+    $output = ob_get_contents();
+} finally {
+    ob_end_clean();
+}
+echo json_encode(
+    ["output" => $output, "result" => $result],
+    JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR
+);
+"""
+
+W07_RESET_RUNNER = r"""
+$source = base64_decode(getenv("NATIVE_SOURCE"), true);
+$arguments = json_decode(getenv("NATIVE_ARGUMENTS"), true, 512, JSON_THROW_ON_ERROR);
+$options = [
+    "wave" => 7,
+    "function" => getenv("NATIVE_FUNCTION"),
+    "target" => getenv("NATIVE_TARGET"),
+];
+ob_start();
+$first = native_mir_test_compile_execute(
+    $source, getenv("NATIVE_FILENAME"), $arguments, $options
+);
+$second = native_mir_test_compile_execute(
+    $source, getenv("NATIVE_FILENAME"), $arguments, $options
+);
+ob_end_clean();
+echo json_encode([$first, $second], JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR);
+"""
+
 RESET_RUNNER = r"""
 $firstSource = base64_decode(getenv("NATIVE_SOURCE"), true);
 $secondSource = base64_decode(getenv("NATIVE_SOURCE_TWO"), true);
@@ -184,6 +264,101 @@ def environment(case: Case, arguments: tuple[Any, ...], target: str) -> dict[str
     }
 
 
+def w05_accepted_cases() -> tuple[CallCase, ...]:
+    manifest = json.loads(
+        (ROOT / "tests/native/calls/corpus/manifest.json").read_text()
+    )
+    inputs = {
+        "direct_call_in_if": (True,),
+        "direct_call_in_reducible_loop": (False,),
+        "direct_call_after_phi": (False, True, True),
+    }
+    return tuple(
+        CallCase(
+            entry["id"],
+            Path(entry["source"]),
+            entry["function"],
+            inputs.get(entry["id"], ()),
+            entry.get("compiler_mode"),
+        )
+        for entry in manifest["cases"]
+        if entry["status"] == "accepted"
+    )
+
+
+def w07_environment(
+    source: bytes,
+    filename: str,
+    function: str,
+    arguments: tuple[Any, ...],
+    target: str,
+    *,
+    compiler_mode: str | None = None,
+    repeat: int = 1,
+    stack_probe: bool = False,
+) -> dict[str, str]:
+    return {
+        "NATIVE_SOURCE": base64.b64encode(source).decode("ascii"),
+        "NATIVE_ARGUMENTS": json.dumps(arguments, separators=(",", ":")),
+        "NATIVE_FUNCTION": function,
+        "NATIVE_FILENAME": filename,
+        "NATIVE_TARGET": target,
+        "NATIVE_REPEAT": str(repeat),
+        "NATIVE_COMPILER_MODE": compiler_mode or "",
+        "NATIVE_STACK_PROBE": "1" if stack_probe else "0",
+    }
+
+
+def verify_no_vm_dispatch(execution: dict[str, Any]) -> None:
+    for counter in (
+        "vm_handler_calls",
+        "execute_ex_calls",
+        "opline_handler_calls",
+    ):
+        if execution.get(counter) != 0:
+            raise AssertionError(
+                f"{counter}: expected 0, got {execution.get(counter)!r}"
+            )
+
+
+def verify_w07_result(
+    document: dict[str, Any],
+    expected: dict[str, Any],
+    target: str,
+    *,
+    executions: int = 1,
+) -> dict[str, Any]:
+    result = document.get("result")
+    if not isinstance(result, dict):
+        raise AssertionError(json.dumps(document, indent=2))
+    if result.get("status") != "accepted" or result.get("phase") != "complete":
+        raise AssertionError(json.dumps(result, indent=2))
+    if document.get("output") != expected.get("output"):
+        raise AssertionError(
+            f"output: expected {expected.get('output')!r}, "
+            f"got {document.get('output')!r}"
+        )
+    execution = result["execution"]
+    checks = {
+        "target": target,
+        "target_triple": TARGETS[target][2],
+        "status": "returned",
+        "executions": executions,
+        "writable_after_publish": False,
+        "executable_after_publish": True,
+        "return_value": expected.get("return_value"),
+    }
+    for key, value in checks.items():
+        if execution.get(key) != value:
+            raise AssertionError(
+                f"{key}: expected {value!r}, got {execution.get(key)!r}"
+            )
+    verify_no_vm_dispatch(execution)
+    if not execution.get("machine_code"):
+        raise AssertionError("W07 execution did not publish machine code")
+    return execution
+
+
 def verify_native_result(
     document: dict[str, Any], expected: Any, target: str
 ) -> None:
@@ -194,7 +369,6 @@ def verify_native_result(
         "target": target,
         "target_triple": TARGETS[target][2],
         "status": "returned",
-        "vm_handler_calls": 0,
         "executions": 10,
         "writable_after_publish": False,
         "executable_after_publish": True,
@@ -207,6 +381,7 @@ def verify_native_result(
             )
     if not execution.get("machine_code"):
         raise AssertionError("native execution did not expose emitted machine code")
+    verify_no_vm_dispatch(execution)
 
 
 def llvm_mc() -> str:
@@ -284,6 +459,124 @@ def verify_corpus_coverage() -> None:
         )
 
 
+def mixed_argument_source(count: int) -> bytes:
+    names = [f"$p{index}" for index in range(count)]
+    values = ("1", "true", "2.5", "null")
+    arguments = [values[index % len(values)] for index in range(count)]
+    return (
+        "<?php\n"
+        f"function boundary_target_{count}({', '.join(names)}): void "
+        "{ echo $p0; }\n"
+        f"function boundary_case_{count}(): void {{ "
+        f"boundary_target_{count}({', '.join(arguments)}); }}\n"
+    ).encode()
+
+
+def deep_recursion_source(depth: int) -> tuple[bytes, tuple[bool, ...]]:
+    parameters = ", ".join(f"bool $a{index}" for index in range(depth))
+    recursive_arguments = ", ".join(
+        [*(f"$a{index}" for index in range(1, depth)), "false"]
+    )
+    source = (
+        "<?php\n"
+        f"function deep_recursive({parameters}): bool {{\n"
+        "    if (!$a0) { return true; }\n"
+        f"    return deep_recursive({recursive_arguments});\n"
+        "}\n"
+    )
+    return source.encode(), (True,) * depth
+
+
+STACK_PROBE_SOURCE = b"""<?php
+function probe_leaf(int $value): int
+{
+    echo 1;
+    return $value;
+}
+function probe_middle(): int
+{
+    echo 2;
+    return probe_leaf(7);
+}
+function probe_root(): int
+{
+    echo 3;
+    return probe_middle();
+}
+"""
+
+
+MUTUAL_RECURSION_SOURCE = b"""<?php
+function mutual_even(bool $again): bool
+{
+    if (!$again) { return true; }
+    return mutual_odd(false);
+}
+function mutual_odd(bool $again): bool
+{
+    if (!$again) { return false; }
+    return mutual_even(false);
+}
+function mutual_case(): bool
+{
+    return mutual_even(true);
+}
+"""
+
+
+def run_stack_limit_case(
+    binary: Path, program: str, env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            str(binary),
+            "-n",
+            "-d",
+            "zend.max_allowed_stack_size=1048576",
+            "-d",
+            "display_errors=1",
+            "-d",
+            "log_errors=0",
+            "-r",
+            program,
+        ],
+        cwd=ROOT,
+        env={**os.environ, **env},
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+
+
+def verify_infinite_self_recursion(
+    candidate: Path, target: str, case: CallCase
+) -> None:
+    source = (ROOT / case.source).read_bytes()
+    env = w07_environment(
+        source, case.source.name, case.function, case.inputs, target
+    )
+    candidate_program = r"""
+$source = base64_decode(getenv("NATIVE_SOURCE"), true);
+native_mir_test_compile_execute(
+    $source,
+    getenv("NATIVE_FILENAME"),
+    [],
+    ["wave" => 7, "function" => getenv("NATIVE_FUNCTION"),
+     "target" => getenv("NATIVE_TARGET")]
+);
+"""
+    completed = run_stack_limit_case(candidate, candidate_program, env)
+    output = completed.stdout + completed.stderr
+    if completed.returncode == 0 or "Maximum call stack size" not in output:
+        raise AssertionError(
+            "native self-recursion did not reach the Zend stack limit: "
+            f"exit={completed.returncode} output={output[-1000:]!r}"
+        )
+    if case.source.name not in output:
+        raise AssertionError("native recursion stack trace lost its source filename")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", required=True, choices=TARGETS)
@@ -313,6 +606,131 @@ def main() -> int:
             ]
             checks += 1
 
+    call_cases = w05_accepted_cases()
+    recursive_case = next(
+        case for case in call_cases if case.identifier == "recursive_self_call"
+    )
+    for case in call_cases:
+        if case is recursive_case:
+            continue
+        source = (ROOT / case.source).read_bytes()
+        env = w07_environment(
+            source,
+            case.source.name,
+            case.function,
+            case.inputs,
+            arguments.target,
+            compiler_mode=case.compiler_mode,
+        )
+        expected = run_php(reference, W07_REFERENCE_RUNNER, env)
+        document = run_php(candidate, W07_CANDIDATE_RUNNER, env)
+        execution = verify_w07_result(document, expected, arguments.target)
+        disassembly_sample = disassembly_sample or execution["machine_code"]
+        checks += 1
+
+    verify_infinite_self_recursion(candidate, arguments.target, recursive_case)
+    checks += 1
+
+    for count in (1, 6, 7, 8, 9, 16, 128):
+        source = mixed_argument_source(count)
+        function = f"boundary_case_{count}"
+        env = w07_environment(
+            source,
+            f"boundary-{count}.php",
+            function,
+            (),
+            arguments.target,
+            stack_probe=True,
+        )
+        expected = run_php(reference, W07_REFERENCE_RUNNER, env)
+        document = run_php(candidate, W07_CANDIDATE_RUNNER, env)
+        execution = verify_w07_result(document, expected, arguments.target)
+        trace = execution.get("stack_trace")
+        expected_types = [
+            ("int", "bool", "float", "null")[index % 4]
+            for index in range(count)
+        ]
+        if not execution.get("frame_chain_valid") or not isinstance(trace, list):
+            raise AssertionError("argument boundary probe did not retain frames")
+        matching_frames = [
+            frame for frame in trace
+            if frame.get("callee") == f"boundary_target_{count}"
+        ]
+        if len(matching_frames) != 1:
+            raise AssertionError(
+                f"argument boundary probe count mismatch: {matching_frames!r}"
+            )
+        frame = matching_frames[0]
+        if frame.get("argument_count") != count \
+                or frame.get("argument_types") != expected_types:
+            raise AssertionError(
+                f"argument boundary frame mismatch: {frame!r}"
+            )
+        checks += 1
+
+    mutual_env = w07_environment(
+        MUTUAL_RECURSION_SOURCE,
+        "mutual.php",
+        "mutual_case",
+        (),
+        arguments.target,
+    )
+    mutual_expected = run_php(reference, W07_REFERENCE_RUNNER, mutual_env)
+    mutual_document = run_php(candidate, W07_CANDIDATE_RUNNER, mutual_env)
+    verify_w07_result(mutual_document, mutual_expected, arguments.target)
+    checks += 1
+
+    deep_source, deep_arguments = deep_recursion_source(128)
+    deep_env = w07_environment(
+        deep_source,
+        "deep-recursion.php",
+        "deep_recursive",
+        deep_arguments,
+        arguments.target,
+        stack_probe=True,
+    )
+    deep_expected = run_php(reference, W07_REFERENCE_RUNNER, deep_env)
+    deep_document = run_php(candidate, W07_CANDIDATE_RUNNER, deep_env)
+    deep_execution = verify_w07_result(
+        deep_document, deep_expected, arguments.target
+    )
+    if not deep_execution.get("frame_chain_valid") \
+            or len(deep_execution.get("stack_trace", ())) != 128:
+        raise AssertionError("deep native recursion did not retain 128 Zend frames")
+    checks += 1
+
+    probe_env = w07_environment(
+        STACK_PROBE_SOURCE,
+        "stack-probe.php",
+        "probe_root",
+        (),
+        arguments.target,
+        stack_probe=True,
+    )
+    probe_expected = run_php(reference, W07_REFERENCE_RUNNER, probe_env)
+    probe_document = run_php(candidate, W07_CANDIDATE_RUNNER, probe_env)
+    probe_execution = verify_w07_result(
+        probe_document, probe_expected, arguments.target
+    )
+    trace = probe_execution.get("stack_trace")
+    expected_trace = [
+        ("probe_root", "probe_middle", 15),
+        ("probe_middle", "probe_leaf", 10),
+    ]
+    if not probe_execution.get("frame_chain_valid") or not isinstance(trace, list):
+        raise AssertionError("native stack probe did not retain the Zend frame chain")
+    observed_trace = [
+        (frame.get("caller"), frame.get("callee"), frame.get("caller_line"))
+        for frame in trace
+    ]
+    if observed_trace != expected_trace or not all(
+        frame.get("previous_matches_caller") for frame in trace
+    ):
+        raise AssertionError(
+            f"native stack source mapping mismatch: {observed_trace!r}"
+        )
+    checks += 1
+
     assert disassembly_sample is not None
     verify_disassembly(disassembly_sample, arguments.target)
 
@@ -333,6 +751,25 @@ def main() -> int:
     if any(item["execution"]["vm_handler_calls"] for item in reset_results):
         raise AssertionError("compiler reset path reached a VM handler")
 
+    repeat_case = next(
+        case for case in call_cases
+        if case.identifier == "direct_user_scalar_result_followup"
+    )
+    repeat_source = (ROOT / repeat_case.source).read_bytes()
+    repeat_env = w07_environment(
+        repeat_source,
+        repeat_case.source.name,
+        repeat_case.function,
+        repeat_case.inputs,
+        arguments.target,
+    )
+    repeated_compilations = run_php(candidate, W07_RESET_RUNNER, repeat_env)
+    if [item.get("status") for item in repeated_compilations] \
+            != ["accepted", "accepted"]:
+        raise AssertionError("W07 entry cells failed across repeated compilations")
+    for item in repeated_compilations:
+        verify_no_vm_dispatch(item["execution"])
+
     fault_env = environment(CASES[0], CASES[0].inputs[0], arguments.target)
     fault_env["NATIVE_FAULT"] = "mapping_failure"
     fault = run_php(candidate, CANDIDATE_RUNNER, fault_env)
@@ -348,7 +785,8 @@ def main() -> int:
 
     print(
         f"PASS target={arguments.target} differential_cases={checks} "
-        "repeat=10 vm_handler_calls=0 mapping_failure=clean disassembly=native"
+        "repeat=10 frame_depth=128 vm_handler_calls=0 execute_ex_calls=0 "
+        "opline_handler_calls=0 mapping_failure=clean disassembly=native"
     )
     return 0
 

@@ -16,6 +16,11 @@ typedef enum _zend_native_entry_cell_state {
 	ZEND_NATIVE_ENTRY_FAILED = 3
 } zend_native_entry_cell_state;
 
+typedef void (*zend_native_frame_probe_t)(
+	void *context,
+	const zend_execute_data *caller,
+	const zend_execute_data *callee);
+
 /*
  * Entry cells are process-local indirections. They own neither the
  * zend_function nor native code and may be reset only after active_calls is
@@ -28,6 +33,8 @@ typedef struct _zend_native_entry_cell {
 	const zend_native_code *code;
 	uint64_t generation;
 	uint32_t active_calls;
+	zend_native_frame_probe_t frame_probe;
+	void *frame_probe_context;
 } zend_native_entry_cell;
 
 void zend_native_entry_cell_init(
@@ -35,8 +42,13 @@ void zend_native_entry_cell_init(
 zend_result zend_native_entry_cell_begin_compile(zend_native_entry_cell *cell);
 zend_result zend_native_entry_cell_publish(
 	zend_native_entry_cell *cell, const zend_native_code *code);
+/* Also rolls back a partially published, inactive recursive component. */
 void zend_native_entry_cell_fail(zend_native_entry_cell *cell);
 zend_result zend_native_entry_cell_reset(zend_native_entry_cell *cell);
+void zend_native_entry_cell_set_frame_probe(
+	zend_native_entry_cell *cell,
+	zend_native_frame_probe_t probe,
+	void *context);
 zend_result zend_native_frame_prepare(zend_execute_data *execute_data);
 
 /*
@@ -49,7 +61,8 @@ zend_result zend_native_frame_prepare(zend_execute_data *execute_data);
 void zend_native_call_begin(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
-	uint32_t argument_count);
+	uint32_t argument_count,
+	uint32_t source_opline_index);
 void zend_native_call_set_integer_argument(
 	zend_execute_data *caller,
 	uint32_t ordinal,
