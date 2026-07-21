@@ -292,7 +292,9 @@ extern "C" zend_result zend_tpde_compile_module(
 		return FAILURE;
 	}
 	image->target = target;
-	image->slot_count = plan.value_count + plan.value_count;
+	/* TPDE liveness and register allocation own temporaries; the reserved ABI
+	 * pointer remains present for compatibility but no value-slot array is used. */
+	image->slot_count = 0;
 	image->argument_count = plan.argument_count;
 	zend_result result = target == ZEND_NATIVE_TARGET_DARWIN_ARM64
 		? zend_tpde_emit_darwin_arm64(&plan, image, diag)
@@ -357,6 +359,9 @@ extern "C" zend_result zend_native_execute(
 
 extern "C" void zend_native_image_destroy(zend_native_image *image) {
 	if (image != nullptr) {
+		if (image->destroy_target_state != nullptr) {
+			image->destroy_target_state(image->target_state);
+		}
 		std::free(image->text);
 		std::free(image);
 	}

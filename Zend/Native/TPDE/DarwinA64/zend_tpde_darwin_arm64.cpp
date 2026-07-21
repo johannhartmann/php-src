@@ -1,193 +1,84 @@
 // SPDX-License-Identifier: PHP-3.01
 
-#include "Zend/Native/TPDE/Common/zend_tpde_internal.hpp"
+#include "Zend/Native/TPDE/Common/zend_tpde_ir_adaptor.hpp"
 #include "Zend/Native/TPDE/DarwinA64/zend_tpde_apple_a64_abi.hpp"
 
+#include <tpde/ELF.hpp>
+
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <memory>
+#include <optional>
+#include <vector>
+
+#if defined(__APPLE__) && defined(__aarch64__)
+# include <libkern/OSCacheControl.h>
+# include <pthread.h>
+# include <sys/mman.h>
+# include <unistd.h>
+#endif
 
 namespace {
 
-constexpr uint32_t X0 = 0;
-constexpr uint32_t X1 = 1;
-constexpr uint32_t X2 = 2;
-constexpr uint32_t X8 = 8;
-constexpr uint32_t X9 = 9;
-constexpr uint32_t X10 = 10;
-constexpr uint32_t X29 = 29;
-constexpr uint32_t X30 = 30;
+using Adaptor = zend::native::tpde::ZendIRAdaptor;
+using IRValueRef = zend::native::tpde::IRValueRef;
+using IRInstRef = zend::native::tpde::IRInstRef;
+using IRBlockRef = zend::native::tpde::IRBlockRef;
+using IRFuncRef = zend::native::tpde::IRFuncRef;
+using DarwinConfig = zend::native::tpde::DarwinA64PlatformConfig;
+using DarwinAssembler = zend::native::tpde::AssemblerDarwinA64;
 
-struct branch_patch {
-	size_t offset;
-	zend_mir_block_id target;
-	uint32_t base;
-	uint32_t bits;
-};
+class ZendCompilerA64 final
+	: public ::tpde::a64::CompilerA64<Adaptor, ZendCompilerA64,
+		::tpde::CompilerBase, DarwinConfig> {
+	using Base = ::tpde::a64::CompilerA64<Adaptor, ZendCompilerA64,
+		::tpde::CompilerBase, DarwinConfig>;
 
-struct emitter {
-	const zend_tpde_plan *plan;
-	zend_native_image *image;
-	size_t *labels;
-	branch_patch *patches;
-	uint32_t patch_count;
-	uint32_t patch_capacity;
-	zend_native_diagnostic *diag;
-};
-
-bool emit32(emitter *out, uint32_t instruction) {
-	if (!zend_tpde_image_u32(out->image, instruction)) {
-		zend_tpde_set_diagnostic(out->diag,
-			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
-			"unable to grow the Darwin A64 text image");
-		return false;
-	}
-	return true;
-}
-
-int32_t block_index(const zend_tpde_plan *plan, zend_mir_block_id id) {
-	for (uint32_t i = 0; i < plan->block_count; ++i) {
-		if (plan->blocks[i].id == id) {
-			return static_cast<int32_t>(i);
-		}
-	}
-	return -1;
-}
-
-bool add_patch(emitter *out, zend_mir_block_id target, uint32_t base,
-		uint32_t bits) {
-	if (out->patch_count == out->patch_capacity) {
-		zend_tpde_set_diagnostic(out->diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-			"Darwin A64 branch patch count exceeds the checked bound");
-		return false;
-	}
-	out->patches[out->patch_count++] = {
-		out->image->text_size, target, base, bits
+public:
+	struct ValRefSpecial {
+		uint8_t mode = 4;
+		uint8_t bank = 0;
+		uint8_t padding[6]{};
+		uint64_t bits = 0;
 	};
-	return emit32(out, base);
-}
 
-bool mov_imm64(emitter *out, uint32_t rd, uint64_t value) {
-	if (!emit32(out, UINT32_C(0xd2800000)
-			| (static_cast<uint32_t>(value & UINT64_C(0xffff)) << 5) | rd)) {
-		return false;
+	struct ValueParts {
+		::tpde::RegBank bank;
+		uint32_t count() const { return 1; }
+		uint32_t size_bytes(uint32_t) const { return 8; }
+		::tpde::RegBank reg_bank(uint32_t) const { return bank; }
+	};
+
+	explicit ZendCompilerA64(Adaptor *adaptor) : Base{adaptor} {}
+
+	bool cur_func_may_emit_calls() const { return false; }
+	::tpde::SymRef cur_personality_func() const { return {}; }
+	ValueParts val_parts(IRValueRef value) const {
+		return {adaptor->representation(value) == ZEND_MIR_REPRESENTATION_DOUBLE
+			? DarwinConfig::FP_BANK : DarwinConfig::GP_BANK};
 	}
-	for (uint32_t hw = 1; hw < 4; ++hw) {
-		uint32_t part = static_cast<uint32_t>((value >> (hw * 16)) & UINT64_C(0xffff));
-		if (part != 0 && !emit32(out, UINT32_C(0xf2800000) | (hw << 21)
-				| (part << 5) | rd)) {
-			return false;
+	std::optional<ValRefSpecial> val_ref_special(IRValueRef value) {
+		uint64_t bits;
+		if (!adaptor->constant(value, &bits)) {
+			return {};
 		}
+		return ValRefSpecial{
+			.mode = 4,
+			.bank = static_cast<uint8_t>(val_parts(value).bank.id()),
+			.bits = bits};
 	}
-	return true;
-}
-
-bool load_slot(emitter *out, uint32_t reg, uint32_t slot) {
-	return emit32(out, UINT32_C(0xf9400000) | (slot << 10) | (X1 << 5) | reg);
-}
-
-bool store_slot(emitter *out, uint32_t reg, uint32_t slot) {
-	return emit32(out, UINT32_C(0xf9000000) | (slot << 10) | (X1 << 5) | reg);
-}
-
-bool load_value(emitter *out, zend_mir_value_id id, uint32_t reg) {
-	int32_t index = zend_tpde_value_index(out->plan, id);
-	if (index < 0) {
-		zend_tpde_set_diagnostic(out->diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-			"Darwin A64 instruction references an unknown value");
-		return false;
+	ValuePart val_part_ref_special(ValRefSpecial &value, uint32_t) {
+		return ValuePart{value.bits, 8, ::tpde::RegBank{value.bank}};
 	}
-	return load_slot(out, reg, static_cast<uint32_t>(index));
-}
-
-bool store_result(emitter *out, const zend_tpde_instruction *instruction,
-		uint32_t reg) {
-	int32_t index = zend_tpde_value_index(out->plan, instruction->record.result_id);
-	if (index < 0) {
-		zend_tpde_set_diagnostic(out->diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-			"Darwin A64 instruction result is unknown");
-		return false;
-	}
-	return store_slot(out, reg, static_cast<uint32_t>(index));
-}
-
-bool emit_cset(emitter *out, uint32_t rd, uint32_t condition) {
-	return emit32(out, UINT32_C(0x9a9f07e0) | ((condition ^ 1U) << 12) | rd);
-}
-
-bool emit_phi_edge(emitter *out, zend_mir_block_id from,
-		zend_mir_block_id to) {
-	uint32_t predecessors = out->plan->view->predecessor_count(
-		out->plan->view->context, to);
-	uint32_t predecessor_index = UINT32_MAX;
-	for (uint32_t i = 0; i < predecessors; ++i) {
-		zend_mir_block_id predecessor;
-		if (!out->plan->view->predecessor_at(out->plan->view->context, to, i,
-				&predecessor)) {
-			zend_tpde_set_diagnostic(out->diag,
-				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-				"Darwin A64 cannot read a predecessor edge");
-			return false;
-		}
-		if (predecessor == from) {
-			predecessor_index = i;
-			break;
-		}
-	}
-	if (predecessor_index == UINT32_MAX) {
-		zend_tpde_set_diagnostic(out->diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-			"Darwin A64 branch is absent from the predecessor table");
-		return false;
+	void define_func_idx(IRFuncRef function, uint32_t index) {
+		(void) function;
+		(void) index;
 	}
 
-	/* Copy all PHI inputs to temporaries before assigning any PHI result. */
-	for (uint32_t i = 0; i < out->plan->instruction_count; ++i) {
-		const zend_tpde_instruction *phi = &out->plan->instructions[i];
-		if (phi->record.block_id != to || phi->record.opcode != ZEND_MIR_OPCODE_PHI) {
-			continue;
-		}
-		zend_mir_value_id input = zend_tpde_operand_at(out->plan, phi,
-			predecessor_index);
-		int32_t result_index = zend_tpde_value_index(out->plan, phi->record.result_id);
-		if (!zend_mir_id_is_valid(input) || result_index < 0
-				|| predecessor_index >= phi->operand_count
-				|| !load_value(out, input, X8)
-				|| !store_slot(out, X8, out->plan->value_count
-					+ static_cast<uint32_t>(result_index))) {
-			return false;
-		}
-	}
-	for (uint32_t i = 0; i < out->plan->instruction_count; ++i) {
-		const zend_tpde_instruction *phi = &out->plan->instructions[i];
-		if (phi->record.block_id != to || phi->record.opcode != ZEND_MIR_OPCODE_PHI) {
-			continue;
-		}
-		int32_t result_index = zend_tpde_value_index(out->plan, phi->record.result_id);
-		if (result_index < 0
-				|| !load_slot(out, X8, out->plan->value_count
-					+ static_cast<uint32_t>(result_index))
-				|| !store_slot(out, X8, static_cast<uint32_t>(result_index))) {
-			return false;
-		}
-	}
-	return true;
-}
-
-bool emit_edge(emitter *out, zend_mir_block_id from, zend_mir_block_id to) {
-	return emit_phi_edge(out, from, to)
-		&& add_patch(out, to, UINT32_C(0x14000000), 26);
-}
-
-bool load_binary(emitter *out, const zend_tpde_instruction *instruction) {
-	return instruction->operand_count == 2
-		&& load_value(out, zend_tpde_operand_at(out->plan, instruction, 0), X8)
-		&& load_value(out, zend_tpde_operand_at(out->plan, instruction, 1), X9);
-}
-
-bool load_unary(emitter *out, const zend_tpde_instruction *instruction) {
-	return instruction->operand_count == 1
-		&& load_value(out, zend_tpde_operand_at(out->plan, instruction, 0), X8);
-}
+	bool compile_inst(IRInstRef instruction, InstRange);
+};
 
 uint32_t scalar_kind(zend_mir_representation representation) {
 	switch (representation) {
@@ -205,249 +96,394 @@ uint32_t scalar_kind(zend_mir_representation representation) {
 	}
 }
 
-bool emit_return(emitter *out, const zend_tpde_instruction *instruction) {
-	if (!load_unary(out, instruction)) {
-		return false;
+bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
+	const Adaptor::InstNode &node = adaptor->node(instruction);
+	if (node.kind == Adaptor::InstKind::LoadArgument) {
+		auto [base_ref, base] = val_ref_single(node.operands[0]);
+		auto [result_ref, result] = result_ref_single(node.result);
+		auto base_reg = base.load_to_reg();
+		auto result_reg = result.alloc_reg();
+		uint32_t offset = node.argument_index * sizeof(zend_native_scalar);
+		load_off(result_reg, base_reg, offset, 8);
+		result.set_modified();
+		return true;
 	}
-	int32_t value_index = zend_tpde_value_index(out->plan,
-		zend_tpde_operand_at(out->plan, instruction, 0));
-	if (value_index < 0 || !emit32(out, UINT32_C(0xf9000048))) { /* str x8, [x2] */
-		return false;
-	}
-	if (!mov_imm64(out, X8, scalar_kind(out->plan->values[value_index].representation))
-			|| !emit32(out, UINT32_C(0xb9000848)) /* str w8, [x2, #8] */
-			|| !emit32(out, UINT32_C(0xa8c17bfd)) /* ldp x29, x30, [sp], #16 */
-			|| !emit32(out, UINT32_C(0xd65f03c0))) { /* ret */
-		return false;
-	}
-	return true;
-}
 
-bool emit_instruction(emitter *out, const zend_tpde_instruction *instruction) {
-	const zend_mir_instruction_record &record = instruction->record;
-	switch (record.opcode) {
-		case ZEND_MIR_OPCODE_CONSTANT:
-		case ZEND_MIR_OPCODE_PHI:
-		case ZEND_MIR_OPCODE_STATEPOINT:
-		case ZEND_MIR_OPCODE_SCALAR_DROP:
-			return true;
+	const zend_tpde_instruction &mir = adaptor->mir_instruction(instruction);
+	auto unary = [&]() { return val_ref_single(node.operands[0]); };
+	auto binary = [&]() {
+		return std::pair{val_ref_single(node.operands[0]),
+			val_ref_single(node.operands[1])};
+	};
+	auto copy_result = [&]() {
+		auto [source_ref, source] = unary();
+		auto [result_ref, result] = result_ref_single(node.result);
+		auto source_reg = source.load_to_reg();
+		auto result_reg = result.alloc_try_reuse(source);
+		if (source_reg != result_reg) {
+			mov(result_reg, source_reg, 8);
+		}
+		result.set_modified();
+		return true;
+	};
+	auto integer_binary = [&](auto emit) {
+		auto [left_pair, right_pair] = binary();
+		auto &[left_ref, left] = left_pair;
+		auto &[right_ref, right] = right_pair;
+		auto [result_ref, result] = result_ref_single(node.result);
+		auto left_reg = left.load_to_reg();
+		auto right_reg = right.load_to_reg();
+		auto result_reg = result.alloc_try_reuse(left);
+		emit(result_reg, left_reg, right_reg);
+		result.set_modified();
+		return true;
+	};
+	auto integer_compare = [&](Jump condition) {
+		auto [left_pair, right_pair] = binary();
+		auto &[left_ref, left] = left_pair;
+		auto &[right_ref, right] = right_pair;
+		auto [result_ref, result] = result_ref_single(node.result);
+		ASM(CMPx, left.load_to_reg(), right.load_to_reg());
+		auto result_reg = result.alloc_reg();
+		generate_raw_set(condition, result_reg);
+		result.set_modified();
+		return true;
+	};
+	auto floating_binary = [&](auto emit) {
+		auto [left_pair, right_pair] = binary();
+		auto &[left_ref, left] = left_pair;
+		auto &[right_ref, right] = right_pair;
+		auto [result_ref, result] = result_ref_single(node.result);
+		auto left_reg = left.load_to_reg();
+		auto right_reg = right.load_to_reg();
+		auto result_reg = result.alloc_try_reuse(left);
+		emit(result_reg, left_reg, right_reg);
+		result.set_modified();
+		return true;
+	};
+	auto floating_compare = [&](Jump condition) {
+		auto [left_pair, right_pair] = binary();
+		auto &[left_ref, left] = left_pair;
+		auto &[right_ref, right] = right_pair;
+		auto [result_ref, result] = result_ref_single(node.result);
+		ASM(FCMP_d, left.load_to_reg(), right.load_to_reg());
+		auto result_reg = result.alloc_reg();
+		generate_raw_set(condition, result_reg);
+		result.set_modified();
+		return true;
+	};
+
+	switch (mir.record.opcode) {
 		case ZEND_MIR_OPCODE_COPY:
 		case ZEND_MIR_OPCODE_CANONICALIZE:
-			return load_unary(out, instruction) && store_result(out, instruction, X8);
-		case ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW:
-			return load_binary(out, instruction)
-				&& emit32(out, UINT32_C(0x8b000000) | (X9 << 16) | (X8 << 5) | X10)
-				&& store_result(out, instruction, X10);
-		case ZEND_MIR_OPCODE_I64_SUB_NO_OVERFLOW:
-			return load_binary(out, instruction)
-				&& emit32(out, UINT32_C(0xcb000000) | (X9 << 16) | (X8 << 5) | X10)
-				&& store_result(out, instruction, X10);
-		case ZEND_MIR_OPCODE_I64_MUL_NO_OVERFLOW:
-			return load_binary(out, instruction)
-				&& emit32(out, UINT32_C(0x9b007c00) | (X9 << 16) | (X8 << 5) | X10)
-				&& store_result(out, instruction, X10);
-		case ZEND_MIR_OPCODE_I64_MOD_NONZERO:
-			return load_binary(out, instruction)
-				&& emit32(out, UINT32_C(0x9ac00c00) | (X9 << 16) | (X8 << 5) | X10)
-				/* msub x10, x10, x9, x8: dividend - quotient * divisor */
-				&& emit32(out, UINT32_C(0x9b008000) | (X9 << 16) | (X8 << 10)
-					| (X10 << 5) | X10)
-				&& store_result(out, instruction, X10);
-		case ZEND_MIR_OPCODE_I64_SHL_CHECKED:
-			return load_binary(out, instruction)
-				&& emit32(out, UINT32_C(0x9ac02000) | (X9 << 16) | (X8 << 5) | X10)
-				&& store_result(out, instruction, X10);
-		case ZEND_MIR_OPCODE_I64_SHR_CHECKED:
-			return load_binary(out, instruction)
-				&& emit32(out, UINT32_C(0x9ac02800) | (X9 << 16) | (X8 << 5) | X10)
-				&& store_result(out, instruction, X10);
-		case ZEND_MIR_OPCODE_I64_BIT_OR:
-		case ZEND_MIR_OPCODE_I64_BIT_AND:
-		case ZEND_MIR_OPCODE_I64_BIT_XOR: {
-			uint32_t base = record.opcode == ZEND_MIR_OPCODE_I64_BIT_OR
-				? UINT32_C(0xaa000000)
-				: record.opcode == ZEND_MIR_OPCODE_I64_BIT_AND
-					? UINT32_C(0x8a000000) : UINT32_C(0xca000000);
-			return load_binary(out, instruction)
-				&& emit32(out, base | (X9 << 16) | (X8 << 5) | X10)
-				&& store_result(out, instruction, X10);
-		}
-		case ZEND_MIR_OPCODE_I64_BIT_NOT:
-			return load_unary(out, instruction)
-				&& emit32(out, UINT32_C(0xaa2003e0) | (X8 << 16) | X10)
-				&& store_result(out, instruction, X10);
-		case ZEND_MIR_OPCODE_I1_NOT:
-			return load_unary(out, instruction) && mov_imm64(out, X9, 0)
-				&& emit32(out, UINT32_C(0xeb00001f) | (X9 << 16) | (X8 << 5))
-				&& emit_cset(out, X10, 0) && store_result(out, instruction, X10);
-		case ZEND_MIR_OPCODE_I1_XOR:
-			return load_binary(out, instruction)
-				&& emit32(out, UINT32_C(0xca000000) | (X9 << 16) | (X8 << 5) | X10)
-				&& store_result(out, instruction, X10);
-		case ZEND_MIR_OPCODE_I64_EQ:
-		case ZEND_MIR_OPCODE_I64_LT:
-		case ZEND_MIR_OPCODE_I64_LE:
-		case ZEND_MIR_OPCODE_I1_EQ: {
-			uint32_t condition = record.opcode == ZEND_MIR_OPCODE_I64_LT ? 11
-				: record.opcode == ZEND_MIR_OPCODE_I64_LE ? 13 : 0;
-			return load_binary(out, instruction)
-				&& emit32(out, UINT32_C(0xeb00001f) | (X9 << 16) | (X8 << 5))
-				&& emit_cset(out, X10, condition)
-				&& store_result(out, instruction, X10);
-		}
-		case ZEND_MIR_OPCODE_I64_CMP:
-			return load_binary(out, instruction)
-				&& emit32(out, UINT32_C(0xeb00001f) | (X9 << 16) | (X8 << 5))
-				&& emit_cset(out, X9, 11) && emit_cset(out, X10, 12)
-				&& emit32(out, UINT32_C(0xcb000000) | (X9 << 16) | (X10 << 5) | X10)
-				&& store_result(out, instruction, X10);
-		case ZEND_MIR_OPCODE_F64_ADD:
-		case ZEND_MIR_OPCODE_F64_SUB:
-		case ZEND_MIR_OPCODE_F64_MUL: {
-			uint32_t base = record.opcode == ZEND_MIR_OPCODE_F64_ADD
-				? UINT32_C(0x1e602800)
-				: record.opcode == ZEND_MIR_OPCODE_F64_SUB
-					? UINT32_C(0x1e603800) : UINT32_C(0x1e600800);
-			return load_binary(out, instruction)
-				&& emit32(out, UINT32_C(0x9e670000) | (X8 << 5) | X8)
-				&& emit32(out, UINT32_C(0x9e670000) | (X9 << 5) | X9)
-				&& emit32(out, base | (X9 << 16) | (X8 << 5) | X10)
-				&& emit32(out, UINT32_C(0x9e660000) | (X10 << 5) | X10)
-				&& store_result(out, instruction, X10);
-		}
-		case ZEND_MIR_OPCODE_F64_EQ:
-		case ZEND_MIR_OPCODE_F64_LT:
-		case ZEND_MIR_OPCODE_F64_LE: {
-			uint32_t condition = record.opcode == ZEND_MIR_OPCODE_F64_LT ? 11
-				: record.opcode == ZEND_MIR_OPCODE_F64_LE ? 13 : 0;
-			return load_binary(out, instruction)
-				&& emit32(out, UINT32_C(0x9e670000) | (X8 << 5) | X8)
-				&& emit32(out, UINT32_C(0x9e670000) | (X9 << 5) | X9)
-				&& emit32(out, UINT32_C(0x1e602000) | (X9 << 16) | (X8 << 5))
-				&& emit_cset(out, X10, condition)
-				&& store_result(out, instruction, X10);
-		}
-		case ZEND_MIR_OPCODE_F64_CMP:
-			return load_binary(out, instruction)
-				&& emit32(out, UINT32_C(0x9e670000) | (X8 << 5) | X8)
-				&& emit32(out, UINT32_C(0x9e670000) | (X9 << 5) | X9)
-				&& emit32(out, UINT32_C(0x1e602000) | (X9 << 16) | (X8 << 5))
-				&& emit_cset(out, X9, 11) && emit_cset(out, X10, 12)
-				&& emit32(out, UINT32_C(0xcb000000) | (X9 << 16) | (X10 << 5) | X10)
-				&& store_result(out, instruction, X10);
-		case ZEND_MIR_OPCODE_I64_TO_F64:
-		case ZEND_MIR_OPCODE_I1_TO_F64:
-			return load_unary(out, instruction)
-				&& emit32(out, UINT32_C(0x9e620000) | (X8 << 5) | X10)
-				&& emit32(out, UINT32_C(0x9e660000) | (X10 << 5) | X10)
-				&& store_result(out, instruction, X10);
-		case ZEND_MIR_OPCODE_F64_TO_I64_CHECKED:
-			return load_unary(out, instruction)
-				&& emit32(out, UINT32_C(0x9e670000) | (X8 << 5) | X8)
-				&& emit32(out, UINT32_C(0x9e780000) | (X8 << 5) | X10)
-				&& store_result(out, instruction, X10);
-		case ZEND_MIR_OPCODE_I64_TO_I1:
-			return load_unary(out, instruction) && mov_imm64(out, X9, 0)
-				&& emit32(out, UINT32_C(0xeb00001f) | (X9 << 16) | (X8 << 5))
-				&& emit_cset(out, X10, 1) && store_result(out, instruction, X10);
-		case ZEND_MIR_OPCODE_F64_TO_I1:
-			return load_unary(out, instruction)
-				&& emit32(out, UINT32_C(0x9e670000) | (X8 << 5) | X8)
-				&& emit32(out, UINT32_C(0x1e602008) | (X8 << 5))
-				&& emit_cset(out, X10, 1) && store_result(out, instruction, X10);
 		case ZEND_MIR_OPCODE_I1_TO_I64:
-			return load_unary(out, instruction) && store_result(out, instruction, X8);
-		case ZEND_MIR_OPCODE_BRANCH: {
-			zend_mir_block_id target;
-			if (out->plan->view->successor_count(out->plan->view->context,
-					record.block_id) != 1
-					|| !out->plan->view->successor_at(out->plan->view->context,
-						record.block_id, 0, &target)) {
-				return false;
+			return copy_result();
+		case ZEND_MIR_OPCODE_STATEPOINT:
+		case ZEND_MIR_OPCODE_SCALAR_DROP:
+			for (IRValueRef operand : node.operands) {
+				auto consumed = val_ref(operand);
+				(void) consumed;
 			}
-			return emit_edge(out, record.block_id, target);
+			return true;
+		case ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW:
+			return integer_binary([&](auto dst, auto left, auto right) {
+				ASM(ADDx, dst, left, right);
+			});
+		case ZEND_MIR_OPCODE_I64_SUB_NO_OVERFLOW:
+			return integer_binary([&](auto dst, auto left, auto right) {
+				ASM(SUBx, dst, left, right);
+			});
+		case ZEND_MIR_OPCODE_I64_MUL_NO_OVERFLOW:
+			return integer_binary([&](auto dst, auto left, auto right) {
+				ASM(MULx, dst, left, right);
+			});
+		case ZEND_MIR_OPCODE_I64_BIT_OR:
+			return integer_binary([&](auto dst, auto left, auto right) {
+				ASM(ORRx, dst, left, right);
+			});
+		case ZEND_MIR_OPCODE_I64_BIT_AND:
+			return integer_binary([&](auto dst, auto left, auto right) {
+				ASM(ANDx, dst, left, right);
+			});
+		case ZEND_MIR_OPCODE_I64_BIT_XOR:
+		case ZEND_MIR_OPCODE_I1_XOR:
+			return integer_binary([&](auto dst, auto left, auto right) {
+				ASM(EORx, dst, left, right);
+			});
+		case ZEND_MIR_OPCODE_I64_BIT_NOT: {
+			auto [source_ref, source] = unary();
+			auto [result_ref, result] = result_ref_single(node.result);
+			auto source_reg = source.load_to_reg();
+			auto result_reg = result.alloc_try_reuse(source);
+			ASM(MVNx, result_reg, source_reg);
+			result.set_modified();
+			return true;
 		}
+		case ZEND_MIR_OPCODE_I1_NOT:
+		case ZEND_MIR_OPCODE_I64_TO_I1: {
+			auto [source_ref, source] = unary();
+			auto [result_ref, result] = result_ref_single(node.result);
+			ASM(CMPxi, source.load_to_reg(), 0);
+			auto result_reg = result.alloc_reg();
+			generate_raw_set(mir.record.opcode == ZEND_MIR_OPCODE_I1_NOT
+				? Jump::Jeq : Jump::Jne, result_reg);
+			result.set_modified();
+			return true;
+		}
+		case ZEND_MIR_OPCODE_I64_EQ:
+		case ZEND_MIR_OPCODE_I1_EQ:
+			return integer_compare(Jump::Jeq);
+		case ZEND_MIR_OPCODE_I64_LT:
+			return integer_compare(Jump::Jlt);
+		case ZEND_MIR_OPCODE_I64_LE:
+			return integer_compare(Jump::Jle);
+		case ZEND_MIR_OPCODE_I64_CMP: {
+			auto [left_pair, right_pair] = binary();
+			auto &[left_ref, left] = left_pair;
+			auto &[right_ref, right] = right_pair;
+			ASM(CMPx, left.load_to_reg(), right.load_to_reg());
+			ScratchReg less{this};
+			ScratchReg greater{this};
+			auto less_reg = less.alloc_gp();
+			auto greater_reg = greater.alloc_gp();
+			generate_raw_set(Jump::Jlt, less_reg);
+			generate_raw_set(Jump::Jgt, greater_reg);
+			ASM(SUBx, greater_reg, greater_reg, less_reg);
+			auto [result_ref, result] = result_ref_single(node.result);
+			result.set_value(std::move(greater));
+			return true;
+		}
+		case ZEND_MIR_OPCODE_I64_MOD_NONZERO: {
+			auto [left_pair, right_pair] = binary();
+			auto &[left_ref, left] = left_pair;
+			auto &[right_ref, right] = right_pair;
+			ScratchReg quotient{this};
+			auto quotient_reg = quotient.alloc_gp();
+			auto left_reg = left.load_to_reg();
+			auto right_reg = right.load_to_reg();
+			ASM(SDIVx, quotient_reg, left_reg, right_reg);
+			auto [result_ref, result] = result_ref_single(node.result);
+			auto result_reg = result.alloc_reg();
+			ASM(MSUBx, result_reg, quotient_reg, right_reg, left_reg);
+			result.set_modified();
+			return true;
+		}
+		case ZEND_MIR_OPCODE_I64_SHL_CHECKED:
+			return integer_binary([&](auto dst, auto left, auto right) {
+				ASM(LSLVx, dst, left, right);
+			});
+		case ZEND_MIR_OPCODE_I64_SHR_CHECKED:
+			return integer_binary([&](auto dst, auto left, auto right) {
+				ASM(ASRVx, dst, left, right);
+			});
+		case ZEND_MIR_OPCODE_F64_ADD:
+			return floating_binary([&](auto dst, auto left, auto right) {
+				ASM(FADDd, dst, left, right);
+			});
+		case ZEND_MIR_OPCODE_F64_SUB:
+			return floating_binary([&](auto dst, auto left, auto right) {
+				ASM(FSUBd, dst, left, right);
+			});
+		case ZEND_MIR_OPCODE_F64_MUL:
+			return floating_binary([&](auto dst, auto left, auto right) {
+				ASM(FMULd, dst, left, right);
+			});
+		case ZEND_MIR_OPCODE_F64_EQ:
+			return floating_compare(Jump::Jeq);
+		case ZEND_MIR_OPCODE_F64_LT:
+			return floating_compare(Jump::Jlt);
+		case ZEND_MIR_OPCODE_F64_LE:
+			return floating_compare(Jump::Jle);
+		case ZEND_MIR_OPCODE_F64_CMP: {
+			auto [left_pair, right_pair] = binary();
+			auto &[left_ref, left] = left_pair;
+			auto &[right_ref, right] = right_pair;
+			ASM(FCMP_d, left.load_to_reg(), right.load_to_reg());
+			ScratchReg less{this};
+			ScratchReg greater{this};
+			auto less_reg = less.alloc_gp();
+			auto greater_reg = greater.alloc_gp();
+			generate_raw_set(Jump::Jlt, less_reg);
+			generate_raw_set(Jump::Jgt, greater_reg);
+			ASM(SUBx, greater_reg, greater_reg, less_reg);
+			auto [result_ref, result] = result_ref_single(node.result);
+			result.set_value(std::move(greater));
+			return true;
+		}
+		case ZEND_MIR_OPCODE_I64_TO_F64:
+		case ZEND_MIR_OPCODE_I1_TO_F64: {
+			auto [source_ref, source] = unary();
+			auto [result_ref, result] = result_ref_single(node.result);
+			auto result_reg = result.alloc_reg();
+			ASM(SCVTFdx, result_reg, source.load_to_reg());
+			result.set_modified();
+			return true;
+		}
+		case ZEND_MIR_OPCODE_F64_TO_I64_CHECKED: {
+			auto [source_ref, source] = unary();
+			auto [result_ref, result] = result_ref_single(node.result);
+			auto result_reg = result.alloc_reg();
+			ASM(FCVTZSxd, result_reg, source.load_to_reg());
+			result.set_modified();
+			return true;
+		}
+		case ZEND_MIR_OPCODE_F64_TO_I1: {
+			auto [source_ref, source] = unary();
+			ScratchReg bits{this};
+			auto bits_reg = bits.alloc_gp();
+			ASM(FMOVxd, bits_reg, source.load_to_reg());
+			ASM(LSLxi, bits_reg, bits_reg, 1);
+			auto [result_ref, result] = result_ref_single(node.result);
+			auto result_reg = result.alloc_reg();
+			ASM(CMPxi, bits_reg, 0);
+			generate_raw_set(Jump::Jne, result_reg);
+			result.set_modified();
+			return true;
+		}
+		case ZEND_MIR_OPCODE_BRANCH:
+			generate_uncond_branch(adaptor->block_succs(
+				adaptor->block_ref(mir.record.block_id))[0]);
+			return true;
 		case ZEND_MIR_OPCODE_COND_BRANCH: {
-			zend_mir_block_id true_target, false_target;
-			if (!load_unary(out, instruction)
-					|| out->plan->view->successor_count(out->plan->view->context,
-						record.block_id) != 2
-					|| !out->plan->view->successor_at(out->plan->view->context,
-						record.block_id, 0, &true_target)
-					|| !out->plan->view->successor_at(out->plan->view->context,
-						record.block_id, 1, &false_target)) {
-				return false;
-			}
-			size_t cbz_offset = out->image->text_size;
-			if (!emit32(out, UINT32_C(0xb4000000) | X8)
-					|| !emit_edge(out, record.block_id, true_target)) {
-				return false;
-			}
-			size_t false_offset = out->image->text_size;
-			int64_t delta = static_cast<int64_t>(false_offset)
-				- static_cast<int64_t>(cbz_offset);
-			if ((delta & 3) != 0 || delta / 4 < -(INT64_C(1) << 18)
-					|| delta / 4 >= (INT64_C(1) << 18)) {
-				return false;
-			}
-			uint32_t encoded = UINT32_C(0xb4000000)
-				| ((static_cast<uint32_t>(delta / 4) & UINT32_C(0x7ffff)) << 5) | X8;
-			std::memcpy(out->image->text + cbz_offset, &encoded, sizeof(encoded));
-			return emit_edge(out, record.block_id, false_target);
+			auto [condition_ref, condition] = unary();
+			auto condition_reg = condition.load_to_reg();
+			const auto &successors = adaptor->block_succs(
+				adaptor->block_ref(mir.record.block_id));
+			generate_cond_branch(Jump{Jump::Cbnz, condition_reg, false},
+				successors[0], successors[1]);
+			return true;
 		}
-		case ZEND_MIR_OPCODE_RETURN:
-			return emit_return(out, instruction);
+		case ZEND_MIR_OPCODE_RETURN: {
+			auto [value_ref, value] = val_ref_single(node.operands[0]);
+			auto [pointer_ref, pointer] = val_ref_single(node.operands[1]);
+			auto pointer_reg = pointer.load_to_reg();
+			auto value_reg = value.load_to_reg();
+			store_off(pointer_reg, 0, value_reg, 8);
+			ScratchReg kind{this};
+			auto kind_reg = kind.alloc_gp();
+			materialize_constant(scalar_kind(adaptor->representation(
+				node.operands[0])), DarwinConfig::GP_BANK, 4, kind_reg);
+			store_off(pointer_reg, 8, kind_reg, 4);
+			RetBuilder return_builder{*this, *cur_cc_assigner()};
+			return_builder.ret();
+			return true;
+		}
 		default:
-			zend_tpde_set_diagnostic(out->diag,
-				ZEND_NATIVE_DIAGNOSTIC_UNSUPPORTED_OPCODE,
-				"opcode is outside the executable W03/W04 Darwin A64 slice");
 			return false;
 	}
 }
 
-bool initialize_values(emitter *out) {
-	for (uint32_t i = 0; i < out->plan->value_count; ++i) {
-		const zend_tpde_value &value = out->plan->values[i];
-		if (value.argument_index >= 0) {
-			uint32_t offset = static_cast<uint32_t>(value.argument_index) * 2;
-			if (!emit32(out, UINT32_C(0xf9400000) | (offset << 10)
-					| (X0 << 5) | X8)
-					|| !store_slot(out, X8, i)) {
-				return false;
-			}
-		} else if (value.constant) {
-			if (!mov_imm64(out, X8, value.constant_bits) || !store_slot(out, X8, i)) {
-				return false;
-			}
-		}
-	}
-	return true;
+struct A64ImageState {
+	Adaptor adaptor;
+	ZendCompilerA64 compiler;
+
+	explicit A64ImageState(const zend_tpde_plan *plan)
+		: adaptor{plan}, compiler{&adaptor} {}
+};
+
+void destroy_a64_image_state(void *state) {
+	delete static_cast<A64ImageState *>(state);
 }
 
-bool patch_branches(emitter *out) {
-	for (uint32_t i = 0; i < out->patch_count; ++i) {
-		const branch_patch &patch = out->patches[i];
-		int32_t target_index = block_index(out->plan, patch.target);
-		if (target_index < 0 || out->labels[target_index] == SIZE_MAX) {
-			zend_tpde_set_diagnostic(out->diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-				"Darwin A64 branch target is absent");
-			return false;
+#if defined(__APPLE__) && defined(__aarch64__)
+
+struct MappedSection {
+	void *mapping = nullptr;
+	size_t mapping_size = 0;
+	uint32_t flags = 0;
+};
+
+struct A64PublishedState {
+	std::vector<MappedSection> sections;
+
+	~A64PublishedState() {
+		for (const MappedSection &section : sections) {
+			if (section.mapping != nullptr) {
+				munmap(section.mapping, section.mapping_size);
+			}
 		}
-		int64_t delta = static_cast<int64_t>(out->labels[target_index])
-			- static_cast<int64_t>(patch.offset);
-		int64_t words = delta / 4;
-		int64_t limit = INT64_C(1) << (patch.bits - 1);
-		if ((delta & 3) != 0 || words < -limit || words >= limit) {
-			zend_tpde_set_diagnostic(out->diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-				"Darwin A64 branch displacement is outside the encoder range");
-			return false;
-		}
-		uint32_t mask = (UINT32_C(1) << patch.bits) - 1;
-		uint32_t encoded = patch.base | (static_cast<uint32_t>(words) & mask);
-		std::memcpy(out->image->text + patch.offset, &encoded, sizeof(encoded));
 	}
-	return true;
+};
+
+void destroy_a64_published_state(void *state) {
+	delete static_cast<A64PublishedState *>(state);
 }
+
+bool signed_range(int64_t value, unsigned bits) {
+	const int64_t minimum = -(INT64_C(1) << (bits - 1));
+	const int64_t maximum = (INT64_C(1) << (bits - 1)) - 1;
+	return value >= minimum && value <= maximum;
+}
+
+bool apply_relocation(uint8_t *location, uint32_t type,
+	uintptr_t symbol, int32_t addend) {
+	using namespace ::tpde::elf;
+	const uintptr_t place = reinterpret_cast<uintptr_t>(location);
+	const uintptr_t target = symbol + static_cast<intptr_t>(addend);
+	auto load32 = [&]() {
+		uint32_t value;
+		std::memcpy(&value, location, sizeof(value));
+		return value;
+	};
+	auto store32 = [&](uint32_t value) {
+		std::memcpy(location, &value, sizeof(value));
+	};
+	switch (type) {
+		case R_AARCH64_ABS64:
+			std::memcpy(location, &target, sizeof(target));
+			return true;
+		case R_AARCH64_PREL32: {
+			int64_t delta = static_cast<int64_t>(target - place);
+			if (!signed_range(delta, 32)) return false;
+			int32_t value = static_cast<int32_t>(delta);
+			std::memcpy(location, &value, sizeof(value));
+			return true;
+		}
+		case R_AARCH64_JUMP26:
+		case R_AARCH64_CALL26: {
+			int64_t delta = static_cast<int64_t>(target - place);
+			if ((delta & 3) != 0 || !signed_range(delta >> 2, 26)) return false;
+			store32((load32() & UINT32_C(0xfc000000))
+				| (static_cast<uint32_t>(delta >> 2) & UINT32_C(0x03ffffff)));
+			return true;
+		}
+		case R_AARCH64_ADR_PREL_PG_HI21:
+		case R_AARCH64_ADR_PREL_PG_HI21_NC: {
+			int64_t pages = (static_cast<int64_t>(target & ~uintptr_t{0xfff})
+				- static_cast<int64_t>(place & ~uintptr_t{0xfff})) >> 12;
+			if (type == R_AARCH64_ADR_PREL_PG_HI21 && !signed_range(pages, 21)) {
+				return false;
+			}
+			uint32_t instruction = load32() & UINT32_C(0x9f00001f);
+			uint32_t encoded = static_cast<uint32_t>(pages) & UINT32_C(0x1fffff);
+			instruction |= (encoded & 3) << 29;
+			instruction |= ((encoded >> 2) & UINT32_C(0x7ffff)) << 5;
+			store32(instruction);
+			return true;
+		}
+		case R_AARCH64_ADD_ABS_LO12_NC:
+			store32((load32() & ~UINT32_C(0x003ffc00))
+				| ((static_cast<uint32_t>(target) & UINT32_C(0xfff)) << 10));
+			return true;
+		case R_AARCH64_LDST8_ABS_LO12_NC:
+		case R_AARCH64_LDST16_ABS_LO12_NC:
+		case R_AARCH64_LDST32_ABS_LO12_NC:
+		case R_AARCH64_LDST64_ABS_LO12_NC:
+		case R_AARCH64_LDST128_ABS_LO12_NC: {
+			unsigned shift = type == R_AARCH64_LDST8_ABS_LO12_NC ? 0
+				: type == R_AARCH64_LDST16_ABS_LO12_NC ? 1
+				: type == R_AARCH64_LDST32_ABS_LO12_NC ? 2
+				: type == R_AARCH64_LDST64_ABS_LO12_NC ? 3 : 4;
+			store32((load32() & ~UINT32_C(0x003ffc00))
+				| (((static_cast<uint32_t>(target) >> shift) & UINT32_C(0xfff)) << 10));
+			return true;
+		}
+		default:
+			return false;
+	}
+}
+
+#endif
 
 } // namespace
 
@@ -455,52 +491,183 @@ zend_result zend_tpde_emit_darwin_arm64(
 	const zend_tpde_plan *plan,
 	zend_native_image *image,
 	zend_native_diagnostic *diag) {
-	static_assert(
-		zend::native::tpde::CCAssignerAppleA64::valid_fixed_entry());
-	/* 12-bit scaled LDR/STR offsets keep the baseline encoder compact. */
-	if (plan->value_count > 2047 || plan->argument_count > 2047
-			|| plan->instruction_count > UINT32_MAX / 3) {
+	auto state = std::make_unique<A64ImageState>(plan);
+	if (!state->adaptor.valid() || !state->compiler.compile()) {
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-			"Darwin A64 module exceeds the checked baseline displacement bound");
+			"TPDE rejected the ZNMIR arm64 adaptor graph");
 		return FAILURE;
 	}
-
-	emitter out{};
-	out.plan = plan;
-	out.image = image;
-	out.diag = diag;
-	out.patch_capacity = plan->instruction_count * 3;
-	out.labels = static_cast<size_t *>(std::malloc(plan->block_count * sizeof(size_t)));
-	out.patches = static_cast<branch_patch *>(std::calloc(
-		out.patch_capacity == 0 ? 1 : out.patch_capacity, sizeof(branch_patch)));
-	if (out.labels == nullptr || out.patches == nullptr) {
-		std::free(out.labels);
-		std::free(out.patches);
+	std::vector<::tpde::u8> finalized =
+		state->compiler.assembler.build_object_file();
+	const ::tpde::DataSection &text = state->compiler.assembler.get_section(
+		state->compiler.assembler.get_default_section(::tpde::SectionKind::Text));
+	if (finalized.empty() || text.data.empty() || !zend_tpde_image_append(
+			image, text.data.data(), text.data.size())) {
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
-			"unable to allocate Darwin A64 relocation state");
+			"unable to retain the finalized TPDE arm64 image");
 		return FAILURE;
 	}
-	for (uint32_t i = 0; i < plan->block_count; ++i) {
-		out.labels[i] = SIZE_MAX;
+	image->target_state = state.release();
+	image->destroy_target_state = destroy_a64_image_state;
+	return SUCCESS;
+}
+
+zend_result zend_tpde_map_darwin_arm64(
+	const zend_native_image *image,
+	zend_native_code *code,
+	zend_native_diagnostic *diag) {
+#if defined(__APPLE__) && defined(__aarch64__)
+	if (image == nullptr || image->target_state == nullptr || code == nullptr) {
+		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
+			"Darwin TPDE mapper requires compiled assembler state");
+		return FAILURE;
+	}
+	long page_size_value = sysconf(_SC_PAGESIZE);
+	if (page_size_value <= 0) {
+		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
+			"Darwin page size is unavailable");
+		return FAILURE;
+	}
+	size_t page_size = static_cast<size_t>(page_size_value);
+	auto *compiled = static_cast<A64ImageState *>(image->target_state);
+	DarwinAssembler &assembler = compiled->compiler.assembler;
+	auto published = std::make_unique<A64PublishedState>();
+	published->sections.resize(assembler.section_count());
+	bool has_executable = false;
+
+	for (size_t i = 1; i < assembler.section_count(); ++i) {
+		if (!assembler.section_present(i)) continue;
+		const ::tpde::DataSection &section = assembler.get_section(
+			::tpde::SecRef{static_cast<uint32_t>(i)});
+		if ((section.flags & DarwinAssembler::SECTION_ALLOC) == 0
+				|| section.size() == 0) continue;
+		if (section.size() > SIZE_MAX - (page_size - 1)) {
+			zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
+				"Darwin section size overflows page alignment");
+			return FAILURE;
+		}
+		size_t mapping_size = (section.size() + page_size - 1)
+			& ~(page_size - 1);
+		bool executable = (section.flags & DarwinAssembler::SECTION_EXEC) != 0;
+		int map_flags = MAP_PRIVATE | MAP_ANON | (executable ? MAP_JIT : 0);
+		void *mapping = mmap(nullptr, mapping_size,
+			executable ? PROT_READ | PROT_WRITE | PROT_EXEC : PROT_READ | PROT_WRITE,
+			map_flags, -1, 0);
+		if (mapping == MAP_FAILED) {
+			zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
+				"Darwin section mapping failed");
+			return FAILURE;
+		}
+		published->sections[i] = {mapping, mapping_size, section.flags};
+		assembler.get_section(::tpde::SecRef{static_cast<uint32_t>(i)}).addr =
+			reinterpret_cast<uintptr_t>(mapping);
+		has_executable |= executable;
 	}
 
-	bool ok = emit32(&out, UINT32_C(0xa9bf7bfd)) /* stp x29, x30, [sp, #-16]! */
-		&& emit32(&out, UINT32_C(0x910003fd)) /* mov x29, sp */
-		&& initialize_values(&out);
-	for (uint32_t block = 0; ok && block < plan->block_count; ++block) {
-		out.labels[block] = image->text_size;
-		for (uint32_t i = 0; ok && i < plan->instruction_count; ++i) {
-			if (plan->instructions[i].record.block_id == plan->blocks[block].id) {
-				ok = emit_instruction(&out, &plan->instructions[i]);
+	if (has_executable) pthread_jit_write_protect_np(0);
+	for (size_t i = 1; i < assembler.section_count(); ++i) {
+		if (!assembler.section_present(i)
+				|| published->sections[i].mapping == nullptr) continue;
+		const ::tpde::DataSection &section = assembler.get_section(
+			::tpde::SecRef{static_cast<uint32_t>(i)});
+		if (!section.is_virtual && !section.data.empty()) {
+			std::memcpy(published->sections[i].mapping,
+				section.data.data(), section.data.size());
+		}
+	}
+
+	for (size_t i = 1; i < assembler.section_count(); ++i) {
+		if (!assembler.section_present(i)
+				|| published->sections[i].mapping == nullptr) continue;
+		const ::tpde::DataSection &section = assembler.get_section(
+			::tpde::SecRef{static_cast<uint32_t>(i)});
+		if (section.is_virtual) continue;
+		for (const ::tpde::Relocation &relocation : section.relocations()) {
+			if (relocation.symbol.id() >= assembler.symbol_count()
+					|| relocation.offset > section.size()
+					|| section.size() - relocation.offset < sizeof(uint32_t)) {
+				zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
+					"Darwin TPDE relocation is outside its section");
+				if (has_executable) pthread_jit_write_protect_np(1);
+				return FAILURE;
+			}
+			const DarwinAssembler::Symbol &symbol = assembler.symbol(relocation.symbol);
+			if (!symbol.defined || symbol.section.id() >= published->sections.size()
+					|| published->sections[symbol.section.id()].mapping == nullptr) {
+				zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
+					"Darwin TPDE image contains an unresolved symbol");
+				if (has_executable) pthread_jit_write_protect_np(1);
+				return FAILURE;
+			}
+			uint8_t *location = static_cast<uint8_t *>(
+				published->sections[i].mapping) + relocation.offset;
+			uintptr_t symbol_address = reinterpret_cast<uintptr_t>(
+				published->sections[symbol.section.id()].mapping) + symbol.offset;
+			if (!apply_relocation(location, relocation.type,
+					symbol_address, relocation.addend)) {
+				zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
+					"Darwin TPDE relocation kind or range is unsupported");
+				if (has_executable) pthread_jit_write_protect_np(1);
+				return FAILURE;
 			}
 		}
 	}
-	ok = ok && patch_branches(&out);
-	std::free(out.labels);
-	std::free(out.patches);
-	if (!ok && (diag == nullptr || diag->code == ZEND_NATIVE_DIAGNOSTIC_OK)) {
-		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-			"Darwin A64 code emission failed a checked MIR invariant");
+
+	void *entry = nullptr;
+	::tpde::SymRef entry_ref = compiled->compiler.func_syms[0];
+	if (entry_ref.id() < assembler.symbol_count()) {
+		const DarwinAssembler::Symbol &symbol = assembler.symbol(entry_ref);
+		if (symbol.defined && symbol.section.id() < published->sections.size()
+				&& published->sections[symbol.section.id()].mapping != nullptr) {
+			entry = static_cast<uint8_t *>(
+				published->sections[symbol.section.id()].mapping) + symbol.offset;
+		}
 	}
-	return ok ? SUCCESS : FAILURE;
+	if (entry == nullptr) {
+		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
+			"Darwin TPDE entry symbol was not mapped");
+		if (has_executable) pthread_jit_write_protect_np(1);
+		return FAILURE;
+	}
+
+	for (const MappedSection &section : published->sections) {
+		if (section.mapping == nullptr) continue;
+		if ((section.flags & DarwinAssembler::SECTION_EXEC) != 0) {
+			sys_icache_invalidate(section.mapping, section.mapping_size);
+		}
+	}
+	if (has_executable) pthread_jit_write_protect_np(1);
+	for (const MappedSection &section : published->sections) {
+		if (section.mapping == nullptr) continue;
+		/* MAP_JIT deliberately retains RWX as its maximum VM protection.  Apple
+		 * enforces the effective W^X state per thread through
+		 * pthread_jit_write_protect_np; mprotect(RX) is rejected for MAP_JIT
+		 * mappings on supported Darwin versions. */
+		if ((section.flags & DarwinAssembler::SECTION_EXEC) != 0) continue;
+		int protection = PROT_READ;
+		if ((section.flags & DarwinAssembler::SECTION_WRITE) != 0) {
+			protection |= PROT_WRITE;
+		}
+		if (mprotect(section.mapping, section.mapping_size, protection) != 0) {
+			zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
+				"Darwin final section protection failed");
+			return FAILURE;
+		}
+	}
+
+	const MappedSection &entry_section = published->sections[
+		assembler.symbol(entry_ref).section.id()];
+	code->mapping = entry_section.mapping;
+	code->mapping_size = entry_section.mapping_size;
+	code->entry = reinterpret_cast<zend_native_entry>(entry);
+	code->target_state = published.release();
+	code->destroy_target_state = destroy_a64_published_state;
+	return SUCCESS;
+#else
+	(void) image;
+	(void) code;
+	zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_TARGET_MISMATCH,
+		"darwin-arm64-dev publication requires native Apple Silicon");
+	return FAILURE;
+#endif
 }

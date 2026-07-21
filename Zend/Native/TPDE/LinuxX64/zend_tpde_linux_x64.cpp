@@ -1,283 +1,71 @@
 // SPDX-License-Identifier: PHP-3.01
 
-#include "Zend/Native/TPDE/Common/zend_tpde_internal.hpp"
+#include "Zend/Native/TPDE/Common/zend_tpde_ir_adaptor.hpp"
 
-#include <fadec-enc2.h>
+#include <tpde/x64/CompilerX64.hpp>
+#include <tpde/ElfMapper.hpp>
 
 #include <cstdlib>
 #include <cstring>
-#include <limits>
+#include <memory>
+#include <optional>
 
 namespace {
 
-enum register_id : uint8_t {
-	RAX = 0,
-	RCX = 1,
-	RDX = 2,
-	RSI = 6,
-	RDI = 7,
-	R8 = 8,
-	R9 = 9,
-	R10 = 10,
-	R11 = 11
-};
+using Adaptor = zend::native::tpde::ZendIRAdaptor;
+using IRValueRef = zend::native::tpde::IRValueRef;
+using IRInstRef = zend::native::tpde::IRInstRef;
+using IRBlockRef = zend::native::tpde::IRBlockRef;
+using IRFuncRef = zend::native::tpde::IRFuncRef;
 
-struct branch_patch {
-	size_t displacement_offset;
-	size_t next_instruction;
-	zend_mir_block_id target;
-};
+class ZendCompilerX64 final
+	: public tpde::x64::CompilerX64<Adaptor, ZendCompilerX64> {
+	using Base = tpde::x64::CompilerX64<Adaptor, ZendCompilerX64>;
 
-struct emitter {
-	const zend_tpde_plan *plan;
-	zend_native_image *image;
-	size_t *labels;
-	branch_patch *patches;
-	uint32_t patch_count;
-	uint32_t patch_capacity;
-	zend_native_diagnostic *diag;
-};
-
-bool emit_bytes(emitter *out, const void *bytes, size_t length) {
-	if (!zend_tpde_image_append(out->image, bytes, length)) {
-		zend_tpde_set_diagnostic(out->diag,
-			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
-			"unable to grow the Linux x86-64 text image");
-		return false;
-	}
-	return true;
-}
-
-FeRegGP fadec_register(register_id reg) {
-	return FE_GP(static_cast<unsigned char>(reg));
-}
-
-template <typename Function, typename... Operands>
-bool emit_fadec(emitter *out, Function function, Operands... operands) {
-	uint8_t bytes[16]{};
-	unsigned length = function(bytes, 0, operands...);
-	if (length == 0 || length > 15) {
-		zend_tpde_set_diagnostic(out->diag,
-			ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-			"the pinned TPDE/Fadec x86-64 encoder rejected an instruction");
-		return false;
-	}
-	return emit_bytes(out, bytes, length);
-}
-
-bool mov_imm64(emitter *out, register_id reg, uint64_t value) {
-	return emit_fadec(out, fe64_MOV64ri, fadec_register(reg),
-		static_cast<int64_t>(value));
-}
-
-bool load_memory(emitter *out, register_id reg, register_id base,
-		uint32_t displacement) {
-	return emit_fadec(out, fe64_MOV64rm, fadec_register(reg),
-		FE_MEM(fadec_register(base), 0, FE_NOREG,
-			static_cast<int32_t>(displacement)));
-}
-
-bool store_memory(emitter *out, register_id base, uint32_t displacement,
-		register_id reg) {
-	return emit_fadec(out, fe64_MOV64mr,
-		FE_MEM(fadec_register(base), 0, FE_NOREG,
-			static_cast<int32_t>(displacement)), fadec_register(reg));
-}
-
-bool load_slot(emitter *out, register_id reg, uint32_t slot) {
-	return load_memory(out, reg, RSI, slot * 8);
-}
-
-bool store_slot(emitter *out, register_id reg, uint32_t slot) {
-	return store_memory(out, RSI, slot * 8, reg);
-}
-
-bool load_value(emitter *out, zend_mir_value_id id, register_id reg) {
-	int32_t index = zend_tpde_value_index(out->plan, id);
-	if (index < 0) {
-		zend_tpde_set_diagnostic(out->diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-			"Linux x86-64 instruction references an unknown value");
-		return false;
-	}
-	return load_slot(out, reg, static_cast<uint32_t>(index));
-}
-
-bool store_result(emitter *out, const zend_tpde_instruction *instruction,
-		register_id reg) {
-	int32_t index = zend_tpde_value_index(out->plan, instruction->record.result_id);
-	if (index < 0) {
-		zend_tpde_set_diagnostic(out->diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-			"Linux x86-64 instruction result is unknown");
-		return false;
-	}
-	return store_slot(out, reg, static_cast<uint32_t>(index));
-}
-
-bool binary_reg(emitter *out, uint8_t opcode, register_id destination,
-		register_id source) {
-	switch (opcode) {
-		case 0x01:
-			return emit_fadec(out, fe64_ADD64rr, fadec_register(destination),
-				fadec_register(source));
-		case 0x09:
-			return emit_fadec(out, fe64_OR64rr, fadec_register(destination),
-				fadec_register(source));
-		case 0x21:
-			return emit_fadec(out, fe64_AND64rr, fadec_register(destination),
-				fadec_register(source));
-		case 0x29:
-			return emit_fadec(out, fe64_SUB64rr, fadec_register(destination),
-				fadec_register(source));
-		case 0x31:
-			return emit_fadec(out, fe64_XOR64rr, fadec_register(destination),
-				fadec_register(source));
-		case 0x39:
-			return emit_fadec(out, fe64_CMP64rr, fadec_register(destination),
-				fadec_register(source));
-		default:
-			return false;
-	}
-}
-
-bool cmp_regs(emitter *out, register_id left, register_id right) {
-	return binary_reg(out, UINT8_C(0x39), left, right);
-}
-
-bool setcc_rax(emitter *out, uint8_t condition) {
-	bool encoded;
-	switch (condition) {
-		case 2:
-			encoded = emit_fadec(out, (fe64_SETC8r), FE_AX);
-			break;
-		case 4:
-			encoded = emit_fadec(out, (fe64_SETZ8r), FE_AX);
-			break;
-		case 5:
-			encoded = emit_fadec(out, (fe64_SETNZ8r), FE_AX);
-			break;
-		case 6:
-			encoded = emit_fadec(out, (fe64_SETBE8r), FE_AX);
-			break;
-		case 7:
-			encoded = emit_fadec(out, (fe64_SETA8r), FE_AX);
-			break;
-		case 12:
-			encoded = emit_fadec(out, (fe64_SETL8r), FE_AX);
-			break;
-		case 14:
-			encoded = emit_fadec(out, (fe64_SETLE8r), FE_AX);
-			break;
-		case 15:
-			encoded = emit_fadec(out, (fe64_SETG8r), FE_AX);
-			break;
-		default:
-			return false;
-	}
-	return encoded && emit_fadec(out, (fe64_MOVZXr64r8), FE_AX, FE_AX);
-}
-
-bool mov_reg(emitter *out, register_id destination, register_id source) {
-	return emit_fadec(out, fe64_MOV64rr, fadec_register(destination),
-		fadec_register(source));
-}
-
-int32_t block_index(const zend_tpde_plan *plan, zend_mir_block_id id) {
-	for (uint32_t i = 0; i < plan->block_count; ++i) {
-		if (plan->blocks[i].id == id) {
-			return static_cast<int32_t>(i);
-		}
-	}
-	return -1;
-}
-
-bool add_jump_patch(emitter *out, zend_mir_block_id target) {
-	if (out->patch_count == out->patch_capacity) {
-		return false;
-	}
-	uint8_t bytes[16]{};
-	unsigned length = fe64_JMP(bytes, FE_JMPL, bytes + 5);
-	if (length != 5) {
-		zend_tpde_set_diagnostic(out->diag,
-			ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-			"the pinned TPDE/Fadec encoder rejected a long jump");
-		return false;
-	}
-	size_t displacement = out->image->text_size + length - 4;
-	if (!emit_bytes(out, bytes, length)) {
-		return false;
-	}
-	out->patches[out->patch_count++] = {
-		displacement, out->image->text_size, target
+public:
+	struct ValRefSpecial {
+		uint8_t mode = 4;
+		uint8_t bank = 0;
+		uint8_t padding[6]{};
+		uint64_t bits = 0;
 	};
-	return true;
-}
 
-bool emit_phi_edge(emitter *out, zend_mir_block_id from,
-		zend_mir_block_id to) {
-	uint32_t predecessors = out->plan->view->predecessor_count(
-		out->plan->view->context, to);
-	uint32_t predecessor_index = UINT32_MAX;
-	for (uint32_t i = 0; i < predecessors; ++i) {
-		zend_mir_block_id predecessor;
-		if (!out->plan->view->predecessor_at(out->plan->view->context, to, i,
-				&predecessor)) {
-			return false;
-		}
-		if (predecessor == from) {
-			predecessor_index = i;
-			break;
-		}
-	}
-	if (predecessor_index == UINT32_MAX) {
-		zend_tpde_set_diagnostic(out->diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-			"Linux x86-64 branch is absent from the predecessor table");
-		return false;
-	}
-	for (uint32_t i = 0; i < out->plan->instruction_count; ++i) {
-		const zend_tpde_instruction *phi = &out->plan->instructions[i];
-		if (phi->record.block_id != to || phi->record.opcode != ZEND_MIR_OPCODE_PHI) {
-			continue;
-		}
-		zend_mir_value_id input = zend_tpde_operand_at(out->plan, phi,
-			predecessor_index);
-		int32_t result_index = zend_tpde_value_index(out->plan, phi->record.result_id);
-		if (predecessor_index >= phi->operand_count || result_index < 0
-				|| !load_value(out, input, RAX)
-				|| !store_slot(out, RAX, out->plan->value_count
-					+ static_cast<uint32_t>(result_index))) {
-			return false;
-		}
-	}
-	for (uint32_t i = 0; i < out->plan->instruction_count; ++i) {
-		const zend_tpde_instruction *phi = &out->plan->instructions[i];
-		if (phi->record.block_id != to || phi->record.opcode != ZEND_MIR_OPCODE_PHI) {
-			continue;
-		}
-		int32_t result_index = zend_tpde_value_index(out->plan, phi->record.result_id);
-		if (result_index < 0
-				|| !load_slot(out, RAX, out->plan->value_count
-					+ static_cast<uint32_t>(result_index))
-				|| !store_slot(out, RAX, static_cast<uint32_t>(result_index))) {
-			return false;
-		}
-	}
-	return true;
-}
+	struct ValueParts {
+		tpde::RegBank bank;
+		uint32_t count() const { return 1; }
+		uint32_t size_bytes(uint32_t) const { return 8; }
+		tpde::RegBank reg_bank(uint32_t) const { return bank; }
+	};
 
-bool emit_edge(emitter *out, zend_mir_block_id from, zend_mir_block_id to) {
-	return emit_phi_edge(out, from, to) && add_jump_patch(out, to);
-}
+	explicit ZendCompilerX64(Adaptor *adaptor) : Base{adaptor} {}
 
-bool load_unary(emitter *out, const zend_tpde_instruction *instruction) {
-	return instruction->operand_count == 1
-		&& load_value(out, zend_tpde_operand_at(out->plan, instruction, 0), RAX);
-}
+	bool cur_func_may_emit_calls() const { return false; }
+	tpde::SymRef cur_personality_func() const { return {}; }
+	ValueParts val_parts(IRValueRef value) const {
+		return {adaptor->representation(value) == ZEND_MIR_REPRESENTATION_DOUBLE
+			? tpde::x64::PlatformConfig::FP_BANK
+			: tpde::x64::PlatformConfig::GP_BANK};
+	}
+	std::optional<ValRefSpecial> val_ref_special(IRValueRef value) {
+		uint64_t bits;
+		if (!adaptor->constant(value, &bits)) {
+			return {};
+		}
+		return ValRefSpecial{
+			.mode = 4,
+			.bank = static_cast<uint8_t>(val_parts(value).bank.id()),
+			.bits = bits};
+	}
+	ValuePart val_part_ref_special(ValRefSpecial &value, uint32_t) {
+		return ValuePart{value.bits, 8, tpde::RegBank{value.bank}};
+	}
+	void define_func_idx(IRFuncRef function, uint32_t index) {
+		(void) function;
+		(void) index;
+	}
 
-bool load_binary(emitter *out, const zend_tpde_instruction *instruction) {
-	return instruction->operand_count == 2
-		&& load_value(out, zend_tpde_operand_at(out->plan, instruction, 0), RAX)
-		&& load_value(out, zend_tpde_operand_at(out->plan, instruction, 1), RCX);
-}
+	bool compile_inst(IRInstRef instruction, InstRange);
+};
 
 uint32_t scalar_kind(zend_mir_representation representation) {
 	switch (representation) {
@@ -295,266 +83,338 @@ uint32_t scalar_kind(zend_mir_representation representation) {
 	}
 }
 
-bool emit_return(emitter *out, const zend_tpde_instruction *instruction) {
-	if (!load_unary(out, instruction)) {
-		return false;
+bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
+	const Adaptor::InstNode &node = adaptor->node(instruction);
+	if (node.kind == Adaptor::InstKind::LoadArgument) {
+		auto [base_ref, base] = val_ref_single(node.operands[0]);
+		auto [result_ref, result] = result_ref_single(node.result);
+		auto base_reg = base.load_to_reg();
+		auto result_reg = result.alloc_reg();
+		int32_t offset = static_cast<int32_t>(node.argument_index *
+			sizeof(zend_native_scalar));
+		if (val_parts(node.result).bank == tpde::x64::PlatformConfig::FP_BANK) {
+			ASM(SSE_MOVSDrm, result_reg,
+				FE_MEM(base_reg, 0, FE_NOREG, offset));
+		} else {
+			ASM(MOV64rm, result_reg, FE_MEM(base_reg, 0, FE_NOREG, offset));
+		}
+		result.set_modified();
+		return true;
 	}
-	int32_t value_index = zend_tpde_value_index(out->plan,
-		zend_tpde_operand_at(out->plan, instruction, 0));
-	uint32_t kind = value_index < 0 ? ZEND_NATIVE_SCALAR_NULL
-		: scalar_kind(out->plan->values[value_index].representation);
-	return store_memory(out, R11, 0, RAX)
-		&& emit_fadec(out, fe64_MOV32mi,
-			FE_MEM(FE_R11, 0, FE_NOREG, 8), static_cast<int32_t>(kind))
-		&& emit_fadec(out, fe64_POPr, FE_BP)
-		&& emit_fadec(out, fe64_RET);
-}
 
-bool emit_f64_binary(emitter *out, const zend_tpde_instruction *instruction,
-		uint8_t opcode) {
-	if (!load_binary(out, instruction)
-			|| !emit_fadec(out, fe64_SSE_MOVQ_G2Xrr, FE_XMM0, FE_AX)
-			|| !emit_fadec(out, fe64_SSE_MOVQ_G2Xrr, FE_XMM1, FE_CX)) {
-		return false;
-	}
-	bool encoded = opcode == 0x58
-		? emit_fadec(out, fe64_SSE_ADDSDrr, FE_XMM0, FE_XMM1)
-		: opcode == 0x5c
-			? emit_fadec(out, fe64_SSE_SUBSDrr, FE_XMM0, FE_XMM1)
-			: opcode == 0x59
-				? emit_fadec(out, fe64_SSE_MULSDrr, FE_XMM0, FE_XMM1)
-				: false;
-	return encoded
-		&& emit_fadec(out, fe64_SSE_MOVQ_X2Grr, FE_AX, FE_XMM0)
-		&& store_result(out, instruction, RAX);
-}
+	const zend_tpde_instruction &mir = adaptor->mir_instruction(instruction);
+	auto unary = [&]() {
+		return val_ref_single(node.operands[0]);
+	};
+	auto binary = [&]() {
+		return std::pair{val_ref_single(node.operands[0]),
+			val_ref_single(node.operands[1])};
+	};
+	auto copy_result = [&]() {
+		auto [source_ref, source] = unary();
+		auto [result_ref, result] = result_ref_single(node.result);
+		auto source_reg = source.load_to_reg();
+		auto result_reg = result.alloc_try_reuse(source);
+		if (source_reg != result_reg) {
+			mov(result_reg, source_reg, 8);
+		}
+		result.set_modified();
+		return true;
+	};
+	auto integer_binary = [&](auto emit) {
+		auto [left_pair, right_pair] = binary();
+		auto &[left_ref, left] = left_pair;
+		auto &[right_ref, right] = right_pair;
+		auto [result_ref, result] = result_ref_single(node.result);
+		auto left_reg = left.load_to_reg();
+		auto right_reg = right.load_to_reg();
+		auto result_reg = result.alloc_try_reuse(left);
+		if (result_reg != left_reg) {
+			mov(result_reg, left_reg, 8);
+		}
+		emit(result_reg, right_reg);
+		result.set_modified();
+		return true;
+	};
+	auto integer_compare = [&](Jump condition) {
+		auto [left_pair, right_pair] = binary();
+		auto &[left_ref, left] = left_pair;
+		auto &[right_ref, right] = right_pair;
+		auto [result_ref, result] = result_ref_single(node.result);
+		ASM(CMP64rr, left.load_to_reg(), right.load_to_reg());
+		auto result_reg = result.alloc_reg();
+		generate_raw_set(condition, result_reg);
+		result.set_modified();
+		return true;
+	};
+	auto floating_binary = [&](auto emit) {
+		auto [left_pair, right_pair] = binary();
+		auto &[left_ref, left] = left_pair;
+		auto &[right_ref, right] = right_pair;
+		auto [result_ref, result] = result_ref_single(node.result);
+		auto left_reg = left.load_to_reg();
+		auto right_reg = right.load_to_reg();
+		auto result_reg = result.alloc_try_reuse(left);
+		if (result_reg != left_reg) {
+			mov(result_reg, left_reg, 8);
+		}
+		emit(result_reg, right_reg);
+		result.set_modified();
+		return true;
+	};
+	auto floating_compare = [&](Jump condition) {
+		auto [left_pair, right_pair] = binary();
+		auto &[left_ref, left] = left_pair;
+		auto &[right_ref, right] = right_pair;
+		auto [result_ref, result] = result_ref_single(node.result);
+		ASM(SSE_UCOMISDrr, left.load_to_reg(), right.load_to_reg());
+		auto result_reg = result.alloc_reg();
+		generate_raw_set(condition, result_reg);
+		result.set_modified();
+		return true;
+	};
 
-bool emit_compare_result(emitter *out, const zend_tpde_instruction *instruction,
-		uint8_t condition) {
-	return load_binary(out, instruction) && cmp_regs(out, RAX, RCX)
-		&& setcc_rax(out, condition) && store_result(out, instruction, RAX);
-}
-
-bool emit_f64_compare(emitter *out, const zend_tpde_instruction *instruction,
-		uint8_t condition) {
-	return load_binary(out, instruction)
-		&& emit_fadec(out, fe64_SSE_MOVQ_G2Xrr, FE_XMM0, FE_AX)
-		&& emit_fadec(out, fe64_SSE_MOVQ_G2Xrr, FE_XMM1, FE_CX)
-		&& emit_fadec(out, fe64_SSE_UCOMISDrr, FE_XMM0, FE_XMM1)
-		&& setcc_rax(out, condition) && store_result(out, instruction, RAX);
-}
-
-bool emit_instruction(emitter *out, const zend_tpde_instruction *instruction) {
-	const zend_mir_instruction_record &record = instruction->record;
-	switch (record.opcode) {
-		case ZEND_MIR_OPCODE_CONSTANT:
-		case ZEND_MIR_OPCODE_PHI:
-		case ZEND_MIR_OPCODE_STATEPOINT:
-		case ZEND_MIR_OPCODE_SCALAR_DROP:
-			return true;
+	switch (mir.record.opcode) {
 		case ZEND_MIR_OPCODE_COPY:
 		case ZEND_MIR_OPCODE_CANONICALIZE:
 		case ZEND_MIR_OPCODE_I1_TO_I64:
-			return load_unary(out, instruction) && store_result(out, instruction, RAX);
+			return copy_result();
+		case ZEND_MIR_OPCODE_STATEPOINT:
+		case ZEND_MIR_OPCODE_SCALAR_DROP:
+			for (IRValueRef operand : node.operands) {
+				auto consumed = val_ref(operand);
+				(void) consumed;
+			}
+			return true;
 		case ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW:
-			return load_binary(out, instruction) && binary_reg(out, 0x01, RAX, RCX)
-				&& store_result(out, instruction, RAX);
+			return integer_binary([&](auto dst, auto src) { ASM(ADD64rr, dst, src); });
 		case ZEND_MIR_OPCODE_I64_SUB_NO_OVERFLOW:
-			return load_binary(out, instruction) && binary_reg(out, 0x29, RAX, RCX)
-				&& store_result(out, instruction, RAX);
+			return integer_binary([&](auto dst, auto src) { ASM(SUB64rr, dst, src); });
 		case ZEND_MIR_OPCODE_I64_MUL_NO_OVERFLOW:
-			return load_binary(out, instruction)
-				&& emit_fadec(out, fe64_IMUL64rr, FE_AX, FE_CX)
-				&& store_result(out, instruction, RAX);
-		case ZEND_MIR_OPCODE_I64_MOD_NONZERO:
-			return load_binary(out, instruction)
-				&& emit_fadec(out, fe64_CQO)
-				&& emit_fadec(out, fe64_IDIV64r, FE_CX)
-				&& store_result(out, instruction, RDX);
-		case ZEND_MIR_OPCODE_I64_SHL_CHECKED:
-			return load_binary(out, instruction)
-				&& emit_fadec(out, fe64_SHL64rr, FE_AX, FE_CX)
-				&& store_result(out, instruction, RAX);
-		case ZEND_MIR_OPCODE_I64_SHR_CHECKED:
-			return load_binary(out, instruction)
-				&& emit_fadec(out, fe64_SAR64rr, FE_AX, FE_CX)
-				&& store_result(out, instruction, RAX);
+			return integer_binary([&](auto dst, auto src) { ASM(IMUL64rr, dst, src); });
 		case ZEND_MIR_OPCODE_I64_BIT_OR:
+			return integer_binary([&](auto dst, auto src) { ASM(OR64rr, dst, src); });
 		case ZEND_MIR_OPCODE_I64_BIT_AND:
+			return integer_binary([&](auto dst, auto src) { ASM(AND64rr, dst, src); });
 		case ZEND_MIR_OPCODE_I64_BIT_XOR:
-		case ZEND_MIR_OPCODE_I1_XOR: {
-			uint8_t opcode = record.opcode == ZEND_MIR_OPCODE_I64_BIT_OR ? 0x09
-				: record.opcode == ZEND_MIR_OPCODE_I64_BIT_AND ? 0x21 : 0x31;
-			return load_binary(out, instruction) && binary_reg(out, opcode, RAX, RCX)
-				&& store_result(out, instruction, RAX);
+		case ZEND_MIR_OPCODE_I1_XOR:
+			return integer_binary([&](auto dst, auto src) { ASM(XOR64rr, dst, src); });
+		case ZEND_MIR_OPCODE_I64_BIT_NOT: {
+			auto [source_ref, source] = unary();
+			auto [result_ref, result] = result_ref_single(node.result);
+			auto source_reg = source.load_to_reg();
+			auto result_reg = result.alloc_try_reuse(source);
+			if (result_reg != source_reg) mov(result_reg, source_reg, 8);
+			ASM(NOT64r, result_reg);
+			result.set_modified();
+			return true;
 		}
-		case ZEND_MIR_OPCODE_I64_BIT_NOT:
-			return load_unary(out, instruction)
-				&& emit_fadec(out, fe64_NOT64r, FE_AX)
-				&& store_result(out, instruction, RAX);
 		case ZEND_MIR_OPCODE_I1_NOT:
-			return load_unary(out, instruction)
-				&& emit_fadec(out, fe64_TEST64rr, FE_AX, FE_AX)
-				&& setcc_rax(out, 4) && store_result(out, instruction, RAX);
+		case ZEND_MIR_OPCODE_I64_TO_I1: {
+			auto [source_ref, source] = unary();
+			auto [result_ref, result] = result_ref_single(node.result);
+			auto source_reg = source.load_to_reg();
+			ASM(TEST64rr, source_reg, source_reg);
+			auto result_reg = result.alloc_reg();
+			generate_raw_set(mir.record.opcode == ZEND_MIR_OPCODE_I1_NOT
+				? Jump::je : Jump::jne, result_reg);
+			result.set_modified();
+			return true;
+		}
 		case ZEND_MIR_OPCODE_I64_EQ:
 		case ZEND_MIR_OPCODE_I1_EQ:
-			return emit_compare_result(out, instruction, 4);
+			return integer_compare(Jump::je);
 		case ZEND_MIR_OPCODE_I64_LT:
-			return emit_compare_result(out, instruction, 12);
+			return integer_compare(Jump::jl);
 		case ZEND_MIR_OPCODE_I64_LE:
-			return emit_compare_result(out, instruction, 14);
-		case ZEND_MIR_OPCODE_I64_CMP:
-			if (!load_binary(out, instruction) || !cmp_regs(out, RAX, RCX)
-					|| !setcc_rax(out, 12) || !mov_reg(out, R8, RAX)
-					|| !cmp_regs(out, RAX, RAX) /* flags are replaced below */
-					|| !load_binary(out, instruction) || !cmp_regs(out, RAX, RCX)
-					|| !setcc_rax(out, 15) || !binary_reg(out, 0x29, RAX, R8)) {
-				return false;
+			return integer_compare(Jump::jle);
+		case ZEND_MIR_OPCODE_I64_CMP: {
+			auto [left_pair, right_pair] = binary();
+			auto &[left_ref, left] = left_pair;
+			auto &[right_ref, right] = right_pair;
+			auto [result_ref, result] = result_ref_single(node.result);
+			ASM(CMP64rr, left.load_to_reg(), right.load_to_reg());
+			ScratchReg less{this};
+			ScratchReg greater{this};
+			auto less_reg = less.alloc_gp();
+			auto greater_reg = greater.alloc_gp();
+			generate_raw_set(Jump::jl, less_reg);
+			generate_raw_set(Jump::jg, greater_reg);
+			ASM(SUB64rr, greater_reg, less_reg);
+			result.set_value(std::move(greater));
+			return true;
+		}
+		case ZEND_MIR_OPCODE_I64_MOD_NONZERO: {
+			ScratchReg rax{this};
+			ScratchReg rdx{this};
+			ScratchReg divisor{this};
+			auto ax = rax.alloc_specific(tpde::x64::AsmReg::AX);
+			auto dx = rdx.alloc_specific(tpde::x64::AsmReg::DX);
+			auto cx = divisor.alloc_specific(tpde::x64::AsmReg::CX);
+			auto [left_pair, right_pair] = binary();
+			auto &[left_ref, left] = left_pair;
+			auto &[right_ref, right] = right_pair;
+			mov(ax, left.load_to_reg(), 8);
+			mov(cx, right.load_to_reg(), 8);
+			ASM(CQO);
+			ASM(IDIV64r, cx);
+			auto [result_ref, result] = result_ref_single(node.result);
+			result.set_value(std::move(rdx));
+			return true;
+		}
+		case ZEND_MIR_OPCODE_I64_SHL_CHECKED:
+		case ZEND_MIR_OPCODE_I64_SHR_CHECKED: {
+			ScratchReg count{this};
+			auto cx = count.alloc_specific(tpde::x64::AsmReg::CX);
+			auto [left_pair, right_pair] = binary();
+			auto &[left_ref, left] = left_pair;
+			auto &[right_ref, right] = right_pair;
+			mov(cx, right.load_to_reg(), 8);
+			auto [result_ref, result] = result_ref_single(node.result);
+			auto left_reg = left.load_to_reg();
+			auto result_reg = result.alloc_try_reuse(left);
+			if (result_reg != left_reg) mov(result_reg, left_reg, 8);
+			if (mir.record.opcode == ZEND_MIR_OPCODE_I64_SHL_CHECKED) {
+				ASM(SHL64rr, result_reg, cx);
+			} else {
+				ASM(SAR64rr, result_reg, cx);
 			}
-			return store_result(out, instruction, RAX);
+			result.set_modified();
+			return true;
+		}
 		case ZEND_MIR_OPCODE_F64_ADD:
-			return emit_f64_binary(out, instruction, 0x58);
+			return floating_binary([&](auto dst, auto src) { ASM(SSE_ADDSDrr, dst, src); });
 		case ZEND_MIR_OPCODE_F64_SUB:
-			return emit_f64_binary(out, instruction, 0x5c);
+			return floating_binary([&](auto dst, auto src) { ASM(SSE_SUBSDrr, dst, src); });
 		case ZEND_MIR_OPCODE_F64_MUL:
-			return emit_f64_binary(out, instruction, 0x59);
+			return floating_binary([&](auto dst, auto src) { ASM(SSE_MULSDrr, dst, src); });
 		case ZEND_MIR_OPCODE_F64_EQ:
-			return emit_f64_compare(out, instruction, 4);
+			return floating_compare(Jump::je);
 		case ZEND_MIR_OPCODE_F64_LT:
-			return emit_f64_compare(out, instruction, 2);
+			return floating_compare(Jump::jb);
 		case ZEND_MIR_OPCODE_F64_LE:
-			return emit_f64_compare(out, instruction, 6);
+			return floating_compare(Jump::jbe);
 		case ZEND_MIR_OPCODE_F64_CMP: {
-			if (!load_binary(out, instruction)
-					|| !emit_fadec(out, fe64_SSE_MOVQ_G2Xrr, FE_XMM0, FE_AX)
-					|| !emit_fadec(out, fe64_SSE_MOVQ_G2Xrr, FE_XMM1, FE_CX)
-					|| !emit_fadec(out, fe64_SSE_UCOMISDrr, FE_XMM0, FE_XMM1)
-					|| !setcc_rax(out, 2) || !mov_reg(out, R8, RAX)
-					|| !load_binary(out, instruction)
-					|| !emit_fadec(out, fe64_SSE_MOVQ_G2Xrr, FE_XMM0, FE_AX)
-					|| !emit_fadec(out, fe64_SSE_MOVQ_G2Xrr, FE_XMM1, FE_CX)
-					|| !emit_fadec(out, fe64_SSE_UCOMISDrr, FE_XMM0, FE_XMM1)
-					|| !setcc_rax(out, 7) || !binary_reg(out, 0x29, RAX, R8)) {
-				return false;
-			}
-			return store_result(out, instruction, RAX);
+			auto [left_pair, right_pair] = binary();
+			auto &[left_ref, left] = left_pair;
+			auto &[right_ref, right] = right_pair;
+			auto [result_ref, result] = result_ref_single(node.result);
+			ASM(SSE_UCOMISDrr, left.load_to_reg(), right.load_to_reg());
+			ScratchReg less{this};
+			ScratchReg greater{this};
+			auto less_reg = less.alloc_gp();
+			auto greater_reg = greater.alloc_gp();
+			generate_raw_set(Jump::jb, less_reg);
+			generate_raw_set(Jump::ja, greater_reg);
+			ASM(SUB64rr, greater_reg, less_reg);
+			result.set_value(std::move(greater));
+			return true;
 		}
 		case ZEND_MIR_OPCODE_I64_TO_F64:
-		case ZEND_MIR_OPCODE_I1_TO_F64:
-			return load_unary(out, instruction)
-				&& emit_fadec(out, fe64_SSE_CVTSI2SD64rr, FE_XMM0, FE_AX)
-				&& emit_fadec(out, fe64_SSE_MOVQ_X2Grr, FE_AX, FE_XMM0)
-				&& store_result(out, instruction, RAX);
-		case ZEND_MIR_OPCODE_F64_TO_I64_CHECKED:
-			return load_unary(out, instruction)
-				&& emit_fadec(out, fe64_SSE_MOVQ_G2Xrr, FE_XMM0, FE_AX)
-				&& emit_fadec(out, fe64_SSE_CVTTSD2SI64rr, FE_AX, FE_XMM0)
-				&& store_result(out, instruction, RAX);
-		case ZEND_MIR_OPCODE_I64_TO_I1:
-			return load_unary(out, instruction)
-				&& emit_fadec(out, fe64_TEST64rr, FE_AX, FE_AX)
-				&& setcc_rax(out, 5) && store_result(out, instruction, RAX);
-		case ZEND_MIR_OPCODE_F64_TO_I1:
-			return load_unary(out, instruction)
-				&& emit_fadec(out, fe64_SSE_MOVQ_G2Xrr, FE_XMM0, FE_AX)
-				&& mov_imm64(out, RCX, 0)
-				&& emit_fadec(out, fe64_SSE_MOVQ_G2Xrr, FE_XMM1, FE_CX)
-				&& emit_fadec(out, fe64_SSE_UCOMISDrr, FE_XMM0, FE_XMM1)
-				&& setcc_rax(out, 5) && store_result(out, instruction, RAX);
-		case ZEND_MIR_OPCODE_BRANCH: {
-			zend_mir_block_id target;
-			if (out->plan->view->successor_count(out->plan->view->context,
-					record.block_id) != 1
-					|| !out->plan->view->successor_at(out->plan->view->context,
-						record.block_id, 0, &target)) {
-				return false;
-			}
-			return emit_edge(out, record.block_id, target);
+		case ZEND_MIR_OPCODE_I1_TO_F64: {
+			auto [source_ref, source] = unary();
+			auto [result_ref, result] = result_ref_single(node.result);
+			auto result_reg = result.alloc_reg();
+			ASM(SSE_CVTSI2SD64rr, result_reg, source.load_to_reg());
+			result.set_modified();
+			return true;
 		}
+		case ZEND_MIR_OPCODE_F64_TO_I64_CHECKED: {
+			auto [source_ref, source] = unary();
+			auto [result_ref, result] = result_ref_single(node.result);
+			auto result_reg = result.alloc_reg();
+			ASM(SSE_CVTTSD2SI64rr, result_reg, source.load_to_reg());
+			result.set_modified();
+			return true;
+		}
+		case ZEND_MIR_OPCODE_F64_TO_I1: {
+			auto [source_ref, source] = unary();
+			ScratchReg bits{this};
+			auto bits_reg = bits.alloc_gp();
+			ASM(SSE_MOVQ_X2Grr, bits_reg, source.load_to_reg());
+			ASM(SHL64ri, bits_reg, 1);
+			auto [result_ref, result] = result_ref_single(node.result);
+			auto result_reg = result.alloc_reg();
+			generate_raw_set(Jump::jne, result_reg);
+			result.set_modified();
+			return true;
+		}
+		case ZEND_MIR_OPCODE_BRANCH:
+			generate_uncond_branch(adaptor->block_succs(
+				adaptor->block_ref(mir.record.block_id))[0]);
+			return true;
 		case ZEND_MIR_OPCODE_COND_BRANCH: {
-			zend_mir_block_id true_target, false_target;
-			if (!load_unary(out, instruction)
-					|| out->plan->view->successor_count(out->plan->view->context,
-						record.block_id) != 2
-					|| !out->plan->view->successor_at(out->plan->view->context,
-						record.block_id, 0, &true_target)
-					|| !out->plan->view->successor_at(out->plan->view->context,
-						record.block_id, 1, &false_target)
-					|| !emit_fadec(out, fe64_TEST64rr, FE_AX, FE_AX)) {
-				return false;
-			}
-			uint8_t bytes[16]{};
-			unsigned length = fe64_JZ(bytes, FE_JMPL, bytes + 6);
-			if (length != 6) {
-				zend_tpde_set_diagnostic(out->diag,
-					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-					"the pinned TPDE/Fadec encoder rejected a long conditional jump");
-				return false;
-			}
-			size_t displacement_offset = out->image->text_size + length - 4;
-			if (!emit_bytes(out, bytes, length)
-					|| !emit_edge(out, record.block_id, true_target)) {
-				return false;
-			}
-			size_t false_offset = out->image->text_size;
-			int64_t delta = static_cast<int64_t>(false_offset)
-				- static_cast<int64_t>(displacement_offset + 4);
-			if (delta < INT32_MIN || delta > INT32_MAX) {
-				return false;
-			}
-			int32_t rel32 = static_cast<int32_t>(delta);
-			std::memcpy(out->image->text + displacement_offset, &rel32, sizeof(rel32));
-			return emit_edge(out, record.block_id, false_target);
+			auto [condition_ref, condition] = unary();
+			auto condition_reg = condition.load_to_reg();
+			ASM(TEST64rr, condition_reg, condition_reg);
+			const auto &successors = adaptor->block_succs(
+				adaptor->block_ref(mir.record.block_id));
+			generate_cond_branch(Jump::jne, successors[0], successors[1]);
+			return true;
 		}
-		case ZEND_MIR_OPCODE_RETURN:
-			return emit_return(out, instruction);
+		case ZEND_MIR_OPCODE_RETURN: {
+			auto [value_ref, value] = val_ref_single(node.operands[0]);
+			auto [pointer_ref, pointer] = val_ref_single(node.operands[1]);
+			auto pointer_reg = pointer.load_to_reg();
+			auto value_reg = value.load_to_reg();
+			if (val_parts(node.operands[0]).bank == tpde::x64::PlatformConfig::FP_BANK) {
+				ASM(SSE_MOVSDmr, FE_MEM(pointer_reg, 0, FE_NOREG, 0), value_reg);
+			} else {
+				ASM(MOV64mr, FE_MEM(pointer_reg, 0, FE_NOREG, 0), value_reg);
+			}
+			ASM(MOV32mi, FE_MEM(pointer_reg, 0, FE_NOREG, 8),
+				static_cast<int32_t>(scalar_kind(
+					adaptor->representation(node.operands[0]))));
+			RetBuilder return_builder{*this, *cur_cc_assigner()};
+			return_builder.ret();
+			return true;
+		}
 		default:
-			zend_tpde_set_diagnostic(out->diag,
-				ZEND_NATIVE_DIAGNOSTIC_UNSUPPORTED_OPCODE,
-				"opcode is outside the executable W03/W04 Linux x86-64 slice");
 			return false;
 	}
 }
 
-bool initialize_values(emitter *out) {
-	for (uint32_t i = 0; i < out->plan->value_count; ++i) {
-		const zend_tpde_value &value = out->plan->values[i];
-		if (value.argument_index >= 0) {
-			if (!load_memory(out, RAX, RDI,
-					static_cast<uint32_t>(value.argument_index) * 16)
-					|| !store_slot(out, RAX, i)) {
-				return false;
-			}
-		} else if (value.constant) {
-			if (!mov_imm64(out, RAX, value.constant_bits) || !store_slot(out, RAX, i)) {
-				return false;
-			}
-		}
-	}
-	return true;
+struct X64ImageState {
+	Adaptor adaptor;
+	ZendCompilerX64 compiler;
+
+	explicit X64ImageState(const zend_tpde_plan *plan)
+		: adaptor{plan}, compiler{&adaptor} {}
+};
+
+struct X64PublishedState {
+	tpde::elf::ElfMapper mapper;
+};
+
+void destroy_x64_state(void *state) {
+	delete static_cast<X64ImageState *>(state);
 }
 
-bool patch_branches(emitter *out) {
-	for (uint32_t i = 0; i < out->patch_count; ++i) {
-		const branch_patch &patch = out->patches[i];
-		int32_t target_index = block_index(out->plan, patch.target);
-		if (target_index < 0 || out->labels[target_index] == SIZE_MAX) {
-			zend_tpde_set_diagnostic(out->diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-				"Linux x86-64 branch target is absent");
-			return false;
-		}
-		int64_t delta = static_cast<int64_t>(out->labels[target_index])
-			- static_cast<int64_t>(patch.next_instruction);
-		if (delta < INT32_MIN || delta > INT32_MAX) {
-			zend_tpde_set_diagnostic(out->diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-				"Linux x86-64 branch displacement exceeds rel32");
-			return false;
-		}
-		int32_t rel32 = static_cast<int32_t>(delta);
-		std::memcpy(out->image->text + patch.displacement_offset,
-			&rel32, sizeof(rel32));
+void destroy_x64_published_state(void *state) {
+	delete static_cast<X64PublishedState *>(state);
+}
+
+bool elf_has_writable_executable_section(const std::vector<tpde::u8> &object) {
+	using namespace tpde::elf;
+	if (object.size() < sizeof(Elf64_Ehdr)) {
+		return true;
 	}
-	return true;
+	const auto *header = reinterpret_cast<const Elf64_Ehdr *>(object.data());
+	if (header->e_shentsize != sizeof(Elf64_Shdr)
+			|| header->e_shoff > object.size()
+			|| header->e_shnum >
+				(object.size() - header->e_shoff) / sizeof(Elf64_Shdr)) {
+		return true;
+	}
+	const auto *sections = reinterpret_cast<const Elf64_Shdr *>(
+		object.data() + header->e_shoff);
+	for (uint32_t i = 0; i < header->e_shnum; ++i) {
+		if ((sections[i].sh_flags & (SHF_WRITE | SHF_EXECINSTR))
+				== (SHF_WRITE | SHF_EXECINSTR)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 } // namespace
@@ -563,49 +423,66 @@ zend_result zend_tpde_emit_linux_x64(
 	const zend_tpde_plan *plan,
 	zend_native_image *image,
 	zend_native_diagnostic *diag) {
-	if (plan->value_count > UINT32_MAX / 16
-			|| plan->argument_count > UINT32_MAX / 16
-			|| plan->instruction_count > UINT32_MAX / 3) {
+	auto state = std::make_unique<X64ImageState>(plan);
+	if (!state->adaptor.valid() || !state->compiler.compile()) {
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-			"Linux x86-64 module exceeds the checked displacement bound");
+			"TPDE rejected the ZNMIR x86-64 adaptor graph");
 		return FAILURE;
 	}
-	emitter out{};
-	out.plan = plan;
-	out.image = image;
-	out.diag = diag;
-	out.patch_capacity = plan->instruction_count * 3;
-	out.labels = static_cast<size_t *>(std::malloc(plan->block_count * sizeof(size_t)));
-	out.patches = static_cast<branch_patch *>(std::calloc(
-		out.patch_capacity == 0 ? 1 : out.patch_capacity, sizeof(branch_patch)));
-	if (out.labels == nullptr || out.patches == nullptr) {
-		std::free(out.labels);
-		std::free(out.patches);
+	const auto &text = state->compiler.assembler.get_section(
+		state->compiler.assembler.get_default_section(tpde::SectionKind::Text)).data;
+	if (text.empty() || !zend_tpde_image_append(image, text.data(), text.size())) {
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
-			"unable to allocate Linux x86-64 relocation state");
+			"unable to retain TPDE x86-64 text for inspection");
 		return FAILURE;
 	}
-	for (uint32_t i = 0; i < plan->block_count; ++i) {
-		out.labels[i] = SIZE_MAX;
+	image->target_state = state.release();
+	image->destroy_target_state = destroy_x64_state;
+	return SUCCESS;
+}
+
+zend_result zend_tpde_map_linux_x64(
+	const zend_native_image *image,
+	zend_native_code *code,
+	zend_native_diagnostic *diag) {
+#if defined(__linux__) && defined(__x86_64__)
+	if (image == nullptr || image->target_state == nullptr || code == nullptr) {
+		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
+			"Linux TPDE mapper requires compiled assembler state");
+		return FAILURE;
 	}
-	bool ok = emit_fadec(&out, fe64_PUSHr, FE_BP)
-		&& emit_fadec(&out, fe64_MOV64rr, FE_BP, FE_SP)
-		&& emit_fadec(&out, fe64_MOV64rr, FE_R11, FE_DX)
-		&& initialize_values(&out);
-	for (uint32_t block = 0; ok && block < plan->block_count; ++block) {
-		out.labels[block] = image->text_size;
-		for (uint32_t i = 0; ok && i < plan->instruction_count; ++i) {
-			if (plan->instructions[i].record.block_id == plan->blocks[block].id) {
-				ok = emit_instruction(&out, &plan->instructions[i]);
-			}
-		}
+	auto *compiled = static_cast<X64ImageState *>(image->target_state);
+	std::vector<tpde::u8> object = compiled->compiler.assembler.build_object_file();
+	if (elf_has_writable_executable_section(object)) {
+		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
+			"TPDE ELF image contains a writable executable section");
+		return FAILURE;
 	}
-	ok = ok && patch_branches(&out);
-	std::free(out.labels);
-	std::free(out.patches);
-	if (!ok && (diag == nullptr || diag->code == ZEND_NATIVE_DIAGNOSTIC_OK)) {
-		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-			"Linux x86-64 code emission failed a checked MIR invariant");
+	auto published = std::make_unique<X64PublishedState>();
+	if (!published->mapper.map(compiled->compiler.assembler,
+			[](std::string_view) -> void * { return nullptr; })) {
+		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
+			"TPDE ELF symbol or relocation mapping failed");
+		return FAILURE;
 	}
-	return ok ? SUCCESS : FAILURE;
+	auto [mapping, mapping_size] = published->mapper.get_mapped_range();
+	void *entry = published->mapper.get_sym_addr(compiled->compiler.func_syms[0]);
+	if (mapping == nullptr || mapping_size == 0 || entry == nullptr) {
+		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
+			"TPDE ELF entry symbol was not mapped");
+		return FAILURE;
+	}
+	code->mapping = mapping;
+	code->mapping_size = mapping_size;
+	code->entry = reinterpret_cast<zend_native_entry>(entry);
+	code->target_state = published.release();
+	code->destroy_target_state = destroy_x64_published_state;
+	return SUCCESS;
+#else
+	(void) image;
+	(void) code;
+	zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_TARGET_MISMATCH,
+		"linux-amd64-prod publication requires native Linux x86-64");
+	return FAILURE;
+#endif
 }
