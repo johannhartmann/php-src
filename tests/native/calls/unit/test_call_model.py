@@ -139,6 +139,15 @@ class CallModelTests(unittest.TestCase):
         self.assertNotIn("num_args > 64", model)
         self.assertNotIn("by_ref_mask", model)
 
+    def test_structural_verifier_allows_repeated_argument_values(self) -> None:
+        model = MODEL.read_text(encoding="utf-8")
+        self.assertNotIn(
+            "operand_count > view->value_count(view->context)", model
+        )
+        self.assertIn(
+            "!zend_mir_w05_find_value(view, operand)", model
+        )
+
     def test_final_verifier_precedes_determinism_check(self) -> None:
         model = MODEL.read_text(encoding="utf-8")
         lower = model[model.index("zend_mir_lower_direct_user_calls(") :]

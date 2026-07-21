@@ -29,6 +29,7 @@
  *     wave?: 3|4|5|6|7,
  *     arena_chunk_size?: int,
  *     compiler_mode?: "ignore_user_functions",
+ *     stack_probe?: true,
  *     fault?: null|"compile_bailout"|"ssa_failure"|"lower_failure"|
  *         "module_oom"|"planner_allocation"|"target_snapshot"|
  *         "argument_table"|"frame_state"|"call_record"|"finalize_failure"|

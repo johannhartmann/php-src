@@ -417,6 +417,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				builder.add_arg(ValuePart{call.operand_count, 4,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+				builder.add_arg(ValuePart{call.record.source_position_id, 4,
+					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				builder.call(ValuePart{
 					reinterpret_cast<uintptr_t>(&zend_native_call_begin), 8,
 					DarwinConfig::GP_BANK});

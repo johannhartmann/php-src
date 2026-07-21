@@ -53,6 +53,8 @@
 #define NATIVE_MIR_TEST_MIN_MIR_CHUNK_SIZE 64
 #define NATIVE_MIR_TEST_MAX_MIR_CHUNK_SIZE (1024 * 1024)
 #define NATIVE_MIR_TEST_OPTIMIZATION_LEVEL ((zend_long) 0x7FFEBFFF)
+#define NATIVE_MIR_TEST_MAX_FRAME_PROBES 2048
+#define NATIVE_MIR_TEST_MAX_PROBE_ARGUMENTS 128
 
 typedef enum _native_mir_test_phase {
 	NATIVE_MIR_TEST_PHASE_COMPILE = 0,
@@ -118,6 +120,16 @@ typedef struct _native_mir_test_module_host {
 	uint32_t fail_after;
 	bool fail_enabled;
 } native_mir_test_module_host;
+
+typedef struct _native_mir_test_frame_probe {
+	const zend_string *caller_name;
+	const zend_string *callee_name;
+	uint32_t caller_line;
+	uint32_t callee_line;
+	uint32_t argument_count;
+	uint8_t argument_types[NATIVE_MIR_TEST_MAX_PROBE_ARGUMENTS];
+	bool previous_matches_caller;
+} native_mir_test_frame_probe;
 
 typedef struct _native_mir_test_native_function {
 	zend_op_array *op_array;
@@ -185,11 +197,58 @@ typedef struct _native_mir_test_state {
 	bool native_exception;
 	bool native_bailout;
 	uint64_t vm_handler_calls;
+	uint64_t execute_ex_calls;
+	uint64_t opline_handler_calls;
+	bool stack_probe_enabled;
+	bool frame_chain_valid;
+	native_mir_test_frame_probe *frame_probes;
+	uint32_t frame_probe_count;
 	uint32_t execute_repetitions;
 	uint32_t completed_executions;
 	smart_str dump;
 	uint32_t dump_writes;
 } native_mir_test_state;
+
+static void native_mir_test_frame_probe_record(
+	void *context,
+	const zend_execute_data *caller,
+	const zend_execute_data *callee)
+{
+	native_mir_test_state *state = context;
+	native_mir_test_frame_probe *record;
+
+	if (state == NULL || caller == NULL || callee == NULL
+			|| state->frame_probe_count >= NATIVE_MIR_TEST_MAX_FRAME_PROBES) {
+		if (state != NULL) {
+			state->frame_chain_valid = false;
+		}
+		return;
+	}
+	record = &state->frame_probes[state->frame_probe_count++];
+	record->caller_name = caller->func != NULL
+		? caller->func->common.function_name : NULL;
+	record->callee_name = callee->func != NULL
+		? callee->func->common.function_name : NULL;
+	record->caller_line = caller->opline != NULL ? caller->opline->lineno : 0;
+	record->callee_line = callee->opline != NULL ? callee->opline->lineno : 0;
+	record->argument_count = ZEND_CALL_NUM_ARGS(callee);
+	if (record->argument_count > NATIVE_MIR_TEST_MAX_PROBE_ARGUMENTS) {
+		state->frame_chain_valid = false;
+	} else {
+		uint32_t argument_index;
+
+		for (argument_index = 0;
+				argument_index < record->argument_count; argument_index++) {
+			const zval *argument = ZEND_CALL_ARG(
+				(zend_execute_data *) callee, argument_index + 1);
+
+			record->argument_types[argument_index] = Z_TYPE_P(argument);
+		}
+	}
+	record->previous_matches_caller = callee->prev_execute_data == caller;
+	state->frame_chain_valid = state->frame_chain_valid
+		&& record->previous_matches_caller;
+}
 
 /*
  * This private integration point constructs the deterministic provider list
@@ -544,6 +603,11 @@ static bool native_mir_test_parse_options(
 				goto invalid_value;
 			}
 			state->execute_repetitions = (uint32_t) Z_LVAL_P(value);
+		} else if (zend_string_equals_literal(key, "stack_probe")) {
+			if (!state->execute_mode || Z_TYPE_P(value) != IS_TRUE) {
+				goto invalid_value;
+			}
+			state->stack_probe_enabled = true;
 		} else if (zend_string_equals_literal(key, "arena_chunk_size")) {
 			if (Z_TYPE_P(value) != IS_LONG
 					|| Z_LVAL_P(value) < NATIVE_MIR_TEST_MIN_MIR_CHUNK_SIZE
@@ -1630,6 +1694,10 @@ static native_mir_test_native_function *native_mir_test_add_native_function(
 	}
 	zend_native_entry_cell_init(
 		&function->entry_cell, (zend_function *) op_array);
+	if (state->stack_probe_enabled) {
+		zend_native_entry_cell_set_frame_probe(
+			&function->entry_cell, native_mir_test_frame_probe_record, state);
+	}
 	if (zend_native_entry_cell_begin_compile(&function->entry_cell) == FAILURE) {
 		native_mir_test_fail(
 			state, NATIVE_MIR_TEST_STATUS_ERROR,
@@ -1773,6 +1841,10 @@ static bool native_mir_test_prepare_w07_projection(
 	uint32_t projected_variable_count;
 	uint32_t next_ssa_variable;
 	uint32_t next_literal;
+	size_t projected_opcode_bytes;
+	size_t projected_literal_bytes;
+	size_t projected_storage_bytes;
+	uint32_t projected_literal_count;
 	uint32_t echo_index = 0;
 	uint32_t index;
 
@@ -1798,13 +1870,32 @@ static bool native_mir_test_prepare_w07_projection(
 	}
 	projected_variable_count =
 		(uint32_t) function->ssa.vars_count + echo_count * 2;
-	function->projected_opcodes = ecalloc(
-		source->last == 0 ? 1 : source->last,
-		sizeof(*function->projected_opcodes));
-	function->projected_literals = ecalloc(
-		source->last_literal + echo_count + return_check_count == 0
-			? 1 : source->last_literal + echo_count + return_check_count,
-		sizeof(*function->projected_literals));
+	projected_literal_count =
+		source->last_literal + echo_count + return_check_count;
+	if ((size_t) (source->last == 0 ? 1 : source->last)
+			> (SIZE_MAX - 15) / sizeof(*function->projected_opcodes)
+			|| (size_t) (projected_literal_count == 0
+				? 1 : projected_literal_count)
+				> SIZE_MAX / sizeof(*function->projected_literals)) {
+		return false;
+	}
+	projected_opcode_bytes = ZEND_MM_ALIGNED_SIZE_EX(
+		(size_t) (source->last == 0 ? 1 : source->last)
+			* sizeof(*function->projected_opcodes), 16);
+	projected_literal_bytes =
+		(size_t) (projected_literal_count == 0 ? 1 : projected_literal_count)
+			* sizeof(*function->projected_literals);
+	if (projected_opcode_bytes > SIZE_MAX - projected_literal_bytes) {
+		return false;
+	}
+	projected_storage_bytes = projected_opcode_bytes + projected_literal_bytes;
+	/* Runtime constant operands are signed offsets from their opline. Keep
+	 * projected opcodes and literals in the same allocation, as pass two does,
+	 * so the representation remains valid with the system allocator under
+	 * AddressSanitizer as well as with Zend MM. */
+	function->projected_opcodes = ecalloc(1, projected_storage_bytes);
+	function->projected_literals = (zval *) (
+		(char *) function->projected_opcodes + projected_opcode_bytes);
 	function->projected_ssa_ops = ecalloc(
 		source->last == 0 ? 1 : source->last,
 		sizeof(*function->projected_ssa_ops));
@@ -2604,7 +2695,6 @@ static void native_mir_test_cleanup(native_mir_test_state *state)
 			efree(function->projected_ssa_var_info);
 			efree(function->projected_ssa_vars);
 			efree(function->projected_ssa_ops);
-			efree(function->projected_literals);
 			efree(function->projected_opcodes);
 		}
 		efree(state->native_functions);
@@ -2751,6 +2841,10 @@ static void native_mir_test_build_result(
 		add_assoc_bool(&execution, "bailout", state->native_bailout);
 		add_assoc_long(&execution, "vm_handler_calls",
 			(zend_long) state->vm_handler_calls);
+		add_assoc_long(&execution, "execute_ex_calls",
+			(zend_long) state->execute_ex_calls);
+		add_assoc_long(&execution, "opline_handler_calls",
+			(zend_long) state->opline_handler_calls);
 		add_assoc_long(&execution, "executions",
 			(zend_long) state->completed_executions);
 		add_assoc_bool(&execution, "writable_after_publish",
@@ -2786,6 +2880,51 @@ static void native_mir_test_build_result(
 			add_assoc_zval(&execution, "return_value", &value);
 		} else {
 			add_assoc_null(&execution, "return_value");
+		}
+		if (state->stack_probe_enabled) {
+			zval trace;
+
+			array_init(&trace);
+			for (index = 0; index < state->frame_probe_count; index++) {
+				const native_mir_test_frame_probe *record =
+					&state->frame_probes[index];
+				zval frame;
+				zval argument_types;
+				uint32_t argument_index;
+
+				array_init(&frame);
+				if (record->caller_name != NULL) {
+					add_assoc_str(&frame, "caller",
+						zend_string_copy((zend_string *) record->caller_name));
+				} else {
+					add_assoc_string(&frame, "caller", "{main}");
+				}
+				if (record->callee_name != NULL) {
+					add_assoc_str(&frame, "callee",
+						zend_string_copy((zend_string *) record->callee_name));
+				} else {
+					add_assoc_string(&frame, "callee", "{main}");
+				}
+				add_assoc_long(&frame, "caller_line", record->caller_line);
+				add_assoc_long(&frame, "callee_line", record->callee_line);
+				add_assoc_long(&frame, "argument_count", record->argument_count);
+				array_init(&argument_types);
+				for (argument_index = 0;
+						argument_index < record->argument_count
+						&& argument_index < NATIVE_MIR_TEST_MAX_PROBE_ARGUMENTS;
+						argument_index++) {
+					add_next_index_string(
+						&argument_types,
+						zend_get_type_by_const(record->argument_types[argument_index]));
+				}
+				add_assoc_zval(&frame, "argument_types", &argument_types);
+				add_assoc_bool(&frame, "previous_matches_caller",
+					record->previous_matches_caller);
+				add_next_index_zval(&trace, &frame);
+			}
+			add_assoc_bool(&execution, "frame_chain_valid",
+				state->frame_chain_valid);
+			add_assoc_zval(&execution, "stack_trace", &trace);
 		}
 		add_assoc_zval(return_value, "execution", &execution);
 	}
@@ -2824,6 +2963,7 @@ ZEND_FUNCTION(native_mir_test_compile_dump)
 	if (options != NULL && !native_mir_test_parse_options(state, options)) {
 		native_mir_test_build_result(state, return_value);
 		efree(state->diagnostics);
+		efree(state->frame_probes);
 		efree(state);
 		return;
 	}
@@ -2886,6 +3026,7 @@ ZEND_FUNCTION(native_mir_test_compile_execute)
 	state->wave = 4;
 	state->execute_mode = true;
 	state->execute_repetitions = 1;
+	state->frame_chain_valid = true;
 #if defined(__APPLE__) && defined(__aarch64__)
 	state->target = ZEND_NATIVE_TARGET_DARWIN_ARM64;
 #elif defined(__linux__) && defined(__x86_64__)
@@ -2902,8 +3043,13 @@ ZEND_FUNCTION(native_mir_test_compile_execute)
 	if (options != NULL && !native_mir_test_parse_options(state, options)) {
 		native_mir_test_build_result(state, return_value);
 		efree(state->diagnostics);
+		efree(state->frame_probes);
 		efree(state);
 		return;
+	}
+	if (state->stack_probe_enabled) {
+		state->frame_probes = ecalloc(
+			NATIVE_MIR_TEST_MAX_FRAME_PROBES, sizeof(*state->frame_probes));
 	}
 	state->module_host.fail_enabled =
 		state->fault == NATIVE_MIR_TEST_FAULT_MODULE_OOM;
@@ -2936,6 +3082,7 @@ ZEND_FUNCTION(native_mir_test_compile_execute)
 	smart_str_free(&state->dump);
 	efree(state->source_opcodes);
 	efree(state->diagnostics);
+	efree(state->frame_probes);
 	efree(state);
 }
 
