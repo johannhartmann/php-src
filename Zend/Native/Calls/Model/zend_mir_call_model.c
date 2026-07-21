@@ -1947,9 +1947,6 @@ static bool zend_mir_w05_verify_final_structural(
 		}
 		operand_count = view->instruction_operand_count(
 			view->context, instruction.id);
-		if (operand_count > view->value_count(view->context)) {
-			goto failure;
-		}
 		for (operand_index = 0;
 			operand_index < operand_count; operand_index++) {
 			zend_mir_value_id operand;

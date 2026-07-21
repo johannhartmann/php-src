@@ -42,7 +42,9 @@ zend_result zend_native_entry_cell_publish(
 
 void zend_native_entry_cell_fail(zend_native_entry_cell *cell)
 {
-	if (cell != NULL && cell->state == ZEND_NATIVE_ENTRY_COMPILING) {
+	if (cell != NULL && cell->active_calls == 0
+			&& (cell->state == ZEND_NATIVE_ENTRY_COMPILING
+				|| cell->state == ZEND_NATIVE_ENTRY_READY)) {
 		cell->code = NULL;
 		cell->state = ZEND_NATIVE_ENTRY_FAILED;
 	}
@@ -56,6 +58,16 @@ zend_result zend_native_entry_cell_reset(zend_native_entry_cell *cell)
 	cell->code = NULL;
 	cell->state = ZEND_NATIVE_ENTRY_UNCOMPILED;
 	return SUCCESS;
+}
+
+void zend_native_entry_cell_set_frame_probe(
+	zend_native_entry_cell *cell,
+	zend_native_frame_probe_t probe,
+	void *context)
+{
+	ZEND_ASSERT(cell != NULL && cell->active_calls == 0);
+	cell->frame_probe = probe;
+	cell->frame_probe_context = context;
 }
 
 zend_result zend_native_frame_prepare(zend_execute_data *execute_data)
@@ -111,7 +123,8 @@ static ZEND_COLD ZEND_NORETURN void zend_native_call_abort(const char *message)
 void zend_native_call_begin(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
-	uint32_t argument_count)
+	uint32_t argument_count,
+	uint32_t source_opline_index)
 {
 	zend_execute_data *call;
 	zend_function *function;
@@ -125,6 +138,10 @@ void zend_native_call_begin(
 		zend_native_call_abort("Native callee entry is not ready");
 	}
 	function = cell->function;
+	if (caller->func == NULL || caller->func->type != ZEND_USER_FUNCTION
+			|| source_opline_index >= caller->func->op_array.last) {
+		zend_native_call_abort("Native call source position is invalid");
+	}
 	if (argument_count < function->common.required_num_args
 			|| argument_count > function->common.num_args) {
 		zend_native_call_abort("Native callee argument count is invalid");
@@ -138,6 +155,7 @@ void zend_native_call_begin(
 	call = zend_vm_stack_push_call_frame(
 		ZEND_CALL_NESTED_FUNCTION, function, argument_count, NULL);
 	caller->call = call;
+	caller->opline = &caller->func->op_array.opcodes[source_opline_index];
 	zend_init_func_execute_data(call, &function->op_array, NULL);
 	EG(current_execute_data) = caller;
 }
@@ -194,6 +212,9 @@ uint64_t zend_native_call_invoke_finish(
 		zend_native_call_abort("Invalid native invocation state");
 	}
 	call = caller->call;
+	if (cell->frame_probe != NULL) {
+		cell->frame_probe(cell->frame_probe_context, caller, call);
+	}
 	ZVAL_UNDEF(&return_value);
 	call->return_value = &return_value;
 	cell->active_calls++;

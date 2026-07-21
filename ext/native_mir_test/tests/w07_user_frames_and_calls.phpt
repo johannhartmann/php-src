@@ -25,11 +25,14 @@ function run_native(
     );
     $output = ob_get_clean();
     printf(
-        "%s %s %s vm=%d output=%s return=%s diagnostic=%s\n",
+        "%s %s %s vm=%d execute_ex=%d handler=%d "
+            . "output=%s return=%s diagnostic=%s\n",
         $function,
         $result['status'],
         $result['phase'],
         $result['execution']['vm_handler_calls'],
+        $result['execution']['execute_ex_calls'],
+        $result['execution']['opline_handler_calls'],
         $output === '' ? '<empty>' : $output,
         json_encode($result['execution']['return_value']),
         $result['diagnostics'][0]['code'],
@@ -249,20 +252,20 @@ run_native($strictNumericReturn, 'strict_float_case', [], 7);
 run_native($nested, 'nested_case', [], 5);
 ?>
 --EXPECT--
-nested_case accepted complete vm=0 output=17 return=null diagnostic=MIRL0000
-nested_case accepted complete vm=0 output=171717 return=null diagnostic=MIRL0000
-recursive_case accepted complete vm=0 output=<empty> return=1 diagnostic=MIRL0000
-mutual_case accepted complete vm=0 output=<empty> return=false diagnostic=MIRL0000
-branch_case accepted complete vm=0 output=<empty> return=7 diagnostic=MIRL0000
-default_case accepted complete vm=0 output=<empty> return=7 diagnostic=MIRL0000
-scalar_int_case accepted complete vm=0 output=<empty> return=4 diagnostic=MIRL0000
-scalar_bool_case accepted complete vm=0 output=<empty> return=true diagnostic=MIRL0000
-scalar_float_case accepted complete vm=0 output=<empty> return=2.5 diagnostic=MIRL0000
-scalar_null_case accepted complete vm=0 output=<empty> return=null diagnostic=MIRL0000
-scalar_echo_case accepted complete vm=0 output=4 return=null diagnostic=MIRL0000
-weak_case accepted complete vm=0 output=<empty> return=1 diagnostic=MIRL0000
-weak_return_case accepted complete vm=0 output=<empty> return=1 diagnostic=MIRL0000
+nested_case accepted complete vm=0 execute_ex=0 handler=0 output=17 return=null diagnostic=MIRL0000
+nested_case accepted complete vm=0 execute_ex=0 handler=0 output=171717 return=null diagnostic=MIRL0000
+recursive_case accepted complete vm=0 execute_ex=0 handler=0 output=<empty> return=1 diagnostic=MIRL0000
+mutual_case accepted complete vm=0 execute_ex=0 handler=0 output=<empty> return=false diagnostic=MIRL0000
+branch_case accepted complete vm=0 execute_ex=0 handler=0 output=<empty> return=7 diagnostic=MIRL0000
+default_case accepted complete vm=0 execute_ex=0 handler=0 output=<empty> return=7 diagnostic=MIRL0000
+scalar_int_case accepted complete vm=0 execute_ex=0 handler=0 output=<empty> return=4 diagnostic=MIRL0000
+scalar_bool_case accepted complete vm=0 execute_ex=0 handler=0 output=<empty> return=true diagnostic=MIRL0000
+scalar_float_case accepted complete vm=0 execute_ex=0 handler=0 output=<empty> return=2.5 diagnostic=MIRL0000
+scalar_null_case accepted complete vm=0 execute_ex=0 handler=0 output=<empty> return=null diagnostic=MIRL0000
+scalar_echo_case accepted complete vm=0 execute_ex=0 handler=0 output=4 return=null diagnostic=MIRL0000
+weak_case accepted complete vm=0 execute_ex=0 handler=0 output=<empty> return=1 diagnostic=MIRL0000
+weak_return_case accepted complete vm=0 execute_ex=0 handler=0 output=<empty> return=1 diagnostic=MIRL0000
 strict_case TypeError strict_target(): Argument #1 ($value) must be of type int, true given, called in strict_case.php on line 9
 strict_return_case TypeError strict_return_case(): Return value must be of type int, true returned
-strict_float_case accepted complete vm=0 output=<empty> return=2 diagnostic=MIRL0000
-nested_case rejected lowering vm=0 output=<empty> return=null diagnostic=MIRL0026
+strict_float_case accepted complete vm=0 execute_ex=0 handler=0 output=<empty> return=2 diagnostic=MIRL0000
+nested_case rejected lowering vm=0 execute_ex=0 handler=0 output=<empty> return=null diagnostic=MIRL0026
