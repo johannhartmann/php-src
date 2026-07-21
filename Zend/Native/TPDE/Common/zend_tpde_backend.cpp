@@ -526,21 +526,43 @@ extern "C" zend_result zend_native_execute(
 			"native execution arguments do not match the compiled entry");
 		return FAILURE;
 	}
+	for (uint32_t i = 0; i < argument_count; ++i) {
+		if (arguments[i].kind > ZEND_NATIVE_SCALAR_DOUBLE) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
+				"scalar execution argument kind is invalid");
+			return FAILURE;
+		}
+	}
 
 	zend_op_array op_array{};
 	op_array.type = ZEND_USER_FUNCTION;
 	op_array.num_args = argument_count;
 	op_array.required_num_args = argument_count;
 	op_array.last_var = argument_count;
+	op_array.last = argument_count;
+	op_array.opcodes = static_cast<zend_op *>(std::calloc(
+		static_cast<size_t>(argument_count) + 1, sizeof(zend_op)));
+	if (op_array.opcodes == nullptr) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"unable to allocate scalar execution receive opcodes");
+		return FAILURE;
+	}
 	if (argument_count != 0) {
 		op_array.arg_info = static_cast<zend_arg_info *>(
 			std::calloc(argument_count, sizeof(zend_arg_info)));
 		if (op_array.arg_info == nullptr) {
+			std::free(op_array.opcodes);
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
 				"unable to allocate scalar execution argument metadata");
 			return FAILURE;
 		}
+	}
+	for (uint32_t i = 0; i < argument_count; ++i) {
+		op_array.opcodes[i].opcode = ZEND_RECV;
+		op_array.opcodes[i].op1.num = i + 1;
 	}
 
 	zend_execute_data *previous = EG(current_execute_data);
@@ -549,7 +571,6 @@ extern "C" zend_result zend_native_execute(
 		argument_count, nullptr);
 	zval return_value;
 	ZVAL_UNDEF(&return_value);
-	zend_init_func_execute_data(frame, &op_array, &return_value);
 	for (uint32_t i = 0; i < argument_count; ++i) {
 		zval *argument = ZEND_CALL_ARG(frame, i + 1);
 		switch (arguments[i].kind) {
@@ -569,15 +590,10 @@ extern "C" zend_result zend_native_execute(
 				break;
 			}
 			default:
-				zend_vm_stack_free_args(frame);
-				zend_vm_stack_free_call_frame(frame);
-				std::free(op_array.arg_info);
-				zend_tpde_set_diagnostic(diag,
-					ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
-					"scalar execution argument kind is invalid");
-				return FAILURE;
+				ZEND_UNREACHABLE();
 		}
 	}
+	zend_init_func_execute_data(frame, &op_array, &return_value);
 
 	EG(current_execute_data) = frame;
 	zend_native_status status = zend_native_execute_frame(code, frame, diag);
@@ -617,6 +633,7 @@ extern "C" zend_result zend_native_execute(
 	zend_vm_stack_free_args(frame);
 	zend_vm_stack_free_call_frame(frame);
 	std::free(op_array.arg_info);
+	std::free(op_array.opcodes);
 	return status == ZEND_NATIVE_RETURNED ? SUCCESS : FAILURE;
 }
 
