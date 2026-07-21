@@ -37,83 +37,83 @@ PROOF_CATALOG = {
 DECISIONS: dict[str, dict[str, Any]] = {
     "ZEND_NOP": {
         "classification": "required",
-        "owner": "W03-A-lowering-core-registry",
+        "provider": "core",
         "proofs": ["single_reachable_block", "no_calls", "no_reentry"],
         "mir_opcodes": [],
         "rationale": "The cited handler is an effect-free metadata no-op.",
     },
     "ZEND_QM_ASSIGN": {
-        "owner": "W03-B-frontend-operands-facts",
+        "provider": "frontend",
         "proofs": [*COMMON_PROOFS, "non_refcounted"],
         "mir_opcodes": ["copy"],
     },
     "ZEND_ADD": {
-        "owner": "W03-C-numeric-arithmetic-bitwise",
+        "provider": "numeric",
         "proofs": [*COMMON_PROOFS, "no_overflow", "no_destructor", "no_exception"],
         "mir_opcodes": ["i64_add_no_overflow", "f64_add"],
     },
     "ZEND_SUB": {
-        "owner": "W03-C-numeric-arithmetic-bitwise",
+        "provider": "numeric",
         "proofs": [*COMMON_PROOFS, "no_overflow", "no_destructor", "no_exception"],
         "mir_opcodes": ["i64_sub_no_overflow", "f64_sub"],
     },
     "ZEND_MUL": {
-        "owner": "W03-C-numeric-arithmetic-bitwise",
+        "provider": "numeric",
         "proofs": [*COMMON_PROOFS, "no_overflow", "no_destructor", "no_exception"],
         "mir_opcodes": ["i64_mul_no_overflow", "f64_mul"],
     },
     "ZEND_MOD": {
-        "owner": "W03-C-numeric-arithmetic-bitwise",
+        "provider": "numeric",
         "proofs": [*COMMON_PROOFS, "nonzero_divisor", "no_overflow", "no_exception"],
         "mir_opcodes": ["i64_mod_nonzero"],
     },
     "ZEND_SL": {
-        "owner": "W03-C-numeric-arithmetic-bitwise",
+        "provider": "numeric",
         "proofs": [*COMMON_PROOFS, "valid_shift_count", "no_overflow"],
         "mir_opcodes": ["i64_shl_checked"],
     },
     "ZEND_SR": {
-        "owner": "W03-C-numeric-arithmetic-bitwise",
+        "provider": "numeric",
         "proofs": [*COMMON_PROOFS, "valid_shift_count"],
         "mir_opcodes": ["i64_shr_checked"],
     },
     "ZEND_BW_OR": {
-        "owner": "W03-C-numeric-arithmetic-bitwise",
+        "provider": "numeric",
         "proofs": list(COMMON_PROOFS),
         "mir_opcodes": ["i64_bit_or"],
     },
     "ZEND_BW_AND": {
-        "owner": "W03-C-numeric-arithmetic-bitwise",
+        "provider": "numeric",
         "proofs": list(COMMON_PROOFS),
         "mir_opcodes": ["i64_bit_and"],
     },
     "ZEND_BW_XOR": {
-        "owner": "W03-C-numeric-arithmetic-bitwise",
+        "provider": "numeric",
         "proofs": list(COMMON_PROOFS),
         "mir_opcodes": ["i64_bit_xor"],
     },
     "ZEND_BW_NOT": {
-        "owner": "W03-C-numeric-arithmetic-bitwise",
+        "provider": "numeric",
         "proofs": list(COMMON_PROOFS),
         "mir_opcodes": ["i64_bit_not"],
     },
     "ZEND_BOOL": {
-        "owner": "W03-D-comparison-boolean-casts",
+        "provider": "logic",
         "proofs": [*COMMON_PROOFS, "safe_scalar_cast"],
         "mir_opcodes": ["i64_to_i1", "f64_to_i1"],
     },
     "ZEND_BOOL_NOT": {
-        "owner": "W03-D-comparison-boolean-casts",
+        "provider": "logic",
         "proofs": list(COMMON_PROOFS),
         "mir_opcodes": ["i1_not"],
     },
     "ZEND_BOOL_XOR": {
-        "owner": "W03-D-comparison-boolean-casts",
+        "provider": "logic",
         "proofs": list(COMMON_PROOFS),
         "mir_opcodes": ["i1_xor"],
     },
     "ZEND_CAST": {
-        "owner": "W03-D-comparison-boolean-casts",
+        "provider": "logic",
         "proofs": [*COMMON_PROOFS, "safe_scalar_cast", "finite_f64", "no_destructor", "no_exception"],
         "mir_opcodes": [
             "i64_to_f64",
@@ -125,12 +125,12 @@ DECISIONS: dict[str, dict[str, Any]] = {
         ],
     },
     "ZEND_FREE": {
-        "owner": "W03-E-straight-line-lifetime-return",
+        "provider": "lifetime",
         "proofs": [*COMMON_PROOFS, "non_refcounted", "no_destructor"],
         "mir_opcodes": ["scalar_drop"],
     },
     "ZEND_RETURN": {
-        "owner": "W03-E-straight-line-lifetime-return",
+        "provider": "lifetime",
         "proofs": [
             *COMMON_PROOFS,
             "non_refcounted",
@@ -153,7 +153,7 @@ for name, opcodes in {
     "ZEND_SPACESHIP": ["i64_cmp", "f64_cmp"],
 }.items():
     DECISIONS[name] = {
-        "owner": "W03-D-comparison-boolean-casts",
+        "provider": "logic",
         "proofs": [*COMMON_PROOFS, "same_exact_type", "finite_f64"],
         "mir_opcodes": opcodes,
     }
@@ -201,7 +201,7 @@ def build_profile(matrix: dict[str, Any]) -> dict[str, Any]:
                     "number": opcode["number"],
                     "opcode": opcode["opcode"],
                     "classification": "deferred",
-                    "owner": "W03-integration-gate",
+                    "provider": None,
                     "deferred_wave": DEFERRED_WAVE_BY_FAMILY[family],
                     "proofs": [],
                     "mir_opcodes": [],
@@ -215,7 +215,7 @@ def build_profile(matrix: dict[str, Any]) -> dict[str, Any]:
             "number": opcode["number"],
             "opcode": opcode["opcode"],
             "classification": decision.get("classification", "conditional"),
-            "owner": decision["owner"],
+            "provider": decision["provider"],
             "deferred_wave": None,
             "proofs": decision["proofs"],
             "mir_opcodes": decision["mir_opcodes"],

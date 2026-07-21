@@ -146,9 +146,8 @@ extern zend_mir_lowering_result zend_mir_lower_w03_zend_source(
 	zend_mir_diagnostic_sink *diagnostics);
 
 /*
- * A-owned process-local W04 integration wrapper. W04-B supplies a
- * failure-atomic link stub for standalone bridge tests; W04-I links this
- * declaration to the production implementation without duplicating providers.
+ * Process-local W04 integration wrapper. Standalone bridge tests provide a
+ * failure-atomic link stub; production builds use the real implementation.
  */
 extern zend_mir_lowering_result zend_mir_lower_w04_zend_op_array(
 	const zend_op_array *op_array,
@@ -905,9 +904,8 @@ static bool native_mir_test_dump_write(
 }
 
 /*
- * Provider-specific state is assembled here after the W03 specialist
- * providers have been merged. Keeping it private to the test extension
- * prevents a public production orchestration API from being introduced.
+ * Provider-specific state stays private to the test extension so the test
+ * adapter does not introduce a public production orchestration API.
  */
 static bool native_mir_test_publish_lowering_result(
 	native_mir_test_state *state,

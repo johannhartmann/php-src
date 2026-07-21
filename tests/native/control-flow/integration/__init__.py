@@ -1,1 +1,1 @@
-"""W04 integration hard-gate tests."""
+"""W04 control-flow integration tests."""

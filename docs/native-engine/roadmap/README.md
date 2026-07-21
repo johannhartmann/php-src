@@ -1,8 +1,9 @@
-# Native-engine capability roadmap
+# Native-engine implementation roadmap
 
-`capabilities.json` is the machine-readable dependency and semantic-debt model.
-It deliberately does not treat wave order as proof of completeness. Receipts
-list the capabilities actually provided and every still-open semantic debt.
+The next implementation work is closing the semantic gaps that keep W05's
+direct-user-call model from executing: reference ownership, exception and
+bailout cleanup, dynamic targets, observer integration, target emission, and
+the internal C ABI. These are engineering tasks, not repository workflow states.
 
-W05 models direct user-call structure only. It does not execute MIR, call the
-VM, emit target code, or cross the C ABI.
+W05 currently models direct user-call structure only. It does not execute MIR,
+call the VM, emit target code, or cross the C ABI.

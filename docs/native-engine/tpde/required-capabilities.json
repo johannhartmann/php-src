@@ -45,9 +45,7 @@
             "owner": "tpde",
             "upstreamability": "not_applicable",
             "target_impact": {"x86_64": {"status": "required", "impact": "Architecture-independent adaptor used by the primary backend."}, "aarch64": {"status": "analyzed_unreleased", "impact": "The same adaptor boundary applies to the follow-on backend."}},
-            "required_tests": ["Compile CFGs with loop and merge PHIs through the PHP adaptor."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Compile CFGs with loop and merge PHIs through the PHP adaptor."]
         },
         {
             "id": "single-entry-functions",
@@ -62,9 +60,7 @@
             "owner": "shared",
             "upstreamability": "not_applicable",
             "target_impact": {"x86_64": {"status": "required", "impact": "Resume code must respect single entry."}, "aarch64": {"status": "analyzed_unreleased", "impact": "The architecture-independent restriction is identical."}},
-            "required_tests": ["Reject a PHP lowering that names a mid-function native entry."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Reject a PHP lowering that names a mid-function native entry."]
         },
         {
             "id": "multipart-values",
@@ -79,9 +75,7 @@
             "owner": "tpde",
             "upstreamability": "not_applicable",
             "target_impact": {"x86_64": {"status": "required", "impact": "Part assignment follows x86-64 banks."}, "aarch64": {"status": "analyzed_unreleased", "impact": "Part assignment must be tested against AArch64 banks and ABI."}},
-            "required_tests": ["Exercise values with two parts across integer and floating-point banks."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Exercise values with two parts across integer and floating-point banks."]
         },
         {
             "id": "calls-calling-conventions",
@@ -96,9 +90,7 @@
             "owner": "shared",
             "upstreamability": "not_applicable",
             "target_impact": {"x86_64": {"status": "required", "impact": "PHP helper ABI must bind to the x86-64 assigner."}, "aarch64": {"status": "analyzed_unreleased", "impact": "The AArch64 helper ABI needs separate conformance tests."}},
-            "required_tests": ["Check integer, floating, stack, return, and vararg helper-call assignments."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Check integer, floating, stack, return, and vararg helper-call assignments."]
         },
         {
             "id": "fixed-context-registers",
@@ -113,9 +105,7 @@
             "owner": "shared",
             "upstreamability": "not_applicable",
             "target_impact": {"x86_64": {"status": "required", "impact": "Register selection must avoid target-reserved and EH-sensitive registers."}, "aarch64": {"status": "analyzed_unreleased", "impact": "AArch64 has a distinct non-allocatable mask and callee-saved constraints."}},
-            "required_tests": ["Verify fixed assignments survive calls and remain excluded from general allocation."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Verify fixed assignments survive calls and remain excluded from general allocation."]
         },
         {
             "id": "branches-switches",
@@ -130,9 +120,7 @@
             "owner": "tpde",
             "upstreamability": "not_applicable",
             "target_impact": {"x86_64": {"status": "required", "impact": "Primary backend branch encodings are required."}, "aarch64": {"status": "analyzed_unreleased", "impact": "AArch64 branch reach and jump-table encodings require target tests."}},
-            "required_tests": ["Compile dense and sparse switches plus forward and backward branches."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Compile dense and sparse switches plus forward and backward branches."]
         },
         {
             "id": "symbols-relocations",
@@ -147,9 +135,7 @@
             "owner": "tpde",
             "upstreamability": "not_applicable",
             "target_impact": {"x86_64": {"status": "required", "impact": "x86-64 relocation kinds are applied by the primary mapper."}, "aarch64": {"status": "analyzed_unreleased", "impact": "AArch64 uses distinct CALL26, ADR, and GOT relocations."}},
-            "required_tests": ["Resolve local, external, PC-relative, absolute, PLT, and GOT symbols."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Resolve local, external, PC-relative, absolute, PLT, and GOT symbols."]
         },
         {
             "id": "elf-object-output",
@@ -164,9 +150,7 @@
             "owner": "tpde",
             "upstreamability": "not_applicable",
             "target_impact": {"x86_64": {"status": "required", "impact": "ELF x86-64 object generation is available."}, "aarch64": {"status": "analyzed_unreleased", "impact": "ELF AArch64 object generation is available in TPDE but not a released PHP target."}},
-            "required_tests": ["Parse emitted ELF headers, sections, symbols, and relocations for both TPDE targets."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Parse emitted ELF headers, sections, symbols, and relocations for both TPDE targets."]
         },
         {
             "id": "custom-code-allocation",
@@ -181,9 +165,7 @@
             "owner": "shared",
             "upstreamability": "good_candidate",
             "target_impact": {"x86_64": {"status": "required", "impact": "Required for PHP-owned primary-target code memory."}, "aarch64": {"status": "analyzed_unreleased", "impact": "The same API must allow target-specific publish operations."}},
-            "required_tests": ["Map through a recording allocator and verify sizes, alignments, ownership, and failure cleanup."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Map through a recording allocator and verify sizes, alignments, ownership, and failure cleanup."]
         },
         {
             "id": "custom-mapper",
@@ -198,9 +180,7 @@
             "owner": "shared",
             "upstreamability": "good_candidate",
             "target_impact": {"x86_64": {"status": "required", "impact": "Needed to integrate primary code with PHP memory ownership."}, "aarch64": {"status": "analyzed_unreleased", "impact": "Must include target publish and branch-range responsibilities."}},
-            "required_tests": ["Compare ElfMapper and a test custom mapper over the same finalized image."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Compare ElfMapper and a test custom mapper over the same finalized image."]
         },
         {
             "id": "persistable-relocations",
@@ -215,9 +195,7 @@
             "owner": "shared",
             "upstreamability": "good_candidate",
             "target_impact": {"x86_64": {"status": "required", "impact": "Primary persistent records need x86-64 relocation semantics."}, "aarch64": {"status": "analyzed_unreleased", "impact": "AArch64 records additionally need range-safe call and GOT handling."}},
-            "required_tests": ["Serialize, reload at a different base, resolve process symbols, and compare relocated bytes."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Serialize, reload at a different base, resolve process symbols, and compare relocated bytes."]
         },
         {
             "id": "process-local-symbol-resolution",
@@ -232,9 +210,7 @@
             "owner": "shared",
             "upstreamability": "not_applicable",
             "target_impact": {"x86_64": {"status": "required", "impact": "Resolver supplies helper and PLT/GOT targets per process."}, "aarch64": {"status": "analyzed_unreleased", "impact": "The same lifecycle applies with AArch64 relocation kinds."}},
-            "required_tests": ["Map identical input with two resolvers and prove addresses are not shared or serialized."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Map identical input with two resolvers and prove addresses are not shared or serialized."]
         },
         {
             "id": "wx-mapping",
@@ -249,9 +225,7 @@
             "owner": "tpde",
             "upstreamability": "requires_core_review",
             "target_impact": {"x86_64": {"status": "required", "impact": "Primary mapper must retain the RW-to-RX transition."}, "aarch64": {"status": "analyzed_unreleased", "impact": "The transition must be ordered with instruction-cache publication."}},
-            "required_tests": ["Inspect mappings after publication and assert no writable executable range."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Inspect mappings after publication and assert no writable executable range."]
         },
         {
             "id": "aarch64-icache",
@@ -266,9 +240,7 @@
             "owner": "tpde",
             "upstreamability": "requires_core_review",
             "target_impact": {"x86_64": {"status": "not_applicable", "impact": "x86-64 instruction caches are coherent for this publication model."}, "aarch64": {"status": "analyzed_unreleased", "impact": "Release is prohibited until cache maintenance is implemented and tested."}},
-            "required_tests": ["Generate, publish, and repeatedly execute patched AArch64 code on real hardware or a cache-faithful runner."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Generate, publish, and repeatedly execute patched AArch64 code on real hardware or a cache-faithful runner."]
         },
         {
             "id": "aarch64-branch-veneers",
@@ -283,9 +255,7 @@
             "owner": "tpde",
             "upstreamability": "requires_core_review",
             "target_impact": {"x86_64": {"status": "not_applicable", "impact": "The AArch64 CALL26 range rule does not apply."}, "aarch64": {"status": "analyzed_unreleased", "impact": "Required before AArch64 can be released."}},
-            "required_tests": ["Relocate calls just inside and outside CALL26 range and force multiple veneer regions."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Relocate calls just inside and outside CALL26 range and force multiple veneer regions."]
         },
         {
             "id": "unwind-eh-frame",
@@ -300,9 +270,7 @@
             "owner": "shared",
             "upstreamability": "not_applicable",
             "target_impact": {"x86_64": {"status": "required", "impact": "Primary live mappings require registration and teardown."}, "aarch64": {"status": "analyzed_unreleased", "impact": "AArch64 CFI and registration need separate validation."}},
-            "required_tests": ["Walk a native stack through generated code and verify deregistration before unmap."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Walk a native stack through generated code and verify deregistration before unmap."]
         },
         {
             "id": "statepoint-code-offset",
@@ -317,9 +285,7 @@
             "owner": "shared",
             "upstreamability": "good_candidate",
             "target_impact": {"x86_64": {"status": "required", "impact": "Offsets index primary-target bailout metadata."}, "aarch64": {"status": "analyzed_unreleased", "impact": "Offsets have the same meaning but different instruction alignment."}},
-            "required_tests": ["Check before/after hook offsets around zero-byte, fixed-size, and call-emitting instructions."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Check before/after hook offsets around zero-byte, fixed-size, and call-emitting instructions."]
         },
         {
             "id": "force-materialize",
@@ -334,9 +300,7 @@
             "owner": "shared",
             "upstreamability": "good_candidate",
             "target_impact": {"x86_64": {"status": "required", "impact": "Required at every primary bailout-capable statepoint."}, "aarch64": {"status": "analyzed_unreleased", "impact": "Must handle target-specific fixed and floating-point registers."}},
-            "required_tests": ["Materialize dirty, clean, fixed, multipart, stack, register, and variable-reference values."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Materialize dirty, clean, fixed, multipart, stack, register, and variable-reference values."]
         },
         {
             "id": "value-location-snapshot",
@@ -351,9 +315,7 @@
             "owner": "shared",
             "upstreamability": "good_candidate",
             "target_impact": {"x86_64": {"status": "required", "impact": "Descriptors must name x86-64 register banks and CFA-relative stack locations."}, "aarch64": {"status": "analyzed_unreleased", "impact": "Register identifiers and stack rules require an AArch64 mapping."}},
-            "required_tests": ["Snapshot multipart values before and after spills, calls, and fixed assignment changes."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Snapshot multipart values before and after spills, calls, and fixed assignment changes."]
         },
         {
             "id": "frame-stackmap-metadata",
@@ -368,9 +330,7 @@
             "owner": "php",
             "upstreamability": "php_local",
             "target_impact": {"x86_64": {"status": "required", "impact": "PHP consumes x86-64 normalized locations."}, "aarch64": {"status": "analyzed_unreleased", "impact": "The PHP schema stays stable while location decoding becomes target-specific."}},
-            "required_tests": ["Round-trip PHP frame maps and reject missing, duplicate, or non-materialized values."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Round-trip PHP frame maps and reject missing, duplicate, or non-materialized values."]
         },
         {
             "id": "resume-osr",
@@ -385,9 +345,7 @@
             "owner": "php",
             "upstreamability": "php_local",
             "target_impact": {"x86_64": {"status": "required", "impact": "Primary resume stubs use the x86-64 PHP ABI."}, "aarch64": {"status": "analyzed_unreleased", "impact": "Separate AArch64 stubs need ABI and context-register validation."}},
-            "required_tests": ["Prove all resume IDs target function symbols and no metadata points inside a function body."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Prove all resume IDs target function symbols and no metadata points inside a function body."]
         },
         {
             "id": "debug-perf",
@@ -402,9 +360,7 @@
             "owner": "php",
             "upstreamability": "php_local",
             "target_impact": {"x86_64": {"status": "required", "impact": "Primary generated code must be symbolized."}, "aarch64": {"status": "analyzed_unreleased", "impact": "The same event schema applies with AArch64 machine code."}},
-            "required_tests": ["Check symbol/range publication and removal on code lifecycle transitions."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Check symbol/range publication and removal on code lifecycle transitions."]
         },
         {
             "id": "thread-safety",
@@ -419,9 +375,7 @@
             "owner": "php",
             "upstreamability": "php_local",
             "target_impact": {"x86_64": {"status": "required", "impact": "Per-compilation ownership is mandatory on the primary target."}, "aarch64": {"status": "analyzed_unreleased", "impact": "The same ownership rule applies."}},
-            "required_tests": ["Run independent compiler instances concurrently under a race detector when available."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Run independent compiler instances concurrently under a race detector when available."]
         },
         {
             "id": "reset-reuse",
@@ -436,9 +390,7 @@
             "owner": "tpde",
             "upstreamability": "not_applicable",
             "target_impact": {"x86_64": {"status": "required", "impact": "Primary compiler reuse must invoke reset."}, "aarch64": {"status": "analyzed_unreleased", "impact": "Target-specific reset state needs the same regression coverage."}},
-            "required_tests": ["Compile two disjoint modules with reset and detect any cross-module symbol or byte leakage."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Compile two disjoint modules with reset and detect any cross-module symbol or byte leakage."]
         },
         {
             "id": "cxx20-no-eh",
@@ -453,9 +405,7 @@
             "owner": "shared",
             "upstreamability": "not_applicable",
             "target_impact": {"x86_64": {"status": "required", "impact": "Required build mode for the primary backend."}, "aarch64": {"status": "analyzed_unreleased", "impact": "The same language and exception mode applies."}},
-            "required_tests": ["Configure and compile TPDE integration with C++20 and exceptions disabled."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Configure and compile TPDE integration with C++20 and exceptions disabled."]
         },
         {
             "id": "x86-64-target",
@@ -470,9 +420,7 @@
             "owner": "shared",
             "upstreamability": "not_applicable",
             "target_impact": {"x86_64": {"status": "required", "impact": "This is the release target."}, "aarch64": {"status": "not_applicable", "impact": "This capability is x86-64-specific."}},
-            "required_tests": ["Run the complete native contract and backend suite on Linux/ELF x86-64."],
-            "blocker_id": null,
-            "decision_id": null
+            "required_tests": ["Run the complete native contract and backend suite on Linux/ELF x86-64."]
         },
         {
             "id": "aarch64-target",
@@ -486,10 +434,8 @@
             "minimal_api_or_shim": "None.",
             "owner": "shared",
             "upstreamability": "not_applicable",
-            "target_impact": {"x86_64": {"status": "not_applicable", "impact": "This capability is AArch64-specific."}, "aarch64": {"status": "analyzed_unreleased", "impact": "Backend existence does not imply PHP release; cache, veneer, ABI, and contract tests remain gates."}},
-            "required_tests": ["Compile target corpus and run target-specific relocation, ABI, unwind, cache, and veneer suites before release."],
-            "blocker_id": null,
-            "decision_id": null
+            "target_impact": {"x86_64": {"status": "not_applicable", "impact": "This capability is AArch64-specific."}, "aarch64": {"status": "analyzed_unreleased", "impact": "Backend existence does not imply PHP release; cache, veneer, ABI, and contract tests are still required."}},
+            "required_tests": ["Compile target corpus and run target-specific relocation, ABI, unwind, cache, and veneer suites before release."]
         }
     ]
 }

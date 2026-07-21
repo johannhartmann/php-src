@@ -15,14 +15,11 @@ from typing import Any, Iterable
 
 
 ROOT = Path(__file__).resolve().parents[3]
-REPORT_PATH = Path("docs/native-engine/semantics/w01-coverage-report.json")
-WAVE_BASE = "dc6e34b56846c38dc2475d6c962c2b9b7ada6df4"
 OPCODE_SOURCE_COMMIT = "b7c524a19fa815799a858b98d39f176ca88648b1"
 TPDE_PIN = "338d41890e424b058e2053b6a5787e1348e3dd57"
 
 ARTIFACTS = {
-    "blockers": Path("docs/native-engine/semantics/blockers.json"),
-    "cross_contract": Path("docs/native-engine/waves/w01-cross-track-contract.md"),
+    "vocabulary": Path("docs/native-engine/semantics/vocabulary.md"),
     "effects": Path("docs/native-engine/semantics/effects/effect-model.json"),
     "effects_schema": Path("docs/native-engine/semantics/effects/effect-model.schema.json"),
     "frame_examples": Path("docs/native-engine/semantics/frames/frame-state.examples.json"),
@@ -87,29 +84,29 @@ class ValidationError(ValueError):
     """A deterministic W01 cross-contract validation failure."""
 
 
-def load_specialist_module(name: str, relative: str) -> Any:
+def load_validator_module(name: str, relative: str) -> Any:
     path = ROOT / relative
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
-        raise ValidationError(f"cannot load specialist validator {relative}")
+        raise ValidationError(f"cannot load validator {relative}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-OPCODE_VALIDATOR = load_specialist_module(
+OPCODE_VALIDATOR = load_validator_module(
     "w01_opcode_validator", "scripts/native/semantics/generate-opcode-matrix.py"
 )
-EFFECT_VALIDATOR = load_specialist_module(
+EFFECT_VALIDATOR = load_validator_module(
     "w01_effect_validator", "scripts/native/semantics/validate-effect-model.py"
 )
-FRAME_VALIDATOR = load_specialist_module(
+FRAME_VALIDATOR = load_validator_module(
     "w01_frame_validator", "scripts/native/semantics/validate-frame-contract.py"
 )
-TPDE_VALIDATOR = load_specialist_module(
+TPDE_VALIDATOR = load_validator_module(
     "w01_tpde_validator", "scripts/native/semantics/validate-tpde-gap.py"
 )
-MANIFEST_VALIDATOR = load_specialist_module(
+MANIFEST_VALIDATOR = load_validator_module(
     "w01_manifest_validator", "tests/native/semantics/validate_manifest.py"
 )
 
@@ -186,45 +183,6 @@ def find_safepoint_enum(value: Any) -> set[str]:
     return set()
 
 
-def validate_blockers(document: Any) -> tuple[list[dict[str, Any]], list[str]]:
-    require(isinstance(document, dict), "blockers document must be an object")
-    require(set(document) == {"$schema", "blockers", "format_version", "wave_id"}, "blockers document has unexpected fields")
-    require(document["$schema"] == "./blockers.schema.json", "blockers schema reference is invalid")
-    require(document["format_version"] == "1.0.0", "blockers format_version must be 1.0.0")
-    require(document["wave_id"] == "W01", "blockers wave_id must be W01")
-    blockers = document["blockers"]
-    require(isinstance(blockers, list), "blockers must be an array")
-    identifiers: list[str] = []
-    unresolved_critical: list[str] = []
-    required_fields = {
-        "affected_waves", "blocker_id", "decision", "github_issue_url",
-        "issue_ready", "owner", "severity", "source_refs", "status", "title",
-    }
-    for index, blocker in enumerate(blockers):
-        context = f"blockers[{index}]"
-        require(isinstance(blocker, dict), f"{context} must be an object")
-        require(set(blocker) == required_fields, f"{context} has unexpected fields")
-        blocker_id = blocker["blocker_id"]
-        require(isinstance(blocker_id, str) and re.fullmatch(r"W01-BLOCK-[0-9]{3}", blocker_id) is not None, f"{context}.blocker_id is invalid")
-        identifiers.append(blocker_id)
-        require(blocker["severity"] in {"critical", "high", "medium", "low"}, f"{context}.severity is invalid")
-        require(blocker["status"] in {"resolved", "unresolved"}, f"{context}.status is invalid")
-        require(isinstance(blocker["owner"], str) and blocker["owner"], f"{context}.owner is required")
-        require(isinstance(blocker["title"], str) and blocker["title"], f"{context}.title is required")
-        require(isinstance(blocker["decision"], str) and blocker["decision"], f"{context}.decision is required")
-        require(isinstance(blocker["source_refs"], list) and blocker["source_refs"], f"{context}.source_refs is required")
-        require(isinstance(blocker["affected_waves"], list) and blocker["affected_waves"], f"{context}.affected_waves is required")
-        require(all(isinstance(wave, str) and re.fullmatch(r"W[0-9]{2}", wave) for wave in blocker["affected_waves"]), f"{context}.affected_waves is invalid")
-        issue_url = blocker["github_issue_url"]
-        require(issue_url is None or (isinstance(issue_url, str) and issue_url.startswith("https://github.com/")), f"{context}.github_issue_url is invalid")
-        require(isinstance(blocker["issue_ready"], bool), f"{context}.issue_ready must be boolean")
-        if blocker["status"] == "unresolved" and blocker["severity"] == "critical":
-            require(issue_url is not None, f"{context} unresolved critical blocker lacks a GitHub issue")
-            unresolved_critical.append(blocker_id)
-    require(len(identifiers) == len(set(identifiers)), "blockers contain duplicate IDs")
-    return blockers, unresolved_critical
-
-
 def build_report(root: Path = ROOT) -> dict[str, Any]:
     documents = {
         name: load_json(root / relative)
@@ -232,41 +190,41 @@ def build_report(root: Path = ROOT) -> dict[str, Any]:
         if relative.suffix == ".json"
     }
     try:
-        cross_contract = (root / ARTIFACTS["cross_contract"]).read_text(encoding="utf-8")
+        vocabulary = (root / ARTIFACTS["vocabulary"]).read_text(encoding="utf-8")
     except OSError as exc:
-        raise ValidationError(f"cannot load {root / ARTIFACTS['cross_contract']}: {exc}") from exc
+        raise ValidationError(f"cannot load {root / ARTIFACTS['vocabulary']}: {exc}") from exc
 
     matrix = documents["opcodes"]
-    specialist_root = root if (root / "Zend/zend_vm_opcodes.h").is_file() else ROOT
+    source_root = root if (root / "Zend/zend_vm_opcodes.h").is_file() else ROOT
     try:
         generated_matrix = OPCODE_VALIDATOR.build_matrix(
-            specialist_root,
-            specialist_root / "Zend/zend_vm_opcodes.h",
-            specialist_root / "Zend/zend_vm_def.h",
-            specialist_root / "docs/native-engine/semantics/opcodes/opcode-overrides.json",
+            source_root,
+            source_root / "Zend/zend_vm_opcodes.h",
+            source_root / "Zend/zend_vm_def.h",
+            source_root / "docs/native-engine/semantics/opcodes/opcode-overrides.json",
         )
     except OPCODE_VALIDATOR.MatrixError as exc:
-        raise ValidationError(f"opcode specialist validation failed: {exc}") from exc
-    require(matrix == generated_matrix, "opcode matrix differs from the specialist generator output")
+        raise ValidationError(f"opcode validation failed: {exc}") from exc
+    require(matrix == generated_matrix, "opcode matrix differs from generator output")
 
     try:
         EFFECT_VALIDATOR.validate_model(documents["effects"], documents["effects_schema"])
     except EFFECT_VALIDATOR.ValidationError as exc:
-        raise ValidationError(f"effect specialist validation failed: {exc}") from exc
+        raise ValidationError(f"effect validation failed: {exc}") from exc
 
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         frame_status = FRAME_VALIDATOR.check(
             root / ARTIFACTS["frame_schema"], root / ARTIFACTS["frame_examples"]
         )
-    require(frame_status == 0, "frame specialist validation failed")
+    require(frame_status == 0, "frame validation failed")
 
     tpde_errors = TPDE_VALIDATOR.validate_document(documents["tpde"])
-    require(not tpde_errors, f"TPDE specialist validation failed: {tpde_errors}")
+    require(not tpde_errors, f"TPDE validation failed: {tpde_errors}")
 
     try:
-        MANIFEST_VALIDATOR.validate_document(documents["manifest"], specialist_root)
+        MANIFEST_VALIDATOR.validate_document(documents["manifest"], source_root)
     except MANIFEST_VALIDATOR.ManifestError as exc:
-        raise ValidationError(f"manifest specialist validation failed: {exc}") from exc
+        raise ValidationError(f"manifest validation failed: {exc}") from exc
 
     require(matrix.get("format_version") == "1.0.0", "opcode matrix format_version must be 1.0.0")
     require(
@@ -301,8 +259,8 @@ def build_report(root: Path = ROOT) -> dict[str, Any]:
     ):
         missing = sorted(required - actual)
         require(not missing, f"{label} omit frozen IDs: {missing}")
-        absent_from_contract = sorted(identifier for identifier in required if f"`{identifier}`" not in cross_contract)
-        require(not absent_from_contract, f"cross-track contract omits {label}: {absent_from_contract}")
+        absent_from_contract = sorted(identifier for identifier in required if f"`{identifier}`" not in vocabulary)
+        require(not absent_from_contract, f"semantic vocabulary omits {label}: {absent_from_contract}")
 
     missing_crosslinks: list[str] = []
     for opcode in opcodes:
@@ -322,7 +280,6 @@ def build_report(root: Path = ROOT) -> dict[str, Any]:
     require(not missing_crosslinks, f"opcode/effect crosslinks are incomplete: {missing_crosslinks}")
 
     manifest = documents["manifest"]
-    require(manifest.get("wave_base_commit") == WAVE_BASE, "semantic manifest wave base is stale")
     declared_families = set(manifest.get("required_opcode_families", []))
     require(declared_families == REQUIRED_FAMILIES, f"semantic manifest required families differ: {sorted(declared_families ^ REQUIRED_FAMILIES)}")
     declared_risks = set(manifest.get("required_semantic_risks", []))
@@ -361,29 +318,18 @@ def build_report(root: Path = ROOT) -> dict[str, Any]:
     capability_ids = require_id_set(tpde.get("capabilities"), "TPDE capabilities")
     require(REQUIRED_TPDE_CAPABILITIES <= capability_ids, f"TPDE analysis omits integration capabilities: {sorted(REQUIRED_TPDE_CAPABILITIES - capability_ids)}")
 
-    blockers, unresolved_critical = validate_blockers(documents["blockers"])
-    blocker_ids = {blocker["blocker_id"] for blocker in blockers}
     blocked_capabilities: list[str] = []
     for capability in tpde["capabilities"]:
         require(isinstance(capability.get("source_refs"), list) and capability["source_refs"], f"TPDE capability {capability['id']} lacks source refs")
-        blocker_id = capability.get("blocker_id")
-        if blocker_id is not None:
-            require(blocker_id in blocker_ids, f"TPDE capability {capability['id']} references unknown blocker {blocker_id}")
         if capability.get("critical") is True and capability.get("classification") == "blocked":
             blocked_capabilities.append(capability["id"])
     require(not blocked_capabilities, f"critical TPDE capabilities remain blocked: {sorted(blocked_capabilities)}")
-    require(not unresolved_critical, f"critical W01 blockers remain unresolved: {sorted(unresolved_critical)}")
 
     for artifact_name, document in sorted(documents.items()):
         for path, value in walk_strings(document):
             require(PLACEHOLDER.search(value) is None, f"{artifact_name}{path} contains a semantic placeholder")
 
     return {
-        "blockers": {
-            "resolved": sum(blocker["status"] == "resolved" for blocker in blockers),
-            "total": len(blockers),
-            "unresolved_critical": [],
-        },
         "cross_links": {
             "barrier_ids": len(barriers),
             "effect_ids": len(effects),
@@ -414,35 +360,18 @@ def build_report(root: Path = ROOT) -> dict[str, Any]:
             "required_integration_capabilities": sorted(REQUIRED_TPDE_CAPABILITIES),
             "tpde_commit": TPDE_PIN,
         },
-        "wave_base_commit": WAVE_BASE,
-        "wave_id": "W01",
     }
-
-
-def render_report(report: dict[str, Any]) -> str:
-    return json.dumps(report, indent=2, sort_keys=True) + "\n"
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--check", action="store_true", help="validate and require the checked-in report to be current")
-    parser.add_argument("--output", type=Path, help="write the deterministic report to this path")
+    parser.add_argument("--check", action="store_true")
     parser.add_argument("--root", type=Path, default=ROOT, help="repository-like artifact root used by contract tests")
     args = parser.parse_args(argv)
+    if not args.check:
+        parser.error("only --check is supported")
     try:
         report = build_report(args.root.resolve())
-        rendered = render_report(report)
-        if args.check:
-            checked_in = args.root.resolve() / REPORT_PATH
-            try:
-                actual = checked_in.read_text(encoding="utf-8")
-            except OSError as exc:
-                raise ValidationError(f"cannot load {checked_in}: {exc}") from exc
-            require(actual == rendered, f"{REPORT_PATH} is stale; regenerate it")
-        if args.output is not None:
-            args.output.write_text(rendered, encoding="utf-8")
-        elif not args.check:
-            (args.root.resolve() / REPORT_PATH).write_text(rendered, encoding="utf-8")
     except ValidationError as exc:
         print(f"W01 validation failed: {exc}", file=sys.stderr)
         return 1

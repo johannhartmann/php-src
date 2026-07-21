@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and run the standalone W03-D scalar Logic tests."""
+"""Build and run the standalone scalar logic tests."""
 
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ def main() -> int:
             environment,
         )
 
-    print("W03-D Logic tests passed: C11 lowering and C++20 header")
+    print("scalar logic tests passed: C11 lowering and C++20 header")
     return 0
 
 

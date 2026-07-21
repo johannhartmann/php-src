@@ -29,7 +29,7 @@ class CoreLoweringTests(unittest.TestCase):
         )
         nop = next(entry for entry in profile["opcodes"] if entry["opcode"] == "ZEND_NOP")
         self.assertEqual(nop["number"], 0)
-        self.assertEqual(nop["owner"], "W03-A-lowering-core-registry")
+        self.assertEqual(nop["provider"], "core")
         self.assertEqual(nop["mir_opcodes"], [])
 
     def test_compiled_profile_matches_every_frozen_w03_entry(self) -> None:

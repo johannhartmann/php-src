@@ -50,7 +50,7 @@ class CallModelTests(unittest.TestCase):
         text = MODEL.read_text(encoding="utf-8")
         self.assertIn("plan->public_plan.complete = true;", text)
         self.assertIn("plan->public_plan.immutable = true;", text)
-        self.assertIn("receipt.codegen_eligible = false;", text)
+        self.assertIn("result.codegen_eligible = false;", text)
         self.assertIn("ZEND_MIR_W05_REQUIRED_DEBTS", text)
 
     def test_module_publication_uses_staging_and_atomic_commit(self) -> None:
@@ -139,28 +139,23 @@ class CallModelTests(unittest.TestCase):
         self.assertNotIn("num_args > 64", model)
         self.assertNotIn("by_ref_mask", model)
 
-    def test_final_verifier_precedes_content_bound_receipt_publication(self) -> None:
+    def test_final_verifier_precedes_determinism_check(self) -> None:
         model = MODEL.read_text(encoding="utf-8")
         lower = model[model.index("zend_mir_lower_w05_zend_source(") :]
         final_verify = lower.index("zend_mir_w05_verify_final_composition(")
         fingerprint = lower.index("zend_mir_w05_build_fingerprints(")
-        publish = lower.index("zend_mir_module_publish_w05_verifier_receipts(")
         recompute = lower.index(
             "zend_mir_w05_build_fingerprints(", fingerprint + 1
         )
-        receipt_verify = lower.index("zend_mir_w05_verify_receipts(")
         self.assertEqual(
-            [final_verify, fingerprint, publish, recompute, receipt_verify],
-            sorted(
-                [final_verify, fingerprint, publish, recompute, receipt_verify]
-            ),
+            [final_verify, fingerprint, recompute],
+            sorted([final_verify, fingerprint, recompute]),
         )
+        self.assertNotIn("receipt", lower)
         self.assertNotIn("module_ops.verify_stage1(", lower)
         self.assertNotIn("module_ops.verify_stage2(", lower)
         self.assertNotIn("zend_mir_verify_w04_control_flow(", lower)
-        self.assertIn(
-            "zend_mir_dump_w05_fingerprint_projection(", model
-        )
+        self.assertIn("zend_mir_dump_text(view, &writer", model)
         self.assertIn(
             "zend_mir_w05_verify_final_structural(", model
         )
@@ -172,19 +167,13 @@ class CallModelTests(unittest.TestCase):
         self.assertIn("source->opcode_at", model)
         self.assertIn("source->edge_at", model)
         self.assertIn("source_calls->call_argument_at", model)
-        self.assertIn("zend_mir_module_w05_capability_ids_are_canonical", model)
         self.assertIn("zend_mir_lowering_result_is_w04_failure_atomic(&w04)", model)
 
-    def test_fingerprint_has_independent_words_and_excludes_receipts(self) -> None:
+    def test_fingerprint_has_independent_words(self) -> None:
         model = MODEL.read_text(encoding="utf-8")
-        dump = (
-            ROOT / "Zend/Native/MIR/Text/zend_mir_dump.c"
-        ).read_text(encoding="utf-8")
         self.assertIn("uint32_t words[4];", model)
         self.assertIn("static const uint32_t domains[4]", model)
         self.assertNotIn("module_writer.hash", model)
-        self.assertIn("omit_verifier_receipts", dump)
-        self.assertIn("zend_mir_dump_w05_fingerprint_projection", dump)
         self.assertIn("recomputed_module_fingerprint", model)
 
     def test_call_effect_summary_is_a_w01_sequence_superset(self) -> None:

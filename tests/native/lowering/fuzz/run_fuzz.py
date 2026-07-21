@@ -27,6 +27,7 @@ FRONTEND_SOURCES = (
     FRONTEND / "zend_mir_literal_pool.c",
     FRONTEND / "zend_mir_slot_map.c",
     FRONTEND / "zend_mir_source_positions.c",
+    ROOT / "tests/native/lowering/frontend/zend_optimizer_stubs.c",
 )
 TEXT_FUZZER = ROOT / "tests/native/mir/fuzz/run_mutation_fuzz.py"
 

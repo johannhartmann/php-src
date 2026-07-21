@@ -43,7 +43,7 @@ result = {
         "source_id": "fnv1a64:0000000000000000",
     },
     "diagnostics": [{"stage": "MIRL", "code": "MIRL0000", "message": "ok", "opline": None}],
-    "mir": "instruction i0 block b0 opcode call_direct_user\ncall-receipt cr0 modeled true codegen-eligible false\n",
+    "mir": "instruction i0 block b0 opcode call_direct_user\n",
 }
 print(json.dumps({"schema_version": 1, "calls": [result for _ in range(repeat)]}))
 """

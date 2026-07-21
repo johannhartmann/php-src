@@ -819,6 +819,6 @@ int main(void)
 	test_deferred_paths();
 	test_mutation_failure();
 	test_provider_set();
-	puts("W03-C numeric lowering C tests passed");
+	puts("numeric lowering C tests passed");
 	return 0;
 }

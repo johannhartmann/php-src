@@ -40,15 +40,17 @@
 
 /*
  * W05 adds pointer-free call-model tables without changing W01-W04 records.
- * Minor 1.5 distinguishes final-module guarantees from the prerequisite W04
- * receipt and gives unlowered callees a stable declaration identity. Minor
+ * Minor 1.5 distinguishes final-module guarantees from prerequisite W04
+ * verification and gives unlowered callees a stable declaration identity. Minor
  * 1.6 adds an original-opcode proof table to the process-local call source
  * view so W03 projection cannot erase the W05 call-sequence proof. Minor 1.7
  * carries compiler-preserved named-argument syntax into the pointer-free call
  * source view even when Zend normalizes the argument position. Minor 1.8 adds
- * the exact mapped scalar result ID to each immutable MIR call site.
+ * the exact mapped scalar result ID to each immutable MIR call site. Minor 1.9
+ * removes persisted capability and verifier records; verification is performed
+ * directly before the module is returned.
  */
-#define ZEND_MIR_W05_CONTRACT_VERSION_MINOR UINT32_C(8)
+#define ZEND_MIR_W05_CONTRACT_VERSION_MINOR UINT32_C(9)
 #define ZEND_MIR_W05_CONTRACT_VERSION \
 	((ZEND_MIR_CONTRACT_VERSION_MAJOR << 16) | ZEND_MIR_W05_CONTRACT_VERSION_MINOR)
 
@@ -79,7 +81,6 @@ typedef uint32_t zend_mir_call_site_id;
 typedef uint32_t zend_mir_call_argument_id;
 typedef uint32_t zend_mir_call_target_id;
 typedef uint32_t zend_mir_call_continuation_id;
-typedef uint32_t zend_mir_call_capability_receipt_id;
 typedef uint32_t zend_mir_source_call_site_id;
 typedef uint32_t zend_mir_source_call_argument_id;
 typedef uint32_t zend_mir_source_call_target_id;

@@ -88,15 +88,11 @@ compiler bit.
 continuations, capabilities, and debts with stable `MIRV0700` through
 `MIRV0705` codes. A final composition verifier independently checks the
 extension-aware structural records, exact scalar facts, reciprocal CFG edges
-and nonterminating call placement, and the complete call model. Only the
-facets actually checked earn passing structural, scalar, control-flow, and
-call-model receipts.
-
-All receipts bind the same four-domain, 128-bit module and source
-fingerprints. The canonical module projection excludes verifier-receipt
-records because those records contain the fingerprint itself. The projection
-is recomputed after receipt publication and must remain identical. Planning
-and lowering failures use `MIRL0021` through `MIRL0029`.
+and nonterminating call placement, and the complete call model. These checks
+run directly before the module is returned. The stable module and source
+projections are recomputed once to detect mutation during verification; no
+verification or capability records are persisted in MIR. Planning and
+lowering failures use `MIRL0021` through `MIRL0029`.
 
 W04 Stage 1/2/3 guarantees describe the pre-mutation W04 projection and are
 stored separately as W05 `prerequisite_guarantees`. The final W05 module
@@ -105,7 +101,7 @@ verifier accepts opcode 41. The named verifier validates the final call
 extension and proves that it preserves the scalar and reducible-CFG
 capabilities of that prerequisite projection.
 
-The receipt requires all W05 capabilities and all explicit W05 debts. It
+The lowering result exposes all W05 capabilities and explicit W05 debts. It
 therefore states:
 
 ```text

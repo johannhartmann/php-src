@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and run the standalone W03-C numeric lowering tests."""
+"""Build and run the standalone numeric lowering tests."""
 
 from __future__ import annotations
 
@@ -74,7 +74,7 @@ def main() -> int:
             ],
             environment,
         )
-    print("W03-C numeric lowering tests passed")
+    print("numeric lowering tests passed")
     return 0
 
 

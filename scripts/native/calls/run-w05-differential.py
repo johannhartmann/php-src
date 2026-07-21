@@ -38,7 +38,6 @@ def call_properties(mir: str) -> dict[str, int]:
         "continuations": sum(
             line.startswith("call-continuation ") for line in lines
         ),
-        "receipts": sum(line.startswith("call-receipt ") for line in lines),
         "sites": sum(line.startswith("call-site ") for line in lines),
         "targets": sum(line.startswith("call-target ") for line in lines),
     }
@@ -57,7 +56,6 @@ def self_test() -> None:
                 "call-continuation cc2",
                 "call-continuation cc3",
                 "call-site cs0",
-                "call-receipt cr0",
             ]
         ),
     }
@@ -65,7 +63,6 @@ def self_test() -> None:
     assert call_properties(modeled["mir"]) == {
         "arguments": 0,
         "continuations": 4,
-        "receipts": 1,
         "sites": 1,
         "targets": 1,
     }

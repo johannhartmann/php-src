@@ -25,11 +25,9 @@ FIXTURES = ROOT / "tests/native/control-flow/contracts"
 PROFILE = ROOT / "docs/native-engine/control-flow/w04-opcode-profile.json"
 MATRIX = ROOT / "docs/native-engine/semantics/opcodes/opcode-matrix.json"
 W03_PROFILE = ROOT / "docs/native-engine/lowering/w03-opcode-profile.json"
-OWNERSHIP = ROOT / "docs/native-engine/control-flow/w04-ownership.json"
 SOURCE_FILES = ROOT / "docs/native-engine/control-flow/w04-source-files.json"
 BLOCKERS = ROOT / "docs/native-engine/control-flow/w04-blockers.json"
 GENERATOR = ROOT / "scripts/native/control-flow/generate-w04-profile.py"
-OWNERSHIP_CHECKER = ROOT / "scripts/native/control-flow/check-ownership.py"
 
 HEADERS = (
     MIR / "zend_mir_ids.h",
@@ -44,7 +42,6 @@ HEADERS = (
 
 SCHEMA_PAIRS = (
     (PROFILE, ROOT / "docs/native-engine/control-flow/w04-opcode-profile.schema.json"),
-    (OWNERSHIP, ROOT / "docs/native-engine/control-flow/w04-ownership.schema.json"),
     (SOURCE_FILES, ROOT / "docs/native-engine/control-flow/w04-source-files.schema.json"),
     (BLOCKERS, ROOT / "docs/native-engine/control-flow/w04-blockers.schema.json"),
 )
@@ -114,13 +111,6 @@ def validate_schema_documents() -> None:
             "reserved_opcode_numbers",
             "proof_catalog",
             "opcodes",
-        },
-        OWNERSHIP: {
-            "format_version",
-            "wave",
-            "specialist_tasks",
-            "integration_task",
-            "contract_reserved_paths",
         },
         SOURCE_FILES: {
             "format_version",
@@ -383,15 +373,6 @@ def validate_fixtures() -> None:
         raise ContractError("loop fixture lacks source-backed interrupt backedge")
 
 
-def validate_w03_goldens() -> None:
-    manifest = FIXTURES / "w03-golden.sha256"
-    for line in manifest.read_text(encoding="utf-8").splitlines():
-        expected, relative = line.split(maxsplit=1)
-        actual = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
-        if actual != expected:
-            raise ContractError(f"W03 golden bytes changed: {relative}")
-
-
 def compiler(default: str, variable: str) -> str:
     selected = os.environ.get(variable, default)
     resolved = shutil.which(selected)
@@ -467,14 +448,8 @@ def check() -> None:
     validate_headers()
     validate_profile()
     validate_fixtures()
-    validate_w03_goldens()
     compile_contract()
-    run(["python3", "scripts/native/semantics/validate-w01.py", "--check"])
-    run(["python3", "scripts/native/mir/validate-w02.py", "--check"])
-    run(["python3", "scripts/native/lowering/validate-w03.py", "--check"])
-    run(["python3", "scripts/native/lowering/test-w03.py", "--self-test"])
     run(["python3", str(GENERATOR.relative_to(ROOT)), "--check"])
-    run(["python3", str(OWNERSHIP_CHECKER.relative_to(ROOT)), "--check-manifest"])
 
 
 def main() -> int:
@@ -489,8 +464,8 @@ def main() -> int:
         print(f"W04 control-flow contract check failed: {error}", file=sys.stderr)
         return 1
     print(
-        "W04 control-flow contract check passed: C11/C++20, W01-W03, "
-        "profile, ownership, fixtures, and goldens"
+        "W04 control-flow contract check passed: C11/C++20, profile, "
+        "source manifest and fixtures"
     )
     return 0
 

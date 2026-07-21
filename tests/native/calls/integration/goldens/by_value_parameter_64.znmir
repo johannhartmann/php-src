@@ -537,9 +537,4 @@ call-continuation cc1 site cs0 kind exception_debt block invalid debt 0x00000002
 call-continuation cc2 site cs0 kind bailout_reentry_debt block invalid debt 0x00000004
 call-continuation cc3 site cs0 kind observer_debt block invalid debt 0x00000008
 call-site cs0 source sc0 instruction i67 target ct0 arguments 0+64 result invalid caller frame fs2 function f0 symbol s0 op-array oa0 slots 0+65 pending 64 callee frame invalid function invalid symbol s1 op-array oa1 slots 65+64 pending invalid continuations 0+4 effects 0x07ff reads 0x00017fff writes 0x00017fff barriers 0x7f
-call-receipt cr0 capabilities 0x0000001f capability-ids 0+6 debts 0x0000003f debt-ids 0+8 modeled true codegen-eligible false
-verifier-receipt 1 contract 0x00010002 module 54e3d5cbad0a1bed00a868eafca9f73e source fa4c0631a3e49a0b2aa790549b3dd0bc status 0
-verifier-receipt 2 contract 0x00010002 module 54e3d5cbad0a1bed00a868eafca9f73e source fa4c0631a3e49a0b2aa790549b3dd0bc status 0
-verifier-receipt 3 contract 0x00010003 module 54e3d5cbad0a1bed00a868eafca9f73e source fa4c0631a3e49a0b2aa790549b3dd0bc status 0
-verifier-receipt 4 contract 0x00010008 module 54e3d5cbad0a1bed00a868eafca9f73e source fa4c0631a3e49a0b2aa790549b3dd0bc status 0
 end

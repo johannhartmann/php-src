@@ -22,6 +22,7 @@ FRONTEND = [
     "Zend/Native/Lowering/Frontend/zend_mir_literal_pool.c",
     "Zend/Native/Lowering/Frontend/zend_mir_slot_map.c",
     "Zend/Native/Lowering/Frontend/zend_mir_source_positions.c",
+    "tests/native/lowering/frontend/zend_optimizer_stubs.c",
 ]
 WARNINGS = [
     "-Wall",
