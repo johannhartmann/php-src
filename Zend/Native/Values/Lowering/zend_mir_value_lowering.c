@@ -630,7 +630,27 @@ zend_mir_w06_preflight_transitions(
 				break;
 			case ZEND_MAKE_REF:
 			case ZEND_ASSIGN_REF:
+				source_category = zend_mir_w06_operand_category(
+					op_array, ssa, &opcode->op1);
+				if (source_category
+							!= ZEND_MIR_VALUE_NON_REFCOUNTED_SCALAR
+						&& source_category
+							!= ZEND_MIR_VALUE_REFCOUNTED_STRING) {
+					return
+						ZEND_MIRL_W06_REFERENCE_SEMANTICS_DEFERRED;
+				}
+				break;
 			case ZEND_RETURN_BY_REF:
+				/*
+				 * The VM accepts CONST/TMP and some VAR returns only by
+				 * creating a reference at runtime after emitting a notice.
+				 * W06 has no runtime-reference-binding capability, so its
+				 * exact proof is limited to a source-backed CV lvalue.
+				 */
+				if (opcode->op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV) {
+					return
+						ZEND_MIRL_W06_REFERENCE_SEMANTICS_DEFERRED;
+				}
 				source_category = zend_mir_w06_operand_category(
 					op_array, ssa, &opcode->op1);
 				if (source_category

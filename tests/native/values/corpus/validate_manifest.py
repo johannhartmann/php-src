@@ -28,6 +28,7 @@ EXPECTED_MODELED = {
     "exact_recursive_direct_call_with_reference_model",
 }
 EXPECTED_DEFERRED = {
+    "return_by_ref_non_lvalue_temporary": "W10",
     "array_write_or_clone": "W07",
     "string_concat_or_rope": "W07",
     "object_reference_or_property": "W08",
