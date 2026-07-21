@@ -3,12 +3,12 @@
 /** @generate-class-entries */
 
 /**
- * Compile source without executing it and return a canonical W03/W04/W05 MIR result.
+ * Compile source without executing it and return a canonical W03-W06 MIR result.
  *
  * Result shape:
  * array{
  *     schema_version: int,
- *     wave?: 4|5,
+ *     wave?: 4|5|6,
  *     status: "accepted"|"rejected"|"error",
  *     phase: "compile"|"ssa"|"lowering"|"verify"|"dump"|"complete",
  *     source: array{filename: string, byte_length: int, source_id: string},
@@ -26,14 +26,19 @@
  * array{
  *     function?: ?string,
  *     diagnostic_limit?: int,
- *     wave?: 3|4|5,
+ *     wave?: 3|4|5|6,
  *     arena_chunk_size?: int,
  *     compiler_mode?: "ignore_user_functions",
  *     fault?: null|"compile_bailout"|"ssa_failure"|"lower_failure"|
  *         "module_oom"|"planner_allocation"|"target_snapshot"|
  *         "argument_table"|"frame_state"|"call_record"|"finalize_failure"|
  *         "stage1_verifier_failure"|"stage2_verifier_failure"|
- *         "call_verifier_failure"|"dump_failure"
+ *         "structural_verifier_failure"|"scalar_verifier_failure"|
+ *         "control_flow_verifier_failure"|"call_verifier_failure"|
+ *         "fingerprint_recompute_failure"|"value_inventory"|"value_plan"|
+ *         "value_storage"|"value_reference"|"value_alias"|"value_event"|
+ *         "value_separation"|"value_call_transfer"|
+ *         "value_verifier_failure"|"dump_failure"
  * }
  *
  * @return array

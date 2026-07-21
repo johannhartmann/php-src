@@ -1,0 +1,748 @@
+/*
+  +----------------------------------------------------------------------+
+  | Copyright © The PHP Group and Contributors.                          |
+  +----------------------------------------------------------------------+
+  | This source file is subject to the Modified BSD License that is      |
+  | bundled with this package in the file LICENSE, and is available      |
+  | through the World Wide Web at <https://www.php.net/license/>.        |
+  |                                                                      |
+  | SPDX-License-Identifier: BSD-3-Clause                                |
+  +----------------------------------------------------------------------+
+*/
+
+#include "Zend/Native/Values/Core/zend_mir_value_core.h"
+#include "Zend/Native/MIR/Core/zend_mir_module_internal.h"
+
+#include <stdalign.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define TEST_ALLOCATION_LIMIT 512
+#define TEST_TEXT_CAPACITY 32768
+
+static bool test_quiet_checks;
+
+#define CHECK(condition) do { \
+	if (!(condition)) { \
+		if (!test_quiet_checks) { \
+			fprintf(stderr, "CHECK failed at %s:%d: %s\n", \
+				__FILE__, __LINE__, #condition); \
+		} \
+		return false; \
+	} \
+} while (0)
+
+typedef struct _test_allocator {
+	void *raw[TEST_ALLOCATION_LIMIT];
+	uint32_t raw_count;
+	uint32_t allocation_count;
+	uint32_t fail_at;
+	uint32_t reset_count;
+} test_allocator;
+
+typedef struct _test_diagnostics {
+	uint32_t count;
+	char last_message[ZEND_MIR_DIAGNOSTIC_MESSAGE_CAPACITY];
+} test_diagnostics;
+
+typedef struct _test_text {
+	char bytes[TEST_TEXT_CAPACITY];
+	size_t length;
+} test_text;
+
+typedef enum _test_case {
+	TEST_VALID = 0,
+	TEST_INDIRECT_CYCLE,
+	TEST_ALIAS_CONTRADICTION,
+	TEST_DOUBLE_RELEASE,
+	TEST_DESTROY_BORROWED,
+	TEST_INVALID_SEPARATION,
+	TEST_CALL_SPAN_OVERFLOW,
+	TEST_VERIFIER_INDIRECT_MUTATION,
+	TEST_VERIFIER_PAYLOAD_MUTATION,
+	TEST_COPY_ADDREF_UNIQUE_STAYS_UNIQUE,
+	TEST_RELEASE_LOST_CLEANUP,
+	TEST_EVENT_PAYLOAD_MISMATCH,
+	TEST_REFERENCE_LOST_CLEANUP,
+	TEST_ALIAS_TRANSITIVE_CONTRADICTION,
+	TEST_SEPARATION_SOURCE_MISMATCH,
+	TEST_SEPARATION_RESULT_CATEGORY_MISMATCH,
+	TEST_STORAGE_ID_OVERFLOW,
+	TEST_RELEASE_UNIQUE_STAYS_UNIQUE,
+	TEST_ALIAS_STORAGE_USE_AFTER_MOVE,
+	TEST_TABLE_COUNT_OVERFLOW,
+	TEST_VALID_CALL_TRANSFER,
+	TEST_CALL_TRANSFER_WITHOUT_MODEL,
+	TEST_CALL_MODEL_WITHOUT_TRANSFER,
+	TEST_CALL_TRANSFER_WRONG_SITE,
+	TEST_CALL_TRANSFER_WRONG_ORDINAL,
+	TEST_VERIFIER_CALL_TRANSFER_MUTATION,
+	TEST_VALID_ZERO_ARGUMENT_CALL
+} test_case;
+
+static void *test_allocate(void *context, size_t size, size_t alignment)
+{
+	test_allocator *allocator = (test_allocator *) context;
+	uintptr_t address;
+	void *raw;
+
+	allocator->allocation_count++;
+	if (allocator->allocation_count == allocator->fail_at
+			|| allocator->raw_count >= TEST_ALLOCATION_LIMIT
+			|| alignment == 0 || (alignment & (alignment - 1)) != 0
+			|| size > SIZE_MAX - alignment) {
+		return NULL;
+	}
+	raw = malloc(size + alignment);
+	if (raw == NULL) {
+		return NULL;
+	}
+	address = ((uintptr_t) raw + alignment - 1)
+		& ~(uintptr_t) (alignment - 1);
+	allocator->raw[allocator->raw_count++] = raw;
+	return (void *) address;
+}
+
+static void test_reset(void *context)
+{
+	test_allocator *allocator = (test_allocator *) context;
+	uint32_t index;
+
+	for (index = 0; index < allocator->raw_count; index++) {
+		free(allocator->raw[index]);
+	}
+	allocator->raw_count = 0;
+	allocator->reset_count++;
+}
+
+static zend_mir_allocator test_allocator_vtable(test_allocator *allocator)
+{
+	zend_mir_allocator result;
+
+	result.context = allocator;
+	result.allocate = test_allocate;
+	result.reset = test_reset;
+	return result;
+}
+
+static bool test_emit_diagnostic(
+	void *context, const zend_mir_diagnostic *diagnostic)
+{
+	test_diagnostics *diagnostics = (test_diagnostics *) context;
+
+	diagnostics->count++;
+	memcpy(diagnostics->last_message, diagnostic->message,
+		sizeof(diagnostics->last_message));
+	return true;
+}
+
+static zend_mir_diagnostic_sink test_diagnostic_sink(
+	test_diagnostics *diagnostics)
+{
+	zend_mir_diagnostic_sink result;
+
+	memset(&result, 0, sizeof(result));
+	result.context = diagnostics;
+	result.emit = test_emit_diagnostic;
+	result.limit = 32;
+	return result;
+}
+
+static bool test_stage_call_model(
+	zend_mir_module *module, zend_mir_function_id function,
+	zend_mir_block_id block, bool with_argument)
+{
+	zend_mir_mutator *core_mutator = zend_mir_module_get_mutator(module);
+	zend_mir_call_mutator *call_mutator =
+		zend_mir_module_get_call_mutator(module);
+	zend_mir_call_target_ref target;
+	zend_mir_call_argument_ref argument;
+	zend_mir_call_continuation_ref continuation;
+	zend_mir_call_site_ref site;
+
+	CHECK(core_mutator != NULL && call_mutator != NULL);
+	CHECK(core_mutator->add_value(
+		core_mutator->context, 0, ZEND_MIR_REPRESENTATION_ZVAL,
+		ZEND_MIR_OWNERSHIP_STATE_BORROWED));
+
+	memset(&target, 0, sizeof(target));
+	target.id = 0;
+	target.kind = ZEND_MIR_CALL_TARGET_DIRECT_USER;
+	target.function_symbol_id = 9;
+	target.op_array_id = 10;
+	target.num_args = with_argument ? 1 : 0;
+	target.required_num_args = with_argument ? 1 : 0;
+	CHECK(call_mutator->add_call_target(call_mutator->context, &target));
+
+	if (with_argument) {
+		memset(&argument, 0, sizeof(argument));
+		argument.id = 0;
+		argument.call_site_id = 0;
+		argument.ordinal = 0;
+		argument.value_id = 0;
+		argument.ownership = ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR;
+		CHECK(call_mutator->add_call_argument(
+			call_mutator->context, &argument));
+	}
+
+	memset(&continuation, 0, sizeof(continuation));
+	continuation.id = 0;
+	continuation.call_site_id = 0;
+	continuation.kind = ZEND_MIR_CALL_CONTINUATION_NORMAL;
+	continuation.block_id = block;
+	CHECK(call_mutator->add_call_continuation(
+		call_mutator->context, &continuation));
+
+	memset(&site, 0, sizeof(site));
+	site.id = 0;
+	site.source_call_site_id = 0;
+	site.instruction_id = 0;
+	site.target_id = 0;
+	site.arguments.offset = 0;
+	site.arguments.count = with_argument ? 1 : 0;
+	site.result_id = ZEND_MIR_ID_INVALID;
+	site.caller_frame.frame_state_id = ZEND_MIR_ID_INVALID;
+	site.caller_frame.function_id = function;
+	site.caller_frame.function_symbol_id = 7;
+	site.caller_frame.op_array_id = 11;
+	site.caller_frame.pending_call_slot_id = ZEND_MIR_ID_INVALID;
+	site.callee_entry_frame.frame_state_id = ZEND_MIR_ID_INVALID;
+	site.callee_entry_frame.function_id = ZEND_MIR_ID_INVALID;
+	site.callee_entry_frame.function_symbol_id = target.function_symbol_id;
+	site.callee_entry_frame.op_array_id = target.op_array_id;
+	site.callee_entry_frame.pending_call_slot_id = ZEND_MIR_ID_INVALID;
+	site.continuations.offset = 0;
+	site.continuations.count = 1;
+	CHECK(call_mutator->add_call_site(call_mutator->context, &site));
+
+	return call_mutator->commit_call_model(call_mutator->context);
+}
+
+static bool test_write(void *context, const char *bytes, size_t length)
+{
+	test_text *text = (test_text *) context;
+
+	if (length > sizeof(text->bytes) - text->length - 1) {
+		return false;
+	}
+	memcpy(text->bytes + text->length, bytes, length);
+	text->length += length;
+	text->bytes[text->length] = '\0';
+	return true;
+}
+
+static bool test_stage_model(
+	zend_mir_value_mutator *mutator, test_case mode)
+{
+	zend_mir_payload_ref payload;
+	zend_mir_storage_ref storage;
+	zend_mir_reference_cell_ref cell;
+	zend_mir_alias_relation_ref alias;
+	zend_mir_ownership_event_ref event;
+	zend_mir_separation_plan_ref separation;
+
+	memset(&payload, 0, sizeof(payload));
+	payload.id = 0;
+	payload.category = ZEND_MIR_VALUE_REFCOUNTED_STRING;
+	payload.refcount_state =
+		mode == TEST_COPY_ADDREF_UNIQUE_STAYS_UNIQUE
+				|| mode == TEST_RELEASE_UNIQUE_STAYS_UNIQUE
+			? ZEND_MIR_REFCOUNT_UNIQUE : ZEND_MIR_REFCOUNT_SHARED;
+	payload.cleanup_obligation = true;
+	CHECK(mutator->add_payload(mutator->context, &payload));
+	payload.id = 1;
+	payload.refcount_state = ZEND_MIR_REFCOUNT_UNIQUE;
+	CHECK(mutator->add_payload(mutator->context, &payload));
+	if (mode == TEST_SEPARATION_RESULT_CATEGORY_MISMATCH) {
+		payload.id = 2;
+		payload.category = ZEND_MIR_VALUE_REFCOUNTED_CONTAINER_ABSTRACT;
+		payload.refcount_state = ZEND_MIR_REFCOUNT_UNIQUE;
+		CHECK(mutator->add_payload(mutator->context, &payload));
+	}
+
+	memset(&storage, 0, sizeof(storage));
+	storage.id = 0;
+	storage.kind = ZEND_MIR_STORAGE_REFERENCE_PAYLOAD_SLOT;
+	storage.state = ZEND_MIR_STORAGE_DIRECT;
+	storage.category = ZEND_MIR_VALUE_REFCOUNTED_STRING;
+	storage.payload_id = 0;
+	storage.reference_cell_id = ZEND_MIR_ID_INVALID;
+	storage.indirect_target_id = ZEND_MIR_ID_INVALID;
+	CHECK(mutator->add_storage(mutator->context, &storage));
+	storage.id = 1;
+	storage.kind = ZEND_MIR_STORAGE_FRAME_SLOT;
+	storage.state = ZEND_MIR_STORAGE_REFERENCE;
+	storage.category = ZEND_MIR_VALUE_REFERENCE_CELL;
+	storage.payload_id = ZEND_MIR_ID_INVALID;
+	storage.reference_cell_id = 0;
+	CHECK(mutator->add_storage(mutator->context, &storage));
+	storage.id = 2;
+	storage.kind = ZEND_MIR_STORAGE_INDIRECT_SLOT;
+	storage.state = ZEND_MIR_STORAGE_INDIRECT;
+	storage.reference_cell_id = ZEND_MIR_ID_INVALID;
+	storage.indirect_target_id =
+		mode == TEST_INDIRECT_CYCLE ? 4 : 1;
+	CHECK(mutator->add_storage(mutator->context, &storage));
+	storage.id = 3;
+	storage.kind = ZEND_MIR_STORAGE_TEMPORARY;
+	storage.state = ZEND_MIR_STORAGE_DIRECT;
+	storage.category = ZEND_MIR_VALUE_REFCOUNTED_STRING;
+	storage.payload_id = 0;
+	storage.indirect_target_id = ZEND_MIR_ID_INVALID;
+	CHECK(mutator->add_storage(mutator->context, &storage));
+	if (mode == TEST_VALID_CALL_TRANSFER
+			|| mode == TEST_CALL_TRANSFER_WITHOUT_MODEL
+			|| mode == TEST_CALL_TRANSFER_WRONG_SITE
+			|| mode == TEST_CALL_TRANSFER_WRONG_ORDINAL
+			|| mode == TEST_VERIFIER_CALL_TRANSFER_MUTATION) {
+		storage.id = 4;
+		storage.kind = ZEND_MIR_STORAGE_CALL_RETURN_SLOT;
+		storage.state = ZEND_MIR_STORAGE_REFERENCE;
+		storage.category = ZEND_MIR_VALUE_REFERENCE_CELL;
+		storage.payload_id = ZEND_MIR_ID_INVALID;
+		storage.reference_cell_id = 0;
+		CHECK(mutator->add_storage(mutator->context, &storage));
+	}
+	if (mode == TEST_SEPARATION_SOURCE_MISMATCH) {
+		storage.id = 4;
+		storage.payload_id = 1;
+		CHECK(mutator->add_storage(mutator->context, &storage));
+	}
+	if (mode == TEST_STORAGE_ID_OVERFLOW) {
+		storage.id = ZEND_MIR_ID_INVALID;
+		CHECK(mutator->add_storage(mutator->context, &storage));
+	}
+	if (mode == TEST_INDIRECT_CYCLE) {
+		storage.id = 4;
+		storage.kind = ZEND_MIR_STORAGE_INDIRECT_SLOT;
+		storage.state = ZEND_MIR_STORAGE_INDIRECT;
+		storage.category = ZEND_MIR_VALUE_CATEGORY_UNKNOWN;
+		storage.payload_id = ZEND_MIR_ID_INVALID;
+		storage.reference_cell_id = ZEND_MIR_ID_INVALID;
+		storage.indirect_target_id = 2;
+		CHECK(mutator->add_storage(mutator->context, &storage));
+	}
+
+	memset(&cell, 0, sizeof(cell));
+	cell.id = 0;
+	cell.payload_storage_id = 0;
+	cell.alias_class_id = 1;
+	cell.creation_source_id = 0;
+	cell.ownership = ZEND_MIR_OWNERSHIP_STATE_OWNED;
+	cell.cleanup_obligation = mode != TEST_REFERENCE_LOST_CLEANUP;
+	CHECK(mutator->add_reference_cell(mutator->context, &cell));
+
+	memset(&alias, 0, sizeof(alias));
+	alias.left_id = 1;
+	alias.right_id = 1;
+	alias.relation = ZEND_MIR_ALIAS_MUST;
+	CHECK(mutator->add_alias_relation(mutator->context, &alias));
+	if (mode == TEST_ALIAS_CONTRADICTION) {
+		alias.right_id = 2;
+		alias.relation = ZEND_MIR_ALIAS_NONE;
+		alias.proof_id = 9;
+		CHECK(mutator->add_alias_relation(mutator->context, &alias));
+		alias.left_id = 2;
+		alias.right_id = 1;
+		alias.relation = ZEND_MIR_ALIAS_MAY;
+		alias.proof_id = 0;
+		CHECK(mutator->add_alias_relation(mutator->context, &alias));
+	} else if (mode == TEST_ALIAS_TRANSITIVE_CONTRADICTION) {
+		alias.left_id = 1;
+		alias.right_id = 2;
+		alias.relation = ZEND_MIR_ALIAS_MUST;
+		alias.proof_id = 0;
+		CHECK(mutator->add_alias_relation(mutator->context, &alias));
+		alias.left_id = 2;
+		alias.right_id = 3;
+		CHECK(mutator->add_alias_relation(mutator->context, &alias));
+		alias.left_id = 1;
+		alias.right_id = 3;
+		alias.relation = ZEND_MIR_ALIAS_NONE;
+		alias.proof_id = 9;
+		CHECK(mutator->add_alias_relation(mutator->context, &alias));
+	}
+
+	memset(&event, 0, sizeof(event));
+	event.id = 0;
+	event.source_storage_id = 0;
+	event.target_storage_id = 3;
+	event.payload_id = 0;
+	event.action =
+		mode == TEST_DOUBLE_RELEASE ? ZEND_MIR_TRANSFER_RELEASE
+		: ZEND_MIR_TRANSFER_COPY_ADDREF;
+	event.before_state = ZEND_MIR_REFCOUNT_SHARED;
+	event.after_state = ZEND_MIR_REFCOUNT_SHARED;
+	event.cleanup_obligation = true;
+	if (mode == TEST_COPY_ADDREF_UNIQUE_STAYS_UNIQUE) {
+		event.before_state = ZEND_MIR_REFCOUNT_UNIQUE;
+		event.after_state = ZEND_MIR_REFCOUNT_UNIQUE;
+	} else if (mode == TEST_RELEASE_UNIQUE_STAYS_UNIQUE) {
+		event.action = ZEND_MIR_TRANSFER_RELEASE;
+		event.target_storage_id = ZEND_MIR_ID_INVALID;
+		event.before_state = ZEND_MIR_REFCOUNT_UNIQUE;
+		event.after_state = ZEND_MIR_REFCOUNT_UNIQUE;
+	} else if (mode == TEST_ALIAS_STORAGE_USE_AFTER_MOVE) {
+		event.action = ZEND_MIR_TRANSFER_MOVE;
+		event.cleanup_obligation = false;
+	} else if (mode == TEST_DOUBLE_RELEASE) {
+		event.target_storage_id = ZEND_MIR_ID_INVALID;
+	} else if (mode == TEST_RELEASE_LOST_CLEANUP) {
+		event.action = ZEND_MIR_TRANSFER_RELEASE;
+		event.target_storage_id = ZEND_MIR_ID_INVALID;
+		event.cleanup_obligation = false;
+	} else if (mode == TEST_EVENT_PAYLOAD_MISMATCH) {
+		event.payload_id = 1;
+	}
+	if (mode == TEST_DESTROY_BORROWED) {
+		event.action = ZEND_MIR_TRANSFER_BORROW;
+		event.target_storage_id = ZEND_MIR_ID_INVALID;
+		event.cleanup_obligation = false;
+	}
+	CHECK(mutator->add_ownership_event(mutator->context, &event));
+	if (mode == TEST_DOUBLE_RELEASE || mode == TEST_DESTROY_BORROWED
+			|| mode == TEST_ALIAS_STORAGE_USE_AFTER_MOVE) {
+		event.id = 1;
+		event.action = ZEND_MIR_TRANSFER_RELEASE;
+		event.target_storage_id = ZEND_MIR_ID_INVALID;
+		event.cleanup_obligation = true;
+		if (mode == TEST_ALIAS_STORAGE_USE_AFTER_MOVE) {
+			event.source_storage_id = 3;
+		}
+		CHECK(mutator->add_ownership_event(mutator->context, &event));
+	}
+
+	memset(&separation, 0, sizeof(separation));
+	separation.id = 0;
+	separation.source_payload_id = 0;
+	separation.source_storage_id = 0;
+	separation.reason = ZEND_MIR_SEPARATION_WRITE;
+	separation.uniqueness_fact = ZEND_MIR_REFCOUNT_SHARED;
+	separation.required = ZEND_MIR_SEPARATION_REQUIRED_YES;
+	separation.result_payload_id =
+		mode == TEST_INVALID_SEPARATION ? 0 : 1;
+	if (mode == TEST_SEPARATION_SOURCE_MISMATCH) {
+		separation.source_storage_id = 4;
+	} else if (mode == TEST_SEPARATION_RESULT_CATEGORY_MISMATCH) {
+		separation.result_payload_id = 2;
+	}
+	separation.clone_execution_required = true;
+	if (mode == TEST_COPY_ADDREF_UNIQUE_STAYS_UNIQUE
+			|| mode == TEST_RELEASE_UNIQUE_STAYS_UNIQUE) {
+		separation.uniqueness_fact = ZEND_MIR_REFCOUNT_UNIQUE;
+		separation.required = ZEND_MIR_SEPARATION_REQUIRED_NO;
+		separation.result_payload_id = ZEND_MIR_ID_INVALID;
+		separation.clone_execution_required = false;
+	}
+	CHECK(mutator->add_separation_plan(mutator->context, &separation));
+
+	if (mode == TEST_CALL_SPAN_OVERFLOW
+			|| mode == TEST_VALID_CALL_TRANSFER
+			|| mode == TEST_CALL_TRANSFER_WITHOUT_MODEL
+			|| mode == TEST_CALL_TRANSFER_WRONG_SITE
+			|| mode == TEST_CALL_TRANSFER_WRONG_ORDINAL
+			|| mode == TEST_VERIFIER_CALL_TRANSFER_MUTATION) {
+		zend_mir_call_transfer_ref transfer;
+		memset(&transfer, 0, sizeof(transfer));
+		transfer.call_site_id =
+			mode == TEST_CALL_TRANSFER_WITHOUT_MODEL
+					|| mode == TEST_CALL_TRANSFER_WRONG_SITE
+				? 1 : 0;
+		transfer.parameter_modes.offset =
+			mode == TEST_CALL_SPAN_OVERFLOW ? UINT32_MAX : 0;
+		transfer.parameter_modes.count =
+			mode == TEST_CALL_SPAN_OVERFLOW ? 2 : 1;
+		transfer.argument_ordinal =
+			mode == TEST_CALL_TRANSFER_WRONG_ORDINAL ? 1 : 0;
+		transfer.argument_storage_id = 1;
+		transfer.argument_reference_cell_id =
+			0;
+		transfer.argument_action = ZEND_MIR_TRANSFER_TO_CALLEE;
+		transfer.return_storage_id = 4;
+		transfer.return_reference_cell_id = 0;
+		transfer.return_action = ZEND_MIR_TRANSFER_FROM_CALLEE;
+		CHECK(mutator->add_call_transfer(mutator->context, &transfer));
+	}
+
+	return true;
+}
+
+static bool test_build_case(
+	test_case mode, uint32_t fail_at, test_text *before_verify,
+	test_text *after_verify, uint32_t *allocation_count,
+	test_diagnostics *diagnostics_out)
+{
+	test_allocator allocator = { { 0 }, 0, 0, fail_at, 0 };
+	test_diagnostics diagnostics = { 0, { 0 } };
+	zend_mir_allocator vtable = test_allocator_vtable(&allocator);
+	zend_mir_diagnostic_sink sink = test_diagnostic_sink(&diagnostics);
+	zend_mir_module *module =
+		zend_mir_module_create(60, &vtable, 128, NULL, &sink);
+	zend_mir_mutator *core_mutator;
+	zend_mir_value_mutator *value_mutator;
+	zend_mir_function_id function;
+	zend_mir_block_id block;
+	zend_mir_source_position_ref source;
+	zend_mir_source_position_id source_id;
+	bool committed;
+	bool success = false;
+
+	test_quiet_checks = fail_at != 0;
+	if (module == NULL) {
+		goto done;
+	}
+	core_mutator = zend_mir_module_get_mutator(module);
+	value_mutator = zend_mir_module_get_value_mutator(module);
+	if (core_mutator == NULL || value_mutator == NULL
+			|| !core_mutator->add_function(
+				core_mutator->context, 7, &function)
+			|| !core_mutator->add_block(
+				core_mutator->context, function, &block)
+			|| !core_mutator->set_entry_block(
+				core_mutator->context, function, block)) {
+		goto destroy;
+	}
+	memset(&source, 0, sizeof(source));
+	source.id = 0;
+	source.file_symbol_id = 8;
+	source.line = 1;
+	source.column_start = 1;
+	source.column_end = 2;
+	if (!core_mutator->add_source_position(
+			core_mutator->context, &source, &source_id)
+			|| source_id != 0
+			|| ((mode == TEST_VALID_CALL_TRANSFER
+					|| mode == TEST_CALL_MODEL_WITHOUT_TRANSFER
+					|| mode == TEST_CALL_TRANSFER_WRONG_SITE
+					|| mode == TEST_CALL_TRANSFER_WRONG_ORDINAL
+					|| mode == TEST_VERIFIER_CALL_TRANSFER_MUTATION
+					|| mode == TEST_VALID_ZERO_ARGUMENT_CALL)
+				&& !test_stage_call_model(module, function, block,
+					mode != TEST_VALID_ZERO_ARGUMENT_CALL))
+			|| !test_stage_model(value_mutator, mode)) {
+		goto destroy;
+	}
+	if (mode == TEST_TABLE_COUNT_OVERFLOW) {
+		module->value_staging.payload_count = UINT32_C(1048577);
+	}
+	committed = zend_mir_module_commit_value_model(module);
+	if (!committed) {
+		goto destroy;
+	}
+	if (!core_mutator->seal_function(core_mutator->context, function)
+			|| !zend_mir_module_finalize(module)) {
+		goto destroy;
+	}
+	if (mode == TEST_VERIFIER_INDIRECT_MUTATION) {
+		zend_mir_storage_ref *records = ZEND_MIR_CORE_ITEMS(
+			module, value_storages, zend_mir_storage_ref);
+		records[2].indirect_target_id = 2;
+	} else if (mode == TEST_VERIFIER_PAYLOAD_MUTATION) {
+		zend_mir_payload_ref *payloads = ZEND_MIR_CORE_ITEMS(
+			module, value_payloads, zend_mir_payload_ref);
+		payloads[1].category = ZEND_MIR_VALUE_NON_REFCOUNTED_SCALAR;
+	} else if (mode == TEST_VERIFIER_CALL_TRANSFER_MUTATION) {
+		zend_mir_call_transfer_ref *transfers = ZEND_MIR_CORE_ITEMS(
+			module, value_call_transfers, zend_mir_call_transfer_ref);
+		transfers[0].call_site_id = 1;
+	}
+	if (before_verify != NULL) {
+		zend_mir_text_writer writer = { before_verify, test_write };
+		if (!zend_mir_dump_text(
+				zend_mir_module_get_view(module), &writer, &sink)) {
+			goto destroy;
+		}
+	}
+	if (!zend_mir_verify_w06_values(
+			zend_mir_module_get_view(module),
+			zend_mir_module_get_value_view(module), &sink)) {
+		if (mode == TEST_VERIFIER_INDIRECT_MUTATION
+				|| mode == TEST_VERIFIER_PAYLOAD_MUTATION
+				|| mode == TEST_VERIFIER_CALL_TRANSFER_MUTATION) {
+			success = true;
+		}
+		goto destroy;
+	}
+	if (mode == TEST_VERIFIER_INDIRECT_MUTATION
+			|| mode == TEST_VERIFIER_PAYLOAD_MUTATION
+			|| mode == TEST_VERIFIER_CALL_TRANSFER_MUTATION) {
+		goto destroy;
+	}
+	if (after_verify != NULL) {
+		zend_mir_text_writer writer = { after_verify, test_write };
+		if (!zend_mir_dump_text(
+				zend_mir_module_get_view(module), &writer, &sink)) {
+			goto destroy;
+		}
+	}
+	success = true;
+
+destroy:
+	zend_mir_module_destroy(module);
+done:
+	if (allocation_count != NULL) {
+		*allocation_count = allocator.allocation_count;
+	}
+	if (diagnostics_out != NULL) {
+		*diagnostics_out = diagnostics;
+	}
+	CHECK(allocator.raw_count == 0);
+	CHECK(allocator.reset_count == 1);
+	test_quiet_checks = false;
+	return success;
+}
+
+static bool test_valid_model_and_read_only_verifier(void)
+{
+	test_text before = { { 0 }, 0 };
+	test_text after = { { 0 }, 0 };
+	test_diagnostics diagnostics;
+
+	CHECK(test_build_case(
+		TEST_VALID, 0, &before, &after, NULL, &diagnostics));
+	CHECK(before.length == after.length);
+	CHECK(memcmp(before.bytes, after.bytes, before.length) == 0);
+	CHECK(strstr(before.bytes, "value-storage vs0") != NULL);
+	CHECK(strstr(before.bytes, "reference-cell rc0") != NULL);
+	CHECK(strstr(before.bytes, "separation-plan sp0") != NULL);
+	CHECK(strstr(before.bytes, "clone-execution true") != NULL);
+	CHECK(diagnostics.count == 0);
+	return true;
+}
+
+static bool test_rejections(void)
+{
+	static const test_case rejected[] = {
+		TEST_INDIRECT_CYCLE,
+		TEST_ALIAS_CONTRADICTION,
+		TEST_DOUBLE_RELEASE,
+		TEST_DESTROY_BORROWED,
+		TEST_INVALID_SEPARATION,
+		TEST_CALL_SPAN_OVERFLOW,
+		TEST_COPY_ADDREF_UNIQUE_STAYS_UNIQUE,
+		TEST_RELEASE_LOST_CLEANUP,
+		TEST_EVENT_PAYLOAD_MISMATCH,
+		TEST_REFERENCE_LOST_CLEANUP,
+		TEST_ALIAS_TRANSITIVE_CONTRADICTION,
+		TEST_SEPARATION_SOURCE_MISMATCH,
+		TEST_SEPARATION_RESULT_CATEGORY_MISMATCH,
+		TEST_STORAGE_ID_OVERFLOW,
+		TEST_RELEASE_UNIQUE_STAYS_UNIQUE,
+		TEST_ALIAS_STORAGE_USE_AFTER_MOVE,
+		TEST_TABLE_COUNT_OVERFLOW,
+		TEST_CALL_TRANSFER_WITHOUT_MODEL,
+		TEST_CALL_MODEL_WITHOUT_TRANSFER,
+		TEST_CALL_TRANSFER_WRONG_SITE,
+		TEST_CALL_TRANSFER_WRONG_ORDINAL
+	};
+	uint32_t index;
+
+	for (index = 0; index < sizeof(rejected) / sizeof(rejected[0]);
+			index++) {
+		test_diagnostics diagnostics;
+		CHECK(!test_build_case(
+			rejected[index], 0, NULL, NULL, NULL, &diagnostics));
+		CHECK(diagnostics.count != 0);
+	}
+	return true;
+}
+
+static bool test_merge_rules(void)
+{
+	zend_mir_storage_ref left;
+	zend_mir_storage_ref right;
+	zend_mir_storage_ref merged;
+
+	CHECK(zend_mir_value_merge_alias_relation(
+		ZEND_MIR_ALIAS_MUST, ZEND_MIR_ALIAS_NONE) == ZEND_MIR_ALIAS_MAY);
+	CHECK(zend_mir_value_merge_alias_relation(
+		ZEND_MIR_ALIAS_NONE, ZEND_MIR_ALIAS_NONE) == ZEND_MIR_ALIAS_MAY);
+	CHECK(zend_mir_value_merge_refcount_state(
+		ZEND_MIR_REFCOUNT_UNIQUE,
+		ZEND_MIR_REFCOUNT_SHARED) == ZEND_MIR_REFCOUNT_SHARED);
+	memset(&left, 0, sizeof(left));
+	left.id = 1;
+	left.kind = ZEND_MIR_STORAGE_TEMPORARY;
+	left.state = ZEND_MIR_STORAGE_DIRECT;
+	left.category = ZEND_MIR_VALUE_REFCOUNTED_STRING;
+	left.payload_id = 1;
+	left.reference_cell_id = ZEND_MIR_ID_INVALID;
+	left.indirect_target_id = ZEND_MIR_ID_INVALID;
+	right = left;
+	right.id = 2;
+	right.payload_id = 2;
+	CHECK(!zend_mir_value_merge_storage_state(&left, &right, &merged));
+	right.state = ZEND_MIR_STORAGE_REFERENCE;
+	CHECK(!zend_mir_value_merge_storage_state(&left, &right, &merged));
+	return true;
+}
+
+static bool test_verifier_rejections(void)
+{
+	test_diagnostics diagnostics;
+
+	CHECK(test_build_case(TEST_VERIFIER_INDIRECT_MUTATION,
+		0, NULL, NULL, NULL, &diagnostics));
+	CHECK(strstr(diagnostics.last_message, "MIRV0802") != NULL);
+	CHECK(test_build_case(TEST_VERIFIER_PAYLOAD_MUTATION,
+		0, NULL, NULL, NULL, &diagnostics));
+	CHECK(strstr(diagnostics.last_message, "MIRV0800") != NULL);
+	CHECK(test_build_case(TEST_VERIFIER_CALL_TRANSFER_MUTATION,
+		0, NULL, NULL, NULL, &diagnostics));
+	CHECK(strstr(diagnostics.last_message, "MIRV0806") != NULL);
+	return true;
+}
+
+static bool test_call_transfer_dump_is_complete(void)
+{
+	test_text text = { { 0 }, 0 };
+	test_diagnostics diagnostics;
+
+	CHECK(test_build_case(
+		TEST_VALID_CALL_TRANSFER, 0, &text, NULL, NULL, &diagnostics));
+	CHECK(strstr(text.bytes, "argument-reference rc0") != NULL);
+	CHECK(strstr(text.bytes, "return-reference rc0") != NULL);
+	return true;
+}
+
+static bool test_zero_argument_call_model(void)
+{
+	test_diagnostics diagnostics;
+
+	CHECK(test_build_case(TEST_VALID_ZERO_ARGUMENT_CALL,
+		0, NULL, NULL, NULL, &diagnostics));
+	CHECK(diagnostics.count == 0);
+	return true;
+}
+
+static bool test_every_arena_allocation_failure(void)
+{
+	uint32_t allocation_count;
+	uint32_t fail_at;
+
+	CHECK(test_build_case(
+		TEST_VALID, 0, NULL, NULL, &allocation_count, NULL));
+	CHECK(allocation_count > 1);
+	for (fail_at = 1; fail_at <= allocation_count; fail_at++) {
+		CHECK(!test_build_case(
+			TEST_VALID, fail_at, NULL, NULL, NULL, NULL));
+	}
+	return true;
+}
+
+int main(void)
+{
+	if (!test_valid_model_and_read_only_verifier()
+			|| !test_rejections()
+			|| !test_merge_rules()
+			|| !test_verifier_rejections()
+			|| !test_call_transfer_dump_is_complete()
+			|| !test_zero_argument_call_model()
+			|| !test_every_arena_allocation_failure()) {
+		return 1;
+	}
+	puts("W06 value core tests passed");
+	return 0;
+}

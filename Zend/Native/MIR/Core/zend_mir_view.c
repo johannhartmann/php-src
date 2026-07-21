@@ -526,6 +526,85 @@ void zend_mir_module_init_call_view(zend_mir_module *module)
 		zend_mir_call_view_continuation_at;
 }
 
+static bool zend_mir_value_view_is_available(const zend_mir_module *module)
+{
+	return zend_mir_view_is_available(module)
+		&& module->value_staging.committed;
+}
+
+#define ZEND_MIR_VALUE_VIEW_ACCESSORS(prefix, field, type) \
+static uint32_t prefix##_count(const void *context) \
+{ \
+	const zend_mir_module *module = (const zend_mir_module *) context; \
+	return zend_mir_value_view_is_available(module) \
+		? module->field.count : 0; \
+} \
+static bool prefix##_at(const void *context, uint32_t index, type *out) \
+{ \
+	const zend_mir_module *module = (const zend_mir_module *) context; \
+	type *records; \
+	if (!zend_mir_value_view_is_available(module) || out == NULL \
+			|| index >= module->field.count) { \
+		return false; \
+	} \
+	records = ZEND_MIR_CORE_ITEMS(module, field, type); \
+	*out = records[index]; \
+	return true; \
+}
+
+ZEND_MIR_VALUE_VIEW_ACCESSORS(
+	zend_mir_value_view_storage, value_storages, zend_mir_storage_ref)
+ZEND_MIR_VALUE_VIEW_ACCESSORS(
+	zend_mir_value_view_payload, value_payloads, zend_mir_payload_ref)
+ZEND_MIR_VALUE_VIEW_ACCESSORS(
+	zend_mir_value_view_reference_cell, value_reference_cells,
+	zend_mir_reference_cell_ref)
+ZEND_MIR_VALUE_VIEW_ACCESSORS(
+	zend_mir_value_view_alias_relation, value_alias_relations,
+	zend_mir_alias_relation_ref)
+ZEND_MIR_VALUE_VIEW_ACCESSORS(
+	zend_mir_value_view_ownership_event, value_ownership_events,
+	zend_mir_ownership_event_ref)
+ZEND_MIR_VALUE_VIEW_ACCESSORS(
+	zend_mir_value_view_separation_plan, value_separation_plans,
+	zend_mir_separation_plan_ref)
+ZEND_MIR_VALUE_VIEW_ACCESSORS(
+	zend_mir_value_view_call_transfer, value_call_transfers,
+	zend_mir_call_transfer_ref)
+
+#undef ZEND_MIR_VALUE_VIEW_ACCESSORS
+
+void zend_mir_module_init_value_view(zend_mir_module *module)
+{
+	memset(&module->value_view, 0, sizeof(module->value_view));
+	module->value_view.contract_version = ZEND_MIR_W06_CONTRACT_VERSION;
+	module->value_view.context = module;
+	module->value_view.storage_count = zend_mir_value_view_storage_count;
+	module->value_view.storage_at = zend_mir_value_view_storage_at;
+	module->value_view.payload_count = zend_mir_value_view_payload_count;
+	module->value_view.payload_at = zend_mir_value_view_payload_at;
+	module->value_view.reference_cell_count =
+		zend_mir_value_view_reference_cell_count;
+	module->value_view.reference_cell_at =
+		zend_mir_value_view_reference_cell_at;
+	module->value_view.alias_relation_count =
+		zend_mir_value_view_alias_relation_count;
+	module->value_view.alias_relation_at =
+		zend_mir_value_view_alias_relation_at;
+	module->value_view.ownership_event_count =
+		zend_mir_value_view_ownership_event_count;
+	module->value_view.ownership_event_at =
+		zend_mir_value_view_ownership_event_at;
+	module->value_view.separation_plan_count =
+		zend_mir_value_view_separation_plan_count;
+	module->value_view.separation_plan_at =
+		zend_mir_value_view_separation_plan_at;
+	module->value_view.call_transfer_count =
+		zend_mir_value_view_call_transfer_count;
+	module->value_view.call_transfer_at =
+		zend_mir_value_view_call_transfer_at;
+}
+
 void zend_mir_module_init_view(zend_mir_module *module)
 {
 	module->view.contract_version = ZEND_MIR_CONTRACT_VERSION;
