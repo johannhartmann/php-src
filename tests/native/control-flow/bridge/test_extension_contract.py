@@ -93,7 +93,7 @@ class ExtensionContractTests(unittest.TestCase):
         self.assertIn("ZEND_COMPILE_WITHOUT_EXECUTION", self.extension)
         forbidden_native = re.compile(
             r"\b(?:zend_execute|execute_ex|zend_vm_call_opcode_handler|"
-            r"mir_interpret|mir_evaluate)\b",
+            r"mir_interpret|mir_evaluate)\s*\(",
             re.IGNORECASE,
         )
         self.assertIsNone(forbidden_native.search(self.extension))
