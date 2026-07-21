@@ -18,8 +18,8 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 TARGETS = {
-    "darwin-arm64-dev": ("Darwin", "arm64", "arm64-apple-darwin", "stp"),
-    "linux-amd64-prod": ("Linux", "x86_64", "x86_64-unknown-linux-gnu", "push"),
+    "darwin-arm64-dev": ("Darwin", "arm64", "arm64-apple-darwin", "ret"),
+    "linux-amd64-prod": ("Linux", "x86_64", "x86_64-unknown-linux-gnu", "ret"),
 }
 
 
