@@ -55,10 +55,12 @@ def run_native_mutations(seed: int, counts: dict[str, int], compiler: str) -> No
             [
                 compiler,
                 "-std=c11",
+                "-D_GNU_SOURCE",
                 "-O2",
                 "-Wall",
                 "-Wextra",
                 "-Werror",
+                "-Wno-sign-compare",
                 f"-I{ROOT / 'tests/native/lowering/frontend/include'}",
                 f"-I{ROOT}",
                 f"-I{ROOT / 'Zend'}",

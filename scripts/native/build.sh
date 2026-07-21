@@ -6,6 +6,7 @@ IFS=$'\n\t'
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
+trap native_release_lock EXIT
 
 usage() {
     cat <<'EOF'
@@ -118,6 +119,8 @@ fi
     --build-type "$PROFILE_BUILD_TYPE" \
     --thread-safety "$PROFILE_THREAD_SAFETY" \
     --sanitizer "$PROFILE_SANITIZER" \
+    --target-id "${PROFILE_TARGET_ID:-unspecified}" \
+    --target-triple "${PROFILE_TARGET_TRIPLE:-unspecified}" \
     --configure-program "$NATIVE_REPO_ROOT/configure" \
     "${manifest_args[@]}" \
     --fingerprint "$fingerprint" \
@@ -129,7 +132,7 @@ fi
     --opcache-loaded "$opcache_loaded" \
     --jobs "$jobs"
 
-flock -u "$NATIVE_LOCK_FD"
+native_release_lock
 printf 'MANIFEST=%s\n' "$NATIVE_MANIFEST_PATH"
 if ((print_binary)); then
     printf '%s\n' "$NATIVE_BINARY_PATH"

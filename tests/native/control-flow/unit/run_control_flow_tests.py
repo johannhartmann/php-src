@@ -31,7 +31,13 @@ WARNINGS = [
     "-Werror",
     "-Wno-c23-extensions",
 ]
-FRONTEND_WARNINGS = ["-Wall", "-Wextra", "-Werror"]
+FRONTEND_FLAGS = [
+    "-D_GNU_SOURCE",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-Wno-sign-compare",
+]
 
 
 def run(command: list[str]) -> None:
@@ -88,7 +94,7 @@ def main() -> int:
             [
                 *cc,
                 "-std=c11",
-                *FRONTEND_WARNINGS,
+                *FRONTEND_FLAGS,
                 "-Itests/native/lowering/frontend/include",
                 "-I.",
                 "-IZend",

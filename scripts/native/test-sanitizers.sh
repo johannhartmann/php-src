@@ -11,11 +11,13 @@ usage() {
     cat <<'EOF'
 Build and smoke-test the W00 sanitizer profiles.
 
-Usage: test-sanitizers.sh [--profile asan-nts|ubsan-nts] [--jobs N]
+Usage: test-sanitizers.sh [--profile PROFILE] [--jobs N]
 
 With no --profile, both mandatory sanitizer profiles are run. The harness uses
-strict ASAN_OPTIONS/UBSAN_OPTIONS defaults, enables leak detection for ASan,
-does not install suppressions, and fails on diagnostics.
+strict ASAN_OPTIONS/UBSAN_OPTIONS defaults, enables leak detection where the
+platform runtime supports it, does not install suppressions, and fails on
+diagnostics. An explicit profile may name any address- or
+undefined-sanitizer profile.
 EOF
 }
 
@@ -45,8 +47,9 @@ done
 native_validate_jobs "$jobs"
 
 if [[ -n $selected_profile ]]; then
-    [[ $selected_profile == asan-nts || $selected_profile == ubsan-nts ]] || \
-        native_die "sanitizer profile must be asan-nts or ubsan-nts"
+    native_load_profile "$selected_profile"
+    [[ $PROFILE_SANITIZER == address || $PROFILE_SANITIZER == undefined ]] || \
+        native_die "profile is not a sanitizer profile: $selected_profile"
     profiles=("$selected_profile")
 else
     profiles=(asan-nts ubsan-nts)

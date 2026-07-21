@@ -67,7 +67,8 @@ if [[ -n $explicit_binary ]]; then
     PROFILE_SANITIZER=none
     NATIVE_WORKTREE_ID=$(native_worktree_id)
     NATIVE_WORKTREE_ROOT="$(native_work_root)/$NATIVE_WORKTREE_ID"
-    binary_id=$(printf '%s' "$binary" | sha256sum | awk '{print substr($1, 1, 16)}')
+    binary_id=$(printf '%s' "$binary" | native_sha256_stream)
+    binary_id=${binary_id:0:16}
     smoke_dir="$NATIVE_WORKTREE_ROOT/external-$binary_id/artifacts/smoke"
 else
     native_load_profile "$profile"
