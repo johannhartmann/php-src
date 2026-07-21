@@ -18,6 +18,7 @@
 
 #include "zend_mir_arena.h"
 #include "../zend_mir_call.h"
+#include "../zend_mir_values.h"
 
 typedef struct _zend_mir_core_function {
 	zend_mir_function_record record;
@@ -63,6 +64,31 @@ typedef struct _zend_mir_core_call_staging {
 	bool committed;
 } zend_mir_core_call_staging;
 
+typedef struct _zend_mir_core_value_staging {
+	zend_mir_storage_ref *storages;
+	zend_mir_payload_ref *payloads;
+	zend_mir_reference_cell_ref *reference_cells;
+	zend_mir_alias_relation_ref *alias_relations;
+	zend_mir_ownership_event_ref *ownership_events;
+	zend_mir_separation_plan_ref *separation_plans;
+	zend_mir_call_transfer_ref *call_transfers;
+	uint32_t storage_count;
+	uint32_t storage_capacity;
+	uint32_t payload_count;
+	uint32_t payload_capacity;
+	uint32_t reference_cell_count;
+	uint32_t reference_cell_capacity;
+	uint32_t alias_relation_count;
+	uint32_t alias_relation_capacity;
+	uint32_t ownership_event_count;
+	uint32_t ownership_event_capacity;
+	uint32_t separation_plan_count;
+	uint32_t separation_plan_capacity;
+	uint32_t call_transfer_count;
+	uint32_t call_transfer_capacity;
+	bool committed;
+} zend_mir_core_value_staging;
+
 struct _zend_mir_module {
 	zend_mir_module_id id;
 	zend_mir_module_state state;
@@ -87,6 +113,14 @@ struct _zend_mir_module {
 	zend_mir_core_table call_continuations;
 	zend_mir_core_table call_sites;
 	zend_mir_core_call_staging call_staging;
+	zend_mir_core_table value_storages;
+	zend_mir_core_table value_payloads;
+	zend_mir_core_table value_reference_cells;
+	zend_mir_core_table value_alias_relations;
+	zend_mir_core_table value_ownership_events;
+	zend_mir_core_table value_separation_plans;
+	zend_mir_core_table value_call_transfers;
+	zend_mir_core_value_staging value_staging;
 	uint32_t operand_count;
 	uint32_t *value_index;
 	uint32_t value_index_capacity;
@@ -94,6 +128,8 @@ struct _zend_mir_module {
 	zend_mir_mutator mutator;
 	zend_mir_call_view call_view;
 	zend_mir_call_mutator call_mutator;
+	zend_mir_value_view value_view;
+	zend_mir_value_mutator value_mutator;
 };
 
 bool zend_mir_core_next_id(uint32_t count, uint32_t *out);
@@ -116,6 +152,8 @@ void zend_mir_module_init_view(zend_mir_module *module);
 void zend_mir_module_init_mutator(zend_mir_module *module);
 void zend_mir_module_init_call_view(zend_mir_module *module);
 void zend_mir_module_init_call_mutator(zend_mir_module *module);
+void zend_mir_module_init_value_view(zend_mir_module *module);
+void zend_mir_module_init_value_mutator(zend_mir_module *module);
 
 zend_mir_call_mutator *zend_mir_module_get_call_mutator(
 	zend_mir_module *module);
@@ -140,6 +178,48 @@ zend_mir_module_call_view_from_view(const zend_mir_view *view)
 		&& module->state != ZEND_MIR_MODULE_FAILED
 		&& module->call_staging.committed
 		? &module->call_view : NULL;
+}
+
+static inline const zend_mir_module *
+zend_mir_module_from_value_view(const zend_mir_value_view *view)
+{
+	const zend_mir_module *module;
+	uintptr_t view_address;
+
+	if (view == NULL || view->context == NULL) {
+		return NULL;
+	}
+	view_address = (uintptr_t) (const void *) view;
+	if (view_address < offsetof(zend_mir_module, value_view)) {
+		return NULL;
+	}
+	module = (const zend_mir_module *)
+		(view_address - offsetof(zend_mir_module, value_view));
+	return (const void *) module == view->context
+		&& module->state != ZEND_MIR_MODULE_FAILED
+		&& module->value_staging.committed
+		? module : NULL;
+}
+
+static inline const zend_mir_value_view *
+zend_mir_module_value_view_from_view(const zend_mir_view *view)
+{
+	const zend_mir_module *module;
+	uintptr_t view_address;
+
+	if (view == NULL || view->context == NULL) {
+		return NULL;
+	}
+	view_address = (uintptr_t) (const void *) view;
+	if (view_address < offsetof(zend_mir_module, view)) {
+		return NULL;
+	}
+	module = (const zend_mir_module *)
+		(view_address - offsetof(zend_mir_module, view));
+	return (const void *) module == view->context
+		&& module->state != ZEND_MIR_MODULE_FAILED
+		&& module->value_staging.committed
+		? &module->value_view : NULL;
 }
 
 #define ZEND_MIR_CORE_ITEMS(module, field, type) \

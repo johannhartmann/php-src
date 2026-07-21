@@ -1,0 +1,6617 @@
+{
+  "accepted_variant_count": 11,
+  "active_opcode_count": 212,
+  "codegen_eligible": false,
+  "execution_boundaries": [
+    "container_clone_execution",
+    "string_and_array_operation_semantics",
+    "object_lifecycle",
+    "destructor_exception_cleanup",
+    "runtime_reference_binding",
+    "dynamic_symbol_table_aliasing",
+    "call_execution",
+    "internal_c_abi_interop"
+  ],
+  "format_version": 1,
+  "live_w06_deferred_count": 87,
+  "mir_contract_version": "1.9",
+  "modeled_semantics": [
+    "zval_storage_model",
+    "reference_cell_model",
+    "indirect_slot_model",
+    "refcount_transfer_model",
+    "alias_partition_model",
+    "separation_protocol_model",
+    "direct_user_call_reference_transfer_model",
+    "refcounted_call_result_model"
+  ],
+  "opcodes": [
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 0,
+      "opcode": "ZEND_NOP",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 8168,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8162,
+          "symbol": "ZEND_NOP"
+        },
+        {
+          "end_line": 2729,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2729,
+          "symbol": "ZEND_NOP"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 1,
+      "opcode": "ZEND_ADD",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry",
+        "exact_scalar_types",
+        "no_overflow",
+        "no_destructor",
+        "no_exception"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 45,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 25,
+          "symbol": "zend_add_helper"
+        },
+        {
+          "end_line": 83,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 46,
+          "symbol": "ZEND_ADD"
+        },
+        {
+          "end_line": 1712,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1712,
+          "symbol": "ZEND_ADD"
+        },
+        {
+          "end_line": 4551,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4551,
+          "symbol": "ZEND_ADD"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 2,
+      "opcode": "ZEND_SUB",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry",
+        "exact_scalar_types",
+        "no_overflow",
+        "no_destructor",
+        "no_exception"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 104,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 84,
+          "symbol": "zend_sub_helper"
+        },
+        {
+          "end_line": 142,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 105,
+          "symbol": "ZEND_SUB"
+        },
+        {
+          "end_line": 1713,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1713,
+          "symbol": "ZEND_SUB"
+        },
+        {
+          "end_line": 4552,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4552,
+          "symbol": "ZEND_SUB"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 3,
+      "opcode": "ZEND_MUL",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry",
+        "exact_scalar_types",
+        "no_overflow",
+        "no_destructor",
+        "no_exception"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 163,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 143,
+          "symbol": "zend_mul_helper"
+        },
+        {
+          "end_line": 204,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 164,
+          "symbol": "ZEND_MUL"
+        },
+        {
+          "end_line": 1714,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1714,
+          "symbol": "ZEND_MUL"
+        },
+        {
+          "end_line": 4553,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4553,
+          "symbol": "ZEND_MUL"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W16",
+      "number": 4,
+      "opcode": "ZEND_DIV",
+      "proofs": [],
+      "rationale": "Unrelated scalar arithmetic gap.",
+      "source_refs": [
+        {
+          "end_line": 218,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 205,
+          "symbol": "ZEND_DIV"
+        },
+        {
+          "end_line": 1398,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1398,
+          "symbol": "ZEND_DIV"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 5,
+      "opcode": "ZEND_MOD",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry",
+        "exact_scalar_types",
+        "nonzero_divisor",
+        "no_overflow",
+        "no_exception"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 228,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 219,
+          "symbol": "zend_mod_by_zero_helper"
+        },
+        {
+          "end_line": 249,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 229,
+          "symbol": "zend_mod_helper"
+        },
+        {
+          "end_line": 276,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 250,
+          "symbol": "ZEND_MOD"
+        },
+        {
+          "end_line": 1668,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1668,
+          "symbol": "ZEND_MOD"
+        },
+        {
+          "end_line": 4517,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4517,
+          "symbol": "ZEND_MOD"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 6,
+      "opcode": "ZEND_SL",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry",
+        "exact_scalar_types",
+        "valid_shift_count",
+        "no_overflow"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 297,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 277,
+          "symbol": "zend_shift_left_helper"
+        },
+        {
+          "end_line": 318,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 298,
+          "symbol": "ZEND_SL"
+        },
+        {
+          "end_line": 1666,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1666,
+          "symbol": "ZEND_SL"
+        },
+        {
+          "end_line": 4515,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4515,
+          "symbol": "ZEND_SL"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 7,
+      "opcode": "ZEND_SR",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry",
+        "exact_scalar_types",
+        "valid_shift_count"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 339,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 319,
+          "symbol": "zend_shift_right_helper"
+        },
+        {
+          "end_line": 358,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 340,
+          "symbol": "ZEND_SR"
+        },
+        {
+          "end_line": 1667,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1667,
+          "symbol": "ZEND_SR"
+        },
+        {
+          "end_line": 4516,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4516,
+          "symbol": "ZEND_SR"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 8,
+      "opcode": "ZEND_CONCAT",
+      "proofs": [],
+      "rationale": "Concrete string concatenation and allocation.",
+      "source_refs": [
+        {
+          "end_line": 449,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 373,
+          "symbol": "ZEND_CONCAT"
+        },
+        {
+          "end_line": 1776,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1776,
+          "symbol": "ZEND_CONCAT"
+        },
+        {
+          "end_line": 4664,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4664,
+          "symbol": "ZEND_CONCAT"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 9,
+      "opcode": "ZEND_BW_OR",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry",
+        "exact_scalar_types"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 822,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 802,
+          "symbol": "zend_bw_or_helper"
+        },
+        {
+          "end_line": 840,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 823,
+          "symbol": "ZEND_BW_OR"
+        },
+        {
+          "end_line": 1663,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1663,
+          "symbol": "ZEND_BW_OR"
+        },
+        {
+          "end_line": 4512,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4512,
+          "symbol": "ZEND_BW_OR"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 10,
+      "opcode": "ZEND_BW_AND",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry",
+        "exact_scalar_types"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 861,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 841,
+          "symbol": "zend_bw_and_helper"
+        },
+        {
+          "end_line": 879,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 862,
+          "symbol": "ZEND_BW_AND"
+        },
+        {
+          "end_line": 1664,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1664,
+          "symbol": "ZEND_BW_AND"
+        },
+        {
+          "end_line": 4513,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4513,
+          "symbol": "ZEND_BW_AND"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 11,
+      "opcode": "ZEND_BW_XOR",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry",
+        "exact_scalar_types"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 900,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 880,
+          "symbol": "zend_bw_xor_helper"
+        },
+        {
+          "end_line": 918,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 901,
+          "symbol": "ZEND_BW_XOR"
+        },
+        {
+          "end_line": 1665,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1665,
+          "symbol": "ZEND_BW_XOR"
+        },
+        {
+          "end_line": 4514,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4514,
+          "symbol": "ZEND_BW_XOR"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W16",
+      "number": 12,
+      "opcode": "ZEND_POW",
+      "proofs": [],
+      "rationale": "Unrelated scalar arithmetic gap.",
+      "source_refs": [
+        {
+          "end_line": 372,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 359,
+          "symbol": "ZEND_POW"
+        },
+        {
+          "end_line": 1397,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1397,
+          "symbol": "ZEND_POW"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 13,
+      "opcode": "ZEND_BW_NOT",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry",
+        "exact_scalar_types"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 945,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 933,
+          "symbol": "zend_bw_not_helper"
+        },
+        {
+          "end_line": 959,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 946,
+          "symbol": "ZEND_BW_NOT"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 14,
+      "opcode": "ZEND_BOOL_NOT",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry",
+        "exact_scalar_types"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 985,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 960,
+          "symbol": "ZEND_BOOL_NOT"
+        },
+        {
+          "end_line": 2298,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2298,
+          "symbol": "ZEND_BOOL_NOT"
+        },
+        {
+          "end_line": 5657,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5657,
+          "symbol": "ZEND_BOOL_NOT"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 15,
+      "opcode": "ZEND_BOOL_XOR",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry",
+        "exact_scalar_types"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 932,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 919,
+          "symbol": "ZEND_BOOL_XOR"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 16,
+      "opcode": "ZEND_IS_IDENTICAL",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry",
+        "exact_scalar_types",
+        "same_exact_type",
+        "finite_f64"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 464,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 450,
+          "symbol": "ZEND_IS_IDENTICAL"
+        },
+        {
+          "end_line": 2202,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2202,
+          "symbol": "ZEND_IS_IDENTICAL"
+        },
+        {
+          "end_line": 5479,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5479,
+          "symbol": "ZEND_IS_IDENTICAL"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 17,
+      "opcode": "ZEND_IS_NOT_IDENTICAL",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry",
+        "exact_scalar_types",
+        "same_exact_type",
+        "finite_f64"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 493,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 479,
+          "symbol": "ZEND_IS_NOT_IDENTICAL"
+        },
+        {
+          "end_line": 2203,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2203,
+          "symbol": "ZEND_IS_NOT_IDENTICAL"
+        },
+        {
+          "end_line": 5480,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5480,
+          "symbol": "ZEND_IS_NOT_IDENTICAL"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 18,
+      "opcode": "ZEND_IS_EQUAL",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry",
+        "exact_scalar_types",
+        "same_exact_type",
+        "finite_f64"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 515,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 494,
+          "symbol": "zend_is_equal_helper"
+        },
+        {
+          "end_line": 573,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 516,
+          "symbol": "ZEND_IS_EQUAL"
+        },
+        {
+          "end_line": 2164,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2164,
+          "symbol": "ZEND_IS_EQUAL"
+        },
+        {
+          "end_line": 5429,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5429,
+          "symbol": "ZEND_IS_EQUAL"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 19,
+      "opcode": "ZEND_IS_NOT_EQUAL",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry",
+        "exact_scalar_types",
+        "same_exact_type",
+        "finite_f64"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 595,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 574,
+          "symbol": "zend_is_not_equal_helper"
+        },
+        {
+          "end_line": 653,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 596,
+          "symbol": "ZEND_IS_NOT_EQUAL"
+        },
+        {
+          "end_line": 2165,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2165,
+          "symbol": "ZEND_IS_NOT_EQUAL"
+        },
+        {
+          "end_line": 5430,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5430,
+          "symbol": "ZEND_IS_NOT_EQUAL"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 20,
+      "opcode": "ZEND_IS_SMALLER",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry",
+        "exact_scalar_types",
+        "same_exact_type",
+        "finite_f64"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 675,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 654,
+          "symbol": "zend_is_smaller_helper"
+        },
+        {
+          "end_line": 718,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 676,
+          "symbol": "ZEND_IS_SMALLER"
+        },
+        {
+          "end_line": 2166,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2166,
+          "symbol": "ZEND_IS_SMALLER"
+        },
+        {
+          "end_line": 5431,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5431,
+          "symbol": "ZEND_IS_SMALLER"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 21,
+      "opcode": "ZEND_IS_SMALLER_OR_EQUAL",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry",
+        "exact_scalar_types",
+        "same_exact_type",
+        "finite_f64"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 740,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 719,
+          "symbol": "zend_is_smaller_or_equal_helper"
+        },
+        {
+          "end_line": 787,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 741,
+          "symbol": "ZEND_IS_SMALLER_OR_EQUAL"
+        },
+        {
+          "end_line": 2167,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2167,
+          "symbol": "ZEND_IS_SMALLER_OR_EQUAL"
+        },
+        {
+          "end_line": 5432,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5432,
+          "symbol": "ZEND_IS_SMALLER_OR_EQUAL"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "accepted",
+      "later_wave": null,
+      "number": 22,
+      "opcode": "ZEND_ASSIGN",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "local_storage_only",
+        "old_value_transition_complete"
+      ],
+      "rationale": "Local storage assignment with a complete old-value transition.",
+      "source_refs": [
+        {
+          "end_line": 2861,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2833,
+          "symbol": "ZEND_ASSIGN"
+        },
+        {
+          "end_line": 2018,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2018,
+          "symbol": "ZEND_ASSIGN"
+        },
+        {
+          "end_line": 5119,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5119,
+          "symbol": "ZEND_ASSIGN"
+        }
+      ],
+      "transition_family": "storage_write",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 23,
+      "opcode": "ZEND_ASSIGN_DIM",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 2832,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2680,
+          "symbol": "ZEND_ASSIGN_DIM"
+        },
+        {
+          "end_line": 1855,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1855,
+          "symbol": "ZEND_ASSIGN_DIM"
+        },
+        {
+          "end_line": 5062,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5062,
+          "symbol": "ZEND_ASSIGN_DIM"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W07"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 24,
+      "opcode": "ZEND_ASSIGN_OBJ",
+      "proofs": [],
+      "rationale": "Object property storage and lifecycle.",
+      "source_refs": [
+        {
+          "end_line": 2642,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2489,
+          "symbol": "ZEND_ASSIGN_OBJ"
+        },
+        {
+          "end_line": 1972,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1972,
+          "symbol": "ZEND_ASSIGN_OBJ"
+        },
+        {
+          "end_line": 4972,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4972,
+          "symbol": "ZEND_ASSIGN_OBJ"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 25,
+      "opcode": "ZEND_ASSIGN_STATIC_PROP",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 2679,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2643,
+          "symbol": "ZEND_ASSIGN_STATIC_PROP"
+        },
+        {
+          "end_line": 6787,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6787,
+          "symbol": "ZEND_ASSIGN_STATIC_PROP"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W16",
+      "number": 26,
+      "opcode": "ZEND_ASSIGN_OP",
+      "proofs": [],
+      "rationale": "Generic compound-operation semantics.",
+      "source_refs": [
+        {
+          "end_line": 1286,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1256,
+          "symbol": "ZEND_ASSIGN_OP"
+        },
+        {
+          "end_line": 1805,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1805,
+          "symbol": "ZEND_ASSIGN_OP"
+        },
+        {
+          "end_line": 4691,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4691,
+          "symbol": "ZEND_ASSIGN_OP"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 27,
+      "opcode": "ZEND_ASSIGN_DIM_OP",
+      "proofs": [],
+      "rationale": "Array/dimension container update.",
+      "source_refs": [
+        {
+          "end_line": 1255,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1155,
+          "symbol": "ZEND_ASSIGN_DIM_OP"
+        },
+        {
+          "end_line": 1835,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1835,
+          "symbol": "ZEND_ASSIGN_DIM_OP"
+        },
+        {
+          "end_line": 4734,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4734,
+          "symbol": "ZEND_ASSIGN_DIM_OP"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 28,
+      "opcode": "ZEND_ASSIGN_OBJ_OP",
+      "proofs": [],
+      "rationale": "Object property update and lifecycle.",
+      "source_refs": [
+        {
+          "end_line": 1099,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1007,
+          "symbol": "ZEND_ASSIGN_OBJ_OP"
+        },
+        {
+          "end_line": 1921,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1921,
+          "symbol": "ZEND_ASSIGN_OBJ_OP"
+        },
+        {
+          "end_line": 4876,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4876,
+          "symbol": "ZEND_ASSIGN_OBJ_OP"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 29,
+      "opcode": "ZEND_ASSIGN_STATIC_PROP_OP",
+      "proofs": [],
+      "rationale": "Static property storage and lifecycle.",
+      "source_refs": [
+        {
+          "end_line": 1154,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1100,
+          "symbol": "ZEND_ASSIGN_STATIC_PROP_OP"
+        },
+        {
+          "end_line": 6790,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6790,
+          "symbol": "ZEND_ASSIGN_STATIC_PROP_OP"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "accepted",
+      "later_wave": null,
+      "number": 30,
+      "opcode": "ZEND_ASSIGN_REF",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "local_storage_only",
+        "stable_reference_cell_identity",
+        "reference_lvalue_exact"
+      ],
+      "rationale": "Local binding to an exact stable reference cell.",
+      "source_refs": [
+        {
+          "end_line": 2900,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2862,
+          "symbol": "ZEND_ASSIGN_REF"
+        }
+      ],
+      "transition_family": "reference_bind",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "accepted_variant",
+      "later_wave": null,
+      "number": 31,
+      "opcode": "ZEND_QM_ASSIGN",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "abstract_refcount_state",
+        "cleanup_debt_explicit"
+      ],
+      "rationale": "Existing scalar lowering retained with an explicit refcounted copy/move variant.",
+      "source_refs": [
+        {
+          "end_line": 7991,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 7954,
+          "symbol": "ZEND_QM_ASSIGN"
+        },
+        {
+          "end_line": 2064,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2064,
+          "symbol": "ZEND_QM_ASSIGN"
+        },
+        {
+          "end_line": 5238,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5238,
+          "symbol": "ZEND_QM_ASSIGN"
+        }
+      ],
+      "transition_family": "refcount_copy_variant",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 32,
+      "opcode": "ZEND_ASSIGN_OBJ_REF",
+      "proofs": [],
+      "rationale": "Object property reference binding.",
+      "source_refs": [
+        {
+          "end_line": 2937,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2901,
+          "symbol": "ZEND_ASSIGN_OBJ_REF"
+        },
+        {
+          "end_line": 6791,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6791,
+          "symbol": "ZEND_ASSIGN_OBJ_REF"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 33,
+      "opcode": "ZEND_ASSIGN_STATIC_PROP_REF",
+      "proofs": [],
+      "rationale": "Static property reference binding.",
+      "source_refs": [
+        {
+          "end_line": 2985,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2938,
+          "symbol": "ZEND_ASSIGN_STATIC_PROP_REF"
+        },
+        {
+          "end_line": 6792,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6792,
+          "symbol": "ZEND_ASSIGN_STATIC_PROP_REF"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W16",
+      "number": 34,
+      "opcode": "ZEND_PRE_INC",
+      "proofs": [],
+      "rationale": "Generic increment semantics.",
+      "source_refs": [
+        {
+          "end_line": 1527,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1495,
+          "symbol": "zend_pre_inc_helper"
+        },
+        {
+          "end_line": 1545,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1528,
+          "symbol": "ZEND_PRE_INC"
+        },
+        {
+          "end_line": 1619,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1619,
+          "symbol": "ZEND_PRE_INC"
+        },
+        {
+          "end_line": 4450,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4450,
+          "symbol": "ZEND_PRE_INC"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W16",
+      "number": 35,
+      "opcode": "ZEND_PRE_DEC",
+      "proofs": [],
+      "rationale": "Generic decrement semantics.",
+      "source_refs": [
+        {
+          "end_line": 1579,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1546,
+          "symbol": "zend_pre_dec_helper"
+        },
+        {
+          "end_line": 1597,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1580,
+          "symbol": "ZEND_PRE_DEC"
+        },
+        {
+          "end_line": 1620,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1620,
+          "symbol": "ZEND_PRE_DEC"
+        },
+        {
+          "end_line": 4451,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4451,
+          "symbol": "ZEND_PRE_DEC"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W16",
+      "number": 36,
+      "opcode": "ZEND_POST_INC",
+      "proofs": [],
+      "rationale": "Generic increment semantics.",
+      "source_refs": [
+        {
+          "end_line": 1629,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1598,
+          "symbol": "zend_post_inc_helper"
+        },
+        {
+          "end_line": 1645,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1630,
+          "symbol": "ZEND_POST_INC"
+        },
+        {
+          "end_line": 1621,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1621,
+          "symbol": "ZEND_POST_INC"
+        },
+        {
+          "end_line": 4452,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4452,
+          "symbol": "ZEND_POST_INC"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W16",
+      "number": 37,
+      "opcode": "ZEND_POST_DEC",
+      "proofs": [],
+      "rationale": "Generic decrement semantics.",
+      "source_refs": [
+        {
+          "end_line": 1677,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1646,
+          "symbol": "zend_post_dec_helper"
+        },
+        {
+          "end_line": 1693,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1678,
+          "symbol": "ZEND_POST_DEC"
+        },
+        {
+          "end_line": 1622,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1622,
+          "symbol": "ZEND_POST_DEC"
+        },
+        {
+          "end_line": 4453,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4453,
+          "symbol": "ZEND_POST_DEC"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 38,
+      "opcode": "ZEND_PRE_INC_STATIC_PROP",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 1455,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1428,
+          "symbol": "ZEND_PRE_INC_STATIC_PROP"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 39,
+      "opcode": "ZEND_PRE_DEC_STATIC_PROP",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 1455,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1428,
+          "symbol": "ZEND_PRE_INC_STATIC_PROP"
+        },
+        {
+          "end_line": 1461,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1456,
+          "symbol": "ZEND_PRE_DEC_STATIC_PROP"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 40,
+      "opcode": "ZEND_POST_INC_STATIC_PROP",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 1489,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1462,
+          "symbol": "ZEND_POST_INC_STATIC_PROP"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 41,
+      "opcode": "ZEND_POST_DEC_STATIC_PROP",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 1489,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1462,
+          "symbol": "ZEND_POST_INC_STATIC_PROP"
+        },
+        {
+          "end_line": 1494,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1490,
+          "symbol": "ZEND_POST_DEC_STATIC_PROP"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 42,
+      "opcode": "ZEND_JMP",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 3134,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 3128,
+          "symbol": "ZEND_JMP"
+        },
+        {
+          "end_line": 281,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 281,
+          "symbol": "ZEND_JMP"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 43,
+      "opcode": "ZEND_JMPZ",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "exact_scalar_types",
+        "condition_truthiness_side_effect_free",
+        "no_calls",
+        "no_bailout",
+        "no_destructor",
+        "no_exception",
+        "no_observer",
+        "no_reentry",
+        "non_refcounted"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 4357,
+          "path": "Zend/zend_execute.c",
+          "start_line": 4321,
+          "symbol": "vm_interrupt"
+        },
+        {
+          "end_line": 3168,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 3135,
+          "symbol": "ZEND_JMPZ"
+        },
+        {
+          "end_line": 2307,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2307,
+          "symbol": "ZEND_JMPZ"
+        },
+        {
+          "end_line": 5668,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5668,
+          "symbol": "ZEND_JMPZ"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 44,
+      "opcode": "ZEND_JMPNZ",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "exact_scalar_types",
+        "condition_truthiness_side_effect_free",
+        "no_calls",
+        "no_bailout",
+        "no_destructor",
+        "no_exception",
+        "no_observer",
+        "no_reentry",
+        "non_refcounted"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 4357,
+          "path": "Zend/zend_execute.c",
+          "start_line": 4321,
+          "symbol": "vm_interrupt"
+        },
+        {
+          "end_line": 3202,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 3169,
+          "symbol": "ZEND_JMPNZ"
+        },
+        {
+          "end_line": 2308,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2308,
+          "symbol": "ZEND_JMPNZ"
+        },
+        {
+          "end_line": 5669,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5669,
+          "symbol": "ZEND_JMPNZ"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 46,
+      "opcode": "ZEND_JMPZ_EX",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "exact_scalar_types",
+        "condition_truthiness_side_effect_free",
+        "result_ssa_complete",
+        "no_calls",
+        "no_bailout",
+        "no_destructor",
+        "no_exception",
+        "no_observer",
+        "no_reentry",
+        "non_refcounted"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 4357,
+          "path": "Zend/zend_execute.c",
+          "start_line": 4321,
+          "symbol": "vm_interrupt"
+        },
+        {
+          "end_line": 3238,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 3203,
+          "symbol": "ZEND_JMPZ_EX"
+        },
+        {
+          "end_line": 2318,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2318,
+          "symbol": "ZEND_JMPZ_EX"
+        },
+        {
+          "end_line": 5670,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5670,
+          "symbol": "ZEND_JMPZ_EX"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 47,
+      "opcode": "ZEND_JMPNZ_EX",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "exact_scalar_types",
+        "condition_truthiness_side_effect_free",
+        "result_ssa_complete",
+        "no_calls",
+        "no_bailout",
+        "no_destructor",
+        "no_exception",
+        "no_observer",
+        "no_reentry",
+        "non_refcounted"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 4357,
+          "path": "Zend/zend_execute.c",
+          "start_line": 4321,
+          "symbol": "vm_interrupt"
+        },
+        {
+          "end_line": 3273,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 3239,
+          "symbol": "ZEND_JMPNZ_EX"
+        },
+        {
+          "end_line": 2319,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2319,
+          "symbol": "ZEND_JMPNZ_EX"
+        },
+        {
+          "end_line": 5671,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5671,
+          "symbol": "ZEND_JMPNZ_EX"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W16",
+      "number": 48,
+      "opcode": "ZEND_CASE",
+      "proofs": [],
+      "rationale": "Unrelated comparison semantics.",
+      "source_refs": [
+        {
+          "end_line": 5950,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 5932,
+          "symbol": "zend_case_helper"
+        },
+        {
+          "end_line": 6001,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 5951,
+          "symbol": "ZEND_CASE"
+        },
+        {
+          "end_line": 2168,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2168,
+          "symbol": "ZEND_CASE"
+        },
+        {
+          "end_line": 5433,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5433,
+          "symbol": "ZEND_CASE"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "accepted",
+      "later_wave": null,
+      "number": 49,
+      "opcode": "ZEND_CHECK_VAR",
+      "proofs": [
+        "complete_value_inventory",
+        "local_storage_only"
+      ],
+      "rationale": "Local undef/direct/reference observation.",
+      "source_refs": [
+        {
+          "end_line": 9367,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9355,
+          "symbol": "ZEND_CHECK_VAR"
+        }
+      ],
+      "transition_family": "storage_observe",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "accepted",
+      "later_wave": null,
+      "number": 50,
+      "opcode": "ZEND_SEND_VAR_NO_REF_EX",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "exact_direct_user_call",
+        "scalable_parameter_modes",
+        "call_transfer_complete"
+      ],
+      "rationale": "Exact direct-user-call no-ref argument transfer.",
+      "source_refs": [
+        {
+          "end_line": 5123,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 5056,
+          "symbol": "ZEND_SEND_VAR_NO_REF_EX"
+        },
+        {
+          "end_line": 2114,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2114,
+          "symbol": "ZEND_SEND_VAR_NO_REF_EX"
+        },
+        {
+          "end_line": 5339,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5339,
+          "symbol": "ZEND_SEND_VAR_NO_REF_EX"
+        }
+      ],
+      "transition_family": "call_argument_transfer",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 51,
+      "opcode": "ZEND_CAST",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry",
+        "exact_scalar_types",
+        "safe_scalar_cast",
+        "finite_f64",
+        "no_destructor",
+        "no_exception"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 6604,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 6556,
+          "symbol": "ZEND_CAST"
+        },
+        {
+          "end_line": 5233,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5233,
+          "symbol": "ZEND_CAST"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 52,
+      "opcode": "ZEND_BOOL",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry",
+        "exact_scalar_types",
+        "safe_scalar_cast"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 5931,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 5906,
+          "symbol": "ZEND_BOOL"
+        },
+        {
+          "end_line": 2297,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2297,
+          "symbol": "ZEND_BOOL"
+        },
+        {
+          "end_line": 5656,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5656,
+          "symbol": "ZEND_BOOL"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 53,
+      "opcode": "ZEND_FAST_CONCAT",
+      "proofs": [],
+      "rationale": "Concrete string concatenation.",
+      "source_refs": [
+        {
+          "end_line": 3432,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 3308,
+          "symbol": "ZEND_FAST_CONCAT"
+        },
+        {
+          "end_line": 1777,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1777,
+          "symbol": "ZEND_FAST_CONCAT"
+        },
+        {
+          "end_line": 4665,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4665,
+          "symbol": "ZEND_FAST_CONCAT"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 54,
+      "opcode": "ZEND_ROPE_INIT",
+      "proofs": [],
+      "rationale": "Concrete rope/string container construction.",
+      "source_refs": [
+        {
+          "end_line": 3467,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 3433,
+          "symbol": "ZEND_ROPE_INIT"
+        },
+        {
+          "end_line": 2683,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2683,
+          "symbol": "ZEND_ROPE_INIT"
+        },
+        {
+          "end_line": 6464,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6464,
+          "symbol": "ZEND_ROPE_INIT"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 55,
+      "opcode": "ZEND_ROPE_ADD",
+      "proofs": [],
+      "rationale": "Concrete rope/string container construction.",
+      "source_refs": [
+        {
+          "end_line": 3502,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 3468,
+          "symbol": "ZEND_ROPE_ADD"
+        },
+        {
+          "end_line": 2684,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2684,
+          "symbol": "ZEND_ROPE_ADD"
+        },
+        {
+          "end_line": 6465,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6465,
+          "symbol": "ZEND_ROPE_ADD"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 56,
+      "opcode": "ZEND_ROPE_END",
+      "proofs": [],
+      "rationale": "Concrete rope/string container construction.",
+      "source_refs": [
+        {
+          "end_line": 3562,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 3503,
+          "symbol": "ZEND_ROPE_END"
+        },
+        {
+          "end_line": 2685,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2685,
+          "symbol": "ZEND_ROPE_END"
+        },
+        {
+          "end_line": 6466,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6466,
+          "symbol": "ZEND_ROPE_END"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W15",
+      "number": 57,
+      "opcode": "ZEND_BEGIN_SILENCE",
+      "proofs": [],
+      "rationale": "Runtime error-reporting boundary.",
+      "source_refs": [
+        {
+          "end_line": 7810,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 7777,
+          "symbol": "ZEND_BEGIN_SILENCE"
+        },
+        {
+          "end_line": 3741,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 3741,
+          "symbol": "ZEND_BEGIN_SILENCE"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W15",
+      "number": 58,
+      "opcode": "ZEND_END_SILENCE",
+      "proofs": [],
+      "rationale": "Runtime error-reporting boundary.",
+      "source_refs": [
+        {
+          "end_line": 7821,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 7811,
+          "symbol": "ZEND_END_SILENCE"
+        },
+        {
+          "end_line": 3742,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 3742,
+          "symbol": "ZEND_END_SILENCE"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 59,
+      "opcode": "ZEND_INIT_FCALL_BY_NAME",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 1006,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 996,
+          "symbol": "zend_undefined_function_helper"
+        },
+        {
+          "end_line": 3921,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 3894,
+          "symbol": "ZEND_INIT_FCALL_BY_NAME"
+        },
+        {
+          "end_line": 2080,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2080,
+          "symbol": "ZEND_INIT_FCALL_BY_NAME"
+        },
+        {
+          "end_line": 5287,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5287,
+          "symbol": "ZEND_INIT_FCALL_BY_NAME"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W10"
+    },
+    {
+      "decision": "accepted_variant",
+      "later_wave": null,
+      "number": 60,
+      "opcode": "ZEND_DO_FCALL",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "exact_direct_user_call",
+        "abstract_refcount_state",
+        "scalable_parameter_modes",
+        "call_transfer_complete",
+        "same_module_fingerprint"
+      ],
+      "rationale": "W05 call fragment retained with an additional proof-closed refcount/reference transfer variant.",
+      "source_refs": [
+        {
+          "end_line": 4357,
+          "path": "Zend/zend_execute.c",
+          "start_line": 4321,
+          "symbol": "vm_interrupt"
+        },
+        {
+          "end_line": 4467,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 4337,
+          "symbol": "ZEND_DO_FCALL"
+        },
+        {
+          "end_line": 2159,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2159,
+          "symbol": "ZEND_DO_FCALL"
+        },
+        {
+          "end_line": 5424,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5424,
+          "symbol": "ZEND_DO_FCALL"
+        }
+      ],
+      "transition_family": "call_sequence_refcount_variant",
+      "w05_classification": "conditional",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "accepted_variant",
+      "later_wave": null,
+      "number": 61,
+      "opcode": "ZEND_INIT_FCALL",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "exact_direct_user_call",
+        "abstract_refcount_state",
+        "scalable_parameter_modes",
+        "call_transfer_complete",
+        "same_module_fingerprint"
+      ],
+      "rationale": "W05 call fragment retained with an additional proof-closed refcount/reference transfer variant.",
+      "source_refs": [
+        {
+          "end_line": 4108,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 4080,
+          "symbol": "ZEND_INIT_FCALL"
+        },
+        {
+          "end_line": 2079,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2079,
+          "symbol": "ZEND_INIT_FCALL"
+        },
+        {
+          "end_line": 5286,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5286,
+          "symbol": "ZEND_INIT_FCALL"
+        }
+      ],
+      "transition_family": "call_sequence_refcount_variant",
+      "w05_classification": "conditional",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "accepted_variant",
+      "later_wave": null,
+      "number": 62,
+      "opcode": "ZEND_RETURN",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "abstract_refcount_state",
+        "call_transfer_complete",
+        "same_module_fingerprint"
+      ],
+      "rationale": "Existing scalar return retained with an explicit refcounted result-transfer variant.",
+      "source_refs": [
+        {
+          "end_line": 3127,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2986,
+          "symbol": "zend_leave_helper"
+        },
+        {
+          "end_line": 4622,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 4545,
+          "symbol": "ZEND_RETURN"
+        },
+        {
+          "end_line": 2279,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2279,
+          "symbol": "ZEND_RETURN"
+        },
+        {
+          "end_line": 5578,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5578,
+          "symbol": "ZEND_RETURN"
+        }
+      ],
+      "transition_family": "refcount_return_variant",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "accepted_variant",
+      "later_wave": null,
+      "number": 63,
+      "opcode": "ZEND_RECV",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "exact_direct_user_call",
+        "abstract_refcount_state",
+        "scalable_parameter_modes",
+        "call_transfer_complete",
+        "same_module_fingerprint"
+      ],
+      "rationale": "W05 call fragment retained with an additional proof-closed refcount/reference transfer variant.",
+      "source_refs": [
+        {
+          "end_line": 5716,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 5707,
+          "symbol": "zend_missing_arg_helper"
+        },
+        {
+          "end_line": 5728,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 5717,
+          "symbol": "zend_verify_recv_arg_type_helper"
+        },
+        {
+          "end_line": 5771,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 5753,
+          "symbol": "ZEND_RECV"
+        },
+        {
+          "end_line": 2520,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2520,
+          "symbol": "ZEND_RECV"
+        },
+        {
+          "end_line": 6185,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6185,
+          "symbol": "ZEND_RECV"
+        }
+      ],
+      "transition_family": "call_sequence_refcount_variant",
+      "w05_classification": "conditional",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 64,
+      "opcode": "ZEND_RECV_INIT",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 5833,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 5784,
+          "symbol": "ZEND_RECV_INIT"
+        },
+        {
+          "end_line": 2525,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2525,
+          "symbol": "ZEND_RECV_INIT"
+        },
+        {
+          "end_line": 6190,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6190,
+          "symbol": "ZEND_RECV_INIT"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W07"
+    },
+    {
+      "decision": "accepted_variant",
+      "later_wave": null,
+      "number": 65,
+      "opcode": "ZEND_SEND_VAL",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "exact_direct_user_call",
+        "abstract_refcount_state",
+        "scalable_parameter_modes",
+        "call_transfer_complete",
+        "same_module_fingerprint"
+      ],
+      "rationale": "W05 call fragment retained with an additional proof-closed refcount/reference transfer variant.",
+      "source_refs": [
+        {
+          "end_line": 4928,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 4901,
+          "symbol": "ZEND_SEND_VAL"
+        },
+        {
+          "end_line": 2086,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2086,
+          "symbol": "ZEND_SEND_VAL"
+        },
+        {
+          "end_line": 5294,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5294,
+          "symbol": "ZEND_SEND_VAL"
+        }
+      ],
+      "transition_family": "call_sequence_refcount_variant",
+      "w05_classification": "conditional",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "accepted_variant",
+      "later_wave": null,
+      "number": 66,
+      "opcode": "ZEND_SEND_VAR_EX",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "exact_direct_user_call",
+        "abstract_refcount_state",
+        "scalable_parameter_modes",
+        "call_transfer_complete",
+        "same_module_fingerprint"
+      ],
+      "rationale": "W05 call fragment retained with an additional proof-closed refcount/reference transfer variant.",
+      "source_refs": [
+        {
+          "end_line": 5219,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 5154,
+          "symbol": "ZEND_SEND_VAR_EX"
+        },
+        {
+          "end_line": 2112,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2112,
+          "symbol": "ZEND_SEND_VAR_EX"
+        },
+        {
+          "end_line": 5337,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5337,
+          "symbol": "ZEND_SEND_VAR_EX"
+        }
+      ],
+      "transition_family": "call_sequence_refcount_variant",
+      "w05_classification": "conditional",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "accepted",
+      "later_wave": null,
+      "number": 67,
+      "opcode": "ZEND_SEND_REF",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "exact_direct_user_call",
+        "reference_lvalue_exact",
+        "call_transfer_complete"
+      ],
+      "rationale": "Exact direct-user-call by-reference transfer.",
+      "source_refs": [
+        {
+          "end_line": 5153,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 5124,
+          "symbol": "ZEND_SEND_REF"
+        },
+        {
+          "end_line": 2101,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2101,
+          "symbol": "ZEND_SEND_REF"
+        },
+        {
+          "end_line": 5321,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5321,
+          "symbol": "ZEND_SEND_REF"
+        }
+      ],
+      "transition_family": "call_argument_transfer",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 68,
+      "opcode": "ZEND_NEW",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 6070,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 6002,
+          "symbol": "ZEND_NEW"
+        },
+        {
+          "end_line": 278,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 278,
+          "symbol": "ZEND_NEW"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 69,
+      "opcode": "ZEND_INIT_NS_FCALL_BY_NAME",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 1006,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 996,
+          "symbol": "zend_undefined_function_helper"
+        },
+        {
+          "end_line": 4079,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 4047,
+          "symbol": "ZEND_INIT_NS_FCALL_BY_NAME"
+        },
+        {
+          "end_line": 2081,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2081,
+          "symbol": "ZEND_INIT_NS_FCALL_BY_NAME"
+        },
+        {
+          "end_line": 5288,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5288,
+          "symbol": "ZEND_INIT_NS_FCALL_BY_NAME"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W10"
+    },
+    {
+      "decision": "accepted_variant",
+      "later_wave": null,
+      "number": 70,
+      "opcode": "ZEND_FREE",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "abstract_refcount_state",
+        "cleanup_debt_explicit"
+      ],
+      "rationale": "Existing scalar lowering retained with an explicit refcounted release variant.",
+      "source_refs": [
+        {
+          "end_line": 3282,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 3274,
+          "symbol": "ZEND_FREE"
+        },
+        {
+          "end_line": 2532,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2532,
+          "symbol": "ZEND_FREE"
+        },
+        {
+          "end_line": 6209,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6209,
+          "symbol": "ZEND_FREE"
+        }
+      ],
+      "transition_family": "refcount_release_variant",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 71,
+      "opcode": "ZEND_INIT_ARRAY",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 6394,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 6285,
+          "symbol": "ZEND_ADD_ARRAY_ELEMENT"
+        },
+        {
+          "end_line": 6555,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 6534,
+          "symbol": "ZEND_INIT_ARRAY"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W07"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 72,
+      "opcode": "ZEND_ADD_ARRAY_ELEMENT",
+      "proofs": [],
+      "rationale": "Array container materialization.",
+      "source_refs": [
+        {
+          "end_line": 6394,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 6285,
+          "symbol": "ZEND_ADD_ARRAY_ELEMENT"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 73,
+      "opcode": "ZEND_INCLUDE_OR_EVAL",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 6687,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 6605,
+          "symbol": "ZEND_INCLUDE_OR_EVAL"
+        },
+        {
+          "end_line": 2783,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2783,
+          "symbol": "ZEND_INCLUDE_OR_EVAL"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W10"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 74,
+      "opcode": "ZEND_UNSET_VAR",
+      "proofs": [],
+      "rationale": "Dynamic variable and symbol-table aliasing.",
+      "source_refs": [
+        {
+          "end_line": 6743,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 6706,
+          "symbol": "ZEND_UNSET_VAR"
+        },
+        {
+          "end_line": 1384,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 1384,
+          "symbol": "ZEND_UNSET_VAR"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 75,
+      "opcode": "ZEND_UNSET_DIM",
+      "proofs": [],
+      "rationale": "Array/dimension container mutation.",
+      "source_refs": [
+        {
+          "end_line": 6897,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 6796,
+          "symbol": "ZEND_UNSET_DIM"
+        },
+        {
+          "end_line": 939,
+          "path": "ext/opcache/jit/zend_jit_vm_helpers.c",
+          "start_line": 939,
+          "symbol": "ZEND_UNSET_DIM"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 76,
+      "opcode": "ZEND_UNSET_OBJ",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 6942,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 6898,
+          "symbol": "ZEND_UNSET_OBJ"
+        },
+        {
+          "end_line": 1000,
+          "path": "ext/opcache/jit/zend_jit_vm_helpers.c",
+          "start_line": 1000,
+          "symbol": "ZEND_UNSET_OBJ"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 77,
+      "opcode": "ZEND_FE_RESET_R",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 4357,
+          "path": "Zend/zend_execute.c",
+          "start_line": 4321,
+          "symbol": "vm_interrupt"
+        },
+        {
+          "end_line": 7019,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 6943,
+          "symbol": "ZEND_FE_RESET_R"
+        },
+        {
+          "end_line": 2599,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2599,
+          "symbol": "ZEND_FE_RESET_R"
+        },
+        {
+          "end_line": 6313,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6313,
+          "symbol": "ZEND_FE_RESET_R"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W07"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 78,
+      "opcode": "ZEND_FE_FETCH_R",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 7240,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 7119,
+          "symbol": "zend_fe_fetch_object_helper"
+        },
+        {
+          "end_line": 7324,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 7241,
+          "symbol": "ZEND_FE_FETCH_R"
+        },
+        {
+          "end_line": 2608,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2608,
+          "symbol": "ZEND_FE_FETCH_R"
+        },
+        {
+          "end_line": 6323,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6323,
+          "symbol": "ZEND_FE_FETCH_R"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W07"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 80,
+      "opcode": "ZEND_FETCH_R",
+      "proofs": [],
+      "rationale": "General variable fetch may use dynamic storage.",
+      "source_refs": [
+        {
+          "end_line": 1823,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1723,
+          "symbol": "zend_fetch_var_address_helper"
+        },
+        {
+          "end_line": 1828,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1824,
+          "symbol": "ZEND_FETCH_R"
+        },
+        {
+          "end_line": 1378,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 1378,
+          "symbol": "ZEND_FETCH_R"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 81,
+      "opcode": "ZEND_FETCH_DIM_R",
+      "proofs": [],
+      "rationale": "Array/dimension lookup semantics.",
+      "source_refs": [
+        {
+          "end_line": 1970,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1932,
+          "symbol": "ZEND_FETCH_DIM_R"
+        },
+        {
+          "end_line": 2388,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2388,
+          "symbol": "ZEND_FETCH_DIM_R"
+        },
+        {
+          "end_line": 5843,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5843,
+          "symbol": "ZEND_FETCH_DIM_R"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 82,
+      "opcode": "ZEND_FETCH_OBJ_R",
+      "proofs": [],
+      "rationale": "Object property lookup.",
+      "source_refs": [
+        {
+          "end_line": 2252,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2080,
+          "symbol": "ZEND_FETCH_OBJ_R"
+        },
+        {
+          "end_line": 2450,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2450,
+          "symbol": "ZEND_FETCH_OBJ_R"
+        },
+        {
+          "end_line": 6050,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6050,
+          "symbol": "ZEND_FETCH_OBJ_R"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 83,
+      "opcode": "ZEND_FETCH_W",
+      "proofs": [],
+      "rationale": "General writable variable fetch may use dynamic storage.",
+      "source_refs": [
+        {
+          "end_line": 1823,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1723,
+          "symbol": "zend_fetch_var_address_helper"
+        },
+        {
+          "end_line": 1833,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1829,
+          "symbol": "ZEND_FETCH_W"
+        },
+        {
+          "end_line": 1379,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 1379,
+          "symbol": "ZEND_FETCH_W"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 84,
+      "opcode": "ZEND_FETCH_DIM_W",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 1985,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1971,
+          "symbol": "ZEND_FETCH_DIM_W"
+        },
+        {
+          "end_line": 2401,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2401,
+          "symbol": "ZEND_FETCH_DIM_W"
+        },
+        {
+          "end_line": 5900,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5900,
+          "symbol": "ZEND_FETCH_DIM_W"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W07"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 85,
+      "opcode": "ZEND_FETCH_OBJ_W",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 2273,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2253,
+          "symbol": "ZEND_FETCH_OBJ_W"
+        },
+        {
+          "end_line": 2452,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2452,
+          "symbol": "ZEND_FETCH_OBJ_W"
+        },
+        {
+          "end_line": 6052,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6052,
+          "symbol": "ZEND_FETCH_OBJ_W"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 86,
+      "opcode": "ZEND_FETCH_RW",
+      "proofs": [],
+      "rationale": "General read/write variable fetch may use dynamic storage.",
+      "source_refs": [
+        {
+          "end_line": 1823,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1723,
+          "symbol": "zend_fetch_var_address_helper"
+        },
+        {
+          "end_line": 1838,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1834,
+          "symbol": "ZEND_FETCH_RW"
+        },
+        {
+          "end_line": 1380,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 1380,
+          "symbol": "ZEND_FETCH_RW"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 87,
+      "opcode": "ZEND_FETCH_DIM_RW",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 2000,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1986,
+          "symbol": "ZEND_FETCH_DIM_RW"
+        },
+        {
+          "end_line": 2402,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2402,
+          "symbol": "ZEND_FETCH_DIM_RW"
+        },
+        {
+          "end_line": 5901,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5901,
+          "symbol": "ZEND_FETCH_DIM_RW"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W07"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 88,
+      "opcode": "ZEND_FETCH_OBJ_RW",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 2290,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2274,
+          "symbol": "ZEND_FETCH_OBJ_RW"
+        },
+        {
+          "end_line": 994,
+          "path": "ext/opcache/jit/zend_jit_vm_helpers.c",
+          "start_line": 994,
+          "symbol": "ZEND_FETCH_OBJ_RW"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 89,
+      "opcode": "ZEND_FETCH_IS",
+      "proofs": [],
+      "rationale": "General isset fetch may use dynamic storage.",
+      "source_refs": [
+        {
+          "end_line": 1823,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1723,
+          "symbol": "zend_fetch_var_address_helper"
+        },
+        {
+          "end_line": 1857,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1852,
+          "symbol": "ZEND_FETCH_IS"
+        },
+        {
+          "end_line": 1382,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 1382,
+          "symbol": "ZEND_FETCH_IS"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 90,
+      "opcode": "ZEND_FETCH_DIM_IS",
+      "proofs": [],
+      "rationale": "Array/dimension isset lookup semantics.",
+      "source_refs": [
+        {
+          "end_line": 2015,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2001,
+          "symbol": "ZEND_FETCH_DIM_IS"
+        },
+        {
+          "end_line": 2389,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2389,
+          "symbol": "ZEND_FETCH_DIM_IS"
+        },
+        {
+          "end_line": 5844,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5844,
+          "symbol": "ZEND_FETCH_DIM_IS"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 91,
+      "opcode": "ZEND_FETCH_OBJ_IS",
+      "proofs": [],
+      "rationale": "Object property isset lookup.",
+      "source_refs": [
+        {
+          "end_line": 2413,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2291,
+          "symbol": "ZEND_FETCH_OBJ_IS"
+        },
+        {
+          "end_line": 2451,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2451,
+          "symbol": "ZEND_FETCH_OBJ_IS"
+        },
+        {
+          "end_line": 6051,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6051,
+          "symbol": "ZEND_FETCH_OBJ_IS"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 92,
+      "opcode": "ZEND_FETCH_FUNC_ARG",
+      "proofs": [],
+      "rationale": "General call-argument fetch may use dynamic storage.",
+      "source_refs": [
+        {
+          "end_line": 1823,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1723,
+          "symbol": "zend_fetch_var_address_helper"
+        },
+        {
+          "end_line": 1846,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1839,
+          "symbol": "ZEND_FETCH_FUNC_ARG"
+        },
+        {
+          "end_line": 1381,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 1381,
+          "symbol": "ZEND_FETCH_FUNC_ARG"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 93,
+      "opcode": "ZEND_FETCH_DIM_FUNC_ARG",
+      "proofs": [],
+      "rationale": "Array/dimension call-argument lookup.",
+      "source_refs": [
+        {
+          "end_line": 1970,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1932,
+          "symbol": "ZEND_FETCH_DIM_R"
+        },
+        {
+          "end_line": 1985,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1971,
+          "symbol": "ZEND_FETCH_DIM_W"
+        },
+        {
+          "end_line": 2027,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2016,
+          "symbol": "zend_use_tmp_in_write_context_helper"
+        },
+        {
+          "end_line": 2039,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2028,
+          "symbol": "zend_use_undef_in_read_context_helper"
+        },
+        {
+          "end_line": 2064,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2040,
+          "symbol": "ZEND_FETCH_DIM_FUNC_ARG"
+        },
+        {
+          "end_line": 5835,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5835,
+          "symbol": "ZEND_FETCH_DIM_FUNC_ARG"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 94,
+      "opcode": "ZEND_FETCH_OBJ_FUNC_ARG",
+      "proofs": [],
+      "rationale": "Object property call-argument lookup.",
+      "source_refs": [
+        {
+          "end_line": 2027,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2016,
+          "symbol": "zend_use_tmp_in_write_context_helper"
+        },
+        {
+          "end_line": 2252,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2080,
+          "symbol": "ZEND_FETCH_OBJ_R"
+        },
+        {
+          "end_line": 2273,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2253,
+          "symbol": "ZEND_FETCH_OBJ_W"
+        },
+        {
+          "end_line": 2436,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2414,
+          "symbol": "ZEND_FETCH_OBJ_FUNC_ARG"
+        },
+        {
+          "end_line": 6037,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6037,
+          "symbol": "ZEND_FETCH_OBJ_FUNC_ARG"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 95,
+      "opcode": "ZEND_FETCH_UNSET",
+      "proofs": [],
+      "rationale": "General unset fetch may use dynamic storage.",
+      "source_refs": [
+        {
+          "end_line": 1823,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1723,
+          "symbol": "zend_fetch_var_address_helper"
+        },
+        {
+          "end_line": 1851,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1847,
+          "symbol": "ZEND_FETCH_UNSET"
+        },
+        {
+          "end_line": 1383,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 1383,
+          "symbol": "ZEND_FETCH_UNSET"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 96,
+      "opcode": "ZEND_FETCH_DIM_UNSET",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 2079,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2065,
+          "symbol": "ZEND_FETCH_DIM_UNSET"
+        },
+        {
+          "end_line": 13066,
+          "path": "ext/opcache/jit/zend_jit_ir.c",
+          "start_line": 13066,
+          "symbol": "ZEND_FETCH_DIM_UNSET"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W07"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 97,
+      "opcode": "ZEND_FETCH_OBJ_UNSET",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 2453,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2437,
+          "symbol": "ZEND_FETCH_OBJ_UNSET"
+        },
+        {
+          "end_line": 996,
+          "path": "ext/opcache/jit/zend_jit_vm_helpers.c",
+          "start_line": 996,
+          "symbol": "ZEND_FETCH_OBJ_UNSET"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 98,
+      "opcode": "ZEND_FETCH_LIST_R",
+      "proofs": [],
+      "rationale": "List/array container extraction.",
+      "source_refs": [
+        {
+          "end_line": 2465,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2454,
+          "symbol": "ZEND_FETCH_LIST_R"
+        },
+        {
+          "end_line": 2390,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2390,
+          "symbol": "ZEND_FETCH_LIST_R"
+        },
+        {
+          "end_line": 5845,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5845,
+          "symbol": "ZEND_FETCH_LIST_R"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 99,
+      "opcode": "ZEND_FETCH_CONSTANT",
+      "proofs": [],
+      "rationale": "Dynamic constant resolution.",
+      "source_refs": [
+        {
+          "end_line": 6151,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 6136,
+          "symbol": "ZEND_FETCH_CONSTANT"
+        },
+        {
+          "end_line": 2618,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2618,
+          "symbol": "ZEND_FETCH_CONSTANT"
+        },
+        {
+          "end_line": 6356,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6356,
+          "symbol": "ZEND_FETCH_CONSTANT"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "accepted",
+      "later_wave": null,
+      "number": 100,
+      "opcode": "ZEND_CHECK_FUNC_ARG",
+      "proofs": [
+        "complete_value_inventory",
+        "exact_direct_user_call",
+        "scalable_parameter_modes"
+      ],
+      "rationale": "Exact scalable parameter-mode lookup.",
+      "source_refs": [
+        {
+          "end_line": 5251,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 5220,
+          "symbol": "ZEND_CHECK_FUNC_ARG"
+        },
+        {
+          "end_line": 2138,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2138,
+          "symbol": "ZEND_CHECK_FUNC_ARG"
+        },
+        {
+          "end_line": 5396,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5396,
+          "symbol": "ZEND_CHECK_FUNC_ARG"
+        }
+      ],
+      "transition_family": "call_parameter_mode",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W15",
+      "number": 101,
+      "opcode": "ZEND_EXT_STMT",
+      "proofs": [],
+      "rationale": "Observer/extension runtime boundary.",
+      "source_refs": [
+        {
+          "end_line": 8003,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 7992,
+          "symbol": "ZEND_EXT_STMT"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W15",
+      "number": 102,
+      "opcode": "ZEND_EXT_FCALL_BEGIN",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 8015,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8004,
+          "symbol": "ZEND_EXT_FCALL_BEGIN"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W15"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W15",
+      "number": 103,
+      "opcode": "ZEND_EXT_FCALL_END",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 8027,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8016,
+          "symbol": "ZEND_EXT_FCALL_END"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W15"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W15",
+      "number": 104,
+      "opcode": "ZEND_EXT_NOP",
+      "proofs": [],
+      "rationale": "Observer/extension runtime boundary.",
+      "source_refs": [
+        {
+          "end_line": 8161,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8155,
+          "symbol": "ZEND_EXT_NOP"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W15",
+      "number": 105,
+      "opcode": "ZEND_TICKS",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 8109,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8093,
+          "symbol": "ZEND_TICKS"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W15"
+    },
+    {
+      "decision": "accepted",
+      "later_wave": null,
+      "number": 106,
+      "opcode": "ZEND_SEND_VAR_NO_REF",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "exact_direct_user_call",
+        "scalable_parameter_modes",
+        "call_transfer_complete"
+      ],
+      "rationale": "Exact direct-user-call no-ref argument transfer.",
+      "source_refs": [
+        {
+          "end_line": 5055,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 5025,
+          "symbol": "ZEND_SEND_VAR_NO_REF"
+        },
+        {
+          "end_line": 2113,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2113,
+          "symbol": "ZEND_SEND_VAR_NO_REF"
+        },
+        {
+          "end_line": 5338,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5338,
+          "symbol": "ZEND_SEND_VAR_NO_REF"
+        }
+      ],
+      "transition_family": "call_argument_transfer",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W09",
+      "number": 107,
+      "opcode": "ZEND_CATCH",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 4900,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 4851,
+          "symbol": "ZEND_CATCH"
+        },
+        {
+          "end_line": 292,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 292,
+          "symbol": "ZEND_CATCH"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W09"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W09",
+      "number": 108,
+      "opcode": "ZEND_THROW",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 4850,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 4817,
+          "symbol": "ZEND_THROW"
+        },
+        {
+          "end_line": 2761,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2761,
+          "symbol": "ZEND_THROW"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W09"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 109,
+      "opcode": "ZEND_FETCH_CLASS",
+      "proofs": [],
+      "rationale": "Class identity resolution.",
+      "source_refs": [
+        {
+          "end_line": 3605,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 3563,
+          "symbol": "ZEND_FETCH_CLASS"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 110,
+      "opcode": "ZEND_CLONE",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 6135,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 6071,
+          "symbol": "ZEND_CLONE"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "accepted",
+      "later_wave": null,
+      "number": 111,
+      "opcode": "ZEND_RETURN_BY_REF",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "stable_reference_cell_identity",
+        "reference_lvalue_exact"
+      ],
+      "rationale": "Exact variable reference return, modeled without runtime binding.",
+      "source_refs": [
+        {
+          "end_line": 3127,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2986,
+          "symbol": "zend_leave_helper"
+        },
+        {
+          "end_line": 4691,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 4623,
+          "symbol": "ZEND_RETURN_BY_REF"
+        },
+        {
+          "end_line": 2755,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2755,
+          "symbol": "ZEND_RETURN_BY_REF"
+        }
+      ],
+      "transition_family": "call_return_reference",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 112,
+      "opcode": "ZEND_INIT_METHOD_CALL",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 3760,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 3606,
+          "symbol": "ZEND_INIT_METHOD_CALL"
+        },
+        {
+          "end_line": 2628,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2628,
+          "symbol": "ZEND_INIT_METHOD_CALL"
+        },
+        {
+          "end_line": 6361,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6361,
+          "symbol": "ZEND_INIT_METHOD_CALL"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 113,
+      "opcode": "ZEND_INIT_STATIC_METHOD_CALL",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 3893,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 3761,
+          "symbol": "ZEND_INIT_STATIC_METHOD_CALL"
+        },
+        {
+          "end_line": 2670,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2670,
+          "symbol": "ZEND_INIT_STATIC_METHOD_CALL"
+        },
+        {
+          "end_line": 6431,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6431,
+          "symbol": "ZEND_INIT_STATIC_METHOD_CALL"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 114,
+      "opcode": "ZEND_ISSET_ISEMPTY_VAR",
+      "proofs": [],
+      "rationale": "Dynamic variable and symbol-table lookup.",
+      "source_refs": [
+        {
+          "end_line": 7594,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 7550,
+          "symbol": "ZEND_ISSET_ISEMPTY_VAR"
+        },
+        {
+          "end_line": 286,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 286,
+          "symbol": "ZEND_ISSET_ISEMPTY_VAR"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 115,
+      "opcode": "ZEND_ISSET_ISEMPTY_DIM_OBJ",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 7693,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 7615,
+          "symbol": "ZEND_ISSET_ISEMPTY_DIM_OBJ"
+        },
+        {
+          "end_line": 2419,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2419,
+          "symbol": "ZEND_ISSET_ISEMPTY_DIM_OBJ"
+        },
+        {
+          "end_line": 5952,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5952,
+          "symbol": "ZEND_ISSET_ISEMPTY_DIM_OBJ"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W07"
+    },
+    {
+      "decision": "accepted_variant",
+      "later_wave": null,
+      "number": 116,
+      "opcode": "ZEND_SEND_VAL_EX",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "exact_direct_user_call",
+        "abstract_refcount_state",
+        "scalable_parameter_modes",
+        "call_transfer_complete",
+        "same_module_fingerprint"
+      ],
+      "rationale": "W05 call fragment retained with an additional proof-closed refcount/reference transfer variant.",
+      "source_refs": [
+        {
+          "end_line": 4940,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 4929,
+          "symbol": "zend_cannot_pass_by_ref_helper"
+        },
+        {
+          "end_line": 4977,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 4941,
+          "symbol": "ZEND_SEND_VAL_EX"
+        },
+        {
+          "end_line": 2087,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2087,
+          "symbol": "ZEND_SEND_VAL_EX"
+        },
+        {
+          "end_line": 5295,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5295,
+          "symbol": "ZEND_SEND_VAL_EX"
+        }
+      ],
+      "transition_family": "call_sequence_refcount_variant",
+      "w05_classification": "conditional",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "accepted_variant",
+      "later_wave": null,
+      "number": 117,
+      "opcode": "ZEND_SEND_VAR",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "exact_direct_user_call",
+        "abstract_refcount_state",
+        "scalable_parameter_modes",
+        "call_transfer_complete",
+        "same_module_fingerprint"
+      ],
+      "rationale": "W05 call fragment retained with an additional proof-closed refcount/reference transfer variant.",
+      "source_refs": [
+        {
+          "end_line": 5024,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 4978,
+          "symbol": "ZEND_SEND_VAR"
+        },
+        {
+          "end_line": 2111,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2111,
+          "symbol": "ZEND_SEND_VAR"
+        },
+        {
+          "end_line": 5336,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5336,
+          "symbol": "ZEND_SEND_VAR"
+        }
+      ],
+      "transition_family": "call_sequence_refcount_variant",
+      "w05_classification": "conditional",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 118,
+      "opcode": "ZEND_INIT_USER_CALL",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 4046,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 3975,
+          "symbol": "ZEND_INIT_USER_CALL"
+        },
+        {
+          "end_line": 279,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 279,
+          "symbol": "ZEND_INIT_USER_CALL"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W10"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 119,
+      "opcode": "ZEND_SEND_ARRAY",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 5671,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 5521,
+          "symbol": "ZEND_SEND_ARRAY"
+        },
+        {
+          "end_line": 6457,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6457,
+          "symbol": "ZEND_SEND_ARRAY"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W07"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 120,
+      "opcode": "ZEND_SEND_USER",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 5692,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 5672,
+          "symbol": "ZEND_SEND_USER"
+        },
+        {
+          "end_line": 269,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 269,
+          "symbol": "ZEND_SEND_USER"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W10"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 121,
+      "opcode": "ZEND_STRLEN",
+      "proofs": [],
+      "rationale": "Concrete string operation semantics.",
+      "source_refs": [
+        {
+          "end_line": 8889,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8828,
+          "symbol": "ZEND_STRLEN"
+        },
+        {
+          "end_line": 2548,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2548,
+          "symbol": "ZEND_STRLEN"
+        },
+        {
+          "end_line": 6227,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6227,
+          "symbol": "ZEND_STRLEN"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 122,
+      "opcode": "ZEND_DEFINED",
+      "proofs": [],
+      "rationale": "Dynamic constant resolution.",
+      "source_refs": [
+        {
+          "end_line": 8981,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8959,
+          "symbol": "ZEND_DEFINED"
+        },
+        {
+          "end_line": 2237,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2237,
+          "symbol": "ZEND_DEFINED"
+        },
+        {
+          "end_line": 5530,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5530,
+          "symbol": "ZEND_DEFINED"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W16",
+      "number": 123,
+      "opcode": "ZEND_TYPE_CHECK",
+      "proofs": [],
+      "rationale": "Unrelated runtime type-check semantics.",
+      "source_refs": [
+        {
+          "end_line": 8925,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8890,
+          "symbol": "ZEND_TYPE_CHECK"
+        },
+        {
+          "end_line": 2256,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2256,
+          "symbol": "ZEND_TYPE_CHECK"
+        },
+        {
+          "end_line": 5549,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5549,
+          "symbol": "ZEND_TYPE_CHECK"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W09",
+      "number": 124,
+      "opcode": "ZEND_VERIFY_RETURN_TYPE",
+      "proofs": [],
+      "rationale": "Observable type-error and cleanup path.",
+      "source_refs": [
+        {
+          "end_line": 4537,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 4468,
+          "symbol": "ZEND_VERIFY_RETURN_TYPE"
+        },
+        {
+          "end_line": 2578,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2578,
+          "symbol": "ZEND_VERIFY_RETURN_TYPE"
+        },
+        {
+          "end_line": 6290,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6290,
+          "symbol": "ZEND_VERIFY_RETURN_TYPE"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 125,
+      "opcode": "ZEND_FE_RESET_RW",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 4357,
+          "path": "Zend/zend_execute.c",
+          "start_line": 4321,
+          "symbol": "vm_interrupt"
+        },
+        {
+          "end_line": 7118,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 7020,
+          "symbol": "ZEND_FE_RESET_RW"
+        },
+        {
+          "end_line": 17228,
+          "path": "ext/opcache/jit/zend_jit_ir.c",
+          "start_line": 17228,
+          "symbol": "ZEND_FE_RESET_RW"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W07"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 126,
+      "opcode": "ZEND_FE_FETCH_RW",
+      "proofs": [],
+      "rationale": "Writable iteration and container aliasing.",
+      "source_refs": [
+        {
+          "end_line": 7527,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 7325,
+          "symbol": "ZEND_FE_FETCH_RW"
+        },
+        {
+          "end_line": 17234,
+          "path": "ext/opcache/jit/zend_jit_ir.c",
+          "start_line": 17234,
+          "symbol": "ZEND_FE_FETCH_RW"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 127,
+      "opcode": "ZEND_FE_FREE",
+      "proofs": [],
+      "rationale": "Iterator/container cleanup.",
+      "source_refs": [
+        {
+          "end_line": 3307,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 3283,
+          "symbol": "ZEND_FE_FREE"
+        },
+        {
+          "end_line": 2533,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2533,
+          "symbol": "ZEND_FE_FREE"
+        },
+        {
+          "end_line": 6210,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6210,
+          "symbol": "ZEND_FE_FREE"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 128,
+      "opcode": "ZEND_INIT_DYNAMIC_CALL",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 3974,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 3922,
+          "symbol": "ZEND_INIT_DYNAMIC_CALL"
+        },
+        {
+          "end_line": 6446,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6446,
+          "symbol": "ZEND_INIT_DYNAMIC_CALL"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W10"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W15",
+      "number": 129,
+      "opcode": "ZEND_DO_ICALL",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 4357,
+          "path": "Zend/zend_execute.c",
+          "start_line": 4321,
+          "symbol": "vm_interrupt"
+        },
+        {
+          "end_line": 4195,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 4127,
+          "symbol": "ZEND_DO_ICALL"
+        },
+        {
+          "end_line": 2157,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2157,
+          "symbol": "ZEND_DO_ICALL"
+        },
+        {
+          "end_line": 5422,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5422,
+          "symbol": "ZEND_DO_ICALL"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W15"
+    },
+    {
+      "decision": "accepted_variant",
+      "later_wave": null,
+      "number": 130,
+      "opcode": "ZEND_DO_UCALL",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "exact_direct_user_call",
+        "abstract_refcount_state",
+        "scalable_parameter_modes",
+        "call_transfer_complete",
+        "same_module_fingerprint"
+      ],
+      "rationale": "W05 call fragment retained with an additional proof-closed refcount/reference transfer variant.",
+      "source_refs": [
+        {
+          "end_line": 4220,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 4196,
+          "symbol": "ZEND_DO_UCALL"
+        },
+        {
+          "end_line": 2155,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2155,
+          "symbol": "ZEND_DO_UCALL"
+        },
+        {
+          "end_line": 5421,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5421,
+          "symbol": "ZEND_DO_UCALL"
+        }
+      ],
+      "transition_family": "call_sequence_refcount_variant",
+      "w05_classification": "conditional",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 131,
+      "opcode": "ZEND_DO_FCALL_BY_NAME",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 4357,
+          "path": "Zend/zend_execute.c",
+          "start_line": 4321,
+          "symbol": "vm_interrupt"
+        },
+        {
+          "end_line": 4336,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 4221,
+          "symbol": "ZEND_DO_FCALL_BY_NAME"
+        },
+        {
+          "end_line": 2158,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2158,
+          "symbol": "ZEND_DO_FCALL_BY_NAME"
+        },
+        {
+          "end_line": 5423,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5423,
+          "symbol": "ZEND_DO_FCALL_BY_NAME"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W10"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 132,
+      "opcode": "ZEND_PRE_INC_OBJ",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 1352,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1287,
+          "symbol": "ZEND_PRE_INC_OBJ"
+        },
+        {
+          "end_line": 1874,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1874,
+          "symbol": "ZEND_PRE_INC_OBJ"
+        },
+        {
+          "end_line": 4792,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4792,
+          "symbol": "ZEND_PRE_INC_OBJ"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 133,
+      "opcode": "ZEND_PRE_DEC_OBJ",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 1352,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1287,
+          "symbol": "ZEND_PRE_INC_OBJ"
+        },
+        {
+          "end_line": 1357,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1353,
+          "symbol": "ZEND_PRE_DEC_OBJ"
+        },
+        {
+          "end_line": 1875,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1875,
+          "symbol": "ZEND_PRE_DEC_OBJ"
+        },
+        {
+          "end_line": 4793,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4793,
+          "symbol": "ZEND_PRE_DEC_OBJ"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 134,
+      "opcode": "ZEND_POST_INC_OBJ",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 1421,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1358,
+          "symbol": "ZEND_POST_INC_OBJ"
+        },
+        {
+          "end_line": 1876,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1876,
+          "symbol": "ZEND_POST_INC_OBJ"
+        },
+        {
+          "end_line": 4794,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4794,
+          "symbol": "ZEND_POST_INC_OBJ"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 135,
+      "opcode": "ZEND_POST_DEC_OBJ",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 1421,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1358,
+          "symbol": "ZEND_POST_INC_OBJ"
+        },
+        {
+          "end_line": 1427,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1422,
+          "symbol": "ZEND_POST_DEC_OBJ"
+        },
+        {
+          "end_line": 1877,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 1877,
+          "symbol": "ZEND_POST_DEC_OBJ"
+        },
+        {
+          "end_line": 4795,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 4795,
+          "symbol": "ZEND_POST_DEC_OBJ"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W15",
+      "number": 136,
+      "opcode": "ZEND_ECHO",
+      "proofs": [],
+      "rationale": "Observable runtime output boundary.",
+      "source_refs": [
+        {
+          "end_line": 1722,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1694,
+          "symbol": "ZEND_ECHO"
+        },
+        {
+          "end_line": 2539,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2539,
+          "symbol": "ZEND_ECHO"
+        },
+        {
+          "end_line": 6217,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6217,
+          "symbol": "ZEND_ECHO"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "owner_sequence",
+      "later_wave": null,
+      "number": 137,
+      "opcode": "ZEND_OP_DATA",
+      "proofs": [],
+      "rationale": "Owned by its immediately preceding opcode sequence; never lowered independently.",
+      "source_refs": [
+        {
+          "end_line": 10690,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 10689,
+          "symbol": "ZEND_OP_DATA"
+        },
+        {
+          "end_line": 2730,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2730,
+          "symbol": "ZEND_OP_DATA"
+        }
+      ],
+      "transition_family": "owner_sequence",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 138,
+      "opcode": "ZEND_INSTANCEOF",
+      "proofs": [],
+      "rationale": "Class/object semantics.",
+      "source_refs": [
+        {
+          "end_line": 8154,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8110,
+          "symbol": "ZEND_INSTANCEOF"
+        },
+        {
+          "end_line": 290,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 290,
+          "symbol": "ZEND_INSTANCEOF"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W11",
+      "number": 139,
+      "opcode": "ZEND_GENERATOR_CREATE",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 3127,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2986,
+          "symbol": "zend_leave_helper"
+        },
+        {
+          "end_line": 4769,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 4692,
+          "symbol": "ZEND_GENERATOR_CREATE"
+        },
+        {
+          "end_line": 2753,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2753,
+          "symbol": "ZEND_GENERATOR_CREATE"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W11"
+    },
+    {
+      "decision": "accepted",
+      "later_wave": null,
+      "number": 140,
+      "opcode": "ZEND_MAKE_REF",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "local_storage_only",
+        "stable_reference_cell_identity"
+      ],
+      "rationale": "Creates a stable abstract local reference cell.",
+      "source_refs": [
+        {
+          "end_line": 9400,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9368,
+          "symbol": "ZEND_MAKE_REF"
+        }
+      ],
+      "transition_family": "reference_create",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 141,
+      "opcode": "ZEND_DECLARE_FUNCTION",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 8092,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8082,
+          "symbol": "ZEND_DECLARE_FUNCTION"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W10"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 142,
+      "opcode": "ZEND_DECLARE_LAMBDA_FUNCTION",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 8438,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8412,
+          "symbol": "ZEND_DECLARE_LAMBDA_FUNCTION"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W10"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 143,
+      "opcode": "ZEND_DECLARE_CONST",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 8369,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8338,
+          "symbol": "ZEND_DECLARE_CONST"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W10"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 144,
+      "opcode": "ZEND_DECLARE_CLASS",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 8036,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8028,
+          "symbol": "ZEND_DECLARE_CLASS"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 145,
+      "opcode": "ZEND_DECLARE_CLASS_DELAYED",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 8056,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8037,
+          "symbol": "ZEND_DECLARE_CLASS_DELAYED"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 146,
+      "opcode": "ZEND_DECLARE_ANON_CLASS",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 8081,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8057,
+          "symbol": "ZEND_DECLARE_ANON_CLASS"
+        },
+        {
+          "end_line": 293,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 293,
+          "symbol": "ZEND_DECLARE_ANON_CLASS"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 147,
+      "opcode": "ZEND_ADD_ARRAY_UNPACK",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 6533,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 6395,
+          "symbol": "ZEND_ADD_ARRAY_UNPACK"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W07"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 148,
+      "opcode": "ZEND_ISSET_ISEMPTY_PROP_OBJ",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 7743,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 7694,
+          "symbol": "ZEND_ISSET_ISEMPTY_PROP_OBJ"
+        },
+        {
+          "end_line": 288,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 288,
+          "symbol": "ZEND_ISSET_ISEMPTY_PROP_OBJ"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W09",
+      "number": 149,
+      "opcode": "ZEND_HANDLE_EXCEPTION",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 8245,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8169,
+          "symbol": "zend_dispatch_try_catch_finally_helper"
+        },
+        {
+          "end_line": 8305,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8246,
+          "symbol": "ZEND_HANDLE_EXCEPTION"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W09"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W11",
+      "number": 150,
+      "opcode": "ZEND_USER_OPCODE",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 3127,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2986,
+          "symbol": "zend_leave_helper"
+        },
+        {
+          "end_line": 8337,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8306,
+          "symbol": "ZEND_USER_OPCODE"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W11"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W09",
+      "number": 151,
+      "opcode": "ZEND_ASSERT_CHECK",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 8996,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8982,
+          "symbol": "ZEND_ASSERT_CHECK"
+        },
+        {
+          "end_line": 291,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 291,
+          "symbol": "ZEND_ASSERT_CHECK"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W09"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W16",
+      "number": 152,
+      "opcode": "ZEND_JMP_SET",
+      "proofs": [],
+      "rationale": "Unrelated value-producing control-flow semantics.",
+      "source_refs": [
+        {
+          "end_line": 7868,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 7822,
+          "symbol": "ZEND_JMP_SET"
+        },
+        {
+          "end_line": 17224,
+          "path": "ext/opcache/jit/zend_jit_ir.c",
+          "start_line": 17224,
+          "symbol": "ZEND_JMP_SET"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "accepted",
+      "later_wave": null,
+      "number": 153,
+      "opcode": "ZEND_UNSET_CV",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "local_storage_only",
+        "abstract_refcount_state",
+        "cleanup_debt_explicit"
+      ],
+      "rationale": "Local storage release with explicit cleanup debt.",
+      "source_refs": [
+        {
+          "end_line": 6705,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 6688,
+          "symbol": "ZEND_UNSET_CV"
+        }
+      ],
+      "transition_family": "storage_release",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "accepted",
+      "later_wave": null,
+      "number": 154,
+      "opcode": "ZEND_ISSET_ISEMPTY_CV",
+      "proofs": [
+        "complete_value_inventory",
+        "local_storage_only"
+      ],
+      "rationale": "Local undef/direct/reference observation.",
+      "source_refs": [
+        {
+          "end_line": 7549,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 7528,
+          "symbol": "ZEND_ISSET_ISEMPTY_CV"
+        },
+        {
+          "end_line": 2333,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2333,
+          "symbol": "ZEND_ISSET_ISEMPTY_CV"
+        },
+        {
+          "end_line": 5765,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5765,
+          "symbol": "ZEND_ISSET_ISEMPTY_CV"
+        }
+      ],
+      "transition_family": "storage_observe",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 155,
+      "opcode": "ZEND_FETCH_LIST_W",
+      "proofs": [],
+      "rationale": "List/array container write.",
+      "source_refs": [
+        {
+          "end_line": 2488,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 2466,
+          "symbol": "ZEND_FETCH_LIST_W"
+        },
+        {
+          "end_line": 2404,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2404,
+          "symbol": "ZEND_FETCH_LIST_W"
+        },
+        {
+          "end_line": 5903,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5903,
+          "symbol": "ZEND_FETCH_LIST_W"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "accepted",
+      "later_wave": null,
+      "number": 156,
+      "opcode": "ZEND_SEPARATE",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "abstract_refcount_state",
+        "alias_merge_conservative",
+        "separation_requirement_complete"
+      ],
+      "rationale": "Abstract separation requirement only; no clone execution.",
+      "source_refs": [
+        {
+          "end_line": 8453,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8439,
+          "symbol": "ZEND_SEPARATE"
+        }
+      ],
+      "transition_family": "separation_protocol",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 157,
+      "opcode": "ZEND_FETCH_CLASS_NAME",
+      "proofs": [],
+      "rationale": "Class identity and name semantics.",
+      "source_refs": [
+        {
+          "end_line": 9058,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8997,
+          "symbol": "ZEND_FETCH_CLASS_NAME"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 158,
+      "opcode": "ZEND_CALL_TRAMPOLINE",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 9206,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9059,
+          "symbol": "ZEND_CALL_TRAMPOLINE"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W10"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W09",
+      "number": 159,
+      "opcode": "ZEND_DISCARD_EXCEPTION",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 8716,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8689,
+          "symbol": "ZEND_DISCARD_EXCEPTION"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W09"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W11",
+      "number": 160,
+      "opcode": "ZEND_YIELD",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 8465,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8454,
+          "symbol": "zend_yield_in_closed_generator_helper"
+        },
+        {
+          "end_line": 8586,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8466,
+          "symbol": "ZEND_YIELD"
+        },
+        {
+          "end_line": 2759,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2759,
+          "symbol": "ZEND_YIELD"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W11"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W11",
+      "number": 161,
+      "opcode": "ZEND_GENERATOR_RETURN",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 4816,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 4770,
+          "symbol": "ZEND_GENERATOR_RETURN"
+        },
+        {
+          "end_line": 2754,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2754,
+          "symbol": "ZEND_GENERATOR_RETURN"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W11"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W09",
+      "number": 162,
+      "opcode": "ZEND_FAST_CALL",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 8727,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8717,
+          "symbol": "ZEND_FAST_CALL"
+        },
+        {
+          "end_line": 280,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 280,
+          "symbol": "ZEND_FAST_CALL"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W09"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W09",
+      "number": 163,
+      "opcode": "ZEND_FAST_RET",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 8245,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8169,
+          "symbol": "zend_dispatch_try_catch_finally_helper"
+        },
+        {
+          "end_line": 8747,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8728,
+          "symbol": "ZEND_FAST_RET"
+        },
+        {
+          "end_line": 2752,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2752,
+          "symbol": "ZEND_FAST_RET"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W09"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 164,
+      "opcode": "ZEND_RECV_VARIADIC",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 5905,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 5834,
+          "symbol": "ZEND_RECV_VARIADIC"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W07"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 165,
+      "opcode": "ZEND_SEND_UNPACK",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 5520,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 5303,
+          "symbol": "ZEND_SEND_UNPACK"
+        },
+        {
+          "end_line": 6458,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6458,
+          "symbol": "ZEND_SEND_UNPACK"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W07"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W11",
+      "number": 166,
+      "opcode": "ZEND_YIELD_FROM",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 8688,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8587,
+          "symbol": "ZEND_YIELD_FROM"
+        },
+        {
+          "end_line": 2760,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2760,
+          "symbol": "ZEND_YIELD_FROM"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W11"
+    },
+    {
+      "decision": "accepted",
+      "later_wave": null,
+      "number": 167,
+      "opcode": "ZEND_COPY_TMP",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "abstract_refcount_state",
+        "cleanup_debt_explicit"
+      ],
+      "rationale": "Explicit copy-addref or move transition.",
+      "source_refs": [
+        {
+          "end_line": 9830,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9822,
+          "symbol": "ZEND_COPY_TMP"
+        }
+      ],
+      "transition_family": "refcount_transfer",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 168,
+      "opcode": "ZEND_BIND_GLOBAL",
+      "proofs": [],
+      "rationale": "Global symbol-table reference binding.",
+      "source_refs": [
+        {
+          "end_line": 8827,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8748,
+          "symbol": "ZEND_BIND_GLOBAL"
+        },
+        {
+          "end_line": 2510,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2510,
+          "symbol": "ZEND_BIND_GLOBAL"
+        },
+        {
+          "end_line": 6160,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6160,
+          "symbol": "ZEND_BIND_GLOBAL"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 169,
+      "opcode": "ZEND_COALESCE",
+      "proofs": [],
+      "rationale": "Container/string-aware coalescing semantics.",
+      "source_refs": [
+        {
+          "end_line": 7909,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 7869,
+          "symbol": "ZEND_COALESCE"
+        },
+        {
+          "end_line": 17225,
+          "path": "ext/opcache/jit/zend_jit_ir.c",
+          "start_line": 17225,
+          "symbol": "ZEND_COALESCE"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "inherited",
+      "later_wave": null,
+      "number": 170,
+      "opcode": "ZEND_SPACESHIP",
+      "proofs": [
+        "source_cfg_complete",
+        "reducible_cfg",
+        "no_protected_regions",
+        "branch_successor_order_exact",
+        "phi_predecessor_order_exact",
+        "edge_statepoints_complete",
+        "no_calls",
+        "no_reentry",
+        "exact_scalar_types",
+        "same_exact_type",
+        "finite_f64"
+      ],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 801,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 788,
+          "symbol": "ZEND_SPACESHIP"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "inherited",
+      "w05_deferred_wave": null
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 171,
+      "opcode": "ZEND_FUNC_NUM_ARGS",
+      "proofs": [],
+      "rationale": "Runtime frame argument introspection.",
+      "source_refs": [
+        {
+          "end_line": 9744,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9737,
+          "symbol": "ZEND_FUNC_NUM_ARGS"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 172,
+      "opcode": "ZEND_FUNC_GET_ARGS",
+      "proofs": [],
+      "rationale": "Runtime frame argument container materialization.",
+      "source_refs": [
+        {
+          "end_line": 9821,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9745,
+          "symbol": "ZEND_FUNC_GET_ARGS"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 173,
+      "opcode": "ZEND_FETCH_STATIC_PROP_R",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 1892,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1858,
+          "symbol": "zend_fetch_static_prop_helper"
+        },
+        {
+          "end_line": 1898,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1893,
+          "symbol": "ZEND_FETCH_STATIC_PROP_R"
+        },
+        {
+          "end_line": 2494,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2494,
+          "symbol": "ZEND_FETCH_STATIC_PROP_R"
+        },
+        {
+          "end_line": 6144,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6144,
+          "symbol": "ZEND_FETCH_STATIC_PROP_R"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 174,
+      "opcode": "ZEND_FETCH_STATIC_PROP_W",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 1892,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1858,
+          "symbol": "zend_fetch_static_prop_helper"
+        },
+        {
+          "end_line": 1904,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1899,
+          "symbol": "ZEND_FETCH_STATIC_PROP_W"
+        },
+        {
+          "end_line": 2496,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2496,
+          "symbol": "ZEND_FETCH_STATIC_PROP_W"
+        },
+        {
+          "end_line": 6146,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6146,
+          "symbol": "ZEND_FETCH_STATIC_PROP_W"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 175,
+      "opcode": "ZEND_FETCH_STATIC_PROP_RW",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 1892,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1858,
+          "symbol": "zend_fetch_static_prop_helper"
+        },
+        {
+          "end_line": 1910,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1905,
+          "symbol": "ZEND_FETCH_STATIC_PROP_RW"
+        },
+        {
+          "end_line": 2497,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2497,
+          "symbol": "ZEND_FETCH_STATIC_PROP_RW"
+        },
+        {
+          "end_line": 6147,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6147,
+          "symbol": "ZEND_FETCH_STATIC_PROP_RW"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 176,
+      "opcode": "ZEND_FETCH_STATIC_PROP_IS",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 1892,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1858,
+          "symbol": "zend_fetch_static_prop_helper"
+        },
+        {
+          "end_line": 1931,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1927,
+          "symbol": "ZEND_FETCH_STATIC_PROP_IS"
+        },
+        {
+          "end_line": 2495,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2495,
+          "symbol": "ZEND_FETCH_STATIC_PROP_IS"
+        },
+        {
+          "end_line": 6145,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6145,
+          "symbol": "ZEND_FETCH_STATIC_PROP_IS"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 177,
+      "opcode": "ZEND_FETCH_STATIC_PROP_FUNC_ARG",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 1892,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1858,
+          "symbol": "zend_fetch_static_prop_helper"
+        },
+        {
+          "end_line": 1898,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1893,
+          "symbol": "ZEND_FETCH_STATIC_PROP_R"
+        },
+        {
+          "end_line": 1904,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1899,
+          "symbol": "ZEND_FETCH_STATIC_PROP_W"
+        },
+        {
+          "end_line": 1920,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1911,
+          "symbol": "ZEND_FETCH_STATIC_PROP_FUNC_ARG"
+        },
+        {
+          "end_line": 6137,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6137,
+          "symbol": "ZEND_FETCH_STATIC_PROP_FUNC_ARG"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 178,
+      "opcode": "ZEND_FETCH_STATIC_PROP_UNSET",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 1892,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1858,
+          "symbol": "zend_fetch_static_prop_helper"
+        },
+        {
+          "end_line": 1926,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 1921,
+          "symbol": "ZEND_FETCH_STATIC_PROP_UNSET"
+        },
+        {
+          "end_line": 2498,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2498,
+          "symbol": "ZEND_FETCH_STATIC_PROP_UNSET"
+        },
+        {
+          "end_line": 6148,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6148,
+          "symbol": "ZEND_FETCH_STATIC_PROP_UNSET"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 179,
+      "opcode": "ZEND_UNSET_STATIC_PROP",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 6795,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 6744,
+          "symbol": "ZEND_UNSET_STATIC_PROP"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 180,
+      "opcode": "ZEND_ISSET_ISEMPTY_STATIC_PROP",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 7614,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 7595,
+          "symbol": "ZEND_ISSET_ISEMPTY_STATIC_PROP"
+        },
+        {
+          "end_line": 289,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 289,
+          "symbol": "ZEND_ISSET_ISEMPTY_STATIC_PROP"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 181,
+      "opcode": "ZEND_FETCH_CLASS_CONSTANT",
+      "proofs": [],
+      "rationale": "Class constant resolution.",
+      "source_refs": [
+        {
+          "end_line": 6284,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 6152,
+          "symbol": "ZEND_FETCH_CLASS_CONSTANT"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 182,
+      "opcode": "ZEND_BIND_LEXICAL",
+      "proofs": [],
+      "rationale": "Lexical binding and closure storage.",
+      "source_refs": [
+        {
+          "end_line": 9238,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9207,
+          "symbol": "ZEND_BIND_LEXICAL"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 183,
+      "opcode": "ZEND_BIND_STATIC",
+      "proofs": [],
+      "rationale": "Static variable binding.",
+      "source_refs": [
+        {
+          "end_line": 9291,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9239,
+          "symbol": "ZEND_BIND_STATIC"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 184,
+      "opcode": "ZEND_FETCH_THIS",
+      "proofs": [],
+      "rationale": "Object identity and frame semantics.",
+      "source_refs": [
+        {
+          "end_line": 995,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 986,
+          "symbol": "zend_this_not_in_object_context_helper"
+        },
+        {
+          "end_line": 9334,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9320,
+          "symbol": "ZEND_FETCH_THIS"
+        },
+        {
+          "end_line": 2566,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2566,
+          "symbol": "ZEND_FETCH_THIS"
+        },
+        {
+          "end_line": 6271,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6271,
+          "symbol": "ZEND_FETCH_THIS"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "accepted",
+      "later_wave": null,
+      "number": 185,
+      "opcode": "ZEND_SEND_FUNC_ARG",
+      "proofs": [
+        "complete_value_inventory",
+        "atomic_value_plan",
+        "exact_direct_user_call",
+        "scalable_parameter_modes",
+        "reference_lvalue_exact",
+        "call_transfer_complete"
+      ],
+      "rationale": "Target-proven exact direct-user-call argument transfer.",
+      "source_refs": [
+        {
+          "end_line": 5302,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 5252,
+          "symbol": "ZEND_SEND_FUNC_ARG"
+        },
+        {
+          "end_line": 2115,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2115,
+          "symbol": "ZEND_SEND_FUNC_ARG"
+        },
+        {
+          "end_line": 5340,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5340,
+          "symbol": "ZEND_SEND_FUNC_ARG"
+        }
+      ],
+      "transition_family": "call_argument_transfer",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 186,
+      "opcode": "ZEND_ISSET_ISEMPTY_THIS",
+      "proofs": [],
+      "rationale": "Object identity observation.",
+      "source_refs": [
+        {
+          "end_line": 9354,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9345,
+          "symbol": "ZEND_ISSET_ISEMPTY_THIS"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 187,
+      "opcode": "ZEND_SWITCH_LONG",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 9428,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9401,
+          "symbol": "ZEND_SWITCH_LONG"
+        },
+        {
+          "end_line": 2571,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2571,
+          "symbol": "ZEND_SWITCH_LONG"
+        },
+        {
+          "end_line": 6283,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6283,
+          "symbol": "ZEND_SWITCH_LONG"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W07"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 188,
+      "opcode": "ZEND_SWITCH_STRING",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 9461,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9429,
+          "symbol": "ZEND_SWITCH_STRING"
+        },
+        {
+          "end_line": 2572,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2572,
+          "symbol": "ZEND_SWITCH_STRING"
+        },
+        {
+          "end_line": 6284,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6284,
+          "symbol": "ZEND_SWITCH_STRING"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W07"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 189,
+      "opcode": "ZEND_IN_ARRAY",
+      "proofs": [],
+      "rationale": "Concrete array operation semantics.",
+      "source_refs": [
+        {
+          "end_line": 9585,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9514,
+          "symbol": "ZEND_IN_ARRAY"
+        },
+        {
+          "end_line": 2359,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2359,
+          "symbol": "ZEND_IN_ARRAY"
+        },
+        {
+          "end_line": 5805,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5805,
+          "symbol": "ZEND_IN_ARRAY"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 190,
+      "opcode": "ZEND_COUNT",
+      "proofs": [],
+      "rationale": "Concrete array/countable operation semantics.",
+      "source_refs": [
+        {
+          "end_line": 9642,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9586,
+          "symbol": "ZEND_COUNT"
+        },
+        {
+          "end_line": 2557,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2557,
+          "symbol": "ZEND_COUNT"
+        },
+        {
+          "end_line": 6249,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6249,
+          "symbol": "ZEND_COUNT"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 191,
+      "opcode": "ZEND_GET_CLASS",
+      "proofs": [],
+      "rationale": "Class/object semantics.",
+      "source_refs": [
+        {
+          "end_line": 9700,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9658,
+          "symbol": "ZEND_GET_CLASS"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 192,
+      "opcode": "ZEND_GET_CALLED_CLASS",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 9718,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9701,
+          "symbol": "ZEND_GET_CALLED_CLASS"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W16",
+      "number": 193,
+      "opcode": "ZEND_GET_TYPE",
+      "proofs": [],
+      "rationale": "Unrelated runtime type query.",
+      "source_refs": [
+        {
+          "end_line": 9736,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9719,
+          "symbol": "ZEND_GET_TYPE"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 194,
+      "opcode": "ZEND_ARRAY_KEY_EXISTS",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 7776,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 7744,
+          "symbol": "ZEND_ARRAY_KEY_EXISTS"
+        },
+        {
+          "end_line": 294,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 294,
+          "symbol": "ZEND_ARRAY_KEY_EXISTS"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W07"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 195,
+      "opcode": "ZEND_MATCH",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 9502,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9462,
+          "symbol": "ZEND_MATCH"
+        },
+        {
+          "end_line": 2573,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2573,
+          "symbol": "ZEND_MATCH"
+        },
+        {
+          "end_line": 6285,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6285,
+          "symbol": "ZEND_MATCH"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W07"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W16",
+      "number": 196,
+      "opcode": "ZEND_CASE_STRICT",
+      "proofs": [],
+      "rationale": "Unrelated comparison semantics.",
+      "source_refs": [
+        {
+          "end_line": 478,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 465,
+          "symbol": "ZEND_CASE_STRICT"
+        },
+        {
+          "end_line": 2204,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2204,
+          "symbol": "ZEND_CASE_STRICT"
+        },
+        {
+          "end_line": 5481,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5481,
+          "symbol": "ZEND_CASE_STRICT"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W09",
+      "number": 197,
+      "opcode": "ZEND_MATCH_ERROR",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 9513,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9503,
+          "symbol": "ZEND_MATCH_ERROR"
+        },
+        {
+          "end_line": 2757,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2757,
+          "symbol": "ZEND_MATCH_ERROR"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W09"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W16",
+      "number": 198,
+      "opcode": "ZEND_JMP_NULL",
+      "proofs": [],
+      "rationale": "Unrelated value-producing control-flow semantics.",
+      "source_refs": [
+        {
+          "end_line": 7953,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 7910,
+          "symbol": "ZEND_JMP_NULL"
+        },
+        {
+          "end_line": 17226,
+          "path": "ext/opcache/jit/zend_jit_ir.c",
+          "start_line": 17226,
+          "symbol": "ZEND_JMP_NULL"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 199,
+      "opcode": "ZEND_CHECK_UNDEF_ARGS",
+      "proofs": [],
+      "rationale": "Runtime frame argument state.",
+      "source_refs": [
+        {
+          "end_line": 5706,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 5693,
+          "symbol": "ZEND_CHECK_UNDEF_ARGS"
+        },
+        {
+          "end_line": 2150,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2150,
+          "symbol": "ZEND_CHECK_UNDEF_ARGS"
+        },
+        {
+          "end_line": 5412,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5412,
+          "symbol": "ZEND_CHECK_UNDEF_ARGS"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 200,
+      "opcode": "ZEND_FETCH_GLOBALS",
+      "proofs": [],
+      "rationale": "Global symbol-table aliasing.",
+      "source_refs": [
+        {
+          "end_line": 9344,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9335,
+          "symbol": "ZEND_FETCH_GLOBALS"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W09",
+      "number": 201,
+      "opcode": "ZEND_VERIFY_NEVER_TYPE",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 4544,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 4538,
+          "symbol": "ZEND_VERIFY_NEVER_TYPE"
+        },
+        {
+          "end_line": 2762,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2762,
+          "symbol": "ZEND_VERIFY_NEVER_TYPE"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W09"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 202,
+      "opcode": "ZEND_CALLABLE_CONVERT",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 9868,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9831,
+          "symbol": "ZEND_CALLABLE_CONVERT"
+        },
+        {
+          "end_line": 303,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 303,
+          "symbol": "ZEND_CALLABLE_CONVERT"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W10"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 203,
+      "opcode": "ZEND_BIND_INIT_STATIC_OR_JMP",
+      "proofs": [],
+      "rationale": "Static variable binding and initialization.",
+      "source_refs": [
+        {
+          "end_line": 9319,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9292,
+          "symbol": "ZEND_BIND_INIT_STATIC_OR_JMP"
+        },
+        {
+          "end_line": 17252,
+          "path": "ext/opcache/jit/zend_jit_ir.c",
+          "start_line": 17252,
+          "symbol": "ZEND_BIND_INIT_STATIC_OR_JMP"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W15",
+      "number": 204,
+      "opcode": "ZEND_FRAMELESS_ICALL_0",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 9950,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9931,
+          "symbol": "ZEND_FRAMELESS_ICALL_0"
+        },
+        {
+          "end_line": 2694,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2694,
+          "symbol": "ZEND_FRAMELESS_ICALL_0"
+        },
+        {
+          "end_line": 6476,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6476,
+          "symbol": "ZEND_FRAMELESS_ICALL_0"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W15"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W15",
+      "number": 205,
+      "opcode": "ZEND_FRAMELESS_ICALL_1",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 9976,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9951,
+          "symbol": "ZEND_FRAMELESS_ICALL_1"
+        },
+        {
+          "end_line": 2697,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2697,
+          "symbol": "ZEND_FRAMELESS_ICALL_1"
+        },
+        {
+          "end_line": 6479,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6479,
+          "symbol": "ZEND_FRAMELESS_ICALL_1"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W15"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W15",
+      "number": 206,
+      "opcode": "ZEND_FRAMELESS_ICALL_2",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 10010,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9977,
+          "symbol": "ZEND_FRAMELESS_ICALL_2"
+        },
+        {
+          "end_line": 2701,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2701,
+          "symbol": "ZEND_FRAMELESS_ICALL_2"
+        },
+        {
+          "end_line": 6483,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6483,
+          "symbol": "ZEND_FRAMELESS_ICALL_2"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W15"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W15",
+      "number": 207,
+      "opcode": "ZEND_FRAMELESS_ICALL_3",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 10050,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 10011,
+          "symbol": "ZEND_FRAMELESS_ICALL_3"
+        },
+        {
+          "end_line": 2706,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2706,
+          "symbol": "ZEND_FRAMELESS_ICALL_3"
+        },
+        {
+          "end_line": 6488,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 6488,
+          "symbol": "ZEND_FRAMELESS_ICALL_3"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W15"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W15",
+      "number": 208,
+      "opcode": "ZEND_JMP_FRAMELESS",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 9930,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9908,
+          "symbol": "ZEND_JMP_FRAMELESS"
+        },
+        {
+          "end_line": 2623,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 2623,
+          "symbol": "ZEND_JMP_FRAMELESS"
+        },
+        {
+          "end_line": 5738,
+          "path": "ext/opcache/jit/zend_jit_trace.c",
+          "start_line": 5738,
+          "symbol": "ZEND_JMP_FRAMELESS"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W15"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W08",
+      "number": 209,
+      "opcode": "ZEND_INIT_PARENT_PROPERTY_HOOK_CALL",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 10106,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 10051,
+          "symbol": "ZEND_INIT_PARENT_PROPERTY_HOOK_CALL"
+        },
+        {
+          "end_line": 274,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 274,
+          "symbol": "ZEND_INIT_PARENT_PROPERTY_HOOK_CALL"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W08"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 210,
+      "opcode": "ZEND_DECLARE_ATTRIBUTED_CONST",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 8411,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8370,
+          "symbol": "ZEND_DECLARE_ATTRIBUTED_CONST"
+        },
+        {
+          "end_line": 4170,
+          "path": "ext/opcache/jit/zend_jit_ir.c",
+          "start_line": 4170,
+          "symbol": "ZEND_DECLARE_ATTRIBUTED_CONST"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W10"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W09",
+      "number": 211,
+      "opcode": "ZEND_TYPE_ASSERT",
+      "proofs": [],
+      "rationale": "Observable type-error and cleanup path.",
+      "source_refs": [
+        {
+          "end_line": 8958,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 8926,
+          "symbol": "ZEND_TYPE_ASSERT"
+        }
+      ],
+      "transition_family": "none",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W06"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W10",
+      "number": 212,
+      "opcode": "ZEND_CALLABLE_CONVERT_PARTIAL",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 1126,
+          "path": "Zend/zend_partial.c",
+          "start_line": 1079,
+          "symbol": "zp_bind"
+        },
+        {
+          "end_line": 1167,
+          "path": "Zend/zend_partial.c",
+          "start_line": 1128,
+          "symbol": "zend_partial_create"
+        },
+        {
+          "end_line": 9906,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 9869,
+          "symbol": "ZEND_CALLABLE_CONVERT_PARTIAL"
+        },
+        {
+          "end_line": 304,
+          "path": "ext/opcache/jit/zend_jit.c",
+          "start_line": 304,
+          "symbol": "ZEND_CALLABLE_CONVERT_PARTIAL"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W10"
+    },
+    {
+      "decision": "deferred",
+      "later_wave": "W07",
+      "number": 213,
+      "opcode": "ZEND_SEND_PLACEHOLDER",
+      "proofs": [],
+      "rationale": "Inherited unchanged from the live W05-v2 profile.",
+      "source_refs": [
+        {
+          "end_line": 5602,
+          "path": "Zend/zend_execute.c",
+          "start_line": 5541,
+          "symbol": "zend_handle_named_arg"
+        },
+        {
+          "end_line": 5751,
+          "path": "Zend/zend_vm_def.h",
+          "start_line": 5729,
+          "symbol": "ZEND_SEND_PLACEHOLDER"
+        }
+      ],
+      "transition_family": "inherited",
+      "w05_classification": "deferred",
+      "w05_deferred_wave": "W07"
+    }
+  ],
+  "proof_catalog": [
+    "abstract_refcount_state",
+    "alias_merge_conservative",
+    "atomic_value_plan",
+    "call_transfer_complete",
+    "cleanup_debt_explicit",
+    "complete_value_inventory",
+    "exact_direct_user_call",
+    "local_storage_only",
+    "old_value_transition_complete",
+    "reference_lvalue_exact",
+    "same_module_fingerprint",
+    "scalable_parameter_modes",
+    "separation_requirement_complete",
+    "stable_reference_cell_identity"
+  ],
+  "reserved_opcode_numbers": [
+    45,
+    79
+  ],
+  "sources": {
+    "w01": {
+      "active_opcode_count": 212,
+      "path": "docs/native-engine/semantics/opcodes/opcode-matrix.json",
+      "sha256": "96406ddd2fc7a0a58903c1d1f79cef61b0f6ad5a49801426779d26984942b60e",
+      "source_commit": "b7c524a19fa815799a858b98d39f176ca88648b1"
+    },
+    "w04": {
+      "active_opcode_count": 212,
+      "path": "docs/native-engine/control-flow/w04-opcode-profile.json",
+      "sha256": "366bc33ecc780064fe236a38da5376ff63125a26526908b51d4b565761e485a9"
+    },
+    "w05_v2": {
+      "active_opcode_count": 212,
+      "path": "docs/native-engine/calls/w05-opcode-profile.json",
+      "sha256": "b8b2626f38f6d53f7c849d2d0845171c99c008f9cf968014e2f7c94ea4eff3ff"
+    }
+  },
+  "unresolved_w06_count": 0,
+  "w06_accepted_count": 14
+}

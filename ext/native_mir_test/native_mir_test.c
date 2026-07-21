@@ -38,6 +38,7 @@
 #include "Zend/Native/MIR/Scalar/zend_mir_scalar_descriptors.h"
 #include "Zend/Native/MIR/zend_mir.h"
 #include "Zend/Native/Calls/Model/zend_mir_call_model.h"
+#include "Zend/Native/Values/Lowering/zend_mir_value_lowering.h"
 #include "Zend/Native/Lowering/Core/zend_mir_lowering_internal.h"
 #include "Zend/Native/Lowering/zend_mir_lowering_zend.h"
 #include "Zend/Native/TPDE/Common/zend_tpde_backend.h"
@@ -87,6 +88,15 @@ typedef enum _native_mir_test_fault {
 	NATIVE_MIR_TEST_FAULT_CONTROL_FLOW_VERIFIER_FAILURE,
 	NATIVE_MIR_TEST_FAULT_CALL_VERIFIER_FAILURE,
 	NATIVE_MIR_TEST_FAULT_FINGERPRINT_RECOMPUTE_FAILURE,
+	NATIVE_MIR_TEST_FAULT_VALUE_INVENTORY,
+	NATIVE_MIR_TEST_FAULT_VALUE_PLAN,
+	NATIVE_MIR_TEST_FAULT_VALUE_STORAGE,
+	NATIVE_MIR_TEST_FAULT_VALUE_REFERENCE,
+	NATIVE_MIR_TEST_FAULT_VALUE_ALIAS,
+	NATIVE_MIR_TEST_FAULT_VALUE_EVENT,
+	NATIVE_MIR_TEST_FAULT_VALUE_SEPARATION,
+	NATIVE_MIR_TEST_FAULT_VALUE_CALL_TRANSFER,
+	NATIVE_MIR_TEST_FAULT_VALUE_VERIFIER_FAILURE,
 	NATIVE_MIR_TEST_FAULT_DUMP_FAILURE,
 	NATIVE_MIR_TEST_FAULT_MAPPING_FAILURE
 } native_mir_test_fault;
@@ -174,6 +184,13 @@ extern zend_mir_lowering_result zend_mir_lower_w04_zend_op_array(
 	zend_mir_diagnostic_sink *diagnostics);
 
 extern zend_mir_w05_lowering_result zend_mir_lower_w05_zend_op_array(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	const zend_mir_lowering_module_ops *module_ops,
+	zend_mir_diagnostic_sink *diagnostics);
+
+extern zend_mir_w06_lowering_result zend_mir_lower_w06_zend_op_array(
 	const zend_script *script,
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,
@@ -398,6 +415,25 @@ static bool native_mir_test_fault_from_string(
 	} else if (zend_string_equals_literal(
 			value, "fingerprint_recompute_failure")) {
 		*out = NATIVE_MIR_TEST_FAULT_FINGERPRINT_RECOMPUTE_FAILURE;
+	} else if (zend_string_equals_literal(value, "value_inventory")) {
+		*out = NATIVE_MIR_TEST_FAULT_VALUE_INVENTORY;
+	} else if (zend_string_equals_literal(value, "value_plan")) {
+		*out = NATIVE_MIR_TEST_FAULT_VALUE_PLAN;
+	} else if (zend_string_equals_literal(value, "value_storage")) {
+		*out = NATIVE_MIR_TEST_FAULT_VALUE_STORAGE;
+	} else if (zend_string_equals_literal(value, "value_reference")) {
+		*out = NATIVE_MIR_TEST_FAULT_VALUE_REFERENCE;
+	} else if (zend_string_equals_literal(value, "value_alias")) {
+		*out = NATIVE_MIR_TEST_FAULT_VALUE_ALIAS;
+	} else if (zend_string_equals_literal(value, "value_event")) {
+		*out = NATIVE_MIR_TEST_FAULT_VALUE_EVENT;
+	} else if (zend_string_equals_literal(value, "value_separation")) {
+		*out = NATIVE_MIR_TEST_FAULT_VALUE_SEPARATION;
+	} else if (zend_string_equals_literal(value, "value_call_transfer")) {
+		*out = NATIVE_MIR_TEST_FAULT_VALUE_CALL_TRANSFER;
+	} else if (zend_string_equals_literal(
+			value, "value_verifier_failure")) {
+		*out = NATIVE_MIR_TEST_FAULT_VALUE_VERIFIER_FAILURE;
 	} else if (zend_string_equals_literal(value, "dump_failure")) {
 		*out = NATIVE_MIR_TEST_FAULT_DUMP_FAILURE;
 	} else if (zend_string_equals_literal(value, "mapping_failure")) {
@@ -440,7 +476,8 @@ static bool native_mir_test_parse_options(
 		} else if (zend_string_equals_literal(key, "wave")) {
 			if (Z_TYPE_P(value) != IS_LONG
 					|| (Z_LVAL_P(value) != 3 && Z_LVAL_P(value) != 4
-						&& Z_LVAL_P(value) != 5)) {
+						&& Z_LVAL_P(value) != 5
+						&& Z_LVAL_P(value) != 6)) {
 				goto invalid_value;
 			}
 			state->wave = (uint32_t) Z_LVAL_P(value);
@@ -976,7 +1013,7 @@ static bool native_mir_test_publish_lowering_result(
 	diagnostics.context = state;
 	diagnostics.emit = native_mir_test_emit_mir_diagnostic;
 	diagnostics.limit = state->diagnostic_limit;
-	if (!(wave == 5
+	if (!(wave >= 5
 			? ((result.status == ZEND_MIR_LOWERING_SUCCESS
 					&& result.diagnostic_code == ZEND_MIRL_OK
 					&& result.guarantees
@@ -1196,6 +1233,98 @@ static bool native_mir_test_lower_w05_and_dump(native_mir_test_state *state)
 		state, result.lowering, 5);
 }
 
+static bool native_mir_test_lower_w06_and_dump(native_mir_test_state *state)
+{
+	zend_mir_lowering_module_ops module_ops;
+	zend_mir_diagnostic_sink diagnostics;
+	zend_mir_w06_lowering_result result;
+#ifdef ZEND_MIR_W06_TEST_FAULTS
+	zend_mir_w06_test_fault value_fault = ZEND_MIR_W06_TEST_FAULT_NONE;
+#endif
+
+	memset(&module_ops, 0, sizeof(module_ops));
+	module_ops.context = state;
+	module_ops.create = native_mir_test_module_create;
+	module_ops.destroy = native_mir_test_module_destroy;
+	module_ops.mutator = native_mir_test_module_mutator;
+	module_ops.view = native_mir_test_module_view;
+	module_ops.finalize = native_mir_test_module_finalize;
+	module_ops.verify_stage1 = native_mir_test_verify_stage1;
+	module_ops.verify_stage2 = native_mir_test_verify_stage2;
+	memset(&diagnostics, 0, sizeof(diagnostics));
+	diagnostics.context = state;
+	diagnostics.emit = native_mir_test_emit_mir_diagnostic;
+	diagnostics.limit = state->diagnostic_limit;
+#ifdef ZEND_MIR_W06_TEST_FAULTS
+	switch (state->fault) {
+		case NATIVE_MIR_TEST_FAULT_VALUE_INVENTORY:
+			value_fault = ZEND_MIR_W06_TEST_FAULT_INVENTORY;
+			break;
+		case NATIVE_MIR_TEST_FAULT_VALUE_PLAN:
+			value_fault = ZEND_MIR_W06_TEST_FAULT_PLAN;
+			break;
+		case NATIVE_MIR_TEST_FAULT_VALUE_STORAGE:
+			value_fault = ZEND_MIR_W06_TEST_FAULT_STORAGE;
+			break;
+		case NATIVE_MIR_TEST_FAULT_VALUE_REFERENCE:
+			value_fault = ZEND_MIR_W06_TEST_FAULT_REFERENCE_CELL;
+			break;
+		case NATIVE_MIR_TEST_FAULT_VALUE_ALIAS:
+			value_fault = ZEND_MIR_W06_TEST_FAULT_ALIAS;
+			break;
+		case NATIVE_MIR_TEST_FAULT_VALUE_EVENT:
+			value_fault = ZEND_MIR_W06_TEST_FAULT_EVENT;
+			break;
+		case NATIVE_MIR_TEST_FAULT_VALUE_SEPARATION:
+			value_fault = ZEND_MIR_W06_TEST_FAULT_SEPARATION;
+			break;
+		case NATIVE_MIR_TEST_FAULT_VALUE_CALL_TRANSFER:
+			value_fault = ZEND_MIR_W06_TEST_FAULT_CALL_TRANSFER;
+			break;
+		case NATIVE_MIR_TEST_FAULT_STRUCTURAL_VERIFIER_FAILURE:
+			value_fault = ZEND_MIR_W06_TEST_FAULT_STRUCTURAL_VERIFIER;
+			break;
+		case NATIVE_MIR_TEST_FAULT_SCALAR_VERIFIER_FAILURE:
+			value_fault = ZEND_MIR_W06_TEST_FAULT_SCALAR_VERIFIER;
+			break;
+		case NATIVE_MIR_TEST_FAULT_CONTROL_FLOW_VERIFIER_FAILURE:
+			value_fault = ZEND_MIR_W06_TEST_FAULT_CONTROL_FLOW_VERIFIER;
+			break;
+		case NATIVE_MIR_TEST_FAULT_CALL_VERIFIER_FAILURE:
+			value_fault = ZEND_MIR_W06_TEST_FAULT_CALL_VERIFIER;
+			break;
+		case NATIVE_MIR_TEST_FAULT_FINGERPRINT_RECOMPUTE_FAILURE:
+			value_fault = ZEND_MIR_W06_TEST_FAULT_FINGERPRINT_RECOMPUTE;
+			break;
+		case NATIVE_MIR_TEST_FAULT_VALUE_VERIFIER_FAILURE:
+			value_fault = ZEND_MIR_W06_TEST_FAULT_VALUE_VERIFIER;
+			break;
+		default:
+			break;
+	}
+	zend_mir_w06_test_set_fault(value_fault);
+#endif
+	result = zend_mir_lower_w06_zend_op_array(
+		&state->script, state->selected, &state->ssa,
+		&module_ops, &diagnostics);
+#ifdef ZEND_MIR_W06_TEST_FAULTS
+	zend_mir_w06_test_set_fault(ZEND_MIR_W06_TEST_FAULT_NONE);
+#endif
+	if (!zend_mir_lowering_result_is_w06_failure_atomic(&result)) {
+		if (result.prerequisite.lowering.module != NULL) {
+			native_mir_test_module_destroy(
+				state, result.prerequisite.lowering.module);
+		}
+		native_mir_test_fail(
+			state, NATIVE_MIR_TEST_STATUS_ERROR,
+			NATIVE_MIR_TEST_PHASE_LOWERING, "MIRL", "MIRL0007",
+			"W06 lowering returned a non-atomic result");
+		return false;
+	}
+	return native_mir_test_publish_lowering_result(
+		state, result.prerequisite.lowering, 6);
+}
+
 static bool native_mir_test_lower_and_dump(native_mir_test_state *state)
 {
 	state->phase = NATIVE_MIR_TEST_PHASE_LOWERING;
@@ -1206,6 +1335,9 @@ static bool native_mir_test_lower_and_dump(native_mir_test_state *state)
 			NATIVE_MIR_TEST_PHASE_LOWERING, "MIRL", "MIRL0007",
 			"injected lowering failure");
 		return false;
+	}
+	if (state->wave == 6) {
+		return native_mir_test_lower_w06_and_dump(state);
 	}
 	if (state->wave == 5) {
 		return native_mir_test_lower_w05_and_dump(state);
@@ -1511,16 +1643,14 @@ static void native_mir_test_build_result(
 		add_next_index_zval(&diagnostics, &diagnostic);
 	}
 	add_assoc_zval(return_value, "diagnostics", &diagnostics);
-	if (state->execute_mode) {
-		array_init(&source_opcodes);
-		for (index = 0; index < state->source_opcode_count; index++) {
-			const char *name = zend_get_opcode_name(state->source_opcodes[index]);
+	array_init(&source_opcodes);
+	for (index = 0; index < state->source_opcode_count; index++) {
+		const char *name = zend_get_opcode_name(state->source_opcodes[index]);
 
-			add_next_index_string(
-				&source_opcodes, name != NULL ? (char *) name : "UNKNOWN");
-		}
-		add_assoc_zval(return_value, "source_opcodes", &source_opcodes);
+		add_next_index_string(
+			&source_opcodes, name != NULL ? (char *) name : "UNKNOWN");
 	}
+	add_assoc_zval(return_value, "source_opcodes", &source_opcodes);
 	if (state->status == NATIVE_MIR_TEST_STATUS_ACCEPTED
 			&& state->dump.s != NULL) {
 		add_assoc_str(

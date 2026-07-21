@@ -21,6 +21,9 @@
 #define ZEND_MIR_LOWERING_MAX_CLAIMS UINT32_C(64)
 
 struct _zend_mir_zend_source;
+struct _zend_script;
+struct _zend_op_array;
+struct _zend_ssa;
 
 typedef enum _zend_mir_lowering_profile_disposition {
 	ZEND_MIR_LOWERING_PROFILE_ACCEPTED = 0,
@@ -164,6 +167,13 @@ bool zend_mir_lowering_context_set_value_fact_resolver(
 bool zend_mir_lowering_context_set_zend_source(
 	zend_mir_lowering_context *context,
 	const struct _zend_mir_zend_source *source);
+
+zend_mir_w06_lowering_result zend_mir_lower_w06_zend_op_array(
+	const struct _zend_script *script,
+	const struct _zend_op_array *op_array,
+	const struct _zend_ssa *ssa,
+	const zend_mir_lowering_module_ops *module_ops,
+	zend_mir_diagnostic_sink *diagnostics);
 bool zend_mir_lowering_context_value_fact(
 	const zend_mir_lowering_context *context, zend_mir_value_id value_id,
 	zend_mir_value_fact_ref *fact_out);

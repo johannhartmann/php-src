@@ -37,6 +37,8 @@ Repository-wide and path-specific agent rules live in:
 17. [W05 atomic call-sequence model](adr/0019-w05-call-sequence-model.md)
 18. [Named MIR capabilities instead of stage numbers](adr/0020-named-mir-capabilities.md)
 19. [W05 direct-call model corrections](adr/0021-w05-call-model-corrections.md)
+20. [W06 storage, reference, and alias model](adr/0022-w06-storage-reference-alias-model.md)
+21. [W06 separation protocol, not container clone](adr/0023-w06-separation-protocol-not-container-clone.md)
 
 ## Development contracts
 
@@ -45,6 +47,8 @@ Repository-wide and path-specific agent rules live in:
 - [W03 lowering profile](lowering/README.md)
 - [W04 control-flow contracts](control-flow/contracts/source-cfg.md)
 - [W05 direct-user-call contracts](calls/contracts/call-sequence.md)
+- [W06 value and reference contracts](values/contracts/value-model.md)
+- [W06 separation and call-transfer contracts](values/contracts/separation-and-calls.md)
 
 CI invokes these technical checks directly. A change is accepted when its
 applicable contract, unit, differential, sanitizer, and fuzz tests pass; it

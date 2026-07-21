@@ -1,0 +1,253 @@
+{
+  "format_version": 2,
+  "modeled": [
+    {
+      "name": "local_make_ref",
+      "runtime": false,
+      "profile_opcode": "ZEND_MAKE_REF",
+      "evidence": "covered by immutable-plan unit and fuzz fixtures; ordinary local reference syntax compiles to ZEND_ASSIGN_REF"
+    },
+    {
+      "name": "local_assign_ref",
+      "runtime": true,
+      "source": "<?php function f(int $x,int $y){$x =& $y; return $x;}",
+      "function": "f",
+      "expected_status": "accepted",
+      "required_source_opcodes": ["ZEND_ASSIGN_REF"],
+      "required_mir_tokens": ["reference-cell rc0", "alias-relation ac0"],
+      "exact_mir_token_counts": {
+        "reference-cell ": 1,
+        "alias-relation ": 1
+      }
+    },
+    {
+      "name": "local_reference_rebinding",
+      "runtime": true,
+      "source": "<?php function f(int $x,int $y,int $z){$x =& $y; $y =& $z; return $x;}",
+      "function": "f",
+      "expected_status": "accepted",
+      "required_source_opcodes": ["ZEND_ASSIGN_REF"],
+      "required_mir_tokens": ["reference-cell rc0", "reference-cell rc1"],
+      "exact_mir_token_counts": {
+        "reference-cell ": 2,
+        "alias-relation ": 2
+      }
+    },
+    {
+      "name": "local_alias_write_scalar",
+      "runtime": true,
+      "source": "<?php function f(int &$x,int $y){$x=$y; return $x;}",
+      "function": "f",
+      "expected_status": "accepted",
+      "required_source_opcodes": ["ZEND_ASSIGN"],
+      "required_mir_tokens": ["value-storage vs0", "value-payload vp0"]
+    },
+    {
+      "name": "local_unset_and_isset",
+      "runtime": true,
+      "source": "<?php function f(int $x){unset($x); return isset($x);}",
+      "function": "f",
+      "expected_status": "accepted",
+      "required_source_opcodes": ["ZEND_UNSET_CV", "ZEND_ISSET_ISEMPTY_CV"],
+      "required_mir_tokens": ["value-storage vs0", "value-payload vp0"]
+    },
+    {
+      "name": "copy_tmp_refcounted_string",
+      "runtime": false,
+      "profile_opcode": "ZEND_COPY_TMP",
+      "evidence": "covered by immutable-plan unit and fuzz fixtures; the direct-call string corpus separately proves copy-addref call transfer"
+    },
+    {
+      "name": "separate_shared_string_protocol",
+      "runtime": false,
+      "profile_opcode": "ZEND_SEPARATE",
+      "evidence": "covered by immutable-plan unit and fuzz fixtures"
+    },
+    {
+      "name": "direct_user_by_ref_argument",
+      "runtime": true,
+      "source": "<?php function g(int &$x): int{return $x;} function f(int $x): int{return g($x);}",
+      "function": "f",
+      "expected_status": "accepted",
+      "required_source_opcodes": ["ZEND_SEND_REF"],
+      "required_mir_tokens": ["argument-reference rc0 action 4", "call-transfer cs0 parameter-modes 0+1"]
+    },
+    {
+      "name": "direct_user_refcounted_string_argument",
+      "runtime": true,
+      "source": "<?php function g(string $x): string{return $x;} function f(): string{return g(\"hello\");}",
+      "function": "f",
+      "expected_status": "accepted",
+      "required_source_opcodes": ["ZEND_SEND_VAL"],
+      "required_mir_tokens": ["category 1", "action 1"]
+    },
+    {
+      "name": "direct_user_refcounted_string_return",
+      "runtime": true,
+      "source": "<?php function g(string $x): string{return $x;} function f(): string{return g(\"hello\");}",
+      "function": "f",
+      "expected_status": "accepted",
+      "required_source_opcodes": ["ZEND_DO_UCALL"],
+      "required_mir_tokens": ["kind 5 state 1", "return-action 5"]
+    },
+    {
+      "name": "direct_user_by_ref_return",
+      "runtime": true,
+      "source": "<?php function &g(int &$x): int{return $x;} function f(int &$x){return g($x);}",
+      "function": "f",
+      "expected_status": "accepted",
+      "required_source_opcodes": ["ZEND_DO_UCALL"],
+      "required_mir_tokens": ["return-reference rc", "return-action 5", "reference-cell rc"]
+    },
+    {
+      "name": "nested_direct_refcounted_result",
+      "runtime": true,
+      "source": "<?php function g(string $x): string{return $x;} function f(): string{return g(g(\"hello\"));}",
+      "function": "f",
+      "expected_status": "accepted",
+      "required_source_opcodes": ["ZEND_DO_UCALL"],
+      "required_mir_tokens": ["call-transfer cs0", "call-transfer cs1", "return-storage vs"]
+    },
+    {
+      "name": "by_ref_parameter_65",
+      "runtime": true,
+      "generator": "by_ref_parameter",
+      "parameter": 65,
+      "function": "f",
+      "expected_status": "accepted",
+      "required_source_opcodes": ["ZEND_SEND_REF"],
+      "required_mir_tokens": ["parameter-modes 0+65", "argument 64"]
+    },
+    {
+      "name": "by_ref_parameter_128",
+      "runtime": true,
+      "generator": "by_ref_parameter",
+      "parameter": 128,
+      "function": "f",
+      "expected_status": "accepted",
+      "required_source_opcodes": ["ZEND_SEND_REF"],
+      "required_mir_tokens": ["parameter-modes 0+128", "argument 127"]
+    },
+    {
+      "name": "exact_recursive_direct_call_with_reference_model",
+      "runtime": true,
+      "source": "<?php function f(int &$x): int{return f($x);}",
+      "function": "f",
+      "expected_status": "accepted",
+      "required_source_opcodes": ["ZEND_SEND_REF"],
+      "required_mir_tokens": ["argument-reference rc0 action 4", "call-target ct0 kind direct_user"]
+    }
+  ],
+  "deferred": [
+    {
+      "name": "return_by_ref_non_lvalue_temporary",
+      "runtime": true,
+      "later_wave": "W10",
+      "source": "<?php function &f(int $x){return +$x;}",
+      "function": "f",
+      "expected_status": "rejected",
+      "expected_code": "MIRL0013",
+      "required_source_opcodes": ["ZEND_MUL", "ZEND_RETURN_BY_REF"]
+    },
+    {
+      "name": "array_write_or_clone",
+      "runtime": true,
+      "later_wave": "W07",
+      "source": "<?php function f(){return [1];}",
+      "function": "f",
+      "expected_status": "rejected",
+      "expected_code": "MIRL0035",
+      "required_source_opcodes": ["ZEND_RETURN"]
+    },
+    {
+      "name": "string_concat_or_rope",
+      "runtime": true,
+      "later_wave": "W07",
+      "source": "<?php function f(string $x){return $x.\"a\";}",
+      "function": "f",
+      "expected_status": "rejected",
+      "expected_code": "MIRL0013",
+      "required_source_opcodes": ["ZEND_FAST_CONCAT"]
+    },
+    {
+      "name": "object_reference_or_property",
+      "runtime": true,
+      "later_wave": "W08",
+      "source": "<?php function f(object $o){return $o->x;}",
+      "function": "f",
+      "expected_status": "rejected",
+      "expected_code": "MIRL0013",
+      "required_source_opcodes": ["ZEND_FETCH_OBJ_R"]
+    },
+    {
+      "name": "destructor_observable_overwrite",
+      "runtime": true,
+      "later_wave": "W09",
+      "source": "<?php function f(object $o){$o=1;return $o;}",
+      "function": "f",
+      "expected_status": "rejected",
+      "expected_code": "MIRL0033",
+      "required_source_opcodes": ["ZEND_ASSIGN"]
+    },
+    {
+      "name": "exception_during_release",
+      "runtime": true,
+      "later_wave": "W09",
+      "source": "<?php function f(object $o){unset($o);return 1;}",
+      "function": "f",
+      "expected_status": "rejected",
+      "expected_code": "MIRL0033",
+      "required_source_opcodes": ["ZEND_UNSET_CV"]
+    },
+    {
+      "name": "global_or_lexical_binding",
+      "runtime": true,
+      "later_wave": "W10",
+      "source": "<?php function f(){global $x; return $x;}",
+      "function": "f",
+      "expected_status": "rejected",
+      "expected_code": "MIRL0013",
+      "required_source_opcodes": ["ZEND_BIND_GLOBAL"]
+    },
+    {
+      "name": "dynamic_symbol_table_alias",
+      "runtime": true,
+      "later_wave": "W10",
+      "source": "<?php function f($n,$x){${$n} =& $x; return $x;}",
+      "function": "f",
+      "expected_status": "rejected",
+      "expected_code": "SSA0001",
+      "required_source_opcodes": ["ZEND_FETCH_W", "ZEND_ASSIGN_REF"]
+    },
+    {
+      "name": "internal_function_reference_transfer",
+      "runtime": true,
+      "later_wave": "W15",
+      "source": "<?php function f($x){sort($x);return $x;}",
+      "function": "f",
+      "expected_status": "rejected",
+      "expected_code": "MIRL0036",
+      "required_source_opcodes": ["ZEND_DO_ICALL"]
+    },
+    {
+      "name": "echo_or_silence_runtime",
+      "runtime": true,
+      "later_wave": "W15",
+      "source": "<?php function f($x){echo $x;return 1;}",
+      "function": "f",
+      "expected_status": "rejected",
+      "expected_code": "MIRL0013",
+      "required_source_opcodes": ["ZEND_ECHO"]
+    },
+    {
+      "name": "unrelated_scalar_gap",
+      "runtime": true,
+      "later_wave": "W16",
+      "source": "<?php function f(int $x){return $x/2;}",
+      "function": "f",
+      "expected_status": "rejected",
+      "expected_code": "MIRL0013",
+      "required_source_opcodes": ["ZEND_DIV"]
+    }
+  ]
+}
