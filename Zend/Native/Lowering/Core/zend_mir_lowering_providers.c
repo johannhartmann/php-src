@@ -1723,12 +1723,13 @@ zend_mir_lowering_result zend_mir_lower_w04_zend_op_array(
 	return result;
 }
 
-zend_mir_w05_lowering_result zend_mir_lower_w05_zend_op_array(
+static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 	const zend_script *script,
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,
 	const zend_mir_lowering_module_ops *module_ops,
-	zend_mir_diagnostic_sink *diagnostics)
+	zend_mir_diagnostic_sink *diagnostics,
+	bool w07_execution)
 {
 	zend_mir_w03_integration integration;
 	zend_mir_frontend_diagnostic frontend_diagnostic;
@@ -1751,8 +1752,11 @@ zend_mir_w05_lowering_result zend_mir_lower_w05_zend_op_array(
 		return zend_mir_w05_integration_result(
 			ZEND_MIR_LOWERING_REJECTED, ZEND_MIRL_INVALID_SOURCE);
 	}
-	status = zend_mir_zend_source_preflight_w05(
-		script, op_array, ssa, &frontend_diagnostic);
+	status = w07_execution
+		? zend_mir_zend_source_preflight_w07(
+			script, op_array, ssa, &frontend_diagnostic)
+		: zend_mir_zend_source_preflight_w05(
+			script, op_array, ssa, &frontend_diagnostic);
 	if (status != ZEND_MIR_LOWERING_SUCCESS) {
 		return zend_mir_w05_integration_result(
 			status, frontend_diagnostic.code);
@@ -1831,10 +1835,35 @@ zend_mir_w05_lowering_result zend_mir_lower_w05_zend_op_array(
 		return zend_mir_w05_integration_result(
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_INVALID_SOURCE);
 	}
-	result = zend_mir_lower_w05_zend_source(
-		&integration.lowering_context, NULL, &map, &calls, &resolver, NULL);
+	result = w07_execution
+		? zend_mir_lower_w07_zend_source(
+			&integration.lowering_context, NULL, &map, &calls, &resolver, NULL)
+		: zend_mir_lower_w05_zend_source(
+			&integration.lowering_context, NULL, &map, &calls, &resolver, NULL);
 	zend_mir_w03_release(&integration);
 	return result;
+}
+
+zend_mir_w05_lowering_result zend_mir_lower_w05_zend_op_array(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	const zend_mir_lowering_module_ops *module_ops,
+	zend_mir_diagnostic_sink *diagnostics)
+{
+	return zend_mir_lower_direct_user_op_array(
+		script, op_array, ssa, module_ops, diagnostics, false);
+}
+
+zend_mir_w05_lowering_result zend_mir_lower_w07_zend_op_array(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	const zend_mir_lowering_module_ops *module_ops,
+	zend_mir_diagnostic_sink *diagnostics)
+{
+	return zend_mir_lower_direct_user_op_array(
+		script, op_array, ssa, module_ops, diagnostics, true);
 }
 
 static zend_mir_w06_lowering_result zend_mir_w06_integration_result(

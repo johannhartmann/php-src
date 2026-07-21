@@ -51,12 +51,12 @@ public:
 	static constexpr bool TPDE_PROVIDES_HIGHEST_VAL_IDX = true;
 	static constexpr bool TPDE_LIVENESS_VISIT_ARGS = true;
 
-	static constexpr uint32_t ARGUMENTS_VALUE = 0;
-	static constexpr uint32_t SLOTS_VALUE = 1;
-	static constexpr uint32_t RESULT_VALUE = 2;
-	static constexpr uint32_t MIR_VALUE_BASE = 3;
+	static constexpr uint32_t EXECUTE_DATA_VALUE = 0;
+	static constexpr uint32_t FRAME_VALUE = 1;
+	static constexpr uint32_t MIR_VALUE_BASE = 2;
 
 	enum class InstKind : uint8_t {
+		LoadFrame,
 		LoadArgument,
 		MIR,
 	};
@@ -109,9 +109,7 @@ public:
 private:
 	const zend_tpde_plan *plan_;
 	std::array<IRFuncRef, 1> functions_{IRFuncRef{0}};
-	std::array<IRValueRef, 3> arguments_{
-		IRValueRef{ARGUMENTS_VALUE}, IRValueRef{SLOTS_VALUE},
-		IRValueRef{RESULT_VALUE}};
+	std::array<IRValueRef, 1> arguments_{IRValueRef{EXECUTE_DATA_VALUE}};
 	std::vector<IRValueRef> no_values_;
 	std::vector<IRBlockRef> blocks_;
 	std::vector<std::vector<IRBlockRef>> successors_;
@@ -181,8 +179,16 @@ public:
 			valid_ = false;
 			return;
 		}
+		add_node(static_cast<uint32_t>(entry), InstNode{
+			InstKind::LoadFrame,
+			UINT32_MAX,
+			UINT32_MAX,
+			IRValueRef{FRAME_VALUE},
+			{IRValueRef{EXECUTE_DATA_VALUE}},
+			true});
 		for (uint32_t i = 0; i < plan_->value_count; ++i) {
-			if (plan_->values[i].argument_index < 0) {
+			if (plan_->values[i].argument_index < 0
+					|| plan_->values[i].exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
 				continue;
 			}
 			add_node(static_cast<uint32_t>(entry), InstNode{
@@ -190,7 +196,7 @@ public:
 				UINT32_MAX,
 				static_cast<uint32_t>(plan_->values[i].argument_index),
 				IRValueRef{MIR_VALUE_BASE + i},
-				{IRValueRef{ARGUMENTS_VALUE}},
+				{IRValueRef{FRAME_VALUE}},
 				true});
 		}
 
@@ -239,7 +245,9 @@ public:
 			std::vector<IRValueRef> operands;
 			operands.reserve(instruction.operand_count +
 				(instruction.record.opcode == ZEND_MIR_OPCODE_RETURN));
-			for (uint32_t n = 0; n < instruction.operand_count; ++n) {
+			uint32_t data_operand_count = instruction.record.opcode
+				== ZEND_MIR_OPCODE_STATEPOINT ? 0 : instruction.operand_count;
+			for (uint32_t n = 0; n < data_operand_count; ++n) {
 				IRValueRef operand = value_ref(zend_tpde_operand_at(
 					plan_, &instruction, n));
 				if (operand == INVALID_VALUE_REF) {
@@ -247,12 +255,21 @@ public:
 				}
 				operands.push_back(operand);
 			}
-			if (instruction.record.opcode == ZEND_MIR_OPCODE_RETURN) {
-				operands.push_back(IRValueRef{RESULT_VALUE});
+			if (instruction.record.opcode == ZEND_MIR_OPCODE_RETURN
+					|| instruction.source_effect != 0) {
+				operands.push_back(IRValueRef{FRAME_VALUE});
+			}
+			if (instruction.record.opcode
+					== ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
+				/* begin + one setter per argument + invoke_finish */
+				for (uint32_t n = 0; n < instruction.operand_count + 2; ++n) {
+					operands.push_back(IRValueRef{FRAME_VALUE});
+				}
 			}
 			add_node(static_cast<uint32_t>(block), InstNode{
 				InstKind::MIR, i, UINT32_MAX, result, std::move(operands),
-				result != INVALID_VALUE_REF});
+				result != INVALID_VALUE_REF
+					&& exact_type(result) != ZEND_MIR_SCALAR_TYPE_NULL});
 		}
 	}
 
@@ -274,9 +291,25 @@ public:
 		return index < MIR_VALUE_BASE ? ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER
 			: plan_->values[index - MIR_VALUE_BASE].representation;
 	}
+	zend_mir_scalar_type_mask exact_type(IRValueRef value) const {
+		uint32_t index = static_cast<uint32_t>(value);
+		return index < MIR_VALUE_BASE ? ZEND_MIR_SCALAR_TYPE_NONE
+			: plan_->values[index - MIR_VALUE_BASE].exact_type;
+	}
 	bool constant(IRValueRef value, uint64_t *bits) const {
 		uint32_t index = static_cast<uint32_t>(value);
-		if (index < MIR_VALUE_BASE || !plan_->values[index - MIR_VALUE_BASE].constant) {
+		if (index < MIR_VALUE_BASE) {
+			return false;
+		}
+		/* Null has no runtime payload. Treat every exact-null value as the
+		 * canonical zero constant, including arguments and call results, while
+		 * retaining the instruction that produces its observable call effects. */
+		if (plan_->values[index - MIR_VALUE_BASE].exact_type
+				== ZEND_MIR_SCALAR_TYPE_NULL) {
+			*bits = 0;
+			return true;
+		}
+		if (!plan_->values[index - MIR_VALUE_BASE].constant) {
 			return false;
 		}
 		*bits = plan_->values[index - MIR_VALUE_BASE].constant_bits;

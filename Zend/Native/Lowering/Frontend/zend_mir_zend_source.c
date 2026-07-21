@@ -2016,9 +2016,10 @@ bool zend_mir_frontend_w05_result_fact_at(
 	return false;
 }
 
-zend_mir_lowering_status zend_mir_zend_source_preflight_w05(
+static zend_mir_lowering_status zend_mir_zend_source_preflight_direct_calls(
 	const zend_script *script, const zend_op_array *op_array,
-	const zend_ssa *ssa, zend_mir_frontend_diagnostic *diagnostic)
+	const zend_ssa *ssa, zend_mir_frontend_diagnostic *diagnostic,
+	bool w07_execution)
 {
 	zend_mir_zend_source source;
 	zend_mir_frontend_call_inventory *inventory;
@@ -2060,7 +2061,8 @@ zend_mir_lowering_status zend_mir_zend_source_preflight_w05(
 	for (index = 0; index < inventory->argument_count; index++) {
 		const zend_mir_source_call_argument_ref *argument =
 			&inventory->arguments[index];
-		if (zend_mir_frontend_w05_argument_is_call_result(
+		if (!w07_execution
+				&& zend_mir_frontend_w05_argument_is_call_result(
 				inventory, argument)) {
 			uint32_t opline_index = argument->send_opline_index;
 			uint32_t ssa_variable_id = argument->value_ssa_variable_id;
@@ -2166,7 +2168,7 @@ zend_mir_lowering_status zend_mir_zend_source_preflight_w05(
 			target = &inventory->targets[site->target_id].record;
 			if ((site->flags & ZEND_MIR_SOURCE_CALL_SITE_PROTECTED) != 0) {
 				code = ZEND_MIRL_W05_PROTECTED_CALL;
-			} else if ((site->flags
+			} else if (!w07_execution && (site->flags
 					& (ZEND_MIR_SOURCE_CALL_SITE_NESTED
 						| ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR))
 					== (ZEND_MIR_SOURCE_CALL_SITE_NESTED
@@ -2175,7 +2177,12 @@ zend_mir_lowering_status zend_mir_zend_source_preflight_w05(
 			} else if (!zend_mir_frontend_w05_result_is_supported(
 					op_array, ssa, inventory, site)) {
 				code = ZEND_MIRL_W05_UNSUPPORTED_RESULT;
-			} else if (site->argument_span.count != target->num_args) {
+			} else if ((!w07_execution
+					&& site->argument_span.count != target->num_args)
+					|| (w07_execution
+						&& (site->argument_span.count
+							< target->required_num_args
+							|| site->argument_span.count > target->num_args))) {
 				code = ZEND_MIRL_W05_ARGUMENT_COUNT_MISMATCH;
 			}
 		}
@@ -2191,6 +2198,22 @@ zend_mir_lowering_status zend_mir_zend_source_preflight_w05(
 	}
 	zend_mir_zend_source_release_w05(&source);
 	return ZEND_MIR_LOWERING_SUCCESS;
+}
+
+zend_mir_lowering_status zend_mir_zend_source_preflight_w05(
+	const zend_script *script, const zend_op_array *op_array,
+	const zend_ssa *ssa, zend_mir_frontend_diagnostic *diagnostic)
+{
+	return zend_mir_zend_source_preflight_direct_calls(
+		script, op_array, ssa, diagnostic, false);
+}
+
+zend_mir_lowering_status zend_mir_zend_source_preflight_w07(
+	const zend_script *script, const zend_op_array *op_array,
+	const zend_ssa *ssa, zend_mir_frontend_diagnostic *diagnostic)
+{
+	return zend_mir_zend_source_preflight_direct_calls(
+		script, op_array, ssa, diagnostic, true);
 }
 
 zend_mir_lowering_status zend_mir_zend_source_enable_w05(
