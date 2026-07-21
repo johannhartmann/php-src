@@ -9,6 +9,7 @@
 struct zend_tpde_value {
 	zend_mir_value_id id;
 	zend_mir_representation representation;
+	zend_mir_scalar_type_mask exact_type;
 	int32_t argument_index;
 	bool constant;
 	uint64_t constant_bits;
@@ -18,6 +19,9 @@ struct zend_tpde_instruction {
 	zend_mir_instruction_record record;
 	uint32_t operand_offset;
 	uint32_t operand_count;
+	zend_native_entry_cell *entry_cell;
+	zend_native_source_effect_kind source_effect;
+	zend_mir_scalar_type_mask source_effect_exact_type;
 };
 
 struct zend_tpde_plan {
@@ -32,6 +36,7 @@ struct zend_tpde_plan {
 	zend_mir_value_id *operands;
 	uint32_t operand_count;
 	uint32_t argument_count;
+	bool may_emit_calls;
 };
 
 struct zend_native_image {
@@ -45,14 +50,11 @@ struct zend_native_image {
 	void (*destroy_target_state)(void *);
 };
 
-typedef void (*zend_native_entry)(
-	const zend_native_scalar *, uint64_t *, zend_native_scalar *);
-
 struct zend_native_code {
 	zend_native_target target;
 	void *mapping;
 	size_t mapping_size;
-	zend_native_entry entry;
+	zend_native_frame_entry_t entry;
 	uint32_t slot_count;
 	uint32_t argument_count;
 	bool writable;

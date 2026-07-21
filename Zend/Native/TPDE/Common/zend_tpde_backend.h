@@ -1,4 +1,4 @@
-/* C boundary for the two executable W06 TPDE targets. */
+/* C boundary for executable ZNMIR on the supported TPDE targets. */
 
 #ifndef ZEND_TPDE_BACKEND_H
 #define ZEND_TPDE_BACKEND_H
@@ -44,12 +44,62 @@ typedef struct _zend_native_scalar {
 	uint32_t reserved;
 } zend_native_scalar;
 
+typedef enum _zend_native_status {
+	ZEND_NATIVE_RETURNED = 0,
+	ZEND_NATIVE_EXCEPTION = 1,
+	ZEND_NATIVE_BAILOUT = 2
+} zend_native_status;
+
+typedef zend_native_status (*zend_native_frame_entry_t)(
+	zend_execute_data *execute_data);
+
 typedef struct zend_native_image zend_native_image;
 typedef struct zend_native_code zend_native_code;
+typedef struct _zend_native_entry_cell zend_native_entry_cell;
+
+typedef struct _zend_native_call_binding {
+	zend_mir_call_target_id target_id;
+	zend_native_entry_cell *entry_cell;
+} zend_native_call_binding;
+
+typedef enum _zend_native_source_effect_kind {
+	ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR = 1
+} zend_native_source_effect_kind;
+
+/*
+ * W07 source effects remain process-local compiler input. They augment a
+ * verified W05/W06 module without changing either persistent MIR contract.
+ * source_position_id must identify exactly one scalar carrier instruction in
+ * the module, preserving source order and its proven scalar type.
+ */
+typedef struct _zend_native_source_effect {
+	zend_mir_source_position_id source_position_id;
+	zend_native_source_effect_kind kind;
+	zend_mir_scalar_type_mask exact_type;
+} zend_native_source_effect;
 
 zend_result zend_tpde_compile_module(
 	zend_native_target target,
 	const zend_mir_view *module,
+	zend_native_image **out_image,
+	zend_native_diagnostic *diag);
+
+zend_result zend_tpde_compile_module_bound(
+	zend_native_target target,
+	const zend_mir_view *module,
+	const zend_native_call_binding *bindings,
+	uint32_t binding_count,
+	zend_native_image **out_image,
+	zend_native_diagnostic *diag);
+
+zend_result zend_tpde_compile_module_w07(
+	zend_native_target target,
+	const zend_mir_view *module,
+	const zend_native_call_binding *bindings,
+	uint32_t binding_count,
+	const zend_native_source_effect *effects,
+	uint32_t effect_count,
+	uint32_t frame_argument_count,
 	zend_native_image **out_image,
 	zend_native_diagnostic *diag);
 
@@ -64,6 +114,11 @@ zend_result zend_native_execute(
 	const zend_native_scalar *arguments,
 	uint32_t argument_count,
 	zend_native_scalar *result,
+	zend_native_diagnostic *diag);
+
+zend_native_status zend_native_execute_frame(
+	const zend_native_code *code,
+	zend_execute_data *execute_data,
 	zend_native_diagnostic *diag);
 
 void zend_native_image_destroy(zend_native_image *image);

@@ -24,12 +24,18 @@ class ExtensionW05Tests(unittest.TestCase):
 
     def test_compile_dump_never_executes_source_or_mir(self) -> None:
         self.assertIn("ZEND_COMPILE_WITHOUT_EXECUTION", self.extension)
+        match = re.search(
+            r"ZEND_FUNCTION\(native_mir_test_compile_dump\).*?^}",
+            self.extension,
+            re.DOTALL | re.MULTILINE,
+        )
+        self.assertIsNotNone(match)
         forbidden = re.compile(
             r"\b(?:zend_execute|execute_ex|zend_vm_call_opcode_handler|"
             r"mir_interpret|mir_evaluate)\b",
             re.IGNORECASE,
         )
-        self.assertIsNone(forbidden.search(self.extension))
+        self.assertIsNone(forbidden.search(match.group(0)))
 
     def test_w05_uses_only_the_integrated_wrapper(self) -> None:
         match = re.search(

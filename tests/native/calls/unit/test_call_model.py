@@ -141,7 +141,7 @@ class CallModelTests(unittest.TestCase):
 
     def test_final_verifier_precedes_determinism_check(self) -> None:
         model = MODEL.read_text(encoding="utf-8")
-        lower = model[model.index("zend_mir_lower_w05_zend_source(") :]
+        lower = model[model.index("zend_mir_lower_direct_user_calls(") :]
         final_verify = lower.index("zend_mir_w05_verify_final_composition(")
         fingerprint = lower.index("zend_mir_w05_build_fingerprints(")
         recompute = lower.index(

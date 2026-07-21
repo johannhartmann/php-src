@@ -3,12 +3,12 @@
 /** @generate-class-entries */
 
 /**
- * Compile source without executing it and return a canonical W03-W06 MIR result.
+ * Compile source without executing it and return a canonical W03-W07 MIR result.
  *
  * Result shape:
  * array{
  *     schema_version: int,
- *     wave?: 4|5|6,
+ *     wave?: 4|5|6|7,
  *     status: "accepted"|"rejected"|"error",
  *     phase: "compile"|"ssa"|"lowering"|"verify"|"dump"|"complete",
  *     source: array{filename: string, byte_length: int, source_id: string},
@@ -26,7 +26,7 @@
  * array{
  *     function?: ?string,
  *     diagnostic_limit?: int,
- *     wave?: 3|4|5|6,
+ *     wave?: 3|4|5|6|7,
  *     arena_chunk_size?: int,
  *     compiler_mode?: "ignore_user_functions",
  *     fault?: null|"compile_bailout"|"ssa_failure"|"lower_failure"|
@@ -51,8 +51,8 @@ function native_mir_test_compile_dump(
 ): array {}
 
 /**
- * Compile source through SSA and verified W03/W04 ZNMIR, publish native code,
- * and execute that code without entering a VM opcode handler.
+ * Compile source through SSA and verified ZNMIR, publish native code, and
+ * execute it over real Zend frames without entering a VM opcode handler.
  *
  * @return array
  * @param list<null|bool|int|float> $arguments
