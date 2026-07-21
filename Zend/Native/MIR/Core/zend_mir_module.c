@@ -1523,15 +1523,23 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 	module->instructions.count = total_instructions;
 	module->instructions.capacity = total_instructions;
 	module->operand_count += staging->argument_count;
-	memcpy(module->call_targets.items, staging->targets,
-		(size_t) staging->target_count * sizeof(*staging->targets));
-	memcpy(module->call_arguments.items, staging->arguments,
-		(size_t) staging->argument_count * sizeof(*staging->arguments));
-	memcpy(module->call_continuations.items, staging->continuations,
-		(size_t) staging->continuation_count
-			* sizeof(*staging->continuations));
-	memcpy(module->call_sites.items, staging->sites,
-		(size_t) staging->site_count * sizeof(*staging->sites));
+	if (staging->target_count != 0) {
+		memcpy(module->call_targets.items, staging->targets,
+			(size_t) staging->target_count * sizeof(*staging->targets));
+	}
+	if (staging->argument_count != 0) {
+		memcpy(module->call_arguments.items, staging->arguments,
+			(size_t) staging->argument_count * sizeof(*staging->arguments));
+	}
+	if (staging->continuation_count != 0) {
+		memcpy(module->call_continuations.items, staging->continuations,
+			(size_t) staging->continuation_count
+				* sizeof(*staging->continuations));
+	}
+	if (staging->site_count != 0) {
+		memcpy(module->call_sites.items, staging->sites,
+			(size_t) staging->site_count * sizeof(*staging->sites));
+	}
 	module->call_targets.count = staging->target_count;
 	module->call_arguments.count = staging->argument_count;
 	module->call_continuations.count = staging->continuation_count;
