@@ -170,6 +170,8 @@ def command_write_manifest(args: argparse.Namespace) -> int:
             "build_type": args.build_type,
             "thread_safety": args.thread_safety,
             "sanitizer": args.sanitizer,
+            "target_id": args.target_id,
+            "target_triple": args.target_triple,
         },
         "configure": {
             "command": [args.configure_program] + args.configure_arg,
@@ -308,6 +310,8 @@ def parser() -> argparse.ArgumentParser:
     manifest.add_argument("--build-type", required=True)
     manifest.add_argument("--thread-safety", required=True)
     manifest.add_argument("--sanitizer", required=True)
+    manifest.add_argument("--target-id", required=True)
+    manifest.add_argument("--target-triple", required=True)
     manifest.add_argument("--configure-program", required=True)
     manifest.add_argument("--configure-arg", action="append", default=[])
     manifest.add_argument("--fingerprint", required=True)

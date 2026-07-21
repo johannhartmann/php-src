@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "Zend/Native/Lowering/Frontend/zend_mir_zend_source.h"
 #include "Zend/zend_compile.h"

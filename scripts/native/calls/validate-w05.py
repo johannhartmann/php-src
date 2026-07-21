@@ -22,7 +22,6 @@ GOLDENS = ROOT / "tests/native/calls/integration/goldens/index.json"
 ARCHITECTURE_PATHS = (
     ROOT / "Zend/Native/Calls/Model/zend_mir_call_model.c",
     ROOT / "Zend/Native/Calls/Model/zend_mir_call_model.h",
-    ROOT / "ext/native_mir_test/native_mir_test.c",
 )
 FORBIDDEN_RUNTIME = re.compile(
     r"\b(?:zend_execute(?:_ex|_internal)?|execute_ex|zend_vm_execute|tpde|"

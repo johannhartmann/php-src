@@ -40,6 +40,7 @@
 #include "Zend/Native/Calls/Model/zend_mir_call_model.h"
 #include "Zend/Native/Lowering/Core/zend_mir_lowering_internal.h"
 #include "Zend/Native/Lowering/zend_mir_lowering_zend.h"
+#include "Zend/Native/TPDE/Common/zend_tpde_backend.h"
 
 #define NATIVE_MIR_TEST_SCHEMA_VERSION 1
 #define NATIVE_MIR_TEST_DEFAULT_DIAGNOSTIC_LIMIT 32
@@ -55,6 +56,9 @@ typedef enum _native_mir_test_phase {
 	NATIVE_MIR_TEST_PHASE_LOWERING,
 	NATIVE_MIR_TEST_PHASE_VERIFY,
 	NATIVE_MIR_TEST_PHASE_DUMP,
+	NATIVE_MIR_TEST_PHASE_CODEGEN,
+	NATIVE_MIR_TEST_PHASE_PUBLISH,
+	NATIVE_MIR_TEST_PHASE_EXECUTE,
 	NATIVE_MIR_TEST_PHASE_COMPLETE
 } native_mir_test_phase;
 
@@ -83,7 +87,8 @@ typedef enum _native_mir_test_fault {
 	NATIVE_MIR_TEST_FAULT_CONTROL_FLOW_VERIFIER_FAILURE,
 	NATIVE_MIR_TEST_FAULT_CALL_VERIFIER_FAILURE,
 	NATIVE_MIR_TEST_FAULT_FINGERPRINT_RECOMPUTE_FAILURE,
-	NATIVE_MIR_TEST_FAULT_DUMP_FAILURE
+	NATIVE_MIR_TEST_FAULT_DUMP_FAILURE,
+	NATIVE_MIR_TEST_FAULT_MAPPING_FAILURE
 } native_mir_test_fault;
 
 typedef struct _native_mir_test_diagnostic {
@@ -125,10 +130,23 @@ typedef struct _native_mir_test_state {
 	uint32_t diagnostic_count;
 	uint32_t diagnostic_limit;
 	uint32_t wave;
+	bool execute_mode;
+	zend_native_target target;
 	size_t mir_chunk_size;
 	const char *diagnostic_stage;
 	native_mir_test_module_host module_host;
 	zend_mir_module *module;
+	zend_native_image *native_image;
+	zend_native_code *native_code;
+	zend_native_scalar native_result;
+	bool native_result_valid;
+	bool native_writable_after_publish;
+	bool native_executable_after_publish;
+	bool native_exception;
+	bool native_bailout;
+	uint64_t vm_handler_calls;
+	uint32_t execute_repetitions;
+	uint32_t completed_executions;
 	smart_str dump;
 	uint32_t dump_writes;
 } native_mir_test_state;
@@ -175,6 +193,12 @@ static const char *native_mir_test_phase_name(native_mir_test_phase phase)
 			return "verify";
 		case NATIVE_MIR_TEST_PHASE_DUMP:
 			return "dump";
+		case NATIVE_MIR_TEST_PHASE_CODEGEN:
+			return "codegen";
+		case NATIVE_MIR_TEST_PHASE_PUBLISH:
+			return "publish";
+		case NATIVE_MIR_TEST_PHASE_EXECUTE:
+			return "execute";
 		case NATIVE_MIR_TEST_PHASE_COMPLETE:
 			return "complete";
 	}
@@ -376,6 +400,8 @@ static bool native_mir_test_fault_from_string(
 		*out = NATIVE_MIR_TEST_FAULT_FINGERPRINT_RECOMPUTE_FAILURE;
 	} else if (zend_string_equals_literal(value, "dump_failure")) {
 		*out = NATIVE_MIR_TEST_FAULT_DUMP_FAILURE;
+	} else if (zend_string_equals_literal(value, "mapping_failure")) {
+		*out = NATIVE_MIR_TEST_FAULT_MAPPING_FAILURE;
 	} else {
 		return false;
 	}
@@ -418,6 +444,24 @@ static bool native_mir_test_parse_options(
 				goto invalid_value;
 			}
 			state->wave = (uint32_t) Z_LVAL_P(value);
+		} else if (zend_string_equals_literal(key, "target")) {
+			if (!state->execute_mode || Z_TYPE_P(value) != IS_STRING) {
+				goto invalid_value;
+			}
+			if (zend_string_equals_literal(Z_STR_P(value), "darwin-arm64-dev")) {
+				state->target = ZEND_NATIVE_TARGET_DARWIN_ARM64;
+			} else if (zend_string_equals_literal(
+					Z_STR_P(value), "linux-amd64-prod")) {
+				state->target = ZEND_NATIVE_TARGET_LINUX_AMD64;
+			} else {
+				goto invalid_value;
+			}
+		} else if (zend_string_equals_literal(key, "repeat")) {
+			if (!state->execute_mode || Z_TYPE_P(value) != IS_LONG
+					|| Z_LVAL_P(value) < 1 || Z_LVAL_P(value) > 1000) {
+				goto invalid_value;
+			}
+			state->execute_repetitions = (uint32_t) Z_LVAL_P(value);
 		} else if (zend_string_equals_literal(key, "arena_chunk_size")) {
 			if (Z_TYPE_P(value) != IS_LONG
 					|| Z_LVAL_P(value) < NATIVE_MIR_TEST_MIN_MIR_CHUNK_SIZE
@@ -618,15 +662,25 @@ static void *native_mir_test_module_allocate(
 	void *context, size_t size, size_t alignment)
 {
 	native_mir_test_module_host *host = context;
+	void *allocation;
+	size_t alignment_mask;
+	uintptr_t address;
 
 	if (host == NULL || host->arena == NULL || size == 0
-			|| alignment > ZEND_MM_ALIGNMENT
+			|| alignment == 0 || (alignment & (alignment - 1)) != 0
+			|| size > SIZE_MAX - (alignment - 1)
 			|| (host->fail_enabled
 				&& host->successful_allocations >= host->fail_after)) {
 		return NULL;
 	}
+	alignment_mask = alignment - 1;
 	host->successful_allocations++;
-	return zend_arena_alloc(&host->arena, size);
+	allocation = zend_arena_alloc(&host->arena, size + alignment_mask);
+	address = (uintptr_t) allocation;
+	if (address > UINTPTR_MAX - alignment_mask) {
+		return NULL;
+	}
+	return (void *) ((address + alignment_mask) & ~alignment_mask);
 }
 
 static void native_mir_test_module_reset(void *context)
@@ -968,6 +1022,14 @@ static bool native_mir_test_publish_lowering_result(
 			"verified module did not expose a read-only view");
 		return false;
 	}
+	if (state->execute_mode) {
+		state->status = NATIVE_MIR_TEST_STATUS_ACCEPTED;
+		state->phase = NATIVE_MIR_TEST_PHASE_COMPLETE;
+		snprintf(message, sizeof(message), "W%02u lowering completed", wave);
+		native_mir_test_add_diagnostic(
+			state, "MIRL", "MIRL0000", message, false, 0);
+		return true;
+	}
 	state->phase = NATIVE_MIR_TEST_PHASE_DUMP;
 	state->diagnostic_stage = "MIRV";
 	writer.context = state;
@@ -1194,6 +1256,149 @@ static bool native_mir_test_compile(native_mir_test_state *state)
 	return true;
 }
 
+static void native_mir_test_backend_failure(
+	native_mir_test_state *state,
+	native_mir_test_phase phase,
+	const zend_native_diagnostic *diagnostic)
+{
+	char code[16];
+
+	snprintf(code, sizeof(code), "NATIVE%04u",
+		(unsigned int) (diagnostic != NULL ? diagnostic->code : 0));
+	native_mir_test_fail(
+		state, NATIVE_MIR_TEST_STATUS_ERROR, phase, "native", code,
+		diagnostic != NULL && diagnostic->message[0] != '\0'
+			? diagnostic->message : "native backend operation failed");
+}
+
+static bool native_mir_test_scalar_from_zval(
+	const zval *value, zend_native_scalar *scalar)
+{
+	memset(scalar, 0, sizeof(*scalar));
+	switch (Z_TYPE_P(value)) {
+		case IS_NULL:
+			scalar->kind = ZEND_NATIVE_SCALAR_NULL;
+			return true;
+		case IS_FALSE:
+			scalar->kind = ZEND_NATIVE_SCALAR_BOOL;
+			scalar->payload_bits = 0;
+			return true;
+		case IS_TRUE:
+			scalar->kind = ZEND_NATIVE_SCALAR_BOOL;
+			scalar->payload_bits = 1;
+			return true;
+		case IS_LONG:
+			scalar->kind = ZEND_NATIVE_SCALAR_LONG;
+			scalar->payload_bits = (uint64_t) Z_LVAL_P(value);
+			return true;
+		case IS_DOUBLE:
+			scalar->kind = ZEND_NATIVE_SCALAR_DOUBLE;
+			memcpy(&scalar->payload_bits, &Z_DVAL_P(value), sizeof(double));
+			return true;
+		default:
+			return false;
+	}
+}
+
+static bool native_mir_test_execute_module(
+	native_mir_test_state *state, HashTable *arguments)
+{
+	const zend_mir_view *view;
+	zend_native_diagnostic diagnostic;
+	zend_native_scalar *native_arguments = NULL;
+	uint32_t argument_count = arguments != NULL
+		? zend_hash_num_elements(arguments) : 0;
+	uint32_t index;
+
+	if (state->wave == 5) {
+		native_mir_test_fail(
+			state, NATIVE_MIR_TEST_STATUS_REJECTED,
+			NATIVE_MIR_TEST_PHASE_CODEGEN, "native", "NATIVE0004",
+			"W06 executes the W03/W04 slice; userland calls remain out of scope");
+		return false;
+	}
+	view = native_mir_test_module_view(state, state->module);
+	if (view == NULL) {
+		native_mir_test_backend_failure(
+			state, NATIVE_MIR_TEST_PHASE_CODEGEN, NULL);
+		return false;
+	}
+	memset(&diagnostic, 0, sizeof(diagnostic));
+	state->phase = NATIVE_MIR_TEST_PHASE_CODEGEN;
+	if (zend_tpde_compile_module(
+			state->target, view, &state->native_image, &diagnostic) == FAILURE) {
+		native_mir_test_backend_failure(state, state->phase, &diagnostic);
+		return false;
+	}
+	state->phase = NATIVE_MIR_TEST_PHASE_PUBLISH;
+	if (state->fault == NATIVE_MIR_TEST_FAULT_MAPPING_FAILURE) {
+		memset(&diagnostic, 0, sizeof(diagnostic));
+		diagnostic.code = ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED;
+		snprintf(diagnostic.message, sizeof(diagnostic.message),
+			"injected native mapping failure");
+		native_mir_test_backend_failure(state, state->phase, &diagnostic);
+		return false;
+	}
+	if (zend_native_publish_image(
+			state->target, state->native_image, &state->native_code,
+			&diagnostic) == FAILURE) {
+		native_mir_test_backend_failure(state, state->phase, &diagnostic);
+		return false;
+	}
+	state->native_writable_after_publish =
+		zend_native_code_is_writable(state->native_code);
+	state->native_executable_after_publish =
+		zend_native_code_is_executable(state->native_code);
+	if (state->native_writable_after_publish
+			|| !state->native_executable_after_publish) {
+		memset(&diagnostic, 0, sizeof(diagnostic));
+		diagnostic.code = ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED;
+		snprintf(diagnostic.message, sizeof(diagnostic.message),
+			"published code violates the W^X contract");
+		native_mir_test_backend_failure(state, state->phase, &diagnostic);
+		return false;
+	}
+	if (argument_count != 0) {
+		native_arguments = safe_emalloc(
+			argument_count, sizeof(*native_arguments), 0);
+	}
+	for (index = 0; index < argument_count; index++) {
+		zval *argument = zend_hash_index_find(arguments, index);
+
+		if (argument == NULL
+				|| !native_mir_test_scalar_from_zval(
+					argument, &native_arguments[index])) {
+			efree(native_arguments);
+			native_mir_test_fail(
+				state, NATIVE_MIR_TEST_STATUS_ERROR,
+				NATIVE_MIR_TEST_PHASE_EXECUTE, "native", "INVALID_ARGUMENTS",
+				"native arguments must be a packed list of null/bool/int/float");
+			return false;
+		}
+	}
+	state->phase = NATIVE_MIR_TEST_PHASE_EXECUTE;
+	memset(&diagnostic, 0, sizeof(diagnostic));
+	for (index = 0; index < state->execute_repetitions; ++index) {
+		if (zend_native_execute(
+				state->native_code, native_arguments, argument_count,
+				&state->native_result, &diagnostic) == FAILURE) {
+			if (native_arguments != NULL) {
+				efree(native_arguments);
+			}
+			native_mir_test_backend_failure(state, state->phase, &diagnostic);
+			return false;
+		}
+		state->completed_executions++;
+	}
+	if (native_arguments != NULL) {
+		efree(native_arguments);
+	}
+	state->native_result_valid = true;
+	state->status = NATIVE_MIR_TEST_STATUS_ACCEPTED;
+	state->phase = NATIVE_MIR_TEST_PHASE_COMPLETE;
+	return true;
+}
+
 static void native_mir_test_cleanup(native_mir_test_state *state)
 {
 	HashTable *function_table;
@@ -1202,6 +1407,14 @@ static void native_mir_test_cleanup(native_mir_test_state *state)
 	if (state->compiler_options_saved) {
 		CG(compiler_options) = state->original_compiler_options;
 		state->compiler_options_saved = false;
+	}
+	if (state->native_code != NULL) {
+		zend_native_code_destroy(state->native_code);
+		state->native_code = NULL;
+	}
+	if (state->native_image != NULL) {
+		zend_native_image_destroy(state->native_image);
+		state->native_image = NULL;
 	}
 	if (state->module != NULL) {
 		zend_mir_module_destroy(state->module);
@@ -1298,20 +1511,94 @@ static void native_mir_test_build_result(
 		add_next_index_zval(&diagnostics, &diagnostic);
 	}
 	add_assoc_zval(return_value, "diagnostics", &diagnostics);
-	array_init(&source_opcodes);
-	for (index = 0; index < state->source_opcode_count; index++) {
-		const char *name = zend_get_opcode_name(state->source_opcodes[index]);
+	if (state->execute_mode) {
+		array_init(&source_opcodes);
+		for (index = 0; index < state->source_opcode_count; index++) {
+			const char *name = zend_get_opcode_name(state->source_opcodes[index]);
 
-		add_next_index_string(
-			&source_opcodes, name != NULL ? (char *) name : "UNKNOWN");
+			add_next_index_string(
+				&source_opcodes, name != NULL ? (char *) name : "UNKNOWN");
+		}
+		add_assoc_zval(return_value, "source_opcodes", &source_opcodes);
 	}
-	add_assoc_zval(return_value, "source_opcodes", &source_opcodes);
 	if (state->status == NATIVE_MIR_TEST_STATUS_ACCEPTED
 			&& state->dump.s != NULL) {
 		add_assoc_str(
 			return_value, "mir", zend_string_copy(state->dump.s));
 	} else {
 		add_assoc_null(return_value, "mir");
+	}
+	if (state->execute_mode) {
+		zval execution;
+
+		array_init(&execution);
+		add_assoc_string(&execution, "target",
+			(char *) zend_native_target_id(state->target));
+		add_assoc_string(&execution, "target_triple",
+			(char *) zend_native_target_triple(state->target));
+		add_assoc_string(&execution, "status",
+			state->native_bailout ? "bailout"
+				: state->native_exception ? "exception"
+					: state->native_result_valid ? "returned" : "not_executed");
+		add_assoc_bool(&execution, "exception", state->native_exception);
+		add_assoc_bool(&execution, "bailout", state->native_bailout);
+		add_assoc_long(&execution, "vm_handler_calls",
+			(zend_long) state->vm_handler_calls);
+		add_assoc_long(&execution, "executions",
+			(zend_long) state->completed_executions);
+		add_assoc_bool(&execution, "writable_after_publish",
+			state->native_writable_after_publish);
+		add_assoc_bool(&execution, "executable_after_publish",
+			state->native_executable_after_publish);
+		add_assoc_long(&execution, "image_size",
+			(zend_long) zend_native_image_size(state->native_image));
+		if (state->native_image != NULL) {
+			static const char hex[] = "0123456789abcdef";
+			const unsigned char *bytes =
+				zend_native_image_bytes(state->native_image);
+			size_t byte_count = zend_native_image_size(state->native_image);
+
+			ZEND_ASSERT(byte_count <= ZSTR_MAX_LEN / 2);
+			zend_string *encoded = zend_string_alloc(byte_count * 2, false);
+			size_t byte_index;
+
+			for (byte_index = 0; byte_index < byte_count; ++byte_index) {
+				ZSTR_VAL(encoded)[byte_index * 2] = hex[bytes[byte_index] >> 4];
+				ZSTR_VAL(encoded)[byte_index * 2 + 1] =
+					hex[bytes[byte_index] & 0x0f];
+			}
+			ZSTR_VAL(encoded)[byte_count * 2] = '\0';
+			add_assoc_str(&execution, "machine_code", encoded);
+		} else {
+			add_assoc_null(&execution, "machine_code");
+		}
+		if (state->native_result_valid) {
+			switch (state->native_result.kind) {
+				case ZEND_NATIVE_SCALAR_NULL:
+					add_assoc_null(&execution, "return_value");
+					break;
+				case ZEND_NATIVE_SCALAR_BOOL:
+					add_assoc_bool(&execution, "return_value",
+						state->native_result.payload_bits != 0);
+					break;
+				case ZEND_NATIVE_SCALAR_LONG:
+					add_assoc_long(&execution, "return_value",
+						(zend_long) state->native_result.payload_bits);
+					break;
+				case ZEND_NATIVE_SCALAR_DOUBLE: {
+					double value;
+					memcpy(&value, &state->native_result.payload_bits, sizeof(value));
+					add_assoc_double(&execution, "return_value", value);
+					break;
+				}
+				default:
+					add_assoc_null(&execution, "return_value");
+					break;
+			}
+		} else {
+			add_assoc_null(&execution, "return_value");
+		}
+		add_assoc_zval(return_value, "execution", &execution);
 	}
 }
 
@@ -1376,6 +1663,86 @@ ZEND_FUNCTION(native_mir_test_compile_dump)
 	}
 	native_mir_test_cleanup(state);
 	native_mir_test_build_result(state, return_value);
+	smart_str_free(&state->dump);
+	efree(state->source_opcodes);
+	efree(state->diagnostics);
+	efree(state);
+}
+
+ZEND_FUNCTION(native_mir_test_compile_execute)
+{
+	zend_string *source;
+	zend_string *filename;
+	HashTable *arguments = NULL;
+	HashTable *options = NULL;
+	native_mir_test_state *state;
+	bool bailed_out = false;
+
+	ZEND_PARSE_PARAMETERS_START(2, 4)
+		Z_PARAM_STR(source)
+		Z_PARAM_PATH_STR(filename)
+		Z_PARAM_OPTIONAL
+		Z_PARAM_ARRAY_HT(arguments)
+		Z_PARAM_ARRAY_HT(options)
+	ZEND_PARSE_PARAMETERS_END();
+
+	if (ZSTR_LEN(filename) == 0) {
+		zend_argument_value_error(2, "must not be empty");
+		RETURN_THROWS();
+	}
+	state = ecalloc(1, sizeof(*state));
+	state->source = source;
+	state->filename = filename;
+	state->diagnostic_limit = NATIVE_MIR_TEST_DEFAULT_DIAGNOSTIC_LIMIT;
+	state->wave = 4;
+	state->execute_mode = true;
+	state->execute_repetitions = 1;
+#if defined(__APPLE__) && defined(__aarch64__)
+	state->target = ZEND_NATIVE_TARGET_DARWIN_ARM64;
+#elif defined(__linux__) && defined(__x86_64__)
+	state->target = ZEND_NATIVE_TARGET_LINUX_AMD64;
+#else
+# error "native_mir_test execute bridge supports only Darwin arm64 and Linux x86-64"
+#endif
+	state->mir_chunk_size = ZEND_MIR_CORE_DEFAULT_CHUNK_SIZE;
+	state->phase = NATIVE_MIR_TEST_PHASE_COMPILE;
+	state->status = NATIVE_MIR_TEST_STATUS_ERROR;
+	state->diagnostics = ecalloc(
+		NATIVE_MIR_TEST_MAX_DIAGNOSTIC_LIMIT,
+		sizeof(state->diagnostics[0]));
+	if (options != NULL && !native_mir_test_parse_options(state, options)) {
+		native_mir_test_build_result(state, return_value);
+		efree(state->diagnostics);
+		efree(state);
+		return;
+	}
+	state->module_host.fail_enabled =
+		state->fault == NATIVE_MIR_TEST_FAULT_MODULE_OOM;
+	state->module_host.fail_after = 0;
+
+	/* This path never invokes an opline handler or a VM execute function. */
+	zend_try {
+		if (native_mir_test_compile(state)
+				&& native_mir_test_build_ssa(state)
+				&& native_mir_test_lower_and_dump(state)) {
+			(void) native_mir_test_execute_module(state, arguments);
+		}
+	} zend_catch {
+		bailed_out = true;
+	} zend_end_try();
+
+	if (bailed_out) {
+		state->native_bailout = true;
+		if (EG(exception) != NULL) {
+			state->native_exception = true;
+			zend_clear_exception();
+		}
+		native_mir_test_fail(
+			state, NATIVE_MIR_TEST_STATUS_ERROR, state->phase,
+			"native", "BAILOUT", "native execution path bailed out");
+	}
+	native_mir_test_build_result(state, return_value);
+	native_mir_test_cleanup(state);
 	smart_str_free(&state->dump);
 	efree(state->source_opcodes);
 	efree(state->diagnostics);

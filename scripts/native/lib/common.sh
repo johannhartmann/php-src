@@ -33,6 +33,33 @@ native_require_tool() {
     command -v "$tool" >/dev/null 2>&1 || native_die "required tool not found: $tool"
 }
 
+native_sha256_stream() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 | awk '{print $1}'
+    else
+        python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+    fi
+}
+
+native_sha256_file() {
+    local path=$1
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum -- "$path" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 -- "$path" | awk '{print $1}'
+    else
+        python3 - "$path" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+    fi
+}
+
 native_canonical_path() {
     local path=$1
     if [[ -d $path ]]; then
@@ -62,7 +89,8 @@ native_worktree_id_for() {
     local canonical base digest
     canonical=$(native_canonical_path "$worktree_path")
     base=$(printf '%s' "$(basename -- "$canonical")" | tr -c 'A-Za-z0-9._-' '-')
-    digest=$(printf '%s\0%s' "$canonical" "$commit" | sha256sum | awk '{print substr($1, 1, 16)}')
+    digest=$(printf '%s\0%s' "$canonical" "$commit" | native_sha256_stream)
+    digest=${digest:0:16}
     printf '%s-%s\n' "$base" "$digest"
 }
 
@@ -99,6 +127,7 @@ native_load_profile() {
     fi
 
     unset PROFILE_NAME PROFILE_BUILD_TYPE PROFILE_THREAD_SAFETY PROFILE_SANITIZER
+    unset PROFILE_TARGET_ID PROFILE_TARGET_TRIPLE PROFILE_HOST_SYSTEM PROFILE_HOST_ARCH
     unset PROFILE_CONFIGURE_FLAGS
     # Profile files are repository-owned declarative shell data.
     # shellcheck source=/dev/null
@@ -108,6 +137,17 @@ native_load_profile() {
     [[ ${PROFILE_BUILD_TYPE:-} == debug || ${PROFILE_BUILD_TYPE:-} == release ]] || native_die "invalid build type in $profile_file"
     [[ ${PROFILE_THREAD_SAFETY:-} == zts || ${PROFILE_THREAD_SAFETY:-} == nts ]] || native_die "invalid thread-safety value in $profile_file"
     [[ ${PROFILE_SANITIZER:-} == none || ${PROFILE_SANITIZER:-} == address || ${PROFILE_SANITIZER:-} == undefined ]] || native_die "invalid sanitizer value in $profile_file"
+    if [[ -n ${PROFILE_TARGET_ID:-} ]]; then
+        [[ $PROFILE_TARGET_ID == darwin-arm64-dev || $PROFILE_TARGET_ID == linux-amd64-prod ]] || native_die "invalid native target in $profile_file"
+        [[ -n ${PROFILE_TARGET_TRIPLE:-} && -n ${PROFILE_HOST_SYSTEM:-} && -n ${PROFILE_HOST_ARCH:-} ]] || native_die "incomplete target declaration in $profile_file"
+        [[ $(uname -s) == "$PROFILE_HOST_SYSTEM" ]] || native_die "$profile requires host system $PROFILE_HOST_SYSTEM (found $(uname -s))"
+        [[ $(uname -m) == "$PROFILE_HOST_ARCH" ]] || native_die "$profile requires host architecture $PROFILE_HOST_ARCH (found $(uname -m))"
+        if [[ $PROFILE_TARGET_ID == darwin-arm64-dev ]]; then
+            local translated
+            translated=$(sysctl -in sysctl.proc_translated 2>/dev/null || printf '0')
+            [[ $translated == 0 ]] || native_die "$profile cannot run through Rosetta"
+        fi
+    fi
     declare -p PROFILE_CONFIGURE_FLAGS >/dev/null 2>&1 || native_die "missing configure flags in $profile_file"
 
     NATIVE_PROFILE=$profile
@@ -146,6 +186,8 @@ native_default_jobs() {
         printf '%s\n' "$NATIVE_JOBS"
     elif command -v nproc >/dev/null 2>&1; then
         nproc
+    elif [[ $(uname -s) == Darwin ]] && command -v sysctl >/dev/null 2>&1; then
+        sysctl -n hw.ncpu
     else
         printf '2\n'
     fi
@@ -163,9 +205,9 @@ native_source_fingerprint() {
         git -C "$NATIVE_REPO_ROOT" diff --binary HEAD
         git -C "$NATIVE_REPO_ROOT" ls-files --others --exclude-standard | while IFS= read -r file; do
             printf '%s\0' "$file"
-            sha256sum -- "$NATIVE_REPO_ROOT/$file"
+            printf '%s  %s\n' "$(native_sha256_file "$NATIVE_REPO_ROOT/$file")" "$file"
         done
-    } | sha256sum | awk '{print $1}'
+    } | native_sha256_stream
 }
 
 native_configuration_fingerprint() {
@@ -196,8 +238,38 @@ native_reset_build_dir() {
 native_acquire_lock() {
     local lock_path=$1
     mkdir -p -- "$(dirname -- "$lock_path")"
-    exec {NATIVE_LOCK_FD}>"$lock_path"
-    flock "$NATIVE_LOCK_FD"
+    NATIVE_LOCK_CONTROL_DIR=$(mktemp -d "${TMPDIR:-/tmp}/php-native-lock.XXXXXX")
+    mkfifo "$NATIVE_LOCK_CONTROL_DIR/input" "$NATIVE_LOCK_CONTROL_DIR/output"
+    python3 "$NATIVE_SCRIPTS_DIR/portable-lock.py" "$lock_path" \
+        <"$NATIVE_LOCK_CONTROL_DIR/input" >"$NATIVE_LOCK_CONTROL_DIR/output" &
+    NATIVE_LOCK_PID=$!
+    NATIVE_LOCK_INPUT_FD=8
+    NATIVE_LOCK_OUTPUT_FD=9
+    exec 8>"$NATIVE_LOCK_CONTROL_DIR/input"
+    exec 9<"$NATIVE_LOCK_CONTROL_DIR/output"
+    local ready=
+    if ! IFS= read -r ready <&"$NATIVE_LOCK_OUTPUT_FD"; then
+        exec 8>&-
+        exec 9<&-
+        wait "$NATIVE_LOCK_PID" || true
+        rm -f -- "$NATIVE_LOCK_CONTROL_DIR/input" "$NATIVE_LOCK_CONTROL_DIR/output"
+        rmdir -- "$NATIVE_LOCK_CONTROL_DIR"
+        unset NATIVE_LOCK_PID NATIVE_LOCK_INPUT_FD NATIVE_LOCK_OUTPUT_FD NATIVE_LOCK_CONTROL_DIR
+        native_die "lock helper failed: $lock_path"
+    fi
+    exec 9<&-
+    unset NATIVE_LOCK_OUTPUT_FD
+    [[ $ready == locked ]] || native_die "lock helper returned an invalid response: $ready"
+}
+
+native_release_lock() {
+    [[ -n ${NATIVE_LOCK_PID:-} ]] || return 0
+    printf 'release\n' >&"$NATIVE_LOCK_INPUT_FD" || true
+    exec 8>&-
+    wait "$NATIVE_LOCK_PID" || true
+    rm -f -- "$NATIVE_LOCK_CONTROL_DIR/input" "$NATIVE_LOCK_CONTROL_DIR/output"
+    rmdir -- "$NATIVE_LOCK_CONTROL_DIR"
+    unset NATIVE_LOCK_PID NATIVE_LOCK_INPUT_FD NATIVE_LOCK_CONTROL_DIR
 }
 
 native_print_command() {
@@ -208,8 +280,12 @@ native_print_command() {
 native_export_sanitizer_environment() {
     case ${PROFILE_SANITIZER:-none} in
         address)
-            export ASAN_OPTIONS=${ASAN_OPTIONS:-abort_on_error=1:detect_leaks=1:halt_on_error=1:strict_string_checks=1}
-            export LSAN_OPTIONS=${LSAN_OPTIONS:-exitcode=23:print_suppressions=1}
+            if [[ $(uname -s) == Darwin ]]; then
+                export ASAN_OPTIONS=${ASAN_OPTIONS:-abort_on_error=1:detect_leaks=0:halt_on_error=1:strict_string_checks=1}
+            else
+                export ASAN_OPTIONS=${ASAN_OPTIONS:-abort_on_error=1:detect_leaks=1:halt_on_error=1:strict_string_checks=1}
+                export LSAN_OPTIONS=${LSAN_OPTIONS:-exitcode=23:print_suppressions=1}
+            fi
             export USE_ZEND_ALLOC=${USE_ZEND_ALLOC:-0}
             ;;
         undefined)
