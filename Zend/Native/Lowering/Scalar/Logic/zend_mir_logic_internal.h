@@ -49,8 +49,8 @@ typedef struct _zend_mir_logic_plan {
 } zend_mir_logic_plan;
 
 /*
- * W03-A owns these context accessors. Declaring the narrow integration seam
- * here keeps this specialist branch independently compilable without copying
+ * The core exposes these context accessors. Declaring the narrow integration
+ * seam here keeps the provider independently compilable without copying
  * or exposing the Core context layout.
  */
 const void *zend_mir_lowering_context_provider_context(

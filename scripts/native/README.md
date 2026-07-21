@@ -14,8 +14,7 @@ bundled/core dependencies and builds the CLI plus static OPcache. No script
 downloads packages or installs dependencies.
 
 AArch64 uses the same profiles and scripts. An Ubuntu AArch64 GitHub-hosted or
-self-hosted runner can set `NATIVE_WORK_ROOT` and run the commands below; W00
-documents this as the secondary runner rather than making it a required gate.
+self-hosted runner can set `NATIVE_WORK_ROOT` and run the commands below.
 
 ## Profiles
 
@@ -114,14 +113,11 @@ returns zero.
 
 ## CI
 
-`.github/workflows/native-w00.yml` runs all six profiles independently on the
-primary Linux x86-64 runner. It reuses `.github/actions/apt-x64` rather than
-maintaining a second package list, requires no secrets, and uploads configure
-logs, build logs, manifests, and smoke artifacts on both success and failure.
-Regular minimal profiles are expected to finish in roughly 10–30 minutes on a
-cold runner; sanitizer profiles are the slower 20–45 minute class. The workflow
-uses a 90-minute per-profile timeout to accommodate cold package and compiler
-caches.
+`.github/workflows/native-engine.yml` runs the contract tests and the actively
+used debug NTS, debug ZTS, ASan, and UBSan profiles on Linux x86-64. It reuses
+`.github/actions/apt-x64` instead of maintaining a second package list and
+requires no secrets. Release profiles remain available for explicit local or
+release qualification runs.
 
 ## Troubleshooting
 

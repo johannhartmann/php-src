@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the W05 modeled/deferred, determinism, fault, and semantic gate."""
+"""Run W05 modeled/deferred, determinism, fault, and semantic tests."""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ ROOT = Path(__file__).resolve().parents[3]
 MANIFEST = ROOT / "tests/native/calls/corpus/manifest.json"
 GOLDEN_ROOT = ROOT / "tests/native/calls/integration/goldens"
 GOLDEN_INDEX = GOLDEN_ROOT / "index.json"
-EVIDENCE = ROOT / "tests/native/calls/integration/gate-evidence.json"
 DUMP_PATH = ROOT / "scripts/native/calls/dump-w05.py"
 ARENA_SIZES = (64, 4096, 65536)
 FAULTS = {
@@ -45,11 +44,11 @@ FAULTS = {
 
 
 class W05TestError(RuntimeError):
-    """The W05 gate failed to produce trustworthy evidence."""
+    """A W05 call-model or differential invariant failed."""
 
 
 def load_dump() -> Any:
-    specification = importlib.util.spec_from_file_location("w05_gate_dump", DUMP_PATH)
+    specification = importlib.util.spec_from_file_location("w05_test_dump", DUMP_PATH)
     if specification is None or specification.loader is None:
         raise W05TestError("unable to load dump-w05.py")
     module = importlib.util.module_from_spec(specification)
@@ -178,7 +177,6 @@ def properties(mir: str) -> dict[str, int]:
         "arguments": "call-argument ",
         "continuations": "call-continuation ",
         "frames": "frame ",
-        "receipts": "call-receipt ",
         "sites": "call-site ",
         "targets": "call-target ",
     }
@@ -200,8 +198,6 @@ def validate_modeled(case: dict[str, Any], result: dict[str, Any]) -> str:
         "opcode call_direct_user",
         "call-target ",
         "call-site ",
-        "call-receipt ",
-        "modeled true codegen-eligible false",
     )
     if any(token not in mir for token in required):
         raise W05TestError(f"{case['id']}: incomplete W05 call model")
@@ -217,34 +213,6 @@ def validate_deferred(case: dict[str, Any], result: dict[str, Any]) -> None:
         or not isinstance(case.get("wave"), str)
     ):
         raise W05TestError(f"{case['id']}: deferred classification mismatch")
-
-
-def write_goldens(
-    accepted: list[tuple[dict[str, Any], str]],
-) -> dict[str, Any]:
-    expected_names: set[str] = set()
-    entries: dict[str, Any] = {}
-    GOLDEN_ROOT.mkdir(parents=True, exist_ok=True)
-    for case, mir in accepted:
-        path = GOLDEN_ROOT / f"{case['id']}.znmir"
-        payload = mir.encode("utf-8")
-        path.write_bytes(payload)
-        expected_names.add(path.name)
-        entries[case["id"]] = {
-            "path": path.relative_to(ROOT).as_posix(),
-            "properties": properties(mir),
-            "sha256": sha256_bytes(payload),
-        }
-    for path in GOLDEN_ROOT.glob("*.znmir"):
-        if path.name not in expected_names:
-            path.unlink()
-    document = {
-        "cases": entries,
-        "format_version": "1.0.0",
-        "normalization": False,
-    }
-    stable_write(GOLDEN_INDEX, document)
-    return document
 
 
 def verify_goldens(accepted: list[tuple[dict[str, Any], str]]) -> dict[str, Any]:
@@ -273,30 +241,10 @@ def verify_goldens(accepted: list[tuple[dict[str, Any], str]]) -> dict[str, Any]
     return index
 
 
-def verify_artifacts_only() -> dict[str, Any]:
-    try:
-        evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
-        index = json.loads(GOLDEN_INDEX.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise W05TestError(f"committed gate artifacts: {error}") from error
-    if evidence.get("status") != "pass" or evidence.get("mir_executed") is not False:
-        raise W05TestError("gate evidence does not record a non-executing pass")
-    for case_id, entry in index.get("cases", {}).items():
-        path = ROOT / entry["path"]
-        if not path.is_file() or sha256_bytes(path.read_bytes()) != entry["sha256"]:
-            raise W05TestError(f"{case_id}: committed golden digest mismatch")
-    if evidence.get("golden_index_sha256") != sha256_bytes(
-        GOLDEN_INDEX.read_bytes()
-    ):
-        raise W05TestError("gate evidence golden index digest mismatch")
-    return evidence
-
-
-def run_gate(
+def run_tests(
     reference: Path,
     candidate: Path,
     sanitizer: str | None,
-    write: bool,
 ) -> dict[str, Any]:
     env = environment(sanitizer)
     for name in (
@@ -434,7 +382,7 @@ def run_gate(
                 raise W05TestError(f"{fault}: failure atomicity mismatch")
         fault_results[fault] = {"diagnostic": code, "phase": phase}
 
-    index = write_goldens(accepted) if write else verify_goldens(accepted)
+    index = verify_goldens(accepted)
     wave_counts: dict[str, int] = {}
     diagnostic_counts: dict[str, int] = {}
     for case in manifest["cases"]:
@@ -464,8 +412,6 @@ def run_gate(
         "normalization": False,
         "status": "pass",
     }
-    if write:
-        stable_write(EVIDENCE, evidence)
     return evidence
 
 
@@ -474,26 +420,20 @@ def main() -> int:
     parser.add_argument("--reference-php")
     parser.add_argument("--candidate-php")
     parser.add_argument("--sanitizer", choices=["address", "undefined"])
-    parser.add_argument("--write-goldens", action="store_true")
-    parser.add_argument("--verify-artifacts-only", action="store_true")
     parser.add_argument("--json-out", type=Path)
     arguments = parser.parse_args()
     try:
-        if arguments.verify_artifacts_only:
-            evidence = verify_artifacts_only()
-        else:
-            if not arguments.reference_php or not arguments.candidate_php:
-                parser.error("--reference-php and --candidate-php are required")
-            evidence = run_gate(
-                executable(arguments.reference_php, "reference"),
-                executable(arguments.candidate_php, "candidate"),
-                arguments.sanitizer,
-                arguments.write_goldens,
-            )
+        if not arguments.reference_php or not arguments.candidate_php:
+            parser.error("--reference-php and --candidate-php are required")
+        evidence = run_tests(
+            executable(arguments.reference_php, "reference"),
+            executable(arguments.candidate_php, "candidate"),
+            arguments.sanitizer,
+        )
         if arguments.json_out is not None:
             stable_write(arguments.json_out, evidence)
         print(
-            "W05 gate test: PASS accepted={} deferred={} mir_executed=false".format(
+            "W05 integration tests: PASS accepted={} deferred={} mir_executed=false".format(
                 evidence["accepted_case_count"],
                 evidence["deferred_case_count"],
             )
@@ -505,7 +445,7 @@ def main() -> int:
         subprocess.TimeoutExpired,
         json.JSONDecodeError,
     ) as error:
-        print(f"W05 gate test: FAIL: {error}", file=sys.stderr)
+        print(f"W05 integration tests: FAIL: {error}", file=sys.stderr)
         return 1
 
 

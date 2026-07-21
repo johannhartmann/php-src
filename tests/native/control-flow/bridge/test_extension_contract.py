@@ -12,6 +12,8 @@ EXTENSION = ROOT / "ext/native_mir_test/native_mir_test.c"
 STUB = ROOT / "ext/native_mir_test/native_mir_test.stub.php"
 CONFIG = ROOT / "ext/native_mir_test/config.m4"
 INVOKER = ROOT / "tests/native/control-flow/bridge/invoke_dump.php"
+
+
 class ExtensionContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -22,17 +24,18 @@ class ExtensionContractTests(unittest.TestCase):
     def test_config_has_no_w04_stub(self) -> None:
         self.assertNotIn("w04_entry_stub", CONFIG.read_text(encoding="utf-8"))
 
-    def test_wave_three_is_default_and_only_three_or_four_are_valid(self) -> None:
+    def test_wave_three_is_default_and_supported_versions_are_explicit(self) -> None:
         self.assertIn("state->wave = 3;", self.extension)
         self.assertRegex(
             self.extension,
             re.compile(
                 r"zend_string_equals_literal\(key, \"wave\"\).*?"
-                r"Z_LVAL_P\(value\) != 3 && Z_LVAL_P\(value\) != 4",
+                r"Z_LVAL_P\(value\) != 3 && Z_LVAL_P\(value\) != 4\s*"
+                r"&& Z_LVAL_P\(value\) != 5",
                 re.DOTALL,
             ),
         )
-        self.assertIn("wave?: 3|4", self.stub)
+        self.assertIn("wave?: 3|4|5", self.stub)
 
     def test_stub_annotations_are_generator_compatible(self) -> None:
         self.assertIn("@return array", self.stub)
@@ -44,14 +47,12 @@ class ExtensionContractTests(unittest.TestCase):
         self.assertRegex(
             self.extension,
             re.compile(
-                r'if \(state->wave == 4\) \{\s*'
-                r'add_assoc_long\(return_value, "wave", 4\);\s*\}',
+                r'if \(state->wave >= 4\) \{\s*'
+                r'add_assoc_long\(return_value, "wave", state->wave\);\s*\}',
                 re.DOTALL,
             ),
         )
-        self.assertNotIn('add_assoc_long(return_value, "wave", state->wave)', self.extension)
-
-    def test_w04_path_calls_only_the_a_owned_wrapper(self) -> None:
+    def test_w04_path_calls_only_the_integrated_wrapper(self) -> None:
         match = re.search(
             r"static bool native_mir_test_lower_w04_and_dump.*?^}",
             self.extension,
@@ -71,7 +72,7 @@ class ExtensionContractTests(unittest.TestCase):
         self.assertRegex(
             self.extension,
             re.compile(
-                r"return state->wave == 4\s*"
+                r"return state->wave >= 4\s*"
                 r"\? native_mir_test_verify_w04_scalar\(state, view\)\s*"
                 r": zend_mir_verify_w03_scalar\(view, diagnostics\);",
                 re.DOTALL,
@@ -82,7 +83,7 @@ class ExtensionContractTests(unittest.TestCase):
         self.assertRegex(
             self.extension,
             re.compile(
-                r"state->wave == 4 && state->selected->last_try_catch != 0.*?"
+                r"state->wave >= 4 && state->selected->last_try_catch != 0.*?"
                 r'"MIRL0015"',
                 re.DOTALL,
             ),

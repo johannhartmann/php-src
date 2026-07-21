@@ -11,5 +11,5 @@ instructions.
 - Preserve Zend value, call, bailout, and lifetime semantics. Require an ADR and
   focused compatibility tests before changing an ABI boundary.
 - Put architecture-specific lowering and target code only under `TPDE/`.
-- Treat `MIR/`, `TPDE/`, and `Runtime/` as separately owned subtrees and read
-  their `AGENTS.md` before changing them.
+- Keep `MIR/`, `TPDE/`, and `Runtime/` as explicit architectural boundaries and
+  read their `AGENTS.md` before changing them.

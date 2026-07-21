@@ -10,7 +10,7 @@
     },
     "w03": {
       "path": "docs/native-engine/lowering/w03-opcode-profile.json",
-      "sha256": "1dc21bb11de58a0d6c278f24e01c67d1d51e012172cfa25e4b4d308d8c2e14b4",
+      "sha256": "dd2609caa8263a9930b7ac7452f2092ae100ae5476af2093dc816e1104ec9ece",
       "source_commit": "b7c524a19fa815799a858b98d39f176ca88648b1",
       "active_opcode_count": 212
     }
@@ -50,7 +50,7 @@
       "number": 0,
       "opcode": "ZEND_NOP",
       "classification": "required",
-      "owner": "W04-A-production-control-flow",
+      "provider": "core",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -63,7 +63,7 @@
         "no_reentry"
       ],
       "mir_opcodes": [],
-      "rationale": "Inherited from W03-A-lowering-core-registry with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "runtime.misc",
         "effect_ids": [],
@@ -89,14 +89,13 @@
           "start_line": 2729,
           "symbol": "ZEND_NOP"
         }
-      ],
-      "provider_owner": "W03-A-lowering-core-registry"
+      ]
     },
     {
       "number": 1,
       "opcode": "ZEND_ADD",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "numeric",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -116,7 +115,7 @@
         "i64_add_no_overflow",
         "f64_add"
       ],
-      "rationale": "Inherited from W03-C-numeric-arithmetic-bitwise with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "scalar.binary",
         "effect_ids": [
@@ -166,14 +165,13 @@
           "start_line": 4551,
           "symbol": "ZEND_ADD"
         }
-      ],
-      "provider_owner": "W03-C-numeric-arithmetic-bitwise"
+      ]
     },
     {
       "number": 2,
       "opcode": "ZEND_SUB",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "numeric",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -193,7 +191,7 @@
         "i64_sub_no_overflow",
         "f64_sub"
       ],
-      "rationale": "Inherited from W03-C-numeric-arithmetic-bitwise with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "scalar.binary",
         "effect_ids": [
@@ -243,14 +241,13 @@
           "start_line": 4552,
           "symbol": "ZEND_SUB"
         }
-      ],
-      "provider_owner": "W03-C-numeric-arithmetic-bitwise"
+      ]
     },
     {
       "number": 3,
       "opcode": "ZEND_MUL",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "numeric",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -270,7 +267,7 @@
         "i64_mul_no_overflow",
         "f64_mul"
       ],
-      "rationale": "Inherited from W03-C-numeric-arithmetic-bitwise with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "scalar.binary",
         "effect_ids": [
@@ -320,14 +317,13 @@
           "start_line": 4553,
           "symbol": "ZEND_MUL"
         }
-      ],
-      "provider_owner": "W03-C-numeric-arithmetic-bitwise"
+      ]
     },
     {
       "number": 4,
       "opcode": "ZEND_DIV",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -373,14 +369,13 @@
           "start_line": 1398,
           "symbol": "ZEND_DIV"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 5,
       "opcode": "ZEND_MOD",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "numeric",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -399,7 +394,7 @@
       "mir_opcodes": [
         "i64_mod_nonzero"
       ],
-      "rationale": "Inherited from W03-C-numeric-arithmetic-bitwise with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "scalar.binary",
         "effect_ids": [
@@ -455,14 +450,13 @@
           "start_line": 4517,
           "symbol": "ZEND_MOD"
         }
-      ],
-      "provider_owner": "W03-C-numeric-arithmetic-bitwise"
+      ]
     },
     {
       "number": 6,
       "opcode": "ZEND_SL",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "numeric",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -480,7 +474,7 @@
       "mir_opcodes": [
         "i64_shl_checked"
       ],
-      "rationale": "Inherited from W03-C-numeric-arithmetic-bitwise with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "scalar.binary",
         "effect_ids": [
@@ -530,14 +524,13 @@
           "start_line": 4515,
           "symbol": "ZEND_SL"
         }
-      ],
-      "provider_owner": "W03-C-numeric-arithmetic-bitwise"
+      ]
     },
     {
       "number": 7,
       "opcode": "ZEND_SR",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "numeric",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -554,7 +547,7 @@
       "mir_opcodes": [
         "i64_shr_checked"
       ],
-      "rationale": "Inherited from W03-C-numeric-arithmetic-bitwise with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "scalar.binary",
         "effect_ids": [
@@ -604,14 +597,13 @@
           "start_line": 4516,
           "symbol": "ZEND_SR"
         }
-      ],
-      "provider_owner": "W03-C-numeric-arithmetic-bitwise"
+      ]
     },
     {
       "number": 8,
       "opcode": "ZEND_CONCAT",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -665,14 +657,13 @@
           "start_line": 4664,
           "symbol": "ZEND_CONCAT"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 9,
       "opcode": "ZEND_BW_OR",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "numeric",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -688,7 +679,7 @@
       "mir_opcodes": [
         "i64_bit_or"
       ],
-      "rationale": "Inherited from W03-C-numeric-arithmetic-bitwise with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "scalar.binary",
         "effect_ids": [
@@ -738,14 +729,13 @@
           "start_line": 4512,
           "symbol": "ZEND_BW_OR"
         }
-      ],
-      "provider_owner": "W03-C-numeric-arithmetic-bitwise"
+      ]
     },
     {
       "number": 10,
       "opcode": "ZEND_BW_AND",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "numeric",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -761,7 +751,7 @@
       "mir_opcodes": [
         "i64_bit_and"
       ],
-      "rationale": "Inherited from W03-C-numeric-arithmetic-bitwise with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "scalar.binary",
         "effect_ids": [
@@ -811,14 +801,13 @@
           "start_line": 4513,
           "symbol": "ZEND_BW_AND"
         }
-      ],
-      "provider_owner": "W03-C-numeric-arithmetic-bitwise"
+      ]
     },
     {
       "number": 11,
       "opcode": "ZEND_BW_XOR",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "numeric",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -834,7 +823,7 @@
       "mir_opcodes": [
         "i64_bit_xor"
       ],
-      "rationale": "Inherited from W03-C-numeric-arithmetic-bitwise with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "scalar.binary",
         "effect_ids": [
@@ -884,14 +873,13 @@
           "start_line": 4514,
           "symbol": "ZEND_BW_XOR"
         }
-      ],
-      "provider_owner": "W03-C-numeric-arithmetic-bitwise"
+      ]
     },
     {
       "number": 12,
       "opcode": "ZEND_POW",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -937,14 +925,13 @@
           "start_line": 1397,
           "symbol": "ZEND_POW"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 13,
       "opcode": "ZEND_BW_NOT",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "numeric",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -960,7 +947,7 @@
       "mir_opcodes": [
         "i64_bit_not"
       ],
-      "rationale": "Inherited from W03-C-numeric-arithmetic-bitwise with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "scalar.binary",
         "effect_ids": [
@@ -998,14 +985,13 @@
           "start_line": 946,
           "symbol": "ZEND_BW_NOT"
         }
-      ],
-      "provider_owner": "W03-C-numeric-arithmetic-bitwise"
+      ]
     },
     {
       "number": 14,
       "opcode": "ZEND_BOOL_NOT",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "logic",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -1021,7 +1007,7 @@
       "mir_opcodes": [
         "i1_not"
       ],
-      "rationale": "Inherited from W03-D-comparison-boolean-casts with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "scalar.compare",
         "effect_ids": [
@@ -1069,14 +1055,13 @@
           "start_line": 5657,
           "symbol": "ZEND_BOOL_NOT"
         }
-      ],
-      "provider_owner": "W03-D-comparison-boolean-casts"
+      ]
     },
     {
       "number": 15,
       "opcode": "ZEND_BOOL_XOR",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "logic",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -1092,7 +1077,7 @@
       "mir_opcodes": [
         "i1_xor"
       ],
-      "rationale": "Inherited from W03-D-comparison-boolean-casts with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "scalar.compare",
         "effect_ids": [
@@ -1128,14 +1113,13 @@
           "start_line": 919,
           "symbol": "ZEND_BOOL_XOR"
         }
-      ],
-      "provider_owner": "W03-D-comparison-boolean-casts"
+      ]
     },
     {
       "number": 16,
       "opcode": "ZEND_IS_IDENTICAL",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "logic",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -1155,7 +1139,7 @@
         "f64_eq",
         "i1_eq"
       ],
-      "rationale": "Inherited from W03-D-comparison-boolean-casts with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "scalar.compare",
         "effect_ids": [
@@ -1204,14 +1188,13 @@
           "start_line": 5479,
           "symbol": "ZEND_IS_IDENTICAL"
         }
-      ],
-      "provider_owner": "W03-D-comparison-boolean-casts"
+      ]
     },
     {
       "number": 17,
       "opcode": "ZEND_IS_NOT_IDENTICAL",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "logic",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -1232,7 +1215,7 @@
         "i1_eq",
         "i1_not"
       ],
-      "rationale": "Inherited from W03-D-comparison-boolean-casts with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "scalar.compare",
         "effect_ids": [
@@ -1281,14 +1264,13 @@
           "start_line": 5480,
           "symbol": "ZEND_IS_NOT_IDENTICAL"
         }
-      ],
-      "provider_owner": "W03-D-comparison-boolean-casts"
+      ]
     },
     {
       "number": 18,
       "opcode": "ZEND_IS_EQUAL",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "logic",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -1308,7 +1290,7 @@
         "f64_eq",
         "i1_eq"
       ],
-      "rationale": "Inherited from W03-D-comparison-boolean-casts with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "scalar.compare",
         "effect_ids": [
@@ -1363,14 +1345,13 @@
           "start_line": 5429,
           "symbol": "ZEND_IS_EQUAL"
         }
-      ],
-      "provider_owner": "W03-D-comparison-boolean-casts"
+      ]
     },
     {
       "number": 19,
       "opcode": "ZEND_IS_NOT_EQUAL",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "logic",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -1391,7 +1372,7 @@
         "i1_eq",
         "i1_not"
       ],
-      "rationale": "Inherited from W03-D-comparison-boolean-casts with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "scalar.compare",
         "effect_ids": [
@@ -1446,14 +1427,13 @@
           "start_line": 5430,
           "symbol": "ZEND_IS_NOT_EQUAL"
         }
-      ],
-      "provider_owner": "W03-D-comparison-boolean-casts"
+      ]
     },
     {
       "number": 20,
       "opcode": "ZEND_IS_SMALLER",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "logic",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -1472,7 +1452,7 @@
         "i64_lt",
         "f64_lt"
       ],
-      "rationale": "Inherited from W03-D-comparison-boolean-casts with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "scalar.compare",
         "effect_ids": [
@@ -1522,14 +1502,13 @@
           "start_line": 5431,
           "symbol": "ZEND_IS_SMALLER"
         }
-      ],
-      "provider_owner": "W03-D-comparison-boolean-casts"
+      ]
     },
     {
       "number": 21,
       "opcode": "ZEND_IS_SMALLER_OR_EQUAL",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "logic",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -1548,7 +1527,7 @@
         "i64_le",
         "f64_le"
       ],
-      "rationale": "Inherited from W03-D-comparison-boolean-casts with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "scalar.compare",
         "effect_ids": [
@@ -1598,14 +1577,13 @@
           "start_line": 5432,
           "symbol": "ZEND_IS_SMALLER_OR_EQUAL"
         }
-      ],
-      "provider_owner": "W03-D-comparison-boolean-casts"
+      ]
     },
     {
       "number": 22,
       "opcode": "ZEND_ASSIGN",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -1659,14 +1637,13 @@
           "start_line": 5119,
           "symbol": "ZEND_ASSIGN"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 23,
       "opcode": "ZEND_ASSIGN_DIM",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W07",
       "proofs": [],
       "mir_opcodes": [],
@@ -1723,14 +1700,13 @@
           "start_line": 5062,
           "symbol": "ZEND_ASSIGN_DIM"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 24,
       "opcode": "ZEND_ASSIGN_OBJ",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -1788,14 +1764,13 @@
           "start_line": 4972,
           "symbol": "ZEND_ASSIGN_OBJ"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 25,
       "opcode": "ZEND_ASSIGN_STATIC_PROP",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -1843,14 +1818,13 @@
           "start_line": 6787,
           "symbol": "ZEND_ASSIGN_STATIC_PROP"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 26,
       "opcode": "ZEND_ASSIGN_OP",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -1905,14 +1879,13 @@
           "start_line": 4691,
           "symbol": "ZEND_ASSIGN_OP"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 27,
       "opcode": "ZEND_ASSIGN_DIM_OP",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -1969,14 +1942,13 @@
           "start_line": 4734,
           "symbol": "ZEND_ASSIGN_DIM_OP"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 28,
       "opcode": "ZEND_ASSIGN_OBJ_OP",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -2031,14 +2003,13 @@
           "start_line": 4876,
           "symbol": "ZEND_ASSIGN_OBJ_OP"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 29,
       "opcode": "ZEND_ASSIGN_STATIC_PROP_OP",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -2087,14 +2058,13 @@
           "start_line": 6790,
           "symbol": "ZEND_ASSIGN_STATIC_PROP_OP"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 30,
       "opcode": "ZEND_ASSIGN_REF",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -2137,14 +2107,13 @@
           "start_line": 2862,
           "symbol": "ZEND_ASSIGN_REF"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 31,
       "opcode": "ZEND_QM_ASSIGN",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "frontend",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -2161,7 +2130,7 @@
       "mir_opcodes": [
         "copy"
       ],
-      "rationale": "Inherited from W03-B-frontend-operands-facts with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "runtime.reference",
         "effect_ids": [
@@ -2204,14 +2173,13 @@
           "start_line": 5238,
           "symbol": "ZEND_QM_ASSIGN"
         }
-      ],
-      "provider_owner": "W03-B-frontend-operands-facts"
+      ]
     },
     {
       "number": 32,
       "opcode": "ZEND_ASSIGN_OBJ_REF",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -2259,14 +2227,13 @@
           "start_line": 6791,
           "symbol": "ZEND_ASSIGN_OBJ_REF"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 33,
       "opcode": "ZEND_ASSIGN_STATIC_PROP_REF",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -2315,14 +2282,13 @@
           "start_line": 6792,
           "symbol": "ZEND_ASSIGN_STATIC_PROP_REF"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 34,
       "opcode": "ZEND_PRE_INC",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -2379,14 +2345,13 @@
           "start_line": 4450,
           "symbol": "ZEND_PRE_INC"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 35,
       "opcode": "ZEND_PRE_DEC",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -2443,14 +2408,13 @@
           "start_line": 4451,
           "symbol": "ZEND_PRE_DEC"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 36,
       "opcode": "ZEND_POST_INC",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -2506,14 +2470,13 @@
           "start_line": 4452,
           "symbol": "ZEND_POST_INC"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 37,
       "opcode": "ZEND_POST_DEC",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -2569,14 +2532,13 @@
           "start_line": 4453,
           "symbol": "ZEND_POST_DEC"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 38,
       "opcode": "ZEND_PRE_INC_STATIC_PROP",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -2610,14 +2572,13 @@
           "start_line": 1428,
           "symbol": "ZEND_PRE_INC_STATIC_PROP"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 39,
       "opcode": "ZEND_PRE_DEC_STATIC_PROP",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -2657,14 +2618,13 @@
           "start_line": 1456,
           "symbol": "ZEND_PRE_DEC_STATIC_PROP"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 40,
       "opcode": "ZEND_POST_INC_STATIC_PROP",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -2698,14 +2658,13 @@
           "start_line": 1462,
           "symbol": "ZEND_POST_INC_STATIC_PROP"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 41,
       "opcode": "ZEND_POST_DEC_STATIC_PROP",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -2745,15 +2704,13 @@
           "start_line": 1490,
           "symbol": "ZEND_POST_DEC_STATIC_PROP"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 42,
       "opcode": "ZEND_JMP",
       "classification": "required",
-      "owner": "W04-A-production-control-flow",
-      "provider_owner": null,
+      "provider": "control_flow",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -2803,8 +2760,7 @@
       "number": 43,
       "opcode": "ZEND_JMPZ",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
-      "provider_owner": null,
+      "provider": "control_flow",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -2889,8 +2845,7 @@
       "number": 44,
       "opcode": "ZEND_JMPNZ",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
-      "provider_owner": null,
+      "provider": "control_flow",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -2975,8 +2930,7 @@
       "number": 46,
       "opcode": "ZEND_JMPZ_EX",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
-      "provider_owner": null,
+      "provider": "control_flow",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -3062,8 +3016,7 @@
       "number": 47,
       "opcode": "ZEND_JMPNZ_EX",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
-      "provider_owner": null,
+      "provider": "control_flow",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -3149,7 +3102,7 @@
       "number": 48,
       "opcode": "ZEND_CASE",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -3208,14 +3161,13 @@
           "start_line": 5433,
           "symbol": "ZEND_CASE"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 49,
       "opcode": "ZEND_CHECK_VAR",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -3247,14 +3199,13 @@
           "start_line": 9355,
           "symbol": "ZEND_CHECK_VAR"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 50,
       "opcode": "ZEND_SEND_VAR_NO_REF_EX",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -3311,14 +3262,13 @@
           "start_line": 5339,
           "symbol": "ZEND_SEND_VAR_NO_REF_EX"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 51,
       "opcode": "ZEND_CAST",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "logic",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -3343,7 +3293,7 @@
         "i1_to_i64",
         "i1_to_f64"
       ],
-      "rationale": "Inherited from W03-D-comparison-boolean-casts with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "runtime.misc",
         "effect_ids": [
@@ -3389,14 +3339,13 @@
           "start_line": 5233,
           "symbol": "ZEND_CAST"
         }
-      ],
-      "provider_owner": "W03-D-comparison-boolean-casts"
+      ]
     },
     {
       "number": 52,
       "opcode": "ZEND_BOOL",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "logic",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -3414,7 +3363,7 @@
         "i64_to_i1",
         "f64_to_i1"
       ],
-      "rationale": "Inherited from W03-D-comparison-boolean-casts with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "scalar.compare",
         "effect_ids": [
@@ -3462,14 +3411,13 @@
           "start_line": 5656,
           "symbol": "ZEND_BOOL"
         }
-      ],
-      "provider_owner": "W03-D-comparison-boolean-casts"
+      ]
     },
     {
       "number": 53,
       "opcode": "ZEND_FAST_CONCAT",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -3525,14 +3473,13 @@
           "start_line": 4665,
           "symbol": "ZEND_FAST_CONCAT"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 54,
       "opcode": "ZEND_ROPE_INIT",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -3586,14 +3533,13 @@
           "start_line": 6464,
           "symbol": "ZEND_ROPE_INIT"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 55,
       "opcode": "ZEND_ROPE_ADD",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -3647,14 +3593,13 @@
           "start_line": 6465,
           "symbol": "ZEND_ROPE_ADD"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 56,
       "opcode": "ZEND_ROPE_END",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -3709,14 +3654,13 @@
           "start_line": 6466,
           "symbol": "ZEND_ROPE_END"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 57,
       "opcode": "ZEND_BEGIN_SILENCE",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -3751,14 +3695,13 @@
           "start_line": 3741,
           "symbol": "ZEND_BEGIN_SILENCE"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 58,
       "opcode": "ZEND_END_SILENCE",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -3792,14 +3735,13 @@
           "start_line": 3742,
           "symbol": "ZEND_END_SILENCE"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 59,
       "opcode": "ZEND_INIT_FCALL_BY_NAME",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -3852,14 +3794,13 @@
           "start_line": 5287,
           "symbol": "ZEND_INIT_FCALL_BY_NAME"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 60,
       "opcode": "ZEND_DO_FCALL",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -3924,14 +3865,13 @@
           "start_line": 5424,
           "symbol": "ZEND_DO_FCALL"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 61,
       "opcode": "ZEND_INIT_FCALL",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -3976,14 +3916,13 @@
           "start_line": 5286,
           "symbol": "ZEND_INIT_FCALL"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 62,
       "opcode": "ZEND_RETURN",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "lifetime",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -4004,7 +3943,7 @@
       "mir_opcodes": [
         "return"
       ],
-      "rationale": "Inherited from W03-E-straight-line-lifetime-return with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "control.return",
         "effect_ids": [
@@ -4065,14 +4004,13 @@
           "start_line": 5578,
           "symbol": "ZEND_RETURN"
         }
-      ],
-      "provider_owner": "W03-E-straight-line-lifetime-return"
+      ]
     },
     {
       "number": 63,
       "opcode": "ZEND_RECV",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -4129,14 +4067,13 @@
           "start_line": 6185,
           "symbol": "ZEND_RECV"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 64,
       "opcode": "ZEND_RECV_INIT",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -4192,14 +4129,13 @@
           "start_line": 6190,
           "symbol": "ZEND_RECV_INIT"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 65,
       "opcode": "ZEND_SEND_VAL",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -4254,14 +4190,13 @@
           "start_line": 5294,
           "symbol": "ZEND_SEND_VAL"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 66,
       "opcode": "ZEND_SEND_VAR_EX",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -4317,14 +4252,13 @@
           "start_line": 5337,
           "symbol": "ZEND_SEND_VAR_EX"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 67,
       "opcode": "ZEND_SEND_REF",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -4378,14 +4312,13 @@
           "start_line": 5321,
           "symbol": "ZEND_SEND_REF"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 68,
       "opcode": "ZEND_NEW",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -4431,14 +4364,13 @@
           "start_line": 278,
           "symbol": "ZEND_NEW"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 69,
       "opcode": "ZEND_INIT_NS_FCALL_BY_NAME",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -4491,14 +4423,13 @@
           "start_line": 5288,
           "symbol": "ZEND_INIT_NS_FCALL_BY_NAME"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 70,
       "opcode": "ZEND_FREE",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "lifetime",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -4516,7 +4447,7 @@
       "mir_opcodes": [
         "scalar_drop"
       ],
-      "rationale": "Inherited from W03-E-straight-line-lifetime-return with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "runtime.misc",
         "effect_ids": [
@@ -4564,14 +4495,13 @@
           "start_line": 6209,
           "symbol": "ZEND_FREE"
         }
-      ],
-      "provider_owner": "W03-E-straight-line-lifetime-return"
+      ]
     },
     {
       "number": 71,
       "opcode": "ZEND_INIT_ARRAY",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W07",
       "proofs": [],
       "mir_opcodes": [],
@@ -4622,14 +4552,13 @@
           "start_line": 6534,
           "symbol": "ZEND_INIT_ARRAY"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 72,
       "opcode": "ZEND_ADD_ARRAY_ELEMENT",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -4673,14 +4602,13 @@
           "start_line": 6285,
           "symbol": "ZEND_ADD_ARRAY_ELEMENT"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 73,
       "opcode": "ZEND_INCLUDE_OR_EVAL",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -4733,14 +4661,13 @@
           "start_line": 2783,
           "symbol": "ZEND_INCLUDE_OR_EVAL"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 74,
       "opcode": "ZEND_UNSET_VAR",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -4787,14 +4714,13 @@
           "start_line": 1384,
           "symbol": "ZEND_UNSET_VAR"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 75,
       "opcode": "ZEND_UNSET_DIM",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -4844,14 +4770,13 @@
           "start_line": 939,
           "symbol": "ZEND_UNSET_DIM"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 76,
       "opcode": "ZEND_UNSET_OBJ",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -4900,14 +4825,13 @@
           "start_line": 1000,
           "symbol": "ZEND_UNSET_OBJ"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 77,
       "opcode": "ZEND_FE_RESET_R",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W07",
       "proofs": [],
       "mir_opcodes": [],
@@ -4973,14 +4897,13 @@
           "start_line": 6313,
           "symbol": "ZEND_FE_RESET_R"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 78,
       "opcode": "ZEND_FE_FETCH_R",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W07",
       "proofs": [],
       "mir_opcodes": [],
@@ -5035,14 +4958,13 @@
           "start_line": 6323,
           "symbol": "ZEND_FE_FETCH_R"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 80,
       "opcode": "ZEND_FETCH_R",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -5093,14 +5015,13 @@
           "start_line": 1378,
           "symbol": "ZEND_FETCH_R"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 81,
       "opcode": "ZEND_FETCH_DIM_R",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -5156,14 +5077,13 @@
           "start_line": 5843,
           "symbol": "ZEND_FETCH_DIM_R"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 82,
       "opcode": "ZEND_FETCH_OBJ_R",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -5223,14 +5143,13 @@
           "start_line": 6050,
           "symbol": "ZEND_FETCH_OBJ_R"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 83,
       "opcode": "ZEND_FETCH_W",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -5281,14 +5200,13 @@
           "start_line": 1379,
           "symbol": "ZEND_FETCH_W"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 84,
       "opcode": "ZEND_FETCH_DIM_W",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W07",
       "proofs": [],
       "mir_opcodes": [],
@@ -5341,14 +5259,13 @@
           "start_line": 5900,
           "symbol": "ZEND_FETCH_DIM_W"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 85,
       "opcode": "ZEND_FETCH_OBJ_W",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -5401,14 +5318,13 @@
           "start_line": 6052,
           "symbol": "ZEND_FETCH_OBJ_W"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 86,
       "opcode": "ZEND_FETCH_RW",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -5459,14 +5375,13 @@
           "start_line": 1380,
           "symbol": "ZEND_FETCH_RW"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 87,
       "opcode": "ZEND_FETCH_DIM_RW",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W07",
       "proofs": [],
       "mir_opcodes": [],
@@ -5519,14 +5434,13 @@
           "start_line": 5901,
           "symbol": "ZEND_FETCH_DIM_RW"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 88,
       "opcode": "ZEND_FETCH_OBJ_RW",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -5573,14 +5487,13 @@
           "start_line": 994,
           "symbol": "ZEND_FETCH_OBJ_RW"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 89,
       "opcode": "ZEND_FETCH_IS",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -5631,14 +5544,13 @@
           "start_line": 1382,
           "symbol": "ZEND_FETCH_IS"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 90,
       "opcode": "ZEND_FETCH_DIM_IS",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -5692,14 +5604,13 @@
           "start_line": 5844,
           "symbol": "ZEND_FETCH_DIM_IS"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 91,
       "opcode": "ZEND_FETCH_OBJ_IS",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -5756,14 +5667,13 @@
           "start_line": 6051,
           "symbol": "ZEND_FETCH_OBJ_IS"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 92,
       "opcode": "ZEND_FETCH_FUNC_ARG",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -5814,14 +5724,13 @@
           "start_line": 1381,
           "symbol": "ZEND_FETCH_FUNC_ARG"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 93,
       "opcode": "ZEND_FETCH_DIM_FUNC_ARG",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -5895,14 +5804,13 @@
           "start_line": 5835,
           "symbol": "ZEND_FETCH_DIM_FUNC_ARG"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 94,
       "opcode": "ZEND_FETCH_OBJ_FUNC_ARG",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -5974,14 +5882,13 @@
           "start_line": 6037,
           "symbol": "ZEND_FETCH_OBJ_FUNC_ARG"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 95,
       "opcode": "ZEND_FETCH_UNSET",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -6032,14 +5939,13 @@
           "start_line": 1383,
           "symbol": "ZEND_FETCH_UNSET"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 96,
       "opcode": "ZEND_FETCH_DIM_UNSET",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W07",
       "proofs": [],
       "mir_opcodes": [],
@@ -6086,14 +5992,13 @@
           "start_line": 13066,
           "symbol": "ZEND_FETCH_DIM_UNSET"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 97,
       "opcode": "ZEND_FETCH_OBJ_UNSET",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -6140,14 +6045,13 @@
           "start_line": 996,
           "symbol": "ZEND_FETCH_OBJ_UNSET"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 98,
       "opcode": "ZEND_FETCH_LIST_R",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -6200,14 +6104,13 @@
           "start_line": 5845,
           "symbol": "ZEND_FETCH_LIST_R"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 99,
       "opcode": "ZEND_FETCH_CONSTANT",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -6253,14 +6156,13 @@
           "start_line": 6356,
           "symbol": "ZEND_FETCH_CONSTANT"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 100,
       "opcode": "ZEND_CHECK_FUNC_ARG",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -6301,14 +6203,13 @@
           "start_line": 5396,
           "symbol": "ZEND_CHECK_FUNC_ARG"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 101,
       "opcode": "ZEND_EXT_STMT",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -6341,14 +6242,13 @@
           "start_line": 7992,
           "symbol": "ZEND_EXT_STMT"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 102,
       "opcode": "ZEND_EXT_FCALL_BEGIN",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -6381,14 +6281,13 @@
           "start_line": 8004,
           "symbol": "ZEND_EXT_FCALL_BEGIN"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 103,
       "opcode": "ZEND_EXT_FCALL_END",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -6421,14 +6320,13 @@
           "start_line": 8016,
           "symbol": "ZEND_EXT_FCALL_END"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 104,
       "opcode": "ZEND_EXT_NOP",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -6452,14 +6350,13 @@
           "start_line": 8155,
           "symbol": "ZEND_EXT_NOP"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 105,
       "opcode": "ZEND_TICKS",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -6498,14 +6395,13 @@
           "start_line": 8093,
           "symbol": "ZEND_TICKS"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 106,
       "opcode": "ZEND_SEND_VAR_NO_REF",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -6562,14 +6458,13 @@
           "start_line": 5338,
           "symbol": "ZEND_SEND_VAR_NO_REF"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 107,
       "opcode": "ZEND_CATCH",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -6616,14 +6511,13 @@
           "start_line": 292,
           "symbol": "ZEND_CATCH"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 108,
       "opcode": "ZEND_THROW",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -6672,14 +6566,13 @@
           "start_line": 2761,
           "symbol": "ZEND_THROW"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 109,
       "opcode": "ZEND_FETCH_CLASS",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -6721,14 +6614,13 @@
           "start_line": 3563,
           "symbol": "ZEND_FETCH_CLASS"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 110,
       "opcode": "ZEND_CLONE",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -6771,14 +6663,13 @@
           "start_line": 6071,
           "symbol": "ZEND_CLONE"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 111,
       "opcode": "ZEND_RETURN_BY_REF",
       "classification": "deferred",
-      "owner": "W04-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -6838,14 +6729,13 @@
           "start_line": 2755,
           "symbol": "ZEND_RETURN_BY_REF"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 112,
       "opcode": "ZEND_INIT_METHOD_CALL",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -6901,14 +6791,13 @@
           "start_line": 6361,
           "symbol": "ZEND_INIT_METHOD_CALL"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 113,
       "opcode": "ZEND_INIT_STATIC_METHOD_CALL",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -6963,14 +6852,13 @@
           "start_line": 6431,
           "symbol": "ZEND_INIT_STATIC_METHOD_CALL"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 114,
       "opcode": "ZEND_ISSET_ISEMPTY_VAR",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -7018,14 +6906,13 @@
           "start_line": 286,
           "symbol": "ZEND_ISSET_ISEMPTY_VAR"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 115,
       "opcode": "ZEND_ISSET_ISEMPTY_DIM_OBJ",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W07",
       "proofs": [],
       "mir_opcodes": [],
@@ -7079,14 +6966,13 @@
           "start_line": 5952,
           "symbol": "ZEND_ISSET_ISEMPTY_DIM_OBJ"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 116,
       "opcode": "ZEND_SEND_VAL_EX",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -7147,14 +7033,13 @@
           "start_line": 5295,
           "symbol": "ZEND_SEND_VAL_EX"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 117,
       "opcode": "ZEND_SEND_VAR",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -7210,14 +7095,13 @@
           "start_line": 5336,
           "symbol": "ZEND_SEND_VAR"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 118,
       "opcode": "ZEND_INIT_USER_CALL",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -7266,14 +7150,13 @@
           "start_line": 279,
           "symbol": "ZEND_INIT_USER_CALL"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 119,
       "opcode": "ZEND_SEND_ARRAY",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -7324,14 +7207,13 @@
           "start_line": 6457,
           "symbol": "ZEND_SEND_ARRAY"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 120,
       "opcode": "ZEND_SEND_USER",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -7381,14 +7263,13 @@
           "start_line": 269,
           "symbol": "ZEND_SEND_USER"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 121,
       "opcode": "ZEND_STRLEN",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -7443,14 +7324,13 @@
           "start_line": 6227,
           "symbol": "ZEND_STRLEN"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 122,
       "opcode": "ZEND_DEFINED",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -7492,14 +7372,13 @@
           "start_line": 5530,
           "symbol": "ZEND_DEFINED"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 123,
       "opcode": "ZEND_TYPE_CHECK",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -7553,14 +7432,13 @@
           "start_line": 5549,
           "symbol": "ZEND_TYPE_CHECK"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 124,
       "opcode": "ZEND_VERIFY_RETURN_TYPE",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -7607,14 +7485,13 @@
           "start_line": 6290,
           "symbol": "ZEND_VERIFY_RETURN_TYPE"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 125,
       "opcode": "ZEND_FE_RESET_RW",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W07",
       "proofs": [],
       "mir_opcodes": [],
@@ -7675,14 +7552,13 @@
           "start_line": 17228,
           "symbol": "ZEND_FE_RESET_RW"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 126,
       "opcode": "ZEND_FE_FETCH_RW",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -7733,14 +7609,13 @@
           "start_line": 17234,
           "symbol": "ZEND_FE_FETCH_RW"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 127,
       "opcode": "ZEND_FE_FREE",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -7794,14 +7669,13 @@
           "start_line": 6210,
           "symbol": "ZEND_FE_FREE"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 128,
       "opcode": "ZEND_INIT_DYNAMIC_CALL",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -7849,14 +7723,13 @@
           "start_line": 6446,
           "symbol": "ZEND_INIT_DYNAMIC_CALL"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 129,
       "opcode": "ZEND_DO_ICALL",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -7921,14 +7794,13 @@
           "start_line": 5422,
           "symbol": "ZEND_DO_ICALL"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 130,
       "opcode": "ZEND_DO_UCALL",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -7980,14 +7852,13 @@
           "start_line": 5421,
           "symbol": "ZEND_DO_UCALL"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 131,
       "opcode": "ZEND_DO_FCALL_BY_NAME",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -8052,14 +7923,13 @@
           "start_line": 5423,
           "symbol": "ZEND_DO_FCALL_BY_NAME"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 132,
       "opcode": "ZEND_PRE_INC_OBJ",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -8113,14 +7983,13 @@
           "start_line": 4792,
           "symbol": "ZEND_PRE_INC_OBJ"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 133,
       "opcode": "ZEND_PRE_DEC_OBJ",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -8180,14 +8049,13 @@
           "start_line": 4793,
           "symbol": "ZEND_PRE_DEC_OBJ"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 134,
       "opcode": "ZEND_POST_INC_OBJ",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -8241,14 +8109,13 @@
           "start_line": 4794,
           "symbol": "ZEND_POST_INC_OBJ"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 135,
       "opcode": "ZEND_POST_DEC_OBJ",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -8308,14 +8175,13 @@
           "start_line": 4795,
           "symbol": "ZEND_POST_DEC_OBJ"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 136,
       "opcode": "ZEND_ECHO",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -8369,14 +8235,13 @@
           "start_line": 6217,
           "symbol": "ZEND_ECHO"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 137,
       "opcode": "ZEND_OP_DATA",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -8406,14 +8271,13 @@
           "start_line": 2730,
           "symbol": "ZEND_OP_DATA"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 138,
       "opcode": "ZEND_INSTANCEOF",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -8461,14 +8325,13 @@
           "start_line": 290,
           "symbol": "ZEND_INSTANCEOF"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 139,
       "opcode": "ZEND_GENERATOR_CREATE",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W11",
       "proofs": [],
       "mir_opcodes": [],
@@ -8521,14 +8384,13 @@
           "start_line": 2753,
           "symbol": "ZEND_GENERATOR_CREATE"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 140,
       "opcode": "ZEND_MAKE_REF",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -8560,14 +8422,13 @@
           "start_line": 9368,
           "symbol": "ZEND_MAKE_REF"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 141,
       "opcode": "ZEND_DECLARE_FUNCTION",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -8599,14 +8460,13 @@
           "start_line": 8082,
           "symbol": "ZEND_DECLARE_FUNCTION"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 142,
       "opcode": "ZEND_DECLARE_LAMBDA_FUNCTION",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -8639,14 +8499,13 @@
           "start_line": 8412,
           "symbol": "ZEND_DECLARE_LAMBDA_FUNCTION"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 143,
       "opcode": "ZEND_DECLARE_CONST",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -8688,14 +8547,13 @@
           "start_line": 8338,
           "symbol": "ZEND_DECLARE_CONST"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 144,
       "opcode": "ZEND_DECLARE_CLASS",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -8727,14 +8585,13 @@
           "start_line": 8028,
           "symbol": "ZEND_DECLARE_CLASS"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 145,
       "opcode": "ZEND_DECLARE_CLASS_DELAYED",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -8767,14 +8624,13 @@
           "start_line": 8037,
           "symbol": "ZEND_DECLARE_CLASS_DELAYED"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 146,
       "opcode": "ZEND_DECLARE_ANON_CLASS",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -8813,14 +8669,13 @@
           "start_line": 293,
           "symbol": "ZEND_DECLARE_ANON_CLASS"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 147,
       "opcode": "ZEND_ADD_ARRAY_UNPACK",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W07",
       "proofs": [],
       "mir_opcodes": [],
@@ -8864,14 +8719,13 @@
           "start_line": 6395,
           "symbol": "ZEND_ADD_ARRAY_UNPACK"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 148,
       "opcode": "ZEND_ISSET_ISEMPTY_PROP_OBJ",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -8920,14 +8774,13 @@
           "start_line": 288,
           "symbol": "ZEND_ISSET_ISEMPTY_PROP_OBJ"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 149,
       "opcode": "ZEND_HANDLE_EXCEPTION",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -8976,14 +8829,13 @@
           "start_line": 8246,
           "symbol": "ZEND_HANDLE_EXCEPTION"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 150,
       "opcode": "ZEND_USER_OPCODE",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W11",
       "proofs": [],
       "mir_opcodes": [],
@@ -9031,14 +8883,13 @@
           "start_line": 8306,
           "symbol": "ZEND_USER_OPCODE"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 151,
       "opcode": "ZEND_ASSERT_CHECK",
       "classification": "deferred",
-      "owner": "W04-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -9073,14 +8924,13 @@
           "start_line": 291,
           "symbol": "ZEND_ASSERT_CHECK"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 152,
       "opcode": "ZEND_JMP_SET",
       "classification": "deferred",
-      "owner": "W04-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -9129,14 +8979,13 @@
           "start_line": 17224,
           "symbol": "ZEND_JMP_SET"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 153,
       "opcode": "ZEND_UNSET_CV",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -9177,14 +9026,13 @@
           "start_line": 6688,
           "symbol": "ZEND_UNSET_CV"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 154,
       "opcode": "ZEND_ISSET_ISEMPTY_CV",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -9226,14 +9074,13 @@
           "start_line": 5765,
           "symbol": "ZEND_ISSET_ISEMPTY_CV"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 155,
       "opcode": "ZEND_FETCH_LIST_W",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -9287,14 +9134,13 @@
           "start_line": 5903,
           "symbol": "ZEND_FETCH_LIST_W"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 156,
       "opcode": "ZEND_SEPARATE",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -9325,14 +9171,13 @@
           "start_line": 8439,
           "symbol": "ZEND_SEPARATE"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 157,
       "opcode": "ZEND_FETCH_CLASS_NAME",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -9374,14 +9219,13 @@
           "start_line": 8997,
           "symbol": "ZEND_FETCH_CLASS_NAME"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 158,
       "opcode": "ZEND_CALL_TRAMPOLINE",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -9429,14 +9273,13 @@
           "start_line": 9059,
           "symbol": "ZEND_CALL_TRAMPOLINE"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 159,
       "opcode": "ZEND_DISCARD_EXCEPTION",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -9477,14 +9320,13 @@
           "start_line": 8689,
           "symbol": "ZEND_DISCARD_EXCEPTION"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 160,
       "opcode": "ZEND_YIELD",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W11",
       "proofs": [],
       "mir_opcodes": [],
@@ -9542,14 +9384,13 @@
           "start_line": 2759,
           "symbol": "ZEND_YIELD"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 161,
       "opcode": "ZEND_GENERATOR_RETURN",
       "classification": "deferred",
-      "owner": "W04-integration-gate",
+      "provider": null,
       "deferred_wave": "W11",
       "proofs": [],
       "mir_opcodes": [],
@@ -9602,14 +9443,13 @@
           "start_line": 2754,
           "symbol": "ZEND_GENERATOR_RETURN"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 162,
       "opcode": "ZEND_FAST_CALL",
       "classification": "deferred",
-      "owner": "W04-integration-gate",
+      "provider": null,
       "deferred_wave": "W09",
       "proofs": [],
       "mir_opcodes": [],
@@ -9644,14 +9484,13 @@
           "start_line": 280,
           "symbol": "ZEND_FAST_CALL"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 163,
       "opcode": "ZEND_FAST_RET",
       "classification": "deferred",
-      "owner": "W04-integration-gate",
+      "provider": null,
       "deferred_wave": "W09",
       "proofs": [],
       "mir_opcodes": [],
@@ -9701,14 +9540,13 @@
           "start_line": 2752,
           "symbol": "ZEND_FAST_RET"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 164,
       "opcode": "ZEND_RECV_VARIADIC",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -9746,14 +9584,13 @@
           "start_line": 5834,
           "symbol": "ZEND_RECV_VARIADIC"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 165,
       "opcode": "ZEND_SEND_UNPACK",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -9806,14 +9643,13 @@
           "start_line": 6458,
           "symbol": "ZEND_SEND_UNPACK"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 166,
       "opcode": "ZEND_YIELD_FROM",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W11",
       "proofs": [],
       "mir_opcodes": [],
@@ -9867,14 +9703,13 @@
           "start_line": 2760,
           "symbol": "ZEND_YIELD_FROM"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 167,
       "opcode": "ZEND_COPY_TMP",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -9904,14 +9739,13 @@
           "start_line": 9822,
           "symbol": "ZEND_COPY_TMP"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 168,
       "opcode": "ZEND_BIND_GLOBAL",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -9966,14 +9800,13 @@
           "start_line": 6160,
           "symbol": "ZEND_BIND_GLOBAL"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 169,
       "opcode": "ZEND_COALESCE",
       "classification": "deferred",
-      "owner": "W04-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -10022,14 +9855,13 @@
           "start_line": 17225,
           "symbol": "ZEND_COALESCE"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 170,
       "opcode": "ZEND_SPACESHIP",
       "classification": "conditional",
-      "owner": "W04-A-production-control-flow",
+      "provider": "logic",
       "deferred_wave": null,
       "proofs": [
         "source_cfg_complete",
@@ -10048,7 +9880,7 @@
         "i64_cmp",
         "f64_cmp"
       ],
-      "rationale": "Inherited from W03-D-comparison-boolean-casts with the W04 source-CFG proof set replacing the W03 single-block restriction.",
+      "rationale": "Inherited with the W04 source-CFG proof set replacing the W03 single-block restriction.",
       "w01": {
         "planned_znmir_lowering": "scalar.compare",
         "effect_ids": [
@@ -10084,14 +9916,13 @@
           "start_line": 788,
           "symbol": "ZEND_SPACESHIP"
         }
-      ],
-      "provider_owner": "W03-D-comparison-boolean-casts"
+      ]
     },
     {
       "number": 171,
       "opcode": "ZEND_FUNC_NUM_ARGS",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -10120,14 +9951,13 @@
           "start_line": 9737,
           "symbol": "ZEND_FUNC_NUM_ARGS"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 172,
       "opcode": "ZEND_FUNC_GET_ARGS",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -10161,14 +9991,13 @@
           "start_line": 9745,
           "symbol": "ZEND_FUNC_GET_ARGS"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 173,
       "opcode": "ZEND_FETCH_STATIC_PROP_R",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -10222,14 +10051,13 @@
           "start_line": 6144,
           "symbol": "ZEND_FETCH_STATIC_PROP_R"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 174,
       "opcode": "ZEND_FETCH_STATIC_PROP_W",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -10283,14 +10111,13 @@
           "start_line": 6146,
           "symbol": "ZEND_FETCH_STATIC_PROP_W"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 175,
       "opcode": "ZEND_FETCH_STATIC_PROP_RW",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -10344,14 +10171,13 @@
           "start_line": 6147,
           "symbol": "ZEND_FETCH_STATIC_PROP_RW"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 176,
       "opcode": "ZEND_FETCH_STATIC_PROP_IS",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -10405,14 +10231,13 @@
           "start_line": 6145,
           "symbol": "ZEND_FETCH_STATIC_PROP_IS"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 177,
       "opcode": "ZEND_FETCH_STATIC_PROP_FUNC_ARG",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -10472,14 +10297,13 @@
           "start_line": 6137,
           "symbol": "ZEND_FETCH_STATIC_PROP_FUNC_ARG"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 178,
       "opcode": "ZEND_FETCH_STATIC_PROP_UNSET",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -10533,14 +10357,13 @@
           "start_line": 6148,
           "symbol": "ZEND_FETCH_STATIC_PROP_UNSET"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 179,
       "opcode": "ZEND_UNSET_STATIC_PROP",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -10581,14 +10404,13 @@
           "start_line": 6744,
           "symbol": "ZEND_UNSET_STATIC_PROP"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 180,
       "opcode": "ZEND_ISSET_ISEMPTY_STATIC_PROP",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W08",
       "proofs": [],
       "mir_opcodes": [],
@@ -10625,14 +10447,13 @@
           "start_line": 289,
           "symbol": "ZEND_ISSET_ISEMPTY_STATIC_PROP"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 181,
       "opcode": "ZEND_FETCH_CLASS_CONSTANT",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -10675,14 +10496,13 @@
           "start_line": 6152,
           "symbol": "ZEND_FETCH_CLASS_CONSTANT"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 182,
       "opcode": "ZEND_BIND_LEXICAL",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -10717,14 +10537,13 @@
           "start_line": 9207,
           "symbol": "ZEND_BIND_LEXICAL"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 183,
       "opcode": "ZEND_BIND_STATIC",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -10770,14 +10589,13 @@
           "start_line": 9239,
           "symbol": "ZEND_BIND_STATIC"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 184,
       "opcode": "ZEND_FETCH_THIS",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -10828,14 +10646,13 @@
           "start_line": 6271,
           "symbol": "ZEND_FETCH_THIS"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 185,
       "opcode": "ZEND_SEND_FUNC_ARG",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -10891,14 +10708,13 @@
           "start_line": 5340,
           "symbol": "ZEND_SEND_FUNC_ARG"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 186,
       "opcode": "ZEND_ISSET_ISEMPTY_THIS",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -10927,14 +10743,13 @@
           "start_line": 9345,
           "symbol": "ZEND_ISSET_ISEMPTY_THIS"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 187,
       "opcode": "ZEND_SWITCH_LONG",
       "classification": "deferred",
-      "owner": "W04-integration-gate",
+      "provider": null,
       "deferred_wave": "W07",
       "proofs": [],
       "mir_opcodes": [],
@@ -10977,14 +10792,13 @@
           "start_line": 6283,
           "symbol": "ZEND_SWITCH_LONG"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 188,
       "opcode": "ZEND_SWITCH_STRING",
       "classification": "deferred",
-      "owner": "W04-integration-gate",
+      "provider": null,
       "deferred_wave": "W07",
       "proofs": [],
       "mir_opcodes": [],
@@ -11027,14 +10841,13 @@
           "start_line": 6284,
           "symbol": "ZEND_SWITCH_STRING"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 189,
       "opcode": "ZEND_IN_ARRAY",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -11088,14 +10901,13 @@
           "start_line": 5805,
           "symbol": "ZEND_IN_ARRAY"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 190,
       "opcode": "ZEND_COUNT",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -11150,14 +10962,13 @@
           "start_line": 6249,
           "symbol": "ZEND_COUNT"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 191,
       "opcode": "ZEND_GET_CLASS",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -11199,14 +11010,13 @@
           "start_line": 9658,
           "symbol": "ZEND_GET_CLASS"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 192,
       "opcode": "ZEND_GET_CALLED_CLASS",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -11239,14 +11049,13 @@
           "start_line": 9701,
           "symbol": "ZEND_GET_CALLED_CLASS"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 193,
       "opcode": "ZEND_GET_TYPE",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -11288,14 +11097,13 @@
           "start_line": 9719,
           "symbol": "ZEND_GET_TYPE"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 194,
       "opcode": "ZEND_ARRAY_KEY_EXISTS",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W07",
       "proofs": [],
       "mir_opcodes": [],
@@ -11343,14 +11151,13 @@
           "start_line": 294,
           "symbol": "ZEND_ARRAY_KEY_EXISTS"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 195,
       "opcode": "ZEND_MATCH",
       "classification": "deferred",
-      "owner": "W04-integration-gate",
+      "provider": null,
       "deferred_wave": "W07",
       "proofs": [],
       "mir_opcodes": [],
@@ -11396,14 +11203,13 @@
           "start_line": 6285,
           "symbol": "ZEND_MATCH"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 196,
       "opcode": "ZEND_CASE_STRICT",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -11456,14 +11262,13 @@
           "start_line": 5481,
           "symbol": "ZEND_CASE_STRICT"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 197,
       "opcode": "ZEND_MATCH_ERROR",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -11502,14 +11307,13 @@
           "start_line": 2757,
           "symbol": "ZEND_MATCH_ERROR"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 198,
       "opcode": "ZEND_JMP_NULL",
       "classification": "deferred",
-      "owner": "W04-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -11556,14 +11360,13 @@
           "start_line": 17226,
           "symbol": "ZEND_JMP_NULL"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 199,
       "opcode": "ZEND_CHECK_UNDEF_ARGS",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -11608,14 +11411,13 @@
           "start_line": 5412,
           "symbol": "ZEND_CHECK_UNDEF_ARGS"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 200,
       "opcode": "ZEND_FETCH_GLOBALS",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -11645,14 +11447,13 @@
           "start_line": 9335,
           "symbol": "ZEND_FETCH_GLOBALS"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 201,
       "opcode": "ZEND_VERIFY_NEVER_TYPE",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -11691,14 +11492,13 @@
           "start_line": 2762,
           "symbol": "ZEND_VERIFY_NEVER_TYPE"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 202,
       "opcode": "ZEND_CALLABLE_CONVERT",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -11745,14 +11545,13 @@
           "start_line": 303,
           "symbol": "ZEND_CALLABLE_CONVERT"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 203,
       "opcode": "ZEND_BIND_INIT_STATIC_OR_JMP",
       "classification": "deferred",
-      "owner": "W04-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -11800,14 +11599,13 @@
           "start_line": 17252,
           "symbol": "ZEND_BIND_INIT_STATIC_OR_JMP"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 204,
       "opcode": "ZEND_FRAMELESS_ICALL_0",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -11860,14 +11658,13 @@
           "start_line": 6476,
           "symbol": "ZEND_FRAMELESS_ICALL_0"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 205,
       "opcode": "ZEND_FRAMELESS_ICALL_1",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -11924,14 +11721,13 @@
           "start_line": 6479,
           "symbol": "ZEND_FRAMELESS_ICALL_1"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 206,
       "opcode": "ZEND_FRAMELESS_ICALL_2",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -11988,14 +11784,13 @@
           "start_line": 6483,
           "symbol": "ZEND_FRAMELESS_ICALL_2"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 207,
       "opcode": "ZEND_FRAMELESS_ICALL_3",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -12052,14 +11847,13 @@
           "start_line": 6488,
           "symbol": "ZEND_FRAMELESS_ICALL_3"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 208,
       "opcode": "ZEND_JMP_FRAMELESS",
       "classification": "deferred",
-      "owner": "W04-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -12101,14 +11895,13 @@
           "start_line": 5738,
           "symbol": "ZEND_JMP_FRAMELESS"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 209,
       "opcode": "ZEND_INIT_PARENT_PROPERTY_HOOK_CALL",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -12149,14 +11942,13 @@
           "start_line": 274,
           "symbol": "ZEND_INIT_PARENT_PROPERTY_HOOK_CALL"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 210,
       "opcode": "ZEND_DECLARE_ATTRIBUTED_CONST",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -12204,14 +11996,13 @@
           "start_line": 4170,
           "symbol": "ZEND_DECLARE_ATTRIBUTED_CONST"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 211,
       "opcode": "ZEND_TYPE_ASSERT",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W06",
       "proofs": [],
       "mir_opcodes": [],
@@ -12252,14 +12043,13 @@
           "start_line": 8926,
           "symbol": "ZEND_TYPE_ASSERT"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 212,
       "opcode": "ZEND_CALLABLE_CONVERT_PARTIAL",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -12320,14 +12110,13 @@
           "start_line": 304,
           "symbol": "ZEND_CALLABLE_CONVERT_PARTIAL"
         }
-      ],
-      "provider_owner": null
+      ]
     },
     {
       "number": 213,
       "opcode": "ZEND_SEND_PLACEHOLDER",
       "classification": "deferred",
-      "owner": "W03-integration-gate",
+      "provider": null,
       "deferred_wave": "W05",
       "proofs": [],
       "mir_opcodes": [],
@@ -12370,8 +12159,7 @@
           "start_line": 5729,
           "symbol": "ZEND_SEND_PLACEHOLDER"
         }
-      ],
-      "provider_owner": null
+      ]
     }
   ]
 }

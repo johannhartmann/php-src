@@ -1,9 +1,10 @@
 # Native engine contracts
 
 This directory records the architecture and working contracts for the native
-engine full-cutover project. W00 establishes rules, build/test command names,
-and gates; W01 freezes semantic contracts. Neither wave adds a compiler or
-changes PHP runtime behavior.
+engine full-cutover project. It keeps architectural contracts and executable
+engine tests close to the implementation. Planning metadata, task receipts,
+path-ownership manifests, and generated status dashboards are deliberately not
+repository contracts.
 
 Repository-wide and path-specific agent rules live in:
 
@@ -34,18 +35,18 @@ Repository-wide and path-specific agent rules live in:
 15. [W04 control-flow source contract](adr/0015-w04-control-flow-source-contract.md)
 16. [Reducible CFGs and edge statepoints](adr/0016-w04-reducible-cfg-and-edge-statepoints.md)
 17. [W05 atomic call-sequence model](adr/0019-w05-call-sequence-model.md)
-18. [Capability receipts instead of stage numbers](adr/0020-capability-receipts-not-stage-numbers.md)
+18. [Named MIR capabilities instead of stage numbers](adr/0020-named-mir-capabilities.md)
+19. [W05 direct-call model corrections](adr/0021-w05-call-model-corrections.md)
 
-## Delivery contracts
+## Development contracts
 
-- [Codex task template](codex-task-template.md)
-- [Codex review template](codex-review-template.md)
-- [Pull-request conventions](pr-conventions.md)
 - [Native test-command contract](test-command-contract.md)
 - [Native frame semantics](semantics/frames/README.md)
 - [W03 lowering profile](lowering/README.md)
 - [W04 control-flow contracts](control-flow/contracts/source-cfg.md)
 - [W05 direct-user-call contracts](calls/contracts/call-sequence.md)
 
-The generated wave status subtree, `docs/native-engine/waves/`, is owned by the
-wave-gate work and is intentionally outside W00-A.
+CI invokes these technical checks directly. A change is accepted when its
+applicable contract, unit, differential, sanitizer, and fuzz tests pass; it
+does not need a second layer of delivery receipts or generated validation
+evidence.

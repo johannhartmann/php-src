@@ -124,7 +124,7 @@ extern "C" {
 /*
  * These process-local accessors are supplied by the lowering core.  Keeping
  * them out of the frozen public ABI lets the W03 integration track reconcile
- * specialist-private context layouts without persisting a pointer in ZNMIR.
+ * provider-private context layouts without persisting a pointer in ZNMIR.
  */
 const void *zend_mir_lowering_context_provider_context(
 	const zend_mir_lowering_context *context);

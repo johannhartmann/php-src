@@ -15,8 +15,6 @@ W01_MATRIX = ROOT / "docs/native-engine/semantics/opcodes/opcode-matrix.json"
 W03_PROFILE = ROOT / "docs/native-engine/lowering/w03-opcode-profile.json"
 W04_PROFILE = ROOT / "docs/native-engine/control-flow/w04-opcode-profile.json"
 
-W04_OWNER = "W04-A-production-control-flow"
-
 CFG_PROOFS = (
     "source_cfg_complete",
     "reducible_cfg",
@@ -182,12 +180,10 @@ def build_profile(
         name = old["opcode"]
         if old["classification"] != "deferred":
             entry = dict(old)
-            entry["owner"] = W04_OWNER
-            entry["provider_owner"] = old["owner"]
             entry["proofs"] = _replace_straight_line_proof(old["proofs"])
             entry["rationale"] = (
-                f"Inherited from {old['owner']} with the W04 source-CFG proof set "
-                "replacing the W03 single-block restriction."
+                "Inherited with the W04 source-CFG proof set replacing the "
+                "W03 single-block restriction."
             )
         elif old.get("deferred_wave") == "W04":
             decision = W04_DECISIONS.get(name)
@@ -197,8 +193,7 @@ def build_profile(
                     "number": old["number"],
                     "opcode": name,
                     "classification": decision["classification"],
-                    "owner": W04_OWNER,
-                    "provider_owner": None,
+                    "provider": "control_flow",
                     "deferred_wave": None,
                     "proofs": decision["proofs"],
                     "mir_opcodes": decision["mir_opcodes"],
@@ -209,15 +204,15 @@ def build_profile(
             elif later is not None:
                 wave, rationale = later
                 entry = dict(old)
-                entry["owner"] = "W04-integration-gate"
-                entry["provider_owner"] = None
+                entry["provider"] = None
                 entry["deferred_wave"] = wave
                 entry["rationale"] = rationale
             else:
                 raise ValueError(f"unresolved W04-deferred opcode: {name}")
         else:
             entry = dict(old)
-            entry["provider_owner"] = None
+        entry.pop("owner", None)
+        entry.pop("provider_owner", None)
         entries.append(entry)
 
     return {

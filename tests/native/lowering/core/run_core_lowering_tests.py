@@ -79,7 +79,7 @@ def main() -> int:
             ),
         )
 
-    print("W03-A core lowering harness: PASS")
+    print("core lowering harness: PASS")
     return 0
 
 

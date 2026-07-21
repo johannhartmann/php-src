@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import importlib.util
 import json
 import os
@@ -27,16 +26,12 @@ DOCS = ROOT / "docs/native-engine/calls"
 FIXTURES = ROOT / "tests/native/calls/contracts"
 PROFILE = DOCS / "w05-opcode-profile.json"
 SEQUENCE = DOCS / "w05-sequence-profile.json"
-MANIFEST = DOCS / "w05-phase-manifest.json"
 RECLASSIFICATION = DOCS / "w05-reclassification.json"
 GENERATOR = ROOT / "scripts/native/calls/generate-w05-profile.py"
-PHASE_CHECKER = ROOT / "scripts/native/calls/check-phases.py"
 
 HEADERS = (
     MIR / "zend_mir_ids.h",
     MIR / "zend_mir_opcodes.h",
-    MIR / "zend_mir_capability.h",
-    MIR / "zend_mir_verification.h",
     CALLS / "Contracts/zend_mir_call_source.h",
     CALLS / "Contracts/zend_mir_call_plan.h",
     MIR / "zend_mir_call.h",
@@ -55,7 +50,6 @@ POINTER_FREE_RECORDS = (
     "zend_mir_call_frame_descriptor",
     "zend_mir_call_continuation_ref",
     "zend_mir_call_site_ref",
-    "zend_mir_call_capability_receipt_ref",
 )
 CAPABILITIES = (
     "scalar_semantics",
@@ -192,7 +186,7 @@ def validate_headers() -> None:
     versions = (
         ("ZEND_MIR_CONTRACT_VERSION_MINOR", 2),
         ("ZEND_MIR_W04_CONTRACT_VERSION_MINOR", 3),
-        ("ZEND_MIR_W05_CONTRACT_VERSION_MINOR", 8),
+        ("ZEND_MIR_W05_CONTRACT_VERSION_MINOR", 9),
     )
     for symbol, value in versions:
         if re.search(rf"\b{symbol}\s+UINT32_C\({value}\)", ids) is None:
@@ -246,20 +240,12 @@ def validate_headers() -> None:
         "zend_mir_lowering_result_is_w05_failure_atomic",
         "prerequisite_guarantees",
         "function_symbol_id",
-        "zend_mir_verifier_receipt_ref",
-        "zend_mir_capability_set_ref",
     )
     for token in required:
         if token not in combined:
             raise ContractError(f"missing W05 contract token: {token}")
     if "STAGE4" in combined.upper():
         raise ContractError("W05 introduced forbidden Stage 4 semantics")
-    if not all(
-        token in texts[MIR / "zend_mir_call.h"]
-        for token in ("modeled", "codegen_eligible", "semantic_debts")
-    ):
-        raise ContractError("capability receipt does not separate model, codegen and debt")
-
     diagnostics = texts[LOWERING / "zend_mir_lowering_diagnostic.h"]
     for value in range(21, 30):
         if re.search(rf"=\s*{value}\b", diagnostics) is None:
@@ -287,7 +273,7 @@ def validate_headers() -> None:
         raise ContractError("W04 guarantee/result compatibility was removed")
     w05_result = extract_struct(combined, "zend_mir_w05_lowering_result")
     if "prerequisite_guarantees" not in w05_result:
-        raise ContractError("W05 prerequisite guarantee receipt is absent")
+        raise ContractError("W05 prerequisite guarantees are absent")
     if (
         "result->lowering.guarantees\n\t\t\t\t== ZEND_MIR_LOWERING_GUARANTEE_FINALIZED"
         not in lowering
@@ -413,15 +399,6 @@ def validate_fixtures() -> None:
         raise ContractError("nested fixture leaves an incomplete call site")
 
 
-def validate_w02_golden() -> None:
-    manifest = ROOT / "tests/native/control-flow/contracts/w03-golden.sha256"
-    for line in manifest.read_text(encoding="utf-8").splitlines():
-        expected, relative = line.split(maxsplit=1)
-        actual = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
-        if actual != expected:
-            raise ContractError(f"pre-W05 golden bytes changed: {relative}")
-
-
 def compiler(default: str, variable: str) -> str:
     selected = os.environ.get(variable, default)
     resolved = shutil.which(selected)
@@ -454,24 +431,13 @@ def compile_contract() -> None:
         run([str(cxx_binary)])
 
 
-def validate_w02_regressions() -> None:
-    """Run the full W02 validator against its commit-bound historical report."""
-    run(["python3", "scripts/native/mir/validate-w02.py", "--check"])
-
-
 def check() -> None:
     validate_schema_documents()
     validate_profile()
     validate_headers()
     validate_sequence_profile()
     validate_fixtures()
-    validate_w02_golden()
     compile_contract()
-    run(["python3", "scripts/native/semantics/validate-w01.py", "--check"])
-    validate_w02_regressions()
-    run(["python3", "scripts/native/lowering/validate-w03.py", "--check"])
-    run(["python3", "scripts/native/control-flow/validate-w04.py", "--check"])
-    run(["python3", str(PHASE_CHECKER.relative_to(ROOT)), "--check"])
 
 
 def main() -> int:
@@ -486,8 +452,8 @@ def main() -> int:
         print(f"W05 call contract check failed: {error}", file=sys.stderr)
         return 1
     print(
-        "W05 call contract check passed: C11/C++20, W01-W04, "
-        "profile, phases, fixtures, capabilities and debts"
+        "W05 call contract check passed: C11/C++20, profile, fixtures, "
+        "capabilities and debts"
     )
     return 0
 

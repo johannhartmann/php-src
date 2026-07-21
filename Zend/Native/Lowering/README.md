@@ -9,5 +9,5 @@ The generated opcode profile is the acceptance authority. A conditional opcode
 is lowerable only when all listed proofs are available. Otherwise lowering must
 return a stable diagnostic and no module.
 
-Implementation belongs to the W03 specialist tracks. These headers define
+Implementation is split into focused provider modules. These headers define
 interfaces and stable numeric identities only.

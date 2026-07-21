@@ -60,7 +60,7 @@ class NumericLoweringContractTests(unittest.TestCase):
         expected = {
             entry["number"]
             for entry in profile["opcodes"]
-            if entry["owner"] == "W03-C-numeric-arithmetic-bitwise"
+            if entry["provider"] == "numeric"
         }
         header = (NUMERIC / "zend_mir_lower_numeric.h").read_text()
         constants = {

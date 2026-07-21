@@ -21,12 +21,10 @@
             "minItems": 1,
             "type": "array",
             "uniqueItems": true
-        },
-        "wave_base_commit": {"$ref": "#/$defs/commit"}
+        }
     },
     "required": [
         "format_version",
-        "wave_base_commit",
         "php_src_semantics_commit",
         "required_opcode_families",
         "required_semantic_risks",
@@ -88,7 +86,6 @@
                     "type": "array",
                     "uniqueItems": true
                 },
-                "owner": {"const": "W01-E"},
                 "reference_provenance_required": {"const": true},
                 "repeat_calls": {
                     "items": {"maximum": 10, "minimum": 1, "type": "integer"},
@@ -126,8 +123,7 @@
                 "repeat_calls",
                 "forced_boundaries",
                 "reference_provenance_required",
-                "determinism_constraints",
-                "owner"
+                "determinism_constraints"
             ],
             "type": "object"
         },

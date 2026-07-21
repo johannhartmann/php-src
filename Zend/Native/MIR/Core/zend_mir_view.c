@@ -508,53 +508,6 @@ static bool zend_mir_call_view_continuation_at(
 	return true;
 }
 
-static uint32_t zend_mir_call_view_receipt_count(const void *context)
-{
-	const zend_mir_module *module = context;
-	return zend_mir_call_view_is_available(module)
-		? module->call_receipts.count : 0;
-}
-
-static bool zend_mir_call_view_receipt_at(
-	const void *context, uint32_t index,
-	zend_mir_call_capability_receipt_ref *out)
-{
-	const zend_mir_module *module = context;
-	zend_mir_call_capability_receipt_ref *records;
-	if (!zend_mir_call_view_is_available(module) || out == NULL
-			|| index >= module->call_receipts.count) {
-		return false;
-	}
-	records = ZEND_MIR_CORE_ITEMS(
-		module, call_receipts, zend_mir_call_capability_receipt_ref);
-	*out = records[index];
-	return true;
-}
-
-static uint32_t zend_mir_call_view_verifier_receipt_count(
-	const void *context)
-{
-	const zend_mir_module *module = context;
-	return zend_mir_call_view_is_available(module)
-		? module->verifier_receipts.count : 0;
-}
-
-static bool zend_mir_call_view_verifier_receipt_at(
-	const void *context, uint32_t index,
-	zend_mir_verifier_receipt_ref *out)
-{
-	const zend_mir_module *module = context;
-	zend_mir_verifier_receipt_ref *records;
-	if (!zend_mir_call_view_is_available(module) || out == NULL
-			|| index >= module->verifier_receipts.count) {
-		return false;
-	}
-	records = ZEND_MIR_CORE_ITEMS(
-		module, verifier_receipts, zend_mir_verifier_receipt_ref);
-	*out = records[index];
-	return true;
-}
-
 void zend_mir_module_init_call_view(zend_mir_module *module)
 {
 	memset(&module->call_view, 0, sizeof(module->call_view));
@@ -571,14 +524,6 @@ void zend_mir_module_init_call_view(zend_mir_module *module)
 		zend_mir_call_view_continuation_count;
 	module->call_view.call_continuation_at =
 		zend_mir_call_view_continuation_at;
-	module->call_view.call_capability_receipt_count =
-		zend_mir_call_view_receipt_count;
-	module->call_view.call_capability_receipt_at =
-		zend_mir_call_view_receipt_at;
-	module->call_view.verifier_receipt_count =
-		zend_mir_call_view_verifier_receipt_count;
-	module->call_view.verifier_receipt_at =
-		zend_mir_call_view_verifier_receipt_at;
 }
 
 void zend_mir_module_init_view(zend_mir_module *module)

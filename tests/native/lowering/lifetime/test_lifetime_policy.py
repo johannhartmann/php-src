@@ -17,7 +17,7 @@ class LifetimePolicyTests(unittest.TestCase):
         owned = {
             entry["opcode"]: (entry["number"], entry["mir_opcodes"])
             for entry in entries
-            if entry["owner"] == "W03-E-straight-line-lifetime-return"
+            if entry["provider"] == "lifetime"
         }
         self.assertEqual(
             {

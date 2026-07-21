@@ -27,7 +27,7 @@ python3 scripts/native/control-flow/test-w04.py --self-test
 python3 -m unittest discover -s tests/native/control-flow -p 'test_*.py' -v
 ```
 
-Run the real gate with explicit, distinct binaries:
+Run the real differential tests with explicit, distinct binaries:
 
 ```sh
 python3 scripts/native/control-flow/test-w04.py \
@@ -36,7 +36,7 @@ python3 scripts/native/control-flow/test-w04.py \
 ```
 
 ASan and UBSan use the same command plus `--sanitizer address` or
-`--sanitizer undefined`. The full Linux hard gate also builds debug NTS and
-ZTS, runs 20,000 cases with seed `20260719`, repeats calls 1 through 10, and
-checks arena chunk sizes and OPcache on/off determinism. The timestamp-free
-summary is `w04-coverage-report.json`.
+`--sanitizer undefined`. Linux CI also builds debug NTS and ZTS, runs 20,000
+cases with seed `20260719`, repeats calls 1 through 10, and checks arena chunk
+sizes and OPcache on/off determinism. These are direct test results, not a
+second committed evidence model.

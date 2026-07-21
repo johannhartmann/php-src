@@ -1,4 +1,4 @@
-"""Compile and execute the W04-B failure-atomic entry stub."""
+"""Compile and execute the W04 failure-atomic entry stub."""
 
 from __future__ import annotations
 

@@ -5,11 +5,11 @@
 These instructions apply to the entire repository. Read and obey
 `CONTRIBUTING.md`, `CODING_STANDARDS.md`, and every deeper `AGENTS.md` that
 applies to a changed path. Deeper instructions may add constraints for their
-scope; they do not relax repository-wide safety, testing, or ownership rules.
+scope; they do not relax repository-wide safety or testing rules.
 
-Change only the paths declared in the task's path ownership. Stop and report a
-conflict before changing an owned path assigned to another task or preserving
-work would require overwriting unrelated changes.
+Keep changes focused and preserve unrelated work already present in the
+worktree. Repository paths are not assigned through persistent task, phase, or
+wave ownership manifests.
 
 ## Native-engine contracts
 
@@ -22,17 +22,14 @@ Do not introduce a production VM fallback in native-engine code. Do not change
 public ABI, persistent formats, or dependencies without an explicit contract,
 compatibility analysis, and the tests required by that contract.
 
-The following paths are stable W00 command contracts; their absence before the
-owning W00 work is integrated is not permission to invent replacements:
+The native-engine build and test entry points are:
 
 - `scripts/native/configure-dev.sh`
 - `scripts/native/build.sh`
 - `scripts/native/test-smoke.sh`
 - `scripts/native/test-sanitizers.sh`
-- `scripts/native/wave-gate.py`
 
-See `docs/native-engine/test-command-contract.md` for ownership and exit
-semantics.
+See `docs/native-engine/test-command-contract.md` for exit semantics.
 
 ## Completion
 

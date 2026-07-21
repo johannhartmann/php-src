@@ -98,8 +98,7 @@
         "number",
         "opcode",
         "classification",
-        "owner",
-        "provider_owner",
+        "provider",
         "deferred_wave",
         "proofs",
         "mir_opcodes",
@@ -123,11 +122,7 @@
             "deferred"
           ]
         },
-        "owner": {
-          "type": "string",
-          "minLength": 1
-        },
-        "provider_owner": {
+        "provider": {
           "type": [
             "string",
             "null"

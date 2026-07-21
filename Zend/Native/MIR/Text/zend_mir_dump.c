@@ -23,7 +23,6 @@ typedef struct _zend_mir_dump_context {
 	zend_mir_text_writer *writer;
 	zend_mir_diagnostic_sink *diagnostics;
 	bool writer_failed;
-	bool omit_verifier_receipts;
 } zend_mir_dump_context;
 
 typedef bool (*zend_mir_dump_id_at_fn)(
@@ -818,11 +817,7 @@ static bool zend_mir_dump_call_model(zend_mir_dump_context *dump)
 			|| calls->call_continuation_count == NULL
 			|| calls->call_continuation_at == NULL
 			|| calls->call_site_count == NULL
-			|| calls->call_site_at == NULL
-			|| calls->call_capability_receipt_count == NULL
-			|| calls->call_capability_receipt_at == NULL
-			|| calls->verifier_receipt_count == NULL
-			|| calls->verifier_receipt_at == NULL) {
+			|| calls->call_site_at == NULL) {
 		zend_mir_dump_diagnostic(dump, "incomplete W05 call view");
 		return false;
 	}
@@ -950,81 +945,6 @@ static bool zend_mir_dump_call_model(zend_mir_dump_context *dump)
 			return false;
 		}
 	}
-	count = calls->call_capability_receipt_count(calls->context);
-	if (count > UINT32_C(1048576)) {
-		zend_mir_dump_diagnostic(dump, "W05 receipt count exceeds hard limit");
-		return false;
-	}
-	for (index = 0; index < count; index++) {
-		zend_mir_call_capability_receipt_ref receipt;
-		if (!calls->call_capability_receipt_at(
-				calls->context, index, &receipt)
-				|| !zend_mir_dump_literal(dump, "call-receipt ")
-				|| !zend_mir_dump_id(dump, "cr", receipt.id)
-				|| !zend_mir_dump_literal(dump, " capabilities 0x")
-				|| !zend_mir_dump_hex(dump, receipt.capabilities, 8)
-				|| !zend_mir_dump_literal(dump, " capability-ids ")
-				|| !zend_mir_dump_u32(
-					dump, receipt.canonical.capability_ids.offset)
-				|| !zend_mir_dump_literal(dump, "+")
-				|| !zend_mir_dump_u32(
-					dump, receipt.canonical.capability_ids.count)
-				|| !zend_mir_dump_literal(dump, " debts 0x")
-				|| !zend_mir_dump_hex(dump, receipt.semantic_debts, 8)
-				|| !zend_mir_dump_literal(dump, " debt-ids ")
-				|| !zend_mir_dump_u32(
-					dump, receipt.canonical.semantic_debt_ids.offset)
-				|| !zend_mir_dump_literal(dump, "+")
-				|| !zend_mir_dump_u32(
-					dump, receipt.canonical.semantic_debt_ids.count)
-				|| !zend_mir_dump_literal(dump, " modeled ")
-				|| !zend_mir_dump_bool(dump, receipt.modeled)
-				|| !zend_mir_dump_literal(dump, " codegen-eligible ")
-				|| !zend_mir_dump_bool(dump, receipt.codegen_eligible)
-				|| !zend_mir_dump_literal(dump, "\n")) {
-			return false;
-		}
-	}
-	count = dump->omit_verifier_receipts
-		? 0 : calls->verifier_receipt_count(calls->context);
-	if (count > UINT32_C(1024)) {
-		zend_mir_dump_diagnostic(
-			dump, "W05 verifier receipt count exceeds hard limit");
-		return false;
-	}
-	for (index = 0; index < count; index++) {
-		zend_mir_verifier_receipt_ref receipt;
-		if (!calls->verifier_receipt_at(
-				calls->context, index, &receipt)
-				|| !zend_mir_dump_literal(dump, "verifier-receipt ")
-				|| !zend_mir_dump_u32(dump, receipt.verifier_id)
-				|| !zend_mir_dump_literal(dump, " contract 0x")
-				|| !zend_mir_dump_hex(
-					dump, receipt.verifier_contract_version, 8)
-				|| !zend_mir_dump_literal(dump, " module ")
-				|| !zend_mir_dump_hex(
-					dump, receipt.module_fingerprint[0], 8)
-				|| !zend_mir_dump_hex(
-					dump, receipt.module_fingerprint[1], 8)
-				|| !zend_mir_dump_hex(
-					dump, receipt.module_fingerprint[2], 8)
-				|| !zend_mir_dump_hex(
-					dump, receipt.module_fingerprint[3], 8)
-				|| !zend_mir_dump_literal(dump, " source ")
-				|| !zend_mir_dump_hex(
-					dump, receipt.source_fingerprint[0], 8)
-				|| !zend_mir_dump_hex(
-					dump, receipt.source_fingerprint[1], 8)
-				|| !zend_mir_dump_hex(
-					dump, receipt.source_fingerprint[2], 8)
-				|| !zend_mir_dump_hex(
-					dump, receipt.source_fingerprint[3], 8)
-				|| !zend_mir_dump_literal(dump, " status ")
-				|| !zend_mir_dump_u32(dump, receipt.status)
-				|| !zend_mir_dump_literal(dump, "\n")) {
-			return false;
-		}
-	}
 	return true;
 }
 
@@ -1124,7 +1044,7 @@ static bool zend_mir_dump_view_is_complete(const zend_mir_view *view)
 
 static bool zend_mir_dump_text_internal(
 	const zend_mir_view *view, zend_mir_text_writer *writer,
-	zend_mir_diagnostic_sink *diagnostics, bool omit_verifier_receipts)
+	zend_mir_diagnostic_sink *diagnostics)
 {
 	zend_mir_dump_context dump;
 
@@ -1132,7 +1052,6 @@ static bool zend_mir_dump_text_internal(
 	dump.view = view;
 	dump.writer = writer;
 	dump.diagnostics = diagnostics;
-	dump.omit_verifier_receipts = omit_verifier_receipts;
 	if (!zend_mir_dump_view_is_complete(view)) {
 		zend_mir_dump_diagnostic(&dump, "incomplete ZNMIR view");
 		return false;
@@ -1185,18 +1104,5 @@ static bool zend_mir_dump_text_internal(
 bool zend_mir_dump_text(const zend_mir_view *view,
 	zend_mir_text_writer *writer, zend_mir_diagnostic_sink *diagnostics)
 {
-	return zend_mir_dump_text_internal(
-		view, writer, diagnostics, false);
-}
-
-/*
- * Verifier receipts contain this projection's fingerprint, so they are
- * deliberately excluded from the canonical fingerprint input.
- */
-bool zend_mir_dump_w05_fingerprint_projection(
-	const zend_mir_view *view, zend_mir_text_writer *writer,
-	zend_mir_diagnostic_sink *diagnostics)
-{
-	return zend_mir_dump_text_internal(
-		view, writer, diagnostics, true);
+	return zend_mir_dump_text_internal(view, writer, diagnostics);
 }

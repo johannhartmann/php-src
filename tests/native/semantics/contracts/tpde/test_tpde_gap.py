@@ -51,8 +51,6 @@ class TpdeGapContractTest(unittest.TestCase):
         data = copy.deepcopy(self.manifest)
         capability = data["capabilities"][0]
         capability["classification"] = "blocked"
-        capability["blocker_id"] = "TPDE-BLOCK-TEST"
-        capability["decision_id"] = "TPDE-DECISION-TEST"
         self.assert_error_contains(data, "critical capability remains unresolved")
 
     def test_source_ref_without_symbol_is_rejected(self) -> None:

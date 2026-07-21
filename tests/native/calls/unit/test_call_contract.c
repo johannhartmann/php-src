@@ -8,7 +8,6 @@
 
 int main(void)
 {
-	zend_mir_call_capability_receipt_ref receipt = {0};
 	zend_mir_source_call_argument_ref argument = {0};
 	zend_mir_source_parameter_mode_ref parameter = {0};
 
@@ -30,16 +29,5 @@ int main(void)
 	assert(parameter.target_id == 7);
 	assert(parameter.ordinal == 65);
 	assert(parameter.mode == ZEND_MIR_SOURCE_PARAMETER_BY_REFERENCE);
-	receipt.canonical.capability_ids.count = 6;
-	receipt.canonical.semantic_debt_ids.count = 8;
-	receipt.capabilities = ZEND_MIR_W05_REQUIRED_CAPABILITIES;
-	receipt.semantic_debts = ZEND_MIR_W05_REQUIRED_DEBTS;
-	receipt.modeled = true;
-	receipt.codegen_eligible = false;
-	assert(receipt.capabilities == ZEND_MIR_W05_REQUIRED_CAPABILITIES);
-	assert(receipt.semantic_debts == ZEND_MIR_W05_REQUIRED_DEBTS);
-	assert(receipt.canonical.capability_ids.count == 6);
-	assert(receipt.canonical.semantic_debt_ids.count == 8);
-	assert(receipt.modeled && !receipt.codegen_eligible);
 	return 0;
 }
