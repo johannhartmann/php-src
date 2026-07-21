@@ -116,6 +116,16 @@ bool zend_mir_zend_source_call_target_resolver(
 	const zend_mir_zend_source *source,
 	zend_mir_source_call_target_resolver *out);
 
+/*
+ * Return the exact declared type of a process-local W05 direct-user target.
+ * This is source evidence for W06 planning only; no zend_function pointer is
+ * exposed or retained by persistent MIR.
+ */
+bool zend_mir_zend_source_w06_call_return_type(
+	const zend_mir_zend_source *source,
+	zend_mir_source_call_target_id target_id,
+	uint32_t *type_mask);
+
 bool zend_mir_zend_source_view(
 	const zend_mir_zend_source *source,
 	zend_mir_lowering_source_view *out);

@@ -41,7 +41,7 @@ AS_VAR_IF([PHP_NATIVE_MIR_TEST], [no], [], [
   PHP_NEW_EXTENSION([native_mir_test],
     [native_mir_test.c],
     [no],,
-    [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1 -DZEND_MIR_W05_TEST_FAULTS=1],
+    [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1 -DZEND_MIR_W05_TEST_FAULTS=1 -DZEND_MIR_W06_TEST_FAULTS=1],
     [cxx])
 
   PHP_ADD_BUILD_DIR([Zend/Native/TPDE/Common])
@@ -78,7 +78,6 @@ AS_VAR_IF([PHP_NATIVE_MIR_TEST], [no], [], [
   PHP_ADD_BUILD_DIR([Zend/Native/Runtime/LinuxX64])
   PHP_ADD_SOURCES_X([Zend/Native/Runtime/LinuxX64], [zend_native_publish_linux_x64.cpp],
     [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
-
   dnl BEGIN GENERATED NATIVE SOURCES
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/CFG])
   PHP_ADD_SOURCES([Zend/Native/MIR/CFG], [zend_mir_cfg.c])
@@ -188,5 +187,11 @@ AS_VAR_IF([PHP_NATIVE_MIR_TEST], [no], [], [
   PHP_ADD_SOURCES_X([Zend/Native/MIR/ControlFlow], [zend_mir_verify_control_flow.c],, [PHP_GLOBAL_OBJS])
   PHP_ADD_BUILD_DIR([Zend/Native/Calls/Model])
   PHP_ADD_SOURCES_X([Zend/Native/Calls/Model], [zend_mir_call_model.c], [-DZEND_MIR_W05_TEST_FAULTS=1], [PHP_GLOBAL_OBJS])
+  PHP_ADD_BUILD_DIR([Zend/Native/MIR/Values])
+  PHP_ADD_SOURCES_X([Zend/Native/MIR/Values], [zend_mir_verify_values.c],, [PHP_GLOBAL_OBJS])
+  PHP_ADD_BUILD_DIR([Zend/Native/Values/Core])
+  PHP_ADD_SOURCES_X([Zend/Native/Values/Core], [zend_mir_value_core.c],, [PHP_GLOBAL_OBJS])
+  PHP_ADD_BUILD_DIR([Zend/Native/Values/Lowering])
+  PHP_ADD_SOURCES_X([Zend/Native/Values/Lowering], [zend_mir_value_lowering.c], [-DZEND_MIR_W06_TEST_FAULTS=1], [PHP_GLOBAL_OBJS])
   dnl END GENERATED NATIVE SOURCES
 ])
