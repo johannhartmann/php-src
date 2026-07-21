@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the real-PHP W03 lowering, determinism, and differential gate."""
+"""Run W03 real-PHP lowering, determinism, and differential tests."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[3]
 MANIFEST_PATH = ROOT / "tests/native/lowering/corpus/manifest.json"
 DUMP_PATH = ROOT / "scripts/native/lowering/dump-mir.py"
 DIFFERENTIAL_PATH = ROOT / "scripts/native/lowering/run-w03-differential.py"
-SPECIALIST_RUNNERS = (
+NATIVE_RUNNERS = (
     "tests/native/lowering/core/run_core_lowering_tests.py",
     "tests/native/lowering/frontend/run_frontend_tests.py",
     "tests/native/lowering/numeric/run_numeric_tests.py",
@@ -43,7 +43,7 @@ OPCACHE_MODES = (False, True)
 
 
 class W03TestError(RuntimeError):
-    """The W03 hard gate cannot produce passing evidence."""
+    """A W03 lowering or differential invariant failed."""
 
 
 def load_module(name: str, path: Path) -> Any:
@@ -55,7 +55,7 @@ def load_module(name: str, path: Path) -> Any:
     return module
 
 
-dump_mir = load_module("w03_gate_dump_mir", DUMP_PATH)
+dump_mir = load_module("w03_integration_dump_mir", DUMP_PATH)
 
 
 def canonical_binary(value: str, label: str) -> Path:
@@ -148,7 +148,7 @@ def php_capabilities(binary: Path, environment: dict[str, str]) -> dict[str, Any
 
 
 def run_static_and_unit_suites(environment: dict[str, str]) -> None:
-    for runner in SPECIALIST_RUNNERS:
+    for runner in NATIVE_RUNNERS:
         run(["python3", runner], environment)
     for directory in PYTHON_TEST_DIRS:
         run(
@@ -278,7 +278,7 @@ def self_test() -> None:
         environment,
         timeout=60,
     )
-    with tempfile.TemporaryDirectory(prefix="w03-gate-selftest-") as directory:
+    with tempfile.TemporaryDirectory(prefix="w03-selftest-") as directory:
         output = Path(directory) / "result.json"
         document = {
             "axes": list(ARENA_CHUNK_SIZES),
@@ -326,7 +326,7 @@ def main() -> int:
                     "--self-test does not accept PHP, sanitizer, or output arguments"
                 )
             self_test()
-            print("W03 hard-gate harness self-test passed")
+            print("W03 lowering harness self-test passed")
             return 0
         if arguments.reference_php is None or arguments.candidate_php is None:
             raise W03TestError(
@@ -340,7 +340,7 @@ def main() -> int:
             reference, candidate, arguments.sanitizer
         )
         capabilities = php_capabilities(candidate, environment)
-        with tempfile.TemporaryDirectory(prefix="w03-hard-gate-") as directory:
+        with tempfile.TemporaryDirectory(prefix="w03-integration-") as directory:
             differential_path = Path(directory) / "differential.json"
             if arguments.sanitizer is None:
                 run_static_and_unit_suites(environment)
@@ -369,7 +369,7 @@ def main() -> int:
         if arguments.json_out is not None:
             stable_write(result, arguments.json_out)
         print(
-            "W03 real-PHP hard gate passed "
+            "W03 real-PHP integration tests passed "
             f"(sanitizer={arguments.sanitizer or 'none'}, "
             f"cases={differential['summary']['total']})"
         )

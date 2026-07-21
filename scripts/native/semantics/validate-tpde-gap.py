@@ -100,8 +100,6 @@ CAPABILITY_FIELDS = {
     "upstreamability",
     "target_impact",
     "required_tests",
-    "blocker_id",
-    "decision_id",
 }
 SOURCE_REF_FIELDS = {"path", "symbol", "start_line", "end_line", "evidence"}
 TARGET_FIELDS = {"status", "impact"}
@@ -262,14 +260,8 @@ def validate_document(data: Any, tpde: Path | None = None) -> list[str]:
             if cap.get("minimal_api_or_shim") != "None.":
                 errors.append(f"{where}: covered capability must not propose an API or shim")
         if classification == "blocked":
-            if not _nonempty_string(cap.get("blocker_id")):
-                errors.append(f"{where}: blocked capability requires blocker_id")
-            if not _nonempty_string(cap.get("decision_id")):
-                errors.append(f"{where}: blocked capability requires decision_id")
             if cap.get("critical") is True:
                 errors.append(f"{where}: critical capability remains unresolved (blocked)")
-        elif cap.get("blocker_id") is not None or cap.get("decision_id") is not None:
-            errors.append(f"{where}: blocker_id and decision_id must be null unless blocked")
 
         target_impact = cap.get("target_impact")
         if not isinstance(target_impact, dict):

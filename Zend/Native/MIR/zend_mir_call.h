@@ -6,8 +6,6 @@
 
 #include "../Calls/Contracts/zend_mir_call_source.h"
 #include "zend_mir.h"
-#include "zend_mir_capability.h"
-#include "zend_mir_verification.h"
 
 typedef enum _zend_mir_call_target_kind {
 	ZEND_MIR_CALL_TARGET_DIRECT_USER = 0,
@@ -120,16 +118,6 @@ typedef struct _zend_mir_call_site_ref {
 	zend_mir_barrier_mask barriers;
 } zend_mir_call_site_ref;
 
-/* capabilities/semantic_debts below are the derived v1 projection. */
-typedef struct _zend_mir_call_capability_receipt_ref {
-	zend_mir_call_capability_receipt_id id;
-	zend_mir_capability_set_ref canonical;
-	uint32_t capabilities;
-	uint32_t semantic_debts;
-	bool modeled;
-	bool codegen_eligible;
-} zend_mir_call_capability_receipt_ref;
-
 typedef struct _zend_mir_call_view {
 	uint32_t contract_version;
 	const void *context;
@@ -145,12 +133,6 @@ typedef struct _zend_mir_call_view {
 	uint32_t (*call_continuation_count)(const void *context);
 	bool (*call_continuation_at)(const void *context, uint32_t index,
 		zend_mir_call_continuation_ref *out);
-	uint32_t (*call_capability_receipt_count)(const void *context);
-	bool (*call_capability_receipt_at)(const void *context, uint32_t index,
-		zend_mir_call_capability_receipt_ref *out);
-	uint32_t (*verifier_receipt_count)(const void *context);
-	bool (*verifier_receipt_at)(const void *context, uint32_t index,
-		zend_mir_verifier_receipt_ref *out);
 } zend_mir_call_view;
 
 typedef struct _zend_mir_call_mutator {
@@ -161,8 +143,7 @@ typedef struct _zend_mir_call_mutator {
 	bool (*add_call_continuation)(void *context,
 		const zend_mir_call_continuation_ref *continuation);
 	bool (*add_call_site)(void *context, const zend_mir_call_site_ref *site);
-	bool (*add_call_capability_receipt)(void *context,
-		const zend_mir_call_capability_receipt_ref *receipt);
+	bool (*commit_call_model)(void *context);
 } zend_mir_call_mutator;
 
 typedef enum _zend_mir_verify_w05_code {

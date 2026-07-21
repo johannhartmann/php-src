@@ -39,7 +39,6 @@ class ManifestValidationTests(unittest.TestCase):
             "observable_channels": ["exit_status", "stderr", "stdout"],
             "opcode_families": sorted(validator.REQUIRED_OPCODE_FAMILIES),
             "opcodes": [],
-            "owner": "W01-E",
             "reference_provenance_required": True,
             "repeat_calls": list(range(1, 11)),
             "required_extensions": ["zend_test"],
@@ -53,7 +52,6 @@ class ManifestValidationTests(unittest.TestCase):
             "php_src_semantics_commit": validator.PHP_SRC_SEMANTICS_COMMIT,
             "required_opcode_families": sorted(validator.REQUIRED_OPCODE_FAMILIES),
             "required_semantic_risks": sorted(validator.REQUIRED_SEMANTIC_RISKS),
-            "wave_base_commit": validator.WAVE_BASE_COMMIT,
         }
 
     def tearDown(self) -> None:

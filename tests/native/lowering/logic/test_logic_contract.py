@@ -26,7 +26,7 @@ class LogicContractTests(unittest.TestCase):
         owned = [
             entry["number"]
             for entry in self.profile["opcodes"]
-            if entry["owner"] == "W03-D-comparison-boolean-casts"
+            if entry["provider"] == "logic"
         ]
         provider = self.sources["zend_mir_logic_provider.c"]
         claim_block = provider.split(
@@ -47,7 +47,7 @@ class LogicContractTests(unittest.TestCase):
         owned = [
             entry
             for entry in self.profile["opcodes"]
-            if entry["owner"] == "W03-D-comparison-boolean-casts"
+            if entry["provider"] == "logic"
         ]
         expected = {
             opcode.upper()

@@ -1,1 +1,1 @@
-"""W03 integration-gate tests."""
+"""W03 integration tests."""

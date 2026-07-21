@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and run the standalone W03-E lifetime lowering tests."""
+"""Build and run the standalone lifetime lowering tests."""
 
 from __future__ import annotations
 
@@ -97,7 +97,7 @@ def main() -> int:
             ],
             environment,
         )
-    print("W03-E lifetime lowering tests passed")
+    print("lifetime lowering tests passed")
     return 0
 
 

@@ -6,11 +6,10 @@
         "arguments": 1,
         "continuations": 4,
         "frames": 3,
-        "receipts": 1,
         "sites": 1,
         "targets": 1
       },
-      "sha256": "67ad444b4edcc87e2e18da01ede38b8327d414d99f7b13dbaa4494554d086557"
+      "sha256": "ee1189e53b4e509aadb28cf3f3905915bd5de1d1cf7165d02466e4af7754540f"
     },
     "by_value_parameter_128": {
       "path": "tests/native/calls/integration/goldens/by_value_parameter_128.znmir",
@@ -18,11 +17,10 @@
         "arguments": 128,
         "continuations": 4,
         "frames": 3,
-        "receipts": 1,
         "sites": 1,
         "targets": 1
       },
-      "sha256": "c557ee536f01cc8e4fe0302f430dc11b382519ca3720e7be2d1902effa49b775"
+      "sha256": "062b80f5df87d6ec7a460f9f97ac084fd8c3bdaf0a85041ddd2d5b5ff807d6db"
     },
     "by_value_parameter_64": {
       "path": "tests/native/calls/integration/goldens/by_value_parameter_64.znmir",
@@ -30,11 +28,10 @@
         "arguments": 64,
         "continuations": 4,
         "frames": 3,
-        "receipts": 1,
         "sites": 1,
         "targets": 1
       },
-      "sha256": "6ffecaf8d91eb44729f406f7c74e66eecfc814be9932e5a3c6702efdc9d3fb37"
+      "sha256": "f98116cc06861fe8eb954b31996fe2f2cf559f516289095fe2091d6d86cb7649"
     },
     "by_value_parameter_65": {
       "path": "tests/native/calls/integration/goldens/by_value_parameter_65.znmir",
@@ -42,11 +39,10 @@
         "arguments": 65,
         "continuations": 4,
         "frames": 3,
-        "receipts": 1,
         "sites": 1,
         "targets": 1
       },
-      "sha256": "e8451730668e93501b584a5a20e42b7ee95ab1e7b4917c3f68a587e0bdbecfbb"
+      "sha256": "8f344bb6cb9274cd5bb183f75028658f635e8055d1a5f6f60e2c36e86027a8de"
     },
     "default_argument": {
       "path": "tests/native/calls/integration/goldens/default_argument.znmir",
@@ -54,11 +50,10 @@
         "arguments": 1,
         "continuations": 4,
         "frames": 3,
-        "receipts": 1,
         "sites": 1,
         "targets": 1
       },
-      "sha256": "43b8d3831d9b728811408111a56931c9f7f6726cea485590cae53f76c9b31894"
+      "sha256": "c08fdfd1e2b163c867fe41a8657f241b8c2d5881e71e129c9a90df53c7b329f9"
     },
     "direct_call_after_phi": {
       "path": "tests/native/calls/integration/goldens/direct_call_after_phi.znmir",
@@ -66,11 +61,10 @@
         "arguments": 0,
         "continuations": 4,
         "frames": 4,
-        "receipts": 1,
         "sites": 1,
         "targets": 1
       },
-      "sha256": "06a6e89171957f644198d634c19477d9e447321a83c46f407075042474b2d99a"
+      "sha256": "759920297d16e7966656500779be0360c24f1ecc1770e544bff39bad4503d5fd"
     },
     "direct_call_exact_user_do_fcall": {
       "path": "tests/native/calls/integration/goldens/direct_call_exact_user_do_fcall.znmir",
@@ -78,11 +72,10 @@
         "arguments": 1,
         "continuations": 4,
         "frames": 3,
-        "receipts": 1,
         "sites": 1,
         "targets": 1
       },
-      "sha256": "c794ddd9106cc8777cf751baba106895c060178bf73085abb8beb01fd9314163"
+      "sha256": "3d90c8c6571938b51cbe17eef8dd4ee10e05c7699ebb2202ede4e78939ced3df"
     },
     "direct_call_exact_user_do_ucall": {
       "path": "tests/native/calls/integration/goldens/direct_call_exact_user_do_ucall.znmir",
@@ -90,11 +83,10 @@
         "arguments": 1,
         "continuations": 4,
         "frames": 3,
-        "receipts": 1,
         "sites": 1,
         "targets": 1
       },
-      "sha256": "9f69d687c7f21a1aa3892a8f1ed166225ca19f2c564ae9625bff70f96e4ab874"
+      "sha256": "42b4acb7592e3fd625f0bb9e54a68afda6cca72b664a9c657ef4eca7c3777580"
     },
     "direct_call_in_if": {
       "path": "tests/native/calls/integration/goldens/direct_call_in_if.znmir",
@@ -102,11 +94,10 @@
         "arguments": 0,
         "continuations": 4,
         "frames": 3,
-        "receipts": 1,
         "sites": 1,
         "targets": 1
       },
-      "sha256": "bfedc45bcb5882fb3bb4c71adfbb0862f8a301adf418ed22b8490835c4e0295f"
+      "sha256": "1a2542627aca2df2994800664302c98fc1a485bdf17994120889d35c573c4b07"
     },
     "direct_call_in_reducible_loop": {
       "path": "tests/native/calls/integration/goldens/direct_call_in_reducible_loop.znmir",
@@ -114,11 +105,10 @@
         "arguments": 0,
         "continuations": 4,
         "frames": 4,
-        "receipts": 1,
         "sites": 1,
         "targets": 1
       },
-      "sha256": "de291636539a0951e36d8fd4f4e8a5b49a02da8ecde15075ae23502e58259334"
+      "sha256": "0143e1507a6fd0eb241eb571a874a2aac9aa8bb22cb9307150ecf199d04dc89c"
     },
     "direct_user_scalar_literals": {
       "path": "tests/native/calls/integration/goldens/direct_user_scalar_literals.znmir",
@@ -126,11 +116,10 @@
         "arguments": 4,
         "continuations": 4,
         "frames": 3,
-        "receipts": 1,
         "sites": 1,
         "targets": 1
       },
-      "sha256": "a668f96168edd2f56852c135a5c3b5ab57aa43fc4facb9b0c8c9cea3c20e3857"
+      "sha256": "6147ca9bd016a3062f514b93641eccba318ac7ea655969c6e3823209c8b89bdf"
     },
     "direct_user_scalar_result_bool": {
       "path": "tests/native/calls/integration/goldens/direct_user_scalar_result_bool.znmir",
@@ -138,11 +127,10 @@
         "arguments": 0,
         "continuations": 4,
         "frames": 3,
-        "receipts": 1,
         "sites": 1,
         "targets": 1
       },
-      "sha256": "1a75680c945dc297a6c4a131dd2e9411e7d8e5eef8d08ab999b28548d5ab30ff"
+      "sha256": "bd3849e33ec393fd8f07e80e8bdcf962704112247cebe5e5b600406f007073b9"
     },
     "direct_user_scalar_result_float": {
       "path": "tests/native/calls/integration/goldens/direct_user_scalar_result_float.znmir",
@@ -150,11 +138,10 @@
         "arguments": 0,
         "continuations": 4,
         "frames": 3,
-        "receipts": 1,
         "sites": 1,
         "targets": 1
       },
-      "sha256": "d009c1a99f6e8bf0d4b566d7d958e45367bfc4acc38dbdcbe740cbdbf01ed5ed"
+      "sha256": "466a6aba0639e41be12828b99d794f42189fcc6f538cb94b8cd706bed2e466d0"
     },
     "direct_user_scalar_result_followup": {
       "path": "tests/native/calls/integration/goldens/direct_user_scalar_result_followup.znmir",
@@ -162,11 +149,10 @@
         "arguments": 0,
         "continuations": 4,
         "frames": 3,
-        "receipts": 1,
         "sites": 1,
         "targets": 1
       },
-      "sha256": "f1189a5b8d5251b508fcc3e9f6f15a393ae39c6097f3c56ca75bd054c847cda6"
+      "sha256": "6ce253cc8dcb657c8f223fb001f5d468fca1bbd5a0c1ee6c2699132d2f05f2ba"
     },
     "direct_user_scalar_result_int": {
       "path": "tests/native/calls/integration/goldens/direct_user_scalar_result_int.znmir",
@@ -174,11 +160,10 @@
         "arguments": 0,
         "continuations": 4,
         "frames": 3,
-        "receipts": 1,
         "sites": 1,
         "targets": 1
       },
-      "sha256": "691db279140edff7b8584f2510fac7c89b895947fab3988e8128031304cad6e9"
+      "sha256": "25a744ef4e8aa3564da65188c081c249b7ea79ea253367fb8d042cd8a57ffc37"
     },
     "direct_user_scalar_result_null": {
       "path": "tests/native/calls/integration/goldens/direct_user_scalar_result_null.znmir",
@@ -186,11 +171,10 @@
         "arguments": 0,
         "continuations": 4,
         "frames": 3,
-        "receipts": 1,
         "sites": 1,
         "targets": 1
       },
-      "sha256": "5b85bc9db2dd53822ecf6508dc7aebfa28eff8fd2e11ecef22dcbeca56aa73b7"
+      "sha256": "a534af3924554bb8fe92c5b5efb4e3229af41ea24474b4255f67cd54f2f50b28"
     },
     "direct_user_scalar_variables": {
       "path": "tests/native/calls/integration/goldens/direct_user_scalar_variables.znmir",
@@ -198,11 +182,10 @@
         "arguments": 2,
         "continuations": 4,
         "frames": 3,
-        "receipts": 1,
         "sites": 1,
         "targets": 1
       },
-      "sha256": "454970407e68fd1196622040e428658228732f6df78a53d52f54e55d1b71bfab"
+      "sha256": "5e43545c4542f1313f26f630972a261c360cd85b0f64f3bb283bf6e79d82ec90"
     },
     "direct_user_zero_args_unused_return": {
       "path": "tests/native/calls/integration/goldens/direct_user_zero_args_unused_return.znmir",
@@ -210,11 +193,10 @@
         "arguments": 0,
         "continuations": 4,
         "frames": 3,
-        "receipts": 1,
         "sites": 1,
         "targets": 1
       },
-      "sha256": "3d01884200bdd3a8577950d4033234e0a26c55f7fe79ee75194bf07ed647a603"
+      "sha256": "dd7f25822f2bc2d337494f19267814f46e6665891152a5666f8c4e5f7d168eec"
     },
     "named_argument_normalized_position": {
       "path": "tests/native/calls/integration/goldens/named_argument_normalized_position.znmir",
@@ -222,11 +204,10 @@
         "arguments": 1,
         "continuations": 4,
         "frames": 3,
-        "receipts": 1,
         "sites": 1,
         "targets": 1
       },
-      "sha256": "e790a746c8c2e37487e0a64e70ea8696bcf194d4eeea1be8bcf48689a06df604"
+      "sha256": "b97c36c9c4b314568904e781f5f7d43a539f54b34312f7e5808ab9d2f1331508"
     },
     "recursive_self_call": {
       "path": "tests/native/calls/integration/goldens/recursive_self_call.znmir",
@@ -234,11 +215,10 @@
         "arguments": 0,
         "continuations": 4,
         "frames": 3,
-        "receipts": 1,
         "sites": 1,
         "targets": 1
       },
-      "sha256": "92e7f9e12b66610ce1b56e4b488d4701febe9aaa232bdfa0c8e87944264cbbfd"
+      "sha256": "b68de4561eae2a4ecc25a8d3652999df4be58391e3aa044c4b1c42c811d9b320"
     },
     "two_direct_calls_same_block": {
       "path": "tests/native/calls/integration/goldens/two_direct_calls_same_block.znmir",
@@ -246,11 +226,10 @@
         "arguments": 2,
         "continuations": 8,
         "frames": 4,
-        "receipts": 1,
         "sites": 2,
         "targets": 1
       },
-      "sha256": "291347ae3a5e06a6ec993b093835b1a9eec2637885718d018d01831ac37fee5f"
+      "sha256": "273508fd2524af8b66e4565d3f87f88d5edd0f4cfc2defc7e0277cf05f6c4ba2"
     }
   },
   "format_version": "1.0.0",

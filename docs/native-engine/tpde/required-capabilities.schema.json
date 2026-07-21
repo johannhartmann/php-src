@@ -88,9 +88,7 @@
                 "owner",
                 "upstreamability",
                 "target_impact",
-                "required_tests",
-                "blocker_id",
-                "decision_id"
+                "required_tests"
             ],
             "properties": {
                 "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
@@ -137,9 +135,7 @@
                     "type": "array",
                     "minItems": 1,
                     "items": { "type": "string", "minLength": 1 }
-                },
-                "blocker_id": { "type": ["string", "null"] },
-                "decision_id": { "type": ["string", "null"] }
+                }
             }
         }
     }

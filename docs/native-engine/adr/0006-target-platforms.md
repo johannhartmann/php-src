@@ -13,10 +13,10 @@ turn untested code paths into an implicit compatibility promise.
 
 ## Decision
 
-Use Linux/ELF x86-64 as the primary platform and required first gate. Treat
-AArch64 as the documented second target and later gate once an explicit runner,
-ABI contract, backend verification, and differential suite exist. Reject all
-other target combinations explicitly until an ADR and target gate accept them.
+Use Linux/ELF x86-64 as the primary supported platform. Treat AArch64 as the
+documented second target once an explicit runner, ABI contract, backend
+verification, and differential suite exist. Reject all other target
+combinations explicitly until an ADR and the target tests accept them.
 
 Keep ZNMIR architecture-independent and isolate target mechanics under
 `Zend/Native/TPDE/`.
@@ -39,6 +39,6 @@ Keep ZNMIR architecture-independent and isolate target mechanics under
 
 ## Verification impact
 
-The primary gate requires a Linux/ELF x86-64 runner. AArch64 becomes a gate only
-with recorded runner provenance and the same semantic, ABI, relocation, unwind,
-and concurrency coverage. Unsupported combinations must fail clearly.
+Primary-platform validation requires a Linux/ELF x86-64 runner. AArch64 is
+supported only with the same semantic, ABI, relocation, unwind, and concurrency
+coverage. Unsupported combinations must fail clearly.

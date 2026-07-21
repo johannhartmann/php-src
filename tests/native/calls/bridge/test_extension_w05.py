@@ -83,7 +83,8 @@ class RealCandidateTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(first["status"], "accepted")
         self.assertIn("opcode call_direct_user", first["mir"])
-        self.assertIn("codegen-eligible false", first["mir"])
+        self.assertIn("call-target ct0", first["mir"])
+        self.assertIn("call-site cs0", first["mir"])
 
     def test_real_candidate_preserves_zero_based_arguments_and_frames(self) -> None:
         candidate = os.environ.get("TEST_PHP_EXECUTABLE")

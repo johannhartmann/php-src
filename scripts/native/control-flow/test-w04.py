@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the real-PHP W04 Stage-1/2/3, determinism, and differential gate."""
+"""Run W04 real-PHP Stage-1/2/3, determinism, and differential tests."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ OPCACHE_MODES = (False, True)
 
 
 class W04TestError(RuntimeError):
-    """The W04 hard gate cannot produce passing evidence."""
+    """A W04 control-flow or differential invariant failed."""
 
 
 def load_module(name: str, path: Path) -> Any:
@@ -40,7 +40,7 @@ def load_module(name: str, path: Path) -> Any:
     return module
 
 
-dump_w04 = load_module("w04_gate_dump", DUMP_PATH)
+dump_w04 = load_module("w04_integration_dump", DUMP_PATH)
 
 
 def stable_write(document: Any, destination: Path) -> None:
@@ -406,7 +406,7 @@ def main() -> int:
             ) or arguments.write_goldens:
                 raise W04TestError("--self-test accepts no other arguments")
             self_test()
-            print("W04 hard-gate harness self-test passed")
+            print("W04 control-flow harness self-test passed")
             return 0
         if arguments.candidate_php is None:
             raise W04TestError("--candidate-php is required")
@@ -432,7 +432,7 @@ def main() -> int:
         if os.path.samefile(reference, candidate):
             raise W04TestError("reference and candidate PHP must be distinct")
         capabilities = php_capabilities(candidate, environment)
-        with tempfile.TemporaryDirectory(prefix="w04-hard-gate-") as directory:
+        with tempfile.TemporaryDirectory(prefix="w04-integration-") as directory:
             differential_path = Path(directory) / "differential.json"
             if arguments.sanitizer is None:
                 run_static_suites(environment)
@@ -463,7 +463,7 @@ def main() -> int:
         if arguments.json_out is not None:
             stable_write(result, arguments.json_out)
         print(
-            "W04 real-PHP hard gate passed "
+            "W04 real-PHP integration tests passed "
             "(sanitizer={}, cases={})".format(
                 arguments.sanitizer or "none",
                 differential["summary"]["total"],

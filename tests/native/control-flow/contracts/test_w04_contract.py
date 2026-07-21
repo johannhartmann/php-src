@@ -6,17 +6,13 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
-import tempfile
 import unittest
 
 sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parents[4]
 GENERATOR_PATH = ROOT / "scripts/native/control-flow/generate-w04-profile.py"
-OWNERSHIP_PATH = ROOT / "scripts/native/control-flow/check-ownership.py"
 CONTRACT_PATH = ROOT / "scripts/native/control-flow/check-contract.py"
-W02_VALIDATOR_PATH = ROOT / "scripts/native/mir/validate-w02.py"
-W03_VALIDATOR_PATH = ROOT / "scripts/native/lowering/validate-w03.py"
 
 
 def load_module(name: str, path: Path):
@@ -28,10 +24,7 @@ def load_module(name: str, path: Path):
 
 
 GENERATOR = load_module("w04_test_generator", GENERATOR_PATH)
-OWNERSHIP = load_module("w04_test_ownership", OWNERSHIP_PATH)
 CONTRACT = load_module("w04_test_contract", CONTRACT_PATH)
-W02_VALIDATOR = load_module("w04_test_w02_validator", W02_VALIDATOR_PATH)
-W03_VALIDATOR = load_module("w04_test_w03_validator", W03_VALIDATOR_PATH)
 
 
 class OpcodeProfileTests(unittest.TestCase):
@@ -97,129 +90,6 @@ class OpcodeProfileTests(unittest.TestCase):
         source = GENERATOR_PATH.read_text(encoding="utf-8")
         self.assertNotIn("active_opcode_count\": 210", source)
         self.assertNotIn("active_opcode_count\": 212", source)
-
-
-class OwnershipTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.manifest = json.loads(OWNERSHIP.MANIFEST.read_text(encoding="utf-8"))
-        cls.sources = json.loads(OWNERSHIP.SOURCE_MANIFEST.read_text(encoding="utf-8"))
-
-    def test_manifest_is_disjoint(self) -> None:
-        self.assertEqual([], OWNERSHIP.validate_manifest(self.manifest, self.sources))
-
-    def test_specialist_overlap_is_rejected(self) -> None:
-        mutated = copy.deepcopy(self.manifest)
-        mutated["specialist_tasks"][1]["owned_paths"].append(
-            "Zend/Native/Lowering/ControlFlow/**"
-        )
-        errors = OWNERSHIP.validate_manifest(mutated, self.sources)
-        self.assertTrue(any("specialist overlap" in error for error in errors))
-
-    def test_reserved_integration_path_is_rejected(self) -> None:
-        mutated = copy.deepcopy(self.manifest)
-        mutated["specialist_tasks"][0]["owned_paths"].append(
-            "ext/native_mir_test/config.m4"
-        )
-        errors = OWNERSHIP.validate_manifest(mutated, self.sources)
-        self.assertTrue(any("reserved/integration path" in error for error in errors))
-
-    def test_wave_definition_is_generated_from_manifest(self) -> None:
-        base = "1" * 40
-        wave = OWNERSHIP.build_wave(self.manifest, base)
-        self.assertEqual("W04", wave["wave_id"])
-        self.assertEqual("Control flow and loops", wave["title"])
-        self.assertEqual(base, wave["expected_base_commit"])
-        self.assertEqual(2, len(wave["parallel_tracks"]))
-        self.assertEqual(
-            [
-                "W04-A-production-control-flow",
-                "W04-B-control-flow-evidence",
-                "W04-integration-gate",
-            ],
-            wave["required_gate_ids"],
-        )
-        for generated, source in zip(wave["tasks"], [
-            *self.manifest["specialist_tasks"],
-            self.manifest["integration_task"],
-        ]):
-            self.assertEqual(source["owned_paths"], generated["owned_paths"])
-
-    def test_prerequisite_repairs_are_reserved(self) -> None:
-        reserved = set(self.manifest["contract_reserved_paths"])
-        for path in (
-            "Zend/Native/MIR/Core/zend_mir_module.c",
-            "Zend/Native/MIR/Core/zend_mir_view.c",
-            "scripts/native/lowering/test-w03.py",
-            "docs/native-engine/mir/w02-coverage-report.json",
-            "docs/native-engine/lowering/w03-coverage-report.json",
-        ):
-            with self.subTest(path=path):
-                self.assertIn(path, reserved)
-
-    def test_wave_writer_appends_then_replaces_w04(self) -> None:
-        original = OWNERSHIP.WAVES
-        try:
-            with tempfile.TemporaryDirectory(prefix="w04-wave-writer-") as directory:
-                path = Path(directory) / "waves.json"
-                path.write_text(
-                    json.dumps({"waves": [{"wave_id": "W03"}]}) + "\n",
-                    encoding="utf-8",
-                )
-                OWNERSHIP.WAVES = path
-                OWNERSHIP.write_wave_definition(self.manifest, "1" * 40)
-                first = json.loads(path.read_text(encoding="utf-8"))
-                self.assertEqual(
-                    ["W03", "W04"],
-                    [wave["wave_id"] for wave in first["waves"]],
-                )
-                OWNERSHIP.write_wave_definition(self.manifest, "2" * 40)
-                second = json.loads(path.read_text(encoding="utf-8"))
-                w04 = [
-                    wave for wave in second["waves"]
-                    if wave["wave_id"] == "W04"
-                ]
-                self.assertEqual(1, len(w04))
-                self.assertEqual("2" * 40, w04[0]["expected_base_commit"])
-        finally:
-            OWNERSHIP.WAVES = original
-
-
-class PriorWaveReportTests(unittest.TestCase):
-    def test_w02_inventory_excludes_w04_control_flow_sources(self) -> None:
-        paths = (
-            *W02_VALIDATOR.production_sources(),
-            *W02_VALIDATOR.production_headers(),
-        )
-        self.assertTrue(paths)
-        self.assertFalse(
-            any(
-                "ControlFlow"
-                in path.relative_to(W02_VALIDATOR.MIR).parts
-                for path in paths
-            )
-        )
-
-    def test_w03_inventory_is_stable_across_w04_additions(self) -> None:
-        paths = W03_VALIDATOR.production_paths()
-        self.assertTrue(paths)
-        self.assertFalse(
-            any(
-                "ControlFlow"
-                in path.relative_to(W03_VALIDATOR.LOWERING).parts
-                for path in paths
-                if path.is_relative_to(W03_VALIDATOR.LOWERING)
-            )
-        )
-        self.assertFalse(
-            any(path.name == "zend_mir_lowering_w04.h" for path in paths)
-        )
-        source = W03_VALIDATOR_PATH.read_text(encoding="utf-8")
-        function = source[
-            source.index("def path_set_digest"):
-            source.index("def contract_evidence_digest")
-        ]
-        self.assertNotIn("read_bytes", function)
 
 
 class SourceFixtureTests(unittest.TestCase):

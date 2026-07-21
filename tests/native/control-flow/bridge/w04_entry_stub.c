@@ -1,8 +1,6 @@
 /*
- * Branch-local link stub for W04-B compile and schema tests.
- *
- * This file is test evidence only. It is intentionally absent from config.m4
- * and cannot publish a module, guarantees, or control-flow semantics.
+ * Standalone link stub for compile and schema tests. It is intentionally
+ * absent from config.m4 and cannot publish a module or control-flow semantics.
  */
 #include "Zend/Native/Lowering/Core/zend_mir_lowering_internal.h"
 

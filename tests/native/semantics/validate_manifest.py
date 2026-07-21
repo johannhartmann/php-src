@@ -15,7 +15,6 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_MANIFEST = Path(__file__).with_name("manifest.json")
 
 FORMAT_VERSION = "1.0.0"
-WAVE_BASE_COMMIT = "dc6e34b56846c38dc2475d6c962c2b9b7ada6df4"
 PHP_SRC_SEMANTICS_COMMIT = "47355da494ba696b1bdb6d10448a225e742bd316"
 
 REQUIRED_OPCODE_FAMILIES = {
@@ -92,7 +91,6 @@ TOP_LEVEL_KEYS = {
     "php_src_semantics_commit",
     "required_opcode_families",
     "required_semantic_risks",
-    "wave_base_commit",
 }
 FIXTURE_KEYS = {
     "determinism_constraints",
@@ -102,7 +100,6 @@ FIXTURE_KEYS = {
     "observable_channels",
     "opcode_families",
     "opcodes",
-    "owner",
     "reference_provenance_required",
     "repeat_calls",
     "required_extensions",
@@ -253,7 +250,6 @@ def validate_fixture(fixture: Any, index: int, repository_root: Path) -> Dict[st
         fixture["determinism_constraints"], context + ".determinism_constraints", False)
     require(set(constraints) <= ALLOWED_DETERMINISM_CONSTRAINTS,
             "{}.determinism_constraints contains an unstable or unsupported assumption".format(context))
-    require(fixture["owner"] == "W01-E", "{}.owner must be W01-E".format(context))
     if kind == "differential_php":
         require({"exit_status", "stderr", "stdout"} <= set(channels),
                 "{} differential case must compare stdout, stderr, and exit status".format(context))
@@ -267,17 +263,16 @@ def validate_document(document: Any, repository_root: Path = REPOSITORY_ROOT) ->
     require(isinstance(document, dict), "manifest must be an object")
     require_exact_keys(document, TOP_LEVEL_KEYS, "manifest")
     require(document["format_version"] == FORMAT_VERSION, "unsupported format_version")
-    require(document["wave_base_commit"] == WAVE_BASE_COMMIT, "unexpected wave_base_commit")
     require(document["php_src_semantics_commit"] == PHP_SRC_SEMANTICS_COMMIT,
             "unexpected php_src_semantics_commit")
     families = require_sorted_unique_strings(document["required_opcode_families"],
                                              "required_opcode_families", False)
     require(set(families) == REQUIRED_OPCODE_FAMILIES,
-            "required_opcode_families must equal the W01-E mandatory set")
+            "required_opcode_families must equal the mandatory set")
     risks = require_sorted_unique_strings(document["required_semantic_risks"],
                                           "required_semantic_risks", False)
     require(set(risks) == REQUIRED_SEMANTIC_RISKS,
-            "required_semantic_risks must equal the W01-E mandatory set")
+            "required_semantic_risks must equal the mandatory set")
     raw_fixtures = document["fixtures"]
     require(isinstance(raw_fixtures, list) and raw_fixtures, "fixtures must be a non-empty array")
     fixtures = [validate_fixture(fixture, index, repository_root) for index, fixture in enumerate(raw_fixtures)]

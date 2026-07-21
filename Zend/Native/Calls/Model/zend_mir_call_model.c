@@ -688,7 +688,7 @@ static bool zend_mir_w05_emit_calls(
 			|| mutator->add_call_argument == NULL
 			|| mutator->add_call_continuation == NULL
 			|| mutator->add_call_site == NULL
-			|| mutator->add_call_capability_receipt == NULL) {
+			|| mutator->commit_call_model == NULL) {
 		return false;
 	}
 	for (index = 0; index < plan->target_count; index++) {
@@ -784,22 +784,7 @@ static bool zend_mir_w05_emit_calls(
 			return false;
 		}
 	}
-	{
-		zend_mir_call_capability_receipt_ref receipt;
-		memset(&receipt, 0, sizeof(receipt));
-		receipt.id = 0;
-		receipt.canonical.capability_ids.offset = 0;
-		receipt.canonical.capability_ids.count = 6;
-		receipt.canonical.semantic_debt_ids.offset = 0;
-		receipt.canonical.semantic_debt_ids.count = 8;
-		receipt.canonical.codegen_eligible = false;
-		receipt.capabilities = ZEND_MIR_W05_REQUIRED_CAPABILITIES;
-		receipt.semantic_debts = ZEND_MIR_W05_REQUIRED_DEBTS;
-		receipt.modeled = true;
-		receipt.codegen_eligible = false;
-		return mutator->add_call_capability_receipt(
-			mutator->context, &receipt);
-	}
+	return mutator->commit_call_model(mutator->context);
 }
 
 static bool zend_mir_w05_verify_emit(zend_mir_diagnostic_sink *diagnostics,
@@ -948,8 +933,7 @@ static bool zend_mir_w05_build_fingerprints(
 	module_writer.digest = zend_mir_w05_fingerprint_init();
 	writer.context = &module_writer;
 	writer.write = zend_mir_w05_fingerprint_write;
-	if (!zend_mir_dump_w05_fingerprint_projection(
-			view, &writer, diagnostics)) {
+	if (!zend_mir_dump_text(view, &writer, diagnostics)) {
 		return false;
 	}
 
@@ -1199,12 +1183,6 @@ static bool zend_mir_w05_words_equal(
 	return memcmp(left, right, 4 * sizeof(uint32_t)) == 0;
 }
 
-static bool zend_mir_w05_words_zero(const uint32_t words[4])
-{
-	static const uint32_t zero[4] = {0, 0, 0, 0};
-	return zend_mir_w05_words_equal(words, zero);
-}
-
 static bool zend_mir_w05_verify_scalar_result(
 	const zend_mir_view *view, zend_mir_value_id value_id,
 	zend_mir_representation *representation_out)
@@ -1344,8 +1322,6 @@ bool zend_mir_verify_w05_calls(
 			|| calls->call_target_count == NULL || calls->call_target_at == NULL
 			|| calls->call_continuation_count == NULL
 			|| calls->call_continuation_at == NULL
-			|| calls->call_capability_receipt_count == NULL
-			|| calls->call_capability_receipt_at == NULL
 			|| view->function_count == NULL
 			|| view->function_at == NULL
 			|| view->instruction_count == NULL
@@ -1693,74 +1669,6 @@ bool zend_mir_verify_w05_calls(
 			zend_mir_w05_verify_emit(diagnostics,
 				ZEND_MIR_VERIFY_W05_CONTINUATION_MISMATCH,
 				ZEND_MIRV_TOKEN_W05_CONTINUATION_MISMATCH);
-			return false;
-		}
-	}
-	if (calls->call_capability_receipt_count(calls->context) != 1) {
-		zend_mir_w05_verify_emit(diagnostics,
-			ZEND_MIR_VERIFY_W05_CAPABILITY_DEBT_MISMATCH,
-			ZEND_MIRV_TOKEN_W05_CAPABILITY_DEBT_MISMATCH);
-		return false;
-	}
-	{
-		zend_mir_call_capability_receipt_ref receipt;
-		if (!calls->call_capability_receipt_at(calls->context, 0, &receipt)
-				|| receipt.id != 0
-				|| receipt.canonical.capability_ids.offset != 0
-				|| receipt.canonical.capability_ids.count != 6
-				|| receipt.canonical.semantic_debt_ids.offset != 0
-				|| receipt.canonical.semantic_debt_ids.count != 8
-				|| receipt.canonical.codegen_eligible
-				|| receipt.capabilities != ZEND_MIR_W05_REQUIRED_CAPABILITIES
-				|| receipt.semantic_debts != ZEND_MIR_W05_REQUIRED_DEBTS
-				|| !receipt.modeled || receipt.codegen_eligible) {
-			zend_mir_w05_verify_emit(diagnostics,
-				ZEND_MIR_VERIFY_W05_CAPABILITY_DEBT_MISMATCH,
-				ZEND_MIRV_TOKEN_W05_CAPABILITY_DEBT_MISMATCH);
-			return false;
-		}
-	}
-	return true;
-}
-
-static bool zend_mir_w05_verify_receipts(
-	const zend_mir_call_view *calls,
-	const uint32_t module_fingerprint[4],
-	const uint32_t source_fingerprint[4],
-	zend_mir_diagnostic_sink *diagnostics)
-{
-	uint32_t index;
-
-	if (calls == NULL || module_fingerprint == NULL
-			|| source_fingerprint == NULL
-			|| calls->verifier_receipt_count == NULL
-			|| calls->verifier_receipt_at == NULL
-			|| calls->verifier_receipt_count(calls->context) != 4) {
-		zend_mir_w05_verify_emit(diagnostics,
-			ZEND_MIR_VERIFY_W05_CAPABILITY_DEBT_MISMATCH,
-			ZEND_MIRV_TOKEN_W05_CAPABILITY_DEBT_MISMATCH);
-		return false;
-	}
-	for (index = 0; index < 4; index++) {
-		zend_mir_verifier_receipt_ref receipt;
-		uint32_t expected_version =
-			index == 2 ? ZEND_MIR_W04_CONTRACT_VERSION
-				: index == 3 ? ZEND_MIR_W05_CONTRACT_VERSION
-				: ZEND_MIR_CONTRACT_VERSION;
-		if (!calls->verifier_receipt_at(
-				calls->context, index, &receipt)
-				|| receipt.verifier_id
-					!= (zend_mir_verifier_id) (index + 1)
-				|| receipt.verifier_contract_version != expected_version
-				|| receipt.status != ZEND_MIR_VERIFIER_STATUS_PASS
-				|| !zend_mir_w05_words_zero(receipt.diagnostic_digest)
-				|| !zend_mir_w05_words_equal(
-					receipt.module_fingerprint, module_fingerprint)
-				|| !zend_mir_w05_words_equal(
-					receipt.source_fingerprint, source_fingerprint)) {
-			zend_mir_w05_verify_emit(diagnostics,
-				ZEND_MIR_VERIFY_W05_CAPABILITY_DEBT_MISMATCH,
-				ZEND_MIRV_TOKEN_W05_CAPABILITY_DEBT_MISMATCH);
 			return false;
 		}
 	}
@@ -2135,36 +2043,23 @@ static bool zend_mir_w05_verify_final_composition(
 	const zend_mir_view *view,
 	const zend_mir_source_call_view *source_calls,
 	const zend_mir_call_view *calls,
-	zend_mir_diagnostic_sink *diagnostics,
-	uint32_t *verified_facets)
+	zend_mir_diagnostic_sink *diagnostics)
 {
-	uint32_t facets = 0;
-
-	if (verified_facets == NULL
-			|| !zend_mir_w05_verify_final_structural(
-				view, diagnostics)) {
+	if (!zend_mir_w05_verify_final_structural(view, diagnostics)) {
 		return false;
 	}
-	facets |= ZEND_MIR_W05_VERIFIED_STRUCTURAL;
 	if (!zend_mir_w05_verify_final_scalar(
 			view, calls, diagnostics)) {
 		return false;
 	}
-	facets |= ZEND_MIR_W05_VERIFIED_SCALAR;
 	if (!zend_mir_w05_verify_final_control_flow(
 			view, calls, diagnostics)) {
 		return false;
 	}
-	facets |= ZEND_MIR_W05_VERIFIED_CONTROL_FLOW;
-	if (zend_mir_w05_test_fault_is(
+	return !zend_mir_w05_test_fault_is(
 			ZEND_MIR_W05_TEST_FAULT_CALL_VERIFIER)
-			|| !zend_mir_verify_w05_calls(
-				view, source_calls, calls, diagnostics)) {
-		return false;
-	}
-	facets |= ZEND_MIR_W05_VERIFIED_CALL_MODEL;
-	*verified_facets = facets;
-	return facets == ZEND_MIR_W05_VERIFIED_ALL;
+		&& zend_mir_verify_w05_calls(
+			view, source_calls, calls, diagnostics);
 }
 
 zend_mir_w05_lowering_result zend_mir_lower_w05_zend_source(
@@ -2184,7 +2079,6 @@ zend_mir_w05_lowering_result zend_mir_lower_w05_zend_source(
 	uint32_t source_fingerprint[4];
 	uint32_t recomputed_module_fingerprint[4];
 	uint32_t recomputed_source_fingerprint[4];
-	uint32_t verified_facets = 0;
 	zend_mir_w05_lowering_result result;
 
 	code = zend_mir_w05_plan_calls(
@@ -2228,27 +2122,18 @@ zend_mir_w05_lowering_result zend_mir_lower_w05_zend_source(
 	view = context->module_ops.view(context->module_ops.context, w04.module);
 	calls = zend_mir_module_get_call_view(w04.module);
 	if (view == NULL || calls == NULL
-			|| !zend_mir_module_w05_capability_ids_are_canonical(w04.module)
 			|| !zend_mir_w05_verify_final_composition(
-				view, source_calls, calls, context->diagnostics,
-				&verified_facets)) {
+				view, source_calls, calls, context->diagnostics)) {
 		context->module_ops.destroy(context->module_ops.context, w04.module);
 		zend_mir_w05_plan_release(&plan);
 		return zend_mir_w05_failure(
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_W05_CALL_VERIFY_FAILED);
 	}
-	/*
-	 * The named final verifier independently earns all four receipt facets
-	 * over the extension-aware returned module. Frozen W03/W04 verifiers
-	 * remain the prerequisite proof for the pre-W05 projection.
-	 */
+	/* Recompute the stable projection to catch mutation during verification. */
 	if (!zend_mir_w05_build_fingerprints(
 				view, context->source, source_calls, calls,
 				context->diagnostics,
 				module_fingerprint, source_fingerprint)
-			|| !zend_mir_module_publish_w05_verifier_receipts(
-				w04.module, module_fingerprint, source_fingerprint,
-				verified_facets)
 			|| !zend_mir_w05_build_fingerprints(
 				view, context->source, source_calls, calls,
 				context->diagnostics,
@@ -2261,10 +2146,7 @@ zend_mir_w05_lowering_result zend_mir_lower_w05_zend_source(
 			|| !zend_mir_w05_words_equal(
 				module_fingerprint, recomputed_module_fingerprint)
 			|| !zend_mir_w05_words_equal(
-				source_fingerprint, recomputed_source_fingerprint)
-			|| !zend_mir_w05_verify_receipts(
-				calls, module_fingerprint, source_fingerprint,
-				context->diagnostics)) {
+				source_fingerprint, recomputed_source_fingerprint)) {
 		context->module_ops.destroy(context->module_ops.context, w04.module);
 		zend_mir_w05_plan_release(&plan);
 		return zend_mir_w05_failure(

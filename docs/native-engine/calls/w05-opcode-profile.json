@@ -6655,7 +6655,7 @@
     "w04": {
       "active_opcode_count": 212,
       "path": "docs/native-engine/control-flow/w04-opcode-profile.json",
-      "sha256": "48e140fb1abb14da2eafc58ae3b1e8a3a5462d973dcccd26c414e6291c9a73e6"
+      "sha256": "366bc33ecc780064fe236a38da5376ff63125a26526908b51d4b565761e485a9"
     }
   },
   "unresolved_w05_count": 0

@@ -1,19 +1,5 @@
 # Native test-command contract
 
-## Status and ownership
-
-W00 fixes the public command names and exit semantics below before the scripts
-exist. W00-A defines this contract but does not implement any script.
-
-- W00-B owns `configure-dev.sh`, `build.sh`, `test-smoke.sh`, and
-  `test-sanitizers.sh` under `scripts/native/`.
-- W00-D owns `scripts/native/wave-gate.py` and
-  `docs/native-engine/waves/**`.
-
-Until those work streams are integrated, a missing command is an expected W00
-delivery gap, not a successful check and not permission to add a differently
-named wrapper.
-
 ## Common behavior
 
 Every command must:
@@ -63,16 +49,9 @@ capabilities are failures.
 Build or select the declared sanitizer profile and run its required tests. Exit
 `0` only when tests pass and no required sanitizer diagnostic is present.
 
-### `scripts/native/wave-gate.py`
-
-Validate and record declared wave-result JSON, then generate the wave status
-view owned by W00-D. Reject missing, malformed, incompatible, or unsuccessful
-required results. Exit `0` only when validation and the requested gate operation
-complete atomically.
-
 ## Compatibility
 
-Keep these paths and exit classes stable across later waves. Additive options
+Keep these build/test paths and exit classes stable. Additive options
 must preserve non-interactive behavior. Any incompatible CLI, result-format, or
 exit-semantics change requires an ADR, coordinated consumer updates, and fixture
 coverage before integration.

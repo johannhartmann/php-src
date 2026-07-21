@@ -1,0 +1,99 @@
+name: Native engine
+
+on:
+  push:
+    paths:
+      - "Zend/Native/**"
+      - "docs/native-engine/**"
+      - "ext/native_mir_test/**"
+      - "scripts/native/**"
+      - "tests/native/**"
+      - ".github/workflows/native-engine.yml"
+  pull_request:
+    paths:
+      - "Zend/Native/**"
+      - "docs/native-engine/**"
+      - "ext/native_mir_test/**"
+      - "scripts/native/**"
+      - "tests/native/**"
+      - ".github/workflows/native-engine.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/apt-x64
+      - name: Validate contracts and static integration state
+        run: |
+          python3 scripts/native/semantics/validate-w01.py --check
+          python3 scripts/native/mir/validate-w02.py --check
+          python3 scripts/native/lowering/validate-w03.py --check
+          python3 scripts/native/control-flow/check-contract.py --check
+          python3 scripts/native/control-flow/validate-w04.py --check
+          python3 scripts/native/calls/check-contract.py --check
+          python3 scripts/native/calls/validate-w05.py --check
+      - name: Run native unit and integration tests
+        run: |
+          python3 -m unittest discover -s tests/native/semantics -p 'test_*.py' -v
+          python3 -m unittest discover -s tests/native/lowering -p 'test_*.py' -v
+          python3 -m unittest discover -s tests/native/control-flow -p 'test_*.py' -v
+          python3 -m unittest discover -s tests/native/calls -p 'test_*.py' -v
+
+  build-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [debug-nts, debug-zts, asan-nts, ubsan-nts]
+    env:
+      NATIVE_WORK_ROOT: ${{ runner.temp }}/php-native
+      NATIVE_JOBS: 2
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/apt-x64
+        with:
+          asan: ${{ matrix.profile == 'asan-nts' && 'true' || 'false' }}
+      - name: Build
+        run: scripts/native/build.sh --profile "${{ matrix.profile }}"
+      - name: Smoke test
+        if: ${{ !endsWith(matrix.profile, 'san-nts') }}
+        run: scripts/native/test-smoke.sh --profile "${{ matrix.profile }}"
+      - name: Sanitizer test
+        if: ${{ endsWith(matrix.profile, 'san-nts') }}
+        run: scripts/native/test-sanitizers.sh --profile "${{ matrix.profile }}"
+
+  call-model:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      NATIVE_WORK_ROOT: ${{ runner.temp }}/php-native
+      NATIVE_JOBS: 2
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/apt-x64
+      - name: Build reference PHP
+        run: |
+          reference_root="$RUNNER_TEMP/php-reference"
+          git worktree add --detach "$reference_root" 47355da494ba696b1bdb6d10448a225e742bd316
+          cd "$reference_root"
+          ./buildconf --force
+          ./configure --disable-all --enable-cli --disable-cgi --disable-phpdbg --without-pear
+          make -j"$NATIVE_JOBS" sapi/cli/php
+          echo "REFERENCE_PHP=$reference_root/sapi/cli/php" >> "$GITHUB_ENV"
+      - name: Build and test call model
+        run: |
+          candidate=$(scripts/native/build.sh --profile w05-debug-nts --print-binary | tail -n 1)
+          python3 scripts/native/calls/test-w05.py \
+            --reference-php "$REFERENCE_PHP" --candidate-php "$candidate"
+          TEST_PHP_EXECUTABLE="$candidate" \
+            python3 tests/native/calls/fuzz/run_fuzz.py \
+              --seed 20260719 --cases 20000 --candidate-php "$candidate"

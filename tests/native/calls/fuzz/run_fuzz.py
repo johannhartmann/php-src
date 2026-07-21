@@ -149,7 +149,8 @@ def run(seed: int, count: int, candidate: Path) -> str:
                 if (
                     not isinstance(mir, str)
                     or "opcode call_direct_user" not in mir
-                    or "codegen-eligible false" not in mir
+                    or "call-target ct0" not in mir
+                    or "call-site cs0" not in mir
                 ):
                     raise FuzzError(f"{case['filename']}: incomplete accepted MIR")
             elif result.get("mir") is not None:
