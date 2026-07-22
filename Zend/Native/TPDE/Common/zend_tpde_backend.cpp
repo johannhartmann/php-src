@@ -6,6 +6,7 @@
 #include "Zend/zend_execute.h"
 #include "Zend/zend_type_info.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -13,6 +14,7 @@
 namespace {
 constexpr uint32_t MAX_RECORDS = UINT32_C(1) << 20;
 constexpr size_t MAX_NATIVE_IMAGE_BYTES = size_t{1} << 28;
+std::atomic_uint32_t live_unwind_registrations{0};
 
 bool checked_count(uint32_t count) {
 	return count <= MAX_RECORDS;
@@ -672,11 +674,16 @@ extern "C" zend_result zend_native_publish_image(
 			"publish target differs from compiled image target");
 		return FAILURE;
 	}
-	return target == ZEND_NATIVE_TARGET_DARWIN_ARM64
+	zend_result result = target == ZEND_NATIVE_TARGET_DARWIN_ARM64
 		? zend_native_publish_darwin_arm64(image, out_code, diag)
 		: target == ZEND_NATIVE_TARGET_LINUX_AMD64
 			? zend_native_publish_linux_x64(image, out_code, diag)
 			: FAILURE;
+	if (result == SUCCESS && *out_code != nullptr
+			&& (*out_code)->unwind_registered) {
+		live_unwind_registrations.fetch_add(1, std::memory_order_relaxed);
+	}
+	return result;
 }
 
 extern "C" zend_result zend_native_execute(
@@ -816,6 +823,12 @@ extern "C" void zend_native_code_destroy(zend_native_code *code) {
 	if (code == nullptr) {
 		return;
 	}
+	if (code->unwind_registered) {
+		uint32_t previous = live_unwind_registrations.fetch_sub(
+			1, std::memory_order_relaxed);
+		ZEND_ASSERT(previous != 0);
+		code->unwind_registered = false;
+	}
 	if (code->target == ZEND_NATIVE_TARGET_DARWIN_ARM64) {
 		zend_native_unmap_darwin_arm64(code);
 	} else if (code->target == ZEND_NATIVE_TARGET_LINUX_AMD64) {
@@ -847,6 +860,10 @@ extern "C" bool zend_native_code_is_executable(const zend_native_code *code) {
 
 extern "C" bool zend_native_code_has_unwind_info(const zend_native_code *code) {
 	return code != nullptr && code->unwind_registered;
+}
+
+extern "C" uint32_t zend_native_live_unwind_registration_count(void) {
+	return live_unwind_registrations.load(std::memory_order_relaxed);
 }
 
 extern "C" bool zend_native_code_contains_address(
