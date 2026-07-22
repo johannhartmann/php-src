@@ -510,7 +510,7 @@ static bool zend_mir_w03_prepare_source(
 		 * semantics in its source/value records; only the prerequisite CFG
 		 * sees the operand-compatible scalar RETURN spelling.
 		 */
-		if (integration->w06 && !integration->w09
+		if (integration->w06
 				&& opline->opcode == ZEND_RETURN_BY_REF) {
 			opline->opcode = ZEND_RETURN;
 			continue;

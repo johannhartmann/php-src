@@ -973,7 +973,9 @@ static zend_mir_lowering_status zend_mir_frontend_validate_eligibility_w04_impl(
 			if (allow_any_source_zval_return
 					&& original_op_array != NULL
 					&& i < original_op_array->last
-					&& original_op_array->opcodes[i].opcode == ZEND_RETURN
+					&& (original_op_array->opcodes[i].opcode == ZEND_RETURN
+						|| original_op_array->opcodes[i].opcode
+							== ZEND_RETURN_BY_REF)
 					&& operand_index == ZEND_MIR_FRONTEND_OP1) {
 				uint8_t type = original_op_array->opcodes[i].op1_type;
 				if (type == IS_CONST || type == IS_CV || type == IS_VAR
