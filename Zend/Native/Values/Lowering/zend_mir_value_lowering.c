@@ -156,6 +156,11 @@ static zend_mir_opcode zend_mir_w09_executable_opcode(uint32_t opcode)
 		case ZEND_FETCH_LIST_R:
 		case ZEND_FETCH_LIST_W:
 			return ZEND_MIR_OPCODE_VALUE_FETCH_LIST;
+		case ZEND_PRE_INC:
+		case ZEND_PRE_DEC:
+		case ZEND_POST_INC:
+		case ZEND_POST_DEC:
+			return ZEND_MIR_OPCODE_VALUE_INCDEC;
 		case ZEND_ASSIGN:
 			return ZEND_MIR_OPCODE_VALUE_ASSIGN;
 		case ZEND_ASSIGN_OP:
@@ -293,6 +298,7 @@ static bool zend_mir_w09_operation_semantics(
 		case ZEND_MIR_OPCODE_VALUE_UNARY_OP:
 		case ZEND_MIR_OPCODE_VALUE_CAST:
 		case ZEND_MIR_OPCODE_VALUE_FETCH_LIST:
+		case ZEND_MIR_OPCODE_VALUE_INCDEC:
 			if (!zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_ALLOCATE)
 					|| !zend_mir_w09_add_effect(
 						&summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)
