@@ -111,6 +111,9 @@ static void zend_mir_w06_sanitize_prerequisite_facts(
 static void zend_mir_w06_hide_private_call_results(
 	zend_mir_w03_integration *integration,
 	const zend_op_array *op_array, const zend_ssa *ssa);
+static void zend_mir_w08_hide_byref_argument_facts(
+	zend_mir_w03_integration *integration,
+	const zend_op_array *op_array, const zend_ssa *ssa);
 
 static bool zend_mir_w03_checked_add(
 	uint32_t left, uint32_t right, uint32_t *out)
@@ -1808,6 +1811,8 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 		zend_mir_w06_sanitize_prerequisite_facts(&integration);
 		zend_mir_w06_hide_private_call_results(
 			&integration, op_array, ssa);
+		zend_mir_w08_hide_byref_argument_facts(
+			&integration, op_array, ssa);
 	}
 	status = zend_mir_zend_source_init_w05_projection(
 		&integration.source, source_op_array, source_ssa, op_array, ssa,
@@ -2014,6 +2019,38 @@ static void zend_mir_w06_hide_private_call_results(
 		}
 		if (seen && private_result) {
 			integration->projected_ssa_var_info[result].type = 0;
+		}
+	}
+}
+
+/* Internal by-reference arguments remain canonical zvals in the source
+ * execute frame.  Do not also publish their pre-reference SSA value into the
+ * private scalar prerequisite: W08 call records carry the source operand and
+ * the runtime boundary materializes the reference in that exact source slot. */
+static void zend_mir_w08_hide_byref_argument_facts(
+	zend_mir_w03_integration *integration,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa)
+{
+	uint32_t index;
+
+	if (integration == NULL || op_array == NULL || ssa == NULL
+			|| ssa->ops == NULL) {
+		return;
+	}
+	for (index = 0; index < op_array->last; index++) {
+		const zend_ssa_op *ssa_op;
+		if (op_array->opcodes[index].opcode != ZEND_SEND_REF) {
+			continue;
+		}
+		ssa_op = &ssa->ops[index];
+		if (ssa_op->op1_use >= 0
+				&& ssa_op->op1_use < integration->projected_ssa.vars_count) {
+			integration->projected_ssa_var_info[ssa_op->op1_use].type = 0;
+		}
+		if (ssa_op->op1_def >= 0
+				&& ssa_op->op1_def < integration->projected_ssa.vars_count) {
+			integration->projected_ssa_var_info[ssa_op->op1_def].type = 0;
 		}
 	}
 }
