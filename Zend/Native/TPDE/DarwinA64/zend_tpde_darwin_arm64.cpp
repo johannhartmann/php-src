@@ -619,6 +619,105 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			}
 			return true;
 		}
+		case ZEND_MIR_OPCODE_FINALLY_ENTER: {
+			zend::native::tpde::CCAssignerAppleA64 assigner;
+			CallBuilder builder{*this, assigner};
+			builder.add_arg(CallArg{node.operands[0]});
+			builder.add_arg(ValuePart{mir.record.source_position_id, 4,
+				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			builder.call(ValuePart{
+				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
+					ZEND_NATIVE_HELPER_FINALLY_ENTER)),
+				8, DarwinConfig::GP_BANK});
+			ValuePart status{DarwinConfig::GP_BANK};
+			builder.add_ret(status, ::tpde::CCAssignment{});
+			auto status_reg = status.cur_reg_or_load(this);
+			ASM(CMPxi, status_reg, ZEND_NATIVE_RETURNED);
+			auto continued = text_writer.label_create();
+			generate_raw_jump(Jump::Jeq, continued);
+			RetBuilder return_builder{*this, *cur_cc_assigner()};
+			return_builder.add(std::move(status), ::tpde::CCAssignment{});
+			return_builder.ret();
+			label_place(continued);
+			return true;
+		}
+		case ZEND_MIR_OPCODE_FINALLY_CALL: {
+			zend::native::tpde::CCAssignerAppleA64 assigner;
+			CallBuilder builder{*this, assigner};
+			builder.add_arg(CallArg{node.operands[0]});
+			builder.add_arg(ValuePart{mir.record.source_position_id, 4,
+				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			builder.call(ValuePart{
+				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
+					ZEND_NATIVE_HELPER_FINALLY_CALL)),
+				8, DarwinConfig::GP_BANK});
+			const auto &successors = adaptor->block_succs(
+				adaptor->block_ref(mir.record.block_id));
+			if (successors.size() != 2) {
+				return false;
+			}
+			generate_exception_branch(successors[0]);
+			return true;
+		}
+		case ZEND_MIR_OPCODE_FINALLY_RETURN: {
+			zend::native::tpde::CCAssignerAppleA64 assigner;
+			CallBuilder builder{*this, assigner};
+			builder.add_arg(CallArg{node.operands[0]});
+			builder.add_arg(ValuePart{mir.record.source_position_id, 4,
+				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			builder.call(ValuePart{
+				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
+					ZEND_NATIVE_HELPER_FINALLY_RETURN)),
+				8, DarwinConfig::GP_BANK});
+			ValuePart continuation{DarwinConfig::GP_BANK};
+			builder.add_ret(continuation, ::tpde::CCAssignment{});
+			auto continuation_reg = continuation.cur_reg_or_load(this);
+			const zend_tpde_plan *plan = adaptor->plan();
+			for (uint32_t i = 0; i < plan->instruction_count; ++i) {
+				const zend_mir_instruction_record &call =
+					plan->instructions[i].record;
+				zend_mir_block_id target;
+				if (call.opcode != ZEND_MIR_OPCODE_FINALLY_CALL
+						|| plan->view->successor_count(
+							plan->view->context, call.block_id) != 2
+						|| !plan->view->successor_at(
+							plan->view->context, call.block_id, 1, &target)) {
+					continue;
+				}
+				ASM(CMPxi, continuation_reg, call.source_position_id);
+				auto continued = text_writer.label_create();
+				generate_raw_jump(Jump::Jne, continued);
+				generate_exception_branch(adaptor->block_ref(target));
+				label_place(continued);
+			}
+			for (uint32_t i = 0; i < plan->instruction_count; ++i) {
+				const zend_mir_instruction_record &handler =
+					plan->instructions[i].record;
+				if ((handler.opcode != ZEND_MIR_OPCODE_CATCH_ENTER
+						&& handler.opcode != ZEND_MIR_OPCODE_FINALLY_ENTER)
+						|| handler.block_id == plan->function.entry_block_id
+						|| !zend_mir_id_is_valid(handler.source_position_id)) {
+					continue;
+				}
+				ScratchReg expected{this};
+				auto expected_reg = expected.alloc_gp();
+				materialize_constant(
+					ZEND_NATIVE_FINALLY_EXCEPTION_FLAG
+						| handler.source_position_id,
+					DarwinConfig::GP_BANK, 4, expected_reg);
+				ASM(CMPx, continuation_reg, expected_reg);
+				auto continued = text_writer.label_create();
+				generate_raw_jump(Jump::Jne, continued);
+				generate_exception_branch(adaptor->block_ref(handler.block_id));
+				label_place(continued);
+			}
+			continuation.reset(this);
+			RetBuilder return_builder{*this, *cur_cc_assigner()};
+			return_builder.add(ValuePart{ZEND_NATIVE_EXCEPTION, 4,
+				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			return_builder.ret();
+			return true;
+		}
 		case ZEND_MIR_OPCODE_CATCH_ENTER: {
 			zend::native::tpde::CCAssignerAppleA64 assigner;
 			CallBuilder builder{*this, assigner};

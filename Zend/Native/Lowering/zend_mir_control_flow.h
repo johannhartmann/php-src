@@ -14,6 +14,8 @@ typedef enum _zend_mir_w04_branch_kind {
 	ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT = 3,
 	ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT = 4,
 	ZEND_MIR_W04_BRANCH_CATCH = 5,
+	ZEND_MIR_W08_BRANCH_FINALLY_CALL = 6,
+	ZEND_MIR_W08_BRANCH_FINALLY_RETURN = 7,
 	ZEND_MIR_W04_BRANCH_KIND_INVALID = -1
 } zend_mir_w04_branch_kind;
 
@@ -46,6 +48,8 @@ static inline uint32_t zend_mir_w04_mir_successor_for_source(
 		case ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT:
 		case ZEND_MIR_W04_BRANCH_CATCH:
 			return source_successor_index == 0 ? 1 : 0;
+		case ZEND_MIR_W08_BRANCH_FINALLY_CALL:
+			return source_successor_index;
 		case ZEND_MIR_W04_BRANCH_IF_TRUE:
 		case ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT:
 			return source_successor_index;

@@ -502,14 +502,17 @@ bool zend_mir_w04_emit_terminator(
 		kind = zend_mir_w04_branch_kind_for_opcode(opcode->zend_opcode_number);
 	}
 	if ((kind == ZEND_MIR_W04_BRANCH_UNCONDITIONAL && edge_count != 1)
-			|| (kind >= ZEND_MIR_W04_BRANCH_IF_FALSE
-				&& kind != ZEND_MIR_W04_BRANCH_CATCH && edge_count != 2)
+			|| ((kind >= ZEND_MIR_W04_BRANCH_IF_FALSE
+					&& kind <= ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT)
+				&& edge_count != 2)
 			|| (kind == ZEND_MIR_W04_BRANCH_CATCH
 				&& edge_count != 1 && edge_count != 2)
+			|| (kind == ZEND_MIR_W08_BRANCH_FINALLY_CALL && edge_count != 2)
+			|| (kind == ZEND_MIR_W08_BRANCH_FINALLY_RETURN && edge_count != 0)
 			|| (kind == ZEND_MIR_W04_BRANCH_KIND_INVALID && edge_count > 1)) {
 		return false;
 	}
-	if (edge_count == 0) {
+	if (edge_count == 0 && kind != ZEND_MIR_W08_BRANCH_FINALLY_RETURN) {
 		if (opcode != NULL || block->opcode_count != 0) {
 			return true;
 		}
@@ -519,6 +522,7 @@ bool zend_mir_w04_emit_terminator(
 			ZEND_MIR_ID_INVALID, ZEND_MIR_ID_INVALID, &terminator);
 	}
 	if (edge_count == 2 && kind != ZEND_MIR_W04_BRANCH_CATCH
+			&& kind != ZEND_MIR_W08_BRANCH_FINALLY_CALL
 			&& !zend_mir_w04_condition_value(
 				context, mutator, opcode, &condition)) {
 		return false;
@@ -549,6 +553,10 @@ bool zend_mir_w04_emit_terminator(
 			zend_mir_lowering_context_block_id(context),
 			kind == ZEND_MIR_W04_BRANCH_CATCH
 				? ZEND_MIR_OPCODE_CATCH_ENTER
+				: kind == ZEND_MIR_W08_BRANCH_FINALLY_CALL
+					? ZEND_MIR_OPCODE_FINALLY_CALL
+				: kind == ZEND_MIR_W08_BRANCH_FINALLY_RETURN
+					? ZEND_MIR_OPCODE_FINALLY_RETURN
 				: edge_count == 1 ? ZEND_MIR_OPCODE_BRANCH
 				: ZEND_MIR_OPCODE_COND_BRANCH,
 			ZEND_MIR_REPRESENTATION_CONTROL, ZEND_MIR_ID_INVALID,
@@ -556,7 +564,8 @@ bool zend_mir_w04_emit_terminator(
 			&terminator)) {
 		return false;
 	}
-	if (edge_count == 2 && kind != ZEND_MIR_W04_BRANCH_CATCH) {
+	if (edge_count == 2 && kind != ZEND_MIR_W04_BRANCH_CATCH
+			&& kind != ZEND_MIR_W08_BRANCH_FINALLY_CALL) {
 		if (!zend_mir_id_is_valid(condition)
 				|| !mutator->add_operand(
 					mutator->context, terminator, condition)) {

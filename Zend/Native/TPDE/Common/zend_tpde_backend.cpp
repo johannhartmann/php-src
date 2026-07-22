@@ -200,6 +200,11 @@ bool initialize_plan(
 		plan->instructions[i].exception_block_id = ZEND_MIR_ID_INVALID;
 		plan->instructions[i].operand_offset = static_cast<uint32_t>(operands - count);
 		plan->instructions[i].operand_count = count;
+		if (record.opcode == ZEND_MIR_OPCODE_FINALLY_ENTER
+				|| record.opcode == ZEND_MIR_OPCODE_FINALLY_CALL
+				|| record.opcode == ZEND_MIR_OPCODE_FINALLY_RETURN) {
+			plan->may_emit_calls = true;
+		}
 		if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
 				|| record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL) {
 			zend_mir_call_site_ref site{};
@@ -416,6 +421,9 @@ bool initialize_plan(
 			ZEND_NATIVE_HELPER_CALL_READ_SOURCE_SCALAR,
 			ZEND_NATIVE_HELPER_ECHO_INTEGER,
 			ZEND_NATIVE_HELPER_ECHO_DOUBLE,
+			ZEND_NATIVE_HELPER_FINALLY_ENTER,
+			ZEND_NATIVE_HELPER_FINALLY_CALL,
+			ZEND_NATIVE_HELPER_FINALLY_RETURN,
 		};
 		if (zend_native_runtime_validate(plan->runtime,
 				ZEND_NATIVE_RUNTIME_CAP_USER_CALL

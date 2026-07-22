@@ -884,10 +884,10 @@ static bool zend_mir_frontend_view_block_at(
 		for (try_index = 0; try_index < op_array->last_try_catch; try_index++) {
 			const zend_try_catch_element *region =
 				&op_array->try_catch_array[try_index];
-			if (region->catch_op == block->start) {
+			if (region->catch_op != 0 && region->catch_op == block->start) {
 				out->flags |= ZEND_MIR_SOURCE_BLOCK_CATCH_ENTRY;
 			}
-			if (region->finally_op == block->start) {
+			if (region->finally_op != 0 && region->finally_op == block->start) {
 				out->flags |= ZEND_MIR_SOURCE_BLOCK_FINALLY_ENTRY;
 			}
 		}
@@ -915,7 +915,7 @@ bool zend_mir_zend_source_exception_handler(
 	const zend_op_array *op_array;
 	const zend_ssa *ssa;
 	uint32_t selected = ZEND_MIR_ID_INVALID;
-	uint32_t selected_try = 0;
+	uint32_t handler_opline = ZEND_MIR_ID_INVALID;
 	uint32_t index;
 
 	if (!zend_mir_source_is_initialized(source) || !source->w04
@@ -928,24 +928,46 @@ bool zend_mir_zend_source_exception_handler(
 			|| throwing_opline_index >= op_array->last) {
 		return false;
 	}
+	/*
+	 * Mirror zend_dispatch_try_catch_finally_helper's table order using only
+	 * stable source indices. The last containing table entry is innermost.
+	 * A throw before catch enters catch; a throw after catch but before finally
+	 * enters finally; a throw from inside that finally continues outward.
+	 */
 	for (index = 0; index < op_array->last_try_catch; index++) {
 		const zend_try_catch_element *region =
 			&op_array->try_catch_array[index];
-		uint32_t protected_end = region->catch_op != 0
-			? region->catch_op : region->finally_op;
-		if (region->catch_op != 0
-				&& throwing_opline_index >= region->try_op
-				&& throwing_opline_index < protected_end
-				&& (!zend_mir_id_is_valid(selected)
-					|| region->try_op >= selected_try)) {
+		if (region->try_op <= throwing_opline_index
+				&& ((region->catch_op != 0
+						&& throwing_opline_index < region->catch_op)
+					|| (region->finally_end != 0
+						&& throwing_opline_index < region->finally_end))) {
 			selected = index;
-			selected_try = region->try_op;
 		}
 	}
-	if (!zend_mir_id_is_valid(selected)) {
+	while (zend_mir_id_is_valid(selected)) {
+		const zend_try_catch_element *region =
+			&op_array->try_catch_array[selected];
+		if (region->catch_op != 0
+				&& throwing_opline_index < region->catch_op) {
+			handler_opline = region->catch_op;
+			break;
+		}
+		if (region->finally_op != 0
+				&& throwing_opline_index < region->finally_op) {
+			handler_opline = region->finally_op;
+			break;
+		}
+		if (selected == 0) {
+			selected = ZEND_MIR_ID_INVALID;
+		} else {
+			selected--;
+		}
+	}
+	if (!zend_mir_id_is_valid(handler_opline)) {
 		return false;
 	}
-	*catch_opline_index_out = op_array->try_catch_array[selected].catch_op;
+	*catch_opline_index_out = handler_opline;
 	if (*catch_opline_index_out >= op_array->last
 			|| ssa->cfg.map == NULL
 			|| ssa->cfg.map[*catch_opline_index_out] < 0) {
@@ -1767,7 +1789,19 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 			}
 			if ((ssa->cfg.blocks[block_id].flags
 					& ZEND_BB_PROTECTED) != 0) {
-				site->flags |= ZEND_MIR_SOURCE_CALL_SITE_PROTECTED;
+				zend_mir_source_block_id handler_block;
+				uint32_t handler_opline;
+
+				/*
+				 * ZEND_BB_PROTECTED also covers the body of a terminal finally.
+				 * Such a call has no in-frame exception destination: it must
+				 * propagate to the caller. Mark only calls with a real, stable
+				 * catch/finally destination as protected call sites.
+				 */
+				if (zend_mir_zend_source_exception_handler(
+						source, index, &handler_block, &handler_opline)) {
+					site->flags |= ZEND_MIR_SOURCE_CALL_SITE_PROTECTED;
+				}
 			}
 			stack[stack_count++] = inventory->site_count++;
 			continue;

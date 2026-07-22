@@ -173,6 +173,73 @@ public:
 					static_cast<uint32_t>(target_index)});
 			}
 		}
+		/*
+		 * Zend's CFG records FAST_CALL's continuation on the call block while
+		 * the executable edge is selected by FAST_RET. Add those dynamic
+		 * destinations to TPDE's internal CFG so liveness sees every machine
+		 * branch without changing persistent source identity.
+		 */
+		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
+			if (plan_->instructions[i].record.opcode
+					!= ZEND_MIR_OPCODE_FINALLY_RETURN) {
+				continue;
+			}
+			int32_t ret_block = block_index(
+				plan_->instructions[i].record.block_id);
+			if (ret_block < 0) {
+				valid_ = false;
+				continue;
+			}
+			for (uint32_t n = 0; n < plan_->instruction_count; ++n) {
+				const zend_mir_instruction_record &call =
+					plan_->instructions[n].record;
+				zend_mir_block_id continuation;
+				if (call.opcode != ZEND_MIR_OPCODE_FINALLY_CALL
+						|| plan_->view->successor_count(
+							plan_->view->context, call.block_id) != 2
+						|| !plan_->view->successor_at(
+							plan_->view->context, call.block_id, 1,
+							&continuation)) {
+					continue;
+				}
+				int32_t continuation_block = block_index(continuation);
+				if (continuation_block < 0) {
+					valid_ = false;
+					continue;
+				}
+				IRBlockRef continuation_ref{
+					static_cast<uint32_t>(continuation_block)};
+				auto &ret_successors = successors_[
+					static_cast<uint32_t>(ret_block)];
+				if (std::find(ret_successors.begin(), ret_successors.end(),
+						continuation_ref) == ret_successors.end()) {
+					ret_successors.push_back(continuation_ref);
+				}
+			}
+			for (uint32_t n = 0; n < plan_->instruction_count; ++n) {
+				const zend_mir_instruction_record &handler =
+					plan_->instructions[n].record;
+				if (handler.opcode != ZEND_MIR_OPCODE_CATCH_ENTER
+						&& handler.opcode != ZEND_MIR_OPCODE_FINALLY_ENTER) {
+					continue;
+				}
+				if (handler.block_id == plan_->function.entry_block_id) {
+					continue;
+				}
+				int32_t handler_block = block_index(handler.block_id);
+				if (handler_block < 0) {
+					valid_ = false;
+					continue;
+				}
+				IRBlockRef handler_ref{static_cast<uint32_t>(handler_block)};
+				auto &ret_successors = successors_[
+					static_cast<uint32_t>(ret_block)];
+				if (std::find(ret_successors.begin(), ret_successors.end(),
+						handler_ref) == ret_successors.end()) {
+					ret_successors.push_back(handler_ref);
+				}
+			}
+		}
 
 		int32_t entry = block_index(plan_->function.entry_block_id);
 		if (entry < 0) {
@@ -292,7 +359,13 @@ public:
 					operands.push_back(IRValueRef{FRAME_VALUE});
 				}
 			} else if (instruction.record.opcode
-					== ZEND_MIR_OPCODE_CATCH_ENTER) {
+					== ZEND_MIR_OPCODE_CATCH_ENTER
+					|| instruction.record.opcode
+						== ZEND_MIR_OPCODE_FINALLY_ENTER
+					|| instruction.record.opcode
+						== ZEND_MIR_OPCODE_FINALLY_CALL
+					|| instruction.record.opcode
+						== ZEND_MIR_OPCODE_FINALLY_RETURN) {
 				operands.push_back(IRValueRef{FRAME_VALUE});
 			}
 			add_node(static_cast<uint32_t>(block), InstNode{
