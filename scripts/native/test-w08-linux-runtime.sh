@@ -290,11 +290,12 @@ printf(
 );
 PHP
 
-set +e
-timeout 10s "$candidate" -n -d display_errors=1 -d log_errors=0 \
-    "$timeout_source" >"$timeout_output" 2>&1
-timeout_status=$?
-set -e
+if timeout 10s "$candidate" -n -d display_errors=1 -d log_errors=0 \
+    "$timeout_source" >"$timeout_output" 2>&1; then
+    timeout_status=0
+else
+    timeout_status=$?
+fi
 [[ $timeout_status == 0 || $timeout_status == 255 ]] || {
     cat "$timeout_output" >&2
     printf 'timeout process exited %d\n' "$timeout_status" >&2
