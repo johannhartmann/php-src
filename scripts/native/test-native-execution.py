@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute the accepted W03-W07 slice as native machine code."""
+"""Execute the accepted W03-W08 runtime as native machine code."""
 
 from __future__ import annotations
 
@@ -159,7 +159,7 @@ W07_CANDIDATE_RUNNER = r"""
 $source = base64_decode(getenv("NATIVE_SOURCE"), true);
 $arguments = json_decode(getenv("NATIVE_ARGUMENTS"), true, 512, JSON_THROW_ON_ERROR);
 $options = [
-    "wave" => 7,
+    "wave" => (int) getenv("NATIVE_WAVE"),
     "function" => getenv("NATIVE_FUNCTION"),
     "target" => getenv("NATIVE_TARGET"),
     "repeat" => (int) getenv("NATIVE_REPEAT"),
@@ -294,6 +294,7 @@ def w07_environment(
     target: str,
     *,
     compiler_mode: str | None = None,
+    wave: int = 7,
     repeat: int = 1,
     stack_probe: bool = False,
 ) -> dict[str, str]:
@@ -303,6 +304,7 @@ def w07_environment(
         "NATIVE_FUNCTION": function,
         "NATIVE_FILENAME": filename,
         "NATIVE_TARGET": target,
+        "NATIVE_WAVE": str(wave),
         "NATIVE_REPEAT": str(repeat),
         "NATIVE_COMPILER_MODE": compiler_mode or "",
         "NATIVE_STACK_PROBE": "1" if stack_probe else "0",
@@ -524,6 +526,49 @@ function mutual_case(): bool
 """
 
 
+W08_INTERNAL_VALUE_SOURCE = b"""<?php
+function native_internal_value(mixed $value): string
+{
+    return strrev(json_encode($value));
+}
+"""
+
+
+W08_EXCEPTION_SOURCE = b"""<?php
+function native_internal_exception(): int
+{
+    try {
+        intdiv(1, 0);
+    } catch (DivisionByZeroError) {
+        return 6;
+    }
+    return 0;
+}
+"""
+
+
+W08_REENTRY_SOURCE = b"""<?php
+function native_internal_callback(int $value): int
+{
+    return $value;
+}
+function native_internal_reentry(): int
+{
+    array_map('native_internal_callback', [4]);
+    return 7;
+}
+"""
+
+
+W08_BYREF_SOURCE = b"""<?php
+function native_internal_byref(string $value, int $count): int
+{
+    str_replace('a', 'b', $value, $count);
+    return strcmp(json_encode($count), '2');
+}
+"""
+
+
 def run_stack_limit_case(
     binary: Path, program: str, env: dict[str, str]
 ) -> subprocess.CompletedProcess[str]:
@@ -730,6 +775,48 @@ def main() -> int:
             f"native stack source mapping mismatch: {observed_trace!r}"
         )
     checks += 1
+
+    w08_cases = (
+        (
+            "w08-internal-value.php",
+            W08_INTERNAL_VALUE_SOURCE,
+            "native_internal_value",
+            ((None,), (True,), (7,), (1.5,), ("hello",), ([1, 2],)),
+        ),
+        (
+            "w08-internal-exception.php",
+            W08_EXCEPTION_SOURCE,
+            "native_internal_exception",
+            ((),),
+        ),
+        (
+            "w08-internal-reentry.php",
+            W08_REENTRY_SOURCE,
+            "native_internal_reentry",
+            ((),),
+        ),
+        (
+            "w08-internal-byref.php",
+            W08_BYREF_SOURCE,
+            "native_internal_byref",
+            (("a-a", 0),),
+        ),
+    )
+    for filename, source, function, inputs in w08_cases:
+        for case_arguments in inputs:
+            env = w07_environment(
+                source,
+                filename,
+                function,
+                case_arguments,
+                arguments.target,
+                wave=8,
+            )
+            expected = run_php(reference, W07_REFERENCE_RUNNER, env)
+            document = run_php(candidate, W07_CANDIDATE_RUNNER, env)
+            execution = verify_w07_result(document, expected, arguments.target)
+            disassembly_sample = disassembly_sample or execution["machine_code"]
+            checks += 1
 
     assert disassembly_sample is not None
     verify_disassembly(disassembly_sample, arguments.target)

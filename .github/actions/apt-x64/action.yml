@@ -80,4 +80,5 @@ runs:
           libjpeg-dev \
           libpng-dev \
           libfreetype6-dev \
+          libfcgi-bin \
           $OPCACHE_TLS_TESTS_DEPS

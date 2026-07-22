@@ -102,6 +102,8 @@ jobs:
             --target darwin-arm64-dev \
             --reference "$REFERENCE_PHP" \
             --candidate "$candidate"
+          TEST_PHP_EXECUTABLE="$candidate" \
+            "$candidate" run-tests.php -q ext/native_mir_test/tests/w08_*.phpt
 
   linux-amd64:
     runs-on: ubuntu-24.04
@@ -158,6 +160,13 @@ jobs:
             --target linux-amd64-prod \
             --reference "$REFERENCE_PHP" \
             --candidate "$candidate"
+          TEST_PHP_EXECUTABLE="$candidate" \
+            "$candidate" run-tests.php -q ext/native_mir_test/tests/w08_*.phpt
+          if [[ "$profile" == linux-amd64-native-debug-nts ]]; then
+            scripts/native/test-w08-linux-runtime.sh \
+              --candidate "$candidate" \
+              --fpm "$(dirname "$(dirname "$candidate")")/fpm/php-fpm"
+          fi
 
   call-model:
     runs-on: ubuntu-24.04
