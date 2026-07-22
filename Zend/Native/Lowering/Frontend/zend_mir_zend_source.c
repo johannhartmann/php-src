@@ -1656,7 +1656,8 @@ bool zend_mir_zend_source_w08_return_source_zval(
 		return false;
 	}
 	return_opline = &op_array->opcodes[return_opline_index];
-	if (return_opline->opcode != ZEND_RETURN) {
+	if (return_opline->opcode != ZEND_RETURN
+			&& (!source->w09 || return_opline->opcode != ZEND_RETURN_BY_REF)) {
 		return false;
 	}
 	/*

@@ -998,6 +998,7 @@ zend_native_status zend_native_return_source_zval(
 {
 	const zend_op *opline;
 	zval *source;
+	zval *source_slot;
 	zval *return_value;
 
 	if (execute_data == NULL || execute_data->func == NULL
@@ -1006,17 +1007,92 @@ zend_native_status zend_native_return_source_zval(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	opline = &execute_data->func->op_array.opcodes[return_opline_index];
-	if (opline->opcode != ZEND_RETURN
+	if ((opline->opcode != ZEND_RETURN
+			&& opline->opcode != ZEND_RETURN_BY_REF)
 			|| (opline->op1_type != IS_CONST && opline->op1_type != IS_CV
 				&& opline->op1_type != IS_TMP_VAR
 				&& opline->op1_type != IS_VAR)) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	execute_data->opline = opline;
-	source = opline->op1_type == IS_CONST
+	source_slot = opline->op1_type == IS_CONST
 		? RT_CONSTANT(opline, opline->op1)
 		: ZEND_CALL_VAR(execute_data, opline->op1.var);
+	source = source_slot;
 	return_value = execute_data->return_value;
+	if (opline->opcode == ZEND_RETURN_BY_REF) {
+		bool temporary = opline->op1_type == IS_TMP_VAR
+			|| opline->op1_type == IS_VAR;
+		if (opline->op1_type == IS_VAR
+				&& Z_TYPE_P(source) == IS_INDIRECT) {
+			source = Z_INDIRECT_P(source);
+		}
+
+		if ((opline->op1_type == IS_CONST
+				|| opline->op1_type == IS_TMP_VAR)
+				|| (opline->op1_type == IS_VAR
+					&& opline->extended_value == ZEND_RETURNS_VALUE)) {
+			zend_error(E_NOTICE,
+				"Only variable references should be returned by reference");
+			if (UNEXPECTED(EG(exception) != NULL)) {
+				return ZEND_NATIVE_EXCEPTION;
+			}
+			if (return_value == NULL) {
+				if (temporary && !Z_ISUNDEF_P(source_slot)) {
+					zval_ptr_dtor(source_slot);
+					ZVAL_UNDEF(source_slot);
+				}
+				return ZEND_NATIVE_RETURNED;
+			}
+			if (opline->op1_type == IS_VAR && Z_ISREF_P(source)) {
+				ZVAL_COPY_VALUE(return_value, source);
+				ZVAL_UNDEF(source_slot);
+			} else {
+				ZVAL_NEW_REF(return_value, source);
+				if (opline->op1_type == IS_CONST) {
+					Z_TRY_ADDREF_P(source);
+				} else {
+					ZVAL_UNDEF(source_slot);
+				}
+			}
+			zend_return_unwrap_ref(execute_data, return_value);
+			return ZEND_NATIVE_RETURNED;
+		}
+
+		if (opline->op1_type == IS_VAR
+				&& opline->extended_value == ZEND_RETURNS_FUNCTION
+				&& !Z_ISREF_P(source)) {
+			zend_error(E_NOTICE,
+				"Only variable references should be returned by reference");
+			if (UNEXPECTED(EG(exception) != NULL)) {
+				return ZEND_NATIVE_EXCEPTION;
+			}
+			if (return_value != NULL) {
+				ZVAL_NEW_REF(return_value, source);
+				ZVAL_UNDEF(source_slot);
+			} else if (!Z_ISUNDEF_P(source_slot)) {
+				zval_ptr_dtor(source_slot);
+				ZVAL_UNDEF(source_slot);
+			}
+			zend_return_unwrap_ref(execute_data, return_value);
+			return ZEND_NATIVE_RETURNED;
+		}
+
+		if (return_value != NULL) {
+			if (Z_ISREF_P(source)) {
+				Z_ADDREF_P(source);
+			} else {
+				ZVAL_MAKE_REF_EX(source, 2);
+			}
+			ZVAL_REF(return_value, Z_REF_P(source));
+		}
+		if (temporary && !Z_ISUNDEF_P(source_slot)) {
+			zval_ptr_dtor(source_slot);
+			ZVAL_UNDEF(source_slot);
+		}
+		zend_return_unwrap_ref(execute_data, return_value);
+		return ZEND_NATIVE_RETURNED;
+	}
 	if (opline->op1_type == IS_CV && Z_ISUNDEF_P(source)) {
 		if (return_value != NULL) {
 			ZVAL_NULL(return_value);
