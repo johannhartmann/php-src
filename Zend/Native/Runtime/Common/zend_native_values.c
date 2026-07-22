@@ -181,6 +181,22 @@ zend_native_status zend_native_value_assign_ref(
 	if (garbage != NULL) {
 		GC_DTOR(garbage);
 	}
+	/* ZEND_ASSIGN_REF consumes both VAR operands.  In particular, a direct
+	 * user-call result may carry the sole temporary reference container; if it
+	 * is left live here, the later frame cleanup cannot see it after its SSA
+	 * lifetime ended and the reference leaks. */
+	if (opline->op2_type == IS_VAR && !Z_ISUNDEF_P(value_slot)) {
+		zval_ptr_dtor(value_slot);
+		ZVAL_UNDEF(value_slot);
+	}
+	if (opline->op1_type == IS_VAR && !Z_ISUNDEF_P(
+			zend_native_value_slot(
+				execute_data, opline->op1_type, opline->op1))) {
+		zval *variable_slot = zend_native_value_slot(
+			execute_data, opline->op1_type, opline->op1);
+		zval_ptr_dtor(variable_slot);
+		ZVAL_UNDEF(variable_slot);
+	}
 	return zend_native_value_status();
 }
 
