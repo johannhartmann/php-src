@@ -2105,9 +2105,12 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 			if (RESULT_UNUSED(opline)) {
 				site->flags |= ZEND_MIR_SOURCE_CALL_SITE_RESULT_UNUSED;
 			} else if (ssa->ops[index].result_def >= 0
-					&& zend_mir_frontend_call_result_is_scalar(
-						op_array, ssa, index,
-						(uint32_t) ssa->ops[index].result_def)) {
+					&& site->target_id < inventory->target_count
+					&& (inventory->targets[site->target_id].record.kind
+							== ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
+						|| zend_mir_frontend_call_result_is_scalar(
+							op_array, ssa, index,
+							(uint32_t) ssa->ops[index].result_def))) {
 				site->flags |= ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR;
 				site->result_ssa_variable_id =
 					(uint32_t) ssa->ops[index].result_def;
