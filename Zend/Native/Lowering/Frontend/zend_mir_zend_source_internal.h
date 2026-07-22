@@ -108,6 +108,11 @@ zend_mir_lowering_status zend_mir_frontend_validate_eligibility_w04(
 	const zend_ssa *ssa,
 	zend_mir_op_array_id op_array_id,
 	zend_mir_frontend_diagnostic *diagnostic);
+zend_mir_lowering_status zend_mir_frontend_validate_eligibility_w08(
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	zend_mir_op_array_id op_array_id,
+	zend_mir_frontend_diagnostic *diagnostic);
 
 zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope(
 	const zend_op_array *op_array,

@@ -757,6 +757,13 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 					return ZEND_MIRL_W05_UNSUPPORTED_RESULT;
 				}
 				plan->results[index] = ZEND_MIR_ID_INVALID;
+			} else if (w08_execution && result_flags == 0
+					&& !zend_mir_id_is_valid(
+						site->result_ssa_variable_id)) {
+				/* Refcounted and otherwise non-scalar internal results remain
+				 * in their source zval slot. A later W08 source-backed opcode
+				 * must independently prove and consume that exact slot. */
+				plan->results[index] = ZEND_MIR_ID_INVALID;
 			} else if (result_flags
 					== ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR
 					&& zend_mir_id_is_valid(

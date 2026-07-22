@@ -31,6 +31,15 @@ function caught_second_internal(): int
     }
     return 3;
 }
+
+function caught_variable()
+{
+    try {
+        intdiv(1, 0);
+    } catch (DivisionByZeroError $e) {
+        return $e->getCode();
+    }
+}
 PHP;
 
 $result = native_mir_test_compile_execute(
@@ -68,7 +77,26 @@ printf(
     $second['execution']['execute_ex_calls'],
     $second['execution']['opline_handler_calls'],
 );
+
+$variable = native_mir_test_compile_execute(
+    $source,
+    'w08-internal-exception.php',
+    [],
+    ['wave' => 8, 'function' => 'caught_variable'],
+);
+printf(
+    "%s %s return=%s exception=%d bailout=%d vm=%d execute_ex=%d handler=%d\n",
+    $variable['status'],
+    $variable['execution']['status'],
+    json_encode($variable['execution']['return_value']),
+    $variable['execution']['exception'],
+    $variable['execution']['bailout'],
+    $variable['execution']['vm_handler_calls'],
+    $variable['execution']['execute_ex_calls'],
+    $variable['execution']['opline_handler_calls'],
+);
 ?>
 --EXPECT--
 accepted returned return=7 exception=0 bailout=0 vm=0 execute_ex=0 handler=0
 accepted returned return=2 exception=0 bailout=0 vm=0 execute_ex=0 handler=0
+accepted returned return=0 exception=0 bailout=0 vm=0 execute_ex=0 handler=0

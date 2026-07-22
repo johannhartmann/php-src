@@ -15,10 +15,15 @@ function throws_native(): int
     return intdiv(1, 0);
 }
 
+function propagates_native(): int
+{
+    return throws_native();
+}
+
 function catches_user(): int
 {
     try {
-        return throws_native();
+        return propagates_native();
     } catch (DivisionByZeroError) {
         return 9;
     }
