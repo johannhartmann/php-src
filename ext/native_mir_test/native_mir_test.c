@@ -110,7 +110,8 @@ typedef enum _native_mir_test_fault {
 	NATIVE_MIR_TEST_FAULT_VALUE_CALL_TRANSFER,
 	NATIVE_MIR_TEST_FAULT_VALUE_VERIFIER_FAILURE,
 	NATIVE_MIR_TEST_FAULT_DUMP_FAILURE,
-	NATIVE_MIR_TEST_FAULT_MAPPING_FAILURE
+	NATIVE_MIR_TEST_FAULT_MAPPING_FAILURE,
+	NATIVE_MIR_TEST_FAULT_ENTRY_PUBLISH_FAILURE
 } native_mir_test_fault;
 
 typedef struct _native_mir_test_diagnostic {
@@ -215,6 +216,7 @@ typedef struct _native_mir_test_state {
 	uint32_t frame_probe_count;
 	uint32_t execute_repetitions;
 	uint32_t completed_executions;
+	uint32_t unwind_registrations_before;
 	smart_str dump;
 	uint32_t dump_writes;
 } native_mir_test_state;
@@ -567,6 +569,8 @@ static bool native_mir_test_fault_from_string(
 		*out = NATIVE_MIR_TEST_FAULT_DUMP_FAILURE;
 	} else if (zend_string_equals_literal(value, "mapping_failure")) {
 		*out = NATIVE_MIR_TEST_FAULT_MAPPING_FAILURE;
+	} else if (zend_string_equals_literal(value, "entry_publish_failure")) {
+		*out = NATIVE_MIR_TEST_FAULT_ENTRY_PUBLISH_FAILURE;
 	} else {
 		return false;
 	}
@@ -2795,6 +2799,15 @@ binding_rejected:
 			return false;
 		}
 	}
+	if (state->fault == NATIVE_MIR_TEST_FAULT_ENTRY_PUBLISH_FAILURE) {
+		memset(&diagnostic, 0, sizeof(diagnostic));
+		diagnostic.code = ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED;
+		snprintf(diagnostic.message, sizeof(diagnostic.message),
+			"injected entry-cell publication failure");
+		native_mir_test_backend_failure(state, state->phase, &diagnostic);
+		native_mir_test_fail_native_component(state);
+		return false;
+	}
 	for (index = 0; index < state->native_function_count; index++) {
 		native_mir_test_native_function *function =
 			&state->native_functions[index];
@@ -3216,6 +3229,19 @@ static void native_mir_test_build_result(
 			(zend_long) state->opline_handler_calls);
 		add_assoc_long(&execution, "executions",
 			(zend_long) state->completed_executions);
+		add_assoc_long(&execution, "unwind_registrations_before",
+			(zend_long) state->unwind_registrations_before);
+		add_assoc_long(&execution, "unwind_registrations_live",
+			(zend_long) zend_native_live_unwind_registration_count());
+		{
+			uint32_t active_calls = 0;
+
+			for (index = 0; index < state->native_function_count; index++) {
+				active_calls += state->native_functions[index].entry_cell.active_calls;
+			}
+			add_assoc_long(&execution, "entry_active_calls",
+				(zend_long) active_calls);
+		}
 		add_assoc_bool(&execution, "writable_after_publish",
 			state->native_writable_after_publish);
 		add_assoc_bool(&execution, "executable_after_publish",
@@ -3399,6 +3425,8 @@ ZEND_FUNCTION(native_mir_test_compile_execute)
 	state->execute_mode = true;
 	state->execute_repetitions = 1;
 	state->frame_chain_valid = true;
+	state->unwind_registrations_before =
+		zend_native_live_unwind_registration_count();
 #if defined(__APPLE__) && defined(__aarch64__)
 	state->target = ZEND_NATIVE_TARGET_DARWIN_ARM64;
 #elif defined(__linux__) && defined(__x86_64__)
