@@ -384,6 +384,7 @@ uint64_t zend_native_call_read_source_scalar(
 	}
 	opline = &caller->func->op_array.opcodes[do_opline_index];
 	if ((opline->opcode != ZEND_DO_ICALL
+			&& opline->opcode != ZEND_DO_UCALL
 			&& opline->opcode != ZEND_DO_FCALL)
 			|| (opline->result_type != IS_VAR
 				&& opline->result_type != IS_TMP_VAR)) {
