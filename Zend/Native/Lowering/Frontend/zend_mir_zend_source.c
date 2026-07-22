@@ -1624,6 +1624,7 @@ bool zend_mir_zend_source_w08_return_source_zval(
 		const zend_mir_source_call_site_ref *site = &inventory->sites[index];
 		const zend_mir_frontend_call_target *target;
 		const zend_op *do_opline;
+		uint32_t result_flags;
 		uint32_t result_slot;
 		zend_mir_source_slot_kind result_slot_kind;
 
@@ -1633,7 +1634,12 @@ bool zend_mir_zend_source_w08_return_source_zval(
 			continue;
 		}
 		target = &inventory->targets[site->target_id];
-		if (target->record.kind != ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL) {
+		result_flags = site->flags
+			& (ZEND_MIR_SOURCE_CALL_SITE_RESULT_UNUSED
+				| ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR);
+		if (target->record.kind != ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL
+				|| result_flags != 0
+				|| zend_mir_id_is_valid(site->result_ssa_variable_id)) {
 			continue;
 		}
 		do_opline = &op_array->opcodes[site->do_opline_index];
@@ -1915,6 +1921,19 @@ static bool zend_mir_frontend_reorder_arguments(
 	return output == inventory->argument_count;
 }
 
+static bool zend_mir_frontend_call_result_is_scalar(
+	const zend_op_array *op_array, const zend_ssa *ssa, uint32_t opline_index,
+	uint32_t ssa_variable_id)
+{
+	zend_mir_value_fact_ref fact;
+
+	return zend_mir_frontend_fact_for_ssa(
+			op_array, ssa, ssa_variable_id, &fact)
+		&& zend_mir_scalar_type_is_exact(fact.exact_type)
+		&& (fact.flags & ZEND_MIR_VALUE_FACT_NON_REFCOUNTED) != 0
+		&& ssa->ops[opline_index].result_def == (int) ssa_variable_id;
+}
+
 static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 	zend_mir_zend_source *source, const zend_script *script,
 	const zend_op_array *op_array, const zend_ssa *ssa,
@@ -2085,7 +2104,10 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 			site->source_block_id = block_id;
 			if (RESULT_UNUSED(opline)) {
 				site->flags |= ZEND_MIR_SOURCE_CALL_SITE_RESULT_UNUSED;
-			} else if (ssa->ops[index].result_def >= 0) {
+			} else if (ssa->ops[index].result_def >= 0
+					&& zend_mir_frontend_call_result_is_scalar(
+						op_array, ssa, index,
+						(uint32_t) ssa->ops[index].result_def)) {
 				site->flags |= ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR;
 				site->result_ssa_variable_id =
 					(uint32_t) ssa->ops[index].result_def;
@@ -2305,26 +2327,35 @@ static zend_mir_lowering_status zend_mir_frontend_project_call_result_facts(
 		const zend_mir_frontend_call_target *target;
 		zend_ssa_var *variable;
 		zend_ssa_var_info *info;
+		int result_def;
 		uint32_t type;
 
-		if ((site->flags & ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR) == 0) {
+		if ((site->flags & ZEND_MIR_SOURCE_CALL_SITE_RESULT_UNUSED) != 0) {
 			continue;
 		}
 		if (site->target_id >= inventory->target_count
-				|| !zend_mir_id_is_valid(site->result_ssa_variable_id)
-				|| site->result_ssa_variable_id
-					>= (uint32_t) projected_ssa->vars_count) {
+				|| site->do_opline_index >= op_array->last) {
 			goto unsupported_result;
 		}
 		target = &inventory->targets[site->target_id];
-		type = zend_mir_frontend_w05_return_type_mask(target->function);
-		variable = &projected_ssa->vars[site->result_ssa_variable_id];
-		info = &projected_ssa->var_info[site->result_ssa_variable_id];
 		if ((target->record.kind != ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
-				&& target->record.kind != ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL)
+				&& target->record.kind
+					!= ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL)
 				|| target->record.returns_by_reference) {
 			goto unsupported_result;
 		}
+		result_def = ssa->ops[site->do_opline_index].result_def;
+		if (result_def < 0 || result_def >= projected_ssa->vars_count) {
+			if (source_backed_internal_results
+					&& target->record.kind
+						== ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL) {
+				continue;
+			}
+			goto unsupported_result;
+		}
+		type = zend_mir_frontend_w05_return_type_mask(target->function);
+		variable = &projected_ssa->vars[result_def];
+		info = &projected_ssa->var_info[result_def];
 		/* General W08 internal results remain in their source zval slot. */
 		if (source_backed_internal_results
 				&& target->record.kind
@@ -2352,10 +2383,15 @@ static zend_mir_lowering_status zend_mir_frontend_project_call_result_facts(
 unsupported_result:
 	zend_mir_frontend_set_diagnostic(
 		diagnostic, ZEND_MIR_LOWERING_DEFERRED,
-		ZEND_MIRL_W05_UNSUPPORTED_RESULT, 0,
-		inventory->sites[index].do_opline_index,
-		ZEND_MIR_FRONTEND_RESULT,
-		inventory->sites[index].result_ssa_variable_id);
+			ZEND_MIRL_W05_UNSUPPORTED_RESULT, 0,
+			inventory->sites[index].do_opline_index,
+			ZEND_MIR_FRONTEND_RESULT,
+			inventory->sites[index].do_opline_index < op_array->last
+				&& ssa->ops[inventory->sites[index].do_opline_index]
+					.result_def >= 0
+			? (uint32_t) ssa->ops[
+				inventory->sites[index].do_opline_index].result_def
+			: ZEND_MIR_ID_INVALID);
 	zend_mir_zend_source_release_w05(&source);
 	return ZEND_MIR_LOWERING_DEFERRED;
 }
