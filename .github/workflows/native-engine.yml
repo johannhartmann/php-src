@@ -44,6 +44,9 @@ jobs:
           python3 -m unittest discover -s tests/native/lowering -p 'test_*.py' -v
           python3 -m unittest discover -s tests/native/control-flow -p 'test_*.py' -v
           python3 -m unittest discover -s tests/native/calls -p 'test_*.py' -v
+          python3 tests/native/values/contracts/test_w06_contract.py -v
+          python3 tests/native/values/unit/test_value_core.py -v
+          python3 tests/native/values/bridge/test_w06_bridge_contract.py -v
 
   darwin-arm64:
     runs-on: macos-26
@@ -103,7 +106,9 @@ jobs:
             --reference "$REFERENCE_PHP" \
             --candidate "$candidate"
           TEST_PHP_EXECUTABLE="$candidate" \
-            "$candidate" run-tests.php -q ext/native_mir_test/tests/w08_*.phpt
+            "$candidate" run-tests.php -q --show-diff \
+              ext/native_mir_test/tests/w07_*.phpt \
+              ext/native_mir_test/tests/w08_*.phpt
 
   linux-amd64:
     runs-on: ubuntu-24.04
@@ -161,7 +166,9 @@ jobs:
             --reference "$REFERENCE_PHP" \
             --candidate "$candidate"
           TEST_PHP_EXECUTABLE="$candidate" \
-            "$candidate" run-tests.php -q ext/native_mir_test/tests/w08_*.phpt
+            "$candidate" run-tests.php -q --show-diff \
+              ext/native_mir_test/tests/w07_*.phpt \
+              ext/native_mir_test/tests/w08_*.phpt
           if [[ "$profile" == linux-amd64-native-debug-nts ]]; then
             scripts/native/test-w08-linux-runtime.sh \
               --candidate "$candidate" \
@@ -193,6 +200,10 @@ jobs:
           candidate=$(scripts/native/build.sh --profile w05-debug-nts --print-binary | tail -n 1)
           python3 scripts/native/calls/test-w05.py \
             --reference-php "$REFERENCE_PHP" --candidate-php "$candidate"
+          python3 scripts/native/values/run-w06-differential.py \
+            --candidate-php "$candidate"
+          python3 tests/native/values/fuzz/run_fuzz.py \
+            --seed 20260720 --cases 20000
           TEST_PHP_EXECUTABLE="$candidate" \
             python3 tests/native/calls/fuzz/run_fuzz.py \
               --seed 20260719 --cases 20000 --candidate-php "$candidate"
