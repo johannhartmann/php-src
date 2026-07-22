@@ -364,7 +364,10 @@ static bool zend_mir_w05_is_supported_send(
 		|| opcode == ZEND_SEND_VAR || opcode == ZEND_SEND_VAR_EX
 		|| (w08_execution && opcode == ZEND_SEND_REF)
 		|| (w09_execution && (opcode == ZEND_SEND_VAR_NO_REF
-			|| opcode == ZEND_SEND_VAR_NO_REF_EX));
+			|| opcode == ZEND_SEND_VAR_NO_REF_EX
+			|| opcode == ZEND_SEND_UNPACK
+			|| opcode == ZEND_SEND_ARRAY
+			|| opcode == ZEND_SEND_USER));
 }
 
 static bool zend_mir_w05_is_call_finish(uint32_t opcode)
@@ -685,7 +688,9 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 						&& plan->arguments[index].mode
 							!= ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_REFERENCE
 						&& plan->arguments[index].mode
-							!= ZEND_MIR_SOURCE_CALL_ARGUMENT_NAMED)
+							!= ZEND_MIR_SOURCE_CALL_ARGUMENT_NAMED
+						&& plan->arguments[index].mode
+							!= ZEND_MIR_SOURCE_CALL_ARGUMENT_UNPACK)
 					: w08_execution
 					? (plan->arguments[index].mode
 							!= ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE

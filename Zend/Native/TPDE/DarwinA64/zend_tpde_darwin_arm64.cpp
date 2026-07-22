@@ -758,7 +758,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			{
 				zend::native::tpde::CCAssignerAppleA64 assigner;
 				CallBuilder builder{*this, assigner};
-				builder.add_arg(CallArg{node.operands[0]});
+				builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
 				builder.add_arg(ValuePart{
 					reinterpret_cast<uintptr_t>(call.internal_call_cell), 8,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
@@ -777,7 +777,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 						call.call_argument_offset + index];
 				zend::native::tpde::CCAssignerAppleA64 assigner;
 				CallBuilder builder{*this, assigner};
-				builder.add_arg(CallArg{node.operands[index + 1]});
+				builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
 				builder.add_arg(ValuePart{argument.ordinal, 4,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				builder.add_arg(ValuePart{argument.send_opline_index, 4,
@@ -795,7 +795,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			}
 			zend::native::tpde::CCAssignerAppleA64 assigner;
 			CallBuilder builder{*this, assigner};
-			builder.add_arg(CallArg{node.operands[call.call_argument_count + 1]});
+			builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
 			builder.add_arg(ValuePart{
 				reinterpret_cast<uintptr_t>(call.internal_call_cell), 8,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
@@ -826,8 +826,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			if (node.has_result) {
 				zend::native::tpde::CCAssignerAppleA64 result_assigner;
 				CallBuilder result_builder{*this, result_assigner};
-				result_builder.add_arg(CallArg{
-					node.operands[call.call_argument_count + 2]});
+				result_builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
 				result_builder.add_arg(ValuePart{
 					call.call_site.source_do_opline_index, 4,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});

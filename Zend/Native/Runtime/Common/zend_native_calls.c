@@ -374,6 +374,7 @@ void zend_native_call_begin(
 	zend_function *function;
 	const zend_op *source_init;
 	uint32_t initial_argument_count;
+	uint32_t index;
 
 	if (caller == NULL || cell == NULL || caller->call != NULL) {
 		zend_native_call_abort("Invalid pending native call state");
@@ -404,6 +405,9 @@ void zend_native_call_begin(
 #endif
 	call = zend_vm_stack_push_call_frame(
 		ZEND_CALL_NESTED_FUNCTION, function, initial_argument_count, NULL);
+	for (index = 0; index < initial_argument_count; index++) {
+		ZVAL_UNDEF(ZEND_CALL_ARG(call, index + 1));
+	}
 	call->prev_execute_data = caller;
 	caller->call = call;
 	caller->opline = &caller->func->op_array.opcodes[source_opline_index];
@@ -524,8 +528,7 @@ static zend_native_status zend_native_call_invoke(
 		zend_native_call_abort("Invalid native invocation state");
 	}
 	call = caller->call;
-	if ((ZEND_CALL_INFO(call) & ZEND_CALL_MAY_HAVE_UNDEF) != 0
-			&& zend_handle_undef_args(call) == FAILURE) {
+	if (EG(exception) != NULL) {
 		zend_vm_stack_free_args(call);
 		if ((ZEND_CALL_INFO(call)
 				& ZEND_CALL_HAS_EXTRA_NAMED_PARAMS) != 0) {
@@ -535,7 +538,8 @@ static zend_native_status zend_native_call_invoke(
 		caller->call = NULL;
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	if (EG(exception) != NULL) {
+	if ((ZEND_CALL_INFO(call) & ZEND_CALL_MAY_HAVE_UNDEF) != 0
+			&& zend_handle_undef_args(call) == FAILURE) {
 		zend_vm_stack_free_args(call);
 		if ((ZEND_CALL_INFO(call)
 				& ZEND_CALL_HAS_EXTRA_NAMED_PARAMS) != 0) {
@@ -627,11 +631,16 @@ zend_native_status zend_native_call_invoke_finish_source(
 			&& opline->opcode != ZEND_DO_FCALL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
+	if (EG(exception) != NULL) {
+		ZVAL_UNDEF(&temporary);
+		return zend_native_call_invoke(caller, cell, &temporary);
+	}
 	caller->opline = opline;
 	if (opline->result_type == IS_UNUSED) {
 		ZVAL_UNDEF(&temporary);
 		return_value = &temporary;
-	} else if (opline->result_type == IS_VAR
+	} else if (opline->result_type == IS_CV
+			|| opline->result_type == IS_VAR
 			|| opline->result_type == IS_TMP_VAR) {
 		return_value = ZEND_CALL_VAR(caller, opline->result.var);
 		ZVAL_UNDEF(return_value);
