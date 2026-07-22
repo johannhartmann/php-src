@@ -713,6 +713,11 @@ static bool zend_mir_frontend_w09_iterator_branch(uint8_t opcode)
 		|| opcode == ZEND_FE_RESET_RW || opcode == ZEND_FE_FETCH_RW;
 }
 
+static bool zend_mir_frontend_w09_value_branch(uint8_t opcode)
+{
+	return opcode == ZEND_COALESCE;
+}
+
 static bool zend_mir_frontend_w09_iterator_operands_match(
 	const zend_op *opline)
 {
@@ -795,10 +800,13 @@ static zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w04_impl
 		bool valid;
 		if (opline->opcode > ZEND_VM_LAST_OPCODE
 				|| (!zend_mir_frontend_opcode_is_supported(opline->opcode)
-					&& !zend_mir_frontend_w04_branch(opline->opcode)
-					&& !(allow_iterator_branches
-						&& zend_mir_frontend_w09_iterator_branch(
-							opline->opcode)))) {
+				&& !zend_mir_frontend_w04_branch(opline->opcode)
+				&& !(allow_iterator_branches
+					&& zend_mir_frontend_w09_iterator_branch(
+						opline->opcode))
+				&& !(allow_iterator_branches
+					&& zend_mir_frontend_w09_value_branch(
+						opline->opcode)))) {
 			zend_mir_frontend_set_diagnostic(diagnostic,
 				ZEND_MIR_LOWERING_DEFERRED,
 				zend_mir_frontend_deferred_code_w04(opline->opcode),
@@ -816,6 +824,14 @@ static zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w04_impl
 		if (allow_iterator_branches
 				&& zend_mir_frontend_w09_iterator_branch(opline->opcode)) {
 			valid = zend_mir_frontend_w09_iterator_operands_match(opline);
+		} else if (allow_iterator_branches
+				&& zend_mir_frontend_w09_value_branch(opline->opcode)) {
+			valid = (opline->op1_type == IS_CONST
+					|| opline->op1_type == IS_TMP_VAR
+					|| opline->op1_type == IS_VAR
+					|| opline->op1_type == IS_CV)
+				&& opline->op2_type == IS_UNUSED
+				&& opline->result_type == IS_TMP_VAR;
 		} else if (!zend_mir_frontend_w04_branch(opline->opcode)) {
 			valid = zend_mir_frontend_opcode_operands_match(opline);
 		} else if (opline->opcode == ZEND_JMP) {
@@ -956,6 +972,9 @@ static zend_mir_lowering_status zend_mir_frontend_validate_eligibility_w04_impl(
 				&& !zend_mir_frontend_w04_branch(op_array->opcodes[i].opcode)
 				&& !(allow_any_source_zval_return
 					&& zend_mir_frontend_w09_iterator_branch(
+						op_array->opcodes[i].opcode))
+				&& !(allow_any_source_zval_return
+					&& zend_mir_frontend_w09_value_branch(
 						op_array->opcodes[i].opcode))) {
 			return ZEND_MIR_LOWERING_DEFERRED;
 		}
@@ -965,6 +984,9 @@ static zend_mir_lowering_status zend_mir_frontend_validate_eligibility_w04_impl(
 				|| op_array->opcodes[i].opcode == ZEND_FAST_RET
 				|| (allow_any_source_zval_return
 					&& zend_mir_frontend_w09_iterator_branch(
+						op_array->opcodes[i].opcode))
+				|| (allow_any_source_zval_return
+					&& zend_mir_frontend_w09_value_branch(
 						op_array->opcodes[i].opcode))) {
 			continue;
 		}

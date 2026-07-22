@@ -95,6 +95,8 @@ zend_native_runtime_helper_id executable_value_helper(zend_mir_opcode opcode) {
 			return ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV;
 		case ZEND_MIR_OPCODE_VALUE_FETCH_LIST:
 			return ZEND_NATIVE_HELPER_VALUE_FETCH_LIST;
+		case ZEND_MIR_OPCODE_VALUE_INCDEC:
+			return ZEND_NATIVE_HELPER_VALUE_INCDEC;
 		default:
 			return ZEND_NATIVE_HELPER_COUNT;
 	}

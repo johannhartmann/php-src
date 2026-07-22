@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-#define ZEND_NATIVE_RUNTIME_ABI_VERSION 6u
+#define ZEND_NATIVE_RUNTIME_ABI_VERSION 7u
 
 typedef enum _zend_native_runtime_capability {
 	ZEND_NATIVE_RUNTIME_CAP_USER_CALL = UINT64_C(1) << 0,
@@ -77,7 +77,8 @@ typedef enum _zend_native_runtime_helper_id {
 	ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV = 54,
 	ZEND_NATIVE_HELPER_VALUE_FETCH_LIST = 55,
 	ZEND_NATIVE_HELPER_VALUE_COND_BRANCH = 56,
-	ZEND_NATIVE_HELPER_COUNT = 57
+	ZEND_NATIVE_HELPER_VALUE_INCDEC = 57,
+	ZEND_NATIVE_HELPER_COUNT = 58
 } zend_native_runtime_helper_id;
 
 typedef enum _zend_native_iterator_branch_result {

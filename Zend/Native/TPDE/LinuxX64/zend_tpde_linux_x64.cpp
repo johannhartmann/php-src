@@ -402,6 +402,8 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_LIST:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_LIST);
+		case ZEND_MIR_OPCODE_VALUE_INCDEC:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_INCDEC);
 		case ZEND_MIR_OPCODE_COPY:
 		case ZEND_MIR_OPCODE_CANONICALIZE:
 		case ZEND_MIR_OPCODE_I1_TO_I64:

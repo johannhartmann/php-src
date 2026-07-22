@@ -218,7 +218,21 @@ static bool zend_mir_w04_fact_for_ssa(
 	zend_mir_value_fact_ref *fact_out,
 	zend_mir_representation *representation_out)
 {
-	if (zend_mir_w09_dynamic_phi_member(context, ssa_variable_id)) {
+	if (zend_mir_w09_dynamic_phi_member(context, ssa_variable_id)
+			|| (context != NULL && context->zend_source != NULL
+				&& context->zend_source->w09 && context->source != NULL
+				&& context->source->ssa_count != NULL
+				&& ssa_variable_id
+					< context->source->ssa_count(context->source->context)
+				&& !zend_mir_w04_raw_fact_for_ssa(context, ssa_variable_id,
+					fact_out, representation_out))) {
+		/*
+		 * W09 executes the canonical source zval when Zend's analysis cannot
+		 * prove one exact non-refcounted scalar type.  Undefined CV inputs are
+		 * one important example: COALESCE must observe them without a warning,
+		 * and its merge result still needs a declared MIR value.  Predeclare all
+		 * such source SSA identities as zvals instead of silently omitting them.
+		 */
 		memset(fact_out, 0, sizeof(*fact_out));
 		fact_out->id = ZEND_MIR_ID_INVALID;
 		fact_out->value_id =
@@ -329,7 +343,8 @@ bool zend_mir_w04_validate_branch_proofs(
 			if (opcode.op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
 					|| opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
 					|| ((kind == ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT
-							|| kind == ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT)
+							|| kind == ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT
+							|| kind == ZEND_MIR_W09_BRANCH_COALESCE)
 						? opcode.result.kind != ZEND_MIR_SOURCE_OPERAND_SSA
 						: opcode.result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED)) {
 				return false;
