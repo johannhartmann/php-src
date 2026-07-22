@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute the accepted W03-W08 runtime as native machine code."""
+"""Execute the accepted W03-W09 runtime as native machine code."""
 
 from __future__ import annotations
 
@@ -569,6 +569,123 @@ function native_internal_byref(string $value, int $count): int
 """
 
 
+W09_COMBINED_VALUE_SOURCE = b"""<?php
+function w09_diff_recursive($values, $depth)
+{
+    if ($depth === 0) {
+        return $values;
+    }
+    $copy = $values;
+    $copy[] = $depth;
+    return w09_diff_recursive($copy, $depth - 1);
+}
+
+function w09_diff_collect(&$values, $label = 'default', ...$extra)
+{
+    $values[] = $label;
+    foreach ($extra as $key => $value) {
+        $values[$key] = $value;
+    }
+    return $values;
+}
+
+function w09_diff_map($value)
+{
+    return "mapped-$value";
+}
+
+function w09_diff_values($input, $branch)
+{
+    $original = $input;
+    $numbers =& $input['numbers'];
+    foreach ($numbers as &$number) {
+        $number *= 2;
+    }
+    unset($number);
+
+    $callArguments = ['label' => 'named', 'tail' => 'unpacked'];
+    $called = w09_diff_collect($numbers, ...$callArguments);
+    $mapped = array_map('w09_diff_map', ['a', 'b']);
+
+    $events = [];
+    try {
+        intdiv(1, 0);
+    } catch (DivisionByZeroError) {
+        $events[] = 'catch';
+    } finally {
+        $events[] = 'finally';
+    }
+
+    $rope = "A{$numbers[0]}B{$numbers[1]}C{$numbers[2]}D";
+    $ropeAlias = $rope;
+    $rope[0] = 'Z';
+
+    $packed = [10, 20];
+    $packed['name'] = 'mixed';
+    $packed[] = 30;
+    unset($packed[0]);
+    $packed[0] = 40;
+
+    $cycle = [];
+    $cycle['self'] =& $cycle;
+    $cycle['value'] = 7;
+    $cycleValid = $cycle === $cycle['self'];
+    unset($cycle);
+
+    $selected = $branch ? $input : $original;
+    for ($index = 0; $index < 3; $index++) {
+        $selected['loop'][] = $index;
+    }
+
+    return [
+        'original' => $original,
+        'input' => $input,
+        'called' => $called,
+        'recursive' => w09_diff_recursive(['root'], 3),
+        'mapped' => $mapped,
+        'events' => $events,
+        'rope' => [$rope, $ropeAlias, $rope[-1]],
+        'packed' => $packed,
+        'cycle' => $cycleValid,
+        'selected' => $selected,
+    ];
+}
+"""
+
+
+W09_REFERENCE_SOURCE = b"""<?php
+function &w09_diff_return_reference(&$value)
+{
+    return $value;
+}
+
+function w09_diff_reference($value)
+{
+    $original = $value;
+    $alias =& $value;
+    $returned =& w09_diff_return_reference($alias);
+    $returned['nested']['changed'] = true;
+    $copy = $value;
+    $copy['copy_only'] = true;
+    return [$original, $value, $alias, $returned, $copy];
+}
+"""
+
+
+def w09_variadic_source(count: int) -> bytes:
+    return (
+        "<?php\n"
+        "function w09_variadic_target(...$values)\n"
+        "{\n"
+        f"    return [$values[0], $values[{count - 1}]];\n"
+        "}\n"
+        f"function w09_variadic_case_{count}($values)\n"
+        "{\n"
+        "    return w09_variadic_target(...$values);\n"
+        "}\n"
+    ).encode()
+
+
 def run_stack_limit_case(
     binary: Path, program: str, env: dict[str, str]
 ) -> subprocess.CompletedProcess[str]:
@@ -676,7 +793,7 @@ def main() -> int:
     verify_infinite_self_recursion(candidate, arguments.target, recursive_case)
     checks += 1
 
-    for count in (1, 6, 7, 8, 9, 16, 128):
+    for count in (1, 6, 7, 8, 9, 16, 64, 65, 128):
         source = mixed_argument_source(count)
         function = f"boundary_case_{count}"
         env = w07_environment(
@@ -818,6 +935,62 @@ def main() -> int:
             disassembly_sample = disassembly_sample or execution["machine_code"]
             checks += 1
 
+    w09_cases = (
+        (
+            "w09-combined-values.php",
+            W09_COMBINED_VALUE_SOURCE,
+            "w09_diff_values",
+            (
+                ({"numbers": [1, 2, 3], "stable": "source"}, False),
+                ({"numbers": [1, 2, 3], "stable": "source"}, True),
+            ),
+        ),
+        (
+            "w09-return-reference.php",
+            W09_REFERENCE_SOURCE,
+            "w09_diff_reference",
+            (({"nested": {"changed": False}, "stable": "source"},),),
+        ),
+    )
+    for filename, source, function, inputs in w09_cases:
+        for case_arguments in inputs:
+            env = w07_environment(
+                source,
+                filename,
+                function,
+                case_arguments,
+                arguments.target,
+                wave=9,
+                repeat=10,
+            )
+            expected = run_php(reference, W07_REFERENCE_RUNNER, env)
+            document = run_php(candidate, W07_CANDIDATE_RUNNER, env)
+            execution = verify_w07_result(
+                document, expected, arguments.target, executions=10
+            )
+            disassembly_sample = disassembly_sample or execution["machine_code"]
+            checks += 1
+
+    for count in (1, 64, 65, 128, 160):
+        source = w09_variadic_source(count)
+        function = f"w09_variadic_case_{count}"
+        env = w07_environment(
+            source,
+            f"w09-variadic-{count}.php",
+            function,
+            (list(range(1, count + 1)),),
+            arguments.target,
+            wave=9,
+            repeat=10,
+        )
+        expected = run_php(reference, W07_REFERENCE_RUNNER, env)
+        document = run_php(candidate, W07_CANDIDATE_RUNNER, env)
+        execution = verify_w07_result(
+            document, expected, arguments.target, executions=10
+        )
+        disassembly_sample = disassembly_sample or execution["machine_code"]
+        checks += 1
+
     assert disassembly_sample is not None
     verify_disassembly(disassembly_sample, arguments.target)
 
@@ -872,7 +1045,8 @@ def main() -> int:
 
     print(
         f"PASS target={arguments.target} differential_cases={checks} "
-        "repeat=10 frame_depth=128 vm_handler_calls=0 execute_ex_calls=0 "
+        "waves=W03-W09 repeat=10 frame_depth=128 variadic_max=160 "
+        "vm_handler_calls=0 execute_ex_calls=0 "
         "opline_handler_calls=0 mapping_failure=clean disassembly=native"
     )
     return 0
