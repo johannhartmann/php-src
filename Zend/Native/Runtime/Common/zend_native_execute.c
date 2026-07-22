@@ -50,10 +50,11 @@ static void zend_native_execution_diagnostic(
 	snprintf(diagnostic->message, sizeof(diagnostic->message), "%s", message);
 }
 
-zend_native_status zend_native_execute_frame(
+static zend_native_status zend_native_execute_frame_impl(
 	const zend_native_code *code,
 	zend_execute_data *execute_data,
-	zend_native_diagnostic *diagnostic)
+	zend_native_diagnostic *diagnostic,
+	bool observer_already_started)
 {
 	zend_native_execution_state *state;
 	zend_native_frame_entry_t entry;
@@ -79,7 +80,7 @@ zend_native_status zend_native_execute_frame(
 	state = emalloc(sizeof(*state));
 	state->status = ZEND_NATIVE_BAILOUT;
 	state->original_return_value = execute_data->return_value;
-	state->observer_started = false;
+	state->observer_started = observer_already_started;
 	state->observer_finished = false;
 	if (state->original_return_value == NULL) {
 		ZVAL_UNDEF(&state->discarded_return);
@@ -87,8 +88,10 @@ zend_native_status zend_native_execute_frame(
 	}
 
 	zend_try {
-		state->observer_started = true;
-		ZEND_OBSERVER_FCALL_BEGIN(execute_data);
+		if (!state->observer_started) {
+			state->observer_started = true;
+			ZEND_OBSERVER_FCALL_BEGIN(execute_data);
+		}
 		state->status = entry(execute_data);
 	} zend_catch {
 		state->status = EG(exception) != NULL
@@ -163,4 +166,22 @@ zend_native_status zend_native_execute_frame(
 		efree(state);
 		return status;
 	}
+}
+
+zend_native_status zend_native_execute_frame(
+	const zend_native_code *code,
+	zend_execute_data *execute_data,
+	zend_native_diagnostic *diagnostic)
+{
+	return zend_native_execute_frame_impl(
+		code, execute_data, diagnostic, false);
+}
+
+zend_native_status zend_native_execute_observed_frame(
+	const zend_native_code *code,
+	zend_execute_data *execute_data,
+	zend_native_diagnostic *diagnostic)
+{
+	return zend_native_execute_frame_impl(
+		code, execute_data, diagnostic, true);
 }
