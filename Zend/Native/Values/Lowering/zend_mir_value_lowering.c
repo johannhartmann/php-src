@@ -129,6 +129,16 @@ static zend_mir_opcode zend_mir_w09_executable_opcode(uint32_t opcode)
 			return ZEND_MIR_OPCODE_VALUE_ASSIGN;
 		case ZEND_QM_ASSIGN:
 			return ZEND_MIR_OPCODE_VALUE_QM_ASSIGN;
+		case ZEND_CONCAT:
+			return ZEND_MIR_OPCODE_VALUE_CONCAT;
+		case ZEND_FAST_CONCAT:
+			return ZEND_MIR_OPCODE_VALUE_FAST_CONCAT;
+		case ZEND_ROPE_INIT:
+			return ZEND_MIR_OPCODE_VALUE_ROPE_INIT;
+		case ZEND_ROPE_ADD:
+			return ZEND_MIR_OPCODE_VALUE_ROPE_ADD;
+		case ZEND_ROPE_END:
+			return ZEND_MIR_OPCODE_VALUE_ROPE_END;
 		case ZEND_MAKE_REF:
 			return ZEND_MIR_OPCODE_VALUE_MAKE_REF;
 		case ZEND_ASSIGN_REF:
@@ -195,6 +205,11 @@ static bool zend_mir_w09_operation_semantics(
 			break;
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN_REF:
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN:
+		case ZEND_MIR_OPCODE_VALUE_CONCAT:
+		case ZEND_MIR_OPCODE_VALUE_FAST_CONCAT:
+		case ZEND_MIR_OPCODE_VALUE_ROPE_INIT:
+		case ZEND_MIR_OPCODE_VALUE_ROPE_ADD:
+		case ZEND_MIR_OPCODE_VALUE_ROPE_END:
 			if (!zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_ALLOCATE)
 					|| !zend_mir_w09_add_effect(
 						&summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)

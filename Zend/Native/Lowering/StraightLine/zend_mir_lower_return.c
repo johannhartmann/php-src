@@ -29,7 +29,8 @@ static zend_mir_lowering_status zend_mir_lower_source_zval_return(
 	bool prior_entry_emitted;
 	zend_mir_lowering_status status;
 
-	if (source_opcode->op1.kind != ZEND_MIR_SOURCE_OPERAND_SLOT) {
+	if (source_opcode->op1.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+			&& source_opcode->op1.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL) {
 		return ZEND_MIR_LOWERING_STATUS_INVALID;
 	}
 	if (context->zend_source == NULL || !context->zend_source->w08

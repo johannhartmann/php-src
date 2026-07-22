@@ -991,6 +991,9 @@ bool zend_mir_frontend_opcode_at(
 		const zend_op_array *original_op_array = source->call_op_array;
 		const zend_op *original = &original_op_array->opcodes[index];
 
+		if (original->op1_type == IS_CONST && source->w09) {
+			return true;
+		}
 		if (!zend_mir_frontend_decode_slot(
 				original_op_array, &original->op1, original->op1_type,
 				&out->op1.index, &out->op1.slot_kind)) {

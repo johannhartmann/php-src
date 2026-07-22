@@ -608,6 +608,9 @@ static zend_mir_lowering_status zend_mir_frontend_validate_slots_w05(
 		if (!zend_mir_frontend_ssa_slot(
 				projected_op_array, projected_ssa, index,
 				&ignored_slot, &ignored_kind)
+				&& !zend_mir_frontend_ssa_slot(
+					original_op_array, original_ssa, index,
+					&ignored_slot, &ignored_kind)
 				&& !zend_mir_frontend_w05_original_result_slot(
 					projected_op_array, projected_ssa,
 					original_op_array, original_ssa, index,
@@ -776,6 +779,12 @@ static bool zend_mir_frontend_view_ssa_at(
 	projected_ssa = zend_mir_source_ssa(source);
 	out->ssa_variable_id = index;
 	out->definition_opline_index = ZEND_MIR_ID_INVALID;
+	if (zend_mir_frontend_ssa_slot(
+			(const zend_op_array *) source->call_op_array,
+			(const zend_ssa *) source->call_ssa, index,
+			&out->source_slot, &out->source_slot_kind)) {
+		return true;
+	}
 	return zend_mir_frontend_w05_original_result_slot(
 		projected_op_array, projected_ssa,
 		source->call_op_array, source->call_ssa, index,
@@ -1612,10 +1621,7 @@ bool zend_mir_zend_source_w08_return_source_zval(
 		return false;
 	}
 	return_opline = &op_array->opcodes[return_opline_index];
-	if (return_opline->opcode != ZEND_RETURN
-			|| !zend_mir_frontend_decode_slot(
-				op_array, &return_opline->op1, return_opline->op1_type,
-				&return_slot, &return_slot_kind)) {
+	if (return_opline->opcode != ZEND_RETURN) {
 		return false;
 	}
 	/*
@@ -1625,7 +1631,15 @@ bool zend_mir_zend_source_w08_return_source_zval(
 	 * all have changed the slot.  Transfer the source zval itself.
 	 */
 	if (source->w09) {
-		return true;
+		return return_opline->op1_type == IS_CONST
+			|| zend_mir_frontend_decode_slot(
+				op_array, &return_opline->op1, return_opline->op1_type,
+				&return_slot, &return_slot_kind);
+	}
+	if (!zend_mir_frontend_decode_slot(
+			op_array, &return_opline->op1, return_opline->op1_type,
+			&return_slot, &return_slot_kind)) {
+		return false;
 	}
 	inventory = (const zend_mir_frontend_call_inventory *) source->call_inventory;
 	for (index = 0; index < inventory->site_count; index++) {
