@@ -325,6 +325,17 @@ bool zend_mir_w04_validate_branch_proofs(
 			}
 			continue;
 		}
+		if (context->zend_source != NULL && context->zend_source->w09) {
+			if (opcode.op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+					|| opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
+					|| ((kind == ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT
+							|| kind == ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT)
+						? opcode.result.kind != ZEND_MIR_SOURCE_OPERAND_SSA
+						: opcode.result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED)) {
+				return false;
+			}
+			continue;
+		}
 		if (opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
 				|| !zend_mir_w04_fact_for_operand(context, &opcode.op1,
 					&input_fact, &input_representation)

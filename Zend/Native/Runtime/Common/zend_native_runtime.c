@@ -149,6 +149,19 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 		(const void *) zend_native_value_fe_free},
 	{ZEND_NATIVE_HELPER_VALUE_ITERATOR_BRANCH, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
 		(const void *) zend_native_value_iterator_branch},
+	{ZEND_NATIVE_HELPER_VALUE_BINARY_OP, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_value_binary_op},
+	{ZEND_NATIVE_HELPER_VALUE_UNARY_OP, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_value_unary_op},
+	{ZEND_NATIVE_HELPER_VALUE_CAST, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_value_cast},
+	{ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV,
+		ZEND_NATIVE_RUNTIME_EFFECT_OBSERVE,
+		(const void *) zend_native_value_isset_isempty_cv},
+	{ZEND_NATIVE_HELPER_VALUE_FETCH_LIST, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_value_fetch_list},
+	{ZEND_NATIVE_HELPER_VALUE_COND_BRANCH, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_value_cond_branch},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
