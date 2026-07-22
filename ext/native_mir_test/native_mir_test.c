@@ -245,8 +245,12 @@ static void native_mir_test_frame_probe_record(
 		? caller->func->common.function_name : NULL;
 	record->callee_name = callee->func != NULL
 		? callee->func->common.function_name : NULL;
-	record->caller_line = caller->opline != NULL ? caller->opline->lineno : 0;
-	record->callee_line = callee->opline != NULL ? callee->opline->lineno : 0;
+	record->caller_line = caller->func != NULL
+		&& caller->func->type == ZEND_USER_FUNCTION
+		&& caller->opline != NULL ? caller->opline->lineno : 0;
+	record->callee_line = callee->func != NULL
+		&& callee->func->type == ZEND_USER_FUNCTION
+		&& callee->opline != NULL ? callee->opline->lineno : 0;
 	record->argument_count = ZEND_CALL_NUM_ARGS(callee);
 	if (record->argument_count > NATIVE_MIR_TEST_MAX_PROBE_ARGUMENTS) {
 		state->frame_chain_valid = false;
@@ -2086,18 +2090,25 @@ static bool native_mir_test_prepare_w07_projection(
 		function->source_effects = ecalloc(
 			echo_count, sizeof(*function->source_effects));
 	}
-	memcpy(function->projected_opcodes, source->opcodes,
-		(size_t) source->last * sizeof(*function->projected_opcodes));
-	memcpy(function->projected_literals, source->literals,
-		(size_t) source->last_literal * sizeof(*function->projected_literals));
-	memcpy(function->projected_ssa_ops, function->ssa.ops,
-		(size_t) source->last * sizeof(*function->projected_ssa_ops));
-	memcpy(function->projected_ssa_vars, function->ssa.vars,
-		(size_t) function->ssa.vars_count
-			* sizeof(*function->projected_ssa_vars));
-	memcpy(function->projected_ssa_var_info, function->ssa.var_info,
-		(size_t) function->ssa.vars_count
-			* sizeof(*function->projected_ssa_var_info));
+	if (source->last != 0) {
+		memcpy(function->projected_opcodes, source->opcodes,
+			(size_t) source->last * sizeof(*function->projected_opcodes));
+		memcpy(function->projected_ssa_ops, function->ssa.ops,
+			(size_t) source->last * sizeof(*function->projected_ssa_ops));
+	}
+	if (source->last_literal != 0) {
+		memcpy(function->projected_literals, source->literals,
+			(size_t) source->last_literal
+				* sizeof(*function->projected_literals));
+	}
+	if (function->ssa.vars_count != 0) {
+		memcpy(function->projected_ssa_vars, function->ssa.vars,
+			(size_t) function->ssa.vars_count
+				* sizeof(*function->projected_ssa_vars));
+		memcpy(function->projected_ssa_var_info, function->ssa.var_info,
+			(size_t) function->ssa.vars_count
+				* sizeof(*function->projected_ssa_var_info));
+	}
 	function->projected_op_array = *source;
 	function->projected_op_array.opcodes = function->projected_opcodes;
 	function->projected_op_array.literals = function->projected_literals;
