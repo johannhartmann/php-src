@@ -451,11 +451,14 @@ static bool zend_mir_w04_validate_scalar_phis(
 						&& result_fact.exact_type
 							!= ZEND_MIR_SCALAR_TYPE_NONE
 						&& input_fact.exact_type
-							!= result_fact.exact_type)) {
+								!= result_fact.exact_type)) {
 				return false;
 			}
 		}
 		if (phi.kind == ZEND_MIR_SOURCE_PHI_PI_RANGE
+				&& !(context->zend_source != NULL
+					&& context->zend_source->w09
+					&& result_representation == ZEND_MIR_REPRESENTATION_ZVAL)
 				&& (result_fact.exact_type != ZEND_MIR_SCALAR_TYPE_I64
 					|| (result_fact.flags
 						& ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) == 0
@@ -466,7 +469,7 @@ static bool zend_mir_w04_validate_scalar_phis(
 					|| ((phi.constraint.flags
 							& ZEND_MIR_SOURCE_PHI_RANGE_MAX_UNBOUNDED) == 0
 						&& result_fact.integer_max
-							> phi.constraint.range_max))) {
+								> phi.constraint.range_max))) {
 			return false;
 		}
 	}
@@ -745,14 +748,29 @@ zend_mir_lowering_result zend_mir_lower_w04_zend_source(
 				ZEND_MIRL_W04_SOURCE_MIR_MAPPING_FAILED);
 		}
 	}
-	if (!zend_mir_w04_predeclare_values(context, mutator)
-			|| !zend_mir_control_flow_map_find_block(&storage.public_map,
-				validation.entry_block_id, &context->block_id)
-			|| !zend_mir_w04_emit_phis(context, mutator, &storage)
-			|| !mutator->set_entry_block(mutator->context,
-				context->function_id, context->block_id)
-			|| !zend_mir_w04_lower_blocks(context, mutator, &storage)
-			|| !mutator->seal_function(mutator->context, context->function_id)) {
+	if (!zend_mir_w04_predeclare_values(context, mutator)) {
+		return zend_mir_w04_abort(context, module, &storage,
+			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
+	}
+	if (!zend_mir_control_flow_map_find_block(&storage.public_map,
+			validation.entry_block_id, &context->block_id)) {
+		return zend_mir_w04_abort(context, module, &storage,
+			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
+	}
+	if (!zend_mir_w04_emit_phis(context, mutator, &storage)) {
+		return zend_mir_w04_abort(context, module, &storage,
+			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
+	}
+	if (!mutator->set_entry_block(mutator->context,
+			context->function_id, context->block_id)) {
+		return zend_mir_w04_abort(context, module, &storage,
+			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
+	}
+	if (!zend_mir_w04_lower_blocks(context, mutator, &storage)) {
+		return zend_mir_w04_abort(context, module, &storage,
+			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
+	}
+	if (!mutator->seal_function(mutator->context, context->function_id)) {
 		return zend_mir_w04_abort(context, module, &storage,
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
 	}
