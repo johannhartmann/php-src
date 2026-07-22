@@ -56,11 +56,17 @@ typedef zend_native_status (*zend_native_frame_entry_t)(
 typedef struct zend_native_image zend_native_image;
 typedef struct zend_native_code zend_native_code;
 typedef struct _zend_native_entry_cell zend_native_entry_cell;
+typedef struct _zend_native_internal_call_cell zend_native_internal_call_cell;
 
 typedef struct _zend_native_call_binding {
 	zend_mir_call_target_id target_id;
 	zend_native_entry_cell *entry_cell;
 } zend_native_call_binding;
+
+typedef struct _zend_native_internal_call_binding {
+	zend_mir_call_target_id target_id;
+	zend_native_internal_call_cell *call_cell;
+} zend_native_internal_call_binding;
 
 typedef enum _zend_native_source_effect_kind {
 	ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR = 1
@@ -97,6 +103,19 @@ zend_result zend_tpde_compile_module_w07(
 	const zend_mir_view *module,
 	const zend_native_call_binding *bindings,
 	uint32_t binding_count,
+	const zend_native_source_effect *effects,
+	uint32_t effect_count,
+	uint32_t frame_argument_count,
+	zend_native_image **out_image,
+	zend_native_diagnostic *diag);
+
+zend_result zend_tpde_compile_module_w08(
+	zend_native_target target,
+	const zend_mir_view *module,
+	const zend_native_call_binding *user_bindings,
+	uint32_t user_binding_count,
+	const zend_native_internal_call_binding *internal_bindings,
+	uint32_t internal_binding_count,
 	const zend_native_source_effect *effects,
 	uint32_t effect_count,
 	uint32_t frame_argument_count,

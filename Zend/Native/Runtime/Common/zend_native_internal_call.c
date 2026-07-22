@@ -123,7 +123,7 @@ zend_result zend_native_call_set_zval_argument(
 	argument_number = ordinal + 1;
 	if (mode == ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE) {
 		if (!Z_ISREF_P(source)
-				|| !ARG_MAY_BE_SENT_BY_REF(function, argument_number)) {
+				|| !ARG_SHOULD_BE_SENT_BY_REF(function, argument_number)) {
 			return FAILURE;
 		}
 	} else if (ARG_SHOULD_BE_SENT_BY_REF(function, argument_number)) {
@@ -138,17 +138,20 @@ zend_result zend_native_call_set_zval_argument(
 }
 
 static zval *zend_native_source_argument(
-	zend_execute_data *caller, uint32_t send_opline_index, bool *mutable_value)
+	zend_execute_data *caller, uint32_t send_opline_index, bool *mutable_value,
+	uint8_t *operand_type)
 {
 	const zend_op *send;
 
-	if (mutable_value == NULL || caller == NULL || caller->func == NULL
+	if (mutable_value == NULL || operand_type == NULL
+			|| caller == NULL || caller->func == NULL
 			|| caller->func->type != ZEND_USER_FUNCTION
 			|| send_opline_index >= caller->func->op_array.last) {
 		return NULL;
 	}
 	send = &caller->func->op_array.opcodes[send_opline_index];
 	*mutable_value = false;
+	*operand_type = send->op1_type;
 	switch (send->opcode) {
 		case ZEND_SEND_VAL:
 		case ZEND_SEND_VAL_EX:
@@ -179,12 +182,26 @@ zend_result zend_native_call_set_source_argument(
 	zend_native_call_argument_mode mode)
 {
 	bool mutable_value;
+	uint8_t operand_type;
+	zend_execute_data *call;
+	zend_function *function;
+	zval *target;
+	uint32_t argument_number;
 	zval *value = zend_native_source_argument(
-		caller, send_opline_index, &mutable_value);
+		caller, send_opline_index, &mutable_value, &operand_type);
 
-	if (value == NULL) {
+	if (value == NULL || caller->call == NULL
+			|| mode > ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE) {
 		return FAILURE;
 	}
+	call = caller->call;
+	function = call->func;
+	if (function == NULL || function->type != ZEND_INTERNAL_FUNCTION
+			|| ordinal >= ZEND_CALL_NUM_ARGS(call)) {
+		return FAILURE;
+	}
+	argument_number = ordinal + 1;
+	target = ZEND_CALL_ARG(call, argument_number);
 	/*
 	 * SEND_VAR_EX and SEND_REF materialize a reference in the canonical
 	 * caller slot when the resolved parameter requires one.  The native
@@ -197,8 +214,32 @@ zend_result zend_native_call_set_source_argument(
 		}
 		ZVAL_MAKE_REF(value);
 	}
-	return zend_native_call_set_zval_argument(
-		caller, ordinal, value, mode);
+	if (mode == ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE) {
+		if (!ARG_SHOULD_BE_SENT_BY_REF(function, argument_number)) {
+			return FAILURE;
+		}
+		ZVAL_COPY(target, value);
+		return SUCCESS;
+	}
+	if (ARG_SHOULD_BE_SENT_BY_REF(function, argument_number)) {
+		return FAILURE;
+	}
+	if (operand_type == IS_CONST) {
+		ZVAL_COPY(target, value);
+	} else if (operand_type == IS_CV) {
+		ZVAL_COPY_DEREF(target, value);
+	} else if (operand_type == IS_VAR || operand_type == IS_TMP_VAR) {
+		if (Z_ISREF_P(value)) {
+			ZVAL_COPY_DEREF(target, value);
+			zval_ptr_dtor(value);
+		} else {
+			ZVAL_COPY_VALUE(target, value);
+		}
+		ZVAL_UNDEF(value);
+	} else {
+		return FAILURE;
+	}
+	return SUCCESS;
 }
 
 zend_native_status zend_native_internal_call_invoke_finish(
@@ -298,6 +339,62 @@ zend_native_status zend_native_internal_call_invoke_finish_source(
 		zval_ptr_dtor(&temporary);
 	}
 	return status;
+}
+
+uint64_t zend_native_call_read_source_scalar(
+	zend_execute_data *caller,
+	uint32_t do_opline_index,
+	zend_mir_scalar_type_mask exact_type)
+{
+	const zend_op *opline;
+	const zval *value;
+	uint64_t payload_bits = 0;
+	bool matches = false;
+
+	if (caller == NULL || caller->func == NULL
+			|| caller->func->type != ZEND_USER_FUNCTION
+			|| do_opline_index >= caller->func->op_array.last) {
+		goto mismatch;
+	}
+	opline = &caller->func->op_array.opcodes[do_opline_index];
+	if (opline->opcode != ZEND_DO_ICALL
+			|| (opline->result_type != IS_VAR
+				&& opline->result_type != IS_TMP_VAR)) {
+		goto mismatch;
+	}
+	value = ZEND_CALL_VAR(caller, opline->result.var);
+	switch (exact_type) {
+		case ZEND_MIR_SCALAR_TYPE_NULL:
+			matches = Z_TYPE_P(value) == IS_NULL;
+			break;
+		case ZEND_MIR_SCALAR_TYPE_I1:
+			matches = Z_TYPE_P(value) == IS_FALSE || Z_TYPE_P(value) == IS_TRUE;
+			payload_bits = Z_TYPE_P(value) == IS_TRUE;
+			break;
+		case ZEND_MIR_SCALAR_TYPE_I64:
+			matches = Z_TYPE_P(value) == IS_LONG;
+			if (matches) {
+				payload_bits = (uint64_t) Z_LVAL_P(value);
+			}
+			break;
+		case ZEND_MIR_SCALAR_TYPE_F64:
+			matches = Z_TYPE_P(value) == IS_DOUBLE;
+			if (matches) {
+				memcpy(&payload_bits, &Z_DVAL_P(value), sizeof(payload_bits));
+			}
+			break;
+		default:
+			break;
+	}
+	if (matches) {
+		return payload_bits;
+	}
+
+mismatch:
+	zend_throw_error(NULL,
+		"Native internal call violated its exact scalar result contract");
+	zend_bailout();
+	return 0;
 }
 
 void zend_native_interrupt_poll(zend_execute_data *execute_data)
