@@ -1634,8 +1634,17 @@ static ZEND_COLD void zend_error_va_list(
 		const char *format, va_list args)
 {
 	zend_string *message = zend_vstrpprintf(0, format, args);
-	zend_error_zstr_at(orig_type, error_filename, error_lineno, message);
+	bool bailed_out = false;
+
+	zend_try {
+		zend_error_zstr_at(orig_type, error_filename, error_lineno, message);
+	} zend_catch {
+		bailed_out = true;
+	} zend_end_try();
 	zend_string_release(message);
+	if (UNEXPECTED(bailed_out)) {
+		zend_bailout();
+	}
 }
 
 static ZEND_COLD void get_filename_lineno(int type, zend_string **filename, uint32_t *lineno) {
