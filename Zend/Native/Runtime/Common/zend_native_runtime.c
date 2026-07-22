@@ -162,6 +162,8 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 		(const void *) zend_native_value_fetch_list},
 	{ZEND_NATIVE_HELPER_VALUE_COND_BRANCH, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
 		(const void *) zend_native_value_cond_branch},
+	{ZEND_NATIVE_HELPER_VALUE_INCDEC, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_value_incdec},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {

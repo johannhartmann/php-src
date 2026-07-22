@@ -70,7 +70,8 @@
 	X(VALUE_UNARY_OP, "value_unary_op", 85) \
 	X(VALUE_CAST, "value_cast", 86) \
 	X(VALUE_ISSET_ISEMPTY_CV, "value_isset_isempty_cv", 87) \
-	X(VALUE_FETCH_LIST, "value_fetch_list", 88)
+	X(VALUE_FETCH_LIST, "value_fetch_list", 88) \
+	X(VALUE_INCDEC, "value_incdec", 90)
 
 #define ZEND_MIR_ITERATOR_OPCODE_CATALOG(X) \
 	X(ITERATOR_BRANCH, "iterator_branch", 81) \
@@ -125,7 +126,7 @@ typedef enum _zend_mir_opcode {
 	ZEND_MIR_W05_OPCODE_COUNT = 42,
 	ZEND_MIR_W06_OPCODE_COUNT = 48,
 	ZEND_MIR_W08_OPCODE_COUNT = 54,
-	ZEND_MIR_W09_OPCODE_COUNT = 90,
+	ZEND_MIR_W09_OPCODE_COUNT = 91,
 	ZEND_MIR_OPCODE_INVALID = -1
 } zend_mir_opcode;
 #undef ZEND_MIR_OPCODE_ENUM
@@ -189,7 +190,8 @@ static inline bool zend_mir_opcode_is_executable_value(
 			&& opcode <= ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM)
 		|| opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN_OP
 		|| (opcode >= ZEND_MIR_OPCODE_VALUE_FE_FREE
-			&& opcode <= ZEND_MIR_OPCODE_VALUE_FETCH_LIST);
+			&& opcode <= ZEND_MIR_OPCODE_VALUE_FETCH_LIST)
+		|| opcode == ZEND_MIR_OPCODE_VALUE_INCDEC;
 }
 
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_COUNT < UINT32_MAX,
@@ -222,10 +224,13 @@ ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_VALUE_MAKE_REF
 	== ZEND_MIR_W08_OPCODE_COUNT,
 	"executable value opcodes begin after the W08 boundary");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W09_OPCODE_COUNT
-	== ZEND_MIR_OPCODE_VALUE_COND_BRANCH + 1,
+	== ZEND_MIR_OPCODE_VALUE_INCDEC + 1,
 	"executable value opcodes have an additive table boundary");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 	== ZEND_MIR_OPCODE_VALUE_FETCH_LIST + 1,
 	"source value branch follows executable value operations");
+ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_VALUE_INCDEC
+	== ZEND_MIR_OPCODE_VALUE_COND_BRANCH + 1,
+	"increment and decrement extend the W09 value range");
 
 #endif /* ZEND_MIR_OPCODES_H */

@@ -620,6 +620,8 @@ zend_mir_w04_branch_kind zend_mir_w04_branch_kind_for_opcode(uint32_t opcode)
 			return ZEND_MIR_W08_BRANCH_FINALLY_CALL;
 		case ZEND_MIR_W08_OPCODE_FAST_RET:
 			return ZEND_MIR_W08_BRANCH_FINALLY_RETURN;
+		case ZEND_MIR_W09_OPCODE_COALESCE:
+			return ZEND_MIR_W09_BRANCH_COALESCE;
 		case ZEND_MIR_W09_OPCODE_FE_RESET_R:
 		case ZEND_MIR_W09_OPCODE_FE_FETCH_R:
 		case ZEND_MIR_W09_OPCODE_FE_RESET_RW:

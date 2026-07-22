@@ -3189,6 +3189,10 @@ static bool native_mir_test_execute_module(
 			state->native_exception = native_status == ZEND_NATIVE_EXCEPTION;
 			state->native_bailout = native_status == ZEND_NATIVE_BAILOUT;
 			native_mir_test_backend_failure(state, state->phase, &diagnostic);
+			if (!Z_ISUNDEF(state->native_result)) {
+				zval_ptr_dtor(&state->native_result);
+				ZVAL_UNDEF(&state->native_result);
+			}
 			if (reentry_entered) {
 				zend_native_reentry_scope_leave(&reentry_scope);
 			}
@@ -3196,6 +3200,11 @@ static bool native_mir_test_execute_module(
 			return false;
 		}
 		state->completed_executions++;
+		if (index + 1 < state->execute_repetitions
+				&& !Z_ISUNDEF(state->native_result)) {
+			zval_ptr_dtor(&state->native_result);
+			ZVAL_UNDEF(&state->native_result);
+		}
 	}
 	if (reentry_entered) {
 		zend_native_reentry_scope_leave(&reentry_scope);

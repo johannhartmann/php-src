@@ -866,8 +866,9 @@ static bool zend_mir_w03_prepare_logic(
 			&& zend_mir_zend_source_w08_return_source_zval(
 				&integration->source, opcode.opline_index);
 		w09_executable = integration->w09
-			&& zend_mir_w09_opcode_is_executable(
-				opcode.zend_opcode_number);
+			&& (zend_mir_w09_opcode_is_executable(
+				opcode.zend_opcode_number)
+				|| opcode.zend_opcode_number == ZEND_COALESCE);
 		if ((!w09_executable && !source_zval_return
 				&& !zend_mir_w03_add_logic_binding(
 					integration, &opcode.op1))
