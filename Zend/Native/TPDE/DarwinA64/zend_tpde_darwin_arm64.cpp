@@ -350,6 +350,16 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ASSIGN);
 		case ZEND_MIR_OPCODE_VALUE_QM_ASSIGN:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_QM_ASSIGN);
+		case ZEND_MIR_OPCODE_VALUE_CONCAT:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_CONCAT);
+		case ZEND_MIR_OPCODE_VALUE_FAST_CONCAT:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FAST_CONCAT);
+		case ZEND_MIR_OPCODE_VALUE_ROPE_INIT:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ROPE_INIT);
+		case ZEND_MIR_OPCODE_VALUE_ROPE_ADD:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ROPE_ADD);
+		case ZEND_MIR_OPCODE_VALUE_ROPE_END:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ROPE_END);
 		case ZEND_MIR_OPCODE_COPY:
 		case ZEND_MIR_OPCODE_CANONICALIZE:
 		case ZEND_MIR_OPCODE_I1_TO_I64:
