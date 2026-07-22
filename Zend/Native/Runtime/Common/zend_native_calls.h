@@ -124,6 +124,8 @@ uint64_t zend_native_call_read_source_scalar(
 	zend_execute_data *caller,
 	uint32_t do_opline_index,
 	zend_mir_scalar_type_mask exact_type);
+zend_native_status zend_native_catch_enter(
+	zend_execute_data *execute_data, uint32_t catch_opline_index);
 void zend_native_interrupt_poll(zend_execute_data *execute_data);
 
 void zend_native_echo_integer(

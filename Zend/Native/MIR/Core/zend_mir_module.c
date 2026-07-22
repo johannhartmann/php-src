@@ -1320,6 +1320,81 @@ static bool zend_mir_core_append_calls_before(
 	}
 }
 
+static bool zend_mir_core_append_catch_entry(
+	zend_mir_module *module, zend_mir_core_instruction *instructions,
+	uint32_t *instruction_count, zend_mir_block_id block_id,
+	bool *inserted, uint32_t *inserted_count)
+{
+	zend_mir_core_call_staging *staging = &module->call_staging;
+	uint32_t site_index;
+	uint32_t selected = ZEND_MIR_ID_INVALID;
+	uint32_t source_opline = ZEND_MIR_ID_INVALID;
+
+	for (site_index = 0; site_index < staging->site_count; site_index++) {
+		const zend_mir_call_site_ref *site = &staging->sites[site_index];
+		const zend_mir_call_continuation_ref *continuation;
+		if (inserted[site_index] || site->continuations.count != 4
+				|| site->continuations.offset > staging->continuation_count
+				|| site->continuations.count
+					> staging->continuation_count - site->continuations.offset) {
+			continue;
+		}
+		continuation = &staging->continuations[site->continuations.offset + 1];
+		if (continuation->kind != ZEND_MIR_CALL_CONTINUATION_EXCEPTION_DEBT
+				|| continuation->block_id != block_id) {
+			continue;
+		}
+		if (!zend_mir_id_is_valid(continuation->source_opline_index)
+				|| (zend_mir_id_is_valid(selected)
+					&& source_opline != continuation->source_opline_index)) {
+			return zend_mir_module_fail(module,
+				ZEND_MIR_DIAGNOSTIC_INVALID_ID,
+				"conflicting catch-entry continuations");
+		}
+		selected = site_index;
+		source_opline = continuation->source_opline_index;
+	}
+	if (!zend_mir_id_is_valid(selected)) {
+		return true;
+	}
+	{
+		zend_mir_core_instruction *instruction =
+			&instructions[(*instruction_count)++];
+		memset(instruction, 0, sizeof(*instruction));
+		instruction->record.id = *instruction_count - 1;
+		instruction->record.block_id = block_id;
+		instruction->record.opcode = ZEND_MIR_OPCODE_CATCH_ENTER;
+		instruction->record.representation = ZEND_MIR_REPRESENTATION_VOID;
+		instruction->record.result_id = ZEND_MIR_ID_INVALID;
+		instruction->record.frame_state_id = ZEND_MIR_ID_INVALID;
+		instruction->record.source_position_id = source_opline;
+		instruction->record.effects =
+			ZEND_MIR_EFFECT_MASK(ZEND_MIR_EFFECT_READ_MEMORY)
+			| ZEND_MIR_EFFECT_MASK(ZEND_MIR_EFFECT_WRITE_MEMORY)
+			| ZEND_MIR_EFFECT_MASK(ZEND_MIR_EFFECT_THROW)
+			| ZEND_MIR_EFFECT_MASK(ZEND_MIR_EFFECT_RUN_DESTRUCTOR);
+		instruction->record.reads =
+			ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_FRAME_LOCALS)
+			| ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_ENGINE_EXCEPTION);
+		instruction->record.writes = instruction->record.reads;
+		instruction->record.barriers =
+			ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_EXCEPTION)
+			| ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_DESTRUCTOR);
+	}
+	for (site_index = 0; site_index < staging->site_count; site_index++) {
+		const zend_mir_call_site_ref *site = &staging->sites[site_index];
+		const zend_mir_call_continuation_ref *continuation =
+			&staging->continuations[site->continuations.offset + 1];
+		if (!inserted[site_index]
+				&& continuation->kind == ZEND_MIR_CALL_CONTINUATION_EXCEPTION_DEBT
+				&& continuation->block_id == block_id) {
+			inserted[site_index] = true;
+			(*inserted_count)++;
+		}
+	}
+	return true;
+}
+
 static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 {
 	zend_mir_core_call_staging *staging = &module->call_staging;
@@ -1328,6 +1403,7 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 	zend_mir_frame_slot_ref *slots;
 	zend_mir_frame_state_ref *frames;
 	bool *inserted;
+	bool *catch_inserted;
 	size_t new_instruction_bytes;
 	uint32_t total_slots = module->frame_slots.count;
 	uint32_t total_call_operands = 0;
@@ -1336,6 +1412,9 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 	uint32_t next_slot_id = 0;
 	uint32_t new_instruction_count = 0;
 	uint32_t site_index;
+	uint32_t catch_entry_count = 0;
+	uint32_t catch_site_count = 0;
+	uint32_t catch_inserted_count = 0;
 	uint32_t index;
 
 	if (!zend_mir_module_require_building(module)
@@ -1351,6 +1430,7 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 	}
 	for (site_index = 0; site_index < staging->site_count; site_index++) {
 		const zend_mir_call_site_ref *site = &staging->sites[site_index];
+		const zend_mir_call_continuation_ref *exception_continuation;
 		zend_mir_block_id block_id;
 		if (total_slots == UINT32_MAX
 				|| site->arguments.count
@@ -1363,6 +1443,43 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 				"invalid W05 call-site shape");
 		}
 		total_slots += site->arguments.count * 2 + 1;
+		if (site->continuations.count != 4
+				|| site->continuations.offset > staging->continuation_count
+				|| site->continuations.count
+					> staging->continuation_count - site->continuations.offset) {
+			return zend_mir_module_fail(module,
+				ZEND_MIR_DIAGNOSTIC_INVALID_ID,
+				"invalid call continuation span");
+		}
+		exception_continuation =
+			&staging->continuations[site->continuations.offset + 1];
+		if (zend_mir_id_is_valid(exception_continuation->block_id)) {
+			bool first = true;
+			uint32_t prior;
+			if (exception_continuation->kind
+					!= ZEND_MIR_CALL_CONTINUATION_EXCEPTION_DEBT
+					|| !zend_mir_id_is_valid(
+						exception_continuation->source_opline_index)
+					|| zend_mir_find_block(
+						module, exception_continuation->block_id) == NULL) {
+				return zend_mir_module_fail(module,
+					ZEND_MIR_DIAGNOSTIC_INVALID_ID,
+					"invalid catch continuation");
+			}
+			for (prior = 0; prior < site_index; prior++) {
+				const zend_mir_call_site_ref *prior_site = &staging->sites[prior];
+				if (staging->continuations[
+						prior_site->continuations.offset + 1].block_id
+						== exception_continuation->block_id) {
+					first = false;
+					break;
+				}
+			}
+			if (first) {
+				catch_entry_count++;
+			}
+			catch_site_count++;
+		}
 		if (staging->targets[site->target_id].kind
 				== ZEND_MIR_CALL_TARGET_DIRECT_USER) {
 			if (site->arguments.count
@@ -1375,7 +1492,15 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 		}
 	}
 	total_frames = module->frame_states.count + staging->site_count;
-	total_instructions = module->instructions.count + staging->site_count;
+	if (module->instructions.count > UINT32_MAX - staging->site_count
+			|| module->instructions.count + staging->site_count
+				> UINT32_MAX - catch_entry_count) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
+			"call instruction count overflow");
+	}
+	total_instructions = module->instructions.count
+		+ staging->site_count + catch_entry_count;
 	if (module->operand_count > module->limits.operands
 			|| total_call_operands
 				> module->limits.operands - module->operand_count
@@ -1413,8 +1538,10 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 		&module->arena, new_instruction_bytes,
 		alignof(zend_mir_core_instruction));
 	inserted = calloc(staging->site_count, sizeof(*inserted));
-	if (new_instructions == NULL || inserted == NULL) {
+	catch_inserted = calloc(staging->site_count, sizeof(*catch_inserted));
+	if (new_instructions == NULL || inserted == NULL || catch_inserted == NULL) {
 		free(inserted);
+		free(catch_inserted);
 		return zend_mir_module_fail(module,
 			ZEND_MIR_DIAGNOSTIC_ALLOCATION_FAILED,
 			"call instruction publication failed");
@@ -1429,6 +1556,7 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 		if (slots[index].slot_id >= next_slot_id) {
 			if (slots[index].slot_id == ZEND_MIR_ID_MAX) {
 				free(inserted);
+				free(catch_inserted);
 				return zend_mir_module_fail(module,
 					ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
 					"call frame slot ID overflow");
@@ -1439,6 +1567,7 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 	if (total_slots - module->frame_slots.count
 			> (ZEND_MIR_ID_MAX - next_slot_id) + 1) {
 		free(inserted);
+		free(catch_inserted);
 		return zend_mir_module_fail(module,
 			ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
 			"call frame slot ID overflow");
@@ -1533,6 +1662,14 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 	for (index = 0; index < module->instructions.count; index++) {
 		bool terminator = zend_mir_opcode_is_terminator(
 			old_instructions[index].record.opcode);
+		if (!zend_mir_core_append_catch_entry(
+				module, new_instructions, &new_instruction_count,
+				old_instructions[index].record.block_id,
+				catch_inserted, &catch_inserted_count)) {
+			free(inserted);
+			free(catch_inserted);
+			return false;
+		}
 		if ((terminator
 				|| zend_mir_id_is_valid(
 					old_instructions[index].record.source_position_id))
@@ -1542,12 +1679,20 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 					old_instructions[index].record.source_position_id,
 					terminator, inserted)) {
 			free(inserted);
+			free(catch_inserted);
 			return false;
 		}
 		new_instructions[new_instruction_count] = old_instructions[index];
 		new_instructions[new_instruction_count].record.id =
 			new_instruction_count;
 		new_instruction_count++;
+	}
+	if (catch_inserted_count != catch_site_count) {
+		free(inserted);
+		free(catch_inserted);
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_INVALID_ID,
+			"catch continuation targets an empty block");
 	}
 	for (site_index = 0; site_index < staging->site_count; site_index++) {
 		zend_mir_block_id block_id;
@@ -1558,11 +1703,13 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 					module, new_instructions, &new_instruction_count,
 					block_id, ZEND_MIR_ID_INVALID, true, inserted)) {
 				free(inserted);
+				free(catch_inserted);
 				return false;
 			}
 		}
 	}
 	free(inserted);
+	free(catch_inserted);
 	module->instructions.items = new_instructions;
 	module->instructions.count = total_instructions;
 	module->instructions.capacity = total_instructions;

@@ -24,6 +24,7 @@ struct zend_tpde_instruction {
 	zend_native_entry_cell *entry_cell;
 	zend_native_internal_call_cell *internal_call_cell;
 	zend_mir_call_site_ref call_site;
+	zend_mir_block_id exception_block_id;
 	uint32_t call_argument_offset;
 	uint32_t call_argument_count;
 	zend_native_source_effect_kind source_effect;
