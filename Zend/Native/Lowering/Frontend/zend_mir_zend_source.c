@@ -974,11 +974,10 @@ bool zend_mir_zend_source_exception_handler(
 	}
 	*catch_opline_index_out = handler_opline;
 	if (*catch_opline_index_out >= op_array->last
-			|| ssa->cfg.map == NULL
-			|| ssa->cfg.map[*catch_opline_index_out] < 0) {
+			|| ssa->cfg.map == NULL) {
 		return false;
 	}
-	*block_id_out = (uint32_t) ssa->cfg.map[*catch_opline_index_out];
+	*block_id_out = ssa->cfg.map[*catch_opline_index_out];
 	return *block_id_out < ssa->cfg.blocks_count;
 }
 
