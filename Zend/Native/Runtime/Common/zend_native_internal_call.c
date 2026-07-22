@@ -430,6 +430,53 @@ mismatch:
 	return 0;
 }
 
+zend_native_status zend_native_return_source_zval(
+	zend_execute_data *execute_data, uint32_t return_opline_index)
+{
+	const zend_op *opline;
+	zval *source;
+	zval *return_value;
+
+	if (execute_data == NULL || execute_data->func == NULL
+			|| execute_data->func->type != ZEND_USER_FUNCTION
+			|| return_opline_index >= execute_data->func->op_array.last) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	opline = &execute_data->func->op_array.opcodes[return_opline_index];
+	if (opline->opcode != ZEND_RETURN
+			|| (opline->op1_type != IS_CV && opline->op1_type != IS_TMP_VAR
+				&& opline->op1_type != IS_VAR)) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	execute_data->opline = opline;
+	source = ZEND_CALL_VAR(execute_data, opline->op1.var);
+	return_value = execute_data->return_value;
+	if (opline->op1_type == IS_CV && Z_ISUNDEF_P(source)) {
+		if (return_value != NULL) {
+			ZVAL_NULL(return_value);
+		}
+		return ZEND_NATIVE_RETURNED;
+	}
+	if (return_value == NULL) {
+		if (opline->op1_type != IS_CV && !Z_ISUNDEF_P(source)) {
+			zval_ptr_dtor(source);
+			ZVAL_UNDEF(source);
+		}
+		return ZEND_NATIVE_RETURNED;
+	}
+	if (opline->op1_type == IS_CV || Z_ISREF_P(source)) {
+		ZVAL_COPY_DEREF(return_value, source);
+		if (opline->op1_type != IS_CV) {
+			zval_ptr_dtor(source);
+			ZVAL_UNDEF(source);
+		}
+	} else {
+		ZVAL_COPY_VALUE(return_value, source);
+		ZVAL_UNDEF(source);
+	}
+	return ZEND_NATIVE_RETURNED;
+}
+
 zend_native_status zend_native_catch_enter(
 	zend_execute_data *execute_data, uint32_t catch_opline_index)
 {

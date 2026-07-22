@@ -202,7 +202,8 @@ bool initialize_plan(
 		plan->instructions[i].operand_count = count;
 		if (record.opcode == ZEND_MIR_OPCODE_FINALLY_ENTER
 				|| record.opcode == ZEND_MIR_OPCODE_FINALLY_CALL
-				|| record.opcode == ZEND_MIR_OPCODE_FINALLY_RETURN) {
+				|| record.opcode == ZEND_MIR_OPCODE_FINALLY_RETURN
+				|| record.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL) {
 			plan->may_emit_calls = true;
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
@@ -424,6 +425,7 @@ bool initialize_plan(
 			ZEND_NATIVE_HELPER_FINALLY_ENTER,
 			ZEND_NATIVE_HELPER_FINALLY_CALL,
 			ZEND_NATIVE_HELPER_FINALLY_RETURN,
+			ZEND_NATIVE_HELPER_RETURN_SOURCE_ZVAL,
 		};
 		if (zend_native_runtime_validate(plan->runtime,
 				ZEND_NATIVE_RUNTIME_CAP_USER_CALL
