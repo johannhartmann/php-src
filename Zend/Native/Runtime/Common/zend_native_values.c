@@ -2,8 +2,10 @@
 
 #include "Zend/Native/Runtime/Common/zend_native_values.h"
 
+#include "Zend/zend_API.h"
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_execute.h"
+#include "Zend/zend_operators.h"
 
 static const zend_op *zend_native_value_opline(
 	zend_execute_data *execute_data, uint32_t source_opline_index,
@@ -555,5 +557,596 @@ zend_native_status zend_native_value_rope_end(
 		zend_string_release_ex(rope[index], false);
 	}
 	*target = '\0';
+	return ZEND_NATIVE_RETURNED;
+}
+
+typedef enum _zend_native_array_key_kind {
+	ZEND_NATIVE_ARRAY_KEY_INVALID = 0,
+	ZEND_NATIVE_ARRAY_KEY_LONG = 1,
+	ZEND_NATIVE_ARRAY_KEY_STRING = 2
+} zend_native_array_key_kind;
+
+typedef struct _zend_native_array_key {
+	zend_native_array_key_kind kind;
+	zend_ulong index;
+	zend_string *string;
+} zend_native_array_key;
+
+static bool zend_native_array_key_from_zval(
+	const zval *source, uint8_t operand_type, bool deprecate_null,
+	zend_native_array_key *key)
+{
+	const zval *value = source;
+	zend_ulong index;
+
+	if (key == NULL || value == NULL) {
+		return false;
+	}
+	while (Z_ISREF_P(value)) {
+		value = Z_REFVAL_P(value);
+	}
+	memset(key, 0, sizeof(*key));
+	switch (Z_TYPE_P(value)) {
+		case IS_LONG:
+			key->kind = ZEND_NATIVE_ARRAY_KEY_LONG;
+			key->index = (zend_ulong) Z_LVAL_P(value);
+			return true;
+		case IS_STRING:
+			if (operand_type != IS_CONST
+					&& ZEND_HANDLE_NUMERIC(Z_STR_P(value), index)) {
+				key->kind = ZEND_NATIVE_ARRAY_KEY_LONG;
+				key->index = index;
+			} else {
+				key->kind = ZEND_NATIVE_ARRAY_KEY_STRING;
+				key->string = Z_STR_P(value);
+			}
+			return true;
+		case IS_UNDEF:
+		case IS_NULL:
+			if (deprecate_null) {
+				zend_error(E_DEPRECATED,
+					"Using null as an array offset is deprecated, use an empty string instead");
+				if (EG(exception) != NULL) {
+					return false;
+				}
+			}
+			key->kind = ZEND_NATIVE_ARRAY_KEY_STRING;
+			key->string = ZSTR_EMPTY_ALLOC();
+			return true;
+		case IS_DOUBLE:
+			key->kind = ZEND_NATIVE_ARRAY_KEY_LONG;
+			key->index = (zend_ulong) zend_dval_to_lval_safe(Z_DVAL_P(value));
+			return EG(exception) == NULL;
+		case IS_FALSE:
+		case IS_TRUE:
+			key->kind = ZEND_NATIVE_ARRAY_KEY_LONG;
+			key->index = Z_TYPE_P(value) == IS_TRUE ? 1 : 0;
+			return true;
+		case IS_RESOURCE:
+			zend_use_resource_as_offset(value);
+			if (EG(exception) != NULL) {
+				return false;
+			}
+			key->kind = ZEND_NATIVE_ARRAY_KEY_LONG;
+			key->index = (zend_ulong) Z_RES_HANDLE_P(value);
+			return true;
+		default:
+			zend_type_error("Illegal offset type");
+			return false;
+	}
+}
+
+static zval *zend_native_array_find(
+	HashTable *table, const zend_native_array_key *key)
+{
+	return key->kind == ZEND_NATIVE_ARRAY_KEY_LONG
+		? zend_hash_index_find(table, key->index)
+		: zend_hash_find(table, key->string);
+}
+
+static zval *zend_native_array_update(
+	HashTable *table, const zend_native_array_key *key, zval *value)
+{
+	return key->kind == ZEND_NATIVE_ARRAY_KEY_LONG
+		? zend_hash_index_update(table, key->index, value)
+		: zend_hash_update(table, key->string, value);
+}
+
+static zval *zend_native_array_write_slot(
+	HashTable *table, const zend_native_array_key *key, bool warn_missing)
+{
+	zval *value = zend_native_array_find(table, key);
+
+	if (value != NULL) {
+		return value;
+	}
+	if (warn_missing) {
+		if (key->kind == ZEND_NATIVE_ARRAY_KEY_LONG) {
+			value = zend_undefined_offset_write(table, (zend_long) key->index);
+		} else {
+			value = zend_undefined_index_write(table, key->string);
+		}
+		return value;
+	}
+	return zend_native_array_update(table, key, &EG(uninitialized_zval));
+}
+
+static void zend_native_array_warn_missing(const zend_native_array_key *key)
+{
+	if (key->kind == ZEND_NATIVE_ARRAY_KEY_LONG) {
+		zend_error(E_WARNING, "Undefined array key " ZEND_LONG_FMT,
+			(zend_long) key->index);
+	} else {
+		zend_error(E_WARNING, "Undefined array key \"%s\"",
+			ZSTR_VAL(key->string));
+	}
+}
+
+static bool zend_native_value_take(
+	zend_execute_data *execute_data, const zend_op *opline,
+	uint8_t operand_type, znode_op operand, bool preserve_reference, zval *out)
+{
+	zval *slot;
+	zval *value = zend_native_value_read(
+		execute_data, opline, operand_type, operand);
+
+	if (value == NULL || out == NULL) {
+		return false;
+	}
+	if (preserve_reference && (operand_type == IS_CV || operand_type == IS_VAR)) {
+		slot = zend_native_value_slot(execute_data, operand_type, operand);
+		if (slot == NULL) {
+			return false;
+		}
+		if (operand_type == IS_VAR && Z_TYPE_P(slot) == IS_INDIRECT) {
+			slot = Z_INDIRECT_P(slot);
+		}
+		if (!Z_ISREF_P(slot)) {
+			ZVAL_MAKE_REF(slot);
+		}
+		ZVAL_COPY(out, slot);
+		return true;
+	}
+	if (operand_type == IS_TMP_VAR) {
+		ZVAL_COPY_VALUE(out, value);
+		ZVAL_UNDEF(value);
+		if (Z_ISREF_P(out) && Z_REFCOUNT_P(out) == 1) {
+			ZVAL_UNREF(out);
+		}
+		return true;
+	}
+	ZVAL_COPY_DEREF(out, value);
+	if (operand_type == IS_VAR) {
+		slot = zend_native_value_slot(execute_data, operand_type, operand);
+		if (slot != NULL && Z_TYPE_P(slot) != IS_INDIRECT) {
+			zval_ptr_dtor_nogc(slot);
+			ZVAL_UNDEF(slot);
+		}
+	}
+	return true;
+}
+
+static bool zend_native_array_add_source_element(
+	zend_execute_data *execute_data, const zend_op *opline, HashTable *table)
+{
+	zend_native_array_key key;
+	zval value;
+	zval *offset;
+	zval *inserted;
+	bool by_reference =
+		(opline->extended_value & ZEND_ARRAY_ELEMENT_REF) != 0;
+
+	if (opline->op1_type == IS_UNUSED
+			|| !zend_native_value_take(execute_data, opline,
+				opline->op1_type, opline->op1, by_reference, &value)) {
+		return false;
+	}
+	if (opline->op2_type == IS_UNUSED) {
+		inserted = zend_hash_next_index_insert(table, &value);
+	} else {
+		offset = zend_native_value_read(execute_data, opline,
+			opline->op2_type, opline->op2);
+		if (offset == NULL || !zend_native_array_key_from_zval(
+				offset, opline->op2_type, true, &key)) {
+			zval_ptr_dtor_nogc(&value);
+			return false;
+		}
+		inserted = zend_native_array_update(table, &key, &value);
+	}
+	if (inserted == NULL) {
+		zval_ptr_dtor_nogc(&value);
+		zend_cannot_add_element();
+		return false;
+	}
+	return EG(exception) == NULL;
+}
+
+zend_native_status zend_native_value_init_array(
+	zend_execute_data *execute_data, uint32_t source_opline_index)
+{
+	const zend_op *opline = zend_native_value_opline(
+		execute_data, source_opline_index, ZEND_INIT_ARRAY);
+	zval *result;
+	uint32_t size;
+
+	if (opline == NULL || opline->result_type == IS_UNUSED
+			|| (result = zend_native_value_slot(execute_data,
+				opline->result_type, opline->result)) == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	size = opline->extended_value >> ZEND_ARRAY_SIZE_SHIFT;
+	ZVAL_ARR(result, zend_new_array(size));
+	if ((opline->extended_value & ZEND_ARRAY_NOT_PACKED) != 0) {
+		zend_hash_real_init_mixed(Z_ARRVAL_P(result));
+	}
+	if (opline->op1_type != IS_UNUSED
+			&& !zend_native_array_add_source_element(
+				execute_data, opline, Z_ARRVAL_P(result))) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	return zend_native_value_status();
+}
+
+zend_native_status zend_native_value_add_array_element(
+	zend_execute_data *execute_data, uint32_t source_opline_index)
+{
+	const zend_op *opline = zend_native_value_opline(
+		execute_data, source_opline_index, ZEND_ADD_ARRAY_ELEMENT);
+	zval *result;
+
+	if (opline == NULL || (result = zend_native_value_slot(execute_data,
+			opline->result_type, opline->result)) == NULL
+			|| Z_TYPE_P(result) != IS_ARRAY
+			|| !zend_native_array_add_source_element(
+				execute_data, opline, Z_ARRVAL_P(result))) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	return zend_native_value_status();
+}
+
+zend_native_status zend_native_value_add_array_unpack(
+	zend_execute_data *execute_data, uint32_t source_opline_index)
+{
+	const zend_op *opline = zend_native_value_opline(
+		execute_data, source_opline_index, ZEND_ADD_ARRAY_UNPACK);
+	zval *source;
+	zval *result;
+	HashTable *source_table;
+	HashTable *result_table;
+	zend_string *key;
+	zval *entry;
+
+	if (opline == NULL
+			|| (source = zend_native_value_read(execute_data, opline,
+				opline->op1_type, opline->op1)) == NULL
+			|| (result = zend_native_value_slot(execute_data,
+				opline->result_type, opline->result)) == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	ZVAL_DEREF(source);
+	if (Z_TYPE_P(source) != IS_ARRAY || Z_TYPE_P(result) != IS_ARRAY) {
+		zend_throw_error(NULL, "Only arrays and Traversables can be unpacked, %s given",
+			zend_zval_value_name(source));
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	source_table = Z_ARRVAL_P(source);
+	result_table = Z_ARRVAL_P(result);
+	ZEND_HASH_FOREACH_STR_KEY_VAL(source_table, key, entry) {
+		zval copy;
+		if (Z_ISREF_P(entry) && Z_REFCOUNT_P(entry) == 1) {
+			entry = Z_REFVAL_P(entry);
+		}
+		ZVAL_COPY(&copy, entry);
+		if (key != NULL) {
+			zend_hash_update(result_table, key, &copy);
+		} else if (zend_hash_next_index_insert(result_table, &copy) == NULL) {
+			zval_ptr_dtor_nogc(&copy);
+			zend_cannot_add_element();
+			break;
+		}
+	} ZEND_HASH_FOREACH_END();
+	if (opline->op1_type == IS_TMP_VAR) {
+		zval_ptr_dtor_nogc(source);
+		ZVAL_UNDEF(source);
+	}
+	return zend_native_value_status();
+}
+
+typedef enum _zend_native_dim_mode {
+	ZEND_NATIVE_DIM_R,
+	ZEND_NATIVE_DIM_W,
+	ZEND_NATIVE_DIM_RW,
+	ZEND_NATIVE_DIM_IS,
+	ZEND_NATIVE_DIM_FUNC_ARG,
+	ZEND_NATIVE_DIM_UNSET
+} zend_native_dim_mode;
+
+static zend_native_status zend_native_value_fetch_dim_impl(
+	zend_execute_data *execute_data, uint32_t source_opline_index,
+	uint8_t expected_opcode, zend_native_dim_mode mode)
+{
+	const zend_op *opline = zend_native_value_opline(
+		execute_data, source_opline_index, expected_opcode);
+	zend_native_array_key key;
+	zval *container;
+	zval *offset;
+	zval *result;
+	zval *value;
+	bool write;
+
+	if (opline == NULL
+			|| (container = zend_native_value_read(execute_data, opline,
+				opline->op1_type, opline->op1)) == NULL
+			|| (result = zend_native_value_slot(execute_data,
+				opline->result_type, opline->result)) == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	if (opline->op1_type == IS_CV || opline->op1_type == IS_VAR) {
+		ZVAL_DEREF(container);
+	}
+	write = mode == ZEND_NATIVE_DIM_W || mode == ZEND_NATIVE_DIM_RW
+		|| mode == ZEND_NATIVE_DIM_UNSET;
+	if (mode == ZEND_NATIVE_DIM_FUNC_ARG && execute_data->call != NULL
+			&& (ZEND_CALL_INFO(execute_data->call)
+				& ZEND_CALL_SEND_ARG_BY_REF) != 0) {
+		write = true;
+		mode = ZEND_NATIVE_DIM_W;
+	} else if (mode == ZEND_NATIVE_DIM_FUNC_ARG) {
+		mode = ZEND_NATIVE_DIM_R;
+	}
+	if (write && Z_TYPE_P(container) <= IS_FALSE) {
+		ZVAL_ARR(container, zend_new_array(8));
+	}
+	if (Z_TYPE_P(container) != IS_ARRAY) {
+		if (write) {
+			zend_throw_error(NULL, "Cannot use a scalar value as an array");
+		} else {
+			zend_throw_error(NULL, "Cannot access offset of type mixed on %s",
+				zend_zval_value_name(container));
+		}
+		ZVAL_UNDEF(result);
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	if (write) {
+		SEPARATE_ARRAY(container);
+	}
+	if (opline->op2_type == IS_UNUSED) {
+		if (!write || mode == ZEND_NATIVE_DIM_UNSET) {
+			zend_throw_error(NULL, "Cannot use [] for reading");
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		value = zend_hash_next_index_insert(
+			Z_ARRVAL_P(container), &EG(uninitialized_zval));
+	} else {
+		offset = zend_native_value_read(execute_data, opline,
+			opline->op2_type, opline->op2);
+		if (offset == NULL || !zend_native_array_key_from_zval(offset,
+				opline->op2_type, mode != ZEND_NATIVE_DIM_UNSET, &key)) {
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		if (mode == ZEND_NATIVE_DIM_W) {
+			value = zend_native_array_write_slot(
+				Z_ARRVAL_P(container), &key, false);
+		} else if (mode == ZEND_NATIVE_DIM_RW) {
+			value = zend_native_array_write_slot(
+				Z_ARRVAL_P(container), &key, true);
+		} else {
+			value = zend_native_array_find(Z_ARRVAL_P(container), &key);
+		}
+	}
+	if (write) {
+		if (value == NULL) {
+			ZVAL_UNDEF(result);
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		ZVAL_INDIRECT(result, value);
+	} else if (value == NULL) {
+		if (mode == ZEND_NATIVE_DIM_R) {
+			zend_native_array_warn_missing(&key);
+		}
+		ZVAL_UNDEF(result);
+	} else {
+		ZVAL_COPY_DEREF(result, value);
+	}
+	if (!write && opline->op1_type == IS_TMP_VAR) {
+		zval_ptr_dtor_nogc(container);
+		ZVAL_UNDEF(container);
+	}
+	return zend_native_value_status();
+}
+
+#define ZEND_NATIVE_DIM_WRAPPER(name, opcode, mode) \
+	zend_native_status name( \
+			zend_execute_data *execute_data, uint32_t source_opline_index) \
+	{ \
+		return zend_native_value_fetch_dim_impl( \
+			execute_data, source_opline_index, opcode, mode); \
+	}
+
+ZEND_NATIVE_DIM_WRAPPER(zend_native_value_fetch_dim_r,
+	ZEND_FETCH_DIM_R, ZEND_NATIVE_DIM_R)
+ZEND_NATIVE_DIM_WRAPPER(zend_native_value_fetch_dim_w,
+	ZEND_FETCH_DIM_W, ZEND_NATIVE_DIM_W)
+ZEND_NATIVE_DIM_WRAPPER(zend_native_value_fetch_dim_rw,
+	ZEND_FETCH_DIM_RW, ZEND_NATIVE_DIM_RW)
+ZEND_NATIVE_DIM_WRAPPER(zend_native_value_fetch_dim_is,
+	ZEND_FETCH_DIM_IS, ZEND_NATIVE_DIM_IS)
+ZEND_NATIVE_DIM_WRAPPER(zend_native_value_fetch_dim_func_arg,
+	ZEND_FETCH_DIM_FUNC_ARG, ZEND_NATIVE_DIM_FUNC_ARG)
+ZEND_NATIVE_DIM_WRAPPER(zend_native_value_fetch_dim_unset,
+	ZEND_FETCH_DIM_UNSET, ZEND_NATIVE_DIM_UNSET)
+
+#undef ZEND_NATIVE_DIM_WRAPPER
+
+static zend_native_status zend_native_value_assign_dim_impl(
+	zend_execute_data *execute_data, uint32_t source_opline_index, bool compound)
+{
+	const zend_op *opline = zend_native_value_opline(execute_data,
+		source_opline_index, compound ? ZEND_ASSIGN_DIM_OP : ZEND_ASSIGN_DIM);
+	const zend_op *data;
+	zend_native_array_key key;
+	zval *container;
+	zval *offset;
+	zval *target;
+	zval *result;
+	zval source;
+	zval computed;
+	zval *assigned;
+	binary_op_type operation;
+
+	if (opline == NULL || source_opline_index + 1 >= execute_data->func->op_array.last
+			|| (data = opline + 1)->opcode != ZEND_OP_DATA
+			|| (container = zend_native_value_read(execute_data, opline,
+				opline->op1_type, opline->op1)) == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	ZVAL_DEREF(container);
+	if (Z_TYPE_P(container) <= IS_FALSE) {
+		if (Z_TYPE_P(container) == IS_FALSE) {
+			zend_false_to_array_deprecated();
+			if (EG(exception) != NULL) {
+				return ZEND_NATIVE_EXCEPTION;
+			}
+		}
+		ZVAL_ARR(container, zend_new_array(8));
+	}
+	if (Z_TYPE_P(container) != IS_ARRAY) {
+		zend_throw_error(NULL, "Cannot use a scalar value as an array");
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	SEPARATE_ARRAY(container);
+	if (opline->op2_type == IS_UNUSED) {
+		target = zend_hash_next_index_insert(
+			Z_ARRVAL_P(container), &EG(uninitialized_zval));
+	} else {
+		offset = zend_native_value_read(execute_data, opline,
+			opline->op2_type, opline->op2);
+		if (offset == NULL || !zend_native_array_key_from_zval(
+				offset, opline->op2_type, true, &key)) {
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		target = zend_native_array_write_slot(
+			Z_ARRVAL_P(container), &key, compound);
+	}
+	if (target == NULL || !zend_native_value_take(execute_data, data,
+			data->op1_type, data->op1, false, &source)) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	if (Z_ISREF_P(target)) {
+		target = Z_REFVAL_P(target);
+	}
+	if (compound) {
+		operation = get_binary_op(opline->extended_value);
+		if (operation == NULL
+				|| operation(&computed, target, &source) != SUCCESS) {
+			zval_ptr_dtor_nogc(&source);
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		zval_ptr_dtor_nogc(&source);
+		zval_ptr_dtor_nogc(target);
+		ZVAL_COPY_VALUE(target, &computed);
+		assigned = target;
+	} else {
+		zval_ptr_dtor_nogc(target);
+		ZVAL_COPY_VALUE(target, &source);
+		assigned = target;
+	}
+	if (opline->result_type != IS_UNUSED) {
+		result = zend_native_value_slot(
+			execute_data, opline->result_type, opline->result);
+		if (result == NULL) {
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		ZVAL_COPY(result, assigned);
+	}
+	return zend_native_value_status();
+}
+
+zend_native_status zend_native_value_assign_dim(
+	zend_execute_data *execute_data, uint32_t source_opline_index)
+{
+	return zend_native_value_assign_dim_impl(
+		execute_data, source_opline_index, false);
+}
+
+zend_native_status zend_native_value_assign_dim_op(
+	zend_execute_data *execute_data, uint32_t source_opline_index)
+{
+	return zend_native_value_assign_dim_impl(
+		execute_data, source_opline_index, true);
+}
+
+zend_native_status zend_native_value_unset_dim(
+	zend_execute_data *execute_data, uint32_t source_opline_index)
+{
+	const zend_op *opline = zend_native_value_opline(
+		execute_data, source_opline_index, ZEND_UNSET_DIM);
+	zend_native_array_key key;
+	zval *container;
+	zval *offset;
+
+	if (opline == NULL
+			|| (container = zend_native_value_read(execute_data, opline,
+				opline->op1_type, opline->op1)) == NULL
+			|| (offset = zend_native_value_read(execute_data, opline,
+				opline->op2_type, opline->op2)) == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	ZVAL_DEREF(container);
+	if (Z_TYPE_P(container) != IS_ARRAY) {
+		if (Z_TYPE_P(container) == IS_STRING) {
+			zend_throw_error(NULL, "Cannot unset string offsets");
+		}
+		return zend_native_value_status();
+	}
+	SEPARATE_ARRAY(container);
+	if (!zend_native_array_key_from_zval(
+			offset, opline->op2_type, false, &key)) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	if (key.kind == ZEND_NATIVE_ARRAY_KEY_LONG) {
+		zend_hash_index_del(Z_ARRVAL_P(container), key.index);
+	} else {
+		zend_hash_del(Z_ARRVAL_P(container), key.string);
+	}
+	return zend_native_value_status();
+}
+
+zend_native_status zend_native_value_isset_isempty_dim(
+	zend_execute_data *execute_data, uint32_t source_opline_index)
+{
+	const zend_op *opline = zend_native_value_opline(
+		execute_data, source_opline_index, ZEND_ISSET_ISEMPTY_DIM_OBJ);
+	zend_native_array_key key;
+	zval *container;
+	zval *offset;
+	zval *result;
+	zval *value = NULL;
+	bool answer;
+
+	if (opline == NULL
+			|| (container = zend_native_value_read(execute_data, opline,
+				opline->op1_type, opline->op1)) == NULL
+			|| (offset = zend_native_value_read(execute_data, opline,
+				opline->op2_type, opline->op2)) == NULL
+			|| (result = zend_native_value_slot(execute_data,
+				opline->result_type, opline->result)) == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	ZVAL_DEREF(container);
+	if (Z_TYPE_P(container) == IS_ARRAY
+			&& zend_native_array_key_from_zval(
+				offset, opline->op2_type, false, &key)) {
+		value = zend_native_array_find(Z_ARRVAL_P(container), &key);
+	} else if (EG(exception) != NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	if ((opline->extended_value & ZEND_ISEMPTY) != 0) {
+		answer = value == NULL || !i_zend_is_true(value);
+	} else {
+		answer = value != NULL && Z_TYPE_P(value) > IS_NULL
+			&& (!Z_ISREF_P(value) || Z_TYPE_P(Z_REFVAL_P(value)) != IS_NULL);
+	}
+	ZVAL_BOOL(result, answer);
 	return ZEND_NATIVE_RETURNED;
 }

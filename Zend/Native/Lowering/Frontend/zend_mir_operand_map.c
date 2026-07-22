@@ -884,9 +884,10 @@ zend_mir_lowering_status zend_mir_frontend_validate_eligibility(
 
 static zend_mir_lowering_status zend_mir_frontend_validate_eligibility_w04_impl(
 	const zend_op_array *op_array, const zend_ssa *ssa,
+	const zend_op_array *original_op_array,
 	zend_mir_op_array_id op_array_id,
 	zend_mir_frontend_diagnostic *diagnostic,
-	bool allow_source_zval_return)
+	bool allow_source_zval_return, bool allow_any_source_zval_return)
 {
 	uint32_t i;
 	for (i = 0; i < op_array->last; i++) {
@@ -904,6 +905,17 @@ static zend_mir_lowering_status zend_mir_frontend_validate_eligibility_w04_impl(
 		}
 		for (operand_index = 0; operand_index < 3; operand_index++) {
 			uint32_t missing_ssa_id = ZEND_MIR_ID_INVALID;
+			if (allow_any_source_zval_return
+					&& original_op_array != NULL
+					&& i < original_op_array->last
+					&& original_op_array->opcodes[i].opcode == ZEND_RETURN
+					&& operand_index == ZEND_MIR_FRONTEND_OP1) {
+				uint8_t type = original_op_array->opcodes[i].op1_type;
+				if (type == IS_CONST || type == IS_CV || type == IS_VAR
+						|| type == IS_TMP_VAR) {
+					continue;
+				}
+			}
 			if (allow_source_zval_return
 					&& op_array->opcodes[i].opcode == ZEND_RETURN
 					&& operand_index == ZEND_MIR_FRONTEND_OP1) {
@@ -935,7 +947,7 @@ zend_mir_lowering_status zend_mir_frontend_validate_eligibility_w04(
 	zend_mir_frontend_diagnostic *diagnostic)
 {
 	return zend_mir_frontend_validate_eligibility_w04_impl(
-		op_array, ssa, op_array_id, diagnostic, false);
+		op_array, ssa, NULL, op_array_id, diagnostic, false, false);
 }
 
 zend_mir_lowering_status zend_mir_frontend_validate_eligibility_w08(
@@ -944,7 +956,17 @@ zend_mir_lowering_status zend_mir_frontend_validate_eligibility_w08(
 	zend_mir_frontend_diagnostic *diagnostic)
 {
 	return zend_mir_frontend_validate_eligibility_w04_impl(
-		op_array, ssa, op_array_id, diagnostic, true);
+		op_array, ssa, NULL, op_array_id, diagnostic, true, false);
+}
+
+zend_mir_lowering_status zend_mir_frontend_validate_eligibility_w09(
+	const zend_op_array *op_array, const zend_ssa *ssa,
+	const zend_op_array *original_op_array,
+	zend_mir_op_array_id op_array_id,
+	zend_mir_frontend_diagnostic *diagnostic)
+{
+	return zend_mir_frontend_validate_eligibility_w04_impl(
+		op_array, ssa, original_op_array, op_array_id, diagnostic, true, true);
 }
 
 bool zend_mir_frontend_opcode_at(

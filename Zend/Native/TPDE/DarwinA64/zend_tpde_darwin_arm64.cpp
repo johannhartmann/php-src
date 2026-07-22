@@ -360,6 +360,32 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ROPE_ADD);
 		case ZEND_MIR_OPCODE_VALUE_ROPE_END:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ROPE_END);
+		case ZEND_MIR_OPCODE_VALUE_INIT_ARRAY:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY);
+		case ZEND_MIR_OPCODE_VALUE_ADD_ARRAY_ELEMENT:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_ELEMENT);
+		case ZEND_MIR_OPCODE_VALUE_ADD_ARRAY_UNPACK:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_UNPACK);
+		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R);
+		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_W:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_W);
+		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_RW:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_RW);
+		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_IS:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_IS);
+		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_FUNC_ARG:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_FUNC_ARG);
+		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_UNSET:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_UNSET);
+		case ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM);
+		case ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM_OP:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_OP);
+		case ZEND_MIR_OPCODE_VALUE_UNSET_DIM:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_UNSET_DIM);
+		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM);
 		case ZEND_MIR_OPCODE_COPY:
 		case ZEND_MIR_OPCODE_CANONICALIZE:
 		case ZEND_MIR_OPCODE_I1_TO_I64:

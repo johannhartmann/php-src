@@ -2772,11 +2772,11 @@ static bool native_mir_test_compile_native_component(
 		const zend_native_runtime_api *runtime = zend_native_runtime_get();
 		zend_native_runtime_api injected_runtime;
 		zend_native_runtime_helper injected_helpers[
-			ZEND_NATIVE_HELPER_ABI_CONFORMANCE];
+			ZEND_NATIVE_HELPER_COUNT - 1];
 		if (state->runtime_helper_failure != 0) {
 			uint32_t helper_index;
 
-			if (runtime->helper_count > ZEND_NATIVE_HELPER_ABI_CONFORMANCE) {
+			if (runtime->helper_count > ZEND_NATIVE_HELPER_COUNT - 1) {
 				efree(bindings);
 				efree(internal_bindings);
 				native_mir_test_backend_failure(state, state->phase, NULL);

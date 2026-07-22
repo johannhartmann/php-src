@@ -37,6 +37,32 @@ zend_native_status zend_native_value_rope_add(
 	zend_execute_data *execute_data, uint32_t source_opline_index);
 zend_native_status zend_native_value_rope_end(
 	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_init_array(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_add_array_element(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_add_array_unpack(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_fetch_dim_r(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_fetch_dim_w(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_fetch_dim_rw(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_fetch_dim_is(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_fetch_dim_func_arg(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_fetch_dim_unset(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_assign_dim(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_assign_dim_op(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_unset_dim(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_isset_isempty_dim(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
 
 #ifdef __cplusplus
 }
