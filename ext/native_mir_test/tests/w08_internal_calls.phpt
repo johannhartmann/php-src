@@ -1,5 +1,5 @@
 --TEST--
-Native MIR W08 executes direct, nested, optional, and variadic internal calls
+Native MIR W08 executes direct, nested, optional, variadic, and by-reference internal calls
 --SKIPIF--
 <?php
 if (!function_exists('native_mir_test_compile_execute')) {
@@ -59,9 +59,19 @@ function variadic_internal(string $format, string $value): int
     return strcmp(sprintf($format, $value, 2, 'x'), 'a-2-x');
 }
 PHP, 'variadic_internal', ['%s-%d-%s', 'a']);
+
+run_w08(<<<'PHP'
+<?php
+function byref_internal(string $value, int $count): int
+{
+    str_replace('a', 'b', $value, $count);
+    return strcmp(json_encode($count), '2');
+}
+PHP, 'byref_internal', ['a-a', 0]);
 ?>
 --EXPECT--
 direct_internal accepted returned return=0 vm=0 execute_ex=0 handler=0
 nested_internal accepted returned return=0 vm=0 execute_ex=0 handler=0
 optional_internal accepted returned return=0 vm=0 execute_ex=0 handler=0
 variadic_internal accepted returned return=0 vm=0 execute_ex=0 handler=0
+byref_internal accepted returned return=0 vm=0 execute_ex=0 handler=0
