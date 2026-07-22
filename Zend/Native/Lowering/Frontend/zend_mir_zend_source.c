@@ -544,7 +544,8 @@ static bool zend_mir_frontend_w05_original_result_slot(
 		if (original_ssa->ops[opline_index].result_def
 					!= (int) ssa_variable_id
 				|| (opline->opcode != ZEND_DO_UCALL
-					&& opline->opcode != ZEND_DO_FCALL)
+					&& opline->opcode != ZEND_DO_FCALL
+					&& opline->opcode != ZEND_DO_ICALL)
 				|| !zend_mir_frontend_decode_slot(
 					original_op_array, &opline->result, opline->result_type,
 					slot, slot_kind)) {
@@ -1763,7 +1764,9 @@ static uint32_t zend_mir_frontend_w05_return_type_mask(
 {
 	uint32_t type;
 
-	if (function == NULL || function->type != ZEND_USER_FUNCTION
+	if (function == NULL
+			|| (function->type != ZEND_USER_FUNCTION
+				&& function->type != ZEND_INTERNAL_FUNCTION)
 			|| function->common.arg_info == NULL
 			|| (function->common.fn_flags & ZEND_ACC_HAS_RETURN_TYPE) == 0
 			|| (function->common.fn_flags & ZEND_ACC_RETURN_REFERENCE) != 0) {
@@ -1842,10 +1845,11 @@ static zend_mir_scalar_type_mask zend_mir_frontend_w05_return_scalar_type(
 	}
 }
 
-zend_mir_lowering_status zend_mir_frontend_project_w05_result_facts(
+static zend_mir_lowering_status zend_mir_frontend_project_call_result_facts(
 	const zend_script *script, const zend_op_array *op_array,
 	const zend_ssa *ssa, zend_ssa *projected_ssa,
-	zend_mir_frontend_diagnostic *diagnostic)
+	zend_mir_frontend_diagnostic *diagnostic,
+	bool source_backed_internal_results)
 {
 	zend_mir_zend_source source;
 	zend_mir_frontend_call_inventory *inventory;
@@ -1899,9 +1903,25 @@ zend_mir_lowering_status zend_mir_frontend_project_w05_result_facts(
 		type = zend_mir_frontend_w05_return_type_mask(target->function);
 		variable = &projected_ssa->vars[site->result_ssa_variable_id];
 		info = &projected_ssa->var_info[site->result_ssa_variable_id];
-		if (target->record.kind != ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
-				|| target->record.returns_by_reference
-				|| type == 0 || variable->alias != NO_ALIAS
+		if ((target->record.kind != ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
+				&& target->record.kind != ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL)
+				|| target->record.returns_by_reference) {
+			goto unsupported_result;
+		}
+		/* General W08 internal results remain in their source zval slot. */
+		if (source_backed_internal_results
+				&& target->record.kind
+					== ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL
+				&& (type == 0 || variable->alias != NO_ALIAS
+					|| info->guarded_reference || info->indirect_reference
+					|| info->ce != NULL || info->is_instanceof
+					|| !zend_mir_scalar_type_is_exact(
+						zend_mir_frontend_w05_return_scalar_type(
+							target->function)))) {
+			info->has_range = 0;
+			continue;
+		}
+		if (type == 0 || variable->alias != NO_ALIAS
 				|| info->guarded_reference || info->indirect_reference
 				|| info->ce != NULL || info->is_instanceof) {
 			goto unsupported_result;
@@ -1921,6 +1941,24 @@ unsupported_result:
 		inventory->sites[index].result_ssa_variable_id);
 	zend_mir_zend_source_release_w05(&source);
 	return ZEND_MIR_LOWERING_DEFERRED;
+}
+
+zend_mir_lowering_status zend_mir_frontend_project_w05_result_facts(
+	const zend_script *script, const zend_op_array *op_array,
+	const zend_ssa *ssa, zend_ssa *projected_ssa,
+	zend_mir_frontend_diagnostic *diagnostic)
+{
+	return zend_mir_frontend_project_call_result_facts(
+		script, op_array, ssa, projected_ssa, diagnostic, false);
+}
+
+zend_mir_lowering_status zend_mir_frontend_project_w08_result_facts(
+	const zend_script *script, const zend_op_array *op_array,
+	const zend_ssa *ssa, zend_ssa *projected_ssa,
+	zend_mir_frontend_diagnostic *diagnostic)
+{
+	return zend_mir_frontend_project_call_result_facts(
+		script, op_array, ssa, projected_ssa, diagnostic, true);
 }
 
 static bool zend_mir_frontend_w05_declared_result_fact(
@@ -1945,7 +1983,8 @@ static bool zend_mir_frontend_w05_declared_result_fact(
 		return false;
 	}
 	target = &inventory->targets[site->target_id];
-	if (target->record.kind != ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
+	if ((target->record.kind != ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
+			&& target->record.kind != ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL)
 			|| target->record.returns_by_reference) {
 		return false;
 	}

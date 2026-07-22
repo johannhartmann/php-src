@@ -46,6 +46,9 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_INTERNAL_CALL_FINISH_SOURCE,
 		ZEND_NATIVE_RUNTIME_EFFECT_ALL,
 		(const void *) zend_native_internal_call_invoke_finish_source},
+	{ZEND_NATIVE_HELPER_CALL_READ_SOURCE_SCALAR,
+		ZEND_NATIVE_RUNTIME_EFFECT_THROW | ZEND_NATIVE_RUNTIME_EFFECT_BAILOUT,
+		(const void *) zend_native_call_read_source_scalar},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {

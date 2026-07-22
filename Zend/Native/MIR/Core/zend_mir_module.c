@@ -1116,9 +1116,6 @@ static bool zend_mir_core_stage_call_site(
 	staging = &module->call_staging;
 	if (staging->committed || site->id != staging->site_count
 			|| site->target_id >= staging->target_count
-			|| (staging->targets[site->target_id].kind
-					== ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL
-				&& zend_mir_id_is_valid(site->result_id))
 			|| (zend_mir_id_is_valid(site->result_id)
 				&& !zend_mir_module_find_value(
 					module, site->result_id, NULL))

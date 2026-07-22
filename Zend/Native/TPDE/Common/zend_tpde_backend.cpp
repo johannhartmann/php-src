@@ -23,13 +23,16 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->values);
 	std::free(plan->instructions);
 	std::free(plan->operands);
+	std::free(plan->call_arguments);
 	std::memset(plan, 0, sizeof(*plan));
 }
 
 bool initialize_plan(
 	const zend_mir_view *view,
-	const zend_native_call_binding *bindings,
-	uint32_t binding_count,
+	const zend_native_call_binding *user_bindings,
+	uint32_t user_binding_count,
+	const zend_native_internal_call_binding *internal_bindings,
+	uint32_t internal_binding_count,
 	const zend_native_source_effect *effects,
 	uint32_t effect_count,
 	uint32_t frame_argument_count,
@@ -56,11 +59,16 @@ bool initialize_plan(
 	plan->block_count = view->block_count(view->context);
 	plan->value_count = view->value_count(view->context);
 	plan->instruction_count = view->instruction_count(view->context);
+	const zend_mir_call_view *calls = zend_mir_module_call_view_from_view(view);
+	plan->call_argument_count = calls != nullptr
+		&& calls->call_argument_count != nullptr
+		? calls->call_argument_count(calls->context) : 0;
 	const uint32_t constant_count = view->constant_count(view->context);
 	const uint32_t frame_slot_count = view->frame_slot_count(view->context);
 	if (plan->block_count == 0 || !checked_count(plan->block_count)
 			|| !checked_count(plan->value_count)
 			|| !checked_count(plan->instruction_count)
+			|| !checked_count(plan->call_argument_count)
 			|| !checked_count(constant_count)
 			|| !checked_count(frame_slot_count)) {
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
@@ -74,11 +82,25 @@ bool initialize_plan(
 		std::calloc(plan->value_count, sizeof(*plan->values)));
 	plan->instructions = static_cast<zend_tpde_instruction *>(
 		std::calloc(plan->instruction_count, sizeof(*plan->instructions)));
+	plan->call_arguments = static_cast<zend_mir_call_argument_ref *>(
+		std::calloc(plan->call_argument_count, sizeof(*plan->call_arguments)));
 	if (plan->blocks == nullptr || (plan->value_count != 0 && plan->values == nullptr)
-			|| (plan->instruction_count != 0 && plan->instructions == nullptr)) {
+			|| (plan->instruction_count != 0 && plan->instructions == nullptr)
+			|| (plan->call_argument_count != 0
+				&& plan->call_arguments == nullptr)) {
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
 			"unable to allocate the TPDE adaptor plan");
 		return false;
+	}
+	for (uint32_t i = 0; i < plan->call_argument_count; ++i) {
+		if (calls == nullptr || calls->call_argument_at == nullptr
+				|| !calls->call_argument_at(
+					calls->context, i, &plan->call_arguments[i])) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"MIR call-argument table is unreadable");
+			return false;
+		}
 	}
 
 	for (uint32_t i = 0; i < plan->block_count; ++i) {
@@ -177,13 +199,14 @@ bool initialize_plan(
 		plan->instructions[i].record = record;
 		plan->instructions[i].operand_offset = static_cast<uint32_t>(operands - count);
 		plan->instructions[i].operand_count = count;
-		if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
-			const zend_mir_call_view *calls =
-				zend_mir_module_call_view_from_view(view);
+		if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
+				|| record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL) {
 			zend_mir_call_site_ref site{};
+			zend_mir_call_target_ref target{};
 			bool found_site = false;
 			if (calls == nullptr || calls->call_site_count == nullptr
-					|| calls->call_site_at == nullptr) {
+					|| calls->call_site_at == nullptr
+					|| calls->call_target_at == nullptr) {
 				zend_tpde_set_diagnostic(diag,
 					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 					"direct call lacks its W05 call view");
@@ -208,22 +231,38 @@ bool initialize_plan(
 					found_site = true;
 				}
 			}
-			if (!found_site || site.arguments.count != count) {
+			if (!found_site
+					|| site.arguments.offset > plan->call_argument_count
+					|| site.arguments.count > plan->call_argument_count
+						- site.arguments.offset
+					|| !calls->call_target_at(
+						calls->context, site.target_id, &target)
+					|| (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
+						&& (site.arguments.count != count
+							|| target.kind != ZEND_MIR_CALL_TARGET_DIRECT_USER))
+					|| (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL
+						&& (count != 0
+							|| target.kind
+								!= ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL))) {
 				zend_tpde_set_diagnostic(diag,
 					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 					"direct call instruction and call site disagree");
 				return false;
 			}
-			for (uint32_t n = 0; n < binding_count; ++n) {
-				if (bindings[n].target_id == site.target_id) {
+			plan->instructions[i].call_site = site;
+			plan->instructions[i].call_argument_offset = site.arguments.offset;
+			plan->instructions[i].call_argument_count = site.arguments.count;
+			if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
+			for (uint32_t n = 0; n < user_binding_count; ++n) {
+				if (user_bindings[n].target_id == site.target_id) {
 					if (plan->instructions[i].entry_cell != nullptr
-							|| bindings[n].entry_cell == nullptr) {
+							|| user_bindings[n].entry_cell == nullptr) {
 						zend_tpde_set_diagnostic(diag,
 							ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
 							"direct call binding is duplicate or null");
 						return false;
 					}
-					plan->instructions[i].entry_cell = bindings[n].entry_cell;
+					plan->instructions[i].entry_cell = user_bindings[n].entry_cell;
 				}
 			}
 			if (plan->instructions[i].entry_cell == nullptr) {
@@ -231,6 +270,27 @@ bool initialize_plan(
 					ZEND_NATIVE_DIAGNOSTIC_UNSUPPORTED_OPCODE,
 					"direct user call has no native entry-cell binding");
 				return false;
+			}
+			} else {
+				for (uint32_t n = 0; n < internal_binding_count; ++n) {
+					if (internal_bindings[n].target_id == site.target_id) {
+						if (plan->instructions[i].internal_call_cell != nullptr
+								|| internal_bindings[n].call_cell == nullptr) {
+							zend_tpde_set_diagnostic(diag,
+								ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
+								"internal call binding is duplicate or null");
+							return false;
+						}
+						plan->instructions[i].internal_call_cell =
+							internal_bindings[n].call_cell;
+					}
+				}
+				if (plan->instructions[i].internal_call_cell == nullptr) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_UNSUPPORTED_OPCODE,
+						"direct internal call has no runtime binding");
+					return false;
+				}
 			}
 			plan->may_emit_calls = true;
 		}
@@ -466,13 +526,33 @@ extern "C" zend_result zend_tpde_compile_module_w07(
 	uint32_t frame_argument_count,
 	zend_native_image **out_image,
 	zend_native_diagnostic *diag) {
+	return zend_tpde_compile_module_w08(
+		target, module, bindings, binding_count, nullptr, 0, effects,
+		effect_count, frame_argument_count, out_image, diag);
+}
+
+extern "C" zend_result zend_tpde_compile_module_w08(
+	zend_native_target target,
+	const zend_mir_view *module,
+	const zend_native_call_binding *user_bindings,
+	uint32_t user_binding_count,
+	const zend_native_internal_call_binding *internal_bindings,
+	uint32_t internal_binding_count,
+	const zend_native_source_effect *effects,
+	uint32_t effect_count,
+	uint32_t frame_argument_count,
+	zend_native_image **out_image,
+	zend_native_diagnostic *diag) {
 	if (diag != nullptr) {
 		std::memset(diag, 0, sizeof(*diag));
 	}
 	if (module == nullptr || out_image == nullptr
-			|| (binding_count != 0 && bindings == nullptr)
+			|| (user_binding_count != 0 && user_bindings == nullptr)
+			|| (internal_binding_count != 0 && internal_bindings == nullptr)
 			|| (effect_count != 0 && effects == nullptr)
-			|| !checked_count(binding_count) || !checked_count(effect_count)
+			|| !checked_count(user_binding_count)
+			|| !checked_count(internal_binding_count)
+			|| !checked_count(effect_count)
 			|| (frame_argument_count != UINT32_MAX
 				&& !checked_count(frame_argument_count))) {
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
@@ -489,7 +569,8 @@ extern "C" zend_result zend_tpde_compile_module_w07(
 
 	zend_tpde_plan plan{};
 	if (!initialize_plan(
-			module, bindings, binding_count, effects, effect_count,
+			module, user_bindings, user_binding_count,
+			internal_bindings, internal_binding_count, effects, effect_count,
 			frame_argument_count,
 			&plan, diag)) {
 		destroy_plan(&plan);
@@ -660,7 +741,6 @@ extern "C" zend_result zend_native_execute(
 	if (!Z_ISUNDEF(return_value)) {
 		zval_ptr_dtor(&return_value);
 	}
-	zend_vm_stack_free_args(frame);
 	zend_vm_stack_free_call_frame(frame);
 	std::free(op_array.arg_info);
 	std::free(op_array.opcodes);

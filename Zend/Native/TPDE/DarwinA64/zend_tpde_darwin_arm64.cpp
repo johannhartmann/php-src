@@ -479,6 +479,100 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			}
 			return true;
 		}
+		case ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL: {
+			const zend_tpde_instruction &call =
+				adaptor->mir_instruction(instruction);
+			{
+				zend::native::tpde::CCAssignerAppleA64 assigner;
+				CallBuilder builder{*this, assigner};
+				builder.add_arg(CallArg{node.operands[0]});
+				builder.add_arg(ValuePart{
+					reinterpret_cast<uintptr_t>(call.internal_call_cell), 8,
+					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+				builder.add_arg(ValuePart{call.call_argument_count, 4,
+					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+				builder.add_arg(ValuePart{call.call_site.source_init_opline_index, 4,
+					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+				builder.call(ValuePart{
+					reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
+						ZEND_NATIVE_HELPER_INTERNAL_CALL_BEGIN)), 8,
+					DarwinConfig::GP_BANK});
+			}
+			for (uint32_t index = 0; index < call.call_argument_count; ++index) {
+				const zend_mir_call_argument_ref &argument =
+					adaptor->plan()->call_arguments[
+						call.call_argument_offset + index];
+				zend::native::tpde::CCAssignerAppleA64 assigner;
+				CallBuilder builder{*this, assigner};
+				builder.add_arg(CallArg{node.operands[index + 1]});
+				builder.add_arg(ValuePart{argument.ordinal, 4,
+					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+				builder.add_arg(ValuePart{argument.send_opline_index, 4,
+					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+				builder.add_arg(ValuePart{
+					argument.ownership
+						== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
+						? ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
+						: ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE,
+					4, DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+				builder.call(ValuePart{
+					reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
+						ZEND_NATIVE_HELPER_CALL_SET_SOURCE_ARGUMENT)), 8,
+					DarwinConfig::GP_BANK});
+			}
+			zend::native::tpde::CCAssignerAppleA64 assigner;
+			CallBuilder builder{*this, assigner};
+			builder.add_arg(CallArg{node.operands[call.call_argument_count + 1]});
+			builder.add_arg(ValuePart{
+				reinterpret_cast<uintptr_t>(call.internal_call_cell), 8,
+				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			builder.add_arg(ValuePart{call.call_site.source_do_opline_index, 4,
+				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			builder.call(ValuePart{
+				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
+					ZEND_NATIVE_HELPER_INTERNAL_CALL_FINISH_SOURCE)), 8,
+				DarwinConfig::GP_BANK});
+			ValuePart status{DarwinConfig::GP_BANK};
+			builder.add_ret(status, ::tpde::CCAssignment{});
+			auto status_reg = status.cur_reg_or_load(this);
+			ASM(CMPxi, status_reg, ZEND_NATIVE_RETURNED);
+			auto continued = text_writer.label_create();
+			generate_raw_jump(Jump::Jeq, continued);
+			RetBuilder return_builder{*this, *cur_cc_assigner()};
+			return_builder.add(std::move(status), ::tpde::CCAssignment{});
+			return_builder.ret();
+			label_place(continued);
+			if (node.has_result) {
+				zend::native::tpde::CCAssignerAppleA64 result_assigner;
+				CallBuilder result_builder{*this, result_assigner};
+				result_builder.add_arg(CallArg{
+					node.operands[call.call_argument_count + 2]});
+				result_builder.add_arg(ValuePart{
+					call.call_site.source_do_opline_index, 4,
+					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+				result_builder.add_arg(ValuePart{
+					static_cast<uint32_t>(adaptor->exact_type(node.result)), 4,
+					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+				result_builder.call(ValuePart{
+					reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
+						ZEND_NATIVE_HELPER_CALL_READ_SOURCE_SCALAR)), 8,
+					DarwinConfig::GP_BANK});
+				ValuePart payload{DarwinConfig::GP_BANK};
+				result_builder.add_ret(payload, ::tpde::CCAssignment{});
+				auto [result_ref, result] = result_ref_single(node.result);
+				if (val_parts(node.result).bank == DarwinConfig::FP_BANK) {
+					auto payload_reg = payload.cur_reg_or_load(this);
+					ScratchReg converted{this};
+					auto result_reg = converted.alloc(DarwinConfig::FP_BANK);
+					ASM(FMOVdx, result_reg, payload_reg);
+					payload.reset(this);
+					result.set_value(std::move(converted));
+				} else {
+					result.set_value(std::move(payload));
+				}
+			}
+			return true;
+		}
 		case ZEND_MIR_OPCODE_RETURN: {
 			{
 			auto [value_ref, value] = val_ref_single(node.operands[0]);

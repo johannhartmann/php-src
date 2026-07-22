@@ -267,7 +267,6 @@ uint64_t zend_native_call_invoke_finish(
 	if (!Z_ISUNDEF(return_value)) {
 		zval_ptr_dtor(&return_value);
 	}
-	zend_vm_stack_free_args(call);
 	zend_vm_stack_free_call_frame(call);
 	caller->call = NULL;
 	if (status != ZEND_NATIVE_RETURNED) {

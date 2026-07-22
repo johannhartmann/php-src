@@ -106,6 +106,12 @@ static zend_mir_w05_lowering_result zend_mir_w05_integration_result(
 	return result;
 }
 
+static void zend_mir_w06_sanitize_prerequisite_facts(
+	zend_mir_w03_integration *integration);
+static void zend_mir_w06_hide_private_call_results(
+	zend_mir_w03_integration *integration,
+	const zend_op_array *op_array, const zend_ssa *ssa);
+
 static bool zend_mir_w03_checked_add(
 	uint32_t left, uint32_t right, uint32_t *out)
 {
@@ -425,7 +431,10 @@ static bool zend_mir_w03_prepare_source(
 					- (char *) opline);
 #endif
 			if (integration->w05
-					&& zend_mir_w05_call_init_fragment(opline->opcode)) {
+					&& (zend_mir_w05_call_init_fragment(opline->opcode)
+						|| (zend_mir_w05_call_fragment(opline->opcode)
+							&& Z_TYPE(op_array->literals[literal_index])
+								> IS_DOUBLE))) {
 				ZVAL_NULL(&integration->projected_literals[literal_index]);
 			}
 		}
@@ -447,7 +456,10 @@ static bool zend_mir_w03_prepare_source(
 					- (char *) opline);
 #endif
 			if (integration->w05
-					&& zend_mir_w05_call_init_fragment(opline->opcode)) {
+					&& (zend_mir_w05_call_init_fragment(opline->opcode)
+						|| (zend_mir_w05_call_fragment(opline->opcode)
+							&& Z_TYPE(op_array->literals[literal_index])
+								> IS_DOUBLE))) {
 				ZVAL_NULL(&integration->projected_literals[literal_index]);
 			}
 		}
@@ -974,12 +986,12 @@ static bool zend_mir_w03_initial_slot_value(
 				*value_id_out = candidate;
 				found = true;
 				/*
-				 * Removed W06 call fragments may define the same TMP slot
+				 * Removed call/value fragments may define the same TMP slot
 				 * repeatedly. The retained RETURN sees the latest SSA
 				 * representative, so the private prerequisite entry state
 				 * must publish that representative as well.
 				 */
-				if (!integration->w06) {
+				if (!integration->w05 && !integration->w06) {
 					return true;
 				}
 			}
@@ -1661,7 +1673,7 @@ zend_mir_lowering_result zend_mir_lower_w04_zend_op_array(
 	}
 	integration.w04 = true;
 	if (!zend_mir_w03_prepare_source(
-			&integration, op_array, ssa, &source_op_array, &source_ssa)) {
+		&integration, op_array, ssa, &source_op_array, &source_ssa)) {
 		zend_mir_w03_release(&integration);
 		return zend_mir_w03_result(
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
@@ -1773,13 +1785,29 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 		return zend_mir_w05_integration_result(
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
 	}
-	status = zend_mir_frontend_project_w05_result_facts(
-		script, op_array, ssa, &integration.projected_ssa,
-		&frontend_diagnostic);
+	status = w08_execution
+		? zend_mir_frontend_project_w08_result_facts(
+			script, op_array, ssa, &integration.projected_ssa,
+			&frontend_diagnostic)
+		: zend_mir_frontend_project_w05_result_facts(
+			script, op_array, ssa, &integration.projected_ssa,
+			&frontend_diagnostic);
 	if (status != ZEND_MIR_LOWERING_SUCCESS) {
 		zend_mir_w03_release(&integration);
 		return zend_mir_w05_integration_result(
 			status, frontend_diagnostic.code);
+	}
+	/*
+	 * W08 carries string/reference arguments and by-reference mutations in
+	 * its original source-backed call inventory.  The private W04 scalar
+	 * prerequisite has had every call fragment removed, so retaining those
+	 * pointer/reference SSA facts there would reject semantics that are owned
+	 * and executed by the W08 runtime boundary.
+	 */
+	if (w08_execution) {
+		zend_mir_w06_sanitize_prerequisite_facts(&integration);
+		zend_mir_w06_hide_private_call_results(
+			&integration, op_array, ssa);
 	}
 	status = zend_mir_zend_source_init_w05_projection(
 		&integration.source, source_op_array, source_ssa, op_array, ssa,

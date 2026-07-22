@@ -731,7 +731,31 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 		}
 		if (plan->targets[site->target_id].kind
 				== ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL) {
-			plan->results[index] = ZEND_MIR_ID_INVALID;
+			uint32_t result_flags = site->flags
+				& (ZEND_MIR_SOURCE_CALL_SITE_RESULT_UNUSED
+					| ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR);
+
+			if (result_flags == ZEND_MIR_SOURCE_CALL_SITE_RESULT_UNUSED) {
+				if (zend_mir_id_is_valid(site->result_ssa_variable_id)) {
+					return ZEND_MIRL_W05_UNSUPPORTED_RESULT;
+				}
+				plan->results[index] = ZEND_MIR_ID_INVALID;
+			} else if (result_flags
+					== ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR
+					&& zend_mir_id_is_valid(
+						site->result_ssa_variable_id)) {
+				/*
+				 * Exact non-refcounted internal results enter scalar MIR.
+				 * Every other zval result stays in its canonical source slot
+				 * and can be consumed by another W08 source-backed operation.
+				 */
+				if (!zend_mir_w05_result_value(
+						context, site, &plan->results[index])) {
+					plan->results[index] = ZEND_MIR_ID_INVALID;
+				}
+			} else {
+				return ZEND_MIRL_W05_UNSUPPORTED_RESULT;
+			}
 		} else if (!zend_mir_w05_result_value(
 				context, site, &plan->results[index])) {
 			return ZEND_MIRL_W05_UNSUPPORTED_RESULT;
@@ -2374,6 +2398,7 @@ static bool zend_mir_verify_w08_calls(
 		zend_mir_call_target_ref target;
 		zend_mir_instruction_record instruction;
 		zend_mir_frame_state_ref frame;
+		zend_mir_representation internal_result_representation;
 		bool internal;
 		uint32_t argument_index;
 		uint32_t continuation_index;
@@ -2385,10 +2410,32 @@ static bool zend_mir_verify_w08_calls(
 					source.target_id, &source_target)
 				|| !calls->call_site_at(calls->context, index, &site)
 				|| !calls->call_target_at(
-					calls->context, site.target_id, &target)) {
+					calls->context, site.target_id, &target)
+				|| !view->instruction_at(
+					view->context, site.instruction_id, &instruction)) {
 			goto failure;
 		}
 		internal = target.kind == ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL;
+		internal_result_representation = ZEND_MIR_REPRESENTATION_VOID;
+		if (internal
+				&& (view->instruction_operand_count(
+						view->context, instruction.id) != 0
+					|| (zend_mir_id_is_valid(site.result_id)
+						? (!zend_mir_id_is_valid(
+								source.result_ssa_variable_id)
+							|| site.result_id != zend_mir_value_from_original_ssa(
+								source.result_ssa_variable_id)
+							|| instruction.result_id != site.result_id
+							|| !zend_mir_w05_verify_scalar_result(
+								view, site.result_id,
+								&internal_result_representation)
+							|| instruction.representation
+								!= internal_result_representation)
+						: (zend_mir_id_is_valid(instruction.result_id)
+							|| instruction.representation
+								!= ZEND_MIR_REPRESENTATION_VOID)))) {
+			goto failure;
+		}
 		if (site.id != index || site.source_call_site_id != source.id
 				|| site.target_id != source.target_id
 				|| site.arguments.offset != source.argument_span.offset
@@ -2397,20 +2444,11 @@ static bool zend_mir_verify_w08_calls(
 				|| site.source_do_opline_index != source.do_opline_index
 				|| site.continuations.offset != index * 4
 				|| site.continuations.count != 4
-				|| !view->instruction_at(
-					view->context, site.instruction_id, &instruction)
 				|| instruction.opcode != (internal
 					? ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL
 					: ZEND_MIR_OPCODE_CALL_DIRECT_USER)
 				|| instruction.source_position_id != source.do_opline_index
-				|| (internal
-					? (zend_mir_id_is_valid(site.result_id)
-						|| zend_mir_id_is_valid(instruction.result_id)
-						|| instruction.representation
-							!= ZEND_MIR_REPRESENTATION_VOID
-						|| view->instruction_operand_count(
-							view->context, instruction.id) != 0)
-					: view->instruction_operand_count(
+				|| (!internal && view->instruction_operand_count(
 						view->context, instruction.id) != site.arguments.count)
 				|| !view->frame_state_at(view->context,
 					site.caller_frame.frame_state_id, &frame)
