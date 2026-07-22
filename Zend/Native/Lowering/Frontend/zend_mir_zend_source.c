@@ -662,8 +662,11 @@ static zend_mir_lowering_status zend_mir_zend_source_init_w04_impl(
 					op_array, ssa, original_op_array, original_ssa,
 					op_array_id, diagnostic, &slots))
 				!= ZEND_MIR_LOWERING_SUCCESS
-			|| (status = zend_mir_frontend_validate_opcode_scope_w04(
-				op_array, op_array_id, diagnostic))
+			|| (status = allow_any_source_zval_return
+				? zend_mir_frontend_validate_opcode_scope_w09(
+					op_array, op_array_id, diagnostic)
+				: zend_mir_frontend_validate_opcode_scope_w04(
+					op_array, op_array_id, diagnostic))
 				!= ZEND_MIR_LOWERING_SUCCESS
 			|| (status = zend_mir_frontend_validate_literals(
 				op_array, op_array_id, diagnostic))

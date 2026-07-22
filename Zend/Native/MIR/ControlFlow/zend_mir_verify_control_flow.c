@@ -23,6 +23,11 @@ static zend_mir_w04_branch_kind zend_mir_w04_verify_branch_kind(uint32_t opcode)
 			return ZEND_MIR_W08_BRANCH_FINALLY_CALL;
 		case 163:
 			return ZEND_MIR_W08_BRANCH_FINALLY_RETURN;
+		case 77:
+		case 78:
+		case 125:
+		case 126:
+			return ZEND_MIR_W09_BRANCH_ITERATOR;
 		default:
 			return ZEND_MIR_W04_BRANCH_KIND_INVALID;
 	}
@@ -460,6 +465,8 @@ static bool zend_mir_w04_verify_edges(
 							? terminator.opcode != ZEND_MIR_OPCODE_FINALLY_CALL
 						: branch_kind == ZEND_MIR_W08_BRANCH_FINALLY_RETURN
 							? terminator.opcode != ZEND_MIR_OPCODE_FINALLY_RETURN
+						: branch_kind == ZEND_MIR_W09_BRANCH_ITERATOR
+							? terminator.opcode != ZEND_MIR_OPCODE_ITERATOR_BRANCH
 						: (view->successor_count(view->context, source_from) == 1
 							? terminator.opcode != ZEND_MIR_OPCODE_BRANCH
 							: terminator.opcode

@@ -386,6 +386,10 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_UNSET_DIM);
 		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM);
+		case ZEND_MIR_OPCODE_VALUE_ASSIGN_OP:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ASSIGN_OP);
+		case ZEND_MIR_OPCODE_VALUE_FE_FREE:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FE_FREE);
 		case ZEND_MIR_OPCODE_COPY:
 		case ZEND_MIR_OPCODE_CANONICALIZE:
 		case ZEND_MIR_OPCODE_I1_TO_I64:
@@ -580,6 +584,41 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			const auto &successors = adaptor->block_succs(
 				adaptor->block_ref(mir.record.block_id));
 			generate_cond_branch(Jump{Jump::Cbnz, condition_reg, false},
+				successors[0], successors[1]);
+			return true;
+		}
+		case ZEND_MIR_OPCODE_ITERATOR_BRANCH: {
+			if (node.operands.size() != 1
+					|| mir.source_opline_index == UINT32_MAX) {
+				return false;
+			}
+			zend::native::tpde::CCAssignerAppleA64 assigner;
+			CallBuilder builder{*this, assigner};
+			builder.add_arg(CallArg{node.operands[0]});
+			builder.add_arg(ValuePart{mir.source_opline_index, 4,
+				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			builder.call(ValuePart{reinterpret_cast<uintptr_t>(
+				adaptor->runtime_helper(
+					ZEND_NATIVE_HELPER_VALUE_ITERATOR_BRANCH)), 8,
+				DarwinConfig::GP_BANK});
+			ValuePart decision{DarwinConfig::GP_BANK};
+			builder.add_ret(decision, ::tpde::CCAssignment{});
+			auto decision_reg = decision.cur_reg_or_load(this);
+			ASM(CMPxi, decision_reg, ZEND_NATIVE_ITERATOR_EXCEPTION);
+			auto valid = text_writer.label_create();
+			generate_raw_jump(Jump::Jlt, valid);
+			/* Release the helper return register before constructing an early
+			 * native return.  On the valid edge the generated return sequence is
+			 * skipped, so the physical decision register still carries 0 or 1. */
+			decision.reset(this);
+			RetBuilder return_builder{*this, *cur_cc_assigner()};
+			return_builder.add(ValuePart{ZEND_NATIVE_EXCEPTION, 4,
+				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			return_builder.ret();
+			label_place(valid);
+			const auto &successors = adaptor->block_succs(
+				adaptor->block_ref(mir.record.block_id));
+			generate_cond_branch(Jump{Jump::Cbnz, decision_reg, false},
 				successors[0], successors[1]);
 			return true;
 		}

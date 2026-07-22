@@ -707,6 +707,44 @@ static bool zend_mir_frontend_w04_branch(uint8_t opcode)
 		|| opcode == ZEND_FAST_RET;
 }
 
+static bool zend_mir_frontend_w09_iterator_branch(uint8_t opcode)
+{
+	return opcode == ZEND_FE_RESET_R || opcode == ZEND_FE_FETCH_R
+		|| opcode == ZEND_FE_RESET_RW || opcode == ZEND_FE_FETCH_RW;
+}
+
+static bool zend_mir_frontend_w09_iterator_operands_match(
+	const zend_op *opline)
+{
+	switch (opline->opcode) {
+		case ZEND_FE_RESET_R:
+			return (opline->op1_type == IS_CONST
+					|| opline->op1_type == IS_TMP_VAR
+					|| opline->op1_type == IS_CV)
+				&& opline->op2_type == IS_UNUSED
+				&& opline->result_type == IS_TMP_VAR;
+		case ZEND_FE_RESET_RW:
+			return (opline->op1_type == IS_CONST
+					|| opline->op1_type == IS_TMP_VAR
+					|| opline->op1_type == IS_VAR
+					|| opline->op1_type == IS_CV)
+				&& opline->op2_type == IS_UNUSED
+				&& opline->result_type == IS_VAR;
+		case ZEND_FE_FETCH_R:
+			return opline->op1_type == IS_TMP_VAR
+				&& opline->op2_type != IS_UNUSED
+				&& (opline->result_type == IS_UNUSED
+					|| opline->result_type == IS_TMP_VAR);
+		case ZEND_FE_FETCH_RW:
+			return opline->op1_type == IS_VAR
+				&& opline->op2_type != IS_UNUSED
+				&& (opline->result_type == IS_UNUSED
+					|| opline->result_type == IS_TMP_VAR);
+		default:
+			return false;
+	}
+}
+
 static bool zend_mir_frontend_w04_smart_branch(
 	const zend_op_array *op_array, uint32_t opline_index)
 {
@@ -743,9 +781,9 @@ static bool zend_mir_frontend_w04_smart_branch(
 		&& branch->op1.var == producer->result.var;
 }
 
-zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w04(
+static zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w04_impl(
 	const zend_op_array *op_array, zend_mir_op_array_id op_array_id,
-	zend_mir_frontend_diagnostic *diagnostic)
+	zend_mir_frontend_diagnostic *diagnostic, bool allow_iterator_branches)
 {
 	uint32_t i;
 	if (op_array == NULL || op_array->last > ZEND_MIR_ID_MAX
@@ -757,7 +795,10 @@ zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w04(
 		bool valid;
 		if (opline->opcode > ZEND_VM_LAST_OPCODE
 				|| (!zend_mir_frontend_opcode_is_supported(opline->opcode)
-					&& !zend_mir_frontend_w04_branch(opline->opcode))) {
+					&& !zend_mir_frontend_w04_branch(opline->opcode)
+					&& !(allow_iterator_branches
+						&& zend_mir_frontend_w09_iterator_branch(
+							opline->opcode)))) {
 			zend_mir_frontend_set_diagnostic(diagnostic,
 				ZEND_MIR_LOWERING_DEFERRED,
 				zend_mir_frontend_deferred_code_w04(opline->opcode),
@@ -772,7 +813,10 @@ zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w04(
 				ZEND_MIR_FRONTEND_RESULT, ZEND_MIR_ID_INVALID);
 			return ZEND_MIR_LOWERING_REJECTED;
 		}
-		if (!zend_mir_frontend_w04_branch(opline->opcode)) {
+		if (allow_iterator_branches
+				&& zend_mir_frontend_w09_iterator_branch(opline->opcode)) {
+			valid = zend_mir_frontend_w09_iterator_operands_match(opline);
+		} else if (!zend_mir_frontend_w04_branch(opline->opcode)) {
 			valid = zend_mir_frontend_opcode_operands_match(opline);
 		} else if (opline->opcode == ZEND_JMP) {
 			valid = opline->op1_type == IS_UNUSED
@@ -802,6 +846,22 @@ zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w04(
 		}
 	}
 	return ZEND_MIR_LOWERING_SUCCESS;
+}
+
+zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w04(
+	const zend_op_array *op_array, zend_mir_op_array_id op_array_id,
+	zend_mir_frontend_diagnostic *diagnostic)
+{
+	return zend_mir_frontend_validate_opcode_scope_w04_impl(
+		op_array, op_array_id, diagnostic, false);
+}
+
+zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w09(
+	const zend_op_array *op_array, zend_mir_op_array_id op_array_id,
+	zend_mir_frontend_diagnostic *diagnostic)
+{
+	return zend_mir_frontend_validate_opcode_scope_w04_impl(
+		op_array, op_array_id, diagnostic, true);
 }
 
 static bool zend_mir_frontend_operand_has_exact_scalar(
@@ -893,14 +953,19 @@ static zend_mir_lowering_status zend_mir_frontend_validate_eligibility_w04_impl(
 	for (i = 0; i < op_array->last; i++) {
 		uint32_t operand_index;
 		if (!zend_mir_frontend_opcode_is_supported(op_array->opcodes[i].opcode)
-				&& !zend_mir_frontend_w04_branch(
-					op_array->opcodes[i].opcode)) {
+				&& !zend_mir_frontend_w04_branch(op_array->opcodes[i].opcode)
+				&& !(allow_any_source_zval_return
+					&& zend_mir_frontend_w09_iterator_branch(
+						op_array->opcodes[i].opcode))) {
 			return ZEND_MIR_LOWERING_DEFERRED;
 		}
 		if (op_array->opcodes[i].opcode == ZEND_NOP
 				|| op_array->opcodes[i].opcode == ZEND_JMP
 				|| op_array->opcodes[i].opcode == ZEND_FAST_CALL
-				|| op_array->opcodes[i].opcode == ZEND_FAST_RET) {
+				|| op_array->opcodes[i].opcode == ZEND_FAST_RET
+				|| (allow_any_source_zval_return
+					&& zend_mir_frontend_w09_iterator_branch(
+						op_array->opcodes[i].opcode))) {
 			continue;
 		}
 		for (operand_index = 0; operand_index < 3; operand_index++) {

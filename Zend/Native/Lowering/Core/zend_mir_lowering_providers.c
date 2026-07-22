@@ -124,9 +124,15 @@ static void zend_mir_w08_hide_method_receiver_facts(
 static bool zend_mir_w03_value_fragment(
 	const zend_mir_w03_integration *integration, uint32_t opcode)
 {
+	bool w09_iterator_control = opcode == ZEND_FE_RESET_R
+		|| opcode == ZEND_FE_FETCH_R
+		|| opcode == ZEND_FE_RESET_RW
+		|| opcode == ZEND_FE_FETCH_RW;
+
 	return integration->w06
 		&& (integration->w09
 			? zend_mir_w09_opcode_is_executable(opcode)
+				&& !w09_iterator_control
 			: zend_mir_w06_opcode_is_accepted(opcode));
 }
 
@@ -839,6 +845,7 @@ static bool zend_mir_w03_prepare_logic(
 		zend_mir_logic_opcode_proof *proof;
 		uint32_t temporary_payload;
 		bool source_zval_return;
+		bool w09_executable;
 
 		if (!integration->source_view.opcode_at(
 				integration->source_view.context, index, &opcode)) {
@@ -848,12 +855,16 @@ static bool zend_mir_w03_prepare_logic(
 			&& opcode.zend_opcode_number == ZEND_RETURN
 			&& zend_mir_zend_source_w08_return_source_zval(
 				&integration->source, opcode.opline_index);
-		if ((!source_zval_return && !zend_mir_w03_add_logic_binding(
+		w09_executable = integration->w09
+			&& zend_mir_w09_opcode_is_executable(
+				opcode.zend_opcode_number);
+		if ((!w09_executable && !source_zval_return
+				&& !zend_mir_w03_add_logic_binding(
 					integration, &opcode.op1))
-				|| !zend_mir_w03_add_logic_binding(
-					integration, &opcode.op2)
-				|| !zend_mir_w03_add_logic_binding(
-					integration, &opcode.result)
+				|| (!w09_executable && !zend_mir_w03_add_logic_binding(
+					integration, &opcode.op2))
+				|| (!w09_executable && !zend_mir_w03_add_logic_binding(
+					integration, &opcode.result))
 				|| !zend_mir_w03_checked_add(
 					integration->source.literal_count,
 					opcode_count, &temporary_payload)

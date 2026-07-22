@@ -63,7 +63,12 @@
 	X(VALUE_ASSIGN_DIM, "value_assign_dim", 77) \
 	X(VALUE_ASSIGN_DIM_OP, "value_assign_dim_op", 78) \
 	X(VALUE_UNSET_DIM, "value_unset_dim", 79) \
-	X(VALUE_ISSET_ISEMPTY_DIM, "value_isset_isempty_dim", 80)
+	X(VALUE_ISSET_ISEMPTY_DIM, "value_isset_isempty_dim", 80) \
+	X(VALUE_ASSIGN_OP, "value_assign_op", 82) \
+	X(VALUE_FE_FREE, "value_fe_free", 83)
+
+#define ZEND_MIR_ITERATOR_OPCODE_CATALOG(X) \
+	X(ITERATOR_BRANCH, "iterator_branch", 81)
 
 #define ZEND_MIR_SCALAR_OPCODE_CATALOG(X) \
 	X(I64_ADD_NO_OVERFLOW, "i64_add_no_overflow", 10) \
@@ -105,6 +110,7 @@ typedef enum _zend_mir_opcode {
 	ZEND_MIR_CALL_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
 	ZEND_MIR_VALUE_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
 	ZEND_MIR_EXECUTABLE_VALUE_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
+	ZEND_MIR_ITERATOR_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
 	/*
 	 * Keep the W03 scalar range boundary stable. W05 is modeling-only and
 	 * publishes its additive table boundary separately.
@@ -113,7 +119,7 @@ typedef enum _zend_mir_opcode {
 	ZEND_MIR_W05_OPCODE_COUNT = 42,
 	ZEND_MIR_W06_OPCODE_COUNT = 48,
 	ZEND_MIR_W08_OPCODE_COUNT = 54,
-	ZEND_MIR_W09_OPCODE_COUNT = 81,
+	ZEND_MIR_W09_OPCODE_COUNT = 84,
 	ZEND_MIR_OPCODE_INVALID = -1
 } zend_mir_opcode;
 #undef ZEND_MIR_OPCODE_ENUM
@@ -159,6 +165,7 @@ static inline bool zend_mir_opcode_is_terminator(zend_mir_opcode opcode)
 {
 	return opcode == ZEND_MIR_OPCODE_BRANCH
 		|| opcode == ZEND_MIR_OPCODE_COND_BRANCH
+		|| opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH
 		|| opcode == ZEND_MIR_OPCODE_CATCH_ENTER
 		|| opcode == ZEND_MIR_OPCODE_FINALLY_CALL
 		|| opcode == ZEND_MIR_OPCODE_FINALLY_RETURN
@@ -171,8 +178,10 @@ static inline bool zend_mir_opcode_is_terminator(zend_mir_opcode opcode)
 static inline bool zend_mir_opcode_is_executable_value(
 	zend_mir_opcode opcode)
 {
-	return opcode >= ZEND_MIR_OPCODE_VALUE_MAKE_REF
-		&& opcode < ZEND_MIR_W09_OPCODE_COUNT;
+	return (opcode >= ZEND_MIR_OPCODE_VALUE_MAKE_REF
+			&& opcode <= ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM)
+		|| opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN_OP
+		|| opcode == ZEND_MIR_OPCODE_VALUE_FE_FREE;
 }
 
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_COUNT < UINT32_MAX,
@@ -205,7 +214,7 @@ ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_VALUE_MAKE_REF
 	== ZEND_MIR_W08_OPCODE_COUNT,
 	"executable value opcodes begin after the W08 boundary");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W09_OPCODE_COUNT
-	== ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM + 1,
+	== ZEND_MIR_OPCODE_VALUE_FE_FREE + 1,
 	"executable value opcodes have an additive table boundary");
 
 #endif /* ZEND_MIR_OPCODES_H */
