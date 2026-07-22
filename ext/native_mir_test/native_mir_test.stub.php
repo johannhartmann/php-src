@@ -65,3 +65,9 @@ function native_mir_test_compile_execute(
     array $arguments = [],
     array $options = [],
 ): array {}
+
+/**
+ * Return the number of published native frames visible to the platform stack
+ * unwinder. This test-only probe returns zero outside native execution.
+ */
+function native_mir_test_unwind_probe(): int {}
