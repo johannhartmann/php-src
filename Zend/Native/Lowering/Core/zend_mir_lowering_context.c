@@ -129,6 +129,22 @@ bool zend_mir_lowering_context_set_zend_source(
 	return true;
 }
 
+bool zend_mir_lowering_context_set_post_call_composition(
+	zend_mir_lowering_context *context, const void *composition_context,
+	bool (*compose)(const void *composition_context,
+		zend_mir_lowering_context *lowering_context,
+		zend_mir_module *module,
+		const zend_mir_control_flow_map *control_flow_map))
+{
+	if (context == NULL || composition_context == NULL || compose == NULL
+			|| context->busy) {
+		return false;
+	}
+	context->post_call_composition_context = composition_context;
+	context->post_call_composition = compose;
+	return true;
+}
+
 bool zend_mir_lowering_context_value_fact(
 	const zend_mir_lowering_context *context, zend_mir_value_id value_id,
 	zend_mir_value_fact_ref *fact_out)

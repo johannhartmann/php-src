@@ -195,6 +195,9 @@ static uint32_t zend_mir_verify_expected_operands(zend_mir_opcode opcode,
 		uint32_t predecessor_count, bool *variable)
 {
 	*variable = false;
+	if (zend_mir_opcode_is_executable_value(opcode)) {
+		return 0;
+	}
 	switch (opcode) {
 		case ZEND_MIR_OPCODE_CONSTANT:
 		case ZEND_MIR_OPCODE_BRANCH:
@@ -230,6 +233,10 @@ static uint32_t zend_mir_verify_expected_operands(zend_mir_opcode opcode,
 static bool zend_mir_verify_result_contract(
 		const zend_mir_instruction_record *instruction)
 {
+	if (zend_mir_opcode_is_executable_value(instruction->opcode)) {
+		return !zend_mir_id_is_valid(instruction->result_id)
+			&& instruction->representation == ZEND_MIR_REPRESENTATION_VOID;
+	}
 	switch (instruction->opcode) {
 		case ZEND_MIR_OPCODE_CONSTANT:
 		case ZEND_MIR_OPCODE_PHI:

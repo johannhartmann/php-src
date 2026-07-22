@@ -1,5 +1,5 @@
 /* This is a generated file, edit native_mir_test.stub.php instead.
- * Stub hash: dba9f64230c84323020e58faff1bb1ba3c60a903 */
+ * Stub hash: 393521bd270501fd24293195e1721471c69e96e7 */
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_native_mir_test_compile_dump, 0, 2, IS_ARRAY, 0)
 	ZEND_ARG_TYPE_INFO(0, source, IS_STRING, 0)

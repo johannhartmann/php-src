@@ -3,6 +3,7 @@
 #include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
+#include "Zend/Native/Runtime/Common/zend_native_values.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -68,6 +69,34 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 		(const void *) zend_native_return_source_zval},
 	{ZEND_NATIVE_HELPER_ABI_CONFORMANCE, 0,
 		(const void *) zend_native_abi_conformance},
+	{ZEND_NATIVE_HELPER_VALUE_MAKE_REF, ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE,
+		(const void *) zend_native_value_make_ref},
+	{ZEND_NATIVE_HELPER_VALUE_ASSIGN_REF,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE | ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_RUNTIME_EFFECT_THROW | ZEND_NATIVE_RUNTIME_EFFECT_BAILOUT,
+		(const void *) zend_native_value_assign_ref},
+	{ZEND_NATIVE_HELPER_VALUE_SEPARATE, 0,
+		(const void *) zend_native_value_separate},
+	{ZEND_NATIVE_HELPER_VALUE_COPY_TMP, ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE,
+		(const void *) zend_native_value_copy_tmp},
+	{ZEND_NATIVE_HELPER_VALUE_FREE,
+		ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT | ZEND_NATIVE_RUNTIME_EFFECT_THROW
+			| ZEND_NATIVE_RUNTIME_EFFECT_BAILOUT,
+		(const void *) zend_native_value_free},
+	{ZEND_NATIVE_HELPER_VALUE_UNSET_CV,
+		ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT | ZEND_NATIVE_RUNTIME_EFFECT_THROW
+			| ZEND_NATIVE_RUNTIME_EFFECT_BAILOUT,
+		(const void *) zend_native_value_unset_cv},
+	{ZEND_NATIVE_HELPER_VALUE_CHECK_VAR,
+		ZEND_NATIVE_RUNTIME_EFFECT_THROW | ZEND_NATIVE_RUNTIME_EFFECT_BAILOUT,
+		(const void *) zend_native_value_check_var},
+	{ZEND_NATIVE_HELPER_VALUE_ASSIGN,
+		ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT | ZEND_NATIVE_RUNTIME_EFFECT_THROW
+			| ZEND_NATIVE_RUNTIME_EFFECT_BAILOUT,
+		(const void *) zend_native_value_assign},
+	{ZEND_NATIVE_HELPER_VALUE_QM_ASSIGN,
+		ZEND_NATIVE_RUNTIME_EFFECT_THROW | ZEND_NATIVE_RUNTIME_EFFECT_BAILOUT,
+		(const void *) zend_native_value_qm_assign},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
@@ -125,7 +154,7 @@ zend_result zend_native_runtime_validate(
 	zend_native_diagnostic *diagnostic)
 {
 	uint32_t index;
-	uint32_t seen = 0;
+	uint64_t seen = 0;
 
 	if (runtime == NULL
 			|| runtime->abi_version != ZEND_NATIVE_RUNTIME_ABI_VERSION
@@ -146,18 +175,19 @@ zend_result zend_native_runtime_validate(
 	for (index = 0; index < runtime->helper_count; index++) {
 		const zend_native_runtime_helper *helper = &runtime->helpers[index];
 
-		if (helper->id == 0 || helper->id > 31 || helper->address == NULL
+		if (helper->id == 0 || helper->id >= ZEND_NATIVE_HELPER_COUNT
+				|| helper->id > 63 || helper->address == NULL
 				|| (helper->effects & ~ZEND_NATIVE_RUNTIME_EFFECT_ALL) != 0
 				|| ((helper->effects & ZEND_NATIVE_RUNTIME_EFFECT_REENTER) != 0
 					&& (helper->effects
 						& ZEND_NATIVE_RUNTIME_EFFECT_USERLAND) == 0)
-				|| (seen & (UINT32_C(1) << helper->id)) != 0) {
+				|| (seen & (UINT64_C(1) << helper->id)) != 0) {
 			zend_native_runtime_diagnostic(diagnostic,
 				ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
 				"native runtime helper contract is invalid or contradictory");
 			return FAILURE;
 		}
-		seen |= UINT32_C(1) << helper->id;
+		seen |= UINT64_C(1) << helper->id;
 	}
 	return SUCCESS;
 }

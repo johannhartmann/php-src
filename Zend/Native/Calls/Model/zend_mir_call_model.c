@@ -591,7 +591,8 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 	const zend_mir_source_call_target_resolver *resolver,
 	zend_mir_w05_plan *plan,
 	bool allow_w06_scalar_proxy,
-	bool w07_execution, bool w08_execution)
+	bool w07_execution, bool w08_execution,
+	bool allow_empty_calls)
 {
 	uint32_t index;
 
@@ -611,6 +612,10 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 	plan->site_count = calls->call_site_count(calls->context);
 	plan->target_count = calls->call_target_count(calls->context);
 	plan->argument_count = calls->call_argument_count(calls->context);
+	if (plan->site_count == 0 && plan->target_count == 0
+			&& plan->argument_count == 0 && allow_empty_calls) {
+		return ZEND_MIRL_OK;
+	}
 	if (plan->site_count == 0 || plan->target_count == 0) {
 		return ZEND_MIRL_W05_RUNTIME_EFFECT_DEFERRED;
 	}
@@ -881,7 +886,8 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 static bool zend_mir_w05_emit_calls(
 	const zend_mir_w05_plan *plan,
 	const zend_mir_lowering_context *context,
-	zend_mir_call_mutator *mutator, bool w08_execution)
+	zend_mir_call_mutator *mutator, bool w08_execution,
+	bool allow_empty_calls)
 {
 	uint32_t index;
 
@@ -896,6 +902,13 @@ static bool zend_mir_w05_emit_calls(
 			|| mutator->add_call_site == NULL
 			|| mutator->commit_call_model == NULL) {
 		return false;
+	}
+	if (plan->site_count == 0 && plan->target_count == 0
+			&& plan->argument_count == 0) {
+		zend_mir_module *module = mutator->context;
+		return allow_empty_calls && module != NULL
+			&& &module->call_mutator == mutator
+			&& zend_mir_module_commit_empty_call_model(module);
 	}
 	for (index = 0; index < plan->target_count; index++) {
 		const zend_mir_source_call_target_ref *source = &plan->targets[index];
@@ -1076,12 +1089,12 @@ zend_mir_lowering_diagnostic_code zend_mir_w05_plan_and_emit_calls(
 
 	memset(&plan, 0, sizeof(plan));
 	code = zend_mir_w05_plan_calls(
-		context, source_calls, resolver, &plan, true, false, false);
+		context, source_calls, resolver, &plan, true, false, false, false);
 	if (code == ZEND_MIRL_OK
 			&& (!zend_mir_w05_materialize_w06_scalar_proxies(
 					&plan, call_mutator)
 				|| !zend_mir_w05_emit_calls(
-					&plan, context, call_mutator, false))) {
+					&plan, context, call_mutator, false, false))) {
 		code = ZEND_MIRL_W05_CALL_PLAN_FAILED;
 	}
 	zend_mir_w05_plan_release(&plan);
@@ -1098,7 +1111,7 @@ zend_mir_lowering_diagnostic_code zend_mir_w05_validate_call_plan(
 
 	memset(&plan, 0, sizeof(plan));
 	code = zend_mir_w05_plan_calls(
-		context, source_calls, resolver, &plan, true, false, false);
+		context, source_calls, resolver, &plan, true, false, false, false);
 	zend_mir_w05_plan_release(&plan);
 	return code;
 }
@@ -2083,7 +2096,7 @@ static bool zend_mir_w05_find_source_position(
 
 static bool zend_mir_w05_verify_final_structural(
 	const zend_mir_view *view, zend_mir_diagnostic_sink *diagnostics,
-	bool w08_execution)
+	bool w08_execution, bool w09_execution)
 {
 	uint32_t index;
 
@@ -2130,7 +2143,9 @@ static bool zend_mir_w05_verify_final_structural(
 				|| !zend_mir_w05_find_block(
 					view, instruction.block_id, NULL)
 				|| (uint32_t) instruction.opcode
-					>= (w08_execution
+					>= (w09_execution
+						? ZEND_MIR_W09_OPCODE_COUNT
+						: w08_execution
 						? ZEND_MIR_W08_OPCODE_COUNT
 						: ZEND_MIR_W05_OPCODE_COUNT)
 				|| (uint32_t) instruction.representation
@@ -2597,10 +2612,13 @@ static bool zend_mir_w05_verify_final_composition(
 	const zend_mir_view *view,
 	const zend_mir_source_call_view *source_calls,
 	const zend_mir_call_view *calls,
-	zend_mir_diagnostic_sink *diagnostics, bool w08_execution)
+	zend_mir_diagnostic_sink *diagnostics,
+	bool w08_execution, bool w09_execution)
 {
+	bool empty_w09_calls;
+
 	if (!zend_mir_w05_verify_final_structural(
-			view, diagnostics, w08_execution)) {
+			view, diagnostics, w08_execution, w09_execution)) {
 		return false;
 	}
 	if (!zend_mir_w05_verify_final_scalar(
@@ -2611,9 +2629,17 @@ static bool zend_mir_w05_verify_final_composition(
 			view, calls, diagnostics, w08_execution)) {
 		return false;
 	}
+	empty_w09_calls = w09_execution
+		&& source_calls->call_site_count(source_calls->context) == 0
+		&& source_calls->call_target_count(source_calls->context) == 0
+		&& source_calls->call_argument_count(source_calls->context) == 0;
 	return !zend_mir_w05_test_fault_is(
 			ZEND_MIR_W05_TEST_FAULT_CALL_VERIFIER)
-		&& (w08_execution
+		&& (empty_w09_calls
+			? calls->call_site_count(calls->context) == 0
+				&& calls->call_target_count(calls->context) == 0
+				&& calls->call_argument_count(calls->context) == 0
+			: w08_execution
 			? zend_mir_verify_w08_calls(
 				view, source_calls, calls, diagnostics)
 			: zend_mir_verify_w05_calls(
@@ -2627,7 +2653,7 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_calls(
 	const zend_mir_source_call_view *source_calls,
 	const zend_mir_source_call_target_resolver *resolver,
 	zend_mir_call_mutator *call_mutator,
-	bool w07_execution, bool w08_execution)
+	bool w07_execution, bool w08_execution, bool w09_execution)
 {
 	zend_mir_w05_plan plan;
 	zend_mir_lowering_result w04;
@@ -2642,7 +2668,7 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_calls(
 
 	code = zend_mir_w05_plan_calls(
 		context, source_calls, resolver, &plan, false,
-		w07_execution, w08_execution);
+		w07_execution, w08_execution, w09_execution);
 	if (code != ZEND_MIRL_OK) {
 		zend_mir_w05_plan_release(&plan);
 		return zend_mir_w05_failure(
@@ -2667,11 +2693,20 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_calls(
 		call_mutator = zend_mir_module_get_call_mutator(w04.module);
 	}
 	if (!zend_mir_w05_emit_calls(
-			&plan, context, call_mutator, w08_execution)) {
+			&plan, context, call_mutator, w08_execution, w09_execution)) {
 		context->module_ops.destroy(context->module_ops.context, w04.module);
 		zend_mir_w05_plan_release(&plan);
 		return zend_mir_w05_failure(
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_W05_CALL_PLAN_FAILED);
+	}
+	if (context->post_call_composition != NULL
+			&& !context->post_call_composition(
+				context->post_call_composition_context, context, w04.module,
+				control_flow_map)) {
+		context->module_ops.destroy(context->module_ops.context, w04.module);
+		zend_mir_w05_plan_release(&plan);
+		return zend_mir_w05_failure(
+			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
 	}
 	if (!context->module_ops.finalize(
 			context->module_ops.context, w04.module)) {
@@ -2685,7 +2720,7 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_calls(
 	if (view == NULL || calls == NULL
 			|| !zend_mir_w05_verify_final_composition(
 				view, source_calls, calls, context->diagnostics,
-				w08_execution)) {
+				w08_execution, w09_execution)) {
 		context->module_ops.destroy(context->module_ops.context, w04.module);
 		zend_mir_w05_plan_release(&plan);
 		return zend_mir_w05_failure(
@@ -2739,7 +2774,7 @@ zend_mir_w05_lowering_result zend_mir_lower_w05_zend_source(
 {
 	return zend_mir_lower_direct_user_calls(
 		context, mutator, control_flow_map, source_calls, resolver,
-		call_mutator, false, false);
+		call_mutator, false, false, false);
 }
 
 zend_mir_w05_lowering_result zend_mir_lower_w07_zend_source(
@@ -2752,7 +2787,7 @@ zend_mir_w05_lowering_result zend_mir_lower_w07_zend_source(
 {
 	return zend_mir_lower_direct_user_calls(
 		context, mutator, control_flow_map, source_calls, resolver,
-		call_mutator, true, false);
+		call_mutator, true, false, false);
 }
 
 zend_mir_w08_lowering_result zend_mir_lower_w08_zend_source(
@@ -2765,5 +2800,18 @@ zend_mir_w08_lowering_result zend_mir_lower_w08_zend_source(
 {
 	return zend_mir_lower_direct_user_calls(
 		context, mutator, control_flow_map, source_calls, resolver,
-		call_mutator, true, true);
+		call_mutator, true, true, false);
+}
+
+zend_mir_w08_lowering_result zend_mir_lower_w09_zend_source(
+	zend_mir_lowering_context *context,
+	zend_mir_mutator *mutator,
+	zend_mir_control_flow_map *control_flow_map,
+	const zend_mir_source_call_view *source_calls,
+	const zend_mir_source_call_target_resolver *resolver,
+	zend_mir_call_mutator *call_mutator)
+{
+	return zend_mir_lower_direct_user_calls(
+		context, mutator, control_flow_map, source_calls, resolver,
+		call_mutator, true, true, true);
 }

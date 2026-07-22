@@ -1618,6 +1618,15 @@ bool zend_mir_zend_source_w08_return_source_zval(
 				&return_slot, &return_slot_kind)) {
 		return false;
 	}
+	/*
+	 * W09 executes zval-producing and aliasing oplines against the canonical
+	 * Zend frame.  A scalar SSA value is therefore not an authoritative copy
+	 * of a CV/VAR/TMP at return: references, COW separation and destructors may
+	 * all have changed the slot.  Transfer the source zval itself.
+	 */
+	if (source->w09) {
+		return true;
+	}
 	inventory = (const zend_mir_frontend_call_inventory *) source->call_inventory;
 	for (index = 0; index < inventory->site_count; index++) {
 		const zend_mir_source_call_site_ref *site = &inventory->sites[index];
@@ -2519,7 +2528,7 @@ bool zend_mir_frontend_w05_result_fact_at(
 static zend_mir_lowering_status zend_mir_zend_source_preflight_direct_calls(
 	const zend_script *script, const zend_op_array *op_array,
 	const zend_ssa *ssa, zend_mir_frontend_diagnostic *diagnostic,
-	bool w07_execution, bool w08_execution)
+	bool w07_execution, bool w08_execution, bool allow_empty_calls)
 {
 	zend_mir_zend_source source;
 	zend_mir_frontend_call_inventory *inventory;
@@ -2549,7 +2558,8 @@ static zend_mir_lowering_status zend_mir_zend_source_preflight_direct_calls(
 		return status;
 	}
 	inventory = source.call_inventory;
-	if (inventory->site_count == 0 || inventory->target_count == 0) {
+	if ((inventory->site_count == 0 || inventory->target_count == 0)
+			&& !allow_empty_calls) {
 		zend_mir_zend_source_release_w05(&source);
 		zend_mir_frontend_set_diagnostic(
 			diagnostic, ZEND_MIR_LOWERING_DEFERRED,
@@ -2741,7 +2751,7 @@ zend_mir_lowering_status zend_mir_zend_source_preflight_w05(
 	const zend_ssa *ssa, zend_mir_frontend_diagnostic *diagnostic)
 {
 	return zend_mir_zend_source_preflight_direct_calls(
-		script, op_array, ssa, diagnostic, false, false);
+		script, op_array, ssa, diagnostic, false, false, false);
 }
 
 zend_mir_lowering_status zend_mir_zend_source_preflight_w07(
@@ -2749,7 +2759,7 @@ zend_mir_lowering_status zend_mir_zend_source_preflight_w07(
 	const zend_ssa *ssa, zend_mir_frontend_diagnostic *diagnostic)
 {
 	return zend_mir_zend_source_preflight_direct_calls(
-		script, op_array, ssa, diagnostic, true, false);
+		script, op_array, ssa, diagnostic, true, false, false);
 }
 
 zend_mir_lowering_status zend_mir_zend_source_preflight_w08(
@@ -2757,7 +2767,15 @@ zend_mir_lowering_status zend_mir_zend_source_preflight_w08(
 	const zend_ssa *ssa, zend_mir_frontend_diagnostic *diagnostic)
 {
 	return zend_mir_zend_source_preflight_direct_calls(
-		script, op_array, ssa, diagnostic, true, true);
+		script, op_array, ssa, diagnostic, true, true, false);
+}
+
+zend_mir_lowering_status zend_mir_zend_source_preflight_w09(
+	const zend_script *script, const zend_op_array *op_array,
+	const zend_ssa *ssa, zend_mir_frontend_diagnostic *diagnostic)
+{
+	return zend_mir_zend_source_preflight_direct_calls(
+		script, op_array, ssa, diagnostic, true, true, true);
 }
 
 zend_mir_lowering_status zend_mir_zend_source_enable_w05(

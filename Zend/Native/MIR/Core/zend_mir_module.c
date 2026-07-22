@@ -43,7 +43,7 @@ static bool zend_mir_constant_kind_is_valid(zend_mir_constant_kind kind)
 
 static bool zend_mir_opcode_is_valid(zend_mir_opcode opcode)
 {
-	return opcode >= 0 && opcode < ZEND_MIR_W08_OPCODE_COUNT;
+	return opcode >= 0 && opcode < ZEND_MIR_W09_OPCODE_COUNT;
 }
 
 static void zend_mir_emit_diagnostic(zend_mir_diagnostic_sink *sink,
@@ -1624,6 +1624,28 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 static bool zend_mir_core_commit_staged_calls(void *context)
 {
 	return zend_mir_core_commit_call_model(context);
+}
+
+bool zend_mir_module_commit_empty_call_model(zend_mir_module *module)
+{
+	zend_mir_core_call_staging *staging;
+
+	if (!zend_mir_module_require_building(module)) {
+		return false;
+	}
+	staging = &module->call_staging;
+	if (staging->committed || staging->target_count != 0
+			|| staging->argument_count != 0 || staging->continuation_count != 0
+			|| staging->site_count != 0 || module->call_targets.count != 0
+			|| module->call_arguments.count != 0
+			|| module->call_continuations.count != 0
+			|| module->call_sites.count != 0) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_INVALID_ID,
+			"invalid empty call model");
+	}
+	staging->committed = true;
+	return true;
 }
 
 void zend_mir_module_init_call_mutator(zend_mir_module *module)

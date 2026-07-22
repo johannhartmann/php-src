@@ -365,6 +365,10 @@ public:
 						ZEND_MIR_EFFECT_INTERRUPT_BOUNDARY)) != 0) {
 				operands.push_back(IRValueRef{FRAME_VALUE});
 			}
+			if (zend_mir_opcode_is_executable_value(
+					instruction.record.opcode)) {
+				operands.push_back(IRValueRef{FRAME_VALUE});
+			}
 			if (instruction.record.opcode
 					== ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
 				/* begin + setters + finish + optional source-result read */
