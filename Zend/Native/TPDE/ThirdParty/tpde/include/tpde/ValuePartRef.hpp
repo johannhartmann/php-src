@@ -51,6 +51,14 @@ public:
     assert(bank.id() < Config::NUM_BANKS);
   }
 
+  ValuePart(RegBank bank, u32 size)
+      : state{
+            ConstantData{.is_const = false, .bank = bank, .size = size}
+  } {
+    assert(bank.id() < Config::NUM_BANKS);
+    assert(size != 0);
+  }
+
   ValuePart(ValLocalIdx local_idx,
             ValueAssignment *assignment,
             u32 part,

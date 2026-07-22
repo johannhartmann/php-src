@@ -543,3 +543,55 @@ void zend_native_echo_double(
 	ZVAL_DOUBLE(&value, payload);
 	zend_native_echo_zval(execute_data, &value);
 }
+
+uint64_t zend_native_abi_conformance(
+	zend_execute_data *execute_data,
+	const zval *first_argument_slot,
+	uint64_t source_value,
+	uint8_t zext8,
+	int8_t sext8,
+	uint16_t zext16,
+	int16_t sext16,
+	uint32_t zext32,
+	int32_t sext32,
+	uint64_t unsigned64,
+	int64_t signed64,
+	uint64_t spill_a,
+	uint64_t spill_b,
+	double fp0,
+	double fp1,
+	double fp2,
+	double fp3,
+	double fp4,
+	double fp5,
+	double fp6,
+	double fp7,
+	double fp8,
+	double fp9)
+{
+	if (execute_data == NULL
+			|| execute_data != EG(current_execute_data)
+			|| execute_data->func == NULL
+			|| execute_data->func->common.num_args < 1
+			|| first_argument_slot != ZEND_CALL_ARG(execute_data, 1)
+			|| Z_TYPE_P(first_argument_slot) != IS_LONG
+			|| Z_LVAL_P(first_argument_slot) != 37
+			|| source_value != UINT64_C(37)
+			|| zext8 != UINT64_C(0xfe)
+			|| sext8 != INT64_C(-128)
+			|| zext16 != UINT64_C(0xfedc)
+			|| sext16 != INT64_C(-32767)
+			|| zext32 != UINT64_C(0xfedcba98)
+			|| sext32 != INT64_C(-1985229329)
+			|| unsigned64 != UINT64_C(0xfedcba9876543210)
+			|| signed64 != INT64_C(-81985529216486895)
+			|| spill_a != UINT64_C(0x0123456789abcdef)
+			|| spill_b != UINT64_C(0x8877665544332211)
+			|| fp0 != 1.5 || fp1 != -2.25 || fp2 != 3.125
+			|| fp3 != -4.5 || fp4 != 5.75 || fp5 != -6.875
+			|| fp6 != 7.0 || fp7 != -8.125 || fp8 != 9.25
+			|| fp9 != -10.5) {
+		return 0;
+	}
+	return ZEND_NATIVE_ABI_CONFORMANCE_RESULT;
+}

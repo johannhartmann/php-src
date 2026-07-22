@@ -69,11 +69,12 @@ typedef struct _zend_native_internal_call_binding {
 } zend_native_internal_call_binding;
 
 typedef enum _zend_native_source_effect_kind {
-	ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR = 1
+	ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR = 1,
+	ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE = 2
 } zend_native_source_effect_kind;
 
 /*
- * W07 source effects remain process-local compiler input. They augment a
+ * W07/W08 source effects remain process-local compiler input. They augment a
  * verified W05/W06 module without changing either persistent MIR contract.
  * source_position_id must identify exactly one scalar carrier instruction in
  * the module, preserving source order and its proven scalar type.
