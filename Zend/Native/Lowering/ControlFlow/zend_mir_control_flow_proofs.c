@@ -616,6 +616,10 @@ zend_mir_w04_branch_kind zend_mir_w04_branch_kind_for_opcode(uint32_t opcode)
 			return ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT;
 		case ZEND_MIR_W08_OPCODE_CATCH:
 			return ZEND_MIR_W04_BRANCH_CATCH;
+		case ZEND_MIR_W08_OPCODE_FAST_CALL:
+			return ZEND_MIR_W08_BRANCH_FINALLY_CALL;
+		case ZEND_MIR_W08_OPCODE_FAST_RET:
+			return ZEND_MIR_W08_BRANCH_FINALLY_RETURN;
 		default:
 			return ZEND_MIR_W04_BRANCH_KIND_INVALID;
 	}

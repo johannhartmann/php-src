@@ -200,6 +200,67 @@ void zend_native_call_set_double_argument(
 	ZVAL_DOUBLE(ZEND_CALL_ARG(call, ordinal + 1), value);
 }
 
+zend_result zend_native_prepare_finally_exception(
+	zend_execute_data *caller, uint32_t source_opline_index)
+{
+	zend_op_array *op_array;
+	zend_object *exception;
+	uint32_t index;
+
+	if (caller == NULL || caller->func == NULL
+			|| caller->func->type != ZEND_USER_FUNCTION
+			|| source_opline_index >= caller->func->op_array.last
+			|| EG(exception) == NULL) {
+		return FAILURE;
+	}
+	op_array = &caller->func->op_array;
+	exception = EG(exception);
+	/* Zend's dispatcher walks the innermost active region outward. */
+	for (index = op_array->last_try_catch; index-- > 0;) {
+		const zend_try_catch_element *region = &op_array->try_catch_array[index];
+		const zend_op *fast_ret;
+		zval *fast_call;
+
+		if (region->finally_op == 0 || region->finally_end == 0
+				|| source_opline_index < region->finally_op
+				|| source_opline_index >= region->finally_end
+				|| region->finally_end >= op_array->last) {
+			continue;
+		}
+		fast_ret = &op_array->opcodes[region->finally_end];
+		if (fast_ret->opcode != ZEND_FAST_RET
+				|| fast_ret->op1_type != IS_TMP_VAR) {
+			return FAILURE;
+		}
+		fast_call = ZEND_CALL_VAR(caller, fast_ret->op1.var);
+		if (Z_OPLINE_NUM_P(fast_call) != UINT32_MAX) {
+			uint32_t return_opline_index = Z_OPLINE_NUM_P(fast_call);
+
+			if (return_opline_index >= op_array->last) {
+				return FAILURE;
+			}
+			if ((op_array->opcodes[return_opline_index].op2_type
+					& (IS_TMP_VAR | IS_VAR)) != 0) {
+				zval *return_value = ZEND_CALL_VAR(caller,
+					op_array->opcodes[return_opline_index].op2.var);
+
+				zval_ptr_dtor(return_value);
+				ZVAL_NULL(return_value);
+			}
+		}
+		if (Z_OBJ_P(fast_call) != NULL) {
+			if (zend_is_unwind_exit(exception)
+					|| zend_is_graceful_exit(exception)) {
+				OBJ_RELEASE(Z_OBJ_P(fast_call));
+			} else {
+				zend_exception_set_previous(exception, Z_OBJ_P(fast_call));
+			}
+			Z_OBJ_P(fast_call) = NULL;
+		}
+	}
+	return SUCCESS;
+}
+
 static zend_native_status zend_native_call_invoke(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
@@ -319,6 +380,11 @@ zend_native_status zend_native_call_invoke_finish_source(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	status = zend_native_call_invoke(caller, cell, return_value);
+	if (status == ZEND_NATIVE_EXCEPTION && EG(exception) != NULL
+			&& zend_native_prepare_finally_exception(
+				caller, do_opline_index) == FAILURE) {
+		status = ZEND_NATIVE_BAILOUT;
+	}
 	if (status != ZEND_NATIVE_RETURNED || return_value == &temporary) {
 		if (!Z_ISUNDEF_P(return_value)) {
 			zval_ptr_dtor(return_value);

@@ -55,6 +55,14 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_USER_CALL_FINISH_SOURCE,
 		ZEND_NATIVE_RUNTIME_EFFECT_ALL,
 		(const void *) zend_native_call_invoke_finish_source},
+	{ZEND_NATIVE_HELPER_FINALLY_ENTER,
+		ZEND_NATIVE_RUNTIME_EFFECT_THROW,
+		(const void *) zend_native_finally_enter},
+	{ZEND_NATIVE_HELPER_FINALLY_CALL, 0,
+		(const void *) zend_native_finally_call},
+	{ZEND_NATIVE_HELPER_FINALLY_RETURN,
+		ZEND_NATIVE_RUNTIME_EFFECT_THROW,
+		(const void *) zend_native_finally_return},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {

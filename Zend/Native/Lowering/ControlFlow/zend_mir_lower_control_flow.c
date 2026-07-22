@@ -126,11 +126,19 @@ bool zend_mir_w04_validate_branch_proofs(
 			}
 			continue;
 		}
-		if (kind == ZEND_MIR_W04_BRANCH_CATCH) {
-			if (opcode.op1.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
-					|| opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
-					|| opcode.result.kind
-						!= ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+		if (kind == ZEND_MIR_W04_BRANCH_CATCH
+				|| kind == ZEND_MIR_W08_BRANCH_FINALLY_CALL
+				|| kind == ZEND_MIR_W08_BRANCH_FINALLY_RETURN) {
+			/*
+			 * FAST_CALL/FAST_RET operands are Zend's private finally-state
+			 * slot and try-table index. They remain source-backed metadata,
+			 * not scalar MIR values.
+			 */
+			if (kind == ZEND_MIR_W04_BRANCH_CATCH
+					&& (opcode.op1.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
+						|| opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
+						|| opcode.result.kind
+							!= ZEND_MIR_SOURCE_OPERAND_UNUSED)) {
 				return false;
 			}
 			continue;
@@ -383,6 +391,24 @@ static bool zend_mir_w04_lower_blocks(
 					&storage->public_map, block.id, &block_id)
 				|| !zend_mir_lowering_context_set_block_id(context, block_id)) {
 			return false;
+		}
+		if ((block.flags & ZEND_MIR_SOURCE_BLOCK_FINALLY_ENTRY) != 0) {
+			zend_mir_instruction_record finally_enter;
+			zend_mir_instruction_id finally_enter_id;
+
+			memset(&finally_enter, 0, sizeof(finally_enter));
+			finally_enter.id = ZEND_MIR_ID_INVALID;
+			finally_enter.block_id = block_id;
+			finally_enter.opcode = ZEND_MIR_OPCODE_FINALLY_ENTER;
+			finally_enter.representation = ZEND_MIR_REPRESENTATION_VOID;
+			finally_enter.result_id = ZEND_MIR_ID_INVALID;
+			finally_enter.frame_state_id = ZEND_MIR_ID_INVALID;
+			finally_enter.source_position_id = block.first_opcode_ordinal;
+			if (mutator->add_instruction == NULL
+					|| !mutator->add_instruction(mutator->context,
+						&finally_enter, &finally_enter_id)) {
+				return false;
+			}
 		}
 		for (j = 0; j < block.opcode_count; j++) {
 			const zend_mir_lowering_provider *provider;
