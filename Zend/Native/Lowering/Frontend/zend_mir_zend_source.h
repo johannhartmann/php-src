@@ -25,6 +25,7 @@
 struct _zend_op_array;
 struct _zend_ssa;
 struct _zend_script;
+union _zend_function;
 
 #define ZEND_MIR_FRONTEND_OPERAND_NONE ZEND_MIR_ID_INVALID
 
@@ -115,6 +116,15 @@ bool zend_mir_zend_source_call_view(
 bool zend_mir_zend_source_call_target_resolver(
 	const zend_mir_zend_source *source,
 	zend_mir_source_call_target_resolver *out);
+
+/*
+ * Return the process-local function backing an exact internal target. The
+ * pointer is valid only while the source adapter and its script are alive;
+ * it is never copied into MIR or used as persistent identity.
+ */
+const union _zend_function *zend_mir_zend_source_internal_function(
+	const zend_mir_zend_source *source,
+	zend_mir_source_call_target_id target_id);
 
 /*
  * Return the exact declared type of a process-local W05 direct-user target.

@@ -1729,7 +1729,8 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 	const zend_ssa *ssa,
 	const zend_mir_lowering_module_ops *module_ops,
 	zend_mir_diagnostic_sink *diagnostics,
-	bool w07_execution)
+	bool w07_execution,
+	bool w08_execution)
 {
 	zend_mir_w03_integration integration;
 	zend_mir_frontend_diagnostic frontend_diagnostic;
@@ -1752,7 +1753,10 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 		return zend_mir_w05_integration_result(
 			ZEND_MIR_LOWERING_REJECTED, ZEND_MIRL_INVALID_SOURCE);
 	}
-	status = w07_execution
+	status = w08_execution
+		? zend_mir_zend_source_preflight_w08(
+			script, op_array, ssa, &frontend_diagnostic)
+		: w07_execution
 		? zend_mir_zend_source_preflight_w07(
 			script, op_array, ssa, &frontend_diagnostic)
 		: zend_mir_zend_source_preflight_w05(
@@ -1835,7 +1839,10 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 		return zend_mir_w05_integration_result(
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_INVALID_SOURCE);
 	}
-	result = w07_execution
+	result = w08_execution
+		? zend_mir_lower_w08_zend_source(
+			&integration.lowering_context, NULL, &map, &calls, &resolver, NULL)
+		: w07_execution
 		? zend_mir_lower_w07_zend_source(
 			&integration.lowering_context, NULL, &map, &calls, &resolver, NULL)
 		: zend_mir_lower_w05_zend_source(
@@ -1852,7 +1859,7 @@ zend_mir_w05_lowering_result zend_mir_lower_w05_zend_op_array(
 	zend_mir_diagnostic_sink *diagnostics)
 {
 	return zend_mir_lower_direct_user_op_array(
-		script, op_array, ssa, module_ops, diagnostics, false);
+		script, op_array, ssa, module_ops, diagnostics, false, false);
 }
 
 zend_mir_w05_lowering_result zend_mir_lower_w07_zend_op_array(
@@ -1863,7 +1870,18 @@ zend_mir_w05_lowering_result zend_mir_lower_w07_zend_op_array(
 	zend_mir_diagnostic_sink *diagnostics)
 {
 	return zend_mir_lower_direct_user_op_array(
-		script, op_array, ssa, module_ops, diagnostics, true);
+		script, op_array, ssa, module_ops, diagnostics, true, false);
+}
+
+zend_mir_w08_lowering_result zend_mir_lower_w08_zend_op_array(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	const zend_mir_lowering_module_ops *module_ops,
+	zend_mir_diagnostic_sink *diagnostics)
+{
+	return zend_mir_lower_direct_user_op_array(
+		script, op_array, ssa, module_ops, diagnostics, true, true);
 }
 
 static zend_mir_w06_lowering_result zend_mir_w06_integration_result(

@@ -137,17 +137,18 @@ zend_result zend_native_call_set_zval_argument(
 	return SUCCESS;
 }
 
-static const zval *zend_native_source_argument(
-	zend_execute_data *caller, uint32_t send_opline_index)
+static zval *zend_native_source_argument(
+	zend_execute_data *caller, uint32_t send_opline_index, bool *mutable_value)
 {
 	const zend_op *send;
 
-	if (caller == NULL || caller->func == NULL
+	if (mutable_value == NULL || caller == NULL || caller->func == NULL
 			|| caller->func->type != ZEND_USER_FUNCTION
 			|| send_opline_index >= caller->func->op_array.last) {
 		return NULL;
 	}
 	send = &caller->func->op_array.opcodes[send_opline_index];
+	*mutable_value = false;
 	switch (send->opcode) {
 		case ZEND_SEND_VAL:
 		case ZEND_SEND_VAL_EX:
@@ -160,10 +161,11 @@ static const zval *zend_native_source_argument(
 	}
 	switch (send->op1_type) {
 		case IS_CONST:
-			return RT_CONSTANT(send, send->op1);
+			return (zval *) RT_CONSTANT(send, send->op1);
 		case IS_CV:
 		case IS_VAR:
 		case IS_TMP_VAR:
+			*mutable_value = true;
 			return ZEND_CALL_VAR(caller, send->op1.var);
 		default:
 			return NULL;
@@ -176,11 +178,24 @@ zend_result zend_native_call_set_source_argument(
 	uint32_t send_opline_index,
 	zend_native_call_argument_mode mode)
 {
-	const zval *value = zend_native_source_argument(
-		caller, send_opline_index);
+	bool mutable_value;
+	zval *value = zend_native_source_argument(
+		caller, send_opline_index, &mutable_value);
 
 	if (value == NULL) {
 		return FAILURE;
+	}
+	/*
+	 * SEND_VAR_EX and SEND_REF materialize a reference in the canonical
+	 * caller slot when the resolved parameter requires one.  The native
+	 * path must perform the same mutation before the argument is copied into
+	 * the internal call frame; literals can never become by-reference args.
+	 */
+	if (mode == ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE && !Z_ISREF_P(value)) {
+		if (!mutable_value) {
+			return FAILURE;
+		}
+		ZVAL_MAKE_REF(value);
 	}
 	return zend_native_call_set_zval_argument(
 		caller, ordinal, value, mode);

@@ -187,6 +187,12 @@ zend_mir_lowering_status zend_mir_zend_source_preflight_w07(
 	const zend_ssa *ssa,
 	zend_mir_frontend_diagnostic *diagnostic);
 
+zend_mir_lowering_status zend_mir_zend_source_preflight_w08(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	zend_mir_frontend_diagnostic *diagnostic);
+
 zend_mir_lowering_status zend_mir_zend_source_init_w05_projection(
 	zend_mir_zend_source *source,
 	const zend_op_array *projected_op_array,
