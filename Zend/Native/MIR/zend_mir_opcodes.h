@@ -20,7 +20,8 @@
 	X(UNREACHABLE, "unreachable", 9)
 
 #define ZEND_MIR_CALL_OPCODE_CATALOG(X) \
-	X(CALL_DIRECT_USER, "call_direct_user", 41)
+	X(CALL_DIRECT_USER, "call_direct_user", 41) \
+	X(CALL_DIRECT_INTERNAL, "call_direct_internal", 48)
 
 #define ZEND_MIR_VALUE_OPCODE_CATALOG(X) \
 	X(STORAGE_BIND, "storage_bind", 42) \
@@ -76,6 +77,7 @@ typedef enum _zend_mir_opcode {
 	ZEND_MIR_OPCODE_COUNT = 41,
 	ZEND_MIR_W05_OPCODE_COUNT = 42,
 	ZEND_MIR_W06_OPCODE_COUNT = 48,
+	ZEND_MIR_W08_OPCODE_COUNT = 49,
 	ZEND_MIR_OPCODE_INVALID = -1
 } zend_mir_opcode;
 #undef ZEND_MIR_OPCODE_ENUM
@@ -136,5 +138,9 @@ ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_STORAGE_BIND == ZEND_MIR_W05_OPCODE_COUNT
 	"W06 value opcodes begin after the frozen W05 boundary");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W06_OPCODE_COUNT == ZEND_MIR_OPCODE_SEPARATION_PLAN + 1,
 	"W06 value opcodes have an additive table boundary");
+ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL == ZEND_MIR_W06_OPCODE_COUNT,
+	"W08 internal-call opcode begins after the frozen W06 boundary");
+ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W08_OPCODE_COUNT == ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL + 1,
+	"W08 internal-call opcode has an additive table boundary");
 
 #endif /* ZEND_MIR_OPCODES_H */

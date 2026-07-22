@@ -735,7 +735,9 @@ static bool zend_mir_add_frame_slot(void *context,
 			|| slot->materialization >= ZEND_MIR_MATERIALIZATION_COUNT
 			|| slot->ownership < 0
 			|| slot->ownership >= ZEND_MIR_FRAME_SLOT_OWNERSHIP_COUNT
-			|| (slot->materialization == ZEND_MIR_MATERIALIZATION_UNDEF
+			|| ((slot->materialization == ZEND_MIR_MATERIALIZATION_UNDEF
+					|| slot->materialization
+						== ZEND_MIR_MATERIALIZATION_SOURCE_ZVAL)
 				? zend_mir_id_is_valid(slot->value_id)
 				: !zend_mir_module_find_value(
 					module, slot->value_id, NULL))) {
@@ -1022,9 +1024,11 @@ static bool zend_mir_core_stage_call_target(
 	}
 	staging = &module->call_staging;
 	if (staging->committed || target->id != staging->target_count
-			|| target->kind != ZEND_MIR_CALL_TARGET_DIRECT_USER
+			|| (target->kind != ZEND_MIR_CALL_TARGET_DIRECT_USER
+				&& target->kind != ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL)
 			|| !zend_mir_id_is_valid(target->function_symbol_id)
-			|| !zend_mir_id_is_valid(target->op_array_id)
+			|| (target->kind == ZEND_MIR_CALL_TARGET_DIRECT_USER
+				&& !zend_mir_id_is_valid(target->op_array_id))
 			|| !zend_mir_core_grow_staging(
 				(void **) &staging->targets, staging->target_count,
 				&staging->target_capacity, sizeof(*staging->targets))) {
@@ -1047,9 +1051,20 @@ static bool zend_mir_core_stage_call_argument(
 	}
 	staging = &module->call_staging;
 	if (staging->committed || argument->id != staging->argument_count
+			|| argument->ownership < ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR
 			|| argument->ownership
-				!= ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR
-			|| !zend_mir_module_find_value(module, argument->value_id, NULL)
+				> ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
+			|| (argument->ownership == ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR
+				? !zend_mir_module_find_value(
+					module, argument->value_id, NULL)
+				: (zend_mir_id_is_valid(argument->value_id)
+					|| argument->source_mode < ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE
+					|| argument->source_mode
+						> ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_REFERENCE
+					|| argument->source_operand.kind
+						< ZEND_MIR_SOURCE_OPERAND_LITERAL
+					|| argument->source_operand.kind
+						> ZEND_MIR_SOURCE_OPERAND_SSA))
 			|| !zend_mir_core_grow_staging(
 				(void **) &staging->arguments, staging->argument_count,
 				&staging->argument_capacity, sizeof(*staging->arguments))) {
@@ -1101,6 +1116,9 @@ static bool zend_mir_core_stage_call_site(
 	staging = &module->call_staging;
 	if (staging->committed || site->id != staging->site_count
 			|| site->target_id >= staging->target_count
+			|| (staging->targets[site->target_id].kind
+					== ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL
+				&& zend_mir_id_is_valid(site->result_id))
 			|| (zend_mir_id_is_valid(site->result_id)
 				&& !zend_mir_module_find_value(
 					module, site->result_id, NULL))
@@ -1195,7 +1213,9 @@ static bool zend_mir_core_append_call_instruction(
 	uint32_t result_index;
 	uint32_t index;
 
-	if (site->arguments.count != 0) {
+	if (staging->targets[site->target_id].kind
+			== ZEND_MIR_CALL_TARGET_DIRECT_USER
+			&& site->arguments.count != 0) {
 		operands = zend_mir_arena_allocate(
 			&module->arena,
 			(size_t) site->arguments.count * sizeof(*operands),
@@ -1213,7 +1233,10 @@ static bool zend_mir_core_append_call_instruction(
 	memset(instruction, 0, sizeof(*instruction));
 	instruction->record.id = *instruction_count;
 	instruction->record.block_id = block_id;
-	instruction->record.opcode = ZEND_MIR_OPCODE_CALL_DIRECT_USER;
+	instruction->record.opcode = staging->targets[site->target_id].kind
+		== ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL
+		? ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL
+		: ZEND_MIR_OPCODE_CALL_DIRECT_USER;
 	if (zend_mir_id_is_valid(site->result_id)) {
 		if (!zend_mir_module_find_value(
 				module, site->result_id, &result_index)) {
@@ -1242,10 +1265,14 @@ static bool zend_mir_core_append_call_instruction(
 	instruction->record.writes = site->writes;
 	instruction->record.barriers = site->barriers;
 	instruction->record.ownership_actions =
-		ZEND_MIR_OWNERSHIP_ACTION_MASK(ZEND_MIR_OWNERSHIP_ACTION_BORROW);
+		instruction->record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL
+		? ZEND_MIR_OWNERSHIP_ACTION_MASK(
+			ZEND_MIR_OWNERSHIP_ACTION_COPY_ADDREF)
+		: ZEND_MIR_OWNERSHIP_ACTION_MASK(
+			ZEND_MIR_OWNERSHIP_ACTION_BORROW);
 	instruction->operands = operands;
-	instruction->operand_count = site->arguments.count;
-	instruction->operand_capacity = site->arguments.count;
+	instruction->operand_count = operands != NULL ? site->arguments.count : 0;
+	instruction->operand_capacity = instruction->operand_count;
 	site->instruction_id = *instruction_count;
 	(*instruction_count)++;
 	return true;
@@ -1306,6 +1333,7 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 	bool *inserted;
 	size_t new_instruction_bytes;
 	uint32_t total_slots = module->frame_slots.count;
+	uint32_t total_call_operands = 0;
 	uint32_t total_frames;
 	uint32_t total_instructions;
 	uint32_t next_slot_id = 0;
@@ -1338,11 +1366,21 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 				"invalid W05 call-site shape");
 		}
 		total_slots += site->arguments.count * 2 + 1;
+		if (staging->targets[site->target_id].kind
+				== ZEND_MIR_CALL_TARGET_DIRECT_USER) {
+			if (site->arguments.count
+					> UINT32_MAX - total_call_operands) {
+				return zend_mir_module_fail(module,
+					ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
+					"call operand count overflow");
+			}
+			total_call_operands += site->arguments.count;
+		}
 	}
 	total_frames = module->frame_states.count + staging->site_count;
 	total_instructions = module->instructions.count + staging->site_count;
 	if (module->operand_count > module->limits.operands
-			|| staging->argument_count
+			|| total_call_operands
 				> module->limits.operands - module->operand_count
 			|| !zend_mir_checked_multiply_size(
 				total_instructions, sizeof(*new_instructions),
@@ -1410,6 +1448,8 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 	}
 	for (site_index = 0; site_index < staging->site_count; site_index++) {
 		zend_mir_call_site_ref *site = &staging->sites[site_index];
+		const bool internal_call = staging->targets[site->target_id].kind
+			== ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL;
 		uint32_t caller_offset = module->frame_slots.count;
 		uint32_t argument_index;
 		uint32_t pending_slot_id;
@@ -1433,7 +1473,9 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 			slot->kind = ZEND_MIR_FRAME_SLOT_KIND_ARGUMENT;
 			slot->representation =
 				ZEND_MIR_FRAME_SLOT_REPRESENTATION_CANONICAL_ZVAL;
-			slot->materialization = ZEND_MIR_MATERIALIZATION_MATERIALIZED;
+			slot->materialization = internal_call
+				? ZEND_MIR_MATERIALIZATION_SOURCE_ZVAL
+				: ZEND_MIR_MATERIALIZATION_MATERIALIZED;
 			slot->ownership = ZEND_MIR_FRAME_SLOT_OWNERSHIP_CALLER_OWNED;
 		}
 		pending_slot_id = next_slot_id++;
@@ -1469,14 +1511,19 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 			slot->kind = ZEND_MIR_FRAME_SLOT_KIND_ARGUMENT;
 			slot->representation =
 				ZEND_MIR_FRAME_SLOT_REPRESENTATION_CANONICAL_ZVAL;
-			slot->materialization = ZEND_MIR_MATERIALIZATION_MATERIALIZED;
-			slot->ownership = ZEND_MIR_FRAME_SLOT_OWNERSHIP_BORROWED;
+			slot->materialization = internal_call
+				? ZEND_MIR_MATERIALIZATION_SOURCE_ZVAL
+				: ZEND_MIR_MATERIALIZATION_MATERIALIZED;
+			slot->ownership = internal_call
+				? ZEND_MIR_FRAME_SLOT_OWNERSHIP_FRAME_OWNED
+				: ZEND_MIR_FRAME_SLOT_OWNERSHIP_BORROWED;
 		}
 		zend_mir_core_init_frame_state(
 			&frames[module->frame_states.count++], caller_frame_id,
 			site->caller_frame.function_id,
 			ZEND_MIR_ID_INVALID, opline, caller_span,
-			ZEND_MIR_SAFEPOINT_CLASS_USER_CALL);
+			internal_call ? ZEND_MIR_SAFEPOINT_CLASS_INTERNAL_CALL
+				: ZEND_MIR_SAFEPOINT_CLASS_USER_CALL);
 		site->caller_frame.frame_state_id = caller_frame_id;
 		site->caller_frame.slots = caller_span;
 		site->caller_frame.pending_call_slot_id = pending_slot_id;
@@ -1522,7 +1569,7 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 	module->instructions.items = new_instructions;
 	module->instructions.count = total_instructions;
 	module->instructions.capacity = total_instructions;
-	module->operand_count += staging->argument_count;
+	module->operand_count += total_call_operands;
 	if (staging->target_count != 0) {
 		memcpy(module->call_targets.items, staging->targets,
 			(size_t) staging->target_count * sizeof(*staging->targets));

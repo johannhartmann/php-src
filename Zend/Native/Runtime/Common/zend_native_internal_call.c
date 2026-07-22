@@ -137,6 +137,55 @@ zend_result zend_native_call_set_zval_argument(
 	return SUCCESS;
 }
 
+static const zval *zend_native_source_argument(
+	zend_execute_data *caller, uint32_t send_opline_index)
+{
+	const zend_op *send;
+
+	if (caller == NULL || caller->func == NULL
+			|| caller->func->type != ZEND_USER_FUNCTION
+			|| send_opline_index >= caller->func->op_array.last) {
+		return NULL;
+	}
+	send = &caller->func->op_array.opcodes[send_opline_index];
+	switch (send->opcode) {
+		case ZEND_SEND_VAL:
+		case ZEND_SEND_VAL_EX:
+		case ZEND_SEND_VAR:
+		case ZEND_SEND_VAR_EX:
+		case ZEND_SEND_REF:
+			break;
+		default:
+			return NULL;
+	}
+	switch (send->op1_type) {
+		case IS_CONST:
+			return RT_CONSTANT(send, send->op1);
+		case IS_CV:
+		case IS_VAR:
+		case IS_TMP_VAR:
+			return ZEND_CALL_VAR(caller, send->op1.var);
+		default:
+			return NULL;
+	}
+}
+
+zend_result zend_native_call_set_source_argument(
+	zend_execute_data *caller,
+	uint32_t ordinal,
+	uint32_t send_opline_index,
+	zend_native_call_argument_mode mode)
+{
+	const zval *value = zend_native_source_argument(
+		caller, send_opline_index);
+
+	if (value == NULL) {
+		return FAILURE;
+	}
+	return zend_native_call_set_zval_argument(
+		caller, ordinal, value, mode);
+}
+
 zend_native_status zend_native_internal_call_invoke_finish(
 	zend_execute_data *caller,
 	const zend_native_internal_call_cell *cell,
@@ -195,6 +244,44 @@ zend_native_status zend_native_internal_call_invoke_finish(
 	}
 	status = state->status;
 	efree(state);
+	return status;
+}
+
+zend_native_status zend_native_internal_call_invoke_finish_source(
+	zend_execute_data *caller,
+	const zend_native_internal_call_cell *cell,
+	uint32_t do_opline_index)
+{
+	const zend_op *opline;
+	zval temporary;
+	zval *return_value;
+	zend_native_status status;
+
+	if (caller == NULL || caller->func == NULL
+			|| caller->func->type != ZEND_USER_FUNCTION
+			|| do_opline_index >= caller->func->op_array.last) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	opline = &caller->func->op_array.opcodes[do_opline_index];
+	if (opline->opcode != ZEND_DO_ICALL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	caller->opline = opline;
+	if (opline->result_type == IS_UNUSED) {
+		ZVAL_UNDEF(&temporary);
+		return_value = &temporary;
+	} else if (opline->result_type == IS_VAR
+			|| opline->result_type == IS_TMP_VAR) {
+		return_value = ZEND_CALL_VAR(caller, opline->result.var);
+		ZVAL_UNDEF(return_value);
+	} else {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	status = zend_native_internal_call_invoke_finish(
+		caller, cell, return_value);
+	if (return_value == &temporary && !Z_ISUNDEF(temporary)) {
+		zval_ptr_dtor(&temporary);
+	}
 	return status;
 }
 

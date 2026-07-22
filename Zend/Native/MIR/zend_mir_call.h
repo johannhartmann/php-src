@@ -9,11 +9,14 @@
 
 typedef enum _zend_mir_call_target_kind {
 	ZEND_MIR_CALL_TARGET_DIRECT_USER = 0,
+	ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL = 1,
 	ZEND_MIR_CALL_TARGET_KIND_INVALID = -1
 } zend_mir_call_target_kind;
 
 typedef enum _zend_mir_call_argument_ownership {
 	ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR = 0,
+	ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE = 1,
+	ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE = 2,
 	ZEND_MIR_CALL_ARGUMENT_OWNERSHIP_INVALID = -1
 } zend_mir_call_argument_ownership;
 
@@ -73,6 +76,9 @@ typedef struct _zend_mir_call_argument_ref {
 	uint32_t ordinal;
 	zend_mir_value_id value_id;
 	zend_mir_call_argument_ownership ownership;
+	uint32_t send_opline_index;
+	zend_mir_source_call_argument_mode source_mode;
+	zend_mir_source_operand_ref source_operand;
 } zend_mir_call_argument_ref;
 
 /*
@@ -116,6 +122,8 @@ typedef struct _zend_mir_call_site_ref {
 	zend_mir_memory_domain_mask reads;
 	zend_mir_memory_domain_mask writes;
 	zend_mir_barrier_mask barriers;
+	uint32_t source_init_opline_index;
+	uint32_t source_do_opline_index;
 } zend_mir_call_site_ref;
 
 typedef struct _zend_mir_call_view {
