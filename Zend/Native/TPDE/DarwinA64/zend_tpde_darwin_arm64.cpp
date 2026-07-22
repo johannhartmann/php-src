@@ -20,6 +20,13 @@
 # include <pthread.h>
 # include <sys/mman.h>
 # include <unistd.h>
+
+extern "C" void __register_frame(void *);
+extern "C" void __deregister_frame(void *);
+extern "C" void __unw_add_dynamic_eh_frame_section(uintptr_t)
+	__attribute__((weak_import));
+extern "C" void __unw_remove_dynamic_eh_frame_section(uintptr_t)
+	__attribute__((weak_import));
 #endif
 
 namespace {
@@ -842,8 +849,19 @@ struct MappedSection {
 
 struct A64PublishedState {
 	std::vector<MappedSection> sections;
+	void *unwind_section = nullptr;
+	bool unwind_registered = false;
 
 	~A64PublishedState() {
+		if (unwind_registered) {
+			if (__unw_remove_dynamic_eh_frame_section != nullptr) {
+				__unw_remove_dynamic_eh_frame_section(
+					reinterpret_cast<uintptr_t>(unwind_section));
+			} else {
+				__deregister_frame(unwind_section);
+			}
+			unwind_registered = false;
+		}
 		for (const MappedSection &section : sections) {
 			if (section.mapping != nullptr) {
 				munmap(section.mapping, section.mapping_size);
@@ -978,6 +996,8 @@ zend_result zend_tpde_map_darwin_arm64(
 	size_t page_size = static_cast<size_t>(page_size_value);
 	auto *compiled = static_cast<A64ImageState *>(image->target_state);
 	DarwinAssembler &assembler = compiled->compiler.assembler;
+	::tpde::SecRef unwind_ref = assembler.get_default_section(
+		::tpde::SectionKind::EHFrame);
 	auto published = std::make_unique<A64PublishedState>();
 	published->sections.resize(assembler.section_count());
 	bool has_executable = false;
@@ -988,12 +1008,22 @@ zend_result zend_tpde_map_darwin_arm64(
 			::tpde::SecRef{static_cast<uint32_t>(i)});
 		if ((section.flags & DarwinAssembler::SECTION_ALLOC) == 0
 				|| section.size() == 0) continue;
-		if (section.size() > SIZE_MAX - (page_size - 1)) {
+		size_t logical_size = section.size();
+		if (i == unwind_ref.id()) {
+			if (logical_size > SIZE_MAX - sizeof(uint32_t)) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
+					"Darwin unwind section size overflows its terminator");
+				return FAILURE;
+			}
+			logical_size += sizeof(uint32_t);
+		}
+		if (logical_size > SIZE_MAX - (page_size - 1)) {
 			zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
 				"Darwin section size overflows page alignment");
 			return FAILURE;
 		}
-		size_t mapping_size = (section.size() + page_size - 1)
+		size_t mapping_size = (logical_size + page_size - 1)
 			& ~(page_size - 1);
 		bool executable = (section.flags & DarwinAssembler::SECTION_EXEC) != 0;
 		int map_flags = MAP_PRIVATE | MAP_ANON | (executable ? MAP_JIT : 0);
@@ -1101,12 +1131,29 @@ zend_result zend_tpde_map_darwin_arm64(
 			return FAILURE;
 		}
 	}
+	if (!unwind_ref.valid() || unwind_ref.id() >= published->sections.size()
+			|| !assembler.section_present(unwind_ref.id())
+			|| assembler.get_section(unwind_ref).data.empty()
+			|| published->sections[unwind_ref.id()].mapping == nullptr) {
+		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
+			"Darwin TPDE image has no publishable unwind information");
+		return FAILURE;
+	}
+	published->unwind_section = published->sections[unwind_ref.id()].mapping;
+	if (__unw_add_dynamic_eh_frame_section != nullptr) {
+		__unw_add_dynamic_eh_frame_section(
+			reinterpret_cast<uintptr_t>(published->unwind_section));
+	} else {
+		__register_frame(published->unwind_section);
+	}
+	published->unwind_registered = true;
 
 	const MappedSection &entry_section = published->sections[
 		assembler.symbol(entry_ref).section.id()];
 	code->mapping = entry_section.mapping;
 	code->mapping_size = entry_section.mapping_size;
 	code->entry = reinterpret_cast<zend_native_frame_entry_t>(entry);
+	code->unwind_registered = published->unwind_registered;
 	code->target_state = published.release();
 	code->destroy_target_state = destroy_a64_published_state;
 	return SUCCESS;

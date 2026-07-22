@@ -843,6 +843,20 @@ extern "C" bool zend_native_code_is_executable(const zend_native_code *code) {
 	return code != nullptr && code->executable;
 }
 
+extern "C" bool zend_native_code_has_unwind_info(const zend_native_code *code) {
+	return code != nullptr && code->unwind_registered;
+}
+
+extern "C" bool zend_native_code_contains_address(
+		const zend_native_code *code, const void *address) {
+	if (code == nullptr || code->mapping == nullptr || address == nullptr) {
+		return false;
+	}
+	const auto begin = reinterpret_cast<uintptr_t>(code->mapping);
+	const auto candidate = reinterpret_cast<uintptr_t>(address);
+	return candidate >= begin && candidate - begin < code->mapping_size;
+}
+
 extern "C" zend_native_frame_entry_t zend_native_code_frame_entry(
 	const zend_native_code *code) {
 	return code != nullptr ? code->entry : nullptr;

@@ -924,6 +924,7 @@ zend_result zend_tpde_map_linux_x64(
 	code->mapping = mapping;
 	code->mapping_size = mapping_size;
 	code->entry = reinterpret_cast<zend_native_frame_entry_t>(entry);
+	code->unwind_registered = true;
 	code->target_state = published.release();
 	code->destroy_target_state = destroy_x64_published_state;
 	return SUCCESS;
