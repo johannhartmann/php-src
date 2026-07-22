@@ -1,5 +1,7 @@
 #include "zend_mir_zend_source_internal.h"
 
+#include "../../../zend_object_handlers.h"
+
 typedef struct _zend_mir_frontend_call_target {
 	zend_mir_source_call_target_ref record;
 	const zend_function *function;
@@ -541,9 +543,7 @@ static bool zend_mir_frontend_w05_original_result_slot(
 			opline_index++) {
 		const zend_op *opline = &original_op_array->opcodes[opline_index];
 
-		if (original_ssa->ops[opline_index].result_def
-					!= (int) ssa_variable_id
-				|| (opline->opcode != ZEND_DO_UCALL
+		if ((opline->opcode != ZEND_DO_UCALL
 					&& opline->opcode != ZEND_DO_FCALL
 					&& opline->opcode != ZEND_DO_ICALL)
 				|| !zend_mir_frontend_decode_slot(
@@ -551,8 +551,24 @@ static bool zend_mir_frontend_w05_original_result_slot(
 					slot, slot_kind)) {
 			continue;
 		}
-		return *slot_kind != ZEND_MIR_SOURCE_SLOT_CV
-			&& *slot == physical_slot;
+		if (*slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+				|| *slot != physical_slot) {
+			continue;
+		}
+		if (original_ssa->ops[opline_index].result_def
+				== (int) ssa_variable_id) {
+			return true;
+		}
+		/* Zend's optimizer may leave a dead, definitionsless SSA version for
+		 * a temporary that is physically owned by the call result. It maps to
+		 * that same source slot but publishes no independent value fact. */
+		if (original_ssa->vars[ssa_variable_id].definition == -1
+				&& original_ssa->vars[ssa_variable_id].definition_phi == NULL
+				&& original_ssa->vars[ssa_variable_id].use_chain == -1
+				&& original_ssa->vars[ssa_variable_id].phi_use_chain == NULL
+				&& original_ssa->vars[ssa_variable_id].sym_use_chain == NULL) {
+			return true;
+		}
 	}
 	return false;
 }
@@ -1263,6 +1279,62 @@ static zend_function *zend_mir_frontend_canonical_script_function(
 	return candidate;
 }
 
+zend_function *zend_mir_zend_source_resolve_internal_call(
+	const zend_script *script, const zend_op_array *op_array,
+	const zend_ssa *ssa, uint32_t init_opline_index)
+{
+	const zend_op *opline;
+	const zend_ssa_var_info *receiver_info;
+	const zend_class_entry *receiver_class;
+	zend_function *function;
+	bool is_prototype = false;
+	int receiver_ssa;
+
+	if (op_array == NULL || ssa == NULL || ssa->ops == NULL
+			|| ssa->var_info == NULL || init_opline_index >= op_array->last) {
+		return NULL;
+	}
+	opline = &op_array->opcodes[init_opline_index];
+	function = zend_optimizer_get_called_func(
+		script, op_array, (zend_op *) opline, &is_prototype);
+	if (function != NULL && !is_prototype
+			&& function->type == ZEND_INTERNAL_FUNCTION) {
+		return function;
+	}
+	if (opline->opcode != ZEND_INIT_METHOD_CALL
+			|| opline->op1_type == IS_UNUSED
+			|| opline->op2_type != IS_CONST
+			|| Z_TYPE_P(CRT_CONSTANT(opline->op2)) != IS_STRING
+			|| Z_TYPE_P(CRT_CONSTANT(opline->op2) + 1) != IS_STRING) {
+		return NULL;
+	}
+	receiver_ssa = ssa->ops[init_opline_index].op1_use;
+	if (receiver_ssa < 0 || receiver_ssa >= ssa->vars_count) {
+		return NULL;
+	}
+	receiver_info = &ssa->var_info[receiver_ssa];
+	receiver_class = receiver_info->ce;
+	if (receiver_class == NULL || receiver_class->default_object_handlers == NULL
+			|| receiver_class->default_object_handlers->get_method
+				!= zend_std_get_method) {
+		return NULL;
+	}
+	function = zend_hash_find_ptr(
+		&receiver_class->function_table,
+		Z_STR_P(CRT_CONSTANT(opline->op2) + 1));
+	if (function == NULL || function->type != ZEND_INTERNAL_FUNCTION
+			|| (function->common.fn_flags
+				& (ZEND_ACC_ABSTRACT | ZEND_ACC_STATIC | ZEND_ACC_PUBLIC))
+				!= ZEND_ACC_PUBLIC) {
+		return NULL;
+	}
+	if (receiver_info->is_instanceof
+			&& (receiver_class->ce_flags & ZEND_ACC_FINAL) == 0) {
+		return NULL;
+	}
+	return function;
+}
+
 static zend_mir_source_call_target_kind
 zend_mir_frontend_target_kind(uint8_t opcode, const zend_function *function,
 	const zend_script *script, const zend_op_array *caller)
@@ -1413,6 +1485,7 @@ static bool zend_mir_frontend_snapshot_target(
 static bool zend_mir_frontend_target_for_call(
 	zend_mir_frontend_call_inventory *inventory,
 	const zend_script *script, const zend_op_array *op_array,
+	const zend_ssa *ssa, uint32_t opline_index,
 	const zend_op *opline, zend_mir_source_call_target_id *target_id)
 {
 	zend_function *function = NULL;
@@ -1431,6 +1504,10 @@ static bool zend_mir_frontend_target_for_call(
 			script, op_array, (zend_op *) opline, &is_prototype);
 		if (is_prototype) {
 			function = NULL;
+		}
+		if (function == NULL && opline->opcode == ZEND_INIT_METHOD_CALL) {
+			function = zend_mir_zend_source_resolve_internal_call(
+				script, op_array, ssa, opline_index);
 		}
 		function = zend_mir_frontend_canonical_script_function(
 			script, function);
@@ -1573,7 +1650,8 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 
 			if (inventory->site_count >= op_array->last
 					|| !zend_mir_frontend_target_for_call(
-						inventory, script, op_array, opline, &target_id)) {
+						inventory, script, op_array, ssa, index,
+						opline, &target_id)) {
 				goto allocation_failed;
 			}
 			site = &inventory->sites[inventory->site_count];
@@ -2233,7 +2311,8 @@ static zend_mir_lowering_status zend_mir_zend_source_preflight_direct_calls(
 						|| (init_opcode != ZEND_INIT_FCALL
 							&& init_opcode != ZEND_INIT_METHOD_CALL
 							&& init_opcode != ZEND_INIT_STATIC_METHOD_CALL)
-						|| do_opcode != ZEND_DO_ICALL))
+						|| (do_opcode != ZEND_DO_ICALL
+							&& do_opcode != ZEND_DO_FCALL)))
 					|| (target->kind
 						== ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
 						&& (init_opcode != ZEND_INIT_FCALL

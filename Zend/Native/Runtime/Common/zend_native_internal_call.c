@@ -31,7 +31,7 @@ zend_result zend_native_internal_call_cell_init(
 {
 	if (cell == NULL || function == NULL
 			|| function->type != ZEND_INTERNAL_FUNCTION
-			|| receiver_kind > ZEND_NATIVE_INTERNAL_RECEIVER_CALLED_SCOPE) {
+			|| receiver_kind > ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT) {
 		return FAILURE;
 	}
 	if (function->common.scope == NULL
@@ -57,6 +57,7 @@ zend_result zend_native_internal_call_begin(
 {
 	zend_execute_data *call;
 	zend_function *function;
+	const zend_op *source_opline;
 	void *object_or_called_scope = NULL;
 	uint32_t call_info = ZEND_CALL_NESTED_FUNCTION;
 
@@ -71,6 +72,7 @@ zend_result zend_native_internal_call_begin(
 	if (!zend_native_internal_count_is_valid(function, argument_count)) {
 		return FAILURE;
 	}
+	source_opline = &caller->func->op_array.opcodes[source_opline_index];
 	if (cell->receiver_kind == ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS) {
 		if ((ZEND_CALL_INFO(caller) & ZEND_CALL_HAS_THIS) == 0
 				|| !instanceof_function(
@@ -82,6 +84,26 @@ zend_result zend_native_internal_call_begin(
 	} else if (cell->receiver_kind
 			== ZEND_NATIVE_INTERNAL_RECEIVER_CALLED_SCOPE) {
 		object_or_called_scope = cell->called_scope;
+	} else if (cell->receiver_kind
+			== ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT) {
+		zval *receiver;
+
+		if (source_opline->opcode != ZEND_INIT_METHOD_CALL
+				|| (source_opline->op1_type != IS_CV
+					&& source_opline->op1_type != IS_VAR
+					&& source_opline->op1_type != IS_TMP_VAR)) {
+			return FAILURE;
+		}
+		receiver = ZEND_CALL_VAR(caller, source_opline->op1.var);
+		ZVAL_DEREF(receiver);
+		if (Z_TYPE_P(receiver) != IS_OBJECT
+				|| !instanceof_function(
+					Z_OBJCE_P(receiver), function->common.scope)) {
+			return FAILURE;
+		}
+		object_or_called_scope = Z_OBJ_P(receiver);
+		GC_ADDREF((zend_object *) object_or_called_scope);
+		call_info |= ZEND_CALL_HAS_THIS | ZEND_CALL_RELEASE_THIS;
 	}
 
 #ifdef ZEND_CHECK_STACK_LIMIT
@@ -291,6 +313,9 @@ zend_native_status zend_native_internal_call_invoke_finish(
 	}
 	EG(current_execute_data) = state->caller;
 	zend_vm_stack_free_args(state->call);
+	if ((ZEND_CALL_INFO(state->call) & ZEND_CALL_RELEASE_THIS) != 0) {
+		OBJ_RELEASE(Z_OBJ(state->call->This));
+	}
 	zend_vm_stack_free_call_frame(state->call);
 	state->caller->call = NULL;
 	if (state->status != ZEND_NATIVE_RETURNED
@@ -319,7 +344,8 @@ zend_native_status zend_native_internal_call_invoke_finish_source(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	opline = &caller->func->op_array.opcodes[do_opline_index];
-	if (opline->opcode != ZEND_DO_ICALL) {
+	if (opline->opcode != ZEND_DO_ICALL
+			&& opline->opcode != ZEND_DO_FCALL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	caller->opline = opline;
@@ -357,7 +383,8 @@ uint64_t zend_native_call_read_source_scalar(
 		goto mismatch;
 	}
 	opline = &caller->func->op_array.opcodes[do_opline_index];
-	if (opline->opcode != ZEND_DO_ICALL
+	if ((opline->opcode != ZEND_DO_ICALL
+			&& opline->opcode != ZEND_DO_FCALL)
 			|| (opline->result_type != IS_VAR
 				&& opline->result_type != IS_TMP_VAR)) {
 		goto mismatch;
