@@ -1,13 +1,25 @@
-# W06 value-model contracts
+# Native value semantics
 
-This subtree owns the target-neutral W06 storage, reference, alias, ownership,
-and separation contracts. Records must remain pointer-free and use stable MIR
-IDs. W06 models transitions but does not execute reference binding, releases,
-destructors, container clones, calls, or target code.
+This subtree owns the single target-neutral value implementation used by native
+execution. It must represent and execute canonical zvals, references, aliases,
+ownership transfers, separation, cleanup, strings, arrays, iterators, and
+argument containers. It is not a model-only layer.
 
-Unknown aliasing is `may_alias`; `no_alias` always requires an explicit proof.
-Indirect slots and reference cells are distinct concepts. All plans must be
-complete before any MIR mutation, and every failed operation is failure-atomic.
-
-Production sources are C11. Public internal headers must also compile as C++20.
-Do not change W01-W05 IDs, record layouts, dumps, or verifier meanings.
+- Replace or simplify historical W06 records when they obstruct executable
+  semantics; do not create a second parallel value system.
+- Valid value and container operations in the active implementation scope must
+  lower to executable MIR. Modeling-only success, `codegen_eligible` barriers,
+  and deliberate compile rejection are not implementations.
+- Keep persistent MIR identity pointer-free and target-neutral. Process-local
+  runtime bindings may use Zend pointers while they are alive.
+- Preserve exact Zend addref, move, release, destructor, reference, COW, GC-root,
+  warning, exception, and bailout ordering. Indirect slots and reference cells
+  remain distinct concepts.
+- Use bounded Runtime helpers for Zend storage and container operations when
+  inline expansion is inappropriate. Helpers must never dispatch VM opcodes or
+  provide a production VM fallback.
+- Keep multi-opcode constructs such as `OP_DATA`, ropes, calls, and iterator
+  pairs atomic during lowering and failure.
+- Production sources are C11. C ABI headers must also compile as C++20.
+- Extend direct execution tests and the existing native test matrix; do not add
+  wave profiles, ownership manifests, receipts, or value-specific gate systems.

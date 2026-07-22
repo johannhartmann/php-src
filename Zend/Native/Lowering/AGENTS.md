@@ -1,17 +1,23 @@
-# W04 lowering rules
+# Native lowering rules
 
-- Keep the lowering source view independent of PHP runtime structs and raw
-  pointers.
-- Accept an opcode only when every proof named by the generated W03 profile is
-  present. Missing or contradictory facts are a hard failure.
-- W04 providers must additionally satisfy every CFG, branch-order, PHI-order,
-  reducibility, and edge-statepoint proof named by the generated W04 profile.
-- Providers must have disjoint source-opcode claims and deterministic ordering.
-- W03 lowering results remain failure-atomic after finalization and verifier
-  stages 1 and 2. W04 results may escape only after verifier stage 3 also
-  succeeds while the source view and process-local control-flow map are alive.
-- Source successor order, predecessor order, and PHI input order are semantic.
-  Never sort or reconstruct these tables from pointers.
-- Keep source-to-MIR mappings process-local. Persistent MIR records must not
-  contain source pointers.
-- Do not add a VM or interpreter fallback.
+- Keep persistent lowering records independent of PHP runtime pointers. A
+  process-local source view may inspect Zend structures while lowering.
+- Lower every valid operation in the active language scope to executable MIR.
+  Historical generated profiles, provider allowlists, wave ownership, and
+  `codegen_eligible` flags are not acceptance gates.
+- Validate the facts required by the operation itself. Missing or contradictory
+  semantic facts fail atomically; they must not be replaced by permissive
+  defaults, model-only success, or VM fallback.
+- Lower complete Zend constructs atomically, including calls, `OP_DATA`, ropes,
+  foreach pairs, exception regions, and other coupled opcode sequences.
+- Providers must have deterministic, non-conflicting claims. Source successor,
+  predecessor, and PHI input order are semantic and must not be reconstructed
+  from pointer order.
+- Keep source-to-MIR mappings and Zend pointers process-local. Persistent MIR
+  records contain stable IDs only.
+- Preserve frame states, roots, cleanup obligations, exceptional edges, and
+  failure atomicity until executable code has been produced.
+- Extend existing direct execution tests and CI. Do not introduce new wave
+  profiles, ownership manifests, gate frameworks, receipts, ledgers, or status
+  dashboards.
+- Do not add a VM, opcode-dispatch helper, interpreter, or production fallback.

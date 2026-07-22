@@ -13,3 +13,9 @@ instructions.
 - Put architecture-specific lowering and target code only under `TPDE/`.
 - Keep `MIR/`, `TPDE/`, and `Runtime/` as explicit architectural boundaries and
   read their `AGENTS.md` before changing them.
+- Historical wave boundaries, model-only restrictions, generated profiles, and
+  `codegen_eligible` barriers are not architectural requirements. Refactor or
+  remove them when they prevent complete native execution.
+- Extend the existing native build, PHPT, differential, and CI paths. Do not add
+  per-wave gate frameworks, ownership manifests, receipts, ledgers, seals, or
+  status infrastructure.
