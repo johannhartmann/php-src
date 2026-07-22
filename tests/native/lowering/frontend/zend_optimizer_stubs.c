@@ -3,8 +3,43 @@
 #include <strings.h>
 
 #include "Zend/Native/Lowering/Frontend/zend_mir_zend_source.h"
-#include "Zend/Optimizer/zend_ssa.h"
 #include "Zend/zend_compile.h"
+#include "Zend/Optimizer/zend_dfg.h"
+#include "Zend/Optimizer/zend_ssa.h"
+#include "Zend/zend_alloc.h"
+#include "Zend/zend_execute.h"
+
+#undef _emalloc
+#undef _efree
+
+void *ZEND_FASTCALL _emalloc(size_t size)
+{
+	return malloc(size);
+}
+
+void ZEND_FASTCALL _efree(void *pointer)
+{
+	free(pointer);
+}
+
+void zend_dfg_add_use_def_op(
+	const zend_op_array *op_array, const zend_op *opline,
+	uint32_t build_flags, zend_bitset use, zend_bitset def)
+{
+	uint32_t variable;
+
+	(void) opline;
+	(void) build_flags;
+	(void) use;
+	if (op_array == NULL || op_array->last_var > UINT32_MAX - op_array->T) {
+		return;
+	}
+	/* The W03-only harness has no runtime class table. Conservatively treating
+	 * every slot as redefined keeps W08 catch-receiver discovery fail-closed. */
+	for (variable = 0; variable < op_array->last_var + op_array->T; variable++) {
+		zend_bitset_incl(def, variable);
+	}
+}
 
 #if defined(__GNUC__) && (defined(__i386__) || (defined(__x86_64__) && !defined(__ILP32__)))
 bool ZEND_FASTCALL zend_string_equal_val(const zend_string *s1, const zend_string *s2)
@@ -37,5 +72,14 @@ zend_function *zend_std_get_method(
 	(void) object;
 	(void) method;
 	(void) key;
+	return NULL;
+}
+
+zend_class_entry *zend_fetch_class_by_name(
+	zend_string *class_name, zend_string *lcname, uint32_t fetch_type)
+{
+	(void) class_name;
+	(void) lcname;
+	(void) fetch_type;
 	return NULL;
 }
