@@ -71,7 +71,8 @@ typedef struct _zend_native_internal_call_binding {
 
 typedef enum _zend_native_source_effect_kind {
 	ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR = 1,
-	ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE = 2
+	ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE = 2,
+	ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE = 3
 } zend_native_source_effect_kind;
 
 /*
@@ -84,6 +85,7 @@ typedef struct _zend_native_source_effect {
 	zend_mir_source_position_id source_position_id;
 	zend_native_source_effect_kind kind;
 	zend_mir_scalar_type_mask exact_type;
+	zend_mir_block_id target_block_id;
 } zend_native_source_effect;
 
 zend_result zend_tpde_compile_module(

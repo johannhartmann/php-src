@@ -259,4 +259,11 @@ zend_mir_lowering_status zend_mir_zend_source_init_w09_projection(
 	zend_mir_symbol_id file_symbol_id,
 	zend_mir_frontend_diagnostic *diagnostic);
 
+bool zend_mir_zend_op_array_exception_handler(
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	uint32_t throwing_opline_index,
+	zend_mir_source_block_id *block_id_out,
+	uint32_t *catch_opline_index_out);
+
 #endif /* ZEND_MIR_ZEND_SOURCE_INTERNAL_H */

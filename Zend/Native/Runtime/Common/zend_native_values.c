@@ -918,6 +918,165 @@ typedef enum _zend_native_dim_mode {
 	ZEND_NATIVE_DIM_UNSET
 } zend_native_dim_mode;
 
+static bool zend_native_string_offset(
+	const zval *dimension, int type, zend_long *offset)
+{
+	const zval *value = dimension;
+
+try_again:
+	switch (Z_TYPE_P(value)) {
+		case IS_LONG:
+			*offset = Z_LVAL_P(value);
+			return true;
+		case IS_STRING:
+		{
+			bool trailing_data = false;
+
+			if (is_numeric_string_ex(
+					Z_STRVAL_P(value), Z_STRLEN_P(value), offset, NULL,
+					true, NULL, &trailing_data) == IS_LONG) {
+				if (trailing_data && type != BP_VAR_UNSET) {
+					zend_error(E_WARNING, "Illegal string offset \"%s\"",
+						Z_STRVAL_P(value));
+				}
+				return EG(exception) == NULL;
+			}
+			zend_illegal_container_offset(
+				ZSTR_KNOWN(ZEND_STR_STRING), value, type);
+			return false;
+		}
+		case IS_DOUBLE:
+			zend_error(E_WARNING, "String offset cast occurred");
+			*offset = zend_dval_to_lval_silent(Z_DVAL_P(value));
+			return EG(exception) == NULL;
+		case IS_UNDEF:
+		case IS_NULL:
+		case IS_FALSE:
+		case IS_TRUE:
+			zend_error(E_WARNING, "String offset cast occurred");
+			if (EG(exception) != NULL) {
+				return false;
+			}
+			*offset = zval_get_long((zval *) value);
+			return EG(exception) == NULL;
+		case IS_REFERENCE:
+			value = Z_REFVAL_P(value);
+			goto try_again;
+		default:
+			zend_illegal_container_offset(
+				ZSTR_KNOWN(ZEND_STR_STRING), value, type);
+			return false;
+	}
+}
+
+static bool zend_native_assign_string_offset(
+	zend_execute_data *execute_data, const zend_op *opline,
+	zval *container, zval *dimension, zval *source, zval **assigned)
+{
+	zend_string *string;
+	zend_string *converted = NULL;
+	zend_long offset;
+	size_t source_length;
+	zend_uchar character;
+
+	if (opline->op2_type == IS_UNUSED) {
+		zend_throw_error(NULL, "[] operator not supported for strings");
+		return false;
+	}
+
+	string = Z_STR_P(container);
+	GC_ADDREF(string);
+	if (!zend_native_string_offset(dimension, BP_VAR_W, &offset)) {
+		if (GC_DELREF(string) == 0) {
+			zend_string_efree(string);
+		}
+		return false;
+	}
+	if (GC_DELREF(string) == 0) {
+		zend_string_efree(string);
+		return false;
+	}
+
+	if (offset < -(zend_long) ZSTR_LEN(string)) {
+		zend_error(E_WARNING, "Illegal string offset " ZEND_LONG_FMT, offset);
+		return false;
+	}
+	if (offset < 0) {
+		offset += (zend_long) ZSTR_LEN(string);
+	}
+
+	if (Z_TYPE_P(source) == IS_STRING) {
+		source_length = Z_STRLEN_P(source);
+		character = source_length == 0
+			? 0 : (zend_uchar) Z_STRVAL_P(source)[0];
+	} else {
+		GC_ADDREF(string);
+		converted = zval_try_get_string(source);
+		if (GC_DELREF(string) == 0) {
+			zend_string_efree(string);
+			if (converted != NULL) {
+				zend_string_release_ex(converted, false);
+			}
+			return false;
+		}
+		if (converted == NULL) {
+			return false;
+		}
+		source_length = ZSTR_LEN(converted);
+		character = source_length == 0
+			? 0 : (zend_uchar) ZSTR_VAL(converted)[0];
+		zend_string_release_ex(converted, false);
+	}
+
+	if (source_length == 0) {
+		zend_throw_error(NULL,
+			"Cannot assign an empty string to a string offset");
+		return false;
+	}
+	if (source_length != 1) {
+		GC_ADDREF(string);
+		zend_error(E_WARNING,
+			"Only the first byte will be assigned to the string offset");
+		if (GC_DELREF(string) == 0) {
+			zend_string_efree(string);
+			return false;
+		}
+		if (EG(exception) != NULL) {
+			return false;
+		}
+	}
+
+	Z_STR_P(container) = zend_string_separate(Z_STR_P(container), false);
+	string = Z_STR_P(container);
+
+	if ((size_t) offset >= ZSTR_LEN(string)) {
+		zend_long old_length = (zend_long) ZSTR_LEN(string);
+
+		ZVAL_NEW_STR(container,
+			zend_string_extend(string, (size_t) offset + 1, false));
+		memset(Z_STRVAL_P(container) + old_length, ' ',
+			(size_t) (offset - old_length));
+		Z_STRVAL_P(container)[offset + 1] = '\0';
+	} else {
+		zend_string_forget_hash_val(string);
+	}
+	Z_STRVAL_P(container)[offset] = character;
+
+	if (opline->result_type != IS_UNUSED) {
+		zval *result = zend_native_value_slot(
+			execute_data, opline->result_type, opline->result);
+
+		if (result == NULL) {
+			return false;
+		}
+		ZVAL_CHAR(result, character);
+		*assigned = result;
+	} else {
+		*assigned = NULL;
+	}
+	return true;
+}
+
 static zend_native_status zend_native_value_fetch_dim_impl(
 	zend_execute_data *execute_data, uint32_t source_opline_index,
 	uint8_t expected_opcode, zend_native_dim_mode mode)
@@ -929,6 +1088,7 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 	zval *offset;
 	zval *result;
 	zval *value;
+	zend_long string_offset;
 	bool write;
 
 	if (opline == NULL
@@ -953,6 +1113,34 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 	}
 	if (write && Z_TYPE_P(container) <= IS_FALSE) {
 		ZVAL_ARR(container, zend_new_array(8));
+	}
+	if (Z_TYPE_P(container) == IS_STRING) {
+		if (!write) {
+			offset = zend_native_value_read(execute_data, opline,
+				opline->op2_type, opline->op2);
+			if (offset == NULL) {
+				return ZEND_NATIVE_EXCEPTION;
+			}
+			zend_fetch_dimension_const(result, container, offset,
+				mode == ZEND_NATIVE_DIM_IS ? BP_VAR_IS : BP_VAR_R);
+			if (opline->op1_type == IS_TMP_VAR) {
+				zval_ptr_dtor_nogc(container);
+				ZVAL_UNDEF(container);
+			}
+			return zend_native_value_status();
+		}
+		if (opline->op2_type != IS_UNUSED) {
+			offset = zend_native_value_read(execute_data, opline,
+				opline->op2_type, opline->op2);
+			if (offset == NULL
+					|| !zend_native_string_offset(
+						offset, BP_VAR_RW, &string_offset)) {
+				return ZEND_NATIVE_EXCEPTION;
+			}
+		}
+		zend_wrong_string_offset_error();
+		ZVAL_UNDEF(result);
+		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (Z_TYPE_P(container) != IS_ARRAY) {
 		if (write) {
@@ -1050,6 +1238,7 @@ static zend_native_status zend_native_value_assign_dim_impl(
 	zval computed;
 	zval *assigned;
 	binary_op_type operation;
+	zend_long string_offset;
 
 	if (opline == NULL || source_opline_index + 1 >= execute_data->func->op_array.last
 			|| (data = opline + 1)->opcode != ZEND_OP_DATA
@@ -1058,6 +1247,37 @@ static zend_native_status zend_native_value_assign_dim_impl(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	ZVAL_DEREF(container);
+	if (Z_TYPE_P(container) == IS_STRING) {
+		if (compound) {
+			if (opline->op2_type != IS_UNUSED) {
+				offset = zend_native_value_read(execute_data, opline,
+					opline->op2_type, opline->op2);
+				if (offset == NULL
+						|| !zend_native_string_offset(
+							offset, BP_VAR_RW, &string_offset)) {
+					return ZEND_NATIVE_EXCEPTION;
+				}
+			}
+			zend_wrong_string_offset_error();
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		offset = zend_native_value_read(execute_data, opline,
+			opline->op2_type, opline->op2);
+		if (opline->op2_type != IS_UNUSED && offset == NULL) {
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		if (!zend_native_value_take(execute_data, data,
+				data->op1_type, data->op1, false, &source)) {
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		if (!zend_native_assign_string_offset(execute_data, opline,
+				container, offset, &source, &assigned)) {
+			zval_ptr_dtor_nogc(&source);
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		zval_ptr_dtor_nogc(&source);
+		return zend_native_value_status();
+	}
 	if (Z_TYPE_P(container) <= IS_FALSE) {
 		if (Z_TYPE_P(container) == IS_FALSE) {
 			zend_false_to_array_deprecated();
@@ -1191,6 +1411,26 @@ zend_native_status zend_native_value_isset_isempty_dim(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	ZVAL_DEREF(container);
+	if (Z_TYPE_P(container) == IS_STRING) {
+		zval string_value;
+
+		zend_fetch_dimension_const(
+			&string_value, container, offset, BP_VAR_IS);
+		if (EG(exception) != NULL) {
+			if (!Z_ISUNDEF(string_value)) {
+				zval_ptr_dtor_nogc(&string_value);
+			}
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		if ((opline->extended_value & ZEND_ISEMPTY) != 0) {
+			answer = !i_zend_is_true(&string_value);
+		} else {
+			answer = Z_TYPE(string_value) > IS_NULL;
+		}
+		zval_ptr_dtor_nogc(&string_value);
+		ZVAL_BOOL(result, answer);
+		return ZEND_NATIVE_RETURNED;
+	}
 	if (Z_TYPE_P(container) == IS_ARRAY
 			&& zend_native_array_key_from_zval(
 				offset, opline->op2_type, false, &key)) {
