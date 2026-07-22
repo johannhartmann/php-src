@@ -49,6 +49,7 @@
 #include "Zend/Native/Values/Lowering/zend_mir_value_lowering.h"
 #include "Zend/Native/Lowering/Core/zend_mir_lowering_internal.h"
 #include "Zend/Native/Lowering/Frontend/zend_mir_zend_source.h"
+#include "Zend/Native/Lowering/Frontend/zend_mir_zend_source_internal.h"
 #include "Zend/Native/Lowering/zend_mir_lowering_zend.h"
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
 #include "Zend/Native/Runtime/Common/zend_native_runtime.h"
@@ -155,6 +156,8 @@ typedef struct _native_mir_test_native_function {
 	uint32_t argument_type_count;
 	zend_native_source_effect *source_effects;
 	uint32_t source_effect_count;
+	uint32_t source_effect_capacity;
+	uint32_t *exception_handler_oplines;
 	native_mir_test_module_host module_host;
 	native_mir_test_module_host *module_host_ref;
 	zend_mir_module *module;
@@ -2063,6 +2066,7 @@ static bool native_mir_test_prepare_w07_projection(
 		}
 	}
 	if (echo_count > (UINT32_MAX - (uint32_t) function->ssa.vars_count) / 2
+			|| source->last > UINT32_MAX - echo_count
 			|| source->T > UINT32_MAX - echo_count
 			|| source->last_literal > UINT32_MAX - echo_count
 			|| source->last_literal + echo_count
@@ -2106,9 +2110,11 @@ static bool native_mir_test_prepare_w07_projection(
 	function->projected_ssa_var_info = ecalloc(
 		projected_variable_count == 0 ? 1 : projected_variable_count,
 		sizeof(*function->projected_ssa_var_info));
-	if (echo_count != 0) {
+	function->source_effect_capacity = echo_count + source->last;
+	if (function->source_effect_capacity != 0) {
 		function->source_effects = ecalloc(
-			echo_count, sizeof(*function->source_effects));
+			function->source_effect_capacity,
+			sizeof(*function->source_effects));
 	}
 	if (source->last != 0) {
 		memcpy(function->projected_opcodes, source->opcodes,
@@ -2215,6 +2221,7 @@ static bool native_mir_test_prepare_w07_projection(
 				? ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE
 				: ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR;
 			effect->exact_type = type;
+			effect->target_block_id = ZEND_MIR_ID_INVALID;
 			if (!zend_mir_scalar_type_is_exact(type)) {
 				native_mir_test_fail(
 					state, NATIVE_MIR_TEST_STATUS_REJECTED,
@@ -2364,6 +2371,95 @@ static bool native_mir_test_prepare_w07_projection(
 	return true;
 }
 
+static bool native_mir_test_prepare_w09_exception_routes(
+	native_mir_test_native_function *function)
+{
+	uint32_t index;
+
+	if (function->op_array == NULL || function->ssa.cfg.map == NULL) {
+		return false;
+	}
+	function->exception_handler_oplines = ecalloc(
+		function->op_array->last == 0 ? 1 : function->op_array->last,
+		sizeof(*function->exception_handler_oplines));
+	for (index = 0; index < function->op_array->last; index++) {
+		zend_mir_source_block_id source_handler_block;
+		uint32_t handler_opline;
+
+		function->exception_handler_oplines[index] = ZEND_MIR_ID_INVALID;
+		if (zend_mir_zend_op_array_exception_handler(
+				function->op_array, &function->ssa, index,
+				&source_handler_block, &handler_opline)) {
+			function->exception_handler_oplines[index] = handler_opline;
+		}
+	}
+	return true;
+}
+
+static bool native_mir_test_add_w09_exception_routes(
+	native_mir_test_state *state, native_mir_test_native_function *function)
+{
+	const zend_mir_view *view = native_mir_test_module_view(
+		state, function->module);
+	uint32_t instruction_count;
+	uint32_t index;
+
+	if (view == NULL || function->exception_handler_oplines == NULL) {
+		return false;
+	}
+	instruction_count = view->instruction_count(view->context);
+	for (index = 0; index < instruction_count; index++) {
+		zend_mir_instruction_record instruction;
+		uint32_t handler_opline;
+		zend_mir_block_id target_block = ZEND_MIR_ID_INVALID;
+		uint32_t candidate_index;
+
+		if (!view->instruction_at(view->context, index, &instruction)) {
+			return false;
+		}
+		if (!zend_mir_opcode_is_executable_value(instruction.opcode)
+				|| !zend_mir_id_is_valid(instruction.source_position_id)
+				|| instruction.source_position_id
+					>= function->op_array->last
+				|| !zend_mir_id_is_valid(handler_opline =
+					function->exception_handler_oplines[
+						instruction.source_position_id])) {
+			continue;
+		}
+		for (candidate_index = 0; candidate_index < instruction_count;
+				candidate_index++) {
+			zend_mir_instruction_record candidate;
+
+			if (!view->instruction_at(
+					view->context, candidate_index, &candidate)) {
+				return false;
+			}
+			if (candidate.source_position_id == handler_opline
+					&& (candidate.opcode == ZEND_MIR_OPCODE_CATCH_ENTER
+						|| candidate.opcode
+							== ZEND_MIR_OPCODE_FINALLY_ENTER)) {
+				if (zend_mir_id_is_valid(target_block)
+						&& target_block != candidate.block_id) {
+					return false;
+				}
+				target_block = candidate.block_id;
+			}
+		}
+		if (!zend_mir_id_is_valid(target_block)
+				|| function->source_effect_count
+					>= function->source_effect_capacity) {
+			return false;
+		}
+		zend_native_source_effect *effect =
+			&function->source_effects[function->source_effect_count++];
+		effect->source_position_id = instruction.source_position_id;
+		effect->kind = ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE;
+		effect->exact_type = ZEND_MIR_SCALAR_TYPE_NONE;
+		effect->target_block_id = target_block;
+	}
+	return true;
+}
+
 static bool native_mir_test_lower_native_function(
 	native_mir_test_state *state,
 	native_mir_test_native_function *function)
@@ -2376,6 +2472,11 @@ static bool native_mir_test_lower_native_function(
 	if (state->wave >= 7
 			&& function->projected_opcodes == NULL
 			&& !native_mir_test_prepare_w07_projection(state, function)) {
+		return false;
+	}
+	if (state->wave >= 9
+			&& function->exception_handler_oplines == NULL
+			&& !native_mir_test_prepare_w09_exception_routes(function)) {
 		return false;
 	}
 	local.selected = state->wave >= 7
@@ -2421,6 +2522,10 @@ static bool native_mir_test_lower_native_function(
 		return false;
 	}
 	function->module = local.module;
+	if (state->wave >= 9
+			&& !native_mir_test_add_w09_exception_routes(state, function)) {
+		return false;
+	}
 	if (function->op_array == state->selected && diagnostic_count == 0) {
 		state->diagnostic_count = local.diagnostic_count;
 		state->diagnostic_stage = local.diagnostic_stage;
@@ -3166,6 +3271,7 @@ static void native_mir_test_cleanup(native_mir_test_state *state)
 				zend_arena_destroy(function->ssa_arena);
 			}
 			efree(function->source_effects);
+			efree(function->exception_handler_oplines);
 			efree(function->internal_call_cells);
 			efree(function->argument_types);
 			efree(function->projected_ssa_var_info);

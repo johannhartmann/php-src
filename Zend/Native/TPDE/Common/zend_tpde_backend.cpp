@@ -536,10 +536,13 @@ bool initialize_plan(
 		const zend_native_source_effect &effect = effects[i];
 		zend_tpde_instruction *match = nullptr;
 
-		if ((effect.kind != ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR
-				&& effect.kind != ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE)
-				|| !zend_mir_id_is_valid(effect.source_position_id)
-				|| !zend_mir_scalar_type_is_exact(effect.exact_type)) {
+		if (!zend_mir_id_is_valid(effect.source_position_id)
+				|| (effect.kind == ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE
+					? !zend_mir_id_is_valid(effect.target_block_id)
+					: ((effect.kind != ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR
+							&& effect.kind
+								!= ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE)
+						|| !zend_mir_scalar_type_is_exact(effect.exact_type)))) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
 				"W07 source effect is invalid");
@@ -551,7 +554,12 @@ bool initialize_plan(
 					!= effect.source_position_id) {
 				continue;
 			}
-			if (candidate.record.opcode != ZEND_MIR_OPCODE_I1_NOT
+			if (effect.kind == ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE) {
+				if (executable_value_helper(candidate.record.opcode)
+						== ZEND_NATIVE_HELPER_COUNT) {
+					continue;
+				}
+			} else if (candidate.record.opcode != ZEND_MIR_OPCODE_I1_NOT
 					&& candidate.record.opcode != ZEND_MIR_OPCODE_I64_TO_I1
 					&& candidate.record.opcode != ZEND_MIR_OPCODE_F64_TO_I1
 					&& candidate.record.opcode != ZEND_MIR_OPCODE_SCALAR_DROP) {
@@ -565,12 +573,21 @@ bool initialize_plan(
 			}
 			match = &candidate;
 		}
-		if (match == nullptr || match->operand_count != 1
-				|| match->source_effect != 0) {
+		if (match == nullptr
+				|| (effect.kind == ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE
+					? zend_mir_id_is_valid(match->exception_block_id)
+					: (match->operand_count != 1
+						|| match->source_effect != 0))) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-				"W07 echo must map uniquely to a scalar value proof");
+				effect.kind == ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE
+					? "value exception route must map uniquely to an instruction"
+					: "W07 echo must map uniquely to a scalar value proof");
 			return false;
+		}
+		if (effect.kind == ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE) {
+			match->exception_block_id = effect.target_block_id;
+			continue;
 		}
 		match->source_effect = effect.kind;
 		match->source_effect_exact_type = effect.exact_type;
