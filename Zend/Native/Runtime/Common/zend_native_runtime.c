@@ -40,6 +40,12 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 			| ZEND_NATIVE_RUNTIME_EFFECT_USERLAND
 			| ZEND_NATIVE_RUNTIME_EFFECT_REENTER,
 		(const void *) zend_native_interrupt_poll},
+	{ZEND_NATIVE_HELPER_CALL_SET_SOURCE_ARGUMENT,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE,
+		(const void *) zend_native_call_set_source_argument},
+	{ZEND_NATIVE_HELPER_INTERNAL_CALL_FINISH_SOURCE,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_internal_call_invoke_finish_source},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {

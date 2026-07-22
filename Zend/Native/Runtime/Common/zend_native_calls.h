@@ -106,10 +106,19 @@ zend_result zend_native_call_set_zval_argument(
 	uint32_t ordinal,
 	const zval *value,
 	zend_native_call_argument_mode mode);
+zend_result zend_native_call_set_source_argument(
+	zend_execute_data *caller,
+	uint32_t ordinal,
+	uint32_t send_opline_index,
+	zend_native_call_argument_mode mode);
 zend_native_status zend_native_internal_call_invoke_finish(
 	zend_execute_data *caller,
 	const zend_native_internal_call_cell *cell,
 	zval *return_value);
+zend_native_status zend_native_internal_call_invoke_finish_source(
+	zend_execute_data *caller,
+	const zend_native_internal_call_cell *cell,
+	uint32_t do_opline_index);
 void zend_native_interrupt_poll(zend_execute_data *execute_data);
 
 void zend_native_echo_integer(
