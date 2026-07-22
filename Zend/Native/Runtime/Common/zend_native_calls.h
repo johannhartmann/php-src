@@ -91,6 +91,10 @@ void zend_native_call_set_double_argument(
 	zend_execute_data *caller, uint32_t ordinal, double value);
 uint64_t zend_native_call_invoke_finish(
 	zend_execute_data *caller, zend_native_entry_cell *cell);
+zend_native_status zend_native_call_invoke_finish_source(
+	zend_execute_data *caller,
+	zend_native_entry_cell *cell,
+	uint32_t do_opline_index);
 
 zend_result zend_native_internal_call_cell_init(
 	zend_native_internal_call_cell *cell,
