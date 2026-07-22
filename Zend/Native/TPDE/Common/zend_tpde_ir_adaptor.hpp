@@ -346,6 +346,11 @@ public:
 					|| instruction.source_effect != 0) {
 				operands.push_back(IRValueRef{FRAME_VALUE});
 			}
+			if (instruction.record.opcode == ZEND_MIR_OPCODE_STATEPOINT
+					&& (instruction.record.effects & ZEND_MIR_EFFECT_MASK(
+						ZEND_MIR_EFFECT_INTERRUPT_BOUNDARY)) != 0) {
+				operands.push_back(IRValueRef{FRAME_VALUE});
+			}
 			if (instruction.record.opcode
 					== ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
 				/* begin + setters + finish + optional source-result read */

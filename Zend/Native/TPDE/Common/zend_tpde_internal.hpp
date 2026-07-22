@@ -29,6 +29,7 @@ struct zend_tpde_instruction {
 	uint32_t call_argument_count;
 	zend_native_source_effect_kind source_effect;
 	zend_mir_scalar_type_mask source_effect_exact_type;
+	uint32_t source_opline_index;
 };
 
 struct zend_tpde_plan {
