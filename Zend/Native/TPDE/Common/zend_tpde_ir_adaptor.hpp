@@ -277,8 +277,10 @@ public:
 			}
 			if (instruction.record.opcode
 					== ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
-				/* begin + one setter per argument + invoke_finish */
-				for (uint32_t n = 0; n < instruction.operand_count + 2; ++n) {
+				/* begin + setters + finish + optional source-result read */
+				for (uint32_t n = 0;
+						n < instruction.operand_count + 2
+							+ (result != INVALID_VALUE_REF); ++n) {
 					operands.push_back(IRValueRef{FRAME_VALUE});
 				}
 			} else if (instruction.record.opcode

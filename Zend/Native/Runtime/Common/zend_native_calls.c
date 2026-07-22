@@ -200,15 +200,16 @@ void zend_native_call_set_double_argument(
 	ZVAL_DOUBLE(ZEND_CALL_ARG(call, ordinal + 1), value);
 }
 
-uint64_t zend_native_call_invoke_finish(
-	zend_execute_data *caller, zend_native_entry_cell *cell)
+static zend_native_status zend_native_call_invoke(
+	zend_execute_data *caller,
+	zend_native_entry_cell *cell,
+	zval *return_value)
 {
-	uint64_t payload_bits = 0;
 	zend_execute_data *call;
-	zval return_value;
 	zend_native_status status;
 
-	if (caller == NULL || cell == NULL || caller->call == NULL
+	if (caller == NULL || cell == NULL || return_value == NULL
+			|| caller->call == NULL
 			|| cell->state != ZEND_NATIVE_ENTRY_READY || cell->code == NULL) {
 		zend_native_call_abort("Invalid native invocation state");
 	}
@@ -216,8 +217,8 @@ uint64_t zend_native_call_invoke_finish(
 	if (cell->frame_probe != NULL) {
 		cell->frame_probe(cell->frame_probe_context, caller, call);
 	}
-	ZVAL_UNDEF(&return_value);
-	call->return_value = &return_value;
+	ZVAL_UNDEF(return_value);
+	call->return_value = return_value;
 	cell->active_calls++;
 	EG(current_execute_data) = call;
 	ZEND_OBSERVER_FCALL_BEGIN(call);
@@ -225,7 +226,7 @@ uint64_t zend_native_call_invoke_finish(
 	if (status != ZEND_NATIVE_BAILOUT) {
 		ZEND_OBSERVER_FCALL_END(call,
 			status == ZEND_NATIVE_RETURNED && EG(exception) == NULL
-				? &return_value : NULL);
+				? return_value : NULL);
 	}
 	if (status != ZEND_NATIVE_BAILOUT
 			&& UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
@@ -239,6 +240,19 @@ uint64_t zend_native_call_invoke_finish(
 	if (status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
 		status = ZEND_NATIVE_EXCEPTION;
 	}
+	zend_vm_stack_free_call_frame(call);
+	caller->call = NULL;
+	return status;
+}
+
+uint64_t zend_native_call_invoke_finish(
+	zend_execute_data *caller, zend_native_entry_cell *cell)
+{
+	uint64_t payload_bits = 0;
+	zval return_value;
+	zend_native_status status = zend_native_call_invoke(
+		caller, cell, &return_value);
+
 	if (status == ZEND_NATIVE_RETURNED) {
 		switch (Z_TYPE(return_value)) {
 			case IS_NULL:
@@ -267,12 +281,51 @@ uint64_t zend_native_call_invoke_finish(
 	if (!Z_ISUNDEF(return_value)) {
 		zval_ptr_dtor(&return_value);
 	}
-	zend_vm_stack_free_call_frame(call);
-	caller->call = NULL;
 	if (status != ZEND_NATIVE_RETURNED) {
 		zend_bailout();
 	}
 	return payload_bits;
+}
+
+zend_native_status zend_native_call_invoke_finish_source(
+	zend_execute_data *caller,
+	zend_native_entry_cell *cell,
+	uint32_t do_opline_index)
+{
+	const zend_op *opline;
+	zval temporary;
+	zval *return_value;
+	zend_native_status status;
+
+	if (caller == NULL || caller->func == NULL
+			|| caller->func->type != ZEND_USER_FUNCTION
+			|| do_opline_index >= caller->func->op_array.last) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	opline = &caller->func->op_array.opcodes[do_opline_index];
+	if (opline->opcode != ZEND_DO_UCALL
+			&& opline->opcode != ZEND_DO_FCALL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	caller->opline = opline;
+	if (opline->result_type == IS_UNUSED) {
+		ZVAL_UNDEF(&temporary);
+		return_value = &temporary;
+	} else if (opline->result_type == IS_VAR
+			|| opline->result_type == IS_TMP_VAR) {
+		return_value = ZEND_CALL_VAR(caller, opline->result.var);
+		ZVAL_UNDEF(return_value);
+	} else {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	status = zend_native_call_invoke(caller, cell, return_value);
+	if (status != ZEND_NATIVE_RETURNED || return_value == &temporary) {
+		if (!Z_ISUNDEF_P(return_value)) {
+			zval_ptr_dtor(return_value);
+			ZVAL_UNDEF(return_value);
+		}
+	}
+	return status;
 }
 
 static void zend_native_echo_zval(
