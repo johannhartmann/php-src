@@ -150,7 +150,8 @@ uint32_t zend_native_finally_return(
 
 #define ZEND_NATIVE_FINALLY_EXCEPTION_FLAG UINT32_C(0x80000000)
 #define ZEND_NATIVE_FINALLY_PROPAGATE UINT32_MAX
-void zend_native_interrupt_poll(zend_execute_data *execute_data);
+void zend_native_interrupt_poll(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
 
 void zend_native_echo_integer(
 	zend_execute_data *execute_data,

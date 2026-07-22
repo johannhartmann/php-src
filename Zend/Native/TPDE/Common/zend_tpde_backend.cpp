@@ -198,8 +198,37 @@ bool initialize_plan(
 		}
 		plan->instructions[i].record = record;
 		plan->instructions[i].exception_block_id = ZEND_MIR_ID_INVALID;
+		plan->instructions[i].source_opline_index = UINT32_MAX;
 		plan->instructions[i].operand_offset = static_cast<uint32_t>(operands - count);
 		plan->instructions[i].operand_count = count;
+		if (record.opcode == ZEND_MIR_OPCODE_STATEPOINT
+				&& (record.effects & ZEND_MIR_EFFECT_MASK(
+					ZEND_MIR_EFFECT_INTERRUPT_BOUNDARY)) != 0) {
+			zend_mir_frame_state_ref frame{};
+			bool found_frame = false;
+			for (uint32_t n = 0; n < view->frame_state_count(view->context); ++n) {
+				zend_mir_frame_state_ref candidate{};
+				if (!view->frame_state_at(view->context, n, &candidate)) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+						"MIR frame-state table is unreadable");
+					return false;
+				}
+				if (candidate.id == record.frame_state_id) {
+					frame = candidate;
+					found_frame = true;
+					break;
+				}
+			}
+			if (!found_frame || frame.function_id != plan->function.id) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+					"interrupt statepoint lacks its source-backed frame");
+				return false;
+			}
+			plan->instructions[i].source_opline_index = frame.opline_index;
+			plan->may_emit_calls = true;
+		}
 		if (record.opcode == ZEND_MIR_OPCODE_FINALLY_ENTER
 				|| record.opcode == ZEND_MIR_OPCODE_FINALLY_CALL
 				|| record.opcode == ZEND_MIR_OPCODE_FINALLY_RETURN
@@ -426,6 +455,7 @@ bool initialize_plan(
 			ZEND_NATIVE_HELPER_FINALLY_CALL,
 			ZEND_NATIVE_HELPER_FINALLY_RETURN,
 			ZEND_NATIVE_HELPER_RETURN_SOURCE_ZVAL,
+			ZEND_NATIVE_HELPER_INTERRUPT_POLL,
 		};
 		if (zend_native_runtime_validate(plan->runtime,
 				ZEND_NATIVE_RUNTIME_CAP_USER_CALL

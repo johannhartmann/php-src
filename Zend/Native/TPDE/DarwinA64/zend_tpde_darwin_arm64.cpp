@@ -238,6 +238,24 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		case ZEND_MIR_OPCODE_I1_TO_I64:
 			return copy_result();
 		case ZEND_MIR_OPCODE_STATEPOINT:
+			if ((mir.record.effects & ZEND_MIR_EFFECT_MASK(
+					ZEND_MIR_EFFECT_INTERRUPT_BOUNDARY)) != 0) {
+				if (node.operands.size() != 1
+						|| mir.source_opline_index == UINT32_MAX) {
+					return false;
+				}
+				zend::native::tpde::CCAssignerAppleA64 assigner;
+				CallBuilder builder{*this, assigner};
+				builder.add_arg(CallArg{node.operands[0]});
+				builder.add_arg(ValuePart{mir.source_opline_index, 4,
+					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+				builder.call(ValuePart{
+					reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
+						ZEND_NATIVE_HELPER_INTERRUPT_POLL)), 8,
+					DarwinConfig::GP_BANK});
+				return true;
+			}
+			[[fallthrough]];
 		case ZEND_MIR_OPCODE_SCALAR_DROP:
 			for (IRValueRef operand : node.operands) {
 				auto consumed = val_ref(operand);
