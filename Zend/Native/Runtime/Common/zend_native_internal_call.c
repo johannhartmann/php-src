@@ -656,10 +656,27 @@ uint32_t zend_native_finally_return(
 		: ZEND_NATIVE_FINALLY_PROPAGATE;
 }
 
-void zend_native_interrupt_poll(zend_execute_data *execute_data)
+void zend_native_interrupt_poll(
+	zend_execute_data *execute_data, uint32_t source_opline_index)
 {
-	if (execute_data != NULL
-			&& UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+	if (execute_data == NULL || execute_data->func == NULL
+			|| execute_data->func->type != ZEND_USER_FUNCTION
+			|| source_opline_index >= execute_data->func->op_array.last) {
+		zend_throw_error(NULL, "Invalid native interrupt source position");
+		zend_bailout();
+	}
+	execute_data->opline =
+		&execute_data->func->op_array.opcodes[source_opline_index];
+	if (UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
 		zend_fcall_interrupt(execute_data);
+		/*
+		 * Generated code has no VM exception-dispatch continuation at an
+		 * asynchronous backedge. Transfer to the C-only native frame boundary,
+		 * which preserves EG(exception) and restores the complete Zend frame
+		 * chain before returning to the caller.
+		 */
+		if (UNEXPECTED(EG(exception) != NULL)) {
+			zend_bailout();
+		}
 	}
 }
