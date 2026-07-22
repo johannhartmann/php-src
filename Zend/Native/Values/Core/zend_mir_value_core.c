@@ -687,6 +687,8 @@ static bool zend_mir_value_validate_call_transfers(
 	const zend_mir_call_argument_ref *arguments;
 	const zend_mir_call_target_ref *targets;
 	uint32_t index;
+	bool source_backed = staging->call_transfer_count == 0
+		&& module->call_arguments.count != 0;
 
 	if (!module->call_staging.committed) {
 		return staging->call_transfer_count == 0;
@@ -696,7 +698,8 @@ static bool zend_mir_value_validate_call_transfers(
 			&& module->call_continuations.count == 0) {
 		return staging->call_transfer_count == 0;
 	}
-	if (staging->call_transfer_count != module->call_arguments.count
+	if ((!source_backed
+			&& staging->call_transfer_count != module->call_arguments.count)
 			|| module->call_sites.items == NULL
 			|| (module->call_arguments.count != 0
 				&& module->call_arguments.items == NULL)
@@ -709,6 +712,16 @@ static bool zend_mir_value_validate_call_transfers(
 		module, call_arguments, zend_mir_call_argument_ref);
 	targets = ZEND_MIR_CORE_ITEMS(
 		module, call_targets, zend_mir_call_target_ref);
+	if (source_backed) {
+		for (index = 0; index < module->call_arguments.count; index++) {
+			if (arguments[index].id != index
+					|| arguments[index].ownership
+						== ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR) {
+				return false;
+			}
+		}
+		return true;
+	}
 	for (index = 0; index < staging->call_transfer_count; index++) {
 		const zend_mir_call_transfer_ref *transfer =
 			&staging->call_transfers[index];

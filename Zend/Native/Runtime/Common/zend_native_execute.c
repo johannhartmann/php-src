@@ -34,6 +34,13 @@ static void zend_native_execution_cleanup_frame(zend_execute_data *execute_data)
 				(uint32_t) (execute_data->opline - op_array->opcodes), 0);
 		}
 	}
+	zend_vm_stack_free_extra_args(execute_data);
+	if ((ZEND_CALL_INFO(execute_data)
+			& ZEND_CALL_HAS_EXTRA_NAMED_PARAMS) != 0) {
+		zend_free_extra_named_params(execute_data->extra_named_params);
+		execute_data->extra_named_params = NULL;
+		ZEND_DEL_CALL_FLAG(execute_data, ZEND_CALL_HAS_EXTRA_NAMED_PARAMS);
+	}
 	zend_free_compiled_variables(execute_data);
 }
 
@@ -57,14 +64,11 @@ static zend_native_status zend_native_execute_frame_impl(
 {
 	zend_native_execution_state *state;
 	zend_native_frame_entry_t entry;
-	uint32_t argument_count;
 
 	entry = zend_native_code_frame_entry(code);
-	argument_count = zend_native_code_argument_count(code);
 	if (code == NULL || execute_data == NULL || entry == NULL
 			|| !zend_native_code_is_executable(code)
 			|| execute_data->func == NULL
-			|| ZEND_CALL_NUM_ARGS(execute_data) > argument_count
 			|| zend_native_frame_prepare(execute_data) == FAILURE) {
 		zend_native_execution_diagnostic(diagnostic,
 			ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
