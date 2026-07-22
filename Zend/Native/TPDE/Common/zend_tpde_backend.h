@@ -140,6 +140,17 @@ zend_native_status zend_native_execute_frame(
 	zend_execute_data *execute_data,
 	zend_native_diagnostic *diag);
 
+/*
+ * zend_call_function() has already emitted the begin notification before it
+ * enters zend_execute_ex.  Native reentry uses this variant so the native
+ * boundary owns cleanup and the matching end notification without emitting a
+ * duplicate begin event.
+ */
+zend_native_status zend_native_execute_observed_frame(
+	const zend_native_code *code,
+	zend_execute_data *execute_data,
+	zend_native_diagnostic *diag);
+
 void zend_native_image_destroy(zend_native_image *image);
 void zend_native_code_destroy(zend_native_code *code);
 const char *zend_native_target_id(zend_native_target target);
