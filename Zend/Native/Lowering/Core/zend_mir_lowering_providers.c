@@ -1878,7 +1878,12 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 		zend_mir_w08_hide_method_receiver_facts(
 			&integration, op_array, ssa);
 	}
-	status = (w08_execution || w09_execution)
+	status = w09_execution
+		? zend_mir_zend_source_init_w09_projection(
+			&integration.source, source_op_array, source_ssa, op_array, ssa,
+			ZEND_MIR_W03_OP_ARRAY_ID, ZEND_MIR_W03_FILE_SYMBOL_ID,
+			&frontend_diagnostic)
+		: w08_execution
 		? zend_mir_zend_source_init_w08_projection(
 			&integration.source, source_op_array, source_ssa, op_array, ssa,
 			ZEND_MIR_W03_OP_ARRAY_ID, ZEND_MIR_W03_FILE_SYMBOL_ID,
@@ -1887,9 +1892,6 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 			&integration.source, source_op_array, source_ssa, op_array, ssa,
 			ZEND_MIR_W03_OP_ARRAY_ID, ZEND_MIR_W03_FILE_SYMBOL_ID,
 			&frontend_diagnostic);
-	if (status == ZEND_MIR_LOWERING_SUCCESS && w09_execution) {
-		integration.source.w09 = true;
-	}
 	if (status == ZEND_MIR_LOWERING_SUCCESS) {
 		status = zend_mir_zend_source_enable_w05(
 			&integration.source, script, op_array, ssa,

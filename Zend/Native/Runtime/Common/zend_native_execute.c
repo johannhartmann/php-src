@@ -17,17 +17,16 @@ typedef struct _zend_native_execution_state {
 	bool observer_finished;
 } zend_native_execution_state;
 
-static void zend_native_execution_cleanup_frame(
-	zend_execute_data *execute_data, zend_native_status status)
+static void zend_native_execution_cleanup_frame(zend_execute_data *execute_data)
 {
 	/*
 	 * The VM's leave helper destroys every compiled variable before releasing
 	 * a user frame.  Native entries return to C instead, so this boundary owns
-	 * the equivalent cleanup exactly once.  On an exceptional/bailout path,
-	 * first release live temporaries and any unfinished call rooted at the
-	 * current source opline.
+	 * the equivalent cleanup exactly once. Release live temporaries at the
+	 * current source opline on every exit; the return helper has already moved
+	 * its result and marked the source slot undefined.
 	 */
-	if (status != ZEND_NATIVE_RETURNED && execute_data->opline != NULL) {
+	if (execute_data->opline != NULL) {
 		const zend_op_array *op_array = &execute_data->func->op_array;
 		if (execute_data->opline >= op_array->opcodes
 				&& execute_data->opline < op_array->opcodes + op_array->last) {
@@ -153,7 +152,7 @@ static zend_native_status zend_native_execute_frame_impl(
 		} zend_end_try();
 	}
 
-	zend_native_execution_cleanup_frame(execute_data, state->status);
+	zend_native_execution_cleanup_frame(execute_data);
 
 	if (state->original_return_value == NULL) {
 		if (!Z_ISUNDEF(state->discarded_return)) {
