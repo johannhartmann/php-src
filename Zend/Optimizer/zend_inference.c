@@ -4001,8 +4001,14 @@ static zend_always_inline zend_result _zend_update_type_info(
 			}
 			break;
 		case ZEND_CATCH:
-			/* Forbidden opcodes */
-			ZEND_UNREACHABLE();
+			/* Protected-region SSA exposes catch entries to inference. The
+			 * optional result is the caught exception object assigned to the
+			 * catch variable. The exact class is resolved from the catch literal
+			 * by consumers that need it. */
+			UPDATE_SSA_TYPE(
+				MAY_BE_OBJECT | MAY_BE_RC1 | MAY_BE_RCN,
+				ssa_op->result_def);
+			UPDATE_SSA_OBJ_TYPE(NULL, 0, ssa_op->result_def);
 			break;
 		case ZEND_FETCH_CLASS_NAME:
 			UPDATE_SSA_TYPE(MAY_BE_STRING|MAY_BE_RCN, ssa_op->result_def);
