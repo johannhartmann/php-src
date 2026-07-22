@@ -18,6 +18,16 @@
 
 #include "../../MIR/Core/zend_mir_module_internal.h"
 
+static bool zend_mir_value_checked_multiply_size(
+	size_t left, size_t right, size_t *out)
+{
+	if (out == NULL || (right != 0 && left > SIZE_MAX / right)) {
+		return false;
+	}
+	*out = left * right;
+	return true;
+}
+
 static bool zend_mir_value_grow_staging(
 	zend_mir_module *module, void **items, uint32_t count,
 	uint32_t *capacity, size_t item_size, size_t alignment)
@@ -873,14 +883,14 @@ static bool zend_mir_value_compose_executable_operations(
 			"executable value instruction count overflow");
 	}
 	total_count = old_count + operation_count;
-	if ((size_t) total_count > SIZE_MAX / sizeof(*new_instructions)
-			|| (size_t) old_count > SIZE_MAX / sizeof(*old_to_new)) {
+	if (!zend_mir_value_checked_multiply_size(
+			(size_t) total_count, sizeof(*new_instructions), &instruction_bytes)
+			|| !zend_mir_value_checked_multiply_size(
+				(size_t) old_count, sizeof(*old_to_new), &map_bytes)) {
 		return zend_mir_module_fail(module,
 			ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
 			"executable value composition size overflow");
 	}
-	instruction_bytes = (size_t) total_count * sizeof(*new_instructions);
-	map_bytes = (size_t) old_count * sizeof(*old_to_new);
 	new_instructions = zend_mir_arena_allocate(
 		&module->arena, instruction_bytes, alignof(zend_mir_core_instruction));
 	old_to_new = zend_mir_arena_allocate(
