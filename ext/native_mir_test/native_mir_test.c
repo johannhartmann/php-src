@@ -30,6 +30,7 @@
 #include "Zend/zend_execute.h"
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_smart_str.h"
+#include "Zend/zend_type_info.h"
 #include "Zend/zend_vm_opcodes.h"
 #include "Zend/Optimizer/zend_func_info.h"
 #include "Zend/Optimizer/zend_optimizer.h"
@@ -1736,6 +1737,65 @@ static zend_function *native_mir_test_resolve_internal_target(
 	return NULL;
 }
 
+static const zend_arg_info *native_mir_test_internal_argument_info(
+	const zend_function *function, uint32_t ordinal)
+{
+	if (function == NULL || function->type != ZEND_INTERNAL_FUNCTION
+			|| function->common.arg_info == NULL
+			|| function->common.num_args == 0) {
+		return NULL;
+	}
+	if (ordinal < function->common.num_args) {
+		return &function->common.arg_info[ordinal];
+	}
+	if ((function->common.fn_flags & ZEND_ACC_VARIADIC) != 0) {
+		return &function->common.arg_info[function->common.num_args - 1];
+	}
+	return NULL;
+}
+
+static zend_op_array *native_mir_test_resolve_callback_argument(
+	native_mir_test_state *state,
+	const zend_op_array *caller,
+	const zend_mir_call_argument_ref *argument,
+	bool nullable,
+	bool *no_user_reentry)
+{
+	const zend_op *send;
+	zval *callback;
+	zend_string *lower_name;
+	zend_function *function;
+
+	*no_user_reentry = false;
+	if (argument == NULL || argument->send_opline_index >= caller->last) {
+		return NULL;
+	}
+	send = &caller->opcodes[argument->send_opline_index];
+	if (send->op1_type != IS_CONST) {
+		return NULL;
+	}
+	callback = RT_CONSTANT(send, send->op1);
+	if (nullable && Z_TYPE_P(callback) == IS_NULL) {
+		*no_user_reentry = true;
+		return NULL;
+	}
+	if (Z_TYPE_P(callback) != IS_STRING) {
+		return NULL;
+	}
+	lower_name = zend_string_tolower(Z_STR_P(callback));
+	function = zend_hash_find_ptr(&state->script.function_table, lower_name);
+	if (function == NULL) {
+		function = zend_hash_find_ptr(EG(function_table), lower_name);
+		if (function != NULL && function->type == ZEND_INTERNAL_FUNCTION) {
+			*no_user_reentry = true;
+			function = NULL;
+		}
+	}
+	zend_string_release(lower_name);
+	return function != NULL && function->type == ZEND_USER_FUNCTION
+		? &function->op_array : NULL;
+}
+
 static native_mir_test_native_function *native_mir_test_find_native_function(
 	native_mir_test_state *state, const zend_op_array *op_array)
 {
@@ -2393,6 +2453,48 @@ static bool native_mir_test_discover_native_callees(
 			return false;
 		}
 		if (target.kind == ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL) {
+			zend_function *internal = native_mir_test_resolve_internal_target(
+				state, function->op_array, calls, &target, NULL);
+
+			if (internal == NULL) {
+				return false;
+			}
+			for (argument_index = 0; argument_index < site.arguments.count;
+					argument_index++) {
+				zend_mir_call_argument_ref argument;
+				const zend_arg_info *argument_info;
+				uint32_t type_mask;
+				zend_op_array *callback;
+				bool no_user_reentry;
+
+				if (!calls->call_argument_at(calls->context,
+						site.arguments.offset + argument_index, &argument)) {
+					return false;
+				}
+				argument_info = native_mir_test_internal_argument_info(
+					internal, argument.ordinal);
+				type_mask = argument_info != NULL
+					? ZEND_TYPE_FULL_MASK(argument_info->type) : 0;
+				if ((type_mask & MAY_BE_CALLABLE) == 0) {
+					continue;
+				}
+				callback = native_mir_test_resolve_callback_argument(
+					state, function->op_array, &argument,
+					(type_mask & MAY_BE_NULL) != 0, &no_user_reentry);
+				if (no_user_reentry) {
+					continue;
+				}
+				if (callback == NULL
+						|| native_mir_test_add_native_function(
+							state, callback) == NULL) {
+					native_mir_test_fail(
+						state, NATIVE_MIR_TEST_STATUS_REJECTED,
+						NATIVE_MIR_TEST_PHASE_CODEGEN,
+						"native", "NATIVE0003",
+						"internal callable argument is not a compile-time native target");
+					return false;
+				}
+			}
 			continue;
 		}
 		native_callee = native_mir_test_find_native_function(state, callee);
@@ -2804,9 +2906,12 @@ static bool native_mir_test_execute_module(
 	native_mir_test_state *state, HashTable *arguments)
 {
 	zend_native_diagnostic diagnostic;
+	zend_native_reentry_binding *reentry_bindings = NULL;
+	zend_native_reentry_scope reentry_scope;
 	uint32_t argument_count = arguments != NULL
 		? zend_hash_num_elements(arguments) : 0;
 	uint32_t index;
+	bool reentry_entered = false;
 
 	if (!native_mir_test_prepare_native_component(state, arguments)
 			|| !native_mir_test_compile_native_component(state)) {
@@ -2827,6 +2932,28 @@ static bool native_mir_test_execute_module(
 	}
 	state->phase = NATIVE_MIR_TEST_PHASE_EXECUTE;
 	memset(&diagnostic, 0, sizeof(diagnostic));
+	memset(&reentry_scope, 0, sizeof(reentry_scope));
+	if (state->wave >= 8) {
+		reentry_bindings = safe_emalloc(
+			state->native_function_count, sizeof(*reentry_bindings), 0);
+		for (index = 0; index < state->native_function_count; index++) {
+			reentry_bindings[index].function =
+				(zend_function *) state->native_functions[index].op_array;
+			reentry_bindings[index].entry_cell =
+				&state->native_functions[index].entry_cell;
+		}
+		if (zend_native_reentry_scope_enter(
+				&reentry_scope, reentry_bindings,
+				state->native_function_count) == FAILURE) {
+			efree(reentry_bindings);
+			native_mir_test_fail(
+				state, NATIVE_MIR_TEST_STATUS_ERROR,
+				NATIVE_MIR_TEST_PHASE_EXECUTE, "native", "NATIVE0003",
+				"native reentry scope is unavailable");
+			return false;
+		}
+		reentry_entered = true;
+	}
 	for (index = 0; index < state->execute_repetitions; ++index) {
 		zend_native_status native_status = native_mir_test_execute_frame(
 			state, arguments, &diagnostic);
@@ -2835,10 +2962,18 @@ static bool native_mir_test_execute_module(
 			state->native_exception = native_status == ZEND_NATIVE_EXCEPTION;
 			state->native_bailout = native_status == ZEND_NATIVE_BAILOUT;
 			native_mir_test_backend_failure(state, state->phase, &diagnostic);
+			if (reentry_entered) {
+				zend_native_reentry_scope_leave(&reentry_scope);
+			}
+			efree(reentry_bindings);
 			return false;
 		}
 		state->completed_executions++;
 	}
+	if (reentry_entered) {
+		zend_native_reentry_scope_leave(&reentry_scope);
+	}
+	efree(reentry_bindings);
 	state->native_result_valid = true;
 	state->status = NATIVE_MIR_TEST_STATUS_ACCEPTED;
 	state->phase = NATIVE_MIR_TEST_PHASE_COMPLETE;
@@ -3244,7 +3379,7 @@ ZEND_FUNCTION(native_mir_test_compile_execute)
 		state->fault == NATIVE_MIR_TEST_FAULT_MODULE_OOM;
 	state->module_host.fail_after = 0;
 
-	/* This path never invokes an opline handler or a VM execute function. */
+	/* Native execution never invokes an opline handler or VM dispatcher. */
 	zend_try {
 		if (native_mir_test_compile(state)
 				&& native_mir_test_build_ssa(state)
@@ -3284,12 +3419,23 @@ PHP_MINFO_FUNCTION(native_mir_test)
 	php_info_print_table_end();
 }
 
+PHP_MINIT_FUNCTION(native_mir_test)
+{
+	return zend_native_reentry_install();
+}
+
+PHP_MSHUTDOWN_FUNCTION(native_mir_test)
+{
+	zend_native_reentry_uninstall();
+	return SUCCESS;
+}
+
 zend_module_entry native_mir_test_module_entry = {
 	STANDARD_MODULE_HEADER,
 	"native_mir_test",
 	ext_functions,
-	NULL,
-	NULL,
+	PHP_MINIT(native_mir_test),
+	PHP_MSHUTDOWN(native_mir_test),
 	NULL,
 	NULL,
 	PHP_MINFO(native_mir_test),

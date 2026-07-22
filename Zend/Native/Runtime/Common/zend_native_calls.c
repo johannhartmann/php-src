@@ -4,8 +4,118 @@
 
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_execute.h"
+#include "Zend/zend_observer.h"
 
 #include <string.h>
+
+static void (*zend_native_previous_execute_ex)(zend_execute_data *execute_data);
+ZEND_TLS zend_native_reentry_scope *zend_native_active_reentry_scope;
+
+static zend_native_entry_cell *zend_native_reentry_find(
+	const zend_native_reentry_scope *scope, zend_function *function)
+{
+	uint32_t index;
+
+	for (index = 0; index < scope->binding_count; index++) {
+		if (scope->bindings[index].function == function) {
+			return scope->bindings[index].entry_cell;
+		}
+	}
+	return NULL;
+}
+
+static void zend_native_reentry_execute_ex(zend_execute_data *execute_data)
+{
+	zend_native_reentry_scope *scope = zend_native_active_reentry_scope;
+	zend_native_entry_cell *cell;
+	zend_execute_data *previous = execute_data->prev_execute_data;
+	zend_native_status status;
+
+	if (scope == NULL) {
+		zend_native_previous_execute_ex(execute_data);
+		return;
+	}
+	cell = zend_native_reentry_find(scope, execute_data->func);
+	if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
+			|| cell->code == NULL) {
+		zend_throw_error(NULL,
+			"Userland reentry target is not part of the native component");
+		ZEND_OBSERVER_FCALL_END(execute_data, NULL);
+		EG(current_execute_data) = previous;
+		return;
+	}
+	if (cell->frame_probe != NULL) {
+		cell->frame_probe(cell->frame_probe_context, previous, execute_data);
+	}
+	cell->active_calls++;
+	EG(current_execute_data) = execute_data;
+	status = zend_native_execute_observed_frame(cell->code, execute_data, NULL);
+	EG(current_execute_data) = previous;
+	cell->active_calls--;
+	if (status == ZEND_NATIVE_BAILOUT) {
+		zend_bailout();
+	}
+}
+
+zend_result zend_native_reentry_install(void)
+{
+	if (zend_execute_ex == zend_native_reentry_execute_ex) {
+		return SUCCESS;
+	}
+	if (zend_native_previous_execute_ex != NULL) {
+		return FAILURE;
+	}
+	zend_native_previous_execute_ex = zend_execute_ex;
+	zend_execute_ex = zend_native_reentry_execute_ex;
+	return SUCCESS;
+}
+
+void zend_native_reentry_uninstall(void)
+{
+	if (zend_execute_ex == zend_native_reentry_execute_ex) {
+		zend_execute_ex = zend_native_previous_execute_ex;
+	}
+	zend_native_previous_execute_ex = NULL;
+	zend_native_active_reentry_scope = NULL;
+}
+
+zend_result zend_native_reentry_scope_enter(
+	zend_native_reentry_scope *scope,
+	const zend_native_reentry_binding *bindings,
+	uint32_t binding_count)
+{
+	uint32_t index;
+
+	if (scope == NULL || bindings == NULL || binding_count == 0
+			|| zend_native_previous_execute_ex == NULL) {
+		return FAILURE;
+	}
+	for (index = 0; index < binding_count; index++) {
+		if (bindings[index].function == NULL
+				|| bindings[index].entry_cell == NULL
+				|| bindings[index].entry_cell->function != bindings[index].function
+				|| bindings[index].entry_cell->state != ZEND_NATIVE_ENTRY_READY
+				|| bindings[index].entry_cell->code == NULL) {
+			return FAILURE;
+		}
+	}
+	scope->bindings = bindings;
+	scope->binding_count = binding_count;
+	scope->previous = zend_native_active_reentry_scope;
+	zend_native_active_reentry_scope = scope;
+	return SUCCESS;
+}
+
+void zend_native_reentry_scope_leave(zend_native_reentry_scope *scope)
+{
+	ZEND_ASSERT(scope != NULL && zend_native_active_reentry_scope == scope);
+	if (scope != NULL && zend_native_active_reentry_scope == scope) {
+		zend_native_active_reentry_scope = scope->previous;
+		scope->bindings = NULL;
+		scope->binding_count = 0;
+		scope->previous = NULL;
+	}
+}
 
 void zend_native_entry_cell_init(
 	zend_native_entry_cell *cell, zend_function *function)

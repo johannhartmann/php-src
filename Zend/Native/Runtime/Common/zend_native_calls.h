@@ -37,6 +37,17 @@ typedef struct _zend_native_entry_cell {
 	void *frame_probe_context;
 } zend_native_entry_cell;
 
+typedef struct _zend_native_reentry_binding {
+	zend_function *function;
+	zend_native_entry_cell *entry_cell;
+} zend_native_reentry_binding;
+
+typedef struct _zend_native_reentry_scope {
+	const zend_native_reentry_binding *bindings;
+	uint32_t binding_count;
+	struct _zend_native_reentry_scope *previous;
+} zend_native_reentry_scope;
+
 typedef enum _zend_native_internal_receiver_kind {
 	ZEND_NATIVE_INTERNAL_RECEIVER_NONE = 0,
 	ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS = 1,
@@ -68,6 +79,20 @@ void zend_native_entry_cell_set_frame_probe(
 	zend_native_entry_cell *cell,
 	zend_native_frame_probe_t probe,
 	void *context);
+
+/*
+ * The execute hook is process-wide, while the active component scope is
+ * thread-local and stack-disciplined.  While a scope is active every userland
+ * reentry must resolve to one of its ready entry cells; unknown targets are
+ * rejected instead of being dispatched by the VM.
+ */
+zend_result zend_native_reentry_install(void);
+void zend_native_reentry_uninstall(void);
+zend_result zend_native_reentry_scope_enter(
+	zend_native_reentry_scope *scope,
+	const zend_native_reentry_binding *bindings,
+	uint32_t binding_count);
+void zend_native_reentry_scope_leave(zend_native_reentry_scope *scope);
 zend_result zend_native_frame_prepare(zend_execute_data *execute_data);
 
 /*
