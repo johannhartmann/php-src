@@ -977,12 +977,28 @@ bool zend_mir_frontend_opcode_at(
 	out->source_position_id = index;
 	out->block_id = source->w04 && ssa->cfg.map != NULL
 		? ssa->cfg.map[index] : 0;
-	return zend_mir_frontend_operand_ref(
+	if (!zend_mir_frontend_operand_ref(
 			op_array, ssa, index, ZEND_MIR_FRONTEND_OP1, -1, &out->op1)
-		&& zend_mir_frontend_operand_ref(
+		|| !zend_mir_frontend_operand_ref(
 			op_array, ssa, index, ZEND_MIR_FRONTEND_OP2, -1, &out->op2)
-		&& zend_mir_frontend_operand_ref(
-			op_array, ssa, index, ZEND_MIR_FRONTEND_RESULT, -1, &out->result);
+		|| !zend_mir_frontend_operand_ref(
+			op_array, ssa, index, ZEND_MIR_FRONTEND_RESULT, -1, &out->result)) {
+		return false;
+	}
+	if (source->w08 && source->w05
+			&& zend_mir_zend_source_w08_return_source_zval(source, index)) {
+		const zend_op_array *original_op_array = source->call_op_array;
+		const zend_op *original = &original_op_array->opcodes[index];
+
+		if (!zend_mir_frontend_decode_slot(
+				original_op_array, &original->op1, original->op1_type,
+				&out->op1.index, &out->op1.slot_kind)) {
+			return false;
+		}
+		out->op1.kind = ZEND_MIR_SOURCE_OPERAND_SLOT;
+		out->op1.ssa_variable_id = ZEND_MIR_ID_INVALID;
+	}
+	return true;
 }
 
 bool zend_mir_frontend_ssa_at(

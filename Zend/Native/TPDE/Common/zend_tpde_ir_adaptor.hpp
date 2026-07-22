@@ -326,12 +326,26 @@ public:
 			}
 
 			std::vector<IRValueRef> operands;
+			bool machine_result = result != INVALID_VALUE_REF
+				&& zend_mir_scalar_type_is_exact(exact_type(result))
+				&& exact_type(result) != ZEND_MIR_SCALAR_TYPE_NULL;
 			operands.reserve(instruction.operand_count +
 				(instruction.record.opcode == ZEND_MIR_OPCODE_RETURN
 					|| instruction.record.opcode
 						== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL));
-			uint32_t data_operand_count = instruction.record.opcode
-				== ZEND_MIR_OPCODE_STATEPOINT ? 0 : instruction.operand_count;
+			/*
+			 * RETURN_SOURCE_ZVAL transfers the canonical zval directly from the
+			 * Zend frame, selected by its source opline.  Its MIR value operand
+			 * carries dependency/type information only; asking TPDE to allocate a
+			 * machine value for it leaves an unconsumed ValueAssignment and, more
+			 * importantly, would tempt target code to treat a scalar payload as a
+			 * complete zval.  The runtime helper needs only the frame pointer.
+			 */
+			uint32_t data_operand_count =
+				instruction.record.opcode == ZEND_MIR_OPCODE_STATEPOINT
+					|| instruction.record.opcode
+						== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
+				? 0 : instruction.operand_count;
 			for (uint32_t n = 0; n < data_operand_count; ++n) {
 				IRValueRef operand = value_ref(zend_tpde_operand_at(
 					plan_, &instruction, n));
@@ -356,7 +370,7 @@ public:
 				/* begin + setters + finish + optional source-result read */
 				for (uint32_t n = 0;
 						n < instruction.operand_count + 2
-							+ (result != INVALID_VALUE_REF); ++n) {
+							+ machine_result; ++n) {
 					operands.push_back(IRValueRef{FRAME_VALUE});
 				}
 			} else if (instruction.record.opcode
@@ -364,7 +378,7 @@ public:
 				/* begin + source setters + finish + optional scalar read */
 				for (uint32_t n = 0;
 						n < instruction.call_argument_count + 2
-							+ (result != INVALID_VALUE_REF); ++n) {
+							+ machine_result; ++n) {
 					operands.push_back(IRValueRef{FRAME_VALUE});
 				}
 			} else if (instruction.record.opcode
@@ -379,8 +393,7 @@ public:
 			}
 			add_node(static_cast<uint32_t>(block), InstNode{
 				InstKind::MIR, i, UINT32_MAX, result, std::move(operands),
-				result != INVALID_VALUE_REF
-					&& exact_type(result) != ZEND_MIR_SCALAR_TYPE_NULL});
+				machine_result});
 		}
 	}
 
