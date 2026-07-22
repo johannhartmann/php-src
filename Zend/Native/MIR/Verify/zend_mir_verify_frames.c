@@ -98,7 +98,9 @@ static void zend_mir_verify_frame_layout(
 					>= ZEND_MIR_FRAME_SLOT_REPRESENTATION_COUNT
 				|| (uint32_t) slot->materialization >= ZEND_MIR_MATERIALIZATION_COUNT
 				|| (uint32_t) slot->ownership >= ZEND_MIR_FRAME_SLOT_OWNERSHIP_COUNT
-				|| (slot->materialization == ZEND_MIR_MATERIALIZATION_UNDEF
+				|| ((slot->materialization == ZEND_MIR_MATERIALIZATION_UNDEF
+						|| slot->materialization
+							== ZEND_MIR_MATERIALIZATION_SOURCE_ZVAL)
 					? zend_mir_id_is_valid(slot->value_id)
 					: zend_mir_verify_find_value(context, slot->value_id) == NULL)) {
 			zend_mir_verify_emit(context, ZEND_MIR_VERIFY_INVALID_SLOT,

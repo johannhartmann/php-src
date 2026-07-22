@@ -113,11 +113,12 @@ typedef enum _zend_mir_frame_slot_representation {
 #define ZEND_MIR_MATERIALIZATION_CATALOG(X) \
 	X(MATERIALIZED, "materialized", 0) \
 	X(UNDEF, "undef", 1) \
-	X(BORROWED_POINTER, "borrowed_pointer", 2)
+	X(BORROWED_POINTER, "borrowed_pointer", 2) \
+	X(SOURCE_ZVAL, "source_zval", 3)
 #define ZEND_MIR_MATERIALIZATION_ENUM(symbol, label, value) ZEND_MIR_MATERIALIZATION_##symbol = value,
 typedef enum _zend_mir_materialization {
 	ZEND_MIR_MATERIALIZATION_CATALOG(ZEND_MIR_MATERIALIZATION_ENUM)
-	ZEND_MIR_MATERIALIZATION_COUNT = 3,
+	ZEND_MIR_MATERIALIZATION_COUNT = 4,
 	ZEND_MIR_MATERIALIZATION_INVALID = -1
 } zend_mir_materialization;
 #undef ZEND_MIR_MATERIALIZATION_ENUM

@@ -23,8 +23,14 @@ int main(void)
 	assert(ZEND_MIR_W04_CONTRACT_VERSION == UINT32_C(0x00010003));
 	assert(ZEND_MIR_W05_CONTRACT_VERSION == UINT32_C(0x00010009));
 	assert(ZEND_MIR_OPCODE_CALL_DIRECT_USER == 41);
+	assert(ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL == 48);
 	assert(ZEND_MIR_OPCODE_COUNT == 41);
 	assert(ZEND_MIR_W05_OPCODE_COUNT == 42);
+	assert(ZEND_MIR_W08_OPCODE_COUNT == 49);
+	assert(ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL == 1);
+	assert(ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE == 1);
+	assert(ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE == 2);
+	assert(ZEND_MIR_MATERIALIZATION_SOURCE_ZVAL == 3);
 
 	assert(offsetof(zend_mir_source_call_site_ref, flags)
 		> offsetof(zend_mir_source_call_site_ref, init_opline_index));
