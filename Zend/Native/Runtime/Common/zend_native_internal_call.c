@@ -13,6 +13,8 @@ typedef struct _zend_native_internal_execution_state {
 	zend_execute_data *call;
 	zval *return_value;
 	zend_native_status status;
+	bool observer_started;
+	bool observer_finished;
 } zend_native_internal_execution_state;
 
 static bool zend_native_internal_count_is_valid(
@@ -282,11 +284,14 @@ zend_native_status zend_native_internal_call_invoke_finish(
 	state->call = caller->call;
 	state->return_value = return_value;
 	state->status = ZEND_NATIVE_BAILOUT;
+	state->observer_started = false;
+	state->observer_finished = false;
 	ZVAL_NULL(state->return_value);
 	EG(current_execute_data) = state->call;
-	ZEND_OBSERVER_FCALL_BEGIN(state->call);
 
 	zend_try {
+		state->observer_started = true;
+		ZEND_OBSERVER_FCALL_BEGIN(state->call);
 		if (EXPECTED(zend_execute_internal == NULL)) {
 			state->call->func->internal_function.handler(
 				state->call, state->return_value);
@@ -295,21 +300,30 @@ zend_native_status zend_native_internal_call_invoke_finish(
 		}
 		state->status = EG(exception) == NULL
 			? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
-	} zend_catch {
-		state->status = EG(exception) != NULL
-			? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
-	} zend_end_try();
-
-	if (state->status != ZEND_NATIVE_BAILOUT) {
 		ZEND_OBSERVER_FCALL_END(state->call,
 			state->status == ZEND_NATIVE_RETURNED
 				? state->return_value : NULL);
+		state->observer_finished = true;
 		if (UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
 			zend_fcall_interrupt(state->call);
 			if (EG(exception) != NULL) {
 				state->status = ZEND_NATIVE_EXCEPTION;
 			}
 		}
+	} zend_catch {
+		state->status = EG(exception) != NULL
+			? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
+	} zend_end_try();
+
+	if (state->observer_started && !state->observer_finished) {
+		zend_try {
+			ZEND_OBSERVER_FCALL_END(state->call, NULL);
+			state->observer_finished = true;
+		} zend_catch {
+			state->observer_finished = true;
+			state->status = EG(exception) != NULL
+				? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
+		} zend_end_try();
 	}
 	EG(current_execute_data) = state->caller;
 	zend_vm_stack_free_args(state->call);
