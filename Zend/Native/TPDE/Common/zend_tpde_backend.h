@@ -159,6 +159,9 @@ size_t zend_native_image_size(const zend_native_image *image);
 const unsigned char *zend_native_image_bytes(const zend_native_image *image);
 bool zend_native_code_is_writable(const zend_native_code *code);
 bool zend_native_code_is_executable(const zend_native_code *code);
+bool zend_native_code_has_unwind_info(const zend_native_code *code);
+bool zend_native_code_contains_address(
+	const zend_native_code *code, const void *address);
 zend_native_frame_entry_t zend_native_code_frame_entry(
 	const zend_native_code *code);
 uint32_t zend_native_code_argument_count(const zend_native_code *code);

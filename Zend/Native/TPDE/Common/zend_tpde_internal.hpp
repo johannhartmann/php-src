@@ -70,6 +70,7 @@ struct zend_native_code {
 	uint32_t argument_count;
 	bool writable;
 	bool executable;
+	bool unwind_registered;
 	void *target_state;
 	void (*destroy_target_state)(void *);
 };

@@ -21,6 +21,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if (defined(__APPLE__) && defined(__aarch64__)) \
+		|| (defined(__linux__) && defined(__x86_64__))
+# include <execinfo.h>
+#endif
+
 #include "php.h"
 #include "php_native_mir_test.h"
 #include "native_mir_test_arginfo.h"
@@ -212,6 +217,8 @@ typedef struct _native_mir_test_state {
 	smart_str dump;
 	uint32_t dump_writes;
 } native_mir_test_state;
+
+ZEND_TLS native_mir_test_state *native_mir_test_active_state;
 
 static void native_mir_test_frame_probe_record(
 	void *context,
@@ -2980,6 +2987,36 @@ static bool native_mir_test_execute_module(
 	return true;
 }
 
+ZEND_FUNCTION(native_mir_test_unwind_probe)
+{
+	void *frames[64];
+	int frame_count;
+	int frame_index;
+	uint32_t function_index;
+	zend_long native_frame_count = 0;
+	native_mir_test_state *state = native_mir_test_active_state;
+
+	ZEND_PARSE_PARAMETERS_NONE();
+
+	if (state == NULL) {
+		RETURN_LONG(0);
+	}
+	frame_count = backtrace(frames, (int) (sizeof(frames) / sizeof(frames[0])));
+	for (frame_index = 0; frame_index < frame_count; frame_index++) {
+		for (function_index = 0;
+				function_index < state->native_function_count;
+				function_index++) {
+			if (zend_native_code_contains_address(
+					state->native_functions[function_index].code,
+					frames[frame_index])) {
+				native_frame_count++;
+				break;
+			}
+		}
+	}
+	RETURN_LONG(native_frame_count);
+}
+
 static void native_mir_test_cleanup(native_mir_test_state *state)
 {
 	HashTable *function_table;
@@ -3175,6 +3212,8 @@ static void native_mir_test_build_result(
 			state->native_writable_after_publish);
 		add_assoc_bool(&execution, "executable_after_publish",
 			state->native_executable_after_publish);
+		add_assoc_bool(&execution, "unwind_registered",
+			zend_native_code_has_unwind_info(state->native_code));
 		add_assoc_long(&execution, "image_size",
 			(zend_long) zend_native_image_size(state->native_image));
 		if (state->native_image != NULL) {
@@ -3329,6 +3368,7 @@ ZEND_FUNCTION(native_mir_test_compile_execute)
 	HashTable *arguments = NULL;
 	HashTable *options = NULL;
 	native_mir_test_state *state;
+	native_mir_test_state *previous_active_state;
 	bool bailed_out = false;
 
 	ZEND_PARSE_PARAMETERS_START(2, 4)
@@ -3380,6 +3420,8 @@ ZEND_FUNCTION(native_mir_test_compile_execute)
 	state->module_host.fail_after = 0;
 
 	/* Native execution never invokes an opline handler or VM dispatcher. */
+	previous_active_state = native_mir_test_active_state;
+	native_mir_test_active_state = state;
 	zend_try {
 		if (native_mir_test_compile(state)
 				&& native_mir_test_build_ssa(state)
@@ -3390,6 +3432,7 @@ ZEND_FUNCTION(native_mir_test_compile_execute)
 	} zend_catch {
 		bailed_out = true;
 	} zend_end_try();
+	native_mir_test_active_state = previous_active_state;
 
 	if (bailed_out) {
 		state->native_bailout = true;
