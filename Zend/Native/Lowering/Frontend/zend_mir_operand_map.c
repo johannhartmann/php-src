@@ -702,7 +702,8 @@ static bool zend_mir_frontend_w04_branch(uint8_t opcode)
 {
 	return opcode == ZEND_JMP || opcode == ZEND_JMPZ
 		|| opcode == ZEND_JMPNZ || opcode == ZEND_JMPZ_EX
-		|| opcode == ZEND_JMPNZ_EX;
+		|| opcode == ZEND_JMPNZ_EX || opcode == ZEND_FAST_CALL
+		|| opcode == ZEND_FAST_RET;
 }
 
 static bool zend_mir_frontend_w04_smart_branch(
@@ -775,6 +776,12 @@ zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w04(
 		} else if (opline->opcode == ZEND_JMP) {
 			valid = opline->op1_type == IS_UNUSED
 				&& opline->op2_type == IS_UNUSED
+				&& opline->result_type == IS_UNUSED;
+		} else if (opline->opcode == ZEND_FAST_CALL) {
+			valid = opline->op1_type == IS_UNUSED
+				&& opline->result_type == IS_TMP_VAR;
+		} else if (opline->opcode == ZEND_FAST_RET) {
+			valid = opline->op1_type == IS_TMP_VAR
 				&& opline->result_type == IS_UNUSED;
 		} else {
 			valid = zend_mir_frontend_is_scalar_source_type(opline->op1_type)
@@ -888,7 +895,9 @@ zend_mir_lowering_status zend_mir_frontend_validate_eligibility_w04(
 			return ZEND_MIR_LOWERING_DEFERRED;
 		}
 		if (op_array->opcodes[i].opcode == ZEND_NOP
-				|| op_array->opcodes[i].opcode == ZEND_JMP) {
+				|| op_array->opcodes[i].opcode == ZEND_JMP
+				|| op_array->opcodes[i].opcode == ZEND_FAST_CALL
+				|| op_array->opcodes[i].opcode == ZEND_FAST_RET) {
 			continue;
 		}
 		for (operand_index = 0; operand_index < 3; operand_index++) {

@@ -361,6 +361,11 @@ zend_native_status zend_native_internal_call_invoke_finish_source(
 	}
 	status = zend_native_internal_call_invoke_finish(
 		caller, cell, return_value);
+	if (status == ZEND_NATIVE_EXCEPTION && EG(exception) != NULL
+			&& zend_native_prepare_finally_exception(
+				caller, do_opline_index) == FAILURE) {
+		status = ZEND_NATIVE_BAILOUT;
+	}
 	if (return_value == &temporary && !Z_ISUNDEF(temporary)) {
 		zval_ptr_dtor(&temporary);
 	}
@@ -475,6 +480,133 @@ zend_native_status zend_native_catch_enter(
 	}
 	return EG(exception) == NULL
 		? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+}
+
+static const zend_try_catch_element *zend_native_finally_region(
+	const zend_op_array *op_array, uint32_t finally_opline_index)
+{
+	uint32_t index;
+
+	if (op_array == NULL || finally_opline_index >= op_array->last) {
+		return NULL;
+	}
+	for (index = 0; index < op_array->last_try_catch; index++) {
+		const zend_try_catch_element *region = &op_array->try_catch_array[index];
+		if (region->finally_op == finally_opline_index
+				&& region->finally_end < op_array->last
+				&& op_array->opcodes[region->finally_end].opcode == ZEND_FAST_RET) {
+			return region;
+		}
+	}
+	return NULL;
+}
+
+zend_native_status zend_native_finally_enter(
+	zend_execute_data *execute_data, uint32_t finally_opline_index)
+{
+	const zend_op_array *op_array;
+	const zend_try_catch_element *region;
+	zval *fast_call;
+
+	if (execute_data == NULL || execute_data->func == NULL
+			|| execute_data->func->type != ZEND_USER_FUNCTION) {
+		return ZEND_NATIVE_BAILOUT;
+	}
+	op_array = &execute_data->func->op_array;
+	region = zend_native_finally_region(op_array, finally_opline_index);
+	if (region == NULL) {
+		return ZEND_NATIVE_BAILOUT;
+	}
+	execute_data->opline = &op_array->opcodes[finally_opline_index];
+	if (EG(exception) == NULL) {
+		return ZEND_NATIVE_RETURNED;
+	}
+	fast_call = ZEND_CALL_VAR(
+		execute_data, op_array->opcodes[region->finally_end].op1.var);
+	Z_OBJ_P(fast_call) = EG(exception);
+	EG(exception) = NULL;
+	Z_OPLINE_NUM_P(fast_call) = UINT32_MAX;
+	return ZEND_NATIVE_RETURNED;
+}
+
+void zend_native_finally_call(
+	zend_execute_data *execute_data, uint32_t fast_call_opline_index)
+{
+	const zend_op *opline;
+	zval *fast_call;
+
+	if (execute_data == NULL || execute_data->func == NULL
+			|| execute_data->func->type != ZEND_USER_FUNCTION
+			|| fast_call_opline_index >= execute_data->func->op_array.last) {
+		zend_bailout();
+	}
+	opline = &execute_data->func->op_array.opcodes[fast_call_opline_index];
+	if (opline->opcode != ZEND_FAST_CALL || opline->result_type != IS_TMP_VAR) {
+		zend_bailout();
+	}
+	execute_data->opline = opline;
+	fast_call = ZEND_CALL_VAR(execute_data, opline->result.var);
+	Z_OBJ_P(fast_call) = NULL;
+	Z_OPLINE_NUM_P(fast_call) = fast_call_opline_index;
+}
+
+uint32_t zend_native_finally_return(
+	zend_execute_data *execute_data, uint32_t fast_ret_opline_index)
+{
+	const zend_op_array *op_array;
+	const zend_op *opline;
+	zval *fast_call;
+	uint32_t continuation;
+	uint32_t selected = ZEND_MIR_ID_INVALID;
+	uint32_t handler = ZEND_MIR_ID_INVALID;
+	uint32_t index;
+
+	if (execute_data == NULL || execute_data->func == NULL
+			|| execute_data->func->type != ZEND_USER_FUNCTION
+			|| fast_ret_opline_index >= execute_data->func->op_array.last) {
+		return UINT32_MAX;
+	}
+	op_array = &execute_data->func->op_array;
+	opline = &op_array->opcodes[fast_ret_opline_index];
+	if (opline->opcode != ZEND_FAST_RET || opline->op1_type != IS_TMP_VAR) {
+		return UINT32_MAX;
+	}
+	execute_data->opline = opline;
+	fast_call = ZEND_CALL_VAR(execute_data, opline->op1.var);
+	continuation = Z_OPLINE_NUM_P(fast_call);
+	if (continuation != UINT32_MAX) {
+		return continuation;
+	}
+	EG(exception) = Z_OBJ_P(fast_call);
+	Z_OBJ_P(fast_call) = NULL;
+	/* Continue zend_dispatch_try_catch_finally_helper outside this finally. */
+	for (index = 0; index < op_array->last_try_catch; index++) {
+		const zend_try_catch_element *region = &op_array->try_catch_array[index];
+		if (region->try_op <= fast_ret_opline_index
+				&& ((region->catch_op != 0
+						&& fast_ret_opline_index < region->catch_op)
+					|| (region->finally_end != 0
+						&& fast_ret_opline_index < region->finally_end))) {
+			selected = index;
+		}
+	}
+	while (zend_mir_id_is_valid(selected)) {
+		const zend_try_catch_element *region = &op_array->try_catch_array[selected];
+		if (region->catch_op != 0 && fast_ret_opline_index < region->catch_op) {
+			handler = region->catch_op;
+			break;
+		}
+		if (region->finally_op != 0
+				&& fast_ret_opline_index < region->finally_op) {
+			handler = region->finally_op;
+			break;
+		}
+		selected = selected == 0 ? ZEND_MIR_ID_INVALID : selected - 1;
+	}
+	return zend_mir_id_is_valid(handler)
+			&& handler < ZEND_NATIVE_FINALLY_EXCEPTION_FLAG
+		? ZEND_NATIVE_FINALLY_EXCEPTION_FLAG | handler
+		: ZEND_NATIVE_FINALLY_PROPAGATE;
 }
 
 void zend_native_interrupt_poll(zend_execute_data *execute_data)

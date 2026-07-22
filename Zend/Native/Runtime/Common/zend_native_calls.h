@@ -96,6 +96,15 @@ zend_native_status zend_native_call_invoke_finish_source(
 	zend_native_entry_cell *cell,
 	uint32_t do_opline_index);
 
+/*
+ * Mirror the VM's exception cleanup for a call that aborted an active finally
+ * body: destroy an incomplete return value and chain each delayed exception
+ * behind the newly thrown exception before control transfers to an outer
+ * catch/finally or caller.
+ */
+zend_result zend_native_prepare_finally_exception(
+	zend_execute_data *caller, uint32_t source_opline_index);
+
 zend_result zend_native_internal_call_cell_init(
 	zend_native_internal_call_cell *cell,
 	zend_function *function,
@@ -130,6 +139,15 @@ uint64_t zend_native_call_read_source_scalar(
 	zend_mir_scalar_type_mask exact_type);
 zend_native_status zend_native_catch_enter(
 	zend_execute_data *execute_data, uint32_t catch_opline_index);
+zend_native_status zend_native_finally_enter(
+	zend_execute_data *execute_data, uint32_t finally_opline_index);
+void zend_native_finally_call(
+	zend_execute_data *execute_data, uint32_t fast_call_opline_index);
+uint32_t zend_native_finally_return(
+	zend_execute_data *execute_data, uint32_t fast_ret_opline_index);
+
+#define ZEND_NATIVE_FINALLY_EXCEPTION_FLAG UINT32_C(0x80000000)
+#define ZEND_NATIVE_FINALLY_PROPAGATE UINT32_MAX
 void zend_native_interrupt_poll(zend_execute_data *execute_data);
 
 void zend_native_echo_integer(
