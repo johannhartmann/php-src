@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PHP-3.01
 
 #include "Zend/Native/TPDE/Common/zend_tpde_internal.hpp"
+#include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 
 #include <cstdlib>
 
@@ -13,6 +14,10 @@ zend_result zend_native_publish_linux_x64(
 			|| image->target_state == nullptr) {
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
 			"Linux x86-64 publisher requires a non-empty Linux image");
+		return FAILURE;
+	}
+	if (zend_native_runtime_validate(zend_native_runtime_get(),
+			ZEND_NATIVE_RUNTIME_CAP_BAILOUT_BOUNDARY, diag) == FAILURE) {
 		return FAILURE;
 	}
 	zend_native_code *code = static_cast<zend_native_code *>(

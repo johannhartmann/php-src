@@ -79,7 +79,8 @@ AS_VAR_IF([PHP_NATIVE_MIR_TEST], [no], [], [
   PHP_ADD_SOURCES_X([Zend/Native/Runtime/LinuxX64], [zend_native_publish_linux_x64.cpp],
     [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
   PHP_ADD_BUILD_DIR([Zend/Native/Runtime/Common])
-  PHP_ADD_SOURCES([Zend/Native/Runtime/Common], [zend_native_calls.c])
+  PHP_ADD_SOURCES([Zend/Native/Runtime/Common],
+    [zend_native_calls.c zend_native_execute.c zend_native_internal_call.c zend_native_runtime.c])
   dnl BEGIN GENERATED NATIVE SOURCES
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/CFG])
   PHP_ADD_SOURCES([Zend/Native/MIR/CFG], [zend_mir_cfg.c])
