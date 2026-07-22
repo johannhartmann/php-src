@@ -723,6 +723,7 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 			&& opline->opcode != ZEND_JMPNZ
 			&& opline->opcode != ZEND_JMPZ_EX
 			&& opline->opcode != ZEND_JMPNZ_EX
+			&& opline->opcode != ZEND_JMP_SET
 			&& opline->opcode != ZEND_COALESCE)
 			|| (value = (opline->opcode == ZEND_COALESCE
 				? zend_native_value_read(execute_data, opline,
@@ -731,7 +732,7 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 				opline->op1_type, opline->op1))) == NULL) {
 		return ZEND_NATIVE_ITERATOR_EXCEPTION;
 	}
-	if (opline->opcode == ZEND_COALESCE) {
+	if (opline->opcode == ZEND_COALESCE || opline->opcode == ZEND_JMP_SET) {
 		zend_reference *reference = NULL;
 		zval *result;
 		zval *slot = opline->op1_type == IS_CONST ? NULL
@@ -743,7 +744,18 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 			reference = opline->op1_type == IS_VAR ? Z_REF_P(value) : NULL;
 			value = Z_REFVAL_P(value);
 		}
-		truth = Z_TYPE_P(value) > IS_NULL;
+		truth = opline->opcode == ZEND_COALESCE
+			? Z_TYPE_P(value) > IS_NULL : zend_is_true(value);
+		if (EG(exception) != NULL) {
+			zend_native_value_consume_operand(execute_data,
+				opline->op1_type, opline->op1, NULL);
+			result = zend_native_value_slot(
+				execute_data, opline->result_type, opline->result);
+			if (result != NULL) {
+				ZVAL_UNDEF(result);
+			}
+			return ZEND_NATIVE_ITERATOR_EXCEPTION;
+		}
 		if (truth) {
 			result = zend_native_value_slot(
 				execute_data, opline->result_type, opline->result);
