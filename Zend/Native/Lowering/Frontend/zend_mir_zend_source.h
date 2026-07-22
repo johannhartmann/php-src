@@ -126,6 +126,13 @@ const union _zend_function *zend_mir_zend_source_internal_function(
 	const zend_mir_zend_source *source,
 	zend_mir_source_call_target_id target_id);
 
+/* Resolve the innermost source-backed catch entry for a throwing opline. */
+bool zend_mir_zend_source_exception_handler(
+	const zend_mir_zend_source *source,
+	uint32_t throwing_opline_index,
+	zend_mir_source_block_id *block_id_out,
+	uint32_t *catch_opline_index_out);
+
 /*
  * Resolve one source call to an exact internal function. Instance methods are
  * accepted only when SSA class evidence and finality prove that normal Zend

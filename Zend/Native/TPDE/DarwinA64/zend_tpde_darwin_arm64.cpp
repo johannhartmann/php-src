@@ -55,6 +55,11 @@ public:
 
 	explicit ZendCompilerA64(Adaptor *adaptor) : Base{adaptor} {}
 
+	void generate_exception_branch(IRBlockRef target) {
+		auto index = static_cast<uint32_t>(this->analyzer.block_idx(target));
+		generate_raw_jump(Jump::jmp, this->block_labels[index]);
+	}
+
 	bool cur_func_may_emit_calls() const { return adaptor->plan()->may_emit_calls; }
 	::tpde::SymRef cur_personality_func() const { return {}; }
 	ValueParts val_parts(IRValueRef value) const {
@@ -538,6 +543,14 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			ASM(CMPxi, status_reg, ZEND_NATIVE_RETURNED);
 			auto continued = text_writer.label_create();
 			generate_raw_jump(Jump::Jeq, continued);
+			if (zend_mir_id_is_valid(call.exception_block_id)) {
+				auto propagate = text_writer.label_create();
+				ASM(CMPxi, status_reg, ZEND_NATIVE_EXCEPTION);
+				generate_raw_jump(Jump::Jne, propagate);
+				generate_exception_branch(
+					adaptor->block_ref(call.exception_block_id));
+				label_place(propagate);
+			}
 			RetBuilder return_builder{*this, *cur_cc_assigner()};
 			return_builder.add(std::move(status), ::tpde::CCAssignment{});
 			return_builder.ret();
@@ -571,6 +584,28 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					result.set_value(std::move(payload));
 				}
 			}
+			return true;
+		}
+		case ZEND_MIR_OPCODE_CATCH_ENTER: {
+			zend::native::tpde::CCAssignerAppleA64 assigner;
+			CallBuilder builder{*this, assigner};
+			builder.add_arg(CallArg{node.operands[0]});
+			builder.add_arg(ValuePart{mir.record.source_position_id, 4,
+				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			builder.call(ValuePart{
+				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
+					ZEND_NATIVE_HELPER_CATCH_ENTER)),
+				8, DarwinConfig::GP_BANK});
+			ValuePart status{DarwinConfig::GP_BANK};
+			builder.add_ret(status, ::tpde::CCAssignment{});
+			auto status_reg = status.cur_reg_or_load(this);
+			ASM(CMPxi, status_reg, ZEND_NATIVE_RETURNED);
+			auto continued = text_writer.label_create();
+			generate_raw_jump(Jump::Jeq, continued);
+			RetBuilder return_builder{*this, *cur_cc_assigner()};
+			return_builder.add(std::move(status), ::tpde::CCAssignment{});
+			return_builder.ret();
+			label_place(continued);
 			return true;
 		}
 		case ZEND_MIR_OPCODE_RETURN: {

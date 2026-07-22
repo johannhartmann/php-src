@@ -207,6 +207,22 @@ public:
 				valid_ = false;
 				continue;
 			}
+			if (zend_mir_id_is_valid(instruction.exception_block_id)) {
+				int32_t exception_block = block_index(
+					instruction.exception_block_id);
+				if (exception_block < 0) {
+					valid_ = false;
+					continue;
+				}
+				IRBlockRef exception_ref{
+					static_cast<uint32_t>(exception_block)};
+				auto &block_successors = successors_[
+					static_cast<uint32_t>(block)];
+				if (std::find(block_successors.begin(), block_successors.end(),
+						exception_ref) == block_successors.end()) {
+					block_successors.push_back(exception_ref);
+				}
+			}
 			IRValueRef result = value_ref(instruction.record.result_id);
 			if (instruction.record.opcode == ZEND_MIR_OPCODE_CONSTANT) {
 				continue;
@@ -273,6 +289,9 @@ public:
 							+ (result != INVALID_VALUE_REF); ++n) {
 					operands.push_back(IRValueRef{FRAME_VALUE});
 				}
+			} else if (instruction.record.opcode
+					== ZEND_MIR_OPCODE_CATCH_ENTER) {
+				operands.push_back(IRValueRef{FRAME_VALUE});
 			}
 			add_node(static_cast<uint32_t>(block), InstNode{
 				InstKind::MIR, i, UINT32_MAX, result, std::move(operands),

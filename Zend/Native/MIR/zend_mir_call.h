@@ -108,6 +108,7 @@ typedef struct _zend_mir_call_continuation_ref {
 	zend_mir_call_site_id call_site_id;
 	zend_mir_call_continuation_kind kind;
 	zend_mir_block_id block_id;
+	uint32_t source_opline_index;
 	uint32_t semantic_debt;
 } zend_mir_call_continuation_ref;
 

@@ -144,6 +144,27 @@ static bool zend_mir_w04_dominates(
 	return false;
 }
 
+static bool zend_mir_w04_has_protected_root(
+	const zend_mir_lowering_source_view *source,
+	zend_mir_source_block_id block)
+{
+	uint32_t remaining = source->block_count(source->context);
+	while (remaining-- != 0) {
+		zend_mir_source_block_ref record;
+		if (!zend_mir_w04_block_by_id(source, block, &record)) {
+			return false;
+		}
+		if (record.immediate_dominator == ZEND_MIR_ID_INVALID) {
+			return (record.flags & ZEND_MIR_SOURCE_BLOCK_PROTECTED) != 0;
+		}
+		if (record.immediate_dominator == block) {
+			return false;
+		}
+		block = record.immediate_dominator;
+	}
+	return false;
+}
+
 static bool zend_mir_w04_ssa_definition_block(
 	const zend_mir_lowering_source_view *source, uint32_t ssa_variable_id,
 	zend_mir_source_block_id *block_id, bool *is_live_in)
@@ -207,12 +228,10 @@ static bool zend_mir_w04_validate_blocks(
 						| ZEND_MIR_SOURCE_BLOCK_REACHABLE
 						| ZEND_MIR_SOURCE_BLOCK_LOOP_HEADER
 						| ZEND_MIR_SOURCE_BLOCK_PROTECTED
-						| ZEND_MIR_SOURCE_BLOCK_IRREDUCIBLE)) != 0) {
+						| ZEND_MIR_SOURCE_BLOCK_IRREDUCIBLE
+						| ZEND_MIR_SOURCE_BLOCK_CATCH_ENTRY
+						| ZEND_MIR_SOURCE_BLOCK_FINALLY_ENTRY)) != 0) {
 			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
-			return false;
-		}
-		if ((block.flags & ZEND_MIR_SOURCE_BLOCK_PROTECTED) != 0) {
-			validation->diagnostic = ZEND_MIRL_W04_PROTECTED_REGION;
 			return false;
 		}
 		if ((block.flags & ZEND_MIR_SOURCE_BLOCK_IRREDUCIBLE) != 0) {
@@ -232,6 +251,8 @@ static bool zend_mir_w04_validate_blocks(
 			continue;
 		}
 		if ((block.flags & ZEND_MIR_SOURCE_BLOCK_ENTRY) == 0
+				&& !((block.flags & ZEND_MIR_SOURCE_BLOCK_PROTECTED) != 0
+					&& block.immediate_dominator == ZEND_MIR_ID_INVALID)
 				&& (block.immediate_dominator >= block_count
 					|| block.immediate_dominator == block.id)) {
 			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
@@ -288,7 +309,8 @@ static bool zend_mir_w04_validate_blocks(
 		}
 		if ((block.flags & ZEND_MIR_SOURCE_BLOCK_REACHABLE) != 0
 				&& !zend_mir_w04_dominates(
-					source, validation->entry_block_id, block.id)) {
+					source, validation->entry_block_id, block.id)
+				&& !zend_mir_w04_has_protected_root(source, block.id)) {
 			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
 			return false;
 		}
@@ -535,10 +557,24 @@ bool zend_mir_w04_validate_source(
 	}
 	validation->proofs = ZEND_MIR_W04_PROOF_SOURCE_CFG_COMPLETE
 		| ZEND_MIR_W04_PROOF_REDUCIBLE_CFG
-		| ZEND_MIR_W04_PROOF_NO_PROTECTED_REGION
 		| ZEND_MIR_W04_PROOF_BRANCH_SUCCESSOR_ORDER
 		| ZEND_MIR_W04_PROOF_PHI_PREDECESSOR_ORDER
 		| ZEND_MIR_W04_PROOF_EDGE_STATEPOINTS;
+	{
+		uint32_t i;
+		bool protected_region = false;
+		for (i = 0; i < source->block_count(source->context); i++) {
+			zend_mir_source_block_ref block;
+			if (!source->block_at(source->context, i, &block)) {
+				return false;
+			}
+			protected_region |=
+				(block.flags & ZEND_MIR_SOURCE_BLOCK_PROTECTED) != 0;
+		}
+		if (!protected_region) {
+			validation->proofs |= ZEND_MIR_W04_PROOF_NO_PROTECTED_REGION;
+		}
+	}
 	validation->diagnostic = ZEND_MIRL_OK;
 	return true;
 }
