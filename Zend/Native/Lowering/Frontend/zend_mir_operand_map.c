@@ -715,7 +715,7 @@ static bool zend_mir_frontend_w09_iterator_branch(uint8_t opcode)
 
 static bool zend_mir_frontend_w09_value_branch(uint8_t opcode)
 {
-	return opcode == ZEND_COALESCE;
+	return opcode == ZEND_COALESCE || opcode == ZEND_JMP_SET;
 }
 
 static bool zend_mir_frontend_w09_iterator_operands_match(

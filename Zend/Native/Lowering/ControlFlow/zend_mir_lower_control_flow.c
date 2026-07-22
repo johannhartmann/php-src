@@ -344,7 +344,8 @@ bool zend_mir_w04_validate_branch_proofs(
 					|| opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
 					|| ((kind == ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT
 							|| kind == ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT
-							|| kind == ZEND_MIR_W09_BRANCH_COALESCE)
+							|| kind == ZEND_MIR_W09_BRANCH_COALESCE
+							|| kind == ZEND_MIR_W09_BRANCH_JMP_SET)
 						? opcode.result.kind != ZEND_MIR_SOURCE_OPERAND_SSA
 						: opcode.result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED)) {
 				return false;

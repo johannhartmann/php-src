@@ -23,6 +23,8 @@ static zend_mir_w04_branch_kind zend_mir_w04_verify_branch_kind(uint32_t opcode)
 			return ZEND_MIR_W08_BRANCH_FINALLY_CALL;
 		case 163:
 			return ZEND_MIR_W08_BRANCH_FINALLY_RETURN;
+		case 152:
+			return ZEND_MIR_W09_BRANCH_JMP_SET;
 		case 169:
 			return ZEND_MIR_W09_BRANCH_COALESCE;
 		case 77:
