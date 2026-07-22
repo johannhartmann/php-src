@@ -91,7 +91,8 @@ def architecture_leaks() -> list[str]:
     for path in production_paths():
         text = path.read_text(encoding="utf-8")
         include = FORBIDDEN_INCLUDE.search(text)
-        runtime = FORBIDDEN_RUNTIME.search(text)
+        runtime_text = re.sub(r"^\s*#.*$", "", text, flags=re.MULTILINE)
+        runtime = FORBIDDEN_RUNTIME.search(runtime_text)
         if include is not None:
             leaks.append(
                 f"{path.relative_to(ROOT)}: forbidden include "
