@@ -345,7 +345,8 @@ bool initialize_plan(
 		const zend_native_source_effect &effect = effects[i];
 		zend_tpde_instruction *match = nullptr;
 
-		if (effect.kind != ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR
+		if ((effect.kind != ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR
+				&& effect.kind != ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE)
 				|| !zend_mir_id_is_valid(effect.source_position_id)
 				|| !zend_mir_scalar_type_is_exact(effect.exact_type)) {
 			zend_tpde_set_diagnostic(diag,
@@ -456,6 +457,7 @@ bool initialize_plan(
 			ZEND_NATIVE_HELPER_FINALLY_RETURN,
 			ZEND_NATIVE_HELPER_RETURN_SOURCE_ZVAL,
 			ZEND_NATIVE_HELPER_INTERRUPT_POLL,
+			ZEND_NATIVE_HELPER_ABI_CONFORMANCE,
 		};
 		if (zend_native_runtime_validate(plan->runtime,
 				ZEND_NATIVE_RUNTIME_CAP_USER_CALL

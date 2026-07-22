@@ -185,6 +185,39 @@ void zend_native_echo_integer(
 void zend_native_echo_double(
 	zend_execute_data *execute_data, double value);
 
+/*
+ * Fixed-signature ABI probe used by the native integration extension. It is
+ * bounded, cannot allocate, call user code, throw, bail out, or reenter PHP.
+ * The wide signature deliberately crosses GP/FP register and stack argument
+ * boundaries on both supported targets. A zero return reports a mismatch.
+ */
+uint64_t zend_native_abi_conformance(
+	zend_execute_data *execute_data,
+	const zval *first_argument_slot,
+	uint64_t source_value,
+	uint8_t zext8,
+	int8_t sext8,
+	uint16_t zext16,
+	int16_t sext16,
+	uint32_t zext32,
+	int32_t sext32,
+	uint64_t unsigned64,
+	int64_t signed64,
+	uint64_t spill_a,
+	uint64_t spill_b,
+	double fp0,
+	double fp1,
+	double fp2,
+	double fp3,
+	double fp4,
+	double fp5,
+	double fp6,
+	double fp7,
+	double fp8,
+	double fp9);
+
+#define ZEND_NATIVE_ABI_CONFORMANCE_RESULT UINT64_C(1)
+
 #ifdef __cplusplus
 }
 #endif

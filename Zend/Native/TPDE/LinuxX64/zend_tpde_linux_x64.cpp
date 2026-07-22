@@ -127,6 +127,76 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		return true;
 	}
 	const zend_tpde_instruction &mir = adaptor->mir_instruction(instruction);
+	if (mir.source_effect == ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE) {
+		if (mir.source_effect_exact_type != ZEND_MIR_SCALAR_TYPE_I64
+				|| node.operands.empty()) {
+			return false;
+		}
+		auto [frame_ref, frame] = val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+		auto frame_reg = frame.load_to_reg();
+		ScratchReg slot{this};
+		auto slot_reg = slot.alloc_gp();
+		ASM(MOV64rr, slot_reg, frame_reg);
+		ASM(ADD64ri, slot_reg,
+			static_cast<int32_t>(ZEND_CALL_FRAME_SLOT * sizeof(zval)));
+		ValuePart slot_pointer{tpde::x64::PlatformConfig::GP_BANK, 8};
+		slot_pointer.set_value(this, std::move(slot));
+
+		tpde::x64::CCAssignerSysV assigner{false};
+		CallBuilder builder{*this, assigner};
+		builder.add_arg(std::move(frame), tpde::CCAssignment{});
+		builder.add_arg(std::move(slot_pointer), tpde::CCAssignment{});
+		builder.add_arg(CallArg{node.operands[0]});
+		auto add_extended = [&](uint64_t bits, uint32_t size, uint8_t extension) {
+			tpde::CCAssignment assignment{};
+			assignment.int_ext = extension;
+			assignment.align = static_cast<uint8_t>(size);
+			builder.add_arg(ValuePart{bits, size,
+				tpde::x64::PlatformConfig::GP_BANK}, assignment);
+		};
+		add_extended(UINT64_C(0xfe), 1, 8);
+		add_extended(UINT64_C(0x80), 1, UINT8_C(0x80) | 8);
+		add_extended(UINT64_C(0xfedc), 2, 16);
+		add_extended(UINT64_C(0x8001), 2, UINT8_C(0x80) | 16);
+		add_extended(UINT64_C(0xfedcba98), 4, 32);
+		add_extended(UINT64_C(0x89abcdef), 4, UINT8_C(0x80) | 32);
+		tpde::CCAssignment wide_assignment{};
+		wide_assignment.align = 8;
+		builder.add_arg(ValuePart{UINT64_C(0xfedcba9876543210), 8,
+			tpde::x64::PlatformConfig::GP_BANK}, wide_assignment);
+		builder.add_arg(ValuePart{UINT64_C(0xfedcba9876543211), 8,
+			tpde::x64::PlatformConfig::GP_BANK}, wide_assignment);
+		builder.add_arg(ValuePart{UINT64_C(0x0123456789abcdef), 8,
+			tpde::x64::PlatformConfig::GP_BANK}, wide_assignment);
+		builder.add_arg(ValuePart{UINT64_C(0x8877665544332211), 8,
+			tpde::x64::PlatformConfig::GP_BANK}, wide_assignment);
+		for (uint64_t bits : {
+				UINT64_C(0x3ff8000000000000), UINT64_C(0xc002000000000000),
+				UINT64_C(0x4009000000000000), UINT64_C(0xc012000000000000),
+				UINT64_C(0x4017000000000000), UINT64_C(0xc01b800000000000),
+				UINT64_C(0x401c000000000000), UINT64_C(0xc020400000000000),
+				UINT64_C(0x4022800000000000), UINT64_C(0xc025000000000000)}) {
+			builder.add_arg(ValuePart{bits, 8,
+				tpde::x64::PlatformConfig::FP_BANK}, wide_assignment);
+		}
+		builder.call(ValuePart{
+			reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
+				ZEND_NATIVE_HELPER_ABI_CONFORMANCE)), 8,
+			tpde::x64::PlatformConfig::GP_BANK});
+		ValuePart status{tpde::x64::PlatformConfig::GP_BANK};
+		builder.add_ret(status, tpde::CCAssignment{});
+		auto status_reg = status.cur_reg_or_load(this);
+		ASM(CMP64ri, status_reg, ZEND_NATIVE_ABI_CONFORMANCE_RESULT);
+		auto matched = text_writer.label_create();
+		generate_raw_jump(Jump::je, matched);
+		status.reset(this);
+		RetBuilder return_builder{*this, *cur_cc_assigner()};
+		return_builder.add(ValuePart{ZEND_NATIVE_BAILOUT, 4,
+			tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+		return_builder.ret();
+		label_place(matched);
+		return true;
+	}
 	if (mir.source_effect == ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR) {
 		zend_mir_scalar_type_mask exact_type = mir.source_effect_exact_type;
 		if (!zend_mir_scalar_type_is_exact(exact_type)
