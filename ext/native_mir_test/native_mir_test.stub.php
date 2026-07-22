@@ -40,7 +40,8 @@
  *         "fingerprint_recompute_failure"|"value_inventory"|"value_plan"|
  *         "value_storage"|"value_reference"|"value_alias"|"value_event"|
  *         "value_separation"|"value_call_transfer"|
- *         "value_verifier_failure"|"dump_failure"
+ *         "value_verifier_failure"|"dump_failure"|"mapping_failure"|
+ *         "entry_publish_failure"
  * }
  *
  * @return array
