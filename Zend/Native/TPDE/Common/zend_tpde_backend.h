@@ -57,6 +57,7 @@ typedef struct zend_native_image zend_native_image;
 typedef struct zend_native_code zend_native_code;
 typedef struct _zend_native_entry_cell zend_native_entry_cell;
 typedef struct _zend_native_internal_call_cell zend_native_internal_call_cell;
+struct _zend_native_runtime_api;
 
 typedef struct _zend_native_call_binding {
 	zend_mir_call_target_id target_id;
@@ -120,6 +121,26 @@ zend_result zend_tpde_compile_module_w08(
 	const zend_native_source_effect *effects,
 	uint32_t effect_count,
 	uint32_t frame_argument_count,
+	zend_native_image **out_image,
+	zend_native_diagnostic *diag);
+
+/*
+ * Compile against an explicit process-local runtime ABI. This is the same
+ * production adaptor path used by zend_tpde_compile_module_w08(); embedders
+ * may supply an ABI-compatible table and every helper actually required by
+ * the plan is resolved before an image can be returned.
+ */
+zend_result zend_tpde_compile_module_w08_with_runtime(
+	zend_native_target target,
+	const zend_mir_view *module,
+	const zend_native_call_binding *user_bindings,
+	uint32_t user_binding_count,
+	const zend_native_internal_call_binding *internal_bindings,
+	uint32_t internal_binding_count,
+	const zend_native_source_effect *effects,
+	uint32_t effect_count,
+	uint32_t frame_argument_count,
+	const struct _zend_native_runtime_api *runtime,
 	zend_native_image **out_image,
 	zend_native_diagnostic *diag);
 
