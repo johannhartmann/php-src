@@ -143,6 +143,12 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 		(const void *) zend_native_value_unset_dim},
 	{ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
 		(const void *) zend_native_value_isset_isempty_dim},
+	{ZEND_NATIVE_HELPER_VALUE_ASSIGN_OP, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_value_assign_op},
+	{ZEND_NATIVE_HELPER_VALUE_FE_FREE, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_value_fe_free},
+	{ZEND_NATIVE_HELPER_VALUE_ITERATOR_BRANCH, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_value_iterator_branch},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {

@@ -127,6 +127,8 @@ static zend_mir_opcode zend_mir_w09_executable_opcode(uint32_t opcode)
 	switch (opcode) {
 		case ZEND_ASSIGN:
 			return ZEND_MIR_OPCODE_VALUE_ASSIGN;
+		case ZEND_ASSIGN_OP:
+			return ZEND_MIR_OPCODE_VALUE_ASSIGN_OP;
 		case ZEND_QM_ASSIGN:
 			return ZEND_MIR_OPCODE_VALUE_QM_ASSIGN;
 		case ZEND_CONCAT:
@@ -165,6 +167,8 @@ static zend_mir_opcode zend_mir_w09_executable_opcode(uint32_t opcode)
 			return ZEND_MIR_OPCODE_VALUE_UNSET_DIM;
 		case ZEND_ISSET_ISEMPTY_DIM_OBJ:
 			return ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM;
+		case ZEND_FE_FREE:
+			return ZEND_MIR_OPCODE_VALUE_FE_FREE;
 		case ZEND_MAKE_REF:
 			return ZEND_MIR_OPCODE_VALUE_MAKE_REF;
 		case ZEND_ASSIGN_REF:
@@ -187,6 +191,8 @@ static zend_mir_opcode zend_mir_w09_executable_opcode(uint32_t opcode)
 bool zend_mir_w09_opcode_is_executable(uint32_t opcode)
 {
 	return opcode == ZEND_OP_DATA
+		|| opcode == ZEND_FE_RESET_R || opcode == ZEND_FE_FETCH_R
+		|| opcode == ZEND_FE_RESET_RW || opcode == ZEND_FE_FETCH_RW
 		|| zend_mir_w09_executable_opcode(opcode) != ZEND_MIR_OPCODE_INVALID;
 }
 
@@ -232,6 +238,7 @@ static bool zend_mir_w09_operation_semantics(
 			break;
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN_REF:
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN:
+		case ZEND_MIR_OPCODE_VALUE_ASSIGN_OP:
 		case ZEND_MIR_OPCODE_VALUE_CONCAT:
 		case ZEND_MIR_OPCODE_VALUE_FAST_CONCAT:
 		case ZEND_MIR_OPCODE_VALUE_ROPE_INIT:
@@ -250,6 +257,7 @@ static bool zend_mir_w09_operation_semantics(
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM_OP:
 		case ZEND_MIR_OPCODE_VALUE_UNSET_DIM:
 		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
+		case ZEND_MIR_OPCODE_VALUE_FE_FREE:
 			if (!zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_ALLOCATE)
 					|| !zend_mir_w09_add_effect(
 						&summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)

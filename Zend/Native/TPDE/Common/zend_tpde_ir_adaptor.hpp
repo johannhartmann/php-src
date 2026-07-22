@@ -255,6 +255,7 @@ public:
 			true});
 		for (uint32_t i = 0; i < plan_->value_count; ++i) {
 			if (plan_->values[i].argument_index < 0
+					|| !zend_mir_scalar_type_is_exact(plan_->values[i].exact_type)
 					|| plan_->values[i].exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
 				continue;
 			}
@@ -297,6 +298,17 @@ public:
 			if (instruction.record.opcode == ZEND_MIR_OPCODE_PHI) {
 				if (result == INVALID_VALUE_REF) {
 					valid_ = false;
+					continue;
+				}
+				/*
+				 * Canonical zval PHIs describe Zend-frame state.  W09 value and
+				 * iterator helpers read and update that state by source slot, so
+				 * these PHIs must remain in ZNMIR without becoming TPDE register
+				 * assignments.  Scalar PHIs still carry machine values and retain
+				 * the normal TPDE parallel-copy semantics.
+				 */
+				if (!zend_mir_scalar_type_is_exact(exact_type(result))
+						|| exact_type(result) == ZEND_MIR_SCALAR_TYPE_NULL) {
 					continue;
 				}
 				phis_[static_cast<uint32_t>(block)].push_back(result);
@@ -367,6 +379,10 @@ public:
 			}
 			if (zend_mir_opcode_is_executable_value(
 					instruction.record.opcode)) {
+				operands.push_back(IRValueRef{FRAME_VALUE});
+			}
+			if (instruction.record.opcode
+					== ZEND_MIR_OPCODE_ITERATOR_BRANCH) {
 				operands.push_back(IRValueRef{FRAME_VALUE});
 			}
 			if (instruction.record.opcode

@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <string.h>
 
 #include "../zend_mir_lowering_zend.h"
@@ -33,7 +34,7 @@ static zend_mir_lowering_result zend_mir_w04_abort(
 	return zend_mir_w04_result(status, code);
 }
 
-static bool zend_mir_w04_fact_for_ssa(
+static bool zend_mir_w04_raw_fact_for_ssa(
 	const zend_mir_lowering_context *context, uint32_t ssa_variable_id,
 	zend_mir_value_fact_ref *fact_out,
 	zend_mir_representation *representation_out)
@@ -51,6 +52,182 @@ static bool zend_mir_w04_fact_for_ssa(
 	*representation_out =
 		zend_mir_scalar_type_representation(fact_out->exact_type);
 	return *representation_out != ZEND_MIR_REPRESENTATION_INVALID;
+}
+
+static bool zend_mir_w09_phi_is_dynamic(
+	const zend_mir_lowering_context *context,
+	const zend_mir_source_phi_ref *phi)
+{
+	zend_mir_value_fact_ref result_fact;
+	zend_mir_representation result_representation;
+	uint32_t input_count;
+	uint32_t i;
+
+	if (context == NULL || phi == NULL
+			|| !zend_mir_w04_raw_fact_for_ssa(context,
+				phi->result_ssa_variable_id, &result_fact,
+				&result_representation)
+			|| result_representation == ZEND_MIR_REPRESENTATION_ZVAL) {
+		return true;
+	}
+	input_count = context->source->phi_input_count(context->source->context);
+	for (i = 0; i < input_count; i++) {
+		zend_mir_source_phi_input_ref input;
+		zend_mir_value_fact_ref input_fact;
+		zend_mir_representation input_representation;
+
+		if (!context->source->phi_input_at(
+				context->source->context, i, &input)) {
+			return true;
+		}
+		if (input.phi_id != phi->id) {
+			continue;
+		}
+		if (!zend_mir_w04_raw_fact_for_ssa(context,
+				input.source_ssa_variable_id, &input_fact,
+				&input_representation)
+				|| input_representation != result_representation
+				|| input_fact.exact_type != result_fact.exact_type) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/*
+ * W09 executes refcounted and dynamically typed value operations against the
+ * real source frame.  Zend SSA can still contain merge nodes for those slots
+ * after the private scalar prerequisite projection removes the defining value
+ * opcodes.  Keep the original PHI topology and stable IDs, but represent the
+ * entire connected dynamic-PHI component as zvals without inventing scalar
+ * facts for it.
+ */
+static bool zend_mir_w09_dynamic_phi_member(
+	const zend_mir_lowering_context *context, uint32_t ssa_variable_id)
+{
+	bool *reachable;
+	bool changed;
+	bool dynamic = false;
+	uint32_t ssa_count;
+	uint32_t phi_count;
+	uint32_t input_count;
+	uint32_t i;
+	bool phi_member = false;
+
+	if (context == NULL || context->zend_source == NULL
+			|| !context->zend_source->w09 || context->source == NULL
+			|| context->source->ssa_count == NULL
+			|| context->source->phi_count == NULL
+			|| context->source->phi_at == NULL
+			|| context->source->phi_input_count == NULL
+			|| context->source->phi_input_at == NULL) {
+		return false;
+	}
+	ssa_count = context->source->ssa_count(context->source->context);
+	if (ssa_variable_id >= ssa_count || ssa_count == 0) {
+		return false;
+	}
+	phi_count = context->source->phi_count(context->source->context);
+	input_count = context->source->phi_input_count(context->source->context);
+	for (i = 0; i < phi_count && !phi_member; i++) {
+		zend_mir_source_phi_ref phi;
+		uint32_t j;
+
+		if (!context->source->phi_at(
+				context->source->context, i, &phi)) {
+			return true;
+		}
+		phi_member = phi.result_ssa_variable_id == ssa_variable_id;
+		for (j = 0; !phi_member && j < input_count; j++) {
+			zend_mir_source_phi_input_ref input;
+
+			if (!context->source->phi_input_at(
+					context->source->context, j, &input)) {
+				return true;
+			}
+			phi_member = input.phi_id == phi.id
+				&& input.source_ssa_variable_id == ssa_variable_id;
+		}
+	}
+	if (!phi_member) {
+		return false;
+	}
+	reachable = calloc(ssa_count, sizeof(*reachable));
+	if (reachable == NULL) {
+		return true;
+	}
+	reachable[ssa_variable_id] = true;
+	do {
+		changed = false;
+		for (i = 0; i < phi_count; i++) {
+			zend_mir_source_phi_ref phi;
+			bool connected;
+			uint32_t j;
+
+			if (!context->source->phi_at(
+					context->source->context, i, &phi)) {
+				free(reachable);
+				return false;
+			}
+			connected = phi.result_ssa_variable_id < ssa_count
+				&& reachable[phi.result_ssa_variable_id];
+			for (j = 0; !connected && j < input_count; j++) {
+				zend_mir_source_phi_input_ref input;
+				if (!context->source->phi_input_at(
+						context->source->context, j, &input)) {
+					free(reachable);
+					return false;
+				}
+				connected = input.phi_id == phi.id
+					&& input.source_ssa_variable_id < ssa_count
+					&& reachable[input.source_ssa_variable_id];
+			}
+			if (!connected) {
+				continue;
+			}
+			if (zend_mir_w09_phi_is_dynamic(context, &phi)) {
+				dynamic = true;
+			}
+			if (phi.result_ssa_variable_id < ssa_count
+					&& !reachable[phi.result_ssa_variable_id]) {
+				reachable[phi.result_ssa_variable_id] = true;
+				changed = true;
+			}
+			for (j = 0; j < input_count; j++) {
+				zend_mir_source_phi_input_ref input;
+				if (!context->source->phi_input_at(
+						context->source->context, j, &input)) {
+					free(reachable);
+					return false;
+				}
+				if (input.phi_id == phi.id
+						&& input.source_ssa_variable_id < ssa_count
+						&& !reachable[input.source_ssa_variable_id]) {
+					reachable[input.source_ssa_variable_id] = true;
+					changed = true;
+				}
+			}
+		}
+	} while (changed);
+	free(reachable);
+	return dynamic;
+}
+
+static bool zend_mir_w04_fact_for_ssa(
+	const zend_mir_lowering_context *context, uint32_t ssa_variable_id,
+	zend_mir_value_fact_ref *fact_out,
+	zend_mir_representation *representation_out)
+{
+	if (zend_mir_w09_dynamic_phi_member(context, ssa_variable_id)) {
+		memset(fact_out, 0, sizeof(*fact_out));
+		fact_out->id = ZEND_MIR_ID_INVALID;
+		fact_out->value_id =
+			zend_mir_value_from_original_ssa(ssa_variable_id);
+		*representation_out = ZEND_MIR_REPRESENTATION_ZVAL;
+		return zend_mir_id_is_valid(fact_out->value_id);
+	}
+	return zend_mir_w04_raw_fact_for_ssa(
+		context, ssa_variable_id, fact_out, representation_out);
 }
 
 static bool zend_mir_w04_fact_for_operand(
@@ -128,7 +305,8 @@ bool zend_mir_w04_validate_branch_proofs(
 		}
 		if (kind == ZEND_MIR_W04_BRANCH_CATCH
 				|| kind == ZEND_MIR_W08_BRANCH_FINALLY_CALL
-				|| kind == ZEND_MIR_W08_BRANCH_FINALLY_RETURN) {
+				|| kind == ZEND_MIR_W08_BRANCH_FINALLY_RETURN
+				|| kind == ZEND_MIR_W09_BRANCH_ITERATOR) {
 			/*
 			 * FAST_CALL/FAST_RET operands are Zend's private finally-state
 			 * slot and try-table index. They remain source-backed metadata,
@@ -139,6 +317,10 @@ bool zend_mir_w04_validate_branch_proofs(
 						|| opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
 						|| opcode.result.kind
 							!= ZEND_MIR_SOURCE_OPERAND_UNUSED)) {
+				return false;
+			}
+			if (kind == ZEND_MIR_W09_BRANCH_ITERATOR
+					&& opcode.op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
 				return false;
 			}
 			continue;
@@ -195,9 +377,10 @@ static bool zend_mir_w04_predeclare_values(
 				representation, ZEND_MIR_OWNERSHIP_STATE_OWNED)) {
 			return false;
 		}
-		if (mutator->add_value_fact == NULL
+		if (fact.exact_type != ZEND_MIR_SCALAR_TYPE_NONE
+				&& (mutator->add_value_fact == NULL
 				|| !mutator->add_value_fact(
-					mutator->context, &fact, &fact_id)) {
+					mutator->context, &fact, &fact_id))) {
 			return false;
 		}
 	}
@@ -238,6 +421,8 @@ static bool zend_mir_w04_validate_scalar_phis(
 					&input_representation)
 					|| input_representation != result_representation
 					|| (phi.kind == ZEND_MIR_SOURCE_PHI_MERGE
+						&& result_fact.exact_type
+							!= ZEND_MIR_SCALAR_TYPE_NONE
 						&& input_fact.exact_type
 							!= result_fact.exact_type)) {
 				return false;
