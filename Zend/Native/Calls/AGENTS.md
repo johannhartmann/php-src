@@ -1,13 +1,20 @@
-# W05 call-model instructions
+# Native call semantics
 
-This subtree models calls; it does not execute them.
+This subtree owns the target-neutral call representation used by executable
+native user, internal, and method calls. It is not restricted to the historical
+W05 positional-scalar model.
 
-- Publish a call only after the complete reachable INIT/SEND/DO sequence has
-  been planned and validated atomically.
-- W05 accepts only exact direct same-script user functions with positional
-  by-value non-refcounted scalar arguments.
-- Records and stable identity are pointer-free. Process-local resolution may
-  inspect `zend_function *`, but no address may enter MIR.
-- Keep runtime binding, exception/bailout/reentry cleanup, observers, result
-  ownership, internal handlers, and C-ABI interoperability as explicit debts.
-- Do not add a VM fallback, MIR interpreter, target emission, or Stage 4.
+- Lower a complete reachable INIT/SEND/DO sequence atomically, including named
+  arguments, defaults, extra arguments, unpacking, variadics, references, and
+  refcounted values.
+- Preserve parameter and return-by-reference rules, argument-container cleanup,
+  observers, exceptions, bailout, reentry, and result ownership exactly.
+- Do not use function-name allowlists or keep valid calls model-only. A call in
+  the active implementation scope must execute or fail for its real PHP error.
+- Persistent records and stable identities remain pointer-free. Process-local
+  resolution and Runtime bindings may inspect `zend_function *`, but no process
+  address may enter MIR.
+- Keep target ABI mechanics in `TPDE/` and Zend call-frame semantics in
+  `Runtime/`; do not add a VM fallback, opcode handler call, or MIR interpreter.
+- Extend the existing execution and PHPT coverage without introducing per-wave
+  call gates, profiles, manifests, receipts, or ledgers.

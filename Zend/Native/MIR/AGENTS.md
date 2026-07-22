@@ -10,4 +10,7 @@ These instructions apply to `Zend/Native/MIR/**`.
 - Verify every MIR unit before lowering. A verifier must reject malformed
   control flow, invalid ownership, incomplete frame states, and unsupported
   effects rather than silently repairing them.
-- Add verifier and differential tests with every MIR contract change.
+- Keep the existing structural verifier coherent with executable MIR changes
+  and prove observable semantics through the existing direct execution,
+  differential, PHPT, sanitizer, and target tests. Do not create per-wave
+  verifier frameworks, gate manifests, receipts, or seal machinery.
