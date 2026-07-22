@@ -129,6 +129,10 @@ zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w04(
 	const zend_op_array *op_array,
 	zend_mir_op_array_id op_array_id,
 	zend_mir_frontend_diagnostic *diagnostic);
+zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w09(
+	const zend_op_array *op_array,
+	zend_mir_op_array_id op_array_id,
+	zend_mir_frontend_diagnostic *diagnostic);
 
 bool zend_mir_frontend_opcode_at(
 	const zend_mir_zend_source *source,

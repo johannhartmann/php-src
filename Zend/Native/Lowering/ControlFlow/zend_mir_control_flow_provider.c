@@ -509,6 +509,7 @@ bool zend_mir_w04_emit_terminator(
 				&& edge_count != 1 && edge_count != 2)
 			|| (kind == ZEND_MIR_W08_BRANCH_FINALLY_CALL && edge_count != 2)
 			|| (kind == ZEND_MIR_W08_BRANCH_FINALLY_RETURN && edge_count != 0)
+			|| (kind == ZEND_MIR_W09_BRANCH_ITERATOR && edge_count != 2)
 			|| (kind == ZEND_MIR_W04_BRANCH_KIND_INVALID && edge_count > 1)) {
 		return false;
 	}
@@ -523,6 +524,7 @@ bool zend_mir_w04_emit_terminator(
 	}
 	if (edge_count == 2 && kind != ZEND_MIR_W04_BRANCH_CATCH
 			&& kind != ZEND_MIR_W08_BRANCH_FINALLY_CALL
+			&& kind != ZEND_MIR_W09_BRANCH_ITERATOR
 			&& !zend_mir_w04_condition_value(
 				context, mutator, opcode, &condition)) {
 		return false;
@@ -557,6 +559,8 @@ bool zend_mir_w04_emit_terminator(
 					? ZEND_MIR_OPCODE_FINALLY_CALL
 				: kind == ZEND_MIR_W08_BRANCH_FINALLY_RETURN
 					? ZEND_MIR_OPCODE_FINALLY_RETURN
+				: kind == ZEND_MIR_W09_BRANCH_ITERATOR
+					? ZEND_MIR_OPCODE_ITERATOR_BRANCH
 				: edge_count == 1 ? ZEND_MIR_OPCODE_BRANCH
 				: ZEND_MIR_OPCODE_COND_BRANCH,
 			ZEND_MIR_REPRESENTATION_CONTROL, ZEND_MIR_ID_INVALID,
@@ -565,7 +569,8 @@ bool zend_mir_w04_emit_terminator(
 		return false;
 	}
 	if (edge_count == 2 && kind != ZEND_MIR_W04_BRANCH_CATCH
-			&& kind != ZEND_MIR_W08_BRANCH_FINALLY_CALL) {
+			&& kind != ZEND_MIR_W08_BRANCH_FINALLY_CALL
+			&& kind != ZEND_MIR_W09_BRANCH_ITERATOR) {
 		if (!zend_mir_id_is_valid(condition)
 				|| !mutator->add_operand(
 					mutator->context, terminator, condition)) {

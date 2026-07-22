@@ -838,13 +838,15 @@ static bool zend_mir_value_compose_executable_operations(
 	zend_mir_core_instruction *new_instructions;
 	zend_mir_call_site_ref *call_sites;
 	uint32_t *old_to_new;
+	unsigned char *operation_emitted;
 	size_t instruction_bytes;
 	size_t map_bytes;
 	uint32_t old_count = module->instructions.count;
 	uint32_t operation_count = staging->executable_operation_count;
 	uint32_t total_count;
 	uint32_t old_index = 0;
-	uint32_t operation_index = 0;
+	uint32_t operation_index;
+	uint32_t emitted_count = 0;
 	uint32_t new_index = 0;
 	uint32_t site_index;
 
@@ -871,35 +873,46 @@ static bool zend_mir_value_compose_executable_operations(
 	old_to_new = zend_mir_arena_allocate(
 		&module->arena, map_bytes == 0 ? sizeof(*old_to_new) : map_bytes,
 		alignof(uint32_t));
-	if (new_instructions == NULL || old_to_new == NULL) {
+	operation_emitted = zend_mir_arena_allocate(
+		&module->arena, operation_count, alignof(unsigned char));
+	if (new_instructions == NULL || old_to_new == NULL
+			|| operation_emitted == NULL) {
 		return zend_mir_module_fail(module,
 			ZEND_MIR_DIAGNOSTIC_ALLOCATION_FAILED,
 			"executable value composition allocation failed");
 	}
+	memset(operation_emitted, 0, operation_count);
 	old_instructions = ZEND_MIR_CORE_ITEMS(
 		module, instructions, zend_mir_core_instruction);
 	while (old_index < old_count) {
 		const zend_mir_instruction_record *old =
 			&old_instructions[old_index].record;
 
-		while (operation_index < operation_count) {
-			const zend_mir_executable_value_ref *operation =
-				&staging->executable_operations[operation_index];
-			if (operation->block_id > old->block_id
-					|| (operation->block_id == old->block_id
-						&& operation->source_position_id
-							> old->source_position_id)) {
-				break;
+		/*
+		 * CFG lowering emits PHIs for all blocks before it emits block bodies,
+		 * so the global instruction table is intentionally not block-sorted.
+		 * Merge against each owning block's non-PHI stream instead of assuming
+		 * that the next global instruction belongs to the next block.  This
+		 * also preserves the required PHI-first ordering within every block.
+		 */
+		if (old->opcode != ZEND_MIR_OPCODE_PHI) {
+			for (operation_index = 0; operation_index < operation_count;
+					operation_index++) {
+				const zend_mir_executable_value_ref *operation =
+					&staging->executable_operations[operation_index];
+
+				if (operation_emitted[operation_index]
+						|| operation->block_id != old->block_id
+						|| operation->source_position_id
+							> old->source_position_id) {
+					continue;
+				}
+				zend_mir_value_emit_executable_operation(
+					&new_instructions[new_index], operation, new_index);
+				operation_emitted[operation_index] = 1;
+				emitted_count++;
+				new_index++;
 			}
-			if (operation->block_id < old->block_id) {
-				return zend_mir_module_fail(module,
-					ZEND_MIR_DIAGNOSTIC_INVALID_CFG,
-					"executable value operation has no owning block instruction");
-			}
-			zend_mir_value_emit_executable_operation(
-				&new_instructions[new_index], operation, new_index);
-			new_index++;
-			operation_index++;
 		}
 		new_instructions[new_index] = old_instructions[old_index];
 		new_instructions[new_index].record.id = new_index;
@@ -907,10 +920,10 @@ static bool zend_mir_value_compose_executable_operations(
 		new_index++;
 		old_index++;
 	}
-	if (operation_index != operation_count || new_index != total_count) {
+	if (emitted_count != operation_count || new_index != total_count) {
 		return zend_mir_module_fail(module,
 			ZEND_MIR_DIAGNOSTIC_INVALID_CFG,
-			"executable value operation follows its block terminator");
+			"executable value operation has no ordered owning block instruction");
 	}
 	call_sites = ZEND_MIR_CORE_ITEMS(
 		module, call_sites, zend_mir_call_site_ref);

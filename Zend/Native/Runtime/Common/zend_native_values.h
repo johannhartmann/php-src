@@ -3,7 +3,7 @@
 #ifndef ZEND_NATIVE_VALUES_H
 #define ZEND_NATIVE_VALUES_H
 
-#include "Zend/Native/TPDE/Common/zend_tpde_backend.h"
+#include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,6 +24,8 @@ zend_native_status zend_native_value_unset_cv(
 zend_native_status zend_native_value_check_var(
 	zend_execute_data *execute_data, uint32_t source_opline_index);
 zend_native_status zend_native_value_assign(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_assign_op(
 	zend_execute_data *execute_data, uint32_t source_opline_index);
 zend_native_status zend_native_value_qm_assign(
 	zend_execute_data *execute_data, uint32_t source_opline_index);
@@ -62,6 +64,11 @@ zend_native_status zend_native_value_assign_dim_op(
 zend_native_status zend_native_value_unset_dim(
 	zend_execute_data *execute_data, uint32_t source_opline_index);
 zend_native_status zend_native_value_isset_isempty_dim(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_fe_free(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+
+zend_native_iterator_branch_result zend_native_value_iterator_branch(
 	zend_execute_data *execute_data, uint32_t source_opline_index);
 
 #ifdef __cplusplus

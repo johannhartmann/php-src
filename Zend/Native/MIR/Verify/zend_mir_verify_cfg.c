@@ -201,6 +201,7 @@ static uint32_t zend_mir_verify_expected_operands(zend_mir_opcode opcode,
 	switch (opcode) {
 		case ZEND_MIR_OPCODE_CONSTANT:
 		case ZEND_MIR_OPCODE_BRANCH:
+		case ZEND_MIR_OPCODE_ITERATOR_BRANCH:
 		case ZEND_MIR_OPCODE_CATCH_ENTER:
 		case ZEND_MIR_OPCODE_FINALLY_ENTER:
 		case ZEND_MIR_OPCODE_FINALLY_CALL:
@@ -247,6 +248,7 @@ static bool zend_mir_verify_result_contract(
 				&& instruction->representation != ZEND_MIR_REPRESENTATION_CONTROL;
 		case ZEND_MIR_OPCODE_BRANCH:
 		case ZEND_MIR_OPCODE_COND_BRANCH:
+		case ZEND_MIR_OPCODE_ITERATOR_BRANCH:
 		case ZEND_MIR_OPCODE_CATCH_ENTER:
 		case ZEND_MIR_OPCODE_FINALLY_CALL:
 		case ZEND_MIR_OPCODE_FINALLY_RETURN:
@@ -413,6 +415,7 @@ static void zend_mir_verify_block_instructions(
 		uint32_t expected_successors =
 			last->record.opcode == ZEND_MIR_OPCODE_BRANCH ? 1
 			: last->record.opcode == ZEND_MIR_OPCODE_COND_BRANCH
+				|| last->record.opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH
 				|| last->record.opcode == ZEND_MIR_OPCODE_FINALLY_CALL ? 2 : 0;
 		if ((last->record.opcode == ZEND_MIR_OPCODE_CATCH_ENTER
 				? block->successors_count != 1 && block->successors_count != 2
