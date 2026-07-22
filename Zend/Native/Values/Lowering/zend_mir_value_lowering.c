@@ -18,8 +18,10 @@
 #include "zend_mir_value_lowering.h"
 #include "../../Calls/Model/zend_mir_call_model.h"
 #include "../../Lowering/Core/zend_mir_lowering_internal.h"
+#include "../../Lowering/StraightLine/zend_mir_straight_line_internal.h"
 #include "../../Lowering/zend_mir_lowering_zend.h"
 #include "../../MIR/Core/zend_mir_module_internal.h"
+#include "../../MIR/Semantics/zend_mir_effect_summary.h"
 
 #define ZEND_MIR_W06_SNAPSHOT_MAGIC UINT32_C(0x57365350)
 #define ZEND_MIR_W06_LIMIT UINT32_C(1048576)
@@ -104,6 +106,7 @@ bool zend_mir_w06_opcode_is_accepted(uint32_t opcode)
 		case ZEND_CHECK_VAR:
 		case ZEND_SEND_VAR_NO_REF_EX:
 		case ZEND_SEND_REF:
+		case ZEND_FREE:
 		case ZEND_CHECK_FUNC_ARG:
 		case ZEND_SEND_VAR_NO_REF:
 		case ZEND_RETURN_BY_REF:
@@ -117,6 +120,329 @@ bool zend_mir_w06_opcode_is_accepted(uint32_t opcode)
 		default:
 			return false;
 	}
+}
+
+static zend_mir_opcode zend_mir_w09_executable_opcode(uint32_t opcode)
+{
+	switch (opcode) {
+		case ZEND_ASSIGN:
+			return ZEND_MIR_OPCODE_VALUE_ASSIGN;
+		case ZEND_QM_ASSIGN:
+			return ZEND_MIR_OPCODE_VALUE_QM_ASSIGN;
+		case ZEND_MAKE_REF:
+			return ZEND_MIR_OPCODE_VALUE_MAKE_REF;
+		case ZEND_ASSIGN_REF:
+			return ZEND_MIR_OPCODE_VALUE_ASSIGN_REF;
+		case ZEND_SEPARATE:
+			return ZEND_MIR_OPCODE_VALUE_SEPARATE;
+		case ZEND_COPY_TMP:
+			return ZEND_MIR_OPCODE_VALUE_COPY_TMP;
+		case ZEND_FREE:
+			return ZEND_MIR_OPCODE_VALUE_FREE;
+		case ZEND_UNSET_CV:
+			return ZEND_MIR_OPCODE_VALUE_UNSET_CV;
+		case ZEND_CHECK_VAR:
+			return ZEND_MIR_OPCODE_VALUE_CHECK_VAR;
+		default:
+			return ZEND_MIR_OPCODE_INVALID;
+	}
+}
+
+bool zend_mir_w09_opcode_is_executable(uint32_t opcode)
+{
+	return zend_mir_w09_executable_opcode(opcode) != ZEND_MIR_OPCODE_INVALID;
+}
+
+static bool zend_mir_w09_add_effect(
+	zend_mir_effect_summary *summary, zend_mir_effect effect)
+{
+	zend_mir_effect_summary atomic;
+	zend_mir_effect_summary composed;
+
+	if (!zend_mir_effect_summary_from_effect(effect, &atomic)
+			|| !zend_mir_effect_summary_compose(
+				&composed, summary, &atomic)) {
+		return false;
+	}
+	*summary = composed;
+	return true;
+}
+
+static bool zend_mir_w09_operation_semantics(
+	zend_mir_opcode opcode, zend_mir_executable_value_ref *operation,
+	zend_mir_safepoint_class *frame_class)
+{
+	zend_mir_effect_summary summary;
+	const zend_mir_memory_domain_mask frame_domains =
+		ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_FRAME_LOCALS)
+		| ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_FRAME_TEMPS);
+	const zend_mir_memory_domain_mask reference_domains =
+		ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_HEAP_ZVAL)
+		| ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_HEAP_REFERENCE)
+		| ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_GC_METADATA);
+
+	zend_mir_effect_summary_empty(&summary);
+	if (!zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_READ_MEMORY)
+			|| !zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_WRITE_MEMORY)) {
+		return false;
+	}
+	switch (opcode) {
+		case ZEND_MIR_OPCODE_VALUE_MAKE_REF:
+			if (!zend_mir_w09_add_effect(
+					&summary, ZEND_MIR_EFFECT_ALLOCATE)) {
+				return false;
+			}
+			break;
+		case ZEND_MIR_OPCODE_VALUE_ASSIGN_REF:
+		case ZEND_MIR_OPCODE_VALUE_ASSIGN:
+			if (!zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_ALLOCATE)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_THROW)) {
+				return false;
+			}
+			break;
+		case ZEND_MIR_OPCODE_VALUE_FREE:
+		case ZEND_MIR_OPCODE_VALUE_UNSET_CV:
+			if (!zend_mir_w09_add_effect(
+					&summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_THROW)) {
+				return false;
+			}
+			break;
+		case ZEND_MIR_OPCODE_VALUE_CHECK_VAR:
+			if (!zend_mir_w09_add_effect(
+					&summary, ZEND_MIR_EFFECT_OBSERVE_FRAME)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_REENTER_PHP)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_THROW)) {
+				return false;
+			}
+			break;
+		case ZEND_MIR_OPCODE_VALUE_SEPARATE:
+		case ZEND_MIR_OPCODE_VALUE_COPY_TMP:
+		case ZEND_MIR_OPCODE_VALUE_QM_ASSIGN:
+			break;
+		default:
+			return false;
+	}
+	summary.reads |= frame_domains | reference_domains;
+	summary.writes |= frame_domains | reference_domains;
+	if (!zend_mir_effect_summary_init(&summary, summary.effects,
+			summary.reads, summary.writes, summary.barriers, 0, 0)) {
+		return false;
+	}
+	operation->effects = summary.effects;
+	operation->reads = summary.reads;
+	operation->writes = summary.writes;
+	operation->barriers = summary.barriers;
+	operation->ownership_actions = 0;
+	if ((summary.barriers
+			& ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_DESTRUCTOR)) != 0) {
+		*frame_class = ZEND_MIR_SAFEPOINT_CLASS_DESTRUCTOR;
+	} else if ((summary.barriers
+			& ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_EXCEPTION)) != 0) {
+		*frame_class = ZEND_MIR_SAFEPOINT_CLASS_EXCEPTION_EDGE;
+	} else if ((summary.barriers
+			& ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_OBSERVER)) != 0) {
+		*frame_class = ZEND_MIR_SAFEPOINT_CLASS_OBSERVER;
+	} else if ((summary.effects
+			& ZEND_MIR_EFFECT_MASK(ZEND_MIR_EFFECT_ALLOCATE)) != 0) {
+		*frame_class = ZEND_MIR_SAFEPOINT_CLASS_ALLOCATION;
+	} else {
+		*frame_class = ZEND_MIR_SAFEPOINT_CLASS_INVALID;
+	}
+	return true;
+}
+
+static bool zend_mir_w09_source_block(
+	const zend_mir_lowering_source_view *source,
+	zend_mir_source_block_id id, zend_mir_source_block_ref *out)
+{
+	uint32_t index;
+
+	for (index = 0; index < source->block_count(source->context); index++) {
+		if (!source->block_at(source->context, index, out)) {
+			return false;
+		}
+		if (out->id == id) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool zend_mir_w09_mir_block(
+	const zend_mir_lowering_source_view *source,
+	const zend_mir_control_flow_map *map, const zend_mir_view *view,
+	zend_mir_source_block_id source_id, zend_mir_block_id *out)
+{
+	uint32_t index;
+	uint32_t reachable_index = 0;
+
+	if (source == NULL || view == NULL || out == NULL
+			|| source->block_count == NULL || source->block_at == NULL
+			|| view->block_count == NULL || view->block_at == NULL) {
+		return false;
+	}
+	if (map != NULL && map->block_count != NULL && map->block_at != NULL) {
+		for (index = 0; index < map->block_count(map->context); index++) {
+			zend_mir_control_flow_block_mapping mapping;
+			if (!map->block_at(map->context, index, &mapping)) {
+				return false;
+			}
+			if (mapping.source_block_id == source_id) {
+				*out = mapping.mir_block_id;
+				return true;
+			}
+		}
+	}
+	/*
+	 * W04 intentionally invalidates its process-local map after stage 3.
+	 * Its persistent block order is nevertheless source-backed: reachable
+	 * source blocks are created once, in source-table order, before calls or
+	 * value operations are appended. Reconstruct only that stable ordinal.
+	 */
+	for (index = 0; index < source->block_count(source->context); index++) {
+		zend_mir_source_block_ref source_block;
+		zend_mir_block_record mir_block;
+
+		if (!source->block_at(source->context, index, &source_block)) {
+			return false;
+		}
+		if ((source_block.flags & ZEND_MIR_SOURCE_BLOCK_REACHABLE) == 0) {
+			continue;
+		}
+		if (source_block.id == source_id) {
+			if (reachable_index >= view->block_count(view->context)
+					|| !view->block_at(
+						view->context, reachable_index, &mir_block)) {
+				return false;
+			}
+			*out = mir_block.id;
+			return true;
+		}
+		reachable_index++;
+	}
+	return false;
+}
+
+static int zend_mir_w09_compare_operations(const void *left, const void *right)
+{
+	const zend_mir_executable_value_ref *a = left;
+	const zend_mir_executable_value_ref *b = right;
+
+	if (a->block_id != b->block_id) {
+		return a->block_id < b->block_id ? -1 : 1;
+	}
+	if (a->source_position_id != b->source_position_id) {
+		return a->source_position_id < b->source_position_id ? -1 : 1;
+	}
+	return 0;
+}
+
+bool zend_mir_w09_emit_executable_values(
+	const zend_op_array *op_array,
+	zend_mir_lowering_context *lowering_context,
+	zend_mir_module *module,
+	const zend_mir_control_flow_map *control_flow_map,
+	zend_mir_straight_line_provider_context *frame_context)
+{
+	const zend_mir_lowering_source_view *source;
+	const zend_mir_view *view;
+	zend_mir_executable_value_ref *operations;
+	zend_mir_value_mutator *value_mutator;
+	zend_mir_mutator *mutator;
+	uint32_t operation_count = 0;
+	uint32_t index;
+	bool success = false;
+
+	if (op_array == NULL || lowering_context == NULL || module == NULL
+			|| control_flow_map == NULL || frame_context == NULL
+			|| op_array->last > ZEND_MIR_W06_LIMIT) {
+		return false;
+	}
+	source = lowering_context->source;
+	view = lowering_context->module_ops.view(
+		lowering_context->module_ops.context, module);
+	if (source == NULL || view == NULL
+			|| source->opcode_count(source->context) != op_array->last) {
+		return false;
+	}
+	operations = zend_mir_w06_calloc(op_array->last, sizeof(*operations));
+	if (op_array->last != 0 && operations == NULL) {
+		return false;
+	}
+	mutator = lowering_context->module_ops.mutator(
+		lowering_context->module_ops.context, module);
+	value_mutator = zend_mir_module_get_value_mutator(module);
+	if (mutator == NULL || value_mutator == NULL
+			|| value_mutator->add_executable_operation == NULL) {
+		goto done;
+	}
+	for (index = 0; index < op_array->last; index++) {
+		zend_mir_source_opcode_ref source_opcode;
+		zend_mir_source_block_ref source_block;
+		zend_mir_executable_value_ref *operation;
+		zend_mir_safepoint_class frame_class;
+		zend_mir_opcode opcode = zend_mir_w09_executable_opcode(
+			op_array->opcodes[index].opcode);
+
+		if (opcode == ZEND_MIR_OPCODE_INVALID) {
+			continue;
+		}
+		if (!source->opcode_at(source->context, index, &source_opcode)
+				|| source_opcode.opline_index != index
+				|| !zend_mir_w09_source_block(
+					source, source_opcode.block_id, &source_block)) {
+			goto done;
+		}
+		if ((source_block.flags & ZEND_MIR_SOURCE_BLOCK_REACHABLE) == 0) {
+			continue;
+		}
+		operation = &operations[operation_count];
+		memset(operation, 0, sizeof(*operation));
+		operation->id = ZEND_MIR_ID_INVALID;
+		operation->opcode = opcode;
+		operation->source_position_id = source_opcode.source_position_id;
+		operation->frame_state_id = ZEND_MIR_ID_INVALID;
+		if (!zend_mir_w09_mir_block(source, control_flow_map, view,
+				source_opcode.block_id, &operation->block_id)
+				|| !zend_mir_w09_operation_semantics(
+					opcode, operation, &frame_class)) {
+			goto done;
+		}
+		if (frame_class != ZEND_MIR_SAFEPOINT_CLASS_INVALID) {
+			zend_mir_source_position_id emitted_source;
+			if (!zend_mir_straight_line_emit_frame_for_class(
+					lowering_context, &source_opcode, mutator, frame_context,
+					frame_class, &operation->frame_state_id, &emitted_source)
+					|| emitted_source != operation->source_position_id) {
+				goto done;
+			}
+		}
+		operation_count++;
+	}
+	if (operation_count == 0) {
+		success = true;
+		goto done;
+	}
+	qsort(operations, operation_count, sizeof(*operations),
+		zend_mir_w09_compare_operations);
+	for (index = 0; index < operation_count; index++) {
+		if (!value_mutator->add_executable_operation(
+				value_mutator->context, &operations[index])) {
+			goto done;
+		}
+	}
+	success = zend_mir_module_commit_value_model(module);
+
+done:
+	free(operations);
+	return success;
 }
 
 static bool zend_mir_w06_profile_opcode_is_accepted(uint32_t opcode)

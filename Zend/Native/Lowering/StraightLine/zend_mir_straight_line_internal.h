@@ -28,5 +28,13 @@ bool zend_mir_straight_line_emit_observable_frame(
 	zend_mir_straight_line_provider_context *provider_context,
 	zend_mir_frame_state_id *frame_id_out,
 	zend_mir_source_position_id *source_id_out);
+bool zend_mir_straight_line_emit_frame_for_class(
+	zend_mir_lowering_context *context,
+	const zend_mir_source_opcode_ref *source_opcode,
+	zend_mir_mutator *mutator,
+	zend_mir_straight_line_provider_context *provider_context,
+	zend_mir_safepoint_class safepoint_class,
+	zend_mir_frame_state_id *frame_id_out,
+	zend_mir_source_position_id *source_id_out);
 
 #endif /* ZEND_MIR_STRAIGHT_LINE_INTERNAL_H */

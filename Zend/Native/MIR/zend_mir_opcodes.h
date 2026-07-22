@@ -36,6 +36,17 @@
 	X(ALIAS_RELATION, "alias_relation", 46) \
 	X(SEPARATION_PLAN, "separation_plan", 47)
 
+#define ZEND_MIR_EXECUTABLE_VALUE_OPCODE_CATALOG(X) \
+	X(VALUE_MAKE_REF, "value_make_ref", 54) \
+	X(VALUE_ASSIGN_REF, "value_assign_ref", 55) \
+	X(VALUE_SEPARATE, "value_separate", 56) \
+	X(VALUE_COPY_TMP, "value_copy_tmp", 57) \
+	X(VALUE_FREE, "value_free", 58) \
+	X(VALUE_UNSET_CV, "value_unset_cv", 59) \
+	X(VALUE_CHECK_VAR, "value_check_var", 60) \
+	X(VALUE_ASSIGN, "value_assign", 61) \
+	X(VALUE_QM_ASSIGN, "value_qm_assign", 62)
+
 #define ZEND_MIR_SCALAR_OPCODE_CATALOG(X) \
 	X(I64_ADD_NO_OVERFLOW, "i64_add_no_overflow", 10) \
 	X(I64_SUB_NO_OVERFLOW, "i64_sub_no_overflow", 11) \
@@ -75,6 +86,7 @@ typedef enum _zend_mir_opcode {
 	ZEND_MIR_SCALAR_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
 	ZEND_MIR_CALL_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
 	ZEND_MIR_VALUE_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
+	ZEND_MIR_EXECUTABLE_VALUE_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
 	/*
 	 * Keep the W03 scalar range boundary stable. W05 is modeling-only and
 	 * publishes its additive table boundary separately.
@@ -83,6 +95,7 @@ typedef enum _zend_mir_opcode {
 	ZEND_MIR_W05_OPCODE_COUNT = 42,
 	ZEND_MIR_W06_OPCODE_COUNT = 48,
 	ZEND_MIR_W08_OPCODE_COUNT = 54,
+	ZEND_MIR_W09_OPCODE_COUNT = 63,
 	ZEND_MIR_OPCODE_INVALID = -1
 } zend_mir_opcode;
 #undef ZEND_MIR_OPCODE_ENUM
@@ -137,6 +150,13 @@ static inline bool zend_mir_opcode_is_terminator(zend_mir_opcode opcode)
 		|| opcode == ZEND_MIR_OPCODE_UNREACHABLE;
 }
 
+static inline bool zend_mir_opcode_is_executable_value(
+	zend_mir_opcode opcode)
+{
+	return opcode >= ZEND_MIR_OPCODE_VALUE_MAKE_REF
+		&& opcode < ZEND_MIR_W09_OPCODE_COUNT;
+}
+
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_COUNT < UINT32_MAX,
 	"opcode invalid value remains unique");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_CALL_DIRECT_USER == ZEND_MIR_OPCODE_COUNT,
@@ -163,5 +183,11 @@ ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W08_OPCODE_COUNT
 	== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL + 1,
 	"W08 opcodes have an additive table boundary");
+ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_VALUE_MAKE_REF
+	== ZEND_MIR_W08_OPCODE_COUNT,
+	"executable value opcodes begin after the W08 boundary");
+ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W09_OPCODE_COUNT
+	== ZEND_MIR_OPCODE_VALUE_QM_ASSIGN + 1,
+	"executable value opcodes have an additive table boundary");
 
 #endif /* ZEND_MIR_OPCODES_H */

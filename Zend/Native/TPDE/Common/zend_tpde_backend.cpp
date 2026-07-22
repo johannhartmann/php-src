@@ -22,7 +22,32 @@ bool checked_count(uint32_t count) {
 
 void require_runtime_helper(
 	zend_tpde_plan *plan, zend_native_runtime_helper_id helper) {
-	plan->required_runtime_helpers |= UINT32_C(1) << helper;
+	plan->required_runtime_helpers |= UINT64_C(1) << helper;
+}
+
+zend_native_runtime_helper_id executable_value_helper(zend_mir_opcode opcode) {
+	switch (opcode) {
+		case ZEND_MIR_OPCODE_VALUE_MAKE_REF:
+			return ZEND_NATIVE_HELPER_VALUE_MAKE_REF;
+		case ZEND_MIR_OPCODE_VALUE_ASSIGN_REF:
+			return ZEND_NATIVE_HELPER_VALUE_ASSIGN_REF;
+		case ZEND_MIR_OPCODE_VALUE_SEPARATE:
+			return ZEND_NATIVE_HELPER_VALUE_SEPARATE;
+		case ZEND_MIR_OPCODE_VALUE_COPY_TMP:
+			return ZEND_NATIVE_HELPER_VALUE_COPY_TMP;
+		case ZEND_MIR_OPCODE_VALUE_FREE:
+			return ZEND_NATIVE_HELPER_VALUE_FREE;
+		case ZEND_MIR_OPCODE_VALUE_UNSET_CV:
+			return ZEND_NATIVE_HELPER_VALUE_UNSET_CV;
+		case ZEND_MIR_OPCODE_VALUE_CHECK_VAR:
+			return ZEND_NATIVE_HELPER_VALUE_CHECK_VAR;
+		case ZEND_MIR_OPCODE_VALUE_ASSIGN:
+			return ZEND_NATIVE_HELPER_VALUE_ASSIGN;
+		case ZEND_MIR_OPCODE_VALUE_QM_ASSIGN:
+			return ZEND_NATIVE_HELPER_VALUE_QM_ASSIGN;
+		default:
+			return ZEND_NATIVE_HELPER_COUNT;
+	}
 }
 
 void destroy_plan(zend_tpde_plan *plan) {
@@ -211,6 +236,22 @@ bool initialize_plan(
 		plan->instructions[i].source_opline_index = UINT32_MAX;
 		plan->instructions[i].operand_offset = static_cast<uint32_t>(operands - count);
 		plan->instructions[i].operand_count = count;
+		if (zend_mir_opcode_is_executable_value(record.opcode)) {
+			const zend_native_runtime_helper_id helper =
+				executable_value_helper(record.opcode);
+			if (count != 0 || !zend_mir_id_is_valid(record.source_position_id)
+					|| helper == ZEND_NATIVE_HELPER_COUNT) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+					"executable value operation lacks exact source semantics");
+				return false;
+			}
+			plan->instructions[i].source_opline_index =
+				record.source_position_id;
+			plan->required_runtime_capabilities |=
+				ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT;
+			require_runtime_helper(plan, helper);
+		}
 		if (record.opcode == ZEND_MIR_OPCODE_STATEPOINT
 				&& (record.effects & ZEND_MIR_EFFECT_MASK(
 					ZEND_MIR_EFFECT_INTERRUPT_BOUNDARY)) != 0) {
@@ -531,8 +572,8 @@ bool initialize_plan(
 			plan->required_runtime_capabilities, diag) == FAILURE) {
 		return false;
 	}
-	for (uint32_t id = 1; id <= ZEND_NATIVE_HELPER_ABI_CONFORMANCE; ++id) {
-		if ((plan->required_runtime_helpers & (UINT32_C(1) << id)) != 0) {
+	for (uint32_t id = 1; id < ZEND_NATIVE_HELPER_COUNT; ++id) {
+		if ((plan->required_runtime_helpers & (UINT64_C(1) << id)) != 0) {
 			const zend_native_runtime_helper *helper =
 				zend_native_runtime_helper_find(plan->runtime,
 					static_cast<zend_native_runtime_helper_id>(id));

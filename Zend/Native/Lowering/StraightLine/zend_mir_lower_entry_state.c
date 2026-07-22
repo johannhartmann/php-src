@@ -291,7 +291,7 @@ static bool zend_mir_straight_line_slot_value(
 	return true;
 }
 
-static bool zend_mir_straight_line_emit_frame(
+bool zend_mir_straight_line_emit_frame_for_class(
 	zend_mir_lowering_context *context,
 	const zend_mir_source_opcode_ref *source_opcode,
 	zend_mir_mutator *mutator,
@@ -416,7 +416,7 @@ zend_mir_lowering_status zend_mir_lower_entry_state(
 		}
 		return ZEND_MIR_LOWERING_SUCCESS;
 	}
-	if (!zend_mir_straight_line_emit_frame(
+	if (!zend_mir_straight_line_emit_frame_for_class(
 			context, source_opcode, mutator, provider_context,
 			ZEND_MIR_SAFEPOINT_CLASS_FUNCTION_ENTRY, &frame_id, &source_id)) {
 		return ZEND_MIR_LOWERING_FAILED;
@@ -459,7 +459,7 @@ bool zend_mir_straight_line_emit_observable_frame(
 	zend_mir_frame_state_id *frame_id_out,
 	zend_mir_source_position_id *source_id_out)
 {
-	return zend_mir_straight_line_emit_frame(
+	return zend_mir_straight_line_emit_frame_for_class(
 		context, source_opcode, mutator, provider_context,
 		ZEND_MIR_SAFEPOINT_CLASS_FUNCTION_ENTRY,
 		frame_id_out, source_id_out);

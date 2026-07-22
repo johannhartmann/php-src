@@ -306,8 +306,50 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		result.set_modified();
 		return true;
 	};
+	auto execute_value_operation = [&](zend_native_runtime_helper_id helper) {
+		if (node.operands.size() != 1 || mir.source_opline_index == UINT32_MAX) {
+			return false;
+		}
+		zend::native::tpde::CCAssignerAppleA64 assigner;
+		CallBuilder builder{*this, assigner};
+		builder.add_arg(CallArg{node.operands[0]});
+		builder.add_arg(ValuePart{mir.source_opline_index, 4,
+			DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+		builder.call(ValuePart{
+			reinterpret_cast<uintptr_t>(adaptor->runtime_helper(helper)), 8,
+			DarwinConfig::GP_BANK});
+		ValuePart status{DarwinConfig::GP_BANK};
+		builder.add_ret(status, ::tpde::CCAssignment{});
+		auto status_reg = status.cur_reg_or_load(this);
+		ASM(CMPxi, status_reg, ZEND_NATIVE_RETURNED);
+		auto continued = text_writer.label_create();
+		generate_raw_jump(Jump::Jeq, continued);
+		RetBuilder return_builder{*this, *cur_cc_assigner()};
+		return_builder.add(std::move(status), ::tpde::CCAssignment{});
+		return_builder.ret();
+		label_place(continued);
+		return true;
+	};
 
 	switch (mir.record.opcode) {
+		case ZEND_MIR_OPCODE_VALUE_MAKE_REF:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_MAKE_REF);
+		case ZEND_MIR_OPCODE_VALUE_ASSIGN_REF:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ASSIGN_REF);
+		case ZEND_MIR_OPCODE_VALUE_SEPARATE:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_SEPARATE);
+		case ZEND_MIR_OPCODE_VALUE_COPY_TMP:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_COPY_TMP);
+		case ZEND_MIR_OPCODE_VALUE_FREE:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FREE);
+		case ZEND_MIR_OPCODE_VALUE_UNSET_CV:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_UNSET_CV);
+		case ZEND_MIR_OPCODE_VALUE_CHECK_VAR:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_CHECK_VAR);
+		case ZEND_MIR_OPCODE_VALUE_ASSIGN:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ASSIGN);
+		case ZEND_MIR_OPCODE_VALUE_QM_ASSIGN:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_QM_ASSIGN);
 		case ZEND_MIR_OPCODE_COPY:
 		case ZEND_MIR_OPCODE_CANONICALIZE:
 		case ZEND_MIR_OPCODE_I1_TO_I64:
