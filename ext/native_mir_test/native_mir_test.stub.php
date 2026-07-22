@@ -3,12 +3,12 @@
 /** @generate-class-entries */
 
 /**
- * Compile source without executing it and return a canonical W03-W07 MIR result.
+ * Compile source without executing it and return a canonical W03-W09 MIR result.
  *
  * Result shape:
  * array{
  *     schema_version: int,
- *     wave?: 4|5|6|7,
+ *     wave?: 4|5|6|7|8|9,
  *     status: "accepted"|"rejected"|"error",
  *     phase: "compile"|"ssa"|"lowering"|"verify"|"dump"|"complete",
  *     source: array{filename: string, byte_length: int, source_id: string},
@@ -26,7 +26,7 @@
  * array{
  *     function?: ?string,
  *     diagnostic_limit?: int,
- *     wave?: 3|4|5|6|7|8,
+ *     wave?: 3|4|5|6|7|8|9,
  *     arena_chunk_size?: int,
  *     compiler_mode?: "ignore_user_functions",
  *     stack_probe?: true,

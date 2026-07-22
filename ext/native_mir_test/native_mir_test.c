@@ -313,6 +313,13 @@ extern zend_mir_w08_lowering_result zend_mir_lower_w08_zend_op_array(
 	const zend_mir_lowering_module_ops *module_ops,
 	zend_mir_diagnostic_sink *diagnostics);
 
+extern zend_mir_w08_lowering_result zend_mir_lower_w09_zend_op_array(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	const zend_mir_lowering_module_ops *module_ops,
+	zend_mir_diagnostic_sink *diagnostics);
+
 extern zend_mir_lowering_status zend_mir_frontend_project_w05_result_facts(
 	const zend_script *script,
 	const zend_op_array *op_array,
@@ -618,7 +625,8 @@ static bool native_mir_test_parse_options(
 							&& Z_LVAL_P(value) != 5
 							&& Z_LVAL_P(value) != 6
 							&& Z_LVAL_P(value) != 7
-							&& Z_LVAL_P(value) != 8)) {
+							&& Z_LVAL_P(value) != 8
+							&& Z_LVAL_P(value) != 9)) {
 				goto invalid_value;
 			}
 			state->wave = (uint32_t) Z_LVAL_P(value);
@@ -1363,7 +1371,11 @@ static bool native_mir_test_lower_w05_and_dump(native_mir_test_state *state)
 	}
 	zend_mir_w05_test_set_fault(call_fault);
 #endif
-	result = state->wave >= 8
+	result = state->wave >= 9
+		? zend_mir_lower_w09_zend_op_array(
+			&state->script, state->selected, &state->ssa,
+			&module_ops, &diagnostics)
+		: state->wave >= 8
 		? zend_mir_lower_w08_zend_op_array(
 			&state->script, state->selected, &state->ssa,
 			&module_ops, &diagnostics)
@@ -1516,7 +1528,8 @@ static bool native_mir_test_lower_and_dump(native_mir_test_state *state)
 	if (state->wave == 6) {
 		return native_mir_test_lower_w06_and_dump(state);
 	}
-	if (state->wave == 5 || state->wave == 7 || state->wave == 8) {
+	if (state->wave == 5 || state->wave == 7
+			|| state->wave == 8 || state->wave == 9) {
 		return native_mir_test_lower_w05_and_dump(state);
 	}
 	return state->wave == 4
@@ -2380,7 +2393,9 @@ static bool native_mir_test_lower_native_function(
 			break;
 		}
 	}
-	if (!(state->wave == 6
+	if (!(state->wave >= 9
+			? native_mir_test_lower_w05_and_dump(&local)
+			: state->wave == 6
 			? native_mir_test_lower_w06_and_dump(&local)
 			: has_call
 				? native_mir_test_lower_w05_and_dump(&local)

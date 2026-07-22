@@ -96,6 +96,9 @@ ZEND_MIR_VALUE_STAGE(zend_mir_value_stage_separation_plan,
 ZEND_MIR_VALUE_STAGE(zend_mir_value_stage_call_transfer,
 	zend_mir_call_transfer_ref, call_transfers,
 	call_transfer_count, call_transfer_capacity)
+ZEND_MIR_VALUE_STAGE(zend_mir_value_stage_executable_operation,
+	zend_mir_executable_value_ref, executable_operations,
+	executable_operation_count, executable_operation_capacity)
 
 #undef ZEND_MIR_VALUE_STAGE
 
@@ -688,6 +691,11 @@ static bool zend_mir_value_validate_call_transfers(
 	if (!module->call_staging.committed) {
 		return staging->call_transfer_count == 0;
 	}
+	if (module->call_sites.count == 0 && module->call_arguments.count == 0
+			&& module->call_targets.count == 0
+			&& module->call_continuations.count == 0) {
+		return staging->call_transfer_count == 0;
+	}
 	if (staging->call_transfer_count != module->call_arguments.count
 			|| module->call_sites.items == NULL
 			|| (module->call_arguments.count != 0
@@ -764,7 +772,161 @@ static bool zend_mir_value_staging_counts_bounded(
 		&& staging->alias_relation_count <= limit
 		&& staging->ownership_event_count <= limit
 		&& staging->separation_plan_count <= limit
-		&& staging->call_transfer_count <= limit;
+		&& staging->call_transfer_count <= limit
+		&& staging->executable_operation_count <= limit;
+}
+
+static bool zend_mir_value_validate_executable_operations(
+	const zend_mir_module *module,
+	const zend_mir_core_value_staging *staging)
+{
+	uint32_t index;
+	zend_mir_block_id previous_block = 0;
+	zend_mir_source_position_id previous_source = 0;
+	bool have_previous = false;
+
+	for (index = 0; index < staging->executable_operation_count; index++) {
+		const zend_mir_executable_value_ref *operation =
+			&staging->executable_operations[index];
+		const zend_mir_block_record *blocks = ZEND_MIR_CORE_ITEMS(
+			module, blocks, zend_mir_block_record);
+
+		if (zend_mir_id_is_valid(operation->id)
+				|| operation->block_id >= module->blocks.count
+				|| blocks[operation->block_id].id != operation->block_id
+				|| !zend_mir_opcode_is_executable_value(operation->opcode)
+				|| operation->source_position_id >= module->source_positions.count) {
+			return false;
+		}
+		if (have_previous
+				&& (operation->block_id < previous_block
+					|| (operation->block_id == previous_block
+						&& operation->source_position_id <= previous_source))) {
+			return false;
+		}
+		previous_block = operation->block_id;
+		previous_source = operation->source_position_id;
+		have_previous = true;
+	}
+	return true;
+}
+
+static void zend_mir_value_emit_executable_operation(
+	zend_mir_core_instruction *target,
+	const zend_mir_executable_value_ref *operation,
+	zend_mir_instruction_id id)
+{
+	memset(target, 0, sizeof(*target));
+	target->record.id = id;
+	target->record.block_id = operation->block_id;
+	target->record.opcode = operation->opcode;
+	target->record.representation = ZEND_MIR_REPRESENTATION_VOID;
+	target->record.result_id = ZEND_MIR_ID_INVALID;
+	target->record.frame_state_id = operation->frame_state_id;
+	target->record.source_position_id = operation->source_position_id;
+	target->record.effects = operation->effects;
+	target->record.reads = operation->reads;
+	target->record.writes = operation->writes;
+	target->record.barriers = operation->barriers;
+	target->record.ownership_actions = operation->ownership_actions;
+}
+
+static bool zend_mir_value_compose_executable_operations(
+	zend_mir_module *module, zend_mir_core_value_staging *staging)
+{
+	zend_mir_core_instruction *old_instructions;
+	zend_mir_core_instruction *new_instructions;
+	zend_mir_call_site_ref *call_sites;
+	uint32_t *old_to_new;
+	size_t instruction_bytes;
+	size_t map_bytes;
+	uint32_t old_count = module->instructions.count;
+	uint32_t operation_count = staging->executable_operation_count;
+	uint32_t total_count;
+	uint32_t old_index = 0;
+	uint32_t operation_index = 0;
+	uint32_t new_index = 0;
+	uint32_t site_index;
+
+	if (operation_count == 0) {
+		return true;
+	}
+	if (old_count > module->limits.instructions
+			|| operation_count > module->limits.instructions - old_count) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
+			"executable value instruction count overflow");
+	}
+	total_count = old_count + operation_count;
+	if ((size_t) total_count > SIZE_MAX / sizeof(*new_instructions)
+			|| (size_t) old_count > SIZE_MAX / sizeof(*old_to_new)) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
+			"executable value composition size overflow");
+	}
+	instruction_bytes = (size_t) total_count * sizeof(*new_instructions);
+	map_bytes = (size_t) old_count * sizeof(*old_to_new);
+	new_instructions = zend_mir_arena_allocate(
+		&module->arena, instruction_bytes, alignof(zend_mir_core_instruction));
+	old_to_new = zend_mir_arena_allocate(
+		&module->arena, map_bytes == 0 ? sizeof(*old_to_new) : map_bytes,
+		alignof(uint32_t));
+	if (new_instructions == NULL || old_to_new == NULL) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_ALLOCATION_FAILED,
+			"executable value composition allocation failed");
+	}
+	old_instructions = ZEND_MIR_CORE_ITEMS(
+		module, instructions, zend_mir_core_instruction);
+	while (old_index < old_count) {
+		const zend_mir_instruction_record *old =
+			&old_instructions[old_index].record;
+
+		while (operation_index < operation_count) {
+			const zend_mir_executable_value_ref *operation =
+				&staging->executable_operations[operation_index];
+			if (operation->block_id > old->block_id
+					|| (operation->block_id == old->block_id
+						&& operation->source_position_id
+							> old->source_position_id)) {
+				break;
+			}
+			if (operation->block_id < old->block_id) {
+				return zend_mir_module_fail(module,
+					ZEND_MIR_DIAGNOSTIC_INVALID_CFG,
+					"executable value operation has no owning block instruction");
+			}
+			zend_mir_value_emit_executable_operation(
+				&new_instructions[new_index], operation, new_index);
+			new_index++;
+			operation_index++;
+		}
+		new_instructions[new_index] = old_instructions[old_index];
+		new_instructions[new_index].record.id = new_index;
+		old_to_new[old_index] = new_index;
+		new_index++;
+		old_index++;
+	}
+	if (operation_index != operation_count || new_index != total_count) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_INVALID_CFG,
+			"executable value operation follows its block terminator");
+	}
+	call_sites = ZEND_MIR_CORE_ITEMS(
+		module, call_sites, zend_mir_call_site_ref);
+	for (site_index = 0; site_index < module->call_sites.count; site_index++) {
+		if (call_sites[site_index].instruction_id >= old_count) {
+			return zend_mir_module_fail(module,
+				ZEND_MIR_DIAGNOSTIC_INVALID_ID,
+				"call site references an unknown pre-composition instruction");
+		}
+		call_sites[site_index].instruction_id =
+			old_to_new[call_sites[site_index].instruction_id];
+	}
+	module->instructions.items = new_instructions;
+	module->instructions.count = total_count;
+	module->instructions.capacity = total_count;
+	return true;
 }
 
 static bool zend_mir_value_copy_table(
@@ -806,7 +968,9 @@ bool zend_mir_module_commit_value_model(zend_mir_module *module)
 			|| !zend_mir_value_validate_aliases(module, staging)
 			|| !zend_mir_value_validate_events(module, staging)
 			|| !zend_mir_value_validate_separations(staging)
-			|| !zend_mir_value_validate_call_transfers(module, staging)) {
+			|| !zend_mir_value_validate_call_transfers(module, staging)
+			|| !zend_mir_value_validate_executable_operations(module, staging)
+			|| !zend_mir_value_compose_executable_operations(module, staging)) {
 		return zend_mir_module_fail(module,
 			ZEND_MIR_DIAGNOSTIC_INVALID_OWNERSHIP,
 			"invalid W06 value/reference model");
@@ -916,6 +1080,8 @@ void zend_mir_module_init_value_mutator(zend_mir_module *module)
 		zend_mir_value_stage_separation_plan;
 	module->value_mutator.add_call_transfer =
 		zend_mir_value_stage_call_transfer;
+	module->value_mutator.add_executable_operation =
+		zend_mir_value_stage_executable_operation;
 }
 
 zend_mir_value_mutator *zend_mir_module_get_value_mutator(

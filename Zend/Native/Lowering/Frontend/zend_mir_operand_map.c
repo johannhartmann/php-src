@@ -1,5 +1,6 @@
 #include "zend_mir_zend_source_internal.h"
 
+
 bool zend_mir_frontend_normalize_operand_type(
 	uint8_t operand_type,
 	uint32_t operand_index,

@@ -16,6 +16,7 @@
 #define ZEND_MIR_LOWERING_INTERNAL_H
 
 #include "../zend_mir_lowering.h"
+#include "../../MIR/zend_mir_control_flow.h"
 
 #define ZEND_MIR_LOWERING_MAX_PROVIDERS UINT32_C(32)
 #define ZEND_MIR_LOWERING_MAX_CLAIMS UINT32_C(64)
@@ -119,6 +120,11 @@ struct _zend_mir_lowering_context {
 	const void *value_fact_context;
 	bool (*value_fact_at)(const void *context, zend_mir_value_id value_id,
 		zend_mir_value_fact_ref *fact_out);
+	const void *post_call_composition_context;
+	bool (*post_call_composition)(const void *composition_context,
+		zend_mir_lowering_context *lowering_context,
+		zend_mir_module *module,
+		const zend_mir_control_flow_map *control_flow_map);
 	const struct _zend_mir_zend_source *zend_source;
 	bool has_last_diagnostic_opline;
 	bool values_predeclared;
@@ -167,6 +173,12 @@ bool zend_mir_lowering_context_set_value_fact_resolver(
 bool zend_mir_lowering_context_set_zend_source(
 	zend_mir_lowering_context *context,
 	const struct _zend_mir_zend_source *source);
+bool zend_mir_lowering_context_set_post_call_composition(
+	zend_mir_lowering_context *context, const void *composition_context,
+	bool (*compose)(const void *composition_context,
+		zend_mir_lowering_context *lowering_context,
+		zend_mir_module *module,
+		const zend_mir_control_flow_map *control_flow_map));
 
 zend_mir_w06_lowering_result zend_mir_lower_w06_zend_op_array(
 	const struct _zend_script *script,

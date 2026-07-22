@@ -153,6 +153,23 @@ typedef struct _zend_mir_call_transfer_ref {
 	zend_mir_transfer_action return_action;
 } zend_mir_call_transfer_ref;
 
+/*
+ * Persistent executable value operations contain stable source and MIR IDs
+ * only. The process-local Zend opline is resolved by the runtime boundary.
+ */
+typedef struct _zend_mir_executable_value_ref {
+	zend_mir_instruction_id id;
+	zend_mir_block_id block_id;
+	zend_mir_opcode opcode;
+	zend_mir_source_position_id source_position_id;
+	zend_mir_frame_state_id frame_state_id;
+	zend_mir_effect_mask effects;
+	zend_mir_memory_domain_mask reads;
+	zend_mir_memory_domain_mask writes;
+	zend_mir_barrier_mask barriers;
+	zend_mir_ownership_action_mask ownership_actions;
+} zend_mir_executable_value_ref;
+
 typedef struct _zend_mir_value_view {
 	uint32_t contract_version;
 	const void *context;
@@ -187,6 +204,8 @@ typedef struct _zend_mir_value_mutator {
 	bool (*add_ownership_event)(void *context, const zend_mir_ownership_event_ref *record);
 	bool (*add_separation_plan)(void *context, const zend_mir_separation_plan_ref *record);
 	bool (*add_call_transfer)(void *context, const zend_mir_call_transfer_ref *record);
+	bool (*add_executable_operation)(void *context,
+		const zend_mir_executable_value_ref *record);
 } zend_mir_value_mutator;
 
 typedef enum _zend_mir_verify_w06_code {

@@ -72,6 +72,7 @@ typedef struct _zend_mir_core_value_staging {
 	zend_mir_ownership_event_ref *ownership_events;
 	zend_mir_separation_plan_ref *separation_plans;
 	zend_mir_call_transfer_ref *call_transfers;
+	zend_mir_executable_value_ref *executable_operations;
 	uint32_t storage_count;
 	uint32_t storage_capacity;
 	uint32_t payload_count;
@@ -86,6 +87,8 @@ typedef struct _zend_mir_core_value_staging {
 	uint32_t separation_plan_capacity;
 	uint32_t call_transfer_count;
 	uint32_t call_transfer_capacity;
+	uint32_t executable_operation_count;
+	uint32_t executable_operation_capacity;
 	bool committed;
 } zend_mir_core_value_staging;
 
@@ -159,6 +162,7 @@ zend_mir_call_mutator *zend_mir_module_get_call_mutator(
 	zend_mir_module *module);
 const zend_mir_call_view *zend_mir_module_get_call_view(
 	const zend_mir_module *module);
+bool zend_mir_module_commit_empty_call_model(zend_mir_module *module);
 static inline const zend_mir_call_view *
 zend_mir_module_call_view_from_view(const zend_mir_view *view)
 {

@@ -80,6 +80,8 @@ struct _zend_mir_w03_integration {
 	bool w05;
 	bool w06;
 	bool w08;
+	bool w09;
+	const zend_op_array *w09_op_array;
 	bool deferred_finalize;
 };
 
@@ -118,6 +120,15 @@ static void zend_mir_w08_hide_byref_argument_facts(
 static void zend_mir_w08_hide_method_receiver_facts(
 	zend_mir_w03_integration *integration,
 	const zend_op_array *op_array, const zend_ssa *ssa);
+
+static bool zend_mir_w03_value_fragment(
+	const zend_mir_w03_integration *integration, uint32_t opcode)
+{
+	return integration->w06
+		&& (integration->w09
+			? zend_mir_w09_opcode_is_executable(opcode)
+			: zend_mir_w06_opcode_is_accepted(opcode));
+}
 
 static bool zend_mir_w03_checked_add(
 	uint32_t left, uint32_t right, uint32_t *out)
@@ -320,9 +331,8 @@ static bool zend_mir_w03_prepare_source(
 				|| (integration->w05
 					&& zend_mir_w05_call_fragment(
 						op_array->opcodes[index].opcode))
-				|| (integration->w06
-					&& zend_mir_w06_opcode_is_accepted(
-						op_array->opcodes[index].opcode))
+				|| zend_mir_w03_value_fragment(
+					integration, op_array->opcodes[index].opcode)
 				|| (integration->w08
 					&& zend_mir_w08_exception_fragment(
 						op_array->opcodes[index].opcode))) {
@@ -484,23 +494,23 @@ static bool zend_mir_w03_prepare_source(
 		 * semantics in its source/value records; only the prerequisite CFG
 		 * sees the operand-compatible scalar RETURN spelling.
 		 */
-		if (integration->w06 && opline->opcode == ZEND_RETURN_BY_REF) {
+		if (integration->w06 && !integration->w09
+				&& opline->opcode == ZEND_RETURN_BY_REF) {
 			opline->opcode = ZEND_RETURN;
 			continue;
 		}
 		if (opline->opcode != ZEND_RECV
 				&& !(integration->w05
 					&& zend_mir_w05_call_fragment(opline->opcode))
-				&& !(integration->w06
-					&& zend_mir_w06_opcode_is_accepted(
-						opline->opcode))
+				&& !zend_mir_w03_value_fragment(
+					integration, opline->opcode)
 				&& !(integration->w08
 					&& zend_mir_w08_exception_fragment(opline->opcode))) {
 			continue;
 		}
-		if (integration->w06
-				&& (zend_mir_w06_opcode_is_accepted(opline->opcode)
-					|| zend_mir_w05_call_fragment(opline->opcode))) {
+		if ((zend_mir_w03_value_fragment(integration, opline->opcode)
+					|| (integration->w06
+						&& zend_mir_w05_call_fragment(opline->opcode)))) {
 			zend_mir_w06_hide_ssa_definition(
 				integration, ssa_op->op1_def);
 			zend_mir_w06_hide_ssa_definition(
@@ -525,9 +535,8 @@ static bool zend_mir_w03_prepare_source(
 			&integration->projected_ssa, &ssa_op->result_def);
 		lineno = opline->lineno;
 		if ((integration->w05 && zend_mir_w05_call_fragment(opline->opcode))
-				|| (integration->w06
-					&& zend_mir_w06_opcode_is_accepted(
-						opline->opcode))
+				|| zend_mir_w03_value_fragment(
+					integration, opline->opcode)
 				|| (integration->w08
 					&& zend_mir_w08_exception_fragment(opline->opcode))) {
 			zend_ssa_remove_instr(
@@ -1768,6 +1777,21 @@ zend_mir_lowering_result zend_mir_lower_w04_zend_op_array(
 	return result;
 }
 
+static bool zend_mir_w09_post_call_composition(
+	const void *composition_context,
+	zend_mir_lowering_context *lowering_context,
+	zend_mir_module *module,
+	const zend_mir_control_flow_map *control_flow_map)
+{
+	zend_mir_w03_integration *integration =
+		(zend_mir_w03_integration *) composition_context;
+
+	return integration != NULL && integration->w09_op_array != NULL
+		&& zend_mir_w09_emit_executable_values(
+			integration->w09_op_array, lowering_context, module,
+			control_flow_map, &integration->lifetime_context);
+}
+
 static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 	const zend_script *script,
 	const zend_op_array *op_array,
@@ -1775,7 +1799,8 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 	const zend_mir_lowering_module_ops *module_ops,
 	zend_mir_diagnostic_sink *diagnostics,
 	bool w07_execution,
-	bool w08_execution)
+	bool w08_execution,
+	bool w09_execution)
 {
 	zend_mir_w03_integration integration;
 	zend_mir_frontend_diagnostic frontend_diagnostic;
@@ -1798,7 +1823,10 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 		return zend_mir_w05_integration_result(
 			ZEND_MIR_LOWERING_REJECTED, ZEND_MIRL_INVALID_SOURCE);
 	}
-	status = w08_execution
+	status = w09_execution
+		? zend_mir_zend_source_preflight_w09(
+			script, op_array, ssa, &frontend_diagnostic)
+		: w08_execution
 		? zend_mir_zend_source_preflight_w08(
 			script, op_array, ssa, &frontend_diagnostic)
 		: w07_execution
@@ -1812,14 +1840,17 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 	}
 	integration.w04 = true;
 	integration.w05 = true;
-	integration.w08 = w08_execution;
+	integration.w06 = w09_execution;
+	integration.w08 = w08_execution || w09_execution;
+	integration.w09 = w09_execution;
+	integration.w09_op_array = w09_execution ? op_array : NULL;
 	if (!zend_mir_w03_prepare_source(
 			&integration, op_array, ssa, &source_op_array, &source_ssa)) {
 		zend_mir_w03_release(&integration);
 		return zend_mir_w05_integration_result(
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
 	}
-	status = w08_execution
+	status = (w08_execution || w09_execution)
 		? zend_mir_frontend_project_w08_result_facts(
 			script, op_array, ssa, &integration.projected_ssa,
 			&frontend_diagnostic)
@@ -1838,7 +1869,7 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 	 * pointer/reference SSA facts there would reject semantics that are owned
 	 * and executed by the W08 runtime boundary.
 	 */
-	if (w08_execution) {
+	if (w08_execution || w09_execution) {
 		zend_mir_w06_sanitize_prerequisite_facts(&integration);
 		zend_mir_w06_hide_private_call_results(
 			&integration, op_array, ssa);
@@ -1847,7 +1878,7 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 		zend_mir_w08_hide_method_receiver_facts(
 			&integration, op_array, ssa);
 	}
-	status = w08_execution
+	status = (w08_execution || w09_execution)
 		? zend_mir_zend_source_init_w08_projection(
 			&integration.source, source_op_array, source_ssa, op_array, ssa,
 			ZEND_MIR_W03_OP_ARRAY_ID, ZEND_MIR_W03_FILE_SYMBOL_ID,
@@ -1856,6 +1887,9 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 			&integration.source, source_op_array, source_ssa, op_array, ssa,
 			ZEND_MIR_W03_OP_ARRAY_ID, ZEND_MIR_W03_FILE_SYMBOL_ID,
 			&frontend_diagnostic);
+	if (status == ZEND_MIR_LOWERING_SUCCESS && w09_execution) {
+		integration.source.w09 = true;
+	}
 	if (status == ZEND_MIR_LOWERING_SUCCESS) {
 		status = zend_mir_zend_source_enable_w05(
 			&integration.source, script, op_array, ssa,
@@ -1896,7 +1930,8 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 	}
 	shape.has_control_flow = true;
 	shape.has_calls = true;
-	shape.has_try_regions = w08_execution && op_array->last_try_catch != 0;
+	shape.has_try_regions = (w08_execution || w09_execution)
+		&& op_array->last_try_catch != 0;
 	shape.ssa_complete = true;
 	if (!zend_mir_lowering_context_init(
 			&integration.lowering_context, &integration.source_view, &shape,
@@ -1906,12 +1941,19 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 				&integration.lowering_context, &integration,
 				zend_mir_w03_value_fact)
 			|| !zend_mir_lowering_context_set_zend_source(
-				&integration.lowering_context, &integration.source)) {
+				&integration.lowering_context, &integration.source)
+			|| (w09_execution
+				&& !zend_mir_lowering_context_set_post_call_composition(
+					&integration.lowering_context, &integration,
+					zend_mir_w09_post_call_composition))) {
 		zend_mir_w03_release(&integration);
 		return zend_mir_w05_integration_result(
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_INVALID_SOURCE);
 	}
-	result = w08_execution
+	result = w09_execution
+		? zend_mir_lower_w09_zend_source(
+			&integration.lowering_context, NULL, &map, &calls, &resolver, NULL)
+		: w08_execution
 		? zend_mir_lower_w08_zend_source(
 			&integration.lowering_context, NULL, &map, &calls, &resolver, NULL)
 		: w07_execution
@@ -1931,7 +1973,7 @@ zend_mir_w05_lowering_result zend_mir_lower_w05_zend_op_array(
 	zend_mir_diagnostic_sink *diagnostics)
 {
 	return zend_mir_lower_direct_user_op_array(
-		script, op_array, ssa, module_ops, diagnostics, false, false);
+		script, op_array, ssa, module_ops, diagnostics, false, false, false);
 }
 
 zend_mir_w05_lowering_result zend_mir_lower_w07_zend_op_array(
@@ -1942,7 +1984,7 @@ zend_mir_w05_lowering_result zend_mir_lower_w07_zend_op_array(
 	zend_mir_diagnostic_sink *diagnostics)
 {
 	return zend_mir_lower_direct_user_op_array(
-		script, op_array, ssa, module_ops, diagnostics, true, false);
+		script, op_array, ssa, module_ops, diagnostics, true, false, false);
 }
 
 zend_mir_w08_lowering_result zend_mir_lower_w08_zend_op_array(
@@ -1953,7 +1995,18 @@ zend_mir_w08_lowering_result zend_mir_lower_w08_zend_op_array(
 	zend_mir_diagnostic_sink *diagnostics)
 {
 	return zend_mir_lower_direct_user_op_array(
-		script, op_array, ssa, module_ops, diagnostics, true, true);
+		script, op_array, ssa, module_ops, diagnostics, true, true, false);
+}
+
+zend_mir_w08_lowering_result zend_mir_lower_w09_zend_op_array(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	const zend_mir_lowering_module_ops *module_ops,
+	zend_mir_diagnostic_sink *diagnostics)
+{
+	return zend_mir_lower_direct_user_op_array(
+		script, op_array, ssa, module_ops, diagnostics, true, true, true);
 }
 
 static zend_mir_w06_lowering_result zend_mir_w06_integration_result(
