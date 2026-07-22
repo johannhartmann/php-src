@@ -469,16 +469,18 @@ static bool zend_mir_w04_verify_edges(
 							? terminator.opcode != ZEND_MIR_OPCODE_ITERATOR_BRANCH
 						: (view->successor_count(view->context, source_from) == 1
 							? terminator.opcode != ZEND_MIR_OPCODE_BRANCH
-							: terminator.opcode
-								!= ZEND_MIR_OPCODE_COND_BRANCH))) {
+							: terminator.opcode != ZEND_MIR_OPCODE_COND_BRANCH
+								&& terminator.opcode
+									!= ZEND_MIR_OPCODE_VALUE_COND_BRANCH))) {
 				return zend_mir_w04_emit_verify(diagnostics,
 					ZEND_MIR_VERIFY_W04_BRANCH_MISMATCH,
 					ZEND_MIRV_TOKEN_W04_BRANCH_MISMATCH,
 					"terminator kind does not match source branch");
 			}
-			if (branch_kind == ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT
+			if (terminator.opcode != ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+					&& (branch_kind == ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT
 					|| branch_kind
-						== ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT) {
+						== ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT)) {
 				zend_mir_value_id condition;
 				bool copy_found = false;
 				uint32_t instruction_index;

@@ -391,6 +391,17 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ASSIGN_OP);
 		case ZEND_MIR_OPCODE_VALUE_FE_FREE:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FE_FREE);
+		case ZEND_MIR_OPCODE_VALUE_BINARY_OP:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_BINARY_OP);
+		case ZEND_MIR_OPCODE_VALUE_UNARY_OP:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_UNARY_OP);
+		case ZEND_MIR_OPCODE_VALUE_CAST:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_CAST);
+		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV:
+			return execute_value_operation(
+				ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV);
+		case ZEND_MIR_OPCODE_VALUE_FETCH_LIST:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_LIST);
 		case ZEND_MIR_OPCODE_COPY:
 		case ZEND_MIR_OPCODE_CANONICALIZE:
 		case ZEND_MIR_OPCODE_I1_TO_I64:
@@ -586,6 +597,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			generate_cond_branch(Jump::jne, successors[0], successors[1]);
 			return true;
 		}
+		case ZEND_MIR_OPCODE_VALUE_COND_BRANCH:
 		case ZEND_MIR_OPCODE_ITERATOR_BRANCH: {
 			if (node.operands.size() != 1
 					|| mir.source_opline_index == UINT32_MAX) {
@@ -596,9 +608,12 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(CallArg{node.operands[0]});
 			builder.add_arg(ValuePart{mir.source_opline_index, 4,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			const auto helper = mir.record.opcode
+				== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				? ZEND_NATIVE_HELPER_VALUE_COND_BRANCH
+				: ZEND_NATIVE_HELPER_VALUE_ITERATOR_BRANCH;
 			builder.call(ValuePart{reinterpret_cast<uintptr_t>(
-				adaptor->runtime_helper(
-					ZEND_NATIVE_HELPER_VALUE_ITERATOR_BRANCH)), 8,
+				adaptor->runtime_helper(helper)), 8,
 				tpde::x64::PlatformConfig::GP_BANK});
 			ValuePart decision{tpde::x64::PlatformConfig::GP_BANK};
 			builder.add_ret(decision, tpde::CCAssignment{});

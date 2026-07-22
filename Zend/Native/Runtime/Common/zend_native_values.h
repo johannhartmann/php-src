@@ -67,8 +67,20 @@ zend_native_status zend_native_value_isset_isempty_dim(
 	zend_execute_data *execute_data, uint32_t source_opline_index);
 zend_native_status zend_native_value_fe_free(
 	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_binary_op(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_unary_op(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_cast(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_isset_isempty_cv(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_fetch_list(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
 
 zend_native_iterator_branch_result zend_native_value_iterator_branch(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_iterator_branch_result zend_native_value_cond_branch(
 	zend_execute_data *execute_data, uint32_t source_opline_index);
 
 #ifdef __cplusplus
