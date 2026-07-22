@@ -209,6 +209,7 @@ typedef struct _native_mir_test_state {
 	uint64_t execute_ex_calls;
 	uint64_t opline_handler_calls;
 	bool stack_probe_enabled;
+	bool abi_probe_enabled;
 	bool frame_chain_valid;
 	native_mir_test_frame_probe *frame_probes;
 	uint32_t frame_probe_count;
@@ -634,6 +635,11 @@ static bool native_mir_test_parse_options(
 				goto invalid_value;
 			}
 			state->stack_probe_enabled = true;
+		} else if (zend_string_equals_literal(key, "abi_probe")) {
+			if (!state->execute_mode || Z_TYPE_P(value) != IS_TRUE) {
+				goto invalid_value;
+			}
+			state->abi_probe_enabled = true;
 		} else if (zend_string_equals_literal(key, "arena_chunk_size")) {
 			if (Z_TYPE_P(value) != IS_LONG
 					|| Z_LVAL_P(value) < NATIVE_MIR_TEST_MIN_MIR_CHUNK_SIZE
@@ -2154,7 +2160,9 @@ static bool native_mir_test_prepare_w07_projection(
 				index, opline->op1_type, &opline->op1, ssa_op->op1_use);
 
 			effect->source_position_id = index;
-			effect->kind = ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR;
+			effect->kind = state->abi_probe_enabled
+				? ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE
+				: ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR;
 			effect->exact_type = type;
 			if (!zend_mir_scalar_type_is_exact(type)) {
 				native_mir_test_fail(
@@ -3405,6 +3413,17 @@ ZEND_FUNCTION(native_mir_test_compile_execute)
 		NATIVE_MIR_TEST_MAX_DIAGNOSTIC_LIMIT,
 		sizeof(state->diagnostics[0]));
 	if (options != NULL && !native_mir_test_parse_options(state, options)) {
+		native_mir_test_build_result(state, return_value);
+		efree(state->diagnostics);
+		efree(state->frame_probes);
+		efree(state);
+		return;
+	}
+	if (state->abi_probe_enabled && state->wave != 8) {
+		native_mir_test_fail(
+			state, NATIVE_MIR_TEST_STATUS_ERROR,
+			NATIVE_MIR_TEST_PHASE_COMPILE, "bridge", "INVALID_OPTIONS",
+			"abi_probe requires wave 8");
 		native_mir_test_build_result(state, return_value);
 		efree(state->diagnostics);
 		efree(state->frame_probes);
