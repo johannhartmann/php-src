@@ -8,8 +8,31 @@
 
 #include <string.h>
 
+#ifdef ZTS
+# include "TSRM/TSRM.h"
+#endif
+
 static void (*zend_native_previous_execute_ex)(zend_execute_data *execute_data);
+static uint32_t zend_native_reentry_users;
+#ifdef ZTS
+static MUTEX_T zend_native_reentry_mutex;
+#endif
 ZEND_TLS zend_native_reentry_scope *zend_native_active_reentry_scope;
+
+static void zend_native_reentry_lock(void)
+{
+#ifdef ZTS
+	ZEND_ASSERT(zend_native_reentry_mutex != NULL);
+	tsrm_mutex_lock(zend_native_reentry_mutex);
+#endif
+}
+
+static void zend_native_reentry_unlock(void)
+{
+#ifdef ZTS
+	tsrm_mutex_unlock(zend_native_reentry_mutex);
+#endif
+}
 
 static zend_native_entry_cell *zend_native_reentry_find(
 	const zend_native_reentry_scope *scope, zend_function *function)
@@ -57,26 +80,80 @@ static void zend_native_reentry_execute_ex(zend_execute_data *execute_data)
 	}
 }
 
-zend_result zend_native_reentry_install(void)
+zend_result zend_native_reentry_startup(void)
 {
-	if (zend_execute_ex == zend_native_reentry_execute_ex) {
-		return SUCCESS;
-	}
-	if (zend_native_previous_execute_ex != NULL) {
+#ifdef ZTS
+	if (zend_native_reentry_mutex != NULL) {
 		return FAILURE;
 	}
-	zend_native_previous_execute_ex = zend_execute_ex;
-	zend_execute_ex = zend_native_reentry_execute_ex;
+	zend_native_reentry_mutex = tsrm_mutex_alloc();
+	if (zend_native_reentry_mutex == NULL) {
+		return FAILURE;
+	}
+#endif
+	if (zend_native_previous_execute_ex != NULL
+			|| zend_native_reentry_users != 0) {
+#ifdef ZTS
+		tsrm_mutex_free(zend_native_reentry_mutex);
+		zend_native_reentry_mutex = NULL;
+#endif
+		return FAILURE;
+	}
 	return SUCCESS;
 }
 
-void zend_native_reentry_uninstall(void)
+void zend_native_reentry_shutdown(void)
 {
+	zend_native_reentry_lock();
 	if (zend_execute_ex == zend_native_reentry_execute_ex) {
 		zend_execute_ex = zend_native_previous_execute_ex;
 	}
 	zend_native_previous_execute_ex = NULL;
+	zend_native_reentry_users = 0;
 	zend_native_active_reentry_scope = NULL;
+	zend_native_reentry_unlock();
+#ifdef ZTS
+	tsrm_mutex_free(zend_native_reentry_mutex);
+	zend_native_reentry_mutex = NULL;
+#endif
+}
+
+zend_result zend_native_reentry_install(void)
+{
+	zend_result result = FAILURE;
+
+	zend_native_reentry_lock();
+	if (zend_native_reentry_users == 0) {
+		if (zend_native_previous_execute_ex == NULL
+				&& zend_execute_ex != zend_native_reentry_execute_ex) {
+			zend_native_previous_execute_ex = zend_execute_ex;
+			zend_execute_ex = zend_native_reentry_execute_ex;
+			zend_native_reentry_users = 1;
+			result = SUCCESS;
+		}
+	} else if (zend_native_reentry_users != UINT32_MAX
+			&& zend_native_previous_execute_ex != NULL
+			&& zend_execute_ex == zend_native_reentry_execute_ex) {
+		zend_native_reentry_users++;
+		result = SUCCESS;
+	}
+	zend_native_reentry_unlock();
+	return result;
+}
+
+void zend_native_reentry_uninstall(void)
+{
+	zend_native_reentry_lock();
+	if (zend_native_reentry_users != 0) {
+		zend_native_reentry_users--;
+		if (zend_native_reentry_users == 0) {
+			if (zend_execute_ex == zend_native_reentry_execute_ex) {
+				zend_execute_ex = zend_native_previous_execute_ex;
+			}
+			zend_native_previous_execute_ex = NULL;
+		}
+	}
+	zend_native_reentry_unlock();
 }
 
 zend_result zend_native_reentry_scope_enter(
@@ -86,8 +163,7 @@ zend_result zend_native_reentry_scope_enter(
 {
 	uint32_t index;
 
-	if (scope == NULL || bindings == NULL || binding_count == 0
-			|| zend_native_previous_execute_ex == NULL) {
+	if (scope == NULL || bindings == NULL || binding_count == 0) {
 		return FAILURE;
 	}
 	for (index = 0; index < binding_count; index++) {
@@ -98,6 +174,9 @@ zend_result zend_native_reentry_scope_enter(
 				|| bindings[index].entry_cell->code == NULL) {
 			return FAILURE;
 		}
+	}
+	if (zend_native_reentry_install() == FAILURE) {
+		return FAILURE;
 	}
 	scope->bindings = bindings;
 	scope->binding_count = binding_count;
@@ -114,6 +193,7 @@ void zend_native_reentry_scope_leave(zend_native_reentry_scope *scope)
 		scope->bindings = NULL;
 		scope->binding_count = 0;
 		scope->previous = NULL;
+		zend_native_reentry_uninstall();
 	}
 }
 
