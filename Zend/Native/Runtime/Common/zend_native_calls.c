@@ -4,6 +4,7 @@
 
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_execute.h"
+#include "Zend/zend_observer.h"
 
 #include <string.h>
 
@@ -219,7 +220,20 @@ uint64_t zend_native_call_invoke_finish(
 	call->return_value = &return_value;
 	cell->active_calls++;
 	EG(current_execute_data) = call;
+	ZEND_OBSERVER_FCALL_BEGIN(call);
 	status = zend_native_execute_frame(cell->code, call, NULL);
+	if (status != ZEND_NATIVE_BAILOUT) {
+		ZEND_OBSERVER_FCALL_END(call,
+			status == ZEND_NATIVE_RETURNED && EG(exception) == NULL
+				? &return_value : NULL);
+	}
+	if (status != ZEND_NATIVE_BAILOUT
+			&& UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+		zend_fcall_interrupt(call);
+		if (EG(exception) != NULL) {
+			status = ZEND_NATIVE_EXCEPTION;
+		}
+	}
 	EG(current_execute_data) = caller;
 	cell->active_calls--;
 	if (status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {

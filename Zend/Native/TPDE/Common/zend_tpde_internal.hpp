@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Zend/Native/TPDE/Common/zend_tpde_backend.h"
+#include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -26,6 +27,7 @@ struct zend_tpde_instruction {
 
 struct zend_tpde_plan {
 	const zend_mir_view *view;
+	const zend_native_runtime_api *runtime;
 	zend_mir_function_record function;
 	zend_mir_block_record *blocks;
 	uint32_t block_count;

@@ -37,6 +37,24 @@ typedef struct _zend_native_entry_cell {
 	void *frame_probe_context;
 } zend_native_entry_cell;
 
+typedef enum _zend_native_internal_receiver_kind {
+	ZEND_NATIVE_INTERNAL_RECEIVER_NONE = 0,
+	ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS = 1,
+	ZEND_NATIVE_INTERNAL_RECEIVER_CALLED_SCOPE = 2
+} zend_native_internal_receiver_kind;
+
+/* Process-local binding for one compile-time resolved internal function. */
+typedef struct _zend_native_internal_call_cell {
+	zend_function *function;
+	zend_class_entry *called_scope;
+	zend_native_internal_receiver_kind receiver_kind;
+} zend_native_internal_call_cell;
+
+typedef enum _zend_native_call_argument_mode {
+	ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE = 0,
+	ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE = 1
+} zend_native_call_argument_mode;
+
 void zend_native_entry_cell_init(
 	zend_native_entry_cell *cell, zend_function *function);
 zend_result zend_native_entry_cell_begin_compile(zend_native_entry_cell *cell);
@@ -72,6 +90,27 @@ void zend_native_call_set_double_argument(
 	zend_execute_data *caller, uint32_t ordinal, double value);
 uint64_t zend_native_call_invoke_finish(
 	zend_execute_data *caller, zend_native_entry_cell *cell);
+
+zend_result zend_native_internal_call_cell_init(
+	zend_native_internal_call_cell *cell,
+	zend_function *function,
+	zend_class_entry *called_scope,
+	zend_native_internal_receiver_kind receiver_kind);
+zend_result zend_native_internal_call_begin(
+	zend_execute_data *caller,
+	const zend_native_internal_call_cell *cell,
+	uint32_t argument_count,
+	uint32_t source_opline_index);
+zend_result zend_native_call_set_zval_argument(
+	zend_execute_data *caller,
+	uint32_t ordinal,
+	const zval *value,
+	zend_native_call_argument_mode mode);
+zend_native_status zend_native_internal_call_invoke_finish(
+	zend_execute_data *caller,
+	const zend_native_internal_call_cell *cell,
+	zval *return_value);
+void zend_native_interrupt_poll(zend_execute_data *execute_data);
 
 void zend_native_echo_integer(
 	zend_execute_data *execute_data,
