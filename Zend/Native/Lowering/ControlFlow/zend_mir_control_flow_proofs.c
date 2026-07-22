@@ -206,7 +206,8 @@ static bool zend_mir_w04_ssa_definition_block(
 
 static bool zend_mir_w04_validate_blocks(
 	const zend_mir_lowering_source_view *source,
-	zend_mir_w04_validation *validation)
+	zend_mir_w04_validation *validation,
+	bool allow_protected_control_flow)
 {
 	uint32_t block_count = source->block_count(source->context);
 	uint32_t opcode_count = source->opcode_count(source->context);
@@ -236,6 +237,11 @@ static bool zend_mir_w04_validate_blocks(
 		}
 		if ((block.flags & ZEND_MIR_SOURCE_BLOCK_IRREDUCIBLE) != 0) {
 			validation->diagnostic = ZEND_MIRL_W04_IRREDUCIBLE_LOOP;
+			return false;
+		}
+		if ((block.flags & ZEND_MIR_SOURCE_BLOCK_PROTECTED) != 0
+				&& !allow_protected_control_flow) {
+			validation->diagnostic = ZEND_MIRL_W04_PROTECTED_REGION;
 			return false;
 		}
 		if ((block.flags & ZEND_MIR_SOURCE_BLOCK_ENTRY) != 0) {
@@ -538,9 +544,10 @@ static bool zend_mir_w04_validate_phis(
 	return true;
 }
 
-bool zend_mir_w04_validate_source(
+static bool zend_mir_w04_validate_source_impl(
 	const zend_mir_lowering_source_view *source,
-	zend_mir_w04_validation *validation)
+	zend_mir_w04_validation *validation,
+	bool allow_protected_control_flow)
 {
 	if (validation == NULL) {
 		return false;
@@ -550,7 +557,8 @@ bool zend_mir_w04_validate_source(
 	validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
 	if (!zend_mir_w04_source_contract_ok(source)
 			|| !zend_mir_w04_validate_linear_source(source, validation)
-			|| !zend_mir_w04_validate_blocks(source, validation)
+			|| !zend_mir_w04_validate_blocks(
+				source, validation, allow_protected_control_flow)
 			|| !zend_mir_w04_validate_edges(source, validation)
 			|| !zend_mir_w04_validate_phis(source, validation)) {
 		return false;
@@ -579,6 +587,20 @@ bool zend_mir_w04_validate_source(
 	return true;
 }
 
+bool zend_mir_w04_validate_source(
+	const zend_mir_lowering_source_view *source,
+	zend_mir_w04_validation *validation)
+{
+	return zend_mir_w04_validate_source_impl(source, validation, false);
+}
+
+bool zend_mir_w04_validate_source_for_protected_control_flow(
+	const zend_mir_lowering_source_view *source,
+	zend_mir_w04_validation *validation)
+{
+	return zend_mir_w04_validate_source_impl(source, validation, true);
+}
+
 zend_mir_w04_branch_kind zend_mir_w04_branch_kind_for_opcode(uint32_t opcode)
 {
 	switch (opcode) {
@@ -592,6 +614,8 @@ zend_mir_w04_branch_kind zend_mir_w04_branch_kind_for_opcode(uint32_t opcode)
 			return ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT;
 		case ZEND_MIR_W04_OPCODE_JMPNZ_EX:
 			return ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT;
+		case ZEND_MIR_W08_OPCODE_CATCH:
+			return ZEND_MIR_W04_BRANCH_CATCH;
 		default:
 			return ZEND_MIR_W04_BRANCH_KIND_INVALID;
 	}

@@ -599,12 +599,23 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_ret(status, tpde::CCAssignment{});
 			auto status_reg = status.cur_reg_or_load(this);
 			ASM(CMP32ri, status_reg, ZEND_NATIVE_RETURNED);
-			auto continued = text_writer.label_create();
-			generate_raw_jump(Jump::je, continued);
+			const auto &successors = adaptor->block_succs(
+				adaptor->block_ref(mir.record.block_id));
+			if (successors.size() == 2) {
+				generate_cond_branch(Jump::je, successors[0], successors[1]);
+				status.reset(this);
+				return true;
+			}
+			if (successors.size() != 1) {
+				return false;
+			}
+			auto propagate = text_writer.label_create();
+			generate_raw_jump(Jump::jne, propagate);
+			generate_exception_branch(successors[0]);
+			label_place(propagate);
 			RetBuilder return_builder{*this, *cur_cc_assigner()};
 			return_builder.add(std::move(status), tpde::CCAssignment{});
 			return_builder.ret();
-			label_place(continued);
 			return true;
 		}
 		case ZEND_MIR_OPCODE_RETURN: {

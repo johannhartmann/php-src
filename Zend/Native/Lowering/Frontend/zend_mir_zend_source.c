@@ -723,9 +723,13 @@ zend_mir_lowering_status zend_mir_zend_source_init_w08_projection(
 	zend_mir_op_array_id op_array_id, zend_mir_symbol_id file_symbol_id,
 	zend_mir_frontend_diagnostic *diagnostic)
 {
-	return zend_mir_zend_source_init_w04_impl(
+	zend_mir_lowering_status status = zend_mir_zend_source_init_w04_impl(
 		source, projected_op_array, projected_ssa, op_array_id, file_symbol_id,
 		diagnostic, original_op_array, original_ssa, true);
+	if (status == ZEND_MIR_LOWERING_SUCCESS) {
+		source->w08 = true;
+	}
+	return status;
 }
 
 static uint32_t zend_mir_frontend_view_opcode_count(const void *context)
@@ -887,6 +891,13 @@ static bool zend_mir_frontend_view_block_at(
 				out->flags |= ZEND_MIR_SOURCE_BLOCK_FINALLY_ENTRY;
 			}
 		}
+	}
+	if (source->w08 && source->w05 && source->call_op_array != NULL
+			&& block->len != 0
+			&& block->start < ((const zend_op_array *) source->call_op_array)->last
+			&& ((const zend_op_array *) source->call_op_array)
+				->opcodes[block->start].opcode == ZEND_CATCH) {
+		out->flags |= ZEND_MIR_SOURCE_BLOCK_CATCH_ENTRY;
 	}
 	out->immediate_dominator =
 		block->idom < 0 ? ZEND_MIR_ID_INVALID : (uint32_t) block->idom;

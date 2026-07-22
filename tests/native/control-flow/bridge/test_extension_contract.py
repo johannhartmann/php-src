@@ -83,11 +83,16 @@ class ExtensionContractTests(unittest.TestCase):
         self.assertRegex(
             self.extension,
             re.compile(
-                r"state->wave >= 4 && state->selected->last_try_catch != 0.*?"
+                r"state->wave >= 4 && state->wave < 8\s*"
+                r"&& state->selected->last_try_catch != 0.*?"
                 r'"MIRL0015"',
                 re.DOTALL,
             ),
         )
+
+    def test_w08_protected_regions_continue_to_ssa(self) -> None:
+        self.assertIn("state->wave >= 8", self.extension)
+        self.assertIn("zend_mir_lower_w08_zend_op_array(", self.extension)
 
     def test_compile_dump_never_executes_source(self) -> None:
         self.assertIn("ZEND_COMPILE_WITHOUT_EXECUTION", self.extension)
