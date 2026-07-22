@@ -254,7 +254,7 @@ grep -F \
     'accepted=accepted execution=returned return=42 exception=0 bailout=0 vm=0 execute_ex=0 handler=0' \
     "$response" >/dev/null
 grep -F \
-    'w09=accepted execution=returned return=[[1,2,3],{"numbers":{"0":2,"1":4,"2":6,"3":7,"4":"named","tail":"unpacked"},"stable":"source"},{"0":2,"1":4,"2":6,"3":7,"4":"named","tail":"unpacked"},["mapped-a","mapped-b"],["catch","finally"],"A2B4C6D",[0,1,2]] runs=10 vm=0 execute_ex=0 handler=0' \
+    'w09=accepted execution=returned return=[{"numbers":[1,2,3],"stable":"source"},{"numbers":{"0":2,"1":4,"2":6,"3":7,"4":"named","tail":"unpacked"},"stable":"source"},{"0":2,"1":4,"2":6,"3":7,"4":"named","tail":"unpacked"},["mapped-a","mapped-b"],["catch","finally"],"A2B4C6D",[0,1,2]] runs=10 vm=0 execute_ex=0 handler=0' \
     "$response" >/dev/null
 
 timeout_source=$work/timeout.php
