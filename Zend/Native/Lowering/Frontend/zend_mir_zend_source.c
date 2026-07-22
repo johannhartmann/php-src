@@ -76,6 +76,14 @@ static bool zend_mir_frontend_is_call_send(uint8_t opcode)
 static zend_mir_source_call_argument_mode
 zend_mir_frontend_call_argument_mode(const zend_op *opline)
 {
+	switch (opline->opcode) {
+		case ZEND_SEND_UNPACK:
+		case ZEND_SEND_ARRAY:
+		case ZEND_SEND_USER:
+			return ZEND_MIR_SOURCE_CALL_ARGUMENT_UNPACK;
+		default:
+			break;
+	}
 	if (opline->op2_type == IS_CONST) {
 		return ZEND_MIR_SOURCE_CALL_ARGUMENT_NAMED;
 	}
@@ -90,10 +98,6 @@ zend_mir_frontend_call_argument_mode(const zend_op *opline)
 		case ZEND_SEND_VAR_NO_REF_EX:
 		case ZEND_SEND_FUNC_ARG:
 			return ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_REFERENCE;
-		case ZEND_SEND_UNPACK:
-		case ZEND_SEND_ARRAY:
-		case ZEND_SEND_USER:
-			return ZEND_MIR_SOURCE_CALL_ARGUMENT_UNPACK;
 		default:
 			return ZEND_MIR_SOURCE_CALL_ARGUMENT_MODE_INVALID;
 	}
@@ -2108,13 +2112,16 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 					next_ordinal++;
 				}
 			}
-			argument->ordinal = opline->op2_type == IS_CONST
+			argument->mode =
+				zend_mir_frontend_call_argument_mode(opline);
+			argument->ordinal = argument->mode
+					== ZEND_MIR_SOURCE_CALL_ARGUMENT_NAMED
+				|| argument->mode
+					== ZEND_MIR_SOURCE_CALL_ARGUMENT_UNPACK
 				? next_ordinal
 				: (opline->op2.num == 0
 					? next_ordinal : opline->op2.num - 1);
 			argument->name_symbol_id = ZEND_MIR_ID_INVALID;
-			argument->mode =
-				zend_mir_frontend_call_argument_mode(opline);
 			argument->flags = 0;
 			argument->value_ssa_variable_id =
 				ssa->ops[index].op1_use >= 0
@@ -2646,7 +2653,9 @@ static zend_mir_lowering_status zend_mir_zend_source_preflight_direct_calls(
 					&& argument->mode
 						!= ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_REFERENCE
 					&& argument->mode
-						!= ZEND_MIR_SOURCE_CALL_ARGUMENT_NAMED)
+						!= ZEND_MIR_SOURCE_CALL_ARGUMENT_NAMED
+					&& argument->mode
+						!= ZEND_MIR_SOURCE_CALL_ARGUMENT_UNPACK)
 			: w08_execution
 				? (argument->mode != ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE
 					&& argument->mode

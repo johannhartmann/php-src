@@ -1060,7 +1060,7 @@ static bool zend_mir_core_stage_call_argument(
 				: (zend_mir_id_is_valid(argument->value_id)
 					|| argument->source_mode < ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE
 					|| argument->source_mode
-						> ZEND_MIR_SOURCE_CALL_ARGUMENT_NAMED
+						> ZEND_MIR_SOURCE_CALL_ARGUMENT_UNPACK
 					|| argument->source_operand.kind
 						< ZEND_MIR_SOURCE_OPERAND_LITERAL
 					|| argument->source_operand.kind
