@@ -5,7 +5,7 @@ IFS=$'\n\t'
 
 usage() {
     cat <<'EOF'
-Exercise the W08 runtime through a real Linux FPM request and a separate
+Exercise the W08-W09 runtime through a real Linux FPM request and a separate
 native timeout process.
 
 Usage: test-w08-linux-runtime.sh --candidate PHP --fpm PHP_FPM
@@ -88,7 +88,7 @@ display_errors=1
 log_errors=0
 zend_test.observer.enabled=1
 zend_test.observer.show_output=1
-zend_test.observer.observe_function_names=native_fpm_outer,native_fpm_inner,intdiv,strcmp
+zend_test.observer.observe_function_names=native_fpm_outer,native_fpm_inner,w09_fpm_outer,w09_fpm_collect,w09_fpm_map,w09_fpm_ref,intdiv,strcmp,array_map
 zend_test.observer.show_return_value=0
 zend_test.observer.execute_internal=1
 EOF
@@ -131,6 +131,75 @@ printf(
     $result['execution']['execute_ex_calls'],
     $result['execution']['opline_handler_calls'],
 );
+
+$w09Source = <<<'NATIVE_PHP'
+<?php
+function &w09_fpm_ref(&$value)
+{
+    return $value;
+}
+
+function w09_fpm_collect(&$values, $label = 'default', ...$extra)
+{
+    $values[] = $label;
+    foreach ($extra as $key => $value) {
+        $values[$key] = $value;
+    }
+    return $values;
+}
+
+function w09_fpm_map($value)
+{
+    return "mapped-$value";
+}
+
+function w09_fpm_outer()
+{
+    $input = ['numbers' => [1, 2, 3], 'stable' => 'source'];
+    $original = $input;
+    $numbers =& $input['numbers'];
+    foreach ($numbers as &$number) {
+        $number *= 2;
+    }
+    unset($number);
+    $returned =& w09_fpm_ref($numbers);
+    $returned[] = 7;
+    $arguments = ['label' => 'named', 'tail' => 'unpacked'];
+    $called = w09_fpm_collect($numbers, ...$arguments);
+    $mapped = array_map('w09_fpm_map', ['a', 'b']);
+    $events = [];
+    try {
+        intdiv(1, 0);
+    } catch (DivisionByZeroError) {
+        $events[] = 'catch';
+    } finally {
+        $events[] = 'finally';
+    }
+    $rope = "A{$numbers[0]}B{$numbers[1]}C{$numbers[2]}D";
+    $selected = $input;
+    for ($index = 0; $index < 3; $index++) {
+        $selected['loop'][] = $index;
+    }
+    return [$original, $input, $called, $mapped, $events, $rope, $selected['loop']];
+}
+NATIVE_PHP;
+
+$w09 = native_mir_test_compile_execute(
+    $w09Source,
+    'w09-fpm-native.php',
+    [],
+    ['wave' => 9, 'function' => 'w09_fpm_outer', 'repeat' => 10],
+);
+printf(
+    "w09=%s execution=%s return=%s runs=%d vm=%d execute_ex=%d handler=%d\n",
+    $w09['status'],
+    $w09['execution']['status'],
+    json_encode($w09['execution']['return_value']),
+    $w09['execution']['executions'],
+    $w09['execution']['vm_handler_calls'],
+    $w09['execution']['execute_ex_calls'],
+    $w09['execution']['opline_handler_calls'],
+);
 PHP
 
 "$fpm" -F -y "$fpm_config" -c "$php_ini" >"$work/fpm.log" 2>&1 &
@@ -162,8 +231,16 @@ grep -F '<native_fpm_outer>' "$response" >/dev/null
 grep -F '<native_fpm_inner>' "$response" >/dev/null
 grep -F '<intdiv>' "$response" >/dev/null
 grep -F '<strcmp>' "$response" >/dev/null
+grep -F '<w09_fpm_outer>' "$response" >/dev/null
+grep -F '<w09_fpm_collect>' "$response" >/dev/null
+grep -F '<w09_fpm_map>' "$response" >/dev/null
+grep -F '<w09_fpm_ref>' "$response" >/dev/null
+grep -F '<array_map>' "$response" >/dev/null
 grep -F \
     'accepted=accepted execution=returned return=42 exception=0 bailout=0 vm=0 execute_ex=0 handler=0' \
+    "$response" >/dev/null
+grep -F \
+    'w09=accepted execution=returned return=[[1,2,3],{"numbers":{"0":2,"1":4,"2":6,"3":7,"4":"named","tail":"unpacked"},"stable":"source"},{"0":2,"1":4,"2":6,"3":7,"4":"named","tail":"unpacked"},["mapped-a","mapped-b"],["catch","finally"],"A2B4C6D",[0,1,2]] runs=10 vm=0 execute_ex=0 handler=0' \
     "$response" >/dev/null
 
 timeout_source=$work/timeout.php
@@ -214,4 +291,4 @@ grep -F \
     'status=error execution=bailout exception=0 bailout=1 vm=0 execute_ex=0 handler=0' \
     "$timeout_output" >/dev/null
 
-printf 'PASS real_fpm=1 internal_calls=2 exception_caught=1 observer=1 timeout_process=1 vm_dispatch=0\n'
+printf 'PASS real_fpm=1 w09_values=1 internal_calls=4 exception_caught=2 observer=1 timeout_process=1 vm_dispatch=0\n'
