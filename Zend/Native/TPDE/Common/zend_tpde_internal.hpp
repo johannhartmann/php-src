@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Zend/Native/TPDE/Common/zend_tpde_backend.h"
+#include "Zend/Native/MIR/zend_mir_call.h"
 #include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 
 #include <cstddef>
@@ -21,6 +22,10 @@ struct zend_tpde_instruction {
 	uint32_t operand_offset;
 	uint32_t operand_count;
 	zend_native_entry_cell *entry_cell;
+	zend_native_internal_call_cell *internal_call_cell;
+	zend_mir_call_site_ref call_site;
+	uint32_t call_argument_offset;
+	uint32_t call_argument_count;
 	zend_native_source_effect_kind source_effect;
 	zend_mir_scalar_type_mask source_effect_exact_type;
 };
@@ -37,6 +42,8 @@ struct zend_tpde_plan {
 	uint32_t instruction_count;
 	zend_mir_value_id *operands;
 	uint32_t operand_count;
+	zend_mir_call_argument_ref *call_arguments;
+	uint32_t call_argument_count;
 	uint32_t argument_count;
 	bool may_emit_calls;
 };

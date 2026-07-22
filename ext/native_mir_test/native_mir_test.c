@@ -152,6 +152,8 @@ typedef struct _native_mir_test_native_function {
 	zend_native_image *image;
 	zend_native_code *code;
 	zend_native_entry_cell entry_cell;
+	zend_native_internal_call_cell *internal_call_cells;
+	uint32_t internal_call_cell_count;
 } native_mir_test_native_function;
 
 typedef struct _native_mir_test_state {
@@ -286,7 +288,21 @@ extern zend_mir_w05_lowering_result zend_mir_lower_w07_zend_op_array(
 	const zend_mir_lowering_module_ops *module_ops,
 	zend_mir_diagnostic_sink *diagnostics);
 
+extern zend_mir_w08_lowering_result zend_mir_lower_w08_zend_op_array(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	const zend_mir_lowering_module_ops *module_ops,
+	zend_mir_diagnostic_sink *diagnostics);
+
 extern zend_mir_lowering_status zend_mir_frontend_project_w05_result_facts(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	zend_ssa *projected_ssa,
+	zend_mir_frontend_diagnostic *diagnostic);
+
+extern zend_mir_lowering_status zend_mir_frontend_project_w08_result_facts(
 	const zend_script *script,
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,
@@ -581,7 +597,8 @@ static bool native_mir_test_parse_options(
 						|| (Z_LVAL_P(value) != 3 && Z_LVAL_P(value) != 4
 							&& Z_LVAL_P(value) != 5
 							&& Z_LVAL_P(value) != 6
-							&& Z_LVAL_P(value) != 7)) {
+							&& Z_LVAL_P(value) != 7
+							&& Z_LVAL_P(value) != 8)) {
 				goto invalid_value;
 			}
 			state->wave = (uint32_t) Z_LVAL_P(value);
@@ -743,7 +760,8 @@ static bool native_mir_test_build_ssa(native_mir_test_state *state)
 	zend_optimizer_ctx optimizer;
 
 	state->phase = NATIVE_MIR_TEST_PHASE_SSA;
-	if (state->wave >= 4 && state->selected->last_try_catch != 0) {
+	if (state->wave >= 4 && state->wave < 8
+			&& state->selected->last_try_catch != 0) {
 		native_mir_test_fail(
 			state, NATIVE_MIR_TEST_STATUS_REJECTED,
 			NATIVE_MIR_TEST_PHASE_LOWERING, "MIRL", "MIRL0015",
@@ -1307,7 +1325,11 @@ static bool native_mir_test_lower_w05_and_dump(native_mir_test_state *state)
 	}
 	zend_mir_w05_test_set_fault(call_fault);
 #endif
-	result = state->wave >= 7
+	result = state->wave >= 8
+		? zend_mir_lower_w08_zend_op_array(
+			&state->script, state->selected, &state->ssa,
+			&module_ops, &diagnostics)
+		: state->wave >= 7
 		? zend_mir_lower_w07_zend_op_array(
 			&state->script, state->selected, &state->ssa,
 			&module_ops, &diagnostics)
@@ -1317,7 +1339,9 @@ static bool native_mir_test_lower_w05_and_dump(native_mir_test_state *state)
 #ifdef ZEND_MIR_W05_TEST_FAULTS
 	zend_mir_w05_test_set_fault(ZEND_MIR_W05_TEST_FAULT_NONE);
 #endif
-	if (!zend_mir_lowering_result_is_w05_failure_atomic(&result)) {
+	if (!(state->wave >= 8
+			? zend_mir_lowering_result_is_w08_failure_atomic(&result)
+			: zend_mir_lowering_result_is_w05_failure_atomic(&result))) {
 		char detail[256];
 
 		snprintf(
@@ -1345,7 +1369,7 @@ static bool native_mir_test_lower_w05_and_dump(native_mir_test_state *state)
 		return false;
 	}
 	return native_mir_test_publish_lowering_result(
-		state, result.lowering, 5);
+		state, result.lowering, state->wave);
 }
 
 static bool native_mir_test_lower_w06_and_dump(native_mir_test_state *state)
@@ -1454,7 +1478,7 @@ static bool native_mir_test_lower_and_dump(native_mir_test_state *state)
 	if (state->wave == 6) {
 		return native_mir_test_lower_w06_and_dump(state);
 	}
-	if (state->wave == 5 || state->wave == 7) {
+	if (state->wave == 5 || state->wave == 7 || state->wave == 8) {
 		return native_mir_test_lower_w05_and_dump(state);
 	}
 	return state->wave == 4
@@ -1602,12 +1626,16 @@ static bool native_mir_test_merge_argument_type(
 	zend_mir_scalar_type_mask type)
 {
 	if (function == NULL || ordinal >= function->argument_type_count
-			|| !zend_mir_scalar_type_is_exact(type)) {
+			|| (!zend_mir_scalar_type_is_exact(type)
+				&& !(state->wave >= 8 && type == ZEND_MIR_SCALAR_TYPE_NONE))) {
 		native_mir_test_fail(
 			state, NATIVE_MIR_TEST_STATUS_REJECTED,
 			NATIVE_MIR_TEST_PHASE_LOWERING, "MIRL", "MIRL0012",
-			"W07 requires exact scalar argument types");
+			"native scalar operations require exact argument types");
 		return false;
+	}
+	if (type == ZEND_MIR_SCALAR_TYPE_NONE) {
+		return true;
 	}
 	if (function->argument_types[ordinal] != ZEND_MIR_SCALAR_TYPE_NONE
 			&& function->argument_types[ordinal] != type) {
@@ -1649,6 +1677,48 @@ static zend_op_array *native_mir_test_resolve_native_target(
 		}
 		declaration_id++;
 	} ZEND_HASH_FOREACH_END();
+	return NULL;
+}
+
+static zend_function *native_mir_test_resolve_internal_target(
+	native_mir_test_state *state,
+	zend_op_array *caller,
+	const zend_mir_call_view *calls,
+	const zend_mir_call_target_ref *target,
+	const zend_op **init_opline_out)
+{
+	uint32_t index;
+
+	if (state == NULL || caller == NULL || calls == NULL || target == NULL
+			|| target->kind != ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL
+			|| calls->call_site_count == NULL || calls->call_site_at == NULL) {
+		return NULL;
+	}
+	for (index = 0; index < calls->call_site_count(calls->context); index++) {
+		zend_mir_call_site_ref site;
+		zend_function *function;
+		bool is_prototype = false;
+		const zend_op *init;
+
+		if (!calls->call_site_at(calls->context, index, &site)
+				|| site.target_id != target->id) {
+			continue;
+		}
+		if (site.source_init_opline_index >= caller->last) {
+			return NULL;
+		}
+		init = &caller->opcodes[site.source_init_opline_index];
+		function = zend_optimizer_get_called_func(
+			&state->script, caller, (zend_op *) init, &is_prototype);
+		if (function == NULL || is_prototype
+				|| function->type != ZEND_INTERNAL_FUNCTION) {
+			return NULL;
+		}
+		if (init_opline_out != NULL) {
+			*init_opline_out = init;
+		}
+		return function;
+	}
 	return NULL;
 }
 
@@ -1714,11 +1784,11 @@ static bool native_mir_test_build_function_ssa(
 {
 	zend_optimizer_ctx optimizer;
 
-	if (function->op_array->last_try_catch != 0) {
+	if (state->wave < 8 && function->op_array->last_try_catch != 0) {
 		native_mir_test_fail(
 			state, NATIVE_MIR_TEST_STATUS_REJECTED,
 			NATIVE_MIR_TEST_PHASE_LOWERING, "MIRL", "MIRL0015",
-			"W07 rejects a protected native callee");
+			"protected native callees require W08");
 		return false;
 	}
 	function->ssa_arena = zend_arena_create(NATIVE_MIR_TEST_ARENA_SIZE);
@@ -1931,9 +2001,13 @@ static bool native_mir_test_prepare_w07_projection(
 	function->projected_ssa.vars = function->projected_ssa_vars;
 	function->projected_ssa.var_info = function->projected_ssa_var_info;
 	memset(&frontend_diagnostic, 0, sizeof(frontend_diagnostic));
-	if (zend_mir_frontend_project_w05_result_facts(
-			&state->script, source, &function->ssa,
-			&function->projected_ssa, &frontend_diagnostic)
+	if ((state->wave >= 8
+			? zend_mir_frontend_project_w08_result_facts(
+				&state->script, source, &function->ssa,
+				&function->projected_ssa, &frontend_diagnostic)
+			: zend_mir_frontend_project_w05_result_facts(
+				&state->script, source, &function->ssa,
+				&function->projected_ssa, &frontend_diagnostic))
 			!= ZEND_MIR_LOWERING_SUCCESS) {
 		char code[16];
 
@@ -2180,7 +2254,8 @@ static bool native_mir_test_lower_native_function(
 			opcode_index++) {
 		uint8_t opcode = local.selected->opcodes[opcode_index].opcode;
 
-		if (opcode == ZEND_DO_UCALL || opcode == ZEND_DO_FCALL) {
+		if (opcode == ZEND_DO_UCALL || opcode == ZEND_DO_FCALL
+				|| (state->wave >= 8 && opcode == ZEND_DO_ICALL)) {
 			has_call = true;
 			break;
 		}
@@ -2241,6 +2316,13 @@ static bool native_mir_test_discover_native_callees(
 				"native call target table is unreadable");
 			return false;
 		}
+		if (target.kind == ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL) {
+			if (state->wave < 8 || native_mir_test_resolve_internal_target(
+					state, function->op_array, calls, &target, NULL) == NULL) {
+				return false;
+			}
+			continue;
+		}
 		callee = native_mir_test_resolve_native_target(
 			state, function->op_array, &target);
 		if (callee == NULL
@@ -2268,6 +2350,7 @@ static bool native_mir_test_discover_native_callees(
 			state, function->module);
 		uint32_t target_index;
 		uint32_t argument_index;
+		bool found_target = false;
 
 		if (!calls->call_site_at(calls->context, index, &site)) {
 			return false;
@@ -2278,10 +2361,21 @@ static bool native_mir_test_discover_native_callees(
 				return false;
 			}
 			if (target.id == site.target_id) {
+				found_target = true;
+				if (target.kind == ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL) {
+					callee = NULL;
+					break;
+				}
 				callee = native_mir_test_resolve_native_target(
 					state, function->op_array, &target);
 				break;
 			}
+		}
+		if (!found_target) {
+			return false;
+		}
+		if (target.kind == ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL) {
+			continue;
 		}
 		native_callee = native_mir_test_find_native_function(state, callee);
 		if (native_callee == NULL || view == NULL) {
@@ -2412,54 +2506,118 @@ static bool native_mir_test_compile_native_component(
 		const zend_mir_call_view *calls =
 			zend_mir_module_get_call_view(function->module);
 		zend_native_call_binding *bindings = NULL;
-		uint32_t binding_count = calls != NULL
+		zend_native_internal_call_binding *internal_bindings = NULL;
+		uint32_t target_count = calls != NULL
 			? calls->call_target_count(calls->context) : 0;
+		uint32_t binding_count = 0;
+		uint32_t internal_binding_count = 0;
 		uint32_t target_index;
 
-		if (binding_count != 0) {
+		if (target_count != 0) {
 			bindings = safe_emalloc(
-				binding_count, sizeof(*bindings), 0);
+				target_count, sizeof(*bindings), 0);
+			internal_bindings = safe_emalloc(
+				target_count, sizeof(*internal_bindings), 0);
+			function->internal_call_cells = ecalloc(
+				target_count, sizeof(*function->internal_call_cells));
 		}
-		for (target_index = 0; target_index < binding_count; target_index++) {
+		for (target_index = 0; target_index < target_count; target_index++) {
 			zend_mir_call_target_ref target;
 			zend_op_array *callee;
 			native_mir_test_native_function *native_callee;
 
 			if (!calls->call_target_at(calls->context, target_index, &target)) {
 				efree(bindings);
+				efree(internal_bindings);
 				native_mir_test_backend_failure(
 					state, state->phase, NULL);
 				native_mir_test_fail_native_component(state);
 				return false;
+			}
+			if (target.kind == ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL) {
+				zend_function *internal;
+				const zend_op *init_opline = NULL;
+				zend_native_internal_receiver_kind receiver_kind =
+					ZEND_NATIVE_INTERNAL_RECEIVER_NONE;
+				zend_class_entry *called_scope = NULL;
+
+				internal = native_mir_test_resolve_internal_target(
+					state, function->op_array, calls, &target, &init_opline);
+				if (internal == NULL || init_opline == NULL) {
+					goto binding_failure;
+				}
+				if (init_opline->opcode == ZEND_INIT_METHOD_CALL) {
+					if (init_opline->op1_type != IS_UNUSED) {
+						native_mir_test_fail(
+							state, NATIVE_MIR_TEST_STATUS_REJECTED,
+							NATIVE_MIR_TEST_PHASE_CODEGEN,
+							"native", "NATIVE0003",
+							"native internal method receiver is not the caller object");
+						goto binding_rejected;
+					}
+					receiver_kind = ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS;
+				} else if (init_opline->opcode == ZEND_INIT_STATIC_METHOD_CALL) {
+					receiver_kind = ZEND_NATIVE_INTERNAL_RECEIVER_CALLED_SCOPE;
+					called_scope = internal->common.scope;
+				} else if (init_opline->opcode != ZEND_INIT_FCALL) {
+					goto binding_failure;
+				}
+				if (zend_native_internal_call_cell_init(
+						&function->internal_call_cells[internal_binding_count],
+						internal, called_scope, receiver_kind) == FAILURE) {
+					goto binding_failure;
+				}
+				internal_bindings[internal_binding_count].target_id = target.id;
+				internal_bindings[internal_binding_count].call_cell =
+					&function->internal_call_cells[internal_binding_count];
+				internal_binding_count++;
+				continue;
 			}
 			callee = native_mir_test_resolve_native_target(
 				state, function->op_array, &target);
 			native_callee = native_mir_test_find_native_function(state, callee);
 			if (native_callee == NULL) {
-				efree(bindings);
-				native_mir_test_backend_failure(
-					state, state->phase, NULL);
-				native_mir_test_fail_native_component(state);
-				return false;
+				goto binding_failure;
 			}
-			bindings[target_index].target_id = target.id;
-			bindings[target_index].entry_cell = &native_callee->entry_cell;
+			bindings[binding_count].target_id = target.id;
+			bindings[binding_count].entry_cell = &native_callee->entry_cell;
+			binding_count++;
 		}
+		function->internal_call_cell_count = internal_binding_count;
 		memset(&diagnostic, 0, sizeof(diagnostic));
-		if (zend_tpde_compile_module_w07(
-				state->target,
-				native_mir_test_module_view(state, function->module),
-				bindings, binding_count,
-				function->source_effects, function->source_effect_count,
-				function->op_array->num_args,
-				&function->image,
-				&diagnostic) == FAILURE) {
+		if ((state->wave >= 8
+				? zend_tpde_compile_module_w08(
+					state->target,
+					native_mir_test_module_view(state, function->module),
+					bindings, binding_count,
+					internal_bindings, internal_binding_count,
+					function->source_effects, function->source_effect_count,
+					function->op_array->num_args,
+					&function->image, &diagnostic)
+				: zend_tpde_compile_module_w07(
+					state->target,
+					native_mir_test_module_view(state, function->module),
+					bindings, binding_count,
+					function->source_effects, function->source_effect_count,
+					function->op_array->num_args,
+					&function->image, &diagnostic)) == FAILURE) {
 			efree(bindings);
+			efree(internal_bindings);
 			native_mir_test_backend_failure(state, state->phase, &diagnostic);
 			native_mir_test_fail_native_component(state);
 			return false;
 		}
 		efree(bindings);
+		efree(internal_bindings);
+		continue;
+
+binding_failure:
+		native_mir_test_backend_failure(state, state->phase, NULL);
+binding_rejected:
+		efree(bindings);
+		efree(internal_bindings);
+		native_mir_test_fail_native_component(state);
+		return false;
 	}
 
 	state->phase = NATIVE_MIR_TEST_PHASE_PUBLISH;
@@ -2603,7 +2761,11 @@ static zend_native_status native_mir_test_execute_frame(
 		zval *argument = zend_hash_index_find(arguments, index);
 
 		ZEND_ASSERT(argument != NULL);
-		ZVAL_COPY_VALUE(ZEND_CALL_ARG(frame, index + 1), argument);
+		if (state->wave >= 8) {
+			ZVAL_COPY(ZEND_CALL_ARG(frame, index + 1), argument);
+		} else {
+			ZVAL_COPY_VALUE(ZEND_CALL_ARG(frame, index + 1), argument);
+		}
 	}
 	ZVAL_UNDEF(&state->native_result);
 	zend_init_func_execute_data(frame, state->selected, &state->native_result);
@@ -2629,11 +2791,12 @@ static bool native_mir_test_execute_module(
 		zval *argument = zend_hash_index_find(arguments, index);
 
 		if (argument == NULL
-				|| !native_mir_test_is_scalar_zval(argument)) {
+				|| (state->wave < 8
+					&& !native_mir_test_is_scalar_zval(argument))) {
 			native_mir_test_fail(
 				state, NATIVE_MIR_TEST_STATUS_ERROR,
 				NATIVE_MIR_TEST_PHASE_EXECUTE, "native", "INVALID_ARGUMENTS",
-				"native arguments must be a packed list of null/bool/int/float");
+				"native arguments must be a packed list of supported values");
 			return false;
 		}
 	}
@@ -2691,6 +2854,7 @@ static void native_mir_test_cleanup(native_mir_test_state *state)
 				zend_arena_destroy(function->ssa_arena);
 			}
 			efree(function->source_effects);
+			efree(function->internal_call_cells);
 			efree(function->argument_types);
 			efree(function->projected_ssa_var_info);
 			efree(function->projected_ssa_vars);
@@ -3059,7 +3223,7 @@ ZEND_FUNCTION(native_mir_test_compile_execute)
 	zend_try {
 		if (native_mir_test_compile(state)
 				&& native_mir_test_build_ssa(state)
-				&& (state->wave == 7
+				&& (state->wave >= 7
 					|| native_mir_test_lower_and_dump(state))) {
 			(void) native_mir_test_execute_module(state, arguments);
 		}

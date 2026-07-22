@@ -265,6 +265,14 @@ public:
 				for (uint32_t n = 0; n < instruction.operand_count + 2; ++n) {
 					operands.push_back(IRValueRef{FRAME_VALUE});
 				}
+			} else if (instruction.record.opcode
+					== ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL) {
+				/* begin + source setters + finish + optional scalar read */
+				for (uint32_t n = 0;
+						n < instruction.call_argument_count + 2
+							+ (result != INVALID_VALUE_REF); ++n) {
+					operands.push_back(IRValueRef{FRAME_VALUE});
+				}
 			}
 			add_node(static_cast<uint32_t>(block), InstNode{
 				InstKind::MIR, i, UINT32_MAX, result, std::move(operands),
