@@ -275,6 +275,11 @@ public:
 
 	bool valid() const { return valid_; }
 	const zend_tpde_plan *plan() const { return plan_; }
+	const void *runtime_helper(zend_native_runtime_helper_id id) const {
+		const zend_native_runtime_helper *helper =
+			zend_native_runtime_helper_find(plan_->runtime, id);
+		return helper != nullptr ? helper->address : nullptr;
+	}
 	IRBlockRef block_ref(zend_mir_block_id id) const {
 		int32_t index = block_index(id);
 		return index < 0 ? INVALID_BLOCK_REF
@@ -323,7 +328,7 @@ public:
 	bool func_extern(IRFuncRef) const { return false; }
 	bool func_only_local(IRFuncRef) const { return false; }
 	bool func_has_weak_linkage(IRFuncRef) const { return false; }
-	bool cur_needs_unwind_info() const { return false; }
+	bool cur_needs_unwind_info() const { return plan_->may_emit_calls; }
 	bool cur_is_vararg() const { return false; }
 	uint32_t cur_highest_val_idx() const {
 		return MIR_VALUE_BASE + plan_->value_count - 1;

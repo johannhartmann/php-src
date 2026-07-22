@@ -134,7 +134,8 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		if (exact_type == ZEND_MIR_SCALAR_TYPE_F64) {
 			builder.add_arg(CallArg{node.operands[0]});
 			builder.call(ValuePart{
-				reinterpret_cast<uintptr_t>(&zend_native_echo_double), 8,
+				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
+					ZEND_NATIVE_HELPER_ECHO_DOUBLE)), 8,
 				tpde::x64::PlatformConfig::GP_BANK});
 		} else {
 			if (exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
@@ -147,7 +148,8 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				static_cast<uint32_t>(exact_type), 4,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 			builder.call(ValuePart{
-				reinterpret_cast<uintptr_t>(&zend_native_echo_integer), 8,
+				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
+					ZEND_NATIVE_HELPER_ECHO_INTEGER)), 8,
 				tpde::x64::PlatformConfig::GP_BANK});
 		}
 		return true;
@@ -416,7 +418,8 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				builder.add_arg(ValuePart{call.record.source_position_id, 4,
 					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 				builder.call(ValuePart{
-					reinterpret_cast<uintptr_t>(&zend_native_call_begin), 8,
+					reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
+						ZEND_NATIVE_HELPER_USER_CALL_BEGIN)), 8,
 					tpde::x64::PlatformConfig::GP_BANK});
 			}
 			for (uint32_t index = 0; index < call.operand_count; ++index) {
@@ -429,8 +432,8 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				builder.add_arg(CallArg{operand});
 				if (adaptor->exact_type(operand) == ZEND_MIR_SCALAR_TYPE_F64) {
 					builder.call(ValuePart{
-						reinterpret_cast<uintptr_t>(
-							&zend_native_call_set_double_argument),
+						reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
+							ZEND_NATIVE_HELPER_USER_CALL_SET_DOUBLE)),
 						8, tpde::x64::PlatformConfig::GP_BANK});
 				} else {
 					if (!zend_mir_scalar_type_is_exact(adaptor->exact_type(operand))) {
@@ -440,8 +443,8 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 						static_cast<uint32_t>(adaptor->exact_type(operand)), 4,
 						tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 					builder.call(ValuePart{
-						reinterpret_cast<uintptr_t>(
-							&zend_native_call_set_integer_argument),
+						reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
+							ZEND_NATIVE_HELPER_USER_CALL_SET_INTEGER)),
 						8, tpde::x64::PlatformConfig::GP_BANK});
 				}
 			}
@@ -452,7 +455,8 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				reinterpret_cast<uintptr_t>(call.entry_cell), 8,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 			builder.call(ValuePart{
-				reinterpret_cast<uintptr_t>(&zend_native_call_invoke_finish), 8,
+				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
+					ZEND_NATIVE_HELPER_USER_CALL_FINISH)), 8,
 				tpde::x64::PlatformConfig::GP_BANK});
 			if (node.has_result) {
 				ValuePart payload{tpde::x64::PlatformConfig::GP_BANK};

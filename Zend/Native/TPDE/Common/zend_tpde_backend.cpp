@@ -35,6 +35,11 @@ bool initialize_plan(
 	uint32_t frame_argument_count,
 	zend_tpde_plan *plan,
 	zend_native_diagnostic *diag) {
+	plan->runtime = zend_native_runtime_get();
+	if (zend_native_runtime_validate(plan->runtime,
+			ZEND_NATIVE_RUNTIME_CAP_BAILOUT_BOUNDARY, diag) == FAILURE) {
+		return false;
+	}
 	if (!zend_mir_contract_is_compatible(view->contract_version)
 			|| view->function_count(view->context) != 1) {
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
@@ -327,6 +332,31 @@ bool initialize_plan(
 				if (plan->argument_count <= slot.index) {
 					plan->argument_count = slot.index + 1;
 				}
+			}
+		}
+	}
+	if (plan->may_emit_calls) {
+		static constexpr zend_native_runtime_helper_id required_helpers[] = {
+			ZEND_NATIVE_HELPER_USER_CALL_BEGIN,
+			ZEND_NATIVE_HELPER_USER_CALL_SET_INTEGER,
+			ZEND_NATIVE_HELPER_USER_CALL_SET_DOUBLE,
+			ZEND_NATIVE_HELPER_USER_CALL_FINISH,
+			ZEND_NATIVE_HELPER_ECHO_INTEGER,
+			ZEND_NATIVE_HELPER_ECHO_DOUBLE,
+		};
+		if (zend_native_runtime_validate(plan->runtime,
+				ZEND_NATIVE_RUNTIME_CAP_USER_CALL
+					| ZEND_NATIVE_RUNTIME_CAP_OBSERVER
+					| ZEND_NATIVE_RUNTIME_CAP_INTERRUPT,
+				diag) == FAILURE) {
+			return false;
+		}
+		for (zend_native_runtime_helper_id helper : required_helpers) {
+			if (zend_native_runtime_helper_find(plan->runtime, helper) == nullptr) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_UNSUPPORTED_OPCODE,
+					"native runtime lacks a required symbolic helper");
+				return false;
 			}
 		}
 	}
@@ -637,64 +667,6 @@ extern "C" zend_result zend_native_execute(
 	return status == ZEND_NATIVE_RETURNED ? SUCCESS : FAILURE;
 }
 
-extern "C" zend_native_status zend_native_execute_frame(
-	const zend_native_code *code,
-	zend_execute_data *execute_data,
-	zend_native_diagnostic *diag) {
-	if (code == nullptr || execute_data == nullptr || !code->executable
-			|| execute_data->func == nullptr
-			|| ZEND_CALL_NUM_ARGS(execute_data) > code->argument_count
-			|| zend_native_frame_prepare(execute_data) == FAILURE) {
-		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
-			"Zend frame does not match the compiled native entry");
-		return ZEND_NATIVE_EXCEPTION;
-	}
-	zval discarded_return;
-	zval *original_return_value = execute_data->return_value;
-	if (original_return_value == nullptr) {
-		ZVAL_UNDEF(&discarded_return);
-		execute_data->return_value = &discarded_return;
-	}
-	zend_native_status status = ZEND_NATIVE_BAILOUT;
-	zend_try {
-		status = code->entry(execute_data);
-	} zend_catch {
-		status = EG(exception) != nullptr
-			? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
-	} zend_end_try();
-	if (status == ZEND_NATIVE_RETURNED && EG(exception) != nullptr) {
-		status = ZEND_NATIVE_EXCEPTION;
-	}
-	if (status == ZEND_NATIVE_RETURNED
-			&& (execute_data->func->common.fn_flags
-				& ZEND_ACC_HAS_RETURN_TYPE) != 0) {
-		const zend_arg_info *return_info =
-			execute_data->func->common.arg_info - 1;
-		uint32_t type_mask = ZEND_TYPE_FULL_MASK(return_info->type);
-		zval *return_value = execute_data->return_value;
-
-		if ((type_mask & MAY_BE_NEVER) != 0) {
-			zend_verify_never_error(execute_data->func);
-			status = ZEND_NATIVE_EXCEPTION;
-		} else if ((type_mask & MAY_BE_VOID) == 0
-				&& (Z_ISUNDEF_P(return_value)
-					|| !zend_check_type_ex(
-						&return_info->type, return_value, true, false))) {
-			zend_verify_return_error(
-				execute_data->func,
-				Z_ISUNDEF_P(return_value) ? nullptr : return_value);
-			status = ZEND_NATIVE_EXCEPTION;
-		}
-	}
-	if (original_return_value == nullptr) {
-		if (!Z_ISUNDEF(discarded_return)) {
-			zval_ptr_dtor(&discarded_return);
-		}
-		execute_data->return_value = nullptr;
-	}
-	return status;
-}
-
 extern "C" void zend_native_image_destroy(zend_native_image *image) {
 	if (image != nullptr) {
 		if (image->destroy_target_state != nullptr) {
@@ -736,4 +708,14 @@ extern "C" bool zend_native_code_is_writable(const zend_native_code *code) {
 }
 extern "C" bool zend_native_code_is_executable(const zend_native_code *code) {
 	return code != nullptr && code->executable;
+}
+
+extern "C" zend_native_frame_entry_t zend_native_code_frame_entry(
+	const zend_native_code *code) {
+	return code != nullptr ? code->entry : nullptr;
+}
+
+extern "C" uint32_t zend_native_code_argument_count(
+	const zend_native_code *code) {
+	return code != nullptr ? code->argument_count : 0;
 }
