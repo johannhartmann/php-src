@@ -81,11 +81,13 @@ void zend_native_entry_cell_set_frame_probe(
 	void *context);
 
 /*
- * The execute hook is process-wide, while the active component scope is
- * thread-local and stack-disciplined.  While a scope is active every userland
- * reentry must resolve to one of its ready entry cells; unknown targets are
- * rejected instead of being dispatched by the VM.
+ * The execute hook is process-wide and reference-counted across active
+ * thread-local, stack-disciplined component scopes. While a scope is active,
+ * every userland reentry must resolve to one of its ready entry cells;
+ * unknown targets are rejected instead of being dispatched by the VM.
  */
+zend_result zend_native_reentry_startup(void);
+void zend_native_reentry_shutdown(void);
 zend_result zend_native_reentry_install(void);
 void zend_native_reentry_uninstall(void);
 zend_result zend_native_reentry_scope_enter(
