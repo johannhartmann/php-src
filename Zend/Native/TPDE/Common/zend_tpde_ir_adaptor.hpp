@@ -341,6 +341,15 @@ public:
 			bool machine_result = result != INVALID_VALUE_REF
 				&& zend_mir_scalar_type_is_exact(exact_type(result))
 				&& exact_type(result) != ZEND_MIR_SCALAR_TYPE_NULL;
+			/* W09 Pi nodes over canonical zvals preserve source SSA topology,
+			 * but the authoritative value remains in the Zend frame slot.  They
+			 * are not machine copies and must not create a TPDE use-before-def
+			 * dependency on another source-only zval identity. */
+			if (instruction.record.opcode == ZEND_MIR_OPCODE_COPY
+					&& instruction.record.representation
+						== ZEND_MIR_REPRESENTATION_ZVAL) {
+				continue;
+			}
 			operands.reserve(instruction.operand_count +
 				(instruction.record.opcode == ZEND_MIR_OPCODE_RETURN
 					|| instruction.record.opcode

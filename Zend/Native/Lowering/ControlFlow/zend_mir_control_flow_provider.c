@@ -608,15 +608,36 @@ bool zend_mir_w04_emit_terminator(
 		mappings[i].edge_statepoint_instruction_id = ZEND_MIR_ID_INVALID;
 		mappings[i].mir_successor_index = mir_index;
 		if (zend_mir_w04_edge_requires_statepoint(&edges[i])) {
+			zend_mir_source_opcode_ref implicit_edge_opcode;
+			const zend_mir_source_opcode_ref *statepoint_opcode = opcode;
 			zend_mir_block_id edge_block;
+
+			/* An implicit fallthrough may itself be the loop backedge. Anchor
+			 * its interrupt statepoint to the final source opcode in the block,
+			 * which is the last operation completed before taking that edge. */
+			if (statepoint_opcode == NULL) {
+				if (block->opcode_count == 0
+						|| !context->source->opcode_at(
+							context->source->context,
+							block->first_opcode_ordinal
+								+ block->opcode_count - 1,
+							&implicit_edge_opcode)) {
+					return false;
+				}
+				statepoint_opcode = &implicit_edge_opcode;
+			}
 			if (!mutator->add_block(mutator->context,
 					zend_mir_lowering_context_function_id(context),
-					&edge_block)
-					|| !zend_mir_w04_emit_edge_statepoint(
-						context, mutator, opcode, block->id, edge_block,
-						&mappings[i].edge_statepoint_instruction_id)
-					|| !mutator->add_edge(mutator->context,
-						edge_block, target)) {
+					&edge_block)) {
+				return false;
+			}
+			if (!zend_mir_w04_emit_edge_statepoint(
+					context, mutator, statepoint_opcode, block->id, edge_block,
+					&mappings[i].edge_statepoint_instruction_id)) {
+				return false;
+			}
+			if (!mutator->add_edge(mutator->context,
+					edge_block, target)) {
 				return false;
 			}
 			mappings[i].mir_to_block_id = edge_block;
