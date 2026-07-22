@@ -1,5 +1,5 @@
 --TEST--
-Native MIR W09 executes increment, decrement, and null coalescing
+Native MIR W09 executes increment, decrement, coalescing, and Elvis branches
 --SKIPIF--
 <?php
 if (!function_exists('native_mir_test_compile_execute')) {
@@ -56,6 +56,23 @@ function value_case($values)
 PHP,
         [["present" => [1, 2], "null" => null]],
     ],
+    'elvis' => [<<<'PHP'
+<?php
+function value_case($null, $false, $zero, $empty, $zeroString, $text, $array)
+{
+    return [
+        $null ?: "fallback",
+        $false ?: "fallback",
+        $zero ?: "fallback",
+        $empty ?: "fallback",
+        $zeroString ?: "fallback",
+        $text ?: "fallback",
+        $array ?: "fallback",
+    ];
+}
+PHP,
+        [null, false, 0, "", "0", "value", [1, 2]],
+    ],
 ];
 
 foreach ($cases as $name => [$source, $arguments]) {
@@ -83,3 +100,4 @@ increment_decrement accepted returned return=[1,3,3,1,1] runs=10 vm=0 execute_ex
 reference_increment accepted returned return=[[1,3,3],3] runs=10 vm=0 execute_ex=0 handler=0
 coalesce_cv accepted returned return=["value","fallback","fallback"] runs=10 vm=0 execute_ex=0 handler=0
 coalesce_dimension accepted returned return=[[1,2],"fallback","fallback"] runs=10 vm=0 execute_ex=0 handler=0
+elvis accepted returned return=["fallback","fallback","fallback","fallback","fallback","value",[1,2]] runs=10 vm=0 execute_ex=0 handler=0
