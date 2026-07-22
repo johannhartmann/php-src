@@ -637,7 +637,7 @@ static zend_mir_lowering_status zend_mir_zend_source_init_w04_impl(
 	const zend_ssa *ssa, zend_mir_op_array_id op_array_id,
 	zend_mir_symbol_id file_symbol_id, zend_mir_frontend_diagnostic *diagnostic,
 	const zend_op_array *original_op_array, const zend_ssa *original_ssa,
-	bool allow_protected_regions)
+	bool allow_protected_regions, bool allow_any_source_zval_return)
 {
 	zend_mir_zend_source candidate;
 	zend_mir_lowering_status status;
@@ -671,7 +671,10 @@ static zend_mir_lowering_status zend_mir_zend_source_init_w04_impl(
 			|| (status = zend_mir_frontend_validate_facts(
 				op_array, ssa, op_array_id, diagnostic, &facts))
 				!= ZEND_MIR_LOWERING_SUCCESS
-			|| (status = allow_protected_regions
+			|| (status = allow_any_source_zval_return
+				? zend_mir_frontend_validate_eligibility_w09(
+					op_array, ssa, original_op_array, op_array_id, diagnostic)
+				: allow_protected_regions
 				? zend_mir_frontend_validate_eligibility_w08(
 					op_array, ssa, op_array_id, diagnostic)
 				: zend_mir_frontend_validate_eligibility_w04(
@@ -709,7 +712,7 @@ zend_mir_lowering_status zend_mir_zend_source_init_w04(
 {
 	return zend_mir_zend_source_init_w04_impl(
 		source, op_array, ssa, op_array_id, file_symbol_id, diagnostic,
-		NULL, NULL, false);
+		NULL, NULL, false, false);
 }
 
 zend_mir_lowering_status zend_mir_zend_source_init_w05_projection(
@@ -721,7 +724,7 @@ zend_mir_lowering_status zend_mir_zend_source_init_w05_projection(
 {
 	return zend_mir_zend_source_init_w04_impl(
 		source, projected_op_array, projected_ssa, op_array_id, file_symbol_id,
-		diagnostic, original_op_array, original_ssa, false);
+		diagnostic, original_op_array, original_ssa, false, false);
 }
 
 zend_mir_lowering_status zend_mir_zend_source_init_w08_projection(
@@ -733,9 +736,26 @@ zend_mir_lowering_status zend_mir_zend_source_init_w08_projection(
 {
 	zend_mir_lowering_status status = zend_mir_zend_source_init_w04_impl(
 		source, projected_op_array, projected_ssa, op_array_id, file_symbol_id,
-		diagnostic, original_op_array, original_ssa, true);
+		diagnostic, original_op_array, original_ssa, true, false);
 	if (status == ZEND_MIR_LOWERING_SUCCESS) {
 		source->w08 = true;
+	}
+	return status;
+}
+
+zend_mir_lowering_status zend_mir_zend_source_init_w09_projection(
+	zend_mir_zend_source *source,
+	const zend_op_array *projected_op_array, const zend_ssa *projected_ssa,
+	const zend_op_array *original_op_array, const zend_ssa *original_ssa,
+	zend_mir_op_array_id op_array_id, zend_mir_symbol_id file_symbol_id,
+	zend_mir_frontend_diagnostic *diagnostic)
+{
+	zend_mir_lowering_status status = zend_mir_zend_source_init_w04_impl(
+		source, projected_op_array, projected_ssa, op_array_id, file_symbol_id,
+		diagnostic, original_op_array, original_ssa, true, true);
+	if (status == ZEND_MIR_LOWERING_SUCCESS) {
+		source->w08 = true;
+		source->w09 = true;
 	}
 	return status;
 }

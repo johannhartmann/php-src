@@ -50,7 +50,20 @@
 	X(VALUE_FAST_CONCAT, "value_fast_concat", 64) \
 	X(VALUE_ROPE_INIT, "value_rope_init", 65) \
 	X(VALUE_ROPE_ADD, "value_rope_add", 66) \
-	X(VALUE_ROPE_END, "value_rope_end", 67)
+	X(VALUE_ROPE_END, "value_rope_end", 67) \
+	X(VALUE_INIT_ARRAY, "value_init_array", 68) \
+	X(VALUE_ADD_ARRAY_ELEMENT, "value_add_array_element", 69) \
+	X(VALUE_ADD_ARRAY_UNPACK, "value_add_array_unpack", 70) \
+	X(VALUE_FETCH_DIM_R, "value_fetch_dim_r", 71) \
+	X(VALUE_FETCH_DIM_W, "value_fetch_dim_w", 72) \
+	X(VALUE_FETCH_DIM_RW, "value_fetch_dim_rw", 73) \
+	X(VALUE_FETCH_DIM_IS, "value_fetch_dim_is", 74) \
+	X(VALUE_FETCH_DIM_FUNC_ARG, "value_fetch_dim_func_arg", 75) \
+	X(VALUE_FETCH_DIM_UNSET, "value_fetch_dim_unset", 76) \
+	X(VALUE_ASSIGN_DIM, "value_assign_dim", 77) \
+	X(VALUE_ASSIGN_DIM_OP, "value_assign_dim_op", 78) \
+	X(VALUE_UNSET_DIM, "value_unset_dim", 79) \
+	X(VALUE_ISSET_ISEMPTY_DIM, "value_isset_isempty_dim", 80)
 
 #define ZEND_MIR_SCALAR_OPCODE_CATALOG(X) \
 	X(I64_ADD_NO_OVERFLOW, "i64_add_no_overflow", 10) \
@@ -100,7 +113,7 @@ typedef enum _zend_mir_opcode {
 	ZEND_MIR_W05_OPCODE_COUNT = 42,
 	ZEND_MIR_W06_OPCODE_COUNT = 48,
 	ZEND_MIR_W08_OPCODE_COUNT = 54,
-	ZEND_MIR_W09_OPCODE_COUNT = 68,
+	ZEND_MIR_W09_OPCODE_COUNT = 81,
 	ZEND_MIR_OPCODE_INVALID = -1
 } zend_mir_opcode;
 #undef ZEND_MIR_OPCODE_ENUM
@@ -192,7 +205,7 @@ ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_VALUE_MAKE_REF
 	== ZEND_MIR_W08_OPCODE_COUNT,
 	"executable value opcodes begin after the W08 boundary");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W09_OPCODE_COUNT
-	== ZEND_MIR_OPCODE_VALUE_ROPE_END + 1,
+	== ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM + 1,
 	"executable value opcodes have an additive table boundary");
 
 #endif /* ZEND_MIR_OPCODES_H */
