@@ -74,6 +74,9 @@ static zend_result zend_dfa_analyze_op_array_impl(
 	}
 
 	build_flags = 0;
+	if (allow_protected_regions) {
+		build_flags |= ZEND_SSA_PROTECTED_REGIONS;
+	}
 	if (ctx->debug_level & ZEND_DUMP_DFA_LIVENESS) {
 		build_flags |= ZEND_SSA_DEBUG_LIVENESS;
 	}
