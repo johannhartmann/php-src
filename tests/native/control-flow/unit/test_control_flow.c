@@ -378,6 +378,12 @@ static void test_branch_order(void)
 		== ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT);
 	assert(zend_mir_w04_branch_kind_for_opcode(ZEND_MIR_W04_OPCODE_JMPNZ_EX)
 		== ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT);
+	assert(zend_mir_w04_branch_kind_for_opcode(ZEND_MIR_W08_OPCODE_CATCH)
+		== ZEND_MIR_W04_BRANCH_CATCH);
+	assert(zend_mir_w04_mir_successor_for_source(
+		ZEND_MIR_W04_BRANCH_CATCH, 0) == 1);
+	assert(zend_mir_w04_mir_successor_for_source(
+		ZEND_MIR_W04_BRANCH_CATCH, 1) == 0);
 }
 
 static void test_validation(void)
@@ -392,6 +398,9 @@ static void test_validation(void)
 	source.blocks[2].flags |= ZEND_MIR_SOURCE_BLOCK_PROTECTED;
 	assert(!zend_mir_w04_validate_source(&view, &validation));
 	assert(validation.diagnostic == ZEND_MIRL_W04_PROTECTED_REGION);
+	assert(zend_mir_w04_validate_source_for_protected_control_flow(
+		&view, &validation));
+	assert((validation.proofs & ZEND_MIR_W04_PROOF_NO_PROTECTED_REGION) == 0);
 	source.blocks[2].flags &= ~ZEND_MIR_SOURCE_BLOCK_PROTECTED;
 
 	source.blocks[2].flags |= ZEND_MIR_SOURCE_BLOCK_IRREDUCIBLE;

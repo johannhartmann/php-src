@@ -17,6 +17,8 @@ static zend_mir_w04_branch_kind zend_mir_w04_verify_branch_kind(uint32_t opcode)
 			return ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT;
 		case 47:
 			return ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT;
+		case 107:
+			return ZEND_MIR_W04_BRANCH_CATCH;
 		default:
 			return ZEND_MIR_W04_BRANCH_KIND_INVALID;
 	}
@@ -257,9 +259,23 @@ static bool zend_mir_w04_expected_successor(
 	{
 		zend_mir_w04_branch_kind kind =
 			zend_mir_w04_verify_branch_kind(opcode.zend_opcode_number);
+		uint32_t successor_count = 0;
+		uint32_t edge_index;
+		for (edge_index = 0;
+			edge_index < source->edge_count(source->context); edge_index++) {
+			zend_mir_source_edge_ref candidate;
+			if (!source->edge_at(source->context, edge_index, &candidate)) {
+				return false;
+			}
+			if (candidate.from_block_id == block.id) {
+				successor_count++;
+			}
+		}
 		if (kind == ZEND_MIR_W04_BRANCH_UNCONDITIONAL
 				|| kind == ZEND_MIR_W04_BRANCH_KIND_INVALID) {
 			*expected = edge->successor_index;
+		} else if (successor_count == 1) {
+			*expected = 0;
 		} else {
 			*expected = zend_mir_w04_mir_successor_for_source(
 				kind, edge->successor_index);
@@ -406,17 +422,6 @@ static bool zend_mir_w04_verify_edges(
 				ZEND_MIRV_TOKEN_W04_EDGE_MISMATCH,
 				"mapped edge target or successor ordinal differs");
 		}
-		if (!zend_mir_w04_view_instruction(
-				view, mapping.terminator_instruction_id, &terminator)
-				|| terminator.block_id != source_from
-				|| (view->successor_count(view->context, source_from) == 1
-					? terminator.opcode != ZEND_MIR_OPCODE_BRANCH
-					: terminator.opcode != ZEND_MIR_OPCODE_COND_BRANCH)) {
-			return zend_mir_w04_emit_verify(diagnostics,
-				ZEND_MIR_VERIFY_W04_BRANCH_MISMATCH,
-				ZEND_MIRV_TOKEN_W04_BRANCH_MISMATCH,
-				"terminator kind does not match successor cardinality");
-		}
 		{
 			zend_mir_source_block_ref source_block;
 			zend_mir_source_opcode_ref source_opcode;
@@ -441,6 +446,20 @@ static bool zend_mir_w04_verify_edges(
 				}
 				branch_kind = zend_mir_w04_verify_branch_kind(
 					source_opcode.zend_opcode_number);
+			}
+			if (!zend_mir_w04_view_instruction(
+					view, mapping.terminator_instruction_id, &terminator)
+					|| terminator.block_id != source_from
+					|| (branch_kind == ZEND_MIR_W04_BRANCH_CATCH
+						? terminator.opcode != ZEND_MIR_OPCODE_CATCH_ENTER
+						: (view->successor_count(view->context, source_from) == 1
+							? terminator.opcode != ZEND_MIR_OPCODE_BRANCH
+							: terminator.opcode
+								!= ZEND_MIR_OPCODE_COND_BRANCH))) {
+				return zend_mir_w04_emit_verify(diagnostics,
+					ZEND_MIR_VERIFY_W04_BRANCH_MISMATCH,
+					ZEND_MIRV_TOKEN_W04_BRANCH_MISMATCH,
+					"terminator kind does not match source branch");
 			}
 			if (branch_kind == ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT
 					|| branch_kind

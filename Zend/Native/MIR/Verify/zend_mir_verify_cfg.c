@@ -198,6 +198,7 @@ static uint32_t zend_mir_verify_expected_operands(zend_mir_opcode opcode,
 	switch (opcode) {
 		case ZEND_MIR_OPCODE_CONSTANT:
 		case ZEND_MIR_OPCODE_BRANCH:
+		case ZEND_MIR_OPCODE_CATCH_ENTER:
 		case ZEND_MIR_OPCODE_UNREACHABLE:
 			return 0;
 		case ZEND_MIR_OPCODE_COPY:
@@ -235,6 +236,7 @@ static bool zend_mir_verify_result_contract(
 				&& instruction->representation != ZEND_MIR_REPRESENTATION_CONTROL;
 		case ZEND_MIR_OPCODE_BRANCH:
 		case ZEND_MIR_OPCODE_COND_BRANCH:
+		case ZEND_MIR_OPCODE_CATCH_ENTER:
 			return !zend_mir_id_is_valid(instruction->result_id)
 				&& instruction->representation == ZEND_MIR_REPRESENTATION_CONTROL;
 		case ZEND_MIR_OPCODE_STATEPOINT:
@@ -396,7 +398,9 @@ static void zend_mir_verify_block_instructions(
 		uint32_t expected_successors =
 			last->record.opcode == ZEND_MIR_OPCODE_BRANCH ? 1
 			: last->record.opcode == ZEND_MIR_OPCODE_COND_BRANCH ? 2 : 0;
-		if (block->successors_count != expected_successors) {
+		if ((last->record.opcode == ZEND_MIR_OPCODE_CATCH_ENTER
+				? block->successors_count != 1 && block->successors_count != 2
+				: block->successors_count != expected_successors)) {
 			zend_mir_verify_emit(context, ZEND_MIR_VERIFY_INVALID_TERMINATOR,
 				ZEND_MIR_DIAGNOSTIC_INVALID_CFG,
 				zend_mir_verify_instruction_location(context, &last->record),

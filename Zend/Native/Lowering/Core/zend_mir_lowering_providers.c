@@ -1889,6 +1889,7 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 	}
 	shape.has_control_flow = true;
 	shape.has_calls = true;
+	shape.has_try_regions = w08_execution && op_array->last_try_catch != 0;
 	shape.ssa_complete = true;
 	if (!zend_mir_lowering_context_init(
 			&integration.lowering_context, &integration.source_view, &shape,

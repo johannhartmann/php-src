@@ -124,6 +124,7 @@ static inline bool zend_mir_opcode_is_terminator(zend_mir_opcode opcode)
 {
 	return opcode == ZEND_MIR_OPCODE_BRANCH
 		|| opcode == ZEND_MIR_OPCODE_COND_BRANCH
+		|| opcode == ZEND_MIR_OPCODE_CATCH_ENTER
 		|| opcode == ZEND_MIR_OPCODE_RETURN
 		|| opcode == ZEND_MIR_OPCODE_THROW
 		|| opcode == ZEND_MIR_OPCODE_UNREACHABLE;

@@ -11,7 +11,8 @@ enum {
 	ZEND_MIR_W04_OPCODE_JMPZ = 43,
 	ZEND_MIR_W04_OPCODE_JMPNZ = 44,
 	ZEND_MIR_W04_OPCODE_JMPZ_EX = 46,
-	ZEND_MIR_W04_OPCODE_JMPNZ_EX = 47
+	ZEND_MIR_W04_OPCODE_JMPNZ_EX = 47,
+	ZEND_MIR_W08_OPCODE_CATCH = 107
 };
 
 typedef struct _zend_mir_w04_validation {
@@ -21,6 +22,9 @@ typedef struct _zend_mir_w04_validation {
 } zend_mir_w04_validation;
 
 bool zend_mir_w04_validate_source(
+	const zend_mir_lowering_source_view *source,
+	zend_mir_w04_validation *validation);
+bool zend_mir_w04_validate_source_for_protected_control_flow(
 	const zend_mir_lowering_source_view *source,
 	zend_mir_w04_validation *validation);
 zend_mir_w04_branch_kind zend_mir_w04_branch_kind_for_opcode(uint32_t opcode);
