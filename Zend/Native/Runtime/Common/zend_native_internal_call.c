@@ -182,6 +182,8 @@ static zval *zend_native_source_argument(
 		case ZEND_SEND_VAR:
 		case ZEND_SEND_VAR_EX:
 		case ZEND_SEND_REF:
+		case ZEND_SEND_VAR_NO_REF:
+		case ZEND_SEND_VAR_NO_REF_EX:
 			break;
 		default:
 			return NULL;
@@ -209,6 +211,7 @@ zend_result zend_native_call_set_source_argument(
 	uint8_t operand_type;
 	zend_execute_data *call;
 	zend_function *function;
+	const zend_op *send;
 	zval *target;
 	uint32_t argument_number;
 	zval *value = zend_native_source_argument(
@@ -220,33 +223,60 @@ zend_result zend_native_call_set_source_argument(
 	}
 	call = caller->call;
 	function = call->func;
-	if (function == NULL || function->type != ZEND_INTERNAL_FUNCTION
-			|| ordinal >= ZEND_CALL_NUM_ARGS(call)) {
+	if (function == NULL
+			|| (function->type != ZEND_INTERNAL_FUNCTION
+				&& function->type != ZEND_USER_FUNCTION)) {
 		return FAILURE;
 	}
-	argument_number = ordinal + 1;
-	target = ZEND_CALL_ARG(call, argument_number);
+	send = &caller->func->op_array.opcodes[send_opline_index];
+	if (send->op2_type == IS_CONST) {
+		zval *name = RT_CONSTANT(send, send->op2);
+		void *cache_slot[2] = {NULL, NULL};
+		if (Z_TYPE_P(name) != IS_STRING) {
+			return FAILURE;
+		}
+		target = zend_handle_named_arg(
+			&call, Z_STR_P(name), &argument_number, cache_slot);
+		caller->call = call;
+		if (target == NULL) {
+			return FAILURE;
+		}
+	} else {
+		argument_number = send->op2.num != 0
+			? send->op2.num : ordinal + 1;
+		if (argument_number == 0
+				|| argument_number > ZEND_CALL_NUM_ARGS(call)) {
+			return FAILURE;
+		}
+		target = ZEND_CALL_ARG(call, argument_number);
+	}
 	/*
 	 * SEND_VAR_EX and SEND_REF materialize a reference in the canonical
 	 * caller slot when the resolved parameter requires one.  The native
 	 * path must perform the same mutation before the argument is copied into
 	 * the internal call frame; literals can never become by-reference args.
 	 */
-	if (mode == ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE && !Z_ISREF_P(value)) {
+	if ((mode == ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
+			|| ARG_SHOULD_BE_SENT_BY_REF(function, argument_number))
+			&& !Z_ISREF_P(value)) {
 		if (!mutable_value) {
+			zend_cannot_pass_by_reference(argument_number);
 			return FAILURE;
 		}
 		ZVAL_MAKE_REF(value);
 	}
-	if (mode == ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE) {
-		if (!ARG_SHOULD_BE_SENT_BY_REF(function, argument_number)) {
-			return FAILURE;
-		}
+	if (mode == ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
+			|| ARG_SHOULD_BE_SENT_BY_REF(function, argument_number)) {
 		ZVAL_COPY(target, value);
 		return SUCCESS;
 	}
-	if (ARG_SHOULD_BE_SENT_BY_REF(function, argument_number)) {
-		return FAILURE;
+	if ((send->opcode == ZEND_SEND_VAR_NO_REF
+			|| send->opcode == ZEND_SEND_VAR_NO_REF_EX)
+			&& !Z_ISREF_P(value)) {
+		ZVAL_COPY(target, value);
+		ZVAL_NEW_REF(target, target);
+		zend_error(E_NOTICE, "Only variables should be passed by reference");
+		return EG(exception) == NULL ? SUCCESS : FAILURE;
 	}
 	if (operand_type == IS_CONST) {
 		ZVAL_COPY(target, value);

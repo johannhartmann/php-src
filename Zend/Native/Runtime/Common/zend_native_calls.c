@@ -272,10 +272,12 @@ zend_result zend_native_frame_prepare(zend_execute_data *execute_data)
 	}
 	op_array = &execute_data->func->op_array;
 	supplied = ZEND_CALL_NUM_ARGS(execute_data);
-	if (supplied < op_array->required_num_args || supplied > op_array->num_args) {
+	if (supplied < op_array->required_num_args) {
+		zend_missing_arg_error(execute_data);
 		return FAILURE;
 	}
-	for (ordinal = supplied; ordinal < op_array->num_args; ordinal++) {
+	for (ordinal = supplied;
+			ordinal < op_array->num_args; ordinal++) {
 		const zend_op *receive = &op_array->opcodes[ordinal];
 		zval *argument = ZEND_CALL_ARG(execute_data, ordinal + 1);
 
@@ -285,6 +287,12 @@ zend_result zend_native_frame_prepare(zend_execute_data *execute_data)
 			return FAILURE;
 		}
 		ZVAL_COPY(argument, RT_CONSTANT(receive, receive->op2));
+		if (Z_TYPE_P(argument) == IS_CONSTANT_AST
+				&& zval_update_constant_ex(argument, op_array->scope) == FAILURE) {
+			zval_ptr_dtor_nogc(argument);
+			ZVAL_UNDEF(argument);
+			return FAILURE;
+		}
 	}
 	if (op_array->num_args != 0 && op_array->arg_info == NULL) {
 		return FAILURE;
@@ -299,6 +307,52 @@ zend_result zend_native_frame_prepare(zend_execute_data *execute_data)
 			zend_verify_arg_error(
 				execute_data->func, argument_info, ordinal + 1, argument);
 			return FAILURE;
+		}
+	}
+	if ((op_array->fn_flags & ZEND_ACC_VARIADIC) != 0) {
+		const zend_arg_info *argument_info =
+			&op_array->arg_info[op_array->num_args];
+		zval *variadic = ZEND_CALL_VAR_NUM(
+			execute_data, op_array->num_args);
+		uint32_t argument_number = op_array->num_args + 1;
+		uint32_t extra_count = supplied > op_array->num_args
+			? supplied - op_array->num_args : 0;
+		uint32_t named_count =
+			(ZEND_CALL_INFO(execute_data)
+				& ZEND_CALL_HAS_EXTRA_NAMED_PARAMS) != 0
+			? zend_hash_num_elements(execute_data->extra_named_params) : 0;
+
+		array_init_size(variadic, extra_count + named_count);
+		for (ordinal = 0; ordinal < extra_count; ordinal++) {
+			zval *source = ZEND_CALL_VAR_NUM(execute_data,
+				op_array->last_var + op_array->T + ordinal);
+			zval copy;
+			if (ZEND_TYPE_IS_SET(argument_info->type)
+					&& !zend_check_type_ex(
+						&argument_info->type, source, false, false)) {
+				zend_verify_arg_error(execute_data->func, argument_info,
+					argument_number + ordinal, source);
+				return FAILURE;
+			}
+			ZVAL_COPY(&copy, source);
+			zend_hash_next_index_insert(Z_ARRVAL_P(variadic), &copy);
+		}
+		if (named_count != 0) {
+			zend_string *name;
+			zval *source;
+			ZEND_HASH_MAP_FOREACH_STR_KEY_VAL(
+					execute_data->extra_named_params, name, source) {
+				zval copy;
+				if (ZEND_TYPE_IS_SET(argument_info->type)
+						&& !zend_check_type_ex(
+							&argument_info->type, source, false, false)) {
+					zend_verify_arg_error(execute_data->func, argument_info,
+						argument_number + extra_count, source);
+					return FAILURE;
+				}
+				ZVAL_COPY(&copy, source);
+				zend_hash_add_new(Z_ARRVAL_P(variadic), name, &copy);
+			} ZEND_HASH_FOREACH_END();
 		}
 	}
 	return SUCCESS;
@@ -318,6 +372,8 @@ void zend_native_call_begin(
 {
 	zend_execute_data *call;
 	zend_function *function;
+	const zend_op *source_init;
+	uint32_t initial_argument_count;
 
 	if (caller == NULL || cell == NULL || caller->call != NULL) {
 		zend_native_call_abort("Invalid pending native call state");
@@ -332,8 +388,12 @@ void zend_native_call_begin(
 			|| source_opline_index >= caller->func->op_array.last) {
 		zend_native_call_abort("Native call source position is invalid");
 	}
-	if (argument_count < function->common.required_num_args
-			|| argument_count > function->common.num_args) {
+	source_init = &caller->func->op_array.opcodes[source_opline_index];
+	if (source_init->opcode != ZEND_INIT_FCALL) {
+		zend_native_call_abort("Native call source opcode is invalid");
+	}
+	initial_argument_count = source_init->extended_value;
+	if (initial_argument_count > argument_count) {
 		zend_native_call_abort("Native callee argument count is invalid");
 	}
 #ifdef ZEND_CHECK_STACK_LIMIT
@@ -343,10 +403,10 @@ void zend_native_call_begin(
 	}
 #endif
 	call = zend_vm_stack_push_call_frame(
-		ZEND_CALL_NESTED_FUNCTION, function, argument_count, NULL);
+		ZEND_CALL_NESTED_FUNCTION, function, initial_argument_count, NULL);
+	call->prev_execute_data = caller;
 	caller->call = call;
 	caller->opline = &caller->func->op_array.opcodes[source_opline_index];
-	zend_init_func_execute_data(call, &function->op_array, NULL);
 	EG(current_execute_data) = caller;
 }
 
@@ -464,6 +524,29 @@ static zend_native_status zend_native_call_invoke(
 		zend_native_call_abort("Invalid native invocation state");
 	}
 	call = caller->call;
+	if ((ZEND_CALL_INFO(call) & ZEND_CALL_MAY_HAVE_UNDEF) != 0
+			&& zend_handle_undef_args(call) == FAILURE) {
+		zend_vm_stack_free_args(call);
+		if ((ZEND_CALL_INFO(call)
+				& ZEND_CALL_HAS_EXTRA_NAMED_PARAMS) != 0) {
+			zend_free_extra_named_params(call->extra_named_params);
+		}
+		zend_vm_stack_free_call_frame(call);
+		caller->call = NULL;
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	if (EG(exception) != NULL) {
+		zend_vm_stack_free_args(call);
+		if ((ZEND_CALL_INFO(call)
+				& ZEND_CALL_HAS_EXTRA_NAMED_PARAMS) != 0) {
+			zend_free_extra_named_params(call->extra_named_params);
+		}
+		zend_vm_stack_free_call_frame(call);
+		caller->call = NULL;
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	zend_init_func_execute_data(call, &cell->function->op_array, NULL);
+	EG(current_execute_data) = caller;
 	if (cell->frame_probe != NULL) {
 		cell->frame_probe(cell->frame_probe_context, caller, call);
 	}

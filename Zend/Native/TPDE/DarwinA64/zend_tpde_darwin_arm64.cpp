@@ -625,6 +625,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		case ZEND_MIR_OPCODE_CALL_DIRECT_USER: {
 			const zend_tpde_instruction &call =
 				adaptor->mir_instruction(instruction);
+			const bool source_arguments = call.operand_count == 0
+				&& call.call_argument_count != 0;
 			{
 				zend::native::tpde::CCAssignerAppleA64 assigner;
 				CallBuilder builder{*this, assigner};
@@ -632,7 +634,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				builder.add_arg(ValuePart{
 					reinterpret_cast<uintptr_t>(call.entry_cell), 8,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-				builder.add_arg(ValuePart{call.operand_count, 4,
+				builder.add_arg(ValuePart{
+					source_arguments ? call.call_argument_count : call.operand_count, 4,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				builder.add_arg(ValuePart{call.call_site.source_init_opline_index, 4,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
@@ -641,11 +644,33 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 						ZEND_NATIVE_HELPER_USER_CALL_BEGIN)), 8,
 					DarwinConfig::GP_BANK});
 			}
-			for (uint32_t index = 0; index < call.operand_count; ++index) {
+			for (uint32_t index = 0;
+					index < (source_arguments
+						? call.call_argument_count : call.operand_count); ++index) {
 				zend::native::tpde::CCAssignerAppleA64 assigner;
 				CallBuilder builder{*this, assigner};
-				IRValueRef operand = node.operands[index];
 				builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
+				if (source_arguments) {
+					const zend_mir_call_argument_ref &argument =
+						adaptor->plan()->call_arguments[
+							call.call_argument_offset + index];
+					builder.add_arg(ValuePart{argument.ordinal, 4,
+						DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+					builder.add_arg(ValuePart{argument.send_opline_index, 4,
+						DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+					builder.add_arg(ValuePart{
+						argument.ownership
+							== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
+							? ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
+							: ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE,
+						4, DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+					builder.call(ValuePart{
+						reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
+							ZEND_NATIVE_HELPER_CALL_SET_SOURCE_ARGUMENT)),
+						8, DarwinConfig::GP_BANK});
+					continue;
+				}
+				IRValueRef operand = node.operands[index];
 				builder.add_arg(ValuePart{index, 4,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				builder.add_arg(CallArg{operand});

@@ -747,11 +747,13 @@ static bool zend_mir_w06_verify_call_transfers(
 	uint32_t reference_count =
 		values->reference_cell_count(values->context);
 	uint32_t index;
+	bool source_backed = count == 0
+		&& module != NULL && module->call_arguments.count != 0;
 
 	if (module == NULL
 			|| ((calls == NULL) != (module->call_sites.count == 0))
 			|| (calls != NULL && calls != &module->call_view)
-			|| count != module->call_arguments.count
+			|| (!source_backed && count != module->call_arguments.count)
 			|| (module->call_staging.committed
 				&& (module->call_sites.items == NULL
 					|| (module->call_arguments.count != 0
@@ -762,6 +764,21 @@ static bool zend_mir_w06_verify_call_transfers(
 			ZEND_MIR_VERIFY_W06_CALL_TRANSFER_MISMATCH,
 			ZEND_MIRV_TOKEN_W06_CALL_TRANSFER_MISMATCH,
 			"call-transfer table is not bound to the W05 call model");
+	}
+	if (source_backed) {
+		for (index = 0; index < module->call_arguments.count; index++) {
+			zend_mir_call_argument_ref argument;
+			if (!calls->call_argument_at(calls->context, index, &argument)
+					|| argument.id != index
+					|| argument.ownership
+						== ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR) {
+				return zend_mir_w06_emit(view, diagnostics,
+					ZEND_MIR_VERIFY_W06_CALL_TRANSFER_MISMATCH,
+					ZEND_MIRV_TOKEN_W06_CALL_TRANSFER_MISMATCH,
+					"source-backed call argument has a scalar transfer");
+			}
+		}
+		return true;
 	}
 	for (index = 0; index < count; index++) {
 		zend_mir_call_transfer_ref transfer;

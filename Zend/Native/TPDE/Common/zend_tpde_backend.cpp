@@ -412,8 +412,9 @@ bool initialize_plan(
 					|| exception_continuation.kind
 						!= ZEND_MIR_CALL_CONTINUATION_EXCEPTION_DEBT
 					|| (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
-						&& (site.arguments.count != count
-							|| target.kind != ZEND_MIR_CALL_TARGET_DIRECT_USER))
+						&& (target.kind != ZEND_MIR_CALL_TARGET_DIRECT_USER
+							|| (site.arguments.count != count
+								&& count != 0)))
 					|| (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL
 						&& (count != 0
 							|| target.kind
@@ -429,6 +430,8 @@ bool initialize_plan(
 			plan->instructions[i].call_argument_offset = site.arguments.offset;
 			plan->instructions[i].call_argument_count = site.arguments.count;
 			if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
+				const bool source_arguments = count == 0
+					&& site.arguments.count != 0;
 				plan->required_runtime_capabilities |=
 					ZEND_NATIVE_RUNTIME_CAP_USER_CALL
 						| ZEND_NATIVE_RUNTIME_CAP_OBSERVER;
@@ -453,6 +456,21 @@ bool initialize_plan(
 					"direct user call has no native entry-cell binding");
 				return false;
 			}
+				if (source_arguments) {
+					for (uint32_t n = 0; n < site.arguments.count; ++n) {
+						const zend_mir_call_argument_ref &argument =
+							plan->call_arguments[site.arguments.offset + n];
+						if (argument.ownership
+								== ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR) {
+							zend_tpde_set_diagnostic(diag,
+								ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+								"source-backed user call has a scalar argument");
+							return false;
+						}
+					}
+					require_runtime_helper(
+						plan, ZEND_NATIVE_HELPER_CALL_SET_SOURCE_ARGUMENT);
+				}
 				for (uint32_t n = 0; n < count; ++n) {
 					zend_mir_value_id operand_id;
 					if (!view->instruction_operand_at(

@@ -388,8 +388,11 @@ public:
 			if (instruction.record.opcode
 					== ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
 				/* begin + setters + finish + optional source-result read */
+				uint32_t setter_count = instruction.operand_count == 0
+					? instruction.call_argument_count
+					: instruction.operand_count;
 				for (uint32_t n = 0;
-						n < instruction.operand_count + 2
+						n < setter_count + 2
 							+ machine_result; ++n) {
 					operands.push_back(IRValueRef{FRAME_VALUE});
 				}

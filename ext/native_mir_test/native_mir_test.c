@@ -334,6 +334,13 @@ extern zend_mir_lowering_status zend_mir_frontend_project_w08_result_facts(
 	zend_ssa *projected_ssa,
 	zend_mir_frontend_diagnostic *diagnostic);
 
+extern zend_mir_lowering_status zend_mir_frontend_project_w09_result_facts(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	zend_ssa *projected_ssa,
+	zend_mir_frontend_diagnostic *diagnostic);
+
 extern zend_mir_w06_lowering_result zend_mir_lower_w06_zend_op_array(
 	const zend_script *script,
 	const zend_op_array *op_array,
@@ -2132,7 +2139,11 @@ static bool native_mir_test_prepare_w07_projection(
 	function->projected_ssa.vars = function->projected_ssa_vars;
 	function->projected_ssa.var_info = function->projected_ssa_var_info;
 	memset(&frontend_diagnostic, 0, sizeof(frontend_diagnostic));
-	if ((state->wave >= 8
+	if ((state->wave >= 9
+			? zend_mir_frontend_project_w09_result_facts(
+				&state->script, source, &function->ssa,
+				&function->projected_ssa, &frontend_diagnostic)
+			: state->wave >= 8
 			? zend_mir_frontend_project_w08_result_facts(
 				&state->script, source, &function->ssa,
 				&function->projected_ssa, &frontend_diagnostic)
@@ -2569,6 +2580,15 @@ static bool native_mir_test_discover_native_callees(
 					calls->context, site.arguments.offset + argument_index,
 					&argument)) {
 				return false;
+			}
+			/* W09 user calls transfer canonical source zvals. Their source
+			 * ordinal may be named or variadic and is intentionally not a
+			 * machine-scalar signature for the callee. Runtime argument
+			 * placement and the callee's RECV projection provide the exact
+			 * Zend semantics. */
+			if (state->wave >= 9
+					&& !zend_mir_id_is_valid(argument.value_id)) {
+				continue;
 			}
 			for (fact_index = 0;
 					fact_index < view->value_fact_count(view->context);

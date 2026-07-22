@@ -136,6 +136,14 @@ static bool zend_mir_w03_value_fragment(
 			: zend_mir_w06_opcode_is_accepted(opcode));
 }
 
+static bool zend_mir_w03_receive_fragment(
+	const zend_mir_w03_integration *integration, uint32_t opcode)
+{
+	return opcode == ZEND_RECV
+		|| (integration != NULL && integration->w09
+			&& (opcode == ZEND_RECV_INIT || opcode == ZEND_RECV_VARIADIC));
+}
+
 static bool zend_mir_w03_checked_add(
 	uint32_t left, uint32_t right, uint32_t *out)
 {
@@ -267,6 +275,7 @@ static bool zend_mir_w05_call_fragment(uint8_t opcode)
 		case ZEND_SEND_FUNC_ARG:
 		case ZEND_SEND_VAR_NO_REF:
 		case ZEND_SEND_VAR_NO_REF_EX:
+		case ZEND_CHECK_UNDEF_ARGS:
 		case ZEND_DO_UCALL:
 		case ZEND_DO_FCALL:
 		case ZEND_DO_FCALL_BY_NAME:
@@ -333,7 +342,8 @@ static bool zend_mir_w03_prepare_source(
 		return false;
 	}
 	for (index = 0; index < op_array->last; index++) {
-		if (op_array->opcodes[index].opcode == ZEND_RECV
+		if (zend_mir_w03_receive_fragment(
+				integration, op_array->opcodes[index].opcode)
 				|| (integration->w05
 					&& zend_mir_w05_call_fragment(
 						op_array->opcodes[index].opcode))
@@ -505,7 +515,7 @@ static bool zend_mir_w03_prepare_source(
 			opline->opcode = ZEND_RETURN;
 			continue;
 		}
-		if (opline->opcode != ZEND_RECV
+		if (!zend_mir_w03_receive_fragment(integration, opline->opcode)
 				&& !(integration->w05
 					&& zend_mir_w05_call_fragment(opline->opcode))
 				&& !zend_mir_w03_value_fragment(
@@ -1861,7 +1871,11 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 		return zend_mir_w05_integration_result(
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
 	}
-	status = (w08_execution || w09_execution)
+	status = w09_execution
+		? zend_mir_frontend_project_w09_result_facts(
+			script, op_array, ssa, &integration.projected_ssa,
+			&frontend_diagnostic)
+		: w08_execution
 		? zend_mir_frontend_project_w08_result_facts(
 			script, op_array, ssa, &integration.projected_ssa,
 			&frontend_diagnostic)
