@@ -164,7 +164,7 @@
         },
         "index": {"type": ["integer", "null"], "minimum": 0},
         "representation": {"enum": ["canonical_zval", "execute_data_field", "persistent_suspend_state"]},
-        "materialization": {"enum": ["materialized", "undef", "borrowed_pointer"]},
+        "materialization": {"enum": ["materialized", "undef", "borrowed_pointer", "source_zval"]},
         "ownership": {
           "enum": [
             "borrowed",
