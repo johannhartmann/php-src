@@ -127,6 +127,17 @@ const union _zend_function *zend_mir_zend_source_internal_function(
 	zend_mir_source_call_target_id target_id);
 
 /*
+ * Resolve one source call to an exact internal function. Instance methods are
+ * accepted only when SSA class evidence and finality prove that normal Zend
+ * method dispatch cannot select an override.
+ */
+union _zend_function *zend_mir_zend_source_resolve_internal_call(
+	const struct _zend_script *script,
+	const struct _zend_op_array *op_array,
+	const struct _zend_ssa *ssa,
+	uint32_t init_opline_index);
+
+/*
  * Return the exact declared type of a process-local W05 direct-user target.
  * This is source evidence for W06 planning only; no zend_function pointer is
  * exposed or retained by persistent MIR.

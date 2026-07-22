@@ -40,7 +40,8 @@ typedef struct _zend_native_entry_cell {
 typedef enum _zend_native_internal_receiver_kind {
 	ZEND_NATIVE_INTERNAL_RECEIVER_NONE = 0,
 	ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS = 1,
-	ZEND_NATIVE_INTERNAL_RECEIVER_CALLED_SCOPE = 2
+	ZEND_NATIVE_INTERNAL_RECEIVER_CALLED_SCOPE = 2,
+	ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT = 3
 } zend_native_internal_receiver_kind;
 
 /* Process-local binding for one compile-time resolved internal function. */

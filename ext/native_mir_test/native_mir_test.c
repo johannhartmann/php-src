@@ -42,6 +42,7 @@
 #include "Zend/Native/Calls/Model/zend_mir_call_model.h"
 #include "Zend/Native/Values/Lowering/zend_mir_value_lowering.h"
 #include "Zend/Native/Lowering/Core/zend_mir_lowering_internal.h"
+#include "Zend/Native/Lowering/Frontend/zend_mir_zend_source.h"
 #include "Zend/Native/Lowering/zend_mir_lowering_zend.h"
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
 #include "Zend/Native/TPDE/Common/zend_tpde_backend.h"
@@ -1697,8 +1698,9 @@ static zend_function *native_mir_test_resolve_internal_target(
 	for (index = 0; index < calls->call_site_count(calls->context); index++) {
 		zend_mir_call_site_ref site;
 		zend_function *function;
-		bool is_prototype = false;
 		const zend_op *init;
+		uint32_t function_index;
+		const zend_ssa *ssa = NULL;
 
 		if (!calls->call_site_at(calls->context, index, &site)
 				|| site.target_id != target->id) {
@@ -1708,10 +1710,19 @@ static zend_function *native_mir_test_resolve_internal_target(
 			return NULL;
 		}
 		init = &caller->opcodes[site.source_init_opline_index];
-		function = zend_optimizer_get_called_func(
-			&state->script, caller, (zend_op *) init, &is_prototype);
-		if (function == NULL || is_prototype
-				|| function->type != ZEND_INTERNAL_FUNCTION) {
+		for (function_index = 0;
+				function_index < state->native_function_count;
+				function_index++) {
+			if (state->native_functions[function_index].op_array == caller) {
+				ssa = &state->native_functions[function_index].ssa;
+				break;
+			}
+		}
+		function = ssa == NULL ? NULL
+			: zend_mir_zend_source_resolve_internal_call(
+				&state->script, caller, ssa,
+				site.source_init_opline_index);
+		if (function == NULL || function->type != ZEND_INTERNAL_FUNCTION) {
 			return NULL;
 		}
 		if (init_opline_out != NULL) {
@@ -1874,8 +1885,9 @@ static uint32_t native_mir_test_zend_type_from_scalar_type(
 static bool native_mir_test_verify_projected_return_type(
 	const native_mir_test_native_function *function, uint32_t opline_index)
 {
-	const zend_op *opline = &function->op_array->opcodes[opline_index];
-	const zend_ssa_op *ssa_op = &function->ssa.ops[opline_index];
+	const zend_op *opline =
+		&function->projected_op_array.opcodes[opline_index];
+	const zend_ssa_op *ssa_op = &function->projected_ssa.ops[opline_index];
 	const zend_arg_info *return_info;
 	zend_mir_scalar_type_mask type;
 	uint32_t type_mask;
@@ -1885,7 +1897,7 @@ static bool native_mir_test_verify_projected_return_type(
 		return false;
 	}
 	type = native_mir_test_operand_exact_type(
-		function->op_array, &function->ssa, opline_index,
+		&function->projected_op_array, &function->projected_ssa, opline_index,
 		opline->op1_type, &opline->op1, ssa_op->op1_use);
 	if (!zend_mir_scalar_type_is_exact(type)) {
 		return false;
@@ -2547,15 +2559,22 @@ static bool native_mir_test_compile_native_component(
 					goto binding_failure;
 				}
 				if (init_opline->opcode == ZEND_INIT_METHOD_CALL) {
-					if (init_opline->op1_type != IS_UNUSED) {
+					if (init_opline->op1_type == IS_UNUSED) {
+						receiver_kind =
+							ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS;
+					} else if (init_opline->op1_type == IS_CV
+							|| init_opline->op1_type == IS_VAR
+							|| init_opline->op1_type == IS_TMP_VAR) {
+						receiver_kind =
+							ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT;
+					} else {
 						native_mir_test_fail(
 							state, NATIVE_MIR_TEST_STATUS_REJECTED,
 							NATIVE_MIR_TEST_PHASE_CODEGEN,
 							"native", "NATIVE0003",
-							"native internal method receiver is not the caller object");
+							"native internal method receiver is unsupported");
 						goto binding_rejected;
 					}
-					receiver_kind = ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS;
 				} else if (init_opline->opcode == ZEND_INIT_STATIC_METHOD_CALL) {
 					receiver_kind = ZEND_NATIVE_INTERNAL_RECEIVER_CALLED_SCOPE;
 					called_scope = internal->common.scope;

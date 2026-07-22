@@ -114,6 +114,9 @@ static void zend_mir_w06_hide_private_call_results(
 static void zend_mir_w08_hide_byref_argument_facts(
 	zend_mir_w03_integration *integration,
 	const zend_op_array *op_array, const zend_ssa *ssa);
+static void zend_mir_w08_hide_method_receiver_facts(
+	zend_mir_w03_integration *integration,
+	const zend_op_array *op_array, const zend_ssa *ssa);
 
 static bool zend_mir_w03_checked_add(
 	uint32_t left, uint32_t right, uint32_t *out)
@@ -1813,6 +1816,8 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 			&integration, op_array, ssa);
 		zend_mir_w08_hide_byref_argument_facts(
 			&integration, op_array, ssa);
+		zend_mir_w08_hide_method_receiver_facts(
+			&integration, op_array, ssa);
 	}
 	status = zend_mir_zend_source_init_w05_projection(
 		&integration.source, source_op_array, source_ssa, op_array, ssa,
@@ -2051,6 +2056,54 @@ static void zend_mir_w08_hide_byref_argument_facts(
 		if (ssa_op->op1_def >= 0
 				&& ssa_op->op1_def < integration->projected_ssa.vars_count) {
 			integration->projected_ssa_var_info[ssa_op->op1_def].type = 0;
+		}
+	}
+}
+
+/* Instance receivers stay as source zvals in the execute frame and are
+ * validated by the exact internal-method binding at the runtime boundary.
+ * The call fragment has been removed from the private scalar prerequisite,
+ * so publishing its object SSA value there would create an unowned scalar
+ * entry value. */
+static void zend_mir_w08_hide_method_receiver_facts(
+	zend_mir_w03_integration *integration,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa)
+{
+	uint32_t index;
+
+	if (integration == NULL || op_array == NULL || ssa == NULL
+			|| ssa->ops == NULL) {
+		return;
+	}
+	for (index = 0; index < op_array->last; index++) {
+		int receiver;
+
+		if (op_array->opcodes[index].opcode != ZEND_INIT_METHOD_CALL
+				|| op_array->opcodes[index].op1_type == IS_UNUSED) {
+			continue;
+		}
+		receiver = ssa->ops[index].op1_use;
+		if (receiver >= 0
+				&& receiver < integration->projected_ssa.vars_count) {
+			integration->projected_ssa_var_info[receiver].type = 0;
+		}
+	}
+	for (index = 0;
+			index < (uint32_t) integration->projected_ssa.vars_count;
+			index++) {
+		zend_ssa_var *variable = &integration->projected_ssa_vars[index];
+
+		/* Temporary slots cannot be live-ins. Optimizer-created dead SSA
+		 * versions that remain after call projection carry no independent
+		 * scalar fact; the source call result owns the physical slot. */
+		if (variable->var >= integration->projected_op_array.last_var
+				&& variable->definition == -1
+				&& variable->definition_phi == NULL
+				&& variable->use_chain == -1
+				&& variable->phi_use_chain == NULL
+				&& variable->sym_use_chain == NULL) {
+			integration->projected_ssa_var_info[index].type = 0;
 		}
 	}
 }

@@ -545,7 +545,8 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_source_sequence(
 					|| (target.kind
 						== ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL
 						? (!w08_execution
-							|| opcode.zend_opcode_number != ZEND_DO_ICALL)
+							|| (opcode.zend_opcode_number != ZEND_DO_ICALL
+								&& opcode.zend_opcode_number != ZEND_DO_FCALL))
 						: (target.kind
 								!= ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
 							|| (opcode.zend_opcode_number
