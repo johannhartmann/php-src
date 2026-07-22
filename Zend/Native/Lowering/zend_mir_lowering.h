@@ -51,6 +51,9 @@ typedef struct _zend_mir_w05_lowering_result {
 	bool codegen_eligible;
 } zend_mir_w05_lowering_result;
 
+/* W08 closes the runtime debts and makes the verified module executable. */
+typedef zend_mir_w05_lowering_result zend_mir_w08_lowering_result;
+
 /*
  * W06 preserves the W05 prerequisite and records that the final value and
  * reference model passed its direct verifier. W06 models these semantics but
@@ -124,6 +127,33 @@ static inline bool zend_mir_lowering_result_is_w05_failure_atomic(
 		&& result->semantic_debts == 0
 		&& !result->modeled
 		&& !result->codegen_eligible;
+}
+
+static inline bool zend_mir_lowering_result_is_w08_failure_atomic(
+	const zend_mir_w08_lowering_result *result)
+{
+	if (result == NULL) {
+		return false;
+	}
+	if (result->lowering.status == ZEND_MIR_LOWERING_SUCCESS) {
+		return result->lowering.diagnostic_code == ZEND_MIRL_OK
+			&& result->lowering.guarantees
+				== ZEND_MIR_LOWERING_GUARANTEE_FINALIZED
+			&& result->lowering.module != NULL
+			&& result->prerequisite_guarantees
+				== ZEND_MIR_LOWERING_GUARANTEE_W04_ALL
+			&& result->capabilities == ZEND_MIR_W08_REQUIRED_CAPABILITIES
+			&& result->semantic_debts == 0
+			&& result->modeled && result->codegen_eligible;
+	}
+	return result->lowering.status != ZEND_MIR_LOWERING_STATUS_INVALID
+		&& result->lowering.diagnostic_code != ZEND_MIRL_OK
+		&& result->lowering.guarantees == 0
+		&& result->lowering.module == NULL
+		&& result->prerequisite_guarantees == 0
+		&& result->capabilities == 0
+		&& result->semantic_debts == 0
+		&& !result->modeled && !result->codegen_eligible;
 }
 
 static inline bool zend_mir_lowering_result_is_w06_failure_atomic(
