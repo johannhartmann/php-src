@@ -27,6 +27,16 @@ zend_native_status zend_native_value_assign(
 	zend_execute_data *execute_data, uint32_t source_opline_index);
 zend_native_status zend_native_value_qm_assign(
 	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_concat(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_fast_concat(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_rope_init(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_rope_add(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_rope_end(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
 
 #ifdef __cplusplus
 }

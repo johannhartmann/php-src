@@ -382,3 +382,178 @@ zend_native_status zend_native_value_qm_assign(
 	}
 	return zend_native_value_status();
 }
+
+static zend_native_status zend_native_value_concat_impl(
+	zend_execute_data *execute_data, uint32_t source_opline_index,
+	uint8_t expected_opcode)
+{
+	const zend_op *opline = zend_native_value_opline(
+		execute_data, source_opline_index, expected_opcode);
+	zval *left;
+	zval *result;
+	zval *right;
+	zend_result status;
+
+	if (opline == NULL || opline->result_type == IS_UNUSED
+			|| (opline->op1_type != IS_CONST && opline->op1_type != IS_TMP_VAR
+				&& opline->op1_type != IS_CV)
+			|| (opline->op2_type != IS_CONST && opline->op2_type != IS_TMP_VAR
+				&& opline->op2_type != IS_CV)
+			|| (left = zend_native_value_read(
+				execute_data, opline, opline->op1_type, opline->op1)) == NULL
+			|| (right = zend_native_value_read(
+				execute_data, opline, opline->op2_type, opline->op2)) == NULL
+			|| (result = zend_native_value_slot(
+				execute_data, opline->result_type, opline->result)) == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	status = concat_function(result, left, right);
+	if (opline->op1_type == IS_TMP_VAR) {
+		zval_ptr_dtor_nogc(left);
+		ZVAL_UNDEF(left);
+	}
+	if (opline->op2_type == IS_TMP_VAR) {
+		zval_ptr_dtor_nogc(right);
+		ZVAL_UNDEF(right);
+	}
+	return status == SUCCESS ? zend_native_value_status()
+		: ZEND_NATIVE_EXCEPTION;
+}
+
+zend_native_status zend_native_value_concat(
+	zend_execute_data *execute_data, uint32_t source_opline_index)
+{
+	return zend_native_value_concat_impl(
+		execute_data, source_opline_index, ZEND_CONCAT);
+}
+
+zend_native_status zend_native_value_fast_concat(
+	zend_execute_data *execute_data, uint32_t source_opline_index)
+{
+	return zend_native_value_concat_impl(
+		execute_data, source_opline_index, ZEND_FAST_CONCAT);
+}
+
+static zend_string *zend_native_value_rope_piece(
+	zend_execute_data *execute_data, const zend_op *opline)
+{
+	zval *value = zend_native_value_read(
+		execute_data, opline, opline->op2_type, opline->op2);
+
+	if (value == NULL) {
+		return NULL;
+	}
+	if (opline->op2_type == IS_CONST) {
+		return zend_string_copy(Z_STR_P(value));
+	}
+	if (Z_TYPE_P(value) == IS_STRING) {
+		return opline->op2_type == IS_CV
+			? zend_string_copy(Z_STR_P(value)) : Z_STR_P(value);
+	}
+	if (opline->op2_type == IS_CV && Z_TYPE_P(value) == IS_UNDEF) {
+		uint32_t variable_index = EX_VAR_TO_NUM(opline->op2.var);
+		if (variable_index >= execute_data->func->op_array.last_var) {
+			return NULL;
+		}
+		zend_error(E_WARNING, "Undefined variable $%s",
+			ZSTR_VAL(execute_data->func->op_array.vars[variable_index]));
+		if (EG(exception) != NULL) {
+			return NULL;
+		}
+	}
+	zend_string *string = zval_get_string_func(value);
+	if (opline->op2_type == IS_TMP_VAR) {
+		zval_ptr_dtor_nogc(value);
+		ZVAL_UNDEF(value);
+	}
+	return string;
+}
+
+static zend_native_status zend_native_value_rope_store(
+	zend_execute_data *execute_data, uint32_t source_opline_index,
+	uint8_t expected_opcode, bool initialize)
+{
+	const zend_op *opline = zend_native_value_opline(
+		execute_data, source_opline_index, expected_opcode);
+	zend_string **rope;
+	zend_string *piece;
+
+	if (opline == NULL || (opline->op2_type != IS_CONST
+			&& opline->op2_type != IS_TMP_VAR && opline->op2_type != IS_CV)) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	rope = (zend_string **) zend_native_value_slot(execute_data,
+		initialize ? opline->result_type : opline->op1_type,
+		initialize ? opline->result : opline->op1);
+	if (rope == NULL || (!initialize && opline->op1_type != IS_TMP_VAR)) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	piece = zend_native_value_rope_piece(execute_data, opline);
+	if (piece == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	rope[initialize ? 0 : opline->extended_value] = piece;
+	return zend_native_value_status();
+}
+
+zend_native_status zend_native_value_rope_init(
+	zend_execute_data *execute_data, uint32_t source_opline_index)
+{
+	return zend_native_value_rope_store(
+		execute_data, source_opline_index, ZEND_ROPE_INIT, true);
+}
+
+zend_native_status zend_native_value_rope_add(
+	zend_execute_data *execute_data, uint32_t source_opline_index)
+{
+	return zend_native_value_rope_store(
+		execute_data, source_opline_index, ZEND_ROPE_ADD, false);
+}
+
+zend_native_status zend_native_value_rope_end(
+	zend_execute_data *execute_data, uint32_t source_opline_index)
+{
+	const zend_op *opline = zend_native_value_opline(
+		execute_data, source_opline_index, ZEND_ROPE_END);
+	zend_string **rope;
+	zend_string *piece;
+	zval *result;
+	size_t length = 0;
+	uint32_t flags = ZSTR_COPYABLE_CONCAT_PROPERTIES;
+	uint32_t index;
+	char *target;
+
+	if (opline == NULL || opline->op1_type != IS_TMP_VAR
+			|| (rope = (zend_string **) zend_native_value_slot(
+				execute_data, opline->op1_type, opline->op1)) == NULL
+			|| (result = zend_native_value_slot(
+				execute_data, opline->result_type, opline->result)) == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	piece = zend_native_value_rope_piece(execute_data, opline);
+	if (piece == NULL) {
+		for (index = 0; index < opline->extended_value; index++) {
+			zend_string_release_ex(rope[index], false);
+		}
+		ZVAL_UNDEF(result);
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	rope[opline->extended_value] = piece;
+	for (index = 0; index <= opline->extended_value; index++) {
+		if (length > ZSTR_MAX_LEN - ZSTR_LEN(rope[index])) {
+			zend_error_noreturn(E_ERROR, "Integer overflow in memory allocation");
+		}
+		length += ZSTR_LEN(rope[index]);
+		flags &= ZSTR_GET_COPYABLE_CONCAT_PROPERTIES(rope[index]);
+	}
+	ZVAL_STR(result, zend_string_alloc(length, false));
+	GC_ADD_FLAGS(Z_STR_P(result), flags);
+	target = Z_STRVAL_P(result);
+	for (index = 0; index <= opline->extended_value; index++) {
+		memcpy(target, ZSTR_VAL(rope[index]), ZSTR_LEN(rope[index]));
+		target += ZSTR_LEN(rope[index]);
+		zend_string_release_ex(rope[index], false);
+	}
+	*target = '\0';
+	return ZEND_NATIVE_RETURNED;
+}
