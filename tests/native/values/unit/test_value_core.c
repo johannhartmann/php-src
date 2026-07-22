@@ -161,6 +161,7 @@ static bool test_stage_call_model(
 	zend_mir_call_argument_ref argument;
 	zend_mir_call_continuation_ref continuation;
 	zend_mir_call_site_ref site;
+	uint32_t continuation_index;
 
 	CHECK(core_mutator != NULL && call_mutator != NULL);
 	CHECK(core_mutator->add_value(
@@ -187,13 +188,25 @@ static bool test_stage_call_model(
 			call_mutator->context, &argument));
 	}
 
-	memset(&continuation, 0, sizeof(continuation));
-	continuation.id = 0;
-	continuation.call_site_id = 0;
-	continuation.kind = ZEND_MIR_CALL_CONTINUATION_NORMAL;
-	continuation.block_id = block;
-	CHECK(call_mutator->add_call_continuation(
-		call_mutator->context, &continuation));
+	for (continuation_index = 0; continuation_index < 4;
+			continuation_index++) {
+		memset(&continuation, 0, sizeof(continuation));
+		continuation.id = continuation_index;
+		continuation.call_site_id = 0;
+		continuation.kind =
+			(zend_mir_call_continuation_kind) continuation_index;
+		continuation.block_id = continuation_index == 0
+			? block : ZEND_MIR_ID_INVALID;
+		continuation.source_opline_index = ZEND_MIR_ID_INVALID;
+		continuation.semantic_debt = continuation_index == 1
+			? ZEND_MIR_DEBT_CALL_EXCEPTION_PROPAGATION
+			: continuation_index == 2
+				? ZEND_MIR_DEBT_CALL_BAILOUT_REENTRY
+				: continuation_index == 3
+					? ZEND_MIR_DEBT_CALL_OBSERVER_INTEGRATION : 0;
+		CHECK(call_mutator->add_call_continuation(
+			call_mutator->context, &continuation));
+	}
 
 	memset(&site, 0, sizeof(site));
 	site.id = 0;
@@ -214,7 +227,7 @@ static bool test_stage_call_model(
 	site.callee_entry_frame.op_array_id = target.op_array_id;
 	site.callee_entry_frame.pending_call_slot_id = ZEND_MIR_ID_INVALID;
 	site.continuations.offset = 0;
-	site.continuations.count = 1;
+	site.continuations.count = 4;
 	CHECK(call_mutator->add_call_site(call_mutator->context, &site));
 
 	return call_mutator->commit_call_model(call_mutator->context);
