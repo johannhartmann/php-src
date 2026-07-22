@@ -70,6 +70,20 @@ php_ini=$work/php.ini
 request=$work/request.php
 response=$work/response.txt
 
+dump_failure() {
+	local status=$?
+	printf 'W08-W09 Linux runtime test failed at line %s: %s\n' \
+		"${BASH_LINENO[0]}" "$BASH_COMMAND" >&2
+	for artifact in "$response" "$work/fpm.log" "$work/fpm-error.log"; do
+		if [[ -s $artifact ]]; then
+			printf '%s\n' "--- $artifact ---" >&2
+			cat "$artifact" >&2
+		fi
+	done
+	exit "$status"
+}
+trap dump_failure ERR
+
 cat >"$fpm_config" <<EOF
 [global]
 daemonize = no
