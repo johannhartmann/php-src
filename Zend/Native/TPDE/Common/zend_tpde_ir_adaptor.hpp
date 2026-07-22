@@ -386,6 +386,10 @@ public:
 				operands.push_back(IRValueRef{FRAME_VALUE});
 			}
 			if (instruction.record.opcode
+					== ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
+				operands.push_back(IRValueRef{FRAME_VALUE});
+			}
+			if (instruction.record.opcode
 					== ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
 				/* begin + setters + finish + optional source-result read */
 				uint32_t setter_count = instruction.operand_count == 0

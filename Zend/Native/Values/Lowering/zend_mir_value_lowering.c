@@ -125,6 +125,37 @@ bool zend_mir_w06_opcode_is_accepted(uint32_t opcode)
 static zend_mir_opcode zend_mir_w09_executable_opcode(uint32_t opcode)
 {
 	switch (opcode) {
+		case ZEND_ADD:
+		case ZEND_SUB:
+		case ZEND_MUL:
+		case ZEND_DIV:
+		case ZEND_MOD:
+		case ZEND_POW:
+		case ZEND_SL:
+		case ZEND_SR:
+		case ZEND_BW_OR:
+		case ZEND_BW_AND:
+		case ZEND_BW_XOR:
+		case ZEND_BOOL_XOR:
+		case ZEND_IS_IDENTICAL:
+		case ZEND_IS_NOT_IDENTICAL:
+		case ZEND_IS_EQUAL:
+		case ZEND_IS_NOT_EQUAL:
+		case ZEND_IS_SMALLER:
+		case ZEND_IS_SMALLER_OR_EQUAL:
+		case ZEND_SPACESHIP:
+			return ZEND_MIR_OPCODE_VALUE_BINARY_OP;
+		case ZEND_BW_NOT:
+		case ZEND_BOOL_NOT:
+		case ZEND_BOOL:
+			return ZEND_MIR_OPCODE_VALUE_UNARY_OP;
+		case ZEND_CAST:
+			return ZEND_MIR_OPCODE_VALUE_CAST;
+		case ZEND_ISSET_ISEMPTY_CV:
+			return ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV;
+		case ZEND_FETCH_LIST_R:
+		case ZEND_FETCH_LIST_W:
+			return ZEND_MIR_OPCODE_VALUE_FETCH_LIST;
 		case ZEND_ASSIGN:
 			return ZEND_MIR_OPCODE_VALUE_ASSIGN;
 		case ZEND_ASSIGN_OP:
@@ -258,11 +289,21 @@ static bool zend_mir_w09_operation_semantics(
 		case ZEND_MIR_OPCODE_VALUE_UNSET_DIM:
 		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
 		case ZEND_MIR_OPCODE_VALUE_FE_FREE:
+		case ZEND_MIR_OPCODE_VALUE_BINARY_OP:
+		case ZEND_MIR_OPCODE_VALUE_UNARY_OP:
+		case ZEND_MIR_OPCODE_VALUE_CAST:
+		case ZEND_MIR_OPCODE_VALUE_FETCH_LIST:
 			if (!zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_ALLOCATE)
 					|| !zend_mir_w09_add_effect(
 						&summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)
 					|| !zend_mir_w09_add_effect(
 						&summary, ZEND_MIR_EFFECT_THROW)) {
+				return false;
+			}
+			break;
+		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV:
+			if (!zend_mir_w09_add_effect(
+					&summary, ZEND_MIR_EFFECT_OBSERVE_FRAME)) {
 				return false;
 			}
 			break;

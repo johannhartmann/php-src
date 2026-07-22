@@ -8,9 +8,8 @@
 #include "Zend/zend_iterators.h"
 #include "Zend/zend_operators.h"
 
-static const zend_op *zend_native_value_opline(
-	zend_execute_data *execute_data, uint32_t source_opline_index,
-	uint8_t expected_opcode)
+static const zend_op *zend_native_value_source_opline(
+	zend_execute_data *execute_data, uint32_t source_opline_index)
 {
 	const zend_op *opline;
 
@@ -20,16 +19,25 @@ static const zend_op *zend_native_value_opline(
 		return NULL;
 	}
 	opline = &execute_data->func->op_array.opcodes[source_opline_index];
-	if (opline->opcode != expected_opcode) {
-		return NULL;
-	}
 	execute_data->opline = opline;
 	return opline;
+}
+
+static const zend_op *zend_native_value_opline(
+	zend_execute_data *execute_data, uint32_t source_opline_index,
+	uint8_t expected_opcode)
+{
+	const zend_op *opline = zend_native_value_source_opline(
+		execute_data, source_opline_index);
+
+	return opline != NULL && opline->opcode == expected_opcode
+		? opline : NULL;
 }
 
 static zval *zend_native_value_slot(
 	zend_execute_data *execute_data, uint8_t operand_type, znode_op operand)
 {
+	operand_type &= IS_CONST | IS_TMP_VAR | IS_VAR | IS_CV;
 	if (operand_type != IS_CV && operand_type != IS_VAR
 			&& operand_type != IS_TMP_VAR) {
 		return NULL;
@@ -57,6 +65,44 @@ static zval *zend_native_value_read(
 static zend_native_status zend_native_value_status(void)
 {
 	return EG(exception) == NULL ? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+}
+
+static zval *zend_native_value_read_r(
+	zend_execute_data *execute_data, const zend_op *opline,
+	uint8_t operand_type, znode_op operand)
+{
+	zval *value = zend_native_value_read(
+		execute_data, opline, operand_type, operand);
+
+	if (value != NULL && operand_type == IS_CV
+			&& UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
+		uint32_t variable_index = EX_VAR_TO_NUM(operand.var);
+
+		if (variable_index >= execute_data->func->op_array.last_var) {
+			return NULL;
+		}
+		zend_error(E_WARNING, "Undefined variable $%s",
+			ZSTR_VAL(execute_data->func->op_array.vars[variable_index]));
+		return &EG(uninitialized_zval);
+	}
+	return value;
+}
+
+static void zend_native_value_consume_operand(
+	zend_execute_data *execute_data, uint8_t operand_type, znode_op operand,
+	zval *preserve)
+{
+	zval *slot;
+
+	operand_type &= IS_CONST | IS_TMP_VAR | IS_VAR | IS_CV;
+	if (operand_type != IS_TMP_VAR && operand_type != IS_VAR) {
+		return;
+	}
+	slot = zend_native_value_slot(execute_data, operand_type, operand);
+	if (slot != NULL && slot != preserve && !Z_ISUNDEF_P(slot)) {
+		zval_ptr_dtor_nogc(slot);
+		ZVAL_UNDEF(slot);
+	}
 }
 
 zend_native_status zend_native_value_make_ref(
@@ -411,6 +457,224 @@ zend_native_status zend_native_value_assign_op(
 		}
 	}
 	return zend_native_value_status();
+}
+
+static bool zend_native_value_is_binary_opcode(uint8_t opcode)
+{
+	switch (opcode) {
+		case ZEND_ADD:
+		case ZEND_SUB:
+		case ZEND_MUL:
+		case ZEND_DIV:
+		case ZEND_MOD:
+		case ZEND_POW:
+		case ZEND_SL:
+		case ZEND_SR:
+		case ZEND_BW_OR:
+		case ZEND_BW_AND:
+		case ZEND_BW_XOR:
+		case ZEND_BOOL_XOR:
+		case ZEND_IS_IDENTICAL:
+		case ZEND_IS_NOT_IDENTICAL:
+		case ZEND_IS_EQUAL:
+		case ZEND_IS_NOT_EQUAL:
+		case ZEND_IS_SMALLER:
+		case ZEND_IS_SMALLER_OR_EQUAL:
+		case ZEND_SPACESHIP:
+			return true;
+		default:
+			return false;
+	}
+}
+
+zend_native_status zend_native_value_binary_op(
+	zend_execute_data *execute_data, uint32_t source_opline_index)
+{
+	const zend_op *opline = zend_native_value_source_opline(
+		execute_data, source_opline_index);
+	binary_op_type operation;
+	zval *left;
+	zval *right;
+	zval *result;
+	zval *strict_left;
+	zval *strict_right;
+	zend_result operation_status;
+
+	if (opline == NULL || !zend_native_value_is_binary_opcode(opline->opcode)
+			|| opline->result_type == IS_UNUSED
+			|| (left = zend_native_value_read_r(execute_data, opline,
+				opline->op1_type, opline->op1)) == NULL
+			|| (right = zend_native_value_read_r(execute_data, opline,
+				opline->op2_type, opline->op2)) == NULL
+			|| (result = zend_native_value_slot(execute_data,
+				opline->result_type, opline->result)) == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	operation = get_binary_op(opline->opcode);
+	if (operation == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	strict_left = left;
+	strict_right = right;
+	if (opline->opcode == ZEND_IS_IDENTICAL
+			|| opline->opcode == ZEND_IS_NOT_IDENTICAL) {
+		ZVAL_DEREF(strict_left);
+		ZVAL_DEREF(strict_right);
+		left = strict_left;
+		right = strict_right;
+	}
+	operation_status = operation(result, left, right);
+	zend_native_value_consume_operand(
+		execute_data, opline->op1_type, opline->op1, result);
+	zend_native_value_consume_operand(
+		execute_data, opline->op2_type, opline->op2, result);
+	return operation_status == SUCCESS
+		? zend_native_value_status() : ZEND_NATIVE_EXCEPTION;
+}
+
+zend_native_status zend_native_value_unary_op(
+	zend_execute_data *execute_data, uint32_t source_opline_index)
+{
+	const zend_op *opline = zend_native_value_source_opline(
+		execute_data, source_opline_index);
+	unary_op_type operation;
+	zval *operand;
+	zval *result;
+	zend_result operation_status = SUCCESS;
+
+	if (opline == NULL || (opline->opcode != ZEND_BW_NOT
+			&& opline->opcode != ZEND_BOOL_NOT
+			&& opline->opcode != ZEND_BOOL)
+			|| opline->result_type == IS_UNUSED
+			|| (operand = zend_native_value_read_r(execute_data, opline,
+				opline->op1_type, opline->op1)) == NULL
+			|| (result = zend_native_value_slot(execute_data,
+				opline->result_type, opline->result)) == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	if (opline->opcode == ZEND_BOOL) {
+		ZVAL_BOOL(result, zend_is_true(operand));
+	} else {
+		operation = get_unary_op(opline->opcode);
+		if (operation == NULL) {
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		operation_status = operation(result, operand);
+	}
+	zend_native_value_consume_operand(
+		execute_data, opline->op1_type, opline->op1, result);
+	return operation_status == SUCCESS
+		? zend_native_value_status() : ZEND_NATIVE_EXCEPTION;
+}
+
+zend_native_status zend_native_value_cast(
+	zend_execute_data *execute_data, uint32_t source_opline_index)
+{
+	const zend_op *opline = zend_native_value_opline(
+		execute_data, source_opline_index, ZEND_CAST);
+	zval *operand;
+	zval *result;
+	zval *value;
+
+	if (opline == NULL || opline->result_type == IS_UNUSED
+			|| (operand = zend_native_value_read_r(execute_data, opline,
+				opline->op1_type, opline->op1)) == NULL
+			|| (result = zend_native_value_slot(execute_data,
+				opline->result_type, opline->result)) == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	value = operand;
+	ZVAL_DEREF(value);
+	switch (opline->extended_value) {
+		case IS_LONG:
+			ZVAL_LONG(result, zval_get_long(value));
+			break;
+		case IS_DOUBLE:
+			ZVAL_DOUBLE(result, zval_get_double(value));
+			break;
+		case IS_STRING:
+			ZVAL_STR(result, zval_get_string(value));
+			break;
+		case IS_ARRAY:
+			if (Z_TYPE_P(value) == IS_ARRAY) {
+				ZVAL_COPY(result, value);
+			} else {
+				zend_cast_zval_to_array(result, value, opline->op1_type);
+			}
+			break;
+		case IS_OBJECT:
+			if (Z_TYPE_P(value) == IS_OBJECT) {
+				ZVAL_COPY(result, value);
+			} else {
+				zend_cast_zval_to_object(result, value, opline->op1_type);
+			}
+			break;
+		default:
+			return ZEND_NATIVE_EXCEPTION;
+	}
+	zend_native_value_consume_operand(
+		execute_data, opline->op1_type, opline->op1, result);
+	return zend_native_value_status();
+}
+
+zend_native_iterator_branch_result zend_native_value_cond_branch(
+	zend_execute_data *execute_data, uint32_t source_opline_index)
+{
+	const zend_op *opline = zend_native_value_source_opline(
+		execute_data, source_opline_index);
+	zval *value;
+	bool truth;
+
+	if (opline == NULL || (opline->opcode != ZEND_JMPZ
+			&& opline->opcode != ZEND_JMPNZ
+			&& opline->opcode != ZEND_JMPZ_EX
+			&& opline->opcode != ZEND_JMPNZ_EX)
+			|| (value = zend_native_value_read_r(execute_data, opline,
+				opline->op1_type, opline->op1)) == NULL) {
+		return ZEND_NATIVE_ITERATOR_EXCEPTION;
+	}
+	truth = zend_is_true(value);
+	if (EG(exception) != NULL) {
+		return ZEND_NATIVE_ITERATOR_EXCEPTION;
+	}
+	if (opline->opcode == ZEND_JMPZ_EX
+			|| opline->opcode == ZEND_JMPNZ_EX) {
+		zval *result = zend_native_value_slot(
+			execute_data, opline->result_type, opline->result);
+		if (result == NULL) {
+			return ZEND_NATIVE_ITERATOR_EXCEPTION;
+		}
+		ZVAL_BOOL(result, truth);
+	}
+	zend_native_value_consume_operand(
+		execute_data, opline->op1_type, opline->op1, NULL);
+	return truth ? ZEND_NATIVE_ITERATOR_NEXT : ZEND_NATIVE_ITERATOR_END;
+}
+
+zend_native_status zend_native_value_isset_isempty_cv(
+	zend_execute_data *execute_data, uint32_t source_opline_index)
+{
+	const zend_op *opline = zend_native_value_opline(
+		execute_data, source_opline_index, ZEND_ISSET_ISEMPTY_CV);
+	zval *value;
+	zval *result;
+	bool truth;
+
+	if (opline == NULL || opline->op1_type != IS_CV
+			|| (value = zend_native_value_slot(execute_data,
+				opline->op1_type, opline->op1)) == NULL
+			|| (result = zend_native_value_slot(execute_data,
+				opline->result_type, opline->result)) == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	if ((opline->extended_value & ZEND_ISEMPTY) != 0) {
+		truth = !zend_is_true(value);
+	} else {
+		truth = Z_TYPE_P(value) > IS_NULL
+			&& (!Z_ISREF_P(value) || Z_TYPE_P(Z_REFVAL_P(value)) != IS_NULL);
+	}
+	ZVAL_BOOL(result, truth);
+	return ZEND_NATIVE_RETURNED;
 }
 
 zend_native_status zend_native_value_qm_assign(
@@ -1238,6 +1502,73 @@ ZEND_NATIVE_DIM_WRAPPER(zend_native_value_fetch_dim_unset,
 	ZEND_FETCH_DIM_UNSET, ZEND_NATIVE_DIM_UNSET)
 
 #undef ZEND_NATIVE_DIM_WRAPPER
+
+zend_native_status zend_native_value_fetch_list(
+	zend_execute_data *execute_data, uint32_t source_opline_index)
+{
+	const zend_op *opline = zend_native_value_source_opline(
+		execute_data, source_opline_index);
+	zend_native_array_key key;
+	zval *container_slot;
+	zval *container;
+	zval *offset;
+	zval *result;
+	zval *element;
+	bool writable;
+
+	if (opline == NULL || (opline->opcode != ZEND_FETCH_LIST_R
+			&& opline->opcode != ZEND_FETCH_LIST_W)
+			|| (container_slot = zend_native_value_slot(execute_data,
+				opline->op1_type, opline->op1)) == NULL
+			|| (container = zend_native_value_read_r(execute_data, opline,
+				opline->op1_type, opline->op1)) == NULL
+			|| (offset = zend_native_value_read_r(execute_data, opline,
+				opline->op2_type, opline->op2)) == NULL
+			|| (result = zend_native_value_slot(execute_data,
+				opline->result_type, opline->result)) == NULL
+			|| !zend_native_array_key_from_zval(
+				offset, opline->op2_type, true, &key)) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	writable = opline->opcode == ZEND_FETCH_LIST_W;
+	if (writable && opline->op1_type == IS_VAR
+			&& Z_TYPE_P(container_slot) != IS_INDIRECT
+			&& !Z_ISREF_P(container)) {
+		zend_error(E_NOTICE,
+			"Attempting to set reference to non referenceable value");
+		writable = false;
+	}
+	ZVAL_DEREF(container);
+	if (Z_TYPE_P(container) != IS_ARRAY) {
+		zend_error(E_WARNING, "Cannot use %s as array",
+			zend_zval_type_name(container));
+		ZVAL_NULL(result);
+		zend_native_value_consume_operand(
+			execute_data, opline->op2_type, opline->op2, result);
+		return zend_native_value_status();
+	}
+	if (writable) {
+		SEPARATE_ARRAY(container);
+		element = zend_native_array_write_slot(
+			Z_ARRVAL_P(container), &key, false);
+		if (element == NULL) {
+			ZVAL_UNDEF(result);
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		ZVAL_INDIRECT(result, element);
+	} else {
+		element = zend_native_array_find(Z_ARRVAL_P(container), &key);
+		if (element == NULL) {
+			zend_native_array_warn_missing(&key);
+			ZVAL_NULL(result);
+		} else {
+			ZVAL_COPY_DEREF(result, element);
+		}
+	}
+	zend_native_value_consume_operand(
+		execute_data, opline->op2_type, opline->op2, result);
+	return zend_native_value_status();
+}
 
 static zend_native_status zend_native_value_assign_dim_impl(
 	zend_execute_data *execute_data, uint32_t source_opline_index, bool compound)

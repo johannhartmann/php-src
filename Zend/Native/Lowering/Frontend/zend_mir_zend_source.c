@@ -1111,11 +1111,14 @@ static bool zend_mir_frontend_view_edge_at(
 	return false;
 }
 
+static bool zend_mir_frontend_source_ssa_slot(
+	const zend_mir_zend_source *source, uint32_t ssa_variable_id,
+	uint32_t *slot, zend_mir_source_slot_kind *slot_kind);
+
 static zend_ssa_phi *zend_mir_frontend_phi_at_index(
 	const zend_mir_zend_source *source, uint32_t index,
 	uint32_t *block_id_out)
 {
-	const zend_op_array *op_array = zend_mir_source_op_array(source);
 	const zend_ssa *ssa = zend_mir_source_ssa(source);
 	zend_ssa_phi *selected = NULL;
 	uint32_t selected_block = ZEND_MIR_ID_INVALID;
@@ -1148,8 +1151,8 @@ static zend_ssa_phi *zend_mir_frontend_phi_at_index(
 				bool after_selected;
 				bool before_next;
 				if (phi->ssa_var < 0
-						|| !zend_mir_frontend_ssa_slot(
-							op_array, ssa, (uint32_t) phi->ssa_var,
+						|| !zend_mir_frontend_source_ssa_slot(
+							source, (uint32_t) phi->ssa_var,
 							&slot, &kind)) {
 					return NULL;
 				}
@@ -1200,22 +1203,35 @@ static zend_ssa_phi *zend_mir_frontend_phi_at_index(
 	return selected;
 }
 
+static bool zend_mir_frontend_source_ssa_slot(
+	const zend_mir_zend_source *source, uint32_t ssa_variable_id,
+	uint32_t *slot, zend_mir_source_slot_kind *slot_kind)
+{
+	if (zend_mir_frontend_ssa_slot(
+			zend_mir_source_op_array(source), zend_mir_source_ssa(source),
+			ssa_variable_id, slot, slot_kind)) {
+		return true;
+	}
+	return source != NULL && source->w05
+		&& source->call_op_array != NULL && source->call_ssa != NULL
+		&& zend_mir_frontend_ssa_slot(
+			(const zend_op_array *) source->call_op_array,
+			(const zend_ssa *) source->call_ssa,
+			ssa_variable_id, slot, slot_kind);
+}
+
 static bool zend_mir_frontend_view_phi_at(
 	const void *context, uint32_t index, zend_mir_source_phi_ref *out)
 {
 	const zend_mir_zend_source *source = context;
-	const zend_op_array *op_array;
-	const zend_ssa *ssa;
 	zend_ssa_phi *phi;
 	uint32_t block;
 	if (!zend_mir_source_is_initialized(source) || !source->w04
 			|| out == NULL || index >= source->phi_count) {
 		return false;
 	}
-	op_array = zend_mir_source_op_array(source);
-	ssa = zend_mir_source_ssa(source);
 	phi = zend_mir_frontend_phi_at_index(source, index, &block);
-	if (phi == NULL || !zend_mir_frontend_ssa_slot(op_array, ssa,
+	if (phi == NULL || !zend_mir_frontend_source_ssa_slot(source,
 			(uint32_t) phi->ssa_var, &out->source_slot_index,
 			&out->source_slot_kind)) {
 		return false;

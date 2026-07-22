@@ -85,6 +85,16 @@ zend_native_runtime_helper_id executable_value_helper(zend_mir_opcode opcode) {
 			return ZEND_NATIVE_HELPER_VALUE_ASSIGN_OP;
 		case ZEND_MIR_OPCODE_VALUE_FE_FREE:
 			return ZEND_NATIVE_HELPER_VALUE_FE_FREE;
+		case ZEND_MIR_OPCODE_VALUE_BINARY_OP:
+			return ZEND_NATIVE_HELPER_VALUE_BINARY_OP;
+		case ZEND_MIR_OPCODE_VALUE_UNARY_OP:
+			return ZEND_NATIVE_HELPER_VALUE_UNARY_OP;
+		case ZEND_MIR_OPCODE_VALUE_CAST:
+			return ZEND_NATIVE_HELPER_VALUE_CAST;
+		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV:
+			return ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV;
+		case ZEND_MIR_OPCODE_VALUE_FETCH_LIST:
+			return ZEND_NATIVE_HELPER_VALUE_FETCH_LIST;
 		default:
 			return ZEND_NATIVE_HELPER_COUNT;
 	}
@@ -305,6 +315,20 @@ bool initialize_plan(
 				ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT;
 			require_runtime_helper(
 				plan, ZEND_NATIVE_HELPER_VALUE_ITERATOR_BRANCH);
+		}
+		if (record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
+			if (count != 0 || !zend_mir_id_is_valid(record.source_position_id)) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+					"source value branch lacks exact source semantics");
+				return false;
+			}
+			plan->instructions[i].source_opline_index =
+				record.source_position_id;
+			plan->required_runtime_capabilities |=
+				ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT;
+			require_runtime_helper(
+				plan, ZEND_NATIVE_HELPER_VALUE_COND_BRANCH);
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_STATEPOINT
 				&& (record.effects & ZEND_MIR_EFFECT_MASK(
