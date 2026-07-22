@@ -126,6 +126,15 @@ bool zend_mir_w04_validate_branch_proofs(
 			}
 			continue;
 		}
+		if (kind == ZEND_MIR_W04_BRANCH_CATCH) {
+			if (opcode.op1.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
+					|| opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
+					|| opcode.result.kind
+						!= ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+				return false;
+			}
+			continue;
+		}
 		if (opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
 				|| !zend_mir_w04_fact_for_operand(context, &opcode.op1,
 					&input_fact, &input_representation)
@@ -442,7 +451,10 @@ zend_mir_lowering_result zend_mir_lower_w04_zend_source(
 		return zend_mir_w04_result(ZEND_MIR_LOWERING_REJECTED,
 			ZEND_MIRL_W04_MALFORMED_CFG);
 	}
-	if (!zend_mir_w04_validate_source(context->source, &validation)) {
+	if (!(context->shape.has_try_regions
+			? zend_mir_w04_validate_source_for_protected_control_flow(
+				context->source, &validation)
+			: zend_mir_w04_validate_source(context->source, &validation))) {
 		return zend_mir_w04_result(
 			ZEND_MIR_LOWERING_REJECTED, validation.diagnostic);
 	}

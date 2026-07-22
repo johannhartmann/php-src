@@ -925,6 +925,15 @@ bool zend_mir_frontend_opcode_at(
 	out->opline_index = index;
 	out->zend_opcode_number = opline->opcode;
 	out->extended_value = opline->extended_value;
+	if (source->w08 && source->w05 && source->call_op_array != NULL
+			&& index < ((const zend_op_array *) source->call_op_array)->last
+			&& ((const zend_op_array *) source->call_op_array)
+				->opcodes[index].opcode == ZEND_CATCH) {
+		const zend_op *original =
+			&((const zend_op_array *) source->call_op_array)->opcodes[index];
+		out->zend_opcode_number = ZEND_CATCH;
+		out->extended_value = original->extended_value;
+	}
 	out->source_position_id = index;
 	out->block_id = source->w04 && ssa->cfg.map != NULL
 		? ssa->cfg.map[index] : 0;

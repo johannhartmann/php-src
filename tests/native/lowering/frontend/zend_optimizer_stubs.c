@@ -30,3 +30,12 @@ zend_function *zend_optimizer_get_called_func(
 	*is_prototype = false;
 	return NULL;
 }
+
+zend_function *zend_std_get_method(
+	zend_object **object, zend_string *method, const zval *key)
+{
+	(void) object;
+	(void) method;
+	(void) key;
+	return NULL;
+}
