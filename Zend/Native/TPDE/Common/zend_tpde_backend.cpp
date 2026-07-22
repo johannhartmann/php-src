@@ -20,6 +20,11 @@ bool checked_count(uint32_t count) {
 	return count <= MAX_RECORDS;
 }
 
+void require_runtime_helper(
+	zend_tpde_plan *plan, zend_native_runtime_helper_id helper) {
+	plan->required_runtime_helpers |= UINT32_C(1) << helper;
+}
+
 void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->blocks);
 	std::free(plan->values);
@@ -31,6 +36,7 @@ void destroy_plan(zend_tpde_plan *plan) {
 
 bool initialize_plan(
 	const zend_mir_view *view,
+	const zend_native_runtime_api *runtime,
 	const zend_native_call_binding *user_bindings,
 	uint32_t user_binding_count,
 	const zend_native_internal_call_binding *internal_bindings,
@@ -40,9 +46,11 @@ bool initialize_plan(
 	uint32_t frame_argument_count,
 	zend_tpde_plan *plan,
 	zend_native_diagnostic *diag) {
-	plan->runtime = zend_native_runtime_get();
+	plan->runtime = runtime;
+	plan->required_runtime_capabilities =
+		ZEND_NATIVE_RUNTIME_CAP_BAILOUT_BOUNDARY;
 	if (zend_native_runtime_validate(plan->runtime,
-			ZEND_NATIVE_RUNTIME_CAP_BAILOUT_BOUNDARY, diag) == FAILURE) {
+			plan->required_runtime_capabilities, diag) == FAILURE) {
 		return false;
 	}
 	if (!zend_mir_contract_is_compatible(view->contract_version)
@@ -229,13 +237,38 @@ bool initialize_plan(
 				return false;
 			}
 			plan->instructions[i].source_opline_index = frame.opline_index;
-			plan->may_emit_calls = true;
+			plan->required_runtime_capabilities |=
+				ZEND_NATIVE_RUNTIME_CAP_INTERRUPT;
+			require_runtime_helper(plan, ZEND_NATIVE_HELPER_INTERRUPT_POLL);
 		}
-		if (record.opcode == ZEND_MIR_OPCODE_FINALLY_ENTER
-				|| record.opcode == ZEND_MIR_OPCODE_FINALLY_CALL
-				|| record.opcode == ZEND_MIR_OPCODE_FINALLY_RETURN
-				|| record.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL) {
-			plan->may_emit_calls = true;
+		switch (record.opcode) {
+			case ZEND_MIR_OPCODE_CATCH_ENTER:
+				plan->required_runtime_capabilities |=
+					ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT;
+				require_runtime_helper(plan, ZEND_NATIVE_HELPER_CATCH_ENTER);
+				break;
+			case ZEND_MIR_OPCODE_FINALLY_ENTER:
+				plan->required_runtime_capabilities |=
+					ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT;
+				require_runtime_helper(plan, ZEND_NATIVE_HELPER_FINALLY_ENTER);
+				break;
+			case ZEND_MIR_OPCODE_FINALLY_CALL:
+				plan->required_runtime_capabilities |=
+					ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT;
+				require_runtime_helper(plan, ZEND_NATIVE_HELPER_FINALLY_CALL);
+				break;
+			case ZEND_MIR_OPCODE_FINALLY_RETURN:
+				plan->required_runtime_capabilities |=
+					ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT;
+				require_runtime_helper(plan, ZEND_NATIVE_HELPER_FINALLY_RETURN);
+				break;
+			case ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL:
+				plan->required_runtime_capabilities |=
+					ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT;
+				require_runtime_helper(plan, ZEND_NATIVE_HELPER_RETURN_SOURCE_ZVAL);
+				break;
+			default:
+				break;
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
 				|| record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL) {
@@ -301,6 +334,12 @@ bool initialize_plan(
 			plan->instructions[i].call_argument_offset = site.arguments.offset;
 			plan->instructions[i].call_argument_count = site.arguments.count;
 			if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
+				plan->required_runtime_capabilities |=
+					ZEND_NATIVE_RUNTIME_CAP_USER_CALL
+						| ZEND_NATIVE_RUNTIME_CAP_OBSERVER;
+				require_runtime_helper(plan, ZEND_NATIVE_HELPER_USER_CALL_BEGIN);
+				require_runtime_helper(
+					plan, ZEND_NATIVE_HELPER_USER_CALL_FINISH_SOURCE);
 			for (uint32_t n = 0; n < user_binding_count; ++n) {
 				if (user_bindings[n].target_id == site.target_id) {
 					if (plan->instructions[i].entry_cell != nullptr
@@ -319,7 +358,41 @@ bool initialize_plan(
 					"direct user call has no native entry-cell binding");
 				return false;
 			}
+				for (uint32_t n = 0; n < count; ++n) {
+					zend_mir_value_id operand_id;
+					if (!view->instruction_operand_at(
+							view->context, record.id, n, &operand_id)) {
+						zend_tpde_set_diagnostic(diag,
+							ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+							"direct user call operand table is unreadable");
+						return false;
+					}
+					int32_t value_index = zend_tpde_value_index(plan, operand_id);
+					if (value_index < 0) {
+						zend_tpde_set_diagnostic(diag,
+							ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+							"direct user call operand is unknown");
+						return false;
+					}
+					require_runtime_helper(plan,
+						plan->values[value_index].exact_type
+							== ZEND_MIR_SCALAR_TYPE_F64
+							? ZEND_NATIVE_HELPER_USER_CALL_SET_DOUBLE
+							: ZEND_NATIVE_HELPER_USER_CALL_SET_INTEGER);
+				}
 			} else {
+				plan->required_runtime_capabilities |=
+					ZEND_NATIVE_RUNTIME_CAP_INTERNAL_CALL
+						| ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT
+						| ZEND_NATIVE_RUNTIME_CAP_OBSERVER;
+				require_runtime_helper(
+					plan, ZEND_NATIVE_HELPER_INTERNAL_CALL_BEGIN);
+				require_runtime_helper(
+					plan, ZEND_NATIVE_HELPER_INTERNAL_CALL_FINISH_SOURCE);
+				if (site.arguments.count != 0) {
+					require_runtime_helper(
+						plan, ZEND_NATIVE_HELPER_CALL_SET_SOURCE_ARGUMENT);
+				}
 				for (uint32_t n = 0; n < internal_binding_count; ++n) {
 					if (internal_bindings[n].target_id == site.target_id) {
 						if (plan->instructions[i].internal_call_cell != nullptr
@@ -340,7 +413,10 @@ bool initialize_plan(
 					return false;
 				}
 			}
-			plan->may_emit_calls = true;
+			if (zend_mir_id_is_valid(record.result_id)) {
+				require_runtime_helper(
+					plan, ZEND_NATIVE_HELPER_CALL_READ_SOURCE_SCALAR);
+			}
 		}
 	}
 	for (uint32_t i = 0; i < effect_count; ++i) {
@@ -385,7 +461,14 @@ bool initialize_plan(
 		}
 		match->source_effect = effect.kind;
 		match->source_effect_exact_type = effect.exact_type;
-		plan->may_emit_calls = true;
+		if (effect.kind == ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE) {
+			require_runtime_helper(plan, ZEND_NATIVE_HELPER_ABI_CONFORMANCE);
+		} else {
+			require_runtime_helper(plan,
+				effect.exact_type == ZEND_MIR_SCALAR_TYPE_F64
+					? ZEND_NATIVE_HELPER_ECHO_DOUBLE
+					: ZEND_NATIVE_HELPER_ECHO_INTEGER);
+		}
 	}
 	plan->operand_count = static_cast<uint32_t>(operands);
 	plan->operands = static_cast<zend_mir_value_id *>(
@@ -444,32 +527,16 @@ bool initialize_plan(
 			}
 		}
 	}
-	if (plan->may_emit_calls) {
-		static constexpr zend_native_runtime_helper_id required_helpers[] = {
-			ZEND_NATIVE_HELPER_USER_CALL_BEGIN,
-			ZEND_NATIVE_HELPER_USER_CALL_SET_INTEGER,
-			ZEND_NATIVE_HELPER_USER_CALL_SET_DOUBLE,
-			ZEND_NATIVE_HELPER_USER_CALL_FINISH,
-			ZEND_NATIVE_HELPER_USER_CALL_FINISH_SOURCE,
-			ZEND_NATIVE_HELPER_CALL_READ_SOURCE_SCALAR,
-			ZEND_NATIVE_HELPER_ECHO_INTEGER,
-			ZEND_NATIVE_HELPER_ECHO_DOUBLE,
-			ZEND_NATIVE_HELPER_FINALLY_ENTER,
-			ZEND_NATIVE_HELPER_FINALLY_CALL,
-			ZEND_NATIVE_HELPER_FINALLY_RETURN,
-			ZEND_NATIVE_HELPER_RETURN_SOURCE_ZVAL,
-			ZEND_NATIVE_HELPER_INTERRUPT_POLL,
-			ZEND_NATIVE_HELPER_ABI_CONFORMANCE,
-		};
-		if (zend_native_runtime_validate(plan->runtime,
-				ZEND_NATIVE_RUNTIME_CAP_USER_CALL
-					| ZEND_NATIVE_RUNTIME_CAP_OBSERVER
-					| ZEND_NATIVE_RUNTIME_CAP_INTERRUPT,
-				diag) == FAILURE) {
-			return false;
-		}
-		for (zend_native_runtime_helper_id helper : required_helpers) {
-			if (zend_native_runtime_helper_find(plan->runtime, helper) == nullptr) {
+	if (zend_native_runtime_validate(plan->runtime,
+			plan->required_runtime_capabilities, diag) == FAILURE) {
+		return false;
+	}
+	for (uint32_t id = 1; id <= ZEND_NATIVE_HELPER_ABI_CONFORMANCE; ++id) {
+		if ((plan->required_runtime_helpers & (UINT32_C(1) << id)) != 0) {
+			const zend_native_runtime_helper *helper =
+				zend_native_runtime_helper_find(plan->runtime,
+					static_cast<zend_native_runtime_helper_id>(id));
+			if (helper == nullptr) {
 				zend_tpde_set_diagnostic(diag,
 					ZEND_NATIVE_DIAGNOSTIC_UNSUPPORTED_OPCODE,
 					"native runtime lacks a required symbolic helper");
@@ -477,6 +544,7 @@ bool initialize_plan(
 			}
 		}
 	}
+	plan->may_emit_calls = plan->required_runtime_helpers != 0;
 	return true;
 }
 } // namespace
@@ -600,10 +668,30 @@ extern "C" zend_result zend_tpde_compile_module_w08(
 	uint32_t frame_argument_count,
 	zend_native_image **out_image,
 	zend_native_diagnostic *diag) {
+	return zend_tpde_compile_module_w08_with_runtime(
+		target, module, user_bindings, user_binding_count,
+		internal_bindings, internal_binding_count, effects, effect_count,
+		frame_argument_count, zend_native_runtime_get(), out_image, diag);
+}
+
+extern "C" zend_result zend_tpde_compile_module_w08_with_runtime(
+	zend_native_target target,
+	const zend_mir_view *module,
+	const zend_native_call_binding *user_bindings,
+	uint32_t user_binding_count,
+	const zend_native_internal_call_binding *internal_bindings,
+	uint32_t internal_binding_count,
+	const zend_native_source_effect *effects,
+	uint32_t effect_count,
+	uint32_t frame_argument_count,
+	const zend_native_runtime_api *runtime,
+	zend_native_image **out_image,
+	zend_native_diagnostic *diag) {
 	if (diag != nullptr) {
 		std::memset(diag, 0, sizeof(*diag));
 	}
 	if (module == nullptr || out_image == nullptr
+			|| runtime == nullptr
 			|| (user_binding_count != 0 && user_bindings == nullptr)
 			|| (internal_binding_count != 0 && internal_bindings == nullptr)
 			|| (effect_count != 0 && effects == nullptr)
@@ -626,7 +714,7 @@ extern "C" zend_result zend_tpde_compile_module_w08(
 
 	zend_tpde_plan plan{};
 	if (!initialize_plan(
-			module, user_bindings, user_binding_count,
+			module, runtime, user_bindings, user_binding_count,
 			internal_bindings, internal_binding_count, effects, effect_count,
 			frame_argument_count,
 			&plan, diag)) {

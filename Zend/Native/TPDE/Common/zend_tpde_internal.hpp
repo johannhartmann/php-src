@@ -47,6 +47,8 @@ struct zend_tpde_plan {
 	zend_mir_call_argument_ref *call_arguments;
 	uint32_t call_argument_count;
 	uint32_t argument_count;
+	uint64_t required_runtime_capabilities;
+	uint32_t required_runtime_helpers;
 	bool may_emit_calls;
 };
 

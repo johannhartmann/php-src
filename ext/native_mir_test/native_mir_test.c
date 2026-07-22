@@ -51,6 +51,7 @@
 #include "Zend/Native/Lowering/Frontend/zend_mir_zend_source.h"
 #include "Zend/Native/Lowering/zend_mir_lowering_zend.h"
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
+#include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 #include "Zend/Native/TPDE/Common/zend_tpde_backend.h"
 
 #define NATIVE_MIR_TEST_SCHEMA_VERSION 1
@@ -215,6 +216,7 @@ typedef struct _native_mir_test_state {
 	native_mir_test_frame_probe *frame_probes;
 	uint32_t frame_probe_count;
 	uint32_t execute_repetitions;
+	uint32_t runtime_helper_failure;
 	uint32_t completed_executions;
 	uint32_t unwind_registrations_before;
 	smart_str dump;
@@ -651,6 +653,13 @@ static bool native_mir_test_parse_options(
 				goto invalid_value;
 			}
 			state->mir_chunk_size = (size_t) Z_LVAL_P(value);
+		} else if (zend_string_equals_literal(key, "runtime_helper_failure")) {
+			if (!state->execute_mode || Z_TYPE_P(value) != IS_LONG
+					|| Z_LVAL_P(value) < ZEND_NATIVE_HELPER_USER_CALL_BEGIN
+					|| Z_LVAL_P(value) > ZEND_NATIVE_HELPER_ABI_CONFORMANCE) {
+				goto invalid_value;
+			}
+			state->runtime_helper_failure = (uint32_t) Z_LVAL_P(value);
 		} else if (zend_string_equals_literal(key, "fault")) {
 			if (Z_TYPE_P(value) == IS_NULL) {
 				continue;
@@ -675,6 +684,9 @@ static bool native_mir_test_parse_options(
 			return false;
 		}
 	} ZEND_HASH_FOREACH_END();
+	if (state->runtime_helper_failure != 0 && state->wave < 8) {
+		goto invalid_value;
+	}
 	return true;
 
 invalid_value:
@@ -2731,14 +2743,50 @@ static bool native_mir_test_compile_native_component(
 		}
 		function->internal_call_cell_count = internal_binding_count;
 		memset(&diagnostic, 0, sizeof(diagnostic));
+		const zend_native_runtime_api *runtime = zend_native_runtime_get();
+		zend_native_runtime_api injected_runtime;
+		zend_native_runtime_helper injected_helpers[
+			ZEND_NATIVE_HELPER_ABI_CONFORMANCE];
+		if (state->runtime_helper_failure != 0) {
+			uint32_t helper_index;
+
+			if (runtime->helper_count > ZEND_NATIVE_HELPER_ABI_CONFORMANCE) {
+				efree(bindings);
+				efree(internal_bindings);
+				native_mir_test_backend_failure(state, state->phase, NULL);
+				native_mir_test_fail_native_component(state);
+				return false;
+			}
+			memcpy(injected_helpers, runtime->helpers,
+				runtime->helper_count * sizeof(*injected_helpers));
+			for (helper_index = 0;
+					helper_index < runtime->helper_count; helper_index++) {
+				if (injected_helpers[helper_index].id
+						== state->runtime_helper_failure) {
+					injected_helpers[helper_index].address = NULL;
+					break;
+				}
+			}
+			if (helper_index == runtime->helper_count) {
+				efree(bindings);
+				efree(internal_bindings);
+				native_mir_test_backend_failure(state, state->phase, NULL);
+				native_mir_test_fail_native_component(state);
+				return false;
+			}
+			injected_runtime = *runtime;
+			injected_runtime.helpers = injected_helpers;
+			runtime = &injected_runtime;
+		}
 		if ((state->wave >= 8
-				? zend_tpde_compile_module_w08(
+				? zend_tpde_compile_module_w08_with_runtime(
 					state->target,
 					native_mir_test_module_view(state, function->module),
 					bindings, binding_count,
 					internal_bindings, internal_binding_count,
 					function->source_effects, function->source_effect_count,
 					function->op_array->num_args,
+					runtime,
 					&function->image, &diagnostic)
 				: zend_tpde_compile_module_w07(
 					state->target,
