@@ -118,6 +118,13 @@ bool zend_mir_zend_source_call_target_resolver(
 	const zend_mir_zend_source *source,
 	zend_mir_source_call_target_resolver *out);
 
+/* Proves that a W08 RETURN reads the exact source zval written by a direct
+ * internal call. Protected handlers may lack optimizer SSA, so this proof is
+ * intentionally based on original oplines and physical source slots. */
+bool zend_mir_zend_source_w08_return_source_zval(
+	const zend_mir_zend_source *source,
+	uint32_t return_opline_index);
+
 /*
  * Return the process-local function backing an exact internal target. The
  * pointer is valid only while the source adapter and its script are alive;

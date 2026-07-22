@@ -780,6 +780,23 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			return_builder.ret();
 			return true;
 		}
+		case ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL: {
+			zend::native::tpde::CCAssignerAppleA64 assigner;
+			CallBuilder builder{*this, assigner};
+			builder.add_arg(CallArg{node.operands[0]});
+			builder.add_arg(ValuePart{mir.record.source_position_id, 4,
+				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			builder.call(ValuePart{
+				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
+					ZEND_NATIVE_HELPER_RETURN_SOURCE_ZVAL)),
+				8, DarwinConfig::GP_BANK});
+			ValuePart status{DarwinConfig::GP_BANK};
+			builder.add_ret(status, ::tpde::CCAssignment{});
+			RetBuilder return_builder{*this, *cur_cc_assigner()};
+			return_builder.add(std::move(status), ::tpde::CCAssignment{});
+			return_builder.ret();
+			return true;
+		}
 		default:
 			return false;
 	}

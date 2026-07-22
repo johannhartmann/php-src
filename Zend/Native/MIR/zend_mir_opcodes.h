@@ -25,7 +25,8 @@
 	X(CATCH_ENTER, "catch_enter", 49) \
 	X(FINALLY_ENTER, "finally_enter", 50) \
 	X(FINALLY_CALL, "finally_call", 51) \
-	X(FINALLY_RETURN, "finally_return", 52)
+	X(FINALLY_RETURN, "finally_return", 52) \
+	X(RETURN_SOURCE_ZVAL, "return_source_zval", 53)
 
 #define ZEND_MIR_VALUE_OPCODE_CATALOG(X) \
 	X(STORAGE_BIND, "storage_bind", 42) \
@@ -81,7 +82,7 @@ typedef enum _zend_mir_opcode {
 	ZEND_MIR_OPCODE_COUNT = 41,
 	ZEND_MIR_W05_OPCODE_COUNT = 42,
 	ZEND_MIR_W06_OPCODE_COUNT = 48,
-	ZEND_MIR_W08_OPCODE_COUNT = 53,
+	ZEND_MIR_W08_OPCODE_COUNT = 54,
 	ZEND_MIR_OPCODE_INVALID = -1
 } zend_mir_opcode;
 #undef ZEND_MIR_OPCODE_ENUM
@@ -130,6 +131,7 @@ static inline bool zend_mir_opcode_is_terminator(zend_mir_opcode opcode)
 		|| opcode == ZEND_MIR_OPCODE_CATCH_ENTER
 		|| opcode == ZEND_MIR_OPCODE_FINALLY_CALL
 		|| opcode == ZEND_MIR_OPCODE_FINALLY_RETURN
+		|| opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
 		|| opcode == ZEND_MIR_OPCODE_RETURN
 		|| opcode == ZEND_MIR_OPCODE_THROW
 		|| opcode == ZEND_MIR_OPCODE_UNREACHABLE;
@@ -155,7 +157,11 @@ ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_FINALLY_CALL == ZEND_MIR_OPCODE_FINALLY_E
 	"W08 finally call follows finally entry");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_FINALLY_RETURN == ZEND_MIR_OPCODE_FINALLY_CALL + 1,
 	"W08 finally return follows finally call");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W08_OPCODE_COUNT == ZEND_MIR_OPCODE_FINALLY_RETURN + 1,
+ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
+	== ZEND_MIR_OPCODE_FINALLY_RETURN + 1,
+	"W08 source-zval return follows finally return");
+ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W08_OPCODE_COUNT
+	== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL + 1,
 	"W08 opcodes have an additive table boundary");
 
 #endif /* ZEND_MIR_OPCODES_H */

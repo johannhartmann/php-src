@@ -38,7 +38,8 @@ typedef enum _zend_native_runtime_helper_id {
 	ZEND_NATIVE_HELPER_USER_CALL_FINISH_SOURCE = 15,
 	ZEND_NATIVE_HELPER_FINALLY_ENTER = 16,
 	ZEND_NATIVE_HELPER_FINALLY_CALL = 17,
-	ZEND_NATIVE_HELPER_FINALLY_RETURN = 18
+	ZEND_NATIVE_HELPER_FINALLY_RETURN = 18,
+	ZEND_NATIVE_HELPER_RETURN_SOURCE_ZVAL = 19
 } zend_native_runtime_helper_id;
 
 typedef enum _zend_native_runtime_effect {

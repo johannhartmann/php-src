@@ -1,5 +1,7 @@
 #include "zend_mir_zend_source_internal.h"
 
+#include "../../../Optimizer/zend_dfg.h"
+#include "../../../zend_execute.h"
 #include "../../../zend_object_handlers.h"
 
 typedef struct _zend_mir_frontend_call_target {
@@ -666,8 +668,11 @@ static zend_mir_lowering_status zend_mir_zend_source_init_w04_impl(
 			|| (status = zend_mir_frontend_validate_facts(
 				op_array, ssa, op_array_id, diagnostic, &facts))
 				!= ZEND_MIR_LOWERING_SUCCESS
-			|| (status = zend_mir_frontend_validate_eligibility_w04(
-				op_array, ssa, op_array_id, diagnostic))
+			|| (status = allow_protected_regions
+				? zend_mir_frontend_validate_eligibility_w08(
+					op_array, ssa, op_array_id, diagnostic)
+				: zend_mir_frontend_validate_eligibility_w04(
+					op_array, ssa, op_array_id, diagnostic))
 				!= ZEND_MIR_LOWERING_SUCCESS) {
 		return status;
 	}
@@ -1399,6 +1404,130 @@ static zend_function *zend_mir_frontend_canonical_script_function(
 	return candidate;
 }
 
+static bool zend_mir_frontend_opline_defines_variable(
+	const zend_op_array *op_array, const zend_op *opline, uint32_t variable)
+{
+	uint32_t variable_count;
+	uint32_t set_size;
+	bool defines;
+	ALLOCA_FLAG(use_heap)
+	ALLOCA_FLAG(def_heap)
+	zend_bitset use;
+	zend_bitset def;
+
+	if (op_array == NULL || opline == NULL
+			|| op_array->last_var > UINT32_MAX - op_array->T) {
+		return true;
+	}
+	variable_count = op_array->last_var + op_array->T;
+	if (variable >= variable_count) {
+		return true;
+	}
+	set_size = zend_bitset_len(variable_count);
+	use = ZEND_BITSET_ALLOCA(set_size, use_heap);
+	def = ZEND_BITSET_ALLOCA(set_size, def_heap);
+	zend_bitset_clear(use, set_size);
+	zend_bitset_clear(def, set_size);
+	zend_dfg_add_use_def_op(op_array, opline, 0, use, def);
+	defines = zend_bitset_in(def, variable);
+	free_alloca(def, def_heap);
+	free_alloca(use, use_heap);
+	return defines;
+}
+
+static zend_class_entry *zend_mir_frontend_catch_receiver_class(
+	const zend_op_array *op_array, const zend_ssa *ssa,
+	uint32_t init_opline_index)
+{
+	const zend_op *init_opline;
+	const zend_op *catch_opline;
+	uint32_t block_id;
+	uint32_t scan_end;
+	uint32_t receiver_variable;
+	uint32_t remaining;
+
+	if (op_array == NULL || ssa == NULL || ssa->ops == NULL
+			|| ssa->cfg.map == NULL || ssa->cfg.blocks == NULL
+			|| init_opline_index >= op_array->last) {
+		return NULL;
+	}
+	init_opline = &op_array->opcodes[init_opline_index];
+	if (init_opline->opcode != ZEND_INIT_METHOD_CALL
+			|| init_opline->op1_type != IS_CV) {
+		return NULL;
+	}
+	receiver_variable = EX_VAR_TO_NUM(init_opline->op1.var);
+	block_id = ssa->cfg.map[init_opline_index];
+	if (block_id >= ssa->cfg.blocks_count) {
+		return NULL;
+	}
+	scan_end = init_opline_index;
+	remaining = ssa->cfg.blocks_count;
+	catch_opline = NULL;
+	while (remaining-- != 0) {
+		const zend_basic_block *block = &ssa->cfg.blocks[block_id];
+		uint32_t index;
+
+		if (block->len == 0 || block->start > op_array->last
+				|| block->len > op_array->last - block->start
+				|| block->start > scan_end
+				|| scan_end > block->start + block->len) {
+			return NULL;
+		}
+		if (op_array->opcodes[block->start].opcode == ZEND_CATCH) {
+			catch_opline = &op_array->opcodes[block->start];
+			for (index = block->start + 1; index < scan_end; index++) {
+				if (zend_mir_frontend_opline_defines_variable(
+						op_array, &op_array->opcodes[index],
+						receiver_variable)) {
+					return NULL;
+				}
+			}
+			break;
+		}
+		for (index = block->start; index < scan_end; index++) {
+			if (zend_mir_frontend_opline_defines_variable(
+					op_array, &op_array->opcodes[index], receiver_variable)) {
+				return NULL;
+			}
+		}
+		if (block->predecessors_count != 1
+				|| ssa->cfg.predecessors == NULL
+				|| block->predecessor_offset < 0
+				|| (uint32_t) block->predecessor_offset
+					>= ssa->cfg.edges_count) {
+			return NULL;
+		}
+		block_id = (uint32_t)
+			ssa->cfg.predecessors[block->predecessor_offset];
+		if (block_id >= ssa->cfg.blocks_count) {
+			return NULL;
+		}
+		scan_end = ssa->cfg.blocks[block_id].start
+			+ ssa->cfg.blocks[block_id].len;
+	}
+	if (catch_opline == NULL) {
+		return NULL;
+	}
+	if (catch_opline->opcode != ZEND_CATCH
+			|| catch_opline->op1_type != IS_CONST
+			|| catch_opline->result_type != IS_CV
+			|| catch_opline->result.var != init_opline->op1.var
+			|| Z_TYPE_P(RT_CONSTANT(catch_opline, catch_opline->op1))
+				!= IS_STRING
+			|| Z_TYPE_P(RT_CONSTANT(catch_opline, catch_opline->op1) + 1)
+				!= IS_STRING) {
+		return NULL;
+	}
+	/* Protected handlers are disconnected from ordinary SSA reachability.
+	 * The unique predecessor chain and DFG definition checks prove that this
+	 * source catch binding is the value consumed by the method receiver. */
+	return zend_fetch_class_by_name(
+		Z_STR_P(RT_CONSTANT(catch_opline, catch_opline->op1)),
+		Z_STR_P(RT_CONSTANT(catch_opline, catch_opline->op1) + 1),
+		ZEND_FETCH_CLASS_NO_AUTOLOAD | ZEND_FETCH_CLASS_SILENT);
+}
+
 zend_function *zend_mir_zend_source_resolve_internal_call(
 	const zend_script *script, const zend_op_array *op_array,
 	const zend_ssa *ssa, uint32_t init_opline_index)
@@ -1407,6 +1536,7 @@ zend_function *zend_mir_zend_source_resolve_internal_call(
 	const zend_ssa_var_info *receiver_info;
 	const zend_class_entry *receiver_class;
 	zend_function *function;
+	bool catch_receiver = false;
 	bool is_prototype = false;
 	int receiver_ssa;
 
@@ -1429,11 +1559,18 @@ zend_function *zend_mir_zend_source_resolve_internal_call(
 		return NULL;
 	}
 	receiver_ssa = ssa->ops[init_opline_index].op1_use;
-	if (receiver_ssa < 0 || receiver_ssa >= ssa->vars_count) {
-		return NULL;
+	if (receiver_ssa >= 0 && receiver_ssa < ssa->vars_count) {
+		receiver_info = &ssa->var_info[receiver_ssa];
+		receiver_class = receiver_info->ce;
+	} else {
+		receiver_info = NULL;
+		receiver_class = NULL;
 	}
-	receiver_info = &ssa->var_info[receiver_ssa];
-	receiver_class = receiver_info->ce;
+	if (receiver_class == NULL) {
+		receiver_class = zend_mir_frontend_catch_receiver_class(
+			op_array, ssa, init_opline_index);
+		catch_receiver = receiver_class != NULL;
+	}
 	if (receiver_class == NULL || receiver_class->default_object_handlers == NULL
 			|| receiver_class->default_object_handlers->get_method
 				!= zend_std_get_method) {
@@ -1448,11 +1585,81 @@ zend_function *zend_mir_zend_source_resolve_internal_call(
 				!= ZEND_ACC_PUBLIC) {
 		return NULL;
 	}
-	if (receiver_info->is_instanceof
-			&& (receiver_class->ce_flags & ZEND_ACC_FINAL) == 0) {
+	if ((catch_receiver || receiver_info == NULL
+			|| receiver_info->is_instanceof || receiver_info->ce == NULL)
+			&& (receiver_class->ce_flags & ZEND_ACC_FINAL) == 0
+			&& (function->common.fn_flags & ZEND_ACC_FINAL) == 0) {
 		return NULL;
 	}
 	return function;
+}
+
+bool zend_mir_zend_source_w08_return_source_zval(
+	const zend_mir_zend_source *source, uint32_t return_opline_index)
+{
+	const zend_mir_frontend_call_inventory *inventory;
+	const zend_op_array *op_array;
+	const zend_op *return_opline;
+	uint32_t return_slot;
+	zend_mir_source_slot_kind return_slot_kind;
+	uint32_t index;
+
+	if (!zend_mir_source_is_initialized(source) || !source->w08 || !source->w05
+			|| source->call_op_array == NULL || source->call_inventory == NULL) {
+		return false;
+	}
+	op_array = (const zend_op_array *) source->call_op_array;
+	if (return_opline_index >= op_array->last) {
+		return false;
+	}
+	return_opline = &op_array->opcodes[return_opline_index];
+	if (return_opline->opcode != ZEND_RETURN
+			|| !zend_mir_frontend_decode_slot(
+				op_array, &return_opline->op1, return_opline->op1_type,
+				&return_slot, &return_slot_kind)) {
+		return false;
+	}
+	inventory = (const zend_mir_frontend_call_inventory *) source->call_inventory;
+	for (index = 0; index < inventory->site_count; index++) {
+		const zend_mir_source_call_site_ref *site = &inventory->sites[index];
+		const zend_mir_frontend_call_target *target;
+		const zend_op *do_opline;
+		uint32_t result_slot;
+		zend_mir_source_slot_kind result_slot_kind;
+
+		if (site->do_opline_index >= return_opline_index
+				|| site->do_opline_index >= op_array->last
+				|| site->target_id >= inventory->target_count) {
+			continue;
+		}
+		target = &inventory->targets[site->target_id];
+		if (target->record.kind != ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL) {
+			continue;
+		}
+		do_opline = &op_array->opcodes[site->do_opline_index];
+		if (!zend_mir_frontend_decode_slot(
+				op_array, &do_opline->result, do_opline->result_type,
+				&result_slot, &result_slot_kind)
+				|| result_slot != return_slot
+				|| result_slot_kind != return_slot_kind) {
+			continue;
+		}
+		/* The returned source slot must not be overwritten after the call. */
+		for (uint32_t scan = site->do_opline_index + 1;
+				scan < return_opline_index; scan++) {
+			uint32_t variable = return_slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+				? return_slot
+				: return_slot + (uint32_t) op_array->last_var;
+			if (zend_mir_frontend_opline_defines_variable(
+					op_array, &op_array->opcodes[scan], variable)) {
+				goto next_site;
+			}
+		}
+		return true;
+	next_site:
+		continue;
+	}
+	return false;
 }
 
 static zend_mir_source_call_target_kind

@@ -202,6 +202,7 @@ static uint32_t zend_mir_verify_expected_operands(zend_mir_opcode opcode,
 		case ZEND_MIR_OPCODE_FINALLY_ENTER:
 		case ZEND_MIR_OPCODE_FINALLY_CALL:
 		case ZEND_MIR_OPCODE_FINALLY_RETURN:
+		case ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL:
 		case ZEND_MIR_OPCODE_UNREACHABLE:
 			return 0;
 		case ZEND_MIR_OPCODE_COPY:
@@ -247,6 +248,7 @@ static bool zend_mir_verify_result_contract(
 		case ZEND_MIR_OPCODE_STATEPOINT:
 		case ZEND_MIR_OPCODE_FINALLY_ENTER:
 		case ZEND_MIR_OPCODE_RETURN:
+		case ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL:
 		case ZEND_MIR_OPCODE_THROW:
 		case ZEND_MIR_OPCODE_UNREACHABLE:
 			return !zend_mir_id_is_valid(instruction->result_id)

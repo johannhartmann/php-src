@@ -829,11 +829,18 @@ static bool zend_mir_w03_prepare_logic(
 		zend_mir_source_opcode_ref opcode;
 		zend_mir_logic_opcode_proof *proof;
 		uint32_t temporary_payload;
+		bool source_zval_return;
 
 		if (!integration->source_view.opcode_at(
-				integration->source_view.context, index, &opcode)
-				|| !zend_mir_w03_add_logic_binding(
-					integration, &opcode.op1)
+				integration->source_view.context, index, &opcode)) {
+			return false;
+		}
+		source_zval_return = integration->w08
+			&& opcode.zend_opcode_number == ZEND_RETURN
+			&& zend_mir_zend_source_w08_return_source_zval(
+				&integration->source, opcode.opline_index);
+		if ((!source_zval_return && !zend_mir_w03_add_logic_binding(
+					integration, &opcode.op1))
 				|| !zend_mir_w03_add_logic_binding(
 					integration, &opcode.op2)
 				|| !zend_mir_w03_add_logic_binding(
