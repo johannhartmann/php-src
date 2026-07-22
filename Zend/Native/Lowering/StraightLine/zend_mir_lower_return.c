@@ -187,7 +187,11 @@ zend_mir_lowering_status zend_mir_lower_return(
 			|| mutator->add_operand == NULL) {
 		return ZEND_MIR_LOWERING_REJECTED;
 	}
-	if (source_opcode->op1.kind == ZEND_MIR_SOURCE_OPERAND_SLOT) {
+	if (source_opcode->op1.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+			|| (context->zend_source != NULL
+				&& context->zend_source->w09
+				&& source_opcode->op1.kind
+					== ZEND_MIR_SOURCE_OPERAND_LITERAL)) {
 		return zend_mir_lower_source_zval_return(
 			context, source_opcode, mutator, provider_context, diagnostic_out);
 	}

@@ -61,7 +61,9 @@ zend_result zend_native_internal_call_begin(
 	zend_function *function;
 	const zend_op *source_opline;
 	void *object_or_called_scope = NULL;
+	uint32_t initial_argument_count;
 	uint32_t call_info = ZEND_CALL_NESTED_FUNCTION;
+	uint32_t index;
 
 	if (caller == NULL || caller->call != NULL || caller->func == NULL
 			|| caller->func->type != ZEND_USER_FUNCTION
@@ -71,10 +73,11 @@ zend_result zend_native_internal_call_begin(
 		return FAILURE;
 	}
 	function = cell->function;
-	if (!zend_native_internal_count_is_valid(function, argument_count)) {
+	source_opline = &caller->func->op_array.opcodes[source_opline_index];
+	initial_argument_count = source_opline->extended_value;
+	if (initial_argument_count > argument_count) {
 		return FAILURE;
 	}
-	source_opline = &caller->func->op_array.opcodes[source_opline_index];
 	if (cell->receiver_kind == ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS) {
 		if ((ZEND_CALL_INFO(caller) & ZEND_CALL_HAS_THIS) == 0
 				|| !instanceof_function(
@@ -115,7 +118,10 @@ zend_result zend_native_internal_call_begin(
 	}
 #endif
 	call = zend_vm_stack_push_call_frame(
-		call_info, function, argument_count, object_or_called_scope);
+		call_info, function, initial_argument_count, object_or_called_scope);
+	for (index = 0; index < initial_argument_count; index++) {
+		ZVAL_UNDEF(ZEND_CALL_ARG(call, index + 1));
+	}
 	call->prev_execute_data = caller;
 	caller->call = call;
 	caller->opline = &caller->func->op_array.opcodes[source_opline_index];
@@ -182,6 +188,9 @@ static zval *zend_native_source_argument(
 		case ZEND_SEND_VAR:
 		case ZEND_SEND_VAR_EX:
 		case ZEND_SEND_REF:
+		case ZEND_SEND_UNPACK:
+		case ZEND_SEND_ARRAY:
+		case ZEND_SEND_USER:
 		case ZEND_SEND_VAR_NO_REF:
 		case ZEND_SEND_VAR_NO_REF_EX:
 			break;
@@ -201,6 +210,477 @@ static zval *zend_native_source_argument(
 	}
 }
 
+static void zend_native_release_source_operand(zval *value, uint8_t operand_type)
+{
+	if (value != NULL
+			&& (operand_type == IS_VAR || operand_type == IS_TMP_VAR)) {
+		zval_ptr_dtor(value);
+		ZVAL_UNDEF(value);
+	}
+}
+
+static uint32_t zend_native_argument_number_by_name(
+	const zend_function *function, const zend_string *name)
+{
+	uint32_t index;
+
+	if (function == NULL || name == NULL || function->common.arg_info == NULL) {
+		return 0;
+	}
+	for (index = 0; index < function->common.num_args; index++) {
+		const zend_arg_info *info = &function->common.arg_info[index];
+		if (info->name != NULL && zend_string_equals(name, info->name)) {
+			return index + 1;
+		}
+	}
+	return (function->common.fn_flags & ZEND_ACC_VARIADIC) != 0
+		? function->common.num_args + 1 : 0;
+}
+
+static void zend_native_traversable_by_reference_warning(
+	const zend_function *function, uint32_t argument_number)
+{
+	zend_error(E_WARNING,
+		"Cannot pass by-reference argument %d of %s%s%s()"
+		" by unpacking a Traversable, passing by-value instead",
+		argument_number,
+		function->common.scope != NULL
+			? ZSTR_VAL(function->common.scope->name) : "",
+		function->common.scope != NULL ? "::" : "",
+		function->common.function_name != NULL
+			? ZSTR_VAL(function->common.function_name) : "{main}");
+}
+
+static zend_result zend_native_call_unpack_array(
+	zend_execute_data *caller, zval *source, uint8_t operand_type)
+{
+	zend_execute_data *call = caller->call;
+	zend_function *function = call->func;
+	zval *args = source;
+	HashTable *table;
+	zval *argument;
+	zend_string *name;
+	uint32_t argument_number = ZEND_CALL_NUM_ARGS(call) + 1;
+	bool have_named_parameters = false;
+	bool can_reference_buckets = operand_type == IS_CV || operand_type == IS_VAR;
+
+	while (Z_ISREF_P(args)) {
+		args = Z_REFVAL_P(args);
+	}
+	if (Z_TYPE_P(args) != IS_ARRAY) {
+		return FAILURE;
+	}
+	table = Z_ARRVAL_P(args);
+	zend_vm_stack_extend_call_frame(
+		&call, argument_number - 1, zend_hash_num_elements(table));
+	caller->call = call;
+
+	if (can_reference_buckets && GC_REFCOUNT(table) > 1) {
+		uint32_t candidate_number = argument_number;
+		bool separate = false;
+
+		ZEND_HASH_FOREACH_STR_KEY_VAL(table, name, argument) {
+			if (name != NULL) {
+				candidate_number = zend_native_argument_number_by_name(
+					function, name);
+			}
+			if (candidate_number != 0
+					&& ARG_SHOULD_BE_SENT_BY_REF(
+						function, candidate_number)) {
+				separate = true;
+				break;
+			}
+			candidate_number++;
+		} ZEND_HASH_FOREACH_END();
+		if (separate) {
+			SEPARATE_ARRAY(args);
+			table = Z_ARRVAL_P(args);
+		}
+	}
+
+	ZEND_HASH_FOREACH_STR_KEY_VAL(table, name, argument) {
+		zval *target;
+
+		if (name != NULL) {
+			void *cache_slot[2] = {NULL, NULL};
+			have_named_parameters = true;
+			target = zend_handle_named_arg(
+				&call, name, &argument_number, cache_slot);
+			caller->call = call;
+			if (target == NULL) {
+				zend_native_release_source_operand(source, operand_type);
+				return FAILURE;
+			}
+		} else {
+			if (have_named_parameters) {
+				zend_throw_error(NULL,
+					"Cannot use positional argument after named argument during unpacking");
+				zend_native_release_source_operand(source, operand_type);
+				return FAILURE;
+			}
+			target = ZEND_CALL_ARG(call, argument_number);
+			ZEND_CALL_NUM_ARGS(call)++;
+		}
+
+		if (ARG_SHOULD_BE_SENT_BY_REF(function, argument_number)) {
+			if (Z_ISREF_P(argument)) {
+				Z_ADDREF_P(argument);
+				ZVAL_REF(target, Z_REF_P(argument));
+			} else if (can_reference_buckets) {
+				ZVAL_MAKE_REF_EX(argument, 2);
+				ZVAL_REF(target, Z_REF_P(argument));
+			} else {
+				Z_TRY_ADDREF_P(argument);
+				ZVAL_NEW_REF(target, argument);
+			}
+		} else {
+			ZVAL_COPY_DEREF(target, argument);
+		}
+		argument_number++;
+	} ZEND_HASH_FOREACH_END();
+
+	zend_native_release_source_operand(source, operand_type);
+	return EG(exception) == NULL ? SUCCESS : FAILURE;
+}
+
+static zend_result zend_native_call_unpack_traversable(
+	zend_execute_data *caller, zval *source, uint8_t operand_type)
+{
+	zend_execute_data *call = caller->call;
+	zend_function *function = call->func;
+	zval *args = source;
+	zend_class_entry *class_entry;
+	zend_object_iterator *iterator;
+	const zend_object_iterator_funcs *functions;
+	uint32_t argument_number = ZEND_CALL_NUM_ARGS(call) + 1;
+	bool have_named_parameters = false;
+
+	while (Z_ISREF_P(args)) {
+		args = Z_REFVAL_P(args);
+	}
+	if (Z_TYPE_P(args) != IS_OBJECT) {
+		return FAILURE;
+	}
+	class_entry = Z_OBJCE_P(args);
+	if (class_entry->get_iterator == NULL) {
+		zend_type_error("Only arrays and Traversables can be unpacked, %s given",
+			zend_zval_value_name(args));
+		zend_native_release_source_operand(source, operand_type);
+		return FAILURE;
+	}
+	iterator = class_entry->get_iterator(class_entry, args, 0);
+	if (iterator == NULL) {
+		if (EG(exception) == NULL) {
+			zend_throw_exception_ex(NULL, 0,
+				"Object of type %s did not create an Iterator",
+				ZSTR_VAL(class_entry->name));
+		}
+		zend_native_release_source_operand(source, operand_type);
+		return FAILURE;
+	}
+	functions = iterator->funcs;
+	if (functions->rewind != NULL) {
+		functions->rewind(iterator);
+	}
+	while (EG(exception) == NULL && functions->valid(iterator) == SUCCESS) {
+		zval *argument = functions->get_current_data(iterator);
+		zval *target;
+		zend_string *name = NULL;
+		zend_string *key_string = NULL;
+
+		if (EG(exception) != NULL || argument == NULL) {
+			if (EG(exception) == NULL) {
+				zend_throw_error(NULL,
+					"Traversable returned no value during argument unpacking");
+			}
+			break;
+		}
+		if (functions->get_current_key != NULL) {
+			zval key;
+			ZVAL_UNDEF(&key);
+			functions->get_current_key(iterator, &key);
+			if (EG(exception) != NULL) {
+				if (!Z_ISUNDEF(key)) {
+					zval_ptr_dtor(&key);
+				}
+				break;
+			}
+			if (Z_TYPE(key) == IS_STRING) {
+				zend_ulong numeric_key;
+				key_string = Z_STR(key);
+				if (!ZEND_HANDLE_NUMERIC(key_string, numeric_key)) {
+					name = key_string;
+				}
+			} else if (Z_TYPE(key) != IS_LONG) {
+				zend_throw_error(NULL,
+					"Keys must be of type int|string during argument unpacking");
+				zval_ptr_dtor(&key);
+				break;
+			}
+		}
+
+		if (name != NULL) {
+			void *cache_slot[2] = {NULL, NULL};
+			have_named_parameters = true;
+			target = zend_handle_named_arg(
+				&call, name, &argument_number, cache_slot);
+			caller->call = call;
+			if (target == NULL) {
+				zend_string_release(key_string);
+				break;
+			}
+		} else {
+			if (key_string != NULL) {
+				zend_string_release(key_string);
+				key_string = NULL;
+			}
+			if (have_named_parameters) {
+				zend_throw_error(NULL,
+					"Cannot use positional argument after named argument during unpacking");
+				break;
+			}
+			zend_vm_stack_extend_call_frame(
+				&call, argument_number - 1, 1);
+			caller->call = call;
+			target = ZEND_CALL_ARG(call, argument_number);
+			ZEND_CALL_NUM_ARGS(call)++;
+		}
+
+		ZVAL_DEREF(argument);
+		Z_TRY_ADDREF_P(argument);
+		if (ARG_MUST_BE_SENT_BY_REF(function, argument_number)) {
+			zend_native_traversable_by_reference_warning(
+				function, argument_number);
+			ZVAL_NEW_REF(target, argument);
+		} else {
+			ZVAL_COPY_VALUE(target, argument);
+		}
+		if (key_string != NULL) {
+			zend_string_release(key_string);
+		}
+		if (EG(exception) != NULL) {
+			break;
+		}
+		functions->move_forward(iterator);
+		argument_number++;
+	}
+	zend_iterator_dtor(iterator);
+	zend_native_release_source_operand(source, operand_type);
+	return EG(exception) == NULL ? SUCCESS : FAILURE;
+}
+
+static zend_result zend_native_call_send_unpack(
+	zend_execute_data *caller, zval *source, uint8_t operand_type)
+{
+	zval *args = source;
+
+	while (Z_ISREF_P(args)) {
+		args = Z_REFVAL_P(args);
+	}
+	if (Z_TYPE_P(args) == IS_ARRAY) {
+		return zend_native_call_unpack_array(caller, source, operand_type);
+	}
+	if (Z_TYPE_P(args) == IS_OBJECT) {
+		return zend_native_call_unpack_traversable(caller, source, operand_type);
+	}
+	if (operand_type == IS_CV && Z_TYPE_P(args) == IS_UNDEF) {
+		zend_throw_error(NULL, "Only arrays and Traversables can be unpacked, null given");
+	} else {
+		zend_type_error("Only arrays and Traversables can be unpacked, %s given",
+			zend_zval_value_name(args));
+	}
+	zend_native_release_source_operand(source, operand_type);
+	return FAILURE;
+}
+
+static zend_result zend_native_call_send_user(
+	zend_execute_data *caller, const zend_op *send,
+	zval *source, uint8_t operand_type)
+{
+	zend_execute_data *call = caller->call;
+	zend_function *function = call->func;
+	uint32_t argument_number = send->op2.num;
+	zval *argument = source;
+	zval *target;
+
+	if (argument_number == 0
+			|| argument_number > ZEND_CALL_NUM_ARGS(call)) {
+		return FAILURE;
+	}
+	target = ZEND_CALL_VAR(call, send->result.var);
+	ZVAL_DEREF(argument);
+	if (ARG_MUST_BE_SENT_BY_REF(function, argument_number)) {
+		zend_param_must_be_ref(function, argument_number);
+		Z_TRY_ADDREF_P(argument);
+		ZVAL_NEW_REF(target, argument);
+	} else {
+		ZVAL_COPY(target, argument);
+	}
+	zend_native_release_source_operand(source, operand_type);
+	return EG(exception) == NULL ? SUCCESS : FAILURE;
+}
+
+static zval *zend_native_source_op2(
+	zend_execute_data *caller, const zend_op *send)
+{
+	switch (send->op2_type) {
+		case IS_CONST:
+			return (zval *) RT_CONSTANT(send, send->op2);
+		case IS_CV:
+		case IS_VAR:
+		case IS_TMP_VAR:
+			return ZEND_CALL_VAR(caller, send->op2.var);
+		default:
+			return NULL;
+	}
+}
+
+static void zend_native_send_array_copy_argument(
+	zend_function *function, uint32_t argument_number,
+	zval *target, zval *argument)
+{
+	bool wrap_reference = false;
+
+	if (ARG_SHOULD_BE_SENT_BY_REF(function, argument_number)) {
+		if (!Z_ISREF_P(argument)
+				&& !ARG_MAY_BE_SENT_BY_REF(function, argument_number)) {
+			zend_param_must_be_ref(function, argument_number);
+			wrap_reference = true;
+		}
+	} else if (Z_ISREF_P(argument)
+			&& (function->common.fn_flags & ZEND_ACC_CALL_VIA_TRAMPOLINE) == 0) {
+		argument = Z_REFVAL_P(argument);
+	}
+	if (!wrap_reference) {
+		ZVAL_COPY(target, argument);
+	} else {
+		Z_TRY_ADDREF_P(argument);
+		ZVAL_NEW_REF(target, argument);
+	}
+}
+
+static zend_result zend_native_call_send_array(
+	zend_execute_data *caller, const zend_op *send,
+	zval *source, uint8_t operand_type)
+{
+	zend_execute_data *call = caller->call;
+	zend_function *function = call->func;
+	zval *args = source;
+	HashTable *table;
+	zval *argument;
+
+	while (Z_ISREF_P(args)) {
+		args = Z_REFVAL_P(args);
+	}
+	if (Z_TYPE_P(args) != IS_ARRAY) {
+		zend_type_error(
+			"call_user_func_array(): Argument #2 ($args) must be of type array, %s given",
+			zend_zval_value_name(args));
+		zend_native_release_source_operand(source, operand_type);
+		return FAILURE;
+	}
+	table = Z_ARRVAL_P(args);
+	if (send->op2_type != IS_UNUSED) {
+		zval *length_source = zend_native_source_op2(caller, send);
+		zval *length_value = length_source;
+		uint32_t skip = send->extended_value;
+		uint32_t count = zend_hash_num_elements(table);
+		zend_long length;
+
+		if (length_source == NULL) {
+			zend_native_release_source_operand(source, operand_type);
+			return FAILURE;
+		}
+		ZVAL_DEREF(length_value);
+		if (Z_TYPE_P(length_value) == IS_LONG) {
+			length = Z_LVAL_P(length_value);
+		} else if (Z_TYPE_P(length_value) == IS_NULL) {
+			length = skip < count ? (zend_long) (count - skip) : 0;
+		} else if (ZEND_CALL_USES_STRICT_TYPES(caller)
+				|| !zend_parse_arg_long_weak(length_value, &length, 3)) {
+			zend_type_error(
+				"array_slice(): Argument #3 ($length) must be of type ?int, %s given",
+				zend_zval_value_name(length_value));
+			zend_native_release_source_operand(
+				length_source, send->op2_type);
+			zend_native_release_source_operand(source, operand_type);
+			return FAILURE;
+		}
+
+		if (length < 0) {
+			zend_long remaining = skip < count
+				? (zend_long) (count - skip) : 0;
+			length += remaining;
+		}
+		if (skip < count && length > 0) {
+			uint32_t argument_number = 1;
+			zval *target;
+
+			if (length > (zend_long) (count - skip)) {
+				length = (zend_long) (count - skip);
+			}
+			zend_vm_stack_extend_call_frame(
+				&call, 0, (uint32_t) length);
+			caller->call = call;
+			target = ZEND_CALL_ARG(call, 1);
+			ZEND_HASH_FOREACH_VAL(table, argument) {
+				if (skip > 0) {
+					skip--;
+					continue;
+				}
+				if ((zend_long) (argument_number - 1) >= length) {
+					break;
+				}
+				zend_native_send_array_copy_argument(
+					function, argument_number, target, argument);
+				ZEND_CALL_NUM_ARGS(call)++;
+				argument_number++;
+				target++;
+			} ZEND_HASH_FOREACH_END();
+		}
+		zend_native_release_source_operand(
+			length_source, send->op2_type);
+	} else {
+		zend_string *name;
+		uint32_t argument_number = 1;
+		zval *target;
+		bool have_named_parameters = false;
+
+		zend_vm_stack_extend_call_frame(
+			&call, 0, zend_hash_num_elements(table));
+		caller->call = call;
+		target = ZEND_CALL_ARG(call, 1);
+		ZEND_HASH_FOREACH_STR_KEY_VAL(table, name, argument) {
+			if (name != NULL) {
+				void *cache_slot[2] = {NULL, NULL};
+				have_named_parameters = true;
+				target = zend_handle_named_arg(
+					&call, name, &argument_number, cache_slot);
+				caller->call = call;
+				if (target == NULL) {
+					zend_native_release_source_operand(source, operand_type);
+					return FAILURE;
+				}
+			} else if (have_named_parameters) {
+				zend_throw_error(NULL,
+					"Cannot use positional argument after named argument");
+				zend_native_release_source_operand(source, operand_type);
+				return FAILURE;
+			}
+
+			zend_native_send_array_copy_argument(
+				function, argument_number, target, argument);
+			if (name == NULL) {
+				ZEND_CALL_NUM_ARGS(call)++;
+				argument_number++;
+				target++;
+			}
+		} ZEND_HASH_FOREACH_END();
+	}
+	zend_native_release_source_operand(source, operand_type);
+	return EG(exception) == NULL ? SUCCESS : FAILURE;
+}
+
 zend_result zend_native_call_set_source_argument(
 	zend_execute_data *caller,
 	uint32_t ordinal,
@@ -214,9 +694,13 @@ zend_result zend_native_call_set_source_argument(
 	const zend_op *send;
 	zval *target;
 	uint32_t argument_number;
-	zval *value = zend_native_source_argument(
-		caller, send_opline_index, &mutable_value, &operand_type);
+	zval *value;
 
+	if (EG(exception) != NULL) {
+		return FAILURE;
+	}
+	value = zend_native_source_argument(
+		caller, send_opline_index, &mutable_value, &operand_type);
 	if (value == NULL || caller->call == NULL
 			|| mode > ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE) {
 		return FAILURE;
@@ -229,6 +713,19 @@ zend_result zend_native_call_set_source_argument(
 		return FAILURE;
 	}
 	send = &caller->func->op_array.opcodes[send_opline_index];
+	caller->opline = send;
+	if (send->opcode == ZEND_SEND_UNPACK) {
+		return zend_native_call_send_unpack(
+			caller, value, operand_type);
+	}
+	if (send->opcode == ZEND_SEND_ARRAY) {
+		return zend_native_call_send_array(
+			caller, send, value, operand_type);
+	}
+	if (send->opcode == ZEND_SEND_USER) {
+		return zend_native_call_send_user(
+			caller, send, value, operand_type);
+	}
 	if (send->op2_type == IS_CONST) {
 		zval *name = RT_CONSTANT(send, send->op2);
 		void *cache_slot[2] = {NULL, NULL};
@@ -320,24 +817,39 @@ zend_native_status zend_native_internal_call_invoke_finish(
 	EG(current_execute_data) = state->call;
 
 	zend_try {
-		state->observer_started = true;
-		ZEND_OBSERVER_FCALL_BEGIN(state->call);
-		if (EXPECTED(zend_execute_internal == NULL)) {
-			state->call->func->internal_function.handler(
-				state->call, state->return_value);
+		if (EG(exception) != NULL) {
+			state->status = ZEND_NATIVE_EXCEPTION;
+		} else if ((ZEND_CALL_INFO(state->call) & ZEND_CALL_MAY_HAVE_UNDEF) != 0
+				&& zend_handle_undef_args(state->call) == FAILURE) {
+			state->status = EG(exception) != NULL
+				? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
+		} else if (!zend_native_internal_count_is_valid(
+				state->call->func, ZEND_CALL_NUM_ARGS(state->call))) {
+			zend_wrong_parameters_count_error(
+				state->call->func->common.required_num_args,
+				(state->call->func->common.fn_flags & ZEND_ACC_VARIADIC) != 0
+					? (uint32_t) -1 : state->call->func->common.num_args);
+			state->status = ZEND_NATIVE_EXCEPTION;
 		} else {
-			zend_execute_internal(state->call, state->return_value);
-		}
-		state->status = EG(exception) == NULL
-			? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
-		ZEND_OBSERVER_FCALL_END(state->call,
-			state->status == ZEND_NATIVE_RETURNED
-				? state->return_value : NULL);
-		state->observer_finished = true;
-		if (UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
-			zend_fcall_interrupt(state->call);
-			if (EG(exception) != NULL) {
-				state->status = ZEND_NATIVE_EXCEPTION;
+			state->observer_started = true;
+			ZEND_OBSERVER_FCALL_BEGIN(state->call);
+			if (EXPECTED(zend_execute_internal == NULL)) {
+				state->call->func->internal_function.handler(
+					state->call, state->return_value);
+			} else {
+				zend_execute_internal(state->call, state->return_value);
+			}
+			state->status = EG(exception) == NULL
+				? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+			ZEND_OBSERVER_FCALL_END(state->call,
+				state->status == ZEND_NATIVE_RETURNED
+					? state->return_value : NULL);
+			state->observer_finished = true;
+			if (UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+				zend_fcall_interrupt(state->call);
+				if (EG(exception) != NULL) {
+					state->status = ZEND_NATIVE_EXCEPTION;
+				}
 			}
 		}
 	} zend_catch {
@@ -392,11 +904,17 @@ zend_native_status zend_native_internal_call_invoke_finish_source(
 			&& opline->opcode != ZEND_DO_FCALL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
+	if (EG(exception) != NULL) {
+		ZVAL_UNDEF(&temporary);
+		return zend_native_internal_call_invoke_finish(
+			caller, cell, &temporary);
+	}
 	caller->opline = opline;
 	if (opline->result_type == IS_UNUSED) {
 		ZVAL_UNDEF(&temporary);
 		return_value = &temporary;
-	} else if (opline->result_type == IS_VAR
+	} else if (opline->result_type == IS_CV
+			|| opline->result_type == IS_VAR
 			|| opline->result_type == IS_TMP_VAR) {
 		return_value = ZEND_CALL_VAR(caller, opline->result.var);
 		ZVAL_UNDEF(return_value);
@@ -435,7 +953,8 @@ uint64_t zend_native_call_read_source_scalar(
 	if ((opline->opcode != ZEND_DO_ICALL
 			&& opline->opcode != ZEND_DO_UCALL
 			&& opline->opcode != ZEND_DO_FCALL)
-			|| (opline->result_type != IS_VAR
+			|| (opline->result_type != IS_CV
+				&& opline->result_type != IS_VAR
 				&& opline->result_type != IS_TMP_VAR)) {
 		goto mismatch;
 	}
