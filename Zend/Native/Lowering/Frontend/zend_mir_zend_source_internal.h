@@ -210,4 +210,14 @@ zend_mir_lowering_status zend_mir_zend_source_init_w05_projection(
 	zend_mir_symbol_id file_symbol_id,
 	zend_mir_frontend_diagnostic *diagnostic);
 
+zend_mir_lowering_status zend_mir_zend_source_init_w08_projection(
+	zend_mir_zend_source *source,
+	const zend_op_array *projected_op_array,
+	const zend_ssa *projected_ssa,
+	const zend_op_array *original_op_array,
+	const zend_ssa *original_ssa,
+	zend_mir_op_array_id op_array_id,
+	zend_mir_symbol_id file_symbol_id,
+	zend_mir_frontend_diagnostic *diagnostic);
+
 #endif /* ZEND_MIR_ZEND_SOURCE_INTERNAL_H */

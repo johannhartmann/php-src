@@ -424,6 +424,58 @@ mismatch:
 	return 0;
 }
 
+zend_native_status zend_native_catch_enter(
+	zend_execute_data *execute_data, uint32_t catch_opline_index)
+{
+	const zend_op *opline;
+	zend_class_entry *catch_ce;
+	zend_class_entry *exception_ce;
+	zend_object *exception;
+	uint32_t cache_offset;
+
+	if (execute_data == NULL || execute_data->func == NULL
+			|| execute_data->func->type != ZEND_USER_FUNCTION
+			|| catch_opline_index >= execute_data->func->op_array.last) {
+		return ZEND_NATIVE_BAILOUT;
+	}
+	opline = &execute_data->func->op_array.opcodes[catch_opline_index];
+	if (opline->opcode != ZEND_CATCH || EG(exception) == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	execute_data->opline = opline;
+	cache_offset = opline->extended_value & ~ZEND_LAST_CATCH;
+	catch_ce = CACHED_PTR(cache_offset);
+	if (catch_ce == NULL) {
+		catch_ce = zend_fetch_class_by_name(
+			Z_STR_P(RT_CONSTANT(opline, opline->op1)),
+			Z_STR_P(RT_CONSTANT(opline, opline->op1) + 1),
+			ZEND_FETCH_CLASS_NO_AUTOLOAD | ZEND_FETCH_CLASS_SILENT);
+		CACHE_PTR(cache_offset, catch_ce);
+	}
+	exception_ce = EG(exception)->ce;
+	if (exception_ce != catch_ce
+			&& (catch_ce == NULL
+				|| !instanceof_function(exception_ce, catch_ce))) {
+		if ((opline->extended_value & ZEND_LAST_CATCH) != 0) {
+			zend_rethrow_exception(execute_data);
+		}
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	exception = EG(exception);
+	EG(exception) = NULL;
+	if (opline->result_type != IS_UNUSED) {
+		zval tmp;
+		ZVAL_OBJ(&tmp, exception);
+		zend_assign_to_variable(
+			ZEND_CALL_VAR(execute_data, opline->result.var),
+			&tmp, IS_TMP_VAR, true);
+	} else {
+		OBJ_RELEASE(exception);
+	}
+	return EG(exception) == NULL
+		? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+}
+
 void zend_native_interrupt_poll(zend_execute_data *execute_data)
 {
 	if (execute_data != NULL

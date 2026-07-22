@@ -18,6 +18,8 @@ typedef struct _zend_mir_w05_plan {
 	zend_mir_call_argument_ownership *ownerships;
 	zend_mir_value_id *results;
 	zend_mir_block_id *blocks;
+	zend_mir_block_id *exception_blocks;
+	uint32_t *exception_oplines;
 	uint32_t site_count;
 	uint32_t target_count;
 	uint32_t argument_count;
@@ -222,6 +224,8 @@ static void zend_mir_w05_plan_release(zend_mir_w05_plan *plan)
 	free(plan->ownerships);
 	free(plan->results);
 	free(plan->blocks);
+	free(plan->exception_blocks);
+	free(plan->exception_oplines);
 	memset(plan, 0, sizeof(*plan));
 }
 
@@ -637,12 +641,24 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 	plan->blocks = zend_mir_w05_calloc(
 		plan->site_count, sizeof(*plan->blocks),
 		ZEND_MIR_W05_ALLOCATION_PLANNER);
+	plan->exception_blocks = zend_mir_w05_calloc(
+		plan->site_count, sizeof(*plan->exception_blocks),
+		ZEND_MIR_W05_ALLOCATION_PLANNER);
+	plan->exception_oplines = zend_mir_w05_calloc(
+		plan->site_count, sizeof(*plan->exception_oplines),
+		ZEND_MIR_W05_ALLOCATION_PLANNER);
 	if (plan->entries == NULL || plan->sites == NULL || plan->targets == NULL
 			|| (plan->argument_count != 0
 				&& (plan->arguments == NULL || plan->values == NULL
 					|| plan->ownerships == NULL))
-			|| plan->results == NULL || plan->blocks == NULL) {
+			|| plan->results == NULL || plan->blocks == NULL
+			|| plan->exception_blocks == NULL
+			|| plan->exception_oplines == NULL) {
 		return ZEND_MIRL_W05_CALL_PLAN_FAILED;
+	}
+	for (index = 0; index < plan->site_count; index++) {
+		plan->exception_blocks[index] = ZEND_MIR_ID_INVALID;
+		plan->exception_oplines[index] = ZEND_MIR_ID_INVALID;
 	}
 	for (index = 0; index < plan->argument_count; index++) {
 		plan->values[index] = ZEND_MIR_ID_INVALID;
@@ -809,6 +825,18 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 				&plan->blocks[index])) {
 			return ZEND_MIRL_W05_CALL_PLAN_FAILED;
 		}
+		if (w08_execution
+				&& (site->flags & ZEND_MIR_SOURCE_CALL_SITE_PROTECTED) != 0) {
+			zend_mir_source_block_id handler_source_block;
+			if (!zend_mir_zend_source_exception_handler(
+					context->zend_source, site->do_opline_index,
+					&handler_source_block, &plan->exception_oplines[index])
+					|| !zend_mir_w05_source_block_to_mir(
+						context->source, handler_source_block,
+						&plan->exception_blocks[index])) {
+				return ZEND_MIRL_W05_CALL_PLAN_FAILED;
+			}
+		}
 		entry->source_call_site_id = site->id;
 		entry->decision = ZEND_MIR_CALL_PLAN_ACCEPTED;
 		entry->diagnostic_code = ZEND_MIRL_OK;
@@ -915,7 +943,11 @@ static bool zend_mir_w05_emit_calls(
 			continuation.kind =
 				(zend_mir_call_continuation_kind) continuation_index;
 			continuation.block_id = continuation_index == 0
-				? plan->blocks[index] : ZEND_MIR_ID_INVALID;
+				? plan->blocks[index]
+				: continuation_index == 1
+					? plan->exception_blocks[index] : ZEND_MIR_ID_INVALID;
+			continuation.source_opline_index = continuation_index == 1
+				? plan->exception_oplines[index] : ZEND_MIR_ID_INVALID;
 			continuation.semantic_debt = w08_execution ? 0
 				: continuation_index == 1
 				? ZEND_MIR_DEBT_CALL_EXCEPTION_PROPAGATION
@@ -2518,6 +2550,9 @@ static bool zend_mir_verify_w08_calls(
 		for (continuation_index = 0; continuation_index < 4;
 				continuation_index++) {
 			zend_mir_call_continuation_ref continuation;
+			bool protected_exception = continuation_index == 1
+				&& (source.flags
+					& ZEND_MIR_SOURCE_CALL_SITE_PROTECTED) != 0;
 			if (!calls->call_continuation_at(calls->context,
 					site.continuations.offset + continuation_index,
 					&continuation)
@@ -2529,7 +2564,15 @@ static bool zend_mir_verify_w08_calls(
 					|| continuation.semantic_debt != 0
 					|| (continuation_index == 0
 						? continuation.block_id != instruction.block_id
-						: zend_mir_id_is_valid(continuation.block_id))) {
+							|| zend_mir_id_is_valid(
+								continuation.source_opline_index)
+						: protected_exception
+							? !zend_mir_id_is_valid(continuation.block_id)
+								|| !zend_mir_id_is_valid(
+									continuation.source_opline_index)
+							: zend_mir_id_is_valid(continuation.block_id)
+								|| zend_mir_id_is_valid(
+									continuation.source_opline_index))) {
 				goto failure;
 			}
 		}

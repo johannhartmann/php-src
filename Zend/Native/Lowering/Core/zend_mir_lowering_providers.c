@@ -79,6 +79,7 @@ struct _zend_mir_w03_integration {
 	bool w04;
 	bool w05;
 	bool w06;
+	bool w08;
 	bool deferred_finalize;
 };
 
@@ -259,6 +260,11 @@ static bool zend_mir_w05_call_fragment(uint8_t opcode)
 	}
 }
 
+static bool zend_mir_w08_exception_fragment(uint8_t opcode)
+{
+	return opcode == ZEND_CATCH;
+}
+
 static bool zend_mir_w05_call_init_fragment(uint8_t opcode)
 {
 	switch (opcode) {
@@ -316,6 +322,9 @@ static bool zend_mir_w03_prepare_source(
 						op_array->opcodes[index].opcode))
 				|| (integration->w06
 					&& zend_mir_w06_opcode_is_accepted(
+						op_array->opcodes[index].opcode))
+				|| (integration->w08
+					&& zend_mir_w08_exception_fragment(
 						op_array->opcodes[index].opcode))) {
 			has_recv = true;
 			break;
@@ -484,7 +493,9 @@ static bool zend_mir_w03_prepare_source(
 					&& zend_mir_w05_call_fragment(opline->opcode))
 				&& !(integration->w06
 					&& zend_mir_w06_opcode_is_accepted(
-						opline->opcode))) {
+						opline->opcode))
+				&& !(integration->w08
+					&& zend_mir_w08_exception_fragment(opline->opcode))) {
 			continue;
 		}
 		if (integration->w06
@@ -516,7 +527,9 @@ static bool zend_mir_w03_prepare_source(
 		if ((integration->w05 && zend_mir_w05_call_fragment(opline->opcode))
 				|| (integration->w06
 					&& zend_mir_w06_opcode_is_accepted(
-						opline->opcode))) {
+						opline->opcode))
+				|| (integration->w08
+					&& zend_mir_w08_exception_fragment(opline->opcode))) {
 			zend_ssa_remove_instr(
 				&integration->projected_ssa, opline, ssa_op);
 			opline->lineno = lineno;
@@ -1544,6 +1557,10 @@ static bool zend_mir_w03_verify_stage1(
 	zend_mir_diagnostic_sink *diagnostics)
 {
 	zend_mir_w03_integration *integration = context;
+	if (integration->w08 && integration->deferred_finalize) {
+		/* W08 publishes calls and catch entries before structural verification. */
+		return true;
+	}
 
 	return integration->target_module_ops.verify_stage1(
 		integration->target_module_ops.context, view, diagnostics);
@@ -1554,6 +1571,9 @@ static bool zend_mir_w03_verify_stage2(
 	zend_mir_diagnostic_sink *diagnostics)
 {
 	zend_mir_w03_integration *integration = context;
+	if (integration->w08 && integration->deferred_finalize) {
+		return true;
+	}
 
 	return integration->target_module_ops.verify_stage2(
 		integration->target_module_ops.context, view, diagnostics);
@@ -1785,6 +1805,7 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 	}
 	integration.w04 = true;
 	integration.w05 = true;
+	integration.w08 = w08_execution;
 	if (!zend_mir_w03_prepare_source(
 			&integration, op_array, ssa, &source_op_array, &source_ssa)) {
 		zend_mir_w03_release(&integration);
@@ -1819,10 +1840,15 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 		zend_mir_w08_hide_method_receiver_facts(
 			&integration, op_array, ssa);
 	}
-	status = zend_mir_zend_source_init_w05_projection(
-		&integration.source, source_op_array, source_ssa, op_array, ssa,
-		ZEND_MIR_W03_OP_ARRAY_ID, ZEND_MIR_W03_FILE_SYMBOL_ID,
-		&frontend_diagnostic);
+	status = w08_execution
+		? zend_mir_zend_source_init_w08_projection(
+			&integration.source, source_op_array, source_ssa, op_array, ssa,
+			ZEND_MIR_W03_OP_ARRAY_ID, ZEND_MIR_W03_FILE_SYMBOL_ID,
+			&frontend_diagnostic)
+		: zend_mir_zend_source_init_w05_projection(
+			&integration.source, source_op_array, source_ssa, op_array, ssa,
+			ZEND_MIR_W03_OP_ARRAY_ID, ZEND_MIR_W03_FILE_SYMBOL_ID,
+			&frontend_diagnostic);
 	if (status == ZEND_MIR_LOWERING_SUCCESS) {
 		status = zend_mir_zend_source_enable_w05(
 			&integration.source, script, op_array, ssa,

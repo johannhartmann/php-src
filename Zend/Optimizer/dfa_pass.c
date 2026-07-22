@@ -36,11 +36,13 @@
 # include "ssa_integrity.c"
 #endif
 
-zend_result zend_dfa_analyze_op_array(zend_op_array *op_array, zend_optimizer_ctx *ctx, zend_ssa *ssa)
+static zend_result zend_dfa_analyze_op_array_impl(
+		zend_op_array *op_array, zend_optimizer_ctx *ctx, zend_ssa *ssa,
+		bool allow_protected_regions)
 {
 	uint32_t build_flags;
 
-	if (op_array->last_try_catch) {
+	if (op_array->last_try_catch && !allow_protected_regions) {
 		/* TODO: we can't analyze functions with try/catch/finally ??? */
 		return FAILURE;
 	}
@@ -106,6 +108,18 @@ zend_result zend_dfa_analyze_op_array(zend_op_array *op_array, zend_optimizer_ct
 	}
 
 	return SUCCESS;
+}
+
+zend_result zend_dfa_analyze_op_array(
+		zend_op_array *op_array, zend_optimizer_ctx *ctx, zend_ssa *ssa)
+{
+	return zend_dfa_analyze_op_array_impl(op_array, ctx, ssa, false);
+}
+
+zend_result zend_dfa_analyze_op_array_with_protected_regions(
+		zend_op_array *op_array, zend_optimizer_ctx *ctx, zend_ssa *ssa)
+{
+	return zend_dfa_analyze_op_array_impl(op_array, ctx, ssa, true);
 }
 
 static void zend_ssa_remove_nops(zend_op_array *op_array, zend_ssa *ssa, zend_optimizer_ctx *ctx)

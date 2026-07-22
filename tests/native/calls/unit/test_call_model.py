@@ -42,7 +42,7 @@ class CallModelTests(unittest.TestCase):
         text = MODEL.read_text(encoding="utf-8")
         planner = text.index("code = zend_mir_w05_plan_calls(")
         w04 = text.index("w04 = zend_mir_lower_w04_zend_source(")
-        emitter = text.index("zend_mir_w05_emit_calls(&plan")
+        emitter = text.index("zend_mir_w05_emit_calls(", w04)
         self.assertLess(planner, w04)
         self.assertLess(w04, emitter)
 
@@ -50,7 +50,7 @@ class CallModelTests(unittest.TestCase):
         text = MODEL.read_text(encoding="utf-8")
         self.assertIn("plan->public_plan.complete = true;", text)
         self.assertIn("plan->public_plan.immutable = true;", text)
-        self.assertIn("result.codegen_eligible = false;", text)
+        self.assertIn("result.codegen_eligible = w08_execution;", text)
         self.assertIn("ZEND_MIR_W05_REQUIRED_DEBTS", text)
 
     def test_module_publication_uses_staging_and_atomic_commit(self) -> None:

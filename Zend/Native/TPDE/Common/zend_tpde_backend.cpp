@@ -197,16 +197,19 @@ bool initialize_plan(
 			return false;
 		}
 		plan->instructions[i].record = record;
+		plan->instructions[i].exception_block_id = ZEND_MIR_ID_INVALID;
 		plan->instructions[i].operand_offset = static_cast<uint32_t>(operands - count);
 		plan->instructions[i].operand_count = count;
 		if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
 				|| record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL) {
 			zend_mir_call_site_ref site{};
 			zend_mir_call_target_ref target{};
+			zend_mir_call_continuation_ref exception_continuation{};
 			bool found_site = false;
 			if (calls == nullptr || calls->call_site_count == nullptr
 					|| calls->call_site_at == nullptr
-					|| calls->call_target_at == nullptr) {
+					|| calls->call_target_at == nullptr
+					|| calls->call_continuation_at == nullptr) {
 				zend_tpde_set_diagnostic(diag,
 					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 					"direct call lacks its W05 call view");
@@ -237,6 +240,12 @@ bool initialize_plan(
 						- site.arguments.offset
 					|| !calls->call_target_at(
 						calls->context, site.target_id, &target)
+					|| site.continuations.count != 4
+					|| !calls->call_continuation_at(calls->context,
+						site.continuations.offset + 1,
+						&exception_continuation)
+					|| exception_continuation.kind
+						!= ZEND_MIR_CALL_CONTINUATION_EXCEPTION_DEBT
 					|| (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
 						&& (site.arguments.count != count
 							|| target.kind != ZEND_MIR_CALL_TARGET_DIRECT_USER))
@@ -250,6 +259,8 @@ bool initialize_plan(
 				return false;
 			}
 			plan->instructions[i].call_site = site;
+			plan->instructions[i].exception_block_id =
+				exception_continuation.block_id;
 			plan->instructions[i].call_argument_offset = site.arguments.offset;
 			plan->instructions[i].call_argument_count = site.arguments.count;
 			if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER) {

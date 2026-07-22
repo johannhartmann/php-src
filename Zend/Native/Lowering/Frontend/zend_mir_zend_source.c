@@ -302,7 +302,8 @@ static bool zend_mir_frontend_cfg_dominates(
 static zend_mir_lowering_status zend_mir_frontend_validate_cfg_w04(
 	const zend_op_array *op_array, const zend_ssa *ssa,
 	zend_mir_op_array_id op_array_id, zend_mir_frontend_diagnostic *diagnostic,
-	uint32_t *phi_count, uint32_t *phi_input_count)
+	uint32_t *phi_count, uint32_t *phi_input_count,
+	bool allow_protected_regions)
 {
 	uint32_t i;
 	uint32_t edges = 0;
@@ -316,7 +317,7 @@ static zend_mir_lowering_status zend_mir_frontend_validate_cfg_w04(
 			|| (ssa->cfg.flags & ZEND_CFG_STACKLESS) != 0) {
 		goto malformed;
 	}
-	if (op_array->last_try_catch != 0) {
+	if (op_array->last_try_catch != 0 && !allow_protected_regions) {
 		zend_mir_frontend_set_diagnostic(diagnostic,
 			ZEND_MIR_LOWERING_DEFERRED, ZEND_MIRL_W04_PROTECTED_REGION,
 			op_array_id, ZEND_MIR_ID_INVALID,
@@ -330,7 +331,8 @@ static zend_mir_lowering_status zend_mir_frontend_validate_cfg_w04(
 		if ((block->flags & ZEND_BB_REACHABLE) == 0) {
 			continue;
 		}
-		if ((block->flags & ZEND_BB_PROTECTED) != 0) {
+		if ((block->flags & ZEND_BB_PROTECTED) != 0
+				&& !allow_protected_regions) {
 			zend_mir_frontend_set_diagnostic(diagnostic,
 				ZEND_MIR_LOWERING_DEFERRED, ZEND_MIRL_W04_PROTECTED_REGION,
 				op_array_id, ZEND_MIR_ID_INVALID,
@@ -351,7 +353,10 @@ static zend_mir_lowering_status zend_mir_frontend_validate_cfg_w04(
 				|| (block->idom >= 0
 					&& ((uint32_t) block->idom >= ssa->cfg.blocks_count
 						|| (uint32_t) block->idom == i))
-				|| (i == 0 ? block->idom != -1 : block->idom < 0)
+				|| (i == 0
+					? block->idom != -1
+					: block->idom < 0
+						&& !allow_protected_regions)
 				|| block->loop_header < -1
 				|| (block->loop_header >= 0
 					&& ((uint32_t) block->loop_header
@@ -471,7 +476,9 @@ static zend_mir_lowering_status zend_mir_frontend_validate_cfg_w04(
 	}
 	for (i = 0; i < ssa->cfg.blocks_count; i++) {
 		if ((ssa->cfg.blocks[i].flags & ZEND_BB_REACHABLE) != 0
-				&& !zend_mir_frontend_cfg_dominates(&ssa->cfg, 0, i)) {
+				&& !zend_mir_frontend_cfg_dominates(&ssa->cfg, 0, i)
+				&& !(allow_protected_regions
+					&& i != 0 && ssa->cfg.blocks[i].idom < 0)) {
 			goto malformed;
 		}
 	}
@@ -624,7 +631,8 @@ static zend_mir_lowering_status zend_mir_zend_source_init_w04_impl(
 	zend_mir_zend_source *source, const zend_op_array *op_array,
 	const zend_ssa *ssa, zend_mir_op_array_id op_array_id,
 	zend_mir_symbol_id file_symbol_id, zend_mir_frontend_diagnostic *diagnostic,
-	const zend_op_array *original_op_array, const zend_ssa *original_ssa)
+	const zend_op_array *original_op_array, const zend_ssa *original_ssa,
+	bool allow_protected_regions)
 {
 	zend_mir_zend_source candidate;
 	zend_mir_lowering_status status;
@@ -636,7 +644,8 @@ static zend_mir_lowering_status zend_mir_zend_source_init_w04_impl(
 	}
 	zend_mir_zend_source_reset(source);
 	status = zend_mir_frontend_validate_cfg_w04(
-		op_array, ssa, op_array_id, diagnostic, &phis, &inputs);
+		op_array, ssa, op_array_id, diagnostic, &phis, &inputs,
+		allow_protected_regions);
 	if (status != ZEND_MIR_LOWERING_SUCCESS
 			|| (status = zend_mir_frontend_validate_operands_w04(
 				op_array, ssa, op_array_id, diagnostic, &uses, &defs))
@@ -692,7 +701,7 @@ zend_mir_lowering_status zend_mir_zend_source_init_w04(
 {
 	return zend_mir_zend_source_init_w04_impl(
 		source, op_array, ssa, op_array_id, file_symbol_id, diagnostic,
-		NULL, NULL);
+		NULL, NULL, false);
 }
 
 zend_mir_lowering_status zend_mir_zend_source_init_w05_projection(
@@ -704,7 +713,19 @@ zend_mir_lowering_status zend_mir_zend_source_init_w05_projection(
 {
 	return zend_mir_zend_source_init_w04_impl(
 		source, projected_op_array, projected_ssa, op_array_id, file_symbol_id,
-		diagnostic, original_op_array, original_ssa);
+		diagnostic, original_op_array, original_ssa, false);
+}
+
+zend_mir_lowering_status zend_mir_zend_source_init_w08_projection(
+	zend_mir_zend_source *source,
+	const zend_op_array *projected_op_array, const zend_ssa *projected_ssa,
+	const zend_op_array *original_op_array, const zend_ssa *original_ssa,
+	zend_mir_op_array_id op_array_id, zend_mir_symbol_id file_symbol_id,
+	zend_mir_frontend_diagnostic *diagnostic)
+{
+	return zend_mir_zend_source_init_w04_impl(
+		source, projected_op_array, projected_ssa, op_array_id, file_symbol_id,
+		diagnostic, original_op_array, original_ssa, true);
 }
 
 static uint32_t zend_mir_frontend_view_opcode_count(const void *context)
@@ -823,12 +844,14 @@ static bool zend_mir_frontend_view_block_at(
 	const void *context, uint32_t index, zend_mir_source_block_ref *out)
 {
 	const zend_mir_zend_source *source = context;
+	const zend_op_array *op_array;
 	const zend_ssa *ssa;
 	const zend_basic_block *block;
 	if (!zend_mir_source_is_initialized(source) || !source->w04
 			|| out == NULL || index >= source->block_count) {
 		return false;
 	}
+	op_array = zend_mir_source_op_array(source);
 	ssa = zend_mir_source_ssa(source);
 	block = &ssa->cfg.blocks[index];
 	memset(out, 0, sizeof(*out));
@@ -844,17 +867,81 @@ static bool zend_mir_frontend_view_block_at(
 	if ((block->flags & ZEND_BB_LOOP_HEADER) != 0) {
 		out->flags |= ZEND_MIR_SOURCE_BLOCK_LOOP_HEADER;
 	}
-	if ((block->flags & ZEND_BB_PROTECTED) != 0) {
+	if ((block->flags & ZEND_BB_PROTECTED) != 0
+			|| (op_array->last_try_catch != 0 && index != 0
+				&& block->idom < 0)) {
 		out->flags |= ZEND_MIR_SOURCE_BLOCK_PROTECTED;
 	}
 	if ((block->flags & ZEND_BB_IRREDUCIBLE_LOOP) != 0) {
 		out->flags |= ZEND_MIR_SOURCE_BLOCK_IRREDUCIBLE;
+	}
+	if (block->len != 0 && op_array->last_try_catch != 0) {
+		uint32_t try_index;
+		for (try_index = 0; try_index < op_array->last_try_catch; try_index++) {
+			const zend_try_catch_element *region =
+				&op_array->try_catch_array[try_index];
+			if (region->catch_op == block->start) {
+				out->flags |= ZEND_MIR_SOURCE_BLOCK_CATCH_ENTRY;
+			}
+			if (region->finally_op == block->start) {
+				out->flags |= ZEND_MIR_SOURCE_BLOCK_FINALLY_ENTRY;
+			}
+		}
 	}
 	out->immediate_dominator =
 		block->idom < 0 ? ZEND_MIR_ID_INVALID : (uint32_t) block->idom;
 	out->loop_header =
 		block->loop_header < 0 ? ZEND_MIR_ID_INVALID : (uint32_t) block->loop_header;
 	return true;
+}
+
+bool zend_mir_zend_source_exception_handler(
+	const zend_mir_zend_source *source,
+	uint32_t throwing_opline_index,
+	zend_mir_source_block_id *block_id_out,
+	uint32_t *catch_opline_index_out)
+{
+	const zend_op_array *op_array;
+	const zend_ssa *ssa;
+	uint32_t selected = ZEND_MIR_ID_INVALID;
+	uint32_t selected_try = 0;
+	uint32_t index;
+
+	if (!zend_mir_source_is_initialized(source) || !source->w04
+			|| block_id_out == NULL || catch_opline_index_out == NULL) {
+		return false;
+	}
+	op_array = zend_mir_source_op_array(source);
+	ssa = zend_mir_source_ssa(source);
+	if (op_array == NULL || ssa == NULL
+			|| throwing_opline_index >= op_array->last) {
+		return false;
+	}
+	for (index = 0; index < op_array->last_try_catch; index++) {
+		const zend_try_catch_element *region =
+			&op_array->try_catch_array[index];
+		uint32_t protected_end = region->catch_op != 0
+			? region->catch_op : region->finally_op;
+		if (region->catch_op != 0
+				&& throwing_opline_index >= region->try_op
+				&& throwing_opline_index < protected_end
+				&& (!zend_mir_id_is_valid(selected)
+					|| region->try_op >= selected_try)) {
+			selected = index;
+			selected_try = region->try_op;
+		}
+	}
+	if (!zend_mir_id_is_valid(selected)) {
+		return false;
+	}
+	*catch_opline_index_out = op_array->try_catch_array[selected].catch_op;
+	if (*catch_opline_index_out >= op_array->last
+			|| ssa->cfg.map == NULL
+			|| ssa->cfg.map[*catch_opline_index_out] < 0) {
+		return false;
+	}
+	*block_id_out = (uint32_t) ssa->cfg.map[*catch_opline_index_out];
+	return *block_id_out < ssa->cfg.blocks_count;
 }
 
 static bool zend_mir_frontend_cfg_dominates(

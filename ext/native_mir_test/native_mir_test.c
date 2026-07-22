@@ -810,8 +810,11 @@ static bool native_mir_test_build_ssa(native_mir_test_state *state)
 	optimizer.arena = state->ssa_arena;
 	optimizer.script = &state->script;
 	optimizer.optimization_level = ZEND_OPTIMIZER_PASS_6;
-	if (zend_dfa_analyze_op_array(
-			state->selected, &optimizer, &state->ssa) == FAILURE) {
+	if ((state->wave >= 8
+			? zend_dfa_analyze_op_array_with_protected_regions(
+				state->selected, &optimizer, &state->ssa)
+			: zend_dfa_analyze_op_array(
+				state->selected, &optimizer, &state->ssa)) == FAILURE) {
 		state->ssa_arena = optimizer.arena;
 		native_mir_test_fail(
 			state, NATIVE_MIR_TEST_STATUS_REJECTED,
@@ -1814,8 +1817,11 @@ static bool native_mir_test_build_function_ssa(
 	optimizer.arena = function->ssa_arena;
 	optimizer.script = &state->script;
 	optimizer.optimization_level = ZEND_OPTIMIZER_PASS_6;
-	if (zend_dfa_analyze_op_array(
-			function->op_array, &optimizer, &function->ssa) == FAILURE) {
+	if ((state->wave >= 8
+			? zend_dfa_analyze_op_array_with_protected_regions(
+				function->op_array, &optimizer, &function->ssa)
+			: zend_dfa_analyze_op_array(
+				function->op_array, &optimizer, &function->ssa)) == FAILURE) {
 		function->ssa_arena = optimizer.arena;
 		native_mir_test_fail(
 			state, NATIVE_MIR_TEST_STATUS_REJECTED,
