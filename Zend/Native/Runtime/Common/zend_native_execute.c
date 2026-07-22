@@ -4,6 +4,7 @@
 
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_execute.h"
+#include "Zend/zend_observer.h"
 #include "Zend/zend_type_info.h"
 
 #include <stdio.h>
@@ -12,6 +13,8 @@ typedef struct _zend_native_execution_state {
 	zend_native_status status;
 	zval discarded_return;
 	zval *original_return_value;
+	bool observer_started;
+	bool observer_finished;
 } zend_native_execution_state;
 
 static void zend_native_execution_cleanup_frame(
@@ -76,12 +79,16 @@ zend_native_status zend_native_execute_frame(
 	state = emalloc(sizeof(*state));
 	state->status = ZEND_NATIVE_BAILOUT;
 	state->original_return_value = execute_data->return_value;
+	state->observer_started = false;
+	state->observer_finished = false;
 	if (state->original_return_value == NULL) {
 		ZVAL_UNDEF(&state->discarded_return);
 		execute_data->return_value = &state->discarded_return;
 	}
 
 	zend_try {
+		state->observer_started = true;
+		ZEND_OBSERVER_FCALL_BEGIN(execute_data);
 		state->status = entry(execute_data);
 	} zend_catch {
 		state->status = EG(exception) != NULL
@@ -110,6 +117,37 @@ zend_native_status zend_native_execute_frame(
 				Z_ISUNDEF_P(return_value) ? NULL : return_value);
 			state->status = ZEND_NATIVE_EXCEPTION;
 		}
+	}
+
+	/*
+	 * Unlike the VM, this boundary catches bailout locally.  It therefore also
+	 * owns the matching end notification instead of relying on request-shutdown
+	 * observer unwinding.  Keep it behind a second Zend bailout boundary because
+	 * observers are extension code and may themselves throw or bail out.
+	 */
+	if (state->observer_started && !state->observer_finished) {
+		zend_try {
+			ZEND_OBSERVER_FCALL_END(execute_data,
+				state->status == ZEND_NATIVE_RETURNED && EG(exception) == NULL
+					? execute_data->return_value : NULL);
+			state->observer_finished = true;
+		} zend_catch {
+			state->observer_finished = true;
+			state->status = EG(exception) != NULL
+				? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
+		} zend_end_try();
+	}
+	if (state->status != ZEND_NATIVE_BAILOUT
+			&& UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+		zend_try {
+			zend_fcall_interrupt(execute_data);
+			if (EG(exception) != NULL) {
+				state->status = ZEND_NATIVE_EXCEPTION;
+			}
+		} zend_catch {
+			state->status = EG(exception) != NULL
+				? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
+		} zend_end_try();
 	}
 
 	zend_native_execution_cleanup_frame(execute_data, state->status);
