@@ -947,25 +947,19 @@ static bool zend_mir_frontend_view_block_at(
 	return true;
 }
 
-bool zend_mir_zend_source_exception_handler(
-	const zend_mir_zend_source *source,
+bool zend_mir_zend_op_array_exception_handler(
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
 	uint32_t throwing_opline_index,
 	zend_mir_source_block_id *block_id_out,
 	uint32_t *catch_opline_index_out)
 {
-	const zend_op_array *op_array;
-	const zend_ssa *ssa;
 	uint32_t selected = ZEND_MIR_ID_INVALID;
 	uint32_t handler_opline = ZEND_MIR_ID_INVALID;
 	uint32_t index;
 
-	if (!zend_mir_source_is_initialized(source) || !source->w04
-			|| block_id_out == NULL || catch_opline_index_out == NULL) {
-		return false;
-	}
-	op_array = zend_mir_source_op_array(source);
-	ssa = zend_mir_source_ssa(source);
 	if (op_array == NULL || ssa == NULL
+			|| block_id_out == NULL || catch_opline_index_out == NULL
 			|| throwing_opline_index >= op_array->last) {
 		return false;
 	}
@@ -1015,6 +1009,20 @@ bool zend_mir_zend_source_exception_handler(
 	}
 	*block_id_out = ssa->cfg.map[*catch_opline_index_out];
 	return *block_id_out < ssa->cfg.blocks_count;
+}
+
+bool zend_mir_zend_source_exception_handler(
+	const zend_mir_zend_source *source,
+	uint32_t throwing_opline_index,
+	zend_mir_source_block_id *block_id_out,
+	uint32_t *catch_opline_index_out)
+{
+	if (!zend_mir_source_is_initialized(source) || !source->w04) {
+		return false;
+	}
+	return zend_mir_zend_op_array_exception_handler(
+		zend_mir_source_op_array(source), zend_mir_source_ssa(source),
+		throwing_opline_index, block_id_out, catch_opline_index_out);
 }
 
 static bool zend_mir_frontend_cfg_dominates(

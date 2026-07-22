@@ -324,6 +324,14 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(CMPxi, status_reg, ZEND_NATIVE_RETURNED);
 		auto continued = text_writer.label_create();
 		generate_raw_jump(Jump::Jeq, continued);
+		if (zend_mir_id_is_valid(mir.exception_block_id)) {
+			auto propagate = text_writer.label_create();
+			ASM(CMPxi, status_reg, ZEND_NATIVE_EXCEPTION);
+			generate_raw_jump(Jump::Jne, propagate);
+			generate_exception_branch(
+				adaptor->block_ref(mir.exception_block_id));
+			label_place(propagate);
+		}
 		RetBuilder return_builder{*this, *cur_cc_assigner()};
 		return_builder.add(std::move(status), ::tpde::CCAssignment{});
 		return_builder.ret();
