@@ -105,7 +105,7 @@ display_errors=1
 log_errors=0
 zend_test.observer.enabled=1
 zend_test.observer.show_output=1
-zend_test.observer.observe_function_names=native_fpm_outer,native_fpm_inner,w09_fpm_outer,w09_fpm_collect,w09_fpm_map,w09_fpm_ref,w10_fpm_outer,w10_fpm_loaded_callback,W10FpmObject::__construct,W10FpmObject::__get,W10FpmObject::__set,W10FpmObject::__destruct,W10FpmTrait::compute,w11_fpm_outer,w11_fpm_static,W11FpmStream::stream_open,W11FpmStream::stream_read,W11FpmStream::stream_eof,W11FpmStream::stream_stat,W11FpmStream::url_stat,W11FpmRuntime::value,W11FpmChild::value,W11FpmBase::base,intdiv,strcmp,array_map
+zend_test.observer.observe_function_names=native_fpm_outer,native_fpm_inner,w09_fpm_outer,w09_fpm_collect,w09_fpm_map,w09_fpm_ref,w10_fpm_outer,w10_fpm_loaded_callback,__construct,__get,__set,__destruct,compute,w11_fpm_outer,w11_fpm_static,stream_open,stream_read,stream_eof,stream_stat,url_stat,value,base,intdiv,strcmp,array_map
 zend_test.observer.show_return_value=0
 zend_test.observer.execute_internal=1
 EOF

@@ -1288,6 +1288,21 @@ ZEND_API void function_add_ref(zend_function *function) /* {{{ */
 }
 /* }}} */
 
+static zend_never_inline ZEND_COLD ZEND_NORETURN void do_bind_function_error_ex(
+		const zend_function *old_function, const zend_string *function_name, int error_level) /* {{{ */
+{
+	if (old_function->type == ZEND_USER_FUNCTION
+		&& old_function->op_array.last > 0) {
+		zend_error_noreturn(error_level, "Cannot redeclare function %s() (previously declared in %s:%d)",
+					ZSTR_VAL(function_name),
+					ZSTR_VAL(old_function->op_array.filename),
+					old_function->op_array.line_start);
+	} else {
+		zend_error_noreturn(error_level, "Cannot redeclare function %s()",
+			ZSTR_VAL(function_name));
+	}
+}
+
 static zend_never_inline ZEND_COLD ZEND_NORETURN void do_bind_function_error(const zend_string *lcname, const zend_op_array *op_array, bool compile_time) /* {{{ */
 {
 	const zval *zv = zend_hash_find_known_hash(compile_time ? CG(function_table) : EG(function_table), lcname);
@@ -1296,16 +1311,9 @@ static zend_never_inline ZEND_COLD ZEND_NORETURN void do_bind_function_error(con
 
 	ZEND_ASSERT(zv != NULL);
 	old_function = Z_PTR_P(zv);
-	if (old_function->type == ZEND_USER_FUNCTION
-		&& old_function->op_array.last > 0) {
-		zend_error_noreturn(error_level, "Cannot redeclare function %s() (previously declared in %s:%d)",
-					op_array ? ZSTR_VAL(op_array->function_name) : ZSTR_VAL(old_function->common.function_name),
-					ZSTR_VAL(old_function->op_array.filename),
-					old_function->op_array.line_start);
-	} else {
-		zend_error_noreturn(error_level, "Cannot redeclare function %s()",
-			op_array ? ZSTR_VAL(op_array->function_name) : ZSTR_VAL(old_function->common.function_name));
-	}
+	do_bind_function_error_ex(old_function,
+		op_array ? op_array->function_name : old_function->common.function_name,
+		error_level);
 }
 
 ZEND_API zend_result do_bind_function(zend_function *func, const zval *lcname) /* {{{ */
@@ -9091,8 +9099,19 @@ static zend_op_array *zend_compile_func_decl_ex(
 	} else if (level == FUNC_DECL_LEVEL_TOPLEVEL) {
 		/* Only register the function after a successful compile */
 		if (UNEXPECTED(zend_hash_add_ptr(CG(function_table), lcname, op_array) == NULL)) {
+			const zend_function *old_function =
+				zend_hash_find_ptr(CG(function_table), lcname);
+
 			CG(zend_lineno) = decl->start_lineno;
-			do_bind_function_error(lcname, op_array, true);
+			ZEND_ASSERT(old_function != NULL);
+			zend_oparray_context_end(&orig_oparray_context);
+			zend_stack_del_top(&CG(loop_var_stack));
+			zend_string_release_ex(lcname, 0);
+			CG(active_op_array) = orig_op_array;
+			CG(active_class_entry) = orig_class_entry;
+			destroy_op_array(op_array);
+			do_bind_function_error_ex(
+				old_function, decl->name, E_COMPILE_ERROR);
 		}
 	}
 
