@@ -918,7 +918,15 @@ static bool zend_mir_value_compose_executable_operations(
 		 * that the next global instruction belongs to the next block.  This
 		 * also preserves the required PHI-first ordering within every block.
 		 */
-		if (old->opcode != ZEND_MIR_OPCODE_PHI) {
+		/*
+		 * PI nodes are represented as source-position-free COPY instructions and
+		 * share the PHI prefix of their owning block.  They must not be mistaken
+		 * for an end-of-block insertion point: doing so places source operation N
+		 * before a call at N-1.  A source-less terminator still flushes the block.
+		 */
+		if (old->opcode != ZEND_MIR_OPCODE_PHI
+				&& (zend_mir_id_is_valid(old->source_position_id)
+					|| zend_mir_opcode_is_terminator(old->opcode))) {
 			for (operation_index = 0; operation_index < operation_count;
 					operation_index++) {
 				const zend_mir_executable_value_ref *operation =

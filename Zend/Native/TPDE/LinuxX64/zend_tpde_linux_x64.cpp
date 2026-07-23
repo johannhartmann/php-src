@@ -332,6 +332,19 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		return true;
 	};
 
+	if ((mir.record.opcode >= ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS
+				&& mir.record.opcode <= ZEND_MIR_OPCODE_OBJECT_BIND_STATIC)
+			|| mir.record.opcode == ZEND_MIR_OPCODE_VALUE_TYPE_CHECK
+			|| mir.record.opcode == ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL
+			|| mir.record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME) {
+		return execute_value_operation(
+			static_cast<zend_native_runtime_helper_id>(
+				static_cast<uint32_t>(mir.record.opcode)
+					- static_cast<uint32_t>(
+						ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS)
+					+ static_cast<uint32_t>(
+						ZEND_NATIVE_HELPER_OBJECT_DECLARE_ANON_CLASS)));
+	}
 	switch (mir.record.opcode) {
 		case ZEND_MIR_OPCODE_VALUE_MAKE_REF:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_MAKE_REF);
@@ -1049,6 +1062,33 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				8, tpde::x64::PlatformConfig::GP_BANK});
 			ValuePart status{tpde::x64::PlatformConfig::GP_BANK};
 			builder.add_ret(status, ::tpde::CCAssignment{});
+			RetBuilder return_builder{*this, *cur_cc_assigner()};
+			return_builder.add(std::move(status), ::tpde::CCAssignment{});
+			return_builder.ret();
+			return true;
+		}
+		case ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL: {
+			if (node.operands.size() != 1
+					|| mir.source_opline_index == UINT32_MAX) {
+				return false;
+			}
+			tpde::x64::CCAssignerSysV assigner{false};
+			CallBuilder builder{*this, assigner};
+			builder.add_arg(CallArg{node.operands[0]});
+			builder.add_arg(ValuePart{mir.source_opline_index, 4,
+				tpde::x64::PlatformConfig::GP_BANK}, ::tpde::CCAssignment{});
+			builder.call(ValuePart{
+				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
+					ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL)),
+				8, tpde::x64::PlatformConfig::GP_BANK});
+			ValuePart status{tpde::x64::PlatformConfig::GP_BANK};
+			builder.add_ret(status, ::tpde::CCAssignment{});
+			if (zend_mir_id_is_valid(mir.exception_block_id)) {
+				generate_exception_branch(
+					adaptor->block_ref(mir.exception_block_id));
+				status.reset(this);
+				return true;
+			}
 			RetBuilder return_builder{*this, *cur_cc_assigner()};
 			return_builder.add(std::move(status), ::tpde::CCAssignment{});
 			return_builder.ret();

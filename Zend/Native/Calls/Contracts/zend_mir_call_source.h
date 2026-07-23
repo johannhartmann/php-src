@@ -118,6 +118,10 @@ typedef struct _zend_mir_source_call_target_resolver {
 		const void *context,
 		zend_mir_source_call_target_id target_id,
 		zend_mir_source_call_target_ref *out);
+	bool (*resolve_exact_method)(
+		const void *context,
+		zend_mir_source_call_target_id target_id,
+		zend_mir_source_call_target_ref *out);
 	bool (*resolve_exact_internal)(
 		const void *context,
 		zend_mir_source_call_target_id target_id,

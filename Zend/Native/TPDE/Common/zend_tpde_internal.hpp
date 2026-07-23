@@ -48,7 +48,7 @@ struct zend_tpde_plan {
 	uint32_t call_argument_count;
 	uint32_t argument_count;
 	uint64_t required_runtime_capabilities;
-	uint64_t required_runtime_helpers;
+	uint64_t required_runtime_helpers[ZEND_NATIVE_RUNTIME_HELPER_WORD_COUNT];
 	bool may_emit_calls;
 };
 

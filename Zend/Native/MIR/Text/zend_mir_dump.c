@@ -150,14 +150,26 @@ static const char *zend_mir_opcode_label(uint32_t value)
 		ZEND_MIR_CALL_OPCODE_CATALOG(ZEND_MIR_LABEL_CASE)
 		ZEND_MIR_VALUE_OPCODE_CATALOG(ZEND_MIR_LABEL_CASE)
 		ZEND_MIR_EXECUTABLE_VALUE_OPCODE_CATALOG(ZEND_MIR_LABEL_CASE)
+		ZEND_MIR_ITERATOR_OPCODE_CATALOG(ZEND_MIR_LABEL_CASE)
+		ZEND_MIR_OBJECT_OPCODE_CATALOG(ZEND_MIR_LABEL_CASE)
 		default: return NULL;
 	}
 }
 
 static const char *zend_mir_call_target_kind_label(uint32_t value)
 {
-	return value == ZEND_MIR_CALL_TARGET_DIRECT_USER
-		? "direct_user" : NULL;
+	switch (value) {
+		case ZEND_MIR_CALL_TARGET_DIRECT_USER:
+			return "direct_user";
+		case ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL:
+			return "direct_internal";
+		case ZEND_MIR_CALL_TARGET_METHOD_USER:
+			return "method_user";
+		case ZEND_MIR_CALL_TARGET_DYNAMIC:
+			return "dynamic";
+		default:
+			return NULL;
+	}
 }
 
 static const char *zend_mir_call_argument_ownership_label(uint32_t value)

@@ -296,7 +296,6 @@ static bool zend_mir_w04_validate_blocks(
 		zend_mir_source_block_ref block;
 		if (!source->opcode_at(source->context, i, &opcode)
 				|| !zend_mir_w04_block_by_id(source, opcode.block_id, &block)
-				|| (block.flags & ZEND_MIR_SOURCE_BLOCK_REACHABLE) == 0
 				|| i < block.first_opcode_ordinal
 				|| i - block.first_opcode_ordinal >= block.opcode_count) {
 			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
@@ -624,6 +623,10 @@ zend_mir_w04_branch_kind zend_mir_w04_branch_kind_for_opcode(uint32_t opcode)
 			return ZEND_MIR_W09_BRANCH_JMP_SET;
 		case ZEND_MIR_W09_OPCODE_COALESCE:
 			return ZEND_MIR_W09_BRANCH_COALESCE;
+		case ZEND_MIR_W10_OPCODE_JMP_NULL:
+			return ZEND_MIR_W10_BRANCH_JMP_NULL;
+		case ZEND_MIR_W10_OPCODE_THROW:
+			return ZEND_MIR_W10_BRANCH_THROW;
 		case ZEND_MIR_W09_OPCODE_FE_RESET_R:
 		case ZEND_MIR_W09_OPCODE_FE_FETCH_R:
 		case ZEND_MIR_W09_OPCODE_FE_RESET_RW:

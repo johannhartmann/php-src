@@ -42,9 +42,14 @@ typedef struct _zend_native_reentry_binding {
 	zend_native_entry_cell *entry_cell;
 } zend_native_reentry_binding;
 
+typedef zend_native_entry_cell *(*zend_native_reentry_resolver_t)(
+	void *context, zend_function *function);
+
 typedef struct _zend_native_reentry_scope {
 	const zend_native_reentry_binding *bindings;
 	uint32_t binding_count;
+	zend_native_reentry_resolver_t resolver;
+	void *resolver_context;
 	struct _zend_native_reentry_scope *previous;
 } zend_native_reentry_scope;
 
@@ -94,8 +99,16 @@ zend_result zend_native_reentry_scope_enter(
 	zend_native_reentry_scope *scope,
 	const zend_native_reentry_binding *bindings,
 	uint32_t binding_count);
+zend_result zend_native_reentry_scope_enter_resolver(
+	zend_native_reentry_scope *scope,
+	const zend_native_reentry_binding *bindings,
+	uint32_t binding_count,
+	zend_native_reentry_resolver_t resolver,
+	void *resolver_context);
 void zend_native_reentry_scope_leave(zend_native_reentry_scope *scope);
 zend_result zend_native_frame_prepare(zend_execute_data *execute_data);
+zend_native_status zend_native_call_frameless_internal(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
 
 /*
  * begin may extend the VM stack and initialize a real Zend call frame. The

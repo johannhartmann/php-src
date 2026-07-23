@@ -71,6 +71,8 @@ zend_native_status zend_native_value_binary_op(
 	zend_execute_data *execute_data, uint32_t source_opline_index);
 zend_native_status zend_native_value_unary_op(
 	zend_execute_data *execute_data, uint32_t source_opline_index);
+zend_native_status zend_native_value_type_check(
+	zend_execute_data *execute_data, uint32_t source_opline_index);
 zend_native_status zend_native_value_cast(
 	zend_execute_data *execute_data, uint32_t source_opline_index);
 zend_native_status zend_native_value_isset_isempty_cv(

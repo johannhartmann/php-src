@@ -47,6 +47,7 @@ static bool zend_mir_frontend_is_call_do(uint8_t opcode)
 		case ZEND_DO_FCALL:
 		case ZEND_DO_FCALL_BY_NAME:
 		case ZEND_DO_ICALL:
+		case ZEND_CALLABLE_CONVERT:
 			return true;
 		default:
 			return false;
@@ -448,8 +449,8 @@ static zend_mir_lowering_status zend_mir_frontend_validate_cfg_w04(
 			}
 			if (phi->pi >= 0
 					&& ((!phi->has_range_constraint
-							&& (phi->constraint.type.ce != NULL
-								|| phi->constraint.type.type_mask == 0)))) {
+							&& phi->constraint.type.ce == NULL
+							&& phi->constraint.type.type_mask == 0))) {
 				goto unsupported_phi;
 			}
 			for (input = 0; input < phi_inputs; input++) {
@@ -558,7 +559,8 @@ static bool zend_mir_frontend_w05_original_result_slot(
 
 		if ((opline->opcode != ZEND_DO_UCALL
 					&& opline->opcode != ZEND_DO_FCALL
-					&& opline->opcode != ZEND_DO_ICALL)
+					&& opline->opcode != ZEND_DO_ICALL
+					&& opline->opcode != ZEND_CALLABLE_CONVERT)
 				|| !zend_mir_frontend_decode_slot(
 					original_op_array, &opline->result, opline->result_type,
 					slot, slot_kind)) {
@@ -580,6 +582,40 @@ static bool zend_mir_frontend_w05_original_result_slot(
 				&& original_ssa->vars[ssa_variable_id].use_chain == -1
 				&& original_ssa->vars[ssa_variable_id].phi_use_chain == NULL
 				&& original_ssa->vars[ssa_variable_id].sym_use_chain == NULL) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool zend_mir_frontend_dead_ssa_peer_slot(
+	const zend_op_array *op_array, const zend_ssa *ssa,
+	uint32_t ssa_variable_id, uint32_t *slot,
+	zend_mir_source_slot_kind *slot_kind)
+{
+	const zend_ssa_var *variable;
+	uint32_t candidate;
+
+	if (op_array == NULL || ssa == NULL || ssa->vars == NULL
+			|| slot == NULL || slot_kind == NULL
+			|| ssa_variable_id >= (uint32_t) ssa->vars_count) {
+		return false;
+	}
+	variable = &ssa->vars[ssa_variable_id];
+	if (variable->var < op_array->last_var || variable->definition != -1
+			|| variable->definition_phi != NULL || variable->use_chain != -1
+			|| variable->phi_use_chain != NULL
+			|| variable->sym_use_chain != NULL) {
+		return false;
+	}
+	for (candidate = 0; candidate < (uint32_t) ssa->vars_count;
+			candidate++) {
+		if (candidate == ssa_variable_id
+				|| ssa->vars[candidate].var != variable->var) {
+			continue;
+		}
+		if (zend_mir_frontend_ssa_slot(
+				op_array, ssa, candidate, slot, slot_kind)) {
 			return true;
 		}
 	}
@@ -612,7 +648,13 @@ static zend_mir_lowering_status zend_mir_frontend_validate_slots_w05(
 		if (!zend_mir_frontend_ssa_slot(
 				projected_op_array, projected_ssa, index,
 				&ignored_slot, &ignored_kind)
+				&& !zend_mir_frontend_dead_ssa_peer_slot(
+					projected_op_array, projected_ssa, index,
+					&ignored_slot, &ignored_kind)
 				&& !zend_mir_frontend_ssa_slot(
+					original_op_array, original_ssa, index,
+					&ignored_slot, &ignored_kind)
+				&& !zend_mir_frontend_dead_ssa_peer_slot(
 					original_op_array, original_ssa, index,
 					&ignored_slot, &ignored_kind)
 				&& !zend_mir_frontend_w05_original_result_slot(
@@ -641,7 +683,8 @@ static zend_mir_lowering_status zend_mir_zend_source_init_w04_impl(
 	const zend_ssa *ssa, zend_mir_op_array_id op_array_id,
 	zend_mir_symbol_id file_symbol_id, zend_mir_frontend_diagnostic *diagnostic,
 	const zend_op_array *original_op_array, const zend_ssa *original_ssa,
-	bool allow_protected_regions, bool allow_any_source_zval_return)
+	bool allow_protected_regions, bool allow_any_source_zval_return,
+	bool allow_w10_operations)
 {
 	zend_mir_zend_source candidate;
 	zend_mir_lowering_status status;
@@ -666,7 +709,10 @@ static zend_mir_lowering_status zend_mir_zend_source_init_w04_impl(
 					op_array, ssa, original_op_array, original_ssa,
 					op_array_id, diagnostic, &slots))
 				!= ZEND_MIR_LOWERING_SUCCESS
-			|| (status = allow_any_source_zval_return
+			|| (status = allow_w10_operations
+				? zend_mir_frontend_validate_opcode_scope_w10(
+					op_array, op_array_id, diagnostic)
+				: allow_any_source_zval_return
 				? zend_mir_frontend_validate_opcode_scope_w09(
 					op_array, op_array_id, diagnostic)
 				: zend_mir_frontend_validate_opcode_scope_w04(
@@ -678,7 +724,10 @@ static zend_mir_lowering_status zend_mir_zend_source_init_w04_impl(
 			|| (status = zend_mir_frontend_validate_facts(
 				op_array, ssa, op_array_id, diagnostic, &facts))
 				!= ZEND_MIR_LOWERING_SUCCESS
-			|| (status = allow_any_source_zval_return
+			|| (status = allow_w10_operations
+				? zend_mir_frontend_validate_eligibility_w10(
+					op_array, ssa, original_op_array, op_array_id, diagnostic)
+				: allow_any_source_zval_return
 				? zend_mir_frontend_validate_eligibility_w09(
 					op_array, ssa, original_op_array, op_array_id, diagnostic)
 				: allow_protected_regions
@@ -719,7 +768,7 @@ zend_mir_lowering_status zend_mir_zend_source_init_w04(
 {
 	return zend_mir_zend_source_init_w04_impl(
 		source, op_array, ssa, op_array_id, file_symbol_id, diagnostic,
-		NULL, NULL, false, false);
+		NULL, NULL, false, false, false);
 }
 
 zend_mir_lowering_status zend_mir_zend_source_init_w05_projection(
@@ -731,7 +780,7 @@ zend_mir_lowering_status zend_mir_zend_source_init_w05_projection(
 {
 	return zend_mir_zend_source_init_w04_impl(
 		source, projected_op_array, projected_ssa, op_array_id, file_symbol_id,
-		diagnostic, original_op_array, original_ssa, false, false);
+		diagnostic, original_op_array, original_ssa, false, false, false);
 }
 
 zend_mir_lowering_status zend_mir_zend_source_init_w08_projection(
@@ -743,7 +792,7 @@ zend_mir_lowering_status zend_mir_zend_source_init_w08_projection(
 {
 	zend_mir_lowering_status status = zend_mir_zend_source_init_w04_impl(
 		source, projected_op_array, projected_ssa, op_array_id, file_symbol_id,
-		diagnostic, original_op_array, original_ssa, true, false);
+		diagnostic, original_op_array, original_ssa, true, false, false);
 	if (status == ZEND_MIR_LOWERING_SUCCESS) {
 		source->w08 = true;
 	}
@@ -759,10 +808,28 @@ zend_mir_lowering_status zend_mir_zend_source_init_w09_projection(
 {
 	zend_mir_lowering_status status = zend_mir_zend_source_init_w04_impl(
 		source, projected_op_array, projected_ssa, op_array_id, file_symbol_id,
-		diagnostic, original_op_array, original_ssa, true, true);
+		diagnostic, original_op_array, original_ssa, true, true, false);
 	if (status == ZEND_MIR_LOWERING_SUCCESS) {
 		source->w08 = true;
 		source->w09 = true;
+	}
+	return status;
+}
+
+zend_mir_lowering_status zend_mir_zend_source_init_w10_projection(
+	zend_mir_zend_source *source,
+	const zend_op_array *projected_op_array, const zend_ssa *projected_ssa,
+	const zend_op_array *original_op_array, const zend_ssa *original_ssa,
+	zend_mir_op_array_id op_array_id, zend_mir_symbol_id file_symbol_id,
+	zend_mir_frontend_diagnostic *diagnostic)
+{
+	zend_mir_lowering_status status = zend_mir_zend_source_init_w04_impl(
+		source, projected_op_array, projected_ssa, op_array_id, file_symbol_id,
+		diagnostic, original_op_array, original_ssa, true, true, true);
+	if (status == ZEND_MIR_LOWERING_SUCCESS) {
+		source->w08 = true;
+		source->w09 = true;
+		source->w10 = true;
 	}
 	return status;
 }
@@ -807,6 +874,12 @@ static bool zend_mir_frontend_view_ssa_at(
 	out->ssa_variable_id = index;
 	out->definition_opline_index = ZEND_MIR_ID_INVALID;
 	if (zend_mir_frontend_ssa_slot(
+			(const zend_op_array *) source->call_op_array,
+			(const zend_ssa *) source->call_ssa, index,
+			&out->source_slot, &out->source_slot_kind)) {
+		return true;
+	}
+	if (zend_mir_frontend_dead_ssa_peer_slot(
 			(const zend_op_array *) source->call_op_array,
 			(const zend_ssa *) source->call_ssa, index,
 			&out->source_slot, &out->source_slot_kind)) {
@@ -1268,11 +1341,12 @@ static bool zend_mir_frontend_view_phi_at(
 			out->constraint.flags |= ZEND_MIR_SOURCE_PHI_RANGE_NEGATED;
 		}
 	} else {
-		if (phi->constraint.type.ce != NULL) {
-			return false;
-		}
 		out->kind = ZEND_MIR_SOURCE_PHI_PI_TYPE;
-		out->constraint.type_mask = phi->constraint.type.type_mask;
+		/* Class identity is request-local and must not enter persistent MIR.
+		 * Preserve the source-backed object constraint as a portable type mask;
+		 * the runtime object operation retains the authoritative class check. */
+		out->constraint.type_mask = phi->constraint.type.type_mask != 0
+			? phi->constraint.type.type_mask : MAY_BE_OBJECT;
 	}
 	return true;
 }
@@ -1653,6 +1727,90 @@ zend_function *zend_mir_zend_source_resolve_internal_call(
 	return function;
 }
 
+zend_function *zend_mir_zend_source_resolve_user_method_call(
+	const zend_script *script, const zend_op_array *op_array,
+	const zend_ssa *ssa, uint32_t init_opline_index)
+{
+	const zend_op *opline;
+	const zend_ssa_var_info *receiver_info = NULL;
+	const zend_class_entry *receiver_class = NULL;
+	zend_function *function;
+	bool is_prototype = false;
+	int receiver_ssa;
+
+	if (op_array == NULL || ssa == NULL || ssa->ops == NULL
+			|| ssa->var_info == NULL || init_opline_index >= op_array->last) {
+		return NULL;
+	}
+	opline = &op_array->opcodes[init_opline_index];
+	function = zend_optimizer_get_called_func(
+		script, op_array, (zend_op *) opline, &is_prototype);
+	if (function != NULL && !is_prototype
+			&& function->type == ZEND_USER_FUNCTION
+			&& (function->common.fn_flags & ZEND_ACC_ABSTRACT) == 0) {
+		return function;
+	}
+	if (opline->opcode != ZEND_INIT_METHOD_CALL
+			|| opline->op2_type != IS_CONST
+			|| Z_TYPE_P(CRT_CONSTANT(opline->op2)) != IS_STRING
+			|| Z_TYPE_P(CRT_CONSTANT(opline->op2) + 1) != IS_STRING) {
+		return NULL;
+	}
+	if (opline->op1_type == IS_UNUSED) {
+		receiver_class = op_array->scope;
+	} else {
+		int definition;
+
+		receiver_ssa = ssa->ops[init_opline_index].op1_use;
+		if (receiver_ssa < 0 || receiver_ssa >= ssa->vars_count) {
+			return NULL;
+		}
+		receiver_info = &ssa->var_info[receiver_ssa];
+		receiver_class = receiver_info->ce;
+		/* Enum cases are represented as class constants.  The optimizer keeps
+		 * their result type deliberately broad, so recover the exact final enum
+		 * class from the source definition instead of persisting a class pointer
+		 * in MIR or treating the method call as unresolved. */
+		definition = ssa->vars[receiver_ssa].definition;
+		if (receiver_class == NULL && definition >= 0
+				&& (uint32_t) definition < op_array->last
+				&& op_array->opcodes[definition].opcode
+					== ZEND_FETCH_CLASS_CONSTANT) {
+			const zend_class_constant *constant;
+			bool constant_is_prototype = false;
+
+			constant = zend_fetch_class_const_info(
+				script, op_array, &op_array->opcodes[definition],
+				&constant_is_prototype);
+			if (constant != NULL && !constant_is_prototype
+					&& (ZEND_CLASS_CONST_FLAGS(constant)
+						& ZEND_CLASS_CONST_IS_CASE) != 0
+					&& constant->ce != NULL
+					&& (constant->ce->ce_flags & ZEND_ACC_ENUM) != 0) {
+				receiver_class = constant->ce;
+			}
+		}
+	}
+	if (receiver_class == NULL
+			|| (receiver_class->default_object_handlers != NULL
+				&& receiver_class->default_object_handlers->get_method
+					!= zend_std_get_method)) {
+		return NULL;
+	}
+	function = zend_hash_find_ptr(
+		&receiver_class->function_table,
+		Z_STR_P(CRT_CONSTANT(opline->op2) + 1));
+	if (function == NULL || function->type != ZEND_USER_FUNCTION
+			|| (function->common.fn_flags
+				& (ZEND_ACC_ABSTRACT | ZEND_ACC_STATIC)) != 0) {
+		return NULL;
+	}
+	/* The source target is the statically known implementation and supplies
+	 * the call signature.  W10 resolves the actual method against the runtime
+	 * receiver and may compile an override into a request-local entry cell. */
+	return function;
+}
+
 bool zend_mir_zend_source_w08_return_source_zval(
 	const zend_mir_zend_source *source, uint32_t return_opline_index)
 {
@@ -1865,7 +2023,8 @@ static bool zend_mir_frontend_snapshot_target(
 	zend_mir_frontend_call_target *target,
 	zend_mir_source_call_target_id id,
 	zend_mir_source_call_target_kind kind,
-	const zend_function *function, uint32_t declaration_id)
+	const zend_function *function, uint32_t declaration_id,
+	bool open_method)
 {
 	memset(target, 0, sizeof(*target));
 	target->record.id = id;
@@ -1874,6 +2033,15 @@ static bool zend_mir_frontend_snapshot_target(
 	target->record.op_array_id = kind == ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL
 		? ZEND_MIR_ID_INVALID : declaration_id;
 	target->function = function;
+	if (kind == ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER || open_method) {
+		/* Even when the optimizer can currently see a likely function, PHP's
+		 * named, first-class callable, and receiver-polymorphic method forms
+		 * resolve against request-local bindings at execution time.  Persist
+		 * only the open call-site shape. */
+		target->record.variadic = true;
+		return zend_mir_frontend_append_parameter_modes(
+			inventory, &target->record, NULL);
+	}
 	if (function == NULL) {
 		return zend_mir_frontend_append_parameter_modes(
 			inventory, &target->record, function);
@@ -1915,6 +2083,10 @@ static bool zend_mir_frontend_target_for_call(
 		if (function == NULL && opline->opcode == ZEND_INIT_METHOD_CALL) {
 			function = zend_mir_zend_source_resolve_internal_call(
 				script, op_array, ssa, opline_index);
+			if (function == NULL) {
+				function = zend_mir_zend_source_resolve_user_method_call(
+					script, op_array, ssa, opline_index);
+			}
 		}
 		function = zend_mir_frontend_canonical_script_function(
 			script, function);
@@ -1942,7 +2114,9 @@ static bool zend_mir_frontend_target_for_call(
 	if (!zend_mir_frontend_snapshot_target(
 		inventory,
 		&inventory->targets[inventory->target_count],
-		inventory->target_count, kind, function, declaration_id)) {
+		inventory->target_count, kind, function, declaration_id,
+		function == NULL && (opline->opcode == ZEND_INIT_METHOD_CALL
+			|| opline->opcode == ZEND_INIT_STATIC_METHOD_CALL))) {
 		return false;
 	}
 	inventory->target_count++;
@@ -2369,7 +2543,8 @@ static zend_mir_lowering_status zend_mir_frontend_project_call_result_facts(
 	const zend_ssa *ssa, zend_ssa *projected_ssa,
 	zend_mir_frontend_diagnostic *diagnostic,
 	bool source_backed_internal_results,
-	bool source_backed_all_results)
+	bool source_backed_all_results,
+	bool source_backed_method_results)
 {
 	zend_mir_zend_source source;
 	zend_mir_frontend_call_inventory *inventory;
@@ -2421,7 +2596,13 @@ static zend_mir_lowering_status zend_mir_frontend_project_call_result_facts(
 		target = &inventory->targets[site->target_id];
 		if ((target->record.kind != ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
 				&& target->record.kind
-					!= ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL)
+					!= ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL
+				&& (!source_backed_all_results
+					|| target->record.kind
+						!= ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER)
+				&& (!source_backed_method_results
+					|| target->record.kind
+						!= ZEND_MIR_SOURCE_CALL_TARGET_METHOD))
 				|| (target->record.returns_by_reference
 					&& !source_backed_all_results)) {
 			goto unsupported_result;
@@ -2492,7 +2673,8 @@ zend_mir_lowering_status zend_mir_frontend_project_w05_result_facts(
 	zend_mir_frontend_diagnostic *diagnostic)
 {
 	return zend_mir_frontend_project_call_result_facts(
-		script, op_array, ssa, projected_ssa, diagnostic, false, false);
+		script, op_array, ssa, projected_ssa, diagnostic,
+		false, false, false);
 }
 
 zend_mir_lowering_status zend_mir_frontend_project_w08_result_facts(
@@ -2501,7 +2683,8 @@ zend_mir_lowering_status zend_mir_frontend_project_w08_result_facts(
 	zend_mir_frontend_diagnostic *diagnostic)
 {
 	return zend_mir_frontend_project_call_result_facts(
-		script, op_array, ssa, projected_ssa, diagnostic, true, false);
+		script, op_array, ssa, projected_ssa, diagnostic,
+		true, false, false);
 }
 
 zend_mir_lowering_status zend_mir_frontend_project_w09_result_facts(
@@ -2510,7 +2693,18 @@ zend_mir_lowering_status zend_mir_frontend_project_w09_result_facts(
 	zend_mir_frontend_diagnostic *diagnostic)
 {
 	return zend_mir_frontend_project_call_result_facts(
-		script, op_array, ssa, projected_ssa, diagnostic, true, true);
+		script, op_array, ssa, projected_ssa, diagnostic,
+		true, true, false);
+}
+
+zend_mir_lowering_status zend_mir_frontend_project_w10_result_facts(
+	const zend_script *script, const zend_op_array *op_array,
+	const zend_ssa *ssa, zend_ssa *projected_ssa,
+	zend_mir_frontend_diagnostic *diagnostic)
+{
+	return zend_mir_frontend_project_call_result_facts(
+		script, op_array, ssa, projected_ssa, diagnostic,
+		true, true, true);
 }
 
 static bool zend_mir_frontend_w05_declared_result_fact(
@@ -2617,6 +2811,7 @@ static zend_mir_lowering_status zend_mir_zend_source_preflight_direct_calls(
 	const zend_script *script, const zend_op_array *op_array,
 	const zend_ssa *ssa, zend_mir_frontend_diagnostic *diagnostic,
 	bool w07_execution, bool w08_execution, bool w09_execution,
+	bool w10_execution,
 	bool allow_empty_calls)
 {
 	zend_mir_zend_source source;
@@ -2716,7 +2911,11 @@ static zend_mir_lowering_status zend_mir_zend_source_preflight_direct_calls(
 					&& target->kind
 						!= ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
 					&& target->kind
-							!= ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL)
+							!= ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL
+					&& (!w10_execution || target->kind
+							!= ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER)
+					&& (!w10_execution || target->kind
+							!= ZEND_MIR_SOURCE_CALL_TARGET_METHOD))
 				|| (!w09_execution
 					&& target->kind
 						== ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
@@ -2798,13 +2997,37 @@ static zend_mir_lowering_status zend_mir_zend_source_preflight_direct_calls(
 						|| (init_opcode != ZEND_INIT_FCALL
 							&& init_opcode != ZEND_INIT_METHOD_CALL
 							&& init_opcode != ZEND_INIT_STATIC_METHOD_CALL)
-						|| (do_opcode != ZEND_DO_ICALL
-							&& do_opcode != ZEND_DO_FCALL)))
+							|| (do_opcode != ZEND_DO_ICALL
+								&& do_opcode != ZEND_DO_FCALL
+								&& (!w10_execution
+									|| do_opcode != ZEND_CALLABLE_CONVERT))))
 					|| (target->kind
 						== ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
 						&& (init_opcode != ZEND_INIT_FCALL
 							|| (do_opcode != ZEND_DO_UCALL
-								&& do_opcode != ZEND_DO_FCALL)))) {
+								&& do_opcode != ZEND_DO_FCALL
+								&& (!w10_execution
+									|| do_opcode != ZEND_CALLABLE_CONVERT))))
+					|| (target->kind
+						== ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER
+						&& (!w10_execution
+							|| (init_opcode != ZEND_INIT_FCALL_BY_NAME
+								&& init_opcode != ZEND_INIT_NS_FCALL_BY_NAME
+								&& init_opcode != ZEND_INIT_DYNAMIC_CALL
+								&& init_opcode != ZEND_INIT_USER_CALL)
+							|| (do_opcode != ZEND_DO_UCALL
+								&& do_opcode != ZEND_DO_FCALL
+								&& do_opcode != ZEND_DO_FCALL_BY_NAME
+								&& do_opcode != ZEND_DO_ICALL
+								&& do_opcode != ZEND_CALLABLE_CONVERT)))
+					|| (target->kind == ZEND_MIR_SOURCE_CALL_TARGET_METHOD
+						&& (!w10_execution
+							|| (init_opcode != ZEND_INIT_METHOD_CALL
+								&& init_opcode != ZEND_INIT_STATIC_METHOD_CALL
+								&& init_opcode != ZEND_NEW)
+							|| (do_opcode != ZEND_DO_UCALL
+								&& do_opcode != ZEND_DO_FCALL
+								&& do_opcode != ZEND_CALLABLE_CONVERT)))) {
 				code = ZEND_MIRL_W05_UNSUPPORTED_TARGET;
 			} else if (!w08_execution
 					&& (site->flags
@@ -2852,7 +3075,7 @@ zend_mir_lowering_status zend_mir_zend_source_preflight_w05(
 	const zend_ssa *ssa, zend_mir_frontend_diagnostic *diagnostic)
 {
 	return zend_mir_zend_source_preflight_direct_calls(
-		script, op_array, ssa, diagnostic, false, false, false, false);
+		script, op_array, ssa, diagnostic, false, false, false, false, false);
 }
 
 zend_mir_lowering_status zend_mir_zend_source_preflight_w07(
@@ -2860,7 +3083,7 @@ zend_mir_lowering_status zend_mir_zend_source_preflight_w07(
 	const zend_ssa *ssa, zend_mir_frontend_diagnostic *diagnostic)
 {
 	return zend_mir_zend_source_preflight_direct_calls(
-		script, op_array, ssa, diagnostic, true, false, false, false);
+		script, op_array, ssa, diagnostic, true, false, false, false, false);
 }
 
 zend_mir_lowering_status zend_mir_zend_source_preflight_w08(
@@ -2868,7 +3091,7 @@ zend_mir_lowering_status zend_mir_zend_source_preflight_w08(
 	const zend_ssa *ssa, zend_mir_frontend_diagnostic *diagnostic)
 {
 	return zend_mir_zend_source_preflight_direct_calls(
-		script, op_array, ssa, diagnostic, true, true, false, false);
+		script, op_array, ssa, diagnostic, true, true, false, false, false);
 }
 
 zend_mir_lowering_status zend_mir_zend_source_preflight_w09(
@@ -2876,7 +3099,15 @@ zend_mir_lowering_status zend_mir_zend_source_preflight_w09(
 	const zend_ssa *ssa, zend_mir_frontend_diagnostic *diagnostic)
 {
 	return zend_mir_zend_source_preflight_direct_calls(
-		script, op_array, ssa, diagnostic, true, true, true, true);
+		script, op_array, ssa, diagnostic, true, true, true, false, true);
+}
+
+zend_mir_lowering_status zend_mir_zend_source_preflight_w10(
+	const zend_script *script, const zend_op_array *op_array,
+	const zend_ssa *ssa, zend_mir_frontend_diagnostic *diagnostic)
+{
+	return zend_mir_zend_source_preflight_direct_calls(
+		script, op_array, ssa, diagnostic, true, true, true, true, true);
 }
 
 zend_mir_lowering_status zend_mir_zend_source_enable_w05(
@@ -3067,6 +3298,67 @@ static bool zend_mir_frontend_resolve_call_target(
 	return true;
 }
 
+static bool zend_mir_frontend_resolve_method_target(
+	const void *context, zend_mir_source_call_target_id target_id,
+	zend_mir_source_call_target_ref *out)
+{
+	const zend_mir_zend_source *source = context;
+	const zend_mir_frontend_call_inventory *inventory;
+	const zend_op_array *op_array;
+	uint32_t index;
+	bool found_site = false;
+	bool open_method;
+	if (!zend_mir_source_is_initialized(source) || !source->w10
+			|| out == NULL || target_id >= source->call_target_count) {
+		return false;
+	}
+	inventory = source->call_inventory;
+	if (inventory->targets[target_id].record.kind
+			!= ZEND_MIR_SOURCE_CALL_TARGET_METHOD) {
+		return false;
+	}
+	if (inventory->targets[target_id].function == NULL) {
+		op_array = source->call_op_array;
+		if (op_array == NULL
+				|| inventory->targets[target_id].record.num_args != 0
+				|| inventory->targets[target_id].record.required_num_args != 0
+				|| inventory->targets[target_id].record.parameter_modes.count != 0) {
+			return false;
+		}
+		open_method = inventory->targets[target_id].record.variadic;
+		for (index = 0; index < inventory->site_count; index++) {
+			const zend_mir_source_call_site_ref *site =
+				&inventory->sites[index];
+
+			if (site->target_id != target_id) {
+				continue;
+			}
+			if (site->init_opline_index >= op_array->last) {
+				return false;
+			}
+			uint8_t init_opcode =
+				op_array->opcodes[site->init_opline_index].opcode;
+			if (open_method
+					? init_opcode != ZEND_INIT_METHOD_CALL
+						&& init_opcode != ZEND_INIT_STATIC_METHOD_CALL
+					: init_opcode != ZEND_NEW) {
+				return false;
+			}
+			found_site = true;
+		}
+		if (!found_site) {
+			return false;
+		}
+	} else if (inventory->targets[target_id].function->type
+			!= ZEND_USER_FUNCTION
+			|| (inventory->targets[target_id].record.function_flags_snapshot
+				& (ZEND_ACC_CLOSURE | ZEND_ACC_GENERATOR | ZEND_ACC_ABSTRACT)) != 0) {
+		return false;
+	}
+	*out = inventory->targets[target_id].record;
+	return true;
+}
+
 static bool zend_mir_frontend_resolve_internal_target(
 	const void *context, zend_mir_source_call_target_id target_id,
 	zend_mir_source_call_target_ref *out)
@@ -3180,6 +3472,7 @@ bool zend_mir_zend_source_call_target_resolver(
 	out->context = source;
 	out->resolve_exact_direct_user =
 		zend_mir_frontend_resolve_call_target;
+	out->resolve_exact_method = zend_mir_frontend_resolve_method_target;
 	out->resolve_exact_internal =
 		zend_mir_frontend_resolve_internal_target;
 	return true;

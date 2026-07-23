@@ -125,6 +125,93 @@ bool zend_mir_w06_opcode_is_accepted(uint32_t opcode)
 static zend_mir_opcode zend_mir_w09_executable_opcode(uint32_t opcode)
 {
 	switch (opcode) {
+		case ZEND_DECLARE_ANON_CLASS:
+			return ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS;
+		case ZEND_FETCH_THIS:
+			return ZEND_MIR_OPCODE_OBJECT_FETCH_THIS;
+		case ZEND_FETCH_OBJ_R:
+			return ZEND_MIR_OPCODE_OBJECT_FETCH_R;
+		case ZEND_FETCH_OBJ_W:
+			return ZEND_MIR_OPCODE_OBJECT_FETCH_W;
+		case ZEND_FETCH_OBJ_RW:
+			return ZEND_MIR_OPCODE_OBJECT_FETCH_RW;
+		case ZEND_FETCH_OBJ_IS:
+			return ZEND_MIR_OPCODE_OBJECT_FETCH_IS;
+		case ZEND_FETCH_OBJ_FUNC_ARG:
+			return ZEND_MIR_OPCODE_OBJECT_FETCH_FUNC_ARG;
+		case ZEND_FETCH_OBJ_UNSET:
+			return ZEND_MIR_OPCODE_OBJECT_FETCH_UNSET;
+		case ZEND_ASSIGN_OBJ:
+			return ZEND_MIR_OPCODE_OBJECT_ASSIGN;
+		case ZEND_ASSIGN_OBJ_REF:
+			return ZEND_MIR_OPCODE_OBJECT_ASSIGN_REF;
+		case ZEND_ASSIGN_OBJ_OP:
+			return ZEND_MIR_OPCODE_OBJECT_ASSIGN_OP;
+		case ZEND_UNSET_OBJ:
+			return ZEND_MIR_OPCODE_OBJECT_UNSET;
+		case ZEND_ISSET_ISEMPTY_PROP_OBJ:
+			return ZEND_MIR_OPCODE_OBJECT_ISSET_ISEMPTY;
+		case ZEND_PRE_INC_OBJ:
+			return ZEND_MIR_OPCODE_OBJECT_PRE_INC;
+		case ZEND_PRE_DEC_OBJ:
+			return ZEND_MIR_OPCODE_OBJECT_PRE_DEC;
+		case ZEND_POST_INC_OBJ:
+			return ZEND_MIR_OPCODE_OBJECT_POST_INC;
+		case ZEND_POST_DEC_OBJ:
+			return ZEND_MIR_OPCODE_OBJECT_POST_DEC;
+		case ZEND_INSTANCEOF:
+			return ZEND_MIR_OPCODE_OBJECT_INSTANCEOF;
+		case ZEND_CLONE:
+			return ZEND_MIR_OPCODE_OBJECT_CLONE;
+		case ZEND_FETCH_STATIC_PROP_R:
+			return ZEND_MIR_OPCODE_STATIC_FETCH_R;
+		case ZEND_FETCH_STATIC_PROP_W:
+			return ZEND_MIR_OPCODE_STATIC_FETCH_W;
+		case ZEND_FETCH_STATIC_PROP_RW:
+			return ZEND_MIR_OPCODE_STATIC_FETCH_RW;
+		case ZEND_FETCH_STATIC_PROP_IS:
+			return ZEND_MIR_OPCODE_STATIC_FETCH_IS;
+		case ZEND_FETCH_STATIC_PROP_FUNC_ARG:
+			return ZEND_MIR_OPCODE_STATIC_FETCH_FUNC_ARG;
+		case ZEND_FETCH_STATIC_PROP_UNSET:
+			return ZEND_MIR_OPCODE_STATIC_FETCH_UNSET;
+		case ZEND_ASSIGN_STATIC_PROP:
+			return ZEND_MIR_OPCODE_STATIC_ASSIGN;
+		case ZEND_ASSIGN_STATIC_PROP_REF:
+			return ZEND_MIR_OPCODE_STATIC_ASSIGN_REF;
+		case ZEND_ASSIGN_STATIC_PROP_OP:
+			return ZEND_MIR_OPCODE_STATIC_ASSIGN_OP;
+		case ZEND_PRE_INC_STATIC_PROP:
+			return ZEND_MIR_OPCODE_STATIC_PRE_INC;
+		case ZEND_PRE_DEC_STATIC_PROP:
+			return ZEND_MIR_OPCODE_STATIC_PRE_DEC;
+		case ZEND_POST_INC_STATIC_PROP:
+			return ZEND_MIR_OPCODE_STATIC_POST_INC;
+		case ZEND_POST_DEC_STATIC_PROP:
+			return ZEND_MIR_OPCODE_STATIC_POST_DEC;
+		case ZEND_ISSET_ISEMPTY_STATIC_PROP:
+			return ZEND_MIR_OPCODE_STATIC_ISSET_ISEMPTY;
+		case ZEND_UNSET_STATIC_PROP:
+			return ZEND_MIR_OPCODE_STATIC_UNSET;
+		case ZEND_FETCH_CLASS:
+			return ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS;
+		case ZEND_FETCH_CLASS_NAME:
+			return ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME;
+		case ZEND_FETCH_CLASS_CONSTANT:
+			return ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_CONSTANT;
+		case ZEND_DECLARE_LAMBDA_FUNCTION:
+			return ZEND_MIR_OPCODE_OBJECT_DECLARE_LAMBDA;
+		case ZEND_BIND_LEXICAL:
+			return ZEND_MIR_OPCODE_OBJECT_BIND_LEXICAL;
+		case ZEND_BIND_STATIC:
+			return ZEND_MIR_OPCODE_OBJECT_BIND_STATIC;
+		case ZEND_TYPE_CHECK:
+			return ZEND_MIR_OPCODE_VALUE_TYPE_CHECK;
+		case ZEND_FRAMELESS_ICALL_0:
+		case ZEND_FRAMELESS_ICALL_1:
+		case ZEND_FRAMELESS_ICALL_2:
+		case ZEND_FRAMELESS_ICALL_3:
+			return ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL;
 		case ZEND_ADD:
 		case ZEND_SUB:
 		case ZEND_MUL:
@@ -226,6 +313,17 @@ static zend_mir_opcode zend_mir_w09_executable_opcode(uint32_t opcode)
 
 bool zend_mir_w09_opcode_is_executable(uint32_t opcode)
 {
+	return zend_mir_w09_executable_opcode(opcode)
+		< ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS
+		&& (opcode == ZEND_OP_DATA
+			|| opcode == ZEND_FE_RESET_R || opcode == ZEND_FE_FETCH_R
+			|| opcode == ZEND_FE_RESET_RW || opcode == ZEND_FE_FETCH_RW
+			|| zend_mir_w09_executable_opcode(opcode)
+				!= ZEND_MIR_OPCODE_INVALID);
+}
+
+bool zend_mir_w10_opcode_is_executable(uint32_t opcode)
+{
 	return opcode == ZEND_OP_DATA
 		|| opcode == ZEND_FE_RESET_R || opcode == ZEND_FE_FETCH_R
 		|| opcode == ZEND_FE_RESET_RW || opcode == ZEND_FE_FETCH_RW
@@ -302,6 +400,79 @@ static bool zend_mir_w09_operation_semantics(
 			if (!zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_ALLOCATE)
 					|| !zend_mir_w09_add_effect(
 						&summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_THROW)) {
+				return false;
+			}
+			break;
+		case ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS:
+		case ZEND_MIR_OPCODE_OBJECT_FETCH_THIS:
+		case ZEND_MIR_OPCODE_OBJECT_FETCH_R:
+		case ZEND_MIR_OPCODE_OBJECT_FETCH_W:
+		case ZEND_MIR_OPCODE_OBJECT_FETCH_RW:
+		case ZEND_MIR_OPCODE_OBJECT_FETCH_IS:
+		case ZEND_MIR_OPCODE_OBJECT_FETCH_FUNC_ARG:
+		case ZEND_MIR_OPCODE_OBJECT_FETCH_UNSET:
+		case ZEND_MIR_OPCODE_OBJECT_ASSIGN:
+		case ZEND_MIR_OPCODE_OBJECT_ASSIGN_REF:
+		case ZEND_MIR_OPCODE_OBJECT_ASSIGN_OP:
+		case ZEND_MIR_OPCODE_OBJECT_UNSET:
+		case ZEND_MIR_OPCODE_OBJECT_ISSET_ISEMPTY:
+		case ZEND_MIR_OPCODE_OBJECT_PRE_INC:
+		case ZEND_MIR_OPCODE_OBJECT_PRE_DEC:
+		case ZEND_MIR_OPCODE_OBJECT_POST_INC:
+		case ZEND_MIR_OPCODE_OBJECT_POST_DEC:
+		case ZEND_MIR_OPCODE_OBJECT_INSTANCEOF:
+		case ZEND_MIR_OPCODE_OBJECT_CLONE:
+		case ZEND_MIR_OPCODE_STATIC_FETCH_R:
+		case ZEND_MIR_OPCODE_STATIC_FETCH_W:
+		case ZEND_MIR_OPCODE_STATIC_FETCH_RW:
+		case ZEND_MIR_OPCODE_STATIC_FETCH_IS:
+		case ZEND_MIR_OPCODE_STATIC_FETCH_FUNC_ARG:
+		case ZEND_MIR_OPCODE_STATIC_FETCH_UNSET:
+		case ZEND_MIR_OPCODE_STATIC_ASSIGN:
+		case ZEND_MIR_OPCODE_STATIC_ASSIGN_REF:
+		case ZEND_MIR_OPCODE_STATIC_ASSIGN_OP:
+		case ZEND_MIR_OPCODE_STATIC_PRE_INC:
+		case ZEND_MIR_OPCODE_STATIC_PRE_DEC:
+		case ZEND_MIR_OPCODE_STATIC_POST_INC:
+		case ZEND_MIR_OPCODE_STATIC_POST_DEC:
+		case ZEND_MIR_OPCODE_STATIC_ISSET_ISEMPTY:
+		case ZEND_MIR_OPCODE_STATIC_UNSET:
+		case ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS:
+		case ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME:
+		case ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_CONSTANT:
+		case ZEND_MIR_OPCODE_OBJECT_DECLARE_LAMBDA:
+		case ZEND_MIR_OPCODE_OBJECT_BIND_LEXICAL:
+		case ZEND_MIR_OPCODE_OBJECT_BIND_STATIC:
+			if (!zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_ALLOCATE)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_CALL_PHP)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_REENTER_PHP)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_THROW)) {
+				return false;
+			}
+			break;
+		case ZEND_MIR_OPCODE_VALUE_TYPE_CHECK:
+			if (!zend_mir_w09_add_effect(
+					&summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_THROW)) {
+				return false;
+			}
+			break;
+		case ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL:
+			if (!zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_ALLOCATE)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_CALL_PHP)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_REENTER_PHP)
 					|| !zend_mir_w09_add_effect(
 						&summary, ZEND_MIR_EFFECT_THROW)) {
 				return false;
@@ -459,7 +630,8 @@ bool zend_mir_w09_emit_executable_values(
 	zend_mir_lowering_context *lowering_context,
 	zend_mir_module *module,
 	const zend_mir_control_flow_map *control_flow_map,
-	zend_mir_straight_line_provider_context *frame_context)
+	zend_mir_straight_line_provider_context *frame_context,
+	bool w10_execution)
 {
 	const zend_mir_lowering_source_view *source;
 	const zend_mir_view *view;
@@ -501,7 +673,9 @@ bool zend_mir_w09_emit_executable_values(
 		zend_mir_opcode opcode = zend_mir_w09_executable_opcode(
 			op_array->opcodes[index].opcode);
 
-		if (opcode == ZEND_MIR_OPCODE_INVALID) {
+		if (opcode == ZEND_MIR_OPCODE_INVALID
+				|| (!w10_execution
+					&& opcode >= ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS)) {
 			continue;
 		}
 		if (!source->opcode_at(source->context, index, &source_opcode)
