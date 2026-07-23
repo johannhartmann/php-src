@@ -1886,102 +1886,6 @@ binding_rejected:
 	return true;
 }
 
-static bool zend_native_compiler_add_nested_functions(
-	zend_native_compiler *compiler,
-	zend_op_array *op_array,
-	zend_native_compile_diagnostic *diagnostic,
-	uint32_t depth)
-{
-	uint32_t index;
-
-	if (op_array == NULL || depth > 64
-			|| zend_native_compiler_add_function(
-				compiler, op_array, diagnostic) == NULL) {
-		return false;
-	}
-	for (index = 0; index < op_array->num_dynamic_func_defs; index++) {
-		if (!zend_native_compiler_add_nested_functions(
-				compiler, op_array->dynamic_func_defs[index],
-				diagnostic, depth + 1)) {
-			return false;
-		}
-	}
-	return true;
-}
-
-static bool zend_native_compiler_add_class_functions(
-	zend_native_compiler *compiler,
-	zend_class_entry *class_entry,
-	zend_native_compile_diagnostic *diagnostic)
-{
-	zend_function *function;
-	zend_property_info *property_info;
-
-	if (class_entry == NULL) {
-		return true;
-	}
-	ZEND_HASH_MAP_FOREACH_PTR(&class_entry->function_table, function) {
-		if (function != NULL && function->type == ZEND_USER_FUNCTION
-				&& !zend_native_compiler_add_nested_functions(
-					compiler, &function->op_array, diagnostic, 0)) {
-			return false;
-		}
-	} ZEND_HASH_FOREACH_END();
-	if (class_entry->num_hooked_props == 0) {
-		return true;
-	}
-	ZEND_HASH_MAP_FOREACH_PTR(
-			&class_entry->properties_info, property_info) {
-		uint32_t hook_index;
-
-		if (property_info->ce != class_entry
-				|| property_info->hooks == NULL) {
-			continue;
-		}
-		for (hook_index = 0; hook_index < ZEND_PROPERTY_HOOK_COUNT;
-				hook_index++) {
-			function = property_info->hooks[hook_index];
-			if (function != NULL && function->type == ZEND_USER_FUNCTION
-					&& !zend_native_compiler_add_nested_functions(
-						compiler, &function->op_array, diagnostic, 0)) {
-				return false;
-			}
-		}
-	} ZEND_HASH_FOREACH_END();
-	return true;
-}
-
-static bool zend_native_compiler_add_script_component(
-	zend_native_compiler *compiler,
-	zend_native_compile_diagnostic *diagnostic)
-{
-	zend_function *function;
-	zend_class_entry *class_entry;
-
-	if (compiler->script == NULL
-			|| !zend_native_compiler_add_nested_functions(
-				compiler, &compiler->script->main_op_array,
-				diagnostic, 0)) {
-		return false;
-	}
-	ZEND_HASH_MAP_FOREACH_PTR(
-			&compiler->script->function_table, function) {
-		if (function != NULL && function->type == ZEND_USER_FUNCTION
-				&& !zend_native_compiler_add_nested_functions(
-					compiler, &function->op_array, diagnostic, 0)) {
-			return false;
-		}
-	} ZEND_HASH_FOREACH_END();
-	ZEND_HASH_MAP_FOREACH_PTR(
-			&compiler->script->class_table, class_entry) {
-		if (!zend_native_compiler_add_class_functions(
-				compiler, class_entry, diagnostic)) {
-			return false;
-		}
-	} ZEND_HASH_FOREACH_END();
-	return true;
-}
-
 zend_result zend_native_compiler_compile(
 	zend_native_compiler *compiler,
 	zend_op_array *root,
@@ -2019,18 +1923,13 @@ zend_result zend_native_compiler_compile(
 		return SUCCESS;
 	}
 	/*
-	 * The initial Zend script is one compilation owner. Compile its complete
-	 * function/class/closure component, not only the selected root. Dynamic
-	 * include/eval owners are added separately through their exact root and
-	 * recursively reachable child op_arrays.
+	 * A request starts with exactly the selected root. Static user-call
+	 * discovery below grows this component with transitively reachable
+	 * codeunits; unrelated script functions, methods and closures remain
+	 * absent from the native registry until reentry selects them.
 	 */
-	if (compiler->function_count == 0
-			&& !zend_native_compiler_add_script_component(
-				compiler, diagnostic)) {
-		goto failure;
-	}
-	if (!zend_native_compiler_add_nested_functions(
-			compiler, root, diagnostic, 0)) {
+	if (zend_native_compiler_add_function(
+			compiler, root, diagnostic) == NULL) {
 		goto failure;
 	}
 	root_function = zend_native_compiler_find_function(compiler, root);
@@ -2095,10 +1994,10 @@ zend_result zend_native_compiler_compile_dynamic_component(
 	zend_native_entry_cell **root_entry,
 	zend_native_compile_diagnostic *diagnostic)
 {
-	zend_function *function;
-	zend_class_entry *class_entry;
 	zend_native_compiled_function *compiled_root;
 
+	(void) first_function_bucket;
+	(void) first_class_bucket;
 	if (root_entry != NULL) {
 		*root_entry = NULL;
 	}
@@ -2111,26 +2010,6 @@ zend_result zend_native_compiler_compile_dynamic_component(
 			"invalid dynamic codeunit symbol-table snapshot");
 		return FAILURE;
 	}
-	if (!zend_native_compiler_add_nested_functions(
-			compiler, root, diagnostic, 0)) {
-		goto failure;
-	}
-	ZEND_HASH_FOREACH_PTR_FROM(
-			EG(function_table), function, first_function_bucket) {
-		if (function != NULL && function->type == ZEND_USER_FUNCTION
-				&& !zend_native_compiler_add_nested_functions(
-					compiler, &function->op_array, diagnostic, 0)) {
-			goto failure;
-		}
-	} ZEND_HASH_FOREACH_END();
-	ZEND_HASH_FOREACH_PTR_FROM(
-			EG(class_table), class_entry, first_class_bucket) {
-		if (class_entry != NULL && class_entry->type == ZEND_USER_CLASS
-				&& !zend_native_compiler_add_class_functions(
-					compiler, class_entry, diagnostic)) {
-			goto failure;
-		}
-	} ZEND_HASH_FOREACH_END();
 	if (zend_native_compiler_compile(
 			compiler, root, NULL, 0, diagnostic) == FAILURE) {
 		return FAILURE;
@@ -2199,6 +2078,12 @@ static zend_native_entry_cell *zend_native_compiler_resolve_reentry(
 	}
 	function = zend_native_compiler_find_function(
 		compiler, source_op_array);
+	if (function != NULL
+			&& function->state == ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED) {
+		zend_throw_error(NULL,
+			"Suspendable codeunit is reserved for native W12 activation");
+		return NULL;
+	}
 	return function != NULL
 			&& function->entry_cell.state == ZEND_NATIVE_ENTRY_READY
 		? &function->entry_cell : NULL;
