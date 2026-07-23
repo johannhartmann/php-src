@@ -75,6 +75,16 @@ PHP,
     [
         <<<'PHP'
 <?php
+function w11_nested_eval(): int {
+    return eval('return eval(\'return 42;\');');
+}
+PHP,
+        'w11_nested_eval',
+        [],
+    ],
+    [
+        <<<'PHP'
+<?php
 function w11_eval_closure(): int {
     $closure = eval('return static fn (int $value): int => $value + 2;');
     return $closure(40);
@@ -110,10 +120,13 @@ PHP,
         <<<'PHP'
 <?php
 function w11_autoload(string $path): int {
-    spl_autoload_register(static function (string $class) use ($path): void {
+    $loader = static function (string $class) use ($path): void {
         include $path;
-    });
-    return (new W11Autoloaded())->value();
+    };
+    spl_autoload_register($loader);
+    $value = (new W11Autoloaded())->value();
+    spl_autoload_unregister($loader);
+    return $value;
 }
 PHP,
         'w11_autoload',
@@ -148,6 +161,7 @@ w11_eval_return accepted return=42 vm=0 execute_ex=0 handler=0
 w11_eval_declaration accepted return=42 vm=0 execute_ex=0 handler=0
 w11_eval_scope accepted return=[42,42] vm=0 execute_ex=0 handler=0
 w11_eval_internal_call accepted return=42 vm=0 execute_ex=0 handler=0
+w11_nested_eval accepted return=42 vm=0 execute_ex=0 handler=0
 w11_eval_closure accepted return=42 vm=0 execute_ex=0 handler=0
 w11_eval_class accepted return=42 vm=0 execute_ex=0 handler=0
 w11_include accepted return=[42,true,40] vm=0 execute_ex=0 handler=0

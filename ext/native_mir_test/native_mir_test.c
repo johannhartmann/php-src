@@ -207,9 +207,6 @@ typedef struct _native_mir_test_state {
 	native_mir_test_native_function **native_functions;
 	uint32_t native_function_count;
 	uint32_t native_function_capacity;
-	zend_op_array **dynamic_op_arrays;
-	uint32_t dynamic_op_array_count;
-	uint32_t dynamic_op_array_capacity;
 	zend_native_dynamic_compiler dynamic_compiler;
 	bool dynamic_compiler_active;
 	zval native_result;
@@ -3776,31 +3773,9 @@ static zend_native_status native_mir_test_dynamic_compile_execute(
 	zend_native_entry_cell *entry_cell;
 	zend_native_diagnostic diagnostic;
 	zend_native_status status;
-	uint32_t old_capacity;
-	uint32_t new_capacity;
+	zend_execute_data *previous;
 
 	memset(&diagnostic, 0, sizeof(diagnostic));
-	if (state->dynamic_op_array_count
-			== state->dynamic_op_array_capacity) {
-		old_capacity = state->dynamic_op_array_capacity;
-		new_capacity = old_capacity < 8 ? 8 : old_capacity * 2;
-		if (new_capacity <= old_capacity) {
-			zend_throw_error(NULL,
-				"Native dynamic codeunit owner capacity overflow");
-			return ZEND_NATIVE_EXCEPTION;
-		}
-		state->dynamic_op_arrays = safe_erealloc(
-			state->dynamic_op_arrays, new_capacity,
-			sizeof(*state->dynamic_op_arrays), 0);
-		state->dynamic_op_array_capacity = new_capacity;
-	}
-	/*
-	 * The compiler takes ownership before any fallible phase. Published
-	 * closures and declarations may keep child op_arrays alive after the
-	 * top-level include/eval frame returns, so their owning root remains valid
-	 * until the entire native execution tree has quiesced.
-	 */
-	state->dynamic_op_arrays[state->dynamic_op_array_count++] = op_array;
 	entry_cell = native_mir_test_resolve_reentry_target(
 		state, (zend_function *) op_array);
 	if (entry_cell == NULL || entry_cell->state != ZEND_NATIVE_ENTRY_READY
@@ -3816,8 +3791,11 @@ static zend_native_status native_mir_test_dynamic_compile_execute(
 		}
 		return ZEND_NATIVE_EXCEPTION;
 	}
+	previous = EG(current_execute_data);
+	EG(current_execute_data) = execute_data;
 	status = zend_native_execute_frame(
 		entry_cell->code, execute_data, &diagnostic);
+	EG(current_execute_data) = previous;
 	if (status != ZEND_NATIVE_RETURNED) {
 		native_mir_test_backend_failure(
 			state, NATIVE_MIR_TEST_PHASE_EXECUTE, &diagnostic);
@@ -3879,9 +3857,9 @@ static bool native_mir_test_execute_module(
 		reentry_entered = true;
 	}
 	if (state->wave >= 11) {
-		state->dynamic_compiler.context = state;
-		state->dynamic_compiler.compile_execute =
-			native_mir_test_dynamic_compile_execute;
+		zend_native_dynamic_compiler_init(
+			&state->dynamic_compiler, state,
+			native_mir_test_dynamic_compile_execute);
 		zend_native_dynamic_compiler_activate(&state->dynamic_compiler);
 		state->dynamic_compiler_active = true;
 	}
@@ -4106,19 +4084,7 @@ static void native_mir_test_cleanup(native_mir_test_state *state)
 			state->ssa_arena = NULL;
 		}
 	}
-	if (state->dynamic_op_arrays != NULL) {
-		for (index = state->dynamic_op_array_count; index-- > 0;) {
-			zend_op_array *op_array = state->dynamic_op_arrays[index];
-
-			zend_destroy_static_vars(op_array);
-			destroy_op_array(op_array);
-			efree_size(op_array, sizeof(zend_op_array));
-		}
-		efree(state->dynamic_op_arrays);
-		state->dynamic_op_arrays = NULL;
-		state->dynamic_op_array_count = 0;
-		state->dynamic_op_array_capacity = 0;
-	}
+	zend_native_dynamic_compiler_destroy(&state->dynamic_compiler);
 	if (state->script_initialized) {
 		zend_hash_destroy(&state->script.function_table);
 		zend_hash_destroy(&state->script.class_table);
