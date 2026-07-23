@@ -66,6 +66,17 @@ zend_function *zend_optimizer_get_called_func(
 	return NULL;
 }
 
+const zend_class_constant *zend_fetch_class_const_info(
+	const zend_script *script, const zend_op_array *op_array,
+	zend_op *opline, bool *is_prototype)
+{
+	(void) script;
+	(void) op_array;
+	(void) opline;
+	*is_prototype = false;
+	return NULL;
+}
+
 zend_function *zend_std_get_method(
 	zend_object **object, zend_string *method, const zval *key)
 {
