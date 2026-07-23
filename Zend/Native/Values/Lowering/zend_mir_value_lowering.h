@@ -67,13 +67,15 @@ bool zend_mir_w06_emit_value_snapshot(
 
 bool zend_mir_w06_opcode_is_accepted(uint32_t opcode);
 bool zend_mir_w09_opcode_is_executable(uint32_t opcode);
+bool zend_mir_w10_opcode_is_executable(uint32_t opcode);
 
 bool zend_mir_w09_emit_executable_values(
 	const struct _zend_op_array *op_array,
 	struct _zend_mir_lowering_context *lowering_context,
 	zend_mir_module *module,
 	const zend_mir_control_flow_map *control_flow_map,
-	struct _zend_mir_straight_line_provider_context *frame_context);
+	struct _zend_mir_straight_line_provider_context *frame_context,
+	bool w10_execution);
 
 zend_mir_lowering_diagnostic_code zend_mir_w06_preflight_literals(
 	const struct _zend_op_array *op_array);

@@ -3,6 +3,7 @@
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
 
 #include "Zend/zend_exceptions.h"
+#include "Zend/zend_closures.h"
 #include "Zend/zend_execute.h"
 #include "Zend/zend_observer.h"
 
@@ -871,6 +872,12 @@ zend_native_status zend_native_internal_call_invoke_finish(
 	zend_vm_stack_free_args(state->call);
 	if ((ZEND_CALL_INFO(state->call) & ZEND_CALL_RELEASE_THIS) != 0) {
 		OBJ_RELEASE(Z_OBJ(state->call->This));
+	} else if ((ZEND_CALL_INFO(state->call) & ZEND_CALL_CLOSURE) != 0) {
+		OBJ_RELEASE(ZEND_CLOSURE_OBJECT(state->call->func));
+	}
+	if ((state->call->func->common.fn_flags
+			& ZEND_ACC_CALL_VIA_TRAMPOLINE) != 0) {
+		zend_free_trampoline(state->call->func);
 	}
 	zend_vm_stack_free_call_frame(state->call);
 	state->caller->call = NULL;

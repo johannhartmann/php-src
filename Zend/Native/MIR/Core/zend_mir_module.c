@@ -43,7 +43,7 @@ static bool zend_mir_constant_kind_is_valid(zend_mir_constant_kind kind)
 
 static bool zend_mir_opcode_is_valid(zend_mir_opcode opcode)
 {
-	return opcode >= 0 && opcode < ZEND_MIR_W09_OPCODE_COUNT;
+	return opcode >= 0 && opcode < ZEND_MIR_W10_OPCODE_COUNT;
 }
 
 static void zend_mir_emit_diagnostic(zend_mir_diagnostic_sink *sink,
@@ -1025,9 +1025,12 @@ static bool zend_mir_core_stage_call_target(
 	staging = &module->call_staging;
 	if (staging->committed || target->id != staging->target_count
 			|| (target->kind != ZEND_MIR_CALL_TARGET_DIRECT_USER
-				&& target->kind != ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL)
+				&& target->kind != ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL
+				&& target->kind != ZEND_MIR_CALL_TARGET_METHOD_USER
+				&& target->kind != ZEND_MIR_CALL_TARGET_DYNAMIC)
 			|| !zend_mir_id_is_valid(target->function_symbol_id)
-			|| (target->kind == ZEND_MIR_CALL_TARGET_DIRECT_USER
+			|| ((target->kind == ZEND_MIR_CALL_TARGET_DIRECT_USER
+					|| target->kind == ZEND_MIR_CALL_TARGET_METHOD_USER)
 				&& !zend_mir_id_is_valid(target->op_array_id))
 			|| !zend_mir_core_grow_staging(
 				(void **) &staging->targets, staging->target_count,
@@ -1392,7 +1395,7 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 			}
 		}
 		if (staging->targets[site->target_id].kind
-				== ZEND_MIR_CALL_TARGET_DIRECT_USER
+				!= ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL
 				&& (site->arguments.count == 0
 					|| staging->arguments[site->arguments.offset].ownership
 						== ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR)) {

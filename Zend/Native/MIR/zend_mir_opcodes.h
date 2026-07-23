@@ -77,6 +77,51 @@
 	X(ITERATOR_BRANCH, "iterator_branch", 81) \
 	X(VALUE_COND_BRANCH, "value_cond_branch", 89)
 
+#define ZEND_MIR_OBJECT_OPCODE_CATALOG(X) \
+	X(OBJECT_DECLARE_ANON_CLASS, "object_declare_anon_class", 91) \
+	X(OBJECT_FETCH_THIS, "object_fetch_this", 92) \
+	X(OBJECT_FETCH_R, "object_fetch_r", 93) \
+	X(OBJECT_FETCH_W, "object_fetch_w", 94) \
+	X(OBJECT_FETCH_RW, "object_fetch_rw", 95) \
+	X(OBJECT_FETCH_IS, "object_fetch_is", 96) \
+	X(OBJECT_FETCH_FUNC_ARG, "object_fetch_func_arg", 97) \
+	X(OBJECT_FETCH_UNSET, "object_fetch_unset", 98) \
+	X(OBJECT_ASSIGN, "object_assign", 99) \
+	X(OBJECT_ASSIGN_REF, "object_assign_ref", 100) \
+	X(OBJECT_ASSIGN_OP, "object_assign_op", 101) \
+	X(OBJECT_UNSET, "object_unset", 102) \
+	X(OBJECT_ISSET_ISEMPTY, "object_isset_isempty", 103) \
+	X(OBJECT_PRE_INC, "object_pre_inc", 104) \
+	X(OBJECT_PRE_DEC, "object_pre_dec", 105) \
+	X(OBJECT_POST_INC, "object_post_inc", 106) \
+	X(OBJECT_POST_DEC, "object_post_dec", 107) \
+	X(OBJECT_INSTANCEOF, "object_instanceof", 108) \
+	X(OBJECT_CLONE, "object_clone", 109) \
+	X(STATIC_FETCH_R, "static_fetch_r", 110) \
+	X(STATIC_FETCH_W, "static_fetch_w", 111) \
+	X(STATIC_FETCH_RW, "static_fetch_rw", 112) \
+	X(STATIC_FETCH_IS, "static_fetch_is", 113) \
+	X(STATIC_FETCH_FUNC_ARG, "static_fetch_func_arg", 114) \
+	X(STATIC_FETCH_UNSET, "static_fetch_unset", 115) \
+	X(STATIC_ASSIGN, "static_assign", 116) \
+	X(STATIC_ASSIGN_REF, "static_assign_ref", 117) \
+	X(STATIC_ASSIGN_OP, "static_assign_op", 118) \
+	X(STATIC_PRE_INC, "static_pre_inc", 119) \
+	X(STATIC_PRE_DEC, "static_pre_dec", 120) \
+	X(STATIC_POST_INC, "static_post_inc", 121) \
+	X(STATIC_POST_DEC, "static_post_dec", 122) \
+	X(STATIC_ISSET_ISEMPTY, "static_isset_isempty", 123) \
+	X(STATIC_UNSET, "static_unset", 124) \
+	X(OBJECT_FETCH_CLASS, "object_fetch_class", 125) \
+	X(OBJECT_FETCH_CLASS_CONSTANT, "object_fetch_class_constant", 126) \
+	X(OBJECT_DECLARE_LAMBDA, "object_declare_lambda", 127) \
+	X(OBJECT_BIND_LEXICAL, "object_bind_lexical", 128) \
+	X(OBJECT_BIND_STATIC, "object_bind_static", 129) \
+	X(THROW_SOURCE_ZVAL, "throw_source_zval", 130) \
+	X(VALUE_TYPE_CHECK, "value_type_check", 131) \
+	X(CALL_FRAMELESS_INTERNAL, "call_frameless_internal", 132) \
+	X(OBJECT_FETCH_CLASS_NAME, "object_fetch_class_name", 133)
+
 #define ZEND_MIR_SCALAR_OPCODE_CATALOG(X) \
 	X(I64_ADD_NO_OVERFLOW, "i64_add_no_overflow", 10) \
 	X(I64_SUB_NO_OVERFLOW, "i64_sub_no_overflow", 11) \
@@ -118,6 +163,7 @@ typedef enum _zend_mir_opcode {
 	ZEND_MIR_VALUE_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
 	ZEND_MIR_EXECUTABLE_VALUE_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
 	ZEND_MIR_ITERATOR_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
+	ZEND_MIR_OBJECT_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
 	/*
 	 * Keep the W03 scalar range boundary stable. W05 is modeling-only and
 	 * publishes its additive table boundary separately.
@@ -127,6 +173,7 @@ typedef enum _zend_mir_opcode {
 	ZEND_MIR_W06_OPCODE_COUNT = 48,
 	ZEND_MIR_W08_OPCODE_COUNT = 54,
 	ZEND_MIR_W09_OPCODE_COUNT = 91,
+	ZEND_MIR_W10_OPCODE_COUNT = 134,
 	ZEND_MIR_OPCODE_INVALID = -1
 } zend_mir_opcode;
 #undef ZEND_MIR_OPCODE_ENUM
@@ -180,6 +227,7 @@ static inline bool zend_mir_opcode_is_terminator(zend_mir_opcode opcode)
 		|| opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
 		|| opcode == ZEND_MIR_OPCODE_RETURN
 		|| opcode == ZEND_MIR_OPCODE_THROW
+		|| opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
 		|| opcode == ZEND_MIR_OPCODE_UNREACHABLE;
 }
 
@@ -191,7 +239,12 @@ static inline bool zend_mir_opcode_is_executable_value(
 		|| opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN_OP
 		|| (opcode >= ZEND_MIR_OPCODE_VALUE_FE_FREE
 			&& opcode <= ZEND_MIR_OPCODE_VALUE_FETCH_LIST)
-		|| opcode == ZEND_MIR_OPCODE_VALUE_INCDEC;
+		|| opcode == ZEND_MIR_OPCODE_VALUE_INCDEC
+		|| (opcode >= ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS
+			&& opcode <= ZEND_MIR_OPCODE_OBJECT_BIND_STATIC)
+		|| opcode == ZEND_MIR_OPCODE_VALUE_TYPE_CHECK
+		|| opcode == ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL
+		|| opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME;
 }
 
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_COUNT < UINT32_MAX,
@@ -232,5 +285,11 @@ ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_VALUE_INCDEC
 	== ZEND_MIR_OPCODE_VALUE_COND_BRANCH + 1,
 	"increment and decrement extend the W09 value range");
+ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS
+	== ZEND_MIR_W09_OPCODE_COUNT,
+	"object operations begin after the W09 boundary");
+ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W10_OPCODE_COUNT
+	== ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME + 1,
+	"W10 object operations have an additive table boundary");
 
 #endif /* ZEND_MIR_OPCODES_H */

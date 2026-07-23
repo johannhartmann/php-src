@@ -353,7 +353,9 @@ public:
 			operands.reserve(instruction.operand_count +
 				(instruction.record.opcode == ZEND_MIR_OPCODE_RETURN
 					|| instruction.record.opcode
-						== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL));
+						== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
+					|| instruction.record.opcode
+						== ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL));
 			/*
 			 * RETURN_SOURCE_ZVAL transfers the canonical zval directly from the
 			 * Zend frame, selected by its source opline.  Its MIR value operand
@@ -366,6 +368,8 @@ public:
 				instruction.record.opcode == ZEND_MIR_OPCODE_STATEPOINT
 					|| instruction.record.opcode
 						== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
+					|| instruction.record.opcode
+						== ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
 				? 0 : instruction.operand_count;
 			for (uint32_t n = 0; n < data_operand_count; ++n) {
 				IRValueRef operand = value_ref(zend_tpde_operand_at(
@@ -378,6 +382,8 @@ public:
 			if (instruction.record.opcode == ZEND_MIR_OPCODE_RETURN
 					|| instruction.record.opcode
 						== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
+					|| instruction.record.opcode
+						== ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
 					|| instruction.source_effect != 0) {
 				operands.push_back(IRValueRef{FRAME_VALUE});
 			}
