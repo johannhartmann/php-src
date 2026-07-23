@@ -81,12 +81,17 @@ typedef enum _zend_native_call_argument_mode {
 typedef struct _zend_native_direct_call_argument {
 	uint32_t ordinal;
 	zend_native_call_argument_mode mode;
+	zend_mir_scalar_type_mask exact_type;
 	zend_mir_source_operand_ref source_operand;
 } zend_native_direct_call_argument;
+
+#define ZEND_NATIVE_DIRECT_CALL_TRIVIAL_FRAME UINT32_C(1)
 
 typedef struct _zend_native_direct_call_descriptor {
 	uint32_t argument_count;
 	uint32_t source_position;
+	uint32_t flags;
+	uint32_t frame_size;
 	zend_mir_scalar_type_mask result_type;
 	zend_mir_source_operand_ref result_operand;
 	zend_native_direct_call_argument arguments[1];
