@@ -19,6 +19,8 @@ void zend_native_dynamic_compiler_init(
 {
 	ZEND_ASSERT(compiler != NULL);
 	memset(compiler, 0, sizeof(*compiler));
+	zend_hash_init(
+		&compiler->entries_by_op_array, 8, NULL, NULL, false);
 }
 
 void zend_native_dynamic_compiler_bind_product(
@@ -47,6 +49,7 @@ void zend_native_dynamic_compiler_destroy(
 	}
 	efree(compiler->owned_op_arrays);
 	efree(compiler->entries);
+	zend_hash_destroy(&compiler->entries_by_op_array);
 	memset(compiler, 0, sizeof(*compiler));
 }
 
@@ -62,17 +65,15 @@ zend_native_entry_cell *zend_native_dynamic_compiler_lookup(
 	const zend_native_dynamic_compiler *compiler,
 	const zend_op_array *op_array)
 {
-	uint32_t index;
+	zend_native_entry_cell *entry_cell;
 
 	if (compiler == NULL || op_array == NULL) {
 		return NULL;
 	}
-	for (index = 0; index < compiler->entry_count; index++) {
-		if (compiler->entries[index].op_array == op_array) {
-			return compiler->entries[index].entry_cell;
-		}
-	}
-	return NULL;
+	entry_cell = zend_hash_index_find_ptr(
+		&compiler->entries_by_op_array,
+		(zend_ulong) (uintptr_t) op_array);
+	return entry_cell;
 }
 
 zend_result zend_native_dynamic_compiler_publish(
@@ -101,6 +102,11 @@ zend_result zend_native_dynamic_compiler_publish(
 			compiler->entries, new_capacity,
 			sizeof(*compiler->entries), 0);
 		compiler->entry_capacity = new_capacity;
+	}
+	if (zend_hash_index_add_ptr(
+			&compiler->entries_by_op_array,
+			(zend_ulong) (uintptr_t) op_array, entry_cell) == NULL) {
+		return FAILURE;
 	}
 	compiler->entries[compiler->entry_count].op_array = op_array;
 	compiler->entries[compiler->entry_count].entry_cell = entry_cell;
