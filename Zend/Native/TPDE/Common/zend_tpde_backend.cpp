@@ -1011,6 +1011,35 @@ bool initialize_plan(
 						site.source_do_opline_index;
 					descriptor->result_operand = site.result_operand;
 					descriptor->result_type = ZEND_MIR_SCALAR_TYPE_NONE;
+					bool trivial_frame =
+						plan->instructions[i].entry_cell != nullptr
+						&& plan->instructions[i].entry_cell->function != nullptr
+						&& ZEND_USER_CODE(
+							plan->instructions[i].entry_cell->function->type);
+					zend_function *callee = trivial_frame
+						? plan->instructions[i].entry_cell->function : nullptr;
+					if (trivial_frame) {
+						const zend_op_array &op_array = callee->op_array;
+						trivial_frame =
+							op_array.scope == nullptr
+							&& op_array.num_args == site.arguments.count
+							&& op_array.required_num_args
+								== site.arguments.count
+							&& op_array.last_var == op_array.num_args
+							&& op_array.T == 0
+							&& (op_array.fn_flags
+								& (ZEND_ACC_VARIADIC
+									| ZEND_ACC_CALL_VIA_TRAMPOLINE)) == 0;
+						for (uint32_t n = 0;
+								trivial_frame && n < op_array.num_args; ++n) {
+							trivial_frame = op_array.arg_info == nullptr
+								|| !ZEND_TYPE_IS_SET(op_array.arg_info[n].type);
+						}
+						if (trivial_frame) {
+							descriptor->frame_size = zend_vm_calc_used_stack(
+								site.arguments.count, callee);
+						}
+					}
 					if (zend_mir_id_is_valid(record.result_id)) {
 						const int32_t result_index =
 							zend_tpde_value_index(plan, record.result_id);
@@ -1042,8 +1071,27 @@ bool initialize_plan(
 									== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
 								? ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
 								: ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE;
+						const int32_t argument_value_index =
+							zend_tpde_value_index(plan, argument.value_id);
+						descriptor->arguments[n].exact_type =
+							argument_value_index >= 0
+							? plan->values[argument_value_index].exact_type
+							: ZEND_MIR_SCALAR_TYPE_NONE;
 						descriptor->arguments[n].source_operand =
 							argument.source_operand;
+						trivial_frame = trivial_frame
+							&& descriptor->arguments[n].mode
+								== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
+							&& zend_mir_scalar_type_is_exact(
+								descriptor->arguments[n].exact_type);
+					}
+					if (trivial_frame
+							&& (descriptor->result_type
+									== ZEND_MIR_SCALAR_TYPE_NONE
+								|| zend_mir_scalar_type_is_exact(
+									descriptor->result_type))) {
+						descriptor->flags |=
+							ZEND_NATIVE_DIRECT_CALL_TRIVIAL_FRAME;
 					}
 					plan->instructions[i].direct_call = descriptor;
 					plan->direct_calls[plan->direct_call_count++] = descriptor;

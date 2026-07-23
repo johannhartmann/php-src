@@ -1745,6 +1745,7 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 	uint32_t used_stack;
 	uint32_t activation_size;
 	uint32_t index;
+	bool trivial_frame;
 
 	if (caller == NULL || caller->func == NULL || context == NULL
 			|| !ZEND_USER_CODE(caller->func->type)
@@ -1772,8 +1773,25 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 #endif
 	caller->opline = &caller->func->op_array.opcodes[
 		descriptor->source_position];
-	used_stack = zend_vm_calc_used_stack(
-		descriptor->argument_count, function);
+	trivial_frame =
+		(descriptor->flags & ZEND_NATIVE_DIRECT_CALL_TRIVIAL_FRAME) != 0
+		&& descriptor->frame_size
+			== zend_vm_calc_used_stack(descriptor->argument_count, function)
+		&& function->op_array.scope == NULL
+		&& function->op_array.num_args == descriptor->argument_count
+		&& function->op_array.required_num_args == descriptor->argument_count
+		&& function->op_array.last_var == function->op_array.num_args
+		&& function->op_array.T == 0
+		&& (function->op_array.fn_flags
+			& (ZEND_ACC_VARIADIC | ZEND_ACC_CALL_VIA_TRAMPOLINE)) == 0;
+	for (index = 0;
+			trivial_frame && index < function->op_array.num_args; index++) {
+		trivial_frame = function->op_array.arg_info == NULL
+			|| !ZEND_TYPE_IS_SET(function->op_array.arg_info[index].type);
+	}
+	used_stack = trivial_frame
+		? descriptor->frame_size
+		: zend_vm_calc_used_stack(descriptor->argument_count, function);
 	activation_size = (uint32_t) (
 		(sizeof(zend_native_direct_activation) + sizeof(zval) - 1)
 			/ sizeof(zval) * sizeof(zval));
@@ -1817,7 +1835,22 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 		}
 		ZVAL_UNDEF(return_value);
 	}
-	zend_init_func_execute_data(call, &function->op_array, return_value);
+	if (trivial_frame) {
+		if (UNEXPECTED(!RUN_TIME_CACHE(&function->op_array))) {
+			zend_init_func_run_time_cache(&function->op_array);
+		}
+		call->opline =
+			function->op_array.opcodes + descriptor->argument_count;
+		call->call = NULL;
+		call->return_value = return_value;
+		call->prev_execute_data = caller;
+		call->symbol_table = NULL;
+		call->run_time_cache = RUN_TIME_CACHE(&function->op_array);
+		call->extra_named_params = NULL;
+		EG(current_execute_data) = call;
+	} else {
+		zend_init_func_execute_data(call, &function->op_array, return_value);
+	}
 	activation->raw_arguments_owned = false;
 	activation->frame_initialized = true;
 	if (cell->frame_probe != NULL) {
@@ -1828,7 +1861,8 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 	EG(current_execute_data) = call;
 	if (context->observers_enabled) {
 		result.entry = zend_native_call_direct_observed_entry;
-	} else if (zend_native_frame_prepare(call) == FAILURE) {
+	} else if (!trivial_frame
+			&& zend_native_frame_prepare(call) == FAILURE) {
 		zend_native_execution_cleanup_frame(call);
 		activation->frame_initialized = false;
 		goto finish;
