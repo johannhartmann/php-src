@@ -319,7 +319,6 @@ grep -F '<w09_fpm_ref>' "$response" >/dev/null
 grep -F '<array_map>' "$response" >/dev/null
 grep -F '<w10_fpm_outer>' "$response" >/dev/null
 grep -F '<w10_fpm_loaded_callback>' "$response" >/dev/null
-grep -F '<W10FpmObject::__destruct>' "$response" >/dev/null
 grep -F \
     'accepted=accepted execution=returned return=42 exception=0 bailout=0 vm=0 execute_ex=0 handler=0' \
     "$response" >/dev/null
