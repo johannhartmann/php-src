@@ -11,12 +11,21 @@ if (!function_exists('native_mir_test_compile_execute')) {
 $directory = sys_get_temp_dir() . '/native-w11-' . getmypid();
 mkdir($directory);
 $included = $directory . '/loaded.php';
+$autoloaded = $directory . '/autoloaded.php';
 file_put_contents($included, <<<'PHP'
 <?php
 function w11_loaded(): int {
     return 40;
 }
 return w11_loaded() + 2;
+PHP);
+file_put_contents($autoloaded, <<<'PHP'
+<?php
+class W11Autoloaded {
+    public function value(): int {
+        return 42;
+    }
+}
 PHP);
 
 $cases = [
@@ -56,6 +65,38 @@ PHP,
     [
         <<<'PHP'
 <?php
+function w11_eval_internal_call(): int {
+    return eval('return strlen("forty-two");') + 33;
+}
+PHP,
+        'w11_eval_internal_call',
+        [],
+    ],
+    [
+        <<<'PHP'
+<?php
+function w11_eval_closure(): int {
+    $closure = eval('return static fn (int $value): int => $value + 2;');
+    return $closure(40);
+}
+PHP,
+        'w11_eval_closure',
+        [],
+    ],
+    [
+        <<<'PHP'
+<?php
+function w11_eval_class(): int {
+    eval('class W11EvalClass { public function value(): int { return 42; } }');
+    return (new W11EvalClass())->value();
+}
+PHP,
+        'w11_eval_class',
+        [],
+    ],
+    [
+        <<<'PHP'
+<?php
 function w11_include(string $path): array {
     $first = include $path;
     $once = include_once $path;
@@ -64,6 +105,19 @@ function w11_include(string $path): array {
 PHP,
         'w11_include',
         [$included],
+    ],
+    [
+        <<<'PHP'
+<?php
+function w11_autoload(string $path): int {
+    spl_autoload_register(static function (string $class) use ($path): void {
+        include $path;
+    });
+    return (new W11Autoloaded())->value();
+}
+PHP,
+        'w11_autoload',
+        [$autoloaded],
     ],
 ];
 
@@ -86,10 +140,15 @@ foreach ($cases as $index => [$source, $function, $arguments]) {
 }
 
 unlink($included);
+unlink($autoloaded);
 rmdir($directory);
 ?>
 --EXPECT--
 w11_eval_return accepted return=42 vm=0 execute_ex=0 handler=0
 w11_eval_declaration accepted return=42 vm=0 execute_ex=0 handler=0
 w11_eval_scope accepted return=[42,42] vm=0 execute_ex=0 handler=0
+w11_eval_internal_call accepted return=42 vm=0 execute_ex=0 handler=0
+w11_eval_closure accepted return=42 vm=0 execute_ex=0 handler=0
+w11_eval_class accepted return=42 vm=0 execute_ex=0 handler=0
 w11_include accepted return=[42,true,40] vm=0 execute_ex=0 handler=0
+w11_autoload accepted return=42 vm=0 execute_ex=0 handler=0
