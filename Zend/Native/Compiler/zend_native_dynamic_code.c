@@ -4,6 +4,7 @@
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_execute.h"
 #include "Zend/zend_observer.h"
+#include "Zend/Native/Runtime/Common/zend_native_calls.h"
 
 #include <stdint.h>
 
@@ -15,12 +16,12 @@ ZEND_TLS zend_native_dynamic_compiler
 void zend_native_dynamic_compiler_init(
 	zend_native_dynamic_compiler *compiler,
 	void *context,
-	zend_native_dynamic_compile_execute_t compile_execute)
+	zend_native_dynamic_compile_t compile)
 {
-	ZEND_ASSERT(compiler != NULL && compile_execute != NULL);
+	ZEND_ASSERT(compiler != NULL && compile != NULL);
 	memset(compiler, 0, sizeof(*compiler));
 	compiler->context = context;
-	compiler->compile_execute = compile_execute;
+	compiler->compile = compile;
 }
 
 void zend_native_dynamic_compiler_destroy(
@@ -38,15 +39,66 @@ void zend_native_dynamic_compiler_destroy(
 		efree_size(op_array, sizeof(zend_op_array));
 	}
 	efree(compiler->owned_op_arrays);
+	efree(compiler->entries);
 	memset(compiler, 0, sizeof(*compiler));
 }
 
 void zend_native_dynamic_compiler_activate(
 	zend_native_dynamic_compiler *compiler)
 {
-	ZEND_ASSERT(compiler != NULL && compiler->compile_execute != NULL);
+	ZEND_ASSERT(compiler != NULL && compiler->compile != NULL);
 	ZEND_ASSERT(zend_native_active_dynamic_compiler == NULL);
 	zend_native_active_dynamic_compiler = compiler;
+}
+
+zend_native_entry_cell *zend_native_dynamic_compiler_lookup(
+	const zend_native_dynamic_compiler *compiler,
+	const zend_op_array *op_array)
+{
+	uint32_t index;
+
+	if (compiler == NULL || op_array == NULL) {
+		return NULL;
+	}
+	for (index = 0; index < compiler->entry_count; index++) {
+		if (compiler->entries[index].op_array == op_array) {
+			return compiler->entries[index].entry_cell;
+		}
+	}
+	return NULL;
+}
+
+zend_result zend_native_dynamic_compiler_publish(
+	zend_native_dynamic_compiler *compiler,
+	zend_op_array *op_array,
+	zend_native_entry_cell *entry_cell)
+{
+	uint32_t old_capacity;
+	uint32_t new_capacity;
+
+	if (compiler == NULL || op_array == NULL || entry_cell == NULL
+			|| entry_cell->state != ZEND_NATIVE_ENTRY_READY
+			|| entry_cell->code == NULL) {
+		return FAILURE;
+	}
+	if (zend_native_dynamic_compiler_lookup(compiler, op_array) != NULL) {
+		return FAILURE;
+	}
+	if (compiler->entry_count == compiler->entry_capacity) {
+		old_capacity = compiler->entry_capacity;
+		new_capacity = old_capacity < 8 ? 8 : old_capacity * 2;
+		if (new_capacity <= old_capacity) {
+			return FAILURE;
+		}
+		compiler->entries = safe_erealloc(
+			compiler->entries, new_capacity,
+			sizeof(*compiler->entries), 0);
+		compiler->entry_capacity = new_capacity;
+	}
+	compiler->entries[compiler->entry_count].op_array = op_array;
+	compiler->entries[compiler->entry_count].entry_cell = entry_cell;
+	compiler->entry_count++;
+	return SUCCESS;
 }
 
 static bool zend_native_dynamic_compiler_adopt(
@@ -125,12 +177,15 @@ zend_native_status zend_native_execute_include_or_eval(
 	const zend_op *opline;
 	zend_op_array *new_op_array;
 	zend_execute_data *call;
+	zend_execute_data *previous;
+	zend_native_entry_cell *entry_cell;
 	zval *filename;
 	zval *result = NULL;
 	zend_native_status status;
+	zend_native_diagnostic diagnostic;
 	uint32_t call_info;
 
-	if (compiler == NULL || compiler->compile_execute == NULL
+	if (compiler == NULL || compiler->compile == NULL
 			|| execute_data == NULL || execute_data->func == NULL
 			|| !ZEND_USER_CODE(execute_data->func->type)
 			|| source_opline_index >= execute_data->func->op_array.last) {
@@ -197,7 +252,24 @@ zend_native_status zend_native_execute_include_or_eval(
 			"Native dynamic codeunit owner capacity overflow");
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	status = compiler->compile_execute(compiler->context, new_op_array, call);
+	if (compiler->compile(compiler->context, new_op_array) == FAILURE
+			|| (entry_cell = zend_native_dynamic_compiler_lookup(
+				compiler, new_op_array)) == NULL
+			|| entry_cell->state != ZEND_NATIVE_ENTRY_READY
+			|| entry_cell->code == NULL) {
+		zend_vm_stack_free_call_frame(call);
+		if (EG(exception) == NULL) {
+			zend_throw_error(NULL,
+				"Native compilation failed for dynamically created code");
+		}
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	memset(&diagnostic, 0, sizeof(diagnostic));
+	previous = EG(current_execute_data);
+	EG(current_execute_data) = call;
+	status = zend_native_execute_frame(
+		entry_cell->code, call, &diagnostic);
+	EG(current_execute_data) = previous;
 	zend_vm_stack_free_call_frame(call);
 	/*
 	 * compile_execute takes ownership even when compilation fails. The native
