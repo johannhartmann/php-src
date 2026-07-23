@@ -125,6 +125,7 @@ typedef struct _zend_mir_call_site_ref {
 	zend_mir_call_target_id target_id;
 	zend_mir_span arguments;
 	zend_mir_value_id result_id;
+	zend_mir_source_operand_ref result_operand;
 	zend_mir_call_frame_descriptor caller_frame;
 	zend_mir_call_frame_descriptor callee_entry_frame;
 	zend_mir_span continuations;

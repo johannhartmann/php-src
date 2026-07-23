@@ -815,12 +815,20 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 	for (index = 0; index < plan->site_count; index++) {
 		zend_mir_source_call_site_ref *site = &plan->sites[index];
 		zend_mir_call_plan_entry *entry = &plan->entries[index];
+		zend_mir_source_opcode_ref do_opcode;
 		uint32_t argument_index;
 		if (!calls->call_site_at(calls->context, index, site)
 				|| site->id != index || site->target_id >= plan->target_count
 				|| site->argument_span.offset > plan->argument_count
 				|| site->argument_span.count
-					> plan->argument_count - site->argument_span.offset) {
+					> plan->argument_count - site->argument_span.offset
+				|| site->do_opline_index
+					>= calls->source_opcode_count(calls->context)
+				|| !calls->source_opcode_at(
+					calls->context, site->do_opline_index, &do_opcode)
+				|| do_opcode.opline_index != site->do_opline_index
+				|| memcmp(&site->result_operand, &do_opcode.result,
+					sizeof(site->result_operand)) != 0) {
 			return ZEND_MIRL_W05_MALFORMED_CALL_SEQUENCE;
 		}
 		if (!w08_execution
@@ -1088,6 +1096,7 @@ static bool zend_mir_w05_emit_calls(
 		site.target_id = source->target_id;
 		site.arguments = source->argument_span;
 		site.result_id = plan->results[index];
+		site.result_operand = source->result_operand;
 		site.caller_frame.frame_state_id = ZEND_MIR_ID_INVALID;
 		site.caller_frame.function_id = context->function_id;
 		site.caller_frame.function_symbol_id = context->function_symbol_id;
@@ -1538,6 +1547,7 @@ static bool zend_mir_w05_build_fingerprints(
 		W05_MIX(record, argument_span.offset);
 		W05_MIX(record, argument_span.count);
 		W05_MIX(record, result_ssa_variable_id);
+		W05_MIX_OPERAND(record, result_operand);
 		W05_MIX(record, flags);
 	}
 	source_seed = zend_mir_w05_fingerprint_mix(
@@ -1862,6 +1872,8 @@ bool zend_mir_verify_w05_calls(
 				|| site.arguments.count
 					> calls->call_argument_count(calls->context)
 						- site.arguments.offset
+				|| memcmp(&site.result_operand, &source.result_operand,
+					sizeof(site.result_operand)) != 0
 				|| site.continuations.offset != index * 4
 				|| site.continuations.count != 4
 				|| site.effects != W05_EFFECTS || site.reads != W05_READS
@@ -2607,6 +2619,8 @@ static bool zend_mir_verify_w08_calls(
 				|| site.target_id != source.target_id
 				|| site.arguments.offset != source.argument_span.offset
 				|| site.arguments.count != source.argument_span.count
+				|| memcmp(&site.result_operand, &source.result_operand,
+					sizeof(site.result_operand)) != 0
 				|| site.source_init_opline_index != source.init_opline_index
 				|| site.source_do_opline_index != source.do_opline_index
 				|| site.continuations.offset != index * 4

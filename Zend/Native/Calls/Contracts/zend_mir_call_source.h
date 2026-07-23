@@ -52,6 +52,7 @@ typedef struct _zend_mir_source_call_site_ref {
 	zend_mir_source_call_target_id target_id;
 	zend_mir_span argument_span;
 	uint32_t result_ssa_variable_id;
+	zend_mir_source_operand_ref result_operand;
 	uint32_t flags;
 } zend_mir_source_call_site_ref;
 

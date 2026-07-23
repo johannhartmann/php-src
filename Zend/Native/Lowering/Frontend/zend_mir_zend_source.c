@@ -2298,6 +2298,11 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 			site->source_block_id = block_id;
 			site->target_id = target_id;
 			site->result_ssa_variable_id = ZEND_MIR_ID_INVALID;
+			site->result_operand.kind = ZEND_MIR_SOURCE_OPERAND_UNUSED;
+			site->result_operand.slot_kind =
+				ZEND_MIR_SOURCE_SLOT_KIND_INVALID;
+			site->result_operand.index = ZEND_MIR_ID_INVALID;
+			site->result_operand.ssa_variable_id = ZEND_MIR_ID_INVALID;
 			if (stack_count != 0) {
 				site->flags |= ZEND_MIR_SOURCE_CALL_SITE_NESTED;
 			}
@@ -2382,6 +2387,8 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 		}
 		if (zend_mir_frontend_is_call_do(opline->opcode)) {
 			zend_mir_source_call_site_ref *site;
+			zend_mir_source_opcode_ref source_opcode;
+			zend_mir_zend_source original_source;
 
 			if (stack_count == 0) {
 				zend_mir_frontend_set_diagnostic(
@@ -2395,6 +2402,15 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 			site = &inventory->sites[stack[--stack_count]];
 			site->do_opline_index = index;
 			site->source_block_id = block_id;
+			original_source = *source;
+			original_source.op_array = op_array;
+			original_source.ssa = ssa;
+			original_source.opcode_count = op_array->last;
+			if (!zend_mir_frontend_opcode_at(
+					&original_source, index, &source_opcode)) {
+				goto malformed;
+			}
+			site->result_operand = source_opcode.result;
 			if (RESULT_UNUSED(opline)) {
 				site->flags |= ZEND_MIR_SOURCE_CALL_SITE_RESULT_UNUSED;
 			} else if (ssa->ops[index].result_def >= 0

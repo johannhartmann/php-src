@@ -370,6 +370,9 @@ public:
 						== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
 					|| instruction.record.opcode
 						== ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
+					|| (instruction.record.opcode
+							== ZEND_MIR_OPCODE_CALL_DIRECT_USER
+						&& instruction.direct_call != nullptr)
 				? 0 : instruction.operand_count;
 			for (uint32_t n = 0; n < data_operand_count; ++n) {
 				IRValueRef operand = value_ref(zend_tpde_operand_at(
@@ -406,13 +409,22 @@ public:
 			}
 			if (instruction.record.opcode
 					== ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
-				/* begin + setters + finish + optional source-result read */
-				uint32_t setter_count = instruction.operand_count == 0
-					? instruction.call_argument_count
-					: instruction.operand_count;
-				for (uint32_t n = 0;
-						n < setter_count + 2
-							+ machine_result; ++n) {
+				/*
+				 * The descriptor path is one call with explicit source-backed
+				 * operands and a two-register status/payload result.  The
+				 * compatibility path still exposes one frame use per helper
+				 * invocation so TPDE's reference counts match generated code.
+				 */
+				uint32_t frame_use_count;
+				if (instruction.direct_call != nullptr) {
+					frame_use_count = 1;
+				} else {
+					uint32_t setter_count = instruction.operand_count == 0
+						? instruction.call_argument_count
+						: instruction.operand_count;
+					frame_use_count = setter_count + 2 + machine_result;
+				}
+				for (uint32_t n = 0; n < frame_use_count; ++n) {
 					operands.push_back(IRValueRef{FRAME_VALUE});
 				}
 			} else if (instruction.record.opcode

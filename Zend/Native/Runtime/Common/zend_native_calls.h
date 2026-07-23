@@ -3,6 +3,7 @@
 #ifndef ZEND_NATIVE_CALLS_H
 #define ZEND_NATIVE_CALLS_H
 
+#include "Zend/Native/Lowering/zend_mir_lowering_source.h"
 #include "Zend/Native/TPDE/Common/zend_tpde_backend.h"
 
 #ifdef __cplusplus
@@ -73,6 +74,29 @@ typedef enum _zend_native_call_argument_mode {
 	ZEND_NATIVE_CALL_ARGUMENT_PLACEHOLDER = 2
 } zend_native_call_argument_mode;
 
+/*
+ * Immutable call-site data used by the direct Native-to-Native path. Source
+ * positions remain diagnostics only; operand identity is carried explicitly.
+ */
+typedef struct _zend_native_direct_call_argument {
+	uint32_t ordinal;
+	zend_native_call_argument_mode mode;
+	zend_mir_source_operand_ref source_operand;
+} zend_native_direct_call_argument;
+
+typedef struct _zend_native_direct_call_descriptor {
+	uint32_t argument_count;
+	uint32_t source_position;
+	zend_mir_scalar_type_mask result_type;
+	zend_mir_source_operand_ref result_operand;
+	zend_native_direct_call_argument arguments[1];
+} zend_native_direct_call_descriptor;
+
+typedef struct _zend_native_direct_call_result {
+	uint64_t status;
+	uint64_t payload;
+} zend_native_direct_call_result;
+
 void zend_native_entry_cell_init(
 	zend_native_entry_cell *cell, zend_function *function);
 zend_result zend_native_entry_cell_begin_compile(zend_native_entry_cell *cell);
@@ -138,6 +162,14 @@ zend_native_status zend_native_call_invoke_finish_source(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
 	uint32_t do_opline_index);
+zend_native_direct_call_result zend_native_call_direct(
+	zend_execute_data *caller,
+	zend_native_entry_cell *cell,
+	const zend_native_direct_call_descriptor *descriptor);
+void zend_native_call_direct_unwind(zend_execute_data *outermost);
+void zend_native_execution_cleanup_frame(zend_execute_data *execute_data);
+zend_native_status zend_native_execution_finish_direct_frame(
+	zend_execute_data *execute_data, zend_native_status status);
 
 /*
  * Mirror the VM's exception cleanup for a call that aborted an active finally
