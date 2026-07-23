@@ -11,6 +11,17 @@
 
 struct _zend_native_direct_call_descriptor;
 
+static inline uint64_t zend_tpde_encode_value_operand(
+	const zend_mir_source_operand_ref &operand)
+{
+	return (static_cast<uint64_t>(
+			static_cast<uint32_t>(operand.kind) & UINT32_C(0xff)))
+		| (static_cast<uint64_t>(
+				static_cast<uint32_t>(operand.slot_kind) & UINT32_C(0xff))
+			<< 8)
+		| (static_cast<uint64_t>(operand.index) << 16);
+}
+
 struct zend_tpde_value {
 	zend_mir_value_id id;
 	zend_mir_representation representation;

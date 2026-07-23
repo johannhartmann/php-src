@@ -16,6 +16,7 @@
 #include "Zend/Optimizer/zend_ssa.h"
 
 #include "zend_mir_value_lowering.h"
+
 #include "../../Calls/Model/zend_mir_call_model.h"
 #include "../../Lowering/Core/zend_mir_lowering_internal.h"
 #include "../../Lowering/StraightLine/zend_mir_straight_line_internal.h"
@@ -347,6 +348,22 @@ static zend_mir_opcode zend_mir_w09_executable_opcode(uint32_t opcode)
 	}
 }
 
+static zend_mir_opcode zend_mir_w11p_control_value_opcode(uint32_t opcode)
+{
+	switch (opcode) {
+		case ZEND_JMPZ:
+		case ZEND_JMPNZ:
+		case ZEND_JMPZ_EX:
+		case ZEND_JMPNZ_EX:
+		case ZEND_JMP_SET:
+		case ZEND_COALESCE:
+		case ZEND_JMP_NULL:
+			return ZEND_MIR_OPCODE_VALUE_COND_BRANCH;
+		default:
+			return ZEND_MIR_OPCODE_INVALID;
+	}
+}
+
 bool zend_mir_w09_opcode_is_executable(uint32_t opcode)
 {
 	return zend_mir_w09_executable_opcode(opcode)
@@ -546,6 +563,16 @@ static bool zend_mir_w09_operation_semantics(
 				return false;
 			}
 			break;
+		case ZEND_MIR_OPCODE_VALUE_COND_BRANCH:
+			if (!zend_mir_w09_add_effect(
+					&summary, ZEND_MIR_EFFECT_OBSERVE_FRAME)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_REENTER_PHP)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_THROW)) {
+				return false;
+			}
+			break;
 		case ZEND_MIR_OPCODE_VALUE_FREE:
 		case ZEND_MIR_OPCODE_VALUE_UNSET_CV:
 			if (!zend_mir_w09_add_effect(
@@ -710,6 +737,33 @@ static zend_mir_storage_id zend_mir_w09_operand_storage_id(
 	return base + operand->index;
 }
 
+static bool zend_mir_w11p_find_control_value_instruction(
+	const zend_mir_view *view, zend_mir_block_id block_id,
+	zend_mir_source_position_id source_position_id,
+	zend_mir_instruction_id *out)
+{
+	uint32_t index;
+
+	if (view == NULL || out == NULL || view->instruction_count == NULL
+			|| view->instruction_at == NULL) {
+		return false;
+	}
+	for (index = 0; index < view->instruction_count(view->context); index++) {
+		zend_mir_instruction_record instruction;
+
+		if (!view->instruction_at(view->context, index, &instruction)) {
+			return false;
+		}
+		if (instruction.block_id == block_id
+				&& instruction.source_position_id == source_position_id
+				&& instruction.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
+			*out = instruction.id;
+			return true;
+		}
+	}
+	return false;
+}
+
 bool zend_mir_w09_emit_executable_values(
 	const zend_op_array *op_array,
 	zend_mir_lowering_context *lowering_context,
@@ -720,6 +774,7 @@ bool zend_mir_w09_emit_executable_values(
 	bool w11_execution)
 {
 	const zend_mir_lowering_source_view *source;
+	zend_mir_source_call_view semantic_source;
 	const zend_mir_view *view;
 	zend_mir_executable_value_ref *operations;
 	zend_mir_value_mutator *value_mutator;
@@ -737,7 +792,14 @@ bool zend_mir_w09_emit_executable_values(
 	view = lowering_context->module_ops.view(
 		lowering_context->module_ops.context, module);
 	if (source == NULL || view == NULL
-			|| source->opcode_count(source->context) != op_array->last) {
+			|| source->opcode_count(source->context) != op_array->last
+			|| lowering_context->zend_source == NULL
+			|| !zend_mir_zend_source_call_view(
+				lowering_context->zend_source, &semantic_source)
+			|| semantic_source.source_opcode_count == NULL
+			|| semantic_source.source_opcode_at == NULL
+			|| semantic_source.source_opcode_count(
+				semantic_source.context) != op_array->last) {
 		return false;
 	}
 	operations = zend_mir_w06_calloc(op_array->last, sizeof(*operations));
@@ -759,6 +821,10 @@ bool zend_mir_w09_emit_executable_values(
 		zend_mir_opcode opcode = zend_mir_w09_executable_opcode(
 			op_array->opcodes[index].opcode);
 
+		if (opcode == ZEND_MIR_OPCODE_INVALID) {
+			opcode = zend_mir_w11p_control_value_opcode(
+				op_array->opcodes[index].opcode);
+		}
 		if (opcode == ZEND_MIR_OPCODE_INVALID
 				|| (!w10_execution
 					&& opcode >= ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS)
@@ -766,7 +832,8 @@ bool zend_mir_w09_emit_executable_values(
 					&& opcode >= ZEND_MIR_OPCODE_DYNAMIC_FETCH_R)) {
 			continue;
 		}
-		if (!source->opcode_at(source->context, index, &source_opcode)
+		if (!semantic_source.source_opcode_at(
+				semantic_source.context, index, &source_opcode)
 				|| source_opcode.opline_index != index
 				|| !zend_mir_w09_source_block(
 					source, source_opcode.block_id, &source_block)) {
@@ -796,6 +863,12 @@ bool zend_mir_w09_emit_executable_values(
 				source_opcode.block_id, &operation->block_id)
 				|| !zend_mir_w09_operation_semantics(
 					opcode, operation, &frame_class)) {
+			goto done;
+		}
+		if (opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				&& !zend_mir_w11p_find_control_value_instruction(
+					view, operation->block_id,
+					operation->source_position_id, &operation->id)) {
 			goto done;
 		}
 		if (frame_class != ZEND_MIR_SAFEPOINT_CLASS_INVALID) {
