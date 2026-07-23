@@ -248,6 +248,8 @@ static zend_mir_opcode zend_mir_w09_executable_opcode(uint32_t opcode)
 		case ZEND_FRAMELESS_ICALL_2:
 		case ZEND_FRAMELESS_ICALL_3:
 			return ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL;
+		case ZEND_ECHO:
+			return ZEND_MIR_OPCODE_ECHO_SCALAR;
 		case ZEND_ADD:
 		case ZEND_SUB:
 		case ZEND_MUL:
@@ -524,6 +526,7 @@ static bool zend_mir_w09_operation_semantics(
 		case ZEND_MIR_OPCODE_DYNAMIC_DECLARE_CONSTANT:
 		case ZEND_MIR_OPCODE_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT:
 		case ZEND_MIR_OPCODE_DYNAMIC_INCLUDE_OR_EVAL:
+		case ZEND_MIR_OPCODE_ECHO_SCALAR:
 			if (!zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_ALLOCATE)
 					|| !zend_mir_w09_add_effect(
 						&summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)

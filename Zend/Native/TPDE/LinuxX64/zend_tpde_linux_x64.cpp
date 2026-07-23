@@ -197,7 +197,8 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		label_place(matched);
 		return true;
 	}
-	if (mir.source_effect == ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR) {
+	if (mir.record.opcode == ZEND_MIR_OPCODE_ECHO_SCALAR
+			|| mir.source_effect == ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR) {
 		zend_mir_scalar_type_mask exact_type = mir.source_effect_exact_type;
 		if (!zend_mir_scalar_type_is_exact(exact_type)
 				|| node.operands.empty()) {

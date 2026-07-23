@@ -26,6 +26,21 @@ void require_runtime_helper(
 		UINT64_C(1) << (helper % 64u);
 }
 
+bool source_operand_value_id(
+	const zend_mir_source_operand_ref &operand, zend_mir_value_id &value_id) {
+	switch (operand.kind) {
+		case ZEND_MIR_SOURCE_OPERAND_LITERAL:
+			value_id = zend_mir_value_from_synthetic(operand.index);
+			return zend_mir_id_is_valid(value_id);
+		case ZEND_MIR_SOURCE_OPERAND_SSA:
+			value_id = zend_mir_value_from_original_ssa(
+				operand.ssa_variable_id);
+			return zend_mir_id_is_valid(value_id);
+		default:
+			return false;
+	}
+}
+
 zend_native_runtime_helper_id executable_value_helper(zend_mir_opcode opcode) {
 	if (opcode >= ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS
 			&& opcode <= ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME) {
@@ -353,10 +368,14 @@ bool initialize_plan(
 		plan->instructions[i].operand_offset = static_cast<uint32_t>(operands - count);
 		plan->instructions[i].operand_count = count;
 		if (zend_mir_opcode_is_executable_value(record.opcode)) {
-			const zend_native_runtime_helper_id helper =
-				executable_value_helper(record.opcode);
-			if (count != 0 || !zend_mir_id_is_valid(record.source_position_id)
-					|| helper == ZEND_NATIVE_HELPER_COUNT
+			const bool semantic_echo =
+				record.opcode == ZEND_MIR_OPCODE_ECHO_SCALAR;
+			const zend_native_runtime_helper_id helper = semantic_echo
+				? ZEND_NATIVE_HELPER_COUNT
+				: executable_value_helper(record.opcode);
+			if ((semantic_echo ? count != 1 : count != 0)
+					|| !zend_mir_id_is_valid(record.source_position_id)
+					|| (!semantic_echo && helper == ZEND_NATIVE_HELPER_COUNT)
 					|| !plan->instructions[i].has_value_operation
 					|| plan->instructions[i].value_operation.id != record.id
 					|| plan->instructions[i].value_operation.opcode
@@ -367,6 +386,36 @@ bool initialize_plan(
 					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 					"executable value operation lacks exact source semantics");
 				return false;
+			}
+			if (semantic_echo) {
+				zend_mir_value_id value_id;
+				const zend_mir_executable_value_ref &operation =
+					plan->instructions[i].value_operation;
+				if (operation.source_opcode != ZEND_ECHO
+						|| !source_operand_value_id(operation.op1, value_id)) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+						"semantic echo lacks an explicit scalar operand");
+					return false;
+				}
+				const int32_t value_index =
+					zend_tpde_value_index(plan, value_id);
+				if (value_index < 0
+						|| !zend_mir_scalar_type_is_exact(
+							plan->values[value_index].exact_type)) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_UNSUPPORTED_OPCODE,
+						"semantic echo operand has no exact scalar type");
+					return false;
+				}
+				plan->instructions[i].source_effect_exact_type =
+					plan->values[value_index].exact_type;
+				require_runtime_helper(plan,
+					plan->values[value_index].exact_type
+						== ZEND_MIR_SCALAR_TYPE_F64
+						? ZEND_NATIVE_HELPER_ECHO_DOUBLE
+						: ZEND_NATIVE_HELPER_ECHO_INTEGER);
+				continue;
 			}
 			/*
 			 * Kept temporarily for uncommon slow paths while their helper ABI
@@ -769,7 +818,9 @@ bool initialize_plan(
 							!= ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL) {
 					continue;
 				}
-			} else if (candidate.record.opcode != ZEND_MIR_OPCODE_I1_NOT
+			} else if (candidate.record.opcode
+						!= ZEND_MIR_OPCODE_ECHO_SCALAR
+					&& candidate.record.opcode != ZEND_MIR_OPCODE_I1_NOT
 					&& candidate.record.opcode != ZEND_MIR_OPCODE_I64_TO_I1
 					&& candidate.record.opcode != ZEND_MIR_OPCODE_F64_TO_I1
 					&& candidate.record.opcode != ZEND_MIR_OPCODE_SCALAR_DROP) {
@@ -826,6 +877,18 @@ bool initialize_plan(
 					&plan->operands[instruction.operand_offset + n])) {
 				zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 					"MIR operand table is unreadable");
+				return false;
+			}
+		}
+		if (instruction.record.opcode == ZEND_MIR_OPCODE_ECHO_SCALAR) {
+			zend_mir_value_id expected;
+			if (!source_operand_value_id(
+					instruction.value_operation.op1, expected)
+					|| instruction.operand_count != 1
+					|| plan->operands[instruction.operand_offset] != expected) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+					"semantic echo MIR operand differs from source semantics");
 				return false;
 			}
 		}

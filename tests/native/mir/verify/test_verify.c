@@ -370,9 +370,9 @@ static void test_entry_failures(void)
 	expect_rejected(&host, "MIRV0002");
 
 	zend_mir_verify_fixture_linear(&host);
-	host.instructions[0].opcode = (zend_mir_opcode) ZEND_MIR_W11_OPCODE_COUNT;
-	host.instructions[1].opcode = (zend_mir_opcode) ZEND_MIR_W11_OPCODE_COUNT;
-	host.instructions[2].opcode = (zend_mir_opcode) ZEND_MIR_W11_OPCODE_COUNT;
+	host.instructions[0].opcode = (zend_mir_opcode) ZEND_MIR_W11P_OPCODE_COUNT;
+	host.instructions[1].opcode = (zend_mir_opcode) ZEND_MIR_W11P_OPCODE_COUNT;
+	host.instructions[2].opcode = (zend_mir_opcode) ZEND_MIR_W11P_OPCODE_COUNT;
 	assert(!verify_host(&host, 2, &collected));
 	assert(diagnostics_contain(&collected, "MIRV0003"));
 }
@@ -391,7 +391,7 @@ static void test_identity_and_representation_failures(void)
 	expect_rejected(&host, "MIRV0101");
 
 	zend_mir_verify_fixture_linear(&host);
-	host.instructions[1].opcode = (zend_mir_opcode) ZEND_MIR_W11_OPCODE_COUNT;
+	host.instructions[1].opcode = (zend_mir_opcode) ZEND_MIR_W11P_OPCODE_COUNT;
 	expect_rejected(&host, "MIRV0102");
 
 	zend_mir_verify_fixture_linear(&host);
@@ -488,6 +488,13 @@ static void test_cfg_failures(void)
 	zend_mir_verify_fixture_linear(&host);
 	host.operands[1] = host.operands[0];
 	host.operand_count = 2;
+	expect_rejected(&host, "MIRV0207");
+
+	zend_mir_verify_fixture_linear(&host);
+	host.instructions[1].opcode = ZEND_MIR_OPCODE_ECHO_SCALAR;
+	host.instructions[1].representation = ZEND_MIR_REPRESENTATION_VOID;
+	host.instructions[1].result_id = ZEND_MIR_ID_INVALID;
+	host.instructions[1].source_position_id = 0;
 	expect_rejected(&host, "MIRV0207");
 
 	zend_mir_verify_fixture_diamond(&host);

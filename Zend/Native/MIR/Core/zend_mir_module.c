@@ -43,7 +43,7 @@ static bool zend_mir_constant_kind_is_valid(zend_mir_constant_kind kind)
 
 static bool zend_mir_opcode_is_valid(zend_mir_opcode opcode)
 {
-	return opcode >= 0 && opcode < ZEND_MIR_W11_OPCODE_COUNT;
+	return opcode >= 0 && opcode < ZEND_MIR_W11P_OPCODE_COUNT;
 }
 
 static void zend_mir_emit_diagnostic(zend_mir_diagnostic_sink *sink,
