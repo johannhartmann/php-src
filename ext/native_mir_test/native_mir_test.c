@@ -47,7 +47,6 @@
 #include "Zend/Native/MIR/zend_mir.h"
 #include "Zend/Native/Calls/Model/zend_mir_call_model.h"
 #include "Zend/Native/Compiler/zend_native_compiler.h"
-#include "Zend/Native/Compiler/zend_native_dynamic_code.h"
 #include "Zend/Native/Values/Lowering/zend_mir_value_lowering.h"
 #include "Zend/Native/Lowering/Core/zend_mir_lowering_internal.h"
 #include "Zend/Native/Lowering/Frontend/zend_mir_zend_source.h"
@@ -209,8 +208,6 @@ typedef struct _native_mir_test_state {
 	native_mir_test_native_function **native_functions;
 	uint32_t native_function_count;
 	uint32_t native_function_capacity;
-	zend_native_dynamic_compiler dynamic_compiler;
-	bool dynamic_compiler_active;
 	zval native_result;
 	bool native_result_valid;
 	bool native_writable_after_publish;
@@ -331,13 +328,6 @@ extern zend_mir_w08_lowering_result zend_mir_lower_w09_zend_op_array(
 	zend_mir_diagnostic_sink *diagnostics);
 
 extern zend_mir_w08_lowering_result zend_mir_lower_w10_zend_op_array(
-	const zend_script *script,
-	const zend_op_array *op_array,
-	const zend_ssa *ssa,
-	const zend_mir_lowering_module_ops *module_ops,
-	zend_mir_diagnostic_sink *diagnostics);
-
-extern zend_mir_w08_lowering_result zend_mir_lower_w11_zend_op_array(
 	const zend_script *script,
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,
@@ -1005,10 +995,7 @@ static bool native_mir_test_build_ssa(native_mir_test_state *state)
 	optimizer.arena = state->ssa_arena;
 	optimizer.script = &state->script;
 	optimizer.optimization_level = ZEND_OPTIMIZER_PASS_6;
-	if ((state->wave >= 11
-			? zend_dfa_analyze_op_array_with_dynamic_bindings(
-				state->selected, &optimizer, &state->ssa)
-			: state->wave >= 8
+	if ((state->wave >= 8
 			? zend_dfa_analyze_op_array_with_protected_regions(
 				state->selected, &optimizer, &state->ssa)
 			: zend_dfa_analyze_op_array(
@@ -1527,11 +1514,7 @@ static bool native_mir_test_lower_w05_and_dump(native_mir_test_state *state)
 	}
 	zend_mir_w05_test_set_fault(call_fault);
 #endif
-	result = state->wave >= 11
-		? zend_mir_lower_w11_zend_op_array(
-			&state->script, state->selected, &state->ssa,
-			&module_ops, &diagnostics)
-		: state->wave >= 10
+	result = state->wave >= 10
 		? zend_mir_lower_w10_zend_op_array(
 			&state->script, state->selected, &state->ssa,
 			&module_ops, &diagnostics)
@@ -1694,7 +1677,7 @@ static bool native_mir_test_lower_and_dump(native_mir_test_state *state)
 	}
 	if (state->wave == 5 || state->wave == 7
 			|| state->wave == 8 || state->wave == 9
-			|| state->wave == 10 || state->wave == 11) {
+			|| state->wave == 10) {
 		return native_mir_test_lower_w05_and_dump(state);
 	}
 	return state->wave == 4
@@ -2411,10 +2394,7 @@ static bool native_mir_test_build_function_ssa(
 	optimizer.arena = function->ssa_arena;
 	optimizer.script = &state->script;
 	optimizer.optimization_level = ZEND_OPTIMIZER_PASS_6;
-	if ((state->wave >= 11
-			? zend_dfa_analyze_op_array_with_dynamic_bindings(
-				function->op_array, &optimizer, &function->ssa)
-			: state->wave >= 8
+	if ((state->wave >= 8
 			? zend_dfa_analyze_op_array_with_protected_regions(
 				function->op_array, &optimizer, &function->ssa)
 			: zend_dfa_analyze_op_array(
@@ -3658,10 +3638,6 @@ static zend_native_entry_cell *native_mir_test_resolve_reentry_target(
 	source_op_array = native_mir_test_canonical_reentry_op_array(
 		state, &resolved->op_array);
 	if (source_op_array == NULL
-			&& state->wave >= 11) {
-		source_op_array = &resolved->op_array;
-	}
-	if (source_op_array == NULL
 			&& state->wave >= 10
 			&& resolved->common.function_name != NULL
 			&& zend_string_starts_with_literal(
@@ -3994,11 +3970,6 @@ static bool native_mir_test_execute_module(
 		}
 		reentry_entered = true;
 	}
-	if (state->wave >= 11) {
-		zend_native_dynamic_compiler_init(&state->dynamic_compiler);
-		zend_native_dynamic_compiler_activate(&state->dynamic_compiler);
-		state->dynamic_compiler_active = true;
-	}
 	for (index = 0; index < state->execute_repetitions; ++index) {
 		zend_native_status native_status = native_mir_test_execute_frame(
 			state, arguments, &diagnostic);
@@ -4010,11 +3981,6 @@ static bool native_mir_test_execute_module(
 			if (!Z_ISUNDEF(state->native_result)) {
 				zval_ptr_dtor(&state->native_result);
 				ZVAL_UNDEF(&state->native_result);
-			}
-			if (state->dynamic_compiler_active) {
-				zend_native_dynamic_compiler_deactivate(
-					&state->dynamic_compiler);
-				state->dynamic_compiler_active = false;
 			}
 			if (reentry_entered) {
 				zend_native_reentry_scope_leave(&reentry_scope);
@@ -4028,10 +3994,6 @@ static bool native_mir_test_execute_module(
 			zval_ptr_dtor(&state->native_result);
 			ZVAL_UNDEF(&state->native_result);
 		}
-	}
-	if (state->dynamic_compiler_active) {
-		zend_native_dynamic_compiler_deactivate(&state->dynamic_compiler);
-		state->dynamic_compiler_active = false;
 	}
 	if (reentry_entered) {
 		zend_native_reentry_scope_leave(&reentry_scope);
@@ -4165,10 +4127,6 @@ static void native_mir_test_cleanup(native_mir_test_state *state)
 	HashTable *class_table;
 	uint32_t index;
 
-	if (state->dynamic_compiler_active) {
-		zend_native_dynamic_compiler_deactivate(&state->dynamic_compiler);
-		state->dynamic_compiler_active = false;
-	}
 	if (state->compiler_options_saved) {
 		CG(compiler_options) = state->original_compiler_options;
 		state->compiler_options_saved = false;
@@ -4241,7 +4199,6 @@ static void native_mir_test_cleanup(native_mir_test_state *state)
 			state->ssa_arena = NULL;
 		}
 	}
-	zend_native_dynamic_compiler_destroy(&state->dynamic_compiler);
 	if (state->script_initialized) {
 		zend_hash_destroy(&state->script.function_table);
 		zend_hash_destroy(&state->script.class_table);
@@ -4666,10 +4623,6 @@ ZEND_FUNCTION(native_mir_test_compile_execute)
 	} zend_catch {
 		bailed_out = true;
 	} zend_end_try();
-	if (state->dynamic_compiler_active) {
-		zend_native_dynamic_compiler_deactivate(&state->dynamic_compiler);
-		state->dynamic_compiler_active = false;
-	}
 	native_mir_test_active_state = previous_active_state;
 
 	if (bailed_out) {
