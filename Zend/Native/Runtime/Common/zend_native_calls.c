@@ -561,6 +561,14 @@ static ZEND_COLD ZEND_NORETURN void zend_native_call_abort(const char *message)
 	zend_bailout();
 }
 
+static zend_function *zend_native_call_reject_target(const char *message)
+{
+	if (EG(exception) == NULL) {
+		zend_throw_error(NULL, "%s", message);
+	}
+	return (zend_function *) &zend_pass_function;
+}
+
 static zval *zend_native_call_source_slot(
 	zend_execute_data *caller, uint8_t type, znode_op operand)
 {
@@ -1045,8 +1053,9 @@ void zend_native_call_begin(
 					zend_native_active_reentry_scope, resolved);
 				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
 						|| cell->code == NULL) {
-					zend_native_call_abort(
+					function = zend_native_call_reject_target(
 						"Native named target compilation failed");
+					break;
 				}
 			}
 			function = resolved;
@@ -1071,8 +1080,9 @@ void zend_native_call_begin(
 					zend_native_active_reentry_scope, function);
 				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
 						|| cell->code == NULL) {
-					zend_native_call_abort(
+					function = zend_native_call_reject_target(
 						"Native named target compilation failed");
+					object_or_called_scope = NULL;
 				}
 			}
 			break;
@@ -1102,8 +1112,15 @@ void zend_native_call_begin(
 					zend_native_active_reentry_scope, function);
 				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
 						|| cell->code == NULL) {
-					zend_native_call_abort(
+					if ((call_info & ZEND_CALL_RELEASE_THIS) != 0) {
+						OBJ_RELEASE((zend_object *) object_or_called_scope);
+					} else if ((call_info & ZEND_CALL_CLOSURE) != 0) {
+						OBJ_RELEASE(ZEND_CLOSURE_OBJECT(function));
+					}
+					function = zend_native_call_reject_target(
 						"Native dynamic target compilation failed");
+					object_or_called_scope = NULL;
+					call_info = ZEND_CALL_NESTED_FUNCTION;
 				}
 			}
 			if ((source_init->op2_type & (IS_VAR | IS_TMP_VAR)) != 0) {
@@ -1139,8 +1156,10 @@ void zend_native_call_begin(
 					if (receiver_owned) {
 						OBJ_RELEASE(object);
 					}
-					zend_native_call_abort(
+					function = zend_native_call_reject_target(
 						"Native method target compilation failed");
+					object_or_called_scope = NULL;
+					break;
 				}
 			}
 			function = resolved;
@@ -1174,8 +1193,10 @@ void zend_native_call_begin(
 					zend_native_active_reentry_scope, resolved);
 				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
 						|| cell->code == NULL) {
-					zend_native_call_abort(
+					function = zend_native_call_reject_target(
 						"Native static method target compilation failed");
+					object_or_called_scope = NULL;
+					break;
 				}
 			}
 			function = resolved;
@@ -1207,8 +1228,10 @@ void zend_native_call_begin(
 					zend_native_active_reentry_scope, resolved);
 				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
 						|| cell->code == NULL) {
-					zend_native_call_abort(
+					function = zend_native_call_reject_target(
 						"Native parent property hook compilation failed");
+					object_or_called_scope = NULL;
+					break;
 				}
 			}
 			function = resolved;
@@ -1244,8 +1267,10 @@ void zend_native_call_begin(
 				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
 						|| cell->code == NULL) {
 					OBJ_RELEASE(object);
-					zend_native_call_abort(
+					function = zend_native_call_reject_target(
 						"Native constructor target compilation failed");
+					object_or_called_scope = NULL;
+					break;
 				}
 			}
 			function = resolved;
