@@ -332,6 +332,13 @@ extern zend_mir_w08_lowering_result zend_mir_lower_w10_zend_op_array(
 	const zend_mir_lowering_module_ops *module_ops,
 	zend_mir_diagnostic_sink *diagnostics);
 
+extern zend_mir_w08_lowering_result zend_mir_lower_w11_zend_op_array(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	const zend_mir_lowering_module_ops *module_ops,
+	zend_mir_diagnostic_sink *diagnostics);
+
 extern zend_mir_lowering_status zend_mir_frontend_project_w05_result_facts(
 	const zend_script *script,
 	const zend_op_array *op_array,
@@ -659,7 +666,8 @@ static bool native_mir_test_parse_options(
 							&& Z_LVAL_P(value) != 7
 							&& Z_LVAL_P(value) != 8
 							&& Z_LVAL_P(value) != 9
-							&& Z_LVAL_P(value) != 10)) {
+							&& Z_LVAL_P(value) != 10
+							&& Z_LVAL_P(value) != 11)) {
 				goto invalid_value;
 			}
 			state->wave = (uint32_t) Z_LVAL_P(value);
@@ -992,7 +1000,10 @@ static bool native_mir_test_build_ssa(native_mir_test_state *state)
 	optimizer.arena = state->ssa_arena;
 	optimizer.script = &state->script;
 	optimizer.optimization_level = ZEND_OPTIMIZER_PASS_6;
-	if ((state->wave >= 8
+	if ((state->wave >= 11
+			? zend_dfa_analyze_op_array_with_dynamic_bindings(
+				state->selected, &optimizer, &state->ssa)
+			: state->wave >= 8
 			? zend_dfa_analyze_op_array_with_protected_regions(
 				state->selected, &optimizer, &state->ssa)
 			: zend_dfa_analyze_op_array(
@@ -1511,7 +1522,11 @@ static bool native_mir_test_lower_w05_and_dump(native_mir_test_state *state)
 	}
 	zend_mir_w05_test_set_fault(call_fault);
 #endif
-	result = state->wave >= 10
+	result = state->wave >= 11
+		? zend_mir_lower_w11_zend_op_array(
+			&state->script, state->selected, &state->ssa,
+			&module_ops, &diagnostics)
+		: state->wave >= 10
 		? zend_mir_lower_w10_zend_op_array(
 			&state->script, state->selected, &state->ssa,
 			&module_ops, &diagnostics)
@@ -1674,7 +1689,7 @@ static bool native_mir_test_lower_and_dump(native_mir_test_state *state)
 	}
 	if (state->wave == 5 || state->wave == 7
 			|| state->wave == 8 || state->wave == 9
-			|| state->wave == 10) {
+			|| state->wave == 10 || state->wave == 11) {
 		return native_mir_test_lower_w05_and_dump(state);
 	}
 	return state->wave == 4
@@ -2293,7 +2308,10 @@ static bool native_mir_test_build_function_ssa(
 	optimizer.arena = function->ssa_arena;
 	optimizer.script = &state->script;
 	optimizer.optimization_level = ZEND_OPTIMIZER_PASS_6;
-	if ((state->wave >= 8
+	if ((state->wave >= 11
+			? zend_dfa_analyze_op_array_with_dynamic_bindings(
+				function->op_array, &optimizer, &function->ssa)
+			: state->wave >= 8
 			? zend_dfa_analyze_op_array_with_protected_regions(
 				function->op_array, &optimizer, &function->ssa)
 			: zend_dfa_analyze_op_array(
@@ -3536,6 +3554,10 @@ static zend_native_entry_cell *native_mir_test_resolve_reentry_target(
 	}
 	source_op_array = native_mir_test_canonical_reentry_op_array(
 		state, &resolved->op_array);
+	if (source_op_array == NULL
+			&& state->wave >= 11) {
+		source_op_array = &resolved->op_array;
+	}
 	if (source_op_array == NULL
 			&& state->wave >= 10
 			&& resolved->common.function_name != NULL

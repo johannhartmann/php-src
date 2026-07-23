@@ -114,6 +114,8 @@ void zend_optimize_dfa(zend_op_array *op_array, zend_optimizer_ctx *ctx);
 zend_result zend_dfa_analyze_op_array(zend_op_array *op_array, zend_optimizer_ctx *ctx, zend_ssa *ssa);
 zend_result zend_dfa_analyze_op_array_with_protected_regions(
 		zend_op_array *op_array, zend_optimizer_ctx *ctx, zend_ssa *ssa);
+zend_result zend_dfa_analyze_op_array_with_dynamic_bindings(
+		zend_op_array *op_array, zend_optimizer_ctx *ctx, zend_ssa *ssa);
 void zend_dfa_optimize_op_array(zend_op_array *op_array, zend_optimizer_ctx *ctx, zend_ssa *ssa, zend_call_info **call_map);
 void zend_optimize_temporary_variables(zend_op_array *op_array, zend_optimizer_ctx *ctx);
 void zend_optimizer_nop_removal(zend_op_array *op_array, zend_optimizer_ctx *ctx);
