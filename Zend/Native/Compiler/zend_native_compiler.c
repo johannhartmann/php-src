@@ -561,13 +561,11 @@ static bool zend_native_compiler_prepare_projection(
 	uint32_t echo_count = 0;
 	uint32_t return_check_count = 0;
 	uint32_t projected_variable_count;
-	uint32_t next_ssa_variable;
 	uint32_t next_literal;
 	size_t projected_opcode_bytes;
 	size_t projected_literal_bytes;
 	size_t projected_storage_bytes;
 	uint32_t projected_literal_count;
-	uint32_t echo_index = 0;
 	uint32_t index;
 
 	if (source == NULL || function->ssa.ops == NULL
@@ -583,18 +581,14 @@ static bool zend_native_compiler_prepare_projection(
 			return_check_count++;
 		}
 	}
-	if (echo_count > (UINT32_MAX - (uint32_t) function->ssa.vars_count) / 2
-			|| source->last > UINT32_MAX - echo_count
-			|| source->T > UINT32_MAX - echo_count
-			|| source->last_literal > UINT32_MAX - echo_count
-			|| source->last_literal + echo_count
-				> UINT32_MAX - return_check_count) {
+	if (source->last_literal > UINT32_MAX - return_check_count
+			|| (compiler->abi_conformance_probe
+				&& source->last > UINT32_MAX - echo_count)) {
 		return false;
 	}
-	projected_variable_count =
-		(uint32_t) function->ssa.vars_count + echo_count * 2;
+	projected_variable_count = (uint32_t) function->ssa.vars_count;
 	projected_literal_count =
-		source->last_literal + echo_count + return_check_count;
+		source->last_literal + return_check_count;
 	if ((size_t) (source->last == 0 ? 1 : source->last)
 			> (SIZE_MAX - 15) / sizeof(*function->projected_opcodes)
 			|| (size_t) (projected_literal_count == 0
@@ -628,7 +622,8 @@ static bool zend_native_compiler_prepare_projection(
 	function->projected_ssa_var_info = ecalloc(
 		projected_variable_count == 0 ? 1 : projected_variable_count,
 		sizeof(*function->projected_ssa_var_info));
-	function->source_effect_capacity = echo_count + source->last;
+	function->source_effect_capacity =
+		(compiler->abi_conformance_probe ? echo_count : 0) + source->last;
 	if (function->source_effect_capacity != 0) {
 		function->source_effects = ecalloc(
 			function->source_effect_capacity,
@@ -656,7 +651,7 @@ static bool zend_native_compiler_prepare_projection(
 	function->projected_op_array = *source;
 	function->projected_op_array.opcodes = function->projected_opcodes;
 	function->projected_op_array.literals = function->projected_literals;
-	function->projected_op_array.T = source->T + echo_count;
+	function->projected_op_array.T = source->T;
 	function->projected_op_array.last_literal = source->last_literal;
 	function->projected_ssa = function->ssa;
 	function->projected_ssa.ops = function->projected_ssa_ops;
@@ -674,7 +669,6 @@ static bool zend_native_compiler_prepare_projection(
 		return false;
 	}
 	function->projected_ssa.vars_count = (int) projected_variable_count;
-	next_ssa_variable = (uint32_t) function->ssa.vars_count;
 	next_literal = source->last_literal;
 
 	for (index = 0; index < source->last; index++) {
@@ -712,22 +706,10 @@ static bool zend_native_compiler_prepare_projection(
 #endif
 		}
 		if (original->opcode == ZEND_ECHO) {
-			zend_native_source_effect *effect =
-				&function->source_effects[function->source_effect_count++];
-			uint32_t ssa_variable = next_ssa_variable++;
-			uint32_t variable = source->last_var + source->T + echo_index;
-			zend_ssa_var *ssa_var =
-				&function->projected_ssa_vars[ssa_variable];
 			zend_mir_scalar_type_mask type = zend_native_compiler_operand_exact_type(
 				&function->projected_op_array, &function->projected_ssa,
 				index, opline->op1_type, &opline->op1, ssa_op->op1_use);
 
-			effect->source_position_id = index;
-			effect->kind = compiler->abi_conformance_probe
-				? ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE
-				: ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR;
-			effect->exact_type = type;
-			effect->target_block_id = ZEND_MIR_ID_INVALID;
 			if (!zend_mir_scalar_type_is_exact(type)) {
 				zend_native_compiler_set_diagnostic(
 					compiler, NULL, ZEND_NATIVE_COMPILE_PHASE_LOWERING,
@@ -735,50 +717,15 @@ static bool zend_native_compiler_prepare_projection(
 					"native echo requires an exact scalar value");
 				return false;
 			}
-			if (type == ZEND_MIR_SCALAR_TYPE_NULL) {
-				uint32_t literal = next_literal++;
+			if (compiler->abi_conformance_probe) {
+				zend_native_source_effect *effect =
+					&function->source_effects[function->source_effect_count++];
 
-				if (ssa_op->op1_use >= 0) {
-					int original_use = ssa_op->op1_use;
-
-					zend_ssa_unlink_use_chain(
-						&function->projected_ssa, (int) index, original_use);
-					ssa_op->op1_use = -1;
-					ssa_op->op1_use_chain = -1;
-				}
-				ZVAL_FALSE(&function->projected_literals[literal]);
-#if ZEND_USE_ABS_CONST_ADDR
-				opline->op1.zv = &function->projected_literals[literal];
-#else
-				opline->op1.constant = (uint32_t) (
-					(char *) &function->projected_literals[literal]
-					- (char *) opline);
-#endif
-				opline->op1_type = IS_CONST;
+				effect->source_position_id = index;
+				effect->kind = ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE;
+				effect->exact_type = type;
+				effect->target_block_id = ZEND_MIR_ID_INVALID;
 			}
-			/* Use the scalar conversion that is valid for the proven source
-			 * type. The result is deliberately dead: TPDE replaces this
-			 * verified carrier with the source-level echo effect. */
-			opline->opcode = type == ZEND_MIR_SCALAR_TYPE_I1
-				|| type == ZEND_MIR_SCALAR_TYPE_NULL
-				? ZEND_BOOL_NOT : ZEND_BOOL;
-			opline->op2_type = IS_UNUSED;
-			memset(&opline->op2, 0, sizeof(opline->op2));
-			opline->result_type = IS_TMP_VAR;
-			opline->result.var = NUM_VAR(variable);
-			ssa_op->op2_use = -1;
-			ssa_op->op2_def = -1;
-			ssa_op->op2_use_chain = -1;
-			ssa_op->result_use = -1;
-			ssa_op->result_def = (int) ssa_variable;
-			ssa_op->res_use_chain = -1;
-			memset(ssa_var, 0, sizeof(*ssa_var));
-			ssa_var->var = (int) variable;
-			ssa_var->scc = -1;
-			ssa_var->definition = (int) index;
-			ssa_var->use_chain = -1;
-			function->projected_ssa_var_info[ssa_variable].type = MAY_BE_BOOL;
-			echo_index++;
 			continue;
 		}
 		if (original->opcode == ZEND_VERIFY_RETURN_TYPE) {
@@ -894,7 +841,7 @@ static bool zend_native_compiler_prepare_projection(
 			}
 		}
 	}
-	function->projected_ssa.vars_count = (int) next_ssa_variable;
+	function->projected_ssa.vars_count = (int) projected_variable_count;
 	function->projected_op_array.last_literal = next_literal;
 	return true;
 }

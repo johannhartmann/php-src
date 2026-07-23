@@ -891,11 +891,33 @@ static bool zend_mir_value_validate_executable_operations(
 	return true;
 }
 
-static void zend_mir_value_emit_executable_operation(
+static bool zend_mir_value_operation_operand(
+	const zend_mir_source_operand_ref *operand, zend_mir_value_id *value_id)
+{
+	if (operand == NULL || value_id == NULL) {
+		return false;
+	}
+	switch (operand->kind) {
+		case ZEND_MIR_SOURCE_OPERAND_LITERAL:
+			*value_id = zend_mir_value_from_synthetic(operand->index);
+			return zend_mir_id_is_valid(*value_id);
+		case ZEND_MIR_SOURCE_OPERAND_SSA:
+			*value_id = zend_mir_value_from_original_ssa(
+				operand->ssa_variable_id);
+			return zend_mir_id_is_valid(*value_id);
+		default:
+			return false;
+	}
+}
+
+static bool zend_mir_value_emit_executable_operation(
+	zend_mir_module *module,
 	zend_mir_core_instruction *target,
 	const zend_mir_executable_value_ref *operation,
 	zend_mir_instruction_id id)
 {
+	zend_mir_value_id operand;
+
 	memset(target, 0, sizeof(*target));
 	target->record.id = id;
 	target->record.block_id = operation->block_id;
@@ -909,6 +931,29 @@ static void zend_mir_value_emit_executable_operation(
 	target->record.writes = operation->writes;
 	target->record.barriers = operation->barriers;
 	target->record.ownership_actions = operation->ownership_actions;
+	if (operation->opcode != ZEND_MIR_OPCODE_ECHO_SCALAR) {
+		return true;
+	}
+	if (module->operand_count >= module->limits.operands
+			|| !zend_mir_value_operation_operand(&operation->op1, &operand)
+			|| !zend_mir_module_find_value(module, operand, NULL)) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_INVALID_ID,
+			"semantic echo references an unknown scalar value");
+	}
+	target->operands = zend_mir_arena_allocate(
+		&module->arena, sizeof(*target->operands),
+		alignof(zend_mir_value_id));
+	if (target->operands == NULL) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_ALLOCATION_FAILED,
+			"semantic echo operand allocation failed");
+	}
+	target->operands[0] = operand;
+	target->operand_count = 1;
+	target->operand_capacity = 1;
+	module->operand_count++;
+	return true;
 }
 
 static bool zend_mir_value_compose_executable_operations(
@@ -1004,8 +1049,11 @@ static bool zend_mir_value_compose_executable_operations(
 							> old->source_position_id) {
 					continue;
 				}
-				zend_mir_value_emit_executable_operation(
-					&new_instructions[new_index], operation, new_index);
+				if (!zend_mir_value_emit_executable_operation(
+						module, &new_instructions[new_index],
+						operation, new_index)) {
+					return false;
+				}
 				staging->executable_operations[operation_index].id = new_index;
 				operation_emitted[operation_index] = 1;
 				emitted_count++;

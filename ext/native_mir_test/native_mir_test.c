@@ -2580,6 +2580,7 @@ static bool native_mir_test_prepare_w07_projection(
 	const zend_op_array *source = function->op_array;
 	zend_mir_frontend_diagnostic frontend_diagnostic;
 	uint32_t echo_count = 0;
+	uint32_t carrier_echo_count;
 	uint32_t return_check_count = 0;
 	uint32_t projected_variable_count;
 	uint32_t next_ssa_variable;
@@ -2604,18 +2605,20 @@ static bool native_mir_test_prepare_w07_projection(
 			return_check_count++;
 		}
 	}
-	if (echo_count > (UINT32_MAX - (uint32_t) function->ssa.vars_count) / 2
+	carrier_echo_count = state->wave >= 9 ? 0 : echo_count;
+	if (carrier_echo_count
+				> (UINT32_MAX - (uint32_t) function->ssa.vars_count) / 2
 			|| source->last > UINT32_MAX - echo_count
-			|| source->T > UINT32_MAX - echo_count
-			|| source->last_literal > UINT32_MAX - echo_count
-			|| source->last_literal + echo_count
+			|| source->T > UINT32_MAX - carrier_echo_count
+			|| source->last_literal > UINT32_MAX - carrier_echo_count
+			|| source->last_literal + carrier_echo_count
 				> UINT32_MAX - return_check_count) {
 		return false;
 	}
 	projected_variable_count =
-		(uint32_t) function->ssa.vars_count + echo_count * 2;
+		(uint32_t) function->ssa.vars_count + carrier_echo_count * 2;
 	projected_literal_count =
-		source->last_literal + echo_count + return_check_count;
+		source->last_literal + carrier_echo_count + return_check_count;
 	if ((size_t) (source->last == 0 ? 1 : source->last)
 			> (SIZE_MAX - 15) / sizeof(*function->projected_opcodes)
 			|| (size_t) (projected_literal_count == 0
@@ -2649,7 +2652,9 @@ static bool native_mir_test_prepare_w07_projection(
 	function->projected_ssa_var_info = ecalloc(
 		projected_variable_count == 0 ? 1 : projected_variable_count,
 		sizeof(*function->projected_ssa_var_info));
-	function->source_effect_capacity = echo_count + source->last;
+	function->source_effect_capacity =
+		(state->wave < 9 || state->abi_probe_enabled ? echo_count : 0)
+			+ source->last;
 	if (function->source_effect_capacity != 0) {
 		function->source_effects = ecalloc(
 			function->source_effect_capacity,
@@ -2677,7 +2682,7 @@ static bool native_mir_test_prepare_w07_projection(
 	function->projected_op_array = *source;
 	function->projected_op_array.opcodes = function->projected_opcodes;
 	function->projected_op_array.literals = function->projected_literals;
-	function->projected_op_array.T = source->T + echo_count;
+	function->projected_op_array.T = source->T + carrier_echo_count;
 	function->projected_op_array.last_literal = source->last_literal;
 	function->projected_ssa = function->ssa;
 	function->projected_ssa.ops = function->projected_ssa_ops;
@@ -2749,22 +2754,10 @@ static bool native_mir_test_prepare_w07_projection(
 #endif
 		}
 		if (original->opcode == ZEND_ECHO) {
-			zend_native_source_effect *effect =
-				&function->source_effects[function->source_effect_count++];
-			uint32_t ssa_variable = next_ssa_variable++;
-			uint32_t variable = source->last_var + source->T + echo_index;
-			zend_ssa_var *ssa_var =
-				&function->projected_ssa_vars[ssa_variable];
 			zend_mir_scalar_type_mask type = native_mir_test_operand_exact_type(
 				&function->projected_op_array, &function->projected_ssa,
 				index, opline->op1_type, &opline->op1, ssa_op->op1_use);
 
-			effect->source_position_id = index;
-			effect->kind = state->abi_probe_enabled
-				? ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE
-				: ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR;
-			effect->exact_type = type;
-			effect->target_block_id = ZEND_MIR_ID_INVALID;
 			if (!zend_mir_scalar_type_is_exact(type)) {
 				native_mir_test_fail(
 					state, NATIVE_MIR_TEST_STATUS_REJECTED,
@@ -2772,6 +2765,33 @@ static bool native_mir_test_prepare_w07_projection(
 					"W07 echo requires an exact scalar value");
 				return false;
 			}
+			if (state->wave >= 9) {
+				if (state->abi_probe_enabled) {
+					zend_native_source_effect *effect =
+						&function->source_effects[
+							function->source_effect_count++];
+
+					effect->source_position_id = index;
+					effect->kind =
+						ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE;
+					effect->exact_type = type;
+					effect->target_block_id = ZEND_MIR_ID_INVALID;
+				}
+				continue;
+			}
+			zend_native_source_effect *effect =
+				&function->source_effects[function->source_effect_count++];
+			uint32_t ssa_variable = next_ssa_variable++;
+			uint32_t variable = source->last_var + source->T + echo_index;
+			zend_ssa_var *ssa_var =
+				&function->projected_ssa_vars[ssa_variable];
+
+			effect->source_position_id = index;
+			effect->kind = state->abi_probe_enabled
+				? ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE
+				: ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR;
+			effect->exact_type = type;
+			effect->target_block_id = ZEND_MIR_ID_INVALID;
 			if (type == ZEND_MIR_SCALAR_TYPE_NULL) {
 				uint32_t literal = next_literal++;
 

@@ -589,10 +589,10 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_source_sequence(
 							|| (opcode.zend_opcode_number != ZEND_DO_ICALL
 								&& opcode.zend_opcode_number != ZEND_DO_FCALL
 								&& (!w10_execution
-									|| opcode.zend_opcode_number
-										!= ZEND_CALLABLE_CONVERT
-									&& opcode.zend_opcode_number
-										!= ZEND_CALLABLE_CONVERT_PARTIAL)))
+									|| (opcode.zend_opcode_number
+											!= ZEND_CALLABLE_CONVERT
+										&& opcode.zend_opcode_number
+											!= ZEND_CALLABLE_CONVERT_PARTIAL))))
 					: ((target.kind
 								!= ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
 							&& (!w10_execution || target.kind
@@ -2261,7 +2261,7 @@ static bool zend_mir_w05_verify_final_structural(
 					view, instruction.block_id, NULL)
 				|| (uint32_t) instruction.opcode
 					>= (w09_execution
-						? ZEND_MIR_W11_OPCODE_COUNT
+						? ZEND_MIR_W11P_OPCODE_COUNT
 						: w08_execution
 						? ZEND_MIR_W08_OPCODE_COUNT
 						: ZEND_MIR_W05_OPCODE_COUNT)
