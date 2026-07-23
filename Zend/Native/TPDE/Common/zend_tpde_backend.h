@@ -62,6 +62,9 @@ typedef struct _zend_native_execution_context {
 	zval **vm_stack_end;
 	zend_execute_data **current_execute_data;
 	void **active_direct_call;
+	struct zend_atomic_bool_s *vm_interrupt;
+	zend_object **exception;
+	void **stack_limit;
 	bool observers_enabled;
 } zend_native_execution_context;
 

@@ -1009,6 +1009,9 @@ bool initialize_plan(
 					descriptor->argument_count = site.arguments.count;
 					descriptor->source_position =
 						site.source_do_opline_index;
+					descriptor->expected_function =
+						plan->instructions[i].entry_cell != nullptr
+						? plan->instructions[i].entry_cell->function : nullptr;
 					descriptor->result_operand = site.result_operand;
 					descriptor->result_type = ZEND_MIR_SCALAR_TYPE_NONE;
 					bool trivial_frame =
@@ -1027,6 +1030,9 @@ bool initialize_plan(
 								== site.arguments.count
 							&& op_array.last_var == op_array.num_args
 							&& op_array.T == 0
+							&& op_array.cache_size == 0
+							&& (op_array.fn_flags
+								& ZEND_ACC_HAS_RETURN_TYPE) == 0
 							&& (op_array.fn_flags
 								& (ZEND_ACC_VARIADIC
 									| ZEND_ACC_CALL_VIA_TRAMPOLINE)) == 0;
@@ -1087,9 +1093,19 @@ bool initialize_plan(
 					}
 					if (trivial_frame
 							&& (descriptor->result_type
-									== ZEND_MIR_SCALAR_TYPE_NONE
-								|| zend_mir_scalar_type_is_exact(
-									descriptor->result_type))) {
+									!= ZEND_MIR_SCALAR_TYPE_NONE
+								&& zend_mir_scalar_type_is_exact(
+									descriptor->result_type))
+							&& (descriptor->result_operand.kind
+									== ZEND_MIR_SOURCE_OPERAND_SLOT
+								|| descriptor->result_operand.kind
+									== ZEND_MIR_SOURCE_OPERAND_SSA)
+							&& (descriptor->result_operand.slot_kind
+									== ZEND_MIR_SOURCE_SLOT_CV
+								|| descriptor->result_operand.slot_kind
+									== ZEND_MIR_SOURCE_SLOT_TMP
+								|| descriptor->result_operand.slot_kind
+									== ZEND_MIR_SOURCE_SLOT_VAR)) {
 						descriptor->flags |=
 							ZEND_NATIVE_DIRECT_CALL_TRIVIAL_FRAME;
 					}
