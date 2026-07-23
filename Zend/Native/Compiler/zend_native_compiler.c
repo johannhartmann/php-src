@@ -929,20 +929,50 @@ static bool zend_native_compiler_add_exception_routes(
 {
 	const zend_mir_view *view = zend_native_compiler_module_view(
 		compiler, function->module);
+	zend_mir_block_id *handler_blocks;
 	uint32_t instruction_count;
 	uint32_t index;
 
 	if (view == NULL || function->exception_handler_oplines == NULL) {
 		return false;
 	}
+	handler_blocks = emalloc(
+		(function->op_array->last == 0 ? 1 : function->op_array->last)
+			* sizeof(*handler_blocks));
+	for (index = 0; index < function->op_array->last; index++) {
+		handler_blocks[index] = ZEND_MIR_ID_INVALID;
+	}
 	instruction_count = view->instruction_count(view->context);
 	for (index = 0; index < instruction_count; index++) {
 		zend_mir_instruction_record instruction;
-		uint32_t handler_opline;
-		zend_mir_block_id target_block = ZEND_MIR_ID_INVALID;
-		uint32_t candidate_index;
 
 		if (!view->instruction_at(view->context, index, &instruction)) {
+			efree(handler_blocks);
+			return false;
+		}
+		if (zend_mir_id_is_valid(instruction.source_position_id)
+				&& instruction.source_position_id < function->op_array->last
+				&& (instruction.opcode == ZEND_MIR_OPCODE_CATCH_ENTER
+					|| instruction.opcode
+						== ZEND_MIR_OPCODE_FINALLY_ENTER)) {
+			zend_mir_block_id *handler_block =
+				&handler_blocks[instruction.source_position_id];
+
+			if (zend_mir_id_is_valid(*handler_block)
+					&& *handler_block != instruction.block_id) {
+				efree(handler_blocks);
+				return false;
+			}
+			*handler_block = instruction.block_id;
+		}
+	}
+	for (index = 0; index < instruction_count; index++) {
+		zend_mir_instruction_record instruction;
+		uint32_t handler_opline;
+		zend_mir_block_id target_block;
+
+		if (!view->instruction_at(view->context, index, &instruction)) {
+			efree(handler_blocks);
 			return false;
 		}
 		if ((!zend_mir_opcode_is_executable_value(instruction.opcode)
@@ -955,28 +985,13 @@ static bool zend_native_compiler_add_exception_routes(
 						instruction.source_position_id])) {
 			continue;
 		}
-		for (candidate_index = 0; candidate_index < instruction_count;
-				candidate_index++) {
-			zend_mir_instruction_record candidate;
-
-			if (!view->instruction_at(
-					view->context, candidate_index, &candidate)) {
-				return false;
-			}
-			if (candidate.source_position_id == handler_opline
-					&& (candidate.opcode == ZEND_MIR_OPCODE_CATCH_ENTER
-						|| candidate.opcode
-							== ZEND_MIR_OPCODE_FINALLY_ENTER)) {
-				if (zend_mir_id_is_valid(target_block)
-						&& target_block != candidate.block_id) {
-					return false;
-				}
-				target_block = candidate.block_id;
-			}
-		}
+		target_block = handler_opline < function->op_array->last
+			? handler_blocks[handler_opline]
+			: ZEND_MIR_ID_INVALID;
 		if (!zend_mir_id_is_valid(target_block)
 				|| function->source_effect_count
 					>= function->source_effect_capacity) {
+			efree(handler_blocks);
 			return false;
 		}
 		zend_native_source_effect *effect =
@@ -986,6 +1001,7 @@ static bool zend_native_compiler_add_exception_routes(
 		effect->exact_type = ZEND_MIR_SCALAR_TYPE_NONE;
 		effect->target_block_id = target_block;
 	}
+	efree(handler_blocks);
 	return true;
 }
 
