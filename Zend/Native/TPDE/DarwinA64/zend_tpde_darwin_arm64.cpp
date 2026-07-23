@@ -44,6 +44,9 @@ class ZendCompilerA64 final
 		::tpde::CompilerBase, DarwinConfig> {
 	using Base = ::tpde::a64::CompilerA64<Adaptor, ZendCompilerA64,
 		::tpde::CompilerBase, DarwinConfig>;
+	zend_native_image *image_;
+	std::array<::tpde::SymRef, ZEND_NATIVE_HELPER_COUNT> runtime_symbols_{};
+	std::array<::tpde::SymRef, ZEND_NATIVE_HELPER_COUNT> runtime_slots_{};
 
 public:
 	struct ValRefSpecial {
@@ -60,7 +63,44 @@ public:
 		::tpde::RegBank reg_bank(uint32_t) const { return bank; }
 	};
 
-	explicit ZendCompilerA64(Adaptor *adaptor) : Base{adaptor} {}
+	explicit ZendCompilerA64(Adaptor *adaptor, zend_native_image *image)
+		: Base{adaptor}, image_{image} {}
+
+	ValuePart runtime_symbol(zend_native_runtime_helper_id id) {
+		const uint32_t index = static_cast<uint32_t>(id);
+		::tpde::SymRef &reference =
+			runtime_symbols_[static_cast<uint32_t>(id)];
+		if (!reference.valid()) {
+			const zend_native_image_symbol *symbol = zend_tpde_image_symbol_find(
+				image_, ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER,
+				index);
+			if (symbol == nullptr) {
+				return ValuePart{DarwinConfig::GP_BANK, 8};
+			}
+			reference = assembler.sym_add_undef(symbol->name,
+				::tpde::Assembler::SymBinding::GLOBAL);
+		}
+		::tpde::SymRef &slot = runtime_slots_[index];
+		if (!slot.valid()) {
+			const std::array<::tpde::u8, sizeof(uintptr_t)> zero{};
+			::tpde::SecRef section = assembler.get_default_section(
+				::tpde::SectionKind::DataRelRO);
+			uint32_t offset = 0;
+			slot = assembler.sym_def_data(section, "", zero, alignof(uintptr_t),
+				::tpde::Assembler::SymBinding::LOCAL, &offset);
+			assembler.reloc_abs(section, reference, offset, 0);
+		}
+		ValuePart target{DarwinConfig::GP_BANK, 8};
+		const auto target_reg = target.alloc_reg(this);
+		text_writer.ensure_space(8);
+		reloc_text(slot, ::tpde::elf::R_AARCH64_ADR_PREL_PG_HI21,
+			text_writer.offset(), 0);
+		ASM(ADRP, target_reg, 0, 0);
+		reloc_text(slot, ::tpde::elf::R_AARCH64_LDST64_ABS_LO12_NC,
+			text_writer.offset(), 0);
+		ASM(LDRxu, target_reg, target_reg, 0);
+		return target;
+	}
 
 	void generate_exception_branch(IRBlockRef target) {
 		auto index = static_cast<uint32_t>(this->analyzer.block_idx(target));
@@ -199,10 +239,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(ValuePart{bits, 8, DarwinConfig::FP_BANK},
 				wide_assignment);
 		}
-		builder.call(ValuePart{
-			reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
-				ZEND_NATIVE_HELPER_ABI_CONFORMANCE)), 8,
-			DarwinConfig::GP_BANK});
+		builder.call(runtime_symbol(ZEND_NATIVE_HELPER_ABI_CONFORMANCE));
 		ValuePart status{DarwinConfig::GP_BANK};
 		builder.add_ret(status, ::tpde::CCAssignment{});
 		auto status_reg = status.cur_reg_or_load(this);
@@ -229,10 +266,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
 		if (exact_type == ZEND_MIR_SCALAR_TYPE_F64) {
 			builder.add_arg(CallArg{node.operands[0]});
-			builder.call(ValuePart{
-				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
-					ZEND_NATIVE_HELPER_ECHO_DOUBLE)), 8,
-				DarwinConfig::GP_BANK});
+			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_ECHO_DOUBLE));
 		} else {
 			if (exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
 				builder.add_arg(ValuePart{uint64_t{0}, 8, DarwinConfig::GP_BANK},
@@ -243,10 +277,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(ValuePart{
 				static_cast<uint32_t>(exact_type), 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			builder.call(ValuePart{
-				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
-					ZEND_NATIVE_HELPER_ECHO_INTEGER)), 8,
-				DarwinConfig::GP_BANK});
+			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_ECHO_INTEGER));
 		}
 		return true;
 	}
@@ -369,9 +400,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(ValuePart{mir.source_opline_index, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 		}
-		builder.call(ValuePart{
-			reinterpret_cast<uintptr_t>(adaptor->runtime_helper(helper)), 8,
-			DarwinConfig::GP_BANK});
+		builder.call(runtime_symbol(helper));
 		ValuePart status{DarwinConfig::GP_BANK};
 		builder.add_ret(status, ::tpde::CCAssignment{});
 		auto status_reg = status.cur_reg_or_load(this);
@@ -1124,10 +1153,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				builder.add_arg(CallArg{node.operands[0]});
 				builder.add_arg(ValuePart{mir.source_opline_index, 4,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-				builder.call(ValuePart{
-					reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
-						ZEND_NATIVE_HELPER_INTERRUPT_POLL)), 8,
-					DarwinConfig::GP_BANK});
+				builder.call(runtime_symbol(ZEND_NATIVE_HELPER_INTERRUPT_POLL));
 				return true;
 			}
 			[[fallthrough]];
@@ -1343,9 +1369,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 				? ZEND_NATIVE_HELPER_VALUE_COND_BRANCH
 				: ZEND_NATIVE_HELPER_VALUE_ITERATOR_BRANCH;
-			builder.call(ValuePart{reinterpret_cast<uintptr_t>(
-				adaptor->runtime_helper(helper)), 8,
-				DarwinConfig::GP_BANK});
+			builder.call(runtime_symbol(helper));
 			ValuePart decision{DarwinConfig::GP_BANK};
 			builder.add_ret(decision, ::tpde::CCAssignment{});
 			auto decision_reg = decision.cur_reg_or_load(this);
@@ -1380,10 +1404,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				builder.add_arg(ValuePart{
 					reinterpret_cast<uintptr_t>(call.direct_call), 8,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-				builder.call(ValuePart{
-					reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
-						ZEND_NATIVE_HELPER_DIRECT_USER_CALL)), 8,
-					DarwinConfig::GP_BANK});
+				builder.call(runtime_symbol(ZEND_NATIVE_HELPER_DIRECT_USER_CALL));
 				ValuePart status{DarwinConfig::GP_BANK};
 				ValuePart payload{DarwinConfig::GP_BANK};
 				builder.add_ret(status, ::tpde::CCAssignment{});
@@ -1435,10 +1456,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				builder.add_arg(ValuePart{call.call_site.source_init_opline_index, 4,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-				builder.call(ValuePart{
-					reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
-						ZEND_NATIVE_HELPER_USER_CALL_BEGIN)), 8,
-					DarwinConfig::GP_BANK});
+				builder.call(runtime_symbol(ZEND_NATIVE_HELPER_USER_CALL_BEGIN));
 			}
 			for (uint32_t index = 0;
 					index < (source_arguments
@@ -1465,10 +1483,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 								? ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
 								: ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE,
 						4, DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-					builder.call(ValuePart{
-						reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
-							ZEND_NATIVE_HELPER_CALL_SET_SOURCE_ARGUMENT)),
-						8, DarwinConfig::GP_BANK});
+					builder.call(runtime_symbol(ZEND_NATIVE_HELPER_CALL_SET_SOURCE_ARGUMENT));
 					continue;
 				}
 				IRValueRef operand = node.operands[index];
@@ -1476,10 +1491,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				builder.add_arg(CallArg{operand});
 				if (adaptor->exact_type(operand) == ZEND_MIR_SCALAR_TYPE_F64) {
-					builder.call(ValuePart{
-						reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
-							ZEND_NATIVE_HELPER_USER_CALL_SET_DOUBLE)),
-						8, DarwinConfig::GP_BANK});
+					builder.call(runtime_symbol(ZEND_NATIVE_HELPER_USER_CALL_SET_DOUBLE));
 				} else {
 					if (!zend_mir_scalar_type_is_exact(adaptor->exact_type(operand))) {
 						return false;
@@ -1487,10 +1499,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					builder.add_arg(ValuePart{
 						static_cast<uint32_t>(adaptor->exact_type(operand)), 4,
 						DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-					builder.call(ValuePart{
-						reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
-							ZEND_NATIVE_HELPER_USER_CALL_SET_INTEGER)),
-						8, DarwinConfig::GP_BANK});
+					builder.call(runtime_symbol(ZEND_NATIVE_HELPER_USER_CALL_SET_INTEGER));
 				}
 			}
 			zend::native::tpde::CCAssignerAppleA64 assigner;
@@ -1501,10 +1510,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.add_arg(ValuePart{call.call_site.source_do_opline_index, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			builder.call(ValuePart{
-				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
-					ZEND_NATIVE_HELPER_USER_CALL_FINISH_SOURCE)), 8,
-				DarwinConfig::GP_BANK});
+			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_USER_CALL_FINISH_SOURCE));
 			ValuePart status{DarwinConfig::GP_BANK};
 			builder.add_ret(status, ::tpde::CCAssignment{});
 			auto status_reg = status.cur_reg_or_load(this);
@@ -1533,10 +1539,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				result_builder.add_arg(ValuePart{
 					static_cast<uint32_t>(adaptor->exact_type(node.result)), 4,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-				result_builder.call(ValuePart{
-					reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
-						ZEND_NATIVE_HELPER_CALL_READ_SOURCE_SCALAR)), 8,
-					DarwinConfig::GP_BANK});
+				result_builder.call(runtime_symbol(ZEND_NATIVE_HELPER_CALL_READ_SOURCE_SCALAR));
 				ValuePart payload{DarwinConfig::GP_BANK};
 				result_builder.add_ret(payload, ::tpde::CCAssignment{});
 				auto [result_ref, result] = result_ref_single(node.result);
@@ -1567,10 +1570,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				builder.add_arg(ValuePart{call.call_site.source_init_opline_index, 4,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-				builder.call(ValuePart{
-					reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
-						ZEND_NATIVE_HELPER_INTERNAL_CALL_BEGIN)), 8,
-					DarwinConfig::GP_BANK});
+				builder.call(runtime_symbol(ZEND_NATIVE_HELPER_INTERNAL_CALL_BEGIN));
 			}
 			for (uint32_t index = 0; index < call.call_argument_count; ++index) {
 				zend_mir_call_argument_ref argument;
@@ -1594,10 +1594,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 							? ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
 							: ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE,
 					4, DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-				builder.call(ValuePart{
-					reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
-						ZEND_NATIVE_HELPER_CALL_SET_SOURCE_ARGUMENT)), 8,
-					DarwinConfig::GP_BANK});
+				builder.call(runtime_symbol(ZEND_NATIVE_HELPER_CALL_SET_SOURCE_ARGUMENT));
 			}
 			zend::native::tpde::CCAssignerAppleA64 assigner;
 			CallBuilder builder{*this, assigner};
@@ -1607,10 +1604,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.add_arg(ValuePart{call.call_site.source_do_opline_index, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			builder.call(ValuePart{
-				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
-					ZEND_NATIVE_HELPER_INTERNAL_CALL_FINISH_SOURCE)), 8,
-				DarwinConfig::GP_BANK});
+			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_INTERNAL_CALL_FINISH_SOURCE));
 			ValuePart status{DarwinConfig::GP_BANK};
 			builder.add_ret(status, ::tpde::CCAssignment{});
 			auto status_reg = status.cur_reg_or_load(this);
@@ -1639,10 +1633,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				result_builder.add_arg(ValuePart{
 					static_cast<uint32_t>(adaptor->exact_type(node.result)), 4,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-				result_builder.call(ValuePart{
-					reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
-						ZEND_NATIVE_HELPER_CALL_READ_SOURCE_SCALAR)), 8,
-					DarwinConfig::GP_BANK});
+				result_builder.call(runtime_symbol(ZEND_NATIVE_HELPER_CALL_READ_SOURCE_SCALAR));
 				ValuePart payload{DarwinConfig::GP_BANK};
 				result_builder.add_ret(payload, ::tpde::CCAssignment{});
 				auto [result_ref, result] = result_ref_single(node.result);
@@ -1665,10 +1656,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(CallArg{node.operands[0]});
 			builder.add_arg(ValuePart{record.source_position_id, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			builder.call(ValuePart{
-				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
-					ZEND_NATIVE_HELPER_FINALLY_ENTER)),
-				8, DarwinConfig::GP_BANK});
+			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_FINALLY_ENTER));
 			ValuePart status{DarwinConfig::GP_BANK};
 			builder.add_ret(status, ::tpde::CCAssignment{});
 			auto status_reg = status.cur_reg_or_load(this);
@@ -1687,10 +1675,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(CallArg{node.operands[0]});
 			builder.add_arg(ValuePart{record.source_position_id, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			builder.call(ValuePart{
-				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
-					ZEND_NATIVE_HELPER_FINALLY_CALL)),
-				8, DarwinConfig::GP_BANK});
+			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_FINALLY_CALL));
 			const auto &successors = adaptor->block_succs(
 				adaptor->block_ref(record.block_id));
 			if (successors.size() != 2) {
@@ -1705,10 +1690,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(CallArg{node.operands[0]});
 			builder.add_arg(ValuePart{record.source_position_id, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			builder.call(ValuePart{
-				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
-					ZEND_NATIVE_HELPER_FINALLY_RETURN)),
-				8, DarwinConfig::GP_BANK});
+			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_FINALLY_RETURN));
 			ValuePart continuation{DarwinConfig::GP_BANK};
 			builder.add_ret(continuation, ::tpde::CCAssignment{});
 			auto continuation_reg = continuation.cur_reg_or_load(this);
@@ -1766,10 +1748,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(CallArg{node.operands[0]});
 			builder.add_arg(ValuePart{record.source_position_id, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			builder.call(ValuePart{
-				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
-					ZEND_NATIVE_HELPER_CATCH_ENTER)),
-				8, DarwinConfig::GP_BANK});
+			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_CATCH_ENTER));
 			ValuePart status{DarwinConfig::GP_BANK};
 			builder.add_ret(status, ::tpde::CCAssignment{});
 			auto status_reg = status.cur_reg_or_load(this);
@@ -1828,10 +1807,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(CallArg{node.operands[0]});
 			builder.add_arg(ValuePart{record.source_position_id, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			builder.call(ValuePart{
-				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
-					ZEND_NATIVE_HELPER_RETURN_SOURCE_ZVAL)),
-				8, DarwinConfig::GP_BANK});
+			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_RETURN_SOURCE_ZVAL));
 			ValuePart status{DarwinConfig::GP_BANK};
 			builder.add_ret(status, ::tpde::CCAssignment{});
 			RetBuilder return_builder{*this, *cur_cc_assigner()};
@@ -1849,10 +1825,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(CallArg{node.operands[0]});
 			builder.add_arg(ValuePart{mir.source_opline_index, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			builder.call(ValuePart{
-				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
-					ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL)),
-				8, DarwinConfig::GP_BANK});
+			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL));
 			ValuePart status{DarwinConfig::GP_BANK};
 			builder.add_ret(status, ::tpde::CCAssignment{});
 			if (zend_mir_id_is_valid(mir.exception_block_id)) {
@@ -1875,8 +1848,9 @@ struct A64ImageState {
 	Adaptor adaptor;
 	ZendCompilerA64 compiler;
 
-	explicit A64ImageState(const zend_tpde_plan *plan)
-		: adaptor{plan}, compiler{&adaptor} {}
+	explicit A64ImageState(
+		const zend_tpde_plan *plan, zend_native_image *image)
+		: adaptor{plan}, compiler{&adaptor, image} {}
 };
 
 void destroy_a64_image_state(void *state) {
@@ -1984,7 +1958,7 @@ bool apply_relocation(uint8_t *location, uint32_t type,
 				: type == R_AARCH64_LDST32_ABS_LO12_NC ? 2
 				: type == R_AARCH64_LDST64_ABS_LO12_NC ? 3 : 4;
 			store32((load32() & ~UINT32_C(0x003ffc00))
-				| (((static_cast<uint32_t>(target) >> shift) & UINT32_C(0xfff)) << 10));
+				| (((static_cast<uint32_t>(target) & UINT32_C(0xfff)) >> shift) << 10));
 			return true;
 		}
 		default:
@@ -2000,7 +1974,7 @@ zend_result zend_tpde_emit_darwin_arm64(
 	const zend_tpde_plan *plan,
 	zend_native_image *image,
 	zend_native_diagnostic *diag) {
-	auto state = std::make_unique<A64ImageState>(plan);
+	auto state = std::make_unique<A64ImageState>(plan, image);
 	if (!state->adaptor.valid() || !state->compiler.compile()) {
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 			"TPDE rejected the ZNMIR arm64 adaptor graph");
@@ -2113,17 +2087,34 @@ zend_result zend_tpde_map_darwin_arm64(
 				return FAILURE;
 			}
 			const DarwinAssembler::Symbol &symbol = assembler.symbol(relocation.symbol);
-			if (!symbol.defined || symbol.section.id() >= published->sections.size()
-					|| published->sections[symbol.section.id()].mapping == nullptr) {
-				zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
-					"Darwin TPDE image contains an unresolved symbol");
-				if (has_executable) pthread_jit_write_protect_np(1);
-				return FAILURE;
-			}
 			uint8_t *location = static_cast<uint8_t *>(
 				published->sections[i].mapping) + relocation.offset;
-			uintptr_t symbol_address = reinterpret_cast<uintptr_t>(
-				published->sections[symbol.section.id()].mapping) + symbol.offset;
+			uintptr_t symbol_address;
+			if (symbol.defined) {
+				if (symbol.section.id() >= published->sections.size()
+						|| published->sections[symbol.section.id()].mapping
+							== nullptr) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
+						"Darwin TPDE image contains an invalid local symbol");
+					if (has_executable) pthread_jit_write_protect_np(1);
+					return FAILURE;
+				}
+				symbol_address = reinterpret_cast<uintptr_t>(
+					published->sections[symbol.section.id()].mapping)
+					+ symbol.offset;
+			} else {
+				const void *resolved = nullptr;
+				if (!zend_tpde_image_resolve_symbol(
+						image, symbol.name.c_str(), &resolved)) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
+						"Darwin TPDE image contains an unresolved external symbol");
+					if (has_executable) pthread_jit_write_protect_np(1);
+					return FAILURE;
+				}
+				symbol_address = reinterpret_cast<uintptr_t>(resolved);
+			}
 			if (!apply_relocation(location, relocation.type,
 					symbol_address, relocation.addend)) {
 				zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
