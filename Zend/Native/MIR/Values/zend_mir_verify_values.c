@@ -244,7 +244,8 @@ static bool zend_mir_w06_view_complete(
 		&& view->source_position_count != NULL
 		&& view->source_position_at != NULL
 		&& values != NULL && values->context != NULL
-		&& values->contract_version == ZEND_MIR_W06_CONTRACT_VERSION
+		&& (values->contract_version == ZEND_MIR_W06_CONTRACT_VERSION
+			|| values->contract_version == ZEND_MIR_W11P_CONTRACT_VERSION)
 		&& values->storage_count != NULL && values->storage_at != NULL
 		&& values->payload_count != NULL && values->payload_at != NULL
 		&& values->reference_cell_count != NULL

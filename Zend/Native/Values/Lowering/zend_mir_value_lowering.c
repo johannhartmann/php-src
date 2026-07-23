@@ -687,6 +687,29 @@ static int zend_mir_w09_compare_operations(const void *left, const void *right)
 	return 0;
 }
 
+static zend_mir_storage_id zend_mir_w09_operand_storage_id(
+	const zend_op_array *op_array, const zend_mir_source_operand_ref *operand)
+{
+	uint32_t base;
+
+	if (operand->kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+			&& operand->kind != ZEND_MIR_SOURCE_OPERAND_SSA) {
+		return ZEND_MIR_ID_INVALID;
+	}
+	if (operand->slot_kind < ZEND_MIR_SOURCE_SLOT_CV
+			|| operand->slot_kind > ZEND_MIR_SOURCE_SLOT_VAR) {
+		return ZEND_MIR_ID_INVALID;
+	}
+	base = operand->slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+		? 0 : (uint32_t) op_array->last_var;
+	if (operand->index > ZEND_MIR_ID_MAX - base
+			|| base + operand->index
+				>= (uint32_t) op_array->last_var + op_array->T) {
+		return ZEND_MIR_ID_INVALID;
+	}
+	return base + operand->index;
+}
+
 bool zend_mir_w09_emit_executable_values(
 	const zend_op_array *op_array,
 	zend_mir_lowering_context *lowering_context,
@@ -756,6 +779,17 @@ bool zend_mir_w09_emit_executable_values(
 		memset(operation, 0, sizeof(*operation));
 		operation->id = ZEND_MIR_ID_INVALID;
 		operation->opcode = opcode;
+		operation->source_opcode = source_opcode.zend_opcode_number;
+		operation->op1 = source_opcode.op1;
+		operation->op2 = source_opcode.op2;
+		operation->result = source_opcode.result;
+		operation->op1_storage_id = zend_mir_w09_operand_storage_id(
+			op_array, &source_opcode.op1);
+		operation->op2_storage_id = zend_mir_w09_operand_storage_id(
+			op_array, &source_opcode.op2);
+		operation->result_storage_id = zend_mir_w09_operand_storage_id(
+			op_array, &source_opcode.result);
+		operation->extended_value = source_opcode.extended_value;
 		operation->source_position_id = source_opcode.source_position_id;
 		operation->frame_state_id = ZEND_MIR_ID_INVALID;
 		if (!zend_mir_w09_mir_block(source, control_flow_map, view,

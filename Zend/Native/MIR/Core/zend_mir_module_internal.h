@@ -123,6 +123,7 @@ struct _zend_mir_module {
 	zend_mir_core_table value_ownership_events;
 	zend_mir_core_table value_separation_plans;
 	zend_mir_core_table value_call_transfers;
+	zend_mir_core_table value_executable_operations;
 	zend_mir_core_value_staging value_staging;
 	uint32_t operand_count;
 	uint32_t *value_index;

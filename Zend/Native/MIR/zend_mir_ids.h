@@ -63,6 +63,15 @@
 #define ZEND_MIR_W06_CONTRACT_VERSION \
 	((ZEND_MIR_CONTRACT_VERSION_MAJOR << 16) | ZEND_MIR_W06_CONTRACT_VERSION_MINOR)
 
+/*
+ * W11P makes executable boxed-value instructions self-describing. Source
+ * positions remain diagnostic identity; operand slots, literals, opcode flags
+ * and modes are carried independently and never reconstructed from zend_op.
+ */
+#define ZEND_MIR_W11P_CONTRACT_VERSION_MINOR UINT32_C(10)
+#define ZEND_MIR_W11P_CONTRACT_VERSION \
+	((ZEND_MIR_CONTRACT_VERSION_MAJOR << 16) | ZEND_MIR_W11P_CONTRACT_VERSION_MINOR)
+
 #define ZEND_MIR_ID_INVALID UINT32_C(0xffffffff)
 #define ZEND_MIR_ID_MAX UINT32_C(0xfffffffe)
 
