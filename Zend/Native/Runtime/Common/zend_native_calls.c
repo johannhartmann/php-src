@@ -219,6 +219,16 @@ static zend_native_entry_cell *zend_native_reentry_find(
 	return NULL;
 }
 
+zend_native_entry_cell *zend_native_reentry_resolve(
+	zend_function *function)
+{
+	if (function == NULL || !ZEND_USER_CODE(function->type)) {
+		return NULL;
+	}
+	return zend_native_reentry_find(
+		zend_native_active_reentry_scope, function);
+}
+
 static void zend_native_reentry_execute_ex(zend_execute_data *execute_data)
 {
 	zend_native_reentry_scope *scope = zend_native_active_reentry_scope;
@@ -230,7 +240,7 @@ static void zend_native_reentry_execute_ex(zend_execute_data *execute_data)
 		zend_native_previous_execute_ex(execute_data);
 		return;
 	}
-	cell = zend_native_reentry_find(scope, execute_data->func);
+	cell = zend_native_reentry_resolve(execute_data->func);
 	if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
 			|| cell->code == NULL) {
 		zend_throw_error(NULL,

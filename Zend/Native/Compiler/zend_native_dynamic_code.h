@@ -4,13 +4,10 @@
 #include "Zend/zend_compile.h"
 #include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 
-typedef zend_result (*zend_native_dynamic_compile_t)(
-	void *context, zend_op_array *op_array);
-
 /*
- * The compiler takes ownership of each dynamic op_array before invoking
- * compile. A successful compile must atomically publish its entry through
- * zend_native_dynamic_compiler_publish().
+ * The compiler takes ownership of each dynamic op_array before resolving it
+ * through the active product reentry scope. A successful resolution is
+ * atomically published in this request-local dynamic registry.
  */
 
 typedef struct _zend_native_dynamic_entry {
@@ -19,8 +16,6 @@ typedef struct _zend_native_dynamic_entry {
 } zend_native_dynamic_entry;
 
 typedef struct _zend_native_dynamic_compiler {
-	void *context;
-	zend_native_dynamic_compile_t compile;
 	zend_op_array **owned_op_arrays;
 	uint32_t owned_op_array_count;
 	uint32_t owned_op_array_capacity;
@@ -35,9 +30,7 @@ typedef struct _zend_native_dynamic_compiler {
  * compile-on-demand lock or partially published unit.
  */
 ZEND_API void zend_native_dynamic_compiler_init(
-	zend_native_dynamic_compiler *compiler,
-	void *context,
-	zend_native_dynamic_compile_t compile);
+	zend_native_dynamic_compiler *compiler);
 ZEND_API void zend_native_dynamic_compiler_destroy(
 	zend_native_dynamic_compiler *compiler);
 ZEND_API void zend_native_dynamic_compiler_activate(
