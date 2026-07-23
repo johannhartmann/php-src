@@ -38,6 +38,18 @@ typedef struct _zend_native_direct_activation {
 
 ZEND_TLS zend_native_direct_activation *zend_native_active_direct_call;
 
+void zend_native_execution_context_init(
+	zend_native_execution_context *context)
+{
+	ZEND_ASSERT(context != NULL);
+	context->vm_stack = &EG(vm_stack);
+	context->vm_stack_top = &EG(vm_stack_top);
+	context->vm_stack_end = &EG(vm_stack_end);
+	context->current_execute_data = &EG(current_execute_data);
+	context->active_direct_call = (void **) &zend_native_active_direct_call;
+	context->observers_enabled = ZEND_OBSERVER_ENABLED;
+}
+
 static zval *zend_native_frameless_slot(
 	zend_execute_data *execute_data, uint8_t type, znode_op operand)
 {
@@ -1660,7 +1672,8 @@ static bool zend_native_direct_scalar_payload(
 zend_native_direct_call_result zend_native_call_direct(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
-	const zend_native_direct_call_descriptor *descriptor)
+	const zend_native_direct_call_descriptor *descriptor,
+	zend_native_execution_context *context)
 {
 	zend_native_direct_call_result result = {
 		.status = ZEND_NATIVE_EXCEPTION,
@@ -1676,7 +1689,7 @@ zend_native_direct_call_result zend_native_call_direct(
 	uint32_t index;
 	zend_native_status status = ZEND_NATIVE_EXCEPTION;
 
-	if (caller == NULL || caller->func == NULL
+	if (caller == NULL || caller->func == NULL || context == NULL
 			|| !ZEND_USER_CODE(caller->func->type)
 			|| cell == NULL || descriptor == NULL
 			|| caller->call != NULL || cell->state != ZEND_NATIVE_ENTRY_READY
@@ -1761,7 +1774,7 @@ zend_native_direct_call_result zend_native_call_direct(
 		status = ZEND_NATIVE_EXCEPTION;
 		zend_native_execution_cleanup_frame(call);
 	} else {
-		status = entry(call);
+		status = entry(call, context);
 		status = zend_native_execution_finish_direct_frame(call, status);
 	}
 	EG(current_execute_data) = caller;

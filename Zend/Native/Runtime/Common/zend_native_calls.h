@@ -165,7 +165,10 @@ zend_native_status zend_native_call_invoke_finish_source(
 zend_native_direct_call_result zend_native_call_direct(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
-	const zend_native_direct_call_descriptor *descriptor);
+	const zend_native_direct_call_descriptor *descriptor,
+	zend_native_execution_context *context);
+void zend_native_execution_context_init(
+	zend_native_execution_context *context);
 void zend_native_call_direct_unwind(zend_execute_data *outermost);
 void zend_native_execution_cleanup_frame(zend_execute_data *execute_data);
 zend_native_status zend_native_execution_finish_direct_frame(
