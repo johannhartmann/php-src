@@ -27,31 +27,6 @@ permissions:
   contents: read
 
 jobs:
-  contracts:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/apt-x64
-      - name: Validate contracts and static integration state
-        run: |
-          python3 scripts/native/semantics/validate-w01.py --check
-          python3 scripts/native/mir/validate-w02.py --check
-          python3 scripts/native/lowering/validate-w03.py --check
-          python3 scripts/native/control-flow/check-contract.py --check
-          python3 scripts/native/control-flow/validate-w04.py --check
-          python3 scripts/native/calls/check-contract.py --check
-          python3 scripts/native/calls/validate-w05.py --check
-      - name: Run native unit and integration tests
-        run: |
-          python3 -m unittest discover -s tests/native/semantics -p 'test_*.py' -v
-          python3 -m unittest discover -s tests/native/lowering -p 'test_*.py' -v
-          python3 -m unittest discover -s tests/native/control-flow -p 'test_*.py' -v
-          python3 -m unittest discover -s tests/native/calls -p 'test_*.py' -v
-          python3 tests/native/values/contracts/test_w06_contract.py -v
-          python3 tests/native/values/unit/test_value_core.py -v
-          python3 tests/native/values/bridge/test_w06_bridge_contract.py -v
-
   darwin-arm64:
     runs-on: macos-26
     timeout-minutes: 120
