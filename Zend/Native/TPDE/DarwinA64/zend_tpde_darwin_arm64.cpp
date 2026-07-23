@@ -1447,9 +1447,11 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				CallBuilder builder{*this, assigner};
 				builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
 				if (source_arguments) {
-					const zend_mir_call_argument_ref &argument =
-						adaptor->plan()->call_arguments[
-							call.call_argument_offset + index];
+					zend_mir_call_argument_ref argument;
+					if (!zend_tpde_call_argument_at(adaptor->plan(),
+							call.call_argument_offset + index, &argument)) {
+						return false;
+					}
 					builder.add_arg(ValuePart{argument.ordinal, 4,
 						DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 					builder.add_arg(ValuePart{argument.send_opline_index, 4,
@@ -1571,9 +1573,11 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					DarwinConfig::GP_BANK});
 			}
 			for (uint32_t index = 0; index < call.call_argument_count; ++index) {
-				const zend_mir_call_argument_ref &argument =
-					adaptor->plan()->call_arguments[
-						call.call_argument_offset + index];
+				zend_mir_call_argument_ref argument;
+				if (!zend_tpde_call_argument_at(adaptor->plan(),
+						call.call_argument_offset + index, &argument)) {
+					return false;
+				}
 				zend::native::tpde::CCAssignerAppleA64 assigner;
 				CallBuilder builder{*this, assigner};
 				builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});

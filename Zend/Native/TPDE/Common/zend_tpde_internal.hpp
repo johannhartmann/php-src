@@ -222,6 +222,7 @@ static inline bool zend_tpde_integer_array_isset_at(
 
 struct zend_tpde_plan {
 	const zend_mir_view *view;
+	const zend_mir_call_view *calls;
 	const zend_native_runtime_api *runtime;
 	zend_mir_function_record function;
 	zend_mir_block_id *block_ids;
@@ -236,8 +237,17 @@ struct zend_tpde_plan {
 	uint32_t instruction_count;
 	zend_tpde_id_index_entry *instruction_index;
 	uint32_t instruction_index_capacity;
-	zend_mir_call_argument_ref *call_arguments;
+	zend_tpde_id_index_entry *call_site_instruction_index;
+	uint32_t call_site_instruction_index_capacity;
+	uint32_t call_site_count;
+	zend_tpde_id_index_entry *call_target_index;
+	uint32_t call_target_index_capacity;
+	uint32_t call_target_count;
 	uint32_t call_argument_count;
+	zend_tpde_id_index_entry *user_binding_index;
+	uint32_t user_binding_index_capacity;
+	zend_tpde_id_index_entry *internal_binding_index;
+	uint32_t internal_binding_index_capacity;
 	_zend_native_direct_call_descriptor **direct_calls;
 	uint32_t direct_call_count;
 	uint32_t argument_count;
@@ -290,6 +300,10 @@ const zend_tpde_instruction *zend_tpde_instruction_at(
 zend_mir_instruction_record zend_tpde_instruction_record_at(
 	const zend_tpde_plan *plan,
 	const zend_tpde_instruction *instruction);
+bool zend_tpde_call_argument_at(
+	const zend_tpde_plan *plan,
+	uint32_t index,
+	zend_mir_call_argument_ref *out);
 zend_mir_value_id zend_tpde_operand_at(
 	const zend_tpde_plan *plan,
 	const zend_tpde_instruction *instruction,
