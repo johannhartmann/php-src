@@ -4,6 +4,7 @@
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_execute.h"
 #include "Zend/zend_observer.h"
+#include "Zend/Native/Compiler/zend_native_compiler_internal.h"
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
 
 #include <stdint.h>
@@ -18,6 +19,16 @@ void zend_native_dynamic_compiler_init(
 {
 	ZEND_ASSERT(compiler != NULL);
 	memset(compiler, 0, sizeof(*compiler));
+}
+
+void zend_native_dynamic_compiler_bind_product(
+	zend_native_dynamic_compiler *compiler,
+	zend_native_compiler *product_compiler)
+{
+	ZEND_ASSERT(compiler != NULL);
+	ZEND_ASSERT(compiler->owned_op_array_count == 0);
+	ZEND_ASSERT(compiler->entry_count == 0);
+	compiler->product_compiler = product_compiler;
 }
 
 void zend_native_dynamic_compiler_destroy(
@@ -179,7 +190,10 @@ zend_native_status zend_native_execute_include_or_eval(
 	zval *result = NULL;
 	zend_native_status status;
 	zend_native_diagnostic diagnostic;
+	zend_native_compile_diagnostic compile_diagnostic;
 	uint32_t call_info;
+	uint32_t first_function_bucket;
+	uint32_t first_class_bucket;
 
 	if (compiler == NULL
 			|| execute_data == NULL || execute_data->func == NULL
@@ -197,6 +211,8 @@ zend_native_status zend_native_execute_include_or_eval(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	execute_data->opline = opline;
+	first_function_bucket = EG(function_table)->nNumUsed;
+	first_class_bucket = EG(class_table)->nNumUsed;
 	new_op_array = zend_include_or_eval(filename, opline->extended_value);
 	zend_native_dynamic_free_operand(execute_data, opline);
 	if (EG(exception) != NULL) {
@@ -248,8 +264,24 @@ zend_native_status zend_native_execute_include_or_eval(
 			"Native dynamic codeunit owner capacity overflow");
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	entry_cell = zend_native_reentry_resolve(
-		(zend_function *) new_op_array);
+	if (compiler->product_compiler != NULL) {
+		memset(&compile_diagnostic, 0, sizeof(compile_diagnostic));
+		if (zend_native_compiler_compile_dynamic_component(
+				compiler->product_compiler, new_op_array,
+				first_function_bucket, first_class_bucket,
+				&entry_cell, &compile_diagnostic) == FAILURE) {
+			entry_cell = NULL;
+			if (EG(exception) == NULL) {
+				zend_throw_error(NULL, "%s",
+					compile_diagnostic.message[0] != '\0'
+						? compile_diagnostic.message
+						: "Native compilation failed for dynamic codeunit");
+			}
+		}
+	} else {
+		entry_cell = zend_native_reentry_resolve(
+			(zend_function *) new_op_array);
+	}
 	if (entry_cell == NULL
 			|| entry_cell->state != ZEND_NATIVE_ENTRY_READY
 			|| entry_cell->code == NULL

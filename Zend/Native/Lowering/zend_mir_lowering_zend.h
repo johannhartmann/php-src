@@ -7,6 +7,11 @@
 #include "../Values/Contracts/zend_mir_value_plan.h"
 #include "zend_mir_lowering.h"
 
+typedef struct _zend_script zend_script;
+typedef struct _zend_op_array zend_op_array;
+typedef struct _zend_ssa zend_ssa;
+typedef struct _zend_mir_lowering_module_ops zend_mir_lowering_module_ops;
+
 /*
  * Internal W04 entry point. The source view owned by context and the
  * process-local map must remain alive through stage-3 verification.
@@ -60,6 +65,17 @@ zend_mir_w08_lowering_result zend_mir_lower_w10_zend_source(
 	const zend_mir_source_call_view *source_calls,
 	const zend_mir_source_call_target_resolver *resolver,
 	zend_mir_call_mutator *call_mutator);
+
+/*
+ * Product compiler entry. Source, SSA and module callbacks remain borrowed
+ * through the synchronous failure-atomic lowering operation.
+ */
+zend_mir_w08_lowering_result zend_mir_lower_w11_zend_op_array(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	const zend_mir_lowering_module_ops *module_ops,
+	zend_mir_diagnostic_sink *diagnostics);
 
 /*
  * Internal modeling-only W06 entry. Source inventory and the complete value
