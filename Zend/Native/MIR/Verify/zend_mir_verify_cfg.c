@@ -195,6 +195,9 @@ static uint32_t zend_mir_verify_expected_operands(zend_mir_opcode opcode,
 		uint32_t predecessor_count, bool *variable)
 {
 	*variable = false;
+	if (opcode == ZEND_MIR_OPCODE_ECHO_SCALAR) {
+		return 1;
+	}
 	if (zend_mir_opcode_is_executable_value(opcode)) {
 		return 0;
 	}
