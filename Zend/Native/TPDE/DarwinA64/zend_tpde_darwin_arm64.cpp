@@ -519,6 +519,10 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			}
 		}
 		auto slow = text_writer.label_create();
+		auto packed = text_writer.label_create();
+		auto mixed_loop = text_writer.label_create();
+		auto mixed_next = text_writer.label_create();
+		auto found = text_writer.label_create();
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
@@ -548,10 +552,6 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(CMPwi, type_reg, IS_ARRAY);
 		generate_raw_jump(Jump::Jne, slow);
 		load_off(array_reg, slot_reg, 0, 8);
-		load_off(type_reg, array_reg,
-			static_cast<uint32_t>(offsetof(HashTable, u)), 4);
-		ASM(TSTwi, type_reg, HASH_FLAG_PACKED);
-		generate_raw_jump(Jump::Jeq, slow);
 
 		ASM(ADDxi, slot_reg, frame_reg, layout.key_offset);
 		load_off(type_reg, slot_reg,
@@ -559,6 +559,45 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(CMPwi, type_reg, IS_LONG);
 		generate_raw_jump(Jump::Jne, slow);
 		load_off(key_reg, slot_reg, 0, 8);
+
+		ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
+		load_off(limit_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(CMPwi, limit_reg, IS_UNDEF);
+		generate_raw_jump(Jump::Jne, slow);
+
+		load_off(type_reg, array_reg,
+			static_cast<uint32_t>(offsetof(HashTable, u)), 4);
+		ASM(TSTwi, type_reg, HASH_FLAG_PACKED);
+		generate_raw_jump(Jump::Jne, packed);
+
+		load_off(element_reg, array_reg,
+			static_cast<uint32_t>(offsetof(HashTable, arData)), 8);
+		load_off(limit_reg, array_reg,
+			static_cast<uint32_t>(offsetof(HashTable, nTableMask)), 4);
+		ASM(ORRw, limit_reg, key_reg, limit_reg);
+		ASM(ADDx_sxtw, slot_reg, element_reg, limit_reg, 2);
+		load_off(limit_reg, slot_reg, 0, 4);
+		label_place(mixed_loop);
+		ASM(CMPwi, limit_reg, HT_INVALID_IDX);
+		generate_raw_jump(Jump::Jeq, slow);
+		ASM(ADDx_lsl, slot_reg, element_reg, limit_reg, 5);
+		load_off(type_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(Bucket, h)), 8);
+		ASM(CMPx, type_reg, key_reg);
+		generate_raw_jump(Jump::Jne, mixed_next);
+		load_off(type_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(Bucket, key)), 8);
+		ASM(CMPxi, type_reg, 0);
+		generate_raw_jump(Jump::Jeq, found);
+		label_place(mixed_next);
+		load_off(limit_reg, slot_reg,
+			static_cast<uint32_t>(
+				offsetof(Bucket, val) + offsetof(zval, u2.next)),
+			4);
+		generate_raw_jump(Jump::jmp, mixed_loop);
+
+		label_place(packed);
 		load_off(limit_reg, array_reg,
 			static_cast<uint32_t>(offsetof(HashTable, nNumUsed)), 4);
 		ASM(CMPx, key_reg, limit_reg);
@@ -567,16 +606,19 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		load_off(element_reg, array_reg,
 			static_cast<uint32_t>(offsetof(HashTable, arPacked)), 8);
 		ASM(ADDx_lsl, element_reg, element_reg, key_reg, 4);
+		ASM(ORRx, slot_reg, element_reg, element_reg);
+		label_place(found);
+		/*
+		 * Mixed buckets begin with zval, so slot_reg is the value address
+		 * for both layouts after the packed path copies its address here.
+		 */
+		ASM(ORRx, element_reg, slot_reg, slot_reg);
 		load_off(type_reg, element_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(CMPwi, type_reg, IS_UNDEF);
 		generate_raw_jump(Jump::Jeq, slow);
 
 		ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
-		load_off(limit_reg, slot_reg,
-			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
-		ASM(CMPwi, limit_reg, IS_UNDEF);
-		generate_raw_jump(Jump::Jne, slow);
 		load_off(low_word_reg, element_reg, 0, 8);
 		load_off(high_word_reg, element_reg, 8, 8);
 		store_off(slot_reg, 0, low_word_reg, 8);
