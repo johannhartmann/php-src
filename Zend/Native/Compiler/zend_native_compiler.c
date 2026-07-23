@@ -33,18 +33,10 @@ typedef struct _zend_native_compiled_function {
 	zend_op_array *op_array;
 	zend_arena *ssa_arena;
 	zend_ssa ssa;
-	zend_op_array projected_op_array;
-	zend_ssa projected_ssa;
-	zend_op *projected_opcodes;
-	zval *projected_literals;
-	zend_ssa_op *projected_ssa_ops;
-	zend_ssa_var *projected_ssa_vars;
-	zend_ssa_var_info *projected_ssa_var_info;
-	zend_mir_scalar_type_mask *argument_types;
-	uint32_t argument_type_count;
 	zend_native_source_effect *source_effects;
 	uint32_t source_effect_count;
 	uint32_t source_effect_capacity;
+	bool source_effects_prepared;
 	uint32_t *exception_handler_oplines;
 	zend_native_compiler_module_host module_host;
 	zend_mir_module *module;
@@ -272,49 +264,6 @@ static zend_mir_scalar_type_mask zend_native_compiler_scalar_type_from_zval(
 	}
 }
 
-static zend_mir_scalar_type_mask zend_native_compiler_argument_static_type(
-	const zend_op_array *op_array, uint32_t ordinal)
-{
-	uint32_t type_mask;
-
-	if (op_array == NULL || ordinal >= op_array->num_args
-			|| op_array->arg_info == NULL) {
-		return ZEND_MIR_SCALAR_TYPE_NONE;
-	}
-	type_mask = ZEND_TYPE_PURE_MASK(op_array->arg_info[ordinal].type);
-	switch (type_mask) {
-		case MAY_BE_NULL:
-			return ZEND_MIR_SCALAR_TYPE_NULL;
-		case MAY_BE_FALSE:
-		case MAY_BE_TRUE:
-		case MAY_BE_BOOL:
-			return ZEND_MIR_SCALAR_TYPE_I1;
-		case MAY_BE_LONG:
-			return ZEND_MIR_SCALAR_TYPE_I64;
-		case MAY_BE_DOUBLE:
-			return ZEND_MIR_SCALAR_TYPE_F64;
-		default:
-			return ZEND_MIR_SCALAR_TYPE_NONE;
-	}
-}
-
-static uint32_t zend_native_compiler_may_be_from_scalar_type(
-	zend_mir_scalar_type_mask type)
-{
-	switch (type) {
-		case ZEND_MIR_SCALAR_TYPE_NULL:
-			return MAY_BE_NULL;
-		case ZEND_MIR_SCALAR_TYPE_I1:
-			return MAY_BE_BOOL;
-		case ZEND_MIR_SCALAR_TYPE_I64:
-			return MAY_BE_LONG;
-		case ZEND_MIR_SCALAR_TYPE_F64:
-			return MAY_BE_DOUBLE;
-		default:
-			return 0;
-	}
-}
-
 static zend_mir_scalar_type_mask zend_native_compiler_ssa_exact_type(
 	const zend_ssa *ssa, int variable)
 {
@@ -419,18 +368,6 @@ static zend_native_compiled_function *zend_native_compiler_add_function(
 	function->state = (op_array->fn_flags & ZEND_ACC_GENERATOR) != 0
 		? ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED
 		: ZEND_NATIVE_CODEUNIT_COMPILING;
-	function->argument_type_count = op_array->num_args;
-	if (function->argument_type_count != 0) {
-		function->argument_types = ecalloc(
-			function->argument_type_count,
-			sizeof(*function->argument_types));
-		for (uint32_t ordinal = 0;
-				ordinal < function->argument_type_count; ordinal++) {
-			function->argument_types[ordinal] =
-				zend_native_compiler_argument_static_type(
-					op_array, ordinal);
-		}
-	}
 	zend_native_entry_cell_init(
 		&function->entry_cell, (zend_function *) op_array);
 	if (compiler->frame_probe != NULL) {
@@ -445,7 +382,6 @@ static zend_native_compiled_function *zend_native_compiler_add_function(
 			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
 			ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
 			"native entry cell rejected synchronous compilation");
-		efree(function->argument_types);
 		efree(function);
 		return NULL;
 	}
@@ -459,7 +395,6 @@ static zend_native_compiled_function *zend_native_compiler_add_function(
 			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
 			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
 			"native codeunit index insertion failed");
-		efree(function->argument_types);
 		efree(function);
 		return NULL;
 	}
@@ -505,18 +440,12 @@ static bool zend_native_compiler_build_ssa(
 	return true;
 }
 
-static bool zend_native_compiler_prepare_projection(
+static bool zend_native_compiler_prepare_source_effects(
 	zend_native_compiler *compiler,
 	zend_native_compiled_function *function)
 {
 	const zend_op_array *source = function->op_array;
-	zend_mir_frontend_diagnostic frontend_diagnostic;
 	uint32_t echo_count = 0;
-	uint32_t projected_variable_count;
-	size_t projected_opcode_bytes;
-	size_t projected_literal_bytes;
-	size_t projected_storage_bytes;
-	uint32_t projected_literal_count;
 	uint32_t index;
 
 	if (source == NULL || function->ssa.ops == NULL
@@ -525,136 +454,31 @@ static bool zend_native_compiler_prepare_projection(
 					|| function->ssa.var_info == NULL))) {
 		return false;
 	}
-	for (index = 0; index < source->last; index++) {
-		if (source->opcodes[index].opcode == ZEND_ECHO) {
-			echo_count++;
+	if (compiler->abi_conformance_probe) {
+		for (index = 0; index < source->last; index++) {
+			if (source->opcodes[index].opcode == ZEND_ECHO) {
+				echo_count++;
+			}
 		}
 	}
-	if ((compiler->abi_conformance_probe
-				&& source->last > UINT32_MAX - echo_count)) {
+	if (source->last > UINT32_MAX - echo_count) {
 		return false;
 	}
-	projected_variable_count = (uint32_t) function->ssa.vars_count;
-	projected_literal_count = source->last_literal;
-	if ((size_t) (source->last == 0 ? 1 : source->last)
-			> (SIZE_MAX - 15) / sizeof(*function->projected_opcodes)
-			|| (size_t) (projected_literal_count == 0
-				? 1 : projected_literal_count)
-				> SIZE_MAX / sizeof(*function->projected_literals)) {
-		return false;
-	}
-	projected_opcode_bytes = ZEND_MM_ALIGNED_SIZE_EX(
-		(size_t) (source->last == 0 ? 1 : source->last)
-			* sizeof(*function->projected_opcodes), 16);
-	projected_literal_bytes =
-		(size_t) (projected_literal_count == 0 ? 1 : projected_literal_count)
-			* sizeof(*function->projected_literals);
-	if (projected_opcode_bytes > SIZE_MAX - projected_literal_bytes) {
-		return false;
-	}
-	projected_storage_bytes = projected_opcode_bytes + projected_literal_bytes;
-	/* Runtime constant operands are signed offsets from their opline. Keep
-	 * projected opcodes and literals in the same allocation, as pass two does,
-	 * so the representation remains valid with the system allocator under
-	 * AddressSanitizer as well as with Zend MM. */
-	function->projected_opcodes = ecalloc(1, projected_storage_bytes);
-	function->projected_literals = (zval *) (
-		(char *) function->projected_opcodes + projected_opcode_bytes);
-	function->projected_ssa_ops = ecalloc(
-		source->last == 0 ? 1 : source->last,
-		sizeof(*function->projected_ssa_ops));
-	function->projected_ssa_vars = ecalloc(
-		projected_variable_count == 0 ? 1 : projected_variable_count,
-		sizeof(*function->projected_ssa_vars));
-	function->projected_ssa_var_info = ecalloc(
-		projected_variable_count == 0 ? 1 : projected_variable_count,
-		sizeof(*function->projected_ssa_var_info));
-	function->source_effect_capacity =
-		(compiler->abi_conformance_probe ? echo_count : 0) + source->last;
+	function->source_effect_capacity = source->last + echo_count;
 	if (function->source_effect_capacity != 0) {
 		function->source_effects = ecalloc(
 			function->source_effect_capacity,
 			sizeof(*function->source_effects));
 	}
-	if (source->last != 0) {
-		memcpy(function->projected_opcodes, source->opcodes,
-			(size_t) source->last * sizeof(*function->projected_opcodes));
-		memcpy(function->projected_ssa_ops, function->ssa.ops,
-			(size_t) source->last * sizeof(*function->projected_ssa_ops));
-	}
-	if (source->last_literal != 0) {
-		memcpy(function->projected_literals, source->literals,
-			(size_t) source->last_literal
-				* sizeof(*function->projected_literals));
-	}
-	if (function->ssa.vars_count != 0) {
-		memcpy(function->projected_ssa_vars, function->ssa.vars,
-			(size_t) function->ssa.vars_count
-				* sizeof(*function->projected_ssa_vars));
-		memcpy(function->projected_ssa_var_info, function->ssa.var_info,
-			(size_t) function->ssa.vars_count
-				* sizeof(*function->projected_ssa_var_info));
-	}
-	function->projected_op_array = *source;
-	function->projected_op_array.opcodes = function->projected_opcodes;
-	function->projected_op_array.literals = function->projected_literals;
-	function->projected_op_array.T = source->T;
-	function->projected_op_array.last_literal = source->last_literal;
-	function->projected_ssa = function->ssa;
-	function->projected_ssa.ops = function->projected_ssa_ops;
-	function->projected_ssa.vars = function->projected_ssa_vars;
-	function->projected_ssa.var_info = function->projected_ssa_var_info;
-	memset(&frontend_diagnostic, 0, sizeof(frontend_diagnostic));
-	if (zend_mir_frontend_project_w10_result_facts(
-			compiler->script, source, &function->ssa,
-			&function->projected_ssa, &frontend_diagnostic)
-			!= ZEND_MIR_LOWERING_SUCCESS) {
-		zend_native_compiler_set_diagnostic(
-			compiler, NULL, ZEND_NATIVE_COMPILE_PHASE_LOWERING,
-			frontend_diagnostic.code,
-			"cannot project a direct native call result");
-		return false;
-	}
-	function->projected_ssa.vars_count = (int) projected_variable_count;
-
-	for (index = 0; index < source->last; index++) {
+	for (index = 0; compiler->abi_conformance_probe
+			&& index < source->last; index++) {
 		const zend_op *original = &source->opcodes[index];
-		zend_op *opline = &function->projected_opcodes[index];
-		zend_ssa_op *ssa_op = &function->projected_ssa_ops[index];
-		ptrdiff_t literal_index;
+		const zend_ssa_op *ssa_op = &function->ssa.ops[index];
 
-		if (opline->op1_type == IS_CONST) {
-			literal_index = RT_CONSTANT(original, original->op1) - source->literals;
-			if (literal_index < 0
-					|| (uint32_t) literal_index >= source->last_literal) {
-				return false;
-			}
-#if ZEND_USE_ABS_CONST_ADDR
-			opline->op1.zv = &function->projected_literals[literal_index];
-#else
-			opline->op1.constant = (uint32_t) (
-				(char *) &function->projected_literals[literal_index]
-				- (char *) opline);
-#endif
-		}
-		if (opline->op2_type == IS_CONST) {
-			literal_index = RT_CONSTANT(original, original->op2) - source->literals;
-			if (literal_index < 0
-					|| (uint32_t) literal_index >= source->last_literal) {
-				return false;
-			}
-#if ZEND_USE_ABS_CONST_ADDR
-			opline->op2.zv = &function->projected_literals[literal_index];
-#else
-			opline->op2.constant = (uint32_t) (
-				(char *) &function->projected_literals[literal_index]
-				- (char *) opline);
-#endif
-		}
 		if (original->opcode == ZEND_ECHO) {
 			zend_mir_scalar_type_mask type = zend_native_compiler_operand_exact_type(
-				&function->projected_op_array, &function->projected_ssa,
-				index, opline->op1_type, &opline->op1, ssa_op->op1_use);
+				source, &function->ssa, index, original->op1_type,
+				&original->op1, ssa_op->op1_use);
 
 			if (!zend_mir_scalar_type_is_exact(type)) {
 				zend_native_compiler_set_diagnostic(
@@ -672,35 +496,9 @@ static bool zend_native_compiler_prepare_projection(
 				effect->exact_type = type;
 				effect->target_block_id = ZEND_MIR_ID_INVALID;
 			}
-			continue;
-		}
-		if (original->opcode == ZEND_RECV
-				|| original->opcode == ZEND_RECV_INIT) {
-			uint32_t ordinal = original->op1.num - 1;
-			zend_mir_scalar_type_mask type = ordinal < function->argument_type_count
-				? function->argument_types[ordinal]
-				: ZEND_MIR_SCALAR_TYPE_NONE;
-
-			if (original->opcode == ZEND_RECV_INIT
-					&& type == ZEND_MIR_SCALAR_TYPE_NONE
-					&& original->op2_type == IS_CONST) {
-				type = zend_native_compiler_scalar_type_from_zval(
-					RT_CONSTANT(original, original->op2));
-			}
-			if (zend_mir_scalar_type_is_exact(type)
-					&& ssa_op->result_def >= 0
-					&& ssa_op->result_def < function->projected_ssa.vars_count) {
-				function->projected_ssa_var_info[ssa_op->result_def].type =
-					zend_native_compiler_may_be_from_scalar_type(type);
-			}
-			if (original->opcode == ZEND_RECV_INIT) {
-				opline->opcode = ZEND_RECV;
-				opline->op2_type = IS_UNUSED;
-				memset(&opline->op2, 0, sizeof(opline->op2));
-			}
 		}
 	}
-	function->projected_ssa.vars_count = (int) projected_variable_count;
+	function->source_effects_prepared = true;
 	return true;
 }
 
@@ -820,8 +618,8 @@ static bool zend_native_compiler_lower_function(
 	zend_mir_diagnostic_sink diagnostics;
 	zend_mir_w08_lowering_result result;
 
-	if (function->projected_opcodes == NULL
-			&& !zend_native_compiler_prepare_projection(
+	if (!function->source_effects_prepared
+			&& !zend_native_compiler_prepare_source_effects(
 				compiler, function)) {
 		if (diagnostic != NULL) {
 			*diagnostic = compiler->last_diagnostic;
@@ -853,8 +651,8 @@ static bool zend_native_compiler_lower_function(
 	diagnostics.emit = zend_native_compiler_emit_mir_diagnostic;
 	diagnostics.limit = UINT32_MAX;
 	result = zend_mir_lower_w11_zend_op_array(
-		compiler->script, &function->projected_op_array,
-		&function->projected_ssa, &module_ops, &diagnostics);
+		compiler->script, function->op_array,
+		&function->ssa, &module_ops, &diagnostics);
 	if (!zend_mir_lowering_result_is_w08_failure_atomic(&result)) {
 		if (result.lowering.module != NULL) {
 			zend_mir_module_destroy(result.lowering.module);
@@ -2186,11 +1984,6 @@ void zend_native_compiler_destroy(zend_native_compiler *compiler)
 		efree(function->source_effects);
 		efree(function->exception_handler_oplines);
 		efree(function->internal_call_cells);
-		efree(function->argument_types);
-		efree(function->projected_ssa_var_info);
-		efree(function->projected_ssa_vars);
-		efree(function->projected_ssa_ops);
-		efree(function->projected_opcodes);
 		efree(function);
 	}
 	efree(compiler->reentry_bindings);
