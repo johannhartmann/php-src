@@ -13,6 +13,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -27,6 +28,8 @@ class ZendCompilerX64 final
 	using Base = tpde::x64::CompilerX64<Adaptor, ZendCompilerX64>;
 	zend_native_image *image_;
 	std::array<tpde::SymRef, ZEND_NATIVE_HELPER_COUNT> runtime_symbols_{};
+	std::vector<tpde::SymRef> image_symbols_;
+	std::vector<tpde::SymRef> image_slots_;
 
 public:
 	struct ValRefSpecial {
@@ -44,7 +47,10 @@ public:
 	};
 
 	explicit ZendCompilerX64(Adaptor *adaptor, zend_native_image *image)
-		: Base{adaptor}, image_{image} {}
+		: Base{adaptor},
+		  image_{image},
+		  image_symbols_(image->symbol_count),
+		  image_slots_(image->symbol_count) {}
 
 	tpde::SymRef runtime_symbol(zend_native_runtime_helper_id id) {
 		tpde::SymRef &reference =
@@ -60,6 +66,39 @@ public:
 				tpde::Assembler::SymBinding::GLOBAL);
 		}
 		return reference;
+	}
+
+	ValuePart image_symbol_value(
+		zend_native_image_symbol_kind kind, uint32_t id) {
+		const zend_native_image_symbol *symbol =
+			zend_tpde_image_symbol_find(image_, kind, id);
+		if (symbol == nullptr) {
+			return ValuePart{tpde::x64::PlatformConfig::GP_BANK, 8};
+		}
+		const uint32_t index =
+			static_cast<uint32_t>(symbol - image_->symbols);
+		tpde::SymRef &reference = image_symbols_[index];
+		if (!reference.valid()) {
+			reference = assembler.sym_add_undef(symbol->name,
+				tpde::Assembler::SymBinding::GLOBAL);
+		}
+		tpde::SymRef &slot = image_slots_[index];
+		if (!slot.valid()) {
+			const std::array<tpde::u8, sizeof(uintptr_t)> zero{};
+			tpde::SecRef section = assembler.get_default_section(
+				tpde::SectionKind::DataRelRO);
+			uint32_t offset = 0;
+			slot = assembler.sym_def_data(section, "", zero, alignof(uintptr_t),
+				tpde::Assembler::SymBinding::LOCAL, &offset);
+			assembler.reloc_abs(section, reference, offset, 0);
+		}
+		ValuePart target{tpde::x64::PlatformConfig::GP_BANK, 8};
+		const auto target_reg = target.alloc_reg(this);
+		text_writer.ensure_space(16);
+		ASM(MOV64rm, target_reg, FE_MEM(FE_IP, 0, FE_NOREG, -1));
+		reloc_text(slot, tpde::elf::R_X86_64_PC32,
+			text_writer.offset() - 4, -4);
+		return target;
 	}
 
 	void generate_exception_branch(IRBlockRef target) {
@@ -1482,12 +1521,12 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				tpde::x64::CCAssignerSysV assigner{false};
 				CallBuilder builder{*this, assigner};
 				builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
-				builder.add_arg(ValuePart{
-					reinterpret_cast<uintptr_t>(call.entry_cell), 8,
-					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-				builder.add_arg(ValuePart{
-					reinterpret_cast<uintptr_t>(call.direct_call), 8,
-					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+				builder.add_arg(image_symbol_value(
+					ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
+					call.call_site.target_id), tpde::CCAssignment{});
+				builder.add_arg(image_symbol_value(
+					ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR,
+					call.id), tpde::CCAssignment{});
 				builder.call(runtime_symbol(ZEND_NATIVE_HELPER_DIRECT_USER_CALL));
 				ValuePart status{tpde::x64::PlatformConfig::GP_BANK};
 				ValuePart payload{tpde::x64::PlatformConfig::GP_BANK};
@@ -1534,9 +1573,9 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				tpde::x64::CCAssignerSysV assigner{false};
 				CallBuilder builder{*this, assigner};
 				builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
-				builder.add_arg(ValuePart{
-					reinterpret_cast<uintptr_t>(call.entry_cell), 8,
-					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+				builder.add_arg(image_symbol_value(
+					ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
+					call.call_site.target_id), tpde::CCAssignment{});
 				builder.add_arg(ValuePart{
 					source_arguments ? call.call_argument_count : call.operand_count, 4,
 					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
@@ -1591,9 +1630,9 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			tpde::x64::CCAssignerSysV assigner{false};
 			CallBuilder builder{*this, assigner};
 			builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
-			builder.add_arg(ValuePart{
-				reinterpret_cast<uintptr_t>(call.entry_cell), 8,
-				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			builder.add_arg(image_symbol_value(
+				ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
+				call.call_site.target_id), tpde::CCAssignment{});
 			builder.add_arg(ValuePart{call.call_site.source_do_opline_index, 4,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_USER_CALL_FINISH_SOURCE));
@@ -1650,9 +1689,9 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				tpde::x64::CCAssignerSysV assigner{false};
 				CallBuilder builder{*this, assigner};
 				builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
-				builder.add_arg(ValuePart{
-					reinterpret_cast<uintptr_t>(call.internal_call_cell), 8,
-					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+				builder.add_arg(image_symbol_value(
+					ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL,
+					call.call_site.target_id), tpde::CCAssignment{});
 				builder.add_arg(ValuePart{call.call_argument_count, 4,
 					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 				builder.add_arg(ValuePart{call.call_site.source_init_opline_index, 4,
@@ -1686,9 +1725,9 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			tpde::x64::CCAssignerSysV assigner{false};
 			CallBuilder builder{*this, assigner};
 			builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
-			builder.add_arg(ValuePart{
-				reinterpret_cast<uintptr_t>(call.internal_call_cell), 8,
-				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			builder.add_arg(image_symbol_value(
+				ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL,
+				call.call_site.target_id), tpde::CCAssignment{});
 			builder.add_arg(ValuePart{call.call_site.source_do_opline_index, 4,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_INTERNAL_CALL_FINISH_SOURCE));
