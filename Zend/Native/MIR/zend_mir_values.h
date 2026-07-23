@@ -167,9 +167,16 @@ typedef struct _zend_mir_executable_value_ref {
 	zend_mir_source_operand_ref op1;
 	zend_mir_source_operand_ref op2;
 	zend_mir_source_operand_ref result;
+	/*
+	 * Auxiliary value carried by a following ZEND_OP_DATA.  It is copied
+	 * into the executable model while source SSA is alive so assignment
+	 * helpers never rediscover value semantics from an adjacent zend_op.
+	 */
+	zend_mir_source_operand_ref auxiliary;
 	zend_mir_storage_id op1_storage_id;
 	zend_mir_storage_id op2_storage_id;
 	zend_mir_storage_id result_storage_id;
+	zend_mir_storage_id auxiliary_storage_id;
 	uint32_t extended_value;
 	zend_mir_source_position_id source_position_id;
 	zend_mir_frame_state_id frame_state_id;
