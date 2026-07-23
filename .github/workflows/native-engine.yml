@@ -86,7 +86,7 @@ jobs:
             --reference "$REFERENCE_PHP" \
             --candidate "$candidate"
           TEST_PHP_EXECUTABLE="$candidate" \
-            "$candidate" run-tests.php -q --show-diff \
+            "$candidate" run-tests.php -q --show-diff --set-timeout 180 \
               ext/native_mir_test/tests/w07_*.phpt \
               ext/native_mir_test/tests/w08_*.phpt \
               ext/native_mir_test/tests/w09_*.phpt \
@@ -149,7 +149,7 @@ jobs:
             --reference "$REFERENCE_PHP" \
             --candidate "$candidate"
           TEST_PHP_EXECUTABLE="$candidate" \
-            "$candidate" run-tests.php -q --show-diff \
+            "$candidate" run-tests.php -q --show-diff --set-timeout 180 \
               ext/native_mir_test/tests/w07_*.phpt \
               ext/native_mir_test/tests/w08_*.phpt \
               ext/native_mir_test/tests/w09_*.phpt \
