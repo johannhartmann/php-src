@@ -14,14 +14,10 @@ ZEND_TLS zend_native_dynamic_compiler
 	*zend_native_active_dynamic_compiler;
 
 void zend_native_dynamic_compiler_init(
-	zend_native_dynamic_compiler *compiler,
-	void *context,
-	zend_native_dynamic_compile_t compile)
+	zend_native_dynamic_compiler *compiler)
 {
-	ZEND_ASSERT(compiler != NULL && compile != NULL);
+	ZEND_ASSERT(compiler != NULL);
 	memset(compiler, 0, sizeof(*compiler));
-	compiler->context = context;
-	compiler->compile = compile;
 }
 
 void zend_native_dynamic_compiler_destroy(
@@ -46,7 +42,7 @@ void zend_native_dynamic_compiler_destroy(
 void zend_native_dynamic_compiler_activate(
 	zend_native_dynamic_compiler *compiler)
 {
-	ZEND_ASSERT(compiler != NULL && compiler->compile != NULL);
+	ZEND_ASSERT(compiler != NULL);
 	ZEND_ASSERT(zend_native_active_dynamic_compiler == NULL);
 	zend_native_active_dynamic_compiler = compiler;
 }
@@ -185,7 +181,7 @@ zend_native_status zend_native_execute_include_or_eval(
 	zend_native_diagnostic diagnostic;
 	uint32_t call_info;
 
-	if (compiler == NULL || compiler->compile == NULL
+	if (compiler == NULL
 			|| execute_data == NULL || execute_data->func == NULL
 			|| !ZEND_USER_CODE(execute_data->func->type)
 			|| source_opline_index >= execute_data->func->op_array.last) {
@@ -252,11 +248,13 @@ zend_native_status zend_native_execute_include_or_eval(
 			"Native dynamic codeunit owner capacity overflow");
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	if (compiler->compile(compiler->context, new_op_array) == FAILURE
-			|| (entry_cell = zend_native_dynamic_compiler_lookup(
-				compiler, new_op_array)) == NULL
+	entry_cell = zend_native_reentry_resolve(
+		(zend_function *) new_op_array);
+	if (entry_cell == NULL
 			|| entry_cell->state != ZEND_NATIVE_ENTRY_READY
-			|| entry_cell->code == NULL) {
+			|| entry_cell->code == NULL
+			|| zend_native_dynamic_compiler_publish(
+				compiler, new_op_array, entry_cell) == FAILURE) {
 		zend_vm_stack_free_call_frame(call);
 		if (EG(exception) == NULL) {
 			zend_throw_error(NULL,
