@@ -57,6 +57,14 @@ struct zend_tpde_packed_array_read {
 	uint32_t result_offset;
 };
 
+struct zend_tpde_packed_array_append {
+	uint32_t container_offset;
+	uint32_t value_offset;
+	uint32_t result_offset;
+	bool move_value;
+	bool has_result;
+};
+
 /*
  * Keep the semantic fast-path selection target-neutral.  Target backends only
  * encode the guards and loads; they do not independently decide which MIR
@@ -99,6 +107,58 @@ static inline bool zend_tpde_packed_array_read_at(
 	out->container_offset = static_cast<uint32_t>(container_offset);
 	out->key_offset = static_cast<uint32_t>(key_offset);
 	out->result_offset = static_cast<uint32_t>(result_offset);
+	return true;
+}
+
+static inline bool zend_tpde_packed_array_append_at(
+	const zend_tpde_instruction &instruction,
+	zend_tpde_packed_array_append *out)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	uint64_t container_offset;
+	uint64_t value_offset;
+	uint64_t result_offset = 0;
+
+	if (out == nullptr || !instruction.has_value_operation
+			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM
+			|| operation.source_opcode != ZEND_ASSIGN_DIM
+			|| operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
+			|| operation.op1_storage_id == ZEND_MIR_ID_INVALID
+			|| operation.auxiliary_storage_id == ZEND_MIR_ID_INVALID
+			|| operation.op1_storage_id == operation.auxiliary_storage_id
+			|| (operation.auxiliary.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+				&& operation.auxiliary.slot_kind
+					!= ZEND_MIR_SOURCE_SLOT_TMP)
+			|| (operation.result_storage_id != ZEND_MIR_ID_INVALID
+				&& (operation.result_storage_id
+						== operation.op1_storage_id
+					|| operation.result_storage_id
+						== operation.auxiliary_storage_id))) {
+		return false;
+	}
+	container_offset =
+		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
+			* sizeof(zval);
+	value_offset =
+		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.auxiliary_storage_id)
+			* sizeof(zval);
+	if (operation.result_storage_id != ZEND_MIR_ID_INVALID) {
+		result_offset =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
+				* sizeof(zval);
+	}
+	if (container_offset > UINT32_MAX || value_offset > UINT32_MAX
+			|| result_offset > UINT32_MAX) {
+		return false;
+	}
+	out->container_offset = static_cast<uint32_t>(container_offset);
+	out->value_offset = static_cast<uint32_t>(value_offset);
+	out->result_offset = static_cast<uint32_t>(result_offset);
+	out->move_value =
+		operation.auxiliary.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP;
+	out->has_result =
+		operation.result_storage_id != ZEND_MIR_ID_INVALID;
 	return true;
 }
 
