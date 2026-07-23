@@ -1007,6 +1007,14 @@ void zend_native_call_begin(
 		zend_native_call_abort("Native call source position is invalid");
 	}
 	source_init = &caller->func->op_array.opcodes[source_opline_index];
+	/*
+	 * Target resolution may allocate objects or raise before the call frame
+	 * exists (notably NEW creates the object before invoking its constructor).
+	 * Publish the source call site first so exception file/line and backtrace
+	 * state match the VM for every exit from call setup.
+	 */
+	caller->opline = source_init;
+	EG(current_execute_data) = caller;
 	initial_argument_count = source_init->extended_value;
 	if (initial_argument_count > argument_count) {
 		zend_native_call_abort("Native callee argument count is invalid");
@@ -1255,8 +1263,6 @@ void zend_native_call_begin(
 	}
 	call->prev_execute_data = caller;
 	caller->call = call;
-	caller->opline = &caller->func->op_array.opcodes[source_opline_index];
-	EG(current_execute_data) = caller;
 }
 
 void zend_native_call_set_integer_argument(
