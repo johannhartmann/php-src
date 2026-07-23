@@ -132,6 +132,11 @@ private:
 			: IRValueRef{MIR_VALUE_BASE + static_cast<uint32_t>(index)};
 	}
 
+	zend_mir_instruction_record instruction_record_at(uint32_t index) const {
+		return zend_tpde_instruction_record_at(
+			plan_, zend_tpde_instruction_at(plan_, index));
+	}
+
 	void add_node(uint32_t block, InstNode node) {
 		uint32_t index = static_cast<uint32_t>(nodes_.size());
 		nodes_.push_back(std::move(node));
@@ -175,19 +180,19 @@ public:
 		 * branch without changing persistent source identity.
 		 */
 		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
-			if (plan_->instructions[i].record.opcode
-					!= ZEND_MIR_OPCODE_FINALLY_RETURN) {
+			const zend_mir_instruction_record ret =
+				instruction_record_at(i);
+			if (ret.opcode != ZEND_MIR_OPCODE_FINALLY_RETURN) {
 				continue;
 			}
-			int32_t ret_block = block_index(
-				plan_->instructions[i].record.block_id);
+			int32_t ret_block = block_index(ret.block_id);
 			if (ret_block < 0) {
 				valid_ = false;
 				continue;
 			}
 			for (uint32_t n = 0; n < plan_->instruction_count; ++n) {
-				const zend_mir_instruction_record &call =
-					plan_->instructions[n].record;
+				const zend_mir_instruction_record call =
+					instruction_record_at(n);
 				zend_mir_block_id continuation;
 				if (call.opcode != ZEND_MIR_OPCODE_FINALLY_CALL
 						|| plan_->view->successor_count(
@@ -212,8 +217,8 @@ public:
 				}
 			}
 			for (uint32_t n = 0; n < plan_->instruction_count; ++n) {
-				const zend_mir_instruction_record &handler =
-					plan_->instructions[n].record;
+				const zend_mir_instruction_record handler =
+					instruction_record_at(n);
 				if (handler.opcode != ZEND_MIR_OPCODE_CATCH_ENTER
 						&& handler.opcode != ZEND_MIR_OPCODE_FINALLY_ENTER) {
 					continue;
@@ -265,7 +270,13 @@ public:
 
 		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
 			const zend_tpde_instruction &instruction = plan_->instructions[i];
-			int32_t block = block_index(instruction.record.block_id);
+			const zend_mir_instruction_record record =
+				instruction_record_at(i);
+			if (!zend_mir_id_is_valid(record.id)) {
+				valid_ = false;
+				continue;
+			}
+			int32_t block = block_index(record.block_id);
 			if (block < 0) {
 				valid_ = false;
 				continue;
@@ -286,11 +297,11 @@ public:
 					block_successors.push_back(exception_ref);
 				}
 			}
-			IRValueRef result = value_ref(instruction.record.result_id);
-			if (instruction.record.opcode == ZEND_MIR_OPCODE_CONSTANT) {
+			IRValueRef result = value_ref(record.result_id);
+			if (record.opcode == ZEND_MIR_OPCODE_CONSTANT) {
 				continue;
 			}
-			if (instruction.record.opcode == ZEND_MIR_OPCODE_PHI) {
+			if (record.opcode == ZEND_MIR_OPCODE_PHI) {
 				if (result == INVALID_VALUE_REF) {
 					valid_ = false;
 					continue;
@@ -309,7 +320,7 @@ public:
 				phis_[static_cast<uint32_t>(block)].push_back(result);
 				phi_values_[static_cast<uint32_t>(result)] = 1;
 				uint32_t predecessors = plan_->view->predecessor_count(
-					plan_->view->context, instruction.record.block_id);
+					plan_->view->context, record.block_id);
 				if (predecessors != instruction.operand_count) {
 					valid_ = false;
 					continue;
@@ -320,7 +331,7 @@ public:
 					IRValueRef input = value_ref(zend_tpde_operand_at(
 						plan_, &instruction, n));
 					if (!plan_->view->predecessor_at(plan_->view->context,
-							instruction.record.block_id, n, &predecessor)
+							record.block_id, n, &predecessor)
 							|| (predecessor_index = block_index(predecessor)) < 0
 							|| input == INVALID_VALUE_REF) {
 						valid_ = false;
@@ -340,16 +351,16 @@ public:
 			 * but the authoritative value remains in the Zend frame slot.  They
 			 * are not machine copies and must not create a TPDE use-before-def
 			 * dependency on another source-only zval identity. */
-			if (instruction.record.opcode == ZEND_MIR_OPCODE_COPY
-					&& instruction.record.representation
+			if (record.opcode == ZEND_MIR_OPCODE_COPY
+					&& record.representation
 						== ZEND_MIR_REPRESENTATION_ZVAL) {
 				continue;
 			}
 			operands.reserve(instruction.operand_count +
-				(instruction.record.opcode == ZEND_MIR_OPCODE_RETURN
-					|| instruction.record.opcode
+				(record.opcode == ZEND_MIR_OPCODE_RETURN
+					|| record.opcode
 						== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
-					|| instruction.record.opcode
+					|| record.opcode
 						== ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL));
 			/*
 			 * RETURN_SOURCE_ZVAL transfers the canonical zval directly from the
@@ -360,12 +371,12 @@ public:
 			 * complete zval.  The runtime helper needs only the frame pointer.
 			 */
 			uint32_t data_operand_count =
-				instruction.record.opcode == ZEND_MIR_OPCODE_STATEPOINT
-					|| instruction.record.opcode
+				record.opcode == ZEND_MIR_OPCODE_STATEPOINT
+					|| record.opcode
 						== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
-					|| instruction.record.opcode
+					|| record.opcode
 						== ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
-					|| (instruction.record.opcode
+					|| (record.opcode
 							== ZEND_MIR_OPCODE_CALL_DIRECT_USER
 						&& instruction.direct_call != nullptr)
 				? 0 : instruction.operand_count;
@@ -377,32 +388,32 @@ public:
 				}
 				operands.push_back(operand);
 			}
-			if (instruction.record.opcode == ZEND_MIR_OPCODE_RETURN
-					|| instruction.record.opcode
+			if (record.opcode == ZEND_MIR_OPCODE_RETURN
+					|| record.opcode
 						== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
-					|| instruction.record.opcode
+					|| record.opcode
 						== ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
 					|| instruction.source_effect != 0) {
 				operands.push_back(IRValueRef{FRAME_VALUE});
 			}
-			if (instruction.record.opcode == ZEND_MIR_OPCODE_STATEPOINT
-					&& (instruction.record.effects & ZEND_MIR_EFFECT_MASK(
+			if (record.opcode == ZEND_MIR_OPCODE_STATEPOINT
+					&& (record.effects & ZEND_MIR_EFFECT_MASK(
 						ZEND_MIR_EFFECT_INTERRUPT_BOUNDARY)) != 0) {
 				operands.push_back(IRValueRef{FRAME_VALUE});
 			}
 			if (zend_mir_opcode_is_executable_value(
-					instruction.record.opcode)) {
+					record.opcode)) {
 				operands.push_back(IRValueRef{FRAME_VALUE});
 			}
-			if (instruction.record.opcode
+			if (record.opcode
 					== ZEND_MIR_OPCODE_ITERATOR_BRANCH) {
 				operands.push_back(IRValueRef{FRAME_VALUE});
 			}
-			if (instruction.record.opcode
+			if (record.opcode
 					== ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
 				operands.push_back(IRValueRef{FRAME_VALUE});
 			}
-			if (instruction.record.opcode
+			if (record.opcode
 					== ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
 				/*
 				 * The descriptor path is one call with explicit source-backed
@@ -422,7 +433,7 @@ public:
 				for (uint32_t n = 0; n < frame_use_count; ++n) {
 					operands.push_back(IRValueRef{FRAME_VALUE});
 				}
-			} else if (instruction.record.opcode
+			} else if (record.opcode
 					== ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL) {
 				/* begin + source setters + finish + optional scalar read */
 				for (uint32_t n = 0;
@@ -430,13 +441,13 @@ public:
 							+ machine_result; ++n) {
 					operands.push_back(IRValueRef{FRAME_VALUE});
 				}
-			} else if (instruction.record.opcode
+			} else if (record.opcode
 					== ZEND_MIR_OPCODE_CATCH_ENTER
-					|| instruction.record.opcode
+					|| record.opcode
 						== ZEND_MIR_OPCODE_FINALLY_ENTER
-					|| instruction.record.opcode
+					|| record.opcode
 						== ZEND_MIR_OPCODE_FINALLY_CALL
-					|| instruction.record.opcode
+					|| record.opcode
 						== ZEND_MIR_OPCODE_FINALLY_RETURN) {
 				operands.push_back(IRValueRef{FRAME_VALUE});
 			}
@@ -463,6 +474,9 @@ public:
 	}
 	const zend_tpde_instruction &mir_instruction(IRInstRef inst) const {
 		return plan_->instructions[node(inst).mir_instruction_index];
+	}
+	zend_mir_instruction_record instruction_record(IRInstRef inst) const {
+		return instruction_record_at(node(inst).mir_instruction_index);
 	}
 	zend_mir_representation representation(IRValueRef value) const {
 		uint32_t index = static_cast<uint32_t>(value);

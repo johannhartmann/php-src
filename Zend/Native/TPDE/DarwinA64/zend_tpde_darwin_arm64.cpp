@@ -144,6 +144,11 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		return true;
 	}
 	const zend_tpde_instruction &mir = adaptor->mir_instruction(instruction);
+	const zend_mir_instruction_record record =
+		adaptor->instruction_record(instruction);
+	if (!zend_mir_id_is_valid(record.id)) {
+		return false;
+	}
 	if (mir.source_effect == ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE) {
 		if (mir.source_effect_exact_type != ZEND_MIR_SCALAR_TYPE_I64
 				|| node.operands.empty()) {
@@ -212,7 +217,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		label_place(matched);
 		return true;
 	}
-	if (mir.record.opcode == ZEND_MIR_OPCODE_ECHO_SCALAR
+	if (record.opcode == ZEND_MIR_OPCODE_ECHO_SCALAR
 			|| mir.source_effect == ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR) {
 		zend_mir_scalar_type_mask exact_type = mir.source_effect_exact_type;
 		if (!zend_mir_scalar_type_is_exact(exact_type)
@@ -983,24 +988,24 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		return true;
 	};
 
-	if ((mir.record.opcode >= ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS
-				&& mir.record.opcode
+	if ((record.opcode >= ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS
+				&& record.opcode
 					<= ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS_DELAYED)
-			|| (mir.record.opcode >= ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
-				&& mir.record.opcode
+			|| (record.opcode >= ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
+				&& record.opcode
 					<= ZEND_MIR_OPCODE_DYNAMIC_INCLUDE_OR_EVAL)
-			|| mir.record.opcode == ZEND_MIR_OPCODE_VALUE_TYPE_CHECK
-			|| mir.record.opcode == ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL
-			|| mir.record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME) {
+			|| record.opcode == ZEND_MIR_OPCODE_VALUE_TYPE_CHECK
+			|| record.opcode == ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL
+			|| record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME) {
 		zend_native_runtime_helper_id helper;
-		if (mir.record.opcode >= ZEND_MIR_OPCODE_DYNAMIC_FETCH_R) {
+		if (record.opcode >= ZEND_MIR_OPCODE_DYNAMIC_FETCH_R) {
 			helper = static_cast<zend_native_runtime_helper_id>(
-				static_cast<uint32_t>(mir.record.opcode)
+				static_cast<uint32_t>(record.opcode)
 					- static_cast<uint32_t>(ZEND_MIR_OPCODE_DYNAMIC_FETCH_R)
 					+ static_cast<uint32_t>(ZEND_NATIVE_HELPER_DYNAMIC_FETCH_R));
 		} else {
 			helper = static_cast<zend_native_runtime_helper_id>(
-				static_cast<uint32_t>(mir.record.opcode)
+				static_cast<uint32_t>(record.opcode)
 					- static_cast<uint32_t>(
 						ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS)
 					+ static_cast<uint32_t>(
@@ -1008,7 +1013,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		}
 		return execute_value_operation(helper);
 	}
-	switch (mir.record.opcode) {
+	switch (record.opcode) {
 		case ZEND_MIR_OPCODE_VALUE_MAKE_REF:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_MAKE_REF);
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN_REF:
@@ -1108,7 +1113,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		case ZEND_MIR_OPCODE_I1_TO_I64:
 			return copy_result();
 		case ZEND_MIR_OPCODE_STATEPOINT:
-			if ((mir.record.effects & ZEND_MIR_EFFECT_MASK(
+			if ((record.effects & ZEND_MIR_EFFECT_MASK(
 					ZEND_MIR_EFFECT_INTERRUPT_BOUNDARY)) != 0) {
 				if (node.operands.size() != 1
 						|| mir.source_opline_index == UINT32_MAX) {
@@ -1172,7 +1177,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			auto [result_ref, result] = result_ref_single(node.result);
 			ASM(CMPxi, source.load_to_reg(), 0);
 			auto result_reg = result.alloc_reg();
-			generate_raw_set(mir.record.opcode == ZEND_MIR_OPCODE_I1_NOT
+			generate_raw_set(record.opcode == ZEND_MIR_OPCODE_I1_NOT
 				? Jump::Jeq : Jump::Jne, result_reg);
 			result.set_modified();
 			return true;
@@ -1289,13 +1294,13 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		}
 		case ZEND_MIR_OPCODE_BRANCH:
 			generate_uncond_branch(adaptor->block_succs(
-				adaptor->block_ref(mir.record.block_id))[0]);
+				adaptor->block_ref(record.block_id))[0]);
 			return true;
 		case ZEND_MIR_OPCODE_COND_BRANCH: {
 			auto [condition_ref, condition] = unary();
 			auto condition_reg = condition.load_to_reg();
 			const auto &successors = adaptor->block_succs(
-				adaptor->block_ref(mir.record.block_id));
+				adaptor->block_ref(record.block_id));
 			generate_cond_branch(Jump{Jump::Cbnz, condition_reg, false},
 				successors[0], successors[1]);
 			return true;
@@ -1303,7 +1308,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		case ZEND_MIR_OPCODE_VALUE_COND_BRANCH:
 		case ZEND_MIR_OPCODE_ITERATOR_BRANCH: {
 			if (node.operands.size() != 1
-					|| (mir.record.opcode
+					|| (record.opcode
 							== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 						? !mir.has_value_operation
 						: mir.source_opline_index == UINT32_MAX)) {
@@ -1312,7 +1317,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			zend::native::tpde::CCAssignerAppleA64 assigner;
 			CallBuilder builder{*this, assigner};
 			builder.add_arg(CallArg{node.operands[0]});
-			if (mir.record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
+			if (record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
 				const zend_mir_executable_value_ref &operation =
 					mir.value_operation;
 				builder.add_arg(ValuePart{
@@ -1334,7 +1339,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				builder.add_arg(ValuePart{mir.source_opline_index, 4,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			}
-			const auto helper = mir.record.opcode
+			const auto helper = record.opcode
 				== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 				? ZEND_NATIVE_HELPER_VALUE_COND_BRANCH
 				: ZEND_NATIVE_HELPER_VALUE_ITERATOR_BRANCH;
@@ -1357,7 +1362,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			return_builder.ret();
 			label_place(valid);
 			const auto &successors = adaptor->block_succs(
-				adaptor->block_ref(mir.record.block_id));
+				adaptor->block_ref(record.block_id));
 			generate_cond_branch(Jump{Jump::Cbnz, decision_reg, false},
 				successors[0], successors[1]);
 			return true;
@@ -1654,7 +1659,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			zend::native::tpde::CCAssignerAppleA64 assigner;
 			CallBuilder builder{*this, assigner};
 			builder.add_arg(CallArg{node.operands[0]});
-			builder.add_arg(ValuePart{mir.record.source_position_id, 4,
+			builder.add_arg(ValuePart{record.source_position_id, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.call(ValuePart{
 				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
@@ -1676,14 +1681,14 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			zend::native::tpde::CCAssignerAppleA64 assigner;
 			CallBuilder builder{*this, assigner};
 			builder.add_arg(CallArg{node.operands[0]});
-			builder.add_arg(ValuePart{mir.record.source_position_id, 4,
+			builder.add_arg(ValuePart{record.source_position_id, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.call(ValuePart{
 				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
 					ZEND_NATIVE_HELPER_FINALLY_CALL)),
 				8, DarwinConfig::GP_BANK});
 			const auto &successors = adaptor->block_succs(
-				adaptor->block_ref(mir.record.block_id));
+				adaptor->block_ref(record.block_id));
 			if (successors.size() != 2) {
 				return false;
 			}
@@ -1694,7 +1699,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			zend::native::tpde::CCAssignerAppleA64 assigner;
 			CallBuilder builder{*this, assigner};
 			builder.add_arg(CallArg{node.operands[0]});
-			builder.add_arg(ValuePart{mir.record.source_position_id, 4,
+			builder.add_arg(ValuePart{record.source_position_id, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.call(ValuePart{
 				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
@@ -1705,8 +1710,9 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			auto continuation_reg = continuation.cur_reg_or_load(this);
 			const zend_tpde_plan *plan = adaptor->plan();
 			for (uint32_t i = 0; i < plan->instruction_count; ++i) {
-				const zend_mir_instruction_record &call =
-					plan->instructions[i].record;
+				const zend_mir_instruction_record call =
+					zend_tpde_instruction_record_at(
+						plan, &plan->instructions[i]);
 				zend_mir_block_id target;
 				if (call.opcode != ZEND_MIR_OPCODE_FINALLY_CALL
 						|| plan->view->successor_count(
@@ -1722,8 +1728,9 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				label_place(continued);
 			}
 			for (uint32_t i = 0; i < plan->instruction_count; ++i) {
-				const zend_mir_instruction_record &handler =
-					plan->instructions[i].record;
+				const zend_mir_instruction_record handler =
+					zend_tpde_instruction_record_at(
+						plan, &plan->instructions[i]);
 				if ((handler.opcode != ZEND_MIR_OPCODE_CATCH_ENTER
 						&& handler.opcode != ZEND_MIR_OPCODE_FINALLY_ENTER)
 						|| handler.block_id == plan->function.entry_block_id
@@ -1753,7 +1760,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			zend::native::tpde::CCAssignerAppleA64 assigner;
 			CallBuilder builder{*this, assigner};
 			builder.add_arg(CallArg{node.operands[0]});
-			builder.add_arg(ValuePart{mir.record.source_position_id, 4,
+			builder.add_arg(ValuePart{record.source_position_id, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.call(ValuePart{
 				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
@@ -1764,7 +1771,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			auto status_reg = status.cur_reg_or_load(this);
 			ASM(CMPxi, status_reg, ZEND_NATIVE_RETURNED);
 			const auto &successors = adaptor->block_succs(
-				adaptor->block_ref(mir.record.block_id));
+				adaptor->block_ref(record.block_id));
 			if (successors.size() == 2) {
 				generate_cond_branch(Jump::Jeq, successors[0], successors[1]);
 				status.reset(this);
@@ -1815,7 +1822,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			zend::native::tpde::CCAssignerAppleA64 assigner;
 			CallBuilder builder{*this, assigner};
 			builder.add_arg(CallArg{node.operands[0]});
-			builder.add_arg(ValuePart{mir.record.source_position_id, 4,
+			builder.add_arg(ValuePart{record.source_position_id, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.call(ValuePart{
 				reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
