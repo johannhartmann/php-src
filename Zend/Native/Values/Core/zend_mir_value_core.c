@@ -813,11 +813,25 @@ static bool zend_mir_value_validate_executable_operations(
 			&staging->executable_operations[index];
 		const zend_mir_block_record *blocks = ZEND_MIR_CORE_ITEMS(
 			module, blocks, zend_mir_block_record);
+		const zend_mir_core_instruction *instructions = ZEND_MIR_CORE_ITEMS(
+			module, instructions, zend_mir_core_instruction);
+		const bool attached_control =
+			operation->opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH;
 
-		if (zend_mir_id_is_valid(operation->id)
+		if ((attached_control
+				? operation->id >= module->instructions.count
+					|| instructions[operation->id].record.id != operation->id
+					|| instructions[operation->id].record.block_id
+						!= operation->block_id
+					|| instructions[operation->id].record.opcode
+						!= operation->opcode
+					|| instructions[operation->id].record.source_position_id
+						!= operation->source_position_id
+				: zend_mir_id_is_valid(operation->id))
 				|| operation->block_id >= module->blocks.count
 				|| blocks[operation->block_id].id != operation->block_id
-				|| !zend_mir_opcode_is_executable_value(operation->opcode)
+				|| (!attached_control
+					&& !zend_mir_opcode_is_executable_value(operation->opcode))
 				|| operation->source_opcode > UINT8_MAX
 				|| operation->source_position_id >= module->source_positions.count) {
 			return false;
@@ -907,6 +921,7 @@ static bool zend_mir_value_compose_executable_operations(
 	size_t map_bytes;
 	uint32_t old_count = module->instructions.count;
 	uint32_t operation_count = staging->executable_operation_count;
+	uint32_t materialized_count = 0;
 	uint32_t total_count;
 	uint32_t old_index = 0;
 	uint32_t operation_index;
@@ -917,13 +932,20 @@ static bool zend_mir_value_compose_executable_operations(
 	if (operation_count == 0) {
 		return true;
 	}
+	for (operation_index = 0; operation_index < operation_count;
+			operation_index++) {
+		if (!zend_mir_id_is_valid(
+				staging->executable_operations[operation_index].id)) {
+			materialized_count++;
+		}
+	}
 	if (old_count > module->limits.instructions
-			|| operation_count > module->limits.instructions - old_count) {
+			|| materialized_count > module->limits.instructions - old_count) {
 		return zend_mir_module_fail(module,
 			ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
 			"executable value instruction count overflow");
 	}
-	total_count = old_count + operation_count;
+	total_count = old_count + materialized_count;
 	if (!zend_mir_value_checked_multiply_size(
 			(size_t) total_count, sizeof(*new_instructions), &instruction_bytes)
 			|| !zend_mir_value_checked_multiply_size(
@@ -974,6 +996,7 @@ static bool zend_mir_value_compose_executable_operations(
 					&staging->executable_operations[operation_index];
 
 				if (operation_emitted[operation_index]
+						|| zend_mir_id_is_valid(operation->id)
 						|| operation->block_id != old->block_id
 						|| operation->source_position_id
 							> old->source_position_id) {
@@ -990,6 +1013,16 @@ static bool zend_mir_value_compose_executable_operations(
 		new_instructions[new_index] = old_instructions[old_index];
 		new_instructions[new_index].record.id = new_index;
 		old_to_new[old_index] = new_index;
+		for (operation_index = 0; operation_index < operation_count;
+				operation_index++) {
+			if (!operation_emitted[operation_index]
+					&& staging->executable_operations[operation_index].id
+						== old_index) {
+				staging->executable_operations[operation_index].id = new_index;
+				operation_emitted[operation_index] = 1;
+				emitted_count++;
+			}
+		}
 		new_index++;
 		old_index++;
 	}

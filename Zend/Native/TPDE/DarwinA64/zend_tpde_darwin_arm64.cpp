@@ -306,15 +306,49 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		result.set_modified();
 		return true;
 	};
-	auto execute_value_operation = [&](zend_native_runtime_helper_id helper) {
-		if (node.operands.size() != 1 || mir.source_opline_index == UINT32_MAX) {
+	auto execute_value_operation = [&](
+			zend_native_runtime_helper_id helper,
+			ValuePart *frame_argument = nullptr) {
+		const bool explicit_operands =
+			helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN
+			|| helper == ZEND_NATIVE_HELPER_VALUE_QM_ASSIGN
+			|| helper == ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV;
+		if (node.operands.size() != 1
+				|| (explicit_operands
+					? !mir.has_value_operation
+					: mir.source_opline_index == UINT32_MAX)) {
 			return false;
 		}
 		zend::native::tpde::CCAssignerAppleA64 assigner;
 		CallBuilder builder{*this, assigner};
-		builder.add_arg(CallArg{node.operands[0]});
-		builder.add_arg(ValuePart{mir.source_opline_index, 4,
-			DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+		if (frame_argument != nullptr) {
+			builder.add_arg(
+				std::move(*frame_argument), ::tpde::CCAssignment{});
+		} else {
+			builder.add_arg(CallArg{node.operands[0]});
+		}
+		if (explicit_operands) {
+			const zend_mir_executable_value_ref &operation =
+				mir.value_operation;
+			builder.add_arg(ValuePart{
+				zend_tpde_encode_value_operand(operation.op1), 8,
+				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			builder.add_arg(ValuePart{
+				zend_tpde_encode_value_operand(operation.op2), 8,
+				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			builder.add_arg(ValuePart{
+				zend_tpde_encode_value_operand(operation.result), 8,
+				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			builder.add_arg(ValuePart{operation.extended_value, 4,
+				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			builder.add_arg(ValuePart{operation.source_opcode, 4,
+				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			builder.add_arg(ValuePart{operation.source_position_id, 4,
+				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+		} else {
+			builder.add_arg(ValuePart{mir.source_opline_index, 4,
+				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+		}
 		builder.call(ValuePart{
 			reinterpret_cast<uintptr_t>(adaptor->runtime_helper(helper)), 8,
 			DarwinConfig::GP_BANK});
@@ -364,11 +398,27 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			return false;
 		}
 
+		/*
+		 * The guarded helper call mutates TPDE's global register state even
+		 * though it is emitted on only one local machine-code edge.  Spill all
+		 * live assignments before introducing that edge, then keep the frame
+		 * pointer in an untracked scratch register.  Both arms consequently
+		 * reach the join with the same allocator state.
+		 */
+		for (auto reg_id : register_file.used_regs()) {
+			::tpde::Reg reg{reg_id};
+			if (!register_file.is_fixed(reg)
+					&& register_file.reg_local_idx(reg)
+						!= INVALID_VAL_LOCAL_IDX) {
+				evict_reg(reg);
+			}
+		}
 		auto slow = text_writer.label_create();
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_reg = frame.load_to_reg();
+		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_reg = frame_scratch.cur_reg();
 		ScratchReg source_slot{this};
 		ScratchReg target_slot{this};
 		ScratchReg source_type{this};
@@ -426,7 +476,15 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		}
 		generate_raw_jump(Jump::jmp, done);
 		label_place(slow);
-		if (!execute_value_operation(slow_helper)) {
+		source_slot.reset();
+		target_slot.reset();
+		source_type.reset();
+		target_type.reset();
+		low_word.reset();
+		high_word.reset();
+		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
+		frame_argument.set_value(this, std::move(frame_scratch));
+		if (!execute_value_operation(slow_helper, &frame_argument)) {
 			return false;
 		}
 		label_place(done);
@@ -750,14 +808,37 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		case ZEND_MIR_OPCODE_VALUE_COND_BRANCH:
 		case ZEND_MIR_OPCODE_ITERATOR_BRANCH: {
 			if (node.operands.size() != 1
-					|| mir.source_opline_index == UINT32_MAX) {
+					|| (mir.record.opcode
+							== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+						? !mir.has_value_operation
+						: mir.source_opline_index == UINT32_MAX)) {
 				return false;
 			}
 			zend::native::tpde::CCAssignerAppleA64 assigner;
 			CallBuilder builder{*this, assigner};
 			builder.add_arg(CallArg{node.operands[0]});
-			builder.add_arg(ValuePart{mir.source_opline_index, 4,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			if (mir.record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
+				const zend_mir_executable_value_ref &operation =
+					mir.value_operation;
+				builder.add_arg(ValuePart{
+					zend_tpde_encode_value_operand(operation.op1), 8,
+					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+				builder.add_arg(ValuePart{
+					zend_tpde_encode_value_operand(operation.op2), 8,
+					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+				builder.add_arg(ValuePart{
+					zend_tpde_encode_value_operand(operation.result), 8,
+					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+				builder.add_arg(ValuePart{operation.extended_value, 4,
+					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+				builder.add_arg(ValuePart{operation.source_opcode, 4,
+					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+				builder.add_arg(ValuePart{operation.source_position_id, 4,
+					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			} else {
+				builder.add_arg(ValuePart{mir.source_opline_index, 4,
+					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			}
 			const auto helper = mir.record.opcode
 				== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 				? ZEND_NATIVE_HELPER_VALUE_COND_BRANCH
