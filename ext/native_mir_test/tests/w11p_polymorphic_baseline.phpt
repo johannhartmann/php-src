@@ -60,4 +60,4 @@ object(stdClass)#1 (1) {
   ["property"]=>
   int(3)
 }
-accepted return=7 codeunits=3 vm=0 execute_ex=0 handler=0
+accepted return=7 codeunits=2 vm=0 execute_ex=0 handler=0
