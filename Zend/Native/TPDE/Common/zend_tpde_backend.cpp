@@ -230,6 +230,7 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->values);
 	std::free(plan->value_index);
 	std::free(plan->instructions);
+	std::free(plan->instruction_index);
 	std::free(plan->call_arguments);
 	std::free(plan->direct_calls);
 	std::memset(plan, 0, sizeof(*plan));
@@ -299,6 +300,8 @@ bool initialize_plan(
 		plan->value_count, &plan->value_index_capacity);
 	plan->instructions = static_cast<zend_tpde_instruction *>(
 		std::calloc(plan->instruction_count, sizeof(*plan->instructions)));
+	plan->instruction_index = allocate_id_index(
+		plan->instruction_count, &plan->instruction_index_capacity);
 	plan->call_arguments = static_cast<zend_mir_call_argument_ref *>(
 		std::calloc(plan->call_argument_count, sizeof(*plan->call_arguments)));
 	plan->direct_calls = static_cast<zend_native_direct_call_descriptor **>(
@@ -306,7 +309,9 @@ bool initialize_plan(
 	if (plan->block_ids == nullptr || plan->block_index == nullptr
 			|| (plan->value_count != 0
 				&& (plan->values == nullptr || plan->value_index == nullptr))
-			|| (plan->instruction_count != 0 && plan->instructions == nullptr)
+			|| (plan->instruction_count != 0
+				&& (plan->instructions == nullptr
+					|| plan->instruction_index == nullptr))
 			|| (plan->instruction_count != 0 && plan->direct_calls == nullptr)
 			|| (plan->call_argument_count != 0
 				&& plan->call_arguments == nullptr)) {
@@ -323,6 +328,32 @@ bool initialize_plan(
 				"MIR call-argument table is unreadable");
 			return false;
 		}
+	}
+	uint64_t operands = 0;
+	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
+		zend_mir_instruction_record record;
+		if (!view->instruction_at(view->context, i, &record)
+				|| !id_index_insert(plan->instruction_index,
+					plan->instruction_index_capacity, record.id, i)) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"MIR instruction table is unreadable or contains duplicate IDs");
+			return false;
+		}
+		const uint32_t count =
+			view->instruction_operand_count(view->context, record.id);
+		operands += count;
+		if (operands > MAX_RECORDS) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"MIR operand count is outside the W06 executable bound");
+			return false;
+		}
+		plan->instructions[i].id = record.id;
+		plan->instructions[i].view_index = i;
+		plan->instructions[i].operand_count = count;
+		plan->instructions[i].exception_block_id = ZEND_MIR_ID_INVALID;
+		plan->instructions[i].source_opline_index = UINT32_MAX;
 	}
 	if (value_model != nullptr) {
 		if (value_model->contract_version != ZEND_MIR_W11P_CONTRACT_VERSION
@@ -344,17 +375,20 @@ bool initialize_plan(
 		}
 		for (uint32_t i = 0; i < operation_count; ++i) {
 			zend_mir_executable_value_ref operation{};
+			int32_t instruction_index;
 			if (!value_model->executable_operation_at(
 					value_model->context, i, &operation)
-					|| operation.id >= plan->instruction_count
-					|| plan->instructions[operation.id].has_value_operation) {
+					|| (instruction_index =
+							zend_tpde_instruction_index(plan, operation.id)) < 0
+					|| plan->instructions[instruction_index]
+						.has_value_operation) {
 				zend_tpde_set_diagnostic(diag,
 					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 					"executable value operation has an invalid instruction identity");
 				return false;
 			}
-			plan->instructions[operation.id].value_operation = operation;
-			plan->instructions[operation.id].has_value_operation = true;
+			plan->instructions[instruction_index].value_operation = operation;
+			plan->instructions[instruction_index].has_value_operation = true;
 		}
 	}
 
@@ -442,25 +476,15 @@ bool initialize_plan(
 		}
 	}
 
-	uint64_t operands = 0;
 	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
 		zend_mir_instruction_record record;
-		if (!view->instruction_at(view->context, i, &record)) {
+		if (!view->instruction_at(view->context, i, &record)
+				|| record.id != plan->instructions[i].id) {
 			zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 				"MIR instruction table is unreadable");
 			return false;
 		}
-		uint32_t count = view->instruction_operand_count(view->context, record.id);
-		operands += count;
-		if (operands > MAX_RECORDS) {
-			zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-				"MIR operand count is outside the W06 executable bound");
-			return false;
-		}
-		plan->instructions[i].record = record;
-		plan->instructions[i].exception_block_id = ZEND_MIR_ID_INVALID;
-		plan->instructions[i].source_opline_index = UINT32_MAX;
-		plan->instructions[i].operand_count = count;
+		const uint32_t count = plan->instructions[i].operand_count;
 		if (zend_mir_opcode_is_executable_value(record.opcode)) {
 			const bool semantic_echo =
 				record.opcode == ZEND_MIR_OPCODE_ECHO_SCALAR;
@@ -922,23 +946,24 @@ bool initialize_plan(
 		}
 		for (uint32_t n = 0; n < plan->instruction_count; ++n) {
 			zend_tpde_instruction &candidate = plan->instructions[n];
-			if (candidate.record.source_position_id
-					!= effect.source_position_id) {
+			const zend_mir_instruction_record candidate_record =
+				zend_tpde_instruction_record_at(plan, &candidate);
+			if (candidate_record.source_position_id != effect.source_position_id) {
 				continue;
 			}
 			if (effect.kind == ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE) {
-				if (executable_value_helper(candidate.record.opcode)
+				if (executable_value_helper(candidate_record.opcode)
 						== ZEND_NATIVE_HELPER_COUNT
-						&& candidate.record.opcode
+						&& candidate_record.opcode
 							!= ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL) {
 					continue;
 				}
-			} else if (candidate.record.opcode
+			} else if (candidate_record.opcode
 						!= ZEND_MIR_OPCODE_ECHO_SCALAR
-					&& candidate.record.opcode != ZEND_MIR_OPCODE_I1_NOT
-					&& candidate.record.opcode != ZEND_MIR_OPCODE_I64_TO_I1
-					&& candidate.record.opcode != ZEND_MIR_OPCODE_F64_TO_I1
-					&& candidate.record.opcode != ZEND_MIR_OPCODE_SCALAR_DROP) {
+					&& candidate_record.opcode != ZEND_MIR_OPCODE_I1_NOT
+					&& candidate_record.opcode != ZEND_MIR_OPCODE_I64_TO_I1
+					&& candidate_record.opcode != ZEND_MIR_OPCODE_F64_TO_I1
+					&& candidate_record.opcode != ZEND_MIR_OPCODE_SCALAR_DROP) {
 				continue;
 			}
 			if (match != nullptr) {
@@ -981,14 +1006,16 @@ bool initialize_plan(
 		for (uint32_t n = 0; n < instruction.operand_count; ++n) {
 			zend_mir_value_id operand;
 			if (!view->instruction_operand_at(view->context,
-					instruction.record.id, n, &operand)
+					instruction.id, n, &operand)
 					|| zend_tpde_value_index(plan, operand) < 0) {
 				zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 					"MIR operand table is unreadable or references an unknown value");
 				return false;
 			}
 		}
-		if (instruction.record.opcode == ZEND_MIR_OPCODE_ECHO_SCALAR) {
+		const zend_mir_instruction_record record =
+			zend_tpde_instruction_record_at(plan, &instruction);
+		if (record.opcode == ZEND_MIR_OPCODE_ECHO_SCALAR) {
 			zend_mir_value_id expected;
 			if (!source_operand_value_id(
 					instruction.value_operation.op1, expected)
@@ -1085,9 +1112,29 @@ int32_t zend_tpde_block_index(const zend_tpde_plan *plan, zend_mir_block_id id) 
 	return id_index_find(plan->block_index, plan->block_index_capacity, id);
 }
 
+int32_t zend_tpde_instruction_index(
+	const zend_tpde_plan *plan, zend_mir_instruction_id id) {
+	return id_index_find(
+		plan->instruction_index, plan->instruction_index_capacity, id);
+}
+
 const zend_tpde_instruction *zend_tpde_instruction_at(
 	const zend_tpde_plan *plan, uint32_t index) {
 	return index < plan->instruction_count ? &plan->instructions[index] : nullptr;
+}
+
+zend_mir_instruction_record zend_tpde_instruction_record_at(
+	const zend_tpde_plan *plan,
+	const zend_tpde_instruction *instruction) {
+	zend_mir_instruction_record record{};
+	if (instruction == nullptr
+			|| instruction->view_index >= plan->instruction_count
+			|| !plan->view->instruction_at(plan->view->context,
+				instruction->view_index, &record)
+			|| record.id != instruction->id) {
+		record.id = ZEND_MIR_ID_INVALID;
+	}
+	return record;
 }
 
 zend_mir_value_id zend_tpde_operand_at(
@@ -1099,7 +1146,7 @@ zend_mir_value_id zend_tpde_operand_at(
 	}
 	zend_mir_value_id operand = ZEND_MIR_ID_INVALID;
 	return plan->view->instruction_operand_at(plan->view->context,
-			instruction->record.id, index, &operand)
+			instruction->id, index, &operand)
 		? operand
 		: ZEND_MIR_ID_INVALID;
 }
