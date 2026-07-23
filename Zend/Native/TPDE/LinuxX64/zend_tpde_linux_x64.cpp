@@ -306,8 +306,13 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN
 			|| helper == ZEND_NATIVE_HELPER_VALUE_QM_ASSIGN
 			|| helper == ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV
+			|| helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM
+			|| helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_OP
 			|| (helper >= ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R
 				&& helper <= ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_UNSET);
+		const bool explicit_auxiliary =
+			helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM
+			|| helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_OP;
 		if (node.operands.size() != 1
 				|| (explicit_operands
 					? !mir.has_value_operation
@@ -334,6 +339,12 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(ValuePart{
 				zend_tpde_encode_value_operand(operation.result), 8,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			if (explicit_auxiliary) {
+				builder.add_arg(ValuePart{
+					zend_tpde_encode_value_operand(operation.auxiliary), 8,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+			}
 			builder.add_arg(ValuePart{operation.extended_value, 4,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 			builder.add_arg(ValuePart{operation.source_opcode, 4,
