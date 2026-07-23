@@ -20,6 +20,8 @@ typedef struct _zend_native_execution_state {
 
 static void zend_native_execution_cleanup_frame(zend_execute_data *execute_data)
 {
+	uint32_t call_info = ZEND_CALL_INFO(execute_data);
+
 	/*
 	 * The VM's leave helper destroys every compiled variable before releasing
 	 * a user frame.  Native entries return to C instead, so this boundary owns
@@ -42,8 +44,41 @@ static void zend_native_execution_cleanup_frame(zend_execute_data *execute_data)
 		execute_data->extra_named_params = NULL;
 		ZEND_DEL_CALL_FLAG(execute_data, ZEND_CALL_HAS_EXTRA_NAMED_PARAMS);
 	}
+	if ((call_info & ZEND_CALL_CODE) != 0) {
+		zend_array *symbol_table = execute_data->symbol_table;
+
+		/*
+		 * Include/eval frames borrow the caller's symbol table. Mirror the
+		 * VM's ZEND_CALL_CODE leave path: publish the frame CVs back into the
+		 * table, then reattach the first owning caller. The dynamic-code
+		 * boundary owns the op_array and stack frame after this returns.
+		 */
+		if (execute_data->func->op_array.last_var > 0) {
+			zend_execute_data *caller;
+
+			zend_detach_symbol_table(execute_data);
+			for (caller = execute_data->prev_execute_data;
+					caller != NULL; caller = caller->prev_execute_data) {
+				if (caller->func == NULL
+						|| (ZEND_CALL_INFO(caller)
+							& ZEND_CALL_HAS_SYMBOL_TABLE) == 0) {
+					continue;
+				}
+				if (caller->symbol_table == symbol_table) {
+					if (caller->func->op_array.last_var > 0) {
+						zend_attach_symbol_table(caller);
+					} else {
+						ZEND_ADD_CALL_FLAG(
+							caller, ZEND_CALL_NEEDS_REATTACH);
+					}
+				}
+				break;
+			}
+		}
+		return;
+	}
 	zend_free_compiled_variables(execute_data);
-	if ((ZEND_CALL_INFO(execute_data) & ZEND_CALL_HAS_SYMBOL_TABLE) != 0) {
+	if ((call_info & ZEND_CALL_HAS_SYMBOL_TABLE) != 0) {
 		zend_clean_and_cache_symbol_table(execute_data->symbol_table);
 		execute_data->symbol_table = NULL;
 		ZEND_DEL_CALL_FLAG(execute_data, ZEND_CALL_HAS_SYMBOL_TABLE);

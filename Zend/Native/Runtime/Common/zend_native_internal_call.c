@@ -1119,7 +1119,7 @@ zend_native_status zend_native_return_source_zval(
 	zval *return_value;
 
 	if (execute_data == NULL || execute_data->func == NULL
-			|| execute_data->func->type != ZEND_USER_FUNCTION
+			|| !ZEND_USER_CODE(execute_data->func->type)
 			|| return_opline_index >= execute_data->func->op_array.last) {
 		return ZEND_NATIVE_EXCEPTION;
 	}

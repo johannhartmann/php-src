@@ -46,6 +46,7 @@
 #include "Zend/Native/MIR/Scalar/zend_mir_scalar_descriptors.h"
 #include "Zend/Native/MIR/zend_mir.h"
 #include "Zend/Native/Calls/Model/zend_mir_call_model.h"
+#include "Zend/Native/Compiler/zend_native_dynamic_code.h"
 #include "Zend/Native/Values/Lowering/zend_mir_value_lowering.h"
 #include "Zend/Native/Lowering/Core/zend_mir_lowering_internal.h"
 #include "Zend/Native/Lowering/Frontend/zend_mir_zend_source.h"
@@ -203,9 +204,11 @@ typedef struct _native_mir_test_state {
 	zend_mir_module *module;
 	zend_native_image *native_image;
 	zend_native_code *native_code;
-	native_mir_test_native_function *native_functions;
+	native_mir_test_native_function **native_functions;
 	uint32_t native_function_count;
 	uint32_t native_function_capacity;
+	zend_native_dynamic_compiler dynamic_compiler;
+	bool dynamic_compiler_active;
 	zval native_result;
 	bool native_result_valid;
 	bool native_writable_after_publish;
@@ -1902,8 +1905,8 @@ static zend_op_array *native_mir_test_resolve_native_target(
 			return NULL;
 		}
 		for (index = 0; index < state->native_function_count; index++) {
-			if (state->native_functions[index].op_array == caller) {
-				caller_ssa = &state->native_functions[index].ssa;
+			if (state->native_functions[index]->op_array == caller) {
+				caller_ssa = &state->native_functions[index]->ssa;
 				break;
 			}
 		}
@@ -2002,8 +2005,8 @@ static zend_function *native_mir_test_resolve_internal_target(
 		for (function_index = 0;
 				function_index < state->native_function_count;
 				function_index++) {
-			if (state->native_functions[function_index].op_array == caller) {
-				ssa = &state->native_functions[function_index].ssa;
+			if (state->native_functions[function_index]->op_array == caller) {
+				ssa = &state->native_functions[function_index]->ssa;
 				break;
 			}
 		}
@@ -2087,8 +2090,8 @@ static native_mir_test_native_function *native_mir_test_find_native_function(
 	uint32_t index;
 
 	for (index = 0; index < state->native_function_count; index++) {
-		if (state->native_functions[index].op_array == op_array) {
-			return &state->native_functions[index];
+		if (state->native_functions[index]->op_array == op_array) {
+			return state->native_functions[index];
 		}
 	}
 	return NULL;
@@ -2131,7 +2134,7 @@ static zend_op_array *native_mir_test_canonical_reentry_op_array(
 	}
 	for (index = 0; index < state->native_function_count; index++) {
 		found = native_mir_test_find_source_op_array(
-			state->native_functions[index].op_array, resolved, 0);
+			state->native_functions[index]->op_array, resolved, 0);
 		if (found != NULL) {
 			return found;
 		}
@@ -2244,21 +2247,41 @@ static native_mir_test_native_function *native_mir_test_add_native_function(
 	native_mir_test_state *state, zend_op_array *op_array)
 {
 	native_mir_test_native_function *function;
+	uint32_t old_capacity;
+	uint32_t new_capacity;
 
 	function = native_mir_test_find_native_function(state, op_array);
 	if (function != NULL) {
 		return function;
 	}
-	if (op_array == NULL
-			|| state->native_function_count >= state->native_function_capacity) {
+	if (op_array == NULL) {
 		native_mir_test_fail(
 			state, NATIVE_MIR_TEST_STATUS_ERROR,
 			NATIVE_MIR_TEST_PHASE_CODEGEN, "native", "NATIVE0005",
-			"native call component exceeds the compiled script");
+			"native call component contains an invalid op array");
 		return NULL;
 	}
-	function = &state->native_functions[state->native_function_count++];
-	memset(function, 0, sizeof(*function));
+	if (state->native_function_count == state->native_function_capacity) {
+		old_capacity = state->native_function_capacity;
+		new_capacity = old_capacity < 8 ? 8 : old_capacity * 2;
+		if (new_capacity <= old_capacity) {
+			native_mir_test_fail(
+				state, NATIVE_MIR_TEST_STATUS_ERROR,
+				NATIVE_MIR_TEST_PHASE_CODEGEN, "native", "NATIVE0005",
+				"native codeunit registry capacity overflow");
+			return NULL;
+		}
+		state->native_functions = safe_erealloc(
+			state->native_functions, new_capacity,
+			sizeof(*state->native_functions), 0);
+		memset(
+			state->native_functions + old_capacity, 0,
+			(new_capacity - old_capacity)
+				* sizeof(*state->native_functions));
+		state->native_function_capacity = new_capacity;
+	}
+	function = ecalloc(1, sizeof(*function));
+	state->native_functions[state->native_function_count++] = function;
 	function->op_array = op_array;
 	function->module_host_ref = &function->module_host;
 	function->argument_type_count = op_array->num_args;
@@ -3155,7 +3178,7 @@ static void native_mir_test_fail_native_component(
 
 	for (index = 0; index < state->native_function_count; index++) {
 		zend_native_entry_cell_fail(
-			&state->native_functions[index].entry_cell);
+			&state->native_functions[index]->entry_cell);
 	}
 }
 
@@ -3275,7 +3298,7 @@ static bool native_mir_test_prepare_native_component(
 
 	for (index = 0; index < state->native_function_count; index++) {
 		native_mir_test_native_function *function =
-			&state->native_functions[index];
+			state->native_functions[index];
 
 		if (function->module == NULL) {
 			if ((function->ssa.ops == NULL
@@ -3302,7 +3325,7 @@ static bool native_mir_test_compile_native_component(
 	state->phase = NATIVE_MIR_TEST_PHASE_CODEGEN;
 	for (index = 0; index < state->native_function_count; index++) {
 		native_mir_test_native_function *function =
-			&state->native_functions[index];
+			state->native_functions[index];
 
 		if (function->entry_cell.state == ZEND_NATIVE_ENTRY_READY) {
 			continue;
@@ -3485,7 +3508,7 @@ binding_rejected:
 	}
 	for (index = 0; index < state->native_function_count; index++) {
 		native_mir_test_native_function *function =
-			&state->native_functions[index];
+			state->native_functions[index];
 
 		if (function->entry_cell.state == ZEND_NATIVE_ENTRY_READY) {
 			continue;
@@ -3520,7 +3543,7 @@ binding_rejected:
 	}
 	for (index = 0; index < state->native_function_count; index++) {
 		native_mir_test_native_function *function =
-			&state->native_functions[index];
+			state->native_functions[index];
 
 		if (function->entry_cell.state == ZEND_NATIVE_ENTRY_READY) {
 			continue;
@@ -3533,8 +3556,8 @@ binding_rejected:
 			return false;
 		}
 	}
-	state->native_image = state->native_functions[0].image;
-	state->native_code = state->native_functions[0].code;
+	state->native_image = state->native_functions[0]->image;
+	state->native_code = state->native_functions[0]->code;
 	state->native_writable_after_publish = false;
 	state->native_executable_after_publish = true;
 	return true;
@@ -3549,7 +3572,7 @@ static zend_native_entry_cell *native_mir_test_resolve_reentry_target(
 	uint32_t index;
 
 	if (state == NULL || resolved == NULL
-			|| resolved->type != ZEND_USER_FUNCTION) {
+			|| !ZEND_USER_CODE(resolved->type)) {
 		return NULL;
 	}
 	source_op_array = native_mir_test_canonical_reentry_op_array(
@@ -3591,7 +3614,7 @@ static zend_native_entry_cell *native_mir_test_resolve_reentry_target(
 	}
 	for (index = 0; index < state->native_function_count; index++) {
 		native_mir_test_native_function *candidate =
-			&state->native_functions[index];
+			state->native_functions[index];
 
 		if (candidate->module != NULL) {
 			continue;
@@ -3741,6 +3764,41 @@ static zend_native_status native_mir_test_execute_frame(
 	return status;
 }
 
+static zend_native_status native_mir_test_dynamic_compile_execute(
+	void *context,
+	zend_op_array *op_array,
+	zend_execute_data *execute_data)
+{
+	native_mir_test_state *state = context;
+	zend_native_entry_cell *entry_cell;
+	zend_native_diagnostic diagnostic;
+	zend_native_status status;
+
+	memset(&diagnostic, 0, sizeof(diagnostic));
+	entry_cell = native_mir_test_resolve_reentry_target(
+		state, (zend_function *) op_array);
+	if (entry_cell == NULL || entry_cell->state != ZEND_NATIVE_ENTRY_READY
+			|| entry_cell->code == NULL) {
+		if (EG(exception) == NULL) {
+			const char *detail = state->diagnostic_count != 0
+				? state->diagnostics[state->diagnostic_count - 1].message
+				: "no compiler diagnostic";
+
+			zend_throw_error(NULL,
+				"Native compilation failed for dynamically created code: %s",
+				detail);
+		}
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	status = zend_native_execute_frame(
+		entry_cell->code, execute_data, &diagnostic);
+	if (status != ZEND_NATIVE_RETURNED) {
+		native_mir_test_backend_failure(
+			state, NATIVE_MIR_TEST_PHASE_EXECUTE, &diagnostic);
+	}
+	return status;
+}
+
 static bool native_mir_test_execute_module(
 	native_mir_test_state *state, HashTable *arguments)
 {
@@ -3777,9 +3835,9 @@ static bool native_mir_test_execute_module(
 			state->native_function_count, sizeof(*reentry_bindings), 0);
 		for (index = 0; index < state->native_function_count; index++) {
 			reentry_bindings[index].function =
-				(zend_function *) state->native_functions[index].op_array;
+				(zend_function *) state->native_functions[index]->op_array;
 			reentry_bindings[index].entry_cell =
-				&state->native_functions[index].entry_cell;
+				&state->native_functions[index]->entry_cell;
 		}
 		if (zend_native_reentry_scope_enter_resolver(
 				&reentry_scope, reentry_bindings,
@@ -3794,6 +3852,13 @@ static bool native_mir_test_execute_module(
 		}
 		reentry_entered = true;
 	}
+	if (state->wave >= 11) {
+		state->dynamic_compiler.context = state;
+		state->dynamic_compiler.compile_execute =
+			native_mir_test_dynamic_compile_execute;
+		zend_native_dynamic_compiler_activate(&state->dynamic_compiler);
+		state->dynamic_compiler_active = true;
+	}
 	for (index = 0; index < state->execute_repetitions; ++index) {
 		zend_native_status native_status = native_mir_test_execute_frame(
 			state, arguments, &diagnostic);
@@ -3805,6 +3870,11 @@ static bool native_mir_test_execute_module(
 			if (!Z_ISUNDEF(state->native_result)) {
 				zval_ptr_dtor(&state->native_result);
 				ZVAL_UNDEF(&state->native_result);
+			}
+			if (state->dynamic_compiler_active) {
+				zend_native_dynamic_compiler_deactivate(
+					&state->dynamic_compiler);
+				state->dynamic_compiler_active = false;
 			}
 			if (reentry_entered) {
 				zend_native_reentry_scope_leave(&reentry_scope);
@@ -3818,6 +3888,10 @@ static bool native_mir_test_execute_module(
 			zval_ptr_dtor(&state->native_result);
 			ZVAL_UNDEF(&state->native_result);
 		}
+	}
+	if (state->dynamic_compiler_active) {
+		zend_native_dynamic_compiler_deactivate(&state->dynamic_compiler);
+		state->dynamic_compiler_active = false;
 	}
 	if (reentry_entered) {
 		zend_native_reentry_scope_leave(&reentry_scope);
@@ -3849,7 +3923,7 @@ ZEND_FUNCTION(native_mir_test_unwind_probe)
 				function_index < state->native_function_count;
 				function_index++) {
 			if (zend_native_code_contains_address(
-					state->native_functions[function_index].code,
+					state->native_functions[function_index]->code,
 					frames[frame_index])) {
 				native_frame_count++;
 				break;
@@ -3936,6 +4010,10 @@ static void native_mir_test_cleanup(native_mir_test_state *state)
 	HashTable *class_table;
 	uint32_t index;
 
+	if (state->dynamic_compiler_active) {
+		zend_native_dynamic_compiler_deactivate(&state->dynamic_compiler);
+		state->dynamic_compiler_active = false;
+	}
 	if (state->compiler_options_saved) {
 		CG(compiler_options) = state->original_compiler_options;
 		state->compiler_options_saved = false;
@@ -3947,7 +4025,7 @@ static void native_mir_test_cleanup(native_mir_test_state *state)
 	if (state->native_functions != NULL) {
 		for (index = 0; index < state->native_function_count; index++) {
 			native_mir_test_native_function *function =
-				&state->native_functions[index];
+				state->native_functions[index];
 
 			(void) zend_native_entry_cell_reset(&function->entry_cell);
 			if (function->code != NULL) {
@@ -3972,6 +4050,7 @@ static void native_mir_test_cleanup(native_mir_test_state *state)
 			efree(function->projected_ssa_vars);
 			efree(function->projected_ssa_ops);
 			efree(function->projected_opcodes);
+			efree(function);
 		}
 		efree(state->native_functions);
 		state->native_functions = NULL;
@@ -4158,7 +4237,7 @@ static void native_mir_test_build_result(
 			uint32_t active_calls = 0;
 
 			for (index = 0; index < state->native_function_count; index++) {
-				active_calls += state->native_functions[index].entry_cell.active_calls;
+				active_calls += state->native_functions[index]->entry_cell.active_calls;
 			}
 			add_assoc_long(&execution, "entry_active_calls",
 				(zend_long) active_calls);
@@ -4400,6 +4479,10 @@ ZEND_FUNCTION(native_mir_test_compile_execute)
 	} zend_catch {
 		bailed_out = true;
 	} zend_end_try();
+	if (state->dynamic_compiler_active) {
+		zend_native_dynamic_compiler_deactivate(&state->dynamic_compiler);
+		state->dynamic_compiler_active = false;
+	}
 	native_mir_test_active_state = previous_active_state;
 
 	if (bailed_out) {

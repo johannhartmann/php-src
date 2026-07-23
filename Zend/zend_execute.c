@@ -5318,7 +5318,7 @@ static zend_never_inline zend_execute_data *zend_init_dynamic_call_array(const z
 
 #define ZEND_FAKE_OP_ARRAY ((zend_op_array*)(intptr_t)-1)
 
-static zend_never_inline zend_op_array* ZEND_FASTCALL zend_include_or_eval(const zval *inc_filename_zv, int type) /* {{{ */
+ZEND_API zend_never_inline zend_op_array* ZEND_FASTCALL zend_include_or_eval(const zval *inc_filename_zv, int type) /* {{{ */
 {
 	zend_op_array *new_op_array = NULL;
 	zend_string *tmp_inc_filename;
