@@ -2226,6 +2226,11 @@ static zend_native_entry_cell *zend_native_compiler_resolve_reentry(
 	function = zend_native_compiler_find_function(
 		compiler, source_op_array);
 	if (function != NULL) {
+		if (function->state == ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED) {
+			zend_throw_error(NULL,
+				"Suspendable codeunit is reserved for native W12 activation");
+			return NULL;
+		}
 		return function->entry_cell.state == ZEND_NATIVE_ENTRY_READY
 			? &function->entry_cell : NULL;
 	}
