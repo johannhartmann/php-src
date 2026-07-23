@@ -14,6 +14,7 @@
 namespace {
 constexpr uint32_t MAX_RECORDS = UINT32_C(1) << 20;
 constexpr size_t MAX_NATIVE_IMAGE_BYTES = size_t{1} << 28;
+constexpr uint32_t NATIVE_IMAGE_ABI_VERSION = 1;
 std::atomic_uint32_t live_unwind_registrations{0};
 
 bool checked_count(uint32_t count) {
@@ -104,6 +105,76 @@ void require_runtime_helper(
 	zend_tpde_plan *plan, zend_native_runtime_helper_id helper) {
 	plan->required_runtime_helpers[helper / 64u] |=
 		UINT64_C(1) << (helper % 64u);
+}
+
+bool image_add_symbol(
+	zend_native_image *image,
+	zend_native_image_symbol_kind kind,
+	uint32_t id,
+	uint32_t abi_version,
+	uint32_t effects) {
+	if (image == nullptr || id == 0) {
+		return false;
+	}
+	for (uint32_t index = 0; index < image->symbol_count; ++index) {
+		const zend_native_image_symbol &symbol = image->symbols[index];
+		if (symbol.kind == kind && symbol.id == id) {
+			return symbol.abi_version == abi_version
+				&& symbol.effects == effects;
+		}
+	}
+	if (image->symbol_count == image->symbol_capacity) {
+		uint32_t capacity = image->symbol_capacity == 0
+			? 16 : image->symbol_capacity * 2;
+		if (capacity > MAX_RECORDS) {
+			return false;
+		}
+		void *resized = std::realloc(image->symbols,
+			static_cast<size_t>(capacity) * sizeof(*image->symbols));
+		if (resized == nullptr) {
+			return false;
+		}
+		image->symbols = static_cast<zend_native_image_symbol *>(resized);
+		image->symbol_capacity = capacity;
+	}
+	zend_native_image_symbol &symbol = image->symbols[image->symbol_count];
+	std::memset(&symbol, 0, sizeof(symbol));
+	symbol.kind = kind;
+	symbol.id = id;
+	symbol.abi_version = abi_version;
+	symbol.effects = effects;
+	const int written = std::snprintf(symbol.name, sizeof(symbol.name),
+		"__znmir_%u_%u", static_cast<uint32_t>(kind), id);
+	if (written <= 0 || static_cast<size_t>(written) >= sizeof(symbol.name)) {
+		return false;
+	}
+	image->symbol_count++;
+	return true;
+}
+
+bool prepare_image_symbols(
+	const zend_tpde_plan *plan,
+	zend_native_image *image,
+	zend_native_diagnostic *diag) {
+	for (uint32_t id = 1; id < ZEND_NATIVE_HELPER_COUNT; ++id) {
+		if ((plan->required_runtime_helpers[id / 64u]
+				& (UINT64_C(1) << (id % 64u))) == 0) {
+			continue;
+		}
+		const zend_native_runtime_helper *helper =
+			zend_native_runtime_helper_find(plan->runtime,
+				static_cast<zend_native_runtime_helper_id>(id));
+		if (helper == nullptr
+				|| !image_add_symbol(image,
+					ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER, id,
+					plan->runtime->abi_version, helper->effects)) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+				"unable to create the native image runtime symbol table");
+			return false;
+		}
+	}
+	return true;
 }
 
 bool source_operand_value_id(
@@ -1262,6 +1333,59 @@ bool zend_tpde_image_u64(zend_native_image *image, uint64_t value) {
 	return zend_tpde_image_append(image, &value, sizeof(value));
 }
 
+const zend_native_image_symbol *zend_tpde_image_symbol_find(
+	const zend_native_image *image,
+	zend_native_image_symbol_kind kind,
+	uint32_t id) {
+	if (image == nullptr) {
+		return nullptr;
+	}
+	for (uint32_t index = 0; index < image->symbol_count; ++index) {
+		const zend_native_image_symbol &symbol = image->symbols[index];
+		if (symbol.kind == kind && symbol.id == id) {
+			return &symbol;
+		}
+	}
+	return nullptr;
+}
+
+bool zend_tpde_image_resolve_symbol(
+	const zend_native_image *image,
+	const char *name,
+	const void **address) {
+	if (image == nullptr || name == nullptr || address == nullptr
+			|| image->abi_version != NATIVE_IMAGE_ABI_VERSION) {
+		return false;
+	}
+	*address = nullptr;
+	const zend_native_image_symbol *symbol = nullptr;
+	for (uint32_t index = 0; index < image->symbol_count; ++index) {
+		if (std::strcmp(image->symbols[index].name, name) == 0) {
+			symbol = &image->symbols[index];
+			break;
+		}
+	}
+	if (symbol == nullptr
+			|| symbol->kind != ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER) {
+		return false;
+	}
+	const zend_native_runtime_api *runtime = zend_native_runtime_get();
+	if (runtime == nullptr
+			|| runtime->abi_version != image->runtime_abi_version
+			|| symbol->abi_version != runtime->abi_version) {
+		return false;
+	}
+	const zend_native_runtime_helper *helper =
+		zend_native_runtime_helper_find(runtime,
+			static_cast<zend_native_runtime_helper_id>(symbol->id));
+	if (helper == nullptr || helper->effects != symbol->effects
+			|| helper->address == nullptr) {
+		return false;
+	}
+	*address = helper->address;
+	return true;
+}
+
 extern "C" zend_result zend_tpde_compile_module(
 	zend_native_target target,
 	const zend_mir_view *module,
@@ -1372,13 +1496,17 @@ extern "C" zend_result zend_tpde_compile_module_w08_with_runtime(
 		return FAILURE;
 	}
 	image->target = target;
+	image->abi_version = NATIVE_IMAGE_ABI_VERSION;
+	image->runtime_abi_version = plan.runtime->abi_version;
 	/* TPDE liveness and register allocation own temporaries; the reserved ABI
 	 * pointer remains present for compatibility but no value-slot array is used. */
 	image->slot_count = 0;
 	image->argument_count = plan.argument_count;
-	zend_result result = target == ZEND_NATIVE_TARGET_DARWIN_ARM64
-		? zend_tpde_emit_darwin_arm64(&plan, image, diag)
-		: zend_tpde_emit_linux_x64(&plan, image, diag);
+	zend_result result = prepare_image_symbols(&plan, image, diag)
+		? target == ZEND_NATIVE_TARGET_DARWIN_ARM64
+			? zend_tpde_emit_darwin_arm64(&plan, image, diag)
+			: zend_tpde_emit_linux_x64(&plan, image, diag)
+		: FAILURE;
 	if (result == SUCCESS) {
 		image->direct_calls = plan.direct_calls;
 		image->direct_call_count = plan.direct_call_count;
@@ -1565,6 +1693,7 @@ extern "C" void zend_native_image_destroy(zend_native_image *image) {
 		if (image->destroy_target_state != nullptr) {
 			image->destroy_target_state(image->target_state);
 		}
+		std::free(image->symbols);
 		std::free(image->text);
 		std::free(image);
 	}
