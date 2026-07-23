@@ -492,6 +492,113 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		label_place(done);
 		return true;
 	};
+	auto read_packed_array = [&]() {
+		zend_tpde_packed_array_read layout;
+
+		if (!zend_tpde_packed_array_read_at(mir, &layout)) {
+			return execute_value_operation(
+				ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R);
+		}
+		for (auto reg_id : register_file.used_regs()) {
+			::tpde::Reg reg{reg_id};
+			if (!register_file.is_fixed(reg)
+					&& register_file.reg_local_idx(reg)
+						!= INVALID_VAL_LOCAL_IDX) {
+				evict_reg(reg);
+			}
+		}
+		auto slow = text_writer.label_create();
+		auto done = text_writer.label_create();
+		auto [frame_ref, frame] =
+			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_reg = frame_scratch.cur_reg();
+		ScratchReg slot{this};
+		ScratchReg type{this};
+		ScratchReg array{this};
+		ScratchReg key{this};
+		ScratchReg limit{this};
+		ScratchReg element{this};
+		ScratchReg low_word{this};
+		ScratchReg high_word{this};
+		auto slot_reg = slot.alloc_gp();
+		auto type_reg = type.alloc_gp();
+		auto array_reg = array.alloc_gp();
+		auto key_reg = key.alloc_gp();
+		auto limit_reg = limit.alloc_gp();
+		auto element_reg = element.alloc_gp();
+		auto low_word_reg = low_word.alloc_gp();
+		auto high_word_reg = high_word.alloc_gp();
+
+		ASM(ADDxi, slot_reg, frame_reg, layout.container_offset);
+		load_off(type_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+		ASM(CMPwi, type_reg, IS_ARRAY);
+		generate_raw_jump(Jump::Jne, slow);
+		load_off(array_reg, slot_reg, 0, 8);
+		load_off(type_reg, array_reg,
+			static_cast<uint32_t>(offsetof(HashTable, u)), 4);
+		ASM(TSTwi, type_reg, HASH_FLAG_PACKED);
+		generate_raw_jump(Jump::Jeq, slow);
+
+		ASM(ADDxi, slot_reg, frame_reg, layout.key_offset);
+		load_off(type_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(CMPwi, type_reg, IS_LONG);
+		generate_raw_jump(Jump::Jne, slow);
+		load_off(key_reg, slot_reg, 0, 8);
+		load_off(limit_reg, array_reg,
+			static_cast<uint32_t>(offsetof(HashTable, nNumUsed)), 4);
+		ASM(CMPx, key_reg, limit_reg);
+		generate_raw_jump(Jump::Jhs, slow);
+
+		load_off(element_reg, array_reg,
+			static_cast<uint32_t>(offsetof(HashTable, arPacked)), 8);
+		ASM(ADDx_lsl, element_reg, element_reg, key_reg, 4);
+		load_off(type_reg, element_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(CMPwi, type_reg, IS_UNDEF);
+		generate_raw_jump(Jump::Jeq, slow);
+
+		ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
+		load_off(limit_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(CMPwi, limit_reg, IS_UNDEF);
+		generate_raw_jump(Jump::Jne, slow);
+		load_off(low_word_reg, element_reg, 0, 8);
+		load_off(high_word_reg, element_reg, 8, 8);
+		store_off(slot_reg, 0, low_word_reg, 8);
+		store_off(slot_reg, 8, high_word_reg, 8);
+		ASM(TSTwi, type_reg,
+			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+		generate_raw_jump(Jump::Jeq, done);
+		load_off(limit_reg, low_word_reg,
+			static_cast<uint32_t>(offsetof(zend_refcounted_h, refcount)), 4);
+		ASM(ADDwi, limit_reg, limit_reg, 1);
+		store_off(low_word_reg,
+			static_cast<uint32_t>(offsetof(zend_refcounted_h, refcount)),
+			limit_reg, 4);
+		generate_raw_jump(Jump::jmp, done);
+
+		label_place(slow);
+		slot.reset();
+		type.reset();
+		array.reset();
+		key.reset();
+		limit.reset();
+		element.reset();
+		low_word.reset();
+		high_word.reset();
+		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
+		frame_argument.set_value(this, std::move(frame_scratch));
+		if (!execute_value_operation(
+				ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R, &frame_argument)) {
+			return false;
+		}
+		label_place(done);
+		return true;
+	};
 
 	if ((mir.record.opcode >= ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS
 				&& mir.record.opcode
@@ -574,7 +681,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		case ZEND_MIR_OPCODE_VALUE_ADD_ARRAY_UNPACK:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_UNPACK);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R);
+			return read_packed_array();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_W:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_W);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_RW:

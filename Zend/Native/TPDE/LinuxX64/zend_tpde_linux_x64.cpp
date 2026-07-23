@@ -491,6 +491,138 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		label_place(done);
 		return true;
 	};
+	auto read_packed_array = [&]() {
+		zend_tpde_packed_array_read layout;
+
+		if (!zend_tpde_packed_array_read_at(mir, &layout)
+				|| layout.container_offset > INT32_MAX
+				|| layout.key_offset > INT32_MAX
+				|| layout.result_offset > INT32_MAX) {
+			return execute_value_operation(
+				ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R);
+		}
+		for (auto reg_id : register_file.used_regs()) {
+			tpde::Reg reg{reg_id};
+			if (!register_file.is_fixed(reg)
+					&& register_file.reg_local_idx(reg)
+						!= INVALID_VAL_LOCAL_IDX) {
+				evict_reg(reg);
+			}
+		}
+		auto slow = text_writer.label_create();
+		auto done = text_writer.label_create();
+		auto [frame_ref, frame] =
+			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_reg = frame_scratch.cur_reg();
+		ScratchReg slot{this};
+		ScratchReg type{this};
+		ScratchReg array{this};
+		ScratchReg key{this};
+		ScratchReg limit{this};
+		ScratchReg element{this};
+		ScratchReg low_word{this};
+		ScratchReg high_word{this};
+		auto slot_reg = slot.alloc_gp();
+		auto type_reg = type.alloc_gp();
+		auto array_reg = array.alloc_gp();
+		auto key_reg = key.alloc_gp();
+		auto limit_reg = limit.alloc_gp();
+		auto element_reg = element.alloc_gp();
+		auto low_word_reg = low_word.alloc_gp();
+		auto high_word_reg = high_word.alloc_gp();
+
+		ASM(MOV64rr, slot_reg, frame_reg);
+		ASM(ADD64ri, slot_reg,
+			static_cast<int32_t>(layout.container_offset));
+		ASM(MOV32rm, type_reg,
+			FE_MEM(slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		ASM(AND32ri, type_reg, Z_TYPE_MASK);
+		ASM(CMP32ri, type_reg, IS_ARRAY);
+		generate_raw_jump(Jump::jne, slow);
+		ASM(MOV64rm, array_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
+		ASM(MOV32rm, type_reg,
+			FE_MEM(array_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(HashTable, u))));
+		ASM(AND32ri, type_reg, HASH_FLAG_PACKED);
+		ASM(TEST32rr, type_reg, type_reg);
+		generate_raw_jump(Jump::je, slow);
+
+		ASM(MOV64rr, slot_reg, frame_reg);
+		ASM(ADD64ri, slot_reg, static_cast<int32_t>(layout.key_offset));
+		ASM(MOV32rm, type_reg,
+			FE_MEM(slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		ASM(CMP32ri, type_reg, IS_LONG);
+		generate_raw_jump(Jump::jne, slow);
+		ASM(MOV64rm, key_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
+		ASM(MOV32rm, limit_reg,
+			FE_MEM(array_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(HashTable, nNumUsed))));
+		ASM(CMP64rr, key_reg, limit_reg);
+		generate_raw_jump(Jump::jae, slow);
+
+		ASM(MOV64rm, element_reg,
+			FE_MEM(array_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(HashTable, arPacked))));
+		ASM(SHL64ri, key_reg, 4);
+		ASM(ADD64rr, element_reg, key_reg);
+		ASM(MOV32rm, type_reg,
+			FE_MEM(element_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		ASM(CMP32ri, type_reg, IS_UNDEF);
+		generate_raw_jump(Jump::je, slow);
+
+		ASM(MOV64rr, slot_reg, frame_reg);
+		ASM(ADD64ri, slot_reg,
+			static_cast<int32_t>(layout.result_offset));
+		ASM(MOV32rm, limit_reg,
+			FE_MEM(slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		ASM(CMP32ri, limit_reg, IS_UNDEF);
+		generate_raw_jump(Jump::jne, slow);
+		ASM(MOV64rm, low_word_reg,
+			FE_MEM(element_reg, 0, FE_NOREG, 0));
+		ASM(MOV64rm, high_word_reg,
+			FE_MEM(element_reg, 0, FE_NOREG, 8));
+		ASM(MOV64mr, FE_MEM(slot_reg, 0, FE_NOREG, 0), low_word_reg);
+		ASM(MOV64mr, FE_MEM(slot_reg, 0, FE_NOREG, 8), high_word_reg);
+		ASM(AND32ri, type_reg,
+			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+		ASM(TEST32rr, type_reg, type_reg);
+		generate_raw_jump(Jump::je, done);
+		ASM(MOV32rm, limit_reg,
+			FE_MEM(low_word_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_refcounted_h, refcount))));
+		ASM(ADD32ri, limit_reg, 1);
+		ASM(MOV32mr,
+			FE_MEM(low_word_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_refcounted_h, refcount))),
+			limit_reg);
+		generate_raw_jump(Jump::jmp, done);
+
+		label_place(slow);
+		slot.reset();
+		type.reset();
+		array.reset();
+		key.reset();
+		limit.reset();
+		element.reset();
+		low_word.reset();
+		high_word.reset();
+		ValuePart frame_argument{
+			tpde::x64::PlatformConfig::GP_BANK, 8};
+		frame_argument.set_value(this, std::move(frame_scratch));
+		if (!execute_value_operation(
+				ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R, &frame_argument)) {
+			return false;
+		}
+		label_place(done);
+		return true;
+	};
 
 	if ((mir.record.opcode >= ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS
 				&& mir.record.opcode
@@ -573,7 +705,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		case ZEND_MIR_OPCODE_VALUE_ADD_ARRAY_UNPACK:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_UNPACK);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R);
+			return read_packed_array();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_W:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_W);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_RW:
