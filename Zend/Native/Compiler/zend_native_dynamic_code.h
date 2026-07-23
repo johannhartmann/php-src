@@ -16,6 +16,7 @@ typedef struct _zend_native_dynamic_entry {
 } zend_native_dynamic_entry;
 
 typedef struct _zend_native_dynamic_compiler {
+	struct _zend_native_compiler *product_compiler;
 	zend_op_array **owned_op_arrays;
 	uint32_t owned_op_array_count;
 	uint32_t owned_op_array_capacity;
@@ -31,6 +32,9 @@ typedef struct _zend_native_dynamic_compiler {
  */
 ZEND_API void zend_native_dynamic_compiler_init(
 	zend_native_dynamic_compiler *compiler);
+ZEND_API void zend_native_dynamic_compiler_bind_product(
+	zend_native_dynamic_compiler *compiler,
+	struct _zend_native_compiler *product_compiler);
 ZEND_API void zend_native_dynamic_compiler_destroy(
 	zend_native_dynamic_compiler *compiler);
 ZEND_API void zend_native_dynamic_compiler_activate(
