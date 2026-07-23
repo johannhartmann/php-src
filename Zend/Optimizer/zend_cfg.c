@@ -663,6 +663,29 @@ static void compute_postnum_recursive(
 }
 /* }}} */
 
+/*
+ * Protected-region entries are not connected to the ordinary CFG entry by an
+ * exception edge. Build a postorder for one such component without walking
+ * back into a component whose dominators were already established.
+ */
+static void compute_protected_postnum_recursive(
+		int *postnum, uint32_t *cur, bool *component,
+		const zend_cfg *cfg, int block_num) /* {{{ */
+{
+	zend_basic_block *block = &cfg->blocks[block_num];
+
+	if (component[block_num] || block->idom >= 0) {
+		return;
+	}
+	component[block_num] = true;
+	for (uint32_t s = 0; s < block->successors_count; s++) {
+		compute_protected_postnum_recursive(
+			postnum, cur, component, cfg, block->successors[s]);
+	}
+	postnum[block_num] = (*cur)++;
+}
+/* }}} */
+
 /* Computes dominator tree using algorithm from "A Simple, Fast Dominance Algorithm" by
  * Cooper, Harvey and Kennedy. */
 ZEND_API void zend_cfg_compute_dominators_tree(const zend_op_array *op_array, zend_cfg *cfg) /* {{{ */
@@ -678,6 +701,7 @@ ZEND_API void zend_cfg_compute_dominators_tree(const zend_op_array *op_array, ze
 	}
 
 	ALLOCA_FLAG(use_heap)
+	ALLOCA_FLAG(component_use_heap)
 	int *postnum = do_alloca(sizeof(int) * cfg->blocks_count, use_heap);
 	memset(postnum, -1, sizeof(int) * cfg->blocks_count);
 	j = 0;
@@ -717,6 +741,64 @@ ZEND_API void zend_cfg_compute_dominators_tree(const zend_op_array *op_array, ze
 	} while (changed);
 	blocks[0].idom = -1;
 
+	/*
+	 * Catch entries and their control flow are reachable at runtime, but the
+	 * CFG intentionally has no synthetic exception predecessor from a try
+	 * block. Compute a dominator forest for those disconnected components as
+	 * well. This keeps short-circuit temporaries and array-construction values
+	 * live across branches inside a catch/finally region. Components stop when
+	 * they join a block already dominated from the ordinary entry.
+	 */
+	bool *component = do_alloca(
+		sizeof(bool) * cfg->blocks_count, component_use_heap);
+	for (uint32_t root = 1; root < blocks_count; root++) {
+		if ((blocks[root].flags & ZEND_BB_REACHABLE) == 0
+				|| blocks[root].idom >= 0
+				|| blocks[root].predecessors_count != 0) {
+			continue;
+		}
+		memset(component, 0, sizeof(bool) * cfg->blocks_count);
+		compute_protected_postnum_recursive(
+			postnum, &j, component, cfg, (int) root);
+		blocks[root].idom = (int) root;
+		do {
+			changed = 0;
+			for (uint32_t block = 1; block < blocks_count; block++) {
+				int idom = -1;
+
+				if (block == root || !component[block]) {
+					continue;
+				}
+				for (uint32_t k = 0;
+						k < blocks[block].predecessors_count; k++) {
+					int pred = cfg->predecessors[
+						blocks[block].predecessor_offset + k];
+
+					if (!component[pred] || blocks[pred].idom < 0) {
+						continue;
+					}
+					if (idom < 0) {
+						idom = pred;
+					} else {
+						while (idom != pred) {
+							while (postnum[pred] < postnum[idom]) {
+								pred = blocks[pred].idom;
+							}
+							while (postnum[idom] < postnum[pred]) {
+								idom = blocks[idom].idom;
+							}
+						}
+					}
+				}
+				if (idom >= 0 && blocks[block].idom != idom) {
+					blocks[block].idom = idom;
+					changed = 1;
+				}
+			}
+		} while (changed);
+		blocks[root].idom = -1;
+	}
+
 	for (j = 1; j < blocks_count; j++) {
 		if ((blocks[j].flags & ZEND_BB_REACHABLE) == 0) {
 			continue;
@@ -755,6 +837,7 @@ ZEND_API void zend_cfg_compute_dominators_tree(const zend_op_array *op_array, ze
 		blocks[j].level = level;
 	}
 
+	free_alloca(component, component_use_heap);
 	free_alloca(postnum, use_heap);
 }
 /* }}} */

@@ -310,6 +310,8 @@ zend_mir_lowering_status zend_mir_zend_source_init(
 
 static bool zend_mir_frontend_cfg_dominates(
 	const zend_cfg *cfg, uint32_t dominator, uint32_t block);
+static bool zend_mir_frontend_cfg_has_valid_root(
+	const zend_cfg *cfg, uint32_t block, bool allow_protected_regions);
 
 static zend_mir_lowering_status zend_mir_frontend_validate_cfg_w04(
 	const zend_op_array *op_array, const zend_ssa *ssa,
@@ -490,9 +492,8 @@ static zend_mir_lowering_status zend_mir_frontend_validate_cfg_w04(
 	}
 	for (i = 0; i < ssa->cfg.blocks_count; i++) {
 		if ((ssa->cfg.blocks[i].flags & ZEND_BB_REACHABLE) != 0
-				&& !zend_mir_frontend_cfg_dominates(&ssa->cfg, 0, i)
-				&& !(allow_protected_regions
-					&& i != 0 && ssa->cfg.blocks[i].idom < 0)) {
+				&& !zend_mir_frontend_cfg_has_valid_root(
+					&ssa->cfg, i, allow_protected_regions)) {
 			goto malformed;
 		}
 	}
@@ -1118,6 +1119,30 @@ static bool zend_mir_frontend_cfg_dominates(
 		}
 		idom = cfg->blocks[block].idom;
 		if (idom < 0 || (uint32_t) idom == block
+				|| (uint32_t) idom >= cfg->blocks_count) {
+			return false;
+		}
+		block = (uint32_t) idom;
+	}
+	return false;
+}
+
+static bool zend_mir_frontend_cfg_has_valid_root(
+	const zend_cfg *cfg, uint32_t block, bool allow_protected_regions)
+{
+	uint32_t remaining = cfg->blocks_count;
+
+	while (remaining-- != 0) {
+		int idom;
+
+		if (block == 0) {
+			return cfg->blocks[block].idom < 0;
+		}
+		idom = cfg->blocks[block].idom;
+		if (idom < 0) {
+			return allow_protected_regions;
+		}
+		if ((uint32_t) idom == block
 				|| (uint32_t) idom >= cfg->blocks_count) {
 			return false;
 		}
