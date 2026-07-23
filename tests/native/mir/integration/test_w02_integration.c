@@ -536,7 +536,7 @@ static void integration_expect_positive(const integration_positive *test)
 
 static void mutate_unknown_opcode(zend_mir_fixture_host *host)
 {
-	host->instructions[1].opcode = (zend_mir_opcode) 99;
+	host->instructions[1].opcode = (zend_mir_opcode) ZEND_MIR_W10_OPCODE_COUNT;
 }
 
 static void mutate_use_before_definition(zend_mir_fixture_host *host)
