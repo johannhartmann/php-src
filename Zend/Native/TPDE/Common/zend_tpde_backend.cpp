@@ -112,15 +112,31 @@ bool image_add_symbol(
 	zend_native_image_symbol_kind kind,
 	uint32_t id,
 	uint32_t abi_version,
-	uint32_t effects) {
-	if (image == nullptr || id == 0) {
+	uint32_t effects,
+	const void *address = nullptr) {
+	if (image == nullptr || !zend_mir_id_is_valid(id)) {
 		return false;
 	}
 	for (uint32_t index = 0; index < image->symbol_count; ++index) {
 		const zend_native_image_symbol &symbol = image->symbols[index];
 		if (symbol.kind == kind && symbol.id == id) {
-			return symbol.abi_version == abi_version
-				&& symbol.effects == effects;
+			if (symbol.abi_version != abi_version
+					|| symbol.effects != effects) {
+				return false;
+			}
+			if (address == nullptr) {
+				return true;
+			}
+			for (uint32_t binding_index = 0;
+					binding_index < image->symbol_binding_count;
+					++binding_index) {
+				const zend_native_image_symbol_binding &binding =
+					image->symbol_bindings[binding_index];
+				if (binding.symbol_index == index) {
+					return binding.address == address;
+				}
+			}
+			return false;
 		}
 	}
 	if (image->symbol_count == image->symbol_capacity) {
@@ -148,7 +164,27 @@ bool image_add_symbol(
 	if (written <= 0 || static_cast<size_t>(written) >= sizeof(symbol.name)) {
 		return false;
 	}
-	image->symbol_count++;
+	const uint32_t symbol_index = image->symbol_count++;
+	if (address != nullptr) {
+		if (image->symbol_binding_count == image->symbol_binding_capacity) {
+			uint32_t capacity = image->symbol_binding_capacity == 0
+				? 16 : image->symbol_binding_capacity * 2;
+			if (capacity > MAX_RECORDS) {
+				return false;
+			}
+			void *resized = std::realloc(image->symbol_bindings,
+				static_cast<size_t>(capacity)
+					* sizeof(*image->symbol_bindings));
+			if (resized == nullptr) {
+				return false;
+			}
+			image->symbol_bindings =
+				static_cast<zend_native_image_symbol_binding *>(resized);
+			image->symbol_binding_capacity = capacity;
+		}
+		image->symbol_bindings[image->symbol_binding_count++] = {
+			symbol_index, address};
+	}
 	return true;
 }
 
@@ -171,6 +207,41 @@ bool prepare_image_symbols(
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
 				"unable to create the native image runtime symbol table");
+			return false;
+		}
+	}
+	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+		const zend_tpde_instruction &instruction = plan->instructions[index];
+		if (instruction.entry_cell != nullptr
+				&& !image_add_symbol(image,
+					ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
+					instruction.call_site.target_id,
+					NATIVE_IMAGE_ABI_VERSION, 0,
+					instruction.entry_cell)) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+				"unable to create the native image entry-cell symbol");
+			return false;
+		}
+		if (instruction.internal_call_cell != nullptr
+				&& !image_add_symbol(image,
+					ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL,
+					instruction.call_site.target_id,
+					NATIVE_IMAGE_ABI_VERSION, 0,
+					instruction.internal_call_cell)) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+				"unable to create the native image internal-call symbol");
+			return false;
+		}
+		if (instruction.direct_call != nullptr
+				&& !image_add_symbol(image,
+					ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR,
+					instruction.id, NATIVE_IMAGE_ABI_VERSION, 0,
+					instruction.direct_call)) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+				"unable to create the native image direct-call symbol");
 			return false;
 		}
 	}
@@ -1365,8 +1436,31 @@ bool zend_tpde_image_resolve_symbol(
 			break;
 		}
 	}
-	if (symbol == nullptr
-			|| symbol->kind != ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER) {
+	if (symbol == nullptr) {
+		return false;
+	}
+	if (symbol->kind != ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER) {
+		if (symbol->abi_version != NATIVE_IMAGE_ABI_VERSION
+				|| symbol->effects != 0
+				|| (symbol->kind != ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL
+					&& symbol->kind
+						!= ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL
+					&& symbol->kind
+						!= ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR)) {
+			return false;
+		}
+		const uint32_t symbol_index =
+			static_cast<uint32_t>(symbol - image->symbols);
+		for (uint32_t index = 0;
+				index < image->symbol_binding_count; ++index) {
+			const zend_native_image_symbol_binding &binding =
+				image->symbol_bindings[index];
+			if (binding.symbol_index == symbol_index
+					&& binding.address != nullptr) {
+				*address = binding.address;
+				return true;
+			}
+		}
 		return false;
 	}
 	const zend_native_runtime_api *runtime = zend_native_runtime_get();
@@ -1549,9 +1643,9 @@ extern "C" zend_result zend_native_publish_image(
 	}
 	if (result == SUCCESS && *out_code != nullptr) {
 		/*
-		 * Direct-call descriptors are embedded by address in the published
-		 * code. Transfer their storage with the mapping so callers may destroy
-		 * the intermediate image immediately after a successful publish.
+		 * Direct-call descriptors are resolved into process-local relocation
+		 * slots at publication. Transfer their storage with the mapping so
+		 * callers may destroy the intermediate image immediately afterward.
 		 */
 		(*out_code)->direct_calls = image->direct_calls;
 		(*out_code)->direct_call_count = image->direct_call_count;
@@ -1693,6 +1787,7 @@ extern "C" void zend_native_image_destroy(zend_native_image *image) {
 		if (image->destroy_target_state != nullptr) {
 			image->destroy_target_state(image->target_state);
 		}
+		std::free(image->symbol_bindings);
 		std::free(image->symbols);
 		std::free(image->text);
 		std::free(image);
