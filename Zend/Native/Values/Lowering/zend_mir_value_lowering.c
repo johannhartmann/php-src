@@ -270,6 +270,7 @@ static zend_mir_opcode zend_mir_w09_executable_opcode(uint32_t opcode)
 		case ZEND_BW_NOT:
 		case ZEND_BOOL_NOT:
 		case ZEND_BOOL:
+		case ZEND_STRLEN:
 			return ZEND_MIR_OPCODE_VALUE_UNARY_OP;
 		case ZEND_CAST:
 			return ZEND_MIR_OPCODE_VALUE_CAST;
