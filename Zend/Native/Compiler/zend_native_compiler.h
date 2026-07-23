@@ -80,8 +80,9 @@ ZEND_API void zend_native_compiler_destroy(zend_native_compiler *compiler);
 
 /*
  * Compile and atomically publish the complete reachable codeunit component.
- * supplied_argument_types may be NULL. When present it contains one exact
- * scalar type or ZEND_MIR_SCALAR_TYPE_NONE per declared argument.
+ * The supplied argument signature is retained for source compatibility but
+ * does not specialize the baseline entry. Exact representations come only
+ * from declared types and path-valid SSA proofs.
  */
 ZEND_API zend_result zend_native_compiler_compile(
 	zend_native_compiler *compiler,
