@@ -194,6 +194,7 @@ static zval *zend_native_source_argument(
 		case ZEND_SEND_USER:
 		case ZEND_SEND_VAR_NO_REF:
 		case ZEND_SEND_VAR_NO_REF_EX:
+		case ZEND_SEND_FUNC_ARG:
 			break;
 		default:
 			return NULL;
@@ -697,24 +698,60 @@ zend_result zend_native_call_set_source_argument(
 	uint32_t argument_number;
 	zval *value;
 
-	if (EG(exception) != NULL) {
+	if (EG(exception) != NULL || caller == NULL || caller->func == NULL
+			|| caller->func->type != ZEND_USER_FUNCTION
+			|| caller->call == NULL
+			|| send_opline_index >= caller->func->op_array.last
+			|| mode > ZEND_NATIVE_CALL_ARGUMENT_PLACEHOLDER) {
 		return FAILURE;
+	}
+	send = &caller->func->op_array.opcodes[send_opline_index];
+	call = caller->call;
+	caller->opline = send;
+	if (mode == ZEND_NATIVE_CALL_ARGUMENT_PLACEHOLDER) {
+		if (send->opcode != ZEND_SEND_PLACEHOLDER) {
+			return FAILURE;
+		}
+		if (send->op2_type == IS_CONST) {
+			zval *name = RT_CONSTANT(send, send->op2);
+			void **cache_slot;
+
+			if (Z_TYPE_P(name) != IS_STRING
+					|| caller->run_time_cache == NULL
+					|| send->result.num > caller->func->op_array.cache_size
+					|| 2 * sizeof(void *)
+						> caller->func->op_array.cache_size
+							- send->result.num) {
+				return FAILURE;
+			}
+			cache_slot = (void **) ((char *) caller->run_time_cache
+				+ send->result.num);
+			target = zend_handle_named_arg(
+				&call, Z_STR_P(name), &argument_number, cache_slot);
+			caller->call = call;
+			if (target == NULL) {
+				return FAILURE;
+			}
+		} else if (send->op2_type == IS_UNUSED) {
+			target = ZEND_CALL_VAR(call, send->result.var);
+		} else {
+			return FAILURE;
+		}
+		Z_TYPE_INFO_P(target) = _IS_PLACEHOLDER;
+		return SUCCESS;
 	}
 	value = zend_native_source_argument(
 		caller, send_opline_index, &mutable_value, &operand_type);
-	if (value == NULL || caller->call == NULL
+	if (value == NULL
 			|| mode > ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE) {
 		return FAILURE;
 	}
-	call = caller->call;
 	function = call->func;
 	if (function == NULL
 			|| (function->type != ZEND_INTERNAL_FUNCTION
 				&& function->type != ZEND_USER_FUNCTION)) {
 		return FAILURE;
 	}
-	send = &caller->func->op_array.opcodes[send_opline_index];
-	caller->opline = send;
 	if (send->opcode == ZEND_SEND_UNPACK) {
 		return zend_native_call_send_unpack(
 			caller, value, operand_type);
@@ -726,6 +763,79 @@ zend_result zend_native_call_set_source_argument(
 	if (send->opcode == ZEND_SEND_USER) {
 		return zend_native_call_send_user(
 			caller, send, value, operand_type);
+	}
+	if (send->opcode == ZEND_SEND_FUNC_ARG) {
+		bool send_by_reference;
+
+		if (operand_type != IS_VAR) {
+			zend_native_release_source_operand(value, operand_type);
+			return FAILURE;
+		}
+		if (send->op2_type == IS_CONST) {
+			zval *name = RT_CONSTANT(send, send->op2);
+			void **cache_slot;
+
+			if (Z_TYPE_P(name) != IS_STRING
+					|| caller->run_time_cache == NULL
+					|| send->result.num > caller->func->op_array.cache_size
+					|| 2 * sizeof(void *)
+						> caller->func->op_array.cache_size
+							- send->result.num) {
+				zend_native_release_source_operand(value, operand_type);
+				return FAILURE;
+			}
+			cache_slot = (void **) ((char *) caller->run_time_cache
+				+ send->result.num);
+			target = zend_handle_named_arg(
+				&call, Z_STR_P(name), &argument_number, cache_slot);
+			caller->call = call;
+			if (target == NULL) {
+				zend_native_release_source_operand(value, operand_type);
+				return FAILURE;
+			}
+		} else if (send->op2_type == IS_UNUSED) {
+			argument_number = send->op2.num;
+			if (argument_number == 0) {
+				argument_number = ordinal + 1;
+			}
+			target = ZEND_CALL_VAR(call, send->result.var);
+		} else {
+			zend_native_release_source_operand(value, operand_type);
+			return FAILURE;
+		}
+		send_by_reference =
+			ARG_SHOULD_BE_SENT_BY_REF(function, argument_number);
+		if (send_by_reference) {
+			if (Z_ISREF_P(value)) {
+				Z_ADDREF_P(value);
+			} else {
+				if (!mutable_value) {
+					zend_cannot_pass_by_reference(argument_number);
+					zend_native_release_source_operand(
+						value, operand_type);
+					return FAILURE;
+				}
+				ZVAL_MAKE_REF_EX(value, 2);
+			}
+			ZVAL_REF(target, Z_REF_P(value));
+			zend_native_release_source_operand(value, operand_type);
+			return EG(exception) == NULL ? SUCCESS : FAILURE;
+		}
+		if (Z_ISREF_P(value)) {
+			zend_refcounted *reference = Z_COUNTED_P(value);
+			zval *referent = Z_REFVAL_P(value);
+
+			ZVAL_COPY_VALUE(target, referent);
+			if (GC_DELREF(reference) == 0) {
+				efree_size(reference, sizeof(zend_reference));
+			} else if (Z_OPT_REFCOUNTED_P(target)) {
+				Z_ADDREF_P(target);
+			}
+		} else {
+			ZVAL_COPY_VALUE(target, value);
+		}
+		ZVAL_UNDEF(value);
+		return SUCCESS;
 	}
 	if (send->op2_type == IS_CONST) {
 		zval *name = RT_CONSTANT(send, send->op2);

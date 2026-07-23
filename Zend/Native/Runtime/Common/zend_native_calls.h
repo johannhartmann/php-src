@@ -69,7 +69,8 @@ typedef struct _zend_native_internal_call_cell {
 
 typedef enum _zend_native_call_argument_mode {
 	ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE = 0,
-	ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE = 1
+	ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE = 1,
+	ZEND_NATIVE_CALL_ARGUMENT_PLACEHOLDER = 2
 } zend_native_call_argument_mode;
 
 void zend_native_entry_cell_init(

@@ -274,6 +274,7 @@ static bool zend_mir_w05_call_fragment(uint8_t opcode)
 		case ZEND_INIT_USER_CALL:
 		case ZEND_INIT_METHOD_CALL:
 		case ZEND_INIT_STATIC_METHOD_CALL:
+		case ZEND_INIT_PARENT_PROPERTY_HOOK_CALL:
 		case ZEND_NEW:
 		case ZEND_SEND_VAL:
 		case ZEND_SEND_VAL_EX:
@@ -284,14 +285,17 @@ static bool zend_mir_w05_call_fragment(uint8_t opcode)
 		case ZEND_SEND_ARRAY:
 		case ZEND_SEND_USER:
 		case ZEND_SEND_FUNC_ARG:
+		case ZEND_CHECK_FUNC_ARG:
 		case ZEND_SEND_VAR_NO_REF:
 		case ZEND_SEND_VAR_NO_REF_EX:
+		case ZEND_SEND_PLACEHOLDER:
 		case ZEND_CHECK_UNDEF_ARGS:
 		case ZEND_DO_UCALL:
 		case ZEND_DO_FCALL:
 		case ZEND_DO_FCALL_BY_NAME:
 		case ZEND_DO_ICALL:
 		case ZEND_CALLABLE_CONVERT:
+		case ZEND_CALLABLE_CONVERT_PARTIAL:
 			return true;
 		default:
 			return false;
@@ -313,6 +317,7 @@ static bool zend_mir_w05_call_init_fragment(uint8_t opcode)
 		case ZEND_INIT_USER_CALL:
 		case ZEND_INIT_METHOD_CALL:
 		case ZEND_INIT_STATIC_METHOD_CALL:
+		case ZEND_INIT_PARENT_PROPERTY_HOOK_CALL:
 		case ZEND_NEW:
 			return true;
 		default:
@@ -328,6 +333,7 @@ static bool zend_mir_w05_call_completion_fragment(uint8_t opcode)
 		case ZEND_DO_FCALL_BY_NAME:
 		case ZEND_DO_ICALL:
 		case ZEND_CALLABLE_CONVERT:
+		case ZEND_CALLABLE_CONVERT_PARTIAL:
 			return true;
 		default:
 			return false;

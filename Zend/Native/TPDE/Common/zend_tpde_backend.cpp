@@ -106,6 +106,12 @@ zend_native_runtime_helper_id executable_value_helper(zend_mir_opcode opcode) {
 			return ZEND_NATIVE_HELPER_VALUE_FETCH_LIST;
 		case ZEND_MIR_OPCODE_VALUE_INCDEC:
 			return ZEND_NATIVE_HELPER_VALUE_INCDEC;
+		case ZEND_MIR_OPCODE_OBJECT_DECLARE_FUNCTION:
+			return ZEND_NATIVE_HELPER_OBJECT_DECLARE_FUNCTION;
+		case ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS:
+			return ZEND_NATIVE_HELPER_OBJECT_DECLARE_CLASS;
+		case ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS_DELAYED:
+			return ZEND_NATIVE_HELPER_OBJECT_DECLARE_CLASS_DELAYED;
 		default:
 			return ZEND_NATIVE_HELPER_COUNT;
 	}
@@ -312,7 +318,8 @@ bool initialize_plan(
 			plan->required_runtime_capabilities |=
 				ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT;
 			if (record.opcode >= ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS
-					&& record.opcode <= ZEND_MIR_OPCODE_OBJECT_BIND_STATIC) {
+					&& record.opcode
+						<= ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS_DELAYED) {
 				plan->required_runtime_capabilities |=
 					ZEND_NATIVE_RUNTIME_CAP_OBJECT_OPERATION;
 			}
