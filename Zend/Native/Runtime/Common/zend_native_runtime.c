@@ -519,6 +519,12 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 			| ZEND_NATIVE_RUNTIME_EFFECT_THROW
 			| ZEND_NATIVE_EFFECT_MAY_REENTER,
 		(const void *) zend_native_value_verify_return_type},
+	{ZEND_NATIVE_HELPER_DIRECT_USER_CALL_ENTER,
+		ZEND_NATIVE_EFFECT_CALL,
+		(const void *) zend_native_call_direct_enter},
+	{ZEND_NATIVE_HELPER_DIRECT_USER_CALL_LEAVE,
+		ZEND_NATIVE_EFFECT_CALL,
+		(const void *) zend_native_call_direct_leave},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
