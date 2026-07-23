@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <cstdint>
 
+struct _zend_native_direct_call_descriptor;
+
 struct zend_tpde_value {
 	zend_mir_value_id id;
 	zend_mir_representation representation;
@@ -27,6 +29,7 @@ struct zend_tpde_instruction {
 	zend_mir_block_id exception_block_id;
 	uint32_t call_argument_offset;
 	uint32_t call_argument_count;
+	_zend_native_direct_call_descriptor *direct_call;
 	zend_native_source_effect_kind source_effect;
 	zend_mir_scalar_type_mask source_effect_exact_type;
 	uint32_t source_opline_index;
@@ -46,6 +49,8 @@ struct zend_tpde_plan {
 	uint32_t operand_count;
 	zend_mir_call_argument_ref *call_arguments;
 	uint32_t call_argument_count;
+	_zend_native_direct_call_descriptor **direct_calls;
+	uint32_t direct_call_count;
 	uint32_t argument_count;
 	uint64_t required_runtime_capabilities;
 	uint64_t required_runtime_helpers[ZEND_NATIVE_RUNTIME_HELPER_WORD_COUNT];
@@ -61,6 +66,8 @@ struct zend_native_image {
 	uint32_t argument_count;
 	void *target_state;
 	void (*destroy_target_state)(void *);
+	_zend_native_direct_call_descriptor **direct_calls;
+	uint32_t direct_call_count;
 };
 
 struct zend_native_code {
@@ -75,6 +82,8 @@ struct zend_native_code {
 	bool unwind_registered;
 	void *target_state;
 	void (*destroy_target_state)(void *);
+	_zend_native_direct_call_descriptor **direct_calls;
+	uint32_t direct_call_count;
 };
 
 void zend_tpde_set_diagnostic(
