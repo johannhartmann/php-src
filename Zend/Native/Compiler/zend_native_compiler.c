@@ -353,23 +353,6 @@ static zend_mir_scalar_type_mask zend_native_compiler_operand_exact_type(
 	return zend_native_compiler_ssa_exact_type(ssa, ssa_use);
 }
 
-static uint32_t zend_native_compiler_zend_type_from_scalar_type(
-	zend_mir_scalar_type_mask type)
-{
-	switch (type) {
-		case ZEND_MIR_SCALAR_TYPE_NULL:
-			return IS_NULL;
-		case ZEND_MIR_SCALAR_TYPE_I1:
-			return IS_FALSE;
-		case ZEND_MIR_SCALAR_TYPE_I64:
-			return IS_LONG;
-		case ZEND_MIR_SCALAR_TYPE_F64:
-			return IS_DOUBLE;
-		default:
-			return IS_UNDEF;
-	}
-}
-
 static zend_native_compiled_function *zend_native_compiler_find_function(
 	const zend_native_compiler *compiler, const zend_op_array *op_array)
 {
@@ -522,36 +505,6 @@ static bool zend_native_compiler_build_ssa(
 	return true;
 }
 
-static bool zend_native_compiler_verify_projected_return_type(
-	const zend_native_compiled_function *function, uint32_t opline_index)
-{
-	const zend_op *opline =
-		&function->projected_op_array.opcodes[opline_index];
-	const zend_ssa_op *ssa_op = &function->projected_ssa.ops[opline_index];
-	const zend_arg_info *return_info;
-	zend_mir_scalar_type_mask type;
-	uint32_t type_mask;
-
-	if (opline->op1_type == IS_UNUSED
-			|| function->op_array->arg_info == NULL) {
-		return false;
-	}
-	type = zend_native_compiler_operand_exact_type(
-		&function->projected_op_array, &function->projected_ssa, opline_index,
-		opline->op1_type, &opline->op1, ssa_op->op1_use);
-	if (!zend_mir_scalar_type_is_exact(type)) {
-		return false;
-	}
-	return_info = function->op_array->arg_info - 1;
-	type_mask = ZEND_TYPE_PURE_MASK(return_info->type);
-	return type_mask == MAY_BE_NULL
-		|| type_mask == MAY_BE_FALSE
-		|| type_mask == MAY_BE_TRUE
-		|| type_mask == MAY_BE_BOOL
-		|| type_mask == MAY_BE_LONG
-		|| type_mask == MAY_BE_DOUBLE;
-}
-
 static bool zend_native_compiler_prepare_projection(
 	zend_native_compiler *compiler,
 	zend_native_compiled_function *function)
@@ -559,9 +512,7 @@ static bool zend_native_compiler_prepare_projection(
 	const zend_op_array *source = function->op_array;
 	zend_mir_frontend_diagnostic frontend_diagnostic;
 	uint32_t echo_count = 0;
-	uint32_t return_check_count = 0;
 	uint32_t projected_variable_count;
-	uint32_t next_literal;
 	size_t projected_opcode_bytes;
 	size_t projected_literal_bytes;
 	size_t projected_storage_bytes;
@@ -577,18 +528,14 @@ static bool zend_native_compiler_prepare_projection(
 	for (index = 0; index < source->last; index++) {
 		if (source->opcodes[index].opcode == ZEND_ECHO) {
 			echo_count++;
-		} else if (source->opcodes[index].opcode == ZEND_VERIFY_RETURN_TYPE) {
-			return_check_count++;
 		}
 	}
-	if (source->last_literal > UINT32_MAX - return_check_count
-			|| (compiler->abi_conformance_probe
+	if ((compiler->abi_conformance_probe
 				&& source->last > UINT32_MAX - echo_count)) {
 		return false;
 	}
 	projected_variable_count = (uint32_t) function->ssa.vars_count;
-	projected_literal_count =
-		source->last_literal + return_check_count;
+	projected_literal_count = source->last_literal;
 	if ((size_t) (source->last == 0 ? 1 : source->last)
 			> (SIZE_MAX - 15) / sizeof(*function->projected_opcodes)
 			|| (size_t) (projected_literal_count == 0
@@ -669,7 +616,6 @@ static bool zend_native_compiler_prepare_projection(
 		return false;
 	}
 	function->projected_ssa.vars_count = (int) projected_variable_count;
-	next_literal = source->last_literal;
 
 	for (index = 0; index < source->last; index++) {
 		const zend_op *original = &source->opcodes[index];
@@ -728,93 +674,6 @@ static bool zend_native_compiler_prepare_projection(
 			}
 			continue;
 		}
-		if (original->opcode == ZEND_VERIFY_RETURN_TYPE) {
-			uint32_t lineno = opline->lineno;
-			zend_mir_scalar_type_mask operand_type =
-				zend_native_compiler_operand_exact_type(
-					&function->projected_op_array,
-					&function->projected_ssa,
-					index, opline->op1_type, &opline->op1,
-					ssa_op->op1_use);
-
-			if (!zend_native_compiler_verify_projected_return_type(
-					function, index)) {
-				if (ssa_op->result_def >= 0
-						&& ssa_op->result_def
-							< function->projected_ssa.vars_count) {
-					/* W10 keeps object and call results as canonical zvals.  The
-					 * native frame epilogue performs the authoritative Zend return
-					 * type check; retain the SSA definition as an identity copy. */
-					opline->opcode = ZEND_QM_ASSIGN;
-					opline->op2_type = IS_UNUSED;
-					memset(&opline->op2, 0, sizeof(opline->op2));
-					ssa_op->op2_use = -1;
-					ssa_op->op2_def = -1;
-					ssa_op->op2_use_chain = -1;
-					function->projected_ssa_var_info[
-						ssa_op->result_def].has_range = 0;
-					continue;
-				}
-				zend_ssa_rename_defs_of_instr(
-					&function->projected_ssa, ssa_op);
-				zend_ssa_remove_instr(
-					&function->projected_ssa, opline, ssa_op);
-				opline->lineno = lineno;
-				continue;
-			}
-			/*
-			 * Scalar return checks that reach this point were retained as an
-			 * identity operation above. The real Zend frame epilogue owns the
-			 * authoritative return-type check and coercion.
-			 */
-			const zend_arg_info *return_info =
-				function->op_array->arg_info - 1;
-			uint32_t operand_zend_type =
-				zend_native_compiler_zend_type_from_scalar_type(operand_type);
-
-			if (ssa_op->result_def >= 0
-					&& !ZEND_TYPE_CONTAINS_CODE(
-						return_info->type, operand_zend_type)) {
-				/* Constant return checks define the temporary consumed by
-				 * RETURN. Preserve that definition with a scalar identity
-				 * operation. The declared-type conversion remains below;
-				 * zend_native_execute_frame performs the actual Zend return
-				 * type check and any permitted scalar coercion. */
-				{
-					uint32_t literal = next_literal++;
-
-					if (operand_type == ZEND_MIR_SCALAR_TYPE_I1) {
-						opline->opcode = ZEND_BOOL_XOR;
-						ZVAL_FALSE(&function->projected_literals[literal]);
-					} else {
-						opline->opcode = ZEND_ADD;
-						if (operand_type == ZEND_MIR_SCALAR_TYPE_I64) {
-							ZVAL_LONG(&function->projected_literals[literal], 0);
-						} else {
-							ZVAL_DOUBLE(
-								&function->projected_literals[literal], 0.0);
-						}
-					}
-					opline->op2_type = IS_CONST;
-#if ZEND_USE_ABS_CONST_ADDR
-					opline->op2.zv = &function->projected_literals[literal];
-#else
-					opline->op2.constant = (uint32_t) (
-						(char *) &function->projected_literals[literal]
-						- (char *) opline);
-#endif
-					function->projected_op_array.last_literal = next_literal;
-				}
-				function->projected_ssa_var_info[ssa_op->result_def].type =
-					zend_native_compiler_may_be_from_scalar_type(operand_type);
-				continue;
-			}
-			zend_ssa_rename_defs_of_instr(
-				&function->projected_ssa, ssa_op);
-			zend_ssa_remove_instr(&function->projected_ssa, opline, ssa_op);
-			opline->lineno = lineno;
-			continue;
-		}
 		if (original->opcode == ZEND_RECV
 				|| original->opcode == ZEND_RECV_INIT) {
 			uint32_t ordinal = original->op1.num - 1;
@@ -842,7 +701,6 @@ static bool zend_native_compiler_prepare_projection(
 		}
 	}
 	function->projected_ssa.vars_count = (int) projected_variable_count;
-	function->projected_op_array.last_literal = next_literal;
 	return true;
 }
 
