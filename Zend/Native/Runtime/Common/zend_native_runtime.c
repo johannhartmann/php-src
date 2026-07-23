@@ -300,6 +300,13 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_DYNAMIC_INCLUDE_OR_EVAL,
 		ZEND_NATIVE_RUNTIME_EFFECT_ALL,
 		(const void *) zend_native_execute_include_or_eval},
+	{ZEND_NATIVE_HELPER_DIRECT_USER_CALL,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
+			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_RUNTIME_EFFECT_THROW
+			| ZEND_NATIVE_RUNTIME_EFFECT_BAILOUT
+			| ZEND_NATIVE_RUNTIME_EFFECT_USERLAND,
+		(const void *) zend_native_call_direct},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
