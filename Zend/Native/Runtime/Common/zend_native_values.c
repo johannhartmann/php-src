@@ -2480,10 +2480,13 @@ zend_native_status zend_native_value_unset_dim(
 }
 
 zend_native_status zend_native_value_isset_isempty_dim(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
-	const zend_op *opline = zend_native_value_opline(
-		execute_data, source_opline_index, ZEND_ISSET_ISEMPTY_DIM_OBJ);
+	zend_native_explicit_value_operation operation;
+	const zend_native_explicit_value_operation *opline = &operation;
 	zend_native_array_key key;
 	zval *container;
 	zval *offset;
@@ -2491,10 +2494,13 @@ zend_native_status zend_native_value_isset_isempty_dim(
 	zval *value = NULL;
 	bool answer;
 
-	if (opline == NULL
-			|| (container = zend_native_value_read(execute_data, opline,
+	if (!zend_native_value_init_explicit_operation(
+			execute_data, op1, op2, result_operand, extended_value,
+			source_opcode, source_position_id,
+			ZEND_ISSET_ISEMPTY_DIM_OBJ, &operation)
+			|| (container = zend_native_value_read_explicit(execute_data, opline,
 				opline->op1_type, opline->op1)) == NULL
-			|| (offset = zend_native_value_read(execute_data, opline,
+			|| (offset = zend_native_value_read_explicit(execute_data, opline,
 				opline->op2_type, opline->op2)) == NULL
 			|| (result = zend_native_value_slot(execute_data,
 				opline->result_type, opline->result)) == NULL) {
