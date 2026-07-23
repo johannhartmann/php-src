@@ -29,6 +29,26 @@ function array_case($values, $key)
 PHP,
         [['answer' => 42], 'answer'],
     ],
+    'packed_read_scalar' => [
+        <<<'PHP'
+<?php
+function array_case($values, $key)
+{
+    return $values[$key];
+}
+PHP,
+        [[10, 42, 90], 1],
+    ],
+    'packed_read_refcounted' => [
+        <<<'PHP'
+<?php
+function array_case($values, $key)
+{
+    return $values[$key];
+}
+PHP,
+        [['first', 'native', 'last'], 1],
+    ],
     'copy_on_write' => [
         <<<'PHP'
 <?php
@@ -133,6 +153,8 @@ foreach ($cases as $name => [$source, $arguments]) {
 --EXPECT--
 literal accepted returned return={"0":1,"1":2,"name":"native"} vm=0 execute_ex=0 handler=0
 read accepted returned return=42 vm=0 execute_ex=0 handler=0
+packed_read_scalar accepted returned return=42 vm=0 execute_ex=0 handler=0
+packed_read_refcounted accepted returned return="native" vm=0 execute_ex=0 handler=0
 copy_on_write accepted returned return=[1,2] vm=0 execute_ex=0 handler=0
 append accepted returned return=[10,20] vm=0 execute_ex=0 handler=0
 compound accepted returned return=12 vm=0 execute_ex=0 handler=0
