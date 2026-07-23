@@ -92,10 +92,32 @@ typedef struct _zend_native_direct_call_descriptor {
 	uint32_t source_position;
 	uint32_t flags;
 	uint32_t frame_size;
+	zend_function *expected_function;
 	zend_mir_scalar_type_mask result_type;
 	zend_mir_source_operand_ref result_operand;
 	zend_native_direct_call_argument arguments[1];
 } zend_native_direct_call_descriptor;
+
+/*
+ * A direct activation lives immediately after its Zend frame on the VM stack.
+ * Generated callers link it before entering native code so the outermost
+ * C-only bailout boundary can unwind every nested native frame without adding
+ * another catcher to each call.
+ */
+typedef struct _zend_native_direct_activation {
+	zend_execute_data *caller;
+	zend_execute_data *callee;
+	zend_native_entry_cell *cell;
+	const zend_native_direct_call_descriptor *descriptor;
+	struct _zend_native_direct_activation *previous;
+	zval discarded_return;
+	uint32_t status;
+	bool uses_discarded_return;
+	bool raw_arguments_owned;
+	bool frame_initialized;
+	bool frame_requires_finish;
+	bool cell_active;
+} zend_native_direct_activation;
 
 typedef struct _zend_native_direct_call_result {
 	uint64_t status;
