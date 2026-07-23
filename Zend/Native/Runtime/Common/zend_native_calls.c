@@ -783,13 +783,16 @@ static void zend_native_call_release_target(zend_execute_data *call)
 {
 	uint32_t call_info = ZEND_CALL_INFO(call);
 
+	/* A closure owns the zend_function embedded in its object.  Inspect and
+	 * dispose a trampoline before releasing any target object that may own
+	 * call->func.  This mirrors the VM call-frame teardown order. */
+	if ((call->func->common.fn_flags & ZEND_ACC_CALL_VIA_TRAMPOLINE) != 0) {
+		zend_free_trampoline(call->func);
+	}
 	if ((call_info & ZEND_CALL_RELEASE_THIS) != 0) {
 		OBJ_RELEASE(Z_OBJ(call->This));
 	} else if ((call_info & ZEND_CALL_CLOSURE) != 0) {
 		OBJ_RELEASE(ZEND_CLOSURE_OBJECT(call->func));
-	}
-	if ((call->func->common.fn_flags & ZEND_ACC_CALL_VIA_TRAMPOLINE) != 0) {
-		zend_free_trampoline(call->func);
 	}
 }
 

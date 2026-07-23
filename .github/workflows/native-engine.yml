@@ -114,7 +114,8 @@ jobs:
             "$candidate" run-tests.php -q --show-diff \
               ext/native_mir_test/tests/w07_*.phpt \
               ext/native_mir_test/tests/w08_*.phpt \
-              ext/native_mir_test/tests/w09_*.phpt
+              ext/native_mir_test/tests/w09_*.phpt \
+              ext/native_mir_test/tests/w10_*.phpt
 
   linux-amd64:
     runs-on: ubuntu-24.04
@@ -175,7 +176,8 @@ jobs:
             "$candidate" run-tests.php -q --show-diff \
               ext/native_mir_test/tests/w07_*.phpt \
               ext/native_mir_test/tests/w08_*.phpt \
-              ext/native_mir_test/tests/w09_*.phpt
+              ext/native_mir_test/tests/w09_*.phpt \
+              ext/native_mir_test/tests/w10_*.phpt
           if [[ "$profile" == linux-amd64-native-debug-nts ]]; then
             scripts/native/test-w08-linux-runtime.sh \
               --candidate "$candidate" \
