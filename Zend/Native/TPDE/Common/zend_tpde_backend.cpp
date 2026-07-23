@@ -128,6 +128,8 @@ zend_native_runtime_helper_id executable_value_helper(zend_mir_opcode opcode) {
 			return ZEND_NATIVE_HELPER_VALUE_FETCH_LIST;
 		case ZEND_MIR_OPCODE_VALUE_INCDEC:
 			return ZEND_NATIVE_HELPER_VALUE_INCDEC;
+		case ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE:
+			return ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE;
 		case ZEND_MIR_OPCODE_OBJECT_DECLARE_FUNCTION:
 			return ZEND_NATIVE_HELPER_OBJECT_DECLARE_FUNCTION;
 		case ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS:
@@ -415,6 +417,27 @@ bool initialize_plan(
 						== ZEND_MIR_SCALAR_TYPE_F64
 						? ZEND_NATIVE_HELPER_ECHO_DOUBLE
 						: ZEND_NATIVE_HELPER_ECHO_INTEGER);
+				continue;
+			}
+			if (record.opcode == ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE) {
+				const zend_mir_executable_value_ref &operation =
+					plan->instructions[i].value_operation;
+				if (operation.source_opcode != ZEND_VERIFY_RETURN_TYPE
+						|| operation.op2.kind
+							!= ZEND_MIR_SOURCE_OPERAND_UNUSED
+						|| (operation.op1.kind
+								== ZEND_MIR_SOURCE_OPERAND_LITERAL
+							&& operation.result.kind
+								== ZEND_MIR_SOURCE_OPERAND_UNUSED)) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+						"return type verification lacks explicit source operands");
+					return false;
+				}
+				plan->required_runtime_capabilities |=
+					ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT;
+				require_runtime_helper(
+					plan, ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE);
 				continue;
 			}
 			/*

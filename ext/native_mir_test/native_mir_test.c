@@ -2601,7 +2601,9 @@ static bool native_mir_test_prepare_w07_projection(
 	for (index = 0; index < source->last; index++) {
 		if (source->opcodes[index].opcode == ZEND_ECHO) {
 			echo_count++;
-		} else if (source->opcodes[index].opcode == ZEND_VERIFY_RETURN_TYPE) {
+		} else if (state->wave < 11
+				&& source->opcodes[index].opcode
+					== ZEND_VERIFY_RETURN_TYPE) {
 			return_check_count++;
 		}
 	}
@@ -2839,6 +2841,9 @@ static bool native_mir_test_prepare_w07_projection(
 			continue;
 		}
 		if (original->opcode == ZEND_VERIFY_RETURN_TYPE) {
+			if (state->wave >= 11) {
+				continue;
+			}
 			uint32_t lineno = opline->lineno;
 			zend_mir_scalar_type_mask operand_type =
 				native_mir_test_operand_exact_type(

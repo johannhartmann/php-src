@@ -250,6 +250,8 @@ static zend_mir_opcode zend_mir_w09_executable_opcode(uint32_t opcode)
 			return ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL;
 		case ZEND_ECHO:
 			return ZEND_MIR_OPCODE_ECHO_SCALAR;
+		case ZEND_VERIFY_RETURN_TYPE:
+			return ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE;
 		case ZEND_ADD:
 		case ZEND_SUB:
 		case ZEND_MUL:
@@ -540,6 +542,7 @@ static bool zend_mir_w09_operation_semantics(
 			}
 			break;
 		case ZEND_MIR_OPCODE_VALUE_TYPE_CHECK:
+		case ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE:
 			if (!zend_mir_w09_add_effect(
 					&summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)
 					|| !zend_mir_w09_add_effect(
