@@ -1048,7 +1048,9 @@ bool initialize_plan(
 					plan->instructions[i].direct_call = descriptor;
 					plan->direct_calls[plan->direct_call_count++] = descriptor;
 					require_runtime_helper(
-						plan, ZEND_NATIVE_HELPER_DIRECT_USER_CALL);
+						plan, ZEND_NATIVE_HELPER_DIRECT_USER_CALL_ENTER);
+					require_runtime_helper(
+						plan, ZEND_NATIVE_HELPER_DIRECT_USER_CALL_LEAVE);
 				} else {
 					require_runtime_helper(
 						plan, ZEND_NATIVE_HELPER_USER_CALL_BEGIN);

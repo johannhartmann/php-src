@@ -1519,17 +1519,62 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			const zend_tpde_instruction &call =
 				adaptor->mir_instruction(instruction);
 			if (call.direct_call != nullptr) {
+				ValuePart callee{tpde::x64::PlatformConfig::GP_BANK};
+				ValuePart entry{tpde::x64::PlatformConfig::GP_BANK};
+				{
+					tpde::x64::CCAssignerSysV assigner{false};
+					CallBuilder builder{*this, assigner};
+					builder.add_arg(CallArg{node.operands[0]});
+					builder.add_arg(image_symbol_value(
+						ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
+						call.call_site.target_id), tpde::CCAssignment{});
+					builder.add_arg(image_symbol_value(
+						ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR,
+						call.id), tpde::CCAssignment{});
+					builder.add_arg(CallArg{node.operands[2]});
+					builder.call(runtime_symbol(
+						ZEND_NATIVE_HELPER_DIRECT_USER_CALL_ENTER));
+					builder.add_ret(callee, tpde::CCAssignment{});
+					builder.add_ret(entry, tpde::CCAssignment{});
+				}
+				ScratchReg entry_copy{this};
+				auto entry_copy_reg =
+					entry_copy.alloc_specific(tpde::x64::AsmReg::R11);
+				mov(entry_copy_reg, entry.cur_reg_or_load(this), sizeof(void *));
+				entry.reset(this);
+				ValuePart entry_target{
+					tpde::x64::PlatformConfig::GP_BANK};
+				entry_target.set_value(this, std::move(entry_copy));
+				ValuePart entry_status{tpde::x64::PlatformConfig::GP_BANK};
+				{
+					tpde::x64::CCAssignerSysV assigner{false};
+					CallBuilder builder{*this, assigner};
+					builder.add_arg(std::move(callee), tpde::CCAssignment{});
+					builder.add_arg(CallArg{node.operands[3]});
+					builder.call(std::move(entry_target));
+					builder.add_ret(entry_status, tpde::CCAssignment{});
+				}
+				ScratchReg entry_status_copy{this};
+				auto entry_status_copy_reg =
+					entry_status_copy.alloc_specific(tpde::x64::AsmReg::CX);
+				mov(entry_status_copy_reg,
+					entry_status.cur_reg_or_load(this), sizeof(uint64_t));
+				entry_status.reset(this);
+				ValuePart entry_status_argument{
+					tpde::x64::PlatformConfig::GP_BANK};
+				entry_status_argument.set_value(
+					this, std::move(entry_status_copy));
 				tpde::x64::CCAssignerSysV assigner{false};
 				CallBuilder builder{*this, assigner};
-				builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
-				builder.add_arg(image_symbol_value(
-					ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
-					call.call_site.target_id), tpde::CCAssignment{});
+				builder.add_arg(CallArg{node.operands[1]});
 				builder.add_arg(image_symbol_value(
 					ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR,
 					call.id), tpde::CCAssignment{});
-				builder.add_arg(CallArg{node.operands[1]});
-				builder.call(runtime_symbol(ZEND_NATIVE_HELPER_DIRECT_USER_CALL));
+				builder.add_arg(CallArg{node.operands[4]});
+				builder.add_arg(
+					std::move(entry_status_argument), tpde::CCAssignment{});
+				builder.call(runtime_symbol(
+					ZEND_NATIVE_HELPER_DIRECT_USER_CALL_LEAVE));
 				ValuePart status{tpde::x64::PlatformConfig::GP_BANK};
 				ValuePart payload{tpde::x64::PlatformConfig::GP_BANK};
 				builder.add_ret(status, tpde::CCAssignment{});
