@@ -2804,7 +2804,8 @@ static bool native_mir_test_add_w09_exception_routes(
 		if (!view->instruction_at(view->context, index, &instruction)) {
 			return false;
 		}
-		if (!zend_mir_opcode_is_executable_value(instruction.opcode)
+		if ((!zend_mir_opcode_is_executable_value(instruction.opcode)
+				&& instruction.opcode != ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL)
 				|| !zend_mir_id_is_valid(instruction.source_position_id)
 				|| instruction.source_position_id
 					>= function->op_array->last

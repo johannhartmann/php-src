@@ -3011,7 +3011,8 @@ static zend_mir_lowering_status zend_mir_zend_source_preflight_direct_calls(
 					|| (target->kind
 						== ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER
 						&& (!w10_execution
-							|| (init_opcode != ZEND_INIT_FCALL_BY_NAME
+							|| (init_opcode != ZEND_INIT_FCALL
+								&& init_opcode != ZEND_INIT_FCALL_BY_NAME
 								&& init_opcode != ZEND_INIT_NS_FCALL_BY_NAME
 								&& init_opcode != ZEND_INIT_DYNAMIC_CALL
 								&& init_opcode != ZEND_INIT_USER_CALL)

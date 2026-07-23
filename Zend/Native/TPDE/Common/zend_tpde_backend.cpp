@@ -614,7 +614,9 @@ bool initialize_plan(
 			}
 			if (effect.kind == ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE) {
 				if (executable_value_helper(candidate.record.opcode)
-						== ZEND_NATIVE_HELPER_COUNT) {
+						== ZEND_NATIVE_HELPER_COUNT
+						&& candidate.record.opcode
+							!= ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL) {
 					continue;
 				}
 			} else if (candidate.record.opcode != ZEND_MIR_OPCODE_I1_NOT

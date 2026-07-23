@@ -905,8 +905,32 @@ void zend_native_call_begin(
 	}
 #endif
 	switch (source_init->opcode) {
-		case ZEND_INIT_FCALL:
+		case ZEND_INIT_FCALL: {
+			zval *name = RT_CONSTANT(source_init, source_init->op2);
+			zend_function *resolved = Z_TYPE_P(name) == IS_STRING
+				? zend_fetch_function(Z_STR_P(name)) : NULL;
+
+			if (resolved == NULL || resolved->type != ZEND_USER_FUNCTION) {
+				if (EG(exception) == NULL) {
+					zend_throw_error(NULL, "Call to undefined function %s()",
+						Z_TYPE_P(name) == IS_STRING
+							? Z_STRVAL_P(name) : "unknown");
+				}
+				function = (zend_function *) &zend_pass_function;
+				break;
+			}
+			if (resolved != function) {
+				cell = zend_native_reentry_find(
+					zend_native_active_reentry_scope, resolved);
+				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
+						|| cell->code == NULL) {
+					zend_native_call_abort(
+						"Native named target compilation failed");
+				}
+			}
+			function = resolved;
 			break;
+		}
 		case ZEND_INIT_FCALL_BY_NAME:
 		case ZEND_INIT_NS_FCALL_BY_NAME:
 		case ZEND_INIT_DYNAMIC_CALL:

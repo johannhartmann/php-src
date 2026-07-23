@@ -297,6 +297,16 @@ function w10_complete_invalid_callable_error(): int {
     }
     return 0;
 }
+function w10_complete_throw_finally(): int {
+    try {
+        throw new RuntimeException('native');
+    } catch (RuntimeException $error) {
+        $value = $error->getMessage() === 'native' ? 41 : 0;
+    } finally {
+        $value++;
+    }
+    return $value;
+}
 PHP;
 
 $functions = [
@@ -339,6 +349,7 @@ $functions = [
     'w10_complete_private_method_error',
     'w10_complete_private_static_method_error',
     'w10_complete_invalid_callable_error',
+    'w10_complete_throw_finally',
 ];
 foreach ($functions as $function) {
     $result = native_mir_test_compile_execute(
@@ -398,3 +409,4 @@ w10_complete_forward_static accepted return=42 vm=0 execute_ex=0 handler=0
 w10_complete_private_method_error accepted return=42 vm=0 execute_ex=0 handler=0
 w10_complete_private_static_method_error accepted return=42 vm=0 execute_ex=0 handler=0
 w10_complete_invalid_callable_error accepted return=42 vm=0 execute_ex=0 handler=0
+w10_complete_throw_finally accepted return=42 vm=0 execute_ex=0 handler=0
