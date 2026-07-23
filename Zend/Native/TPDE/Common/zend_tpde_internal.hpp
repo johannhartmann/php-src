@@ -256,11 +256,33 @@ struct zend_tpde_plan {
 	bool may_emit_calls;
 };
 
+enum zend_native_image_symbol_kind : uint32_t {
+	ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER = 1,
+	ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL = 2,
+	ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL = 3,
+	ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_API = 4,
+	ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR = 5,
+	ZEND_NATIVE_IMAGE_SYMBOL_SOURCE = 6,
+};
+
+struct zend_native_image_symbol {
+	uint32_t kind;
+	uint32_t id;
+	uint32_t abi_version;
+	uint32_t effects;
+	char name[64];
+};
+
 struct zend_native_image {
 	zend_native_target target;
+	uint32_t abi_version;
+	uint32_t runtime_abi_version;
 	unsigned char *text;
 	size_t text_size;
 	size_t text_capacity;
+	zend_native_image_symbol *symbols;
+	uint32_t symbol_count;
+	uint32_t symbol_capacity;
 	uint32_t slot_count;
 	uint32_t argument_count;
 	void *target_state;
@@ -313,6 +335,14 @@ bool zend_tpde_image_append(
 bool zend_tpde_image_u8(zend_native_image *image, uint8_t value);
 bool zend_tpde_image_u32(zend_native_image *image, uint32_t value);
 bool zend_tpde_image_u64(zend_native_image *image, uint64_t value);
+const zend_native_image_symbol *zend_tpde_image_symbol_find(
+	const zend_native_image *image,
+	zend_native_image_symbol_kind kind,
+	uint32_t id);
+bool zend_tpde_image_resolve_symbol(
+	const zend_native_image *image,
+	const char *name,
+	const void **address);
 
 zend_result zend_tpde_emit_darwin_arm64(
 	const zend_tpde_plan *plan,
