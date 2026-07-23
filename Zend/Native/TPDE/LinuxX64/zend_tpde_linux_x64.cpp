@@ -306,6 +306,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN
 			|| helper == ZEND_NATIVE_HELPER_VALUE_QM_ASSIGN
 			|| helper == ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV
+			|| helper == ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM
 			|| helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM
 			|| helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_OP
 			|| (helper >= ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R
@@ -634,6 +635,143 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		label_place(done);
 		return true;
 	};
+	auto isset_packed_array = [&]() {
+		zend_tpde_packed_array_isset layout;
+
+		if (!zend_tpde_packed_array_isset_at(mir, &layout)
+				|| layout.container_offset > INT32_MAX
+				|| layout.key_offset > INT32_MAX
+				|| layout.result_offset > INT32_MAX) {
+			return execute_value_operation(
+				ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM);
+		}
+		for (auto reg_id : register_file.used_regs()) {
+			tpde::Reg reg{reg_id};
+			if (!register_file.is_fixed(reg)
+					&& register_file.reg_local_idx(reg)
+						!= INVALID_VAL_LOCAL_IDX) {
+				evict_reg(reg);
+			}
+		}
+		auto slow = text_writer.label_create();
+		auto answer_false = text_writer.label_create();
+		auto answer_true = text_writer.label_create();
+		auto store_answer = text_writer.label_create();
+		auto not_reference = text_writer.label_create();
+		auto done = text_writer.label_create();
+		auto [frame_ref, frame] =
+			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_reg = frame_scratch.cur_reg();
+		ScratchReg slot{this};
+		ScratchReg type{this};
+		ScratchReg array{this};
+		ScratchReg key{this};
+		ScratchReg limit{this};
+		ScratchReg element{this};
+		auto slot_reg = slot.alloc_gp();
+		auto type_reg = type.alloc_gp();
+		auto array_reg = array.alloc_gp();
+		auto key_reg = key.alloc_gp();
+		auto limit_reg = limit.alloc_gp();
+		auto element_reg = element.alloc_gp();
+
+		ASM(MOV64rr, slot_reg, frame_reg);
+		ASM(ADD64ri, slot_reg,
+			static_cast<int32_t>(layout.container_offset));
+		ASM(MOV32rm, type_reg,
+			FE_MEM(slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		ASM(AND32ri, type_reg, Z_TYPE_MASK);
+		ASM(CMP32ri, type_reg, IS_ARRAY);
+		generate_raw_jump(Jump::jne, slow);
+		ASM(MOV64rm, array_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
+		ASM(MOV32rm, type_reg,
+			FE_MEM(array_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(HashTable, u))));
+		ASM(AND32ri, type_reg, HASH_FLAG_PACKED);
+		ASM(TEST32rr, type_reg, type_reg);
+		generate_raw_jump(Jump::je, slow);
+
+		ASM(MOV64rr, slot_reg, frame_reg);
+		ASM(ADD64ri, slot_reg, static_cast<int32_t>(layout.key_offset));
+		ASM(MOV32rm, type_reg,
+			FE_MEM(slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		ASM(CMP32ri, type_reg, IS_LONG);
+		generate_raw_jump(Jump::jne, slow);
+		ASM(MOV64rm, key_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
+
+		ASM(MOV64rr, slot_reg, frame_reg);
+		ASM(ADD64ri, slot_reg, static_cast<int32_t>(layout.result_offset));
+		ASM(MOV32rm, type_reg,
+			FE_MEM(slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		ASM(CMP32ri, type_reg, IS_UNDEF);
+		generate_raw_jump(Jump::jne, slow);
+
+		ASM(MOV32rm, limit_reg,
+			FE_MEM(array_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(HashTable, nNumUsed))));
+		ASM(CMP64rr, key_reg, limit_reg);
+		generate_raw_jump(Jump::jae, answer_false);
+		ASM(MOV64rm, element_reg,
+			FE_MEM(array_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(HashTable, arPacked))));
+		ASM(SHL64ri, key_reg, 4);
+		ASM(ADD64rr, element_reg, key_reg);
+		ASM(MOV32rm, type_reg,
+			FE_MEM(element_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		ASM(AND32ri, type_reg, Z_TYPE_MASK);
+		ASM(CMP32ri, type_reg, IS_REFERENCE);
+		generate_raw_jump(Jump::jne, not_reference);
+		ASM(MOV64rm, element_reg,
+			FE_MEM(element_reg, 0, FE_NOREG, 0));
+		ASM(MOV32rm, type_reg,
+			FE_MEM(element_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_reference, val)
+						+ offsetof(zval, u1.type_info))));
+		ASM(AND32ri, type_reg, Z_TYPE_MASK);
+		label_place(not_reference);
+		ASM(CMP32ri, type_reg, IS_NULL);
+		generate_raw_jump(Jump::ja, answer_true);
+
+		label_place(answer_false);
+		ASM(MOV64ri, element_reg, 0);
+		ASM(MOV32ri, type_reg, IS_FALSE);
+		generate_raw_jump(Jump::jmp, store_answer);
+		label_place(answer_true);
+		ASM(MOV64ri, element_reg, 1);
+		ASM(MOV32ri, type_reg, IS_TRUE);
+		label_place(store_answer);
+		ASM(MOV64mr,
+			FE_MEM(slot_reg, 0, FE_NOREG, 0), element_reg);
+		ASM(MOV32mr,
+			FE_MEM(slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))),
+			type_reg);
+		generate_raw_jump(Jump::jmp, done);
+
+		label_place(slow);
+		slot.reset();
+		type.reset();
+		array.reset();
+		key.reset();
+		limit.reset();
+		element.reset();
+		ValuePart frame_argument{
+			tpde::x64::PlatformConfig::GP_BANK, 8};
+		frame_argument.set_value(this, std::move(frame_scratch));
+		if (!execute_value_operation(
+				ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM,
+				&frame_argument)) {
+			return false;
+		}
+		label_place(done);
+		return true;
+	};
 	auto append_packed_array = [&]() {
 		zend_tpde_packed_array_append layout;
 
@@ -944,7 +1082,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		case ZEND_MIR_OPCODE_VALUE_UNSET_DIM:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_UNSET_DIM);
 		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM);
+			return isset_packed_array();
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN_OP:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ASSIGN_OP);
 		case ZEND_MIR_OPCODE_VALUE_FE_FREE:

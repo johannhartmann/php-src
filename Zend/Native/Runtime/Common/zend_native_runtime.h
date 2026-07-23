@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-#define ZEND_NATIVE_RUNTIME_ABI_VERSION 18u
+#define ZEND_NATIVE_RUNTIME_ABI_VERSION 19u
 
 typedef enum _zend_native_runtime_capability {
 	ZEND_NATIVE_RUNTIME_CAP_USER_CALL = UINT64_C(1) << 0,

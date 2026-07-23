@@ -49,6 +49,36 @@ function array_case($values, $key)
 PHP,
         [['first', 'native', 'last'], 1],
     ],
+    'packed_isset_present' => [
+        <<<'PHP'
+<?php
+function array_case($values, $key)
+{
+    return isset($values[$key]);
+}
+PHP,
+        [[10, 20], 1],
+    ],
+    'packed_isset_missing' => [
+        <<<'PHP'
+<?php
+function array_case($values, $key)
+{
+    return isset($values[$key]);
+}
+PHP,
+        [[10, 20], 9],
+    ],
+    'packed_isset_null' => [
+        <<<'PHP'
+<?php
+function array_case($values, $key)
+{
+    return isset($values[$key]);
+}
+PHP,
+        [[10, null], 1],
+    ],
     'copy_on_write' => [
         <<<'PHP'
 <?php
@@ -179,6 +209,9 @@ literal accepted returned return={"0":1,"1":2,"name":"native"} vm=0 execute_ex=0
 read accepted returned return=42 vm=0 execute_ex=0 handler=0
 packed_read_scalar accepted returned return=42 vm=0 execute_ex=0 handler=0
 packed_read_refcounted accepted returned return="native" vm=0 execute_ex=0 handler=0
+packed_isset_present accepted returned return=true vm=0 execute_ex=0 handler=0
+packed_isset_missing accepted returned return=false vm=0 execute_ex=0 handler=0
+packed_isset_null accepted returned return=false vm=0 execute_ex=0 handler=0
 copy_on_write accepted returned return=[1,2] vm=0 execute_ex=0 handler=0
 append accepted returned return=[10,20] vm=0 execute_ex=0 handler=0
 packed_append_cv accepted returned return=[10,"native"] vm=0 execute_ex=0 handler=0

@@ -313,6 +313,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN
 			|| helper == ZEND_NATIVE_HELPER_VALUE_QM_ASSIGN
 			|| helper == ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV
+			|| helper == ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM
 			|| helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM
 			|| helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_OP
 			|| (helper >= ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R
@@ -609,6 +610,127 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		label_place(done);
 		return true;
 	};
+	auto isset_packed_array = [&]() {
+		zend_tpde_packed_array_isset layout;
+
+		if (!zend_tpde_packed_array_isset_at(mir, &layout)) {
+			return execute_value_operation(
+				ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM);
+		}
+		for (auto reg_id : register_file.used_regs()) {
+			::tpde::Reg reg{reg_id};
+			if (!register_file.is_fixed(reg)
+					&& register_file.reg_local_idx(reg)
+						!= INVALID_VAL_LOCAL_IDX) {
+				evict_reg(reg);
+			}
+		}
+		auto slow = text_writer.label_create();
+		auto answer_false = text_writer.label_create();
+		auto answer_true = text_writer.label_create();
+		auto store_answer = text_writer.label_create();
+		auto not_reference = text_writer.label_create();
+		auto done = text_writer.label_create();
+		auto [frame_ref, frame] =
+			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_reg = frame_scratch.cur_reg();
+		ScratchReg slot{this};
+		ScratchReg type{this};
+		ScratchReg array{this};
+		ScratchReg key{this};
+		ScratchReg limit{this};
+		ScratchReg element{this};
+		auto slot_reg = slot.alloc_gp();
+		auto type_reg = type.alloc_gp();
+		auto array_reg = array.alloc_gp();
+		auto key_reg = key.alloc_gp();
+		auto limit_reg = limit.alloc_gp();
+		auto element_reg = element.alloc_gp();
+
+		ASM(ADDxi, slot_reg, frame_reg, layout.container_offset);
+		load_off(type_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+		ASM(CMPwi, type_reg, IS_ARRAY);
+		generate_raw_jump(Jump::Jne, slow);
+		load_off(array_reg, slot_reg, 0, 8);
+		load_off(type_reg, array_reg,
+			static_cast<uint32_t>(offsetof(HashTable, u)), 4);
+		ASM(TSTwi, type_reg, HASH_FLAG_PACKED);
+		generate_raw_jump(Jump::Jeq, slow);
+
+		ASM(ADDxi, slot_reg, frame_reg, layout.key_offset);
+		load_off(type_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(CMPwi, type_reg, IS_LONG);
+		generate_raw_jump(Jump::Jne, slow);
+		load_off(key_reg, slot_reg, 0, 8);
+
+		ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
+		load_off(type_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(CMPwi, type_reg, IS_UNDEF);
+		generate_raw_jump(Jump::Jne, slow);
+
+		load_off(limit_reg, array_reg,
+			static_cast<uint32_t>(offsetof(HashTable, nNumUsed)), 4);
+		ASM(CMPx, key_reg, limit_reg);
+		generate_raw_jump(Jump::Jhs, answer_false);
+		load_off(element_reg, array_reg,
+			static_cast<uint32_t>(offsetof(HashTable, arPacked)), 8);
+		ASM(ADDx_lsl, element_reg, element_reg, key_reg, 4);
+		load_off(type_reg, element_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+		ASM(CMPwi, type_reg, IS_REFERENCE);
+		generate_raw_jump(Jump::Jne, not_reference);
+		load_off(element_reg, element_reg, 0, 8);
+		load_off(type_reg, element_reg,
+			static_cast<uint32_t>(
+				offsetof(zend_reference, val)
+					+ offsetof(zval, u1.type_info)),
+			4);
+		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+		label_place(not_reference);
+		ASM(CMPwi, type_reg, IS_NULL);
+		generate_raw_jump(Jump::Jhi, answer_true);
+
+		label_place(answer_false);
+		materialize_constant(
+			uint64_t{0}, DarwinConfig::GP_BANK, 8, element_reg);
+		materialize_constant(
+			IS_FALSE, DarwinConfig::GP_BANK, 4, type_reg);
+		generate_raw_jump(Jump::jmp, store_answer);
+		label_place(answer_true);
+		materialize_constant(
+			1, DarwinConfig::GP_BANK, 8, element_reg);
+		materialize_constant(
+			IS_TRUE, DarwinConfig::GP_BANK, 4, type_reg);
+		label_place(store_answer);
+		store_off(slot_reg, 0, element_reg, 8);
+		store_off(slot_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+			type_reg, 4);
+		generate_raw_jump(Jump::jmp, done);
+
+		label_place(slow);
+		slot.reset();
+		type.reset();
+		array.reset();
+		key.reset();
+		limit.reset();
+		element.reset();
+		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
+		frame_argument.set_value(this, std::move(frame_scratch));
+		if (!execute_value_operation(
+				ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM,
+				&frame_argument)) {
+			return false;
+		}
+		label_place(done);
+		return true;
+	};
 	auto append_packed_array = [&]() {
 		zend_tpde_packed_array_append layout;
 
@@ -878,7 +1000,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		case ZEND_MIR_OPCODE_VALUE_UNSET_DIM:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_UNSET_DIM);
 		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM);
+			return isset_packed_array();
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN_OP:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ASSIGN_OP);
 		case ZEND_MIR_OPCODE_VALUE_FE_FREE:
