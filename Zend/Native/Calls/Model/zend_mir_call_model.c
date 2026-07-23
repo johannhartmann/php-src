@@ -330,6 +330,7 @@ static bool zend_mir_w05_is_call_init(uint32_t opcode)
 		case ZEND_INIT_USER_CALL:
 		case ZEND_INIT_METHOD_CALL:
 		case ZEND_INIT_STATIC_METHOD_CALL:
+		case ZEND_INIT_PARENT_PROPERTY_HOOK_CALL:
 		case ZEND_NEW:
 			return true;
 		default:
@@ -351,6 +352,7 @@ static bool zend_mir_w05_is_call_send(uint32_t opcode)
 		case ZEND_SEND_FUNC_ARG:
 		case ZEND_SEND_VAR_NO_REF:
 		case ZEND_SEND_VAR_NO_REF_EX:
+		case ZEND_SEND_PLACEHOLDER:
 			return true;
 		default:
 			return false;
@@ -358,7 +360,8 @@ static bool zend_mir_w05_is_call_send(uint32_t opcode)
 }
 
 static bool zend_mir_w05_is_supported_send(
-	uint32_t opcode, bool w08_execution, bool w09_execution)
+	uint32_t opcode, bool w08_execution, bool w09_execution,
+	bool w10_execution)
 {
 	return opcode == ZEND_SEND_VAL || opcode == ZEND_SEND_VAL_EX
 		|| opcode == ZEND_SEND_VAR || opcode == ZEND_SEND_VAR_EX
@@ -367,14 +370,17 @@ static bool zend_mir_w05_is_supported_send(
 			|| opcode == ZEND_SEND_VAR_NO_REF_EX
 			|| opcode == ZEND_SEND_UNPACK
 			|| opcode == ZEND_SEND_ARRAY
-			|| opcode == ZEND_SEND_USER));
+			|| opcode == ZEND_SEND_USER))
+		|| (w10_execution && (opcode == ZEND_SEND_FUNC_ARG
+			|| opcode == ZEND_SEND_PLACEHOLDER));
 }
 
 static bool zend_mir_w05_is_call_finish(uint32_t opcode)
 {
 	return opcode == ZEND_DO_UCALL || opcode == ZEND_DO_FCALL
 		|| opcode == ZEND_DO_FCALL_BY_NAME || opcode == ZEND_DO_ICALL
-		|| opcode == ZEND_CALLABLE_CONVERT;
+		|| opcode == ZEND_CALLABLE_CONVERT
+		|| opcode == ZEND_CALLABLE_CONVERT_PARTIAL;
 }
 
 static zend_mir_lowering_diagnostic_code zend_mir_w05_source_sequence(
@@ -518,6 +524,8 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_source_sequence(
 									!= ZEND_INIT_METHOD_CALL
 									&& opcode.zend_opcode_number
 										!= ZEND_INIT_STATIC_METHOD_CALL
+									&& opcode.zend_opcode_number
+										!= ZEND_INIT_PARENT_PROPERTY_HOOK_CALL
 									&& opcode.zend_opcode_number != ZEND_NEW))
 						: (target.kind
 								!= ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL
@@ -549,7 +557,7 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_source_sequence(
 			if (!zend_mir_w05_is_call_send(opcode.zend_opcode_number)
 					|| !zend_mir_w05_is_supported_send(
 						opcode.zend_opcode_number,
-						w08_execution, w09_execution)
+						w08_execution, w09_execution, w10_execution)
 					|| !calls->call_argument_at(
 						calls->context, argument_id, argument)
 					|| seen_arguments[argument->id]
@@ -582,7 +590,9 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_source_sequence(
 								&& opcode.zend_opcode_number != ZEND_DO_FCALL
 								&& (!w10_execution
 									|| opcode.zend_opcode_number
-										!= ZEND_CALLABLE_CONVERT)))
+										!= ZEND_CALLABLE_CONVERT
+									&& opcode.zend_opcode_number
+										!= ZEND_CALLABLE_CONVERT_PARTIAL)))
 					: ((target.kind
 								!= ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
 							&& (!w10_execution || target.kind
@@ -598,7 +608,10 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_source_sequence(
 								&& opcode.zend_opcode_number
 									!= ZEND_DO_ICALL
 								&& opcode.zend_opcode_number
-									!= ZEND_CALLABLE_CONVERT)))
+									!= ZEND_CALLABLE_CONVERT
+								&& (!w10_execution
+									|| opcode.zend_opcode_number
+										!= ZEND_CALLABLE_CONVERT_PARTIAL))))
 					|| stack_count == 0
 					|| stack[stack_count - 1] != finish_id) {
 				result = zend_mir_w05_is_call_finish(
@@ -724,7 +737,10 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 						&& plan->arguments[index].mode
 							!= ZEND_MIR_SOURCE_CALL_ARGUMENT_NAMED
 						&& plan->arguments[index].mode
-							!= ZEND_MIR_SOURCE_CALL_ARGUMENT_UNPACK)
+							!= ZEND_MIR_SOURCE_CALL_ARGUMENT_UNPACK
+						&& (!w10_execution
+							|| plan->arguments[index].mode
+								!= ZEND_MIR_SOURCE_CALL_ARGUMENT_PLACEHOLDER))
 					: w08_execution
 					? (plan->arguments[index].mode
 							!= ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE

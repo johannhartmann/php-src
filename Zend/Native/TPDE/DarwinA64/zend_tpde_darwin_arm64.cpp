@@ -340,7 +340,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 	};
 
 	if ((mir.record.opcode >= ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS
-				&& mir.record.opcode <= ZEND_MIR_OPCODE_OBJECT_BIND_STATIC)
+				&& mir.record.opcode
+					<= ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS_DELAYED)
 			|| mir.record.opcode == ZEND_MIR_OPCODE_VALUE_TYPE_CHECK
 			|| mir.record.opcode == ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL
 			|| mir.record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME) {
@@ -697,10 +698,13 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					builder.add_arg(ValuePart{argument.send_opline_index, 4,
 						DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 					builder.add_arg(ValuePart{
-						argument.ownership
-							== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
-							? ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
-							: ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE,
+						argument.source_mode
+								== ZEND_MIR_SOURCE_CALL_ARGUMENT_PLACEHOLDER
+							? ZEND_NATIVE_CALL_ARGUMENT_PLACEHOLDER
+							: argument.ownership
+									== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
+								? ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
+								: ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE,
 						4, DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 					builder.call(ValuePart{
 						reinterpret_cast<uintptr_t>(adaptor->runtime_helper(
@@ -821,10 +825,13 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				builder.add_arg(ValuePart{argument.send_opline_index, 4,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				builder.add_arg(ValuePart{
-					argument.ownership
-						== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
-						? ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
-						: ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE,
+					argument.source_mode
+							== ZEND_MIR_SOURCE_CALL_ARGUMENT_PLACEHOLDER
+						? ZEND_NATIVE_CALL_ARGUMENT_PLACEHOLDER
+						: argument.ownership
+								== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
+							? ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
+							: ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE,
 					4, DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				builder.call(ValuePart{
 					reinterpret_cast<uintptr_t>(adaptor->runtime_helper(

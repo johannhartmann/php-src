@@ -120,7 +120,10 @@
 	X(THROW_SOURCE_ZVAL, "throw_source_zval", 130) \
 	X(VALUE_TYPE_CHECK, "value_type_check", 131) \
 	X(CALL_FRAMELESS_INTERNAL, "call_frameless_internal", 132) \
-	X(OBJECT_FETCH_CLASS_NAME, "object_fetch_class_name", 133)
+	X(OBJECT_FETCH_CLASS_NAME, "object_fetch_class_name", 133) \
+	X(OBJECT_DECLARE_FUNCTION, "object_declare_function", 134) \
+	X(OBJECT_DECLARE_CLASS, "object_declare_class", 135) \
+	X(OBJECT_DECLARE_CLASS_DELAYED, "object_declare_class_delayed", 136)
 
 #define ZEND_MIR_SCALAR_OPCODE_CATALOG(X) \
 	X(I64_ADD_NO_OVERFLOW, "i64_add_no_overflow", 10) \
@@ -173,7 +176,7 @@ typedef enum _zend_mir_opcode {
 	ZEND_MIR_W06_OPCODE_COUNT = 48,
 	ZEND_MIR_W08_OPCODE_COUNT = 54,
 	ZEND_MIR_W09_OPCODE_COUNT = 91,
-	ZEND_MIR_W10_OPCODE_COUNT = 134,
+	ZEND_MIR_W10_OPCODE_COUNT = 137,
 	ZEND_MIR_OPCODE_INVALID = -1
 } zend_mir_opcode;
 #undef ZEND_MIR_OPCODE_ENUM
@@ -244,7 +247,8 @@ static inline bool zend_mir_opcode_is_executable_value(
 			&& opcode <= ZEND_MIR_OPCODE_OBJECT_BIND_STATIC)
 		|| opcode == ZEND_MIR_OPCODE_VALUE_TYPE_CHECK
 		|| opcode == ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL
-		|| opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME;
+		|| (opcode >= ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME
+			&& opcode <= ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS_DELAYED);
 }
 
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_COUNT < UINT32_MAX,
@@ -289,7 +293,7 @@ ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS
 	== ZEND_MIR_W09_OPCODE_COUNT,
 	"object operations begin after the W09 boundary");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W10_OPCODE_COUNT
-	== ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME + 1,
+	== ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS_DELAYED + 1,
 	"W10 object operations have an additive table boundary");
 
 #endif /* ZEND_MIR_OPCODES_H */

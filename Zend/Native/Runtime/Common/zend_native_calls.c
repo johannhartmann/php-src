@@ -9,6 +9,7 @@
 #include "Zend/zend_frameless_function.h"
 #include "Zend/zend_object_handlers.h"
 #include "Zend/zend_observer.h"
+#include "Zend/zend_partial.h"
 
 #include <string.h>
 
@@ -779,6 +780,61 @@ static zend_function *zend_native_call_constructor(
 	return constructor;
 }
 
+static zend_function *zend_native_call_parent_property_hook(
+	zend_execute_data *caller, const zend_op *source_init,
+	zend_object **object_out)
+{
+	zend_class_entry *scope;
+	zend_class_entry *parent;
+	zend_property_info *property;
+	zend_property_hook_kind hook_kind;
+	zval *name;
+	zend_function *function;
+
+	*object_out = NULL;
+	scope = caller->func->common.scope;
+	if (scope == NULL || (parent = scope->parent) == NULL) {
+		zend_throw_error(NULL,
+			"Cannot use \"parent\" when current class scope has no parent");
+		return NULL;
+	}
+	if (Z_TYPE(caller->This) != IS_OBJECT
+			|| source_init->op1_type != IS_CONST
+			|| source_init->op2.num > ZEND_PROPERTY_HOOK_SET) {
+		zend_throw_error(NULL, "Malformed parent property hook call");
+		return NULL;
+	}
+	name = RT_CONSTANT(source_init, source_init->op1);
+	if (Z_TYPE_P(name) != IS_STRING) {
+		zend_throw_error(NULL, "Malformed parent property hook name");
+		return NULL;
+	}
+	property = zend_hash_find_ptr(
+		&parent->properties_info, Z_STR_P(name));
+	if (property == NULL) {
+		zend_throw_error(NULL, "Undefined property %s::$%s",
+			ZSTR_VAL(parent->name), Z_STRVAL_P(name));
+		return NULL;
+	}
+	if ((property->flags & ZEND_ACC_PRIVATE) != 0) {
+		zend_throw_error(NULL, "Cannot access private property %s::$%s",
+			ZSTR_VAL(parent->name), Z_STRVAL_P(name));
+		return NULL;
+	}
+	hook_kind = (zend_property_hook_kind) source_init->op2.num;
+	function = property->hooks != NULL
+		? property->hooks[hook_kind] : NULL;
+	if (function == NULL) {
+		function = zend_get_property_hook_trampoline(
+			property, hook_kind, Z_STR_P(name));
+	}
+	if (function == NULL) {
+		return NULL;
+	}
+	*object_out = Z_OBJ(caller->This);
+	return function;
+}
+
 static void zend_native_call_release_target(zend_execute_data *call)
 {
 	uint32_t call_info = ZEND_CALL_INFO(call);
@@ -1043,6 +1099,37 @@ void zend_native_call_begin(
 			if ((function->common.fn_flags & ZEND_ACC_STATIC) == 0) {
 				call_info |= ZEND_CALL_HAS_THIS;
 			}
+			break;
+		}
+		case ZEND_INIT_PARENT_PROPERTY_HOOK_CALL: {
+			zend_object *object = NULL;
+			zend_function *resolved =
+				zend_native_call_parent_property_hook(
+					caller, source_init, &object);
+
+			if (resolved == NULL || object == NULL) {
+				if (EG(exception) == NULL) {
+					zend_throw_error(NULL,
+						"Native parent property hook target cannot be resolved");
+				}
+				function = (zend_function *) &zend_pass_function;
+				object_or_called_scope = NULL;
+				break;
+			}
+			if (resolved != function && resolved->type == ZEND_USER_FUNCTION
+					&& (resolved->common.fn_flags
+						& ZEND_ACC_CALL_VIA_TRAMPOLINE) == 0) {
+				cell = zend_native_reentry_find(
+					zend_native_active_reentry_scope, resolved);
+				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
+						|| cell->code == NULL) {
+					zend_native_call_abort(
+						"Native parent property hook compilation failed");
+				}
+			}
+			function = resolved;
+			object_or_called_scope = object;
+			call_info |= ZEND_CALL_HAS_THIS;
 			break;
 		}
 		case ZEND_NEW: {
@@ -1400,7 +1487,8 @@ zend_native_status zend_native_call_invoke_finish_source(
 			&& opline->opcode != ZEND_DO_FCALL
 			&& opline->opcode != ZEND_DO_FCALL_BY_NAME
 			&& opline->opcode != ZEND_DO_ICALL
-			&& opline->opcode != ZEND_CALLABLE_CONVERT) {
+			&& opline->opcode != ZEND_CALLABLE_CONVERT
+			&& opline->opcode != ZEND_CALLABLE_CONVERT_PARTIAL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (EG(exception) != NULL) {
@@ -1432,6 +1520,56 @@ zend_native_status zend_native_call_invoke_finish_source(
 		zend_vm_stack_free_call_frame(call);
 		caller->call = NULL;
 		return ZEND_NATIVE_RETURNED;
+	}
+	if (opline->opcode == ZEND_CALLABLE_CONVERT_PARTIAL) {
+		zend_execute_data *call = caller->call;
+		void **cache_slot;
+		zval *named_positions = NULL;
+		zend_op_array *op_array = &caller->func->op_array;
+		uint32_t call_info;
+
+		if (call == NULL || caller->run_time_cache == NULL
+				|| opline->op1.num > op_array->cache_size
+				|| 2 * sizeof(void *)
+					> op_array->cache_size - opline->op1.num) {
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		if (opline->op2_type == IS_CONST) {
+			named_positions = RT_CONSTANT(opline, opline->op2);
+			if (Z_TYPE_P(named_positions) != IS_ARRAY) {
+				return ZEND_NATIVE_EXCEPTION;
+			}
+		} else if (opline->op2_type != IS_UNUSED) {
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		cache_slot = (void **) ((char *) caller->run_time_cache
+			+ opline->op1.num);
+		call_info = ZEND_CALL_INFO(call);
+		zend_partial_create(return_value,
+			&call->This, call->func,
+			ZEND_CALL_NUM_ARGS(call), ZEND_CALL_ARG(call, 1),
+			(call_info & ZEND_CALL_HAS_EXTRA_NAMED_PARAMS) != 0
+				? call->extra_named_params : NULL,
+			named_positions != NULL ? Z_ARRVAL_P(named_positions) : NULL,
+			op_array, opline, cache_slot,
+			(opline->extended_value
+				& ZEND_FCALL_USES_VARIADIC_PLACEHOLDER) != 0);
+		if ((call_info & ZEND_CALL_HAS_EXTRA_NAMED_PARAMS) != 0) {
+			zend_array_release(call->extra_named_params);
+		}
+		if ((call->func->common.fn_flags
+				& ZEND_ACC_CALL_VIA_TRAMPOLINE) != 0) {
+			zend_free_trampoline(call->func);
+		}
+		if ((call_info & ZEND_CALL_RELEASE_THIS) != 0) {
+			OBJ_RELEASE(Z_OBJ(call->This));
+		} else if ((call_info & ZEND_CALL_CLOSURE) != 0) {
+			OBJ_RELEASE(ZEND_CLOSURE_OBJECT(call->func));
+		}
+		zend_vm_stack_free_call_frame(call);
+		caller->call = NULL;
+		return EG(exception) == NULL
+			? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
 	}
 	status = zend_native_call_invoke(caller, cell, return_value);
 	if (status == ZEND_NATIVE_EXCEPTION && EG(exception) != NULL
