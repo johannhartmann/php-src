@@ -1877,11 +1877,14 @@ static bool zend_native_assign_string_offset(
 }
 
 static zend_native_status zend_native_value_fetch_dim_impl(
-	zend_execute_data *execute_data, uint32_t source_opline_index,
-	uint8_t expected_opcode, zend_native_dim_mode mode)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id, uint8_t expected_opcode,
+	zend_native_dim_mode mode)
 {
-	const zend_op *opline = zend_native_value_opline(
-		execute_data, source_opline_index, expected_opcode);
+	zend_native_explicit_value_operation operation;
+	const zend_native_explicit_value_operation *opline = &operation;
 	zend_native_array_key key;
 	zval *container;
 	zval *offset;
@@ -1890,8 +1893,10 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 	zend_long string_offset;
 	bool write;
 
-	if (opline == NULL
-			|| (container = zend_native_value_read(execute_data, opline,
+	if (!zend_native_value_init_explicit_operation(
+			execute_data, op1, op2, result_operand, extended_value,
+			source_opcode, source_position_id, expected_opcode, &operation)
+			|| (container = zend_native_value_read_explicit(execute_data, opline,
 				opline->op1_type, opline->op1)) == NULL
 			|| (result = zend_native_value_slot(execute_data,
 				opline->result_type, opline->result)) == NULL) {
@@ -1915,7 +1920,7 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 	}
 	if (Z_TYPE_P(container) == IS_STRING) {
 		if (!write) {
-			offset = zend_native_value_read(execute_data, opline,
+			offset = zend_native_value_read_explicit(execute_data, opline,
 				opline->op2_type, opline->op2);
 			if (offset == NULL) {
 				return ZEND_NATIVE_EXCEPTION;
@@ -1927,7 +1932,7 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 			return zend_native_value_status();
 		}
 		if (opline->op2_type != IS_UNUSED) {
-			offset = zend_native_value_read(execute_data, opline,
+			offset = zend_native_value_read_explicit(execute_data, opline,
 				opline->op2_type, opline->op2);
 			if (offset == NULL
 					|| !zend_native_string_offset(
@@ -1943,7 +1948,9 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 		zend_object *object = Z_OBJ_P(container);
 		zval *returned;
 
-		offset = zend_native_value_dimension_offset(execute_data, opline);
+		offset = opline->op2_type == IS_UNUSED ? NULL
+			: zend_native_value_read_explicit(
+				execute_data, opline, opline->op2_type, opline->op2);
 		if (opline->op2_type != IS_UNUSED && offset == NULL) {
 			ZVAL_UNDEF(result);
 			return ZEND_NATIVE_EXCEPTION;
@@ -2024,7 +2031,7 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 		value = zend_hash_next_index_insert(
 			Z_ARRVAL_P(container), &EG(uninitialized_zval));
 	} else {
-		offset = zend_native_value_read(execute_data, opline,
+		offset = zend_native_value_read_explicit(execute_data, opline,
 			opline->op2_type, opline->op2);
 		if (offset == NULL || !zend_native_array_key_from_zval(offset,
 				opline->op2_type, mode != ZEND_NATIVE_DIM_UNSET, &key)) {
@@ -2063,10 +2070,14 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 
 #define ZEND_NATIVE_DIM_WRAPPER(name, opcode, mode) \
 	zend_native_status name( \
-			zend_execute_data *execute_data, uint32_t source_opline_index) \
+			zend_execute_data *execute_data, \
+			uint64_t op1, uint64_t op2, uint64_t result, \
+			uint32_t extended_value, uint32_t source_opcode, \
+			uint32_t source_position_id) \
 	{ \
 		return zend_native_value_fetch_dim_impl( \
-			execute_data, source_opline_index, opcode, mode); \
+			execute_data, op1, op2, result, extended_value, source_opcode, \
+			source_position_id, opcode, mode); \
 	}
 
 ZEND_NATIVE_DIM_WRAPPER(zend_native_value_fetch_dim_r,
