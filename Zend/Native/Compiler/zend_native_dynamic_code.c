@@ -9,15 +9,66 @@
 
 #define ZEND_NATIVE_FAKE_OP_ARRAY ((zend_op_array *) (intptr_t) -1)
 
-ZEND_TLS const zend_native_dynamic_compiler
+ZEND_TLS zend_native_dynamic_compiler
 	*zend_native_active_dynamic_compiler;
 
+void zend_native_dynamic_compiler_init(
+	zend_native_dynamic_compiler *compiler,
+	void *context,
+	zend_native_dynamic_compile_execute_t compile_execute)
+{
+	ZEND_ASSERT(compiler != NULL && compile_execute != NULL);
+	memset(compiler, 0, sizeof(*compiler));
+	compiler->context = context;
+	compiler->compile_execute = compile_execute;
+}
+
+void zend_native_dynamic_compiler_destroy(
+	zend_native_dynamic_compiler *compiler)
+{
+	uint32_t index;
+
+	ZEND_ASSERT(compiler != NULL);
+	ZEND_ASSERT(zend_native_active_dynamic_compiler != compiler);
+	for (index = compiler->owned_op_array_count; index-- > 0;) {
+		zend_op_array *op_array = compiler->owned_op_arrays[index];
+
+		zend_destroy_static_vars(op_array);
+		destroy_op_array(op_array);
+		efree_size(op_array, sizeof(zend_op_array));
+	}
+	efree(compiler->owned_op_arrays);
+	memset(compiler, 0, sizeof(*compiler));
+}
+
 void zend_native_dynamic_compiler_activate(
-	const zend_native_dynamic_compiler *compiler)
+	zend_native_dynamic_compiler *compiler)
 {
 	ZEND_ASSERT(compiler != NULL && compiler->compile_execute != NULL);
 	ZEND_ASSERT(zend_native_active_dynamic_compiler == NULL);
 	zend_native_active_dynamic_compiler = compiler;
+}
+
+static bool zend_native_dynamic_compiler_adopt(
+	zend_native_dynamic_compiler *compiler, zend_op_array *op_array)
+{
+	uint32_t old_capacity;
+	uint32_t new_capacity;
+
+	if (compiler->owned_op_array_count
+			== compiler->owned_op_array_capacity) {
+		old_capacity = compiler->owned_op_array_capacity;
+		new_capacity = old_capacity < 8 ? 8 : old_capacity * 2;
+		if (new_capacity <= old_capacity) {
+			return false;
+		}
+		compiler->owned_op_arrays = safe_erealloc(
+			compiler->owned_op_arrays, new_capacity,
+			sizeof(*compiler->owned_op_arrays), 0);
+		compiler->owned_op_array_capacity = new_capacity;
+	}
+	compiler->owned_op_arrays[compiler->owned_op_array_count++] = op_array;
+	return true;
 }
 
 void zend_native_dynamic_compiler_deactivate(
@@ -69,7 +120,7 @@ static void zend_native_dynamic_free_operand(
 zend_native_status zend_native_execute_include_or_eval(
 	zend_execute_data *execute_data, uint32_t source_opline_index)
 {
-	const zend_native_dynamic_compiler *compiler =
+	zend_native_dynamic_compiler *compiler =
 		zend_native_active_dynamic_compiler;
 	const zend_op *opline;
 	zend_op_array *new_op_array;
@@ -137,6 +188,15 @@ zend_native_status zend_native_execute_include_or_eval(
 	}
 	call->prev_execute_data = execute_data;
 	zend_init_code_execute_data(call, new_op_array, result);
+	if (!zend_native_dynamic_compiler_adopt(compiler, new_op_array)) {
+		zend_vm_stack_free_call_frame(call);
+		zend_destroy_static_vars(new_op_array);
+		destroy_op_array(new_op_array);
+		efree_size(new_op_array, sizeof(zend_op_array));
+		zend_throw_error(NULL,
+			"Native dynamic codeunit owner capacity overflow");
+		return ZEND_NATIVE_EXCEPTION;
+	}
 	status = compiler->compile_execute(compiler->context, new_op_array, call);
 	zend_vm_stack_free_call_frame(call);
 	/*
