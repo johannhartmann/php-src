@@ -33,9 +33,13 @@ struct zend_tpde_value {
 	uint64_t constant_bits;
 };
 
+struct zend_tpde_id_index_entry {
+	uint32_t id;
+	uint32_t index;
+};
+
 struct zend_tpde_instruction {
 	zend_mir_instruction_record record;
-	uint32_t operand_offset;
 	uint32_t operand_count;
 	zend_native_entry_cell *entry_cell;
 	zend_native_internal_call_cell *internal_call_cell;
@@ -219,14 +223,16 @@ struct zend_tpde_plan {
 	const zend_mir_view *view;
 	const zend_native_runtime_api *runtime;
 	zend_mir_function_record function;
-	zend_mir_block_record *blocks;
+	zend_mir_block_id *block_ids;
 	uint32_t block_count;
+	zend_tpde_id_index_entry *block_index;
+	uint32_t block_index_capacity;
 	zend_tpde_value *values;
 	uint32_t value_count;
+	zend_tpde_id_index_entry *value_index;
+	uint32_t value_index_capacity;
 	zend_tpde_instruction *instructions;
 	uint32_t instruction_count;
-	zend_mir_value_id *operands;
-	uint32_t operand_count;
 	zend_mir_call_argument_ref *call_arguments;
 	uint32_t call_argument_count;
 	_zend_native_direct_call_descriptor **direct_calls;
@@ -272,6 +278,8 @@ void zend_tpde_set_diagnostic(
 	const char *message);
 int32_t zend_tpde_value_index(
 	const zend_tpde_plan *plan, zend_mir_value_id id);
+int32_t zend_tpde_block_index(
+	const zend_tpde_plan *plan, zend_mir_block_id id);
 const zend_tpde_instruction *zend_tpde_instruction_at(
 	const zend_tpde_plan *plan, uint32_t index);
 zend_mir_value_id zend_tpde_operand_at(
