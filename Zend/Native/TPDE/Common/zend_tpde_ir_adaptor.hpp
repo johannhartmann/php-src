@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Zend/Native/TPDE/Common/zend_tpde_internal.hpp"
+#include "Zend/Native/Runtime/Common/zend_native_calls.h"
 
 #include <tpde/IRAdaptor.hpp>
 #include <tpde/ValLocalIdx.hpp>
@@ -502,14 +503,37 @@ public:
 			if (record.opcode
 					== ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
 				/*
-				 * The descriptor path enters a Zend frame, calls the returned
-				 * native entry directly, then leaves the frame. Keep the
-				 * repeated frame/context uses explicit so TPDE's reference
-				 * counts match generated code.
+				 * A proven trivial descriptor materializes each exact scalar
+				 * argument in the generated Zend frame. The remaining
+				 * descriptor path enters a Zend frame, calls the returned native
+				 * entry directly, then leaves the frame. Keep repeated
+				 * frame/context uses explicit so TPDE's reference counts match
+				 * both generated paths.
 				 */
 				uint32_t frame_use_count;
 				if (instruction.direct_call != nullptr) {
-					frame_use_count = 2;
+					if ((instruction.direct_call->flags
+							& ZEND_NATIVE_DIRECT_CALL_TRIVIAL_FRAME) != 0) {
+						for (uint32_t n = 0;
+								n < instruction.call_argument_count; ++n) {
+							zend_mir_call_argument_ref argument;
+							if (!zend_tpde_call_argument_at(plan_,
+									instruction.call_argument_offset + n,
+									&argument)) {
+								valid_ = false;
+								operands_.push_back(INVALID_VALUE_REF);
+								continue;
+							}
+							IRValueRef value = value_ref(argument.value_id);
+							if (value == INVALID_VALUE_REF) {
+								valid_ = false;
+							}
+							operands_.push_back(value);
+						}
+						frame_use_count = 7;
+					} else {
+						frame_use_count = 2;
+					}
 				} else {
 					uint32_t setter_count = instruction.operand_count == 0
 						? instruction.call_argument_count
@@ -520,7 +544,11 @@ public:
 					operands_.push_back(IRValueRef{FRAME_VALUE});
 				}
 				if (instruction.direct_call != nullptr) {
-					for (uint32_t n = 0; n < 3; ++n) {
+					const uint32_t context_use_count =
+						(instruction.direct_call->flags
+							& ZEND_NATIVE_DIRECT_CALL_TRIVIAL_FRAME) != 0
+						? 7 : 3;
+					for (uint32_t n = 0; n < context_use_count; ++n) {
 						operands_.push_back(
 							IRValueRef{EXECUTION_CONTEXT_VALUE});
 					}

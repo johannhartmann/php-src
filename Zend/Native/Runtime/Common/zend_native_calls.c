@@ -24,20 +24,6 @@ static MUTEX_T zend_native_reentry_mutex;
 #endif
 ZEND_TLS zend_native_reentry_scope *zend_native_active_reentry_scope;
 
-typedef struct _zend_native_direct_activation {
-	zend_execute_data *caller;
-	zend_execute_data *callee;
-	zend_native_entry_cell *cell;
-	const zend_native_direct_call_descriptor *descriptor;
-	struct _zend_native_direct_activation *previous;
-	zval discarded_return;
-	bool uses_discarded_return;
-	bool raw_arguments_owned;
-	bool frame_initialized;
-	bool frame_requires_finish;
-	bool cell_active;
-} zend_native_direct_activation;
-
 ZEND_TLS zend_native_direct_activation *zend_native_active_direct_call;
 
 void zend_native_execution_context_init(
@@ -49,6 +35,13 @@ void zend_native_execution_context_init(
 	context->vm_stack_end = &EG(vm_stack_end);
 	context->current_execute_data = &EG(current_execute_data);
 	context->active_direct_call = (void **) &zend_native_active_direct_call;
+	context->vm_interrupt = &EG(vm_interrupt);
+	context->exception = &EG(exception);
+#ifdef ZEND_CHECK_STACK_LIMIT
+	context->stack_limit = &EG(stack_limit);
+#else
+	context->stack_limit = NULL;
+#endif
 	context->observers_enabled = ZEND_OBSERVER_ENABLED;
 }
 
@@ -1752,6 +1745,7 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 			|| cell == NULL || descriptor == NULL
 			|| caller->call != NULL || cell->state != ZEND_NATIVE_ENTRY_READY
 			|| cell->code == NULL || cell->function == NULL
+			|| cell->function != descriptor->expected_function
 			|| !ZEND_USER_CODE(cell->function->type)
 			|| descriptor->argument_count > ZEND_MIR_ID_MAX
 			|| descriptor->source_position >= caller->func->op_array.last) {
