@@ -1,5 +1,5 @@
 --TEST--
-Native MIR W11 reserves static and dynamically declared generator codeunits
+Native MIR W11 leaves unselected generator codeunits unseen
 --SKIPIF--
 <?php
 if (!function_exists('native_mir_test_compile_execute')) {
@@ -37,4 +37,4 @@ printf(
 );
 ?>
 --EXPECT--
-accepted return=42 units=5 reserved=2 vm=0 execute_ex=0 handler=0
+accepted return=42 units=2 reserved=0 vm=0 execute_ex=0 handler=0
