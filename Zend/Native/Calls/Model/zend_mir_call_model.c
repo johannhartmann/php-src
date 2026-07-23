@@ -503,7 +503,9 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_source_sequence(
 							== ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER
 							? (!w10_execution
 								|| (opcode.zend_opcode_number
-									!= ZEND_INIT_FCALL_BY_NAME
+									!= ZEND_INIT_FCALL
+									&& opcode.zend_opcode_number
+										!= ZEND_INIT_FCALL_BY_NAME
 									&& opcode.zend_opcode_number
 										!= ZEND_INIT_NS_FCALL_BY_NAME
 									&& opcode.zend_opcode_number

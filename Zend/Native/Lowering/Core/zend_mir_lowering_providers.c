@@ -892,8 +892,12 @@ static bool zend_mir_w03_prepare_logic(
 					opcode.zend_opcode_number)
 				|| opcode.zend_opcode_number == ZEND_COALESCE
 				|| opcode.zend_opcode_number == ZEND_JMP_SET
+				|| opcode.zend_opcode_number == ZEND_CATCH
+				|| opcode.zend_opcode_number == ZEND_FAST_CALL
+				|| opcode.zend_opcode_number == ZEND_FAST_RET
 				|| (integration->w10
-					&& opcode.zend_opcode_number == ZEND_JMP_NULL));
+					&& (opcode.zend_opcode_number == ZEND_JMP_NULL
+						|| opcode.zend_opcode_number == ZEND_THROW)));
 		if ((!w09_executable && !source_zval_return
 				&& !zend_mir_w03_add_logic_binding(
 					integration, &opcode.op1))
