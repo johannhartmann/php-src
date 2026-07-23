@@ -522,6 +522,10 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			}
 		}
 		auto slow = text_writer.label_create();
+		auto packed = text_writer.label_create();
+		auto mixed_loop = text_writer.label_create();
+		auto mixed_next = text_writer.label_create();
+		auto found = text_writer.label_create();
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
@@ -554,12 +558,6 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(CMP32ri, type_reg, IS_ARRAY);
 		generate_raw_jump(Jump::jne, slow);
 		ASM(MOV64rm, array_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
-		ASM(MOV32rm, type_reg,
-			FE_MEM(array_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(HashTable, u))));
-		ASM(AND32ri, type_reg, HASH_FLAG_PACKED);
-		ASM(TEST32rr, type_reg, type_reg);
-		generate_raw_jump(Jump::je, slow);
 
 		ASM(MOV64rr, slot_reg, frame_reg);
 		ASM(ADD64ri, slot_reg, static_cast<int32_t>(layout.key_offset));
@@ -569,6 +567,58 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(CMP32ri, type_reg, IS_LONG);
 		generate_raw_jump(Jump::jne, slow);
 		ASM(MOV64rm, key_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
+
+		ASM(MOV64rr, slot_reg, frame_reg);
+		ASM(ADD64ri, slot_reg,
+			static_cast<int32_t>(layout.result_offset));
+		ASM(MOV32rm, limit_reg,
+			FE_MEM(slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		ASM(CMP32ri, limit_reg, IS_UNDEF);
+		generate_raw_jump(Jump::jne, slow);
+
+		ASM(MOV32rm, type_reg,
+			FE_MEM(array_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(HashTable, u))));
+		ASM(AND32ri, type_reg, HASH_FLAG_PACKED);
+		ASM(TEST32rr, type_reg, type_reg);
+		generate_raw_jump(Jump::jne, packed);
+
+		ASM(MOV64rm, element_reg,
+			FE_MEM(array_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(HashTable, arData))));
+		ASM(MOV32rm, limit_reg,
+			FE_MEM(array_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(HashTable, nTableMask))));
+		ASM(MOV32rr, type_reg, key_reg);
+		ASM(OR32rr, type_reg, limit_reg);
+		ASM(MOVSXr64r32, type_reg, type_reg);
+		ASM(MOV32rm, limit_reg,
+			FE_MEM(element_reg, 4, type_reg, 0));
+		label_place(mixed_loop);
+		ASM(CMP32ri, limit_reg, HT_INVALID_IDX);
+		generate_raw_jump(Jump::je, slow);
+		ASM(MOV64rr, slot_reg, limit_reg);
+		ASM(SHL64ri, slot_reg, 5);
+		ASM(ADD64rr, slot_reg, element_reg);
+		ASM(MOV64rm, type_reg,
+			FE_MEM(slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(Bucket, h))));
+		ASM(CMP64rr, type_reg, key_reg);
+		generate_raw_jump(Jump::jne, mixed_next);
+		ASM(MOV64rm, type_reg,
+			FE_MEM(slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(Bucket, key))));
+		ASM(TEST64rr, type_reg, type_reg);
+		generate_raw_jump(Jump::je, found);
+		label_place(mixed_next);
+		ASM(MOV32rm, limit_reg,
+			FE_MEM(slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(Bucket, val) + offsetof(zval, u2.next))));
+		generate_raw_jump(Jump::jmp, mixed_loop);
+
+		label_place(packed);
 		ASM(MOV32rm, limit_reg,
 			FE_MEM(array_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(HashTable, nNumUsed))));
@@ -580,6 +630,9 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				static_cast<int32_t>(offsetof(HashTable, arPacked))));
 		ASM(SHL64ri, key_reg, 4);
 		ASM(ADD64rr, element_reg, key_reg);
+		ASM(MOV64rr, slot_reg, element_reg);
+		label_place(found);
+		ASM(MOV64rr, element_reg, slot_reg);
 		ASM(MOV32rm, type_reg,
 			FE_MEM(element_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(zval, u1.type_info))));
@@ -589,11 +642,6 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(MOV64rr, slot_reg, frame_reg);
 		ASM(ADD64ri, slot_reg,
 			static_cast<int32_t>(layout.result_offset));
-		ASM(MOV32rm, limit_reg,
-			FE_MEM(slot_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))));
-		ASM(CMP32ri, limit_reg, IS_UNDEF);
-		generate_raw_jump(Jump::jne, slow);
 		ASM(MOV64rm, low_word_reg,
 			FE_MEM(element_reg, 0, FE_NOREG, 0));
 		ASM(MOV64rm, high_word_reg,

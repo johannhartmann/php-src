@@ -49,6 +49,26 @@ function array_case($values, $key)
 PHP,
         [['first', 'native', 'last'], 1],
     ],
+    'mixed_read_scalar' => [
+        <<<'PHP'
+<?php
+function array_case($values, $key)
+{
+    return $values[$key];
+}
+PHP,
+        [[10 => 1, 'shape' => 'mixed', 42 => 42], 42],
+    ],
+    'mixed_read_collision_refcounted' => [
+        <<<'PHP'
+<?php
+function array_case($values, $key)
+{
+    return $values[$key];
+}
+PHP,
+        [[0 => 'zero', 8 => 'eight', 'shape' => 1], 0],
+    ],
     'packed_isset_present' => [
         <<<'PHP'
 <?php
@@ -209,6 +229,8 @@ literal accepted returned return={"0":1,"1":2,"name":"native"} vm=0 execute_ex=0
 read accepted returned return=42 vm=0 execute_ex=0 handler=0
 packed_read_scalar accepted returned return=42 vm=0 execute_ex=0 handler=0
 packed_read_refcounted accepted returned return="native" vm=0 execute_ex=0 handler=0
+mixed_read_scalar accepted returned return=42 vm=0 execute_ex=0 handler=0
+mixed_read_collision_refcounted accepted returned return="zero" vm=0 execute_ex=0 handler=0
 packed_isset_present accepted returned return=true vm=0 execute_ex=0 handler=0
 packed_isset_missing accepted returned return=false vm=0 execute_ex=0 handler=0
 packed_isset_null accepted returned return=false vm=0 execute_ex=0 handler=0
