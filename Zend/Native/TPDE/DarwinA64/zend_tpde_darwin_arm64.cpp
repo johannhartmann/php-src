@@ -344,7 +344,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					<= ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS_DELAYED)
 			|| (mir.record.opcode >= ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
 				&& mir.record.opcode
-					<= ZEND_MIR_OPCODE_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT)
+					<= ZEND_MIR_OPCODE_DYNAMIC_INCLUDE_OR_EVAL)
 			|| mir.record.opcode == ZEND_MIR_OPCODE_VALUE_TYPE_CHECK
 			|| mir.record.opcode == ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL
 			|| mir.record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME) {

@@ -396,7 +396,7 @@ void zend_native_entry_cell_init(
 zend_result zend_native_entry_cell_begin_compile(zend_native_entry_cell *cell)
 {
 	if (cell == NULL || cell->function == NULL
-			|| cell->function->type != ZEND_USER_FUNCTION
+			|| !ZEND_USER_CODE(cell->function->type)
 			|| cell->state != ZEND_NATIVE_ENTRY_UNCOMPILED) {
 		return FAILURE;
 	}
@@ -454,7 +454,7 @@ zend_result zend_native_frame_prepare(zend_execute_data *execute_data)
 	uint32_t ordinal;
 
 	if (execute_data == NULL || execute_data->func == NULL
-			|| execute_data->func->type != ZEND_USER_FUNCTION) {
+			|| !ZEND_USER_CODE(execute_data->func->type)) {
 		return FAILURE;
 	}
 	op_array = &execute_data->func->op_array;

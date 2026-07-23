@@ -2,6 +2,7 @@
 
 #include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 
+#include "Zend/Native/Compiler/zend_native_dynamic_code.h"
 #include "Zend/Native/Runtime/Common/zend_native_bindings.h"
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
 #include "Zend/Native/Runtime/Common/zend_native_objects.h"
@@ -296,6 +297,9 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT,
 		ZEND_NATIVE_RUNTIME_EFFECT_ALL,
 		(const void *) zend_native_dynamic_declare_attributed_constant},
+	{ZEND_NATIVE_HELPER_DYNAMIC_INCLUDE_OR_EVAL,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_include_or_eval},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
