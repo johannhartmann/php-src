@@ -67,7 +67,7 @@ zend_result zend_native_internal_call_begin(
 	uint32_t index;
 
 	if (caller == NULL || caller->call != NULL || caller->func == NULL
-			|| caller->func->type != ZEND_USER_FUNCTION
+			|| !ZEND_USER_CODE(caller->func->type)
 			|| cell == NULL || cell->function == NULL
 			|| cell->function->type != ZEND_INTERNAL_FUNCTION
 			|| source_opline_index >= caller->func->op_array.last) {
@@ -176,7 +176,7 @@ static zval *zend_native_source_argument(
 
 	if (mutable_value == NULL || operand_type == NULL
 			|| caller == NULL || caller->func == NULL
-			|| caller->func->type != ZEND_USER_FUNCTION
+			|| !ZEND_USER_CODE(caller->func->type)
 			|| send_opline_index >= caller->func->op_array.last) {
 		return NULL;
 	}
@@ -699,7 +699,7 @@ zend_result zend_native_call_set_source_argument(
 	zval *value;
 
 	if (EG(exception) != NULL || caller == NULL || caller->func == NULL
-			|| caller->func->type != ZEND_USER_FUNCTION
+			|| !ZEND_USER_CODE(caller->func->type)
 			|| caller->call == NULL
 			|| send_opline_index >= caller->func->op_array.last
 			|| mode > ZEND_NATIVE_CALL_ARGUMENT_PLACEHOLDER) {
@@ -1012,7 +1012,7 @@ zend_native_status zend_native_internal_call_invoke_finish_source(
 	zend_native_status status;
 
 	if (caller == NULL || caller->func == NULL
-			|| caller->func->type != ZEND_USER_FUNCTION
+			|| !ZEND_USER_CODE(caller->func->type)
 			|| do_opline_index >= caller->func->op_array.last) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -1062,7 +1062,7 @@ uint64_t zend_native_call_read_source_scalar(
 	bool matches = false;
 
 	if (caller == NULL || caller->func == NULL
-			|| caller->func->type != ZEND_USER_FUNCTION
+			|| !ZEND_USER_CODE(caller->func->type)
 			|| do_opline_index >= caller->func->op_array.last) {
 		goto mismatch;
 	}
@@ -1248,7 +1248,7 @@ zend_native_status zend_native_catch_enter(
 	uint32_t cache_offset;
 
 	if (execute_data == NULL || execute_data->func == NULL
-			|| execute_data->func->type != ZEND_USER_FUNCTION
+			|| !ZEND_USER_CODE(execute_data->func->type)
 			|| catch_opline_index >= execute_data->func->op_array.last) {
 		return ZEND_NATIVE_BAILOUT;
 	}
@@ -1317,7 +1317,7 @@ zend_native_status zend_native_finally_enter(
 	zval *fast_call;
 
 	if (execute_data == NULL || execute_data->func == NULL
-			|| execute_data->func->type != ZEND_USER_FUNCTION) {
+			|| !ZEND_USER_CODE(execute_data->func->type)) {
 		return ZEND_NATIVE_BAILOUT;
 	}
 	op_array = &execute_data->func->op_array;
@@ -1344,7 +1344,7 @@ void zend_native_finally_call(
 	zval *fast_call;
 
 	if (execute_data == NULL || execute_data->func == NULL
-			|| execute_data->func->type != ZEND_USER_FUNCTION
+			|| !ZEND_USER_CODE(execute_data->func->type)
 			|| fast_call_opline_index >= execute_data->func->op_array.last) {
 		zend_bailout();
 	}
@@ -1370,7 +1370,7 @@ uint32_t zend_native_finally_return(
 	uint32_t index;
 
 	if (execute_data == NULL || execute_data->func == NULL
-			|| execute_data->func->type != ZEND_USER_FUNCTION
+			|| !ZEND_USER_CODE(execute_data->func->type)
 			|| fast_ret_opline_index >= execute_data->func->op_array.last) {
 		return UINT32_MAX;
 	}
@@ -1421,7 +1421,7 @@ void zend_native_interrupt_poll(
 	zend_execute_data *execute_data, uint32_t source_opline_index)
 {
 	if (execute_data == NULL || execute_data->func == NULL
-			|| execute_data->func->type != ZEND_USER_FUNCTION
+			|| !ZEND_USER_CODE(execute_data->func->type)
 			|| source_opline_index >= execute_data->func->op_array.last) {
 		zend_throw_error(NULL, "Invalid native interrupt source position");
 		zend_bailout();
