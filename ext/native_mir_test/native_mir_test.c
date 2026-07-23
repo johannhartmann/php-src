@@ -3764,18 +3764,13 @@ static zend_native_status native_mir_test_execute_frame(
 	return status;
 }
 
-static zend_native_status native_mir_test_dynamic_compile_execute(
+static zend_result native_mir_test_dynamic_compile(
 	void *context,
-	zend_op_array *op_array,
-	zend_execute_data *execute_data)
+	zend_op_array *op_array)
 {
 	native_mir_test_state *state = context;
 	zend_native_entry_cell *entry_cell;
-	zend_native_diagnostic diagnostic;
-	zend_native_status status;
-	zend_execute_data *previous;
 
-	memset(&diagnostic, 0, sizeof(diagnostic));
 	entry_cell = native_mir_test_resolve_reentry_target(
 		state, (zend_function *) op_array);
 	if (entry_cell == NULL || entry_cell->state != ZEND_NATIVE_ENTRY_READY
@@ -3789,18 +3784,10 @@ static zend_native_status native_mir_test_dynamic_compile_execute(
 				"Native compilation failed for dynamically created code: %s",
 				detail);
 		}
-		return ZEND_NATIVE_EXCEPTION;
+		return FAILURE;
 	}
-	previous = EG(current_execute_data);
-	EG(current_execute_data) = execute_data;
-	status = zend_native_execute_frame(
-		entry_cell->code, execute_data, &diagnostic);
-	EG(current_execute_data) = previous;
-	if (status != ZEND_NATIVE_RETURNED) {
-		native_mir_test_backend_failure(
-			state, NATIVE_MIR_TEST_PHASE_EXECUTE, &diagnostic);
-	}
-	return status;
+	return zend_native_dynamic_compiler_publish(
+		&state->dynamic_compiler, op_array, entry_cell);
 }
 
 static bool native_mir_test_execute_module(
@@ -3859,7 +3846,7 @@ static bool native_mir_test_execute_module(
 	if (state->wave >= 11) {
 		zend_native_dynamic_compiler_init(
 			&state->dynamic_compiler, state,
-			native_mir_test_dynamic_compile_execute);
+			native_mir_test_dynamic_compile);
 		zend_native_dynamic_compiler_activate(&state->dynamic_compiler);
 		state->dynamic_compiler_active = true;
 	}
