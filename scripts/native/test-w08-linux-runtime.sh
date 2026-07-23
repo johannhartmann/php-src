@@ -5,7 +5,7 @@ IFS=$'\n\t'
 
 usage() {
     cat <<'EOF'
-Exercise the W08-W09 runtime through a real Linux FPM request and a separate
+Exercise the W08-W10 runtime through a real Linux FPM request and a separate
 native timeout process.
 
 Usage: test-w08-linux-runtime.sh --candidate PHP --fpm PHP_FPM
@@ -72,7 +72,7 @@ response=$work/response.txt
 
 dump_failure() {
 	local status=$?
-	printf 'W08-W09 Linux runtime test failed at line %s: %s\n' \
+	printf 'W08-W10 Linux runtime test failed at line %s: %s\n' \
 		"${BASH_LINENO[0]}" "$BASH_COMMAND" >&2
 	for artifact in "$response" "$work/fpm.log" "$work/fpm-error.log"; do
 		if [[ -s $artifact ]]; then
@@ -102,7 +102,7 @@ display_errors=1
 log_errors=0
 zend_test.observer.enabled=1
 zend_test.observer.show_output=1
-zend_test.observer.observe_function_names=native_fpm_outer,native_fpm_inner,w09_fpm_outer,w09_fpm_collect,w09_fpm_map,w09_fpm_ref,intdiv,strcmp,array_map
+zend_test.observer.observe_function_names=native_fpm_outer,native_fpm_inner,w09_fpm_outer,w09_fpm_collect,w09_fpm_map,w09_fpm_ref,w10_fpm_outer,w10_fpm_loaded_callback,W10FpmObject::__construct,W10FpmObject::__get,W10FpmObject::__set,W10FpmObject::__destruct,W10FpmTrait::compute,intdiv,strcmp,array_map
 zend_test.observer.show_return_value=0
 zend_test.observer.execute_internal=1
 EOF
@@ -214,6 +214,73 @@ printf(
     $w09['execution']['execute_ex_calls'],
     $w09['execution']['opline_handler_calls'],
 );
+
+class W10FpmLoadedBase {
+    protected int $base = 30;
+    public function base(): int { return $this->base; }
+}
+function w10_fpm_loaded_callback(int $value): int { return $value + 1; }
+
+$w10Source = <<<'NATIVE_PHP'
+<?php
+interface W10FpmContract { public function compute(int $value): int; }
+trait W10FpmTrait {
+    public function compute(int $value): int { return $this->base() + $value; }
+}
+class W10FpmObject extends W10FpmLoadedBase implements W10FpmContract {
+    use W10FpmTrait;
+    private array $values = [];
+    public static int $destructed = 0;
+    public function __construct(public readonly int $offset) {}
+    public function __get(string $name): mixed { return $this->values[$name] ?? null; }
+    public function __set(string $name, mixed $value): void { $this->values[$name] = $value; }
+    public function __destruct() {
+        self::$destructed = w10_fpm_loaded_callback(self::$destructed);
+    }
+}
+function w10_fpm_outer(): int {
+    W10FpmObject::$destructed = 39;
+    $class = 'W10FpmObject';
+    $object = new $class(10);
+    $object->answer = 40;
+    $captured = 1;
+    $callback = function(int $value) use (&$captured, $object): int {
+        $captured++;
+        $method = 'compute';
+        return $object->$method($value) + $captured;
+    };
+    $mapped = array_map($callback, [8]);
+    try {
+        throw new RuntimeException('fpm');
+    } catch (RuntimeException $error) {
+        $value = $error->getMessage() === 'fpm'
+            ? $mapped[0] + $object->answer - 40
+            : 0;
+    } finally {
+        $value += 2;
+    }
+    unset($object, $callback);
+    gc_collect_cycles();
+    return $value + W10FpmObject::$destructed - 40;
+}
+NATIVE_PHP;
+
+$w10 = native_mir_test_compile_execute(
+    $w10Source,
+    'w10-fpm-native.php',
+    [],
+    ['wave' => 10, 'function' => 'w10_fpm_outer', 'repeat' => 10],
+);
+printf(
+    "w10=%s execution=%s return=%s runs=%d vm=%d execute_ex=%d handler=%d\n",
+    $w10['status'],
+    $w10['execution']['status'],
+    json_encode($w10['execution']['return_value']),
+    $w10['execution']['executions'],
+    $w10['execution']['vm_handler_calls'],
+    $w10['execution']['execute_ex_calls'],
+    $w10['execution']['opline_handler_calls'],
+);
 PHP
 
 "$fpm" -F -y "$fpm_config" -c "$php_ini" >"$work/fpm.log" 2>&1 &
@@ -250,11 +317,17 @@ grep -F '<w09_fpm_collect>' "$response" >/dev/null
 grep -F '<w09_fpm_map>' "$response" >/dev/null
 grep -F '<w09_fpm_ref>' "$response" >/dev/null
 grep -F '<array_map>' "$response" >/dev/null
+grep -F '<w10_fpm_outer>' "$response" >/dev/null
+grep -F '<w10_fpm_loaded_callback>' "$response" >/dev/null
+grep -F '<W10FpmObject::__destruct>' "$response" >/dev/null
 grep -F \
     'accepted=accepted execution=returned return=42 exception=0 bailout=0 vm=0 execute_ex=0 handler=0' \
     "$response" >/dev/null
 grep -F \
     'w09=accepted execution=returned return=[{"numbers":[1,2,3],"stable":"source"},{"numbers":{"0":2,"1":4,"2":6,"3":7,"4":"named","tail":"unpacked"},"stable":"source"},{"0":2,"1":4,"2":6,"3":7,"4":"named","tail":"unpacked"},["mapped-a","mapped-b"],["catch","finally"],"A2B4C6D",[0,1,2]] runs=10 vm=0 execute_ex=0 handler=0' \
+    "$response" >/dev/null
+grep -F \
+    'w10=accepted execution=returned return=42 runs=10 vm=0 execute_ex=0 handler=0' \
     "$response" >/dev/null
 
 timeout_source=$work/timeout.php
@@ -306,4 +379,4 @@ grep -F \
     'status=error execution=bailout exception=0 bailout=1 vm=0 execute_ex=0 handler=0' \
     "$timeout_output" >/dev/null
 
-printf 'PASS real_fpm=1 w09_values=1 internal_calls=4 exception_caught=2 observer=1 timeout_process=1 vm_dispatch=0\n'
+printf 'PASS real_fpm=1 w09_values=1 w10_objects_callables=1 internal_calls=4 exception_caught=3 observer=1 timeout_process=1 vm_dispatch=0\n'
