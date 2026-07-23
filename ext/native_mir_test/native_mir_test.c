@@ -170,6 +170,7 @@ typedef struct _native_mir_test_native_function {
 } native_mir_test_native_function;
 
 typedef struct _native_mir_test_state {
+	struct _native_mir_test_state *retained_next;
 	zend_string *source;
 	zend_string *filename;
 	zend_string *function_name;
@@ -185,9 +186,13 @@ typedef struct _native_mir_test_state {
 	bool compiler_options_saved;
 	bool ignore_user_functions;
 	uint32_t function_table_used_before;
+	uint32_t function_table_used_after_compile;
 	bool function_table_snapshot;
 	uint32_t class_table_used_before;
+	uint32_t class_table_used_after_compile;
 	bool class_table_snapshot;
+	zend_class_entry **detached_classes;
+	uint32_t detached_class_count;
 	native_mir_test_phase phase;
 	native_mir_test_status status;
 	native_mir_test_fault fault;
@@ -231,6 +236,75 @@ typedef struct _native_mir_test_state {
 } native_mir_test_state;
 
 ZEND_TLS native_mir_test_state *native_mir_test_active_state;
+ZEND_TLS native_mir_test_state *native_mir_test_retained_states;
+
+static void native_mir_test_cleanup(native_mir_test_state *state);
+
+static void native_mir_test_release_state(native_mir_test_state *state)
+{
+	native_mir_test_cleanup(state);
+	smart_str_free(&state->dump);
+	efree(state->source_opcodes);
+	efree(state->diagnostics);
+	efree(state->frame_probes);
+	efree(state);
+}
+
+static void native_mir_test_retain_state(native_mir_test_state *state)
+{
+	state->retained_next = native_mir_test_retained_states;
+	native_mir_test_retained_states = state;
+}
+
+static void native_mir_test_detach_compiled_symbols(
+	native_mir_test_state *state)
+{
+	HashTable *function_table = CG(function_table);
+	HashTable *class_table = CG(class_table);
+	uint32_t index;
+	uint32_t class_count = 0;
+
+	if (state->function_table_snapshot && function_table != NULL) {
+		index = state->function_table_used_after_compile;
+		while (index > state->function_table_used_before) {
+			Bucket *bucket = &function_table->arData[--index];
+
+			if (Z_TYPE(bucket->val) != IS_UNDEF && bucket->key != NULL) {
+				(void) zend_hash_del(function_table, bucket->key);
+			}
+		}
+		state->function_table_snapshot = false;
+	}
+	if (!state->class_table_snapshot || class_table == NULL) {
+		return;
+	}
+	for (index = state->class_table_used_before;
+			index < state->class_table_used_after_compile; index++) {
+		Bucket *bucket = &class_table->arData[index];
+
+		if (Z_TYPE(bucket->val) == IS_PTR) {
+			class_count++;
+		}
+	}
+	if (class_count != 0) {
+		state->detached_classes = safe_emalloc(
+			class_count, sizeof(*state->detached_classes), 0);
+	}
+	index = state->class_table_used_after_compile;
+	while (index > state->class_table_used_before) {
+		Bucket *bucket = &class_table->arData[--index];
+
+		if (Z_TYPE(bucket->val) == IS_PTR) {
+			zend_class_add_ref(&bucket->val);
+			state->detached_classes[state->detached_class_count++] =
+				Z_PTR(bucket->val);
+		}
+		if (Z_TYPE(bucket->val) != IS_UNDEF && bucket->key != NULL) {
+			(void) zend_hash_del(class_table, bucket->key);
+		}
+	}
+	state->class_table_snapshot = false;
+}
 
 static void native_mir_test_frame_probe_record(
 	void *context,
@@ -1727,6 +1801,10 @@ static bool native_mir_test_compile(native_mir_test_state *state)
 			"source class linking failed");
 		return false;
 	}
+	state->function_table_used_after_compile =
+		CG(function_table)->nNumUsed;
+	state->class_table_used_after_compile =
+		CG(class_table)->nNumUsed;
 	state->selected = native_mir_test_select_op_array(state);
 	if (state->selected == NULL) {
 		native_mir_test_fail(
@@ -4249,6 +4327,15 @@ static void native_mir_test_cleanup(native_mir_test_state *state)
 		state->compiled = NULL;
 		state->selected = NULL;
 	}
+	for (index = state->detached_class_count; index-- > 0;) {
+		zval class_value;
+
+		ZVAL_PTR(&class_value, state->detached_classes[index]);
+		destroy_zend_class(&class_value);
+	}
+	efree(state->detached_classes);
+	state->detached_classes = NULL;
+	state->detached_class_count = 0;
 }
 
 static void native_mir_test_build_result(
@@ -4636,12 +4723,18 @@ ZEND_FUNCTION(native_mir_test_compile_execute)
 			"native", "BAILOUT", "native execution path bailed out");
 	}
 	native_mir_test_build_result(state, return_value);
-	native_mir_test_cleanup(state);
-	smart_str_free(&state->dump);
-	efree(state->source_opcodes);
-	efree(state->diagnostics);
-	efree(state->frame_probes);
-	efree(state);
+	if (state->wave >= 11 && state->product_compiler != NULL) {
+		/*
+		 * W11 compilers are request owners. Dynamic declarations, closures,
+		 * include versions and their native entries may outlive this outer
+		 * call, so the complete owner stays alive until the executor and
+		 * compiler have released every request value.
+		 */
+		native_mir_test_detach_compiled_symbols(state);
+		native_mir_test_retain_state(state);
+	} else {
+		native_mir_test_release_state(state);
+	}
 }
 
 PHP_MINFO_FUNCTION(native_mir_test)
@@ -4664,15 +4757,63 @@ PHP_MSHUTDOWN_FUNCTION(native_mir_test)
 	return SUCCESS;
 }
 
+PHP_RINIT_FUNCTION(native_mir_test)
+{
+#if defined(ZTS) && defined(COMPILE_DL_NATIVE_MIR_TEST)
+	ZEND_TSRMLS_CACHE_UPDATE();
+#endif
+	native_mir_test_active_state = NULL;
+	native_mir_test_retained_states = NULL;
+	return SUCCESS;
+}
+
+PHP_RSHUTDOWN_FUNCTION(native_mir_test)
+{
+	native_mir_test_state *state = native_mir_test_retained_states;
+
+	while (state != NULL) {
+		if (state->native_result_valid) {
+			zval_ptr_dtor(&state->native_result);
+			state->native_result_valid = false;
+		}
+		state = state->retained_next;
+	}
+	native_mir_test_active_state = NULL;
+	return SUCCESS;
+}
+
+ZEND_MODULE_POST_ZEND_DEACTIVATE_D(native_mir_test)
+{
+	native_mir_test_state *state = native_mir_test_retained_states;
+
+	native_mir_test_retained_states = NULL;
+	while (state != NULL) {
+		native_mir_test_state *next = state->retained_next;
+
+		/*
+		 * Zend has already destroyed the request function and class tables.
+		 * The retained source owner now releases only its own roots and
+		 * generated code; it must not revisit those tables.
+		 */
+		state->function_table_snapshot = false;
+		state->class_table_snapshot = false;
+		native_mir_test_release_state(state);
+		state = next;
+	}
+	return SUCCESS;
+}
+
 zend_module_entry native_mir_test_module_entry = {
 	STANDARD_MODULE_HEADER,
 	"native_mir_test",
 	ext_functions,
 	PHP_MINIT(native_mir_test),
 	PHP_MSHUTDOWN(native_mir_test),
-	NULL,
-	NULL,
+	PHP_RINIT(native_mir_test),
+	PHP_RSHUTDOWN(native_mir_test),
 	PHP_MINFO(native_mir_test),
 	PHP_NATIVE_MIR_TEST_VERSION,
-	STANDARD_MODULE_PROPERTIES
+	NO_MODULE_GLOBALS,
+	ZEND_MODULE_POST_ZEND_DEACTIVATE_N(native_mir_test),
+	STANDARD_MODULE_PROPERTIES_EX
 };
