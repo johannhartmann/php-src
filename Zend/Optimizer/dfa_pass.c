@@ -38,7 +38,7 @@
 
 static zend_result zend_dfa_analyze_op_array_impl(
 		zend_op_array *op_array, zend_optimizer_ctx *ctx, zend_ssa *ssa,
-		bool allow_protected_regions)
+		bool allow_protected_regions, bool allow_indirect_variable_access)
 {
 	uint32_t build_flags;
 
@@ -52,7 +52,8 @@ static zend_result zend_dfa_analyze_op_array_impl(
 
 	zend_build_cfg(&ctx->arena, op_array, ZEND_CFG_NO_ENTRY_PREDECESSORS, &ssa->cfg);
 
-	if ((ssa->cfg.flags & ZEND_FUNC_INDIRECT_VAR_ACCESS)) {
+	if (!allow_indirect_variable_access
+			&& (ssa->cfg.flags & ZEND_FUNC_INDIRECT_VAR_ACCESS)) {
 		/* TODO: we can't analyze functions with indirect variable access ??? */
 		return FAILURE;
 	}
@@ -98,6 +99,30 @@ static zend_result zend_dfa_analyze_op_array_impl(
 
 	zend_ssa_find_sccs(op_array, ssa);
 
+	if (allow_indirect_variable_access) {
+		int i;
+
+		/*
+		 * Indirect variable access invalidates ordinary SSA type facts: any
+		 * symbol-table write may change every CV alias. Preserve the CFG,
+		 * def/use chains and stable SSA identities, but expose conservative
+		 * zval facts instead of running inference that assumes direct CV
+		 * ownership.
+		 */
+		ssa->var_info = zend_arena_calloc(
+			&ctx->arena, ssa->vars_count, sizeof(zend_ssa_var_info));
+		if (ssa->vars_count != 0 && ssa->var_info == NULL) {
+			return FAILURE;
+		}
+		for (i = 0; i < ssa->vars_count; i++) {
+			ssa->var_info[i].type =
+				MAY_BE_UNDEF | MAY_BE_RC1 | MAY_BE_RCN | MAY_BE_REF
+				| MAY_BE_ANY | MAY_BE_ARRAY_KEY_ANY | MAY_BE_ARRAY_OF_ANY
+				| MAY_BE_ARRAY_OF_REF;
+		}
+		return SUCCESS;
+	}
+
 	if (zend_ssa_inference(&ctx->arena, op_array, ctx->script, ssa, ctx->optimization_level) == FAILURE) {
 		return FAILURE;
 	}
@@ -116,13 +141,19 @@ static zend_result zend_dfa_analyze_op_array_impl(
 zend_result zend_dfa_analyze_op_array(
 		zend_op_array *op_array, zend_optimizer_ctx *ctx, zend_ssa *ssa)
 {
-	return zend_dfa_analyze_op_array_impl(op_array, ctx, ssa, false);
+	return zend_dfa_analyze_op_array_impl(op_array, ctx, ssa, false, false);
 }
 
 zend_result zend_dfa_analyze_op_array_with_protected_regions(
 		zend_op_array *op_array, zend_optimizer_ctx *ctx, zend_ssa *ssa)
 {
-	return zend_dfa_analyze_op_array_impl(op_array, ctx, ssa, true);
+	return zend_dfa_analyze_op_array_impl(op_array, ctx, ssa, true, false);
+}
+
+zend_result zend_dfa_analyze_op_array_with_dynamic_bindings(
+		zend_op_array *op_array, zend_optimizer_ctx *ctx, zend_ssa *ssa)
+{
+	return zend_dfa_analyze_op_array_impl(op_array, ctx, ssa, true, true);
 }
 
 static void zend_ssa_remove_nops(zend_op_array *op_array, zend_ssa *ssa, zend_optimizer_ctx *ctx)

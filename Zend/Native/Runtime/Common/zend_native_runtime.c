@@ -2,6 +2,7 @@
 
 #include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 
+#include "Zend/Native/Runtime/Common/zend_native_bindings.h"
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
 #include "Zend/Native/Runtime/Common/zend_native_objects.h"
 #include "Zend/Native/Runtime/Common/zend_native_values.h"
@@ -266,6 +267,35 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_OBJECT_DECLARE_CLASS_DELAYED,
 		ZEND_NATIVE_RUNTIME_EFFECT_ALL,
 		(const void *) zend_native_execute_object_declare_class_delayed},
+	{ZEND_NATIVE_HELPER_DYNAMIC_FETCH_R, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_dynamic_fetch_r},
+	{ZEND_NATIVE_HELPER_DYNAMIC_FETCH_W, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_dynamic_fetch_w},
+	{ZEND_NATIVE_HELPER_DYNAMIC_FETCH_RW, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_dynamic_fetch_rw},
+	{ZEND_NATIVE_HELPER_DYNAMIC_FETCH_IS, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_dynamic_fetch_is},
+	{ZEND_NATIVE_HELPER_DYNAMIC_FETCH_FUNC_ARG, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_dynamic_fetch_func_arg},
+	{ZEND_NATIVE_HELPER_DYNAMIC_FETCH_UNSET, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_dynamic_fetch_unset},
+	{ZEND_NATIVE_HELPER_DYNAMIC_UNSET_VAR, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_dynamic_unset_var},
+	{ZEND_NATIVE_HELPER_DYNAMIC_ISSET_ISEMPTY_VAR,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_dynamic_isset_isempty_var},
+	{ZEND_NATIVE_HELPER_DYNAMIC_BIND_GLOBAL, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_dynamic_bind_global},
+	{ZEND_NATIVE_HELPER_DYNAMIC_FETCH_GLOBALS, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_dynamic_fetch_globals},
+	{ZEND_NATIVE_HELPER_DYNAMIC_FETCH_CONSTANT, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_dynamic_fetch_constant},
+	{ZEND_NATIVE_HELPER_DYNAMIC_DECLARE_CONSTANT,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_dynamic_declare_constant},
+	{ZEND_NATIVE_HELPER_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_dynamic_declare_attributed_constant},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
@@ -277,7 +307,8 @@ static const zend_native_runtime_api zend_native_runtime = {
 		| ZEND_NATIVE_RUNTIME_CAP_OBSERVER
 		| ZEND_NATIVE_RUNTIME_CAP_INTERRUPT
 		| ZEND_NATIVE_RUNTIME_CAP_BAILOUT_BOUNDARY
-		| ZEND_NATIVE_RUNTIME_CAP_OBJECT_OPERATION,
+		| ZEND_NATIVE_RUNTIME_CAP_OBJECT_OPERATION
+		| ZEND_NATIVE_RUNTIME_CAP_DYNAMIC_BINDING,
 	zend_native_runtime_helpers,
 	(uint32_t) (sizeof(zend_native_runtime_helpers)
 		/ sizeof(zend_native_runtime_helpers[0])),

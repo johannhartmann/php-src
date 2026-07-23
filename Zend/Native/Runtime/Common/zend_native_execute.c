@@ -43,6 +43,11 @@ static void zend_native_execution_cleanup_frame(zend_execute_data *execute_data)
 		ZEND_DEL_CALL_FLAG(execute_data, ZEND_CALL_HAS_EXTRA_NAMED_PARAMS);
 	}
 	zend_free_compiled_variables(execute_data);
+	if ((ZEND_CALL_INFO(execute_data) & ZEND_CALL_HAS_SYMBOL_TABLE) != 0) {
+		zend_clean_and_cache_symbol_table(execute_data->symbol_table);
+		execute_data->symbol_table = NULL;
+		ZEND_DEL_CALL_FLAG(execute_data, ZEND_CALL_HAS_SYMBOL_TABLE);
+	}
 }
 
 static void zend_native_execution_diagnostic(

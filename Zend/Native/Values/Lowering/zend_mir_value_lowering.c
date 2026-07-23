@@ -211,6 +211,32 @@ static zend_mir_opcode zend_mir_w09_executable_opcode(uint32_t opcode)
 			return ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS;
 		case ZEND_DECLARE_CLASS_DELAYED:
 			return ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS_DELAYED;
+		case ZEND_FETCH_R:
+			return ZEND_MIR_OPCODE_DYNAMIC_FETCH_R;
+		case ZEND_FETCH_W:
+			return ZEND_MIR_OPCODE_DYNAMIC_FETCH_W;
+		case ZEND_FETCH_RW:
+			return ZEND_MIR_OPCODE_DYNAMIC_FETCH_RW;
+		case ZEND_FETCH_IS:
+			return ZEND_MIR_OPCODE_DYNAMIC_FETCH_IS;
+		case ZEND_FETCH_FUNC_ARG:
+			return ZEND_MIR_OPCODE_DYNAMIC_FETCH_FUNC_ARG;
+		case ZEND_FETCH_UNSET:
+			return ZEND_MIR_OPCODE_DYNAMIC_FETCH_UNSET;
+		case ZEND_UNSET_VAR:
+			return ZEND_MIR_OPCODE_DYNAMIC_UNSET_VAR;
+		case ZEND_ISSET_ISEMPTY_VAR:
+			return ZEND_MIR_OPCODE_DYNAMIC_ISSET_ISEMPTY_VAR;
+		case ZEND_BIND_GLOBAL:
+			return ZEND_MIR_OPCODE_DYNAMIC_BIND_GLOBAL;
+		case ZEND_FETCH_GLOBALS:
+			return ZEND_MIR_OPCODE_DYNAMIC_FETCH_GLOBALS;
+		case ZEND_FETCH_CONSTANT:
+			return ZEND_MIR_OPCODE_DYNAMIC_FETCH_CONSTANT;
+		case ZEND_DECLARE_CONST:
+			return ZEND_MIR_OPCODE_DYNAMIC_DECLARE_CONSTANT;
+		case ZEND_DECLARE_ATTRIBUTED_CONST:
+			return ZEND_MIR_OPCODE_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT;
 		case ZEND_TYPE_CHECK:
 			return ZEND_MIR_OPCODE_VALUE_TYPE_CHECK;
 		case ZEND_FRAMELESS_ICALL_0:
@@ -336,6 +362,15 @@ bool zend_mir_w10_opcode_is_executable(uint32_t opcode)
 		|| zend_mir_w09_executable_opcode(opcode) != ZEND_MIR_OPCODE_INVALID;
 }
 
+bool zend_mir_w11_opcode_is_executable(uint32_t opcode)
+{
+	zend_mir_opcode mapped = zend_mir_w09_executable_opcode(opcode);
+
+	return zend_mir_w10_opcode_is_executable(opcode)
+		|| (mapped >= ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
+			&& mapped <= ZEND_MIR_OPCODE_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT);
+}
+
 static bool zend_mir_w09_add_effect(
 	zend_mir_effect_summary *summary, zend_mir_effect effect)
 {
@@ -454,6 +489,19 @@ static bool zend_mir_w09_operation_semantics(
 		case ZEND_MIR_OPCODE_OBJECT_DECLARE_FUNCTION:
 		case ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS:
 		case ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS_DELAYED:
+		case ZEND_MIR_OPCODE_DYNAMIC_FETCH_R:
+		case ZEND_MIR_OPCODE_DYNAMIC_FETCH_W:
+		case ZEND_MIR_OPCODE_DYNAMIC_FETCH_RW:
+		case ZEND_MIR_OPCODE_DYNAMIC_FETCH_IS:
+		case ZEND_MIR_OPCODE_DYNAMIC_FETCH_FUNC_ARG:
+		case ZEND_MIR_OPCODE_DYNAMIC_FETCH_UNSET:
+		case ZEND_MIR_OPCODE_DYNAMIC_UNSET_VAR:
+		case ZEND_MIR_OPCODE_DYNAMIC_ISSET_ISEMPTY_VAR:
+		case ZEND_MIR_OPCODE_DYNAMIC_BIND_GLOBAL:
+		case ZEND_MIR_OPCODE_DYNAMIC_FETCH_GLOBALS:
+		case ZEND_MIR_OPCODE_DYNAMIC_FETCH_CONSTANT:
+		case ZEND_MIR_OPCODE_DYNAMIC_DECLARE_CONSTANT:
+		case ZEND_MIR_OPCODE_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT:
 			if (!zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_ALLOCATE)
 					|| !zend_mir_w09_add_effect(
 						&summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)
@@ -640,7 +688,8 @@ bool zend_mir_w09_emit_executable_values(
 	zend_mir_module *module,
 	const zend_mir_control_flow_map *control_flow_map,
 	zend_mir_straight_line_provider_context *frame_context,
-	bool w10_execution)
+	bool w10_execution,
+	bool w11_execution)
 {
 	const zend_mir_lowering_source_view *source;
 	const zend_mir_view *view;
@@ -684,7 +733,9 @@ bool zend_mir_w09_emit_executable_values(
 
 		if (opcode == ZEND_MIR_OPCODE_INVALID
 				|| (!w10_execution
-					&& opcode >= ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS)) {
+					&& opcode >= ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS)
+				|| (!w11_execution
+					&& opcode >= ZEND_MIR_OPCODE_DYNAMIC_FETCH_R)) {
 			continue;
 		}
 		if (!source->opcode_at(source->context, index, &source_opcode)
