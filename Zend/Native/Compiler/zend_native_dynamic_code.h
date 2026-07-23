@@ -21,6 +21,7 @@ typedef struct _zend_native_dynamic_compiler {
 	uint32_t owned_op_array_count;
 	uint32_t owned_op_array_capacity;
 	zend_native_dynamic_entry *entries;
+	HashTable entries_by_op_array;
 	uint32_t entry_count;
 	uint32_t entry_capacity;
 } zend_native_dynamic_compiler;
