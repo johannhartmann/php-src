@@ -310,7 +310,7 @@ static zend_mir_lowering_status zend_mir_frontend_validate_cfg_w04(
 	const zend_op_array *op_array, const zend_ssa *ssa,
 	zend_mir_op_array_id op_array_id, zend_mir_frontend_diagnostic *diagnostic,
 	uint32_t *phi_count, uint32_t *phi_input_count,
-	bool allow_protected_regions)
+	bool allow_protected_regions, bool allow_object_type_constraints)
 {
 	uint32_t i;
 	uint32_t edges = 0;
@@ -449,8 +449,10 @@ static zend_mir_lowering_status zend_mir_frontend_validate_cfg_w04(
 			}
 			if (phi->pi >= 0
 					&& ((!phi->has_range_constraint
-							&& phi->constraint.type.ce == NULL
-							&& phi->constraint.type.type_mask == 0))) {
+							&& ((!allow_object_type_constraints
+									&& phi->constraint.type.ce != NULL)
+								|| (phi->constraint.type.ce == NULL
+									&& phi->constraint.type.type_mask == 0))))) {
 				goto unsupported_phi;
 			}
 			for (input = 0; input < phi_inputs; input++) {
@@ -697,7 +699,7 @@ static zend_mir_lowering_status zend_mir_zend_source_init_w04_impl(
 	zend_mir_zend_source_reset(source);
 	status = zend_mir_frontend_validate_cfg_w04(
 		op_array, ssa, op_array_id, diagnostic, &phis, &inputs,
-		allow_protected_regions);
+		allow_protected_regions, allow_w10_operations);
 	if (status != ZEND_MIR_LOWERING_SUCCESS
 			|| (status = zend_mir_frontend_validate_operands_w04(
 				op_array, ssa, op_array_id, diagnostic, &uses, &defs))
