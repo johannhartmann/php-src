@@ -195,6 +195,7 @@ static zend_mir_opcode zend_mir_w09_executable_opcode(uint32_t opcode)
 			return ZEND_MIR_OPCODE_STATIC_UNSET;
 		case ZEND_FETCH_CLASS:
 			return ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS;
+		case ZEND_GET_CLASS:
 		case ZEND_FETCH_CLASS_NAME:
 			return ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME;
 		case ZEND_FETCH_CLASS_CONSTANT:
