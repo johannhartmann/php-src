@@ -5,7 +5,7 @@ IFS=$'\n\t'
 
 usage() {
     cat <<'EOF'
-Exercise the W08-W10 runtime through a real Linux FPM request and a separate
+Exercise the W08-W11 runtime through repeated real Linux FPM requests and a separate
 native timeout process.
 
 Usage: test-w08-linux-runtime.sh --candidate PHP --fpm PHP_FPM
@@ -68,13 +68,16 @@ socket=$work/native-fpm.sock
 fpm_config=$work/php-fpm.conf
 php_ini=$work/php.ini
 request=$work/request.php
-response=$work/response.txt
+response_one=$work/response-1.txt
+response_two=$work/response-2.txt
+response=$response_one
 
 dump_failure() {
 	local status=$?
-	printf 'W08-W10 Linux runtime test failed at line %s: %s\n' \
+	printf 'W08-W11 Linux runtime test failed at line %s: %s\n' \
 		"${BASH_LINENO[0]}" "$BASH_COMMAND" >&2
-	for artifact in "$response" "$work/fpm.log" "$work/fpm-error.log"; do
+	for artifact in "$response_one" "$response_two" \
+			"$work/fpm.log" "$work/fpm-error.log"; do
 		if [[ -s $artifact ]]; then
 			printf '%s\n' "--- $artifact ---" >&2
 			cat "$artifact" >&2
@@ -102,10 +105,32 @@ display_errors=1
 log_errors=0
 zend_test.observer.enabled=1
 zend_test.observer.show_output=1
-zend_test.observer.observe_function_names=native_fpm_outer,native_fpm_inner,w09_fpm_outer,w09_fpm_collect,w09_fpm_map,w09_fpm_ref,w10_fpm_outer,w10_fpm_loaded_callback,W10FpmObject::__construct,W10FpmObject::__get,W10FpmObject::__set,W10FpmObject::__destruct,W10FpmTrait::compute,intdiv,strcmp,array_map
+zend_test.observer.observe_function_names=native_fpm_outer,native_fpm_inner,w09_fpm_outer,w09_fpm_collect,w09_fpm_map,w09_fpm_ref,w10_fpm_outer,w10_fpm_loaded_callback,W10FpmObject::__construct,W10FpmObject::__get,W10FpmObject::__set,W10FpmObject::__destruct,W10FpmTrait::compute,w11_fpm_outer,w11_fpm_static,W11FpmStream::stream_open,W11FpmStream::stream_read,W11FpmStream::stream_eof,W11FpmStream::stream_stat,W11FpmStream::url_stat,W11FpmRuntime::value,W11FpmChild::value,W11FpmBase::base,intdiv,strcmp,array_map
 zend_test.observer.show_return_value=0
 zend_test.observer.execute_internal=1
 EOF
+
+mkdir "$work/w11-library"
+cat >"$work/w11-library/path-unit.php" <<'PHP'
+<?php
+return 20;
+PHP
+cat >"$work/w11-library/base.php" <<'PHP'
+<?php
+class W11FpmBase {
+    public function base(): int {
+        return 40;
+    }
+}
+PHP
+cat >"$work/w11-library/child.php" <<'PHP'
+<?php
+class W11FpmChild extends W11FpmBase {
+    public function value(): int {
+        return $this->base() + 2;
+    }
+}
+PHP
 
 cat >"$request" <<'PHP'
 <?php
@@ -281,6 +306,145 @@ printf(
     $w10['execution']['execute_ex_calls'],
     $w10['execution']['opline_handler_calls'],
 );
+
+class W11FpmStream
+{
+    public $context;
+    private string $source = '';
+    private int $offset = 0;
+
+    public function stream_open(
+        string $path,
+        string $mode,
+        int $options,
+        ?string &$openedPath,
+    ): bool {
+        $this->source = '<?php return 22;';
+        $this->offset = 0;
+        $openedPath = $path;
+        return true;
+    }
+
+    public function stream_read(int $length): string
+    {
+        $chunk = substr($this->source, $this->offset, $length);
+        $this->offset += strlen($chunk);
+        return $chunk;
+    }
+
+    public function stream_eof(): bool
+    {
+        return $this->offset >= strlen($this->source);
+    }
+
+    public function stream_stat(): array
+    {
+        return ['size' => strlen($this->source)];
+    }
+
+    public function url_stat(string $path, int $flags): array
+    {
+        return ['size' => strlen('<?php return 22;')];
+    }
+
+    public function stream_set_option(
+        int $option,
+        int $argument1,
+        int $argument2,
+    ): bool {
+        return false;
+    }
+}
+
+stream_wrapper_register('w11fpm', W11FpmStream::class);
+$w11Source = <<<'NATIVE_PHP'
+<?php
+function w11_fpm_outer(string $directory): array {
+    $previous = set_include_path($directory);
+    $trace = [];
+    $first = static function (string $class) use (&$trace): void {
+        $trace[] = 'first:' . $class;
+    };
+    $second = static function (string $class) use ($directory, &$trace): void {
+        $trace[] = 'second:' . $class;
+        if ($class === 'W11FpmChild') {
+            include_once $directory . '/child.php';
+        } elseif ($class === 'W11FpmBase') {
+            include_once $directory . '/base.php';
+        }
+    };
+    spl_autoload_register($first);
+    spl_autoload_register($second);
+    try {
+        $pathValue = include 'path-unit.php';
+        $streamValue = include 'w11fpm://dynamic-unit';
+        $runtime = eval(<<<'CODE'
+interface W11FpmContract {
+    public function value(): int;
+}
+trait W11FpmTrait {
+    public function value(): int {
+        return W11_FPM_CONSTANT;
+    }
+}
+enum W11FpmEnum: int {
+    case Answer = 42;
+}
+class W11FpmRuntime implements W11FpmContract {
+    use W11FpmTrait;
+}
+const W11_FPM_CONSTANT = 42;
+function w11_fpm_static(): int {
+    static $calls = 0;
+    return ++$calls;
+}
+return [
+    (new W11FpmRuntime())->value(),
+    W11FpmEnum::Answer->value,
+    w11_fpm_static(),
+    w11_fpm_static(),
+];
+CODE);
+        $loaded = (new W11FpmChild())->value();
+        $captured = 40;
+        $closure = eval(
+            'return static function () use (&$captured): int { '
+            . 'return ++$captured; };'
+        );
+        $closureValue = $closure();
+        return [
+            $pathValue,
+            $streamValue,
+            $runtime,
+            $loaded,
+            $closureValue,
+            $trace,
+        ];
+    } finally {
+        spl_autoload_unregister($second);
+        spl_autoload_unregister($first);
+        set_include_path($previous);
+    }
+}
+NATIVE_PHP;
+
+$w11 = native_mir_test_compile_execute(
+    $w11Source,
+    'w11-fpm-native.php',
+    [__DIR__ . '/w11-library'],
+    ['wave' => 11, 'function' => 'w11_fpm_outer'],
+);
+printf(
+    "w11=%s execution=%s return=%s worker=%d vm=%d execute_ex=%d handler=%d\n",
+    $w11['status'],
+    $w11['execution']['status'],
+    json_encode($w11['execution']['return_value']),
+    getmypid(),
+    $w11['execution']['vm_handler_calls'],
+    $w11['execution']['execute_ex_calls'],
+    $w11['execution']['opline_handler_calls'],
+);
+stream_wrapper_unregister('w11fpm');
 PHP
 
 "$fpm" -F -y "$fpm_config" -c "$php_ini" >"$work/fpm.log" 2>&1 &
@@ -295,39 +459,62 @@ for _ in {1..100}; do
 done
 [[ -S $socket ]] || { printf 'PHP-FPM socket was not created\n' >&2; exit 1; }
 
-SCRIPT_FILENAME=$request \
-SCRIPT_NAME=/request.php \
-REQUEST_URI=/request.php \
-REQUEST_METHOD=GET \
-SERVER_PROTOCOL=HTTP/1.1 \
-GATEWAY_INTERFACE=CGI/1.1 \
-SERVER_SOFTWARE=native-w08-test \
-REMOTE_ADDR=127.0.0.1 \
-REMOTE_PORT=12345 \
-SERVER_ADDR=127.0.0.1 \
-SERVER_PORT=9000 \
-    cgi-fcgi -bind -connect "$socket" >"$response"
+run_fpm_request() {
+	local output=$1
 
-grep -F '<native_fpm_outer>' "$response" >/dev/null
-grep -F '<native_fpm_inner>' "$response" >/dev/null
-grep -F '<intdiv>' "$response" >/dev/null
-grep -F '<strcmp>' "$response" >/dev/null
-grep -F '<w09_fpm_outer>' "$response" >/dev/null
-grep -F '<w09_fpm_collect>' "$response" >/dev/null
-grep -F '<w09_fpm_map>' "$response" >/dev/null
-grep -F '<w09_fpm_ref>' "$response" >/dev/null
-grep -F '<array_map>' "$response" >/dev/null
-grep -F '<w10_fpm_outer>' "$response" >/dev/null
-grep -F '<w10_fpm_loaded_callback>' "$response" >/dev/null
-grep -F \
-    'accepted=accepted execution=returned return=42 exception=0 bailout=0 vm=0 execute_ex=0 handler=0' \
-    "$response" >/dev/null
-grep -F \
-    'w09=accepted execution=returned return=[{"numbers":[1,2,3],"stable":"source"},{"numbers":{"0":2,"1":4,"2":6,"3":7,"4":"named","tail":"unpacked"},"stable":"source"},{"0":2,"1":4,"2":6,"3":7,"4":"named","tail":"unpacked"},["mapped-a","mapped-b"],["catch","finally"],"A2B4C6D",[0,1,2]] runs=10 vm=0 execute_ex=0 handler=0' \
-    "$response" >/dev/null
-grep -F \
-    'w10=accepted execution=returned return=42 runs=10 vm=0 execute_ex=0 handler=0' \
-    "$response" >/dev/null
+	SCRIPT_FILENAME=$request \
+	SCRIPT_NAME=/request.php \
+	REQUEST_URI=/request.php \
+	REQUEST_METHOD=GET \
+	SERVER_PROTOCOL=HTTP/1.1 \
+	GATEWAY_INTERFACE=CGI/1.1 \
+	SERVER_SOFTWARE=native-w11-test \
+	REMOTE_ADDR=127.0.0.1 \
+	REMOTE_PORT=12345 \
+	SERVER_ADDR=127.0.0.1 \
+	SERVER_PORT=9000 \
+		cgi-fcgi -bind -connect "$socket" >"$output"
+}
+
+run_fpm_request "$response_one"
+run_fpm_request "$response_two"
+
+for response in "$response_one" "$response_two"; do
+	grep -F '<native_fpm_outer>' "$response" >/dev/null
+	grep -F '<native_fpm_inner>' "$response" >/dev/null
+	grep -F '<intdiv>' "$response" >/dev/null
+	grep -F '<strcmp>' "$response" >/dev/null
+	grep -F '<w09_fpm_outer>' "$response" >/dev/null
+	grep -F '<w09_fpm_collect>' "$response" >/dev/null
+	grep -F '<w09_fpm_map>' "$response" >/dev/null
+	grep -F '<w09_fpm_ref>' "$response" >/dev/null
+	grep -F '<array_map>' "$response" >/dev/null
+	grep -F '<w10_fpm_outer>' "$response" >/dev/null
+	grep -F '<w10_fpm_loaded_callback>' "$response" >/dev/null
+	grep -F '<w11_fpm_outer>' "$response" >/dev/null
+	grep -F '<w11_fpm_static>' "$response" >/dev/null
+	grep -F '<W11FpmStream::stream_open>' "$response" >/dev/null
+	grep -F '<W11FpmChild::value>' "$response" >/dev/null
+	grep -F \
+		'accepted=accepted execution=returned return=42 exception=0 bailout=0 vm=0 execute_ex=0 handler=0' \
+		"$response" >/dev/null
+	grep -F \
+		'w09=accepted execution=returned return=[{"numbers":[1,2,3],"stable":"source"},{"numbers":{"0":2,"1":4,"2":6,"3":7,"4":"named","tail":"unpacked"},"stable":"source"},{"0":2,"1":4,"2":6,"3":7,"4":"named","tail":"unpacked"},["mapped-a","mapped-b"],["catch","finally"],"A2B4C6D",[0,1,2]] runs=10 vm=0 execute_ex=0 handler=0' \
+		"$response" >/dev/null
+	grep -F \
+		'w10=accepted execution=returned return=42 runs=10 vm=0 execute_ex=0 handler=0' \
+		"$response" >/dev/null
+	grep -F \
+		'w11=accepted execution=returned return=[20,22,[42,42,1,2],42,41,["first:W11FpmChild","second:W11FpmChild","first:W11FpmBase","second:W11FpmBase"]]' \
+		"$response" >/dev/null
+	grep -F 'vm=0 execute_ex=0 handler=0' "$response" >/dev/null
+done
+
+worker_one=$(sed -n 's/.*w11=.* worker=\([0-9][0-9]*\) vm=.*/\1/p' \
+	"$response_one")
+worker_two=$(sed -n 's/.*w11=.* worker=\([0-9][0-9]*\) vm=.*/\1/p' \
+	"$response_two")
+[[ -n $worker_one && $worker_one == "$worker_two" ]]
 
 timeout_source=$work/timeout.php
 timeout_output=$work/timeout-output.txt
@@ -378,4 +565,4 @@ grep -F \
     'status=error execution=bailout exception=0 bailout=1 vm=0 execute_ex=0 handler=0' \
     "$timeout_output" >/dev/null
 
-printf 'PASS real_fpm=1 w09_values=1 w10_objects_callables=1 internal_calls=4 exception_caught=3 observer=1 timeout_process=1 vm_dispatch=0\n'
+printf 'PASS real_fpm=2 same_worker=1 w09_values=1 w10_objects_callables=1 w11_dynamic_code=1 w11_request_teardown=1 internal_calls=4 exception_caught=3 observer=1 timeout_process=1 vm_dispatch=0\n'

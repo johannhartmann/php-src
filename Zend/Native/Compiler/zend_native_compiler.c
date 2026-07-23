@@ -1677,7 +1677,8 @@ static bool zend_native_compiler_compile_native_component(
 			continue;
 		}
 		if (function->state
-				== ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED) {
+				== ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED
+				|| function->state == ZEND_NATIVE_CODEUNIT_FAILED) {
 			continue;
 		}
 		const zend_mir_call_view *calls =
@@ -1767,7 +1768,9 @@ static bool zend_native_compiler_compile_native_component(
 			callee = zend_native_compiler_resolve_native_target(
 				compiler, function->op_array, calls, &target);
 			native_callee = zend_native_compiler_find_function(compiler, callee);
-			if (native_callee == NULL) {
+			if (native_callee == NULL
+					|| native_callee->state
+						== ZEND_NATIVE_CODEUNIT_FAILED) {
 				goto binding_failure;
 			}
 			bindings[binding_count].target_id = target.id;
@@ -2042,6 +2045,14 @@ zend_result zend_native_compiler_compile(
 	}
 	root_function = zend_native_compiler_find_function(compiler, root);
 	if (root_function != NULL
+			&& root_function->state == ZEND_NATIVE_CODEUNIT_FAILED) {
+		zend_native_compiler_set_diagnostic(
+			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
+			ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
+			"native codeunit previously failed compilation");
+		return FAILURE;
+	}
+	if (root_function != NULL
 			&& root_function->entry_cell.state
 				== ZEND_NATIVE_ENTRY_READY) {
 		return SUCCESS;
@@ -2077,7 +2088,8 @@ zend_result zend_native_compiler_compile(
 			compiler->functions[index];
 
 		if (function->state
-				== ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED) {
+				== ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED
+				|| function->state == ZEND_NATIVE_CODEUNIT_FAILED) {
 			continue;
 		}
 		if (function->entry_cell.state == ZEND_NATIVE_ENTRY_READY) {
@@ -2304,7 +2316,8 @@ static zend_result zend_native_compiler_enter(
 			compiler->functions[index];
 
 		if (function->state
-				== ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED) {
+				== ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED
+				|| function->state == ZEND_NATIVE_CODEUNIT_FAILED) {
 			continue;
 		}
 		if (function->entry_cell.state != ZEND_NATIVE_ENTRY_READY) {
@@ -2601,7 +2614,8 @@ bool zend_native_compiler_all_code_is_wx(
 		const zend_native_code *code;
 
 		if (function->state
-				== ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED) {
+				== ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED
+				|| function->state == ZEND_NATIVE_CODEUNIT_FAILED) {
 			continue;
 		}
 		code = function->code;
