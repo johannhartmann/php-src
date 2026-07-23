@@ -245,7 +245,7 @@ void zend_mir_verify_ids(zend_mir_verify_context *context)
 				ZEND_MIR_DIAGNOSTIC_INVALID_CFG, location,
 				ZEND_MIR_ID_INVALID, "instruction references an unknown block");
 		}
-		if ((uint32_t) instruction->opcode >= ZEND_MIR_W10_OPCODE_COUNT) {
+		if ((uint32_t) instruction->opcode >= ZEND_MIR_W11_OPCODE_COUNT) {
 			zend_mir_verify_emit(context, ZEND_MIR_VERIFY_UNKNOWN_ENUM,
 				ZEND_MIR_DIAGNOSTIC_INVALID_OPCODE, location,
 				ZEND_MIR_ID_INVALID, "instruction opcode is unregistered");

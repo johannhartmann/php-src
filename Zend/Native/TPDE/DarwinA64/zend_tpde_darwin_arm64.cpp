@@ -342,16 +342,27 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 	if ((mir.record.opcode >= ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS
 				&& mir.record.opcode
 					<= ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS_DELAYED)
+			|| (mir.record.opcode >= ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
+				&& mir.record.opcode
+					<= ZEND_MIR_OPCODE_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT)
 			|| mir.record.opcode == ZEND_MIR_OPCODE_VALUE_TYPE_CHECK
 			|| mir.record.opcode == ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL
 			|| mir.record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME) {
-		return execute_value_operation(
-			static_cast<zend_native_runtime_helper_id>(
+		zend_native_runtime_helper_id helper;
+		if (mir.record.opcode >= ZEND_MIR_OPCODE_DYNAMIC_FETCH_R) {
+			helper = static_cast<zend_native_runtime_helper_id>(
+				static_cast<uint32_t>(mir.record.opcode)
+					- static_cast<uint32_t>(ZEND_MIR_OPCODE_DYNAMIC_FETCH_R)
+					+ static_cast<uint32_t>(ZEND_NATIVE_HELPER_DYNAMIC_FETCH_R));
+		} else {
+			helper = static_cast<zend_native_runtime_helper_id>(
 				static_cast<uint32_t>(mir.record.opcode)
 					- static_cast<uint32_t>(
 						ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS)
 					+ static_cast<uint32_t>(
-						ZEND_NATIVE_HELPER_OBJECT_DECLARE_ANON_CLASS)));
+						ZEND_NATIVE_HELPER_OBJECT_DECLARE_ANON_CLASS));
+		}
+		return execute_value_operation(helper);
 	}
 	switch (mir.record.opcode) {
 		case ZEND_MIR_OPCODE_VALUE_MAKE_REF:
