@@ -312,7 +312,9 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		const bool explicit_operands =
 			helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN
 			|| helper == ZEND_NATIVE_HELPER_VALUE_QM_ASSIGN
-			|| helper == ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV;
+			|| helper == ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV
+			|| (helper >= ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R
+				&& helper <= ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_UNSET);
 		if (node.operands.size() != 1
 				|| (explicit_operands
 					? !mir.has_value_operation
