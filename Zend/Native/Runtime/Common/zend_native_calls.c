@@ -28,11 +28,13 @@ typedef struct _zend_native_direct_activation {
 	zend_execute_data *caller;
 	zend_execute_data *callee;
 	zend_native_entry_cell *cell;
+	const zend_native_direct_call_descriptor *descriptor;
 	struct _zend_native_direct_activation *previous;
 	zval discarded_return;
 	bool uses_discarded_return;
 	bool raw_arguments_owned;
 	bool frame_initialized;
+	bool frame_requires_finish;
 	bool cell_active;
 } zend_native_direct_activation;
 
@@ -1669,15 +1671,71 @@ static bool zend_native_direct_scalar_payload(
 	}
 }
 
-zend_native_direct_call_result zend_native_call_direct(
+static zend_native_status zend_native_call_direct_observed_entry(
+	zend_execute_data *execute_data,
+	zend_native_execution_context *context)
+{
+	zend_native_direct_activation *activation;
+	zend_native_status status;
+
+	if (context == NULL || context->active_direct_call == NULL
+			|| (activation = (zend_native_direct_activation *)
+				*context->active_direct_call) == NULL
+			|| activation->callee != execute_data
+			|| activation->cell == NULL || activation->cell->code == NULL) {
+		zend_throw_error(NULL, "Invalid observed direct native call");
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	status = zend_native_execute_frame(
+		activation->cell->code, execute_data, NULL);
+	activation->frame_initialized = false;
+	return status;
+}
+
+static void zend_native_call_direct_release(
+	zend_native_direct_activation *activation)
+{
+	if (activation->frame_initialized) {
+		zend_native_execution_cleanup_frame(activation->callee);
+		activation->frame_initialized = false;
+	} else if (activation->raw_arguments_owned) {
+		zend_vm_stack_free_args(activation->callee);
+		activation->raw_arguments_owned = false;
+	}
+	if (activation->cell_active && activation->cell != NULL
+			&& activation->cell->active_calls != 0) {
+		activation->cell->active_calls--;
+		activation->cell_active = false;
+	}
+	if (activation->uses_discarded_return
+			&& !Z_ISUNDEF(activation->discarded_return)) {
+		zval_ptr_dtor(&activation->discarded_return);
+		ZVAL_UNDEF(&activation->discarded_return);
+	}
+	activation->caller->call = NULL;
+	EG(current_execute_data) = activation->caller;
+	zend_native_active_direct_call = activation->previous;
+	zend_vm_stack_free_call_frame(activation->callee);
+}
+
+static zend_native_status zend_native_call_direct_failed_entry(
+	zend_execute_data *execute_data,
+	zend_native_execution_context *context)
+{
+	(void) execute_data;
+	(void) context;
+	return ZEND_NATIVE_EXCEPTION;
+}
+
+zend_native_direct_call_entry zend_native_call_direct_enter(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
 	const zend_native_direct_call_descriptor *descriptor,
 	zend_native_execution_context *context)
 {
-	zend_native_direct_call_result result = {
-		.status = ZEND_NATIVE_EXCEPTION,
-		.payload = 0
+	zend_native_direct_call_entry result = {
+		.callee = caller,
+		.entry = zend_native_call_direct_failed_entry
 	};
 	zend_native_direct_activation *activation;
 	zend_execute_data *call;
@@ -1687,7 +1745,6 @@ zend_native_direct_call_result zend_native_call_direct(
 	uint32_t used_stack;
 	uint32_t activation_size;
 	uint32_t index;
-	zend_native_status status = ZEND_NATIVE_EXCEPTION;
 
 	if (caller == NULL || caller->func == NULL || context == NULL
 			|| !ZEND_USER_CODE(caller->func->type)
@@ -1733,6 +1790,7 @@ zend_native_direct_call_result zend_native_call_direct(
 	activation->caller = caller;
 	activation->callee = call;
 	activation->cell = cell;
+	activation->descriptor = descriptor;
 	activation->previous = zend_native_active_direct_call;
 	ZVAL_UNDEF(&activation->discarded_return);
 	zend_native_active_direct_call = activation;
@@ -1768,47 +1826,90 @@ zend_native_direct_call_result zend_native_call_direct(
 	cell->active_calls++;
 	activation->cell_active = true;
 	EG(current_execute_data) = call;
-	if (ZEND_OBSERVER_ENABLED) {
-		status = zend_native_execute_frame(cell->code, call, NULL);
+	if (context->observers_enabled) {
+		result.entry = zend_native_call_direct_observed_entry;
 	} else if (zend_native_frame_prepare(call) == FAILURE) {
-		status = ZEND_NATIVE_EXCEPTION;
 		zend_native_execution_cleanup_frame(call);
+		activation->frame_initialized = false;
+		goto finish;
 	} else {
-		status = entry(call, context);
-		status = zend_native_execution_finish_direct_frame(call, status);
+		activation->frame_requires_finish = true;
+		result.entry = entry;
 	}
-	EG(current_execute_data) = caller;
-	cell->active_calls--;
-	activation->cell_active = false;
-	activation->frame_initialized = false;
+	result.callee = call;
+	return result;
+
+finish:
+	zend_native_call_direct_release(activation);
+	return result;
+}
+
+zend_native_direct_call_result zend_native_call_direct_leave(
+	zend_execute_data *caller,
+	const zend_native_direct_call_descriptor *descriptor,
+	zend_native_execution_context *context,
+	zend_native_status status)
+{
+	zend_native_direct_call_result result = {
+		.status = ZEND_NATIVE_EXCEPTION,
+		.payload = 0
+	};
+	zend_native_direct_activation *activation;
+	zval *return_value;
+
+	if (caller == NULL || descriptor == NULL || context == NULL
+			|| context->active_direct_call == NULL
+			|| (activation = (zend_native_direct_activation *)
+				*context->active_direct_call) == NULL
+			|| activation->caller != caller
+			|| activation->descriptor != descriptor) {
+		if (EG(exception) == NULL) {
+			zend_throw_error(NULL, "Invalid direct native call completion");
+		}
+		return result;
+	}
+	if (activation->frame_requires_finish) {
+		status = zend_native_execution_finish_direct_frame(
+			activation->callee, status);
+		activation->frame_requires_finish = false;
+		activation->frame_initialized = false;
+	}
+	return_value = activation->uses_discarded_return
+		? &activation->discarded_return
+		: zend_native_direct_operand(
+			caller, &descriptor->result_operand, false);
 	if (status == ZEND_NATIVE_RETURNED
 			&& descriptor->result_type != ZEND_MIR_SCALAR_TYPE_NONE
-			&& !zend_native_direct_scalar_payload(
-				return_value, descriptor->result_type, &result.payload)) {
+			&& (return_value == NULL || !zend_native_direct_scalar_payload(
+				return_value, descriptor->result_type, &result.payload))) {
 		zend_throw_error(
 			NULL, "Native callee violated its exact scalar result contract");
 		status = ZEND_NATIVE_EXCEPTION;
 	}
 	result.status = status;
-
-finish:
-	if (activation->frame_initialized) {
-		zend_native_execution_cleanup_frame(call);
-		activation->frame_initialized = false;
-	} else if (activation->raw_arguments_owned) {
-		zend_vm_stack_free_args(call);
-		activation->raw_arguments_owned = false;
-	}
-	if (activation->uses_discarded_return
-			&& !Z_ISUNDEF(activation->discarded_return)) {
-		zval_ptr_dtor(&activation->discarded_return);
-		ZVAL_UNDEF(&activation->discarded_return);
-	}
-	EG(current_execute_data) = caller;
-	caller->call = NULL;
-	zend_native_active_direct_call = activation->previous;
-	zend_vm_stack_free_call_frame(call);
+	zend_native_call_direct_release(activation);
 	return result;
+}
+
+zend_native_direct_call_result zend_native_call_direct(
+	zend_execute_data *caller,
+	zend_native_entry_cell *cell,
+	const zend_native_direct_call_descriptor *descriptor,
+	zend_native_execution_context *context)
+{
+	zend_native_direct_call_entry invocation =
+		zend_native_call_direct_enter(caller, cell, descriptor, context);
+
+	if (invocation.callee == NULL || invocation.entry == NULL) {
+		zend_native_direct_call_result result = {
+			.status = ZEND_NATIVE_EXCEPTION,
+			.payload = 0
+		};
+		return result;
+	}
+	return zend_native_call_direct_leave(
+		caller, descriptor, context,
+		invocation.entry(invocation.callee, context));
 }
 
 void zend_native_call_direct_unwind(zend_execute_data *outermost)

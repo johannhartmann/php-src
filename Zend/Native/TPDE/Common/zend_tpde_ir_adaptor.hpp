@@ -502,14 +502,14 @@ public:
 			if (record.opcode
 					== ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
 				/*
-				 * The descriptor path is one call with explicit source-backed
-				 * operands and a two-register status/payload result.  The
-				 * compatibility path still exposes one frame use per helper
-				 * invocation so TPDE's reference counts match generated code.
+				 * The descriptor path enters a Zend frame, calls the returned
+				 * native entry directly, then leaves the frame. Keep the
+				 * repeated frame/context uses explicit so TPDE's reference
+				 * counts match generated code.
 				 */
 				uint32_t frame_use_count;
 				if (instruction.direct_call != nullptr) {
-					frame_use_count = 1;
+					frame_use_count = 2;
 				} else {
 					uint32_t setter_count = instruction.operand_count == 0
 						? instruction.call_argument_count
@@ -520,8 +520,10 @@ public:
 					operands_.push_back(IRValueRef{FRAME_VALUE});
 				}
 				if (instruction.direct_call != nullptr) {
-					operands_.push_back(
-						IRValueRef{EXECUTION_CONTEXT_VALUE});
+					for (uint32_t n = 0; n < 3; ++n) {
+						operands_.push_back(
+							IRValueRef{EXECUTION_CONTEXT_VALUE});
+					}
 				}
 			} else if (record.opcode
 					== ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL) {

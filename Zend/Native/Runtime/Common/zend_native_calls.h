@@ -97,6 +97,11 @@ typedef struct _zend_native_direct_call_result {
 	uint64_t payload;
 } zend_native_direct_call_result;
 
+typedef struct _zend_native_direct_call_entry {
+	zend_execute_data *callee;
+	zend_native_frame_entry_t entry;
+} zend_native_direct_call_entry;
+
 void zend_native_entry_cell_init(
 	zend_native_entry_cell *cell, zend_function *function);
 zend_result zend_native_entry_cell_begin_compile(zend_native_entry_cell *cell);
@@ -167,6 +172,16 @@ zend_native_direct_call_result zend_native_call_direct(
 	zend_native_entry_cell *cell,
 	const zend_native_direct_call_descriptor *descriptor,
 	zend_native_execution_context *context);
+zend_native_direct_call_entry zend_native_call_direct_enter(
+	zend_execute_data *caller,
+	zend_native_entry_cell *cell,
+	const zend_native_direct_call_descriptor *descriptor,
+	zend_native_execution_context *context);
+zend_native_direct_call_result zend_native_call_direct_leave(
+	zend_execute_data *caller,
+	const zend_native_direct_call_descriptor *descriptor,
+	zend_native_execution_context *context,
+	zend_native_status status);
 void zend_native_execution_context_init(
 	zend_native_execution_context *context);
 void zend_native_call_direct_unwind(zend_execute_data *outermost);
