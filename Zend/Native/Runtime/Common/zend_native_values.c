@@ -572,7 +572,8 @@ zend_native_status zend_native_value_unary_op(
 
 	if (opline == NULL || (opline->opcode != ZEND_BW_NOT
 			&& opline->opcode != ZEND_BOOL_NOT
-			&& opline->opcode != ZEND_BOOL)
+			&& opline->opcode != ZEND_BOOL
+			&& opline->opcode != ZEND_STRLEN)
 			|| opline->result_type == IS_UNUSED
 			|| (operand = zend_native_value_read_r(execute_data, opline,
 				opline->op1_type, opline->op1)) == NULL
@@ -580,7 +581,43 @@ zend_native_status zend_native_value_unary_op(
 				opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	if (opline->opcode == ZEND_BOOL) {
+	if (opline->opcode == ZEND_STRLEN) {
+		if ((opline->op1_type == IS_VAR || opline->op1_type == IS_CV)
+				&& Z_ISREF_P(operand)) {
+			operand = Z_REFVAL_P(operand);
+		}
+		if (EXPECTED(Z_TYPE_P(operand) == IS_STRING)) {
+			ZVAL_LONG(result, Z_STRLEN_P(operand));
+		} else if (!ZEND_CALL_USES_STRICT_TYPES(execute_data)) {
+			zend_string *string;
+			zval temporary;
+
+			if (UNEXPECTED(Z_TYPE_P(operand) == IS_NULL)) {
+				zend_error(E_DEPRECATED,
+					"strlen(): Passing null to parameter #1 ($string) of type string is deprecated");
+				ZVAL_LONG(result, 0);
+			} else {
+				ZVAL_COPY(&temporary, operand);
+				string = zend_parse_arg_str_weak(&temporary, 1);
+				if (string != NULL) {
+					ZVAL_LONG(result, ZSTR_LEN(string));
+				} else {
+					ZVAL_UNDEF(result);
+				}
+				zval_ptr_dtor(&temporary);
+			}
+			if (Z_ISUNDEF_P(result) && EG(exception) == NULL) {
+				zend_type_error(
+					"strlen(): Argument #1 ($string) must be of type string, %s given",
+					zend_zval_value_name(operand));
+			}
+		} else {
+			zend_type_error(
+				"strlen(): Argument #1 ($string) must be of type string, %s given",
+				zend_zval_value_name(operand));
+			ZVAL_UNDEF(result);
+		}
+	} else if (opline->opcode == ZEND_BOOL) {
 		ZVAL_BOOL(result, zend_is_true(operand));
 	} else {
 		operation = get_unary_op(opline->opcode);
