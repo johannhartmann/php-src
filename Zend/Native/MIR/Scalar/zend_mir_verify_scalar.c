@@ -431,6 +431,7 @@ static void zend_mir_scalar_verify_scope(
 			case ZEND_MIR_OPCODE_VALUE_COND_BRANCH:
 			case ZEND_MIR_OPCODE_ITERATOR_BRANCH:
 			case ZEND_MIR_OPCODE_THROW:
+			case ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL:
 			case ZEND_MIR_OPCODE_UNREACHABLE:
 				zend_mir_scalar_verify_emit(context,
 					ZEND_MIR_SCALAR_VERIFY_INVALID_SCOPE,

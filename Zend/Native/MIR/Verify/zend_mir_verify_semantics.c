@@ -164,7 +164,8 @@ static void zend_mir_verify_summary(
 			ZEND_MIR_ID_INVALID,
 			"instruction summary is not closed under W01 composition rules");
 	}
-	if (instruction->opcode == ZEND_MIR_OPCODE_THROW
+	if ((instruction->opcode == ZEND_MIR_OPCODE_THROW
+			|| instruction->opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL)
 			&& (instruction->effects
 				& ZEND_MIR_EFFECT_MASK(ZEND_MIR_EFFECT_THROW)) == 0) {
 		zend_mir_verify_emit(context, ZEND_MIR_VERIFY_INCOMPLETE_SEMANTICS,

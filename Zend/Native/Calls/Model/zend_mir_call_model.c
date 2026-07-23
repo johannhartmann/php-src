@@ -373,12 +373,13 @@ static bool zend_mir_w05_is_supported_send(
 static bool zend_mir_w05_is_call_finish(uint32_t opcode)
 {
 	return opcode == ZEND_DO_UCALL || opcode == ZEND_DO_FCALL
-		|| opcode == ZEND_DO_FCALL_BY_NAME || opcode == ZEND_DO_ICALL;
+		|| opcode == ZEND_DO_FCALL_BY_NAME || opcode == ZEND_DO_ICALL
+		|| opcode == ZEND_CALLABLE_CONVERT;
 }
 
 static zend_mir_lowering_diagnostic_code zend_mir_w05_source_sequence(
 	const zend_mir_source_call_view *calls,
-	bool w08_execution, bool w09_execution)
+	bool w08_execution, bool w09_execution, bool w10_execution)
 {
 	zend_mir_source_call_site_id *stack = NULL;
 	bool *seen_arguments = NULL;
@@ -498,6 +499,24 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_source_sequence(
 					|| (target.kind
 						== ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
 						? opcode.zend_opcode_number != ZEND_INIT_FCALL
+						: target.kind
+							== ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER
+							? (!w10_execution
+								|| (opcode.zend_opcode_number
+									!= ZEND_INIT_FCALL_BY_NAME
+									&& opcode.zend_opcode_number
+										!= ZEND_INIT_NS_FCALL_BY_NAME
+									&& opcode.zend_opcode_number
+										!= ZEND_INIT_DYNAMIC_CALL
+									&& opcode.zend_opcode_number
+										!= ZEND_INIT_USER_CALL))
+						: target.kind == ZEND_MIR_SOURCE_CALL_TARGET_METHOD
+							? (!w10_execution
+								|| (opcode.zend_opcode_number
+									!= ZEND_INIT_METHOD_CALL
+									&& opcode.zend_opcode_number
+										!= ZEND_INIT_STATIC_METHOD_CALL
+									&& opcode.zend_opcode_number != ZEND_NEW))
 						: (target.kind
 								!= ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL
 							|| !w08_execution
@@ -558,13 +577,26 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_source_sequence(
 						== ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL
 						? (!w08_execution
 							|| (opcode.zend_opcode_number != ZEND_DO_ICALL
-								&& opcode.zend_opcode_number != ZEND_DO_FCALL))
-						: (target.kind
+								&& opcode.zend_opcode_number != ZEND_DO_FCALL
+								&& (!w10_execution
+									|| opcode.zend_opcode_number
+										!= ZEND_CALLABLE_CONVERT)))
+					: ((target.kind
 								!= ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
+							&& (!w10_execution || target.kind
+								!= ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER)
+							&& (!w10_execution || target.kind
+								!= ZEND_MIR_SOURCE_CALL_TARGET_METHOD))
 							|| (opcode.zend_opcode_number
 									!= ZEND_DO_UCALL
 								&& opcode.zend_opcode_number
-									!= ZEND_DO_FCALL)))
+									!= ZEND_DO_FCALL
+								&& opcode.zend_opcode_number
+									!= ZEND_DO_FCALL_BY_NAME
+								&& opcode.zend_opcode_number
+									!= ZEND_DO_ICALL
+								&& opcode.zend_opcode_number
+									!= ZEND_CALLABLE_CONVERT)))
 					|| stack_count == 0
 					|| stack[stack_count - 1] != finish_id) {
 				result = zend_mir_w05_is_call_finish(
@@ -600,7 +632,7 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 	zend_mir_w05_plan *plan,
 	bool allow_w06_scalar_proxy,
 	bool w07_execution, bool w08_execution,
-	bool w09_execution,
+	bool w09_execution, bool w10_execution,
 	bool allow_empty_calls)
 {
 	uint32_t index;
@@ -736,11 +768,25 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 					|| resolved.parameter_modes.count != resolved.num_args) {
 				return ZEND_MIRL_W05_UNSUPPORTED_TARGET;
 			}
-		} else if (!resolver->resolve_exact_direct_user(
-				resolver->context, index, &resolved)
+		} else if (plan->targets[index].kind
+				== ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER) {
+			if (!w10_execution || !plan->targets[index].variadic
+					|| plan->targets[index].required_num_args != 0
+					|| plan->targets[index].parameter_modes.count != 0) {
+				return ZEND_MIRL_W05_UNSUPPORTED_TARGET;
+			}
+		} else if (!(plan->targets[index].kind
+				== ZEND_MIR_SOURCE_CALL_TARGET_METHOD
+				? w10_execution && resolver->resolve_exact_method != NULL
+					&& resolver->resolve_exact_method(
+						resolver->context, index, &resolved)
+				: resolver->resolve_exact_direct_user(
+					resolver->context, index, &resolved))
 				|| !zend_mir_w05_target_equals(
 					&resolved, &plan->targets[index])
-				|| resolved.kind != ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
+				|| (resolved.kind != ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
+					&& (!w10_execution || resolved.kind
+						!= ZEND_MIR_SOURCE_CALL_TARGET_METHOD))
 				|| (!w09_execution
 					&& (resolved.variadic || resolved.returns_by_reference
 						|| !zend_mir_w05_target_parameter_modes_are_by_value(
@@ -905,7 +951,7 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 	{
 		zend_mir_lowering_diagnostic_code grammar =
 			zend_mir_w05_source_sequence(
-				calls, w08_execution, w09_execution);
+				calls, w08_execution, w09_execution, w10_execution);
 		if (grammar != ZEND_MIRL_OK) {
 			return grammar;
 		}
@@ -951,7 +997,11 @@ static bool zend_mir_w05_emit_calls(
 		target.id = source->id;
 		target.kind = source->kind == ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL
 			? ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL
-			: ZEND_MIR_CALL_TARGET_DIRECT_USER;
+			: source->kind == ZEND_MIR_SOURCE_CALL_TARGET_METHOD
+				? ZEND_MIR_CALL_TARGET_METHOD_USER
+				: source->kind == ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER
+					? ZEND_MIR_CALL_TARGET_DYNAMIC
+					: ZEND_MIR_CALL_TARGET_DIRECT_USER;
 		target.function_symbol_id = source->function_symbol_id;
 		target.op_array_id = source->op_array_id;
 		target.num_args = source->num_args;
@@ -1124,7 +1174,7 @@ zend_mir_lowering_diagnostic_code zend_mir_w05_plan_and_emit_calls(
 	memset(&plan, 0, sizeof(plan));
 	code = zend_mir_w05_plan_calls(
 		context, source_calls, resolver, &plan,
-		true, false, false, false, false);
+		true, false, false, false, false, false);
 	if (code == ZEND_MIRL_OK
 			&& (!zend_mir_w05_materialize_w06_scalar_proxies(
 					&plan, call_mutator)
@@ -1147,7 +1197,7 @@ zend_mir_lowering_diagnostic_code zend_mir_w05_validate_call_plan(
 	memset(&plan, 0, sizeof(plan));
 	code = zend_mir_w05_plan_calls(
 		context, source_calls, resolver, &plan,
-		true, false, false, false, false);
+		true, false, false, false, false, false);
 	zend_mir_w05_plan_release(&plan);
 	return code;
 }
@@ -1711,7 +1761,7 @@ bool zend_mir_verify_w05_calls(
 		source_calls->call_argument_count(source_calls->context);
 	frame_slot_count = view->frame_slot_count(view->context);
 	if (zend_mir_w05_source_sequence(
-			source_calls, false, false) != ZEND_MIRL_OK
+			source_calls, false, false, false) != ZEND_MIRL_OK
 			|| source_site_count == 0
 			|| source_site_count > ZEND_MIR_ID_MAX / 4
 			|| calls->call_site_count(calls->context) != source_site_count
@@ -2181,7 +2231,7 @@ static bool zend_mir_w05_verify_final_structural(
 					view, instruction.block_id, NULL)
 				|| (uint32_t) instruction.opcode
 					>= (w09_execution
-						? ZEND_MIR_W09_OPCODE_COUNT
+						? ZEND_MIR_W10_OPCODE_COUNT
 						: w08_execution
 						? ZEND_MIR_W08_OPCODE_COUNT
 						: ZEND_MIR_W05_OPCODE_COUNT)
@@ -2426,7 +2476,7 @@ static bool zend_mir_verify_w08_calls(
 	const zend_mir_source_call_view *source_calls,
 	const zend_mir_call_view *calls,
 	zend_mir_diagnostic_sink *diagnostics,
-	bool w09_execution)
+	bool w09_execution, bool w10_execution)
 {
 	uint32_t source_site_count;
 	uint32_t source_target_count;
@@ -2457,7 +2507,7 @@ static bool zend_mir_verify_w08_calls(
 	source_argument_count =
 		source_calls->call_argument_count(source_calls->context);
 	if (zend_mir_w05_source_sequence(
-			source_calls, true, w09_execution) != ZEND_MIRL_OK
+			source_calls, true, w09_execution, w10_execution) != ZEND_MIRL_OK
 			|| source_site_count == 0 || source_target_count == 0
 			|| calls->call_site_count(calls->context) != source_site_count
 			|| calls->call_target_count(calls->context) != source_target_count
@@ -2475,7 +2525,12 @@ static bool zend_mir_verify_w08_calls(
 				|| target.kind !=
 					(source.kind == ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL
 						? ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL
-						: ZEND_MIR_CALL_TARGET_DIRECT_USER)
+						: source.kind == ZEND_MIR_SOURCE_CALL_TARGET_METHOD
+							? ZEND_MIR_CALL_TARGET_METHOD_USER
+							: source.kind
+								== ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER
+									? ZEND_MIR_CALL_TARGET_DYNAMIC
+									: ZEND_MIR_CALL_TARGET_DIRECT_USER)
 				|| target.function_symbol_id != source.function_symbol_id
 				|| target.op_array_id != source.op_array_id
 				|| target.num_args != source.num_args
@@ -2660,7 +2715,7 @@ static bool zend_mir_w05_verify_final_composition(
 	const zend_mir_source_call_view *source_calls,
 	const zend_mir_call_view *calls,
 	zend_mir_diagnostic_sink *diagnostics,
-	bool w08_execution, bool w09_execution)
+	bool w08_execution, bool w09_execution, bool w10_execution)
 {
 	bool empty_w09_calls;
 
@@ -2688,7 +2743,8 @@ static bool zend_mir_w05_verify_final_composition(
 				&& calls->call_argument_count(calls->context) == 0
 			: w08_execution
 			? zend_mir_verify_w08_calls(
-				view, source_calls, calls, diagnostics, w09_execution)
+				view, source_calls, calls, diagnostics,
+				w09_execution, w10_execution)
 			: zend_mir_verify_w05_calls(
 				view, source_calls, calls, diagnostics));
 }
@@ -2700,7 +2756,8 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_calls(
 	const zend_mir_source_call_view *source_calls,
 	const zend_mir_source_call_target_resolver *resolver,
 	zend_mir_call_mutator *call_mutator,
-	bool w07_execution, bool w08_execution, bool w09_execution)
+	bool w07_execution, bool w08_execution, bool w09_execution,
+	bool w10_execution)
 {
 	zend_mir_w05_plan plan;
 	zend_mir_lowering_result w04;
@@ -2715,7 +2772,8 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_calls(
 
 	code = zend_mir_w05_plan_calls(
 		context, source_calls, resolver, &plan, false,
-		w07_execution, w08_execution, w09_execution, w09_execution);
+		w07_execution, w08_execution, w09_execution, w10_execution,
+		w09_execution);
 	if (code != ZEND_MIRL_OK) {
 		zend_mir_w05_plan_release(&plan);
 		return zend_mir_w05_failure(
@@ -2767,7 +2825,7 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_calls(
 	if (view == NULL || calls == NULL
 			|| !zend_mir_w05_verify_final_composition(
 				view, source_calls, calls, context->diagnostics,
-				w08_execution, w09_execution)) {
+				w08_execution, w09_execution, w10_execution)) {
 		context->module_ops.destroy(context->module_ops.context, w04.module);
 		zend_mir_w05_plan_release(&plan);
 		return zend_mir_w05_failure(
@@ -2821,7 +2879,7 @@ zend_mir_w05_lowering_result zend_mir_lower_w05_zend_source(
 {
 	return zend_mir_lower_direct_user_calls(
 		context, mutator, control_flow_map, source_calls, resolver,
-		call_mutator, false, false, false);
+		call_mutator, false, false, false, false);
 }
 
 zend_mir_w05_lowering_result zend_mir_lower_w07_zend_source(
@@ -2834,7 +2892,7 @@ zend_mir_w05_lowering_result zend_mir_lower_w07_zend_source(
 {
 	return zend_mir_lower_direct_user_calls(
 		context, mutator, control_flow_map, source_calls, resolver,
-		call_mutator, true, false, false);
+		call_mutator, true, false, false, false);
 }
 
 zend_mir_w08_lowering_result zend_mir_lower_w08_zend_source(
@@ -2847,7 +2905,7 @@ zend_mir_w08_lowering_result zend_mir_lower_w08_zend_source(
 {
 	return zend_mir_lower_direct_user_calls(
 		context, mutator, control_flow_map, source_calls, resolver,
-		call_mutator, true, true, false);
+		call_mutator, true, true, false, false);
 }
 
 zend_mir_w08_lowering_result zend_mir_lower_w09_zend_source(
@@ -2860,5 +2918,18 @@ zend_mir_w08_lowering_result zend_mir_lower_w09_zend_source(
 {
 	return zend_mir_lower_direct_user_calls(
 		context, mutator, control_flow_map, source_calls, resolver,
-		call_mutator, true, true, true);
+		call_mutator, true, true, true, false);
+}
+
+zend_mir_w08_lowering_result zend_mir_lower_w10_zend_source(
+	zend_mir_lowering_context *context,
+	zend_mir_mutator *mutator,
+	zend_mir_control_flow_map *control_flow_map,
+	const zend_mir_source_call_view *source_calls,
+	const zend_mir_source_call_target_resolver *resolver,
+	zend_mir_call_mutator *call_mutator)
+{
+	return zend_mir_lower_direct_user_calls(
+		context, mutator, control_flow_map, source_calls, resolver,
+		call_mutator, true, true, true, true);
 }

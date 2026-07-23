@@ -3,6 +3,7 @@
 #include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
+#include "Zend/Native/Runtime/Common/zend_native_objects.h"
 #include "Zend/Native/Runtime/Common/zend_native_values.h"
 
 #include <stddef.h>
@@ -164,6 +165,98 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 		(const void *) zend_native_value_cond_branch},
 	{ZEND_NATIVE_HELPER_VALUE_INCDEC, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
 		(const void *) zend_native_value_incdec},
+	{ZEND_NATIVE_HELPER_OBJECT_DECLARE_ANON_CLASS, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_declare_anon_class},
+	{ZEND_NATIVE_HELPER_OBJECT_FETCH_THIS, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_fetch_this},
+	{ZEND_NATIVE_HELPER_OBJECT_FETCH_R, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_fetch_r},
+	{ZEND_NATIVE_HELPER_OBJECT_FETCH_W, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_fetch_w},
+	{ZEND_NATIVE_HELPER_OBJECT_FETCH_RW, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_fetch_rw},
+	{ZEND_NATIVE_HELPER_OBJECT_FETCH_IS, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_fetch_is},
+	{ZEND_NATIVE_HELPER_OBJECT_FETCH_FUNC_ARG, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_fetch_func_arg},
+	{ZEND_NATIVE_HELPER_OBJECT_FETCH_UNSET, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_fetch_unset},
+	{ZEND_NATIVE_HELPER_OBJECT_ASSIGN, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_assign},
+	{ZEND_NATIVE_HELPER_OBJECT_ASSIGN_REF, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_assign_ref},
+	{ZEND_NATIVE_HELPER_OBJECT_ASSIGN_OP, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_assign_op},
+	{ZEND_NATIVE_HELPER_OBJECT_UNSET, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_unset},
+	{ZEND_NATIVE_HELPER_OBJECT_ISSET_ISEMPTY, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_isset_isempty},
+	{ZEND_NATIVE_HELPER_OBJECT_PRE_INC, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_pre_inc},
+	{ZEND_NATIVE_HELPER_OBJECT_PRE_DEC, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_pre_dec},
+	{ZEND_NATIVE_HELPER_OBJECT_POST_INC, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_post_inc},
+	{ZEND_NATIVE_HELPER_OBJECT_POST_DEC, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_post_dec},
+	{ZEND_NATIVE_HELPER_OBJECT_INSTANCEOF, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_instanceof},
+	{ZEND_NATIVE_HELPER_OBJECT_CLONE, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_clone},
+	{ZEND_NATIVE_HELPER_STATIC_FETCH_R, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_static_fetch_r},
+	{ZEND_NATIVE_HELPER_STATIC_FETCH_W, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_static_fetch_w},
+	{ZEND_NATIVE_HELPER_STATIC_FETCH_RW, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_static_fetch_rw},
+	{ZEND_NATIVE_HELPER_STATIC_FETCH_IS, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_static_fetch_is},
+	{ZEND_NATIVE_HELPER_STATIC_FETCH_FUNC_ARG, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_static_fetch_func_arg},
+	{ZEND_NATIVE_HELPER_STATIC_FETCH_UNSET, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_static_fetch_unset},
+	{ZEND_NATIVE_HELPER_STATIC_ASSIGN, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_static_assign},
+	{ZEND_NATIVE_HELPER_STATIC_ASSIGN_REF, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_static_assign_ref},
+	{ZEND_NATIVE_HELPER_STATIC_ASSIGN_OP, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_static_assign_op},
+	{ZEND_NATIVE_HELPER_STATIC_PRE_INC, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_static_pre_inc},
+	{ZEND_NATIVE_HELPER_STATIC_PRE_DEC, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_static_pre_dec},
+	{ZEND_NATIVE_HELPER_STATIC_POST_INC, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_static_post_inc},
+	{ZEND_NATIVE_HELPER_STATIC_POST_DEC, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_static_post_dec},
+	{ZEND_NATIVE_HELPER_STATIC_ISSET_ISEMPTY, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_static_isset_isempty},
+	{ZEND_NATIVE_HELPER_STATIC_UNSET, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_static_unset},
+	{ZEND_NATIVE_HELPER_OBJECT_FETCH_CLASS, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_fetch_class},
+	{ZEND_NATIVE_HELPER_OBJECT_FETCH_CLASS_CONSTANT,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_fetch_class_constant},
+	{ZEND_NATIVE_HELPER_OBJECT_DECLARE_LAMBDA, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_declare_lambda},
+	{ZEND_NATIVE_HELPER_OBJECT_BIND_LEXICAL, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_bind_lexical},
+	{ZEND_NATIVE_HELPER_OBJECT_BIND_STATIC, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_bind_static},
+	{ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
+			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_RUNTIME_EFFECT_THROW,
+		(const void *) zend_native_throw_source_zval},
+	{ZEND_NATIVE_HELPER_VALUE_TYPE_CHECK, ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_value_type_check},
+	{ZEND_NATIVE_HELPER_CALL_FRAMELESS_INTERNAL,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_call_frameless_internal},
+	{ZEND_NATIVE_HELPER_OBJECT_FETCH_CLASS_NAME,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_fetch_class_name},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
@@ -174,7 +267,8 @@ static const zend_native_runtime_api zend_native_runtime = {
 		| ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT
 		| ZEND_NATIVE_RUNTIME_CAP_OBSERVER
 		| ZEND_NATIVE_RUNTIME_CAP_INTERRUPT
-		| ZEND_NATIVE_RUNTIME_CAP_BAILOUT_BOUNDARY,
+		| ZEND_NATIVE_RUNTIME_CAP_BAILOUT_BOUNDARY
+		| ZEND_NATIVE_RUNTIME_CAP_OBJECT_OPERATION,
 	zend_native_runtime_helpers,
 	(uint32_t) (sizeof(zend_native_runtime_helpers)
 		/ sizeof(zend_native_runtime_helpers[0])),
@@ -221,7 +315,7 @@ zend_result zend_native_runtime_validate(
 	zend_native_diagnostic *diagnostic)
 {
 	uint32_t index;
-	uint64_t seen = 0;
+	uint64_t seen[ZEND_NATIVE_RUNTIME_HELPER_WORD_COUNT] = {0};
 
 	if (runtime == NULL
 			|| runtime->abi_version != ZEND_NATIVE_RUNTIME_ABI_VERSION
@@ -243,18 +337,19 @@ zend_result zend_native_runtime_validate(
 		const zend_native_runtime_helper *helper = &runtime->helpers[index];
 
 		if (helper->id == 0 || helper->id >= ZEND_NATIVE_HELPER_COUNT
-				|| helper->id > 63 || helper->address == NULL
+				|| helper->address == NULL
 				|| (helper->effects & ~ZEND_NATIVE_RUNTIME_EFFECT_ALL) != 0
 				|| ((helper->effects & ZEND_NATIVE_RUNTIME_EFFECT_REENTER) != 0
 					&& (helper->effects
 						& ZEND_NATIVE_RUNTIME_EFFECT_USERLAND) == 0)
-				|| (seen & (UINT64_C(1) << helper->id)) != 0) {
+				|| (seen[helper->id / 64u]
+					& (UINT64_C(1) << (helper->id % 64u))) != 0) {
 			zend_native_runtime_diagnostic(diagnostic,
 				ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
 				"native runtime helper contract is invalid or contradictory");
 			return FAILURE;
 		}
-		seen |= UINT64_C(1) << helper->id;
+		seen[helper->id / 64u] |= UINT64_C(1) << (helper->id % 64u);
 	}
 	return SUCCESS;
 }

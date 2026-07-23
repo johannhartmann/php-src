@@ -22,10 +22,19 @@ bool checked_count(uint32_t count) {
 
 void require_runtime_helper(
 	zend_tpde_plan *plan, zend_native_runtime_helper_id helper) {
-	plan->required_runtime_helpers |= UINT64_C(1) << helper;
+	plan->required_runtime_helpers[helper / 64u] |=
+		UINT64_C(1) << (helper % 64u);
 }
 
 zend_native_runtime_helper_id executable_value_helper(zend_mir_opcode opcode) {
+	if (opcode >= ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS
+			&& opcode <= ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME) {
+		return static_cast<zend_native_runtime_helper_id>(
+			static_cast<uint32_t>(opcode)
+				- static_cast<uint32_t>(ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS)
+				+ static_cast<uint32_t>(
+					ZEND_NATIVE_HELPER_OBJECT_DECLARE_ANON_CLASS));
+	}
 	switch (opcode) {
 		case ZEND_MIR_OPCODE_VALUE_MAKE_REF:
 			return ZEND_NATIVE_HELPER_VALUE_MAKE_REF;
@@ -302,7 +311,26 @@ bool initialize_plan(
 				record.source_position_id;
 			plan->required_runtime_capabilities |=
 				ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT;
+			if (record.opcode >= ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS
+					&& record.opcode <= ZEND_MIR_OPCODE_OBJECT_BIND_STATIC) {
+				plan->required_runtime_capabilities |=
+					ZEND_NATIVE_RUNTIME_CAP_OBJECT_OPERATION;
+			}
 			require_runtime_helper(plan, helper);
+		}
+		if (record.opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL) {
+			if (count != 0 || !zend_mir_id_is_valid(record.source_position_id)) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+					"source-zval throw lacks exact source semantics");
+				return false;
+			}
+			plan->instructions[i].source_opline_index =
+				record.source_position_id;
+			plan->required_runtime_capabilities |=
+				ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT;
+			require_runtime_helper(
+				plan, ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL);
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH) {
 			if (count != 0 || !zend_mir_id_is_valid(record.source_position_id)) {
@@ -438,7 +466,11 @@ bool initialize_plan(
 					|| exception_continuation.kind
 						!= ZEND_MIR_CALL_CONTINUATION_EXCEPTION_DEBT
 					|| (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
-						&& (target.kind != ZEND_MIR_CALL_TARGET_DIRECT_USER
+						&& ((target.kind != ZEND_MIR_CALL_TARGET_DIRECT_USER
+								&& target.kind
+									!= ZEND_MIR_CALL_TARGET_METHOD_USER
+								&& target.kind
+									!= ZEND_MIR_CALL_TARGET_DYNAMIC)
 							|| (site.arguments.count != count
 								&& count != 0)))
 					|| (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL
@@ -688,7 +720,8 @@ bool initialize_plan(
 		return false;
 	}
 	for (uint32_t id = 1; id < ZEND_NATIVE_HELPER_COUNT; ++id) {
-		if ((plan->required_runtime_helpers & (UINT64_C(1) << id)) != 0) {
+		if ((plan->required_runtime_helpers[id / 64u]
+				& (UINT64_C(1) << (id % 64u))) != 0) {
 			const zend_native_runtime_helper *helper =
 				zend_native_runtime_helper_find(plan->runtime,
 					static_cast<zend_native_runtime_helper_id>(id));
@@ -700,7 +733,12 @@ bool initialize_plan(
 			}
 		}
 	}
-	plan->may_emit_calls = plan->required_runtime_helpers != 0;
+	plan->may_emit_calls = false;
+	for (uint32_t index = 0;
+			index < ZEND_NATIVE_RUNTIME_HELPER_WORD_COUNT; ++index) {
+		plan->may_emit_calls = plan->may_emit_calls
+			|| plan->required_runtime_helpers[index] != 0;
+	}
 	return true;
 }
 } // namespace

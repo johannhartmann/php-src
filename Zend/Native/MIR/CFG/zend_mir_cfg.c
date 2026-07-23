@@ -290,6 +290,7 @@ static uint32_t zend_mir_cfg_expected_successors(zend_mir_opcode opcode)
 			return 2;
 		case ZEND_MIR_OPCODE_RETURN:
 		case ZEND_MIR_OPCODE_THROW:
+		case ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL:
 		case ZEND_MIR_OPCODE_UNREACHABLE:
 			return 0;
 		default:

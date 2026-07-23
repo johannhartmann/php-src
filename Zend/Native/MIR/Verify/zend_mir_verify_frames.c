@@ -421,6 +421,7 @@ static void zend_mir_verify_instruction_frame(
 		|| instruction->record.opcode == ZEND_MIR_OPCODE_STATEPOINT
 		|| instruction->record.opcode == ZEND_MIR_OPCODE_RETURN
 		|| instruction->record.opcode == ZEND_MIR_OPCODE_THROW
+		|| instruction->record.opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
 		|| instruction->record.opcode == ZEND_MIR_OPCODE_UNREACHABLE;
 	const zend_mir_verify_frame *frame;
 	const zend_mir_verify_block *block;

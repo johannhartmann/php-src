@@ -317,6 +317,14 @@ bool zend_mir_w04_validate_branch_proofs(
 			}
 			continue;
 		}
+		if (kind == ZEND_MIR_W10_BRANCH_THROW) {
+			if (opcode.op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+					|| opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
+					|| opcode.result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+				return false;
+			}
+			continue;
+		}
 		if (kind == ZEND_MIR_W04_BRANCH_CATCH
 				|| kind == ZEND_MIR_W08_BRANCH_FINALLY_CALL
 				|| kind == ZEND_MIR_W08_BRANCH_FINALLY_RETURN
@@ -345,7 +353,8 @@ bool zend_mir_w04_validate_branch_proofs(
 					|| ((kind == ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT
 							|| kind == ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT
 							|| kind == ZEND_MIR_W09_BRANCH_COALESCE
-							|| kind == ZEND_MIR_W09_BRANCH_JMP_SET)
+							|| kind == ZEND_MIR_W09_BRANCH_JMP_SET
+							|| kind == ZEND_MIR_W10_BRANCH_JMP_NULL)
 						? opcode.result.kind != ZEND_MIR_SOURCE_OPERAND_SSA
 						: opcode.result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED)) {
 				return false;

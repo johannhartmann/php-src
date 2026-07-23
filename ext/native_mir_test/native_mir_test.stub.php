@@ -3,12 +3,12 @@
 /** @generate-class-entries */
 
 /**
- * Compile source without executing it and return a canonical W03-W09 MIR result.
+ * Compile source without executing it and return a canonical W03-W10 MIR result.
  *
  * Result shape:
  * array{
  *     schema_version: int,
- *     wave?: 4|5|6|7|8|9,
+ *     wave?: 4|5|6|7|8|9|10,
  *     status: "accepted"|"rejected"|"error",
  *     phase: "compile"|"ssa"|"lowering"|"verify"|"dump"|"complete",
  *     source: array{filename: string, byte_length: int, source_id: string},
@@ -26,7 +26,7 @@
  * array{
  *     function?: ?string,
  *     diagnostic_limit?: int,
- *     wave?: 3|4|5|6|7|8|9,
+ *     wave?: 3|4|5|6|7|8|9|10,
  *     arena_chunk_size?: int,
  *     compiler_mode?: "ignore_user_functions",
  *     stack_probe?: true,
@@ -58,7 +58,7 @@ function native_mir_test_compile_dump(
  * execute it over real Zend frames without entering a VM opcode handler.
  *
  * @return array
- * @param list<null|bool|int|float> $arguments
+ * @param list<mixed> $arguments
  * @param array $options
  */
 function native_mir_test_compile_execute(

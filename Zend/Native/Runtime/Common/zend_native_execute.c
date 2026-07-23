@@ -3,6 +3,7 @@
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
 
 #include "Zend/zend_exceptions.h"
+#include "Zend/zend_closures.h"
 #include "Zend/zend_execute.h"
 #include "Zend/zend_observer.h"
 #include "Zend/zend_type_info.h"
@@ -157,6 +158,21 @@ static zend_native_status zend_native_execute_frame_impl(
 	}
 
 	zend_native_execution_cleanup_frame(execute_data);
+	/* A frame entered through zend_execute_ex is normally finalized by
+	 * zend_leave_helper(), which also releases the retained closure or
+	 * receiver.  The request-local native reentry hook replaces that helper;
+	 * its caller still owns the stack frame itself, but not this call-target
+	 * reference.  Direct native-to-native calls release their target at their
+	 * call site and therefore must not pass through this branch. */
+	if (observer_already_started) {
+		uint32_t call_info = ZEND_CALL_INFO(execute_data);
+
+		if ((call_info & ZEND_CALL_RELEASE_THIS) != 0) {
+			OBJ_RELEASE(Z_OBJ(execute_data->This));
+		} else if ((call_info & ZEND_CALL_CLOSURE) != 0) {
+			OBJ_RELEASE(ZEND_CLOSURE_OBJECT(execute_data->func));
+		}
+	}
 
 	if (state->original_return_value == NULL) {
 		if (!Z_ISUNDEF(state->discarded_return)) {

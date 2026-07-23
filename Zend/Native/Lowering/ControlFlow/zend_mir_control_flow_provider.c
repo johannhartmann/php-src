@@ -2,6 +2,7 @@
 
 #include "../Frontend/zend_mir_zend_source.h"
 #include "../../MIR/Scalar/zend_mir_scalar_descriptors.h"
+#include "../../MIR/Semantics/zend_mir_effect_summary.h"
 #include "zend_mir_control_flow_internal.h"
 
 static bool zend_mir_w04_add_instruction(
@@ -340,6 +341,146 @@ static zend_mir_frame_slot_kind zend_mir_w04_frame_slot_kind(
 	}
 }
 
+static bool zend_mir_w10_add_effect(
+	zend_mir_effect_summary *summary, zend_mir_effect effect)
+{
+	zend_mir_effect_summary atomic;
+	zend_mir_effect_summary composed;
+
+	if (!zend_mir_effect_summary_from_effect(effect, &atomic)
+			|| !zend_mir_effect_summary_compose(
+				&composed, summary, &atomic)) {
+		return false;
+	}
+	*summary = composed;
+	return true;
+}
+
+static bool zend_mir_w10_throw_semantics(zend_mir_effect_summary *summary)
+{
+	const zend_mir_memory_domain_mask frame_domains =
+		ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_FRAME_LOCALS)
+		| ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_FRAME_TEMPS);
+	const zend_mir_memory_domain_mask heap_domains =
+		ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_HEAP_ZVAL)
+		| ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_HEAP_OBJECT)
+		| ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_HEAP_REFERENCE)
+		| ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_GC_METADATA)
+		| ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_ENGINE_EXCEPTION);
+
+	zend_mir_effect_summary_empty(summary);
+	if (!zend_mir_w10_add_effect(summary, ZEND_MIR_EFFECT_READ_MEMORY)
+			|| !zend_mir_w10_add_effect(summary, ZEND_MIR_EFFECT_WRITE_MEMORY)
+			|| !zend_mir_w10_add_effect(summary, ZEND_MIR_EFFECT_ALLOCATE)
+			|| !zend_mir_w10_add_effect(summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)
+			|| !zend_mir_w10_add_effect(summary, ZEND_MIR_EFFECT_THROW)) {
+		return false;
+	}
+	summary->reads |= frame_domains | heap_domains;
+	summary->writes |= frame_domains | heap_domains;
+	return zend_mir_effect_summary_init(summary, summary->effects,
+		summary->reads, summary->writes, summary->barriers, 0, 0);
+}
+
+static bool zend_mir_w10_emit_throw_frame(
+	zend_mir_lowering_context *context, zend_mir_mutator *mutator,
+	const zend_mir_source_opcode_ref *opcode,
+	zend_mir_source_block_id source_block_id,
+	zend_mir_frame_state_id *frame_id_out)
+{
+	const zend_mir_zend_source *zend_source =
+		context != NULL ? context->zend_source : NULL;
+	zend_mir_frame_state_ref frame;
+	zend_mir_source_map_ref source_map;
+	zend_mir_frame_state_id frame_id;
+	zend_mir_source_map_id source_map_id;
+	uint32_t first_slot = 0;
+	uint32_t slot_count = zend_mir_zend_source_slot_count(zend_source);
+	uint32_t i;
+
+	if (zend_source == NULL || opcode == NULL || frame_id_out == NULL
+			|| mutator->add_frame_slot == NULL
+			|| mutator->add_frame_state == NULL
+			|| mutator->add_source_map == NULL) {
+		return false;
+	}
+	for (i = 0; i < slot_count; i++) {
+		zend_mir_source_slot_ref source_slot;
+		zend_mir_frame_slot_ref frame_slot;
+		zend_mir_value_id value_id = ZEND_MIR_ID_INVALID;
+		uint32_t slot_index;
+
+		if (!zend_mir_zend_source_slot_at(zend_source, i, &source_slot)
+				|| !zend_mir_w04_current_slot_value(context,
+					&source_slot, source_block_id, &value_id)) {
+			return false;
+		}
+		memset(&frame_slot, 0, sizeof(frame_slot));
+		frame_slot.slot_id = source_slot.slot_id;
+		frame_slot.index = source_slot.kind_index;
+		frame_slot.kind = zend_mir_w04_frame_slot_kind(source_slot.kind);
+		frame_slot.representation =
+			ZEND_MIR_FRAME_SLOT_REPRESENTATION_CANONICAL_ZVAL;
+		frame_slot.materialization = zend_mir_id_is_valid(value_id)
+			? ZEND_MIR_MATERIALIZATION_MATERIALIZED
+			: ZEND_MIR_MATERIALIZATION_UNDEF;
+		frame_slot.ownership = ZEND_MIR_FRAME_SLOT_OWNERSHIP_FRAME_OWNED;
+		frame_slot.value_id = value_id;
+		if (frame_slot.kind == ZEND_MIR_FRAME_SLOT_KIND_INVALID
+				|| !mutator->add_frame_slot(
+					mutator->context, &frame_slot, &slot_index)
+				|| (i != 0 && slot_index != first_slot + i)) {
+			return false;
+		}
+		if (i == 0) {
+			first_slot = slot_index;
+		}
+	}
+	memset(&frame, 0, sizeof(frame));
+	frame.id = ZEND_MIR_ID_INVALID;
+	frame.function_id = zend_mir_lowering_context_function_id(context);
+	frame.parent_id = ZEND_MIR_ID_INVALID;
+	frame.function_kind = ZEND_MIR_FUNCTION_KIND_USER;
+	frame.opline_index = opcode->opline_index;
+	frame.opline_phase = ZEND_MIR_OPLINE_PHASE_BEFORE;
+	frame.slots.offset = slot_count == 0 ? 0 : first_slot;
+	frame.slots.count = slot_count;
+	frame.return_continuation.kind = ZEND_MIR_CONTINUATION_KIND_TERMINAL;
+	frame.return_continuation.frame_state_id = ZEND_MIR_ID_INVALID;
+	frame.return_continuation.opline_index = ZEND_MIR_ID_INVALID;
+	frame.exception_continuation = frame.return_continuation;
+	frame.bailout_continuation.kind =
+		ZEND_MIR_CONTINUATION_KIND_NONLOCAL_BAILOUT;
+	frame.bailout_continuation.frame_state_id = ZEND_MIR_ID_INVALID;
+	frame.bailout_continuation.opline_index = ZEND_MIR_ID_INVALID;
+	frame.suspend_kind = ZEND_MIR_SUSPEND_KIND_NONE;
+	frame.suspend_state_id = ZEND_MIR_ID_INVALID;
+	frame.code_version_id = 0;
+	frame.resume.allowed = false;
+	frame.resume.entry_kind = ZEND_MIR_RESUME_ENTRY_KIND_NONE;
+	frame.resume.resume_id = ZEND_MIR_ID_INVALID;
+	frame.resume.code_version_id = ZEND_MIR_ID_INVALID;
+	frame.resume.target_opline_index = ZEND_MIR_ID_INVALID;
+	frame.safepoint_class = ZEND_MIR_SAFEPOINT_CLASS_DESTRUCTOR;
+	frame.canonical = true;
+	if (!mutator->add_frame_state(mutator->context, &frame, &frame_id)) {
+		return false;
+	}
+	memset(&source_map, 0, sizeof(source_map));
+	source_map.id = ZEND_MIR_ID_INVALID;
+	source_map.source_position_id = opcode->source_position_id;
+	source_map.op_array_id = zend_source->op_array_id;
+	source_map.opline_index = opcode->opline_index;
+	source_map.opline_phase = ZEND_MIR_OPLINE_PHASE_BEFORE;
+	source_map.owner_frame_id = frame_id;
+	if (!mutator->add_source_map(
+			mutator->context, &source_map, &source_map_id)) {
+		return false;
+	}
+	*frame_id_out = frame_id;
+	return true;
+}
+
 static bool zend_mir_w04_emit_edge_statepoint(
 	zend_mir_lowering_context *context, zend_mir_mutator *mutator,
 	const zend_mir_source_opcode_ref *opcode,
@@ -516,8 +657,36 @@ bool zend_mir_w04_emit_terminator(
 			|| (kind == ZEND_MIR_W08_BRANCH_FINALLY_CALL && edge_count != 2)
 			|| (kind == ZEND_MIR_W08_BRANCH_FINALLY_RETURN && edge_count != 0)
 			|| (kind == ZEND_MIR_W09_BRANCH_ITERATOR && edge_count != 2)
+			|| (kind == ZEND_MIR_W10_BRANCH_THROW && edge_count != 0)
 			|| (kind == ZEND_MIR_W04_BRANCH_KIND_INVALID && edge_count > 1)) {
 		return false;
+	}
+	if (kind == ZEND_MIR_W10_BRANCH_THROW) {
+		zend_mir_effect_summary summary;
+		zend_mir_frame_state_id frame_id;
+		zend_mir_instruction_record record;
+
+		if (opcode == NULL || block->opcode_count == 0
+				|| !zend_mir_w10_throw_semantics(&summary)
+				|| !zend_mir_w10_emit_throw_frame(
+					context, mutator, opcode, block->id, &frame_id)) {
+			return false;
+		}
+		memset(&record, 0, sizeof(record));
+		record.id = ZEND_MIR_ID_INVALID;
+		record.block_id = zend_mir_lowering_context_block_id(context);
+		record.opcode = ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL;
+		record.representation = ZEND_MIR_REPRESENTATION_VOID;
+		record.result_id = ZEND_MIR_ID_INVALID;
+		record.frame_state_id = frame_id;
+		record.source_position_id = opcode->source_position_id;
+		record.effects = summary.effects;
+		record.reads = summary.reads;
+		record.writes = summary.writes;
+		record.barriers = summary.barriers;
+		return mutator->add_instruction != NULL
+			&& mutator->add_instruction(
+				mutator->context, &record, &terminator);
 	}
 	if (edge_count == 0 && kind != ZEND_MIR_W08_BRANCH_FINALLY_RETURN) {
 		if (opcode != NULL || block->opcode_count != 0) {

@@ -120,6 +120,12 @@ zend_mir_lowering_status zend_mir_frontend_validate_eligibility_w09(
 	const zend_op_array *original_op_array,
 	zend_mir_op_array_id op_array_id,
 	zend_mir_frontend_diagnostic *diagnostic);
+zend_mir_lowering_status zend_mir_frontend_validate_eligibility_w10(
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	const zend_op_array *original_op_array,
+	zend_mir_op_array_id op_array_id,
+	zend_mir_frontend_diagnostic *diagnostic);
 
 zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope(
 	const zend_op_array *op_array,
@@ -130,6 +136,10 @@ zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w04(
 	zend_mir_op_array_id op_array_id,
 	zend_mir_frontend_diagnostic *diagnostic);
 zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w09(
+	const zend_op_array *op_array,
+	zend_mir_op_array_id op_array_id,
+	zend_mir_frontend_diagnostic *diagnostic);
+zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w10(
 	const zend_op_array *op_array,
 	zend_mir_op_array_id op_array_id,
 	zend_mir_frontend_diagnostic *diagnostic);
@@ -189,6 +199,13 @@ zend_mir_lowering_status zend_mir_frontend_project_w09_result_facts(
 	zend_ssa *projected_ssa,
 	zend_mir_frontend_diagnostic *diagnostic);
 
+zend_mir_lowering_status zend_mir_frontend_project_w10_result_facts(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	zend_ssa *projected_ssa,
+	zend_mir_frontend_diagnostic *diagnostic);
+
 bool zend_mir_frontend_fact_for_ssa(
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,
@@ -229,6 +246,18 @@ zend_mir_lowering_status zend_mir_zend_source_preflight_w09(
 	const zend_ssa *ssa,
 	zend_mir_frontend_diagnostic *diagnostic);
 
+zend_mir_lowering_status zend_mir_zend_source_preflight_w10(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	zend_mir_frontend_diagnostic *diagnostic);
+
+zend_function *zend_mir_zend_source_resolve_user_method_call(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	uint32_t init_opline_index);
+
 zend_mir_lowering_status zend_mir_zend_source_init_w05_projection(
 	zend_mir_zend_source *source,
 	const zend_op_array *projected_op_array,
@@ -250,6 +279,16 @@ zend_mir_lowering_status zend_mir_zend_source_init_w08_projection(
 	zend_mir_frontend_diagnostic *diagnostic);
 
 zend_mir_lowering_status zend_mir_zend_source_init_w09_projection(
+	zend_mir_zend_source *source,
+	const zend_op_array *projected_op_array,
+	const zend_ssa *projected_ssa,
+	const zend_op_array *original_op_array,
+	const zend_ssa *original_ssa,
+	zend_mir_op_array_id op_array_id,
+	zend_mir_symbol_id file_symbol_id,
+	zend_mir_frontend_diagnostic *diagnostic);
+
+zend_mir_lowering_status zend_mir_zend_source_init_w10_projection(
 	zend_mir_zend_source *source,
 	const zend_op_array *projected_op_array,
 	const zend_ssa *projected_ssa,
