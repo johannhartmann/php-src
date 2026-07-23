@@ -818,8 +818,49 @@ static bool zend_mir_value_validate_executable_operations(
 				|| operation->block_id >= module->blocks.count
 				|| blocks[operation->block_id].id != operation->block_id
 				|| !zend_mir_opcode_is_executable_value(operation->opcode)
+				|| operation->source_opcode > UINT8_MAX
 				|| operation->source_position_id >= module->source_positions.count) {
 			return false;
+		}
+		{
+			const zend_mir_source_operand_ref *operands[3] = {
+				&operation->op1, &operation->op2, &operation->result
+			};
+			const zend_mir_storage_id storage_ids[3] = {
+				operation->op1_storage_id,
+				operation->op2_storage_id,
+				operation->result_storage_id
+			};
+			uint32_t operand_index;
+
+			for (operand_index = 0; operand_index < 3; operand_index++) {
+				const zend_mir_source_operand_ref *operand =
+					operands[operand_index];
+
+				if (operand->kind < ZEND_MIR_SOURCE_OPERAND_UNUSED
+						|| operand->kind > ZEND_MIR_SOURCE_OPERAND_SSA
+						|| (operand->kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+							&& (operand->index != ZEND_MIR_ID_INVALID
+								|| operand->slot_kind
+									!= ZEND_MIR_SOURCE_SLOT_KIND_INVALID
+								|| storage_ids[operand_index]
+									!= ZEND_MIR_ID_INVALID))
+						|| (operand->kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+							&& (operand->slot_kind
+									!= ZEND_MIR_SOURCE_SLOT_KIND_INVALID
+								|| storage_ids[operand_index]
+									!= ZEND_MIR_ID_INVALID))
+						|| ((operand->kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+								|| operand->kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+							&& (operand->slot_kind < ZEND_MIR_SOURCE_SLOT_CV
+								|| operand->slot_kind
+									> ZEND_MIR_SOURCE_SLOT_VAR
+								|| operand->index == ZEND_MIR_ID_INVALID
+								|| storage_ids[operand_index]
+									== ZEND_MIR_ID_INVALID))) {
+					return false;
+				}
+			}
 		}
 		if (have_previous
 				&& (operation->block_id < previous_block
@@ -940,6 +981,7 @@ static bool zend_mir_value_compose_executable_operations(
 				}
 				zend_mir_value_emit_executable_operation(
 					&new_instructions[new_index], operation, new_index);
+				staging->executable_operations[operation_index].id = new_index;
 				operation_emitted[operation_index] = 1;
 				emitted_count++;
 				new_index++;
@@ -1039,6 +1081,8 @@ bool zend_mir_module_commit_value_model(zend_mir_module *module)
 		separation_plan_count, zend_mir_separation_plan_ref)
 	ZEND_MIR_VALUE_COPY(value_call_transfers, call_transfers,
 		call_transfer_count, zend_mir_call_transfer_ref)
+	ZEND_MIR_VALUE_COPY(value_executable_operations, executable_operations,
+		executable_operation_count, zend_mir_executable_value_ref)
 #undef ZEND_MIR_VALUE_COPY
 	staging->committed = true;
 	return true;

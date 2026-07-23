@@ -986,7 +986,9 @@ static bool zend_mir_dump_value_model(zend_mir_dump_context *dump)
 	}
 	module = zend_mir_module_from_value_view(values);
 	if (module == NULL
-			|| values->contract_version != ZEND_MIR_W06_CONTRACT_VERSION
+			|| (values->contract_version != ZEND_MIR_W06_CONTRACT_VERSION
+				&& values->contract_version
+					!= ZEND_MIR_W11P_CONTRACT_VERSION)
 			|| values->storage_count == NULL || values->storage_at == NULL
 			|| values->payload_count == NULL || values->payload_at == NULL
 			|| values->reference_cell_count == NULL
