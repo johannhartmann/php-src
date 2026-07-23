@@ -155,7 +155,8 @@ uint32_t zval_type(const Adaptor &adaptor, IRValueRef value) {
 
 bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 	const Adaptor::InstNode &node = adaptor->node(instruction);
-	if (node.kind == Adaptor::InstKind::LoadFrame) {
+	if (node.kind == Adaptor::InstKind::LoadFrame
+			|| node.kind == Adaptor::InstKind::LoadExecutionContext) {
 		auto [source_ref, source] = val_ref_single(node.operands[0]);
 		auto [result_ref, result] = result_ref_single(node.result);
 		auto source_reg = source.load_to_reg();
@@ -1413,6 +1414,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				builder.add_arg(image_symbol_value(
 					ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR,
 					call.id), ::tpde::CCAssignment{});
+				builder.add_arg(CallArg{node.operands[1]});
 				builder.call(runtime_symbol(ZEND_NATIVE_HELPER_DIRECT_USER_CALL));
 				ValuePart status{DarwinConfig::GP_BANK};
 				ValuePart payload{DarwinConfig::GP_BANK};

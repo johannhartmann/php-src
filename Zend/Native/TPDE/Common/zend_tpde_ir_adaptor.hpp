@@ -52,11 +52,14 @@ public:
 	static constexpr bool TPDE_LIVENESS_VISIT_ARGS = true;
 
 	static constexpr uint32_t EXECUTE_DATA_VALUE = 0;
-	static constexpr uint32_t FRAME_VALUE = 1;
-	static constexpr uint32_t MIR_VALUE_BASE = 2;
+	static constexpr uint32_t EXECUTION_CONTEXT_ARGUMENT = 1;
+	static constexpr uint32_t FRAME_VALUE = 2;
+	static constexpr uint32_t EXECUTION_CONTEXT_VALUE = 3;
+	static constexpr uint32_t MIR_VALUE_BASE = 4;
 
 	enum class InstKind : uint8_t {
 		LoadFrame,
+		LoadExecutionContext,
 		LoadArgument,
 		MIR,
 	};
@@ -125,7 +128,9 @@ public:
 private:
 	const zend_tpde_plan *plan_;
 	std::array<IRFuncRef, 1> functions_{IRFuncRef{0}};
-	std::array<IRValueRef, 1> arguments_{IRValueRef{EXECUTE_DATA_VALUE}};
+	std::array<IRValueRef, 2> arguments_{
+		IRValueRef{EXECUTE_DATA_VALUE},
+		IRValueRef{EXECUTION_CONTEXT_ARGUMENT}};
 	std::array<IRValueRef, 0> no_values_;
 	std::vector<IRBlockRef> blocks_;
 	std::vector<Slice> successor_slices_;
@@ -333,6 +338,18 @@ public:
 			0,
 			1,
 			true});
+		uint32_t context_operand_offset =
+			static_cast<uint32_t>(operands_.size());
+		operands_.push_back(IRValueRef{EXECUTION_CONTEXT_ARGUMENT});
+		add_node(block_instructions, static_cast<uint32_t>(entry), InstNode{
+			InstKind::LoadExecutionContext,
+			UINT32_MAX,
+			UINT32_MAX,
+			IRValueRef{EXECUTION_CONTEXT_VALUE},
+			{},
+			context_operand_offset,
+			1,
+			true});
 		for (uint32_t i = 0; i < plan_->value_count; ++i) {
 			if (plan_->values[i].argument_index < 0
 					|| !zend_mir_scalar_type_is_exact(plan_->values[i].exact_type)
@@ -501,6 +518,10 @@ public:
 				}
 				for (uint32_t n = 0; n < frame_use_count; ++n) {
 					operands_.push_back(IRValueRef{FRAME_VALUE});
+				}
+				if (instruction.direct_call != nullptr) {
+					operands_.push_back(
+						IRValueRef{EXECUTION_CONTEXT_VALUE});
 				}
 			} else if (record.opcode
 					== ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL) {

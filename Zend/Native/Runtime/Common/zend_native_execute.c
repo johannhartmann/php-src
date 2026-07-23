@@ -122,6 +122,7 @@ static zend_native_status zend_native_execute_frame_impl(
 	bool observer_already_started)
 {
 	zend_native_execution_state *state;
+	zend_native_execution_context context;
 	zend_native_frame_entry_t entry;
 
 	entry = zend_native_code_frame_entry(code);
@@ -144,6 +145,7 @@ static zend_native_status zend_native_execute_frame_impl(
 	state->original_return_value = execute_data->return_value;
 	state->observer_started = observer_already_started;
 	state->observer_finished = false;
+	zend_native_execution_context_init(&context);
 	if (state->original_return_value == NULL) {
 		ZVAL_UNDEF(&state->discarded_return);
 		execute_data->return_value = &state->discarded_return;
@@ -154,7 +156,7 @@ static zend_native_status zend_native_execute_frame_impl(
 			state->observer_started = true;
 			ZEND_OBSERVER_FCALL_BEGIN(execute_data);
 		}
-		state->status = entry(execute_data);
+		state->status = entry(execute_data, &context);
 	} zend_catch {
 		state->status = EG(exception) != NULL
 			? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
