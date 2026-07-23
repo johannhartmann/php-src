@@ -16,6 +16,9 @@ typedef zend_native_status (*zend_native_dynamic_compile_execute_t)(
 typedef struct _zend_native_dynamic_compiler {
 	void *context;
 	zend_native_dynamic_compile_execute_t compile_execute;
+	zend_op_array **owned_op_arrays;
+	uint32_t owned_op_array_count;
+	uint32_t owned_op_array_capacity;
 } zend_native_dynamic_compiler;
 
 /*
@@ -23,8 +26,14 @@ typedef struct _zend_native_dynamic_compiler {
  * native execution tree is active, so independent ZTS requests never share a
  * compile-on-demand lock or partially published unit.
  */
+ZEND_API void zend_native_dynamic_compiler_init(
+	zend_native_dynamic_compiler *compiler,
+	void *context,
+	zend_native_dynamic_compile_execute_t compile_execute);
+ZEND_API void zend_native_dynamic_compiler_destroy(
+	zend_native_dynamic_compiler *compiler);
 ZEND_API void zend_native_dynamic_compiler_activate(
-	const zend_native_dynamic_compiler *compiler);
+	zend_native_dynamic_compiler *compiler);
 ZEND_API void zend_native_dynamic_compiler_deactivate(
 	const zend_native_dynamic_compiler *compiler);
 
