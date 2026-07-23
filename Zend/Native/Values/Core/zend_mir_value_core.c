@@ -837,17 +837,19 @@ static bool zend_mir_value_validate_executable_operations(
 			return false;
 		}
 		{
-			const zend_mir_source_operand_ref *operands[3] = {
-				&operation->op1, &operation->op2, &operation->result
+			const zend_mir_source_operand_ref *operands[4] = {
+				&operation->op1, &operation->op2, &operation->result,
+				&operation->auxiliary
 			};
-			const zend_mir_storage_id storage_ids[3] = {
+			const zend_mir_storage_id storage_ids[4] = {
 				operation->op1_storage_id,
 				operation->op2_storage_id,
-				operation->result_storage_id
+				operation->result_storage_id,
+				operation->auxiliary_storage_id
 			};
 			uint32_t operand_index;
 
-			for (operand_index = 0; operand_index < 3; operand_index++) {
+			for (operand_index = 0; operand_index < 4; operand_index++) {
 				const zend_mir_source_operand_ref *operand =
 					operands[operand_index];
 

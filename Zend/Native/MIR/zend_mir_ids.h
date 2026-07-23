@@ -68,7 +68,7 @@
  * positions remain diagnostic identity; operand slots, literals, opcode flags
  * and modes are carried independently and never reconstructed from zend_op.
  */
-#define ZEND_MIR_W11P_CONTRACT_VERSION_MINOR UINT32_C(10)
+#define ZEND_MIR_W11P_CONTRACT_VERSION_MINOR UINT32_C(11)
 #define ZEND_MIR_W11P_CONTRACT_VERSION \
 	((ZEND_MIR_CONTRACT_VERSION_MAJOR << 16) | ZEND_MIR_W11P_CONTRACT_VERSION_MINOR)
 
