@@ -271,16 +271,14 @@ static zend_mir_scalar_type_mask zend_native_compiler_scalar_type_from_zval(
 	}
 }
 
-static zend_mir_scalar_type_mask zend_native_compiler_argument_runtime_type(
-	const zend_op_array *op_array,
-	uint32_t ordinal,
-	zend_mir_scalar_type_mask supplied_type)
+static zend_mir_scalar_type_mask zend_native_compiler_argument_static_type(
+	const zend_op_array *op_array, uint32_t ordinal)
 {
 	uint32_t type_mask;
 
 	if (op_array == NULL || ordinal >= op_array->num_args
 			|| op_array->arg_info == NULL) {
-		return supplied_type;
+		return ZEND_MIR_SCALAR_TYPE_NONE;
 	}
 	type_mask = ZEND_TYPE_PURE_MASK(op_array->arg_info[ordinal].type);
 	switch (type_mask) {
@@ -295,7 +293,7 @@ static zend_mir_scalar_type_mask zend_native_compiler_argument_runtime_type(
 		case MAY_BE_DOUBLE:
 			return ZEND_MIR_SCALAR_TYPE_F64;
 		default:
-			return supplied_type;
+			return ZEND_MIR_SCALAR_TYPE_NONE;
 	}
 }
 
@@ -440,6 +438,12 @@ static zend_native_compiled_function *zend_native_compiler_add_function(
 		function->argument_types = ecalloc(
 			function->argument_type_count,
 			sizeof(*function->argument_types));
+		for (uint32_t ordinal = 0;
+				ordinal < function->argument_type_count; ordinal++) {
+			function->argument_types[ordinal] =
+				zend_native_compiler_argument_static_type(
+					op_array, ordinal);
+		}
 	}
 	zend_native_entry_cell_init(
 		&function->entry_cell, (zend_function *) op_array);
@@ -461,37 +465,6 @@ static zend_native_compiled_function *zend_native_compiler_add_function(
 	}
 	compiler->functions[compiler->function_count++] = function;
 	return function;
-}
-
-static bool zend_native_compiler_merge_argument_type(
-	zend_native_compiler *compiler,
-	zend_native_compiled_function *function,
-	uint32_t ordinal,
-	zend_mir_scalar_type_mask type,
-	zend_native_compile_diagnostic *diagnostic)
-{
-	if (function == NULL || ordinal >= function->argument_type_count
-			|| (!zend_mir_scalar_type_is_exact(type)
-				&& type != ZEND_MIR_SCALAR_TYPE_NONE)) {
-		zend_native_compiler_set_diagnostic(
-			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_LOWERING,
-			ZEND_MIRL_W05_UNSUPPORTED_ARGUMENT,
-			"native scalar operation has an invalid argument type");
-		return false;
-	}
-	if (type == ZEND_MIR_SCALAR_TYPE_NONE) {
-		return true;
-	}
-	if (function->argument_types[ordinal] != ZEND_MIR_SCALAR_TYPE_NONE
-			&& function->argument_types[ordinal] != type) {
-		zend_native_compiler_set_diagnostic(
-			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_LOWERING,
-			ZEND_MIRL_W05_UNSUPPORTED_ARGUMENT,
-			"native entry cell has conflicting scalar call signatures");
-		return false;
-	}
-	function->argument_types[ordinal] = type;
-	return true;
 }
 
 static bool zend_native_compiler_build_ssa(
@@ -1490,9 +1463,6 @@ static bool zend_native_compiler_discover_native_callees(
 		zend_mir_call_site_ref site;
 		zend_mir_call_target_ref target;
 		zend_op_array *callee = NULL;
-		zend_native_compiled_function *native_callee;
-		const zend_mir_view *view = zend_native_compiler_module_view(
-			compiler, function->module);
 		uint32_t target_index;
 		uint32_t argument_index;
 		bool found_target = false;
@@ -1575,54 +1545,14 @@ static bool zend_native_compiler_discover_native_callees(
 		}
 		if (target.kind == ZEND_MIR_CALL_TARGET_METHOD_USER
 				&& callee == function->op_array) {
-			/* Constructorless NEW and open receiver-polymorphic methods use
-			 * the caller entry cell as a runtime placeholder.  They have no
-			 * statically distinct callee signature to merge here. */
 			continue;
 		}
-		native_callee = zend_native_compiler_find_function(compiler, callee);
-		if (native_callee == NULL || view == NULL) {
-			return false;
-		}
-		for (argument_index = 0; argument_index < site.arguments.count;
-				argument_index++) {
-			zend_mir_call_argument_ref argument;
-			zend_mir_value_fact_ref fact;
-			uint32_t fact_index;
-			bool found = false;
-
-			if (!calls->call_argument_at(
-					calls->context, site.arguments.offset + argument_index,
-					&argument)) {
-				return false;
-			}
-			/* W09 user calls transfer canonical source zvals. Their source
-			 * ordinal may be named or variadic and is intentionally not a
-			 * machine-scalar signature for the callee. Runtime argument
-			 * placement and the callee's RECV projection provide the exact
-			 * Zend semantics. */
-			if (!zend_mir_id_is_valid(argument.value_id)) {
-				continue;
-			}
-			for (fact_index = 0;
-					fact_index < view->value_fact_count(view->context);
-					fact_index++) {
-				if (!view->value_fact_at(view->context, fact_index, &fact)) {
-					return false;
-				}
-				if (fact.value_id == argument.value_id) {
-					found = true;
-					break;
-				}
-			}
-			if (!found || !zend_native_compiler_merge_argument_type(
-					compiler, native_callee, argument.ordinal,
-					zend_native_compiler_argument_runtime_type(
-						native_callee->op_array, argument.ordinal,
-						fact.exact_type), NULL)) {
-				return false;
-			}
-		}
+		/*
+		 * A baseline entry is a property of the function body and its static
+		 * scope, never of the first observed call-site types.  User arguments
+		 * remain canonical zvals unless the callee's own declared type and SSA
+		 * prove an exact scalar after zend_native_frame_prepare().
+		 */
 	}
 	return true;
 }
@@ -2045,13 +1975,12 @@ zend_result zend_native_compiler_compile(
 	zend_native_compiled_function *root_function;
 	uint32_t index;
 
+	(void) supplied_argument_types;
+	(void) supplied_argument_count;
 	if (diagnostic != NULL) {
 		memset(diagnostic, 0, sizeof(*diagnostic));
 	}
-	if (compiler == NULL || root == NULL
-			|| supplied_argument_count > root->num_args
-			|| (supplied_argument_count != 0
-				&& supplied_argument_types == NULL)) {
+	if (compiler == NULL || root == NULL) {
 		zend_native_compiler_set_diagnostic(
 			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
 			ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
@@ -2089,15 +2018,6 @@ zend_result zend_native_compiler_compile(
 	}
 	root_function = zend_native_compiler_find_function(compiler, root);
 	ZEND_ASSERT(root_function != NULL);
-	for (index = 0; index < supplied_argument_count; index++) {
-		if (!zend_native_compiler_merge_argument_type(
-				compiler, root_function, index,
-				zend_native_compiler_argument_runtime_type(
-					root, index, supplied_argument_types[index]),
-				diagnostic)) {
-			goto failure;
-		}
-	}
 	for (index = 0; index < compiler->function_count; index++) {
 		zend_native_compiled_function *function =
 			compiler->functions[index];
@@ -2383,7 +2303,6 @@ zend_native_status zend_native_compiler_execute(
 	zend_native_diagnostic *diagnostic)
 {
 	zend_native_compile_diagnostic compile_diagnostic;
-	zend_mir_scalar_type_mask *argument_types = NULL;
 	zend_native_entry_cell *entry_cell;
 	zend_execute_data *previous;
 	zend_execute_data *frame;
@@ -2391,7 +2310,6 @@ zend_native_status zend_native_compiler_execute(
 	void *object_or_called_scope = NULL;
 	uint32_t argument_count =
 		arguments != NULL ? zend_hash_num_elements(arguments) : 0;
-	uint32_t typed_argument_count;
 	uint32_t call_info = ZEND_CALL_NESTED_FUNCTION;
 	uint32_t index;
 	zend_native_status status;
@@ -2405,30 +2323,17 @@ zend_native_status zend_native_compiler_execute(
 				&& (function->common.fn_flags & ZEND_ACC_VARIADIC) == 0)) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	typed_argument_count = argument_count < function->common.num_args
-		? argument_count : function->common.num_args;
-	if (typed_argument_count != 0) {
-		argument_types = safe_emalloc(
-			typed_argument_count, sizeof(*argument_types), 0);
-	}
 	for (index = 0; index < argument_count; index++) {
 		zval *argument = zend_hash_index_find(arguments, index);
 
 		if (argument == NULL) {
-			efree(argument_types);
 			return ZEND_NATIVE_EXCEPTION;
-		}
-		if (index < typed_argument_count) {
-			argument_types[index] =
-				zend_native_compiler_scalar_type_from_zval(argument);
 		}
 	}
 	memset(&compile_diagnostic, 0, sizeof(compile_diagnostic));
 	if (zend_native_compiler_compile(
-			compiler, &function->op_array, argument_types,
-			typed_argument_count,
+			compiler, &function->op_array, NULL, 0,
 			&compile_diagnostic) == FAILURE) {
-		efree(argument_types);
 		if (diagnostic != NULL) {
 			diagnostic->code = ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR;
 			snprintf(diagnostic->message, sizeof(diagnostic->message), "%s",
@@ -2436,7 +2341,6 @@ zend_native_status zend_native_compiler_execute(
 		}
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	efree(argument_types);
 	if (zend_native_compiler_codeunit_state(compiler, function)
 			== ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED) {
 		if (diagnostic != NULL) {
