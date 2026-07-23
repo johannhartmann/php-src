@@ -207,6 +207,9 @@ typedef struct _native_mir_test_state {
 	native_mir_test_native_function **native_functions;
 	uint32_t native_function_count;
 	uint32_t native_function_capacity;
+	zend_op_array **dynamic_op_arrays;
+	uint32_t dynamic_op_array_count;
+	uint32_t dynamic_op_array_capacity;
 	zend_native_dynamic_compiler dynamic_compiler;
 	bool dynamic_compiler_active;
 	zval native_result;
@@ -3773,8 +3776,31 @@ static zend_native_status native_mir_test_dynamic_compile_execute(
 	zend_native_entry_cell *entry_cell;
 	zend_native_diagnostic diagnostic;
 	zend_native_status status;
+	uint32_t old_capacity;
+	uint32_t new_capacity;
 
 	memset(&diagnostic, 0, sizeof(diagnostic));
+	if (state->dynamic_op_array_count
+			== state->dynamic_op_array_capacity) {
+		old_capacity = state->dynamic_op_array_capacity;
+		new_capacity = old_capacity < 8 ? 8 : old_capacity * 2;
+		if (new_capacity <= old_capacity) {
+			zend_throw_error(NULL,
+				"Native dynamic codeunit owner capacity overflow");
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		state->dynamic_op_arrays = safe_erealloc(
+			state->dynamic_op_arrays, new_capacity,
+			sizeof(*state->dynamic_op_arrays), 0);
+		state->dynamic_op_array_capacity = new_capacity;
+	}
+	/*
+	 * The compiler takes ownership before any fallible phase. Published
+	 * closures and declarations may keep child op_arrays alive after the
+	 * top-level include/eval frame returns, so their owning root remains valid
+	 * until the entire native execution tree has quiesced.
+	 */
+	state->dynamic_op_arrays[state->dynamic_op_array_count++] = op_array;
 	entry_cell = native_mir_test_resolve_reentry_target(
 		state, (zend_function *) op_array);
 	if (entry_cell == NULL || entry_cell->state != ZEND_NATIVE_ENTRY_READY
@@ -4079,6 +4105,19 @@ static void native_mir_test_cleanup(native_mir_test_state *state)
 			zend_arena_destroy(state->ssa_arena);
 			state->ssa_arena = NULL;
 		}
+	}
+	if (state->dynamic_op_arrays != NULL) {
+		for (index = state->dynamic_op_array_count; index-- > 0;) {
+			zend_op_array *op_array = state->dynamic_op_arrays[index];
+
+			zend_destroy_static_vars(op_array);
+			destroy_op_array(op_array);
+			efree_size(op_array, sizeof(zend_op_array));
+		}
+		efree(state->dynamic_op_arrays);
+		state->dynamic_op_arrays = NULL;
+		state->dynamic_op_array_count = 0;
+		state->dynamic_op_array_capacity = 0;
 	}
 	if (state->script_initialized) {
 		zend_hash_destroy(&state->script.function_table);

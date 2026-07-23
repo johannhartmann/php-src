@@ -139,8 +139,10 @@ zend_native_status zend_native_execute_include_or_eval(
 	zend_init_code_execute_data(call, new_op_array, result);
 	status = compiler->compile_execute(compiler->context, new_op_array, call);
 	zend_vm_stack_free_call_frame(call);
-	zend_destroy_static_vars(new_op_array);
-	destroy_op_array(new_op_array);
-	efree_size(new_op_array, sizeof(zend_op_array));
+	/*
+	 * compile_execute takes ownership even when compilation fails. The native
+	 * registry must retain the codeunit root while declarations, closures or
+	 * active frames can still reach any child op_array.
+	 */
 	return EG(exception) == NULL ? status : ZEND_NATIVE_EXCEPTION;
 }

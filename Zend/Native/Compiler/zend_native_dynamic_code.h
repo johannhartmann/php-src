@@ -7,6 +7,12 @@
 typedef zend_native_status (*zend_native_dynamic_compile_execute_t)(
 	void *context, zend_op_array *op_array, zend_execute_data *execute_data);
 
+/*
+ * compile_execute takes ownership of op_array on every invocation. It must
+ * release the complete codeunit only after its native entries and all
+ * non-suspended frames and closures have released their owner references.
+ */
+
 typedef struct _zend_native_dynamic_compiler {
 	void *context;
 	zend_native_dynamic_compile_execute_t compile_execute;

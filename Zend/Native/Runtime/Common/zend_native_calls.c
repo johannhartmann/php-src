@@ -92,7 +92,7 @@ zend_native_status zend_native_call_frameless_internal(
 	uint32_t argument_count;
 
 	if (execute_data == NULL || execute_data->func == NULL
-			|| execute_data->func->type != ZEND_USER_FUNCTION
+			|| !ZEND_USER_CODE(execute_data->func->type)
 			|| source_opline_index >= execute_data->func->op_array.last) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -948,7 +948,7 @@ void zend_native_call_begin(
 		zend_native_call_abort("Native callee entry is not ready");
 	}
 	function = cell->function;
-	if (caller->func == NULL || caller->func->type != ZEND_USER_FUNCTION
+	if (caller->func == NULL || !ZEND_USER_CODE(caller->func->type)
 			|| source_opline_index >= caller->func->op_array.last) {
 		zend_native_call_abort("Native call source position is invalid");
 	}
@@ -1230,7 +1230,7 @@ zend_result zend_native_prepare_finally_exception(
 	uint32_t index;
 
 	if (caller == NULL || caller->func == NULL
-			|| caller->func->type != ZEND_USER_FUNCTION
+			|| !ZEND_USER_CODE(caller->func->type)
 			|| source_opline_index >= caller->func->op_array.last
 			|| EG(exception) == NULL) {
 		return FAILURE;
@@ -1478,7 +1478,7 @@ zend_native_status zend_native_call_invoke_finish_source(
 	zend_native_status status;
 
 	if (caller == NULL || caller->func == NULL
-			|| caller->func->type != ZEND_USER_FUNCTION
+			|| !ZEND_USER_CODE(caller->func->type)
 			|| do_opline_index >= caller->func->op_array.last) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
