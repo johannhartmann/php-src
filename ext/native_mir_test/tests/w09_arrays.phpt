@@ -99,6 +99,48 @@ function array_case($values, $key)
 PHP,
         [[10, null], 1],
     ],
+    'mixed_isset_collision_present' => [
+        <<<'PHP'
+<?php
+function array_case($values, $key)
+{
+    return isset($values[$key]);
+}
+PHP,
+        [[0 => 'zero', 8 => 'eight', 'shape' => 1], 0],
+    ],
+    'mixed_isset_collision_missing' => [
+        <<<'PHP'
+<?php
+function array_case($values, $key)
+{
+    return isset($values[$key]);
+}
+PHP,
+        [[0 => 'zero', 8 => 'eight', 'shape' => 1], 16],
+    ],
+    'mixed_isset_null' => [
+        <<<'PHP'
+<?php
+function array_case($values, $key)
+{
+    return isset($values[$key]);
+}
+PHP,
+        [[0 => null, 'shape' => 1], 0],
+    ],
+    'mixed_isset_reference' => [
+        <<<'PHP'
+<?php
+function array_case($key)
+{
+    $value = 'native';
+    $values = [0 => null, 8 => &$value, 'shape' => 1];
+    return isset($values[$key]);
+}
+PHP,
+        [8],
+    ],
     'copy_on_write' => [
         <<<'PHP'
 <?php
@@ -234,6 +276,10 @@ mixed_read_collision_refcounted accepted returned return="zero" vm=0 execute_ex=
 packed_isset_present accepted returned return=true vm=0 execute_ex=0 handler=0
 packed_isset_missing accepted returned return=false vm=0 execute_ex=0 handler=0
 packed_isset_null accepted returned return=false vm=0 execute_ex=0 handler=0
+mixed_isset_collision_present accepted returned return=true vm=0 execute_ex=0 handler=0
+mixed_isset_collision_missing accepted returned return=false vm=0 execute_ex=0 handler=0
+mixed_isset_null accepted returned return=false vm=0 execute_ex=0 handler=0
+mixed_isset_reference accepted returned return=true vm=0 execute_ex=0 handler=0
 copy_on_write accepted returned return=[1,2] vm=0 execute_ex=0 handler=0
 append accepted returned return=[10,20] vm=0 execute_ex=0 handler=0
 packed_append_cv accepted returned return=[10,"native"] vm=0 execute_ex=0 handler=0
