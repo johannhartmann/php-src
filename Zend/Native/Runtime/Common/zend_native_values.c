@@ -957,7 +957,15 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 		if (result == NULL) {
 			return ZEND_NATIVE_ITERATOR_EXCEPTION;
 		}
+		/*
+		 * Zend commonly reuses one TMP slot for the condition and the
+		 * short-circuit result. Consume the old value before publishing the
+		 * bool so an aliased result is not immediately destroyed again.
+		 */
+		zend_native_value_consume_operand(
+			execute_data, opline->op1_type, opline->op1, NULL);
 		ZVAL_BOOL(result, truth);
+		return truth ? ZEND_NATIVE_ITERATOR_NEXT : ZEND_NATIVE_ITERATOR_END;
 	}
 	zend_native_value_consume_operand(
 		execute_data, opline->op1_type, opline->op1, NULL);
