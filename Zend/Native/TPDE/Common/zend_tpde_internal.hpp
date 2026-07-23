@@ -273,6 +273,11 @@ struct zend_native_image_symbol {
 	char name[64];
 };
 
+struct zend_native_image_symbol_binding {
+	uint32_t symbol_index;
+	const void *address;
+};
+
 struct zend_native_image {
 	zend_native_target target;
 	uint32_t abi_version;
@@ -283,6 +288,9 @@ struct zend_native_image {
 	zend_native_image_symbol *symbols;
 	uint32_t symbol_count;
 	uint32_t symbol_capacity;
+	zend_native_image_symbol_binding *symbol_bindings;
+	uint32_t symbol_binding_count;
+	uint32_t symbol_binding_capacity;
 	uint32_t slot_count;
 	uint32_t argument_count;
 	void *target_state;
