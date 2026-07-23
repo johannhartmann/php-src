@@ -210,6 +210,117 @@ static zend_native_status zend_native_declare_anon_class(
 	return ZEND_NATIVE_RETURNED;
 }
 
+static zend_native_status zend_native_declare_function(
+	zend_execute_data *execute_data, const zend_op *opline)
+{
+	zend_op_array *op_array;
+	zend_function *function;
+	zval *name;
+
+	if (execute_data->func == NULL
+			|| execute_data->func->type != ZEND_USER_FUNCTION
+			|| opline->opcode != ZEND_DECLARE_FUNCTION
+			|| opline->op1_type != IS_CONST
+			|| opline->op2.num >= execute_data->func->op_array.num_dynamic_func_defs
+			|| execute_data->func->op_array.dynamic_func_defs == NULL) {
+		zend_throw_error(NULL, "Malformed native function declaration");
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	op_array = &execute_data->func->op_array;
+	name = RT_CONSTANT(opline, opline->op1);
+	if (Z_TYPE_P(name) != IS_STRING) {
+		zend_throw_error(NULL, "Malformed native function declaration name");
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	function = (zend_function *)
+		op_array->dynamic_func_defs[opline->op2.num];
+	if (function == NULL) {
+		zend_throw_error(NULL, "Missing native function declaration");
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	do_bind_function(function, name);
+	return EG(exception) == NULL
+		? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+}
+
+static zend_native_status zend_native_declare_class(
+	zend_execute_data *execute_data, const zend_op *opline)
+{
+	zval *class_name;
+	zend_string *parent_name = NULL;
+
+	if (opline->opcode != ZEND_DECLARE_CLASS
+			|| opline->op1_type != IS_CONST) {
+		zend_throw_error(NULL, "Malformed native class declaration");
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	class_name = RT_CONSTANT(opline, opline->op1);
+	if (Z_TYPE_P(class_name) != IS_STRING) {
+		zend_throw_error(NULL, "Malformed native class declaration name");
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	if (opline->op2_type == IS_CONST) {
+		zval *parent = RT_CONSTANT(opline, opline->op2);
+
+		if (Z_TYPE_P(parent) != IS_STRING) {
+			zend_throw_error(NULL, "Malformed native class parent name");
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		parent_name = Z_STR_P(parent);
+	} else if (opline->op2_type != IS_UNUSED) {
+		zend_throw_error(NULL, "Malformed native class declaration parent");
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	do_bind_class(class_name, parent_name);
+	return EG(exception) == NULL
+		? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+}
+
+static zend_native_status zend_native_declare_class_delayed(
+	zend_execute_data *execute_data, const zend_op *opline)
+{
+	zend_op_array *op_array = &execute_data->func->op_array;
+	zval *lowercase_name;
+	zval *runtime_definition;
+	zval *parent;
+	void **cache_slot;
+	zend_class_entry *class_entry;
+
+	if (opline->opcode != ZEND_DECLARE_CLASS_DELAYED
+			|| opline->op1_type != IS_CONST
+			|| opline->op2_type != IS_CONST
+			|| execute_data->run_time_cache == NULL
+			|| opline->extended_value > op_array->cache_size
+			|| sizeof(void *) > op_array->cache_size - opline->extended_value) {
+		zend_throw_error(NULL, "Malformed delayed native class declaration");
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	lowercase_name = RT_CONSTANT(opline, opline->op1);
+	parent = RT_CONSTANT(opline, opline->op2);
+	if (Z_TYPE_P(lowercase_name) != IS_STRING
+			|| Z_TYPE_P(lowercase_name + 1) != IS_STRING
+			|| Z_TYPE_P(parent) != IS_STRING) {
+		zend_throw_error(NULL, "Malformed delayed native class metadata");
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	cache_slot = (void **) ((char *) execute_data->run_time_cache
+		+ opline->extended_value);
+	class_entry = (zend_class_entry *) cache_slot[0];
+	if (class_entry == NULL) {
+		runtime_definition = zend_hash_find_known_hash(
+			EG(class_table), Z_STR_P(lowercase_name + 1));
+		if (runtime_definition != NULL) {
+			class_entry = zend_bind_class_in_slot(
+				runtime_definition, lowercase_name, Z_STR_P(parent));
+			if (EG(exception) != NULL) {
+				return ZEND_NATIVE_EXCEPTION;
+			}
+		}
+		cache_slot[0] = class_entry;
+	}
+	return ZEND_NATIVE_RETURNED;
+}
+
 static zend_native_status zend_native_declare_lambda(
 	zend_execute_data *execute_data, const zend_op *opline)
 {
@@ -1493,5 +1604,13 @@ ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_bind_lexical,
 	ZEND_BIND_LEXICAL, zend_native_bind_lexical(execute_data, opline))
 ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_bind_static,
 	ZEND_BIND_STATIC, zend_native_bind_static(execute_data, opline))
+ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_declare_function,
+	ZEND_DECLARE_FUNCTION, zend_native_declare_function(execute_data, opline))
+ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_declare_class,
+	ZEND_DECLARE_CLASS, zend_native_declare_class(execute_data, opline))
+ZEND_NATIVE_OBJECT_EXACT_HELPER(
+	zend_native_execute_object_declare_class_delayed,
+	ZEND_DECLARE_CLASS_DELAYED,
+	zend_native_declare_class_delayed(execute_data, opline))
 
 #undef ZEND_NATIVE_OBJECT_EXACT_HELPER

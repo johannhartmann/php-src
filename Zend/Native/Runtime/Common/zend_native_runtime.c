@@ -257,6 +257,15 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_OBJECT_FETCH_CLASS_NAME,
 		ZEND_NATIVE_RUNTIME_EFFECT_ALL,
 		(const void *) zend_native_execute_object_fetch_class_name},
+	{ZEND_NATIVE_HELPER_OBJECT_DECLARE_FUNCTION,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_declare_function},
+	{ZEND_NATIVE_HELPER_OBJECT_DECLARE_CLASS,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_declare_class},
+	{ZEND_NATIVE_HELPER_OBJECT_DECLARE_CLASS_DELAYED,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALL,
+		(const void *) zend_native_execute_object_declare_class_delayed},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {

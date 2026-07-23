@@ -33,6 +33,7 @@ static bool zend_mir_frontend_is_call_init(uint8_t opcode)
 		case ZEND_INIT_USER_CALL:
 		case ZEND_INIT_METHOD_CALL:
 		case ZEND_INIT_STATIC_METHOD_CALL:
+		case ZEND_INIT_PARENT_PROPERTY_HOOK_CALL:
 		case ZEND_NEW:
 			return true;
 		default:
@@ -48,6 +49,7 @@ static bool zend_mir_frontend_is_call_do(uint8_t opcode)
 		case ZEND_DO_FCALL_BY_NAME:
 		case ZEND_DO_ICALL:
 		case ZEND_CALLABLE_CONVERT:
+		case ZEND_CALLABLE_CONVERT_PARTIAL:
 			return true;
 		default:
 			return false;
@@ -68,6 +70,7 @@ static bool zend_mir_frontend_is_call_send(uint8_t opcode)
 		case ZEND_SEND_FUNC_ARG:
 		case ZEND_SEND_VAR_NO_REF:
 		case ZEND_SEND_VAR_NO_REF_EX:
+		case ZEND_SEND_PLACEHOLDER:
 			return true;
 		default:
 			return false;
@@ -78,6 +81,8 @@ static zend_mir_source_call_argument_mode
 zend_mir_frontend_call_argument_mode(const zend_op *opline)
 {
 	switch (opline->opcode) {
+		case ZEND_SEND_PLACEHOLDER:
+			return ZEND_MIR_SOURCE_CALL_ARGUMENT_PLACEHOLDER;
 		case ZEND_SEND_UNPACK:
 		case ZEND_SEND_ARRAY:
 		case ZEND_SEND_USER:
@@ -93,11 +98,11 @@ zend_mir_frontend_call_argument_mode(const zend_op *opline)
 		case ZEND_SEND_VAL_EX:
 		case ZEND_SEND_VAR:
 		case ZEND_SEND_VAR_EX:
+		case ZEND_SEND_FUNC_ARG:
 			return ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE;
 		case ZEND_SEND_REF:
 		case ZEND_SEND_VAR_NO_REF:
 		case ZEND_SEND_VAR_NO_REF_EX:
-		case ZEND_SEND_FUNC_ARG:
 			return ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_REFERENCE;
 		default:
 			return ZEND_MIR_SOURCE_CALL_ARGUMENT_MODE_INVALID;
@@ -562,7 +567,9 @@ static bool zend_mir_frontend_w05_original_result_slot(
 		if ((opline->opcode != ZEND_DO_UCALL
 					&& opline->opcode != ZEND_DO_FCALL
 					&& opline->opcode != ZEND_DO_ICALL
-					&& opline->opcode != ZEND_CALLABLE_CONVERT)
+					&& opline->opcode != ZEND_CALLABLE_CONVERT
+					&& opline->opcode
+						!= ZEND_CALLABLE_CONVERT_PARTIAL)
 				|| !zend_mir_frontend_decode_slot(
 					original_op_array, &opline->result, opline->result_type,
 					slot, slot_kind)) {
@@ -1907,7 +1914,8 @@ zend_mir_frontend_target_kind(uint8_t opcode, const zend_function *function,
 	const zend_script *script, const zend_op_array *caller)
 {
 	if (opcode == ZEND_INIT_METHOD_CALL
-			|| opcode == ZEND_INIT_STATIC_METHOD_CALL) {
+			|| opcode == ZEND_INIT_STATIC_METHOD_CALL
+			|| opcode == ZEND_INIT_PARENT_PROPERTY_HOOK_CALL) {
 		if (function != NULL && function->type == ZEND_INTERNAL_FUNCTION) {
 			return ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL;
 		}
@@ -2076,9 +2084,12 @@ static bool zend_mir_frontend_target_for_call(
 			|| opline->opcode == ZEND_INIT_NS_FCALL_BY_NAME
 			|| opline->opcode == ZEND_INIT_METHOD_CALL
 			|| opline->opcode == ZEND_INIT_STATIC_METHOD_CALL
+			|| opline->opcode == ZEND_INIT_PARENT_PROPERTY_HOOK_CALL
 			|| opline->opcode == ZEND_NEW) {
-		function = zend_optimizer_get_called_func(
-			script, op_array, (zend_op *) opline, &is_prototype);
+		if (opline->opcode != ZEND_INIT_PARENT_PROPERTY_HOOK_CALL) {
+			function = zend_optimizer_get_called_func(
+				script, op_array, (zend_op *) opline, &is_prototype);
+		}
 		if (is_prototype) {
 			function = NULL;
 		}
@@ -2118,7 +2129,9 @@ static bool zend_mir_frontend_target_for_call(
 		&inventory->targets[inventory->target_count],
 		inventory->target_count, kind, function, declaration_id,
 		function == NULL && (opline->opcode == ZEND_INIT_METHOD_CALL
-			|| opline->opcode == ZEND_INIT_STATIC_METHOD_CALL))) {
+			|| opline->opcode == ZEND_INIT_STATIC_METHOD_CALL
+			|| opline->opcode
+				== ZEND_INIT_PARENT_PROPERTY_HOOK_CALL))) {
 		return false;
 	}
 	inventory->target_count++;
@@ -2319,6 +2332,8 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 					== ZEND_MIR_SOURCE_CALL_ARGUMENT_NAMED
 				|| argument->mode
 					== ZEND_MIR_SOURCE_CALL_ARGUMENT_UNPACK
+				|| argument->mode
+					== ZEND_MIR_SOURCE_CALL_ARGUMENT_PLACEHOLDER
 				? next_ordinal
 				: (opline->op2.num == 0
 					? next_ordinal : opline->op2.num - 1);
@@ -2877,7 +2892,9 @@ static zend_mir_lowering_status zend_mir_zend_source_preflight_direct_calls(
 					&& argument->mode
 						!= ZEND_MIR_SOURCE_CALL_ARGUMENT_NAMED
 					&& argument->mode
-						!= ZEND_MIR_SOURCE_CALL_ARGUMENT_UNPACK)
+						!= ZEND_MIR_SOURCE_CALL_ARGUMENT_UNPACK
+					&& (!w10_execution || argument->mode
+						!= ZEND_MIR_SOURCE_CALL_ARGUMENT_PLACEHOLDER))
 			: w08_execution
 				? (argument->mode != ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE
 					&& argument->mode
@@ -2886,13 +2903,17 @@ static zend_mir_lowering_status zend_mir_zend_source_preflight_direct_calls(
 					!= ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE)
 				|| argument->flags != 0
 				|| zend_mir_id_is_valid(argument->name_symbol_id)
-				|| ((w08_execution || w09_execution)
+				|| (argument->mode
+						== ZEND_MIR_SOURCE_CALL_ARGUMENT_PLACEHOLDER
+					? (!w10_execution || argument->source_operand.kind
+						!= ZEND_MIR_SOURCE_OPERAND_UNUSED)
+					: ((w08_execution || w09_execution)
 					? (argument->source_operand.kind
 							< ZEND_MIR_SOURCE_OPERAND_LITERAL
 						|| argument->source_operand.kind
 							> ZEND_MIR_SOURCE_OPERAND_SSA)
 					: !zend_mir_frontend_w05_argument_is_scalar(
-						op_array, ssa, argument))) {
+						op_array, ssa, argument)))) {
 			uint32_t opline_index = argument->send_opline_index;
 			uint32_t ssa_variable_id = argument->value_ssa_variable_id;
 			zend_mir_zend_source_release_w05(&source);
@@ -2998,18 +3019,24 @@ static zend_mir_lowering_status zend_mir_zend_source_preflight_direct_calls(
 					&& (!w08_execution
 						|| (init_opcode != ZEND_INIT_FCALL
 							&& init_opcode != ZEND_INIT_METHOD_CALL
-							&& init_opcode != ZEND_INIT_STATIC_METHOD_CALL)
+							&& init_opcode != ZEND_INIT_STATIC_METHOD_CALL
+							&& (!w10_execution || init_opcode
+								!= ZEND_INIT_PARENT_PROPERTY_HOOK_CALL))
 							|| (do_opcode != ZEND_DO_ICALL
 								&& do_opcode != ZEND_DO_FCALL
 								&& (!w10_execution
-									|| do_opcode != ZEND_CALLABLE_CONVERT))))
+									|| (do_opcode != ZEND_CALLABLE_CONVERT
+										&& do_opcode
+											!= ZEND_CALLABLE_CONVERT_PARTIAL)))))
 					|| (target->kind
 						== ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
 						&& (init_opcode != ZEND_INIT_FCALL
 							|| (do_opcode != ZEND_DO_UCALL
 								&& do_opcode != ZEND_DO_FCALL
 								&& (!w10_execution
-									|| do_opcode != ZEND_CALLABLE_CONVERT))))
+									|| (do_opcode != ZEND_CALLABLE_CONVERT
+										&& do_opcode
+											!= ZEND_CALLABLE_CONVERT_PARTIAL)))))
 					|| (target->kind
 						== ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER
 						&& (!w10_execution
@@ -3022,15 +3049,21 @@ static zend_mir_lowering_status zend_mir_zend_source_preflight_direct_calls(
 								&& do_opcode != ZEND_DO_FCALL
 								&& do_opcode != ZEND_DO_FCALL_BY_NAME
 								&& do_opcode != ZEND_DO_ICALL
-								&& do_opcode != ZEND_CALLABLE_CONVERT)))
+								&& do_opcode != ZEND_CALLABLE_CONVERT
+								&& do_opcode
+									!= ZEND_CALLABLE_CONVERT_PARTIAL)))
 					|| (target->kind == ZEND_MIR_SOURCE_CALL_TARGET_METHOD
 						&& (!w10_execution
 							|| (init_opcode != ZEND_INIT_METHOD_CALL
 								&& init_opcode != ZEND_INIT_STATIC_METHOD_CALL
+								&& init_opcode
+									!= ZEND_INIT_PARENT_PROPERTY_HOOK_CALL
 								&& init_opcode != ZEND_NEW)
 							|| (do_opcode != ZEND_DO_UCALL
 								&& do_opcode != ZEND_DO_FCALL
-								&& do_opcode != ZEND_CALLABLE_CONVERT)))) {
+								&& do_opcode != ZEND_CALLABLE_CONVERT
+								&& do_opcode
+									!= ZEND_CALLABLE_CONVERT_PARTIAL)))) {
 				code = ZEND_MIRL_W05_UNSUPPORTED_TARGET;
 			} else if (!w08_execution
 					&& (site->flags
@@ -3344,6 +3377,8 @@ static bool zend_mir_frontend_resolve_method_target(
 			if (open_method
 					? init_opcode != ZEND_INIT_METHOD_CALL
 						&& init_opcode != ZEND_INIT_STATIC_METHOD_CALL
+						&& init_opcode
+							!= ZEND_INIT_PARENT_PROPERTY_HOOK_CALL
 					: init_opcode != ZEND_NEW) {
 				return false;
 			}

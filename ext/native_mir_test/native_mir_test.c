@@ -1920,7 +1920,9 @@ static zend_op_array *native_mir_test_resolve_native_target(
 					&& (caller->opcodes[site.source_init_opline_index].opcode
 							== ZEND_INIT_METHOD_CALL
 						|| caller->opcodes[site.source_init_opline_index].opcode
-							== ZEND_INIT_STATIC_METHOD_CALL)) {
+							== ZEND_INIT_STATIC_METHOD_CALL
+						|| caller->opcodes[site.source_init_opline_index].opcode
+							== ZEND_INIT_PARENT_PROPERTY_HOOK_CALL)) {
 				/* The receiver class is intentionally request-local for a
 				 * polymorphic instance or static method call.  Bind the generated
 				 * site to the caller cell as a placeholder; zend_native_call_begin()
@@ -2889,6 +2891,7 @@ static bool native_mir_test_lower_native_function(
 
 		if (opcode == ZEND_DO_UCALL || opcode == ZEND_DO_FCALL
 				|| opcode == ZEND_CALLABLE_CONVERT
+				|| opcode == ZEND_CALLABLE_CONVERT_PARTIAL
 				|| (state->wave >= 8 && opcode == ZEND_DO_ICALL)) {
 			has_call = true;
 			break;
@@ -3533,6 +3536,20 @@ static zend_native_entry_cell *native_mir_test_resolve_reentry_target(
 	}
 	source_op_array = native_mir_test_canonical_reentry_op_array(
 		state, &resolved->op_array);
+	if (source_op_array == NULL
+			&& state->wave >= 10
+			&& resolved->common.function_name != NULL
+			&& zend_string_starts_with_literal(
+				resolved->common.function_name, "{closure:pfa:")) {
+		/*
+		 * Partial application compiles a source-derived forwarding closure
+		 * from the declaring opline and caches that op_array. It is not a
+		 * dynamic source unit, so compile the exact generated PFA on first
+		 * native invocation while keeping eval/include-created functions out
+		 * of the W10 component.
+		 */
+		source_op_array = &resolved->op_array;
+	}
 	if (source_op_array == NULL) {
 		return NULL;
 	}
