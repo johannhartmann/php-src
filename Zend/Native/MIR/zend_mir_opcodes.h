@@ -138,7 +138,8 @@
 	X(DYNAMIC_FETCH_GLOBALS, "dynamic_fetch_globals", 146) \
 	X(DYNAMIC_FETCH_CONSTANT, "dynamic_fetch_constant", 147) \
 	X(DYNAMIC_DECLARE_CONSTANT, "dynamic_declare_constant", 148) \
-	X(DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT, "dynamic_declare_attributed_constant", 149)
+	X(DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT, "dynamic_declare_attributed_constant", 149) \
+	X(DYNAMIC_INCLUDE_OR_EVAL, "dynamic_include_or_eval", 150)
 
 #define ZEND_MIR_SCALAR_OPCODE_CATALOG(X) \
 	X(I64_ADD_NO_OVERFLOW, "i64_add_no_overflow", 10) \
@@ -193,7 +194,7 @@ typedef enum _zend_mir_opcode {
 	ZEND_MIR_W08_OPCODE_COUNT = 54,
 	ZEND_MIR_W09_OPCODE_COUNT = 91,
 	ZEND_MIR_W10_OPCODE_COUNT = 137,
-	ZEND_MIR_W11_OPCODE_COUNT = 150,
+	ZEND_MIR_W11_OPCODE_COUNT = 151,
 	ZEND_MIR_OPCODE_INVALID = -1
 } zend_mir_opcode;
 #undef ZEND_MIR_OPCODE_ENUM
@@ -267,7 +268,7 @@ static inline bool zend_mir_opcode_is_executable_value(
 		|| (opcode >= ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME
 			&& opcode <= ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS_DELAYED)
 		|| (opcode >= ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
-			&& opcode <= ZEND_MIR_OPCODE_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT);
+			&& opcode <= ZEND_MIR_OPCODE_DYNAMIC_INCLUDE_OR_EVAL);
 }
 
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_COUNT < UINT32_MAX,
@@ -318,7 +319,7 @@ ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
 	== ZEND_MIR_W10_OPCODE_COUNT,
 	"W11 dynamic operations begin after the W10 boundary");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W11_OPCODE_COUNT
-	== ZEND_MIR_OPCODE_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT + 1,
+	== ZEND_MIR_OPCODE_DYNAMIC_INCLUDE_OR_EVAL + 1,
 	"W11 dynamic operations have an additive table boundary");
 
 #endif /* ZEND_MIR_OPCODES_H */

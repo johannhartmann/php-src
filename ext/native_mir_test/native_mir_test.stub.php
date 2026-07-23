@@ -56,6 +56,7 @@ function native_mir_test_compile_dump(
 /**
  * Compile source through SSA and verified ZNMIR, publish native code, and
  * execute it over real Zend frames without entering a VM opcode handler.
+ * Waves 3 through 11 use their respective production lowering contract.
  *
  * @return array
  * @param list<mixed> $arguments

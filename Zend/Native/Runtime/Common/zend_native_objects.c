@@ -15,7 +15,7 @@ static const zend_op *zend_native_object_opline(
 	zend_execute_data *execute_data, uint32_t source_opline_index)
 {
 	if (execute_data == NULL || execute_data->func == NULL
-			|| execute_data->func->type != ZEND_USER_FUNCTION
+			|| !ZEND_USER_CODE(execute_data->func->type)
 			|| source_opline_index >= execute_data->func->op_array.last) {
 		return NULL;
 	}
@@ -218,7 +218,7 @@ static zend_native_status zend_native_declare_function(
 	zval *name;
 
 	if (execute_data->func == NULL
-			|| execute_data->func->type != ZEND_USER_FUNCTION
+			|| !ZEND_USER_CODE(execute_data->func->type)
 			|| opline->opcode != ZEND_DECLARE_FUNCTION
 			|| opline->op1_type != IS_CONST
 			|| opline->op2.num >= execute_data->func->op_array.num_dynamic_func_defs
@@ -331,7 +331,7 @@ static zend_native_status zend_native_declare_lambda(
 		execute_data, opline->result_type, opline->result);
 
 	if (result == NULL || execute_data->func == NULL
-			|| execute_data->func->type != ZEND_USER_FUNCTION
+			|| !ZEND_USER_CODE(execute_data->func->type)
 			|| opline->op2.num
 				>= execute_data->func->op_array.num_dynamic_func_defs
 			|| execute_data->func->op_array.dynamic_func_defs == NULL) {

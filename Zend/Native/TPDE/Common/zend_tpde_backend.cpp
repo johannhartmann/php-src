@@ -36,7 +36,7 @@ zend_native_runtime_helper_id executable_value_helper(zend_mir_opcode opcode) {
 					ZEND_NATIVE_HELPER_OBJECT_DECLARE_ANON_CLASS));
 	}
 	if (opcode >= ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
-			&& opcode <= ZEND_MIR_OPCODE_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT) {
+			&& opcode <= ZEND_MIR_OPCODE_DYNAMIC_INCLUDE_OR_EVAL) {
 		return static_cast<zend_native_runtime_helper_id>(
 			static_cast<uint32_t>(opcode)
 				- static_cast<uint32_t>(ZEND_MIR_OPCODE_DYNAMIC_FETCH_R)
@@ -329,7 +329,7 @@ bool initialize_plan(
 							<= ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS_DELAYED)
 					|| (record.opcode >= ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
 						&& record.opcode
-							<= ZEND_MIR_OPCODE_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT)) {
+							<= ZEND_MIR_OPCODE_DYNAMIC_INCLUDE_OR_EVAL)) {
 				plan->required_runtime_capabilities |= record.opcode
 						>= ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
 					? ZEND_NATIVE_RUNTIME_CAP_DYNAMIC_BINDING

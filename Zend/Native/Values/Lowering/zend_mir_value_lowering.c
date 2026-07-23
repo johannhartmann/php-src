@@ -237,6 +237,8 @@ static zend_mir_opcode zend_mir_w09_executable_opcode(uint32_t opcode)
 			return ZEND_MIR_OPCODE_DYNAMIC_DECLARE_CONSTANT;
 		case ZEND_DECLARE_ATTRIBUTED_CONST:
 			return ZEND_MIR_OPCODE_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT;
+		case ZEND_INCLUDE_OR_EVAL:
+			return ZEND_MIR_OPCODE_DYNAMIC_INCLUDE_OR_EVAL;
 		case ZEND_TYPE_CHECK:
 			return ZEND_MIR_OPCODE_VALUE_TYPE_CHECK;
 		case ZEND_FRAMELESS_ICALL_0:
@@ -368,7 +370,7 @@ bool zend_mir_w11_opcode_is_executable(uint32_t opcode)
 
 	return zend_mir_w10_opcode_is_executable(opcode)
 		|| (mapped >= ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
-			&& mapped <= ZEND_MIR_OPCODE_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT);
+			&& mapped <= ZEND_MIR_OPCODE_DYNAMIC_INCLUDE_OR_EVAL);
 }
 
 static bool zend_mir_w09_add_effect(
@@ -502,6 +504,7 @@ static bool zend_mir_w09_operation_semantics(
 		case ZEND_MIR_OPCODE_DYNAMIC_FETCH_CONSTANT:
 		case ZEND_MIR_OPCODE_DYNAMIC_DECLARE_CONSTANT:
 		case ZEND_MIR_OPCODE_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT:
+		case ZEND_MIR_OPCODE_DYNAMIC_INCLUDE_OR_EVAL:
 			if (!zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_ALLOCATE)
 					|| !zend_mir_w09_add_effect(
 						&summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)
