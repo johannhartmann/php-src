@@ -3,6 +3,7 @@
 
 #include "Zend/Native/TPDE/Common/zend_tpde_backend.h"
 #include "Zend/Native/MIR/zend_mir_call.h"
+#include "Zend/Native/MIR/zend_mir_values.h"
 #include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 
 #include <cstddef>
@@ -32,6 +33,8 @@ struct zend_tpde_instruction {
 	_zend_native_direct_call_descriptor *direct_call;
 	zend_native_source_effect_kind source_effect;
 	zend_mir_scalar_type_mask source_effect_exact_type;
+	zend_mir_executable_value_ref value_operation;
+	bool has_value_operation;
 	uint32_t source_opline_index;
 };
 

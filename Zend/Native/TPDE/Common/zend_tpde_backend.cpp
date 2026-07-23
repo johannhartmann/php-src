@@ -173,6 +173,8 @@ bool initialize_plan(
 	plan->value_count = view->value_count(view->context);
 	plan->instruction_count = view->instruction_count(view->context);
 	const zend_mir_call_view *calls = zend_mir_module_call_view_from_view(view);
+	const zend_mir_value_view *value_model =
+		zend_mir_module_value_view_from_view(view);
 	plan->call_argument_count = calls != nullptr
 		&& calls->call_argument_count != nullptr
 		? calls->call_argument_count(calls->context) : 0;
@@ -216,6 +218,39 @@ bool initialize_plan(
 				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 				"MIR call-argument table is unreadable");
 			return false;
+		}
+	}
+	if (value_model != nullptr) {
+		if (value_model->contract_version != ZEND_MIR_W11P_CONTRACT_VERSION
+				|| value_model->executable_operation_count == nullptr
+				|| value_model->executable_operation_at == nullptr) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"executable value model lacks explicit W11P operands");
+			return false;
+		}
+		const uint32_t operation_count =
+			value_model->executable_operation_count(value_model->context);
+		if (!checked_count(operation_count)
+				|| operation_count > plan->instruction_count) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"executable value operation count is outside the MIR bound");
+			return false;
+		}
+		for (uint32_t i = 0; i < operation_count; ++i) {
+			zend_mir_executable_value_ref operation{};
+			if (!value_model->executable_operation_at(
+					value_model->context, i, &operation)
+					|| operation.id >= plan->instruction_count
+					|| plan->instructions[operation.id].has_value_operation) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+					"executable value operation has an invalid instruction identity");
+				return false;
+			}
+			plan->instructions[operation.id].value_operation = operation;
+			plan->instructions[operation.id].has_value_operation = true;
 		}
 	}
 
@@ -321,12 +356,23 @@ bool initialize_plan(
 			const zend_native_runtime_helper_id helper =
 				executable_value_helper(record.opcode);
 			if (count != 0 || !zend_mir_id_is_valid(record.source_position_id)
-					|| helper == ZEND_NATIVE_HELPER_COUNT) {
+					|| helper == ZEND_NATIVE_HELPER_COUNT
+					|| !plan->instructions[i].has_value_operation
+					|| plan->instructions[i].value_operation.id != record.id
+					|| plan->instructions[i].value_operation.opcode
+						!= record.opcode
+					|| plan->instructions[i].value_operation.source_position_id
+						!= record.source_position_id) {
 				zend_tpde_set_diagnostic(diag,
 					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 					"executable value operation lacks exact source semantics");
 				return false;
 			}
+			/*
+			 * Kept temporarily for uncommon slow paths while their helper ABI
+			 * is migrated to the explicit operation below. Inline W11P paths
+			 * never consume this source identity.
+			 */
 			plan->instructions[i].source_opline_index =
 				record.source_position_id;
 			plan->required_runtime_capabilities |=

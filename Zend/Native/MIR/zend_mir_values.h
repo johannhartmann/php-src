@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "../Lowering/zend_mir_lowering_source.h"
 #include "zend_mir.h"
 
 typedef enum _zend_mir_storage_kind {
@@ -155,12 +156,21 @@ typedef struct _zend_mir_call_transfer_ref {
 
 /*
  * Persistent executable value operations contain stable source and MIR IDs
- * only. The process-local Zend opline is resolved by the runtime boundary.
+ * only. Source position is diagnostic identity, not operand identity: runtime
+ * code consumes these explicit operands and never decodes a zend_op.
  */
 typedef struct _zend_mir_executable_value_ref {
 	zend_mir_instruction_id id;
 	zend_mir_block_id block_id;
 	zend_mir_opcode opcode;
+	uint32_t source_opcode;
+	zend_mir_source_operand_ref op1;
+	zend_mir_source_operand_ref op2;
+	zend_mir_source_operand_ref result;
+	zend_mir_storage_id op1_storage_id;
+	zend_mir_storage_id op2_storage_id;
+	zend_mir_storage_id result_storage_id;
+	uint32_t extended_value;
 	zend_mir_source_position_id source_position_id;
 	zend_mir_frame_state_id frame_state_id;
 	zend_mir_effect_mask effects;
@@ -192,6 +202,9 @@ typedef struct _zend_mir_value_view {
 	uint32_t (*call_transfer_count)(const void *context);
 	bool (*call_transfer_at)(const void *context, uint32_t index,
 		zend_mir_call_transfer_ref *out);
+	uint32_t (*executable_operation_count)(const void *context);
+	bool (*executable_operation_at)(const void *context, uint32_t index,
+		zend_mir_executable_value_ref *out);
 } zend_mir_value_view;
 
 typedef struct _zend_mir_value_mutator {

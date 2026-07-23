@@ -338,6 +338,100 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		label_place(continued);
 		return true;
 	};
+	auto copy_nonrefcounted_slot = [&](
+			const zend_mir_source_operand_ref &source_operand,
+			zend_mir_storage_id source_storage,
+			zend_mir_storage_id target_storage,
+			zend_mir_storage_id result_storage,
+			bool move_source,
+			zend_native_runtime_helper_id slow_helper) {
+		if (source_storage == ZEND_MIR_ID_INVALID
+				|| target_storage == ZEND_MIR_ID_INVALID
+				|| source_storage == target_storage
+				|| (result_storage != ZEND_MIR_ID_INVALID
+					&& (result_storage == source_storage
+						|| result_storage == target_storage))) {
+			return execute_value_operation(slow_helper);
+		}
+		const uint64_t source_offset =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + source_storage) * sizeof(zval);
+		const uint64_t target_offset =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + target_storage) * sizeof(zval);
+		const uint64_t result_offset = result_storage == ZEND_MIR_ID_INVALID
+			? 0 : (uint64_t{ZEND_CALL_FRAME_SLOT} + result_storage) * sizeof(zval);
+		if (source_offset > UINT32_MAX || target_offset > UINT32_MAX
+				|| result_offset > UINT32_MAX) {
+			return false;
+		}
+
+		auto slow = text_writer.label_create();
+		auto done = text_writer.label_create();
+		auto [frame_ref, frame] =
+			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+		auto frame_reg = frame.load_to_reg();
+		ScratchReg source_slot{this};
+		ScratchReg target_slot{this};
+		ScratchReg source_type{this};
+		ScratchReg target_type{this};
+		ScratchReg low_word{this};
+		ScratchReg high_word{this};
+		auto source_slot_reg = source_slot.alloc_gp();
+		auto target_slot_reg = target_slot.alloc_gp();
+		auto source_type_reg = source_type.alloc_gp();
+		auto target_type_reg = target_type.alloc_gp();
+		auto low_word_reg = low_word.alloc_gp();
+		auto high_word_reg = high_word.alloc_gp();
+
+		ASM(ADDxi, source_slot_reg, frame_reg,
+			static_cast<uint32_t>(source_offset));
+		ASM(ADDxi, target_slot_reg, frame_reg,
+			static_cast<uint32_t>(target_offset));
+		load_off(source_type_reg, source_slot_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		if (source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+			ASM(CMPwi, source_type_reg, IS_UNDEF);
+			generate_raw_jump(Jump::Jeq, slow);
+		}
+		ASM(CMPwi, source_type_reg, IS_DOUBLE);
+		generate_raw_jump(Jump::Jgt, slow);
+		load_off(target_type_reg, target_slot_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(CMPwi, target_type_reg, IS_DOUBLE);
+		generate_raw_jump(Jump::Jgt, slow);
+		if (result_storage != ZEND_MIR_ID_INVALID) {
+			ASM(ADDxi, target_type_reg, frame_reg,
+				static_cast<uint32_t>(result_offset));
+			load_off(target_type_reg, target_type_reg,
+				static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+			ASM(CMPwi, target_type_reg, IS_DOUBLE);
+			generate_raw_jump(Jump::Jgt, slow);
+		}
+		load_off(low_word_reg, source_slot_reg, 0, 8);
+		load_off(high_word_reg, source_slot_reg, 8, 8);
+		store_off(target_slot_reg, 0, low_word_reg, 8);
+		store_off(target_slot_reg, 8, high_word_reg, 8);
+		if (result_storage != ZEND_MIR_ID_INVALID) {
+			ASM(ADDxi, target_slot_reg, frame_reg,
+				static_cast<uint32_t>(result_offset));
+			store_off(target_slot_reg, 0, low_word_reg, 8);
+			store_off(target_slot_reg, 8, high_word_reg, 8);
+		}
+		if (move_source) {
+			materialize_constant(
+				static_cast<uint64_t>(IS_UNDEF),
+				DarwinConfig::GP_BANK, 4, source_type_reg);
+			store_off(source_slot_reg,
+				static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+				source_type_reg, 4);
+		}
+		generate_raw_jump(Jump::jmp, done);
+		label_place(slow);
+		if (!execute_value_operation(slow_helper)) {
+			return false;
+		}
+		label_place(done);
+		return true;
+	};
 
 	if ((mir.record.opcode >= ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS
 				&& mir.record.opcode
@@ -380,9 +474,29 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		case ZEND_MIR_OPCODE_VALUE_CHECK_VAR:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_CHECK_VAR);
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ASSIGN);
+			if (mir.value_operation.op1.slot_kind
+					!= ZEND_MIR_SOURCE_SLOT_CV) {
+				return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ASSIGN);
+			}
+			return copy_nonrefcounted_slot(
+				mir.value_operation.op2,
+				mir.value_operation.op2_storage_id,
+				mir.value_operation.op1_storage_id,
+				mir.value_operation.result_storage_id,
+				mir.value_operation.op2.slot_kind
+					== ZEND_MIR_SOURCE_SLOT_TMP,
+				ZEND_NATIVE_HELPER_VALUE_ASSIGN);
 		case ZEND_MIR_OPCODE_VALUE_QM_ASSIGN:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_QM_ASSIGN);
+			return copy_nonrefcounted_slot(
+				mir.value_operation.op1,
+				mir.value_operation.op1_storage_id,
+				mir.value_operation.result_storage_id,
+				ZEND_MIR_ID_INVALID,
+				mir.value_operation.op1.slot_kind
+					== ZEND_MIR_SOURCE_SLOT_TMP
+					|| mir.value_operation.op1.slot_kind
+						== ZEND_MIR_SOURCE_SLOT_VAR,
+				ZEND_NATIVE_HELPER_VALUE_QM_ASSIGN);
 		case ZEND_MIR_OPCODE_VALUE_CONCAT:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_CONCAT);
 		case ZEND_MIR_OPCODE_VALUE_FAST_CONCAT:

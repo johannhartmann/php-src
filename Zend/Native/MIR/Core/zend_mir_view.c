@@ -571,13 +571,16 @@ ZEND_MIR_VALUE_VIEW_ACCESSORS(
 ZEND_MIR_VALUE_VIEW_ACCESSORS(
 	zend_mir_value_view_call_transfer, value_call_transfers,
 	zend_mir_call_transfer_ref)
+ZEND_MIR_VALUE_VIEW_ACCESSORS(
+	zend_mir_value_view_executable_operation, value_executable_operations,
+	zend_mir_executable_value_ref)
 
 #undef ZEND_MIR_VALUE_VIEW_ACCESSORS
 
 void zend_mir_module_init_value_view(zend_mir_module *module)
 {
 	memset(&module->value_view, 0, sizeof(module->value_view));
-	module->value_view.contract_version = ZEND_MIR_W06_CONTRACT_VERSION;
+	module->value_view.contract_version = ZEND_MIR_W11P_CONTRACT_VERSION;
 	module->value_view.context = module;
 	module->value_view.storage_count = zend_mir_value_view_storage_count;
 	module->value_view.storage_at = zend_mir_value_view_storage_at;
@@ -603,6 +606,10 @@ void zend_mir_module_init_value_view(zend_mir_module *module)
 		zend_mir_value_view_call_transfer_count;
 	module->value_view.call_transfer_at =
 		zend_mir_value_view_call_transfer_at;
+	module->value_view.executable_operation_count =
+		zend_mir_value_view_executable_operation_count;
+	module->value_view.executable_operation_at =
+		zend_mir_value_view_executable_operation_at;
 }
 
 void zend_mir_module_init_view(zend_mir_module *module)
