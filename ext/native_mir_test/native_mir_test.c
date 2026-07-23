@@ -46,6 +46,7 @@
 #include "Zend/Native/MIR/Scalar/zend_mir_scalar_descriptors.h"
 #include "Zend/Native/MIR/zend_mir.h"
 #include "Zend/Native/Calls/Model/zend_mir_call_model.h"
+#include "Zend/Native/Compiler/zend_native_compiler.h"
 #include "Zend/Native/Compiler/zend_native_dynamic_code.h"
 #include "Zend/Native/Values/Lowering/zend_mir_value_lowering.h"
 #include "Zend/Native/Lowering/Core/zend_mir_lowering_internal.h"
@@ -204,6 +205,7 @@ typedef struct _native_mir_test_state {
 	zend_mir_module *module;
 	zend_native_image *native_image;
 	zend_native_code *native_code;
+	zend_native_compiler *product_compiler;
 	native_mir_test_native_function **native_functions;
 	uint32_t native_function_count;
 	uint32_t native_function_capacity;
@@ -1766,6 +1768,84 @@ static void native_mir_test_backend_failure(
 		state, NATIVE_MIR_TEST_STATUS_ERROR, phase, "native", code,
 		diagnostic != NULL && diagnostic->message[0] != '\0'
 			? diagnostic->message : "native backend operation failed");
+}
+
+static native_mir_test_phase native_mir_test_product_phase(
+	zend_native_compile_phase phase)
+{
+	switch (phase) {
+		case ZEND_NATIVE_COMPILE_PHASE_SSA:
+			return NATIVE_MIR_TEST_PHASE_SSA;
+		case ZEND_NATIVE_COMPILE_PHASE_LOWERING:
+			return NATIVE_MIR_TEST_PHASE_LOWERING;
+		case ZEND_NATIVE_COMPILE_PHASE_CODEGEN:
+			return NATIVE_MIR_TEST_PHASE_CODEGEN;
+		case ZEND_NATIVE_COMPILE_PHASE_PUBLISH:
+			return NATIVE_MIR_TEST_PHASE_PUBLISH;
+		case ZEND_NATIVE_COMPILE_PHASE_EXECUTE:
+			return NATIVE_MIR_TEST_PHASE_EXECUTE;
+	}
+	return NATIVE_MIR_TEST_PHASE_COMPILE;
+}
+
+static void native_mir_test_product_observer(
+	void *context, const zend_native_compile_diagnostic *source)
+{
+	native_mir_test_state *state = context;
+	char code[16];
+	const char *stage;
+
+	if (state == NULL || source == NULL) {
+		return;
+	}
+	if (native_mir_test_extract_token(source->message, code)) {
+		stage = memcmp(code, "MIRL", 4) == 0 ? "MIRL" : "MIRV";
+	} else if (source->phase == ZEND_NATIVE_COMPILE_PHASE_LOWERING) {
+		stage = "MIRL";
+		snprintf(code, sizeof(code), "MIRL%04u",
+			(unsigned int) source->code);
+	} else if (source->phase == ZEND_NATIVE_COMPILE_PHASE_SSA) {
+		stage = "ssa";
+		snprintf(code, sizeof(code), "SSA%04u",
+			(unsigned int) source->code);
+	} else {
+		stage = "native";
+		snprintf(code, sizeof(code), "NATIVE%04u",
+			(unsigned int) source->code);
+	}
+	native_mir_test_add_diagnostic(
+		state, stage, code,
+		source->message[0] != '\0'
+			? source->message : "native compiler operation failed",
+		source->has_source_opline, source->source_opline);
+}
+
+static zend_native_compile_fault native_mir_test_product_fault(
+	native_mir_test_fault fault)
+{
+	switch (fault) {
+		case NATIVE_MIR_TEST_FAULT_SSA_FAILURE:
+			return ZEND_NATIVE_COMPILE_FAULT_SSA;
+		case NATIVE_MIR_TEST_FAULT_MODULE_OOM:
+			return ZEND_NATIVE_COMPILE_FAULT_MODULE_ALLOCATION;
+		case NATIVE_MIR_TEST_FAULT_FINALIZE_FAILURE:
+			return ZEND_NATIVE_COMPILE_FAULT_MODULE_FINALIZE;
+		case NATIVE_MIR_TEST_FAULT_STAGE1_VERIFIER_FAILURE:
+		case NATIVE_MIR_TEST_FAULT_STRUCTURAL_VERIFIER_FAILURE:
+			return ZEND_NATIVE_COMPILE_FAULT_STAGE1_VERIFY;
+		case NATIVE_MIR_TEST_FAULT_STAGE2_VERIFIER_FAILURE:
+		case NATIVE_MIR_TEST_FAULT_SCALAR_VERIFIER_FAILURE:
+		case NATIVE_MIR_TEST_FAULT_CONTROL_FLOW_VERIFIER_FAILURE:
+		case NATIVE_MIR_TEST_FAULT_CALL_VERIFIER_FAILURE:
+		case NATIVE_MIR_TEST_FAULT_VALUE_VERIFIER_FAILURE:
+			return ZEND_NATIVE_COMPILE_FAULT_STAGE2_VERIFY;
+		case NATIVE_MIR_TEST_FAULT_MAPPING_FAILURE:
+			return ZEND_NATIVE_COMPILE_FAULT_MAPPING;
+		case NATIVE_MIR_TEST_FAULT_ENTRY_PUBLISH_FAILURE:
+			return ZEND_NATIVE_COMPILE_FAULT_ENTRY_PUBLISH;
+		default:
+			return ZEND_NATIVE_COMPILE_FAULT_NONE;
+	}
 }
 
 static bool native_mir_test_is_scalar_zval(const zval *value)
@@ -3764,6 +3844,100 @@ static zend_native_status native_mir_test_execute_frame(
 	return status;
 }
 
+static bool native_mir_test_execute_product(
+	native_mir_test_state *state, HashTable *arguments)
+{
+	zend_native_compiler_config config;
+	zend_native_compile_diagnostic compile_diagnostic;
+	zend_native_diagnostic diagnostic;
+	zend_native_entry_cell *entry_cell;
+	uint32_t index;
+
+	if (!state->script_initialized) {
+		native_mir_test_init_script(state);
+	}
+	if (state->product_compiler == NULL) {
+		memset(&config, 0, sizeof(config));
+		config.script = &state->script;
+		config.target = state->target;
+		config.mir_chunk_size = state->mir_chunk_size;
+		config.frame_probe = state->stack_probe_enabled
+			? native_mir_test_frame_probe_record : NULL;
+		config.frame_probe_context = state;
+		config.observer = native_mir_test_product_observer;
+		config.observer_context = state;
+		config.fault = native_mir_test_product_fault(state->fault);
+		config.unavailable_runtime_helper = state->runtime_helper_failure;
+		config.abi_conformance_probe = state->abi_probe_enabled;
+		memset(&compile_diagnostic, 0, sizeof(compile_diagnostic));
+		state->product_compiler = zend_native_compiler_create(
+			&config, &compile_diagnostic);
+		if (state->product_compiler == NULL) {
+			native_mir_test_fail(
+				state, NATIVE_MIR_TEST_STATUS_ERROR,
+				native_mir_test_product_phase(compile_diagnostic.phase),
+				"native", "NATIVE0003",
+				compile_diagnostic.message[0] != '\0'
+					? compile_diagnostic.message
+					: "native compiler creation failed");
+			return false;
+		}
+	}
+	state->phase = NATIVE_MIR_TEST_PHASE_EXECUTE;
+	for (index = 0; index < state->execute_repetitions; index++) {
+		zend_native_status status;
+
+		memset(&diagnostic, 0, sizeof(diagnostic));
+		status = zend_native_compiler_execute(
+			state->product_compiler,
+			(zend_function *) state->selected,
+			arguments, &state->native_result, &diagnostic);
+		if (status != ZEND_NATIVE_RETURNED) {
+			state->native_exception = status == ZEND_NATIVE_EXCEPTION;
+			state->native_bailout = status == ZEND_NATIVE_BAILOUT;
+			if (state->diagnostic_count == 0) {
+				native_mir_test_backend_failure(
+					state, NATIVE_MIR_TEST_PHASE_EXECUTE, &diagnostic);
+			} else {
+				state->status = NATIVE_MIR_TEST_STATUS_ERROR;
+				state->phase = NATIVE_MIR_TEST_PHASE_EXECUTE;
+			}
+			if (!Z_ISUNDEF(state->native_result)) {
+				zval_ptr_dtor(&state->native_result);
+				ZVAL_UNDEF(&state->native_result);
+			}
+			return false;
+		}
+		state->completed_executions++;
+		if (index + 1 < state->execute_repetitions
+				&& !Z_ISUNDEF(state->native_result)) {
+			zval_ptr_dtor(&state->native_result);
+			ZVAL_UNDEF(&state->native_result);
+		}
+	}
+	entry_cell = zend_native_compiler_lookup(
+		state->product_compiler, (zend_function *) state->selected);
+	if (entry_cell == NULL || entry_cell->code == NULL) {
+		native_mir_test_fail(
+			state, NATIVE_MIR_TEST_STATUS_ERROR,
+			NATIVE_MIR_TEST_PHASE_PUBLISH, "native", "NATIVE0003",
+			"native product compiler did not publish the selected entry");
+		return false;
+	}
+	state->native_code = (zend_native_code *) entry_cell->code;
+	state->native_image = (zend_native_image *)
+		zend_native_compiler_image_for(
+			state->product_compiler, (zend_function *) state->selected);
+	state->native_writable_after_publish =
+		!zend_native_compiler_all_code_is_wx(state->product_compiler);
+	state->native_executable_after_publish =
+		zend_native_compiler_all_code_is_wx(state->product_compiler);
+	state->native_result_valid = true;
+	state->status = NATIVE_MIR_TEST_STATUS_ACCEPTED;
+	state->phase = NATIVE_MIR_TEST_PHASE_COMPLETE;
+	return true;
+}
+
 static bool native_mir_test_execute_module(
 	native_mir_test_state *state, HashTable *arguments)
 {
@@ -3775,6 +3949,9 @@ static bool native_mir_test_execute_module(
 	uint32_t index;
 	bool reentry_entered = false;
 
+	if (state->wave >= 11) {
+		return native_mir_test_execute_product(state, arguments);
+	}
 	if (!native_mir_test_prepare_native_component(state, arguments)
 			|| !native_mir_test_compile_native_component(state)) {
 		return false;
@@ -3882,6 +4059,21 @@ ZEND_FUNCTION(native_mir_test_unwind_probe)
 	}
 	frame_count = backtrace(frames, (int) (sizeof(frames) / sizeof(frames[0])));
 	for (frame_index = 0; frame_index < frame_count; frame_index++) {
+		if (state->product_compiler != NULL) {
+			for (function_index = 0;
+					function_index < zend_native_compiler_function_count(
+						state->product_compiler);
+					function_index++) {
+				if (zend_native_code_contains_address(
+						zend_native_compiler_code_at(
+							state->product_compiler, function_index),
+						frames[frame_index])) {
+					native_frame_count++;
+					break;
+				}
+			}
+			continue;
+		}
 		for (function_index = 0;
 				function_index < state->native_function_count;
 				function_index++) {
@@ -3984,6 +4176,12 @@ static void native_mir_test_cleanup(native_mir_test_state *state)
 	if (state->native_result_valid) {
 		zval_ptr_dtor(&state->native_result);
 		state->native_result_valid = false;
+	}
+	if (state->product_compiler != NULL) {
+		zend_native_compiler_destroy(state->product_compiler);
+		state->product_compiler = NULL;
+		state->native_code = NULL;
+		state->native_image = NULL;
 	}
 	if (state->native_functions != NULL) {
 		for (index = 0; index < state->native_function_count; index++) {
@@ -4193,15 +4391,32 @@ static void native_mir_test_build_result(
 			(zend_long) state->opline_handler_calls);
 		add_assoc_long(&execution, "executions",
 			(zend_long) state->completed_executions);
+		add_assoc_long(&execution, "native_codeunits",
+			state->product_compiler != NULL
+				? (zend_long) zend_native_compiler_function_count(
+					state->product_compiler)
+				: (zend_long) state->native_function_count);
+		add_assoc_long(&execution, "suspendable_reserved",
+			state->product_compiler != NULL
+				? (zend_long) zend_native_compiler_codeunit_count(
+					state->product_compiler,
+					ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED)
+				: 0);
 		add_assoc_long(&execution, "unwind_registrations_before",
 			(zend_long) state->unwind_registrations_before);
 		add_assoc_long(&execution, "unwind_registrations_live",
 			(zend_long) zend_native_live_unwind_registration_count());
 		{
-			uint32_t active_calls = 0;
+			uint32_t active_calls = state->product_compiler != NULL
+				? zend_native_compiler_active_call_count(
+					state->product_compiler)
+				: 0;
 
-			for (index = 0; index < state->native_function_count; index++) {
-				active_calls += state->native_functions[index]->entry_cell.active_calls;
+			if (state->product_compiler == NULL) {
+				for (index = 0; index < state->native_function_count; index++) {
+					active_calls +=
+						state->native_functions[index]->entry_cell.active_calls;
+				}
 			}
 			add_assoc_long(&execution, "entry_active_calls",
 				(zend_long) active_calls);
@@ -4434,11 +4649,19 @@ ZEND_FUNCTION(native_mir_test_compile_execute)
 	previous_active_state = native_mir_test_active_state;
 	native_mir_test_active_state = state;
 	zend_try {
-		if (native_mir_test_compile(state)
-				&& native_mir_test_build_ssa(state)
-				&& (state->wave >= 7
+		if (native_mir_test_compile(state)) {
+			bool source_ready;
+
+			if (state->wave >= 11) {
+				native_mir_test_init_script(state);
+				source_ready = true;
+			} else {
+				source_ready = native_mir_test_build_ssa(state);
+			}
+			if (source_ready && (state->wave >= 7
 					|| native_mir_test_lower_and_dump(state))) {
-			(void) native_mir_test_execute_module(state, arguments);
+				(void) native_mir_test_execute_module(state, arguments);
+			}
 		}
 	} zend_catch {
 		bailed_out = true;
