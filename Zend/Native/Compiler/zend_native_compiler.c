@@ -1892,17 +1892,6 @@ binding_rejected:
 			return false;
 		}
 	}
-	if (compiler->fault == ZEND_NATIVE_COMPILE_FAULT_ENTRY_PUBLISH) {
-		memset(&diagnostic, 0, sizeof(diagnostic));
-		diagnostic.code = ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED;
-		snprintf(diagnostic.message, sizeof(diagnostic.message),
-			"injected entry-cell publication failure");
-		zend_native_compiler_backend_failure(
-			compiler, product_diagnostic,
-			ZEND_NATIVE_COMPILE_PHASE_PUBLISH, &diagnostic);
-		zend_native_compiler_fail_pending_component(compiler);
-		return false;
-	}
 	for (index = 0; index < compiler->function_count; index++) {
 		zend_native_compiled_function *function =
 			compiler->functions[index];
@@ -1917,6 +1906,32 @@ binding_rejected:
 				ZEND_NATIVE_COMPILE_PHASE_PUBLISH, NULL);
 			zend_native_compiler_fail_pending_component(compiler);
 			return false;
+		}
+		if (compiler->fault == ZEND_NATIVE_COMPILE_FAULT_ENTRY_PUBLISH) {
+			memset(&diagnostic, 0, sizeof(diagnostic));
+			diagnostic.code = ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED;
+			snprintf(diagnostic.message, sizeof(diagnostic.message),
+				"injected entry-cell publication failure");
+			zend_native_compiler_backend_failure(
+				compiler, product_diagnostic,
+				ZEND_NATIVE_COMPILE_PHASE_PUBLISH, &diagnostic);
+			zend_native_compiler_fail_pending_component(compiler);
+			return false;
+		}
+	}
+	/*
+	 * Keep every member publish_pending until the complete entry-cell batch has
+	 * been published. zend_native_compiler_fail_pending_component() can then
+	 * roll an already-published READY cell back to FAILED if any later member
+	 * rejects publication. No entry from this component becomes committed
+	 * independently of its siblings.
+	 */
+	for (index = 0; index < compiler->function_count; index++) {
+		zend_native_compiled_function *function =
+			compiler->functions[index];
+
+		if (!function->publish_pending) {
+			continue;
 		}
 		function->state = ZEND_NATIVE_CODEUNIT_READY;
 		function->publish_pending = false;
