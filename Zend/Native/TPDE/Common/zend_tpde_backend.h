@@ -50,8 +50,24 @@ typedef enum _zend_native_status {
 	ZEND_NATIVE_BAILOUT = 2
 } zend_native_status;
 
+/*
+ * Request-local executor addresses carried through the internal Native ABI.
+ * Resolving the ZTS/NTS executor globals once at the outer C boundary lets
+ * nested generated entries update the real Zend VM stack and current frame
+ * without a TLS lookup or runtime transition on every Native-to-Native call.
+ */
+typedef struct _zend_native_execution_context {
+	void **vm_stack;
+	zval **vm_stack_top;
+	zval **vm_stack_end;
+	zend_execute_data **current_execute_data;
+	void **active_direct_call;
+	bool observers_enabled;
+} zend_native_execution_context;
+
 typedef zend_native_status (*zend_native_frame_entry_t)(
-	zend_execute_data *execute_data);
+	zend_execute_data *execute_data,
+	zend_native_execution_context *context);
 
 typedef struct zend_native_image zend_native_image;
 typedef struct zend_native_code zend_native_code;
