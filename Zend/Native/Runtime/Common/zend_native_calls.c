@@ -934,6 +934,51 @@ static bool zend_native_call_dynamic_target(
 	return true;
 }
 
+static bool zend_native_call_named_target(
+	zend_execute_data *caller, const zend_op *opline, bool namespace_fallback,
+	zend_function **function_out, void **object_or_scope_out,
+	uint32_t *call_info_out)
+{
+	const zend_op_array *op_array = &caller->func->op_array;
+	zval *encoded_name;
+	zval *function;
+	ptrdiff_t literal_index;
+
+	if (opline->op2_type != IS_CONST || op_array->literals == NULL) {
+		return false;
+	}
+	encoded_name = (zval *) RT_CONSTANT(opline, opline->op2);
+	literal_index = encoded_name - op_array->literals;
+	if (literal_index < 0
+			|| (uint32_t) literal_index >= op_array->last_literal
+			|| (uint32_t) literal_index + (namespace_fallback ? 2 : 1)
+				>= op_array->last_literal
+			|| Z_TYPE(encoded_name[1]) != IS_STRING
+			|| (namespace_fallback
+				&& Z_TYPE(encoded_name[2]) != IS_STRING)) {
+		return false;
+	}
+	function = zend_hash_find_known_hash(
+		EG(function_table), Z_STR(encoded_name[1]));
+	if (function == NULL && namespace_fallback) {
+		function = zend_hash_find_known_hash(
+			EG(function_table), Z_STR(encoded_name[2]));
+	}
+	if (function == NULL || Z_TYPE_P(function) != IS_PTR) {
+		zend_throw_error(NULL, "Call to undefined function %s()",
+			Z_STRVAL(encoded_name[1]));
+		return false;
+	}
+	*function_out = Z_FUNC_P(function);
+	if ((*function_out)->type == ZEND_USER_FUNCTION
+			&& RUN_TIME_CACHE(&(*function_out)->op_array) == NULL) {
+		zend_init_func_run_time_cache(&(*function_out)->op_array);
+	}
+	*object_or_scope_out = NULL;
+	*call_info_out = ZEND_CALL_NESTED_FUNCTION;
+	return true;
+}
+
 void zend_native_call_begin(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
@@ -953,8 +998,7 @@ void zend_native_call_begin(
 		zend_native_call_abort("Invalid pending native call state");
 	}
 	if (cell->state != ZEND_NATIVE_ENTRY_READY || cell->code == NULL
-			|| cell->function == NULL
-			|| cell->function->type != ZEND_USER_FUNCTION) {
+			|| cell->function == NULL) {
 		zend_native_call_abort("Native callee entry is not ready");
 	}
 	function = cell->function;
@@ -1002,6 +1046,28 @@ void zend_native_call_begin(
 		}
 		case ZEND_INIT_FCALL_BY_NAME:
 		case ZEND_INIT_NS_FCALL_BY_NAME:
+			if (!zend_native_call_named_target(
+					caller, source_init,
+					source_init->opcode == ZEND_INIT_NS_FCALL_BY_NAME,
+					&function, &object_or_called_scope, &call_info)) {
+				if (EG(exception) == NULL) {
+					zend_throw_error(NULL,
+						"Native named call target cannot be resolved");
+				}
+				function = (zend_function *) &zend_pass_function;
+				object_or_called_scope = NULL;
+				break;
+			}
+			if (function->type == ZEND_USER_FUNCTION) {
+				cell = zend_native_reentry_find(
+					zend_native_active_reentry_scope, function);
+				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
+						|| cell->code == NULL) {
+					zend_native_call_abort(
+						"Native named target compilation failed");
+				}
+			}
+			break;
 		case ZEND_INIT_DYNAMIC_CALL:
 		case ZEND_INIT_USER_CALL:
 			if (!zend_native_call_dynamic_target(
