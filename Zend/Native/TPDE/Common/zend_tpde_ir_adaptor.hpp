@@ -66,7 +66,9 @@ public:
 		uint32_t mir_instruction_index;
 		uint32_t argument_index;
 		IRValueRef result;
-		std::vector<IRValueRef> operands;
+		std::span<const IRValueRef> operands;
+		uint32_t operand_offset;
+		uint32_t operand_count;
 		bool has_result;
 	};
 
@@ -75,12 +77,26 @@ public:
 		IRBlockRef block;
 	};
 
+	struct Slice {
+		uint32_t offset = 0;
+		uint32_t count = 0;
+	};
+
+	template <typename T>
+	struct BlockItem {
+		uint32_t block;
+		T value;
+	};
+
 	class PhiRef {
 		const ZendIRAdaptor *adaptor_;
 		IRValueRef value_;
 
-		const std::vector<PhiInput> &inputs() const {
-			return adaptor_->phi_inputs_[static_cast<uint32_t>(value_)];
+		std::span<const PhiInput> inputs() const {
+			const Slice &slice =
+				adaptor_->phi_input_slices_[static_cast<uint32_t>(value_)];
+			return std::span<const PhiInput>{adaptor_->phi_inputs_}.subspan(
+				slice.offset, slice.count);
 		}
 
 	public:
@@ -110,13 +126,18 @@ private:
 	const zend_tpde_plan *plan_;
 	std::array<IRFuncRef, 1> functions_{IRFuncRef{0}};
 	std::array<IRValueRef, 1> arguments_{IRValueRef{EXECUTE_DATA_VALUE}};
-	std::vector<IRValueRef> no_values_;
+	std::array<IRValueRef, 0> no_values_;
 	std::vector<IRBlockRef> blocks_;
-	std::vector<std::vector<IRBlockRef>> successors_;
-	std::vector<std::vector<IRInstRef>> instructions_;
-	std::vector<std::vector<IRValueRef>> phis_;
-	std::vector<std::vector<PhiInput>> phi_inputs_;
+	std::vector<Slice> successor_slices_;
+	std::vector<IRBlockRef> successors_;
+	std::vector<Slice> instruction_slices_;
+	std::vector<IRInstRef> instructions_;
+	std::vector<Slice> phi_slices_;
+	std::vector<IRValueRef> phis_;
+	std::vector<Slice> phi_input_slices_;
+	std::vector<PhiInput> phi_inputs_;
 	std::vector<InstNode> nodes_;
+	std::vector<IRValueRef> operands_;
 	std::vector<uint8_t> phi_values_;
 	std::vector<uint32_t> block_info_;
 	std::vector<uint32_t> block_info2_;
@@ -137,19 +158,80 @@ private:
 			plan_, zend_tpde_instruction_at(plan_, index));
 	}
 
-	void add_node(uint32_t block, InstNode node) {
+	void add_node(
+			std::vector<BlockItem<IRInstRef>> &block_instructions,
+			uint32_t block, InstNode node) {
 		uint32_t index = static_cast<uint32_t>(nodes_.size());
 		nodes_.push_back(std::move(node));
-		instructions_[block].push_back(IRInstRef{index});
+		block_instructions.push_back({block, IRInstRef{index}});
+	}
+
+	template <typename T>
+	static void flatten_block_items(
+			uint32_t block_count,
+			const std::vector<BlockItem<T>> &items,
+			std::vector<Slice> &slices,
+			std::vector<T> &values) {
+		slices.assign(block_count, {});
+		for (const BlockItem<T> &item : items) {
+			++slices[item.block].count;
+		}
+		uint32_t offset = 0;
+		for (Slice &slice : slices) {
+			slice.offset = offset;
+			offset += slice.count;
+			slice.count = 0;
+		}
+		values.clear();
+		if (offset != 0) {
+			values.assign(offset, items.front().value);
+		}
+		for (const BlockItem<T> &item : items) {
+			Slice &slice = slices[item.block];
+			values[slice.offset + slice.count++] = item.value;
+		}
+	}
+
+	static void flatten_unique_successors(
+			uint32_t block_count,
+			const std::vector<BlockItem<IRBlockRef>> &items,
+			std::vector<Slice> &slices,
+			std::vector<IRBlockRef> &values) {
+		flatten_block_items(block_count, items, slices, values);
+		std::vector<uint32_t> seen(block_count, UINT32_MAX);
+		uint32_t write = 0;
+		for (uint32_t block = 0; block < block_count; ++block) {
+			const Slice source = slices[block];
+			Slice &result = slices[block];
+			result.offset = write;
+			result.count = 0;
+			for (uint32_t n = 0; n < source.count; ++n) {
+				IRBlockRef target = values[source.offset + n];
+				uint32_t target_index = static_cast<uint32_t>(target);
+				if (seen[target_index] == block) {
+					continue;
+				}
+				seen[target_index] = block;
+				values[write++] = target;
+				++result.count;
+			}
+		}
+		values.resize(write);
 	}
 
 public:
 	explicit ZendIRAdaptor(const zend_tpde_plan *plan) : plan_(plan) {
+		std::vector<BlockItem<IRBlockRef>> block_successors;
+		std::vector<BlockItem<IRInstRef>> block_instructions;
+		std::vector<BlockItem<IRValueRef>> block_phis;
+		std::vector<uint32_t> finally_return_blocks;
+		std::vector<IRBlockRef> finally_targets;
+
 		blocks_.reserve(plan_->block_count);
-		successors_.resize(plan_->block_count);
-		instructions_.resize(plan_->block_count);
-		phis_.resize(plan_->block_count);
-		phi_inputs_.resize(MIR_VALUE_BASE + plan_->value_count);
+		block_successors.reserve(plan_->block_count * 2);
+		block_instructions.reserve(plan_->instruction_count + plan_->value_count + 1);
+		block_phis.reserve(plan_->value_count);
+		phi_input_slices_.resize(MIR_VALUE_BASE + plan_->value_count);
 		phi_values_.resize(MIR_VALUE_BASE + plan_->value_count);
 		block_info_.resize(plan_->block_count);
 		block_info2_.resize(plan_->block_count);
@@ -169,37 +251,49 @@ public:
 					valid_ = false;
 					continue;
 				}
-				successors_[i].push_back(IRBlockRef{
-					static_cast<uint32_t>(target_index)});
+				block_successors.push_back({i, IRBlockRef{
+					static_cast<uint32_t>(target_index)}});
 			}
 		}
 		/*
 		 * Zend's CFG records FAST_CALL's continuation on the call block while
 		 * the executable edge is selected by FAST_RET. Add those dynamic
 		 * destinations to TPDE's internal CFG so liveness sees every machine
-		 * branch without changing persistent source identity.
+		 * branch without changing persistent source identity. Collect every
+		 * continuation, handler, return block, and exception edge in one MIR
+		 * pass; the former return-by-instruction rescans were quadratic.
 		 */
 		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
-			const zend_mir_instruction_record ret =
+			const zend_tpde_instruction &instruction = plan_->instructions[i];
+			const zend_mir_instruction_record record =
 				instruction_record_at(i);
-			if (ret.opcode != ZEND_MIR_OPCODE_FINALLY_RETURN) {
-				continue;
-			}
-			int32_t ret_block = block_index(ret.block_id);
-			if (ret_block < 0) {
+			int32_t record_block = block_index(record.block_id);
+			if (record_block < 0) {
 				valid_ = false;
 				continue;
 			}
-			for (uint32_t n = 0; n < plan_->instruction_count; ++n) {
-				const zend_mir_instruction_record call =
-					instruction_record_at(n);
+			if (zend_mir_id_is_valid(instruction.exception_block_id)) {
+				int32_t exception_block =
+					block_index(instruction.exception_block_id);
+				if (exception_block < 0) {
+					valid_ = false;
+				} else {
+					block_successors.push_back({
+						static_cast<uint32_t>(record_block),
+						IRBlockRef{static_cast<uint32_t>(exception_block)}});
+				}
+			}
+			if (record.opcode == ZEND_MIR_OPCODE_FINALLY_RETURN) {
+				finally_return_blocks.push_back(
+					static_cast<uint32_t>(record_block));
+			} else if (record.opcode == ZEND_MIR_OPCODE_FINALLY_CALL) {
 				zend_mir_block_id continuation;
-				if (call.opcode != ZEND_MIR_OPCODE_FINALLY_CALL
-						|| plan_->view->successor_count(
-							plan_->view->context, call.block_id) != 2
+				if (plan_->view->successor_count(
+							plan_->view->context, record.block_id) != 2
 						|| !plan_->view->successor_at(
-							plan_->view->context, call.block_id, 1,
+							plan_->view->context, record.block_id, 1,
 							&continuation)) {
+					valid_ = false;
 					continue;
 				}
 				int32_t continuation_block = block_index(continuation);
@@ -207,51 +301,37 @@ public:
 					valid_ = false;
 					continue;
 				}
-				IRBlockRef continuation_ref{
-					static_cast<uint32_t>(continuation_block)};
-				auto &ret_successors = successors_[
-					static_cast<uint32_t>(ret_block)];
-				if (std::find(ret_successors.begin(), ret_successors.end(),
-						continuation_ref) == ret_successors.end()) {
-					ret_successors.push_back(continuation_ref);
-				}
-			}
-			for (uint32_t n = 0; n < plan_->instruction_count; ++n) {
-				const zend_mir_instruction_record handler =
-					instruction_record_at(n);
-				if (handler.opcode != ZEND_MIR_OPCODE_CATCH_ENTER
-						&& handler.opcode != ZEND_MIR_OPCODE_FINALLY_ENTER) {
-					continue;
-				}
-				if (handler.block_id == plan_->function.entry_block_id) {
-					continue;
-				}
-				int32_t handler_block = block_index(handler.block_id);
-				if (handler_block < 0) {
-					valid_ = false;
-					continue;
-				}
-				IRBlockRef handler_ref{static_cast<uint32_t>(handler_block)};
-				auto &ret_successors = successors_[
-					static_cast<uint32_t>(ret_block)];
-				if (std::find(ret_successors.begin(), ret_successors.end(),
-						handler_ref) == ret_successors.end()) {
-					ret_successors.push_back(handler_ref);
-				}
+				finally_targets.push_back(
+					IRBlockRef{static_cast<uint32_t>(continuation_block)});
+			} else if ((record.opcode == ZEND_MIR_OPCODE_CATCH_ENTER
+						|| record.opcode == ZEND_MIR_OPCODE_FINALLY_ENTER)
+					&& record.block_id != plan_->function.entry_block_id) {
+				finally_targets.push_back(
+					IRBlockRef{static_cast<uint32_t>(record_block)});
 			}
 		}
+		for (uint32_t return_block : finally_return_blocks) {
+			for (IRBlockRef target : finally_targets) {
+				block_successors.push_back({return_block, target});
+			}
+		}
+		flatten_unique_successors(plan_->block_count, block_successors,
+			successor_slices_, successors_);
 
 		int32_t entry = block_index(plan_->function.entry_block_id);
 		if (entry < 0) {
 			valid_ = false;
 			return;
 		}
-		add_node(static_cast<uint32_t>(entry), InstNode{
+		operands_.push_back(IRValueRef{EXECUTE_DATA_VALUE});
+		add_node(block_instructions, static_cast<uint32_t>(entry), InstNode{
 			InstKind::LoadFrame,
 			UINT32_MAX,
 			UINT32_MAX,
 			IRValueRef{FRAME_VALUE},
-			{IRValueRef{EXECUTE_DATA_VALUE}},
+			{},
+			0,
+			1,
 			true});
 		for (uint32_t i = 0; i < plan_->value_count; ++i) {
 			if (plan_->values[i].argument_index < 0
@@ -259,12 +339,16 @@ public:
 					|| plan_->values[i].exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
 				continue;
 			}
-			add_node(static_cast<uint32_t>(entry), InstNode{
+			uint32_t operand_offset = static_cast<uint32_t>(operands_.size());
+			operands_.push_back(IRValueRef{FRAME_VALUE});
+			add_node(block_instructions, static_cast<uint32_t>(entry), InstNode{
 				InstKind::LoadArgument,
 				UINT32_MAX,
 				static_cast<uint32_t>(plan_->values[i].argument_index),
 				IRValueRef{MIR_VALUE_BASE + i},
-				{IRValueRef{FRAME_VALUE}},
+				{},
+				operand_offset,
+				1,
 				true});
 		}
 
@@ -280,22 +364,6 @@ public:
 			if (block < 0) {
 				valid_ = false;
 				continue;
-			}
-			if (zend_mir_id_is_valid(instruction.exception_block_id)) {
-				int32_t exception_block = block_index(
-					instruction.exception_block_id);
-				if (exception_block < 0) {
-					valid_ = false;
-					continue;
-				}
-				IRBlockRef exception_ref{
-					static_cast<uint32_t>(exception_block)};
-				auto &block_successors = successors_[
-					static_cast<uint32_t>(block)];
-				if (std::find(block_successors.begin(), block_successors.end(),
-						exception_ref) == block_successors.end()) {
-					block_successors.push_back(exception_ref);
-				}
 			}
 			IRValueRef result = value_ref(record.result_id);
 			if (record.opcode == ZEND_MIR_OPCODE_CONSTANT) {
@@ -317,7 +385,8 @@ public:
 						|| exact_type(result) == ZEND_MIR_SCALAR_TYPE_NULL) {
 					continue;
 				}
-				phis_[static_cast<uint32_t>(block)].push_back(result);
+				block_phis.push_back(
+					{static_cast<uint32_t>(block), result});
 				phi_values_[static_cast<uint32_t>(result)] = 1;
 				uint32_t predecessors = plan_->view->predecessor_count(
 					plan_->view->context, record.block_id);
@@ -325,6 +394,10 @@ public:
 					valid_ = false;
 					continue;
 				}
+				Slice &input_slice =
+					phi_input_slices_[static_cast<uint32_t>(result)];
+				input_slice.offset =
+					static_cast<uint32_t>(phi_inputs_.size());
 				for (uint32_t n = 0; n < predecessors; ++n) {
 					zend_mir_block_id predecessor;
 					int32_t predecessor_index;
@@ -337,13 +410,13 @@ public:
 						valid_ = false;
 						continue;
 					}
-					phi_inputs_[static_cast<uint32_t>(result)].push_back(
+					phi_inputs_.push_back(
 						{input, IRBlockRef{static_cast<uint32_t>(predecessor_index)}});
+					++input_slice.count;
 				}
 				continue;
 			}
 
-			std::vector<IRValueRef> operands;
 			bool machine_result = result != INVALID_VALUE_REF
 				&& zend_mir_scalar_type_is_exact(exact_type(result))
 				&& exact_type(result) != ZEND_MIR_SCALAR_TYPE_NULL;
@@ -356,12 +429,8 @@ public:
 						== ZEND_MIR_REPRESENTATION_ZVAL) {
 				continue;
 			}
-			operands.reserve(instruction.operand_count +
-				(record.opcode == ZEND_MIR_OPCODE_RETURN
-					|| record.opcode
-						== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
-					|| record.opcode
-						== ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL));
+			uint32_t operand_offset =
+				static_cast<uint32_t>(operands_.size());
 			/*
 			 * RETURN_SOURCE_ZVAL transfers the canonical zval directly from the
 			 * Zend frame, selected by its source opline.  Its MIR value operand
@@ -386,7 +455,7 @@ public:
 				if (operand == INVALID_VALUE_REF) {
 					valid_ = false;
 				}
-				operands.push_back(operand);
+				operands_.push_back(operand);
 			}
 			if (record.opcode == ZEND_MIR_OPCODE_RETURN
 					|| record.opcode
@@ -394,24 +463,24 @@ public:
 					|| record.opcode
 						== ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
 					|| instruction.source_effect != 0) {
-				operands.push_back(IRValueRef{FRAME_VALUE});
+				operands_.push_back(IRValueRef{FRAME_VALUE});
 			}
 			if (record.opcode == ZEND_MIR_OPCODE_STATEPOINT
 					&& (record.effects & ZEND_MIR_EFFECT_MASK(
 						ZEND_MIR_EFFECT_INTERRUPT_BOUNDARY)) != 0) {
-				operands.push_back(IRValueRef{FRAME_VALUE});
+				operands_.push_back(IRValueRef{FRAME_VALUE});
 			}
 			if (zend_mir_opcode_is_executable_value(
 					record.opcode)) {
-				operands.push_back(IRValueRef{FRAME_VALUE});
+				operands_.push_back(IRValueRef{FRAME_VALUE});
 			}
 			if (record.opcode
 					== ZEND_MIR_OPCODE_ITERATOR_BRANCH) {
-				operands.push_back(IRValueRef{FRAME_VALUE});
+				operands_.push_back(IRValueRef{FRAME_VALUE});
 			}
 			if (record.opcode
 					== ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
-				operands.push_back(IRValueRef{FRAME_VALUE});
+				operands_.push_back(IRValueRef{FRAME_VALUE});
 			}
 			if (record.opcode
 					== ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
@@ -431,7 +500,7 @@ public:
 					frame_use_count = setter_count + 2 + machine_result;
 				}
 				for (uint32_t n = 0; n < frame_use_count; ++n) {
-					operands.push_back(IRValueRef{FRAME_VALUE});
+					operands_.push_back(IRValueRef{FRAME_VALUE});
 				}
 			} else if (record.opcode
 					== ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL) {
@@ -439,7 +508,7 @@ public:
 				for (uint32_t n = 0;
 						n < instruction.call_argument_count + 2
 							+ machine_result; ++n) {
-					operands.push_back(IRValueRef{FRAME_VALUE});
+					operands_.push_back(IRValueRef{FRAME_VALUE});
 				}
 			} else if (record.opcode
 					== ZEND_MIR_OPCODE_CATCH_ENTER
@@ -449,12 +518,22 @@ public:
 						== ZEND_MIR_OPCODE_FINALLY_CALL
 					|| record.opcode
 						== ZEND_MIR_OPCODE_FINALLY_RETURN) {
-				operands.push_back(IRValueRef{FRAME_VALUE});
+				operands_.push_back(IRValueRef{FRAME_VALUE});
 			}
-			add_node(static_cast<uint32_t>(block), InstNode{
-				InstKind::MIR, i, UINT32_MAX, result, std::move(operands),
-				machine_result});
+			uint32_t operand_count =
+				static_cast<uint32_t>(operands_.size()) - operand_offset;
+			add_node(block_instructions, static_cast<uint32_t>(block), InstNode{
+				InstKind::MIR, i, UINT32_MAX, result, {}, operand_offset,
+				operand_count, machine_result});
 		}
+		for (InstNode &node : nodes_) {
+			node.operands = std::span<const IRValueRef>{operands_}.subspan(
+				node.operand_offset, node.operand_count);
+		}
+		flatten_block_items(plan_->block_count, block_instructions,
+			instruction_slices_, instructions_);
+		flatten_block_items(plan_->block_count, block_phis,
+			phi_slices_, phis_);
 	}
 
 	bool valid() const { return valid_; }
@@ -533,13 +612,19 @@ public:
 	}
 	const auto &cur_blocks() const { return blocks_; }
 	std::span<const IRBlockRef> block_succs(IRBlockRef block) const {
-		return successors_[static_cast<uint32_t>(block)];
+		const Slice &slice = successor_slices_[static_cast<uint32_t>(block)];
+		return std::span<const IRBlockRef>{successors_}.subspan(
+			slice.offset, slice.count);
 	}
 	std::span<const IRInstRef> block_insts(IRBlockRef block) const {
-		return instructions_[static_cast<uint32_t>(block)];
+		const Slice &slice = instruction_slices_[static_cast<uint32_t>(block)];
+		return std::span<const IRInstRef>{instructions_}.subspan(
+			slice.offset, slice.count);
 	}
 	std::span<const IRValueRef> block_phis(IRBlockRef block) const {
-		return phis_[static_cast<uint32_t>(block)];
+		const Slice &slice = phi_slices_[static_cast<uint32_t>(block)];
+		return std::span<const IRValueRef>{phis_}.subspan(
+			slice.offset, slice.count);
 	}
 	uint32_t block_info(IRBlockRef block) const {
 		return block_info_[static_cast<uint32_t>(block)];
@@ -569,7 +654,9 @@ public:
 	static uint32_t val_alloca_size(IRValueRef) { return 0; }
 	static uint32_t val_alloca_align(IRValueRef) { return 1; }
 	std::string_view value_fmt_ref(IRValueRef) const { return "znmir-value"; }
-	const auto &inst_operands(IRInstRef inst) const { return node(inst).operands; }
+	std::span<const IRValueRef> inst_operands(IRInstRef inst) const {
+		return node(inst).operands;
+	}
 	auto inst_results(IRInstRef inst) const {
 		const InstNode &current = node(inst);
 		return std::span<const IRValueRef>{&current.result,
