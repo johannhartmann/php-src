@@ -123,12 +123,7 @@ private:
 	bool valid_ = true;
 
 	int32_t block_index(zend_mir_block_id id) const {
-		for (uint32_t i = 0; i < plan_->block_count; ++i) {
-			if (plan_->blocks[i].id == id) {
-				return static_cast<int32_t>(i);
-			}
-		}
-		return -1;
+		return zend_tpde_block_index(plan_, id);
 	}
 
 	IRValueRef value_ref(zend_mir_value_id id) const {
@@ -156,11 +151,11 @@ public:
 		for (uint32_t i = 0; i < plan_->block_count; ++i) {
 			blocks_.push_back(IRBlockRef{i});
 			uint32_t count = plan_->view->successor_count(
-				plan_->view->context, plan_->blocks[i].id);
+				plan_->view->context, plan_->block_ids[i]);
 			for (uint32_t n = 0; n < count; ++n) {
 				zend_mir_block_id target;
 				if (!plan_->view->successor_at(plan_->view->context,
-						plan_->blocks[i].id, n, &target)) {
+						plan_->block_ids[i], n, &target)) {
 					valid_ = false;
 					continue;
 				}
