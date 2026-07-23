@@ -34,6 +34,10 @@ file_put_contents($directory . '/Loaded.php', <<<'PHP'
 <?php
 namespace W11Package;
 
+function local_named(int $value): int {
+    return $value + 2;
+}
+
 class Loaded extends Base implements Contract {
     public function run(array &$trace): array {
         $captured = 0;
@@ -51,13 +55,14 @@ class Loaded extends Base implements Contract {
                 . 'return $callback($alias);'
             );
             $mapped = array_map($callback, [40]);
+            $named = local_named(40);
             throw new \RuntimeException('dynamic');
         } catch (\RuntimeException $error) {
             $trace[] = 'catch:' . $error->getMessage();
         } finally {
             $trace[] = 'finally';
         }
-        return [$value, $mapped[0], $local, $captured];
+        return [$value, $mapped[0], $named, $local, $captured];
     }
 }
 PHP);
@@ -165,4 +170,4 @@ unlink($directory . '/Base.php');
 rmdir($directory);
 ?>
 --EXPECTF--
-accepted return=[[41,42,40,2],[41,42,40,2],[42,42,41,42],[1,1],42,42,["LogicException","autoload"],["first:W11Package\\Loaded","second:W11Package\\Loaded","first:W11Package\\Base","second:W11Package\\Base","callback:40","callback:40","catch:dynamic","finally","callback:40","callback:40","catch:dynamic","finally"]] units=%d vm=0 execute_ex=0 handler=0
+accepted return=[[41,42,42,40,2],[41,42,42,40,2],[42,42,41,42],[1,1],42,42,["LogicException","autoload"],["first:W11Package\\Loaded","second:W11Package\\Loaded","first:W11Package\\Base","second:W11Package\\Base","callback:40","callback:40","catch:dynamic","finally","callback:40","callback:40","catch:dynamic","finally"]] units=%d vm=0 execute_ex=0 handler=0
