@@ -45,35 +45,16 @@ static void zend_native_execution_cleanup_frame(zend_execute_data *execute_data)
 		ZEND_DEL_CALL_FLAG(execute_data, ZEND_CALL_HAS_EXTRA_NAMED_PARAMS);
 	}
 	if ((call_info & ZEND_CALL_CODE) != 0) {
-		zend_array *symbol_table = execute_data->symbol_table;
-
 		/*
 		 * Include/eval frames borrow the caller's symbol table. Mirror the
-		 * VM's ZEND_CALL_CODE leave path: publish the frame CVs back into the
-		 * table, then reattach the first owning caller. The dynamic-code
-		 * boundary owns the op_array and stack frame after this returns.
+		 * nested ZEND_CALL_CODE leave path up to, but not including, stack
+		 * frame release: publish frame CVs back into the table and tell the
+		 * owner of the stack frame that the caller must be reattached only
+		 * after this code frame has been released.
 		 */
 		if (execute_data->func->op_array.last_var > 0) {
-			zend_execute_data *caller;
-
 			zend_detach_symbol_table(execute_data);
-			for (caller = execute_data->prev_execute_data;
-					caller != NULL; caller = caller->prev_execute_data) {
-				if (caller->func == NULL
-						|| (ZEND_CALL_INFO(caller)
-							& ZEND_CALL_HAS_SYMBOL_TABLE) == 0) {
-					continue;
-				}
-				if (caller->symbol_table == symbol_table) {
-					if (caller->func->op_array.last_var > 0) {
-						zend_attach_symbol_table(caller);
-					} else {
-						ZEND_ADD_CALL_FLAG(
-							caller, ZEND_CALL_NEEDS_REATTACH);
-					}
-				}
-				break;
-			}
+			ZEND_ADD_CALL_FLAG(execute_data, ZEND_CALL_NEEDS_REATTACH);
 		}
 		return;
 	}

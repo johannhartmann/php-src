@@ -270,9 +270,17 @@ zend_native_status zend_native_execute_include_or_eval(
 	status = zend_native_execute_frame(
 		entry_cell->code, call, &diagnostic);
 	EG(current_execute_data) = previous;
+	call_info = ZEND_CALL_INFO(call);
 	zend_vm_stack_free_call_frame(call);
+	if ((call_info & ZEND_CALL_NEEDS_REATTACH) != 0) {
+		if (execute_data->func->op_array.last_var > 0) {
+			zend_attach_symbol_table(execute_data);
+		} else {
+			ZEND_ADD_CALL_FLAG(execute_data, ZEND_CALL_NEEDS_REATTACH);
+		}
+	}
 	/*
-	 * compile_execute takes ownership even when compilation fails. The native
+	 * The compiler takes ownership even when compilation fails. The native
 	 * registry must retain the codeunit root while declarations, closures or
 	 * active frames can still reach any child op_array.
 	 */
