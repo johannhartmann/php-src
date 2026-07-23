@@ -4446,6 +4446,12 @@ static void native_mir_test_build_result(
 					state->product_compiler,
 					ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED)
 				: 0);
+		add_assoc_long(&execution, "failed_codeunits",
+			state->product_compiler != NULL
+				? (zend_long) zend_native_compiler_codeunit_count(
+					state->product_compiler,
+					ZEND_NATIVE_CODEUNIT_FAILED)
+				: 0);
 		add_assoc_long(&execution, "unwind_registrations_before",
 			(zend_long) state->unwind_registrations_before);
 		add_assoc_long(&execution, "unwind_registrations_live",
