@@ -51,7 +51,7 @@ struct zend_tpde_instruction {
 	uint32_t source_opline_index;
 };
 
-struct zend_tpde_packed_array_read {
+struct zend_tpde_integer_array_read {
 	uint32_t container_offset;
 	uint32_t key_offset;
 	uint32_t result_offset;
@@ -65,7 +65,7 @@ struct zend_tpde_packed_array_append {
 	bool has_result;
 };
 
-struct zend_tpde_packed_array_isset {
+struct zend_tpde_integer_array_isset {
 	uint32_t container_offset;
 	uint32_t key_offset;
 	uint32_t result_offset;
@@ -76,9 +76,9 @@ struct zend_tpde_packed_array_isset {
  * encode the guards and loads; they do not independently decide which MIR
  * shape is safe to execute without the generic dimension primitive.
  */
-static inline bool zend_tpde_packed_array_read_at(
+static inline bool zend_tpde_integer_array_read_at(
 	const zend_tpde_instruction &instruction,
-	zend_tpde_packed_array_read *out)
+	zend_tpde_integer_array_read *out)
 {
 	const zend_mir_executable_value_ref &operation =
 		instruction.value_operation;
@@ -171,9 +171,9 @@ static inline bool zend_tpde_packed_array_append_at(
 	return true;
 }
 
-static inline bool zend_tpde_packed_array_isset_at(
+static inline bool zend_tpde_integer_array_isset_at(
 	const zend_tpde_instruction &instruction,
-	zend_tpde_packed_array_isset *out)
+	zend_tpde_integer_array_isset *out)
 {
 	const zend_mir_executable_value_ref &operation =
 		instruction.value_operation;
