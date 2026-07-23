@@ -69,6 +69,7 @@ struct _zend_native_compiler {
 	uint32_t unavailable_runtime_helper;
 	bool abi_conformance_probe;
 	zend_native_compiled_function **functions;
+	HashTable functions_by_op_array;
 	uint32_t function_count;
 	uint32_t function_capacity;
 	zend_native_reentry_binding *reentry_bindings;
@@ -372,14 +373,16 @@ static uint32_t zend_native_compiler_zend_type_from_scalar_type(
 static zend_native_compiled_function *zend_native_compiler_find_function(
 	const zend_native_compiler *compiler, const zend_op_array *op_array)
 {
-	uint32_t index;
+	zend_native_compiled_function *function;
 
-	for (index = 0; index < compiler->function_count; index++) {
-		if (compiler->functions[index]->op_array == op_array) {
-			return compiler->functions[index];
-		}
+	if (compiler == NULL || op_array == NULL) {
+		return NULL;
 	}
-	return NULL;
+	function = zend_hash_index_find_ptr(
+		&compiler->functions_by_op_array,
+		(zend_ulong) (uintptr_t) op_array);
+	return function != NULL && function->op_array == op_array
+		? function : NULL;
 }
 
 static bool zend_native_compiler_reserve_functions(
@@ -459,6 +462,20 @@ static zend_native_compiled_function *zend_native_compiler_add_function(
 			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
 			ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
 			"native entry cell rejected synchronous compilation");
+		efree(function->argument_types);
+		efree(function);
+		return NULL;
+	}
+	if (zend_hash_index_add_ptr(
+			&compiler->functions_by_op_array,
+			(zend_ulong) (uintptr_t) op_array, function) == NULL) {
+		if (function->entry_cell.state == ZEND_NATIVE_ENTRY_COMPILING) {
+			zend_native_entry_cell_fail(&function->entry_cell);
+		}
+		zend_native_compiler_set_diagnostic(
+			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"native codeunit index insertion failed");
 		efree(function->argument_types);
 		efree(function);
 		return NULL;
@@ -1075,11 +1092,11 @@ static zend_op_array *zend_native_compiler_resolve_native_target(
 				|| calls->call_site_at == NULL) {
 			return NULL;
 		}
-		for (index = 0; index < compiler->function_count; index++) {
-			if (compiler->functions[index]->op_array == caller) {
-				caller_ssa = &compiler->functions[index]->ssa;
-				break;
-			}
+		zend_native_compiled_function *caller_function =
+			zend_native_compiler_find_function(compiler, caller);
+
+		if (caller_function != NULL) {
+			caller_ssa = &caller_function->ssa;
 		}
 		if (caller_ssa == NULL) {
 			return NULL;
@@ -2416,6 +2433,8 @@ zend_native_compiler *zend_native_compiler_create(
 	compiler->unavailable_runtime_helper =
 		config->unavailable_runtime_helper;
 	compiler->abi_conformance_probe = config->abi_conformance_probe;
+	zend_hash_init(
+		&compiler->functions_by_op_array, 8, NULL, NULL, false);
 	zend_native_dynamic_compiler_init(&compiler->dynamic_compiler);
 	zend_native_dynamic_compiler_bind_product(
 		&compiler->dynamic_compiler, compiler);
@@ -2469,6 +2488,7 @@ void zend_native_compiler_destroy(zend_native_compiler *compiler)
 		efree(function);
 	}
 	efree(compiler->reentry_bindings);
+	zend_hash_destroy(&compiler->functions_by_op_array);
 	efree(compiler->functions);
 	zend_native_dynamic_compiler_destroy(&compiler->dynamic_compiler);
 	efree(compiler);
