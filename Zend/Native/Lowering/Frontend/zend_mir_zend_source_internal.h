@@ -298,6 +298,19 @@ zend_mir_lowering_status zend_mir_zend_source_init_w10_projection(
 	zend_mir_symbol_id file_symbol_id,
 	zend_mir_frontend_diagnostic *diagnostic);
 
+/*
+ * Initialize the W11 source adapter directly from optimizer-owned storage.
+ * W11 prerequisite filtering is supplied by a thin source-view overlay; this
+ * constructor deliberately does not materialize or mutate an OpArray/SSA copy.
+ */
+zend_mir_lowering_status zend_mir_zend_source_init_w11_direct(
+	zend_mir_zend_source *source,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	zend_mir_op_array_id op_array_id,
+	zend_mir_symbol_id file_symbol_id,
+	zend_mir_frontend_diagnostic *diagnostic);
+
 bool zend_mir_zend_op_array_exception_handler(
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,

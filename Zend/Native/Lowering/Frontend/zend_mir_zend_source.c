@@ -844,6 +844,57 @@ zend_mir_lowering_status zend_mir_zend_source_init_w10_projection(
 	return status;
 }
 
+zend_mir_lowering_status zend_mir_zend_source_init_w11_direct(
+	zend_mir_zend_source *source,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	zend_mir_op_array_id op_array_id,
+	zend_mir_symbol_id file_symbol_id,
+	zend_mir_frontend_diagnostic *diagnostic)
+{
+	zend_mir_zend_source candidate;
+	zend_mir_lowering_status status;
+	uint32_t slots;
+	uint32_t phis;
+	uint32_t inputs;
+
+	if (source == NULL || op_array == NULL || ssa == NULL
+			|| !zend_mir_id_is_valid(op_array_id)
+			|| !zend_mir_id_is_valid(file_symbol_id)) {
+		return ZEND_MIR_LOWERING_REJECTED;
+	}
+	zend_mir_zend_source_reset(source);
+	status = zend_mir_frontend_validate_cfg_w04(
+		op_array, ssa, op_array_id, diagnostic, &phis, &inputs, true, true);
+	if (status != ZEND_MIR_LOWERING_SUCCESS
+			|| (status = zend_mir_frontend_validate_slots(
+				op_array, ssa, op_array_id, diagnostic, &slots))
+				!= ZEND_MIR_LOWERING_SUCCESS) {
+		return status;
+	}
+	memset(&candidate, 0, sizeof(candidate));
+	candidate.op_array = op_array;
+	candidate.ssa = ssa;
+	candidate.op_array_id = op_array_id;
+	candidate.file_symbol_id = file_symbol_id;
+	candidate.opcode_count = op_array->last;
+	candidate.ssa_count = (uint32_t) ssa->vars_count;
+	candidate.literal_count = op_array->last_literal;
+	candidate.slot_count = slots;
+	candidate.source_position_count = op_array->last;
+	candidate.block_count = ssa->cfg.blocks_count;
+	candidate.edge_count = ssa->cfg.edges_count;
+	candidate.phi_count = phis;
+	candidate.phi_input_count = inputs;
+	candidate.w04 = true;
+	candidate.w08 = true;
+	candidate.w09 = true;
+	candidate.w10 = true;
+	candidate.initialized = ZEND_MIR_ZEND_SOURCE_MAGIC;
+	*source = candidate;
+	return ZEND_MIR_LOWERING_SUCCESS;
+}
+
 static uint32_t zend_mir_frontend_view_opcode_count(const void *context)
 {
 	const zend_mir_zend_source *source = context;
