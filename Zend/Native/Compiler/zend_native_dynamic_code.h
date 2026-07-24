@@ -51,6 +51,9 @@ ZEND_API zend_native_entry_cell *zend_native_dynamic_compiler_lookup(
 	const zend_op_array *op_array);
 
 ZEND_API zend_native_status zend_native_execute_include_or_eval(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
 
 #endif /* ZEND_NATIVE_DYNAMIC_CODE_H */

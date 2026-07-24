@@ -772,10 +772,10 @@ bool initialize_plan(
 			}
 			if (record.opcode < ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
 					|| record.opcode
-						> ZEND_MIR_OPCODE_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT) {
+						> ZEND_MIR_OPCODE_DYNAMIC_INCLUDE_OR_EVAL) {
 				/*
-				 * Kept temporarily for uncommon object and include/eval slow
-				 * paths while their helper ABI is migrated.
+				 * Kept temporarily for uncommon object slow paths while their
+				 * helper ABI is migrated.
 				 */
 				plan->instructions[i].source_opline_index =
 					record.source_position_id;
