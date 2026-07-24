@@ -87,6 +87,7 @@ typedef struct _zend_native_direct_call_argument {
 
 #define ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME UINT32_C(1)
 #define ZEND_NATIVE_DIRECT_CALL_CONSUME_RECEIVER UINT32_C(2)
+#define ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE UINT32_C(4)
 
 typedef struct _zend_native_direct_call_descriptor {
 	uint32_t argument_count;
@@ -94,6 +95,7 @@ typedef struct _zend_native_direct_call_descriptor {
 	uint32_t flags;
 	uint32_t frame_size;
 	zend_function *expected_function;
+	zend_class_entry *called_scope;
 	zend_native_internal_receiver_kind receiver_kind;
 	zend_mir_source_operand_ref receiver_operand;
 	zend_mir_scalar_type_mask result_type;

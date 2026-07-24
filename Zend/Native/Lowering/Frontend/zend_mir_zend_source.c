@@ -1901,6 +1901,45 @@ static zend_function *zend_mir_zend_source_resolve_user_method_call_ex(
 		}
 		return function;
 	}
+	if (opline->opcode == ZEND_INIT_STATIC_METHOD_CALL
+			&& opline->op1_type == IS_UNUSED
+			&& opline->op2_type == IS_CONST
+			&& op_array->scope != NULL
+			&& Z_TYPE_P(CRT_CONSTANT(opline->op2)) == IS_STRING
+			&& Z_TYPE_P(CRT_CONSTANT(opline->op2) + 1) == IS_STRING) {
+		uint32_t fetch_type =
+			opline->op1.num & ZEND_FETCH_CLASS_MASK;
+
+		if (fetch_type == ZEND_FETCH_CLASS_PARENT) {
+			receiver_class = op_array->scope->parent;
+		} else if (fetch_type == ZEND_FETCH_CLASS_SELF
+				|| fetch_type == ZEND_FETCH_CLASS_STATIC) {
+			receiver_class = op_array->scope;
+		} else {
+			return NULL;
+		}
+		if (receiver_class == NULL) {
+			return NULL;
+		}
+		function = zend_hash_find_ptr(
+			&receiver_class->function_table,
+			Z_STR_P(CRT_CONSTANT(opline->op2) + 1));
+		if (function == NULL || function->type != ZEND_USER_FUNCTION
+				|| (function->common.fn_flags
+					& (ZEND_ACC_ABSTRACT | ZEND_ACC_STATIC))
+					!= ZEND_ACC_STATIC
+				|| !zend_check_method_accessible(
+					function, op_array->scope)) {
+			return NULL;
+		}
+		if (require_monomorphic
+				&& fetch_type == ZEND_FETCH_CLASS_STATIC
+				&& (op_array->scope->ce_flags & ZEND_ACC_FINAL) == 0
+				&& (function->common.fn_flags & ZEND_ACC_FINAL) == 0) {
+			return NULL;
+		}
+		return function;
+	}
 	if (opline->opcode != ZEND_INIT_METHOD_CALL
 			|| opline->op2_type != IS_CONST
 			|| Z_TYPE_P(CRT_CONSTANT(opline->op2)) != IS_STRING
@@ -1988,6 +2027,52 @@ zend_function *zend_mir_zend_source_resolve_monomorphic_user_method_call(
 {
 	return zend_mir_zend_source_resolve_user_method_call_ex(
 		script, op_array, ssa, init_opline_index, true);
+}
+
+bool zend_mir_zend_source_direct_static_call_scope(
+	const zend_script *script, const zend_op_array *op_array,
+	uint32_t init_opline_index, const zend_function *function,
+	bool *inherit_called_scope)
+{
+	const zend_op *opline;
+	zend_class_entry *called_scope;
+	uint32_t fetch_type;
+
+	if (op_array == NULL || function == NULL || inherit_called_scope == NULL
+			|| init_opline_index >= op_array->last
+			|| function->type != ZEND_USER_FUNCTION
+			|| function->common.scope == NULL
+			|| (function->common.fn_flags & ZEND_ACC_STATIC) == 0) {
+		return false;
+	}
+	opline = &op_array->opcodes[init_opline_index];
+	if (opline->opcode != ZEND_INIT_STATIC_METHOD_CALL
+			|| opline->op2_type != IS_CONST) {
+		return false;
+	}
+	if (opline->op1_type == IS_CONST) {
+		called_scope = zend_optimizer_get_class_entry_from_op1(
+			script, op_array, opline);
+		if (called_scope == NULL || called_scope->name == NULL
+				|| function->common.scope->name == NULL
+				|| !zend_string_equals_ci(
+					called_scope->name, function->common.scope->name)) {
+			return false;
+		}
+		*inherit_called_scope = false;
+		return true;
+	}
+	if (opline->op1_type != IS_UNUSED || op_array->scope == NULL) {
+		return false;
+	}
+	fetch_type = opline->op1.num & ZEND_FETCH_CLASS_MASK;
+	if (fetch_type != ZEND_FETCH_CLASS_SELF
+			&& fetch_type != ZEND_FETCH_CLASS_PARENT
+			&& fetch_type != ZEND_FETCH_CLASS_STATIC) {
+		return false;
+	}
+	*inherit_called_scope = true;
+	return true;
 }
 
 bool zend_mir_zend_source_w08_return_source_zval(
@@ -2265,9 +2350,13 @@ static bool zend_mir_frontend_target_for_call(
 		if (is_prototype) {
 			function = NULL;
 		}
-		if (function == NULL && opline->opcode == ZEND_INIT_METHOD_CALL) {
-			function = zend_mir_zend_source_resolve_internal_call(
-				script, op_array, ssa, opline_index);
+		if (function == NULL
+				&& (opline->opcode == ZEND_INIT_METHOD_CALL
+					|| opline->opcode == ZEND_INIT_STATIC_METHOD_CALL)) {
+			if (opline->opcode == ZEND_INIT_METHOD_CALL) {
+				function = zend_mir_zend_source_resolve_internal_call(
+					script, op_array, ssa, opline_index);
+			}
 			if (function == NULL) {
 				function = zend_mir_zend_source_resolve_user_method_call(
 					script, op_array, ssa, opline_index);
