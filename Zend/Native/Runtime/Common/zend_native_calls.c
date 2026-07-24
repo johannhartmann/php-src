@@ -717,26 +717,35 @@ static zend_function *zend_native_call_reject_target(const char *message)
 	return (zend_function *) &zend_pass_function;
 }
 
+static zval *zend_native_direct_operand(
+	zend_execute_data *execute_data,
+	const zend_mir_source_operand_ref *operand,
+	bool allow_literal);
+
 static zval *zend_native_call_source_slot(
-	zend_execute_data *caller, uint8_t type, znode_op operand)
+	zend_execute_data *caller, const zend_mir_source_operand_ref *operand)
 {
-	type &= IS_CONST | IS_TMP_VAR | IS_VAR | IS_CV;
-	if (type != IS_CV && type != IS_VAR && type != IS_TMP_VAR) {
+	if (operand == NULL
+			|| (operand->kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+				&& operand->kind != ZEND_MIR_SOURCE_OPERAND_SSA)) {
 		return NULL;
 	}
-	return ZEND_CALL_VAR(caller, operand.var);
+	return zend_native_direct_operand(caller, operand, false);
 }
 
 static void zend_native_call_consume_source_slot(
-	zend_execute_data *caller, uint8_t type, znode_op operand)
+	zend_execute_data *caller, const zend_mir_source_operand_ref *operand)
 {
 	zval *slot;
 
-	type &= IS_CONST | IS_TMP_VAR | IS_VAR | IS_CV;
-	if (type != IS_VAR && type != IS_TMP_VAR) {
+	if (operand == NULL
+			|| (operand->kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+				&& operand->kind != ZEND_MIR_SOURCE_OPERAND_SSA)
+			|| (operand->slot_kind != ZEND_MIR_SOURCE_SLOT_VAR
+				&& operand->slot_kind != ZEND_MIR_SOURCE_SLOT_TMP)) {
 		return;
 	}
-	slot = zend_native_call_source_slot(caller, type, operand);
+	slot = zend_native_call_source_slot(caller, operand);
 	if (slot != NULL && !Z_ISUNDEF_P(slot)) {
 		zval_ptr_dtor(slot);
 		ZVAL_UNDEF(slot);
@@ -744,151 +753,143 @@ static void zend_native_call_consume_source_slot(
 }
 
 static zend_class_entry *zend_native_call_source_class(
-	zend_execute_data *caller, const zend_op *source_init, znode_op operand,
-	uint8_t type, uint32_t cache_offset)
+	zend_execute_data *caller,
+	const zend_mir_source_operand_ref *operand,
+	uint32_t payload)
 {
 	zval *value;
+	zend_op_array *op_array = &caller->func->op_array;
 
-	if (type == IS_CONST) {
-		value = RT_CONSTANT(source_init, operand);
-		if (Z_TYPE_P(value) != IS_STRING
-				|| Z_TYPE_P(value + 1) != IS_STRING) {
+	if (operand->kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+		if (operand->index >= op_array->last_literal
+				|| operand->index + 1 >= op_array->last_literal) {
+			return NULL;
+		}
+		value = &op_array->literals[operand->index];
+		if (Z_TYPE_P(value) != IS_STRING || Z_TYPE_P(value + 1) != IS_STRING) {
 			return NULL;
 		}
 		return zend_fetch_class_by_name(
 			Z_STR_P(value), Z_STR_P(value + 1),
 			ZEND_FETCH_CLASS_DEFAULT | ZEND_FETCH_CLASS_EXCEPTION);
 	}
-	if (type == IS_UNUSED) {
-		return zend_fetch_class(NULL, operand.num);
+	if (operand->kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+		return zend_fetch_class(NULL, payload);
 	}
-	if (type != IS_VAR && type != IS_TMP_VAR && type != IS_CV) {
-		return NULL;
-	}
-	value = zend_native_call_source_slot(caller, type, operand);
+	value = zend_native_call_source_slot(caller, operand);
 	if (value == NULL || Z_TYPE_P(value) != IS_PTR) {
 		return NULL;
 	}
-	(void) cache_offset;
 	return Z_CE_P(value);
 }
 
 static zend_function *zend_native_call_object_method(
-	zend_execute_data *caller, const zend_op *source_init,
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor,
 	zend_object **object_out, bool *owned_out)
 {
 	zval *receiver;
 	zval *name;
+	zval *cache_name = NULL;
 	zend_object *object;
 	zend_object *original;
 	zend_function *function;
+	zend_op_array *op_array = &caller->func->op_array;
 
 	*object_out = NULL;
 	*owned_out = false;
-	name = source_init->op2_type == IS_CONST
-		? RT_CONSTANT(source_init, source_init->op2)
-		: zend_native_call_source_slot(
-			caller, source_init->op2_type, source_init->op2);
+	name = zend_native_direct_operand(caller, &descriptor->init_op2, true);
+	if (descriptor->init_op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+			&& descriptor->init_op2.index + 1 < op_array->last_literal) {
+		cache_name = &op_array->literals[descriptor->init_op2.index + 1];
+	}
 	if (name != NULL && Z_ISREF_P(name)) {
 		name = Z_REFVAL_P(name);
 	}
 	if (name == NULL || Z_TYPE_P(name) != IS_STRING) {
 		zend_throw_error(NULL, "Method name must be a string");
-		zend_native_call_consume_source_slot(
-			caller, source_init->op2_type, source_init->op2);
+		zend_native_call_consume_source_slot(caller, &descriptor->init_op2);
 		return NULL;
 	}
-	if (source_init->op1_type == IS_UNUSED) {
+	if (descriptor->init_op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
 		receiver = &caller->This;
 	} else {
-		receiver = zend_native_call_source_slot(
-			caller, source_init->op1_type, source_init->op1);
+		receiver = zend_native_call_source_slot(caller, &descriptor->init_op1);
 	}
 	if (receiver == NULL) {
-		zend_native_call_consume_source_slot(
-			caller, source_init->op2_type, source_init->op2);
+		zend_native_call_consume_source_slot(caller, &descriptor->init_op2);
 		return NULL;
 	}
 	ZVAL_DEREF(receiver);
 	if (Z_TYPE_P(receiver) != IS_OBJECT) {
 		zend_throw_error(NULL, "Call to a member function %s() on %s",
 			Z_STRVAL_P(name), zend_zval_value_name(receiver));
-		zend_native_call_consume_source_slot(
-			caller, source_init->op2_type, source_init->op2);
-		zend_native_call_consume_source_slot(
-			caller, source_init->op1_type, source_init->op1);
+		zend_native_call_consume_source_slot(caller, &descriptor->init_op2);
+		zend_native_call_consume_source_slot(caller, &descriptor->init_op1);
 		return NULL;
 	}
 	original = object = Z_OBJ_P(receiver);
 	function = object->handlers->get_method(
-		&object, Z_STR_P(name), source_init->op2_type == IS_CONST
-			? RT_CONSTANT(source_init, source_init->op2) + 1 : NULL);
+		&object, Z_STR_P(name), cache_name);
 	if (function == NULL) {
 		if (function == NULL && EG(exception) == NULL) {
 			zend_undefined_method(original->ce, Z_STR_P(name));
 		}
-		zend_native_call_consume_source_slot(
-			caller, source_init->op2_type, source_init->op2);
-		zend_native_call_consume_source_slot(
-			caller, source_init->op1_type, source_init->op1);
+		zend_native_call_consume_source_slot(caller, &descriptor->init_op2);
+		zend_native_call_consume_source_slot(caller, &descriptor->init_op1);
 		return NULL;
 	}
-	zend_native_call_consume_source_slot(
-		caller, source_init->op2_type, source_init->op2);
+	zend_native_call_consume_source_slot(caller, &descriptor->init_op2);
 	if ((function->common.fn_flags & ZEND_ACC_STATIC) != 0) {
 		*object_out = (zend_object *) original->ce;
-		zend_native_call_consume_source_slot(
-			caller, source_init->op1_type, source_init->op1);
+		zend_native_call_consume_source_slot(caller, &descriptor->init_op1);
 		return function;
 	}
 	*object_out = object;
-	if (source_init->op1_type != IS_UNUSED) {
+	if (descriptor->init_op1.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED) {
 		GC_ADDREF(object);
-		zend_native_call_consume_source_slot(
-			caller, source_init->op1_type, source_init->op1);
+		zend_native_call_consume_source_slot(caller, &descriptor->init_op1);
 		*owned_out = true;
 	}
 	return function;
 }
 
 static zend_function *zend_native_call_static_method(
-	zend_execute_data *caller, const zend_op *source_init,
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor,
 	zend_class_entry **called_scope_out)
 {
 	zend_class_entry *called_scope;
 	zval *name;
+	zval *cache_name = NULL;
 	zend_function *function;
+	zend_op_array *op_array = &caller->func->op_array;
 
 	called_scope = zend_native_call_source_class(
-		caller, source_init, source_init->op1, source_init->op1_type,
-		source_init->result.num);
+		caller, &descriptor->init_op1, descriptor->init_op1_payload);
 	if (called_scope == NULL) {
 		return NULL;
 	}
-	if (source_init->op2_type == IS_UNUSED) {
+	if (descriptor->init_op2.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
 		function = called_scope->constructor;
 	} else {
-		name = source_init->op2_type == IS_CONST
-			? RT_CONSTANT(source_init, source_init->op2)
-			: zend_native_call_source_slot(
-				caller, source_init->op2_type, source_init->op2);
+		name = zend_native_direct_operand(caller, &descriptor->init_op2, true);
+		if (descriptor->init_op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+				&& descriptor->init_op2.index + 1 < op_array->last_literal) {
+			cache_name = &op_array->literals[descriptor->init_op2.index + 1];
+		}
 		if (name != NULL && Z_ISREF_P(name)) {
 			name = Z_REFVAL_P(name);
 		}
 		if (name == NULL || Z_TYPE_P(name) != IS_STRING) {
 			zend_throw_error(NULL, "Method name must be a string");
-			zend_native_call_consume_source_slot(
-				caller, source_init->op2_type, source_init->op2);
+			zend_native_call_consume_source_slot(caller, &descriptor->init_op2);
 			return NULL;
 		}
 		function = called_scope->get_static_method != NULL
 			? called_scope->get_static_method(called_scope, Z_STR_P(name))
-			: zend_std_get_static_method(
-				called_scope, Z_STR_P(name),
-				source_init->op2_type == IS_CONST
-					? RT_CONSTANT(source_init, source_init->op2) + 1 : NULL);
-		zend_native_call_consume_source_slot(
-			caller, source_init->op2_type, source_init->op2);
+			: zend_std_get_static_method(called_scope, Z_STR_P(name), cache_name);
+		zend_native_call_consume_source_slot(caller, &descriptor->init_op2);
 	}
 	if (function == NULL) {
 		return NULL;
@@ -907,7 +908,8 @@ static zend_function *zend_native_call_static_method(
 }
 
 static zend_function *zend_native_call_constructor(
-	zend_execute_data *caller, const zend_op *source_init,
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor,
 	zend_object **object_out, bool *missing_out)
 {
 	zend_class_entry *ce;
@@ -917,13 +919,12 @@ static zend_function *zend_native_call_constructor(
 	*object_out = NULL;
 	*missing_out = false;
 	ce = zend_native_call_source_class(
-		caller, source_init, source_init->op1, source_init->op1_type,
-		source_init->op2.num);
-	if (ce == NULL || source_init->result_type == IS_UNUSED) {
+		caller, &descriptor->init_op1, descriptor->init_op1_payload);
+	if (ce == NULL
+			|| descriptor->init_result.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
 		return NULL;
 	}
-	result = zend_native_call_source_slot(
-		caller, source_init->result_type, source_init->result);
+	result = zend_native_call_source_slot(caller, &descriptor->init_result);
 	if (result == NULL) {
 		return NULL;
 	}
@@ -947,7 +948,8 @@ static zend_function *zend_native_call_constructor(
 }
 
 static zend_function *zend_native_call_parent_property_hook(
-	zend_execute_data *caller, const zend_op *source_init,
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor,
 	zend_object **object_out)
 {
 	zend_class_entry *scope;
@@ -965,13 +967,14 @@ static zend_function *zend_native_call_parent_property_hook(
 		return NULL;
 	}
 	if (Z_TYPE(caller->This) != IS_OBJECT
-			|| source_init->op1_type != IS_CONST
-			|| source_init->op2.num > ZEND_PROPERTY_HOOK_SET) {
+			|| descriptor->init_op1.kind
+				!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| descriptor->init_op2_payload > ZEND_PROPERTY_HOOK_SET) {
 		zend_throw_error(NULL, "Malformed parent property hook call");
 		return NULL;
 	}
-	name = RT_CONSTANT(source_init, source_init->op1);
-	if (Z_TYPE_P(name) != IS_STRING) {
+	name = zend_native_direct_operand(caller, &descriptor->init_op1, true);
+	if (name == NULL || Z_TYPE_P(name) != IS_STRING) {
 		zend_throw_error(NULL, "Malformed parent property hook name");
 		return NULL;
 	}
@@ -987,7 +990,7 @@ static zend_function *zend_native_call_parent_property_hook(
 			ZSTR_VAL(parent->name), Z_STRVAL_P(name));
 		return NULL;
 	}
-	hook_kind = (zend_property_hook_kind) source_init->op2.num;
+	hook_kind = (zend_property_hook_kind) descriptor->init_op2_payload;
 	function = property->hooks != NULL
 		? property->hooks[hook_kind] : NULL;
 	if (function == NULL) {
@@ -1019,27 +1022,20 @@ static void zend_native_call_release_target(zend_execute_data *call)
 }
 
 static zval *zend_native_call_callable_operand(
-	zend_execute_data *caller, const zend_op *opline)
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor)
 {
-	switch (opline->op2_type) {
-		case IS_CONST:
-			return (zval *) RT_CONSTANT(opline, opline->op2);
-		case IS_CV:
-		case IS_VAR:
-		case IS_TMP_VAR:
-			return ZEND_CALL_VAR(caller, opline->op2.var);
-		default:
-			return NULL;
-	}
+	return zend_native_direct_operand(caller, &descriptor->init_op2, true);
 }
 
 static bool zend_native_call_dynamic_target(
-	zend_execute_data *caller, const zend_op *opline,
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor,
 	zend_function **function_out, void **object_or_scope_out,
 	uint32_t *call_info_out)
 {
 	zend_fcall_info_cache fcc;
-	zval *callable = zend_native_call_callable_operand(caller, opline);
+	zval *callable = zend_native_call_callable_operand(caller, descriptor);
 	char *error = NULL;
 	uint32_t call_info = ZEND_CALL_NESTED_FUNCTION | ZEND_CALL_DYNAMIC;
 	void *object_or_scope;
@@ -1091,29 +1087,31 @@ static bool zend_native_call_dynamic_target(
 }
 
 static bool zend_native_call_named_target(
-	zend_execute_data *caller, const zend_op *opline, bool namespace_fallback,
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor,
+	bool namespace_fallback,
 	zend_function **function_out, void **object_or_scope_out,
 	uint32_t *call_info_out)
 {
 	const zend_op_array *op_array = &caller->func->op_array;
 	zval *encoded_name;
 	zval *function;
-	ptrdiff_t literal_index;
+	uint32_t literal_index;
 
-	if (opline->op2_type != IS_CONST || op_array->literals == NULL) {
+	if (descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| op_array->literals == NULL) {
 		return false;
 	}
-	encoded_name = (zval *) RT_CONSTANT(opline, opline->op2);
-	literal_index = encoded_name - op_array->literals;
-	if (literal_index < 0
-			|| (uint32_t) literal_index >= op_array->last_literal
-			|| (uint32_t) literal_index + (namespace_fallback ? 2 : 1)
+	literal_index = descriptor->init_op2.index;
+	if (literal_index >= op_array->last_literal
+			|| literal_index + (namespace_fallback ? 2 : 1)
 				>= op_array->last_literal
-			|| Z_TYPE(encoded_name[1]) != IS_STRING
+			|| Z_TYPE(op_array->literals[literal_index + 1]) != IS_STRING
 			|| (namespace_fallback
-				&& Z_TYPE(encoded_name[2]) != IS_STRING)) {
+				&& Z_TYPE(op_array->literals[literal_index + 2]) != IS_STRING)) {
 		return false;
 	}
+	encoded_name = &op_array->literals[literal_index];
 	function = zend_hash_find_known_hash(
 		EG(function_table), Z_STR(encoded_name[1]));
 	if (function == NULL && namespace_fallback) {
@@ -1138,8 +1136,7 @@ static bool zend_native_call_named_target(
 void zend_native_call_begin(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
-	uint32_t argument_count,
-	uint32_t source_opline_index)
+	const zend_native_user_call_descriptor *descriptor)
 {
 	zend_execute_data *call;
 	zend_function *function;
@@ -1150,7 +1147,8 @@ void zend_native_call_begin(
 	uint32_t initial_argument_count;
 	uint32_t index;
 
-	if (caller == NULL || cell == NULL || caller->call != NULL) {
+	if (caller == NULL || cell == NULL || descriptor == NULL
+			|| caller->call != NULL) {
 		zend_native_call_abort("Invalid pending native call state");
 	}
 	if (cell->state != ZEND_NATIVE_ENTRY_READY || cell->code == NULL
@@ -1159,10 +1157,14 @@ void zend_native_call_begin(
 	}
 	function = cell->function;
 	if (caller->func == NULL || !ZEND_USER_CODE(caller->func->type)
-			|| source_opline_index >= caller->func->op_array.last) {
+			|| descriptor->init_source_position
+				>= caller->func->op_array.last
+			|| descriptor->initial_argument_count
+				> descriptor->argument_count) {
 		zend_native_call_abort("Native call source position is invalid");
 	}
-	source_init = &caller->func->op_array.opcodes[source_opline_index];
+	source_init = &caller->func->op_array.opcodes[
+		descriptor->init_source_position];
 	/*
 	 * Target resolution may allocate objects or raise before the call frame
 	 * exists (notably NEW creates the object before invoking its constructor).
@@ -1171,26 +1173,25 @@ void zend_native_call_begin(
 	 */
 	caller->opline = source_init;
 	EG(current_execute_data) = caller;
-	initial_argument_count = source_init->extended_value;
-	if (initial_argument_count > argument_count) {
-		zend_native_call_abort("Native callee argument count is invalid");
-	}
+	initial_argument_count = descriptor->initial_argument_count;
 #ifdef ZEND_CHECK_STACK_LIMIT
 	if (UNEXPECTED(zend_call_stack_overflowed(EG(stack_limit)))) {
 		zend_call_stack_size_error();
 		zend_bailout();
 	}
 #endif
-	switch (source_init->opcode) {
+	switch (descriptor->init_opcode) {
 		case ZEND_INIT_FCALL: {
-			zval *name = RT_CONSTANT(source_init, source_init->op2);
-			zend_function *resolved = Z_TYPE_P(name) == IS_STRING
+			zval *name = zend_native_direct_operand(
+				caller, &descriptor->init_op2, true);
+			zend_function *resolved =
+				name != NULL && Z_TYPE_P(name) == IS_STRING
 				? zend_fetch_function(Z_STR_P(name)) : NULL;
 
 			if (resolved == NULL || resolved->type != ZEND_USER_FUNCTION) {
 				if (EG(exception) == NULL) {
 					zend_throw_error(NULL, "Call to undefined function %s()",
-						Z_TYPE_P(name) == IS_STRING
+						name != NULL && Z_TYPE_P(name) == IS_STRING
 							? Z_STRVAL_P(name) : "unknown");
 				}
 				function = (zend_function *) &zend_pass_function;
@@ -1212,8 +1213,8 @@ void zend_native_call_begin(
 		case ZEND_INIT_FCALL_BY_NAME:
 		case ZEND_INIT_NS_FCALL_BY_NAME:
 			if (!zend_native_call_named_target(
-					caller, source_init,
-					source_init->opcode == ZEND_INIT_NS_FCALL_BY_NAME,
+					caller, descriptor,
+					descriptor->init_opcode == ZEND_INIT_NS_FCALL_BY_NAME,
 					&function, &object_or_called_scope, &call_info)) {
 				if (EG(exception) == NULL) {
 					zend_throw_error(NULL,
@@ -1237,14 +1238,10 @@ void zend_native_call_begin(
 		case ZEND_INIT_DYNAMIC_CALL:
 		case ZEND_INIT_USER_CALL:
 			if (!zend_native_call_dynamic_target(
-					caller, source_init, &function,
+					caller, descriptor, &function,
 					&object_or_called_scope, &call_info)) {
-				if ((source_init->op2_type & (IS_VAR | IS_TMP_VAR)) != 0) {
-					zval *callable = ZEND_CALL_VAR(
-						caller, source_init->op2.var);
-					zval_ptr_dtor(callable);
-					ZVAL_UNDEF(callable);
-				}
+				zend_native_call_consume_source_slot(
+					caller, &descriptor->init_op2);
 				if (EG(exception) == NULL) {
 					zend_throw_error(NULL,
 						"Native dynamic call target cannot be resolved");
@@ -1271,16 +1268,13 @@ void zend_native_call_begin(
 					call_info = ZEND_CALL_NESTED_FUNCTION;
 				}
 			}
-			if ((source_init->op2_type & (IS_VAR | IS_TMP_VAR)) != 0) {
-				zval *callable = ZEND_CALL_VAR(caller, source_init->op2.var);
-				zval_ptr_dtor(callable);
-				ZVAL_UNDEF(callable);
-			}
+			zend_native_call_consume_source_slot(
+				caller, &descriptor->init_op2);
 			break;
 		case ZEND_INIT_METHOD_CALL: {
 			zend_object *object = NULL;
 			zend_function *resolved = zend_native_call_object_method(
-				caller, source_init, &object, &receiver_owned);
+				caller, descriptor, &object, &receiver_owned);
 
 			if (resolved == NULL || object == NULL) {
 				if (receiver_owned) {
@@ -1323,7 +1317,7 @@ void zend_native_call_begin(
 		case ZEND_INIT_STATIC_METHOD_CALL: {
 			zend_class_entry *called_scope = NULL;
 			zend_function *resolved = zend_native_call_static_method(
-				caller, source_init, &called_scope);
+				caller, descriptor, &called_scope);
 
 			if (resolved == NULL || called_scope == NULL) {
 				if (EG(exception) == NULL) {
@@ -1358,7 +1352,7 @@ void zend_native_call_begin(
 			zend_object *object = NULL;
 			zend_function *resolved =
 				zend_native_call_parent_property_hook(
-					caller, source_init, &object);
+					caller, descriptor, &object);
 
 			if (resolved == NULL || object == NULL) {
 				if (EG(exception) == NULL) {
@@ -1391,7 +1385,7 @@ void zend_native_call_begin(
 			zend_object *object = NULL;
 			bool constructor_missing = false;
 			zend_function *resolved = zend_native_call_constructor(
-				caller, source_init, &object, &constructor_missing);
+				caller, descriptor, &object, &constructor_missing);
 
 			if (constructor_missing) {
 				function = (zend_function *) &zend_pass_function;
@@ -2255,9 +2249,7 @@ uint64_t zend_native_call_invoke_finish(
 zend_native_status zend_native_call_invoke_finish_source(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
-	uint32_t do_opline_index,
-	uint32_t do_opcode,
-	uint64_t result_operand)
+	const zend_native_user_call_descriptor *descriptor)
 {
 	const zend_op *opline;
 	zval temporary;
@@ -2265,18 +2257,20 @@ zend_native_status zend_native_call_invoke_finish_source(
 	uint8_t result_operand_type;
 	zend_native_status status;
 
-	if (caller == NULL || caller->func == NULL
+	if (caller == NULL || descriptor == NULL || caller->func == NULL
 			|| !ZEND_USER_CODE(caller->func->type)
-			|| do_opline_index >= caller->func->op_array.last) {
+			|| descriptor->do_source_position
+				>= caller->func->op_array.last) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	opline = &caller->func->op_array.opcodes[do_opline_index];
-	if (do_opcode != ZEND_DO_UCALL
-			&& do_opcode != ZEND_DO_FCALL
-			&& do_opcode != ZEND_DO_FCALL_BY_NAME
-			&& do_opcode != ZEND_DO_ICALL
-			&& do_opcode != ZEND_CALLABLE_CONVERT
-			&& do_opcode != ZEND_CALLABLE_CONVERT_PARTIAL) {
+	opline = &caller->func->op_array.opcodes[
+		descriptor->do_source_position];
+	if (descriptor->do_opcode != ZEND_DO_UCALL
+			&& descriptor->do_opcode != ZEND_DO_FCALL
+			&& descriptor->do_opcode != ZEND_DO_FCALL_BY_NAME
+			&& descriptor->do_opcode != ZEND_DO_ICALL
+			&& descriptor->do_opcode != ZEND_CALLABLE_CONVERT
+			&& descriptor->do_opcode != ZEND_CALLABLE_CONVERT_PARTIAL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (EG(exception) != NULL) {
@@ -2284,8 +2278,15 @@ zend_native_status zend_native_call_invoke_finish_source(
 		return zend_native_call_invoke(caller, cell, &temporary);
 	}
 	caller->opline = opline;
-	return_value = zend_native_call_explicit_slot(
-		caller, result_operand, &result_operand_type);
+	return_value = zend_native_direct_operand(
+		caller, &descriptor->do_result, false);
+	result_operand_type = descriptor->do_result.kind
+			== ZEND_MIR_SOURCE_OPERAND_UNUSED
+		? IS_UNUSED
+		: descriptor->do_result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+			? IS_CV
+			: descriptor->do_result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR
+				? IS_VAR : IS_TMP_VAR;
 	if (result_operand_type == IS_UNUSED) {
 		ZVAL_UNDEF(&temporary);
 		return_value = &temporary;
@@ -2294,7 +2295,7 @@ zend_native_status zend_native_call_invoke_finish_source(
 	} else {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	if (do_opcode == ZEND_CALLABLE_CONVERT) {
+	if (descriptor->do_opcode == ZEND_CALLABLE_CONVERT) {
 		zend_execute_data *call = caller->call;
 
 		if (call == NULL || EG(exception) != NULL) {
@@ -2308,7 +2309,7 @@ zend_native_status zend_native_call_invoke_finish_source(
 		caller->call = NULL;
 		return ZEND_NATIVE_RETURNED;
 	}
-	if (do_opcode == ZEND_CALLABLE_CONVERT_PARTIAL) {
+	if (descriptor->do_opcode == ZEND_CALLABLE_CONVERT_PARTIAL) {
 		zend_execute_data *call = caller->call;
 		void **cache_slot;
 		zval *named_positions = NULL;
@@ -2316,21 +2317,24 @@ zend_native_status zend_native_call_invoke_finish_source(
 		uint32_t call_info;
 
 		if (call == NULL || caller->run_time_cache == NULL
-				|| opline->op1.num > op_array->cache_size
+				|| descriptor->do_op1_payload > op_array->cache_size
 				|| 2 * sizeof(void *)
-					> op_array->cache_size - opline->op1.num) {
+					> op_array->cache_size - descriptor->do_op1_payload) {
 			return ZEND_NATIVE_EXCEPTION;
 		}
-		if (opline->op2_type == IS_CONST) {
-			named_positions = RT_CONSTANT(opline, opline->op2);
-			if (Z_TYPE_P(named_positions) != IS_ARRAY) {
+		if (descriptor->do_op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+			named_positions = zend_native_direct_operand(
+				caller, &descriptor->do_op2, true);
+			if (named_positions == NULL
+					|| Z_TYPE_P(named_positions) != IS_ARRAY) {
 				return ZEND_NATIVE_EXCEPTION;
 			}
-		} else if (opline->op2_type != IS_UNUSED) {
+		} else if (descriptor->do_op2.kind
+				!= ZEND_MIR_SOURCE_OPERAND_UNUSED) {
 			return ZEND_NATIVE_EXCEPTION;
 		}
 		cache_slot = (void **) ((char *) caller->run_time_cache
-			+ opline->op1.num);
+			+ descriptor->do_op1_payload);
 		call_info = ZEND_CALL_INFO(call);
 		zend_partial_create(return_value,
 			&call->This, call->func,
@@ -2339,7 +2343,7 @@ zend_native_status zend_native_call_invoke_finish_source(
 				? call->extra_named_params : NULL,
 			named_positions != NULL ? Z_ARRVAL_P(named_positions) : NULL,
 			op_array, opline, cache_slot,
-			(opline->extended_value
+			(descriptor->do_extended_value
 				& ZEND_FCALL_USES_VARIADIC_PLACEHOLDER) != 0);
 		if ((call_info & ZEND_CALL_HAS_EXTRA_NAMED_PARAMS) != 0) {
 			zend_array_release(call->extra_named_params);
@@ -2361,7 +2365,7 @@ zend_native_status zend_native_call_invoke_finish_source(
 	status = zend_native_call_invoke(caller, cell, return_value);
 	if (status == ZEND_NATIVE_EXCEPTION && EG(exception) != NULL
 			&& zend_native_prepare_finally_exception(
-				caller, do_opline_index) == FAILURE) {
+				caller, descriptor->do_source_position) == FAILURE) {
 		status = ZEND_NATIVE_BAILOUT;
 	}
 	if (status != ZEND_NATIVE_RETURNED || return_value == &temporary) {

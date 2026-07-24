@@ -14,7 +14,7 @@
 namespace {
 constexpr uint32_t MAX_RECORDS = UINT32_C(1) << 20;
 constexpr size_t MAX_NATIVE_IMAGE_BYTES = size_t{1} << 28;
-constexpr uint32_t NATIVE_IMAGE_ABI_VERSION = 1;
+constexpr uint32_t NATIVE_IMAGE_ABI_VERSION = 2;
 std::atomic_uint32_t live_unwind_registrations{0};
 
 bool checked_count(uint32_t count) {
@@ -355,6 +355,16 @@ bool prepare_image_symbols(
 				"unable to create the native image direct internal-call symbol");
 			return false;
 		}
+		if (instruction.user_call != nullptr
+				&& !image_add_symbol(image,
+					ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
+					instruction.id, NATIVE_IMAGE_ABI_VERSION, 0,
+					instruction.user_call)) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+				"unable to create the native image user-call symbol");
+			return false;
+		}
 	}
 	return true;
 }
@@ -488,6 +498,9 @@ void destroy_plan(zend_tpde_plan *plan) {
 			index < plan->direct_internal_call_count; ++index) {
 		std::free(plan->direct_internal_calls[index]);
 	}
+	for (uint32_t index = 0; index < plan->user_call_count; ++index) {
+		std::free(plan->user_calls[index]);
+	}
 	std::free(plan->block_ids);
 	std::free(plan->block_index);
 	std::free(plan->values);
@@ -500,6 +513,7 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->internal_binding_index);
 	std::free(plan->direct_calls);
 	std::free(plan->direct_internal_calls);
+	std::free(plan->user_calls);
 	std::memset(plan, 0, sizeof(*plan));
 }
 
@@ -592,6 +606,8 @@ bool initialize_plan(
 		static_cast<zend_native_direct_internal_call_descriptor **>(
 			std::calloc(plan->call_site_count,
 				sizeof(*plan->direct_internal_calls)));
+	plan->user_calls = static_cast<zend_native_user_call_descriptor **>(
+		std::calloc(plan->call_site_count, sizeof(*plan->user_calls)));
 	if (plan->block_ids == nullptr || plan->block_index == nullptr
 			|| (plan->value_count != 0
 				&& (plan->values == nullptr || plan->value_index == nullptr))
@@ -601,7 +617,8 @@ bool initialize_plan(
 			|| (plan->call_site_count != 0
 				&& (plan->call_site_instruction_index == nullptr
 					|| plan->direct_calls == nullptr
-					|| plan->direct_internal_calls == nullptr))
+					|| plan->direct_internal_calls == nullptr
+					|| plan->user_calls == nullptr))
 			|| (plan->call_target_count != 0
 				&& plan->call_target_index == nullptr)
 			|| (user_binding_count != 0 && plan->user_binding_index == nullptr)
@@ -1269,8 +1286,6 @@ bool initialize_plan(
 					"direct call has no explicit source completion descriptor");
 				return false;
 			}
-			plan->instructions[i].call_do_opcode =
-				source_op_array->opcodes[site.source_do_opline_index].opcode;
 			if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
 				const bool source_arguments = count == 0
 					&& site.arguments.count != 0;
@@ -1598,6 +1613,124 @@ bool initialize_plan(
 					require_runtime_helper(
 						plan, ZEND_NATIVE_HELPER_DIRECT_USER_CALL_LEAVE);
 				} else {
+					if (source_op_array == nullptr
+							|| site.source_init_opline_index
+								>= source_op_array->last) {
+						zend_tpde_set_diagnostic(diag,
+							ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+							"user call has no explicit source init descriptor");
+						return false;
+					}
+					const zend_op *init = &source_op_array->opcodes[
+						site.source_init_opline_index];
+					const zend_op *finish = &source_op_array->opcodes[
+						site.source_do_opline_index];
+					if (init->extended_value > site.arguments.count) {
+						zend_tpde_set_diagnostic(diag,
+							ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+							"user call source argument count is inconsistent");
+						return false;
+					}
+					const size_t descriptor_size =
+						offsetof(zend_native_user_call_descriptor, arguments)
+						+ static_cast<size_t>(site.arguments.count)
+							* sizeof(zend_native_direct_internal_call_argument);
+					auto *descriptor =
+						static_cast<zend_native_user_call_descriptor *>(
+							std::calloc(1, descriptor_size));
+					if (descriptor == nullptr) {
+						zend_tpde_set_diagnostic(diag,
+							ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+							"unable to allocate a user-call descriptor");
+						return false;
+					}
+					descriptor->argument_count = site.arguments.count;
+					descriptor->initial_argument_count = init->extended_value;
+					descriptor->init_source_position =
+						site.source_init_opline_index;
+					descriptor->do_source_position =
+						site.source_do_opline_index;
+					descriptor->init_opcode = init->opcode;
+					descriptor->do_opcode = finish->opcode;
+					descriptor->init_op1_payload = init->op1.num;
+					descriptor->init_op2_payload = init->op2.num;
+					descriptor->init_result_payload = init->result.num;
+					descriptor->init_extended_value = init->extended_value;
+					descriptor->do_op1_payload = finish->op1.num;
+					descriptor->do_op2_payload = finish->op2.num;
+					descriptor->do_result_payload = finish->result.num;
+					descriptor->do_extended_value = finish->extended_value;
+					if (!source_descriptor_operand(
+								source_op_array, init, init->op1_type,
+								init->op1, &descriptor->init_op1)
+							|| !source_descriptor_operand(
+								source_op_array, init, init->op2_type,
+								init->op2, &descriptor->init_op2)
+							|| !source_descriptor_operand(
+								source_op_array, init, init->result_type,
+								init->result, &descriptor->init_result)
+							|| !source_descriptor_operand(
+								source_op_array, finish, finish->op1_type,
+								finish->op1, &descriptor->do_op1)
+							|| !source_descriptor_operand(
+								source_op_array, finish, finish->op2_type,
+								finish->op2, &descriptor->do_op2)) {
+						std::free(descriptor);
+						zend_tpde_set_diagnostic(diag,
+							ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+							"user call source operands are invalid");
+						return false;
+					}
+					descriptor->do_result = site.result_operand;
+					for (uint32_t n = 0; n < site.arguments.count; ++n) {
+						zend_mir_call_argument_ref argument;
+						if (!zend_tpde_call_argument_at(
+									plan, site.arguments.offset + n, &argument)
+								|| argument.send_opline_index
+									>= source_op_array->last) {
+							std::free(descriptor);
+							zend_tpde_set_diagnostic(diag,
+								ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+								"user-call argument table is unreadable");
+							return false;
+						}
+						const zend_op *send = &source_op_array->opcodes[
+							argument.send_opline_index];
+						if (!source_descriptor_send_opcode(send->opcode)) {
+							std::free(descriptor);
+							zend_tpde_set_diagnostic(diag,
+								ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+								"user-call SEND opcode is invalid");
+							return false;
+						}
+						zend_native_direct_internal_call_argument &encoded =
+							descriptor->arguments[n];
+						encoded.ordinal = argument.ordinal;
+						encoded.mode = argument.source_mode
+								== ZEND_MIR_SOURCE_CALL_ARGUMENT_PLACEHOLDER
+							? ZEND_NATIVE_CALL_ARGUMENT_PLACEHOLDER
+							: argument.ownership
+									== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
+								? ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
+								: ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE;
+						encoded.source_opcode = send->opcode;
+						encoded.source_position = argument.send_opline_index;
+						encoded.source_operand = argument.source_operand;
+						encoded.auxiliary_payload = send->op2.num;
+						encoded.result_payload = send->result.num;
+						encoded.extended_value = send->extended_value;
+						if (!source_descriptor_operand(
+								source_op_array, send, send->op2_type,
+								send->op2, &encoded.auxiliary_operand)) {
+							std::free(descriptor);
+							zend_tpde_set_diagnostic(diag,
+								ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+								"user-call auxiliary operand is invalid");
+							return false;
+						}
+					}
+					plan->instructions[i].user_call = descriptor;
+					plan->user_calls[plan->user_call_count++] = descriptor;
 					require_runtime_helper(
 						plan, ZEND_NATIVE_HELPER_USER_CALL_BEGIN);
 					require_runtime_helper(
@@ -2101,7 +2234,9 @@ bool zend_tpde_image_resolve_symbol(
 					&& symbol->kind
 						!= ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR
 					&& symbol->kind
-						!= ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR)) {
+						!= ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR
+					&& symbol->kind
+						!= ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR)) {
 			return false;
 		}
 		const uint32_t symbol_index =
@@ -2268,6 +2403,10 @@ extern "C" zend_result zend_tpde_compile_module_w08_with_runtime(
 		image->direct_internal_call_count = plan.direct_internal_call_count;
 		plan.direct_internal_calls = nullptr;
 		plan.direct_internal_call_count = 0;
+		image->user_calls = plan.user_calls;
+		image->user_call_count = plan.user_call_count;
+		plan.user_calls = nullptr;
+		plan.user_call_count = 0;
 	}
 	destroy_plan(&plan);
 	if (result == FAILURE) {
@@ -2318,6 +2457,10 @@ extern "C" zend_result zend_native_publish_image(
 			image->direct_internal_call_count;
 		image->direct_internal_calls = nullptr;
 		image->direct_internal_call_count = 0;
+		(*out_code)->user_calls = image->user_calls;
+		(*out_code)->user_call_count = image->user_call_count;
+		image->user_calls = nullptr;
+		image->user_call_count = 0;
 	}
 	return result;
 }
@@ -2456,6 +2599,10 @@ extern "C" void zend_native_image_destroy(zend_native_image *image) {
 			std::free(image->direct_internal_calls[index]);
 		}
 		std::free(image->direct_internal_calls);
+		for (uint32_t index = 0; index < image->user_call_count; ++index) {
+			std::free(image->user_calls[index]);
+		}
+		std::free(image->user_calls);
 		if (image->destroy_target_state != nullptr) {
 			image->destroy_target_state(image->target_state);
 		}
@@ -2479,6 +2626,10 @@ extern "C" void zend_native_code_destroy(zend_native_code *code) {
 		std::free(code->direct_internal_calls[index]);
 	}
 	std::free(code->direct_internal_calls);
+	for (uint32_t index = 0; index < code->user_call_count; ++index) {
+		std::free(code->user_calls[index]);
+	}
+	std::free(code->user_calls);
 	if (code->unwind_registered) {
 		uint32_t previous = live_unwind_registrations.fetch_sub(
 			1, std::memory_order_relaxed);

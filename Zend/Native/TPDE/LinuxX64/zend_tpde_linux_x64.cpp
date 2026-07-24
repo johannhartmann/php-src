@@ -4028,11 +4028,9 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				builder.add_arg(image_symbol_value(
 					ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
 					call.call_site.target_id), tpde::CCAssignment{});
-				builder.add_arg(ValuePart{
-					source_arguments ? call.call_argument_count : call.operand_count, 4,
-					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-				builder.add_arg(ValuePart{call.call_site.source_init_opline_index, 4,
-					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+				builder.add_arg(image_symbol_value(
+					ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
+					call.id), tpde::CCAssignment{});
 				builder.call(runtime_symbol(ZEND_NATIVE_HELPER_USER_CALL_BEGIN));
 			}
 			for (uint32_t index = 0;
@@ -4042,24 +4040,11 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				CallBuilder builder{*this, assigner};
 				builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
 				if (source_arguments) {
-					zend_mir_call_argument_ref argument;
-					if (!zend_tpde_call_argument_at(adaptor->plan(),
-							call.call_argument_offset + index, &argument)) {
-						return false;
-					}
-					builder.add_arg(ValuePart{argument.ordinal, 4,
+					builder.add_arg(image_symbol_value(
+						ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
+						call.id), tpde::CCAssignment{});
+					builder.add_arg(ValuePart{index, 4,
 						tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-					builder.add_arg(ValuePart{argument.send_opline_index, 4,
-						tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-					builder.add_arg(ValuePart{
-						argument.source_mode
-								== ZEND_MIR_SOURCE_CALL_ARGUMENT_PLACEHOLDER
-							? ZEND_NATIVE_CALL_ARGUMENT_PLACEHOLDER
-							: argument.ownership
-									== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
-								? ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
-								: ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE,
-						4, tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 					builder.call(runtime_symbol(ZEND_NATIVE_HELPER_CALL_SET_SOURCE_ARGUMENT));
 					continue;
 				}
@@ -4085,14 +4070,10 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(image_symbol_value(
 				ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
 				call.call_site.target_id), tpde::CCAssignment{});
-				builder.add_arg(ValuePart{call.call_site.source_do_opline_index, 4,
-					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-				builder.add_arg(ValuePart{call.call_do_opcode, 4,
-					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-				builder.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(call.call_site.result_operand), 8,
-					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-				builder.call(runtime_symbol(ZEND_NATIVE_HELPER_USER_CALL_FINISH_SOURCE));
+			builder.add_arg(image_symbol_value(
+				ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
+				call.id), tpde::CCAssignment{});
+			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_USER_CALL_FINISH_SOURCE));
 			ValuePart status{tpde::x64::PlatformConfig::GP_BANK};
 			builder.add_ret(status, tpde::CCAssignment{});
 			auto status_reg = status.cur_reg_or_load(this);

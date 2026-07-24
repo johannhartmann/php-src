@@ -13,6 +13,7 @@
 
 struct _zend_native_direct_call_descriptor;
 struct _zend_native_direct_internal_call_descriptor;
+struct _zend_native_user_call_descriptor;
 
 static inline uint64_t zend_tpde_encode_value_operand(
 	const zend_mir_source_operand_ref &operand, uint32_t unused_payload)
@@ -137,7 +138,7 @@ struct zend_tpde_instruction {
 	zend_mir_block_id exception_block_id;
 	uint32_t call_argument_offset;
 	uint32_t call_argument_count;
-	uint32_t call_do_opcode;
+	_zend_native_user_call_descriptor *user_call;
 	_zend_native_direct_call_descriptor *direct_call;
 	_zend_native_direct_internal_call_descriptor *direct_internal_call;
 	zend_native_source_effect_kind source_effect;
@@ -610,6 +611,8 @@ struct zend_tpde_plan {
 	uint32_t direct_call_count;
 	_zend_native_direct_internal_call_descriptor **direct_internal_calls;
 	uint32_t direct_internal_call_count;
+	_zend_native_user_call_descriptor **user_calls;
+	uint32_t user_call_count;
 	uint32_t argument_count;
 	uint32_t value_model_flags;
 	uint64_t required_runtime_capabilities;
@@ -625,6 +628,7 @@ enum zend_native_image_symbol_kind : uint32_t {
 	ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR = 5,
 	ZEND_NATIVE_IMAGE_SYMBOL_SOURCE = 6,
 	ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR = 7,
+	ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR = 8,
 };
 
 struct zend_native_image_symbol {
@@ -661,6 +665,8 @@ struct zend_native_image {
 	uint32_t direct_call_count;
 	_zend_native_direct_internal_call_descriptor **direct_internal_calls;
 	uint32_t direct_internal_call_count;
+	_zend_native_user_call_descriptor **user_calls;
+	uint32_t user_call_count;
 };
 
 struct zend_native_code {
@@ -679,6 +685,8 @@ struct zend_native_code {
 	uint32_t direct_call_count;
 	_zend_native_direct_internal_call_descriptor **direct_internal_calls;
 	uint32_t direct_internal_call_count;
+	_zend_native_user_call_descriptor **user_calls;
+	uint32_t user_call_count;
 };
 
 void zend_tpde_set_diagnostic(
