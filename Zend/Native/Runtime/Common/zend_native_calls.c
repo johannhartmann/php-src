@@ -330,17 +330,17 @@ static zend_native_entry_cell *zend_native_reentry_find(
 	for (current = scope; current != NULL; current = current->previous) {
 		uint32_t index;
 
-		for (index = 0; index < current->binding_count; index++) {
-			if (current->bindings[index].function == function) {
-				return current->bindings[index].entry_cell;
-			}
-		}
 		if (current->resolver != NULL) {
 			zend_native_entry_cell *cell = current->resolver(
 				current->resolver_context, function);
 
 			if (cell != NULL) {
 				return cell;
+			}
+		}
+		for (index = 0; index < current->binding_count; index++) {
+			if (current->bindings[index].function == function) {
+				return current->bindings[index].entry_cell;
 			}
 		}
 	}
