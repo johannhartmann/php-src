@@ -1380,29 +1380,22 @@ zend_native_status zend_native_internal_call_invoke_finish_source(
 
 uint64_t zend_native_call_read_source_scalar(
 	zend_execute_data *caller,
-	uint32_t do_opline_index,
+	uint64_t result_operand,
 	zend_mir_scalar_type_mask exact_type)
 {
-	const zend_op *opline;
 	const zval *value;
+	uint8_t result_operand_type;
 	uint64_t payload_bits = 0;
 	bool matches = false;
 
-	if (caller == NULL || caller->func == NULL
-			|| !ZEND_USER_CODE(caller->func->type)
-			|| do_opline_index >= caller->func->op_array.last) {
+	value = zend_native_call_explicit_slot(
+		caller, result_operand, &result_operand_type);
+	if (value == NULL
+			|| (result_operand_type != IS_CV
+				&& result_operand_type != IS_VAR
+				&& result_operand_type != IS_TMP_VAR)) {
 		goto mismatch;
 	}
-	opline = &caller->func->op_array.opcodes[do_opline_index];
-	if ((opline->opcode != ZEND_DO_ICALL
-			&& opline->opcode != ZEND_DO_UCALL
-			&& opline->opcode != ZEND_DO_FCALL)
-			|| (opline->result_type != IS_CV
-				&& opline->result_type != IS_VAR
-				&& opline->result_type != IS_TMP_VAR)) {
-		goto mismatch;
-	}
-	value = ZEND_CALL_VAR(caller, opline->result.var);
 	switch (exact_type) {
 		case ZEND_MIR_SCALAR_TYPE_NULL:
 			matches = Z_TYPE_P(value) == IS_NULL;
@@ -1432,7 +1425,7 @@ uint64_t zend_native_call_read_source_scalar(
 
 mismatch:
 	zend_throw_error(NULL,
-		"Native internal call violated its exact scalar result contract");
+		"Native call violated its exact scalar result contract");
 	zend_bailout();
 	return 0;
 }

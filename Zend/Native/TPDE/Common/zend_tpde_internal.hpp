@@ -137,6 +137,7 @@ struct zend_tpde_instruction {
 	zend_mir_block_id exception_block_id;
 	uint32_t call_argument_offset;
 	uint32_t call_argument_count;
+	uint32_t call_do_opcode;
 	_zend_native_direct_call_descriptor *direct_call;
 	_zend_native_direct_internal_call_descriptor *direct_internal_call;
 	zend_native_source_effect_kind source_effect;

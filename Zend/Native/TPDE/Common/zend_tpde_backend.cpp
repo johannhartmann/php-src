@@ -1262,6 +1262,15 @@ bool initialize_plan(
 				exception_continuation.block_id;
 			plan->instructions[i].call_argument_offset = site.arguments.offset;
 			plan->instructions[i].call_argument_count = site.arguments.count;
+			if (source_op_array == nullptr
+					|| site.source_do_opline_index >= source_op_array->last) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+					"direct call has no explicit source completion descriptor");
+				return false;
+			}
+			plan->instructions[i].call_do_opcode =
+				source_op_array->opcodes[site.source_do_opline_index].opcode;
 			if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
 				const bool source_arguments = count == 0
 					&& site.arguments.count != 0;
