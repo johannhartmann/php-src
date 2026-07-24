@@ -572,6 +572,9 @@ ZEND_MIR_VALUE_VIEW_ACCESSORS(
 	zend_mir_value_view_call_transfer, value_call_transfers,
 	zend_mir_call_transfer_ref)
 ZEND_MIR_VALUE_VIEW_ACCESSORS(
+	zend_mir_value_view_value_location, value_locations,
+	zend_mir_value_location_ref)
+ZEND_MIR_VALUE_VIEW_ACCESSORS(
 	zend_mir_value_view_executable_operation, value_executable_operations,
 	zend_mir_executable_value_ref)
 
@@ -606,6 +609,10 @@ void zend_mir_module_init_value_view(zend_mir_module *module)
 		zend_mir_value_view_call_transfer_count;
 	module->value_view.call_transfer_at =
 		zend_mir_value_view_call_transfer_at;
+	module->value_view.value_location_count =
+		zend_mir_value_view_value_location_count;
+	module->value_view.value_location_at =
+		zend_mir_value_view_value_location_at;
 	module->value_view.executable_operation_count =
 		zend_mir_value_view_executable_operation_count;
 	module->value_view.executable_operation_at =

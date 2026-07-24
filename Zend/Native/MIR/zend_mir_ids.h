@@ -67,8 +67,10 @@
  * W11P makes executable boxed-value instructions self-describing. Source
  * positions remain diagnostic identity; operand slots, literals, opcode flags
  * and modes are carried independently and never reconstructed from zend_op.
+ * Minor 13 also publishes the canonical Zend storage location of each
+ * source-SSA value so boxed PHIs can be proven without a second IR.
  */
-#define ZEND_MIR_W11P_CONTRACT_VERSION_MINOR UINT32_C(12)
+#define ZEND_MIR_W11P_CONTRACT_VERSION_MINOR UINT32_C(13)
 #define ZEND_MIR_W11P_CONTRACT_VERSION \
 	((ZEND_MIR_CONTRACT_VERSION_MAJOR << 16) | ZEND_MIR_W11P_CONTRACT_VERSION_MINOR)
 

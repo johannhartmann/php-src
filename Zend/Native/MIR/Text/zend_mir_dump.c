@@ -1000,7 +1000,12 @@ static bool zend_mir_dump_value_model(zend_mir_dump_context *dump)
 			|| values->separation_plan_count == NULL
 			|| values->separation_plan_at == NULL
 			|| values->call_transfer_count == NULL
-			|| values->call_transfer_at == NULL) {
+			|| values->call_transfer_at == NULL
+			|| (values->contract_version == ZEND_MIR_W11P_CONTRACT_VERSION
+				&& ((values->model_flags
+						& ~ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS) != 0
+					|| values->value_location_count == NULL
+					|| values->value_location_at == NULL))) {
 		zend_mir_dump_diagnostic(dump, "incomplete W06 value view");
 		return false;
 	}
@@ -1051,6 +1056,28 @@ static bool zend_mir_dump_value_model(zend_mir_dump_context *dump)
 					dump, "vs", record.indirect_target_id)
 				|| !zend_mir_dump_literal(dump, "\n")) {
 			return false;
+		}
+	}
+	if (values->contract_version == ZEND_MIR_W11P_CONTRACT_VERSION) {
+		if (!zend_mir_dump_literal(dump, "value-model-flags ")
+				|| !zend_mir_dump_u32(dump, values->model_flags)
+				|| !zend_mir_dump_literal(dump, "\n")) {
+			return false;
+		}
+		ZEND_MIR_VALUE_COUNT(value_location)
+		for (index = 0; index < count; index++) {
+			zend_mir_value_location_ref record;
+			if (!values->value_location_at(
+					values->context, index, &record)
+					|| !zend_mir_dump_literal(
+						dump, "value-location ")
+					|| !zend_mir_dump_id(dump, "v", record.value_id)
+					|| !zend_mir_dump_literal(
+						dump, " frame-storage ")
+					|| !zend_mir_dump_u32(dump, record.storage_id)
+					|| !zend_mir_dump_literal(dump, "\n")) {
+				return false;
+			}
 		}
 	}
 	ZEND_MIR_VALUE_COUNT(reference_cell)

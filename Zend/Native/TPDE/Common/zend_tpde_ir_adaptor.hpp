@@ -393,12 +393,39 @@ public:
 					continue;
 				}
 				/*
-				 * Canonical zval PHIs describe Zend-frame state.  W09 value and
-				 * iterator helpers read and update that state by source slot, so
-				 * these PHIs must remain in ZNMIR without becoming TPDE register
-				 * assignments.  Scalar PHIs still carry machine values and retain
-				 * the normal TPDE parallel-copy semantics.
+				 * A boxed PHI is registerless only when every incoming source-SSA
+				 * identity names the exact same canonical Zend-frame location as
+				 * its result.  This is a physical-location proof, not an assumption
+				 * based on representation or source-opline decoding.
 				 */
+				if (representation(result) == ZEND_MIR_REPRESENTATION_ZVAL) {
+					if ((plan_->value_model_flags
+							& ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS) == 0) {
+						continue;
+					}
+					const uint32_t predecessors =
+						plan_->view->predecessor_count(
+							plan_->view->context, record.block_id);
+					const zend_mir_storage_id result_storage =
+						canonical_storage(result);
+					if (predecessors != instruction.operand_count
+							|| !zend_mir_id_is_valid(result_storage)) {
+						valid_ = false;
+						continue;
+					}
+					for (uint32_t n = 0; n < predecessors; ++n) {
+						const IRValueRef input = value_ref(
+							zend_tpde_operand_at(plan_, &instruction, n));
+						if (input == INVALID_VALUE_REF
+								|| representation(input)
+									!= ZEND_MIR_REPRESENTATION_ZVAL
+								|| canonical_storage(input) != result_storage) {
+							valid_ = false;
+							break;
+						}
+					}
+					continue;
+				}
 				if (!zend_mir_scalar_type_is_exact(exact_type(result))
 						|| exact_type(result) == ZEND_MIR_SCALAR_TYPE_NULL) {
 					continue;
@@ -438,13 +465,30 @@ public:
 			bool machine_result = result != INVALID_VALUE_REF
 				&& zend_mir_scalar_type_is_exact(exact_type(result))
 				&& exact_type(result) != ZEND_MIR_SCALAR_TYPE_NULL;
-			/* W09 Pi nodes over canonical zvals preserve source SSA topology,
-			 * but the authoritative value remains in the Zend frame slot.  They
-			 * are not machine copies and must not create a TPDE use-before-def
-			 * dependency on another source-only zval identity. */
+			/* W09 Pi nodes over canonical zvals preserve source SSA topology.
+			 * They are registerless only after the same physical-location proof
+			 * used for boxed PHIs. */
 			if (record.opcode == ZEND_MIR_OPCODE_COPY
 					&& record.representation
 						== ZEND_MIR_REPRESENTATION_ZVAL) {
+				if ((plan_->value_model_flags
+						& ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS) == 0) {
+					continue;
+				}
+				const zend_mir_storage_id result_storage =
+					canonical_storage(result);
+				const IRValueRef input = instruction.operand_count == 1
+					? value_ref(zend_tpde_operand_at(
+						plan_, &instruction, 0))
+					: INVALID_VALUE_REF;
+				if (result == INVALID_VALUE_REF
+						|| input == INVALID_VALUE_REF
+						|| representation(input)
+							!= ZEND_MIR_REPRESENTATION_ZVAL
+						|| !zend_mir_id_is_valid(result_storage)
+						|| canonical_storage(input) != result_storage) {
+					valid_ = false;
+				}
 				continue;
 			}
 			uint32_t operand_offset =
@@ -618,6 +662,11 @@ public:
 		uint32_t index = static_cast<uint32_t>(value);
 		return index < MIR_VALUE_BASE ? ZEND_MIR_SCALAR_TYPE_NONE
 			: plan_->values[index - MIR_VALUE_BASE].exact_type;
+	}
+	zend_mir_storage_id canonical_storage(IRValueRef value) const {
+		uint32_t index = static_cast<uint32_t>(value);
+		return index < MIR_VALUE_BASE ? ZEND_MIR_ID_INVALID
+			: plan_->values[index - MIR_VALUE_BASE].canonical_storage_id;
 	}
 	bool constant(IRValueRef value, uint64_t *bits) const {
 		uint32_t index = static_cast<uint32_t>(value);
