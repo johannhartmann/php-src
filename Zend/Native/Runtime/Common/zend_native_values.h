@@ -131,14 +131,20 @@ ZEND_NATIVE_EXPLICIT_DIM_ASSIGN_HELPER(zend_native_value_assign_dim_op)
 
 #undef ZEND_NATIVE_EXPLICIT_DIM_ASSIGN_HELPER
 zend_native_status zend_native_value_unset_dim(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
 zend_native_status zend_native_value_isset_isempty_dim(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,
 	uint32_t extended_value, uint32_t source_opcode,
 	uint32_t source_position_id);
 zend_native_status zend_native_value_fe_free(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
 zend_native_status zend_native_value_binary_op(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,
@@ -170,7 +176,10 @@ zend_native_status zend_native_value_isset_isempty_cv(
 	uint32_t extended_value, uint32_t source_opcode,
 	uint32_t source_position_id);
 zend_native_status zend_native_value_fetch_list(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
 zend_native_status zend_native_value_incdec(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,
