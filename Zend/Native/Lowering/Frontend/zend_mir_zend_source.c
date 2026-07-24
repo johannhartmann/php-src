@@ -1895,6 +1895,10 @@ static zend_function *zend_mir_zend_source_resolve_user_method_call_ex(
 		 * the call target itself is fixed. This is the strongest and cheapest
 		 * monomorphic proof available to the native frontend.
 		 */
+		if (require_monomorphic
+				&& !zend_check_method_accessible(function, op_array->scope)) {
+			return NULL;
+		}
 		return function;
 	}
 	if (opline->opcode != ZEND_INIT_METHOD_CALL
@@ -1953,6 +1957,10 @@ static zend_function *zend_mir_zend_source_resolve_user_method_call_ex(
 	if (function == NULL || function->type != ZEND_USER_FUNCTION
 			|| (function->common.fn_flags
 				& (ZEND_ACC_ABSTRACT | ZEND_ACC_STATIC)) != 0) {
+		return NULL;
+	}
+	if (require_monomorphic
+			&& !zend_check_method_accessible(function, op_array->scope)) {
 		return NULL;
 	}
 	if (require_monomorphic && !exact_receiver

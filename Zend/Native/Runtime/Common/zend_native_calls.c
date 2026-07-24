@@ -1867,6 +1867,9 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 			|| cell->function != descriptor->expected_function
 			|| !ZEND_USER_CODE(cell->function->type)
 			|| descriptor->argument_count > ZEND_MIR_ID_MAX
+			|| (descriptor->flags
+				& ~(ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME
+					| ZEND_NATIVE_DIRECT_CALL_CONSUME_RECEIVER)) != 0
 			|| descriptor->source_position >= caller->func->op_array.last) {
 		zend_throw_error(NULL, "Invalid direct native call descriptor");
 		return result;
@@ -1908,8 +1911,12 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 			object_or_called_scope = Z_OBJ(caller->This);
 			break;
 		case ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT: {
-			zval *receiver = zend_native_direct_operand(
+			zval *source_receiver = zend_native_direct_operand(
 				caller, &descriptor->receiver_operand, false);
+			zval *receiver = source_receiver;
+			bool consume_receiver =
+				(descriptor->flags
+					& ZEND_NATIVE_DIRECT_CALL_CONSUME_RECEIVER) != 0;
 
 			if (receiver != NULL) {
 				ZVAL_DEREF(receiver);
@@ -1921,12 +1928,21 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 						Z_OBJCE_P(receiver), function->common.scope)) {
 				zend_throw_error(NULL,
 					"Direct native method has an incompatible receiver");
+				if (consume_receiver && source_receiver != NULL
+						&& !Z_ISUNDEF_P(source_receiver)) {
+					zval_ptr_dtor(source_receiver);
+					ZVAL_UNDEF(source_receiver);
+				}
 				return result;
 			}
 			GC_ADDREF(Z_OBJ_P(receiver));
 			call_info |= ZEND_CALL_HAS_THIS | ZEND_CALL_RELEASE_THIS;
 			object_or_called_scope = Z_OBJ_P(receiver);
 			receiver_owned = true;
+			if (consume_receiver) {
+				zval_ptr_dtor(source_receiver);
+				ZVAL_UNDEF(source_receiver);
+			}
 			break;
 		}
 		default:
