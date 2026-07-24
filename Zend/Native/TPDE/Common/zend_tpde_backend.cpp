@@ -1307,7 +1307,6 @@ bool initialize_plan(
 							&& op_array.required_num_args
 								== site.arguments.count
 							&& op_array.last_var == op_array.num_args
-							&& op_array.T == 0
 							&& op_array.cache_size == 0
 							&& (op_array.fn_flags
 								& ZEND_ACC_HAS_RETURN_TYPE) == 0
