@@ -847,14 +847,30 @@ bool initialize_plan(
 				plan, ZEND_NATIVE_HELPER_VALUE_ITERATOR_BRANCH);
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
-			if (count != 0 || !zend_mir_id_is_valid(record.source_position_id)) {
+			const zend_mir_executable_value_ref &operation =
+				plan->instructions[i].value_operation;
+			const bool conditional_opcode =
+				operation.source_opcode == ZEND_JMPZ
+				|| operation.source_opcode == ZEND_JMPNZ
+				|| operation.source_opcode == ZEND_JMPZ_EX
+				|| operation.source_opcode == ZEND_JMPNZ_EX
+				|| operation.source_opcode == ZEND_JMP_SET
+				|| operation.source_opcode == ZEND_COALESCE
+				|| operation.source_opcode == ZEND_JMP_NULL;
+			if (count != 0 || !zend_mir_id_is_valid(record.source_position_id)
+					|| !plan->instructions[i].has_value_operation
+					|| operation.id != record.id
+					|| operation.opcode != record.opcode
+					|| operation.source_position_id
+						!= record.source_position_id
+					|| operation.op1.kind
+						== ZEND_MIR_SOURCE_OPERAND_UNUSED
+					|| !conditional_opcode) {
 				zend_tpde_set_diagnostic(diag,
 					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 					"source value branch lacks exact source semantics");
 				return false;
 			}
-			plan->instructions[i].source_opline_index =
-				record.source_position_id;
 			plan->required_runtime_capabilities |=
 				ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT;
 			require_runtime_helper(
