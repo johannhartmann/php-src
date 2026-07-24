@@ -9,20 +9,6 @@
 extern "C" {
 #endif
 
-#define ZEND_NATIVE_OBJECT_HELPER(name) \
-	zend_native_status name( \
-		zend_execute_data *execute_data, uint32_t source_opline_index);
-
-ZEND_NATIVE_OBJECT_HELPER(zend_native_execute_object_declare_anon_class)
-ZEND_NATIVE_OBJECT_HELPER(zend_native_execute_object_declare_lambda)
-ZEND_NATIVE_OBJECT_HELPER(zend_native_execute_object_bind_lexical)
-ZEND_NATIVE_OBJECT_HELPER(zend_native_execute_object_bind_static)
-ZEND_NATIVE_OBJECT_HELPER(zend_native_execute_object_declare_function)
-ZEND_NATIVE_OBJECT_HELPER(zend_native_execute_object_declare_class)
-ZEND_NATIVE_OBJECT_HELPER(zend_native_execute_object_declare_class_delayed)
-
-#undef ZEND_NATIVE_OBJECT_HELPER
-
 zend_native_status zend_native_execute_object_fetch_r(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,
@@ -52,6 +38,8 @@ ZEND_NATIVE_EXPLICIT_OBJECT_FETCH_HELPER(
 		uint64_t op1, uint64_t op2, uint64_t result, \
 		uint32_t extended_value, uint32_t source_opcode, \
 		uint32_t source_position_id);
+ZEND_NATIVE_EXPLICIT_OBJECT_HELPER(
+	zend_native_execute_object_declare_anon_class)
 ZEND_NATIVE_EXPLICIT_OBJECT_HELPER(zend_native_execute_object_fetch_this)
 ZEND_NATIVE_EXPLICIT_OBJECT_HELPER(zend_native_execute_object_unset)
 ZEND_NATIVE_EXPLICIT_OBJECT_HELPER(
@@ -67,6 +55,18 @@ ZEND_NATIVE_EXPLICIT_OBJECT_HELPER(
 	zend_native_execute_object_fetch_class_constant)
 ZEND_NATIVE_EXPLICIT_OBJECT_HELPER(
 	zend_native_execute_object_fetch_class_name)
+ZEND_NATIVE_EXPLICIT_OBJECT_HELPER(
+	zend_native_execute_object_declare_lambda)
+ZEND_NATIVE_EXPLICIT_OBJECT_HELPER(
+	zend_native_execute_object_bind_lexical)
+ZEND_NATIVE_EXPLICIT_OBJECT_HELPER(
+	zend_native_execute_object_bind_static)
+ZEND_NATIVE_EXPLICIT_OBJECT_HELPER(
+	zend_native_execute_object_declare_function)
+ZEND_NATIVE_EXPLICIT_OBJECT_HELPER(
+	zend_native_execute_object_declare_class)
+ZEND_NATIVE_EXPLICIT_OBJECT_HELPER(
+	zend_native_execute_object_declare_class_delayed)
 ZEND_NATIVE_EXPLICIT_OBJECT_HELPER(zend_native_execute_static_fetch_r)
 ZEND_NATIVE_EXPLICIT_OBJECT_HELPER(zend_native_execute_static_fetch_w)
 ZEND_NATIVE_EXPLICIT_OBJECT_HELPER(zend_native_execute_static_fetch_rw)
