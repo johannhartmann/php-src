@@ -15,7 +15,6 @@ extern "C" {
 
 ZEND_NATIVE_OBJECT_HELPER(zend_native_execute_object_declare_anon_class)
 ZEND_NATIVE_OBJECT_HELPER(zend_native_execute_object_fetch_this)
-ZEND_NATIVE_OBJECT_HELPER(zend_native_execute_object_fetch_r)
 ZEND_NATIVE_OBJECT_HELPER(zend_native_execute_object_fetch_w)
 ZEND_NATIVE_OBJECT_HELPER(zend_native_execute_object_fetch_rw)
 ZEND_NATIVE_OBJECT_HELPER(zend_native_execute_object_fetch_is)
@@ -58,6 +57,12 @@ ZEND_NATIVE_OBJECT_HELPER(zend_native_execute_object_declare_class)
 ZEND_NATIVE_OBJECT_HELPER(zend_native_execute_object_declare_class_delayed)
 
 #undef ZEND_NATIVE_OBJECT_HELPER
+
+zend_native_status zend_native_execute_object_fetch_r(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
 
 zend_native_status zend_native_throw_source_zval(
 	zend_execute_data *execute_data, uint32_t source_opline_index);
