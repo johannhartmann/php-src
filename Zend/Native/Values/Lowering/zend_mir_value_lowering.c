@@ -363,6 +363,11 @@ static zend_mir_opcode zend_mir_w11p_control_value_opcode(uint32_t opcode)
 		case ZEND_COALESCE:
 		case ZEND_JMP_NULL:
 			return ZEND_MIR_OPCODE_VALUE_COND_BRANCH;
+		case ZEND_FE_RESET_R:
+		case ZEND_FE_RESET_RW:
+		case ZEND_FE_FETCH_R:
+		case ZEND_FE_FETCH_RW:
+			return ZEND_MIR_OPCODE_ITERATOR_BRANCH;
 		default:
 			return ZEND_MIR_OPCODE_INVALID;
 	}
@@ -571,6 +576,7 @@ static bool zend_mir_w09_operation_semantics(
 			}
 			break;
 		case ZEND_MIR_OPCODE_VALUE_COND_BRANCH:
+		case ZEND_MIR_OPCODE_ITERATOR_BRANCH:
 			if (!zend_mir_w09_add_effect(
 					&summary, ZEND_MIR_EFFECT_OBSERVE_FRAME)
 					|| !zend_mir_w09_add_effect(
@@ -764,7 +770,8 @@ static bool zend_mir_w11p_index_control_value_instructions(
 		if (!view->instruction_at(view->context, index, &instruction)) {
 			return false;
 		}
-		if (instruction.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
+		if (instruction.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				|| instruction.opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH) {
 			if (instruction.source_position_id >= source_count
 					|| zend_mir_id_is_valid(instructions_by_source[
 						instruction.source_position_id])) {
@@ -910,14 +917,16 @@ bool zend_mir_w09_emit_executable_values(
 					opcode, operation, &frame_class)) {
 			goto done;
 		}
-		if (opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+		if ((opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				|| opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH)
 				&& (operation->source_position_id >= op_array->last
 					|| !zend_mir_id_is_valid(
 						control_instruction_by_source[
 							operation->source_position_id]))) {
 			goto done;
 		}
-		if (opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
+		if (opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				|| opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH) {
 			operation->id = control_instruction_by_source[
 				operation->source_position_id];
 		}

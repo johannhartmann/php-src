@@ -807,14 +807,25 @@ bool initialize_plan(
 				plan, ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL);
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH) {
-			if (count != 0 || !zend_mir_id_is_valid(record.source_position_id)) {
+			const zend_mir_executable_value_ref &operation =
+				plan->instructions[i].value_operation;
+			const bool iterator_opcode =
+				operation.source_opcode == ZEND_FE_RESET_R
+				|| operation.source_opcode == ZEND_FE_RESET_RW
+				|| operation.source_opcode == ZEND_FE_FETCH_R
+				|| operation.source_opcode == ZEND_FE_FETCH_RW;
+			if (count != 0 || !zend_mir_id_is_valid(record.source_position_id)
+					|| !plan->instructions[i].has_value_operation
+					|| operation.id != record.id
+					|| operation.opcode != record.opcode
+					|| operation.source_position_id
+						!= record.source_position_id
+					|| !iterator_opcode) {
 				zend_tpde_set_diagnostic(diag,
 					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-					"iterator branch lacks exact source semantics");
+					"iterator branch lacks explicit source semantics");
 				return false;
 			}
-			plan->instructions[i].source_opline_index =
-				record.source_position_id;
 			plan->required_runtime_capabilities |=
 				ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT;
 			require_runtime_helper(
