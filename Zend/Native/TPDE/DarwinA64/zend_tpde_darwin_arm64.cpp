@@ -2412,12 +2412,24 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 							offsetof(zend_execute_data, call)), 8);
 					ASM(CMPxi, first_reg, 0);
 					generate_raw_jump(Jump::Jne, slow_path);
+					if (call.direct_call->receiver_kind
+							== ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS) {
+						load_off(first_reg, frame_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_execute_data, This)
+									+ offsetof(zval, u1.type_info)), 4);
+						ASM(ANDwi, first_reg, first_reg, Z_TYPE_MASK);
+						ASM(CMPwi, first_reg, IS_OBJECT);
+						generate_raw_jump(Jump::Jne, slow_path);
+					}
 
 					/*
-					 * A boxed CV can be copied inline while it is a defined,
-					 * non-reference zval. References require ZVAL_COPY_DEREF
-					 * semantics and remain on the canonical slow path. Guard
-					 * every boxed source before publishing or reserving a frame.
+					 * A boxed by-value CV can be copied inline while it is a
+					 * defined, non-reference zval. A by-reference CV can be
+					 * copied inline once it already contains a reference; the
+					 * canonical slow path owns first-time reference creation.
+					 * Guard every boxed source before publishing or reserving a
+					 * frame.
 					 */
 					for (uint32_t index = 0; index < argument_count; ++index) {
 						const zend_native_direct_call_argument &argument =
@@ -2434,10 +2446,17 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 								+ offsetof(zval, u1.type_info));
 						load_off(first_reg, frame_reg, source_offset, 4);
 						ASM(ANDwi, first_reg, first_reg, Z_TYPE_MASK);
-						ASM(CMPwi, first_reg, IS_UNDEF);
-						generate_raw_jump(Jump::Jeq, slow_path);
 						ASM(CMPwi, first_reg, IS_REFERENCE);
-						generate_raw_jump(Jump::Jeq, slow_path);
+						generate_raw_jump(
+							argument.mode
+									== ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
+								? Jump::Jne : Jump::Jeq,
+							slow_path);
+						if (argument.mode
+								== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE) {
+							ASM(CMPwi, first_reg, IS_UNDEF);
+							generate_raw_jump(Jump::Jeq, slow_path);
+						}
 					}
 
 					/*
@@ -2518,14 +2537,39 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					store_constant(callee_reg,
 						static_cast<uint32_t>(
 							offsetof(zend_execute_data, extra_named_params)), 0, 8);
-					store_constant(callee_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_execute_data, This)), 0, 8);
+					if (call.direct_call->receiver_kind
+							== ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS) {
+						load_off(second_reg, frame_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_execute_data, This)), 8);
+						store_off(callee_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_execute_data, This)),
+							second_reg, 8);
+					} else if (call.direct_call->receiver_kind
+							== ZEND_NATIVE_INTERNAL_RECEIVER_CALLED_SCOPE) {
+						load_off(second_reg, descriptor_reg,
+							static_cast<uint32_t>(offsetof(
+								zend_native_direct_call_descriptor,
+								called_scope)), 8);
+						store_off(callee_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_execute_data, This)),
+							second_reg, 8);
+					} else {
+						store_constant(callee_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_execute_data, This)), 0, 8);
+					}
 					store_constant(callee_reg,
 						static_cast<uint32_t>(
 							offsetof(zend_execute_data, This)
 								+ offsetof(zval, u1.type_info)),
-						ZEND_CALL_NESTED_FUNCTION, 4);
+						ZEND_CALL_NESTED_FUNCTION
+							| (call.direct_call->receiver_kind
+									== ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS
+								? ZEND_CALL_HAS_THIS : 0),
+						4);
 					store_constant(callee_reg,
 						static_cast<uint32_t>(
 							offsetof(zend_execute_data, This)
