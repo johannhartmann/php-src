@@ -133,6 +133,36 @@ typedef struct _zend_native_direct_internal_call_descriptor {
 } zend_native_direct_internal_call_descriptor;
 
 /*
+ * Complete immutable source-call semantics for a user call that cannot use
+ * the fixed direct-frame path. The compiler decodes INIT/SEND/DO once; runtime
+ * source positions are used only to publish EX(opline) and preserve declaring
+ * source identity.
+ */
+typedef struct _zend_native_user_call_descriptor {
+	uint32_t argument_count;
+	uint32_t initial_argument_count;
+	uint32_t init_source_position;
+	uint32_t do_source_position;
+	uint32_t init_opcode;
+	uint32_t do_opcode;
+	uint32_t init_op1_payload;
+	uint32_t init_op2_payload;
+	uint32_t init_result_payload;
+	uint32_t init_extended_value;
+	uint32_t do_op1_payload;
+	uint32_t do_op2_payload;
+	uint32_t do_result_payload;
+	uint32_t do_extended_value;
+	zend_mir_source_operand_ref init_op1;
+	zend_mir_source_operand_ref init_op2;
+	zend_mir_source_operand_ref init_result;
+	zend_mir_source_operand_ref do_op1;
+	zend_mir_source_operand_ref do_op2;
+	zend_mir_source_operand_ref do_result;
+	zend_native_direct_internal_call_argument arguments[1];
+} zend_native_user_call_descriptor;
+
+/*
  * A direct activation lives immediately after its Zend frame on the VM stack.
  * Generated callers link it before entering native code so the outermost
  * C-only bailout boundary can unwind every nested native frame without adding
@@ -216,8 +246,7 @@ zend_native_status zend_native_call_frameless_internal(
 void zend_native_call_begin(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
-	uint32_t argument_count,
-	uint32_t source_opline_index);
+	const zend_native_user_call_descriptor *descriptor);
 void zend_native_call_set_integer_argument(
 	zend_execute_data *caller,
 	uint32_t ordinal,
@@ -230,9 +259,7 @@ uint64_t zend_native_call_invoke_finish(
 zend_native_status zend_native_call_invoke_finish_source(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
-	uint32_t do_opline_index,
-	uint32_t do_opcode,
-	uint64_t result_operand);
+	const zend_native_user_call_descriptor *descriptor);
 zend_native_direct_call_result zend_native_call_direct(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
@@ -272,8 +299,7 @@ zend_result zend_native_internal_call_cell_init(
 zend_result zend_native_internal_call_begin(
 	zend_execute_data *caller,
 	const zend_native_internal_call_cell *cell,
-	uint32_t argument_count,
-	uint32_t source_opline_index);
+	const zend_native_direct_internal_call_descriptor *descriptor);
 zend_result zend_native_call_set_zval_argument(
 	zend_execute_data *caller,
 	uint32_t ordinal,
@@ -281,9 +307,8 @@ zend_result zend_native_call_set_zval_argument(
 	zend_native_call_argument_mode mode);
 zend_result zend_native_call_set_source_argument(
 	zend_execute_data *caller,
-	uint32_t ordinal,
-	uint32_t send_opline_index,
-	zend_native_call_argument_mode mode);
+	const zend_native_user_call_descriptor *descriptor,
+	uint32_t argument_index);
 zend_native_status zend_native_internal_call_invoke_finish(
 	zend_execute_data *caller,
 	const zend_native_internal_call_cell *cell,
@@ -291,7 +316,7 @@ zend_native_status zend_native_internal_call_invoke_finish(
 zend_native_status zend_native_internal_call_invoke_finish_source(
 	zend_execute_data *caller,
 	const zend_native_internal_call_cell *cell,
-	uint32_t do_opline_index);
+	const zend_native_direct_internal_call_descriptor *descriptor);
 zend_native_direct_call_result zend_native_internal_call_direct(
 	zend_execute_data *caller,
 	const zend_native_internal_call_cell *cell,
