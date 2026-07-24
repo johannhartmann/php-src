@@ -1869,7 +1869,8 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 			|| descriptor->argument_count > ZEND_MIR_ID_MAX
 			|| (descriptor->flags
 				& ~(ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME
-					| ZEND_NATIVE_DIRECT_CALL_CONSUME_RECEIVER)) != 0
+					| ZEND_NATIVE_DIRECT_CALL_CONSUME_RECEIVER
+					| ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE)) != 0
 			|| descriptor->source_position >= caller->func->op_array.last) {
 		zend_throw_error(NULL, "Invalid direct native call descriptor");
 		return result;
@@ -1943,6 +1944,34 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 				zval_ptr_dtor(source_receiver);
 				ZVAL_UNDEF(source_receiver);
 			}
+			break;
+		}
+		case ZEND_NATIVE_INTERNAL_RECEIVER_CALLED_SCOPE: {
+			zend_class_entry *called_scope;
+			bool inherit_called_scope =
+				(descriptor->flags
+					& ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE) != 0;
+
+			if ((descriptor->flags
+					& ZEND_NATIVE_DIRECT_CALL_CONSUME_RECEIVER) != 0
+					|| (function->common.fn_flags & ZEND_ACC_STATIC) == 0
+					|| function->common.scope == NULL
+					|| (inherit_called_scope
+						&& descriptor->called_scope != NULL)) {
+				zend_throw_error(NULL,
+					"Direct native static method has an invalid scope");
+				return result;
+			}
+			called_scope = inherit_called_scope
+				? zend_get_called_scope(caller) : descriptor->called_scope;
+			if (called_scope == NULL
+					|| !instanceof_function(
+						called_scope, function->common.scope)) {
+				zend_throw_error(NULL,
+					"Direct native static method has an incompatible scope");
+				return result;
+			}
+			object_or_called_scope = called_scope;
 			break;
 		}
 		default:

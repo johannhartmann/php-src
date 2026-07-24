@@ -1212,14 +1212,37 @@ bool initialize_plan(
 					descriptor->receiver_operand.ssa_variable_id =
 						ZEND_MIR_ID_INVALID;
 					if (target.kind == ZEND_MIR_CALL_TARGET_METHOD_USER) {
-						if (init->opcode != ZEND_INIT_METHOD_CALL) {
+						if (init->opcode == ZEND_INIT_STATIC_METHOD_CALL) {
+							if (init->op2_type != IS_CONST
+									|| descriptor->expected_function == nullptr
+									|| descriptor->expected_function->common.scope
+										== nullptr
+									|| (descriptor->expected_function->common.fn_flags
+										& ZEND_ACC_STATIC) == 0
+									|| (init->op1_type != IS_CONST
+										&& init->op1_type != IS_UNUSED)) {
+								std::free(descriptor);
+								zend_tpde_set_diagnostic(diag,
+									ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+									"direct native static method has no fixed scope");
+								return false;
+							}
+							descriptor->receiver_kind =
+								ZEND_NATIVE_INTERNAL_RECEIVER_CALLED_SCOPE;
+							if (init->op1_type == IS_UNUSED) {
+								descriptor->flags |=
+									ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE;
+							} else {
+								descriptor->called_scope =
+									descriptor->expected_function->common.scope;
+							}
+						} else if (init->opcode != ZEND_INIT_METHOD_CALL) {
 							std::free(descriptor);
 							zend_tpde_set_diagnostic(diag,
 								ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 								"direct native method has an unsupported source init");
 							return false;
-						}
-						if (init->op1_type == IS_UNUSED) {
+						} else if (init->op1_type == IS_UNUSED) {
 							descriptor->receiver_kind =
 								ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS;
 						} else if (init->op1_type == IS_CV

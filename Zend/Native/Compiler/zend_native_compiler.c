@@ -808,6 +808,7 @@ static bool zend_native_compiler_target_is_direct_native(
 		zend_mir_call_site_ref site;
 		const zend_op *init;
 		zend_function *resolved;
+		bool inherit_called_scope;
 
 		if (!calls->call_site_at(calls->context, index, &site)) {
 			return false;
@@ -820,19 +821,31 @@ static bool zend_native_compiler_target_is_direct_native(
 		}
 		init = &caller_function->op_array->opcodes[
 			site.source_init_opline_index];
-		if (init->opcode != ZEND_INIT_METHOD_CALL
-				|| (init->op1_type != IS_UNUSED
+		if (init->opcode == ZEND_INIT_METHOD_CALL) {
+			if (init->op1_type != IS_UNUSED
 					&& init->op1_type != IS_CV
 					&& init->op1_type != IS_VAR
-					&& init->op1_type != IS_TMP_VAR)) {
+					&& init->op1_type != IS_TMP_VAR) {
+				return false;
+			}
+		} else if (init->opcode != ZEND_INIT_STATIC_METHOD_CALL) {
 			return false;
 		}
 		resolved = zend_mir_zend_source_resolve_monomorphic_user_method_call(
 			compiler->script, caller_function->op_array,
 			&caller_function->ssa, site.source_init_opline_index);
 		if (resolved == NULL || resolved->type != ZEND_USER_FUNCTION
-				|| (resolved->common.fn_flags & ZEND_ACC_STATIC) != 0
 				|| &resolved->op_array != callee) {
+			return false;
+		}
+		if (init->opcode == ZEND_INIT_METHOD_CALL) {
+			if ((resolved->common.fn_flags & ZEND_ACC_STATIC) != 0) {
+				return false;
+			}
+		} else if (!zend_mir_zend_source_direct_static_call_scope(
+				compiler->script, caller_function->op_array,
+				site.source_init_opline_index, resolved,
+				&inherit_called_scope)) {
 			return false;
 		}
 		found = true;
