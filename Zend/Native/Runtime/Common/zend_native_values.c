@@ -746,10 +746,13 @@ static bool zend_native_value_is_binary_opcode(uint8_t opcode)
 }
 
 zend_native_status zend_native_value_binary_op(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
-	const zend_op *opline = zend_native_value_source_opline(
-		execute_data, source_opline_index);
+	zend_native_explicit_value_operation operation_record;
+	const zend_native_explicit_value_operation *opline = &operation_record;
 	binary_op_type operation;
 	zval *left;
 	zval *right;
@@ -758,11 +761,18 @@ zend_native_status zend_native_value_binary_op(
 	zval *strict_right;
 	zend_result operation_status;
 
-	if (opline == NULL || !zend_native_value_is_binary_opcode(opline->opcode)
+	if (source_opcode > UINT8_MAX
+			|| !zend_native_value_is_binary_opcode((uint8_t) source_opcode)
+			|| !zend_native_value_init_explicit_operation(
+				execute_data, op1, op2, result_operand, extended_value,
+				source_opcode, source_position_id, (uint8_t) source_opcode,
+				&operation_record)
 			|| opline->result_type == IS_UNUSED
-			|| (left = zend_native_value_read_r(execute_data, opline,
+			|| (left = zend_native_value_read_r_explicit(
+				execute_data, opline,
 				opline->op1_type, opline->op1)) == NULL
-			|| (right = zend_native_value_read_r(execute_data, opline,
+			|| (right = zend_native_value_read_r_explicit(
+				execute_data, opline,
 				opline->op2_type, opline->op2)) == NULL
 			|| (result = zend_native_value_slot(execute_data,
 				opline->result_type, opline->result)) == NULL) {
@@ -1014,16 +1024,23 @@ zend_native_status zend_native_value_incdec(
 }
 
 zend_native_status zend_native_value_cast(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
-	const zend_op *opline = zend_native_value_opline(
-		execute_data, source_opline_index, ZEND_CAST);
+	zend_native_explicit_value_operation operation;
+	const zend_native_explicit_value_operation *opline = &operation;
 	zval *operand;
 	zval *result;
 	zval *value;
 
-	if (opline == NULL || opline->result_type == IS_UNUSED
-			|| (operand = zend_native_value_read_r(execute_data, opline,
+	if (!zend_native_value_init_explicit_operation(
+			execute_data, op1, op2, result_operand, extended_value,
+			source_opcode, source_position_id, ZEND_CAST, &operation)
+			|| opline->result_type == IS_UNUSED
+			|| (operand = zend_native_value_read_r_explicit(
+				execute_data, opline,
 				opline->op1_type, opline->op1)) == NULL
 			|| (result = zend_native_value_slot(execute_data,
 				opline->result_type, opline->result)) == NULL) {
