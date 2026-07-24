@@ -358,66 +358,11 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			zend_native_runtime_helper_id helper,
 			ValuePart *frame_argument = nullptr) {
 		const bool explicit_operands =
-			helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN
-			|| helper == ZEND_NATIVE_HELPER_VALUE_QM_ASSIGN
-			|| helper == ZEND_NATIVE_HELPER_VALUE_COPY_TMP
-			|| helper == ZEND_NATIVE_HELPER_VALUE_FREE
-			|| helper == ZEND_NATIVE_HELPER_VALUE_CONCAT
-			|| helper == ZEND_NATIVE_HELPER_VALUE_FAST_CONCAT
-			|| helper == ZEND_NATIVE_HELPER_VALUE_BINARY_OP
-			|| helper == ZEND_NATIVE_HELPER_VALUE_CAST
-			|| helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_OP
-			|| helper == ZEND_NATIVE_HELPER_VALUE_INCDEC
-			|| helper == ZEND_NATIVE_HELPER_VALUE_MAKE_REF
-			|| helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_REF
-			|| helper == ZEND_NATIVE_HELPER_VALUE_SEPARATE
-			|| helper == ZEND_NATIVE_HELPER_VALUE_UNSET_CV
-			|| helper == ZEND_NATIVE_HELPER_VALUE_CHECK_VAR
-			|| helper == ZEND_NATIVE_HELPER_VALUE_TYPE_CHECK
-			|| helper == ZEND_NATIVE_HELPER_VALUE_ROPE_INIT
-			|| helper == ZEND_NATIVE_HELPER_VALUE_ROPE_ADD
-			|| helper == ZEND_NATIVE_HELPER_VALUE_ROPE_END
-			|| helper == ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY
-			|| helper == ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_ELEMENT
-			|| helper == ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_UNPACK
-			|| helper == ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV
-			|| helper == ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM
-			|| helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM
-			|| helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_OP
-			|| helper == ZEND_NATIVE_HELPER_VALUE_UNSET_DIM
-			|| helper == ZEND_NATIVE_HELPER_VALUE_FE_FREE
-			|| helper == ZEND_NATIVE_HELPER_VALUE_FETCH_LIST
-			|| helper == ZEND_NATIVE_HELPER_VALUE_UNARY_OP
-			|| helper == ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE
-			|| helper == ZEND_NATIVE_HELPER_VALUE_ECHO
-			|| helper == ZEND_NATIVE_HELPER_VALUE_FUNC_GET_ARGS
-			|| helper == ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL
-			|| helper == ZEND_NATIVE_HELPER_CALL_FRAMELESS_INTERNAL
-			|| (helper >= ZEND_NATIVE_HELPER_OBJECT_DECLARE_ANON_CLASS
-				&& helper <= ZEND_NATIVE_HELPER_OBJECT_BIND_STATIC)
-			|| (helper >= ZEND_NATIVE_HELPER_OBJECT_FETCH_CLASS_NAME
-				&& helper <= ZEND_NATIVE_HELPER_OBJECT_DECLARE_CLASS_DELAYED)
-			|| (helper >= ZEND_NATIVE_HELPER_DYNAMIC_FETCH_R
-				&& helper
-					<= ZEND_NATIVE_HELPER_DYNAMIC_INCLUDE_OR_EVAL)
-			|| (helper >= ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R
-				&& helper <= ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_UNSET);
+			zend_tpde_helper_has_explicit_operands(helper);
 		const bool explicit_object_operands =
-			(helper >= ZEND_NATIVE_HELPER_OBJECT_DECLARE_ANON_CLASS
-				&& helper <= ZEND_NATIVE_HELPER_OBJECT_BIND_STATIC)
-			|| (helper >= ZEND_NATIVE_HELPER_OBJECT_FETCH_CLASS_NAME
-				&& helper <= ZEND_NATIVE_HELPER_OBJECT_DECLARE_CLASS_DELAYED);
+			zend_tpde_helper_has_object_operand_payloads(helper);
 		const bool explicit_auxiliary =
-			helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM
-			|| helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_OP
-			|| (helper >= ZEND_NATIVE_HELPER_OBJECT_ASSIGN
-				&& helper <= ZEND_NATIVE_HELPER_OBJECT_ASSIGN_OP)
-			|| (helper >= ZEND_NATIVE_HELPER_STATIC_ASSIGN
-				&& helper <= ZEND_NATIVE_HELPER_STATIC_ASSIGN_OP)
-			|| (helper >= ZEND_NATIVE_HELPER_DYNAMIC_FETCH_R
-				&& helper
-					<= ZEND_NATIVE_HELPER_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT)
-			|| helper == ZEND_NATIVE_HELPER_CALL_FRAMELESS_INTERNAL;
+			zend_tpde_helper_has_explicit_auxiliary(helper);
 		if (node.operands.size() != 1
 				|| (explicit_operands
 					? !mir.has_value_operation
