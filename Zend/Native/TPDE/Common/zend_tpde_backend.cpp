@@ -1349,12 +1349,32 @@ bool initialize_plan(
 											== ZEND_MIR_SOURCE_SLOT_CV)));
 						trivial_frame =
 							inline_receiver
-							&& op_array.num_args == site.arguments.count
-							&& op_array.required_num_args
-								== site.arguments.count
+							&& site.arguments.count
+								>= op_array.required_num_args
+							&& site.arguments.count <= op_array.num_args
 							&& (op_array.fn_flags
 								& (ZEND_ACC_VARIADIC
 									| ZEND_ACC_CALL_VIA_TRAMPOLINE)) == 0;
+						for (uint32_t n = site.arguments.count;
+								trivial_frame && n < op_array.num_args; ++n) {
+							const zend_op &receive = op_array.opcodes[n];
+							const zval *default_value =
+								receive.opcode == ZEND_RECV_INIT
+									&& receive.op1.num == n + 1
+									&& receive.op2_type == IS_CONST
+									&& EX_VAR_TO_NUM(receive.result.var) == n
+								? RT_CONSTANT(&receive, receive.op2)
+								: nullptr;
+							trivial_frame = default_value != nullptr
+								&& default_value >= op_array.literals
+								&& default_value
+									< op_array.literals + op_array.last_literal
+								&& static_cast<size_t>(
+									default_value - op_array.literals)
+									<= static_cast<size_t>(INT32_MAX)
+										/ sizeof(zval)
+								&& Z_TYPE_P(default_value) != IS_CONSTANT_AST;
+						}
 						if (trivial_frame) {
 							descriptor->frame_size = zend_vm_calc_used_stack(
 								site.arguments.count, callee);

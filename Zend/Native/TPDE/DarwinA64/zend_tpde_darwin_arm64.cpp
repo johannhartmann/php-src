@@ -2297,6 +2297,11 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					call.direct_call->result_operand.kind
 						== ZEND_MIR_SOURCE_OPERAND_UNUSED;
 				const uint32_t argument_count = call.call_argument_count;
+				const uint32_t callee_argument_count =
+					generated_fast_path
+						? call.direct_call->expected_function
+							->op_array.num_args
+						: argument_count;
 				const uint32_t compiled_variable_count =
 					generated_fast_path
 						? static_cast<uint32_t>(
@@ -2752,7 +2757,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 						static_cast<uint32_t>(
 							offsetof(zend_op_array, opcodes)), 8);
 					add_offset(second_reg, second_reg,
-						static_cast<uint64_t>(argument_count)
+						static_cast<uint64_t>(callee_argument_count)
 							* sizeof(zend_op));
 					store_off(callee_reg,
 						static_cast<uint32_t>(
@@ -2864,6 +2869,57 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 						}
 					}
 					for (uint32_t index = argument_count;
+							index < callee_argument_count; ++index) {
+						const zend_op_array &op_array =
+							call.direct_call->expected_function->op_array;
+						const zend_op &receive = op_array.opcodes[index];
+						const zval *default_value =
+							RT_CONSTANT(&receive, receive.op2);
+						const uint32_t literal_index =
+							static_cast<uint32_t>(
+								default_value - op_array.literals);
+						const uint32_t offset = static_cast<uint32_t>(
+							(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval));
+						ScratchReg source_address{this};
+						ScratchReg low_word{this};
+						ScratchReg high_word{this};
+						ScratchReg type_info{this};
+						auto source_address_reg = source_address.alloc_gp();
+						auto low_word_reg = low_word.alloc_gp();
+						auto high_word_reg = high_word.alloc_gp();
+						auto type_info_reg = type_info.alloc_gp();
+
+						load_off(source_address_reg, cell_reg,
+							static_cast<uint32_t>(offsetof(
+								zend_native_entry_cell, function)), 8);
+						load_off(source_address_reg, source_address_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_op_array, literals)), 8);
+						add_offset(source_address_reg, source_address_reg,
+							static_cast<uint64_t>(literal_index)
+								* sizeof(zval));
+						load_off(low_word_reg, source_address_reg, 0, 8);
+						load_off(high_word_reg, source_address_reg, 8, 8);
+						store_off(callee_reg, offset, low_word_reg, 8);
+						store_off(callee_reg, offset + 8, high_word_reg, 8);
+						load_off(type_info_reg, source_address_reg,
+							static_cast<uint32_t>(
+								offsetof(zval, u1.type_info)), 4);
+						ASM(TSTwi, type_info_reg,
+							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+						auto copied = text_writer.label_create();
+						generate_raw_jump(Jump::Jeq, copied);
+						load_off(type_info_reg, low_word_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_refcounted_h, refcount)), 4);
+						ASM(ADDwi, type_info_reg, type_info_reg, 1);
+						store_off(low_word_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_refcounted_h, refcount)),
+							type_info_reg, 4);
+						label_place(copied);
+					}
+					for (uint32_t index = callee_argument_count;
 							index < compiled_variable_count; ++index) {
 						const uint32_t offset = static_cast<uint32_t>(
 							(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval));

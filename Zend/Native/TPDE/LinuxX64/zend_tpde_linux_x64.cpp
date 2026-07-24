@@ -2509,6 +2509,11 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 					call.direct_call->result_operand.kind
 						== ZEND_MIR_SOURCE_OPERAND_UNUSED;
 				const uint32_t argument_count = call.call_argument_count;
+				const uint32_t callee_argument_count =
+					generated_fast_path
+						? call.direct_call->expected_function
+							->op_array.num_args
+						: argument_count;
 				const uint32_t compiled_variable_count =
 					generated_fast_path
 						? static_cast<uint32_t>(
@@ -3014,10 +3019,10 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 						FE_MEM(second_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
 								offsetof(zend_op_array, opcodes))));
-					if (argument_count != 0) {
+					if (callee_argument_count != 0) {
 						ASM(ADD64ri, second_reg,
 							static_cast<int32_t>(
-								argument_count * sizeof(zend_op)));
+								callee_argument_count * sizeof(zend_op)));
 					}
 					ASM(MOV64mr,
 						FE_MEM(callee_reg, 0, FE_NOREG,
@@ -3152,6 +3157,66 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 						}
 					}
 					for (uint32_t index = argument_count;
+							index < callee_argument_count; ++index) {
+						const zend_op_array &op_array =
+							call.direct_call->expected_function->op_array;
+						const zend_op &receive = op_array.opcodes[index];
+						const zval *default_value =
+							RT_CONSTANT(&receive, receive.op2);
+						const uint32_t literal_index =
+							static_cast<uint32_t>(
+								default_value - op_array.literals);
+						const int32_t offset = static_cast<int32_t>(
+							(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval));
+						ScratchReg source_address{this};
+						ScratchReg low_word{this};
+						ScratchReg high_word{this};
+						ScratchReg type_info{this};
+						auto source_address_reg = source_address.alloc_gp();
+						auto low_word_reg = low_word.alloc_gp();
+						auto high_word_reg = high_word.alloc_gp();
+						auto type_info_reg = type_info.alloc_gp();
+
+						ASM(MOV64rm, source_address_reg,
+							FE_MEM(cell_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_native_entry_cell, function))));
+						ASM(MOV64rm, source_address_reg,
+							FE_MEM(source_address_reg, 0, FE_NOREG,
+								static_cast<int32_t>(
+									offsetof(zend_op_array, literals))));
+						if (literal_index != 0) {
+							ASM(ADD64ri, source_address_reg,
+								static_cast<int32_t>(
+									literal_index * sizeof(zval)));
+						}
+						ASM(MOV64rm, low_word_reg,
+							FE_MEM(source_address_reg, 0, FE_NOREG, 0));
+						ASM(MOV64rm, high_word_reg,
+							FE_MEM(source_address_reg, 0, FE_NOREG, 8));
+						ASM(MOV64mr,
+							FE_MEM(callee_reg, 0, FE_NOREG, offset),
+							low_word_reg);
+						ASM(MOV64mr,
+							FE_MEM(callee_reg, 0, FE_NOREG, offset + 8),
+							high_word_reg);
+						ASM(MOV32rm, type_info_reg,
+							FE_MEM(source_address_reg, 0, FE_NOREG,
+								static_cast<int32_t>(
+									offsetof(zval, u1.type_info))));
+						ASM(AND32ri, type_info_reg,
+							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+						ASM(TEST32rr, type_info_reg, type_info_reg);
+						auto copied = text_writer.label_create();
+						generate_raw_jump(Jump::je, copied);
+						ASM(ADD32mi,
+							FE_MEM(low_word_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_refcounted_h, refcount))),
+							1);
+						label_place(copied);
+					}
+					for (uint32_t index = callee_argument_count;
 							index < compiled_variable_count; ++index) {
 						const int32_t offset = static_cast<int32_t>(
 							(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval));
