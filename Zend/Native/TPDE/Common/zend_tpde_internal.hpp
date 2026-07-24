@@ -83,7 +83,7 @@ struct zend_tpde_packed_array_append {
 	bool has_result;
 };
 
-struct zend_tpde_integer_array_isset {
+struct zend_tpde_array_isset {
 	uint32_t container_offset;
 	uint32_t key_offset;
 	uint32_t result_offset;
@@ -217,9 +217,9 @@ static inline bool zend_tpde_packed_array_append_at(
 	return true;
 }
 
-static inline bool zend_tpde_integer_array_isset_at(
+static inline bool zend_tpde_array_isset_at(
 	const zend_tpde_instruction &instruction,
-	zend_tpde_integer_array_isset *out)
+	zend_tpde_array_isset *out)
 {
 	const zend_mir_executable_value_ref &operation =
 		instruction.value_operation;
