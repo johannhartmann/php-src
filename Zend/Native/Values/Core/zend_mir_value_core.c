@@ -816,7 +816,8 @@ static bool zend_mir_value_validate_executable_operations(
 		const zend_mir_core_instruction *instructions = ZEND_MIR_CORE_ITEMS(
 			module, instructions, zend_mir_core_instruction);
 		const bool attached_control =
-			operation->opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH;
+			operation->opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+			|| operation->opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH;
 
 		if ((attached_control
 				? operation->id >= module->instructions.count

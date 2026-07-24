@@ -200,23 +200,6 @@ static zval *zend_native_value_slot(
 	return ZEND_CALL_VAR(execute_data, operand.var);
 }
 
-static zval *zend_native_value_read(
-	zend_execute_data *execute_data, const zend_op *opline,
-	uint8_t operand_type, znode_op operand)
-{
-	zval *value;
-
-	if (operand_type == IS_CONST) {
-		return RT_CONSTANT(opline, operand);
-	}
-	value = zend_native_value_slot(execute_data, operand_type, operand);
-	if (value != NULL && operand_type == IS_VAR
-			&& Z_TYPE_P(value) == IS_INDIRECT) {
-		value = Z_INDIRECT_P(value);
-	}
-	return value;
-}
-
 static zend_native_status zend_native_value_status(void)
 {
 	return EG(exception) == NULL ? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
@@ -2768,27 +2751,6 @@ zend_native_status zend_native_value_isset_isempty_dim(
 	return ZEND_NATIVE_RETURNED;
 }
 
-static const zend_op *zend_native_iterator_opline(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
-{
-	const zend_op *opline;
-
-	if (execute_data == NULL || execute_data->func == NULL
-			|| !ZEND_USER_CODE(execute_data->func->type)
-			|| source_opline_index >= execute_data->func->op_array.last) {
-		return NULL;
-	}
-	opline = &execute_data->func->op_array.opcodes[source_opline_index];
-	if (opline->opcode != ZEND_FE_RESET_R
-			&& opline->opcode != ZEND_FE_RESET_RW
-			&& opline->opcode != ZEND_FE_FETCH_R
-			&& opline->opcode != ZEND_FE_FETCH_RW) {
-		return NULL;
-	}
-	execute_data->opline = opline;
-	return opline;
-}
-
 static void zend_native_iterator_release_operand(
 	zend_execute_data *execute_data, uint8_t operand_type, znode_op operand)
 {
@@ -2805,7 +2767,8 @@ static void zend_native_iterator_release_operand(
 }
 
 static zend_native_iterator_branch_result zend_native_iterator_reset_array(
-	zend_execute_data *execute_data, const zend_op *opline,
+	zend_execute_data *execute_data,
+	const zend_native_explicit_value_operation *opline,
 	zval *source_slot, zval *array, bool by_reference)
 {
 	zval *result = zend_native_value_slot(
@@ -2853,7 +2816,8 @@ static zend_native_iterator_branch_result zend_native_iterator_reset_array(
 }
 
 static zend_native_iterator_branch_result zend_native_iterator_reset_object(
-	zend_execute_data *execute_data, const zend_op *opline,
+	zend_execute_data *execute_data,
+	const zend_native_explicit_value_operation *opline,
 	zval *source_slot, zval *object, bool by_reference)
 {
 	zend_object *zobj = Z_OBJ_P(object);
@@ -2952,9 +2916,10 @@ static zend_native_iterator_branch_result zend_native_iterator_reset_object(
 }
 
 static zend_native_iterator_branch_result zend_native_iterator_reset(
-	zend_execute_data *execute_data, const zend_op *opline)
+	zend_execute_data *execute_data,
+	const zend_native_explicit_value_operation *opline)
 {
-	zval *source_slot = zend_native_value_read(
+	zval *source_slot = zend_native_value_read_explicit(
 		execute_data, opline, opline->op1_type, opline->op1);
 	zval *value = source_slot;
 	bool by_reference = opline->opcode == ZEND_FE_RESET_RW;
@@ -2991,7 +2956,8 @@ static zend_native_iterator_branch_result zend_native_iterator_reset(
 }
 
 static bool zend_native_iterator_set_key(
-	zend_execute_data *execute_data, const zend_op *opline,
+	zend_execute_data *execute_data,
+	const zend_native_explicit_value_operation *opline,
 	zend_ulong index, zend_string *key)
 {
 	zval *result;
@@ -3021,7 +2987,8 @@ static bool zend_native_iterator_set_key(
 }
 
 static bool zend_native_iterator_assign_value(
-	zend_execute_data *execute_data, const zend_op *opline,
+	zend_execute_data *execute_data,
+	const zend_native_explicit_value_operation *opline,
 	zval *value, bool by_reference)
 {
 	zval *destination = zend_native_value_slot(
@@ -3055,7 +3022,8 @@ static bool zend_native_iterator_assign_value(
 }
 
 static zend_native_iterator_branch_result zend_native_iterator_fetch_array(
-	zend_execute_data *execute_data, const zend_op *opline,
+	zend_execute_data *execute_data,
+	const zend_native_explicit_value_operation *opline,
 	zval *holder, zval *array, bool by_reference)
 {
 	HashTable *table = Z_ARRVAL_P(array);
@@ -3096,7 +3064,8 @@ static zend_native_iterator_branch_result zend_native_iterator_fetch_array(
 }
 
 static zend_native_iterator_branch_result zend_native_iterator_fetch_object(
-	zend_execute_data *execute_data, const zend_op *opline,
+	zend_execute_data *execute_data,
+	const zend_native_explicit_value_operation *opline,
 	zval *holder, zval *object, bool by_reference)
 {
 	zend_object_iterator *iterator = zend_iterator_unwrap(object);
@@ -3174,15 +3143,25 @@ static zend_native_iterator_branch_result zend_native_iterator_fetch_object(
 }
 
 zend_native_iterator_branch_result zend_native_value_iterator_branch(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
-	const zend_op *opline = zend_native_iterator_opline(
-		execute_data, source_opline_index);
+	zend_native_explicit_value_operation operation;
+	const zend_native_explicit_value_operation *opline = &operation;
 	zval *holder;
 	zval *value;
 	bool by_reference;
 
-	if (opline == NULL) {
+	if ((source_opcode != ZEND_FE_RESET_R
+			&& source_opcode != ZEND_FE_RESET_RW
+			&& source_opcode != ZEND_FE_FETCH_R
+			&& source_opcode != ZEND_FE_FETCH_RW)
+			|| !zend_native_value_init_explicit_operation(
+				execute_data, op1, op2, result_operand, extended_value,
+				source_opcode, source_position_id, (uint8_t) source_opcode,
+				&operation)) {
 		return ZEND_NATIVE_ITERATOR_EXCEPTION;
 	}
 	if (opline->opcode == ZEND_FE_RESET_R

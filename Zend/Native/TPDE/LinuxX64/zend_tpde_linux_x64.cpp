@@ -2223,11 +2223,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		}
 		case ZEND_MIR_OPCODE_VALUE_COND_BRANCH:
 		case ZEND_MIR_OPCODE_ITERATOR_BRANCH: {
-			if (node.operands.size() != 1
-					|| (record.opcode
-							== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
-						? !mir.has_value_operation
-						: mir.source_opline_index == UINT32_MAX)) {
+			if (node.operands.size() != 1 || !mir.has_value_operation) {
 				return false;
 			}
 			if (record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
@@ -2403,35 +2399,29 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			tpde::x64::CCAssignerSysV assigner{false};
 			CallBuilder builder{*this, assigner};
 			builder.add_arg(CallArg{node.operands[0]});
-			if (record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
-				const zend_mir_executable_value_ref &operation =
-					mir.value_operation;
-				builder.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.op1), 8,
-					tpde::x64::PlatformConfig::GP_BANK},
-					tpde::CCAssignment{});
-				builder.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.op2), 8,
-					tpde::x64::PlatformConfig::GP_BANK},
-					tpde::CCAssignment{});
-				builder.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.result), 8,
-					tpde::x64::PlatformConfig::GP_BANK},
-					tpde::CCAssignment{});
-				builder.add_arg(ValuePart{operation.extended_value, 4,
-					tpde::x64::PlatformConfig::GP_BANK},
-					tpde::CCAssignment{});
-				builder.add_arg(ValuePart{operation.source_opcode, 4,
-					tpde::x64::PlatformConfig::GP_BANK},
-					tpde::CCAssignment{});
-				builder.add_arg(ValuePart{operation.source_position_id, 4,
-					tpde::x64::PlatformConfig::GP_BANK},
-					tpde::CCAssignment{});
-			} else {
-				builder.add_arg(ValuePart{mir.source_opline_index, 4,
-					tpde::x64::PlatformConfig::GP_BANK},
-					tpde::CCAssignment{});
-			}
+			const zend_mir_executable_value_ref &operation =
+				mir.value_operation;
+			builder.add_arg(ValuePart{
+				zend_tpde_encode_value_operand(operation.op1), 8,
+				tpde::x64::PlatformConfig::GP_BANK},
+				tpde::CCAssignment{});
+			builder.add_arg(ValuePart{
+				zend_tpde_encode_value_operand(operation.op2), 8,
+				tpde::x64::PlatformConfig::GP_BANK},
+				tpde::CCAssignment{});
+			builder.add_arg(ValuePart{
+				zend_tpde_encode_value_operand(operation.result), 8,
+				tpde::x64::PlatformConfig::GP_BANK},
+				tpde::CCAssignment{});
+			builder.add_arg(ValuePart{operation.extended_value, 4,
+				tpde::x64::PlatformConfig::GP_BANK},
+				tpde::CCAssignment{});
+			builder.add_arg(ValuePart{operation.source_opcode, 4,
+				tpde::x64::PlatformConfig::GP_BANK},
+				tpde::CCAssignment{});
+			builder.add_arg(ValuePart{operation.source_position_id, 4,
+				tpde::x64::PlatformConfig::GP_BANK},
+				tpde::CCAssignment{});
 			const auto helper = record.opcode
 				== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 				? ZEND_NATIVE_HELPER_VALUE_COND_BRANCH
