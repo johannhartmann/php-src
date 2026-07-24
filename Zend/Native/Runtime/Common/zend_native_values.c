@@ -446,19 +446,26 @@ zend_native_status zend_native_value_separate(
 }
 
 zend_native_status zend_native_value_copy_tmp(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
-	const zend_op *opline = zend_native_value_opline(
-		execute_data, source_opline_index, ZEND_COPY_TMP);
+	zend_native_explicit_value_operation operation;
 	zval *source;
 	zval *result;
 
-	if (opline == NULL || opline->op1_type != IS_TMP_VAR
-			|| opline->result_type == IS_UNUSED
+	if (!zend_native_value_init_explicit_operation(
+			execute_data, op1, op2, result_operand, extended_value,
+			source_opcode, source_position_id, ZEND_COPY_TMP, &operation)
+			|| operation.op1_type != IS_TMP_VAR
+			|| operation.op2_type != IS_UNUSED
+			|| operation.result_type == IS_UNUSED
 			|| (source = zend_native_value_slot(
-				execute_data, opline->op1_type, opline->op1)) == NULL
+				execute_data, operation.op1_type, operation.op1)) == NULL
 			|| (result = zend_native_value_slot(
-				execute_data, opline->result_type, opline->result)) == NULL) {
+				execute_data, operation.result_type,
+				operation.result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	ZVAL_COPY(result, source);
@@ -466,15 +473,23 @@ zend_native_status zend_native_value_copy_tmp(
 }
 
 zend_native_status zend_native_value_free(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
-	const zend_op *opline = zend_native_value_opline(
-		execute_data, source_opline_index, ZEND_FREE);
+	zend_native_explicit_value_operation operation;
 	zval *value;
 
-	if (opline == NULL
+	if (!zend_native_value_init_explicit_operation(
+			execute_data, op1, op2, result, extended_value, source_opcode,
+			source_position_id, ZEND_FREE, &operation)
+			|| (operation.op1_type != IS_TMP_VAR
+				&& operation.op1_type != IS_VAR)
+			|| operation.op2_type != IS_UNUSED
+			|| operation.result_type != IS_UNUSED
 			|| (value = zend_native_value_slot(
-				execute_data, opline->op1_type, opline->op1)) == NULL) {
+				execute_data, operation.op1_type, operation.op1)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (!Z_ISUNDEF_P(value)) {
