@@ -1300,7 +1300,20 @@ bool initialize_plan(
 										&& descriptor->called_scope != nullptr
 										&& (descriptor->flags
 											& ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE)
-											== 0)));
+											== 0)
+									|| (descriptor->receiver_kind
+											== ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT
+										&& (op_array.fn_flags
+											& ZEND_ACC_STATIC) == 0
+										&& (descriptor->flags
+											& ZEND_NATIVE_DIRECT_CALL_CONSUME_RECEIVER)
+											== 0
+										&& (descriptor->receiver_operand.kind
+												== ZEND_MIR_SOURCE_OPERAND_SLOT
+											|| descriptor->receiver_operand.kind
+												== ZEND_MIR_SOURCE_OPERAND_SSA)
+										&& descriptor->receiver_operand.slot_kind
+											== ZEND_MIR_SOURCE_SLOT_CV)));
 						trivial_frame =
 							inline_receiver
 							&& op_array.num_args == site.arguments.count
