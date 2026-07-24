@@ -38,8 +38,6 @@ bool zend_mir_w04_validate_source_for_protected_control_flow(
 	const zend_mir_lowering_source_view *source,
 	zend_mir_w04_validation *validation);
 zend_mir_w04_branch_kind zend_mir_w04_branch_kind_for_opcode(uint32_t opcode);
-bool zend_mir_w04_validate_branch_proofs(
-	const zend_mir_lowering_context *context);
 bool zend_mir_w04_emit_terminator(
 	zend_mir_lowering_context *context,
 	zend_mir_mutator *mutator,
