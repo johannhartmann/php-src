@@ -560,12 +560,8 @@ public:
 				}
 			} else if (record.opcode
 					== ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL) {
-				/* begin + source setters + finish + optional scalar read */
-				for (uint32_t n = 0;
-						n < instruction.call_argument_count + 2
-							+ machine_result; ++n) {
-					operands_.push_back(IRValueRef{FRAME_VALUE});
-				}
+				/* One direct Zend-runtime boundary returns status and payload. */
+				operands_.push_back(IRValueRef{FRAME_VALUE});
 			} else if (record.opcode
 					== ZEND_MIR_OPCODE_CATCH_ENTER
 					|| record.opcode

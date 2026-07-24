@@ -99,6 +99,35 @@ typedef struct _zend_native_direct_call_descriptor {
 } zend_native_direct_call_descriptor;
 
 /*
+ * Complete immutable source-call semantics for one direct internal call.
+ * The compiler resolves the INIT/SEND/DO sequence once. Runtime code uses
+ * these explicit operands and payloads and consults source_position only for
+ * EX(opline), diagnostics, observers, and exception routing.
+ */
+typedef struct _zend_native_direct_internal_call_argument {
+	uint32_t ordinal;
+	zend_native_call_argument_mode mode;
+	uint32_t source_opcode;
+	uint32_t source_position;
+	zend_mir_source_operand_ref source_operand;
+	zend_mir_source_operand_ref auxiliary_operand;
+	uint32_t auxiliary_payload;
+	uint32_t result_payload;
+	uint32_t extended_value;
+} zend_native_direct_internal_call_argument;
+
+typedef struct _zend_native_direct_internal_call_descriptor {
+	uint32_t argument_count;
+	uint32_t initial_argument_count;
+	uint32_t init_source_position;
+	uint32_t do_source_position;
+	zend_mir_source_operand_ref receiver_operand;
+	zend_mir_source_operand_ref result_operand;
+	zend_mir_scalar_type_mask result_type;
+	zend_native_direct_internal_call_argument arguments[1];
+} zend_native_direct_internal_call_descriptor;
+
+/*
  * A direct activation lives immediately after its Zend frame on the VM stack.
  * Generated callers link it before entering native code so the outermost
  * C-only bailout boundary can unwind every nested native frame without adding
@@ -256,6 +285,10 @@ zend_native_status zend_native_internal_call_invoke_finish_source(
 	zend_execute_data *caller,
 	const zend_native_internal_call_cell *cell,
 	uint32_t do_opline_index);
+zend_native_direct_call_result zend_native_internal_call_direct(
+	zend_execute_data *caller,
+	const zend_native_internal_call_cell *cell,
+	const zend_native_direct_internal_call_descriptor *descriptor);
 uint64_t zend_native_call_read_source_scalar(
 	zend_execute_data *caller,
 	uint32_t do_opline_index,
