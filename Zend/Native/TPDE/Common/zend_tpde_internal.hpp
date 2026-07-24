@@ -81,6 +81,10 @@ struct zend_tpde_string_length {
 	uint32_t result_offset;
 };
 
+struct zend_tpde_value_condition {
+	uint32_t operand_offset;
+};
+
 /*
  * Keep the semantic fast-path selection target-neutral.  Target backends only
  * encode the guards and loads; they do not independently decide which MIR
@@ -257,6 +261,32 @@ static inline bool zend_tpde_string_length_at(
 	}
 	out->operand_offset = static_cast<uint32_t>(operand_offset);
 	out->result_offset = static_cast<uint32_t>(result_offset);
+	return true;
+}
+
+static inline bool zend_tpde_value_condition_at(
+	const zend_tpde_instruction &instruction,
+	zend_tpde_value_condition *out)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	uint64_t operand_offset;
+
+	if (out == nullptr || !instruction.has_value_operation
+			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+			|| (operation.source_opcode != ZEND_JMPZ
+				&& operation.source_opcode != ZEND_JMPNZ)
+			|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+			|| operation.op1_storage_id == ZEND_MIR_ID_INVALID) {
+		return false;
+	}
+	operand_offset =
+		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
+			* sizeof(zval);
+	if (operand_offset > UINT32_MAX) {
+		return false;
+	}
+	out->operand_offset = static_cast<uint32_t>(operand_offset);
 	return true;
 }
 

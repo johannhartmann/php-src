@@ -1533,6 +1533,168 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 						: mir.source_opline_index == UINT32_MAX)) {
 				return false;
 			}
+			if (record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
+				zend_tpde_value_condition layout;
+
+				if (zend_tpde_value_condition_at(mir, &layout)
+						&& layout.operand_offset <= INT32_MAX) {
+					for (auto reg_id : register_file.used_regs()) {
+						tpde::Reg reg{reg_id};
+						if (!register_file.is_fixed(reg)
+								&& register_file.reg_local_idx(reg)
+									!= INVALID_VAL_LOCAL_IDX) {
+							evict_reg(reg);
+						}
+					}
+					auto slow = text_writer.label_create();
+					auto truthy = text_writer.label_create();
+					auto falsey = text_writer.label_create();
+					auto branch = text_writer.label_create();
+					auto [frame_ref, frame] =
+						val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+					auto frame_scratch = std::move(frame).into_scratch();
+					auto frame_reg = frame_scratch.cur_reg();
+					ScratchReg slot{this};
+					ScratchReg type{this};
+					ScratchReg value{this};
+					auto slot_reg = slot.alloc_gp();
+					auto type_reg = type.alloc_gp();
+					auto value_reg = value.alloc_gp();
+
+					ASM(MOV64rr, slot_reg, frame_reg);
+					ASM(ADD64ri, slot_reg,
+						static_cast<int32_t>(layout.operand_offset));
+					ASM(MOV32rm, type_reg,
+						FE_MEM(slot_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zval, u1.type_info))));
+					ASM(AND32ri, type_reg, Z_TYPE_MASK);
+					ASM(CMP32ri, type_reg, IS_NULL);
+					generate_raw_jump(Jump::je, falsey);
+					ASM(CMP32ri, type_reg, IS_FALSE);
+					generate_raw_jump(Jump::je, falsey);
+					ASM(CMP32ri, type_reg, IS_TRUE);
+					generate_raw_jump(Jump::je, truthy);
+					ASM(CMP32ri, type_reg, IS_LONG);
+					auto not_long = text_writer.label_create();
+					generate_raw_jump(Jump::jne, not_long);
+					ASM(MOV64rm, value_reg,
+						FE_MEM(slot_reg, 0, FE_NOREG, 0));
+					ASM(TEST64rr, value_reg, value_reg);
+					generate_raw_jump(Jump::jne, truthy);
+					generate_raw_jump(Jump::jmp, falsey);
+
+					label_place(not_long);
+					ASM(CMP32ri, type_reg, IS_STRING);
+					auto not_string = text_writer.label_create();
+					generate_raw_jump(Jump::jne, not_string);
+					ASM(MOV64rm, value_reg,
+						FE_MEM(slot_reg, 0, FE_NOREG, 0));
+					ASM(MOV64rm, slot_reg,
+						FE_MEM(value_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zend_string, len))));
+					ASM(TEST64rr, slot_reg, slot_reg);
+					generate_raw_jump(Jump::je, falsey);
+					ASM(CMP64ri, slot_reg, 1);
+					generate_raw_jump(Jump::jne, truthy);
+					ASM(MOVZXr32m8, type_reg,
+						FE_MEM(value_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zend_string, val))));
+					ASM(CMP32ri, type_reg, '0');
+					generate_raw_jump(Jump::je, falsey);
+					generate_raw_jump(Jump::jmp, truthy);
+
+					label_place(not_string);
+					ASM(CMP32ri, type_reg, IS_ARRAY);
+					auto not_array = text_writer.label_create();
+					generate_raw_jump(Jump::jne, not_array);
+					ASM(MOV64rm, value_reg,
+						FE_MEM(slot_reg, 0, FE_NOREG, 0));
+					ASM(MOV32rm, type_reg,
+						FE_MEM(value_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(HashTable, nNumOfElements))));
+					ASM(TEST32rr, type_reg, type_reg);
+					generate_raw_jump(Jump::jne, truthy);
+					generate_raw_jump(Jump::jmp, falsey);
+					label_place(not_array);
+					ASM(CMP32ri, type_reg, IS_RESOURCE);
+					generate_raw_jump(Jump::je, truthy);
+					generate_raw_jump(Jump::jmp, slow);
+
+					slot.reset();
+					type.reset();
+					value.reset();
+					const auto &successors = adaptor->block_succs(
+						adaptor->block_ref(record.block_id));
+					label_place(slow);
+
+					tpde::x64::CCAssignerSysV assigner{false};
+					CallBuilder builder{*this, assigner};
+					ValuePart frame_argument{
+						tpde::x64::PlatformConfig::GP_BANK, 8};
+					frame_argument.set_value(
+						this, std::move(frame_scratch));
+					builder.add_arg(
+						std::move(frame_argument), tpde::CCAssignment{});
+					const zend_mir_executable_value_ref &operation =
+						mir.value_operation;
+					builder.add_arg(ValuePart{
+						zend_tpde_encode_value_operand(operation.op1), 8,
+						tpde::x64::PlatformConfig::GP_BANK},
+						tpde::CCAssignment{});
+					builder.add_arg(ValuePart{
+						zend_tpde_encode_value_operand(operation.op2), 8,
+						tpde::x64::PlatformConfig::GP_BANK},
+						tpde::CCAssignment{});
+					builder.add_arg(ValuePart{
+						zend_tpde_encode_value_operand(operation.result), 8,
+						tpde::x64::PlatformConfig::GP_BANK},
+						tpde::CCAssignment{});
+					builder.add_arg(ValuePart{operation.extended_value, 4,
+						tpde::x64::PlatformConfig::GP_BANK},
+						tpde::CCAssignment{});
+					builder.add_arg(ValuePart{operation.source_opcode, 4,
+						tpde::x64::PlatformConfig::GP_BANK},
+						tpde::CCAssignment{});
+					builder.add_arg(ValuePart{operation.source_position_id, 4,
+						tpde::x64::PlatformConfig::GP_BANK},
+						tpde::CCAssignment{});
+					builder.call(runtime_symbol(
+						ZEND_NATIVE_HELPER_VALUE_COND_BRANCH));
+					ValuePart decision{
+						tpde::x64::PlatformConfig::GP_BANK};
+					builder.add_ret(decision, tpde::CCAssignment{});
+					auto decision_reg =
+						decision.cur_reg_or_load(this);
+					ASM(CMP32ri, decision_reg,
+						ZEND_NATIVE_ITERATOR_EXCEPTION);
+					auto valid = text_writer.label_create();
+					generate_raw_jump(Jump::jl, valid);
+					decision.reset(this);
+					RetBuilder return_builder{
+						*this, *cur_cc_assigner()};
+					return_builder.add(ValuePart{
+						ZEND_NATIVE_EXCEPTION, 4,
+						tpde::x64::PlatformConfig::GP_BANK},
+						tpde::CCAssignment{});
+					return_builder.ret();
+					label_place(valid);
+					generate_raw_jump(Jump::jmp, branch);
+					label_place(truthy);
+					ASM(MOV32ri, decision_reg, 1);
+					generate_raw_jump(Jump::jmp, branch);
+					label_place(falsey);
+					ASM(MOV32ri, decision_reg, 0);
+					label_place(branch);
+					ASM(TEST32rr, decision_reg, decision_reg);
+					generate_cond_branch(
+						Jump::jne, successors[0], successors[1]);
+					return true;
+				}
+			}
 			tpde::x64::CCAssignerSysV assigner{false};
 			CallBuilder builder{*this, assigner};
 			builder.add_arg(CallArg{node.operands[0]});
