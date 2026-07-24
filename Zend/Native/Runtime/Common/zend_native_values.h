@@ -89,7 +89,10 @@ zend_native_status zend_native_value_fe_free(
 zend_native_status zend_native_value_binary_op(
 	zend_execute_data *execute_data, uint32_t source_opline_index);
 zend_native_status zend_native_value_unary_op(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
 zend_native_status zend_native_value_type_check(
 	zend_execute_data *execute_data, uint32_t source_opline_index);
 zend_native_status zend_native_value_verify_return_type(
