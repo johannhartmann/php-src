@@ -394,6 +394,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			|| helper == ZEND_NATIVE_HELPER_VALUE_UNARY_OP
 			|| helper == ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE
 			|| helper == ZEND_NATIVE_HELPER_VALUE_ECHO
+			|| helper == ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL
 			|| helper == ZEND_NATIVE_HELPER_OBJECT_FETCH_R
 			|| helper == ZEND_NATIVE_HELPER_OBJECT_ASSIGN
 			|| (helper >= ZEND_NATIVE_HELPER_DYNAMIC_FETCH_R
@@ -428,6 +429,27 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(ValuePart{
 				zend_tpde_encode_value_operand(operation.op1), 8,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			if (helper == ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL) {
+				builder.add_arg(ValuePart{operation.source_opcode, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				builder.add_arg(ValuePart{operation.source_position_id, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				builder.call(runtime_symbol(helper));
+				ValuePart status{tpde::x64::PlatformConfig::GP_BANK};
+				builder.add_ret(status, tpde::CCAssignment{});
+				if (zend_mir_id_is_valid(mir.exception_block_id)) {
+					generate_exception_branch(
+						adaptor->block_ref(mir.exception_block_id));
+					status.reset(this);
+					return true;
+				}
+				RetBuilder return_builder{*this, *cur_cc_assigner()};
+				return_builder.add(std::move(status), tpde::CCAssignment{});
+				return_builder.ret();
+				return true;
+			}
 			builder.add_arg(ValuePart{
 				zend_tpde_encode_value_operand(operation.op2), 8,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
@@ -3813,30 +3835,6 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_RETURN_SOURCE_ZVAL));
 			ValuePart status{tpde::x64::PlatformConfig::GP_BANK};
 			builder.add_ret(status, ::tpde::CCAssignment{});
-			RetBuilder return_builder{*this, *cur_cc_assigner()};
-			return_builder.add(std::move(status), ::tpde::CCAssignment{});
-			return_builder.ret();
-			return true;
-		}
-		case ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL: {
-			if (node.operands.size() != 1
-					|| mir.source_opline_index == UINT32_MAX) {
-				return false;
-			}
-			tpde::x64::CCAssignerSysV assigner{false};
-			CallBuilder builder{*this, assigner};
-			builder.add_arg(CallArg{node.operands[0]});
-			builder.add_arg(ValuePart{mir.source_opline_index, 4,
-				tpde::x64::PlatformConfig::GP_BANK}, ::tpde::CCAssignment{});
-			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL));
-			ValuePart status{tpde::x64::PlatformConfig::GP_BANK};
-			builder.add_ret(status, ::tpde::CCAssignment{});
-			if (zend_mir_id_is_valid(mir.exception_block_id)) {
-				generate_exception_branch(
-					adaptor->block_ref(mir.exception_block_id));
-				status.reset(this);
-				return true;
-			}
 			RetBuilder return_builder{*this, *cur_cc_assigner()};
 			return_builder.add(std::move(status), ::tpde::CCAssignment{});
 			return_builder.ret();

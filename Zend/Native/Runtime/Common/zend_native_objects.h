@@ -69,7 +69,8 @@ zend_native_status zend_native_execute_object_assign(
 	uint32_t source_position_id);
 
 zend_native_status zend_native_throw_source_zval(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	zend_execute_data *execute_data, uint64_t operand,
+	uint32_t source_opcode, uint32_t source_position_id);
 
 #ifdef __cplusplus
 }
