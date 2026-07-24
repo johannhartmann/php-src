@@ -2152,7 +2152,9 @@ static bool native_mir_test_target_is_direct_native(
 			site.source_init_opline_index];
 		if (init->opcode != ZEND_INIT_METHOD_CALL
 				|| (init->op1_type != IS_UNUSED
-					&& init->op1_type != IS_CV)) {
+					&& init->op1_type != IS_CV
+					&& init->op1_type != IS_VAR
+					&& init->op1_type != IS_TMP_VAR)) {
 			return false;
 		}
 		resolved = zend_mir_zend_source_resolve_monomorphic_user_method_call(

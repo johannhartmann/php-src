@@ -1223,10 +1223,23 @@ bool initialize_plan(
 							descriptor->receiver_kind =
 								ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS;
 						} else if (init->op1_type == IS_CV
-								&& source_descriptor_operand(
+								|| init->op1_type == IS_VAR
+								|| init->op1_type == IS_TMP_VAR) {
+							if (!source_descriptor_operand(
 									source_op_array, init, init->op1_type,
 									init->op1,
 									&descriptor->receiver_operand)) {
+								std::free(descriptor);
+								zend_tpde_set_diagnostic(diag,
+									ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+									"direct native method receiver is not explicit");
+								return false;
+							}
+							if (init->op1_type == IS_VAR
+									|| init->op1_type == IS_TMP_VAR) {
+								descriptor->flags |=
+									ZEND_NATIVE_DIRECT_CALL_CONSUME_RECEIVER;
+							}
 							descriptor->receiver_kind =
 								ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT;
 						} else {

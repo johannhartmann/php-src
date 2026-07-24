@@ -820,14 +820,11 @@ static bool zend_native_compiler_target_is_direct_native(
 		}
 		init = &caller_function->op_array->opcodes[
 			site.source_init_opline_index];
-		/*
-		 * Direct instance frames currently consume either the caller's $this
-		 * or a stable CV. Temporary receivers retain distinct Zend lifetime
-		 * semantics and stay on the dynamic call path.
-		 */
 		if (init->opcode != ZEND_INIT_METHOD_CALL
 				|| (init->op1_type != IS_UNUSED
-					&& init->op1_type != IS_CV)) {
+					&& init->op1_type != IS_CV
+					&& init->op1_type != IS_VAR
+					&& init->op1_type != IS_TMP_VAR)) {
 			return false;
 		}
 		resolved = zend_mir_zend_source_resolve_monomorphic_user_method_call(
