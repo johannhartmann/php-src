@@ -35,6 +35,7 @@ void zend_native_execution_context_init(
 	context->vm_stack_end = &EG(vm_stack_end);
 	context->current_execute_data = &EG(current_execute_data);
 	context->active_direct_call = (void **) &zend_native_active_direct_call;
+	context->map_ptr_base_address = (void **) &CG(map_ptr_base);
 	context->vm_interrupt = &EG(vm_interrupt);
 	context->exception = &EG(exception);
 #ifdef ZEND_CHECK_STACK_LIMIT

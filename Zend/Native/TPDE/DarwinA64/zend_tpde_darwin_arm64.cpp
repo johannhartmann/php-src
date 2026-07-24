@@ -2377,6 +2377,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					ScratchReg second{this};
 					auto first_reg = first.alloc_gp();
 					auto second_reg = second.alloc_gp();
+					std::optional<ScratchReg> run_time_cache;
 
 					load_off(first_reg, cell_reg,
 						static_cast<uint32_t>(
@@ -2418,6 +2419,32 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 							offsetof(zend_execute_data, call)), 8);
 					ASM(CMPxi, first_reg, 0);
 					generate_raw_jump(Jump::Jne, slow_path);
+					if (call.direct_call->expected_function
+							->op_array.cache_size != 0) {
+						run_time_cache.emplace(this);
+						auto cache_reg = run_time_cache->alloc_gp();
+						load_off(first_reg, cell_reg,
+							static_cast<uint32_t>(offsetof(
+								zend_native_entry_cell, function)), 8);
+						load_off(cache_reg, first_reg,
+							static_cast<uint32_t>(offsetof(
+								zend_op_array, run_time_cache__ptr)), 8);
+						mov(first_reg, cache_reg, 8);
+						ASM(ANDxi, first_reg, first_reg, 1);
+						ASM(CMPxi, first_reg, 0);
+						auto cache_resolved = text_writer.label_create();
+						generate_raw_jump(Jump::Jeq, cache_resolved);
+						load_off(first_reg, context_reg,
+							static_cast<uint32_t>(offsetof(
+								zend_native_execution_context,
+								map_ptr_base_address)), 8);
+						load_off(first_reg, first_reg, 0, 8);
+						ASM(ADDx, cache_reg, cache_reg, first_reg);
+						load_off(cache_reg, cache_reg, 0, 8);
+						label_place(cache_resolved);
+						ASM(CMPxi, cache_reg, 0);
+						generate_raw_jump(Jump::Jeq, slow_path);
+					}
 					if (call.direct_call->receiver_kind
 							== ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS) {
 						load_off(first_reg, frame_reg,
@@ -2615,9 +2642,17 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					store_constant(callee_reg,
 						static_cast<uint32_t>(
 							offsetof(zend_execute_data, symbol_table)), 0, 8);
-					store_constant(callee_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_execute_data, run_time_cache)), 0, 8);
+					if (run_time_cache.has_value()) {
+						store_off(callee_reg,
+							static_cast<uint32_t>(offsetof(
+								zend_execute_data, run_time_cache)),
+							run_time_cache->cur_reg(), 8);
+						run_time_cache->reset();
+					} else {
+						store_constant(callee_reg,
+							static_cast<uint32_t>(offsetof(
+								zend_execute_data, run_time_cache)), 0, 8);
+					}
 					store_constant(callee_reg,
 						static_cast<uint32_t>(
 							offsetof(zend_execute_data, extra_named_params)), 0, 8);

@@ -2565,6 +2565,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 					ScratchReg second{this};
 					auto first_reg = first.alloc_gp();
 					auto second_reg = second.alloc_gp();
+					std::optional<ScratchReg> run_time_cache;
 
 					ASM(CMP32mi,
 						FE_MEM(cell_reg, 0, FE_NOREG,
@@ -2614,6 +2615,37 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 								offsetof(zend_execute_data, call))));
 					ASM(TEST64rr, first_reg, first_reg);
 					generate_raw_jump(Jump::jne, slow_path);
+					if (call.direct_call->expected_function
+							->op_array.cache_size != 0) {
+						run_time_cache.emplace(this);
+						auto cache_reg = run_time_cache->alloc_gp();
+						ASM(MOV64rm, first_reg,
+							FE_MEM(cell_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_native_entry_cell, function))));
+						ASM(MOV64rm, cache_reg,
+							FE_MEM(first_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_op_array, run_time_cache__ptr))));
+						ASM(MOV64rr, first_reg, cache_reg);
+						ASM(AND64ri, first_reg, 1);
+						ASM(TEST64rr, first_reg, first_reg);
+						auto cache_resolved = text_writer.label_create();
+						generate_raw_jump(Jump::je, cache_resolved);
+						ASM(MOV64rm, first_reg,
+							FE_MEM(context_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_native_execution_context,
+									map_ptr_base_address))));
+						ASM(MOV64rm, first_reg,
+							FE_MEM(first_reg, 0, FE_NOREG, 0));
+						ASM(ADD64rr, cache_reg, first_reg);
+						ASM(MOV64rm, cache_reg,
+							FE_MEM(cache_reg, 0, FE_NOREG, 0));
+						label_place(cache_resolved);
+						ASM(TEST64rr, cache_reg, cache_reg);
+						generate_raw_jump(Jump::je, slow_path);
+					}
 					if (call.direct_call->receiver_kind
 							== ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS) {
 						ASM(MOV32rm, first_reg,
@@ -2849,11 +2881,20 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 							static_cast<int32_t>(
 								offsetof(zend_execute_data, symbol_table))),
 						0);
-					ASM(MOV64mi,
-						FE_MEM(callee_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(zend_execute_data, run_time_cache))),
-						0);
+					if (run_time_cache.has_value()) {
+						ASM(MOV64mr,
+							FE_MEM(callee_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_execute_data, run_time_cache))),
+							run_time_cache->cur_reg());
+						run_time_cache->reset();
+					} else {
+						ASM(MOV64mi,
+							FE_MEM(callee_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_execute_data, run_time_cache))),
+							0);
+					}
 					ASM(MOV64mi,
 						FE_MEM(callee_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
