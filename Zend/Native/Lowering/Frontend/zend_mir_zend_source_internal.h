@@ -258,6 +258,12 @@ zend_function *zend_mir_zend_source_resolve_user_method_call(
 	const zend_ssa *ssa,
 	uint32_t init_opline_index);
 
+zend_function *zend_mir_zend_source_resolve_monomorphic_user_method_call(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	uint32_t init_opline_index);
+
 zend_mir_lowering_status zend_mir_zend_source_init_w05_projection(
 	zend_mir_zend_source *source,
 	const zend_op_array *projected_op_array,

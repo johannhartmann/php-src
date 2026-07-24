@@ -1791,6 +1791,15 @@ static zend_native_status zend_native_call_direct_observed_entry(
 	return status;
 }
 
+static void zend_native_call_direct_release_receiver(
+	zend_execute_data *call)
+{
+	if ((ZEND_CALL_INFO(call) & ZEND_CALL_RELEASE_THIS) != 0) {
+		OBJ_RELEASE(Z_OBJ(call->This));
+		ZEND_DEL_CALL_FLAG(call, ZEND_CALL_RELEASE_THIS);
+	}
+}
+
 static void zend_native_call_direct_release(
 	zend_native_direct_activation *activation)
 {
@@ -1814,6 +1823,7 @@ static void zend_native_call_direct_release(
 	activation->caller->call = NULL;
 	EG(current_execute_data) = activation->caller;
 	zend_native_active_direct_call = activation->previous;
+	zend_native_call_direct_release_receiver(activation->callee);
 	zend_vm_stack_free_call_frame(activation->callee);
 }
 
@@ -1844,6 +1854,9 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 	uint32_t used_stack;
 	uint32_t activation_size;
 	uint32_t index;
+	uint32_t call_info = ZEND_CALL_NESTED_FUNCTION;
+	void *object_or_called_scope = NULL;
+	bool receiver_owned = false;
 	bool trivial_frame;
 
 	if (caller == NULL || caller->func == NULL || context == NULL
@@ -1873,6 +1886,53 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 #endif
 	caller->opline = &caller->func->op_array.opcodes[
 		descriptor->source_position];
+	switch (descriptor->receiver_kind) {
+		case ZEND_NATIVE_INTERNAL_RECEIVER_NONE:
+			if (function->common.scope != NULL) {
+				zend_throw_error(NULL,
+					"Direct native function unexpectedly requires a receiver");
+				return result;
+			}
+			break;
+		case ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS:
+			if ((function->common.fn_flags & ZEND_ACC_STATIC) != 0
+					|| function->common.scope == NULL
+					|| Z_TYPE(caller->This) != IS_OBJECT
+					|| !instanceof_function(
+						Z_OBJCE(caller->This), function->common.scope)) {
+				zend_throw_error(NULL,
+					"Direct native method has no compatible caller receiver");
+				return result;
+			}
+			call_info |= ZEND_CALL_HAS_THIS;
+			object_or_called_scope = Z_OBJ(caller->This);
+			break;
+		case ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT: {
+			zval *receiver = zend_native_direct_operand(
+				caller, &descriptor->receiver_operand, false);
+
+			if (receiver != NULL) {
+				ZVAL_DEREF(receiver);
+			}
+			if ((function->common.fn_flags & ZEND_ACC_STATIC) != 0
+					|| function->common.scope == NULL
+					|| receiver == NULL || Z_TYPE_P(receiver) != IS_OBJECT
+					|| !instanceof_function(
+						Z_OBJCE_P(receiver), function->common.scope)) {
+				zend_throw_error(NULL,
+					"Direct native method has an incompatible receiver");
+				return result;
+			}
+			GC_ADDREF(Z_OBJ_P(receiver));
+			call_info |= ZEND_CALL_HAS_THIS | ZEND_CALL_RELEASE_THIS;
+			object_or_called_scope = Z_OBJ_P(receiver);
+			receiver_owned = true;
+			break;
+		}
+		default:
+			zend_throw_error(NULL, "Invalid direct native method receiver");
+			return result;
+	}
 	trivial_frame =
 		(descriptor->flags & ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME) != 0
 		&& descriptor->frame_size
@@ -1896,12 +1956,15 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 		(sizeof(zend_native_direct_activation) + sizeof(zval) - 1)
 			/ sizeof(zval) * sizeof(zval));
 	if (used_stack > UINT32_MAX - activation_size) {
+		if (receiver_owned) {
+			OBJ_RELEASE((zend_object *) object_or_called_scope);
+		}
 		zend_throw_error(NULL, "Direct native call frame is too large");
 		return result;
 	}
 	call = zend_vm_stack_push_call_frame_ex(
-		used_stack + activation_size, ZEND_CALL_NESTED_FUNCTION,
-		function, descriptor->argument_count, NULL);
+		used_stack + activation_size, call_info,
+		function, descriptor->argument_count, object_or_called_scope);
 	activation = (zend_native_direct_activation *)
 		((char *) call + used_stack);
 	memset(activation, 0, sizeof(*activation));
@@ -2051,6 +2114,7 @@ void zend_native_call_direct_unwind(zend_execute_data *outermost)
 	while (zend_native_active_direct_call != NULL) {
 		zend_native_direct_activation *activation =
 			zend_native_active_direct_call;
+		zend_execute_data *caller = activation->caller;
 
 		if (activation->frame_initialized) {
 			zend_native_execution_cleanup_frame(activation->callee);
@@ -2070,10 +2134,11 @@ void zend_native_call_direct_unwind(zend_execute_data *outermost)
 			ZVAL_UNDEF(&activation->discarded_return);
 		}
 		activation->caller->call = NULL;
-		EG(current_execute_data) = activation->caller;
+		EG(current_execute_data) = caller;
 		zend_native_active_direct_call = activation->previous;
+		zend_native_call_direct_release_receiver(activation->callee);
 		zend_vm_stack_free_call_frame(activation->callee);
-		if (activation->caller == outermost) {
+		if (caller == outermost) {
 			break;
 		}
 	}
