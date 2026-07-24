@@ -372,6 +372,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			|| helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_OP
 			|| helper == ZEND_NATIVE_HELPER_VALUE_UNARY_OP
 			|| helper == ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE
+			|| helper == ZEND_NATIVE_HELPER_VALUE_ECHO
 			|| helper == ZEND_NATIVE_HELPER_OBJECT_FETCH_R
 			|| helper == ZEND_NATIVE_HELPER_OBJECT_ASSIGN
 			|| (helper >= ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R
@@ -2005,6 +2006,8 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		case ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE:
 			return execute_value_operation(
 				ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE);
+		case ZEND_MIR_OPCODE_VALUE_ECHO:
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ECHO);
 		case ZEND_MIR_OPCODE_COPY:
 		case ZEND_MIR_OPCODE_CANONICALIZE:
 		case ZEND_MIR_OPCODE_I1_TO_I64:
