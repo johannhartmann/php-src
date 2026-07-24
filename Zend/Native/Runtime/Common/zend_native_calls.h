@@ -230,7 +230,9 @@ uint64_t zend_native_call_invoke_finish(
 zend_native_status zend_native_call_invoke_finish_source(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
-	uint32_t do_opline_index);
+	uint32_t do_opline_index,
+	uint32_t do_opcode,
+	uint64_t result_operand);
 zend_native_direct_call_result zend_native_call_direct(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
@@ -296,8 +298,12 @@ zend_native_direct_call_result zend_native_internal_call_direct(
 	const zend_native_direct_internal_call_descriptor *descriptor);
 uint64_t zend_native_call_read_source_scalar(
 	zend_execute_data *caller,
-	uint32_t do_opline_index,
+	uint64_t result_operand,
 	zend_mir_scalar_type_mask exact_type);
+zval *zend_native_call_explicit_slot(
+	zend_execute_data *caller,
+	uint64_t encoded_operand,
+	uint8_t *operand_type);
 zend_native_status zend_native_return_source_zval(
 	zend_execute_data *execute_data, uint32_t return_opline_index);
 zend_native_status zend_native_catch_enter(

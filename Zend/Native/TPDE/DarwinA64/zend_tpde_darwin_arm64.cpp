@@ -3702,9 +3702,14 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(image_symbol_value(
 				ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
 				call.call_site.target_id), ::tpde::CCAssignment{});
-			builder.add_arg(ValuePart{call.call_site.source_do_opline_index, 4,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_USER_CALL_FINISH_SOURCE));
+				builder.add_arg(ValuePart{call.call_site.source_do_opline_index, 4,
+					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+				builder.add_arg(ValuePart{call.call_do_opcode, 4,
+					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+				builder.add_arg(ValuePart{
+					zend_tpde_encode_value_operand(call.call_site.result_operand), 8,
+					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+				builder.call(runtime_symbol(ZEND_NATIVE_HELPER_USER_CALL_FINISH_SOURCE));
 			ValuePart status{DarwinConfig::GP_BANK};
 			builder.add_ret(status, ::tpde::CCAssignment{});
 			auto status_reg = status.cur_reg_or_load(this);
@@ -3727,9 +3732,9 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				zend::native::tpde::CCAssignerAppleA64 result_assigner;
 				CallBuilder result_builder{*this, result_assigner};
 				result_builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
-				result_builder.add_arg(ValuePart{
-					call.call_site.source_do_opline_index, 4,
-					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+					result_builder.add_arg(ValuePart{
+						zend_tpde_encode_value_operand(call.call_site.result_operand), 8,
+						DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				result_builder.add_arg(ValuePart{
 					static_cast<uint32_t>(adaptor->exact_type(node.result)), 4,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
