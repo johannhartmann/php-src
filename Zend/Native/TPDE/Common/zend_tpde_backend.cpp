@@ -2077,6 +2077,76 @@ bool initialize_plan(
 	}
 	return true;
 }
+
+bool source_opline_decoding_helper(zend_native_runtime_helper_id helper) {
+	switch (helper) {
+		case ZEND_NATIVE_HELPER_CALL_SET_SOURCE_ARGUMENT:
+		case ZEND_NATIVE_HELPER_INTERNAL_CALL_FINISH_SOURCE:
+		case ZEND_NATIVE_HELPER_CALL_READ_SOURCE_SCALAR:
+		case ZEND_NATIVE_HELPER_USER_CALL_FINISH_SOURCE:
+		case ZEND_NATIVE_HELPER_RETURN_SOURCE_ZVAL:
+			return true;
+		default:
+			return false;
+	}
+}
+
+zend_native_image_metrics collect_plan_metrics(const zend_tpde_plan &plan) {
+	zend_native_image_metrics metrics{};
+
+	for (uint32_t index = 0; index < plan.instruction_count; ++index) {
+		const zend_tpde_instruction &instruction = plan.instructions[index];
+		const zend_native_runtime_helper_id helper =
+			instruction.runtime_helper;
+		bool guarded_fast_path = false;
+		zend_tpde_array_read array_read{};
+		zend_tpde_packed_array_append array_append{};
+		zend_tpde_array_isset array_isset{};
+		zend_tpde_string_length string_length{};
+		zend_tpde_string_identity string_identity{};
+		zend_tpde_value_condition value_condition{};
+		zend_tpde_slot_isset_empty slot_isset{};
+		zend_tpde_object_property_read property_read{};
+		zend_tpde_object_property_write property_write{};
+
+		if (helper != ZEND_NATIVE_HELPER_COUNT) {
+			metrics.runtime_helper_sites++;
+			if (source_opline_decoding_helper(helper)) {
+				metrics.source_opline_decode_sites++;
+			}
+		}
+		guarded_fast_path =
+			zend_tpde_array_read_at(instruction, &array_read)
+			|| zend_tpde_packed_array_append_at(
+				instruction, &array_append)
+			|| zend_tpde_array_isset_at(instruction, &array_isset)
+			|| zend_tpde_string_length_at(instruction, &string_length)
+			|| zend_tpde_string_identity_at(
+				instruction, &string_identity)
+			|| zend_tpde_value_condition_at(
+				instruction, &value_condition)
+			|| zend_tpde_slot_isset_empty_at(
+				instruction, &slot_isset)
+			|| zend_tpde_object_property_read_at(
+				instruction, &property_read)
+			|| zend_tpde_object_property_write_at(
+				instruction, &property_write);
+		if (guarded_fast_path) {
+			metrics.guard_sites++;
+			if (helper != ZEND_NATIVE_HELPER_COUNT) {
+				metrics.slow_path_sites++;
+			}
+		}
+	}
+	metrics.direct_call_sites = plan.direct_call_count;
+	for (uint32_t index = 0; index < plan.direct_call_count; ++index) {
+		if (plan.direct_calls[index] != nullptr) {
+			metrics.direct_call_frame_bytes +=
+				plan.direct_calls[index]->frame_size;
+		}
+	}
+	return metrics;
+}
 } // namespace
 
 void zend_tpde_set_diagnostic(
@@ -2382,6 +2452,7 @@ extern "C" zend_result zend_tpde_compile_module_w08_with_runtime(
 	 * pointer remains present for compatibility but no value-slot array is used. */
 	image->slot_count = 0;
 	image->argument_count = plan.argument_count;
+	image->metrics = collect_plan_metrics(plan);
 	zend_result result = prepare_image_symbols(&plan, image, diag)
 		? target == ZEND_NATIVE_TARGET_DARWIN_ARM64
 			? zend_tpde_emit_darwin_arm64(&plan, image, diag)
@@ -2650,6 +2721,14 @@ extern "C" size_t zend_native_image_size(const zend_native_image *image) {
 }
 extern "C" const unsigned char *zend_native_image_bytes(const zend_native_image *image) {
 	return image == nullptr ? nullptr : image->text;
+}
+extern "C" void zend_native_image_get_metrics(
+		const zend_native_image *image, zend_native_image_metrics *metrics) {
+	if (metrics == nullptr) {
+		return;
+	}
+	*metrics = image != nullptr
+		? image->metrics : zend_native_image_metrics{};
 }
 extern "C" bool zend_native_code_is_writable(const zend_native_code *code) {
 	return code != nullptr && code->writable;
