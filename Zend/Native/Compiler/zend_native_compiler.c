@@ -69,6 +69,7 @@ struct _zend_native_compiler {
 	bool abi_conformance_probe;
 	zend_native_compiled_function **functions;
 	HashTable functions_by_op_array;
+	HashTable source_op_arrays_by_opcodes;
 	zend_op_array **script_functions_by_declaration_id;
 	uint32_t script_function_count;
 	uint32_t function_count;
@@ -1040,150 +1041,113 @@ static zend_op_array *zend_native_compiler_resolve_callback_argument(
 		? &function->op_array : NULL;
 }
 
-static zend_op_array *zend_native_compiler_find_source_op_array(
-	zend_op_array *candidate, const zend_op_array *resolved, uint32_t depth)
+static bool zend_native_compiler_index_source_op_array(
+	zend_native_compiler *compiler, zend_op_array *op_array, uint32_t depth)
 {
 	uint32_t index;
 
-	if (candidate == NULL || resolved == NULL || depth > 64) {
-		return NULL;
+	if (op_array == NULL || depth > 64) {
+		return false;
 	}
-	if (candidate == resolved
-			|| (candidate->opcodes == resolved->opcodes
-				&& candidate->last == resolved->last)) {
-		return candidate;
-	}
-	for (index = 0; index < candidate->num_dynamic_func_defs; index++) {
-		zend_op_array *found = zend_native_compiler_find_source_op_array(
-			candidate->dynamic_func_defs[index], resolved, depth + 1);
+	if (op_array->opcodes != NULL) {
+		zend_ulong key = (zend_ulong) (uintptr_t) op_array->opcodes;
+		zend_op_array *indexed = zend_hash_index_find_ptr(
+			&compiler->source_op_arrays_by_opcodes, key);
 
-		if (found != NULL) {
-			return found;
+		if (indexed == NULL
+				&& zend_hash_index_add_ptr(
+					&compiler->source_op_arrays_by_opcodes,
+					key, op_array) == NULL) {
+			return false;
 		}
 	}
-	return NULL;
+	for (index = 0; index < op_array->num_dynamic_func_defs; index++) {
+		if (!zend_native_compiler_index_source_op_array(
+				compiler, op_array->dynamic_func_defs[index], depth + 1)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool zend_native_compiler_index_source_class(
+	zend_native_compiler *compiler, zend_class_entry *class_entry)
+{
+	zend_function *function;
+	zend_property_info *property_info;
+	uint32_t hook_index;
+
+	if (class_entry == NULL) {
+		return true;
+	}
+	ZEND_HASH_FOREACH_PTR(&class_entry->function_table, function) {
+		if (function != NULL && function->type == ZEND_USER_FUNCTION
+				&& !zend_native_compiler_index_source_op_array(
+					compiler, &function->op_array, 0)) {
+			return false;
+		}
+	} ZEND_HASH_FOREACH_END();
+	if (class_entry->num_hooked_props == 0) {
+		return true;
+	}
+	ZEND_HASH_MAP_FOREACH_PTR(
+			&class_entry->properties_info, property_info) {
+		if (property_info->ce != class_entry
+				|| property_info->hooks == NULL) {
+			continue;
+		}
+		for (hook_index = 0; hook_index < ZEND_PROPERTY_HOOK_COUNT;
+				hook_index++) {
+			function = property_info->hooks[hook_index];
+			if (function != NULL && function->type == ZEND_USER_FUNCTION
+					&& !zend_native_compiler_index_source_op_array(
+						compiler, &function->op_array, 0)) {
+				return false;
+			}
+		}
+	} ZEND_HASH_FOREACH_END();
+	return true;
+}
+
+static bool zend_native_compiler_index_source_op_arrays(
+	zend_native_compiler *compiler)
+{
+	zend_function *function;
+	zend_class_entry *class_entry;
+
+	if (!zend_native_compiler_index_source_op_array(
+			compiler, &compiler->script->main_op_array, 0)) {
+		return false;
+	}
+	ZEND_HASH_FOREACH_PTR(&compiler->script->function_table, function) {
+		if (function != NULL && function->type == ZEND_USER_FUNCTION
+				&& !zend_native_compiler_index_source_op_array(
+					compiler, &function->op_array, 0)) {
+			return false;
+		}
+	} ZEND_HASH_FOREACH_END();
+	ZEND_HASH_FOREACH_PTR(&compiler->script->class_table, class_entry) {
+		if (!zend_native_compiler_index_source_class(
+				compiler, class_entry)) {
+			return false;
+		}
+	} ZEND_HASH_FOREACH_END();
+	return true;
 }
 
 static zend_op_array *zend_native_compiler_canonical_reentry_op_array(
 	zend_native_compiler *compiler, const zend_op_array *resolved)
 {
-	zend_op_array *found;
-	zend_function *function;
-	zend_class_entry *class_entry;
-	uint32_t index;
+	zend_op_array *source;
 
-	if (compiler == NULL || resolved == NULL) {
+	if (compiler == NULL || resolved == NULL || resolved->opcodes == NULL) {
 		return NULL;
 	}
-	for (index = 0; index < compiler->function_count; index++) {
-		found = zend_native_compiler_find_source_op_array(
-			compiler->functions[index]->op_array, resolved, 0);
-		if (found != NULL) {
-			return found;
-		}
-	}
-	found = zend_native_compiler_find_source_op_array(
-		&compiler->script->main_op_array, resolved, 0);
-	if (found != NULL) {
-		return found;
-	}
-	ZEND_HASH_FOREACH_PTR(&compiler->script->function_table, function) {
-		if (function != NULL && function->type == ZEND_USER_FUNCTION) {
-			found = zend_native_compiler_find_source_op_array(
-				&function->op_array, resolved, 0);
-			if (found != NULL) {
-				return found;
-			}
-		}
-	} ZEND_HASH_FOREACH_END();
-	ZEND_HASH_FOREACH_PTR(&compiler->script->class_table, class_entry) {
-		zend_property_info *property_info;
-		uint32_t hook_index;
-
-		if (class_entry == NULL) {
-			continue;
-		}
-		ZEND_HASH_FOREACH_PTR(&class_entry->function_table, function) {
-			if (function != NULL && function->type == ZEND_USER_FUNCTION) {
-				found = zend_native_compiler_find_source_op_array(
-					&function->op_array, resolved, 0);
-				if (found != NULL) {
-					return found;
-				}
-			}
-		} ZEND_HASH_FOREACH_END();
-		if (class_entry->num_hooked_props == 0) {
-			continue;
-		}
-		ZEND_HASH_MAP_FOREACH_PTR(
-				&class_entry->properties_info, property_info) {
-			if (property_info->ce != class_entry
-					|| property_info->hooks == NULL) {
-				continue;
-			}
-			for (hook_index = 0; hook_index < ZEND_PROPERTY_HOOK_COUNT;
-					hook_index++) {
-				function = property_info->hooks[hook_index];
-				if (function == NULL || function->type != ZEND_USER_FUNCTION) {
-					continue;
-				}
-				found = zend_native_compiler_find_source_op_array(
-					&function->op_array, resolved, 0);
-				if (found != NULL) {
-					return found;
-				}
-			}
-		} ZEND_HASH_FOREACH_END();
-	} ZEND_HASH_FOREACH_END();
-	ZEND_HASH_FOREACH_PTR(EG(function_table), function) {
-		if (function != NULL && function->type == ZEND_USER_FUNCTION) {
-			found = zend_native_compiler_find_source_op_array(
-				&function->op_array, resolved, 0);
-			if (found != NULL) {
-				return found;
-			}
-		}
-	} ZEND_HASH_FOREACH_END();
-	ZEND_HASH_FOREACH_PTR(EG(class_table), class_entry) {
-		zend_property_info *property_info;
-		uint32_t hook_index;
-
-		if (class_entry == NULL) {
-			continue;
-		}
-		ZEND_HASH_FOREACH_PTR(&class_entry->function_table, function) {
-			if (function != NULL && function->type == ZEND_USER_FUNCTION) {
-				found = zend_native_compiler_find_source_op_array(
-					&function->op_array, resolved, 0);
-				if (found != NULL) {
-					return found;
-				}
-			}
-		} ZEND_HASH_FOREACH_END();
-		if (class_entry->num_hooked_props == 0) {
-			continue;
-		}
-		ZEND_HASH_MAP_FOREACH_PTR(
-				&class_entry->properties_info, property_info) {
-			if (property_info->ce != class_entry
-					|| property_info->hooks == NULL) {
-				continue;
-			}
-			for (hook_index = 0; hook_index < ZEND_PROPERTY_HOOK_COUNT;
-					hook_index++) {
-				function = property_info->hooks[hook_index];
-				if (function == NULL || function->type != ZEND_USER_FUNCTION) {
-					continue;
-				}
-				found = zend_native_compiler_find_source_op_array(
-					&function->op_array, resolved, 0);
-				if (found != NULL) {
-					return found;
-				}
-			}
-		} ZEND_HASH_FOREACH_END();
-	} ZEND_HASH_FOREACH_END();
-	return NULL;
+	source = zend_hash_index_find_ptr(
+		&compiler->source_op_arrays_by_opcodes,
+		(zend_ulong) (uintptr_t) resolved->opcodes);
+	return source != NULL && source->last == resolved->last
+		? source : NULL;
 }
 
 static bool zend_native_compiler_discover_native_callees(
@@ -2287,11 +2251,23 @@ zend_native_compiler *zend_native_compiler_create(
 	compiler->unavailable_runtime_helper =
 		config->unavailable_runtime_helper;
 	compiler->abi_conformance_probe = config->abi_conformance_probe;
+	zend_hash_init(
+		&compiler->source_op_arrays_by_opcodes, 32, NULL, NULL, false);
+	if (!zend_native_compiler_index_source_op_arrays(compiler)) {
+		zend_native_compiler_set_diagnostic(
+			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"native source codeunit index cannot be constructed");
+		zend_hash_destroy(&compiler->source_op_arrays_by_opcodes);
+		efree(compiler);
+		return NULL;
+	}
 	if (!zend_native_compiler_index_script_functions(compiler)) {
 		zend_native_compiler_set_diagnostic(
 			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
 			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
 			"native script function index cannot be constructed");
+		zend_hash_destroy(&compiler->source_op_arrays_by_opcodes);
 		efree(compiler);
 		return NULL;
 	}
@@ -2349,6 +2325,7 @@ void zend_native_compiler_destroy(zend_native_compiler *compiler)
 	efree(compiler->reentry_bindings);
 	efree(compiler->script_functions_by_declaration_id);
 	zend_hash_destroy(&compiler->functions_by_op_array);
+	zend_hash_destroy(&compiler->source_op_arrays_by_opcodes);
 	efree(compiler->functions);
 	zend_native_dynamic_compiler_destroy(&compiler->dynamic_compiler);
 	efree(compiler);
