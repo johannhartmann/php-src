@@ -19,9 +19,11 @@ typedef struct _zend_native_explicit_object_operation {
 	uint8_t op1_type;
 	uint8_t op2_type;
 	uint8_t result_type;
+	uint8_t auxiliary_type;
 	znode_op op1;
 	znode_op op2;
 	znode_op result;
+	znode_op auxiliary;
 	uint32_t extended_value;
 	uint32_t source_position_id;
 } zend_native_explicit_object_operation;
@@ -120,6 +122,22 @@ static bool zend_native_object_init_explicit_operation(
 	execute_data->opline =
 		&execute_data->func->op_array.opcodes[source_position_id];
 	return true;
+}
+
+static bool zend_native_object_init_explicit_assignment(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result, uint64_t auxiliary,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id, uint8_t expected_opcode,
+	zend_native_explicit_object_operation *operation)
+{
+	return zend_native_object_init_explicit_operation(
+			execute_data, op1, op2, result, extended_value, source_opcode,
+			source_position_id, expected_opcode, operation)
+		&& zend_native_object_decode_explicit_operand(
+			execute_data, auxiliary, &operation->auxiliary_type,
+			&operation->auxiliary)
+		&& operation->auxiliary_type != IS_UNUSED;
 }
 
 static const zend_op *zend_native_object_opline(
@@ -775,6 +793,90 @@ static zend_native_status zend_native_object_fetch_r_explicit(
 	if (temporary != NULL) {
 		zend_tmp_string_release(temporary);
 	}
+	zend_native_object_consume(
+		execute_data, operation->op2_type, operation->op2, result);
+	zend_native_object_consume(
+		execute_data, operation->op1_type, operation->op1, result);
+	return zend_native_object_status();
+}
+
+static zend_native_status zend_native_object_assign_explicit(
+	zend_execute_data *execute_data,
+	const zend_native_explicit_object_operation *operation)
+{
+	zval *receiver;
+	zval *property = zend_native_object_read_explicit(
+		execute_data, operation->op2_type, operation->op2);
+	zval *value = zend_native_object_read_explicit(
+		execute_data, operation->auxiliary_type, operation->auxiliary);
+	zval *result = operation->result_type == IS_UNUSED ? NULL
+		: zend_native_object_slot(
+			execute_data, operation->result_type, operation->result);
+	zend_string *temporary = NULL;
+	zend_string *name;
+	zval *written;
+	void **cache_slot = NULL;
+
+	if (operation->op1_type == IS_UNUSED) {
+		receiver = &execute_data->This;
+	} else {
+		receiver = zend_native_object_read_explicit(
+			execute_data, operation->op1_type, operation->op1);
+	}
+	if (receiver != NULL && Z_ISREF_P(receiver)) {
+		receiver = Z_REFVAL_P(receiver);
+	}
+	if (receiver == NULL || property == NULL || value == NULL
+			|| (result == NULL && operation->result_type != IS_UNUSED)) {
+		zend_throw_error(NULL, "Malformed native object assignment operands");
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	if (Z_TYPE_P(receiver) != IS_OBJECT) {
+		if (result != NULL) {
+			ZVAL_NULL(result);
+		}
+		return zend_native_object_bad_receiver(receiver, property, false);
+	}
+	if (operation->op2_type == IS_CONST
+			&& Z_TYPE_P(property) == IS_STRING) {
+		name = Z_STR_P(property);
+		if (execute_data->run_time_cache != NULL) {
+			uint32_t cache_offset = operation->extended_value;
+			const uint32_t cache_size =
+				execute_data->func->op_array.cache_size;
+
+			if (cache_offset > cache_size
+					|| 3 * sizeof(void *) > cache_size - cache_offset) {
+				zend_throw_error(NULL,
+					"Malformed native object assignment cache offset");
+				return ZEND_NATIVE_EXCEPTION;
+			}
+			cache_slot = (void **) (
+				(char *) execute_data->run_time_cache + cache_offset);
+		}
+	} else {
+		name = zval_try_get_tmp_string(property, &temporary);
+		if (name == NULL) {
+			if (result != NULL) {
+				ZVAL_UNDEF(result);
+			}
+			return zend_native_object_status();
+		}
+	}
+	if (operation->auxiliary_type == IS_CV
+			|| operation->auxiliary_type == IS_VAR) {
+		ZVAL_DEREF(value);
+	}
+	written = Z_OBJ_HT_P(receiver)->write_property(
+		Z_OBJ_P(receiver), name, value, cache_slot);
+	if (result != NULL && written != NULL) {
+		zend_native_object_replace(result, written);
+	}
+	if (temporary != NULL) {
+		zend_tmp_string_release(temporary);
+	}
+	zend_native_object_consume(
+		execute_data, operation->auxiliary_type, operation->auxiliary, result);
 	zend_native_object_consume(
 		execute_data, operation->op2_type, operation->op2, result);
 	zend_native_object_consume(
@@ -1805,8 +1907,22 @@ ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_fetch_func_arg,
 ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_fetch_unset,
 	ZEND_FETCH_OBJ_UNSET,
 	zend_native_object_fetch(execute_data, opline, BP_VAR_UNSET))
-ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_assign,
-	ZEND_ASSIGN_OBJ, zend_native_object_assign(execute_data, opline, false))
+zend_native_status zend_native_execute_object_assign(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result, uint64_t auxiliary,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
+{
+	zend_native_explicit_object_operation operation;
+
+	if (!zend_native_object_init_explicit_assignment(
+			execute_data, op1, op2, result, auxiliary, extended_value,
+			source_opcode, source_position_id, ZEND_ASSIGN_OBJ, &operation)) {
+		zend_throw_error(NULL, "Malformed native object assignment operation");
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	return zend_native_object_assign_explicit(execute_data, &operation);
+}
 ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_assign_ref,
 	ZEND_ASSIGN_OBJ_REF, zend_native_object_assign(execute_data, opline, true))
 ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_assign_op,
