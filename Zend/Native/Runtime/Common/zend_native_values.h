@@ -75,17 +75,35 @@ zend_native_status zend_native_value_fast_concat(
 	uint32_t extended_value, uint32_t source_opcode,
 	uint32_t source_position_id);
 zend_native_status zend_native_value_rope_init(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
 zend_native_status zend_native_value_rope_add(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
 zend_native_status zend_native_value_rope_end(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
 zend_native_status zend_native_value_init_array(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
 zend_native_status zend_native_value_add_array_element(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
 zend_native_status zend_native_value_add_array_unpack(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
 #define ZEND_NATIVE_EXPLICIT_VALUE_HELPER(name) \
 	zend_native_status name( \
 		zend_execute_data *execute_data, \
