@@ -770,13 +770,16 @@ bool initialize_plan(
 					plan, ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE);
 				continue;
 			}
-			/*
-			 * Kept temporarily for uncommon slow paths while their helper ABI
-			 * is migrated to the explicit operation below. Inline W11P paths
-			 * never consume this source identity.
-			 */
-			plan->instructions[i].source_opline_index =
-				record.source_position_id;
+			if (record.opcode < ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
+					|| record.opcode
+						> ZEND_MIR_OPCODE_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT) {
+				/*
+				 * Kept temporarily for uncommon object and include/eval slow
+				 * paths while their helper ABI is migrated.
+				 */
+				plan->instructions[i].source_opline_index =
+					record.source_position_id;
+			}
 			plan->required_runtime_capabilities |=
 				ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT;
 			if ((record.opcode >= ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS
