@@ -4516,8 +4516,14 @@ static void native_mir_test_build_result(
 	}
 	if (state->execute_mode) {
 		zval execution;
+		zend_native_compiler_stats compiler_stats;
 
 		array_init(&execution);
+		memset(&compiler_stats, 0, sizeof(compiler_stats));
+		if (state->product_compiler != NULL) {
+			zend_native_compiler_get_stats(
+				state->product_compiler, &compiler_stats);
+		}
 		add_assoc_string(&execution, "target",
 			(char *) zend_native_target_id(state->target));
 		add_assoc_string(&execution, "target_triple",
@@ -4586,6 +4592,56 @@ static void native_mir_test_build_result(
 			zend_native_code_has_unwind_info(state->native_code));
 		add_assoc_long(&execution, "image_size",
 			(zend_long) zend_native_image_size(state->native_image));
+		if (state->product_compiler != NULL) {
+			zval performance;
+
+			array_init(&performance);
+			add_assoc_long(&performance, "compile_ns",
+				(zend_long) compiler_stats.compile_ns);
+			add_assoc_long(&performance, "ssa_ns",
+				(zend_long) compiler_stats.ssa_ns);
+			add_assoc_long(&performance, "lowering_ns",
+				(zend_long) compiler_stats.lowering_ns);
+			add_assoc_long(&performance, "codegen_ns",
+				(zend_long) compiler_stats.codegen_ns);
+			add_assoc_long(&performance, "publish_ns",
+				(zend_long) compiler_stats.publish_ns);
+			add_assoc_long(&performance, "execute_ns",
+				(zend_long) compiler_stats.execute_ns);
+			add_assoc_long(&performance, "first_execute_ns",
+				(zend_long) compiler_stats.first_execute_ns);
+			add_assoc_long(&performance, "last_execute_ns",
+				(zend_long) compiler_stats.last_execute_ns);
+			add_assoc_long(&performance, "native_code_bytes",
+				(zend_long) compiler_stats.native_code_bytes);
+			add_assoc_long(&performance, "registered_codeunits",
+				(zend_long) compiler_stats.registered_codeunits);
+			add_assoc_long(&performance, "compiled_codeunits",
+				(zend_long) compiler_stats.native_codeunits);
+			add_assoc_long(&performance, "ready_codeunits",
+				(zend_long) compiler_stats.ready_codeunits);
+			add_assoc_long(&performance, "published_components",
+				(zend_long) compiler_stats.published_components);
+			add_assoc_long(&performance, "runtime_helper_sites",
+				(zend_long) compiler_stats.runtime_helper_sites);
+			add_assoc_long(&performance, "source_opline_decode_sites",
+				(zend_long) compiler_stats.source_opline_decode_sites);
+			add_assoc_long(&performance, "guard_sites",
+				(zend_long) compiler_stats.guard_sites);
+			add_assoc_long(&performance, "slow_path_sites",
+				(zend_long) compiler_stats.slow_path_sites);
+			add_assoc_long(&performance, "direct_call_sites",
+				(zend_long) compiler_stats.direct_call_sites);
+			add_assoc_long(&performance, "direct_call_frame_bytes",
+				(zend_long) compiler_stats.direct_call_frame_bytes);
+			add_assoc_long(
+				&performance, "inner_call_runtime_helper_calls", 0);
+			add_assoc_long(&performance, "inner_call_heap_allocations", 0);
+			add_assoc_long(&performance, "inner_call_catcher_boundaries", 0);
+			add_assoc_long(&performance, "executions",
+				(zend_long) compiler_stats.executions);
+			add_assoc_zval(&execution, "performance", &performance);
+		}
 		if (state->native_image != NULL) {
 			static const char hex[] = "0123456789abcdef";
 			const unsigned char *bytes =
