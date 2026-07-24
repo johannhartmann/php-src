@@ -590,17 +590,17 @@ const zend_native_runtime_helper *zend_native_runtime_helper_find(
 	const zend_native_runtime_api *runtime,
 	zend_native_runtime_helper_id id)
 {
-	uint32_t index;
+	uint32_t index = (uint32_t) id;
 
-	if (runtime == NULL || runtime->helpers == NULL) {
+	if (runtime == NULL || runtime->helpers == NULL || index == 0
+			|| index > runtime->helper_count) {
 		return NULL;
 	}
-	for (index = 0; index < runtime->helper_count; index++) {
-		if (runtime->helpers[index].id == (uint32_t) id) {
-			return &runtime->helpers[index];
-		}
+	index--;
+	if (runtime->helpers[index].id != (uint32_t) id) {
+		return NULL;
 	}
-	return NULL;
+	return &runtime->helpers[index];
 }
 
 zend_result zend_native_runtime_validate(
@@ -609,12 +609,12 @@ zend_result zend_native_runtime_validate(
 	zend_native_diagnostic *diagnostic)
 {
 	uint32_t index;
-	uint64_t seen[ZEND_NATIVE_RUNTIME_HELPER_WORD_COUNT] = {0};
 
 	if (runtime == NULL
 			|| runtime->abi_version != ZEND_NATIVE_RUNTIME_ABI_VERSION
 			|| runtime->struct_size < sizeof(zend_native_runtime_api)
-			|| runtime->helpers == NULL || runtime->helper_count == 0) {
+			|| runtime->helpers == NULL
+			|| runtime->helper_count != ZEND_NATIVE_HELPER_COUNT - 1) {
 		zend_native_runtime_diagnostic(diagnostic,
 			ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
 			"native runtime ABI version or size is incompatible");
@@ -630,20 +630,17 @@ zend_result zend_native_runtime_validate(
 	for (index = 0; index < runtime->helper_count; index++) {
 		const zend_native_runtime_helper *helper = &runtime->helpers[index];
 
-		if (helper->id == 0 || helper->id >= ZEND_NATIVE_HELPER_COUNT
+		if (helper->id != index + 1
 				|| helper->address == NULL
 				|| (helper->effects & ~ZEND_NATIVE_RUNTIME_EFFECT_ALL) != 0
 				|| ((helper->effects & ZEND_NATIVE_RUNTIME_EFFECT_REENTER) != 0
 					&& (helper->effects
-						& ZEND_NATIVE_RUNTIME_EFFECT_USERLAND) == 0)
-				|| (seen[helper->id / 64u]
-					& (UINT64_C(1) << (helper->id % 64u))) != 0) {
+						& ZEND_NATIVE_RUNTIME_EFFECT_USERLAND) == 0)) {
 			zend_native_runtime_diagnostic(diagnostic,
 				ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
 				"native runtime helper contract is invalid or contradictory");
 			return FAILURE;
 		}
-		seen[helper->id / 64u] |= UINT64_C(1) << (helper->id % 64u);
 	}
 	return SUCCESS;
 }
