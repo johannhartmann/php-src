@@ -144,6 +144,7 @@ struct zend_tpde_instruction {
 	_zend_native_direct_internal_call_descriptor *direct_internal_call;
 	zend_native_source_effect_kind source_effect;
 	zend_mir_scalar_type_mask source_effect_exact_type;
+	zend_native_runtime_helper_id runtime_helper;
 	zend_mir_executable_value_ref value_operation;
 	bool has_value_operation;
 	uint32_t source_opline_index;
