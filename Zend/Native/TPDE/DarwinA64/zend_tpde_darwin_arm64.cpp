@@ -1095,6 +1095,138 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		label_place(done);
 		return true;
 	};
+	auto slot_isset_empty = [&]() {
+		zend_tpde_slot_isset_empty layout;
+
+		if (!zend_tpde_slot_isset_empty_at(mir, &layout)
+				|| layout.operand_offset > UINT32_C(4095)
+				|| layout.result_offset > UINT32_C(4095)) {
+			return execute_value_operation(
+				ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV);
+		}
+		for (auto reg_id : register_file.used_regs()) {
+			::tpde::Reg reg{reg_id};
+			if (!register_file.is_fixed(reg)
+					&& register_file.reg_local_idx(reg)
+						!= INVALID_VAL_LOCAL_IDX) {
+				evict_reg(reg);
+			}
+		}
+		auto slow = text_writer.label_create();
+		auto truthy = text_writer.label_create();
+		auto falsey = text_writer.label_create();
+		auto store = text_writer.label_create();
+		auto done = text_writer.label_create();
+		auto [frame_ref, frame] =
+			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_reg = frame_scratch.cur_reg();
+		ScratchReg slot{this};
+		ScratchReg type{this};
+		ScratchReg value{this};
+		auto slot_reg = slot.alloc_gp();
+		auto type_reg = type.alloc_gp();
+		auto value_reg = value.alloc_gp();
+
+		ASM(ADDxi, slot_reg, frame_reg, layout.operand_offset);
+		load_off(type_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+		ASM(CMPwi, type_reg, IS_NULL);
+		generate_raw_jump(Jump::Jle, falsey);
+		ASM(CMPwi, type_reg, IS_REFERENCE);
+		generate_raw_jump(Jump::Jeq, slow);
+		if (!layout.is_empty) {
+			generate_raw_jump(Jump::jmp, truthy);
+		} else {
+			ASM(CMPwi, type_reg, IS_FALSE);
+			generate_raw_jump(Jump::Jeq, falsey);
+			ASM(CMPwi, type_reg, IS_TRUE);
+			generate_raw_jump(Jump::Jeq, truthy);
+			ASM(CMPwi, type_reg, IS_LONG);
+			auto not_long = text_writer.label_create();
+			generate_raw_jump(Jump::Jne, not_long);
+			load_off(value_reg, slot_reg, 0, 8);
+			generate_raw_jump(
+				Jump{Jump::Cbnz, value_reg, false}, truthy);
+			generate_raw_jump(Jump::jmp, falsey);
+
+			label_place(not_long);
+			ASM(CMPwi, type_reg, IS_STRING);
+			auto not_string = text_writer.label_create();
+			generate_raw_jump(Jump::Jne, not_string);
+			load_off(value_reg, slot_reg, 0, 8);
+			load_off(slot_reg, value_reg,
+				static_cast<uint32_t>(offsetof(zend_string, len)), 8);
+			generate_raw_jump(
+				Jump{Jump::Cbz, slot_reg, false}, falsey);
+			ASM(CMPxi, slot_reg, 1);
+			generate_raw_jump(Jump::Jne, truthy);
+			load_off(type_reg, value_reg,
+				static_cast<uint32_t>(offsetof(zend_string, val)), 1);
+			ASM(CMPwi, type_reg, '0');
+			generate_raw_jump(Jump::Jeq, falsey);
+			generate_raw_jump(Jump::jmp, truthy);
+
+			label_place(not_string);
+			ASM(CMPwi, type_reg, IS_ARRAY);
+			auto not_array = text_writer.label_create();
+			generate_raw_jump(Jump::Jne, not_array);
+			load_off(value_reg, slot_reg, 0, 8);
+			load_off(type_reg, value_reg,
+				static_cast<uint32_t>(
+					offsetof(HashTable, nNumOfElements)), 4);
+			generate_raw_jump(
+				Jump{Jump::Cbnz, type_reg, false}, truthy);
+			generate_raw_jump(Jump::jmp, falsey);
+
+			label_place(not_array);
+			ASM(CMPwi, type_reg, IS_RESOURCE);
+			auto not_resource = text_writer.label_create();
+			generate_raw_jump(Jump::Jne, not_resource);
+			load_off(value_reg, slot_reg, 0, 8);
+			load_off(type_reg, value_reg,
+				static_cast<uint32_t>(
+					offsetof(zend_resource, handle)), 4);
+			generate_raw_jump(
+				Jump{Jump::Cbnz, type_reg, false}, truthy);
+			generate_raw_jump(Jump::jmp, falsey);
+			label_place(not_resource);
+			generate_raw_jump(Jump::jmp, slow);
+		}
+
+		label_place(truthy);
+		materialize_constant(
+			static_cast<uint64_t>(
+				layout.is_empty ? IS_FALSE : IS_TRUE),
+			DarwinConfig::GP_BANK, 4, type_reg);
+		generate_raw_jump(Jump::jmp, store);
+		label_place(falsey);
+		materialize_constant(
+			static_cast<uint64_t>(
+				layout.is_empty ? IS_TRUE : IS_FALSE),
+			DarwinConfig::GP_BANK, 4, type_reg);
+		label_place(store);
+		ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
+		store_off(slot_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+			type_reg, 4);
+		generate_raw_jump(Jump::jmp, done);
+
+		label_place(slow);
+		slot.reset();
+		type.reset();
+		value.reset();
+		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
+		frame_argument.set_value(this, std::move(frame_scratch));
+		if (!execute_value_operation(
+				ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV,
+				&frame_argument)) {
+			return false;
+		}
+		label_place(done);
+		return true;
+	};
 	auto object_property_read = [&]() {
 		zend_tpde_object_property_read layout;
 
@@ -1474,8 +1606,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		case ZEND_MIR_OPCODE_VALUE_CAST:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_CAST);
 		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV:
-			return execute_value_operation(
-				ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV);
+			return slot_isset_empty();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_LIST:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_LIST);
 		case ZEND_MIR_OPCODE_VALUE_INCDEC:
@@ -1765,8 +1896,14 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					generate_raw_jump(Jump::jmp, falsey);
 					label_place(not_array);
 					ASM(CMPwi, type_reg, IS_RESOURCE);
-					generate_raw_jump(Jump::Jeq, truthy);
-					generate_raw_jump(Jump::jmp, slow);
+					generate_raw_jump(Jump::Jne, slow);
+					load_off(value_reg, slot_reg, 0, 8);
+					load_off(type_reg, value_reg,
+						static_cast<uint32_t>(
+							offsetof(zend_resource, handle)), 4);
+					generate_raw_jump(
+						Jump{Jump::Cbnz, type_reg, false}, truthy);
+					generate_raw_jump(Jump::jmp, falsey);
 
 					slot.reset();
 					type.reset();
