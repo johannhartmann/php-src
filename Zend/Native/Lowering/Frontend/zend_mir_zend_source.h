@@ -55,6 +55,7 @@ typedef struct _zend_mir_zend_source {
 	const void *call_ssa;
 	const void *script;
 	void *call_inventory;
+	void *phi_index;
 	zend_mir_op_array_id op_array_id;
 	zend_mir_symbol_id file_symbol_id;
 	uint32_t opcode_count;
