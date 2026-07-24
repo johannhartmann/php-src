@@ -2619,6 +2619,55 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 						ASM(CMP32ri, first_reg, IS_OBJECT);
 						generate_raw_jump(Jump::jne, slow_path);
 					} else if (call.direct_call->receiver_kind
+								== ZEND_NATIVE_INTERNAL_RECEIVER_CALLED_SCOPE
+							&& (call.direct_call->flags
+								& ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE)
+								!= 0) {
+						ASM(MOV64rm, first_reg,
+							FE_MEM(frame_reg, 0, FE_NOREG,
+								static_cast<int32_t>(
+									offsetof(zend_execute_data, This))));
+						ASM(MOV32rm, second_reg,
+							FE_MEM(frame_reg, 0, FE_NOREG,
+								static_cast<int32_t>(
+									offsetof(zend_execute_data, This)
+										+ offsetof(zval, u1.type_info))));
+						ASM(AND32ri, second_reg, Z_TYPE_MASK);
+						ASM(CMP32ri, second_reg, IS_OBJECT);
+						auto called_scope_ready = text_writer.label_create();
+						generate_raw_jump(Jump::jne, called_scope_ready);
+						ASM(MOV64rm, first_reg,
+							FE_MEM(first_reg, 0, FE_NOREG,
+								static_cast<int32_t>(
+									offsetof(zend_object, ce))));
+						label_place(called_scope_ready);
+						ASM(TEST64rr, first_reg, first_reg);
+						generate_raw_jump(Jump::je, slow_path);
+						ASM(MOV64rm, second_reg,
+							FE_MEM(cell_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_native_entry_cell, function))));
+						ASM(MOV64rm, second_reg,
+							FE_MEM(second_reg, 0, FE_NOREG,
+								static_cast<int32_t>(
+									offsetof(zend_op_array, scope))));
+						auto called_scope_compatible =
+							text_writer.label_create();
+						auto check_called_scope = text_writer.label_create();
+						label_place(check_called_scope);
+						ASM(CMP64rr, first_reg, second_reg);
+						generate_raw_jump(
+							Jump::je, called_scope_compatible);
+						ASM(MOV64rm, first_reg,
+							FE_MEM(first_reg, 0, FE_NOREG,
+								static_cast<int32_t>(
+									offsetof(zend_class_entry, parent))));
+						ASM(TEST64rr, first_reg, first_reg);
+						generate_raw_jump(
+							Jump::jne, check_called_scope);
+						generate_raw_jump(Jump::jmp, slow_path);
+						label_place(called_scope_compatible);
+					} else if (call.direct_call->receiver_kind
 							== ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT) {
 						const int32_t receiver_offset =
 							static_cast<int32_t>(
@@ -2817,11 +2866,36 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 							second_reg);
 					} else if (call.direct_call->receiver_kind
 							== ZEND_NATIVE_INTERNAL_RECEIVER_CALLED_SCOPE) {
-						ASM(MOV64rm, second_reg,
-							FE_MEM(descriptor_reg, 0, FE_NOREG,
-								static_cast<int32_t>(offsetof(
-									zend_native_direct_call_descriptor,
-									called_scope))));
+						if ((call.direct_call->flags
+								& ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE)
+								!= 0) {
+							ASM(MOV64rm, second_reg,
+								FE_MEM(frame_reg, 0, FE_NOREG,
+									static_cast<int32_t>(
+										offsetof(zend_execute_data, This))));
+							ASM(MOV32rm, first_reg,
+								FE_MEM(frame_reg, 0, FE_NOREG,
+									static_cast<int32_t>(
+										offsetof(zend_execute_data, This)
+											+ offsetof(zval, u1.type_info))));
+							ASM(AND32ri, first_reg, Z_TYPE_MASK);
+							ASM(CMP32ri, first_reg, IS_OBJECT);
+							auto called_scope_ready =
+								text_writer.label_create();
+							generate_raw_jump(
+								Jump::jne, called_scope_ready);
+							ASM(MOV64rm, second_reg,
+								FE_MEM(second_reg, 0, FE_NOREG,
+									static_cast<int32_t>(
+										offsetof(zend_object, ce))));
+							label_place(called_scope_ready);
+						} else {
+							ASM(MOV64rm, second_reg,
+								FE_MEM(descriptor_reg, 0, FE_NOREG,
+									static_cast<int32_t>(offsetof(
+										zend_native_direct_call_descriptor,
+										called_scope))));
+						}
 						ASM(MOV64mr,
 							FE_MEM(callee_reg, 0, FE_NOREG,
 								static_cast<int32_t>(
