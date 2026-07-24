@@ -4354,8 +4354,10 @@ static void native_mir_test_cleanup(native_mir_test_state *state)
 	}
 	for (index = state->detached_class_count; index-- > 0;) {
 		zval class_value;
+		zend_class_entry *class_entry = state->detached_classes[index];
 
-		ZVAL_PTR(&class_value, state->detached_classes[index]);
+		native_mir_test_cleanup_class_request_data(class_entry);
+		ZVAL_PTR(&class_value, class_entry);
 		destroy_zend_class(&class_value);
 	}
 	efree(state->detached_classes);
