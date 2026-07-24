@@ -14,8 +14,6 @@ extern "C" {
 		zend_execute_data *execute_data, uint32_t source_opline_index);
 
 ZEND_NATIVE_OBJECT_HELPER(zend_native_execute_object_declare_anon_class)
-ZEND_NATIVE_OBJECT_HELPER(zend_native_execute_object_assign_ref)
-ZEND_NATIVE_OBJECT_HELPER(zend_native_execute_object_assign_op)
 ZEND_NATIVE_OBJECT_HELPER(zend_native_execute_static_fetch_r)
 ZEND_NATIVE_OBJECT_HELPER(zend_native_execute_static_fetch_w)
 ZEND_NATIVE_OBJECT_HELPER(zend_native_execute_static_fetch_rw)
@@ -84,11 +82,19 @@ ZEND_NATIVE_EXPLICIT_OBJECT_HELPER(zend_native_execute_object_instanceof)
 ZEND_NATIVE_EXPLICIT_OBJECT_HELPER(zend_native_execute_object_clone)
 #undef ZEND_NATIVE_EXPLICIT_OBJECT_HELPER
 
-zend_native_status zend_native_execute_object_assign(
-	zend_execute_data *execute_data,
-	uint64_t op1, uint64_t op2, uint64_t result, uint64_t auxiliary,
-	uint32_t extended_value, uint32_t source_opcode,
-	uint32_t source_position_id);
+#define ZEND_NATIVE_EXPLICIT_OBJECT_ASSIGNMENT_HELPER(name) \
+	zend_native_status name( \
+		zend_execute_data *execute_data, \
+		uint64_t op1, uint64_t op2, uint64_t result, uint64_t auxiliary, \
+		uint32_t extended_value, uint32_t source_opcode, \
+		uint32_t source_position_id);
+ZEND_NATIVE_EXPLICIT_OBJECT_ASSIGNMENT_HELPER(
+	zend_native_execute_object_assign)
+ZEND_NATIVE_EXPLICIT_OBJECT_ASSIGNMENT_HELPER(
+	zend_native_execute_object_assign_ref)
+ZEND_NATIVE_EXPLICIT_OBJECT_ASSIGNMENT_HELPER(
+	zend_native_execute_object_assign_op)
+#undef ZEND_NATIVE_EXPLICIT_OBJECT_ASSIGNMENT_HELPER
 
 zend_native_status zend_native_throw_source_zval(
 	zend_execute_data *execute_data, uint64_t operand,
