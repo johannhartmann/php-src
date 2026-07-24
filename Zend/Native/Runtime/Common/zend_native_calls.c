@@ -55,14 +55,83 @@ static zval *zend_native_frameless_slot(
 	return ZEND_CALL_VAR(execute_data, operand.var);
 }
 
+static bool zend_native_frameless_decode_operand(
+	zend_execute_data *execute_data, uint64_t encoded,
+	uint8_t *operand_type, znode_op *operand)
+{
+	zend_mir_source_operand_kind kind =
+		(zend_mir_source_operand_kind) (encoded & UINT64_C(0xff));
+	zend_mir_source_slot_kind slot_kind =
+		(zend_mir_source_slot_kind) ((encoded >> 8) & UINT64_C(0xff));
+	uint32_t index = (uint32_t) (encoded >> 16);
+	uint32_t physical_slot;
+
+	if (execute_data == NULL || execute_data->func == NULL
+			|| !ZEND_USER_CODE(execute_data->func->type)
+			|| operand_type == NULL || operand == NULL) {
+		return false;
+	}
+	memset(operand, 0, sizeof(*operand));
+	if (kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+		*operand_type = IS_UNUSED;
+		return index == ZEND_MIR_ID_INVALID;
+	}
+	if (kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+		if (index >= execute_data->func->op_array.last_literal) {
+			return false;
+		}
+		*operand_type = IS_CONST;
+		operand->constant = index;
+		return true;
+	}
+	if (kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+			&& kind != ZEND_MIR_SOURCE_OPERAND_SSA) {
+		return false;
+	}
+	switch (slot_kind) {
+		case ZEND_MIR_SOURCE_SLOT_CV:
+			if (index >= (uint32_t) execute_data->func->op_array.last_var) {
+				return false;
+			}
+			*operand_type = IS_CV;
+			physical_slot = index;
+			break;
+		case ZEND_MIR_SOURCE_SLOT_TMP:
+			if (index >= execute_data->func->op_array.T) {
+				return false;
+			}
+			*operand_type = IS_TMP_VAR;
+			physical_slot =
+				(uint32_t) execute_data->func->op_array.last_var + index;
+			break;
+		case ZEND_MIR_SOURCE_SLOT_VAR:
+			if (index >= execute_data->func->op_array.T) {
+				return false;
+			}
+			*operand_type = IS_VAR;
+			physical_slot =
+				(uint32_t) execute_data->func->op_array.last_var + index;
+			break;
+		default:
+			return false;
+	}
+	if (physical_slot > (UINT32_MAX / sizeof(zval))
+			- (uint32_t) ZEND_CALL_FRAME_SLOT) {
+		return false;
+	}
+	operand->var =
+		((uint32_t) ZEND_CALL_FRAME_SLOT + physical_slot) * sizeof(zval);
+	return true;
+}
+
 static zval *zend_native_frameless_argument(
-	zend_execute_data *execute_data, const zend_op *opline,
-	uint8_t type, znode_op operand)
+	zend_execute_data *execute_data, uint8_t type, znode_op operand)
 {
 	zval *value;
 
 	if (type == IS_CONST) {
-		value = RT_CONSTANT(opline, operand);
+		value = operand.constant < execute_data->func->op_array.last_literal
+			? &execute_data->func->op_array.literals[operand.constant] : NULL;
 	} else {
 		value = zend_native_frameless_slot(execute_data, type, operand);
 	}
@@ -103,101 +172,138 @@ static void zend_native_frameless_consume(
 	}
 }
 
-zend_native_status zend_native_call_frameless_internal(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+static void zend_native_frameless_observed_call_explicit(
+	zend_execute_data *execute_data, zend_function *function,
+	zval *result, zval **arguments, uint32_t argument_count)
 {
-	const zend_op *opline;
-	const zend_op *op_data = NULL;
+	zend_execute_data *call = zend_vm_stack_push_call_frame_ex(
+		zend_vm_calc_used_stack(argument_count, function),
+		ZEND_CALL_NESTED_FUNCTION, function, argument_count, NULL);
+	uint32_t index;
+	uint32_t call_info;
+
+	call->prev_execute_data = execute_data;
+	for (index = 0; index < argument_count; index++) {
+		if (Z_ISUNDEF_P(arguments[index])) {
+			ZVAL_NULL(ZEND_CALL_VAR_NUM(call, index));
+		} else {
+			ZVAL_COPY_DEREF(ZEND_CALL_VAR_NUM(call, index), arguments[index]);
+		}
+	}
+	EG(current_execute_data) = call;
+	zend_observer_fcall_begin_prechecked(call, ZEND_OBSERVER_DATA(function));
+	function->internal_function.handler(call, result);
+	zend_observer_fcall_end(call, result);
+	EG(current_execute_data) = execute_data;
+	if (UNEXPECTED(EG(exception) != NULL)) {
+		zend_rethrow_exception(execute_data);
+	}
+	zend_vm_stack_free_args(call);
+	call_info = ZEND_CALL_INFO(call);
+	if (UNEXPECTED(call_info & ZEND_CALL_ALLOCATED)) {
+		zend_vm_stack_free_call_frame_ex(call_info, call);
+	} else {
+		EG(vm_stack_top) = (zval *) call;
+	}
+}
+
+zend_native_status zend_native_call_frameless_internal(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand, uint64_t auxiliary,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
+{
+	uint64_t encoded_arguments[3] = {op1, op2, auxiliary};
+	uint8_t argument_types[3];
+	znode_op argument_operands[3];
+	uint8_t result_type;
+	znode_op result_node;
 	zval *arguments[3] = {NULL, NULL, NULL};
 	zval *result;
 	uint32_t argument_count;
+	uint32_t index;
+	zend_native_status status = ZEND_NATIVE_RETURNED;
 
 	if (execute_data == NULL || execute_data->func == NULL
 			|| !ZEND_USER_CODE(execute_data->func->type)
-			|| source_opline_index >= execute_data->func->op_array.last) {
-		return ZEND_NATIVE_EXCEPTION;
-	}
-	opline = &execute_data->func->op_array.opcodes[source_opline_index];
-	if (!ZEND_OP_IS_FRAMELESS_ICALL(opline->opcode)
-			|| opline->extended_value >= zend_flf_count
-			|| zend_flf_handlers[opline->extended_value] == NULL
-			|| zend_flf_functions[opline->extended_value] == NULL
-			|| opline->result_type == IS_UNUSED
+			|| source_position_id >= execute_data->func->op_array.last
+			|| !ZEND_OP_IS_FRAMELESS_ICALL(source_opcode)
+			|| extended_value >= zend_flf_count
+			|| zend_flf_handlers[extended_value] == NULL
+			|| zend_flf_functions[extended_value] == NULL
+			|| !zend_native_frameless_decode_operand(
+				execute_data, result_operand, &result_type, &result_node)
+			|| result_type == IS_UNUSED
 			|| (result = zend_native_frameless_slot(
-				execute_data, opline->result_type, opline->result)) == NULL) {
+				execute_data, result_type, result_node)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	argument_count = ZEND_FLF_NUM_ARGS(opline->opcode);
-	if (argument_count == 3) {
-		if (source_opline_index + 1 >= execute_data->func->op_array.last
-				|| (op_data = opline + 1)->opcode != ZEND_OP_DATA) {
+	argument_count = ZEND_FLF_NUM_ARGS(source_opcode);
+	for (index = 0; index < 3; index++) {
+		if (!zend_native_frameless_decode_operand(
+				execute_data, encoded_arguments[index],
+				&argument_types[index], &argument_operands[index])
+				|| (index < argument_count
+					? argument_types[index] == IS_UNUSED
+					: argument_types[index] != IS_UNUSED)) {
 			return ZEND_NATIVE_EXCEPTION;
 		}
 	}
-	execute_data->opline = opline;
-	if (argument_count >= 1
-			&& (arguments[0] = zend_native_frameless_argument(
-				execute_data, opline, opline->op1_type, opline->op1)) == NULL) {
-		return ZEND_NATIVE_EXCEPTION;
-	}
-	if (argument_count >= 2
-			&& (arguments[1] = zend_native_frameless_argument(
-				execute_data, opline, opline->op2_type, opline->op2)) == NULL) {
-		zend_native_frameless_consume(
-			execute_data, opline->op1_type, opline->op1);
-		return ZEND_NATIVE_EXCEPTION;
-	}
-	if (argument_count == 3
-			&& (arguments[2] = zend_native_frameless_argument(
-				execute_data, op_data, op_data->op1_type, op_data->op1)) == NULL) {
-		zend_native_frameless_consume(
-			execute_data, opline->op1_type, opline->op1);
-		zend_native_frameless_consume(
-			execute_data, opline->op2_type, opline->op2);
-		return ZEND_NATIVE_EXCEPTION;
+	/*
+	 * The source position remains available for diagnostics, observers and
+	 * exceptions. No semantic operand is read from this zend_op.
+	 */
+	execute_data->opline =
+		&execute_data->func->op_array.opcodes[source_position_id];
+	for (index = 0; index < argument_count; index++) {
+		arguments[index] = zend_native_frameless_argument(
+			execute_data, argument_types[index], argument_operands[index]);
+		if (arguments[index] == NULL) {
+			status = ZEND_NATIVE_EXCEPTION;
+			goto cleanup;
+		}
 	}
 	ZVAL_NULL(result);
 #if !ZEND_VM_SPEC || ZEND_OBSERVER_ENABLED
 	if (ZEND_OBSERVER_ENABLED && UNEXPECTED(!zend_observer_handler_is_unobserved(
-			ZEND_OBSERVER_DATA(zend_flf_functions[opline->extended_value])))) {
-		zend_frameless_observed_call(execute_data);
+			ZEND_OBSERVER_DATA(zend_flf_functions[extended_value])))) {
+		zend_native_frameless_observed_call_explicit(
+			execute_data, zend_flf_functions[extended_value],
+			result, arguments, argument_count);
 	} else
 #endif
 	{
 		switch (argument_count) {
 			case 0:
 				((zend_frameless_function_0)
-					zend_flf_handlers[opline->extended_value])(result);
+					zend_flf_handlers[extended_value])(result);
 				break;
 			case 1:
 				((zend_frameless_function_1)
-					zend_flf_handlers[opline->extended_value])(
+					zend_flf_handlers[extended_value])(
 						result, arguments[0]);
 				break;
 			case 2:
 				((zend_frameless_function_2)
-					zend_flf_handlers[opline->extended_value])(
+					zend_flf_handlers[extended_value])(
 						result, arguments[0], arguments[1]);
 				break;
 			case 3:
 				((zend_frameless_function_3)
-					zend_flf_handlers[opline->extended_value])(
+					zend_flf_handlers[extended_value])(
 						result, arguments[0], arguments[1], arguments[2]);
 				break;
 			default:
 				return ZEND_NATIVE_EXCEPTION;
 		}
 	}
-	zend_native_frameless_consume(
-		execute_data, opline->op1_type, opline->op1);
-	zend_native_frameless_consume(
-		execute_data, opline->op2_type, opline->op2);
-	if (op_data != NULL) {
+
+cleanup:
+	for (index = 0; index < argument_count; index++) {
 		zend_native_frameless_consume(
-			execute_data, op_data->op1_type, op_data->op1);
+			execute_data, argument_types[index], argument_operands[index]);
 	}
-	return EG(exception) == NULL
-		? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+	return EG(exception) == NULL ? status : ZEND_NATIVE_EXCEPTION;
 }
 
 static void zend_native_reentry_lock(void)

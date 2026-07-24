@@ -167,7 +167,10 @@ zend_native_entry_cell *zend_native_reentry_resolve(
 	zend_function *function);
 zend_result zend_native_frame_prepare(zend_execute_data *execute_data);
 zend_native_status zend_native_call_frameless_internal(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result, uint64_t auxiliary,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
 
 /*
  * begin may extend the VM stack and initialize a real Zend call frame. The

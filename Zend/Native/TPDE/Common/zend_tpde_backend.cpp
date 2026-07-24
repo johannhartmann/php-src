@@ -770,6 +770,33 @@ bool initialize_plan(
 					plan, ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE);
 				continue;
 			}
+			if (record.opcode == ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL) {
+				const zend_mir_executable_value_ref &operation =
+					plan->instructions[i].value_operation;
+				if (operation.source_opcode < ZEND_FRAMELESS_ICALL_0
+						|| operation.source_opcode > ZEND_FRAMELESS_ICALL_3
+						|| operation.result.kind
+							== ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+						"frameless internal call lacks explicit operands");
+					return false;
+				}
+				const uint32_t argument_count =
+					operation.source_opcode - ZEND_FRAMELESS_ICALL_0;
+				const zend_mir_source_operand_ref arguments[] = {
+					operation.op1, operation.op2, operation.auxiliary};
+				for (uint32_t argument = 0; argument < 3; ++argument) {
+					if ((argument < argument_count)
+							== (arguments[argument].kind
+								== ZEND_MIR_SOURCE_OPERAND_UNUSED)) {
+						zend_tpde_set_diagnostic(diag,
+							ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+							"frameless internal call arity disagrees with operands");
+						return false;
+					}
+				}
+			}
 			const bool explicit_object_operands =
 				(record.opcode >= ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS
 					&& record.opcode <= ZEND_MIR_OPCODE_OBJECT_BIND_STATIC)
@@ -778,6 +805,8 @@ bool initialize_plan(
 					&& record.opcode
 						<= ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS_DELAYED);
 			if (!explicit_object_operands
+					&& record.opcode
+						!= ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL
 					&& (record.opcode < ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
 						|| record.opcode
 							> ZEND_MIR_OPCODE_DYNAMIC_INCLUDE_OR_EVAL)) {
