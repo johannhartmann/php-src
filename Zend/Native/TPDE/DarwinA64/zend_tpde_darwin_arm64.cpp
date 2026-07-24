@@ -277,7 +277,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
 		if (exact_type == ZEND_MIR_SCALAR_TYPE_F64) {
 			builder.add_arg(CallArg{node.operands[0]});
-			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_ECHO_DOUBLE));
+			builder.call(runtime_symbol(mir.runtime_helper));
 		} else {
 			if (exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
 				builder.add_arg(ValuePart{uint64_t{0}, 8, DarwinConfig::GP_BANK},
@@ -288,7 +288,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(ValuePart{
 				static_cast<uint32_t>(exact_type), 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_ECHO_INTEGER));
+			builder.call(runtime_symbol(mir.runtime_helper));
 		}
 		return true;
 	}
@@ -354,9 +354,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		result.set_modified();
 		return true;
 	};
-	auto execute_value_operation = [&](
-			zend_native_runtime_helper_id helper,
-			ValuePart *frame_argument = nullptr) {
+	auto execute_value_operation = [&](ValuePart *frame_argument = nullptr) {
+		const zend_native_runtime_helper_id helper = mir.runtime_helper;
 		const bool explicit_object_operands =
 			zend_tpde_helper_has_object_operand_payloads(helper);
 		const bool explicit_auxiliary =
@@ -452,15 +451,14 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			zend_mir_storage_id source_storage,
 			zend_mir_storage_id target_storage,
 			zend_mir_storage_id result_storage,
-			bool move_source,
-			zend_native_runtime_helper_id slow_helper) {
+			bool move_source) {
 		if (source_storage == ZEND_MIR_ID_INVALID
 				|| target_storage == ZEND_MIR_ID_INVALID
 				|| source_storage == target_storage
 				|| (result_storage != ZEND_MIR_ID_INVALID
 					&& (result_storage == source_storage
 						|| result_storage == target_storage))) {
-			return execute_value_operation(slow_helper);
+			return execute_value_operation();
 		}
 		const uint64_t source_offset =
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + source_storage) * sizeof(zval);
@@ -615,7 +613,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		probe.reset();
 		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
 		frame_argument.set_value(this, std::move(frame_scratch));
-		if (!execute_value_operation(slow_helper, &frame_argument)) {
+		if (!execute_value_operation(&frame_argument)) {
 			return false;
 		}
 		label_place(done);
@@ -629,16 +627,14 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		if (source_storage == ZEND_MIR_ID_INVALID
 				|| result_storage == ZEND_MIR_ID_INVALID
 				|| source_storage == result_storage) {
-			return execute_value_operation(
-				ZEND_NATIVE_HELPER_VALUE_COPY_TMP);
+			return execute_value_operation();
 		}
 		const uint64_t source_offset =
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + source_storage) * sizeof(zval);
 		const uint64_t result_offset =
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + result_storage) * sizeof(zval);
 		if (source_offset > UINT32_MAX || result_offset > UINT32_MAX) {
-			return execute_value_operation(
-				ZEND_NATIVE_HELPER_VALUE_COPY_TMP);
+			return execute_value_operation();
 		}
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
@@ -684,12 +680,12 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		const zend_mir_storage_id source_storage =
 			mir.value_operation.op1_storage_id;
 		if (source_storage == ZEND_MIR_ID_INVALID) {
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FREE);
+			return execute_value_operation();
 		}
 		const uint64_t source_offset =
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + source_storage) * sizeof(zval);
 		if (source_offset > UINT32_MAX) {
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FREE);
+			return execute_value_operation();
 		}
 		for (auto reg_id : register_file.used_regs()) {
 			::tpde::Reg reg{reg_id};
@@ -748,8 +744,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		probe.reset();
 		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
 		frame_argument.set_value(this, std::move(frame_scratch));
-		if (!execute_value_operation(
-				ZEND_NATIVE_HELPER_VALUE_FREE, &frame_argument)) {
+		if (!execute_value_operation(&frame_argument)) {
 			return false;
 		}
 		label_place(done);
@@ -759,8 +754,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		zend_tpde_array_read layout;
 
 		if (!zend_tpde_array_read_at(mir, &layout)) {
-			return execute_value_operation(
-				ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R);
+			return execute_value_operation();
 		}
 		for (auto reg_id : register_file.used_regs()) {
 			::tpde::Reg reg{reg_id};
@@ -946,8 +940,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		high_word.reset();
 		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
 		frame_argument.set_value(this, std::move(frame_scratch));
-		if (!execute_value_operation(
-				ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R, &frame_argument)) {
+		if (!execute_value_operation(&frame_argument)) {
 			return false;
 		}
 		label_place(done);
@@ -957,8 +950,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		zend_tpde_array_isset layout;
 
 		if (!zend_tpde_array_isset_at(mir, &layout)) {
-			return execute_value_operation(
-				ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM);
+			return execute_value_operation();
 		}
 		for (auto reg_id : register_file.used_regs()) {
 			::tpde::Reg reg{reg_id};
@@ -1156,9 +1148,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		key_kind.reset();
 		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
 		frame_argument.set_value(this, std::move(frame_scratch));
-		if (!execute_value_operation(
-				ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM,
-				&frame_argument)) {
+		if (!execute_value_operation(&frame_argument)) {
 			return false;
 		}
 		label_place(done);
@@ -1168,8 +1158,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		zend_tpde_packed_array_append layout;
 
 		if (!zend_tpde_packed_array_append_at(mir, &layout)) {
-			return execute_value_operation(
-				ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM);
+			return execute_value_operation();
 		}
 		for (auto reg_id : register_file.used_regs()) {
 			::tpde::Reg reg{reg_id};
@@ -1326,8 +1315,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		high_word.reset();
 		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
 		frame_argument.set_value(this, std::move(frame_scratch));
-		if (!execute_value_operation(
-				ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM, &frame_argument)) {
+		if (!execute_value_operation(&frame_argument)) {
 			return false;
 		}
 		label_place(done);
@@ -1337,8 +1325,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		zend_tpde_string_length layout;
 
 		if (!zend_tpde_string_length_at(mir, &layout)) {
-			return execute_value_operation(
-				ZEND_NATIVE_HELPER_VALUE_UNARY_OP);
+			return execute_value_operation();
 		}
 		for (auto reg_id : register_file.used_regs()) {
 			::tpde::Reg reg{reg_id};
@@ -1390,8 +1377,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		string.reset();
 		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
 		frame_argument.set_value(this, std::move(frame_scratch));
-		if (!execute_value_operation(
-				ZEND_NATIVE_HELPER_VALUE_UNARY_OP, &frame_argument)) {
+		if (!execute_value_operation(&frame_argument)) {
 			return false;
 		}
 		label_place(done);
@@ -1401,8 +1387,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		zend_tpde_string_identity layout;
 
 		if (!zend_tpde_string_identity_at(mir, &layout)) {
-			return execute_value_operation(
-				ZEND_NATIVE_HELPER_VALUE_BINARY_OP);
+			return execute_value_operation();
 		}
 		for (auto reg_id : register_file.used_regs()) {
 			::tpde::Reg reg{reg_id};
@@ -1469,8 +1454,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		right.reset();
 		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
 		frame_argument.set_value(this, std::move(frame_scratch));
-		if (!execute_value_operation(
-				ZEND_NATIVE_HELPER_VALUE_BINARY_OP, &frame_argument)) {
+		if (!execute_value_operation(&frame_argument)) {
 			return false;
 		}
 		label_place(done);
@@ -1482,8 +1466,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		if (!zend_tpde_slot_isset_empty_at(mir, &layout)
 				|| layout.operand_offset > UINT32_C(4095)
 				|| layout.result_offset > UINT32_C(4095)) {
-			return execute_value_operation(
-				ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV);
+			return execute_value_operation();
 		}
 		for (auto reg_id : register_file.used_regs()) {
 			::tpde::Reg reg{reg_id};
@@ -1600,9 +1583,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		value.reset();
 		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
 		frame_argument.set_value(this, std::move(frame_scratch));
-		if (!execute_value_operation(
-				ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV,
-				&frame_argument)) {
+		if (!execute_value_operation(&frame_argument)) {
 			return false;
 		}
 		label_place(done);
@@ -1612,8 +1593,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		zend_tpde_object_property_read layout;
 
 		if (!zend_tpde_object_property_read_at(mir, &layout)) {
-			return execute_value_operation(
-				ZEND_NATIVE_HELPER_OBJECT_FETCH_R);
+			return execute_value_operation();
 		}
 		for (auto reg_id : register_file.used_regs()) {
 			::tpde::Reg reg{reg_id};
@@ -1709,8 +1689,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		low_word.reset();
 		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
 		frame_argument.set_value(this, std::move(frame_scratch));
-		if (!execute_value_operation(
-				ZEND_NATIVE_HELPER_OBJECT_FETCH_R, &frame_argument)) {
+		if (!execute_value_operation(&frame_argument)) {
 			return false;
 		}
 		label_place(done);
@@ -1720,8 +1699,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		zend_tpde_object_property_write layout;
 
 		if (!zend_tpde_object_property_write_at(mir, &layout)) {
-			return execute_value_operation(
-				ZEND_NATIVE_HELPER_OBJECT_ASSIGN);
+			return execute_value_operation();
 		}
 		for (auto reg_id : register_file.used_regs()) {
 			::tpde::Reg reg{reg_id};
@@ -1862,8 +1840,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		low_word.reset();
 		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
 		frame_argument.set_value(this, std::move(frame_scratch));
-		if (!execute_value_operation(
-				ZEND_NATIVE_HELPER_OBJECT_ASSIGN, &frame_argument)) {
+		if (!execute_value_operation(&frame_argument)) {
 			return false;
 		}
 		label_place(done);
@@ -1885,41 +1862,27 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		if (record.opcode == ZEND_MIR_OPCODE_OBJECT_ASSIGN) {
 			return object_property_write();
 		}
-		zend_native_runtime_helper_id helper;
-		if (record.opcode >= ZEND_MIR_OPCODE_DYNAMIC_FETCH_R) {
-			helper = static_cast<zend_native_runtime_helper_id>(
-				static_cast<uint32_t>(record.opcode)
-					- static_cast<uint32_t>(ZEND_MIR_OPCODE_DYNAMIC_FETCH_R)
-					+ static_cast<uint32_t>(ZEND_NATIVE_HELPER_DYNAMIC_FETCH_R));
-		} else {
-			helper = static_cast<zend_native_runtime_helper_id>(
-				static_cast<uint32_t>(record.opcode)
-					- static_cast<uint32_t>(
-						ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS)
-					+ static_cast<uint32_t>(
-						ZEND_NATIVE_HELPER_OBJECT_DECLARE_ANON_CLASS));
-		}
-		return execute_value_operation(helper);
+		return execute_value_operation();
 	}
 	switch (record.opcode) {
 		case ZEND_MIR_OPCODE_VALUE_MAKE_REF:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_MAKE_REF);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN_REF:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ASSIGN_REF);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_SEPARATE:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_SEPARATE);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_COPY_TMP:
 			return copy_temporary_slot();
 		case ZEND_MIR_OPCODE_VALUE_FREE:
 			return free_temporary_slot();
 		case ZEND_MIR_OPCODE_VALUE_UNSET_CV:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_UNSET_CV);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_CHECK_VAR:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_CHECK_VAR);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN:
 			if (mir.value_operation.op1.slot_kind
 					!= ZEND_MIR_SOURCE_SLOT_CV) {
-				return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ASSIGN);
+				return execute_value_operation();
 			}
 			return copy_slot(
 				mir.value_operation.op2,
@@ -1927,8 +1890,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				mir.value_operation.op1_storage_id,
 				mir.value_operation.result_storage_id,
 				mir.value_operation.op2.slot_kind
-					== ZEND_MIR_SOURCE_SLOT_TMP,
-				ZEND_NATIVE_HELPER_VALUE_ASSIGN);
+					== ZEND_MIR_SOURCE_SLOT_TMP);
 		case ZEND_MIR_OPCODE_VALUE_QM_ASSIGN:
 			return copy_slot(
 				mir.value_operation.op1,
@@ -1938,65 +1900,63 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				mir.value_operation.op1.slot_kind
 					== ZEND_MIR_SOURCE_SLOT_TMP
 					|| mir.value_operation.op1.slot_kind
-						== ZEND_MIR_SOURCE_SLOT_VAR,
-				ZEND_NATIVE_HELPER_VALUE_QM_ASSIGN);
+						== ZEND_MIR_SOURCE_SLOT_VAR);
 		case ZEND_MIR_OPCODE_VALUE_CONCAT:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_CONCAT);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_FAST_CONCAT:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FAST_CONCAT);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_ROPE_INIT:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ROPE_INIT);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_ROPE_ADD:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ROPE_ADD);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_ROPE_END:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ROPE_END);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_INIT_ARRAY:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_ADD_ARRAY_ELEMENT:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_ELEMENT);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_ADD_ARRAY_UNPACK:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_UNPACK);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R:
 			return read_array();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_W:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_W);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_RW:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_RW);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_IS:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_IS);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_FUNC_ARG:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_FUNC_ARG);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_UNSET:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_UNSET);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM:
 			return append_packed_array();
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM_OP:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_OP);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_UNSET_DIM:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_UNSET_DIM);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
 			return isset_array();
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN_OP:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ASSIGN_OP);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_FE_FREE:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FE_FREE);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_BINARY_OP:
 			return string_identity();
 		case ZEND_MIR_OPCODE_VALUE_UNARY_OP:
 			return string_length();
 		case ZEND_MIR_OPCODE_VALUE_CAST:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_CAST);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV:
 			return slot_isset_empty();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_LIST:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_LIST);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_INCDEC:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_INCDEC);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE:
-			return execute_value_operation(
-				ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_ECHO:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ECHO);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_FUNC_NUM_ARGS: {
 			if (node.operands.size() != 1
 					|| record.representation != ZEND_MIR_REPRESENTATION_I64
@@ -2034,8 +1994,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			return true;
 		}
 		case ZEND_MIR_OPCODE_FUNC_GET_ARGS:
-			return execute_value_operation(
-				ZEND_NATIVE_HELPER_VALUE_FUNC_GET_ARGS);
+			return execute_value_operation();
 		case ZEND_MIR_OPCODE_COPY:
 		case ZEND_MIR_OPCODE_CANONICALIZE:
 		case ZEND_MIR_OPCODE_I1_TO_I64:
@@ -2362,8 +2321,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					builder.add_arg(ValuePart{operation.source_position_id, 4,
 						DarwinConfig::GP_BANK},
 						::tpde::CCAssignment{});
-					builder.call(runtime_symbol(
-						ZEND_NATIVE_HELPER_VALUE_COND_BRANCH));
+					builder.call(runtime_symbol(mir.runtime_helper));
 					ValuePart decision{DarwinConfig::GP_BANK};
 					builder.add_ret(
 						decision, ::tpde::CCAssignment{});
@@ -2417,11 +2375,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.add_arg(ValuePart{operation.source_position_id, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			const auto helper = record.opcode
-				== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
-				? ZEND_NATIVE_HELPER_VALUE_COND_BRANCH
-				: ZEND_NATIVE_HELPER_VALUE_ITERATOR_BRANCH;
-			builder.call(runtime_symbol(helper));
+			builder.call(runtime_symbol(mir.runtime_helper));
 			ValuePart decision{DarwinConfig::GP_BANK};
 			builder.add_ret(decision, ::tpde::CCAssignment{});
 			auto decision_reg = decision.cur_reg_or_load(this);
