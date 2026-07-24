@@ -10,6 +10,8 @@
 extern "C" {
 #endif
 
+struct _zend_op_array;
+
 typedef enum _zend_native_target {
 	ZEND_NATIVE_TARGET_DARWIN_ARM64 = 0,
 	ZEND_NATIVE_TARGET_LINUX_AMD64 = 1
@@ -142,6 +144,7 @@ zend_result zend_tpde_compile_module_w08(
 	const zend_native_source_effect *effects,
 	uint32_t effect_count,
 	uint32_t frame_argument_count,
+	const struct _zend_op_array *source_op_array,
 	zend_native_image **out_image,
 	zend_native_diagnostic *diag);
 
@@ -161,6 +164,7 @@ zend_result zend_tpde_compile_module_w08_with_runtime(
 	const zend_native_source_effect *effects,
 	uint32_t effect_count,
 	uint32_t frame_argument_count,
+	const struct _zend_op_array *source_op_array,
 	const struct _zend_native_runtime_api *runtime,
 	zend_native_image **out_image,
 	zend_native_diagnostic *diag);

@@ -12,6 +12,7 @@
 #include <cstdint>
 
 struct _zend_native_direct_call_descriptor;
+struct _zend_native_direct_internal_call_descriptor;
 
 static inline uint64_t zend_tpde_encode_value_operand(
 	const zend_mir_source_operand_ref &operand, uint32_t unused_payload)
@@ -59,6 +60,7 @@ struct zend_tpde_instruction {
 	uint32_t call_argument_offset;
 	uint32_t call_argument_count;
 	_zend_native_direct_call_descriptor *direct_call;
+	_zend_native_direct_internal_call_descriptor *direct_internal_call;
 	zend_native_source_effect_kind source_effect;
 	zend_mir_scalar_type_mask source_effect_exact_type;
 	zend_mir_executable_value_ref value_operation;
@@ -476,6 +478,8 @@ struct zend_tpde_plan {
 	uint32_t internal_binding_index_capacity;
 	_zend_native_direct_call_descriptor **direct_calls;
 	uint32_t direct_call_count;
+	_zend_native_direct_internal_call_descriptor **direct_internal_calls;
+	uint32_t direct_internal_call_count;
 	uint32_t argument_count;
 	uint64_t required_runtime_capabilities;
 	uint64_t required_runtime_helpers[ZEND_NATIVE_RUNTIME_HELPER_WORD_COUNT];
@@ -489,6 +493,7 @@ enum zend_native_image_symbol_kind : uint32_t {
 	ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_API = 4,
 	ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR = 5,
 	ZEND_NATIVE_IMAGE_SYMBOL_SOURCE = 6,
+	ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR = 7,
 };
 
 struct zend_native_image_symbol {
@@ -523,6 +528,8 @@ struct zend_native_image {
 	void (*destroy_target_state)(void *);
 	_zend_native_direct_call_descriptor **direct_calls;
 	uint32_t direct_call_count;
+	_zend_native_direct_internal_call_descriptor **direct_internal_calls;
+	uint32_t direct_internal_call_count;
 };
 
 struct zend_native_code {
@@ -539,6 +546,8 @@ struct zend_native_code {
 	void (*destroy_target_state)(void *);
 	_zend_native_direct_call_descriptor **direct_calls;
 	uint32_t direct_call_count;
+	_zend_native_direct_internal_call_descriptor **direct_internal_calls;
+	uint32_t direct_internal_call_count;
 };
 
 void zend_tpde_set_diagnostic(
