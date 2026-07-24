@@ -1405,25 +1405,32 @@ zend_native_status zend_native_value_verify_return_type(
 }
 
 static zend_native_status zend_native_value_concat_impl(
-	zend_execute_data *execute_data, uint32_t source_opline_index,
-	uint8_t expected_opcode)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id, uint8_t expected_opcode)
 {
-	const zend_op *opline = zend_native_value_opline(
-		execute_data, source_opline_index, expected_opcode);
+	zend_native_explicit_value_operation operation;
+	const zend_native_explicit_value_operation *opline = &operation;
 	zval *left;
 	zval *result;
 	zval *right;
 	zend_result status;
 
-	if (opline == NULL || opline->result_type == IS_UNUSED
+	if (!zend_native_value_init_explicit_operation(
+			execute_data, op1, op2, result_operand, extended_value,
+			source_opcode, source_position_id, expected_opcode, &operation)
+			|| opline->result_type == IS_UNUSED
 			|| (opline->op1_type != IS_CONST && opline->op1_type != IS_TMP_VAR
 				&& opline->op1_type != IS_CV)
 			|| (opline->op2_type != IS_CONST && opline->op2_type != IS_TMP_VAR
 				&& opline->op2_type != IS_CV)
-			|| (left = zend_native_value_read(
-				execute_data, opline, opline->op1_type, opline->op1)) == NULL
-			|| (right = zend_native_value_read(
-				execute_data, opline, opline->op2_type, opline->op2)) == NULL
+			|| (left = zend_native_value_read_r_explicit(
+				execute_data, opline,
+				opline->op1_type, opline->op1)) == NULL
+			|| (right = zend_native_value_read_r_explicit(
+				execute_data, opline,
+				opline->op2_type, opline->op2)) == NULL
 			|| (result = zend_native_value_slot(
 				execute_data, opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
@@ -1442,17 +1449,23 @@ static zend_native_status zend_native_value_concat_impl(
 }
 
 zend_native_status zend_native_value_concat(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
-	return zend_native_value_concat_impl(
-		execute_data, source_opline_index, ZEND_CONCAT);
+	return zend_native_value_concat_impl(execute_data, op1, op2, result,
+		extended_value, source_opcode, source_position_id, ZEND_CONCAT);
 }
 
 zend_native_status zend_native_value_fast_concat(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
-	return zend_native_value_concat_impl(
-		execute_data, source_opline_index, ZEND_FAST_CONCAT);
+	return zend_native_value_concat_impl(execute_data, op1, op2, result,
+		extended_value, source_opcode, source_position_id, ZEND_FAST_CONCAT);
 }
 
 static zend_string *zend_native_value_rope_piece(
