@@ -927,6 +927,7 @@ static bool zend_mir_value_emit_executable_operation(
 	zend_mir_instruction_id id)
 {
 	zend_mir_value_id operand;
+	zend_mir_value_id result;
 
 	memset(target, 0, sizeof(*target));
 	target->record.id = id;
@@ -941,6 +942,24 @@ static bool zend_mir_value_emit_executable_operation(
 	target->record.writes = operation->writes;
 	target->record.barriers = operation->barriers;
 	target->record.ownership_actions = operation->ownership_actions;
+	if (operation->opcode == ZEND_MIR_OPCODE_FUNC_NUM_ARGS) {
+		if (operation->result.kind != ZEND_MIR_SOURCE_OPERAND_SSA) {
+			return zend_mir_module_fail(module,
+				ZEND_MIR_DIAGNOSTIC_INVALID_ID,
+				"func_num_args lacks a scalar result");
+		}
+		result = zend_mir_value_from_original_ssa(
+			operation->result.ssa_variable_id);
+		if (!zend_mir_id_is_valid(result)
+				|| !zend_mir_module_find_value(module, result, NULL)) {
+			return zend_mir_module_fail(module,
+				ZEND_MIR_DIAGNOSTIC_INVALID_ID,
+				"func_num_args result is not a known scalar value");
+		}
+		target->record.representation = ZEND_MIR_REPRESENTATION_I64;
+		target->record.result_id = result;
+		return true;
+	}
 	if (operation->opcode != ZEND_MIR_OPCODE_ECHO_SCALAR) {
 		return true;
 	}

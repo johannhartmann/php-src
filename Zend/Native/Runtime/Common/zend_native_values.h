@@ -39,6 +39,16 @@ zend_native_status zend_native_value_echo(
 	uint64_t op1, uint64_t op2, uint64_t result,
 	uint32_t extended_value, uint32_t source_opcode,
 	uint32_t source_position_id);
+zend_native_status zend_native_value_func_num_args(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
+zend_native_status zend_native_value_func_get_args(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
 zend_native_status zend_native_value_unset_cv(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,

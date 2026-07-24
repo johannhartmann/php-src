@@ -390,6 +390,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			|| helper == ZEND_NATIVE_HELPER_VALUE_UNARY_OP
 			|| helper == ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE
 			|| helper == ZEND_NATIVE_HELPER_VALUE_ECHO
+			|| helper == ZEND_NATIVE_HELPER_VALUE_FUNC_GET_ARGS
 			|| helper == ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL
 			|| helper == ZEND_NATIVE_HELPER_CALL_FRAMELESS_INTERNAL
 			|| (helper >= ZEND_NATIVE_HELPER_OBJECT_DECLARE_ANON_CLASS
@@ -1879,6 +1880,45 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE);
 		case ZEND_MIR_OPCODE_VALUE_ECHO:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ECHO);
+		case ZEND_MIR_OPCODE_FUNC_NUM_ARGS: {
+			if (node.operands.size() != 1
+					|| record.representation != ZEND_MIR_REPRESENTATION_I64
+					|| !mir.has_value_operation
+					|| mir.value_operation.result_storage_id
+						== ZEND_MIR_ID_INVALID) {
+				return false;
+			}
+			const uint64_t result_offset =
+				(uint64_t{ZEND_CALL_FRAME_SLOT}
+					+ mir.value_operation.result_storage_id) * sizeof(zval);
+			if (result_offset > UINT32_MAX - offsetof(zval, u1.type_info)) {
+				return false;
+			}
+			auto [frame_ref, frame] = val_ref_single(node.operands[0]);
+			auto [result_ref, result] = result_ref_single(node.result);
+			auto frame_reg = frame.load_to_reg();
+			auto result_reg = result.alloc_reg();
+			load_off(result_reg, frame_reg,
+				static_cast<uint32_t>(
+					offsetof(zend_execute_data, This)
+						+ offsetof(zval, u2.num_args)),
+				4);
+			store_off(frame_reg, static_cast<uint32_t>(result_offset),
+				result_reg, 8);
+			ScratchReg type{this};
+			auto type_reg = type.alloc_gp();
+			materialize_constant(
+				IS_LONG, DarwinConfig::GP_BANK, 4, type_reg);
+			store_off(frame_reg,
+				static_cast<uint32_t>(
+					result_offset + offsetof(zval, u1.type_info)),
+				type_reg, 4);
+			result.set_modified();
+			return true;
+		}
+		case ZEND_MIR_OPCODE_FUNC_GET_ARGS:
+			return execute_value_operation(
+				ZEND_NATIVE_HELPER_VALUE_FUNC_GET_ARGS);
 		case ZEND_MIR_OPCODE_COPY:
 		case ZEND_MIR_OPCODE_CANONICALIZE:
 		case ZEND_MIR_OPCODE_I1_TO_I64:
@@ -2302,12 +2342,28 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 						? call.direct_call->expected_function
 							->op_array.num_args
 						: argument_count;
+				const uint32_t first_extra_argument_slot =
+					generated_fast_path
+						? static_cast<uint32_t>(
+							call.direct_call->expected_function
+								->op_array.last_var
+							+ call.direct_call->expected_function
+								->op_array.T)
+						: argument_count;
 				const uint32_t compiled_variable_count =
 					generated_fast_path
 						? static_cast<uint32_t>(
 							call.direct_call->expected_function
 								->op_array.last_var)
 						: argument_count;
+				bool release_extra_arguments = false;
+				for (uint32_t index = callee_argument_count;
+						generated_fast_path && index < argument_count; ++index) {
+					release_extra_arguments =
+						release_extra_arguments
+						|| !zend_mir_scalar_type_is_exact(
+							call.direct_call->arguments[index].exact_type);
+				}
 				const uint32_t frame_operand =
 					generated_fast_path ? argument_count : 0;
 				const uint32_t frame_use_count =
@@ -2727,7 +2783,9 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 										== ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS
 									|| call.direct_call->receiver_kind
 										== ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT)
-								? ZEND_CALL_HAS_THIS : 0),
+								? ZEND_CALL_HAS_THIS : 0)
+							| (release_extra_arguments
+								? ZEND_CALL_FREE_EXTRA_ARGS : 0),
 						4);
 					store_constant(callee_reg,
 						static_cast<uint32_t>(
@@ -2807,8 +2865,14 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					for (uint32_t index = 0; index < argument_count; ++index) {
 						auto [argument_ref, argument] =
 							val_ref_single(node.operands[index]);
+						const uint32_t frame_slot =
+							index < callee_argument_count
+								? index
+								: first_extra_argument_slot
+									+ index - callee_argument_count;
 						const uint32_t offset = static_cast<uint32_t>(
-							(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval));
+							(ZEND_CALL_FRAME_SLOT + frame_slot)
+								* sizeof(zval));
 						const zend_native_direct_call_argument &descriptor_argument =
 							call.direct_call->arguments[index];
 						if (zend_mir_scalar_type_is_exact(
@@ -3117,33 +3181,13 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					}
 
 					/*
-					 * Mirror zend_free_compiled_variables() without a helper for
-					 * shareable argument and local CVs. Check the whole frame
-					 * first so a later complex destructor cannot observe
-					 * partially released variables on the complete_fast path.
+					 * Mirror Zend's sequential frame cleanup. A decremented slot
+					 * is made UNDEF before advancing, so the canonical rare path
+					 * can resume safely if a later alias owns the final reference.
 					 */
 					{
 						ScratchReg counted{this};
 						auto counted_reg = counted.alloc_gp();
-						for (uint32_t index = 0;
-								index < compiled_variable_count; ++index) {
-							const uint32_t offset = static_cast<uint32_t>(
-								(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval));
-							load_off(probe_reg, post_callee_reg,
-								offset + static_cast<uint32_t>(
-									offsetof(zval, u1.type_info)), 4);
-							ASM(TSTwi, probe_reg,
-								IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-							auto checked = text_writer.label_create();
-							generate_raw_jump(Jump::Jeq, checked);
-							load_off(counted_reg, post_callee_reg, offset, 8);
-							load_off(probe_reg, counted_reg,
-								static_cast<uint32_t>(
-									offsetof(zend_refcounted_h, refcount)), 4);
-							ASM(CMPwi, probe_reg, 1);
-							generate_raw_jump(Jump::Jeq, complete_fast);
-							label_place(checked);
-						}
 						for (uint32_t index = 0;
 								index < compiled_variable_count; ++index) {
 							const uint32_t offset = static_cast<uint32_t>(
@@ -3159,11 +3203,49 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 							load_off(probe_reg, counted_reg,
 								static_cast<uint32_t>(
 									offsetof(zend_refcounted_h, refcount)), 4);
+							ASM(CMPwi, probe_reg, 1);
+							generate_raw_jump(Jump::Jeq, complete_fast);
 							ASM(SUBwi, probe_reg, probe_reg, 1);
 							store_off(counted_reg,
 								static_cast<uint32_t>(
 									offsetof(zend_refcounted_h, refcount)),
 								probe_reg, 4);
+							store_constant(post_callee_reg,
+								offset + static_cast<uint32_t>(
+									offsetof(zval, u1.type_info)),
+								IS_UNDEF, 4);
+							label_place(released);
+						}
+						for (uint32_t index = callee_argument_count;
+								index < argument_count; ++index) {
+							const uint32_t frame_slot =
+								first_extra_argument_slot
+									+ index - callee_argument_count;
+							const uint32_t offset = static_cast<uint32_t>(
+								(ZEND_CALL_FRAME_SLOT + frame_slot)
+									* sizeof(zval));
+							load_off(probe_reg, post_callee_reg,
+								offset + static_cast<uint32_t>(
+									offsetof(zval, u1.type_info)), 4);
+							ASM(TSTwi, probe_reg,
+								IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+							auto released = text_writer.label_create();
+							generate_raw_jump(Jump::Jeq, released);
+							load_off(counted_reg, post_callee_reg, offset, 8);
+							load_off(probe_reg, counted_reg,
+								static_cast<uint32_t>(
+									offsetof(zend_refcounted_h, refcount)), 4);
+							ASM(CMPwi, probe_reg, 1);
+							generate_raw_jump(Jump::Jeq, complete_fast);
+							ASM(SUBwi, probe_reg, probe_reg, 1);
+							store_off(counted_reg,
+								static_cast<uint32_t>(
+									offsetof(zend_refcounted_h, refcount)),
+								probe_reg, 4);
+							store_constant(post_callee_reg,
+								offset + static_cast<uint32_t>(
+									offsetof(zval, u1.type_info)),
+								IS_UNDEF, 4);
 							label_place(released);
 						}
 					}

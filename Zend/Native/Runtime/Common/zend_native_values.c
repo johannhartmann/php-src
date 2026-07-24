@@ -497,6 +497,133 @@ zend_native_status zend_native_value_echo(
 	return zend_native_value_status();
 }
 
+zend_native_status zend_native_value_func_num_args(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
+{
+	zend_native_explicit_value_operation operation;
+	zval *result;
+
+	if (!zend_native_value_init_explicit_operation(
+			execute_data, op1, op2, result_operand, extended_value,
+			source_opcode, source_position_id, ZEND_FUNC_NUM_ARGS, &operation)
+			|| operation.op1_type != IS_UNUSED
+			|| operation.op2_type != IS_UNUSED
+			|| operation.result_type == IS_UNUSED
+			|| (result = zend_native_value_slot(
+				execute_data, operation.result_type,
+				operation.result)) == NULL
+			|| !Z_ISUNDEF_P(result)) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	ZVAL_LONG(result, ZEND_CALL_NUM_ARGS(execute_data));
+	return ZEND_NATIVE_RETURNED;
+}
+
+zend_native_status zend_native_value_func_get_args(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
+{
+	zend_native_explicit_value_operation operation;
+	zval *result;
+	zval *skip_value;
+	uint32_t arg_count;
+	uint32_t first_extra_arg;
+	uint32_t result_size;
+	uint32_t skip;
+
+	if (!zend_native_value_init_explicit_operation(
+			execute_data, op1, op2, result_operand, extended_value,
+			source_opcode, source_position_id, ZEND_FUNC_GET_ARGS, &operation)
+			|| (operation.op1_type != IS_UNUSED
+				&& operation.op1_type != IS_CONST)
+			|| operation.op2_type != IS_UNUSED
+			|| operation.result_type == IS_UNUSED
+			|| (result = zend_native_value_slot(
+				execute_data, operation.result_type,
+				operation.result)) == NULL
+			|| !Z_ISUNDEF_P(result)) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+
+	arg_count = ZEND_CALL_NUM_ARGS(execute_data);
+	if (operation.op1_type == IS_CONST) {
+		skip_value = zend_native_value_read_explicit(
+			execute_data, &operation, operation.op1_type, operation.op1);
+		if (skip_value == NULL || Z_TYPE_P(skip_value) != IS_LONG) {
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		skip = (uint32_t) Z_LVAL_P(skip_value);
+		result_size = arg_count < skip ? 0 : arg_count - skip;
+	} else {
+		skip = 0;
+		result_size = arg_count;
+	}
+
+	if (result_size == 0) {
+		ZVAL_EMPTY_ARRAY(result);
+		return ZEND_NATIVE_RETURNED;
+	}
+
+	first_extra_arg = execute_data->func->op_array.num_args;
+	ZVAL_ARR(result, zend_new_array(result_size));
+	zend_hash_real_init_packed(Z_ARRVAL_P(result));
+	ZEND_HASH_FILL_PACKED(Z_ARRVAL_P(result)) {
+		zval *argument;
+		zval *value;
+		uint32_t index = skip;
+
+		argument = ZEND_CALL_VAR_NUM(execute_data, index);
+		if (arg_count > first_extra_arg) {
+			while (index < first_extra_arg) {
+				value = argument;
+				if (EXPECTED(Z_TYPE_INFO_P(value) != IS_UNDEF)) {
+					ZVAL_DEREF(value);
+					if (Z_OPT_REFCOUNTED_P(value)) {
+						Z_ADDREF_P(value);
+					}
+					ZEND_HASH_FILL_SET(value);
+				} else {
+					ZEND_HASH_FILL_SET_NULL();
+				}
+				ZEND_HASH_FILL_NEXT();
+				argument++;
+				index++;
+			}
+			if (skip < first_extra_arg) {
+				skip = 0;
+			} else {
+				skip -= first_extra_arg;
+			}
+			argument = ZEND_CALL_VAR_NUM(
+				execute_data,
+				execute_data->func->op_array.last_var
+					+ execute_data->func->op_array.T + skip);
+		}
+		while (index < arg_count) {
+			value = argument;
+			if (EXPECTED(Z_TYPE_INFO_P(value) != IS_UNDEF)) {
+				ZVAL_DEREF(value);
+				if (Z_OPT_REFCOUNTED_P(value)) {
+					Z_ADDREF_P(value);
+				}
+				ZEND_HASH_FILL_SET(value);
+			} else {
+				ZEND_HASH_FILL_SET_NULL();
+			}
+			ZEND_HASH_FILL_NEXT();
+			argument++;
+			index++;
+		}
+	} ZEND_HASH_FILL_END();
+	Z_ARRVAL_P(result)->nNumOfElements = result_size;
+	return ZEND_NATIVE_RETURNED;
+}
+
 zend_native_status zend_native_value_unset_cv(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result_operand,
