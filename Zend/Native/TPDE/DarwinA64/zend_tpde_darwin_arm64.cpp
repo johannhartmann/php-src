@@ -2421,6 +2421,42 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 						ASM(ANDwi, first_reg, first_reg, Z_TYPE_MASK);
 						ASM(CMPwi, first_reg, IS_OBJECT);
 						generate_raw_jump(Jump::Jne, slow_path);
+					} else if (call.direct_call->receiver_kind
+							== ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT) {
+						const uint32_t receiver_offset =
+							static_cast<uint32_t>(
+								(ZEND_CALL_FRAME_SLOT
+									+ call.direct_call->receiver_operand.index)
+								* sizeof(zval));
+						load_off(first_reg, frame_reg,
+							receiver_offset + static_cast<uint32_t>(
+								offsetof(zval, u1.type_info)), 4);
+						ASM(ANDwi, first_reg, first_reg, Z_TYPE_MASK);
+						ASM(CMPwi, first_reg, IS_OBJECT);
+						generate_raw_jump(Jump::Jne, slow_path);
+						load_off(first_reg, frame_reg, receiver_offset, 8);
+						load_off(first_reg, first_reg,
+							static_cast<uint32_t>(offsetof(zend_object, ce)), 8);
+						load_off(second_reg, cell_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_native_entry_cell, function)), 8);
+						load_off(second_reg, second_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_op_array, scope)), 8);
+						auto receiver_compatible = text_writer.label_create();
+						auto check_receiver_class = text_writer.label_create();
+						label_place(check_receiver_class);
+						ASM(CMPx, first_reg, second_reg);
+						generate_raw_jump(
+							Jump::Jeq, receiver_compatible);
+						load_off(first_reg, first_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_class_entry, parent)), 8);
+						ASM(CMPxi, first_reg, 0);
+						generate_raw_jump(
+							Jump::Jne, check_receiver_class);
+						generate_raw_jump(Jump::jmp, slow_path);
+						label_place(receiver_compatible);
 					}
 
 					/*
@@ -2556,6 +2592,17 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 							static_cast<uint32_t>(
 								offsetof(zend_execute_data, This)),
 							second_reg, 8);
+					} else if (call.direct_call->receiver_kind
+							== ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT) {
+						load_off(second_reg, frame_reg,
+							static_cast<uint32_t>(
+								(ZEND_CALL_FRAME_SLOT
+									+ call.direct_call->receiver_operand.index)
+								* sizeof(zval)), 8);
+						store_off(callee_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_execute_data, This)),
+							second_reg, 8);
 					} else {
 						store_constant(callee_reg,
 							static_cast<uint32_t>(
@@ -2566,8 +2613,10 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 							offsetof(zend_execute_data, This)
 								+ offsetof(zval, u1.type_info)),
 						ZEND_CALL_NESTED_FUNCTION
-							| (call.direct_call->receiver_kind
-									== ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS
+							| ((call.direct_call->receiver_kind
+										== ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS
+									|| call.direct_call->receiver_kind
+										== ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT)
 								? ZEND_CALL_HAS_THIS : 0),
 						4);
 					store_constant(callee_reg,
