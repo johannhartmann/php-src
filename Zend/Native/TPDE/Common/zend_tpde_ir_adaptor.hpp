@@ -503,12 +503,12 @@ public:
 			if (record.opcode
 					== ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
 				/*
-				 * A proven trivial descriptor materializes each exact scalar
-				 * argument in the generated Zend frame. The remaining
-				 * descriptor path enters a Zend frame, calls the returned native
-				 * entry directly, then leaves the frame. Keep repeated
-				 * frame/context uses explicit so TPDE's reference counts match
-				 * both generated paths.
+				 * A proven inline descriptor materializes exact scalar payloads
+				 * and boxed CV zvals in the generated Zend frame. Boxed CVs use
+				 * a frame operand because their authoritative representation
+				 * remains the canonical caller slot. Keep repeated frame/context
+				 * uses explicit so TPDE's reference counts match both generated
+				 * paths.
 				 */
 				uint32_t frame_use_count;
 				if (instruction.direct_call != nullptr) {
@@ -524,7 +524,12 @@ public:
 								operands_.push_back(INVALID_VALUE_REF);
 								continue;
 							}
-							IRValueRef value = value_ref(argument.value_id);
+							IRValueRef value =
+								zend_mir_scalar_type_is_exact(
+									instruction.direct_call
+										->arguments[n].exact_type)
+								? value_ref(argument.value_id)
+								: IRValueRef{FRAME_VALUE};
 							if (value == INVALID_VALUE_REF) {
 								valid_ = false;
 							}

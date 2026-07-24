@@ -1049,17 +1049,18 @@ bool initialize_plan(
 					if (zend_mir_id_is_valid(record.result_id)) {
 						const int32_t result_index =
 							zend_tpde_value_index(plan, record.result_id);
-						if (result_index < 0
-								|| !zend_mir_scalar_type_is_exact(
-									plan->values[result_index].exact_type)) {
+						if (result_index < 0) {
 							std::free(descriptor);
 							zend_tpde_set_diagnostic(diag,
 								ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-								"direct user-call result lacks an exact type");
+								"direct user-call result has no value record");
 							return false;
 						}
-						descriptor->result_type =
-							plan->values[result_index].exact_type;
+						if (zend_mir_scalar_type_is_exact(
+								plan->values[result_index].exact_type)) {
+							descriptor->result_type =
+								plan->values[result_index].exact_type;
+						}
 					}
 					for (uint32_t n = 0; n < site.arguments.count; ++n) {
 						zend_mir_call_argument_ref argument;
@@ -1085,20 +1086,24 @@ bool initialize_plan(
 							: ZEND_MIR_SCALAR_TYPE_NONE;
 						descriptor->arguments[n].source_operand =
 							argument.source_operand;
-						trivial_frame = trivial_frame
-							&& descriptor->arguments[n].mode
+						const bool inline_argument =
+							descriptor->arguments[n].mode
 								== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
-							&& zend_mir_scalar_type_is_exact(
-								descriptor->arguments[n].exact_type);
+							&& (zend_mir_scalar_type_is_exact(
+									descriptor->arguments[n].exact_type)
+								|| ((argument.source_operand.kind
+											== ZEND_MIR_SOURCE_OPERAND_SLOT
+										|| argument.source_operand.kind
+											== ZEND_MIR_SOURCE_OPERAND_SSA)
+									&& argument.source_operand.slot_kind
+										== ZEND_MIR_SOURCE_SLOT_CV));
+						trivial_frame = trivial_frame && inline_argument;
 					}
 					const bool inline_result =
 						(!zend_mir_id_is_valid(record.result_id)
 							&& descriptor->result_operand.kind
 								== ZEND_MIR_SOURCE_OPERAND_UNUSED)
-						|| ((descriptor->result_type
-								!= ZEND_MIR_SCALAR_TYPE_NONE
-							&& zend_mir_scalar_type_is_exact(
-								descriptor->result_type))
+						|| (zend_mir_id_is_valid(record.result_id)
 							&& (descriptor->result_operand.kind
 								== ZEND_MIR_SOURCE_OPERAND_SLOT
 								|| descriptor->result_operand.kind
