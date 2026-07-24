@@ -47,6 +47,34 @@ typedef struct _zend_native_compile_diagnostic {
 	char message[192];
 } zend_native_compile_diagnostic;
 
+/*
+ * Cumulative, read-only product metrics. They are collected at existing
+ * compile and outer execution boundaries, so generated inner calls do not
+ * acquire instrumentation branches or helper calls.
+ */
+typedef struct _zend_native_compiler_stats {
+	uint64_t compile_ns;
+	uint64_t ssa_ns;
+	uint64_t lowering_ns;
+	uint64_t codegen_ns;
+	uint64_t publish_ns;
+	uint64_t execute_ns;
+	uint64_t first_execute_ns;
+	uint64_t last_execute_ns;
+	uint64_t native_code_bytes;
+	uint64_t runtime_helper_sites;
+	uint64_t source_opline_decode_sites;
+	uint64_t guard_sites;
+	uint64_t slow_path_sites;
+	uint64_t direct_call_sites;
+	uint64_t direct_call_frame_bytes;
+	uint32_t registered_codeunits;
+	uint32_t native_codeunits;
+	uint32_t ready_codeunits;
+	uint32_t published_components;
+	uint32_t executions;
+} zend_native_compiler_stats;
+
 typedef void (*zend_native_compile_observer_t)(
 	void *context, const zend_native_compile_diagnostic *diagnostic);
 
@@ -99,6 +127,8 @@ ZEND_API uint32_t zend_native_compiler_codeunit_count(
 	const zend_native_compiler *compiler, zend_native_codeunit_state state);
 ZEND_API uint32_t zend_native_compiler_published_component_count(
 	const zend_native_compiler *compiler);
+ZEND_API void zend_native_compiler_get_stats(
+	const zend_native_compiler *compiler, zend_native_compiler_stats *stats);
 
 /*
  * Product execution compiles on demand, enters the product reentry scope,

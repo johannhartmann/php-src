@@ -81,6 +81,15 @@ typedef struct _zend_native_entry_cell zend_native_entry_cell;
 typedef struct _zend_native_internal_call_cell zend_native_internal_call_cell;
 struct _zend_native_runtime_api;
 
+typedef struct _zend_native_image_metrics {
+	uint64_t runtime_helper_sites;
+	uint64_t source_opline_decode_sites;
+	uint64_t guard_sites;
+	uint64_t slow_path_sites;
+	uint64_t direct_call_sites;
+	uint64_t direct_call_frame_bytes;
+} zend_native_image_metrics;
+
 typedef struct _zend_native_call_binding {
 	zend_mir_call_target_id target_id;
 	zend_native_entry_cell *entry_cell;
@@ -206,6 +215,8 @@ const char *zend_native_target_id(zend_native_target target);
 const char *zend_native_target_triple(zend_native_target target);
 size_t zend_native_image_size(const zend_native_image *image);
 const unsigned char *zend_native_image_bytes(const zend_native_image *image);
+void zend_native_image_get_metrics(
+	const zend_native_image *image, zend_native_image_metrics *metrics);
 bool zend_native_code_is_writable(const zend_native_code *code);
 bool zend_native_code_is_executable(const zend_native_code *code);
 bool zend_native_code_has_unwind_info(const zend_native_code *code);

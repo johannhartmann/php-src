@@ -16,6 +16,7 @@
 #include "Zend/Native/MIR/Core/zend_mir_module_internal.h"
 #include "Zend/Native/MIR/zend_mir.h"
 #include "Zend/Native/Runtime/Common/zend_native_runtime.h"
+#include "Zend/zend_hrtime.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -84,9 +85,13 @@ struct _zend_native_compiler {
 	zend_native_dynamic_compiler dynamic_compiler;
 	bool dynamic_compiler_active;
 	uint32_t published_component_count;
+	zend_native_compiler_stats stats;
 	bool failed;
 	zend_native_compile_diagnostic last_diagnostic;
 };
+
+static uint64_t zend_native_compiler_dynamic_codeunit_count(
+	uint32_t first_function_bucket, uint32_t first_class_bucket);
 
 static void zend_native_compiler_set_diagnostic(
 	zend_native_compiler *compiler,
@@ -1623,6 +1628,9 @@ static bool zend_native_compiler_compile_native_component(
 		memset(&diagnostic, 0, sizeof(diagnostic));
 		const zend_native_runtime_api *runtime = zend_native_runtime_get();
 		zend_native_runtime_api injected_runtime;
+		zend_hrtime_t phase_started;
+		zend_result compile_result;
+		zend_native_image_metrics image_metrics;
 		zend_native_runtime_helper injected_helpers[
 			ZEND_NATIVE_HELPER_COUNT - 1];
 		if (compiler->unavailable_runtime_helper != 0) {
@@ -1662,7 +1670,8 @@ static bool zend_native_compiler_compile_native_component(
 			injected_runtime.helpers = injected_helpers;
 			runtime = &injected_runtime;
 		}
-		if (zend_tpde_compile_module_w08_with_runtime(
+		phase_started = zend_hrtime();
+		compile_result = zend_tpde_compile_module_w08_with_runtime(
 				compiler->target,
 				zend_native_compiler_module_view(compiler, function->module),
 				bindings, binding_count,
@@ -1671,7 +1680,9 @@ static bool zend_native_compiler_compile_native_component(
 				function->op_array->num_args,
 				function->op_array,
 				runtime,
-				&function->image, &diagnostic) == FAILURE) {
+				&function->image, &diagnostic);
+		compiler->stats.codegen_ns += zend_hrtime() - phase_started;
+		if (compile_result == FAILURE) {
 			efree(bindings);
 			efree(internal_bindings);
 			zend_native_compiler_backend_failure(
@@ -1681,6 +1692,19 @@ static bool zend_native_compiler_compile_native_component(
 				compiler, component_id);
 			return false;
 		}
+		memset(&image_metrics, 0, sizeof(image_metrics));
+		zend_native_image_get_metrics(function->image, &image_metrics);
+		compiler->stats.native_code_bytes +=
+			zend_native_image_size(function->image);
+		compiler->stats.runtime_helper_sites +=
+			image_metrics.runtime_helper_sites;
+		compiler->stats.source_opline_decode_sites +=
+			image_metrics.source_opline_decode_sites;
+		compiler->stats.guard_sites += image_metrics.guard_sites;
+		compiler->stats.slow_path_sites += image_metrics.slow_path_sites;
+		compiler->stats.direct_call_sites += image_metrics.direct_call_sites;
+		compiler->stats.direct_call_frame_bytes +=
+			image_metrics.direct_call_frame_bytes;
 		function->publish_pending = true;
 		efree(bindings);
 		efree(internal_bindings);
@@ -1717,9 +1741,12 @@ binding_rejected:
 			continue;
 		}
 		memset(&diagnostic, 0, sizeof(diagnostic));
-		if (zend_native_publish_image(
+		zend_hrtime_t publish_started = zend_hrtime();
+		zend_result publish_result = zend_native_publish_image(
 				compiler->target, function->image, &function->code,
-				&diagnostic) == FAILURE) {
+				&diagnostic);
+		compiler->stats.publish_ns += zend_hrtime() - publish_started;
+		if (publish_result == FAILURE) {
 			zend_native_compiler_backend_failure(
 				compiler, product_diagnostic,
 				ZEND_NATIVE_COMPILE_PHASE_PUBLISH, &diagnostic);
@@ -1847,6 +1874,7 @@ zend_result zend_native_compiler_compile(
 	for (index = 0; index < compiler->function_count; index++) {
 		zend_native_compiled_function *function =
 			compiler->functions[index];
+		zend_hrtime_t phase_started;
 
 		if (function->state
 				== ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED
@@ -1856,12 +1884,23 @@ zend_result zend_native_compiler_compile(
 		if (function->entry_cell.state == ZEND_NATIVE_ENTRY_READY) {
 			continue;
 		}
-		if (function->module == NULL
-				&& (!zend_native_compiler_build_ssa(
-						compiler, function, diagnostic)
-					|| !zend_native_compiler_lower_function(
-						compiler, function, diagnostic))) {
-			goto failure;
+		if (function->module == NULL) {
+			bool phase_result;
+
+			phase_started = zend_hrtime();
+			phase_result = zend_native_compiler_build_ssa(
+				compiler, function, diagnostic);
+			compiler->stats.ssa_ns += zend_hrtime() - phase_started;
+			if (!phase_result) {
+				goto failure;
+			}
+			phase_started = zend_hrtime();
+			phase_result = zend_native_compiler_lower_function(
+				compiler, function, diagnostic);
+			compiler->stats.lowering_ns += zend_hrtime() - phase_started;
+			if (!phase_result) {
+				goto failure;
+			}
 		}
 		if (!function->call_sites_indexed
 				&& !zend_native_compiler_index_call_sites(function)) {
@@ -1924,9 +1963,8 @@ zend_result zend_native_compiler_compile_dynamic_component(
 	zend_native_compile_diagnostic *diagnostic)
 {
 	zend_native_compiled_function *compiled_root;
+	uint64_t registered_codeunits;
 
-	(void) first_function_bucket;
-	(void) first_class_bucket;
 	if (root_entry != NULL) {
 		*root_entry = NULL;
 	}
@@ -1939,6 +1977,8 @@ zend_result zend_native_compiler_compile_dynamic_component(
 			"invalid dynamic codeunit symbol-table snapshot");
 		return FAILURE;
 	}
+	registered_codeunits = zend_native_compiler_dynamic_codeunit_count(
+		first_function_bucket, first_class_bucket);
 	if (zend_native_compiler_compile(
 			compiler, root, NULL, 0, diagnostic) == FAILURE) {
 		return FAILURE;
@@ -1957,6 +1997,7 @@ zend_result zend_native_compiler_compile_dynamic_component(
 	if (root_entry != NULL) {
 		*root_entry = &compiled_root->entry_cell;
 	}
+	compiler->stats.registered_codeunits += registered_codeunits;
 	return SUCCESS;
 
 failure:
@@ -2071,6 +2112,64 @@ uint32_t zend_native_compiler_published_component_count(
 	return compiler != NULL ? compiler->published_component_count : 0;
 }
 
+void zend_native_compiler_get_stats(
+	const zend_native_compiler *compiler, zend_native_compiler_stats *stats)
+{
+	if (stats == NULL) {
+		return;
+	}
+	memset(stats, 0, sizeof(*stats));
+	if (compiler == NULL) {
+		return;
+	}
+	*stats = compiler->stats;
+	stats->native_codeunits = compiler->function_count;
+	stats->ready_codeunits = zend_native_compiler_codeunit_count(
+		compiler, ZEND_NATIVE_CODEUNIT_READY);
+	stats->published_components = compiler->published_component_count;
+}
+
+static uint64_t zend_native_compiler_dynamic_codeunit_count(
+	uint32_t first_function_bucket, uint32_t first_class_bucket)
+{
+	uint64_t count = 1;
+	uint32_t index;
+
+	for (index = first_function_bucket;
+			index < EG(function_table)->nNumUsed; index++) {
+		zval *value = &EG(function_table)->arData[index].val;
+		zend_function *function;
+
+		if (Z_TYPE_P(value) == IS_UNDEF) {
+			continue;
+		}
+		function = Z_PTR_P(value);
+		if (function != NULL && function->type == ZEND_USER_FUNCTION) {
+			count++;
+		}
+	}
+	for (index = first_class_bucket;
+			index < EG(class_table)->nNumUsed; index++) {
+		zval *value = &EG(class_table)->arData[index].val;
+		zend_class_entry *class_entry;
+		zend_function *function;
+
+		if (Z_TYPE_P(value) == IS_UNDEF) {
+			continue;
+		}
+		class_entry = Z_PTR_P(value);
+		if (class_entry == NULL) {
+			continue;
+		}
+		ZEND_HASH_FOREACH_PTR(&class_entry->function_table, function) {
+			if (function != NULL && function->type == ZEND_USER_FUNCTION) {
+				count++;
+			}
+		} ZEND_HASH_FOREACH_END();
+	}
+	return count;
+}
+
 static zend_result zend_native_compiler_enter(
 	zend_native_compiler *compiler)
 {
@@ -2150,6 +2249,8 @@ zend_native_status zend_native_compiler_execute(
 	uint32_t call_info = ZEND_CALL_NESTED_FUNCTION;
 	uint32_t index;
 	zend_native_status status;
+	zend_hrtime_t phase_started;
+	uint64_t elapsed;
 
 	if (diagnostic != NULL) {
 		memset(diagnostic, 0, sizeof(*diagnostic));
@@ -2168,9 +2269,11 @@ zend_native_status zend_native_compiler_execute(
 		}
 	}
 	memset(&compile_diagnostic, 0, sizeof(compile_diagnostic));
+	phase_started = zend_hrtime();
 	if (zend_native_compiler_compile(
 			compiler, &function->op_array, NULL, 0,
 			&compile_diagnostic) == FAILURE) {
+		compiler->stats.compile_ns += zend_hrtime() - phase_started;
 		if (diagnostic != NULL) {
 			diagnostic->code = ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR;
 			snprintf(diagnostic->message, sizeof(diagnostic->message), "%s",
@@ -2178,6 +2281,7 @@ zend_native_status zend_native_compiler_execute(
 		}
 		return ZEND_NATIVE_EXCEPTION;
 	}
+	compiler->stats.compile_ns += zend_hrtime() - phase_started;
 	if (zend_native_compiler_codeunit_state(compiler, function)
 			== ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED) {
 		if (diagnostic != NULL) {
@@ -2215,7 +2319,15 @@ zend_native_status zend_native_compiler_execute(
 	}
 	ZVAL_UNDEF(result);
 	zend_init_func_execute_data(frame, &function->op_array, result);
+	phase_started = zend_hrtime();
 	status = zend_native_execute_frame(entry_cell->code, frame, diagnostic);
+	elapsed = zend_hrtime() - phase_started;
+	compiler->stats.execute_ns += elapsed;
+	compiler->stats.last_execute_ns = elapsed;
+	if (compiler->stats.executions == 0) {
+		compiler->stats.first_execute_ns = elapsed;
+	}
+	compiler->stats.executions++;
 	EG(current_execute_data) = previous;
 	zend_vm_stack_free_call_frame(frame);
 	if (!Z_ISUNDEF(receiver)) {
@@ -2297,6 +2409,8 @@ zend_native_compiler *zend_native_compiler_create(
 		efree(compiler);
 		return NULL;
 	}
+	compiler->stats.registered_codeunits =
+		zend_hash_num_elements(&compiler->source_op_arrays_by_opcodes);
 	if (!zend_native_compiler_index_script_functions(compiler)) {
 		zend_native_compiler_set_diagnostic(
 			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,

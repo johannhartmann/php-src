@@ -661,6 +661,7 @@ struct zend_native_image {
 	uint32_t symbol_binding_capacity;
 	uint32_t slot_count;
 	uint32_t argument_count;
+	zend_native_image_metrics metrics;
 	void *target_state;
 	void (*destroy_target_state)(void *);
 	_zend_native_direct_call_descriptor **direct_calls;
