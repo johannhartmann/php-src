@@ -499,6 +499,52 @@ zend_native_status zend_native_value_free(
 	return zend_native_value_status();
 }
 
+zend_native_status zend_native_value_echo(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
+{
+	zend_native_explicit_value_operation operation;
+	zval *value;
+
+	if (!zend_native_value_init_explicit_operation(
+			execute_data, op1, op2, result, extended_value, source_opcode,
+			source_position_id, ZEND_ECHO, &operation)
+			|| operation.op2_type != IS_UNUSED
+			|| operation.result_type != IS_UNUSED
+			|| (value = zend_native_value_read_explicit(
+				execute_data, &operation,
+				operation.op1_type, operation.op1)) == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	if (Z_TYPE_P(value) == IS_STRING) {
+		if (Z_STRLEN_P(value) != 0) {
+			zend_write(Z_STRVAL_P(value), Z_STRLEN_P(value));
+		}
+	} else {
+		zend_string *string = zval_get_string_func(value);
+
+		if (ZSTR_LEN(string) != 0) {
+			zend_write(ZSTR_VAL(string), ZSTR_LEN(string));
+		} else if (operation.op1_type == IS_CV
+				&& UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
+			uint32_t variable_index = EX_VAR_TO_NUM(operation.op1.var);
+
+			if (variable_index >= execute_data->func->op_array.last_var) {
+				zend_string_release_ex(string, false);
+				return ZEND_NATIVE_EXCEPTION;
+			}
+			zend_error(E_WARNING, "Undefined variable $%s",
+				ZSTR_VAL(execute_data->func->op_array.vars[variable_index]));
+		}
+		zend_string_release_ex(string, false);
+	}
+	zend_native_value_consume_operand(
+		execute_data, operation.op1_type, operation.op1, NULL);
+	return zend_native_value_status();
+}
+
 zend_native_status zend_native_value_unset_cv(
 	zend_execute_data *execute_data, uint32_t source_opline_index)
 {
