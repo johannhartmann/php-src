@@ -1460,6 +1460,85 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		label_place(done);
 		return true;
 	};
+	auto string_identity = [&]() {
+		zend_tpde_string_identity layout;
+
+		if (!zend_tpde_string_identity_at(mir, &layout)) {
+			return execute_value_operation(
+				ZEND_NATIVE_HELPER_VALUE_BINARY_OP);
+		}
+		for (auto reg_id : register_file.used_regs()) {
+			::tpde::Reg reg{reg_id};
+			if (!register_file.is_fixed(reg)
+					&& register_file.reg_local_idx(reg)
+						!= INVALID_VAL_LOCAL_IDX) {
+				evict_reg(reg);
+			}
+		}
+		auto slow = text_writer.label_create();
+		auto done = text_writer.label_create();
+		auto [frame_ref, frame] =
+			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_reg = frame_scratch.cur_reg();
+		ScratchReg slot{this};
+		ScratchReg type{this};
+		ScratchReg left{this};
+		ScratchReg right{this};
+		auto slot_reg = slot.alloc_gp();
+		auto type_reg = type.alloc_gp();
+		auto left_reg = left.alloc_gp();
+		auto right_reg = right.alloc_gp();
+
+		ASM(ADDxi, slot_reg, frame_reg, layout.left_offset);
+		load_off(type_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+		ASM(CMPwi, type_reg, IS_STRING);
+		generate_raw_jump(Jump::Jne, slow);
+		load_off(left_reg, slot_reg, 0, 8);
+
+		ASM(ADDxi, slot_reg, frame_reg, layout.right_offset);
+		load_off(type_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+		ASM(CMPwi, type_reg, IS_STRING);
+		generate_raw_jump(Jump::Jne, slow);
+		load_off(right_reg, slot_reg, 0, 8);
+		ASM(CMPx, left_reg, right_reg);
+		generate_raw_jump(Jump::Jne, slow);
+
+		ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
+		load_off(type_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(CMPwi, type_reg, IS_UNDEF);
+		generate_raw_jump(Jump::Jne, slow);
+		materialize_constant(
+			layout.inverted ? uint64_t{0} : uint64_t{1},
+			DarwinConfig::GP_BANK, 8, left_reg);
+		materialize_constant(
+			layout.inverted ? IS_FALSE : IS_TRUE,
+			DarwinConfig::GP_BANK, 4, type_reg);
+		store_off(slot_reg, 0, left_reg, 8);
+		store_off(slot_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+			type_reg, 4);
+		generate_raw_jump(Jump::jmp, done);
+
+		label_place(slow);
+		slot.reset();
+		type.reset();
+		left.reset();
+		right.reset();
+		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
+		frame_argument.set_value(this, std::move(frame_scratch));
+		if (!execute_value_operation(
+				ZEND_NATIVE_HELPER_VALUE_BINARY_OP, &frame_argument)) {
+			return false;
+		}
+		label_place(done);
+		return true;
+	};
 	auto slot_isset_empty = [&]() {
 		zend_tpde_slot_isset_empty layout;
 
@@ -1965,7 +2044,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		case ZEND_MIR_OPCODE_VALUE_FE_FREE:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FE_FREE);
 		case ZEND_MIR_OPCODE_VALUE_BINARY_OP:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_BINARY_OP);
+			return string_identity();
 		case ZEND_MIR_OPCODE_VALUE_UNARY_OP:
 			return string_length();
 		case ZEND_MIR_OPCODE_VALUE_CAST:
