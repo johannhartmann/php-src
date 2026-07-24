@@ -394,7 +394,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			|| helper == ZEND_NATIVE_HELPER_OBJECT_FETCH_THIS
 			|| (helper >= ZEND_NATIVE_HELPER_OBJECT_FETCH_R
 				&& helper <= ZEND_NATIVE_HELPER_OBJECT_FETCH_UNSET)
-			|| helper == ZEND_NATIVE_HELPER_OBJECT_ASSIGN
+			|| (helper >= ZEND_NATIVE_HELPER_OBJECT_ASSIGN
+				&& helper <= ZEND_NATIVE_HELPER_OBJECT_ASSIGN_OP)
 			|| (helper >= ZEND_NATIVE_HELPER_OBJECT_UNSET
 				&& helper <= ZEND_NATIVE_HELPER_OBJECT_POST_DEC)
 			|| helper == ZEND_NATIVE_HELPER_OBJECT_INSTANCEOF
@@ -408,7 +409,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			helper == ZEND_NATIVE_HELPER_OBJECT_FETCH_THIS
 			|| (helper >= ZEND_NATIVE_HELPER_OBJECT_FETCH_R
 				&& helper <= ZEND_NATIVE_HELPER_OBJECT_FETCH_UNSET)
-			|| helper == ZEND_NATIVE_HELPER_OBJECT_ASSIGN
+			|| (helper >= ZEND_NATIVE_HELPER_OBJECT_ASSIGN
+				&& helper <= ZEND_NATIVE_HELPER_OBJECT_ASSIGN_OP)
 			|| (helper >= ZEND_NATIVE_HELPER_OBJECT_UNSET
 				&& helper <= ZEND_NATIVE_HELPER_OBJECT_POST_DEC)
 			|| helper == ZEND_NATIVE_HELPER_OBJECT_INSTANCEOF
@@ -416,7 +418,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		const bool explicit_auxiliary =
 			helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM
 			|| helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_OP
-			|| helper == ZEND_NATIVE_HELPER_OBJECT_ASSIGN
+			|| (helper >= ZEND_NATIVE_HELPER_OBJECT_ASSIGN
+				&& helper <= ZEND_NATIVE_HELPER_OBJECT_ASSIGN_OP)
 			|| (helper >= ZEND_NATIVE_HELPER_DYNAMIC_FETCH_R
 				&& helper
 					<= ZEND_NATIVE_HELPER_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT);

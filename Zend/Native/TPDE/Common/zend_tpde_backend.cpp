@@ -774,7 +774,8 @@ bool initialize_plan(
 				record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_THIS
 				|| (record.opcode >= ZEND_MIR_OPCODE_OBJECT_FETCH_R
 					&& record.opcode <= ZEND_MIR_OPCODE_OBJECT_FETCH_UNSET)
-				|| record.opcode == ZEND_MIR_OPCODE_OBJECT_ASSIGN
+				|| (record.opcode >= ZEND_MIR_OPCODE_OBJECT_ASSIGN
+					&& record.opcode <= ZEND_MIR_OPCODE_OBJECT_ASSIGN_OP)
 				|| (record.opcode >= ZEND_MIR_OPCODE_OBJECT_UNSET
 					&& record.opcode <= ZEND_MIR_OPCODE_OBJECT_POST_DEC)
 				|| record.opcode == ZEND_MIR_OPCODE_OBJECT_INSTANCEOF
