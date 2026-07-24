@@ -85,6 +85,12 @@ struct zend_tpde_value_condition {
 	uint32_t operand_offset;
 };
 
+struct zend_tpde_object_property_read {
+	uint32_t receiver_offset;
+	uint32_t result_offset;
+	uint32_t cache_offset;
+};
+
 /*
  * Keep the semantic fast-path selection target-neutral.  Target backends only
  * encode the guards and loads; they do not independently decide which MIR
@@ -287,6 +293,49 @@ static inline bool zend_tpde_value_condition_at(
 		return false;
 	}
 	out->operand_offset = static_cast<uint32_t>(operand_offset);
+	return true;
+}
+
+static inline bool zend_tpde_object_property_read_at(
+	const zend_tpde_instruction &instruction,
+	zend_tpde_object_property_read *out)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	uint64_t receiver_offset;
+	uint64_t result_offset;
+	uint32_t cache_offset;
+
+	if (out == nullptr || !instruction.has_value_operation
+			|| operation.opcode != ZEND_MIR_OPCODE_OBJECT_FETCH_R
+			|| operation.source_opcode != ZEND_FETCH_OBJ_R
+			|| (operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+				&& operation.op1.kind
+					!= ZEND_MIR_SOURCE_OPERAND_UNUSED)
+			|| operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| operation.result_storage_id == ZEND_MIR_ID_INVALID
+			|| (operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
+				&& (operation.op1_storage_id == ZEND_MIR_ID_INVALID
+					|| operation.op1_storage_id
+						== operation.result_storage_id))) {
+		return false;
+	}
+	receiver_offset =
+		operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+		? offsetof(zend_execute_data, This)
+		: (uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
+			* sizeof(zval);
+	result_offset =
+		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
+			* sizeof(zval);
+	cache_offset = operation.extended_value & ~ZEND_FETCH_REF;
+	if (receiver_offset > UINT32_MAX || result_offset > UINT32_MAX
+			|| cache_offset > UINT32_MAX - 3 * sizeof(void *)) {
+		return false;
+	}
+	out->receiver_offset = static_cast<uint32_t>(receiver_offset);
+	out->result_offset = static_cast<uint32_t>(result_offset);
+	out->cache_offset = cache_offset;
 	return true;
 }
 
