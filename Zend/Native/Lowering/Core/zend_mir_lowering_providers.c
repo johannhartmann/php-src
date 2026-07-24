@@ -470,6 +470,7 @@ static bool zend_mir_w11_prepare_overlay(
 		bool value_fragment = zend_mir_w03_value_fragment(
 			integration, opcode);
 		bool call_fragment = zend_mir_w05_call_fragment(opcode);
+		bool scalar_frame_observation = opcode == ZEND_FUNC_NUM_ARGS;
 
 		if (opcode == ZEND_RETURN_BY_REF) {
 			continue;
@@ -481,12 +482,21 @@ static bool zend_mir_w11_prepare_overlay(
 		}
 		integration->w11_suppressed_opcodes[index] = 1;
 		if (value_fragment || call_fragment) {
+			if (scalar_frame_observation
+					&& ssa_op->result_def >= 0
+					&& ssa_op->result_def < ssa->vars_count) {
+				integration->w11_ssa_replacements[ssa_op->result_def] = -1;
+				integration->w11_fact_modes[ssa_op->result_def] =
+					ZEND_MIR_W11_FACT_ORIGINAL;
+			}
 			zend_mir_w11_hide_definition(
 				integration, ssa_op->op1_def, ssa_op->op1_use);
 			zend_mir_w11_hide_definition(
 				integration, ssa_op->op2_def, ssa_op->op2_use);
-			zend_mir_w11_hide_definition(
-				integration, ssa_op->result_def, ssa_op->result_use);
+			if (!scalar_frame_observation) {
+				zend_mir_w11_hide_definition(
+					integration, ssa_op->result_def, ssa_op->result_use);
+			}
 		}
 	}
 
@@ -590,11 +600,17 @@ static bool zend_mir_w11_prepare_overlay(
 	}
 	for (index = 0; index < (uint32_t) ssa->vars_count; index++) {
 		zend_mir_value_fact_ref ignored;
+		int definition = ssa->vars[index].definition;
+		bool scalar_frame_observation =
+			definition >= 0
+			&& (uint32_t) definition < op_array->last
+			&& op_array->opcodes[definition].opcode == ZEND_FUNC_NUM_ARGS;
 		if (integration->w11_fact_modes[index] == ZEND_MIR_W11_FACT_NULL
 				|| (integration->w11_fact_modes[index]
 						== ZEND_MIR_W11_FACT_ORIGINAL
-					&& zend_mir_frontend_fact_for_ssa(
-						op_array, ssa, index, &ignored))) {
+					&& (scalar_frame_observation
+						|| zend_mir_frontend_fact_for_ssa(
+							op_array, ssa, index, &ignored)))) {
 			if (integration->w11_fact_count == ZEND_MIR_ID_MAX) {
 				return false;
 			}
@@ -1328,11 +1344,23 @@ static bool zend_mir_w11_fact_for_ssa(
 	op_array = zend_mir_source_op_array(&integration->source);
 	ssa = zend_mir_source_ssa(&integration->source);
 	if (mode == ZEND_MIR_W11_FACT_ORIGINAL) {
+		definition = ssa->vars[ssa_variable_id].definition;
+		if (definition >= 0 && (uint32_t) definition < op_array->last
+				&& op_array->opcodes[definition].opcode
+					== ZEND_FUNC_NUM_ARGS) {
+			memset(out, 0, sizeof(*out));
+			out->value_id =
+				zend_mir_value_from_original_ssa(ssa_variable_id);
+			out->exact_type = ZEND_MIR_SCALAR_TYPE_I64;
+			out->flags = ZEND_MIR_VALUE_FACT_NON_REFCOUNTED;
+			out->provenance = ZEND_MIR_FACT_PROVENANCE_TYPE_ANALYSIS;
+			out->provenance_source_position_id = (uint32_t) definition;
+			return zend_mir_id_is_valid(out->value_id);
+		}
 		if (!zend_mir_frontend_fact_for_ssa(
 				op_array, ssa, ssa_variable_id, out)) {
 			return false;
 		}
-		definition = ssa->vars[ssa_variable_id].definition;
 		if (definition >= 0 && (uint32_t) definition < op_array->last
 				&& zend_mir_w05_call_completion_fragment(
 					op_array->opcodes[definition].opcode)) {

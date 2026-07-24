@@ -465,6 +465,10 @@ zend_native_runtime_helper_id executable_value_helper(zend_mir_opcode opcode) {
 			return ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE;
 		case ZEND_MIR_OPCODE_VALUE_ECHO:
 			return ZEND_NATIVE_HELPER_VALUE_ECHO;
+		case ZEND_MIR_OPCODE_FUNC_NUM_ARGS:
+			return ZEND_NATIVE_HELPER_VALUE_FUNC_NUM_ARGS;
+		case ZEND_MIR_OPCODE_FUNC_GET_ARGS:
+			return ZEND_NATIVE_HELPER_VALUE_FUNC_GET_ARGS;
 		case ZEND_MIR_OPCODE_OBJECT_DECLARE_FUNCTION:
 			return ZEND_NATIVE_HELPER_OBJECT_DECLARE_FUNCTION;
 		case ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS:
@@ -890,6 +894,75 @@ bool initialize_plan(
 					ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT;
 				require_runtime_helper(
 					plan, ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE);
+				continue;
+			}
+			if (record.opcode == ZEND_MIR_OPCODE_FUNC_NUM_ARGS
+					|| record.opcode == ZEND_MIR_OPCODE_FUNC_GET_ARGS) {
+				const zend_mir_executable_value_ref &operation =
+					plan->instructions[i].value_operation;
+				const bool valid_op1 =
+					record.opcode == ZEND_MIR_OPCODE_FUNC_NUM_ARGS
+						? operation.op1.kind
+							== ZEND_MIR_SOURCE_OPERAND_UNUSED
+						: (operation.op1.kind
+								== ZEND_MIR_SOURCE_OPERAND_UNUSED
+							|| operation.op1.kind
+								== ZEND_MIR_SOURCE_OPERAND_LITERAL);
+				if (!valid_op1
+						|| operation.op2.kind
+							!= ZEND_MIR_SOURCE_OPERAND_UNUSED
+						|| operation.result.kind
+							== ZEND_MIR_SOURCE_OPERAND_UNUSED
+						|| operation.auxiliary.kind
+							!= ZEND_MIR_SOURCE_OPERAND_UNUSED
+						|| operation.source_opcode
+							!= (record.opcode
+									== ZEND_MIR_OPCODE_FUNC_NUM_ARGS
+								? ZEND_FUNC_NUM_ARGS
+								: ZEND_FUNC_GET_ARGS)) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+						"argument introspection lacks explicit source operands");
+					return false;
+				}
+				if (record.opcode == ZEND_MIR_OPCODE_FUNC_NUM_ARGS) {
+					zend_mir_value_id result_id;
+					const int32_t result_index =
+						source_operand_value_id(operation.result, result_id)
+							? zend_tpde_value_index(plan, result_id)
+							: -1;
+					if (result_index < 0 || result_id != record.result_id) {
+						zend_tpde_set_diagnostic(diag,
+							ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+							"func_num_args result identity is inconsistent");
+						return false;
+					}
+					if (record.representation
+							!= ZEND_MIR_REPRESENTATION_I64) {
+						zend_tpde_set_diagnostic(diag,
+							ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+							"func_num_args result representation is not i64");
+						return false;
+					}
+					if (plan->values[result_index].exact_type
+							!= ZEND_MIR_SCALAR_TYPE_I64) {
+						zend_tpde_set_diagnostic(diag,
+							ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+							"func_num_args result type is not exact i64");
+						return false;
+					}
+					/*
+					 * The count belongs to the active invocation even if source
+					 * analysis saw only fixed-arity callers while compiling this
+					 * function. Generated code must read the current frame.
+					 */
+					plan->values[result_index].constant = false;
+				}
+				plan->required_runtime_capabilities |=
+					ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT;
+				if (record.opcode == ZEND_MIR_OPCODE_FUNC_GET_ARGS) {
+					require_runtime_helper(plan, helper);
+				}
 				continue;
 			}
 			if (record.opcode == ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL) {
@@ -1351,7 +1424,6 @@ bool initialize_plan(
 							inline_receiver
 							&& site.arguments.count
 								>= op_array.required_num_args
-							&& site.arguments.count <= op_array.num_args
 							&& (op_array.fn_flags
 								& (ZEND_ACC_VARIADIC
 									| ZEND_ACC_CALL_VIA_TRAMPOLINE)) == 0;
@@ -1443,6 +1515,7 @@ bool initialize_plan(
 									== ZEND_MIR_SOURCE_SLOT_CV);
 						const bool inline_parameter =
 							!trivial_frame
+							|| n >= callee->op_array.num_args
 							|| callee->op_array.arg_info == nullptr
 							|| !ZEND_TYPE_IS_SET(
 								callee->op_array.arg_info[n].type)

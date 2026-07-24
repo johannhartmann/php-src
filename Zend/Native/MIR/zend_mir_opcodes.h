@@ -144,7 +144,9 @@
 #define ZEND_MIR_W11P_OPCODE_CATALOG(X) \
 	X(ECHO_SCALAR, "echo_scalar", 151) \
 	X(VERIFY_RETURN_TYPE, "verify_return_type", 152) \
-	X(VALUE_ECHO, "value_echo", 153)
+	X(VALUE_ECHO, "value_echo", 153) \
+	X(FUNC_NUM_ARGS, "func_num_args", 154) \
+	X(FUNC_GET_ARGS, "func_get_args", 155)
 
 #define ZEND_MIR_SCALAR_OPCODE_CATALOG(X) \
 	X(I64_ADD_NO_OVERFLOW, "i64_add_no_overflow", 10) \
@@ -201,7 +203,7 @@ typedef enum _zend_mir_opcode {
 	ZEND_MIR_W09_OPCODE_COUNT = 91,
 	ZEND_MIR_W10_OPCODE_COUNT = 137,
 	ZEND_MIR_W11_OPCODE_COUNT = 151,
-	ZEND_MIR_W11P_OPCODE_COUNT = 154,
+	ZEND_MIR_W11P_OPCODE_COUNT = 156,
 	ZEND_MIR_OPCODE_INVALID = -1
 } zend_mir_opcode;
 #undef ZEND_MIR_OPCODE_ENUM
@@ -278,7 +280,9 @@ static inline bool zend_mir_opcode_is_executable_value(
 			&& opcode <= ZEND_MIR_OPCODE_DYNAMIC_INCLUDE_OR_EVAL)
 		|| opcode == ZEND_MIR_OPCODE_ECHO_SCALAR
 		|| opcode == ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE
-		|| opcode == ZEND_MIR_OPCODE_VALUE_ECHO;
+		|| opcode == ZEND_MIR_OPCODE_VALUE_ECHO
+		|| opcode == ZEND_MIR_OPCODE_FUNC_NUM_ARGS
+		|| opcode == ZEND_MIR_OPCODE_FUNC_GET_ARGS;
 }
 
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_COUNT < UINT32_MAX,
@@ -335,7 +339,7 @@ ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_ECHO_SCALAR
 	== ZEND_MIR_W11_OPCODE_COUNT,
 	"W11P semantic echo begins after the frozen W11 boundary");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W11P_OPCODE_COUNT
-	== ZEND_MIR_OPCODE_VALUE_ECHO + 1,
+	== ZEND_MIR_OPCODE_FUNC_GET_ARGS + 1,
 	"W11P semantic operations have an additive table boundary");
 
 #endif /* ZEND_MIR_OPCODES_H */
