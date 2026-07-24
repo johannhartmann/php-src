@@ -844,10 +844,10 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		label_place(done);
 		return true;
 	};
-	auto read_integer_array = [&]() {
-		zend_tpde_integer_array_read layout;
+	auto read_array = [&]() {
+		zend_tpde_array_read layout;
 
-		if (!zend_tpde_integer_array_read_at(mir, &layout)
+		if (!zend_tpde_array_read_at(mir, &layout)
 				|| layout.container_offset > INT32_MAX
 				|| layout.key_offset > INT32_MAX
 				|| layout.result_offset > INT32_MAX) {
@@ -863,9 +863,14 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			}
 		}
 		auto slow = text_writer.label_create();
+		auto key_long = text_writer.label_create();
+		auto key_ready = text_writer.label_create();
 		auto packed = text_writer.label_create();
 		auto mixed_loop = text_writer.label_create();
 		auto mixed_next = text_writer.label_create();
+		auto mixed_string = text_writer.label_create();
+		auto mixed_string_loop = text_writer.label_create();
+		auto mixed_string_next = text_writer.label_create();
 		auto found = text_writer.label_create();
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
@@ -905,9 +910,18 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(MOV32rm, type_reg,
 			FE_MEM(slot_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		ASM(AND32ri, type_reg, Z_TYPE_MASK);
 		ASM(CMP32ri, type_reg, IS_LONG);
+		generate_raw_jump(Jump::je, key_long);
+		ASM(CMP32ri, type_reg, IS_STRING);
 		generate_raw_jump(Jump::jne, slow);
 		ASM(MOV64rm, key_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
+		ASM(MOV32ri, high_word_reg, 1);
+		generate_raw_jump(Jump::jmp, key_ready);
+		label_place(key_long);
+		ASM(MOV64rm, key_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
+		ASM(MOV32ri, high_word_reg, 0);
+		label_place(key_ready);
 
 		ASM(MOV64rr, slot_reg, frame_reg);
 		ASM(ADD64ri, slot_reg,
@@ -925,6 +939,8 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(TEST32rr, type_reg, type_reg);
 		generate_raw_jump(Jump::jne, packed);
 
+		ASM(TEST32rr, high_word_reg, high_word_reg);
+		generate_raw_jump(Jump::jne, mixed_string);
 		ASM(MOV64rm, element_reg,
 			FE_MEM(array_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(HashTable, arData))));
@@ -959,7 +975,47 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 					offsetof(Bucket, val) + offsetof(zval, u2.next))));
 		generate_raw_jump(Jump::jmp, mixed_loop);
 
+		label_place(mixed_string);
+		ASM(MOV64rm, element_reg,
+			FE_MEM(array_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(HashTable, arData))));
+		ASM(MOV64rm, type_reg,
+			FE_MEM(key_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_string, h))));
+		ASM(MOV32rm, limit_reg,
+			FE_MEM(array_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(HashTable, nTableMask))));
+		ASM(MOV32rr, high_word_reg, type_reg);
+		ASM(OR32rr, high_word_reg, limit_reg);
+		ASM(MOVSXr64r32, high_word_reg, high_word_reg);
+		ASM(MOV32rm, limit_reg,
+			FE_MEM(element_reg, 4, high_word_reg, 0));
+		label_place(mixed_string_loop);
+		ASM(CMP32ri, limit_reg, HT_INVALID_IDX);
+		generate_raw_jump(Jump::je, slow);
+		ASM(MOV64rr, slot_reg, limit_reg);
+		ASM(SHL64ri, slot_reg, 5);
+		ASM(ADD64rr, slot_reg, element_reg);
+		ASM(MOV64rm, high_word_reg,
+			FE_MEM(slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(Bucket, h))));
+		ASM(CMP64rr, high_word_reg, type_reg);
+		generate_raw_jump(Jump::jne, mixed_string_next);
+		ASM(MOV64rm, high_word_reg,
+			FE_MEM(slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(Bucket, key))));
+		ASM(CMP64rr, high_word_reg, key_reg);
+		generate_raw_jump(Jump::je, found);
+		label_place(mixed_string_next);
+		ASM(MOV32rm, limit_reg,
+			FE_MEM(slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(Bucket, val) + offsetof(zval, u2.next))));
+		generate_raw_jump(Jump::jmp, mixed_string_loop);
+
 		label_place(packed);
+		ASM(TEST32rr, high_word_reg, high_word_reg);
+		generate_raw_jump(Jump::jne, slow);
 		ASM(MOV32rm, limit_reg,
 			FE_MEM(array_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(HashTable, nNumUsed))));
@@ -2040,7 +2096,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		case ZEND_MIR_OPCODE_VALUE_ADD_ARRAY_UNPACK:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_UNPACK);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R:
-			return read_integer_array();
+			return read_array();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_W:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_W);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_RW:

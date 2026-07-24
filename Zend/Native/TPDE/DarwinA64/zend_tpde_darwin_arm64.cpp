@@ -818,10 +818,10 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		label_place(done);
 		return true;
 	};
-	auto read_integer_array = [&]() {
-		zend_tpde_integer_array_read layout;
+	auto read_array = [&]() {
+		zend_tpde_array_read layout;
 
-		if (!zend_tpde_integer_array_read_at(mir, &layout)) {
+		if (!zend_tpde_array_read_at(mir, &layout)) {
 			return execute_value_operation(
 				ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R);
 		}
@@ -834,9 +834,14 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			}
 		}
 		auto slow = text_writer.label_create();
+		auto key_long = text_writer.label_create();
+		auto key_ready = text_writer.label_create();
 		auto packed = text_writer.label_create();
 		auto mixed_loop = text_writer.label_create();
 		auto mixed_next = text_writer.label_create();
+		auto mixed_string = text_writer.label_create();
+		auto mixed_string_loop = text_writer.label_create();
+		auto mixed_string_next = text_writer.label_create();
 		auto found = text_writer.label_create();
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
@@ -871,9 +876,20 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(ADDxi, slot_reg, frame_reg, layout.key_offset);
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
 		ASM(CMPwi, type_reg, IS_LONG);
+		generate_raw_jump(Jump::Jeq, key_long);
+		ASM(CMPwi, type_reg, IS_STRING);
 		generate_raw_jump(Jump::Jne, slow);
 		load_off(key_reg, slot_reg, 0, 8);
+		materialize_constant(
+			1, DarwinConfig::GP_BANK, 4, high_word_reg);
+		generate_raw_jump(Jump::jmp, key_ready);
+		label_place(key_long);
+		load_off(key_reg, slot_reg, 0, 8);
+		materialize_constant(
+			uint64_t{0}, DarwinConfig::GP_BANK, 4, high_word_reg);
+		label_place(key_ready);
 
 		ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
 		load_off(limit_reg, slot_reg,
@@ -886,6 +902,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(TSTwi, type_reg, HASH_FLAG_PACKED);
 		generate_raw_jump(Jump::Jne, packed);
 
+		ASM(CMPwi, high_word_reg, 0);
+		generate_raw_jump(Jump::Jne, mixed_string);
 		load_off(element_reg, array_reg,
 			static_cast<uint32_t>(offsetof(HashTable, arData)), 8);
 		load_off(limit_reg, array_reg,
@@ -912,7 +930,38 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			4);
 		generate_raw_jump(Jump::jmp, mixed_loop);
 
+		label_place(mixed_string);
+		load_off(element_reg, array_reg,
+			static_cast<uint32_t>(offsetof(HashTable, arData)), 8);
+		load_off(type_reg, key_reg,
+			static_cast<uint32_t>(offsetof(zend_string, h)), 8);
+		load_off(limit_reg, array_reg,
+			static_cast<uint32_t>(offsetof(HashTable, nTableMask)), 4);
+		ASM(ORRw, limit_reg, type_reg, limit_reg);
+		ASM(ADDx_sxtw, slot_reg, element_reg, limit_reg, 2);
+		load_off(limit_reg, slot_reg, 0, 4);
+		label_place(mixed_string_loop);
+		ASM(CMPwi, limit_reg, HT_INVALID_IDX);
+		generate_raw_jump(Jump::Jeq, slow);
+		ASM(ADDx_lsl, slot_reg, element_reg, limit_reg, 5);
+		load_off(high_word_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(Bucket, h)), 8);
+		ASM(CMPx, high_word_reg, type_reg);
+		generate_raw_jump(Jump::Jne, mixed_string_next);
+		load_off(high_word_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(Bucket, key)), 8);
+		ASM(CMPx, high_word_reg, key_reg);
+		generate_raw_jump(Jump::Jeq, found);
+		label_place(mixed_string_next);
+		load_off(limit_reg, slot_reg,
+			static_cast<uint32_t>(
+				offsetof(Bucket, val) + offsetof(zval, u2.next)),
+			4);
+		generate_raw_jump(Jump::jmp, mixed_string_loop);
+
 		label_place(packed);
+		ASM(CMPwi, high_word_reg, 0);
+		generate_raw_jump(Jump::Jne, slow);
 		load_off(limit_reg, array_reg,
 			static_cast<uint32_t>(offsetof(HashTable, nNumUsed)), 4);
 		ASM(CMPx, key_reg, limit_reg);
@@ -1840,7 +1889,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		case ZEND_MIR_OPCODE_VALUE_ADD_ARRAY_UNPACK:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_UNPACK);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R:
-			return read_integer_array();
+			return read_array();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_W:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_W);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_RW:
