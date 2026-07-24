@@ -94,6 +94,13 @@ struct zend_tpde_string_length {
 	uint32_t result_offset;
 };
 
+struct zend_tpde_string_identity {
+	uint32_t left_offset;
+	uint32_t right_offset;
+	uint32_t result_offset;
+	bool inverted;
+};
+
 struct zend_tpde_value_condition {
 	uint32_t operand_offset;
 };
@@ -319,6 +326,50 @@ static inline bool zend_tpde_value_condition_at(
 		return false;
 	}
 	out->operand_offset = static_cast<uint32_t>(operand_offset);
+	return true;
+}
+
+static inline bool zend_tpde_string_identity_at(
+	const zend_tpde_instruction &instruction,
+	zend_tpde_string_identity *out)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	uint64_t left_offset;
+	uint64_t right_offset;
+	uint64_t result_offset;
+
+	if (out == nullptr || !instruction.has_value_operation
+			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_BINARY_OP
+			|| (operation.source_opcode != ZEND_IS_IDENTICAL
+				&& operation.source_opcode != ZEND_IS_NOT_IDENTICAL)
+			|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+			|| operation.op2.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+			|| operation.op1_storage_id == ZEND_MIR_ID_INVALID
+			|| operation.op2_storage_id == ZEND_MIR_ID_INVALID
+			|| operation.result_storage_id == ZEND_MIR_ID_INVALID
+			|| operation.op1_storage_id == operation.op2_storage_id
+			|| operation.op1_storage_id == operation.result_storage_id
+			|| operation.op2_storage_id == operation.result_storage_id) {
+		return false;
+	}
+	left_offset =
+		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
+			* sizeof(zval);
+	right_offset =
+		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op2_storage_id)
+			* sizeof(zval);
+	result_offset =
+		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
+			* sizeof(zval);
+	if (left_offset > UINT32_MAX || right_offset > UINT32_MAX
+			|| result_offset > UINT32_MAX) {
+		return false;
+	}
+	out->left_offset = static_cast<uint32_t>(left_offset);
+	out->right_offset = static_cast<uint32_t>(right_offset);
+	out->result_offset = static_cast<uint32_t>(result_offset);
+	out->inverted = operation.source_opcode == ZEND_IS_NOT_IDENTICAL;
 	return true;
 }
 
