@@ -781,7 +781,12 @@ bool initialize_plan(
 				|| record.opcode == ZEND_MIR_OPCODE_OBJECT_INSTANCEOF
 				|| record.opcode == ZEND_MIR_OPCODE_OBJECT_CLONE
 				|| (record.opcode >= ZEND_MIR_OPCODE_STATIC_FETCH_R
-					&& record.opcode <= ZEND_MIR_OPCODE_STATIC_UNSET);
+					&& record.opcode <= ZEND_MIR_OPCODE_STATIC_UNSET)
+				|| record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS
+				|| record.opcode
+					== ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_CONSTANT
+				|| record.opcode
+					== ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME;
 			if (!explicit_object_operands
 					&& (record.opcode < ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
 						|| record.opcode
