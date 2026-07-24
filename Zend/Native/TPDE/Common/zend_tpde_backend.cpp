@@ -770,9 +770,13 @@ bool initialize_plan(
 					plan, ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE);
 				continue;
 			}
-			if (record.opcode < ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
-					|| record.opcode
-						> ZEND_MIR_OPCODE_DYNAMIC_INCLUDE_OR_EVAL) {
+			const bool explicit_object_fetch =
+				record.opcode >= ZEND_MIR_OPCODE_OBJECT_FETCH_R
+				&& record.opcode <= ZEND_MIR_OPCODE_OBJECT_FETCH_UNSET;
+			if (!explicit_object_fetch
+					&& (record.opcode < ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
+						|| record.opcode
+							> ZEND_MIR_OPCODE_DYNAMIC_INCLUDE_OR_EVAL)) {
 				/*
 				 * Kept temporarily for uncommon object slow paths while their
 				 * helper ABI is migrated.

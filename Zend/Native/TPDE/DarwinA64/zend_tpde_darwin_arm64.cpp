@@ -391,7 +391,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			|| helper == ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE
 			|| helper == ZEND_NATIVE_HELPER_VALUE_ECHO
 			|| helper == ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL
-			|| helper == ZEND_NATIVE_HELPER_OBJECT_FETCH_R
+			|| (helper >= ZEND_NATIVE_HELPER_OBJECT_FETCH_R
+				&& helper <= ZEND_NATIVE_HELPER_OBJECT_FETCH_UNSET)
 			|| helper == ZEND_NATIVE_HELPER_OBJECT_ASSIGN
 			|| (helper >= ZEND_NATIVE_HELPER_DYNAMIC_FETCH_R
 				&& helper
