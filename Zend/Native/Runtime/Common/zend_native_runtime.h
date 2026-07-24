@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-#define ZEND_NATIVE_RUNTIME_ABI_VERSION 49u
+#define ZEND_NATIVE_RUNTIME_ABI_VERSION 50u
 
 typedef enum _zend_native_runtime_capability {
 	ZEND_NATIVE_RUNTIME_CAP_USER_CALL = UINT64_C(1) << 0,
@@ -212,7 +212,9 @@ typedef struct _zend_native_runtime_helper {
 /*
  * The table is process-local and never serialized into MIR. Generated code
  * binds stable helper IDs to these addresses while it is compiled in the
- * current process. Appending fields requires a minor ABI version bump.
+ * current process. Helper ID N occupies table slot N - 1, so symbol binding is
+ * constant-time and independent of registration order. Appending fields
+ * requires a minor ABI version bump.
  */
 typedef struct _zend_native_runtime_api {
 	uint32_t abi_version;
