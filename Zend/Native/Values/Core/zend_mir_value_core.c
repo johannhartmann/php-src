@@ -106,11 +106,33 @@ ZEND_MIR_VALUE_STAGE(zend_mir_value_stage_separation_plan,
 ZEND_MIR_VALUE_STAGE(zend_mir_value_stage_call_transfer,
 	zend_mir_call_transfer_ref, call_transfers,
 	call_transfer_count, call_transfer_capacity)
+ZEND_MIR_VALUE_STAGE(zend_mir_value_stage_value_location,
+	zend_mir_value_location_ref, value_locations,
+	value_location_count, value_location_capacity)
 ZEND_MIR_VALUE_STAGE(zend_mir_value_stage_executable_operation,
 	zend_mir_executable_value_ref, executable_operations,
 	executable_operation_count, executable_operation_capacity)
 
 #undef ZEND_MIR_VALUE_STAGE
+
+static bool zend_mir_value_set_model_flags(void *context, uint32_t flags)
+{
+	zend_mir_module *module = (zend_mir_module *) context;
+	zend_mir_core_value_staging *staging;
+
+	if (!zend_mir_module_require_building(module)
+			|| (flags & ~ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS) != 0) {
+		return false;
+	}
+	staging = &module->value_staging;
+	if (staging->committed
+			|| (staging->model_flags != ZEND_MIR_VALUE_MODEL_NONE
+				&& staging->model_flags != flags)) {
+		return false;
+	}
+	staging->model_flags = flags;
+	return true;
+}
 
 static bool zend_mir_value_category_valid(zend_mir_value_category category)
 {
@@ -796,7 +818,35 @@ static bool zend_mir_value_staging_counts_bounded(
 		&& staging->ownership_event_count <= limit
 		&& staging->separation_plan_count <= limit
 		&& staging->call_transfer_count <= limit
+		&& staging->value_location_count <= limit
 		&& staging->executable_operation_count <= limit;
+}
+
+static bool zend_mir_value_validate_locations(
+	const zend_mir_module *module,
+	const zend_mir_core_value_staging *staging)
+{
+	uint32_t index;
+	zend_mir_value_id previous = 0;
+	bool have_previous = false;
+
+	for (index = 0; index < staging->value_location_count; index++) {
+		const zend_mir_value_location_ref *location =
+			&staging->value_locations[index];
+		uint32_t value_index;
+
+		if (!zend_mir_id_is_valid(location->value_id)
+				|| (location->value_id & ZEND_MIR_VALUE_SYNTHETIC_BIT) != 0
+				|| !zend_mir_id_is_valid(location->storage_id)
+				|| !zend_mir_module_find_value(
+					module, location->value_id, &value_index)
+				|| (have_previous && location->value_id <= previous)) {
+			return false;
+		}
+		previous = location->value_id;
+		have_previous = true;
+	}
+	return true;
 }
 
 static bool zend_mir_value_validate_executable_operations(
@@ -1159,6 +1209,12 @@ bool zend_mir_module_commit_value_model(zend_mir_module *module)
 	}
 	staging = &module->value_staging;
 	if (staging->committed
+			|| (staging->model_flags
+				& ~ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS) != 0
+			|| ((staging->value_location_count != 0
+					|| staging->executable_operation_count != 0)
+				&& (staging->model_flags
+					& ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS) == 0)
 			|| !zend_mir_value_staging_counts_bounded(staging)
 			|| !zend_mir_value_validate_payloads(staging)
 			|| !zend_mir_value_validate_storages(staging)
@@ -1167,6 +1223,7 @@ bool zend_mir_module_commit_value_model(zend_mir_module *module)
 			|| !zend_mir_value_validate_events(module, staging)
 			|| !zend_mir_value_validate_separations(staging)
 			|| !zend_mir_value_validate_call_transfers(module, staging)
+			|| !zend_mir_value_validate_locations(module, staging)
 			|| !zend_mir_value_validate_executable_operations(module, staging)
 			|| !zend_mir_value_compose_executable_operations(module, staging)) {
 		return zend_mir_module_fail(module,
@@ -1193,9 +1250,12 @@ bool zend_mir_module_commit_value_model(zend_mir_module *module)
 		separation_plan_count, zend_mir_separation_plan_ref)
 	ZEND_MIR_VALUE_COPY(value_call_transfers, call_transfers,
 		call_transfer_count, zend_mir_call_transfer_ref)
+	ZEND_MIR_VALUE_COPY(value_locations, value_locations,
+		value_location_count, zend_mir_value_location_ref)
 	ZEND_MIR_VALUE_COPY(value_executable_operations, executable_operations,
 		executable_operation_count, zend_mir_executable_value_ref)
 #undef ZEND_MIR_VALUE_COPY
+	module->value_view.model_flags = staging->model_flags;
 	staging->committed = true;
 	return true;
 }
@@ -1268,6 +1328,7 @@ void zend_mir_module_init_value_mutator(zend_mir_module *module)
 	memset(&module->value_mutator, 0, sizeof(module->value_mutator));
 	module->value_mutator.contract_version = ZEND_MIR_W06_CONTRACT_VERSION;
 	module->value_mutator.context = module;
+	module->value_mutator.set_model_flags = zend_mir_value_set_model_flags;
 	module->value_mutator.add_storage = zend_mir_value_stage_storage;
 	module->value_mutator.add_payload = zend_mir_value_stage_payload;
 	module->value_mutator.add_reference_cell =
@@ -1280,6 +1341,8 @@ void zend_mir_module_init_value_mutator(zend_mir_module *module)
 		zend_mir_value_stage_separation_plan;
 	module->value_mutator.add_call_transfer =
 		zend_mir_value_stage_call_transfer;
+	module->value_mutator.add_value_location =
+		zend_mir_value_stage_value_location;
 	module->value_mutator.add_executable_operation =
 		zend_mir_value_stage_executable_operation;
 }

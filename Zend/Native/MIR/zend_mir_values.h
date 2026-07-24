@@ -155,6 +155,29 @@ typedef struct _zend_mir_call_transfer_ref {
 } zend_mir_call_transfer_ref;
 
 /*
+ * Canonical physical Zend-frame location for an original source-SSA value.
+ * The record contains stable IDs only. Multiple SSA identities may name the
+ * same storage across control-flow edges; TPDE uses that equality to prove
+ * when a boxed PHI requires no machine-register parallel copy. storage_id is
+ * in the physical frame-slot namespace used by executable operands, not an
+ * index into the independent W06 semantic-storage table.
+ */
+typedef struct _zend_mir_value_location_ref {
+	zend_mir_value_id value_id;
+	zend_mir_storage_id storage_id;
+} zend_mir_value_location_ref;
+
+typedef enum _zend_mir_value_model_flag {
+	ZEND_MIR_VALUE_MODEL_NONE = 0,
+	/*
+	 * The executable model contains canonical physical frame locations for
+	 * every original zval identity consumed by TPDE. Legacy W06–W08 models do
+	 * not set this bit and retain their historical registerless boxed values.
+	 */
+	ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS = 1u << 0
+} zend_mir_value_model_flag;
+
+/*
  * Persistent executable value operations contain stable source and MIR IDs
  * only. Source position is diagnostic identity, not operand identity: runtime
  * code consumes these explicit operands and never decodes a zend_op.
@@ -198,6 +221,7 @@ typedef struct _zend_mir_executable_value_ref {
 
 typedef struct _zend_mir_value_view {
 	uint32_t contract_version;
+	uint32_t model_flags;
 	const void *context;
 	uint32_t (*storage_count)(const void *context);
 	bool (*storage_at)(const void *context, uint32_t index, zend_mir_storage_ref *out);
@@ -218,6 +242,9 @@ typedef struct _zend_mir_value_view {
 	uint32_t (*call_transfer_count)(const void *context);
 	bool (*call_transfer_at)(const void *context, uint32_t index,
 		zend_mir_call_transfer_ref *out);
+	uint32_t (*value_location_count)(const void *context);
+	bool (*value_location_at)(const void *context, uint32_t index,
+		zend_mir_value_location_ref *out);
 	uint32_t (*executable_operation_count)(const void *context);
 	bool (*executable_operation_at)(const void *context, uint32_t index,
 		zend_mir_executable_value_ref *out);
@@ -226,6 +253,7 @@ typedef struct _zend_mir_value_view {
 typedef struct _zend_mir_value_mutator {
 	uint32_t contract_version;
 	void *context;
+	bool (*set_model_flags)(void *context, uint32_t flags);
 	bool (*add_storage)(void *context, const zend_mir_storage_ref *record);
 	bool (*add_payload)(void *context, const zend_mir_payload_ref *record);
 	bool (*add_reference_cell)(void *context, const zend_mir_reference_cell_ref *record);
@@ -233,6 +261,8 @@ typedef struct _zend_mir_value_mutator {
 	bool (*add_ownership_event)(void *context, const zend_mir_ownership_event_ref *record);
 	bool (*add_separation_plan)(void *context, const zend_mir_separation_plan_ref *record);
 	bool (*add_call_transfer)(void *context, const zend_mir_call_transfer_ref *record);
+	bool (*add_value_location)(void *context,
+		const zend_mir_value_location_ref *record);
 	bool (*add_executable_operation)(void *context,
 		const zend_mir_executable_value_ref *record);
 } zend_mir_value_mutator;

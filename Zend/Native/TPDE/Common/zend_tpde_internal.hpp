@@ -39,6 +39,7 @@ struct zend_tpde_value {
 	zend_mir_value_id id;
 	zend_mir_representation representation;
 	zend_mir_scalar_type_mask exact_type;
+	zend_mir_storage_id canonical_storage_id;
 	int32_t argument_index;
 	bool constant;
 	uint64_t constant_bits;
@@ -481,6 +482,7 @@ struct zend_tpde_plan {
 	_zend_native_direct_internal_call_descriptor **direct_internal_calls;
 	uint32_t direct_internal_call_count;
 	uint32_t argument_count;
+	uint32_t value_model_flags;
 	uint64_t required_runtime_capabilities;
 	uint64_t required_runtime_helpers[ZEND_NATIVE_RUNTIME_HELPER_WORD_COUNT];
 	bool may_emit_calls;
