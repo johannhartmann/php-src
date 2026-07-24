@@ -1667,68 +1667,105 @@ static bool zend_mir_w03_track_lifetime_values(
 	return true;
 }
 
-static bool zend_mir_w03_initial_slot_value(
+static bool zend_mir_w03_prepare_initial_slot_values(
 	const zend_mir_w03_integration *integration,
-	const zend_mir_source_slot_ref *source_slot,
-	zend_mir_value_id *value_id_out)
+	const zend_op_array *op_array,
+	uint32_t slot_count,
+	zend_mir_value_id *initial_values)
 {
 	uint32_t ssa_count =
 		integration->source_view.ssa_count(integration->source_view.context);
+	const zend_ssa *source_ssa = zend_mir_source_ssa(&integration->source);
+	bool *phi_results;
 	uint32_t index;
-	bool found = false;
+	uint32_t block;
 
+	if (op_array == NULL || op_array->last_var < 0 || source_ssa == NULL
+			|| initial_values == NULL) {
+		return false;
+	}
+	phi_results = zend_mir_w03_calloc(
+		ssa_count == 0 ? 1 : ssa_count, sizeof(*phi_results));
+	if (phi_results == NULL) {
+		return false;
+	}
+	for (index = 0; index < slot_count; index++) {
+		initial_values[index] = ZEND_MIR_ID_INVALID;
+	}
+	for (block = 0; block < source_ssa->cfg.blocks_count; block++) {
+		zend_ssa_phi *phi;
+
+		for (phi = source_ssa->blocks[block].phis;
+				phi != NULL; phi = phi->next) {
+			if (phi->ssa_var < 0 || (uint32_t) phi->ssa_var >= ssa_count) {
+				free(phi_results);
+				return false;
+			}
+			phi_results[phi->ssa_var] = true;
+		}
+	}
 	for (index = 0; index < ssa_count; index++) {
 		zend_mir_source_ssa_ref ssa;
-		bool phi_result = false;
-		uint32_t phi_index;
+		zend_mir_value_id candidate;
+		uint32_t slot_id;
 
 		if (!integration->source_view.ssa_at(
 				integration->source_view.context, index, &ssa)) {
+			free(phi_results);
 			return false;
 		}
-		if (integration->w04) {
-			uint32_t phi_count = integration->source_view.phi_count(
-				integration->source_view.context);
-
-			for (phi_index = 0; phi_index < phi_count; phi_index++) {
-				zend_mir_source_phi_ref phi;
-
-				if (!integration->source_view.phi_at(
-						integration->source_view.context, phi_index, &phi)) {
+		if (ssa.ssa_variable_id >= ssa_count) {
+			free(phi_results);
+			return false;
+		}
+		if (ssa.definition_opline_index != ZEND_MIR_ID_INVALID
+				|| phi_results[ssa.ssa_variable_id]) {
+			continue;
+		}
+		switch (ssa.source_slot_kind) {
+			case ZEND_MIR_SOURCE_SLOT_CV:
+				slot_id = ssa.source_slot;
+				break;
+			case ZEND_MIR_SOURCE_SLOT_TMP:
+				if (ssa.source_slot >= op_array->T) {
+					free(phi_results);
 					return false;
 				}
-				if (phi.result_ssa_variable_id == ssa.ssa_variable_id) {
-					phi_result = true;
-					break;
+				slot_id = (uint32_t) op_array->last_var + ssa.source_slot;
+				break;
+			case ZEND_MIR_SOURCE_SLOT_VAR:
+				if (ssa.source_slot >= op_array->T) {
+					free(phi_results);
+					return false;
 				}
-			}
+				slot_id = (uint32_t) op_array->last_var
+					+ op_array->T + ssa.source_slot;
+				break;
+			default:
+				free(phi_results);
+				return false;
 		}
-		if (ssa.definition_opline_index == ZEND_MIR_ID_INVALID
-				&& !phi_result
-				&& ssa.source_slot_kind == source_slot->kind
-				&& ssa.source_slot == source_slot->kind_index) {
-			zend_mir_value_id candidate =
-				zend_mir_value_from_original_ssa(
-				ssa.ssa_variable_id);
-
-			if (zend_mir_id_is_valid(candidate)
-					&& zend_mir_w03_fact_for_value(
-						integration, candidate) != NULL) {
-				*value_id_out = candidate;
-				found = true;
-				/*
-				 * Removed call/value fragments may define the same TMP slot
-				 * repeatedly. The retained RETURN sees the latest SSA
-				 * representative, so the private prerequisite entry state
-				 * must publish that representative as well.
-				 */
-				if (!integration->w05 && !integration->w06) {
-					return true;
-				}
-			}
+		if (slot_id >= slot_count) {
+			free(phi_results);
+			return false;
+		}
+		candidate = zend_mir_value_from_original_ssa(ssa.ssa_variable_id);
+		if (zend_mir_id_is_valid(candidate)
+				&& zend_mir_w03_fact_for_value(
+					integration, candidate) != NULL
+				&& (!zend_mir_id_is_valid(initial_values[slot_id])
+					|| integration->w05 || integration->w06)) {
+			/*
+			 * Removed call/value fragments may define the same TMP slot
+			 * repeatedly. The retained RETURN sees the latest SSA
+			 * representative, so the private prerequisite entry state
+			 * must publish that representative as well.
+			 */
+			initial_values[slot_id] = candidate;
 		}
 	}
-	return found;
+	free(phi_results);
+	return true;
 }
 
 static bool zend_mir_w03_prepare_slots(
@@ -1737,6 +1774,7 @@ static bool zend_mir_w03_prepare_slots(
 {
 	uint32_t slot_count =
 		zend_mir_zend_source_slot_count(&integration->source);
+	zend_mir_value_id *initial_values;
 	uint32_t index;
 
 	integration->slots = zend_mir_w03_calloc(
@@ -1744,14 +1782,22 @@ static bool zend_mir_w03_prepare_slots(
 	if (integration->slots == NULL) {
 		return false;
 	}
+	initial_values = zend_mir_w03_calloc(
+		slot_count == 0 ? 1 : slot_count, sizeof(*initial_values));
+	if (initial_values == NULL
+			|| !zend_mir_w03_prepare_initial_slot_values(
+				integration, op_array, slot_count, initial_values)) {
+		free(initial_values);
+		return false;
+	}
 	for (index = 0; index < slot_count; index++) {
 		zend_mir_source_slot_ref source_slot;
 		zend_mir_straight_line_slot *slot = &integration->slots[index];
-		zend_mir_value_id value_id;
 		const zend_mir_value_fact_ref *fact;
 
 		if (!zend_mir_zend_source_slot_at(
 				&integration->source, index, &source_slot)) {
+			free(initial_values);
 			return false;
 		}
 		memset(slot, 0, sizeof(*slot));
@@ -1763,20 +1809,23 @@ static bool zend_mir_w03_prepare_slots(
 		slot->materialization = ZEND_MIR_MATERIALIZATION_UNDEF;
 		slot->ownership = ZEND_MIR_FRAME_SLOT_OWNERSHIP_FRAME_OWNED;
 		if (slot->kind == ZEND_MIR_FRAME_SLOT_KIND_INVALID) {
+			free(initial_values);
 			return false;
 		}
-		if (zend_mir_w03_initial_slot_value(
-				integration, &source_slot, &value_id)) {
-			fact = zend_mir_w03_fact_for_value(integration, value_id);
+		if (zend_mir_id_is_valid(initial_values[source_slot.slot_id])) {
+			fact = zend_mir_w03_fact_for_value(
+				integration, initial_values[source_slot.slot_id]);
 			if (fact == NULL) {
+				free(initial_values);
 				return false;
 			}
-			slot->value_id = value_id;
+			slot->value_id = initial_values[source_slot.slot_id];
 			slot->value_representation =
 				zend_mir_scalar_type_representation(fact->exact_type);
 			slot->materialization = ZEND_MIR_MATERIALIZATION_MATERIALIZED;
 		}
 	}
+	free(initial_values);
 	memset(&integration->entry, 0, sizeof(integration->entry));
 	integration->entry.function_kind = op_array->function_name == NULL
 		? ZEND_MIR_FUNCTION_KIND_MAIN : ZEND_MIR_FUNCTION_KIND_USER;
