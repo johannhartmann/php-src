@@ -1127,8 +1127,21 @@ bool initialize_plan(
 			if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
 				const bool source_arguments = count == 0
 					&& site.arguments.count != 0;
-				bool direct_descriptor = target.kind
-					== ZEND_MIR_CALL_TARGET_DIRECT_USER
+				const int32_t binding_index = id_index_find(
+					plan->user_binding_index,
+					plan->user_binding_index_capacity, site.target_id);
+				if (binding_index < 0) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_UNSUPPORTED_OPCODE,
+						"direct user call has no native entry-cell binding");
+					return false;
+				}
+				plan->instructions[i].entry_cell =
+					user_bindings[binding_index].entry_cell;
+				bool direct_descriptor =
+					(target.kind == ZEND_MIR_CALL_TARGET_DIRECT_USER
+						|| (target.kind == ZEND_MIR_CALL_TARGET_METHOD_USER
+							&& user_bindings[binding_index].direct_native))
 					&& site.arguments.count >= target.required_num_args;
 				for (uint32_t n = 0;
 						direct_descriptor && n < site.arguments.count; ++n) {
@@ -1155,18 +1168,20 @@ bool initialize_plan(
 				plan->required_runtime_capabilities |=
 					ZEND_NATIVE_RUNTIME_CAP_USER_CALL
 						| ZEND_NATIVE_RUNTIME_CAP_OBSERVER;
-				const int32_t binding_index = id_index_find(
-					plan->user_binding_index,
-					plan->user_binding_index_capacity, site.target_id);
-				if (binding_index < 0) {
-					zend_tpde_set_diagnostic(diag,
-						ZEND_NATIVE_DIAGNOSTIC_UNSUPPORTED_OPCODE,
-						"direct user call has no native entry-cell binding");
-					return false;
-				}
-				plan->instructions[i].entry_cell =
-					user_bindings[binding_index].entry_cell;
 				if (direct_descriptor) {
+					const zend_op *init = nullptr;
+					if (target.kind == ZEND_MIR_CALL_TARGET_METHOD_USER) {
+						if (source_op_array == nullptr
+								|| site.source_init_opline_index
+									>= source_op_array->last) {
+							zend_tpde_set_diagnostic(diag,
+								ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+								"direct native method has no source descriptor");
+							return false;
+						}
+						init = &source_op_array->opcodes[
+							site.source_init_opline_index];
+					}
 					const size_t descriptor_size =
 						offsetof(zend_native_direct_call_descriptor, arguments)
 						+ static_cast<size_t>(site.arguments.count)
@@ -1185,7 +1200,43 @@ bool initialize_plan(
 						site.source_do_opline_index;
 					descriptor->expected_function =
 						plan->instructions[i].entry_cell != nullptr
-						? plan->instructions[i].entry_cell->function : nullptr;
+							? plan->instructions[i].entry_cell->function : nullptr;
+					descriptor->receiver_kind =
+						ZEND_NATIVE_INTERNAL_RECEIVER_NONE;
+					descriptor->receiver_operand.kind =
+						ZEND_MIR_SOURCE_OPERAND_UNUSED;
+					descriptor->receiver_operand.slot_kind =
+						ZEND_MIR_SOURCE_SLOT_KIND_INVALID;
+					descriptor->receiver_operand.index =
+						ZEND_MIR_ID_INVALID;
+					descriptor->receiver_operand.ssa_variable_id =
+						ZEND_MIR_ID_INVALID;
+					if (target.kind == ZEND_MIR_CALL_TARGET_METHOD_USER) {
+						if (init->opcode != ZEND_INIT_METHOD_CALL) {
+							std::free(descriptor);
+							zend_tpde_set_diagnostic(diag,
+								ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+								"direct native method has an unsupported source init");
+							return false;
+						}
+						if (init->op1_type == IS_UNUSED) {
+							descriptor->receiver_kind =
+								ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS;
+						} else if (init->op1_type == IS_CV
+								&& source_descriptor_operand(
+									source_op_array, init, init->op1_type,
+									init->op1,
+									&descriptor->receiver_operand)) {
+							descriptor->receiver_kind =
+								ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT;
+						} else {
+							std::free(descriptor);
+							zend_tpde_set_diagnostic(diag,
+								ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+								"direct native method receiver is not explicit");
+							return false;
+						}
+					}
 					descriptor->result_operand = site.result_operand;
 					descriptor->result_type = ZEND_MIR_SCALAR_TYPE_NONE;
 					bool trivial_frame =

@@ -83,6 +83,7 @@ struct _zend_native_runtime_api;
 typedef struct _zend_native_call_binding {
 	zend_mir_call_target_id target_id;
 	zend_native_entry_cell *entry_cell;
+	bool direct_native;
 } zend_native_call_binding;
 
 typedef struct _zend_native_internal_call_binding {
