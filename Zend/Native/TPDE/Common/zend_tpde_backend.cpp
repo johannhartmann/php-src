@@ -21,6 +21,78 @@ bool checked_count(uint32_t count) {
 	return count <= MAX_RECORDS;
 }
 
+bool source_descriptor_operand(
+	const zend_op_array *op_array,
+	const zend_op *opline,
+	uint8_t operand_type,
+	const znode_op &node,
+	zend_mir_source_operand_ref *out) {
+	if (op_array == nullptr || opline == nullptr || out == nullptr) {
+		return false;
+	}
+	out->kind = ZEND_MIR_SOURCE_OPERAND_UNUSED;
+	out->slot_kind = ZEND_MIR_SOURCE_SLOT_KIND_INVALID;
+	out->index = ZEND_MIR_ID_INVALID;
+	out->ssa_variable_id = ZEND_MIR_ID_INVALID;
+	if (operand_type == IS_UNUSED) {
+		return true;
+	}
+	if (operand_type == IS_CONST) {
+		const zval *literal = RT_CONSTANT(opline, node);
+		if (literal < op_array->literals
+				|| literal >= op_array->literals + op_array->last_literal) {
+			return false;
+		}
+		out->kind = ZEND_MIR_SOURCE_OPERAND_LITERAL;
+		out->index = static_cast<uint32_t>(literal - op_array->literals);
+		return true;
+	}
+	if (operand_type != IS_CV && operand_type != IS_TMP_VAR
+			&& operand_type != IS_VAR) {
+		return false;
+	}
+	const uint32_t physical_slot = EX_VAR_TO_NUM(node.var);
+	if (operand_type == IS_CV) {
+		if (physical_slot >= static_cast<uint32_t>(op_array->last_var)) {
+			return false;
+		}
+		out->slot_kind = ZEND_MIR_SOURCE_SLOT_CV;
+		out->index = physical_slot;
+	} else {
+		if (physical_slot < static_cast<uint32_t>(op_array->last_var)
+				|| physical_slot - static_cast<uint32_t>(op_array->last_var)
+					>= op_array->T) {
+			return false;
+		}
+		out->slot_kind = operand_type == IS_TMP_VAR
+			? ZEND_MIR_SOURCE_SLOT_TMP : ZEND_MIR_SOURCE_SLOT_VAR;
+		out->index =
+			physical_slot - static_cast<uint32_t>(op_array->last_var);
+	}
+	out->kind = ZEND_MIR_SOURCE_OPERAND_SLOT;
+	return true;
+}
+
+bool source_descriptor_send_opcode(uint8_t opcode) {
+	switch (opcode) {
+		case ZEND_SEND_VAL:
+		case ZEND_SEND_VAL_EX:
+		case ZEND_SEND_VAR:
+		case ZEND_SEND_VAR_EX:
+		case ZEND_SEND_REF:
+		case ZEND_SEND_UNPACK:
+		case ZEND_SEND_ARRAY:
+		case ZEND_SEND_USER:
+		case ZEND_SEND_FUNC_ARG:
+		case ZEND_SEND_VAR_NO_REF:
+		case ZEND_SEND_VAR_NO_REF_EX:
+		case ZEND_SEND_PLACEHOLDER:
+			return true;
+		default:
+			return false;
+	}
+}
+
 uint32_t id_index_capacity(uint32_t count) {
 	uint32_t capacity = 8;
 
@@ -244,6 +316,16 @@ bool prepare_image_symbols(
 				"unable to create the native image direct-call symbol");
 			return false;
 		}
+		if (instruction.direct_internal_call != nullptr
+				&& !image_add_symbol(image,
+					ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
+					instruction.id, NATIVE_IMAGE_ABI_VERSION, 0,
+					instruction.direct_internal_call)) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+				"unable to create the native image direct internal-call symbol");
+			return false;
+		}
 	}
 	return true;
 }
@@ -369,6 +451,10 @@ void destroy_plan(zend_tpde_plan *plan) {
 	for (uint32_t index = 0; index < plan->direct_call_count; ++index) {
 		std::free(plan->direct_calls[index]);
 	}
+	for (uint32_t index = 0;
+			index < plan->direct_internal_call_count; ++index) {
+		std::free(plan->direct_internal_calls[index]);
+	}
 	std::free(plan->block_ids);
 	std::free(plan->block_index);
 	std::free(plan->values);
@@ -380,6 +466,7 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->user_binding_index);
 	std::free(plan->internal_binding_index);
 	std::free(plan->direct_calls);
+	std::free(plan->direct_internal_calls);
 	std::memset(plan, 0, sizeof(*plan));
 }
 
@@ -393,6 +480,7 @@ bool initialize_plan(
 	const zend_native_source_effect *effects,
 	uint32_t effect_count,
 	uint32_t frame_argument_count,
+	const zend_op_array *source_op_array,
 	zend_tpde_plan *plan,
 	zend_native_diagnostic *diag) {
 	plan->runtime = runtime;
@@ -467,6 +555,10 @@ bool initialize_plan(
 		internal_binding_count, &plan->internal_binding_index_capacity);
 	plan->direct_calls = static_cast<zend_native_direct_call_descriptor **>(
 		std::calloc(plan->call_site_count, sizeof(*plan->direct_calls)));
+	plan->direct_internal_calls =
+		static_cast<zend_native_direct_internal_call_descriptor **>(
+			std::calloc(plan->call_site_count,
+				sizeof(*plan->direct_internal_calls)));
 	if (plan->block_ids == nullptr || plan->block_index == nullptr
 			|| (plan->value_count != 0
 				&& (plan->values == nullptr || plan->value_index == nullptr))
@@ -475,7 +567,8 @@ bool initialize_plan(
 					|| plan->instruction_index == nullptr))
 			|| (plan->call_site_count != 0
 				&& (plan->call_site_instruction_index == nullptr
-					|| plan->direct_calls == nullptr))
+					|| plan->direct_calls == nullptr
+					|| plan->direct_internal_calls == nullptr))
 			|| (plan->call_target_count != 0
 				&& plan->call_target_index == nullptr)
 			|| (user_binding_count != 0 && plan->user_binding_index == nullptr)
@@ -1264,28 +1357,133 @@ bool initialize_plan(
 					ZEND_NATIVE_RUNTIME_CAP_INTERNAL_CALL
 						| ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT
 						| ZEND_NATIVE_RUNTIME_CAP_OBSERVER;
-				require_runtime_helper(
-					plan, ZEND_NATIVE_HELPER_INTERNAL_CALL_BEGIN);
-				require_runtime_helper(
-					plan, ZEND_NATIVE_HELPER_INTERNAL_CALL_FINISH_SOURCE);
-				if (site.arguments.count != 0) {
-					require_runtime_helper(
-						plan, ZEND_NATIVE_HELPER_CALL_SET_SOURCE_ARGUMENT);
-				}
 				const int32_t binding_index = id_index_find(
 					plan->internal_binding_index,
 					plan->internal_binding_index_capacity, site.target_id);
-				if (binding_index < 0) {
+				if (binding_index < 0 || source_op_array == nullptr
+						|| site.source_init_opline_index
+							>= source_op_array->last
+						|| site.source_do_opline_index
+							>= source_op_array->last) {
 					zend_tpde_set_diagnostic(diag,
 						ZEND_NATIVE_DIAGNOSTIC_UNSUPPORTED_OPCODE,
-						"direct internal call has no runtime binding");
+						"direct internal call has no runtime binding or source descriptor");
 					return false;
 				}
 				plan->instructions[i].internal_call_cell =
 					internal_bindings[binding_index].call_cell;
+				const zend_op *init = &source_op_array->opcodes[
+					site.source_init_opline_index];
+				const zend_op *finish = &source_op_array->opcodes[
+					site.source_do_opline_index];
+				if ((finish->opcode != ZEND_DO_ICALL
+							&& finish->opcode != ZEND_DO_FCALL)
+						|| init->extended_value > site.arguments.count) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+						"direct internal call source sequence is inconsistent");
+					return false;
+				}
+				const size_t descriptor_size = offsetof(
+						zend_native_direct_internal_call_descriptor, arguments)
+					+ static_cast<size_t>(site.arguments.count)
+						* sizeof(zend_native_direct_internal_call_argument);
+				auto *descriptor =
+					static_cast<zend_native_direct_internal_call_descriptor *>(
+						std::calloc(1, descriptor_size));
+				if (descriptor == nullptr) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+						"unable to allocate a direct internal-call descriptor");
+					return false;
+				}
+				descriptor->argument_count = site.arguments.count;
+				descriptor->initial_argument_count = init->extended_value;
+				descriptor->init_source_position =
+					site.source_init_opline_index;
+				descriptor->do_source_position = site.source_do_opline_index;
+				descriptor->result_operand = site.result_operand;
+				descriptor->result_type = ZEND_MIR_SCALAR_TYPE_NONE;
+				if (!source_descriptor_operand(
+						source_op_array, init, init->op1_type, init->op1,
+						&descriptor->receiver_operand)) {
+					std::free(descriptor);
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+						"direct internal-call receiver operand is invalid");
+					return false;
+				}
+				if (zend_mir_id_is_valid(record.result_id)) {
+					const int32_t result_index =
+						zend_tpde_value_index(plan, record.result_id);
+					if (result_index < 0
+							|| !zend_mir_scalar_type_is_exact(
+								plan->values[result_index].exact_type)) {
+						std::free(descriptor);
+						zend_tpde_set_diagnostic(diag,
+							ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+							"direct internal-call result has no exact scalar value");
+						return false;
+					}
+					descriptor->result_type =
+						plan->values[result_index].exact_type;
+				}
+				for (uint32_t n = 0; n < site.arguments.count; ++n) {
+					zend_mir_call_argument_ref argument;
+					if (!zend_tpde_call_argument_at(
+								plan, site.arguments.offset + n, &argument)
+							|| argument.send_opline_index
+								>= source_op_array->last) {
+						std::free(descriptor);
+						zend_tpde_set_diagnostic(diag,
+							ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+							"direct internal-call argument table is unreadable");
+						return false;
+					}
+					const zend_op *send = &source_op_array->opcodes[
+						argument.send_opline_index];
+					if (!source_descriptor_send_opcode(send->opcode)) {
+						std::free(descriptor);
+						zend_tpde_set_diagnostic(diag,
+							ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+							"direct internal-call SEND opcode is invalid");
+						return false;
+					}
+					zend_native_direct_internal_call_argument &encoded =
+						descriptor->arguments[n];
+					encoded.ordinal = argument.ordinal;
+					encoded.mode = argument.source_mode
+							== ZEND_MIR_SOURCE_CALL_ARGUMENT_PLACEHOLDER
+						? ZEND_NATIVE_CALL_ARGUMENT_PLACEHOLDER
+						: argument.ownership
+								== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
+							? ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
+							: ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE;
+					encoded.source_opcode = send->opcode;
+					encoded.source_position = argument.send_opline_index;
+					encoded.source_operand = argument.source_operand;
+					encoded.auxiliary_payload = send->op2.num;
+					encoded.result_payload = send->result.num;
+					encoded.extended_value = send->extended_value;
+					if (!source_descriptor_operand(
+							source_op_array, send, send->op2_type, send->op2,
+							&encoded.auxiliary_operand)) {
+						std::free(descriptor);
+						zend_tpde_set_diagnostic(diag,
+							ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+							"direct internal-call auxiliary operand is invalid");
+						return false;
+					}
+				}
+				plan->instructions[i].direct_internal_call = descriptor;
+				plan->direct_internal_calls[
+					plan->direct_internal_call_count++] = descriptor;
+				require_runtime_helper(
+					plan, ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL);
 			}
 			if (zend_mir_id_is_valid(record.result_id)
-					&& plan->instructions[i].direct_call == nullptr) {
+					&& plan->instructions[i].direct_call == nullptr
+					&& plan->instructions[i].direct_internal_call == nullptr) {
 				require_runtime_helper(
 					plan, ZEND_NATIVE_HELPER_CALL_READ_SOURCE_SCALAR);
 			}
@@ -1602,7 +1800,9 @@ bool zend_tpde_image_resolve_symbol(
 					&& symbol->kind
 						!= ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL
 					&& symbol->kind
-						!= ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR)) {
+						!= ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR
+					&& symbol->kind
+						!= ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR)) {
 			return false;
 		}
 		const uint32_t symbol_index =
@@ -1669,7 +1869,7 @@ extern "C" zend_result zend_tpde_compile_module_w07(
 	zend_native_diagnostic *diag) {
 	return zend_tpde_compile_module_w08(
 		target, module, bindings, binding_count, nullptr, 0, effects,
-		effect_count, frame_argument_count, out_image, diag);
+		effect_count, frame_argument_count, nullptr, out_image, diag);
 }
 
 extern "C" zend_result zend_tpde_compile_module_w08(
@@ -1682,12 +1882,14 @@ extern "C" zend_result zend_tpde_compile_module_w08(
 	const zend_native_source_effect *effects,
 	uint32_t effect_count,
 	uint32_t frame_argument_count,
+	const zend_op_array *source_op_array,
 	zend_native_image **out_image,
 	zend_native_diagnostic *diag) {
 	return zend_tpde_compile_module_w08_with_runtime(
 		target, module, user_bindings, user_binding_count,
 		internal_bindings, internal_binding_count, effects, effect_count,
-		frame_argument_count, zend_native_runtime_get(), out_image, diag);
+		frame_argument_count, source_op_array, zend_native_runtime_get(),
+		out_image, diag);
 }
 
 extern "C" zend_result zend_tpde_compile_module_w08_with_runtime(
@@ -1700,6 +1902,7 @@ extern "C" zend_result zend_tpde_compile_module_w08_with_runtime(
 	const zend_native_source_effect *effects,
 	uint32_t effect_count,
 	uint32_t frame_argument_count,
+	const zend_op_array *source_op_array,
 	const zend_native_runtime_api *runtime,
 	zend_native_image **out_image,
 	zend_native_diagnostic *diag) {
@@ -1732,7 +1935,7 @@ extern "C" zend_result zend_tpde_compile_module_w08_with_runtime(
 	if (!initialize_plan(
 			module, runtime, user_bindings, user_binding_count,
 			internal_bindings, internal_binding_count, effects, effect_count,
-			frame_argument_count,
+			frame_argument_count, source_op_array,
 			&plan, diag)) {
 		destroy_plan(&plan);
 		return FAILURE;
@@ -1762,6 +1965,10 @@ extern "C" zend_result zend_tpde_compile_module_w08_with_runtime(
 		image->direct_call_count = plan.direct_call_count;
 		plan.direct_calls = nullptr;
 		plan.direct_call_count = 0;
+		image->direct_internal_calls = plan.direct_internal_calls;
+		image->direct_internal_call_count = plan.direct_internal_call_count;
+		plan.direct_internal_calls = nullptr;
+		plan.direct_internal_call_count = 0;
 	}
 	destroy_plan(&plan);
 	if (result == FAILURE) {
@@ -1807,6 +2014,11 @@ extern "C" zend_result zend_native_publish_image(
 		(*out_code)->direct_call_count = image->direct_call_count;
 		image->direct_calls = nullptr;
 		image->direct_call_count = 0;
+		(*out_code)->direct_internal_calls = image->direct_internal_calls;
+		(*out_code)->direct_internal_call_count =
+			image->direct_internal_call_count;
+		image->direct_internal_calls = nullptr;
+		image->direct_internal_call_count = 0;
 	}
 	return result;
 }
@@ -1940,6 +2152,11 @@ extern "C" void zend_native_image_destroy(zend_native_image *image) {
 			std::free(image->direct_calls[index]);
 		}
 		std::free(image->direct_calls);
+		for (uint32_t index = 0;
+				index < image->direct_internal_call_count; ++index) {
+			std::free(image->direct_internal_calls[index]);
+		}
+		std::free(image->direct_internal_calls);
 		if (image->destroy_target_state != nullptr) {
 			image->destroy_target_state(image->target_state);
 		}
@@ -1958,6 +2175,11 @@ extern "C" void zend_native_code_destroy(zend_native_code *code) {
 		std::free(code->direct_calls[index]);
 	}
 	std::free(code->direct_calls);
+	for (uint32_t index = 0;
+			index < code->direct_internal_call_count; ++index) {
+		std::free(code->direct_internal_calls[index]);
+	}
+	std::free(code->direct_internal_calls);
 	if (code->unwind_registered) {
 		uint32_t previous = live_unwind_registrations.fetch_sub(
 			1, std::memory_order_relaxed);

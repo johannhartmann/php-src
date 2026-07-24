@@ -1391,6 +1391,7 @@ static bool zend_native_compiler_compile_native_component(
 				internal_bindings, internal_binding_count,
 				function->source_effects, function->source_effect_count,
 				function->op_array->num_args,
+				function->op_array,
 				runtime,
 				&function->image, &diagnostic) == FAILURE) {
 			efree(bindings);
