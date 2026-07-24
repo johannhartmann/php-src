@@ -784,6 +784,65 @@ static zend_op_array *zend_native_compiler_resolve_native_target(
 	return NULL;
 }
 
+static bool zend_native_compiler_target_is_direct_native(
+	zend_native_compiler *compiler,
+	zend_native_compiled_function *caller_function,
+	const zend_mir_call_view *calls,
+	const zend_mir_call_target_ref *target,
+	const zend_op_array *callee)
+{
+	uint32_t index;
+	bool found = false;
+
+	if (target->kind == ZEND_MIR_CALL_TARGET_DIRECT_USER) {
+		return true;
+	}
+	if (target->kind != ZEND_MIR_CALL_TARGET_METHOD_USER
+			|| compiler == NULL || caller_function == NULL
+			|| caller_function->op_array == NULL || calls == NULL
+			|| calls->call_site_count == NULL || calls->call_site_at == NULL
+			|| callee == NULL) {
+		return false;
+	}
+	for (index = 0; index < calls->call_site_count(calls->context); index++) {
+		zend_mir_call_site_ref site;
+		const zend_op *init;
+		zend_function *resolved;
+
+		if (!calls->call_site_at(calls->context, index, &site)) {
+			return false;
+		}
+		if (site.target_id != target->id) {
+			continue;
+		}
+		if (site.source_init_opline_index >= caller_function->op_array->last) {
+			return false;
+		}
+		init = &caller_function->op_array->opcodes[
+			site.source_init_opline_index];
+		/*
+		 * Direct instance frames currently consume either the caller's $this
+		 * or a stable CV. Temporary receivers retain distinct Zend lifetime
+		 * semantics and stay on the dynamic call path.
+		 */
+		if (init->opcode != ZEND_INIT_METHOD_CALL
+				|| (init->op1_type != IS_UNUSED
+					&& init->op1_type != IS_CV)) {
+			return false;
+		}
+		resolved = zend_mir_zend_source_resolve_monomorphic_user_method_call(
+			compiler->script, caller_function->op_array,
+			&caller_function->ssa, site.source_init_opline_index);
+		if (resolved == NULL || resolved->type != ZEND_USER_FUNCTION
+				|| (resolved->common.fn_flags & ZEND_ACC_STATIC) != 0
+				|| &resolved->op_array != callee) {
+			return false;
+		}
+		found = true;
+	}
+	return found;
+}
+
 static zend_function *zend_native_compiler_resolve_internal_target(
 	zend_native_compiler *compiler,
 	zend_op_array *caller,
@@ -1466,6 +1525,7 @@ static bool zend_native_compiler_compile_native_component(
 			if (target.kind == ZEND_MIR_CALL_TARGET_DYNAMIC) {
 				bindings[binding_count].target_id = target.id;
 				bindings[binding_count].entry_cell = &function->entry_cell;
+				bindings[binding_count].direct_native = false;
 				binding_count++;
 				continue;
 			}
@@ -1479,6 +1539,9 @@ static bool zend_native_compiler_compile_native_component(
 			}
 			bindings[binding_count].target_id = target.id;
 			bindings[binding_count].entry_cell = &native_callee->entry_cell;
+			bindings[binding_count].direct_native =
+				zend_native_compiler_target_is_direct_native(
+					compiler, function, calls, &target, callee);
 			binding_count++;
 		}
 		function->internal_call_cell_count = internal_binding_count;

@@ -1812,15 +1812,72 @@ zend_function *zend_mir_zend_source_resolve_internal_call(
 	return function;
 }
 
-zend_function *zend_mir_zend_source_resolve_user_method_call(
+static const zend_class_entry *
+zend_mir_zend_source_receiver_class_from_ssa(
+	const zend_op_array *op_array, const zend_ssa *ssa,
+	int receiver_ssa, bool *exact_receiver)
+{
+	int current = receiver_ssa;
+	uint32_t depth;
+
+	if (op_array == NULL || ssa == NULL || ssa->ops == NULL
+			|| ssa->vars == NULL || ssa->var_info == NULL
+			|| exact_receiver == NULL) {
+		return NULL;
+	}
+	*exact_receiver = false;
+	for (depth = 0; depth < (uint32_t) ssa->vars_count && current >= 0
+			&& current < ssa->vars_count; depth++) {
+		const zend_ssa_var_info *info = &ssa->var_info[current];
+		int definition;
+		const zend_op *definition_opline;
+		const zend_ssa_op *definition_ssa;
+		int source;
+
+		if (info->ce != NULL) {
+			*exact_receiver = !info->is_instanceof;
+			return info->ce;
+		}
+		definition = ssa->vars[current].definition;
+		if (definition < 0 || (uint32_t) definition >= op_array->last) {
+			return NULL;
+		}
+		definition_opline = &op_array->opcodes[definition];
+		definition_ssa = &ssa->ops[definition];
+		if (definition_opline->opcode == ZEND_FETCH_THIS) {
+			*exact_receiver = op_array->scope != NULL
+				&& (op_array->scope->ce_flags & ZEND_ACC_FINAL) != 0;
+			return op_array->scope;
+		}
+		switch (definition_opline->opcode) {
+			case ZEND_ASSIGN:
+				source = definition_ssa->op2_use;
+				break;
+			case ZEND_QM_ASSIGN:
+			case ZEND_COPY_TMP:
+				source = definition_ssa->op1_use;
+				break;
+			default:
+				return NULL;
+		}
+		if (source < 0 || source == current) {
+			return NULL;
+		}
+		current = source;
+	}
+	return NULL;
+}
+
+static zend_function *zend_mir_zend_source_resolve_user_method_call_ex(
 	const zend_script *script, const zend_op_array *op_array,
-	const zend_ssa *ssa, uint32_t init_opline_index)
+	const zend_ssa *ssa, uint32_t init_opline_index,
+	bool require_monomorphic)
 {
 	const zend_op *opline;
-	const zend_ssa_var_info *receiver_info = NULL;
 	const zend_class_entry *receiver_class = NULL;
 	zend_function *function;
 	bool is_prototype = false;
+	bool exact_receiver = false;
 	int receiver_ssa;
 
 	if (op_array == NULL || ssa == NULL || ssa->ops == NULL
@@ -1833,6 +1890,11 @@ zend_function *zend_mir_zend_source_resolve_user_method_call(
 	if (function != NULL && !is_prototype
 			&& function->type == ZEND_USER_FUNCTION
 			&& (function->common.fn_flags & ZEND_ACC_ABSTRACT) == 0) {
+		/*
+		 * zend_optimizer_get_called_func() only returns a non-prototype when
+		 * the call target itself is fixed. This is the strongest and cheapest
+		 * monomorphic proof available to the native frontend.
+		 */
 		return function;
 	}
 	if (opline->opcode != ZEND_INIT_METHOD_CALL
@@ -1843,6 +1905,8 @@ zend_function *zend_mir_zend_source_resolve_user_method_call(
 	}
 	if (opline->op1_type == IS_UNUSED) {
 		receiver_class = op_array->scope;
+		exact_receiver = receiver_class != NULL
+			&& (receiver_class->ce_flags & ZEND_ACC_FINAL) != 0;
 	} else {
 		int definition;
 
@@ -1850,8 +1914,8 @@ zend_function *zend_mir_zend_source_resolve_user_method_call(
 		if (receiver_ssa < 0 || receiver_ssa >= ssa->vars_count) {
 			return NULL;
 		}
-		receiver_info = &ssa->var_info[receiver_ssa];
-		receiver_class = receiver_info->ce;
+		receiver_class = zend_mir_zend_source_receiver_class_from_ssa(
+			op_array, ssa, receiver_ssa, &exact_receiver);
 		/* Enum cases are represented as class constants.  The optimizer keeps
 		 * their result type deliberately broad, so recover the exact final enum
 		 * class from the source definition instead of persisting a class pointer
@@ -1873,6 +1937,7 @@ zend_function *zend_mir_zend_source_resolve_user_method_call(
 					&& constant->ce != NULL
 					&& (constant->ce->ce_flags & ZEND_ACC_ENUM) != 0) {
 				receiver_class = constant->ce;
+				exact_receiver = true;
 			}
 		}
 	}
@@ -1890,10 +1955,31 @@ zend_function *zend_mir_zend_source_resolve_user_method_call(
 				& (ZEND_ACC_ABSTRACT | ZEND_ACC_STATIC)) != 0) {
 		return NULL;
 	}
+	if (require_monomorphic && !exact_receiver
+			&& (receiver_class->ce_flags & ZEND_ACC_FINAL) == 0
+			&& (function->common.fn_flags & ZEND_ACC_FINAL) == 0) {
+		return NULL;
+	}
 	/* The source target is the statically known implementation and supplies
 	 * the call signature.  W10 resolves the actual method against the runtime
 	 * receiver and may compile an override into a request-local entry cell. */
 	return function;
+}
+
+zend_function *zend_mir_zend_source_resolve_user_method_call(
+	const zend_script *script, const zend_op_array *op_array,
+	const zend_ssa *ssa, uint32_t init_opline_index)
+{
+	return zend_mir_zend_source_resolve_user_method_call_ex(
+		script, op_array, ssa, init_opline_index, false);
+}
+
+zend_function *zend_mir_zend_source_resolve_monomorphic_user_method_call(
+	const zend_script *script, const zend_op_array *op_array,
+	const zend_ssa *ssa, uint32_t init_opline_index)
+{
+	return zend_mir_zend_source_resolve_user_method_call_ex(
+		script, op_array, ssa, init_opline_index, true);
 }
 
 bool zend_mir_zend_source_w08_return_source_zval(
