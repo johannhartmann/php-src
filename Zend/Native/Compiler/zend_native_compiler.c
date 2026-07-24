@@ -33,6 +33,7 @@ typedef struct _zend_native_compiled_function {
 	zend_op_array *op_array;
 	uint32_t registry_index;
 	uint32_t component_id;
+	struct _zend_native_compiled_function *next_component_member;
 	zend_arena *ssa_arena;
 	zend_ssa ssa;
 	zend_native_source_effect *source_effects;
@@ -74,6 +75,8 @@ struct _zend_native_compiler {
 	uint32_t script_function_count;
 	uint32_t function_count;
 	uint32_t function_capacity;
+	zend_native_compiled_function **component_heads;
+	uint32_t component_head_capacity;
 	zend_native_reentry_binding *reentry_bindings;
 	uint32_t reentry_binding_capacity;
 	zend_native_reentry_scope reentry_scope;
@@ -1371,8 +1374,13 @@ static bool zend_native_compiler_visit_scc(
 			}
 			member_index = state->stack[--state->stack_count];
 			state->on_stack[member_index] = false;
-			state->compiler->functions[member_index]->component_id =
-				component_id;
+			zend_native_compiled_function *member =
+				state->compiler->functions[member_index];
+
+			member->component_id = component_id;
+			member->next_component_member =
+				state->compiler->component_heads[component_id];
+			state->compiler->component_heads[component_id] = member;
 		} while (member_index != function_index);
 	}
 	return true;
@@ -1383,9 +1391,22 @@ static bool zend_native_compiler_assign_sccs(
 {
 	zend_native_scc_state state;
 	uint32_t index;
+	uint32_t required_heads;
 
 	memset(&state, 0, sizeof(state));
 	state.compiler = compiler;
+	if (compiler->function_count == UINT32_MAX) {
+		return false;
+	}
+	required_heads = compiler->function_count + 1;
+	if (compiler->component_head_capacity < required_heads) {
+		compiler->component_heads = safe_erealloc(
+			compiler->component_heads, required_heads,
+			sizeof(*compiler->component_heads), 0);
+		compiler->component_head_capacity = required_heads;
+	}
+	memset(compiler->component_heads, 0,
+		required_heads * sizeof(*compiler->component_heads));
 	state.indices = safe_emalloc(
 		compiler->function_count, sizeof(*state.indices), 0);
 	state.lowlinks = safe_emalloc(
@@ -1398,6 +1419,7 @@ static bool zend_native_compiler_assign_sccs(
 		state.indices[index] = UINT32_MAX;
 		state.lowlinks[index] = UINT32_MAX;
 		compiler->functions[index]->component_id = 0;
+		compiler->functions[index]->next_component_member = NULL;
 	}
 	for (index = 0; index < compiler->function_count; index++) {
 		if (compiler->functions[index]->state
@@ -1440,21 +1462,40 @@ static void zend_native_compiler_backend_failure(
 static void zend_native_compiler_fail_pending_component(
 	zend_native_compiler *compiler, uint32_t component_id)
 {
-	uint32_t index;
+	zend_native_compiled_function *function;
 
-	for (index = 0; index < compiler->function_count; index++) {
-		zend_native_compiled_function *function =
-			compiler->functions[index];
+	if (component_id != 0
+			&& component_id < compiler->component_head_capacity) {
+		function = compiler->component_heads[component_id];
+		while (function != NULL) {
+			zend_native_compiled_function *next =
+				function->next_component_member;
 
-		if ((component_id == 0 || function->component_id == component_id)
-				&& (function->publish_pending
+			if (function->publish_pending
 					|| function->entry_cell.state
-						== ZEND_NATIVE_ENTRY_COMPILING)) {
+						== ZEND_NATIVE_ENTRY_COMPILING) {
+				zend_native_entry_cell_fail(&function->entry_cell);
+				function->state = ZEND_NATIVE_CODEUNIT_FAILED;
+				function->publish_pending = false;
+			}
+			function->component_id = 0;
+			function->next_component_member = NULL;
+			function = next;
+		}
+		compiler->component_heads[component_id] = NULL;
+		return;
+	}
+	for (uint32_t index = 0; index < compiler->function_count; index++) {
+		function = compiler->functions[index];
+		if (function->publish_pending
+				|| function->entry_cell.state
+					== ZEND_NATIVE_ENTRY_COMPILING) {
 			zend_native_entry_cell_fail(&function->entry_cell);
 			function->state = ZEND_NATIVE_CODEUNIT_FAILED;
 			function->publish_pending = false;
-			function->component_id = 0;
 		}
+		function->component_id = 0;
+		function->next_component_member = NULL;
 	}
 }
 
@@ -1464,15 +1505,11 @@ static bool zend_native_compiler_compile_native_component(
 	zend_native_compile_diagnostic *product_diagnostic)
 {
 	zend_native_diagnostic diagnostic;
-	uint32_t index;
+	zend_native_compiled_function *function;
 
-	for (index = 0; index < compiler->function_count; index++) {
-		zend_native_compiled_function *function =
-			compiler->functions[index];
-
-		if (function->component_id != component_id) {
-			continue;
-		}
+	for (function = compiler->component_heads[component_id];
+			function != NULL;
+			function = function->next_component_member) {
 		if (function->entry_cell.state == ZEND_NATIVE_ENTRY_READY) {
 			continue;
 		}
@@ -1673,12 +1710,10 @@ binding_rejected:
 			compiler, component_id);
 		return false;
 	}
-	for (index = 0; index < compiler->function_count; index++) {
-		zend_native_compiled_function *function =
-			compiler->functions[index];
-
-		if (function->component_id != component_id
-				|| !function->publish_pending) {
+	for (function = compiler->component_heads[component_id];
+			function != NULL;
+			function = function->next_component_member) {
+		if (!function->publish_pending) {
 			continue;
 		}
 		memset(&diagnostic, 0, sizeof(diagnostic));
@@ -1706,12 +1741,10 @@ binding_rejected:
 			return false;
 		}
 	}
-	for (index = 0; index < compiler->function_count; index++) {
-		zend_native_compiled_function *function =
-			compiler->functions[index];
-
-		if (function->component_id != component_id
-				|| !function->publish_pending) {
+	for (function = compiler->component_heads[component_id];
+			function != NULL;
+			function = function->next_component_member) {
+		if (!function->publish_pending) {
 			continue;
 		}
 		if (zend_native_entry_cell_publish(
@@ -1743,18 +1776,20 @@ binding_rejected:
 	 * rejects publication. No entry from this component becomes committed
 	 * independently of its siblings.
 	 */
-	for (index = 0; index < compiler->function_count; index++) {
-		zend_native_compiled_function *function =
-			compiler->functions[index];
+	function = compiler->component_heads[component_id];
+	while (function != NULL) {
+		zend_native_compiled_function *next =
+			function->next_component_member;
 
-		if (function->component_id != component_id
-				|| !function->publish_pending) {
-			continue;
+		if (function->publish_pending) {
+			function->state = ZEND_NATIVE_CODEUNIT_READY;
+			function->publish_pending = false;
 		}
-		function->state = ZEND_NATIVE_CODEUNIT_READY;
-		function->publish_pending = false;
 		function->component_id = 0;
+		function->next_component_member = NULL;
+		function = next;
 	}
+	compiler->component_heads[component_id] = NULL;
 	compiler->published_component_count++;
 	return true;
 }
@@ -2323,6 +2358,7 @@ void zend_native_compiler_destroy(zend_native_compiler *compiler)
 		efree(function);
 	}
 	efree(compiler->reentry_bindings);
+	efree(compiler->component_heads);
 	efree(compiler->script_functions_by_declaration_id);
 	zend_hash_destroy(&compiler->functions_by_op_array);
 	zend_hash_destroy(&compiler->source_op_arrays_by_opcodes);
