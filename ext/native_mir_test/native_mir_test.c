@@ -4468,6 +4468,12 @@ static void native_mir_test_build_result(
 				? (zend_long) zend_native_compiler_function_count(
 					state->product_compiler)
 				: (zend_long) state->native_function_count);
+		add_assoc_long(&execution, "native_components",
+			state->product_compiler != NULL
+				? (zend_long)
+					zend_native_compiler_published_component_count(
+						state->product_compiler)
+				: 0);
 		add_assoc_long(&execution, "suspendable_reserved",
 			state->product_compiler != NULL
 				? (zend_long) zend_native_compiler_codeunit_count(
