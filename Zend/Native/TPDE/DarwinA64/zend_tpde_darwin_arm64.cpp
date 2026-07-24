@@ -1016,10 +1016,10 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		label_place(done);
 		return true;
 	};
-	auto isset_integer_array = [&]() {
-		zend_tpde_integer_array_isset layout;
+	auto isset_array = [&]() {
+		zend_tpde_array_isset layout;
 
-		if (!zend_tpde_integer_array_isset_at(mir, &layout)) {
+		if (!zend_tpde_array_isset_at(mir, &layout)) {
 			return execute_value_operation(
 				ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM);
 		}
@@ -1032,9 +1032,14 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			}
 		}
 		auto slow = text_writer.label_create();
+		auto key_long = text_writer.label_create();
+		auto key_ready = text_writer.label_create();
 		auto packed = text_writer.label_create();
 		auto mixed_loop = text_writer.label_create();
 		auto mixed_next = text_writer.label_create();
+		auto mixed_string = text_writer.label_create();
+		auto mixed_string_loop = text_writer.label_create();
+		auto mixed_string_next = text_writer.label_create();
 		auto found = text_writer.label_create();
 		auto inspect_element = text_writer.label_create();
 		auto answer_false = text_writer.label_create();
@@ -1052,12 +1057,14 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		ScratchReg key{this};
 		ScratchReg limit{this};
 		ScratchReg element{this};
+		ScratchReg key_kind{this};
 		auto slot_reg = slot.alloc_gp();
 		auto type_reg = type.alloc_gp();
 		auto array_reg = array.alloc_gp();
 		auto key_reg = key.alloc_gp();
 		auto limit_reg = limit.alloc_gp();
 		auto element_reg = element.alloc_gp();
+		auto key_kind_reg = key_kind.alloc_gp();
 
 		ASM(ADDxi, slot_reg, frame_reg, layout.container_offset);
 		load_off(type_reg, slot_reg,
@@ -1070,9 +1077,20 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(ADDxi, slot_reg, frame_reg, layout.key_offset);
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
 		ASM(CMPwi, type_reg, IS_LONG);
+		generate_raw_jump(Jump::Jeq, key_long);
+		ASM(CMPwi, type_reg, IS_STRING);
 		generate_raw_jump(Jump::Jne, slow);
 		load_off(key_reg, slot_reg, 0, 8);
+		materialize_constant(
+			1, DarwinConfig::GP_BANK, 4, key_kind_reg);
+		generate_raw_jump(Jump::jmp, key_ready);
+		label_place(key_long);
+		load_off(key_reg, slot_reg, 0, 8);
+		materialize_constant(
+			uint64_t{0}, DarwinConfig::GP_BANK, 4, key_kind_reg);
+		label_place(key_ready);
 
 		ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
 		load_off(type_reg, slot_reg,
@@ -1085,6 +1103,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(TSTwi, type_reg, HASH_FLAG_PACKED);
 		generate_raw_jump(Jump::Jne, packed);
 
+		ASM(CMPwi, key_kind_reg, 0);
+		generate_raw_jump(Jump::Jne, mixed_string);
 		load_off(element_reg, array_reg,
 			static_cast<uint32_t>(offsetof(HashTable, arData)), 8);
 		load_off(limit_reg, array_reg,
@@ -1111,7 +1131,38 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			4);
 		generate_raw_jump(Jump::jmp, mixed_loop);
 
+		label_place(mixed_string);
+		load_off(element_reg, array_reg,
+			static_cast<uint32_t>(offsetof(HashTable, arData)), 8);
+		load_off(type_reg, key_reg,
+			static_cast<uint32_t>(offsetof(zend_string, h)), 8);
+		load_off(limit_reg, array_reg,
+			static_cast<uint32_t>(offsetof(HashTable, nTableMask)), 4);
+		ASM(ORRw, limit_reg, type_reg, limit_reg);
+		ASM(ADDx_sxtw, slot_reg, element_reg, limit_reg, 2);
+		load_off(limit_reg, slot_reg, 0, 4);
+		label_place(mixed_string_loop);
+		ASM(CMPwi, limit_reg, HT_INVALID_IDX);
+		generate_raw_jump(Jump::Jeq, slow);
+		ASM(ADDx_lsl, slot_reg, element_reg, limit_reg, 5);
+		load_off(key_kind_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(Bucket, h)), 8);
+		ASM(CMPx, key_kind_reg, type_reg);
+		generate_raw_jump(Jump::Jne, mixed_string_next);
+		load_off(key_kind_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(Bucket, key)), 8);
+		ASM(CMPx, key_kind_reg, key_reg);
+		generate_raw_jump(Jump::Jeq, found);
+		label_place(mixed_string_next);
+		load_off(limit_reg, slot_reg,
+			static_cast<uint32_t>(
+				offsetof(Bucket, val) + offsetof(zval, u2.next)),
+			4);
+		generate_raw_jump(Jump::jmp, mixed_string_loop);
+
 		label_place(packed);
+		ASM(CMPwi, key_kind_reg, 0);
+		generate_raw_jump(Jump::Jne, slow);
 		load_off(limit_reg, array_reg,
 			static_cast<uint32_t>(offsetof(HashTable, nNumUsed)), 4);
 		ASM(CMPx, key_reg, limit_reg);
@@ -1165,6 +1216,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		key.reset();
 		limit.reset();
 		element.reset();
+		key_kind.reset();
 		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
 		frame_argument.set_value(this, std::move(frame_scratch));
 		if (!execute_value_operation(
@@ -1907,7 +1959,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		case ZEND_MIR_OPCODE_VALUE_UNSET_DIM:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_UNSET_DIM);
 		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
-			return isset_integer_array();
+			return isset_array();
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN_OP:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ASSIGN_OP);
 		case ZEND_MIR_OPCODE_VALUE_FE_FREE:
