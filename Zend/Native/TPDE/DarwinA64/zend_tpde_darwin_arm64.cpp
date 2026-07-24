@@ -367,11 +367,13 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			|| helper == ZEND_NATIVE_HELPER_VALUE_UNARY_OP
 			|| helper == ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE
 			|| helper == ZEND_NATIVE_HELPER_OBJECT_FETCH_R
+			|| helper == ZEND_NATIVE_HELPER_OBJECT_ASSIGN
 			|| (helper >= ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R
 				&& helper <= ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_UNSET);
 		const bool explicit_auxiliary =
 			helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM
-			|| helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_OP;
+			|| helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_OP
+			|| helper == ZEND_NATIVE_HELPER_OBJECT_ASSIGN;
 		if (node.operands.size() != 1
 				|| (explicit_operands
 					? !mir.has_value_operation
@@ -1122,7 +1124,6 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		ScratchReg property{this};
 		ScratchReg type{this};
 		ScratchReg low_word{this};
-		ScratchReg high_word{this};
 		auto receiver_reg = receiver.alloc_gp();
 		auto object_reg = object.alloc_gp();
 		auto cache_reg = cache.alloc_gp();
@@ -1130,7 +1131,6 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		auto property_reg = property.alloc_gp();
 		auto type_reg = type.alloc_gp();
 		auto low_word_reg = low_word.alloc_gp();
-		auto high_word_reg = high_word.alloc_gp();
 
 		ASM(ADDxi, receiver_reg, frame_reg, layout.receiver_offset);
 		load_off(type_reg, receiver_reg,
@@ -1168,9 +1168,10 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(CMPwi, offset_reg, IS_UNDEF);
 		generate_raw_jump(Jump::Jne, slow);
 		load_off(low_word_reg, property_reg, 0, 8);
-		load_off(high_word_reg, property_reg, 8, 8);
 		store_off(receiver_reg, 0, low_word_reg, 8);
-		store_off(receiver_reg, 8, high_word_reg, 8);
+		store_off(receiver_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+			type_reg, 4);
 		ASM(TSTwi, type_reg,
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		generate_raw_jump(Jump::Jeq, copied);
@@ -1193,11 +1194,163 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		property.reset();
 		type.reset();
 		low_word.reset();
-		high_word.reset();
 		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
 		frame_argument.set_value(this, std::move(frame_scratch));
 		if (!execute_value_operation(
 				ZEND_NATIVE_HELPER_OBJECT_FETCH_R, &frame_argument)) {
+			return false;
+		}
+		label_place(done);
+		return true;
+	};
+	auto object_property_write = [&]() {
+		zend_tpde_object_property_write layout;
+
+		if (!zend_tpde_object_property_write_at(mir, &layout)) {
+			return execute_value_operation(
+				ZEND_NATIVE_HELPER_OBJECT_ASSIGN);
+		}
+		for (auto reg_id : register_file.used_regs()) {
+			::tpde::Reg reg{reg_id};
+			if (!register_file.is_fixed(reg)
+					&& register_file.reg_local_idx(reg)
+						!= INVALID_VAL_LOCAL_IDX) {
+				evict_reg(reg);
+			}
+		}
+		auto slow = text_writer.label_create();
+		auto old_released = text_writer.label_create();
+		auto value_owned = text_writer.label_create();
+		auto done = text_writer.label_create();
+		auto [frame_ref, frame] =
+			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_reg = frame_scratch.cur_reg();
+		ScratchReg receiver{this};
+		ScratchReg object{this};
+		ScratchReg cache{this};
+		ScratchReg offset{this};
+		ScratchReg property{this};
+		ScratchReg type{this};
+		ScratchReg low_word{this};
+		auto receiver_reg = receiver.alloc_gp();
+		auto object_reg = object.alloc_gp();
+		auto cache_reg = cache.alloc_gp();
+		auto offset_reg = offset.alloc_gp();
+		auto property_reg = property.alloc_gp();
+		auto type_reg = type.alloc_gp();
+		auto low_word_reg = low_word.alloc_gp();
+
+		ASM(ADDxi, receiver_reg, frame_reg, layout.receiver_offset);
+		load_off(type_reg, receiver_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+		ASM(CMPwi, type_reg, IS_OBJECT);
+		generate_raw_jump(Jump::Jne, slow);
+		load_off(object_reg, receiver_reg, 0, 8);
+		load_off(receiver_reg, object_reg,
+			static_cast<uint32_t>(offsetof(zend_object, extra_flags)), 4);
+		ASM(TSTwi, receiver_reg,
+			IS_OBJ_LAZY_UNINITIALIZED | IS_OBJ_LAZY_PROXY);
+		generate_raw_jump(Jump::Jne, slow);
+		load_off(cache_reg, frame_reg,
+			static_cast<uint32_t>(
+				offsetof(zend_execute_data, run_time_cache)), 8);
+		generate_raw_jump(
+			Jump{Jump::Cbz, cache_reg, false}, slow);
+		load_off(type_reg, object_reg,
+			static_cast<uint32_t>(offsetof(zend_object, ce)), 8);
+		load_off(receiver_reg, type_reg,
+			static_cast<uint32_t>(
+				offsetof(zend_class_entry, create_object)), 8);
+		generate_raw_jump(
+			Jump{Jump::Cbnz, receiver_reg, false}, slow);
+		load_off(property_reg, cache_reg, layout.cache_offset, 8);
+		ASM(CMPx, type_reg, property_reg);
+		generate_raw_jump(Jump::Jne, slow);
+		load_off(offset_reg, cache_reg,
+			layout.cache_offset + sizeof(void *), 8);
+		ASM(CMPxi, offset_reg, ZEND_FIRST_PROPERTY_OFFSET);
+		generate_raw_jump(Jump::Jlt, slow);
+		load_off(type_reg, cache_reg,
+			layout.cache_offset + 2 * sizeof(void *), 8);
+		generate_raw_jump(
+			Jump{Jump::Cbnz, type_reg, false}, slow);
+		ASM(ADDx, property_reg, object_reg, offset_reg);
+		load_off(type_reg, property_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(ANDwi, offset_reg, type_reg, Z_TYPE_MASK);
+		ASM(CMPwi, offset_reg, IS_UNDEF);
+		generate_raw_jump(Jump::Jeq, slow);
+		ASM(CMPwi, offset_reg, IS_REFERENCE);
+		generate_raw_jump(Jump::Jeq, slow);
+
+		ASM(ADDxi, receiver_reg, frame_reg, layout.value_offset);
+		load_off(type_reg, receiver_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(ANDwi, offset_reg, type_reg, Z_TYPE_MASK);
+		ASM(CMPwi, offset_reg, IS_REFERENCE);
+		generate_raw_jump(Jump::Jeq, slow);
+
+		load_off(offset_reg, property_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(TSTwi, offset_reg,
+			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+		generate_raw_jump(Jump::Jeq, old_released);
+		load_off(cache_reg, property_reg, 0, 8);
+		load_off(offset_reg, cache_reg,
+			static_cast<uint32_t>(
+				offsetof(zend_refcounted_h, refcount)), 4);
+		ASM(CMPwi, offset_reg, 1);
+		generate_raw_jump(Jump::Jle, slow);
+		ASM(SUBwi, offset_reg, offset_reg, 1);
+		store_off(cache_reg,
+			static_cast<uint32_t>(
+				offsetof(zend_refcounted_h, refcount)),
+			offset_reg, 4);
+		label_place(old_released);
+
+		load_off(low_word_reg, receiver_reg, 0, 8);
+		if (!layout.move_value) {
+			ASM(TSTwi, type_reg,
+				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+			generate_raw_jump(Jump::Jeq, value_owned);
+			load_off(offset_reg, low_word_reg,
+				static_cast<uint32_t>(
+					offsetof(zend_refcounted_h, refcount)), 4);
+			ASM(ADDwi, offset_reg, offset_reg, 1);
+			store_off(low_word_reg,
+				static_cast<uint32_t>(
+					offsetof(zend_refcounted_h, refcount)),
+				offset_reg, 4);
+			label_place(value_owned);
+		}
+		store_off(property_reg, 0, low_word_reg, 8);
+		store_off(property_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+			type_reg, 4);
+		if (layout.move_value) {
+			materialize_constant(
+				static_cast<uint64_t>(IS_UNDEF),
+				DarwinConfig::GP_BANK, 4, type_reg);
+			store_off(receiver_reg,
+				static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+				type_reg, 4);
+		}
+		generate_raw_jump(Jump::jmp, done);
+
+		label_place(slow);
+		receiver.reset();
+		object.reset();
+		cache.reset();
+		offset.reset();
+		property.reset();
+		type.reset();
+		low_word.reset();
+		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
+		frame_argument.set_value(this, std::move(frame_scratch));
+		if (!execute_value_operation(
+				ZEND_NATIVE_HELPER_OBJECT_ASSIGN, &frame_argument)) {
 			return false;
 		}
 		label_place(done);
@@ -1215,6 +1368,9 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			|| record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME) {
 		if (record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_R) {
 			return object_property_read();
+		}
+		if (record.opcode == ZEND_MIR_OPCODE_OBJECT_ASSIGN) {
+			return object_property_write();
 		}
 		zend_native_runtime_helper_id helper;
 		if (record.opcode >= ZEND_MIR_OPCODE_DYNAMIC_FETCH_R) {
