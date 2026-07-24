@@ -8,23 +8,122 @@
 #include "Zend/zend_execute.h"
 #include "Zend/zend_operators.h"
 
-static const zend_op *zend_native_dynamic_opline(
-	zend_execute_data *execute_data, uint32_t source_opline_index,
-	uint8_t expected_opcode)
+#include "Zend/Native/Lowering/zend_mir_lowering_source.h"
+
+#include <string.h>
+
+typedef struct _zend_native_explicit_dynamic_operation {
+	uint8_t opcode;
+	uint8_t op1_type;
+	uint8_t op2_type;
+	uint8_t result_type;
+	uint8_t auxiliary_type;
+	znode_op op1;
+	znode_op op2;
+	znode_op result;
+	znode_op auxiliary;
+	uint32_t extended_value;
+	uint32_t source_position_id;
+} zend_native_explicit_dynamic_operation;
+
+static bool zend_native_dynamic_decode_explicit_operand(
+	zend_execute_data *execute_data, uint64_t encoded,
+	uint8_t *operand_type, znode_op *operand)
 {
-	const zend_op *opline;
+	zend_mir_source_operand_kind kind =
+		(zend_mir_source_operand_kind) (encoded & UINT64_C(0xff));
+	zend_mir_source_slot_kind slot_kind =
+		(zend_mir_source_slot_kind) ((encoded >> 8) & UINT64_C(0xff));
+	uint32_t index = (uint32_t) (encoded >> 16);
+	uint32_t physical_slot;
 
 	if (execute_data == NULL || execute_data->func == NULL
 			|| !ZEND_USER_CODE(execute_data->func->type)
-			|| source_opline_index >= execute_data->func->op_array.last) {
-		return NULL;
+			|| operand_type == NULL || operand == NULL) {
+		return false;
 	}
-	opline = &execute_data->func->op_array.opcodes[source_opline_index];
-	if (opline->opcode != expected_opcode) {
-		return NULL;
+	memset(operand, 0, sizeof(*operand));
+	if (kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+		*operand_type = IS_UNUSED;
+		return index == ZEND_MIR_ID_INVALID;
 	}
-	execute_data->opline = opline;
-	return opline;
+	if (kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+		if (index >= execute_data->func->op_array.last_literal) {
+			return false;
+		}
+		*operand_type = IS_CONST;
+		operand->constant = index;
+		return true;
+	}
+	if (kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+			&& kind != ZEND_MIR_SOURCE_OPERAND_SSA) {
+		return false;
+	}
+	switch (slot_kind) {
+		case ZEND_MIR_SOURCE_SLOT_CV:
+			if (index >= (uint32_t) execute_data->func->op_array.last_var) {
+				return false;
+			}
+			*operand_type = IS_CV;
+			physical_slot = index;
+			break;
+		case ZEND_MIR_SOURCE_SLOT_TMP:
+			if (index >= execute_data->func->op_array.T) {
+				return false;
+			}
+			*operand_type = IS_TMP_VAR;
+			physical_slot =
+				(uint32_t) execute_data->func->op_array.last_var + index;
+			break;
+		case ZEND_MIR_SOURCE_SLOT_VAR:
+			if (index >= execute_data->func->op_array.T) {
+				return false;
+			}
+			*operand_type = IS_VAR;
+			physical_slot =
+				(uint32_t) execute_data->func->op_array.last_var + index;
+			break;
+		default:
+			return false;
+	}
+	if (physical_slot > (UINT32_MAX / sizeof(zval))
+			- (uint32_t) ZEND_CALL_FRAME_SLOT) {
+		return false;
+	}
+	operand->var =
+		((uint32_t) ZEND_CALL_FRAME_SLOT + physical_slot) * sizeof(zval);
+	return true;
+}
+
+static bool zend_native_dynamic_init_explicit_operation(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result, uint64_t auxiliary,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id, uint8_t expected_opcode,
+	zend_native_explicit_dynamic_operation *operation)
+{
+	if (operation == NULL || source_opcode != expected_opcode
+			|| execute_data == NULL || execute_data->func == NULL
+			|| !ZEND_USER_CODE(execute_data->func->type)
+			|| source_position_id >= execute_data->func->op_array.last
+			|| !zend_native_dynamic_decode_explicit_operand(
+				execute_data, op1, &operation->op1_type, &operation->op1)
+			|| !zend_native_dynamic_decode_explicit_operand(
+				execute_data, op2, &operation->op2_type, &operation->op2)
+			|| !zend_native_dynamic_decode_explicit_operand(
+				execute_data, result,
+				&operation->result_type, &operation->result)
+			|| !zend_native_dynamic_decode_explicit_operand(
+				execute_data, auxiliary,
+				&operation->auxiliary_type, &operation->auxiliary)) {
+		return false;
+	}
+	operation->opcode = (uint8_t) source_opcode;
+	operation->extended_value = extended_value;
+	operation->source_position_id = source_position_id;
+	execute_data->opline =
+		&execute_data->func->op_array.opcodes[source_position_id];
+	return true;
 }
 
 static zval *zend_native_dynamic_slot(
@@ -38,13 +137,14 @@ static zval *zend_native_dynamic_slot(
 }
 
 static zval *zend_native_dynamic_read(
-	zend_execute_data *execute_data, const zend_op *opline,
+	zend_execute_data *execute_data,
 	uint8_t type, znode_op operand)
 {
 	zval *value;
 
 	if (type == IS_CONST) {
-		return RT_CONSTANT(opline, operand);
+		return operand.constant < execute_data->func->op_array.last_literal
+			? &execute_data->func->op_array.literals[operand.constant] : NULL;
 	}
 	value = zend_native_dynamic_slot(execute_data, type, operand);
 	if (value != NULL && type == IS_VAR && Z_TYPE_P(value) == IS_INDIRECT) {
@@ -84,7 +184,8 @@ static HashTable *zend_native_dynamic_symbol_table(
 }
 
 static zend_native_status zend_native_dynamic_fetch_this(
-	zend_execute_data *execute_data, const zend_op *opline, int fetch_type)
+	zend_execute_data *execute_data,
+	const zend_native_explicit_dynamic_operation *opline, int fetch_type)
 {
 	zval *result = zend_native_dynamic_slot(
 		execute_data, opline->result_type, opline->result);
@@ -124,11 +225,13 @@ static zend_native_status zend_native_dynamic_fetch_this(
 }
 
 static zend_native_status zend_native_dynamic_fetch(
-	zend_execute_data *execute_data, uint32_t source_opline_index,
-	uint8_t expected_opcode, int fetch_type)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand, uint64_t auxiliary,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id, uint8_t expected_opcode, int fetch_type)
 {
-	const zend_op *opline = zend_native_dynamic_opline(
-		execute_data, source_opline_index, expected_opcode);
+	zend_native_explicit_dynamic_operation operation;
+	const zend_native_explicit_dynamic_operation *opline = &operation;
 	HashTable *symbol_table;
 	zval *name_value;
 	zval *result;
@@ -136,9 +239,12 @@ static zend_native_status zend_native_dynamic_fetch(
 	zend_string *name;
 	zend_string *temporary_name = NULL;
 
-	if (opline == NULL || opline->result_type == IS_UNUSED
+	if (!zend_native_dynamic_init_explicit_operation(
+			execute_data, op1, op2, result_operand, auxiliary, extended_value,
+			source_opcode, source_position_id, expected_opcode, &operation)
+			|| opline->result_type == IS_UNUSED
 			|| (name_value = zend_native_dynamic_read(
-				execute_data, opline, opline->op1_type, opline->op1)) == NULL
+				execute_data, opline->op1_type, opline->op1)) == NULL
 			|| (result = zend_native_dynamic_slot(
 				execute_data, opline->result_type, opline->result)) == NULL
 			|| (symbol_table = zend_native_dynamic_symbol_table(
@@ -233,10 +339,14 @@ static zend_native_status zend_native_dynamic_fetch(
 
 #define ZEND_NATIVE_DYNAMIC_FETCH(name, opcode, mode) \
 	zend_native_status name( \
-		zend_execute_data *execute_data, uint32_t source_opline_index) \
+		zend_execute_data *execute_data, \
+		uint64_t op1, uint64_t op2, uint64_t result, uint64_t auxiliary, \
+		uint32_t extended_value, uint32_t source_opcode, \
+		uint32_t source_position_id) \
 	{ \
 		return zend_native_dynamic_fetch( \
-			execute_data, source_opline_index, opcode, mode); \
+			execute_data, op1, op2, result, auxiliary, extended_value, source_opcode, \
+			source_position_id, opcode, mode); \
 	}
 
 ZEND_NATIVE_DYNAMIC_FETCH(
@@ -251,24 +361,29 @@ ZEND_NATIVE_DYNAMIC_FETCH(
 	zend_native_dynamic_fetch_unset, ZEND_FETCH_UNSET, BP_VAR_UNSET)
 
 zend_native_status zend_native_dynamic_fetch_func_arg(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result, uint64_t auxiliary,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
 	int fetch_type = execute_data != NULL && execute_data->call != NULL
 		&& (ZEND_CALL_INFO(execute_data->call)
 			& ZEND_CALL_SEND_ARG_BY_REF) != 0 ? BP_VAR_W : BP_VAR_R;
 
 	return zend_native_dynamic_fetch(
-		execute_data, source_opline_index, ZEND_FETCH_FUNC_ARG, fetch_type);
+		execute_data, op1, op2, result, auxiliary, extended_value, source_opcode,
+		source_position_id, ZEND_FETCH_FUNC_ARG, fetch_type);
 }
 
 #undef ZEND_NATIVE_DYNAMIC_FETCH
 
 static zend_string *zend_native_dynamic_name(
-	zend_execute_data *execute_data, const zend_op *opline,
+	zend_execute_data *execute_data,
+	const zend_native_explicit_dynamic_operation *opline,
 	zend_string **temporary)
 {
 	zval *value = zend_native_dynamic_read(
-		execute_data, opline, opline->op1_type, opline->op1);
+		execute_data, opline->op1_type, opline->op1);
 
 	*temporary = NULL;
 	if (value == NULL) {
@@ -293,15 +408,20 @@ static zend_string *zend_native_dynamic_name(
 }
 
 zend_native_status zend_native_dynamic_unset_var(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand, uint64_t auxiliary,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
-	const zend_op *opline = zend_native_dynamic_opline(
-		execute_data, source_opline_index, ZEND_UNSET_VAR);
+	zend_native_explicit_dynamic_operation operation;
+	const zend_native_explicit_dynamic_operation *opline = &operation;
 	HashTable *symbol_table;
 	zend_string *temporary;
 	zend_string *name;
 
-	if (opline == NULL
+	if (!zend_native_dynamic_init_explicit_operation(
+			execute_data, op1, op2, result_operand, auxiliary, extended_value,
+			source_opcode, source_position_id, ZEND_UNSET_VAR, &operation)
 			|| (name = zend_native_dynamic_name(
 				execute_data, opline, &temporary)) == NULL
 			|| (symbol_table = zend_native_dynamic_symbol_table(
@@ -317,10 +437,13 @@ zend_native_status zend_native_dynamic_unset_var(
 }
 
 zend_native_status zend_native_dynamic_isset_isempty_var(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand, uint64_t auxiliary,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
-	const zend_op *opline = zend_native_dynamic_opline(
-		execute_data, source_opline_index, ZEND_ISSET_ISEMPTY_VAR);
+	zend_native_explicit_dynamic_operation operation;
+	const zend_native_explicit_dynamic_operation *opline = &operation;
 	HashTable *symbol_table;
 	zend_string *temporary;
 	zend_string *name;
@@ -328,7 +451,10 @@ zend_native_status zend_native_dynamic_isset_isempty_var(
 	zval *result;
 	bool truth;
 
-	if (opline == NULL
+	if (!zend_native_dynamic_init_explicit_operation(
+			execute_data, op1, op2, result_operand, auxiliary, extended_value,
+			source_opcode, source_position_id,
+			ZEND_ISSET_ISEMPTY_VAR, &operation)
 			|| (name = zend_native_dynamic_name(
 				execute_data, opline, &temporary)) == NULL
 			|| (symbol_table = zend_native_dynamic_symbol_table(
@@ -360,19 +486,26 @@ zend_native_status zend_native_dynamic_isset_isempty_var(
 }
 
 zend_native_status zend_native_dynamic_bind_global(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand, uint64_t auxiliary,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
-	const zend_op *opline = zend_native_dynamic_opline(
-		execute_data, source_opline_index, ZEND_BIND_GLOBAL);
+	zend_native_explicit_dynamic_operation operation;
+	const zend_native_explicit_dynamic_operation *opline = &operation;
 	zval *name;
 	zval *global;
 	zval *local;
 	zend_reference *reference;
 	zend_refcounted *garbage = NULL;
 
-	if (opline == NULL || opline->op1_type != IS_CV
+	if (!zend_native_dynamic_init_explicit_operation(
+			execute_data, op1, op2, result_operand, auxiliary, extended_value,
+			source_opcode, source_position_id, ZEND_BIND_GLOBAL, &operation)
+			|| opline->op1_type != IS_CV
 			|| opline->op2_type != IS_CONST
-			|| (name = RT_CONSTANT(opline, opline->op2)) == NULL
+			|| (name = zend_native_dynamic_read(
+				execute_data, opline->op2_type, opline->op2)) == NULL
 			|| Z_TYPE_P(name) != IS_STRING
 			|| (local = zend_native_dynamic_slot(
 				execute_data, opline->op1_type, opline->op1)) == NULL) {
@@ -411,13 +544,19 @@ zend_native_status zend_native_dynamic_bind_global(
 }
 
 zend_native_status zend_native_dynamic_fetch_globals(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand, uint64_t auxiliary,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
-	const zend_op *opline = zend_native_dynamic_opline(
-		execute_data, source_opline_index, ZEND_FETCH_GLOBALS);
+	zend_native_explicit_dynamic_operation operation;
+	const zend_native_explicit_dynamic_operation *opline = &operation;
 	zval *result;
 
-	if (opline == NULL || (result = zend_native_dynamic_slot(
+	if (!zend_native_dynamic_init_explicit_operation(
+			execute_data, op1, op2, result_operand, auxiliary, extended_value,
+			source_opcode, source_position_id, ZEND_FETCH_GLOBALS, &operation)
+			|| (result = zend_native_dynamic_slot(
 			execute_data, opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -427,20 +566,29 @@ zend_native_status zend_native_dynamic_fetch_globals(
 }
 
 zend_native_status zend_native_dynamic_fetch_constant(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand, uint64_t auxiliary,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
-	const zend_op *opline = zend_native_dynamic_opline(
-		execute_data, source_opline_index, ZEND_FETCH_CONSTANT);
+	zend_native_explicit_dynamic_operation operation;
+	const zend_native_explicit_dynamic_operation *opline = &operation;
 	const zval *key;
 	zval *value;
 	zval *result;
 
-	if (opline == NULL || opline->op2_type != IS_CONST
+	if (!zend_native_dynamic_init_explicit_operation(
+			execute_data, op1, op2, result_operand, auxiliary, extended_value,
+			source_opcode, source_position_id, ZEND_FETCH_CONSTANT, &operation)
+			|| opline->op2_type != IS_CONST
+			|| (uint64_t) opline->op2.constant + 1
+				>= execute_data->func->op_array.last_literal
 			|| (result = zend_native_dynamic_slot(
-				execute_data, opline->result_type, opline->result)) == NULL) {
+			execute_data, opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	key = RT_CONSTANT(opline, opline->op2) + 1;
+	key = zend_native_dynamic_read(
+		execute_data, opline->op2_type, opline->op2) + 1;
 	if (Z_TYPE_P(key) != IS_STRING) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -448,6 +596,11 @@ zend_native_status zend_native_dynamic_fetch_constant(
 		Z_STR_P(key), execute_data->func->op_array.scope, opline->op1.num);
 	if (value == NULL && (opline->op1.num
 			& IS_CONSTANT_UNQUALIFIED_IN_NAMESPACE) != 0) {
+		if ((uint64_t) opline->op2.constant + 2
+				>= execute_data->func->op_array.last_literal) {
+			ZVAL_UNDEF(result);
+			return ZEND_NATIVE_EXCEPTION;
+		}
 		key++;
 		if (Z_TYPE_P(key) == IS_STRING) {
 			value = zend_get_constant_ex(
@@ -458,7 +611,8 @@ zend_native_status zend_native_dynamic_fetch_constant(
 		ZVAL_UNDEF(result);
 		if (EG(exception) == NULL) {
 			zend_throw_error(NULL, "Undefined constant \"%s\"",
-				Z_STRVAL_P(RT_CONSTANT(opline, opline->op2)));
+				Z_STRVAL_P(zend_native_dynamic_read(
+					execute_data, opline->op2_type, opline->op2)));
 		}
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -467,21 +621,29 @@ zend_native_status zend_native_dynamic_fetch_constant(
 }
 
 static zend_native_status zend_native_dynamic_declare_constant_impl(
-	zend_execute_data *execute_data, uint32_t source_opline_index,
-	bool attributed)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand, uint64_t auxiliary,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id, bool attributed)
 {
-	const zend_op *opline = zend_native_dynamic_opline(
-		execute_data, source_opline_index,
-		attributed ? ZEND_DECLARE_ATTRIBUTED_CONST : ZEND_DECLARE_CONST);
+	zend_native_explicit_dynamic_operation operation;
+	const zend_native_explicit_dynamic_operation *opline = &operation;
 	zval *name;
 	zval *value;
 	zend_constant constant;
 	zend_constant *registered;
 
-	if (opline == NULL || opline->op1_type != IS_CONST
+	if (!zend_native_dynamic_init_explicit_operation(
+			execute_data, op1, op2, result_operand, auxiliary, extended_value,
+			source_opcode, source_position_id,
+			attributed ? ZEND_DECLARE_ATTRIBUTED_CONST : ZEND_DECLARE_CONST,
+			&operation)
+			|| opline->op1_type != IS_CONST
 			|| opline->op2_type != IS_CONST
-			|| (name = RT_CONSTANT(opline, opline->op1)) == NULL
-			|| (value = RT_CONSTANT(opline, opline->op2)) == NULL
+			|| (name = zend_native_dynamic_read(
+				execute_data, opline->op1_type, opline->op1)) == NULL
+			|| (value = zend_native_dynamic_read(
+				execute_data, opline->op2_type, opline->op2)) == NULL
 			|| Z_TYPE_P(name) != IS_STRING) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -497,14 +659,10 @@ static zend_native_status zend_native_dynamic_declare_constant_impl(
 	constant.name = zend_string_copy(Z_STR_P(name));
 	registered = zend_register_constant(&constant);
 	if (registered != NULL && attributed) {
-		const zend_op *op_data;
-		zval *attributes;
+		zval *attributes = zend_native_dynamic_read(
+			execute_data, opline->auxiliary_type, opline->auxiliary);
 
-		if (source_opline_index + 1 >= execute_data->func->op_array.last
-				|| (op_data = opline + 1)->opcode != ZEND_OP_DATA
-				|| (attributes = zend_native_dynamic_read(
-					execute_data, op_data,
-					op_data->op1_type, op_data->op1)) == NULL
+		if (opline->auxiliary_type == IS_UNUSED || attributes == NULL
 				|| Z_TYPE_P(attributes) != IS_PTR) {
 			return ZEND_NATIVE_EXCEPTION;
 		}
@@ -516,15 +674,23 @@ static zend_native_status zend_native_dynamic_declare_constant_impl(
 }
 
 zend_native_status zend_native_dynamic_declare_constant(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand, uint64_t auxiliary,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
 	return zend_native_dynamic_declare_constant_impl(
-		execute_data, source_opline_index, false);
+		execute_data, op1, op2, result_operand, auxiliary, extended_value,
+		source_opcode, source_position_id, false);
 }
 
 zend_native_status zend_native_dynamic_declare_attributed_constant(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand, uint64_t auxiliary,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
 	return zend_native_dynamic_declare_constant_impl(
-		execute_data, source_opline_index, true);
+		execute_data, op1, op2, result_operand, auxiliary, extended_value,
+		source_opcode, source_position_id, true);
 }

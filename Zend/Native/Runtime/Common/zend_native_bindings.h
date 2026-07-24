@@ -9,32 +9,40 @@
 extern "C" {
 #endif
 
+#define ZEND_NATIVE_DYNAMIC_EXPLICIT_ARGS \
+	zend_execute_data *execute_data, \
+	uint64_t op1, uint64_t op2, uint64_t result, uint64_t auxiliary, \
+	uint32_t extended_value, uint32_t source_opcode, \
+	uint32_t source_position_id
+
 zend_native_status zend_native_dynamic_fetch_r(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	ZEND_NATIVE_DYNAMIC_EXPLICIT_ARGS);
 zend_native_status zend_native_dynamic_fetch_w(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	ZEND_NATIVE_DYNAMIC_EXPLICIT_ARGS);
 zend_native_status zend_native_dynamic_fetch_rw(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	ZEND_NATIVE_DYNAMIC_EXPLICIT_ARGS);
 zend_native_status zend_native_dynamic_fetch_is(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	ZEND_NATIVE_DYNAMIC_EXPLICIT_ARGS);
 zend_native_status zend_native_dynamic_fetch_func_arg(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	ZEND_NATIVE_DYNAMIC_EXPLICIT_ARGS);
 zend_native_status zend_native_dynamic_fetch_unset(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	ZEND_NATIVE_DYNAMIC_EXPLICIT_ARGS);
 zend_native_status zend_native_dynamic_unset_var(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	ZEND_NATIVE_DYNAMIC_EXPLICIT_ARGS);
 zend_native_status zend_native_dynamic_isset_isempty_var(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	ZEND_NATIVE_DYNAMIC_EXPLICIT_ARGS);
 zend_native_status zend_native_dynamic_bind_global(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	ZEND_NATIVE_DYNAMIC_EXPLICIT_ARGS);
 zend_native_status zend_native_dynamic_fetch_globals(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	ZEND_NATIVE_DYNAMIC_EXPLICIT_ARGS);
 zend_native_status zend_native_dynamic_fetch_constant(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	ZEND_NATIVE_DYNAMIC_EXPLICIT_ARGS);
 zend_native_status zend_native_dynamic_declare_constant(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	ZEND_NATIVE_DYNAMIC_EXPLICIT_ARGS);
 zend_native_status zend_native_dynamic_declare_attributed_constant(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	ZEND_NATIVE_DYNAMIC_EXPLICIT_ARGS);
+
+#undef ZEND_NATIVE_DYNAMIC_EXPLICIT_ARGS
 
 #ifdef __cplusplus
 }
