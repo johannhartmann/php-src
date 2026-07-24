@@ -42,6 +42,11 @@ typedef struct _zend_native_compiled_function {
 	uint32_t *exception_handler_oplines;
 	zend_native_compiler_module_host module_host;
 	zend_mir_module *module;
+	uint32_t *first_call_site_by_target;
+	uint32_t *next_call_site_by_site;
+	uint32_t call_target_count;
+	uint32_t call_site_count;
+	bool call_sites_indexed;
 	zend_native_image *image;
 	zend_native_code *code;
 	zend_native_entry_cell entry_cell;
@@ -64,6 +69,8 @@ struct _zend_native_compiler {
 	bool abi_conformance_probe;
 	zend_native_compiled_function **functions;
 	HashTable functions_by_op_array;
+	zend_op_array **script_functions_by_declaration_id;
+	uint32_t script_function_count;
 	uint32_t function_count;
 	uint32_t function_capacity;
 	zend_native_reentry_binding *reentry_bindings;
@@ -686,16 +693,91 @@ static bool zend_native_compiler_lower_function(
 	return true;
 }
 
+static bool zend_native_compiler_index_call_sites(
+	zend_native_compiled_function *function)
+{
+	const zend_mir_call_view *calls =
+		zend_mir_module_get_call_view(function->module);
+	uint32_t *first = NULL;
+	uint32_t *last = NULL;
+	uint32_t *next = NULL;
+	uint32_t target_count;
+	uint32_t site_count;
+	uint32_t index;
+
+	if (calls == NULL) {
+		function->call_sites_indexed = true;
+		return true;
+	}
+	if (function->call_sites_indexed) {
+		return true;
+	}
+	if (calls->call_target_count == NULL || calls->call_target_at == NULL
+			|| calls->call_site_count == NULL || calls->call_site_at == NULL) {
+		return false;
+	}
+	target_count = calls->call_target_count(calls->context);
+	site_count = calls->call_site_count(calls->context);
+	if (target_count == 0) {
+		function->call_sites_indexed = site_count == 0;
+		return function->call_sites_indexed;
+	}
+	first = safe_emalloc(target_count, sizeof(*first), 0);
+	last = safe_emalloc(target_count, sizeof(*last), 0);
+	if (site_count != 0) {
+		next = safe_emalloc(site_count, sizeof(*next), 0);
+	}
+	for (index = 0; index < target_count; index++) {
+		zend_mir_call_target_ref target;
+
+		first[index] = UINT32_MAX;
+		last[index] = UINT32_MAX;
+		if (!calls->call_target_at(calls->context, index, &target)
+				|| target.id != index) {
+			goto failure;
+		}
+	}
+	for (index = 0; index < site_count; index++) {
+		zend_mir_call_site_ref site;
+
+		next[index] = UINT32_MAX;
+		if (!calls->call_site_at(calls->context, index, &site)
+				|| site.target_id >= target_count) {
+			goto failure;
+		}
+		if (last[site.target_id] == UINT32_MAX) {
+			first[site.target_id] = index;
+		} else {
+			next[last[site.target_id]] = index;
+		}
+		last[site.target_id] = index;
+	}
+	efree(last);
+	function->first_call_site_by_target = first;
+	function->next_call_site_by_site = next;
+	function->call_target_count = target_count;
+	function->call_site_count = site_count;
+	function->call_sites_indexed = true;
+	return true;
+
+failure:
+	efree(next);
+	efree(last);
+	efree(first);
+	return false;
+}
+
 static zend_op_array *zend_native_compiler_resolve_native_target(
 	zend_native_compiler *compiler,
-	zend_op_array *caller,
+	zend_native_compiled_function *caller_function,
 	const zend_mir_call_view *calls,
 	const zend_mir_call_target_ref *target)
 {
 	zend_function *function;
 	const zend_ssa *caller_ssa = NULL;
-	uint32_t declaration_id = 1;
 	uint32_t index;
+	zend_op_array *caller = caller_function != NULL
+		? caller_function->op_array : NULL;
 
 	if (target != NULL && target->kind == ZEND_MIR_CALL_TARGET_DYNAMIC) {
 		/* Dynamic call sites carry no persistent function identity.  The
@@ -710,26 +792,26 @@ static zend_op_array *zend_native_compiler_resolve_native_target(
 		return NULL;
 	}
 	if (target->kind == ZEND_MIR_CALL_TARGET_METHOD_USER) {
-		if (compiler == NULL || caller == NULL || calls == NULL
+		if (compiler == NULL || caller_function == NULL || caller == NULL
+				|| calls == NULL
+				|| target->id >= caller_function->call_target_count
 				|| calls->call_site_count == NULL
 				|| calls->call_site_at == NULL) {
 			return NULL;
 		}
-		zend_native_compiled_function *caller_function =
-			zend_native_compiler_find_function(compiler, caller);
-
-		if (caller_function != NULL) {
-			caller_ssa = &caller_function->ssa;
-		}
+		caller_ssa = &caller_function->ssa;
 		if (caller_ssa == NULL) {
 			return NULL;
 		}
-		for (index = 0; index < calls->call_site_count(calls->context); index++) {
+		for (index = caller_function->first_call_site_by_target[target->id];
+				index != UINT32_MAX;
+				index = caller_function->next_call_site_by_site[index]) {
 			zend_mir_call_site_ref site;
 
-			if (!calls->call_site_at(calls->context, index, &site)
+			if (index >= caller_function->call_site_count
+					|| !calls->call_site_at(calls->context, index, &site)
 					|| site.target_id != target->id) {
-				continue;
+				return NULL;
 			}
 			if (site.source_init_opline_index >= caller->last) {
 				return NULL;
@@ -769,19 +851,9 @@ static zend_op_array *zend_native_compiler_resolve_native_target(
 	if (target->op_array_id == 0) {
 		return caller;
 	}
-	ZEND_HASH_FOREACH_PTR(&compiler->script->function_table, function) {
-		if (function == NULL || function->type != ZEND_USER_FUNCTION) {
-			continue;
-		}
-		if (declaration_id == target->op_array_id) {
-			return &function->op_array;
-		}
-		if (declaration_id == ZEND_MIR_ID_MAX) {
-			break;
-		}
-		declaration_id++;
-	} ZEND_HASH_FOREACH_END();
-	return NULL;
+	return target->op_array_id <= compiler->script_function_count
+		? compiler->script_functions_by_declaration_id[target->op_array_id]
+		: NULL;
 }
 
 static bool zend_native_compiler_target_is_direct_native(
@@ -804,17 +876,21 @@ static bool zend_native_compiler_target_is_direct_native(
 			|| callee == NULL) {
 		return false;
 	}
-	for (index = 0; index < calls->call_site_count(calls->context); index++) {
+	if (target->id >= caller_function->call_target_count) {
+		return false;
+	}
+	for (index = caller_function->first_call_site_by_target[target->id];
+			index != UINT32_MAX;
+			index = caller_function->next_call_site_by_site[index]) {
 		zend_mir_call_site_ref site;
 		const zend_op *init;
 		zend_function *resolved;
 		bool inherit_called_scope;
 
-		if (!calls->call_site_at(calls->context, index, &site)) {
+		if (index >= caller_function->call_site_count
+				|| !calls->call_site_at(calls->context, index, &site)
+				|| site.target_id != target->id) {
 			return false;
-		}
-		if (site.target_id != target->id) {
-			continue;
 		}
 		if (site.source_init_opline_index >= caller_function->op_array->last) {
 			return false;
@@ -855,43 +931,42 @@ static bool zend_native_compiler_target_is_direct_native(
 
 static zend_function *zend_native_compiler_resolve_internal_target(
 	zend_native_compiler *compiler,
-	zend_op_array *caller,
+	zend_native_compiled_function *caller_function,
 	const zend_mir_call_view *calls,
 	const zend_mir_call_target_ref *target,
 	const zend_op **init_opline_out)
 {
 	uint32_t index;
+	zend_op_array *caller = caller_function != NULL
+		? caller_function->op_array : NULL;
 
-	if (compiler == NULL || caller == NULL || calls == NULL || target == NULL
+	if (compiler == NULL || caller_function == NULL || caller == NULL
+			|| calls == NULL || target == NULL
 			|| target->kind != ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL
 			|| calls->call_site_count == NULL || calls->call_site_at == NULL) {
 		return NULL;
 	}
-	for (index = 0; index < calls->call_site_count(calls->context); index++) {
+	if (target->id >= caller_function->call_target_count) {
+		return NULL;
+	}
+	for (index = caller_function->first_call_site_by_target[target->id];
+			index != UINT32_MAX;
+			index = caller_function->next_call_site_by_site[index]) {
 		zend_mir_call_site_ref site;
 		zend_function *function;
 		const zend_op *init;
-		uint32_t function_index;
-		const zend_ssa *ssa = NULL;
+		const zend_ssa *ssa = &caller_function->ssa;
 
-		if (!calls->call_site_at(calls->context, index, &site)
+		if (index >= caller_function->call_site_count
+				|| !calls->call_site_at(calls->context, index, &site)
 				|| site.target_id != target->id) {
-			continue;
+			return NULL;
 		}
 		if (site.source_init_opline_index >= caller->last) {
 			return NULL;
 		}
 		init = &caller->opcodes[site.source_init_opline_index];
-		for (function_index = 0;
-				function_index < compiler->function_count;
-				function_index++) {
-			if (compiler->functions[function_index]->op_array == caller) {
-				ssa = &compiler->functions[function_index]->ssa;
-				break;
-			}
-		}
-		function = ssa == NULL ? NULL
-			: zend_mir_zend_source_resolve_internal_call(
+		function = zend_mir_zend_source_resolve_internal_call(
 				compiler->script, caller, ssa,
 				site.source_init_opline_index);
 		if (function == NULL || function->type != ZEND_INTERNAL_FUNCTION) {
@@ -1144,7 +1219,7 @@ static bool zend_native_compiler_discover_native_callees(
 		}
 		if (target.kind == ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL) {
 			if (zend_native_compiler_resolve_internal_target(
-					compiler, function->op_array, calls, &target, NULL) == NULL) {
+					compiler, function, calls, &target, NULL) == NULL) {
 				return false;
 			}
 			continue;
@@ -1153,7 +1228,7 @@ static bool zend_native_compiler_discover_native_callees(
 			continue;
 		}
 		callee = zend_native_compiler_resolve_native_target(
-			compiler, function->op_array, calls, &target);
+			compiler, function, calls, &target);
 		if (callee == NULL
 				|| zend_native_compiler_add_function(
 					compiler, callee, NULL) == NULL) {
@@ -1172,35 +1247,24 @@ static bool zend_native_compiler_discover_native_callees(
 		zend_mir_call_site_ref site;
 		zend_mir_call_target_ref target;
 		zend_op_array *callee = NULL;
-		uint32_t target_index;
 		uint32_t argument_index;
-		bool found_target = false;
 
 		if (!calls->call_site_at(calls->context, index, &site)) {
 			return false;
 		}
-		for (target_index = 0; target_index < target_count; target_index++) {
-			if (!calls->call_target_at(
-					calls->context, target_index, &target)) {
-				return false;
-			}
-			if (target.id == site.target_id) {
-				found_target = true;
-				if (target.kind == ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL) {
-					callee = NULL;
-					break;
-				}
-				callee = zend_native_compiler_resolve_native_target(
-					compiler, function->op_array, calls, &target);
-				break;
-			}
-		}
-		if (!found_target) {
+		if (site.target_id >= target_count
+				|| !calls->call_target_at(
+					calls->context, site.target_id, &target)
+				|| target.id != site.target_id) {
 			return false;
+		}
+		if (target.kind != ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL) {
+			callee = zend_native_compiler_resolve_native_target(
+				compiler, function, calls, &target);
 		}
 		if (target.kind == ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL) {
 			zend_function *internal = zend_native_compiler_resolve_internal_target(
-				compiler, function->op_array, calls, &target, NULL);
+				compiler, function, calls, &target, NULL);
 
 			if (internal == NULL) {
 				return false;
@@ -1307,7 +1371,7 @@ static bool zend_native_compiler_visit_scc(
 			continue;
 		}
 		callee = zend_native_compiler_resolve_native_target(
-			state->compiler, function->op_array, calls, &target);
+			state->compiler, function, calls, &target);
 		native_callee = zend_native_compiler_find_function(
 			state->compiler, callee);
 		if (native_callee == NULL) {
@@ -1494,7 +1558,7 @@ static bool zend_native_compiler_compile_native_component(
 				zend_class_entry *called_scope = NULL;
 
 				internal = zend_native_compiler_resolve_internal_target(
-					compiler, function->op_array, calls, &target, &init_opline);
+					compiler, function, calls, &target, &init_opline);
 				if (internal == NULL || init_opline == NULL) {
 					goto binding_failure;
 				}
@@ -1540,7 +1604,7 @@ static bool zend_native_compiler_compile_native_component(
 				continue;
 			}
 			callee = zend_native_compiler_resolve_native_target(
-				compiler, function->op_array, calls, &target);
+				compiler, function, calls, &target);
 			native_callee = zend_native_compiler_find_function(compiler, callee);
 			if (native_callee == NULL
 					|| native_callee->state
@@ -1798,6 +1862,14 @@ zend_result zend_native_compiler_compile(
 						compiler, function, diagnostic)
 					|| !zend_native_compiler_lower_function(
 						compiler, function, diagnostic))) {
+			goto failure;
+		}
+		if (!function->call_sites_indexed
+				&& !zend_native_compiler_index_call_sites(function)) {
+			zend_native_compiler_set_diagnostic(
+				compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"native call-site index cannot be constructed");
 			goto failure;
 		}
 		if (!zend_native_compiler_discover_native_callees(
@@ -2154,6 +2226,39 @@ zend_native_status zend_native_compiler_execute(
 	return status;
 }
 
+static bool zend_native_compiler_index_script_functions(
+	zend_native_compiler *compiler)
+{
+	zend_function *function;
+	uint32_t count = 0;
+	uint32_t declaration_id = 1;
+
+	ZEND_HASH_FOREACH_PTR(&compiler->script->function_table, function) {
+		if (function != NULL && function->type == ZEND_USER_FUNCTION) {
+			if (count == ZEND_MIR_ID_MAX) {
+				return false;
+			}
+			count++;
+		}
+	} ZEND_HASH_FOREACH_END();
+	if (count == 0) {
+		return true;
+	}
+	compiler->script_functions_by_declaration_id =
+		safe_emalloc(count + 1,
+			sizeof(*compiler->script_functions_by_declaration_id), 0);
+	compiler->script_functions_by_declaration_id[0] = NULL;
+	ZEND_HASH_FOREACH_PTR(&compiler->script->function_table, function) {
+		if (function == NULL || function->type != ZEND_USER_FUNCTION) {
+			continue;
+		}
+		compiler->script_functions_by_declaration_id[declaration_id++] =
+			&function->op_array;
+	} ZEND_HASH_FOREACH_END();
+	compiler->script_function_count = count;
+	return true;
+}
+
 zend_native_compiler *zend_native_compiler_create(
 	const zend_native_compiler_config *config,
 	zend_native_compile_diagnostic *diagnostic)
@@ -2182,6 +2287,14 @@ zend_native_compiler *zend_native_compiler_create(
 	compiler->unavailable_runtime_helper =
 		config->unavailable_runtime_helper;
 	compiler->abi_conformance_probe = config->abi_conformance_probe;
+	if (!zend_native_compiler_index_script_functions(compiler)) {
+		zend_native_compiler_set_diagnostic(
+			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"native script function index cannot be constructed");
+		efree(compiler);
+		return NULL;
+	}
 	zend_hash_init(
 		&compiler->functions_by_op_array, 8, NULL, NULL, false);
 	zend_native_dynamic_compiler_init(&compiler->dynamic_compiler);
@@ -2228,10 +2341,13 @@ void zend_native_compiler_destroy(zend_native_compiler *compiler)
 		}
 		efree(function->source_effects);
 		efree(function->exception_handler_oplines);
+		efree(function->first_call_site_by_target);
+		efree(function->next_call_site_by_site);
 		efree(function->internal_call_cells);
 		efree(function);
 	}
 	efree(compiler->reentry_bindings);
+	efree(compiler->script_functions_by_declaration_id);
 	zend_hash_destroy(&compiler->functions_by_op_array);
 	efree(compiler->functions);
 	zend_native_dynamic_compiler_destroy(&compiler->dynamic_compiler);
