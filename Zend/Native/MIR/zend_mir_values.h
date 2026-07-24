@@ -168,11 +168,20 @@ typedef struct _zend_mir_executable_value_ref {
 	zend_mir_source_operand_ref op2;
 	zend_mir_source_operand_ref result;
 	/*
+	 * Some Zend operations attach a stable 32-bit discriminator or table
+	 * index to an IS_UNUSED operand. Preserve that scalar payload explicitly;
+	 * it is zero for every non-UNUSED operand and never contains a pointer.
+	 */
+	uint32_t op1_unused_payload;
+	uint32_t op2_unused_payload;
+	uint32_t result_unused_payload;
+	/*
 	 * Auxiliary value carried by a following ZEND_OP_DATA.  It is copied
 	 * into the executable model while source SSA is alive so assignment
 	 * helpers never rediscover value semantics from an adjacent zend_op.
 	 */
 	zend_mir_source_operand_ref auxiliary;
+	uint32_t auxiliary_unused_payload;
 	zend_mir_storage_id op1_storage_id;
 	zend_mir_storage_id op2_storage_id;
 	zend_mir_storage_id result_storage_id;
