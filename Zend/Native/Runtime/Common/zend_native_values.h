@@ -10,11 +10,20 @@ extern "C" {
 #endif
 
 zend_native_status zend_native_value_make_ref(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
 zend_native_status zend_native_value_assign_ref(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
 zend_native_status zend_native_value_separate(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
 zend_native_status zend_native_value_copy_tmp(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,
@@ -31,9 +40,15 @@ zend_native_status zend_native_value_echo(
 	uint32_t extended_value, uint32_t source_opcode,
 	uint32_t source_position_id);
 zend_native_status zend_native_value_unset_cv(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
 zend_native_status zend_native_value_check_var(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
 zend_native_status zend_native_value_assign(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,
@@ -117,7 +132,10 @@ zend_native_status zend_native_value_unary_op(
 	uint32_t extended_value, uint32_t source_opcode,
 	uint32_t source_position_id);
 zend_native_status zend_native_value_type_check(
-	zend_execute_data *execute_data, uint32_t source_opline_index);
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
 zend_native_status zend_native_value_verify_return_type(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,
