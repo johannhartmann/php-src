@@ -20739,11 +20739,11 @@
     },
     {
       "path": "Zend/zend_execute.c",
-      "sha256": "a24d98a5a7678c33a3e676a36dbeb8500df3b094a8dfc15ccc523571203293dc"
+      "sha256": "e7bc73eeb668598e875000dbc3b57cecbd4acb1a61612173cadcfaf33306eb25"
     },
     {
       "path": "Zend/zend_execute.h",
-      "sha256": "7bbfbbaec02289f1bdf354812e391bb0d302e46e09b8384187382119105433bc"
+      "sha256": "b0262bd8b33e0555ca59ae22dafeb45ac66f121daafc13a16d9387d1030b174d"
     },
     {
       "path": "Zend/zend_partial.c",

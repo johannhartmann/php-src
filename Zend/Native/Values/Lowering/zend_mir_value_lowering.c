@@ -252,6 +252,10 @@ static zend_mir_opcode zend_mir_w09_executable_opcode(uint32_t opcode)
 			return ZEND_MIR_OPCODE_VALUE_ECHO;
 		case ZEND_VERIFY_RETURN_TYPE:
 			return ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE;
+		case ZEND_FUNC_NUM_ARGS:
+			return ZEND_MIR_OPCODE_FUNC_NUM_ARGS;
+		case ZEND_FUNC_GET_ARGS:
+			return ZEND_MIR_OPCODE_FUNC_GET_ARGS;
 		case ZEND_ADD:
 		case ZEND_SUB:
 		case ZEND_MUL:
@@ -426,11 +430,14 @@ static bool zend_mir_w09_operation_semantics(
 	const zend_mir_memory_domain_mask frame_domains =
 		ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_FRAME_LOCALS)
 		| ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_FRAME_TEMPS);
+	const zend_mir_memory_domain_mask argument_domains =
+		ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_FRAME_ARGS);
+	const zend_mir_memory_domain_mask array_domains =
+		ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_HEAP_ARRAY);
 	const zend_mir_memory_domain_mask reference_domains =
 		ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_HEAP_ZVAL)
 		| ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_HEAP_REFERENCE)
 		| ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_GC_METADATA);
-
 	zend_mir_effect_summary_empty(&summary);
 	if (!zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_READ_MEMORY)
 			|| !zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_WRITE_MEMORY)) {
@@ -558,6 +565,19 @@ static bool zend_mir_w09_operation_semantics(
 				return false;
 			}
 			break;
+		case ZEND_MIR_OPCODE_FUNC_NUM_ARGS:
+			if (!zend_mir_w09_add_effect(
+					&summary, ZEND_MIR_EFFECT_OBSERVE_FRAME)) {
+				return false;
+			}
+			break;
+		case ZEND_MIR_OPCODE_FUNC_GET_ARGS:
+			if (!zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_ALLOCATE)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_OBSERVE_FRAME)) {
+				return false;
+			}
+			break;
 		case ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL:
 			if (!zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_ALLOCATE)
 					|| !zend_mir_w09_add_effect(
@@ -623,17 +643,30 @@ static bool zend_mir_w09_operation_semantics(
 		default:
 			return false;
 	}
-	summary.reads |= frame_domains | reference_domains;
-	summary.writes |= frame_domains | reference_domains;
+	if (opcode == ZEND_MIR_OPCODE_FUNC_NUM_ARGS) {
+		summary.reads |= argument_domains;
+		summary.writes |= frame_domains;
+	} else if (opcode == ZEND_MIR_OPCODE_FUNC_GET_ARGS) {
+		summary.reads |= argument_domains | reference_domains;
+		summary.writes |= frame_domains | array_domains | reference_domains;
+	} else {
+		summary.reads |= frame_domains | reference_domains;
+		summary.writes |= frame_domains | reference_domains;
+	}
 	if (!zend_mir_effect_summary_init(&summary, summary.effects,
-			summary.reads, summary.writes, summary.barriers, 0, 0)) {
+			summary.reads, summary.writes, summary.barriers,
+			opcode == ZEND_MIR_OPCODE_FUNC_NUM_ARGS
+				? ZEND_MIR_OWNERSHIP_ACTION_MASK(
+					ZEND_MIR_OWNERSHIP_ACTION_PRODUCE_OWNED)
+				: 0,
+			0)) {
 		return false;
 	}
 	operation->effects = summary.effects;
 	operation->reads = summary.reads;
 	operation->writes = summary.writes;
 	operation->barriers = summary.barriers;
-	operation->ownership_actions = 0;
+	operation->ownership_actions = summary.ownership_actions;
 	if ((summary.barriers
 			& ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_DESTRUCTOR)) != 0) {
 		*frame_class = ZEND_MIR_SAFEPOINT_CLASS_DESTRUCTOR;
