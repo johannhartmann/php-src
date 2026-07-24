@@ -15,7 +15,7 @@ for ($index = 0; $index < 1000; $index++) {
 $source .= <<<'PHP'
 function selected_root(): int
 {
-    return independent_777();
+    return independent_777() + independent_777();
 }
 PHP;
 
@@ -37,4 +37,4 @@ printf(
 );
 ?>
 --EXPECT--
-accepted return=777 codeunits=2 components=2 vm=0 execute_ex=0 handler=0
+accepted return=1554 codeunits=2 components=2 vm=0 execute_ex=0 handler=0

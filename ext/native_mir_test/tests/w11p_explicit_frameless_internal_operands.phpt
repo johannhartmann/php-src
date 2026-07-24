@@ -17,7 +17,7 @@ function w11p_explicit_frameless_internal(
 ): int {
     $clean = trim($text);
     $position = strpos($clean, $needle, $offset);
-    return min($position, 100) + strlen($clean);
+    return min($position, 100) + strlen($clean) + strlen($needle);
 }
 PHP;
 
@@ -42,4 +42,4 @@ printf(
 );
 ?>
 --EXPECT--
-accepted return=16 executions=10 vm=0 execute_ex=0 handler=0
+accepted return=20 executions=10 vm=0 execute_ex=0 handler=0
