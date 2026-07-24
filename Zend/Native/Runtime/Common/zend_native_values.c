@@ -287,14 +287,19 @@ static void zend_native_value_consume_operand(
 }
 
 zend_native_status zend_native_value_make_ref(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
-	const zend_op *opline = zend_native_value_opline(
-		execute_data, source_opline_index, ZEND_MAKE_REF);
+	zend_native_explicit_value_operation operation;
+	const zend_native_explicit_value_operation *opline = &operation;
 	zval *source;
 	zval *result = NULL;
 
-	if (opline == NULL
+	if (!zend_native_value_init_explicit_operation(
+			execute_data, op1, op2, result_operand, extended_value,
+			source_opcode, source_position_id, ZEND_MAKE_REF, &operation)
 			|| (opline->op1_type != IS_CV && opline->op1_type != IS_VAR)
 			|| opline->result_type == IS_UNUSED) {
 		return ZEND_NATIVE_EXCEPTION;
@@ -336,17 +341,22 @@ zend_native_status zend_native_value_make_ref(
 }
 
 zend_native_status zend_native_value_assign_ref(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
-	const zend_op *opline = zend_native_value_opline(
-		execute_data, source_opline_index, ZEND_ASSIGN_REF);
+	zend_native_explicit_value_operation operation;
+	const zend_native_explicit_value_operation *opline = &operation;
 	zend_refcounted *garbage = NULL;
 	zend_reference *reference;
 	zval *variable;
 	zval *value;
 	zval *value_slot;
 
-	if (opline == NULL
+	if (!zend_native_value_init_explicit_operation(
+			execute_data, op1, op2, result_operand, extended_value,
+			source_opcode, source_position_id, ZEND_ASSIGN_REF, &operation)
 			|| (opline->op1_type != IS_CV && opline->op1_type != IS_VAR)
 			|| (opline->op2_type != IS_CV && opline->op2_type != IS_VAR)) {
 		return ZEND_NATIVE_EXCEPTION;
@@ -428,13 +438,19 @@ zend_native_status zend_native_value_assign_ref(
 }
 
 zend_native_status zend_native_value_separate(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
-	const zend_op *opline = zend_native_value_opline(
-		execute_data, source_opline_index, ZEND_SEPARATE);
+	zend_native_explicit_value_operation operation;
+	const zend_native_explicit_value_operation *opline = &operation;
 	zval *value;
 
-	if (opline == NULL || opline->op1_type != IS_VAR
+	if (!zend_native_value_init_explicit_operation(
+			execute_data, op1, op2, result_operand, extended_value,
+			source_opcode, source_position_id, ZEND_SEPARATE, &operation)
+			|| opline->op1_type != IS_VAR
 			|| (value = zend_native_value_slot(
 				execute_data, opline->op1_type, opline->op1)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
@@ -546,13 +562,19 @@ zend_native_status zend_native_value_echo(
 }
 
 zend_native_status zend_native_value_unset_cv(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
-	const zend_op *opline = zend_native_value_opline(
-		execute_data, source_opline_index, ZEND_UNSET_CV);
+	zend_native_explicit_value_operation operation;
+	const zend_native_explicit_value_operation *opline = &operation;
 	zval *value;
 
-	if (opline == NULL || opline->op1_type != IS_CV
+	if (!zend_native_value_init_explicit_operation(
+			execute_data, op1, op2, result_operand, extended_value,
+			source_opcode, source_position_id, ZEND_UNSET_CV, &operation)
+			|| opline->op1_type != IS_CV
 			|| (value = zend_native_value_slot(
 				execute_data, opline->op1_type, opline->op1)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
@@ -568,14 +590,20 @@ zend_native_status zend_native_value_unset_cv(
 }
 
 zend_native_status zend_native_value_check_var(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
-	const zend_op *opline = zend_native_value_opline(
-		execute_data, source_opline_index, ZEND_CHECK_VAR);
+	zend_native_explicit_value_operation operation;
+	const zend_native_explicit_value_operation *opline = &operation;
 	zval *value;
 	uint32_t variable_index;
 
-	if (opline == NULL || opline->op1_type != IS_CV
+	if (!zend_native_value_init_explicit_operation(
+			execute_data, op1, op2, result_operand, extended_value,
+			source_opcode, source_position_id, ZEND_CHECK_VAR, &operation)
+			|| opline->op1_type != IS_CV
 			|| (value = zend_native_value_slot(
 				execute_data, opline->op1_type, opline->op1)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
@@ -887,20 +915,26 @@ zend_native_status zend_native_value_unary_op(
 }
 
 zend_native_status zend_native_value_type_check(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
-	const zend_op *opline = zend_native_value_opline(
-		execute_data, source_opline_index, ZEND_TYPE_CHECK);
+	zend_native_explicit_value_operation operation;
+	const zend_native_explicit_value_operation *opline = &operation;
 	zval *value;
 	zval *result;
 	bool matches = false;
 
-	if (opline == NULL || opline->result_type == IS_UNUSED
+	if (!zend_native_value_init_explicit_operation(
+			execute_data, op1, op2, result_operand, extended_value,
+			source_opcode, source_position_id, ZEND_TYPE_CHECK, &operation)
+			|| opline->result_type == IS_UNUSED
 			|| (opline->op1_type != IS_CONST
 				&& opline->op1_type != IS_TMP_VAR
 				&& opline->op1_type != IS_VAR
 				&& opline->op1_type != IS_CV)
-			|| (value = zend_native_value_read(
+			|| (value = zend_native_value_read_explicit(
 				execute_data, opline, opline->op1_type, opline->op1)) == NULL
 			|| (result = zend_native_value_slot(
 				execute_data, opline->result_type, opline->result)) == NULL) {
