@@ -1091,23 +1091,27 @@ bool initialize_plan(
 							&& zend_mir_scalar_type_is_exact(
 								descriptor->arguments[n].exact_type);
 					}
-					if (trivial_frame
-							&& (descriptor->result_type
-									!= ZEND_MIR_SCALAR_TYPE_NONE
-								&& zend_mir_scalar_type_is_exact(
-									descriptor->result_type))
+					const bool inline_result =
+						(!zend_mir_id_is_valid(record.result_id)
+							&& descriptor->result_operand.kind
+								== ZEND_MIR_SOURCE_OPERAND_UNUSED)
+						|| ((descriptor->result_type
+								!= ZEND_MIR_SCALAR_TYPE_NONE
+							&& zend_mir_scalar_type_is_exact(
+								descriptor->result_type))
 							&& (descriptor->result_operand.kind
-									== ZEND_MIR_SOURCE_OPERAND_SLOT
+								== ZEND_MIR_SOURCE_OPERAND_SLOT
 								|| descriptor->result_operand.kind
 									== ZEND_MIR_SOURCE_OPERAND_SSA)
 							&& (descriptor->result_operand.slot_kind
-									== ZEND_MIR_SOURCE_SLOT_CV
+								== ZEND_MIR_SOURCE_SLOT_CV
 								|| descriptor->result_operand.slot_kind
 									== ZEND_MIR_SOURCE_SLOT_TMP
 								|| descriptor->result_operand.slot_kind
-									== ZEND_MIR_SOURCE_SLOT_VAR)) {
+									== ZEND_MIR_SOURCE_SLOT_VAR));
+					if (trivial_frame && inline_result) {
 						descriptor->flags |=
-							ZEND_NATIVE_DIRECT_CALL_TRIVIAL_FRAME;
+							ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME;
 					}
 					plan->instructions[i].direct_call = descriptor;
 					plan->direct_calls[plan->direct_call_count++] = descriptor;

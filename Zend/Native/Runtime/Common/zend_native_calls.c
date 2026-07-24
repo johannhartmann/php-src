@@ -1768,7 +1768,7 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 	caller->opline = &caller->func->op_array.opcodes[
 		descriptor->source_position];
 	trivial_frame =
-		(descriptor->flags & ZEND_NATIVE_DIRECT_CALL_TRIVIAL_FRAME) != 0
+		(descriptor->flags & ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME) != 0
 		&& descriptor->frame_size
 			== zend_vm_calc_used_stack(descriptor->argument_count, function)
 		&& function->op_array.scope == NULL

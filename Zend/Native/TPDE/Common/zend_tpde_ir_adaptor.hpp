@@ -513,7 +513,7 @@ public:
 				uint32_t frame_use_count;
 				if (instruction.direct_call != nullptr) {
 					if ((instruction.direct_call->flags
-							& ZEND_NATIVE_DIRECT_CALL_TRIVIAL_FRAME) != 0) {
+							& ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME) != 0) {
 						for (uint32_t n = 0;
 								n < instruction.call_argument_count; ++n) {
 							zend_mir_call_argument_ref argument;
@@ -530,7 +530,7 @@ public:
 							}
 							operands_.push_back(value);
 						}
-						frame_use_count = 7;
+						frame_use_count = 6 + machine_result;
 					} else {
 						frame_use_count = 2;
 					}
@@ -546,7 +546,7 @@ public:
 				if (instruction.direct_call != nullptr) {
 					const uint32_t context_use_count =
 						(instruction.direct_call->flags
-							& ZEND_NATIVE_DIRECT_CALL_TRIVIAL_FRAME) != 0
+							& ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME) != 0
 						? 7 : 3;
 					for (uint32_t n = 0; n < context_use_count; ++n) {
 						operands_.push_back(
