@@ -887,6 +887,8 @@ bool initialize_plan(
 			if ((semantic_echo ? count != 1 : count != 0)
 					|| !zend_mir_id_is_valid(record.source_position_id)
 					|| (!semantic_echo && helper == ZEND_NATIVE_HELPER_COUNT)
+					|| (!semantic_echo
+						&& !zend_tpde_helper_has_explicit_operands(helper))
 					|| !plan->instructions[i].has_value_operation
 					|| plan->instructions[i].value_operation.id != record.id
 					|| plan->instructions[i].value_operation.opcode
@@ -1044,26 +1046,6 @@ bool initialize_plan(
 						return false;
 					}
 				}
-			}
-			const bool explicit_object_operands =
-				(record.opcode >= ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS
-					&& record.opcode <= ZEND_MIR_OPCODE_OBJECT_BIND_STATIC)
-				|| (record.opcode
-						>= ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME
-					&& record.opcode
-						<= ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS_DELAYED);
-			if (!explicit_object_operands
-					&& record.opcode
-						!= ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL
-					&& (record.opcode < ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
-						|| record.opcode
-							> ZEND_MIR_OPCODE_DYNAMIC_INCLUDE_OR_EVAL)) {
-				/*
-				 * Kept temporarily for uncommon object slow paths while their
-				 * helper ABI is migrated.
-				 */
-				plan->instructions[i].source_opline_index =
-					record.source_position_id;
 			}
 			plan->required_runtime_capabilities |=
 				ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT;

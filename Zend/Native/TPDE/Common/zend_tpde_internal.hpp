@@ -76,6 +76,7 @@ static inline bool zend_tpde_helper_has_explicit_operands(
 		|| helper == ZEND_NATIVE_HELPER_VALUE_UNARY_OP
 		|| helper == ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE
 		|| helper == ZEND_NATIVE_HELPER_VALUE_ECHO
+		|| helper == ZEND_NATIVE_HELPER_VALUE_FUNC_NUM_ARGS
 		|| helper == ZEND_NATIVE_HELPER_VALUE_FUNC_GET_ARGS
 		|| helper == ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL
 		|| helper == ZEND_NATIVE_HELPER_CALL_FRAMELESS_INTERNAL
