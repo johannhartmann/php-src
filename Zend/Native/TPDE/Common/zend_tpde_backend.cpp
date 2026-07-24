@@ -697,13 +697,18 @@ bool initialize_plan(
 	}
 	if (value_model != nullptr) {
 		if (value_model->contract_version != ZEND_MIR_W11P_CONTRACT_VERSION
+				|| (value_model->model_flags
+					& ~ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS) != 0
+				|| value_model->value_location_count == nullptr
+				|| value_model->value_location_at == nullptr
 				|| value_model->executable_operation_count == nullptr
 				|| value_model->executable_operation_at == nullptr) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-				"executable value model lacks explicit W11P operands");
+				"executable value model lacks explicit W11P operands or locations");
 			return false;
 		}
+		plan->value_model_flags = value_model->model_flags;
 		const uint32_t operation_count =
 			value_model->executable_operation_count(value_model->context);
 		if (!checked_count(operation_count)
@@ -754,7 +759,38 @@ bool initialize_plan(
 			return false;
 		}
 		plan->values[i] = {value.id, value.representation,
-			ZEND_MIR_SCALAR_TYPE_NONE, -1, false, 0};
+			ZEND_MIR_SCALAR_TYPE_NONE, ZEND_MIR_ID_INVALID, -1, false, 0};
+	}
+	if (value_model != nullptr
+			&& (value_model->model_flags
+				& ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS) != 0) {
+		const uint32_t location_count =
+			value_model->value_location_count(value_model->context);
+		if (!checked_count(location_count)
+				|| location_count > plan->value_count) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"value-location table is outside the MIR value bound");
+			return false;
+		}
+		for (uint32_t i = 0; i < location_count; ++i) {
+			zend_mir_value_location_ref location{};
+			int32_t value_index;
+			if (!value_model->value_location_at(
+					value_model->context, i, &location)
+					|| !zend_mir_id_is_valid(location.storage_id)
+					|| (value_index = zend_tpde_value_index(
+							plan, location.value_id)) < 0
+					|| zend_mir_id_is_valid(
+						plan->values[value_index].canonical_storage_id)) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+					"value-location table is unreadable, duplicated, or invalid");
+				return false;
+			}
+			plan->values[value_index].canonical_storage_id =
+				location.storage_id;
+		}
 	}
 	for (uint32_t i = 0; i < constant_count; ++i) {
 		zend_mir_constant_record constant;
