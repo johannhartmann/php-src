@@ -815,11 +815,12 @@ static bool zend_mir_value_validate_executable_operations(
 			module, blocks, zend_mir_block_record);
 		const zend_mir_core_instruction *instructions = ZEND_MIR_CORE_ITEMS(
 			module, instructions, zend_mir_core_instruction);
-		const bool attached_control =
+		const bool attached_instruction =
 			operation->opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
-			|| operation->opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH;
+			|| operation->opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH
+			|| operation->opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL;
 
-		if ((attached_control
+		if ((attached_instruction
 				? operation->id >= module->instructions.count
 					|| instructions[operation->id].record.id != operation->id
 					|| instructions[operation->id].record.block_id
@@ -831,7 +832,7 @@ static bool zend_mir_value_validate_executable_operations(
 				: zend_mir_id_is_valid(operation->id))
 				|| operation->block_id >= module->blocks.count
 				|| blocks[operation->block_id].id != operation->block_id
-				|| (!attached_control
+				|| (!attached_instruction
 					&& !zend_mir_opcode_is_executable_value(operation->opcode))
 				|| operation->source_opcode > UINT8_MAX
 				|| operation->source_position_id >= module->source_positions.count) {

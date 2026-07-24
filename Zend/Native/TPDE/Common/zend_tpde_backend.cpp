@@ -796,14 +796,26 @@ bool initialize_plan(
 			require_runtime_helper(plan, helper);
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL) {
-			if (count != 0 || !zend_mir_id_is_valid(record.source_position_id)) {
+			const zend_mir_executable_value_ref &operation =
+				plan->instructions[i].value_operation;
+			if (count != 0 || !zend_mir_id_is_valid(record.source_position_id)
+					|| !plan->instructions[i].has_value_operation
+					|| operation.id != record.id
+					|| operation.opcode != record.opcode
+					|| operation.source_opcode != ZEND_THROW
+					|| operation.source_position_id
+						!= record.source_position_id
+					|| operation.op1.kind
+						== ZEND_MIR_SOURCE_OPERAND_UNUSED
+					|| operation.op2.kind
+						!= ZEND_MIR_SOURCE_OPERAND_UNUSED
+					|| operation.result.kind
+						!= ZEND_MIR_SOURCE_OPERAND_UNUSED) {
 				zend_tpde_set_diagnostic(diag,
 					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 					"source-zval throw lacks exact source semantics");
 				return false;
 			}
-			plan->instructions[i].source_opline_index =
-				record.source_position_id;
 			plan->required_runtime_capabilities |=
 				ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT;
 			require_runtime_helper(

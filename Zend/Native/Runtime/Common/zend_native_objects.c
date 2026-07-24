@@ -268,29 +268,35 @@ static zend_native_status zend_native_object_status(void)
 }
 
 zend_native_status zend_native_throw_source_zval(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data, uint64_t encoded_operand,
+	uint32_t source_opcode, uint32_t source_position_id)
 {
-	const zend_op *opline = zend_native_object_opline(
-		execute_data, source_opline_index);
+	uint8_t operand_type;
+	znode_op operand;
 	zval *value;
 
-	if (opline == NULL || opline->opcode != ZEND_THROW
-			|| (opline->op1_type != IS_CONST
-				&& opline->op1_type != IS_TMP_VAR
-				&& opline->op1_type != IS_CV)
-			|| opline->op2_type != IS_UNUSED
-			|| opline->result_type != IS_UNUSED) {
+	if (source_opcode != ZEND_THROW
+			|| execute_data == NULL || execute_data->func == NULL
+			|| !ZEND_USER_CODE(execute_data->func->type)
+			|| source_position_id >= execute_data->func->op_array.last
+			|| !zend_native_object_decode_explicit_operand(
+				execute_data, encoded_operand, &operand_type, &operand)
+			|| (operand_type != IS_CONST
+				&& operand_type != IS_TMP_VAR
+				&& operand_type != IS_CV)) {
 		zend_throw_error(NULL, "Malformed native throw source operation");
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	value = zend_native_object_read(
-		execute_data, opline, opline->op1_type, opline->op1);
+	execute_data->opline =
+		&execute_data->func->op_array.opcodes[source_position_id];
+	value = zend_native_object_read_explicit(
+		execute_data, operand_type, operand);
 	if (value == NULL) {
 		zend_throw_error(NULL, "Malformed native throw operand");
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	if (opline->op1_type == IS_CV && UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
-		uint32_t variable_index = EX_VAR_TO_NUM(opline->op1.var);
+	if (operand_type == IS_CV && UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
+		uint32_t variable_index = EX_VAR_TO_NUM(operand.var);
 
 		if (variable_index >= execute_data->func->op_array.last_var) {
 			zend_throw_error(NULL, "Malformed native throw variable");
@@ -309,13 +315,13 @@ zend_native_status zend_native_throw_source_zval(
 	if (Z_TYPE_P(value) != IS_OBJECT) {
 		zend_throw_error(NULL, "Can only throw objects");
 		zend_native_object_consume(
-			execute_data, opline->op1_type, opline->op1, NULL);
+			execute_data, operand_type, operand, NULL);
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	Z_TRY_ADDREF_P(value);
 	zend_throw_exception_object(value);
 	zend_native_object_consume(
-		execute_data, opline->op1_type, opline->op1, NULL);
+		execute_data, operand_type, operand, NULL);
 	return ZEND_NATIVE_EXCEPTION;
 }
 

@@ -368,6 +368,8 @@ static zend_mir_opcode zend_mir_w11p_control_value_opcode(uint32_t opcode)
 		case ZEND_FE_FETCH_R:
 		case ZEND_FE_FETCH_RW:
 			return ZEND_MIR_OPCODE_ITERATOR_BRANCH;
+		case ZEND_THROW:
+			return ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL;
 		default:
 			return ZEND_MIR_OPCODE_INVALID;
 	}
@@ -586,6 +588,15 @@ static bool zend_mir_w09_operation_semantics(
 				return false;
 			}
 			break;
+		case ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL:
+			if (!zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_ALLOCATE)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_THROW)) {
+				return false;
+			}
+			break;
 		case ZEND_MIR_OPCODE_VALUE_FREE:
 		case ZEND_MIR_OPCODE_VALUE_UNSET_CV:
 			if (!zend_mir_w09_add_effect(
@@ -771,7 +782,8 @@ static bool zend_mir_w11p_index_control_value_instructions(
 			return false;
 		}
 		if (instruction.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
-				|| instruction.opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH) {
+				|| instruction.opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH
+				|| instruction.opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL) {
 			if (instruction.source_position_id >= source_count
 					|| zend_mir_id_is_valid(instructions_by_source[
 						instruction.source_position_id])) {
@@ -918,7 +930,8 @@ bool zend_mir_w09_emit_executable_values(
 			goto done;
 		}
 		if ((opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
-				|| opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH)
+				|| opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH
+				|| opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL)
 				&& (operation->source_position_id >= op_array->last
 					|| !zend_mir_id_is_valid(
 						control_instruction_by_source[
@@ -926,9 +939,24 @@ bool zend_mir_w09_emit_executable_values(
 			goto done;
 		}
 		if (opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
-				|| opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH) {
+				|| opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH
+				|| opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL) {
 			operation->id = control_instruction_by_source[
 				operation->source_position_id];
+		}
+		if (opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL) {
+			zend_mir_instruction_record throw_instruction;
+
+			if (!view->instruction_at(
+					view->context, operation->id, &throw_instruction)
+					|| throw_instruction.opcode
+						!= ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
+					|| !zend_mir_id_is_valid(
+						throw_instruction.frame_state_id)) {
+				goto done;
+			}
+			operation->frame_state_id = throw_instruction.frame_state_id;
+			frame_class = ZEND_MIR_SAFEPOINT_CLASS_INVALID;
 		}
 		if (frame_class != ZEND_MIR_SAFEPOINT_CLASS_INVALID) {
 			zend_mir_source_position_id emitted_source;
