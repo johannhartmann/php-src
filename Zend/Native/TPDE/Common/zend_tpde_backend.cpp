@@ -1284,8 +1284,25 @@ bool initialize_plan(
 						? plan->instructions[i].entry_cell->function : nullptr;
 					if (trivial_frame) {
 						const zend_op_array &op_array = callee->op_array;
+						const bool inline_receiver =
+							(op_array.scope == nullptr
+								&& descriptor->receiver_kind
+									== ZEND_NATIVE_INTERNAL_RECEIVER_NONE)
+							|| (op_array.scope != nullptr
+								&& ((descriptor->receiver_kind
+											== ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS
+										&& (op_array.fn_flags
+											& ZEND_ACC_STATIC) == 0)
+									|| (descriptor->receiver_kind
+											== ZEND_NATIVE_INTERNAL_RECEIVER_CALLED_SCOPE
+										&& (op_array.fn_flags
+											& ZEND_ACC_STATIC) != 0
+										&& descriptor->called_scope != nullptr
+										&& (descriptor->flags
+											& ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE)
+											== 0)));
 						trivial_frame =
-							op_array.scope == nullptr
+							inline_receiver
 							&& op_array.num_args == site.arguments.count
 							&& op_array.required_num_args
 								== site.arguments.count
@@ -1342,22 +1359,32 @@ bool initialize_plan(
 						const int32_t argument_value_index =
 							zend_tpde_value_index(plan, argument.value_id);
 						descriptor->arguments[n].exact_type =
-							argument_value_index >= 0
+							descriptor->arguments[n].mode
+									== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
+								&& argument_value_index >= 0
 							? plan->values[argument_value_index].exact_type
 							: ZEND_MIR_SCALAR_TYPE_NONE;
 						descriptor->arguments[n].source_operand =
 							argument.source_operand;
 						const bool inline_argument =
-							descriptor->arguments[n].mode
-								== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
-							&& (zend_mir_scalar_type_is_exact(
-									descriptor->arguments[n].exact_type)
-								|| ((argument.source_operand.kind
-											== ZEND_MIR_SOURCE_OPERAND_SLOT
-										|| argument.source_operand.kind
-											== ZEND_MIR_SOURCE_OPERAND_SSA)
-									&& argument.source_operand.slot_kind
-										== ZEND_MIR_SOURCE_SLOT_CV));
+							(descriptor->arguments[n].mode
+									== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
+								&& (zend_mir_scalar_type_is_exact(
+										descriptor->arguments[n].exact_type)
+									|| ((argument.source_operand.kind
+												== ZEND_MIR_SOURCE_OPERAND_SLOT
+											|| argument.source_operand.kind
+												== ZEND_MIR_SOURCE_OPERAND_SSA)
+										&& argument.source_operand.slot_kind
+											== ZEND_MIR_SOURCE_SLOT_CV)))
+							|| (descriptor->arguments[n].mode
+									== ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
+								&& (argument.source_operand.kind
+										== ZEND_MIR_SOURCE_OPERAND_SLOT
+									|| argument.source_operand.kind
+										== ZEND_MIR_SOURCE_OPERAND_SSA)
+								&& argument.source_operand.slot_kind
+									== ZEND_MIR_SOURCE_SLOT_CV);
 						trivial_frame = trivial_frame && inline_argument;
 					}
 					const bool inline_result =
