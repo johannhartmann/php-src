@@ -1407,12 +1407,17 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			if (call.direct_call != nullptr) {
 				const bool generated_fast_path =
 					(call.direct_call->flags
-						& ZEND_NATIVE_DIRECT_CALL_TRIVIAL_FRAME) != 0;
+						& ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME) != 0;
+				const bool result_unused =
+					call.direct_call->result_operand.kind
+						== ZEND_MIR_SOURCE_OPERAND_UNUSED;
 				const uint32_t argument_count = call.call_argument_count;
 				const uint32_t frame_operand =
 					generated_fast_path ? argument_count : 0;
+				const uint32_t frame_use_count =
+					generated_fast_path ? 6 + node.has_result : 2;
 				const uint32_t context_operand = frame_operand
-					+ (generated_fast_path ? 7 : 2);
+					+ frame_use_count;
 				auto slow_path = text_writer.label_create();
 				auto successful = text_writer.label_create();
 				auto add_offset = [this](
@@ -1559,7 +1564,9 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 						static_cast<uint32_t>(reservation_size));
 					generate_raw_jump(Jump::Jcc, slow_path);
 
-					auto callee_reg = first_reg;
+					ScratchReg callee_address{this};
+					auto callee_reg = callee_address.alloc_gp();
+					mov(callee_reg, first_reg, 8);
 					add_offset(second_reg, callee_reg, reservation_size);
 					{
 						ScratchReg address{this};
@@ -1643,28 +1650,36 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 						second_reg, 8);
 
 					/* Resolve the caller's canonical result zval. */
-					mov(second_reg, frame_reg, 8);
-					if (call.direct_call->result_operand.slot_kind
-							== ZEND_MIR_SOURCE_SLOT_CV) {
-						add_offset(second_reg, second_reg,
+					if (result_unused) {
+						add_offset(second_reg, callee_reg,
 							static_cast<uint64_t>(
-								ZEND_CALL_FRAME_SLOT
-									+ call.direct_call->result_operand.index)
-								* sizeof(zval));
+								call.direct_call->frame_size)
+								+ offsetof(zend_native_direct_activation,
+									discarded_return));
 					} else {
-						ScratchReg slot{this};
-						auto slot_reg = slot.alloc_gp();
-						load_off(slot_reg, frame_reg,
-							static_cast<uint32_t>(
-								offsetof(zend_execute_data, func)), 8);
-						load_off(slot_reg, slot_reg,
-							static_cast<uint32_t>(
-								offsetof(zend_op_array, last_var)), 4);
-						ASM(ADDxi, slot_reg, slot_reg,
-							ZEND_CALL_FRAME_SLOT
-								+ call.direct_call->result_operand.index);
-						ASM(LSLxi, slot_reg, slot_reg, 4);
-						ASM(ADDx, second_reg, second_reg, slot_reg);
+						mov(second_reg, frame_reg, 8);
+						if (call.direct_call->result_operand.slot_kind
+								== ZEND_MIR_SOURCE_SLOT_CV) {
+							add_offset(second_reg, second_reg,
+								static_cast<uint64_t>(
+									ZEND_CALL_FRAME_SLOT
+										+ call.direct_call->result_operand.index)
+									* sizeof(zval));
+						} else {
+							ScratchReg slot{this};
+							auto slot_reg = slot.alloc_gp();
+							load_off(slot_reg, frame_reg,
+								static_cast<uint32_t>(
+									offsetof(zend_execute_data, func)), 8);
+							load_off(slot_reg, slot_reg,
+								static_cast<uint32_t>(
+									offsetof(zend_op_array, last_var)), 4);
+							ASM(ADDxi, slot_reg, slot_reg,
+								ZEND_CALL_FRAME_SLOT
+									+ call.direct_call->result_operand.index);
+							ASM(LSLxi, slot_reg, slot_reg, 4);
+							ASM(ADDx, second_reg, second_reg, slot_reg);
+						}
 					}
 					store_off(callee_reg,
 						static_cast<uint32_t>(
@@ -1744,7 +1759,20 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					store_constant(second_reg,
 						static_cast<uint32_t>(offsetof(
 							zend_native_direct_activation,
+							uses_discarded_return)),
+						result_unused ? 1 : 0, 1);
+					store_constant(second_reg,
+						static_cast<uint32_t>(offsetof(
+							zend_native_direct_activation,
+							raw_arguments_owned)), 0, 1);
+					store_constant(second_reg,
+						static_cast<uint32_t>(offsetof(
+							zend_native_direct_activation,
 							frame_initialized)), 1, 1);
+					store_constant(second_reg,
+						static_cast<uint32_t>(offsetof(
+							zend_native_direct_activation,
+							frame_requires_finish)), 1, 1);
 					store_constant(second_reg,
 						static_cast<uint32_t>(offsetof(
 							zend_native_direct_activation,
@@ -1767,14 +1795,9 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					/* Load the published entry and call it directly. */
 					first.reset();
 					second.reset();
-					ScratchReg callee_argument{this};
-					auto callee_argument_reg = callee_argument.alloc_gp();
-					load_off(callee_argument_reg, frame_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_execute_data, call)), 8);
-					ValuePart callee_value{DarwinConfig::GP_BANK};
+					ValuePart callee_value{DarwinConfig::GP_BANK, 8};
 					callee_value.set_value(
-						this, std::move(callee_argument));
+						this, std::move(callee_address));
 					auto entry_image = image_symbol_value(
 						ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
 						call.call_site.target_id);
@@ -1789,7 +1812,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					load_off(entry_argument_reg, entry_argument_reg,
 						static_cast<uint32_t>(
 							offsetof(zend_native_code, entry)), 8);
-					ValuePart entry_value{DarwinConfig::GP_BANK};
+					ValuePart entry_value{DarwinConfig::GP_BANK, 8};
 					entry_value.set_value(this, std::move(entry_argument));
 					frame_scratch.reset();
 					context_scratch.reset();
@@ -1803,7 +1826,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					fast_builder.add_arg(
 						CallArg{node.operands[context_operand + 1]});
 					fast_builder.call(std::move(entry_value));
-					ValuePart fast_status{DarwinConfig::GP_BANK};
+					ValuePart fast_status{DarwinConfig::GP_BANK, 4};
 					fast_builder.add_ret(
 						fast_status, ::tpde::CCAssignment{});
 
@@ -1859,7 +1882,10 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					load_off(probe_reg, probe_reg,
 						static_cast<uint32_t>(
 							offsetof(zval, u1.type_info)), 4);
-					if (call.direct_call->result_type
+					if (result_unused) {
+						ASM(CMPxi, probe_reg, IS_DOUBLE);
+						generate_raw_jump(Jump::Jhi, complete_fast);
+					} else if (call.direct_call->result_type
 							== ZEND_MIR_SCALAR_TYPE_I1) {
 						ASM(CMPxi, probe_reg, IS_FALSE);
 						generate_raw_jump(Jump::Jcc, complete_fast);
@@ -1947,8 +1973,9 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 							finish_activation_reg,
 							static_cast<uint32_t>(offsetof(
 								zend_native_direct_activation, status)), 4);
+						finish_frame.reset();
 						ValuePart finish_status_argument{
-							DarwinConfig::GP_BANK};
+							DarwinConfig::GP_BANK, 4};
 						finish_status_argument.set_value(
 							this, std::move(finish_activation));
 						finish_builder.add_arg(
@@ -1957,8 +1984,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					}
 					finish_builder.call(runtime_symbol(
 						ZEND_NATIVE_HELPER_DIRECT_USER_CALL_LEAVE));
-					ValuePart finish_status{DarwinConfig::GP_BANK};
-					ValuePart finish_payload{DarwinConfig::GP_BANK};
+					ValuePart finish_status{DarwinConfig::GP_BANK, 8};
+					ValuePart finish_payload{DarwinConfig::GP_BANK, 8};
 					finish_builder.add_ret(
 						finish_status, ::tpde::CCAssignment{});
 					finish_builder.add_ret(
@@ -2078,40 +2105,42 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					payload.reset(this);
 					generate_raw_jump(Jump::jmp, successful);
 					label_place(successful);
-					auto [result_frame_ref, result_frame] =
-						val_ref_single(node.operands[frame_operand + 6]);
-					auto result_frame_reg = result_frame.load_to_reg();
-					ScratchReg result_slot{this};
-					auto result_slot_reg = result_slot.alloc_gp();
-					mov(result_slot_reg, result_frame_reg, 8);
-					if (call.direct_call->result_operand.slot_kind
-							== ZEND_MIR_SOURCE_SLOT_CV) {
-						add_offset(result_slot_reg, result_slot_reg,
-							static_cast<uint64_t>(
+					if (node.has_result) {
+						auto [result_frame_ref, result_frame] =
+							val_ref_single(node.operands[frame_operand + 6]);
+						auto result_frame_reg = result_frame.load_to_reg();
+						ScratchReg result_slot{this};
+						auto result_slot_reg = result_slot.alloc_gp();
+						mov(result_slot_reg, result_frame_reg, 8);
+						if (call.direct_call->result_operand.slot_kind
+								== ZEND_MIR_SOURCE_SLOT_CV) {
+							add_offset(result_slot_reg, result_slot_reg,
+								static_cast<uint64_t>(
+									ZEND_CALL_FRAME_SLOT
+										+ call.direct_call->result_operand.index)
+									* sizeof(zval));
+						} else {
+							ScratchReg slot_index{this};
+							auto slot_index_reg = slot_index.alloc_gp();
+							load_off(slot_index_reg, result_frame_reg,
+								static_cast<uint32_t>(
+									offsetof(zend_execute_data, func)), 8);
+							load_off(slot_index_reg, slot_index_reg,
+								static_cast<uint32_t>(
+									offsetof(zend_op_array, last_var)), 4);
+							ASM(ADDxi, slot_index_reg, slot_index_reg,
 								ZEND_CALL_FRAME_SLOT
-									+ call.direct_call->result_operand.index)
-								* sizeof(zval));
-					} else {
-						ScratchReg slot_index{this};
-						auto slot_index_reg = slot_index.alloc_gp();
-						load_off(slot_index_reg, result_frame_reg,
-							static_cast<uint32_t>(
-								offsetof(zend_execute_data, func)), 8);
-						load_off(slot_index_reg, slot_index_reg,
-							static_cast<uint32_t>(
-								offsetof(zend_op_array, last_var)), 4);
-						ASM(ADDxi, slot_index_reg, slot_index_reg,
-							ZEND_CALL_FRAME_SLOT
-								+ call.direct_call->result_operand.index);
-						ASM(LSLxi, slot_index_reg, slot_index_reg, 4);
-						ASM(ADDx, result_slot_reg,
-							result_slot_reg, slot_index_reg);
+									+ call.direct_call->result_operand.index);
+							ASM(LSLxi, slot_index_reg, slot_index_reg, 4);
+							ASM(ADDx, result_slot_reg,
+								result_slot_reg, slot_index_reg);
+						}
+						auto [result_ref, result] =
+							result_ref_single(node.result);
+						auto result_reg = result.alloc_reg();
+						load_off(result_reg, result_slot_reg, 0, 8);
+						result.set_modified();
 					}
-					auto [result_ref, result] =
-						result_ref_single(node.result);
-					auto result_reg = result.alloc_reg();
-					load_off(result_reg, result_slot_reg, 0, 8);
-					result.set_modified();
 				} else if (node.has_result) {
 					auto [result_ref, result] = result_ref_single(node.result);
 					if (val_parts(node.result).bank == DarwinConfig::FP_BANK) {
