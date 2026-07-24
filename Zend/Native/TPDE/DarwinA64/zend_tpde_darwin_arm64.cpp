@@ -360,6 +360,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		const bool explicit_operands =
 			helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN
 			|| helper == ZEND_NATIVE_HELPER_VALUE_QM_ASSIGN
+			|| helper == ZEND_NATIVE_HELPER_VALUE_COPY_TMP
+			|| helper == ZEND_NATIVE_HELPER_VALUE_FREE
 			|| helper == ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV
 			|| helper == ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM
 			|| helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM
