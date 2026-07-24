@@ -11,6 +11,117 @@
 #include "Zend/zend_object_handlers.h"
 #include "Zend/zend_operators.h"
 
+#include "Zend/Native/Lowering/zend_mir_lowering_source.h"
+
+#include <string.h>
+
+typedef struct _zend_native_explicit_object_operation {
+	uint8_t op1_type;
+	uint8_t op2_type;
+	uint8_t result_type;
+	znode_op op1;
+	znode_op op2;
+	znode_op result;
+	uint32_t extended_value;
+	uint32_t source_position_id;
+} zend_native_explicit_object_operation;
+
+static bool zend_native_object_decode_explicit_operand(
+	zend_execute_data *execute_data, uint64_t encoded,
+	uint8_t *operand_type, znode_op *operand)
+{
+	zend_mir_source_operand_kind kind =
+		(zend_mir_source_operand_kind) (encoded & UINT64_C(0xff));
+	zend_mir_source_slot_kind slot_kind =
+		(zend_mir_source_slot_kind) ((encoded >> 8) & UINT64_C(0xff));
+	uint32_t index = (uint32_t) (encoded >> 16);
+	uint32_t physical_slot;
+
+	if (execute_data == NULL || execute_data->func == NULL
+			|| !ZEND_USER_CODE(execute_data->func->type)
+			|| operand_type == NULL || operand == NULL) {
+		return false;
+	}
+	memset(operand, 0, sizeof(*operand));
+	if (kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+		*operand_type = IS_UNUSED;
+		return index == ZEND_MIR_ID_INVALID;
+	}
+	if (kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+		if (index >= execute_data->func->op_array.last_literal) {
+			return false;
+		}
+		*operand_type = IS_CONST;
+		operand->constant = index;
+		return true;
+	}
+	if (kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+			&& kind != ZEND_MIR_SOURCE_OPERAND_SSA) {
+		return false;
+	}
+	switch (slot_kind) {
+		case ZEND_MIR_SOURCE_SLOT_CV:
+			if (index >= (uint32_t) execute_data->func->op_array.last_var) {
+				return false;
+			}
+			*operand_type = IS_CV;
+			physical_slot = index;
+			break;
+		case ZEND_MIR_SOURCE_SLOT_TMP:
+			if (index >= execute_data->func->op_array.T) {
+				return false;
+			}
+			*operand_type = IS_TMP_VAR;
+			physical_slot =
+				(uint32_t) execute_data->func->op_array.last_var + index;
+			break;
+		case ZEND_MIR_SOURCE_SLOT_VAR:
+			if (index >= execute_data->func->op_array.T) {
+				return false;
+			}
+			*operand_type = IS_VAR;
+			physical_slot =
+				(uint32_t) execute_data->func->op_array.last_var + index;
+			break;
+		default:
+			return false;
+	}
+	if (physical_slot > (UINT32_MAX / sizeof(zval))
+			- (uint32_t) ZEND_CALL_FRAME_SLOT) {
+		return false;
+	}
+	operand->var =
+		((uint32_t) ZEND_CALL_FRAME_SLOT + physical_slot) * sizeof(zval);
+	return true;
+}
+
+static bool zend_native_object_init_explicit_operation(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id, uint8_t expected_opcode,
+	zend_native_explicit_object_operation *operation)
+{
+	if (operation == NULL || source_opcode != expected_opcode
+			|| execute_data == NULL || execute_data->func == NULL
+			|| !ZEND_USER_CODE(execute_data->func->type)
+			|| source_position_id >= execute_data->func->op_array.last
+			|| !zend_native_object_decode_explicit_operand(
+				execute_data, op1, &operation->op1_type, &operation->op1)
+			|| !zend_native_object_decode_explicit_operand(
+				execute_data, op2, &operation->op2_type, &operation->op2)
+			|| !zend_native_object_decode_explicit_operand(
+				execute_data, result,
+				&operation->result_type, &operation->result)) {
+		return false;
+	}
+	operation->extended_value = extended_value;
+	operation->source_position_id = source_position_id;
+	execute_data->opline =
+		&execute_data->func->op_array.opcodes[source_position_id];
+	return true;
+}
+
 static const zend_op *zend_native_object_opline(
 	zend_execute_data *execute_data, uint32_t source_opline_index)
 {
@@ -32,6 +143,22 @@ static zval *zend_native_object_slot(
 		return NULL;
 	}
 	return ZEND_CALL_VAR(execute_data, operand.var);
+}
+
+static zval *zend_native_object_read_explicit(
+	zend_execute_data *execute_data, uint8_t type, znode_op operand)
+{
+	zval *value;
+
+	if (type == IS_CONST) {
+		return operand.constant < execute_data->func->op_array.last_literal
+			? &execute_data->func->op_array.literals[operand.constant] : NULL;
+	}
+	value = zend_native_object_slot(execute_data, type, operand);
+	if (value != NULL && type == IS_VAR && Z_TYPE_P(value) == IS_INDIRECT) {
+		value = Z_INDIRECT_P(value);
+	}
+	return value;
 }
 
 static zval *zend_native_object_read(
@@ -579,6 +706,79 @@ static zend_native_status zend_native_object_fetch(
 		execute_data, opline->op2_type, opline->op2, result);
 	zend_native_object_consume(
 		execute_data, opline->op1_type, opline->op1, result);
+	return zend_native_object_status();
+}
+
+static zend_native_status zend_native_object_fetch_r_explicit(
+	zend_execute_data *execute_data,
+	const zend_native_explicit_object_operation *operation)
+{
+	zval *receiver;
+	zval *property = zend_native_object_read_explicit(
+		execute_data, operation->op2_type, operation->op2);
+	zval *result = zend_native_object_slot(
+		execute_data, operation->result_type, operation->result);
+	zend_string *temporary = NULL;
+	zend_string *name;
+	zval *value;
+	void **cache_slot = NULL;
+
+	if (operation->op1_type == IS_UNUSED) {
+		receiver = &execute_data->This;
+	} else {
+		receiver = zend_native_object_read_explicit(
+			execute_data, operation->op1_type, operation->op1);
+	}
+	if (receiver != NULL && Z_ISREF_P(receiver)) {
+		receiver = Z_REFVAL_P(receiver);
+	}
+	if (receiver == NULL || property == NULL || result == NULL) {
+		zend_throw_error(NULL, "Malformed native object read operands");
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	if (Z_TYPE_P(receiver) != IS_OBJECT) {
+		ZVAL_NULL(result);
+		return zend_native_object_bad_receiver(receiver, property, true);
+	}
+	if (operation->op2_type == IS_CONST
+			&& Z_TYPE_P(property) == IS_STRING) {
+		name = Z_STR_P(property);
+		if (execute_data->run_time_cache != NULL) {
+			uint32_t cache_offset =
+				operation->extended_value & ~ZEND_FETCH_REF;
+			const uint32_t cache_size =
+				execute_data->func->op_array.cache_size;
+
+			if (cache_offset > cache_size
+					|| 3 * sizeof(void *) > cache_size - cache_offset) {
+				zend_throw_error(NULL,
+					"Malformed native object property cache offset");
+				return ZEND_NATIVE_EXCEPTION;
+			}
+			cache_slot = (void **) (
+				(char *) execute_data->run_time_cache + cache_offset);
+		}
+	} else {
+		name = zval_try_get_tmp_string(property, &temporary);
+		if (name == NULL) {
+			ZVAL_UNDEF(result);
+			return zend_native_object_status();
+		}
+	}
+	value = Z_OBJ_HT_P(receiver)->read_property(
+		Z_OBJ_P(receiver), name, BP_VAR_R, cache_slot, result);
+	if (value != result) {
+		zend_native_object_replace(result, value);
+	} else if (Z_ISREF_P(result)) {
+		zend_unwrap_reference(result);
+	}
+	if (temporary != NULL) {
+		zend_tmp_string_release(temporary);
+	}
+	zend_native_object_consume(
+		execute_data, operation->op2_type, operation->op2, result);
+	zend_native_object_consume(
+		execute_data, operation->op1_type, operation->op1, result);
 	return zend_native_object_status();
 }
 
@@ -1574,8 +1774,22 @@ ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_declare_anon_class,
 	zend_native_declare_anon_class(execute_data, opline))
 ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_fetch_this,
 	ZEND_FETCH_THIS, zend_native_fetch_this(execute_data, opline))
-ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_fetch_r,
-	ZEND_FETCH_OBJ_R, zend_native_object_fetch(execute_data, opline, BP_VAR_R))
+zend_native_status zend_native_execute_object_fetch_r(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
+{
+	zend_native_explicit_object_operation operation;
+
+	if (!zend_native_object_init_explicit_operation(
+			execute_data, op1, op2, result, extended_value, source_opcode,
+			source_position_id, ZEND_FETCH_OBJ_R, &operation)) {
+		zend_throw_error(NULL, "Malformed native object read operation");
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	return zend_native_object_fetch_r_explicit(execute_data, &operation);
+}
 ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_fetch_w,
 	ZEND_FETCH_OBJ_W, zend_native_object_fetch(execute_data, opline, BP_VAR_W))
 ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_fetch_rw,
