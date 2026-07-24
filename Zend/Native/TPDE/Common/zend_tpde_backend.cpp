@@ -1352,7 +1352,6 @@ bool initialize_plan(
 							&& op_array.num_args == site.arguments.count
 							&& op_array.required_num_args
 								== site.arguments.count
-							&& op_array.cache_size == 0
 							&& (op_array.fn_flags
 								& (ZEND_ACC_VARIADIC
 									| ZEND_ACC_CALL_VIA_TRAMPOLINE)) == 0;
