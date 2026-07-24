@@ -26,14 +26,15 @@ $result = native_mir_test_compile_execute(
     ['wave' => 11, 'function' => 'selected_root'],
 );
 printf(
-    "%s return=%d codeunits=%d vm=%d execute_ex=%d handler=%d\n",
+    "%s return=%d codeunits=%d components=%d vm=%d execute_ex=%d handler=%d\n",
     $result['status'],
     $result['execution']['return_value'] ?? -1,
     $result['execution']['native_codeunits'] ?? -1,
+    $result['execution']['native_components'] ?? -1,
     $result['execution']['vm_handler_calls'] ?? -1,
     $result['execution']['execute_ex_calls'] ?? -1,
     $result['execution']['opline_handler_calls'] ?? -1,
 );
 ?>
 --EXPECT--
-accepted return=777 codeunits=2 vm=0 execute_ex=0 handler=0
+accepted return=777 codeunits=2 components=2 vm=0 execute_ex=0 handler=0

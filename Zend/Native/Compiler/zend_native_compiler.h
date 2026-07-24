@@ -79,7 +79,7 @@ ZEND_API zend_native_compiler *zend_native_compiler_create(
 ZEND_API void zend_native_compiler_destroy(zend_native_compiler *compiler);
 
 /*
- * Compile and atomically publish the complete reachable codeunit component.
+ * Compile the reachable static call graph and atomically publish each SCC.
  * The supplied argument signature is retained for source compatibility but
  * does not specialize the baseline entry. Exact representations come only
  * from declared types and path-valid SSA proofs.
@@ -97,6 +97,8 @@ ZEND_API zend_native_codeunit_state zend_native_compiler_codeunit_state(
 	const zend_native_compiler *compiler, const zend_function *function);
 ZEND_API uint32_t zend_native_compiler_codeunit_count(
 	const zend_native_compiler *compiler, zend_native_codeunit_state state);
+ZEND_API uint32_t zend_native_compiler_published_component_count(
+	const zend_native_compiler *compiler);
 
 /*
  * Product execution compiles on demand, enters the product reentry scope,

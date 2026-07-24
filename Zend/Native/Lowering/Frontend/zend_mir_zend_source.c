@@ -2000,7 +2000,9 @@ zend_mir_frontend_target_kind(uint8_t opcode, const zend_function *function,
 	if (opcode == ZEND_NEW) {
 		return ZEND_MIR_SOURCE_CALL_TARGET_METHOD;
 	}
-	if (opcode != ZEND_INIT_FCALL) {
+	if (opcode != ZEND_INIT_FCALL
+			&& opcode != ZEND_INIT_FCALL_BY_NAME
+			&& opcode != ZEND_INIT_NS_FCALL_BY_NAME) {
 		return ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER;
 	}
 	if (function == NULL || function->type != ZEND_USER_FUNCTION) {
@@ -3122,9 +3124,13 @@ static zend_mir_lowering_status zend_mir_zend_source_preflight_direct_calls(
 											!= ZEND_CALLABLE_CONVERT_PARTIAL)))))
 					|| (target->kind
 						== ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
-						&& (init_opcode != ZEND_INIT_FCALL
+						&& ((init_opcode != ZEND_INIT_FCALL
+								&& init_opcode != ZEND_INIT_FCALL_BY_NAME
+								&& init_opcode
+									!= ZEND_INIT_NS_FCALL_BY_NAME)
 							|| (do_opcode != ZEND_DO_UCALL
 								&& do_opcode != ZEND_DO_FCALL
+								&& do_opcode != ZEND_DO_FCALL_BY_NAME
 								&& (!w10_execution
 									|| (do_opcode != ZEND_CALLABLE_CONVERT
 										&& do_opcode
