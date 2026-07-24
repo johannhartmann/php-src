@@ -361,16 +361,13 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 	auto execute_value_operation = [&](
 			zend_native_runtime_helper_id helper,
 			ValuePart *frame_argument = nullptr) {
-		const bool explicit_operands =
-			zend_tpde_helper_has_explicit_operands(helper);
 		const bool explicit_object_operands =
 			zend_tpde_helper_has_object_operand_payloads(helper);
 		const bool explicit_auxiliary =
 			zend_tpde_helper_has_explicit_auxiliary(helper);
 		if (node.operands.size() != 1
-				|| (explicit_operands
-					? !mir.has_value_operation
-					: mir.source_opline_index == UINT32_MAX)) {
+				|| !zend_tpde_helper_has_explicit_operands(helper)
+				|| !mir.has_value_operation) {
 			return false;
 		}
 		tpde::x64::CCAssignerSysV assigner{false};
@@ -381,65 +378,60 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		} else {
 			builder.add_arg(CallArg{node.operands[0]});
 		}
-		if (explicit_operands) {
-			const zend_mir_executable_value_ref &operation =
-				mir.value_operation;
-			auto encode_operand = [&](const zend_mir_source_operand_ref &operand,
-					uint32_t unused_payload) {
-				return explicit_object_operands
-					? zend_tpde_encode_value_operand(operand, unused_payload)
-					: zend_tpde_encode_value_operand(operand);
-			};
-			builder.add_arg(ValuePart{
-				encode_operand(
-					operation.op1, operation.op1_unused_payload), 8,
-				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-			if (helper == ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL) {
-				builder.add_arg(ValuePart{operation.source_opcode, 4,
-					tpde::x64::PlatformConfig::GP_BANK},
-					tpde::CCAssignment{});
-				builder.add_arg(ValuePart{operation.source_position_id, 4,
-					tpde::x64::PlatformConfig::GP_BANK},
-					tpde::CCAssignment{});
-				builder.call(runtime_symbol(helper));
-				ValuePart status{tpde::x64::PlatformConfig::GP_BANK};
-				builder.add_ret(status, tpde::CCAssignment{});
-				if (zend_mir_id_is_valid(mir.exception_block_id)) {
-					generate_exception_branch(
-						adaptor->block_ref(mir.exception_block_id));
-					status.reset(this);
-					return true;
-				}
-				RetBuilder return_builder{*this, *cur_cc_assigner()};
-				return_builder.add(std::move(status), tpde::CCAssignment{});
-				return_builder.ret();
+		const zend_mir_executable_value_ref &operation =
+			mir.value_operation;
+		auto encode_operand = [&](const zend_mir_source_operand_ref &operand,
+				uint32_t unused_payload) {
+			return explicit_object_operands
+				? zend_tpde_encode_value_operand(operand, unused_payload)
+				: zend_tpde_encode_value_operand(operand);
+		};
+		builder.add_arg(ValuePart{
+			encode_operand(
+				operation.op1, operation.op1_unused_payload), 8,
+			tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+		if (helper == ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL) {
+			builder.add_arg(ValuePart{operation.source_opcode, 4,
+				tpde::x64::PlatformConfig::GP_BANK},
+				tpde::CCAssignment{});
+			builder.add_arg(ValuePart{operation.source_position_id, 4,
+				tpde::x64::PlatformConfig::GP_BANK},
+				tpde::CCAssignment{});
+			builder.call(runtime_symbol(helper));
+			ValuePart status{tpde::x64::PlatformConfig::GP_BANK};
+			builder.add_ret(status, tpde::CCAssignment{});
+			if (zend_mir_id_is_valid(mir.exception_block_id)) {
+				generate_exception_branch(
+					adaptor->block_ref(mir.exception_block_id));
+				status.reset(this);
 				return true;
 			}
-			builder.add_arg(ValuePart{
-				encode_operand(
-					operation.op2, operation.op2_unused_payload), 8,
-				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-			builder.add_arg(ValuePart{
-				encode_operand(
-					operation.result, operation.result_unused_payload), 8,
-				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-			if (explicit_auxiliary) {
-				builder.add_arg(ValuePart{
-					encode_operand(operation.auxiliary,
-						operation.auxiliary_unused_payload), 8,
-					tpde::x64::PlatformConfig::GP_BANK},
-					tpde::CCAssignment{});
-			}
-			builder.add_arg(ValuePart{operation.extended_value, 4,
-				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-			builder.add_arg(ValuePart{operation.source_opcode, 4,
-				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-			builder.add_arg(ValuePart{operation.source_position_id, 4,
-				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-		} else {
-			builder.add_arg(ValuePart{mir.source_opline_index, 4,
-				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			RetBuilder return_builder{*this, *cur_cc_assigner()};
+			return_builder.add(std::move(status), tpde::CCAssignment{});
+			return_builder.ret();
+			return true;
 		}
+		builder.add_arg(ValuePart{
+			encode_operand(
+				operation.op2, operation.op2_unused_payload), 8,
+			tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+		builder.add_arg(ValuePart{
+			encode_operand(
+				operation.result, operation.result_unused_payload), 8,
+			tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+		if (explicit_auxiliary) {
+			builder.add_arg(ValuePart{
+				encode_operand(operation.auxiliary,
+					operation.auxiliary_unused_payload), 8,
+				tpde::x64::PlatformConfig::GP_BANK},
+				tpde::CCAssignment{});
+		}
+		builder.add_arg(ValuePart{operation.extended_value, 4,
+			tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+		builder.add_arg(ValuePart{operation.source_opcode, 4,
+			tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+		builder.add_arg(ValuePart{operation.source_position_id, 4,
+			tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 		builder.call(runtime_symbol(helper));
 		ValuePart status{tpde::x64::PlatformConfig::GP_BANK};
 		builder.add_ret(status, tpde::CCAssignment{});
