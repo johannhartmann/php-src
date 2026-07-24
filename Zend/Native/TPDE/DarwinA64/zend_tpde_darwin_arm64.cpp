@@ -436,7 +436,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		label_place(continued);
 		return true;
 	};
-	auto copy_nonrefcounted_slot = [&](
+	auto copy_slot = [&](
 			const zend_mir_source_operand_ref &source_operand,
 			zend_mir_storage_id source_storage,
 			zend_mir_storage_id target_storage,
@@ -488,13 +488,13 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		ScratchReg source_type{this};
 		ScratchReg target_type{this};
 		ScratchReg low_word{this};
-		ScratchReg high_word{this};
+		ScratchReg probe{this};
 		auto source_slot_reg = source_slot.alloc_gp();
 		auto target_slot_reg = target_slot.alloc_gp();
 		auto source_type_reg = source_type.alloc_gp();
 		auto target_type_reg = target_type.alloc_gp();
 		auto low_word_reg = low_word.alloc_gp();
-		auto high_word_reg = high_word.alloc_gp();
+		auto probe_reg = probe.alloc_gp();
 
 		ASM(ADDxi, source_slot_reg, frame_reg,
 			static_cast<uint32_t>(source_offset));
@@ -506,29 +506,85 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			ASM(CMPwi, source_type_reg, IS_UNDEF);
 			generate_raw_jump(Jump::Jeq, slow);
 		}
-		ASM(CMPwi, source_type_reg, IS_DOUBLE);
-		generate_raw_jump(Jump::Jgt, slow);
+		if (source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+				|| source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR) {
+			ASM(ANDwi, probe_reg, source_type_reg, Z_TYPE_MASK);
+			ASM(CMPwi, probe_reg, IS_REFERENCE);
+			generate_raw_jump(Jump::Jeq, slow);
+		}
 		load_off(target_type_reg, target_slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
-		ASM(CMPwi, target_type_reg, IS_DOUBLE);
-		generate_raw_jump(Jump::Jgt, slow);
+		ASM(ANDwi, probe_reg, target_type_reg, Z_TYPE_MASK);
+		ASM(CMPwi, probe_reg, IS_REFERENCE);
+		generate_raw_jump(Jump::Jeq, slow);
+		ASM(TSTwi, target_type_reg,
+			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+		auto target_checked = text_writer.label_create();
+		generate_raw_jump(Jump::Jeq, target_checked);
+		/*
+		 * GC_DTOR_NO_REF() must purple a shared collectable value.  Keep
+		 * that transition in the semantic helper; strings and resources
+		 * only need the refcount decrement performed here.
+		 */
+		ASM(TSTwi, target_type_reg,
+			IS_TYPE_COLLECTABLE << Z_TYPE_FLAGS_SHIFT);
+		generate_raw_jump(Jump::Jne, slow);
+		load_off(low_word_reg, target_slot_reg, 0, 8);
+		load_off(probe_reg, low_word_reg,
+			static_cast<uint32_t>(
+				offsetof(zend_refcounted_h, refcount)), 4);
+		ASM(CMPwi, probe_reg, 1);
+		generate_raw_jump(Jump::Jle, slow);
+		label_place(target_checked);
 		if (result_storage != ZEND_MIR_ID_INVALID) {
-			ASM(ADDxi, target_type_reg, frame_reg,
+			ASM(ADDxi, probe_reg, frame_reg,
 				static_cast<uint32_t>(result_offset));
-			load_off(target_type_reg, target_type_reg,
+			load_off(probe_reg, probe_reg,
 				static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
-			ASM(CMPwi, target_type_reg, IS_DOUBLE);
+			ASM(CMPwi, probe_reg, IS_DOUBLE);
 			generate_raw_jump(Jump::Jgt, slow);
 		}
+		ASM(TSTwi, target_type_reg,
+			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+		auto target_released = text_writer.label_create();
+		generate_raw_jump(Jump::Jeq, target_released);
+		load_off(low_word_reg, target_slot_reg, 0, 8);
+		load_off(probe_reg, low_word_reg,
+			static_cast<uint32_t>(
+				offsetof(zend_refcounted_h, refcount)), 4);
+		ASM(SUBwi, probe_reg, probe_reg, 1);
+		store_off(low_word_reg,
+			static_cast<uint32_t>(
+				offsetof(zend_refcounted_h, refcount)),
+			probe_reg, 4);
+		label_place(target_released);
 		load_off(low_word_reg, source_slot_reg, 0, 8);
-		load_off(high_word_reg, source_slot_reg, 8, 8);
+		ASM(TSTwi, source_type_reg,
+			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+		auto value_owned = text_writer.label_create();
+		generate_raw_jump(Jump::Jeq, value_owned);
+		load_off(probe_reg, low_word_reg,
+			static_cast<uint32_t>(
+				offsetof(zend_refcounted_h, refcount)), 4);
+		ASM(ADDwi, probe_reg, probe_reg,
+			(!move_source ? 1 : 0)
+				+ (result_storage != ZEND_MIR_ID_INVALID ? 1 : 0));
+		store_off(low_word_reg,
+			static_cast<uint32_t>(
+				offsetof(zend_refcounted_h, refcount)),
+			probe_reg, 4);
+		label_place(value_owned);
 		store_off(target_slot_reg, 0, low_word_reg, 8);
-		store_off(target_slot_reg, 8, high_word_reg, 8);
+		store_off(target_slot_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+			source_type_reg, 4);
 		if (result_storage != ZEND_MIR_ID_INVALID) {
 			ASM(ADDxi, target_slot_reg, frame_reg,
 				static_cast<uint32_t>(result_offset));
 			store_off(target_slot_reg, 0, low_word_reg, 8);
-			store_off(target_slot_reg, 8, high_word_reg, 8);
+			store_off(target_slot_reg,
+				static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+				source_type_reg, 4);
 		}
 		if (move_source) {
 			materialize_constant(
@@ -545,7 +601,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		source_type.reset();
 		target_type.reset();
 		low_word.reset();
-		high_word.reset();
+		probe.reset();
 		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
 		frame_argument.set_value(this, std::move(frame_scratch));
 		if (!execute_value_operation(slow_helper, &frame_argument)) {
@@ -1540,7 +1596,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					!= ZEND_MIR_SOURCE_SLOT_CV) {
 				return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_ASSIGN);
 			}
-			return copy_nonrefcounted_slot(
+			return copy_slot(
 				mir.value_operation.op2,
 				mir.value_operation.op2_storage_id,
 				mir.value_operation.op1_storage_id,
@@ -1549,7 +1605,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					== ZEND_MIR_SOURCE_SLOT_TMP,
 				ZEND_NATIVE_HELPER_VALUE_ASSIGN);
 		case ZEND_MIR_OPCODE_VALUE_QM_ASSIGN:
-			return copy_nonrefcounted_slot(
+			return copy_slot(
 				mir.value_operation.op1,
 				mir.value_operation.op1_storage_id,
 				mir.value_operation.result_storage_id,
