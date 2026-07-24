@@ -770,14 +770,16 @@ bool initialize_plan(
 					plan, ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE);
 				continue;
 			}
-			const bool explicit_object_fetch =
+			const bool explicit_object_operands =
 				record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_THIS
 				|| (record.opcode >= ZEND_MIR_OPCODE_OBJECT_FETCH_R
 					&& record.opcode <= ZEND_MIR_OPCODE_OBJECT_FETCH_UNSET)
+				|| record.opcode == ZEND_MIR_OPCODE_OBJECT_ASSIGN
 				|| (record.opcode >= ZEND_MIR_OPCODE_OBJECT_UNSET
 					&& record.opcode <= ZEND_MIR_OPCODE_OBJECT_POST_DEC)
+				|| record.opcode == ZEND_MIR_OPCODE_OBJECT_INSTANCEOF
 				|| record.opcode == ZEND_MIR_OPCODE_OBJECT_CLONE;
-			if (!explicit_object_fetch
+			if (!explicit_object_operands
 					&& (record.opcode < ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
 						|| record.opcode
 							> ZEND_MIR_OPCODE_DYNAMIC_INCLUDE_OR_EVAL)) {

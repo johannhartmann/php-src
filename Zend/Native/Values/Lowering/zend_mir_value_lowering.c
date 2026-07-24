@@ -894,6 +894,15 @@ bool zend_mir_w09_emit_executable_values(
 		operation->op1 = source_opcode.op1;
 		operation->op2 = source_opcode.op2;
 		operation->result = source_opcode.result;
+		operation->op1_unused_payload =
+			source_opcode.op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+				? op_array->opcodes[index].op1.num : 0;
+		operation->op2_unused_payload =
+			source_opcode.op2.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+				? op_array->opcodes[index].op2.num : 0;
+		operation->result_unused_payload =
+			source_opcode.result.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+				? op_array->opcodes[index].result.num : 0;
 		operation->op1_storage_id = zend_mir_w09_operand_storage_id(
 			op_array, &source_opcode.op1);
 		operation->op2_storage_id = zend_mir_w09_operand_storage_id(
@@ -905,6 +914,7 @@ bool zend_mir_w09_emit_executable_values(
 			ZEND_MIR_SOURCE_SLOT_KIND_INVALID;
 		operation->auxiliary.index = ZEND_MIR_ID_INVALID;
 		operation->auxiliary.ssa_variable_id = ZEND_MIR_ID_INVALID;
+		operation->auxiliary_unused_payload = 0;
 		operation->auxiliary_storage_id = ZEND_MIR_ID_INVALID;
 		if (index + 1 < op_array->last
 				&& op_array->opcodes[index + 1].opcode == ZEND_OP_DATA) {
@@ -916,6 +926,9 @@ bool zend_mir_w09_emit_executable_values(
 				goto done;
 			}
 			operation->auxiliary = data_opcode.op1;
+			operation->auxiliary_unused_payload =
+				data_opcode.op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+					? op_array->opcodes[index + 1].op1.num : 0;
 			operation->auxiliary_storage_id =
 				zend_mir_w09_operand_storage_id(
 					op_array, &data_opcode.op1);

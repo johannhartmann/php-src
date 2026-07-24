@@ -47,7 +47,8 @@ static bool zend_native_object_decode_explicit_operand(
 	memset(operand, 0, sizeof(*operand));
 	if (kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
 		*operand_type = IS_UNUSED;
-		return index == ZEND_MIR_ID_INVALID;
+		operand->num = index;
+		return true;
 	}
 	if (kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
 		if (index >= execute_data->func->op_array.last_literal) {
@@ -1138,12 +1139,13 @@ static zend_native_status zend_native_object_incdec_explicit(
 }
 
 static zend_native_status zend_native_object_instanceof(
-	zend_execute_data *execute_data, const zend_op *opline)
+	zend_execute_data *execute_data,
+	const zend_native_explicit_object_operation *operation)
 {
-	zval *value = zend_native_object_read(
-		execute_data, opline, opline->op1_type, opline->op1);
+	zval *value = zend_native_object_read_explicit(
+		execute_data, operation->op1_type, operation->op1);
 	zval *result = zend_native_object_slot(
-		execute_data, opline->result_type, opline->result);
+		execute_data, operation->result_type, operation->result);
 	zend_class_entry *class_entry = NULL;
 
 	if (value == NULL || result == NULL) {
@@ -1152,20 +1154,21 @@ static zend_native_status zend_native_object_instanceof(
 	while (Z_ISREF_P(value)) {
 		value = Z_REFVAL_P(value);
 	}
-	if (opline->op2_type == IS_CONST) {
-		zval *name = RT_CONSTANT(opline, opline->op2);
-		if (Z_TYPE_P(name) == IS_STRING) {
+	if (operation->op2_type == IS_CONST) {
+		zval *name = zend_native_object_read_explicit(
+			execute_data, operation->op2_type, operation->op2);
+		if (name != NULL && Z_TYPE_P(name) == IS_STRING) {
 			zval *lower_name = name + 1;
 			class_entry = zend_lookup_class_ex(
 				Z_STR_P(name), Z_TYPE_P(lower_name) == IS_STRING
 					? Z_STR_P(lower_name) : NULL,
 				ZEND_FETCH_CLASS_NO_AUTOLOAD);
 		}
-	} else if (opline->op2_type == IS_UNUSED) {
-		class_entry = zend_fetch_class(NULL, opline->op2.num);
+	} else if (operation->op2_type == IS_UNUSED) {
+		class_entry = zend_fetch_class(NULL, operation->op2.num);
 	} else {
-		zval *class_value = zend_native_object_read(
-			execute_data, opline, opline->op2_type, opline->op2);
+		zval *class_value = zend_native_object_read_explicit(
+			execute_data, operation->op2_type, operation->op2);
 		if (class_value != NULL && Z_TYPE_P(class_value) == IS_PTR) {
 			class_entry = Z_PTR_P(class_value);
 		}
@@ -1173,7 +1176,7 @@ static zend_native_status zend_native_object_instanceof(
 	ZVAL_BOOL(result, Z_TYPE_P(value) == IS_OBJECT && class_entry != NULL
 		&& instanceof_function(Z_OBJCE_P(value), class_entry));
 	zend_native_object_consume(
-		execute_data, opline->op1_type, opline->op1, result);
+		execute_data, operation->op1_type, operation->op1, result);
 	return zend_native_object_status();
 }
 
@@ -2019,8 +2022,9 @@ ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_post_dec,
 	ZEND_POST_DEC_OBJ,
 	zend_native_object_incdec_explicit(
 		execute_data, &operation, true, true))
-ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_instanceof,
-	ZEND_INSTANCEOF, zend_native_object_instanceof(execute_data, opline))
+ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_instanceof,
+	ZEND_INSTANCEOF,
+	zend_native_object_instanceof(execute_data, &operation))
 ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_clone,
 	ZEND_CLONE,
 	zend_native_object_clone_explicit(execute_data, &operation))

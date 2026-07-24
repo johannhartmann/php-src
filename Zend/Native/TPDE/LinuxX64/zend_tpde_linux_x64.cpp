@@ -401,12 +401,22 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			|| helper == ZEND_NATIVE_HELPER_OBJECT_ASSIGN
 			|| (helper >= ZEND_NATIVE_HELPER_OBJECT_UNSET
 				&& helper <= ZEND_NATIVE_HELPER_OBJECT_POST_DEC)
+			|| helper == ZEND_NATIVE_HELPER_OBJECT_INSTANCEOF
 			|| helper == ZEND_NATIVE_HELPER_OBJECT_CLONE
 			|| (helper >= ZEND_NATIVE_HELPER_DYNAMIC_FETCH_R
 				&& helper
 					<= ZEND_NATIVE_HELPER_DYNAMIC_INCLUDE_OR_EVAL)
 			|| (helper >= ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R
 				&& helper <= ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_UNSET);
+		const bool explicit_object_operands =
+			helper == ZEND_NATIVE_HELPER_OBJECT_FETCH_THIS
+			|| (helper >= ZEND_NATIVE_HELPER_OBJECT_FETCH_R
+				&& helper <= ZEND_NATIVE_HELPER_OBJECT_FETCH_UNSET)
+			|| helper == ZEND_NATIVE_HELPER_OBJECT_ASSIGN
+			|| (helper >= ZEND_NATIVE_HELPER_OBJECT_UNSET
+				&& helper <= ZEND_NATIVE_HELPER_OBJECT_POST_DEC)
+			|| helper == ZEND_NATIVE_HELPER_OBJECT_INSTANCEOF
+			|| helper == ZEND_NATIVE_HELPER_OBJECT_CLONE;
 		const bool explicit_auxiliary =
 			helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM
 			|| helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_OP
@@ -431,8 +441,15 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		if (explicit_operands) {
 			const zend_mir_executable_value_ref &operation =
 				mir.value_operation;
+			auto encode_operand = [&](const zend_mir_source_operand_ref &operand,
+					uint32_t unused_payload) {
+				return explicit_object_operands
+					? zend_tpde_encode_value_operand(operand, unused_payload)
+					: zend_tpde_encode_value_operand(operand);
+			};
 			builder.add_arg(ValuePart{
-				zend_tpde_encode_value_operand(operation.op1), 8,
+				encode_operand(
+					operation.op1, operation.op1_unused_payload), 8,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 			if (helper == ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL) {
 				builder.add_arg(ValuePart{operation.source_opcode, 4,
@@ -456,14 +473,17 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				return true;
 			}
 			builder.add_arg(ValuePart{
-				zend_tpde_encode_value_operand(operation.op2), 8,
+				encode_operand(
+					operation.op2, operation.op2_unused_payload), 8,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 			builder.add_arg(ValuePart{
-				zend_tpde_encode_value_operand(operation.result), 8,
+				encode_operand(
+					operation.result, operation.result_unused_payload), 8,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 			if (explicit_auxiliary) {
 				builder.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.auxiliary), 8,
+					encode_operand(operation.auxiliary,
+						operation.auxiliary_unused_payload), 8,
 					tpde::x64::PlatformConfig::GP_BANK},
 					tpde::CCAssignment{});
 			}

@@ -14,14 +14,24 @@
 struct _zend_native_direct_call_descriptor;
 
 static inline uint64_t zend_tpde_encode_value_operand(
-	const zend_mir_source_operand_ref &operand)
+	const zend_mir_source_operand_ref &operand, uint32_t unused_payload)
 {
+	const uint32_t payload_or_index =
+		operand.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+			? unused_payload : operand.index;
+
 	return (static_cast<uint64_t>(
 			static_cast<uint32_t>(operand.kind) & UINT32_C(0xff)))
 		| (static_cast<uint64_t>(
 				static_cast<uint32_t>(operand.slot_kind) & UINT32_C(0xff))
 			<< 8)
-		| (static_cast<uint64_t>(operand.index) << 16);
+		| (static_cast<uint64_t>(payload_or_index) << 16);
+}
+
+static inline uint64_t zend_tpde_encode_value_operand(
+	const zend_mir_source_operand_ref &operand)
+{
+	return zend_tpde_encode_value_operand(operand, ZEND_MIR_ID_INVALID);
 }
 
 struct zend_tpde_value {

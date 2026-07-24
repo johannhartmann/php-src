@@ -849,6 +849,12 @@ static bool zend_mir_value_validate_executable_operations(
 				operation->result_storage_id,
 				operation->auxiliary_storage_id
 			};
+			const uint32_t unused_payloads[4] = {
+				operation->op1_unused_payload,
+				operation->op2_unused_payload,
+				operation->result_unused_payload,
+				operation->auxiliary_unused_payload
+			};
 			uint32_t operand_index;
 
 			for (operand_index = 0; operand_index < 4; operand_index++) {
@@ -868,6 +874,8 @@ static bool zend_mir_value_validate_executable_operations(
 									!= ZEND_MIR_SOURCE_SLOT_KIND_INVALID
 								|| storage_ids[operand_index]
 									!= ZEND_MIR_ID_INVALID))
+						|| (operand->kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
+							&& unused_payloads[operand_index] != 0)
 						|| ((operand->kind == ZEND_MIR_SOURCE_OPERAND_SLOT
 								|| operand->kind == ZEND_MIR_SOURCE_OPERAND_SSA)
 							&& (operand->slot_kind < ZEND_MIR_SOURCE_SLOT_CV
