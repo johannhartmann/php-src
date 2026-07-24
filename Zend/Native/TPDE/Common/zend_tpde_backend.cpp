@@ -93,6 +93,35 @@ bool source_descriptor_send_opcode(uint8_t opcode) {
 	}
 }
 
+bool exact_scalar_satisfies_type(
+	zend_mir_scalar_type_mask exact_type, const zend_type &type) {
+	if (!ZEND_TYPE_IS_SET(type)) {
+		return true;
+	}
+	if (!zend_mir_scalar_type_is_exact(exact_type)
+			|| !ZEND_TYPE_IS_ONLY_MASK(type)) {
+		return false;
+	}
+	const uint32_t accepted = ZEND_TYPE_PURE_MASK(type);
+	switch (exact_type) {
+		case ZEND_MIR_SCALAR_TYPE_NULL:
+			return (accepted & MAY_BE_NULL) != 0;
+		case ZEND_MIR_SCALAR_TYPE_I1:
+			/*
+			 * The scalar fact distinguishes bool from other PHP types but
+			 * does not distinguish true from false. Both values therefore
+			 * have to satisfy the declared type.
+			 */
+			return (accepted & MAY_BE_BOOL) == MAY_BE_BOOL;
+		case ZEND_MIR_SCALAR_TYPE_I64:
+			return (accepted & MAY_BE_LONG) != 0;
+		case ZEND_MIR_SCALAR_TYPE_F64:
+			return (accepted & MAY_BE_DOUBLE) != 0;
+		default:
+			return false;
+	}
+}
+
 uint32_t id_index_capacity(uint32_t count) {
 	uint32_t capacity = 8;
 
@@ -1326,15 +1355,8 @@ bool initialize_plan(
 							&& op_array.last_var == op_array.num_args
 							&& op_array.cache_size == 0
 							&& (op_array.fn_flags
-								& ZEND_ACC_HAS_RETURN_TYPE) == 0
-							&& (op_array.fn_flags
 								& (ZEND_ACC_VARIADIC
 									| ZEND_ACC_CALL_VIA_TRAMPOLINE)) == 0;
-						for (uint32_t n = 0;
-								trivial_frame && n < op_array.num_args; ++n) {
-							trivial_frame = op_array.arg_info == nullptr
-								|| !ZEND_TYPE_IS_SET(op_array.arg_info[n].type);
-						}
 						if (trivial_frame) {
 							descriptor->frame_size = zend_vm_calc_used_stack(
 								site.arguments.count, callee);
@@ -1401,7 +1423,18 @@ bool initialize_plan(
 										== ZEND_MIR_SOURCE_OPERAND_SSA)
 								&& argument.source_operand.slot_kind
 									== ZEND_MIR_SOURCE_SLOT_CV);
-						trivial_frame = trivial_frame && inline_argument;
+						const bool inline_parameter =
+							!trivial_frame
+							|| callee->op_array.arg_info == nullptr
+							|| !ZEND_TYPE_IS_SET(
+								callee->op_array.arg_info[n].type)
+							|| (descriptor->arguments[n].mode
+									== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
+								&& exact_scalar_satisfies_type(
+									descriptor->arguments[n].exact_type,
+									callee->op_array.arg_info[n].type));
+						trivial_frame =
+							trivial_frame && inline_argument && inline_parameter;
 					}
 					const bool inline_result =
 						(!zend_mir_id_is_valid(record.result_id)
