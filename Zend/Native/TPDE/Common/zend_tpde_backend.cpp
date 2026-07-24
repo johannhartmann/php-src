@@ -1297,10 +1297,14 @@ bool initialize_plan(
 											== ZEND_NATIVE_INTERNAL_RECEIVER_CALLED_SCOPE
 										&& (op_array.fn_flags
 											& ZEND_ACC_STATIC) != 0
-										&& descriptor->called_scope != nullptr
-										&& (descriptor->flags
-											& ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE)
-											== 0)
+										&& (((descriptor->flags
+													& ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE)
+												!= 0
+											&& descriptor->called_scope == nullptr)
+											|| ((descriptor->flags
+													& ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE)
+												== 0
+											&& descriptor->called_scope != nullptr)))
 									|| (descriptor->receiver_kind
 											== ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT
 										&& (op_array.fn_flags
