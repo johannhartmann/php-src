@@ -85,6 +85,12 @@ struct zend_tpde_value_condition {
 	uint32_t operand_offset;
 };
 
+struct zend_tpde_slot_isset_empty {
+	uint32_t operand_offset;
+	uint32_t result_offset;
+	bool is_empty;
+};
+
 struct zend_tpde_object_property_read {
 	uint32_t receiver_offset;
 	uint32_t result_offset;
@@ -300,6 +306,41 @@ static inline bool zend_tpde_value_condition_at(
 		return false;
 	}
 	out->operand_offset = static_cast<uint32_t>(operand_offset);
+	return true;
+}
+
+static inline bool zend_tpde_slot_isset_empty_at(
+	const zend_tpde_instruction &instruction,
+	zend_tpde_slot_isset_empty *out)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	uint64_t operand_offset;
+	uint64_t result_offset;
+
+	if (out == nullptr || !instruction.has_value_operation
+			|| operation.opcode
+				!= ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV
+			|| operation.source_opcode != ZEND_ISSET_ISEMPTY_CV
+			|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+			|| operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+			|| operation.op1_storage_id == ZEND_MIR_ID_INVALID
+			|| operation.result_storage_id == ZEND_MIR_ID_INVALID
+			|| operation.op1_storage_id == operation.result_storage_id) {
+		return false;
+	}
+	operand_offset =
+		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
+			* sizeof(zval);
+	result_offset =
+		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
+			* sizeof(zval);
+	if (operand_offset > UINT32_MAX || result_offset > UINT32_MAX) {
+		return false;
+	}
+	out->operand_offset = static_cast<uint32_t>(operand_offset);
+	out->result_offset = static_cast<uint32_t>(result_offset);
+	out->is_empty = (operation.extended_value & ZEND_ISEMPTY) != 0;
 	return true;
 }
 

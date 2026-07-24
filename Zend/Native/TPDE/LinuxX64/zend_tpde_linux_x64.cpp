@@ -1215,6 +1215,151 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		label_place(done);
 		return true;
 	};
+	auto slot_isset_empty = [&]() {
+		zend_tpde_slot_isset_empty layout;
+
+		if (!zend_tpde_slot_isset_empty_at(mir, &layout)
+				|| layout.operand_offset > INT32_MAX
+				|| layout.result_offset > INT32_MAX) {
+			return execute_value_operation(
+				ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV);
+		}
+		for (auto reg_id : register_file.used_regs()) {
+			tpde::Reg reg{reg_id};
+			if (!register_file.is_fixed(reg)
+					&& register_file.reg_local_idx(reg)
+						!= INVALID_VAL_LOCAL_IDX) {
+				evict_reg(reg);
+			}
+		}
+		auto slow = text_writer.label_create();
+		auto truthy = text_writer.label_create();
+		auto falsey = text_writer.label_create();
+		auto store = text_writer.label_create();
+		auto done = text_writer.label_create();
+		auto [frame_ref, frame] =
+			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_reg = frame_scratch.cur_reg();
+		ScratchReg slot{this};
+		ScratchReg type{this};
+		ScratchReg value{this};
+		auto slot_reg = slot.alloc_gp();
+		auto type_reg = type.alloc_gp();
+		auto value_reg = value.alloc_gp();
+
+		ASM(MOV64rr, slot_reg, frame_reg);
+		ASM(ADD64ri, slot_reg,
+			static_cast<int32_t>(layout.operand_offset));
+		ASM(MOV32rm, type_reg,
+			FE_MEM(slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		ASM(AND32ri, type_reg, Z_TYPE_MASK);
+		ASM(CMP32ri, type_reg, IS_NULL);
+		generate_raw_jump(Jump::jle, falsey);
+		ASM(CMP32ri, type_reg, IS_REFERENCE);
+		generate_raw_jump(Jump::je, slow);
+		if (!layout.is_empty) {
+			generate_raw_jump(Jump::jmp, truthy);
+		} else {
+			ASM(CMP32ri, type_reg, IS_FALSE);
+			generate_raw_jump(Jump::je, falsey);
+			ASM(CMP32ri, type_reg, IS_TRUE);
+			generate_raw_jump(Jump::je, truthy);
+			ASM(CMP32ri, type_reg, IS_LONG);
+			auto not_long = text_writer.label_create();
+			generate_raw_jump(Jump::jne, not_long);
+			ASM(MOV64rm, value_reg,
+				FE_MEM(slot_reg, 0, FE_NOREG, 0));
+			ASM(TEST64rr, value_reg, value_reg);
+			generate_raw_jump(Jump::jne, truthy);
+			generate_raw_jump(Jump::jmp, falsey);
+
+			label_place(not_long);
+			ASM(CMP32ri, type_reg, IS_STRING);
+			auto not_string = text_writer.label_create();
+			generate_raw_jump(Jump::jne, not_string);
+			ASM(MOV64rm, value_reg,
+				FE_MEM(slot_reg, 0, FE_NOREG, 0));
+			ASM(MOV64rm, slot_reg,
+				FE_MEM(value_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_string, len))));
+			ASM(TEST64rr, slot_reg, slot_reg);
+			generate_raw_jump(Jump::je, falsey);
+			ASM(CMP64ri, slot_reg, 1);
+			generate_raw_jump(Jump::jne, truthy);
+			ASM(MOVZXr32m8, type_reg,
+				FE_MEM(value_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_string, val))));
+			ASM(CMP32ri, type_reg, '0');
+			generate_raw_jump(Jump::je, falsey);
+			generate_raw_jump(Jump::jmp, truthy);
+
+			label_place(not_string);
+			ASM(CMP32ri, type_reg, IS_ARRAY);
+			auto not_array = text_writer.label_create();
+			generate_raw_jump(Jump::jne, not_array);
+			ASM(MOV64rm, value_reg,
+				FE_MEM(slot_reg, 0, FE_NOREG, 0));
+			ASM(MOV32rm, type_reg,
+				FE_MEM(value_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(HashTable, nNumOfElements))));
+			ASM(TEST32rr, type_reg, type_reg);
+			generate_raw_jump(Jump::jne, truthy);
+			generate_raw_jump(Jump::jmp, falsey);
+
+			label_place(not_array);
+			ASM(CMP32ri, type_reg, IS_RESOURCE);
+			auto not_resource = text_writer.label_create();
+			generate_raw_jump(Jump::jne, not_resource);
+			ASM(MOV64rm, value_reg,
+				FE_MEM(slot_reg, 0, FE_NOREG, 0));
+			ASM(MOV32rm, type_reg,
+				FE_MEM(value_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_resource, handle))));
+			ASM(TEST32rr, type_reg, type_reg);
+			generate_raw_jump(Jump::jne, truthy);
+			generate_raw_jump(Jump::jmp, falsey);
+			label_place(not_resource);
+			generate_raw_jump(Jump::jmp, slow);
+		}
+
+		label_place(truthy);
+		ASM(MOV32ri, type_reg,
+			layout.is_empty ? IS_FALSE : IS_TRUE);
+		generate_raw_jump(Jump::jmp, store);
+		label_place(falsey);
+		ASM(MOV32ri, type_reg,
+			layout.is_empty ? IS_TRUE : IS_FALSE);
+		label_place(store);
+		ASM(MOV64rr, slot_reg, frame_reg);
+		ASM(ADD64ri, slot_reg,
+			static_cast<int32_t>(layout.result_offset));
+		ASM(MOV32mr,
+			FE_MEM(slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))),
+			type_reg);
+		generate_raw_jump(Jump::jmp, done);
+
+		label_place(slow);
+		slot.reset();
+		type.reset();
+		value.reset();
+		ValuePart frame_argument{
+			tpde::x64::PlatformConfig::GP_BANK, 8};
+		frame_argument.set_value(this, std::move(frame_scratch));
+		if (!execute_value_operation(
+				ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV,
+				&frame_argument)) {
+			return false;
+		}
+		label_place(done);
+		return true;
+	};
 	auto object_property_read = [&]() {
 		zend_tpde_object_property_read layout;
 
@@ -1646,8 +1791,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		case ZEND_MIR_OPCODE_VALUE_CAST:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_CAST);
 		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV:
-			return execute_value_operation(
-				ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV);
+			return slot_isset_empty();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_LIST:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FETCH_LIST);
 		case ZEND_MIR_OPCODE_VALUE_INCDEC:
@@ -1944,8 +2088,16 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 					generate_raw_jump(Jump::jmp, falsey);
 					label_place(not_array);
 					ASM(CMP32ri, type_reg, IS_RESOURCE);
-					generate_raw_jump(Jump::je, truthy);
-					generate_raw_jump(Jump::jmp, slow);
+					generate_raw_jump(Jump::jne, slow);
+					ASM(MOV64rm, value_reg,
+						FE_MEM(slot_reg, 0, FE_NOREG, 0));
+					ASM(MOV32rm, type_reg,
+						FE_MEM(value_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zend_resource, handle))));
+					ASM(TEST32rr, type_reg, type_reg);
+					generate_raw_jump(Jump::jne, truthy);
+					generate_raw_jump(Jump::jmp, falsey);
 
 					slot.reset();
 					type.reset();
