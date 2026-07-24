@@ -396,12 +396,18 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			|| helper == ZEND_NATIVE_HELPER_VALUE_ECHO
 			|| helper == ZEND_NATIVE_HELPER_OBJECT_FETCH_R
 			|| helper == ZEND_NATIVE_HELPER_OBJECT_ASSIGN
+			|| (helper >= ZEND_NATIVE_HELPER_DYNAMIC_FETCH_R
+				&& helper
+					<= ZEND_NATIVE_HELPER_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT)
 			|| (helper >= ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R
 				&& helper <= ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_UNSET);
 		const bool explicit_auxiliary =
 			helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM
 			|| helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_OP
-			|| helper == ZEND_NATIVE_HELPER_OBJECT_ASSIGN;
+			|| helper == ZEND_NATIVE_HELPER_OBJECT_ASSIGN
+			|| (helper >= ZEND_NATIVE_HELPER_DYNAMIC_FETCH_R
+				&& helper
+					<= ZEND_NATIVE_HELPER_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT);
 		if (node.operands.size() != 1
 				|| (explicit_operands
 					? !mir.has_value_operation
