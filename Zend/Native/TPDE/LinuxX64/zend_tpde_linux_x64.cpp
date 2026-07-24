@@ -629,6 +629,148 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		label_place(done);
 		return true;
 	};
+	auto copy_temporary_slot = [&]() {
+		const zend_mir_storage_id source_storage =
+			mir.value_operation.op1_storage_id;
+		const zend_mir_storage_id result_storage =
+			mir.value_operation.result_storage_id;
+		if (source_storage == ZEND_MIR_ID_INVALID
+				|| result_storage == ZEND_MIR_ID_INVALID
+				|| source_storage == result_storage) {
+			return execute_value_operation(
+				ZEND_NATIVE_HELPER_VALUE_COPY_TMP);
+		}
+		const uint64_t source_offset =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + source_storage) * sizeof(zval);
+		const uint64_t result_offset =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + result_storage) * sizeof(zval);
+		if (source_offset > INT32_MAX || result_offset > INT32_MAX) {
+			return execute_value_operation(
+				ZEND_NATIVE_HELPER_VALUE_COPY_TMP);
+		}
+		auto [frame_ref, frame] =
+			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+		auto frame_reg = frame.load_to_reg();
+		ScratchReg source_slot{this};
+		ScratchReg result_slot{this};
+		ScratchReg type{this};
+		ScratchReg value{this};
+		ScratchReg probe{this};
+		auto source_slot_reg = source_slot.alloc_gp();
+		auto result_slot_reg = result_slot.alloc_gp();
+		auto type_reg = type.alloc_gp();
+		auto value_reg = value.alloc_gp();
+		auto probe_reg = probe.alloc_gp();
+
+		ASM(MOV64rr, source_slot_reg, frame_reg);
+		ASM(ADD64ri, source_slot_reg, static_cast<int32_t>(source_offset));
+		ASM(MOV64rr, result_slot_reg, frame_reg);
+		ASM(ADD64ri, result_slot_reg, static_cast<int32_t>(result_offset));
+		ASM(MOV32rm, type_reg,
+			FE_MEM(source_slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		ASM(MOV64rm, value_reg,
+			FE_MEM(source_slot_reg, 0, FE_NOREG, 0));
+		ASM(MOV32rr, probe_reg, type_reg);
+		ASM(AND32ri, probe_reg,
+			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+		ASM(TEST32rr, probe_reg, probe_reg);
+		auto copied = text_writer.label_create();
+		generate_raw_jump(Jump::je, copied);
+		ASM(ADD32mi,
+			FE_MEM(value_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_refcounted_h, refcount))),
+			1);
+		label_place(copied);
+		ASM(MOV64mr,
+			FE_MEM(result_slot_reg, 0, FE_NOREG, 0), value_reg);
+		ASM(MOV32mr,
+			FE_MEM(result_slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))),
+			type_reg);
+		return true;
+	};
+	auto free_temporary_slot = [&]() {
+		const zend_mir_storage_id source_storage =
+			mir.value_operation.op1_storage_id;
+		if (source_storage == ZEND_MIR_ID_INVALID) {
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FREE);
+		}
+		const uint64_t source_offset =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + source_storage) * sizeof(zval);
+		if (source_offset > INT32_MAX) {
+			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FREE);
+		}
+		for (auto reg_id : register_file.used_regs()) {
+			tpde::Reg reg{reg_id};
+			if (!register_file.is_fixed(reg)
+					&& register_file.reg_local_idx(reg)
+						!= INVALID_VAL_LOCAL_IDX) {
+				evict_reg(reg);
+			}
+		}
+		auto slow = text_writer.label_create();
+		auto released = text_writer.label_create();
+		auto [frame_ref, frame] =
+			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_reg = frame_scratch.cur_reg();
+		ScratchReg source_slot{this};
+		ScratchReg type{this};
+		ScratchReg value{this};
+		ScratchReg probe{this};
+		auto source_slot_reg = source_slot.alloc_gp();
+		auto type_reg = type.alloc_gp();
+		auto value_reg = value.alloc_gp();
+		auto probe_reg = probe.alloc_gp();
+
+		ASM(MOV64rr, source_slot_reg, frame_reg);
+		ASM(ADD64ri, source_slot_reg, static_cast<int32_t>(source_offset));
+		ASM(MOV32rm, type_reg,
+			FE_MEM(source_slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		ASM(MOV32rr, probe_reg, type_reg);
+		ASM(AND32ri, probe_reg,
+			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+		ASM(TEST32rr, probe_reg, probe_reg);
+		generate_raw_jump(Jump::je, released);
+		ASM(MOV64rm, value_reg,
+			FE_MEM(source_slot_reg, 0, FE_NOREG, 0));
+		ASM(MOV32rm, probe_reg,
+			FE_MEM(value_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_refcounted_h, refcount))));
+		ASM(CMP32ri, probe_reg, 1);
+		generate_raw_jump(Jump::jle, slow);
+		ASM(SUB32mi,
+			FE_MEM(value_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_refcounted_h, refcount))),
+			1);
+		label_place(released);
+		ASM(MOV32ri, type_reg, IS_UNDEF);
+		ASM(MOV32mr,
+			FE_MEM(source_slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))),
+			type_reg);
+		auto done = text_writer.label_create();
+		generate_raw_jump(Jump::jmp, done);
+		label_place(slow);
+		source_slot.reset();
+		type.reset();
+		value.reset();
+		probe.reset();
+		ValuePart frame_argument{
+			tpde::x64::PlatformConfig::GP_BANK, 8};
+		frame_argument.set_value(this, std::move(frame_scratch));
+		if (!execute_value_operation(
+				ZEND_NATIVE_HELPER_VALUE_FREE, &frame_argument)) {
+			return false;
+		}
+		label_place(done);
+		return true;
+	};
 	auto read_integer_array = [&]() {
 		zend_tpde_integer_array_read layout;
 
@@ -1777,9 +1919,9 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		case ZEND_MIR_OPCODE_VALUE_SEPARATE:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_SEPARATE);
 		case ZEND_MIR_OPCODE_VALUE_COPY_TMP:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_COPY_TMP);
+			return copy_temporary_slot();
 		case ZEND_MIR_OPCODE_VALUE_FREE:
-			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_FREE);
+			return free_temporary_slot();
 		case ZEND_MIR_OPCODE_VALUE_UNSET_CV:
 			return execute_value_operation(ZEND_NATIVE_HELPER_VALUE_UNSET_CV);
 		case ZEND_MIR_OPCODE_VALUE_CHECK_VAR:
