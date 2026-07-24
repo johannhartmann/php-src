@@ -1003,23 +1003,27 @@ static zend_native_status zend_native_object_assign_op(
 	return zend_native_object_status();
 }
 
-static zend_native_status zend_native_object_unset(
-	zend_execute_data *execute_data, const zend_op *opline)
+static zend_native_status zend_native_object_unset_explicit(
+	zend_execute_data *execute_data,
+	const zend_native_explicit_object_operation *operation)
 {
-	zval *receiver = zend_native_object_receiver(execute_data, opline);
-	zval *property = zend_native_object_read(
-		execute_data, opline, opline->op2_type, opline->op2);
-	zend_string *temporary;
+	zval *receiver =
+		zend_native_object_receiver_explicit(execute_data, operation);
+	zval *property = zend_native_object_read_explicit(
+		execute_data, operation->op2_type, operation->op2);
+	zend_string *temporary = NULL;
 	zend_string *name;
 
 	if (receiver == NULL || property == NULL) {
+		zend_throw_error(NULL, "Malformed native object unset operands");
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (Z_TYPE_P(receiver) != IS_OBJECT) {
 		return zend_native_object_bad_receiver(
 			receiver, property, false);
 	}
-	name = zend_native_object_name(execute_data, opline, &temporary);
+	name = zend_native_object_name_explicit(
+		execute_data, operation, property, &temporary);
 	if (name == NULL) {
 		return zend_native_object_status();
 	}
@@ -1028,30 +1032,34 @@ static zend_native_status zend_native_object_unset(
 		zend_tmp_string_release(temporary);
 	}
 	zend_native_object_consume(
-		execute_data, opline->op2_type, opline->op2, NULL);
+		execute_data, operation->op2_type, operation->op2, NULL);
 	zend_native_object_consume(
-		execute_data, opline->op1_type, opline->op1, NULL);
+		execute_data, operation->op1_type, operation->op1, NULL);
 	return zend_native_object_status();
 }
 
-static zend_native_status zend_native_object_isset(
-	zend_execute_data *execute_data, const zend_op *opline)
+static zend_native_status zend_native_object_isset_explicit(
+	zend_execute_data *execute_data,
+	const zend_native_explicit_object_operation *operation)
 {
-	zval *receiver = zend_native_object_receiver(execute_data, opline);
-	zval *property = zend_native_object_read(
-		execute_data, opline, opline->op2_type, opline->op2);
+	zval *receiver =
+		zend_native_object_receiver_explicit(execute_data, operation);
+	zval *property = zend_native_object_read_explicit(
+		execute_data, operation->op2_type, operation->op2);
 	zval *result = zend_native_object_slot(
-		execute_data, opline->result_type, opline->result);
-	zend_string *temporary;
+		execute_data, operation->result_type, operation->result);
+	zend_string *temporary = NULL;
 	zend_string *name;
-	bool isempty = (opline->extended_value & ZEND_ISEMPTY) != 0;
+	bool isempty = (operation->extended_value & ZEND_ISEMPTY) != 0;
 	bool found = false;
 
 	if (receiver == NULL || property == NULL || result == NULL) {
+		zend_throw_error(NULL, "Malformed native object isset operands");
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (Z_TYPE_P(receiver) == IS_OBJECT) {
-		name = zend_native_object_name(execute_data, opline, &temporary);
+		name = zend_native_object_name_explicit(
+			execute_data, operation, property, &temporary);
 		if (name != NULL) {
 			found = Z_OBJ_HT_P(receiver)->has_property(
 				Z_OBJ_P(receiver), name, isempty, NULL) != 0;
@@ -1062,23 +1070,25 @@ static zend_native_status zend_native_object_isset(
 	}
 	ZVAL_BOOL(result, isempty ^ found);
 	zend_native_object_consume(
-		execute_data, opline->op2_type, opline->op2, result);
+		execute_data, operation->op2_type, operation->op2, result);
 	zend_native_object_consume(
-		execute_data, opline->op1_type, opline->op1, result);
+		execute_data, operation->op1_type, operation->op1, result);
 	return zend_native_object_status();
 }
 
-static zend_native_status zend_native_object_incdec(
-	zend_execute_data *execute_data, const zend_op *opline,
+static zend_native_status zend_native_object_incdec_explicit(
+	zend_execute_data *execute_data,
+	const zend_native_explicit_object_operation *operation,
 	bool post, bool decrement)
 {
-	zval *receiver = zend_native_object_receiver(execute_data, opline);
-	zval *property = zend_native_object_read(
-		execute_data, opline, opline->op2_type, opline->op2);
-	zval *result = opline->result_type == IS_UNUSED ? NULL
+	zval *receiver =
+		zend_native_object_receiver_explicit(execute_data, operation);
+	zval *property = zend_native_object_read_explicit(
+		execute_data, operation->op2_type, operation->op2);
+	zval *result = operation->result_type == IS_UNUSED ? NULL
 		: zend_native_object_slot(
-			execute_data, opline->result_type, opline->result);
-	zend_string *temporary;
+			execute_data, operation->result_type, operation->result);
+	zend_string *temporary = NULL;
 	zend_string *name;
 	zval current;
 	zval *read;
@@ -1087,9 +1097,11 @@ static zend_native_status zend_native_object_incdec(
 	ZVAL_UNDEF(&current);
 	if (receiver == NULL || property == NULL
 			|| Z_TYPE_P(receiver) != IS_OBJECT) {
+		zend_throw_error(NULL, "Malformed native object incdec operands");
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	name = zend_native_object_name(execute_data, opline, &temporary);
+	name = zend_native_object_name_explicit(
+		execute_data, operation, property, &temporary);
 	if (name == NULL) {
 		return zend_native_object_status();
 	}
@@ -1119,9 +1131,9 @@ static zend_native_status zend_native_object_incdec(
 		zend_tmp_string_release(temporary);
 	}
 	zend_native_object_consume(
-		execute_data, opline->op2_type, opline->op2, result);
+		execute_data, operation->op2_type, operation->op2, result);
 	zend_native_object_consume(
-		execute_data, opline->op1_type, opline->op1, result);
+		execute_data, operation->op1_type, operation->op1, result);
 	return zend_native_object_status();
 }
 
@@ -1165,12 +1177,14 @@ static zend_native_status zend_native_object_instanceof(
 	return zend_native_object_status();
 }
 
-static zend_native_status zend_native_object_clone(
-	zend_execute_data *execute_data, const zend_op *opline)
+static zend_native_status zend_native_object_clone_explicit(
+	zend_execute_data *execute_data,
+	const zend_native_explicit_object_operation *operation)
 {
-	zval *value = zend_native_object_receiver(execute_data, opline);
+	zval *value =
+		zend_native_object_receiver_explicit(execute_data, operation);
 	zval *result = zend_native_object_slot(
-		execute_data, opline->result_type, opline->result);
+		execute_data, operation->result_type, operation->result);
 	zend_object *clone;
 
 	if (value == NULL || result == NULL) {
@@ -1195,7 +1209,7 @@ static zend_native_status zend_native_object_clone(
 	}
 	ZVAL_OBJ(result, clone);
 	zend_native_object_consume(
-		execute_data, opline->op1_type, opline->op1, result);
+		execute_data, operation->op1_type, operation->op1, result);
 	return zend_native_object_status();
 }
 
@@ -1819,11 +1833,12 @@ static zend_native_status zend_native_get_class(
 	return zend_native_object_status();
 }
 
-static zend_native_status zend_native_fetch_this(
-	zend_execute_data *execute_data, const zend_op *opline)
+static zend_native_status zend_native_fetch_this_explicit(
+	zend_execute_data *execute_data,
+	const zend_native_explicit_object_operation *operation)
 {
 	zval *result = zend_native_object_slot(
-		execute_data, opline->result_type, opline->result);
+		execute_data, operation->result_type, operation->result);
 
 	if (result == NULL || Z_TYPE(execute_data->This) != IS_OBJECT) {
 		if (result != NULL) {
@@ -1865,8 +1880,30 @@ static const zend_op *zend_native_object_exact_opline(
 ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_declare_anon_class,
 	ZEND_DECLARE_ANON_CLASS,
 	zend_native_declare_anon_class(execute_data, opline))
-ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_fetch_this,
-	ZEND_FETCH_THIS, zend_native_fetch_this(execute_data, opline))
+
+#define ZEND_NATIVE_OBJECT_EXPLICIT_HELPER( \
+		name, source_opcode, operation_call) \
+	zend_native_status name( \
+		zend_execute_data *execute_data, \
+		uint64_t op1, uint64_t op2, uint64_t result, \
+		uint32_t extended_value, uint32_t actual_source_opcode, \
+		uint32_t source_position_id) \
+	{ \
+		zend_native_explicit_object_operation operation; \
+		if (!zend_native_object_init_explicit_operation( \
+				execute_data, op1, op2, result, extended_value, \
+				actual_source_opcode, source_position_id, source_opcode, \
+				&operation)) { \
+			zend_throw_error(NULL, \
+				"Malformed explicit native object operation"); \
+			return ZEND_NATIVE_EXCEPTION; \
+		} \
+		return operation_call; \
+	}
+
+ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_fetch_this,
+	ZEND_FETCH_THIS,
+	zend_native_fetch_this_explicit(execute_data, &operation))
 zend_native_status zend_native_execute_object_fetch_r(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,
@@ -1959,22 +1996,34 @@ ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_assign_ref,
 	ZEND_ASSIGN_OBJ_REF, zend_native_object_assign(execute_data, opline, true))
 ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_assign_op,
 	ZEND_ASSIGN_OBJ_OP, zend_native_object_assign_op(execute_data, opline))
-ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_unset,
-	ZEND_UNSET_OBJ, zend_native_object_unset(execute_data, opline))
-ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_isset_isempty,
-	ZEND_ISSET_ISEMPTY_PROP_OBJ, zend_native_object_isset(execute_data, opline))
-ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_pre_inc,
-	ZEND_PRE_INC_OBJ, zend_native_object_incdec(execute_data, opline, false, false))
-ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_pre_dec,
-	ZEND_PRE_DEC_OBJ, zend_native_object_incdec(execute_data, opline, false, true))
-ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_post_inc,
-	ZEND_POST_INC_OBJ, zend_native_object_incdec(execute_data, opline, true, false))
-ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_post_dec,
-	ZEND_POST_DEC_OBJ, zend_native_object_incdec(execute_data, opline, true, true))
+ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_unset,
+	ZEND_UNSET_OBJ,
+	zend_native_object_unset_explicit(execute_data, &operation))
+ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(
+	zend_native_execute_object_isset_isempty,
+	ZEND_ISSET_ISEMPTY_PROP_OBJ,
+	zend_native_object_isset_explicit(execute_data, &operation))
+ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_pre_inc,
+	ZEND_PRE_INC_OBJ,
+	zend_native_object_incdec_explicit(
+		execute_data, &operation, false, false))
+ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_pre_dec,
+	ZEND_PRE_DEC_OBJ,
+	zend_native_object_incdec_explicit(
+		execute_data, &operation, false, true))
+ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_post_inc,
+	ZEND_POST_INC_OBJ,
+	zend_native_object_incdec_explicit(
+		execute_data, &operation, true, false))
+ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_post_dec,
+	ZEND_POST_DEC_OBJ,
+	zend_native_object_incdec_explicit(
+		execute_data, &operation, true, true))
 ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_instanceof,
 	ZEND_INSTANCEOF, zend_native_object_instanceof(execute_data, opline))
-ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_object_clone,
-	ZEND_CLONE, zend_native_object_clone(execute_data, opline))
+ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_clone,
+	ZEND_CLONE,
+	zend_native_object_clone_explicit(execute_data, &operation))
 ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_static_fetch_r,
 	ZEND_FETCH_STATIC_PROP_R, zend_native_static_fetch(execute_data, opline, BP_VAR_R))
 ZEND_NATIVE_OBJECT_EXACT_HELPER(zend_native_execute_static_fetch_w,
@@ -2056,3 +2105,4 @@ ZEND_NATIVE_OBJECT_EXACT_HELPER(
 	zend_native_declare_class_delayed(execute_data, opline))
 
 #undef ZEND_NATIVE_OBJECT_EXACT_HELPER
+#undef ZEND_NATIVE_OBJECT_EXPLICIT_HELPER
