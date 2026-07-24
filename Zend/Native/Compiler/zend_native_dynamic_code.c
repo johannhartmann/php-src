@@ -5,6 +5,7 @@
 #include "Zend/zend_execute.h"
 #include "Zend/zend_observer.h"
 #include "Zend/Native/Compiler/zend_native_compiler_internal.h"
+#include "Zend/Native/Lowering/zend_mir_lowering_source.h"
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
 
 #include <stdint.h>
@@ -143,20 +144,90 @@ void zend_native_dynamic_compiler_deactivate(
 	zend_native_active_dynamic_compiler = NULL;
 }
 
-static zval *zend_native_dynamic_operand(
-	zend_execute_data *execute_data, const zend_op *opline)
+static bool zend_native_dynamic_decode_operand(
+	zend_execute_data *execute_data, uint64_t encoded,
+	uint8_t *operand_type, znode_op *operand)
 {
-	zval *operand;
+	zend_mir_source_operand_kind kind =
+		(zend_mir_source_operand_kind) (encoded & UINT64_C(0xff));
+	zend_mir_source_slot_kind slot_kind =
+		(zend_mir_source_slot_kind) ((encoded >> 8) & UINT64_C(0xff));
+	uint32_t index = (uint32_t) (encoded >> 16);
+	uint32_t physical_slot;
 
-	if (opline->op1_type == IS_CONST) {
-		return RT_CONSTANT(opline, opline->op1);
+	if (execute_data == NULL || execute_data->func == NULL
+			|| !ZEND_USER_CODE(execute_data->func->type)
+			|| operand_type == NULL || operand == NULL) {
+		return false;
 	}
-	if (opline->op1_type != IS_TMP_VAR && opline->op1_type != IS_CV) {
+	memset(operand, 0, sizeof(*operand));
+	if (kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+		*operand_type = IS_UNUSED;
+		return index == ZEND_MIR_ID_INVALID;
+	}
+	if (kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+		if (index >= execute_data->func->op_array.last_literal) {
+			return false;
+		}
+		*operand_type = IS_CONST;
+		operand->constant = index;
+		return true;
+	}
+	if (kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+			&& kind != ZEND_MIR_SOURCE_OPERAND_SSA) {
+		return false;
+	}
+	switch (slot_kind) {
+		case ZEND_MIR_SOURCE_SLOT_CV:
+			if (index >= (uint32_t) execute_data->func->op_array.last_var) {
+				return false;
+			}
+			*operand_type = IS_CV;
+			physical_slot = index;
+			break;
+		case ZEND_MIR_SOURCE_SLOT_TMP:
+			if (index >= execute_data->func->op_array.T) {
+				return false;
+			}
+			*operand_type = IS_TMP_VAR;
+			physical_slot =
+				(uint32_t) execute_data->func->op_array.last_var + index;
+			break;
+		case ZEND_MIR_SOURCE_SLOT_VAR:
+			if (index >= execute_data->func->op_array.T) {
+				return false;
+			}
+			*operand_type = IS_VAR;
+			physical_slot =
+				(uint32_t) execute_data->func->op_array.last_var + index;
+			break;
+		default:
+			return false;
+	}
+	if (physical_slot > (UINT32_MAX / sizeof(zval))
+			- (uint32_t) ZEND_CALL_FRAME_SLOT) {
+		return false;
+	}
+	operand->var =
+		((uint32_t) ZEND_CALL_FRAME_SLOT + physical_slot) * sizeof(zval);
+	return true;
+}
+
+static zval *zend_native_dynamic_operand(
+	zend_execute_data *execute_data, uint8_t operand_type, znode_op operand)
+{
+	zval *value;
+
+	if (operand_type == IS_CONST) {
+		return operand.constant < execute_data->func->op_array.last_literal
+			? &execute_data->func->op_array.literals[operand.constant] : NULL;
+	}
+	if (operand_type != IS_TMP_VAR && operand_type != IS_CV) {
 		return NULL;
 	}
-	operand = ZEND_CALL_VAR(execute_data, opline->op1.var);
-	if (opline->op1_type == IS_CV && Z_TYPE_P(operand) == IS_UNDEF) {
-		uint32_t variable_index = EX_VAR_TO_NUM(opline->op1.var);
+	value = ZEND_CALL_VAR(execute_data, operand.var);
+	if (operand_type == IS_CV && Z_TYPE_P(value) == IS_UNDEF) {
+		uint32_t variable_index = EX_VAR_TO_NUM(operand.var);
 
 		if (variable_index < execute_data->func->op_array.last_var) {
 			zend_error(E_WARNING, "Undefined variable $%s",
@@ -164,30 +235,38 @@ static zval *zend_native_dynamic_operand(
 		}
 		return &EG(uninitialized_zval);
 	}
-	return operand;
+	return value;
 }
 
 static void zend_native_dynamic_free_operand(
-	zend_execute_data *execute_data, const zend_op *opline)
+	zend_execute_data *execute_data, uint8_t operand_type, znode_op operand)
 {
-	zval *operand;
+	zval *value;
 
-	if (opline->op1_type != IS_TMP_VAR) {
+	if (operand_type != IS_TMP_VAR) {
 		return;
 	}
-	operand = ZEND_CALL_VAR(execute_data, opline->op1.var);
-	if (!Z_ISUNDEF_P(operand)) {
-		zval_ptr_dtor_nogc(operand);
-		ZVAL_UNDEF(operand);
+	value = ZEND_CALL_VAR(execute_data, operand.var);
+	if (!Z_ISUNDEF_P(value)) {
+		zval_ptr_dtor_nogc(value);
+		ZVAL_UNDEF(value);
 	}
 }
 
 zend_native_status zend_native_execute_include_or_eval(
-	zend_execute_data *execute_data, uint32_t source_opline_index)
+	zend_execute_data *execute_data,
+	uint64_t encoded_op1, uint64_t encoded_op2, uint64_t encoded_result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
 {
 	zend_native_dynamic_compiler *compiler =
 		zend_native_active_dynamic_compiler;
-	const zend_op *opline;
+	uint8_t op1_type;
+	uint8_t op2_type;
+	uint8_t result_type;
+	znode_op op1;
+	znode_op op2;
+	znode_op result_operand;
 	zend_op_array *new_op_array;
 	zend_execute_data *call;
 	zend_execute_data *previous;
@@ -204,36 +283,52 @@ zend_native_status zend_native_execute_include_or_eval(
 	if (compiler == NULL
 			|| execute_data == NULL || execute_data->func == NULL
 			|| !ZEND_USER_CODE(execute_data->func->type)
-			|| source_opline_index >= execute_data->func->op_array.last) {
+			|| source_opcode != ZEND_INCLUDE_OR_EVAL
+			|| source_position_id >= execute_data->func->op_array.last
+			|| !zend_native_dynamic_decode_operand(
+				execute_data, encoded_op1, &op1_type, &op1)
+			|| !zend_native_dynamic_decode_operand(
+				execute_data, encoded_op2, &op2_type, &op2)
+			|| !zend_native_dynamic_decode_operand(
+				execute_data, encoded_result, &result_type, &result_operand)
+			|| (op1_type != IS_CONST
+				&& op1_type != IS_TMP_VAR && op1_type != IS_CV)
+			|| op2_type != IS_UNUSED
+			|| (result_type != IS_UNUSED
+				&& result_type != IS_TMP_VAR && result_type != IS_VAR)
+			|| (extended_value != ZEND_EVAL
+				&& extended_value != ZEND_INCLUDE
+				&& extended_value != ZEND_INCLUDE_ONCE
+				&& extended_value != ZEND_REQUIRE
+				&& extended_value != ZEND_REQUIRE_ONCE)) {
 		zend_throw_error(NULL,
 			"Native dynamic compiler is unavailable for include/eval");
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	opline = &execute_data->func->op_array.opcodes[source_opline_index];
-	if (opline->opcode != ZEND_INCLUDE_OR_EVAL
-			|| (filename = zend_native_dynamic_operand(
-				execute_data, opline)) == NULL) {
+	if ((filename = zend_native_dynamic_operand(
+			execute_data, op1_type, op1)) == NULL) {
 		zend_throw_error(NULL, "Malformed native include/eval operation");
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	execute_data->opline = opline;
+	execute_data->opline =
+		&execute_data->func->op_array.opcodes[source_position_id];
 	first_function_bucket = EG(function_table)->nNumUsed;
 	first_class_bucket = EG(class_table)->nNumUsed;
-	new_op_array = zend_include_or_eval(filename, opline->extended_value);
-	zend_native_dynamic_free_operand(execute_data, opline);
+	new_op_array = zend_include_or_eval(filename, extended_value);
+	zend_native_dynamic_free_operand(execute_data, op1_type, op1);
 	if (EG(exception) != NULL) {
 		if (new_op_array != ZEND_NATIVE_FAKE_OP_ARRAY
 				&& new_op_array != NULL) {
 			destroy_op_array(new_op_array);
 			efree_size(new_op_array, sizeof(zend_op_array));
 		}
-		if (opline->result_type != IS_UNUSED) {
-			ZVAL_UNDEF(ZEND_CALL_VAR(execute_data, opline->result.var));
+		if (result_type != IS_UNUSED) {
+			ZVAL_UNDEF(ZEND_CALL_VAR(execute_data, result_operand.var));
 		}
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	if (opline->result_type != IS_UNUSED) {
-		result = ZEND_CALL_VAR(execute_data, opline->result.var);
+	if (result_type != IS_UNUSED) {
+		result = ZEND_CALL_VAR(execute_data, result_operand.var);
 	}
 	if (new_op_array == ZEND_NATIVE_FAKE_OP_ARRAY) {
 		if (result != NULL) {
