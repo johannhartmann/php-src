@@ -2509,6 +2509,12 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 					call.direct_call->result_operand.kind
 						== ZEND_MIR_SOURCE_OPERAND_UNUSED;
 				const uint32_t argument_count = call.call_argument_count;
+				const uint32_t compiled_variable_count =
+					generated_fast_path
+						? static_cast<uint32_t>(
+							call.direct_call->expected_function
+								->op_array.last_var)
+						: argument_count;
 				const uint32_t frame_operand =
 					generated_fast_path ? argument_count : 0;
 				const uint32_t frame_use_count =
@@ -3104,6 +3110,15 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 							label_place(copied);
 						}
 					}
+					for (uint32_t index = argument_count;
+							index < compiled_variable_count; ++index) {
+						const int32_t offset = static_cast<int32_t>(
+							(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval));
+						ASM(MOV64mi,
+							FE_MEM(callee_reg, 0, FE_NOREG, offset), 0);
+						ASM(MOV64mi,
+							FE_MEM(callee_reg, 0, FE_NOREG, offset + 8), 0);
+					}
 
 					/* Link bailout metadata after the frame. */
 					ASM(MOV64rr, second_reg, callee_reg);
@@ -3325,15 +3340,15 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 
 					/*
 					 * Mirror zend_free_compiled_variables() without a helper for
-					 * shareable argument CVs. Check the whole frame first so a
-					 * later complex destructor cannot observe partially released
-					 * arguments on the complete_fast path.
+					 * shareable argument and local CVs. Check the whole frame
+					 * first so a later complex destructor cannot observe
+					 * partially released variables on the complete_fast path.
 					 */
 					{
 						ScratchReg counted{this};
 						auto counted_reg = counted.alloc_gp();
 						for (uint32_t index = 0;
-								index < argument_count; ++index) {
+								index < compiled_variable_count; ++index) {
 							const int32_t offset = static_cast<int32_t>(
 								(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval));
 							ASM(MOV32rm, probe_reg,
@@ -3356,7 +3371,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 							label_place(checked);
 						}
 						for (uint32_t index = 0;
-								index < argument_count; ++index) {
+								index < compiled_variable_count; ++index) {
 							const int32_t offset = static_cast<int32_t>(
 								(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval));
 							ASM(MOV32rm, probe_reg,
