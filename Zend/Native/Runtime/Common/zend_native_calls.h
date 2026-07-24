@@ -85,7 +85,7 @@ typedef struct _zend_native_direct_call_argument {
 	zend_mir_source_operand_ref source_operand;
 } zend_native_direct_call_argument;
 
-#define ZEND_NATIVE_DIRECT_CALL_TRIVIAL_FRAME UINT32_C(1)
+#define ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME UINT32_C(1)
 
 typedef struct _zend_native_direct_call_descriptor {
 	uint32_t argument_count;
