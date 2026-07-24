@@ -125,6 +125,26 @@ static bool zend_native_frameless_decode_operand(
 	return true;
 }
 
+zval *zend_native_call_explicit_slot(
+	zend_execute_data *caller,
+	uint64_t encoded_operand,
+	uint8_t *operand_type)
+{
+	znode_op operand;
+
+	if (operand_type == NULL
+			|| !zend_native_frameless_decode_operand(
+				caller, encoded_operand, operand_type, &operand)
+			|| (*operand_type != IS_UNUSED
+				&& *operand_type != IS_CV
+				&& *operand_type != IS_VAR
+				&& *operand_type != IS_TMP_VAR)) {
+		return NULL;
+	}
+	return *operand_type == IS_UNUSED
+		? NULL : zend_native_frameless_slot(caller, *operand_type, operand);
+}
+
 static zval *zend_native_frameless_argument(
 	zend_execute_data *execute_data, uint8_t type, znode_op operand)
 {
@@ -2235,11 +2255,14 @@ uint64_t zend_native_call_invoke_finish(
 zend_native_status zend_native_call_invoke_finish_source(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
-	uint32_t do_opline_index)
+	uint32_t do_opline_index,
+	uint32_t do_opcode,
+	uint64_t result_operand)
 {
 	const zend_op *opline;
 	zval temporary;
 	zval *return_value;
+	uint8_t result_operand_type;
 	zend_native_status status;
 
 	if (caller == NULL || caller->func == NULL
@@ -2248,12 +2271,12 @@ zend_native_status zend_native_call_invoke_finish_source(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	opline = &caller->func->op_array.opcodes[do_opline_index];
-	if (opline->opcode != ZEND_DO_UCALL
-			&& opline->opcode != ZEND_DO_FCALL
-			&& opline->opcode != ZEND_DO_FCALL_BY_NAME
-			&& opline->opcode != ZEND_DO_ICALL
-			&& opline->opcode != ZEND_CALLABLE_CONVERT
-			&& opline->opcode != ZEND_CALLABLE_CONVERT_PARTIAL) {
+	if (do_opcode != ZEND_DO_UCALL
+			&& do_opcode != ZEND_DO_FCALL
+			&& do_opcode != ZEND_DO_FCALL_BY_NAME
+			&& do_opcode != ZEND_DO_ICALL
+			&& do_opcode != ZEND_CALLABLE_CONVERT
+			&& do_opcode != ZEND_CALLABLE_CONVERT_PARTIAL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (EG(exception) != NULL) {
@@ -2261,18 +2284,17 @@ zend_native_status zend_native_call_invoke_finish_source(
 		return zend_native_call_invoke(caller, cell, &temporary);
 	}
 	caller->opline = opline;
-	if (opline->result_type == IS_UNUSED) {
+	return_value = zend_native_call_explicit_slot(
+		caller, result_operand, &result_operand_type);
+	if (result_operand_type == IS_UNUSED) {
 		ZVAL_UNDEF(&temporary);
 		return_value = &temporary;
-	} else if (opline->result_type == IS_CV
-			|| opline->result_type == IS_VAR
-			|| opline->result_type == IS_TMP_VAR) {
-		return_value = ZEND_CALL_VAR(caller, opline->result.var);
+	} else if (return_value != NULL) {
 		ZVAL_UNDEF(return_value);
 	} else {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	if (opline->opcode == ZEND_CALLABLE_CONVERT) {
+	if (do_opcode == ZEND_CALLABLE_CONVERT) {
 		zend_execute_data *call = caller->call;
 
 		if (call == NULL || EG(exception) != NULL) {
@@ -2286,7 +2308,7 @@ zend_native_status zend_native_call_invoke_finish_source(
 		caller->call = NULL;
 		return ZEND_NATIVE_RETURNED;
 	}
-	if (opline->opcode == ZEND_CALLABLE_CONVERT_PARTIAL) {
+	if (do_opcode == ZEND_CALLABLE_CONVERT_PARTIAL) {
 		zend_execute_data *call = caller->call;
 		void **cache_slot;
 		zval *named_positions = NULL;
