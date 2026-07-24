@@ -395,6 +395,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			|| helper == ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE
 			|| helper == ZEND_NATIVE_HELPER_VALUE_ECHO
 			|| helper == ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL
+			|| helper == ZEND_NATIVE_HELPER_CALL_FRAMELESS_INTERNAL
 			|| (helper >= ZEND_NATIVE_HELPER_OBJECT_DECLARE_ANON_CLASS
 				&& helper <= ZEND_NATIVE_HELPER_OBJECT_BIND_STATIC)
 			|| (helper >= ZEND_NATIVE_HELPER_OBJECT_FETCH_CLASS_NAME
@@ -418,7 +419,8 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				&& helper <= ZEND_NATIVE_HELPER_STATIC_ASSIGN_OP)
 			|| (helper >= ZEND_NATIVE_HELPER_DYNAMIC_FETCH_R
 				&& helper
-					<= ZEND_NATIVE_HELPER_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT);
+					<= ZEND_NATIVE_HELPER_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT)
+			|| helper == ZEND_NATIVE_HELPER_CALL_FRAMELESS_INTERNAL;
 		if (node.operands.size() != 1
 				|| (explicit_operands
 					? !mir.has_value_operation
