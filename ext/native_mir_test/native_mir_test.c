@@ -230,6 +230,7 @@ typedef struct _native_mir_test_state {
 	uint8_t user_opcode;
 	bool user_opcode_configured;
 	bool user_opcode_installed;
+	bool user_opcode_entered;
 	bool stack_probe_enabled;
 	bool abi_probe_enabled;
 	bool frame_chain_valid;
@@ -256,6 +257,20 @@ static int native_mir_test_user_opcode_handler(zend_execute_data *execute_data)
 		return ZEND_USER_OPCODE_DISPATCH;
 	}
 	state->user_opcode_calls++;
+	if (state->user_opcode_action == ZEND_USER_OPCODE_ENTER) {
+		zend_execute_data *entered;
+
+		if (state->user_opcode_entered) {
+			return ZEND_USER_OPCODE_CONTINUE;
+		}
+		state->user_opcode_entered = true;
+		entered = zend_vm_stack_push_call_frame(
+			ZEND_CALL_NESTED_FUNCTION, execute_data->func, 0, NULL);
+		zend_init_func_execute_data(
+			entered, &execute_data->func->op_array, NULL);
+		EG(current_execute_data) = entered;
+		return ZEND_USER_OPCODE_ENTER;
+	}
 	if (state->user_opcode_advance != 0
 			&& execute_data->func != NULL
 			&& ZEND_USER_CODE(execute_data->func->type)
