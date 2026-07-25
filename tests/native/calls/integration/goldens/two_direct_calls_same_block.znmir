@@ -49,6 +49,6 @@ call-continuation cc4 site cs1 kind normal block b0 debt 0x00000000
 call-continuation cc5 site cs1 kind exception_debt block invalid debt 0x00000002
 call-continuation cc6 site cs1 kind bailout_reentry_debt block invalid debt 0x00000004
 call-continuation cc7 site cs1 kind observer_debt block invalid debt 0x00000008
-call-site cs0 source sc0 instruction i5 target ct0 arguments 0+1 result invalid caller frame fs2 function f0 symbol s0 op-array oa0 slots 0+2 pending 1 callee frame invalid function invalid symbol s1 op-array oa1 slots 2+1 pending invalid continuations 0+4 effects 0x07ff reads 0x00017fff writes 0x00017fff barriers 0x7f
-call-site cs1 source sc1 instruction i6 target ct0 arguments 1+1 result invalid caller frame fs3 function f0 symbol s0 op-array oa0 slots 3+2 pending 4 callee frame invalid function invalid symbol s1 op-array oa1 slots 5+1 pending invalid continuations 4+4 effects 0x07ff reads 0x00017fff writes 0x00017fff barriers 0x7f
+call-site cs0 source sc0 instruction i5 target ct0 arguments 0+1 result invalid result-operand 0:4294967295:4294967295:4294967295 caller frame fs2 function f0 symbol s0 op-array oa0 slots 0+2 pending 1 callee frame invalid function invalid symbol s1 op-array oa1 slots 2+1 pending invalid continuations 0+4 effects 0x07ff reads 0x00017fff writes 0x00017fff barriers 0x7f
+call-site cs1 source sc1 instruction i6 target ct0 arguments 1+1 result invalid result-operand 0:4294967295:4294967295:4294967295 caller frame fs3 function f0 symbol s0 op-array oa0 slots 3+2 pending 4 callee frame invalid function invalid symbol s1 op-array oa1 slots 5+1 pending invalid continuations 4+4 effects 0x07ff reads 0x00017fff writes 0x00017fff barriers 0x7f
 end

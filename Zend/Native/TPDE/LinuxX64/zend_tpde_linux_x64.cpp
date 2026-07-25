@@ -383,6 +383,14 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				|| offset + offsetof(zval, u1.type_info) > INT32_MAX) {
 			return false;
 		}
+		/*
+		 * Keep the first SysV argument register available for the conditional
+		 * release helper. Reserving it before creating the slow-path
+		 * temporaries prevents a fixed scratch value from colliding with the
+		 * helper argument while preserving assignments across the join.
+		 */
+		ScratchReg slow_argument_register{this};
+		slow_argument_register.alloc_specific(tpde::x64::AsmReg::DI);
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 		auto frame_reg = frame.load_to_reg();
@@ -435,6 +443,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			ValuePart slot_pointer{
 				tpde::x64::PlatformConfig::GP_BANK, 8};
 			slot_pointer.set_value(this, std::move(slot));
+			slow_argument_register.reset();
 			{
 				tpde::x64::CCAssignerSysV assigner{false};
 				CallBuilder builder{*this, assigner};
