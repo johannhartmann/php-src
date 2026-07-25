@@ -1665,6 +1665,9 @@ static zend_native_status zend_native_call_invoke(
 	status = zend_native_execute_frame(cell->code, call, NULL);
 	EG(current_execute_data) = caller;
 	cell->active_calls--;
+	if (status == ZEND_NATIVE_GENERATOR_CREATED) {
+		status = ZEND_NATIVE_RETURNED;
+	}
 	if (status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
 		status = ZEND_NATIVE_EXCEPTION;
 	}
@@ -2134,6 +2137,9 @@ zend_native_direct_call_result zend_native_call_direct_leave(
 			activation->callee, status);
 		activation->frame_requires_finish = false;
 		activation->frame_initialized = false;
+	}
+	if (status == ZEND_NATIVE_GENERATOR_CREATED) {
+		status = ZEND_NATIVE_RETURNED;
 	}
 	return_value = activation->uses_discarded_return
 		? &activation->discarded_return

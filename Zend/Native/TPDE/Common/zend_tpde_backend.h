@@ -56,7 +56,13 @@ typedef enum _zend_native_status {
 	 * No C boundary may observe this value: the caller immediately retries
 	 * through the canonical Zend-frame path before any PHP-visible mutation.
 	 */
-	ZEND_NATIVE_RETRY = 3
+	ZEND_NATIVE_RETRY = 3,
+	/* The initial generator frame was transferred to its heap object. */
+	ZEND_NATIVE_GENERATOR_CREATED = 4,
+	/* A generator preserved its frame and yielded control to its caller. */
+	ZEND_NATIVE_SUSPENDED = 5,
+	/* The generator helper closed and released the heap frame. */
+	ZEND_NATIVE_GENERATOR_RETURNED = 6
 } zend_native_status;
 
 /*

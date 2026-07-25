@@ -3682,7 +3682,7 @@ static bool zend_mir_frontend_resolve_call_target(
 			!= ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
 			|| inventory->targets[target_id].function == NULL
 			|| (inventory->targets[target_id].record.function_flags_snapshot
-				& (ZEND_ACC_CLOSURE | ZEND_ACC_GENERATOR)) != 0) {
+				& ZEND_ACC_CLOSURE) != 0) {
 		return false;
 	}
 	*out = inventory->targets[target_id].record;
@@ -3745,7 +3745,7 @@ static bool zend_mir_frontend_resolve_method_target(
 	} else if (inventory->targets[target_id].function->type
 			!= ZEND_USER_FUNCTION
 			|| (inventory->targets[target_id].record.function_flags_snapshot
-				& (ZEND_ACC_CLOSURE | ZEND_ACC_GENERATOR | ZEND_ACC_ABSTRACT)) != 0) {
+				& (ZEND_ACC_CLOSURE | ZEND_ACC_ABSTRACT)) != 0) {
 		return false;
 	}
 	*out = inventory->targets[target_id].record;

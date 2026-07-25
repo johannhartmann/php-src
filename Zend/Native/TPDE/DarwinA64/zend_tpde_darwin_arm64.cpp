@@ -49,6 +49,7 @@ class ZendCompilerA64 final
 	zend_native_image *image_;
 	std::vector<::tpde::SymRef> image_symbols_;
 	std::vector<::tpde::SymRef> image_slots_;
+	std::vector<::tpde::Label> generator_resume_labels_;
 
 public:
 	struct ValRefSpecial {
@@ -180,6 +181,17 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		mov(result_reg, source_reg, 8);
 		if (node.kind == Adaptor::InstKind::LoadFrame
 				&& adaptor->plan()->temporary_variable_count != 0) {
+			auto initialized = text_writer.label_create();
+			ScratchReg call_info{this};
+			auto call_info_reg = call_info.alloc_gp();
+			load_off(call_info_reg, result_reg,
+				static_cast<uint32_t>(
+					offsetof(zend_execute_data, This)
+						+ offsetof(zval, u1.type_info)),
+				4);
+			ASM(ANDwi, call_info_reg, call_info_reg, ZEND_CALL_GENERATOR);
+			ASM(CMPxi, call_info_reg, 0);
+			generate_raw_jump(Jump::Jne, initialized);
 			ScratchReg zero{this};
 			auto zero_reg = zero.alloc_gp();
 			materialize_constant(
@@ -194,8 +206,83 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				store_off(result_reg, offset, zero_reg, 8);
 				store_off(result_reg, offset + sizeof(uint64_t), zero_reg, 8);
 			}
+			label_place(initialized);
 		}
 		result.set_modified();
+		return true;
+	}
+	if (node.kind == Adaptor::InstKind::GeneratorGateway) {
+		if (node.operands.size() != 1
+				|| node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
+				|| adaptor->generator_resume_targets().empty()) {
+			return false;
+		}
+		while (generator_resume_labels_.size()
+				< adaptor->generator_resume_targets().size()) {
+			generator_resume_labels_.push_back(text_writer.label_create());
+		}
+		auto normal = text_writer.label_create();
+		auto invalid = text_writer.label_create();
+		{
+			auto [frame_ref, frame] = val_ref_single(node.operands[0]);
+			auto frame_reg = frame.load_to_reg();
+			ScratchReg call_info{this};
+			auto call_info_reg = call_info.alloc_gp();
+			load_off(call_info_reg, frame_reg,
+				static_cast<uint32_t>(
+					offsetof(zend_execute_data, This)
+						+ offsetof(zval, u1.type_info)),
+				4);
+			ASM(ANDwi, call_info_reg, call_info_reg, ZEND_CALL_GENERATOR);
+			ASM(CMPxi, call_info_reg, 0);
+			generate_raw_jump(Jump::Jeq, normal);
+			call_info.reset();
+			ScratchReg opline{this};
+			ScratchReg function{this};
+			ScratchReg target{this};
+			auto opline_reg = opline.alloc_gp();
+			auto function_reg = function.alloc_gp();
+			auto target_reg = target.alloc_gp();
+			load_off(opline_reg, frame_reg,
+				static_cast<uint32_t>(offsetof(zend_execute_data, opline)), 8);
+			load_off(function_reg, frame_reg,
+				static_cast<uint32_t>(offsetof(zend_execute_data, func)), 8);
+			for (uint32_t index = 0;
+					index < adaptor->generator_resume_targets().size(); ++index) {
+				const uint64_t byte_offset =
+					uint64_t{adaptor->generator_resume_targets()[index]}
+						* sizeof(zend_op);
+				if (byte_offset > UINT32_MAX) {
+					return false;
+				}
+				load_off(target_reg, function_reg,
+					static_cast<uint32_t>(
+						offsetof(zend_function, op_array.opcodes)), 8);
+				if (byte_offset != 0) {
+					ASM(ADDxi, target_reg, target_reg,
+						static_cast<uint32_t>(byte_offset));
+				}
+				ASM(CMPx, opline_reg, target_reg);
+				generate_raw_jump(
+					Jump::Jeq, generator_resume_labels_[index]);
+			}
+			generate_raw_jump(Jump::jmp, invalid);
+		}
+		label_place(invalid);
+		{
+			RetBuilder return_builder{*this, *cur_cc_assigner()};
+			return_builder.add(ValuePart{ZEND_NATIVE_EXCEPTION, 4,
+				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			return_builder.ret();
+		}
+		label_place(normal);
+		return true;
+	}
+	if (node.kind == Adaptor::InstKind::GeneratorResume) {
+		if (node.argument_index >= generator_resume_labels_.size()) {
+			return false;
+		}
+		label_place(generator_resume_labels_[node.argument_index]);
 		return true;
 	}
 	if (node.kind == Adaptor::InstKind::FrameSlotAddress) {
@@ -2843,6 +2930,11 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			return true;
 		}
 		case ZEND_MIR_OPCODE_FUNC_GET_ARGS:
+			return execute_value_operation();
+		case ZEND_MIR_OPCODE_GENERATOR_CREATE:
+		case ZEND_MIR_OPCODE_GENERATOR_YIELD:
+		case ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM:
+		case ZEND_MIR_OPCODE_GENERATOR_RETURN:
 			return execute_value_operation();
 		case ZEND_MIR_OPCODE_COPY:
 		case ZEND_MIR_OPCODE_CANONICALIZE:

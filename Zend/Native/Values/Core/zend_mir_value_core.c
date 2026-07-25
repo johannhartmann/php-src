@@ -1170,6 +1170,48 @@ static bool zend_mir_value_compose_executable_operations(
 		new_index++;
 		old_index++;
 	}
+	/*
+	 * Suspendable functions may end a reachable block at a source-level
+	 * suspension without a conventional MIR terminator.  Such a block still
+	 * owns executable operations (GENERATOR_CREATE/YIELD/RETURN), and their
+	 * only correct insertion point is after the block's existing instruction
+	 * stream.  Keep the stricter failure for blocks that already have a
+	 * terminator: an operation after that terminator would be malformed.
+	 */
+	for (operation_index = 0; operation_index < operation_count;
+			operation_index++) {
+		zend_mir_executable_value_ref *operation =
+			&staging->executable_operations[operation_index];
+		bool has_terminator = false;
+		uint32_t scan_index;
+
+		if (operation_emitted[operation_index]
+				|| zend_mir_id_is_valid(operation->id)) {
+			continue;
+		}
+		for (scan_index = 0; scan_index < old_count; scan_index++) {
+			const zend_mir_instruction_record *candidate =
+				&old_instructions[scan_index].record;
+
+			if (candidate->block_id == operation->block_id
+					&& zend_mir_opcode_is_terminator(candidate->opcode)) {
+				has_terminator = true;
+				break;
+			}
+		}
+		if (has_terminator
+				|| !zend_mir_value_emit_executable_operation(
+					module, &new_instructions[new_index],
+					operation, new_index)) {
+			return zend_mir_module_fail(module,
+				ZEND_MIR_DIAGNOSTIC_INVALID_CFG,
+				"executable value operation follows an owning block terminator");
+		}
+		operation->id = new_index;
+		operation_emitted[operation_index] = 1;
+		emitted_count++;
+		new_index++;
+	}
 	if (emitted_count != operation_count || new_index != total_count) {
 		return zend_mir_module_fail(module,
 			ZEND_MIR_DIAGNOSTIC_INVALID_CFG,

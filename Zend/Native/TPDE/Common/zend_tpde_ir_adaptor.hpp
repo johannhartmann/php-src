@@ -61,6 +61,8 @@ public:
 	enum class InstKind : uint8_t {
 		LoadFrame,
 		LoadExecutionContext,
+		GeneratorGateway,
+		GeneratorResume,
 		FrameSlotAddress,
 		ZvalTypeLoad,
 		ZvalPayloadLoad,
@@ -173,6 +175,8 @@ private:
 	std::vector<uint32_t> block_info2_;
 	std::vector<DerivedValue> derived_values_;
 	std::vector<ArgumentGuard> argument_guards_;
+	std::vector<uint32_t> generator_resume_targets_;
+	std::vector<uint32_t> generator_resume_landings_;
 	bool valid_ = true;
 
 	int32_t block_index(zend_mir_block_id id) const {
@@ -363,6 +367,7 @@ public:
 		std::vector<BlockItem<IRValueRef>> block_phis;
 		std::vector<uint32_t> finally_return_blocks;
 		std::vector<IRBlockRef> finally_targets;
+		std::vector<uint8_t> generator_resume_emitted;
 
 		blocks_.reserve(plan_->block_count);
 		block_successors.reserve(plan_->block_count * 2);
@@ -404,6 +409,19 @@ public:
 			const zend_tpde_instruction &instruction = plan_->instructions[i];
 			const zend_mir_instruction_record record =
 				instruction_record_at(i);
+			if (instruction.has_value_operation
+					&& (record.opcode == ZEND_MIR_OPCODE_GENERATOR_CREATE
+						|| record.opcode == ZEND_MIR_OPCODE_GENERATOR_YIELD
+						|| record.opcode
+							== ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM)) {
+				const uint32_t source_position =
+					instruction.value_operation.source_position_id;
+				if (source_position == UINT32_MAX) {
+					valid_ = false;
+				} else {
+					generator_resume_targets_.push_back(source_position + 1);
+				}
+			}
 			const bool boxed_cond_branch =
 				is_boxed_cond_branch(instruction, record);
 			int32_t record_block = block_index(record.block_id);
@@ -449,6 +467,32 @@ public:
 					IRBlockRef{static_cast<uint32_t>(record_block)});
 			}
 		}
+		std::sort(generator_resume_targets_.begin(),
+			generator_resume_targets_.end());
+		generator_resume_targets_.erase(
+			std::unique(generator_resume_targets_.begin(),
+				generator_resume_targets_.end()),
+			generator_resume_targets_.end());
+		generator_resume_landings_.reserve(
+			generator_resume_targets_.size());
+		for (uint32_t target : generator_resume_targets_) {
+			uint32_t landing = UINT32_MAX;
+			for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
+				const uint32_t source_position =
+					instruction_record_at(i).source_position_id;
+				if (source_position >= target
+						&& (landing == UINT32_MAX
+							|| source_position < landing)) {
+					landing = source_position;
+				}
+			}
+			generator_resume_landings_.push_back(landing);
+			if (landing == UINT32_MAX) {
+				valid_ = false;
+			}
+		}
+		generator_resume_emitted.resize(
+			generator_resume_targets_.size(), 0);
 		for (uint32_t return_block : finally_return_blocks) {
 			for (IRBlockRef target : finally_targets) {
 				block_successors.push_back({return_block, target});
@@ -484,6 +528,20 @@ public:
 			context_operand_offset,
 			1,
 			true});
+		if (!generator_resume_targets_.empty()) {
+			uint32_t operand_offset =
+				static_cast<uint32_t>(operands_.size());
+			operands_.push_back(IRValueRef{FRAME_VALUE});
+			add_node(block_instructions, static_cast<uint32_t>(entry), InstNode{
+				InstKind::GeneratorGateway,
+				UINT32_MAX,
+				UINT32_MAX,
+				INVALID_VALUE_REF,
+				{},
+				operand_offset,
+				1,
+				false});
+		}
 		uint32_t guard_operand_offset =
 			static_cast<uint32_t>(operands_.size());
 		operands_.push_back(IRValueRef{FRAME_VALUE});
@@ -661,6 +719,25 @@ public:
 			if (block < 0) {
 				valid_ = false;
 				continue;
+			}
+			for (uint32_t resume_index = 0;
+					resume_index < generator_resume_landings_.size();
+					++resume_index) {
+				if (generator_resume_emitted[resume_index] == 0
+						&& generator_resume_landings_[resume_index]
+							== record.source_position_id) {
+					generator_resume_emitted[resume_index] = 1;
+					add_node(block_instructions,
+						static_cast<uint32_t>(block), InstNode{
+							InstKind::GeneratorResume,
+							UINT32_MAX,
+							resume_index,
+							INVALID_VALUE_REF,
+							{},
+							0,
+							0,
+							false});
+				}
 			}
 			IRValueRef result = value_ref(record.result_id);
 			if (record.opcode == ZEND_MIR_OPCODE_CONSTANT) {
@@ -1027,6 +1104,11 @@ public:
 				operand_offset,
 				operand_count, machine_result});
 		}
+		if (std::find(generator_resume_emitted.begin(),
+				generator_resume_emitted.end(), 0)
+				!= generator_resume_emitted.end()) {
+			valid_ = false;
+		}
 		/*
 		 * A source argument may have an exact inferred type while remaining a
 		 * boxed-only value (notably a by-reference parameter).  Loading and
@@ -1134,6 +1216,9 @@ public:
 	}
 	std::span<const ArgumentGuard> argument_guards() const {
 		return argument_guards_;
+	}
+	std::span<const uint32_t> generator_resume_targets() const {
+		return generator_resume_targets_;
 	}
 	zend_mir_instruction_record instruction_record(IRInstRef inst) const {
 		const InstNode &instruction_node = node(inst);
