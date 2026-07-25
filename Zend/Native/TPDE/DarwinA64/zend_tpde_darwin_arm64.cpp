@@ -527,7 +527,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				wide_assignment);
 		}
 		builder.call(runtime_symbol(ZEND_NATIVE_HELPER_ABI_CONFORMANCE));
-		ValuePart status{DarwinConfig::GP_BANK};
+		ValuePart status{DarwinConfig::GP_BANK, 8};
 		builder.add_ret(status, ::tpde::CCAssignment{});
 		auto status_reg = status.cur_reg_or_load(this);
 		ASM(CMPxi, status_reg, ZEND_NATIVE_ABI_CONFORMANCE_RESULT);
@@ -667,7 +667,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(ValuePart{operation.source_position_id, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.call(runtime_symbol(helper));
-			ValuePart status{DarwinConfig::GP_BANK};
+			ValuePart status{DarwinConfig::GP_BANK, 4};
 			builder.add_ret(status, ::tpde::CCAssignment{});
 			if (zend_mir_id_is_valid(mir.exception_block_id)) {
 				generate_exception_branch(
@@ -702,7 +702,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		builder.add_arg(ValuePart{operation.source_position_id, 4,
 			DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 		builder.call(runtime_symbol(helper));
-		ValuePart status{DarwinConfig::GP_BANK};
+		ValuePart status{DarwinConfig::GP_BANK, 4};
 		builder.add_ret(status, ::tpde::CCAssignment{});
 		auto status_reg = status.cur_reg_or_load(this);
 		ASM(CMPxi, status_reg, ZEND_NATIVE_RETURNED);
@@ -3190,7 +3190,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 						DarwinConfig::GP_BANK},
 						::tpde::CCAssignment{});
 					builder.call(runtime_symbol(mir.runtime_helper));
-					ValuePart decision{DarwinConfig::GP_BANK};
+					ValuePart decision{DarwinConfig::GP_BANK, 4};
 					builder.add_ret(
 						decision, ::tpde::CCAssignment{});
 					auto decision_reg =
@@ -3244,7 +3244,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(ValuePart{operation.source_position_id, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.call(runtime_symbol(mir.runtime_helper));
-			ValuePart decision{DarwinConfig::GP_BANK};
+			ValuePart decision{DarwinConfig::GP_BANK, 4};
 			builder.add_ret(decision, ::tpde::CCAssignment{});
 			auto decision_reg = decision.cur_reg_or_load(this);
 			ASM(CMPxi, decision_reg, ZEND_NATIVE_ITERATOR_EXCEPTION);
@@ -4972,8 +4972,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					}
 					label_place(slow_path);
 				}
-				ValuePart callee{DarwinConfig::GP_BANK};
-				ValuePart entry{DarwinConfig::GP_BANK};
+				ValuePart callee{DarwinConfig::GP_BANK, 8};
+				ValuePart entry{DarwinConfig::GP_BANK, 8};
 				{
 					zend::native::tpde::CCAssignerAppleA64 assigner;
 					CallBuilder builder{*this, assigner};
@@ -4999,9 +4999,9 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					entry_copy.alloc_specific(AsmReg::R2);
 				mov(entry_copy_reg, entry.cur_reg_or_load(this), sizeof(void *));
 				entry.reset(this);
-				ValuePart entry_target{DarwinConfig::GP_BANK};
+				ValuePart entry_target{DarwinConfig::GP_BANK, 8};
 				entry_target.set_value(this, std::move(entry_copy));
-				ValuePart entry_status{DarwinConfig::GP_BANK};
+				ValuePart entry_status{DarwinConfig::GP_BANK, 4};
 				{
 					zend::native::tpde::CCAssignerAppleA64 assigner;
 					CallBuilder builder{*this, assigner};
@@ -5016,9 +5016,11 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				auto entry_status_copy_reg =
 					entry_status_copy.alloc_specific(AsmReg::R3);
 				mov(entry_status_copy_reg,
-					entry_status.cur_reg_or_load(this), sizeof(uint64_t));
+					entry_status.cur_reg_or_load(this),
+					sizeof(zend_native_status));
 				entry_status.reset(this);
-				ValuePart entry_status_argument{DarwinConfig::GP_BANK};
+				ValuePart entry_status_argument{
+					DarwinConfig::GP_BANK, 4};
 				entry_status_argument.set_value(
 					this, std::move(entry_status_copy));
 				zend::native::tpde::CCAssignerAppleA64 assigner;
@@ -5036,8 +5038,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					std::move(entry_status_argument), ::tpde::CCAssignment{});
 				builder.call(runtime_symbol(
 					ZEND_NATIVE_HELPER_DIRECT_USER_CALL_LEAVE));
-				ValuePart status{DarwinConfig::GP_BANK};
-				ValuePart payload{DarwinConfig::GP_BANK};
+				ValuePart status{DarwinConfig::GP_BANK, 8};
+				ValuePart payload{DarwinConfig::GP_BANK, 8};
 				builder.add_ret(status, ::tpde::CCAssignment{});
 				builder.add_ret(payload, ::tpde::CCAssignment{});
 				auto status_reg = status.cur_reg_or_load(this);
@@ -5190,7 +5192,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
 				call.id), ::tpde::CCAssignment{});
 			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_USER_CALL_FINISH_SOURCE));
-			ValuePart status{DarwinConfig::GP_BANK};
+			ValuePart status{DarwinConfig::GP_BANK, 4};
 			builder.add_ret(status, ::tpde::CCAssignment{});
 			auto status_reg = status.cur_reg_or_load(this);
 			ASM(CMPxi, status_reg, ZEND_NATIVE_RETURNED);
@@ -5219,7 +5221,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					static_cast<uint32_t>(adaptor->exact_type(node.result)), 4,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				result_builder.call(runtime_symbol(ZEND_NATIVE_HELPER_CALL_READ_SOURCE_SCALAR));
-				ValuePart payload{DarwinConfig::GP_BANK};
+				ValuePart payload{DarwinConfig::GP_BANK, 8};
 				result_builder.add_ret(payload, ::tpde::CCAssignment{});
 				auto [result_ref, result] = result_ref_single(node.result);
 				if (val_parts(node.result).bank == DarwinConfig::FP_BANK) {
@@ -5249,8 +5251,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				call.id), ::tpde::CCAssignment{});
 			builder.call(runtime_symbol(
 				ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL));
-			ValuePart status{DarwinConfig::GP_BANK};
-			ValuePart payload{DarwinConfig::GP_BANK};
+			ValuePart status{DarwinConfig::GP_BANK, 8};
+			ValuePart payload{DarwinConfig::GP_BANK, 8};
 			builder.add_ret(status, ::tpde::CCAssignment{});
 			builder.add_ret(payload, ::tpde::CCAssignment{});
 			auto status_reg = status.cur_reg_or_load(this);
@@ -5293,7 +5295,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(ValuePart{record.source_position_id, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_FINALLY_ENTER));
-			ValuePart status{DarwinConfig::GP_BANK};
+			ValuePart status{DarwinConfig::GP_BANK, 4};
 			builder.add_ret(status, ::tpde::CCAssignment{});
 			auto status_reg = status.cur_reg_or_load(this);
 			ASM(CMPxi, status_reg, ZEND_NATIVE_RETURNED);
@@ -5327,7 +5329,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(ValuePart{record.source_position_id, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_FINALLY_RETURN));
-			ValuePart continuation{DarwinConfig::GP_BANK};
+			ValuePart continuation{DarwinConfig::GP_BANK, 4};
 			builder.add_ret(continuation, ::tpde::CCAssignment{});
 			auto continuation_reg = continuation.cur_reg_or_load(this);
 			const zend_tpde_plan *plan = adaptor->plan();
@@ -5385,7 +5387,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(ValuePart{record.source_position_id, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_CATCH_ENTER));
-			ValuePart status{DarwinConfig::GP_BANK};
+			ValuePart status{DarwinConfig::GP_BANK, 4};
 			builder.add_ret(status, ::tpde::CCAssignment{});
 			auto status_reg = status.cur_reg_or_load(this);
 			ASM(CMPxi, status_reg, ZEND_NATIVE_RETURNED);
@@ -5496,7 +5498,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(ValuePart{mir.value_operation.extended_value, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_RETURN_SOURCE_ZVAL));
-			ValuePart status{DarwinConfig::GP_BANK};
+			ValuePart status{DarwinConfig::GP_BANK, 4};
 			builder.add_ret(status, ::tpde::CCAssignment{});
 			RetBuilder return_builder{*this, *cur_cc_assigner()};
 			return_builder.add(std::move(status), ::tpde::CCAssignment{});

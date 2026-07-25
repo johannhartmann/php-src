@@ -555,7 +555,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				tpde::x64::PlatformConfig::FP_BANK}, wide_assignment);
 		}
 		builder.call(runtime_symbol(ZEND_NATIVE_HELPER_ABI_CONFORMANCE));
-		ValuePart status{tpde::x64::PlatformConfig::GP_BANK};
+		ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 8};
 		builder.add_ret(status, tpde::CCAssignment{});
 		auto status_reg = status.cur_reg_or_load(this);
 		ASM(CMP64ri, status_reg, ZEND_NATIVE_ABI_CONFORMANCE_RESULT);
@@ -705,7 +705,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				tpde::x64::PlatformConfig::GP_BANK},
 				tpde::CCAssignment{});
 			builder.call(runtime_symbol(helper));
-			ValuePart status{tpde::x64::PlatformConfig::GP_BANK};
+			ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
 			builder.add_ret(status, tpde::CCAssignment{});
 			if (zend_mir_id_is_valid(mir.exception_block_id)) {
 				generate_exception_branch(
@@ -740,7 +740,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		builder.add_arg(ValuePart{operation.source_position_id, 4,
 			tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 		builder.call(runtime_symbol(helper));
-		ValuePart status{tpde::x64::PlatformConfig::GP_BANK};
+		ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
 		builder.add_ret(status, tpde::CCAssignment{});
 		auto status_reg = status.cur_reg_or_load(this);
 		ASM(CMP32ri, status_reg, ZEND_NATIVE_RETURNED);
@@ -3554,7 +3554,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				tpde::x64::PlatformConfig::GP_BANK},
 				tpde::CCAssignment{});
 			builder.call(runtime_symbol(mir.runtime_helper));
-			ValuePart decision{tpde::x64::PlatformConfig::GP_BANK};
+			ValuePart decision{tpde::x64::PlatformConfig::GP_BANK, 4};
 			builder.add_ret(decision, tpde::CCAssignment{});
 			auto decision_reg = decision.cur_reg_or_load(this);
 			ASM(CMP32ri, decision_reg, ZEND_NATIVE_ITERATOR_EXCEPTION);
@@ -5541,8 +5541,8 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 					}
 					label_place(slow_path);
 				}
-				ValuePart callee{tpde::x64::PlatformConfig::GP_BANK};
-				ValuePart entry{tpde::x64::PlatformConfig::GP_BANK};
+				ValuePart callee{tpde::x64::PlatformConfig::GP_BANK, 8};
+				ValuePart entry{tpde::x64::PlatformConfig::GP_BANK, 8};
 				{
 					tpde::x64::CCAssignerSysV assigner{false};
 					CallBuilder builder{*this, assigner};
@@ -5569,9 +5569,10 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				mov(entry_copy_reg, entry.cur_reg_or_load(this), sizeof(void *));
 				entry.reset(this);
 				ValuePart entry_target{
-					tpde::x64::PlatformConfig::GP_BANK};
+					tpde::x64::PlatformConfig::GP_BANK, 8};
 				entry_target.set_value(this, std::move(entry_copy));
-				ValuePart entry_status{tpde::x64::PlatformConfig::GP_BANK};
+				ValuePart entry_status{
+					tpde::x64::PlatformConfig::GP_BANK, 4};
 				{
 					tpde::x64::CCAssignerSysV assigner{false};
 					CallBuilder builder{*this, assigner};
@@ -5586,10 +5587,11 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				auto entry_status_copy_reg =
 					entry_status_copy.alloc_specific(tpde::x64::AsmReg::CX);
 				mov(entry_status_copy_reg,
-					entry_status.cur_reg_or_load(this), sizeof(uint64_t));
+					entry_status.cur_reg_or_load(this),
+					sizeof(zend_native_status));
 				entry_status.reset(this);
 				ValuePart entry_status_argument{
-					tpde::x64::PlatformConfig::GP_BANK};
+					tpde::x64::PlatformConfig::GP_BANK, 4};
 				entry_status_argument.set_value(
 					this, std::move(entry_status_copy));
 				tpde::x64::CCAssignerSysV assigner{false};
@@ -5607,8 +5609,8 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 					std::move(entry_status_argument), tpde::CCAssignment{});
 				builder.call(runtime_symbol(
 					ZEND_NATIVE_HELPER_DIRECT_USER_CALL_LEAVE));
-				ValuePart status{tpde::x64::PlatformConfig::GP_BANK};
-				ValuePart payload{tpde::x64::PlatformConfig::GP_BANK};
+				ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 8};
+				ValuePart payload{tpde::x64::PlatformConfig::GP_BANK, 8};
 				builder.add_ret(status, tpde::CCAssignment{});
 				builder.add_ret(payload, tpde::CCAssignment{});
 				auto status_reg = status.cur_reg_or_load(this);
@@ -5769,7 +5771,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
 				call.id), tpde::CCAssignment{});
 			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_USER_CALL_FINISH_SOURCE));
-			ValuePart status{tpde::x64::PlatformConfig::GP_BANK};
+			ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
 			builder.add_ret(status, tpde::CCAssignment{});
 			auto status_reg = status.cur_reg_or_load(this);
 			ASM(CMP32ri, status_reg, ZEND_NATIVE_RETURNED);
@@ -5798,7 +5800,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 					static_cast<uint32_t>(adaptor->exact_type(node.result)), 4,
 					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 				result_builder.call(runtime_symbol(ZEND_NATIVE_HELPER_CALL_READ_SOURCE_SCALAR));
-				ValuePart payload{tpde::x64::PlatformConfig::GP_BANK};
+				ValuePart payload{tpde::x64::PlatformConfig::GP_BANK, 8};
 				result_builder.add_ret(payload, tpde::CCAssignment{});
 				auto [result_ref, result] = result_ref_single(node.result);
 				if (val_parts(node.result).bank == tpde::x64::PlatformConfig::FP_BANK) {
@@ -5829,8 +5831,8 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				call.id), tpde::CCAssignment{});
 			builder.call(runtime_symbol(
 				ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL));
-			ValuePart status{tpde::x64::PlatformConfig::GP_BANK};
-			ValuePart payload{tpde::x64::PlatformConfig::GP_BANK};
+			ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 8};
+			ValuePart payload{tpde::x64::PlatformConfig::GP_BANK, 8};
 			builder.add_ret(status, tpde::CCAssignment{});
 			builder.add_ret(payload, tpde::CCAssignment{});
 			auto status_reg = status.cur_reg_or_load(this);
@@ -5875,7 +5877,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(ValuePart{record.source_position_id, 4,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_FINALLY_ENTER));
-			ValuePart status{tpde::x64::PlatformConfig::GP_BANK};
+			ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
 			builder.add_ret(status, tpde::CCAssignment{});
 			auto status_reg = status.cur_reg_or_load(this);
 			ASM(CMP32ri, status_reg, ZEND_NATIVE_RETURNED);
@@ -5909,7 +5911,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(ValuePart{record.source_position_id, 4,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_FINALLY_RETURN));
-			ValuePart continuation{tpde::x64::PlatformConfig::GP_BANK};
+			ValuePart continuation{tpde::x64::PlatformConfig::GP_BANK, 4};
 			builder.add_ret(continuation, tpde::CCAssignment{});
 			auto continuation_reg = continuation.cur_reg_or_load(this);
 			const zend_tpde_plan *plan = adaptor->plan();
@@ -5963,7 +5965,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(ValuePart{record.source_position_id, 4,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_CATCH_ENTER));
-			ValuePart status{tpde::x64::PlatformConfig::GP_BANK};
+			ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
 			builder.add_ret(status, tpde::CCAssignment{});
 			auto status_reg = status.cur_reg_or_load(this);
 			ASM(CMP32ri, status_reg, ZEND_NATIVE_RETURNED);
@@ -6089,7 +6091,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			builder.add_arg(ValuePart{mir.value_operation.extended_value, 4,
 				tpde::x64::PlatformConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_RETURN_SOURCE_ZVAL));
-			ValuePart status{tpde::x64::PlatformConfig::GP_BANK};
+			ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
 			builder.add_ret(status, ::tpde::CCAssignment{});
 			RetBuilder return_builder{*this, *cur_cc_assigner()};
 			return_builder.add(std::move(status), ::tpde::CCAssignment{});
