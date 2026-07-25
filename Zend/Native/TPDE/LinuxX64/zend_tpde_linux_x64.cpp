@@ -7,8 +7,6 @@
 #include "Zend/zend_object_handlers.h"
 
 #include <tpde/x64/CompilerX64.hpp>
-#include <tpde/ElfMapper.hpp>
-
 #include <array>
 #include <cstdlib>
 #include <cstring>
@@ -7801,16 +7799,8 @@ struct X64ImageState {
 		: adaptor{plan}, compiler{&adaptor, image} {}
 };
 
-struct X64PublishedState {
-	tpde::elf::ElfMapper mapper;
-};
-
 void destroy_x64_state(void *state) {
 	delete static_cast<X64ImageState *>(state);
-}
-
-void destroy_x64_published_state(void *state) {
-	delete static_cast<X64PublishedState *>(state);
 }
 
 bool elf_has_writable_executable_section(const std::vector<tpde::u8> &object) {
@@ -7848,67 +7838,17 @@ zend_result zend_tpde_emit_linux_x64(
 			"TPDE rejected the ZNMIR x86-64 adaptor graph");
 		return FAILURE;
 	}
-	const auto &text = state->compiler.assembler.get_section(
-		state->compiler.assembler.get_default_section(tpde::SectionKind::Text)).data;
-	if (text.empty() || !zend_tpde_image_append(image, text.data(), text.size())) {
+	std::vector<tpde::u8> object =
+		state->compiler.assembler.build_object_file();
+	if (object.empty()
+			|| elf_has_writable_executable_section(object)
+			|| !zend_tpde_image_append(
+				image, object.data(), object.size())) {
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
-			"unable to retain TPDE x86-64 text for inspection");
+			"unable to retain relocatable TPDE x86-64 image");
 		return FAILURE;
 	}
 	image->target_state = state.release();
 	image->destroy_target_state = destroy_x64_state;
 	return SUCCESS;
-}
-
-zend_result zend_tpde_map_linux_x64(
-	const zend_native_image *image,
-	zend_native_code *code,
-	zend_native_diagnostic *diag) {
-#if defined(__linux__) && defined(__x86_64__)
-	if (image == nullptr || image->target_state == nullptr || code == nullptr) {
-		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
-			"Linux TPDE mapper requires compiled assembler state");
-		return FAILURE;
-	}
-	auto *compiled = static_cast<X64ImageState *>(image->target_state);
-	std::vector<tpde::u8> object = compiled->compiler.assembler.build_object_file();
-	if (elf_has_writable_executable_section(object)) {
-		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
-			"TPDE ELF image contains a writable executable section");
-		return FAILURE;
-	}
-	auto published = std::make_unique<X64PublishedState>();
-	if (!published->mapper.map(compiled->compiler.assembler,
-			[image](std::string_view name) -> void * {
-				const void *address = nullptr;
-				std::string stable_name{name};
-				return zend_tpde_image_resolve_symbol(
-						image, stable_name.c_str(), &address)
-					? const_cast<void *>(address) : nullptr;
-			})) {
-		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
-			"TPDE ELF symbol or relocation mapping failed");
-		return FAILURE;
-	}
-	auto [mapping, mapping_size] = published->mapper.get_mapped_range();
-	void *entry = published->mapper.get_sym_addr(compiled->compiler.func_syms[0]);
-	if (mapping == nullptr || mapping_size == 0 || entry == nullptr) {
-		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
-			"TPDE ELF entry symbol was not mapped");
-		return FAILURE;
-	}
-	code->mapping = mapping;
-	code->mapping_size = mapping_size;
-	code->entry = reinterpret_cast<zend_native_frame_entry_t>(entry);
-	code->unwind_registered = true;
-	code->target_state = published.release();
-	code->destroy_target_state = destroy_x64_published_state;
-	return SUCCESS;
-#else
-	(void) image;
-	(void) code;
-	zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_TARGET_MISMATCH,
-		"linux-amd64-prod publication requires native Linux x86-64");
-	return FAILURE;
-#endif
 }

@@ -53,6 +53,15 @@ void append(std::vector<::tpde::u8> &output, const T &value) {
 	std::memcpy(output.data() + offset, &value, sizeof(value));
 }
 
+void append_bytes(std::vector<::tpde::u8> &output,
+	const void *bytes, size_t size) {
+	size_t offset = output.size();
+	output.resize(offset + size);
+	if (size != 0) {
+		std::memcpy(output.data() + offset, bytes, size);
+	}
+}
+
 } // namespace
 
 const ::tpde::Assembler::TargetInfo &AssemblerDarwinA64::darwin_target_info() {
@@ -139,12 +148,20 @@ void AssemblerDarwinA64::sym_def(::tpde::SymRef symbol,
 
 std::vector<::tpde::u8> AssemblerDarwinA64::build_object_file() {
 	static constexpr std::array<::tpde::u8, 16> MAGIC{
-		'Z', 'N', 'M', 'I', 'R', '-', 'T', 'P', 'D', 'E', '-', 'A', '6', '4', 0, 1};
+		'Z', 'N', 'M', 'I', 'R', '-', 'T', 'P', 'D', 'E', '-', 'A', '6', '4', 0, 2};
 	std::vector<::tpde::u8> output(MAGIC.begin(), MAGIC.end());
 	uint32_t sections_count = static_cast<uint32_t>(section_count());
+	uint32_t present_sections_count = 0;
+	for (uint32_t i = 1; i < sections_count; ++i) {
+		present_sections_count += section_present(i) ? 1 : 0;
+	}
 	uint32_t symbols_count = static_cast<uint32_t>(symbol_count());
+	uint32_t unwind_section =
+		default_sections[static_cast<unsigned>(::tpde::SectionKind::EHFrame)].id();
 	append(output, sections_count);
+	append(output, present_sections_count);
 	append(output, symbols_count);
+	append(output, unwind_section);
 	for (uint32_t i = 1; i < sections_count; ++i) {
 		if (!section_present(i)) {
 			continue;
@@ -156,15 +173,44 @@ std::vector<::tpde::u8> AssemblerDarwinA64::build_object_file() {
 		append(output, section.align);
 		uint64_t size = section.size();
 		append(output, size);
+		uint32_t name_size =
+			static_cast<uint32_t>(section_names_[i].size());
+		append(output, name_size);
 		uint32_t relocation_count = section.is_virtual
 			? 0 : static_cast<uint32_t>(section.relocations().size());
 		append(output, relocation_count);
+		uint8_t is_virtual = section.is_virtual ? 1 : 0;
+		append(output, is_virtual);
+		const std::array<uint8_t, 7> section_reserved{};
+		append_bytes(output, section_reserved.data(), section_reserved.size());
+		append_bytes(output, section_names_[i].data(), name_size);
 		if (!section.is_virtual) {
-			output.insert(output.end(), section.data.begin(), section.data.end());
+			append_bytes(output, section.data.data(), section.data.size());
 			for (const ::tpde::Relocation &relocation : section.relocations()) {
-				append(output, relocation);
+				append(output, relocation.offset);
+				uint32_t symbol = relocation.symbol.id();
+				append(output, symbol);
+				append(output, relocation.type);
+				append(output, relocation.addend);
 			}
 		}
+	}
+	for (const Symbol &symbol : symbols_) {
+		uint32_t name_size = static_cast<uint32_t>(symbol.name.size());
+		append(output, name_size);
+		uint32_t section = symbol.section.id();
+		append(output, section);
+		append(output, symbol.offset);
+		append(output, symbol.size);
+		uint8_t binding = static_cast<uint8_t>(symbol.binding);
+		uint8_t kind = static_cast<uint8_t>(symbol.kind);
+		uint8_t defined = symbol.defined ? 1 : 0;
+		append(output, binding);
+		append(output, kind);
+		append(output, defined);
+		const std::array<uint8_t, 5> symbol_reserved{};
+		append_bytes(output, symbol_reserved.data(), symbol_reserved.size());
+		append_bytes(output, symbol.name.data(), name_size);
 	}
 	return output;
 }
