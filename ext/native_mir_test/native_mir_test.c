@@ -4881,6 +4881,20 @@ ZEND_FUNCTION(native_mir_test_compile_execute)
 
 			if (state->wave >= 11) {
 				native_mir_test_init_script(state);
+				if (state->selected->last != 0) {
+					uint32_t opcode_index;
+
+					state->source_opcodes = emalloc(
+						state->selected->last
+						* sizeof(*state->source_opcodes));
+					state->source_opcode_count = state->selected->last;
+					for (opcode_index = 0;
+							opcode_index < state->source_opcode_count;
+							opcode_index++) {
+						state->source_opcodes[opcode_index] =
+							state->selected->opcodes[opcode_index].opcode;
+					}
+				}
 				source_ready = true;
 			} else {
 				source_ready = native_mir_test_build_ssa(state);

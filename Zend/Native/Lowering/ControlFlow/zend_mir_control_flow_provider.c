@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <string.h>
 
 #include "../Frontend/zend_mir_zend_source.h"
@@ -166,32 +167,61 @@ static bool zend_mir_w04_condition_value(
 	return true;
 }
 
-static bool zend_mir_w04_source_edges(
+static bool zend_mir_w04_source_edge_count(
 	const zend_mir_lowering_source_view *source,
-	zend_mir_source_block_id block_id,
-	zend_mir_source_edge_ref *edges, uint32_t *count)
+	zend_mir_source_block_id block_id, uint32_t *count)
 {
 	uint32_t i;
 	uint32_t found = 0;
-	edges[0].id = ZEND_MIR_ID_INVALID;
-	edges[1].id = ZEND_MIR_ID_INVALID;
+	if (source == NULL || count == NULL || source->edge_count == NULL
+			|| source->edge_at == NULL) {
+		return false;
+	}
 	for (i = 0; i < source->edge_count(source->context); i++) {
 		zend_mir_source_edge_ref edge;
 		if (!source->edge_at(source->context, i, &edge)) {
 			return false;
 		}
 		if (edge.from_block_id == block_id) {
-			if (edge.successor_index >= 2
-					|| edges[edge.successor_index].id
-						!= ZEND_MIR_ID_INVALID) {
+			if (found == UINT32_MAX) {
 				return false;
 			}
-			edges[edge.successor_index] = edge;
 			found++;
 		}
 	}
 	*count = found;
 	return true;
+}
+
+static bool zend_mir_w04_collect_source_edges(
+	const zend_mir_lowering_source_view *source,
+	zend_mir_source_block_id block_id,
+	zend_mir_source_edge_ref *edges, uint32_t count)
+{
+	uint32_t i;
+	uint32_t found = 0;
+	if (source == NULL || (count != 0 && edges == NULL)) {
+		return false;
+	}
+	for (i = 0; i < count; i++) {
+		edges[i].id = ZEND_MIR_ID_INVALID;
+	}
+	for (i = 0; i < source->edge_count(source->context); i++) {
+		zend_mir_source_edge_ref edge;
+		if (!source->edge_at(source->context, i, &edge)) {
+			return false;
+		}
+		if (edge.from_block_id != block_id) {
+			continue;
+		}
+		if (edge.successor_index >= count
+				|| edges[edge.successor_index].id != ZEND_MIR_ID_INVALID) {
+			return false;
+		}
+		edges[edge.successor_index] = edge;
+		found++;
+	}
+	return found == count;
 }
 
 static bool zend_mir_w04_source_block(
@@ -620,6 +650,108 @@ static bool zend_mir_w04_emit_edge_statepoint(
 	return true;
 }
 
+static bool zend_mir_w04_emit_terminator_edges(
+	zend_mir_lowering_context *context,
+	zend_mir_mutator *mutator,
+	const zend_mir_source_opcode_ref *opcode,
+	const zend_mir_source_block_ref *block,
+	zend_mir_control_flow_map_storage *map,
+	zend_mir_w04_branch_kind kind,
+	zend_mir_instruction_id terminator,
+	uint32_t edge_count)
+{
+	zend_mir_source_edge_ref *edges = NULL;
+	zend_mir_control_flow_edge_mapping *mappings = NULL;
+	uint32_t i;
+	bool success = false;
+
+	if (edge_count != 0) {
+		edges = calloc(edge_count, sizeof(*edges));
+		mappings = calloc(edge_count, sizeof(*mappings));
+		if (edges == NULL || mappings == NULL) {
+			goto done;
+		}
+	}
+	if (!zend_mir_w04_collect_source_edges(
+			context->source, block->id, edges, edge_count)) {
+		goto done;
+	}
+	for (i = 0; i < edge_count; i++) {
+		uint32_t mir_index = i;
+		zend_mir_block_id target;
+		if (edge_count == 2) {
+			mir_index = zend_mir_w04_mir_successor_for_source(kind, i);
+			if (mir_index > 1) {
+				goto done;
+			}
+		}
+		if (!zend_mir_control_flow_map_find_block(
+				&map->public_map, edges[i].to_block_id, &target)) {
+			goto done;
+		}
+		memset(&mappings[i], 0, sizeof(mappings[i]));
+		mappings[i].source_edge_id = edges[i].id;
+		mappings[i].mir_from_block_id =
+			zend_mir_lowering_context_block_id(context);
+		mappings[i].mir_to_block_id = target;
+		mappings[i].terminator_instruction_id = terminator;
+		mappings[i].edge_statepoint_instruction_id = ZEND_MIR_ID_INVALID;
+		mappings[i].mir_successor_index = mir_index;
+		if (zend_mir_w04_edge_requires_statepoint(&edges[i])) {
+			zend_mir_source_opcode_ref implicit_edge_opcode;
+			const zend_mir_source_opcode_ref *statepoint_opcode = opcode;
+			zend_mir_block_id edge_block;
+
+			if (statepoint_opcode == NULL) {
+				if (block->opcode_count == 0
+						|| !context->source->opcode_at(
+							context->source->context,
+							block->first_opcode_ordinal
+								+ block->opcode_count - 1,
+							&implicit_edge_opcode)) {
+					goto done;
+				}
+				statepoint_opcode = &implicit_edge_opcode;
+			}
+			if (!mutator->add_block(mutator->context,
+					zend_mir_lowering_context_function_id(context),
+					&edge_block)
+					|| !zend_mir_w04_emit_edge_statepoint(
+						context, mutator, statepoint_opcode, block->id,
+						edge_block,
+						&mappings[i].edge_statepoint_instruction_id)
+					|| !mutator->add_edge(
+						mutator->context, edge_block, target)) {
+				goto done;
+			}
+			mappings[i].mir_to_block_id = edge_block;
+		}
+	}
+	for (i = 0; i < edge_count; i++) {
+		uint32_t source_index = i;
+		if (edge_count == 2) {
+			source_index =
+				mappings[0].mir_successor_index == i ? 0 : 1;
+		}
+		if (!mutator->add_edge(mutator->context,
+				mappings[source_index].mir_from_block_id,
+				mappings[source_index].mir_to_block_id)) {
+			goto done;
+		}
+	}
+	for (i = 0; i < edge_count; i++) {
+		if (!zend_mir_control_flow_map_add_edge(map, &mappings[i])) {
+			goto done;
+		}
+	}
+	success = true;
+
+done:
+	free(mappings);
+	free(edges);
+	return success;
+}
+
 bool zend_mir_w04_emit_terminator(
 	zend_mir_lowering_context *context,
 	zend_mir_mutator *mutator,
@@ -627,18 +759,15 @@ bool zend_mir_w04_emit_terminator(
 	const zend_mir_source_block_ref *block,
 	zend_mir_control_flow_map_storage *map)
 {
-	zend_mir_source_edge_ref edges[2];
-	zend_mir_control_flow_edge_mapping mappings[2];
 	zend_mir_instruction_id terminator;
 	zend_mir_value_id condition = ZEND_MIR_ID_INVALID;
 	zend_mir_w04_branch_kind kind = ZEND_MIR_W04_BRANCH_KIND_INVALID;
 	bool source_condition = false;
 	bool machine_condition = false;
 	uint32_t edge_count = 0;
-	uint32_t i;
 	if (context == NULL || mutator == NULL || block == NULL || map == NULL
-			|| !zend_mir_w04_source_edges(context->source, block->id,
-				edges, &edge_count)) {
+			|| !zend_mir_w04_source_edge_count(
+				context->source, block->id, &edge_count)) {
 		return false;
 	}
 	if (opcode != NULL) {
@@ -658,7 +787,8 @@ bool zend_mir_w04_emit_terminator(
 		&& !machine_condition
 		&& kind != ZEND_MIR_W04_BRANCH_CATCH
 		&& kind != ZEND_MIR_W08_BRANCH_FINALLY_CALL
-		&& kind != ZEND_MIR_W09_BRANCH_ITERATOR;
+		&& kind != ZEND_MIR_W09_BRANCH_ITERATOR
+		&& kind != ZEND_MIR_W12_BRANCH_MULTIWAY;
 	if ((kind == ZEND_MIR_W04_BRANCH_UNCONDITIONAL && edge_count != 1)
 			|| ((kind >= ZEND_MIR_W04_BRANCH_IF_FALSE
 					&& kind <= ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT)
@@ -669,6 +799,11 @@ bool zend_mir_w04_emit_terminator(
 			|| (kind == ZEND_MIR_W08_BRANCH_FINALLY_RETURN && edge_count != 0)
 			|| (kind == ZEND_MIR_W09_BRANCH_ITERATOR && edge_count != 2)
 			|| (kind == ZEND_MIR_W12_BRANCH_ASSERT_CHECK && edge_count != 2)
+			|| (kind == ZEND_MIR_W12_BRANCH_MULTIWAY
+				&& (opcode == NULL
+					|| (opcode->zend_opcode_number
+							== ZEND_MIR_W12_OPCODE_MATCH
+						? edge_count < 2 : edge_count < 3)))
 			|| (kind == ZEND_MIR_W10_BRANCH_THROW && edge_count != 0)
 			|| (kind == ZEND_MIR_W04_BRANCH_KIND_INVALID && edge_count > 1)) {
 		return false;
@@ -711,7 +846,8 @@ bool zend_mir_w04_emit_terminator(
 	}
 	if (edge_count == 2 && kind != ZEND_MIR_W04_BRANCH_CATCH
 			&& kind != ZEND_MIR_W08_BRANCH_FINALLY_CALL
-			&& kind != ZEND_MIR_W09_BRANCH_ITERATOR && !source_condition
+			&& kind != ZEND_MIR_W09_BRANCH_ITERATOR
+			&& kind != ZEND_MIR_W12_BRANCH_MULTIWAY && !source_condition
 			&& !zend_mir_w04_condition_value(
 				context, mutator, opcode, &condition)) {
 		return false;
@@ -749,6 +885,8 @@ bool zend_mir_w04_emit_terminator(
 					? ZEND_MIR_OPCODE_FINALLY_RETURN
 				: kind == ZEND_MIR_W09_BRANCH_ITERATOR
 					? ZEND_MIR_OPCODE_ITERATOR_BRANCH
+				: kind == ZEND_MIR_W12_BRANCH_MULTIWAY
+					? ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH
 				: source_condition
 					? ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 				: edge_count == 1 ? ZEND_MIR_OPCODE_BRANCH
@@ -760,86 +898,14 @@ bool zend_mir_w04_emit_terminator(
 	}
 	if (edge_count == 2 && kind != ZEND_MIR_W04_BRANCH_CATCH
 			&& kind != ZEND_MIR_W08_BRANCH_FINALLY_CALL
-			&& kind != ZEND_MIR_W09_BRANCH_ITERATOR && !source_condition) {
+			&& kind != ZEND_MIR_W09_BRANCH_ITERATOR
+			&& kind != ZEND_MIR_W12_BRANCH_MULTIWAY && !source_condition) {
 		if (!zend_mir_id_is_valid(condition)
 				|| !mutator->add_operand(
 					mutator->context, terminator, condition)) {
 			return false;
 		}
 	}
-	for (i = 0; i < edge_count; i++) {
-		uint32_t mir_index = i;
-		zend_mir_block_id target;
-		if (edge_count == 2) {
-			mir_index = zend_mir_w04_mir_successor_for_source(kind, i);
-			if (mir_index > 1) {
-				return false;
-			}
-		}
-		if (!zend_mir_control_flow_map_find_block(
-				&map->public_map, edges[i].to_block_id, &target)) {
-			return false;
-		}
-		memset(&mappings[i], 0, sizeof(mappings[i]));
-		mappings[i].source_edge_id = edges[i].id;
-		mappings[i].mir_from_block_id =
-			zend_mir_lowering_context_block_id(context);
-		mappings[i].mir_to_block_id = target;
-		mappings[i].terminator_instruction_id = terminator;
-		mappings[i].edge_statepoint_instruction_id = ZEND_MIR_ID_INVALID;
-		mappings[i].mir_successor_index = mir_index;
-		if (zend_mir_w04_edge_requires_statepoint(&edges[i])) {
-			zend_mir_source_opcode_ref implicit_edge_opcode;
-			const zend_mir_source_opcode_ref *statepoint_opcode = opcode;
-			zend_mir_block_id edge_block;
-
-			/* An implicit fallthrough may itself be the loop backedge. Anchor
-			 * its interrupt statepoint to the final source opcode in the block,
-			 * which is the last operation completed before taking that edge. */
-			if (statepoint_opcode == NULL) {
-				if (block->opcode_count == 0
-						|| !context->source->opcode_at(
-							context->source->context,
-							block->first_opcode_ordinal
-								+ block->opcode_count - 1,
-							&implicit_edge_opcode)) {
-					return false;
-				}
-				statepoint_opcode = &implicit_edge_opcode;
-			}
-			if (!mutator->add_block(mutator->context,
-					zend_mir_lowering_context_function_id(context),
-					&edge_block)) {
-				return false;
-			}
-			if (!zend_mir_w04_emit_edge_statepoint(
-					context, mutator, statepoint_opcode, block->id, edge_block,
-					&mappings[i].edge_statepoint_instruction_id)) {
-				return false;
-			}
-			if (!mutator->add_edge(mutator->context,
-					edge_block, target)) {
-				return false;
-			}
-			mappings[i].mir_to_block_id = edge_block;
-		}
-	}
-	for (i = 0; i < edge_count; i++) {
-		uint32_t source_index = i;
-		if (edge_count == 2) {
-			source_index =
-				mappings[0].mir_successor_index == i ? 0 : 1;
-		}
-		if (!mutator->add_edge(mutator->context,
-				mappings[source_index].mir_from_block_id,
-				mappings[source_index].mir_to_block_id)) {
-			return false;
-		}
-	}
-	for (i = 0; i < edge_count; i++) {
-		if (!zend_mir_control_flow_map_add_edge(map, &mappings[i])) {
-			return false;
-		}
-	}
-	return true;
+	return zend_mir_w04_emit_terminator_edges(
+		context, mutator, opcode, block, map, kind, terminator, edge_count);
 }

@@ -264,6 +264,10 @@ static zend_mir_opcode zend_mir_w09_executable_opcode(uint32_t opcode)
 			return ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM;
 		case ZEND_GENERATOR_RETURN:
 			return ZEND_MIR_OPCODE_GENERATOR_RETURN;
+		case ZEND_SWITCH_LONG:
+		case ZEND_SWITCH_STRING:
+		case ZEND_MATCH:
+			return ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH;
 		case ZEND_COUNT:
 			return ZEND_MIR_OPCODE_VALUE_COUNT;
 		case ZEND_GET_TYPE:
@@ -708,6 +712,7 @@ static bool zend_mir_w09_operation_semantics(
 			}
 			break;
 		case ZEND_MIR_OPCODE_VALUE_COND_BRANCH:
+		case ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH:
 		case ZEND_MIR_OPCODE_ITERATOR_BRANCH:
 			if (!zend_mir_w09_add_effect(
 					&summary, ZEND_MIR_EFFECT_OBSERVE_FRAME)
@@ -1006,6 +1011,8 @@ static bool zend_mir_w11p_index_control_value_instructions(
 		}
 		if (instruction.opcode == ZEND_MIR_OPCODE_COND_BRANCH
 				|| instruction.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				|| instruction.opcode
+					== ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH
 				|| instruction.opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH
 				|| instruction.opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
 				|| instruction.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL) {
@@ -1315,6 +1322,7 @@ bool zend_mir_w09_emit_executable_values(
 			goto done;
 		}
 		if ((opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				|| opcode == ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH
 				|| opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH
 				|| opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
 				|| opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL)
@@ -1328,6 +1336,7 @@ bool zend_mir_w09_emit_executable_values(
 			goto done;
 		}
 		if (opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				|| opcode == ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH
 				|| opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH
 				|| opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
 				|| opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL) {
@@ -1380,6 +1389,16 @@ bool zend_mir_w09_emit_executable_values(
 			if (branch_instruction.opcode != ZEND_MIR_OPCODE_COND_BRANCH
 					&& branch_instruction.opcode
 					!= ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
+				goto done;
+			}
+		}
+		if (opcode == ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH) {
+			zend_mir_instruction_record branch_instruction;
+
+			if (!view->instruction_at(
+					view->context, operation->id, &branch_instruction)
+					|| branch_instruction.opcode
+						!= ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH) {
 				goto done;
 			}
 		}

@@ -241,6 +241,11 @@ static uint32_t zend_mir_verify_expected_operands(zend_mir_opcode opcode,
 static bool zend_mir_verify_result_contract(
 		const zend_mir_instruction_record *instruction)
 {
+	if (instruction->opcode == ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH) {
+		return !zend_mir_id_is_valid(instruction->result_id)
+			&& instruction->representation
+				== ZEND_MIR_REPRESENTATION_CONTROL;
+	}
 	if (zend_mir_opcode_is_executable_value(instruction->opcode)) {
 		return !zend_mir_id_is_valid(instruction->result_id)
 			&& instruction->representation == ZEND_MIR_REPRESENTATION_VOID;
@@ -428,7 +433,9 @@ static void zend_mir_verify_block_instructions(
 				|| last->record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 				|| last->record.opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH
 				|| last->record.opcode == ZEND_MIR_OPCODE_FINALLY_CALL ? 2 : 0;
-		if ((last->record.opcode == ZEND_MIR_OPCODE_CATCH_ENTER
+		if ((last->record.opcode == ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH
+				? block->successors_count < 2
+				: last->record.opcode == ZEND_MIR_OPCODE_CATCH_ENTER
 				? block->successors_count != 1 && block->successors_count != 2
 				: block->successors_count != expected_successors)) {
 			zend_mir_verify_emit(context, ZEND_MIR_VERIFY_INVALID_TERMINATOR,

@@ -31,6 +31,10 @@ static zend_mir_w04_branch_kind zend_mir_w04_verify_branch_kind(uint32_t opcode)
 			return ZEND_MIR_W10_BRANCH_JMP_NULL;
 		case 151:
 			return ZEND_MIR_W12_BRANCH_ASSERT_CHECK;
+		case 187:
+		case 188:
+		case 195:
+			return ZEND_MIR_W12_BRANCH_MULTIWAY;
 		case 77:
 		case 78:
 		case 125:
@@ -289,6 +293,7 @@ static bool zend_mir_w04_expected_successor(
 			}
 		}
 		if (kind == ZEND_MIR_W04_BRANCH_UNCONDITIONAL
+				|| kind == ZEND_MIR_W12_BRANCH_MULTIWAY
 				|| kind == ZEND_MIR_W04_BRANCH_KIND_INVALID) {
 			*expected = edge->successor_index;
 		} else if (successor_count == 1) {
@@ -475,6 +480,9 @@ static bool zend_mir_w04_verify_edges(
 							? terminator.opcode != ZEND_MIR_OPCODE_FINALLY_RETURN
 						: branch_kind == ZEND_MIR_W09_BRANCH_ITERATOR
 							? terminator.opcode != ZEND_MIR_OPCODE_ITERATOR_BRANCH
+						: branch_kind == ZEND_MIR_W12_BRANCH_MULTIWAY
+							? terminator.opcode
+								!= ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH
 						: (view->successor_count(view->context, source_from) == 1
 							? terminator.opcode != ZEND_MIR_OPCODE_BRANCH
 							: terminator.opcode != ZEND_MIR_OPCODE_COND_BRANCH
