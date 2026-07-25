@@ -8,6 +8,19 @@ if (!function_exists('native_mir_test_compile_execute')) {
 ?>
 --FILE--
 <?php
+$includeDirectory = sys_get_temp_dir() . '/native-w12-generator-' . getmypid();
+$includePath = $includeDirectory . '/generator.php';
+mkdir($includeDirectory);
+file_put_contents($includePath, <<<'PHP'
+<?php
+function w12_included_generator(int $value): Generator
+{
+    yield $value;
+    return $value + 1;
+}
+PHP);
+define('W12_GENERATOR_INCLUDE_PATH', $includePath);
+
 $cases = [
     'state' => <<<'PHP'
 <?php
@@ -156,6 +169,60 @@ function w12_dynamic_owners_root(): array
     ];
 }
 PHP,
+    'lifecycle' => <<<'PHP'
+<?php
+function w12_cleanup_generator(array &$trace): Generator
+{
+    try {
+        try {
+            yield 'open';
+            $trace[] = 'after';
+        } finally {
+            $trace[] = 'inner';
+        }
+    } finally {
+        $trace[] = 'outer';
+    }
+}
+function w12_escaping_generator(): Generator
+{
+    yield 'ready';
+    throw new RuntimeException('escaped');
+}
+function w12_lifecycle_root(): array
+{
+    include W12_GENERATOR_INCLUDE_PATH;
+
+    $trace = [];
+    $cleanup = w12_cleanup_generator($trace);
+    $first = $cleanup->current();
+    unset($cleanup);
+    gc_collect_cycles();
+
+    $included = w12_included_generator(8);
+    $includedFirst = $included->current();
+    $included->next();
+
+    $escaping = w12_escaping_generator();
+    $escapingFirst = $escaping->current();
+    try {
+        $escaping->next();
+    } catch (RuntimeException $exception) {
+        $escapingResult = [
+            $escapingFirst,
+            $exception::class,
+            $exception->getMessage(),
+        ];
+    }
+
+    return [
+        $first,
+        $trace,
+        [$includedFirst, $included->getReturn()],
+        $escapingResult,
+    ];
+}
+PHP,
 ];
 
 foreach ($cases as $name => $source) {
@@ -166,6 +233,7 @@ foreach ($cases as $name => $source) {
         'throw' => 'throw_root',
         'by-reference' => 'by_reference_root',
         'dynamic-owners' => 'dynamic_owners_root',
+        'lifecycle' => 'lifecycle_root',
     };
     $result = native_mir_test_compile_execute(
         $source,
@@ -185,6 +253,9 @@ foreach ($cases as $name => $source) {
         $result['execution']['opline_handler_calls'],
     );
 }
+
+unlink($includePath);
+rmdir($includeDirectory);
 ?>
 --EXPECT--
 state status=accepted result=[5,7,10] gateway=yes vm=0 execute_ex=0 handler=0
@@ -193,3 +264,4 @@ delegation status=accepted result=[1,2,4,6,8] gateway=yes vm=0 execute_ex=0 hand
 throw status=accepted result=["ready","caught:boom",17] gateway=yes vm=0 execute_ex=0 handler=0
 by-reference status=accepted result=[26,26,[[4,4],[14,14],[16,16],[26,26]]] gateway=yes vm=0 execute_ex=0 handler=0
 dynamic-owners status=accepted result=[[5,7,9],6,9,12] gateway=yes vm=0 execute_ex=0 handler=0
+lifecycle status=accepted result=["open",["inner","outer"],[8,9],["ready","RuntimeException","escaped"]] gateway=yes vm=0 execute_ex=0 handler=0
