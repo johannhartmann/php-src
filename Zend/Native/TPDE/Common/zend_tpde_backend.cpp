@@ -97,6 +97,68 @@ zend_mir_storage_id source_descriptor_storage(
 	return ZEND_MIR_ID_INVALID;
 }
 
+bool user_opcode_source_operation(
+	const zend_op_array *op_array, uint32_t source_position,
+	zend_mir_executable_value_ref *operation) {
+	const zend_op *opline;
+
+	if (op_array == nullptr || operation == nullptr
+			|| source_position >= op_array->last) {
+		return false;
+	}
+	opline = &op_array->opcodes[source_position];
+	std::memset(operation, 0, sizeof(*operation));
+	operation->id = ZEND_MIR_ID_INVALID;
+	operation->block_id = ZEND_MIR_ID_INVALID;
+	operation->opcode = ZEND_MIR_OPCODE_INVALID;
+	operation->source_opcode = opline->opcode;
+	if (!source_descriptor_operand(
+			op_array, opline, opline->op1_type, opline->op1,
+			&operation->op1)
+			|| !source_descriptor_operand(
+				op_array, opline, opline->op2_type, opline->op2,
+				&operation->op2)
+			|| !source_descriptor_operand(
+				op_array, opline, opline->result_type, opline->result,
+				&operation->result)) {
+		return false;
+	}
+	operation->op1_unused_payload =
+		opline->op1_type == IS_UNUSED ? opline->op1.num : 0;
+	operation->op2_unused_payload =
+		opline->op2_type == IS_UNUSED ? opline->op2.num : 0;
+	operation->result_unused_payload =
+		opline->result_type == IS_UNUSED ? opline->result.num : 0;
+	operation->op1_storage_id =
+		source_descriptor_storage(op_array, operation->op1);
+	operation->op2_storage_id =
+		source_descriptor_storage(op_array, operation->op2);
+	operation->result_storage_id =
+		source_descriptor_storage(op_array, operation->result);
+	operation->auxiliary.kind = ZEND_MIR_SOURCE_OPERAND_UNUSED;
+	operation->auxiliary.slot_kind = ZEND_MIR_SOURCE_SLOT_KIND_INVALID;
+	operation->auxiliary.index = ZEND_MIR_ID_INVALID;
+	operation->auxiliary.ssa_variable_id = ZEND_MIR_ID_INVALID;
+	operation->auxiliary_storage_id = ZEND_MIR_ID_INVALID;
+	if (source_position + 1 < op_array->last
+			&& op_array->opcodes[source_position + 1].opcode == ZEND_OP_DATA) {
+		const zend_op *data = &op_array->opcodes[source_position + 1];
+		if (!source_descriptor_operand(
+				op_array, data, data->op1_type, data->op1,
+				&operation->auxiliary)) {
+			return false;
+		}
+		operation->auxiliary_unused_payload =
+			data->op1_type == IS_UNUSED ? data->op1.num : 0;
+		operation->auxiliary_storage_id =
+			source_descriptor_storage(op_array, operation->auxiliary);
+	}
+	operation->extended_value = opline->extended_value;
+	operation->source_position_id = source_position;
+	operation->frame_state_id = ZEND_MIR_ID_INVALID;
+	return true;
+}
+
 bool source_descriptor_send_opcode(uint8_t opcode) {
 	switch (opcode) {
 		case ZEND_SEND_VAL:
@@ -1125,6 +1187,7 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->call_target_index);
 	std::free(plan->user_binding_index);
 	std::free(plan->internal_binding_index);
+	std::free(plan->user_opcode_source_operations);
 	std::free(plan->direct_calls);
 	std::free(plan->direct_internal_calls);
 	std::free(plan->user_calls);
@@ -1189,6 +1252,30 @@ bool initialize_plan(
 			if (zend_get_user_opcode_handler(
 					source_op_array->opcodes[index].opcode) != nullptr) {
 				plan->user_opcode_callbacks = true;
+				plan->user_opcode_source_operation_count =
+					source_op_array->last;
+				plan->user_opcode_source_operations =
+					static_cast<zend_mir_executable_value_ref *>(
+						std::calloc(source_op_array->last,
+							sizeof(*plan->user_opcode_source_operations)));
+				if (source_op_array->last != 0
+						&& plan->user_opcode_source_operations == nullptr) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+						"unable to allocate user-opcode source operations");
+					return false;
+				}
+				for (uint32_t source = 0;
+						source < source_op_array->last; ++source) {
+					if (!user_opcode_source_operation(
+							source_op_array, source,
+							&plan->user_opcode_source_operations[source])) {
+						zend_tpde_set_diagnostic(diag,
+							ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+							"user-opcode source operands are invalid");
+						return false;
+					}
+				}
 				require_runtime_helper(
 					plan, ZEND_NATIVE_HELPER_USER_OPCODE_INVOKE);
 				require_runtime_helper(plan,
