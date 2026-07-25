@@ -395,6 +395,11 @@ void zend_native_finally_call(
 	zend_execute_data *execute_data, uint32_t fast_call_opline_index);
 uint32_t zend_native_finally_return(
 	zend_execute_data *execute_data, uint32_t fast_ret_opline_index);
+uint32_t zend_native_finally_return_explicit(
+	zend_execute_data *execute_data,
+	uint64_t encoded_operand,
+	uint32_t try_catch_offset,
+	uint32_t source_position);
 zend_native_status zend_native_discard_exception(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,

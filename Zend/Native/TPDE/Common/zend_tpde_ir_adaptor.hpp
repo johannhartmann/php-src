@@ -827,12 +827,20 @@ public:
 				operands_.push_back(IRValueRef{EXECUTION_CONTEXT_VALUE});
 				operands_.push_back(IRValueRef{FRAME_VALUE});
 				operands_.push_back(IRValueRef{FRAME_VALUE});
-				for (size_t dispatch_case = 0;
-						dispatch_case
-							< user_opcode_dispatch_to_sources_.size()
-								* plan_->user_opcode_target_count;
-						++dispatch_case) {
-					operands_.push_back(IRValueRef{FRAME_VALUE});
+				for (size_t dispatch_source = 0;
+						dispatch_source
+							< user_opcode_dispatch_to_sources_.size();
+						++dispatch_source) {
+					for (uint32_t target = 0;
+							target < plan_->user_opcode_target_count;
+							++target) {
+						for (uint32_t use = 0;
+								use < zend_tpde_user_opcode_target_frame_uses(
+									plan_->user_opcode_targets[target].kind);
+								++use) {
+							operands_.push_back(IRValueRef{FRAME_VALUE});
+						}
+					}
 				}
 				add_node(block_instructions, block, InstNode{
 					InstKind::UserOpcodeGateway,
@@ -842,8 +850,7 @@ public:
 					{},
 					operand_offset,
 					static_cast<uint32_t>(
-						4 + user_opcode_dispatch_to_sources_.size()
-							* plan_->user_opcode_target_count),
+						operands_.size() - operand_offset),
 					false});
 			}
 			add_node(block_instructions, block, InstNode{
@@ -1350,9 +1357,11 @@ public:
 					|| record.opcode
 						== ZEND_MIR_OPCODE_FINALLY_ENTER
 					|| record.opcode
-						== ZEND_MIR_OPCODE_FINALLY_CALL
-					|| record.opcode
-						== ZEND_MIR_OPCODE_FINALLY_RETURN) {
+						== ZEND_MIR_OPCODE_FINALLY_CALL) {
+				operands_.push_back(IRValueRef{FRAME_VALUE});
+			} else if (record.opcode
+					== ZEND_MIR_OPCODE_FINALLY_RETURN) {
+				operands_.push_back(IRValueRef{FRAME_VALUE});
 				operands_.push_back(IRValueRef{FRAME_VALUE});
 			}
 			uint32_t operand_count =

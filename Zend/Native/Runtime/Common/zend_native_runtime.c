@@ -731,6 +731,9 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_DYNAMIC_USER_CALL_LEAVE,
 		ZEND_NATIVE_EFFECT_CALL,
 		(const void *) zend_native_call_dynamic_leave},
+	{ZEND_NATIVE_HELPER_FINALLY_RETURN_EXPLICIT,
+		ZEND_NATIVE_EFFECT_FRAME_WRITE | ZEND_NATIVE_RUNTIME_EFFECT_THROW,
+		(const void *) zend_native_finally_return_explicit},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
