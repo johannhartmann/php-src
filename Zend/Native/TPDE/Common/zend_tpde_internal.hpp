@@ -1147,6 +1147,8 @@ struct zend_native_image {
 	zend_native_target target;
 	uint32_t abi_version;
 	uint32_t runtime_abi_version;
+	uint64_t build_id;
+	uint64_t code_version;
 	unsigned char *text;
 	size_t text_size;
 	size_t text_capacity;
@@ -1167,6 +1169,8 @@ struct zend_native_image {
 	uint32_t direct_internal_call_count;
 	_zend_native_user_call_descriptor **user_calls;
 	uint32_t user_call_count;
+	_zend_native_internal_call_cell **owned_internal_call_cells;
+	uint32_t owned_internal_call_cell_count;
 };
 
 struct zend_native_code {
@@ -1187,6 +1191,8 @@ struct zend_native_code {
 	uint32_t direct_internal_call_count;
 	_zend_native_user_call_descriptor **user_calls;
 	uint32_t user_call_count;
+	_zend_native_internal_call_cell **owned_internal_call_cells;
+	uint32_t owned_internal_call_cell_count;
 };
 
 void zend_tpde_set_diagnostic(
