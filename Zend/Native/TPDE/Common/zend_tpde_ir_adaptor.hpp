@@ -756,6 +756,8 @@ public:
 					static_cast<uint32_t>(operands_.size());
 				operands_.push_back(IRValueRef{FRAME_VALUE});
 				operands_.push_back(IRValueRef{EXECUTION_CONTEXT_VALUE});
+				operands_.push_back(IRValueRef{FRAME_VALUE});
+				operands_.push_back(IRValueRef{FRAME_VALUE});
 				add_node(block_instructions, block, InstNode{
 					InstKind::UserOpcodeGateway,
 					UINT32_MAX,
@@ -763,7 +765,7 @@ public:
 					INVALID_VALUE_REF,
 					{},
 					operand_offset,
-					2,
+					4,
 					false});
 			}
 			add_node(block_instructions, block, InstNode{

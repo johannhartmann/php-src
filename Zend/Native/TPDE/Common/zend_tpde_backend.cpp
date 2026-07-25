@@ -1183,6 +1183,8 @@ bool initialize_plan(
 				plan->user_opcode_callbacks = true;
 				require_runtime_helper(
 					plan, ZEND_NATIVE_HELPER_USER_OPCODE_INVOKE);
+				require_runtime_helper(plan,
+					ZEND_NATIVE_HELPER_GENERATOR_USER_OPCODE_RETURN);
 				break;
 			}
 		}
