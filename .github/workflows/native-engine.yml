@@ -40,7 +40,7 @@ jobs:
           - darwin-arm64-native-ubsan-nts
           - darwin-arm64-native-release-nts
     env:
-      NATIVE_WORK_ROOT: /tmp/php-native
+      NATIVE_WORK_ROOT: /tmp/php-native-${{ github.run_id }}-${{ github.run_attempt }}
       NATIVE_JOBS: 2
     steps:
       - uses: actions/checkout@v6
@@ -126,7 +126,7 @@ jobs:
           - linux-amd64-native-ubsan-nts
           - linux-amd64-native-release-nts
     env:
-      NATIVE_WORK_ROOT: /tmp/php-native
+      NATIVE_WORK_ROOT: /tmp/php-native-${{ github.run_id }}-${{ github.run_attempt }}
       NATIVE_JOBS: 2
     steps:
       - uses: actions/checkout@v6
@@ -205,7 +205,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
-      NATIVE_WORK_ROOT: /tmp/php-native
+      NATIVE_WORK_ROOT: /tmp/php-native-${{ github.run_id }}-${{ github.run_attempt }}
       NATIVE_JOBS: 2
     steps:
       - uses: actions/checkout@v6
