@@ -5888,6 +5888,24 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 								zend_native_direct_activation,
 								cell_active))),
 						1);
+					ASM(MOV8mi,
+						FE_MEM(metadata_second_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_native_direct_activation,
+								dynamic_target))),
+						0);
+					ASM(MOV8mi,
+						FE_MEM(metadata_second_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_native_direct_activation,
+								internal_target))),
+						0);
+					ASM(MOV8mi,
+						FE_MEM(metadata_second_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_native_direct_activation,
+								preserve_target))),
+						0);
 					ASM(MOV64mr,
 						FE_MEM(metadata_first_reg, 0, FE_NOREG, 0),
 						metadata_second_reg);
