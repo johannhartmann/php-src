@@ -3983,6 +3983,22 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 						 * those compile-time invariants do not need to be
 						 * reloaded at every loop iteration.
 						 */
+						ASM(MOV64rm, first_reg,
+							FE_MEM(context_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_native_execution_context,
+									stack_limit))));
+						{
+							auto stack_guarded = text_writer.label_create();
+							ASM(TEST64rr, first_reg, first_reg);
+							generate_raw_jump(Jump::je, stack_guarded);
+							ASM(MOV64rm, first_reg,
+								FE_MEM(first_reg, 0, FE_NOREG, 0));
+							ASM(MOV64rr, second_reg, FE_SP);
+							ASM(CMP64rr, second_reg, first_reg);
+							generate_raw_jump(Jump::jbe, slow_path);
+							label_place(stack_guarded);
+						}
 						ASM(CMP8mi,
 							FE_MEM(context_reg, 0, FE_NOREG,
 								static_cast<int32_t>(offsetof(
