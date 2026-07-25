@@ -1234,10 +1234,6 @@ zend_result zend_tpde_emit_linux_x64(
 	const zend_tpde_plan *plan,
 	zend_native_image *image,
 	zend_native_diagnostic *diag);
-zend_result zend_tpde_map_linux_x64(
-	const zend_native_image *image,
-	zend_native_code *code,
-	zend_native_diagnostic *diag);
 zend_result zend_tpde_map_darwin_arm64(
 	const zend_native_image *image,
 	zend_native_code *code,

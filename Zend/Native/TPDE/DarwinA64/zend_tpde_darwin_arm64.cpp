@@ -10,11 +10,14 @@
 #include <tpde/ELF.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #if defined(__APPLE__) && defined(__aarch64__)
@@ -7076,10 +7079,6 @@ struct A64ImageState {
 		: adaptor{plan}, compiler{&adaptor, image} {}
 };
 
-void destroy_a64_image_state(void *state) {
-	delete static_cast<A64ImageState *>(state);
-}
-
 #if defined(__APPLE__) && defined(__aarch64__)
 
 struct MappedSection {
@@ -7189,6 +7188,190 @@ bool apply_relocation(uint8_t *location, uint32_t type,
 	}
 }
 
+struct SerializedRelocation {
+	uint32_t offset;
+	uint32_t symbol;
+	uint32_t type;
+	int32_t addend;
+};
+
+struct SerializedSection {
+	bool present = false;
+	uint32_t type = 0;
+	uint32_t flags = 0;
+	uint32_t alignment = 0;
+	uint64_t size = 0;
+	bool is_virtual = false;
+	std::string_view name;
+	const uint8_t *data = nullptr;
+	std::vector<SerializedRelocation> relocations;
+};
+
+struct SerializedSymbol {
+	std::string_view name;
+	uint32_t section = 0;
+	uint64_t offset = 0;
+	uint64_t size = 0;
+	uint8_t binding = 0;
+	uint8_t kind = 0;
+	bool defined = false;
+};
+
+struct SerializedA64Object {
+	std::vector<SerializedSection> sections;
+	std::vector<SerializedSymbol> symbols;
+	uint32_t unwind_section = UINT32_MAX;
+};
+
+class ObjectCursor {
+	const uint8_t *current_;
+	size_t remaining_;
+
+public:
+	ObjectCursor(const uint8_t *data, size_t size)
+		: current_{data}, remaining_{size} {}
+
+	template <typename T>
+	bool read(T *out) {
+		if (remaining_ < sizeof(T)) {
+			return false;
+		}
+		std::memcpy(out, current_, sizeof(T));
+		current_ += sizeof(T);
+		remaining_ -= sizeof(T);
+		return true;
+	}
+
+	bool skip(size_t size) {
+		if (remaining_ < size) {
+			return false;
+		}
+		current_ += size;
+		remaining_ -= size;
+		return true;
+	}
+
+	bool view(size_t size, const uint8_t **out) {
+		if (remaining_ < size) {
+			return false;
+		}
+		*out = current_;
+		current_ += size;
+		remaining_ -= size;
+		return true;
+	}
+
+	size_t remaining() const { return remaining_; }
+};
+
+bool parse_a64_object(
+	const zend_native_image *image, SerializedA64Object *out) {
+	static constexpr std::array<uint8_t, 16> MAGIC{
+		'Z', 'N', 'M', 'I', 'R', '-', 'T', 'P', 'D', 'E', '-', 'A', '6', '4', 0, 2};
+	if (image->text == nullptr || image->text_size < MAGIC.size()
+			|| std::memcmp(image->text, MAGIC.data(), MAGIC.size()) != 0) {
+		return false;
+	}
+	ObjectCursor cursor{
+		image->text + MAGIC.size(), image->text_size - MAGIC.size()};
+	uint32_t section_count;
+	uint32_t present_section_count;
+	uint32_t symbol_count;
+	if (!cursor.read(&section_count)
+			|| !cursor.read(&present_section_count)
+			|| !cursor.read(&symbol_count)
+			|| !cursor.read(&out->unwind_section)
+			|| section_count == 0
+			|| present_section_count >= section_count
+			|| symbol_count == 0
+			|| out->unwind_section >= section_count
+			|| section_count > image->text_size
+			|| symbol_count > image->text_size) {
+		return false;
+	}
+	out->sections.clear();
+	out->sections.resize(section_count);
+	out->symbols.clear();
+	out->symbols.resize(symbol_count);
+	for (uint32_t present = 0; present < present_section_count; ++present) {
+		uint32_t index;
+		SerializedSection section;
+		uint32_t name_size;
+		uint32_t relocation_count;
+		uint8_t is_virtual;
+		if (!cursor.read(&index)
+				|| !cursor.read(&section.type)
+				|| !cursor.read(&section.flags)
+				|| !cursor.read(&section.alignment)
+				|| !cursor.read(&section.size)
+				|| !cursor.read(&name_size)
+				|| !cursor.read(&relocation_count)
+				|| !cursor.read(&is_virtual)
+				|| !cursor.skip(7)
+				|| index == 0 || index >= section_count
+				|| out->sections[index].present
+				|| is_virtual > 1
+				|| (is_virtual && relocation_count != 0)
+				|| section.size > SIZE_MAX
+				|| relocation_count > image->text_size) {
+			return false;
+		}
+		const uint8_t *name;
+		if (!cursor.view(name_size, &name)) {
+			return false;
+		}
+		section.name = std::string_view{
+			reinterpret_cast<const char *>(name), name_size};
+		section.is_virtual = is_virtual != 0;
+		if (!section.is_virtual
+				&& !cursor.view(static_cast<size_t>(section.size),
+					&section.data)) {
+			return false;
+		}
+		section.relocations.reserve(relocation_count);
+		for (uint32_t relocation_index = 0;
+				relocation_index < relocation_count; ++relocation_index) {
+			SerializedRelocation relocation;
+			if (!cursor.read(&relocation.offset)
+					|| !cursor.read(&relocation.symbol)
+					|| !cursor.read(&relocation.type)
+					|| !cursor.read(&relocation.addend)) {
+				return false;
+			}
+			section.relocations.push_back(relocation);
+		}
+		section.present = true;
+		out->sections[index] = std::move(section);
+	}
+	for (uint32_t index = 0; index < symbol_count; ++index) {
+		SerializedSymbol symbol;
+		uint32_t name_size;
+		uint8_t defined;
+		if (!cursor.read(&name_size)
+				|| !cursor.read(&symbol.section)
+				|| !cursor.read(&symbol.offset)
+				|| !cursor.read(&symbol.size)
+				|| !cursor.read(&symbol.binding)
+				|| !cursor.read(&symbol.kind)
+				|| !cursor.read(&defined)
+				|| !cursor.skip(5)
+				|| defined > 1
+				|| (defined && (symbol.section == 0
+					|| symbol.section >= section_count))) {
+			return false;
+		}
+		const uint8_t *name;
+		if (!cursor.view(name_size, &name)) {
+			return false;
+		}
+		symbol.name = std::string_view{
+			reinterpret_cast<const char *>(name), name_size};
+		symbol.defined = defined != 0;
+		out->symbols[index] = symbol;
+	}
+	return cursor.remaining() == 0;
+}
+
 #endif
 
 } // namespace
@@ -7205,16 +7388,12 @@ zend_result zend_tpde_emit_darwin_arm64(
 	}
 	std::vector<::tpde::u8> finalized =
 		state->compiler.assembler.build_object_file();
-	const ::tpde::DataSection &text = state->compiler.assembler.get_section(
-		state->compiler.assembler.get_default_section(::tpde::SectionKind::Text));
-	if (finalized.empty() || text.data.empty() || !zend_tpde_image_append(
-			image, text.data.data(), text.data.size())) {
+	if (finalized.empty() || !zend_tpde_image_append(
+			image, finalized.data(), finalized.size())) {
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
-			"unable to retain the finalized TPDE arm64 image");
+			"unable to retain the relocatable TPDE arm64 image");
 		return FAILURE;
 	}
-	image->target_state = state.release();
-	image->destroy_target_state = destroy_a64_image_state;
 	return SUCCESS;
 }
 
@@ -7223,9 +7402,16 @@ zend_result zend_tpde_map_darwin_arm64(
 	zend_native_code *code,
 	zend_native_diagnostic *diag) {
 #if defined(__APPLE__) && defined(__aarch64__)
-	if (image == nullptr || image->target_state == nullptr || code == nullptr) {
+	if (image == nullptr || image->text == nullptr || image->text_size == 0
+			|| code == nullptr) {
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
-			"Darwin TPDE mapper requires compiled assembler state");
+			"Darwin TPDE mapper requires a relocatable arm64 image");
+		return FAILURE;
+	}
+	SerializedA64Object object;
+	if (!parse_a64_object(image, &object)) {
+		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
+			"Darwin TPDE image has an invalid object encoding");
 		return FAILURE;
 	}
 	long page_size_value = sysconf(_SC_PAGESIZE);
@@ -7235,22 +7421,29 @@ zend_result zend_tpde_map_darwin_arm64(
 		return FAILURE;
 	}
 	size_t page_size = static_cast<size_t>(page_size_value);
-	auto *compiled = static_cast<A64ImageState *>(image->target_state);
-	DarwinAssembler &assembler = compiled->compiler.assembler;
-	::tpde::SecRef unwind_ref = assembler.get_default_section(
-		::tpde::SectionKind::EHFrame);
+	const uint32_t unwind_section = object.unwind_section;
 	auto published = std::make_unique<A64PublishedState>();
-	published->sections.resize(assembler.section_count());
+	published->sections.resize(object.sections.size());
 	bool has_executable = false;
 
-	for (size_t i = 1; i < assembler.section_count(); ++i) {
-		if (!assembler.section_present(i)) continue;
-		const ::tpde::DataSection &section = assembler.get_section(
-			::tpde::SecRef{static_cast<uint32_t>(i)});
-		if ((section.flags & DarwinAssembler::SECTION_ALLOC) == 0
-				|| section.size() == 0) continue;
-		size_t logical_size = section.size();
-		if (i == unwind_ref.id()) {
+	for (size_t i = 1; i < object.sections.size(); ++i) {
+		const SerializedSection &section = object.sections[i];
+		if (!section.present
+				|| (section.flags & DarwinAssembler::SECTION_ALLOC) == 0
+				|| section.size == 0) {
+			continue;
+		}
+		if ((section.flags & (DarwinAssembler::SECTION_WRITE
+				| DarwinAssembler::SECTION_EXEC))
+				== (DarwinAssembler::SECTION_WRITE
+					| DarwinAssembler::SECTION_EXEC)) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
+				"Darwin TPDE image requests writable executable data");
+			return FAILURE;
+		}
+		size_t logical_size = static_cast<size_t>(section.size);
+		if (i == unwind_section) {
 			if (logical_size > SIZE_MAX - sizeof(uint32_t)) {
 				zend_tpde_set_diagnostic(diag,
 					ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
@@ -7277,45 +7470,46 @@ zend_result zend_tpde_map_darwin_arm64(
 			return FAILURE;
 		}
 		published->sections[i] = {mapping, mapping_size, section.flags};
-		assembler.get_section(::tpde::SecRef{static_cast<uint32_t>(i)}).addr =
-			reinterpret_cast<uintptr_t>(mapping);
 		has_executable |= executable;
 	}
 
 	if (has_executable) pthread_jit_write_protect_np(0);
-	for (size_t i = 1; i < assembler.section_count(); ++i) {
-		if (!assembler.section_present(i)
-				|| published->sections[i].mapping == nullptr) continue;
-		const ::tpde::DataSection &section = assembler.get_section(
-			::tpde::SecRef{static_cast<uint32_t>(i)});
-		if (!section.is_virtual && !section.data.empty()) {
+	for (size_t i = 1; i < object.sections.size(); ++i) {
+		const SerializedSection &section = object.sections[i];
+		if (!section.present || published->sections[i].mapping == nullptr) {
+			continue;
+		}
+		if (!section.is_virtual && section.size != 0) {
 			std::memcpy(published->sections[i].mapping,
-				section.data.data(), section.data.size());
+				section.data, static_cast<size_t>(section.size));
 		}
 	}
 
-	for (size_t i = 1; i < assembler.section_count(); ++i) {
-		if (!assembler.section_present(i)
-				|| published->sections[i].mapping == nullptr) continue;
-		const ::tpde::DataSection &section = assembler.get_section(
-			::tpde::SecRef{static_cast<uint32_t>(i)});
+	for (size_t i = 1; i < object.sections.size(); ++i) {
+		const SerializedSection &section = object.sections[i];
+		if (!section.present || published->sections[i].mapping == nullptr) {
+			continue;
+		}
 		if (section.is_virtual) continue;
-		for (const ::tpde::Relocation &relocation : section.relocations()) {
-			if (relocation.symbol.id() >= assembler.symbol_count()
-					|| relocation.offset > section.size()
-					|| section.size() - relocation.offset < sizeof(uint32_t)) {
+		for (const SerializedRelocation &relocation : section.relocations) {
+			const size_t relocation_width =
+				relocation.type == ::tpde::elf::R_AARCH64_ABS64
+				? sizeof(uint64_t) : sizeof(uint32_t);
+			if (relocation.symbol >= object.symbols.size()
+					|| relocation.offset > section.size
+					|| section.size - relocation.offset < relocation_width) {
 				zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
 					"Darwin TPDE relocation is outside its section");
 				if (has_executable) pthread_jit_write_protect_np(1);
 				return FAILURE;
 			}
-			const DarwinAssembler::Symbol &symbol = assembler.symbol(relocation.symbol);
+			const SerializedSymbol &symbol = object.symbols[relocation.symbol];
 			uint8_t *location = static_cast<uint8_t *>(
 				published->sections[i].mapping) + relocation.offset;
 			uintptr_t symbol_address;
 			if (symbol.defined) {
-				if (symbol.section.id() >= published->sections.size()
-						|| published->sections[symbol.section.id()].mapping
+				if (symbol.section >= published->sections.size()
+						|| published->sections[symbol.section].mapping
 							== nullptr) {
 					zend_tpde_set_diagnostic(diag,
 						ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
@@ -7324,12 +7518,13 @@ zend_result zend_tpde_map_darwin_arm64(
 					return FAILURE;
 				}
 				symbol_address = reinterpret_cast<uintptr_t>(
-					published->sections[symbol.section.id()].mapping)
+					published->sections[symbol.section].mapping)
 					+ symbol.offset;
 			} else {
 				const void *resolved = nullptr;
+				std::string external_name{symbol.name};
 				if (!zend_tpde_image_resolve_symbol(
-						image, symbol.name.c_str(), &resolved)) {
+						image, external_name.c_str(), &resolved)) {
 					zend_tpde_set_diagnostic(diag,
 						ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
 						"Darwin TPDE image contains an unresolved external symbol");
@@ -7348,13 +7543,16 @@ zend_result zend_tpde_map_darwin_arm64(
 		}
 	}
 	void *entry = nullptr;
-	::tpde::SymRef entry_ref = compiled->compiler.func_syms[0];
-	if (entry_ref.id() < assembler.symbol_count()) {
-		const DarwinAssembler::Symbol &symbol = assembler.symbol(entry_ref);
-		if (symbol.defined && symbol.section.id() < published->sections.size()
-				&& published->sections[symbol.section.id()].mapping != nullptr) {
+	uint32_t entry_section_index = UINT32_MAX;
+	for (const SerializedSymbol &symbol : object.symbols) {
+		if (symbol.name == "zend_native_entry"
+				&& symbol.defined
+				&& symbol.section < published->sections.size()
+				&& published->sections[symbol.section].mapping != nullptr) {
 			entry = static_cast<uint8_t *>(
-				published->sections[symbol.section.id()].mapping) + symbol.offset;
+				published->sections[symbol.section].mapping) + symbol.offset;
+			entry_section_index = symbol.section;
+			break;
 		}
 	}
 	if (entry == nullptr) {
@@ -7388,15 +7586,17 @@ zend_result zend_tpde_map_darwin_arm64(
 			return FAILURE;
 		}
 	}
-	if (!unwind_ref.valid() || unwind_ref.id() >= published->sections.size()
-			|| !assembler.section_present(unwind_ref.id())
-			|| assembler.get_section(unwind_ref).data.empty()
-			|| published->sections[unwind_ref.id()].mapping == nullptr) {
+	if (unwind_section == UINT32_MAX
+			|| unwind_section >= published->sections.size()
+			|| object.sections[unwind_section].is_virtual
+			|| object.sections[unwind_section].size == 0
+			|| published->sections[unwind_section].mapping == nullptr) {
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
 			"Darwin TPDE image has no publishable unwind information");
 		return FAILURE;
 	}
-	published->unwind_section = published->sections[unwind_ref.id()].mapping;
+	published->unwind_section =
+		published->sections[unwind_section].mapping;
 	if (__unw_add_dynamic_eh_frame_section != nullptr) {
 		__unw_add_dynamic_eh_frame_section(
 			reinterpret_cast<uintptr_t>(published->unwind_section));
@@ -7405,8 +7605,8 @@ zend_result zend_tpde_map_darwin_arm64(
 	}
 	published->unwind_registered = true;
 
-	const MappedSection &entry_section = published->sections[
-		assembler.symbol(entry_ref).section.id()];
+	const MappedSection &entry_section =
+		published->sections[entry_section_index];
 	code->mapping = entry_section.mapping;
 	code->mapping_size = entry_section.mapping_size;
 	code->entry = reinterpret_cast<zend_native_frame_entry_t>(entry);
