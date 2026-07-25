@@ -26,6 +26,10 @@
 #include "zend_attributes.h"
 #include "zend_constants.h"
 
+#ifdef HAVE_NATIVE_ENGINE
+# include "Zend/Native/Compiler/zend_native_executor.h"
+#endif
+
 #define ADD_DUP_SIZE(m,s)  ZCG(current_persistent_script)->size += zend_shared_memdup_size((void*)m, s)
 #define ADD_SIZE(m)        ZCG(current_persistent_script)->size += ZEND_ALIGNED_SIZE(m)
 
@@ -650,6 +654,11 @@ uint32_t zend_accel_script_persist_calc(zend_persistent_script *new_persistent_s
 #if defined(__AVX__) || defined(__SSE2__)
 	/* Align size to 64-byte boundary */
 	new_persistent_script->size = (new_persistent_script->size + 63) & ~63;
+#endif
+
+#ifdef HAVE_NATIVE_ENGINE
+	ADD_SIZE(zend_native_executor_persist_calc(
+		&new_persistent_script->script.main_op_array));
 #endif
 
 	if (new_persistent_script->script.class_table.nNumUsed != new_persistent_script->script.class_table.nNumOfElements) {

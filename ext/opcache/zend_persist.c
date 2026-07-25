@@ -28,6 +28,10 @@
 #include "zend_interfaces.h"
 #include "zend_attributes.h"
 
+#ifdef HAVE_NATIVE_ENGINE
+# include "Zend/Native/Compiler/zend_native_executor.h"
+#endif
+
 #ifdef HAVE_JIT
 # include "Optimizer/zend_func_info.h"
 # include "jit/zend_jit.h"
@@ -1445,6 +1449,15 @@ zend_persistent_script *zend_accel_script_persist(zend_persistent_script *script
 	ZCG(mem) = (void*)(((uintptr_t)ZCG(mem) + 63L) & ~63L);
 #else
 	ZEND_ASSERT(((uintptr_t)ZCG(mem) & 0x7) == 0); /* should be 8 byte aligned */
+#endif
+
+#ifdef HAVE_NATIVE_ENGINE
+	{
+		size_t native_bundle_size = zend_native_executor_persist(
+			&script->script.main_op_array, ZCG(mem));
+		ZCG(mem) = (char *) ZCG(mem)
+			+ ZEND_ALIGNED_SIZE(native_bundle_size);
+	}
 #endif
 
 #ifdef HAVE_JIT

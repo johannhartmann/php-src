@@ -1531,9 +1531,26 @@ static zend_always_inline bool is_phar_file(const zend_string *filename)
 		!strstr(ZSTR_VAL(filename), "://");
 }
 
+#ifdef HAVE_NATIVE_ENGINE
+static zend_always_inline void zend_accel_prepare_native_script(
+	zend_persistent_script *script)
+{
+	if (UNEXPECTED(zend_native_executor_prepare_script(
+			&script->script) == FAILURE)) {
+		zend_accel_error_noreturn(ACCEL_LOG_FATAL,
+			"Native image generation failed for '%s'",
+			ZSTR_VAL(script->script.filename));
+	}
+}
+#endif
+
 static zend_persistent_script *store_script_in_file_cache(zend_persistent_script *new_persistent_script)
 {
 	uint32_t memory_used;
+
+#ifdef HAVE_NATIVE_ENGINE
+	zend_accel_prepare_native_script(new_persistent_script);
+#endif
 
 	zend_shared_alloc_init_xlat_table();
 
@@ -1559,6 +1576,11 @@ static zend_persistent_script *store_script_in_file_cache(zend_persistent_script
 	new_persistent_script = zend_accel_script_persist(new_persistent_script, 0);
 
 	zend_shared_alloc_destroy_xlat_table();
+
+#ifdef HAVE_NATIVE_ENGINE
+	zend_native_executor_set_bundle_persistent(
+		&new_persistent_script->script.main_op_array, false);
+#endif
 
 	new_persistent_script->is_phar = is_phar_file(new_persistent_script->script.filename);
 
@@ -1605,6 +1627,10 @@ static zend_persistent_script *cache_script_in_shared_memory(zend_persistent_scr
 	zend_optimize_script(&new_persistent_script->script, ZCG(accel_directives).optimization_level, ZCG(accel_directives).opt_debug_level);
 	zend_accel_finalize_delayed_early_binding_list(new_persistent_script);
 	CG(compiler_options) = orig_compiler_options;
+
+#ifdef HAVE_NATIVE_ENGINE
+	zend_accel_prepare_native_script(new_persistent_script);
+#endif
 
 	/* exclusive lock */
 	zend_shared_alloc_lock();
@@ -4672,6 +4698,10 @@ static zend_persistent_script* preload_script_in_shared_memory(zend_persistent_s
 	zend_accel_hash_entry *bucket;
 	uint32_t memory_used;
 	uint32_t checkpoint;
+
+#ifdef HAVE_NATIVE_ENGINE
+	zend_accel_prepare_native_script(new_persistent_script);
+#endif
 
 	if (zend_accel_hash_is_full(&ZCSG(hash))) {
 		zend_accel_error_noreturn(ACCEL_LOG_FATAL, "Not enough entries in hash table for preloading. Consider increasing the value for the opcache.max_accelerated_files directive in php.ini.");

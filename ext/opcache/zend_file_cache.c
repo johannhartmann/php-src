@@ -35,6 +35,10 @@
 #include "zend_accelerator_util_funcs.h"
 #include "zend_accelerator_hash.h"
 
+#ifdef HAVE_NATIVE_ENGINE
+# include "Zend/Native/Compiler/zend_native_executor.h"
+#endif
+
 #ifdef HAVE_JIT
 #include "jit/zend_jit.h"
 #endif
@@ -497,6 +501,15 @@ static void zend_file_cache_serialize_op_array(zend_op_array            *op_arra
 {
 	ZEND_MAP_PTR_INIT(op_array->static_variables_ptr, NULL);
 	ZEND_MAP_PTR_INIT(op_array->run_time_cache, NULL);
+
+#ifdef HAVE_NATIVE_ENGINE
+	{
+		int native_rid = zend_native_executor_op_array_handle();
+		if (native_rid >= 0 && op_array->reserved[native_rid] != NULL) {
+			SERIALIZE_PTR(op_array->reserved[native_rid]);
+		}
+	}
+#endif
 
 	/* Check whether this op_array has already been serialized. */
 	if (IS_SERIALIZED(op_array->opcodes)) {
@@ -1414,6 +1427,15 @@ static void zend_file_cache_unserialize_op_array(zend_op_array           *op_arr
                                                  zend_persistent_script  *script,
                                                  void                    *buf)
 {
+#ifdef HAVE_NATIVE_ENGINE
+	{
+		int native_rid = zend_native_executor_op_array_handle();
+		if (native_rid >= 0 && op_array->reserved[native_rid] != NULL) {
+			UNSERIALIZE_PTR(op_array->reserved[native_rid]);
+		}
+	}
+#endif
+
 	if (!script->corrupted) {
 		if (op_array != &script->script.main_op_array) {
 			op_array->fn_flags |= ZEND_ACC_IMMUTABLE;
@@ -2097,6 +2119,11 @@ use_process_mem:
 	}
 
 	script->corrupted = false;
+
+#ifdef HAVE_NATIVE_ENGINE
+	zend_native_executor_set_bundle_persistent(
+		&script->script.main_op_array, cache_it);
+#endif
 
 	if (cache_it) {
 		ZCSG(map_ptr_last) = CG(map_ptr_last);

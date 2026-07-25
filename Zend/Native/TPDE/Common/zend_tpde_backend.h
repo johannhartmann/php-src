@@ -106,6 +106,28 @@ typedef struct _zend_native_image_metrics {
 	uint64_t direct_call_frame_bytes;
 } zend_native_image_metrics;
 
+typedef enum _zend_native_image_reference_kind {
+	ZEND_NATIVE_IMAGE_REFERENCE_ENTRY_CELL = 1,
+	ZEND_NATIVE_IMAGE_REFERENCE_FUNCTION = 2,
+	ZEND_NATIVE_IMAGE_REFERENCE_CLASS = 3
+} zend_native_image_reference_kind;
+
+/*
+ * Persistent images contain only stable reference tokens. The compiler owns
+ * the Zend-identity mapping used to encode them and reconstructs process-local
+ * addresses once, immediately before publication.
+ */
+typedef bool (*zend_native_image_encode_reference_t)(
+	void *context,
+	zend_native_image_reference_kind kind,
+	const void *address,
+	uint64_t *token);
+typedef bool (*zend_native_image_decode_reference_t)(
+	void *context,
+	zend_native_image_reference_kind kind,
+	uint64_t token,
+	const void **address);
+
 typedef struct _zend_native_call_binding {
 	zend_mir_call_target_id target_id;
 	zend_native_entry_cell *entry_cell;
@@ -204,6 +226,22 @@ zend_result zend_native_publish_image(
 	zend_native_image *image,
 	zend_native_code **out_code,
 	zend_native_diagnostic *diag);
+
+zend_result zend_native_image_serialize(
+	const zend_native_image *image,
+	zend_native_image_encode_reference_t encode_reference,
+	void *reference_context,
+	unsigned char **out_bytes,
+	size_t *out_size,
+	zend_native_diagnostic *diag);
+zend_result zend_native_image_deserialize(
+	const unsigned char *bytes,
+	size_t size,
+	zend_native_image_decode_reference_t decode_reference,
+	void *reference_context,
+	zend_native_image **out_image,
+	zend_native_diagnostic *diag);
+void zend_native_serialized_image_destroy(unsigned char *bytes);
 
 zend_result zend_native_execute(
 	const zend_native_code *code,

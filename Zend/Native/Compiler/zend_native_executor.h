@@ -3,6 +3,8 @@
 
 #include "Zend/zend.h"
 
+typedef struct _zend_script zend_script;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -24,6 +26,23 @@ ZEND_API void zend_native_executor_execute_ex(zend_execute_data *execute_data);
  * userland.
  */
 ZEND_API void zend_native_executor_invalidate(void);
+
+/*
+ * OPcache cold-path integration. The slot contains one pointer-free native
+ * bundle for the script main root. Persistence copies it verbatim; process
+ * publication resolves all Zend and runtime addresses locally.
+ */
+ZEND_API zend_result zend_native_executor_prepare_script(
+	zend_script *script);
+ZEND_API size_t zend_native_executor_persist_calc(
+	const zend_op_array *op_array);
+ZEND_API size_t zend_native_executor_persist(
+	zend_op_array *op_array, void *memory);
+ZEND_API void zend_native_executor_discard_bundle(
+	zend_op_array *op_array);
+ZEND_API void zend_native_executor_set_bundle_persistent(
+	zend_op_array *op_array, bool persistent);
+ZEND_API int zend_native_executor_op_array_handle(void);
 
 #ifdef __cplusplus
 }

@@ -27,6 +27,10 @@
 
 #include "zend_simd.h"
 
+#ifdef HAVE_NATIVE_ENGINE
+# include "Zend/Native/Compiler/zend_native_executor.h"
+#endif
+
 typedef int (*id_function_t)(void *, void *);
 typedef void (*unique_copy_ctor_func_t)(void *pElement);
 
@@ -47,6 +51,11 @@ zend_persistent_script* create_persistent_script(void)
 
 void free_persistent_script(zend_persistent_script *persistent_script, bool destroy_elements)
 {
+#ifdef HAVE_NATIVE_ENGINE
+	zend_native_executor_discard_bundle(
+		&persistent_script->script.main_op_array);
+#endif
+
 	if (!destroy_elements) {
 		/* Both the keys and values have been transferred into the global tables.
 		 * Set nNumUsed=0 to only deallocate the table, but not destroy any elements. */
