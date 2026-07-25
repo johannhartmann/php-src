@@ -32,6 +32,13 @@ function w12_user_opcode_array($key, $array)
 {
     return $key + $array;
 }
+function w12_user_opcode_enter(): array
+{
+    $GLOBALS['w12_user_opcode_enter_trace'][] = 'entered';
+    $value = 1;
+    $value += 2;
+    return [$GLOBALS['w12_user_opcode_enter_trace'], $value];
+}
 PHP;
 
 $cases = [
@@ -74,6 +81,30 @@ foreach ($cases as [$action, $dispatchTo, $expected, $calls]) {
         printf("diagnostics=%s\n", json_encode($result['diagnostics'] ?? null));
     }
 }
+
+$GLOBALS['w12_user_opcode_enter_trace'] = [];
+$result = native_mir_test_compile_execute(
+    $source,
+    'w12-user-opcode-enter.php',
+    [],
+    [
+        'wave' => 11,
+        'function' => 'w12_user_opcode_enter',
+        'user_opcode' => [
+            'opcode' => 'ZEND_ASSIGN_OP',
+            'action' => 'enter',
+        ],
+    ],
+);
+printf(
+    "enter status=%s result=%s calls=%d vm=%d execute_ex=%d handler=%d\n",
+    $result['status'],
+    json_encode($result['execution']['return_value'] ?? null),
+    $result['execution']['user_opcode_calls'] ?? -1,
+    $result['execution']['vm_handler_calls'] ?? -1,
+    $result['execution']['execute_ex_calls'] ?? -1,
+    $result['execution']['opline_handler_calls'] ?? -1,
+);
 
 $binaryTargets = [
     'ZEND_ADD' => 10,
@@ -311,6 +342,7 @@ dispatch status=accepted result=6 calls=2/2 vm=0 execute_ex=0 handler=0
 dispatch_to status=accepted result=6 calls=2/2 vm=0 execute_ex=0 handler=0
 return status=accepted result=null calls=1/1 vm=0 execute_ex=0 handler=0
 leave status=accepted result=null calls=1/1 vm=0 execute_ex=0 handler=0
+enter status=accepted result=[["entered","entered"],1] calls=2 vm=0 execute_ex=0 handler=0
 binary_ZEND_ADD status=accepted result=10 calls=1 vm=0 execute_ex=0 handler=0
 binary_ZEND_SUB status=accepted result=-8 calls=1 vm=0 execute_ex=0 handler=0
 binary_ZEND_MUL status=accepted result=9 calls=1 vm=0 execute_ex=0 handler=0
