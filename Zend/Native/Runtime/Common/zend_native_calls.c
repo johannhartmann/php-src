@@ -1478,7 +1478,7 @@ void zend_native_call_begin(
 				name != NULL && Z_TYPE_P(name) == IS_STRING
 				? zend_fetch_function(Z_STR_P(name)) : NULL;
 
-			if (resolved == NULL || resolved->type != ZEND_USER_FUNCTION) {
+			if (resolved == NULL) {
 				if (EG(exception) == NULL) {
 					zend_throw_error(NULL, "Call to undefined function %s()",
 						name != NULL && Z_TYPE_P(name) == IS_STRING
@@ -1487,7 +1487,8 @@ void zend_native_call_begin(
 				function = (zend_function *) &zend_pass_function;
 				break;
 			}
-			if (resolved != function) {
+			if (resolved->type == ZEND_USER_FUNCTION
+					&& resolved != function) {
 				cell = zend_native_reentry_find(
 					zend_native_active_reentry_scope, resolved);
 				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
@@ -3060,6 +3061,255 @@ zend_native_status zend_native_call_invoke_finish_source(
 		}
 	}
 	return status;
+}
+
+static bool zend_native_call_decode_source_operand(
+	uint64_t encoded, zend_mir_source_operand_ref *operand)
+{
+	if (operand == NULL) {
+		return false;
+	}
+	memset(operand, 0, sizeof(*operand));
+	operand->kind = (zend_mir_source_operand_kind)
+		(encoded & UINT64_C(0xff));
+	operand->slot_kind = (zend_mir_source_slot_kind)
+		((encoded >> 8) & UINT64_C(0xff));
+	operand->index = (uint32_t) (encoded >> 16);
+	operand->ssa_variable_id = ZEND_MIR_ID_INVALID;
+	return operand->kind <= ZEND_MIR_SOURCE_OPERAND_SSA;
+}
+
+static uint64_t zend_native_call_encode_source_operand(
+	const zend_mir_source_operand_ref *operand)
+{
+	return ((uint64_t) operand->kind & UINT64_C(0xff))
+		| (((uint64_t) operand->slot_kind & UINT64_C(0xff)) << 8)
+		| ((uint64_t) operand->index << 16);
+}
+
+static zend_native_entry_cell zend_native_call_fragment_seed(
+	zend_function *function)
+{
+	zend_native_entry_cell cell;
+
+	memset(&cell, 0, sizeof(cell));
+	cell.state = ZEND_NATIVE_ENTRY_READY;
+	cell.function = function != NULL
+		? function : (zend_function *) &zend_pass_function;
+	cell.code = (const zend_native_code *) (uintptr_t) 1;
+	return cell;
+}
+
+static zend_native_status zend_native_call_fragment_cleanup(
+	zend_execute_data *caller, zend_native_entry_cell *cell)
+{
+	zval discarded;
+	zend_native_status status;
+
+	if (caller == NULL || caller->call == NULL) {
+		return EG(exception) != NULL
+			? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
+	}
+	ZVAL_UNDEF(&discarded);
+	status = zend_native_call_invoke(caller, cell, &discarded);
+	if (!Z_ISUNDEF(discarded)) {
+		zval_ptr_dtor(&discarded);
+	}
+	return status == ZEND_NATIVE_BAILOUT
+		? ZEND_NATIVE_BAILOUT : ZEND_NATIVE_EXCEPTION;
+}
+
+zend_native_direct_call_result zend_native_call_fragment(
+	zend_execute_data *caller,
+	const zend_native_entry_cell *entry_cell,
+	const zend_native_internal_call_cell *internal_cell,
+	const zend_native_user_call_descriptor *descriptor,
+	uint32_t source_position)
+{
+	zend_native_direct_call_result result = {
+		.status = ZEND_NATIVE_EXCEPTION,
+		.payload = 0
+	};
+	zend_native_entry_cell seed;
+	zend_native_entry_cell *cell;
+	uint32_t index;
+
+	if (caller == NULL || descriptor == NULL || caller->func == NULL
+			|| !ZEND_USER_CODE(caller->func->type)
+			|| source_position >= caller->func->op_array.last
+			|| (entry_cell == NULL) == (internal_cell == NULL)) {
+		return result;
+	}
+	if (entry_cell != NULL) {
+		cell = (zend_native_entry_cell *) entry_cell;
+	} else {
+		seed = zend_native_call_fragment_seed(internal_cell->function);
+		cell = &seed;
+	}
+	if (source_position == descriptor->init_source_position) {
+		zend_native_call_begin(caller, cell, descriptor);
+		if (EG(exception) != NULL) {
+			result.status = zend_native_call_fragment_cleanup(caller, cell);
+			return result;
+		}
+		result.status = ZEND_NATIVE_RETURNED;
+		return result;
+	}
+	for (index = 0; index < descriptor->argument_count; index++) {
+		if (descriptor->arguments[index].source_position != source_position) {
+			continue;
+		}
+		if (zend_native_call_set_explicit_argument(
+				caller, &descriptor->arguments[index]) == FAILURE) {
+			if (EG(exception) == NULL) {
+				zend_throw_error(NULL,
+					"Invalid native call-fragment argument");
+			}
+			result.status = zend_native_call_fragment_cleanup(caller, cell);
+			return result;
+		}
+		result.status = ZEND_NATIVE_RETURNED;
+		return result;
+	}
+	if (source_position != descriptor->do_source_position) {
+		return result;
+	}
+	result.status = zend_native_call_invoke_finish_source(
+		caller, cell, descriptor);
+	if (result.status == ZEND_NATIVE_RETURNED
+			&& (descriptor->flags
+				& ZEND_NATIVE_USER_CALL_REQUIRE_SCALAR_RESULT) != 0) {
+		result.payload = zend_native_call_read_source_scalar(
+			caller,
+			zend_native_call_encode_source_operand(&descriptor->do_result),
+			descriptor->result_type);
+	}
+	return result;
+}
+
+zend_native_status zend_native_call_fragment_explicit(
+	zend_execute_data *caller,
+	uint32_t source_opcode,
+	uint64_t encoded_op1,
+	uint32_t op1_payload,
+	uint64_t encoded_op2,
+	uint32_t op2_payload,
+	uint64_t encoded_result,
+	uint32_t result_payload,
+	uint32_t extended_value,
+	uint32_t source_position)
+{
+	zend_native_user_call_descriptor descriptor;
+	zend_native_direct_internal_call_argument argument;
+	zend_native_entry_cell seed =
+		zend_native_call_fragment_seed((zend_function *) &zend_pass_function);
+	zend_native_status status;
+	bool init = false;
+	bool send = false;
+	bool finish = false;
+
+	if (caller == NULL || caller->func == NULL
+			|| !ZEND_USER_CODE(caller->func->type)
+			|| source_position >= caller->func->op_array.last) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	switch (source_opcode) {
+		case ZEND_INIT_FCALL:
+		case ZEND_INIT_FCALL_BY_NAME:
+		case ZEND_INIT_NS_FCALL_BY_NAME:
+		case ZEND_INIT_DYNAMIC_CALL:
+		case ZEND_INIT_USER_CALL:
+		case ZEND_INIT_METHOD_CALL:
+		case ZEND_INIT_STATIC_METHOD_CALL:
+		case ZEND_INIT_PARENT_PROPERTY_HOOK_CALL:
+		case ZEND_NEW:
+			init = true;
+			break;
+		case ZEND_SEND_VAL:
+		case ZEND_SEND_VAL_EX:
+		case ZEND_SEND_VAR:
+		case ZEND_SEND_VAR_EX:
+		case ZEND_SEND_REF:
+		case ZEND_SEND_UNPACK:
+		case ZEND_SEND_ARRAY:
+		case ZEND_SEND_USER:
+		case ZEND_SEND_FUNC_ARG:
+		case ZEND_SEND_VAR_NO_REF:
+		case ZEND_SEND_VAR_NO_REF_EX:
+		case ZEND_SEND_PLACEHOLDER:
+			send = true;
+			break;
+		case ZEND_DO_UCALL:
+		case ZEND_DO_FCALL:
+		case ZEND_DO_FCALL_BY_NAME:
+		case ZEND_DO_ICALL:
+		case ZEND_CALLABLE_CONVERT:
+		case ZEND_CALLABLE_CONVERT_PARTIAL:
+			finish = true;
+			break;
+		default:
+			return ZEND_NATIVE_EXCEPTION;
+	}
+	memset(&descriptor, 0, sizeof(descriptor));
+	if (!zend_native_call_decode_source_operand(
+			encoded_op1, &descriptor.init_op1)
+			|| !zend_native_call_decode_source_operand(
+				encoded_op2, &descriptor.init_op2)
+			|| !zend_native_call_decode_source_operand(
+				encoded_result, &descriptor.init_result)) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	if (init) {
+		descriptor.argument_count = extended_value;
+		descriptor.initial_argument_count = extended_value;
+		descriptor.init_source_position = source_position;
+		descriptor.init_opcode = source_opcode;
+		descriptor.init_op1_payload = op1_payload;
+		descriptor.init_op2_payload = op2_payload;
+		descriptor.init_result_payload = result_payload;
+		descriptor.init_extended_value = extended_value;
+		zend_native_call_begin(caller, &seed, &descriptor);
+		if (EG(exception) != NULL) {
+			return zend_native_call_fragment_cleanup(caller, &seed);
+		}
+		return ZEND_NATIVE_RETURNED;
+	}
+	if (send) {
+		memset(&argument, 0, sizeof(argument));
+		argument.ordinal = op2_payload != 0 ? op2_payload - 1 : 0;
+		argument.mode = source_opcode == ZEND_SEND_REF
+			? ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
+			: source_opcode == ZEND_SEND_PLACEHOLDER
+				? ZEND_NATIVE_CALL_ARGUMENT_PLACEHOLDER
+				: ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE;
+		argument.source_opcode = source_opcode;
+		argument.source_position = source_position;
+		argument.source_operand = descriptor.init_op1;
+		argument.auxiliary_operand = descriptor.init_op2;
+		argument.auxiliary_payload = op2_payload;
+		argument.result_payload = result_payload;
+		argument.extended_value = extended_value;
+		if (zend_native_call_set_explicit_argument(
+				caller, &argument) == SUCCESS) {
+			return ZEND_NATIVE_RETURNED;
+		}
+		if (EG(exception) == NULL) {
+			zend_throw_error(NULL, "Invalid native SEND fragment");
+		}
+		return zend_native_call_fragment_cleanup(caller, &seed);
+	}
+	descriptor.do_source_position = source_position;
+	descriptor.do_opcode = source_opcode;
+	descriptor.do_op1_payload = op1_payload;
+	descriptor.do_op2_payload = op2_payload;
+	descriptor.do_result_payload = result_payload;
+	descriptor.do_extended_value = extended_value;
+	descriptor.do_op1 = descriptor.init_op1;
+	descriptor.do_op2 = descriptor.init_op2;
+	descriptor.do_result = descriptor.init_result;
+	status = zend_native_call_invoke_finish_source(
+		caller, &seed, &descriptor);
+	return finish ? status : ZEND_NATIVE_EXCEPTION;
 }
 
 static void zend_native_echo_zval(

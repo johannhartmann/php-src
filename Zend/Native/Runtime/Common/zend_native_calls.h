@@ -361,6 +361,26 @@ zend_result zend_native_call_set_source_argument(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor,
 	uint32_t argument_index);
+zend_result zend_native_call_set_explicit_argument(
+	zend_execute_data *caller,
+	const zend_native_direct_internal_call_argument *argument);
+zend_native_direct_call_result zend_native_call_fragment(
+	zend_execute_data *caller,
+	const zend_native_entry_cell *entry_cell,
+	const zend_native_internal_call_cell *internal_cell,
+	const zend_native_user_call_descriptor *descriptor,
+	uint32_t source_position);
+zend_native_status zend_native_call_fragment_explicit(
+	zend_execute_data *caller,
+	uint32_t source_opcode,
+	uint64_t encoded_op1,
+	uint32_t op1_payload,
+	uint64_t encoded_op2,
+	uint32_t op2_payload,
+	uint64_t encoded_result,
+	uint32_t result_payload,
+	uint32_t extended_value,
+	uint32_t source_position);
 zend_native_status zend_native_internal_call_invoke_finish(
 	zend_execute_data *caller,
 	const zend_native_internal_call_cell *cell,

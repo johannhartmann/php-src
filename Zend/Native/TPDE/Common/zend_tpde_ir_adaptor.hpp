@@ -65,6 +65,7 @@ public:
 		UserOpcodeLanding,
 		UserOpcodeGateway,
 		UserOpcodeDispatch,
+		UserOpcodeCallFragment,
 		GeneratorGateway,
 		GeneratorResume,
 		FrameSlotAddress,
@@ -862,6 +863,57 @@ public:
 				0,
 				0,
 				false});
+			for (uint32_t instruction_index = 0;
+					instruction_index < plan_->instruction_count;
+					++instruction_index) {
+				const zend_tpde_instruction &instruction =
+					plan_->instructions[instruction_index];
+				if (!instruction.user_opcode_call_fragments
+						|| instruction.user_call == nullptr) {
+					continue;
+				}
+				const zend_native_user_call_descriptor *descriptor =
+					instruction.user_call;
+				bool fragment =
+					source_position == descriptor->init_source_position
+					|| source_position == descriptor->do_source_position;
+				for (uint32_t argument = 0;
+						!fragment && argument < descriptor->argument_count;
+						++argument) {
+					fragment = source_position
+						== descriptor->arguments[argument].source_position;
+				}
+				if (!fragment) {
+					continue;
+				}
+				const bool finish =
+					source_position == descriptor->do_source_position;
+				const zend_mir_instruction_record record =
+					instruction_record_at(instruction_index);
+				const IRValueRef result = finish
+					? value_ref(record.result_id) : INVALID_VALUE_REF;
+				const int32_t result_index = finish
+					? zend_tpde_value_index(plan_, record.result_id) : -1;
+				const bool machine_result = result != INVALID_VALUE_REF
+					&& result_index >= 0
+					&& zend_mir_scalar_type_is_exact(exact_type(result))
+					&& exact_type(result) != ZEND_MIR_SCALAR_TYPE_NULL
+					&& machine_value_used[
+						static_cast<uint32_t>(result_index)] != 0;
+				const uint32_t operand_offset =
+					static_cast<uint32_t>(operands_.size());
+				operands_.push_back(IRValueRef{FRAME_VALUE});
+				add_node(block_instructions, block, InstNode{
+					InstKind::UserOpcodeCallFragment,
+					instruction_index,
+					source_position,
+					result,
+					{},
+					operand_offset,
+					1,
+					machine_result});
+				break;
+			}
 		};
 
 		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
@@ -988,6 +1040,12 @@ public:
 							0,
 							false});
 				}
+			}
+			if ((record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
+						|| record.opcode
+							== ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL)
+					&& instruction.user_opcode_call_fragments) {
+				continue;
 			}
 			IRValueRef result = value_ref(record.result_id);
 			if (record.opcode == ZEND_MIR_OPCODE_CONSTANT) {

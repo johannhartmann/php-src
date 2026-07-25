@@ -718,7 +718,7 @@ static zend_result zend_native_call_send_array(
 	return EG(exception) == NULL ? SUCCESS : FAILURE;
 }
 
-static zend_result zend_native_call_set_explicit_argument(
+zend_result zend_native_call_set_explicit_argument(
 	zend_execute_data *caller,
 	const zend_native_direct_internal_call_argument *argument)
 {
