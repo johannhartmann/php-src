@@ -92,7 +92,8 @@ jobs:
               ext/native_mir_test/tests/w08_*.phpt \
               ext/native_mir_test/tests/w09_*.phpt \
               ext/native_mir_test/tests/w10_*.phpt \
-              ext/native_mir_test/tests/w11_*.phpt
+              ext/native_mir_test/tests/w11_*.phpt \
+              ext/native_mir_test/tests/w11p_*.phpt
       - name: Verify native baseline performance
         if: matrix.profile == 'darwin-arm64-native-release-nts'
         run: |
@@ -175,7 +176,8 @@ jobs:
               ext/native_mir_test/tests/w08_*.phpt \
               ext/native_mir_test/tests/w09_*.phpt \
               ext/native_mir_test/tests/w10_*.phpt \
-              ext/native_mir_test/tests/w11_*.phpt
+              ext/native_mir_test/tests/w11_*.phpt \
+              ext/native_mir_test/tests/w11p_*.phpt
           if [[ "$profile" == linux-amd64-native-debug-nts ]]; then
             scripts/native/test-w08-linux-runtime.sh \
               --candidate "$candidate" \
