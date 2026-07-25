@@ -377,6 +377,69 @@ zend_native_entry_cell *zend_native_reentry_resolve(
 		zend_native_active_reentry_scope, function);
 }
 
+uint64_t zend_native_user_opcode_invoke(
+	zend_execute_data *execute_data,
+	zend_native_execution_context *context,
+	uint32_t source_position_id)
+{
+	user_opcode_handler_t handler;
+	zend_execute_data *entered;
+	zend_native_entry_cell *cell;
+	zend_native_status status;
+	int action;
+
+	if (execute_data == NULL || context == NULL || execute_data->func == NULL
+			|| !ZEND_USER_CODE(execute_data->func->type)
+			|| source_position_id >= execute_data->func->op_array.last) {
+		return UINT32_MAX;
+	}
+	execute_data->opline =
+		&execute_data->func->op_array.opcodes[source_position_id];
+	handler = zend_get_user_opcode_handler(execute_data->opline->opcode);
+	if (handler == NULL) {
+		return ZEND_USER_OPCODE_DISPATCH;
+	}
+	EG(current_execute_data) = execute_data;
+	action = handler(execute_data);
+	if (EG(exception) != NULL) {
+		EG(current_execute_data) = execute_data;
+		return UINT32_MAX;
+	}
+	if (action != ZEND_USER_OPCODE_ENTER) {
+		return (uint32_t) action;
+	}
+
+	/*
+	 * ENTER changes the active Zend frame. Resolve that frame through the
+	 * process-local native entry registry and execute its published native
+	 * body; no VM executor or opline handler participates.
+	 */
+	entered = EG(current_execute_data);
+	if (entered == NULL || entered == execute_data
+			|| (cell = zend_native_reentry_resolve(entered->func)) == NULL
+			|| cell->state != ZEND_NATIVE_ENTRY_READY || cell->code == NULL) {
+		EG(current_execute_data) = execute_data;
+		zend_throw_error(NULL,
+			"User opcode ENTER target has no published native entry");
+		return UINT32_MAX;
+	}
+	if (cell->frame_probe != NULL) {
+		cell->frame_probe(
+			cell->frame_probe_context, execute_data, entered);
+	}
+	cell->active_calls++;
+	status = zend_native_execute_observed_frame(cell->code, entered, NULL);
+	cell->active_calls--;
+	EG(current_execute_data) = execute_data;
+	if (status == ZEND_NATIVE_BAILOUT) {
+		zend_bailout();
+	}
+	if (status == ZEND_NATIVE_EXCEPTION || EG(exception) != NULL) {
+		return UINT32_MAX;
+	}
+	return ZEND_USER_OPCODE_CONTINUE;
+}
+
 static void zend_native_reentry_execute_ex(zend_execute_data *execute_data)
 {
 	zend_native_reentry_scope *scope = zend_native_active_reentry_scope;

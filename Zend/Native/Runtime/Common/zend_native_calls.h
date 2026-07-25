@@ -255,6 +255,10 @@ zend_result zend_native_reentry_scope_enter_resolver(
 void zend_native_reentry_scope_leave(zend_native_reentry_scope *scope);
 zend_native_entry_cell *zend_native_reentry_resolve(
 	zend_function *function);
+uint64_t zend_native_user_opcode_invoke(
+	zend_execute_data *execute_data,
+	zend_native_execution_context *context,
+	uint32_t source_position_id);
 zend_result zend_native_frame_prepare(zend_execute_data *execute_data);
 zend_native_status zend_native_call_frameless_internal(
 	zend_execute_data *execute_data,

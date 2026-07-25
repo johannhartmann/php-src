@@ -3,6 +3,7 @@
 
 #include "Zend/Native/TPDE/Common/zend_tpde_internal.hpp"
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
+#include "Zend/Optimizer/zend_ssa.h"
 
 #include <tpde/IRAdaptor.hpp>
 #include <tpde/ValLocalIdx.hpp>
@@ -61,6 +62,8 @@ public:
 	enum class InstKind : uint8_t {
 		LoadFrame,
 		LoadExecutionContext,
+		UserOpcodeLanding,
+		UserOpcodeGateway,
 		GeneratorGateway,
 		GeneratorResume,
 		FrameSlotAddress,
@@ -177,6 +180,7 @@ private:
 	std::vector<ArgumentGuard> argument_guards_;
 	std::vector<uint32_t> generator_resume_targets_;
 	std::vector<uint32_t> generator_resume_landings_;
+	std::vector<uint32_t> user_opcode_next_landings_;
 	bool valid_ = true;
 
 	int32_t block_index(zend_mir_block_id id) const {
@@ -385,6 +389,9 @@ public:
 		std::vector<uint32_t> finally_return_blocks;
 		std::vector<IRBlockRef> finally_targets;
 		std::vector<uint8_t> generator_resume_emitted;
+		std::vector<uint8_t> source_landing_emitted;
+		std::vector<uint32_t> source_landing_blocks;
+		std::vector<uint32_t> source_block_next;
 
 		blocks_.reserve(plan_->block_count);
 		block_successors.reserve(plan_->block_count * 2);
@@ -510,6 +517,80 @@ public:
 		}
 		generator_resume_emitted.resize(
 			generator_resume_targets_.size(), 0);
+		if (plan_->user_opcode_callbacks && plan_->source_op_array != nullptr) {
+			source_landing_emitted.resize(plan_->source_op_array->last, 0);
+			source_landing_blocks.resize(
+				plan_->source_op_array->last, UINT32_MAX);
+			user_opcode_next_landings_.resize(
+				plan_->source_op_array->last, UINT32_MAX);
+			if (plan_->source_ssa == nullptr
+					|| plan_->source_ssa->cfg.blocks == nullptr
+					|| plan_->source_ssa->cfg.map == nullptr) {
+				valid_ = false;
+			} else {
+				const zend_cfg &cfg = plan_->source_ssa->cfg;
+				std::vector<uint32_t> source_block_to_mir(
+					cfg.blocks_count, UINT32_MAX);
+				source_block_next.resize(cfg.blocks_count, UINT32_MAX);
+				for (uint32_t instruction = 0;
+						instruction < plan_->instruction_count;
+						++instruction) {
+					const zend_mir_instruction_record record =
+						instruction_record_at(instruction);
+					if (record.source_position_id
+							>= plan_->source_op_array->last) {
+						continue;
+					}
+					const uint32_t source_block =
+						cfg.map[record.source_position_id];
+					const int32_t mir_block =
+						block_index(record.block_id);
+					if (source_block >= cfg.blocks_count
+							|| mir_block < 0
+							|| (source_block_to_mir[source_block]
+									!= UINT32_MAX
+								&& source_block_to_mir[source_block]
+									!= static_cast<uint32_t>(mir_block))) {
+						valid_ = false;
+						continue;
+					}
+					source_block_to_mir[source_block] =
+						static_cast<uint32_t>(mir_block);
+				}
+				for (uint32_t source_block = 0;
+						source_block < cfg.blocks_count; ++source_block) {
+					const zend_basic_block &block =
+						cfg.blocks[source_block];
+					if ((block.flags & ZEND_BB_REACHABLE) == 0
+							|| block.start > plan_->source_op_array->last
+							|| block.len
+								> plan_->source_op_array->last - block.start) {
+						continue;
+					}
+					source_block_next[source_block] = block.start;
+					if (source_block_to_mir[source_block] == UINT32_MAX) {
+						valid_ = false;
+						continue;
+					}
+					for (uint32_t source = block.start;
+							source < block.start + block.len; ++source) {
+						if (plan_->source_op_array->opcodes[source].opcode
+								!= ZEND_OP_DATA) {
+							source_landing_blocks[source] =
+								source_block_to_mir[source_block];
+						}
+					}
+				}
+			}
+			uint32_t next = UINT32_MAX;
+			for (uint32_t source = plan_->source_op_array->last;
+					source-- > 0;) {
+				if (source_landing_blocks[source] != UINT32_MAX) {
+					next = source;
+				}
+				user_opcode_next_landings_[source] = next;
+			}
+		}
 		for (uint32_t return_block : finally_return_blocks) {
 			for (IRBlockRef target : finally_targets) {
 				block_successors.push_back({return_block, target});
@@ -650,6 +731,43 @@ public:
 				machine_value_used[static_cast<uint32_t>(index)] = 1;
 			}
 		};
+		auto emit_user_opcode_landing = [&](uint32_t block,
+				uint32_t source_position) {
+			if (source_position >= source_landing_emitted.size()
+					|| source_landing_emitted[source_position] != 0
+					|| source_landing_blocks[source_position] != block) {
+				return;
+			}
+			source_landing_emitted[source_position] = 1;
+			add_node(block_instructions, block, InstNode{
+				InstKind::UserOpcodeLanding,
+				UINT32_MAX,
+				source_position,
+				INVALID_VALUE_REF,
+				{},
+				0,
+				0,
+				false});
+			if (zend_get_user_opcode_handler(
+					plan_->source_op_array->opcodes[
+						source_position].opcode) == nullptr) {
+				return;
+			}
+			const uint32_t operand_offset =
+				static_cast<uint32_t>(operands_.size());
+			operands_.push_back(IRValueRef{FRAME_VALUE});
+			operands_.push_back(IRValueRef{EXECUTION_CONTEXT_VALUE});
+			add_node(block_instructions, block, InstNode{
+				InstKind::UserOpcodeGateway,
+				UINT32_MAX,
+				source_position,
+				INVALID_VALUE_REF,
+				{},
+				operand_offset,
+				2,
+				false});
+		};
+
 		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
 			const zend_tpde_instruction &instruction = plan_->instructions[i];
 			const zend_mir_instruction_record record =
@@ -736,6 +854,25 @@ public:
 			if (block < 0) {
 				valid_ = false;
 				continue;
+			}
+			if (plan_->user_opcode_callbacks && plan_->source_ssa != nullptr
+					&& record.source_position_id
+						< plan_->source_op_array->last) {
+				const uint32_t source_block =
+					plan_->source_ssa->cfg.map[
+						record.source_position_id];
+				if (source_block < source_block_next.size()) {
+					const zend_basic_block &source =
+						plan_->source_ssa->cfg.blocks[source_block];
+					uint32_t &next_source =
+						source_block_next[source_block];
+					while (next_source != UINT32_MAX
+							&& next_source <= record.source_position_id
+							&& next_source < source.start + source.len) {
+						emit_user_opcode_landing(
+							static_cast<uint32_t>(block), next_source++);
+					}
+				}
 			}
 			for (uint32_t resume_index = 0;
 					resume_index < generator_resume_landings_.size();
@@ -1161,6 +1298,25 @@ public:
 					static_cast<int32_t>(value_index);
 			}
 		}
+		if (plan_->user_opcode_callbacks && plan_->source_ssa != nullptr) {
+			for (uint32_t source_block = 0;
+					source_block < source_block_next.size(); ++source_block) {
+				uint32_t &next_source = source_block_next[source_block];
+				if (next_source == UINT32_MAX) {
+					continue;
+				}
+				const zend_basic_block &source =
+					plan_->source_ssa->cfg.blocks[source_block];
+				while (next_source < source.start + source.len) {
+					const uint32_t block =
+						source_landing_blocks[next_source];
+					if (block != UINT32_MAX) {
+						emit_user_opcode_landing(block, next_source);
+					}
+					++next_source;
+				}
+			}
+		}
 		auto argument_machine_value_used = [&](uint32_t argument_index) {
 			if (argument_index >= argument_value_indices.size()
 					|| argument_value_indices[argument_index] < 0) {
@@ -1233,6 +1389,9 @@ public:
 	}
 	std::span<const ArgumentGuard> argument_guards() const {
 		return argument_guards_;
+	}
+	std::span<const uint32_t> user_opcode_next_landings() const {
+		return user_opcode_next_landings_;
 	}
 	std::span<const uint32_t> generator_resume_targets() const {
 		return generator_resume_targets_;
