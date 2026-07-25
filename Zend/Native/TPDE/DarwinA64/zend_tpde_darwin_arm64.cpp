@@ -5306,15 +5306,18 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					auto descriptor_reg = descriptor_scratch.cur_reg();
 					ScratchReg first{this};
 					ScratchReg second{this};
+					ScratchReg published_code{this};
 					auto first_reg = first.alloc_gp();
 					auto second_reg = second.alloc_gp();
+					auto published_code_reg = published_code.alloc_gp();
 					std::optional<ScratchReg> run_time_cache;
 
-					load_off(first_reg, cell_reg,
+					add_offset(published_code_reg, cell_reg,
 						static_cast<uint32_t>(
-							offsetof(zend_native_entry_cell, state)), 4);
-					ASM(CMPxi, first_reg, ZEND_NATIVE_ENTRY_READY);
-					generate_raw_jump(Jump::Jne, slow_path);
+							offsetof(zend_native_entry_cell, code)));
+					ASM(LDARx, published_code_reg, published_code_reg);
+					ASM(CMPxi, published_code_reg, 0);
+					generate_raw_jump(Jump::Jeq, slow_path);
 					load_off(first_reg, cell_reg,
 						static_cast<uint32_t>(
 							offsetof(zend_native_entry_cell, function)), 8);
@@ -5324,12 +5327,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 							expected_function)), 8);
 					ASM(CMPx, first_reg, second_reg);
 					generate_raw_jump(Jump::Jne, slow_path);
-					load_off(second_reg, cell_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_native_entry_cell, code)), 8);
-					ASM(CMPxi, second_reg, 0);
-					generate_raw_jump(Jump::Jeq, slow_path);
-					load_off(first_reg, second_reg,
+					load_off(first_reg, published_code_reg,
 						static_cast<uint32_t>(
 							offsetof(zend_native_code, executable)), 1);
 					ASM(CMPxi, first_reg, 1);
@@ -5941,6 +5939,10 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 						cell_reg, 8);
 					store_off(second_reg,
 						static_cast<uint32_t>(offsetof(
+							zend_native_direct_activation, code)),
+						published_code_reg, 8);
+					store_off(second_reg,
+						static_cast<uint32_t>(offsetof(
 							zend_native_direct_activation, descriptor)),
 						descriptor_reg, 8);
 					load_off(first_reg, context_reg,
@@ -6023,18 +6025,9 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					ValuePart callee_value{DarwinConfig::GP_BANK, 8};
 					callee_value.set_value(
 						this, std::move(callee_address));
-					auto entry_image = image_symbol_value(
-						ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
-						call.call_site.target_id);
-					auto entry_cell =
-						std::move(entry_image).into_scratch(this);
-					auto entry_cell_reg = entry_cell.cur_reg();
 					ScratchReg entry_argument{this};
 					auto entry_argument_reg = entry_argument.alloc_gp();
-					load_off(entry_argument_reg, entry_cell_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_native_entry_cell, code)), 8);
-					load_off(entry_argument_reg, entry_argument_reg,
+					load_off(entry_argument_reg, published_code_reg,
 						static_cast<uint32_t>(
 							offsetof(zend_native_code, entry)), 8);
 					ValuePart entry_value{DarwinConfig::GP_BANK, 8};
@@ -6043,7 +6036,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					context_scratch.reset();
 					cell_scratch.reset();
 					descriptor_scratch.reset();
-					entry_cell.reset();
+					published_code.reset();
 					zend::native::tpde::CCAssignerAppleA64 fast_assigner;
 					CallBuilder fast_builder{*this, fast_assigner};
 					fast_builder.add_arg(
