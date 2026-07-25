@@ -928,6 +928,7 @@ zend_mir_lowering_status zend_mir_zend_source_init_w11_direct(
 	candidate.w08 = true;
 	candidate.w09 = true;
 	candidate.w10 = true;
+	candidate.w11 = true;
 	candidate.initialized = ZEND_MIR_ZEND_SOURCE_MAGIC;
 	if (!zend_mir_frontend_build_phi_index(&candidate, NULL, NULL)) {
 		zend_mir_frontend_set_diagnostic(
@@ -1870,7 +1871,8 @@ zend_function *zend_mir_zend_source_resolve_internal_call(
 
 static const zend_class_entry *
 zend_mir_zend_source_receiver_class_from_ssa(
-	const zend_op_array *op_array, const zend_ssa *ssa,
+	const zend_script *script, const zend_op_array *op_array,
+	const zend_ssa *ssa,
 	int receiver_ssa, bool *exact_receiver)
 {
 	int current = receiver_ssa;
@@ -1904,6 +1906,17 @@ zend_mir_zend_source_receiver_class_from_ssa(
 			*exact_receiver = op_array->scope != NULL
 				&& (op_array->scope->ce_flags & ZEND_ACC_FINAL) != 0;
 			return op_array->scope;
+		}
+		if (definition_opline->opcode == ZEND_NEW) {
+			const zend_class_entry *receiver_class =
+				zend_optimizer_get_class_entry_from_op1(
+					script, op_array, definition_opline);
+
+			if (receiver_class == NULL) {
+				return NULL;
+			}
+			*exact_receiver = true;
+			return receiver_class;
 		}
 		switch (definition_opline->opcode) {
 			case ZEND_ASSIGN:
@@ -2014,7 +2027,7 @@ static zend_function *zend_mir_zend_source_resolve_user_method_call_ex(
 			return NULL;
 		}
 		receiver_class = zend_mir_zend_source_receiver_class_from_ssa(
-			op_array, ssa, receiver_ssa, &exact_receiver);
+			script, op_array, ssa, receiver_ssa, &exact_receiver);
 		/* Enum cases are represented as class constants.  The optimizer keeps
 		 * their result type deliberately broad, so recover the exact final enum
 		 * class from the source definition instead of persisting a class pointer

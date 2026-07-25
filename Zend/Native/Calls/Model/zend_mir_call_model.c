@@ -265,12 +265,34 @@ static bool zend_mir_w05_argument_value(
 	zend_mir_value_id *out)
 {
 	zend_mir_value_fact_ref fact;
+	zend_mir_source_literal_ref literal;
 	zend_mir_value_id value;
 
 	if (argument->value_ssa_variable_id != ZEND_MIR_ID_INVALID) {
 		value = zend_mir_value_from_original_ssa(
 			argument->value_ssa_variable_id);
+	} else if (zend_mir_id_is_valid(
+			argument->source_operand.ssa_variable_id)) {
+		value = zend_mir_value_from_original_ssa(
+			argument->source_operand.ssa_variable_id);
 	} else if (argument->source_operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+		/*
+		 * Synthetic value IDs are not literal identities: literal zero and
+		 * the synthetic NULL constant intentionally occupy the same numeric
+		 * payload space.  Only expose a literal as a machine scalar when the
+		 * source view itself proves that it is one of the canonical
+		 * non-refcounted scalar kinds.  Boxed strings, arrays and constant
+		 * ASTs remain source-zval arguments.
+		 */
+		if (context->source == NULL
+				|| context->source->literal_at == NULL
+				|| !context->source->literal_at(
+					context->source->context,
+					argument->source_operand.index, &literal)
+				|| (literal.flags
+					& ZEND_MIR_SOURCE_LITERAL_CANONICAL_SCALAR) == 0) {
+			return false;
+		}
 		value = zend_mir_value_from_synthetic(argument->source_operand.index);
 	} else {
 		return false;
@@ -755,8 +777,9 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 				|| plan->arguments[index].flags != 0
 				|| zend_mir_id_is_valid(
 					plan->arguments[index].name_symbol_id)
-				|| (!w08_execution && !zend_mir_w05_argument_value(context,
+				|| (!zend_mir_w05_argument_value(context,
 						&plan->arguments[index], &plan->values[index])
+					&& !w08_execution
 					&& (!allow_w06_scalar_proxy
 						|| plan->arguments[index].source_operand.kind
 							!= ZEND_MIR_SOURCE_OPERAND_LITERAL
@@ -881,11 +904,17 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 				return ZEND_MIRL_W05_UNSUPPORTED_RESULT;
 			}
 		} else if (w09_execution) {
-			/* W09 keeps arbitrary user-call results in the canonical source
-			 * zval slot. Exact scalar results may still be projected later by a
-			 * source-backed consumer; the call instruction itself has no machine
-			 * result in this mode. */
-			plan->results[index] = ZEND_MIR_ID_INVALID;
+			/*
+			 * W09 keeps arbitrary user-call results in the canonical source
+			 * zval slot. W11's scalar overlay is different: an exact declared
+			 * result consumed by scalar SSA is the machine result of the call
+			 * instruction itself.
+			 */
+			if (!context->zend_source->w11
+					|| !zend_mir_w05_result_value(
+						context, site, &plan->results[index])) {
+				plan->results[index] = ZEND_MIR_ID_INVALID;
+			}
 		} else if (!zend_mir_w05_result_value(
 				context, site, &plan->results[index])) {
 			return ZEND_MIRL_W05_UNSUPPORTED_RESULT;
@@ -911,8 +940,7 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 				return ZEND_MIRL_W05_MALFORMED_CALL_SEQUENCE;
 			}
 			if (plan->targets[site->target_id].kind
-					== ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL
-					&& !w09_execution) {
+					== ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL) {
 				zend_mir_source_parameter_mode parameter_mode;
 				if (!zend_mir_w08_target_parameter_mode_at(
 						calls, &plan->targets[site->target_id],
@@ -921,7 +949,8 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 								== ZEND_MIR_SOURCE_PARAMETER_BY_REFERENCE
 							&& argument->source_operand.kind
 								== ZEND_MIR_SOURCE_OPERAND_LITERAL)
-						|| (parameter_mode
+						|| (!w09_execution
+							&& parameter_mode
 								== ZEND_MIR_SOURCE_PARAMETER_BY_VALUE
 							&& argument->mode
 								!= ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE)) {
@@ -932,13 +961,30 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 					parameter_mode == ZEND_MIR_SOURCE_PARAMETER_BY_REFERENCE
 						? ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
 						: ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE;
-			} else if (w09_execution) {
-				plan->ownerships[
+				plan->values[
 					site->argument_span.offset + argument_index] =
-					argument->mode
-						== ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_REFERENCE
-					? ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
-					: ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE;
+					ZEND_MIR_ID_INVALID;
+			} else if (w09_execution) {
+				uint32_t plan_argument_index =
+					site->argument_span.offset + argument_index;
+				bool borrowed_scalar =
+					plan->targets[site->target_id].kind
+						== ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
+					&& context->zend_source->w11
+					&& argument->mode
+						== ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE
+					&& zend_mir_id_is_valid(
+						plan->values[plan_argument_index]);
+
+				plan->ownerships[plan_argument_index] = borrowed_scalar
+					? ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR
+					: argument->mode
+							== ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_REFERENCE
+						? ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
+						: ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE;
+				if (!borrowed_scalar) {
+					plan->values[plan_argument_index] = ZEND_MIR_ID_INVALID;
+				}
 			}
 		}
 		if (!zend_mir_w05_source_block_to_mir(
@@ -2581,8 +2627,10 @@ static bool zend_mir_verify_w08_calls(
 		zend_mir_call_target_ref target;
 		zend_mir_instruction_record instruction;
 		zend_mir_frame_state_ref frame;
-		zend_mir_representation internal_result_representation;
+		zend_mir_representation result_representation;
 		bool internal;
+		bool scalar_arguments;
+		uint32_t expected_operand_count;
 		uint32_t argument_index;
 		uint32_t continuation_index;
 
@@ -2599,11 +2647,26 @@ static bool zend_mir_verify_w08_calls(
 			goto failure;
 		}
 		internal = target.kind == ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL;
-		internal_result_representation = ZEND_MIR_REPRESENTATION_VOID;
+		scalar_arguments = !internal;
+		for (argument_index = 0;
+			scalar_arguments && argument_index < site.arguments.count;
+			argument_index++) {
+			zend_mir_call_argument_ref argument;
+			if (!calls->call_argument_at(calls->context,
+					site.arguments.offset + argument_index, &argument)
+					|| argument.ownership
+						!= ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR) {
+				scalar_arguments = false;
+			}
+		}
+		expected_operand_count = scalar_arguments
+			? site.arguments.count : 0;
+		result_representation = ZEND_MIR_REPRESENTATION_VOID;
 		if ((internal || w09_execution)
 				&& (view->instruction_operand_count(
-						view->context, instruction.id) != 0
-					|| (internal && zend_mir_id_is_valid(site.result_id)
+						view->context, instruction.id)
+						!= expected_operand_count
+					|| (zend_mir_id_is_valid(site.result_id)
 						? (!zend_mir_id_is_valid(
 								source.result_ssa_variable_id)
 							|| site.result_id != zend_mir_value_from_original_ssa(
@@ -2611,12 +2674,20 @@ static bool zend_mir_verify_w08_calls(
 							|| instruction.result_id != site.result_id
 							|| !zend_mir_w05_verify_scalar_result(
 								view, site.result_id,
-								&internal_result_representation)
+								&result_representation)
 							|| instruction.representation
-								!= internal_result_representation)
+								!= result_representation)
 						: (zend_mir_id_is_valid(instruction.result_id)
 							|| instruction.representation
 								!= ZEND_MIR_REPRESENTATION_VOID)))) {
+			fprintf(stderr,
+				"w08 verify site=%u target=%u internal=%u operands=%u expected=%u site_result=%u source_result=%u inst_result=%u inst_rep=%u\\n",
+				index, site.target_id, internal,
+				view->instruction_operand_count(
+					view->context, instruction.id),
+				expected_operand_count, site.result_id,
+				source.result_ssa_variable_id, instruction.result_id,
+				instruction.representation);
 			goto failure;
 		}
 		if (site.id != index || site.source_call_site_id != source.id
@@ -2638,12 +2709,12 @@ static bool zend_mir_verify_w08_calls(
 						view->context, instruction.id) != site.arguments.count)
 				|| !view->frame_state_at(view->context,
 					site.caller_frame.frame_state_id, &frame)
-				|| !zend_mir_w05_verify_frame_shape(
+					|| !zend_mir_w05_verify_frame_shape(
 					&frame, &site.caller_frame, ZEND_MIR_ID_INVALID,
 					source.do_opline_index,
 					internal ? ZEND_MIR_SAFEPOINT_CLASS_INTERNAL_CALL
 						: ZEND_MIR_SAFEPOINT_CLASS_USER_CALL)
-				|| instruction.frame_state_id != frame.id) {
+					|| instruction.frame_state_id != frame.id) {
 			goto failure;
 		}
 		for (argument_index = 0;
@@ -2677,7 +2748,8 @@ static bool zend_mir_verify_w08_calls(
 			if (internal || w09_execution) {
 				zend_mir_source_parameter_mode parameter_mode;
 				zend_mir_call_argument_ownership expected;
-				if (internal && !w09_execution) {
+				bool borrowed_scalar;
+				if (internal) {
 					if (!zend_mir_w08_target_parameter_mode_at(source_calls,
 							&source_target, argument_index, &parameter_mode)) {
 						goto failure;
@@ -2692,14 +2764,29 @@ static bool zend_mir_verify_w08_calls(
 						== ZEND_MIR_SOURCE_PARAMETER_BY_REFERENCE
 					? ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
 					: ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE;
-				if (argument.ownership != expected
-						|| zend_mir_id_is_valid(argument.value_id)
+				borrowed_scalar = w09_execution && !internal
+					&& parameter_mode
+						== ZEND_MIR_SOURCE_PARAMETER_BY_VALUE
+					&& argument.ownership
+						== ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR;
+				if ((!borrowed_scalar && argument.ownership != expected)
+						|| (borrowed_scalar
+							? !zend_mir_id_is_valid(argument.value_id)
+							: zend_mir_id_is_valid(argument.value_id))
 						|| caller_slot.materialization
-							!= ZEND_MIR_MATERIALIZATION_SOURCE_ZVAL
+							!= (borrowed_scalar
+								? ZEND_MIR_MATERIALIZATION_MATERIALIZED
+								: ZEND_MIR_MATERIALIZATION_SOURCE_ZVAL)
+						|| caller_slot.ownership
+							!= ZEND_MIR_FRAME_SLOT_OWNERSHIP_CALLER_OWNED
 						|| callee_slot.materialization
-							!= ZEND_MIR_MATERIALIZATION_SOURCE_ZVAL
+							!= (borrowed_scalar
+								? ZEND_MIR_MATERIALIZATION_MATERIALIZED
+								: ZEND_MIR_MATERIALIZATION_SOURCE_ZVAL)
 						|| callee_slot.ownership
-							!= ZEND_MIR_FRAME_SLOT_OWNERSHIP_FRAME_OWNED) {
+							!= (borrowed_scalar
+								? ZEND_MIR_FRAME_SLOT_OWNERSHIP_BORROWED
+								: ZEND_MIR_FRAME_SLOT_OWNERSHIP_FRAME_OWNED)) {
 					goto failure;
 				}
 			} else if (argument.ownership

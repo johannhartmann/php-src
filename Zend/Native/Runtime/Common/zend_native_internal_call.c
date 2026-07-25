@@ -7,6 +7,7 @@
 #include "Zend/zend_execute.h"
 #include "Zend/zend_observer.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 typedef struct _zend_native_internal_execution_state {
@@ -1165,6 +1166,8 @@ zend_native_direct_call_result zend_native_internal_call_direct(
 		status = ZEND_NATIVE_BAILOUT;
 	}
 	if (status == ZEND_NATIVE_RETURNED
+			&& (descriptor->flags
+				& ZEND_NATIVE_DIRECT_INTERNAL_CALL_REQUIRE_SCALAR_RESULT) != 0
 			&& descriptor->result_type != ZEND_MIR_SCALAR_TYPE_NONE
 			&& !zend_native_internal_scalar_payload(
 				return_value, descriptor->result_type, &result.payload)) {
@@ -1285,44 +1288,57 @@ mismatch:
 }
 
 zend_native_status zend_native_return_source_zval(
-	zend_execute_data *execute_data, uint32_t return_opline_index)
+	zend_execute_data *execute_data,
+	uint32_t source_position,
+	uint64_t encoded_operand,
+	uint32_t source_opcode,
+	uint32_t extended_value)
 {
-	const zend_op *opline;
+	zend_mir_source_operand_ref operand;
+	bool mutable_value;
+	uint8_t operand_type;
 	zval *source;
 	zval *source_slot;
 	zval *return_value;
 
 	if (execute_data == NULL || execute_data->func == NULL
 			|| !ZEND_USER_CODE(execute_data->func->type)
-			|| return_opline_index >= execute_data->func->op_array.last) {
+			|| source_position >= execute_data->func->op_array.last
+			|| (source_opcode != ZEND_RETURN
+				&& source_opcode != ZEND_RETURN_BY_REF)) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	opline = &execute_data->func->op_array.opcodes[return_opline_index];
-	if ((opline->opcode != ZEND_RETURN
-			&& opline->opcode != ZEND_RETURN_BY_REF)
-			|| (opline->op1_type != IS_CONST && opline->op1_type != IS_CV
-				&& opline->op1_type != IS_TMP_VAR
-				&& opline->op1_type != IS_VAR)) {
+	memset(&operand, 0, sizeof(operand));
+	operand.kind = (zend_mir_source_operand_kind)
+		(encoded_operand & UINT64_C(0xff));
+	operand.slot_kind = (zend_mir_source_slot_kind)
+		((encoded_operand >> 8) & UINT64_C(0xff));
+	operand.index = (uint32_t) (encoded_operand >> 16);
+	operand.ssa_variable_id = ZEND_MIR_ID_INVALID;
+	source_slot = zend_native_explicit_operand(
+		execute_data, &operand, true, &mutable_value, &operand_type);
+	if (source_slot == NULL
+			|| (operand_type != IS_CONST && operand_type != IS_CV
+				&& operand_type != IS_TMP_VAR
+				&& operand_type != IS_VAR)) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	execute_data->opline = opline;
-	source_slot = opline->op1_type == IS_CONST
-		? RT_CONSTANT(opline, opline->op1)
-		: ZEND_CALL_VAR(execute_data, opline->op1.var);
+	execute_data->opline =
+		&execute_data->func->op_array.opcodes[source_position];
 	source = source_slot;
 	return_value = execute_data->return_value;
-	if (opline->opcode == ZEND_RETURN_BY_REF) {
-		bool temporary = opline->op1_type == IS_TMP_VAR
-			|| opline->op1_type == IS_VAR;
-		if (opline->op1_type == IS_VAR
+	if (source_opcode == ZEND_RETURN_BY_REF) {
+		bool temporary = operand_type == IS_TMP_VAR
+			|| operand_type == IS_VAR;
+		if (operand_type == IS_VAR
 				&& Z_TYPE_P(source) == IS_INDIRECT) {
 			source = Z_INDIRECT_P(source);
 		}
 
-		if ((opline->op1_type == IS_CONST
-				|| opline->op1_type == IS_TMP_VAR)
-				|| (opline->op1_type == IS_VAR
-					&& opline->extended_value == ZEND_RETURNS_VALUE)) {
+		if ((operand_type == IS_CONST
+				|| operand_type == IS_TMP_VAR)
+				|| (operand_type == IS_VAR
+					&& extended_value == ZEND_RETURNS_VALUE)) {
 			zend_error(E_NOTICE,
 				"Only variable references should be returned by reference");
 			if (UNEXPECTED(EG(exception) != NULL)) {
@@ -1335,12 +1351,12 @@ zend_native_status zend_native_return_source_zval(
 				}
 				return ZEND_NATIVE_RETURNED;
 			}
-			if (opline->op1_type == IS_VAR && Z_ISREF_P(source)) {
+			if (operand_type == IS_VAR && Z_ISREF_P(source)) {
 				ZVAL_COPY_VALUE(return_value, source);
 				ZVAL_UNDEF(source_slot);
 			} else {
 				ZVAL_NEW_REF(return_value, source);
-				if (opline->op1_type == IS_CONST) {
+				if (operand_type == IS_CONST) {
 					Z_TRY_ADDREF_P(source);
 				} else {
 					ZVAL_UNDEF(source_slot);
@@ -1350,8 +1366,8 @@ zend_native_status zend_native_return_source_zval(
 			return ZEND_NATIVE_RETURNED;
 		}
 
-		if (opline->op1_type == IS_VAR
-				&& opline->extended_value == ZEND_RETURNS_FUNCTION
+		if (operand_type == IS_VAR
+				&& extended_value == ZEND_RETURNS_FUNCTION
 				&& !Z_ISREF_P(source)) {
 			zend_error(E_NOTICE,
 				"Only variable references should be returned by reference");
@@ -1384,24 +1400,24 @@ zend_native_status zend_native_return_source_zval(
 		zend_return_unwrap_ref(execute_data, return_value);
 		return ZEND_NATIVE_RETURNED;
 	}
-	if (opline->op1_type == IS_CV && Z_ISUNDEF_P(source)) {
+	if (operand_type == IS_CV && Z_ISUNDEF_P(source)) {
 		if (return_value != NULL) {
 			ZVAL_NULL(return_value);
 		}
 		return ZEND_NATIVE_RETURNED;
 	}
 	if (return_value == NULL) {
-		if (opline->op1_type != IS_CV && !Z_ISUNDEF_P(source)) {
+		if (operand_type != IS_CV && !Z_ISUNDEF_P(source)) {
 			zval_ptr_dtor(source);
 			ZVAL_UNDEF(source);
 		}
 		return ZEND_NATIVE_RETURNED;
 	}
-	if (opline->op1_type == IS_CONST) {
+	if (operand_type == IS_CONST) {
 		ZVAL_COPY(return_value, source);
-	} else if (opline->op1_type == IS_CV || Z_ISREF_P(source)) {
+	} else if (operand_type == IS_CV || Z_ISREF_P(source)) {
 		ZVAL_COPY_DEREF(return_value, source);
-		if (opline->op1_type != IS_CV) {
+		if (operand_type != IS_CV) {
 			zval_ptr_dtor(source);
 			ZVAL_UNDEF(source);
 		}

@@ -79,6 +79,7 @@ typedef struct _zend_mir_zend_source {
 	bool w08;
 	bool w09;
 	bool w10;
+	bool w11;
 	uint32_t initialized;
 } zend_mir_zend_source;
 

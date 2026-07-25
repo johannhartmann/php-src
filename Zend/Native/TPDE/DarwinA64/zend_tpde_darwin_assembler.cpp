@@ -83,7 +83,14 @@ void AssemblerDarwinA64::rename_section(
 
 ::tpde::SymRef AssemblerDarwinA64::add_symbol(
 	std::string_view name, SymBinding binding, SymbolKind kind) {
-	symbols_.push_back(Symbol{std::string{name}, binding, kind});
+	symbols_.push_back(Symbol{
+		std::string{name},
+		binding,
+		kind,
+		::tpde::SecRef{},
+		0,
+		0,
+		false});
 	return ::tpde::SymRef{static_cast<uint32_t>(symbols_.size() - 1)};
 }
 

@@ -938,6 +938,456 @@ static bool zend_native_compiler_target_is_direct_native(
 	return found;
 }
 
+static bool zend_native_compiler_exact_scalar_satisfies_type(
+	zend_mir_scalar_type_mask exact_type, zend_type type)
+{
+	uint32_t accepted;
+
+	if (!ZEND_TYPE_IS_SET(type)) {
+		return true;
+	}
+	if (!zend_mir_scalar_type_is_exact(exact_type)
+			|| !ZEND_TYPE_IS_ONLY_MASK(type)) {
+		return false;
+	}
+	accepted = ZEND_TYPE_PURE_MASK(type);
+	switch (exact_type) {
+		case ZEND_MIR_SCALAR_TYPE_NULL:
+			return (accepted & MAY_BE_NULL) != 0;
+		case ZEND_MIR_SCALAR_TYPE_I1:
+			return (accepted & MAY_BE_BOOL) == MAY_BE_BOOL;
+		case ZEND_MIR_SCALAR_TYPE_I64:
+			return (accepted & MAY_BE_LONG) != 0;
+		case ZEND_MIR_SCALAR_TYPE_F64:
+			return (accepted & MAY_BE_DOUBLE) != 0;
+		default:
+			return false;
+	}
+}
+
+static bool zend_native_compiler_index_u32(
+	const HashTable *index, uint32_t id, uint32_t *value)
+{
+	zval *entry;
+
+	if (index == NULL || value == NULL
+			|| (entry = zend_hash_index_find(index, id)) == NULL
+			|| Z_TYPE_P(entry) != IS_LONG || Z_LVAL_P(entry) < 0
+			|| (zend_ulong) Z_LVAL_P(entry) > UINT32_MAX) {
+		return false;
+	}
+	*value = (uint32_t) Z_LVAL_P(entry);
+	return true;
+}
+
+static zend_mir_scalar_type_mask zend_native_compiler_index_exact_type(
+	const HashTable *exact_types, zend_mir_value_id value_id)
+{
+	uint32_t exact_type;
+
+	if (!zend_native_compiler_index_u32(
+			exact_types, value_id, &exact_type)) {
+		return ZEND_MIR_SCALAR_TYPE_NONE;
+	}
+	return (zend_mir_scalar_type_mask) exact_type;
+}
+
+static zend_mir_scalar_type_mask
+zend_native_compiler_source_operand_exact_type(
+	const HashTable *exact_types,
+	const zend_mir_source_operand_ref *operand)
+{
+	zend_mir_value_id value_id;
+
+	if (operand == NULL) {
+		return ZEND_MIR_SCALAR_TYPE_NONE;
+	}
+	if (operand->kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+		value_id = zend_mir_value_from_synthetic(operand->index);
+	} else if ((operand->kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| operand->kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& operand->ssa_variable_id != UINT32_MAX) {
+		value_id = zend_mir_value_from_original_ssa(
+			operand->ssa_variable_id);
+	} else {
+		return ZEND_MIR_SCALAR_TYPE_NONE;
+	}
+	return zend_mir_id_is_valid(value_id)
+		? zend_native_compiler_index_exact_type(exact_types, value_id)
+		: ZEND_MIR_SCALAR_TYPE_NONE;
+}
+
+/*
+ * A leaf-scalar frame is deliberately stricter than "currently emits no
+ * helper". It is a complete MIR proof that the generated entry cannot call,
+ * allocate, throw, observe, interrupt, own a refcounted value, or otherwise
+ * require a published Zend activation. Such an entry still receives the
+ * canonical frame ABI, but the caller may keep that frame private.
+ */
+static bool zend_native_compiler_function_has_leaf_scalar_frame(
+	zend_native_compiler *compiler,
+	const zend_native_compiled_function *function)
+{
+	const zend_mir_view *view;
+	const zend_mir_value_view *values;
+	zend_mir_function_record mir_function;
+	HashTable block_indices;
+	HashTable exact_types;
+	HashTable leaf_exact_types;
+	HashTable executable_operands;
+	HashTable executable_indices;
+	bool *reachable;
+	uint32_t *queue;
+	uint32_t block_count;
+	uint32_t queue_head = 0;
+	uint32_t queue_tail = 0;
+	uint32_t instruction_count;
+	uint32_t index;
+	uint32_t value_fact_count;
+	uint32_t executable_operation_count;
+	bool has_return = false;
+	bool eligible = false;
+
+	if (compiler == NULL || function == NULL || function->module == NULL
+			|| function->op_array == NULL
+			|| compiler->frame_probe != NULL
+			|| function->source_effect_count != 0
+			|| function->op_array->scope != NULL
+			|| (function->op_array->fn_flags
+				& (ZEND_ACC_VARIADIC | ZEND_ACC_CALL_VIA_TRAMPOLINE
+					| ZEND_ACC_GENERATOR)) != 0) {
+		return false;
+	}
+	view = zend_native_compiler_module_view(compiler, function->module);
+	values = zend_mir_module_value_view_from_view(view);
+	if (view == NULL || view->function_count(view->context) != 1
+			|| values == NULL
+			|| !view->function_at(view->context, 0, &mir_function)
+			|| !zend_mir_id_is_valid(mir_function.entry_block_id)
+			|| view->block_at == NULL || view->successor_count == NULL
+			|| view->successor_at == NULL
+			|| view->instruction_at == NULL
+			|| view->instruction_operand_count == NULL
+			|| view->instruction_operand_at == NULL
+			|| view->value_fact_count == NULL
+			|| view->value_fact_at == NULL
+			|| values->executable_operation_count == NULL
+			|| values->executable_operation_at == NULL) {
+		return false;
+	}
+	block_count = view->block_count(view->context);
+	if (block_count == 0 || block_count > ZEND_MIR_ID_MAX) {
+		return false;
+	}
+	value_fact_count = view->value_fact_count(view->context);
+	executable_operation_count =
+		values->executable_operation_count(values->context);
+	zend_hash_init(&block_indices, block_count, NULL, NULL, false);
+	zend_hash_init(&exact_types, value_fact_count, NULL, NULL, false);
+	zend_hash_init(&leaf_exact_types, executable_operation_count,
+		NULL, NULL, false);
+	zend_hash_init(
+		&executable_operands, executable_operation_count, NULL, NULL, false);
+	zend_hash_init(
+		&executable_indices, executable_operation_count, NULL, NULL, false);
+	reachable = ecalloc(block_count, sizeof(*reachable));
+	queue = safe_emalloc(block_count, sizeof(*queue), 0);
+	for (index = 0; index < block_count; index++) {
+		zend_mir_block_record block;
+		zval entry;
+
+		if (!view->block_at(view->context, index, &block)) {
+			goto done;
+		}
+		ZVAL_LONG(&entry, index);
+		if (zend_hash_index_add_new(
+				&block_indices, block.id, &entry) == NULL) {
+			goto done;
+		}
+	}
+	for (index = 0; index < value_fact_count; index++) {
+		zend_mir_value_fact_ref fact;
+		zval entry;
+
+		if (!view->value_fact_at(view->context, index, &fact)) {
+			goto done;
+		}
+		ZVAL_LONG(&entry, fact.exact_type);
+		if (zend_hash_index_add_new(
+				&exact_types, fact.value_id, &entry) == NULL) {
+			goto done;
+		}
+	}
+	for (index = 0; index < executable_operation_count; index++) {
+		zend_mir_executable_value_ref operation;
+		zend_mir_value_id value_id;
+		zval entry;
+
+		if (!values->executable_operation_at(
+				values->context, index, &operation)) {
+			goto done;
+		}
+		ZVAL_LONG(&entry, index);
+		if (zend_hash_index_add_new(
+				&executable_indices, operation.id, &entry) == NULL) {
+			goto done;
+		}
+		switch (operation.op1.kind) {
+			case ZEND_MIR_SOURCE_OPERAND_LITERAL:
+				value_id =
+					zend_mir_value_from_synthetic(operation.op1.index);
+				break;
+			case ZEND_MIR_SOURCE_OPERAND_SLOT:
+			case ZEND_MIR_SOURCE_OPERAND_SSA:
+				if (operation.op1.ssa_variable_id == UINT32_MAX) {
+					goto done;
+				}
+				value_id = zend_mir_value_from_original_ssa(
+					operation.op1.ssa_variable_id);
+				break;
+			default:
+				continue;
+		}
+		if (!zend_mir_id_is_valid(value_id)) {
+			goto done;
+		}
+		ZVAL_LONG(&entry, value_id);
+		if (zend_hash_index_add_new(
+				&executable_operands, operation.id, &entry) == NULL) {
+			goto done;
+		}
+	}
+	{
+		uint32_t entry;
+		if (!zend_native_compiler_index_u32(
+				&block_indices, mir_function.entry_block_id, &entry)) {
+			goto done;
+		}
+		reachable[entry] = true;
+		queue[queue_tail++] = entry;
+	}
+	while (queue_head < queue_tail) {
+		zend_mir_block_record block;
+		uint32_t successor_count;
+		uint32_t successor_index;
+
+		if (!view->block_at(
+				view->context, queue[queue_head++], &block)) {
+			goto done;
+		}
+		successor_count = view->successor_count(view->context, block.id);
+		for (successor_index = 0;
+				successor_index < successor_count; successor_index++) {
+			zend_mir_block_id successor_id;
+			uint32_t successor;
+
+			if (!view->successor_at(view->context, block.id,
+					successor_index, &successor_id)
+					|| !zend_native_compiler_index_u32(
+						&block_indices, successor_id, &successor)) {
+				goto done;
+			}
+			if (!reachable[successor]) {
+				reachable[successor] = true;
+				queue[queue_tail++] = (uint32_t) successor;
+			}
+		}
+	}
+
+	instruction_count = view->instruction_count(view->context);
+	for (index = 0; index < instruction_count; index++) {
+		zend_mir_instruction_record instruction;
+		uint32_t block;
+		bool pure_opcode;
+
+		if (!view->instruction_at(view->context, index, &instruction)
+				|| !zend_native_compiler_index_u32(
+					&block_indices, instruction.block_id, &block)) {
+			goto done;
+		}
+		if (!reachable[block]) {
+			continue;
+		}
+		if (instruction.opcode == ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE) {
+			zend_mir_value_id value_id = ZEND_MIR_ID_INVALID;
+			zend_mir_scalar_type_mask exact_type =
+				ZEND_MIR_SCALAR_TYPE_NONE;
+
+			if (function->op_array->arg_info == NULL
+					|| (function->op_array->fn_flags
+							& ZEND_ACC_HAS_RETURN_TYPE) == 0
+					|| !zend_native_compiler_index_u32(
+						&executable_operands, instruction.id, &value_id)
+					|| (!zend_native_compiler_index_u32(
+							&leaf_exact_types, value_id, &exact_type)
+						&& !zend_mir_scalar_type_is_exact(
+							exact_type =
+								zend_native_compiler_index_exact_type(
+									&exact_types, value_id)))
+					|| !zend_mir_scalar_type_is_exact(exact_type)
+					|| !zend_native_compiler_exact_scalar_satisfies_type(
+						exact_type,
+						function->op_array->arg_info[-1].type)) {
+				goto done;
+			}
+			continue;
+		}
+		if (instruction.opcode == ZEND_MIR_OPCODE_VALUE_BINARY_OP) {
+			zend_mir_executable_value_ref operation;
+			uint32_t operation_index;
+			bool direct_long_operand;
+
+			if (!zend_native_compiler_index_u32(
+					&executable_indices, instruction.id,
+					&operation_index)
+					|| !values->executable_operation_at(
+						values->context, operation_index, &operation)
+					|| operation.id != instruction.id) {
+				goto done;
+			}
+			if ((operation.source_opcode != ZEND_ADD
+						&& operation.source_opcode != ZEND_SUB)
+					|| (operation.result.kind
+							!= ZEND_MIR_SOURCE_OPERAND_SLOT
+						&& operation.result.kind
+							!= ZEND_MIR_SOURCE_OPERAND_SSA)
+					|| (operation.result.slot_kind
+							!= ZEND_MIR_SOURCE_SLOT_TMP
+						&& operation.result.slot_kind
+							!= ZEND_MIR_SOURCE_SLOT_VAR)
+					|| operation.result.ssa_variable_id == UINT32_MAX
+					|| operation.result_storage_id == ZEND_MIR_ID_INVALID
+					|| zend_native_compiler_source_operand_exact_type(
+						&exact_types, &operation.op1)
+						!= ZEND_MIR_SCALAR_TYPE_I64
+					|| zend_native_compiler_source_operand_exact_type(
+						&exact_types, &operation.op2)
+						!= ZEND_MIR_SCALAR_TYPE_I64) {
+				goto done;
+			}
+			direct_long_operand =
+				operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+				|| ((operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+						|| operation.op1.kind
+							== ZEND_MIR_SOURCE_OPERAND_SSA)
+					&& operation.op1.slot_kind
+						== ZEND_MIR_SOURCE_SLOT_CV
+					&& operation.op1_storage_id != ZEND_MIR_ID_INVALID);
+			direct_long_operand = direct_long_operand
+				&& (operation.op2.kind
+						== ZEND_MIR_SOURCE_OPERAND_LITERAL
+					|| ((operation.op2.kind
+								== ZEND_MIR_SOURCE_OPERAND_SLOT
+							|| operation.op2.kind
+								== ZEND_MIR_SOURCE_OPERAND_SSA)
+						&& operation.op2.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_CV
+						&& operation.op2_storage_id
+							!= ZEND_MIR_ID_INVALID));
+			if (!direct_long_operand
+					|| (operation.op1.kind
+							!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+						&& operation.op1_storage_id
+							== operation.result_storage_id)
+					|| (operation.op2.kind
+							!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+						&& operation.op2_storage_id
+							== operation.result_storage_id)) {
+				goto done;
+			}
+			{
+				zval result_type;
+				ZVAL_LONG(&result_type, ZEND_MIR_SCALAR_TYPE_I64);
+				zend_hash_index_update(&leaf_exact_types,
+					zend_mir_value_from_original_ssa(
+						operation.result.ssa_variable_id),
+					&result_type);
+			}
+			continue;
+		}
+		if (instruction.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL) {
+			zend_mir_executable_value_ref operation;
+			zend_mir_value_id value_id;
+			zend_mir_scalar_type_mask exact_type;
+			uint32_t operation_index;
+
+			if (!zend_native_compiler_index_u32(
+					&executable_indices, instruction.id,
+					&operation_index)
+					|| !values->executable_operation_at(
+						values->context, operation_index, &operation)
+					|| operation.id != instruction.id
+					|| operation.source_opcode != ZEND_RETURN
+					|| (operation.op1.kind
+							!= ZEND_MIR_SOURCE_OPERAND_SLOT
+						&& operation.op1.kind
+							!= ZEND_MIR_SOURCE_OPERAND_SSA)
+					|| operation.op1.ssa_variable_id == UINT32_MAX
+					|| operation.op1.slot_kind < ZEND_MIR_SOURCE_SLOT_CV
+					|| operation.op1.slot_kind > ZEND_MIR_SOURCE_SLOT_VAR
+					|| operation.op1_storage_id == ZEND_MIR_ID_INVALID
+					|| operation.op2.kind
+						!= ZEND_MIR_SOURCE_OPERAND_UNUSED
+					|| operation.result.kind
+						!= ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+				goto done;
+			}
+			value_id = zend_mir_value_from_original_ssa(
+				operation.op1.ssa_variable_id);
+			if (!zend_native_compiler_index_u32(
+					&leaf_exact_types, value_id, &exact_type)
+					&& !zend_mir_scalar_type_is_exact(
+						exact_type =
+							zend_native_compiler_index_exact_type(
+								&exact_types, value_id))) {
+				goto done;
+			}
+			if (!zend_mir_scalar_type_is_exact(exact_type)) {
+				goto done;
+			}
+			has_return = true;
+			continue;
+		}
+		pure_opcode =
+			instruction.opcode == ZEND_MIR_OPCODE_CONSTANT
+			|| instruction.opcode == ZEND_MIR_OPCODE_PHI
+			|| instruction.opcode == ZEND_MIR_OPCODE_COPY
+			|| instruction.opcode == ZEND_MIR_OPCODE_CANONICALIZE
+			|| instruction.opcode == ZEND_MIR_OPCODE_STATEPOINT
+			|| instruction.opcode == ZEND_MIR_OPCODE_BRANCH
+			|| instruction.opcode == ZEND_MIR_OPCODE_COND_BRANCH
+			|| instruction.opcode == ZEND_MIR_OPCODE_RETURN
+			|| instruction.opcode == ZEND_MIR_OPCODE_UNREACHABLE
+			|| (instruction.opcode >= ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW
+				&& instruction.opcode <= ZEND_MIR_OPCODE_SCALAR_DROP);
+		if (!pure_opcode
+				|| (instruction.representation
+						== ZEND_MIR_REPRESENTATION_ZVAL
+					&& !(instruction.opcode == ZEND_MIR_OPCODE_CONSTANT
+						&& zend_native_compiler_index_exact_type(
+							&exact_types, instruction.result_id)
+							== ZEND_MIR_SCALAR_TYPE_NULL))
+				|| instruction.effects != 0 || instruction.reads != 0
+				|| instruction.writes != 0 || instruction.barriers != 0
+				|| instruction.ownership_actions != 0) {
+			goto done;
+		}
+		has_return = has_return
+			|| instruction.opcode == ZEND_MIR_OPCODE_RETURN;
+	}
+	eligible = has_return;
+
+done:
+	efree(queue);
+	efree(reachable);
+	zend_hash_destroy(&executable_indices);
+	zend_hash_destroy(&executable_operands);
+	zend_hash_destroy(&leaf_exact_types);
+	zend_hash_destroy(&exact_types);
+	zend_hash_destroy(&block_indices);
+	return eligible;
+}
+
 static zend_function *zend_native_compiler_resolve_internal_target(
 	zend_native_compiler *compiler,
 	zend_native_compiled_function *caller_function,
@@ -1606,6 +2056,7 @@ static bool zend_native_compiler_compile_native_component(
 				bindings[binding_count].target_id = target.id;
 				bindings[binding_count].entry_cell = &function->entry_cell;
 				bindings[binding_count].direct_native = false;
+				bindings[binding_count].leaf_scalar_frame = false;
 				binding_count++;
 				continue;
 			}
@@ -1622,6 +2073,10 @@ static bool zend_native_compiler_compile_native_component(
 			bindings[binding_count].direct_native =
 				zend_native_compiler_target_is_direct_native(
 					compiler, function, calls, &target, callee);
+			bindings[binding_count].leaf_scalar_frame =
+				bindings[binding_count].direct_native
+				&& zend_native_compiler_function_has_leaf_scalar_frame(
+					compiler, native_callee);
 			binding_count++;
 		}
 		function->internal_call_cell_count = internal_binding_count;
@@ -1679,6 +2134,7 @@ static bool zend_native_compiler_compile_native_component(
 				function->source_effects, function->source_effect_count,
 				function->op_array->num_args,
 				function->op_array,
+				&function->ssa,
 				runtime,
 				&function->image, &diagnostic);
 		compiler->stats.codegen_ns += zend_hrtime() - phase_started;
@@ -1703,6 +2159,8 @@ static bool zend_native_compiler_compile_native_component(
 		compiler->stats.guard_sites += image_metrics.guard_sites;
 		compiler->stats.slow_path_sites += image_metrics.slow_path_sites;
 		compiler->stats.direct_call_sites += image_metrics.direct_call_sites;
+		compiler->stats.direct_leaf_scalar_sites +=
+			image_metrics.direct_leaf_scalar_sites;
 		compiler->stats.direct_call_frame_bytes +=
 			image_metrics.direct_call_frame_bytes;
 		function->publish_pending = true;

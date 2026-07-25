@@ -70,6 +70,7 @@ jobs:
           profile="${{ matrix.profile }}"
           candidate=$(scripts/native/build.sh \
             --profile "$profile" --print-binary | tail -n 1)
+          echo "CANDIDATE_PHP=$candidate" >> "$GITHUB_ENV"
           case "$profile" in
             *-asan-*|*-ubsan-*)
               scripts/native/test-sanitizers.sh --profile "$profile"
@@ -92,6 +93,25 @@ jobs:
               ext/native_mir_test/tests/w09_*.phpt \
               ext/native_mir_test/tests/w10_*.phpt \
               ext/native_mir_test/tests/w11_*.phpt
+      - name: Verify native baseline performance
+        if: matrix.profile == 'darwin-arm64-native-release-nts'
+        run: |
+          baseline_root="$RUNNER_TEMP/php-w11p-baseline"
+          git worktree add --detach "$baseline_root" 14dce285da0f849572535f49790b2a63d292685a
+          baseline=$(
+            cd "$baseline_root"
+            NATIVE_WORK_ROOT="$RUNNER_TEMP/php-native-baseline" \
+              scripts/native/build.sh \
+                --profile darwin-arm64-native-release-nts \
+                --print-binary | tail -n 1
+          )
+          python3 scripts/native/benchmark-native-performance.py \
+            --candidate "$CANDIDATE_PHP" \
+            --baseline "$baseline" \
+            --reference "$REFERENCE_PHP" \
+            --target darwin-arm64-dev \
+            --suite all \
+            --enforce
 
   linux-amd64:
     runs-on: ubuntu-24.04
@@ -133,6 +153,7 @@ jobs:
           profile="${{ matrix.profile }}"
           candidate=$(scripts/native/build.sh \
             --profile "$profile" --print-binary | tail -n 1)
+          echo "CANDIDATE_PHP=$candidate" >> "$GITHUB_ENV"
           case "$profile" in
             *-asan-*|*-ubsan-*)
               scripts/native/test-sanitizers.sh --profile "$profile"
@@ -160,6 +181,25 @@ jobs:
               --candidate "$candidate" \
               --fpm "$(dirname "$(dirname "$candidate")")/fpm/php-fpm"
           fi
+      - name: Verify native baseline performance
+        if: matrix.profile == 'linux-amd64-native-release-nts'
+        run: |
+          baseline_root="$RUNNER_TEMP/php-w11p-baseline"
+          git worktree add --detach "$baseline_root" 14dce285da0f849572535f49790b2a63d292685a
+          baseline=$(
+            cd "$baseline_root"
+            NATIVE_WORK_ROOT="$RUNNER_TEMP/php-native-baseline" \
+              scripts/native/build.sh \
+                --profile linux-amd64-native-release-nts \
+                --print-binary | tail -n 1
+          )
+          python3 scripts/native/benchmark-native-performance.py \
+            --candidate "$CANDIDATE_PHP" \
+            --baseline "$baseline" \
+            --reference "$REFERENCE_PHP" \
+            --target linux-amd64-prod \
+            --suite all \
+            --enforce
 
   call-model:
     runs-on: ubuntu-24.04

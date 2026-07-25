@@ -1220,9 +1220,11 @@ static bool zend_mir_core_append_call_instruction(
 		staging->targets[site->target_id].kind
 			== ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL;
 
-	if (!source_arguments && site->arguments.count != 0) {
-		source_arguments = staging->arguments[site->arguments.offset].ownership
-			!= ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR;
+	for (index = 0;
+			!source_arguments && index < site->arguments.count; index++) {
+		source_arguments = staging->arguments[
+			site->arguments.offset + index].ownership
+				!= ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR;
 	}
 	if (!source_arguments
 			&& site->arguments.count != 0) {
@@ -1399,10 +1401,19 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 			}
 		}
 		if (staging->targets[site->target_id].kind
-				!= ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL
-				&& (site->arguments.count == 0
-					|| staging->arguments[site->arguments.offset].ownership
-						== ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR)) {
+				!= ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL) {
+			bool scalar_arguments = true;
+			for (index = 0; index < site->arguments.count; index++) {
+				if (staging->arguments[
+						site->arguments.offset + index].ownership
+						!= ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR) {
+					scalar_arguments = false;
+					break;
+				}
+			}
+			if (!scalar_arguments) {
+				continue;
+			}
 			if (site->arguments.count
 					> UINT32_MAX - total_call_operands) {
 				return zend_mir_module_fail(module,
@@ -1491,10 +1502,6 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 		zend_mir_call_site_ref *site = &staging->sites[site_index];
 		const bool internal_call = staging->targets[site->target_id].kind
 			== ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL;
-		const bool source_arguments = internal_call
-			|| (site->arguments.count != 0
-				&& staging->arguments[site->arguments.offset].ownership
-					!= ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR);
 		uint32_t caller_offset = module->frame_slots.count;
 		uint32_t argument_index;
 		uint32_t pending_slot_id;
@@ -1509,6 +1516,9 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 			const zend_mir_call_argument_ref *argument =
 				&staging->arguments[
 					site->arguments.offset + argument_index];
+			const bool source_argument = internal_call
+				|| argument->ownership
+					!= ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR;
 			zend_mir_frame_slot_ref *slot =
 				&slots[module->frame_slots.count++];
 			memset(slot, 0, sizeof(*slot));
@@ -1518,7 +1528,7 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 			slot->kind = ZEND_MIR_FRAME_SLOT_KIND_ARGUMENT;
 			slot->representation =
 				ZEND_MIR_FRAME_SLOT_REPRESENTATION_CANONICAL_ZVAL;
-			slot->materialization = source_arguments
+			slot->materialization = source_argument
 				? ZEND_MIR_MATERIALIZATION_SOURCE_ZVAL
 				: ZEND_MIR_MATERIALIZATION_MATERIALIZED;
 			slot->ownership = ZEND_MIR_FRAME_SLOT_OWNERSHIP_CALLER_OWNED;
@@ -1547,6 +1557,9 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 			const zend_mir_call_argument_ref *argument =
 				&staging->arguments[
 					site->arguments.offset + argument_index];
+			const bool source_argument = internal_call
+				|| argument->ownership
+					!= ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR;
 			zend_mir_frame_slot_ref *slot =
 				&slots[module->frame_slots.count++];
 			memset(slot, 0, sizeof(*slot));
@@ -1556,10 +1569,10 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 			slot->kind = ZEND_MIR_FRAME_SLOT_KIND_ARGUMENT;
 			slot->representation =
 				ZEND_MIR_FRAME_SLOT_REPRESENTATION_CANONICAL_ZVAL;
-			slot->materialization = source_arguments
+			slot->materialization = source_argument
 				? ZEND_MIR_MATERIALIZATION_SOURCE_ZVAL
 				: ZEND_MIR_MATERIALIZATION_MATERIALIZED;
-			slot->ownership = source_arguments
+			slot->ownership = source_argument
 				? ZEND_MIR_FRAME_SLOT_OWNERSHIP_FRAME_OWNED
 				: ZEND_MIR_FRAME_SLOT_OWNERSHIP_BORROWED;
 		}

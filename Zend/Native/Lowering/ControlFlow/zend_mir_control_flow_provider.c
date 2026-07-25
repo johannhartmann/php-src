@@ -633,6 +633,7 @@ bool zend_mir_w04_emit_terminator(
 	zend_mir_value_id condition = ZEND_MIR_ID_INVALID;
 	zend_mir_w04_branch_kind kind = ZEND_MIR_W04_BRANCH_KIND_INVALID;
 	bool source_condition = false;
+	bool machine_condition = false;
 	uint32_t edge_count = 0;
 	uint32_t i;
 	if (context == NULL || mutator == NULL || block == NULL || map == NULL
@@ -642,9 +643,19 @@ bool zend_mir_w04_emit_terminator(
 	}
 	if (opcode != NULL) {
 		kind = zend_mir_w04_branch_kind_for_opcode(opcode->zend_opcode_number);
+		if (zend_mir_id_is_valid(opcode->op1.ssa_variable_id)) {
+			zend_mir_representation representation;
+
+			machine_condition = zend_mir_w04_value_representation(
+				context, opcode->op1.ssa_variable_id, &representation)
+				&& representation != ZEND_MIR_REPRESENTATION_ZVAL
+				&& representation != ZEND_MIR_REPRESENTATION_VOID
+				&& representation != ZEND_MIR_REPRESENTATION_CONTROL;
+		}
 	}
 	source_condition = context->zend_source != NULL
 		&& context->zend_source->w09 && edge_count == 2
+		&& !machine_condition
 		&& kind != ZEND_MIR_W04_BRANCH_CATCH
 		&& kind != ZEND_MIR_W08_BRANCH_FINALLY_CALL
 		&& kind != ZEND_MIR_W09_BRANCH_ITERATOR;

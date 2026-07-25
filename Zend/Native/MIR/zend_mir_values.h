@@ -157,22 +157,31 @@ typedef struct _zend_mir_call_transfer_ref {
 /*
  * Canonical physical Zend-frame location for an original source-SSA value.
  * The record contains stable IDs only. Multiple SSA identities may name the
- * same storage across control-flow edges; TPDE uses that equality to prove
- * when a boxed PHI requires no machine-register parallel copy. storage_id is
- * in the physical frame-slot namespace used by executable operands, not an
- * index into the independent W06 semantic-storage table.
+ * same storage across control-flow edges; machine-code lowering uses that
+ * equality to prove when a boxed PHI requires no machine-register parallel
+ * copy. storage_id is in the physical frame-slot namespace used by executable
+ * operands, not an index into the independent W06 semantic-storage table.
+ *
+ * frame_argument_ordinal_plus_one explicitly identifies a value produced by
+ * a source RECV/RECV_INIT. Zero means that the value is not a function input;
+ * otherwise the encoded ordinal is one-based so zero-initialized legacy
+ * records remain compatible. This is source-backed MIR metadata: target
+ * adaptors must not recover argument identities by decoding Zend opcodes or
+ * by guessing from later frame-slot states.
  */
 typedef struct _zend_mir_value_location_ref {
 	zend_mir_value_id value_id;
 	zend_mir_storage_id storage_id;
+	uint32_t frame_argument_ordinal_plus_one;
 } zend_mir_value_location_ref;
 
 typedef enum _zend_mir_value_model_flag {
 	ZEND_MIR_VALUE_MODEL_NONE = 0,
 	/*
 	 * The executable model contains canonical physical frame locations for
-	 * every original zval identity consumed by TPDE. Legacy W06–W08 models do
-	 * not set this bit and retain their historical registerless boxed values.
+	 * every original zval identity consumed by machine-code lowering. Legacy
+	 * W06–W08 models do not set this bit and retain their historical
+	 * registerless boxed values.
 	 */
 	ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS = 1u << 0
 } zend_mir_value_model_flag;
