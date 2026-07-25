@@ -3647,18 +3647,16 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				int32_t leaf_caller_frame_slot = 0;
 				if (generated_fast_path) {
 					/*
-					 * The indirect entry target must not be allocated in either
-					 * register used by the two-argument native entry ABI. Keep
-					 * both registers unavailable until the target and callee
-					 * values have been materialized, then release them for the
-					 * CallBuilder argument moves.
+					 * Materialize the callee directly in the first native-entry
+					 * argument register. This gives the large-frame path one
+					 * stable callee register without reserving both ABI argument
+					 * registers throughout frame construction. The indirect
+					 * entry target is materialized in R11 immediately before the
+					 * call, so argument placement cannot overwrite it.
 					 */
 					ScratchReg fast_callee_argument_register{this};
-					ScratchReg fast_context_argument_register{this};
 					fast_callee_argument_register.alloc_specific(
 						tpde::x64::AsmReg::DI);
-					fast_context_argument_register.alloc_specific(
-						tpde::x64::AsmReg::SI);
 					if (private_inline_body) {
 						/*
 						 * Preserve live machine values before the observer or
@@ -4006,8 +4004,8 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 									observers_enabled))),
 							0);
 						generate_raw_jump(Jump::jne, slow_path);
-						ScratchReg callee_address{this};
-						auto callee_reg = callee_address.alloc_gp();
+						auto callee_reg =
+							fast_callee_argument_register.cur_reg();
 						ASM(LEA64rm, callee_reg,
 							FE_MEM(FE_BP, 0, FE_NOREG,
 								leaf_private_frame_slot));
@@ -4245,10 +4243,11 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 						ValuePart callee_value{
 							tpde::x64::PlatformConfig::GP_BANK, 8};
 						callee_value.set_value(
-							this, std::move(callee_address));
+							this, std::move(fast_callee_argument_register));
 						ScratchReg entry_argument{this};
 						auto entry_argument_reg =
-							entry_argument.alloc_gp();
+							entry_argument.alloc_specific(
+								tpde::x64::AsmReg::R11);
 						ASM(MOV64rm, entry_argument_reg,
 							FE_MEM(cell_reg, 0, FE_NOREG,
 								static_cast<int32_t>(offsetof(
@@ -4265,8 +4264,6 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 						context_scratch.reset();
 						cell_scratch.reset();
 						descriptor_scratch.reset();
-						fast_callee_argument_register.reset();
-						fast_context_argument_register.reset();
 						tpde::x64::CCAssignerSysV fast_assigner{false};
 						CallBuilder fast_builder{*this, fast_assigner};
 						fast_builder.add_arg(std::move(callee_value),
@@ -4621,8 +4618,8 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 						static_cast<int32_t>(reservation_size));
 					generate_raw_jump(Jump::jb, slow_path);
 
-					ScratchReg callee_address{this};
-					auto callee_reg = callee_address.alloc_gp();
+					auto callee_reg =
+						fast_callee_argument_register.cur_reg();
 					ASM(MOV64rr, callee_reg, first_reg);
 					ASM(MOV64rr, second_reg, callee_reg);
 					ASM(ADD64ri, second_reg,
@@ -4862,6 +4859,14 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 							static_cast<int32_t>(
 								offsetof(zval, u1.type_info))),
 						IS_UNDEF);
+					/*
+					 * Argument copying may need four temporary registers for a
+					 * boxed zval. The two preflight temporaries are dead here;
+					 * release them and reacquire dedicated metadata temporaries
+					 * after all arguments and CVs have been initialized.
+					 */
+					first.reset();
+					second.reset();
 
 					for (uint32_t index = 0; index < argument_count; ++index) {
 						zend_mir_call_argument_ref source_argument;
@@ -5096,104 +5101,110 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 					}
 
 					/* Link bailout metadata after the frame. */
-					ASM(MOV64rr, second_reg, callee_reg);
-					ASM(ADD64ri, second_reg,
+					ScratchReg metadata_first{this};
+					ScratchReg metadata_second{this};
+					auto metadata_first_reg = metadata_first.alloc_gp();
+					auto metadata_second_reg = metadata_second.alloc_gp();
+					ASM(MOV64rr, metadata_second_reg, callee_reg);
+					ASM(ADD64ri, metadata_second_reg,
 						static_cast<int32_t>(call.direct_call->frame_size));
 					ASM(MOV64mr,
-						FE_MEM(second_reg, 0, FE_NOREG,
+						FE_MEM(metadata_second_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
 								zend_native_direct_activation, caller))),
 						frame_reg);
 					ASM(MOV64mr,
-						FE_MEM(second_reg, 0, FE_NOREG,
+						FE_MEM(metadata_second_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
 								zend_native_direct_activation, callee))),
 						callee_reg);
 					ASM(MOV64mr,
-						FE_MEM(second_reg, 0, FE_NOREG,
+						FE_MEM(metadata_second_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
 								zend_native_direct_activation, cell))),
 						cell_reg);
 					ASM(MOV64mr,
-						FE_MEM(second_reg, 0, FE_NOREG,
+						FE_MEM(metadata_second_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
 								zend_native_direct_activation, descriptor))),
 						descriptor_reg);
-					ASM(MOV64rm, first_reg,
+					ASM(MOV64rm, metadata_first_reg,
 						FE_MEM(context_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
 								zend_native_execution_context,
 								active_direct_call))));
 					ASM(MOV64rm, descriptor_reg,
-						FE_MEM(first_reg, 0, FE_NOREG, 0));
+						FE_MEM(metadata_first_reg, 0, FE_NOREG, 0));
 					ASM(MOV64mr,
-						FE_MEM(second_reg, 0, FE_NOREG,
+						FE_MEM(metadata_second_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
 								zend_native_direct_activation, previous))),
 						descriptor_reg);
 					ASM(MOV64mi,
-						FE_MEM(second_reg, 0, FE_NOREG,
+						FE_MEM(metadata_second_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
 								zend_native_direct_activation,
 								discarded_return))),
 						0);
 					ASM(MOV64mi,
-						FE_MEM(second_reg, 0, FE_NOREG,
+						FE_MEM(metadata_second_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
 								zend_native_direct_activation,
 								discarded_return) + 8)),
 						0);
 					ASM(MOV32mi,
-						FE_MEM(second_reg, 0, FE_NOREG,
+						FE_MEM(metadata_second_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
 								zend_native_direct_activation,
 								discarded_return)
 								+ offsetof(zval, u1.type_info))),
 						IS_UNDEF);
 					ASM(MOV64mi,
-						FE_MEM(second_reg, 0, FE_NOREG,
+						FE_MEM(metadata_second_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
 								zend_native_direct_activation, status))),
 						0);
 					ASM(MOV8mi,
-						FE_MEM(second_reg, 0, FE_NOREG,
+						FE_MEM(metadata_second_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
 								zend_native_direct_activation,
 								uses_discarded_return))),
 						result_unused ? 1 : 0);
 					ASM(MOV8mi,
-						FE_MEM(second_reg, 0, FE_NOREG,
+						FE_MEM(metadata_second_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
 								zend_native_direct_activation,
 								raw_arguments_owned))),
 						0);
 					ASM(MOV8mi,
-						FE_MEM(second_reg, 0, FE_NOREG,
+						FE_MEM(metadata_second_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
 								zend_native_direct_activation,
 								frame_initialized))),
 						1);
 					ASM(MOV8mi,
-						FE_MEM(second_reg, 0, FE_NOREG,
+						FE_MEM(metadata_second_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
 								zend_native_direct_activation,
 								frame_requires_finish))),
 						1);
 					ASM(MOV8mi,
-						FE_MEM(second_reg, 0, FE_NOREG,
+						FE_MEM(metadata_second_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
 								zend_native_direct_activation,
 								cell_active))),
 						1);
 					ASM(MOV64mr,
-						FE_MEM(first_reg, 0, FE_NOREG, 0), second_reg);
-					ASM(MOV64rm, first_reg,
+						FE_MEM(metadata_first_reg, 0, FE_NOREG, 0),
+						metadata_second_reg);
+					ASM(MOV64rm, metadata_first_reg,
 						FE_MEM(context_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
 								zend_native_execution_context,
 								current_execute_data))));
 					ASM(MOV64mr,
-						FE_MEM(first_reg, 0, FE_NOREG, 0), callee_reg);
+						FE_MEM(metadata_first_reg, 0, FE_NOREG, 0),
+						callee_reg);
 					ASM(ADD32mi,
 						FE_MEM(cell_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
@@ -5201,14 +5212,16 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 						1);
 
 					/* Load the published entry and call it directly. */
-					first.reset();
-					second.reset();
+					metadata_first.reset();
+					metadata_second.reset();
 					ValuePart callee_value{
 						tpde::x64::PlatformConfig::GP_BANK, 8};
 					callee_value.set_value(
-						this, std::move(callee_address));
+						this, std::move(fast_callee_argument_register));
 					ScratchReg entry_argument{this};
-					auto entry_argument_reg = entry_argument.alloc_gp();
+					auto entry_argument_reg =
+						entry_argument.alloc_specific(
+							tpde::x64::AsmReg::R11);
 					ASM(MOV64rm, entry_argument_reg,
 						FE_MEM(cell_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
@@ -5224,8 +5237,6 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 					context_scratch.reset();
 					cell_scratch.reset();
 					descriptor_scratch.reset();
-					fast_callee_argument_register.reset();
-					fast_context_argument_register.reset();
 					tpde::x64::CCAssignerSysV fast_assigner{false};
 					CallBuilder fast_builder{*this, fast_assigner};
 					fast_builder.add_arg(
