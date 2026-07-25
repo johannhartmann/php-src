@@ -381,6 +381,22 @@ zend_native_status zend_native_call_fragment_explicit(
 	uint32_t result_payload,
 	uint32_t extended_value,
 	uint32_t source_position);
+zend_native_status zend_native_call_check_func_arg(
+	zend_execute_data *caller,
+	uint64_t encoded_op1,
+	uint64_t encoded_op2,
+	uint64_t encoded_result,
+	uint32_t extended_value,
+	uint32_t source_opcode,
+	uint32_t source_position);
+zend_native_status zend_native_call_check_undef_args(
+	zend_execute_data *caller,
+	uint64_t encoded_op1,
+	uint64_t encoded_op2,
+	uint64_t encoded_result,
+	uint32_t extended_value,
+	uint32_t source_opcode,
+	uint32_t source_position);
 zend_native_status zend_native_internal_call_invoke_finish(
 	zend_execute_data *caller,
 	const zend_native_internal_call_cell *cell,

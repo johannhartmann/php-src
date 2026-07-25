@@ -183,7 +183,9 @@
 	X(VALUE_DISCARD_EXCEPTION, "value_discard_exception", 187) \
 	X(VALUE_CASE, "value_case", 188) \
 	X(VALUE_BIND_STATIC_BRANCH, "value_bind_static_branch", 189) \
-	X(VALUE_FRAMELESS_BRANCH, "value_frameless_branch", 190)
+	X(VALUE_FRAMELESS_BRANCH, "value_frameless_branch", 190) \
+	X(VALUE_CHECK_FUNC_ARG, "value_check_func_arg", 191) \
+	X(VALUE_CHECK_UNDEF_ARGS, "value_check_undef_args", 192)
 
 #define ZEND_MIR_SCALAR_OPCODE_CATALOG(X) \
 	X(I64_ADD_NO_OVERFLOW, "i64_add_no_overflow", 10) \
@@ -242,7 +244,7 @@ typedef enum _zend_mir_opcode {
 	ZEND_MIR_W10_OPCODE_COUNT = 137,
 	ZEND_MIR_W11_OPCODE_COUNT = 151,
 	ZEND_MIR_W11P_OPCODE_COUNT = 165,
-	ZEND_MIR_W12_OPCODE_COUNT = 191,
+	ZEND_MIR_W12_OPCODE_COUNT = 193,
 	ZEND_MIR_OPCODE_INVALID = -1
 } zend_mir_opcode;
 #undef ZEND_MIR_OPCODE_ENUM
@@ -389,7 +391,7 @@ ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_GENERATOR_CREATE
 	== ZEND_MIR_W11P_OPCODE_COUNT,
 	"W12 generator operations begin after the frozen W11P boundary");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W12_OPCODE_COUNT
-	== ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH + 1,
+	== ZEND_MIR_OPCODE_VALUE_CHECK_UNDEF_ARGS + 1,
 	"W12 baseline operations have an additive table boundary");
 
 #endif /* ZEND_MIR_OPCODES_H */

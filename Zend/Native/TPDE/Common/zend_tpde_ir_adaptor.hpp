@@ -291,6 +291,8 @@ private:
 			case ZEND_MIR_OPCODE_VALUE_EXT_FCALL_END:
 			case ZEND_MIR_OPCODE_VALUE_EXT_NOP:
 			case ZEND_MIR_OPCODE_VALUE_DISCARD_EXCEPTION:
+			case ZEND_MIR_OPCODE_VALUE_CHECK_FUNC_ARG:
+			case ZEND_MIR_OPCODE_VALUE_CHECK_UNDEF_ARGS:
 				return InstKind::SlowPathCall;
 			case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R:
 			case ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM:
@@ -407,6 +409,7 @@ public:
 		std::vector<uint8_t> source_landing_emitted;
 		std::vector<uint32_t> source_landing_blocks;
 		std::vector<uint32_t> source_block_next;
+		bool source_call_fragments = false;
 
 		blocks_.reserve(plan_->block_count);
 		block_successors.reserve(plan_->block_count * 2);
@@ -470,6 +473,9 @@ public:
 			const zend_tpde_instruction &instruction = plan_->instructions[i];
 			const zend_mir_instruction_record record =
 				instruction_record_at(i);
+			source_call_fragments =
+				source_call_fragments
+				|| instruction.user_opcode_call_fragments;
 			if (instruction.has_value_operation
 					&& (record.opcode == ZEND_MIR_OPCODE_GENERATOR_CREATE
 						|| record.opcode == ZEND_MIR_OPCODE_GENERATOR_YIELD
@@ -578,12 +584,16 @@ public:
 		}
 		generator_resume_emitted.resize(
 			generator_resume_targets_.size(), 0);
-		if (plan_->user_opcode_callbacks && plan_->source_op_array != nullptr) {
+		const bool source_landings =
+			plan_->user_opcode_callbacks || source_call_fragments;
+		if (source_landings && plan_->source_op_array != nullptr) {
 			source_landing_emitted.resize(plan_->source_op_array->last, 0);
 			source_landing_blocks.resize(
 				plan_->source_op_array->last, UINT32_MAX);
-			user_opcode_next_landings_.resize(
-				plan_->source_op_array->last, UINT32_MAX);
+			if (plan_->user_opcode_callbacks) {
+				user_opcode_next_landings_.resize(
+					plan_->source_op_array->last, UINT32_MAX);
+			}
 			if (plan_->source_ssa == nullptr
 					|| plan_->source_ssa->cfg.blocks == nullptr
 					|| plan_->source_ssa->cfg.map == nullptr) {
@@ -643,22 +653,24 @@ public:
 					}
 				}
 			}
-			uint32_t next = UINT32_MAX;
-			for (uint32_t source = plan_->source_op_array->last;
-					source-- > 0;) {
-				if (source_landing_blocks[source] != UINT32_MAX) {
-					next = source;
+			if (plan_->user_opcode_callbacks) {
+				uint32_t next = UINT32_MAX;
+				for (uint32_t source = plan_->source_op_array->last;
+						source-- > 0;) {
+					if (source_landing_blocks[source] != UINT32_MAX) {
+						next = source;
+					}
+					user_opcode_next_landings_[source] = next;
 				}
-				user_opcode_next_landings_[source] = next;
-			}
-			for (uint32_t source = 0;
-					source < plan_->source_op_array->last; ++source) {
-				if (source_landing_blocks[source] == UINT32_MAX
-						|| source
-							>= plan_->user_opcode_source_operation_count) {
-					continue;
+				for (uint32_t source = 0;
+						source < plan_->source_op_array->last; ++source) {
+					if (source_landing_blocks[source] == UINT32_MAX
+							|| source
+								>= plan_->user_opcode_source_operation_count) {
+						continue;
+					}
+					user_opcode_dispatch_to_sources_.push_back(source);
 				}
-				user_opcode_dispatch_to_sources_.push_back(source);
 			}
 		}
 		for (uint32_t return_block : finally_return_blocks) {
@@ -810,59 +822,61 @@ public:
 				return;
 			}
 			source_landing_emitted[source_position] = 1;
-			add_node(block_instructions, block, InstNode{
-				InstKind::UserOpcodeLanding,
-				UINT32_MAX,
-				source_position,
-				INVALID_VALUE_REF,
-				{},
-				0,
-				0,
-				false});
-			if (zend_get_user_opcode_handler(
-					plan_->source_op_array->opcodes[
-						source_position].opcode) != nullptr) {
-				const uint32_t operand_offset =
-					static_cast<uint32_t>(operands_.size());
-				operands_.push_back(IRValueRef{FRAME_VALUE});
-				operands_.push_back(IRValueRef{EXECUTION_CONTEXT_VALUE});
-				operands_.push_back(IRValueRef{FRAME_VALUE});
-				operands_.push_back(IRValueRef{FRAME_VALUE});
-				for (size_t dispatch_source = 0;
-						dispatch_source
-							< user_opcode_dispatch_to_sources_.size();
-						++dispatch_source) {
-					for (uint32_t target = 0;
-							target < plan_->user_opcode_target_count;
-							++target) {
-						for (uint32_t use = 0;
-								use < zend_tpde_user_opcode_target_frame_uses(
-									plan_->user_opcode_targets[target].kind);
-								++use) {
-							operands_.push_back(IRValueRef{FRAME_VALUE});
-						}
-					}
-				}
+			if (plan_->user_opcode_callbacks) {
 				add_node(block_instructions, block, InstNode{
-					InstKind::UserOpcodeGateway,
+					InstKind::UserOpcodeLanding,
 					UINT32_MAX,
 					source_position,
 					INVALID_VALUE_REF,
 					{},
-					operand_offset,
-					static_cast<uint32_t>(
-						operands_.size() - operand_offset),
+					0,
+					0,
+					false});
+				if (zend_get_user_opcode_handler(
+						plan_->source_op_array->opcodes[
+							source_position].opcode) != nullptr) {
+					const uint32_t operand_offset =
+						static_cast<uint32_t>(operands_.size());
+					operands_.push_back(IRValueRef{FRAME_VALUE});
+					operands_.push_back(IRValueRef{EXECUTION_CONTEXT_VALUE});
+					operands_.push_back(IRValueRef{FRAME_VALUE});
+					operands_.push_back(IRValueRef{FRAME_VALUE});
+					for (size_t dispatch_source = 0;
+							dispatch_source
+								< user_opcode_dispatch_to_sources_.size();
+							++dispatch_source) {
+						for (uint32_t target = 0;
+								target < plan_->user_opcode_target_count;
+								++target) {
+							for (uint32_t use = 0;
+									use < zend_tpde_user_opcode_target_frame_uses(
+										plan_->user_opcode_targets[target].kind);
+									++use) {
+								operands_.push_back(IRValueRef{FRAME_VALUE});
+							}
+						}
+					}
+					add_node(block_instructions, block, InstNode{
+						InstKind::UserOpcodeGateway,
+						UINT32_MAX,
+						source_position,
+						INVALID_VALUE_REF,
+						{},
+						operand_offset,
+						static_cast<uint32_t>(
+							operands_.size() - operand_offset),
+						false});
+				}
+				add_node(block_instructions, block, InstNode{
+					InstKind::UserOpcodeDispatch,
+					UINT32_MAX,
+					source_position,
+					INVALID_VALUE_REF,
+					{},
+					0,
+					0,
 					false});
 			}
-			add_node(block_instructions, block, InstNode{
-				InstKind::UserOpcodeDispatch,
-				UINT32_MAX,
-				source_position,
-				INVALID_VALUE_REF,
-				{},
-				0,
-				0,
-				false});
 			for (uint32_t instruction_index = 0;
 					instruction_index < plan_->instruction_count;
 					++instruction_index) {
@@ -1003,7 +1017,7 @@ public:
 				valid_ = false;
 				continue;
 			}
-			if (plan_->user_opcode_callbacks && plan_->source_ssa != nullptr
+			if (source_landings && plan_->source_ssa != nullptr
 					&& record.source_position_id
 						< plan_->source_op_array->last) {
 				const uint32_t source_block =
@@ -1469,7 +1483,7 @@ public:
 					static_cast<int32_t>(value_index);
 			}
 		}
-		if (plan_->user_opcode_callbacks && plan_->source_ssa != nullptr) {
+		if (source_landings && plan_->source_ssa != nullptr) {
 			for (uint32_t source_block = 0;
 					source_block < source_block_next.size(); ++source_block) {
 				uint32_t &next_source = source_block_next[source_block];

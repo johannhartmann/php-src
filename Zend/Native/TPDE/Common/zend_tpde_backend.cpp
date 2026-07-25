@@ -257,6 +257,8 @@ bool user_opcode_target(
 		case ZEND_SEND_VAR_NO_REF:
 		case ZEND_SEND_VAR_NO_REF_EX:
 		case ZEND_SEND_PLACEHOLDER:
+		case ZEND_CHECK_FUNC_ARG:
+		case ZEND_CHECK_UNDEF_ARGS:
 		case ZEND_DO_UCALL:
 		case ZEND_DO_FCALL:
 		case ZEND_DO_FCALL_BY_NAME:
@@ -1337,17 +1339,25 @@ zend_native_runtime_helper_id executable_value_helper(zend_mir_opcode opcode) {
 			return ZEND_NATIVE_HELPER_VALUE_EXT_NOP;
 		case ZEND_MIR_OPCODE_VALUE_DISCARD_EXCEPTION:
 			return ZEND_NATIVE_HELPER_VALUE_DISCARD_EXCEPTION;
+		case ZEND_MIR_OPCODE_VALUE_CHECK_FUNC_ARG:
+			return ZEND_NATIVE_HELPER_VALUE_CHECK_FUNC_ARG;
+		case ZEND_MIR_OPCODE_VALUE_CHECK_UNDEF_ARGS:
+			return ZEND_NATIVE_HELPER_VALUE_CHECK_UNDEF_ARGS;
 		default:
 			return ZEND_NATIVE_HELPER_COUNT;
 	}
 }
 
-bool call_site_has_user_opcode_handler(
+bool call_site_requires_source_fragments(
 	const zend_tpde_plan *plan, const zend_mir_call_site_ref &site)
 {
+	uint32_t source_position;
+
 	if (plan == nullptr || plan->source_op_array == nullptr
 			|| site.source_init_opline_index >= plan->source_op_array->last
-			|| site.source_do_opline_index >= plan->source_op_array->last) {
+			|| site.source_do_opline_index >= plan->source_op_array->last
+			|| site.source_init_opline_index
+				>= site.source_do_opline_index) {
 		return false;
 	}
 	if (zend_get_user_opcode_handler(
@@ -1369,6 +1379,23 @@ bool call_site_has_user_opcode_handler(
 		if (zend_get_user_opcode_handler(
 				plan->source_op_array->opcodes[
 					argument.send_opline_index].opcode) != nullptr) {
+			return true;
+		}
+	}
+	/*
+	 * CHECK_FUNC_ARG and CHECK_UNDEF_ARGS observe the pending call frame at
+	 * their exact source positions.  Keep the ordinary single-enter direct
+	 * path for all other calls, but materialize INIT/SEND/DO fragments when
+	 * either metadata operation is present so FETCH_*_FUNC_ARG sees the
+	 * resolved callee's by-reference contract before it fetches its lvalue.
+	 */
+	for (source_position = site.source_init_opline_index + 1;
+			source_position < site.source_do_opline_index;
+			source_position++) {
+		const uint8_t opcode =
+			plan->source_op_array->opcodes[source_position].opcode;
+		if (opcode == ZEND_CHECK_FUNC_ARG
+				|| opcode == ZEND_CHECK_UNDEF_ARGS) {
 			return true;
 		}
 	}
@@ -2843,7 +2870,7 @@ bool initialize_plan(
 				return false;
 			}
 			const bool fragment_call =
-				call_site_has_user_opcode_handler(plan, site);
+				call_site_requires_source_fragments(plan, site);
 			plan->instructions[i].user_opcode_call_fragments =
 				fragment_call;
 			if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
