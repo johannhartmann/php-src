@@ -31,6 +31,7 @@ enum zend_tpde_user_opcode_target_kind : uint8_t {
 	ZEND_TPDE_USER_OPCODE_TARGET_FINALLY_RETURN = 10,
 	ZEND_TPDE_USER_OPCODE_TARGET_CATCH = 11,
 	ZEND_TPDE_USER_OPCODE_TARGET_RECEIVE = 12,
+	ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT = 13,
 };
 
 static inline uint32_t zend_tpde_user_opcode_target_frame_uses(
@@ -184,6 +185,7 @@ struct zend_tpde_instruction {
 	zend_native_runtime_helper_id runtime_helper;
 	zend_mir_executable_value_ref value_operation;
 	bool has_value_operation;
+	bool user_opcode_call_fragments;
 	bool direct_scalar_return;
 	zend_mir_scalar_type_mask direct_scalar_return_type;
 	uint32_t direct_scalar_return_offset;

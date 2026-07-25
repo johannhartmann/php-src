@@ -746,6 +746,12 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
 			| ZEND_NATIVE_RUNTIME_EFFECT_THROW,
 		(const void *) zend_native_receive_explicit},
+	{ZEND_NATIVE_HELPER_CALL_FRAGMENT,
+		ZEND_NATIVE_EFFECT_CALL,
+		(const void *) zend_native_call_fragment},
+	{ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT,
+		ZEND_NATIVE_EFFECT_CALL,
+		(const void *) zend_native_call_fragment_explicit},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
