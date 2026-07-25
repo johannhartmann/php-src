@@ -209,12 +209,15 @@ uint32_t user_opcode_source_extended_target(
 
 bool user_opcode_target(
 	uint32_t opcode, zend_tpde_user_opcode_target *target) {
-	if (target == nullptr || opcode >= ZEND_VM_LAST_OPCODE) {
+	if (target == nullptr || opcode > ZEND_VM_LAST_OPCODE) {
 		return false;
 	}
 	target->opcode = static_cast<uint8_t>(opcode);
 	target->helper = ZEND_NATIVE_HELPER_COUNT;
 	switch (opcode) {
+		case ZEND_NOP:
+			target->kind = ZEND_TPDE_USER_OPCODE_TARGET_NOP;
+			return true;
 		case ZEND_JMP:
 			target->kind = ZEND_TPDE_USER_OPCODE_TARGET_JUMP_OP1;
 			return true;
@@ -1445,7 +1448,7 @@ bool initialize_plan(
 				require_runtime_helper(plan,
 					ZEND_NATIVE_HELPER_GENERATOR_USER_OPCODE_RETURN);
 				for (uint32_t opcode = 0;
-						opcode < ZEND_VM_LAST_OPCODE; ++opcode) {
+						opcode <= ZEND_VM_LAST_OPCODE; ++opcode) {
 					zend_tpde_user_opcode_target target;
 					if (!user_opcode_target(opcode, &target)) {
 						continue;
