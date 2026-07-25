@@ -668,6 +668,7 @@ bool zend_mir_w04_emit_terminator(
 			|| (kind == ZEND_MIR_W08_BRANCH_FINALLY_CALL && edge_count != 2)
 			|| (kind == ZEND_MIR_W08_BRANCH_FINALLY_RETURN && edge_count != 0)
 			|| (kind == ZEND_MIR_W09_BRANCH_ITERATOR && edge_count != 2)
+			|| (kind == ZEND_MIR_W12_BRANCH_ASSERT_CHECK && edge_count != 2)
 			|| (kind == ZEND_MIR_W10_BRANCH_THROW && edge_count != 0)
 			|| (kind == ZEND_MIR_W04_BRANCH_KIND_INVALID && edge_count > 1)) {
 		return false;

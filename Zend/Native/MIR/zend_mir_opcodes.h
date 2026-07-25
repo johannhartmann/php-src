@@ -161,7 +161,24 @@
 	X(GENERATOR_CREATE, "generator_create", 165) \
 	X(GENERATOR_YIELD, "generator_yield", 166) \
 	X(GENERATOR_YIELD_FROM, "generator_yield_from", 167) \
-	X(GENERATOR_RETURN, "generator_return", 168)
+	X(GENERATOR_RETURN, "generator_return", 168) \
+	X(VALUE_COUNT, "value_count", 169) \
+	X(VALUE_GET_TYPE, "value_get_type", 170) \
+	X(VALUE_ARRAY_KEY_EXISTS, "value_array_key_exists", 171) \
+	X(VALUE_IN_ARRAY, "value_in_array", 172) \
+	X(VALUE_ISSET_THIS, "value_isset_this", 173) \
+	X(VALUE_GET_CALLED_CLASS, "value_get_called_class", 174) \
+	X(VALUE_BEGIN_SILENCE, "value_begin_silence", 175) \
+	X(VALUE_END_SILENCE, "value_end_silence", 176) \
+	X(VALUE_MATCH_ERROR, "value_match_error", 177) \
+	X(VALUE_VERIFY_NEVER_TYPE, "value_verify_never_type", 178) \
+	X(VALUE_DEFINED, "value_defined", 179) \
+	X(VALUE_TICKS, "value_ticks", 180) \
+	X(VALUE_TYPE_ASSERT, "value_type_assert", 181) \
+	X(VALUE_EXT_STMT, "value_ext_stmt", 182) \
+	X(VALUE_EXT_FCALL_BEGIN, "value_ext_fcall_begin", 183) \
+	X(VALUE_EXT_FCALL_END, "value_ext_fcall_end", 184) \
+	X(VALUE_EXT_NOP, "value_ext_nop", 185)
 
 #define ZEND_MIR_SCALAR_OPCODE_CATALOG(X) \
 	X(I64_ADD_NO_OVERFLOW, "i64_add_no_overflow", 10) \
@@ -220,7 +237,7 @@ typedef enum _zend_mir_opcode {
 	ZEND_MIR_W10_OPCODE_COUNT = 137,
 	ZEND_MIR_W11_OPCODE_COUNT = 151,
 	ZEND_MIR_W11P_OPCODE_COUNT = 165,
-	ZEND_MIR_W12_OPCODE_COUNT = 169,
+	ZEND_MIR_W12_OPCODE_COUNT = 179,
 	ZEND_MIR_OPCODE_INVALID = -1
 } zend_mir_opcode;
 #undef ZEND_MIR_OPCODE_ENUM
@@ -301,7 +318,7 @@ static inline bool zend_mir_opcode_is_executable_value(
 		|| opcode == ZEND_MIR_OPCODE_FUNC_NUM_ARGS
 		|| opcode == ZEND_MIR_OPCODE_FUNC_GET_ARGS
 		|| (opcode >= ZEND_MIR_OPCODE_GENERATOR_CREATE
-			&& opcode <= ZEND_MIR_OPCODE_GENERATOR_RETURN);
+			&& opcode < ZEND_MIR_W12_OPCODE_COUNT);
 }
 
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_COUNT < UINT32_MAX,
@@ -364,7 +381,7 @@ ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_GENERATOR_CREATE
 	== ZEND_MIR_W11P_OPCODE_COUNT,
 	"W12 generator operations begin after the frozen W11P boundary");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W12_OPCODE_COUNT
-	== ZEND_MIR_OPCODE_GENERATOR_RETURN + 1,
-	"W12 generator operations have an additive table boundary");
+	== ZEND_MIR_OPCODE_VALUE_VERIFY_NEVER_TYPE + 1,
+	"W12 baseline operations have an additive table boundary");
 
 #endif /* ZEND_MIR_OPCODES_H */
