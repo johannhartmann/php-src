@@ -91,6 +91,51 @@ foreach ([
         printf("diagnostics=%s\n", json_encode($result['diagnostics'] ?? null));
     }
 }
+
+$generatorSource = <<<'PHP'
+<?php
+function w12_user_opcode_generator(): Generator
+{
+    $value = 1;
+    $value += 2;
+    yield $value;
+    return 9;
+}
+function w12_user_opcode_generator_root(): array
+{
+    $generator = w12_user_opcode_generator();
+    $valid = $generator->valid();
+    try {
+        $generator->getReturn();
+        $return = 'unexpected';
+    } catch (Throwable $exception) {
+        $return = $exception->getMessage();
+    }
+    return [$valid, $return];
+}
+PHP;
+$result = native_mir_test_compile_execute(
+    $generatorSource,
+    'w12-user-opcode-generator-return.php',
+    [],
+    [
+        'wave' => 11,
+        'function' => 'w12_user_opcode_generator_root',
+        'user_opcode' => [
+            'opcode' => 'ZEND_ASSIGN_OP',
+            'action' => 'return',
+        ],
+    ],
+);
+printf(
+    "generator_return status=%s result=%s calls=%d vm=%d execute_ex=%d handler=%d\n",
+    $result['status'],
+    json_encode($result['execution']['return_value'] ?? null),
+    $result['execution']['user_opcode_calls'] ?? -1,
+    $result['execution']['vm_handler_calls'] ?? -1,
+    $result['execution']['execute_ex_calls'] ?? -1,
+    $result['execution']['opline_handler_calls'] ?? -1,
+);
 ?>
 --EXPECT--
 continue status=accepted result=1 calls=2/2 vm=0 execute_ex=0 handler=0
@@ -100,3 +145,4 @@ return status=accepted result=null calls=1/1 vm=0 execute_ex=0 handler=0
 leave status=accepted result=null calls=1/1 vm=0 execute_ex=0 handler=0
 moved_dispatch status=accepted result=4 calls=1 vm=0 execute_ex=0 handler=0
 moved_continue status=accepted result=1 calls=1 vm=0 execute_ex=0 handler=0
+generator_return status=accepted result=[false,"Cannot get return value of a generator that hasn't returned"] calls=1 vm=0 execute_ex=0 handler=0
