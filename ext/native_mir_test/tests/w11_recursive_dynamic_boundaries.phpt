@@ -83,15 +83,9 @@ CODE);
     }
 
     eval('function w11_reserved_dynamic_generator(): Generator { yield 42; }');
-    try {
-        iterator_to_array(w11_reserved_dynamic_generator());
-        $generatorFailure = null;
-    } catch (Error $error) {
-        $generatorFailure = str_contains(
-            $error->getMessage(),
-            'reserved for native W12 activation',
-        );
-    }
+    $generatorActivation = iterator_to_array(
+        w11_reserved_dynamic_generator(),
+    ) === [42];
     $afterFailure = eval('return 42;');
 
     return [
@@ -101,7 +95,7 @@ CODE);
         $failedTrace,
         $recursiveAutoload,
         $recursiveTrace,
-        $generatorFailure,
+        $generatorActivation,
         $afterFailure,
     ];
 }
