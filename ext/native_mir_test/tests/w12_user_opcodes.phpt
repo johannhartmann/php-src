@@ -24,6 +24,10 @@ function w12_user_opcode_unary($value)
 {
     return $value + 9;
 }
+function w12_user_opcode_single($value)
+{
+    return !$value;
+}
 function w12_user_opcode_incdec(int $value)
 {
     return $value++;
@@ -167,6 +171,8 @@ $binaryTargets = [
     'ZEND_SPACESHIP' => -1,
     'ZEND_CONCAT' => '19',
     'ZEND_FAST_CONCAT' => '19',
+    'ZEND_CASE' => false,
+    'ZEND_CASE_STRICT' => false,
 ];
 foreach ($binaryTargets as $target => $expected) {
     $result = native_mir_test_compile_execute(
@@ -214,6 +220,67 @@ $result = native_mir_test_compile_execute(
 );
 printf(
     "array_key_exists status=%s result=%s calls=%d vm=%d execute_ex=%d handler=%d\n",
+    $result['status'],
+    json_encode($result['execution']['return_value'] ?? null),
+    $result['execution']['user_opcode_calls'] ?? -1,
+    $result['execution']['vm_handler_calls'] ?? -1,
+    $result['execution']['execute_ex_calls'] ?? -1,
+    $result['execution']['opline_handler_calls'] ?? -1,
+);
+if (($result['execution']['return_value'] ?? null) !== true) {
+    printf("diagnostics=%s\n", json_encode($result['diagnostics'] ?? null));
+}
+
+$singleTargets = [
+    'ZEND_COUNT' => [[1, 2, 3], 3],
+    'ZEND_GET_TYPE' => [['native'], 'array'],
+];
+foreach ($singleTargets as $target => [$input, $expected]) {
+    $result = native_mir_test_compile_execute(
+        $source,
+        "w12-user-opcode-single-$target.php",
+        [$input],
+        [
+            'wave' => 11,
+            'function' => 'w12_user_opcode_single',
+            'user_opcode' => [
+                'opcode' => 'ZEND_BOOL_NOT',
+                'action' => 'dispatch_to',
+                'dispatch_to' => $target,
+            ],
+        ],
+    );
+    printf(
+        "single_%s status=%s result=%s calls=%d vm=%d execute_ex=%d handler=%d\n",
+        $target,
+        $result['status'],
+        json_encode($result['execution']['return_value'] ?? null),
+        $result['execution']['user_opcode_calls'] ?? -1,
+        $result['execution']['vm_handler_calls'] ?? -1,
+        $result['execution']['execute_ex_calls'] ?? -1,
+        $result['execution']['opline_handler_calls'] ?? -1,
+    );
+    if (($result['execution']['return_value'] ?? null) !== $expected) {
+        printf("diagnostics=%s\n", json_encode($result['diagnostics'] ?? null));
+    }
+}
+
+$result = native_mir_test_compile_execute(
+    $source,
+    'w12-user-opcode-in-array.php',
+    ['native', ['native' => true]],
+    [
+        'wave' => 11,
+        'function' => 'w12_user_opcode_array',
+        'user_opcode' => [
+            'opcode' => 'ZEND_ADD',
+            'action' => 'dispatch_to',
+            'dispatch_to' => 'ZEND_IN_ARRAY',
+        ],
+    ],
+);
+printf(
+    "in_array status=%s result=%s calls=%d vm=%d execute_ex=%d handler=%d\n",
     $result['status'],
     json_encode($result['execution']['return_value'] ?? null),
     $result['execution']['user_opcode_calls'] ?? -1,
@@ -529,7 +596,12 @@ binary_ZEND_IS_SMALLER_OR_EQUAL status=accepted result=true calls=1 vm=0 execute
 binary_ZEND_SPACESHIP status=accepted result=-1 calls=1 vm=0 execute_ex=0 handler=0
 binary_ZEND_CONCAT status=accepted result="19" calls=1 vm=0 execute_ex=0 handler=0
 binary_ZEND_FAST_CONCAT status=accepted result="19" calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_CASE status=accepted result=false calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_CASE_STRICT status=accepted result=false calls=1 vm=0 execute_ex=0 handler=0
 array_key_exists status=accepted result=true calls=1 vm=0 execute_ex=0 handler=0
+single_ZEND_COUNT status=accepted result=3 calls=1 vm=0 execute_ex=0 handler=0
+single_ZEND_GET_TYPE status=accepted result="array" calls=1 vm=0 execute_ex=0 handler=0
+in_array status=accepted result=true calls=1 vm=0 execute_ex=0 handler=0
 control_source status=accepted result=false calls=1 vm=0 execute_ex=0 handler=0
 branch_target status=accepted result=true calls=1 vm=0 execute_ex=0 handler=0
 return_target status=accepted result=37 calls=1 vm=0 execute_ex=0 handler=0
