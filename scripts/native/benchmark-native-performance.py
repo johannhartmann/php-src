@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import math
 import os
@@ -24,7 +23,10 @@ TARGET_BY_HOST = {
 }
 
 CANDIDATE_RUNNER = r"""
-$source = base64_decode(getenv("NATIVE_BENCH_SOURCE"), true);
+$source = file_get_contents(getenv("NATIVE_BENCH_SOURCE_FILE"));
+if ($source === false) {
+    throw new RuntimeException("cannot read benchmark source");
+}
 $arguments = json_decode(
     getenv("NATIVE_BENCH_ARGUMENTS"), true, 512, JSON_THROW_ON_ERROR
 );
@@ -65,7 +67,7 @@ echo json_encode(
 """
 
 REFERENCE_RUNNER = r"""
-$source = base64_decode(getenv("NATIVE_BENCH_SOURCE"), true);
+$source = file_get_contents(getenv("NATIVE_BENCH_SOURCE_FILE"));
 $arguments = json_decode(
     getenv("NATIVE_BENCH_ARGUMENTS"), true, 512, JSON_THROW_ON_ERROR
 );
@@ -503,33 +505,36 @@ def run_php(
     *,
     repeat: int | None = None,
 ) -> tuple[dict[str, Any], int]:
-    env = os.environ.copy()
-    env.update(
-        {
-            "NATIVE_BENCH_SOURCE": base64.b64encode(
-                benchmark.source.encode()
-            ).decode(),
-            "NATIVE_BENCH_ARGUMENTS": json.dumps(benchmark.arguments),
-            "NATIVE_BENCH_FUNCTION": benchmark.function,
-            "NATIVE_BENCH_FILENAME": f"benchmark-{benchmark.name}.php",
-            "NATIVE_BENCH_TARGET": target,
-            "NATIVE_BENCH_REPEAT": str(
-                benchmark.repeat if repeat is None else repeat
-            ),
-        }
-    )
-    command = [str(php), "-n"]
-    for setting in benchmark.ini:
-        command.extend(("-d", setting))
-    command.extend(("-r", runner))
-    completed = subprocess.run(
-        command,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", suffix=".php"
+    ) as source_file:
+        source_file.write(benchmark.source)
+        source_file.flush()
+        env = os.environ.copy()
+        env.update(
+            {
+                "NATIVE_BENCH_SOURCE_FILE": source_file.name,
+                "NATIVE_BENCH_ARGUMENTS": json.dumps(benchmark.arguments),
+                "NATIVE_BENCH_FUNCTION": benchmark.function,
+                "NATIVE_BENCH_FILENAME": f"benchmark-{benchmark.name}.php",
+                "NATIVE_BENCH_TARGET": target,
+                "NATIVE_BENCH_REPEAT": str(
+                    benchmark.repeat if repeat is None else repeat
+                ),
+            }
+        )
+        command = [str(php), "-n"]
+        for setting in benchmark.ini:
+            command.extend(("-d", setting))
+        command.extend(("-r", runner))
+        completed = subprocess.run(
+            command,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
     if completed.returncode != 0:
         raise RuntimeError(
             f"{benchmark.name}: {php} exited {completed.returncode}: "
