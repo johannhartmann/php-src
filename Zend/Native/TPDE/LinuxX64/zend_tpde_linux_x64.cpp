@@ -470,6 +470,198 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				continue;
 			}
 			if (dispatch_case.kind
+					== ZEND_TPDE_USER_OPCODE_TARGET_MULTI_BRANCH) {
+				zend_tpde_user_multi_branch layout;
+				if (!zend_tpde_user_multi_branch_at(
+						plan, operation, dispatch_case.target_opcode,
+						&layout)
+						|| layout.operand_offset > INT32_MAX) {
+					auto [frame_ref, frame] = val_ref_single(
+						node.operands[dispatch_case.frame_operand]);
+					frame.reset();
+					generate_raw_jump(Jump::jmp, exception);
+					continue;
+				}
+				std::vector<tpde::Label> case_labels;
+				case_labels.reserve(
+					zend_hash_num_elements(layout.jump_table));
+				for (uint32_t index = 0;
+						index < zend_hash_num_elements(layout.jump_table);
+						++index) {
+					case_labels.push_back(text_writer.label_create());
+				}
+				auto default_label = text_writer.label_create();
+				auto fallback_label =
+					layout.target_opcode == ZEND_MATCH
+						? default_label : text_writer.label_create();
+				auto long_label = text_writer.label_create();
+				auto string_label = text_writer.label_create();
+				auto [frame_ref, frame] = val_ref_single(
+					node.operands[dispatch_case.frame_operand]);
+				auto frame_scratch = std::move(frame).into_scratch();
+				ScratchReg slot{this};
+				ScratchReg type{this};
+				ScratchReg value{this};
+				ScratchReg probe{this};
+				ScratchReg constant{this};
+				auto slot_reg = slot.alloc_gp();
+				auto type_reg = type.alloc_gp();
+				auto value_reg = value.alloc_gp();
+				auto probe_reg = probe.alloc_gp();
+				auto constant_reg = constant.alloc_gp();
+				ASM(MOV64rr, slot_reg, frame_scratch.cur_reg());
+				ASM(ADD64ri, slot_reg,
+					static_cast<int32_t>(layout.operand_offset));
+				ASM(MOV32rm, type_reg,
+					FE_MEM(slot_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zval, u1.type_info))));
+				ASM(AND32ri, type_reg, Z_TYPE_MASK);
+				auto spilled = spill_before_branch();
+				begin_branch_region();
+				auto dereferenced = text_writer.label_create();
+				ASM(CMP32ri, type_reg, IS_REFERENCE);
+				generate_raw_jump(Jump::jne, dereferenced);
+				ASM(MOV64rm, slot_reg,
+					FE_MEM(slot_reg, 0, FE_NOREG, 0));
+				ASM(ADD64ri, slot_reg,
+					static_cast<int32_t>(offsetof(zend_reference, val)));
+				ASM(MOV32rm, type_reg,
+					FE_MEM(slot_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zval, u1.type_info))));
+				ASM(AND32ri, type_reg, Z_TYPE_MASK);
+				label_place(dereferenced);
+				if (layout.target_opcode != ZEND_SWITCH_STRING) {
+					ASM(CMP32ri, type_reg, IS_LONG);
+					generate_raw_jump(Jump::je, long_label);
+				}
+				if (layout.target_opcode != ZEND_SWITCH_LONG) {
+					ASM(CMP32ri, type_reg, IS_STRING);
+					generate_raw_jump(Jump::je, string_label);
+				}
+				generate_raw_jump(Jump::jmp, fallback_label);
+
+				uint32_t case_index = 0;
+				zend_ulong numeric_key;
+				zend_string *string_key;
+				zval *jump_value;
+				label_place(long_label);
+				ASM(MOV64rm, value_reg,
+					FE_MEM(slot_reg, 0, FE_NOREG, 0));
+				ZEND_HASH_FOREACH_KEY_VAL(
+						layout.jump_table, numeric_key, string_key,
+						jump_value) {
+					if (string_key == nullptr) {
+						const uint64_t case_value =
+							static_cast<uint64_t>(numeric_key);
+						materialize_constant(
+							&case_value,
+							tpde::x64::PlatformConfig::GP_BANK,
+							8, constant_reg);
+						ASM(CMP64rr, value_reg, constant_reg);
+						generate_raw_jump(
+							Jump::je, case_labels[case_index]);
+					}
+					case_index++;
+				} ZEND_HASH_FOREACH_END();
+				generate_raw_jump(Jump::jmp, default_label);
+
+				label_place(string_label);
+				ASM(MOV64rm, value_reg,
+					FE_MEM(slot_reg, 0, FE_NOREG, 0));
+				case_index = 0;
+				ZEND_HASH_FOREACH_KEY_VAL(
+						layout.jump_table, numeric_key, string_key,
+						jump_value) {
+					if (string_key != nullptr) {
+						auto next_case = text_writer.label_create();
+						const uint64_t length = ZSTR_LEN(string_key);
+						ASM(MOV64rm, probe_reg,
+							FE_MEM(value_reg, 0, FE_NOREG,
+								static_cast<int32_t>(
+									offsetof(zend_string, len))));
+						materialize_constant(
+							&length,
+							tpde::x64::PlatformConfig::GP_BANK,
+							8, constant_reg);
+						ASM(CMP64rr, probe_reg, constant_reg);
+						generate_raw_jump(Jump::jne, next_case);
+						size_t offset = 0;
+						while (offset < ZSTR_LEN(string_key)) {
+							const uint32_t width =
+								ZSTR_LEN(string_key) - offset >= 8 ? 8
+								: ZSTR_LEN(string_key) - offset >= 4 ? 4
+								: ZSTR_LEN(string_key) - offset >= 2 ? 2 : 1;
+							const size_t byte_offset =
+								offsetof(zend_string, val) + offset;
+							if (byte_offset > INT32_MAX) {
+								return false;
+							}
+							uint64_t expected = 0;
+							memcpy(&expected,
+								ZSTR_VAL(string_key) + offset, width);
+							switch (width) {
+								case 8:
+									ASM(MOV64rm, probe_reg,
+										FE_MEM(value_reg, 0, FE_NOREG,
+											static_cast<int32_t>(
+												byte_offset)));
+									break;
+								case 4:
+									ASM(MOV32rm, probe_reg,
+										FE_MEM(value_reg, 0, FE_NOREG,
+											static_cast<int32_t>(
+												byte_offset)));
+									break;
+								case 2:
+									ASM(MOVZXr32m16, probe_reg,
+										FE_MEM(value_reg, 0, FE_NOREG,
+											static_cast<int32_t>(
+												byte_offset)));
+									break;
+								default:
+									ASM(MOVZXr32m8, probe_reg,
+										FE_MEM(value_reg, 0, FE_NOREG,
+											static_cast<int32_t>(
+												byte_offset)));
+									break;
+							}
+							materialize_constant(
+								&expected,
+								tpde::x64::PlatformConfig::GP_BANK,
+								width, constant_reg);
+							ASM(CMP64rr, probe_reg, constant_reg);
+							generate_raw_jump(Jump::jne, next_case);
+							offset += width;
+						}
+						generate_raw_jump(
+							Jump::jmp, case_labels[case_index]);
+						label_place(next_case);
+					}
+					case_index++;
+				} ZEND_HASH_FOREACH_END();
+				generate_raw_jump(Jump::jmp, default_label);
+
+				case_index = 0;
+				ZEND_HASH_FOREACH_VAL(
+						layout.jump_table, jump_value) {
+					label_place(case_labels[case_index++]);
+					jump_to_source(zend_tpde_relative_source_target(
+						plan->source_op_array, dispatch_case.source,
+						Z_LVAL_P(jump_value)));
+				} ZEND_HASH_FOREACH_END();
+				label_place(default_label);
+				jump_to_source(layout.default_target);
+				if (layout.target_opcode != ZEND_MATCH) {
+					label_place(fallback_label);
+					jump_to_source(layout.fallback_target);
+				}
+				end_branch_region();
+				release_spilled_regs(spilled);
+				continue;
+			}
+			if (dispatch_case.kind
 						== ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2
 					|| dispatch_case.kind
 						== ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_OP2

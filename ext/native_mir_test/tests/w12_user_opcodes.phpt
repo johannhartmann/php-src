@@ -48,6 +48,29 @@ function w12_user_opcode_throw_target(Throwable $exception)
 {
     return !$exception;
 }
+function w12_user_opcode_switch_target($value)
+{
+    switch ($value) {
+        case -4: return 'negative';
+        case 0: return 'zero';
+        case 1: return 'one';
+        case 2: return 'two';
+        case 3: return 'three';
+        case 4: return 'four';
+        case 5: return 'five';
+        case 19: return 'nineteen';
+        default: return 'other';
+    }
+}
+function w12_user_opcode_match_target($value)
+{
+    return match ($value) {
+        1 => 'one',
+        2 => 'two',
+        'three' => 'string-three',
+        default => 'other',
+    };
+}
 function w12_user_opcode_enter(): array
 {
     $GLOBALS['w12_user_opcode_enter_trace'][] = 'entered';
@@ -293,6 +316,41 @@ try {
     printf("throw_target exception=%s\n", $exception->getMessage());
 }
 
+$multiwayTargets = [
+    ['w12_user_opcode_switch_target', 'ZEND_SWITCH_LONG', 'ZEND_MATCH', 2, 'two'],
+    ['w12_user_opcode_match_target', 'ZEND_MATCH', 'ZEND_SWITCH_LONG', 2, 'two'],
+    ['w12_user_opcode_match_target', 'ZEND_MATCH', 'ZEND_SWITCH_STRING', 'three', 'string-three'],
+];
+foreach ($multiwayTargets as [$function, $sourceOpcode, $target, $input, $expected]) {
+    $result = native_mir_test_compile_execute(
+        $source,
+        "w12-user-opcode-multiway-$target.php",
+        [$input],
+        [
+            'wave' => 11,
+            'function' => $function,
+            'user_opcode' => [
+                'opcode' => $sourceOpcode,
+                'action' => 'dispatch_to',
+                'dispatch_to' => $target,
+            ],
+        ],
+    );
+    printf(
+        "multiway_%s status=%s result=%s calls=%d vm=%d execute_ex=%d handler=%d\n",
+        $target,
+        $result['status'],
+        json_encode($result['execution']['return_value'] ?? null),
+        $result['execution']['user_opcode_calls'] ?? -1,
+        $result['execution']['vm_handler_calls'] ?? -1,
+        $result['execution']['execute_ex_calls'] ?? -1,
+        $result['execution']['opline_handler_calls'] ?? -1,
+    );
+    if (($result['execution']['return_value'] ?? null) !== $expected) {
+        printf("diagnostics=%s\n", json_encode($result['diagnostics'] ?? null));
+    }
+}
+
 $unaryTargets = [
     'ZEND_BW_NOT' => [1, -2],
     'ZEND_BOOL_NOT' => [1, false],
@@ -476,6 +534,9 @@ control_source status=accepted result=false calls=1 vm=0 execute_ex=0 handler=0
 branch_target status=accepted result=true calls=1 vm=0 execute_ex=0 handler=0
 return_target status=accepted result=37 calls=1 vm=0 execute_ex=0 handler=0
 throw_target exception=native-target
+multiway_ZEND_MATCH status=accepted result="two" calls=1 vm=0 execute_ex=0 handler=0
+multiway_ZEND_SWITCH_LONG status=accepted result="two" calls=1 vm=0 execute_ex=0 handler=0
+multiway_ZEND_SWITCH_STRING status=accepted result="string-three" calls=1 vm=0 execute_ex=0 handler=0
 unary_ZEND_BW_NOT status=accepted result=-2 calls=1 vm=0 execute_ex=0 handler=0
 unary_ZEND_BOOL_NOT status=accepted result=false calls=1 vm=0 execute_ex=0 handler=0
 unary_ZEND_BOOL status=accepted result=true calls=1 vm=0 execute_ex=0 handler=0

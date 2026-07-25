@@ -32,6 +32,7 @@ bool source_descriptor_operand(
 	if (op_array == nullptr || opline == nullptr || out == nullptr) {
 		return false;
 	}
+	operand_type &= IS_CONST | IS_TMP_VAR | IS_VAR | IS_CV;
 	out->kind = ZEND_MIR_SOURCE_OPERAND_UNUSED;
 	out->slot_kind = ZEND_MIR_SOURCE_SLOT_KIND_INVALID;
 	out->index = ZEND_MIR_ID_INVALID;
@@ -258,6 +259,11 @@ bool user_opcode_target(
 		case ZEND_THROW:
 			target->kind = ZEND_TPDE_USER_OPCODE_TARGET_THROW;
 			target->helper = ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL;
+			return true;
+		case ZEND_SWITCH_LONG:
+		case ZEND_SWITCH_STRING:
+		case ZEND_MATCH:
+			target->kind = ZEND_TPDE_USER_OPCODE_TARGET_MULTI_BRANCH;
 			return true;
 		default:
 			break;
@@ -1407,9 +1413,18 @@ bool initialize_plan(
 					if (!user_opcode_source_operation(
 							source_op_array, source,
 							&plan->user_opcode_source_operations[source])) {
+						char message[192];
+						std::snprintf(message, sizeof(message),
+							"user-opcode source operands are invalid at source %u"
+							" (opcode %u, types %u/%u/%u)",
+							source,
+							source_op_array->opcodes[source].opcode,
+							source_op_array->opcodes[source].op1_type,
+							source_op_array->opcodes[source].op2_type,
+							source_op_array->opcodes[source].result_type);
 						zend_tpde_set_diagnostic(diag,
 							ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-							"user-opcode source operands are invalid");
+							message);
 						return false;
 					}
 					const zend_op &opline =
