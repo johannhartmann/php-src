@@ -91,6 +91,11 @@ zend_native_status zend_native_execution_finish_direct_frame(
 {
 	bool frame_returned = status == ZEND_NATIVE_RETURNED;
 
+	if (status == ZEND_NATIVE_GENERATOR_CREATED
+			|| status == ZEND_NATIVE_SUSPENDED
+			|| status == ZEND_NATIVE_GENERATOR_RETURNED) {
+		return status;
+	}
 	if (status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
 		status = ZEND_NATIVE_EXCEPTION;
 	}
@@ -135,6 +140,7 @@ static zend_native_status zend_native_execute_frame_impl(
 	zend_native_execution_context context;
 	zend_native_frame_entry_t entry;
 	bool frame_returned;
+	bool generator_frame;
 
 	entry = zend_native_code_frame_entry(code);
 	if (code == NULL || execute_data == NULL || entry == NULL
@@ -156,6 +162,8 @@ static zend_native_status zend_native_execute_frame_impl(
 	state->original_return_value = execute_data->return_value;
 	state->observer_started = observer_already_started;
 	state->observer_finished = false;
+	generator_frame =
+		(ZEND_CALL_INFO(execute_data) & ZEND_CALL_GENERATOR) != 0;
 	zend_native_execution_context_init(&context);
 	if (state->original_return_value == NULL) {
 		ZVAL_UNDEF(&state->discarded_return);
@@ -172,6 +180,24 @@ static zend_native_status zend_native_execute_frame_impl(
 		state->status = EG(exception) != NULL
 			? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
 	} zend_end_try();
+
+	/*
+	 * Generator frames are owned by zend_generator after CREATE. Suspension
+	 * deliberately keeps the observer and frame alive, while GENERATOR_RETURN
+	 * has already closed and freed the heap frame. Never pass any of these
+	 * states through ordinary function-return cleanup.
+	 */
+	if (state->status == ZEND_NATIVE_GENERATOR_CREATED
+			|| state->status == ZEND_NATIVE_SUSPENDED
+			|| state->status == ZEND_NATIVE_GENERATOR_RETURNED
+			|| generator_frame) {
+		zend_native_status status = state->status;
+		if (status == ZEND_NATIVE_BAILOUT) {
+			zend_native_call_direct_unwind(execute_data);
+		}
+		efree(state);
+		return status;
+	}
 	frame_returned = state->status == ZEND_NATIVE_RETURNED;
 
 	if (state->status == ZEND_NATIVE_BAILOUT) {

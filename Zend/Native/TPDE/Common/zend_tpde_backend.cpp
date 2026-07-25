@@ -1048,6 +1048,14 @@ zend_native_runtime_helper_id executable_value_helper(zend_mir_opcode opcode) {
 			return ZEND_NATIVE_HELPER_OBJECT_DECLARE_CLASS;
 		case ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS_DELAYED:
 			return ZEND_NATIVE_HELPER_OBJECT_DECLARE_CLASS_DELAYED;
+		case ZEND_MIR_OPCODE_GENERATOR_CREATE:
+			return ZEND_NATIVE_HELPER_GENERATOR_CREATE;
+		case ZEND_MIR_OPCODE_GENERATOR_YIELD:
+			return ZEND_NATIVE_HELPER_GENERATOR_YIELD;
+		case ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM:
+			return ZEND_NATIVE_HELPER_GENERATOR_YIELD_FROM;
+		case ZEND_MIR_OPCODE_GENERATOR_RETURN:
+			return ZEND_NATIVE_HELPER_GENERATOR_RETURN;
 		default:
 			return ZEND_NATIVE_HELPER_COUNT;
 	}
@@ -1818,6 +1826,33 @@ bool initialize_plan(
 				if (record.opcode == ZEND_MIR_OPCODE_FUNC_GET_ARGS) {
 					require_runtime_helper(plan, helper);
 				}
+				continue;
+			}
+			if (record.opcode >= ZEND_MIR_OPCODE_GENERATOR_CREATE
+					&& record.opcode <= ZEND_MIR_OPCODE_GENERATOR_RETURN) {
+				const zend_mir_executable_value_ref &operation =
+					plan->instructions[i].value_operation;
+				const uint32_t expected_source_opcode =
+					record.opcode == ZEND_MIR_OPCODE_GENERATOR_CREATE
+						? ZEND_GENERATOR_CREATE
+						: record.opcode == ZEND_MIR_OPCODE_GENERATOR_YIELD
+							? ZEND_YIELD
+							: record.opcode
+									== ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM
+								? ZEND_YIELD_FROM
+								: ZEND_GENERATOR_RETURN;
+				if (operation.source_opcode != expected_source_opcode
+						|| source_op_array == nullptr
+						|| (source_op_array->fn_flags
+							& ZEND_ACC_GENERATOR) == 0) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+						"generator operation lacks a generator source frame");
+					return false;
+				}
+				plan->required_runtime_capabilities |=
+					ZEND_NATIVE_RUNTIME_CAP_SUSPEND;
+				require_runtime_helper(plan, helper);
 				continue;
 			}
 			if (record.opcode == ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL) {

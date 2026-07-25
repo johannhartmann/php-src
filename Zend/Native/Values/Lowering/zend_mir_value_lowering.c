@@ -256,6 +256,14 @@ static zend_mir_opcode zend_mir_w09_executable_opcode(uint32_t opcode)
 			return ZEND_MIR_OPCODE_FUNC_NUM_ARGS;
 		case ZEND_FUNC_GET_ARGS:
 			return ZEND_MIR_OPCODE_FUNC_GET_ARGS;
+		case ZEND_GENERATOR_CREATE:
+			return ZEND_MIR_OPCODE_GENERATOR_CREATE;
+		case ZEND_YIELD:
+			return ZEND_MIR_OPCODE_GENERATOR_YIELD;
+		case ZEND_YIELD_FROM:
+			return ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM;
+		case ZEND_GENERATOR_RETURN:
+			return ZEND_MIR_OPCODE_GENERATOR_RETURN;
 		case ZEND_ADD:
 		case ZEND_SUB:
 		case ZEND_MUL:
@@ -441,6 +449,9 @@ static bool zend_mir_w09_operation_semantics(
 		ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_HEAP_ZVAL)
 		| ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_HEAP_REFERENCE)
 		| ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_GC_METADATA);
+	const zend_mir_memory_domain_mask generator_domains =
+		ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_ENGINE_GENERATOR)
+		| ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_HEAP_OBJECT);
 	zend_mir_effect_summary_empty(&summary);
 	if (!zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_READ_MEMORY)
 			|| !zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_WRITE_MEMORY)) {
@@ -594,6 +605,34 @@ static bool zend_mir_w09_operation_semantics(
 				return false;
 			}
 			break;
+		case ZEND_MIR_OPCODE_GENERATOR_CREATE:
+		case ZEND_MIR_OPCODE_GENERATOR_YIELD:
+		case ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM:
+			if (!zend_mir_w09_add_effect(
+					&summary, ZEND_MIR_EFFECT_SUSPEND)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_ALLOCATE)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_REENTER_PHP)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_OBSERVE_FRAME)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_THROW)) {
+				return false;
+			}
+			break;
+		case ZEND_MIR_OPCODE_GENERATOR_RETURN:
+			if (!zend_mir_w09_add_effect(
+					&summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_OBSERVE_FRAME)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_THROW)) {
+				return false;
+			}
+			break;
 		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV:
 			if (!zend_mir_w09_add_effect(
 					&summary, ZEND_MIR_EFFECT_OBSERVE_FRAME)) {
@@ -657,6 +696,13 @@ static bool zend_mir_w09_operation_semantics(
 		summary.reads |= frame_domains | reference_domains;
 		summary.writes |= frame_domains | reference_domains;
 	}
+	if (opcode == ZEND_MIR_OPCODE_GENERATOR_CREATE
+			|| opcode == ZEND_MIR_OPCODE_GENERATOR_YIELD
+			|| opcode == ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM
+			|| opcode == ZEND_MIR_OPCODE_GENERATOR_RETURN) {
+		summary.reads |= generator_domains;
+		summary.writes |= generator_domains;
+	}
 	if (!zend_mir_effect_summary_init(&summary, summary.effects,
 			summary.reads, summary.writes, summary.barriers,
 			opcode == ZEND_MIR_OPCODE_FUNC_NUM_ARGS
@@ -671,7 +717,10 @@ static bool zend_mir_w09_operation_semantics(
 	operation->writes = summary.writes;
 	operation->barriers = summary.barriers;
 	operation->ownership_actions = summary.ownership_actions;
-	if ((summary.barriers
+	if (opcode == ZEND_MIR_OPCODE_GENERATOR_YIELD
+			|| opcode == ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM) {
+		*frame_class = ZEND_MIR_SAFEPOINT_CLASS_GENERATOR_SUSPEND;
+	} else if ((summary.barriers
 			& ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_DESTRUCTOR)) != 0) {
 		*frame_class = ZEND_MIR_SAFEPOINT_CLASS_DESTRUCTOR;
 	} else if ((summary.barriers

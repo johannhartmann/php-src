@@ -2319,7 +2319,7 @@ static bool zend_mir_w05_verify_final_structural(
 					view, instruction.block_id, NULL)
 				|| (uint32_t) instruction.opcode
 					>= (w09_execution
-						? ZEND_MIR_W11P_OPCODE_COUNT
+						? ZEND_MIR_W12_OPCODE_COUNT
 						: w08_execution
 						? ZEND_MIR_W08_OPCODE_COUNT
 						: ZEND_MIR_W05_OPCODE_COUNT)

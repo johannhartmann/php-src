@@ -157,6 +157,12 @@
 	X(ZVAL_GUARD_TYPE, "zval_guard_type", 163) \
 	X(SLOW_PATH_CALL, "slow_path_call", 164)
 
+#define ZEND_MIR_W12_OPCODE_CATALOG(X) \
+	X(GENERATOR_CREATE, "generator_create", 165) \
+	X(GENERATOR_YIELD, "generator_yield", 166) \
+	X(GENERATOR_YIELD_FROM, "generator_yield_from", 167) \
+	X(GENERATOR_RETURN, "generator_return", 168)
+
 #define ZEND_MIR_SCALAR_OPCODE_CATALOG(X) \
 	X(I64_ADD_NO_OVERFLOW, "i64_add_no_overflow", 10) \
 	X(I64_SUB_NO_OVERFLOW, "i64_sub_no_overflow", 11) \
@@ -201,6 +207,7 @@ typedef enum _zend_mir_opcode {
 	ZEND_MIR_OBJECT_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
 	ZEND_MIR_DYNAMIC_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
 	ZEND_MIR_W11P_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
+	ZEND_MIR_W12_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
 	/*
 	 * Keep the W03 scalar range boundary stable. W05 is modeling-only and
 	 * publishes its additive table boundary separately.
@@ -213,6 +220,7 @@ typedef enum _zend_mir_opcode {
 	ZEND_MIR_W10_OPCODE_COUNT = 137,
 	ZEND_MIR_W11_OPCODE_COUNT = 151,
 	ZEND_MIR_W11P_OPCODE_COUNT = 165,
+	ZEND_MIR_W12_OPCODE_COUNT = 169,
 	ZEND_MIR_OPCODE_INVALID = -1
 } zend_mir_opcode;
 #undef ZEND_MIR_OPCODE_ENUM
@@ -291,7 +299,9 @@ static inline bool zend_mir_opcode_is_executable_value(
 		|| opcode == ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE
 		|| opcode == ZEND_MIR_OPCODE_VALUE_ECHO
 		|| opcode == ZEND_MIR_OPCODE_FUNC_NUM_ARGS
-		|| opcode == ZEND_MIR_OPCODE_FUNC_GET_ARGS;
+		|| opcode == ZEND_MIR_OPCODE_FUNC_GET_ARGS
+		|| (opcode >= ZEND_MIR_OPCODE_GENERATOR_CREATE
+			&& opcode <= ZEND_MIR_OPCODE_GENERATOR_RETURN);
 }
 
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_COUNT < UINT32_MAX,
@@ -350,5 +360,11 @@ ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_ECHO_SCALAR
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W11P_OPCODE_COUNT
 	== ZEND_MIR_OPCODE_SLOW_PATH_CALL + 1,
 	"W11P semantic operations have an additive table boundary");
+ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_GENERATOR_CREATE
+	== ZEND_MIR_W11P_OPCODE_COUNT,
+	"W12 generator operations begin after the frozen W11P boundary");
+ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W12_OPCODE_COUNT
+	== ZEND_MIR_OPCODE_GENERATOR_RETURN + 1,
+	"W12 generator operations have an additive table boundary");
 
 #endif /* ZEND_MIR_OPCODES_H */
