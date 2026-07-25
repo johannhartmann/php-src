@@ -600,8 +600,6 @@ public:
 				valid_ = false;
 			} else {
 				const zend_cfg &cfg = plan_->source_ssa->cfg;
-				std::vector<uint32_t> source_block_to_mir(
-					cfg.blocks_count, UINT32_MAX);
 				source_block_next.resize(cfg.blocks_count, UINT32_MAX);
 				for (uint32_t instruction = 0;
 						instruction < plan_->instruction_count;
@@ -617,16 +615,22 @@ public:
 					const int32_t mir_block =
 						block_index(record.block_id);
 					if (source_block >= cfg.blocks_count
-							|| mir_block < 0
-							|| (source_block_to_mir[source_block]
-									!= UINT32_MAX
-								&& source_block_to_mir[source_block]
-									!= static_cast<uint32_t>(mir_block))) {
+							|| mir_block < 0) {
 						valid_ = false;
 						continue;
 					}
-					source_block_to_mir[source_block] =
-						static_cast<uint32_t>(mir_block);
+					/*
+					 * Lowering may split one Zend basic block into multiple MIR
+					 * blocks.  Keep the first executable landing for each exact
+					 * source position; gaps are assigned to the next executable
+					 * position below so call INIT/SEND fragments run before the
+					 * operation that consumes their state.
+					 */
+					if (source_landing_blocks[record.source_position_id]
+							== UINT32_MAX) {
+						source_landing_blocks[record.source_position_id] =
+							static_cast<uint32_t>(mir_block);
+					}
 				}
 				for (uint32_t source_block = 0;
 						source_block < cfg.blocks_count; ++source_block) {
@@ -639,16 +643,35 @@ public:
 						continue;
 					}
 					source_block_next[source_block] = block.start;
-					if (source_block_to_mir[source_block] == UINT32_MAX) {
-						valid_ = false;
-						continue;
-					}
-					for (uint32_t source = block.start;
-							source < block.start + block.len; ++source) {
+					const uint32_t block_end = block.start + block.len;
+					uint32_t next_mir_block = UINT32_MAX;
+					for (uint32_t source = block_end;
+							source-- > block.start;) {
 						if (plan_->source_op_array->opcodes[source].opcode
-								!= ZEND_OP_DATA) {
+								== ZEND_OP_DATA) {
+							continue;
+						}
+						if (source_landing_blocks[source] != UINT32_MAX) {
+							next_mir_block = source_landing_blocks[source];
+						} else if (next_mir_block != UINT32_MAX) {
+							source_landing_blocks[source] = next_mir_block;
+						}
+					}
+					uint32_t previous_mir_block = UINT32_MAX;
+					for (uint32_t source = block.start;
+							source < block_end; ++source) {
+						if (plan_->source_op_array->opcodes[source].opcode
+								== ZEND_OP_DATA) {
+							continue;
+						}
+						if (source_landing_blocks[source] != UINT32_MAX) {
+							previous_mir_block =
+								source_landing_blocks[source];
+						} else if (previous_mir_block != UINT32_MAX) {
 							source_landing_blocks[source] =
-								source_block_to_mir[source_block];
+								previous_mir_block;
+						} else {
+							valid_ = false;
 						}
 					}
 				}
