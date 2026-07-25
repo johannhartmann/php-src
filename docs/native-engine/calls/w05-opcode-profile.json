@@ -6649,7 +6649,7 @@
     "w01": {
       "active_opcode_count": 212,
       "path": "docs/native-engine/semantics/opcodes/opcode-matrix.json",
-      "sha256": "96406ddd2fc7a0a58903c1d1f79cef61b0f6ad5a49801426779d26984942b60e",
+      "sha256": "a5b45ccc8d5892a80cac31297b9f25203be2bf1c085e768b039d537b5b0a64f5",
       "source_commit": "b7c524a19fa815799a858b98d39f176ca88648b1"
     },
     "w04": {
