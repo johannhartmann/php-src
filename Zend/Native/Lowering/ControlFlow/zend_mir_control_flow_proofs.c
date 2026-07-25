@@ -627,6 +627,8 @@ zend_mir_w04_branch_kind zend_mir_w04_branch_kind_for_opcode(uint32_t opcode)
 			return ZEND_MIR_W10_BRANCH_JMP_NULL;
 		case ZEND_MIR_W10_OPCODE_THROW:
 			return ZEND_MIR_W10_BRANCH_THROW;
+		case ZEND_MIR_W12_OPCODE_ASSERT_CHECK:
+			return ZEND_MIR_W12_BRANCH_ASSERT_CHECK;
 		case ZEND_MIR_W09_OPCODE_FE_RESET_R:
 		case ZEND_MIR_W09_OPCODE_FE_FETCH_R:
 		case ZEND_MIR_W09_OPCODE_FE_RESET_RW:

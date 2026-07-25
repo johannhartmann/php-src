@@ -49,6 +49,32 @@ zend_native_status zend_native_value_func_get_args(
 	uint64_t op1, uint64_t op2, uint64_t result,
 	uint32_t extended_value, uint32_t source_opcode,
 	uint32_t source_position_id);
+#define ZEND_NATIVE_W12_VALUE_HELPER(name) \
+	zend_native_status name( \
+		zend_execute_data *execute_data, \
+		uint64_t op1, uint64_t op2, uint64_t result, \
+		uint32_t extended_value, uint32_t source_opcode, \
+		uint32_t source_position_id);
+
+ZEND_NATIVE_W12_VALUE_HELPER(zend_native_value_count)
+ZEND_NATIVE_W12_VALUE_HELPER(zend_native_value_get_type)
+ZEND_NATIVE_W12_VALUE_HELPER(zend_native_value_array_key_exists)
+ZEND_NATIVE_W12_VALUE_HELPER(zend_native_value_in_array)
+ZEND_NATIVE_W12_VALUE_HELPER(zend_native_value_isset_this)
+ZEND_NATIVE_W12_VALUE_HELPER(zend_native_value_get_called_class)
+ZEND_NATIVE_W12_VALUE_HELPER(zend_native_value_begin_silence)
+ZEND_NATIVE_W12_VALUE_HELPER(zend_native_value_end_silence)
+ZEND_NATIVE_W12_VALUE_HELPER(zend_native_value_match_error)
+ZEND_NATIVE_W12_VALUE_HELPER(zend_native_value_verify_never_type)
+ZEND_NATIVE_W12_VALUE_HELPER(zend_native_value_defined)
+ZEND_NATIVE_W12_VALUE_HELPER(zend_native_value_ticks)
+ZEND_NATIVE_W12_VALUE_HELPER(zend_native_value_type_assert)
+ZEND_NATIVE_W12_VALUE_HELPER(zend_native_value_ext_stmt)
+ZEND_NATIVE_W12_VALUE_HELPER(zend_native_value_ext_fcall_begin)
+ZEND_NATIVE_W12_VALUE_HELPER(zend_native_value_ext_fcall_end)
+ZEND_NATIVE_W12_VALUE_HELPER(zend_native_value_ext_nop)
+
+#undef ZEND_NATIVE_W12_VALUE_HELPER
 void zend_native_zval_store_integer(
 	zval *slot, uint64_t payload, uint32_t exact_type);
 void zend_native_zval_store_double(zval *slot, double value);

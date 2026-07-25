@@ -264,6 +264,40 @@ static zend_mir_opcode zend_mir_w09_executable_opcode(uint32_t opcode)
 			return ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM;
 		case ZEND_GENERATOR_RETURN:
 			return ZEND_MIR_OPCODE_GENERATOR_RETURN;
+		case ZEND_COUNT:
+			return ZEND_MIR_OPCODE_VALUE_COUNT;
+		case ZEND_GET_TYPE:
+			return ZEND_MIR_OPCODE_VALUE_GET_TYPE;
+		case ZEND_ARRAY_KEY_EXISTS:
+			return ZEND_MIR_OPCODE_VALUE_ARRAY_KEY_EXISTS;
+		case ZEND_IN_ARRAY:
+			return ZEND_MIR_OPCODE_VALUE_IN_ARRAY;
+		case ZEND_ISSET_ISEMPTY_THIS:
+			return ZEND_MIR_OPCODE_VALUE_ISSET_THIS;
+		case ZEND_GET_CALLED_CLASS:
+			return ZEND_MIR_OPCODE_VALUE_GET_CALLED_CLASS;
+		case ZEND_BEGIN_SILENCE:
+			return ZEND_MIR_OPCODE_VALUE_BEGIN_SILENCE;
+		case ZEND_END_SILENCE:
+			return ZEND_MIR_OPCODE_VALUE_END_SILENCE;
+		case ZEND_MATCH_ERROR:
+			return ZEND_MIR_OPCODE_VALUE_MATCH_ERROR;
+		case ZEND_VERIFY_NEVER_TYPE:
+			return ZEND_MIR_OPCODE_VALUE_VERIFY_NEVER_TYPE;
+		case ZEND_DEFINED:
+			return ZEND_MIR_OPCODE_VALUE_DEFINED;
+		case ZEND_TICKS:
+			return ZEND_MIR_OPCODE_VALUE_TICKS;
+		case ZEND_TYPE_ASSERT:
+			return ZEND_MIR_OPCODE_VALUE_TYPE_ASSERT;
+		case ZEND_EXT_STMT:
+			return ZEND_MIR_OPCODE_VALUE_EXT_STMT;
+		case ZEND_EXT_FCALL_BEGIN:
+			return ZEND_MIR_OPCODE_VALUE_EXT_FCALL_BEGIN;
+		case ZEND_EXT_FCALL_END:
+			return ZEND_MIR_OPCODE_VALUE_EXT_FCALL_END;
+		case ZEND_EXT_NOP:
+			return ZEND_MIR_OPCODE_VALUE_EXT_NOP;
 		case ZEND_ADD:
 		case ZEND_SUB:
 		case ZEND_MUL:
@@ -374,6 +408,7 @@ static zend_mir_opcode zend_mir_w11p_control_value_opcode(uint32_t opcode)
 		case ZEND_JMP_SET:
 		case ZEND_COALESCE:
 		case ZEND_JMP_NULL:
+		case ZEND_ASSERT_CHECK:
 			return ZEND_MIR_OPCODE_VALUE_COND_BRANCH;
 		case ZEND_FE_RESET_R:
 		case ZEND_FE_RESET_RW:
@@ -630,6 +665,39 @@ static bool zend_mir_w09_operation_semantics(
 						&summary, ZEND_MIR_EFFECT_OBSERVE_FRAME)
 					|| !zend_mir_w09_add_effect(
 						&summary, ZEND_MIR_EFFECT_THROW)) {
+				return false;
+			}
+			break;
+		case ZEND_MIR_OPCODE_VALUE_COUNT:
+		case ZEND_MIR_OPCODE_VALUE_ARRAY_KEY_EXISTS:
+		case ZEND_MIR_OPCODE_VALUE_IN_ARRAY:
+		case ZEND_MIR_OPCODE_VALUE_GET_TYPE:
+		case ZEND_MIR_OPCODE_VALUE_GET_CALLED_CLASS:
+		case ZEND_MIR_OPCODE_VALUE_BEGIN_SILENCE:
+		case ZEND_MIR_OPCODE_VALUE_END_SILENCE:
+		case ZEND_MIR_OPCODE_VALUE_MATCH_ERROR:
+		case ZEND_MIR_OPCODE_VALUE_VERIFY_NEVER_TYPE:
+		case ZEND_MIR_OPCODE_VALUE_DEFINED:
+		case ZEND_MIR_OPCODE_VALUE_TICKS:
+		case ZEND_MIR_OPCODE_VALUE_TYPE_ASSERT:
+		case ZEND_MIR_OPCODE_VALUE_EXT_STMT:
+		case ZEND_MIR_OPCODE_VALUE_EXT_FCALL_BEGIN:
+		case ZEND_MIR_OPCODE_VALUE_EXT_FCALL_END:
+			if (!zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_ALLOCATE)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_REENTER_PHP)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_THROW)) {
+				return false;
+			}
+			break;
+		case ZEND_MIR_OPCODE_VALUE_EXT_NOP:
+			break;
+		case ZEND_MIR_OPCODE_VALUE_ISSET_THIS:
+			if (!zend_mir_w09_add_effect(
+					&summary, ZEND_MIR_EFFECT_OBSERVE_FRAME)) {
 				return false;
 			}
 			break;
