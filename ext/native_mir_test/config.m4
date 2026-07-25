@@ -1,3 +1,10 @@
+PHP_ARG_ENABLE([native-engine],
+  [whether to enable the native userland execution engine],
+  [AS_HELP_STRING([--enable-native-engine],
+    [Enable the native userland execution engine])],
+  [no],
+  [no])
+
 PHP_ARG_ENABLE([native-mir-test],
   [whether to enable the native MIR compile/dump test bridge],
   [AS_HELP_STRING([--enable-native-mir-test],
@@ -10,8 +17,18 @@ AS_VAR_IF([PHP_NATIVE_MIR_TEST], [no], [], [
     [yes], [],
     [AC_MSG_ERROR([native_mir_test is test-only and cannot be built shared])])
 
+  PHP_NATIVE_ENGINE=yes
   AC_DEFINE([HAVE_NATIVE_MIR_TEST], [1],
     [Define to 1 if the test-only native MIR bridge is enabled.])
+])
+
+AS_VAR_IF([PHP_NATIVE_ENGINE], [no], [], [
+  AS_CASE([$PHP_NATIVE_ENGINE],
+    [yes], [],
+    [AC_MSG_ERROR([native engine is a core component and cannot be built shared])])
+
+  AC_DEFINE([HAVE_NATIVE_ENGINE], [1],
+    [Define to 1 if the native userland execution engine is enabled.])
 
   PHP_REQUIRE_CXX()
   PHP_CXX_COMPILE_STDCXX([20], [mandatory], [PHP_NATIVE_MIR_TEST_STDCXX])
@@ -38,11 +55,13 @@ AS_VAR_IF([PHP_NATIVE_MIR_TEST], [no], [], [
   PHP_ADD_INCLUDE([$abs_srcdir/Zend/Native/TPDE/ThirdParty/tpde/include])
   PHP_ADD_INCLUDE([$NATIVE_MIR_TEST_FADEC_BUILD_DIR])
 
-  PHP_NEW_EXTENSION([native_mir_test],
-    [native_mir_test.c],
-    [no],,
-    [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1 -DZEND_MIR_W05_TEST_FAULTS=1 -DZEND_MIR_W06_TEST_FAULTS=1],
-    [cxx])
+  AS_VAR_IF([PHP_NATIVE_MIR_TEST], [no], [], [
+    PHP_NEW_EXTENSION([native_mir_test],
+      [native_mir_test.c],
+      [no],,
+      [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1 -DZEND_MIR_W05_TEST_FAULTS=1 -DZEND_MIR_W06_TEST_FAULTS=1],
+      [cxx])
+  ])
 
   PHP_ADD_BUILD_DIR([Zend/Native/TPDE/Common])
   PHP_ADD_SOURCES_X([Zend/Native/TPDE/Common], [zend_tpde_backend.cpp],
@@ -84,6 +103,7 @@ AS_VAR_IF([PHP_NATIVE_MIR_TEST], [no], [], [
   PHP_ADD_BUILD_DIR([Zend/Native/Compiler])
   PHP_ADD_SOURCES([Zend/Native/Compiler], [zend_native_dynamic_code.c])
   PHP_ADD_SOURCES([Zend/Native/Compiler], [zend_native_compiler.c])
+  PHP_ADD_SOURCES([Zend/Native/Compiler], [zend_native_executor.c])
   dnl BEGIN GENERATED NATIVE SOURCES
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/CFG])
   PHP_ADD_SOURCES([Zend/Native/MIR/CFG], [zend_mir_cfg.c])

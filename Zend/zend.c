@@ -40,6 +40,9 @@
 #include "zend_enum.h"
 #include "zend_closures.h"
 #include "Optimizer/zend_optimizer.h"
+#ifdef HAVE_NATIVE_ENGINE
+# include "Native/Compiler/zend_native_executor.h"
+#endif
 #include "php.h"
 #include "php_globals.h"
 
@@ -1163,12 +1166,21 @@ zend_result zend_post_startup(void) /* {{{ */
 #endif
 	gc_init();
 
+#ifdef HAVE_NATIVE_ENGINE
+	if (zend_native_executor_startup() == FAILURE) {
+		return FAILURE;
+	}
+#endif
+
 	return SUCCESS;
 }
 /* }}} */
 
 void zend_shutdown(void) /* {{{ */
 {
+#ifdef HAVE_NATIVE_ENGINE
+	zend_native_executor_shutdown();
+#endif
 	zend_vm_dtor();
 
 	zend_destroy_rsrc_list(&EG(persistent_list));
@@ -1330,6 +1342,9 @@ ZEND_API void zend_activate(void) /* {{{ */
 	gc_reset();
 	init_compiler();
 	init_executor();
+#ifdef HAVE_NATIVE_ENGINE
+	zend_native_executor_activate();
+#endif
 	startup_scanner();
 	if (CG(map_ptr_last)) {
 		memset((void **)CG(map_ptr_real_base) + zend_map_ptr_static_size, 0, CG(map_ptr_last) * sizeof(void*));
@@ -1349,6 +1364,9 @@ void zend_call_destructors(void) /* {{{ */
 
 ZEND_API void zend_deactivate(void) /* {{{ */
 {
+#ifdef HAVE_NATIVE_ENGINE
+	zend_native_executor_deactivate();
+#endif
 	/* we're no longer executing anything */
 	EG(current_execute_data) = NULL;
 

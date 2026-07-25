@@ -144,6 +144,16 @@ ZEND_API zend_native_status zend_native_compiler_execute(
 	zval *result,
 	zend_native_diagnostic *diagnostic);
 
+/*
+ * Execute an existing Zend activation. This is the production executor entry:
+ * the caller retains the stack-frame allocation while the native boundary
+ * owns compiled-variable cleanup, observers, exceptions, and bailout state.
+ */
+ZEND_API zend_native_status zend_native_compiler_execute_data(
+	zend_native_compiler *compiler,
+	zend_execute_data *execute_data,
+	zend_native_diagnostic *diagnostic);
+
 ZEND_API uint32_t zend_native_compiler_function_count(
 	const zend_native_compiler *compiler);
 ZEND_API const zend_native_code *zend_native_compiler_code_at(
