@@ -105,7 +105,7 @@ display_errors=1
 log_errors=0
 zend_test.observer.enabled=1
 zend_test.observer.show_output=1
-zend_test.observer.observe_function_names=native_fpm_outer,native_fpm_inner,w09_fpm_outer,w09_fpm_collect,w09_fpm_map,w09_fpm_ref,w10_fpm_outer,w10_fpm_loaded_callback,__construct,__get,__set,__destruct,compute,w11_fpm_outer,w11_fpm_static,stream_open,stream_read,stream_eof,stream_stat,url_stat,value,base,intdiv,strcmp,array_map
+zend_test.observer.observe_function_names=native_fpm_outer,native_fpm_inner,w09_fpm_outer,w09_fpm_collect,w09_fpm_map,w09_fpm_ref,w10_fpm_outer,w10_fpm_loaded_callback,__construct,__get,__set,__destruct,compute,w11_fpm_outer,w11_fpm_static,w12_fpm_outer,w12_fpm_generator,stream_open,stream_read,stream_eof,stream_stat,url_stat,value,base,intdiv,strcmp,array_map
 zend_test.observer.show_return_value=0
 zend_test.observer.execute_internal=1
 EOF
@@ -130,6 +130,11 @@ class W11FpmChild extends W11FpmBase {
         return $this->base() + 2;
     }
 }
+PHP
+cat >"$work/w12-suspend.php" <<'PHP'
+<?php
+$value = Fiber::suspend('include');
+return $value + 1;
 PHP
 
 cat >"$request" <<'PHP'
@@ -445,6 +450,71 @@ printf(
     $w11['execution']['opline_handler_calls'],
 );
 stream_wrapper_unregister('w11fpm');
+
+$w12Source = <<<'NATIVE_PHP'
+<?php
+function w12_fpm_generator(int $base): Generator
+{
+    yield $base;
+    $received = yield $base + 1;
+    return $received + 4;
+}
+
+function w12_fpm_outer(string $includePath): array
+{
+    $generator = w12_fpm_generator(2);
+    $generatorTrace = [
+        $generator->current(),
+        $generator->send(5),
+    ];
+    $generator->send(7);
+    $generatorTrace[] = $generator->getReturn();
+
+    $fiber = new Fiber(static function () use ($includePath): array {
+        $included = include $includePath;
+        $evaluated = eval('return Fiber::suspend("eval");');
+        $mapped = array_map(
+            static fn (int $value): int =>
+                Fiber::suspend("callback:$value"),
+            [1, 2],
+        );
+        $internal = strlen((string) Fiber::suspend('internal'));
+        return [$included, $evaluated, $mapped, $internal];
+    });
+    $fiberTrace = [$fiber->start()];
+    $fiberTrace[] = $fiber->resume(4);
+    $fiberTrace[] = $fiber->resume(5);
+    $fiberTrace[] = $fiber->resume(6);
+    $fiberTrace[] = $fiber->resume(7);
+    $fiber->resume('native');
+
+    return [$generatorTrace, $fiberTrace, $fiber->getReturn()];
+}
+NATIVE_PHP;
+
+$w12 = native_mir_test_compile_execute(
+    $w12Source,
+    'w12-fpm-native.php',
+    [__DIR__ . '/w12-suspend.php'],
+    [
+        'wave' => 11,
+        'function' => 'w12_fpm_outer',
+        'stack_probe' => true,
+    ],
+);
+printf(
+    "w12=%s execution=%s return=%s worker=%d gateway=%s vm=%d execute_ex=%d handler=%d active=%d\n",
+    $w12['status'],
+    $w12['execution']['status'],
+    json_encode($w12['execution']['return_value']),
+    getmypid(),
+    ($w12['execution']['generator_reentry_gateway_calls'] ?? 0) > 0
+        ? 'yes' : 'no',
+    $w12['execution']['vm_handler_calls'],
+    $w12['execution']['execute_ex_calls'],
+    $w12['execution']['opline_handler_calls'],
+    $w12['execution']['entry_active_calls'],
+);
 PHP
 
 "$fpm" -F -y "$fpm_config" -c "$php_ini" >"$work/fpm.log" 2>&1 &
@@ -493,6 +563,8 @@ for response in "$response_one" "$response_two"; do
 	grep -F '<w10_fpm_loaded_callback>' "$response" >/dev/null
 	grep -F '<w11_fpm_outer>' "$response" >/dev/null
 	grep -F '<w11_fpm_static>' "$response" >/dev/null
+	grep -F '<w12_fpm_outer>' "$response" >/dev/null
+	grep -F '<w12_fpm_generator>' "$response" >/dev/null
 	grep -F '<W11FpmStream::stream_open>' "$response" >/dev/null
 	grep -F '<W11FpmChild::value>' "$response" >/dev/null
 	grep -F \
@@ -506,6 +578,11 @@ for response in "$response_one" "$response_two"; do
 		"$response" >/dev/null
 	grep -F \
 		'w11=accepted execution=returned return=[20,22,[42,42,1,2],42,41,["first:W11FpmChild","second:W11FpmChild","first:W11FpmBase","second:W11FpmBase"]]' \
+		"$response" >/dev/null
+	grep -F \
+		'w12=accepted execution=returned return=[[2,3,11],["include","eval","callback:1","callback:2","internal"],[5,5,[6,7],6]]' \
+		"$response" >/dev/null
+	grep -F 'gateway=yes vm=0 execute_ex=0 handler=0 active=0' \
 		"$response" >/dev/null
 	grep -F 'vm=0 execute_ex=0 handler=0' "$response" >/dev/null
 done
@@ -565,4 +642,4 @@ grep -F \
     'status=error execution=bailout exception=0 bailout=1 vm=0 execute_ex=0 handler=0' \
     "$timeout_output" >/dev/null
 
-printf 'PASS real_fpm=2 same_worker=1 w09_values=1 w10_objects_callables=1 w11_dynamic_code=1 w11_request_teardown=1 internal_calls=4 exception_caught=3 observer=1 timeout_process=1 vm_dispatch=0\n'
+printf 'PASS real_fpm=2 same_worker=1 w09_values=1 w10_objects_callables=1 w11_dynamic_code=1 w11_request_teardown=1 w12_suspend_resume=1 generator_gateway=1 internal_calls=4 exception_caught=3 observer=1 timeout_process=1 vm_dispatch=0\n'
