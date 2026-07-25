@@ -226,7 +226,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 	}
 	if (node.kind == Adaptor::InstKind::UserOpcodeGateway) {
 		const zend_tpde_plan *plan = adaptor->plan();
-		if (plan->source_op_array == nullptr || node.operands.size() != 2
+		if (plan->source_op_array == nullptr || node.operands.size() != 4
 				|| node.argument_index >= plan->source_op_array->last
 				|| user_opcode_labels_.size()
 					< plan->source_op_array->last) {
@@ -258,6 +258,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			selected_opcode.alloc_specific(tpde::x64::AsmReg::R10);
 		mov(selected_opcode_reg, action_reg, 4);
 		ASM(AND32ri, selected_opcode_reg, UINT32_C(0xff));
+		auto return_action = text_writer.label_create();
 		auto returned = text_writer.label_create();
 		auto exception = text_writer.label_create();
 		auto continued = text_writer.label_create();
@@ -268,7 +269,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(CMP32ri, action_reg, ZEND_USER_OPCODE_CONTINUE);
 		generate_raw_jump(Jump::je, continued);
 		ASM(CMP32ri, action_reg, ZEND_USER_OPCODE_RETURN);
-		generate_raw_jump(Jump::je, returned);
+		generate_raw_jump(Jump::je, return_action);
 		ASM(CMP32ri, action_reg, ZEND_USER_OPCODE_LEAVE);
 		generate_raw_jump(Jump::je, returned);
 		ASM(CMP32ri, action_reg, ZEND_USER_OPCODE_DISPATCH);
@@ -317,6 +318,35 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		generate_raw_jump(Jump::jmp, exception);
 		position.reset();
 		selected_opcode.reset();
+		label_place(return_action);
+		{
+			auto [frame_ref, frame] = val_ref_single(node.operands[2]);
+			auto frame_reg = frame.load_to_reg();
+			ScratchReg call_info{this};
+			auto call_info_reg = call_info.alloc_gp();
+			ASM(MOV32rm, call_info_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_execute_data, This)
+							+ offsetof(zval, u1.type_info))));
+			ASM(TEST32ri, call_info_reg, ZEND_CALL_GENERATOR);
+			generate_raw_jump(Jump::je, returned);
+			call_info.reset();
+		}
+		{
+			tpde::x64::CCAssignerSysV return_assigner{false};
+			CallBuilder return_call{*this, return_assigner};
+			return_call.add_arg(CallArg{node.operands[3]});
+			return_call.call(runtime_symbol(
+				ZEND_NATIVE_HELPER_GENERATOR_USER_OPCODE_RETURN));
+			ValuePart status{
+				tpde::x64::PlatformConfig::GP_BANK, 4};
+			return_call.add_ret(status, tpde::CCAssignment{});
+			RetBuilder return_builder{*this, *cur_cc_assigner()};
+			return_builder.add(std::move(status),
+				tpde::CCAssignment{});
+			return_builder.ret();
+		}
 		label_place(returned);
 		{
 			RetBuilder return_builder{*this, *cur_cc_assigner()};

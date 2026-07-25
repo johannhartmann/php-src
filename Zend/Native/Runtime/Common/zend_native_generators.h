@@ -23,6 +23,9 @@ ZEND_NATIVE_GENERATOR_HELPER(zend_native_generator_return)
 
 #undef ZEND_NATIVE_GENERATOR_HELPER
 
+zend_native_status zend_native_generator_user_opcode_return(
+	zend_execute_data *execute_data);
+
 #ifdef __cplusplus
 }
 #endif
