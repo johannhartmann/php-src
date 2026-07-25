@@ -64,6 +64,7 @@ public:
 		LoadExecutionContext,
 		UserOpcodeLanding,
 		UserOpcodeGateway,
+		UserOpcodeDispatch,
 		GeneratorGateway,
 		GeneratorResume,
 		FrameSlotAddress,
@@ -750,21 +751,29 @@ public:
 				false});
 			if (zend_get_user_opcode_handler(
 					plan_->source_op_array->opcodes[
-						source_position].opcode) == nullptr) {
-				return;
+						source_position].opcode) != nullptr) {
+				const uint32_t operand_offset =
+					static_cast<uint32_t>(operands_.size());
+				operands_.push_back(IRValueRef{FRAME_VALUE});
+				operands_.push_back(IRValueRef{EXECUTION_CONTEXT_VALUE});
+				add_node(block_instructions, block, InstNode{
+					InstKind::UserOpcodeGateway,
+					UINT32_MAX,
+					source_position,
+					INVALID_VALUE_REF,
+					{},
+					operand_offset,
+					2,
+					false});
 			}
-			const uint32_t operand_offset =
-				static_cast<uint32_t>(operands_.size());
-			operands_.push_back(IRValueRef{FRAME_VALUE});
-			operands_.push_back(IRValueRef{EXECUTION_CONTEXT_VALUE});
 			add_node(block_instructions, block, InstNode{
-				InstKind::UserOpcodeGateway,
+				InstKind::UserOpcodeDispatch,
 				UINT32_MAX,
 				source_position,
 				INVALID_VALUE_REF,
 				{},
-				operand_offset,
-				2,
+				0,
+				0,
 				false});
 		};
 

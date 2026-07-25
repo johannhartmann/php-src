@@ -34,6 +34,7 @@ class ZendCompilerX64 final
 	std::vector<tpde::SymRef> image_slots_;
 	std::vector<tpde::Label> generator_resume_labels_;
 	std::vector<tpde::Label> user_opcode_labels_;
+	std::vector<tpde::Label> user_opcode_dispatch_labels_;
 
 public:
 	struct ValRefSpecial {
@@ -210,8 +211,17 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		}
 		while (user_opcode_labels_.size() < plan->source_op_array->last) {
 			user_opcode_labels_.push_back(text_writer.label_create());
+			user_opcode_dispatch_labels_.push_back(
+				text_writer.label_create());
 		}
 		label_place(user_opcode_labels_[node.argument_index]);
+		return true;
+	}
+	if (node.kind == Adaptor::InstKind::UserOpcodeDispatch) {
+		if (node.argument_index >= user_opcode_dispatch_labels_.size()) {
+			return false;
+		}
+		label_place(user_opcode_dispatch_labels_[node.argument_index]);
 		return true;
 	}
 	if (node.kind == Adaptor::InstKind::UserOpcodeGateway) {
@@ -223,13 +233,8 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			return false;
 		}
 		const uint32_t source_position = node.argument_index;
-		const uint32_t source_opcode =
-			plan->source_op_array->opcodes[source_position].opcode;
 		const auto &next_landings =
 			adaptor->user_opcode_next_landings();
-		const uint32_t next_landing =
-			source_position + 1 < next_landings.size()
-				? next_landings[source_position + 1] : UINT32_MAX;
 		tpde::x64::CCAssignerSysV assigner{false};
 		CallBuilder builder{*this, assigner};
 		builder.add_arg(CallArg{node.operands[0]});
@@ -238,31 +243,80 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 		builder.call(runtime_symbol(ZEND_NATIVE_HELPER_USER_OPCODE_INVOKE));
 		ValuePart action{tpde::x64::PlatformConfig::GP_BANK, 8};
+		ValuePart selected_position{
+			tpde::x64::PlatformConfig::GP_BANK, 8};
 		builder.add_ret(action, tpde::CCAssignment{});
+		builder.add_ret(selected_position, tpde::CCAssignment{});
 		auto action_reg = action.cur_reg_or_load(this);
+		ScratchReg position{this};
+		auto position_reg =
+			position.alloc_specific(tpde::x64::AsmReg::R11);
+		mov(position_reg, selected_position.cur_reg_or_load(this), 4);
+		selected_position.reset(this);
+		ScratchReg selected_opcode{this};
+		auto selected_opcode_reg =
+			selected_opcode.alloc_specific(tpde::x64::AsmReg::R10);
+		mov(selected_opcode_reg, action_reg, 4);
+		ASM(AND32ri, selected_opcode_reg, UINT32_C(0xff));
 		auto returned = text_writer.label_create();
 		auto exception = text_writer.label_create();
+		auto continued = text_writer.label_create();
 		auto dispatch = text_writer.label_create();
+		auto dispatch_to = text_writer.label_create();
 		ASM(CMP32ri, action_reg, UINT32_MAX);
 		generate_raw_jump(Jump::je, exception);
 		ASM(CMP32ri, action_reg, ZEND_USER_OPCODE_CONTINUE);
-		if (next_landing != UINT32_MAX) {
-			generate_raw_jump(
-				Jump::je, user_opcode_labels_[next_landing]);
-		} else {
-			generate_raw_jump(Jump::je, returned);
-		}
+		generate_raw_jump(Jump::je, continued);
 		ASM(CMP32ri, action_reg, ZEND_USER_OPCODE_RETURN);
 		generate_raw_jump(Jump::je, returned);
 		ASM(CMP32ri, action_reg, ZEND_USER_OPCODE_LEAVE);
 		generate_raw_jump(Jump::je, returned);
 		ASM(CMP32ri, action_reg, ZEND_USER_OPCODE_DISPATCH);
 		generate_raw_jump(Jump::je, dispatch);
-		ASM(AND32ri, action_reg, UINT32_C(0xff));
-		ASM(CMP32ri, action_reg, source_opcode);
-		generate_raw_jump(Jump::je, dispatch);
+		generate_raw_jump(Jump::jmp, dispatch_to);
 		action.reset(this);
 		generate_raw_jump(Jump::jmp, exception);
+		label_place(continued);
+		ASM(ADD32ri, position_reg, 1);
+		for (uint32_t source = 0;
+				source < user_opcode_labels_.size(); ++source) {
+			if (next_landings[source] != source) {
+				continue;
+			}
+			ASM(CMP32ri, position_reg, source);
+			generate_raw_jump(
+				Jump::je, user_opcode_labels_[source]);
+		}
+		generate_raw_jump(Jump::jmp, exception);
+		label_place(dispatch);
+		for (uint32_t source = 0;
+				source < user_opcode_dispatch_labels_.size(); ++source) {
+			if (next_landings[source] != source) {
+				continue;
+			}
+			ASM(CMP32ri, position_reg, source);
+			generate_raw_jump(
+				Jump::je, user_opcode_dispatch_labels_[source]);
+		}
+		generate_raw_jump(Jump::jmp, exception);
+		label_place(dispatch_to);
+		for (uint32_t source = 0;
+				source < user_opcode_dispatch_labels_.size(); ++source) {
+			if (next_landings[source] != source) {
+				continue;
+			}
+			auto next_candidate = text_writer.label_create();
+			ASM(CMP32ri, position_reg, source);
+			generate_raw_jump(Jump::jne, next_candidate);
+			ASM(CMP32ri, selected_opcode_reg,
+				plan->source_op_array->opcodes[source].opcode);
+			generate_raw_jump(
+				Jump::je, user_opcode_dispatch_labels_[source]);
+			label_place(next_candidate);
+		}
+		generate_raw_jump(Jump::jmp, exception);
+		position.reset();
+		selected_opcode.reset();
 		label_place(returned);
 		{
 			RetBuilder return_builder{*this, *cur_cc_assigner()};
@@ -279,7 +333,6 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				tpde::CCAssignment{});
 			return_builder.ret();
 		}
-		label_place(dispatch);
 		return true;
 	}
 	if (node.kind == Adaptor::InstKind::GeneratorGateway) {

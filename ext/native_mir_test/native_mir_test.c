@@ -225,6 +225,7 @@ typedef struct _native_mir_test_state {
 	uint64_t user_opcode_calls;
 	user_opcode_handler_t previous_user_opcode_handler;
 	uint32_t user_opcode_action;
+	uint32_t user_opcode_advance;
 	uint8_t user_opcode;
 	bool user_opcode_configured;
 	bool user_opcode_installed;
@@ -254,6 +255,21 @@ static int native_mir_test_user_opcode_handler(zend_execute_data *execute_data)
 		return ZEND_USER_OPCODE_DISPATCH;
 	}
 	state->user_opcode_calls++;
+	if (state->user_opcode_advance != 0
+			&& execute_data->func != NULL
+			&& ZEND_USER_CODE(execute_data->func->type)
+			&& execute_data->opline
+				>= execute_data->func->op_array.opcodes
+			&& execute_data->opline
+				< execute_data->func->op_array.opcodes
+					+ execute_data->func->op_array.last
+			&& state->user_opcode_advance
+				< (uint32_t) (
+					execute_data->func->op_array.opcodes
+						+ execute_data->func->op_array.last
+					- execute_data->opline)) {
+		execute_data->opline += state->user_opcode_advance;
+	}
 	return (int) state->user_opcode_action;
 }
 
@@ -778,6 +794,7 @@ static bool native_mir_test_parse_user_opcode(
 	zval *opcode;
 	zval *action;
 	zval *dispatch_to;
+	zval *advance;
 	uint8_t selected_opcode;
 	uint8_t target_opcode = 0;
 	uint32_t selected_action;
@@ -790,6 +807,7 @@ static bool native_mir_test_parse_user_opcode(
 	action = zend_hash_str_find(configuration, ZEND_STRL("action"));
 	dispatch_to = zend_hash_str_find(
 		configuration, ZEND_STRL("dispatch_to"));
+	advance = zend_hash_str_find(configuration, ZEND_STRL("advance"));
 	if (opcode == NULL || Z_TYPE_P(opcode) != IS_STRING
 			|| !native_mir_test_opcode_from_name(
 				Z_STR_P(opcode), &selected_opcode)
@@ -819,6 +837,13 @@ static bool native_mir_test_parse_user_opcode(
 	if (dispatch_to != NULL
 			&& selected_action < ZEND_USER_OPCODE_DISPATCH_TO) {
 		return false;
+	}
+	if (advance != NULL) {
+		if (Z_TYPE_P(advance) != IS_LONG || Z_LVAL_P(advance) < 0
+				|| (zend_ulong) Z_LVAL_P(advance) > UINT32_MAX) {
+			return false;
+		}
+		state->user_opcode_advance = (uint32_t) Z_LVAL_P(advance);
 	}
 	state->user_opcode = selected_opcode;
 	state->user_opcode_action = selected_action;

@@ -377,7 +377,32 @@ zend_native_entry_cell *zend_native_reentry_resolve(
 		zend_native_active_reentry_scope, function);
 }
 
-uint64_t zend_native_user_opcode_invoke(
+static zend_native_user_opcode_result zend_native_user_opcode_result_make(
+	zend_execute_data *execute_data, uint32_t action)
+{
+	zend_native_user_opcode_result result = {
+		.action = UINT32_MAX,
+		.source_position = UINT32_MAX,
+	};
+	const zend_op_array *op_array;
+
+	if (execute_data == NULL || execute_data->func == NULL
+			|| !ZEND_USER_CODE(execute_data->func->type)
+			|| execute_data->opline == NULL) {
+		return result;
+	}
+	op_array = &execute_data->func->op_array;
+	if (execute_data->opline < op_array->opcodes
+			|| execute_data->opline >= op_array->opcodes + op_array->last) {
+		return result;
+	}
+	result.action = action;
+	result.source_position =
+		(uint32_t) (execute_data->opline - op_array->opcodes);
+	return result;
+}
+
+zend_native_user_opcode_result zend_native_user_opcode_invoke(
 	zend_execute_data *execute_data,
 	zend_native_execution_context *context,
 	uint32_t source_position_id)
@@ -391,22 +416,24 @@ uint64_t zend_native_user_opcode_invoke(
 	if (execute_data == NULL || context == NULL || execute_data->func == NULL
 			|| !ZEND_USER_CODE(execute_data->func->type)
 			|| source_position_id >= execute_data->func->op_array.last) {
-		return UINT32_MAX;
+		return zend_native_user_opcode_result_make(NULL, UINT32_MAX);
 	}
 	execute_data->opline =
 		&execute_data->func->op_array.opcodes[source_position_id];
 	handler = zend_get_user_opcode_handler(execute_data->opline->opcode);
 	if (handler == NULL) {
-		return ZEND_USER_OPCODE_DISPATCH;
+		return zend_native_user_opcode_result_make(
+			execute_data, ZEND_USER_OPCODE_DISPATCH);
 	}
 	EG(current_execute_data) = execute_data;
 	action = handler(execute_data);
 	if (EG(exception) != NULL) {
 		EG(current_execute_data) = execute_data;
-		return UINT32_MAX;
+		return zend_native_user_opcode_result_make(NULL, UINT32_MAX);
 	}
 	if (action != ZEND_USER_OPCODE_ENTER) {
-		return (uint32_t) action;
+		return zend_native_user_opcode_result_make(
+			execute_data, (uint32_t) action);
 	}
 
 	/*
@@ -421,7 +448,7 @@ uint64_t zend_native_user_opcode_invoke(
 		EG(current_execute_data) = execute_data;
 		zend_throw_error(NULL,
 			"User opcode ENTER target has no published native entry");
-		return UINT32_MAX;
+		return zend_native_user_opcode_result_make(NULL, UINT32_MAX);
 	}
 	if (cell->frame_probe != NULL) {
 		cell->frame_probe(
@@ -435,9 +462,10 @@ uint64_t zend_native_user_opcode_invoke(
 		zend_bailout();
 	}
 	if (status == ZEND_NATIVE_EXCEPTION || EG(exception) != NULL) {
-		return UINT32_MAX;
+		return zend_native_user_opcode_result_make(NULL, UINT32_MAX);
 	}
-	return ZEND_USER_OPCODE_CONTINUE;
+	return zend_native_user_opcode_result_make(
+		execute_data, ZEND_USER_OPCODE_CONTINUE);
 }
 
 static void zend_native_reentry_execute_ex(zend_execute_data *execute_data)
