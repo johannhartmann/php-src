@@ -16,6 +16,10 @@ function w12_user_opcode(int $value)
     $value += 3;
     return $value;
 }
+function w12_user_opcode_binary(int $value)
+{
+    return $value + 9;
+}
 PHP;
 
 $cases = [
@@ -50,6 +54,57 @@ foreach ($cases as [$action, $dispatchTo, $expected, $calls]) {
         json_encode($result['execution']['return_value'] ?? null),
         $result['execution']['user_opcode_calls'] ?? -1,
         $calls,
+        $result['execution']['vm_handler_calls'] ?? -1,
+        $result['execution']['execute_ex_calls'] ?? -1,
+        $result['execution']['opline_handler_calls'] ?? -1,
+    );
+    if (($result['execution']['return_value'] ?? null) !== $expected) {
+        printf("diagnostics=%s\n", json_encode($result['diagnostics'] ?? null));
+    }
+}
+
+$binaryTargets = [
+    'ZEND_ADD' => 10,
+    'ZEND_SUB' => -8,
+    'ZEND_MUL' => 9,
+    'ZEND_DIV' => 1 / 9,
+    'ZEND_MOD' => 1,
+    'ZEND_POW' => 1,
+    'ZEND_SL' => 512,
+    'ZEND_SR' => 0,
+    'ZEND_BW_OR' => 9,
+    'ZEND_BW_AND' => 1,
+    'ZEND_BW_XOR' => 8,
+    'ZEND_BOOL_XOR' => false,
+    'ZEND_IS_IDENTICAL' => false,
+    'ZEND_IS_NOT_IDENTICAL' => true,
+    'ZEND_IS_EQUAL' => false,
+    'ZEND_IS_NOT_EQUAL' => true,
+    'ZEND_IS_SMALLER' => true,
+    'ZEND_IS_SMALLER_OR_EQUAL' => true,
+    'ZEND_SPACESHIP' => -1,
+];
+foreach ($binaryTargets as $target => $expected) {
+    $result = native_mir_test_compile_execute(
+        $source,
+        "w12-user-opcode-binary-$target.php",
+        [1],
+        [
+            'wave' => 11,
+            'function' => 'w12_user_opcode_binary',
+            'user_opcode' => [
+                'opcode' => 'ZEND_ADD',
+                'action' => 'dispatch_to',
+                'dispatch_to' => $target,
+            ],
+        ],
+    );
+    printf(
+        "binary_%s status=%s result=%s calls=%d vm=%d execute_ex=%d handler=%d\n",
+        $target,
+        $result['status'],
+        json_encode($result['execution']['return_value'] ?? null),
+        $result['execution']['user_opcode_calls'] ?? -1,
         $result['execution']['vm_handler_calls'] ?? -1,
         $result['execution']['execute_ex_calls'] ?? -1,
         $result['execution']['opline_handler_calls'] ?? -1,
@@ -143,6 +198,25 @@ dispatch status=accepted result=6 calls=2/2 vm=0 execute_ex=0 handler=0
 dispatch_to status=accepted result=6 calls=2/2 vm=0 execute_ex=0 handler=0
 return status=accepted result=null calls=1/1 vm=0 execute_ex=0 handler=0
 leave status=accepted result=null calls=1/1 vm=0 execute_ex=0 handler=0
+binary_ZEND_ADD status=accepted result=10 calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_SUB status=accepted result=-8 calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_MUL status=accepted result=9 calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_DIV status=accepted result=0.1111111111111111 calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_MOD status=accepted result=1 calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_POW status=accepted result=1 calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_SL status=accepted result=512 calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_SR status=accepted result=0 calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_BW_OR status=accepted result=9 calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_BW_AND status=accepted result=1 calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_BW_XOR status=accepted result=8 calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_BOOL_XOR status=accepted result=false calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_IS_IDENTICAL status=accepted result=false calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_IS_NOT_IDENTICAL status=accepted result=true calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_IS_EQUAL status=accepted result=false calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_IS_NOT_EQUAL status=accepted result=true calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_IS_SMALLER status=accepted result=true calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_IS_SMALLER_OR_EQUAL status=accepted result=true calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_SPACESHIP status=accepted result=-1 calls=1 vm=0 execute_ex=0 handler=0
 moved_dispatch status=accepted result=4 calls=1 vm=0 execute_ex=0 handler=0
 moved_continue status=accepted result=1 calls=1 vm=0 execute_ex=0 handler=0
 generator_return status=accepted result=[false,"Cannot get return value of a generator that hasn't returned"] calls=1 vm=0 execute_ex=0 handler=0

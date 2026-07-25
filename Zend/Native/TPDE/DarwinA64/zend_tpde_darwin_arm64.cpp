@@ -236,7 +236,13 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 	}
 	if (node.kind == Adaptor::InstKind::UserOpcodeGateway) {
 		const zend_tpde_plan *plan = adaptor->plan();
-		if (plan->source_op_array == nullptr || node.operands.size() != 4
+		const auto dispatch_sources =
+			adaptor->user_opcode_dispatch_to_sources();
+		const size_t dispatch_case_count =
+			dispatch_sources.size()
+				* zend_tpde_binary_source_opcodes.size();
+		if (plan->source_op_array == nullptr
+				|| node.operands.size() != 4 + dispatch_case_count
 				|| node.argument_index >= plan->source_op_array->last
 				|| user_opcode_labels_.size()
 					< plan->source_op_array->last) {
@@ -336,9 +342,120 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				Jump::Jeq, user_opcode_dispatch_labels_[source]);
 			label_place(next_candidate);
 		}
+		struct DispatchToCase {
+			::tpde::Label label;
+			const zend_tpde_instruction *instruction;
+			uint32_t source;
+			uint32_t target_opcode;
+			uint32_t frame_operand;
+		};
+		std::vector<DispatchToCase> dispatch_cases;
+		dispatch_cases.reserve(dispatch_case_count);
+		for (size_t source_index = 0;
+				source_index < dispatch_sources.size(); ++source_index) {
+			const uint32_t source = dispatch_sources[source_index];
+			auto next_candidate = text_writer.label_create();
+			compare_position(source);
+			generate_raw_jump(Jump::Jne, next_candidate);
+			const zend_tpde_instruction *source_instruction = nullptr;
+			for (uint32_t instruction = 0;
+					instruction < plan->instruction_count; ++instruction) {
+				const zend_tpde_instruction &candidate =
+					plan->instructions[instruction];
+				if (candidate.has_value_operation
+						&& candidate.value_operation.source_position_id
+							== source) {
+					source_instruction = &candidate;
+					break;
+				}
+			}
+			if (source_instruction == nullptr) {
+				return false;
+			}
+			for (size_t target_index = 0;
+					target_index < zend_tpde_binary_source_opcodes.size();
+					++target_index) {
+				const uint32_t target_opcode =
+					zend_tpde_binary_source_opcodes[target_index];
+				auto target = text_writer.label_create();
+				ASM(CMPwi, selected_opcode_reg, target_opcode);
+				generate_raw_jump(Jump::Jeq, target);
+				dispatch_cases.push_back({
+					target,
+					source_instruction,
+					source,
+					target_opcode,
+					static_cast<uint32_t>(
+						4 + source_index
+							* zend_tpde_binary_source_opcodes.size()
+							+ target_index)});
+			}
+			label_place(next_candidate);
+		}
 		generate_raw_jump(Jump::jmp, exception);
 		position.reset();
 		selected_opcode.reset();
+		for (const DispatchToCase &dispatch_case : dispatch_cases) {
+			label_place(dispatch_case.label);
+			const zend_mir_executable_value_ref &operation =
+				dispatch_case.instruction->value_operation;
+			zend::native::tpde::CCAssignerAppleA64 assigner;
+			CallBuilder operation_call{*this, assigner};
+			operation_call.add_arg(
+				CallArg{node.operands[dispatch_case.frame_operand]});
+			operation_call.add_arg(ValuePart{
+				zend_tpde_encode_value_operand(operation.op1), 8,
+				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			operation_call.add_arg(ValuePart{
+				zend_tpde_encode_value_operand(operation.op2), 8,
+				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			operation_call.add_arg(ValuePart{
+				zend_tpde_encode_value_operand(operation.result), 8,
+				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			operation_call.add_arg(ValuePart{
+				operation.extended_value, 4, DarwinConfig::GP_BANK},
+				::tpde::CCAssignment{});
+			operation_call.add_arg(ValuePart{
+				dispatch_case.target_opcode, 4, DarwinConfig::GP_BANK},
+				::tpde::CCAssignment{});
+			operation_call.add_arg(ValuePart{
+				dispatch_case.source, 4, DarwinConfig::GP_BANK},
+				::tpde::CCAssignment{});
+			operation_call.call(
+				runtime_symbol(ZEND_NATIVE_HELPER_VALUE_BINARY_OP));
+			ValuePart status{DarwinConfig::GP_BANK, 4};
+			operation_call.add_ret(status, ::tpde::CCAssignment{});
+			auto status_reg = status.cur_reg_or_load(this);
+			auto completed = text_writer.label_create();
+			ASM(CMPxi, status_reg, ZEND_NATIVE_RETURNED);
+			generate_raw_jump(Jump::Jeq, completed);
+			if (zend_mir_id_is_valid(
+					dispatch_case.instruction->exception_block_id)) {
+				auto propagate = text_writer.label_create();
+				ASM(CMPxi, status_reg, ZEND_NATIVE_EXCEPTION);
+				generate_raw_jump(Jump::Jne, propagate);
+				generate_exception_branch(adaptor->block_ref(
+					dispatch_case.instruction->exception_block_id));
+				label_place(propagate);
+			}
+			{
+				RetBuilder return_builder{*this, *cur_cc_assigner()};
+				return_builder.add(
+					std::move(status), ::tpde::CCAssignment{});
+				return_builder.ret();
+			}
+			label_place(completed);
+			const uint32_t following =
+				dispatch_case.source + 1 < next_landings.size()
+				? next_landings[dispatch_case.source + 1] : UINT32_MAX;
+			if (following == UINT32_MAX
+					|| following >= user_opcode_labels_.size()) {
+				generate_raw_jump(Jump::jmp, exception);
+			} else {
+				generate_raw_jump(
+					Jump::jmp, user_opcode_labels_[following]);
+			}
+		}
 		label_place(return_action);
 		{
 			auto [frame_ref, frame] = val_ref_single(node.operands[2]);

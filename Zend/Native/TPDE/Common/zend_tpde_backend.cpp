@@ -1185,6 +1185,8 @@ bool initialize_plan(
 					plan, ZEND_NATIVE_HELPER_USER_OPCODE_INVOKE);
 				require_runtime_helper(plan,
 					ZEND_NATIVE_HELPER_GENERATOR_USER_OPCODE_RETURN);
+				require_runtime_helper(
+					plan, ZEND_NATIVE_HELPER_VALUE_BINARY_OP);
 				break;
 			}
 		}

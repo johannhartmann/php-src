@@ -182,6 +182,7 @@ private:
 	std::vector<uint32_t> generator_resume_targets_;
 	std::vector<uint32_t> generator_resume_landings_;
 	std::vector<uint32_t> user_opcode_next_landings_;
+	std::vector<uint32_t> user_opcode_dispatch_to_sources_;
 	bool valid_ = true;
 
 	int32_t block_index(zend_mir_block_id id) const {
@@ -591,6 +592,24 @@ public:
 				}
 				user_opcode_next_landings_[source] = next;
 			}
+			for (uint32_t source = 0;
+					source < plan_->source_op_array->last; ++source) {
+				if (source_landing_blocks[source] == UINT32_MAX) {
+					continue;
+				}
+				for (uint32_t instruction = 0;
+						instruction < plan_->instruction_count;
+						++instruction) {
+					const zend_tpde_instruction &candidate =
+						plan_->instructions[instruction];
+					if (candidate.has_value_operation
+							&& candidate.value_operation.source_position_id
+								== source) {
+						user_opcode_dispatch_to_sources_.push_back(source);
+						break;
+					}
+				}
+			}
 		}
 		for (uint32_t return_block : finally_return_blocks) {
 			for (IRBlockRef target : finally_targets) {
@@ -758,6 +777,13 @@ public:
 				operands_.push_back(IRValueRef{EXECUTION_CONTEXT_VALUE});
 				operands_.push_back(IRValueRef{FRAME_VALUE});
 				operands_.push_back(IRValueRef{FRAME_VALUE});
+				for (size_t dispatch_case = 0;
+						dispatch_case
+							< user_opcode_dispatch_to_sources_.size()
+								* zend_tpde_binary_source_opcodes.size();
+						++dispatch_case) {
+					operands_.push_back(IRValueRef{FRAME_VALUE});
+				}
 				add_node(block_instructions, block, InstNode{
 					InstKind::UserOpcodeGateway,
 					UINT32_MAX,
@@ -765,7 +791,9 @@ public:
 					INVALID_VALUE_REF,
 					{},
 					operand_offset,
-					4,
+					static_cast<uint32_t>(
+						4 + user_opcode_dispatch_to_sources_.size()
+							* zend_tpde_binary_source_opcodes.size()),
 					false});
 			}
 			add_node(block_instructions, block, InstNode{
@@ -1403,6 +1431,9 @@ public:
 	}
 	std::span<const uint32_t> user_opcode_next_landings() const {
 		return user_opcode_next_landings_;
+	}
+	std::span<const uint32_t> user_opcode_dispatch_to_sources() const {
+		return user_opcode_dispatch_to_sources_;
 	}
 	std::span<const uint32_t> generator_resume_targets() const {
 		return generator_resume_targets_;
