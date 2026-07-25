@@ -406,6 +406,10 @@ zend_mir_opcode zend_mir_w12_executable_opcode(uint32_t opcode)
 			return ZEND_MIR_OPCODE_VALUE_UNSET_CV;
 		case ZEND_CHECK_VAR:
 			return ZEND_MIR_OPCODE_VALUE_CHECK_VAR;
+		case ZEND_CHECK_FUNC_ARG:
+			return ZEND_MIR_OPCODE_VALUE_CHECK_FUNC_ARG;
+		case ZEND_CHECK_UNDEF_ARGS:
+			return ZEND_MIR_OPCODE_VALUE_CHECK_UNDEF_ARGS;
 		default:
 			return ZEND_MIR_OPCODE_INVALID;
 	}
@@ -771,6 +775,8 @@ static bool zend_mir_w09_operation_semantics(
 			}
 			break;
 		case ZEND_MIR_OPCODE_VALUE_CHECK_VAR:
+		case ZEND_MIR_OPCODE_VALUE_CHECK_FUNC_ARG:
+		case ZEND_MIR_OPCODE_VALUE_CHECK_UNDEF_ARGS:
 			if (!zend_mir_w09_add_effect(
 					&summary, ZEND_MIR_EFFECT_OBSERVE_FRAME)
 					|| !zend_mir_w09_add_effect(
