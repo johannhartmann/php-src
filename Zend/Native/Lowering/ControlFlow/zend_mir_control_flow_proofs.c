@@ -408,6 +408,58 @@ static bool zend_mir_w04_validate_edges(
 	return true;
 }
 
+static bool zend_mir_w04_phi_input_is_edge_pi(
+	const zend_mir_lowering_source_view *source,
+	const zend_mir_source_phi_ref *consumer,
+	const zend_mir_source_phi_input_ref *consumer_input)
+{
+	uint32_t producer_index;
+
+	if (consumer->kind != ZEND_MIR_SOURCE_PHI_MERGE) {
+		return false;
+	}
+	for (producer_index = 0;
+			producer_index < source->phi_count(source->context);
+			producer_index++) {
+		zend_mir_source_phi_ref producer;
+		uint32_t input_index;
+		uint32_t producer_input_count = 0;
+
+		if (!source->phi_at(
+				source->context, producer_index, &producer)) {
+			return false;
+		}
+		if (producer.kind == ZEND_MIR_SOURCE_PHI_MERGE
+				|| producer.block_id != consumer->block_id
+				|| producer.result_ssa_variable_id
+					!= consumer_input->source_ssa_variable_id) {
+			continue;
+		}
+		for (input_index = 0;
+			input_index < source->phi_input_count(source->context);
+			input_index++) {
+			zend_mir_source_phi_input_ref producer_input;
+
+			if (!source->phi_input_at(
+					source->context, input_index, &producer_input)) {
+				return false;
+			}
+			if (producer_input.phi_id != producer.id) {
+				continue;
+			}
+			producer_input_count++;
+			if (producer_input.predecessor_block_id
+						!= consumer_input->predecessor_block_id
+					|| producer_input.input_index
+						!= consumer_input->input_index) {
+				return false;
+			}
+		}
+		return producer_input_count == 1;
+	}
+	return false;
+}
+
 static bool zend_mir_w04_validate_phis(
 	const zend_mir_lowering_source_view *source,
 	zend_mir_w04_validation *validation)
@@ -526,7 +578,9 @@ static bool zend_mir_w04_validate_phis(
 					|| (!is_live_in
 						&& !zend_mir_w04_dominates(source,
 							definition_block,
-							input.predecessor_block_id))) {
+							input.predecessor_block_id)
+						&& !zend_mir_w04_phi_input_is_edge_pi(
+							source, &phi, &input))) {
 				validation->diagnostic = ZEND_MIRL_W04_UNSUPPORTED_PHI_PI;
 				return false;
 			}
