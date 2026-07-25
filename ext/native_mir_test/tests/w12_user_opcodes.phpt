@@ -20,6 +20,14 @@ function w12_user_opcode_binary(int $value)
 {
     return $value + 9;
 }
+function w12_user_opcode_unary($value)
+{
+    return $value + 9;
+}
+function w12_user_opcode_incdec(int $value)
+{
+    return $value++;
+}
 PHP;
 
 $cases = [
@@ -101,6 +109,78 @@ foreach ($binaryTargets as $target => $expected) {
     );
     printf(
         "binary_%s status=%s result=%s calls=%d vm=%d execute_ex=%d handler=%d\n",
+        $target,
+        $result['status'],
+        json_encode($result['execution']['return_value'] ?? null),
+        $result['execution']['user_opcode_calls'] ?? -1,
+        $result['execution']['vm_handler_calls'] ?? -1,
+        $result['execution']['execute_ex_calls'] ?? -1,
+        $result['execution']['opline_handler_calls'] ?? -1,
+    );
+    if (($result['execution']['return_value'] ?? null) !== $expected) {
+        printf("diagnostics=%s\n", json_encode($result['diagnostics'] ?? null));
+    }
+}
+
+$unaryTargets = [
+    'ZEND_BW_NOT' => [1, -2],
+    'ZEND_BOOL_NOT' => [1, false],
+    'ZEND_BOOL' => [1, true],
+    'ZEND_STRLEN' => ['123', 3],
+];
+foreach ($unaryTargets as $target => [$input, $expected]) {
+    $result = native_mir_test_compile_execute(
+        $source,
+        "w12-user-opcode-unary-$target.php",
+        [$input],
+        [
+            'wave' => 11,
+            'function' => 'w12_user_opcode_unary',
+            'user_opcode' => [
+                'opcode' => 'ZEND_ADD',
+                'action' => 'dispatch_to',
+                'dispatch_to' => $target,
+            ],
+        ],
+    );
+    printf(
+        "unary_%s status=%s result=%s calls=%d vm=%d execute_ex=%d handler=%d\n",
+        $target,
+        $result['status'],
+        json_encode($result['execution']['return_value'] ?? null),
+        $result['execution']['user_opcode_calls'] ?? -1,
+        $result['execution']['vm_handler_calls'] ?? -1,
+        $result['execution']['execute_ex_calls'] ?? -1,
+        $result['execution']['opline_handler_calls'] ?? -1,
+    );
+    if (($result['execution']['return_value'] ?? null) !== $expected) {
+        printf("diagnostics=%s\n", json_encode($result['diagnostics'] ?? null));
+    }
+}
+
+$incdecTargets = [
+    'ZEND_PRE_INC' => 5,
+    'ZEND_PRE_DEC' => 3,
+    'ZEND_POST_INC' => 4,
+    'ZEND_POST_DEC' => 4,
+];
+foreach ($incdecTargets as $target => $expected) {
+    $result = native_mir_test_compile_execute(
+        $source,
+        "w12-user-opcode-incdec-$target.php",
+        [4],
+        [
+            'wave' => 11,
+            'function' => 'w12_user_opcode_incdec',
+            'user_opcode' => [
+                'opcode' => 'ZEND_POST_INC',
+                'action' => 'dispatch_to',
+                'dispatch_to' => $target,
+            ],
+        ],
+    );
+    printf(
+        "incdec_%s status=%s result=%s calls=%d vm=%d execute_ex=%d handler=%d\n",
         $target,
         $result['status'],
         json_encode($result['execution']['return_value'] ?? null),
@@ -217,6 +297,14 @@ binary_ZEND_IS_NOT_EQUAL status=accepted result=true calls=1 vm=0 execute_ex=0 h
 binary_ZEND_IS_SMALLER status=accepted result=true calls=1 vm=0 execute_ex=0 handler=0
 binary_ZEND_IS_SMALLER_OR_EQUAL status=accepted result=true calls=1 vm=0 execute_ex=0 handler=0
 binary_ZEND_SPACESHIP status=accepted result=-1 calls=1 vm=0 execute_ex=0 handler=0
+unary_ZEND_BW_NOT status=accepted result=-2 calls=1 vm=0 execute_ex=0 handler=0
+unary_ZEND_BOOL_NOT status=accepted result=false calls=1 vm=0 execute_ex=0 handler=0
+unary_ZEND_BOOL status=accepted result=true calls=1 vm=0 execute_ex=0 handler=0
+unary_ZEND_STRLEN status=accepted result=3 calls=1 vm=0 execute_ex=0 handler=0
+incdec_ZEND_PRE_INC status=accepted result=5 calls=1 vm=0 execute_ex=0 handler=0
+incdec_ZEND_PRE_DEC status=accepted result=3 calls=1 vm=0 execute_ex=0 handler=0
+incdec_ZEND_POST_INC status=accepted result=4 calls=1 vm=0 execute_ex=0 handler=0
+incdec_ZEND_POST_DEC status=accepted result=4 calls=1 vm=0 execute_ex=0 handler=0
 moved_dispatch status=accepted result=4 calls=1 vm=0 execute_ex=0 handler=0
 moved_continue status=accepted result=1 calls=1 vm=0 execute_ex=0 handler=0
 generator_return status=accepted result=[false,"Cannot get return value of a generator that hasn't returned"] calls=1 vm=0 execute_ex=0 handler=0

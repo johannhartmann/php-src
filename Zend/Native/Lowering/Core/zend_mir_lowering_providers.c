@@ -3418,8 +3418,6 @@ static bool zend_mir_w03_forward_add_instruction(
 			|| !integration->w11 || integration->w11_boxed_ssa == NULL
 			|| !zend_mir_value_is_original_ssa(result_id)
 			|| result_id >= integration->source.ssa_count
-			|| integration->w11_fact_modes[result_id]
-				== ZEND_MIR_W11_FACT_HIDDEN
 			|| !integration->w11_machine_ssa[result_id]
 			|| !integration->w11_boxed_ssa[result_id]
 			|| result_fact == NULL

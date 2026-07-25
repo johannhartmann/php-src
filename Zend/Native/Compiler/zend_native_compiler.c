@@ -596,7 +596,11 @@ static bool zend_native_compiler_add_exception_routes(
 			return false;
 		}
 		if ((!zend_mir_opcode_is_executable_value(instruction.opcode)
-				&& instruction.opcode != ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL)
+				&& instruction.opcode != ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
+				&& instruction.opcode != ZEND_MIR_OPCODE_GENERATOR_CREATE
+				&& instruction.opcode != ZEND_MIR_OPCODE_GENERATOR_YIELD
+				&& instruction.opcode
+					!= ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM)
 				|| !zend_mir_id_is_valid(instruction.source_position_id)
 				|| instruction.source_position_id
 					>= function->op_array->last
