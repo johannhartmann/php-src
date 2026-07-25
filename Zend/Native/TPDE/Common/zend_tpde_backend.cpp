@@ -159,6 +159,124 @@ bool user_opcode_source_operation(
 	return true;
 }
 
+zend_native_runtime_helper_id executable_value_helper(zend_mir_opcode opcode);
+
+uint32_t user_opcode_source_absolute_target(
+	const zend_op_array *op_array, uint32_t source_position,
+	const znode_op &operand) {
+	if (op_array == nullptr || source_position >= op_array->last) {
+		return UINT32_MAX;
+	}
+#if ZEND_USE_ABS_JMP_ADDR
+	const uintptr_t address = reinterpret_cast<uintptr_t>(operand.jmp_addr);
+#else
+	const intptr_t signed_address =
+		reinterpret_cast<intptr_t>(&op_array->opcodes[source_position])
+		+ static_cast<intptr_t>(operand.jmp_offset);
+	const uintptr_t address = static_cast<uintptr_t>(signed_address);
+#endif
+	const uintptr_t first =
+		reinterpret_cast<uintptr_t>(op_array->opcodes);
+	const uintptr_t last =
+		first + static_cast<uintptr_t>(op_array->last) * sizeof(zend_op);
+	if (address < first || address >= last
+			|| (address - first) % sizeof(zend_op) != 0) {
+		return UINT32_MAX;
+	}
+	return static_cast<uint32_t>((address - first) / sizeof(zend_op));
+}
+
+uint32_t user_opcode_source_extended_target(
+	const zend_op_array *op_array, uint32_t source_position,
+	uint32_t extended_value) {
+	if (op_array == nullptr || source_position >= op_array->last) {
+		return UINT32_MAX;
+	}
+	const uintptr_t first =
+		reinterpret_cast<uintptr_t>(op_array->opcodes);
+	const uintptr_t address =
+		reinterpret_cast<uintptr_t>(&op_array->opcodes[source_position])
+		+ static_cast<uintptr_t>(extended_value);
+	const uintptr_t last =
+		first + static_cast<uintptr_t>(op_array->last) * sizeof(zend_op);
+	if (address < first || address >= last
+			|| (address - first) % sizeof(zend_op) != 0) {
+		return UINT32_MAX;
+	}
+	return static_cast<uint32_t>((address - first) / sizeof(zend_op));
+}
+
+bool user_opcode_target(
+	uint32_t opcode, zend_tpde_user_opcode_target *target) {
+	if (target == nullptr || opcode >= ZEND_VM_LAST_OPCODE) {
+		return false;
+	}
+	target->opcode = static_cast<uint8_t>(opcode);
+	target->helper = ZEND_NATIVE_HELPER_COUNT;
+	switch (opcode) {
+		case ZEND_JMP:
+			target->kind = ZEND_TPDE_USER_OPCODE_TARGET_JUMP_OP1;
+			return true;
+		case ZEND_JMPZ:
+		case ZEND_JMPZ_EX:
+			target->kind = ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_OP2;
+			target->helper = ZEND_NATIVE_HELPER_VALUE_COND_BRANCH;
+			return true;
+		case ZEND_JMPNZ:
+		case ZEND_JMPNZ_EX:
+		case ZEND_JMP_SET:
+		case ZEND_COALESCE:
+		case ZEND_JMP_NULL:
+		case ZEND_ASSERT_CHECK:
+			target->kind = ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2;
+			target->helper = ZEND_NATIVE_HELPER_VALUE_COND_BRANCH;
+			return true;
+		case ZEND_FE_RESET_R:
+		case ZEND_FE_RESET_RW:
+			target->kind = ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_OP2;
+			target->helper = ZEND_NATIVE_HELPER_VALUE_ITERATOR_BRANCH;
+			return true;
+		case ZEND_FE_FETCH_R:
+		case ZEND_FE_FETCH_RW:
+			target->kind =
+				ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_EXTENDED;
+			target->helper = ZEND_NATIVE_HELPER_VALUE_ITERATOR_BRANCH;
+			return true;
+		case ZEND_BIND_INIT_STATIC_OR_JMP:
+			target->kind = ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2;
+			target->helper = ZEND_NATIVE_HELPER_VALUE_BIND_STATIC_BRANCH;
+			return true;
+		case ZEND_JMP_FRAMELESS:
+			target->kind = ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2;
+			target->helper = ZEND_NATIVE_HELPER_VALUE_FRAMELESS_BRANCH;
+			return true;
+		case ZEND_RETURN:
+		case ZEND_RETURN_BY_REF:
+			target->kind = ZEND_TPDE_USER_OPCODE_TARGET_RETURN;
+			target->helper = ZEND_NATIVE_HELPER_RETURN_SOURCE_ZVAL;
+			return true;
+		case ZEND_THROW:
+			target->kind = ZEND_TPDE_USER_OPCODE_TARGET_THROW;
+			target->helper = ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL;
+			return true;
+		default:
+			break;
+	}
+	const zend_mir_opcode mapped = zend_mir_w12_executable_opcode(opcode);
+	const zend_native_runtime_helper_id helper =
+		zend_mir_opcode_is_executable_value(mapped)
+			? executable_value_helper(mapped) : ZEND_NATIVE_HELPER_COUNT;
+	if (helper == ZEND_NATIVE_HELPER_COUNT
+			|| !zend_tpde_helper_has_explicit_operands(helper)
+			|| helper == ZEND_NATIVE_HELPER_VALUE_BIND_STATIC_BRANCH
+			|| helper == ZEND_NATIVE_HELPER_VALUE_FRAMELESS_BRANCH) {
+		return false;
+	}
+	target->kind = ZEND_TPDE_USER_OPCODE_TARGET_VALUE;
+	target->helper = helper;
+	return true;
+}
+
 bool source_descriptor_send_opcode(uint8_t opcode) {
 	switch (opcode) {
 		case ZEND_SEND_VAL:
@@ -1188,6 +1306,9 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->user_binding_index);
 	std::free(plan->internal_binding_index);
 	std::free(plan->user_opcode_source_operations);
+	std::free(plan->user_opcode_source_op1_targets);
+	std::free(plan->user_opcode_source_op2_targets);
+	std::free(plan->user_opcode_source_extended_targets);
 	std::free(plan->direct_calls);
 	std::free(plan->direct_internal_calls);
 	std::free(plan->user_calls);
@@ -1258,8 +1379,24 @@ bool initialize_plan(
 					static_cast<zend_mir_executable_value_ref *>(
 						std::calloc(source_op_array->last,
 							sizeof(*plan->user_opcode_source_operations)));
+				plan->user_opcode_source_op1_targets =
+					static_cast<uint32_t *>(std::malloc(
+						static_cast<size_t>(source_op_array->last)
+							* sizeof(uint32_t)));
+				plan->user_opcode_source_op2_targets =
+					static_cast<uint32_t *>(std::malloc(
+						static_cast<size_t>(source_op_array->last)
+							* sizeof(uint32_t)));
+				plan->user_opcode_source_extended_targets =
+					static_cast<uint32_t *>(std::malloc(
+						static_cast<size_t>(source_op_array->last)
+							* sizeof(uint32_t)));
 				if (source_op_array->last != 0
-						&& plan->user_opcode_source_operations == nullptr) {
+						&& (plan->user_opcode_source_operations == nullptr
+							|| plan->user_opcode_source_op1_targets == nullptr
+							|| plan->user_opcode_source_op2_targets == nullptr
+							|| plan->user_opcode_source_extended_targets
+								== nullptr)) {
 					zend_tpde_set_diagnostic(diag,
 						ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
 						"unable to allocate user-opcode source operations");
@@ -1275,6 +1412,18 @@ bool initialize_plan(
 							"user-opcode source operands are invalid");
 						return false;
 					}
+					const zend_op &opline =
+						source_op_array->opcodes[source];
+					plan->user_opcode_source_op1_targets[source] =
+						user_opcode_source_absolute_target(
+							source_op_array, source, opline.op1);
+					plan->user_opcode_source_op2_targets[source] =
+						user_opcode_source_absolute_target(
+							source_op_array, source, opline.op2);
+					plan->user_opcode_source_extended_targets[source] =
+						user_opcode_source_extended_target(
+							source_op_array, source,
+							opline.extended_value);
 				}
 				require_runtime_helper(
 					plan, ZEND_NATIVE_HELPER_USER_OPCODE_INVOKE);
@@ -1282,22 +1431,15 @@ bool initialize_plan(
 					ZEND_NATIVE_HELPER_GENERATOR_USER_OPCODE_RETURN);
 				for (uint32_t opcode = 0;
 						opcode < ZEND_VM_LAST_OPCODE; ++opcode) {
-					const zend_mir_opcode mapped =
-						zend_mir_w12_executable_opcode(opcode);
-					const zend_native_runtime_helper_id helper =
-						zend_mir_opcode_is_executable_value(mapped)
-							? executable_value_helper(mapped)
-							: ZEND_NATIVE_HELPER_COUNT;
-
-					if (helper == ZEND_NATIVE_HELPER_COUNT
-							|| !zend_tpde_helper_has_explicit_operands(
-								helper)) {
+					zend_tpde_user_opcode_target target;
+					if (!user_opcode_target(opcode, &target)) {
 						continue;
 					}
 					plan->user_opcode_targets[
-						plan->user_opcode_target_count++] = {
-							static_cast<uint8_t>(opcode), helper};
-					require_runtime_helper(plan, helper);
+						plan->user_opcode_target_count++] = target;
+					if (target.helper != ZEND_NATIVE_HELPER_COUNT) {
+						require_runtime_helper(plan, target.helper);
+					}
 				}
 				break;
 			}
