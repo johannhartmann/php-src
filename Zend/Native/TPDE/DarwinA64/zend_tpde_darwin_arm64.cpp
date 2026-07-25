@@ -420,6 +420,15 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				}
 			};
 			if (dispatch_case.kind
+					== ZEND_TPDE_USER_OPCODE_TARGET_NOP) {
+				auto [frame_ref, frame] =
+					val_ref_single(
+						node.operands[dispatch_case.frame_operand]);
+				frame.reset();
+				jump_to_source(dispatch_case.source + 1);
+				continue;
+			}
+			if (dispatch_case.kind
 					== ZEND_TPDE_USER_OPCODE_TARGET_JUMP_OP1) {
 				auto [frame_ref, frame] =
 					val_ref_single(

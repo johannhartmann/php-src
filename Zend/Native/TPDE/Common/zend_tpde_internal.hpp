@@ -26,6 +26,7 @@ enum zend_tpde_user_opcode_target_kind : uint8_t {
 	ZEND_TPDE_USER_OPCODE_TARGET_RETURN = 5,
 	ZEND_TPDE_USER_OPCODE_TARGET_THROW = 6,
 	ZEND_TPDE_USER_OPCODE_TARGET_MULTI_BRANCH = 7,
+	ZEND_TPDE_USER_OPCODE_TARGET_NOP = 8,
 };
 
 struct zend_tpde_user_opcode_target {
@@ -983,7 +984,8 @@ struct zend_tpde_plan {
 	uint32_t *user_opcode_source_op1_targets;
 	uint32_t *user_opcode_source_op2_targets;
 	uint32_t *user_opcode_source_extended_targets;
-	zend_tpde_user_opcode_target user_opcode_targets[ZEND_VM_LAST_OPCODE];
+	zend_tpde_user_opcode_target
+		user_opcode_targets[ZEND_VM_LAST_OPCODE + 1];
 	uint32_t user_opcode_target_count;
 	bool may_emit_calls;
 	bool user_opcode_callbacks;
