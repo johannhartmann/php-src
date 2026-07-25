@@ -658,6 +658,81 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				continue;
 			}
 			if (dispatch_case.kind
+					== ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT) {
+				tpde::x64::CCAssignerSysV fragment_assigner{false};
+				CallBuilder fragment_call{*this, fragment_assigner};
+				fragment_call.add_arg(
+					CallArg{node.operands[dispatch_case.frame_operand]});
+				fragment_call.add_arg(ValuePart{
+					dispatch_case.target_opcode, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				fragment_call.add_arg(ValuePart{
+					zend_tpde_encode_value_operand(
+						operation.op1, operation.op1_unused_payload),
+					8, tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				fragment_call.add_arg(ValuePart{
+					operation.op1_unused_payload, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				fragment_call.add_arg(ValuePart{
+					zend_tpde_encode_value_operand(
+						operation.op2, operation.op2_unused_payload),
+					8, tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				fragment_call.add_arg(ValuePart{
+					operation.op2_unused_payload, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				fragment_call.add_arg(ValuePart{
+					zend_tpde_encode_value_operand(
+						operation.result,
+						operation.result_unused_payload),
+					8, tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				fragment_call.add_arg(ValuePart{
+					operation.result_unused_payload, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				fragment_call.add_arg(ValuePart{
+					operation.extended_value, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				fragment_call.add_arg(ValuePart{
+					dispatch_case.source, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				fragment_call.call(runtime_symbol(dispatch_case.helper));
+				ValuePart status{
+					tpde::x64::PlatformConfig::GP_BANK, 4};
+				fragment_call.add_ret(status, tpde::CCAssignment{});
+				auto status_reg = status.cur_reg_or_load(this);
+				ASM(CMP32ri, status_reg, ZEND_NATIVE_RETURNED);
+				auto completed = text_writer.label_create();
+				generate_raw_jump(Jump::je, completed);
+				if (dispatch_case.instruction != nullptr
+						&& zend_mir_id_is_valid(
+							dispatch_case.instruction->exception_block_id)) {
+					auto propagate = text_writer.label_create();
+					ASM(CMP32ri, status_reg, ZEND_NATIVE_EXCEPTION);
+					generate_raw_jump(Jump::jne, propagate);
+					generate_exception_branch(adaptor->block_ref(
+						dispatch_case.instruction->exception_block_id));
+					label_place(propagate);
+				}
+				{
+					RetBuilder return_builder{
+						*this, *cur_cc_assigner()};
+					return_builder.add(
+						std::move(status), tpde::CCAssignment{});
+					return_builder.ret();
+				}
+				label_place(completed);
+				jump_to_source(dispatch_case.source + 1);
+				continue;
+			}
+			if (dispatch_case.kind
 					== ZEND_TPDE_USER_OPCODE_TARGET_RETURN) {
 				tpde::x64::CCAssignerSysV return_assigner{false};
 				CallBuilder return_call{*this, return_assigner};
@@ -1108,6 +1183,86 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				tpde::x64::PlatformConfig::GP_BANK},
 				tpde::CCAssignment{});
 			return_builder.ret();
+		}
+		return true;
+	}
+	if (node.kind == Adaptor::InstKind::UserOpcodeCallFragment) {
+		if (node.operands.size() != 1
+				|| node.mir_instruction_index >=
+					adaptor->plan()->instruction_count) {
+			return false;
+		}
+		const zend_tpde_instruction &call =
+			adaptor->plan()->instructions[node.mir_instruction_index];
+		if (!call.user_opcode_call_fragments || call.user_call == nullptr
+				|| (call.entry_cell == nullptr)
+					== (call.internal_call_cell == nullptr)) {
+			return false;
+		}
+		tpde::x64::CCAssignerSysV assigner{false};
+		CallBuilder builder{*this, assigner};
+		builder.add_arg(CallArg{node.operands[0]});
+		if (call.entry_cell != nullptr) {
+			builder.add_arg(image_symbol_value(
+				ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
+				call.call_site.target_id), tpde::CCAssignment{});
+			builder.add_arg(ValuePart{UINT64_C(0), 8,
+				tpde::x64::PlatformConfig::GP_BANK},
+				tpde::CCAssignment{});
+		} else {
+			builder.add_arg(ValuePart{UINT64_C(0), 8,
+				tpde::x64::PlatformConfig::GP_BANK},
+				tpde::CCAssignment{});
+			builder.add_arg(image_symbol_value(
+				ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL,
+				call.call_site.target_id), tpde::CCAssignment{});
+		}
+		builder.add_arg(image_symbol_value(
+			ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
+			call.id), tpde::CCAssignment{});
+		builder.add_arg(ValuePart{node.argument_index, 4,
+			tpde::x64::PlatformConfig::GP_BANK},
+			tpde::CCAssignment{});
+		builder.call(runtime_symbol(ZEND_NATIVE_HELPER_CALL_FRAGMENT));
+		ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 8};
+		ValuePart payload{tpde::x64::PlatformConfig::GP_BANK, 8};
+		builder.add_ret(status, tpde::CCAssignment{});
+		builder.add_ret(payload, tpde::CCAssignment{});
+		auto status_reg = status.cur_reg_or_load(this);
+		ASM(CMP32ri, status_reg, ZEND_NATIVE_RETURNED);
+		auto continued = text_writer.label_create();
+		generate_raw_jump(Jump::je, continued);
+		if (zend_mir_id_is_valid(call.exception_block_id)) {
+			auto propagate = text_writer.label_create();
+			ASM(CMP32ri, status_reg, ZEND_NATIVE_EXCEPTION);
+			generate_raw_jump(Jump::jne, propagate);
+			generate_exception_branch(
+				adaptor->block_ref(call.exception_block_id));
+			label_place(propagate);
+		}
+		{
+			RetBuilder return_builder{*this, *cur_cc_assigner()};
+			return_builder.add(
+				std::move(status), tpde::CCAssignment{});
+			return_builder.ret();
+		}
+		label_place(continued);
+		if (node.has_result) {
+			auto [result_ref, result] = result_ref_single(node.result);
+			if (val_parts(node.result).bank
+					== tpde::x64::PlatformConfig::FP_BANK) {
+				auto payload_reg = payload.cur_reg_or_load(this);
+				ScratchReg converted{this};
+				auto result_reg = converted.alloc(
+					tpde::x64::PlatformConfig::FP_BANK);
+				ASM(SSE_MOVQ_G2Xrr, result_reg, payload_reg);
+				payload.reset(this);
+				result.set_value(std::move(converted));
+			} else {
+				result.set_value(std::move(payload));
+			}
+		} else {
+			payload.reset(this);
 		}
 		return true;
 	}

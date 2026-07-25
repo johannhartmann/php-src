@@ -96,6 +96,18 @@ function w12_user_opcode_catch(): string
         return $exception->getMessage();
     }
 }
+function w12_user_opcode_user_callee(int $value): int
+{
+    return $value + 4;
+}
+function w12_user_opcode_user_call(int $value): int
+{
+    return w12_user_opcode_user_callee($value);
+}
+function w12_user_opcode_internal_call(string $value): int
+{
+    return strcmp($value, 'native');
+}
 PHP;
 
 $cases = [
@@ -615,6 +627,61 @@ foreach ([
     }
 }
 
+$callCases = [
+    [
+        'user',
+        'w12_user_opcode_user_call',
+        [5],
+        9,
+        ['ZEND_INIT_FCALL', 'ZEND_SEND_VAR', 'ZEND_DO_UCALL'],
+    ],
+    [
+        'internal',
+        'w12_user_opcode_internal_call',
+        ['native'],
+        0,
+        ['ZEND_INIT_FCALL', 'ZEND_SEND_VAR', 'ZEND_DO_ICALL'],
+    ],
+];
+foreach ($callCases as [$kind, $function, $arguments, $expected, $opcodes]) {
+    foreach ($opcodes as $opcode) {
+        foreach (['dispatch', 'dispatch_to'] as $action) {
+            $userOpcode = [
+                'opcode' => $opcode,
+                'action' => $action,
+            ];
+            if ($action === 'dispatch_to') {
+                $userOpcode['dispatch_to'] = $opcode;
+            }
+            $result = native_mir_test_compile_execute(
+                $source,
+                "w12-user-opcode-call-$kind-$opcode-$action.php",
+                $arguments,
+                [
+                    'wave' => 11,
+                    'function' => $function,
+                    'user_opcode' => $userOpcode,
+                ],
+            );
+            printf(
+                "call_%s_%s_%s status=%s result=%s calls=%d vm=%d execute_ex=%d handler=%d\n",
+                $kind,
+                $opcode,
+                $action,
+                $result['status'],
+                json_encode($result['execution']['return_value'] ?? null),
+                $result['execution']['user_opcode_calls'] ?? -1,
+                $result['execution']['vm_handler_calls'] ?? -1,
+                $result['execution']['execute_ex_calls'] ?? -1,
+                $result['execution']['opline_handler_calls'] ?? -1,
+            );
+            if (($result['execution']['return_value'] ?? null) !== $expected) {
+                printf("diagnostics=%s\n", json_encode($result['diagnostics'] ?? null));
+            }
+        }
+    }
+}
+
 $generatorSource = <<<'PHP'
 <?php
 function w12_user_opcode_generator(): Generator
@@ -715,4 +782,16 @@ incdec_ZEND_POST_INC status=accepted result=4 calls=1 vm=0 execute_ex=0 handler=
 incdec_ZEND_POST_DEC status=accepted result=4 calls=1 vm=0 execute_ex=0 handler=0
 moved_dispatch status=accepted result=4 calls=1 vm=0 execute_ex=0 handler=0
 moved_continue status=accepted result=1 calls=1 vm=0 execute_ex=0 handler=0
+call_user_ZEND_INIT_FCALL_dispatch status=accepted result=9 calls=1 vm=0 execute_ex=0 handler=0
+call_user_ZEND_INIT_FCALL_dispatch_to status=accepted result=9 calls=1 vm=0 execute_ex=0 handler=0
+call_user_ZEND_SEND_VAR_dispatch status=accepted result=9 calls=1 vm=0 execute_ex=0 handler=0
+call_user_ZEND_SEND_VAR_dispatch_to status=accepted result=9 calls=1 vm=0 execute_ex=0 handler=0
+call_user_ZEND_DO_UCALL_dispatch status=accepted result=9 calls=1 vm=0 execute_ex=0 handler=0
+call_user_ZEND_DO_UCALL_dispatch_to status=accepted result=9 calls=1 vm=0 execute_ex=0 handler=0
+call_internal_ZEND_INIT_FCALL_dispatch status=accepted result=0 calls=1 vm=0 execute_ex=0 handler=0
+call_internal_ZEND_INIT_FCALL_dispatch_to status=accepted result=0 calls=1 vm=0 execute_ex=0 handler=0
+call_internal_ZEND_SEND_VAR_dispatch status=accepted result=0 calls=1 vm=0 execute_ex=0 handler=0
+call_internal_ZEND_SEND_VAR_dispatch_to status=accepted result=0 calls=1 vm=0 execute_ex=0 handler=0
+call_internal_ZEND_DO_ICALL_dispatch status=accepted result=0 calls=1 vm=0 execute_ex=0 handler=0
+call_internal_ZEND_DO_ICALL_dispatch_to status=accepted result=0 calls=1 vm=0 execute_ex=0 handler=0
 generator_return status=accepted result=[false,"Cannot get return value of a generator that hasn't returned"] calls=1 vm=0 execute_ex=0 handler=0
