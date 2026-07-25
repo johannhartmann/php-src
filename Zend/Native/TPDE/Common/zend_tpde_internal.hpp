@@ -888,6 +888,7 @@ struct zend_tpde_plan {
 	const zend_mir_call_view *calls;
 	const zend_native_runtime_api *runtime;
 	const zend_op_array *source_op_array;
+	const struct _zend_ssa *source_ssa;
 	zend_mir_function_record function;
 	zend_mir_block_id *block_ids;
 	uint32_t block_count;
@@ -926,6 +927,7 @@ struct zend_tpde_plan {
 	uint64_t required_runtime_capabilities;
 	uint64_t required_runtime_helpers[ZEND_NATIVE_RUNTIME_HELPER_WORD_COUNT];
 	bool may_emit_calls;
+	bool user_opcode_callbacks;
 };
 
 static inline bool zend_tpde_multi_branch_at(

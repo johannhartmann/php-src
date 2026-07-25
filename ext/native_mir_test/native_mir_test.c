@@ -222,6 +222,12 @@ typedef struct _native_mir_test_state {
 	uint64_t vm_handler_calls;
 	uint64_t execute_ex_calls;
 	uint64_t opline_handler_calls;
+	uint64_t user_opcode_calls;
+	user_opcode_handler_t previous_user_opcode_handler;
+	uint32_t user_opcode_action;
+	uint8_t user_opcode;
+	bool user_opcode_configured;
+	bool user_opcode_installed;
 	bool stack_probe_enabled;
 	bool abi_probe_enabled;
 	bool frame_chain_valid;
@@ -237,6 +243,45 @@ typedef struct _native_mir_test_state {
 
 ZEND_TLS native_mir_test_state *native_mir_test_active_state;
 ZEND_TLS native_mir_test_state *native_mir_test_retained_states;
+
+static int native_mir_test_user_opcode_handler(zend_execute_data *execute_data)
+{
+	native_mir_test_state *state = native_mir_test_active_state;
+
+	if (state == NULL || !state->user_opcode_installed
+			|| execute_data == NULL || execute_data->opline == NULL
+			|| execute_data->opline->opcode != state->user_opcode) {
+		return ZEND_USER_OPCODE_DISPATCH;
+	}
+	state->user_opcode_calls++;
+	return (int) state->user_opcode_action;
+}
+
+static bool native_mir_test_install_user_opcode(native_mir_test_state *state)
+{
+	if (!state->user_opcode_configured) {
+		return true;
+	}
+	state->previous_user_opcode_handler =
+		zend_get_user_opcode_handler(state->user_opcode);
+	if (zend_set_user_opcode_handler(
+			state->user_opcode, native_mir_test_user_opcode_handler)
+			== FAILURE) {
+		return false;
+	}
+	state->user_opcode_installed = true;
+	return true;
+}
+
+static void native_mir_test_restore_user_opcode(native_mir_test_state *state)
+{
+	if (!state->user_opcode_installed) {
+		return;
+	}
+	(void) zend_set_user_opcode_handler(
+		state->user_opcode, state->previous_user_opcode_handler);
+	state->user_opcode_installed = false;
+}
 
 static void native_mir_test_cleanup(native_mir_test_state *state);
 
@@ -705,6 +750,82 @@ static bool native_mir_test_fault_from_string(
 	return true;
 }
 
+static bool native_mir_test_opcode_from_name(
+	zend_string *name, uint8_t *opcode_out)
+{
+	uint32_t opcode;
+
+	if (name == NULL || opcode_out == NULL) {
+		return false;
+	}
+	for (opcode = 0; opcode <= UINT8_MAX; opcode++) {
+		const char *candidate = zend_get_opcode_name((uint8_t) opcode);
+
+		if (candidate != NULL
+				&& ZSTR_LEN(name) == strlen(candidate)
+				&& memcmp(ZSTR_VAL(name), candidate, ZSTR_LEN(name)) == 0) {
+			*opcode_out = (uint8_t) opcode;
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool native_mir_test_parse_user_opcode(
+	native_mir_test_state *state, zval *value)
+{
+	HashTable *configuration;
+	zval *opcode;
+	zval *action;
+	zval *dispatch_to;
+	uint8_t selected_opcode;
+	uint8_t target_opcode = 0;
+	uint32_t selected_action;
+
+	if (!state->execute_mode || Z_TYPE_P(value) != IS_ARRAY) {
+		return false;
+	}
+	configuration = Z_ARRVAL_P(value);
+	opcode = zend_hash_str_find(configuration, ZEND_STRL("opcode"));
+	action = zend_hash_str_find(configuration, ZEND_STRL("action"));
+	dispatch_to = zend_hash_str_find(
+		configuration, ZEND_STRL("dispatch_to"));
+	if (opcode == NULL || Z_TYPE_P(opcode) != IS_STRING
+			|| !native_mir_test_opcode_from_name(
+				Z_STR_P(opcode), &selected_opcode)
+			|| action == NULL || Z_TYPE_P(action) != IS_STRING) {
+		return false;
+	}
+	if (zend_string_equals_literal(Z_STR_P(action), "continue")) {
+		selected_action = ZEND_USER_OPCODE_CONTINUE;
+	} else if (zend_string_equals_literal(Z_STR_P(action), "return")) {
+		selected_action = ZEND_USER_OPCODE_RETURN;
+	} else if (zend_string_equals_literal(Z_STR_P(action), "dispatch")) {
+		selected_action = ZEND_USER_OPCODE_DISPATCH;
+	} else if (zend_string_equals_literal(Z_STR_P(action), "enter")) {
+		selected_action = ZEND_USER_OPCODE_ENTER;
+	} else if (zend_string_equals_literal(Z_STR_P(action), "leave")) {
+		selected_action = ZEND_USER_OPCODE_LEAVE;
+	} else if (zend_string_equals_literal(Z_STR_P(action), "dispatch_to")) {
+		if (dispatch_to == NULL || Z_TYPE_P(dispatch_to) != IS_STRING
+				|| !native_mir_test_opcode_from_name(
+					Z_STR_P(dispatch_to), &target_opcode)) {
+			return false;
+		}
+		selected_action = ZEND_USER_OPCODE_DISPATCH_TO | target_opcode;
+	} else {
+		return false;
+	}
+	if (dispatch_to != NULL
+			&& selected_action < ZEND_USER_OPCODE_DISPATCH_TO) {
+		return false;
+	}
+	state->user_opcode = selected_opcode;
+	state->user_opcode_action = selected_action;
+	state->user_opcode_configured = true;
+	return true;
+}
+
 static bool native_mir_test_parse_options(
 	native_mir_test_state *state, HashTable *options)
 {
@@ -775,6 +896,10 @@ static bool native_mir_test_parse_options(
 				goto invalid_value;
 			}
 			state->abi_probe_enabled = true;
+		} else if (zend_string_equals_literal(key, "user_opcode")) {
+			if (!native_mir_test_parse_user_opcode(state, value)) {
+				goto invalid_value;
+			}
 		} else if (zend_string_equals_literal(key, "arena_chunk_size")) {
 			if (Z_TYPE_P(value) != IS_LONG
 					|| Z_LVAL_P(value) < NATIVE_MIR_TEST_MIN_MIR_CHUNK_SIZE
@@ -4316,6 +4441,7 @@ static void native_mir_test_cleanup(native_mir_test_state *state)
 	HashTable *class_table;
 	uint32_t index;
 
+	native_mir_test_restore_user_opcode(state);
 	if (state->compiler_options_saved) {
 		CG(compiler_options) = state->original_compiler_options;
 		state->compiler_options_saved = false;
@@ -4552,6 +4678,8 @@ static void native_mir_test_build_result(
 			(zend_long) state->execute_ex_calls);
 		add_assoc_long(&execution, "opline_handler_calls",
 			(zend_long) state->opline_handler_calls);
+		add_assoc_long(&execution, "user_opcode_calls",
+			(zend_long) state->user_opcode_calls);
 		add_assoc_long(&execution, "executions",
 			(zend_long) state->completed_executions);
 		add_assoc_long(&execution, "native_codeunits",
@@ -4879,7 +5007,14 @@ ZEND_FUNCTION(native_mir_test_compile_execute)
 		if (native_mir_test_compile(state)) {
 			bool source_ready;
 
-			if (state->wave >= 11) {
+			if (!native_mir_test_install_user_opcode(state)) {
+				native_mir_test_fail(
+					state, NATIVE_MIR_TEST_STATUS_ERROR,
+					NATIVE_MIR_TEST_PHASE_COMPILE, "bridge",
+					"USER_OPCODE_INSTALL",
+					"failed to install requested user opcode handler");
+				source_ready = false;
+			} else if (state->wave >= 11) {
 				native_mir_test_init_script(state);
 				if (state->selected->last != 0) {
 					uint32_t opcode_index;
@@ -4907,6 +5042,7 @@ ZEND_FUNCTION(native_mir_test_compile_execute)
 	} zend_catch {
 		bailed_out = true;
 	} zend_end_try();
+	native_mir_test_restore_user_opcode(state);
 	native_mir_test_active_state = previous_active_state;
 
 	if (bailed_out) {

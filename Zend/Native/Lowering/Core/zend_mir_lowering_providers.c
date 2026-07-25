@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "Zend/zend_compile.h"
+#include "Zend/zend_execute.h"
 #include "Zend/Optimizer/zend_ssa.h"
 #include "Zend/Optimizer/zend_optimizer_internal.h"
 #include "Zend/Native/Calls/Model/zend_mir_call_model.h"
@@ -103,6 +104,7 @@ struct _zend_mir_w03_integration {
 	bool w09;
 	bool w10;
 	bool w11;
+	bool w12_user_opcode_callbacks;
 	bool w11_has_synthetic_one;
 	bool w11_pending_store;
 	zend_mir_instruction_id w11_pending_store_instruction;
@@ -1174,6 +1176,16 @@ static bool zend_mir_w11_scalarizable_opcode(
 	zend_mir_value_fact_ref right;
 	int definition;
 
+	/*
+	 * A registered user-opcode callback may mutate any canonical frame slot
+	 * before the selected opcode executes. Such a frame cannot retain
+	 * source-SSA payloads in machine registers across the callback boundary.
+	 * Callback-free functions keep the scalar fast path unchanged.
+	 */
+	if (integration->w12_user_opcode_callbacks) {
+		return false;
+	}
+
 	switch (opline->opcode) {
 		case ZEND_ASSIGN:
 			definition = ssa_op->op1_def;
@@ -1624,6 +1636,13 @@ static bool zend_mir_w11_prepare_overlay(
 	}
 	integration->w11_synthetic_one_literal =
 		integration->source.literal_count;
+	for (index = 0; index < op_array->last; index++) {
+		if (zend_get_user_opcode_handler(
+				op_array->opcodes[index].opcode) != NULL) {
+			integration->w12_user_opcode_callbacks = true;
+			break;
+		}
+	}
 	for (index = 0; index < (uint32_t) ssa->vars_count; index++) {
 		integration->w11_ssa_replacements[index] = -1;
 		if (zend_mir_w11_original_fact_is_pointer(

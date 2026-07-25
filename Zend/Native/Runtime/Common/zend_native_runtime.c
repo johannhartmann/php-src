@@ -694,6 +694,9 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_VALUE_EXT_NOP,
 		0,
 		(const void *) zend_native_value_ext_nop},
+	{ZEND_NATIVE_HELPER_USER_OPCODE_INVOKE,
+		ZEND_NATIVE_EFFECT_CALL,
+		(const void *) zend_native_user_opcode_invoke},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
