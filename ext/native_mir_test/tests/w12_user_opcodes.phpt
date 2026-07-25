@@ -36,6 +36,18 @@ function w12_user_opcode_control_source($left, $right)
 {
     return $left && $right;
 }
+function w12_user_opcode_branch_target($left, $right)
+{
+    return $left && $right;
+}
+function w12_user_opcode_return_target($value)
+{
+    return +$value;
+}
+function w12_user_opcode_throw_target(Throwable $exception)
+{
+    return !$exception;
+}
 function w12_user_opcode_enter(): array
 {
     $GLOBALS['w12_user_opcode_enter_trace'][] = 'entered';
@@ -213,6 +225,73 @@ printf(
     $result['execution']['execute_ex_calls'] ?? -1,
     $result['execution']['opline_handler_calls'] ?? -1,
 );
+
+$result = native_mir_test_compile_execute(
+    $source,
+    'w12-user-opcode-branch-target.php',
+    [true, false],
+    [
+        'wave' => 11,
+        'function' => 'w12_user_opcode_branch_target',
+        'user_opcode' => [
+            'opcode' => 'ZEND_JMPZ_EX',
+            'action' => 'dispatch_to',
+            'dispatch_to' => 'ZEND_JMPNZ_EX',
+        ],
+    ],
+);
+printf(
+    "branch_target status=%s result=%s calls=%d vm=%d execute_ex=%d handler=%d\n",
+    $result['status'],
+    json_encode($result['execution']['return_value'] ?? null),
+    $result['execution']['user_opcode_calls'] ?? -1,
+    $result['execution']['vm_handler_calls'] ?? -1,
+    $result['execution']['execute_ex_calls'] ?? -1,
+    $result['execution']['opline_handler_calls'] ?? -1,
+);
+
+$result = native_mir_test_compile_execute(
+    $source,
+    'w12-user-opcode-return-target.php',
+    [37],
+    [
+        'wave' => 11,
+        'function' => 'w12_user_opcode_return_target',
+        'user_opcode' => [
+            'opcode' => 'ZEND_MUL',
+            'action' => 'dispatch_to',
+            'dispatch_to' => 'ZEND_RETURN',
+        ],
+    ],
+);
+printf(
+    "return_target status=%s result=%s calls=%d vm=%d execute_ex=%d handler=%d\n",
+    $result['status'],
+    json_encode($result['execution']['return_value'] ?? null),
+    $result['execution']['user_opcode_calls'] ?? -1,
+    $result['execution']['vm_handler_calls'] ?? -1,
+    $result['execution']['execute_ex_calls'] ?? -1,
+    $result['execution']['opline_handler_calls'] ?? -1,
+);
+
+try {
+    native_mir_test_compile_execute(
+        $source,
+        'w12-user-opcode-throw-target.php',
+        [new Exception('native-target')],
+        [
+            'wave' => 11,
+            'function' => 'w12_user_opcode_throw_target',
+            'user_opcode' => [
+                'opcode' => 'ZEND_BOOL_NOT',
+                'action' => 'dispatch_to',
+                'dispatch_to' => 'ZEND_THROW',
+            ],
+        ],
+    );
+} catch (Throwable $exception) {
+    printf("throw_target exception=%s\n", $exception->getMessage());
+}
 
 $unaryTargets = [
     'ZEND_BW_NOT' => [1, -2],
@@ -394,6 +473,9 @@ binary_ZEND_CONCAT status=accepted result="19" calls=1 vm=0 execute_ex=0 handler
 binary_ZEND_FAST_CONCAT status=accepted result="19" calls=1 vm=0 execute_ex=0 handler=0
 array_key_exists status=accepted result=true calls=1 vm=0 execute_ex=0 handler=0
 control_source status=accepted result=false calls=1 vm=0 execute_ex=0 handler=0
+branch_target status=accepted result=true calls=1 vm=0 execute_ex=0 handler=0
+return_target status=accepted result=37 calls=1 vm=0 execute_ex=0 handler=0
+throw_target exception=native-target
 unary_ZEND_BW_NOT status=accepted result=-2 calls=1 vm=0 execute_ex=0 handler=0
 unary_ZEND_BOOL_NOT status=accepted result=false calls=1 vm=0 execute_ex=0 handler=0
 unary_ZEND_BOOL status=accepted result=true calls=1 vm=0 execute_ex=0 handler=0

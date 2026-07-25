@@ -17,8 +17,19 @@ struct _zend_native_user_call_descriptor;
 
 extern "C" zend_mir_opcode zend_mir_w12_executable_opcode(uint32_t opcode);
 
+enum zend_tpde_user_opcode_target_kind : uint8_t {
+	ZEND_TPDE_USER_OPCODE_TARGET_VALUE = 0,
+	ZEND_TPDE_USER_OPCODE_TARGET_JUMP_OP1 = 1,
+	ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2 = 2,
+	ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_OP2 = 3,
+	ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_EXTENDED = 4,
+	ZEND_TPDE_USER_OPCODE_TARGET_RETURN = 5,
+	ZEND_TPDE_USER_OPCODE_TARGET_THROW = 6,
+};
+
 struct zend_tpde_user_opcode_target {
 	uint8_t opcode;
+	zend_tpde_user_opcode_target_kind kind;
 	zend_native_runtime_helper_id helper;
 };
 
@@ -935,6 +946,9 @@ struct zend_tpde_plan {
 	uint64_t required_runtime_helpers[ZEND_NATIVE_RUNTIME_HELPER_WORD_COUNT];
 	zend_mir_executable_value_ref *user_opcode_source_operations;
 	uint32_t user_opcode_source_operation_count;
+	uint32_t *user_opcode_source_op1_targets;
+	uint32_t *user_opcode_source_op2_targets;
+	uint32_t *user_opcode_source_extended_targets;
 	zend_tpde_user_opcode_target user_opcode_targets[ZEND_VM_LAST_OPCODE];
 	uint32_t user_opcode_target_count;
 	bool may_emit_calls;
