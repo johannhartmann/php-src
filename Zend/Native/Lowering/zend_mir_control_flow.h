@@ -23,6 +23,8 @@ typedef enum _zend_mir_w04_branch_kind {
 	ZEND_MIR_W10_BRANCH_THROW = 12,
 	ZEND_MIR_W12_BRANCH_ASSERT_CHECK = 13,
 	ZEND_MIR_W12_BRANCH_MULTIWAY = 14,
+	ZEND_MIR_W12_BRANCH_BIND_STATIC = 15,
+	ZEND_MIR_W12_BRANCH_FRAMELESS = 16,
 	ZEND_MIR_W04_BRANCH_KIND_INVALID = -1
 } zend_mir_w04_branch_kind;
 
@@ -64,6 +66,8 @@ static inline uint32_t zend_mir_w04_mir_successor_for_source(
 		case ZEND_MIR_W09_BRANCH_JMP_SET:
 		case ZEND_MIR_W10_BRANCH_JMP_NULL:
 		case ZEND_MIR_W12_BRANCH_ASSERT_CHECK:
+		case ZEND_MIR_W12_BRANCH_BIND_STATIC:
+		case ZEND_MIR_W12_BRANCH_FRAMELESS:
 			return source_successor_index;
 		case ZEND_MIR_W12_BRANCH_MULTIWAY:
 			return source_successor_index;
