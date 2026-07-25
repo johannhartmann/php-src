@@ -287,6 +287,8 @@ static uint32_t zend_mir_cfg_expected_successors(zend_mir_opcode opcode)
 		case ZEND_MIR_OPCODE_COND_BRANCH:
 		case ZEND_MIR_OPCODE_VALUE_COND_BRANCH:
 		case ZEND_MIR_OPCODE_ITERATOR_BRANCH:
+		case ZEND_MIR_OPCODE_VALUE_BIND_STATIC_BRANCH:
+		case ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH:
 			return 2;
 		case ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH:
 			return UINT32_MAX;

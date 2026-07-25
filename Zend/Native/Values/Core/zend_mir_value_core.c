@@ -877,6 +877,10 @@ static bool zend_mir_value_validate_executable_operations(
 			operation->opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 			|| operation->opcode == ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH
 			|| operation->opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH
+			|| operation->opcode
+				== ZEND_MIR_OPCODE_VALUE_BIND_STATIC_BRANCH
+			|| operation->opcode
+				== ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH
 			|| operation->opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
 			|| operation->opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL;
 		const bool compatible_boxed_branch =

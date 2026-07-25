@@ -158,9 +158,11 @@ static bool zend_mir_w03_value_fragment(
 		|| opcode == ZEND_FE_FETCH_R
 		|| opcode == ZEND_FE_RESET_RW
 		|| opcode == ZEND_FE_FETCH_RW;
-	bool w12_multiway_control = opcode == ZEND_SWITCH_LONG
+	bool w12_attached_control = opcode == ZEND_SWITCH_LONG
 		|| opcode == ZEND_SWITCH_STRING
-		|| opcode == ZEND_MATCH;
+		|| opcode == ZEND_MATCH
+		|| opcode == ZEND_BIND_INIT_STATIC_OR_JMP
+		|| opcode == ZEND_JMP_FRAMELESS;
 
 	return integration->w06
 		&& (integration->w09
@@ -172,7 +174,7 @@ static bool zend_mir_w03_value_fragment(
 					: zend_mir_w10_opcode_is_executable(opcode))
 				: zend_mir_w09_opcode_is_executable(opcode)))
 				&& !w09_iterator_control
-				&& !w12_multiway_control
+				&& !w12_attached_control
 			: zend_mir_w06_opcode_is_accepted(opcode));
 }
 

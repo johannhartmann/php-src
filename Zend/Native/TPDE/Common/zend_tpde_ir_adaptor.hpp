@@ -300,6 +300,8 @@ private:
 			case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV:
 			case ZEND_MIR_OPCODE_VALUE_INCDEC:
 			case ZEND_MIR_OPCODE_VALUE_COND_BRANCH:
+			case ZEND_MIR_OPCODE_VALUE_BIND_STATIC_BRANCH:
+			case ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH:
 			case ZEND_MIR_OPCODE_OBJECT_FETCH_R:
 			case ZEND_MIR_OPCODE_OBJECT_ASSIGN:
 			case ZEND_MIR_OPCODE_DYNAMIC_FETCH_R:
@@ -312,11 +314,19 @@ private:
 	static bool is_boxed_cond_branch(
 			const zend_tpde_instruction &instruction,
 			const zend_mir_instruction_record &record) {
-		return (record.opcode == ZEND_MIR_OPCODE_COND_BRANCH
-					|| record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH)
-			&& instruction.has_value_operation
-			&& instruction.value_operation.opcode
+		if (!instruction.has_value_operation) {
+			return false;
+		}
+		if (record.opcode == ZEND_MIR_OPCODE_COND_BRANCH) {
+			return instruction.value_operation.opcode
 				== ZEND_MIR_OPCODE_VALUE_COND_BRANCH;
+		}
+		return (record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				|| record.opcode
+					== ZEND_MIR_OPCODE_VALUE_BIND_STATIC_BRANCH
+				|| record.opcode
+					== ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH)
+			&& instruction.value_operation.opcode == record.opcode;
 	}
 
 	zend_mir_instruction_record instruction_record_at(uint32_t index) const {
@@ -1158,6 +1168,7 @@ public:
 					IRValueRef{EXECUTION_CONTEXT_VALUE});
 			}
 			if (zend_mir_opcode_is_executable_value(record.opcode)
+					&& !boxed_cond_branch
 					&& !(record.opcode
 							== ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE
 						&& instruction.runtime_helper
@@ -1475,7 +1486,8 @@ public:
 			instruction_record_at(instruction_node.mir_instruction_index);
 		if (is_boxed_cond_branch(
 				mir_instruction(inst), record)) {
-			record.opcode = ZEND_MIR_OPCODE_VALUE_COND_BRANCH;
+			record.opcode =
+				mir_instruction(inst).value_operation.opcode;
 		}
 		return record;
 	}

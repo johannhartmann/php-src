@@ -3716,7 +3716,9 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			return true;
 		}
 		case ZEND_MIR_OPCODE_VALUE_COND_BRANCH:
-		case ZEND_MIR_OPCODE_ITERATOR_BRANCH: {
+		case ZEND_MIR_OPCODE_ITERATOR_BRANCH:
+		case ZEND_MIR_OPCODE_VALUE_BIND_STATIC_BRANCH:
+		case ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH: {
 			if (node.operands.size() != 1 || !mir.has_value_operation) {
 				return false;
 			}

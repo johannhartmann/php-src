@@ -712,6 +712,19 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 			| ZEND_NATIVE_EFFECT_MAY_FAIL
 			| ZEND_NATIVE_EFFECT_MAY_REENTER,
 		(const void *) zend_native_value_case},
+	{ZEND_NATIVE_HELPER_VALUE_BIND_STATIC_BRANCH,
+		ZEND_NATIVE_EFFECT_FRAME_WRITE
+			| ZEND_NATIVE_RUNTIME_EFFECT_HEAP_READ
+			| ZEND_NATIVE_RUNTIME_EFFECT_HEAP_WRITE
+			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_EFFECT_MAY_FAIL
+			| ZEND_NATIVE_EFFECT_MAY_REENTER,
+		(const void *) zend_native_value_bind_static_branch},
+	{ZEND_NATIVE_HELPER_VALUE_FRAMELESS_BRANCH,
+		ZEND_NATIVE_RUNTIME_EFFECT_FRAME_READ
+			| ZEND_NATIVE_RUNTIME_EFFECT_HEAP_READ
+			| ZEND_NATIVE_RUNTIME_EFFECT_HEAP_WRITE,
+		(const void *) zend_native_value_frameless_branch},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
