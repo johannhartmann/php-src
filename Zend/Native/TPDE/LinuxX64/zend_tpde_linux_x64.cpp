@@ -324,6 +324,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		struct DispatchToCase {
 			tpde::Label label;
 			const zend_tpde_instruction *instruction;
+			const zend_mir_executable_value_ref *operation;
 			uint32_t source;
 			uint32_t target_opcode;
 			zend_native_runtime_helper_id helper;
@@ -349,9 +350,11 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 					break;
 				}
 			}
-			if (source_instruction == nullptr) {
+			if (source >= plan->user_opcode_source_operation_count) {
 				return false;
 			}
+			const zend_mir_executable_value_ref *source_operation =
+				&plan->user_opcode_source_operations[source];
 			for (size_t target_index = 0;
 					target_index < plan->user_opcode_target_count;
 					++target_index) {
@@ -363,6 +366,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				dispatch_cases.push_back({
 					target,
 					source_instruction,
+					source_operation,
 					source,
 					target_case.opcode,
 					target_case.helper,
@@ -379,7 +383,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		for (const DispatchToCase &dispatch_case : dispatch_cases) {
 			label_place(dispatch_case.label);
 			const zend_mir_executable_value_ref &operation =
-				dispatch_case.instruction->value_operation;
+				*dispatch_case.operation;
 			const bool explicit_object_operands =
 				zend_tpde_helper_has_object_operand_payloads(
 					dispatch_case.helper);
@@ -438,8 +442,9 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			auto completed = text_writer.label_create();
 			ASM(CMP32ri, status_reg, ZEND_NATIVE_RETURNED);
 			generate_raw_jump(Jump::je, completed);
-			if (zend_mir_id_is_valid(
-					dispatch_case.instruction->exception_block_id)) {
+			if (dispatch_case.instruction != nullptr
+					&& zend_mir_id_is_valid(
+						dispatch_case.instruction->exception_block_id)) {
 				auto propagate = text_writer.label_create();
 				ASM(CMP32ri, status_reg, ZEND_NATIVE_EXCEPTION);
 				generate_raw_jump(Jump::jne, propagate);

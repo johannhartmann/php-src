@@ -933,6 +933,8 @@ struct zend_tpde_plan {
 	uint32_t value_model_flags;
 	uint64_t required_runtime_capabilities;
 	uint64_t required_runtime_helpers[ZEND_NATIVE_RUNTIME_HELPER_WORD_COUNT];
+	zend_mir_executable_value_ref *user_opcode_source_operations;
+	uint32_t user_opcode_source_operation_count;
 	zend_tpde_user_opcode_target user_opcode_targets[ZEND_VM_LAST_OPCODE];
 	uint32_t user_opcode_target_count;
 	bool may_emit_calls;

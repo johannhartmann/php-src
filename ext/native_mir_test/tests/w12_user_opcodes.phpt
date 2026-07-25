@@ -32,6 +32,10 @@ function w12_user_opcode_array($key, $array)
 {
     return $key + $array;
 }
+function w12_user_opcode_control_source($left, $right)
+{
+    return $left && $right;
+}
 function w12_user_opcode_enter(): array
 {
     $GLOBALS['w12_user_opcode_enter_trace'][] = 'entered';
@@ -185,6 +189,30 @@ printf(
 if (($result['execution']['return_value'] ?? null) !== true) {
     printf("diagnostics=%s\n", json_encode($result['diagnostics'] ?? null));
 }
+
+$result = native_mir_test_compile_execute(
+    $source,
+    'w12-user-opcode-control-source.php',
+    [true, false],
+    [
+        'wave' => 11,
+        'function' => 'w12_user_opcode_control_source',
+        'user_opcode' => [
+            'opcode' => 'ZEND_JMPZ_EX',
+            'action' => 'dispatch_to',
+            'dispatch_to' => 'ZEND_BOOL_NOT',
+        ],
+    ],
+);
+printf(
+    "control_source status=%s result=%s calls=%d vm=%d execute_ex=%d handler=%d\n",
+    $result['status'],
+    json_encode($result['execution']['return_value'] ?? null),
+    $result['execution']['user_opcode_calls'] ?? -1,
+    $result['execution']['vm_handler_calls'] ?? -1,
+    $result['execution']['execute_ex_calls'] ?? -1,
+    $result['execution']['opline_handler_calls'] ?? -1,
+);
 
 $unaryTargets = [
     'ZEND_BW_NOT' => [1, -2],
@@ -365,6 +393,7 @@ binary_ZEND_SPACESHIP status=accepted result=-1 calls=1 vm=0 execute_ex=0 handle
 binary_ZEND_CONCAT status=accepted result="19" calls=1 vm=0 execute_ex=0 handler=0
 binary_ZEND_FAST_CONCAT status=accepted result="19" calls=1 vm=0 execute_ex=0 handler=0
 array_key_exists status=accepted result=true calls=1 vm=0 execute_ex=0 handler=0
+control_source status=accepted result=false calls=1 vm=0 execute_ex=0 handler=0
 unary_ZEND_BW_NOT status=accepted result=-2 calls=1 vm=0 execute_ex=0 handler=0
 unary_ZEND_BOOL_NOT status=accepted result=false calls=1 vm=0 execute_ex=0 handler=0
 unary_ZEND_BOOL status=accepted result=true calls=1 vm=0 execute_ex=0 handler=0

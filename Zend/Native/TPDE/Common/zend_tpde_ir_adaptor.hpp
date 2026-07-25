@@ -652,21 +652,12 @@ public:
 			}
 			for (uint32_t source = 0;
 					source < plan_->source_op_array->last; ++source) {
-				if (source_landing_blocks[source] == UINT32_MAX) {
+				if (source_landing_blocks[source] == UINT32_MAX
+						|| source
+							>= plan_->user_opcode_source_operation_count) {
 					continue;
 				}
-				for (uint32_t instruction = 0;
-						instruction < plan_->instruction_count;
-						++instruction) {
-					const zend_tpde_instruction &candidate =
-						plan_->instructions[instruction];
-					if (candidate.has_value_operation
-							&& candidate.value_operation.source_position_id
-								== source) {
-						user_opcode_dispatch_to_sources_.push_back(source);
-						break;
-					}
-				}
+				user_opcode_dispatch_to_sources_.push_back(source);
 			}
 		}
 		for (uint32_t return_block : finally_return_blocks) {
