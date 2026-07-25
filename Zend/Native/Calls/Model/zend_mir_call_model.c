@@ -526,11 +526,13 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_source_sequence(
 						calls->context, site->target_id, &target)
 					|| (target.kind
 						== ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
-						? (opcode.zend_opcode_number != ZEND_INIT_FCALL
-							&& opcode.zend_opcode_number
-								!= ZEND_INIT_FCALL_BY_NAME
-							&& opcode.zend_opcode_number
-								!= ZEND_INIT_NS_FCALL_BY_NAME)
+						? (!w10_execution
+							? opcode.zend_opcode_number != ZEND_INIT_FCALL
+							: (opcode.zend_opcode_number != ZEND_INIT_FCALL
+								&& opcode.zend_opcode_number
+									!= ZEND_INIT_FCALL_BY_NAME
+								&& opcode.zend_opcode_number
+									!= ZEND_INIT_NS_FCALL_BY_NAME))
 						: target.kind
 							== ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER
 							? (!w10_execution
@@ -625,19 +627,25 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_source_sequence(
 								!= ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER)
 							&& (!w10_execution || target.kind
 								!= ZEND_MIR_SOURCE_CALL_TARGET_METHOD))
-							|| (opcode.zend_opcode_number
-									!= ZEND_DO_UCALL
-								&& opcode.zend_opcode_number
-									!= ZEND_DO_FCALL
-								&& opcode.zend_opcode_number
-									!= ZEND_DO_FCALL_BY_NAME
-								&& opcode.zend_opcode_number
-									!= ZEND_DO_ICALL
-								&& opcode.zend_opcode_number
-									!= ZEND_CALLABLE_CONVERT
-								&& (!w10_execution
-									|| opcode.zend_opcode_number
-										!= ZEND_CALLABLE_CONVERT_PARTIAL))))
+							|| (target.kind
+									== ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
+								&& !w10_execution
+								? (opcode.zend_opcode_number != ZEND_DO_UCALL
+									&& opcode.zend_opcode_number
+										!= ZEND_DO_FCALL)
+								: (opcode.zend_opcode_number
+										!= ZEND_DO_UCALL
+									&& opcode.zend_opcode_number
+										!= ZEND_DO_FCALL
+									&& opcode.zend_opcode_number
+										!= ZEND_DO_FCALL_BY_NAME
+									&& opcode.zend_opcode_number
+										!= ZEND_DO_ICALL
+									&& opcode.zend_opcode_number
+										!= ZEND_CALLABLE_CONVERT
+									&& (!w10_execution
+										|| opcode.zend_opcode_number
+											!= ZEND_CALLABLE_CONVERT_PARTIAL)))))
 					|| stack_count == 0
 					|| stack[stack_count - 1] != finish_id) {
 				result = zend_mir_w05_is_call_finish(

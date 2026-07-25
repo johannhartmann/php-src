@@ -1762,7 +1762,7 @@ static bool native_mir_test_lower_and_dump(native_mir_test_state *state)
 	}
 	if (state->wave == 5 || state->wave == 7
 			|| state->wave == 8 || state->wave == 9
-			|| state->wave == 10) {
+			|| state->wave == 10 || state->wave == 11) {
 		return native_mir_test_lower_w05_and_dump(state);
 	}
 	return state->wave == 4
