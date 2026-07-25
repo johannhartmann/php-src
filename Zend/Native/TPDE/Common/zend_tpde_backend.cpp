@@ -1187,12 +1187,25 @@ bool initialize_plan(
 					plan, ZEND_NATIVE_HELPER_USER_OPCODE_INVOKE);
 				require_runtime_helper(plan,
 					ZEND_NATIVE_HELPER_GENERATOR_USER_OPCODE_RETURN);
-				require_runtime_helper(
-					plan, ZEND_NATIVE_HELPER_VALUE_BINARY_OP);
-				require_runtime_helper(
-					plan, ZEND_NATIVE_HELPER_VALUE_UNARY_OP);
-				require_runtime_helper(
-					plan, ZEND_NATIVE_HELPER_VALUE_INCDEC);
+				for (uint32_t opcode = 0;
+						opcode < ZEND_VM_LAST_OPCODE; ++opcode) {
+					const zend_mir_opcode mapped =
+						zend_mir_w12_executable_opcode(opcode);
+					const zend_native_runtime_helper_id helper =
+						zend_mir_opcode_is_executable_value(mapped)
+							? executable_value_helper(mapped)
+							: ZEND_NATIVE_HELPER_COUNT;
+
+					if (helper == ZEND_NATIVE_HELPER_COUNT
+							|| !zend_tpde_helper_has_explicit_operands(
+								helper)) {
+						continue;
+					}
+					plan->user_opcode_targets[
+						plan->user_opcode_target_count++] = {
+							static_cast<uint8_t>(opcode), helper};
+					require_runtime_helper(plan, helper);
+				}
 				break;
 			}
 		}

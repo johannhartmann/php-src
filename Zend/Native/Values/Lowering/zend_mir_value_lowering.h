@@ -66,6 +66,7 @@ bool zend_mir_w06_emit_value_snapshot(
 	zend_mir_value_mutator *mutator);
 
 bool zend_mir_w06_opcode_is_accepted(uint32_t opcode);
+zend_mir_opcode zend_mir_w12_executable_opcode(uint32_t opcode);
 bool zend_mir_w09_opcode_is_executable(uint32_t opcode);
 bool zend_mir_w10_opcode_is_executable(uint32_t opcode);
 bool zend_mir_w11_opcode_is_executable(uint32_t opcode);

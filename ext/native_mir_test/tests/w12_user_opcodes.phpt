@@ -28,6 +28,10 @@ function w12_user_opcode_incdec(int $value)
 {
     return $value++;
 }
+function w12_user_opcode_array($key, $array)
+{
+    return $key + $array;
+}
 PHP;
 
 $cases = [
@@ -91,6 +95,8 @@ $binaryTargets = [
     'ZEND_IS_SMALLER' => true,
     'ZEND_IS_SMALLER_OR_EQUAL' => true,
     'ZEND_SPACESHIP' => -1,
+    'ZEND_CONCAT' => '19',
+    'ZEND_FAST_CONCAT' => '19',
 ];
 foreach ($binaryTargets as $target => $expected) {
     $result = native_mir_test_compile_execute(
@@ -120,6 +126,33 @@ foreach ($binaryTargets as $target => $expected) {
     if (($result['execution']['return_value'] ?? null) !== $expected) {
         printf("diagnostics=%s\n", json_encode($result['diagnostics'] ?? null));
     }
+}
+
+$result = native_mir_test_compile_execute(
+    $source,
+    'w12-user-opcode-array-key-exists.php',
+    ['native', ['native' => 1]],
+    [
+        'wave' => 11,
+        'function' => 'w12_user_opcode_array',
+        'user_opcode' => [
+            'opcode' => 'ZEND_ADD',
+            'action' => 'dispatch_to',
+            'dispatch_to' => 'ZEND_ARRAY_KEY_EXISTS',
+        ],
+    ],
+);
+printf(
+    "array_key_exists status=%s result=%s calls=%d vm=%d execute_ex=%d handler=%d\n",
+    $result['status'],
+    json_encode($result['execution']['return_value'] ?? null),
+    $result['execution']['user_opcode_calls'] ?? -1,
+    $result['execution']['vm_handler_calls'] ?? -1,
+    $result['execution']['execute_ex_calls'] ?? -1,
+    $result['execution']['opline_handler_calls'] ?? -1,
+);
+if (($result['execution']['return_value'] ?? null) !== true) {
+    printf("diagnostics=%s\n", json_encode($result['diagnostics'] ?? null));
 }
 
 $unaryTargets = [
@@ -297,6 +330,9 @@ binary_ZEND_IS_NOT_EQUAL status=accepted result=true calls=1 vm=0 execute_ex=0 h
 binary_ZEND_IS_SMALLER status=accepted result=true calls=1 vm=0 execute_ex=0 handler=0
 binary_ZEND_IS_SMALLER_OR_EQUAL status=accepted result=true calls=1 vm=0 execute_ex=0 handler=0
 binary_ZEND_SPACESHIP status=accepted result=-1 calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_CONCAT status=accepted result="19" calls=1 vm=0 execute_ex=0 handler=0
+binary_ZEND_FAST_CONCAT status=accepted result="19" calls=1 vm=0 execute_ex=0 handler=0
+array_key_exists status=accepted result=true calls=1 vm=0 execute_ex=0 handler=0
 unary_ZEND_BW_NOT status=accepted result=-2 calls=1 vm=0 execute_ex=0 handler=0
 unary_ZEND_BOOL_NOT status=accepted result=false calls=1 vm=0 execute_ex=0 handler=0
 unary_ZEND_BOOL status=accepted result=true calls=1 vm=0 execute_ex=0 handler=0

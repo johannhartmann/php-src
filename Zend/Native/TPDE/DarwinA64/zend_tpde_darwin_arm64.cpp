@@ -240,7 +240,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			adaptor->user_opcode_dispatch_to_sources();
 		const size_t dispatch_case_count =
 			dispatch_sources.size()
-				* zend_tpde_user_opcode_targets.size();
+				* plan->user_opcode_target_count;
 		if (plan->source_op_array == nullptr
 				|| node.operands.size() != 4 + dispatch_case_count
 				|| node.argument_index >= plan->source_op_array->last
@@ -374,10 +374,10 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				return false;
 			}
 			for (size_t target_index = 0;
-					target_index < zend_tpde_user_opcode_targets.size();
+					target_index < plan->user_opcode_target_count;
 					++target_index) {
 				const zend_tpde_user_opcode_target &target_case =
-					zend_tpde_user_opcode_targets[target_index];
+					plan->user_opcode_targets[target_index];
 				auto target = text_writer.label_create();
 				ASM(CMPwi, selected_opcode_reg, target_case.opcode);
 				generate_raw_jump(Jump::Jeq, target);
@@ -389,7 +389,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					target_case.helper,
 					static_cast<uint32_t>(
 						4 + source_index
-							* zend_tpde_user_opcode_targets.size()
+							* plan->user_opcode_target_count
 							+ target_index)});
 			}
 			label_place(next_candidate);
@@ -401,19 +401,41 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			label_place(dispatch_case.label);
 			const zend_mir_executable_value_ref &operation =
 				dispatch_case.instruction->value_operation;
+			const bool explicit_object_operands =
+				zend_tpde_helper_has_object_operand_payloads(
+					dispatch_case.helper);
+			const bool explicit_auxiliary =
+				zend_tpde_helper_has_explicit_auxiliary(
+					dispatch_case.helper);
+			auto encode_operand = [&](const zend_mir_source_operand_ref &operand,
+					uint32_t unused_payload) {
+				return explicit_object_operands
+					? zend_tpde_encode_value_operand(
+						operand, unused_payload)
+					: zend_tpde_encode_value_operand(operand);
+			};
 			zend::native::tpde::CCAssignerAppleA64 assigner;
 			CallBuilder operation_call{*this, assigner};
 			operation_call.add_arg(
 				CallArg{node.operands[dispatch_case.frame_operand]});
 			operation_call.add_arg(ValuePart{
-				zend_tpde_encode_value_operand(operation.op1), 8,
+				encode_operand(
+					operation.op1, operation.op1_unused_payload), 8,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			operation_call.add_arg(ValuePart{
-				zend_tpde_encode_value_operand(operation.op2), 8,
+				encode_operand(
+					operation.op2, operation.op2_unused_payload), 8,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			operation_call.add_arg(ValuePart{
-				zend_tpde_encode_value_operand(operation.result), 8,
+				encode_operand(
+					operation.result, operation.result_unused_payload), 8,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			if (explicit_auxiliary) {
+				operation_call.add_arg(ValuePart{
+					encode_operand(operation.auxiliary,
+						operation.auxiliary_unused_payload), 8,
+					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+			}
 			operation_call.add_arg(ValuePart{
 				operation.extended_value, 4, DarwinConfig::GP_BANK},
 				::tpde::CCAssignment{});
