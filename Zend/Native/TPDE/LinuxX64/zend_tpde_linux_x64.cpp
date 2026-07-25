@@ -5800,16 +5800,18 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 					auto descriptor_reg = descriptor_scratch.cur_reg();
 					ScratchReg first{this};
 					ScratchReg second{this};
+					ScratchReg published_code{this};
 					auto first_reg = first.alloc_gp();
 					auto second_reg = second.alloc_gp();
+					auto published_code_reg = published_code.alloc_gp();
 					std::optional<ScratchReg> run_time_cache;
 
-					ASM(CMP32mi,
+					ASM(MOV64rm, published_code_reg,
 						FE_MEM(cell_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
-								offsetof(zend_native_entry_cell, state))),
-						ZEND_NATIVE_ENTRY_READY);
-					generate_raw_jump(Jump::jne, slow_path);
+								offsetof(zend_native_entry_cell, code))));
+					ASM(TEST64rr, published_code_reg, published_code_reg);
+					generate_raw_jump(Jump::je, slow_path);
 					ASM(MOV64rm, first_reg,
 						FE_MEM(cell_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
@@ -5821,14 +5823,8 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 								expected_function))));
 					ASM(CMP64rr, first_reg, second_reg);
 					generate_raw_jump(Jump::jne, slow_path);
-					ASM(MOV64rm, second_reg,
-						FE_MEM(cell_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(zend_native_entry_cell, code))));
-					ASM(TEST64rr, second_reg, second_reg);
-					generate_raw_jump(Jump::je, slow_path);
 					ASM(CMP8mi,
-						FE_MEM(second_reg, 0, FE_NOREG,
+						FE_MEM(published_code_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
 								offsetof(zend_native_code, executable))),
 						1);
@@ -6574,6 +6570,11 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 					ASM(MOV64mr,
 						FE_MEM(metadata_second_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
+								zend_native_direct_activation, code))),
+						published_code_reg);
+					ASM(MOV64mr,
+						FE_MEM(metadata_second_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
 								zend_native_direct_activation, descriptor))),
 						descriptor_reg);
 					ASM(MOV64rm, metadata_first_reg,
@@ -6689,11 +6690,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 						entry_argument.alloc_specific(
 							tpde::x64::AsmReg::R11);
 					ASM(MOV64rm, entry_argument_reg,
-						FE_MEM(cell_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(zend_native_entry_cell, code))));
-					ASM(MOV64rm, entry_argument_reg,
-						FE_MEM(entry_argument_reg, 0, FE_NOREG,
+						FE_MEM(published_code_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
 								offsetof(zend_native_code, entry))));
 					ValuePart entry_value{
@@ -6703,6 +6700,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 					context_scratch.reset();
 					cell_scratch.reset();
 					descriptor_scratch.reset();
+					published_code.reset();
 					tpde::x64::CCAssignerSysV fast_assigner{false};
 					CallBuilder fast_builder{*this, fast_assigner};
 					fast_builder.add_arg(

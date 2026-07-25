@@ -2680,6 +2680,7 @@ zend_native_status zend_native_compiler_execute(
 {
 	zend_native_compile_diagnostic compile_diagnostic;
 	zend_native_entry_cell *entry_cell;
+	const zend_native_code *code;
 	zend_execute_data *previous;
 	zend_execute_data *frame;
 	zval receiver;
@@ -2723,7 +2724,9 @@ zend_native_status zend_native_compiler_execute(
 	}
 	compiler->stats.compile_ns += zend_hrtime() - phase_started;
 	entry_cell = zend_native_compiler_lookup(compiler, function);
-	if (entry_cell == NULL || zend_native_compiler_enter(compiler) == FAILURE) {
+	if (entry_cell == NULL
+			|| (code = zend_native_entry_cell_load(entry_cell)) == NULL
+			|| zend_native_compiler_enter(compiler) == FAILURE) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	ZVAL_UNDEF(&receiver);
@@ -2751,7 +2754,7 @@ zend_native_status zend_native_compiler_execute(
 	ZVAL_UNDEF(result);
 	zend_init_func_execute_data(frame, &function->op_array, result);
 	phase_started = zend_hrtime();
-	status = zend_native_execute_frame(entry_cell->code, frame, diagnostic);
+	status = zend_native_execute_frame(code, frame, diagnostic);
 	elapsed = zend_hrtime() - phase_started;
 	compiler->stats.execute_ns += elapsed;
 	compiler->stats.last_execute_ns = elapsed;
@@ -2775,6 +2778,7 @@ zend_native_status zend_native_compiler_execute_data(
 {
 	zend_native_compile_diagnostic compile_diagnostic;
 	zend_native_entry_cell *entry_cell;
+	const zend_native_code *code;
 	zend_execute_data *previous;
 	zend_native_status status;
 	zend_hrtime_t phase_started;
@@ -2804,7 +2808,9 @@ zend_native_status zend_native_compiler_execute_data(
 	compiler->stats.compile_ns += zend_hrtime() - phase_started;
 	entry_cell = zend_native_compiler_lookup(
 		compiler, execute_data->func);
-	if (entry_cell == NULL || zend_native_compiler_enter(compiler) == FAILURE) {
+	if (entry_cell == NULL
+			|| (code = zend_native_entry_cell_load(entry_cell)) == NULL
+			|| zend_native_compiler_enter(compiler) == FAILURE) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	previous = execute_data->prev_execute_data;
@@ -2812,7 +2818,7 @@ zend_native_status zend_native_compiler_execute_data(
 	entry_cell->active_calls++;
 	phase_started = zend_hrtime();
 	status = zend_native_execute_frame(
-		entry_cell->code, execute_data, diagnostic);
+		code, execute_data, diagnostic);
 	elapsed = zend_hrtime() - phase_started;
 	entry_cell->active_calls--;
 	EG(current_execute_data) = previous;
