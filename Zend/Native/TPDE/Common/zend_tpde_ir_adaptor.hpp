@@ -443,6 +443,28 @@ public:
 		 * continuation, handler, return block, and exception edge in one MIR
 		 * pass; the former return-by-instruction rescans were quadratic.
 		 */
+		if (plan_->source_op_array != nullptr
+				&& (plan_->source_op_array->fn_flags
+					& (ZEND_ACC_GENERATOR | ZEND_ACC_HAS_FINALLY_BLOCK))
+					== (ZEND_ACC_GENERATOR | ZEND_ACC_HAS_FINALLY_BLOCK)) {
+			for (uint32_t i = 0;
+					i < plan_->source_op_array->last_try_catch; ++i) {
+				const zend_try_catch_element &region =
+					plan_->source_op_array->try_catch_array[i];
+				if (region.finally_op != 0
+						&& region.finally_op < plan_->source_op_array->last
+						&& region.finally_end < plan_->source_op_array->last) {
+					/*
+					 * zend_generator_dtor_storage() resumes a suspended
+					 * generator at finally_op when it is force-closed.
+					 * Publish that exact source address as another local
+					 * machine-code landing beside the ordinary yield
+					 * continuations.
+					 */
+					generator_resume_targets_.push_back(region.finally_op);
+				}
+			}
+		}
 		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
 			const zend_tpde_instruction &instruction = plan_->instructions[i];
 			const zend_mir_instruction_record record =
