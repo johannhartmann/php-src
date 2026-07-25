@@ -8,11 +8,42 @@
 
 #include <string.h>
 
+#include "Zend/zend_compile.h"
 #include "Zend/Native/MIR/Semantics/zend_mir_ownership.h"
 #include "Zend/Native/Lowering/Core/zend_mir_lowering_internal.h"
 #include "Zend/Native/Lowering/Frontend/zend_mir_zend_source.h"
 
 #include "zend_mir_straight_line_internal.h"
+
+static bool zend_mir_straight_line_resolve_return_value(
+	const zend_mir_straight_line_provider_context *provider_context,
+	const zend_mir_source_operand_ref *operand,
+	zend_mir_value_id *value_id_out,
+	zend_mir_straight_line_value *value_out);
+
+static bool zend_mir_straight_line_original_literal_is_scalar(
+	const zend_mir_lowering_context *context,
+	const zend_mir_source_operand_ref *operand)
+{
+	const zend_op_array *op_array;
+	uint8_t type;
+
+	if (operand->kind != ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+		return true;
+	}
+	if (context == NULL || context->zend_source == NULL) {
+		return false;
+	}
+	op_array = context->zend_source->call_op_array != NULL
+		? (const zend_op_array *) context->zend_source->call_op_array
+		: (const zend_op_array *) context->zend_source->op_array;
+	if (op_array == NULL || operand->index >= op_array->last_literal) {
+		return false;
+	}
+	type = Z_TYPE(op_array->literals[operand->index]);
+	return type == IS_NULL || type == IS_FALSE || type == IS_TRUE
+		|| type == IS_LONG || type == IS_DOUBLE;
+}
 
 static zend_mir_lowering_status zend_mir_lower_source_zval_return(
 	zend_mir_lowering_context *context,
@@ -25,8 +56,11 @@ static zend_mir_lowering_status zend_mir_lower_source_zval_return(
 	zend_mir_instruction_id instruction_id;
 	zend_mir_frame_state_id frame_id;
 	zend_mir_source_position_id source_id;
+	zend_mir_value_id scalar_value_id = ZEND_MIR_ID_INVALID;
+	zend_mir_straight_line_value scalar_value;
 	zend_mir_frame_state_id prior_entry_frame_id;
 	bool prior_entry_emitted;
+	bool scalar_return;
 	zend_mir_lowering_status status;
 
 	if (source_opcode->op1.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
@@ -60,16 +94,27 @@ static zend_mir_lowering_status zend_mir_lower_source_zval_return(
 		}
 		return ZEND_MIR_LOWERING_FAILED;
 	}
+	scalar_return = zend_mir_straight_line_original_literal_is_scalar(
+		context, &source_opcode->op1)
+		&& zend_mir_straight_line_resolve_return_value(
+			provider_context, &source_opcode->op1,
+			&scalar_value_id, &scalar_value)
+		&& zend_mir_straight_line_value_contract_is_valid(&scalar_value);
 	memset(&instruction, 0, sizeof(instruction));
 	instruction.id = ZEND_MIR_ID_INVALID;
 	instruction.block_id = zend_mir_lowering_context_block_id(context);
-	instruction.opcode = ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL;
+	instruction.opcode = scalar_return
+		? ZEND_MIR_OPCODE_RETURN
+		: ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL;
 	instruction.representation = ZEND_MIR_REPRESENTATION_VOID;
 	instruction.result_id = ZEND_MIR_ID_INVALID;
 	instruction.frame_state_id = frame_id;
 	instruction.source_position_id = source_id;
 	if (!mutator->add_instruction(
-			mutator->context, &instruction, &instruction_id)) {
+			mutator->context, &instruction, &instruction_id)
+			|| (scalar_return
+				&& !mutator->add_operand(
+					mutator->context, instruction_id, scalar_value_id))) {
 		zend_mir_straight_line_restore_entry_state(
 			provider_context->lifetime, prior_entry_emitted,
 			prior_entry_frame_id);
@@ -90,6 +135,16 @@ static bool zend_mir_straight_line_resolve_return_value(
 	zend_mir_value_id *value_id_out,
 	zend_mir_straight_line_value *value_out)
 {
+	if (operand->kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+			&& operand->ssa_variable_id <= ZEND_MIR_VALUE_ORIGINAL_MAX) {
+		*value_id_out =
+			zend_mir_value_from_original_ssa(operand->ssa_variable_id);
+		return zend_mir_straight_line_value_at(
+			provider_context->lifetime, *value_id_out, value_out);
+	}
+	if (operand->kind == ZEND_MIR_SOURCE_OPERAND_SLOT) {
+		return false;
+	}
 	if (provider_context->entry->resolve_operand != NULL
 			&& provider_context->entry->resolve_operand(
 				provider_context->entry->source_context,

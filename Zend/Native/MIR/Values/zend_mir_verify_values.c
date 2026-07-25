@@ -777,14 +777,26 @@ static bool zend_mir_w06_verify_call_transfers(
 	if (source_backed) {
 		for (index = 0; index < module->call_arguments.count; index++) {
 			zend_mir_call_argument_ref argument;
+			bool borrowed_scalar;
 			if (!calls->call_argument_at(calls->context, index, &argument)
-					|| argument.id != index
-					|| argument.ownership
-						== ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR) {
+					|| argument.id != index) {
 				return zend_mir_w06_emit(view, diagnostics,
 					ZEND_MIR_VERIFY_W06_CALL_TRANSFER_MISMATCH,
 					ZEND_MIRV_TOKEN_W06_CALL_TRANSFER_MISMATCH,
-					"source-backed call argument has a scalar transfer");
+					"source-backed call argument is malformed");
+			}
+			borrowed_scalar = argument.ownership
+				== ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR;
+			if ((borrowed_scalar
+						&& (!zend_mir_id_is_valid(argument.value_id)
+							|| argument.source_mode
+								!= ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE))
+					|| (!borrowed_scalar
+						&& zend_mir_id_is_valid(argument.value_id))) {
+				return zend_mir_w06_emit(view, diagnostics,
+					ZEND_MIR_VERIFY_W06_CALL_TRANSFER_MISMATCH,
+					ZEND_MIRV_TOKEN_W06_CALL_TRANSFER_MISMATCH,
+					"call argument value and ownership disagree");
 			}
 		}
 		return true;
@@ -929,6 +941,8 @@ static bool zend_mir_w11p_verify_value_locations(
 				|| !zend_mir_id_is_valid(location.value_id)
 				|| (location.value_id & ZEND_MIR_VALUE_SYNTHETIC_BIT) != 0
 				|| !zend_mir_id_is_valid(location.storage_id)
+				|| location.frame_argument_ordinal_plus_one
+					== ZEND_MIR_ID_INVALID
 				|| !zend_mir_module_find_value(
 					module, location.value_id, &value_index)
 				|| (have_previous && location.value_id <= previous)) {

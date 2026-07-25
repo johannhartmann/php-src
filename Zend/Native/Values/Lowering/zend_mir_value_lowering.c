@@ -374,6 +374,9 @@ static zend_mir_opcode zend_mir_w11p_control_value_opcode(uint32_t opcode)
 			return ZEND_MIR_OPCODE_ITERATOR_BRANCH;
 		case ZEND_THROW:
 			return ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL;
+		case ZEND_RETURN:
+		case ZEND_RETURN_BY_REF:
+			return ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL;
 		default:
 			return ZEND_MIR_OPCODE_INVALID;
 	}
@@ -639,6 +642,7 @@ static bool zend_mir_w09_operation_semantics(
 		case ZEND_MIR_OPCODE_VALUE_SEPARATE:
 		case ZEND_MIR_OPCODE_VALUE_COPY_TMP:
 		case ZEND_MIR_OPCODE_VALUE_QM_ASSIGN:
+		case ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL:
 			break;
 		default:
 			return false;
@@ -819,6 +823,50 @@ static int zend_mir_w11p_compare_value_locations(
 	return a->value_id < b->value_id ? -1 : 1;
 }
 
+static bool zend_mir_w11p_index_frame_arguments(
+	const zend_op_array *op_array,
+	const zend_mir_source_call_view *source,
+	uint32_t source_ssa_count,
+	uint32_t *argument_by_ssa)
+{
+	uint32_t index;
+
+	if (op_array == NULL || source == NULL || argument_by_ssa == NULL
+			|| source->source_opcode_count == NULL
+			|| source->source_opcode_at == NULL
+			|| source->source_opcode_count(source->context)
+				!= op_array->last) {
+		return false;
+	}
+	for (index = 0; index < source_ssa_count; index++) {
+		argument_by_ssa[index] = 0;
+	}
+	for (index = 0; index < op_array->last; index++) {
+		zend_mir_source_opcode_ref opcode;
+		uint32_t argument_number;
+		uint32_t ssa_variable_id;
+
+		if (!source->source_opcode_at(source->context, index, &opcode)
+				|| opcode.opline_index != index) {
+			return false;
+		}
+		if (opcode.zend_opcode_number != ZEND_RECV
+				&& opcode.zend_opcode_number != ZEND_RECV_INIT) {
+			continue;
+		}
+		argument_number = op_array->opcodes[index].op1.num;
+		ssa_variable_id = opcode.result.ssa_variable_id;
+		if (argument_number == 0 || argument_number > op_array->num_args
+				|| !zend_mir_id_is_valid(ssa_variable_id)
+				|| ssa_variable_id >= source_ssa_count
+				|| argument_by_ssa[ssa_variable_id] != 0) {
+			return false;
+		}
+		argument_by_ssa[ssa_variable_id] = argument_number;
+	}
+	return true;
+}
+
 static bool zend_mir_w11p_index_control_value_instructions(
 	const zend_mir_view *view, uint32_t source_count,
 	zend_mir_instruction_id *instructions_by_source)
@@ -839,9 +887,11 @@ static bool zend_mir_w11p_index_control_value_instructions(
 		if (!view->instruction_at(view->context, index, &instruction)) {
 			return false;
 		}
-		if (instruction.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+		if (instruction.opcode == ZEND_MIR_OPCODE_COND_BRANCH
+				|| instruction.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 				|| instruction.opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH
-				|| instruction.opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL) {
+				|| instruction.opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
+				|| instruction.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL) {
 			if (instruction.source_position_id >= source_count
 					|| zend_mir_id_is_valid(instructions_by_source[
 						instruction.source_position_id])) {
@@ -861,7 +911,9 @@ bool zend_mir_w09_emit_executable_values(
 	const zend_mir_control_flow_map *control_flow_map,
 	zend_mir_straight_line_provider_context *frame_context,
 	bool w10_execution,
-	bool w11_execution)
+	bool w11_execution,
+	const uint8_t *scalarized_opcodes,
+	uint32_t scalarized_opcode_count)
 {
 	const zend_mir_lowering_source_view *source;
 	zend_mir_source_call_view semantic_source;
@@ -869,17 +921,24 @@ bool zend_mir_w09_emit_executable_values(
 	zend_mir_executable_value_ref *operations;
 	zend_mir_value_location_ref *locations;
 	zend_mir_instruction_id *control_instruction_by_source;
+	uint32_t *ssa_by_storage;
+	uint32_t *argument_by_ssa;
+	uint8_t *machine_defined_values;
 	zend_mir_value_mutator *value_mutator;
 	zend_mir_mutator *mutator;
 	uint32_t operation_count = 0;
 	uint32_t location_count = 0;
 	uint32_t source_ssa_count;
+	uint32_t storage_count;
+	uint32_t value_count;
 	uint32_t index;
 	bool success = false;
 
 	if (op_array == NULL || lowering_context == NULL || module == NULL
 			|| control_flow_map == NULL || frame_context == NULL
-			|| op_array->last > ZEND_MIR_W06_LIMIT) {
+			|| op_array->last > ZEND_MIR_W06_LIMIT
+			|| (scalarized_opcodes != NULL
+				&& scalarized_opcode_count != op_array->last)) {
 		return false;
 	}
 	source = lowering_context->source;
@@ -898,7 +957,14 @@ bool zend_mir_w09_emit_executable_values(
 		return false;
 	}
 	source_ssa_count = source->ssa_count(source->context);
-	if (source_ssa_count > ZEND_MIR_W06_LIMIT) {
+	if (source_ssa_count > ZEND_MIR_W06_LIMIT
+			|| (uint32_t) op_array->last_var
+				> ZEND_MIR_W06_LIMIT - op_array->T) {
+		return false;
+	}
+	storage_count = (uint32_t) op_array->last_var + op_array->T;
+	value_count = view->value_count(view->context);
+	if (value_count > ZEND_MIR_W06_LIMIT) {
 		return false;
 	}
 	operations = zend_mir_w06_calloc(op_array->last, sizeof(*operations));
@@ -910,16 +976,76 @@ bool zend_mir_w09_emit_executable_values(
 		free(operations);
 		return false;
 	}
-	control_instruction_by_source = zend_mir_w06_calloc(
-		op_array->last, sizeof(*control_instruction_by_source));
-	if (op_array->last != 0 && control_instruction_by_source == NULL) {
+	argument_by_ssa = zend_mir_w06_calloc(
+		source_ssa_count, sizeof(*argument_by_ssa));
+	if (source_ssa_count != 0 && argument_by_ssa == NULL) {
 		free(locations);
 		free(operations);
 		return false;
 	}
+	control_instruction_by_source = zend_mir_w06_calloc(
+		op_array->last, sizeof(*control_instruction_by_source));
+	if (op_array->last != 0 && control_instruction_by_source == NULL) {
+		free(argument_by_ssa);
+		free(locations);
+		free(operations);
+		return false;
+	}
+	ssa_by_storage = zend_mir_w06_calloc(
+		storage_count, sizeof(*ssa_by_storage));
+	if (storage_count != 0 && ssa_by_storage == NULL) {
+		free(control_instruction_by_source);
+		free(argument_by_ssa);
+		free(locations);
+		free(operations);
+		return false;
+	}
+	for (index = 0; index < storage_count; index++) {
+		ssa_by_storage[index] = ZEND_MIR_ID_INVALID;
+	}
+	machine_defined_values = zend_mir_w06_calloc(
+		value_count, sizeof(*machine_defined_values));
+	if (value_count != 0 && machine_defined_values == NULL) {
+		free(ssa_by_storage);
+		free(control_instruction_by_source);
+		free(argument_by_ssa);
+		free(locations);
+		free(operations);
+		return false;
+	}
+	for (index = 0; index < view->instruction_count(view->context); index++) {
+		zend_mir_instruction_record instruction;
+		uint32_t value_index;
+
+		if (!view->instruction_at(view->context, index, &instruction)) {
+			goto done;
+		}
+		if (zend_mir_id_is_valid(instruction.result_id)
+				&& zend_mir_module_find_value(
+					module, instruction.result_id, &value_index)) {
+			machine_defined_values[value_index] = 1;
+		}
+	}
+	for (index = 0; index < view->constant_count(view->context); index++) {
+		zend_mir_constant_record constant;
+		uint32_t value_index;
+
+		if (!view->constant_at(view->context, index, &constant)
+				|| !zend_mir_module_find_value(
+					module, constant.value_id, &value_index)) {
+			goto done;
+		}
+		machine_defined_values[value_index] = 1;
+	}
 	if (op_array->last != 0
 			&& !zend_mir_w11p_index_control_value_instructions(
 				view, op_array->last, control_instruction_by_source)) {
+		goto done;
+	}
+	if (source_ssa_count != 0
+			&& !zend_mir_w11p_index_frame_arguments(
+				op_array, &semantic_source, source_ssa_count,
+				argument_by_ssa)) {
 		goto done;
 	}
 	mutator = lowering_context->module_ops.mutator(
@@ -953,6 +1079,8 @@ bool zend_mir_w09_emit_executable_values(
 		}
 		locations[location_count].value_id = value_id;
 		locations[location_count].storage_id = storage_id;
+		locations[location_count].frame_argument_ordinal_plus_one =
+			argument_by_ssa[ssa.ssa_variable_id];
 		location_count++;
 	}
 	for (index = 0; index < op_array->last; index++) {
@@ -963,9 +1091,22 @@ bool zend_mir_w09_emit_executable_values(
 		zend_mir_opcode opcode = zend_mir_w09_executable_opcode(
 			op_array->opcodes[index].opcode);
 
+		/*
+		 * W11 scalar lowering already owns the complete semantics and dataflow
+		 * for these source operations. Emitting the older executable-zval
+		 * operation as well would replay the same assignment or increment
+		 * against the Zend frame after the machine SSA result was produced.
+		 */
+		if (scalarized_opcodes != NULL && scalarized_opcodes[index]) {
+			continue;
+		}
 		if (opcode == ZEND_MIR_OPCODE_INVALID) {
 			opcode = zend_mir_w11p_control_value_opcode(
 				op_array->opcodes[index].opcode);
+		}
+		if (!w11_execution
+				&& opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL) {
+			continue;
 		}
 		if (opcode == ZEND_MIR_OPCODE_INVALID
 				|| (!w10_execution
@@ -1007,6 +1148,22 @@ bool zend_mir_w09_emit_executable_values(
 			op_array, &source_opcode.op2);
 		operation->result_storage_id = zend_mir_w09_operand_storage_id(
 			op_array, &source_opcode.result);
+		if (opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
+				&& !zend_mir_id_is_valid(
+					operation->op1.ssa_variable_id)
+				&& zend_mir_id_is_valid(operation->op1_storage_id)
+				&& operation->op1_storage_id < storage_count
+				&& zend_mir_id_is_valid(
+					ssa_by_storage[operation->op1_storage_id])) {
+			/*
+			 * VERIFY_RETURN_TYPE and the following RETURN share the same
+			 * physical carrier, but Zend SSA intentionally omits the second
+			 * use. Preserve the last explicit source-backed SSA identity so
+			 * the attached return descriptor remains exact and pointer-free.
+			 */
+			operation->op1.ssa_variable_id =
+				ssa_by_storage[operation->op1_storage_id];
+		}
 		operation->auxiliary.kind = ZEND_MIR_SOURCE_OPERAND_UNUSED;
 		operation->auxiliary.slot_kind =
 			ZEND_MIR_SOURCE_SLOT_KIND_INVALID;
@@ -1042,18 +1199,72 @@ bool zend_mir_w09_emit_executable_values(
 		}
 		if ((opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 				|| opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH
-				|| opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL)
+				|| opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
+				|| opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL)
 				&& (operation->source_position_id >= op_array->last
 					|| !zend_mir_id_is_valid(
 						control_instruction_by_source[
 							operation->source_position_id]))) {
+			if (opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL) {
+				continue;
+			}
 			goto done;
 		}
 		if (opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 				|| opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH
-				|| opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL) {
+				|| opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
+				|| opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL) {
 			operation->id = control_instruction_by_source[
 				operation->source_position_id];
+		}
+		if (opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
+			zend_mir_instruction_record branch_instruction;
+
+			if (!view->instruction_at(
+					view->context, operation->id, &branch_instruction)) {
+				goto done;
+			}
+			if (branch_instruction.opcode == ZEND_MIR_OPCODE_COND_BRANCH) {
+				zend_mir_value_id condition_id;
+				zend_mir_value_record condition;
+				uint32_t condition_index;
+				bool machine_condition;
+
+				/*
+				 * COND_BRANCH describes topology, not the condition carrier.
+				 * A real non-zval MIR operand is already machine-defined and
+				 * must remain on the direct branch path. Compatibility-wave
+				 * control flow can use the same topology with a canonical
+				 * source zval; only that case needs the explicit source
+				 * operation.
+				 */
+				machine_condition =
+					view->instruction_operand_count(
+						view->context, branch_instruction.id) == 1
+					&& view->instruction_operand_at(
+						view->context, branch_instruction.id, 0,
+						&condition_id)
+					&& zend_mir_module_find_value(
+						module, condition_id, &condition_index)
+					&& machine_defined_values[condition_index]
+					&& view->value_at(
+						view->context, condition_index, &condition)
+					&& condition.id == condition_id
+					&& condition.representation
+						!= ZEND_MIR_REPRESENTATION_ZVAL
+					&& condition.representation
+						!= ZEND_MIR_REPRESENTATION_VOID
+					&& condition.representation
+						!= ZEND_MIR_REPRESENTATION_CONTROL;
+				if (machine_condition) {
+					continue;
+				}
+			}
+			if (branch_instruction.opcode != ZEND_MIR_OPCODE_COND_BRANCH
+					&& branch_instruction.opcode
+					!= ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
+				goto done;
+			}
 		}
 		if (opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL) {
 			zend_mir_instruction_record throw_instruction;
@@ -1077,6 +1288,27 @@ bool zend_mir_w09_emit_executable_values(
 					|| emitted_source != operation->source_position_id) {
 				goto done;
 			}
+		}
+		if (zend_mir_id_is_valid(operation->op1_storage_id)
+				&& operation->op1_storage_id < storage_count
+				&& zend_mir_id_is_valid(
+					operation->op1.ssa_variable_id)) {
+			ssa_by_storage[operation->op1_storage_id] =
+				operation->op1.ssa_variable_id;
+		}
+		if (zend_mir_id_is_valid(operation->op2_storage_id)
+				&& operation->op2_storage_id < storage_count
+				&& zend_mir_id_is_valid(
+					operation->op2.ssa_variable_id)) {
+			ssa_by_storage[operation->op2_storage_id] =
+				operation->op2.ssa_variable_id;
+		}
+		if (zend_mir_id_is_valid(operation->result_storage_id)
+				&& operation->result_storage_id < storage_count
+				&& zend_mir_id_is_valid(
+					operation->result.ssa_variable_id)) {
+			ssa_by_storage[operation->result_storage_id] =
+				operation->result.ssa_variable_id;
 		}
 		operation_count++;
 	}
@@ -1103,7 +1335,10 @@ bool zend_mir_w09_emit_executable_values(
 	success = zend_mir_module_commit_value_model(module);
 
 done:
+	free(machine_defined_values);
+	free(ssa_by_storage);
 	free(control_instruction_by_source);
+	free(argument_by_ssa);
 	free(locations);
 	free(operations);
 	return success;

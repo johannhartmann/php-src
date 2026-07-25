@@ -219,6 +219,8 @@ static uint32_t zend_mir_verify_expected_operands(zend_mir_opcode opcode,
 		case ZEND_MIR_OPCODE_COND_BRANCH:
 		case ZEND_MIR_OPCODE_THROW:
 			return 1;
+		case ZEND_MIR_OPCODE_ZVAL_STORE:
+			return 2;
 		case ZEND_MIR_OPCODE_PHI:
 			return predecessor_count;
 		case ZEND_MIR_OPCODE_RETURN:
@@ -266,6 +268,7 @@ static bool zend_mir_verify_result_contract(
 		case ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL:
 		case ZEND_MIR_OPCODE_THROW:
 		case ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL:
+		case ZEND_MIR_OPCODE_ZVAL_STORE:
 		case ZEND_MIR_OPCODE_UNREACHABLE:
 			return !zend_mir_id_is_valid(instruction->result_id)
 				&& instruction->representation == ZEND_MIR_REPRESENTATION_VOID;

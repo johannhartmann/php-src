@@ -11,6 +11,7 @@ extern "C" {
 #endif
 
 struct _zend_op_array;
+struct _zend_ssa;
 
 typedef enum _zend_native_target {
 	ZEND_NATIVE_TARGET_DARWIN_ARM64 = 0,
@@ -49,7 +50,13 @@ typedef struct _zend_native_scalar {
 typedef enum _zend_native_status {
 	ZEND_NATIVE_RETURNED = 0,
 	ZEND_NATIVE_EXCEPTION = 1,
-	ZEND_NATIVE_BAILOUT = 2
+	ZEND_NATIVE_BAILOUT = 2,
+	/*
+	 * Internal generated-code result used by a private scalar call frame.
+	 * No C boundary may observe this value: the caller immediately retries
+	 * through the canonical Zend-frame path before any PHP-visible mutation.
+	 */
+	ZEND_NATIVE_RETRY = 3
 } zend_native_status;
 
 /*
@@ -87,6 +94,7 @@ typedef struct _zend_native_image_metrics {
 	uint64_t guard_sites;
 	uint64_t slow_path_sites;
 	uint64_t direct_call_sites;
+	uint64_t direct_leaf_scalar_sites;
 	uint64_t direct_call_frame_bytes;
 } zend_native_image_metrics;
 
@@ -94,6 +102,7 @@ typedef struct _zend_native_call_binding {
 	zend_mir_call_target_id target_id;
 	zend_native_entry_cell *entry_cell;
 	bool direct_native;
+	bool leaf_scalar_frame;
 } zend_native_call_binding;
 
 typedef struct _zend_native_internal_call_binding {
@@ -156,6 +165,7 @@ zend_result zend_tpde_compile_module_w08(
 	uint32_t effect_count,
 	uint32_t frame_argument_count,
 	const struct _zend_op_array *source_op_array,
+	const struct _zend_ssa *source_ssa,
 	zend_native_image **out_image,
 	zend_native_diagnostic *diag);
 
@@ -176,6 +186,7 @@ zend_result zend_tpde_compile_module_w08_with_runtime(
 	uint32_t effect_count,
 	uint32_t frame_argument_count,
 	const struct _zend_op_array *source_op_array,
+	const struct _zend_ssa *source_ssa,
 	const struct _zend_native_runtime_api *runtime,
 	zend_native_image **out_image,
 	zend_native_diagnostic *diag);

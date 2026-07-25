@@ -590,11 +590,17 @@ static bool zend_mir_w04_validate_scalar_phis(
 					|| (result_fact.flags
 						& ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) == 0
 					|| ((phi.constraint.flags
-							& ZEND_MIR_SOURCE_PHI_RANGE_MIN_UNBOUNDED) == 0
+							& (ZEND_MIR_SOURCE_PHI_RANGE_MIN_UNBOUNDED
+								| ZEND_MIR_SOURCE_PHI_RANGE_NEGATED)) == 0
+						&& phi.constraint.min_ssa_variable_id
+							== ZEND_MIR_ID_INVALID
 						&& result_fact.integer_min
 							< phi.constraint.range_min)
 					|| ((phi.constraint.flags
-							& ZEND_MIR_SOURCE_PHI_RANGE_MAX_UNBOUNDED) == 0
+							& (ZEND_MIR_SOURCE_PHI_RANGE_MAX_UNBOUNDED
+								| ZEND_MIR_SOURCE_PHI_RANGE_NEGATED)) == 0
+						&& phi.constraint.max_ssa_variable_id
+							== ZEND_MIR_ID_INVALID
 						&& result_fact.integer_max
 								> phi.constraint.range_max))) {
 			return false;
@@ -786,7 +792,8 @@ static bool zend_mir_w04_lower_blocks(
 			context->provider_diagnostic = ZEND_MIRL_OK;
 			status = provider->lower(context, &opcode, mutator);
 			if (status != ZEND_MIR_LOWERING_SUCCESS
-					|| context->provider_status != ZEND_MIR_LOWERING_SUCCESS) {
+					|| context->provider_status
+						!= ZEND_MIR_LOWERING_SUCCESS) {
 				return false;
 			}
 		}
