@@ -442,6 +442,16 @@ static bool zend_mir_w04_validate_branch_proofs(
 			}
 			continue;
 		}
+		if (kind == ZEND_MIR_W12_BRANCH_ASSERT_CHECK) {
+			if (opcode.op1.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
+					|| opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
+					|| (opcode.result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
+						&& opcode.result.kind
+							!= ZEND_MIR_SOURCE_OPERAND_SSA)) {
+				return false;
+			}
+			continue;
+		}
 		if (kind == ZEND_MIR_W04_BRANCH_CATCH
 				|| kind == ZEND_MIR_W08_BRANCH_FINALLY_CALL
 				|| kind == ZEND_MIR_W08_BRANCH_FINALLY_RETURN

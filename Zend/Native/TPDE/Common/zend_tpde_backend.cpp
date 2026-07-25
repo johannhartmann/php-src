@@ -1056,6 +1056,40 @@ zend_native_runtime_helper_id executable_value_helper(zend_mir_opcode opcode) {
 			return ZEND_NATIVE_HELPER_GENERATOR_YIELD_FROM;
 		case ZEND_MIR_OPCODE_GENERATOR_RETURN:
 			return ZEND_NATIVE_HELPER_GENERATOR_RETURN;
+		case ZEND_MIR_OPCODE_VALUE_COUNT:
+			return ZEND_NATIVE_HELPER_VALUE_COUNT;
+		case ZEND_MIR_OPCODE_VALUE_GET_TYPE:
+			return ZEND_NATIVE_HELPER_VALUE_GET_TYPE;
+		case ZEND_MIR_OPCODE_VALUE_ARRAY_KEY_EXISTS:
+			return ZEND_NATIVE_HELPER_VALUE_ARRAY_KEY_EXISTS;
+		case ZEND_MIR_OPCODE_VALUE_IN_ARRAY:
+			return ZEND_NATIVE_HELPER_VALUE_IN_ARRAY;
+		case ZEND_MIR_OPCODE_VALUE_ISSET_THIS:
+			return ZEND_NATIVE_HELPER_VALUE_ISSET_THIS;
+		case ZEND_MIR_OPCODE_VALUE_GET_CALLED_CLASS:
+			return ZEND_NATIVE_HELPER_VALUE_GET_CALLED_CLASS;
+		case ZEND_MIR_OPCODE_VALUE_BEGIN_SILENCE:
+			return ZEND_NATIVE_HELPER_VALUE_BEGIN_SILENCE;
+		case ZEND_MIR_OPCODE_VALUE_END_SILENCE:
+			return ZEND_NATIVE_HELPER_VALUE_END_SILENCE;
+		case ZEND_MIR_OPCODE_VALUE_MATCH_ERROR:
+			return ZEND_NATIVE_HELPER_VALUE_MATCH_ERROR;
+		case ZEND_MIR_OPCODE_VALUE_VERIFY_NEVER_TYPE:
+			return ZEND_NATIVE_HELPER_VALUE_VERIFY_NEVER_TYPE;
+		case ZEND_MIR_OPCODE_VALUE_DEFINED:
+			return ZEND_NATIVE_HELPER_VALUE_DEFINED;
+		case ZEND_MIR_OPCODE_VALUE_TICKS:
+			return ZEND_NATIVE_HELPER_VALUE_TICKS;
+		case ZEND_MIR_OPCODE_VALUE_TYPE_ASSERT:
+			return ZEND_NATIVE_HELPER_VALUE_TYPE_ASSERT;
+		case ZEND_MIR_OPCODE_VALUE_EXT_STMT:
+			return ZEND_NATIVE_HELPER_VALUE_EXT_STMT;
+		case ZEND_MIR_OPCODE_VALUE_EXT_FCALL_BEGIN:
+			return ZEND_NATIVE_HELPER_VALUE_EXT_FCALL_BEGIN;
+		case ZEND_MIR_OPCODE_VALUE_EXT_FCALL_END:
+			return ZEND_NATIVE_HELPER_VALUE_EXT_FCALL_END;
+		case ZEND_MIR_OPCODE_VALUE_EXT_NOP:
+			return ZEND_NATIVE_HELPER_VALUE_EXT_NOP;
 		default:
 			return ZEND_NATIVE_HELPER_COUNT;
 	}
@@ -2089,7 +2123,8 @@ bool initialize_plan(
 				|| operation.source_opcode == ZEND_JMPNZ_EX
 				|| operation.source_opcode == ZEND_JMP_SET
 				|| operation.source_opcode == ZEND_COALESCE
-				|| operation.source_opcode == ZEND_JMP_NULL;
+				|| operation.source_opcode == ZEND_JMP_NULL
+				|| operation.source_opcode == ZEND_ASSERT_CHECK;
 			if ((!compatible_scalar_branch && count != 0)
 					|| !zend_mir_id_is_valid(record.source_position_id)
 					|| !plan->instructions[i].has_value_operation
@@ -2098,8 +2133,10 @@ bool initialize_plan(
 						!= ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 					|| operation.source_position_id
 						!= record.source_position_id
-					|| operation.op1.kind
-						== ZEND_MIR_SOURCE_OPERAND_UNUSED
+					|| (operation.op1.kind
+							== ZEND_MIR_SOURCE_OPERAND_UNUSED
+						&& operation.source_opcode
+							!= ZEND_ASSERT_CHECK)
 					|| !conditional_opcode) {
 				zend_tpde_set_diagnostic(diag,
 					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,

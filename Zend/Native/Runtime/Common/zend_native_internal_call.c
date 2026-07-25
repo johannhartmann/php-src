@@ -1431,7 +1431,9 @@ zend_native_status zend_native_return_source_zval(
 zend_native_status zend_native_catch_enter(
 	zend_execute_data *execute_data, uint32_t catch_opline_index)
 {
+	const zend_op_array *op_array;
 	const zend_op *opline;
+	const zend_op *throw_opline;
 	zend_class_entry *catch_ce;
 	zend_class_entry *exception_ce;
 	zend_object *exception;
@@ -1442,9 +1444,27 @@ zend_native_status zend_native_catch_enter(
 			|| catch_opline_index >= execute_data->func->op_array.last) {
 		return ZEND_NATIVE_BAILOUT;
 	}
-	opline = &execute_data->func->op_array.opcodes[catch_opline_index];
+	op_array = &execute_data->func->op_array;
+	opline = &op_array->opcodes[catch_opline_index];
 	if (opline->opcode != ZEND_CATCH || EG(exception) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
+	}
+	/*
+	 * A native exception edge bypasses the VM's HANDLE_EXCEPTION dispatch.
+	 * Retire live temporaries and restore BEGIN_SILENCE state before entering
+	 * the source catch, using the same source-opline interval as the VM.
+	 */
+	throw_opline = execute_data->opline;
+	if (throw_opline == EG(exception_op)
+			&& EG(opline_before_exception) != NULL) {
+		throw_opline = EG(opline_before_exception);
+	}
+	if (throw_opline >= op_array->opcodes
+			&& throw_opline < op_array->opcodes + op_array->last
+			&& throw_opline != opline) {
+		zend_cleanup_unfinished_execution(execute_data,
+			(uint32_t) (throw_opline - op_array->opcodes),
+			catch_opline_index);
 	}
 	execute_data->opline = opline;
 	cache_offset = opline->extended_value & ~ZEND_LAST_CATCH;
@@ -1504,6 +1524,7 @@ zend_native_status zend_native_finally_enter(
 {
 	const zend_op_array *op_array;
 	const zend_try_catch_element *region;
+	const zend_op *throw_opline;
 	zval *fast_call;
 
 	if (execute_data == NULL || execute_data->func == NULL
@@ -1514,6 +1535,19 @@ zend_native_status zend_native_finally_enter(
 	region = zend_native_finally_region(op_array, finally_opline_index);
 	if (region == NULL) {
 		return ZEND_NATIVE_BAILOUT;
+	}
+	throw_opline = execute_data->opline;
+	if (throw_opline == EG(exception_op)
+			&& EG(opline_before_exception) != NULL) {
+		throw_opline = EG(opline_before_exception);
+	}
+	if (EG(exception) != NULL
+			&& throw_opline >= op_array->opcodes
+			&& throw_opline < op_array->opcodes + op_array->last
+			&& throw_opline != &op_array->opcodes[finally_opline_index]) {
+		zend_cleanup_unfinished_execution(execute_data,
+			(uint32_t) (throw_opline - op_array->opcodes),
+			finally_opline_index);
 	}
 	execute_data->opline = &op_array->opcodes[finally_opline_index];
 	if (EG(exception) == NULL) {
