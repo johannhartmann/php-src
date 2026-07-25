@@ -185,8 +185,12 @@ typedef struct _zend_native_user_call_descriptor {
 	zend_mir_source_operand_ref do_op1;
 	zend_mir_source_operand_ref do_op2;
 	zend_mir_source_operand_ref do_result;
+	zend_mir_scalar_type_mask result_type;
+	uint32_t flags;
 	zend_native_direct_internal_call_argument arguments[1];
 } zend_native_user_call_descriptor;
+
+#define ZEND_NATIVE_USER_CALL_REQUIRE_SCALAR_RESULT UINT32_C(1)
 
 /*
  * A direct activation lives immediately after its Zend frame on the VM stack.
@@ -198,7 +202,7 @@ typedef struct _zend_native_direct_activation {
 	zend_execute_data *caller;
 	zend_execute_data *callee;
 	zend_native_entry_cell *cell;
-	const zend_native_direct_call_descriptor *descriptor;
+	const void *descriptor;
 	struct _zend_native_direct_activation *previous;
 	zval discarded_return;
 	uint32_t status;
@@ -207,6 +211,9 @@ typedef struct _zend_native_direct_activation {
 	bool frame_initialized;
 	bool frame_requires_finish;
 	bool cell_active;
+	bool dynamic_target;
+	bool internal_target;
+	bool preserve_target;
 } zend_native_direct_activation;
 
 typedef struct _zend_native_direct_call_result {
@@ -308,6 +315,16 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 zend_native_direct_call_result zend_native_call_direct_leave(
 	zend_execute_data *caller,
 	const zend_native_direct_call_descriptor *descriptor,
+	zend_native_execution_context *context,
+	zend_native_status status);
+zend_native_direct_call_entry zend_native_call_dynamic_enter(
+	zend_execute_data *caller,
+	zend_native_entry_cell *cell,
+	const zend_native_user_call_descriptor *descriptor,
+	zend_native_execution_context *context);
+zend_native_direct_call_result zend_native_call_dynamic_leave(
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor,
 	zend_native_execution_context *context,
 	zend_native_status status);
 void zend_native_execution_context_init(

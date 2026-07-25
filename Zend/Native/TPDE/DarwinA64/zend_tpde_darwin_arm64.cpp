@@ -5799,6 +5799,116 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			}
 			const bool source_arguments = call.operand_count == 0
 				&& call.call_argument_count != 0;
+			if (call.user_call != nullptr
+					&& call.user_call->do_opcode != ZEND_CALLABLE_CONVERT
+					&& call.user_call->do_opcode
+						!= ZEND_CALLABLE_CONVERT_PARTIAL) {
+				const uint32_t frame_operand = call.operand_count;
+				const uint32_t context_operand = frame_operand + 2;
+				ValuePart callee{DarwinConfig::GP_BANK, 8};
+				ValuePart entry{DarwinConfig::GP_BANK, 8};
+				{
+					zend::native::tpde::CCAssignerAppleA64 assigner;
+					CallBuilder enter_builder{*this, assigner};
+					enter_builder.add_arg(
+						CallArg{node.operands[frame_operand]});
+					enter_builder.add_arg(image_symbol_value(
+						ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
+						call.call_site.target_id), ::tpde::CCAssignment{});
+					enter_builder.add_arg(image_symbol_value(
+						ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
+						call.id), ::tpde::CCAssignment{});
+					enter_builder.add_arg(CallArg{
+						node.operands[context_operand]});
+					enter_builder.call(runtime_symbol(
+						ZEND_NATIVE_HELPER_DYNAMIC_USER_CALL_ENTER));
+					enter_builder.add_ret(callee, ::tpde::CCAssignment{});
+					enter_builder.add_ret(entry, ::tpde::CCAssignment{});
+				}
+				ScratchReg entry_copy{this};
+				auto entry_copy_reg = entry_copy.alloc_specific(AsmReg::R2);
+				mov(entry_copy_reg, entry.cur_reg_or_load(this), sizeof(void *));
+				entry.reset(this);
+				ValuePart entry_target{DarwinConfig::GP_BANK, 8};
+				entry_target.set_value(this, std::move(entry_copy));
+				ValuePart entry_status{DarwinConfig::GP_BANK, 4};
+				{
+					zend::native::tpde::CCAssignerAppleA64 assigner;
+					CallBuilder entry_builder{*this, assigner};
+					entry_builder.add_arg(
+						std::move(callee), ::tpde::CCAssignment{});
+					entry_builder.add_arg(CallArg{
+						node.operands[context_operand + 1]});
+					entry_builder.call(std::move(entry_target));
+					entry_builder.add_ret(
+						entry_status, ::tpde::CCAssignment{});
+				}
+				ScratchReg entry_status_copy{this};
+				auto entry_status_copy_reg =
+					entry_status_copy.alloc_specific(AsmReg::R3);
+				mov(entry_status_copy_reg,
+					entry_status.cur_reg_or_load(this),
+					sizeof(zend_native_status));
+				entry_status.reset(this);
+				ValuePart entry_status_argument{
+					DarwinConfig::GP_BANK, 4};
+				entry_status_argument.set_value(
+					this, std::move(entry_status_copy));
+				zend::native::tpde::CCAssignerAppleA64 assigner;
+				CallBuilder leave_builder{*this, assigner};
+				leave_builder.add_arg(
+					CallArg{node.operands[frame_operand + 1]});
+				leave_builder.add_arg(image_symbol_value(
+					ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
+					call.id), ::tpde::CCAssignment{});
+				leave_builder.add_arg(CallArg{
+					node.operands[context_operand + 2]});
+				leave_builder.add_arg(
+					std::move(entry_status_argument),
+					::tpde::CCAssignment{});
+				leave_builder.call(runtime_symbol(
+					ZEND_NATIVE_HELPER_DYNAMIC_USER_CALL_LEAVE));
+				ValuePart status{DarwinConfig::GP_BANK, 8};
+				ValuePart payload{DarwinConfig::GP_BANK, 8};
+				leave_builder.add_ret(status, ::tpde::CCAssignment{});
+				leave_builder.add_ret(payload, ::tpde::CCAssignment{});
+				auto status_reg = status.cur_reg_or_load(this);
+				ASM(CMPxi, status_reg, ZEND_NATIVE_RETURNED);
+				auto continued = text_writer.label_create();
+				generate_raw_jump(Jump::Jeq, continued);
+				if (zend_mir_id_is_valid(call.exception_block_id)) {
+					auto propagate = text_writer.label_create();
+					ASM(CMPxi, status_reg, ZEND_NATIVE_EXCEPTION);
+					generate_raw_jump(Jump::Jne, propagate);
+					generate_exception_branch(
+						adaptor->block_ref(call.exception_block_id));
+					label_place(propagate);
+				}
+				RetBuilder return_builder{*this, *cur_cc_assigner()};
+				return_builder.add(
+					std::move(status), ::tpde::CCAssignment{});
+				return_builder.ret();
+				label_place(continued);
+				if (node.has_result) {
+					auto [result_ref, result] =
+						result_ref_single(node.result);
+					if (val_parts(node.result).bank
+							== DarwinConfig::FP_BANK) {
+						auto payload_reg = payload.cur_reg_or_load(this);
+						ScratchReg converted{this};
+						auto result_reg =
+							converted.alloc(DarwinConfig::FP_BANK);
+						ASM(FMOVdx, result_reg, payload_reg);
+						payload.reset(this);
+						result.set_value(std::move(converted));
+					} else {
+						result.set_value(std::move(payload));
+					}
+				} else {
+					payload.reset(this);
+				}
+				return true;
+			}
 			{
 				zend::native::tpde::CCAssignerAppleA64 assigner;
 				CallBuilder builder{*this, assigner};

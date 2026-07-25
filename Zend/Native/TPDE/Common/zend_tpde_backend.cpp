@@ -2891,6 +2891,23 @@ bool initialize_plan(
 						return false;
 					}
 					descriptor->do_result = site.result_operand;
+					if (zend_mir_id_is_valid(record.result_id)) {
+						const int32_t result_index =
+							zend_tpde_value_index(plan, record.result_id);
+						if (result_index < 0
+								|| !zend_mir_scalar_type_is_exact(
+									plan->values[result_index].exact_type)) {
+							std::free(descriptor);
+							zend_tpde_set_diagnostic(diag,
+								ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+								"dynamic user-call result is not an exact scalar");
+							return false;
+						}
+						descriptor->result_type =
+							plan->values[result_index].exact_type;
+						descriptor->flags |=
+							ZEND_NATIVE_USER_CALL_REQUIRE_SCALAR_RESULT;
+					}
 					for (uint32_t n = 0; n < site.arguments.count; ++n) {
 						zend_mir_call_argument_ref argument;
 						if (!zend_tpde_call_argument_at(
@@ -2940,10 +2957,22 @@ bool initialize_plan(
 					}
 					plan->instructions[i].user_call = descriptor;
 					plan->user_calls[plan->user_call_count++] = descriptor;
-					require_runtime_helper(
-						plan, ZEND_NATIVE_HELPER_USER_CALL_BEGIN);
-					require_runtime_helper(
-						plan, ZEND_NATIVE_HELPER_USER_CALL_FINISH_SOURCE);
+					if (descriptor->do_opcode == ZEND_CALLABLE_CONVERT
+							|| descriptor->do_opcode
+								== ZEND_CALLABLE_CONVERT_PARTIAL) {
+						require_runtime_helper(
+							plan, ZEND_NATIVE_HELPER_USER_CALL_BEGIN);
+						require_runtime_helper(
+							plan,
+							ZEND_NATIVE_HELPER_USER_CALL_FINISH_SOURCE);
+					} else {
+						require_runtime_helper(
+							plan,
+							ZEND_NATIVE_HELPER_DYNAMIC_USER_CALL_ENTER);
+						require_runtime_helper(
+							plan,
+							ZEND_NATIVE_HELPER_DYNAMIC_USER_CALL_LEAVE);
+					}
 				}
 				if (source_arguments && !direct_descriptor) {
 					for (uint32_t n = 0; n < site.arguments.count; ++n) {
@@ -2963,7 +2992,11 @@ bool initialize_plan(
 							return false;
 						}
 					}
-					if (!direct_descriptor) {
+					if (!direct_descriptor
+							&& (plan->instructions[i].user_call->do_opcode
+								== ZEND_CALLABLE_CONVERT
+								|| plan->instructions[i].user_call->do_opcode
+									== ZEND_CALLABLE_CONVERT_PARTIAL)) {
 						require_runtime_helper(
 							plan,
 							ZEND_NATIVE_HELPER_CALL_SET_SOURCE_ARGUMENT);
@@ -3124,7 +3157,12 @@ bool initialize_plan(
 			}
 			if (zend_mir_id_is_valid(record.result_id)
 					&& plan->instructions[i].direct_call == nullptr
-					&& plan->instructions[i].direct_internal_call == nullptr) {
+					&& plan->instructions[i].direct_internal_call == nullptr
+					&& (plan->instructions[i].user_call == nullptr
+						|| plan->instructions[i].user_call->do_opcode
+							== ZEND_CALLABLE_CONVERT
+						|| plan->instructions[i].user_call->do_opcode
+							== ZEND_CALLABLE_CONVERT_PARTIAL)) {
 				require_runtime_helper(
 					plan, ZEND_NATIVE_HELPER_CALL_READ_SOURCE_SCALAR);
 			}

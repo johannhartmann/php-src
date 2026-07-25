@@ -1214,6 +1214,13 @@ public:
 				 * uses explicit so TPDE's reference counts match both generated
 				 * paths.
 				 */
+				const bool dynamic_direct_call =
+					instruction.direct_call == nullptr
+					&& instruction.user_call != nullptr
+					&& instruction.user_call->do_opcode
+						!= ZEND_CALLABLE_CONVERT
+					&& instruction.user_call->do_opcode
+						!= ZEND_CALLABLE_CONVERT_PARTIAL;
 				uint32_t frame_use_count;
 				if (instruction.direct_call != nullptr) {
 					if ((instruction.direct_call->flags
@@ -1247,6 +1254,8 @@ public:
 					} else {
 						frame_use_count = 2;
 					}
+				} else if (dynamic_direct_call) {
+					frame_use_count = 2;
 				} else {
 					uint32_t setter_count = instruction.operand_count == 0
 						? instruction.call_argument_count
@@ -1334,6 +1343,11 @@ public:
 							}
 							operands_.push_back(value);
 						}
+					}
+				} else if (dynamic_direct_call) {
+					for (uint32_t n = 0; n < 3; ++n) {
+						operands_.push_back(
+							IRValueRef{EXECUTION_CONTEXT_VALUE});
 					}
 				}
 			} else if (record.opcode
