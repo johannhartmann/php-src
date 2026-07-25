@@ -17,7 +17,9 @@ typedef enum _zend_native_codeunit_state {
 	ZEND_NATIVE_CODEUNIT_COMPILING,
 	ZEND_NATIVE_CODEUNIT_READY,
 	ZEND_NATIVE_CODEUNIT_FAILED,
-	ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED
+	ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED,
+	/* Complete target image, intentionally not mapped in the producer. */
+	ZEND_NATIVE_CODEUNIT_IMAGE_READY
 } zend_native_codeunit_state;
 
 typedef enum _zend_native_compile_phase {
@@ -101,6 +103,7 @@ typedef struct _zend_native_compiler_config {
 	zend_native_compile_fault fault;
 	uint32_t unavailable_runtime_helper;
 	bool abi_conformance_probe;
+	bool defer_publication;
 } zend_native_compiler_config;
 
 ZEND_API zend_native_compiler *zend_native_compiler_create(
@@ -128,6 +131,23 @@ ZEND_API zend_result zend_native_compiler_compile(
 	const zend_mir_scalar_type_mask *supplied_argument_types,
 	uint32_t supplied_argument_count,
 	zend_native_compile_diagnostic *diagnostic);
+
+/*
+ * OPcache persists this pointer-free encoding of the normal TPDE images.
+ * Import performs only process-local reference binding, relocation, mapping
+ * and atomic entry publication; it never rebuilds SSA, ZNMIR or machine code.
+ */
+ZEND_API zend_result zend_native_compiler_serialize_bundle(
+	zend_native_compiler *compiler,
+	unsigned char **out_bytes,
+	size_t *out_size,
+	zend_native_compile_diagnostic *diagnostic);
+ZEND_API zend_result zend_native_compiler_import_bundle(
+	zend_native_compiler *compiler,
+	const unsigned char *bytes,
+	size_t size,
+	zend_native_compile_diagnostic *diagnostic);
+ZEND_API void zend_native_compiler_bundle_destroy(unsigned char *bytes);
 
 ZEND_API zend_native_entry_cell *zend_native_compiler_lookup(
 	const zend_native_compiler *compiler, const zend_function *function);
