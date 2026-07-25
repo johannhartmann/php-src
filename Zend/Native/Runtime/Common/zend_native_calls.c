@@ -38,6 +38,7 @@ void zend_native_execution_context_init(
 	context->map_ptr_base_address = (void **) &CG(map_ptr_base);
 	context->vm_interrupt = &EG(vm_interrupt);
 	context->exception = &EG(exception);
+	context->opline_before_exception = &EG(opline_before_exception);
 #ifdef ZEND_CHECK_STACK_LIMIT
 	context->stack_limit = &EG(stack_limit);
 #else
@@ -1757,12 +1758,20 @@ static zend_native_status zend_native_call_invoke(
 	EG(current_execute_data) = caller;
 	cell->active_calls--;
 	if (status == ZEND_NATIVE_GENERATOR_CREATED) {
+		/*
+		 * ZEND_GENERATOR_CREATE moves the call target's retained Closure
+		 * reference into the heap generator frame.  The VM frees the original
+		 * stack frame without releasing that reference; the Generator object
+		 * releases it after the suspended frame is closed.  Releasing it here
+		 * would leave generator->func pointing into a destroyed Closure.
+		 */
 		status = ZEND_NATIVE_RETURNED;
+	} else {
+		zend_native_call_release_target(call);
 	}
 	if (status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
 		status = ZEND_NATIVE_EXCEPTION;
 	}
-	zend_native_call_release_target(call);
 	zend_vm_stack_free_call_frame(call);
 	caller->call = NULL;
 	return status;

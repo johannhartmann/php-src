@@ -11,6 +11,7 @@ extern "C" {
 #endif
 
 struct _zend_op_array;
+struct _zend_op;
 struct _zend_ssa;
 
 typedef enum _zend_native_target {
@@ -80,6 +81,7 @@ typedef struct _zend_native_execution_context {
 	void **map_ptr_base_address;
 	struct zend_atomic_bool_s *vm_interrupt;
 	zend_object **exception;
+	const struct _zend_op **opline_before_exception;
 	void **stack_limit;
 	bool observers_enabled;
 } zend_native_execution_context;
