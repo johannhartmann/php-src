@@ -123,7 +123,7 @@ bool zend_mir_w06_opcode_is_accepted(uint32_t opcode)
 	}
 }
 
-static zend_mir_opcode zend_mir_w09_executable_opcode(uint32_t opcode)
+zend_mir_opcode zend_mir_w12_executable_opcode(uint32_t opcode)
 {
 	switch (opcode) {
 		case ZEND_DECLARE_ANON_CLASS:
@@ -433,12 +433,12 @@ static zend_mir_opcode zend_mir_w11p_control_value_opcode(uint32_t opcode)
 
 bool zend_mir_w09_opcode_is_executable(uint32_t opcode)
 {
-	return zend_mir_w09_executable_opcode(opcode)
+	return zend_mir_w12_executable_opcode(opcode)
 		< ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS
 		&& (opcode == ZEND_OP_DATA
 			|| opcode == ZEND_FE_RESET_R || opcode == ZEND_FE_FETCH_R
 			|| opcode == ZEND_FE_RESET_RW || opcode == ZEND_FE_FETCH_RW
-			|| zend_mir_w09_executable_opcode(opcode)
+			|| zend_mir_w12_executable_opcode(opcode)
 				!= ZEND_MIR_OPCODE_INVALID);
 }
 
@@ -447,12 +447,12 @@ bool zend_mir_w10_opcode_is_executable(uint32_t opcode)
 	return opcode == ZEND_OP_DATA
 		|| opcode == ZEND_FE_RESET_R || opcode == ZEND_FE_FETCH_R
 		|| opcode == ZEND_FE_RESET_RW || opcode == ZEND_FE_FETCH_RW
-		|| zend_mir_w09_executable_opcode(opcode) != ZEND_MIR_OPCODE_INVALID;
+		|| zend_mir_w12_executable_opcode(opcode) != ZEND_MIR_OPCODE_INVALID;
 }
 
 bool zend_mir_w11_opcode_is_executable(uint32_t opcode)
 {
-	zend_mir_opcode mapped = zend_mir_w09_executable_opcode(opcode);
+	zend_mir_opcode mapped = zend_mir_w12_executable_opcode(opcode);
 
 	return zend_mir_w10_opcode_is_executable(opcode)
 		|| (mapped >= ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
@@ -1215,7 +1215,7 @@ bool zend_mir_w09_emit_executable_values(
 		zend_mir_source_block_ref source_block;
 		zend_mir_executable_value_ref *operation;
 		zend_mir_safepoint_class frame_class;
-		zend_mir_opcode opcode = zend_mir_w09_executable_opcode(
+		zend_mir_opcode opcode = zend_mir_w12_executable_opcode(
 			op_array->opcodes[index].opcode);
 
 		/*
