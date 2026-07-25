@@ -5154,12 +5154,11 @@ PHP_MINFO_FUNCTION(native_mir_test)
 
 PHP_MINIT_FUNCTION(native_mir_test)
 {
-	return zend_native_reentry_startup();
+	return SUCCESS;
 }
 
 PHP_MSHUTDOWN_FUNCTION(native_mir_test)
 {
-	zend_native_reentry_shutdown();
 	return SUCCESS;
 }
 
