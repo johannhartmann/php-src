@@ -606,6 +606,7 @@ zend_native_user_opcode_result zend_native_user_opcode_invoke(
 	user_opcode_handler_t handler;
 	zend_execute_data *entered;
 	zend_native_entry_cell *cell;
+	const zend_native_code *code;
 	zend_object *entry_exception;
 	zend_native_status status;
 	int action;
@@ -642,7 +643,7 @@ zend_native_user_opcode_result zend_native_user_opcode_invoke(
 	entered = EG(current_execute_data);
 	if (entered == NULL || entered == execute_data
 			|| (cell = zend_native_reentry_resolve(entered->func)) == NULL
-			|| cell->state != ZEND_NATIVE_ENTRY_READY || cell->code == NULL) {
+			|| (code = zend_native_entry_cell_load(cell)) == NULL) {
 		EG(current_execute_data) = execute_data;
 		zend_throw_error(NULL,
 			"User opcode ENTER target has no published native entry");
@@ -653,7 +654,7 @@ zend_native_user_opcode_result zend_native_user_opcode_invoke(
 			cell->frame_probe_context, execute_data, entered);
 	}
 	cell->active_calls++;
-	status = zend_native_execute_observed_frame(cell->code, entered, NULL);
+	status = zend_native_execute_observed_frame(code, entered, NULL);
 	cell->active_calls--;
 	EG(current_execute_data) = execute_data;
 	zend_vm_stack_free_call_frame(entered);
@@ -671,6 +672,7 @@ static void zend_native_reentry_execute_ex(zend_execute_data *execute_data)
 {
 	zend_native_reentry_scope *scope = zend_native_active_reentry_scope;
 	zend_native_entry_cell *cell;
+	const zend_native_code *code;
 	zend_execute_data *previous = execute_data->prev_execute_data;
 	zend_native_status status;
 
@@ -679,8 +681,8 @@ static void zend_native_reentry_execute_ex(zend_execute_data *execute_data)
 		return;
 	}
 	cell = zend_native_reentry_resolve(execute_data->func);
-	if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
-			|| cell->code == NULL) {
+	if (cell == NULL
+			|| (code = zend_native_entry_cell_load(cell)) == NULL) {
 		zend_throw_error(NULL,
 			"Userland reentry target is not part of the native component");
 		ZEND_OBSERVER_FCALL_END(execute_data, NULL);
@@ -692,7 +694,7 @@ static void zend_native_reentry_execute_ex(zend_execute_data *execute_data)
 	}
 	cell->active_calls++;
 	EG(current_execute_data) = execute_data;
-	status = zend_native_execute_observed_frame(cell->code, execute_data, NULL);
+	status = zend_native_execute_observed_frame(code, execute_data, NULL);
 	EG(current_execute_data) = previous;
 	cell->active_calls--;
 	if (status == ZEND_NATIVE_BAILOUT) {
@@ -859,28 +861,33 @@ zend_result zend_native_entry_cell_publish(
 			|| cell->state != ZEND_NATIVE_ENTRY_COMPILING) {
 		return FAILURE;
 	}
-	cell->code = code;
 	cell->generation++;
+	cell->published_epoch = cell->generation;
 	cell->state = ZEND_NATIVE_ENTRY_READY;
+	__atomic_store_n(&cell->code, code, __ATOMIC_RELEASE);
 	return SUCCESS;
 }
 
 void zend_native_entry_cell_fail(zend_native_entry_cell *cell)
 {
 	if (cell != NULL && cell->active_calls == 0
+			&& cell->suspended_frames == 0
 			&& (cell->state == ZEND_NATIVE_ENTRY_COMPILING
 				|| cell->state == ZEND_NATIVE_ENTRY_READY)) {
-		cell->code = NULL;
+		__atomic_store_n(&cell->code, NULL, __ATOMIC_RELEASE);
+		cell->retired_epoch = cell->published_epoch;
 		cell->state = ZEND_NATIVE_ENTRY_FAILED;
 	}
 }
 
 zend_result zend_native_entry_cell_reset(zend_native_entry_cell *cell)
 {
-	if (cell == NULL || cell->active_calls != 0) {
+	if (cell == NULL || cell->active_calls != 0
+			|| cell->suspended_frames != 0) {
 		return FAILURE;
 	}
-	cell->code = NULL;
+	__atomic_store_n(&cell->code, NULL, __ATOMIC_RELEASE);
+	cell->retired_epoch = cell->published_epoch;
 	cell->state = ZEND_NATIVE_ENTRY_UNCOMPILED;
 	return SUCCESS;
 }
@@ -1829,6 +1836,7 @@ static zend_native_status zend_native_call_invoke(
 	zval *return_value)
 {
 	zend_execute_data *call;
+	const zend_native_code *code = NULL;
 	zend_native_status status;
 
 	if (caller == NULL || cell == NULL || return_value == NULL
@@ -1892,8 +1900,8 @@ static zend_native_status zend_native_call_invoke(
 	}
 	if (call->func->type == ZEND_USER_FUNCTION
 			&& call->func != (zend_function *) &zend_pass_function
-			&& (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
-				|| cell->code == NULL)) {
+			&& (cell == NULL
+				|| (code = zend_native_entry_cell_load(cell)) == NULL)) {
 		zend_native_call_abort("Resolved native invocation target is not ready");
 	}
 	if (EG(exception) != NULL) {
@@ -1953,7 +1961,7 @@ static zend_native_status zend_native_call_invoke(
 	call->return_value = return_value;
 	cell->active_calls++;
 	EG(current_execute_data) = call;
-	status = zend_native_execute_frame(cell->code, call, NULL);
+	status = zend_native_execute_frame(code, call, NULL);
 	EG(current_execute_data) = caller;
 	cell->active_calls--;
 	if (status == ZEND_NATIVE_GENERATOR_CREATED) {
@@ -2098,12 +2106,12 @@ static zend_native_status zend_native_call_direct_observed_entry(
 			|| (activation = (zend_native_direct_activation *)
 				*context->active_direct_call) == NULL
 			|| activation->callee != execute_data
-			|| activation->cell == NULL || activation->cell->code == NULL) {
+			|| activation->cell == NULL || activation->code == NULL) {
 		zend_throw_error(NULL, "Invalid observed direct native call");
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	status = zend_native_execute_frame(
-		activation->cell->code, execute_data, NULL);
+		activation->code, execute_data, NULL);
 	activation->frame_initialized = false;
 	return status;
 }
@@ -2181,6 +2189,7 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 	zend_native_direct_activation *activation;
 	zend_execute_data *call;
 	zend_native_frame_entry_t entry;
+	const zend_native_code *code;
 	zend_function *function;
 	zval *return_value;
 	uint32_t used_stack;
@@ -2194,8 +2203,9 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 	if (caller == NULL || caller->func == NULL || context == NULL
 			|| !ZEND_USER_CODE(caller->func->type)
 			|| cell == NULL || descriptor == NULL
-			|| caller->call != NULL || cell->state != ZEND_NATIVE_ENTRY_READY
-			|| cell->code == NULL || cell->function == NULL
+			|| caller->call != NULL
+			|| (code = zend_native_entry_cell_load(cell)) == NULL
+			|| cell->function == NULL
 			|| cell->function != descriptor->expected_function
 			|| !ZEND_USER_CODE(cell->function->type)
 			|| descriptor->argument_count > ZEND_MIR_ID_MAX
@@ -2212,7 +2222,7 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 		return result;
 	}
 	function = cell->function;
-	entry = zend_native_code_frame_entry(cell->code);
+	entry = zend_native_code_frame_entry(code);
 	if (entry == NULL || descriptor->argument_count
 			< function->common.required_num_args) {
 		zend_throw_error(NULL, "Direct native callee entry is incompatible");
@@ -2352,6 +2362,7 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 	activation->caller = caller;
 	activation->callee = call;
 	activation->cell = cell;
+	activation->code = code;
 	activation->descriptor = descriptor;
 	activation->previous = zend_native_active_direct_call;
 	ZVAL_UNDEF(&activation->discarded_return);
@@ -2620,6 +2631,7 @@ zend_native_direct_call_entry zend_native_call_dynamic_enter(
 	zend_native_direct_activation *activation;
 	zend_execute_data *call;
 	zend_native_entry_cell *actual_cell = cell;
+	const zend_native_code *code = NULL;
 	zend_native_frame_entry_t entry = NULL;
 	zval *return_value;
 	uint32_t activation_slots;
@@ -2675,10 +2687,8 @@ zend_native_direct_call_entry zend_native_call_dynamic_enter(
 				zend_native_active_reentry_scope, call->func);
 		}
 		if (actual_cell == NULL
-				|| actual_cell->state != ZEND_NATIVE_ENTRY_READY
-				|| actual_cell->code == NULL
-				|| (entry = zend_native_code_frame_entry(
-					actual_cell->code)) == NULL) {
+				|| (code = zend_native_entry_cell_load(actual_cell)) == NULL
+				|| (entry = zend_native_code_frame_entry(code)) == NULL) {
 			if (EG(exception) == NULL) {
 				zend_throw_error(NULL,
 					"Resolved dynamic native target is not ready");
@@ -2697,6 +2707,7 @@ zend_native_direct_call_entry zend_native_call_dynamic_enter(
 	activation->caller = caller;
 	activation->callee = call;
 	activation->cell = actual_cell;
+	activation->code = code;
 	activation->descriptor = descriptor;
 	activation->previous = zend_native_active_direct_call;
 	activation->dynamic_target = true;

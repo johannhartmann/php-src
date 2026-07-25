@@ -23,20 +23,36 @@ typedef void (*zend_native_frame_probe_t)(
 	const zend_execute_data *callee);
 
 /*
- * Entry cells are process-local indirections. They own neither the
- * zend_function nor native code and may be reset only after active_calls is
- * zero. Keeping the indirection stable allows recursive callers to be emitted
- * while the whole reachable component is still being compiled.
+ * Entry cells are process-local indirections. The code pointer is the publish
+ * word: NULL is not ready and a non-NULL acquire load pins one fully immutable
+ * code version for the duration of an activation. The owner may replace or
+ * clear the word only with release ordering and retires the old mapping after
+ * active and suspended users reach quiescence.
  */
 typedef struct _zend_native_entry_cell {
 	zend_native_entry_cell_state state;
 	zend_function *function;
-	const zend_native_code *code;
+	const zend_native_code * volatile code;
 	uint64_t generation;
 	uint32_t active_calls;
+	uint32_t suspended_frames;
+	uint64_t published_epoch;
+	uint64_t retired_epoch;
 	zend_native_frame_probe_t frame_probe;
 	void *frame_probe_context;
 } zend_native_entry_cell;
+
+static zend_always_inline const zend_native_code *
+zend_native_entry_cell_load(const zend_native_entry_cell *cell)
+{
+	return cell == NULL ? NULL : __atomic_load_n(&cell->code, __ATOMIC_ACQUIRE);
+}
+
+static zend_always_inline bool zend_native_entry_cell_is_ready(
+	const zend_native_entry_cell *cell)
+{
+	return zend_native_entry_cell_load(cell) != NULL;
+}
 
 typedef struct _zend_native_reentry_binding {
 	zend_function *function;
@@ -202,6 +218,7 @@ typedef struct _zend_native_direct_activation {
 	zend_execute_data *caller;
 	zend_execute_data *callee;
 	zend_native_entry_cell *cell;
+	const zend_native_code *code;
 	const void *descriptor;
 	struct _zend_native_direct_activation *previous;
 	zval discarded_return;

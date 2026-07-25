@@ -271,6 +271,7 @@ zend_native_status zend_native_execute_include_or_eval(
 	zend_execute_data *call;
 	zend_execute_data *previous;
 	zend_native_entry_cell *entry_cell;
+	const zend_native_code *code;
 	zval *filename;
 	zval *result = NULL;
 	zend_native_status status;
@@ -384,8 +385,7 @@ zend_native_status zend_native_execute_include_or_eval(
 			(zend_function *) new_op_array);
 	}
 	if (entry_cell == NULL
-			|| entry_cell->state != ZEND_NATIVE_ENTRY_READY
-			|| entry_cell->code == NULL
+			|| (code = zend_native_entry_cell_load(entry_cell)) == NULL
 			|| zend_native_dynamic_compiler_publish(
 				compiler, new_op_array, entry_cell) == FAILURE) {
 		zend_vm_stack_free_call_frame(call);
@@ -399,7 +399,7 @@ zend_native_status zend_native_execute_include_or_eval(
 	previous = EG(current_execute_data);
 	EG(current_execute_data) = call;
 	status = zend_native_execute_frame(
-		entry_cell->code, call, &diagnostic);
+		code, call, &diagnostic);
 	EG(current_execute_data) = previous;
 	call_info = ZEND_CALL_INFO(call);
 	zend_vm_stack_free_call_frame(call);
