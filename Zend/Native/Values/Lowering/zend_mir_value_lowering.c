@@ -304,6 +304,9 @@ zend_mir_opcode zend_mir_w12_executable_opcode(uint32_t opcode)
 			return ZEND_MIR_OPCODE_VALUE_EXT_NOP;
 		case ZEND_DISCARD_EXCEPTION:
 			return ZEND_MIR_OPCODE_VALUE_DISCARD_EXCEPTION;
+		case ZEND_CASE:
+		case ZEND_CASE_STRICT:
+			return ZEND_MIR_OPCODE_VALUE_CASE;
 		case ZEND_ADD:
 		case ZEND_SUB:
 		case ZEND_MUL:
@@ -532,9 +535,12 @@ static bool zend_mir_w09_operation_semantics(
 		case ZEND_MIR_OPCODE_VALUE_CAST:
 		case ZEND_MIR_OPCODE_VALUE_FETCH_LIST:
 		case ZEND_MIR_OPCODE_VALUE_INCDEC:
+		case ZEND_MIR_OPCODE_VALUE_CASE:
 			if (!zend_mir_w09_add_effect(&summary, ZEND_MIR_EFFECT_ALLOCATE)
 					|| !zend_mir_w09_add_effect(
 						&summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)
+					|| !zend_mir_w09_add_effect(
+						&summary, ZEND_MIR_EFFECT_REENTER_PHP)
 					|| !zend_mir_w09_add_effect(
 						&summary, ZEND_MIR_EFFECT_THROW)) {
 				return false;

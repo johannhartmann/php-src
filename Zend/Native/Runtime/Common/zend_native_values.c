@@ -1551,6 +1551,46 @@ zend_native_status zend_native_value_binary_op(
 		? zend_native_value_status() : ZEND_NATIVE_EXCEPTION;
 }
 
+zend_native_status zend_native_value_case(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
+{
+	zend_native_explicit_value_operation operation_record;
+	const zend_native_explicit_value_operation *opline = &operation_record;
+	zval *left;
+	zval *right;
+	zval *result;
+	bool matched;
+
+	if ((source_opcode != ZEND_CASE && source_opcode != ZEND_CASE_STRICT)
+			|| !zend_native_value_init_explicit_operation(
+				execute_data, op1, op2, result_operand, extended_value,
+				source_opcode, source_position_id, (uint8_t) source_opcode,
+				&operation_record)
+			|| opline->result_type == IS_UNUSED
+			|| (left = zend_native_value_read_r_explicit(
+				execute_data, opline,
+				opline->op1_type, opline->op1)) == NULL
+			|| (right = zend_native_value_read_r_explicit(
+				execute_data, opline,
+				opline->op2_type, opline->op2)) == NULL
+			|| (result = zend_native_value_slot(execute_data,
+				opline->result_type, opline->result)) == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	ZVAL_DEREF(left);
+	ZVAL_DEREF(right);
+	matched = source_opcode == ZEND_CASE_STRICT
+		? fast_is_identical_function(left, right)
+		: zend_compare(left, right) == 0;
+	ZVAL_BOOL(result, matched);
+	zend_native_value_consume_operand(
+		execute_data, opline->op2_type, opline->op2, result);
+	return zend_native_value_status();
+}
+
 zend_native_status zend_native_value_unary_op(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result_operand,

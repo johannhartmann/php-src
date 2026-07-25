@@ -43,6 +43,24 @@ function w12_match(mixed $value): string
         default => "other",
     };
 }
+function w12_case_fallback(mixed $left, mixed $right): string
+{
+    switch ($left . $right) {
+        case 99: return "wrong";
+        case 12: return "loose";
+        default: return "other";
+    }
+}
+function w12_case_strict_fallback(mixed $left, mixed $right): string
+{
+    $numeric = 12;
+    $string = "12";
+    return match ($left . $right) {
+        $numeric => "numeric",
+        $string => "strict",
+        default => "other",
+    };
+}
 PHP;
 
 $cases = [
@@ -58,6 +76,8 @@ $cases = [
     ['w12_match', [5], 'five', 'ZEND_MATCH'],
     ['w12_match', ['fi' . 've'], 'string-five', 'ZEND_MATCH'],
     ['w12_match', [true], 'other', 'ZEND_MATCH'],
+    ['w12_case_fallback', [1, 2], 'loose', 'ZEND_CASE'],
+    ['w12_case_strict_fallback', [1, 2], 'strict', 'ZEND_CASE_STRICT'],
 ];
 foreach ($cases as [$function, $arguments, $expected, $expectedOpcode]) {
     $result = native_mir_test_compile_execute(
@@ -69,7 +89,7 @@ foreach ($cases as [$function, $arguments, $expected, $expectedOpcode]) {
     printf(
         "%s(%s) status=%s opcode=%s result=%s expected=%s vm=%d execute_ex=%d handler=%d\n",
         $function,
-        json_encode($arguments[0]),
+        json_encode(count($arguments) == 1 ? $arguments[0] : $arguments),
         $result['status'],
         in_array($expectedOpcode, $result['source_opcodes'], true)
             ? $expectedOpcode : 'missing',
@@ -97,3 +117,5 @@ w12_match(-7) status=accepted opcode=ZEND_MATCH result="negative" expected="nega
 w12_match(5) status=accepted opcode=ZEND_MATCH result="five" expected="five" vm=0 execute_ex=0 handler=0
 w12_match("five") status=accepted opcode=ZEND_MATCH result="string-five" expected="string-five" vm=0 execute_ex=0 handler=0
 w12_match(true) status=accepted opcode=ZEND_MATCH result="other" expected="other" vm=0 execute_ex=0 handler=0
+w12_case_fallback([1,2]) status=accepted opcode=ZEND_CASE result="loose" expected="loose" vm=0 execute_ex=0 handler=0
+w12_case_strict_fallback([1,2]) status=accepted opcode=ZEND_CASE_STRICT result="strict" expected="strict" vm=0 execute_ex=0 handler=0
