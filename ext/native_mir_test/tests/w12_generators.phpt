@@ -171,13 +171,15 @@ foreach ($cases as $name => $source) {
         $source,
         "w12-$name.php",
         [],
-        ['wave' => 11, 'function' => $function],
+        ['wave' => 11, 'function' => $function, 'stack_probe' => true],
     );
     printf(
-        "%s status=%s result=%s vm=%d execute_ex=%d handler=%d\n",
+        "%s status=%s result=%s gateway=%s vm=%d execute_ex=%d handler=%d\n",
         $name,
         $result['status'],
         json_encode($result['execution']['return_value']),
+        ($result['execution']['generator_reentry_gateway_calls'] ?? 0) > 0
+            ? 'yes' : 'no',
         $result['execution']['vm_handler_calls'],
         $result['execution']['execute_ex_calls'],
         $result['execution']['opline_handler_calls'],
@@ -185,9 +187,9 @@ foreach ($cases as $name => $source) {
 }
 ?>
 --EXPECT--
-state status=accepted result=[5,7,10] vm=0 execute_ex=0 handler=0
-send-and-keys status=accepted result=[[5,11],[6,7],8] vm=0 execute_ex=0 handler=0
-delegation status=accepted result=[1,2,4,6,8] vm=0 execute_ex=0 handler=0
-throw status=accepted result=["ready","caught:boom",17] vm=0 execute_ex=0 handler=0
-by-reference status=accepted result=[26,26,[[4,4],[14,14],[16,16],[26,26]]] vm=0 execute_ex=0 handler=0
-dynamic-owners status=accepted result=[[5,7,9],6,9,12] vm=0 execute_ex=0 handler=0
+state status=accepted result=[5,7,10] gateway=yes vm=0 execute_ex=0 handler=0
+send-and-keys status=accepted result=[[5,11],[6,7],8] gateway=yes vm=0 execute_ex=0 handler=0
+delegation status=accepted result=[1,2,4,6,8] gateway=yes vm=0 execute_ex=0 handler=0
+throw status=accepted result=["ready","caught:boom",17] gateway=yes vm=0 execute_ex=0 handler=0
+by-reference status=accepted result=[26,26,[[4,4],[14,14],[16,16],[26,26]]] gateway=yes vm=0 execute_ex=0 handler=0
+dynamic-owners status=accepted result=[[5,7,9],6,9,12] gateway=yes vm=0 execute_ex=0 handler=0

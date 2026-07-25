@@ -223,6 +223,7 @@ typedef struct _native_mir_test_state {
 	uint64_t execute_ex_calls;
 	uint64_t opline_handler_calls;
 	uint64_t user_opcode_calls;
+	uint64_t generator_reentry_gateway_calls;
 	user_opcode_handler_t previous_user_opcode_handler;
 	uint32_t user_opcode_action;
 	uint32_t user_opcode_advance;
@@ -375,11 +376,21 @@ static void native_mir_test_frame_probe_record(
 	native_mir_test_state *state = context;
 	native_mir_test_frame_probe *record;
 
-	if (state == NULL || caller == NULL || callee == NULL
-			|| state->frame_probe_count >= NATIVE_MIR_TEST_MAX_FRAME_PROBES) {
+	if (state == NULL || caller == NULL || callee == NULL) {
 		if (state != NULL) {
 			state->frame_chain_valid = false;
 		}
+		return;
+	}
+	if (callee->func != NULL
+			&& (callee->func->common.fn_flags & ZEND_ACC_GENERATOR) != 0
+			&& callee->opline != NULL
+			&& callee->opline->opcode != ZEND_GENERATOR_CREATE) {
+		state->generator_reentry_gateway_calls++;
+		return;
+	}
+	if (state->frame_probe_count >= NATIVE_MIR_TEST_MAX_FRAME_PROBES) {
+		state->frame_chain_valid = false;
 		return;
 	}
 	record = &state->frame_probes[state->frame_probe_count++];
@@ -4725,6 +4736,8 @@ static void native_mir_test_build_result(
 			(zend_long) state->opline_handler_calls);
 		add_assoc_long(&execution, "user_opcode_calls",
 			(zend_long) state->user_opcode_calls);
+		add_assoc_long(&execution, "generator_reentry_gateway_calls",
+			(zend_long) state->generator_reentry_gateway_calls);
 		add_assoc_long(&execution, "executions",
 			(zend_long) state->completed_executions);
 		add_assoc_long(&execution, "native_codeunits",
