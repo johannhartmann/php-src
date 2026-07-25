@@ -35,6 +35,10 @@ static zend_mir_w04_branch_kind zend_mir_w04_verify_branch_kind(uint32_t opcode)
 		case 188:
 		case 195:
 			return ZEND_MIR_W12_BRANCH_MULTIWAY;
+		case 203:
+			return ZEND_MIR_W12_BRANCH_BIND_STATIC;
+		case 208:
+			return ZEND_MIR_W12_BRANCH_FRAMELESS;
 		case 77:
 		case 78:
 		case 125:
@@ -483,6 +487,12 @@ static bool zend_mir_w04_verify_edges(
 						: branch_kind == ZEND_MIR_W12_BRANCH_MULTIWAY
 							? terminator.opcode
 								!= ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH
+						: branch_kind == ZEND_MIR_W12_BRANCH_BIND_STATIC
+							? terminator.opcode
+								!= ZEND_MIR_OPCODE_VALUE_BIND_STATIC_BRANCH
+						: branch_kind == ZEND_MIR_W12_BRANCH_FRAMELESS
+							? terminator.opcode
+								!= ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH
 						: (view->successor_count(view->context, source_from) == 1
 							? terminator.opcode != ZEND_MIR_OPCODE_BRANCH
 							: terminator.opcode != ZEND_MIR_OPCODE_COND_BRANCH

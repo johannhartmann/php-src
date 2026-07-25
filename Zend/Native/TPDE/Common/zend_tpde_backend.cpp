@@ -1036,6 +1036,10 @@ zend_native_runtime_helper_id executable_value_helper(zend_mir_opcode opcode) {
 			return ZEND_NATIVE_HELPER_VALUE_INCDEC;
 		case ZEND_MIR_OPCODE_VALUE_CASE:
 			return ZEND_NATIVE_HELPER_VALUE_CASE;
+		case ZEND_MIR_OPCODE_VALUE_BIND_STATIC_BRANCH:
+			return ZEND_NATIVE_HELPER_VALUE_BIND_STATIC_BRANCH;
+		case ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH:
+			return ZEND_NATIVE_HELPER_VALUE_FRAMELESS_BRANCH;
 		case ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE:
 			return ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE;
 		case ZEND_MIR_OPCODE_VALUE_ECHO:
@@ -2158,10 +2162,17 @@ bool initialize_plan(
 		}
 		const bool boxed_cond_branch =
 			(record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
-				|| record.opcode == ZEND_MIR_OPCODE_COND_BRANCH)
+				|| record.opcode == ZEND_MIR_OPCODE_COND_BRANCH
+				|| record.opcode
+					== ZEND_MIR_OPCODE_VALUE_BIND_STATIC_BRANCH
+				|| record.opcode
+					== ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH)
 			&& plan->instructions[i].has_value_operation
-			&& plan->instructions[i].value_operation.opcode
-				== ZEND_MIR_OPCODE_VALUE_COND_BRANCH;
+			&& (record.opcode == ZEND_MIR_OPCODE_COND_BRANCH
+				? plan->instructions[i].value_operation.opcode
+					== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				: plan->instructions[i].value_operation.opcode
+					== record.opcode);
 		if (boxed_cond_branch) {
 			const zend_mir_executable_value_ref &operation =
 				plan->instructions[i].value_operation;
@@ -2169,26 +2180,55 @@ bool initialize_plan(
 				record.opcode == ZEND_MIR_OPCODE_COND_BRANCH
 				&& count == 1;
 			const bool conditional_opcode =
-				operation.source_opcode == ZEND_JMPZ
+				(record.opcode == ZEND_MIR_OPCODE_VALUE_BIND_STATIC_BRANCH
+					? operation.source_opcode
+						== ZEND_BIND_INIT_STATIC_OR_JMP
+					: record.opcode
+						== ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH
+						? operation.source_opcode == ZEND_JMP_FRAMELESS
+						: operation.source_opcode == ZEND_JMPZ
 				|| operation.source_opcode == ZEND_JMPNZ
 				|| operation.source_opcode == ZEND_JMPZ_EX
 				|| operation.source_opcode == ZEND_JMPNZ_EX
 				|| operation.source_opcode == ZEND_JMP_SET
 				|| operation.source_opcode == ZEND_COALESCE
 				|| operation.source_opcode == ZEND_JMP_NULL
-				|| operation.source_opcode == ZEND_ASSERT_CHECK;
+				|| operation.source_opcode == ZEND_ASSERT_CHECK);
+			const bool exact_operands =
+				record.opcode == ZEND_MIR_OPCODE_VALUE_BIND_STATIC_BRANCH
+					? (operation.op1.kind
+							== ZEND_MIR_SOURCE_OPERAND_SLOT
+						|| operation.op1.kind
+							== ZEND_MIR_SOURCE_OPERAND_SSA)
+						&& operation.op1.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_CV
+						&& operation.op2.kind
+							== ZEND_MIR_SOURCE_OPERAND_UNUSED
+						&& operation.result.kind
+							== ZEND_MIR_SOURCE_OPERAND_UNUSED
+					: record.opcode
+						== ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH
+						? operation.op1.kind
+							== ZEND_MIR_SOURCE_OPERAND_LITERAL
+							&& operation.op2.kind
+								== ZEND_MIR_SOURCE_OPERAND_UNUSED
+							&& operation.result.kind
+								== ZEND_MIR_SOURCE_OPERAND_UNUSED
+						: operation.op1.kind
+								!= ZEND_MIR_SOURCE_OPERAND_UNUSED
+							|| operation.source_opcode
+								== ZEND_ASSERT_CHECK;
 			if ((!compatible_scalar_branch && count != 0)
 					|| !zend_mir_id_is_valid(record.source_position_id)
 					|| !plan->instructions[i].has_value_operation
 					|| operation.id != record.id
-					|| operation.opcode
-						!= ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+					|| (record.opcode == ZEND_MIR_OPCODE_COND_BRANCH
+						? operation.opcode
+							!= ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+						: operation.opcode != record.opcode)
 					|| operation.source_position_id
 						!= record.source_position_id
-					|| (operation.op1.kind
-							== ZEND_MIR_SOURCE_OPERAND_UNUSED
-						&& operation.source_opcode
-							!= ZEND_ASSERT_CHECK)
+					|| !exact_operands
 					|| !conditional_opcode) {
 				zend_tpde_set_diagnostic(diag,
 					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
@@ -2198,7 +2238,12 @@ bool initialize_plan(
 			plan->required_runtime_capabilities |=
 				ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT;
 			plan->instructions[i].runtime_helper =
-				ZEND_NATIVE_HELPER_VALUE_COND_BRANCH;
+				record.opcode == ZEND_MIR_OPCODE_VALUE_BIND_STATIC_BRANCH
+					? ZEND_NATIVE_HELPER_VALUE_BIND_STATIC_BRANCH
+					: record.opcode
+						== ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH
+						? ZEND_NATIVE_HELPER_VALUE_FRAMELESS_BRANCH
+						: ZEND_NATIVE_HELPER_VALUE_COND_BRANCH;
 			require_runtime_helper(
 				plan, plan->instructions[i].runtime_helper);
 		}

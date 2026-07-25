@@ -784,7 +784,9 @@ bool zend_mir_w04_emit_terminator(
 	}
 	source_condition = context->zend_source != NULL
 		&& context->zend_source->w09 && edge_count == 2
-		&& !machine_condition
+		&& (!machine_condition
+			|| kind == ZEND_MIR_W12_BRANCH_BIND_STATIC
+			|| kind == ZEND_MIR_W12_BRANCH_FRAMELESS)
 		&& kind != ZEND_MIR_W04_BRANCH_CATCH
 		&& kind != ZEND_MIR_W08_BRANCH_FINALLY_CALL
 		&& kind != ZEND_MIR_W09_BRANCH_ITERATOR
@@ -799,6 +801,8 @@ bool zend_mir_w04_emit_terminator(
 			|| (kind == ZEND_MIR_W08_BRANCH_FINALLY_RETURN && edge_count != 0)
 			|| (kind == ZEND_MIR_W09_BRANCH_ITERATOR && edge_count != 2)
 			|| (kind == ZEND_MIR_W12_BRANCH_ASSERT_CHECK && edge_count != 2)
+			|| (kind == ZEND_MIR_W12_BRANCH_BIND_STATIC && edge_count != 2)
+			|| (kind == ZEND_MIR_W12_BRANCH_FRAMELESS && edge_count != 2)
 			|| (kind == ZEND_MIR_W12_BRANCH_MULTIWAY
 				&& (opcode == NULL
 					|| (opcode->zend_opcode_number
@@ -887,6 +891,10 @@ bool zend_mir_w04_emit_terminator(
 					? ZEND_MIR_OPCODE_ITERATOR_BRANCH
 				: kind == ZEND_MIR_W12_BRANCH_MULTIWAY
 					? ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH
+				: kind == ZEND_MIR_W12_BRANCH_BIND_STATIC
+					? ZEND_MIR_OPCODE_VALUE_BIND_STATIC_BRANCH
+				: kind == ZEND_MIR_W12_BRANCH_FRAMELESS
+					? ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH
 				: source_condition
 					? ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 				: edge_count == 1 ? ZEND_MIR_OPCODE_BRANCH

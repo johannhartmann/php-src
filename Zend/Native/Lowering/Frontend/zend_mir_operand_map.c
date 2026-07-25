@@ -816,7 +816,10 @@ static zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w04_impl
 						opline->opcode))
 				&& !(allow_w10_branches
 					&& (opline->opcode == ZEND_JMP_NULL
-						|| opline->opcode == ZEND_THROW)))) {
+						|| opline->opcode == ZEND_THROW
+						|| opline->opcode
+							== ZEND_BIND_INIT_STATIC_OR_JMP
+						|| opline->opcode == ZEND_JMP_FRAMELESS)))) {
 			zend_mir_frontend_set_diagnostic(diagnostic,
 				ZEND_MIR_LOWERING_DEFERRED,
 				zend_mir_frontend_deferred_code_w04(opline->opcode),
@@ -850,6 +853,16 @@ static zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w04_impl
 				&& opline->result_type == IS_TMP_VAR;
 		} else if (allow_w10_branches && opline->opcode == ZEND_THROW) {
 			valid = zend_mir_frontend_opcode_operands_match(opline);
+		} else if (allow_w10_branches
+				&& opline->opcode == ZEND_BIND_INIT_STATIC_OR_JMP) {
+			valid = opline->op1_type == IS_CV
+				&& opline->op2_type == IS_UNUSED
+				&& opline->result_type == IS_UNUSED;
+		} else if (allow_w10_branches
+				&& opline->opcode == ZEND_JMP_FRAMELESS) {
+			valid = opline->op1_type == IS_CONST
+				&& opline->op2_type == IS_UNUSED
+				&& opline->result_type == IS_UNUSED;
 		} else if (!zend_mir_frontend_w04_branch(opline->opcode)) {
 			valid = zend_mir_frontend_opcode_operands_match(opline);
 		} else if (opline->opcode == ZEND_JMP) {

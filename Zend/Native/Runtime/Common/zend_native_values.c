@@ -7,6 +7,7 @@
 #include "Zend/zend_execute.h"
 #include "Zend/zend_extensions.h"
 #include "Zend/zend_fibers.h"
+#include "Zend/zend_frameless_function.h"
 #include "Zend/zend_ini.h"
 #include "Zend/zend_interfaces.h"
 #include "Zend/zend_iterators.h"
@@ -2054,6 +2055,90 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 	zend_native_value_consume_operand(
 		execute_data, opline->op1_type, opline->op1, NULL);
 	return truth ? ZEND_NATIVE_ITERATOR_NEXT : ZEND_NATIVE_ITERATOR_END;
+}
+
+zend_native_iterator_branch_result zend_native_value_bind_static_branch(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
+{
+	zend_native_explicit_value_operation operation;
+	HashTable *static_variables;
+	zval *variable;
+	zval *value;
+
+	if (!zend_native_value_init_explicit_operation(
+			execute_data, op1, op2, result_operand, extended_value,
+			source_opcode, source_position_id,
+			ZEND_BIND_INIT_STATIC_OR_JMP, &operation)
+			|| operation.op1_type != IS_CV
+			|| operation.op2_type != IS_UNUSED
+			|| operation.result_type != IS_UNUSED
+			|| (variable = zend_native_value_slot(
+				execute_data, operation.op1_type, operation.op1)) == NULL) {
+		return ZEND_NATIVE_ITERATOR_EXCEPTION;
+	}
+	static_variables =
+		ZEND_MAP_PTR_GET(execute_data->func->op_array.static_variables_ptr);
+	if (static_variables == NULL) {
+		return ZEND_NATIVE_ITERATOR_END;
+	}
+	value = (zval *) ((char *) static_variables->arData + extended_value);
+	if (Z_TYPE_P(value) == IS_NULL) {
+		return ZEND_NATIVE_ITERATOR_END;
+	}
+	if (Z_TYPE_P(value) != IS_REFERENCE) {
+		return ZEND_NATIVE_ITERATOR_EXCEPTION;
+	}
+	zval_ptr_dtor(variable);
+	Z_ADDREF_P(value);
+	ZVAL_REF(variable, Z_REF_P(value));
+	return zend_native_value_status() == ZEND_NATIVE_RETURNED
+		? ZEND_NATIVE_ITERATOR_NEXT : ZEND_NATIVE_ITERATOR_EXCEPTION;
+}
+
+zend_native_iterator_branch_result zend_native_value_frameless_branch(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
+{
+	zend_native_explicit_value_operation operation;
+	zval *function_name;
+	zend_jmp_fl_result result;
+	void **cache_slot;
+
+	if (!zend_native_value_init_explicit_operation(
+			execute_data, op1, op2, result_operand, extended_value,
+			source_opcode, source_position_id, ZEND_JMP_FRAMELESS, &operation)
+			|| operation.op1_type != IS_CONST
+			|| operation.op2_type != IS_UNUSED
+			|| operation.result_type != IS_UNUSED
+			|| execute_data->run_time_cache == NULL
+			|| extended_value > execute_data->func->op_array.cache_size
+			|| sizeof(void *) > execute_data->func->op_array.cache_size
+				- extended_value
+			|| (function_name = zend_native_value_read_explicit(
+				execute_data, &operation,
+				operation.op1_type, operation.op1)) == NULL
+			|| Z_TYPE_P(function_name) != IS_STRING) {
+		return ZEND_NATIVE_ITERATOR_EXCEPTION;
+	}
+	cache_slot = (void **) (
+		(char *) execute_data->run_time_cache + extended_value);
+	result = (zend_jmp_fl_result) (uintptr_t) *cache_slot;
+	if (result == ZEND_JMP_FL_UNPRIMED) {
+		result = zend_hash_find_known_hash(
+			EG(function_table), Z_STR_P(function_name)) == NULL
+			? ZEND_JMP_FL_HIT : ZEND_JMP_FL_MISS;
+		*cache_slot = (void *) (uintptr_t) result;
+	}
+	if (result == ZEND_JMP_FL_HIT) {
+		return ZEND_NATIVE_ITERATOR_NEXT;
+	}
+	return result == ZEND_JMP_FL_MISS
+		? ZEND_NATIVE_ITERATOR_END : ZEND_NATIVE_ITERATOR_EXCEPTION;
 }
 
 zend_native_status zend_native_value_isset_isempty_cv(
