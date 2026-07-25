@@ -1239,6 +1239,9 @@ void zend_native_zval_store_integer(
 	zval *slot, uint64_t payload, uint32_t exact_type)
 {
 	ZEND_ASSERT(slot != NULL);
+	if (Z_ISREF_P(slot)) {
+		slot = Z_REFVAL_P(slot);
+	}
 	zval_ptr_dtor_nogc(slot);
 	switch (exact_type) {
 		case ZEND_MIR_SCALAR_TYPE_NULL:
@@ -1258,6 +1261,9 @@ void zend_native_zval_store_integer(
 void zend_native_zval_store_double(zval *slot, double value)
 {
 	ZEND_ASSERT(slot != NULL);
+	if (Z_ISREF_P(slot)) {
+		slot = Z_REFVAL_P(slot);
+	}
 	zval_ptr_dtor_nogc(slot);
 	ZVAL_DOUBLE(slot, value);
 }
@@ -1265,6 +1271,9 @@ void zend_native_zval_store_double(zval *slot, double value)
 void zend_native_zval_release_slow(zval *slot)
 {
 	ZEND_ASSERT(slot != NULL);
+	if (Z_ISREF_P(slot)) {
+		slot = Z_REFVAL_P(slot);
+	}
 	ZEND_ASSERT(Z_REFCOUNTED_P(slot));
 	zval_ptr_dtor_nogc(slot);
 }

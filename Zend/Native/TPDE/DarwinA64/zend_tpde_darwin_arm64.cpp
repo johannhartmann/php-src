@@ -813,15 +813,24 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		auto frame_reg = frame.load_to_reg();
 		auto slow_release = text_writer.label_create();
 		auto store_value = text_writer.label_create();
+		auto slot_resolved = text_writer.label_create();
 		ScratchReg old_type{this};
 		ScratchReg counted{this};
 		ScratchReg refcount{this};
+		auto slot_reg = counted.alloc_gp();
 		auto old_type_reg = old_type.alloc_gp();
-		auto counted_reg = counted.alloc_gp();
 		auto refcount_reg = refcount.alloc_gp();
-		load_off(old_type_reg, frame_reg,
-			static_cast<uint32_t>(
-				offset + offsetof(zval, u1.type_info)), 4);
+		ASM(ADDxi, slot_reg, frame_reg, static_cast<uint32_t>(offset));
+		load_off(old_type_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(CMPwi, old_type_reg, IS_REFERENCE_EX);
+		generate_raw_jump(Jump::Jne, slot_resolved);
+		load_off(slot_reg, slot_reg, 0, 8);
+		ASM(ADDxi, slot_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(zend_reference, val)));
+		load_off(old_type_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		label_place(slot_resolved);
 		ASM(TSTwi, old_type_reg,
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		generate_raw_jump(Jump::Jeq, store_value);
@@ -833,17 +842,17 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(TSTwi, old_type_reg,
 			IS_TYPE_COLLECTABLE << Z_TYPE_FLAGS_SHIFT);
 		generate_raw_jump(Jump::Jne, slow_release);
-		load_off(counted_reg, frame_reg, static_cast<uint32_t>(offset), 8);
-		load_off(refcount_reg, counted_reg,
+		load_off(refcount_reg, slot_reg, 0, 8);
+		load_off(old_type_reg, refcount_reg,
 			static_cast<uint32_t>(
 				offsetof(zend_refcounted_h, refcount)), 4);
-		ASM(CMPwi, refcount_reg, 1);
+		ASM(CMPwi, old_type_reg, 1);
 		generate_raw_jump(Jump::Jls, slow_release);
-		ASM(SUBwi, refcount_reg, refcount_reg, 1);
-		store_off(counted_reg,
+		ASM(SUBwi, old_type_reg, old_type_reg, 1);
+		store_off(refcount_reg,
 			static_cast<uint32_t>(
 				offsetof(zend_refcounted_h, refcount)),
-			refcount_reg, 4);
+			old_type_reg, 4);
 		generate_raw_jump(Jump::jmp, store_value);
 
 		old_type.reset();
@@ -854,11 +863,12 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			const auto register_state =
 				zend::native::tpde::
 					capture_conditional_call_register_state(*this);
-			ScratchReg slot{this};
-			auto slot_reg = slot.alloc_gp();
-			ASM(ADDxi, slot_reg, frame_reg, static_cast<uint32_t>(offset));
+			ScratchReg slot_argument{this};
+			auto slot_argument_reg = slot_argument.alloc_gp();
+			ASM(ADDxi, slot_argument_reg, frame_reg,
+				static_cast<uint32_t>(offset));
 			ValuePart slot_pointer{DarwinConfig::GP_BANK, 8};
-			slot_pointer.set_value(this, std::move(slot));
+			slot_pointer.set_value(this, std::move(slot_argument));
 			{
 				zend::native::tpde::CCAssignerAppleA64 assigner;
 				CallBuilder builder{*this, assigner};
@@ -871,25 +881,39 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		}
 
 		label_place(store_value);
+		auto store_slot_resolved = text_writer.label_create();
+		ScratchReg store_slot{this};
+		ScratchReg store_type{this};
+		auto store_slot_reg = store_slot.alloc_gp();
+		auto store_type_reg = store_type.alloc_gp();
+		ASM(ADDxi, store_slot_reg, frame_reg, static_cast<uint32_t>(offset));
+		load_off(store_type_reg, store_slot_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(CMPwi, store_type_reg, IS_REFERENCE_EX);
+		generate_raw_jump(Jump::Jne, store_slot_resolved);
+		load_off(store_slot_reg, store_slot_reg, 0, 8);
+		ASM(ADDxi, store_slot_reg, store_slot_reg,
+			static_cast<uint32_t>(offsetof(zend_reference, val)));
+		label_place(store_slot_resolved);
 		if (exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
 			ScratchReg zero{this};
 			auto zero_reg = zero.alloc_gp();
 			materialize_constant(
 				UINT64_C(0), DarwinConfig::GP_BANK, 8, zero_reg);
-			store_off(frame_reg, static_cast<uint32_t>(offset), zero_reg, 8);
+			store_off(store_slot_reg, 0, zero_reg, 8);
 			ScratchReg kind{this};
 			auto kind_reg = kind.alloc_gp();
 			materialize_constant(
 				static_cast<uint64_t>(IS_NULL),
 				DarwinConfig::GP_BANK, 4, kind_reg);
-			store_off(frame_reg,
+			store_off(store_slot_reg,
 				static_cast<uint32_t>(
-					offset + offsetof(zval, u1.type_info)),
+					offsetof(zval, u1.type_info)),
 				kind_reg, 4);
 		} else {
 			auto [value_ref, value] = val_ref_single(input);
 			auto value_reg = value.load_to_reg();
-			store_off(frame_reg, static_cast<uint32_t>(offset), value_reg, 8);
+			store_off(store_slot_reg, 0, value_reg, 8);
 			ScratchReg kind{this};
 			auto kind_reg = kind.alloc_gp();
 			materialize_constant(
@@ -897,9 +921,9 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			if (exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
 				ASM(ADDx, kind_reg, kind_reg, value_reg);
 			}
-			store_off(frame_reg,
+			store_off(store_slot_reg,
 				static_cast<uint32_t>(
-					offset + offsetof(zval, u1.type_info)),
+					offsetof(zval, u1.type_info)),
 				kind_reg, 4);
 		}
 		return true;

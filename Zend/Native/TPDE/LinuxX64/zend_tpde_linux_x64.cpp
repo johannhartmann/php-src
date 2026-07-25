@@ -828,33 +828,43 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		auto frame_reg = frame.load_to_reg();
 		auto slow_release = text_writer.label_create();
 		auto store_value = text_writer.label_create();
+		auto slot_resolved = text_writer.label_create();
 		ScratchReg old_type{this};
 		ScratchReg counted{this};
 		ScratchReg refcount{this};
+		auto slot_reg = counted.alloc_gp();
 		auto old_type_reg = old_type.alloc_gp();
-		auto counted_reg = counted.alloc_gp();
 		auto refcount_reg = refcount.alloc_gp();
+		ASM(MOV64rr, slot_reg, frame_reg);
+		ASM(ADD64ri, slot_reg, static_cast<int32_t>(offset));
 		ASM(MOV32rm, old_type_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offset + offsetof(zval, u1.type_info))));
+			FE_MEM(slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		ASM(CMP32ri, old_type_reg, IS_REFERENCE_EX);
+		generate_raw_jump(Jump::jne, slot_resolved);
+		ASM(MOV64rm, slot_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
+		ASM(ADD64ri, slot_reg,
+			static_cast<int32_t>(offsetof(zend_reference, val)));
+		ASM(MOV32rm, old_type_reg,
+			FE_MEM(slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		label_place(slot_resolved);
 		ASM(TEST32ri, old_type_reg,
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		generate_raw_jump(Jump::je, store_value);
 		ASM(TEST32ri, old_type_reg,
 			IS_TYPE_COLLECTABLE << Z_TYPE_FLAGS_SHIFT);
 		generate_raw_jump(Jump::jne, slow_release);
-		ASM(MOV64rm, counted_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offset)));
-		ASM(MOV32rm, refcount_reg,
-			FE_MEM(counted_reg, 0, FE_NOREG,
+		ASM(MOV64rm, refcount_reg,
+			FE_MEM(slot_reg, 0, FE_NOREG, 0));
+		ASM(MOV32rm, old_type_reg,
+			FE_MEM(refcount_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
 					offsetof(zend_refcounted_h, refcount))));
-		ASM(CMP32ri, refcount_reg, 1);
+		ASM(CMP32ri, old_type_reg, 1);
 		generate_raw_jump(Jump::jbe, slow_release);
 		ASM(SUB32mi,
-			FE_MEM(counted_reg, 0, FE_NOREG,
+			FE_MEM(refcount_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
 					offsetof(zend_refcounted_h, refcount))),
 			1);
@@ -868,13 +878,13 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			const auto register_state =
 				zend::native::tpde::
 					capture_conditional_call_register_state(*this);
-			ScratchReg slot{this};
-			auto slot_reg = slot.alloc_gp();
-			ASM(MOV64rr, slot_reg, frame_reg);
-			ASM(ADD64ri, slot_reg, static_cast<int32_t>(offset));
+			ScratchReg slot_argument{this};
+			auto slot_argument_reg = slot_argument.alloc_gp();
+			ASM(MOV64rr, slot_argument_reg, frame_reg);
+			ASM(ADD64ri, slot_argument_reg, static_cast<int32_t>(offset));
 			ValuePart slot_pointer{
 				tpde::x64::PlatformConfig::GP_BANK, 8};
-			slot_pointer.set_value(this, std::move(slot));
+			slot_pointer.set_value(this, std::move(slot_argument));
 			slow_argument_register.reset();
 			{
 				tpde::x64::CCAssignerSysV assigner{false};
@@ -888,15 +898,30 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		}
 
 		label_place(store_value);
+		auto store_slot_resolved = text_writer.label_create();
+		ScratchReg store_slot{this};
+		ScratchReg store_type{this};
+		auto store_slot_reg = store_slot.alloc_gp();
+		auto store_type_reg = store_type.alloc_gp();
+		ASM(MOV64rr, store_slot_reg, frame_reg);
+		ASM(ADD64ri, store_slot_reg, static_cast<int32_t>(offset));
+		ASM(MOV32rm, store_type_reg,
+			FE_MEM(store_slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		ASM(CMP32ri, store_type_reg, IS_REFERENCE_EX);
+		generate_raw_jump(Jump::jne, store_slot_resolved);
+		ASM(MOV64rm, store_slot_reg,
+			FE_MEM(store_slot_reg, 0, FE_NOREG, 0));
+		ASM(ADD64ri, store_slot_reg,
+			static_cast<int32_t>(offsetof(zend_reference, val)));
+		label_place(store_slot_resolved);
 		if (exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
 			ASM(MOV64mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offset)),
+				FE_MEM(store_slot_reg, 0, FE_NOREG, 0),
 				0);
 			ASM(MOV32mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offset + offsetof(zval, u1.type_info))),
+				FE_MEM(store_slot_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zval, u1.type_info))),
 				IS_NULL);
 		} else {
 			auto [value_ref, value] = val_ref_single(input);
@@ -904,13 +929,11 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			if (val_parts(input).bank
 					== tpde::x64::PlatformConfig::FP_BANK) {
 				ASM(SSE_MOVSDmr,
-					FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offset)),
+					FE_MEM(store_slot_reg, 0, FE_NOREG, 0),
 					value_reg);
 			} else {
 				ASM(MOV64mr,
-					FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offset)),
+					FE_MEM(store_slot_reg, 0, FE_NOREG, 0),
 					value_reg);
 			}
 			if (exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
@@ -919,15 +942,13 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				ASM(MOV64rr, kind_reg, value_reg);
 				ASM(ADD64ri, kind_reg, IS_FALSE);
 				ASM(MOV32mr,
-					FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							offset + offsetof(zval, u1.type_info))),
+					FE_MEM(store_slot_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zval, u1.type_info))),
 					kind_reg);
 			} else {
 				ASM(MOV32mi,
-					FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							offset + offsetof(zval, u1.type_info))),
+					FE_MEM(store_slot_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zval, u1.type_info))),
 					static_cast<int32_t>(zval_type(exact_type)));
 			}
 		}
