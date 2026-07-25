@@ -2768,6 +2768,64 @@ zend_native_status zend_native_compiler_execute(
 	return status;
 }
 
+zend_native_status zend_native_compiler_execute_data(
+	zend_native_compiler *compiler,
+	zend_execute_data *execute_data,
+	zend_native_diagnostic *diagnostic)
+{
+	zend_native_compile_diagnostic compile_diagnostic;
+	zend_native_entry_cell *entry_cell;
+	zend_execute_data *previous;
+	zend_native_status status;
+	zend_hrtime_t phase_started;
+	uint64_t elapsed;
+
+	if (diagnostic != NULL) {
+		memset(diagnostic, 0, sizeof(*diagnostic));
+	}
+	if (compiler == NULL || execute_data == NULL
+			|| execute_data->func == NULL
+			|| !ZEND_USER_CODE(execute_data->func->type)) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	memset(&compile_diagnostic, 0, sizeof(compile_diagnostic));
+	phase_started = zend_hrtime();
+	if (zend_native_compiler_compile(
+			compiler, &execute_data->func->op_array, NULL, 0,
+			&compile_diagnostic) == FAILURE) {
+		compiler->stats.compile_ns += zend_hrtime() - phase_started;
+		if (diagnostic != NULL) {
+			diagnostic->code = ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR;
+			snprintf(diagnostic->message, sizeof(diagnostic->message), "%s",
+				compile_diagnostic.message);
+		}
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	compiler->stats.compile_ns += zend_hrtime() - phase_started;
+	entry_cell = zend_native_compiler_lookup(
+		compiler, execute_data->func);
+	if (entry_cell == NULL || zend_native_compiler_enter(compiler) == FAILURE) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	previous = execute_data->prev_execute_data;
+	EG(current_execute_data) = execute_data;
+	entry_cell->active_calls++;
+	phase_started = zend_hrtime();
+	status = zend_native_execute_frame(
+		entry_cell->code, execute_data, diagnostic);
+	elapsed = zend_hrtime() - phase_started;
+	entry_cell->active_calls--;
+	EG(current_execute_data) = previous;
+	compiler->stats.execute_ns += elapsed;
+	compiler->stats.last_execute_ns = elapsed;
+	if (compiler->stats.executions == 0) {
+		compiler->stats.first_execute_ns = elapsed;
+	}
+	compiler->stats.executions++;
+	zend_native_compiler_leave(compiler);
+	return status;
+}
+
 static bool zend_native_compiler_index_script_functions(
 	zend_native_compiler *compiler)
 {
