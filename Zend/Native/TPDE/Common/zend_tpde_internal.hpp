@@ -25,6 +25,7 @@ enum zend_tpde_user_opcode_target_kind : uint8_t {
 	ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_EXTENDED = 4,
 	ZEND_TPDE_USER_OPCODE_TARGET_RETURN = 5,
 	ZEND_TPDE_USER_OPCODE_TARGET_THROW = 6,
+	ZEND_TPDE_USER_OPCODE_TARGET_MULTI_BRANCH = 7,
 };
 
 struct zend_tpde_user_opcode_target {
@@ -269,6 +270,35 @@ struct zend_tpde_multi_branch {
 	uint32_t successor_count;
 	HashTable *jump_table;
 };
+
+struct zend_tpde_user_multi_branch {
+	uint32_t operand_offset;
+	uint32_t target_opcode;
+	uint32_t default_target;
+	uint32_t fallback_target;
+	HashTable *jump_table;
+};
+
+static inline uint32_t zend_tpde_relative_source_target(
+	const zend_op_array *op_array, uint32_t source_position,
+	zend_long byte_offset)
+{
+	if (op_array == nullptr || source_position >= op_array->last) {
+		return UINT32_MAX;
+	}
+	const uintptr_t first = reinterpret_cast<uintptr_t>(op_array->opcodes);
+	const intptr_t signed_address =
+		reinterpret_cast<intptr_t>(&op_array->opcodes[source_position])
+		+ static_cast<intptr_t>(byte_offset);
+	const uintptr_t address = static_cast<uintptr_t>(signed_address);
+	const uintptr_t last =
+		first + static_cast<uintptr_t>(op_array->last) * sizeof(zend_op);
+	if (address < first || address >= last
+			|| (address - first) % sizeof(zend_op) != 0) {
+		return UINT32_MAX;
+	}
+	return static_cast<uint32_t>((address - first) / sizeof(zend_op));
+}
 
 /*
  * Keep the semantic fast-path selection target-neutral.  Target backends only
@@ -954,6 +984,61 @@ struct zend_tpde_plan {
 	bool may_emit_calls;
 	bool user_opcode_callbacks;
 };
+
+static inline bool zend_tpde_user_multi_branch_at(
+	const zend_tpde_plan *plan,
+	const zend_mir_executable_value_ref &operation,
+	uint32_t target_opcode,
+	zend_tpde_user_multi_branch *out)
+{
+	if (plan == nullptr || out == nullptr || plan->source_op_array == nullptr
+			|| operation.source_position_id >= plan->source_op_array->last
+			|| operation.op1_storage_id == ZEND_MIR_ID_INVALID
+			|| operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| (target_opcode != ZEND_SWITCH_LONG
+				&& target_opcode != ZEND_SWITCH_STRING
+				&& target_opcode != ZEND_MATCH)) {
+		return false;
+	}
+	const zend_op *opline =
+		&plan->source_op_array->opcodes[operation.source_position_id];
+	if (opline->op2_type != IS_CONST) {
+		return false;
+	}
+	const zval *jump_table = RT_CONSTANT(opline, opline->op2);
+	if (Z_TYPE_P(jump_table) != IS_ARRAY) {
+		return false;
+	}
+	const uint64_t operand_offset =
+		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
+			* sizeof(zval);
+	const uint32_t default_target = zend_tpde_relative_source_target(
+		plan->source_op_array, operation.source_position_id,
+		static_cast<zend_long>(opline->extended_value));
+	const uint32_t fallback_target =
+		operation.source_position_id + 1 < plan->source_op_array->last
+			? operation.source_position_id + 1 : UINT32_MAX;
+	if (operand_offset > UINT32_MAX || default_target == UINT32_MAX
+			|| (target_opcode != ZEND_MATCH
+				&& fallback_target == UINT32_MAX)) {
+		return false;
+	}
+	zval *jump_value;
+	ZEND_HASH_FOREACH_VAL(Z_ARRVAL_P(jump_table), jump_value) {
+		if (Z_TYPE_P(jump_value) != IS_LONG
+				|| zend_tpde_relative_source_target(
+					plan->source_op_array, operation.source_position_id,
+					Z_LVAL_P(jump_value)) == UINT32_MAX) {
+			return false;
+		}
+	} ZEND_HASH_FOREACH_END();
+	out->operand_offset = static_cast<uint32_t>(operand_offset);
+	out->target_opcode = target_opcode;
+	out->default_target = default_target;
+	out->fallback_target = fallback_target;
+	out->jump_table = Z_ARRVAL_P(jump_table);
+	return true;
+}
 
 static inline bool zend_tpde_multi_branch_at(
 	const zend_tpde_plan *plan,
