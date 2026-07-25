@@ -408,6 +408,13 @@ extern zend_mir_w08_lowering_result zend_mir_lower_w10_zend_op_array(
 	const zend_mir_lowering_module_ops *module_ops,
 	zend_mir_diagnostic_sink *diagnostics);
 
+extern zend_mir_w08_lowering_result zend_mir_lower_w11_zend_op_array(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	const zend_mir_lowering_module_ops *module_ops,
+	zend_mir_diagnostic_sink *diagnostics);
+
 extern zend_mir_lowering_status zend_mir_frontend_project_w05_result_facts(
 	const zend_script *script,
 	const zend_op_array *op_array,
@@ -1588,7 +1595,11 @@ static bool native_mir_test_lower_w05_and_dump(native_mir_test_state *state)
 	}
 	zend_mir_w05_test_set_fault(call_fault);
 #endif
-	result = state->wave >= 10
+	result = state->wave >= 11
+		? zend_mir_lower_w11_zend_op_array(
+			&state->script, state->selected, &state->ssa,
+			&module_ops, &diagnostics)
+		: state->wave >= 10
 		? zend_mir_lower_w10_zend_op_array(
 			&state->script, state->selected, &state->ssa,
 			&module_ops, &diagnostics)
@@ -3643,6 +3654,7 @@ static bool native_mir_test_compile_native_component(
 				bindings[binding_count].target_id = target.id;
 				bindings[binding_count].entry_cell = &function->entry_cell;
 				bindings[binding_count].direct_native = false;
+				bindings[binding_count].leaf_scalar_frame = false;
 				binding_count++;
 				continue;
 			}
@@ -3657,6 +3669,7 @@ static bool native_mir_test_compile_native_component(
 			bindings[binding_count].direct_native =
 				native_mir_test_target_is_direct_native(
 					state, function, calls, &target, callee);
+			bindings[binding_count].leaf_scalar_frame = false;
 			binding_count++;
 		}
 		function->internal_call_cell_count = internal_binding_count;
@@ -3696,24 +3709,23 @@ static bool native_mir_test_compile_native_component(
 			injected_runtime.helpers = injected_helpers;
 			runtime = &injected_runtime;
 		}
-		if ((state->wave >= 8
-				? zend_tpde_compile_module_w08_with_runtime(
-					state->target,
-					native_mir_test_module_view(state, function->module),
-					bindings, binding_count,
-					internal_bindings, internal_binding_count,
-					function->source_effects, function->source_effect_count,
-					function->op_array->num_args,
-					function->op_array,
-					runtime,
-					&function->image, &diagnostic)
-				: zend_tpde_compile_module_w07(
-					state->target,
-					native_mir_test_module_view(state, function->module),
-					bindings, binding_count,
-					function->source_effects, function->source_effect_count,
-					function->op_array->num_args,
-					&function->image, &diagnostic)) == FAILURE) {
+		/*
+		 * Every executable call model carries the original op_array and SSA.
+		 * Use the same explicit source-descriptor path for W07 call tests as
+		 * production compilation instead of falling back to the legacy
+		 * descriptor-less backend entry.
+		 */
+		if (zend_tpde_compile_module_w08_with_runtime(
+				state->target,
+				native_mir_test_module_view(state, function->module),
+				bindings, binding_count,
+				internal_bindings, internal_binding_count,
+				function->source_effects, function->source_effect_count,
+				function->op_array->num_args,
+				function->op_array,
+				&function->ssa,
+				runtime,
+				&function->image, &diagnostic) == FAILURE) {
 			efree(bindings);
 			efree(internal_bindings);
 			native_mir_test_backend_failure(state, state->phase, &diagnostic);
@@ -4632,6 +4644,8 @@ static void native_mir_test_build_result(
 				(zend_long) compiler_stats.slow_path_sites);
 			add_assoc_long(&performance, "direct_call_sites",
 				(zend_long) compiler_stats.direct_call_sites);
+			add_assoc_long(&performance, "direct_leaf_scalar_sites",
+				(zend_long) compiler_stats.direct_leaf_scalar_sites);
 			add_assoc_long(&performance, "direct_call_frame_bytes",
 				(zend_long) compiler_stats.direct_call_frame_bytes);
 			add_assoc_long(

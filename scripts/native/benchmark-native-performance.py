@@ -49,6 +49,7 @@ echo json_encode(
     [
         "status" => $result["status"] ?? "missing",
         "phase" => $result["phase"] ?? "missing",
+        "return_value" => $execution["return_value"] ?? null,
         "bridge_ns" => $bridgeNs,
         "performance" => $execution["performance"] ?? null,
         "native_codeunits" => $execution["native_codeunits"] ?? null,
@@ -87,6 +88,7 @@ if (str_starts_with(getenv("NATIVE_BENCH_TARGET"), "linux-")) {
 echo json_encode(
     [
         "status" => "returned",
+        "return_value" => $result,
         "execute_ns" => $executeNs,
         "peak_rss_bytes" => $peakRss,
     ],
@@ -601,6 +603,40 @@ def summarize(
     baseline: list[dict[str, Any]] | None,
     reference: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
+    candidate_results = [sample.get("return_value") for sample in candidate]
+    if any(result != candidate_results[0] for result in candidate_results[1:]):
+        raise RuntimeError(
+            f"{benchmark.name}: candidate return value is nondeterministic"
+        )
+    if baseline:
+        baseline_results = [sample.get("return_value") for sample in baseline]
+        if any(result != baseline_results[0] for result in baseline_results[1:]):
+            raise RuntimeError(
+                f"{benchmark.name}: baseline return value is nondeterministic"
+            )
+        if baseline_results[0] != candidate_results[0]:
+            raise RuntimeError(
+                f"{benchmark.name}: candidate returned "
+                f"{candidate_results[0]!r}, baseline returned "
+                f"{baseline_results[0]!r}"
+            )
+    if reference:
+        reference_results = [
+            sample.get("return_value") for sample in reference
+        ]
+        if any(
+            result != reference_results[0] for result in reference_results[1:]
+        ):
+            raise RuntimeError(
+                f"{benchmark.name}: reference return value is nondeterministic"
+            )
+        if reference_results[0] != candidate_results[0]:
+            raise RuntimeError(
+                f"{benchmark.name}: candidate returned "
+                f"{candidate_results[0]!r}, reference returned "
+                f"{reference_results[0]!r}"
+            )
+
     candidate_bridge = median_metric(candidate, ("bridge_ns",)) or 0.0
     candidate_comparable = candidate_bridge / benchmark.repeat
     candidate_execute = median_metric(
@@ -655,6 +691,7 @@ def summarize(
             "guard_sites",
             "slow_path_sites",
             "direct_call_sites",
+            "direct_leaf_scalar_sites",
             "direct_call_frame_bytes",
             "inner_call_runtime_helper_calls",
             "inner_call_heap_allocations",
@@ -705,6 +742,12 @@ def parse_args() -> argparse.Namespace:
         "--suite", choices=("all", "direct", "hot", "scaling"),
         default="all",
     )
+    parser.add_argument(
+        "--case",
+        action="append",
+        dest="cases",
+        help="run only the named benchmark case; may be repeated",
+    )
     parser.add_argument("--samples", type=int, default=5)
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--enforce", action="store_true")
@@ -737,6 +780,20 @@ def main() -> int:
             benchmarks += hot_benchmarks(hot_iterations, include_file)
         if args.suite in {"all", "scaling"}:
             benchmarks += scaling_benchmarks(args.quick, Path(temp))
+        if args.cases:
+            selected = set(args.cases)
+            benchmarks = tuple(
+                benchmark
+                for benchmark in benchmarks
+                if benchmark.name in selected
+            )
+            missing = selected.difference(
+                benchmark.name for benchmark in benchmarks
+            )
+            if missing:
+                raise RuntimeError(
+                    "unknown benchmark cases: " + ", ".join(sorted(missing))
+                )
 
         records = []
         for benchmark in benchmarks:
@@ -744,13 +801,20 @@ def main() -> int:
                 args.candidate, benchmark, target, args.samples,
                 CANDIDATE_RUNNER,
             )
-            baseline = (
-                measure(
-                    args.baseline, benchmark, target, args.samples,
-                    CANDIDATE_RUNNER,
+            baseline_error = None
+            try:
+                baseline = (
+                    measure(
+                        args.baseline, benchmark, target, args.samples,
+                        CANDIDATE_RUNNER,
+                    )
+                    if args.baseline is not None else None
                 )
-                if args.baseline is not None else None
-            )
+            except RuntimeError as error:
+                if benchmark.suite != "scaling":
+                    raise
+                baseline = None
+                baseline_error = str(error)
             reference = (
                 measure(
                     args.reference, benchmark, target, args.samples,
@@ -759,6 +823,8 @@ def main() -> int:
                 if args.reference is not None else None
             )
             record = summarize(benchmark, candidate, baseline, reference)
+            if baseline_error is not None:
+                record["baseline_error"] = baseline_error
             records.append(record)
             print(json.dumps(record, sort_keys=True), flush=True)
 
@@ -805,6 +871,9 @@ def main() -> int:
         for record in records
         if "speedup" in record
         and record["suite"] in {"direct", "hot"}
+        # An enabled observer deliberately takes the semantic observer path;
+        # it is measured, but it is not an unobserved representative fast path.
+        and record["case"] != "observer_enabled"
         and float(record["speedup"]) < (1 / 1.10)
     ]
     summary["regressions_over_10_percent"] = regressions
@@ -815,12 +884,20 @@ def main() -> int:
     failures = []
     if args.baseline is None or args.reference is None:
         failures.append("--enforce requires --baseline and --reference")
-    if summary.get("direct_scalar_speedup", 0) < 3.0:
-        failures.append("direct scalar call speedup is below 3.0x")
-    if summary.get("hot_geomean_speedup", 0) < 1.5:
-        failures.append("hot corpus geometric mean speedup is below 1.5x")
-    if summary.get("direct_scalar_vs_reference", 0) <= 1.0:
-        failures.append("native scalar calls do not beat the reference VM")
+    if direct_scalar is not None:
+        if summary.get("direct_scalar_speedup", 0) < 3.0:
+            failures.append("direct scalar call speedup is below 3.0x")
+        if summary.get("direct_scalar_vs_reference", 0) <= 1.0:
+            failures.append("native scalar calls do not beat the reference VM")
+    elif args.suite in {"all", "direct"} and not args.cases:
+        failures.append("direct scalar benchmark was not executed")
+    if hot_speedups:
+        if summary.get("hot_geomean_speedup", 0) < 1.5:
+            failures.append(
+                "hot corpus geometric mean speedup is below 1.5x"
+            )
+    elif args.suite in {"all", "hot"} and not args.cases:
+        failures.append("hot corpus was not executed")
     if regressions:
         failures.append(
             "representative cases regress by more than 10%: "

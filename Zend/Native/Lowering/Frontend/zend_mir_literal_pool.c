@@ -84,6 +84,7 @@ static bool zend_mir_frontend_canonical_literal(
 		return false;
 	}
 
+	memset(out, 0, sizeof(*out));
 	out->literal_index = index;
 	switch (Z_TYPE_P(literal)) {
 		case IS_NULL:
@@ -107,6 +108,7 @@ static bool zend_mir_frontend_canonical_literal(
 			return false;
 	}
 	out->payload_bits = bits;
+	out->flags = ZEND_MIR_SOURCE_LITERAL_CANONICAL_SCALAR;
 	return true;
 }
 

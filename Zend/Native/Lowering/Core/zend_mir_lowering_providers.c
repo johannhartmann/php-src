@@ -43,7 +43,7 @@ typedef struct _zend_mir_w03_integration zend_mir_w03_integration;
 
 typedef enum _zend_mir_w11_fact_mode {
 	ZEND_MIR_W11_FACT_ORIGINAL = 0,
-	ZEND_MIR_W11_FACT_NULL = 1,
+	ZEND_MIR_W11_FACT_SOURCE_ZVAL = 1,
 	ZEND_MIR_W11_FACT_HIDDEN = 2
 } zend_mir_w11_fact_mode;
 
@@ -60,11 +60,18 @@ struct _zend_mir_w03_integration {
 	zend_mir_lowering_source_view source_view;
 	zend_mir_lowering_source_view provider_source_view;
 	uint8_t *w11_suppressed_opcodes;
+	uint8_t *w11_scalarized_opcodes;
+	uint8_t *w11_elided_boxed_opcodes;
+	uint8_t *w11_boxed_ssa;
+	uint8_t *w11_machine_ssa;
 	int *w11_ssa_replacements;
 	uint8_t *w11_fact_modes;
+	zend_mir_value_fact_ref *w11_inferred_facts;
+	uint8_t *w11_inferred_fact_valid;
 	uint32_t w11_ssa_use_count;
 	uint32_t w11_ssa_def_count;
 	uint32_t w11_fact_count;
+	uint32_t w11_synthetic_one_literal;
 	zend_mir_value_fact_ref *facts;
 	uint32_t fact_count;
 	zend_mir_logic_value_binding *logic_bindings;
@@ -96,6 +103,12 @@ struct _zend_mir_w03_integration {
 	bool w09;
 	bool w10;
 	bool w11;
+	bool w11_has_synthetic_one;
+	bool w11_pending_store;
+	zend_mir_instruction_id w11_pending_store_instruction;
+	zend_mir_value_id w11_pending_store_destination;
+	zend_mir_block_id w11_pending_store_block;
+	zend_mir_source_position_id w11_pending_store_source_position;
 	const zend_op_array *w09_op_array;
 	bool deferred_finalize;
 };
@@ -163,12 +176,69 @@ static bool zend_mir_w09_source_value_branch(uint32_t opcode)
 		|| opcode == ZEND_JMPZ_EX || opcode == ZEND_JMPNZ_EX;
 }
 
+static const zend_mir_value_fact_ref *zend_mir_w03_fact_for_value(
+	const zend_mir_w03_integration *integration, zend_mir_value_id value_id);
+static bool zend_mir_w03_resolve_operand(
+	const void *context,
+	const zend_mir_source_operand_ref *operand, zend_mir_value_id *out);
+
+static bool zend_mir_w11_machine_condition(
+	const zend_mir_w03_integration *integration,
+	const zend_mir_source_opcode_ref *opcode)
+{
+	zend_mir_value_id value_id;
+	const zend_mir_value_fact_ref *fact;
+
+	if (integration == NULL || opcode == NULL
+			|| !zend_mir_w09_source_value_branch(
+				opcode->zend_opcode_number)
+			|| opcode->op1.kind != ZEND_MIR_SOURCE_OPERAND_SSA
+			|| !zend_mir_w03_resolve_operand(
+				integration, &opcode->op1, &value_id)
+			|| (fact = zend_mir_w03_fact_for_value(
+				integration, value_id)) == NULL) {
+		return false;
+	}
+	return zend_mir_scalar_type_is_exact(fact->exact_type);
+}
+
 static bool zend_mir_w03_receive_fragment(
 	const zend_mir_w03_integration *integration, uint32_t opcode)
 {
 	return opcode == ZEND_RECV
 		|| (integration != NULL && integration->w09
 			&& (opcode == ZEND_RECV_INIT || opcode == ZEND_RECV_VARIADIC));
+}
+
+static zend_mir_scalar_type_mask zend_mir_w11_declared_argument_scalar_type(
+	const zend_op_array *op_array, const zend_op *opline)
+{
+	uint32_t type;
+	uint32_t argument_number;
+
+	if (op_array == NULL || opline == NULL || op_array->arg_info == NULL
+			|| (opline->opcode != ZEND_RECV
+				&& opline->opcode != ZEND_RECV_INIT)
+			|| (argument_number = opline->op1.num) == 0
+			|| argument_number > op_array->num_args) {
+		return ZEND_MIR_SCALAR_TYPE_NONE;
+	}
+	type = ZEND_TYPE_PURE_MASK(
+		op_array->arg_info[argument_number - 1].type);
+	switch (type) {
+		case MAY_BE_NULL:
+			return ZEND_MIR_SCALAR_TYPE_NULL;
+		case MAY_BE_FALSE:
+		case MAY_BE_TRUE:
+		case MAY_BE_BOOL:
+			return ZEND_MIR_SCALAR_TYPE_I1;
+		case MAY_BE_LONG:
+			return ZEND_MIR_SCALAR_TYPE_I64;
+		case MAY_BE_DOUBLE:
+			return ZEND_MIR_SCALAR_TYPE_F64;
+		default:
+			return ZEND_MIR_SCALAR_TYPE_NONE;
+	}
 }
 
 static bool zend_mir_w03_checked_add(
@@ -411,7 +481,7 @@ static void zend_mir_w11_hide_definition(
 	}
 	integration->w11_ssa_replacements[definition] = replacement;
 	integration->w11_fact_modes[definition] = replacement >= 0
-		? ZEND_MIR_W11_FACT_HIDDEN : ZEND_MIR_W11_FACT_NULL;
+		? ZEND_MIR_W11_FACT_HIDDEN : ZEND_MIR_W11_FACT_SOURCE_ZVAL;
 }
 
 static bool zend_mir_w11_original_fact_is_pointer(
@@ -426,6 +496,1072 @@ static bool zend_mir_w11_original_fact_is_pointer(
 	return variable->alias != NO_ALIAS || info->guarded_reference
 		|| info->indirect_reference || info->ce != NULL
 		|| info->is_instanceof || (info->type & pointer_types) != 0;
+}
+
+static zend_mir_scalar_type_mask zend_mir_w11_zval_scalar_type(
+	const zval *value)
+{
+	if (value == NULL) {
+		return ZEND_MIR_SCALAR_TYPE_NONE;
+	}
+	switch (Z_TYPE_P(value)) {
+		case IS_NULL:
+			return ZEND_MIR_SCALAR_TYPE_NULL;
+		case IS_FALSE:
+		case IS_TRUE:
+			return ZEND_MIR_SCALAR_TYPE_I1;
+		case IS_LONG:
+			return ZEND_MIR_SCALAR_TYPE_I64;
+		case IS_DOUBLE:
+			return ZEND_MIR_SCALAR_TYPE_F64;
+		default:
+			return ZEND_MIR_SCALAR_TYPE_NONE;
+	}
+}
+
+static bool zend_mir_w11_set_inferred_fact(
+	zend_mir_w03_integration *integration, uint32_t ssa_variable_id,
+	zend_mir_scalar_type_mask exact_type,
+	zend_mir_value_fact_flags flags, int64_t minimum, int64_t maximum,
+	uint32_t source_position)
+{
+	zend_mir_value_fact_ref *fact;
+
+	if (integration == NULL
+			|| ssa_variable_id >= integration->source.ssa_count
+			|| !zend_mir_scalar_type_is_exact(exact_type)
+			|| ((flags & ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) != 0
+				&& (exact_type != ZEND_MIR_SCALAR_TYPE_I64
+					|| minimum > maximum))) {
+		return false;
+	}
+	if (integration->w11_inferred_fact_valid[ssa_variable_id]) {
+		return integration->w11_inferred_facts[
+			ssa_variable_id].exact_type == exact_type;
+	}
+	fact = &integration->w11_inferred_facts[ssa_variable_id];
+	memset(fact, 0, sizeof(*fact));
+	fact->id = ZEND_MIR_ID_INVALID;
+	fact->value_id =
+		zend_mir_value_from_original_ssa(ssa_variable_id);
+	fact->exact_type = exact_type;
+	fact->flags = flags | ZEND_MIR_VALUE_FACT_NON_REFCOUNTED;
+	fact->integer_min =
+		(flags & ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) != 0 ? minimum : 0;
+	fact->integer_max =
+		(flags & ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) != 0 ? maximum : 0;
+	fact->provenance =
+		(flags & ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) != 0
+		? ZEND_MIR_FACT_PROVENANCE_RANGE_ANALYSIS
+		: ZEND_MIR_FACT_PROVENANCE_TYPE_ANALYSIS;
+	fact->provenance_source_position_id = source_position;
+	if (!zend_mir_id_is_valid(fact->value_id)) {
+		return false;
+	}
+	integration->w11_inferred_fact_valid[ssa_variable_id] = 1;
+	return true;
+}
+
+static bool zend_mir_w11_inferred_fact_for_use(
+	const zend_mir_w03_integration *integration, int use,
+	zend_mir_value_fact_ref *out)
+{
+	if (integration == NULL || out == NULL || use < 0
+			|| (uint32_t) use >= integration->source.ssa_count
+			|| !integration->w11_inferred_fact_valid[use]) {
+		return false;
+	}
+	*out = integration->w11_inferred_facts[use];
+	return true;
+}
+
+static bool zend_mir_w11_set_integer_range(
+	zend_mir_w03_integration *integration, int ssa_variable_id,
+	int64_t minimum, int64_t maximum)
+{
+	zend_mir_value_fact_ref *fact;
+
+	if (integration == NULL || ssa_variable_id < 0
+			|| (uint32_t) ssa_variable_id >= integration->source.ssa_count
+			|| !integration->w11_inferred_fact_valid[ssa_variable_id]
+			|| minimum > maximum) {
+		return false;
+	}
+	fact = &integration->w11_inferred_facts[ssa_variable_id];
+	if (fact->exact_type != ZEND_MIR_SCALAR_TYPE_I64) {
+		return false;
+	}
+	if ((fact->flags & ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) != 0) {
+		minimum = minimum > fact->integer_min
+			? minimum : fact->integer_min;
+		maximum = maximum < fact->integer_max
+			? maximum : fact->integer_max;
+		if (minimum > maximum) {
+			return false;
+		}
+	}
+	fact->flags |= ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE;
+	fact->integer_min = minimum;
+	fact->integer_max = maximum;
+	fact->provenance = ZEND_MIR_FACT_PROVENANCE_RANGE_ANALYSIS;
+	if (maximum < 0 || minimum > 0) {
+		fact->flags |= ZEND_MIR_VALUE_FACT_NONZERO;
+	}
+	return true;
+}
+
+static bool zend_mir_w11_literal_fact(
+	const zend_op_array *op_array, uint32_t opline_index,
+	const znode_op *operand, zend_mir_value_fact_ref *out)
+{
+	const zval *value;
+	zend_mir_scalar_type_mask exact_type;
+
+	if (op_array == NULL || out == NULL || operand == NULL
+			|| opline_index >= op_array->last) {
+		return false;
+	}
+	value = RT_CONSTANT(&op_array->opcodes[opline_index], *operand);
+	exact_type = zend_mir_w11_zval_scalar_type(value);
+	if (!zend_mir_scalar_type_is_exact(exact_type)) {
+		return false;
+	}
+	memset(out, 0, sizeof(*out));
+	out->id = ZEND_MIR_ID_INVALID;
+	out->value_id = ZEND_MIR_ID_INVALID;
+	out->exact_type = exact_type;
+	out->flags = ZEND_MIR_VALUE_FACT_NON_REFCOUNTED;
+	out->provenance = ZEND_MIR_FACT_PROVENANCE_LITERAL;
+	out->provenance_source_position_id = opline_index;
+	if (exact_type == ZEND_MIR_SCALAR_TYPE_I64) {
+		out->flags |= ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE;
+		out->integer_min = Z_LVAL_P(value);
+		out->integer_max = Z_LVAL_P(value);
+		if (Z_LVAL_P(value) != 0) {
+			out->flags |= ZEND_MIR_VALUE_FACT_NONZERO;
+		}
+	} else if (exact_type == ZEND_MIR_SCALAR_TYPE_F64
+			&& isfinite(Z_DVAL_P(value))) {
+		out->flags |= ZEND_MIR_VALUE_FACT_FINITE;
+	}
+	return true;
+}
+
+static bool zend_mir_w11_opcode_operand_fact(
+	const zend_mir_w03_integration *integration,
+	const zend_op_array *op_array, const zend_ssa *ssa,
+	uint32_t opline_index, uint32_t operand_index,
+	zend_mir_value_fact_ref *out)
+{
+	const zend_op *opline;
+	const zend_ssa_op *ssa_op;
+	const znode_op *operand;
+	uint8_t operand_type;
+	int use;
+
+	if (integration == NULL || op_array == NULL || ssa == NULL || out == NULL
+			|| opline_index >= op_array->last) {
+		return false;
+	}
+	opline = &op_array->opcodes[opline_index];
+	ssa_op = &ssa->ops[opline_index];
+	if (operand_index == ZEND_MIR_FRONTEND_OP1) {
+		operand = &opline->op1;
+		operand_type = opline->op1_type;
+		use = ssa_op->op1_use;
+	} else if (operand_index == ZEND_MIR_FRONTEND_OP2) {
+		operand = &opline->op2;
+		operand_type = opline->op2_type;
+		use = ssa_op->op2_use;
+	} else {
+		operand = &opline->result;
+		operand_type = opline->result_type;
+		use = ssa_op->result_use;
+	}
+	operand_type &= ~(IS_SMART_BRANCH_JMPZ | IS_SMART_BRANCH_JMPNZ);
+	if (operand_type == IS_CONST) {
+		return zend_mir_w11_literal_fact(
+			op_array, opline_index, operand, out);
+	}
+	return zend_mir_w11_inferred_fact_for_use(integration, use, out);
+}
+
+static bool zend_mir_w11_guarded_long_inc(
+	const zend_mir_w03_integration *integration,
+	const zend_op_array *op_array, const zend_ssa *ssa,
+	uint32_t inc_index, int slot)
+{
+	uint32_t index;
+	uint32_t inc_block;
+
+	if (integration == NULL || op_array == NULL || ssa == NULL
+			|| inc_index >= op_array->last || ssa->cfg.map == NULL
+			|| ssa->cfg.blocks == NULL || ssa->cfg.predecessors == NULL
+			|| (op_array->opcodes[inc_index].opcode != ZEND_PRE_INC
+				&& op_array->opcodes[inc_index].opcode != ZEND_POST_INC)) {
+		return false;
+	}
+	inc_block = ssa->cfg.map[inc_index];
+	if (inc_block >= ssa->cfg.blocks_count
+			|| ssa->cfg.blocks[inc_block].predecessors_count != 1
+			|| ssa->cfg.blocks[inc_block].predecessor_offset < 0) {
+		return false;
+	}
+	for (index = 0; index + 1 < op_array->last; index++) {
+		const zend_op *compare = &op_array->opcodes[index];
+		const zend_op *branch = &op_array->opcodes[index + 1];
+		const zend_op *target;
+		zend_mir_value_fact_ref bound;
+		int compare_block;
+		int predecessor;
+
+		if (compare->opcode != ZEND_IS_SMALLER
+				|| branch->opcode != ZEND_JMPNZ
+				|| ssa->ops[index].op1_use < 0
+				|| ssa->vars[ssa->ops[index].op1_use].var != slot
+				|| !zend_mir_w11_opcode_operand_fact(
+					integration, op_array, ssa, index,
+					ZEND_MIR_FRONTEND_OP2, &bound)
+				|| bound.exact_type != ZEND_MIR_SCALAR_TYPE_I64) {
+			continue;
+		}
+		target = OP_JMP_ADDR(branch, branch->op2);
+		if (target < op_array->opcodes
+				|| target >= op_array->opcodes + op_array->last
+				|| ssa->cfg.map[target - op_array->opcodes] != inc_block) {
+			continue;
+		}
+		compare_block = (int) ssa->cfg.map[index];
+		predecessor = ssa->cfg.predecessors[
+			ssa->cfg.blocks[inc_block].predecessor_offset];
+		if (compare_block >= 0 && predecessor == compare_block) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool zend_mir_w11_entry_value_only_overwritten(
+	const zend_op_array *op_array, const zend_ssa *ssa, int variable)
+{
+	uint32_t index;
+	uint32_t block;
+
+	for (index = 0; index < op_array->last; index++) {
+		const zend_ssa_op *ssa_op = &ssa->ops[index];
+		if (ssa_op->op1_use == variable
+				&& !(op_array->opcodes[index].opcode == ZEND_ASSIGN
+					&& ssa_op->op1_def >= 0)) {
+			return false;
+		}
+		if (ssa_op->op2_use == variable
+				|| ssa_op->result_use == variable) {
+			return false;
+		}
+	}
+	for (block = 0; block < ssa->cfg.blocks_count; block++) {
+		const zend_ssa_phi *phi;
+		for (phi = ssa->blocks[block].phis; phi != NULL; phi = phi->next) {
+			uint32_t predecessor;
+			for (predecessor = 0;
+					predecessor < ssa->cfg.blocks[block].predecessors_count;
+					predecessor++) {
+				if (phi->sources[predecessor] == variable) {
+					return false;
+				}
+			}
+		}
+	}
+	return true;
+}
+
+static bool zend_mir_w11_infer_long_induction_slot(
+	zend_mir_w03_integration *integration,
+	const zend_op_array *op_array, const zend_ssa *ssa, int slot)
+{
+	uint32_t index;
+	bool has_seed = false;
+	bool has_defined_value = false;
+
+	for (index = 0; index < (uint32_t) ssa->vars_count; index++) {
+		const zend_ssa_var *variable = &ssa->vars[index];
+		const zend_ssa_op *ssa_op;
+		uint8_t opcode;
+		zend_mir_value_fact_ref source;
+
+		if (variable->var != slot) {
+			continue;
+		}
+		if (variable->definition < 0) {
+			if (variable->definition_phi == NULL
+					&& !zend_mir_w11_entry_value_only_overwritten(
+						op_array, ssa, (int) index)) {
+				return false;
+			}
+			continue;
+		}
+		has_defined_value = true;
+		ssa_op = &ssa->ops[variable->definition];
+		opcode = op_array->opcodes[variable->definition].opcode;
+		if (opcode == ZEND_ASSIGN
+				&& ssa_op->op1_def == (int) index
+				&& zend_mir_w11_opcode_operand_fact(
+					integration, op_array, ssa,
+					(uint32_t) variable->definition,
+					ZEND_MIR_FRONTEND_OP2, &source)
+				&& source.exact_type == ZEND_MIR_SCALAR_TYPE_I64) {
+			has_seed = true;
+			continue;
+		}
+		if ((opcode == ZEND_PRE_INC || opcode == ZEND_POST_INC)
+				&& ssa_op->op1_def == (int) index
+				&& zend_mir_w11_guarded_long_inc(
+					integration, op_array, ssa,
+					(uint32_t) variable->definition, slot)) {
+			continue;
+		}
+		if (opcode == ZEND_VERIFY_RETURN_TYPE
+				&& ssa_op->op1_def == (int) index) {
+			continue;
+		}
+		if (integration->w11_inferred_fact_valid[index]
+				&& integration->w11_inferred_facts[index].exact_type
+					== ZEND_MIR_SCALAR_TYPE_I64) {
+			has_seed = true;
+			continue;
+		}
+		return false;
+	}
+	if (!has_seed || !has_defined_value) {
+		return false;
+	}
+	for (index = 0; index < (uint32_t) ssa->vars_count; index++) {
+		const zend_ssa_var *variable = &ssa->vars[index];
+		if (variable->var == slot
+				&& (variable->definition >= 0
+					|| variable->definition_phi != NULL)
+				&& !zend_mir_w11_set_inferred_fact(
+					integration, index, ZEND_MIR_SCALAR_TYPE_I64, 0,
+					0, 0, variable->definition >= 0
+						? (uint32_t) variable->definition : 0)) {
+			return false;
+		}
+	}
+	for (index = 0; index < op_array->last; index++) {
+		const zend_ssa_op *ssa_op = &ssa->ops[index];
+		if ((op_array->opcodes[index].opcode == ZEND_PRE_INC
+				|| op_array->opcodes[index].opcode == ZEND_POST_INC)
+				&& ssa_op->op1_use >= 0 && ssa_op->op1_def >= 0
+				&& ssa->vars[ssa_op->op1_def].var == slot
+				&& zend_mir_w11_guarded_long_inc(
+					integration, op_array, ssa, index, slot)
+				&& (!zend_mir_w11_set_integer_range(
+						integration, ssa_op->op1_use,
+						INT64_MIN, INT64_MAX - 1)
+					|| !zend_mir_w11_set_integer_range(
+						integration, ssa_op->op1_def,
+						INT64_MIN + 1, INT64_MAX))) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool zend_mir_w11_infer_scalar_facts(
+	zend_mir_w03_integration *integration,
+	const zend_op_array *op_array, const zend_ssa *ssa)
+{
+	uint32_t index;
+	uint32_t pass;
+
+	for (index = 0; index < (uint32_t) ssa->vars_count; index++) {
+		zend_mir_value_fact_ref fact;
+		if (zend_mir_frontend_fact_for_ssa(op_array, ssa, index, &fact)
+				&& !zend_mir_w11_set_inferred_fact(
+					integration, index, fact.exact_type, fact.flags,
+					fact.integer_min, fact.integer_max,
+					fact.provenance_source_position_id)) {
+			return false;
+		}
+	}
+	/*
+	 * The call inventory is the authoritative source for exact direct-call
+	 * result types that Zend's optimizer did not materialize in var_info.
+	 * Seed those facts before the fixed-point pass so assignments and PHIs
+	 * consuming a declared scalar result stay in the private scalar graph.
+	 */
+	for (index = 0;
+			index < zend_mir_zend_source_value_fact_count(&integration->source);
+			index++) {
+		zend_mir_value_fact_ref fact;
+
+		if (!zend_mir_zend_source_value_fact_at(
+				&integration->source, index, &fact)
+				|| !zend_mir_value_is_original_ssa(fact.value_id)
+				|| fact.value_id >= (uint32_t) ssa->vars_count
+				|| !zend_mir_scalar_type_is_exact(fact.exact_type)
+				|| (fact.flags
+					& ZEND_MIR_VALUE_FACT_NON_REFCOUNTED) == 0) {
+			continue;
+		}
+		if (!zend_mir_w11_set_inferred_fact(
+				integration, fact.value_id, fact.exact_type, fact.flags,
+				fact.integer_min, fact.integer_max,
+				fact.provenance_source_position_id)) {
+			return false;
+		}
+	}
+	for (index = 0; index < op_array->last; index++) {
+		const zend_op *opline = &op_array->opcodes[index];
+		const zend_ssa_op *ssa_op = &ssa->ops[index];
+		zend_mir_scalar_type_mask type =
+			zend_mir_w11_declared_argument_scalar_type(op_array, opline);
+
+		if (zend_mir_scalar_type_is_exact(type)
+				&& ssa_op->result_def >= 0
+				&& !zend_mir_w11_set_inferred_fact(
+					integration, (uint32_t) ssa_op->result_def, type,
+					0, 0, 0, index)) {
+			return false;
+		}
+		if (opline->opcode == ZEND_FUNC_NUM_ARGS
+				&& ssa_op->result_def >= 0
+				&& !zend_mir_w11_set_inferred_fact(
+					integration, (uint32_t) ssa_op->result_def,
+					ZEND_MIR_SCALAR_TYPE_I64, 0, 0, 0, index)) {
+			return false;
+		}
+	}
+	for (pass = 0; pass <= (uint32_t) ssa->vars_count; pass++) {
+		bool changed = false;
+		for (index = 0; index < op_array->last; index++) {
+			const zend_op *opline = &op_array->opcodes[index];
+			const zend_ssa_op *ssa_op = &ssa->ops[index];
+			zend_mir_value_fact_ref left;
+			zend_mir_value_fact_ref right;
+			int definition = -1;
+
+			if (opline->opcode == ZEND_ASSIGN) {
+				definition = ssa_op->op1_def;
+				if (!zend_mir_w11_opcode_operand_fact(
+						integration, op_array, ssa, index,
+						ZEND_MIR_FRONTEND_OP2, &left)) {
+					continue;
+				}
+			} else if (opline->opcode == ZEND_QM_ASSIGN) {
+				definition = ssa_op->result_def;
+				if (!zend_mir_w11_opcode_operand_fact(
+						integration, op_array, ssa, index,
+						ZEND_MIR_FRONTEND_OP1, &left)) {
+					continue;
+				}
+			} else if (opline->opcode == ZEND_VERIFY_RETURN_TYPE) {
+				definition = ssa_op->op1_def;
+				if (!zend_mir_w11_opcode_operand_fact(
+						integration, op_array, ssa, index,
+						ZEND_MIR_FRONTEND_OP1, &left)) {
+					continue;
+				}
+			} else if (opline->opcode == ZEND_JMPZ_EX
+					|| opline->opcode == ZEND_JMPNZ_EX) {
+				definition = ssa_op->result_def;
+				if (!zend_mir_w11_opcode_operand_fact(
+						integration, op_array, ssa, index,
+						ZEND_MIR_FRONTEND_OP1, &left)
+						|| !zend_mir_scalar_type_is_exact(
+							left.exact_type)) {
+					continue;
+				}
+				memset(&left, 0, sizeof(left));
+				left.exact_type = ZEND_MIR_SCALAR_TYPE_I1;
+			} else if (opline->opcode == ZEND_IS_IDENTICAL
+					|| opline->opcode == ZEND_IS_NOT_IDENTICAL
+					|| opline->opcode == ZEND_IS_EQUAL
+					|| opline->opcode == ZEND_IS_NOT_EQUAL
+					|| opline->opcode == ZEND_IS_SMALLER
+					|| opline->opcode == ZEND_IS_SMALLER_OR_EQUAL) {
+				definition = ssa_op->result_def;
+				if (!zend_mir_w11_opcode_operand_fact(
+						integration, op_array, ssa, index,
+						ZEND_MIR_FRONTEND_OP1, &left)
+						|| !zend_mir_w11_opcode_operand_fact(
+							integration, op_array, ssa, index,
+							ZEND_MIR_FRONTEND_OP2, &right)
+						|| left.exact_type != right.exact_type
+						|| (left.exact_type != ZEND_MIR_SCALAR_TYPE_I1
+							&& left.exact_type
+								!= ZEND_MIR_SCALAR_TYPE_I64
+							&& left.exact_type
+								!= ZEND_MIR_SCALAR_TYPE_F64)
+						|| (left.exact_type
+								== ZEND_MIR_SCALAR_TYPE_F64
+							&& (((left.flags
+									& ZEND_MIR_VALUE_FACT_FINITE) == 0)
+								|| ((right.flags
+									& ZEND_MIR_VALUE_FACT_FINITE) == 0)))) {
+					continue;
+				}
+				memset(&left, 0, sizeof(left));
+				left.exact_type = ZEND_MIR_SCALAR_TYPE_I1;
+			} else {
+				continue;
+			}
+			if (definition >= 0
+					&& !integration->w11_inferred_fact_valid[definition]) {
+				if (!zend_mir_w11_set_inferred_fact(
+						integration, (uint32_t) definition,
+						left.exact_type, left.flags,
+						left.integer_min, left.integer_max, index)) {
+					return false;
+				}
+				changed = true;
+			}
+		}
+		for (index = 0; index < ssa->cfg.blocks_count; index++) {
+			const zend_ssa_phi *phi;
+			for (phi = ssa->blocks[index].phis; phi != NULL;
+					phi = phi->next) {
+				zend_mir_value_fact_ref common;
+				uint32_t predecessor;
+				bool all = true;
+
+				if (phi->ssa_var < 0
+						|| integration->w11_inferred_fact_valid[
+							phi->ssa_var]) {
+					continue;
+				}
+				memset(&common, 0, sizeof(common));
+				for (predecessor = 0;
+						predecessor
+							< ssa->cfg.blocks[index].predecessors_count;
+						predecessor++) {
+					zend_mir_value_fact_ref input;
+					if (!zend_mir_w11_inferred_fact_for_use(
+							integration, phi->sources[predecessor], &input)
+							|| (predecessor != 0
+								&& input.exact_type != common.exact_type)) {
+						all = false;
+						break;
+					}
+					if (predecessor == 0) {
+						common = input;
+					} else {
+						common.flags &= input.flags;
+						if ((common.flags
+								& ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE)
+								!= 0) {
+							common.integer_min = common.integer_min
+								< input.integer_min
+								? common.integer_min : input.integer_min;
+							common.integer_max = common.integer_max
+								> input.integer_max
+								? common.integer_max : input.integer_max;
+						}
+					}
+				}
+				if (all && zend_mir_scalar_type_is_exact(common.exact_type)) {
+					if (!zend_mir_w11_set_inferred_fact(
+							integration, (uint32_t) phi->ssa_var,
+							common.exact_type, common.flags,
+							common.integer_min, common.integer_max, 0)) {
+						return false;
+					}
+					changed = true;
+				}
+			}
+		}
+		if (!changed) {
+			break;
+		}
+	}
+	for (index = 0; index < (uint32_t) op_array->last_var + op_array->T;
+			index++) {
+		(void) zend_mir_w11_infer_long_induction_slot(
+			integration, op_array, ssa, (int) index);
+	}
+	for (index = 0; index < ssa->cfg.blocks_count; index++) {
+		const zend_ssa_phi *phi;
+		for (phi = ssa->blocks[index].phis; phi != NULL; phi = phi->next) {
+			int64_t minimum = INT64_MIN;
+			int64_t maximum = INT64_MAX;
+
+			if (phi->pi < 0 || !phi->has_range_constraint
+					|| phi->ssa_var < 0
+					|| !integration->w11_inferred_fact_valid[phi->ssa_var]
+					|| integration->w11_inferred_facts[
+						phi->ssa_var].exact_type
+						!= ZEND_MIR_SCALAR_TYPE_I64) {
+				continue;
+			}
+			/*
+			 * Symbolic Pi bounds are relations to another SSA value, not
+			 * absolute limits. Keep their interval conservative; the source
+			 * CFG retains the relational proof. Absolute, non-negated bounds
+			 * may safely narrow the scalar fact.
+			 */
+			if (phi->constraint.range.negative == NEG_NONE) {
+				if (!phi->constraint.range.range.underflow
+						&& phi->constraint.range.min_ssa_var < 0) {
+					minimum = (int64_t)
+						phi->constraint.range.range.min;
+				}
+				if (!phi->constraint.range.range.overflow
+						&& phi->constraint.range.max_ssa_var < 0) {
+					maximum = (int64_t)
+						phi->constraint.range.range.max;
+				}
+			}
+			if (!zend_mir_w11_set_integer_range(
+					integration, phi->ssa_var, minimum, maximum)) {
+				return false;
+			}
+		}
+	}
+	/* Propagate the now-closed induction facts through compare and verify
+	 * definitions without relying on optimizer observation order. */
+	for (pass = 0; pass < 3; pass++) {
+		for (index = 0; index < op_array->last; index++) {
+			const zend_op *opline = &op_array->opcodes[index];
+			const zend_ssa_op *ssa_op = &ssa->ops[index];
+			zend_mir_value_fact_ref left;
+			zend_mir_value_fact_ref right;
+			if ((opline->opcode == ZEND_IS_IDENTICAL
+					|| opline->opcode == ZEND_IS_NOT_IDENTICAL
+					|| opline->opcode == ZEND_IS_EQUAL
+					|| opline->opcode == ZEND_IS_NOT_EQUAL
+					|| opline->opcode == ZEND_IS_SMALLER
+					|| opline->opcode == ZEND_IS_SMALLER_OR_EQUAL)
+					&& ssa_op->result_def >= 0
+					&& zend_mir_w11_opcode_operand_fact(
+						integration, op_array, ssa, index,
+						ZEND_MIR_FRONTEND_OP1, &left)
+					&& zend_mir_w11_opcode_operand_fact(
+						integration, op_array, ssa, index,
+						ZEND_MIR_FRONTEND_OP2, &right)
+					&& left.exact_type == right.exact_type
+					&& !zend_mir_w11_set_inferred_fact(
+						integration, (uint32_t) ssa_op->result_def,
+						ZEND_MIR_SCALAR_TYPE_I1, 0, 0, 0, index)) {
+				return false;
+			}
+			if (opline->opcode == ZEND_VERIFY_RETURN_TYPE
+					&& ssa_op->op1_def >= 0
+					&& zend_mir_w11_opcode_operand_fact(
+						integration, op_array, ssa, index,
+						ZEND_MIR_FRONTEND_OP1, &left)
+					&& !zend_mir_w11_set_inferred_fact(
+						integration, (uint32_t) ssa_op->op1_def,
+						left.exact_type, left.flags, left.integer_min,
+						left.integer_max, index)) {
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+static bool zend_mir_w11_scalarizable_opcode(
+	const zend_mir_w03_integration *integration,
+	const zend_op_array *op_array, const zend_ssa *ssa, uint32_t index)
+{
+	const zend_op *opline = &op_array->opcodes[index];
+	const zend_ssa_op *ssa_op = &ssa->ops[index];
+	zend_mir_value_fact_ref left;
+	zend_mir_value_fact_ref right;
+	int definition;
+
+	switch (opline->opcode) {
+		case ZEND_ASSIGN:
+			definition = ssa_op->op1_def;
+			return definition >= 0
+				&& integration->w11_inferred_fact_valid[definition]
+				&& zend_mir_w11_opcode_operand_fact(
+					integration, op_array, ssa, index,
+					ZEND_MIR_FRONTEND_OP2, &left)
+				&& left.exact_type
+					== integration->w11_inferred_facts[
+						definition].exact_type;
+		case ZEND_PRE_INC:
+		case ZEND_POST_INC:
+			definition = ssa_op->op1_def;
+			return definition >= 0 && ssa_op->result_def < 0
+				&& integration->w11_inferred_fact_valid[definition]
+				&& integration->w11_inferred_facts[
+					definition].exact_type == ZEND_MIR_SCALAR_TYPE_I64
+				&& zend_mir_w11_inferred_fact_for_use(
+					integration, ssa_op->op1_use, &left)
+				&& left.exact_type == ZEND_MIR_SCALAR_TYPE_I64
+				&& zend_mir_w11_guarded_long_inc(
+					integration, op_array, ssa, index,
+					ssa->vars[definition].var);
+		case ZEND_QM_ASSIGN:
+			definition = ssa_op->result_def;
+			return definition >= 0
+				&& integration->w11_inferred_fact_valid[definition]
+				&& zend_mir_w11_opcode_operand_fact(
+					integration, op_array, ssa, index,
+					ZEND_MIR_FRONTEND_OP1, &left);
+		case ZEND_RETURN:
+			return zend_mir_w11_opcode_operand_fact(
+				integration, op_array, ssa, index,
+				ZEND_MIR_FRONTEND_OP1, &left);
+		case ZEND_IS_IDENTICAL:
+		case ZEND_IS_NOT_IDENTICAL:
+		case ZEND_IS_EQUAL:
+		case ZEND_IS_NOT_EQUAL:
+		case ZEND_IS_SMALLER:
+		case ZEND_IS_SMALLER_OR_EQUAL:
+			return ssa_op->result_def >= 0
+				&& integration->w11_inferred_fact_valid[
+					ssa_op->result_def]
+				&& zend_mir_w11_opcode_operand_fact(
+					integration, op_array, ssa, index,
+					ZEND_MIR_FRONTEND_OP1, &left)
+				&& zend_mir_w11_opcode_operand_fact(
+					integration, op_array, ssa, index,
+					ZEND_MIR_FRONTEND_OP2, &right)
+				&& left.exact_type == right.exact_type;
+		default:
+			return false;
+	}
+}
+
+static bool zend_mir_w11_opcode_requires_boxed_execution(
+	const zend_mir_w03_integration *integration,
+	const zend_op_array *op_array, const zend_ssa *ssa, uint32_t index)
+{
+	const uint8_t opcode = op_array->opcodes[index].opcode;
+	zend_mir_value_fact_ref fact;
+
+	if (integration->w11_scalarized_opcodes[index]) {
+		return false;
+	}
+	if (zend_mir_w09_source_value_branch(opcode)) {
+		return !zend_mir_w11_opcode_operand_fact(
+			integration, op_array, ssa, index, ZEND_MIR_FRONTEND_OP1, &fact)
+			|| !zend_mir_scalar_type_is_exact(fact.exact_type);
+	}
+	return zend_mir_w11_opcode_is_executable(opcode)
+		|| zend_mir_w05_call_fragment(opcode)
+		|| opcode == ZEND_RETURN
+		|| opcode == ZEND_RETURN_BY_REF
+		|| opcode == ZEND_THROW
+		|| opcode == ZEND_COALESCE
+		|| opcode == ZEND_JMP_SET
+		|| opcode == ZEND_JMP_NULL
+		|| opcode == ZEND_CATCH
+		|| opcode == ZEND_FAST_CALL
+		|| opcode == ZEND_FAST_RET;
+}
+
+static bool zend_mir_w11_mark_boxed_dependency(
+	const zend_op_array *op_array, const zend_ssa *ssa,
+	uint8_t *boxed_ssa, uint32_t ssa_count, int ssa_variable_id,
+	bool *changed)
+{
+	if (ssa_variable_id < 0) {
+		return true;
+	}
+	if ((uint32_t) ssa_variable_id >= ssa_count) {
+		return false;
+	}
+	if (!boxed_ssa[ssa_variable_id]) {
+		boxed_ssa[ssa_variable_id] = 1;
+		*changed = true;
+	}
+	(void) op_array;
+	(void) ssa;
+	return true;
+}
+
+/*
+ * Local variable-variable operations and include/eval observe the complete
+ * compiled-variable namespace through zend_rebuild_symbol_table(). Their
+ * explicit SSA operands cannot identify every CV that the operation may read
+ * at run time. Therefore every SSA version backed by a CV must have a current
+ * canonical zval before the operation, and subsequent scalar definitions must
+ * keep that slot current.
+ */
+static bool zend_mir_w11_observes_local_symbol_table(
+	const zend_op *opline)
+{
+	if (opline == NULL) {
+		return false;
+	}
+	if (opline->opcode == ZEND_INCLUDE_OR_EVAL) {
+		return true;
+	}
+	if ((opline->extended_value & ZEND_FETCH_LOCAL) == 0) {
+		return false;
+	}
+	switch (opline->opcode) {
+		case ZEND_FETCH_R:
+		case ZEND_FETCH_W:
+		case ZEND_FETCH_RW:
+		case ZEND_FETCH_IS:
+		case ZEND_FETCH_FUNC_ARG:
+		case ZEND_FETCH_UNSET:
+			return true;
+		default:
+			return false;
+	}
+}
+
+/*
+ * Machine lowering and boxed-frame materialization are deliberately separate
+ * decisions. A scalar instruction is always the sole implementation of its
+ * source opcode. If a later boxed operation consumes that value, materialize
+ * the machine result into its canonical frame slot with an explicit
+ * ZVAL_STORE instead of replaying the source opcode through the W09 helper.
+ * Propagate that requirement through scalar definitions and PHIs.
+ */
+static bool zend_mir_w11_plan_boxed_materialization(
+	zend_mir_w03_integration *integration,
+	const zend_op_array *op_array, const zend_ssa *ssa)
+{
+	const uint32_t ssa_count = (uint32_t) ssa->vars_count;
+	uint8_t *boxed_ssa = integration->w11_boxed_ssa;
+	uint32_t index;
+	bool changed = false;
+
+	if (boxed_ssa == NULL) {
+		return false;
+	}
+	for (index = 0; index < op_array->last; index++) {
+		const zend_ssa_op *ssa_op = &ssa->ops[index];
+		uint32_t variable_index;
+
+		integration->w11_elided_boxed_opcodes[index] =
+			integration->w11_scalarized_opcodes[index];
+		if (!zend_mir_w11_opcode_requires_boxed_execution(
+				integration, op_array, ssa, index)) {
+			continue;
+		}
+		if (zend_mir_w11_observes_local_symbol_table(
+				&op_array->opcodes[index])) {
+			for (variable_index = 0; variable_index < ssa_count;
+					variable_index++) {
+				const int32_t storage = ssa->vars[variable_index].var;
+
+				if (storage >= 0
+						&& (uint32_t) storage
+							< (uint32_t) op_array->last_var
+						&& !zend_mir_w11_mark_boxed_dependency(
+							op_array, ssa, boxed_ssa, ssa_count,
+							(int) variable_index, &changed)) {
+					return false;
+				}
+			}
+		}
+		if (!zend_mir_w11_mark_boxed_dependency(
+				op_array, ssa, boxed_ssa, ssa_count, ssa_op->op1_use,
+				&changed)
+				|| !zend_mir_w11_mark_boxed_dependency(
+					op_array, ssa, boxed_ssa, ssa_count, ssa_op->op2_use,
+					&changed)
+				|| !zend_mir_w11_mark_boxed_dependency(
+					op_array, ssa, boxed_ssa, ssa_count,
+					ssa_op->result_use, &changed)) {
+			return false;
+		}
+	}
+	do {
+		changed = false;
+		for (index = 0; index < ssa_count; index++) {
+			const zend_ssa_var *variable;
+			const zend_ssa_phi *phi;
+			const zend_ssa_op *definition;
+			uint32_t predecessor;
+			int definition_index;
+
+			if (!boxed_ssa[index]) {
+				continue;
+			}
+			variable = &ssa->vars[index];
+			phi = variable->definition_phi;
+			if (phi != NULL) {
+				if (phi->block >= (uint32_t) ssa->cfg.blocks_count) {
+					return false;
+				}
+				for (predecessor = 0;
+						predecessor < (uint32_t) ssa->cfg.blocks[
+							phi->block].predecessors_count;
+						predecessor++) {
+					if (!zend_mir_w11_mark_boxed_dependency(
+							op_array, ssa, boxed_ssa, ssa_count,
+							phi->sources[predecessor], &changed)) {
+						return false;
+					}
+				}
+			}
+			definition_index = variable->definition;
+			if (definition_index < 0
+					|| (uint32_t) definition_index >= op_array->last
+					|| !integration->w11_scalarized_opcodes[
+						definition_index]) {
+				continue;
+			}
+			definition = &ssa->ops[definition_index];
+			switch (op_array->opcodes[definition_index].opcode) {
+				case ZEND_ASSIGN:
+					if (!zend_mir_w11_mark_boxed_dependency(
+							op_array, ssa, boxed_ssa, ssa_count,
+							definition->op2_use, &changed)) {
+						return false;
+					}
+					break;
+				case ZEND_PRE_INC:
+				case ZEND_POST_INC:
+				case ZEND_QM_ASSIGN:
+					if (!zend_mir_w11_mark_boxed_dependency(
+							op_array, ssa, boxed_ssa, ssa_count,
+							definition->op1_use, &changed)) {
+						return false;
+					}
+					break;
+				default:
+					if (!zend_mir_w11_mark_boxed_dependency(
+							op_array, ssa, boxed_ssa, ssa_count,
+							definition->op1_use, &changed)
+							|| !zend_mir_w11_mark_boxed_dependency(
+								op_array, ssa, boxed_ssa, ssa_count,
+								definition->op2_use, &changed)) {
+						return false;
+					}
+					break;
+			}
+		}
+	} while (changed);
+	return true;
+}
+
+static bool zend_mir_w11_projected_ssa_operand(
+	const zend_mir_w03_integration *integration, const zend_ssa_op *ssa_op,
+	uint32_t opcode_index, uint32_t operand_index,
+	int *use, int *definition)
+{
+	const zend_op_array *op_array;
+	uint8_t opcode;
+
+	if (integration == NULL || ssa_op == NULL || use == NULL
+			|| definition == NULL || operand_index > ZEND_MIR_FRONTEND_RESULT) {
+		return false;
+	}
+	op_array = zend_mir_source_op_array(&integration->source);
+	if (op_array == NULL || opcode_index >= op_array->last) {
+		return false;
+	}
+	if (!integration->w11_scalarized_opcodes[opcode_index]) {
+		return zend_mir_w11_ssa_operand(
+			ssa_op, operand_index, use, definition);
+	}
+	opcode = op_array->opcodes[opcode_index].opcode;
+	*use = -1;
+	*definition = -1;
+	if (opcode == ZEND_ASSIGN) {
+		if (operand_index == ZEND_MIR_FRONTEND_OP1) {
+			*use = ssa_op->op2_use;
+		} else if (operand_index == ZEND_MIR_FRONTEND_RESULT) {
+			*definition = ssa_op->op1_def;
+		}
+		return true;
+	}
+	if (opcode == ZEND_PRE_INC || opcode == ZEND_POST_INC) {
+		if (operand_index == ZEND_MIR_FRONTEND_OP1) {
+			*use = ssa_op->op1_use;
+		} else if (operand_index == ZEND_MIR_FRONTEND_RESULT) {
+			*definition = ssa_op->op1_def;
+		}
+		return true;
+	}
+	return zend_mir_w11_ssa_operand(
+		ssa_op, operand_index, use, definition);
+}
+
+static void zend_mir_w11_invalidate_inferred_fact(
+	zend_mir_w03_integration *integration, int ssa_variable_id)
+{
+	if (ssa_variable_id < 0
+			|| (uint32_t) ssa_variable_id >= integration->source.ssa_count) {
+		return;
+	}
+	integration->w11_inferred_fact_valid[ssa_variable_id] = 0;
+	integration->w11_fact_modes[ssa_variable_id] =
+		ZEND_MIR_W11_FACT_HIDDEN;
+	memset(
+		&integration->w11_inferred_facts[ssa_variable_id], 0,
+		sizeof(integration->w11_inferred_facts[ssa_variable_id]));
+}
+
+/*
+ * Inference runs before the overlay decides which source-backed definitions
+ * are replaced by canonical zval execution. Removing such a definition must
+ * also remove every PHI and scalar instruction whose proof depended on it.
+ * Otherwise the call model can mistake a boxed zval for a borrowed scalar.
+ */
+static bool zend_mir_w11_close_scalar_overlay(
+	zend_mir_w03_integration *integration,
+	const zend_op_array *op_array, const zend_ssa *ssa)
+{
+	bool changed;
+	uint32_t index;
+
+	do {
+		changed = false;
+		for (index = 0; index < ssa->cfg.blocks_count; index++) {
+			const zend_ssa_phi *phi;
+
+			for (phi = ssa->blocks[index].phis; phi != NULL;
+					phi = phi->next) {
+				uint32_t predecessor;
+
+				if (phi->ssa_var < 0
+						|| (uint32_t) phi->ssa_var
+							>= integration->source.ssa_count
+						|| integration->w11_fact_modes[phi->ssa_var]
+							== ZEND_MIR_W11_FACT_HIDDEN) {
+					continue;
+				}
+				for (predecessor = 0;
+						predecessor < (uint32_t) ssa->cfg.blocks[
+							index].predecessors_count;
+						predecessor++) {
+					const int source = phi->sources[predecessor];
+
+					if (source < 0
+							|| (uint32_t) source
+								>= integration->source.ssa_count
+							|| !integration->w11_inferred_fact_valid[
+								source]) {
+						zend_mir_w11_invalidate_inferred_fact(
+							integration, phi->ssa_var);
+						changed = true;
+						break;
+					}
+				}
+			}
+		}
+		for (index = 0; index < op_array->last; index++) {
+			const zend_ssa_op *ssa_op;
+
+			if (!integration->w11_scalarized_opcodes[index]
+					|| zend_mir_w11_scalarizable_opcode(
+						integration, op_array, ssa, index)) {
+				continue;
+			}
+			ssa_op = &ssa->ops[index];
+			integration->w11_scalarized_opcodes[index] = 0;
+			integration->w11_suppressed_opcodes[index] = 1;
+			zend_mir_w11_invalidate_inferred_fact(
+				integration, ssa_op->op1_def);
+			zend_mir_w11_invalidate_inferred_fact(
+				integration, ssa_op->op2_def);
+			zend_mir_w11_invalidate_inferred_fact(
+				integration, ssa_op->result_def);
+			changed = true;
+		}
+	} while (changed);
+	return true;
 }
 
 static bool zend_mir_w11_prepare_overlay(
@@ -446,22 +1582,60 @@ static bool zend_mir_w11_prepare_overlay(
 	integration->w11_suppressed_opcodes = zend_mir_w03_calloc(
 		op_array->last == 0 ? 1 : op_array->last,
 		sizeof(*integration->w11_suppressed_opcodes));
+	integration->w11_scalarized_opcodes = zend_mir_w03_calloc(
+		op_array->last == 0 ? 1 : op_array->last,
+		sizeof(*integration->w11_scalarized_opcodes));
+	integration->w11_elided_boxed_opcodes = zend_mir_w03_calloc(
+		op_array->last == 0 ? 1 : op_array->last,
+		sizeof(*integration->w11_elided_boxed_opcodes));
+	integration->w11_boxed_ssa = zend_mir_w03_calloc(
+		ssa->vars_count == 0 ? 1 : (uint32_t) ssa->vars_count,
+		sizeof(*integration->w11_boxed_ssa));
+	integration->w11_machine_ssa = zend_mir_w03_calloc(
+		ssa->vars_count == 0 ? 1 : (uint32_t) ssa->vars_count,
+		sizeof(*integration->w11_machine_ssa));
 	integration->w11_ssa_replacements = zend_mir_w03_calloc(
 		ssa->vars_count == 0 ? 1 : (uint32_t) ssa->vars_count,
 		sizeof(*integration->w11_ssa_replacements));
 	integration->w11_fact_modes = zend_mir_w03_calloc(
 		ssa->vars_count == 0 ? 1 : (uint32_t) ssa->vars_count,
 		sizeof(*integration->w11_fact_modes));
+	integration->w11_inferred_facts = zend_mir_w03_calloc(
+		ssa->vars_count == 0 ? 1 : (uint32_t) ssa->vars_count,
+		sizeof(*integration->w11_inferred_facts));
+	integration->w11_inferred_fact_valid = zend_mir_w03_calloc(
+		ssa->vars_count == 0 ? 1 : (uint32_t) ssa->vars_count,
+		sizeof(*integration->w11_inferred_fact_valid));
 	if (integration->w11_suppressed_opcodes == NULL
+			|| integration->w11_scalarized_opcodes == NULL
+			|| integration->w11_elided_boxed_opcodes == NULL
+			|| integration->w11_boxed_ssa == NULL
+			|| integration->w11_machine_ssa == NULL
 			|| integration->w11_ssa_replacements == NULL
-			|| integration->w11_fact_modes == NULL) {
+			|| integration->w11_fact_modes == NULL
+			|| integration->w11_inferred_facts == NULL
+			|| integration->w11_inferred_fact_valid == NULL
+			|| integration->source.literal_count == ZEND_MIR_ID_MAX) {
 		return false;
 	}
+	integration->w11_synthetic_one_literal =
+		integration->source.literal_count;
 	for (index = 0; index < (uint32_t) ssa->vars_count; index++) {
 		integration->w11_ssa_replacements[index] = -1;
 		if (zend_mir_w11_original_fact_is_pointer(
 				&ssa->vars[index], &ssa->var_info[index])) {
-			integration->w11_fact_modes[index] = ZEND_MIR_W11_FACT_NULL;
+			integration->w11_fact_modes[index] =
+				ZEND_MIR_W11_FACT_SOURCE_ZVAL;
+		}
+	}
+	if (!zend_mir_w11_infer_scalar_facts(
+			integration, op_array, ssa)) {
+		return false;
+	}
+	for (index = 0; index < (uint32_t) ssa->vars_count; index++) {
+		if (integration->w11_inferred_fact_valid[index]) {
+			integration->w11_fact_modes[index] =
+				ZEND_MIR_W11_FACT_ORIGINAL;
 		}
 	}
 	for (index = 0; index < op_array->last; index++) {
@@ -474,6 +1648,23 @@ static bool zend_mir_w11_prepare_overlay(
 
 		if (opcode == ZEND_RETURN_BY_REF) {
 			continue;
+		}
+		if (zend_mir_w11_scalarizable_opcode(
+				integration, op_array, ssa, index)) {
+			integration->w11_scalarized_opcodes[index] = 1;
+			if (opcode == ZEND_PRE_INC || opcode == ZEND_POST_INC) {
+				integration->w11_has_synthetic_one = true;
+			}
+			continue;
+		}
+		if (zend_mir_w03_receive_fragment(integration, opcode)
+				&& ssa_op->result_def >= 0
+				&& ssa_op->result_def < ssa->vars_count
+				&& zend_mir_scalar_type_is_exact(
+					zend_mir_w11_declared_argument_scalar_type(
+						op_array, &op_array->opcodes[index]))) {
+			integration->w11_fact_modes[ssa_op->result_def] =
+				ZEND_MIR_W11_FACT_ORIGINAL;
 		}
 		if (!zend_mir_w03_receive_fragment(integration, opcode)
 				&& !call_fragment && !value_fragment
@@ -490,16 +1681,60 @@ static bool zend_mir_w11_prepare_overlay(
 					ZEND_MIR_W11_FACT_ORIGINAL;
 			}
 			zend_mir_w11_hide_definition(
-				integration, ssa_op->op1_def, ssa_op->op1_use);
+				integration, ssa_op->op1_def,
+				value_fragment && !call_fragment
+					? -1 : ssa_op->op1_use);
 			zend_mir_w11_hide_definition(
-				integration, ssa_op->op2_def, ssa_op->op2_use);
+				integration, ssa_op->op2_def,
+				value_fragment && !call_fragment
+					? -1 : ssa_op->op2_use);
 			if (!scalar_frame_observation) {
 				zend_mir_w11_hide_definition(
-					integration, ssa_op->result_def, ssa_op->result_use);
+					integration, ssa_op->result_def,
+					value_fragment && !call_fragment
+						? -1 : ssa_op->result_use);
+			}
+			/*
+			 * A source-backed value operation owns its result as a canonical
+			 * zval.  Type inference may describe the common fast path, but it
+			 * is not a proof that every semantic path has an unboxed machine
+			 * result (integer arithmetic may overflow to double, for example).
+			 * Do not let a removed value definition remain available to the
+			 * call model as an exact scalar SSA value.  Direct call results are
+			 * different: their generated call instruction defines the machine
+			 * result and therefore retains its declared-result fact.
+			 */
+			if (value_fragment && !call_fragment) {
+				const int definitions[3] = {
+					ssa_op->op1_def, ssa_op->op2_def, ssa_op->result_def
+				};
+				uint32_t definition_index;
+
+				for (definition_index = 0; definition_index < 3;
+						definition_index++) {
+					const int definition = definitions[definition_index];
+
+					if (definition >= 0
+							&& definition < ssa->vars_count) {
+						integration->w11_inferred_fact_valid[definition] = 0;
+						integration->w11_fact_modes[definition] =
+							ZEND_MIR_W11_FACT_HIDDEN;
+						memset(
+							&integration->w11_inferred_facts[definition],
+							0,
+							sizeof(integration->w11_inferred_facts[
+								definition]));
+					}
+				}
 			}
 		}
 	}
-
+	if (!zend_mir_w11_close_scalar_overlay(
+			integration, op_array, ssa)
+			|| !zend_mir_w11_plan_boxed_materialization(
+			integration, op_array, ssa)) {
+		return false;
+	}
 	/* Results consumed exclusively by source-backed call/value operations do
 	 * not belong to the scalar prerequisite view. */
 	for (index = 0; index < op_array->last; index++) {
@@ -580,8 +1815,9 @@ static bool zend_mir_w11_prepare_overlay(
 		for (operand_index = 0; operand_index < 3; operand_index++) {
 			int use;
 			int definition;
-			if (!zend_mir_w11_ssa_operand(
-					&ssa->ops[index], operand_index, &use, &definition)) {
+			if (!zend_mir_w11_projected_ssa_operand(
+					integration, &ssa->ops[index], index,
+					operand_index, &use, &definition)) {
 				return false;
 			}
 			if (use >= 0) {
@@ -605,10 +1841,17 @@ static bool zend_mir_w11_prepare_overlay(
 			definition >= 0
 			&& (uint32_t) definition < op_array->last
 			&& op_array->opcodes[definition].opcode == ZEND_FUNC_NUM_ARGS;
-		if (integration->w11_fact_modes[index] == ZEND_MIR_W11_FACT_NULL
+		bool declared_scalar_argument =
+			definition >= 0
+			&& (uint32_t) definition < op_array->last
+			&& zend_mir_scalar_type_is_exact(
+				zend_mir_w11_declared_argument_scalar_type(
+					op_array, &op_array->opcodes[definition]));
+		if (integration->w11_inferred_fact_valid[index]
 				|| (integration->w11_fact_modes[index]
 						== ZEND_MIR_W11_FACT_ORIGINAL
 					&& (scalar_frame_observation
+						|| declared_scalar_argument
 						|| zend_mir_frontend_fact_for_ssa(
 							op_array, ssa, index, &ignored)))) {
 			if (integration->w11_fact_count == ZEND_MIR_ID_MAX) {
@@ -668,10 +1911,60 @@ static bool zend_mir_w11_view_opcode_at(
 	}
 	ssa = zend_mir_source_ssa(&integration->source);
 	ssa_op = &ssa->ops[index];
-	if (out->op1.kind == ZEND_MIR_SOURCE_OPERAND_SSA
-			&& ssa_op->op1_use >= 0) {
-		out->op1.ssa_variable_id = (uint32_t) zend_mir_w11_resolve_ssa(
-			integration, ssa_op->op1_use);
+	if (integration->w11_scalarized_opcodes[index]
+			&& out->zend_opcode_number == ZEND_ASSIGN) {
+		zend_mir_source_operand_ref source = out->op2;
+		zend_mir_source_operand_ref destination = out->op1;
+
+		if (ssa_op->op1_def < 0) {
+			return false;
+		}
+		if (source.kind == ZEND_MIR_SOURCE_OPERAND_SSA
+				&& ssa_op->op2_use >= 0) {
+			source.ssa_variable_id = (uint32_t)
+				zend_mir_w11_resolve_ssa(
+					integration, ssa_op->op2_use);
+		}
+		out->zend_opcode_number = ZEND_QM_ASSIGN;
+		out->op1 = source;
+		zend_mir_w11_unused_operand(&out->op2);
+		out->result = destination;
+		out->result.kind = ZEND_MIR_SOURCE_OPERAND_SSA;
+		out->result.ssa_variable_id = (uint32_t) ssa_op->op1_def;
+		return true;
+	}
+	if (integration->w11_scalarized_opcodes[index]
+			&& (out->zend_opcode_number == ZEND_PRE_INC
+				|| out->zend_opcode_number == ZEND_POST_INC)) {
+		if (ssa_op->op1_use < 0 || ssa_op->op1_def < 0) {
+			return false;
+		}
+		out->zend_opcode_number = ZEND_ADD;
+		out->op1.kind = ZEND_MIR_SOURCE_OPERAND_SSA;
+		out->op1.ssa_variable_id = (uint32_t)
+			zend_mir_w11_resolve_ssa(integration, ssa_op->op1_use);
+		out->op2.kind = ZEND_MIR_SOURCE_OPERAND_LITERAL;
+		out->op2.slot_kind = ZEND_MIR_SOURCE_SLOT_KIND_INVALID;
+		out->op2.index = integration->w11_synthetic_one_literal;
+		out->op2.ssa_variable_id = ZEND_MIR_ID_INVALID;
+		out->result = out->op1;
+		out->result.ssa_variable_id = (uint32_t) ssa_op->op1_def;
+		return true;
+	}
+	if (ssa_op->op1_use >= 0) {
+		const int resolved =
+			zend_mir_w11_resolve_ssa(integration, ssa_op->op1_use);
+		const bool exact_source_slot =
+			out->op1.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+			&& resolved >= 0
+			&& resolved < integration->source.ssa_count
+			&& integration->w11_fact_modes[resolved]
+				== ZEND_MIR_W11_FACT_ORIGINAL;
+
+		if (out->op1.kind == ZEND_MIR_SOURCE_OPERAND_SSA
+				|| exact_source_slot) {
+			out->op1.ssa_variable_id = (uint32_t) resolved;
+		}
 	}
 	if (out->op2.kind == ZEND_MIR_SOURCE_OPERAND_SSA
 			&& ssa_op->op2_use >= 0) {
@@ -744,8 +2037,9 @@ static bool zend_mir_w11_nth_use_or_def(
 		for (operand_index = 0; operand_index < 3; operand_index++) {
 			int use;
 			int definition;
-			if (!zend_mir_w11_ssa_operand(
-					&ssa->ops[index], operand_index, &use, &definition)) {
+			if (!zend_mir_w11_projected_ssa_operand(
+					integration, &ssa->ops[index], index,
+					operand_index, &use, &definition)) {
 				return false;
 			}
 			*ssa_id_out = want_definition ? definition
@@ -814,7 +2108,9 @@ static bool zend_mir_w11_view_ssa_def_at(
 static uint32_t zend_mir_w11_view_literal_count(const void *context)
 {
 	const zend_mir_w03_integration *integration = context;
-	return integration == NULL ? 0 : integration->source.literal_count;
+	return integration == NULL ? 0
+		: integration->source.literal_count
+			+ (integration->w11_has_synthetic_one ? 1 : 0);
 }
 
 static bool zend_mir_w11_view_literal_at(
@@ -823,16 +2119,29 @@ static bool zend_mir_w11_view_literal_at(
 	const zend_mir_w03_integration *integration = context;
 
 	if (integration == NULL || out == NULL
-			|| index >= integration->source.literal_count) {
+			|| index >= zend_mir_w11_view_literal_count(context)) {
 		return false;
 	}
-	if (integration->base_source_view.literal_at(
-			integration->base_source_view.context, index, out)) {
+	if (index < integration->source.literal_count) {
+		if (integration->base_source_view.literal_at(
+				integration->base_source_view.context, index, out)) {
+			return true;
+		}
+		/*
+		 * The scalar source contract has no refcounted literal kind. Keep the
+		 * original stable index present as a neutral placeholder; executable
+		 * W09-W11 descriptors read the authoritative zval from the op array.
+		 */
+		memset(out, 0, sizeof(*out));
+		out->literal_index = index;
+		out->kind = ZEND_MIR_SOURCE_LITERAL_NULL;
 		return true;
 	}
 	memset(out, 0, sizeof(*out));
 	out->literal_index = index;
-	out->kind = ZEND_MIR_SOURCE_LITERAL_NULL;
+	out->kind = ZEND_MIR_SOURCE_LITERAL_LONG_BITS;
+	out->payload_bits = UINT64_C(1);
+	out->flags = ZEND_MIR_SOURCE_LITERAL_CANONICAL_SCALAR;
 	return true;
 }
 
@@ -1338,13 +2647,46 @@ static bool zend_mir_w11_fact_for_ssa(
 		return false;
 	}
 	mode = integration->w11_fact_modes[ssa_variable_id];
+	if (integration->w11_inferred_fact_valid[ssa_variable_id]) {
+		*out = integration->w11_inferred_facts[ssa_variable_id];
+		return true;
+	}
 	if (mode == ZEND_MIR_W11_FACT_HIDDEN) {
+		return false;
+	}
+	if (mode == ZEND_MIR_W11_FACT_SOURCE_ZVAL) {
+		/*
+		 * Pointer-bearing and reference-bearing SSA identities remain
+		 * authoritative zvals in their canonical Zend frame slots.  Publishing
+		 * a fabricated scalar fact would erase both their type and ownership;
+		 * consumers that support boxed values must use their source operand.
+		 */
 		return false;
 	}
 	op_array = zend_mir_source_op_array(&integration->source);
 	ssa = zend_mir_source_ssa(&integration->source);
 	if (mode == ZEND_MIR_W11_FACT_ORIGINAL) {
 		definition = ssa->vars[ssa_variable_id].definition;
+		if (definition >= 0 && (uint32_t) definition < op_array->last
+				&& zend_mir_w03_receive_fragment(
+					integration, op_array->opcodes[definition].opcode)) {
+			zend_mir_scalar_type_mask argument_type =
+				zend_mir_w11_declared_argument_scalar_type(
+					op_array, &op_array->opcodes[definition]);
+
+			if (zend_mir_scalar_type_is_exact(argument_type)) {
+				memset(out, 0, sizeof(*out));
+				out->value_id =
+					zend_mir_value_from_original_ssa(ssa_variable_id);
+				out->exact_type = argument_type;
+				out->flags = ZEND_MIR_VALUE_FACT_NON_REFCOUNTED;
+				out->provenance =
+					ZEND_MIR_FACT_PROVENANCE_TYPE_ANALYSIS;
+				out->provenance_source_position_id =
+					(uint32_t) definition;
+				return zend_mir_id_is_valid(out->value_id);
+			}
+		}
 		if (definition >= 0 && (uint32_t) definition < op_array->last
 				&& op_array->opcodes[definition].opcode
 					== ZEND_FUNC_NUM_ARGS) {
@@ -1372,16 +2714,7 @@ static bool zend_mir_w11_fact_for_ssa(
 		}
 		return true;
 	}
-	memset(out, 0, sizeof(*out));
-	out->value_id = zend_mir_value_from_original_ssa(ssa_variable_id);
-	out->exact_type = ZEND_MIR_SCALAR_TYPE_NULL;
-	out->flags = ZEND_MIR_VALUE_FACT_NON_REFCOUNTED;
-	out->provenance = ZEND_MIR_FACT_PROVENANCE_TYPE_ANALYSIS;
-	definition = ssa->vars[ssa_variable_id].definition;
-	out->provenance_source_position_id = definition >= 0
-		? (uint32_t) definition
-		: (op_array->last == 0 ? ZEND_MIR_ID_INVALID : 0);
-	return zend_mir_id_is_valid(out->value_id);
+	return false;
 }
 
 static bool zend_mir_w03_prepare_facts(
@@ -1409,10 +2742,23 @@ static bool zend_mir_w03_prepare_facts(
 		zend_mir_constant_record constant;
 
 		if (!integration->source_view.literal_at(
-				integration->source_view.context, index, &literal)
-				|| !zend_mir_w03_literal_fact(
-					&literal, &integration->facts[integration->fact_count],
-					&constant)) {
+				integration->source_view.context, index, &literal)) {
+			if (integration->w11) {
+				continue;
+			}
+			return false;
+		}
+		if (!zend_mir_w03_literal_fact(
+				&literal, &integration->facts[integration->fact_count],
+				&constant)) {
+			/*
+			 * W11 keeps the original literal table for executable value and
+			 * call descriptors. Only scalar literals participate in MIR value
+			 * facts; refcounted/string literals stay source-backed.
+			 */
+			if (integration->w11) {
+				continue;
+			}
 			return false;
 		}
 		integration->fact_count++;
@@ -1426,7 +2772,7 @@ static bool zend_mir_w03_prepare_facts(
 			fact.id = integration->fact_count;
 			integration->facts[integration->fact_count++] = fact;
 		}
-		if (integration->fact_count != capacity) {
+		if (integration->fact_count > capacity) {
 			return false;
 		}
 	} else {
@@ -1515,6 +2861,7 @@ static bool zend_mir_w03_prepare_logic(
 		uint32_t temporary_payload;
 		bool source_zval_return;
 		bool w09_executable;
+		bool w11_machine_branch;
 
 		if (!integration->source_view.opcode_at(
 				integration->source_view.context, index, &opcode)) {
@@ -1524,7 +2871,12 @@ static bool zend_mir_w03_prepare_logic(
 			&& opcode.zend_opcode_number == ZEND_RETURN
 			&& zend_mir_zend_source_w08_return_source_zval(
 				&integration->source, opcode.opline_index);
+		w11_machine_branch = integration->w11
+			&& zend_mir_w11_machine_condition(integration, &opcode);
 		w09_executable = integration->w09
+			&& !(integration->w11
+				&& integration->w11_elided_boxed_opcodes[
+					opcode.opline_index])
 			&& ((integration->w10
 					? (integration->w11
 						? zend_mir_w11_opcode_is_executable(
@@ -1533,8 +2885,9 @@ static bool zend_mir_w03_prepare_logic(
 							opcode.zend_opcode_number))
 					: zend_mir_w09_opcode_is_executable(
 						opcode.zend_opcode_number))
-				|| zend_mir_w09_source_value_branch(
-					opcode.zend_opcode_number)
+				|| (zend_mir_w09_source_value_branch(
+						opcode.zend_opcode_number)
+					&& !w11_machine_branch)
 				|| opcode.zend_opcode_number == ZEND_COALESCE
 				|| opcode.zend_opcode_number == ZEND_JMP_SET
 				|| opcode.zend_opcode_number == ZEND_CATCH
@@ -1543,16 +2896,23 @@ static bool zend_mir_w03_prepare_logic(
 				|| (integration->w10
 					&& (opcode.zend_opcode_number == ZEND_JMP_NULL
 						|| opcode.zend_opcode_number == ZEND_THROW)));
-		if ((!w09_executable && !source_zval_return
+		if (!w09_executable && !source_zval_return
 				&& !zend_mir_w03_add_logic_binding(
-					integration, &opcode.op1))
-				|| (!w09_executable && !zend_mir_w03_add_logic_binding(
-					integration, &opcode.op2))
-				|| (!w09_executable && !zend_mir_w03_add_logic_binding(
-					integration, &opcode.result))
-				|| !zend_mir_w03_checked_add(
-					integration->source.literal_count,
-					opcode_count, &temporary_payload)
+					integration, &opcode.op1)) {
+			return false;
+		}
+		if (!w09_executable && !zend_mir_w03_add_logic_binding(
+				integration, &opcode.op2)) {
+			return false;
+		}
+		if (!w09_executable && !zend_mir_w03_add_logic_binding(
+				integration, &opcode.result)) {
+			return false;
+		}
+		if (!zend_mir_w03_checked_add(
+						integration->source_view.literal_count(
+							integration->source_view.context),
+						opcode_count, &temporary_payload)
 				|| !zend_mir_w03_checked_add(
 					temporary_payload, index, &temporary_payload)) {
 			return false;
@@ -1957,10 +3317,24 @@ static bool zend_mir_w03_forward_add_value(
 	zend_mir_representation representation, zend_mir_ownership_state ownership)
 {
 	zend_mir_w03_integration *integration = context;
+	uint32_t ssa_variable_id;
 
-	return integration->target_mutator->add_value(
+	if (!integration->target_mutator->add_value(
 		integration->target_mutator->context, requested_id,
-		representation, ownership);
+		representation, ownership)) {
+		return false;
+	}
+	if (integration->w11 && integration->w11_machine_ssa != NULL
+			&& zend_mir_value_is_original_ssa(requested_id)) {
+		ssa_variable_id = requested_id;
+		if (ssa_variable_id < integration->source.ssa_count) {
+			integration->w11_machine_ssa[ssa_variable_id] =
+				representation == ZEND_MIR_REPRESENTATION_I1
+				|| representation == ZEND_MIR_REPRESENTATION_I64
+				|| representation == ZEND_MIR_REPRESENTATION_DOUBLE;
+		}
+	}
+	return true;
 }
 
 static bool zend_mir_w03_forward_add_constant(
@@ -1977,9 +3351,77 @@ static bool zend_mir_w03_forward_add_instruction(
 	zend_mir_instruction_id *out)
 {
 	zend_mir_w03_integration *integration = context;
+	zend_mir_instruction_record store;
+	zend_mir_instruction_id store_id;
+	zend_mir_value_id result_id;
+	const zend_mir_value_fact_ref *result_fact;
 
+	if (!integration->target_mutator->add_instruction(
+			integration->target_mutator->context, record, out)) {
+		return false;
+	}
+	result_id = record->result_id;
+	result_fact = zend_mir_w03_fact_for_value(integration, result_id);
+	if (integration->w11_pending_store) {
+		return false;
+	}
+	if (record->opcode == ZEND_MIR_OPCODE_COPY
+			&& integration->w11
+			&& integration->w11_boxed_ssa != NULL
+			&& integration->w11_machine_ssa != NULL
+			&& zend_mir_value_is_original_ssa(result_id)
+			&& result_id < integration->source.ssa_count
+			&& integration->w11_boxed_ssa[result_id]
+			&& !integration->w11_machine_ssa[result_id]) {
+		if (out == NULL) {
+			return false;
+		}
+		integration->w11_pending_store = true;
+		integration->w11_pending_store_instruction = *out;
+		integration->w11_pending_store_destination = result_id;
+		integration->w11_pending_store_block = record->block_id;
+		integration->w11_pending_store_source_position =
+			record->source_position_id;
+		return true;
+	}
+	/*
+	 * A scalar PHI whose inputs all name the same canonical Zend slot needs
+	 * no materialization in the block. Its boxed dependencies are propagated
+	 * to the incoming definitions, which store on their respective edges.
+	 * Emitting a store here would also split the required leading PHI run.
+	 */
+	if (record->opcode == ZEND_MIR_OPCODE_PHI
+			|| record->representation == ZEND_MIR_REPRESENTATION_ZVAL
+			|| !integration->w11 || integration->w11_boxed_ssa == NULL
+			|| !zend_mir_value_is_original_ssa(result_id)
+			|| result_id >= integration->source.ssa_count
+			|| integration->w11_fact_modes[result_id]
+				== ZEND_MIR_W11_FACT_HIDDEN
+			|| !integration->w11_machine_ssa[result_id]
+			|| !integration->w11_boxed_ssa[result_id]
+			|| result_fact == NULL
+			|| result_fact->exact_type == ZEND_MIR_SCALAR_TYPE_NULL
+			|| !zend_mir_scalar_type_is_exact(result_fact->exact_type)) {
+		return true;
+	}
+	memset(&store, 0, sizeof(store));
+	store.id = ZEND_MIR_ID_INVALID;
+	store.block_id = record->block_id;
+	store.opcode = ZEND_MIR_OPCODE_ZVAL_STORE;
+	store.representation = ZEND_MIR_REPRESENTATION_VOID;
+	store.result_id = ZEND_MIR_ID_INVALID;
+	store.frame_state_id = ZEND_MIR_ID_INVALID;
+	store.source_position_id = record->source_position_id;
+	store.effects = ZEND_MIR_EFFECT_MASK(ZEND_MIR_EFFECT_WRITE_MEMORY);
+	store.writes =
+		ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_FRAME_LOCALS)
+		| ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_FRAME_TEMPS);
 	return integration->target_mutator->add_instruction(
-		integration->target_mutator->context, record, out);
+			integration->target_mutator->context, &store, &store_id)
+		&& integration->target_mutator->add_operand(
+			integration->target_mutator->context, store_id, result_id)
+		&& integration->target_mutator->add_operand(
+			integration->target_mutator->context, store_id, result_id);
 }
 
 static bool zend_mir_w03_forward_add_operand(
@@ -1987,9 +3429,53 @@ static bool zend_mir_w03_forward_add_operand(
 	zend_mir_value_id value_id)
 {
 	zend_mir_w03_integration *integration = context;
+	zend_mir_instruction_record store;
+	zend_mir_instruction_id store_id;
+	const zend_mir_value_fact_ref *source_fact;
 
-	return integration->target_mutator->add_operand(
-		integration->target_mutator->context, instruction_id, value_id);
+	if (!integration->target_mutator->add_operand(
+			integration->target_mutator->context, instruction_id, value_id)) {
+		return false;
+	}
+	if (!integration->w11_pending_store) {
+		return true;
+	}
+	if (instruction_id != integration->w11_pending_store_instruction) {
+		return false;
+	}
+	source_fact = zend_mir_w03_fact_for_value(integration, value_id);
+	if (source_fact == NULL
+			|| !zend_mir_scalar_type_is_exact(source_fact->exact_type)) {
+		/*
+		 * A boxed COPY already names the canonical source zval.  Only an
+		 * exact scalar payload needs to be materialized into the destination
+		 * slot; references and other boxed values must retain their zval
+		 * identity instead of being reinterpreted as machine scalars.
+		 */
+		integration->w11_pending_store = false;
+		return true;
+	}
+	memset(&store, 0, sizeof(store));
+	store.id = ZEND_MIR_ID_INVALID;
+	store.block_id = integration->w11_pending_store_block;
+	store.opcode = ZEND_MIR_OPCODE_ZVAL_STORE;
+	store.representation = ZEND_MIR_REPRESENTATION_VOID;
+	store.result_id = ZEND_MIR_ID_INVALID;
+	store.frame_state_id = ZEND_MIR_ID_INVALID;
+	store.source_position_id =
+		integration->w11_pending_store_source_position;
+	store.effects = ZEND_MIR_EFFECT_MASK(ZEND_MIR_EFFECT_WRITE_MEMORY);
+	store.writes =
+		ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_FRAME_LOCALS)
+		| ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_FRAME_TEMPS);
+	integration->w11_pending_store = false;
+	return integration->target_mutator->add_instruction(
+			integration->target_mutator->context, &store, &store_id)
+		&& integration->target_mutator->add_operand(
+			integration->target_mutator->context, store_id, value_id)
+		&& integration->target_mutator->add_operand(
+			integration->target_mutator->context, store_id,
+			integration->w11_pending_store_destination);
 }
 
 static bool zend_mir_w03_forward_add_edge(
@@ -2215,6 +3701,39 @@ static bool zend_mir_w03_seed_module(zend_mir_w03_integration *integration)
 			return false;
 		}
 	}
+	for (index = 0; index < integration->logic_proof_count; index++) {
+		const zend_mir_logic_opcode_proof *proof =
+			&integration->logic_proofs[index];
+		zend_mir_source_opcode_ref opcode;
+		zend_mir_value_fact_ref fact;
+		zend_mir_value_fact_id fact_id;
+
+		if (!integration->source_view.opcode_at(
+				integration->source_view.context, proof->opline_index,
+				&opcode)) {
+			return false;
+		}
+		if (opcode.zend_opcode_number != ZEND_IS_NOT_IDENTICAL
+				&& opcode.zend_opcode_number != ZEND_IS_NOT_EQUAL) {
+			continue;
+		}
+		memset(&fact, 0, sizeof(fact));
+		fact.id = ZEND_MIR_ID_INVALID;
+		fact.value_id = proof->temporary_value_id;
+		fact.exact_type = ZEND_MIR_SCALAR_TYPE_I1;
+		fact.flags = ZEND_MIR_VALUE_FACT_NON_REFCOUNTED;
+		fact.provenance = ZEND_MIR_FACT_PROVENANCE_CONTRACT;
+		fact.provenance_source_position_id = proof->opline_index;
+		if (!integration->target_mutator->add_value(
+					integration->target_mutator->context,
+					fact.value_id, ZEND_MIR_REPRESENTATION_I1,
+					ZEND_MIR_OWNERSHIP_STATE_OWNED)
+				|| !integration->target_mutator->add_value_fact(
+					integration->target_mutator->context, &fact,
+					&fact_id)) {
+			return false;
+		}
+	}
 	for (index = 0; index < ssa_count; index++) {
 		zend_mir_source_ssa_ref ssa;
 		zend_mir_value_id value_id;
@@ -2364,8 +3883,14 @@ static void zend_mir_w03_release(zend_mir_w03_integration *integration)
 	free(integration->logic_proofs);
 	free(integration->logic_bindings);
 	free(integration->facts);
+	free(integration->w11_inferred_fact_valid);
+	free(integration->w11_inferred_facts);
 	free(integration->w11_fact_modes);
 	free(integration->w11_ssa_replacements);
+	free(integration->w11_machine_ssa);
+	free(integration->w11_boxed_ssa);
+	free(integration->w11_elided_boxed_opcodes);
+	free(integration->w11_scalarized_opcodes);
 	free(integration->w11_suppressed_opcodes);
 	free(integration->projected_ssa_var_info);
 	free(integration->projected_ssa_vars);
@@ -2538,7 +4063,11 @@ static bool zend_mir_w09_post_call_composition(
 		&& zend_mir_w09_emit_executable_values(
 			integration->w09_op_array, lowering_context, module,
 			control_flow_map, &integration->lifetime_context,
-			integration->w10, integration->w11);
+			integration->w10, integration->w11,
+			integration->w11
+				? integration->w11_elided_boxed_opcodes : NULL,
+			integration->w11
+				? integration->w09_op_array->last : 0);
 }
 
 static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
@@ -2682,26 +4211,47 @@ static zend_mir_w05_lowering_result zend_mir_lower_direct_user_op_array(
 		status = ZEND_MIR_LOWERING_FAILED;
 		frontend_diagnostic.code = ZEND_MIRL_MUTATION_FAILED;
 	}
-	if (status != ZEND_MIR_LOWERING_SUCCESS
-			|| !(w11_execution
-				? zend_mir_w11_source_view(&integration)
-				: zend_mir_zend_source_view(
-					&integration.source, &integration.source_view))
-			|| !zend_mir_zend_source_call_view(&integration.source, &calls)
-			|| !zend_mir_zend_source_call_target_resolver(
-				&integration.source, &resolver)
-			|| !zend_mir_w03_prepare_facts(&integration)
-			|| !zend_mir_w03_track_lifetime_values(&integration)
-			|| !zend_mir_w03_prepare_slots(&integration, source_op_array)
-			|| !zend_mir_w03_prepare_logic(&integration)
-			|| !zend_mir_w03_prepare_providers(&integration)) {
+	if (status != ZEND_MIR_LOWERING_SUCCESS) {
+		zend_mir_w03_release(&integration);
+		return zend_mir_w05_integration_result(
+			status, frontend_diagnostic.code);
+	}
+#define ZEND_MIR_W11_PREPARE_STEP(expression) \
+	if (!(expression)) { \
+		status = ZEND_MIR_LOWERING_FAILED; \
+		goto w11_prepare_failed; \
+	}
+	ZEND_MIR_W11_PREPARE_STEP(
+		w11_execution
+			? zend_mir_w11_source_view(&integration)
+			: zend_mir_zend_source_view(
+				&integration.source, &integration.source_view));
+	ZEND_MIR_W11_PREPARE_STEP(
+		zend_mir_zend_source_call_view(&integration.source, &calls));
+	ZEND_MIR_W11_PREPARE_STEP(
+		zend_mir_zend_source_call_target_resolver(
+			&integration.source, &resolver));
+	ZEND_MIR_W11_PREPARE_STEP(
+		zend_mir_w03_prepare_facts(&integration));
+	ZEND_MIR_W11_PREPARE_STEP(
+		zend_mir_w03_track_lifetime_values(&integration));
+	ZEND_MIR_W11_PREPARE_STEP(
+		zend_mir_w03_prepare_slots(&integration, source_op_array));
+	ZEND_MIR_W11_PREPARE_STEP(
+		zend_mir_w03_prepare_logic(&integration));
+	ZEND_MIR_W11_PREPARE_STEP(
+		zend_mir_w03_prepare_providers(&integration));
+#undef ZEND_MIR_W11_PREPARE_STEP
+	goto w11_prepare_complete;
+
+w11_prepare_failed:
 		zend_mir_w03_release(&integration);
 		return zend_mir_w05_integration_result(
 			status == ZEND_MIR_LOWERING_SUCCESS
 				? ZEND_MIR_LOWERING_FAILED : status,
-			status == ZEND_MIR_LOWERING_SUCCESS
+			frontend_diagnostic.code == ZEND_MIRL_OK
 				? ZEND_MIRL_MUTATION_FAILED : frontend_diagnostic.code);
-	}
+w11_prepare_complete:
 	zend_mir_w03_prepare_module_ops(&integration, module_ops);
 	memset(&shape, 0, sizeof(shape));
 	for (index = 0; index < integration.source_view.block_count(

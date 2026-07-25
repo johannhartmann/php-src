@@ -1885,7 +1885,11 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 			|| (descriptor->flags
 				& ~(ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME
 					| ZEND_NATIVE_DIRECT_CALL_CONSUME_RECEIVER
-					| ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE)) != 0
+					| ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE
+					| ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME
+					| ZEND_NATIVE_DIRECT_CALL_INLINE_LEAF_BODY
+					| ZEND_NATIVE_DIRECT_CALL_REQUIRE_SCALAR_RESULT
+					| ZEND_NATIVE_DIRECT_CALL_INLINE_BOXED_LEAF_BODY)) != 0
 			|| descriptor->source_position >= caller->func->op_array.last) {
 		zend_throw_error(NULL, "Invalid direct native call descriptor");
 		return result;
@@ -2136,6 +2140,8 @@ zend_native_direct_call_result zend_native_call_direct_leave(
 		: zend_native_direct_operand(
 			caller, &descriptor->result_operand, false);
 	if (status == ZEND_NATIVE_RETURNED
+			&& (descriptor->flags
+				& ZEND_NATIVE_DIRECT_CALL_REQUIRE_SCALAR_RESULT) != 0
 			&& descriptor->result_type != ZEND_MIR_SCALAR_TYPE_NONE
 			&& (return_value == NULL || !zend_native_direct_scalar_payload(
 				return_value, descriptor->result_type, &result.payload))) {

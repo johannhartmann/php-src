@@ -1075,6 +1075,12 @@ static bool zend_mir_dump_value_model(zend_mir_dump_context *dump)
 					|| !zend_mir_dump_literal(
 						dump, " frame-storage ")
 					|| !zend_mir_dump_u32(dump, record.storage_id)
+					|| (record.frame_argument_ordinal_plus_one != 0
+						&& (!zend_mir_dump_literal(
+								dump, " frame-argument ")
+							|| !zend_mir_dump_u32(
+								dump,
+								record.frame_argument_ordinal_plus_one - 1)))
 					|| !zend_mir_dump_literal(dump, "\n")) {
 				return false;
 			}

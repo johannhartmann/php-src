@@ -746,9 +746,15 @@ static bool zend_mir_value_validate_call_transfers(
 		module, call_targets, zend_mir_call_target_ref);
 	if (source_backed) {
 		for (index = 0; index < module->call_arguments.count; index++) {
+			bool borrowed_scalar = arguments[index].ownership
+				== ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR;
 			if (arguments[index].id != index
-					|| arguments[index].ownership
-						== ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR) {
+					|| (borrowed_scalar
+						&& (!zend_mir_id_is_valid(arguments[index].value_id)
+							|| arguments[index].source_mode
+								!= ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE))
+					|| (!borrowed_scalar
+						&& zend_mir_id_is_valid(arguments[index].value_id))) {
 				return false;
 			}
 		}
@@ -838,6 +844,8 @@ static bool zend_mir_value_validate_locations(
 		if (!zend_mir_id_is_valid(location->value_id)
 				|| (location->value_id & ZEND_MIR_VALUE_SYNTHETIC_BIT) != 0
 				|| !zend_mir_id_is_valid(location->storage_id)
+				|| location->frame_argument_ordinal_plus_one
+					== ZEND_MIR_ID_INVALID
 				|| !zend_mir_module_find_value(
 					module, location->value_id, &value_index)
 				|| (have_previous && location->value_id <= previous)) {
@@ -868,15 +876,22 @@ static bool zend_mir_value_validate_executable_operations(
 		const bool attached_instruction =
 			operation->opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 			|| operation->opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH
-			|| operation->opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL;
+			|| operation->opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
+			|| operation->opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL;
+		const bool compatible_boxed_branch =
+			operation->opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+			&& operation->id < module->instructions.count
+			&& instructions[operation->id].record.opcode
+				== ZEND_MIR_OPCODE_COND_BRANCH;
 
 		if ((attached_instruction
 				? operation->id >= module->instructions.count
 					|| instructions[operation->id].record.id != operation->id
 					|| instructions[operation->id].record.block_id
 						!= operation->block_id
-					|| instructions[operation->id].record.opcode
-						!= operation->opcode
+					|| (instructions[operation->id].record.opcode
+							!= operation->opcode
+						&& !compatible_boxed_branch)
 					|| instructions[operation->id].record.source_position_id
 						!= operation->source_position_id
 				: zend_mir_id_is_valid(operation->id))

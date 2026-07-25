@@ -77,7 +77,9 @@ bool zend_mir_w09_emit_executable_values(
 	const zend_mir_control_flow_map *control_flow_map,
 	struct _zend_mir_straight_line_provider_context *frame_context,
 	bool w10_execution,
-	bool w11_execution);
+	bool w11_execution,
+	const uint8_t *scalarized_opcodes,
+	uint32_t scalarized_opcode_count);
 
 zend_mir_lowering_diagnostic_code zend_mir_w06_preflight_literals(
 	const struct _zend_op_array *op_array);

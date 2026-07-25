@@ -30,6 +30,15 @@ typedef enum _zend_mir_source_literal_kind {
 	ZEND_MIR_SOURCE_LITERAL_KIND_INVALID = -1
 } zend_mir_source_literal_kind;
 
+typedef enum _zend_mir_source_literal_flag {
+	/*
+	 * The source table proved that this record is the complete, canonical
+	 * value of a non-refcounted scalar literal. W11 source-backed placeholder
+	 * records intentionally leave this bit clear.
+	 */
+	ZEND_MIR_SOURCE_LITERAL_CANONICAL_SCALAR = UINT32_C(1) << 0
+} zend_mir_source_literal_flag;
+
 typedef enum _zend_mir_source_block_flag {
 	ZEND_MIR_SOURCE_BLOCK_ENTRY = UINT32_C(1) << 0,
 	ZEND_MIR_SOURCE_BLOCK_REACHABLE = UINT32_C(1) << 1,
@@ -101,6 +110,7 @@ typedef struct _zend_mir_source_literal_ref {
 	uint32_t literal_index;
 	zend_mir_source_literal_kind kind;
 	uint64_t payload_bits;
+	uint32_t flags;
 } zend_mir_source_literal_ref;
 
 typedef struct _zend_mir_source_block_ref {

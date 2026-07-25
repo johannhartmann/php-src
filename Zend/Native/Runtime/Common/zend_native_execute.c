@@ -18,18 +18,21 @@ typedef struct _zend_native_execution_state {
 	bool observer_finished;
 } zend_native_execution_state;
 
-void zend_native_execution_cleanup_frame(zend_execute_data *execute_data)
+static void zend_native_execution_cleanup_frame_ex(
+	zend_execute_data *execute_data, bool cleanup_unfinished)
 {
 	uint32_t call_info = ZEND_CALL_INFO(execute_data);
 
 	/*
 	 * The VM's leave helper destroys every compiled variable before releasing
 	 * a user frame.  Native entries return to C instead, so this boundary owns
-	 * the equivalent cleanup exactly once. Release live temporaries at the
-	 * current source opline on every exit; the return helper has already moved
-	 * its result and marked the source slot undefined.
+	 * the equivalent cleanup exactly once. An exceptional or bailout exit also
+	 * releases live temporaries at the current source opline. A completed native
+	 * return has already consumed those temporaries in program order, and its
+	 * final scalar instruction need not cross a helper solely to publish an
+	 * opline, so it must not be treated as unfinished execution.
 	 */
-	if (execute_data->opline != NULL) {
+	if (cleanup_unfinished && execute_data->opline != NULL) {
 		const zend_op_array *op_array = &execute_data->func->op_array;
 		if (execute_data->opline >= op_array->opcodes
 				&& execute_data->opline < op_array->opcodes + op_array->last) {
@@ -66,6 +69,11 @@ void zend_native_execution_cleanup_frame(zend_execute_data *execute_data)
 	}
 }
 
+void zend_native_execution_cleanup_frame(zend_execute_data *execute_data)
+{
+	zend_native_execution_cleanup_frame_ex(execute_data, true);
+}
+
 static void zend_native_execution_diagnostic(
 	zend_native_diagnostic *diagnostic,
 	zend_native_diagnostic_code code,
@@ -81,6 +89,8 @@ static void zend_native_execution_diagnostic(
 zend_native_status zend_native_execution_finish_direct_frame(
 	zend_execute_data *execute_data, zend_native_status status)
 {
+	bool frame_returned = status == ZEND_NATIVE_RETURNED;
+
 	if (status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
 		status = ZEND_NATIVE_EXCEPTION;
 	}
@@ -111,7 +121,7 @@ zend_native_status zend_native_execution_finish_direct_frame(
 			status = ZEND_NATIVE_EXCEPTION;
 		}
 	}
-	zend_native_execution_cleanup_frame(execute_data);
+	zend_native_execution_cleanup_frame_ex(execute_data, !frame_returned);
 	return status;
 }
 
@@ -124,6 +134,7 @@ static zend_native_status zend_native_execute_frame_impl(
 	zend_native_execution_state *state;
 	zend_native_execution_context context;
 	zend_native_frame_entry_t entry;
+	bool frame_returned;
 
 	entry = zend_native_code_frame_entry(code);
 	if (code == NULL || execute_data == NULL || entry == NULL
@@ -161,6 +172,7 @@ static zend_native_status zend_native_execute_frame_impl(
 		state->status = EG(exception) != NULL
 			? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
 	} zend_end_try();
+	frame_returned = state->status == ZEND_NATIVE_RETURNED;
 
 	if (state->status == ZEND_NATIVE_BAILOUT) {
 		zend_native_call_direct_unwind(execute_data);
@@ -220,7 +232,7 @@ static zend_native_status zend_native_execute_frame_impl(
 		} zend_end_try();
 	}
 
-	zend_native_execution_cleanup_frame(execute_data);
+	zend_native_execution_cleanup_frame_ex(execute_data, !frame_returned);
 	/* A frame entered through zend_execute_ex is normally finalized by
 	 * zend_leave_helper(), which also releases the retained closure or
 	 * receiver.  The request-local native reentry hook replaces that helper;

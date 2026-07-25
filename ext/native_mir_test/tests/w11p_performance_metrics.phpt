@@ -13,12 +13,12 @@ $result = native_mir_test_compile_execute(
 <?php
 function metrics_leaf(int $value): int
 {
-    return $value + 1;
+    return $value;
 }
 
 function metrics_root(int $count): int
 {
-    $value = 0;
+    $value = $count;
     for ($index = 0; $index < $count; $index++) {
         $value = metrics_leaf($value);
     }
@@ -36,7 +36,7 @@ PHP,
 
 $performance = $result['execution']['performance'];
 printf(
-    "%s return=%d executions=%d registered=%d compiled=%d direct=%d "
+    "%s return=%d executions=%d registered=%d compiled=%d direct=%d leaf=%d "
     . "decode=%d helper=%d heap=%d catcher=%d "
     . "compile=%s execute=%s bytes=%s\n",
     $result['status'],
@@ -45,6 +45,7 @@ printf(
     $performance['registered_codeunits'],
     $performance['compiled_codeunits'],
     $performance['direct_call_sites'],
+    $performance['direct_leaf_scalar_sites'],
     $performance['source_opline_decode_sites'],
     $performance['inner_call_runtime_helper_calls'],
     $performance['inner_call_heap_allocations'],
@@ -55,4 +56,4 @@ printf(
 );
 ?>
 --EXPECT--
-accepted return=100 executions=10 registered=3 compiled=2 direct=1 decode=0 helper=0 heap=0 catcher=0 compile=yes execute=yes bytes=yes
+accepted return=100 executions=10 registered=3 compiled=2 direct=1 leaf=1 decode=0 helper=0 heap=0 catcher=0 compile=yes execute=yes bytes=yes

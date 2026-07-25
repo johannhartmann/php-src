@@ -550,6 +550,24 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 			| ZEND_NATIVE_RUNTIME_EFFECT_OBSERVE
 			| ZEND_NATIVE_RUNTIME_EFFECT_BAILOUT,
 		(const void *) zend_native_value_func_get_args},
+	{ZEND_NATIVE_HELPER_ZVAL_STORE_INTEGER,
+		ZEND_NATIVE_EFFECT_FRAME_WRITE
+			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_EFFECT_MAY_FAIL
+			| ZEND_NATIVE_EFFECT_MAY_REENTER,
+		(const void *) zend_native_zval_store_integer},
+	{ZEND_NATIVE_HELPER_ZVAL_STORE_DOUBLE,
+		ZEND_NATIVE_EFFECT_FRAME_WRITE
+			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_EFFECT_MAY_FAIL
+			| ZEND_NATIVE_EFFECT_MAY_REENTER,
+		(const void *) zend_native_zval_store_double},
+	{ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW,
+		ZEND_NATIVE_RUNTIME_EFFECT_REFCOUNT
+			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_EFFECT_MAY_FAIL
+			| ZEND_NATIVE_EFFECT_MAY_REENTER,
+		(const void *) zend_native_zval_release_slow},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {

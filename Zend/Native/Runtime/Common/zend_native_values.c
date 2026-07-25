@@ -10,6 +10,7 @@
 
 #include "Zend/Native/Lowering/zend_mir_lowering_source.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 typedef struct _zend_native_explicit_value_operation {
@@ -622,6 +623,40 @@ zend_native_status zend_native_value_func_get_args(
 	} ZEND_HASH_FILL_END();
 	Z_ARRVAL_P(result)->nNumOfElements = result_size;
 	return ZEND_NATIVE_RETURNED;
+}
+
+void zend_native_zval_store_integer(
+	zval *slot, uint64_t payload, uint32_t exact_type)
+{
+	ZEND_ASSERT(slot != NULL);
+	zval_ptr_dtor_nogc(slot);
+	switch (exact_type) {
+		case ZEND_MIR_SCALAR_TYPE_NULL:
+			ZVAL_NULL(slot);
+			break;
+		case ZEND_MIR_SCALAR_TYPE_I1:
+			ZVAL_BOOL(slot, payload != 0);
+			break;
+		case ZEND_MIR_SCALAR_TYPE_I64:
+			ZVAL_LONG(slot, (zend_long) payload);
+			break;
+		default:
+			ZEND_UNREACHABLE();
+	}
+}
+
+void zend_native_zval_store_double(zval *slot, double value)
+{
+	ZEND_ASSERT(slot != NULL);
+	zval_ptr_dtor_nogc(slot);
+	ZVAL_DOUBLE(slot, value);
+}
+
+void zend_native_zval_release_slow(zval *slot)
+{
+	ZEND_ASSERT(slot != NULL);
+	ZEND_ASSERT(Z_REFCOUNTED_P(slot));
+	zval_ptr_dtor_nogc(slot);
 }
 
 zend_native_status zend_native_value_unset_cv(
@@ -1369,7 +1404,8 @@ zend_native_status zend_native_value_isset_isempty_cv(
 		truth = !zend_is_true(value);
 	} else {
 		truth = Z_TYPE_P(value) > IS_NULL
-			&& (!Z_ISREF_P(value) || Z_TYPE_P(Z_REFVAL_P(value)) != IS_NULL);
+			&& (!Z_ISREF_P(value)
+				|| Z_TYPE_P(Z_REFVAL_P(value)) > IS_NULL);
 	}
 	ZVAL_BOOL(result, truth);
 	return ZEND_NATIVE_RETURNED;

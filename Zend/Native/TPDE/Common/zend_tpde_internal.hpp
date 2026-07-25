@@ -144,9 +144,13 @@ struct zend_tpde_instruction {
 	_zend_native_direct_internal_call_descriptor *direct_internal_call;
 	zend_native_source_effect_kind source_effect;
 	zend_mir_scalar_type_mask source_effect_exact_type;
+	zend_mir_storage_id zval_store_storage_id;
 	zend_native_runtime_helper_id runtime_helper;
 	zend_mir_executable_value_ref value_operation;
 	bool has_value_operation;
+	bool direct_scalar_return;
+	zend_mir_scalar_type_mask direct_scalar_return_type;
+	uint32_t direct_scalar_return_offset;
 	uint32_t source_opline_index;
 };
 
@@ -182,6 +186,35 @@ struct zend_tpde_string_identity {
 	bool inverted;
 };
 
+struct zend_tpde_long_operand {
+	uint32_t offset;
+	bool literal;
+};
+
+struct zend_tpde_long_binary {
+	zend_tpde_long_operand left;
+	zend_tpde_long_operand right;
+	uint32_t result_offset;
+	uint32_t source_opcode;
+};
+
+struct zend_tpde_long_assign_op {
+	uint32_t left_offset;
+	zend_tpde_long_operand right;
+	uint32_t result_offset;
+	uint32_t source_opcode;
+	bool has_result;
+	bool consume_right;
+};
+
+struct zend_tpde_long_incdec {
+	uint32_t operand_offset;
+	uint32_t result_offset;
+	bool has_result;
+	bool increment;
+	bool post;
+};
+
 struct zend_tpde_value_condition {
 	uint32_t operand_offset;
 };
@@ -203,6 +236,11 @@ struct zend_tpde_object_property_write {
 	uint32_t value_offset;
 	uint32_t cache_offset;
 	bool move_value;
+};
+
+struct zend_tpde_dynamic_fetch_read {
+	uint32_t name_offset;
+	uint32_t result_offset;
 };
 
 /*
@@ -454,6 +492,227 @@ static inline bool zend_tpde_string_identity_at(
 	return true;
 }
 
+static inline bool zend_tpde_long_operand_at(
+	const zend_mir_source_operand_ref &operand,
+	zend_mir_storage_id storage_id,
+	zend_tpde_long_operand *out)
+{
+	uint64_t offset;
+
+	if (out == nullptr) {
+		return false;
+	}
+	if (operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+		offset = uint64_t{operand.index} * sizeof(zval);
+		out->literal = true;
+	} else if ((operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+			&& storage_id != ZEND_MIR_ID_INVALID) {
+		offset =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + storage_id) * sizeof(zval);
+		out->literal = false;
+	} else {
+		return false;
+	}
+	if (offset > UINT32_MAX) {
+		return false;
+	}
+	out->offset = static_cast<uint32_t>(offset);
+	return true;
+}
+
+static inline bool zend_tpde_long_binary_at(
+	const zend_tpde_instruction &instruction,
+	zend_tpde_long_binary *out)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	uint64_t result_offset;
+
+	if (out == nullptr || !instruction.has_value_operation
+			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_BINARY_OP
+			|| (operation.source_opcode != ZEND_ADD
+				&& operation.source_opcode != ZEND_SUB
+				&& operation.source_opcode != ZEND_BW_OR
+				&& operation.source_opcode != ZEND_BW_AND
+				&& operation.source_opcode != ZEND_BW_XOR
+				&& operation.source_opcode != ZEND_IS_IDENTICAL
+				&& operation.source_opcode != ZEND_IS_NOT_IDENTICAL
+				&& operation.source_opcode != ZEND_IS_EQUAL
+				&& operation.source_opcode != ZEND_IS_NOT_EQUAL
+				&& operation.source_opcode != ZEND_IS_SMALLER
+				&& operation.source_opcode
+					!= ZEND_IS_SMALLER_OR_EQUAL)
+			|| (operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+				&& operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
+			|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+				&& operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_VAR)
+			|| operation.result_storage_id == ZEND_MIR_ID_INVALID
+			|| !zend_tpde_long_operand_at(
+				operation.op1, operation.op1_storage_id, &out->left)
+			|| !zend_tpde_long_operand_at(
+				operation.op2, operation.op2_storage_id, &out->right)
+			|| (!out->left.literal
+				&& operation.op1_storage_id
+					== operation.result_storage_id)
+			|| (!out->right.literal
+				&& operation.op2_storage_id
+					== operation.result_storage_id)) {
+		return false;
+	}
+	result_offset =
+		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
+			* sizeof(zval);
+	if (result_offset > UINT32_MAX) {
+		return false;
+	}
+	out->result_offset = static_cast<uint32_t>(result_offset);
+	out->source_opcode = operation.source_opcode;
+	return true;
+}
+
+static inline bool zend_tpde_long_assign_op_at(
+	const zend_tpde_instruction &instruction,
+	zend_tpde_long_assign_op *out)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	uint64_t left_offset;
+	uint64_t right_offset;
+	uint64_t result_offset = 0;
+	bool has_result;
+
+	if (out == nullptr || !instruction.has_value_operation
+			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_ASSIGN_OP
+			|| (operation.extended_value != ZEND_ADD
+				&& operation.extended_value != ZEND_SUB
+				&& operation.extended_value != ZEND_BW_OR
+				&& operation.extended_value != ZEND_BW_AND
+				&& operation.extended_value != ZEND_BW_XOR)
+			|| (operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+				&& operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
+			|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+			|| operation.op1_storage_id == ZEND_MIR_ID_INVALID) {
+		return false;
+	}
+	left_offset =
+		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
+			* sizeof(zval);
+	if (operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+			&& operation.op2_storage_id != ZEND_MIR_ID_INVALID) {
+		right_offset = operation.op2_storage_id * sizeof(zval);
+		out->right.literal = true;
+	} else if ((operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& (operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+				|| operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR
+				|| operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP)
+			&& operation.op2_storage_id != ZEND_MIR_ID_INVALID
+			&& operation.op2_storage_id != operation.op1_storage_id) {
+		right_offset =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op2_storage_id)
+				* sizeof(zval);
+		out->right.literal = false;
+	} else {
+		return false;
+	}
+	has_result = operation.result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED;
+	if (has_result
+			&& ((operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+					&& operation.result.kind
+						!= ZEND_MIR_SOURCE_OPERAND_SSA)
+				|| (operation.result.slot_kind
+						!= ZEND_MIR_SOURCE_SLOT_VAR
+					&& operation.result.slot_kind
+						!= ZEND_MIR_SOURCE_SLOT_TMP)
+				|| operation.result_storage_id == ZEND_MIR_ID_INVALID
+				|| operation.result_storage_id
+					== operation.op1_storage_id
+				|| (!out->right.literal
+					&& operation.result_storage_id
+						== operation.op2_storage_id))) {
+		return false;
+	}
+	if (has_result) {
+		result_offset =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
+				* sizeof(zval);
+	}
+	if (left_offset > UINT32_MAX || right_offset > UINT32_MAX
+			|| result_offset > UINT32_MAX) {
+		return false;
+	}
+	out->left_offset = static_cast<uint32_t>(left_offset);
+	out->right.offset = static_cast<uint32_t>(right_offset);
+	out->result_offset = static_cast<uint32_t>(result_offset);
+	out->source_opcode = operation.extended_value;
+	out->has_result = has_result;
+	out->consume_right =
+		!out->right.literal
+		&& (operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR
+			|| operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP);
+	return true;
+}
+
+static inline bool zend_tpde_long_incdec_at(
+	const zend_tpde_instruction &instruction,
+	zend_tpde_long_incdec *out)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	uint64_t operand_offset;
+	uint64_t result_offset = 0;
+	bool has_result;
+
+	if (out == nullptr || !instruction.has_value_operation
+			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_INCDEC
+			|| (operation.source_opcode != ZEND_PRE_INC
+				&& operation.source_opcode != ZEND_PRE_DEC
+				&& operation.source_opcode != ZEND_POST_INC
+				&& operation.source_opcode != ZEND_POST_DEC)
+			|| operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+			|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+			|| operation.op1_storage_id == ZEND_MIR_ID_INVALID) {
+		return false;
+	}
+	has_result = operation.result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED;
+	if (has_result
+			&& (operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+					&& operation.result.slot_kind
+						!= ZEND_MIR_SOURCE_SLOT_VAR)
+				|| operation.result_storage_id == ZEND_MIR_ID_INVALID
+				|| operation.result_storage_id
+					== operation.op1_storage_id)) {
+		return false;
+	}
+	if ((operation.source_opcode == ZEND_POST_INC
+			|| operation.source_opcode == ZEND_POST_DEC)
+			&& !has_result) {
+		return false;
+	}
+	operand_offset =
+		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
+			* sizeof(zval);
+	if (has_result) {
+		result_offset =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
+				* sizeof(zval);
+	}
+	if (operand_offset > UINT32_MAX || result_offset > UINT32_MAX) {
+		return false;
+	}
+	out->operand_offset = static_cast<uint32_t>(operand_offset);
+	out->result_offset = static_cast<uint32_t>(result_offset);
+	out->has_result = has_result;
+	out->increment = operation.source_opcode == ZEND_PRE_INC
+		|| operation.source_opcode == ZEND_POST_INC;
+	out->post = operation.source_opcode == ZEND_POST_INC
+		|| operation.source_opcode == ZEND_POST_DEC;
+	return true;
+}
+
 static inline bool zend_tpde_slot_isset_empty_at(
 	const zend_tpde_instruction &instruction,
 	zend_tpde_slot_isset_empty *out)
@@ -468,7 +727,8 @@ static inline bool zend_tpde_slot_isset_empty_at(
 				!= ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV
 			|| operation.source_opcode != ZEND_ISSET_ISEMPTY_CV
 			|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
-			|| operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+			|| (operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+				&& operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
 			|| operation.op1_storage_id == ZEND_MIR_ID_INVALID
 			|| operation.result_storage_id == ZEND_MIR_ID_INVALID
 			|| operation.op1_storage_id == operation.result_storage_id) {
@@ -581,6 +841,39 @@ static inline bool zend_tpde_object_property_write_at(
 	return true;
 }
 
+static inline bool zend_tpde_dynamic_fetch_read_at(
+	const zend_tpde_instruction &instruction,
+	zend_tpde_dynamic_fetch_read *out)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	uint64_t name_offset;
+	uint64_t result_offset;
+
+	if (out == nullptr || !instruction.has_value_operation
+			|| operation.opcode != ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
+			|| operation.source_opcode != ZEND_FETCH_R
+			|| operation.extended_value != ZEND_FETCH_LOCAL
+			|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+			|| operation.result_storage_id == ZEND_MIR_ID_INVALID
+			|| operation.op1_storage_id == ZEND_MIR_ID_INVALID
+			|| operation.op1_storage_id == operation.result_storage_id) {
+		return false;
+	}
+	name_offset =
+		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
+			* sizeof(zval);
+	result_offset =
+		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
+			* sizeof(zval);
+	if (name_offset > UINT32_MAX || result_offset > UINT32_MAX) {
+		return false;
+	}
+	out->name_offset = static_cast<uint32_t>(name_offset);
+	out->result_offset = static_cast<uint32_t>(result_offset);
+	return true;
+}
+
 struct zend_tpde_plan {
 	const zend_mir_view *view;
 	const zend_mir_call_view *calls;
@@ -592,6 +885,7 @@ struct zend_tpde_plan {
 	uint32_t block_index_capacity;
 	zend_tpde_value *values;
 	uint32_t value_count;
+	int32_t *argument_value_indices;
 	zend_tpde_id_index_entry *value_index;
 	uint32_t value_index_capacity;
 	zend_tpde_instruction *instructions;
@@ -616,6 +910,8 @@ struct zend_tpde_plan {
 	_zend_native_user_call_descriptor **user_calls;
 	uint32_t user_call_count;
 	uint32_t argument_count;
+	uint32_t compiled_variable_count;
+	uint32_t temporary_variable_count;
 	uint32_t value_model_flags;
 	uint64_t required_runtime_capabilities;
 	uint64_t required_runtime_helpers[ZEND_NATIVE_RUNTIME_HELPER_WORD_COUNT];

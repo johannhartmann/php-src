@@ -146,7 +146,16 @@
 	X(VERIFY_RETURN_TYPE, "verify_return_type", 152) \
 	X(VALUE_ECHO, "value_echo", 153) \
 	X(FUNC_NUM_ARGS, "func_num_args", 154) \
-	X(FUNC_GET_ARGS, "func_get_args", 155)
+	X(FUNC_GET_ARGS, "func_get_args", 155) \
+	X(FRAME_SLOT_ADDRESS, "frame_slot_address", 156) \
+	X(ZVAL_TYPE_LOAD, "zval_type_load", 157) \
+	X(ZVAL_PAYLOAD_LOAD, "zval_payload_load", 158) \
+	X(ZVAL_COPY, "zval_copy", 159) \
+	X(ZVAL_MOVE, "zval_move", 160) \
+	X(ZVAL_STORE, "zval_store", 161) \
+	X(ZVAL_RELEASE_FAST, "zval_release_fast", 162) \
+	X(ZVAL_GUARD_TYPE, "zval_guard_type", 163) \
+	X(SLOW_PATH_CALL, "slow_path_call", 164)
 
 #define ZEND_MIR_SCALAR_OPCODE_CATALOG(X) \
 	X(I64_ADD_NO_OVERFLOW, "i64_add_no_overflow", 10) \
@@ -203,7 +212,7 @@ typedef enum _zend_mir_opcode {
 	ZEND_MIR_W09_OPCODE_COUNT = 91,
 	ZEND_MIR_W10_OPCODE_COUNT = 137,
 	ZEND_MIR_W11_OPCODE_COUNT = 151,
-	ZEND_MIR_W11P_OPCODE_COUNT = 156,
+	ZEND_MIR_W11P_OPCODE_COUNT = 165,
 	ZEND_MIR_OPCODE_INVALID = -1
 } zend_mir_opcode;
 #undef ZEND_MIR_OPCODE_ENUM
@@ -339,7 +348,7 @@ ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_ECHO_SCALAR
 	== ZEND_MIR_W11_OPCODE_COUNT,
 	"W11P semantic echo begins after the frozen W11 boundary");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W11P_OPCODE_COUNT
-	== ZEND_MIR_OPCODE_FUNC_GET_ARGS + 1,
+	== ZEND_MIR_OPCODE_SLOW_PATH_CALL + 1,
 	"W11P semantic operations have an additive table boundary");
 
 #endif /* ZEND_MIR_OPCODES_H */

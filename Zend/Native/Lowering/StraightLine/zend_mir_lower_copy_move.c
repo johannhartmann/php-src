@@ -185,7 +185,9 @@ zend_mir_lowering_status zend_mir_lower_copy_move(
 			|| mutator->contract_version != ZEND_MIR_CONTRACT_VERSION
 			|| source_opcode->zend_opcode_number
 				!= ZEND_MIR_STRAIGHT_LINE_OPCODE_QM_ASSIGN
-			|| source_opcode->op1.kind != ZEND_MIR_SOURCE_OPERAND_SSA
+			|| (source_opcode->op1.kind != ZEND_MIR_SOURCE_OPERAND_SSA
+				&& source_opcode->op1.kind
+					!= ZEND_MIR_SOURCE_OPERAND_LITERAL)
 			|| source_opcode->result.kind != ZEND_MIR_SOURCE_OPERAND_SSA
 			|| source_opcode->result.ssa_variable_id
 				> ZEND_MIR_VALUE_ORIGINAL_MAX
@@ -227,10 +229,14 @@ zend_mir_lowering_status zend_mir_lower_copy_move(
 			provider_context->entry, &source_opcode->op1, &source_id)) {
 		return ZEND_MIR_LOWERING_REJECTED;
 	}
-	if (!zend_mir_straight_line_analyze_uses(
-			provider_context->source, source_opcode,
-			source_opcode->op1.ssa_variable_id, &later_use)) {
-		return ZEND_MIR_LOWERING_REJECTED;
+	if (source_opcode->op1.kind == ZEND_MIR_SOURCE_OPERAND_SSA) {
+		if (!zend_mir_straight_line_analyze_uses(
+				provider_context->source, source_opcode,
+				source_opcode->op1.ssa_variable_id, &later_use)) {
+			return ZEND_MIR_LOWERING_REJECTED;
+		}
+	} else {
+		later_use = true;
 	}
 	source = zend_mir_straight_line_mutable_value(
 		provider_context->lifetime, source_id);

@@ -67,6 +67,7 @@ typedef struct _zend_native_compiler_stats {
 	uint64_t guard_sites;
 	uint64_t slow_path_sites;
 	uint64_t direct_call_sites;
+	uint64_t direct_leaf_scalar_sites;
 	uint64_t direct_call_frame_bytes;
 	uint32_t registered_codeunits;
 	uint32_t native_codeunits;
