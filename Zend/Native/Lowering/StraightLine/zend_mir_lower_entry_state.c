@@ -353,14 +353,30 @@ bool zend_mir_straight_line_emit_frame_for_class(
 		ZEND_MIR_CONTINUATION_KIND_NONLOCAL_BAILOUT;
 	frame.bailout_continuation.frame_state_id = ZEND_MIR_ID_INVALID;
 	frame.bailout_continuation.opline_index = ZEND_MIR_ID_INVALID;
-	frame.suspend_kind = ZEND_MIR_SUSPEND_KIND_NONE;
-	frame.suspend_state_id = ZEND_MIR_ID_INVALID;
+	if (safepoint_class == ZEND_MIR_SAFEPOINT_CLASS_GENERATOR_SUSPEND) {
+		frame.opline_phase = ZEND_MIR_OPLINE_PHASE_SUSPENDED;
+		frame.suspend_kind = ZEND_MIR_SUSPEND_KIND_GENERATOR;
+		frame.suspend_state_id = source_opcode->opline_index;
+	} else if (safepoint_class == ZEND_MIR_SAFEPOINT_CLASS_FIBER_SWITCH) {
+		frame.opline_phase = ZEND_MIR_OPLINE_PHASE_SUSPENDED;
+		frame.suspend_kind = ZEND_MIR_SUSPEND_KIND_FIBER;
+		frame.suspend_state_id = source_opcode->opline_index;
+	} else {
+		frame.suspend_kind = ZEND_MIR_SUSPEND_KIND_NONE;
+		frame.suspend_state_id = ZEND_MIR_ID_INVALID;
+	}
 	frame.code_version_id = entry->code_version_id;
-	frame.resume.allowed = false;
-	frame.resume.entry_kind = ZEND_MIR_RESUME_ENTRY_KIND_NONE;
-	frame.resume.resume_id = ZEND_MIR_ID_INVALID;
-	frame.resume.code_version_id = ZEND_MIR_ID_INVALID;
-	frame.resume.target_opline_index = ZEND_MIR_ID_INVALID;
+	frame.resume.allowed =
+		frame.suspend_kind != ZEND_MIR_SUSPEND_KIND_NONE;
+	frame.resume.entry_kind = frame.resume.allowed
+		? ZEND_MIR_RESUME_ENTRY_KIND_SINGLE_ENTRY_DISPATCHER
+		: ZEND_MIR_RESUME_ENTRY_KIND_NONE;
+	frame.resume.resume_id = frame.resume.allowed
+		? source_opcode->opline_index : ZEND_MIR_ID_INVALID;
+	frame.resume.code_version_id = frame.resume.allowed
+		? entry->code_version_id : ZEND_MIR_ID_INVALID;
+	frame.resume.target_opline_index = frame.resume.allowed
+		? source_opcode->opline_index + 1 : ZEND_MIR_ID_INVALID;
 	frame.safepoint_class = safepoint_class;
 	frame.canonical = true;
 	if (!mutator->add_frame_state(mutator->context, &frame, &frame_id)) {

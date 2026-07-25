@@ -385,9 +385,7 @@ static zend_native_compiled_function *zend_native_compiler_add_function(
 	function = ecalloc(1, sizeof(*function));
 	function->op_array = op_array;
 	function->registry_index = compiler->function_count;
-	function->state = (op_array->fn_flags & ZEND_ACC_GENERATOR) != 0
-		? ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED
-		: ZEND_NATIVE_CODEUNIT_COMPILING;
+	function->state = ZEND_NATIVE_CODEUNIT_COMPILING;
 	zend_native_entry_cell_init(
 		&function->entry_cell, (zend_function *) op_array);
 	if (compiler->frame_probe != NULL) {
@@ -395,9 +393,8 @@ static zend_native_compiled_function *zend_native_compiler_add_function(
 			&function->entry_cell, compiler->frame_probe,
 			compiler->frame_probe_context);
 	}
-	if (function->state != ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED
-			&& zend_native_entry_cell_begin_compile(
-				&function->entry_cell) == FAILURE) {
+	if (zend_native_entry_cell_begin_compile(
+			&function->entry_cell) == FAILURE) {
 		zend_native_compiler_set_diagnostic(
 			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
 			ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
@@ -1968,9 +1965,7 @@ static bool zend_native_compiler_compile_native_component(
 		if (function->entry_cell.state == ZEND_NATIVE_ENTRY_READY) {
 			continue;
 		}
-		if (function->state
-				== ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED
-				|| function->state == ZEND_NATIVE_CODEUNIT_FAILED) {
+		if (function->state == ZEND_NATIVE_CODEUNIT_FAILED) {
 			continue;
 		}
 		const zend_mir_call_view *calls =
@@ -2334,9 +2329,7 @@ zend_result zend_native_compiler_compile(
 			compiler->functions[index];
 		zend_hrtime_t phase_started;
 
-		if (function->state
-				== ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED
-				|| function->state == ZEND_NATIVE_CODEUNIT_FAILED) {
+		if (function->state == ZEND_NATIVE_CODEUNIT_FAILED) {
 			continue;
 		}
 		if (function->entry_cell.state == ZEND_NATIVE_ENTRY_READY) {
@@ -2393,9 +2386,7 @@ zend_result zend_native_compiler_compile(
 	}
 	root_function = zend_native_compiler_find_function(compiler, root);
 	if (root_function == NULL
-			|| (root_function->entry_cell.state != ZEND_NATIVE_ENTRY_READY
-				&& root_function->state
-					!= ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED)) {
+			|| root_function->entry_cell.state != ZEND_NATIVE_ENTRY_READY) {
 		zend_native_compiler_set_diagnostic(
 			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_PUBLISH,
 			ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
@@ -2485,11 +2476,6 @@ static zend_native_entry_cell *zend_native_compiler_resolve_reentry(
 	function = zend_native_compiler_find_function(
 		compiler, source_op_array);
 	if (function != NULL) {
-		if (function->state == ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED) {
-			zend_throw_error(NULL,
-				"Suspendable codeunit is reserved for native W12 activation");
-			return NULL;
-		}
 		return function->entry_cell.state == ZEND_NATIVE_ENTRY_READY
 			? &function->entry_cell : NULL;
 	}
@@ -2506,12 +2492,6 @@ static zend_native_entry_cell *zend_native_compiler_resolve_reentry(
 	}
 	function = zend_native_compiler_find_function(
 		compiler, source_op_array);
-	if (function != NULL
-			&& function->state == ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED) {
-		zend_throw_error(NULL,
-			"Suspendable codeunit is reserved for native W12 activation");
-		return NULL;
-	}
 	return function != NULL
 			&& function->entry_cell.state == ZEND_NATIVE_ENTRY_READY
 		? &function->entry_cell : NULL;
@@ -2649,9 +2629,7 @@ static zend_result zend_native_compiler_enter(
 		zend_native_compiled_function *function =
 			compiler->functions[index];
 
-		if (function->state
-				== ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED
-				|| function->state == ZEND_NATIVE_CODEUNIT_FAILED) {
+		if (function->state == ZEND_NATIVE_CODEUNIT_FAILED) {
 			continue;
 		}
 		if (function->entry_cell.state != ZEND_NATIVE_ENTRY_READY) {
@@ -2740,15 +2718,6 @@ zend_native_status zend_native_compiler_execute(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	compiler->stats.compile_ns += zend_hrtime() - phase_started;
-	if (zend_native_compiler_codeunit_state(compiler, function)
-			== ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED) {
-		if (diagnostic != NULL) {
-			diagnostic->code = ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT;
-			snprintf(diagnostic->message, sizeof(diagnostic->message),
-				"suspendable codeunit is reserved for native W12 activation");
-		}
-		return ZEND_NATIVE_EXCEPTION;
-	}
 	entry_cell = zend_native_compiler_lookup(compiler, function);
 	if (entry_cell == NULL || zend_native_compiler_enter(compiler) == FAILURE) {
 		return ZEND_NATIVE_EXCEPTION;
@@ -3002,9 +2971,7 @@ bool zend_native_compiler_all_code_is_wx(
 			compiler->functions[index];
 		const zend_native_code *code;
 
-		if (function->state
-				== ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED
-				|| function->state == ZEND_NATIVE_CODEUNIT_FAILED) {
+		if (function->state == ZEND_NATIVE_CODEUNIT_FAILED) {
 			continue;
 		}
 		code = function->code;

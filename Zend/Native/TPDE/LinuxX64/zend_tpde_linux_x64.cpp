@@ -32,6 +32,7 @@ class ZendCompilerX64 final
 	std::array<tpde::SymRef, ZEND_NATIVE_HELPER_COUNT> runtime_symbols_{};
 	std::vector<tpde::SymRef> image_symbols_;
 	std::vector<tpde::SymRef> image_slots_;
+	std::vector<tpde::Label> generator_resume_labels_;
 
 public:
 	struct ValRefSpecial {
@@ -171,6 +172,16 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(MOV64rr, result_reg, source_reg);
 		if (node.kind == Adaptor::InstKind::LoadFrame
 				&& adaptor->plan()->temporary_variable_count != 0) {
+			auto initialized = text_writer.label_create();
+			ScratchReg call_info{this};
+			auto call_info_reg = call_info.alloc_gp();
+			ASM(MOV32rm, call_info_reg,
+				FE_MEM(result_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_execute_data, This)
+							+ offsetof(zval, u1.type_info))));
+			ASM(TEST32ri, call_info_reg, ZEND_CALL_GENERATOR);
+			generate_raw_jump(Jump::jne, initialized);
 			for (uint32_t index = 0;
 					index < adaptor->plan()->temporary_variable_count;
 					++index) {
@@ -185,8 +196,86 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 						offset + static_cast<int32_t>(sizeof(uint64_t))),
 					0);
 			}
+			label_place(initialized);
 		}
 		result.set_modified();
+		return true;
+	}
+	if (node.kind == Adaptor::InstKind::GeneratorGateway) {
+		if (node.operands.size() != 1
+				|| node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
+				|| adaptor->generator_resume_targets().empty()) {
+			return false;
+		}
+		while (generator_resume_labels_.size()
+				< adaptor->generator_resume_targets().size()) {
+			generator_resume_labels_.push_back(text_writer.label_create());
+		}
+		auto normal = text_writer.label_create();
+		auto invalid = text_writer.label_create();
+		{
+			auto [frame_ref, frame] = val_ref_single(node.operands[0]);
+			auto frame_reg = frame.load_to_reg();
+			ScratchReg call_info{this};
+			auto call_info_reg = call_info.alloc_gp();
+			ASM(MOV32rm, call_info_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_execute_data, This)
+							+ offsetof(zval, u1.type_info))));
+			ASM(TEST32ri, call_info_reg, ZEND_CALL_GENERATOR);
+			generate_raw_jump(Jump::je, normal);
+			call_info.reset();
+			ScratchReg opline{this};
+			ScratchReg function{this};
+			ScratchReg target{this};
+			auto opline_reg = opline.alloc_gp();
+			auto function_reg = function.alloc_gp();
+			auto target_reg = target.alloc_gp();
+			ASM(MOV64rm, opline_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_execute_data, opline))));
+			ASM(MOV64rm, function_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_execute_data, func))));
+			for (uint32_t index = 0;
+					index < adaptor->generator_resume_targets().size(); ++index) {
+				const uint64_t byte_offset =
+					uint64_t{adaptor->generator_resume_targets()[index]}
+						* sizeof(zend_op);
+				if (byte_offset > INT32_MAX) {
+					return false;
+				}
+				ASM(MOV64rm, target_reg,
+					FE_MEM(function_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zend_function, op_array.opcodes))));
+				if (byte_offset != 0) {
+					ASM(ADD64ri, target_reg,
+						static_cast<int32_t>(byte_offset));
+				}
+				ASM(CMP64rr, opline_reg, target_reg);
+				generate_raw_jump(
+					Jump::je, generator_resume_labels_[index]);
+			}
+			generate_raw_jump(Jump::jmp, invalid);
+		}
+		label_place(invalid);
+		{
+			RetBuilder return_builder{*this, *cur_cc_assigner()};
+			return_builder.add(ValuePart{ZEND_NATIVE_EXCEPTION, 4,
+				tpde::x64::PlatformConfig::GP_BANK},
+				tpde::CCAssignment{});
+			return_builder.ret();
+		}
+		label_place(normal);
+		return true;
+	}
+	if (node.kind == Adaptor::InstKind::GeneratorResume) {
+		if (node.argument_index >= generator_resume_labels_.size()) {
+			return false;
+		}
+		label_place(generator_resume_labels_[node.argument_index]);
 		return true;
 	}
 	if (node.kind == Adaptor::InstKind::FrameSlotAddress) {
@@ -3141,6 +3230,11 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			return true;
 		}
 		case ZEND_MIR_OPCODE_FUNC_GET_ARGS:
+			return execute_value_operation();
+		case ZEND_MIR_OPCODE_GENERATOR_CREATE:
+		case ZEND_MIR_OPCODE_GENERATOR_YIELD:
+		case ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM:
+		case ZEND_MIR_OPCODE_GENERATOR_RETURN:
 			return execute_value_operation();
 		case ZEND_MIR_OPCODE_COPY:
 		case ZEND_MIR_OPCODE_CANONICALIZE:

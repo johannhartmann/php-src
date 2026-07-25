@@ -5,6 +5,7 @@
 #include "Zend/Native/Compiler/zend_native_dynamic_code.h"
 #include "Zend/Native/Runtime/Common/zend_native_bindings.h"
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
+#include "Zend/Native/Runtime/Common/zend_native_generators.h"
 #include "Zend/Native/Runtime/Common/zend_native_objects.h"
 #include "Zend/Native/Runtime/Common/zend_native_values.h"
 
@@ -568,6 +569,39 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 			| ZEND_NATIVE_EFFECT_MAY_FAIL
 			| ZEND_NATIVE_EFFECT_MAY_REENTER,
 		(const void *) zend_native_zval_release_slow},
+	{ZEND_NATIVE_HELPER_GENERATOR_CREATE,
+		ZEND_NATIVE_EFFECT_FRAME_WRITE
+			| ZEND_NATIVE_RUNTIME_EFFECT_OBJECT_WRITE
+			| ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
+			| ZEND_NATIVE_RUNTIME_EFFECT_REFCOUNT
+			| ZEND_NATIVE_RUNTIME_EFFECT_OBSERVE
+			| ZEND_NATIVE_EFFECT_MAY_FAIL,
+		(const void *) zend_native_generator_create},
+	{ZEND_NATIVE_HELPER_GENERATOR_YIELD,
+		ZEND_NATIVE_EFFECT_FRAME_WRITE
+			| ZEND_NATIVE_RUNTIME_EFFECT_OBJECT_WRITE
+			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_RUNTIME_EFFECT_REFCOUNT
+			| ZEND_NATIVE_RUNTIME_EFFECT_OBSERVE
+			| ZEND_NATIVE_EFFECT_MAY_FAIL,
+		(const void *) zend_native_generator_yield},
+	{ZEND_NATIVE_HELPER_GENERATOR_YIELD_FROM,
+		ZEND_NATIVE_EFFECT_FRAME_WRITE
+			| ZEND_NATIVE_RUNTIME_EFFECT_OBJECT_WRITE
+			| ZEND_NATIVE_RUNTIME_EFFECT_ARRAY_READ
+			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_RUNTIME_EFFECT_REFCOUNT
+			| ZEND_NATIVE_EFFECT_MAY_REENTER
+			| ZEND_NATIVE_EFFECT_MAY_FAIL,
+		(const void *) zend_native_generator_yield_from},
+	{ZEND_NATIVE_HELPER_GENERATOR_RETURN,
+		ZEND_NATIVE_EFFECT_FRAME_WRITE
+			| ZEND_NATIVE_RUNTIME_EFFECT_OBJECT_WRITE
+			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_RUNTIME_EFFECT_REFCOUNT
+			| ZEND_NATIVE_RUNTIME_EFFECT_OBSERVE
+			| ZEND_NATIVE_EFFECT_MAY_FAIL,
+		(const void *) zend_native_generator_return},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
@@ -580,7 +614,8 @@ static const zend_native_runtime_api zend_native_runtime = {
 		| ZEND_NATIVE_RUNTIME_CAP_INTERRUPT
 		| ZEND_NATIVE_RUNTIME_CAP_BAILOUT_BOUNDARY
 		| ZEND_NATIVE_RUNTIME_CAP_OBJECT_OPERATION
-		| ZEND_NATIVE_RUNTIME_CAP_DYNAMIC_BINDING,
+		| ZEND_NATIVE_RUNTIME_CAP_DYNAMIC_BINDING
+		| ZEND_NATIVE_RUNTIME_CAP_SUSPEND,
 	zend_native_runtime_helpers,
 	(uint32_t) (sizeof(zend_native_runtime_helpers)
 		/ sizeof(zend_native_runtime_helpers[0])),
