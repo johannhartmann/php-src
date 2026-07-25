@@ -3646,6 +3646,19 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				int32_t leaf_private_frame_slot = 0;
 				int32_t leaf_caller_frame_slot = 0;
 				if (generated_fast_path) {
+					/*
+					 * The indirect entry target must not be allocated in either
+					 * register used by the two-argument native entry ABI. Keep
+					 * both registers unavailable until the target and callee
+					 * values have been materialized, then release them for the
+					 * CallBuilder argument moves.
+					 */
+					ScratchReg fast_callee_argument_register{this};
+					ScratchReg fast_context_argument_register{this};
+					fast_callee_argument_register.alloc_specific(
+						tpde::x64::AsmReg::DI);
+					fast_context_argument_register.alloc_specific(
+						tpde::x64::AsmReg::SI);
 					if (private_inline_body) {
 						/*
 						 * Preserve live machine values before the observer or
@@ -4236,6 +4249,8 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 						context_scratch.reset();
 						cell_scratch.reset();
 						descriptor_scratch.reset();
+						fast_callee_argument_register.reset();
+						fast_context_argument_register.reset();
 						tpde::x64::CCAssignerSysV fast_assigner{false};
 						CallBuilder fast_builder{*this, fast_assigner};
 						fast_builder.add_arg(std::move(callee_value),
@@ -5193,6 +5208,8 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 					context_scratch.reset();
 					cell_scratch.reset();
 					descriptor_scratch.reset();
+					fast_callee_argument_register.reset();
+					fast_context_argument_register.reset();
 					tpde::x64::CCAssignerSysV fast_assigner{false};
 					CallBuilder fast_builder{*this, fast_assigner};
 					fast_builder.add_arg(
