@@ -1641,6 +1641,61 @@ uint32_t zend_native_finally_return(
 		: ZEND_NATIVE_FINALLY_PROPAGATE;
 }
 
+zend_native_status zend_native_discard_exception(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
+{
+	const zend_op_array *op_array;
+	const zend_op *opline;
+	zval *fast_call;
+	uint8_t operand_type;
+	uint32_t continuation;
+
+	(void) op2;
+	(void) result;
+	(void) extended_value;
+	if (execute_data == NULL || execute_data->func == NULL
+			|| !ZEND_USER_CODE(execute_data->func->type)
+			|| source_opcode != ZEND_DISCARD_EXCEPTION) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	op_array = &execute_data->func->op_array;
+	if (source_position_id >= op_array->last
+			|| (opline = &op_array->opcodes[source_position_id])->opcode
+				!= ZEND_DISCARD_EXCEPTION
+			|| (fast_call = zend_native_call_explicit_slot(
+				execute_data, op1, &operand_type)) == NULL
+			|| (operand_type != IS_TMP_VAR && operand_type != IS_VAR)) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	execute_data->opline = opline;
+	continuation = Z_OPLINE_NUM_P(fast_call);
+	if (continuation != UINT32_MAX) {
+		const zend_op *fast_call_opline;
+
+		if (continuation >= op_array->last
+				|| (fast_call_opline = &op_array->opcodes[continuation])
+					->opcode != ZEND_FAST_CALL) {
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		if ((fast_call_opline->op2_type & (IS_TMP_VAR | IS_VAR)) != 0) {
+			zval *return_value =
+				ZEND_CALL_VAR(execute_data, fast_call_opline->op2.var);
+
+			zval_ptr_dtor(return_value);
+			ZVAL_NULL(return_value);
+		}
+	}
+	if (Z_OBJ_P(fast_call) != NULL) {
+		OBJ_RELEASE(Z_OBJ_P(fast_call));
+		Z_OBJ_P(fast_call) = NULL;
+	}
+	return EG(exception) == NULL
+		? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+}
+
 void zend_native_interrupt_poll(
 	zend_execute_data *execute_data, uint32_t source_opline_index)
 {

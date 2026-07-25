@@ -3295,6 +3295,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		case ZEND_MIR_OPCODE_VALUE_EXT_FCALL_BEGIN:
 		case ZEND_MIR_OPCODE_VALUE_EXT_FCALL_END:
 		case ZEND_MIR_OPCODE_VALUE_EXT_NOP:
+		case ZEND_MIR_OPCODE_VALUE_DISCARD_EXCEPTION:
 			return execute_value_operation();
 		case ZEND_MIR_OPCODE_COPY:
 		case ZEND_MIR_OPCODE_CANONICALIZE:

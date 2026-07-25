@@ -1090,6 +1090,8 @@ zend_native_runtime_helper_id executable_value_helper(zend_mir_opcode opcode) {
 			return ZEND_NATIVE_HELPER_VALUE_EXT_FCALL_END;
 		case ZEND_MIR_OPCODE_VALUE_EXT_NOP:
 			return ZEND_NATIVE_HELPER_VALUE_EXT_NOP;
+		case ZEND_MIR_OPCODE_VALUE_DISCARD_EXCEPTION:
+			return ZEND_NATIVE_HELPER_VALUE_DISCARD_EXCEPTION;
 		default:
 			return ZEND_NATIVE_HELPER_COUNT;
 	}
