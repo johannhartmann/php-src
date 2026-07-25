@@ -3187,6 +3187,127 @@ zend_native_direct_call_result zend_native_call_fragment(
 	return result;
 }
 
+static zend_native_status zend_native_call_check_func_arg_impl(
+	zend_execute_data *caller,
+	uint64_t encoded_op2,
+	uint32_t arg_num)
+{
+	zend_execute_data *call = caller != NULL ? caller->call : NULL;
+	zend_mir_source_operand_kind op2_kind =
+		(zend_mir_source_operand_kind) (encoded_op2 & UINT64_C(0xff));
+
+	if (call == NULL || call->func == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	if (op2_kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+		uint8_t operand_type;
+		zval *argument_name = zend_native_call_explicit_operand(
+			caller, encoded_op2, &operand_type);
+		uint32_t index;
+
+		if (argument_name == NULL || operand_type != IS_CONST
+				|| Z_TYPE_P(argument_name) != IS_STRING) {
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		arg_num = 0;
+		if (call->func->common.arg_info != NULL) {
+			for (index = 0;
+					index < call->func->common.num_args;
+					index++) {
+				if (zend_string_equals(
+						Z_STR_P(argument_name),
+						call->func->common.arg_info[index].name)) {
+					arg_num = index + 1;
+					break;
+				}
+			}
+		}
+		if (arg_num == 0
+				&& (call->func->common.fn_flags
+					& ZEND_ACC_VARIADIC) != 0) {
+			arg_num = call->func->common.num_args + 1;
+		}
+		if (arg_num == 0) {
+			ZEND_DEL_CALL_FLAG(call, ZEND_CALL_SEND_ARG_BY_REF);
+			return ZEND_NATIVE_RETURNED;
+		}
+	}
+	if (arg_num == 0) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	if ((arg_num <= MAX_ARG_FLAG_NUM
+			&& QUICK_ARG_SHOULD_BE_SENT_BY_REF(call->func, arg_num))
+			|| (arg_num > MAX_ARG_FLAG_NUM
+				&& ARG_SHOULD_BE_SENT_BY_REF(call->func, arg_num))) {
+		ZEND_ADD_CALL_FLAG(call, ZEND_CALL_SEND_ARG_BY_REF);
+	} else {
+		ZEND_DEL_CALL_FLAG(call, ZEND_CALL_SEND_ARG_BY_REF);
+	}
+	return ZEND_NATIVE_RETURNED;
+}
+
+static zend_native_status zend_native_call_check_undef_args_impl(
+	zend_execute_data *caller)
+{
+	zend_execute_data *call = caller != NULL ? caller->call : NULL;
+
+	if (call == NULL || call->func == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	if ((ZEND_CALL_INFO(call) & ZEND_CALL_MAY_HAVE_UNDEF) != 0
+			&& zend_handle_undef_args(call) == FAILURE) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	return EG(exception) == NULL
+		? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+}
+
+zend_native_status zend_native_call_check_func_arg(
+	zend_execute_data *caller,
+	uint64_t encoded_op1,
+	uint64_t encoded_op2,
+	uint64_t encoded_result,
+	uint32_t extended_value,
+	uint32_t source_opcode,
+	uint32_t source_position)
+{
+	(void) encoded_op1;
+	(void) encoded_result;
+	(void) extended_value;
+
+	if (caller == NULL || caller->func == NULL
+			|| !ZEND_USER_CODE(caller->func->type)
+			|| source_opcode != ZEND_CHECK_FUNC_ARG
+			|| source_position >= caller->func->op_array.last) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	return zend_native_call_check_func_arg_impl(
+		caller, encoded_op2, (uint32_t) (encoded_op2 >> 16));
+}
+
+zend_native_status zend_native_call_check_undef_args(
+	zend_execute_data *caller,
+	uint64_t encoded_op1,
+	uint64_t encoded_op2,
+	uint64_t encoded_result,
+	uint32_t extended_value,
+	uint32_t source_opcode,
+	uint32_t source_position)
+{
+	(void) encoded_op1;
+	(void) encoded_op2;
+	(void) encoded_result;
+	(void) extended_value;
+
+	if (caller == NULL || caller->func == NULL
+			|| !ZEND_USER_CODE(caller->func->type)
+			|| source_opcode != ZEND_CHECK_UNDEF_ARGS
+			|| source_position >= caller->func->op_array.last) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	return zend_native_call_check_undef_args_impl(caller);
+}
+
 zend_native_status zend_native_call_fragment_explicit(
 	zend_execute_data *caller,
 	uint32_t source_opcode,
@@ -3207,6 +3328,8 @@ zend_native_status zend_native_call_fragment_explicit(
 	bool init = false;
 	bool send = false;
 	bool finish = false;
+	bool check_func_arg = false;
+	bool check_undef_args = false;
 
 	if (caller == NULL || caller->func == NULL
 			|| !ZEND_USER_CODE(caller->func->type)
@@ -3239,6 +3362,12 @@ zend_native_status zend_native_call_fragment_explicit(
 		case ZEND_SEND_PLACEHOLDER:
 			send = true;
 			break;
+		case ZEND_CHECK_FUNC_ARG:
+			check_func_arg = true;
+			break;
+		case ZEND_CHECK_UNDEF_ARGS:
+			check_undef_args = true;
+			break;
 		case ZEND_DO_UCALL:
 		case ZEND_DO_FCALL:
 		case ZEND_DO_FCALL_BY_NAME:
@@ -3249,6 +3378,13 @@ zend_native_status zend_native_call_fragment_explicit(
 			break;
 		default:
 			return ZEND_NATIVE_EXCEPTION;
+	}
+	if (check_undef_args) {
+		return zend_native_call_check_undef_args_impl(caller);
+	}
+	if (check_func_arg) {
+		return zend_native_call_check_func_arg_impl(
+			caller, encoded_op2, op2_payload);
 	}
 	memset(&descriptor, 0, sizeof(descriptor));
 	if (!zend_native_call_decode_source_operand(

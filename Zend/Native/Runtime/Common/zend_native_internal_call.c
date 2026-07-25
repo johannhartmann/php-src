@@ -806,6 +806,7 @@ zend_result zend_native_call_set_explicit_argument(
 	}
 	if (argument->source_opcode == ZEND_SEND_FUNC_ARG) {
 		bool send_by_reference;
+		zval *source_value = value;
 
 		if (operand_type != IS_VAR) {
 			zend_native_release_source_operand(value, operand_type);
@@ -849,6 +850,9 @@ zend_result zend_native_call_set_explicit_argument(
 			zend_native_release_source_operand(value, operand_type);
 			return FAILURE;
 		}
+		if (Z_TYPE_P(value) == IS_INDIRECT) {
+			value = Z_INDIRECT_P(value);
+		}
 		send_by_reference =
 			ARG_SHOULD_BE_SENT_BY_REF(function, argument_number);
 		if (send_by_reference) {
@@ -858,13 +862,13 @@ zend_result zend_native_call_set_explicit_argument(
 				if (!mutable_value) {
 					zend_cannot_pass_by_reference(argument_number);
 					zend_native_release_source_operand(
-						value, operand_type);
+						source_value, operand_type);
 					return FAILURE;
 				}
 				ZVAL_MAKE_REF_EX(value, 2);
 			}
 			ZVAL_REF(target, Z_REF_P(value));
-			zend_native_release_source_operand(value, operand_type);
+			zend_native_release_source_operand(source_value, operand_type);
 			return EG(exception) == NULL ? SUCCESS : FAILURE;
 		}
 		if (Z_ISREF_P(value)) {
@@ -880,7 +884,7 @@ zend_result zend_native_call_set_explicit_argument(
 		} else {
 			ZVAL_COPY_VALUE(target, value);
 		}
-		ZVAL_UNDEF(value);
+		ZVAL_UNDEF(source_value);
 		return SUCCESS;
 	}
 	if (argument->auxiliary_operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
