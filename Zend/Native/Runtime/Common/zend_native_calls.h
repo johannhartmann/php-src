@@ -219,6 +219,11 @@ typedef struct _zend_native_direct_call_entry {
 	zend_native_frame_entry_t entry;
 } zend_native_direct_call_entry;
 
+typedef struct _zend_native_user_opcode_result {
+	uint64_t action;
+	uint64_t source_position;
+} zend_native_user_opcode_result;
+
 void zend_native_entry_cell_init(
 	zend_native_entry_cell *cell, zend_function *function);
 zend_result zend_native_entry_cell_begin_compile(zend_native_entry_cell *cell);
@@ -255,7 +260,7 @@ zend_result zend_native_reentry_scope_enter_resolver(
 void zend_native_reentry_scope_leave(zend_native_reentry_scope *scope);
 zend_native_entry_cell *zend_native_reentry_resolve(
 	zend_function *function);
-uint64_t zend_native_user_opcode_invoke(
+zend_native_user_opcode_result zend_native_user_opcode_invoke(
 	zend_execute_data *execute_data,
 	zend_native_execution_context *context,
 	uint32_t source_position_id);
