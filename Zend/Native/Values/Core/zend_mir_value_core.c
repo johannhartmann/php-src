@@ -875,6 +875,7 @@ static bool zend_mir_value_validate_executable_operations(
 			module, instructions, zend_mir_core_instruction);
 		const bool attached_instruction =
 			operation->opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+			|| operation->opcode == ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH
 			|| operation->opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH
 			|| operation->opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
 			|| operation->opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL;

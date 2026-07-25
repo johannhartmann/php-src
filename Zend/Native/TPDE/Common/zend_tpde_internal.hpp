@@ -245,6 +245,13 @@ struct zend_tpde_dynamic_fetch_read {
 	uint32_t result_offset;
 };
 
+struct zend_tpde_multi_branch {
+	uint32_t operand_offset;
+	uint32_t source_opcode;
+	uint32_t successor_count;
+	HashTable *jump_table;
+};
+
 /*
  * Keep the semantic fast-path selection target-neutral.  Target backends only
  * encode the guards and loads; they do not independently decide which MIR
@@ -880,6 +887,7 @@ struct zend_tpde_plan {
 	const zend_mir_view *view;
 	const zend_mir_call_view *calls;
 	const zend_native_runtime_api *runtime;
+	const zend_op_array *source_op_array;
 	zend_mir_function_record function;
 	zend_mir_block_id *block_ids;
 	uint32_t block_count;
@@ -919,6 +927,65 @@ struct zend_tpde_plan {
 	uint64_t required_runtime_helpers[ZEND_NATIVE_RUNTIME_HELPER_WORD_COUNT];
 	bool may_emit_calls;
 };
+
+static inline bool zend_tpde_multi_branch_at(
+	const zend_tpde_plan *plan,
+	const zend_tpde_instruction &instruction,
+	const zend_mir_instruction_record &record,
+	zend_tpde_multi_branch *out)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	const zend_op *opline;
+	const zval *jump_table;
+	uint64_t operand_offset;
+	uint32_t expected_successors;
+
+	if (plan == nullptr || out == nullptr
+			|| !instruction.has_value_operation
+			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH
+			|| record.opcode != ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH
+			|| plan->source_op_array == nullptr
+			|| operation.source_position_id >= plan->source_op_array->last
+			|| operation.source_position_id != record.source_position_id
+			|| operation.op1_storage_id == ZEND_MIR_ID_INVALID
+			|| operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| operation.result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+		return false;
+	}
+	opline =
+		&plan->source_op_array->opcodes[operation.source_position_id];
+	if (opline->opcode != operation.source_opcode
+			|| (opline->opcode != ZEND_SWITCH_LONG
+				&& opline->opcode != ZEND_SWITCH_STRING
+				&& opline->opcode != ZEND_MATCH)
+			|| opline->op2_type != IS_CONST) {
+		return false;
+	}
+	jump_table = RT_CONSTANT(opline, opline->op2);
+	if (Z_TYPE_P(jump_table) != IS_ARRAY) {
+		return false;
+	}
+	expected_successors = zend_hash_num_elements(Z_ARRVAL_P(jump_table))
+		+ (opline->opcode == ZEND_MATCH ? 1 : 2);
+	if (expected_successors < 2
+			|| plan->view->successor_count(
+				plan->view->context, record.block_id)
+				!= expected_successors) {
+		return false;
+	}
+	operand_offset =
+		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
+			* sizeof(zval);
+	if (operand_offset > UINT32_MAX) {
+		return false;
+	}
+	out->operand_offset = static_cast<uint32_t>(operand_offset);
+	out->source_opcode = opline->opcode;
+	out->successor_count = expected_successors;
+	out->jump_table = Z_ARRVAL_P(jump_table);
+	return true;
+}
 
 enum zend_native_image_symbol_kind : uint32_t {
 	ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER = 1,

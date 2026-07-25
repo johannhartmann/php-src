@@ -382,8 +382,7 @@ static bool zend_mir_w04_validate_edges(
 				same_to++;
 			}
 		}
-		if (same_from > 2
-				|| edge.successor_index >= same_from
+		if (edge.successor_index >= same_from
 				|| edge.predecessor_index >= same_to) {
 			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
 			return false;
@@ -629,6 +628,10 @@ zend_mir_w04_branch_kind zend_mir_w04_branch_kind_for_opcode(uint32_t opcode)
 			return ZEND_MIR_W10_BRANCH_THROW;
 		case ZEND_MIR_W12_OPCODE_ASSERT_CHECK:
 			return ZEND_MIR_W12_BRANCH_ASSERT_CHECK;
+		case ZEND_MIR_W12_OPCODE_SWITCH_LONG:
+		case ZEND_MIR_W12_OPCODE_SWITCH_STRING:
+		case ZEND_MIR_W12_OPCODE_MATCH:
+			return ZEND_MIR_W12_BRANCH_MULTIWAY;
 		case ZEND_MIR_W09_OPCODE_FE_RESET_R:
 		case ZEND_MIR_W09_OPCODE_FE_FETCH_R:
 		case ZEND_MIR_W09_OPCODE_FE_RESET_RW:
