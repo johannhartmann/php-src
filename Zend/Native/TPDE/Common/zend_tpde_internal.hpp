@@ -10,10 +10,39 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <array>
 
 struct _zend_native_direct_call_descriptor;
 struct _zend_native_direct_internal_call_descriptor;
 struct _zend_native_user_call_descriptor;
+
+/*
+ * Every binary Zend opcode has the same explicit source-operand shape in
+ * ZNMIR.  A user-opcode DISPATCH_TO can therefore reuse the selected
+ * opline's already-lowered operands while selecting the requested semantic
+ * operation in generated code.
+ */
+static constexpr std::array<uint8_t, 19> zend_tpde_binary_source_opcodes{{
+	ZEND_ADD,
+	ZEND_SUB,
+	ZEND_MUL,
+	ZEND_DIV,
+	ZEND_MOD,
+	ZEND_POW,
+	ZEND_SL,
+	ZEND_SR,
+	ZEND_BW_OR,
+	ZEND_BW_AND,
+	ZEND_BW_XOR,
+	ZEND_BOOL_XOR,
+	ZEND_IS_IDENTICAL,
+	ZEND_IS_NOT_IDENTICAL,
+	ZEND_IS_EQUAL,
+	ZEND_IS_NOT_EQUAL,
+	ZEND_IS_SMALLER,
+	ZEND_IS_SMALLER_OR_EQUAL,
+	ZEND_SPACESHIP,
+}};
 
 static inline uint64_t zend_tpde_encode_value_operand(
 	const zend_mir_source_operand_ref &operand, uint32_t unused_payload)
