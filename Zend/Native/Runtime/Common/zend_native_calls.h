@@ -381,6 +381,10 @@ zval *zend_native_call_explicit_slot(
 	zend_execute_data *caller,
 	uint64_t encoded_operand,
 	uint8_t *operand_type);
+zval *zend_native_call_explicit_operand(
+	zend_execute_data *caller,
+	uint64_t encoded_operand,
+	uint8_t *operand_type);
 zend_native_status zend_native_return_source_zval(
 	zend_execute_data *execute_data,
 	uint32_t source_position,
@@ -389,6 +393,20 @@ zend_native_status zend_native_return_source_zval(
 	uint32_t extended_value);
 zend_native_status zend_native_catch_enter(
 	zend_execute_data *execute_data, uint32_t catch_opline_index);
+uint32_t zend_native_catch_explicit(
+	zend_execute_data *execute_data,
+	uint64_t encoded_class,
+	uint64_t encoded_result,
+	uint32_t extended_value,
+	uint32_t source_position);
+zend_native_status zend_native_receive_explicit(
+	zend_execute_data *execute_data,
+	uint32_t source_opcode,
+	uint32_t argument_number,
+	uint64_t encoded_op2,
+	uint32_t op2_payload,
+	uint64_t encoded_result,
+	uint32_t source_position);
 zend_native_status zend_native_finally_enter(
 	zend_execute_data *execute_data, uint32_t finally_opline_index);
 void zend_native_finally_call(

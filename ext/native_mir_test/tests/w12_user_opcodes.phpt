@@ -82,6 +82,20 @@ function w12_user_opcode_enter(): array
     $value += 2;
     return [$GLOBALS['w12_user_opcode_enter_trace'], $value];
 }
+function w12_user_opcode_receive(int $value = 3, ...$rest): array
+{
+    return [$value, $rest];
+}
+function w12_user_opcode_catch(): string
+{
+    try {
+        throw new Exception('native-catch');
+    } catch (RuntimeException $exception) {
+        return 'wrong';
+    } catch (Exception $exception) {
+        return $exception->getMessage();
+    }
+}
 PHP;
 
 $cases = [
@@ -165,6 +179,60 @@ $result = native_mir_test_compile_execute(
 );
 printf(
     "enter status=%s result=%s calls=%d vm=%d execute_ex=%d handler=%d\n",
+    $result['status'],
+    json_encode($result['execution']['return_value'] ?? null),
+    $result['execution']['user_opcode_calls'] ?? -1,
+    $result['execution']['vm_handler_calls'] ?? -1,
+    $result['execution']['execute_ex_calls'] ?? -1,
+    $result['execution']['opline_handler_calls'] ?? -1,
+);
+
+foreach ([
+    ['ZEND_RECV_INIT', [], [3, []]],
+    ['ZEND_RECV_VARIADIC', [7, 8, 9], [7, [8, 9]]],
+] as [$target, $arguments, $expected]) {
+    $result = native_mir_test_compile_execute(
+        $source,
+        "w12-user-opcode-$target.php",
+        $arguments,
+        [
+            'wave' => 11,
+            'function' => 'w12_user_opcode_receive',
+            'user_opcode' => [
+                'opcode' => $target,
+                'action' => 'dispatch_to',
+                'dispatch_to' => $target,
+            ],
+        ],
+    );
+    printf(
+        "receive_%s status=%s result=%s calls=%d vm=%d execute_ex=%d handler=%d\n",
+        $target,
+        $result['status'],
+        json_encode($result['execution']['return_value'] ?? null),
+        $result['execution']['user_opcode_calls'] ?? -1,
+        $result['execution']['vm_handler_calls'] ?? -1,
+        $result['execution']['execute_ex_calls'] ?? -1,
+        $result['execution']['opline_handler_calls'] ?? -1,
+    );
+}
+
+$result = native_mir_test_compile_execute(
+    $source,
+    'w12-user-opcode-catch.php',
+    [],
+    [
+        'wave' => 11,
+        'function' => 'w12_user_opcode_catch',
+        'user_opcode' => [
+            'opcode' => 'ZEND_CATCH',
+            'action' => 'dispatch_to',
+            'dispatch_to' => 'ZEND_CATCH',
+        ],
+    ],
+);
+printf(
+    "catch status=%s result=%s calls=%d vm=%d execute_ex=%d handler=%d\n",
     $result['status'],
     json_encode($result['execution']['return_value'] ?? null),
     $result['execution']['user_opcode_calls'] ?? -1,
@@ -600,6 +668,9 @@ return status=accepted result=null calls=1/1 vm=0 execute_ex=0 handler=0
 leave status=accepted result=null calls=1/1 vm=0 execute_ex=0 handler=0
 dispatch_to_nop status=accepted result=1 calls=2 vm=0 execute_ex=0 handler=0
 enter status=accepted result=[["entered","entered"],1] calls=2 vm=0 execute_ex=0 handler=0
+receive_ZEND_RECV_INIT status=accepted result=[3,[]] calls=1 vm=0 execute_ex=0 handler=0
+receive_ZEND_RECV_VARIADIC status=accepted result=[7,[8,9]] calls=1 vm=0 execute_ex=0 handler=0
+catch status=accepted result="native-catch" calls=2 vm=0 execute_ex=0 handler=0
 binary_ZEND_ADD status=accepted result=10 calls=1 vm=0 execute_ex=0 handler=0
 binary_ZEND_SUB status=accepted result=-8 calls=1 vm=0 execute_ex=0 handler=0
 binary_ZEND_MUL status=accepted result=9 calls=1 vm=0 execute_ex=0 handler=0

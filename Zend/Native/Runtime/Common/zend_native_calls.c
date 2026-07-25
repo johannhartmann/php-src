@@ -179,6 +179,201 @@ static zval *zend_native_frameless_argument(
 	return value;
 }
 
+zval *zend_native_call_explicit_operand(
+	zend_execute_data *caller,
+	uint64_t encoded_operand,
+	uint8_t *operand_type)
+{
+	znode_op operand;
+
+	if (operand_type == NULL
+			|| !zend_native_frameless_decode_operand(
+				caller, encoded_operand, operand_type, &operand)
+			|| *operand_type == IS_UNUSED) {
+		return NULL;
+	}
+	return zend_native_frameless_argument(caller, *operand_type, operand);
+}
+
+static bool zend_native_receive_verify(
+	zend_execute_data *execute_data,
+	uint32_t argument_number,
+	const zend_arg_info *argument_info,
+	zval *argument)
+{
+	if (argument_info != NULL && ZEND_TYPE_IS_SET(argument_info->type)
+			&& !zend_check_type_ex(
+				&argument_info->type, argument, false, false)) {
+		zend_verify_arg_error(
+			execute_data->func, argument_info, argument_number, argument);
+		return false;
+	}
+	return true;
+}
+
+zend_native_status zend_native_receive_explicit(
+	zend_execute_data *execute_data,
+	uint32_t source_opcode,
+	uint32_t argument_number,
+	uint64_t encoded_op2,
+	uint32_t op2_payload,
+	uint64_t encoded_result,
+	uint32_t source_position)
+{
+	zend_op_array *op_array;
+	zval *result;
+	uint8_t result_type;
+
+	if (execute_data == NULL || execute_data->func == NULL
+			|| !ZEND_USER_CODE(execute_data->func->type)
+			|| source_position >= execute_data->func->op_array.last
+			|| argument_number == 0) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	op_array = &execute_data->func->op_array;
+	execute_data->opline = &op_array->opcodes[source_position];
+	result = zend_native_call_explicit_slot(
+		execute_data, encoded_result, &result_type);
+	if (result == NULL
+			|| (result_type != IS_CV
+				&& result_type != IS_VAR
+				&& result_type != IS_TMP_VAR)) {
+		zend_throw_error(NULL, "Invalid native receive result");
+		return ZEND_NATIVE_EXCEPTION;
+	}
+
+	if (source_opcode == ZEND_RECV) {
+		if (argument_number > ZEND_CALL_NUM_ARGS(execute_data)) {
+			zend_missing_arg_error(execute_data);
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		if ((op2_payload & (UINT32_C(1) << Z_TYPE_P(result))) == 0) {
+			const zend_arg_info *argument_info =
+				op_array->arg_info != NULL
+					&& argument_number <= op_array->num_args
+				? &op_array->arg_info[argument_number - 1] : NULL;
+			if (argument_info == NULL
+					|| !zend_native_receive_verify(
+						execute_data, argument_number,
+						argument_info, result)) {
+				return ZEND_NATIVE_EXCEPTION;
+			}
+		}
+		return ZEND_NATIVE_RETURNED;
+	}
+
+	if (source_opcode == ZEND_RECV_INIT) {
+		if (argument_number > ZEND_CALL_NUM_ARGS(execute_data)) {
+			uint8_t default_type;
+			zval *default_value = zend_native_call_explicit_operand(
+				execute_data, encoded_op2, &default_type);
+			if (default_value == NULL || default_type != IS_CONST) {
+				zend_throw_error(NULL, "Invalid native receive default");
+				return ZEND_NATIVE_EXCEPTION;
+			}
+			ZVAL_COPY(result, default_value);
+			if (Z_TYPE_P(result) == IS_CONSTANT_AST
+					&& zval_update_constant_ex(result, op_array->scope)
+						== FAILURE) {
+				zval_ptr_dtor_nogc(result);
+				ZVAL_UNDEF(result);
+				return ZEND_NATIVE_EXCEPTION;
+			}
+			return ZEND_NATIVE_RETURNED;
+		}
+		if ((op_array->fn_flags & ZEND_ACC_HAS_TYPE_HINTS) != 0) {
+			const zend_arg_info *argument_info =
+				op_array->arg_info != NULL
+					&& argument_number <= op_array->num_args
+				? &op_array->arg_info[argument_number - 1] : NULL;
+			if (argument_info == NULL
+					|| !zend_native_receive_verify(
+						execute_data, argument_number,
+						argument_info, result)) {
+				return ZEND_NATIVE_EXCEPTION;
+			}
+		}
+		return ZEND_NATIVE_RETURNED;
+	}
+
+	if (source_opcode == ZEND_RECV_VARIADIC) {
+		uint32_t argument_count = ZEND_CALL_NUM_ARGS(execute_data);
+		zend_arg_info *argument_info;
+
+		if ((op_array->fn_flags & ZEND_ACC_VARIADIC) == 0
+				|| op_array->num_args + 1 != argument_number
+				|| op_array->arg_info == NULL) {
+			zend_throw_error(NULL, "Invalid native variadic receive");
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		argument_info = &op_array->arg_info[argument_number - 1];
+		if (argument_number <= argument_count) {
+			zval *argument = EX_VAR_NUM(op_array->last_var + op_array->T);
+
+			array_init_size(result,
+				argument_count - argument_number + 1);
+			zend_hash_real_init_packed(Z_ARRVAL_P(result));
+			ZEND_HASH_FILL_PACKED(Z_ARRVAL_P(result)) {
+				if (ZEND_TYPE_IS_SET(argument_info->type)) {
+					ZEND_ADD_CALL_FLAG(
+						execute_data, ZEND_CALL_FREE_EXTRA_ARGS);
+				}
+				do {
+					if (!zend_native_receive_verify(
+							execute_data, argument_number,
+							argument_info, argument)) {
+						ZEND_HASH_FILL_FINISH();
+						return ZEND_NATIVE_EXCEPTION;
+					}
+					Z_TRY_ADDREF_P(argument);
+					ZEND_HASH_FILL_ADD(argument);
+					argument++;
+				} while (++argument_number <= argument_count);
+			} ZEND_HASH_FILL_END();
+		} else {
+			ZVAL_EMPTY_ARRAY(result);
+		}
+		if ((ZEND_CALL_INFO(execute_data)
+				& ZEND_CALL_HAS_EXTRA_NAMED_PARAMS) != 0) {
+			zend_string *name;
+			zval *argument;
+
+			if (ZEND_TYPE_IS_SET(argument_info->type)) {
+				SEPARATE_ARRAY(result);
+				ZEND_HASH_MAP_FOREACH_STR_KEY_VAL(
+						execute_data->extra_named_params,
+						name, argument) {
+					if (!zend_native_receive_verify(
+							execute_data, argument_number,
+							argument_info, argument)) {
+						return ZEND_NATIVE_EXCEPTION;
+					}
+					Z_TRY_ADDREF_P(argument);
+					zend_hash_add_new(
+						Z_ARRVAL_P(result), name, argument);
+				} ZEND_HASH_FOREACH_END();
+			} else if (zend_hash_num_elements(Z_ARRVAL_P(result)) == 0) {
+				GC_ADDREF(execute_data->extra_named_params);
+				ZVAL_ARR(result, execute_data->extra_named_params);
+			} else {
+				SEPARATE_ARRAY(result);
+				ZEND_HASH_MAP_FOREACH_STR_KEY_VAL(
+						execute_data->extra_named_params,
+						name, argument) {
+					Z_TRY_ADDREF_P(argument);
+					zend_hash_add_new(
+						Z_ARRVAL_P(result), name, argument);
+				} ZEND_HASH_FOREACH_END();
+			}
+		}
+		return EG(exception) == NULL
+			? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+	}
+
+	zend_throw_error(NULL, "Invalid native receive opcode");
+	return ZEND_NATIVE_EXCEPTION;
+}
+
 static void zend_native_frameless_consume(
 	zend_execute_data *execute_data, uint8_t type, znode_op operand)
 {
@@ -411,6 +606,7 @@ zend_native_user_opcode_result zend_native_user_opcode_invoke(
 	user_opcode_handler_t handler;
 	zend_execute_data *entered;
 	zend_native_entry_cell *cell;
+	zend_object *entry_exception;
 	zend_native_status status;
 	int action;
 
@@ -427,8 +623,9 @@ zend_native_user_opcode_result zend_native_user_opcode_invoke(
 			execute_data, ZEND_USER_OPCODE_DISPATCH);
 	}
 	EG(current_execute_data) = execute_data;
+	entry_exception = EG(exception);
 	action = handler(execute_data);
-	if (EG(exception) != NULL) {
+	if (EG(exception) != NULL && EG(exception) != entry_exception) {
 		EG(current_execute_data) = execute_data;
 		return zend_native_user_opcode_result_make(NULL, UINT32_MAX);
 	}

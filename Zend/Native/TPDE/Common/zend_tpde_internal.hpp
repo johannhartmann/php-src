@@ -29,6 +29,8 @@ enum zend_tpde_user_opcode_target_kind : uint8_t {
 	ZEND_TPDE_USER_OPCODE_TARGET_NOP = 8,
 	ZEND_TPDE_USER_OPCODE_TARGET_FINALLY_CALL = 9,
 	ZEND_TPDE_USER_OPCODE_TARGET_FINALLY_RETURN = 10,
+	ZEND_TPDE_USER_OPCODE_TARGET_CATCH = 11,
+	ZEND_TPDE_USER_OPCODE_TARGET_RECEIVE = 12,
 };
 
 static inline uint32_t zend_tpde_user_opcode_target_frame_uses(

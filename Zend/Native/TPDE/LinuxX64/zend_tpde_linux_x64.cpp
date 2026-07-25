@@ -568,6 +568,96 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				continue;
 			}
 			if (dispatch_case.kind
+					== ZEND_TPDE_USER_OPCODE_TARGET_CATCH) {
+				tpde::x64::CCAssignerSysV catch_assigner{false};
+				CallBuilder catch_call{*this, catch_assigner};
+				catch_call.add_arg(
+					CallArg{node.operands[dispatch_case.frame_operand]});
+				catch_call.add_arg(ValuePart{
+					zend_tpde_encode_value_operand(operation.op1), 8,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				catch_call.add_arg(ValuePart{
+					zend_tpde_encode_value_operand(operation.result), 8,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				catch_call.add_arg(ValuePart{
+					operation.extended_value, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				catch_call.add_arg(ValuePart{
+					dispatch_case.source, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				catch_call.call(runtime_symbol(dispatch_case.helper));
+				ValuePart result{
+					tpde::x64::PlatformConfig::GP_BANK, 4};
+				catch_call.add_ret(result, tpde::CCAssignment{});
+				auto result_reg = result.cur_reg_or_load(this);
+				auto catch_branch = text_writer.label_create();
+				auto catch_matched = text_writer.label_create();
+				ASM(CMP32ri, result_reg, ZEND_NATIVE_CATCH_EXCEPTION);
+				generate_raw_jump(Jump::je, exception);
+				ASM(CMP32ri, result_reg, ZEND_NATIVE_CATCH_BRANCH);
+				generate_raw_jump(Jump::je, catch_branch);
+				ASM(CMP32ri, result_reg, ZEND_NATIVE_CATCH_MATCHED);
+				generate_raw_jump(Jump::je, catch_matched);
+				result.reset(this);
+				generate_raw_jump(Jump::jmp, exception);
+				label_place(catch_branch);
+				jump_to_source(
+					plan->user_opcode_source_op2_targets[
+						dispatch_case.source]);
+				label_place(catch_matched);
+				jump_to_source(dispatch_case.source + 1);
+				continue;
+			}
+			if (dispatch_case.kind
+					== ZEND_TPDE_USER_OPCODE_TARGET_RECEIVE) {
+				tpde::x64::CCAssignerSysV receive_assigner{false};
+				CallBuilder receive_call{*this, receive_assigner};
+				receive_call.add_arg(
+					CallArg{node.operands[dispatch_case.frame_operand]});
+				receive_call.add_arg(ValuePart{
+					dispatch_case.target_opcode, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				receive_call.add_arg(ValuePart{
+					operation.op1_unused_payload, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				receive_call.add_arg(ValuePart{
+					zend_tpde_encode_value_operand(
+						operation.op2, operation.op2_unused_payload),
+					8, tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				receive_call.add_arg(ValuePart{
+					operation.op2_unused_payload, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				receive_call.add_arg(ValuePart{
+					zend_tpde_encode_value_operand(operation.result), 8,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				receive_call.add_arg(ValuePart{
+					dispatch_case.source, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				receive_call.call(runtime_symbol(dispatch_case.helper));
+				ValuePart status{
+					tpde::x64::PlatformConfig::GP_BANK, 4};
+				receive_call.add_ret(status, tpde::CCAssignment{});
+				auto status_reg = status.cur_reg_or_load(this);
+				ASM(CMP32ri, status_reg, ZEND_NATIVE_RETURNED);
+				auto received = text_writer.label_create();
+				generate_raw_jump(Jump::je, received);
+				status.reset(this);
+				generate_raw_jump(Jump::jmp, exception);
+				label_place(received);
+				jump_to_source(dispatch_case.source + 1);
+				continue;
+			}
+			if (dispatch_case.kind
 					== ZEND_TPDE_USER_OPCODE_TARGET_RETURN) {
 				tpde::x64::CCAssignerSysV return_assigner{false};
 				CallBuilder return_call{*this, return_assigner};
