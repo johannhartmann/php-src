@@ -3167,6 +3167,164 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				successors[0], successors[1]);
 			return true;
 		}
+		case ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH: {
+			zend_tpde_multi_branch layout;
+			if (node.operands.size() != 1
+					|| !zend_tpde_multi_branch_at(
+						adaptor->plan(), mir, record, &layout)) {
+				return false;
+			}
+			const zend_tpde_plan *plan = adaptor->plan();
+			std::vector<IRBlockRef> targets;
+			std::vector<::tpde::Label> case_labels;
+			targets.reserve(layout.successor_count);
+			case_labels.reserve(zend_hash_num_elements(layout.jump_table));
+			for (uint32_t i = 0; i < layout.successor_count; ++i) {
+				zend_mir_block_id target_id;
+				if (!plan->view->successor_at(
+						plan->view->context, record.block_id, i,
+						&target_id)) {
+					return false;
+				}
+				IRBlockRef target = adaptor->block_ref(target_id);
+				if (target == Adaptor::INVALID_BLOCK_REF) {
+					return false;
+				}
+				targets.push_back(target);
+			}
+			for (uint32_t i = 0;
+					i < zend_hash_num_elements(layout.jump_table); ++i) {
+				case_labels.push_back(text_writer.label_create());
+			}
+			auto default_label = text_writer.label_create();
+			auto fallback_label = layout.source_opcode == ZEND_MATCH
+				? default_label : text_writer.label_create();
+			auto long_label = text_writer.label_create();
+			auto string_label = text_writer.label_create();
+			auto [frame_ref, frame] = val_ref_single(node.operands[0]);
+			auto frame_scratch = std::move(frame).into_scratch();
+			ScratchReg slot{this};
+			ScratchReg type{this};
+			ScratchReg value{this};
+			ScratchReg probe{this};
+			ScratchReg constant{this};
+			auto slot_reg = slot.alloc_gp();
+			auto type_reg = type.alloc_gp();
+			auto value_reg = value.alloc_gp();
+			auto probe_reg = probe.alloc_gp();
+			auto constant_reg = constant.alloc_gp();
+			ASM(ADDxi, slot_reg, frame_scratch.cur_reg(),
+				layout.operand_offset);
+			load_off(type_reg, slot_reg,
+				static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+			ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+			auto spilled = spill_before_branch();
+			begin_branch_region();
+			auto dereferenced = text_writer.label_create();
+			ASM(CMPwi, type_reg, IS_REFERENCE);
+			generate_raw_jump(Jump::Jne, dereferenced);
+			load_off(slot_reg, slot_reg, 0, 8);
+			ASM(ADDxi, slot_reg, slot_reg,
+				static_cast<uint32_t>(offsetof(zend_reference, val)));
+			load_off(type_reg, slot_reg,
+				static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+			ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+			label_place(dereferenced);
+			if (layout.source_opcode != ZEND_SWITCH_STRING) {
+				ASM(CMPwi, type_reg, IS_LONG);
+				generate_raw_jump(Jump::Jeq, long_label);
+			}
+			if (layout.source_opcode != ZEND_SWITCH_LONG) {
+				ASM(CMPwi, type_reg, IS_STRING);
+				generate_raw_jump(Jump::Jeq, string_label);
+			}
+			generate_raw_jump(Jump::jmp, fallback_label);
+
+			uint32_t case_index = 0;
+			zend_ulong numeric_key;
+			zend_string *string_key;
+			zval *jump_value;
+			label_place(long_label);
+			load_off(value_reg, slot_reg, 0, 8);
+			ZEND_HASH_FOREACH_KEY_VAL(
+					layout.jump_table, numeric_key, string_key, jump_value) {
+				if (string_key == nullptr) {
+					const uint64_t case_value =
+						static_cast<uint64_t>(numeric_key);
+					materialize_constant(
+						&case_value, DarwinConfig::GP_BANK, 8,
+						constant_reg);
+					ASM(CMPx, value_reg, constant_reg);
+					generate_raw_jump(
+						Jump::Jeq, case_labels[case_index]);
+				}
+				case_index++;
+			} ZEND_HASH_FOREACH_END();
+			generate_raw_jump(Jump::jmp, default_label);
+
+			label_place(string_label);
+			load_off(value_reg, slot_reg, 0, 8);
+			case_index = 0;
+			ZEND_HASH_FOREACH_KEY_VAL(
+					layout.jump_table, numeric_key, string_key, jump_value) {
+				if (string_key != nullptr) {
+					auto next_case = text_writer.label_create();
+					const uint64_t length = ZSTR_LEN(string_key);
+					load_off(probe_reg, value_reg,
+						static_cast<uint32_t>(
+							offsetof(zend_string, len)), 8);
+					materialize_constant(
+						&length, DarwinConfig::GP_BANK, 8,
+						constant_reg);
+					ASM(CMPx, probe_reg, constant_reg);
+					generate_raw_jump(Jump::Jne, next_case);
+					size_t offset = 0;
+					while (offset < ZSTR_LEN(string_key)) {
+						const uint32_t width =
+							ZSTR_LEN(string_key) - offset >= 8 ? 8
+							: ZSTR_LEN(string_key) - offset >= 4 ? 4
+							: ZSTR_LEN(string_key) - offset >= 2 ? 2 : 1;
+						uint64_t expected = 0;
+						memcpy(&expected, ZSTR_VAL(string_key) + offset,
+							width);
+						load_off(probe_reg, value_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_string, val) + offset),
+							width);
+						materialize_constant(
+							&expected, DarwinConfig::GP_BANK,
+							width, constant_reg);
+						ASM(CMPx, probe_reg, constant_reg);
+						generate_raw_jump(Jump::Jne, next_case);
+						offset += width;
+					}
+					generate_raw_jump(
+						Jump::jmp, case_labels[case_index]);
+					label_place(next_case);
+				}
+				case_index++;
+			} ZEND_HASH_FOREACH_END();
+			generate_raw_jump(Jump::jmp, default_label);
+
+			for (uint32_t i = 0; i < case_labels.size(); ++i) {
+				label_place(case_labels[i]);
+				generate_branch_to_block(
+					Jump::jmp, targets[i], false, false);
+			}
+			label_place(default_label);
+			generate_branch_to_block(Jump::jmp,
+				targets[layout.successor_count
+					- (layout.source_opcode == ZEND_MATCH ? 1 : 2)],
+				false, false);
+			if (layout.source_opcode != ZEND_MATCH) {
+				label_place(fallback_label);
+				generate_branch_to_block(
+					Jump::jmp, targets.back(), false, false);
+			}
+			end_branch_region();
+			release_spilled_regs(spilled);
+			return true;
+		}
 		case ZEND_MIR_OPCODE_VALUE_COND_BRANCH:
 		case ZEND_MIR_OPCODE_ITERATOR_BRANCH: {
 			if (node.operands.size() != 1 || !mir.has_value_operation) {

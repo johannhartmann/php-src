@@ -1157,6 +1157,7 @@ bool initialize_plan(
 	}
 
 	plan->view = view;
+	plan->source_op_array = source_op_array;
 	plan->block_count = view->block_count(view->context);
 	plan->value_count = view->value_count(view->context);
 	plan->instruction_count = view->instruction_count(view->context);
@@ -1654,14 +1655,19 @@ bool initialize_plan(
 		if (zend_mir_opcode_is_executable_value(record.opcode)) {
 			const bool semantic_echo =
 				record.opcode == ZEND_MIR_OPCODE_ECHO_SCALAR;
+			const bool multi_branch =
+				record.opcode == ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH;
 			const zend_native_runtime_helper_id helper = semantic_echo
 				? ZEND_NATIVE_HELPER_COUNT
+				: multi_branch
+					? ZEND_NATIVE_HELPER_COUNT
 				: executable_value_helper(record.opcode);
 			plan->instructions[i].runtime_helper = helper;
 			if ((semantic_echo ? count != 1 : count != 0)
 					|| !zend_mir_id_is_valid(record.source_position_id)
-					|| (!semantic_echo && helper == ZEND_NATIVE_HELPER_COUNT)
-					|| (!semantic_echo
+					|| (!semantic_echo && !multi_branch
+						&& helper == ZEND_NATIVE_HELPER_COUNT)
+					|| (!semantic_echo && !multi_branch
 						&& !zend_tpde_helper_has_explicit_operands(helper))
 					|| !plan->instructions[i].has_value_operation
 					|| plan->instructions[i].value_operation.id != record.id
@@ -1673,6 +1679,17 @@ bool initialize_plan(
 					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 					"executable value operation lacks exact source semantics");
 				return false;
+			}
+			if (multi_branch) {
+				zend_tpde_multi_branch layout;
+				if (!zend_tpde_multi_branch_at(
+						plan, plan->instructions[i], record, &layout)) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+						"multiway branch lacks exact source-backed cases");
+					return false;
+				}
+				continue;
 			}
 			if (semantic_echo) {
 				zend_mir_value_id value_id;

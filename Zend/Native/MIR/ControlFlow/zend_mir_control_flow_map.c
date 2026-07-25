@@ -140,7 +140,7 @@ bool zend_mir_control_flow_map_add_edge(
 			|| !zend_mir_id_is_valid(mapping->mir_from_block_id)
 			|| !zend_mir_id_is_valid(mapping->mir_to_block_id)
 			|| !zend_mir_id_is_valid(mapping->terminator_instruction_id)
-			|| mapping->mir_successor_index > 1) {
+			|| mapping->mir_successor_index == UINT32_MAX) {
 		return false;
 	}
 	for (i = 0; i < storage->edge_count; i++) {

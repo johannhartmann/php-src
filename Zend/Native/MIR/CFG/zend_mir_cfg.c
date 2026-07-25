@@ -288,6 +288,8 @@ static uint32_t zend_mir_cfg_expected_successors(zend_mir_opcode opcode)
 		case ZEND_MIR_OPCODE_VALUE_COND_BRANCH:
 		case ZEND_MIR_OPCODE_ITERATOR_BRANCH:
 			return 2;
+		case ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH:
+			return UINT32_MAX;
 		case ZEND_MIR_OPCODE_RETURN:
 		case ZEND_MIR_OPCODE_THROW:
 		case ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL:
@@ -882,8 +884,12 @@ zend_mir_cfg_status zend_mir_cfg_validate(const zend_mir_cfg *cfg)
 			return ZEND_MIR_CFG_STATUS_INVALID_CFG;
 		}
 		expected = zend_mir_cfg_expected_successors(terminator.opcode);
-		if (expected == UINT32_MAX || expected != zend_mir_cfg_successor_count_internal(
-				cfg, cfg->blocks[i].id)) {
+		if (terminator.opcode == ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH
+				? zend_mir_cfg_successor_count_internal(
+					cfg, cfg->blocks[i].id) < 2
+				: expected == UINT32_MAX
+					|| expected != zend_mir_cfg_successor_count_internal(
+						cfg, cfg->blocks[i].id)) {
 			return ZEND_MIR_CFG_STATUS_INVALID_CFG;
 		}
 		for (j = 0; j < cfg->instruction_count; j++) {
