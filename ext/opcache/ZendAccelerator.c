@@ -52,6 +52,10 @@
 #include "ext/standard/basic_functions.h"
 #include "zend_vm_opcodes.h"
 
+#ifdef HAVE_NATIVE_ENGINE
+# include "Zend/Native/Compiler/zend_native_executor.h"
+#endif
+
 #ifdef ZEND_WIN32
 # include "ext/standard/md5.h"
 #endif
@@ -1460,6 +1464,9 @@ zend_result zend_accel_invalidate(zend_string *filename, bool force)
 			zend_accel_lock_discard_script(persistent_script);
 			SHM_PROTECT();
 			HANDLE_UNBLOCK_INTERRUPTIONS();
+#ifdef HAVE_NATIVE_ENGINE
+			zend_native_executor_invalidate();
+#endif
 		}
 
 		file_handle.opened_path = NULL;
@@ -2939,6 +2946,9 @@ ZEND_RINIT_FUNCTION(zend_accelerator)
 				}
 				accel_restart_enter();
 
+#ifdef HAVE_NATIVE_ENGINE
+				zend_native_executor_invalidate();
+#endif
 				zend_map_ptr_reset();
 				zend_reset_cache_vars();
 				zend_accel_hash_clean(&ZCSG(hash));

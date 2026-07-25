@@ -92,6 +92,7 @@ typedef void (*zend_native_compile_observer_t)(
 typedef struct _zend_native_compiler_config {
 	zend_script *script;
 	zend_native_target target;
+	bool persistent;
 	size_t mir_chunk_size;
 	zend_native_frame_probe_t frame_probe;
 	void *frame_probe_context;
@@ -106,6 +107,14 @@ ZEND_API zend_native_compiler *zend_native_compiler_create(
 	const zend_native_compiler_config *config,
 	zend_native_compile_diagnostic *diagnostic);
 ZEND_API void zend_native_compiler_destroy(zend_native_compiler *compiler);
+
+/*
+ * Drop request-owned dynamic code and post-publication compiler workspaces.
+ * Persistent entry cells and immutable code mappings remain ready for the
+ * next request.
+ */
+ZEND_API void zend_native_compiler_end_request(
+	zend_native_compiler *compiler);
 
 /*
  * Compile the reachable static call graph and atomically publish each SCC.
@@ -163,6 +172,10 @@ ZEND_API const zend_native_image *zend_native_compiler_image_at(
 ZEND_API const zend_native_image *zend_native_compiler_image_for(
 	const zend_native_compiler *compiler, const zend_function *function);
 ZEND_API uint32_t zend_native_compiler_active_call_count(
+	const zend_native_compiler *compiler);
+ZEND_API uint32_t zend_native_compiler_suspended_frame_count(
+	const zend_native_compiler *compiler);
+ZEND_API bool zend_native_compiler_is_quiescent(
 	const zend_native_compiler *compiler);
 ZEND_API bool zend_native_compiler_all_code_is_wx(
 	const zend_native_compiler *compiler);

@@ -18,6 +18,13 @@ ZEND_API void zend_native_executor_activate(void);
 ZEND_API void zend_native_executor_deactivate(void);
 ZEND_API void zend_native_executor_execute_ex(zend_execute_data *execute_data);
 
+/*
+ * Advance the process code epoch. Existing mappings remain pinned through
+ * the current request and are reclaimed before the next request enters
+ * userland.
+ */
+ZEND_API void zend_native_executor_invalidate(void);
+
 #ifdef __cplusplus
 }
 #endif
