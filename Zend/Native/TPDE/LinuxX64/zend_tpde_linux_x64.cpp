@@ -327,6 +327,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			const zend_mir_executable_value_ref *operation;
 			uint32_t source;
 			uint32_t target_opcode;
+			zend_tpde_user_opcode_target_kind kind;
 			zend_native_runtime_helper_id helper;
 			uint32_t frame_operand;
 		};
@@ -369,6 +370,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 					source_operation,
 					source,
 					target_case.opcode,
+					target_case.kind,
 					target_case.helper,
 					static_cast<uint32_t>(
 						4 + source_index
@@ -384,6 +386,158 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			label_place(dispatch_case.label);
 			const zend_mir_executable_value_ref &operation =
 				*dispatch_case.operation;
+			auto jump_to_source = [&](uint32_t source) {
+				const uint32_t landing =
+					source < next_landings.size()
+						? next_landings[source] : UINT32_MAX;
+				if (landing == UINT32_MAX
+						|| landing >= user_opcode_labels_.size()) {
+					generate_raw_jump(Jump::jmp, exception);
+				} else {
+					generate_raw_jump(
+						Jump::jmp, user_opcode_labels_[landing]);
+				}
+			};
+			if (dispatch_case.kind
+					== ZEND_TPDE_USER_OPCODE_TARGET_JUMP_OP1) {
+				auto [frame_ref, frame] =
+					val_ref_single(
+						node.operands[dispatch_case.frame_operand]);
+				frame.reset();
+				jump_to_source(
+					plan->user_opcode_source_op1_targets[
+						dispatch_case.source]);
+				continue;
+			}
+			if (dispatch_case.kind
+					== ZEND_TPDE_USER_OPCODE_TARGET_RETURN) {
+				tpde::x64::CCAssignerSysV return_assigner{false};
+				CallBuilder return_call{*this, return_assigner};
+				return_call.add_arg(
+					CallArg{node.operands[dispatch_case.frame_operand]});
+				return_call.add_arg(ValuePart{
+					dispatch_case.source, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				return_call.add_arg(ValuePart{
+					zend_tpde_encode_value_operand(operation.op1), 8,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				return_call.add_arg(ValuePart{
+					dispatch_case.target_opcode, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				return_call.add_arg(ValuePart{
+					operation.extended_value, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				return_call.call(runtime_symbol(dispatch_case.helper));
+				ValuePart status{
+					tpde::x64::PlatformConfig::GP_BANK, 4};
+				return_call.add_ret(status, tpde::CCAssignment{});
+				RetBuilder return_builder{*this, *cur_cc_assigner()};
+				return_builder.add(
+					std::move(status), tpde::CCAssignment{});
+				return_builder.ret();
+				continue;
+			}
+			if (dispatch_case.kind
+					== ZEND_TPDE_USER_OPCODE_TARGET_THROW) {
+				tpde::x64::CCAssignerSysV throw_assigner{false};
+				CallBuilder throw_call{*this, throw_assigner};
+				throw_call.add_arg(
+					CallArg{node.operands[dispatch_case.frame_operand]});
+				throw_call.add_arg(ValuePart{
+					zend_tpde_encode_value_operand(operation.op1), 8,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				throw_call.add_arg(ValuePart{
+					dispatch_case.target_opcode, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				throw_call.add_arg(ValuePart{
+					dispatch_case.source, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				throw_call.call(runtime_symbol(dispatch_case.helper));
+				ValuePart status{
+					tpde::x64::PlatformConfig::GP_BANK, 4};
+				throw_call.add_ret(status, tpde::CCAssignment{});
+				RetBuilder return_builder{*this, *cur_cc_assigner()};
+				return_builder.add(
+					std::move(status), tpde::CCAssignment{});
+				return_builder.ret();
+				continue;
+			}
+			if (dispatch_case.kind
+						== ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2
+					|| dispatch_case.kind
+						== ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_OP2
+					|| dispatch_case.kind
+						== ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_EXTENDED) {
+				tpde::x64::CCAssignerSysV branch_assigner{false};
+				CallBuilder branch_call{*this, branch_assigner};
+				branch_call.add_arg(
+					CallArg{node.operands[dispatch_case.frame_operand]});
+				branch_call.add_arg(ValuePart{
+					zend_tpde_encode_value_operand(operation.op1), 8,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				branch_call.add_arg(ValuePart{
+					zend_tpde_encode_value_operand(operation.op2), 8,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				branch_call.add_arg(ValuePart{
+					zend_tpde_encode_value_operand(operation.result), 8,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				branch_call.add_arg(ValuePart{
+					operation.extended_value, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				branch_call.add_arg(ValuePart{
+					dispatch_case.target_opcode, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				branch_call.add_arg(ValuePart{
+					dispatch_case.source, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				branch_call.call(runtime_symbol(dispatch_case.helper));
+				ValuePart result{
+					tpde::x64::PlatformConfig::GP_BANK, 4};
+				branch_call.add_ret(result, tpde::CCAssignment{});
+				auto result_reg = result.cur_reg_or_load(this);
+				auto branch_target = text_writer.label_create();
+				auto branch_following = text_writer.label_create();
+				ASM(CMP32ri, result_reg, ZEND_NATIVE_ITERATOR_EXCEPTION);
+				generate_raw_jump(Jump::je, exception);
+				if (dispatch_case.kind
+						== ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2) {
+					ASM(CMP32ri, result_reg, ZEND_NATIVE_ITERATOR_NEXT);
+				} else {
+					ASM(CMP32ri, result_reg, ZEND_NATIVE_ITERATOR_END);
+				}
+				generate_raw_jump(Jump::je, branch_target);
+				ASM(CMP32ri, result_reg,
+					dispatch_case.kind
+							== ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2
+						? ZEND_NATIVE_ITERATOR_END
+						: ZEND_NATIVE_ITERATOR_NEXT);
+				generate_raw_jump(Jump::je, branch_following);
+				result.reset(this);
+				generate_raw_jump(Jump::jmp, exception);
+				label_place(branch_target);
+				jump_to_source(dispatch_case.kind
+							== ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_EXTENDED
+						? plan->user_opcode_source_extended_targets[
+							dispatch_case.source]
+						: plan->user_opcode_source_op2_targets[
+							dispatch_case.source]);
+				label_place(branch_following);
+				jump_to_source(dispatch_case.source + 1);
+				continue;
+			}
 			const bool explicit_object_operands =
 				zend_tpde_helper_has_object_operand_payloads(
 					dispatch_case.helper);
