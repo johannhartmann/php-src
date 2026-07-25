@@ -4544,6 +4544,16 @@ static void native_mir_test_cleanup(native_mir_test_state *state)
 		}
 	}
 	if (state->script_initialized) {
+		zend_function *function;
+
+		ZEND_HASH_FOREACH_PTR(&state->script.function_table, function) {
+			if (function != NULL && function->type == ZEND_USER_FUNCTION) {
+				native_mir_test_cleanup_static_variables(
+					&function->op_array);
+			}
+		} ZEND_HASH_FOREACH_END();
+		native_mir_test_cleanup_static_variables(
+			&state->script.main_op_array);
 		zend_hash_destroy(&state->script.function_table);
 		zend_hash_destroy(&state->script.class_table);
 		state->script_initialized = false;
@@ -4588,6 +4598,12 @@ static void native_mir_test_cleanup(native_mir_test_state *state)
 		state->class_table_snapshot = false;
 	}
 	if (state->compiled != NULL) {
+		for (index = 0;
+				index < state->compiled->num_dynamic_func_defs; index++) {
+			native_mir_test_cleanup_static_variables(
+				state->compiled->dynamic_func_defs[index]);
+		}
+		native_mir_test_cleanup_static_variables(state->compiled);
 		destroy_op_array(state->compiled);
 		efree_size(state->compiled, sizeof(zend_op_array));
 		state->compiled = NULL;
