@@ -10,53 +10,17 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <array>
 
 struct _zend_native_direct_call_descriptor;
 struct _zend_native_direct_internal_call_descriptor;
 struct _zend_native_user_call_descriptor;
 
+extern "C" zend_mir_opcode zend_mir_w12_executable_opcode(uint32_t opcode);
+
 struct zend_tpde_user_opcode_target {
 	uint8_t opcode;
 	zend_native_runtime_helper_id helper;
 };
-
-/*
- * These Zend opcodes consume the same explicit op1/op2/result payload carried
- * by a ZNMIR value operation.  DISPATCH_TO selects the semantic operation in
- * generated code while preserving the selected opline's compile-time-bound
- * operands; no zend_op or VM handler is consulted at runtime.
- */
-static constexpr std::array<zend_tpde_user_opcode_target, 27>
-zend_tpde_user_opcode_targets{{
-	{ZEND_ADD, ZEND_NATIVE_HELPER_VALUE_BINARY_OP},
-	{ZEND_SUB, ZEND_NATIVE_HELPER_VALUE_BINARY_OP},
-	{ZEND_MUL, ZEND_NATIVE_HELPER_VALUE_BINARY_OP},
-	{ZEND_DIV, ZEND_NATIVE_HELPER_VALUE_BINARY_OP},
-	{ZEND_MOD, ZEND_NATIVE_HELPER_VALUE_BINARY_OP},
-	{ZEND_POW, ZEND_NATIVE_HELPER_VALUE_BINARY_OP},
-	{ZEND_SL, ZEND_NATIVE_HELPER_VALUE_BINARY_OP},
-	{ZEND_SR, ZEND_NATIVE_HELPER_VALUE_BINARY_OP},
-	{ZEND_BW_OR, ZEND_NATIVE_HELPER_VALUE_BINARY_OP},
-	{ZEND_BW_AND, ZEND_NATIVE_HELPER_VALUE_BINARY_OP},
-	{ZEND_BW_XOR, ZEND_NATIVE_HELPER_VALUE_BINARY_OP},
-	{ZEND_BOOL_XOR, ZEND_NATIVE_HELPER_VALUE_BINARY_OP},
-	{ZEND_IS_IDENTICAL, ZEND_NATIVE_HELPER_VALUE_BINARY_OP},
-	{ZEND_IS_NOT_IDENTICAL, ZEND_NATIVE_HELPER_VALUE_BINARY_OP},
-	{ZEND_IS_EQUAL, ZEND_NATIVE_HELPER_VALUE_BINARY_OP},
-	{ZEND_IS_NOT_EQUAL, ZEND_NATIVE_HELPER_VALUE_BINARY_OP},
-	{ZEND_IS_SMALLER, ZEND_NATIVE_HELPER_VALUE_BINARY_OP},
-	{ZEND_IS_SMALLER_OR_EQUAL, ZEND_NATIVE_HELPER_VALUE_BINARY_OP},
-	{ZEND_SPACESHIP, ZEND_NATIVE_HELPER_VALUE_BINARY_OP},
-	{ZEND_BW_NOT, ZEND_NATIVE_HELPER_VALUE_UNARY_OP},
-	{ZEND_BOOL_NOT, ZEND_NATIVE_HELPER_VALUE_UNARY_OP},
-	{ZEND_BOOL, ZEND_NATIVE_HELPER_VALUE_UNARY_OP},
-	{ZEND_STRLEN, ZEND_NATIVE_HELPER_VALUE_UNARY_OP},
-	{ZEND_PRE_INC, ZEND_NATIVE_HELPER_VALUE_INCDEC},
-	{ZEND_PRE_DEC, ZEND_NATIVE_HELPER_VALUE_INCDEC},
-	{ZEND_POST_INC, ZEND_NATIVE_HELPER_VALUE_INCDEC},
-	{ZEND_POST_DEC, ZEND_NATIVE_HELPER_VALUE_INCDEC},
-}};
 
 static inline uint64_t zend_tpde_encode_value_operand(
 	const zend_mir_source_operand_ref &operand, uint32_t unused_payload)
@@ -969,6 +933,8 @@ struct zend_tpde_plan {
 	uint32_t value_model_flags;
 	uint64_t required_runtime_capabilities;
 	uint64_t required_runtime_helpers[ZEND_NATIVE_RUNTIME_HELPER_WORD_COUNT];
+	zend_tpde_user_opcode_target user_opcode_targets[ZEND_VM_LAST_OPCODE];
+	uint32_t user_opcode_target_count;
 	bool may_emit_calls;
 	bool user_opcode_callbacks;
 };

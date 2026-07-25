@@ -807,7 +807,7 @@ public:
 				for (size_t dispatch_case = 0;
 						dispatch_case
 							< user_opcode_dispatch_to_sources_.size()
-								* zend_tpde_user_opcode_targets.size();
+								* plan_->user_opcode_target_count;
 						++dispatch_case) {
 					operands_.push_back(IRValueRef{FRAME_VALUE});
 				}
@@ -820,7 +820,7 @@ public:
 					operand_offset,
 					static_cast<uint32_t>(
 						4 + user_opcode_dispatch_to_sources_.size()
-							* zend_tpde_user_opcode_targets.size()),
+							* plan_->user_opcode_target_count),
 					false});
 			}
 			add_node(block_instructions, block, InstNode{
