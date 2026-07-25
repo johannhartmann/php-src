@@ -1,6 +1,7 @@
 /* Exact Zend generator lifecycle semantics for native frames. */
 
 #include "Zend/Native/Runtime/Common/zend_native_generators.h"
+#include "Zend/Native/Runtime/Common/zend_native_calls.h"
 
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_generators.h"
@@ -130,6 +131,23 @@ static zend_always_inline zend_generator *zend_native_running_generator(
 		? (zend_generator *) execute_data->return_value : NULL;
 }
 
+void zend_native_generator_release_generation(zend_generator *generator)
+{
+	zend_native_entry_cell *cell;
+
+	if (generator == NULL
+			|| (cell = generator->native_entry_cell) == NULL) {
+		return;
+	}
+	ZEND_ASSERT(cell->generation == generator->native_entry_generation);
+	ZEND_ASSERT(cell->suspended_frames != 0);
+	if (cell->suspended_frames != 0) {
+		cell->suspended_frames--;
+	}
+	generator->native_entry_cell = NULL;
+	generator->native_entry_generation = 0;
+}
+
 zend_native_status zend_native_generator_create(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,
@@ -139,6 +157,7 @@ zend_native_status zend_native_generator_create(
 	zend_native_generator_operation operation;
 	zend_generator *generator;
 	zend_execute_data *generator_frame;
+	zend_native_entry_cell *entry_cell;
 	uint32_t num_args;
 	uint32_t used_stack;
 	uint32_t copied_stack;
@@ -150,6 +169,13 @@ zend_native_status zend_native_generator_create(
 			source_position_id, ZEND_GENERATOR_CREATE, &operation)
 			|| execute_data->return_value == NULL) {
 		zend_throw_error(NULL, "Invalid native generator creation frame");
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	entry_cell = zend_native_reentry_resolve(execute_data->func);
+	if (entry_cell == NULL
+			|| zend_native_entry_cell_load(entry_cell) == NULL) {
+		zend_throw_error(NULL,
+			"Native generator has no published code generation");
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	object_init_ex(execute_data->return_value, zend_ce_generator);
@@ -196,6 +222,10 @@ zend_native_status zend_native_generator_create(
 		ZEND_CALL_TOP_FUNCTION | ZEND_CALL_ALLOCATED | ZEND_CALL_GENERATOR);
 	Z_TYPE_INFO(generator_frame->This) = call_info;
 	generator_frame->prev_execute_data = NULL;
+	generator->native_entry_cell = entry_cell;
+	generator->native_entry_generation =
+		generator->native_entry_cell->generation;
+	generator->native_entry_cell->suspended_frames++;
 	EG(current_execute_data) = execute_data->prev_execute_data;
 	return ZEND_NATIVE_GENERATOR_CREATED;
 }
