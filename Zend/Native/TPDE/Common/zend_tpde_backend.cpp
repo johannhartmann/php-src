@@ -1158,6 +1158,7 @@ bool initialize_plan(
 
 	plan->view = view;
 	plan->source_op_array = source_op_array;
+	plan->source_ssa = source_ssa;
 	plan->block_count = view->block_count(view->context);
 	plan->value_count = view->value_count(view->context);
 	plan->instruction_count = view->instruction_count(view->context);
@@ -1176,6 +1177,15 @@ bool initialize_plan(
 	const uint32_t constant_count = view->constant_count(view->context);
 	const uint32_t frame_slot_count = view->frame_slot_count(view->context);
 	if (source_op_array != nullptr) {
+		for (uint32_t index = 0; index < source_op_array->last; ++index) {
+			if (zend_get_user_opcode_handler(
+					source_op_array->opcodes[index].opcode) != nullptr) {
+				plan->user_opcode_callbacks = true;
+				require_runtime_helper(
+					plan, ZEND_NATIVE_HELPER_USER_OPCODE_INVOKE);
+				break;
+			}
+		}
 		const uint32_t observer_temporary_count =
 			ZEND_OBSERVER_ENABLED ? 1 : 0;
 		if (source_op_array->last_var < 0
