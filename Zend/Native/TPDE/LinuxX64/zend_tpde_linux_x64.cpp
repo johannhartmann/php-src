@@ -231,8 +231,15 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 		const size_t dispatch_case_count =
 			dispatch_sources.size()
 				* plan->user_opcode_target_count;
+		size_t dispatch_operand_count = 0;
+		for (uint32_t target = 0;
+				target < plan->user_opcode_target_count; ++target) {
+			dispatch_operand_count += dispatch_sources.size()
+				* zend_tpde_user_opcode_target_frame_uses(
+					plan->user_opcode_targets[target].kind);
+		}
 		if (plan->source_op_array == nullptr
-				|| node.operands.size() != 4 + dispatch_case_count
+				|| node.operands.size() != 4 + dispatch_operand_count
 				|| node.argument_index >= plan->source_op_array->last
 				|| user_opcode_labels_.size()
 					< plan->source_op_array->last) {
@@ -330,9 +337,11 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			zend_tpde_user_opcode_target_kind kind;
 			zend_native_runtime_helper_id helper;
 			uint32_t frame_operand;
+			uint32_t slow_frame_operand;
 		};
 		std::vector<DispatchToCase> dispatch_cases;
 		dispatch_cases.reserve(dispatch_case_count);
+		uint32_t frame_operand = 4;
 		for (size_t source_index = 0;
 				source_index < dispatch_sources.size(); ++source_index) {
 			const uint32_t source = dispatch_sources[source_index];
@@ -372,10 +381,14 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 					target_case.opcode,
 					target_case.kind,
 					target_case.helper,
-					static_cast<uint32_t>(
-						4 + source_index
-							* plan->user_opcode_target_count
-							+ target_index)});
+					frame_operand,
+					frame_operand
+						+ zend_tpde_user_opcode_target_frame_uses(
+							target_case.kind)
+						- 1});
+				frame_operand +=
+					zend_tpde_user_opcode_target_frame_uses(
+						target_case.kind);
 			}
 			label_place(next_candidate);
 		}
@@ -416,6 +429,142 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				jump_to_source(
 					plan->user_opcode_source_op1_targets[
 						dispatch_case.source]);
+				continue;
+			}
+			if (dispatch_case.kind
+					== ZEND_TPDE_USER_OPCODE_TARGET_FINALLY_CALL) {
+				const uint32_t target =
+					plan->user_opcode_source_op1_targets[
+						dispatch_case.source];
+				if (operation.result_storage_id == ZEND_MIR_ID_INVALID
+						|| target == UINT32_MAX
+						|| operation.result_storage_id
+							> (UINT32_MAX / sizeof(zval))
+								- ZEND_CALL_FRAME_SLOT) {
+					auto [frame_ref, frame] = val_ref_single(
+						node.operands[dispatch_case.frame_operand]);
+					frame.reset();
+					generate_raw_jump(Jump::jmp, exception);
+					continue;
+				}
+				const int32_t result_offset =
+					static_cast<int32_t>(
+						(uint64_t{ZEND_CALL_FRAME_SLOT}
+							+ operation.result_storage_id)
+						* sizeof(zval));
+				auto [frame_ref, frame] = val_ref_single(
+					node.operands[dispatch_case.frame_operand]);
+				auto frame_scratch = std::move(frame).into_scratch();
+				ASM(MOV64mi,
+					FE_MEM(frame_scratch.cur_reg(), 0, FE_NOREG,
+						result_offset),
+					0);
+				ASM(MOV32mi,
+					FE_MEM(frame_scratch.cur_reg(), 0, FE_NOREG,
+						result_offset
+							+ static_cast<int32_t>(
+								offsetof(zval, u2.opline_num))),
+					dispatch_case.source);
+				frame_scratch.reset();
+				jump_to_source(target);
+				continue;
+			}
+			if (dispatch_case.kind
+					== ZEND_TPDE_USER_OPCODE_TARGET_FINALLY_RETURN) {
+				if (operation.op1_storage_id == ZEND_MIR_ID_INVALID
+						|| operation.op1.slot_kind
+							!= ZEND_MIR_SOURCE_SLOT_TMP
+						|| operation.op1_storage_id
+							> (INT32_MAX / sizeof(zval))
+								- ZEND_CALL_FRAME_SLOT) {
+					auto [fast_ref, fast_frame] = val_ref_single(
+						node.operands[dispatch_case.frame_operand]);
+					auto [slow_ref, slow_frame] = val_ref_single(
+						node.operands[
+							dispatch_case.slow_frame_operand]);
+					fast_frame.reset();
+					slow_frame.reset();
+					generate_raw_jump(Jump::jmp, exception);
+					continue;
+				}
+				const int32_t operand_offset =
+					static_cast<int32_t>(
+						(uint64_t{ZEND_CALL_FRAME_SLOT}
+							+ operation.op1_storage_id)
+						* sizeof(zval));
+				auto slow_exception = text_writer.label_create();
+				auto [frame_ref, frame] = val_ref_single(
+					node.operands[dispatch_case.frame_operand]);
+				auto frame_scratch = std::move(frame).into_scratch();
+				ScratchReg continuation{this};
+				auto continuation_reg = continuation.alloc_gp();
+				ASM(MOV32rm, continuation_reg,
+					FE_MEM(frame_scratch.cur_reg(), 0, FE_NOREG,
+						operand_offset
+							+ static_cast<int32_t>(
+								offsetof(zval, u2.opline_num))));
+				frame_scratch.reset();
+				ASM(CMP32ri, continuation_reg, UINT32_MAX);
+				generate_raw_jump(Jump::je, slow_exception);
+				for (uint32_t source = 0;
+						source + 1 < next_landings.size(); ++source) {
+					const uint32_t landing = next_landings[source + 1];
+					if (landing == UINT32_MAX
+							|| landing >= user_opcode_labels_.size()) {
+						continue;
+					}
+					ASM(CMP32ri, continuation_reg, source);
+					auto continued = text_writer.label_create();
+					generate_raw_jump(Jump::jne, continued);
+					generate_raw_jump(
+						Jump::jmp, user_opcode_labels_[landing]);
+					label_place(continued);
+				}
+				continuation.reset();
+				generate_raw_jump(Jump::jmp, exception);
+				label_place(slow_exception);
+				tpde::x64::CCAssignerSysV finally_assigner{false};
+				CallBuilder finally_call{*this, finally_assigner};
+				finally_call.add_arg(CallArg{
+					node.operands[dispatch_case.slow_frame_operand]});
+				finally_call.add_arg(ValuePart{
+					zend_tpde_encode_value_operand(operation.op1), 8,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				finally_call.add_arg(ValuePart{
+					operation.op2_unused_payload, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				finally_call.add_arg(ValuePart{
+					dispatch_case.source, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				finally_call.call(runtime_symbol(dispatch_case.helper));
+				ValuePart selected{
+					tpde::x64::PlatformConfig::GP_BANK, 4};
+				finally_call.add_ret(selected, tpde::CCAssignment{});
+				auto selected_reg = selected.cur_reg_or_load(this);
+				for (uint32_t i = 0; i < plan->instruction_count; ++i) {
+					const zend_mir_instruction_record handler =
+						zend_tpde_instruction_record_at(
+							plan, &plan->instructions[i]);
+					if ((handler.opcode != ZEND_MIR_OPCODE_CATCH_ENTER
+							&& handler.opcode
+								!= ZEND_MIR_OPCODE_FINALLY_ENTER)
+							|| !zend_mir_id_is_valid(
+								handler.source_position_id)) {
+						continue;
+					}
+					ASM(CMP32ri, selected_reg,
+						ZEND_NATIVE_FINALLY_EXCEPTION_FLAG
+							| handler.source_position_id);
+					auto continued = text_writer.label_create();
+					generate_raw_jump(Jump::jne, continued);
+					jump_to_source(handler.source_position_id);
+					label_place(continued);
+				}
+				selected.reset(this);
+				generate_raw_jump(Jump::jmp, exception);
 				continue;
 			}
 			if (dispatch_case.kind
@@ -7085,12 +7234,36 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			return true;
 		}
 		case ZEND_MIR_OPCODE_FINALLY_CALL: {
-			tpde::x64::CCAssignerSysV assigner{false};
-			CallBuilder builder{*this, assigner};
-			builder.add_arg(CallArg{node.operands[0]});
-			builder.add_arg(ValuePart{record.source_position_id, 4,
-				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_FINALLY_CALL));
+			const zend_tpde_plan *plan = adaptor->plan();
+			if (plan->source_op_array == nullptr
+					|| record.source_position_id
+						>= plan->source_op_array->last) {
+				return false;
+			}
+			const zend_op &opline =
+				plan->source_op_array->opcodes[record.source_position_id];
+			if (opline.opcode != ZEND_FAST_CALL
+					|| opline.result_type != IS_TMP_VAR
+					|| opline.result.var > INT32_MAX
+					|| opline.result.var
+						> INT32_MAX
+							- static_cast<int32_t>(
+								offsetof(zval, u2.opline_num))) {
+				return false;
+			}
+			auto [frame_ref, frame] = val_ref_single(node.operands[0]);
+			auto frame_scratch = std::move(frame).into_scratch();
+			ASM(MOV64mi,
+				FE_MEM(frame_scratch.cur_reg(), 0, FE_NOREG,
+					static_cast<int32_t>(opline.result.var)),
+				0);
+			ASM(MOV32mi,
+				FE_MEM(frame_scratch.cur_reg(), 0, FE_NOREG,
+					static_cast<int32_t>(opline.result.var)
+						+ static_cast<int32_t>(
+							offsetof(zval, u2.opline_num))),
+				record.source_position_id);
+			frame_scratch.reset();
 			const auto &successors = adaptor->block_succs(
 				adaptor->block_ref(record.block_id));
 			if (successors.size() != 2) {
@@ -7100,16 +7273,94 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			return true;
 		}
 		case ZEND_MIR_OPCODE_FINALLY_RETURN: {
+			const zend_tpde_plan *plan = adaptor->plan();
+			if (plan->source_op_array == nullptr
+					|| record.source_position_id
+						>= plan->source_op_array->last) {
+				return false;
+			}
+			const zend_op &opline =
+				plan->source_op_array->opcodes[record.source_position_id];
+			if (opline.opcode != ZEND_FAST_RET
+					|| opline.op1_type != IS_TMP_VAR
+					|| opline.op1.var > INT32_MAX
+					|| opline.op1.var
+						> INT32_MAX
+							- static_cast<int32_t>(
+								offsetof(zval, u2.opline_num))) {
+				return false;
+			}
+			auto slow_exception = text_writer.label_create();
+			auto [frame_ref, frame] = val_ref_single(node.operands[0]);
+			auto frame_scratch = std::move(frame).into_scratch();
+			ScratchReg direct_continuation{this};
+			auto direct_continuation_reg =
+				direct_continuation.alloc_gp();
+			ASM(MOV32rm, direct_continuation_reg,
+				FE_MEM(frame_scratch.cur_reg(), 0, FE_NOREG,
+					static_cast<int32_t>(opline.op1.var)
+						+ static_cast<int32_t>(
+							offsetof(zval, u2.opline_num))));
+			frame_scratch.reset();
+			ASM(CMP32ri, direct_continuation_reg, UINT32_MAX);
+			generate_raw_jump(Jump::je, slow_exception);
+			if (plan->user_opcode_callbacks) {
+				const auto &next_landings =
+					adaptor->user_opcode_next_landings();
+				for (uint32_t source = 0;
+						source + 1 < next_landings.size(); ++source) {
+					const uint32_t landing = next_landings[source + 1];
+					if (landing == UINT32_MAX
+							|| landing >= user_opcode_labels_.size()) {
+						continue;
+					}
+					ASM(CMP32ri, direct_continuation_reg, source);
+					auto continued = text_writer.label_create();
+					generate_raw_jump(Jump::jne, continued);
+					generate_raw_jump(
+						Jump::jmp, user_opcode_labels_[landing]);
+					label_place(continued);
+				}
+			} else {
+				for (uint32_t i = 0; i < plan->instruction_count; ++i) {
+					const zend_mir_instruction_record call =
+						zend_tpde_instruction_record_at(
+							plan, &plan->instructions[i]);
+					zend_mir_block_id target;
+					if (call.opcode != ZEND_MIR_OPCODE_FINALLY_CALL
+							|| plan->view->successor_count(
+								plan->view->context, call.block_id) != 2
+							|| !plan->view->successor_at(
+								plan->view->context, call.block_id, 1,
+								&target)) {
+						continue;
+					}
+					ASM(CMP32ri, direct_continuation_reg,
+						call.source_position_id);
+					auto continued = text_writer.label_create();
+					generate_raw_jump(Jump::jne, continued);
+					generate_exception_branch(adaptor->block_ref(target));
+					label_place(continued);
+				}
+			}
+			direct_continuation.reset();
+			{
+				RetBuilder return_builder{*this, *cur_cc_assigner()};
+				return_builder.add(ValuePart{ZEND_NATIVE_EXCEPTION, 4,
+					tpde::x64::PlatformConfig::GP_BANK},
+					tpde::CCAssignment{});
+				return_builder.ret();
+			}
+			label_place(slow_exception);
 			tpde::x64::CCAssignerSysV assigner{false};
 			CallBuilder builder{*this, assigner};
-			builder.add_arg(CallArg{node.operands[0]});
+			builder.add_arg(CallArg{node.operands[1]});
 			builder.add_arg(ValuePart{record.source_position_id, 4,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_FINALLY_RETURN));
 			ValuePart continuation{tpde::x64::PlatformConfig::GP_BANK, 4};
 			builder.add_ret(continuation, tpde::CCAssignment{});
 			auto continuation_reg = continuation.cur_reg_or_load(this);
-			const zend_tpde_plan *plan = adaptor->plan();
 			for (uint32_t i = 0; i < plan->instruction_count; ++i) {
 				const zend_mir_instruction_record call =
 					zend_tpde_instruction_record_at(

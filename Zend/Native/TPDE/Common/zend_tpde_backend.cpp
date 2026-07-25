@@ -218,6 +218,14 @@ bool user_opcode_target(
 		case ZEND_NOP:
 			target->kind = ZEND_TPDE_USER_OPCODE_TARGET_NOP;
 			return true;
+		case ZEND_FAST_CALL:
+			target->kind = ZEND_TPDE_USER_OPCODE_TARGET_FINALLY_CALL;
+			return true;
+		case ZEND_FAST_RET:
+			target->kind = ZEND_TPDE_USER_OPCODE_TARGET_FINALLY_RETURN;
+			target->helper =
+				ZEND_NATIVE_HELPER_FINALLY_RETURN_EXPLICIT;
+			return true;
 		case ZEND_JMP:
 			target->kind = ZEND_TPDE_USER_OPCODE_TARGET_JUMP_OP1;
 			return true;

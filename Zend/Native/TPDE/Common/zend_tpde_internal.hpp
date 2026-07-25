@@ -27,7 +27,15 @@ enum zend_tpde_user_opcode_target_kind : uint8_t {
 	ZEND_TPDE_USER_OPCODE_TARGET_THROW = 6,
 	ZEND_TPDE_USER_OPCODE_TARGET_MULTI_BRANCH = 7,
 	ZEND_TPDE_USER_OPCODE_TARGET_NOP = 8,
+	ZEND_TPDE_USER_OPCODE_TARGET_FINALLY_CALL = 9,
+	ZEND_TPDE_USER_OPCODE_TARGET_FINALLY_RETURN = 10,
 };
+
+static inline uint32_t zend_tpde_user_opcode_target_frame_uses(
+	zend_tpde_user_opcode_target_kind kind)
+{
+	return kind == ZEND_TPDE_USER_OPCODE_TARGET_FINALLY_RETURN ? 2 : 1;
+}
 
 struct zend_tpde_user_opcode_target {
 	uint8_t opcode;
