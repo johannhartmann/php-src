@@ -1093,7 +1093,9 @@ static bool zend_mir_frontend_view_block_at(
 	if ((block->flags & ZEND_BB_LOOP_HEADER) != 0) {
 		out->flags |= ZEND_MIR_SOURCE_BLOCK_LOOP_HEADER;
 	}
-	if ((block->flags & ZEND_BB_PROTECTED) != 0
+	if ((block->flags
+			& (ZEND_BB_TRY | ZEND_BB_CATCH
+				| ZEND_BB_FINALLY | ZEND_BB_FINALLY_END)) != 0
 			|| (op_array->last_try_catch != 0 && index != 0
 				&& block->idom < 0)) {
 		out->flags |= ZEND_MIR_SOURCE_BLOCK_PROTECTED;
