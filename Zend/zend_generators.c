@@ -26,6 +26,9 @@
 #include "zend_generators_arginfo.h"
 #include "zend_observer.h"
 #include "zend_vm_opcodes.h"
+#ifdef HAVE_NATIVE_ENGINE
+# include "Zend/Native/Runtime/Common/zend_native_generators.h"
+#endif
 
 ZEND_API zend_class_entry *zend_ce_generator;
 ZEND_API zend_class_entry *zend_ce_ClosedGeneratorException;
@@ -134,6 +137,9 @@ ZEND_API void zend_generator_close(zend_generator *generator, bool finished_exec
 {
 	if (EXPECTED(generator->execute_data)) {
 		zend_execute_data *execute_data = generator->execute_data;
+#ifdef HAVE_NATIVE_ENGINE
+		zend_native_generator_release_generation(generator);
+#endif
 		/* Null out execute_data early, to prevent double frees if GC runs while we're
 		 * already cleaning up execute_data. */
 		generator->execute_data = NULL;

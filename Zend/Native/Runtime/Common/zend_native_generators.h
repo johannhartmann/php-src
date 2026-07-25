@@ -5,6 +5,8 @@
 
 #include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 
+typedef struct _zend_generator zend_generator;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -25,6 +27,13 @@ ZEND_NATIVE_GENERATOR_HELPER(zend_native_generator_return)
 
 zend_native_status zend_native_generator_user_opcode_return(
 	zend_execute_data *execute_data);
+
+/*
+ * Release the immutable code generation owned by a generator heap frame.
+ * zend_generator_close() calls this exactly once on every normal, exceptional,
+ * and forced-close path.
+ */
+void zend_native_generator_release_generation(zend_generator *generator);
 
 #ifdef __cplusplus
 }

@@ -30,6 +30,9 @@ extern ZEND_API zend_class_entry *zend_ce_ClosedGeneratorException;
 
 typedef struct _zend_generator_node zend_generator_node;
 typedef struct _zend_generator zend_generator;
+#ifdef HAVE_NATIVE_ENGINE
+typedef struct _zend_native_entry_cell zend_native_entry_cell;
+#endif
 
 /* The concept of `yield from` exposes problems when accessed at different levels of the chain of delegated generators. We need to be able to reference the currently executed Generator in all cases and still being able to access the return values of finished Generators.
  * The solution to this problem is a doubly-linked tree, which all Generators referenced in maintain a reference to. It should be impossible to avoid walking the tree in all cases. This way, we only need tree walks from leaf to root in case where some part of the `yield from` chain is passed to another `yield from`. (Update of leaf node pointer and list of multi-children nodes needed when leaf gets a child in direct path from leaf to root node.) But only in that case, which should be a fairly rare case (which is then possible, but not totally cheap).
@@ -90,6 +93,16 @@ struct _zend_generator {
 	/* The underlying function, equivalent to execute_data->func while
 	 * the generator is alive. */
 	zend_function *func;
+
+#ifdef HAVE_NATIVE_ENGINE
+	/*
+	 * A suspended native generator owns the exact immutable entry
+	 * generation that created its heap frame.  Keeping the owner on the
+	 * Generator object makes resume and forced-close paths lookup-free.
+	 */
+	zend_native_entry_cell *native_entry_cell;
+	uint64_t native_entry_generation;
+#endif
 
 	/* ZEND_GENERATOR_* flags */
 	uint8_t flags;

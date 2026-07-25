@@ -56,6 +56,8 @@ typedef struct _zend_native_compiled_function {
 	uint32_t internal_call_cell_count;
 	zend_native_codeunit_state state;
 	bool publish_pending;
+	bool leaf_scalar_frame_known;
+	bool leaf_scalar_frame;
 } zend_native_compiled_function;
 
 struct _zend_native_compiler {
@@ -69,6 +71,7 @@ struct _zend_native_compiler {
 	zend_native_compile_fault fault;
 	uint32_t unavailable_runtime_helper;
 	bool abi_conformance_probe;
+	bool persistent;
 	zend_native_compiled_function **functions;
 	HashTable functions_by_op_array;
 	HashTable source_op_arrays_by_opcodes;
@@ -89,6 +92,31 @@ struct _zend_native_compiler {
 	bool failed;
 	zend_native_compile_diagnostic last_diagnostic;
 };
+
+static void *zend_native_compiler_alloc(
+	const zend_native_compiler *compiler, size_t size, bool zero)
+{
+	void *allocation = pemalloc(size, compiler->persistent);
+
+	if (zero) {
+		memset(allocation, 0, size);
+	}
+	return allocation;
+}
+
+static void *zend_native_compiler_realloc(
+	const zend_native_compiler *compiler, void *allocation,
+	size_t count, size_t size)
+{
+	return safe_perealloc(
+		allocation, count, size, 0, compiler->persistent);
+}
+
+static void zend_native_compiler_free(
+	const zend_native_compiler *compiler, void *allocation)
+{
+	pefree(allocation, compiler->persistent);
+}
 
 static uint64_t zend_native_compiler_dynamic_codeunit_count(
 	uint32_t first_function_bucket, uint32_t first_class_bucket);
@@ -352,9 +380,9 @@ static bool zend_native_compiler_reserve_functions(
 		}
 		new_capacity *= 2;
 	}
-	compiler->functions = safe_erealloc(
-		compiler->functions, new_capacity,
-		sizeof(*compiler->functions), 0);
+	compiler->functions = zend_native_compiler_realloc(
+		compiler, compiler->functions, new_capacity,
+		sizeof(*compiler->functions));
 	memset(compiler->functions + compiler->function_capacity, 0,
 		(new_capacity - compiler->function_capacity)
 			* sizeof(*compiler->functions));
@@ -382,7 +410,8 @@ static zend_native_compiled_function *zend_native_compiler_add_function(
 			"native codeunit registry allocation failed");
 		return NULL;
 	}
-	function = ecalloc(1, sizeof(*function));
+	function = zend_native_compiler_alloc(
+		compiler, sizeof(*function), true);
 	function->op_array = op_array;
 	function->registry_index = compiler->function_count;
 	function->state = ZEND_NATIVE_CODEUNIT_COMPILING;
@@ -399,7 +428,7 @@ static zend_native_compiled_function *zend_native_compiler_add_function(
 			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
 			ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
 			"native entry cell rejected synchronous compilation");
-		efree(function);
+		zend_native_compiler_free(compiler, function);
 		return NULL;
 	}
 	if (zend_hash_index_add_ptr(
@@ -412,7 +441,7 @@ static zend_native_compiled_function *zend_native_compiler_add_function(
 			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
 			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
 			"native codeunit index insertion failed");
-		efree(function);
+		zend_native_compiler_free(compiler, function);
 		return NULL;
 	}
 	compiler->functions[compiler->function_count++] = function;
@@ -483,9 +512,11 @@ static bool zend_native_compiler_prepare_source_effects(
 	}
 	function->source_effect_capacity = source->last + echo_count;
 	if (function->source_effect_capacity != 0) {
-		function->source_effects = ecalloc(
-			function->source_effect_capacity,
-			sizeof(*function->source_effects));
+		function->source_effects = zend_native_compiler_alloc(
+			compiler,
+			function->source_effect_capacity
+				* sizeof(*function->source_effects),
+			true);
 	}
 	for (index = 0; compiler->abi_conformance_probe
 			&& index < source->last; index++) {
@@ -520,6 +551,7 @@ static bool zend_native_compiler_prepare_source_effects(
 }
 
 static bool zend_native_compiler_prepare_exception_routes(
+	zend_native_compiler *compiler,
 	zend_native_compiled_function *function)
 {
 	uint32_t index;
@@ -527,9 +559,11 @@ static bool zend_native_compiler_prepare_exception_routes(
 	if (function->op_array == NULL || function->ssa.cfg.map == NULL) {
 		return false;
 	}
-	function->exception_handler_oplines = ecalloc(
-		function->op_array->last == 0 ? 1 : function->op_array->last,
-		sizeof(*function->exception_handler_oplines));
+	function->exception_handler_oplines = zend_native_compiler_alloc(
+		compiler,
+		(function->op_array->last == 0 ? 1 : function->op_array->last)
+			* sizeof(*function->exception_handler_oplines),
+		true);
 	for (index = 0; index < function->op_array->last; index++) {
 		zend_mir_source_block_id source_handler_block;
 		uint32_t handler_opline;
@@ -648,7 +682,8 @@ static bool zend_native_compiler_lower_function(
 		return false;
 	}
 	if (function->exception_handler_oplines == NULL
-			&& !zend_native_compiler_prepare_exception_routes(function)) {
+			&& !zend_native_compiler_prepare_exception_routes(
+				compiler, function)) {
 		zend_native_compiler_set_diagnostic(
 			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_LOWERING,
 			ZEND_MIRL_W04_SOURCE_MIR_MAPPING_FAILED,
@@ -704,6 +739,7 @@ static bool zend_native_compiler_lower_function(
 }
 
 static bool zend_native_compiler_index_call_sites(
+	zend_native_compiler *compiler,
 	zend_native_compiled_function *function)
 {
 	const zend_mir_call_view *calls =
@@ -732,10 +768,12 @@ static bool zend_native_compiler_index_call_sites(
 		function->call_sites_indexed = site_count == 0;
 		return function->call_sites_indexed;
 	}
-	first = safe_emalloc(target_count, sizeof(*first), 0);
+	first = zend_native_compiler_alloc(
+		compiler, target_count * sizeof(*first), false);
 	last = safe_emalloc(target_count, sizeof(*last), 0);
 	if (site_count != 0) {
-		next = safe_emalloc(site_count, sizeof(*next), 0);
+		next = zend_native_compiler_alloc(
+			compiler, site_count * sizeof(*next), false);
 	}
 	for (index = 0; index < target_count; index++) {
 		zend_mir_call_target_ref target;
@@ -771,9 +809,9 @@ static bool zend_native_compiler_index_call_sites(
 	return true;
 
 failure:
-	efree(next);
+	zend_native_compiler_free(compiler, next);
 	efree(last);
-	efree(first);
+	zend_native_compiler_free(compiler, first);
 	return false;
 }
 
@@ -1025,7 +1063,7 @@ zend_native_compiler_source_operand_exact_type(
  * require a published Zend activation. Such an entry still receives the
  * canonical frame ABI, but the caller may keep that frame private.
  */
-static bool zend_native_compiler_function_has_leaf_scalar_frame(
+static bool zend_native_compiler_calculate_leaf_scalar_frame(
 	zend_native_compiler *compiler,
 	const zend_native_compiled_function *function)
 {
@@ -1387,6 +1425,19 @@ done:
 	zend_hash_destroy(&exact_types);
 	zend_hash_destroy(&block_indices);
 	return eligible;
+}
+
+static bool zend_native_compiler_function_has_leaf_scalar_frame(
+	zend_native_compiler *compiler,
+	zend_native_compiled_function *function)
+{
+	if (!function->leaf_scalar_frame_known) {
+		function->leaf_scalar_frame =
+			zend_native_compiler_calculate_leaf_scalar_frame(
+				compiler, function);
+		function->leaf_scalar_frame_known = true;
+	}
+	return function->leaf_scalar_frame;
 }
 
 static zend_function *zend_native_compiler_resolve_internal_target(
@@ -1856,9 +1907,9 @@ static bool zend_native_compiler_assign_sccs(
 	}
 	required_heads = compiler->function_count + 1;
 	if (compiler->component_head_capacity < required_heads) {
-		compiler->component_heads = safe_erealloc(
-			compiler->component_heads, required_heads,
-			sizeof(*compiler->component_heads), 0);
+		compiler->component_heads = zend_native_compiler_realloc(
+			compiler, compiler->component_heads, required_heads,
+			sizeof(*compiler->component_heads));
 		compiler->component_head_capacity = required_heads;
 	}
 	memset(compiler->component_heads, 0,
@@ -1987,8 +2038,10 @@ static bool zend_native_compiler_compile_native_component(
 				target_count, sizeof(*bindings), 0);
 			internal_bindings = safe_emalloc(
 				target_count, sizeof(*internal_bindings), 0);
-			function->internal_call_cells = ecalloc(
-				target_count, sizeof(*function->internal_call_cells));
+			function->internal_call_cells = zend_native_compiler_alloc(
+				compiler,
+				target_count * sizeof(*function->internal_call_cells),
+				true);
 		}
 		for (target_index = 0; target_index < target_count; target_index++) {
 			zend_mir_call_target_ref target;
@@ -2358,7 +2411,8 @@ zend_result zend_native_compiler_compile(
 			}
 		}
 		if (!function->call_sites_indexed
-				&& !zend_native_compiler_index_call_sites(function)) {
+				&& !zend_native_compiler_index_call_sites(
+					compiler, function)) {
 			zend_native_compiler_set_diagnostic(
 				compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
 				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
@@ -2622,9 +2676,10 @@ static zend_result zend_native_compiler_enter(
 		return FAILURE;
 	}
 	if (compiler->reentry_binding_capacity < compiler->function_count) {
-		compiler->reentry_bindings = safe_erealloc(
-			compiler->reentry_bindings, compiler->function_count,
-			sizeof(*compiler->reentry_bindings), 0);
+		compiler->reentry_bindings = zend_native_compiler_realloc(
+			compiler, compiler->reentry_bindings,
+			compiler->function_count,
+			sizeof(*compiler->reentry_bindings));
 		compiler->reentry_binding_capacity = compiler->function_count;
 	}
 	uint32_t binding_count = 0;
@@ -2851,8 +2906,11 @@ static bool zend_native_compiler_index_script_functions(
 		return true;
 	}
 	compiler->script_functions_by_declaration_id =
-		safe_emalloc(count + 1,
-			sizeof(*compiler->script_functions_by_declaration_id), 0);
+		zend_native_compiler_alloc(
+			compiler,
+			(count + 1)
+				* sizeof(*compiler->script_functions_by_declaration_id),
+			false);
 	compiler->script_functions_by_declaration_id[0] = NULL;
 	ZEND_HASH_FOREACH_PTR(&compiler->script->function_table, function) {
 		if (function == NULL || function->type != ZEND_USER_FUNCTION) {
@@ -2879,7 +2937,8 @@ zend_native_compiler *zend_native_compiler_create(
 				&& config->target != ZEND_NATIVE_TARGET_LINUX_AMD64)) {
 		return NULL;
 	}
-	compiler = ecalloc(1, sizeof(*compiler));
+	compiler = pecalloc(1, sizeof(*compiler), config->persistent);
+	compiler->persistent = config->persistent;
 	compiler->script = config->script;
 	compiler->target = config->target;
 	compiler->mir_chunk_size = config->mir_chunk_size != 0
@@ -2894,14 +2953,15 @@ zend_native_compiler *zend_native_compiler_create(
 		config->unavailable_runtime_helper;
 	compiler->abi_conformance_probe = config->abi_conformance_probe;
 	zend_hash_init(
-		&compiler->source_op_arrays_by_opcodes, 32, NULL, NULL, false);
+		&compiler->source_op_arrays_by_opcodes, 32, NULL, NULL,
+		compiler->persistent);
 	if (!zend_native_compiler_index_source_op_arrays(compiler)) {
 		zend_native_compiler_set_diagnostic(
 			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
 			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
 			"native source codeunit index cannot be constructed");
 		zend_hash_destroy(&compiler->source_op_arrays_by_opcodes);
-		efree(compiler);
+		pefree(compiler, compiler->persistent);
 		return NULL;
 	}
 	compiler->stats.registered_codeunits =
@@ -2912,15 +2972,93 @@ zend_native_compiler *zend_native_compiler_create(
 			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
 			"native script function index cannot be constructed");
 		zend_hash_destroy(&compiler->source_op_arrays_by_opcodes);
-		efree(compiler);
+		pefree(compiler, compiler->persistent);
 		return NULL;
 	}
 	zend_hash_init(
-		&compiler->functions_by_op_array, 8, NULL, NULL, false);
+		&compiler->functions_by_op_array, 8, NULL, NULL,
+		compiler->persistent);
 	zend_native_dynamic_compiler_init(&compiler->dynamic_compiler);
 	zend_native_dynamic_compiler_bind_product(
 		&compiler->dynamic_compiler, compiler);
 	return compiler;
+}
+
+static void zend_native_compiler_release_function_transients(
+	zend_native_compiler *compiler,
+	zend_native_compiled_function *function)
+{
+	if (function->state == ZEND_NATIVE_CODEUNIT_READY
+			&& !function->leaf_scalar_frame_known) {
+		(void) zend_native_compiler_function_has_leaf_scalar_frame(
+			compiler, function);
+	}
+	if (function->image != NULL) {
+		zend_native_image_destroy(function->image);
+		function->image = NULL;
+	}
+	if (function->module != NULL) {
+		zend_mir_module_destroy(function->module);
+		function->module = NULL;
+	} else {
+		zend_native_compiler_module_reset(&function->module_host);
+	}
+	if (function->ssa_arena != NULL) {
+		zend_arena_destroy(function->ssa_arena);
+		function->ssa_arena = NULL;
+	}
+	memset(&function->ssa, 0, sizeof(function->ssa));
+	zend_native_compiler_free(compiler, function->source_effects);
+	function->source_effects = NULL;
+	function->source_effect_count = 0;
+	function->source_effect_capacity = 0;
+	function->source_effects_prepared = false;
+	zend_native_compiler_free(
+		compiler, function->exception_handler_oplines);
+	function->exception_handler_oplines = NULL;
+	zend_native_compiler_free(
+		compiler, function->first_call_site_by_target);
+	function->first_call_site_by_target = NULL;
+	zend_native_compiler_free(
+		compiler, function->next_call_site_by_site);
+	function->next_call_site_by_site = NULL;
+	function->call_target_count = 0;
+	function->call_site_count = 0;
+	function->call_sites_indexed = false;
+}
+
+void zend_native_compiler_end_request(zend_native_compiler *compiler)
+{
+	uint32_t index;
+
+	if (compiler == NULL) {
+		return;
+	}
+	/*
+	 * Publication retirement owns this precondition.  Never unmap code that
+	 * is still executing or backs a suspended generator frame.
+	 */
+	if (!zend_native_compiler_is_quiescent(compiler)) {
+		return;
+	}
+	zend_native_compiler_leave(compiler);
+	zend_native_dynamic_compiler_destroy(&compiler->dynamic_compiler);
+	zend_native_dynamic_compiler_init(&compiler->dynamic_compiler);
+	zend_native_dynamic_compiler_bind_product(
+		&compiler->dynamic_compiler, compiler);
+	if (!compiler->persistent) {
+		return;
+	}
+	for (index = 0; index < compiler->function_count; index++) {
+		zend_native_compiled_function *function =
+			compiler->functions[index];
+
+		if (function != NULL
+				&& function->state == ZEND_NATIVE_CODEUNIT_READY) {
+			zend_native_compiler_release_function_transients(
+				compiler, function);
+		}
+	}
 }
 
 void zend_native_compiler_destroy(zend_native_compiler *compiler)
@@ -2928,6 +3066,13 @@ void zend_native_compiler_destroy(zend_native_compiler *compiler)
 	uint32_t index;
 
 	if (compiler == NULL) {
+		return;
+	}
+	/*
+	 * The executor keeps stale generations on its retirement list until
+	 * active calls and suspended generator frames have both drained.
+	 */
+	if (!zend_native_compiler_is_quiescent(compiler)) {
 		return;
 	}
 	zend_native_compiler_leave(compiler);
@@ -2948,32 +3093,21 @@ void zend_native_compiler_destroy(zend_native_compiler *compiler)
 		if (function->code != NULL) {
 			zend_native_code_destroy(function->code);
 		}
-		if (function->image != NULL) {
-			zend_native_image_destroy(function->image);
-		}
-		if (function->module != NULL) {
-			zend_mir_module_destroy(function->module);
-		} else {
-			zend_native_compiler_module_reset(&function->module_host);
-		}
-		if (function->ssa_arena != NULL) {
-			zend_arena_destroy(function->ssa_arena);
-		}
-		efree(function->source_effects);
-		efree(function->exception_handler_oplines);
-		efree(function->first_call_site_by_target);
-		efree(function->next_call_site_by_site);
-		efree(function->internal_call_cells);
-		efree(function);
+		zend_native_compiler_release_function_transients(
+			compiler, function);
+		zend_native_compiler_free(
+			compiler, function->internal_call_cells);
+		zend_native_compiler_free(compiler, function);
 	}
-	efree(compiler->reentry_bindings);
-	efree(compiler->component_heads);
-	efree(compiler->script_functions_by_declaration_id);
+	zend_native_compiler_free(compiler, compiler->reentry_bindings);
+	zend_native_compiler_free(compiler, compiler->component_heads);
+	zend_native_compiler_free(
+		compiler, compiler->script_functions_by_declaration_id);
 	zend_hash_destroy(&compiler->functions_by_op_array);
 	zend_hash_destroy(&compiler->source_op_arrays_by_opcodes);
-	efree(compiler->functions);
+	zend_native_compiler_free(compiler, compiler->functions);
 	zend_native_dynamic_compiler_destroy(&compiler->dynamic_compiler);
-	efree(compiler);
+	pefree(compiler, compiler->persistent);
 }
 
 uint32_t zend_native_compiler_function_count(
@@ -3023,6 +3157,29 @@ uint32_t zend_native_compiler_active_call_count(
 		active_calls += compiler->functions[index]->entry_cell.active_calls;
 	}
 	return active_calls;
+}
+
+uint32_t zend_native_compiler_suspended_frame_count(
+	const zend_native_compiler *compiler)
+{
+	uint32_t suspended_frames = 0;
+	uint32_t index;
+
+	if (compiler == NULL) {
+		return 0;
+	}
+	for (index = 0; index < compiler->function_count; index++) {
+		suspended_frames +=
+			compiler->functions[index]->entry_cell.suspended_frames;
+	}
+	return suspended_frames;
+}
+
+bool zend_native_compiler_is_quiescent(
+	const zend_native_compiler *compiler)
+{
+	return zend_native_compiler_active_call_count(compiler) == 0
+		&& zend_native_compiler_suspended_frame_count(compiler) == 0;
 }
 
 bool zend_native_compiler_all_code_is_wx(
