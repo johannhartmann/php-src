@@ -378,6 +378,11 @@ void zend_native_finally_call(
 	zend_execute_data *execute_data, uint32_t fast_call_opline_index);
 uint32_t zend_native_finally_return(
 	zend_execute_data *execute_data, uint32_t fast_ret_opline_index);
+zend_native_status zend_native_discard_exception(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
 
 #define ZEND_NATIVE_FINALLY_EXCEPTION_FLAG UINT32_C(0x80000000)
 #define ZEND_NATIVE_FINALLY_PROPAGATE UINT32_MAX
