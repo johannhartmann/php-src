@@ -459,6 +459,7 @@ zend_native_user_opcode_result zend_native_user_opcode_invoke(
 	status = zend_native_execute_observed_frame(cell->code, entered, NULL);
 	cell->active_calls--;
 	EG(current_execute_data) = execute_data;
+	zend_vm_stack_free_call_frame(entered);
 	if (status == ZEND_NATIVE_BAILOUT) {
 		zend_bailout();
 	}
