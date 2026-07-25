@@ -11,7 +11,7 @@ zend_result zend_native_publish_darwin_arm64(
 	zend_native_diagnostic *diag) {
 #if defined(__APPLE__) && defined(__aarch64__)
 	if (image == nullptr || image->target != ZEND_NATIVE_TARGET_DARWIN_ARM64
-			|| image->target_state == nullptr) {
+			|| image->text == nullptr || image->text_size == 0) {
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
 			"Darwin A64 publisher requires a non-empty Darwin image");
 		return FAILURE;
