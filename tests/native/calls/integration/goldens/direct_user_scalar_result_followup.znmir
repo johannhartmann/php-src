@@ -38,5 +38,5 @@ call-continuation cc0 site cs0 kind normal block b0 debt 0x00000000
 call-continuation cc1 site cs0 kind exception_debt block invalid debt 0x00000002
 call-continuation cc2 site cs0 kind bailout_reentry_debt block invalid debt 0x00000004
 call-continuation cc3 site cs0 kind observer_debt block invalid debt 0x00000008
-call-site cs0 source sc0 instruction i4 target ct0 arguments 0+0 result v0 caller frame fs2 function f0 symbol s0 op-array oa0 slots 4+1 pending 2 callee frame invalid function invalid symbol s1 op-array oa1 slots 5+0 pending invalid continuations 0+4 effects 0x07ff reads 0x00017fff writes 0x00017fff barriers 0x7f
+call-site cs0 source sc0 instruction i4 target ct0 arguments 0+0 result v0 result-operand 3:1:0:0 caller frame fs2 function f0 symbol s0 op-array oa0 slots 4+1 pending 2 callee frame invalid function invalid symbol s1 op-array oa1 slots 5+0 pending invalid continuations 0+4 effects 0x07ff reads 0x00017fff writes 0x00017fff barriers 0x7f
 end

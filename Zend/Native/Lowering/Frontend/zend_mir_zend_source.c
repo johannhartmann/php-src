@@ -3376,17 +3376,20 @@ static zend_mir_lowering_status zend_mir_zend_source_preflight_direct_calls(
 											!= ZEND_CALLABLE_CONVERT_PARTIAL)))))
 					|| (target->kind
 						== ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
-						&& ((init_opcode != ZEND_INIT_FCALL
-								&& init_opcode != ZEND_INIT_FCALL_BY_NAME
-								&& init_opcode
-									!= ZEND_INIT_NS_FCALL_BY_NAME)
-							|| (do_opcode != ZEND_DO_UCALL
-								&& do_opcode != ZEND_DO_FCALL
-								&& do_opcode != ZEND_DO_FCALL_BY_NAME
-								&& (!w10_execution
-									|| (do_opcode != ZEND_CALLABLE_CONVERT
-										&& do_opcode
-											!= ZEND_CALLABLE_CONVERT_PARTIAL)))))
+						&& (!w10_execution
+							? (init_opcode != ZEND_INIT_FCALL
+								|| (do_opcode != ZEND_DO_UCALL
+									&& do_opcode != ZEND_DO_FCALL))
+							: ((init_opcode != ZEND_INIT_FCALL
+									&& init_opcode != ZEND_INIT_FCALL_BY_NAME
+									&& init_opcode
+										!= ZEND_INIT_NS_FCALL_BY_NAME)
+								|| (do_opcode != ZEND_DO_UCALL
+									&& do_opcode != ZEND_DO_FCALL
+									&& do_opcode != ZEND_DO_FCALL_BY_NAME
+									&& do_opcode != ZEND_CALLABLE_CONVERT
+									&& do_opcode
+										!= ZEND_CALLABLE_CONVERT_PARTIAL))))
 					|| (target->kind
 						== ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER
 						&& (!w10_execution
