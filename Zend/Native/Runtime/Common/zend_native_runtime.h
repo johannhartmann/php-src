@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-#define ZEND_NATIVE_RUNTIME_ABI_VERSION 62u
+#define ZEND_NATIVE_RUNTIME_ABI_VERSION 64u
 
 typedef enum _zend_native_runtime_capability {
 	ZEND_NATIVE_RUNTIME_CAP_USER_CALL = UINT64_C(1) << 0,
@@ -182,7 +182,9 @@ typedef enum _zend_native_runtime_helper_id {
 	ZEND_NATIVE_HELPER_DYNAMIC_USER_CALL_ENTER = 156,
 	ZEND_NATIVE_HELPER_DYNAMIC_USER_CALL_LEAVE = 157,
 	ZEND_NATIVE_HELPER_FINALLY_RETURN_EXPLICIT = 158,
-	ZEND_NATIVE_HELPER_COUNT = 159
+	ZEND_NATIVE_HELPER_CATCH_EXPLICIT = 159,
+	ZEND_NATIVE_HELPER_RECEIVE_EXPLICIT = 160,
+	ZEND_NATIVE_HELPER_COUNT = 161
 } zend_native_runtime_helper_id;
 
 #define ZEND_NATIVE_RUNTIME_HELPER_WORD_COUNT \
@@ -193,6 +195,12 @@ typedef enum _zend_native_iterator_branch_result {
 	ZEND_NATIVE_ITERATOR_NEXT = 1,
 	ZEND_NATIVE_ITERATOR_EXCEPTION = 2
 } zend_native_iterator_branch_result;
+
+typedef enum _zend_native_catch_result {
+	ZEND_NATIVE_CATCH_MATCHED = 0,
+	ZEND_NATIVE_CATCH_BRANCH = 1,
+	ZEND_NATIVE_CATCH_EXCEPTION = 2
+} zend_native_catch_result;
 
 typedef enum _zend_native_runtime_effect {
 	ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE = UINT32_C(1) << 0,

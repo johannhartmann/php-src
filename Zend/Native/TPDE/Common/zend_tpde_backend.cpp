@@ -226,6 +226,16 @@ bool user_opcode_target(
 			target->helper =
 				ZEND_NATIVE_HELPER_FINALLY_RETURN_EXPLICIT;
 			return true;
+		case ZEND_CATCH:
+			target->kind = ZEND_TPDE_USER_OPCODE_TARGET_CATCH;
+			target->helper = ZEND_NATIVE_HELPER_CATCH_EXPLICIT;
+			return true;
+		case ZEND_RECV:
+		case ZEND_RECV_INIT:
+		case ZEND_RECV_VARIADIC:
+			target->kind = ZEND_TPDE_USER_OPCODE_TARGET_RECEIVE;
+			target->helper = ZEND_NATIVE_HELPER_RECEIVE_EXPLICIT;
+			return true;
 		case ZEND_JMP:
 			target->kind = ZEND_TPDE_USER_OPCODE_TARGET_JUMP_OP1;
 			return true;

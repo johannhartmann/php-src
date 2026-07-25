@@ -1,6 +1,7 @@
 /* Direct calls to compile-time resolved Zend internal functions. */
 
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
+#include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_closures.h"
@@ -1498,6 +1499,74 @@ zend_native_status zend_native_catch_enter(
 	}
 	return EG(exception) == NULL
 		? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+}
+
+uint32_t zend_native_catch_explicit(
+	zend_execute_data *execute_data,
+	uint64_t encoded_class,
+	uint64_t encoded_result,
+	uint32_t extended_value,
+	uint32_t source_position)
+{
+	const zend_op_array *op_array;
+	zval *class_name;
+	zval *result;
+	uint8_t class_type;
+	uint8_t result_type;
+	zend_class_entry *catch_ce;
+	zend_class_entry *exception_ce;
+	zend_object *exception;
+
+	if (execute_data == NULL || execute_data->func == NULL
+			|| !ZEND_USER_CODE(execute_data->func->type)
+			|| source_position >= execute_data->func->op_array.last) {
+		return ZEND_NATIVE_CATCH_EXCEPTION;
+	}
+	op_array = &execute_data->func->op_array;
+	execute_data->opline = &op_array->opcodes[source_position];
+	if (EG(exception) == NULL) {
+		return ZEND_NATIVE_CATCH_BRANCH;
+	}
+	class_name = zend_native_call_explicit_operand(
+		execute_data, encoded_class, &class_type);
+	result = zend_native_call_explicit_slot(
+		execute_data, encoded_result, &result_type);
+	if (class_name == NULL || class_type != IS_CONST
+			|| Z_TYPE_P(class_name) != IS_STRING
+			|| class_name + 1 >= op_array->literals + op_array->last_literal
+			|| Z_TYPE_P(class_name + 1) != IS_STRING
+			|| (result_type != IS_UNUSED
+				&& result_type != IS_CV
+				&& result_type != IS_VAR
+				&& result_type != IS_TMP_VAR)
+			|| (result_type != IS_UNUSED && result == NULL)) {
+		zend_throw_error(NULL, "Invalid native CATCH operands");
+		return ZEND_NATIVE_CATCH_EXCEPTION;
+	}
+	catch_ce = zend_fetch_class_by_name(
+		Z_STR_P(class_name), Z_STR_P(class_name + 1),
+		ZEND_FETCH_CLASS_NO_AUTOLOAD | ZEND_FETCH_CLASS_SILENT);
+	exception_ce = EG(exception)->ce;
+	if (exception_ce != catch_ce
+			&& (catch_ce == NULL
+				|| !instanceof_function(exception_ce, catch_ce))) {
+		if ((extended_value & ZEND_LAST_CATCH) != 0) {
+			zend_rethrow_exception(execute_data);
+			return ZEND_NATIVE_CATCH_EXCEPTION;
+		}
+		return ZEND_NATIVE_CATCH_BRANCH;
+	}
+	exception = EG(exception);
+	EG(exception) = NULL;
+	if (result_type != IS_UNUSED) {
+		zval tmp;
+		ZVAL_OBJ(&tmp, exception);
+		zend_assign_to_variable(result, &tmp, IS_TMP_VAR, true);
+	} else {
+		OBJ_RELEASE(exception);
+	}
+	return EG(exception) == NULL
+		? ZEND_NATIVE_CATCH_MATCHED : ZEND_NATIVE_CATCH_EXCEPTION;
 }
 
 static const zend_try_catch_element *zend_native_finally_region(

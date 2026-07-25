@@ -734,6 +734,18 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_FINALLY_RETURN_EXPLICIT,
 		ZEND_NATIVE_EFFECT_FRAME_WRITE | ZEND_NATIVE_RUNTIME_EFFECT_THROW,
 		(const void *) zend_native_finally_return_explicit},
+	{ZEND_NATIVE_HELPER_CATCH_EXPLICIT,
+		ZEND_NATIVE_EFFECT_FRAME_WRITE
+			| ZEND_NATIVE_RUNTIME_EFFECT_HEAP_READ
+			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_RUNTIME_EFFECT_THROW,
+		(const void *) zend_native_catch_explicit},
+	{ZEND_NATIVE_HELPER_RECEIVE_EXPLICIT,
+		ZEND_NATIVE_EFFECT_FRAME_WRITE
+			| ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
+			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_RUNTIME_EFFECT_THROW,
+		(const void *) zend_native_receive_explicit},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
