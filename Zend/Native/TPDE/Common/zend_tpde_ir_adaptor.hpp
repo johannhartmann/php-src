@@ -181,6 +181,7 @@ private:
 	std::vector<ArgumentGuard> argument_guards_;
 	std::vector<uint32_t> generator_resume_targets_;
 	std::vector<uint32_t> generator_resume_landings_;
+	std::vector<zend_mir_block_id> generator_resume_exception_blocks_;
 	std::vector<uint32_t> user_opcode_next_landings_;
 	std::vector<uint32_t> user_opcode_dispatch_to_sources_;
 	bool valid_ = true;
@@ -501,18 +502,42 @@ public:
 			generator_resume_targets_.end());
 		generator_resume_landings_.reserve(
 			generator_resume_targets_.size());
+		generator_resume_exception_blocks_.reserve(
+			generator_resume_targets_.size());
 		for (uint32_t target : generator_resume_targets_) {
 			uint32_t landing = UINT32_MAX;
+			zend_mir_block_id exception_block = ZEND_MIR_ID_INVALID;
 			for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
+				const zend_tpde_instruction &instruction =
+					plan_->instructions[i];
+				const zend_mir_instruction_record record =
+					instruction_record_at(i);
 				const uint32_t source_position =
-					instruction_record_at(i).source_position_id;
+					record.source_position_id;
 				if (source_position >= target
 						&& (landing == UINT32_MAX
 							|| source_position < landing)) {
 					landing = source_position;
 				}
+				if (instruction.has_value_operation
+						&& source_position != UINT32_MAX
+						&& source_position + 1 == target
+						&& (record.opcode
+								== ZEND_MIR_OPCODE_GENERATOR_CREATE
+							|| record.opcode
+								== ZEND_MIR_OPCODE_GENERATOR_YIELD
+							|| record.opcode
+								== ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM)) {
+					if (zend_mir_id_is_valid(exception_block)
+							&& exception_block
+								!= instruction.exception_block_id) {
+						valid_ = false;
+					}
+					exception_block = instruction.exception_block_id;
+				}
 			}
 			generator_resume_landings_.push_back(landing);
+			generator_resume_exception_blocks_.push_back(exception_block);
 			if (landing == UINT32_MAX) {
 				valid_ = false;
 			}
@@ -650,6 +675,7 @@ public:
 			uint32_t operand_offset =
 				static_cast<uint32_t>(operands_.size());
 			operands_.push_back(IRValueRef{FRAME_VALUE});
+			operands_.push_back(IRValueRef{EXECUTION_CONTEXT_VALUE});
 			add_node(block_instructions, static_cast<uint32_t>(entry), InstNode{
 				InstKind::GeneratorGateway,
 				UINT32_MAX,
@@ -657,7 +683,7 @@ public:
 				INVALID_VALUE_REF,
 				{},
 				operand_offset,
-				1,
+				2,
 				false});
 		}
 		uint32_t guard_operand_offset =
@@ -780,7 +806,7 @@ public:
 				for (size_t dispatch_case = 0;
 						dispatch_case
 							< user_opcode_dispatch_to_sources_.size()
-								* zend_tpde_binary_source_opcodes.size();
+								* zend_tpde_user_opcode_targets.size();
 						++dispatch_case) {
 					operands_.push_back(IRValueRef{FRAME_VALUE});
 				}
@@ -793,7 +819,7 @@ public:
 					operand_offset,
 					static_cast<uint32_t>(
 						4 + user_opcode_dispatch_to_sources_.size()
-							* zend_tpde_binary_source_opcodes.size()),
+							* zend_tpde_user_opcode_targets.size()),
 					false});
 			}
 			add_node(block_instructions, block, InstNode{
@@ -1437,6 +1463,10 @@ public:
 	}
 	std::span<const uint32_t> generator_resume_targets() const {
 		return generator_resume_targets_;
+	}
+	std::span<const zend_mir_block_id>
+	generator_resume_exception_blocks() const {
+		return generator_resume_exception_blocks_;
 	}
 	zend_mir_instruction_record instruction_record(IRInstRef inst) const {
 		const InstNode &instruction_node = node(inst);

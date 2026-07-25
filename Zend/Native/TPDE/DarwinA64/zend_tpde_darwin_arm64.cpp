@@ -240,7 +240,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			adaptor->user_opcode_dispatch_to_sources();
 		const size_t dispatch_case_count =
 			dispatch_sources.size()
-				* zend_tpde_binary_source_opcodes.size();
+				* zend_tpde_user_opcode_targets.size();
 		if (plan->source_op_array == nullptr
 				|| node.operands.size() != 4 + dispatch_case_count
 				|| node.argument_index >= plan->source_op_array->last
@@ -347,6 +347,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			const zend_tpde_instruction *instruction;
 			uint32_t source;
 			uint32_t target_opcode;
+			zend_native_runtime_helper_id helper;
 			uint32_t frame_operand;
 		};
 		std::vector<DispatchToCase> dispatch_cases;
@@ -373,21 +374,22 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				return false;
 			}
 			for (size_t target_index = 0;
-					target_index < zend_tpde_binary_source_opcodes.size();
+					target_index < zend_tpde_user_opcode_targets.size();
 					++target_index) {
-				const uint32_t target_opcode =
-					zend_tpde_binary_source_opcodes[target_index];
+				const zend_tpde_user_opcode_target &target_case =
+					zend_tpde_user_opcode_targets[target_index];
 				auto target = text_writer.label_create();
-				ASM(CMPwi, selected_opcode_reg, target_opcode);
+				ASM(CMPwi, selected_opcode_reg, target_case.opcode);
 				generate_raw_jump(Jump::Jeq, target);
 				dispatch_cases.push_back({
 					target,
 					source_instruction,
 					source,
-					target_opcode,
+					target_case.opcode,
+					target_case.helper,
 					static_cast<uint32_t>(
 						4 + source_index
-							* zend_tpde_binary_source_opcodes.size()
+							* zend_tpde_user_opcode_targets.size()
 							+ target_index)});
 			}
 			label_place(next_candidate);
@@ -421,8 +423,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			operation_call.add_arg(ValuePart{
 				dispatch_case.source, 4, DarwinConfig::GP_BANK},
 				::tpde::CCAssignment{});
-			operation_call.call(
-				runtime_symbol(ZEND_NATIVE_HELPER_VALUE_BINARY_OP));
+			operation_call.call(runtime_symbol(dispatch_case.helper));
 			ValuePart status{DarwinConfig::GP_BANK, 4};
 			operation_call.add_ret(status, ::tpde::CCAssignment{});
 			auto status_reg = status.cur_reg_or_load(this);
@@ -504,8 +505,10 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		return true;
 	}
 	if (node.kind == Adaptor::InstKind::GeneratorGateway) {
-		if (node.operands.size() != 1
+		if (node.operands.size() != 2
 				|| node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
+				|| node.operands[1]
+					!= IRValueRef{Adaptor::EXECUTION_CONTEXT_VALUE}
 				|| adaptor->generator_resume_targets().empty()) {
 			return false;
 		}
@@ -517,7 +520,9 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		auto invalid = text_writer.label_create();
 		{
 			auto [frame_ref, frame] = val_ref_single(node.operands[0]);
+			auto [context_ref, context] = val_ref_single(node.operands[1]);
 			auto frame_reg = frame.load_to_reg();
+			auto context_reg = context.load_to_reg();
 			ScratchReg call_info{this};
 			auto call_info_reg = call_info.alloc_gp();
 			load_off(call_info_reg, frame_reg,
@@ -535,10 +540,16 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			auto opline_reg = opline.alloc_gp();
 			auto function_reg = function.alloc_gp();
 			auto target_reg = target.alloc_gp();
+			ScratchReg exception{this};
+			auto exception_reg = exception.alloc_gp();
 			load_off(opline_reg, frame_reg,
 				static_cast<uint32_t>(offsetof(zend_execute_data, opline)), 8);
 			load_off(function_reg, frame_reg,
 				static_cast<uint32_t>(offsetof(zend_execute_data, func)), 8);
+			load_off(exception_reg, context_reg,
+				static_cast<uint32_t>(
+					offsetof(zend_native_execution_context, exception)), 8);
+			load_off(exception_reg, exception_reg, 0, 8);
 			for (uint32_t index = 0;
 					index < adaptor->generator_resume_targets().size(); ++index) {
 				const uint64_t byte_offset =
@@ -557,6 +568,45 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				ASM(CMPx, opline_reg, target_reg);
 				generate_raw_jump(
 					Jump::Jeq, generator_resume_labels_[index]);
+			}
+			ASM(CMPxi, exception_reg, 0);
+			generate_raw_jump(Jump::Jeq, invalid);
+			load_off(opline_reg, context_reg,
+				static_cast<uint32_t>(offsetof(
+					zend_native_execution_context,
+					opline_before_exception)), 8);
+			load_off(opline_reg, opline_reg, 0, 8);
+			for (uint32_t index = 0;
+					index < adaptor->generator_resume_targets().size(); ++index) {
+				const uint64_t byte_offset =
+					uint64_t{adaptor->generator_resume_targets()[index] - 1}
+						* sizeof(zend_op);
+				if (byte_offset > UINT32_MAX) {
+					return false;
+				}
+				load_off(target_reg, function_reg,
+					static_cast<uint32_t>(
+						offsetof(zend_function, op_array.opcodes)), 8);
+				if (byte_offset != 0) {
+					ASM(ADDxi, target_reg, target_reg,
+						static_cast<uint32_t>(byte_offset));
+				}
+				auto next = text_writer.label_create();
+				ASM(CMPx, opline_reg, target_reg);
+				generate_raw_jump(Jump::Jne, next);
+				const zend_mir_block_id exception_block =
+					adaptor->generator_resume_exception_blocks()[index];
+				if (zend_mir_id_is_valid(exception_block)) {
+					store_off(frame_reg,
+						static_cast<uint32_t>(
+							offsetof(zend_execute_data, opline)),
+						opline_reg, 8);
+					generate_exception_branch(
+						adaptor->block_ref(exception_block));
+				} else {
+					generate_raw_jump(Jump::jmp, invalid);
+				}
+				label_place(next);
 			}
 			generate_raw_jump(Jump::jmp, invalid);
 		}

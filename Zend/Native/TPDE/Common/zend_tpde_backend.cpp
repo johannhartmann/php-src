@@ -16,7 +16,7 @@
 namespace {
 constexpr uint32_t MAX_RECORDS = UINT32_C(1) << 20;
 constexpr size_t MAX_NATIVE_IMAGE_BYTES = size_t{1} << 28;
-constexpr uint32_t NATIVE_IMAGE_ABI_VERSION = 2;
+constexpr uint32_t NATIVE_IMAGE_ABI_VERSION = 3;
 std::atomic_uint32_t live_unwind_registrations{0};
 
 bool checked_count(uint32_t count) {
@@ -1187,6 +1187,10 @@ bool initialize_plan(
 					ZEND_NATIVE_HELPER_GENERATOR_USER_OPCODE_RETURN);
 				require_runtime_helper(
 					plan, ZEND_NATIVE_HELPER_VALUE_BINARY_OP);
+				require_runtime_helper(
+					plan, ZEND_NATIVE_HELPER_VALUE_UNARY_OP);
+				require_runtime_helper(
+					plan, ZEND_NATIVE_HELPER_VALUE_INCDEC);
 				break;
 			}
 		}
@@ -3091,7 +3095,13 @@ bool initialize_plan(
 				if (executable_value_helper(candidate_record.opcode)
 						== ZEND_NATIVE_HELPER_COUNT
 						&& candidate_record.opcode
-							!= ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL) {
+							!= ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
+						&& candidate_record.opcode
+							!= ZEND_MIR_OPCODE_GENERATOR_CREATE
+						&& candidate_record.opcode
+							!= ZEND_MIR_OPCODE_GENERATOR_YIELD
+						&& candidate_record.opcode
+							!= ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM) {
 					continue;
 				}
 			} else if (candidate_record.opcode
