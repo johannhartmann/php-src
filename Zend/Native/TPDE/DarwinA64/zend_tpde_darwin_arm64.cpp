@@ -4645,34 +4645,30 @@ bool ZendCompilerA64::compile_inst(
 				zend_tpde_value_condition layout;
 
 				if (zend_tpde_value_condition_at(mir, &layout)) {
-					for (auto reg_id : register_file.used_regs()) {
-						::tpde::Reg reg{reg_id};
-						if (!register_file.is_fixed(reg)
-								&& register_file.reg_local_idx(reg)
-									!= INVALID_VAL_LOCAL_IDX) {
-							evict_reg(reg);
-						}
+					const int32_t decision_slot =
+						allocate_stack_slot(sizeof(uint32_t));
+					if (decision_slot < 0) {
+						return false;
 					}
 					auto slow = text_writer.label_create();
 					auto truthy = text_writer.label_create();
 					auto falsey = text_writer.label_create();
+					auto fast_ready = text_writer.label_create();
 					auto branch = text_writer.label_create();
 					auto [frame_ref, frame] =
 						val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 					auto frame_scratch = std::move(frame).into_scratch();
 					auto frame_reg = frame_scratch.cur_reg();
-					ScratchReg slot{this};
 					ScratchReg type{this};
 					ScratchReg value{this};
-					auto slot_reg = slot.alloc_gp();
 					auto type_reg = type.alloc_gp();
 					auto value_reg = value.alloc_gp();
 
-					add_unsigned_offset(
-						slot_reg, frame_reg, layout.operand_offset);
-					load_off(type_reg, slot_reg,
-						static_cast<uint32_t>(
-							offsetof(zval, u1.type_info)), 4);
+					load_off(type_reg, frame_reg,
+						layout.operand_offset
+							+ static_cast<uint32_t>(
+								offsetof(zval, u1.type_info)),
+						4);
 					ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
 					ASM(CMPwi, type_reg, IS_NULL);
 					generate_raw_jump(Jump::Jeq, falsey);
@@ -4683,7 +4679,8 @@ bool ZendCompilerA64::compile_inst(
 					ASM(CMPwi, type_reg, IS_LONG);
 					auto not_long = text_writer.label_create();
 					generate_raw_jump(Jump::Jne, not_long);
-					load_off(value_reg, slot_reg, 0, 8);
+					load_off(value_reg, frame_reg,
+						layout.operand_offset, 8);
 					generate_raw_jump(
 						Jump{Jump::Cbnz, value_reg, false}, truthy);
 					generate_raw_jump(Jump::jmp, falsey);
@@ -4692,13 +4689,14 @@ bool ZendCompilerA64::compile_inst(
 					ASM(CMPwi, type_reg, IS_STRING);
 					auto not_string = text_writer.label_create();
 					generate_raw_jump(Jump::Jne, not_string);
-					load_off(value_reg, slot_reg, 0, 8);
-					load_off(slot_reg, value_reg,
+					load_off(value_reg, frame_reg,
+						layout.operand_offset, 8);
+					load_off(type_reg, value_reg,
 						static_cast<uint32_t>(
 							offsetof(zend_string, len)), 8);
 					generate_raw_jump(
-						Jump{Jump::Cbz, slot_reg, false}, falsey);
-					ASM(CMPxi, slot_reg, 1);
+						Jump{Jump::Cbz, type_reg, false}, falsey);
+					ASM(CMPxi, type_reg, 1);
 					generate_raw_jump(Jump::Jne, truthy);
 					load_off(type_reg, value_reg,
 						static_cast<uint32_t>(
@@ -4711,7 +4709,8 @@ bool ZendCompilerA64::compile_inst(
 					ASM(CMPwi, type_reg, IS_ARRAY);
 					auto not_array = text_writer.label_create();
 					generate_raw_jump(Jump::Jne, not_array);
-					load_off(value_reg, slot_reg, 0, 8);
+					load_off(value_reg, frame_reg,
+						layout.operand_offset, 8);
 					load_off(type_reg, value_reg,
 						static_cast<uint32_t>(
 							offsetof(HashTable, nNumOfElements)), 4);
@@ -4721,7 +4720,8 @@ bool ZendCompilerA64::compile_inst(
 					label_place(not_array);
 					ASM(CMPwi, type_reg, IS_RESOURCE);
 					generate_raw_jump(Jump::Jne, slow);
-					load_off(value_reg, slot_reg, 0, 8);
+					load_off(value_reg, frame_reg,
+						layout.operand_offset, 8);
 					load_off(type_reg, value_reg,
 						static_cast<uint32_t>(
 							offsetof(zend_resource, handle)), 4);
@@ -4729,11 +4729,28 @@ bool ZendCompilerA64::compile_inst(
 						Jump{Jump::Cbnz, type_reg, false}, truthy);
 					generate_raw_jump(Jump::jmp, falsey);
 
-					slot.reset();
+					label_place(truthy);
+					materialize_constant(
+						uint64_t{1}, DarwinConfig::GP_BANK, 4, type_reg);
+					store_off(AsmReg{AsmReg::FP},
+						static_cast<uint32_t>(decision_slot),
+						type_reg, 4);
+					generate_raw_jump(Jump::jmp, fast_ready);
+					label_place(falsey);
+					materialize_constant(
+						uint64_t{0}, DarwinConfig::GP_BANK, 4, type_reg);
+					store_off(AsmReg{AsmReg::FP},
+						static_cast<uint32_t>(decision_slot),
+						type_reg, 4);
+					label_place(fast_ready);
 					type.reset();
 					value.reset();
 					const auto &successors = adaptor->block_succs(
 						adaptor->block_ref(record.block_id));
+					const auto register_state =
+						zend::native::tpde::
+							capture_conditional_call_register_state(*this);
+					generate_raw_jump(Jump::jmp, branch);
 					label_place(slow);
 
 					zend::native::tpde::CCAssignerAppleA64 assigner;
@@ -4787,17 +4804,23 @@ bool ZendCompilerA64::compile_inst(
 						::tpde::CCAssignment{});
 					return_builder.ret();
 					label_place(valid);
+					store_off(AsmReg{AsmReg::FP},
+						static_cast<uint32_t>(decision_slot),
+						decision_reg, 4);
+					decision.reset(this);
+					zend::native::tpde::
+						restore_conditional_call_register_state(
+							*this, register_state);
 					generate_raw_jump(Jump::jmp, branch);
-					label_place(truthy);
-					materialize_constant(
-						uint64_t{1}, DarwinConfig::GP_BANK, 4, decision_reg);
-					generate_raw_jump(Jump::jmp, branch);
-					label_place(falsey);
-					materialize_constant(
-						uint64_t{0}, DarwinConfig::GP_BANK, 4, decision_reg);
 					label_place(branch);
+					ScratchReg branch_decision{this};
+					auto branch_decision_reg =
+						branch_decision.alloc_gp();
+					load_off(branch_decision_reg,
+						AsmReg{AsmReg::FP},
+						static_cast<uint32_t>(decision_slot), 4);
 					generate_cond_branch(
-						Jump{Jump::Cbnz, decision_reg, false},
+						Jump{Jump::Cbnz, branch_decision_reg, false},
 						successors[0], successors[1]);
 					return true;
 				}
