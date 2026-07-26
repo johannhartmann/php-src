@@ -86,6 +86,8 @@ struct _zend_native_compiler {
 	uint32_t component_head_capacity;
 	zend_native_reentry_binding *reentry_bindings;
 	uint32_t reentry_binding_capacity;
+	uint32_t reentry_binding_count;
+	uint32_t reentry_binding_function_count;
 	zend_native_reentry_scope reentry_scope;
 	bool reentry_active;
 	zend_native_dynamic_compiler dynamic_compiler;
@@ -2744,41 +2746,50 @@ static uint64_t zend_native_compiler_dynamic_codeunit_count(
 static zend_result zend_native_compiler_enter(
 	zend_native_compiler *compiler)
 {
-	uint32_t index;
-
 	if (compiler->reentry_active || compiler->dynamic_compiler_active
 			|| compiler->function_count == 0) {
 		return FAILURE;
 	}
-	if (compiler->reentry_binding_capacity < compiler->function_count) {
-		compiler->reentry_bindings = zend_native_compiler_realloc(
-			compiler, compiler->reentry_bindings,
-			compiler->function_count,
-			sizeof(*compiler->reentry_bindings));
-		compiler->reentry_binding_capacity = compiler->function_count;
-	}
-	uint32_t binding_count = 0;
+	if (compiler->reentry_binding_function_count
+			!= compiler->function_count) {
+		uint32_t binding_count = 0;
 
-	for (index = 0; index < compiler->function_count; index++) {
-		zend_native_compiled_function *function =
-			compiler->functions[index];
+		if (compiler->reentry_binding_capacity
+				< compiler->function_count) {
+			compiler->reentry_bindings = zend_native_compiler_realloc(
+				compiler, compiler->reentry_bindings,
+				compiler->function_count,
+				sizeof(*compiler->reentry_bindings));
+			compiler->reentry_binding_capacity =
+				compiler->function_count;
+		}
+		for (uint32_t index = 0;
+				index < compiler->function_count; index++) {
+			zend_native_compiled_function *function =
+				compiler->functions[index];
 
-		if (function->state == ZEND_NATIVE_CODEUNIT_FAILED) {
-			continue;
+			if (function->state == ZEND_NATIVE_CODEUNIT_FAILED) {
+				continue;
+			}
+			if (function->entry_cell.state
+					!= ZEND_NATIVE_ENTRY_READY) {
+				return FAILURE;
+			}
+			compiler->reentry_bindings[binding_count].function =
+				(zend_function *) function->op_array;
+			compiler->reentry_bindings[binding_count].entry_cell =
+				&function->entry_cell;
+			binding_count++;
 		}
-		if (function->entry_cell.state != ZEND_NATIVE_ENTRY_READY) {
-			return FAILURE;
-		}
-		compiler->reentry_bindings[binding_count].function =
-			(zend_function *) function->op_array;
-		compiler->reentry_bindings[binding_count].entry_cell =
-			&function->entry_cell;
-		binding_count++;
+		compiler->reentry_binding_count = binding_count;
+		compiler->reentry_binding_function_count =
+			compiler->function_count;
 	}
 	memset(&compiler->reentry_scope, 0, sizeof(compiler->reentry_scope));
 	if (zend_native_reentry_scope_enter_resolver(
 			&compiler->reentry_scope, compiler->reentry_bindings,
-			binding_count, zend_native_compiler_resolve_reentry,
+			compiler->reentry_binding_count,
+			zend_native_compiler_resolve_reentry,
 			compiler) == FAILURE) {
 		return FAILURE;
 	}
@@ -2901,6 +2912,50 @@ zend_native_status zend_native_compiler_execute(
 	return status;
 }
 
+zend_native_status zend_native_compiler_execute_entry(
+	zend_native_compiler *compiler,
+	zend_native_entry_cell *entry_cell,
+	zend_execute_data *execute_data,
+	zend_native_diagnostic *diagnostic)
+{
+	const zend_native_code *code;
+	zend_execute_data *previous;
+	zend_native_status status;
+	zend_hrtime_t phase_started;
+	uint64_t elapsed;
+
+	if (diagnostic != NULL) {
+		memset(diagnostic, 0, sizeof(*diagnostic));
+	}
+	if (compiler == NULL || execute_data == NULL
+			|| execute_data->func == NULL
+			|| !ZEND_USER_CODE(execute_data->func->type)
+			|| entry_cell == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	if ((code = zend_native_entry_cell_load(entry_cell)) == NULL
+			|| zend_native_compiler_enter(compiler) == FAILURE) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	previous = execute_data->prev_execute_data;
+	EG(current_execute_data) = execute_data;
+	entry_cell->active_calls++;
+	phase_started = zend_hrtime();
+	status = zend_native_execute_frame(
+		code, execute_data, diagnostic);
+	elapsed = zend_hrtime() - phase_started;
+	entry_cell->active_calls--;
+	EG(current_execute_data) = previous;
+	compiler->stats.execute_ns += elapsed;
+	compiler->stats.last_execute_ns = elapsed;
+	if (compiler->stats.executions == 0) {
+		compiler->stats.first_execute_ns = elapsed;
+	}
+	compiler->stats.executions++;
+	zend_native_compiler_leave(compiler);
+	return status;
+}
+
 zend_native_status zend_native_compiler_execute_data(
 	zend_native_compiler *compiler,
 	zend_execute_data *execute_data,
@@ -2910,11 +2965,7 @@ zend_native_status zend_native_compiler_execute_data(
 	zend_native_entry_cell *entry_cell;
 	zend_native_compiled_function *compiled_function;
 	zend_op_array *source_op_array;
-	const zend_native_code *code;
-	zend_execute_data *previous;
-	zend_native_status status;
 	zend_hrtime_t phase_started;
-	uint64_t elapsed;
 
 	if (diagnostic != NULL) {
 		memset(diagnostic, 0, sizeof(*diagnostic));
@@ -2949,28 +3000,8 @@ zend_native_status zend_native_compiler_execute_data(
 			&& compiled_function->entry_cell.state
 				== ZEND_NATIVE_ENTRY_READY
 		? &compiled_function->entry_cell : NULL;
-	if (entry_cell == NULL
-			|| (code = zend_native_entry_cell_load(entry_cell)) == NULL
-			|| zend_native_compiler_enter(compiler) == FAILURE) {
-		return ZEND_NATIVE_EXCEPTION;
-	}
-	previous = execute_data->prev_execute_data;
-	EG(current_execute_data) = execute_data;
-	entry_cell->active_calls++;
-	phase_started = zend_hrtime();
-	status = zend_native_execute_frame(
-		code, execute_data, diagnostic);
-	elapsed = zend_hrtime() - phase_started;
-	entry_cell->active_calls--;
-	EG(current_execute_data) = previous;
-	compiler->stats.execute_ns += elapsed;
-	compiler->stats.last_execute_ns = elapsed;
-	if (compiler->stats.executions == 0) {
-		compiler->stats.first_execute_ns = elapsed;
-	}
-	compiler->stats.executions++;
-	zend_native_compiler_leave(compiler);
-	return status;
+	return zend_native_compiler_execute_entry(
+		compiler, entry_cell, execute_data, diagnostic);
 }
 
 static bool zend_native_compiler_index_script_functions(
