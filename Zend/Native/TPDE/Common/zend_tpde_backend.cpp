@@ -1907,8 +1907,16 @@ bool initialize_plan(
 			|| !checked_count(plan->call_argument_count)
 			|| !checked_count(constant_count)
 			|| !checked_count(frame_slot_count)) {
+		char message[192];
+		std::snprintf(message, sizeof(message),
+			"MIR record count exceeds executable bound"
+			" (blocks=%u values=%u instructions=%u sites=%u targets=%u"
+			" arguments=%u constants=%u frame_slots=%u)",
+			plan->block_count, plan->value_count, plan->instruction_count,
+			plan->call_site_count, plan->call_target_count,
+			plan->call_argument_count, constant_count, frame_slot_count);
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-			"MIR record count is outside the W06 executable bound");
+			message);
 		return false;
 	}
 
@@ -2337,9 +2345,23 @@ bool initialize_plan(
 					|| !zend_mir_id_is_valid(
 						plan->values[destination_index]
 							.canonical_storage_id)) {
+				char message[192];
+				std::snprintf(message, sizeof(message),
+					"zval store %u operands source=%u index=%d type=%u "
+					"destination=%u index=%d storage=%u lack metadata",
+					record.id, source_id, source_index,
+					source_index >= 0
+						? static_cast<unsigned>(
+							plan->values[source_index].exact_type)
+						: 0,
+					destination_id, destination_index,
+					destination_index >= 0
+						? plan->values[destination_index]
+							.canonical_storage_id
+						: ZEND_MIR_ID_INVALID);
 				zend_tpde_set_diagnostic(diag,
 					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-					"zval store operands lack scalar or storage metadata");
+					message);
 				return false;
 			}
 			plan->instructions[i].zval_store_storage_id =

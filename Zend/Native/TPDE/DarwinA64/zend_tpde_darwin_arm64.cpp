@@ -119,6 +119,29 @@ public:
 			static_cast<uint32_t>(id));
 	}
 
+	void add_unsigned_offset(
+		AsmReg destination, AsmReg base, uint64_t offset) {
+		if (ASMIF(ADDxi, destination, base, offset)) {
+			return;
+		}
+		ScratchReg amount{this};
+		auto amount_reg = amount.alloc_gp();
+		materialize_constant(
+			offset, DarwinConfig::GP_BANK, 8, amount_reg);
+		ASM(ADDx, destination, base, amount_reg);
+	}
+
+	void compare_unsigned_immediate(AsmReg value, uint64_t immediate) {
+		if (ASMIF(CMPxi, value, immediate)) {
+			return;
+		}
+		ScratchReg constant{this};
+		auto constant_reg = constant.alloc_gp();
+		materialize_constant(
+			immediate, DarwinConfig::GP_BANK, 8, constant_reg);
+		ASM(CMPx, value, constant_reg);
+	}
+
 	void generate_exception_branch(IRBlockRef target) {
 		auto index = static_cast<uint32_t>(this->analyzer.block_idx(target));
 		generate_raw_jump(Jump::jmp, this->block_labels[index]);
@@ -305,7 +328,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		generate_raw_jump(Jump::jmp, exception);
 		auto compare_position = [&](uint32_t source) {
 			if (source <= UINT32_C(0xfff)) {
-				ASM(CMPxi, position_reg, source);
+				compare_unsigned_immediate(position_reg, source);
 			} else {
 				ScratchReg constant{this};
 				auto constant_reg = constant.alloc_gp();
@@ -542,7 +565,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 						continue;
 					}
 					if (source <= UINT32_C(0xfff)) {
-						ASM(CMPxi, continuation_reg, source);
+						compare_unsigned_immediate(continuation_reg, source);
 					} else {
 						ScratchReg expected{this};
 						auto expected_reg = expected.alloc_gp();
@@ -836,8 +859,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				auto value_reg = value.alloc_gp();
 				auto probe_reg = probe.alloc_gp();
 				auto constant_reg = constant.alloc_gp();
-				ASM(ADDxi, slot_reg, frame_scratch.cur_reg(),
-					layout.operand_offset);
+				add_unsigned_offset(
+					slot_reg, frame_scratch.cur_reg(), layout.operand_offset);
 				load_off(type_reg, slot_reg,
 					static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 				ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
@@ -1401,7 +1424,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		}
 		auto base_reg = base.load_to_reg();
 		auto result_reg = result.alloc_reg();
-		ASM(ADDxi, result_reg, base_reg, static_cast<uint32_t>(offset));
+		add_unsigned_offset(
+			result_reg, base_reg, static_cast<uint32_t>(offset));
 		result.set_modified();
 		return true;
 	}
@@ -1582,7 +1606,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		auto slot_reg = counted.alloc_gp();
 		auto old_type_reg = old_type.alloc_gp();
 		auto refcount_reg = refcount.alloc_gp();
-		ASM(ADDxi, slot_reg, frame_reg, static_cast<uint32_t>(offset));
+		add_unsigned_offset(
+			slot_reg, frame_reg, static_cast<uint32_t>(offset));
 		load_off(old_type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(CMPwi, old_type_reg, IS_REFERENCE_EX);
@@ -1627,7 +1652,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					capture_conditional_call_register_state(*this);
 			ScratchReg slot_argument{this};
 			auto slot_argument_reg = slot_argument.alloc_gp();
-			ASM(ADDxi, slot_argument_reg, frame_reg,
+			add_unsigned_offset(slot_argument_reg, frame_reg,
 				static_cast<uint32_t>(offset));
 			ValuePart slot_pointer{DarwinConfig::GP_BANK, 8};
 			slot_pointer.set_value(this, std::move(slot_argument));
@@ -1648,7 +1673,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		ScratchReg store_type{this};
 		auto store_slot_reg = store_slot.alloc_gp();
 		auto store_type_reg = store_type.alloc_gp();
-		ASM(ADDxi, store_slot_reg, frame_reg, static_cast<uint32_t>(offset));
+		add_unsigned_offset(
+			store_slot_reg, frame_reg, static_cast<uint32_t>(offset));
 		load_off(store_type_reg, store_slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(CMPwi, store_type_reg, IS_REFERENCE_EX);
@@ -1711,7 +1737,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 
 		ScratchReg slot{this};
 		auto slot_reg = slot.alloc_gp();
-		ASM(ADDxi, slot_reg, frame_reg,
+		add_unsigned_offset(slot_reg, frame_reg,
 			static_cast<uint32_t>(ZEND_CALL_FRAME_SLOT * sizeof(zval)));
 		ValuePart slot_pointer{DarwinConfig::GP_BANK, 8};
 		slot_pointer.set_value(this, std::move(slot));
@@ -2004,9 +2030,9 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		auto low_word_reg = low_word.alloc_gp();
 		auto probe_reg = probe.alloc_gp();
 
-		ASM(ADDxi, source_slot_reg, frame_reg,
+		add_unsigned_offset(source_slot_reg, frame_reg,
 			static_cast<uint32_t>(source_offset));
-		ASM(ADDxi, target_slot_reg, frame_reg,
+		add_unsigned_offset(target_slot_reg, frame_reg,
 			static_cast<uint32_t>(target_offset));
 		load_off(source_type_reg, source_slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
@@ -2045,7 +2071,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		generate_raw_jump(Jump::Jle, slow);
 		label_place(target_checked);
 		if (result_storage != ZEND_MIR_ID_INVALID) {
-			ASM(ADDxi, probe_reg, frame_reg,
+			add_unsigned_offset(probe_reg, frame_reg,
 				static_cast<uint32_t>(result_offset));
 			load_off(probe_reg, probe_reg,
 				static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
@@ -2087,7 +2113,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)),
 			source_type_reg, 4);
 		if (result_storage != ZEND_MIR_ID_INVALID) {
-			ASM(ADDxi, target_slot_reg, frame_reg,
+			add_unsigned_offset(target_slot_reg, frame_reg,
 				static_cast<uint32_t>(result_offset));
 			store_off(target_slot_reg, 0, low_word_reg, 8);
 			store_off(target_slot_reg,
@@ -2149,9 +2175,9 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		auto value_reg = value.alloc_gp();
 		auto probe_reg = probe.alloc_gp();
 
-		ASM(ADDxi, source_slot_reg, frame_reg,
+		add_unsigned_offset(source_slot_reg, frame_reg,
 			static_cast<uint32_t>(source_offset));
-		ASM(ADDxi, result_slot_reg, frame_reg,
+		add_unsigned_offset(result_slot_reg, frame_reg,
 			static_cast<uint32_t>(result_offset));
 		load_off(type_reg, source_slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
@@ -2209,7 +2235,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		auto value_reg = value.alloc_gp();
 		auto probe_reg = probe.alloc_gp();
 
-		ASM(ADDxi, source_slot_reg, frame_reg,
+		add_unsigned_offset(source_slot_reg, frame_reg,
 			static_cast<uint32_t>(source_offset));
 		load_off(type_reg, source_slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
@@ -2295,7 +2321,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		auto low_word_reg = low_word.alloc_gp();
 		auto high_word_reg = high_word.alloc_gp();
 
-		ASM(ADDxi, slot_reg, frame_reg, layout.container_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.container_offset);
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
@@ -2303,7 +2329,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		generate_raw_jump(Jump::Jne, slow);
 		load_off(array_reg, slot_reg, 0, 8);
 
-		ASM(ADDxi, slot_reg, frame_reg, layout.key_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.key_offset);
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
@@ -2321,7 +2347,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			uint64_t{0}, DarwinConfig::GP_BANK, 4, high_word_reg);
 		label_place(key_ready);
 
-		ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.result_offset);
 		load_off(limit_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(TSTwi, limit_reg,
@@ -2413,7 +2439,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(CMPwi, type_reg, IS_UNDEF);
 		generate_raw_jump(Jump::Jeq, slow);
 
-		ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.result_offset);
 		load_off(low_word_reg, element_reg, 0, 8);
 		load_off(high_word_reg, element_reg, 8, 8);
 		store_off(slot_reg, 0, low_word_reg, 8);
@@ -2495,7 +2521,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		auto element_reg = element.alloc_gp();
 		auto key_kind_reg = key_kind.alloc_gp();
 
-		ASM(ADDxi, slot_reg, frame_reg, layout.container_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.container_offset);
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
@@ -2503,7 +2529,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		generate_raw_jump(Jump::Jne, slow);
 		load_off(array_reg, slot_reg, 0, 8);
 
-		ASM(ADDxi, slot_reg, frame_reg, layout.key_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.key_offset);
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
@@ -2521,7 +2547,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			uint64_t{0}, DarwinConfig::GP_BANK, 4, key_kind_reg);
 		label_place(key_ready);
 
-		ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.result_offset);
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(TSTwi, type_reg,
@@ -2632,7 +2658,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		materialize_constant(
 			IS_TRUE, DarwinConfig::GP_BANK, 4, type_reg);
 		label_place(store_answer);
-		ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.result_offset);
 		store_off(slot_reg, 0, element_reg, 8);
 		store_off(slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)),
@@ -2692,7 +2718,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		auto low_word_reg = low_word.alloc_gp();
 		auto high_word_reg = high_word.alloc_gp();
 
-		ASM(ADDxi, slot_reg, frame_reg, layout.container_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.container_offset);
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
@@ -2725,7 +2751,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(CMPx, count_reg, limit_reg);
 		generate_raw_jump(Jump::Jne, slow);
 
-		ASM(ADDxi, slot_reg, frame_reg, layout.value_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.value_offset);
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(ANDwi, limit_reg, type_reg, Z_TYPE_MASK);
@@ -2736,7 +2762,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(CMPwi, limit_reg, IS_INDIRECT);
 		generate_raw_jump(Jump::Jeq, slow);
 		if (layout.has_result) {
-			ASM(ADDxi, element_reg, frame_reg, layout.result_offset);
+			add_unsigned_offset(element_reg, frame_reg, layout.result_offset);
 			load_off(limit_reg, element_reg,
 				static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 			ASM(CMPwi, limit_reg, IS_UNDEF);
@@ -2786,7 +2812,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			static_cast<uint32_t>(offsetof(HashTable, nNextFreeElement)),
 			count_reg, 8);
 		if (layout.has_result) {
-			ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
+			add_unsigned_offset(slot_reg, frame_reg, layout.result_offset);
 			store_off(slot_reg, 0, low_word_reg, 8);
 			store_off(slot_reg, 8, high_word_reg, 8);
 			auto result_copied = text_writer.label_create();
@@ -2849,7 +2875,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		auto type_reg = type.alloc_gp();
 		auto string_reg = string.alloc_gp();
 
-		ASM(ADDxi, slot_reg, frame_reg, layout.operand_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.operand_offset);
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
@@ -2857,7 +2883,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		generate_raw_jump(Jump::Jne, slow);
 		load_off(string_reg, slot_reg, 0, 8);
 
-		ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.result_offset);
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(TSTwi, type_reg,
@@ -2914,7 +2940,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		auto left_reg = left.alloc_gp();
 		auto right_reg = right.alloc_gp();
 
-		ASM(ADDxi, slot_reg, frame_reg, layout.left_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.left_offset);
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
@@ -2922,7 +2948,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		generate_raw_jump(Jump::Jne, slow);
 		load_off(left_reg, slot_reg, 0, 8);
 
-		ASM(ADDxi, slot_reg, frame_reg, layout.right_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.right_offset);
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
@@ -2932,7 +2958,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(CMPx, left_reg, right_reg);
 		generate_raw_jump(Jump::Jne, slow);
 
-		ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.result_offset);
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(TSTwi, type_reg,
@@ -3026,7 +3052,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		load_long_operand(layout.left, left_reg);
 		load_long_operand(layout.right, right_reg);
 
-		ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.result_offset);
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(TSTwi, type_reg,
@@ -3160,7 +3186,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		auto left_reg = left.alloc_gp();
 		auto right_reg = right.alloc_gp();
 
-		ASM(ADDxi, slot_reg, frame_reg, layout.left_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.left_offset);
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
@@ -3175,9 +3201,9 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			load_off(slot_reg, slot_reg,
 				static_cast<uint32_t>(
 					offsetof(zend_op_array, literals)), 8);
-			ASM(ADDxi, slot_reg, slot_reg, layout.right.offset);
+			add_unsigned_offset(slot_reg, slot_reg, layout.right.offset);
 		} else {
-			ASM(ADDxi, slot_reg, frame_reg, layout.right.offset);
+			add_unsigned_offset(slot_reg, frame_reg, layout.right.offset);
 		}
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
@@ -3187,7 +3213,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		load_off(right_reg, slot_reg, 0, 8);
 
 		if (layout.has_result) {
-			ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
+			add_unsigned_offset(slot_reg, frame_reg, layout.result_offset);
 			load_off(type_reg, slot_reg,
 				static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 			ASM(TSTwi, type_reg,
@@ -3216,7 +3242,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			default:
 				return false;
 		}
-		ASM(ADDxi, slot_reg, frame_reg, layout.left_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.left_offset);
 		store_off(slot_reg, 0, left_reg, 8);
 		materialize_constant(
 			static_cast<uint64_t>(IS_LONG),
@@ -3225,14 +3251,14 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)),
 			type_reg, 4);
 		if (layout.has_result) {
-			ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
+			add_unsigned_offset(slot_reg, frame_reg, layout.result_offset);
 			store_off(slot_reg, 0, left_reg, 8);
 			store_off(slot_reg,
 				static_cast<uint32_t>(offsetof(zval, u1.type_info)),
 				type_reg, 4);
 		}
 		if (layout.consume_right) {
-			ASM(ADDxi, slot_reg, frame_reg, layout.right.offset);
+			add_unsigned_offset(slot_reg, frame_reg, layout.right.offset);
 			materialize_constant(
 				static_cast<uint64_t>(IS_UNDEF),
 				DarwinConfig::GP_BANK, 4, type_reg);
@@ -3284,7 +3310,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		auto value_reg = value.alloc_gp();
 		auto limit_reg = limit.alloc_gp();
 
-		ASM(ADDxi, slot_reg, frame_reg, layout.operand_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.operand_offset);
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
@@ -3300,7 +3326,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		generate_raw_jump(Jump::Jeq, slow);
 
 		if (layout.has_result) {
-			ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
+			add_unsigned_offset(slot_reg, frame_reg, layout.result_offset);
 			load_off(type_reg, slot_reg,
 				static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 			ASM(TSTwi, type_reg,
@@ -3315,10 +3341,10 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		} else {
 			ASM(SUBxi, value_reg, value_reg, 1);
 		}
-		ASM(ADDxi, slot_reg, frame_reg, layout.operand_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.operand_offset);
 		store_off(slot_reg, 0, value_reg, 8);
 		if (layout.has_result) {
-			ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
+			add_unsigned_offset(slot_reg, frame_reg, layout.result_offset);
 			if (!layout.post) {
 				store_off(slot_reg, 0, value_reg, 8);
 			}
@@ -3376,7 +3402,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		auto type_reg = type.alloc_gp();
 		auto value_reg = value.alloc_gp();
 
-		ASM(ADDxi, slot_reg, frame_reg, layout.operand_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.operand_offset);
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
@@ -3455,7 +3481,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				layout.is_empty ? IS_TRUE : IS_FALSE),
 			DarwinConfig::GP_BANK, 4, type_reg);
 		label_place(store);
-		ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.result_offset);
 		load_off(value_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(TSTwi, value_reg,
@@ -3514,7 +3540,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		auto type_reg = type.alloc_gp();
 		auto low_word_reg = low_word.alloc_gp();
 
-		ASM(ADDxi, receiver_reg, frame_reg, layout.receiver_offset);
+		add_unsigned_offset(receiver_reg, frame_reg, layout.receiver_offset);
 		load_off(type_reg, receiver_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
@@ -3544,7 +3570,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(CMPwi, offset_reg, IS_REFERENCE);
 		generate_raw_jump(Jump::Jeq, slow);
 
-		ASM(ADDxi, receiver_reg, frame_reg, layout.result_offset);
+		add_unsigned_offset(receiver_reg, frame_reg, layout.result_offset);
 		load_off(offset_reg, receiver_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(TSTwi, offset_reg,
@@ -3622,7 +3648,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		auto type_reg = type.alloc_gp();
 		auto low_word_reg = low_word.alloc_gp();
 
-		ASM(ADDxi, receiver_reg, frame_reg, layout.receiver_offset);
+		add_unsigned_offset(receiver_reg, frame_reg, layout.receiver_offset);
 		load_off(type_reg, receiver_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
@@ -3666,7 +3692,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(CMPwi, offset_reg, IS_REFERENCE);
 		generate_raw_jump(Jump::Jeq, slow);
 
-		ASM(ADDxi, receiver_reg, frame_reg, layout.value_offset);
+		add_unsigned_offset(receiver_reg, frame_reg, layout.value_offset);
 		load_off(type_reg, receiver_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(ANDwi, offset_reg, type_reg, Z_TYPE_MASK);
@@ -3788,7 +3814,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		ASM(CMPxi, table_reg, 0);
 		generate_raw_jump(Jump::Jeq, slow);
 
-		ASM(ADDxi, slot_reg, frame_reg, layout.name_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.name_offset);
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
@@ -3796,7 +3822,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		generate_raw_jump(Jump::Jne, slow);
 		load_off(name_reg, slot_reg, 0, 8);
 
-		ASM(ADDxi, slot_reg, frame_reg, layout.result_offset);
+		add_unsigned_offset(slot_reg, frame_reg, layout.result_offset);
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(TSTwi, type_reg,
@@ -3847,7 +3873,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 
 		load_off(low_word_reg, slot_reg, 0, 8);
 		load_off(high_word_reg, slot_reg, 8, 8);
-		ASM(ADDxi, name_reg, frame_reg, layout.result_offset);
+		add_unsigned_offset(name_reg, frame_reg, layout.result_offset);
 		store_off(name_reg, 0, low_word_reg, 8);
 		store_off(name_reg, 8, high_word_reg, 8);
 		ASM(TSTwi, type_reg,
@@ -4351,8 +4377,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			auto value_reg = value.alloc_gp();
 			auto probe_reg = probe.alloc_gp();
 			auto constant_reg = constant.alloc_gp();
-			ASM(ADDxi, slot_reg, frame_scratch.cur_reg(),
-				layout.operand_offset);
+			add_unsigned_offset(
+				slot_reg, frame_scratch.cur_reg(), layout.operand_offset);
 			load_off(type_reg, slot_reg,
 				static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 			ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
@@ -4497,8 +4523,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					auto type_reg = type.alloc_gp();
 					auto value_reg = value.alloc_gp();
 
-					ASM(ADDxi, slot_reg, frame_reg,
-						layout.operand_offset);
+					add_unsigned_offset(
+						slot_reg, frame_reg, layout.operand_offset);
 					load_off(type_reg, slot_reg,
 						static_cast<uint32_t>(
 							offsetof(zval, u1.type_info)), 4);
@@ -5032,7 +5058,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 											slot_index_reg,
 											static_cast<uint32_t>(offsetof(
 												zend_op_array, last_var)), 4);
-										ASM(ADDxi, slot_index_reg,
+										add_unsigned_offset(slot_index_reg,
 											slot_index_reg,
 											ZEND_CALL_FRAME_SLOT
 												+ call.direct_call
@@ -5118,7 +5144,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 								load_off(slot_reg, slot_reg,
 									static_cast<uint32_t>(offsetof(
 										zend_op_array, last_var)), 4);
-								ASM(ADDxi, slot_reg, slot_reg,
+								add_unsigned_offset(slot_reg, slot_reg,
 									ZEND_CALL_FRAME_SLOT
 										+ call.direct_call
 											->result_operand.index);
@@ -5595,8 +5621,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 							vm_stack_end)), 8);
 					load_off(second_reg, second_reg, 0, 8);
 					ASM(SUBx, second_reg, second_reg, first_reg);
-					ASM(CMPxi, second_reg,
-						static_cast<uint32_t>(reservation_size));
+					compare_unsigned_immediate(
+						second_reg, reservation_size);
 					generate_raw_jump(Jump::Jcc, slow_path);
 
 					ScratchReg callee_address{this};
@@ -5779,7 +5805,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 							load_off(slot_reg, slot_reg,
 								static_cast<uint32_t>(
 									offsetof(zend_op_array, last_var)), 4);
-							ASM(ADDxi, slot_reg, slot_reg,
+							add_unsigned_offset(slot_reg, slot_reg,
 								ZEND_CALL_FRAME_SLOT
 									+ call.direct_call->result_operand.index);
 							ASM(LSLxi, slot_reg, slot_reg, 4);
@@ -6515,7 +6541,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 							load_off(slot_index_reg, slot_index_reg,
 								static_cast<uint32_t>(
 									offsetof(zend_op_array, last_var)), 4);
-							ASM(ADDxi, slot_index_reg, slot_index_reg,
+							add_unsigned_offset(slot_index_reg, slot_index_reg,
 								ZEND_CALL_FRAME_SLOT
 									+ call.direct_call->result_operand.index);
 							ASM(LSLxi, slot_index_reg, slot_index_reg, 4);
@@ -6908,7 +6934,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 							|| landing >= user_opcode_labels_.size()) {
 						continue;
 					}
-					ASM(CMPxi, direct_continuation_reg, source);
+					compare_unsigned_immediate(
+						direct_continuation_reg, source);
 					auto continued = text_writer.label_create();
 					generate_raw_jump(Jump::Jne, continued);
 					generate_raw_jump(
@@ -6929,8 +6956,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 								&target)) {
 						continue;
 					}
-					ASM(CMPxi, direct_continuation_reg,
-						call.source_position_id);
+					compare_unsigned_immediate(
+						direct_continuation_reg, call.source_position_id);
 					auto continued = text_writer.label_create();
 					generate_raw_jump(Jump::Jne, continued);
 					generate_exception_branch(adaptor->block_ref(target));
@@ -6966,7 +6993,8 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 							plan->view->context, call.block_id, 1, &target)) {
 					continue;
 				}
-				ASM(CMPxi, continuation_reg, call.source_position_id);
+				compare_unsigned_immediate(
+					continuation_reg, call.source_position_id);
 				auto continued = text_writer.label_create();
 				generate_raw_jump(Jump::Jne, continued);
 				generate_exception_branch(adaptor->block_ref(target));

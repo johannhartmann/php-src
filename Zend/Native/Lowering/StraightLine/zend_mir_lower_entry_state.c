@@ -8,9 +8,18 @@
 
 #include <string.h>
 
+#include "Zend/Native/Lowering/Core/zend_mir_lowering_internal.h"
+#include "Zend/Native/Lowering/Frontend/zend_mir_zend_source.h"
 #include "Zend/Native/MIR/Semantics/zend_mir_ownership.h"
 
 #include "zend_mir_straight_line.h"
+
+static bool zend_mir_straight_line_uses_canonical_locations(
+	const zend_mir_lowering_context *context)
+{
+	return context != NULL && context->zend_source != NULL
+		&& context->zend_source->w11;
+}
 
 static bool zend_mir_straight_line_mutator_has_frame_ops(
 	const zend_mir_mutator *mutator)
@@ -308,6 +317,9 @@ bool zend_mir_straight_line_emit_frame_for_class(
 	zend_mir_source_map_id map_id;
 	zend_mir_function_id function_id =
 		zend_mir_lowering_context_function_id(context);
+	const uint32_t frame_slot_count =
+		zend_mir_straight_line_uses_canonical_locations(context)
+			? 0 : entry->slot_count;
 	uint32_t first_slot = 0;
 	uint32_t index;
 
@@ -318,7 +330,7 @@ bool zend_mir_straight_line_emit_frame_for_class(
 		return false;
 	}
 
-	for (index = 0; index < entry->slot_count; index++) {
+	for (index = 0; index < frame_slot_count; index++) {
 		zend_mir_frame_slot_ref slot;
 		uint32_t slot_index;
 
@@ -341,8 +353,8 @@ bool zend_mir_straight_line_emit_frame_for_class(
 	frame.function_kind = entry->function_kind;
 	frame.opline_index = source_opcode->opline_index;
 	frame.opline_phase = ZEND_MIR_OPLINE_PHASE_BEFORE;
-	frame.slots.offset = entry->slot_count != 0 ? first_slot : 0;
-	frame.slots.count = entry->slot_count;
+	frame.slots.offset = frame_slot_count != 0 ? first_slot : 0;
+	frame.slots.count = frame_slot_count;
 	frame.return_continuation.kind = ZEND_MIR_CONTINUATION_KIND_TERMINAL;
 	frame.return_continuation.frame_state_id = ZEND_MIR_ID_INVALID;
 	frame.return_continuation.opline_index = ZEND_MIR_ID_INVALID;
@@ -450,7 +462,10 @@ zend_mir_lowering_status zend_mir_lower_entry_state(
 				mutator->context, &instruction, &instruction_id)) {
 		return ZEND_MIR_LOWERING_FAILED;
 	}
-	for (index = 0; index < provider_context->entry->slot_count; index++) {
+	for (index = 0;
+			!zend_mir_straight_line_uses_canonical_locations(context)
+				&& index < provider_context->entry->slot_count;
+			index++) {
 		const zend_mir_straight_line_slot *slot =
 			&provider_context->entry->slots[index];
 		if (slot->materialization == ZEND_MIR_MATERIALIZATION_MATERIALIZED
