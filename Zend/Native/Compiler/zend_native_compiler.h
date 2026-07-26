@@ -137,6 +137,10 @@ ZEND_API zend_result zend_native_compiler_compile(
 	const zend_mir_scalar_type_mask *supplied_argument_types,
 	uint32_t supplied_argument_count,
 	zend_native_compile_diagnostic *diagnostic);
+ZEND_API zend_native_entry_cell *zend_native_compiler_prepare_function(
+	zend_native_compiler *compiler,
+	zend_function *function,
+	zend_native_compile_diagnostic *diagnostic);
 
 /*
  * OPcache persists this pointer-free encoding of the normal TPDE images.

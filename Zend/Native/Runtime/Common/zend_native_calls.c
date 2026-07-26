@@ -797,7 +797,9 @@ static zend_result zend_native_reentry_scope_enter_resolver_impl(
 {
 	uint32_t index;
 
-	if (scope == NULL || bindings == NULL || binding_count == 0) {
+	if (scope == NULL
+			|| (binding_count != 0 && bindings == NULL)
+			|| (binding_count == 0 && resolver == NULL)) {
 		return FAILURE;
 	}
 	if (install_execute_hook) {
