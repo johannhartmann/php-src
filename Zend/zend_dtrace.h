@@ -31,9 +31,22 @@ ZEND_API extern zend_op_array *(*zend_dtrace_compile_file)(zend_file_handle *fil
 ZEND_API extern void (*zend_dtrace_execute)(zend_op_array *op_array);
 ZEND_API extern void (*zend_dtrace_execute_internal)(zend_execute_data *execute_data, zval *return_value);
 
+typedef struct _zend_dtrace_user_frame {
+	const char *scope;
+	const char *filename;
+	const char *function_name;
+	const char *class_name;
+	int line;
+	bool active;
+} zend_dtrace_user_frame;
+
 ZEND_API zend_op_array *dtrace_compile_file(zend_file_handle *file_handle, int type);
 ZEND_API void dtrace_execute_ex(zend_execute_data *execute_data);
 ZEND_API void dtrace_execute_internal(zend_execute_data *execute_data, zval *return_value);
+ZEND_API void zend_dtrace_user_frame_begin(
+	zend_execute_data *execute_data, zend_dtrace_user_frame *frame);
+ZEND_API void zend_dtrace_user_frame_end(
+	const zend_dtrace_user_frame *frame);
 #include <zend_dtrace_gen.h>
 
 void dtrace_error_notify_cb(int type, zend_string *error_filename, uint32_t error_lineno, zend_string *message);

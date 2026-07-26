@@ -19,6 +19,8 @@
 #include "zend_API.h"
 #include "zend_dtrace.h"
 
+#include <string.h>
+
 #ifdef HAVE_DTRACE
 
 ZEND_API zend_op_array *(*zend_dtrace_compile_file)(zend_file_handle *file_handle, int type);
@@ -50,42 +52,64 @@ ZEND_API zend_op_array *dtrace_compile_file(zend_file_handle *file_handle, int t
 	return res;
 }
 
-/* We wrap the execute function to have fire the execute-entry/return and function-entry/return probes */
-ZEND_API void dtrace_execute_ex(zend_execute_data *execute_data)
+ZEND_API void zend_dtrace_user_frame_begin(
+	zend_execute_data *execute_data, zend_dtrace_user_frame *frame)
 {
-	int lineno;
-	const char *scope, *filename, *funcname, *classname;
-	scope = filename = funcname = classname = NULL;
+	(void) execute_data;
+	memset(frame, 0, sizeof(*frame));
 
 	/* we need filename and lineno for both execute and function probes */
 	if (DTRACE_EXECUTE_ENTRY_ENABLED() || DTRACE_EXECUTE_RETURN_ENABLED()
 		|| DTRACE_FUNCTION_ENTRY_ENABLED() || DTRACE_FUNCTION_RETURN_ENABLED()) {
-		filename = dtrace_get_executed_filename();
-		lineno = zend_get_executed_lineno();
+		frame->filename = dtrace_get_executed_filename();
+		frame->line = zend_get_executed_lineno();
+		frame->active = true;
 	}
 
 	if (DTRACE_FUNCTION_ENTRY_ENABLED() || DTRACE_FUNCTION_RETURN_ENABLED()) {
-		classname = get_active_class_name(&scope);
-		funcname = get_active_function_name();
+		frame->class_name = get_active_class_name(&frame->scope);
+		frame->function_name = get_active_function_name();
 	}
 
 	if (DTRACE_EXECUTE_ENTRY_ENABLED()) {
-		DTRACE_EXECUTE_ENTRY((char *)filename, lineno);
+		DTRACE_EXECUTE_ENTRY(
+			(char *) frame->filename, frame->line);
 	}
 
-	if (DTRACE_FUNCTION_ENTRY_ENABLED() && funcname != NULL) {
-		DTRACE_FUNCTION_ENTRY((char *)funcname, (char *)filename, lineno, (char *)classname, (char *)scope);
+	if (DTRACE_FUNCTION_ENTRY_ENABLED()
+			&& frame->function_name != NULL) {
+		DTRACE_FUNCTION_ENTRY(
+			(char *) frame->function_name,
+			(char *) frame->filename, frame->line,
+			(char *) frame->class_name, (char *) frame->scope);
+	}
+}
+
+ZEND_API void zend_dtrace_user_frame_end(
+	const zend_dtrace_user_frame *frame)
+{
+	if (frame->active && DTRACE_FUNCTION_RETURN_ENABLED()
+			&& frame->function_name != NULL) {
+		DTRACE_FUNCTION_RETURN(
+			(char *) frame->function_name,
+			(char *) frame->filename, frame->line,
+			(char *) frame->class_name, (char *) frame->scope);
 	}
 
+	if (frame->active && DTRACE_EXECUTE_RETURN_ENABLED()) {
+		DTRACE_EXECUTE_RETURN(
+			(char *) frame->filename, frame->line);
+	}
+}
+
+/* We wrap the execute function to fire execute and function probes. */
+ZEND_API void dtrace_execute_ex(zend_execute_data *execute_data)
+{
+	zend_dtrace_user_frame frame;
+
+	zend_dtrace_user_frame_begin(execute_data, &frame);
 	execute_ex(execute_data);
-
-	if (DTRACE_FUNCTION_RETURN_ENABLED() && funcname != NULL) {
-		DTRACE_FUNCTION_RETURN((char *)funcname, (char *)filename, lineno, (char *)classname, (char *)scope);
-	}
-
-	if (DTRACE_EXECUTE_RETURN_ENABLED()) {
-		DTRACE_EXECUTE_RETURN((char *)filename, lineno);
-	}
+	zend_dtrace_user_frame_end(&frame);
 }
 
 ZEND_API void dtrace_execute_internal(zend_execute_data *execute_data, zval *return_value)
