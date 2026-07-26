@@ -267,7 +267,6 @@ typedef struct _zend_native_direct_activation {
 	bool cell_active;
 	bool dynamic_target;
 	bool internal_target;
-	bool preserve_target;
 } zend_native_direct_activation;
 
 typedef struct _zend_native_direct_call_result {
