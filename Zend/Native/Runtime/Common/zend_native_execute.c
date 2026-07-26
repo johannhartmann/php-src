@@ -1,6 +1,7 @@
 /* C-only bailout boundary for generated native frame execution. */
 
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
+#include "Zend/Native/Runtime/Common/zend_native_generators.h"
 
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_closures.h"
@@ -150,8 +151,7 @@ static zend_native_status zend_native_execute_frame_impl(
 	entry = zend_native_code_frame_entry(code);
 	if (code == NULL || execute_data == NULL || entry == NULL
 			|| !zend_native_code_is_executable(code)
-			|| execute_data->func == NULL
-			|| zend_native_frame_prepare(execute_data) == FAILURE) {
+			|| execute_data->func == NULL) {
 		zend_native_execution_diagnostic(diagnostic,
 			ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
 			"Zend frame does not match the compiled native entry");
@@ -190,7 +190,18 @@ static zend_native_status zend_native_execute_frame_impl(
 			state->observer_started = true;
 			ZEND_OBSERVER_FCALL_BEGIN(execute_data);
 		}
-		state->status = entry(execute_data, &context);
+		/*
+		 * RECV initialization and argument type verification are observable
+		 * execution.  The VM starts the fcall observer before those opcodes,
+		 * so native frames must do the same when a type error or default-value
+		 * resolution prevents the machine entry from running.
+		 */
+		if (zend_native_frame_prepare(execute_data) == FAILURE) {
+			state->status = EG(exception) != NULL
+				? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
+		} else {
+			state->status = entry(execute_data, &context);
+		}
 	} zend_catch {
 		state->status = EG(exception) != NULL
 			? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
@@ -221,6 +232,10 @@ static zend_native_status zend_native_execute_frame_impl(
 			|| state->status == ZEND_NATIVE_GENERATOR_RETURNED
 			|| generator_frame) {
 		zend_native_status status = state->status;
+		if (generator_frame && status == ZEND_NATIVE_EXCEPTION) {
+			zend_native_generator_uncaught_exception(execute_data);
+			state->observer_finished = true;
+		}
 		if (status == ZEND_NATIVE_BAILOUT) {
 			zend_native_call_direct_unwind(execute_data);
 		}

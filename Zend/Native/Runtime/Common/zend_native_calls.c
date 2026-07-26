@@ -47,6 +47,21 @@ void zend_native_execution_context_init(
 	context->observers_enabled = ZEND_OBSERVER_ENABLED;
 }
 
+void *zend_native_call_fiber_suspend(void)
+{
+	zend_native_direct_activation *active = zend_native_active_direct_call;
+
+	zend_native_active_direct_call = NULL;
+	return active;
+}
+
+void zend_native_call_fiber_resume(void *active_direct_call)
+{
+	ZEND_ASSERT(zend_native_active_direct_call == NULL);
+	zend_native_active_direct_call =
+		(zend_native_direct_activation *) active_direct_call;
+}
+
 static zval *zend_native_frameless_slot(
 	zend_execute_data *execute_data, uint8_t type, znode_op operand)
 {
@@ -2891,9 +2906,29 @@ zend_native_direct_call_result zend_native_call_direct(
 		invocation.entry(invocation.callee, context));
 }
 
+static bool zend_native_frame_descends_from(
+	zend_execute_data *frame, zend_execute_data *ancestor)
+{
+	while (frame != NULL && frame != ancestor) {
+		frame = frame->prev_execute_data;
+	}
+	return frame == ancestor;
+}
+
 void zend_native_call_direct_unwind(zend_execute_data *outermost)
 {
-	while (zend_native_active_direct_call != NULL) {
+	/*
+	 * An observed direct callee owns its own C bailout boundary.  Its active
+	 * call record, however, is owned by the generated caller and remains live
+	 * until the callee returns a bailout status to that caller.  Unwind only
+	 * activations nested below this boundary; freeing the activation whose
+	 * callee is outermost would release the very frame whose observer and
+	 * compiled variables this boundary still has to finish.
+	 */
+	while (zend_native_active_direct_call != NULL
+			&& zend_native_active_direct_call->callee != outermost
+			&& zend_native_frame_descends_from(
+				zend_native_active_direct_call->caller, outermost)) {
 		zend_native_direct_activation *activation =
 			zend_native_active_direct_call;
 		zend_execute_data *caller = activation->caller;

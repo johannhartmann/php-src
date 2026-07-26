@@ -29,6 +29,14 @@ zend_native_status zend_native_generator_user_opcode_return(
 	zend_execute_data *execute_data);
 
 /*
+ * Complete an uncaught exceptional generator resume exactly like the VM:
+ * publish a NULL observer result and close the generator heap frame before
+ * control returns to zend_generator_resume().
+ */
+void zend_native_generator_uncaught_exception(
+	zend_execute_data *execute_data);
+
+/*
  * Release the immutable code generation owned by a generator heap frame.
  * zend_generator_close() calls this exactly once on every normal, exceptional,
  * and forced-close path.

@@ -100,7 +100,22 @@ zend_native_executor_dispatch_load(const zend_op_array *op_array)
 	return __atomic_load_n(
 		(zend_native_executor_dispatch * const *)
 			&run_time_cache[zend_native_executor_entry_handle],
-		__ATOMIC_ACQUIRE);
+			__ATOMIC_ACQUIRE);
+}
+
+static void zend_native_executor_dispatch_store(
+	zend_op_array *op_array, zend_native_executor_dispatch *dispatch)
+{
+	void **run_time_cache;
+
+	ZEND_ASSERT(op_array != NULL);
+	ZEND_ASSERT(zend_native_executor_entry_handle >= 0);
+	run_time_cache = RUN_TIME_CACHE(op_array);
+	ZEND_ASSERT(run_time_cache != NULL);
+	__atomic_store_n(
+		(zend_native_executor_dispatch **)
+			&run_time_cache[zend_native_executor_entry_handle],
+		dispatch, __ATOMIC_RELEASE);
 }
 
 static void zend_native_executor_dispatch_clear(
@@ -128,7 +143,16 @@ static void zend_native_executor_dispatch_dtor(zval *value)
 {
 	zend_native_executor_dispatch *dispatch = Z_PTR_P(value);
 
-	zend_native_executor_dispatch_clear(dispatch);
+	/*
+	 * During request deactivation, temporary op_arrays (notably closures
+	 * owned by completed or destroyed fibers) may already be gone. Their
+	 * request-local runtime caches are gone with them, so no cache word needs
+	 * clearing. Deletions while the request is active still detach the
+	 * dispatch atomically before releasing it.
+	 */
+	if (zend_native_executor_request_state.active) {
+		zend_native_executor_dispatch_clear(dispatch);
+	}
 	efree(dispatch);
 }
 
@@ -383,11 +407,8 @@ static void zend_native_executor_bind_dispatch(
 				dispatch != NULL; dispatch = dispatch->next) {
 			if (dispatch->op_array == op_array
 					&& dispatch->entry_cell == entry_cell) {
-				__atomic_store_n(
-					(zend_native_executor_dispatch **)
-						&RUN_TIME_CACHE(op_array)[
-							zend_native_executor_entry_handle],
-					dispatch, __ATOMIC_RELEASE);
+				zend_native_executor_dispatch_store(
+					op_array, dispatch);
 				zend_native_executor_generation_unlock();
 				return;
 			}
@@ -399,11 +420,7 @@ static void zend_native_executor_bind_dispatch(
 		dispatch->persistent = true;
 		dispatch->next = generation->dispatches;
 		generation->dispatches = dispatch;
-		__atomic_store_n(
-			(zend_native_executor_dispatch **)
-			&RUN_TIME_CACHE(op_array)[
-				zend_native_executor_entry_handle],
-			dispatch, __ATOMIC_RELEASE);
+		zend_native_executor_dispatch_store(op_array, dispatch);
 		zend_native_executor_generation_unlock();
 		return;
 	}
@@ -415,10 +432,7 @@ static void zend_native_executor_bind_dispatch(
 	zend_hash_index_update_ptr(
 		&zend_native_executor_request_state.dispatch,
 		(zend_ulong) (uintptr_t) op_array, dispatch);
-	__atomic_store_n(
-		(zend_native_executor_dispatch **)
-			&RUN_TIME_CACHE(op_array)[zend_native_executor_entry_handle],
-		dispatch, __ATOMIC_RELEASE);
+	zend_native_executor_dispatch_store(op_array, dispatch);
 }
 
 static void zend_native_executor_destroy_generations(
@@ -1179,7 +1193,7 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 						.observed_epoch)
 			&& (code = zend_native_entry_cell_load(
 				dispatch->entry_cell)) != NULL) {
-		status = zend_native_compiler_execute_published(
+		status = zend_native_compiler_execute_observed_published(
 			dispatch->generation->compiler, dispatch->entry_cell,
 			code, execute_data, &diagnostic);
 		goto complete;
@@ -1244,7 +1258,7 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 		generation->script.class_table = *EG(class_table);
 	}
 	memset(&diagnostic, 0, sizeof(diagnostic));
-	status = zend_native_compiler_execute_data(
+	status = zend_native_compiler_execute_observed_data(
 		generation->compiler, execute_data, &diagnostic);
 	entry_cell = zend_native_compiler_lookup(
 		generation->compiler, execute_data->func);

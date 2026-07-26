@@ -1413,6 +1413,14 @@ zend_native_status zend_native_return_source_zval(
 		return ZEND_NATIVE_RETURNED;
 	}
 	if (operand_type == IS_CV && Z_ISUNDEF_P(source)) {
+		if (operand.index >= execute_data->func->op_array.last_var) {
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		zend_error(E_WARNING, "Undefined variable $%s",
+			ZSTR_VAL(execute_data->func->op_array.vars[operand.index]));
+		if (UNEXPECTED(EG(exception) != NULL)) {
+			return ZEND_NATIVE_EXCEPTION;
+		}
 		if (return_value != NULL) {
 			ZVAL_NULL(return_value);
 		}
