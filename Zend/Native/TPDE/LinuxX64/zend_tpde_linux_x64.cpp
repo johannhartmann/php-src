@@ -2366,32 +2366,27 @@ bool ZendCompilerX64::compile_inst(
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + source_storage) * sizeof(zval);
 		const uint64_t result_offset =
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + result_storage) * sizeof(zval);
-		if (source_offset > INT32_MAX || result_offset > INT32_MAX) {
+		if (source_offset > INT32_MAX - sizeof(zval)
+				|| result_offset > INT32_MAX - sizeof(zval)) {
 			return execute_value_operation();
 		}
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 		auto frame_reg = frame.load_to_reg();
-		ScratchReg source_slot{this};
-		ScratchReg result_slot{this};
 		ScratchReg type{this};
 		ScratchReg value{this};
 		ScratchReg probe{this};
-		auto source_slot_reg = source_slot.alloc_gp();
-		auto result_slot_reg = result_slot.alloc_gp();
 		auto type_reg = type.alloc_gp();
 		auto value_reg = value.alloc_gp();
 		auto probe_reg = probe.alloc_gp();
 
-		ASM(MOV64rr, source_slot_reg, frame_reg);
-		ASM(ADD64ri, source_slot_reg, static_cast<int32_t>(source_offset));
-		ASM(MOV64rr, result_slot_reg, frame_reg);
-		ASM(ADD64ri, result_slot_reg, static_cast<int32_t>(result_offset));
 		ASM(MOV32rm, type_reg,
-			FE_MEM(source_slot_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					source_offset + offsetof(zval, u1.type_info))));
 		ASM(MOV64rm, value_reg,
-			FE_MEM(source_slot_reg, 0, FE_NOREG, 0));
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(source_offset)));
 		ASM(MOV32rr, probe_reg, type_reg);
 		ASM(AND32ri, probe_reg,
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
@@ -2405,10 +2400,13 @@ bool ZendCompilerX64::compile_inst(
 			1);
 		label_place(copied);
 		ASM(MOV64mr,
-			FE_MEM(result_slot_reg, 0, FE_NOREG, 0), value_reg);
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(result_offset)),
+			value_reg);
 		ASM(MOV32mr,
-			FE_MEM(result_slot_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))),
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					result_offset + offsetof(zval, u1.type_info))),
 			type_reg);
 		return true;
 	};
