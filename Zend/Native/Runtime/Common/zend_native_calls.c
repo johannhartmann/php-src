@@ -2020,12 +2020,11 @@ static zend_native_status zend_native_call_invoke(
 	zend_native_entry_cell_release_active(cell);
 	if (status == ZEND_NATIVE_GENERATOR_CREATED) {
 		/*
-		 * ZEND_GENERATOR_CREATE moves the call target's retained Closure
-		 * reference into the heap generator frame.  The VM frees the original
-		 * stack frame without releasing that reference; the Generator object
-		 * releases it after the suspended frame is closed.  Releasing it here
-		 * would leave generator->func pointing into a destroyed Closure.
+		 * ZEND_GENERATOR_CREATE retained the receiver or Closure for the heap
+		 * frame. Release the original call-frame ownership exactly as the VM
+		 * does when it removes that frame.
 		 */
+		zend_native_call_release_target(call);
 		status = ZEND_NATIVE_RETURNED;
 	} else {
 		zend_native_call_release_target(call);
@@ -2210,9 +2209,7 @@ static void zend_native_call_direct_release(
 	EG(current_execute_data) = activation->caller;
 	zend_native_active_direct_call = activation->previous;
 	if (activation->dynamic_target) {
-		if (!activation->preserve_target) {
-			zend_native_call_release_target(activation->callee);
-		}
+		zend_native_call_release_target(activation->callee);
 	} else {
 		zend_native_call_direct_release_receiver(activation->callee);
 	}
@@ -2855,7 +2852,6 @@ zend_native_direct_call_result zend_native_call_dynamic_leave(
 		activation->frame_initialized = false;
 	}
 	if (status == ZEND_NATIVE_GENERATOR_CREATED) {
-		activation->preserve_target = true;
 		status = ZEND_NATIVE_RETURNED;
 	}
 	if (status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
