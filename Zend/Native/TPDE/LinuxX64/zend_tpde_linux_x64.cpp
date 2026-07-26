@@ -1052,7 +1052,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				continue;
 			}
 			const bool explicit_object_operands =
-				zend_tpde_helper_has_object_operand_payloads(
+				zend_tpde_helper_has_unused_operand_payloads(
 					dispatch_case.helper);
 			const bool explicit_auxiliary =
 				zend_tpde_helper_has_explicit_auxiliary(
@@ -1897,7 +1897,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 	auto execute_value_operation = [&](ValuePart *frame_argument = nullptr) {
 		const zend_native_runtime_helper_id helper = mir.runtime_helper;
 		const bool explicit_object_operands =
-			zend_tpde_helper_has_object_operand_payloads(helper);
+			zend_tpde_helper_has_unused_operand_payloads(helper);
 		const bool explicit_auxiliary =
 			zend_tpde_helper_has_explicit_auxiliary(helper);
 		if (node.operands.size() != 1

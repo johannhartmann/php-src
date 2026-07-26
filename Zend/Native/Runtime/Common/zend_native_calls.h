@@ -217,6 +217,7 @@ typedef struct _zend_native_user_call_descriptor {
 typedef struct _zend_native_direct_activation {
 	zend_execute_data *caller;
 	zend_execute_data *callee;
+	zend_execute_data *pending_call;
 	zend_native_entry_cell *cell;
 	const zend_native_code *code;
 	const void *descriptor;

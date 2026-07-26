@@ -19,6 +19,7 @@
 #include "Zend/zend_hrtime.h"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #define ZEND_NATIVE_COMPILER_ARENA_SIZE (64 * 1024)
@@ -707,6 +708,8 @@ static bool zend_native_compiler_lower_function(
 	diagnostics.context = compiler;
 	diagnostics.emit = zend_native_compiler_emit_mir_diagnostic;
 	diagnostics.limit = UINT32_MAX;
+	memset(&compiler->last_diagnostic, 0,
+		sizeof(compiler->last_diagnostic));
 	result = zend_mir_lower_w11_zend_op_array(
 		compiler->script, function->op_array,
 		&function->ssa, &module_ops, &diagnostics);
@@ -722,10 +725,23 @@ static bool zend_native_compiler_lower_function(
 	}
 	if (result.lowering.status != ZEND_MIR_LOWERING_SUCCESS
 			|| result.lowering.module == NULL) {
+		char message[192];
+
+		if (compiler->last_diagnostic.message[0] != '\0'
+				&& compiler->last_diagnostic.code
+					== result.lowering.diagnostic_code) {
+			if (diagnostic != NULL) {
+				*diagnostic = compiler->last_diagnostic;
+			}
+			return false;
+		}
+		snprintf(message, sizeof(message),
+			"native lowering rejected a reachable codeunit (MIRL%04u)",
+			(unsigned int) result.lowering.diagnostic_code);
 		zend_native_compiler_set_diagnostic(
 			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_LOWERING,
 			result.lowering.diagnostic_code,
-			"native lowering rejected a reachable codeunit");
+			message);
 		return false;
 	}
 	function->module = result.lowering.module;
@@ -2091,7 +2107,8 @@ static bool zend_native_compiler_compile_native_component(
 				} else if (init_opline->opcode == ZEND_INIT_STATIC_METHOD_CALL) {
 					receiver_kind = ZEND_NATIVE_INTERNAL_RECEIVER_CALLED_SCOPE;
 					called_scope = internal->common.scope;
-				} else if (init_opline->opcode != ZEND_INIT_FCALL) {
+				} else if (init_opline->opcode != ZEND_INIT_FCALL
+						&& init_opline->opcode != ZEND_NEW) {
 					goto binding_failure;
 				}
 				if (zend_native_internal_call_cell_init(
@@ -2372,6 +2389,21 @@ zend_result zend_native_compiler_compile(
 			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
 			ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
 			"invalid native compiler input");
+		return FAILURE;
+	}
+	/*
+	 * Runtime declarations extend the script after compiler creation. Index
+	 * the selected root and its nested definitions before lowering so a
+	 * request-local Closure op_array can recover the source-backed call,
+	 * branch and value metadata owned by its declaration.
+	 */
+	if (!zend_native_compiler_index_source_op_array(
+			compiler, root, 0)) {
+		zend_native_compiler_set_diagnostic(
+			compiler, diagnostic,
+			ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"native source codeunit index cannot be extended");
 		return FAILURE;
 	}
 	root_function = zend_native_compiler_find_function(compiler, root);
@@ -2862,6 +2894,8 @@ zend_native_status zend_native_compiler_execute_data(
 {
 	zend_native_compile_diagnostic compile_diagnostic;
 	zend_native_entry_cell *entry_cell;
+	zend_native_compiled_function *compiled_function;
+	zend_op_array *source_op_array;
 	const zend_native_code *code;
 	zend_execute_data *previous;
 	zend_native_status status;
@@ -2876,10 +2910,15 @@ zend_native_status zend_native_compiler_execute_data(
 			|| !ZEND_USER_CODE(execute_data->func->type)) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
+	source_op_array = zend_native_compiler_canonical_reentry_op_array(
+		compiler, &execute_data->func->op_array);
+	if (source_op_array == NULL) {
+		source_op_array = &execute_data->func->op_array;
+	}
 	memset(&compile_diagnostic, 0, sizeof(compile_diagnostic));
 	phase_started = zend_hrtime();
 	if (zend_native_compiler_compile(
-			compiler, &execute_data->func->op_array, NULL, 0,
+			compiler, source_op_array, NULL, 0,
 			&compile_diagnostic) == FAILURE) {
 		compiler->stats.compile_ns += zend_hrtime() - phase_started;
 		if (diagnostic != NULL) {
@@ -2890,8 +2929,12 @@ zend_native_status zend_native_compiler_execute_data(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	compiler->stats.compile_ns += zend_hrtime() - phase_started;
-	entry_cell = zend_native_compiler_lookup(
-		compiler, execute_data->func);
+	compiled_function = zend_native_compiler_find_function(
+		compiler, source_op_array);
+	entry_cell = compiled_function != NULL
+			&& compiled_function->entry_cell.state
+				== ZEND_NATIVE_ENTRY_READY
+		? &compiled_function->entry_cell : NULL;
 	if (entry_cell == NULL
 			|| (code = zend_native_entry_cell_load(entry_cell)) == NULL
 			|| zend_native_compiler_enter(compiler) == FAILURE) {
