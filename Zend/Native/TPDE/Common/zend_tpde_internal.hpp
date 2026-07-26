@@ -17,6 +17,29 @@ struct _zend_native_user_call_descriptor;
 
 extern "C" zend_mir_opcode zend_mir_w12_executable_opcode(uint32_t opcode);
 
+enum zend_tpde_machine_value_kind : uint8_t {
+	ZEND_TPDE_MACHINE_VALUE_I64 = 0,
+	ZEND_TPDE_MACHINE_VALUE_F64 = 1,
+	ZEND_TPDE_MACHINE_VALUE_BOOL = 2,
+	ZEND_TPDE_MACHINE_VALUE_STRING_PTR = 3,
+	ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR = 4,
+	ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR = 5,
+	ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR = 6,
+	ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL = 7,
+};
+
+enum zend_tpde_machine_location : uint8_t {
+	ZEND_TPDE_MACHINE_LOCATION_REGISTER = 0,
+	ZEND_TPDE_MACHINE_LOCATION_SPILL = 1,
+	ZEND_TPDE_MACHINE_LOCATION_CANONICAL_FRAME_SLOT = 2,
+};
+
+enum zend_tpde_canonical_slot_state : uint8_t {
+	ZEND_TPDE_CANONICAL_SLOT_UNMATERIALIZED = 0,
+	ZEND_TPDE_CANONICAL_SLOT_CLEAN = 1,
+	ZEND_TPDE_CANONICAL_SLOT_DIRTY = 2,
+};
+
 enum zend_tpde_user_opcode_target_kind : uint8_t {
 	ZEND_TPDE_USER_OPCODE_TARGET_VALUE = 0,
 	ZEND_TPDE_USER_OPCODE_TARGET_JUMP_OP1 = 1,
@@ -160,7 +183,12 @@ struct zend_tpde_value {
 	zend_mir_representation representation;
 	zend_mir_scalar_type_mask exact_type;
 	zend_mir_storage_id canonical_storage_id;
+	zend_mir_ownership_state ownership;
+	zend_mir_refcount_state refcount_state;
 	int32_t argument_index;
+	zend_tpde_machine_value_kind machine_kind;
+	zend_tpde_machine_location location;
+	zend_tpde_canonical_slot_state slot_state;
 	bool constant;
 	uint64_t constant_bits;
 };

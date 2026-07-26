@@ -44,7 +44,8 @@ public:
 
 	struct ValueParts {
 		tpde::RegBank bank;
-		uint32_t count() const { return 1; }
+		uint32_t part_count;
+		uint32_t count() const { return part_count; }
 		uint32_t size_bytes(uint32_t) const { return 8; }
 		tpde::RegBank reg_bank(uint32_t) const { return bank; }
 	};
@@ -116,9 +117,15 @@ public:
 			|| value == IRValueRef{Adaptor::EXECUTION_CONTEXT_VALUE};
 	}
 	ValueParts val_parts(IRValueRef value) const {
-		return {adaptor->representation(value) == ZEND_MIR_REPRESENTATION_DOUBLE
-			? tpde::x64::PlatformConfig::FP_BANK
-			: tpde::x64::PlatformConfig::GP_BANK};
+		const zend_tpde_machine_value_kind kind =
+			adaptor->machine_kind(value);
+		return {
+			kind == ZEND_TPDE_MACHINE_VALUE_F64
+				? tpde::x64::PlatformConfig::FP_BANK
+				: tpde::x64::PlatformConfig::GP_BANK,
+			kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+					&& adaptor->machine_value_is_register_authoritative(value)
+				? 2u : 1u};
 	}
 	std::optional<ValRefSpecial> val_ref_special(IRValueRef value) {
 		uint64_t bits;
@@ -161,7 +168,8 @@ uint32_t zval_type(zend_mir_scalar_type_mask type) {
 	}
 }
 
-bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
+bool ZendCompilerX64::compile_inst(
+	IRInstRef instruction, InstRange remaining_instructions) {
 	const Adaptor::InstNode &node = adaptor->node(instruction);
 	if (node.kind == Adaptor::InstKind::LoadFrame
 			|| node.kind == Adaptor::InstKind::LoadExecutionContext) {
@@ -1426,7 +1434,6 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 	}
 	if (node.kind == Adaptor::InstKind::FrameSlotAddress) {
 		auto [base_ref, base] = val_ref_single(node.operands[0]);
-		auto [result_ref, result] = result_ref_single(node.result);
 		const uint64_t offset =
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + node.storage_id) * sizeof(zval);
 		if (node.operands.size() != 1
@@ -1435,6 +1442,46 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			return false;
 		}
 		auto base_reg = base.load_to_reg();
+		if (remaining_instructions.from != remaining_instructions.to) {
+			const IRInstRef next = *remaining_instructions.from;
+			const Adaptor::InstNode &consumer = adaptor->node(next);
+			if (consumer.kind == Adaptor::InstKind::ZvalPayloadLoad
+					&& consumer.operands.size() == 1
+					&& consumer.operands[0] == node.result
+					&& consumer.storage_id == node.storage_id
+					&& zend_mir_scalar_type_is_exact(consumer.exact_type)
+					&& consumer.exact_type != ZEND_MIR_SCALAR_TYPE_NULL) {
+				auto [result_ref, result] =
+					result_ref_single(consumer.result);
+				auto result_reg = result.alloc_reg();
+				switch (consumer.exact_type) {
+					case ZEND_MIR_SCALAR_TYPE_I1:
+						ASM(MOV32rm, result_reg,
+							FE_MEM(base_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offset
+									+ offsetof(zval, u1.type_info))));
+						ASM(CMP32ri, result_reg, IS_TRUE);
+						generate_raw_set(Jump::je, result_reg);
+						break;
+					case ZEND_MIR_SCALAR_TYPE_I64:
+						ASM(MOV64rm, result_reg,
+							FE_MEM(base_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offset)));
+						break;
+					case ZEND_MIR_SCALAR_TYPE_F64:
+						ASM(SSE_MOVSDrm, result_reg,
+							FE_MEM(base_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offset)));
+						break;
+					default:
+						return false;
+				}
+				result.set_modified();
+				adaptor->mark_fused(next);
+				return true;
+			}
+		}
+		auto [result_ref, result] = result_ref_single(node.result);
 		auto result_reg = result.alloc_reg();
 		ASM(MOV64rr, result_reg, base_reg);
 		ASM(ADD64ri, result_reg, static_cast<int32_t>(offset));

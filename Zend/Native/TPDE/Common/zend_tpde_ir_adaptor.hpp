@@ -207,6 +207,7 @@ private:
 	std::vector<Slice> phi_input_slices_;
 	std::vector<PhiInput> phi_inputs_;
 	std::vector<InstNode> nodes_;
+	std::vector<uint8_t> fused_instructions_;
 	std::vector<IRValueRef> operands_;
 	std::vector<uint8_t> phi_values_;
 	std::vector<uint32_t> block_info_;
@@ -375,6 +376,7 @@ private:
 			uint32_t block, InstNode node) {
 		uint32_t index = static_cast<uint32_t>(nodes_.size());
 		nodes_.push_back(std::move(node));
+		fused_instructions_.push_back(0);
 		block_instructions.push_back({block, IRInstRef{index}});
 	}
 
@@ -1948,6 +1950,38 @@ public:
 			? ZEND_MIR_SCALAR_TYPE_NONE
 			: plan_->values[index - MIR_VALUE_BASE].exact_type;
 	}
+	zend_tpde_machine_value_kind machine_kind(IRValueRef value) const {
+		uint32_t index = static_cast<uint32_t>(value);
+		if (const DerivedValue *derived = derived_value(value)) {
+			switch (derived->exact_type) {
+				case ZEND_MIR_SCALAR_TYPE_I1:
+					return ZEND_TPDE_MACHINE_VALUE_BOOL;
+				case ZEND_MIR_SCALAR_TYPE_F64:
+					return ZEND_TPDE_MACHINE_VALUE_F64;
+				default:
+					return ZEND_TPDE_MACHINE_VALUE_I64;
+			}
+		}
+		return index < MIR_VALUE_BASE
+				|| index - MIR_VALUE_BASE >= plan_->value_count
+			? ZEND_TPDE_MACHINE_VALUE_I64
+			: plan_->values[index - MIR_VALUE_BASE].machine_kind;
+	}
+	bool machine_value_is_register_authoritative(IRValueRef value) const {
+		const uint32_t index = static_cast<uint32_t>(value);
+		if (derived_value(value) != nullptr) {
+			return true;
+		}
+		if (index < MIR_VALUE_BASE
+				|| index - MIR_VALUE_BASE >= plan_->value_count) {
+			return true;
+		}
+		const zend_tpde_value &mir_value =
+			plan_->values[index - MIR_VALUE_BASE];
+		return mir_value.location == ZEND_TPDE_MACHINE_LOCATION_REGISTER
+			&& zend_mir_scalar_type_is_exact(mir_value.exact_type)
+			&& mir_value.exact_type != ZEND_MIR_SCALAR_TYPE_NULL;
+	}
 	zend_mir_storage_id canonical_storage(IRValueRef value) const {
 		uint32_t index = static_cast<uint32_t>(value);
 		if (const DerivedValue *derived = derived_value(value)) {
@@ -2055,7 +2089,19 @@ public:
 		return std::span<const IRValueRef>{&current.result,
 			current.has_result ? size_t{1} : size_t{0}};
 	}
-	static bool inst_fused(IRInstRef) { return false; }
+	bool inst_fused(IRInstRef inst) const {
+		const uint32_t index = static_cast<uint32_t>(inst);
+		return index < fused_instructions_.size()
+			&& fused_instructions_[index] != 0;
+	}
+	void mark_fused(IRInstRef inst) {
+		const uint32_t index = static_cast<uint32_t>(inst);
+		if (index < fused_instructions_.size()) {
+			fused_instructions_[index] = 1;
+		} else {
+			valid_ = false;
+		}
+	}
 	std::string_view inst_fmt_ref(IRInstRef) const { return "znmir-inst"; }
 	void start_compile() const {}
 	void end_compile() const {}
@@ -2065,6 +2111,7 @@ public:
 	void reset() {
 		std::fill(block_info_.begin(), block_info_.end(), 0);
 		std::fill(block_info2_.begin(), block_info2_.end(), 0);
+		std::fill(fused_instructions_.begin(), fused_instructions_.end(), 0);
 	}
 };
 
