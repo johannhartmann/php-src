@@ -27,11 +27,29 @@ function canonical_boxed_phi(bool $chooseLeft, int $iterations): string
     return $value;
 }
 
+function canonical_boxed_identity($value)
+{
+    return $value;
+}
+
+function canonical_boxed_select($left, $right, bool $chooseLeft)
+{
+    $value = $chooseLeft ? $left : $right;
+    return canonical_boxed_identity($value);
+}
+
 function canonical_boxed_phi_root(): array
 {
     return [
         canonical_boxed_phi(true, 3),
         canonical_boxed_phi(false, 2),
+        canonical_boxed_select("selected-left", "selected-right", true),
+        canonical_boxed_select([1, 2], [3, 4], false),
+        canonical_boxed_select(
+            (object) ["value" => 5],
+            (object) ["value" => 6],
+            false,
+        )->value,
     ];
 }
 PHP;
@@ -58,4 +76,4 @@ printf(
 );
 ?>
 --EXPECT--
-accepted return=["left:0:1:2","right:0:1"] runs=10 vm=0 execute_ex=0 handler=0 active=0
+accepted return=["left:0:1:2","right:0:1","selected-left",[3,4],6] runs=10 vm=0 execute_ex=0 handler=0 active=0
