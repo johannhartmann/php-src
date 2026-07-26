@@ -140,10 +140,7 @@ void zend_native_generator_release_generation(zend_generator *generator)
 		return;
 	}
 	ZEND_ASSERT(cell->generation == generator->native_entry_generation);
-	ZEND_ASSERT(cell->suspended_frames != 0);
-	if (cell->suspended_frames != 0) {
-		cell->suspended_frames--;
-	}
+	zend_native_entry_cell_release_suspended(cell);
 	generator->native_entry_cell = NULL;
 	generator->native_entry_generation = 0;
 }
@@ -225,7 +222,8 @@ zend_native_status zend_native_generator_create(
 	generator->native_entry_cell = entry_cell;
 	generator->native_entry_generation =
 		generator->native_entry_cell->generation;
-	generator->native_entry_cell->suspended_frames++;
+	zend_native_entry_cell_retain_suspended(
+		generator->native_entry_cell);
 	EG(current_execute_data) = execute_data->prev_execute_data;
 	return ZEND_NATIVE_GENERATOR_CREATED;
 }

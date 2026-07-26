@@ -88,6 +88,7 @@ struct _zend_native_compiler {
 	uint32_t published_component_count;
 	zend_native_compiler_stats stats;
 	bool failed;
+	bool transients_released;
 	zend_native_compile_diagnostic last_diagnostic;
 };
 
@@ -101,6 +102,10 @@ typedef struct _zend_native_compiler_session {
 	zend_native_dynamic_compiler dynamic_compiler;
 	zend_script request_script;
 	zend_native_compiler *request_compiler;
+	uint64_t execute_ns;
+	uint64_t first_execute_ns;
+	uint64_t last_execute_ns;
+	uint32_t executions;
 	bool reentry_active;
 	bool dynamic_compiler_active;
 } zend_native_compiler_session;
@@ -188,6 +193,62 @@ static void zend_native_compiler_session_release(
 		zend_hash_destroy(&zend_native_compiler_sessions);
 		zend_native_compiler_sessions_active = false;
 	}
+}
+
+static void zend_native_compiler_session_record_execution(
+	zend_native_compiler *compiler, uint64_t elapsed)
+{
+	zend_native_compiler_session *session;
+
+	if (!compiler->persistent) {
+		compiler->stats.execute_ns += elapsed;
+		compiler->stats.last_execute_ns = elapsed;
+		if (compiler->stats.executions == 0) {
+			compiler->stats.first_execute_ns = elapsed;
+		}
+		compiler->stats.executions++;
+		return;
+	}
+	session = zend_native_compiler_session_find(compiler);
+	ZEND_ASSERT(session != NULL);
+	if (session == NULL) {
+		return;
+	}
+	session->execute_ns += elapsed;
+	session->last_execute_ns = elapsed;
+	if (session->executions == 0) {
+		session->first_execute_ns = elapsed;
+	}
+	session->executions++;
+}
+
+static void zend_native_compiler_session_flush_stats(
+	zend_native_compiler *compiler)
+{
+	zend_native_compiler_session *session =
+		zend_native_compiler_session_find(compiler);
+	uint32_t previous_executions;
+
+	if (session == NULL || session->executions == 0) {
+		return;
+	}
+	__atomic_fetch_add(
+		&compiler->stats.execute_ns, session->execute_ns, __ATOMIC_RELAXED);
+	__atomic_store_n(
+		&compiler->stats.last_execute_ns,
+		session->last_execute_ns, __ATOMIC_RELAXED);
+	previous_executions = __atomic_fetch_add(
+		&compiler->stats.executions,
+		session->executions, __ATOMIC_RELAXED);
+	if (previous_executions == 0) {
+		__atomic_store_n(
+			&compiler->stats.first_execute_ns,
+			session->first_execute_ns, __ATOMIC_RELAXED);
+	}
+	session->execute_ns = 0;
+	session->first_execute_ns = 0;
+	session->last_execute_ns = 0;
+	session->executions = 0;
 }
 
 static zend_native_compiler *zend_native_compiler_request_companion(
@@ -549,6 +610,7 @@ static zend_native_compiled_function *zend_native_compiler_add_function(
 	function->state = ZEND_NATIVE_CODEUNIT_COMPILING;
 	zend_native_entry_cell_init(
 		&function->entry_cell, (zend_function *) op_array);
+	function->entry_cell.lease_managed = compiler->persistent;
 	if (compiler->frame_probe != NULL) {
 		zend_native_entry_cell_set_frame_probe(
 			&function->entry_cell, compiler->frame_probe,
@@ -2775,13 +2837,20 @@ zend_native_entry_cell *zend_native_compiler_lookup(
 	const zend_native_compiler *compiler, const zend_function *function)
 {
 	zend_native_compiled_function *compiled;
+	zend_op_array *source_op_array;
 
 	if (compiler == NULL || function == NULL
 			|| !ZEND_USER_CODE(function->type)) {
 		return NULL;
 	}
+	source_op_array = zend_hash_index_find_ptr(
+		&compiler->source_op_arrays_by_opcodes,
+		(zend_ulong) (uintptr_t) function->op_array.opcodes);
 	compiled = zend_native_compiler_find_function(
-		compiler, &function->op_array);
+		compiler,
+		source_op_array != NULL
+				&& source_op_array->last == function->op_array.last
+			? source_op_array : &function->op_array);
 	return compiled != NULL
 			&& compiled->entry_cell.state == ZEND_NATIVE_ENTRY_READY
 		? &compiled->entry_cell : NULL;
@@ -2834,7 +2903,53 @@ void zend_native_compiler_get_stats(
 	if (compiler == NULL) {
 		return;
 	}
-	*stats = compiler->stats;
+	if (compiler->persistent) {
+		zend_native_compiler_session *session =
+			zend_native_compiler_session_find(compiler);
+
+		stats->compile_ns = compiler->stats.compile_ns;
+		stats->ssa_ns = compiler->stats.ssa_ns;
+		stats->lowering_ns = compiler->stats.lowering_ns;
+		stats->codegen_ns = compiler->stats.codegen_ns;
+		stats->publish_ns = compiler->stats.publish_ns;
+		stats->native_code_bytes =
+			compiler->stats.native_code_bytes;
+		stats->runtime_helper_sites =
+			compiler->stats.runtime_helper_sites;
+		stats->source_opline_decode_sites =
+			compiler->stats.source_opline_decode_sites;
+		stats->guard_sites = compiler->stats.guard_sites;
+		stats->slow_path_sites = compiler->stats.slow_path_sites;
+		stats->direct_call_sites =
+			compiler->stats.direct_call_sites;
+		stats->direct_leaf_scalar_sites =
+			compiler->stats.direct_leaf_scalar_sites;
+		stats->direct_call_frame_bytes =
+			compiler->stats.direct_call_frame_bytes;
+		stats->registered_codeunits =
+			compiler->stats.registered_codeunits;
+		stats->execute_ns = __atomic_load_n(
+			&compiler->stats.execute_ns, __ATOMIC_RELAXED);
+		stats->first_execute_ns = __atomic_load_n(
+			&compiler->stats.first_execute_ns, __ATOMIC_RELAXED);
+		stats->last_execute_ns = __atomic_load_n(
+			&compiler->stats.last_execute_ns, __ATOMIC_RELAXED);
+		stats->executions = __atomic_load_n(
+			&compiler->stats.executions, __ATOMIC_RELAXED);
+		if (session != NULL) {
+			stats->execute_ns += session->execute_ns;
+			stats->last_execute_ns = session->executions != 0
+				? session->last_execute_ns : stats->last_execute_ns;
+			if (stats->executions == 0
+					&& session->executions != 0) {
+				stats->first_execute_ns =
+					session->first_execute_ns;
+			}
+			stats->executions += session->executions;
+		}
+	} else {
+		*stats = compiler->stats;
+	}
 	stats->native_codeunits = compiler->function_count;
 	stats->ready_codeunits = zend_native_compiler_codeunit_count(
 		compiler, ZEND_NATIVE_CODEUNIT_READY);
@@ -3051,12 +3166,7 @@ zend_native_status zend_native_compiler_execute(
 	phase_started = zend_hrtime();
 	status = zend_native_execute_frame(code, frame, diagnostic);
 	elapsed = zend_hrtime() - phase_started;
-	compiler->stats.execute_ns += elapsed;
-	compiler->stats.last_execute_ns = elapsed;
-	if (compiler->stats.executions == 0) {
-		compiler->stats.first_execute_ns = elapsed;
-	}
-	compiler->stats.executions++;
+	zend_native_compiler_session_record_execution(compiler, elapsed);
 	EG(current_execute_data) = previous;
 	zend_vm_stack_free_call_frame(frame);
 	if (!Z_ISUNDEF(receiver)) {
@@ -3093,19 +3203,14 @@ zend_native_status zend_native_compiler_execute_entry(
 	}
 	previous = execute_data->prev_execute_data;
 	EG(current_execute_data) = execute_data;
-	entry_cell->active_calls++;
+	zend_native_entry_cell_retain_active(entry_cell);
 	phase_started = zend_hrtime();
 	status = zend_native_execute_frame(
 		code, execute_data, diagnostic);
 	elapsed = zend_hrtime() - phase_started;
-	entry_cell->active_calls--;
+	zend_native_entry_cell_release_active(entry_cell);
 	EG(current_execute_data) = previous;
-	compiler->stats.execute_ns += elapsed;
-	compiler->stats.last_execute_ns = elapsed;
-	if (compiler->stats.executions == 0) {
-		compiler->stats.first_execute_ns = elapsed;
-	}
-	compiler->stats.executions++;
+	zend_native_compiler_session_record_execution(compiler, elapsed);
 	zend_native_compiler_leave(compiler);
 	return status;
 }
@@ -4133,6 +4238,9 @@ void zend_native_compiler_end_request(zend_native_compiler *compiler)
 	if (compiler == NULL) {
 		return;
 	}
+	zend_native_compiler_leave(compiler);
+	zend_native_compiler_session_flush_stats(compiler);
+	zend_native_compiler_session_release(compiler);
 	/*
 	 * Publication retirement owns this precondition.  Never unmap code that
 	 * is still executing or backs a suspended generator frame.
@@ -4140,9 +4248,10 @@ void zend_native_compiler_end_request(zend_native_compiler *compiler)
 	if (!zend_native_compiler_is_quiescent(compiler)) {
 		return;
 	}
-	zend_native_compiler_leave(compiler);
-	zend_native_compiler_session_release(compiler);
 	if (!compiler->persistent) {
+		return;
+	}
+	if (compiler->transients_released) {
 		return;
 	}
 	for (index = 0; index < compiler->function_count; index++) {
@@ -4155,6 +4264,7 @@ void zend_native_compiler_end_request(zend_native_compiler *compiler)
 				compiler, function);
 		}
 	}
+	compiler->transients_released = true;
 }
 
 void zend_native_compiler_destroy(zend_native_compiler *compiler)
@@ -4172,6 +4282,7 @@ void zend_native_compiler_destroy(zend_native_compiler *compiler)
 		return;
 	}
 	zend_native_compiler_leave(compiler);
+	zend_native_compiler_session_flush_stats(compiler);
 	zend_native_compiler_session_release(compiler);
 	for (index = compiler->function_count; index-- > 0;) {
 		zend_native_compiled_function *function =
