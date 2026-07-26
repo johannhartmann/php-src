@@ -41,6 +41,11 @@ typedef struct _zend_native_executor_dispatch_key {
 	uintptr_t source_opcodes;
 } zend_native_executor_dispatch_key;
 
+typedef struct _zend_native_executor_preload_capture {
+	HashTable roots;
+	bool active;
+} zend_native_executor_preload_capture;
+
 typedef struct _zend_native_executor_generation_key {
 	uint64_t epoch;
 	uintptr_t identity;
@@ -70,6 +75,8 @@ struct _zend_native_executor_dispatch {
 };
 
 ZEND_TLS zend_native_executor_request zend_native_executor_request_state;
+ZEND_TLS zend_native_executor_preload_capture
+	zend_native_executor_preload_capture_state;
 static bool zend_native_executor_installed;
 static zend_native_frame_probe_t zend_native_executor_frame_probe;
 static void *zend_native_executor_frame_probe_context;
@@ -98,6 +105,25 @@ static zend_native_entry_cell *
 zend_native_executor_resolve_external_reentry(
 	void *context, zend_function *function);
 static void zend_native_executor_reap_retired_locked(void);
+
+static bool zend_native_executor_capture_preload_root(
+	const zend_op_array *op_array)
+{
+	zend_ulong key;
+
+	if (!zend_native_executor_preload_capture_state.active) {
+		return true;
+	}
+	if (op_array == NULL) {
+		return false;
+	}
+	key = (zend_ulong) (uintptr_t) op_array;
+	return zend_hash_index_exists(
+			&zend_native_executor_preload_capture_state.roots, key)
+		|| zend_hash_index_add_empty_element(
+			&zend_native_executor_preload_capture_state.roots,
+			key) != NULL;
+}
 
 static void zend_native_executor_generation_lock(void)
 {
@@ -1042,10 +1068,11 @@ zend_native_executor_create_generation(zend_op_array *root)
 	zend_native_executor_generation *generation;
 	zend_native_compiler_config config;
 	zend_native_compile_diagnostic diagnostic;
-	zend_native_opcache_bundle *bundle =
-		zend_native_executor_bundle(root);
 	const zend_script *owner =
 		zend_native_executor_script_owner(root);
+	zend_native_opcache_bundle *bundle = owner != NULL
+		? zend_native_executor_bundle(&owner->main_op_array)
+		: zend_native_executor_bundle(root);
 	bool persistent =
 		owner != NULL
 		|| (bundle != NULL
@@ -1236,6 +1263,12 @@ zend_native_executor_resolve_external_reentry(
 	if (function == NULL || !ZEND_USER_CODE(function->type)) {
 		return NULL;
 	}
+	if (UNEXPECTED(!zend_native_executor_capture_preload_root(
+			&function->op_array))) {
+		zend_throw_error(NULL,
+			"Native preload root capture failed");
+		return NULL;
+	}
 	generation = zend_native_executor_find_leased_function(function);
 	if (generation == NULL) {
 		generation = zend_native_executor_find_persistent_function(function);
@@ -1319,6 +1352,7 @@ zend_result zend_native_executor_startup(void)
 
 void zend_native_executor_shutdown(void)
 {
+	zend_native_executor_end_preload_capture();
 	zend_native_executor_deactivate();
 	zend_native_executor_destroy_generations(
 		&zend_native_executor_persistent_generations);
@@ -1446,7 +1480,150 @@ void zend_native_executor_set_frame_probe(
 	}
 }
 
-zend_result zend_native_executor_prepare_script(zend_script *script)
+void zend_native_executor_begin_preload_capture(void)
+{
+	ZEND_ASSERT(zend_native_executor_installed);
+	ZEND_ASSERT(!zend_native_executor_preload_capture_state.active);
+	zend_hash_init(
+		&zend_native_executor_preload_capture_state.roots,
+		32, NULL, NULL, false);
+	zend_native_executor_preload_capture_state.active = true;
+}
+
+void zend_native_executor_end_preload_capture(void)
+{
+	if (!zend_native_executor_preload_capture_state.active) {
+		return;
+	}
+	zend_native_executor_preload_capture_state.active = false;
+	zend_hash_destroy(
+		&zend_native_executor_preload_capture_state.roots);
+}
+
+static bool zend_native_executor_compile_captured_op_array(
+	zend_native_compiler *compiler, zend_op_array *op_array,
+	zend_native_compile_diagnostic *diagnostic, uint32_t depth,
+	uint32_t *selected_count)
+{
+	uint32_t index;
+	bool selected;
+
+	if (compiler == NULL || op_array == NULL || selected_count == NULL
+			|| depth > 64) {
+		return false;
+	}
+	selected = zend_native_executor_preload_capture_state.active
+		&& zend_hash_index_exists(
+				&zend_native_executor_preload_capture_state.roots,
+				(zend_ulong) (uintptr_t) op_array);
+	if (selected) {
+		if (*selected_count == UINT32_MAX
+				|| zend_native_compiler_compile(
+				compiler, op_array, NULL, 0,
+				diagnostic) == FAILURE) {
+			return false;
+		}
+		(*selected_count)++;
+	}
+	for (index = 0; index < op_array->num_dynamic_func_defs; index++) {
+		if (!zend_native_executor_compile_captured_op_array(
+				compiler, op_array->dynamic_func_defs[index],
+				diagnostic, depth + 1, selected_count)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool zend_native_executor_compile_captured_class(
+	zend_native_compiler *compiler, zend_class_entry *class_entry,
+	zend_native_compile_diagnostic *diagnostic,
+	uint32_t *selected_count)
+{
+	zend_function *function;
+	zend_property_info *property_info;
+	uint32_t hook_index;
+
+	if (compiler == NULL || class_entry == NULL
+			|| selected_count == NULL) {
+		return false;
+	}
+	ZEND_HASH_FOREACH_PTR(&class_entry->function_table, function) {
+		if (function != NULL && function->type == ZEND_USER_FUNCTION
+				&& !zend_native_executor_compile_captured_op_array(
+					compiler, &function->op_array,
+					diagnostic, 0, selected_count)) {
+			return false;
+		}
+	} ZEND_HASH_FOREACH_END();
+	if (class_entry->num_hooked_props == 0) {
+		return true;
+	}
+	ZEND_HASH_MAP_FOREACH_PTR(
+			&class_entry->properties_info, property_info) {
+		if (property_info->ce != class_entry
+				|| property_info->hooks == NULL) {
+			continue;
+		}
+		for (hook_index = 0;
+				hook_index < ZEND_PROPERTY_HOOK_COUNT;
+				hook_index++) {
+			function = property_info->hooks[hook_index];
+			if (function != NULL
+					&& function->type == ZEND_USER_FUNCTION
+					&& !zend_native_executor_compile_captured_op_array(
+						compiler, &function->op_array,
+						diagnostic, 0, selected_count)) {
+				return false;
+			}
+		}
+	} ZEND_HASH_FOREACH_END();
+	return true;
+}
+
+static bool zend_native_executor_compile_captured_script(
+	zend_native_compiler *compiler, zend_script *script,
+	zend_native_compile_diagnostic *diagnostic,
+	uint32_t *selected_count)
+{
+	zend_function *function;
+	zend_class_entry *class_entry;
+
+	if (selected_count == NULL) {
+		return false;
+	}
+	if (!zend_native_executor_preload_capture_state.active) {
+		return true;
+	}
+	if (!zend_native_executor_compile_captured_op_array(
+			compiler, &script->main_op_array, diagnostic, 0,
+			selected_count)) {
+		return false;
+	}
+	ZEND_HASH_FOREACH_PTR(&script->function_table, function) {
+		if (function != NULL && function->type == ZEND_USER_FUNCTION
+				&& !zend_native_executor_compile_captured_op_array(
+					compiler, &function->op_array,
+					diagnostic, 0, selected_count)) {
+			return false;
+		}
+	} ZEND_HASH_FOREACH_END();
+	ZEND_HASH_FOREACH_PTR(&script->class_table, class_entry) {
+		if (class_entry != NULL
+				&& class_entry->type == ZEND_USER_CLASS
+				&& !zend_native_executor_compile_captured_class(
+					compiler, class_entry, diagnostic,
+					selected_count)) {
+			return false;
+		}
+	} ZEND_HASH_FOREACH_END();
+	return true;
+}
+
+static zend_result zend_native_executor_prepare_script_impl(
+	zend_script *script,
+	bool compile_main,
+	zend_native_compile_diagnostic *product_diagnostic)
 {
 	zend_native_compiler_config config;
 	zend_native_compile_diagnostic diagnostic;
@@ -1455,6 +1632,7 @@ zend_result zend_native_executor_prepare_script(zend_script *script)
 	unsigned char *bytes = NULL;
 	size_t size = 0;
 	size_t allocation_size;
+	uint32_t selected_count = 0;
 
 	if (script == NULL || zend_native_executor_bundle_rid < 0) {
 		return FAILURE;
@@ -1479,13 +1657,32 @@ zend_result zend_native_executor_prepare_script(zend_script *script)
 	config.defer_publication = true;
 	compiler = zend_native_compiler_create(&config, &diagnostic);
 	if (compiler == NULL) {
+		if (product_diagnostic != NULL) {
+			*product_diagnostic = diagnostic;
+		}
 		return FAILURE;
 	}
-	if (zend_native_compiler_compile(
-			compiler, &script->main_op_array, NULL, 0,
-			&diagnostic) == FAILURE
-			|| zend_native_compiler_serialize_bundle(
+	if ((compile_main
+				&& zend_native_compiler_compile(
+					compiler, &script->main_op_array, NULL, 0,
+					&diagnostic) == FAILURE)
+			|| !zend_native_executor_compile_captured_script(
+				compiler, script, &diagnostic, &selected_count)) {
+		if (product_diagnostic != NULL) {
+			*product_diagnostic = diagnostic;
+		}
+		zend_native_compiler_destroy(compiler);
+		return FAILURE;
+	}
+	if (!compile_main && selected_count == 0) {
+		zend_native_compiler_destroy(compiler);
+		return SUCCESS;
+	}
+	if (zend_native_compiler_serialize_bundle(
 				compiler, &bytes, &size, &diagnostic) == FAILURE) {
+		if (product_diagnostic != NULL) {
+			*product_diagnostic = diagnostic;
+		}
 		zend_native_compiler_destroy(compiler);
 		return FAILURE;
 	}
@@ -1507,6 +1704,22 @@ zend_result zend_native_executor_prepare_script(zend_script *script)
 	script->main_op_array.reserved[zend_native_executor_bundle_rid] =
 		bundle;
 	return SUCCESS;
+}
+
+zend_result zend_native_executor_prepare_script(
+	zend_script *script,
+	zend_native_compile_diagnostic *diagnostic)
+{
+	return zend_native_executor_prepare_script_impl(
+		script, true, diagnostic);
+}
+
+zend_result zend_native_executor_prepare_preloaded_script(
+	zend_script *script,
+	zend_native_compile_diagnostic *diagnostic)
+{
+	return zend_native_executor_prepare_script_impl(
+		script, false, diagnostic);
 }
 
 static bool zend_native_executor_register_preloaded_op_array(
@@ -1765,6 +1978,13 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 		return;
 	}
 	previous = execute_data->prev_execute_data;
+	if (UNEXPECTED(!zend_native_executor_capture_preload_root(
+			&execute_data->func->op_array))) {
+		zend_throw_error(NULL,
+			"Native preload root capture failed");
+		EG(current_execute_data) = previous;
+		return;
+	}
 	if (zend_native_executor_request_state.execution_depth != 0) {
 		entry_cell = zend_native_reentry_resolve(execute_data->func);
 	} else {
