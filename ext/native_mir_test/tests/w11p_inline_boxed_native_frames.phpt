@@ -1,5 +1,5 @@
 --TEST--
-Native baseline copies boxed CV arguments in generated native-to-native frames
+Native baseline carries boxed CV arguments through TPDE registers and native frames
 --SKIPIF--
 <?php
 if (!function_exists('native_mir_test_compile_execute')) {
@@ -15,14 +15,19 @@ function inline_boxed_identity($value)
     return $value;
 }
 
+function inline_boxed_relay($value)
+{
+    return inline_boxed_identity($value);
+}
+
 function inline_boxed_root()
 {
     $string = "native";
     $array = [1, 2, 3];
     $object = (object) ["value" => 4];
-    $stringResult = inline_boxed_identity($string);
-    $arrayResult = inline_boxed_identity($array);
-    $objectResult = inline_boxed_identity($object);
+    $stringResult = inline_boxed_relay($string);
+    $arrayResult = inline_boxed_relay($array);
+    $objectResult = inline_boxed_relay($object);
     return [
         $string,
         $stringResult,

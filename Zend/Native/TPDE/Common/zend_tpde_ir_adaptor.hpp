@@ -1092,8 +1092,12 @@ public:
 				|| value.machine_kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
 				|| value.machine_kind
 					== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR;
+			const bool boxed_register_value =
+				value.machine_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+				&& value.location == ZEND_TPDE_MACHINE_LOCATION_REGISTER;
 			if (value.argument_index < 0
-					|| (!exact_scalar && !unboxed_pointer)) {
+					|| (!exact_scalar && !unboxed_pointer
+						&& !boxed_register_value)) {
 				continue;
 			}
 			/*
@@ -1116,11 +1120,13 @@ public:
 				valid_ = false;
 				continue;
 			}
-			argument_guards_.push_back({
-				static_cast<uint32_t>(value.argument_index),
-				storage_id,
-				value.exact_type,
-				value.machine_kind});
+			if (!boxed_register_value) {
+				argument_guards_.push_back({
+					static_cast<uint32_t>(value.argument_index),
+					storage_id,
+					value.exact_type,
+					value.machine_kind});
+			}
 			const IRValueRef payload_address = add_derived_value(
 				ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
 				ZEND_MIR_SCALAR_TYPE_NONE, storage_id);
@@ -2071,7 +2077,9 @@ public:
 				|| mir_value.machine_kind
 					== ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
 				|| mir_value.machine_kind
-					== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR);
+					== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR
+				|| mir_value.machine_kind
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
 	}
 	bool plan_value_is_register_authoritative(
 			zend_mir_value_id value_id) const {
