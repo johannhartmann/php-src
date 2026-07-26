@@ -1411,11 +1411,13 @@ static void zend_accel_discard_script(zend_persistent_script *persistent_script)
 #ifdef HAVE_NATIVE_ENGINE
 	/*
 	 * Keep already entered and suspended native frames on their immutable
-	 * generation. The next request retires the process-local mappings after
-	 * they reach quiescence and publishes a fresh generation for the
-	 * replacement script.
+	 * generation. Every process observes this shared generation before its
+	 * next userland entry, retires its process-local mapping after
+	 * quiescence and publishes a fresh generation for the replacement
+	 * script.
 	 */
-	zend_native_executor_invalidate();
+	(void) __atomic_add_fetch(
+		&ZCSG(native_generation), 1, __ATOMIC_RELEASE);
 #endif
 	ZSMMG(wasted_shared_memory) += persistent_script->dynamic_members.memory_consumption;
 	if (ZSMMG(memory_exhausted)) {
@@ -2979,7 +2981,9 @@ ZEND_RINIT_FUNCTION(zend_accelerator)
 				accel_restart_enter();
 
 #ifdef HAVE_NATIVE_ENGINE
-				zend_native_executor_invalidate();
+				(void) __atomic_add_fetch(
+					&ZCSG(native_generation), 1,
+					__ATOMIC_RELEASE);
 #endif
 				zend_map_ptr_reset();
 				zend_reset_cache_vars();
@@ -3016,6 +3020,18 @@ ZEND_RINIT_FUNCTION(zend_accelerator)
 
 	SHM_PROTECT();
 	HANDLE_UNBLOCK_INTERRUPTIONS();
+
+#ifdef HAVE_NATIVE_ENGINE
+	{
+		uint64_t native_generation = __atomic_load_n(
+			&ZCSG(native_generation), __ATOMIC_ACQUIRE);
+
+		if (ZCG(native_generation) != native_generation) {
+			ZCG(native_generation) = native_generation;
+			zend_native_executor_invalidate();
+		}
+	}
+#endif
 
 	if (ZCG(accelerator_enabled) && ZCSG(last_restart_time) != ZCG(last_restart_time)) {
 		/* SHM was reinitialized. */
@@ -3569,6 +3585,10 @@ static zend_result accel_post_startup(void)
 
 		/* remember the last restart time in the process memory */
 		ZCG(last_restart_time) = ZCSG(last_restart_time);
+#ifdef HAVE_NATIVE_ENGINE
+		ZCG(native_generation) = __atomic_load_n(
+			&ZCSG(native_generation), __ATOMIC_ACQUIRE);
+#endif
 
 		zend_shared_alloc_lock();
 #ifdef HAVE_JIT

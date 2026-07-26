@@ -732,8 +732,33 @@ void zend_native_executor_deactivate(void)
 
 void zend_native_executor_invalidate(void)
 {
-	(void) __atomic_add_fetch(
+	uint64_t epoch = __atomic_add_fetch(
 		&zend_native_executor_epoch, 1, __ATOMIC_RELEASE);
+
+	/*
+	 * OPcache RINIT runs after Zend request activation but before userland.
+	 * Refresh immediately at that boundary so a worker never serves one
+	 * extra request from a generation invalidated by another process.
+	 * Invalidations raised by executing userland retain the current lease
+	 * until request shutdown.
+	 */
+	if (zend_native_executor_request_state.active
+			&& EG(current_execute_data) == NULL) {
+		zend_native_executor_generation *generation;
+
+		zend_native_executor_release_request_leases();
+		zend_native_executor_retire_stale(epoch);
+		zend_native_executor_request_state.observed_epoch = epoch;
+		zend_native_executor_generation_lock();
+		for (generation = zend_native_executor_persistent_generations;
+				generation != NULL; generation = generation->next) {
+			if (generation->epoch == epoch) {
+				(void) zend_native_executor_acquire_generation_locked(
+					generation);
+			}
+		}
+		zend_native_executor_generation_unlock();
+	}
 }
 
 void zend_native_executor_set_source_probe(

@@ -212,6 +212,9 @@ typedef struct _zend_accel_globals {
 	int                     auto_globals_mask;
 	time_t                  request_time;
 	time_t                  last_restart_time; /* used to synchronize SHM and in-process caches */
+#ifdef HAVE_NATIVE_ENGINE
+	uint64_t                native_generation;
+#endif
 	HashTable               xlat_table;
 #ifndef ZEND_WIN32
 	zend_ulong              root_hash;
@@ -260,6 +263,9 @@ typedef struct _zend_accel_shared_globals {
 	time_t          start_time;
 	time_t          last_restart_time;
 	time_t          force_restart_time;
+#ifdef HAVE_NATIVE_ENGINE
+	uint64_t        native_generation;
+#endif
 	bool       accelerator_enabled;
 	bool       restart_pending;
 	zend_accel_restart_reason restart_reason;
