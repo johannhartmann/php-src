@@ -5,6 +5,7 @@
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
 #include "Zend/zend_execute.h"
 #include "Zend/zend_observer.h"
+#include "Zend/zend_system_id.h"
 #include "Zend/zend_type_info.h"
 #include "Zend/Optimizer/zend_ssa.h"
 
@@ -20,7 +21,7 @@ constexpr size_t MAX_NATIVE_IMAGE_BYTES = size_t{1} << 28;
 constexpr uint32_t NATIVE_IMAGE_ABI_VERSION = 4;
 constexpr uint32_t NATIVE_IMAGE_SERIAL_FORMAT = 2;
 constexpr uint64_t NATIVE_IMAGE_SERIAL_MAGIC = UINT64_C(0x003331474d494e5a);
-constexpr uint64_t NATIVE_IMAGE_BUILD_ID =
+constexpr uint64_t NATIVE_IMAGE_BUILD_ID_SEED =
 	UINT64_C(0x5750313300000000)
 	^ (static_cast<uint64_t>(NATIVE_IMAGE_ABI_VERSION) << 32)
 	^ static_cast<uint64_t>(ZEND_NATIVE_RUNTIME_ABI_VERSION);
@@ -61,6 +62,17 @@ struct zend_native_byte_buffer {
 	size_t size;
 	size_t capacity;
 };
+
+uint64_t native_image_build_id(zend_native_target target) {
+	uint64_t hash = NATIVE_IMAGE_BUILD_ID_SEED
+		^ static_cast<uint64_t>(static_cast<uint32_t>(target));
+
+	for (size_t index = 0; index < sizeof(zend_system_id); ++index) {
+		hash ^= static_cast<unsigned char>(zend_system_id[index]);
+		hash *= UINT64_C(1099511628211);
+	}
+	return hash;
+}
 
 bool checked_count(uint32_t count);
 
@@ -4457,8 +4469,7 @@ extern "C" zend_result zend_tpde_compile_module_w08_with_runtime(
 	image->target = target;
 	image->abi_version = NATIVE_IMAGE_ABI_VERSION;
 	image->runtime_abi_version = plan.runtime->abi_version;
-	image->build_id = NATIVE_IMAGE_BUILD_ID
-		^ static_cast<uint64_t>(static_cast<uint32_t>(target));
+	image->build_id = native_image_build_id(target);
 	image->code_version = next_native_code_version.fetch_add(
 		1, std::memory_order_relaxed);
 	/* TPDE liveness and register allocation own temporaries; the reserved ABI
@@ -4512,9 +4523,7 @@ extern "C" zend_result zend_native_image_serialize(
 	if (out_bytes == nullptr || out_size == nullptr || image == nullptr
 			|| encode_reference == nullptr
 			|| image->abi_version != NATIVE_IMAGE_ABI_VERSION
-			|| image->build_id != (NATIVE_IMAGE_BUILD_ID
-				^ static_cast<uint64_t>(
-					static_cast<uint32_t>(image->target)))
+			|| image->build_id != native_image_build_id(image->target)
 			|| image->text_size > MAX_NATIVE_IMAGE_BYTES
 			|| !checked_count(image->symbol_count)
 			|| !checked_count(image->symbol_binding_count)
@@ -4721,8 +4730,8 @@ extern "C" zend_result zend_native_image_deserialize(
 			|| header.target > ZEND_NATIVE_TARGET_LINUX_AMD64
 			|| header.image_abi != NATIVE_IMAGE_ABI_VERSION
 			|| header.runtime_abi != ZEND_NATIVE_RUNTIME_ABI_VERSION
-			|| header.build_id != (NATIVE_IMAGE_BUILD_ID
-				^ static_cast<uint64_t>(header.target))
+			|| header.build_id != native_image_build_id(
+				static_cast<zend_native_target>(header.target))
 			|| header.code_version == 0 || header.total_size != size
 			|| header.checksum != native_serial_checksum(bytes, size)
 			|| header.text_size > size

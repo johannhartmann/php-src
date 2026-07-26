@@ -2565,6 +2565,38 @@ binding_rejected:
 			return false;
 		}
 	}
+	if (compiler->fault == ZEND_NATIVE_COMPILE_FAULT_ENTRY_PUBLISH) {
+		memset(&diagnostic, 0, sizeof(diagnostic));
+		diagnostic.code = ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED;
+		snprintf(diagnostic.message, sizeof(diagnostic.message),
+			"injected entry-cell publication failure");
+		zend_native_compiler_backend_failure(
+			compiler, product_diagnostic,
+			ZEND_NATIVE_COMPILE_PHASE_PUBLISH, &diagnostic);
+		zend_native_compiler_fail_pending_component(
+			compiler, component_id);
+		return false;
+	}
+	/*
+	 * Validate the complete component before making its first entry visible.
+	 * With the compiler mutation lock held, no entry-cell state can change
+	 * between this preflight and the infallible release stores below.
+	 */
+	for (function = compiler->component_heads[component_id];
+			function != NULL;
+			function = function->next_component_member) {
+		if (function->publish_pending
+				&& (function->code == NULL
+					|| function->entry_cell.state
+						!= ZEND_NATIVE_ENTRY_COMPILING)) {
+			zend_native_compiler_backend_failure(
+				compiler, product_diagnostic,
+				ZEND_NATIVE_COMPILE_PHASE_PUBLISH, NULL);
+			zend_native_compiler_fail_pending_component(
+				compiler, component_id);
+			return false;
+		}
+	}
 	for (function = compiler->component_heads[component_id];
 			function != NULL;
 			function = function->next_component_member) {
@@ -2576,18 +2608,6 @@ binding_rejected:
 			zend_native_compiler_backend_failure(
 				compiler, product_diagnostic,
 				ZEND_NATIVE_COMPILE_PHASE_PUBLISH, NULL);
-			zend_native_compiler_fail_pending_component(
-				compiler, component_id);
-			return false;
-		}
-		if (compiler->fault == ZEND_NATIVE_COMPILE_FAULT_ENTRY_PUBLISH) {
-			memset(&diagnostic, 0, sizeof(diagnostic));
-			diagnostic.code = ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED;
-			snprintf(diagnostic.message, sizeof(diagnostic.message),
-				"injected entry-cell publication failure");
-			zend_native_compiler_backend_failure(
-				compiler, product_diagnostic,
-				ZEND_NATIVE_COMPILE_PHASE_PUBLISH, &diagnostic);
 			zend_native_compiler_fail_pending_component(
 				compiler, component_id);
 			return false;
@@ -4368,6 +4388,15 @@ zend_result zend_native_compiler_import_bundle(
 			metrics.direct_leaf_scalar_sites;
 		compiler->stats.direct_call_frame_bytes +=
 			metrics.direct_call_frame_bytes;
+	}
+	for (index = 0; index < header.function_count; index++) {
+		zend_native_compiled_function *function =
+			compiler->functions[index];
+		if (function->code == NULL
+				|| function->entry_cell.state
+					!= ZEND_NATIVE_ENTRY_COMPILING) {
+			goto failure;
+		}
 	}
 	for (index = 0; index < header.function_count; index++) {
 		zend_native_compiled_function *function =
