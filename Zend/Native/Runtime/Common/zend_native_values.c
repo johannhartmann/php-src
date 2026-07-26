@@ -2277,10 +2277,17 @@ zend_native_status zend_native_value_verify_return_type(
 		if (opline->result_type == IS_UNUSED
 				|| (result = zend_native_value_slot(
 					execute_data, opline->result_type,
-					opline->result)) == NULL
-				|| !Z_ISUNDEF_P(result)) {
+					opline->result)) == NULL) {
 			return ZEND_NATIVE_EXCEPTION;
 		}
+		/*
+		 * A constant VERIFY_RETURN_TYPE result is a fresh TMP/VAR definition.
+		 * Native frames deliberately do not clear every dead temporary at
+		 * entry, so the physical slot may contain stale stack bytes even
+		 * though no zval is live there. Publish the copied constant directly;
+		 * inspecting or destroying the old bytes would turn a register-first
+		 * producer into a whole-frame initialization requirement.
+		 */
 		ZVAL_COPY(result, retval_ptr);
 		retval_ref = retval_ptr = result;
 	} else if (opline->op1_type == IS_VAR

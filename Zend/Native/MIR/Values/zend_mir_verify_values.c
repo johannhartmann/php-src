@@ -777,7 +777,10 @@ static bool zend_mir_w06_verify_call_transfers(
 	if (source_backed) {
 		for (index = 0; index < module->call_arguments.count; index++) {
 			zend_mir_call_argument_ref argument;
+			zend_mir_value_record value;
+			uint32_t value_index;
 			bool borrowed_scalar;
+			bool boxed_by_value = false;
 			if (!calls->call_argument_at(calls->context, index, &argument)
 					|| argument.id != index) {
 				return zend_mir_w06_emit(view, diagnostics,
@@ -787,12 +790,40 @@ static bool zend_mir_w06_verify_call_transfers(
 			}
 			borrowed_scalar = argument.ownership
 				== ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR;
+			if (argument.ownership
+					== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE
+					&& argument.source_mode
+						== ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE
+					&& zend_mir_id_is_valid(argument.value_id)) {
+				for (value_index = 0;
+					value_index < view->value_count(view->context);
+					value_index++) {
+					if (!view->value_at(
+							view->context, value_index, &value)) {
+						return zend_mir_w06_emit(view, diagnostics,
+							ZEND_MIR_VERIFY_W06_CALL_TRANSFER_MISMATCH,
+							ZEND_MIRV_TOKEN_W06_CALL_TRANSFER_MISMATCH,
+							"source-backed call value is malformed");
+					}
+					if (value.id == argument.value_id) {
+						boxed_by_value = value.representation
+							== ZEND_MIR_REPRESENTATION_ZVAL;
+						break;
+					}
+				}
+			}
 			if ((borrowed_scalar
 						&& (!zend_mir_id_is_valid(argument.value_id)
 							|| argument.source_mode
 								!= ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE))
 					|| (!borrowed_scalar
-						&& zend_mir_id_is_valid(argument.value_id))) {
+						&& zend_mir_id_is_valid(argument.value_id)
+						&& !boxed_by_value)
+					|| (!borrowed_scalar && !boxed_by_value
+						&& argument.ownership
+							!= ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE
+						&& argument.ownership
+							!= ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE)) {
 				return zend_mir_w06_emit(view, diagnostics,
 					ZEND_MIR_VERIFY_W06_CALL_TRANSFER_MISMATCH,
 					ZEND_MIRV_TOKEN_W06_CALL_TRANSFER_MISMATCH,

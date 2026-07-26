@@ -746,15 +746,33 @@ static bool zend_mir_value_validate_call_transfers(
 		module, call_targets, zend_mir_call_target_ref);
 	if (source_backed) {
 		for (index = 0; index < module->call_arguments.count; index++) {
+			uint32_t value_index;
 			bool borrowed_scalar = arguments[index].ownership
 				== ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR;
+			bool boxed_by_value = arguments[index].ownership
+					== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE
+				&& arguments[index].source_mode
+					== ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE
+				&& zend_mir_id_is_valid(arguments[index].value_id)
+				&& zend_mir_module_find_value(
+					module, arguments[index].value_id, &value_index)
+				&& ZEND_MIR_CORE_ITEMS(
+					module, values, zend_mir_core_value)[value_index]
+						.record.representation
+					== ZEND_MIR_REPRESENTATION_ZVAL;
 			if (arguments[index].id != index
 					|| (borrowed_scalar
 						&& (!zend_mir_id_is_valid(arguments[index].value_id)
 							|| arguments[index].source_mode
 								!= ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE))
 					|| (!borrowed_scalar
-						&& zend_mir_id_is_valid(arguments[index].value_id))) {
+						&& zend_mir_id_is_valid(arguments[index].value_id)
+						&& !boxed_by_value)
+					|| (!borrowed_scalar && !boxed_by_value
+						&& arguments[index].ownership
+							!= ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE
+						&& arguments[index].ownership
+							!= ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE)) {
 				return false;
 			}
 		}

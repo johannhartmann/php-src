@@ -7583,18 +7583,32 @@ register_operand:
 							ASM(SHL64ri, slot_index_reg, 4);
 							ASM(ADD64rr, result_slot_reg, slot_index_reg);
 						}
-						auto [result_ref, result] =
-							result_ref_single(node.result);
-						auto result_reg = result.alloc_reg();
-						if (val_parts(node.result).bank
-								== tpde::x64::PlatformConfig::FP_BANK) {
-							ASM(SSE_MOVSDrm, result_reg,
-								FE_MEM(result_slot_reg, 0, FE_NOREG, 0));
+						if (adaptor->machine_kind(node.result)
+								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+							auto result = result_ref(node.result);
+							for (uint32_t part = 0; part < 2; ++part) {
+								auto value = result.part(part);
+								auto value_reg = value.alloc_reg();
+								ASM(MOV64rm, value_reg,
+									FE_MEM(result_slot_reg, 0, FE_NOREG,
+										static_cast<int32_t>(
+											part * sizeof(uint64_t))));
+								value.set_modified();
+							}
 						} else {
-							ASM(MOV64rm, result_reg,
-								FE_MEM(result_slot_reg, 0, FE_NOREG, 0));
+							auto [result_ref, result] =
+								result_ref_single(node.result);
+							auto result_reg = result.alloc_reg();
+							if (val_parts(node.result).bank
+									== tpde::x64::PlatformConfig::FP_BANK) {
+								ASM(SSE_MOVSDrm, result_reg,
+									FE_MEM(result_slot_reg, 0, FE_NOREG, 0));
+							} else {
+								ASM(MOV64rm, result_reg,
+									FE_MEM(result_slot_reg, 0, FE_NOREG, 0));
+							}
+							result.set_modified();
 						}
-						result.set_modified();
 					}
 					if (private_inline_body) {
 						free_stack_slot(
@@ -7604,8 +7618,59 @@ register_operand:
 							static_cast<uint32_t>(leaf_private_frame_slot),
 							call.direct_call->frame_size);
 					}
+				} else if (node.has_result
+						&& adaptor->machine_kind(node.result)
+							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+					payload.reset(this);
+					auto [result_frame_ref, result_frame] =
+						val_ref_single(node.operands[frame_operand + 2]);
+					auto result_frame_scratch =
+						std::move(result_frame).into_scratch();
+					auto result_frame_reg =
+						result_frame_scratch.cur_reg();
+					ScratchReg result_slot{this};
+					auto result_slot_reg = result_slot.alloc_gp();
+					ASM(MOV64rr, result_slot_reg, result_frame_reg);
+					if (call.direct_call->result_operand.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_CV) {
+						ASM(ADD64ri, result_slot_reg,
+							static_cast<int32_t>(
+								(ZEND_CALL_FRAME_SLOT
+									+ call.direct_call
+										->result_operand.index)
+								* sizeof(zval)));
+					} else {
+						ScratchReg slot_index{this};
+						auto slot_index_reg = slot_index.alloc_gp();
+						ASM(MOV64rm, slot_index_reg,
+							FE_MEM(result_frame_reg, 0, FE_NOREG,
+								static_cast<int32_t>(
+									offsetof(zend_execute_data, func))));
+						ASM(MOV32rm, slot_index_reg,
+							FE_MEM(slot_index_reg, 0, FE_NOREG,
+								static_cast<int32_t>(
+									offsetof(zend_op_array, last_var))));
+						ASM(ADD64ri, slot_index_reg,
+							static_cast<int32_t>(
+								ZEND_CALL_FRAME_SLOT
+									+ call.direct_call
+										->result_operand.index));
+						ASM(SHL64ri, slot_index_reg, 4);
+						ASM(ADD64rr, result_slot_reg, slot_index_reg);
+					}
+					auto result = result_ref(node.result);
+					for (uint32_t part = 0; part < 2; ++part) {
+						auto value = result.part(part);
+						auto value_reg = value.alloc_reg();
+						ASM(MOV64rm, value_reg,
+							FE_MEM(result_slot_reg, 0, FE_NOREG,
+								static_cast<int32_t>(
+									part * sizeof(uint64_t))));
+						value.set_modified();
+					}
 				} else if (node.has_result) {
-					auto [result_ref, result] = result_ref_single(node.result);
+					auto [result_ref, result] =
+						result_ref_single(node.result);
 					if (val_parts(node.result).bank
 							== tpde::x64::PlatformConfig::FP_BANK) {
 						auto payload_reg = payload.cur_reg_or_load(this);
