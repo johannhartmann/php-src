@@ -2264,30 +2264,25 @@ bool ZendCompilerA64::compile_inst(
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + source_storage) * sizeof(zval);
 		const uint64_t result_offset =
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + result_storage) * sizeof(zval);
-		if (source_offset > UINT32_MAX || result_offset > UINT32_MAX) {
+		if (source_offset > UINT32_MAX - sizeof(zval)
+				|| result_offset > UINT32_MAX - sizeof(zval)) {
 			return execute_value_operation();
 		}
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 		auto frame_reg = frame.load_to_reg();
-		ScratchReg source_slot{this};
-		ScratchReg result_slot{this};
 		ScratchReg type{this};
 		ScratchReg value{this};
 		ScratchReg probe{this};
-		auto source_slot_reg = source_slot.alloc_gp();
-		auto result_slot_reg = result_slot.alloc_gp();
 		auto type_reg = type.alloc_gp();
 		auto value_reg = value.alloc_gp();
 		auto probe_reg = probe.alloc_gp();
 
-		add_unsigned_offset(source_slot_reg, frame_reg,
-			static_cast<uint32_t>(source_offset));
-		add_unsigned_offset(result_slot_reg, frame_reg,
-			static_cast<uint32_t>(result_offset));
-		load_off(type_reg, source_slot_reg,
-			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
-		load_off(value_reg, source_slot_reg, 0, 8);
+		load_off(type_reg, frame_reg,
+			static_cast<uint32_t>(
+				source_offset + offsetof(zval, u1.type_info)), 4);
+		load_off(value_reg, frame_reg,
+			static_cast<uint32_t>(source_offset), 8);
 		ASM(TSTwi, type_reg,
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		auto copied = text_writer.label_create();
@@ -2301,9 +2296,11 @@ bool ZendCompilerA64::compile_inst(
 				offsetof(zend_refcounted_h, refcount)),
 			probe_reg, 4);
 		label_place(copied);
-		store_off(result_slot_reg, 0, value_reg, 8);
-		store_off(result_slot_reg,
-			static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+		store_off(frame_reg, static_cast<uint32_t>(result_offset),
+			value_reg, 8);
+		store_off(frame_reg,
+			static_cast<uint32_t>(
+				result_offset + offsetof(zval, u1.type_info)),
 			type_reg, 4);
 		return true;
 	};
