@@ -31,9 +31,16 @@ typedef struct _zend_native_executor_lease {
 	struct _zend_native_executor_lease *next;
 } zend_native_executor_lease;
 
+typedef struct _zend_native_executor_epoch_ref {
+	uint64_t value;
+	uint32_t active_requests;
+	struct _zend_native_executor_epoch_ref *next;
+} zend_native_executor_epoch_ref;
+
 typedef struct _zend_native_executor_request {
 	zend_native_executor_generation *request_generations;
 	zend_native_executor_lease *leases;
+	zend_native_executor_epoch_ref *epoch;
 	HashTable dispatch;
 	HashTable owners;
 	zend_native_compiler *active_compiler;
@@ -58,6 +65,7 @@ static zend_native_executor_generation
 	*zend_native_executor_persistent_generations;
 static zend_native_executor_generation
 	*zend_native_executor_retired_generations;
+static zend_native_executor_epoch_ref *zend_native_executor_epochs;
 static HashTable zend_native_executor_preloaded_owners;
 static bool zend_native_executor_preloaded_owners_active;
 #ifdef ZTS
@@ -71,6 +79,7 @@ zend_native_executor_create_or_acquire_generation(zend_op_array *root);
 static zend_native_entry_cell *
 zend_native_executor_resolve_external_reentry(
 	void *context, zend_function *function);
+static void zend_native_executor_reap_retired_locked(void);
 
 static void zend_native_executor_generation_lock(void)
 {
@@ -85,6 +94,85 @@ static void zend_native_executor_generation_unlock(void)
 #ifdef ZTS
 	tsrm_mutex_unlock(zend_native_executor_generation_mutex);
 #endif
+}
+
+static zend_native_executor_epoch_ref *
+zend_native_executor_find_epoch_locked(uint64_t value)
+{
+	zend_native_executor_epoch_ref *epoch = zend_native_executor_epochs;
+
+	while (epoch != NULL) {
+		if (epoch->value == value) {
+			return epoch;
+		}
+		epoch = epoch->next;
+	}
+	return NULL;
+}
+
+static bool zend_native_executor_epoch_is_active_locked(uint64_t value)
+{
+	zend_native_executor_epoch_ref *epoch =
+		zend_native_executor_find_epoch_locked(value);
+
+	return epoch != NULL && epoch->active_requests != 0;
+}
+
+static void zend_native_executor_acquire_request_epoch(void)
+{
+	zend_native_executor_epoch_ref *epoch;
+	uint64_t value;
+
+	ZEND_ASSERT(zend_native_executor_request_state.epoch == NULL);
+	for (;;) {
+		value = __atomic_load_n(
+			&zend_native_executor_epoch, __ATOMIC_ACQUIRE);
+		zend_native_executor_generation_lock();
+		if (value != __atomic_load_n(
+				&zend_native_executor_epoch, __ATOMIC_RELAXED)) {
+			zend_native_executor_generation_unlock();
+			continue;
+		}
+		epoch = zend_native_executor_find_epoch_locked(value);
+		if (epoch == NULL) {
+			epoch = pecalloc(1, sizeof(*epoch), true);
+			epoch->value = value;
+			epoch->next = zend_native_executor_epochs;
+			zend_native_executor_epochs = epoch;
+		}
+		epoch->active_requests++;
+		zend_native_executor_request_state.epoch = epoch;
+		zend_native_executor_request_state.observed_epoch = value;
+		zend_native_executor_generation_unlock();
+		return;
+	}
+}
+
+static void zend_native_executor_release_request_epoch(void)
+{
+	zend_native_executor_epoch_ref *epoch =
+		zend_native_executor_request_state.epoch;
+	zend_native_executor_epoch_ref **link;
+
+	if (epoch == NULL) {
+		return;
+	}
+	zend_native_executor_request_state.epoch = NULL;
+	zend_native_executor_generation_lock();
+	ZEND_ASSERT(epoch->active_requests != 0);
+	epoch->active_requests--;
+	zend_native_executor_reap_retired_locked();
+	if (epoch->active_requests == 0) {
+		link = &zend_native_executor_epochs;
+		while (*link != NULL && *link != epoch) {
+			link = &(*link)->next;
+		}
+		if (*link == epoch) {
+			*link = epoch->next;
+			pefree(epoch, true);
+		}
+	}
+	zend_native_executor_generation_unlock();
 }
 
 static zend_native_executor_dispatch *
@@ -239,12 +327,28 @@ zend_native_executor_find_function_generation(
 }
 
 static zend_native_executor_generation *
-zend_native_executor_find_owner_generation(
+zend_native_executor_find_function_epoch_generation(
 	zend_native_executor_generation *generation,
-	const zend_script *owner)
+	zend_function *function, uint64_t epoch)
 {
 	while (generation != NULL) {
-		if (generation->owner == owner) {
+		if (generation->epoch == epoch
+				&& zend_native_compiler_lookup(
+					generation->compiler, function) != NULL) {
+			return generation;
+		}
+		generation = generation->next;
+	}
+	return NULL;
+}
+
+static zend_native_executor_generation *
+zend_native_executor_find_owner_epoch_generation(
+	zend_native_executor_generation *generation,
+	const zend_script *owner, uint64_t epoch)
+{
+	while (generation != NULL) {
+		if (generation->owner == owner && generation->epoch == epoch) {
 			return generation;
 		}
 		generation = generation->next;
@@ -510,6 +614,8 @@ static void zend_native_executor_reap_retired_locked(void)
 		zend_native_executor_generation *generation = *link;
 
 		if (generation->active_requests != 0
+				|| zend_native_executor_epoch_is_active_locked(
+					generation->epoch)
 				|| !zend_native_compiler_is_quiescent(
 				generation->compiler)) {
 			link = &generation->next;
@@ -534,7 +640,9 @@ static void zend_native_executor_retire_stale(uint64_t epoch)
 			continue;
 		}
 		*link = generation->next;
-		if (generation->active_requests == 0
+		if (!zend_native_executor_epoch_is_active_locked(
+				generation->epoch)
+				&& generation->active_requests == 0
 				&& zend_native_compiler_is_quiescent(
 				generation->compiler)) {
 			zend_native_executor_destroy_generation(generation);
@@ -572,11 +680,27 @@ static void zend_native_executor_release_request_leases(void)
 	}
 }
 
-static zend_result zend_native_executor_activate_compiler(
-	zend_native_compiler *compiler)
+static zend_result zend_native_executor_activate_generation(
+	zend_native_executor_generation *generation)
 {
+	zend_native_compiler *compiler;
+
+	if (generation == NULL
+			|| generation->epoch
+				!= zend_native_executor_request_state.observed_epoch) {
+		return FAILURE;
+	}
+	compiler = generation->compiler;
 	if (zend_native_executor_request_state.active_compiler == compiler) {
 		return SUCCESS;
+	}
+	if (!zend_native_executor_request_has_lease(generation)) {
+		zend_native_executor_generation_lock();
+		if (!zend_native_executor_acquire_generation_locked(generation)) {
+			zend_native_executor_generation_unlock();
+			return FAILURE;
+		}
+		zend_native_executor_generation_unlock();
 	}
 	if (zend_native_executor_request_state.active_compiler != NULL) {
 		zend_native_compiler_deactivate_session(
@@ -620,8 +744,10 @@ zend_native_executor_create_generation(zend_op_array *root)
 	generation->root = persistent ? NULL : root;
 	generation->owner = owner;
 	generation->persistent = persistent;
-	generation->epoch = __atomic_load_n(
-		&zend_native_executor_epoch, __ATOMIC_ACQUIRE);
+	generation->epoch = zend_native_executor_request_state.epoch != NULL
+		? zend_native_executor_request_state.observed_epoch
+		: __atomic_load_n(
+			&zend_native_executor_epoch, __ATOMIC_ACQUIRE);
 	if (persistent || bundle != NULL) {
 		if (!zend_native_executor_build_owner_script(
 				generation, root, owner, persistent)) {
@@ -700,14 +826,16 @@ zend_native_executor_find_persistent_function(zend_function *function)
 	zend_native_executor_generation *generation;
 
 	zend_native_executor_generation_lock();
-	generation = zend_native_executor_find_function_generation(
-		zend_native_executor_persistent_generations, function);
-	if (generation != NULL
-			&& generation->epoch
-				== zend_native_executor_request_state.observed_epoch) {
+	generation = zend_native_executor_find_function_epoch_generation(
+		zend_native_executor_persistent_generations, function,
+		zend_native_executor_request_state.observed_epoch);
+	if (generation == NULL) {
+		generation = zend_native_executor_find_function_epoch_generation(
+			zend_native_executor_retired_generations, function,
+			zend_native_executor_request_state.observed_epoch);
+	}
+	if (generation != NULL) {
 		(void) zend_native_executor_acquire_generation_locked(generation);
-	} else {
-		generation = NULL;
 	}
 	zend_native_executor_generation_unlock();
 	return generation;
@@ -736,16 +864,29 @@ zend_native_executor_create_or_acquire_generation(zend_op_array *root)
 		return NULL;
 	}
 	zend_native_executor_generation_lock();
-	generation = zend_native_executor_find_owner_generation(
-		zend_native_executor_persistent_generations, owner);
-	if (generation == NULL
-			|| generation->epoch
-				!= zend_native_executor_request_state.observed_epoch) {
+	generation = zend_native_executor_find_owner_epoch_generation(
+		zend_native_executor_persistent_generations, owner,
+		zend_native_executor_request_state.observed_epoch);
+	if (generation == NULL) {
+		generation = zend_native_executor_find_owner_epoch_generation(
+			zend_native_executor_retired_generations, owner,
+			zend_native_executor_request_state.observed_epoch);
+	}
+	if (generation == NULL) {
 		generation = zend_native_executor_create_generation(root);
 		if (generation != NULL) {
-			generation->next =
-				zend_native_executor_persistent_generations;
-			zend_native_executor_persistent_generations = generation;
+			if (generation->epoch == __atomic_load_n(
+					&zend_native_executor_epoch, __ATOMIC_RELAXED)) {
+				generation->next =
+					zend_native_executor_persistent_generations;
+				zend_native_executor_persistent_generations =
+					generation;
+			} else {
+				generation->next =
+					zend_native_executor_retired_generations;
+				zend_native_executor_retired_generations =
+					generation;
+			}
 		}
 	}
 	if (generation != NULL) {
@@ -864,26 +1005,19 @@ void zend_native_executor_shutdown(void)
 
 void zend_native_executor_activate(void)
 {
-	uint64_t epoch = __atomic_load_n(
-		&zend_native_executor_epoch, __ATOMIC_ACQUIRE);
-	zend_native_executor_generation *generation;
+	uint64_t previous_epoch =
+		zend_native_executor_request_state.observed_epoch;
 
 	ZEND_ASSERT(
 		zend_native_executor_request_state.request_generations == NULL);
 	ZEND_ASSERT(!zend_native_executor_request_state.dispatch_active);
-	if (zend_native_executor_request_state.observed_epoch != epoch) {
-		zend_native_executor_retire_stale(epoch);
-		zend_native_executor_request_state.observed_epoch = epoch;
+	ZEND_ASSERT(zend_native_executor_request_state.epoch == NULL);
+	zend_native_executor_acquire_request_epoch();
+	if (previous_epoch
+			!= zend_native_executor_request_state.observed_epoch) {
+		zend_native_executor_retire_stale(
+			zend_native_executor_request_state.observed_epoch);
 	}
-	zend_native_executor_generation_lock();
-	for (generation = zend_native_executor_persistent_generations;
-			generation != NULL; generation = generation->next) {
-		if (generation->epoch == epoch) {
-			(void) zend_native_executor_acquire_generation_locked(
-				generation);
-		}
-	}
-	zend_native_executor_generation_unlock();
 	zend_hash_init(
 		&zend_native_executor_request_state.dispatch, 32, NULL,
 		zend_native_executor_dispatch_dtor, false);
@@ -907,11 +1041,12 @@ void zend_native_executor_deactivate(void)
 	zend_native_executor_destroy_generations(
 		&zend_native_executor_request_state.request_generations);
 	zend_native_executor_release_request_leases();
+	zend_native_executor_release_request_epoch();
 }
 
 void zend_native_executor_invalidate(void)
 {
-	uint64_t epoch = __atomic_add_fetch(
+	(void) __atomic_add_fetch(
 		&zend_native_executor_epoch, 1, __ATOMIC_RELEASE);
 
 	/*
@@ -923,20 +1058,17 @@ void zend_native_executor_invalidate(void)
 	 */
 	if (zend_native_executor_request_state.active
 			&& EG(current_execute_data) == NULL) {
-		zend_native_executor_generation *generation;
+		uint64_t previous_epoch =
+			zend_native_executor_request_state.observed_epoch;
 
 		zend_native_executor_release_request_leases();
-		zend_native_executor_retire_stale(epoch);
-		zend_native_executor_request_state.observed_epoch = epoch;
-		zend_native_executor_generation_lock();
-		for (generation = zend_native_executor_persistent_generations;
-				generation != NULL; generation = generation->next) {
-			if (generation->epoch == epoch) {
-				(void) zend_native_executor_acquire_generation_locked(
-					generation);
-			}
+		zend_native_executor_release_request_epoch();
+		zend_native_executor_acquire_request_epoch();
+		if (previous_epoch
+				!= zend_native_executor_request_state.observed_epoch) {
+			zend_native_executor_retire_stale(
+				zend_native_executor_request_state.observed_epoch);
 		}
-		zend_native_executor_generation_unlock();
 	}
 }
 
@@ -1103,6 +1235,7 @@ zend_result zend_native_executor_register_script_owner(
 {
 	zend_native_opcache_bundle *bundle =
 		zend_native_executor_bundle(op_array);
+	zend_native_executor_dispatch *dispatch;
 
 	if (bundle == NULL
 			|| bundle->storage
@@ -1117,6 +1250,20 @@ zend_result zend_native_executor_register_script_owner(
 				(zend_ulong) (uintptr_t) op_array->opcodes,
 				(void *) script) == NULL) {
 		return FAILURE;
+	}
+	dispatch = zend_native_executor_dispatch_load(op_array);
+	if (dispatch != NULL
+			&& dispatch->generation->epoch
+				== zend_native_executor_request_state.observed_epoch
+			&& !zend_native_executor_request_has_lease(
+				dispatch->generation)) {
+		zend_native_executor_generation_lock();
+		if (!zend_native_executor_acquire_generation_locked(
+				dispatch->generation)) {
+			zend_native_executor_generation_unlock();
+			return FAILURE;
+		}
+		zend_native_executor_generation_unlock();
 	}
 	return SUCCESS;
 }
@@ -1238,8 +1385,8 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 						.observed_epoch)
 			&& (code = zend_native_entry_cell_load(
 				dispatch->entry_cell)) != NULL) {
-		if (zend_native_executor_activate_compiler(
-				dispatch->generation->compiler) == FAILURE) {
+		if (zend_native_executor_activate_generation(
+				dispatch->generation) == FAILURE) {
 			memset(&diagnostic, 0, sizeof(diagnostic));
 			status = ZEND_NATIVE_EXCEPTION;
 		} else {
