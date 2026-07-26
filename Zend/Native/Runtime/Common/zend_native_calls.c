@@ -17,7 +17,7 @@
 # include "TSRM/TSRM.h"
 #endif
 
-static void (*zend_native_previous_execute_ex)(zend_execute_data *execute_data);
+static void (*zend_native_restore_execute_ex)(zend_execute_data *execute_data);
 static uint32_t zend_native_reentry_users;
 #ifdef ZTS
 static MUTEX_T zend_native_reentry_mutex;
@@ -692,7 +692,10 @@ static void zend_native_reentry_execute_ex(zend_execute_data *execute_data)
 	zend_native_status status;
 
 	if (scope == NULL) {
-		zend_native_previous_execute_ex(execute_data);
+		zend_throw_error(NULL,
+			"Userland reentry requires an active native component");
+		ZEND_OBSERVER_FCALL_END(execute_data, NULL);
+		EG(current_execute_data) = previous;
 		return;
 	}
 	cell = zend_native_reentry_resolve(execute_data->func);
@@ -728,7 +731,7 @@ zend_result zend_native_reentry_startup(void)
 		return FAILURE;
 	}
 #endif
-	if (zend_native_previous_execute_ex != NULL
+	if (zend_native_restore_execute_ex != NULL
 			|| zend_native_reentry_users != 0) {
 #ifdef ZTS
 		tsrm_mutex_free(zend_native_reentry_mutex);
@@ -743,9 +746,9 @@ void zend_native_reentry_shutdown(void)
 {
 	zend_native_reentry_lock();
 	if (zend_execute_ex == zend_native_reentry_execute_ex) {
-		zend_execute_ex = zend_native_previous_execute_ex;
+		zend_execute_ex = zend_native_restore_execute_ex;
 	}
-	zend_native_previous_execute_ex = NULL;
+	zend_native_restore_execute_ex = NULL;
 	zend_native_reentry_users = 0;
 	zend_native_active_reentry_scope = NULL;
 	zend_native_reentry_unlock();
@@ -761,15 +764,15 @@ zend_result zend_native_reentry_install(void)
 
 	zend_native_reentry_lock();
 	if (zend_native_reentry_users == 0) {
-		if (zend_native_previous_execute_ex == NULL
+		if (zend_native_restore_execute_ex == NULL
 				&& zend_execute_ex != zend_native_reentry_execute_ex) {
-			zend_native_previous_execute_ex = zend_execute_ex;
+			zend_native_restore_execute_ex = zend_execute_ex;
 			zend_execute_ex = zend_native_reentry_execute_ex;
 			zend_native_reentry_users = 1;
 			result = SUCCESS;
 		}
 	} else if (zend_native_reentry_users != UINT32_MAX
-			&& zend_native_previous_execute_ex != NULL
+			&& zend_native_restore_execute_ex != NULL
 			&& zend_execute_ex == zend_native_reentry_execute_ex) {
 		zend_native_reentry_users++;
 		result = SUCCESS;
@@ -785,9 +788,9 @@ void zend_native_reentry_uninstall(void)
 		zend_native_reentry_users--;
 		if (zend_native_reentry_users == 0) {
 			if (zend_execute_ex == zend_native_reentry_execute_ex) {
-				zend_execute_ex = zend_native_previous_execute_ex;
+				zend_execute_ex = zend_native_restore_execute_ex;
 			}
-			zend_native_previous_execute_ex = NULL;
+			zend_native_restore_execute_ex = NULL;
 		}
 	}
 	zend_native_reentry_unlock();

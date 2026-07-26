@@ -995,19 +995,36 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 			} else if (w09_execution) {
 				uint32_t plan_argument_index =
 					site->argument_span.offset + argument_index;
-				bool borrowed_scalar =
+				zend_mir_source_parameter_mode parameter_mode =
+					argument->mode
+							== ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_REFERENCE
+						? ZEND_MIR_SOURCE_PARAMETER_BY_REFERENCE
+						: ZEND_MIR_SOURCE_PARAMETER_BY_VALUE;
+				bool borrowed_scalar;
+
+				if (plan->targets[site->target_id].kind
+						== ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
+						&& (!zend_mir_w08_target_parameter_mode_at(
+								calls, &plan->targets[site->target_id],
+								argument_index, &parameter_mode)
+							|| (parameter_mode
+									== ZEND_MIR_SOURCE_PARAMETER_BY_REFERENCE
+								&& argument->source_operand.kind
+									== ZEND_MIR_SOURCE_OPERAND_LITERAL))) {
+					return ZEND_MIRL_W05_UNSUPPORTED_ARGUMENT;
+				}
+				borrowed_scalar =
 					plan->targets[site->target_id].kind
 						== ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
 					&& context->zend_source->w11
-					&& argument->mode
-						== ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE
+					&& parameter_mode
+						== ZEND_MIR_SOURCE_PARAMETER_BY_VALUE
 					&& zend_mir_id_is_valid(
 						plan->values[plan_argument_index]);
-
 				plan->ownerships[plan_argument_index] = borrowed_scalar
 					? ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR
-					: argument->mode
-							== ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_REFERENCE
+					: parameter_mode
+							== ZEND_MIR_SOURCE_PARAMETER_BY_REFERENCE
 						? ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
 						: ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE;
 				if (!borrowed_scalar) {
@@ -2777,7 +2794,8 @@ static bool zend_mir_verify_w08_calls(
 				zend_mir_source_parameter_mode parameter_mode;
 				zend_mir_call_argument_ownership expected;
 				bool borrowed_scalar;
-				if (internal) {
+				if (internal || source_target.kind
+						== ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER) {
 					if (!zend_mir_w08_target_parameter_mode_at(source_calls,
 							&source_target, argument_index, &parameter_mode)) {
 						goto failure;
