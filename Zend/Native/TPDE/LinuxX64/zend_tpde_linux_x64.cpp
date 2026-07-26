@@ -7667,6 +7667,10 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			ValuePart continuation{tpde::x64::PlatformConfig::GP_BANK, 4};
 			builder.add_ret(continuation, tpde::CCAssignment{});
 			auto continuation_reg = continuation.cur_reg_or_load(this);
+			auto generator_returned = text_writer.label_create();
+			ASM(CMP32ri, continuation_reg,
+				ZEND_NATIVE_FINALLY_GENERATOR_RETURNED);
+			generate_raw_jump(Jump::je, generator_returned);
 			for (uint32_t i = 0; i < plan->instruction_count; ++i) {
 				const zend_mir_instruction_record call =
 					zend_tpde_instruction_record_at(
@@ -7708,6 +7712,14 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 			return_builder.add(ValuePart{ZEND_NATIVE_EXCEPTION, 4,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 			return_builder.ret();
+			label_place(generator_returned);
+			RetBuilder generator_return_builder{
+				*this, *cur_cc_assigner()};
+			generator_return_builder.add(ValuePart{
+				ZEND_NATIVE_GENERATOR_RETURNED, 4,
+				tpde::x64::PlatformConfig::GP_BANK},
+				tpde::CCAssignment{});
+			generator_return_builder.ret();
 			return true;
 		}
 		case ZEND_MIR_OPCODE_CATCH_ENTER: {

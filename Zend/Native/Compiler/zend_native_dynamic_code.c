@@ -41,6 +41,7 @@ void zend_native_dynamic_compiler_destroy(
 
 	ZEND_ASSERT(compiler != NULL);
 	ZEND_ASSERT(zend_native_active_dynamic_compiler != compiler);
+	ZEND_ASSERT(compiler->previous_active == NULL);
 	for (index = compiler->owned_op_array_count; index-- > 0;) {
 		zend_op_array *op_array = compiler->owned_op_arrays[index];
 
@@ -58,7 +59,9 @@ void zend_native_dynamic_compiler_activate(
 	zend_native_dynamic_compiler *compiler)
 {
 	ZEND_ASSERT(compiler != NULL);
-	ZEND_ASSERT(zend_native_active_dynamic_compiler == NULL);
+	ZEND_ASSERT(compiler != zend_native_active_dynamic_compiler);
+	ZEND_ASSERT(compiler->previous_active == NULL);
+	compiler->previous_active = zend_native_active_dynamic_compiler;
 	zend_native_active_dynamic_compiler = compiler;
 }
 
@@ -138,10 +141,11 @@ static bool zend_native_dynamic_compiler_adopt(
 }
 
 void zend_native_dynamic_compiler_deactivate(
-	const zend_native_dynamic_compiler *compiler)
+	zend_native_dynamic_compiler *compiler)
 {
 	ZEND_ASSERT(zend_native_active_dynamic_compiler == compiler);
-	zend_native_active_dynamic_compiler = NULL;
+	zend_native_active_dynamic_compiler = compiler->previous_active;
+	compiler->previous_active = NULL;
 }
 
 static bool zend_native_dynamic_decode_operand(

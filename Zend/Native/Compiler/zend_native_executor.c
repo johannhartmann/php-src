@@ -1317,10 +1317,6 @@ void zend_native_executor_shutdown(void)
 		zend_hash_destroy(&zend_native_executor_generations_by_owner);
 		zend_native_executor_generation_indexes_active = false;
 	}
-	if (zend_native_executor_installed
-			&& zend_execute_ex == zend_native_executor_execute_ex) {
-		zend_execute_ex = execute_ex;
-	}
 	zend_native_executor_installed = false;
 	zend_native_executor_bundle_rid = -1;
 	zend_native_executor_entry_handle = -1;

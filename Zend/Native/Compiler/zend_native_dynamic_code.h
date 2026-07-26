@@ -17,6 +17,7 @@ typedef struct _zend_native_dynamic_entry {
 
 typedef struct _zend_native_dynamic_compiler {
 	struct _zend_native_compiler *product_compiler;
+	struct _zend_native_dynamic_compiler *previous_active;
 	zend_op_array **owned_op_arrays;
 	uint32_t owned_op_array_count;
 	uint32_t owned_op_array_capacity;
@@ -27,9 +28,10 @@ typedef struct _zend_native_dynamic_compiler {
 } zend_native_dynamic_compiler;
 
 /*
- * The active compiler is request-/TSRM-local. It is installed only while a
- * native execution tree is active, so independent ZTS requests never share a
- * compile-on-demand lock or partially published unit.
+ * The active compiler stack is request-/TSRM-local. A nested native execution
+ * tree temporarily shadows its caller's compiler and restores it on return,
+ * so independent ZTS requests never share a compile-on-demand lock or
+ * partially published unit.
  */
 ZEND_API void zend_native_dynamic_compiler_init(
 	zend_native_dynamic_compiler *compiler);
@@ -41,7 +43,7 @@ ZEND_API void zend_native_dynamic_compiler_destroy(
 ZEND_API void zend_native_dynamic_compiler_activate(
 	zend_native_dynamic_compiler *compiler);
 ZEND_API void zend_native_dynamic_compiler_deactivate(
-	const zend_native_dynamic_compiler *compiler);
+	zend_native_dynamic_compiler *compiler);
 ZEND_API zend_result zend_native_dynamic_compiler_publish(
 	zend_native_dynamic_compiler *compiler,
 	zend_op_array *op_array,
