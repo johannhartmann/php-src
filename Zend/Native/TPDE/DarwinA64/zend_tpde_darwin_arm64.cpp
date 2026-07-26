@@ -3675,14 +3675,6 @@ bool ZendCompilerA64::compile_inst(
 		if (!zend_tpde_object_property_read_at(mir, &layout)) {
 			return execute_value_operation();
 		}
-		for (auto reg_id : register_file.used_regs()) {
-			::tpde::Reg reg{reg_id};
-			if (!register_file.is_fixed(reg)
-					&& register_file.reg_local_idx(reg)
-						!= INVALID_VAL_LOCAL_IDX) {
-				evict_reg(reg);
-			}
-		}
 		auto slow = text_writer.label_create();
 		auto copied = text_writer.label_create();
 		auto done = text_writer.label_create();
@@ -3690,14 +3682,12 @@ bool ZendCompilerA64::compile_inst(
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 		auto frame_scratch = std::move(frame).into_scratch();
 		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg receiver{this};
 		ScratchReg object{this};
 		ScratchReg cache{this};
 		ScratchReg offset{this};
 		ScratchReg property{this};
 		ScratchReg type{this};
 		ScratchReg low_word{this};
-		auto receiver_reg = receiver.alloc_gp();
 		auto object_reg = object.alloc_gp();
 		auto cache_reg = cache.alloc_gp();
 		auto offset_reg = offset.alloc_gp();
@@ -3705,13 +3695,14 @@ bool ZendCompilerA64::compile_inst(
 		auto type_reg = type.alloc_gp();
 		auto low_word_reg = low_word.alloc_gp();
 
-		add_unsigned_offset(receiver_reg, frame_reg, layout.receiver_offset);
-		load_off(type_reg, receiver_reg,
-			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		load_off(type_reg, frame_reg,
+			layout.receiver_offset
+				+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+			4);
 		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
 		ASM(CMPwi, type_reg, IS_OBJECT);
 		generate_raw_jump(Jump::Jne, slow);
-		load_off(object_reg, receiver_reg, 0, 8);
+		load_off(object_reg, frame_reg, layout.receiver_offset, 8);
 		load_off(cache_reg, frame_reg,
 			static_cast<uint32_t>(
 				offsetof(zend_execute_data, run_time_cache)), 8);
@@ -3735,16 +3726,18 @@ bool ZendCompilerA64::compile_inst(
 		ASM(CMPwi, offset_reg, IS_REFERENCE);
 		generate_raw_jump(Jump::Jeq, slow);
 
-		add_unsigned_offset(receiver_reg, frame_reg, layout.result_offset);
-		load_off(offset_reg, receiver_reg,
-			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		load_off(offset_reg, frame_reg,
+			layout.result_offset
+				+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+			4);
 		ASM(TSTwi, offset_reg,
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		generate_raw_jump(Jump::Jne, slow);
 		load_off(low_word_reg, property_reg, 0, 8);
-		store_off(receiver_reg, 0, low_word_reg, 8);
-		store_off(receiver_reg,
-			static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+		store_off(frame_reg, layout.result_offset, low_word_reg, 8);
+		store_off(frame_reg,
+			layout.result_offset
+				+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
 			type_reg, 4);
 		ASM(TSTwi, type_reg,
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
@@ -3761,18 +3754,22 @@ bool ZendCompilerA64::compile_inst(
 		generate_raw_jump(Jump::jmp, done);
 
 		label_place(slow);
-		receiver.reset();
 		object.reset();
 		cache.reset();
 		offset.reset();
 		property.reset();
 		type.reset();
 		low_word.reset();
+		const auto register_state =
+			zend::native::tpde::
+				capture_conditional_call_register_state(*this);
 		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
 		frame_argument.set_value(this, std::move(frame_scratch));
 		if (!execute_value_operation(&frame_argument)) {
 			return false;
 		}
+		zend::native::tpde::restore_conditional_call_register_state(
+			*this, register_state);
 		label_place(done);
 		return true;
 	};
