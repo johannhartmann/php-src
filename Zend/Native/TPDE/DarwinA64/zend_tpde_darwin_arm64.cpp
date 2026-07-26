@@ -3928,14 +3928,6 @@ bool ZendCompilerA64::compile_inst(
 		if (!zend_tpde_dynamic_fetch_read_at(mir, &layout)) {
 			return execute_value_operation();
 		}
-		for (auto reg_id : register_file.used_regs()) {
-			::tpde::Reg reg{reg_id};
-			if (!register_file.is_fixed(reg)
-					&& register_file.reg_local_idx(reg)
-						!= INVALID_VAL_LOCAL_IDX) {
-				evict_reg(reg);
-			}
-		}
 		auto slow = text_writer.label_create();
 		auto loop = text_writer.label_create();
 		auto next = text_writer.label_create();
@@ -3974,17 +3966,19 @@ bool ZendCompilerA64::compile_inst(
 		ASM(CMPxi, table_reg, 0);
 		generate_raw_jump(Jump::Jeq, slow);
 
-		add_unsigned_offset(slot_reg, frame_reg, layout.name_offset);
-		load_off(type_reg, slot_reg,
-			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		load_off(type_reg, frame_reg,
+			layout.name_offset
+				+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+			4);
 		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
 		ASM(CMPwi, type_reg, IS_STRING);
 		generate_raw_jump(Jump::Jne, slow);
-		load_off(name_reg, slot_reg, 0, 8);
+		load_off(name_reg, frame_reg, layout.name_offset, 8);
 
-		add_unsigned_offset(slot_reg, frame_reg, layout.result_offset);
-		load_off(type_reg, slot_reg,
-			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		load_off(type_reg, frame_reg,
+			layout.result_offset
+				+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+			4);
 		ASM(TSTwi, type_reg,
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		generate_raw_jump(Jump::Jne, slow);
@@ -4033,9 +4027,8 @@ bool ZendCompilerA64::compile_inst(
 
 		load_off(low_word_reg, slot_reg, 0, 8);
 		load_off(high_word_reg, slot_reg, 8, 8);
-		add_unsigned_offset(name_reg, frame_reg, layout.result_offset);
-		store_off(name_reg, 0, low_word_reg, 8);
-		store_off(name_reg, 8, high_word_reg, 8);
+		store_off(frame_reg, layout.result_offset, low_word_reg, 8);
+		store_off(frame_reg, layout.result_offset + 8, high_word_reg, 8);
 		ASM(TSTwi, type_reg,
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		generate_raw_jump(Jump::Jeq, done);
@@ -4058,11 +4051,16 @@ bool ZendCompilerA64::compile_inst(
 		bucket.reset();
 		low_word.reset();
 		high_word.reset();
+		const auto register_state =
+			zend::native::tpde::
+				capture_conditional_call_register_state(*this);
 		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
 		frame_argument.set_value(this, std::move(frame_scratch));
 		if (!execute_value_operation(&frame_argument)) {
 			return false;
 		}
+		zend::native::tpde::restore_conditional_call_register_state(
+			*this, register_state);
 		label_place(done);
 		return true;
 	};
