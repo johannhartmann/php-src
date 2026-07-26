@@ -6061,10 +6061,6 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 						static_cast<uint32_t>(offsetof(
 							zend_native_direct_activation,
 							internal_target)), 0, 1);
-					store_constant(second_reg,
-						static_cast<uint32_t>(offsetof(
-							zend_native_direct_activation,
-							preserve_target)), 0, 1);
 					store_off(first_reg, 0, second_reg, 8);
 					load_off(first_reg, context_reg,
 						static_cast<uint32_t>(offsetof(
