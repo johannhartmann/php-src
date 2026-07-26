@@ -567,6 +567,8 @@ zend_result zend_native_publish_linux_x64(
 	code->target = ZEND_NATIVE_TARGET_LINUX_AMD64;
 	code->slot_count = image->slot_count;
 	code->argument_count = image->argument_count;
+	code->frame_variable_count = image->frame_variable_count;
+	code->frame_temporary_count = image->frame_temporary_count;
 	if (map_linux_x64_object(image, code, diag) == FAILURE) {
 		std::free(code);
 		return FAILURE;

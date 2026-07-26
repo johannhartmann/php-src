@@ -17,8 +17,8 @@
 namespace {
 constexpr uint32_t MAX_RECORDS = UINT32_C(1) << 20;
 constexpr size_t MAX_NATIVE_IMAGE_BYTES = size_t{1} << 28;
-constexpr uint32_t NATIVE_IMAGE_ABI_VERSION = 3;
-constexpr uint32_t NATIVE_IMAGE_SERIAL_FORMAT = 1;
+constexpr uint32_t NATIVE_IMAGE_ABI_VERSION = 4;
+constexpr uint32_t NATIVE_IMAGE_SERIAL_FORMAT = 2;
 constexpr uint64_t NATIVE_IMAGE_SERIAL_MAGIC = UINT64_C(0x003331474d494e5a);
 constexpr uint64_t NATIVE_IMAGE_BUILD_ID =
 	UINT64_C(0x5750313300000000)
@@ -37,6 +37,8 @@ struct zend_native_serial_image_header {
 	uint64_t code_version;
 	uint32_t slot_count;
 	uint32_t argument_count;
+	uint32_t frame_variable_count;
+	uint32_t frame_temporary_count;
 	zend_native_image_metrics metrics;
 	uint64_t text_size;
 	uint32_t symbol_count;
@@ -4463,6 +4465,11 @@ extern "C" zend_result zend_tpde_compile_module_w08_with_runtime(
 	 * pointer remains present for compatibility but no value-slot array is used. */
 	image->slot_count = 0;
 	image->argument_count = plan.argument_count;
+	image->frame_variable_count = source_op_array != nullptr
+		? static_cast<uint32_t>(source_op_array->last_var)
+		: plan.argument_count;
+	image->frame_temporary_count =
+		source_op_array != nullptr ? source_op_array->T : 0;
 	image->metrics = collect_plan_metrics(plan);
 	zend_result result = prepare_image_symbols(&plan, image, diag)
 		? target == ZEND_NATIVE_TARGET_DARWIN_ARM64
@@ -4510,7 +4517,12 @@ extern "C" zend_result zend_native_image_serialize(
 					static_cast<uint32_t>(image->target)))
 			|| image->text_size > MAX_NATIVE_IMAGE_BYTES
 			|| !checked_count(image->symbol_count)
-			|| !checked_count(image->symbol_binding_count)) {
+			|| !checked_count(image->symbol_binding_count)
+			|| !checked_count(image->frame_variable_count)
+			|| !checked_count(image->frame_temporary_count)
+			|| image->frame_variable_count < image->argument_count
+			|| image->frame_temporary_count
+				> MAX_RECORDS - image->frame_variable_count) {
 		zend_tpde_set_diagnostic(diag,
 			ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
 			"native image cannot be serialized");
@@ -4527,6 +4539,8 @@ extern "C" zend_result zend_native_image_serialize(
 	header.code_version = image->code_version;
 	header.slot_count = image->slot_count;
 	header.argument_count = image->argument_count;
+	header.frame_variable_count = image->frame_variable_count;
+	header.frame_temporary_count = image->frame_temporary_count;
 	header.metrics = image->metrics;
 	header.text_size = image->text_size;
 	header.symbol_count = image->symbol_count;
@@ -4714,7 +4728,12 @@ extern "C" zend_result zend_native_image_deserialize(
 			|| header.text_size > size
 			|| !checked_count(header.symbol_count)
 			|| !checked_count(header.binding_count)
-			|| header.binding_count > header.symbol_count) {
+			|| header.binding_count > header.symbol_count
+			|| !checked_count(header.frame_variable_count)
+			|| !checked_count(header.frame_temporary_count)
+			|| header.frame_variable_count < header.argument_count
+			|| header.frame_temporary_count
+				> MAX_RECORDS - header.frame_variable_count) {
 		goto invalid_image;
 	}
 	offset = sizeof(header);
@@ -4739,6 +4758,8 @@ extern "C" zend_result zend_native_image_deserialize(
 	image->code_version = header.code_version;
 	image->slot_count = header.slot_count;
 	image->argument_count = header.argument_count;
+	image->frame_variable_count = header.frame_variable_count;
+	image->frame_temporary_count = header.frame_temporary_count;
 	image->metrics = header.metrics;
 	image->text_size = header.text_size;
 	image->text_capacity = header.text_size;
@@ -5091,7 +5112,8 @@ extern "C" zend_result zend_native_execute(
 	op_array.type = ZEND_USER_FUNCTION;
 	op_array.num_args = argument_count;
 	op_array.required_num_args = argument_count;
-	op_array.last_var = argument_count;
+	op_array.last_var = code->frame_variable_count;
+	op_array.T = code->frame_temporary_count;
 	op_array.last = argument_count;
 	op_array.opcodes = static_cast<zend_op *>(std::calloc(
 		static_cast<size_t>(argument_count) + 1, sizeof(zend_op)));
