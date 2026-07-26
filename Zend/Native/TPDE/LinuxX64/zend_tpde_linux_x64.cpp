@@ -3005,18 +3005,10 @@ register_operand:
 		zend_tpde_packed_array_append layout;
 
 		if (!zend_tpde_packed_array_append_at(mir, &layout)
-				|| layout.container_offset > INT32_MAX
-				|| layout.value_offset > INT32_MAX
-				|| layout.result_offset > INT32_MAX) {
+				|| layout.container_offset > INT32_MAX - 8
+				|| layout.value_offset > INT32_MAX - 8
+				|| layout.result_offset > INT32_MAX - 8) {
 			return execute_value_operation();
-		}
-		for (auto reg_id : register_file.used_regs()) {
-			tpde::Reg reg{reg_id};
-			if (!register_file.is_fixed(reg)
-					&& register_file.reg_local_idx(reg)
-						!= INVALID_VAL_LOCAL_IDX) {
-				evict_reg(reg);
-			}
 		}
 		auto slow = text_writer.label_create();
 		auto done = text_writer.label_create();
@@ -3024,7 +3016,6 @@ register_operand:
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 		auto frame_scratch = std::move(frame).into_scratch();
 		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg slot{this};
 		ScratchReg type{this};
 		ScratchReg array{this};
 		ScratchReg count{this};
@@ -3032,7 +3023,6 @@ register_operand:
 		ScratchReg element{this};
 		ScratchReg low_word{this};
 		ScratchReg high_word{this};
-		auto slot_reg = slot.alloc_gp();
 		auto type_reg = type.alloc_gp();
 		auto array_reg = array.alloc_gp();
 		auto count_reg = count.alloc_gp();
@@ -3041,16 +3031,17 @@ register_operand:
 		auto low_word_reg = low_word.alloc_gp();
 		auto high_word_reg = high_word.alloc_gp();
 
-		ASM(MOV64rr, slot_reg, frame_reg);
-		ASM(ADD64ri, slot_reg,
-			static_cast<int32_t>(layout.container_offset));
 		ASM(MOV32rm, type_reg,
-			FE_MEM(slot_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.container_offset
+						+ offsetof(zval, u1.type_info))));
 		ASM(AND32ri, type_reg, Z_TYPE_MASK);
 		ASM(CMP32ri, type_reg, IS_ARRAY);
 		generate_raw_jump(Jump::jne, slow);
-		ASM(MOV64rm, array_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
+		ASM(MOV64rm, array_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.container_offset)));
 		ASM(MOV32rm, count_reg,
 			FE_MEM(array_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
@@ -3084,11 +3075,10 @@ register_operand:
 		ASM(CMP64rr, count_reg, limit_reg);
 		generate_raw_jump(Jump::jne, slow);
 
-		ASM(MOV64rr, slot_reg, frame_reg);
-		ASM(ADD64ri, slot_reg, static_cast<int32_t>(layout.value_offset));
 		ASM(MOV32rm, type_reg,
-			FE_MEM(slot_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.value_offset + offsetof(zval, u1.type_info))));
 		ASM(MOV32rr, limit_reg, type_reg);
 		ASM(AND32ri, limit_reg, Z_TYPE_MASK);
 		ASM(CMP32ri, limit_reg, IS_UNDEF);
@@ -3098,12 +3088,11 @@ register_operand:
 		ASM(CMP32ri, limit_reg, IS_INDIRECT);
 		generate_raw_jump(Jump::je, slow);
 		if (layout.has_result) {
-			ASM(MOV64rr, element_reg, frame_reg);
-			ASM(ADD64ri, element_reg,
-				static_cast<int32_t>(layout.result_offset));
 			ASM(MOV32rm, limit_reg,
-				FE_MEM(element_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zval, u1.type_info))));
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						layout.result_offset
+							+ offsetof(zval, u1.type_info))));
 			ASM(CMP32ri, limit_reg, IS_UNDEF);
 			generate_raw_jump(Jump::jne, slow);
 		}
@@ -3115,17 +3104,21 @@ register_operand:
 		ASM(ADD64rr, element_reg, count_reg);
 		ASM(SHR64ri, count_reg, 4);
 		ASM(MOV64rm, low_word_reg,
-			FE_MEM(slot_reg, 0, FE_NOREG, 0));
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.value_offset)));
 		ASM(MOV64rm, high_word_reg,
-			FE_MEM(slot_reg, 0, FE_NOREG, 8));
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.value_offset + 8)));
 		ASM(MOV64mr,
 			FE_MEM(element_reg, 0, FE_NOREG, 0), low_word_reg);
 		ASM(MOV64mr,
 			FE_MEM(element_reg, 0, FE_NOREG, 8), high_word_reg);
 		if (layout.move_value) {
 			ASM(MOV32mi,
-				FE_MEM(slot_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zval, u1.type_info))),
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						layout.value_offset
+							+ offsetof(zval, u1.type_info))),
 				IS_UNDEF);
 		} else {
 			auto copied = text_writer.label_create();
@@ -3164,13 +3157,14 @@ register_operand:
 				static_cast<int32_t>(offsetof(HashTable, nNextFreeElement))),
 			count_reg);
 		if (layout.has_result) {
-			ASM(MOV64rr, slot_reg, frame_reg);
-			ASM(ADD64ri, slot_reg,
-				static_cast<int32_t>(layout.result_offset));
 			ASM(MOV64mr,
-				FE_MEM(slot_reg, 0, FE_NOREG, 0), low_word_reg);
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(layout.result_offset)),
+				low_word_reg);
 			ASM(MOV64mr,
-				FE_MEM(slot_reg, 0, FE_NOREG, 8), high_word_reg);
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(layout.result_offset + 8)),
+				high_word_reg);
 			auto result_copied = text_writer.label_create();
 			ASM(MOV32rr, limit_reg, type_reg);
 			ASM(AND32ri, limit_reg,
@@ -3192,7 +3186,6 @@ register_operand:
 		generate_raw_jump(Jump::jmp, done);
 
 		label_place(slow);
-		slot.reset();
 		type.reset();
 		array.reset();
 		count.reset();
@@ -3200,12 +3193,17 @@ register_operand:
 		element.reset();
 		low_word.reset();
 		high_word.reset();
+		const auto register_state =
+			zend::native::tpde::
+				capture_conditional_call_register_state(*this);
 		ValuePart frame_argument{
 			tpde::x64::PlatformConfig::GP_BANK, 8};
 		frame_argument.set_value(this, std::move(frame_scratch));
 		if (!execute_value_operation(&frame_argument)) {
 			return false;
 		}
+		zend::native::tpde::restore_conditional_call_register_state(
+			*this, register_state);
 		label_place(done);
 		return true;
 	};
