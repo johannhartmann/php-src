@@ -1,6 +1,6 @@
 #include "Zend/Native/Compiler/zend_native_executor.h"
 
-#include "Zend/Native/Compiler/zend_native_compiler.h"
+#include "Zend/Native/Compiler/zend_native_compiler_internal.h"
 #include "Zend/zend_compile.h"
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_execute.h"
@@ -36,7 +36,9 @@ typedef struct _zend_native_executor_request {
 	zend_native_executor_lease *leases;
 	HashTable dispatch;
 	HashTable owners;
+	zend_native_compiler *active_compiler;
 	uint64_t observed_epoch;
+	uint32_t execution_depth;
 	bool dispatch_active;
 	bool active;
 } zend_native_executor_request;
@@ -550,6 +552,11 @@ static void zend_native_executor_release_request_leases(void)
 	zend_native_executor_lease *lease =
 		zend_native_executor_request_state.leases;
 
+	if (zend_native_executor_request_state.active_compiler != NULL) {
+		zend_native_compiler_deactivate_session(
+			zend_native_executor_request_state.active_compiler);
+		zend_native_executor_request_state.active_compiler = NULL;
+	}
 	zend_native_executor_request_state.leases = NULL;
 	while (lease != NULL) {
 		zend_native_executor_lease *next = lease->next;
@@ -563,6 +570,34 @@ static void zend_native_executor_release_request_leases(void)
 		efree(lease);
 		lease = next;
 	}
+}
+
+static zend_result zend_native_executor_activate_compiler(
+	zend_native_compiler *compiler)
+{
+	if (zend_native_executor_request_state.active_compiler == compiler) {
+		return SUCCESS;
+	}
+	if (zend_native_executor_request_state.active_compiler != NULL) {
+		zend_native_compiler_deactivate_session(
+			zend_native_executor_request_state.active_compiler);
+		zend_native_executor_request_state.active_compiler = NULL;
+	}
+	if (zend_native_compiler_activate_session(compiler) == FAILURE) {
+		return FAILURE;
+	}
+	zend_native_executor_request_state.active_compiler = compiler;
+	return SUCCESS;
+}
+
+static void zend_native_executor_deactivate_compiler(void)
+{
+	if (zend_native_executor_request_state.active_compiler == NULL) {
+		return;
+	}
+	zend_native_compiler_deactivate_session(
+		zend_native_executor_request_state.active_compiler);
+	zend_native_executor_request_state.active_compiler = NULL;
 }
 
 static zend_native_executor_generation *
@@ -861,6 +896,7 @@ void zend_native_executor_activate(void)
 void zend_native_executor_deactivate(void)
 {
 	zend_native_executor_request_state.active = false;
+	zend_native_executor_deactivate_compiler();
 	if (zend_native_executor_request_state.dispatch_active) {
 		zend_hash_destroy(
 			&zend_native_executor_request_state.owners);
@@ -1164,12 +1200,19 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 			|| execute_data == NULL || execute_data->func == NULL
 			|| !ZEND_USER_CODE(execute_data->func->type)) {
 		zend_throw_error(NULL, "Invalid native userland executor activation");
+		if (execute_data != NULL) {
+			EG(current_execute_data) = execute_data->prev_execute_data;
+		}
 		return;
 	}
-	entry_cell = zend_native_reentry_resolve(execute_data->func);
+	previous = execute_data->prev_execute_data;
+	if (zend_native_executor_request_state.execution_depth != 0) {
+		entry_cell = zend_native_reentry_resolve(execute_data->func);
+	} else {
+		entry_cell = NULL;
+	}
 	if (entry_cell != NULL
 			&& (code = zend_native_entry_cell_load(entry_cell)) != NULL) {
-		previous = execute_data->prev_execute_data;
 		if (entry_cell->frame_probe != NULL) {
 			entry_cell->frame_probe(
 				entry_cell->frame_probe_context, previous,
@@ -1178,8 +1221,10 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 		memset(&diagnostic, 0, sizeof(diagnostic));
 		zend_native_entry_cell_retain_active(entry_cell);
 		EG(current_execute_data) = execute_data;
+		zend_native_executor_request_state.execution_depth++;
 		status = zend_native_execute_observed_frame(
 			code, execute_data, &diagnostic);
+		zend_native_executor_request_state.execution_depth--;
 		EG(current_execute_data) = previous;
 		zend_native_entry_cell_release_active(entry_cell);
 		goto complete;
@@ -1193,9 +1238,17 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 						.observed_epoch)
 			&& (code = zend_native_entry_cell_load(
 				dispatch->entry_cell)) != NULL) {
-		status = zend_native_compiler_execute_observed_published(
-			dispatch->generation->compiler, dispatch->entry_cell,
-			code, execute_data, &diagnostic);
+		if (zend_native_executor_activate_compiler(
+				dispatch->generation->compiler) == FAILURE) {
+			memset(&diagnostic, 0, sizeof(diagnostic));
+			status = ZEND_NATIVE_EXCEPTION;
+		} else {
+			zend_native_executor_request_state.execution_depth++;
+			status = zend_native_compiler_execute_observed_active(
+				dispatch->generation->compiler,
+				dispatch->entry_cell, code, execute_data, &diagnostic);
+			zend_native_executor_request_state.execution_depth--;
+		}
 		goto complete;
 	}
 	if (dispatch != NULL) {
@@ -1247,6 +1300,7 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 		generation = zend_native_executor_create_or_acquire_generation(
 			&execute_data->func->op_array);
 		if (generation == NULL) {
+			EG(current_execute_data) = previous;
 			return;
 		}
 	} else if (!generation->persistent) {
@@ -1258,8 +1312,11 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 		generation->script.class_table = *EG(class_table);
 	}
 	memset(&diagnostic, 0, sizeof(diagnostic));
+	zend_native_executor_deactivate_compiler();
+	zend_native_executor_request_state.execution_depth++;
 	status = zend_native_compiler_execute_observed_data(
 		generation->compiler, execute_data, &diagnostic);
+	zend_native_executor_request_state.execution_depth--;
 	entry_cell = zend_native_compiler_lookup(
 		generation->compiler, execute_data->func);
 	if (entry_cell != NULL) {
@@ -1268,6 +1325,7 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 	}
 complete:
 	if (status == ZEND_NATIVE_BAILOUT) {
+		EG(current_execute_data) = previous;
 		zend_bailout();
 	}
 	if (status == ZEND_NATIVE_EXCEPTION && EG(exception) == NULL) {
@@ -1276,4 +1334,5 @@ complete:
 				? diagnostic.message
 				: "Native userland execution failed");
 	}
+	EG(current_execute_data) = previous;
 }
