@@ -187,10 +187,7 @@ zend_native_executor_dispatch_load(const zend_op_array *op_array)
 	if (run_time_cache == NULL) {
 		return NULL;
 	}
-	return __atomic_load_n(
-		(zend_native_executor_dispatch * const *)
-			&run_time_cache[zend_native_executor_entry_handle],
-			__ATOMIC_ACQUIRE);
+	return run_time_cache[zend_native_executor_entry_handle];
 }
 
 static void zend_native_executor_dispatch_store(
@@ -202,16 +199,12 @@ static void zend_native_executor_dispatch_store(
 	ZEND_ASSERT(zend_native_executor_entry_handle >= 0);
 	run_time_cache = RUN_TIME_CACHE(op_array);
 	ZEND_ASSERT(run_time_cache != NULL);
-	__atomic_store_n(
-		(zend_native_executor_dispatch **)
-			&run_time_cache[zend_native_executor_entry_handle],
-		dispatch, __ATOMIC_RELEASE);
+	run_time_cache[zend_native_executor_entry_handle] = dispatch;
 }
 
 static void zend_native_executor_dispatch_clear(
 	zend_native_executor_dispatch *dispatch)
 {
-	zend_native_executor_dispatch *expected = dispatch;
 	void **run_time_cache;
 
 	if (dispatch == NULL || dispatch->persistent
@@ -223,10 +216,9 @@ static void zend_native_executor_dispatch_clear(
 	if (run_time_cache == NULL) {
 		return;
 	}
-	(void) __atomic_compare_exchange_n(
-		(zend_native_executor_dispatch **)
-			&run_time_cache[zend_native_executor_entry_handle],
-		&expected, NULL, false, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+	if (run_time_cache[zend_native_executor_entry_handle] == dispatch) {
+		run_time_cache[zend_native_executor_entry_handle] = NULL;
+	}
 }
 
 static void zend_native_executor_dispatch_dtor(zval *value)
@@ -1265,6 +1257,16 @@ zend_result zend_native_executor_register_script_owner(
 		}
 		zend_native_executor_generation_unlock();
 	}
+	if (dispatch != NULL
+			&& zend_native_executor_request_state.execution_depth == 0
+			&& dispatch->generation->epoch
+				== zend_native_executor_request_state.observed_epoch
+			&& zend_native_executor_request_state.active_compiler
+				!= dispatch->generation->compiler
+			&& zend_native_executor_activate_generation(
+				dispatch->generation) == FAILURE) {
+		return FAILURE;
+	}
 	return SUCCESS;
 }
 
@@ -1385,16 +1387,24 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 						.observed_epoch)
 			&& (code = zend_native_entry_cell_load(
 				dispatch->entry_cell)) != NULL) {
-		if (zend_native_executor_activate_generation(
-				dispatch->generation) == FAILURE) {
+		if (zend_native_executor_request_state.active_compiler
+					!= dispatch->generation->compiler
+				&& zend_native_executor_activate_generation(
+					dispatch->generation) == FAILURE) {
 			memset(&diagnostic, 0, sizeof(diagnostic));
 			status = ZEND_NATIVE_EXCEPTION;
 		} else {
+			memset(&diagnostic, 0, sizeof(diagnostic));
+			zend_native_entry_cell_retain_active(
+				dispatch->entry_cell);
+			EG(current_execute_data) = execute_data;
 			zend_native_executor_request_state.execution_depth++;
-			status = zend_native_compiler_execute_observed_active(
-				dispatch->generation->compiler,
-				dispatch->entry_cell, code, execute_data, &diagnostic);
+			status = zend_native_execute_observed_frame(
+				code, execute_data, &diagnostic);
 			zend_native_executor_request_state.execution_depth--;
+			EG(current_execute_data) = previous;
+			zend_native_entry_cell_release_active(
+				dispatch->entry_cell);
 		}
 		goto complete;
 	}
