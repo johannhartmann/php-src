@@ -37,6 +37,10 @@ ZEND_API void zend_native_executor_invalidate(void);
  */
 ZEND_API zend_result zend_native_executor_prepare_script(
 	zend_script *script);
+ZEND_API zend_result zend_native_executor_register_script_owner(
+	zend_op_array *op_array, const zend_script *script);
+ZEND_API zend_result zend_native_executor_register_preloaded_script(
+	const zend_script *script);
 ZEND_API size_t zend_native_executor_persist_calc(
 	const zend_op_array *op_array);
 ZEND_API size_t zend_native_executor_persist(

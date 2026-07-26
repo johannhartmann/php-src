@@ -4725,10 +4725,6 @@ static zend_persistent_script* preload_script_in_shared_memory(zend_persistent_s
 	uint32_t memory_used;
 	uint32_t checkpoint;
 
-#ifdef HAVE_NATIVE_ENGINE
-	zend_accel_prepare_native_script(new_persistent_script);
-#endif
-
 	if (zend_accel_hash_is_full(&ZCSG(hash))) {
 		zend_accel_error_noreturn(ACCEL_LOG_FATAL, "Not enough entries in hash table for preloading. Consider increasing the value for the opcache.max_accelerated_files directive in php.ini.");
 		return NULL;
@@ -4839,6 +4835,13 @@ static void preload_load(size_t orig_map_ptr_static_last)
 			cache += runtime_cache_size;
 		}
 	}
+#ifdef HAVE_NATIVE_ENGINE
+	if (UNEXPECTED(zend_native_executor_register_preloaded_script(
+			script) == FAILURE)) {
+		zend_accel_error_noreturn(ACCEL_LOG_FATAL,
+			"Native preload owner registration failed");
+	}
+#endif
 }
 
 #if HAVE_JIT

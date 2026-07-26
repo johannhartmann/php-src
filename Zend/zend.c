@@ -1113,6 +1113,18 @@ zend_result zend_post_startup(void) /* {{{ */
 
 	startup_done = true;
 
+#ifdef HAVE_NATIVE_ENGINE
+	/*
+	 * OPcache performs preload through the post-startup callback and opens a
+	 * complete request while doing so.  Install the global executor before
+	 * that request so preload follows the same native userland cutover and
+	 * ZTS synchronization is live before zend_activate().
+	 */
+	if (zend_native_executor_startup() == FAILURE) {
+		return FAILURE;
+	}
+#endif
+
 	if (zend_post_startup_cb) {
 		zend_result (*cb)(void) = zend_post_startup_cb;
 
@@ -1165,12 +1177,6 @@ zend_result zend_post_startup(void) /* {{{ */
 	zend_call_stack_init();
 #endif
 	gc_init();
-
-#ifdef HAVE_NATIVE_ENGINE
-	if (zend_native_executor_startup() == FAILURE) {
-		return FAILURE;
-	}
-#endif
 
 	return SUCCESS;
 }
