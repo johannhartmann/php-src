@@ -74,6 +74,7 @@ struct _zend_native_compiler {
 	bool abi_conformance_probe;
 	bool source_probe;
 	bool defer_publication;
+	bool direct_reentry;
 	bool persistent;
 	zend_native_compiled_function **functions;
 	HashTable functions_by_op_array;
@@ -2786,11 +2787,16 @@ static zend_result zend_native_compiler_enter(
 			compiler->function_count;
 	}
 	memset(&compiler->reentry_scope, 0, sizeof(compiler->reentry_scope));
-	if (zend_native_reentry_scope_enter_resolver(
+	zend_result entered = compiler->direct_reentry
+		? zend_native_reentry_scope_enter_resolver_direct(
 			&compiler->reentry_scope, compiler->reentry_bindings,
 			compiler->reentry_binding_count,
-			zend_native_compiler_resolve_reentry,
-			compiler) == FAILURE) {
+			zend_native_compiler_resolve_reentry, compiler)
+		: zend_native_reentry_scope_enter_resolver(
+			&compiler->reentry_scope, compiler->reentry_bindings,
+			compiler->reentry_binding_count,
+			zend_native_compiler_resolve_reentry, compiler);
+	if (entered == FAILURE) {
 		return FAILURE;
 	}
 	compiler->reentry_active = true;
@@ -3071,6 +3077,7 @@ zend_native_compiler *zend_native_compiler_create(
 	compiler->abi_conformance_probe = config->abi_conformance_probe;
 	compiler->source_probe = config->source_probe;
 	compiler->defer_publication = config->defer_publication;
+	compiler->direct_reentry = config->direct_reentry;
 	zend_hash_init(
 		&compiler->source_op_arrays_by_opcodes, 32, NULL, NULL,
 		compiler->persistent);

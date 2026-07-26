@@ -1813,6 +1813,7 @@ complete:
 }
 #endif
 
+#ifndef HAVE_NATIVE_ENGINE
 void phpdbg_execute_ex(zend_execute_data *execute_data) /* {{{ */
 {
 	bool original_in_execution = PHPDBG_G(in_execution);
@@ -2008,6 +2009,7 @@ next:
 	}
 	zend_error_noreturn(E_ERROR, "Arrived at end of main loop which shouldn't happen");
 } /* }}} */
+#endif
 
 /* only if *not* interactive and while executing */
 void phpdbg_force_interruption(void) /* {{{ */ {
