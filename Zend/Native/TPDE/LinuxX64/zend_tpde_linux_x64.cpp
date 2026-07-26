@@ -3536,18 +3536,10 @@ register_operand:
 		zend_tpde_long_assign_op layout;
 
 		if (!zend_tpde_long_assign_op_at(mir, &layout)
-				|| layout.left_offset > INT32_MAX
-				|| layout.right.offset > INT32_MAX
-				|| layout.result_offset > INT32_MAX) {
+				|| layout.left_offset > INT32_MAX - 8
+				|| layout.right.offset > INT32_MAX - 8
+				|| layout.result_offset > INT32_MAX - 8) {
 			return execute_value_operation();
-		}
-		for (auto reg_id : register_file.used_regs()) {
-			tpde::Reg reg{reg_id};
-			if (!register_file.is_fixed(reg)
-					&& register_file.reg_local_idx(reg)
-						!= INVALID_VAL_LOCAL_IDX) {
-				evict_reg(reg);
-			}
 		}
 		auto slow = text_writer.label_create();
 		auto done = text_writer.label_create();
@@ -3564,15 +3556,16 @@ register_operand:
 		auto left_reg = left.alloc_gp();
 		auto right_reg = right.alloc_gp();
 
-		ASM(MOV64rr, slot_reg, frame_reg);
-		ASM(ADD64ri, slot_reg, static_cast<int32_t>(layout.left_offset));
 		ASM(MOV32rm, type_reg,
-			FE_MEM(slot_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.left_offset + offsetof(zval, u1.type_info))));
 		ASM(AND32ri, type_reg, Z_TYPE_MASK);
 		ASM(CMP32ri, type_reg, IS_LONG);
 		generate_raw_jump(Jump::jne, slow);
-		ASM(MOV64rm, left_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
+		ASM(MOV64rm, left_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.left_offset)));
 
 		if (layout.right.literal) {
 			ASM(MOV64rm, slot_reg,
@@ -3584,26 +3577,38 @@ register_operand:
 					static_cast<int32_t>(
 						offsetof(zend_op_array, literals))));
 		} else {
-			ASM(MOV64rr, slot_reg, frame_reg);
+			ASM(MOV32rm, type_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						layout.right.offset
+							+ offsetof(zval, u1.type_info))));
+			ASM(AND32ri, type_reg, Z_TYPE_MASK);
+			ASM(CMP32ri, type_reg, IS_LONG);
+			generate_raw_jump(Jump::jne, slow);
+			ASM(MOV64rm, right_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(layout.right.offset)));
 		}
-		ASM(ADD64ri, slot_reg,
-			static_cast<int32_t>(layout.right.offset));
-		ASM(MOV32rm, type_reg,
-			FE_MEM(slot_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))));
-		ASM(AND32ri, type_reg, Z_TYPE_MASK);
-		ASM(CMP32ri, type_reg, IS_LONG);
-		generate_raw_jump(Jump::jne, slow);
-		ASM(MOV64rm, right_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
-
-		if (layout.has_result) {
-			ASM(MOV64rr, slot_reg, frame_reg);
+		if (layout.right.literal) {
 			ASM(ADD64ri, slot_reg,
-				static_cast<int32_t>(layout.result_offset));
+				static_cast<int32_t>(layout.right.offset));
 			ASM(MOV32rm, type_reg,
 				FE_MEM(slot_reg, 0, FE_NOREG,
 					static_cast<int32_t>(
 						offsetof(zval, u1.type_info))));
+			ASM(AND32ri, type_reg, Z_TYPE_MASK);
+			ASM(CMP32ri, type_reg, IS_LONG);
+			generate_raw_jump(Jump::jne, slow);
+			ASM(MOV64rm, right_reg,
+				FE_MEM(slot_reg, 0, FE_NOREG, 0));
+		}
+
+		if (layout.has_result) {
+			ASM(MOV32rm, type_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						layout.result_offset
+							+ offsetof(zval, u1.type_info))));
 			ASM(TEST32ri, type_reg,
 				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 			generate_raw_jump(Jump::jne, slow);
@@ -3630,22 +3635,25 @@ register_operand:
 			default:
 				return false;
 		}
-		ASM(MOV64rr, slot_reg, frame_reg);
-		ASM(ADD64ri, slot_reg, static_cast<int32_t>(layout.left_offset));
-		ASM(MOV64mr, FE_MEM(slot_reg, 0, FE_NOREG, 0), left_reg);
+		ASM(MOV64mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.left_offset)),
+			left_reg);
 		ASM(MOV32mi,
-			FE_MEM(slot_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))),
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.left_offset + offsetof(zval, u1.type_info))),
 			IS_LONG);
 		if (layout.has_result) {
-			ASM(MOV64rr, slot_reg, frame_reg);
-			ASM(ADD64ri, slot_reg,
-				static_cast<int32_t>(layout.result_offset));
-			ASM(MOV64mr, FE_MEM(slot_reg, 0, FE_NOREG, 0), left_reg);
+			ASM(MOV64mr,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(layout.result_offset)),
+				left_reg);
 			ASM(MOV32mi,
-				FE_MEM(slot_reg, 0, FE_NOREG,
+				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(
-						offsetof(zval, u1.type_info))),
+						layout.result_offset
+							+ offsetof(zval, u1.type_info))),
 				IS_LONG);
 		}
 		if (layout.consume_right) {
@@ -3663,12 +3671,17 @@ register_operand:
 		type.reset();
 		left.reset();
 		right.reset();
+		const auto register_state =
+			zend::native::tpde::
+				capture_conditional_call_register_state(*this);
 		ValuePart frame_argument{
 			tpde::x64::PlatformConfig::GP_BANK, 8};
 		frame_argument.set_value(this, std::move(frame_scratch));
 		if (!execute_value_operation(&frame_argument)) {
 			return false;
 		}
+		zend::native::tpde::restore_conditional_call_register_state(
+			*this, register_state);
 		label_place(done);
 		return true;
 	};
