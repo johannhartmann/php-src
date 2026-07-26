@@ -43,6 +43,30 @@ enum zend_tpde_canonical_slot_state : uint8_t {
 	ZEND_TPDE_CANONICAL_SLOT_DIRTY = 2,
 };
 
+static inline uint32_t zend_tpde_machine_value_zval_type(
+	zend_tpde_machine_value_kind kind)
+{
+	switch (kind) {
+		case ZEND_TPDE_MACHINE_VALUE_BOOL:
+			return IS_FALSE;
+		case ZEND_TPDE_MACHINE_VALUE_I64:
+			return IS_LONG;
+		case ZEND_TPDE_MACHINE_VALUE_F64:
+			return IS_DOUBLE;
+		case ZEND_TPDE_MACHINE_VALUE_STRING_PTR:
+			return IS_STRING;
+		case ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR:
+			return IS_ARRAY;
+		case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
+			return IS_OBJECT;
+		case ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR:
+			return IS_REFERENCE;
+		case ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL:
+			return IS_UNDEF;
+	}
+	return IS_UNDEF;
+}
+
 enum zend_tpde_user_opcode_target_kind : uint8_t {
 	ZEND_TPDE_USER_OPCODE_TARGET_VALUE = 0,
 	ZEND_TPDE_USER_OPCODE_TARGET_JUMP_OP1 = 1,
