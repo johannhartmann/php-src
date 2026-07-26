@@ -3125,6 +3125,11 @@ bool initialize_plan(
 					descriptor->expected_function =
 						plan->instructions[i].entry_cell != nullptr
 							? plan->instructions[i].entry_cell->function : nullptr;
+					if (plan->instructions[i].entry_cell != nullptr
+							&& plan->instructions[i].entry_cell->lease_managed) {
+						descriptor->flags |=
+							ZEND_NATIVE_DIRECT_CALL_GENERATION_LEASED;
+					}
 					descriptor->receiver_kind =
 						ZEND_NATIVE_INTERNAL_RECEIVER_NONE;
 					descriptor->receiver_operand.kind =

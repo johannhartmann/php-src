@@ -4693,6 +4693,9 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 				const bool result_unused =
 					call.direct_call->result_operand.kind
 						== ZEND_MIR_SOURCE_OPERAND_UNUSED;
+				const bool generation_leased =
+					(call.direct_call->flags
+						& ZEND_NATIVE_DIRECT_CALL_GENERATION_LEASED) != 0;
 				const uint32_t argument_count = call.call_argument_count;
 				const uint32_t callee_argument_count =
 					generated_fast_path
@@ -6052,7 +6055,7 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					store_constant(second_reg,
 						static_cast<uint32_t>(offsetof(
 							zend_native_direct_activation,
-							cell_active)), 1, 1);
+							cell_active)), generation_leased ? 0 : 1, 1);
 					store_constant(second_reg,
 						static_cast<uint32_t>(offsetof(
 							zend_native_direct_activation,
@@ -6067,14 +6070,16 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 							zend_native_execution_context,
 							current_execute_data)), 8);
 					store_off(first_reg, 0, callee_reg, 8);
-					load_off(first_reg, cell_reg,
-						static_cast<uint32_t>(offsetof(
-							zend_native_entry_cell, active_calls)), 4);
-					ASM(ADDxi, first_reg, first_reg, 1);
-					store_off(cell_reg,
-						static_cast<uint32_t>(offsetof(
-							zend_native_entry_cell, active_calls)),
-						first_reg, 4);
+					if (!generation_leased) {
+						load_off(first_reg, cell_reg,
+							static_cast<uint32_t>(offsetof(
+								zend_native_entry_cell, active_calls)), 4);
+						ASM(ADDxi, first_reg, first_reg, 1);
+						store_off(cell_reg,
+							static_cast<uint32_t>(offsetof(
+								zend_native_entry_cell, active_calls)),
+							first_reg, 4);
+					}
 
 					/* Load the published entry and call it directly. */
 					first.reset();
@@ -6274,19 +6279,22 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 						static_cast<uint32_t>(offsetof(
 							zend_native_direct_activation, previous)), 8);
 					store_off(probe_reg, 0, activation_reg, 8);
-					auto fast_cell = image_symbol_value(
-						ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
-						call.call_site.target_id);
-					auto fast_cell_scratch =
-						std::move(fast_cell).into_scratch(this);
-					load_off(probe_reg, fast_cell_scratch.cur_reg(),
-						static_cast<uint32_t>(offsetof(
-							zend_native_entry_cell, active_calls)), 4);
-					ASM(SUBxi, probe_reg, probe_reg, 1);
-					store_off(fast_cell_scratch.cur_reg(),
-						static_cast<uint32_t>(offsetof(
-							zend_native_entry_cell, active_calls)),
-						probe_reg, 4);
+					if (!generation_leased) {
+						auto fast_cell = image_symbol_value(
+							ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
+							call.call_site.target_id);
+						auto fast_cell_scratch =
+							std::move(fast_cell).into_scratch(this);
+						load_off(probe_reg, fast_cell_scratch.cur_reg(),
+							static_cast<uint32_t>(offsetof(
+								zend_native_entry_cell, active_calls)), 4);
+						ASM(SUBxi, probe_reg, probe_reg, 1);
+						store_off(fast_cell_scratch.cur_reg(),
+							static_cast<uint32_t>(offsetof(
+								zend_native_entry_cell, active_calls)),
+							probe_reg, 4);
+						fast_cell_scratch.reset();
+					}
 					store_constant(post_frame_reg,
 						static_cast<uint32_t>(
 							offsetof(zend_execute_data, call)), 0, 8);
@@ -6300,7 +6308,6 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					post_callee.reset();
 					activation.reset();
 					probe.reset();
-					fast_cell_scratch.reset();
 					generate_raw_jump(Jump::jmp, successful);
 
 					/* Rare completion retains full exception/interrupt cleanup. */

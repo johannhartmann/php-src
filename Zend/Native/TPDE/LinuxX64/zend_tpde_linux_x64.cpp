@@ -5105,6 +5105,9 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 				const bool result_unused =
 					call.direct_call->result_operand.kind
 						== ZEND_MIR_SOURCE_OPERAND_UNUSED;
+				const bool generation_leased =
+					(call.direct_call->flags
+						& ZEND_NATIVE_DIRECT_CALL_GENERATION_LEASED) != 0;
 				const uint32_t argument_count = call.call_argument_count;
 				const uint32_t callee_argument_count =
 					generated_fast_path
@@ -6704,7 +6707,7 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 							static_cast<int32_t>(offsetof(
 								zend_native_direct_activation,
 								cell_active))),
-						1);
+						generation_leased ? 0 : 1);
 					ASM(MOV8mi,
 						FE_MEM(metadata_second_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
@@ -6728,11 +6731,13 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 					ASM(MOV64mr,
 						FE_MEM(metadata_first_reg, 0, FE_NOREG, 0),
 						callee_reg);
-					ASM(ADD32mi,
-						FE_MEM(cell_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_entry_cell, active_calls))),
-						1);
+					if (!generation_leased) {
+						ASM(ADD32mi,
+							FE_MEM(cell_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_native_entry_cell, active_calls))),
+							1);
+					}
 
 					/* Load the published entry and call it directly. */
 					metadata_first.reset();
@@ -6961,16 +6966,19 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 								zend_native_direct_activation, previous))));
 					ASM(MOV64mr,
 						FE_MEM(probe_reg, 0, FE_NOREG, 0), activation_reg);
-					auto fast_cell = image_symbol_value(
-						ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
-						call.call_site.target_id);
-					auto fast_cell_scratch =
-						std::move(fast_cell).into_scratch(this);
-					ASM(SUB32mi,
-						FE_MEM(fast_cell_scratch.cur_reg(), 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_entry_cell, active_calls))),
-						1);
+					if (!generation_leased) {
+						auto fast_cell = image_symbol_value(
+							ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
+							call.call_site.target_id);
+						auto fast_cell_scratch =
+							std::move(fast_cell).into_scratch(this);
+						ASM(SUB32mi,
+							FE_MEM(fast_cell_scratch.cur_reg(), 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_native_entry_cell, active_calls))),
+							1);
+						fast_cell_scratch.reset();
+					}
 					ASM(MOV64mi,
 						FE_MEM(post_frame_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
@@ -6988,7 +6996,6 @@ bool ZendCompilerX64::compile_inst(IRInstRef instruction, InstRange) {
 					post_callee.reset();
 					activation.reset();
 					probe.reset();
-					fast_cell_scratch.reset();
 					generate_raw_jump(Jump::jmp, successful);
 
 					/* Rare completion retains full exception/interrupt cleanup. */
