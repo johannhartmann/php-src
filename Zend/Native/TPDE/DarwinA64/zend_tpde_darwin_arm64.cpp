@@ -2075,7 +2075,9 @@ bool ZendCompilerA64::compile_inst(
 			zend_tpde_helper_has_unused_operand_payloads(helper);
 		const bool explicit_auxiliary =
 			zend_tpde_helper_has_explicit_auxiliary(helper);
-		if (node.operands.size() != 1
+		if (node.operands.empty()
+				|| node.operands.back()
+					!= IRValueRef{Adaptor::FRAME_VALUE}
 				|| !zend_tpde_helper_has_explicit_operands(helper)
 				|| !mir.has_value_operation) {
 			return false;
@@ -2086,7 +2088,7 @@ bool ZendCompilerA64::compile_inst(
 			builder.add_arg(
 				std::move(*frame_argument), ::tpde::CCAssignment{});
 		} else {
-			builder.add_arg(CallArg{node.operands[0]});
+			builder.add_arg(CallArg{node.operands.back()});
 		}
 		const zend_mir_executable_value_ref &operation =
 			mir.value_operation;
@@ -3173,7 +3175,11 @@ bool ZendCompilerA64::compile_inst(
 		if (!zend_tpde_long_binary_at(mir, &layout)
 				|| layout.left.offset > UINT32_MAX - 8
 				|| layout.right.offset > UINT32_MAX - 8
-				|| layout.result_offset > UINT32_MAX - 8) {
+				|| layout.result_offset > UINT32_MAX - 8
+				|| !node.has_result
+				|| node.operands.size() != 3
+				|| node.operands[2]
+					!= IRValueRef{Adaptor::FRAME_VALUE}) {
 			return string_identity();
 		}
 		auto slow = text_writer.label_create();
@@ -3184,123 +3190,83 @@ bool ZendCompilerA64::compile_inst(
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 		auto frame_scratch = std::move(frame).into_scratch();
 		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg slot{this};
-		ScratchReg type{this};
-		ScratchReg left{this};
-		ScratchReg right{this};
-		auto slot_reg = slot.alloc_gp();
-		auto type_reg = type.alloc_gp();
-		auto left_reg = left.alloc_gp();
-		auto right_reg = right.alloc_gp();
-
-		auto load_long_operand = [&](const zend_tpde_long_operand &operand,
-				auto destination) {
-			auto add_offset = [&](auto base, uint32_t offset) {
-				if (offset <= UINT32_C(4095)) {
-					ASM(ADDxi, slot_reg, base, offset);
-				} else {
-					materialize_constant(
-						offset, DarwinConfig::GP_BANK, 8, type_reg);
-					ASM(ADDx, slot_reg, base, type_reg);
-				}
-			};
-			if (operand.literal) {
-				load_off(slot_reg, frame_reg,
-					static_cast<uint32_t>(
-						offsetof(zend_execute_data, func)), 8);
-				load_off(slot_reg, slot_reg,
-					static_cast<uint32_t>(
-						offsetof(zend_op_array, literals)), 8);
-				add_offset(slot_reg, operand.offset);
-			} else {
-				load_off(type_reg, frame_reg,
-					operand.offset
-						+ static_cast<uint32_t>(
-							offsetof(zval, u1.type_info)),
-					4);
-				ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-				ASM(CMPwi, type_reg, IS_LONG);
-				generate_raw_jump(Jump::Jne, slow);
-				load_off(destination, frame_reg, operand.offset, 8);
-				return;
-			}
-			load_off(type_reg, slot_reg,
-				static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
-			ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-			ASM(CMPwi, type_reg, IS_LONG);
-			generate_raw_jump(Jump::Jne, slow);
-			load_off(destination, slot_reg, 0, 8);
-		};
-		load_long_operand(layout.left, left_reg);
-		load_long_operand(layout.right, right_reg);
-
-		load_off(type_reg, frame_reg,
+		ScratchReg result_value{this};
+		auto result_reg = result_value.alloc_gp();
+		load_off(result_reg, frame_reg,
 			layout.result_offset
 				+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
 			4);
-		ASM(TSTwi, type_reg,
+		ASM(TSTwi, result_reg,
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		generate_raw_jump(Jump::Jne, slow);
 
-		switch (layout.source_opcode) {
-			case ZEND_ADD:
-				ASM(ADDSx, left_reg, left_reg, right_reg);
-				generate_raw_jump(Jump::Jvs, retry_or_slow);
-				materialize_constant(
-					static_cast<uint64_t>(IS_LONG),
-					DarwinConfig::GP_BANK, 4, type_reg);
-				break;
-			case ZEND_SUB:
-				ASM(SUBSx, left_reg, left_reg, right_reg);
-				generate_raw_jump(Jump::Jvs, retry_or_slow);
-				materialize_constant(
-					static_cast<uint64_t>(IS_LONG),
-					DarwinConfig::GP_BANK, 4, type_reg);
-				break;
-			case ZEND_BW_OR:
-				ASM(ORRx, left_reg, left_reg, right_reg);
-				materialize_constant(
-					static_cast<uint64_t>(IS_LONG),
-					DarwinConfig::GP_BANK, 4, type_reg);
-				break;
-			case ZEND_BW_AND:
-				ASM(ANDx, left_reg, left_reg, right_reg);
-				materialize_constant(
-					static_cast<uint64_t>(IS_LONG),
-					DarwinConfig::GP_BANK, 4, type_reg);
-				break;
-			case ZEND_BW_XOR:
-				ASM(EORx, left_reg, left_reg, right_reg);
-				materialize_constant(
-					static_cast<uint64_t>(IS_LONG),
-					DarwinConfig::GP_BANK, 4, type_reg);
-				break;
-			case ZEND_IS_IDENTICAL:
-			case ZEND_IS_EQUAL:
-				ASM(CMPx, left_reg, right_reg);
-				generate_raw_set(Jump::Jeq, left_reg);
-				ASM(ADDwi, type_reg, left_reg, IS_FALSE);
-				break;
-			case ZEND_IS_NOT_IDENTICAL:
-			case ZEND_IS_NOT_EQUAL:
-				ASM(CMPx, left_reg, right_reg);
-				generate_raw_set(Jump::Jne, left_reg);
-				ASM(ADDwi, type_reg, left_reg, IS_FALSE);
-				break;
-			case ZEND_IS_SMALLER:
-				ASM(CMPx, left_reg, right_reg);
-				generate_raw_set(Jump::Jlt, left_reg);
-				ASM(ADDwi, type_reg, left_reg, IS_FALSE);
-				break;
-			case ZEND_IS_SMALLER_OR_EQUAL:
-				ASM(CMPx, left_reg, right_reg);
-				generate_raw_set(Jump::Jle, left_reg);
-				ASM(ADDwi, type_reg, left_reg, IS_FALSE);
-				break;
-			default:
-				return false;
+		{
+			auto [left_ref, left] =
+				val_ref_single(node.operands[0]);
+			auto left_reg = left.load_to_reg();
+			ASM(ORRx, result_reg, left_reg, left_reg);
 		}
-		store_off(frame_reg, layout.result_offset, left_reg, 8);
+		const bool boolean_result =
+			layout.source_opcode == ZEND_IS_IDENTICAL
+			|| layout.source_opcode == ZEND_IS_NOT_IDENTICAL
+			|| layout.source_opcode == ZEND_IS_EQUAL
+			|| layout.source_opcode == ZEND_IS_NOT_EQUAL
+			|| layout.source_opcode == ZEND_IS_SMALLER
+			|| layout.source_opcode == ZEND_IS_SMALLER_OR_EQUAL;
+		{
+			auto [right_ref, right] =
+				val_ref_single(node.operands[1]);
+			auto right_reg = right.load_to_reg();
+			switch (layout.source_opcode) {
+				case ZEND_ADD:
+					ASM(ADDSx, result_reg, result_reg, right_reg);
+					generate_raw_jump(Jump::Jvs, retry_or_slow);
+					break;
+				case ZEND_SUB:
+					ASM(SUBSx, result_reg, result_reg, right_reg);
+					generate_raw_jump(Jump::Jvs, retry_or_slow);
+					break;
+				case ZEND_BW_OR:
+					ASM(ORRx, result_reg, result_reg, right_reg);
+					break;
+				case ZEND_BW_AND:
+					ASM(ANDx, result_reg, result_reg, right_reg);
+					break;
+				case ZEND_BW_XOR:
+					ASM(EORx, result_reg, result_reg, right_reg);
+					break;
+				case ZEND_IS_IDENTICAL:
+				case ZEND_IS_EQUAL:
+					ASM(CMPx, result_reg, right_reg);
+					generate_raw_set(Jump::Jeq, result_reg);
+					break;
+				case ZEND_IS_NOT_IDENTICAL:
+				case ZEND_IS_NOT_EQUAL:
+					ASM(CMPx, result_reg, right_reg);
+					generate_raw_set(Jump::Jne, result_reg);
+					break;
+				case ZEND_IS_SMALLER:
+					ASM(CMPx, result_reg, right_reg);
+					generate_raw_set(Jump::Jlt, result_reg);
+					break;
+				case ZEND_IS_SMALLER_OR_EQUAL:
+					ASM(CMPx, result_reg, right_reg);
+					generate_raw_set(Jump::Jle, result_reg);
+					break;
+				default:
+					return false;
+			}
+		}
+		store_off(frame_reg, layout.result_offset, result_reg, 8);
+		ScratchReg type{this};
+		auto type_reg = type.alloc_gp();
+		if (boolean_result) {
+			ASM(ADDwi, type_reg, result_reg, IS_FALSE);
+		} else {
+			materialize_constant(
+				static_cast<uint64_t>(IS_LONG),
+				DarwinConfig::GP_BANK, 4, type_reg);
+		}
 		store_off(frame_reg,
 			layout.result_offset
 				+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
@@ -3313,17 +3279,43 @@ bool ZendCompilerA64::compile_inst(
 		 * complete call through the canonical Zend-frame path is atomic.
 		 */
 		label_place(retry_or_slow);
-		load_off(type_reg, frame_reg,
+		load_off(result_reg, frame_reg,
 			static_cast<uint32_t>(offsetof(zend_execute_data, call)), 8);
-		ASM(CMPxi, type_reg, 1);
+		ASM(CMPxi, result_reg, 1);
 		generate_raw_jump(Jump::Jne, slow);
 		generate_raw_jump(Jump::jmp, retry);
 
 		label_place(slow);
-		slot.reset();
 		type.reset();
-		left.reset();
-		right.reset();
+		result_value.reset();
+		ScratchReg materialized_type{this};
+		auto materialized_type_reg = materialized_type.alloc_gp();
+		materialize_constant(
+			static_cast<uint64_t>(IS_LONG),
+			DarwinConfig::GP_BANK, 4, materialized_type_reg);
+		if (!layout.left.literal) {
+			auto [left_ref, left] =
+				val_ref_single(node.operands[0]);
+			store_off(frame_reg, layout.left.offset,
+				left.load_to_reg(), 8);
+			store_off(frame_reg,
+				layout.left.offset
+					+ static_cast<uint32_t>(
+						offsetof(zval, u1.type_info)),
+				materialized_type_reg, 4);
+		}
+		if (!layout.right.literal) {
+			auto [right_ref, right] =
+				val_ref_single(node.operands[1]);
+			store_off(frame_reg, layout.right.offset,
+				right.load_to_reg(), 8);
+			store_off(frame_reg,
+				layout.right.offset
+					+ static_cast<uint32_t>(
+						offsetof(zval, u1.type_info)),
+				materialized_type_reg, 4);
+		}
+		materialized_type.reset();
 		const auto register_state =
 			zend::native::tpde::
 				capture_conditional_call_register_state(*this);
@@ -3344,6 +3336,14 @@ bool ZendCompilerA64::compile_inst(
 			return_builder.ret();
 		}
 		label_place(done);
+		{
+			auto [result_ref, result] =
+				result_ref_single(node.result);
+			auto result_reg = result.alloc_reg();
+			load_off(result_reg, frame_reg,
+				layout.result_offset, 8);
+			result.set_modified();
+		}
 		return true;
 	};
 	auto long_assign_op = [&]() {
