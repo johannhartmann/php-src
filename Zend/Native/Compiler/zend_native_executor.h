@@ -2,6 +2,7 @@
 #define ZEND_NATIVE_EXECUTOR_H
 
 #include "Zend/zend.h"
+#include "Zend/Native/Compiler/zend_native_compiler.h"
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
 #include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 
@@ -35,11 +36,24 @@ ZEND_API void zend_native_executor_invalidate(void);
 
 /*
  * OPcache cold-path integration. The slot contains one pointer-free native
- * bundle for the script main root. Persistence copies it verbatim; process
- * publication resolves all Zend and runtime addresses locally.
+ * bundle for the script's selected roots. Persistence copies it verbatim;
+ * process publication resolves all Zend and runtime addresses locally.
+ *
+ * Preload capture records only user codeunits actually entered while the
+ * preload program runs. prepare_script() adds those exact roots and their
+ * statically reachable SCCs to a normal source bundle. The synthetic preload
+ * owner has no executable source main; prepare_preloaded_script() serializes
+ * only captured roots that were moved into that owner. Every unselected
+ * function and method remains lazy.
  */
+ZEND_API void zend_native_executor_begin_preload_capture(void);
+ZEND_API void zend_native_executor_end_preload_capture(void);
 ZEND_API zend_result zend_native_executor_prepare_script(
-	zend_script *script);
+	zend_script *script,
+	zend_native_compile_diagnostic *diagnostic);
+ZEND_API zend_result zend_native_executor_prepare_preloaded_script(
+	zend_script *script,
+	zend_native_compile_diagnostic *diagnostic);
 ZEND_API zend_result zend_native_executor_register_script_owner(
 	zend_op_array *op_array, const zend_script *script);
 ZEND_API zend_result zend_native_executor_register_preloaded_script(
