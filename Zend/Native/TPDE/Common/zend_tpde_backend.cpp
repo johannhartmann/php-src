@@ -580,6 +580,106 @@ zend_mir_scalar_type_mask exact_scalar_from_type_mask(uint32_t type) {
 	}
 }
 
+zend_tpde_machine_value_kind zend_tpde_machine_kind(
+	zend_mir_representation representation,
+	zend_mir_scalar_type_mask exact_type,
+	zend_mir_value_category category)
+{
+	switch (exact_type) {
+		case ZEND_MIR_SCALAR_TYPE_I1:
+			return ZEND_TPDE_MACHINE_VALUE_BOOL;
+		case ZEND_MIR_SCALAR_TYPE_I64:
+			return ZEND_TPDE_MACHINE_VALUE_I64;
+		case ZEND_MIR_SCALAR_TYPE_F64:
+			return ZEND_TPDE_MACHINE_VALUE_F64;
+		default:
+			break;
+	}
+	switch (category) {
+		case ZEND_MIR_VALUE_REFCOUNTED_STRING:
+			return ZEND_TPDE_MACHINE_VALUE_STRING_PTR;
+		case ZEND_MIR_VALUE_REFCOUNTED_CONTAINER_ABSTRACT:
+			return ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR;
+		case ZEND_MIR_VALUE_OBJECT_ABSTRACT:
+			return ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR;
+		case ZEND_MIR_VALUE_REFERENCE_CELL:
+			return ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR;
+		default:
+			break;
+	}
+	if (representation == ZEND_MIR_REPRESENTATION_DOUBLE) {
+		return ZEND_TPDE_MACHINE_VALUE_F64;
+	}
+	if (representation == ZEND_MIR_REPRESENTATION_I1
+			|| representation == ZEND_MIR_REPRESENTATION_I8
+			|| representation == ZEND_MIR_REPRESENTATION_I16
+			|| representation == ZEND_MIR_REPRESENTATION_I32
+			|| representation == ZEND_MIR_REPRESENTATION_I64) {
+		return ZEND_TPDE_MACHINE_VALUE_I64;
+	}
+	return ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
+}
+
+bool zend_tpde_apply_machine_value_facts(
+	const zend_mir_value_view *value_model,
+	const zend_ssa *source_ssa,
+	zend_tpde_value *value)
+{
+	zend_mir_storage_ref storage{};
+	zend_mir_value_category category = ZEND_MIR_VALUE_CATEGORY_UNKNOWN;
+
+	if (value_model != nullptr && source_ssa != nullptr
+			&& source_ssa->vars != nullptr
+			&& value->id < static_cast<uint32_t>(source_ssa->vars_count)
+			&& source_ssa->vars[value->id].var >= 0
+			&& value_model->storage_count != nullptr
+			&& value_model->storage_at != nullptr) {
+		const uint32_t storage_index =
+			static_cast<uint32_t>(source_ssa->vars[value->id].var);
+		const uint32_t storage_count =
+			value_model->storage_count(value_model->context);
+		if (storage_index < storage_count
+				&& value_model->storage_at(
+					value_model->context, storage_index, &storage)
+				&& storage.id == storage_index) {
+			category = storage.category;
+		}
+		if (category != ZEND_MIR_VALUE_CATEGORY_UNKNOWN
+				&& zend_mir_id_is_valid(storage.payload_id)
+				&& value_model->payload_count != nullptr
+				&& value_model->payload_at != nullptr) {
+			zend_mir_payload_ref payload{};
+			const uint32_t payload_count =
+				value_model->payload_count(value_model->context);
+			if (storage.payload_id < payload_count
+					&& value_model->payload_at(value_model->context,
+						storage.payload_id, &payload)
+					&& payload.id == storage.payload_id) {
+				value->refcount_state = payload.refcount_state;
+			}
+		}
+	}
+	value->machine_kind = zend_tpde_machine_kind(
+		value->representation, value->exact_type, category);
+	if (value->constant) {
+		value->location = ZEND_TPDE_MACHINE_LOCATION_REGISTER;
+		value->slot_state = ZEND_TPDE_CANONICAL_SLOT_UNMATERIALIZED;
+	} else if (zend_mir_id_is_valid(value->canonical_storage_id)) {
+		value->location = value->machine_kind
+				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+			? ZEND_TPDE_MACHINE_LOCATION_CANONICAL_FRAME_SLOT
+			: ZEND_TPDE_MACHINE_LOCATION_REGISTER;
+		value->slot_state = value->argument_index >= 0
+			|| value->machine_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+			? ZEND_TPDE_CANONICAL_SLOT_CLEAN
+			: ZEND_TPDE_CANONICAL_SLOT_DIRTY;
+	} else {
+		value->location = ZEND_TPDE_MACHINE_LOCATION_REGISTER;
+		value->slot_state = ZEND_TPDE_CANONICAL_SLOT_UNMATERIALIZED;
+	}
+	return true;
+}
+
 zend_mir_scalar_type_mask exact_scalar_from_zval(const zval *value) {
 	if (value == nullptr) {
 		return ZEND_MIR_SCALAR_TYPE_NONE;
@@ -2209,8 +2309,20 @@ bool initialize_plan(
 				"MIR value table is unreadable or contains duplicate IDs");
 			return false;
 		}
-		plan->values[i] = {value.id, value.representation,
-			ZEND_MIR_SCALAR_TYPE_NONE, ZEND_MIR_ID_INVALID, -1, false, 0};
+		plan->values[i] = {
+			.id = value.id,
+			.representation = value.representation,
+			.exact_type = ZEND_MIR_SCALAR_TYPE_NONE,
+			.canonical_storage_id = ZEND_MIR_ID_INVALID,
+			.ownership = value.ownership,
+			.refcount_state = ZEND_MIR_REFCOUNT_UNKNOWN,
+			.argument_index = -1,
+			.machine_kind = ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
+			.location = ZEND_TPDE_MACHINE_LOCATION_CANONICAL_FRAME_SLOT,
+			.slot_state = ZEND_TPDE_CANONICAL_SLOT_UNMATERIALIZED,
+			.constant = false,
+			.constant_bits = 0,
+		};
 	}
 	if (value_model != nullptr
 			&& (value_model->model_flags
@@ -2317,6 +2429,15 @@ bool initialize_plan(
 		int32_t index = zend_tpde_value_index(plan, fact.value_id);
 		if (index >= 0 && zend_mir_scalar_type_is_exact(fact.exact_type)) {
 			plan->values[index].exact_type = fact.exact_type;
+		}
+	}
+	for (uint32_t i = 0; i < plan->value_count; ++i) {
+		if (!zend_tpde_apply_machine_value_facts(
+				value_model, source_ssa, &plan->values[i])) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"machine value facts do not match source SSA storage");
+			return false;
 		}
 	}
 
