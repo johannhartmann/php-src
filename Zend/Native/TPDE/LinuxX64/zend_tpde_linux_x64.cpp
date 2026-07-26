@@ -2003,12 +2003,41 @@ bool ZendCompilerX64::compile_inst(
 		result.set_modified();
 		return true;
 	};
+	auto fuse_compare_branch = [&](Jump condition) {
+		if (remaining_instructions.from == remaining_instructions.to) {
+			return false;
+		}
+		const IRInstRef next = *remaining_instructions.from;
+		const Adaptor::InstNode &consumer = adaptor->node(next);
+		if (consumer.kind != Adaptor::InstKind::MIR
+				|| consumer.operands.size() != 1
+				|| consumer.operands[0] != node.result
+				|| adaptor->instruction_record(next).opcode
+					!= ZEND_MIR_OPCODE_COND_BRANCH
+				|| this->analyzer.liveness_info(
+					adaptor->val_local_idx(node.result)).ref_count != 2) {
+			return false;
+		}
+		const zend_mir_instruction_record branch =
+			adaptor->instruction_record(next);
+		const auto &successors = adaptor->block_succs(
+			adaptor->block_ref(branch.block_id));
+		if (successors.size() != 2) {
+			return false;
+		}
+		generate_cond_branch(condition, successors[0], successors[1]);
+		adaptor->mark_fused(next);
+		return true;
+	};
 	auto integer_compare = [&](Jump condition) {
 		auto [left_pair, right_pair] = binary();
 		auto &[left_ref, left] = left_pair;
 		auto &[right_ref, right] = right_pair;
-		auto [result_ref, result] = result_ref_single(node.result);
 		ASM(CMP64rr, left.load_to_reg(), right.load_to_reg());
+		if (fuse_compare_branch(condition)) {
+			return true;
+		}
+		auto [result_ref, result] = result_ref_single(node.result);
 		auto result_reg = result.alloc_reg();
 		generate_raw_set(condition, result_reg);
 		result.set_modified();
@@ -2033,8 +2062,11 @@ bool ZendCompilerX64::compile_inst(
 		auto [left_pair, right_pair] = binary();
 		auto &[left_ref, left] = left_pair;
 		auto &[right_ref, right] = right_pair;
-		auto [result_ref, result] = result_ref_single(node.result);
 		ASM(SSE_UCOMISDrr, left.load_to_reg(), right.load_to_reg());
+		if (fuse_compare_branch(condition)) {
+			return true;
+		}
+		auto [result_ref, result] = result_ref_single(node.result);
 		auto result_reg = result.alloc_reg();
 		generate_raw_set(condition, result_reg);
 		result.set_modified();
