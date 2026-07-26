@@ -68,7 +68,6 @@ public:
 		UserOpcodeCallFragment,
 		GeneratorGateway,
 		GeneratorResume,
-		FrameSlotAddress,
 		ZvalTypeLoad,
 		ZvalPayloadLoad,
 		ZvalCopy,
@@ -1229,20 +1228,8 @@ public:
 			if (payload_address == INVALID_VALUE_REF) {
 				continue;
 			}
-			uint32_t operand_offset =
+			const uint32_t operand_offset =
 				static_cast<uint32_t>(operands_.size());
-			operands_.push_back(IRValueRef{FRAME_VALUE});
-			add_node(block_instructions, static_cast<uint32_t>(entry), InstNode{
-				InstKind::FrameSlotAddress,
-				UINT32_MAX,
-				static_cast<uint32_t>(value.argument_index),
-				payload_address,
-				{},
-				operand_offset,
-				1,
-				true,
-				storage_id});
-			operand_offset = static_cast<uint32_t>(operands_.size());
 			operands_.push_back(payload_address);
 			add_node(block_instructions, static_cast<uint32_t>(entry), InstNode{
 				InstKind::ZvalPayloadLoad,
@@ -2130,7 +2117,6 @@ public:
 					switch (node.kind) {
 						case InstKind::ZvalGuardArguments:
 							return argument_guards_.empty();
-						case InstKind::FrameSlotAddress:
 						case InstKind::ZvalTypeLoad:
 						case InstKind::ZvalPayloadLoad:
 						case InstKind::ZvalGuardType:
@@ -2264,6 +2250,28 @@ public:
 			? ZEND_MIR_ID_INVALID
 			: plan_->values[index - MIR_VALUE_BASE].canonical_storage_id;
 	}
+	uint32_t frame_slot_reference_count() const {
+		return static_cast<uint32_t>(derived_values_.size());
+	}
+	IRValueRef frame_slot_reference(uint32_t index) const {
+		return index < derived_values_.size()
+			? IRValueRef{MIR_VALUE_BASE + plan_->value_count + index}
+			: INVALID_VALUE_REF;
+	}
+	bool frame_slot_reference(
+			IRValueRef value, zend_mir_storage_id *storage_id) const {
+		const DerivedValue *derived = derived_value(value);
+		if (derived == nullptr
+				|| derived->representation
+					!= ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER
+				|| !zend_mir_id_is_valid(derived->storage_id)) {
+			return false;
+		}
+		if (storage_id != nullptr) {
+			*storage_id = derived->storage_id;
+		}
+		return true;
+	}
 	bool constant(IRValueRef value, uint64_t *bits) const {
 		uint32_t index = static_cast<uint32_t>(value);
 		if (index < MIR_VALUE_BASE
@@ -2343,7 +2351,8 @@ public:
 	}
 	bool val_ignore_in_liveness_analysis(IRValueRef value) const {
 		uint64_t bits;
-		return constant(value, &bits);
+		return constant(value, &bits)
+			|| frame_slot_reference(value, nullptr);
 	}
 	bool val_is_phi(IRValueRef value) const {
 		uint32_t index = static_cast<uint32_t>(value);
