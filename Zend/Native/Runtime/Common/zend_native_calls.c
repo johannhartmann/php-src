@@ -13,15 +13,6 @@
 
 #include <string.h>
 
-#ifdef ZTS
-# include "TSRM/TSRM.h"
-#endif
-
-static void (*zend_native_restore_execute_ex)(zend_execute_data *execute_data);
-static uint32_t zend_native_reentry_users;
-#ifdef ZTS
-static MUTEX_T zend_native_reentry_mutex;
-#endif
 ZEND_TLS zend_native_reentry_scope *zend_native_active_reentry_scope;
 
 ZEND_TLS zend_native_direct_activation *zend_native_active_direct_call;
@@ -538,21 +529,6 @@ cleanup:
 	return EG(exception) == NULL ? status : ZEND_NATIVE_EXCEPTION;
 }
 
-static void zend_native_reentry_lock(void)
-{
-#ifdef ZTS
-	ZEND_ASSERT(zend_native_reentry_mutex != NULL);
-	tsrm_mutex_lock(zend_native_reentry_mutex);
-#endif
-}
-
-static void zend_native_reentry_unlock(void)
-{
-#ifdef ZTS
-	tsrm_mutex_unlock(zend_native_reentry_mutex);
-#endif
-}
-
 static zend_native_entry_cell *zend_native_reentry_find(
 	zend_native_reentry_scope *scope, zend_function *function)
 {
@@ -683,117 +659,14 @@ zend_native_user_opcode_result zend_native_user_opcode_invoke(
 		execute_data, ZEND_USER_OPCODE_CONTINUE);
 }
 
-static void zend_native_reentry_execute_ex(zend_execute_data *execute_data)
-{
-	zend_native_reentry_scope *scope = zend_native_active_reentry_scope;
-	zend_native_entry_cell *cell;
-	const zend_native_code *code;
-	zend_execute_data *previous = execute_data->prev_execute_data;
-	zend_native_status status;
-
-	if (scope == NULL) {
-		zend_throw_error(NULL,
-			"Userland reentry requires an active native component");
-		ZEND_OBSERVER_FCALL_END(execute_data, NULL);
-		EG(current_execute_data) = previous;
-		return;
-	}
-	cell = zend_native_reentry_resolve(execute_data->func);
-	if (cell == NULL
-			|| (code = zend_native_entry_cell_load(cell)) == NULL) {
-		zend_throw_error(NULL,
-			"Userland reentry target is not part of the native component");
-		ZEND_OBSERVER_FCALL_END(execute_data, NULL);
-		EG(current_execute_data) = previous;
-		return;
-	}
-	if (cell->frame_probe != NULL) {
-		cell->frame_probe(cell->frame_probe_context, previous, execute_data);
-	}
-	zend_native_entry_cell_retain_active(cell);
-	EG(current_execute_data) = execute_data;
-	status = zend_native_execute_observed_frame(code, execute_data, NULL);
-	EG(current_execute_data) = previous;
-	zend_native_entry_cell_release_active(cell);
-	if (status == ZEND_NATIVE_BAILOUT) {
-		zend_bailout();
-	}
-}
-
 zend_result zend_native_reentry_startup(void)
 {
-#ifdef ZTS
-	if (zend_native_reentry_mutex != NULL) {
-		return FAILURE;
-	}
-	zend_native_reentry_mutex = tsrm_mutex_alloc();
-	if (zend_native_reentry_mutex == NULL) {
-		return FAILURE;
-	}
-#endif
-	if (zend_native_restore_execute_ex != NULL
-			|| zend_native_reentry_users != 0) {
-#ifdef ZTS
-		tsrm_mutex_free(zend_native_reentry_mutex);
-		zend_native_reentry_mutex = NULL;
-#endif
-		return FAILURE;
-	}
-	return SUCCESS;
+	return zend_native_active_reentry_scope == NULL ? SUCCESS : FAILURE;
 }
 
 void zend_native_reentry_shutdown(void)
 {
-	zend_native_reentry_lock();
-	if (zend_execute_ex == zend_native_reentry_execute_ex) {
-		zend_execute_ex = zend_native_restore_execute_ex;
-	}
-	zend_native_restore_execute_ex = NULL;
-	zend_native_reentry_users = 0;
 	zend_native_active_reentry_scope = NULL;
-	zend_native_reentry_unlock();
-#ifdef ZTS
-	tsrm_mutex_free(zend_native_reentry_mutex);
-	zend_native_reentry_mutex = NULL;
-#endif
-}
-
-zend_result zend_native_reentry_install(void)
-{
-	zend_result result = FAILURE;
-
-	zend_native_reentry_lock();
-	if (zend_native_reentry_users == 0) {
-		if (zend_native_restore_execute_ex == NULL
-				&& zend_execute_ex != zend_native_reentry_execute_ex) {
-			zend_native_restore_execute_ex = zend_execute_ex;
-			zend_execute_ex = zend_native_reentry_execute_ex;
-			zend_native_reentry_users = 1;
-			result = SUCCESS;
-		}
-	} else if (zend_native_reentry_users != UINT32_MAX
-			&& zend_native_restore_execute_ex != NULL
-			&& zend_execute_ex == zend_native_reentry_execute_ex) {
-		zend_native_reentry_users++;
-		result = SUCCESS;
-	}
-	zend_native_reentry_unlock();
-	return result;
-}
-
-void zend_native_reentry_uninstall(void)
-{
-	zend_native_reentry_lock();
-	if (zend_native_reentry_users != 0) {
-		zend_native_reentry_users--;
-		if (zend_native_reentry_users == 0) {
-			if (zend_execute_ex == zend_native_reentry_execute_ex) {
-				zend_execute_ex = zend_native_restore_execute_ex;
-			}
-			zend_native_restore_execute_ex = NULL;
-		}
-	}
-	zend_native_reentry_unlock();
 }
 
 zend_result zend_native_reentry_scope_enter(
@@ -810,8 +683,7 @@ static zend_result zend_native_reentry_scope_enter_resolver_impl(
 	const zend_native_reentry_binding *bindings,
 	uint32_t binding_count,
 	zend_native_reentry_resolver_t resolver,
-	void *resolver_context,
-	bool install_execute_hook)
+	void *resolver_context)
 {
 	uint32_t index;
 
@@ -820,19 +692,14 @@ static zend_result zend_native_reentry_scope_enter_resolver_impl(
 			|| (binding_count == 0 && resolver == NULL)) {
 		return FAILURE;
 	}
-	if (install_execute_hook) {
-		for (index = 0; index < binding_count; index++) {
-			if (bindings[index].function == NULL
-					|| bindings[index].entry_cell == NULL
-					|| bindings[index].entry_cell->function
-						!= bindings[index].function
-					|| bindings[index].entry_cell->state
-						!= ZEND_NATIVE_ENTRY_READY
-					|| bindings[index].entry_cell->code == NULL) {
-				return FAILURE;
-			}
-		}
-		if (zend_native_reentry_install() == FAILURE) {
+	for (index = 0; index < binding_count; index++) {
+		if (bindings[index].function == NULL
+				|| bindings[index].entry_cell == NULL
+				|| bindings[index].entry_cell->function
+					!= bindings[index].function
+				|| bindings[index].entry_cell->state
+					!= ZEND_NATIVE_ENTRY_READY
+				|| bindings[index].entry_cell->code == NULL) {
 			return FAILURE;
 		}
 	}
@@ -841,7 +708,6 @@ static zend_result zend_native_reentry_scope_enter_resolver_impl(
 	scope->resolver = resolver;
 	scope->resolver_context = resolver_context;
 	scope->previous = zend_native_active_reentry_scope;
-	scope->execute_hook_installed = install_execute_hook;
 	zend_native_active_reentry_scope = scope;
 	return SUCCESS;
 }
@@ -854,8 +720,7 @@ zend_result zend_native_reentry_scope_enter_resolver(
 	void *resolver_context)
 {
 	return zend_native_reentry_scope_enter_resolver_impl(
-		scope, bindings, binding_count, resolver, resolver_context,
-		true);
+		scope, bindings, binding_count, resolver, resolver_context);
 }
 
 zend_result zend_native_reentry_scope_enter_resolver_direct(
@@ -866,26 +731,19 @@ zend_result zend_native_reentry_scope_enter_resolver_direct(
 	void *resolver_context)
 {
 	return zend_native_reentry_scope_enter_resolver_impl(
-		scope, bindings, binding_count, resolver, resolver_context,
-		false);
+		scope, bindings, binding_count, resolver, resolver_context);
 }
 
 void zend_native_reentry_scope_leave(zend_native_reentry_scope *scope)
 {
 	ZEND_ASSERT(scope != NULL && zend_native_active_reentry_scope == scope);
 	if (scope != NULL && zend_native_active_reentry_scope == scope) {
-		bool execute_hook_installed = scope->execute_hook_installed;
-
 		zend_native_active_reentry_scope = scope->previous;
 		scope->bindings = NULL;
 		scope->binding_count = 0;
 		scope->resolver = NULL;
 		scope->resolver_context = NULL;
 		scope->previous = NULL;
-		scope->execute_hook_installed = false;
-		if (execute_hook_installed) {
-			zend_native_reentry_uninstall();
-		}
 	}
 }
 
@@ -1371,6 +1229,23 @@ static void zend_native_call_release_target(zend_execute_data *call)
 	} else if ((call_info & ZEND_CALL_CLOSURE) != 0) {
 		OBJ_RELEASE(ZEND_CLOSURE_OBJECT(call->func));
 	}
+}
+
+static void zend_native_call_release_generator_source_target(
+	zend_execute_data *call)
+{
+	/*
+	 * ZEND_GENERATOR_CREATE copies the call frame to the generator heap frame.
+	 * For a Closure, the invocation reference owned by the source frame becomes
+	 * generator->func ownership and is released by the generator object
+	 * destructor.  A receiver marked RELEASE_THIS is separately retained by
+	 * ZEND_GENERATOR_CREATE and must still be released with the source frame.
+	 */
+	if ((ZEND_CALL_INFO(call) & ZEND_CALL_CLOSURE) != 0
+			&& (ZEND_CALL_INFO(call) & ZEND_CALL_RELEASE_THIS) == 0) {
+		return;
+	}
+	zend_native_call_release_target(call);
 }
 
 static zval *zend_native_call_callable_operand(
@@ -2022,12 +1897,7 @@ static zend_native_status zend_native_call_invoke(
 	EG(current_execute_data) = caller;
 	zend_native_entry_cell_release_active(cell);
 	if (status == ZEND_NATIVE_GENERATOR_CREATED) {
-		/*
-		 * ZEND_GENERATOR_CREATE retained the receiver or Closure for the heap
-		 * frame. Release the original call-frame ownership exactly as the VM
-		 * does when it removes that frame.
-		 */
-		zend_native_call_release_target(call);
+		zend_native_call_release_generator_source_target(call);
 		status = ZEND_NATIVE_RETURNED;
 	} else {
 		zend_native_call_release_target(call);
@@ -2212,7 +2082,12 @@ static void zend_native_call_direct_release(
 	EG(current_execute_data) = activation->caller;
 	zend_native_active_direct_call = activation->previous;
 	if (activation->dynamic_target) {
-		zend_native_call_release_target(activation->callee);
+		if (activation->generator_created) {
+			zend_native_call_release_generator_source_target(
+				activation->callee);
+		} else {
+			zend_native_call_release_target(activation->callee);
+		}
 	} else {
 		zend_native_call_direct_release_receiver(activation->callee);
 	}
@@ -2517,6 +2392,7 @@ zend_native_direct_call_result zend_native_call_direct_leave(
 		activation->frame_initialized = false;
 	}
 	if (status == ZEND_NATIVE_GENERATOR_CREATED) {
+		activation->generator_created = true;
 		status = ZEND_NATIVE_RETURNED;
 	}
 	return_value = activation->uses_discarded_return
@@ -2856,6 +2732,7 @@ zend_native_direct_call_result zend_native_call_dynamic_leave(
 		activation->frame_initialized = false;
 	}
 	if (status == ZEND_NATIVE_GENERATOR_CREATED) {
+		activation->generator_created = true;
 		status = ZEND_NATIVE_RETURNED;
 	}
 	if (status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
