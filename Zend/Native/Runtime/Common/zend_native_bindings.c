@@ -45,7 +45,8 @@ static bool zend_native_dynamic_decode_explicit_operand(
 	memset(operand, 0, sizeof(*operand));
 	if (kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
 		*operand_type = IS_UNUSED;
-		return index == ZEND_MIR_ID_INVALID;
+		operand->num = index;
+		return true;
 	}
 	if (kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
 		if (index >= execute_data->func->op_array.last_literal) {

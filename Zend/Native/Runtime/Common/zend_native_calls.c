@@ -1444,8 +1444,7 @@ void zend_native_call_begin(
 	uint32_t initial_argument_count;
 	uint32_t index;
 
-	if (caller == NULL || cell == NULL || descriptor == NULL
-			|| caller->call != NULL) {
+	if (caller == NULL || cell == NULL || descriptor == NULL) {
 		zend_native_call_abort("Invalid pending native call state");
 	}
 	if (cell->state != ZEND_NATIVE_ENTRY_READY || cell->code == NULL
@@ -1726,7 +1725,7 @@ void zend_native_call_begin(
 	for (index = 0; index < initial_argument_count; index++) {
 		ZVAL_UNDEF(ZEND_CALL_ARG(call, index + 1));
 	}
-	call->prev_execute_data = caller;
+	call->prev_execute_data = caller->call;
 	caller->call = call;
 }
 
@@ -1836,6 +1835,7 @@ static zend_native_status zend_native_call_invoke(
 	zval *return_value)
 {
 	zend_execute_data *call;
+	zend_execute_data *pending_call;
 	const zend_native_code *code = NULL;
 	zend_native_status status;
 
@@ -1844,6 +1844,7 @@ static zend_native_status zend_native_call_invoke(
 		zend_native_call_abort("Invalid native invocation state");
 	}
 	call = caller->call;
+	pending_call = call->prev_execute_data;
 	if ((call->func->common.fn_flags & ZEND_ACC_CALL_VIA_TRAMPOLINE) != 0
 			&& call->func->type == ZEND_USER_FUNCTION) {
 		zend_function *trampoline = call->func;
@@ -1912,7 +1913,7 @@ static zend_native_status zend_native_call_invoke(
 		}
 		zend_native_call_release_target(call);
 		zend_vm_stack_free_call_frame(call);
-		caller->call = NULL;
+		caller->call = pending_call;
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if ((ZEND_CALL_INFO(call) & ZEND_CALL_MAY_HAVE_UNDEF) != 0
@@ -1924,7 +1925,7 @@ static zend_native_status zend_native_call_invoke(
 		}
 		zend_native_call_release_target(call);
 		zend_vm_stack_free_call_frame(call);
-		caller->call = NULL;
+		caller->call = pending_call;
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (call->func == (zend_function *) &zend_pass_function) {
@@ -1935,7 +1936,7 @@ static zend_native_status zend_native_call_invoke(
 		}
 		ZVAL_NULL(return_value);
 		zend_vm_stack_free_call_frame(call);
-		caller->call = NULL;
+		caller->call = pending_call;
 		return ZEND_NATIVE_RETURNED;
 	}
 	if (call->func->type == ZEND_INTERNAL_FUNCTION) {
@@ -1952,6 +1953,7 @@ static zend_native_status zend_native_call_invoke(
 	 * entry cell owns code for that canonical opcode body; frame initialization
 	 * must nevertheless use the function actually selected by PHP so visibility,
 	 * late-static binding, and closure-local state retain their runtime meaning. */
+	caller->call = pending_call;
 	zend_init_func_execute_data(call, &call->func->op_array, NULL);
 	EG(current_execute_data) = caller;
 	if (cell->frame_probe != NULL) {
@@ -1980,7 +1982,6 @@ static zend_native_status zend_native_call_invoke(
 		status = ZEND_NATIVE_EXCEPTION;
 	}
 	zend_vm_stack_free_call_frame(call);
-	caller->call = NULL;
 	return status;
 }
 
@@ -2154,7 +2155,7 @@ static void zend_native_call_direct_release(
 		zval_ptr_dtor(&activation->discarded_return);
 		ZVAL_UNDEF(&activation->discarded_return);
 	}
-	activation->caller->call = NULL;
+	activation->caller->call = activation->pending_call;
 	EG(current_execute_data) = activation->caller;
 	zend_native_active_direct_call = activation->previous;
 	if (activation->dynamic_target) {
@@ -2203,7 +2204,6 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 	if (caller == NULL || caller->func == NULL || context == NULL
 			|| !ZEND_USER_CODE(caller->func->type)
 			|| cell == NULL || descriptor == NULL
-			|| caller->call != NULL
 			|| (code = zend_native_entry_cell_load(cell)) == NULL
 			|| cell->function == NULL
 			|| cell->function != descriptor->expected_function
@@ -2361,6 +2361,7 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 	memset(activation, 0, sizeof(*activation));
 	activation->caller = caller;
 	activation->callee = call;
+	activation->pending_call = caller->call;
 	activation->cell = cell;
 	activation->code = code;
 	activation->descriptor = descriptor;
@@ -2575,6 +2576,7 @@ static zend_native_status zend_native_call_dynamic_internal_entry(
 		zend_throw_error(NULL, "Invalid dynamic internal native call");
 		return ZEND_NATIVE_EXCEPTION;
 	}
+	execute_data->prev_execute_data = activation->caller;
 	EG(current_execute_data) = execute_data;
 	if (EG(exception) != NULL) {
 		goto complete;
@@ -2640,7 +2642,6 @@ zend_native_direct_call_entry zend_native_call_dynamic_enter(
 	if (caller == NULL || caller->func == NULL || context == NULL
 			|| !ZEND_USER_CODE(caller->func->type)
 			|| cell == NULL || descriptor == NULL
-			|| caller->call != NULL
 			|| descriptor->argument_count > ZEND_MIR_ID_MAX
 			|| descriptor->initial_argument_count
 				> descriptor->argument_count
@@ -2706,6 +2707,7 @@ zend_native_direct_call_entry zend_native_call_dynamic_enter(
 	memset(activation, 0, sizeof(*activation));
 	activation->caller = caller;
 	activation->callee = call;
+	activation->pending_call = call->prev_execute_data;
 	activation->cell = actual_cell;
 	activation->code = code;
 	activation->descriptor = descriptor;
@@ -2886,7 +2888,7 @@ void zend_native_call_direct_unwind(zend_execute_data *outermost)
 			zval_ptr_dtor(&activation->discarded_return);
 			ZVAL_UNDEF(&activation->discarded_return);
 		}
-		activation->caller->call = NULL;
+		activation->caller->call = activation->pending_call;
 		EG(current_execute_data) = caller;
 		zend_native_active_direct_call = activation->previous;
 		if (activation->dynamic_target) {
@@ -2994,20 +2996,23 @@ zend_native_status zend_native_call_invoke_finish_source(
 	}
 	if (descriptor->do_opcode == ZEND_CALLABLE_CONVERT) {
 		zend_execute_data *call = caller->call;
+		zend_execute_data *pending_call;
 
 		if (call == NULL || EG(exception) != NULL) {
 			return ZEND_NATIVE_EXCEPTION;
 		}
+		pending_call = call->prev_execute_data;
 		zend_closure_from_frame(return_value, call);
 		if ((ZEND_CALL_INFO(call) & ZEND_CALL_RELEASE_THIS) != 0) {
 			OBJ_RELEASE(Z_OBJ(call->This));
 		}
 		zend_vm_stack_free_call_frame(call);
-		caller->call = NULL;
+		caller->call = pending_call;
 		return ZEND_NATIVE_RETURNED;
 	}
 	if (descriptor->do_opcode == ZEND_CALLABLE_CONVERT_PARTIAL) {
 		zend_execute_data *call = caller->call;
+		zend_execute_data *pending_call;
 		void **cache_slot;
 		zval *named_positions = NULL;
 		zend_op_array *op_array = &caller->func->op_array;
@@ -3019,6 +3024,7 @@ zend_native_status zend_native_call_invoke_finish_source(
 					> op_array->cache_size - descriptor->do_op1_payload) {
 			return ZEND_NATIVE_EXCEPTION;
 		}
+		pending_call = call->prev_execute_data;
 		if (descriptor->do_op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
 			named_positions = zend_native_direct_operand(
 				caller, &descriptor->do_op2, true);
@@ -3055,7 +3061,7 @@ zend_native_status zend_native_call_invoke_finish_source(
 			OBJ_RELEASE(ZEND_CLOSURE_OBJECT(call->func));
 		}
 		zend_vm_stack_free_call_frame(call);
-		caller->call = NULL;
+		caller->call = pending_call;
 		return EG(exception) == NULL
 			? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
 	}

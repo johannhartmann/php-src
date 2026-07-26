@@ -127,13 +127,15 @@ static inline bool zend_tpde_helper_has_explicit_operands(
 			&& helper <= ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_UNSET);
 }
 
-static inline bool zend_tpde_helper_has_object_operand_payloads(
+static inline bool zend_tpde_helper_has_unused_operand_payloads(
 	zend_native_runtime_helper_id helper)
 {
 	return (helper >= ZEND_NATIVE_HELPER_OBJECT_DECLARE_ANON_CLASS
 			&& helper <= ZEND_NATIVE_HELPER_OBJECT_BIND_STATIC)
 		|| (helper >= ZEND_NATIVE_HELPER_OBJECT_FETCH_CLASS_NAME
 			&& helper <= ZEND_NATIVE_HELPER_OBJECT_DECLARE_CLASS_DELAYED)
+		|| (helper >= ZEND_NATIVE_HELPER_DYNAMIC_FETCH_R
+			&& helper <= ZEND_NATIVE_HELPER_DYNAMIC_INCLUDE_OR_EVAL)
 		|| helper == ZEND_NATIVE_HELPER_VALUE_CHECK_FUNC_ARG
 		|| helper == ZEND_NATIVE_HELPER_VALUE_CHECK_UNDEF_ARGS;
 }

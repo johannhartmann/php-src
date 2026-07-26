@@ -1408,6 +1408,15 @@ static void zend_accel_discard_script(zend_persistent_script *persistent_script)
 
 	persistent_script->corrupted = true;
 	persistent_script->timestamp = 0;
+#ifdef HAVE_NATIVE_ENGINE
+	/*
+	 * Keep already entered and suspended native frames on their immutable
+	 * generation. The next request retires the process-local mappings after
+	 * they reach quiescence and publishes a fresh generation for the
+	 * replacement script.
+	 */
+	zend_native_executor_invalidate();
+#endif
 	ZSMMG(wasted_shared_memory) += persistent_script->dynamic_members.memory_consumption;
 	if (ZSMMG(memory_exhausted)) {
 		zend_accel_restart_reason reason =
@@ -1464,9 +1473,6 @@ zend_result zend_accel_invalidate(zend_string *filename, bool force)
 			zend_accel_lock_discard_script(persistent_script);
 			SHM_PROTECT();
 			HANDLE_UNBLOCK_INTERRUPTIONS();
-#ifdef HAVE_NATIVE_ENGINE
-			zend_native_executor_invalidate();
-#endif
 		}
 
 		file_handle.opened_path = NULL;

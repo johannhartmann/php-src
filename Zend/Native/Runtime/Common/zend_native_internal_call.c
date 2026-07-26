@@ -158,7 +158,7 @@ static zend_result zend_native_internal_call_begin_explicit(
 	uint32_t call_info = ZEND_CALL_NESTED_FUNCTION;
 	uint32_t index;
 
-	if (caller == NULL || caller->call != NULL || caller->func == NULL
+	if (caller == NULL || caller->func == NULL
 			|| !ZEND_USER_CODE(caller->func->type)
 			|| cell == NULL || cell->function == NULL
 			|| cell->function->type != ZEND_INTERNAL_FUNCTION
@@ -230,7 +230,7 @@ static zend_result zend_native_internal_call_begin_explicit(
 	for (index = 0; index < descriptor->initial_argument_count; index++) {
 		ZVAL_UNDEF(ZEND_CALL_ARG(call, index + 1));
 	}
-	call->prev_execute_data = caller;
+	call->prev_execute_data = caller->call;
 	caller->call = call;
 	caller->opline = &caller->func->op_array.opcodes[
 		descriptor->init_source_position];
@@ -934,8 +934,12 @@ zend_result zend_native_call_set_explicit_argument(
 		ZVAL_COPY(target, value);
 		return SUCCESS;
 	}
-	if ((argument->source_opcode == ZEND_SEND_VAR_NO_REF
-			|| argument->source_opcode == ZEND_SEND_VAR_NO_REF_EX)
+	/*
+	 * ZEND_SEND_VAR_NO_REF_EX has already resolved the callee above.  When
+	 * its parameter is by-value, the VM takes the ordinary send_var path.
+	 * Only the non-EX opcode unconditionally diagnoses a non-reference VAR.
+	 */
+	if (argument->source_opcode == ZEND_SEND_VAR_NO_REF
 			&& !Z_ISREF_P(value)) {
 		ZVAL_COPY(target, value);
 		ZVAL_NEW_REF(target, target);
@@ -979,6 +983,7 @@ zend_native_status zend_native_internal_call_invoke_finish(
 	zval *return_value)
 {
 	zend_native_internal_execution_state *state;
+	zend_execute_data *pending_call;
 	zend_native_status status;
 
 	if (caller == NULL || caller->call == NULL || cell == NULL
@@ -989,6 +994,9 @@ zend_native_status zend_native_internal_call_invoke_finish(
 	state = emalloc(sizeof(*state));
 	state->caller = caller;
 	state->call = caller->call;
+	pending_call = state->call->prev_execute_data;
+	state->call->prev_execute_data = caller;
+	caller->call = pending_call;
 	state->return_value = return_value;
 	state->status = ZEND_NATIVE_BAILOUT;
 	state->observer_started = false;
@@ -1059,7 +1067,6 @@ zend_native_status zend_native_internal_call_invoke_finish(
 		zend_free_trampoline(state->call->func);
 	}
 	zend_vm_stack_free_call_frame(state->call);
-	state->caller->call = NULL;
 	if (state->status != ZEND_NATIVE_RETURNED
 			&& !Z_ISUNDEF_P(state->return_value)) {
 		zval_ptr_dtor(state->return_value);
