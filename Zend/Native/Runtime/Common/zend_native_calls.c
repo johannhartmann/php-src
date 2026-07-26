@@ -653,9 +653,9 @@ zend_native_user_opcode_result zend_native_user_opcode_invoke(
 		cell->frame_probe(
 			cell->frame_probe_context, execute_data, entered);
 	}
-	cell->active_calls++;
+	zend_native_entry_cell_retain_active(cell);
 	status = zend_native_execute_observed_frame(code, entered, NULL);
-	cell->active_calls--;
+	zend_native_entry_cell_release_active(cell);
 	EG(current_execute_data) = execute_data;
 	zend_vm_stack_free_call_frame(entered);
 	if (status == ZEND_NATIVE_BAILOUT) {
@@ -692,11 +692,11 @@ static void zend_native_reentry_execute_ex(zend_execute_data *execute_data)
 	if (cell->frame_probe != NULL) {
 		cell->frame_probe(cell->frame_probe_context, previous, execute_data);
 	}
-	cell->active_calls++;
+	zend_native_entry_cell_retain_active(cell);
 	EG(current_execute_data) = execute_data;
 	status = zend_native_execute_observed_frame(code, execute_data, NULL);
 	EG(current_execute_data) = previous;
-	cell->active_calls--;
+	zend_native_entry_cell_release_active(cell);
 	if (status == ZEND_NATIVE_BAILOUT) {
 		zend_bailout();
 	}
@@ -1996,11 +1996,11 @@ static zend_native_status zend_native_call_invoke(
 	}
 	ZVAL_UNDEF(return_value);
 	call->return_value = return_value;
-	cell->active_calls++;
+	zend_native_entry_cell_retain_active(cell);
 	EG(current_execute_data) = call;
 	status = zend_native_execute_frame(code, call, NULL);
 	EG(current_execute_data) = caller;
-	cell->active_calls--;
+	zend_native_entry_cell_release_active(cell);
 	if (status == ZEND_NATIVE_GENERATOR_CREATED) {
 		/*
 		 * ZEND_GENERATOR_CREATE moves the call target's retained Closure
@@ -2180,9 +2180,8 @@ static void zend_native_call_direct_release(
 		ZEND_DEL_CALL_FLAG(
 			activation->callee, ZEND_CALL_HAS_EXTRA_NAMED_PARAMS);
 	}
-	if (activation->cell_active && activation->cell != NULL
-			&& activation->cell->active_calls != 0) {
-		activation->cell->active_calls--;
+	if (activation->cell_active && activation->cell != NULL) {
+		zend_native_entry_cell_release_active(activation->cell);
 		activation->cell_active = false;
 	}
 	if (activation->uses_discarded_return
@@ -2447,7 +2446,7 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 	if (cell->frame_probe != NULL) {
 		cell->frame_probe(cell->frame_probe_context, caller, call);
 	}
-	cell->active_calls++;
+	zend_native_entry_cell_retain_active(cell);
 	activation->cell_active = true;
 	EG(current_execute_data) = call;
 	if (context->observers_enabled) {
@@ -2792,7 +2791,7 @@ zend_native_direct_call_entry zend_native_call_dynamic_enter(
 		actual_cell->frame_probe(
 			actual_cell->frame_probe_context, caller, call);
 	}
-	actual_cell->active_calls++;
+	zend_native_entry_cell_retain_active(actual_cell);
 	activation->cell_active = true;
 	EG(current_execute_data) = call;
 	if (context->observers_enabled) {
@@ -2913,9 +2912,8 @@ void zend_native_call_direct_unwind(zend_execute_data *outermost)
 			ZEND_DEL_CALL_FLAG(
 				activation->callee, ZEND_CALL_HAS_EXTRA_NAMED_PARAMS);
 		}
-		if (activation->cell_active && activation->cell != NULL
-				&& activation->cell->active_calls != 0) {
-			activation->cell->active_calls--;
+		if (activation->cell_active && activation->cell != NULL) {
+			zend_native_entry_cell_release_active(activation->cell);
 			activation->cell_active = false;
 		}
 		if (activation->uses_discarded_return

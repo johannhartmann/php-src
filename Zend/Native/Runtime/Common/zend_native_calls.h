@@ -40,6 +40,7 @@ typedef struct _zend_native_entry_cell {
 	uint64_t retired_epoch;
 	zend_native_frame_probe_t frame_probe;
 	void *frame_probe_context;
+	bool lease_managed;
 } zend_native_entry_cell;
 
 static zend_always_inline const zend_native_code *
@@ -52,6 +53,40 @@ static zend_always_inline bool zend_native_entry_cell_is_ready(
 	const zend_native_entry_cell *cell)
 {
 	return zend_native_entry_cell_load(cell) != NULL;
+}
+
+static zend_always_inline void zend_native_entry_cell_retain_active(
+	zend_native_entry_cell *cell)
+{
+	if (!cell->lease_managed) {
+		cell->active_calls++;
+	}
+}
+
+static zend_always_inline void zend_native_entry_cell_release_active(
+	zend_native_entry_cell *cell)
+{
+	if (!cell->lease_managed) {
+		ZEND_ASSERT(cell->active_calls != 0);
+		cell->active_calls--;
+	}
+}
+
+static zend_always_inline void zend_native_entry_cell_retain_suspended(
+	zend_native_entry_cell *cell)
+{
+	if (!cell->lease_managed) {
+		cell->suspended_frames++;
+	}
+}
+
+static zend_always_inline void zend_native_entry_cell_release_suspended(
+	zend_native_entry_cell *cell)
+{
+	if (!cell->lease_managed) {
+		ZEND_ASSERT(cell->suspended_frames != 0);
+		cell->suspended_frames--;
+	}
 }
 
 typedef struct _zend_native_reentry_binding {
