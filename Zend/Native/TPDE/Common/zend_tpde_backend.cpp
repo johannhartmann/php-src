@@ -3845,10 +3845,14 @@ bool initialize_plan(
 		if (!zend_mir_id_is_valid(effect.source_position_id)
 				|| (effect.kind == ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE
 					? !zend_mir_id_is_valid(effect.target_block_id)
-					: ((effect.kind != ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR
+					: (effect.kind == ZEND_NATIVE_SOURCE_EFFECT_DEBUG_PROBE
+						? false
+						: ((effect.kind
+								!= ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR
 							&& effect.kind
 								!= ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE)
-						|| !zend_mir_scalar_type_is_exact(effect.exact_type)))) {
+							|| !zend_mir_scalar_type_is_exact(
+								effect.exact_type))))) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
 				"W07 source effect is invalid");
@@ -3874,7 +3878,8 @@ bool initialize_plan(
 							!= ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM) {
 					continue;
 				}
-			} else if (candidate_record.opcode
+			} else if (effect.kind != ZEND_NATIVE_SOURCE_EFFECT_DEBUG_PROBE
+					&& candidate_record.opcode
 						!= ZEND_MIR_OPCODE_ECHO_SCALAR
 					&& candidate_record.opcode != ZEND_MIR_OPCODE_I1_NOT
 					&& candidate_record.opcode != ZEND_MIR_OPCODE_I64_TO_I1
@@ -3882,19 +3887,31 @@ bool initialize_plan(
 					&& candidate_record.opcode != ZEND_MIR_OPCODE_SCALAR_DROP) {
 				continue;
 			}
-			if (match != nullptr) {
+			if (match != nullptr
+					&& effect.kind
+						!= ZEND_NATIVE_SOURCE_EFFECT_DEBUG_PROBE) {
 				zend_tpde_set_diagnostic(diag,
 					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 					"W07 source effect maps to multiple MIR instructions");
 				return false;
 			}
+			if (match != nullptr) {
+				continue;
+			}
 			match = &candidate;
+		}
+		if (match == nullptr
+				&& effect.kind == ZEND_NATIVE_SOURCE_EFFECT_DEBUG_PROBE) {
+			continue;
 		}
 		if (match == nullptr
 				|| (effect.kind == ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE
 					? zend_mir_id_is_valid(match->exception_block_id)
-					: (match->operand_count != 1
-						|| match->source_effect != 0))) {
+					: (effect.kind
+							== ZEND_NATIVE_SOURCE_EFFECT_DEBUG_PROBE
+						? match->debug_probe
+						: (match->operand_count != 1
+						|| match->source_effect != 0)))) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 				effect.kind == ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE
@@ -3904,6 +3921,11 @@ bool initialize_plan(
 		}
 		if (effect.kind == ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE) {
 			match->exception_block_id = effect.target_block_id;
+			continue;
+		}
+		if (effect.kind == ZEND_NATIVE_SOURCE_EFFECT_DEBUG_PROBE) {
+			match->debug_probe = true;
+			require_runtime_helper(plan, ZEND_NATIVE_HELPER_SOURCE_PROBE);
 			continue;
 		}
 		match->source_effect = effect.kind;

@@ -9,7 +9,12 @@
 extern "C" {
 #endif
 
-#define ZEND_NATIVE_RUNTIME_ABI_VERSION 67u
+#define ZEND_NATIVE_RUNTIME_ABI_VERSION 68u
+
+typedef void (*zend_native_source_probe_t)(
+	void *context,
+	zend_execute_data *execute_data,
+	uint32_t source_position_id);
 
 typedef enum _zend_native_runtime_capability {
 	ZEND_NATIVE_RUNTIME_CAP_USER_CALL = UINT64_C(1) << 0,
@@ -188,7 +193,8 @@ typedef enum _zend_native_runtime_helper_id {
 	ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT = 162,
 	ZEND_NATIVE_HELPER_VALUE_CHECK_FUNC_ARG = 163,
 	ZEND_NATIVE_HELPER_VALUE_CHECK_UNDEF_ARGS = 164,
-	ZEND_NATIVE_HELPER_COUNT = 165
+	ZEND_NATIVE_HELPER_SOURCE_PROBE = 165,
+	ZEND_NATIVE_HELPER_COUNT = 166
 } zend_native_runtime_helper_id;
 
 #define ZEND_NATIVE_RUNTIME_HELPER_WORD_COUNT \
@@ -279,6 +285,10 @@ zend_result zend_native_runtime_validate(
 const zend_native_runtime_helper *zend_native_runtime_helper_find(
 	const zend_native_runtime_api *runtime,
 	zend_native_runtime_helper_id id);
+void zend_native_runtime_set_source_probe(
+	zend_native_source_probe_t probe, void *context);
+bool zend_native_runtime_source_probe_enabled(void);
+void zend_native_runtime_source_probe(uint32_t source_position_id);
 
 #ifdef __cplusplus
 }
