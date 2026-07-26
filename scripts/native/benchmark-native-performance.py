@@ -8,13 +8,15 @@ import json
 import math
 import os
 import platform
+import shutil
 import statistics
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Iterable
 
 
 TARGET_BY_HOST = {
@@ -93,6 +95,42 @@ echo json_encode(
         "return_value" => $result,
         "execute_ns" => $executeNs,
         "peak_rss_bytes" => $peakRss,
+    ],
+    JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR
+);
+"""
+
+PRODUCT_RUNNER = r"""
+$arguments = json_decode(
+    getenv("NATIVE_BENCH_ARGUMENTS"), true, 512, JSON_THROW_ON_ERROR
+);
+$repeat = (int) getenv("NATIVE_BENCH_REPEAT");
+$started = hrtime(true);
+for ($index = 0; $index < $repeat; $index++) {
+    $result = __NATIVE_BENCH_FUNCTION__(...$arguments);
+}
+$executeNs = hrtime(true) - $started;
+$usage = getrusage();
+$peakRss = (int) ($usage["ru_maxrss"] ?? 0);
+if (str_starts_with(getenv("NATIVE_BENCH_TARGET"), "linux-")) {
+    $peakRss *= 1024;
+}
+$opcache = function_exists("opcache_get_status")
+    ? opcache_get_status(false) : false;
+$statistics = is_array($opcache)
+    ? ($opcache["opcache_statistics"] ?? []) : [];
+echo json_encode(
+    [
+        "status" => "returned",
+        "return_value" => $result,
+        "execute_ns" => $executeNs,
+        "peak_rss_bytes" => $peakRss,
+        "opcache_enabled" => is_array($opcache),
+        "opcache_hits" => (int) ($statistics["hits"] ?? 0),
+        "opcache_misses" => (int) ($statistics["misses"] ?? 0),
+        "opcache_cached_scripts" => (int) (
+            $statistics["num_cached_scripts"] ?? 0
+        ),
     ],
     JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR
 );
@@ -538,7 +576,8 @@ def run_php(
     if completed.returncode != 0:
         raise RuntimeError(
             f"{benchmark.name}: {php} exited {completed.returncode}: "
-            f"{completed.stderr.strip()}"
+            f"stdout={completed.stdout[-1000:]!r}; "
+            f"stderr={completed.stderr[-1000:]!r}"
         )
     try:
         data = json.loads(completed.stdout)
@@ -548,6 +587,276 @@ def run_php(
             f"{completed.stdout[-1000:]!r}; stderr={completed.stderr[-1000:]!r}"
         ) from error
     return data, completed.returncode
+
+
+def product_source(benchmark: Benchmark) -> str:
+    return (
+        benchmark.source.rstrip()
+        + "\n"
+        + PRODUCT_RUNNER.replace(
+            "__NATIVE_BENCH_FUNCTION__", benchmark.function
+        )
+    )
+
+
+def benchmark_environment(
+    benchmark: Benchmark, target: str
+) -> dict[str, str]:
+    env = os.environ.copy()
+    env.update(
+        {
+            "NATIVE_BENCH_ARGUMENTS": json.dumps(benchmark.arguments),
+            "NATIVE_BENCH_FUNCTION": benchmark.function,
+            "NATIVE_BENCH_FILENAME": f"benchmark-{benchmark.name}.php",
+            "NATIVE_BENCH_TARGET": target,
+            "NATIVE_BENCH_REPEAT": str(benchmark.repeat),
+        }
+    )
+    return env
+
+
+def parse_product_output(
+    benchmark: Benchmark, stdout: str, stderr: str
+) -> dict[str, Any]:
+    body = stdout
+    if "\r\n\r\n" in body:
+        body = body.split("\r\n\r\n", 1)[1]
+    elif "\n\n" in body:
+        body = body.split("\n\n", 1)[1]
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(
+            f"{benchmark.name}: invalid product JSON: "
+            f"{body[-1000:]!r}; stderr={stderr[-1000:]!r}"
+        ) from error
+
+
+def run_product_cli(
+    php: Path,
+    source: Path,
+    benchmark: Benchmark,
+    target: str,
+    opcache: bool,
+    file_cache: Path,
+) -> dict[str, Any]:
+    command = [str(php), "-n"]
+    if opcache:
+        command.extend(
+            (
+                "-d", "opcache.enable_cli=1",
+                "-d", f"opcache.file_cache={file_cache}",
+                "-d", "opcache.file_cache_only=0",
+                "-d", "opcache.validate_timestamps=0",
+                "-d", "opcache.file_update_protection=0",
+            )
+        )
+    else:
+        command.extend(("-d", "opcache.enable_cli=0"))
+    for setting in benchmark.ini:
+        command.extend(("-d", setting))
+    command.append(str(source))
+    started = time.perf_counter_ns()
+    completed = subprocess.run(
+        command,
+        env=benchmark_environment(benchmark, target),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    wall_ns = time.perf_counter_ns() - started
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"{benchmark.name}: {php} exited {completed.returncode}: "
+            f"{completed.stderr.strip()}"
+        )
+    data = parse_product_output(
+        benchmark, completed.stdout, completed.stderr
+    )
+    data["wall_ns"] = wall_ns
+    return data
+
+
+class FpmPool:
+    def __init__(
+        self,
+        fpm: Path,
+        cgi_fcgi: Path,
+        directory: Path,
+        opcache: bool,
+    ) -> None:
+        self.fpm = fpm
+        self.cgi_fcgi = cgi_fcgi
+        self.directory = directory
+        self.opcache = opcache
+        self.socket = directory / "benchmark.sock"
+        self.config = directory / "php-fpm.conf"
+        self.process: subprocess.Popen[str] | None = None
+
+    def __enter__(self) -> FpmPool:
+        self.config.write_text(
+            "[global]\n"
+            f"pid = {self.directory / 'php-fpm.pid'}\n"
+            f"error_log = {self.directory / 'php-fpm.log'}\n"
+            "daemonize = no\n"
+            "[benchmark]\n"
+            f"listen = {self.socket}\n"
+            "listen.mode = 0600\n"
+            "pm = static\n"
+            "pm.max_children = 1\n"
+            "pm.max_requests = 0\n"
+            "clear_env = no\n"
+            "catch_workers_output = yes\n",
+            encoding="utf-8",
+        )
+        command = [
+            str(self.fpm),
+            "-n",
+            "-y", str(self.config),
+            "-F",
+            "-O",
+            "-d", f"opcache.enable={int(self.opcache)}",
+            "-d", "opcache.validate_timestamps=0",
+            "-d", "opcache.file_update_protection=0",
+        ]
+        self.process = subprocess.Popen(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        deadline = time.monotonic() + 15
+        while not self.socket.exists():
+            if self.process.poll() is not None:
+                stdout, stderr = self.process.communicate()
+                raise RuntimeError(
+                    f"php-fpm exited {self.process.returncode}: "
+                    f"{stdout}{stderr}"
+                )
+            if time.monotonic() >= deadline:
+                self.close()
+                raise RuntimeError("php-fpm did not create its socket")
+            time.sleep(0.01)
+        return self
+
+    def request(
+        self,
+        source: Path,
+        benchmark: Benchmark,
+        target: str,
+    ) -> dict[str, Any]:
+        env = benchmark_environment(benchmark, target)
+        env.update(
+            {
+                "SCRIPT_FILENAME": str(source),
+                "SCRIPT_NAME": "/" + source.name,
+                "REQUEST_METHOD": "GET",
+                "REQUEST_URI": "/" + source.name,
+                "QUERY_STRING": "",
+                "SERVER_PROTOCOL": "HTTP/1.1",
+                "GATEWAY_INTERFACE": "CGI/1.1",
+                "SERVER_SOFTWARE": "native-benchmark",
+                "REMOTE_ADDR": "127.0.0.1",
+                "SERVER_ADDR": "127.0.0.1",
+                "SERVER_PORT": "9000",
+                "CONTENT_LENGTH": "0",
+            }
+        )
+        started = time.perf_counter_ns()
+        completed = subprocess.run(
+            [
+                str(self.cgi_fcgi),
+                "-bind",
+                "-connect", str(self.socket),
+            ],
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        wall_ns = time.perf_counter_ns() - started
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"{benchmark.name}: cgi-fcgi exited "
+                f"{completed.returncode}: {completed.stderr.strip()}"
+            )
+        data = parse_product_output(
+            benchmark, completed.stdout, completed.stderr
+        )
+        data["wall_ns"] = wall_ns
+        return data
+
+    def close(self) -> None:
+        if self.process is None:
+            return
+        if self.process.poll() is None:
+            self.process.terminate()
+        try:
+            self.process.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.communicate()
+        self.process = None
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
+
+def measure_product(
+    php: Path,
+    source: Path,
+    benchmark: Benchmark,
+    target: str,
+    samples: int,
+    opcache: bool,
+    file_cache: Path,
+    fpm_pool: FpmPool | None,
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]] | None,
+    dict[str, Any] | None,
+]:
+    def invoke(path: Path = source) -> dict[str, Any]:
+        return (
+            fpm_pool.request(path, benchmark, target)
+            if fpm_pool is not None
+            else run_product_cli(
+                php, path, benchmark, target, opcache, file_cache
+            )
+        )
+
+    cold = None
+    prime = None
+    if opcache:
+        cold = []
+        for index in range(max(0, samples - 1)):
+            if fpm_pool is not None:
+                cold_source = source.with_name(
+                    f"{source.stem}-cold-{index}{source.suffix}"
+                )
+                shutil.copyfile(source, cold_source)
+                cold.append(invoke(cold_source))
+            else:
+                shutil.rmtree(file_cache)
+                file_cache.mkdir()
+                cold.append(invoke())
+        if fpm_pool is None:
+            shutil.rmtree(file_cache)
+            file_cache.mkdir()
+        prime = invoke()
+        cold.append(prime)
+    measured = []
+    for _ in range(samples):
+        data = invoke()
+        if data.get("status") != "returned":
+            raise RuntimeError(
+                f"{benchmark.name}: product executor returned "
+                f"{data.get('status')}"
+            )
+        measured.append(data)
+    return measured, cold, prime
 
 
 def percentile(values: Iterable[float], fraction: float) -> float:
@@ -607,6 +916,8 @@ def summarize(
     candidate: list[dict[str, Any]],
     baseline: list[dict[str, Any]] | None,
     reference: list[dict[str, Any]] | None,
+    cold: list[dict[str, Any]] | None = None,
+    prime: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     candidate_results = [sample.get("return_value") for sample in candidate]
     if any(result != candidate_results[0] for result in candidate_results[1:]):
@@ -642,13 +953,19 @@ def summarize(
                 f"{reference_results[0]!r}"
             )
 
-    candidate_bridge = median_metric(candidate, ("bridge_ns",)) or 0.0
-    candidate_comparable = candidate_bridge / benchmark.repeat
+    candidate_bridge = median_metric(candidate, ("bridge_ns",))
+    candidate_product_execute = median_metric(candidate, ("execute_ns",))
+    candidate_total = (
+        candidate_bridge
+        if candidate_bridge is not None
+        else candidate_product_execute or 0.0
+    )
+    candidate_comparable = candidate_total / benchmark.repeat
     candidate_execute = median_metric(
         candidate, ("performance", "last_execute_ns")
     )
     if candidate_execute is None:
-        candidate_execute = candidate_bridge / benchmark.repeat
+        candidate_execute = candidate_total / benchmark.repeat
     record: dict[str, Any] = {
         "suite": benchmark.suite,
         "case": benchmark.name,
@@ -660,6 +977,7 @@ def summarize(
             candidate_comparable / benchmark.operations
         ),
         "candidate_bridge_ns": candidate_bridge,
+        "candidate_execute_ns": candidate_product_execute,
         "candidate_peak_rss_bytes": median_metric(
             candidate, ("peak_rss_bytes",)
         ),
@@ -672,6 +990,38 @@ def summarize(
             0.95,
         ),
     }
+    if cold is not None:
+        cold_wall = median_metric(cold, ("wall_ns",))
+        warm_wall = median_metric(candidate, ("wall_ns",))
+        record.update(
+            {
+                "cold_wall_ns": cold_wall,
+                "warm_wall_ns": warm_wall,
+                "warm_vs_cold": (
+                    float(cold_wall) / warm_wall
+                    if isinstance(cold_wall, (int, float))
+                    and warm_wall is not None and warm_wall > 0
+                    else None
+                ),
+                "cold_opcache_hits": (
+                    prime.get("opcache_hits")
+                    if prime is not None else None
+                ),
+                "cold_opcache_misses": (
+                    prime.get("opcache_misses")
+                    if prime is not None else None
+                ),
+                "warm_opcache_hits": median_metric(
+                    candidate, ("opcache_hits",)
+                ),
+                "warm_opcache_misses": median_metric(
+                    candidate, ("opcache_misses",)
+                ),
+                "warm_opcache_cached_scripts": median_metric(
+                    candidate, ("opcache_cached_scripts",)
+                ),
+            }
+        )
     performance = next(
         (
             sample["performance"]
@@ -741,6 +1091,34 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--reference", type=Path)
     parser.add_argument(
+        "--mode",
+        choices=("diagnostic", "product-cli", "product-fpm"),
+        default="diagnostic",
+        help=(
+            "diagnostic preserves the W12 bridge measurement; product modes "
+            "execute the benchmark as ordinary userland through the global "
+            "native executor"
+        ),
+    )
+    parser.add_argument(
+        "--opcache", choices=("off", "on"), default="off"
+    )
+    parser.add_argument(
+        "--fpm",
+        type=Path,
+        help="php-fpm binary; inferred beside the candidate CLI binary",
+    )
+    parser.add_argument(
+        "--cgi-fcgi",
+        type=Path,
+        help="cgi-fcgi client used for persistent FPM requests",
+    )
+    parser.add_argument(
+        "--w12-baseline",
+        action="store_true",
+        help="enforce the W13 retention limits against the exact W12 binary",
+    )
+    parser.add_argument(
         "--target", choices=tuple(TARGET_BY_HOST.values())
     )
     parser.add_argument(
@@ -770,6 +1148,26 @@ def main() -> int:
     for binary in (args.candidate, args.baseline, args.reference):
         if binary is not None and not binary.is_file():
             raise RuntimeError(f"PHP binary does not exist: {binary}")
+    if args.mode == "diagnostic" and args.opcache != "off":
+        raise RuntimeError(
+            "--opcache applies only to product-cli and product-fpm"
+        )
+    opcache = args.opcache == "on"
+    fpm = args.fpm
+    cgi_fcgi = args.cgi_fcgi
+    if args.mode == "product-fpm":
+        if fpm is None:
+            fpm = args.candidate.parent.parent / "fpm" / "php-fpm"
+        if not fpm.is_file():
+            raise RuntimeError(f"php-fpm binary does not exist: {fpm}")
+        if cgi_fcgi is None:
+            located = shutil.which("cgi-fcgi")
+            if located is not None:
+                cgi_fcgi = Path(located)
+        if cgi_fcgi is None or not cgi_fcgi.is_file():
+            raise RuntimeError(
+                "product-fpm requires --cgi-fcgi or cgi-fcgi on PATH"
+            )
 
     direct_iterations = 2_000 if args.quick else 200_000
     hot_iterations = 500 if args.quick else 50_000
@@ -800,41 +1198,83 @@ def main() -> int:
                     "unknown benchmark cases: " + ", ".join(sorted(missing))
                 )
 
+        file_cache = Path(temp) / "opcache-file-cache"
+        file_cache.mkdir()
+        product_sources: dict[str, Path] = {}
+        if args.mode != "diagnostic":
+            for benchmark in benchmarks:
+                source = Path(temp) / f"product-{benchmark.name}.php"
+                source.write_text(
+                    product_source(benchmark), encoding="utf-8"
+                )
+                product_sources[benchmark.name] = source
+
         records = []
-        for benchmark in benchmarks:
-            candidate = measure(
-                args.candidate, benchmark, target, args.samples,
-                CANDIDATE_RUNNER,
-            )
-            baseline_error = None
-            try:
-                baseline = (
-                    measure(
-                        args.baseline, benchmark, target, args.samples,
+
+        def run_benchmarks(fpm_pool: FpmPool | None) -> None:
+            for benchmark in benchmarks:
+                cold = None
+                prime = None
+                if args.mode == "diagnostic":
+                    candidate = measure(
+                        args.candidate, benchmark, target, args.samples,
                         CANDIDATE_RUNNER,
                     )
-                    if args.baseline is not None else None
+                else:
+                    candidate, cold, prime = measure_product(
+                        args.candidate,
+                        product_sources[benchmark.name],
+                        benchmark,
+                        target,
+                        args.samples,
+                        opcache,
+                        file_cache,
+                        fpm_pool,
+                    )
+                baseline_error = None
+                try:
+                    baseline = (
+                        measure(
+                            args.baseline, benchmark, target, args.samples,
+                            CANDIDATE_RUNNER,
+                        )
+                        if args.baseline is not None else None
+                    )
+                except RuntimeError as error:
+                    if benchmark.suite != "scaling":
+                        raise
+                    baseline = None
+                    baseline_error = str(error)
+                reference = (
+                    measure(
+                        args.reference, benchmark, target, args.samples,
+                        REFERENCE_RUNNER,
+                    )
+                    if args.reference is not None else None
                 )
-            except RuntimeError as error:
-                if benchmark.suite != "scaling":
-                    raise
-                baseline = None
-                baseline_error = str(error)
-            reference = (
-                measure(
-                    args.reference, benchmark, target, args.samples,
-                    REFERENCE_RUNNER,
+                record = summarize(
+                    benchmark, candidate, baseline, reference, cold, prime
                 )
-                if args.reference is not None else None
-            )
-            record = summarize(benchmark, candidate, baseline, reference)
-            if baseline_error is not None:
-                record["baseline_error"] = baseline_error
-            records.append(record)
-            print(json.dumps(record, sort_keys=True), flush=True)
+                if baseline_error is not None:
+                    record["baseline_error"] = baseline_error
+                records.append(record)
+                print(json.dumps(record, sort_keys=True), flush=True)
+
+        if args.mode == "product-fpm":
+            assert fpm is not None and cgi_fcgi is not None
+            fpm_directory = Path(temp) / "fpm"
+            fpm_directory.mkdir()
+            with FpmPool(
+                fpm, cgi_fcgi, fpm_directory, opcache
+            ) as fpm_pool:
+                run_benchmarks(fpm_pool)
+        else:
+            run_benchmarks(None)
 
     summary: dict[str, Any] = {
         "target": target,
+        "mode": args.mode,
+        "opcache": args.opcache,
         "cases": len(records),
     }
     hot_speedups = [
@@ -844,6 +1284,13 @@ def main() -> int:
     ]
     if hot_speedups:
         summary["hot_geomean_speedup"] = geometric_mean(hot_speedups)
+    warm_speedups = [
+        float(record["warm_vs_cold"])
+        for record in records
+        if isinstance(record.get("warm_vs_cold"), (int, float))
+    ]
+    if warm_speedups:
+        summary["warm_geomean_speedup"] = geometric_mean(warm_speedups)
     direct_scalar = next(
         (record for record in records if record["case"] == "scalar_return"),
         None,
@@ -890,16 +1337,24 @@ def main() -> int:
     if args.baseline is None or args.reference is None:
         failures.append("--enforce requires --baseline and --reference")
     if direct_scalar is not None:
-        if summary.get("direct_scalar_speedup", 0) < 3.0:
-            failures.append("direct scalar call speedup is below 3.0x")
+        minimum = 0.95 if args.w12_baseline else 3.0
+        if summary.get("direct_scalar_speedup", 0) < minimum:
+            failures.append(
+                "direct scalar call retains less than 95% of W12"
+                if args.w12_baseline
+                else "direct scalar call speedup is below 3.0x"
+            )
         if summary.get("direct_scalar_vs_reference", 0) <= 1.0:
             failures.append("native scalar calls do not beat the reference VM")
     elif args.suite in {"all", "direct"} and not args.cases:
         failures.append("direct scalar benchmark was not executed")
     if hot_speedups:
-        if summary.get("hot_geomean_speedup", 0) < 1.5:
+        minimum = 0.95 if args.w12_baseline else 1.5
+        if summary.get("hot_geomean_speedup", 0) < minimum:
             failures.append(
-                "hot corpus geometric mean speedup is below 1.5x"
+                "hot corpus retains less than 95% of W12"
+                if args.w12_baseline
+                else "hot corpus geometric mean speedup is below 1.5x"
             )
     elif args.suite in {"all", "hot"} and not args.cases:
         failures.append("hot corpus was not executed")
@@ -908,6 +1363,35 @@ def main() -> int:
             "representative cases regress by more than 10%: "
             + ", ".join(regressions)
         )
+    if opcache and warm_speedups:
+        if summary.get("warm_geomean_speedup", 0) <= 1.0:
+            failures.append(
+                "warm OPcache/FPM requests are not faster than cold requests"
+            )
+        cold_or_equal = [
+            record["case"]
+            for record in records
+            if isinstance(record.get("warm_vs_cold"), (int, float))
+            and float(record["warm_vs_cold"]) <= 1.0
+        ]
+        if cold_or_equal:
+            failures.append(
+                "warm requests are not faster for: "
+                + ", ".join(cold_or_equal)
+            )
+    elif opcache and args.mode != "diagnostic":
+        failures.append("no cold/warm OPcache samples were recorded")
+    if args.mode == "product-fpm" and opcache:
+        hit_growth = [
+            record
+            for record in records
+            if isinstance(record.get("cold_opcache_hits"), (int, float))
+            and isinstance(record.get("warm_opcache_hits"), (int, float))
+            and float(record["warm_opcache_hits"])
+                > float(record["cold_opcache_hits"])
+        ]
+        if not hit_growth:
+            failures.append("FPM requests did not produce an OPcache hit")
     if independent_1000 is not None:
         compiled = independent_1000.get("compiled_codeunits")
         scaling_speedup = independent_1000.get("speedup", 0)
