@@ -13,6 +13,8 @@
 #include <stdio.h>
 
 typedef struct _zend_native_execution_state {
+	zend_vm_stack previous_stack;
+	zval *previous_stack_top;
 	zend_native_status status;
 	zval discarded_return;
 	zval *original_return_value;
@@ -23,6 +25,43 @@ typedef struct _zend_native_execution_state {
 	bool dtrace_frame_started;
 #endif
 } zend_native_execution_state;
+
+static zend_always_inline zend_native_execution_state *
+zend_native_execution_state_alloc(void)
+{
+	const size_t size = ZEND_MM_ALIGNED_SIZE_EX(
+		sizeof(zend_native_execution_state), sizeof(zval));
+	zend_vm_stack previous_stack = EG(vm_stack);
+	zval *previous_stack_top = EG(vm_stack_top);
+	zend_native_execution_state *state;
+
+	if (EXPECTED(size <= (size_t) (
+			(char *) EG(vm_stack_end) - (char *) previous_stack_top))) {
+		state = (zend_native_execution_state *) previous_stack_top;
+		EG(vm_stack_top) = (zval *) ((char *) previous_stack_top + size);
+	} else {
+		state = (zend_native_execution_state *) zend_vm_stack_extend(size);
+	}
+	state->previous_stack = previous_stack;
+	state->previous_stack_top = previous_stack_top;
+	return state;
+}
+
+static zend_always_inline void zend_native_execution_state_free(
+	zend_native_execution_state *state)
+{
+	zend_vm_stack previous_stack = state->previous_stack;
+	zval *previous_stack_top = state->previous_stack_top;
+
+	while (UNEXPECTED(EG(vm_stack) != previous_stack)) {
+		zend_vm_stack page = EG(vm_stack);
+
+		EG(vm_stack) = page->prev;
+		efree(page);
+	}
+	EG(vm_stack_top) = previous_stack_top;
+	EG(vm_stack_end) = previous_stack->end;
+}
 
 static void zend_native_execution_cleanup_frame_ex(
 	zend_execute_data *execute_data, bool cleanup_unfinished)
@@ -159,10 +198,12 @@ static zend_native_status zend_native_execute_frame_impl(
 	}
 
 	/*
-	 * State changed after setjmp lives on the heap. The catcher therefore does
-	 * not inspect an indeterminate non-volatile automatic after longjmp.
+	 * State changed after setjmp lives in the Zend VM stack rather than in a C
+	 * automatic. The catcher therefore does not inspect an indeterminate
+	 * non-volatile automatic after longjmp, and a native entry does not require
+	 * a general-purpose heap allocation.
 	 */
-	state = emalloc(sizeof(*state));
+	state = zend_native_execution_state_alloc();
 	state->status = ZEND_NATIVE_BAILOUT;
 	state->original_return_value = execute_data->return_value;
 	state->observer_started = observer_already_started;
@@ -239,7 +280,7 @@ static zend_native_status zend_native_execute_frame_impl(
 		if (status == ZEND_NATIVE_BAILOUT) {
 			zend_native_call_direct_unwind(execute_data);
 		}
-		efree(state);
+		zend_native_execution_state_free(state);
 		return status;
 	}
 	frame_returned = state->status == ZEND_NATIVE_RETURNED;
@@ -327,7 +368,7 @@ static zend_native_status zend_native_execute_frame_impl(
 	}
 	{
 		zend_native_status status = state->status;
-		efree(state);
+		zend_native_execution_state_free(state);
 		return status;
 	}
 }
