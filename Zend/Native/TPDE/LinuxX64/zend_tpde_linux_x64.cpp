@@ -3279,18 +3279,10 @@ register_operand:
 		zend_tpde_string_identity layout;
 
 		if (!zend_tpde_string_identity_at(mir, &layout)
-				|| layout.left_offset > INT32_MAX
-				|| layout.right_offset > INT32_MAX
-				|| layout.result_offset > INT32_MAX) {
+				|| layout.left_offset > INT32_MAX - 8
+				|| layout.right_offset > INT32_MAX - 8
+				|| layout.result_offset > INT32_MAX - 8) {
 			return execute_value_operation();
-		}
-		for (auto reg_id : register_file.used_regs()) {
-			tpde::Reg reg{reg_id};
-			if (!register_file.is_fixed(reg)
-					&& register_file.reg_local_idx(reg)
-						!= INVALID_VAL_LOCAL_IDX) {
-				evict_reg(reg);
-			}
 		}
 		auto slow = text_writer.label_create();
 		auto done = text_writer.label_create();
@@ -3298,68 +3290,72 @@ register_operand:
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 		auto frame_scratch = std::move(frame).into_scratch();
 		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg slot{this};
 		ScratchReg type{this};
 		ScratchReg left{this};
 		ScratchReg right{this};
-		auto slot_reg = slot.alloc_gp();
 		auto type_reg = type.alloc_gp();
 		auto left_reg = left.alloc_gp();
 		auto right_reg = right.alloc_gp();
 
-		ASM(MOV64rr, slot_reg, frame_reg);
-		ASM(ADD64ri, slot_reg,
-			static_cast<int32_t>(layout.left_offset));
 		ASM(MOV32rm, type_reg,
-			FE_MEM(slot_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.left_offset + offsetof(zval, u1.type_info))));
 		ASM(AND32ri, type_reg, Z_TYPE_MASK);
 		ASM(CMP32ri, type_reg, IS_STRING);
 		generate_raw_jump(Jump::jne, slow);
-		ASM(MOV64rm, left_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
+		ASM(MOV64rm, left_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.left_offset)));
 
-		ASM(MOV64rr, slot_reg, frame_reg);
-		ASM(ADD64ri, slot_reg,
-			static_cast<int32_t>(layout.right_offset));
 		ASM(MOV32rm, type_reg,
-			FE_MEM(slot_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.right_offset + offsetof(zval, u1.type_info))));
 		ASM(AND32ri, type_reg, Z_TYPE_MASK);
 		ASM(CMP32ri, type_reg, IS_STRING);
 		generate_raw_jump(Jump::jne, slow);
-		ASM(MOV64rm, right_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
+		ASM(MOV64rm, right_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.right_offset)));
 		ASM(CMP64rr, left_reg, right_reg);
 		generate_raw_jump(Jump::jne, slow);
 
-		ASM(MOV64rr, slot_reg, frame_reg);
-		ASM(ADD64ri, slot_reg,
-			static_cast<int32_t>(layout.result_offset));
 		ASM(MOV32rm, type_reg,
-			FE_MEM(slot_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.result_offset + offsetof(zval, u1.type_info))));
 		ASM(TEST32ri, type_reg,
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		generate_raw_jump(Jump::jne, slow);
 		ASM(MOV64ri, left_reg, layout.inverted ? 0 : 1);
 		ASM(MOV32ri, type_reg, layout.inverted ? IS_FALSE : IS_TRUE);
-		ASM(MOV64mr, FE_MEM(slot_reg, 0, FE_NOREG, 0), left_reg);
+		ASM(MOV64mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.result_offset)),
+			left_reg);
 		ASM(MOV32mr,
-			FE_MEM(slot_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))),
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.result_offset + offsetof(zval, u1.type_info))),
 			type_reg);
 		generate_raw_jump(Jump::jmp, done);
 
 		label_place(slow);
-		slot.reset();
 		type.reset();
 		left.reset();
 		right.reset();
+		const auto register_state =
+			zend::native::tpde::
+				capture_conditional_call_register_state(*this);
 		ValuePart frame_argument{
 			tpde::x64::PlatformConfig::GP_BANK, 8};
 		frame_argument.set_value(this, std::move(frame_scratch));
 		if (!execute_value_operation(&frame_argument)) {
 			return false;
 		}
+		zend::native::tpde::restore_conditional_call_register_state(
+			*this, register_state);
 		label_place(done);
 		return true;
 	};
