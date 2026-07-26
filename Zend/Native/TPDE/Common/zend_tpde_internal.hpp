@@ -1163,6 +1163,8 @@ struct zend_native_image {
 	uint32_t symbol_binding_capacity;
 	uint32_t slot_count;
 	uint32_t argument_count;
+	uint32_t frame_variable_count;
+	uint32_t frame_temporary_count;
 	zend_native_image_metrics metrics;
 	void *target_state;
 	void (*destroy_target_state)(void *);
@@ -1183,6 +1185,8 @@ struct zend_native_code {
 	zend_native_frame_entry_t entry;
 	uint32_t slot_count;
 	uint32_t argument_count;
+	uint32_t frame_variable_count;
+	uint32_t frame_temporary_count;
 	bool writable;
 	bool executable;
 	bool unwind_registered;
