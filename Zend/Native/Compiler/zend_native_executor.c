@@ -38,7 +38,8 @@ typedef struct _zend_native_executor_dispatch {
 ZEND_TLS zend_native_executor_request zend_native_executor_request_state;
 static bool zend_native_executor_installed;
 static uint64_t zend_native_executor_epoch = 1;
-static int zend_native_executor_rid = -1;
+static int zend_native_executor_bundle_rid = -1;
+static int zend_native_executor_entry_handle = -1;
 
 static void zend_native_executor_dispatch_dtor(zval *value)
 {
@@ -64,10 +65,10 @@ static zend_native_opcache_bundle *zend_native_executor_bundle(
 {
 	zend_native_opcache_bundle *bundle;
 
-	if (op_array == NULL || zend_native_executor_rid < 0) {
+	if (op_array == NULL || zend_native_executor_bundle_rid < 0) {
 		return NULL;
 	}
-	bundle = op_array->reserved[zend_native_executor_rid];
+	bundle = op_array->reserved[zend_native_executor_bundle_rid];
 	return bundle != NULL
 			&& bundle->magic == ZEND_NATIVE_OPCACHE_BUNDLE_MAGIC
 			&& bundle->format == ZEND_NATIVE_OPCACHE_BUNDLE_FORMAT
@@ -368,13 +369,15 @@ zend_result zend_native_executor_startup(void)
 	if (zend_native_reentry_startup() == FAILURE) {
 		return FAILURE;
 	}
-	zend_native_executor_rid =
+	zend_native_executor_bundle_rid =
+		zend_get_resource_handle("Zend Native");
+	zend_native_executor_entry_handle =
 		zend_get_op_array_extension_handle("Zend Native");
-	if (zend_native_executor_rid < 0
-			|| zend_native_executor_rid
-				>= ZEND_MAX_RESERVED_RESOURCES) {
+	if (zend_native_executor_bundle_rid < 0
+			|| zend_native_executor_entry_handle < 0) {
 		zend_native_reentry_shutdown();
-		zend_native_executor_rid = -1;
+		zend_native_executor_bundle_rid = -1;
+		zend_native_executor_entry_handle = -1;
 		return FAILURE;
 	}
 	zend_execute_ex = zend_native_executor_execute_ex;
@@ -394,7 +397,8 @@ void zend_native_executor_shutdown(void)
 		zend_execute_ex = execute_ex;
 	}
 	zend_native_executor_installed = false;
-	zend_native_executor_rid = -1;
+	zend_native_executor_bundle_rid = -1;
+	zend_native_executor_entry_handle = -1;
 	zend_native_reentry_shutdown();
 }
 
@@ -462,7 +466,7 @@ zend_result zend_native_executor_prepare_script(zend_script *script)
 	size_t size = 0;
 	size_t allocation_size;
 
-	if (script == NULL || zend_native_executor_rid < 0) {
+	if (script == NULL || zend_native_executor_bundle_rid < 0) {
 		return FAILURE;
 	}
 	if (zend_native_executor_bundle(&script->main_op_array) != NULL) {
@@ -500,7 +504,8 @@ zend_result zend_native_executor_prepare_script(zend_script *script)
 	bundle->size = size;
 	memcpy(bundle->bytes, bytes, size);
 	zend_native_compiler_bundle_destroy(bytes);
-	script->main_op_array.reserved[zend_native_executor_rid] = bundle;
+	script->main_op_array.reserved[zend_native_executor_bundle_rid] =
+		bundle;
 	return SUCCESS;
 }
 
@@ -528,7 +533,7 @@ size_t zend_native_executor_persist(
 	memcpy(memory, bundle, size);
 	zend_native_opcache_bundle *persistent = memory;
 	persistent->storage = ZEND_NATIVE_OPCACHE_BUNDLE_PERSISTENT;
-	op_array->reserved[zend_native_executor_rid] = persistent;
+	op_array->reserved[zend_native_executor_bundle_rid] = persistent;
 	if (bundle->storage == ZEND_NATIVE_OPCACHE_BUNDLE_HEAP) {
 		efree(bundle);
 	}
@@ -544,8 +549,8 @@ void zend_native_executor_discard_bundle(zend_op_array *op_array)
 			&& bundle->storage == ZEND_NATIVE_OPCACHE_BUNDLE_HEAP) {
 		efree(bundle);
 	}
-	if (op_array != NULL && zend_native_executor_rid >= 0) {
-		op_array->reserved[zend_native_executor_rid] = NULL;
+	if (op_array != NULL && zend_native_executor_bundle_rid >= 0) {
+		op_array->reserved[zend_native_executor_bundle_rid] = NULL;
 	}
 }
 
@@ -566,7 +571,7 @@ void zend_native_executor_set_bundle_persistent(
 
 int zend_native_executor_op_array_handle(void)
 {
-	return zend_native_executor_rid;
+	return zend_native_executor_bundle_rid;
 }
 
 void zend_native_executor_execute_ex(zend_execute_data *execute_data)
@@ -603,9 +608,9 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 		entry_cell->active_calls--;
 		goto complete;
 	}
-	dispatch = zend_hash_index_find_ptr(
-		&zend_native_executor_request_state.dispatch,
-		(zend_ulong) (uintptr_t) execute_data->func);
+	dispatch = ZEND_OP_ARRAY_EXTENSION(
+		&execute_data->func->op_array,
+		zend_native_executor_entry_handle);
 	if (dispatch != NULL
 			&& zend_native_entry_cell_is_ready(
 				dispatch->entry_cell)) {
@@ -615,6 +620,9 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 		goto complete;
 	}
 	if (dispatch != NULL) {
+		ZEND_OP_ARRAY_EXTENSION(
+			&execute_data->func->op_array,
+			zend_native_executor_entry_handle) = NULL;
 		zend_hash_index_del(
 			&zend_native_executor_request_state.dispatch,
 			(zend_ulong) (uintptr_t) execute_data->func);
@@ -674,6 +682,9 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 			&zend_native_executor_request_state.dispatch,
 			(zend_ulong) (uintptr_t) execute_data->func,
 			dispatch);
+		ZEND_OP_ARRAY_EXTENSION(
+			&execute_data->func->op_array,
+			zend_native_executor_entry_handle) = dispatch;
 	}
 complete:
 	if (status == ZEND_NATIVE_BAILOUT) {
