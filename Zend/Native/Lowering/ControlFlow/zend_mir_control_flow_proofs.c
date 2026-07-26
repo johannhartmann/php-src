@@ -375,7 +375,8 @@ static bool zend_mir_w04_validate_edges(
 				same_from++;
 			}
 			if (peer.to_block_id == edge.to_block_id) {
-				if (peer.predecessor_index == edge.predecessor_index && j != i) {
+				if (peer.predecessor_index == edge.predecessor_index
+						&& peer.from_block_id != edge.from_block_id) {
 					validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
 					return false;
 				}
@@ -532,8 +533,13 @@ static bool zend_mir_w04_validate_phis(
 				validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
 				return false;
 			}
-			if (edge.to_block_id == phi.block_id) {
-				predecessor_count++;
+			if (edge.to_block_id == phi.block_id
+					&& edge.predecessor_index >= predecessor_count) {
+				if (edge.predecessor_index == UINT32_MAX) {
+					validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
+					return false;
+				}
+				predecessor_count = edge.predecessor_index + 1;
 			}
 		}
 		for (j = 0; j < input_count; j++) {

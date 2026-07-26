@@ -617,7 +617,6 @@ static bool zend_mir_add_edge(void *context, zend_mir_block_id from,
 	zend_mir_block_record *from_block;
 	zend_mir_block_record *to_block;
 	zend_mir_core_edge *edges;
-	uint32_t index;
 
 	if (!zend_mir_module_require_building(module)) {
 		return false;
@@ -629,13 +628,6 @@ static bool zend_mir_add_edge(void *context, zend_mir_block_id from,
 			|| !zend_mir_function_is_open(module, from_block->function_id)) {
 		return zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_INVALID_ID,
 			"CFG edge blocks must belong to the same open function");
-	}
-	edges = ZEND_MIR_CORE_ITEMS(module, edges, zend_mir_core_edge);
-	for (index = 0; index < module->edges.count; index++) {
-		if (edges[index].from == from && edges[index].to == to) {
-			return zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_DUPLICATE_ID,
-				"duplicate CFG edge");
-		}
 	}
 	if (!zend_mir_module_grow_table(module, &module->edges,
 			sizeof(zend_mir_core_edge), alignof(zend_mir_core_edge),

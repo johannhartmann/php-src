@@ -3468,7 +3468,10 @@ static bool zend_mir_w03_forward_add_operand(
 	}
 	source_fact = zend_mir_w03_fact_for_value(integration, value_id);
 	if (source_fact == NULL
-			|| !zend_mir_scalar_type_is_exact(source_fact->exact_type)) {
+			|| !zend_mir_scalar_type_is_exact(source_fact->exact_type)
+			|| (zend_mir_value_is_original_ssa(value_id)
+				&& (value_id >= integration->source.ssa_count
+					|| !integration->w11_machine_ssa[value_id]))) {
 		/*
 		 * A boxed COPY already names the canonical source zval.  Only an
 		 * exact scalar payload needs to be materialized into the destination

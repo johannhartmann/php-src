@@ -134,16 +134,22 @@ static bool zend_mir_w05_target_parameter_modes_are_by_value(
 {
 	uint32_t count;
 	uint32_t index;
+	uint32_t expected_mode_count;
 
 	if (calls->parameter_mode_count == NULL
 			|| calls->parameter_mode_at == NULL) {
 		return false;
 	}
+	if (target->variadic && target->num_args == UINT32_MAX) {
+		return false;
+	}
+	expected_mode_count =
+		target->num_args + (target->variadic ? 1 : 0);
 	count = calls->parameter_mode_count(calls->context);
 	if (target->parameter_modes.offset > count
 			|| target->parameter_modes.count
 				> count - target->parameter_modes.offset
-			|| target->parameter_modes.count != target->num_args) {
+			|| target->parameter_modes.count != expected_mode_count) {
 		return false;
 	}
 	for (index = 0; index < target->parameter_modes.count; index++) {
@@ -168,25 +174,31 @@ static bool zend_mir_w08_target_parameter_mode_at(
 	zend_mir_source_parameter_mode_ref mode;
 	uint32_t count;
 	uint32_t parameter_ordinal = ordinal;
+	uint32_t expected_mode_count;
 
 	if (calls == NULL || target == NULL || mode_out == NULL
 			|| calls->parameter_mode_count == NULL
 			|| calls->parameter_mode_at == NULL) {
 		return false;
 	}
+	if (target->variadic && target->num_args == UINT32_MAX) {
+		return false;
+	}
+	expected_mode_count =
+		target->num_args + (target->variadic ? 1 : 0);
 	count = calls->parameter_mode_count(calls->context);
 	if (target->parameter_modes.offset > count
 			|| target->parameter_modes.count
 				> count - target->parameter_modes.offset
-			|| target->parameter_modes.count != target->num_args
+			|| target->parameter_modes.count != expected_mode_count
 			|| target->parameter_modes.count == 0) {
 		return false;
 	}
-	if (parameter_ordinal >= target->parameter_modes.count) {
+	if (parameter_ordinal >= target->num_args) {
 		if (!target->variadic) {
 			return false;
 		}
-		parameter_ordinal = target->parameter_modes.count - 1;
+		parameter_ordinal = target->num_args;
 	}
 	if (!calls->parameter_mode_at(calls->context,
 			target->parameter_modes.offset + parameter_ordinal, &mode)
@@ -821,7 +833,12 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 						&resolved, &plan->targets[index])
 					|| resolved.kind
 						!= ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL
-					|| resolved.parameter_modes.count != resolved.num_args) {
+					|| (resolved.parameter_modes.count
+							!= resolved.num_args
+						&& (!resolved.variadic
+							|| resolved.num_args == UINT32_MAX
+							|| resolved.parameter_modes.count
+								!= resolved.num_args + 1))) {
 				return ZEND_MIRL_W05_UNSUPPORTED_TARGET;
 			}
 		} else if (plan->targets[index].kind

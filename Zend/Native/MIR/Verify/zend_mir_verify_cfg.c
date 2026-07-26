@@ -46,7 +46,7 @@ static void zend_mir_verify_edges(zend_mir_verify_context *context)
 				context->successors[block->successors_offset + edge_index];
 			const zend_mir_verify_block *target =
 				zend_mir_verify_find_block(context, target_id);
-			uint32_t earlier;
+			uint32_t reverse_occurrences;
 
 			if (target == NULL || target->record.function_id != block->record.function_id) {
 				zend_mir_verify_emit(context, ZEND_MIR_VERIFY_INVALID_EDGE,
@@ -56,17 +56,15 @@ static void zend_mir_verify_edges(zend_mir_verify_context *context)
 					"successor is unknown or belongs to another function");
 				continue;
 			}
-			for (earlier = 0; earlier < edge_index; earlier++) {
-				if (context->successors[block->successors_offset + earlier] == target_id) {
-					zend_mir_verify_emit(context, ZEND_MIR_VERIFY_DUPLICATE_EDGE,
-						ZEND_MIR_DIAGNOSTIC_INVALID_CFG,
-						zend_mir_verify_block_location(context, block->record.id),
-						ZEND_MIR_ID_INVALID, "successor edge is duplicated");
-					break;
-				}
-			}
-			if (zend_mir_verify_edge_occurrences(
-					context, target, block->record.id, false) != 1) {
+			reverse_occurrences = zend_mir_verify_edge_occurrences(
+				context, target, block->record.id, false);
+			if (reverse_occurrences > 1) {
+				zend_mir_verify_emit(context, ZEND_MIR_VERIFY_DUPLICATE_EDGE,
+					ZEND_MIR_DIAGNOSTIC_INVALID_CFG,
+					zend_mir_verify_block_location(context, block->record.id),
+					ZEND_MIR_ID_INVALID,
+					"parallel successors require one predecessor slot");
+			} else if (reverse_occurrences == 0) {
 				zend_mir_verify_emit(context, ZEND_MIR_VERIFY_EDGE_MISMATCH,
 					ZEND_MIR_DIAGNOSTIC_INVALID_CFG,
 					zend_mir_verify_block_location(context, block->record.id),
@@ -99,7 +97,7 @@ static void zend_mir_verify_edges(zend_mir_verify_context *context)
 				}
 			}
 			if (zend_mir_verify_edge_occurrences(
-					context, source, block->record.id, true) != 1) {
+					context, source, block->record.id, true) == 0) {
 				zend_mir_verify_emit(context, ZEND_MIR_VERIFY_EDGE_MISMATCH,
 					ZEND_MIR_DIAGNOSTIC_INVALID_CFG,
 					zend_mir_verify_block_location(context, block->record.id),

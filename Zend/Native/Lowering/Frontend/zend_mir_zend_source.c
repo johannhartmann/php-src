@@ -2351,10 +2351,18 @@ static bool zend_mir_frontend_append_parameter_modes(
 	uint32_t required;
 	uint32_t capacity;
 	uint32_t argument;
+	uint32_t fixed_parameter_count;
+	bool variadic;
 
 	target->parameter_modes.offset = inventory->parameter_mode_count;
+	fixed_parameter_count = function == NULL ? 0 : function->common.num_args;
+	variadic = function != NULL
+		&& (function->common.fn_flags & ZEND_ACC_VARIADIC) != 0;
+	if (variadic && fixed_parameter_count == UINT32_MAX) {
+		return false;
+	}
 	target->parameter_modes.count =
-		function == NULL ? 0 : function->common.num_args;
+		function == NULL ? 0 : fixed_parameter_count + (variadic ? 1 : 0);
 	if (target->parameter_modes.count == 0) {
 		return true;
 	}
@@ -3356,7 +3364,11 @@ static zend_mir_lowering_status zend_mir_zend_source_preflight_direct_calls(
 				|| target->parameter_modes.count
 					> inventory->parameter_mode_count
 						- target->parameter_modes.offset
-				|| target->parameter_modes.count != target->num_args) {
+				|| (target->parameter_modes.count != target->num_args
+					&& (!target->variadic
+						|| target->num_args == UINT32_MAX
+						|| target->parameter_modes.count
+							!= target->num_args + 1))) {
 			zend_mir_zend_source_release_w05(&source);
 			zend_mir_frontend_set_diagnostic(
 				diagnostic, ZEND_MIR_LOWERING_FAILED,
