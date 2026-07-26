@@ -99,7 +99,8 @@ static void zend_native_executor_dispatch_clear(
 	zend_native_executor_dispatch *expected = dispatch;
 	void **run_time_cache;
 
-	if (dispatch == NULL || dispatch->op_array == NULL
+	if (dispatch == NULL || dispatch->persistent
+			|| dispatch->op_array == NULL
 			|| zend_native_executor_entry_handle < 0) {
 		return;
 	}
