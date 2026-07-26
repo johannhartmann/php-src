@@ -166,6 +166,7 @@ static PHP_MINIT_FUNCTION(phpdbg) /* {{{ */
 	phpdbg_setup_watchpoints();
 
 #ifdef HAVE_NATIVE_ENGINE
+	zend_native_executor_set_frame_probe(phpdbg_native_frame_probe, NULL);
 	zend_native_executor_set_source_probe(phpdbg_native_source_probe, NULL);
 #else
 	zend_execute_ex = phpdbg_execute_ex;
@@ -180,6 +181,7 @@ static PHP_MSHUTDOWN_FUNCTION(phpdbg) /* {{{ */
 {
 #ifdef HAVE_NATIVE_ENGINE
 	zend_native_executor_set_source_probe(NULL, NULL);
+	zend_native_executor_set_frame_probe(NULL, NULL);
 #endif
 	zend_hash_destroy(&PHPDBG_G(registered));
 	phpdbg_destroy_watchpoints();

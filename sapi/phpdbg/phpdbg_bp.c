@@ -972,6 +972,20 @@ static inline phpdbg_breakbase_t *phpdbg_find_breakpoint_symbol(zend_function *f
 	}
 } /* }}} */
 
+PHPDBG_API phpdbg_breakbase_t *phpdbg_find_breakpoint_at_frame_entry(
+	zend_function *function)
+{
+	phpdbg_breakbase_t *base;
+
+	if (!(PHPDBG_G(flags) & PHPDBG_IS_BP_ENABLED)
+			|| !(PHPDBG_G(flags)
+				& (PHPDBG_HAS_METHOD_BP | PHPDBG_HAS_SYM_BP))) {
+		return NULL;
+	}
+	base = phpdbg_find_breakpoint_symbol(function);
+	return base == NULL || base->disabled ? NULL : base;
+}
+
 static inline phpdbg_breakbase_t *phpdbg_find_breakpoint_method(zend_op_array *ops) /* {{{ */
 {
 	HashTable *class_table;

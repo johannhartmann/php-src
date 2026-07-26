@@ -64,6 +64,10 @@ extern const phpdbg_command_t phpdbg_prompt_commands[]; /* }}} */
 #ifndef HAVE_NATIVE_ENGINE
 void phpdbg_execute_ex(zend_execute_data *execute_data);
 #else
+void phpdbg_native_frame_probe(
+	void *context,
+	const zend_execute_data *caller,
+	const zend_execute_data *callee);
 void phpdbg_native_source_probe(
 	void *context,
 	zend_execute_data *execute_data,
