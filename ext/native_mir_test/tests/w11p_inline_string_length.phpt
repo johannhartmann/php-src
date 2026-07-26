@@ -1,5 +1,5 @@
 --TEST--
-Native baseline reads string length directly from boxed CV storage
+Native baseline keeps typed string arguments register-authoritative across direct calls
 --SKIPIF--
 <?php
 if (!function_exists('native_mir_test_compile_execute')) {
@@ -22,6 +22,11 @@ function inline_string_length_leaf(string $value): int
 }
 
 function inline_string_length_root(string $value): int
+{
+    return inline_string_length_leaf($value);
+}
+
+function inline_string_length_untyped_root($value): int
 {
     return inline_string_length_leaf($value);
 }
@@ -66,7 +71,28 @@ printf(
     $direct['execution']['opline_handler_calls'],
     $direct['execution']['entry_active_calls'],
 );
+
+$untyped = native_mir_test_compile_execute(
+    $source,
+    'w11p-inline-string-length-untyped.php',
+    ['native-string'],
+    [
+        'wave' => 11,
+        'function' => 'inline_string_length_untyped_root',
+        'repeat' => 10,
+    ],
+);
+printf(
+    "%s untyped=%d vm=%d execute_ex=%d handler=%d active=%d\n",
+    $untyped['status'],
+    $untyped['execution']['return_value'],
+    $untyped['execution']['vm_handler_calls'],
+    $untyped['execution']['execute_ex_calls'],
+    $untyped['execution']['opline_handler_calls'],
+    $untyped['execution']['entry_active_calls'],
+);
 ?>
 --EXPECT--
 accepted return=["native-string",13] vm=0 execute_ex=0 handler=0 active=0
 accepted direct=13 vm=0 execute_ex=0 handler=0 active=0
+accepted untyped=13 vm=0 execute_ex=0 handler=0 active=0

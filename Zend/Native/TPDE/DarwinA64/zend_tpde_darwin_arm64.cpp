@@ -1472,8 +1472,13 @@ bool ZendCompilerA64::compile_inst(
 					&& consumer.operands.size() == 1
 					&& consumer.operands[0] == node.result
 					&& consumer.storage_id == node.storage_id
-					&& zend_mir_scalar_type_is_exact(consumer.exact_type)
-					&& consumer.exact_type != ZEND_MIR_SCALAR_TYPE_NULL) {
+					&& ((zend_mir_scalar_type_is_exact(
+							consumer.exact_type)
+							&& consumer.exact_type
+								!= ZEND_MIR_SCALAR_TYPE_NULL)
+						|| zend_tpde_machine_value_zval_type(
+							adaptor->machine_kind(consumer.result))
+							!= IS_UNDEF)) {
 				auto [result_ref, result] =
 					result_ref_single(consumer.result);
 				auto result_reg = result.alloc_reg();
@@ -1491,7 +1496,19 @@ bool ZendCompilerA64::compile_inst(
 							static_cast<uint32_t>(offset), 8);
 						break;
 					default:
-						return false;
+						switch (adaptor->machine_kind(
+								consumer.result)) {
+							case ZEND_TPDE_MACHINE_VALUE_STRING_PTR:
+							case ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR:
+							case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
+							case ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR:
+								load_off(result_reg, base_reg,
+									static_cast<uint32_t>(offset), 8);
+								break;
+							default:
+								return false;
+						}
+						break;
 				}
 				result.set_modified();
 				adaptor->mark_fused(next);
@@ -1531,12 +1548,16 @@ bool ZendCompilerA64::compile_inst(
 		auto mismatch = text_writer.label_create();
 		for (const Adaptor::ArgumentGuard &guard :
 				adaptor->argument_guards()) {
+			const uint32_t expected_type =
+				zend_mir_scalar_type_is_exact(guard.exact_type)
+					? zval_type(guard.exact_type)
+					: zend_tpde_machine_value_zval_type(
+						guard.machine_kind);
 			const uint64_t offset =
 				(uint64_t{ZEND_CALL_FRAME_SLOT} + guard.storage_id)
 				* sizeof(zval);
 			if (!zend_mir_id_is_valid(guard.storage_id)
-					|| !zend_mir_scalar_type_is_exact(guard.exact_type)
-					|| guard.exact_type == ZEND_MIR_SCALAR_TYPE_NULL
+					|| expected_type == IS_UNDEF
 					|| offset + offsetof(zval, u1.type_info)
 						> UINT32_MAX) {
 				return false;
@@ -1556,7 +1577,7 @@ bool ZendCompilerA64::compile_inst(
 				type.reset();
 				label_place(matched_boolean);
 			} else {
-				ASM(CMPwi, type_reg, zval_type(guard.exact_type));
+				ASM(CMPwi, type_reg, expected_type);
 				generate_raw_jump(Jump::Jne, mismatch);
 				type.reset();
 			}
@@ -1620,8 +1641,11 @@ bool ZendCompilerA64::compile_inst(
 	}
 	if (node.kind == Adaptor::InstKind::ZvalPayloadLoad) {
 		if (node.operands.size() != 1
-				|| !zend_mir_scalar_type_is_exact(node.exact_type)
-				|| node.exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
+				|| ((!zend_mir_scalar_type_is_exact(node.exact_type)
+						|| node.exact_type == ZEND_MIR_SCALAR_TYPE_NULL)
+					&& zend_tpde_machine_value_zval_type(
+						adaptor->machine_kind(node.result))
+						== IS_UNDEF)) {
 			return false;
 		}
 		auto [address_ref, address] = val_ref_single(node.operands[0]);
@@ -1640,7 +1664,17 @@ bool ZendCompilerA64::compile_inst(
 				load_off(result_reg, address_reg, 0, 8);
 				break;
 			default:
-				return false;
+				switch (adaptor->machine_kind(node.result)) {
+					case ZEND_TPDE_MACHINE_VALUE_STRING_PTR:
+					case ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR:
+					case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
+					case ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR:
+						load_off(result_reg, address_reg, 0, 8);
+						break;
+					default:
+						return false;
+				}
+				break;
 		}
 		result.set_modified();
 		return true;
@@ -5037,11 +5071,10 @@ bool ZendCompilerA64::compile_inst(
 											== ZEND_NATIVE_INLINE_LEAF_LONG_ADD_ARGUMENT
 										|| inline_operation
 											== ZEND_NATIVE_INLINE_LEAF_LONG_SUB_ARGUMENT;
+								bool first_inline_machine_operand = false;
 								uint32_t inline_machine_operands = 0;
 								if (inline_operation
-										!= ZEND_NATIVE_INLINE_LEAF_SCALAR_CONSTANT
-										&& inline_operation
-											!= ZEND_NATIVE_INLINE_LEAF_STRING_LENGTH_ARGUMENT) {
+										!= ZEND_NATIVE_INLINE_LEAF_SCALAR_CONSTANT) {
 									zend_mir_call_argument_ref argument;
 									if (!zend_tpde_call_argument_at(
 											adaptor->plan(),
@@ -5051,8 +5084,15 @@ bool ZendCompilerA64::compile_inst(
 											&argument)) {
 										return false;
 									}
+									first_inline_machine_operand =
+										zend_mir_id_is_valid(argument.value_id)
+										&& (inline_operation
+												!= ZEND_NATIVE_INLINE_LEAF_STRING_LENGTH_ARGUMENT
+											|| adaptor
+												->plan_value_is_register_authoritative(
+													argument.value_id));
 									inline_machine_operands +=
-										zend_mir_id_is_valid(argument.value_id);
+										first_inline_machine_operand;
 									if (two_arguments) {
 										if (!zend_tpde_call_argument_at(
 												adaptor->plan(),
@@ -5133,20 +5173,40 @@ bool ZendCompilerA64::compile_inst(
 									mov(first_reg, second_reg, 8);
 								} else if (inline_operation
 										== ZEND_NATIVE_INLINE_LEAF_STRING_LENGTH_ARGUMENT) {
-									const zend_native_direct_call_argument
-										&argument =
-											call.direct_call->arguments[
+									if (first_inline_machine_operand) {
+										if (!load_inline_argument(
 												call.direct_call
-													->inline_leaf_argument];
-									load_off(second_reg, frame_reg,
-										argument.source_frame_offset
-											+ static_cast<uint32_t>(offsetof(
-												zval, u1.type_info)),
-										1);
-									ASM(CMPxi, second_reg, IS_STRING);
-									generate_raw_jump(Jump::Jne, slow_path);
-									load_off(first_reg, frame_reg,
-										argument.source_frame_offset, 8);
+													->inline_leaf_argument,
+												first_reg)) {
+											return false;
+										}
+									} else {
+										const zend_native_direct_call_argument
+											&argument =
+												call.direct_call->arguments[
+													call.direct_call
+														->inline_leaf_argument];
+										if (argument.source_frame_offset
+												> UINT32_MAX
+													- static_cast<uint32_t>(
+														offsetof(
+															zval,
+															u1.type_info))) {
+											return false;
+										}
+										load_off(second_reg, frame_reg,
+											argument.source_frame_offset
+												+ static_cast<uint32_t>(
+													offsetof(
+														zval,
+														u1.type_info)),
+											1);
+										ASM(CMPxi, second_reg, IS_STRING);
+										generate_raw_jump(
+											Jump::Jne, slow_path);
+										load_off(first_reg, frame_reg,
+											argument.source_frame_offset, 8);
+									}
 									load_off(first_reg, first_reg,
 										static_cast<uint32_t>(offsetof(
 											zend_string, len)),
