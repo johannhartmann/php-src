@@ -1915,8 +1915,50 @@ bool ZendCompilerA64::compile_inst(
 		auto &[right_ref, right] = right_pair;
 		auto [result_ref, result] = result_ref_single(node.result);
 		auto left_reg = left.load_to_reg();
-		auto right_reg = right.load_to_reg();
 		auto result_reg = result.alloc_try_reuse(left);
+		uint64_t immediate;
+		if (adaptor->constant(node.operands[1], &immediate)) {
+			bool emitted = false;
+			const int64_t signed_immediate =
+				static_cast<int64_t>(immediate);
+			switch (record.opcode) {
+				case ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW:
+					if (signed_immediate >= 0) {
+						emitted = ASMIF(ADDxi, result_reg, left_reg,
+							static_cast<uint64_t>(signed_immediate));
+					} else if (signed_immediate != INT64_MIN) {
+						emitted = ASMIF(SUBxi, result_reg, left_reg,
+							static_cast<uint64_t>(-signed_immediate));
+					}
+					break;
+				case ZEND_MIR_OPCODE_I64_SUB_NO_OVERFLOW:
+					if (signed_immediate >= 0) {
+						emitted = ASMIF(SUBxi, result_reg, left_reg,
+							static_cast<uint64_t>(signed_immediate));
+					} else if (signed_immediate != INT64_MIN) {
+						emitted = ASMIF(ADDxi, result_reg, left_reg,
+							static_cast<uint64_t>(-signed_immediate));
+					}
+					break;
+				case ZEND_MIR_OPCODE_I64_BIT_OR:
+					emitted = ASMIF(ORRxi, result_reg, left_reg, immediate);
+					break;
+				case ZEND_MIR_OPCODE_I64_BIT_AND:
+					emitted = ASMIF(ANDxi, result_reg, left_reg, immediate);
+					break;
+				case ZEND_MIR_OPCODE_I64_BIT_XOR:
+				case ZEND_MIR_OPCODE_I1_XOR:
+					emitted = ASMIF(EORxi, result_reg, left_reg, immediate);
+					break;
+				default:
+					break;
+			}
+			if (emitted) {
+				result.set_modified();
+				return true;
+			}
+		}
+		auto right_reg = right.load_to_reg();
 		emit(result_reg, left_reg, right_reg);
 		result.set_modified();
 		return true;
@@ -1951,7 +1993,13 @@ bool ZendCompilerA64::compile_inst(
 		auto [left_pair, right_pair] = binary();
 		auto &[left_ref, left] = left_pair;
 		auto &[right_ref, right] = right_pair;
-		ASM(CMPx, left.load_to_reg(), right.load_to_reg());
+		uint64_t immediate;
+		auto left_reg = left.load_to_reg();
+		if (adaptor->constant(node.operands[1], &immediate)) {
+			compare_unsigned_immediate(left_reg, immediate);
+		} else {
+			ASM(CMPx, left_reg, right.load_to_reg());
+		}
 		if (fuse_compare_branch(condition)) {
 			return true;
 		}
