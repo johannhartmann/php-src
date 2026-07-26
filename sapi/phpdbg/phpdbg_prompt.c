@@ -1625,6 +1625,8 @@ static inline void list_code(void) {
 } while (0)
 
 #ifdef HAVE_NATIVE_ENGINE
+ZEND_TLS zend_function *phpdbg_native_entry_break_function;
+
 static void phpdbg_native_pause(zend_object *exception)
 {
 	if (exception) {
@@ -1690,10 +1692,10 @@ void phpdbg_native_frame_probe(
 	previous = EG(current_execute_data);
 	EG(current_execute_data) = execute_data;
 	PHPDBG_G(in_execution) = 1;
-	phpdbg_print_opline(execute_data, 0);
 	phpdbg_hit_breakpoint(brake, 1);
 	phpdbg_native_pause(EG(exception));
 	PHPDBG_G(last_line) = execute_data->opline->lineno;
+	phpdbg_native_entry_break_function = execute_data->func;
 	EG(current_execute_data) = previous;
 }
 
@@ -1703,6 +1705,8 @@ void phpdbg_native_source_probe(
 	uint32_t source_position_id)
 {
 	zend_object *exception;
+	bool skip_entry_breakpoint;
+	uint32_t entry_position;
 
 	(void) context;
 	if (execute_data == NULL || execute_data->func == NULL
@@ -1713,6 +1717,15 @@ void phpdbg_native_source_probe(
 	execute_data->opline =
 		&execute_data->func->op_array.opcodes[source_position_id];
 	exception = EG(exception);
+	entry_position = execute_data->func->op_array.num_args
+		+ !!(execute_data->func->op_array.fn_flags & ZEND_ACC_VARIADIC);
+	skip_entry_breakpoint =
+		phpdbg_native_entry_break_function == execute_data->func
+		&& source_position_id == entry_position;
+	if (phpdbg_native_entry_break_function == execute_data->func
+			&& source_position_id >= entry_position) {
+		phpdbg_native_entry_break_function = NULL;
+	}
 
 	if ((PHPDBG_G(flags) & PHPDBG_IS_STOPPING)
 			&& !(PHPDBG_G(flags) & PHPDBG_IS_RUNNING)) {
@@ -1826,7 +1839,15 @@ void phpdbg_native_source_probe(
 		goto complete;
 	}
 	if (PHPDBG_G(flags) & PHPDBG_BP_MASK) {
-		phpdbg_breakbase_t *brake = phpdbg_find_breakpoint(execute_data);
+		phpdbg_breakbase_t *brake;
+		uint64_t entry_breakpoint_flags = PHPDBG_G(flags)
+			& (PHPDBG_HAS_METHOD_BP | PHPDBG_HAS_SYM_BP);
+
+		if (skip_entry_breakpoint) {
+			PHPDBG_G(flags) &= ~entry_breakpoint_flags;
+		}
+		brake = phpdbg_find_breakpoint(execute_data);
+		PHPDBG_G(flags) |= entry_breakpoint_flags;
 
 		if (brake != NULL
 				&& (brake->type != PHPDBG_BREAK_FILE
