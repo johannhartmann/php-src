@@ -7,6 +7,7 @@
 typedef struct _zend_mir_frontend_call_target {
 	zend_mir_source_call_target_ref record;
 	const zend_function *function;
+	uint8_t init_opcode;
 } zend_mir_frontend_call_target;
 
 typedef struct _zend_mir_frontend_call_inventory {
@@ -123,11 +124,11 @@ zend_mir_frontend_call_argument_mode(const zend_op *opline)
 		case ZEND_SEND_VAL_EX:
 		case ZEND_SEND_VAR:
 		case ZEND_SEND_VAR_EX:
+		case ZEND_SEND_VAR_NO_REF_EX:
 		case ZEND_SEND_FUNC_ARG:
 			return ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE;
 		case ZEND_SEND_REF:
 		case ZEND_SEND_VAR_NO_REF:
-		case ZEND_SEND_VAR_NO_REF_EX:
 			return ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_REFERENCE;
 		default:
 			return ZEND_MIR_SOURCE_CALL_ARGUMENT_MODE_INVALID;
@@ -1663,17 +1664,37 @@ static zend_function *zend_mir_frontend_canonical_script_function(
 	const zend_script *script, zend_function *function)
 {
 	zend_function *candidate;
+	zend_class_entry *scope;
 
 	if (script == NULL || function == NULL
 			|| function->type != ZEND_USER_FUNCTION
 			|| function->common.function_name == NULL) {
 		return function;
 	}
-	candidate = zend_hash_find_ptr(
-		&script->function_table, function->common.function_name);
+	if (function->common.scope != NULL) {
+		scope = zend_hash_find_ptr_lc(
+			&script->class_table, function->common.scope->name);
+		if (scope == NULL || scope->name == NULL
+				|| !zend_string_equals_ci(
+					scope->name, function->common.scope->name)) {
+			return function;
+		}
+		candidate = zend_hash_find_ptr_lc(
+			&scope->function_table, function->common.function_name);
+	} else {
+		candidate = zend_hash_find_ptr_lc(
+			&script->function_table, function->common.function_name);
+	}
 	if (candidate == NULL || candidate->type != ZEND_USER_FUNCTION
 			|| candidate->op_array.filename == NULL
 			|| function->op_array.filename == NULL
+			|| ((candidate->common.scope == NULL)
+				!= (function->common.scope == NULL))
+			|| (candidate->common.scope != NULL
+				&& (candidate->common.scope->name == NULL
+					|| !zend_string_equals_ci(
+						candidate->common.scope->name,
+						function->common.scope->name)))
 			|| !zend_string_equals(
 				candidate->op_array.filename, function->op_array.filename)) {
 		return function;
@@ -2248,11 +2269,20 @@ zend_mir_frontend_target_kind(uint8_t opcode, const zend_function *function,
 		return ZEND_MIR_SOURCE_CALL_TARGET_METHOD;
 	}
 	if (opcode == ZEND_NEW) {
-		return ZEND_MIR_SOURCE_CALL_TARGET_METHOD;
+		return function != NULL && function->type == ZEND_INTERNAL_FUNCTION
+			? ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL
+			: ZEND_MIR_SOURCE_CALL_TARGET_METHOD;
 	}
-	if (opcode != ZEND_INIT_FCALL
-			&& opcode != ZEND_INIT_FCALL_BY_NAME
-			&& opcode != ZEND_INIT_NS_FCALL_BY_NAME) {
+	if (opcode == ZEND_INIT_FCALL_BY_NAME
+			|| opcode == ZEND_INIT_NS_FCALL_BY_NAME) {
+		/*
+		 * The optimizer's currently visible target is only a hint for these
+		 * opcodes.  A request-local namespaced declaration may supersede the
+		 * global binding, so native code must retain the open named target.
+		 */
+		return ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER;
+	}
+	if (opcode != ZEND_INIT_FCALL) {
 		return ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER;
 	}
 	if (function == NULL || function->type != ZEND_USER_FUNCTION) {
@@ -2362,7 +2392,7 @@ static bool zend_mir_frontend_snapshot_target(
 	zend_mir_source_call_target_id id,
 	zend_mir_source_call_target_kind kind,
 	const zend_function *function, uint32_t declaration_id,
-	bool open_method)
+	bool open_method, uint8_t init_opcode)
 {
 	memset(target, 0, sizeof(*target));
 	target->record.id = id;
@@ -2371,6 +2401,7 @@ static bool zend_mir_frontend_snapshot_target(
 	target->record.op_array_id = kind == ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL
 		? ZEND_MIR_ID_INVALID : declaration_id;
 	target->function = function;
+	target->init_opcode = init_opcode;
 	if (kind == ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER || open_method) {
 		/* Even when the optimizer can currently see a likely function, PHP's
 		 * named, first-class callable, and receiver-polymorphic method forms
@@ -2421,6 +2452,13 @@ static bool zend_mir_frontend_target_for_call(
 		if (is_prototype) {
 			function = NULL;
 		}
+		if (function != NULL
+				&& (function->common.fn_flags & ZEND_ACC_ABSTRACT) != 0
+				&& (opline->opcode == ZEND_INIT_METHOD_CALL
+					|| opline->opcode
+						== ZEND_INIT_STATIC_METHOD_CALL)) {
+			function = NULL;
+		}
 		if (function == NULL
 				&& (opline->opcode == ZEND_INIT_METHOD_CALL
 					|| opline->opcode == ZEND_INIT_STATIC_METHOD_CALL)) {
@@ -2441,6 +2479,7 @@ static bool zend_mir_frontend_target_for_call(
 	for (index = 0; index < inventory->target_count; index++) {
 		if (inventory->targets[index].function == function
 				&& inventory->targets[index].record.kind == kind
+				&& inventory->targets[index].init_opcode == opline->opcode
 				&& function != NULL) {
 			*target_id = index;
 			return true;
@@ -2463,7 +2502,8 @@ static bool zend_mir_frontend_target_for_call(
 		function == NULL && (opline->opcode == ZEND_INIT_METHOD_CALL
 			|| opline->opcode == ZEND_INIT_STATIC_METHOD_CALL
 			|| opline->opcode
-				== ZEND_INIT_PARENT_PROPERTY_HOOK_CALL))) {
+				== ZEND_INIT_PARENT_PROPERTY_HOOK_CALL),
+		opline->opcode)) {
 		return false;
 	}
 	inventory->target_count++;
@@ -3368,6 +3408,7 @@ static zend_mir_lowering_status zend_mir_zend_source_preflight_direct_calls(
 						|| (init_opcode != ZEND_INIT_FCALL
 							&& init_opcode != ZEND_INIT_METHOD_CALL
 							&& init_opcode != ZEND_INIT_STATIC_METHOD_CALL
+							&& (!w10_execution || init_opcode != ZEND_NEW)
 							&& (!w10_execution || init_opcode
 								!= ZEND_INIT_PARENT_PROPERTY_HOOK_CALL))
 							|| (do_opcode != ZEND_DO_ICALL

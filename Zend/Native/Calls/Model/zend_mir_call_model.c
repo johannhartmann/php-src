@@ -563,7 +563,10 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_source_sequence(
 								&& opcode.zend_opcode_number
 									!= ZEND_INIT_METHOD_CALL
 								&& opcode.zend_opcode_number
-									!= ZEND_INIT_STATIC_METHOD_CALL)))
+									!= ZEND_INIT_STATIC_METHOD_CALL
+								&& (!w10_execution
+									|| opcode.zend_opcode_number
+										!= ZEND_NEW))))
 					|| site->parent_call_site_id != parent
 					|| ((site->flags
 							& ZEND_MIR_SOURCE_CALL_SITE_NESTED) != 0)

@@ -3072,6 +3072,8 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 			zend_fetch_dimension_const(result, container, offset,
 				mode == ZEND_NATIVE_DIM_IS ? BP_VAR_IS : BP_VAR_R);
 			zend_native_value_consume_operand(execute_data,
+				opline->op2_type, opline->op2, result);
+			zend_native_value_consume_operand(execute_data,
 				opline->op1_type, opline->op1, result);
 			return zend_native_value_status();
 		}
@@ -3155,7 +3157,14 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 		return zend_native_value_status();
 	}
 	if (Z_TYPE_P(container) != IS_ARRAY) {
-		if (write) {
+		if (mode == ZEND_NATIVE_DIM_IS) {
+			ZVAL_NULL(result);
+			zend_native_value_consume_operand(execute_data,
+				opline->op2_type, opline->op2, result);
+			zend_native_value_consume_operand(execute_data,
+				opline->op1_type, opline->op1, result);
+			return ZEND_NATIVE_RETURNED;
+		} else if (write) {
 			zend_throw_error(NULL, "Cannot use a scalar value as an array");
 		} else {
 			zend_throw_error(NULL, "Cannot access offset of type mixed on %s",
@@ -3206,6 +3215,8 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 		ZVAL_COPY_DEREF(result, value);
 	}
 	if (!write) {
+		zend_native_value_consume_operand(execute_data,
+			opline->op2_type, opline->op2, result);
 		zend_native_value_consume_operand(execute_data,
 			opline->op1_type, opline->op1, result);
 	}

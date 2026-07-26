@@ -1510,6 +1510,16 @@ bool call_site_requires_source_fragments(
 					site.source_do_opline_index].opcode) != nullptr) {
 		return true;
 	}
+	/*
+	 * NEW must materialize the object into its source result slot before its
+	 * constructor arguments are sent.  The source-fragment path already
+	 * performs that ordering and still binds a fixed internal constructor
+	 * through the process-local call cell.
+	 */
+	if (plan->source_op_array->opcodes[
+			site.source_init_opline_index].opcode == ZEND_NEW) {
+		return true;
+	}
 	for (uint32_t index = 0; index < site.arguments.count; ++index) {
 		zend_mir_call_argument_ref argument;
 		if (!zend_tpde_call_argument_at(
