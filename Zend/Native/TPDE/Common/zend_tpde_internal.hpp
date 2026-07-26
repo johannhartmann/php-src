@@ -8,8 +8,11 @@
 #include "Zend/zend_compile.h"
 #include "Zend/zend_execute.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <vector>
 
 struct _zend_native_direct_call_descriptor;
 struct _zend_native_direct_internal_call_descriptor;
@@ -328,6 +331,61 @@ struct zend_tpde_user_multi_branch {
 	uint32_t fallback_target;
 	HashTable *jump_table;
 };
+
+struct zend_tpde_integer_case {
+	int64_t value;
+	uint32_t label_index;
+};
+
+enum zend_tpde_integer_dispatch_kind : uint8_t {
+	ZEND_TPDE_INTEGER_DISPATCH_LINEAR = 0,
+	ZEND_TPDE_INTEGER_DISPATCH_BALANCED = 1,
+	ZEND_TPDE_INTEGER_DISPATCH_JUMP_TABLE = 2,
+};
+
+static inline zend_tpde_integer_dispatch_kind
+zend_tpde_integer_dispatch(
+	HashTable *jump_table,
+	std::vector<zend_tpde_integer_case> *cases,
+	int64_t *low,
+	uint64_t *range)
+{
+	if (jump_table == nullptr || cases == nullptr
+			|| low == nullptr || range == nullptr) {
+		return ZEND_TPDE_INTEGER_DISPATCH_LINEAR;
+	}
+	cases->clear();
+	cases->reserve(zend_hash_num_elements(jump_table));
+	uint32_t label_index = 0;
+	zend_ulong numeric_key;
+	zend_string *string_key;
+	zval *jump_value;
+	ZEND_HASH_FOREACH_KEY_VAL(
+			jump_table, numeric_key, string_key, jump_value) {
+		if (string_key == nullptr) {
+			cases->push_back({
+				static_cast<int64_t>(numeric_key), label_index});
+		}
+		++label_index;
+	} ZEND_HASH_FOREACH_END();
+	if (cases->size() <= 4) {
+		return ZEND_TPDE_INTEGER_DISPATCH_LINEAR;
+	}
+	std::ranges::sort(*cases, {}, &zend_tpde_integer_case::value);
+	const int64_t first = cases->front().value;
+	const int64_t last = cases->back().value;
+	const uint64_t span = static_cast<uint64_t>(last)
+		- static_cast<uint64_t>(first) + 1;
+	if (span == 0) {
+		return ZEND_TPDE_INTEGER_DISPATCH_LINEAR;
+	}
+	*low = first;
+	*range = span;
+	return span <= std::numeric_limits<uint32_t>::max()
+			&& span / cases->size() < 8
+		? ZEND_TPDE_INTEGER_DISPATCH_JUMP_TABLE
+		: ZEND_TPDE_INTEGER_DISPATCH_BALANCED;
+}
 
 static inline uint32_t zend_tpde_relative_source_target(
 	const zend_op_array *op_array, uint32_t source_position,

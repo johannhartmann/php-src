@@ -145,6 +145,11 @@ public:
 		(void) index;
 	}
 
+	void emit_integer_dispatch(HashTable *jump_table,
+		std::span<const tpde::Label> labels,
+		tpde::x64::AsmReg value_reg,
+		tpde::x64::AsmReg temp_reg,
+		tpde::Label default_label);
 	bool compile_inst(IRInstRef instruction, InstRange);
 };
 
@@ -166,6 +171,79 @@ uint32_t zval_type(zend_mir_scalar_type_mask type) {
 		case ZEND_MIR_SCALAR_TYPE_F64: return IS_DOUBLE;
 		default: return IS_UNDEF;
 	}
+}
+
+void ZendCompilerX64::emit_integer_dispatch(
+	HashTable *jump_table,
+	std::span<const tpde::Label> labels,
+	tpde::x64::AsmReg value_reg,
+	tpde::x64::AsmReg temp_reg,
+	tpde::Label default_label)
+{
+	std::vector<zend_tpde_integer_case> cases;
+	int64_t low = 0;
+	uint64_t range = 0;
+	const zend_tpde_integer_dispatch_kind kind =
+		zend_tpde_integer_dispatch(jump_table, &cases, &low, &range);
+	auto emit_compare = [&](uint64_t expected, tpde::Label target) {
+		materialize_constant(&expected,
+			tpde::x64::PlatformConfig::GP_BANK, 8, temp_reg);
+		ASM(CMP64rr, value_reg, temp_reg);
+		generate_raw_jump(Jump::je, target);
+	};
+	if (kind == ZEND_TPDE_INTEGER_DISPATCH_LINEAR) {
+		for (const zend_tpde_integer_case &entry : cases) {
+			emit_compare(
+				static_cast<uint64_t>(entry.value),
+				labels[entry.label_index]);
+		}
+		generate_raw_jump(Jump::jmp, default_label);
+		return;
+	}
+
+	const uint64_t low_bits = static_cast<uint64_t>(low);
+	materialize_constant(&low_bits,
+		tpde::x64::PlatformConfig::GP_BANK, 8, temp_reg);
+	ASM(SUB64rr, value_reg, temp_reg);
+	if (kind == ZEND_TPDE_INTEGER_DISPATCH_JUMP_TABLE) {
+		const uint64_t high_index = range - 1;
+		materialize_constant(&high_index,
+			tpde::x64::PlatformConfig::GP_BANK, 8, temp_reg);
+		ASM(CMP64rr, value_reg, temp_reg);
+		generate_raw_jump(Jump::ja, default_label);
+		auto &table = text_writer.create_jump_table(
+			static_cast<uint32_t>(range), value_reg, temp_reg);
+		std::ranges::fill(table.labels(), default_label);
+		for (const zend_tpde_integer_case &entry : cases) {
+			const uint64_t index =
+				static_cast<uint64_t>(entry.value) - low_bits;
+			table.labels()[index] = labels[entry.label_index];
+		}
+		return;
+	}
+
+	auto emit_balanced = [&](size_t begin, size_t end, auto &&self) -> void {
+		const size_t count = end - begin;
+		if (count <= 4) {
+			for (size_t index = begin; index < end; ++index) {
+				emit_compare(
+					static_cast<uint64_t>(cases[index].value) - low_bits,
+					labels[cases[index].label_index]);
+			}
+			generate_raw_jump(Jump::jmp, default_label);
+			return;
+		}
+		const size_t middle = begin + count / 2;
+		const uint64_t pivot =
+			static_cast<uint64_t>(cases[middle].value) - low_bits;
+		const tpde::Label greater = text_writer.label_create();
+		emit_compare(pivot, labels[cases[middle].label_index]);
+		generate_raw_jump(Jump::ja, greater);
+		self(begin, middle, self);
+		label_place(greater);
+		self(middle + 1, end, self);
+	};
+	emit_balanced(0, cases.size(), emit_balanced);
 }
 
 bool ZendCompilerX64::compile_inst(
@@ -850,23 +928,8 @@ bool ZendCompilerX64::compile_inst(
 				label_place(long_label);
 				ASM(MOV64rm, value_reg,
 					FE_MEM(slot_reg, 0, FE_NOREG, 0));
-				ZEND_HASH_FOREACH_KEY_VAL(
-						layout.jump_table, numeric_key, string_key,
-						jump_value) {
-					if (string_key == nullptr) {
-						const uint64_t case_value =
-							static_cast<uint64_t>(numeric_key);
-						materialize_constant(
-							&case_value,
-							tpde::x64::PlatformConfig::GP_BANK,
-							8, constant_reg);
-						ASM(CMP64rr, value_reg, constant_reg);
-						generate_raw_jump(
-							Jump::je, case_labels[case_index]);
-					}
-					case_index++;
-				} ZEND_HASH_FOREACH_END();
-				generate_raw_jump(Jump::jmp, default_label);
+				emit_integer_dispatch(layout.jump_table, case_labels,
+					value_reg, constant_reg, default_label);
 
 				label_place(string_label);
 				ASM(MOV64rm, value_reg,
@@ -4776,21 +4839,8 @@ bool ZendCompilerX64::compile_inst(
 			label_place(long_label);
 			ASM(MOV64rm, value_reg,
 				FE_MEM(slot_reg, 0, FE_NOREG, 0));
-			ZEND_HASH_FOREACH_KEY_VAL(
-					layout.jump_table, numeric_key, string_key, jump_value) {
-				if (string_key == nullptr) {
-					const uint64_t case_value =
-						static_cast<uint64_t>(numeric_key);
-					materialize_constant(
-						&case_value, tpde::x64::PlatformConfig::GP_BANK,
-						8, constant_reg);
-					ASM(CMP64rr, value_reg, constant_reg);
-					generate_raw_jump(
-						Jump::je, case_labels[case_index]);
-				}
-				case_index++;
-			} ZEND_HASH_FOREACH_END();
-			generate_raw_jump(Jump::jmp, default_label);
+			emit_integer_dispatch(layout.jump_table, case_labels,
+				value_reg, constant_reg, default_label);
 
 			label_place(string_label);
 			ASM(MOV64rm, value_reg,
