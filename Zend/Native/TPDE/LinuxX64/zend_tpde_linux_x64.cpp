@@ -1512,8 +1512,13 @@ bool ZendCompilerX64::compile_inst(
 					&& consumer.operands.size() == 1
 					&& consumer.operands[0] == node.result
 					&& consumer.storage_id == node.storage_id
-					&& zend_mir_scalar_type_is_exact(consumer.exact_type)
-					&& consumer.exact_type != ZEND_MIR_SCALAR_TYPE_NULL) {
+					&& ((zend_mir_scalar_type_is_exact(
+							consumer.exact_type)
+							&& consumer.exact_type
+								!= ZEND_MIR_SCALAR_TYPE_NULL)
+						|| zend_tpde_machine_value_zval_type(
+							adaptor->machine_kind(consumer.result))
+							!= IS_UNDEF)) {
 				auto [result_ref, result] =
 					result_ref_single(consumer.result);
 				auto result_reg = result.alloc_reg();
@@ -1537,7 +1542,20 @@ bool ZendCompilerX64::compile_inst(
 								static_cast<int32_t>(offset)));
 						break;
 					default:
-						return false;
+						switch (adaptor->machine_kind(
+								consumer.result)) {
+							case ZEND_TPDE_MACHINE_VALUE_STRING_PTR:
+							case ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR:
+							case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
+							case ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR:
+								ASM(MOV64rm, result_reg,
+									FE_MEM(base_reg, 0, FE_NOREG,
+										static_cast<int32_t>(offset)));
+								break;
+							default:
+								return false;
+						}
+						break;
 				}
 				result.set_modified();
 				adaptor->mark_fused(next);
@@ -1578,12 +1596,16 @@ bool ZendCompilerX64::compile_inst(
 		auto mismatch = text_writer.label_create();
 		for (const Adaptor::ArgumentGuard &guard :
 				adaptor->argument_guards()) {
+			const uint32_t expected_type =
+				zend_mir_scalar_type_is_exact(guard.exact_type)
+					? zval_type(guard.exact_type)
+					: zend_tpde_machine_value_zval_type(
+						guard.machine_kind);
 			const uint64_t offset =
 				(uint64_t{ZEND_CALL_FRAME_SLOT} + guard.storage_id)
 				* sizeof(zval);
 			if (!zend_mir_id_is_valid(guard.storage_id)
-					|| !zend_mir_scalar_type_is_exact(guard.exact_type)
-					|| guard.exact_type == ZEND_MIR_SCALAR_TYPE_NULL
+					|| expected_type == IS_UNDEF
 					|| offset + offsetof(zval, u1.type_info)
 						> INT32_MAX) {
 				return false;
@@ -1605,8 +1627,7 @@ bool ZendCompilerX64::compile_inst(
 				label_place(matched_boolean);
 			} else {
 				ASM(CMP32ri, type_reg,
-					static_cast<int32_t>(
-						zval_type(guard.exact_type)));
+					static_cast<int32_t>(expected_type));
 				generate_raw_jump(Jump::jne, mismatch);
 				type.reset();
 			}
@@ -1674,8 +1695,11 @@ bool ZendCompilerX64::compile_inst(
 	}
 	if (node.kind == Adaptor::InstKind::ZvalPayloadLoad) {
 		if (node.operands.size() != 1
-				|| !zend_mir_scalar_type_is_exact(node.exact_type)
-				|| node.exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
+				|| ((!zend_mir_scalar_type_is_exact(node.exact_type)
+						|| node.exact_type == ZEND_MIR_SCALAR_TYPE_NULL)
+					&& zend_tpde_machine_value_zval_type(
+						adaptor->machine_kind(node.result))
+						== IS_UNDEF)) {
 			return false;
 		}
 		auto [address_ref, address] = val_ref_single(node.operands[0]);
@@ -1698,7 +1722,18 @@ bool ZendCompilerX64::compile_inst(
 					FE_MEM(address_reg, 0, FE_NOREG, 0));
 				break;
 			default:
-				return false;
+				switch (adaptor->machine_kind(node.result)) {
+					case ZEND_TPDE_MACHINE_VALUE_STRING_PTR:
+					case ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR:
+					case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
+					case ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR:
+						ASM(MOV64rm, result_reg,
+							FE_MEM(address_reg, 0, FE_NOREG, 0));
+						break;
+					default:
+						return false;
+				}
+				break;
 		}
 		result.set_modified();
 		return true;
@@ -5406,11 +5441,10 @@ register_operand:
 											== ZEND_NATIVE_INLINE_LEAF_LONG_ADD_ARGUMENT
 										|| inline_operation
 											== ZEND_NATIVE_INLINE_LEAF_LONG_SUB_ARGUMENT;
+								bool first_inline_machine_operand = false;
 								uint32_t inline_machine_operands = 0;
 								if (inline_operation
-										!= ZEND_NATIVE_INLINE_LEAF_SCALAR_CONSTANT
-										&& inline_operation
-											!= ZEND_NATIVE_INLINE_LEAF_STRING_LENGTH_ARGUMENT) {
+										!= ZEND_NATIVE_INLINE_LEAF_SCALAR_CONSTANT) {
 									zend_mir_call_argument_ref argument;
 									if (!zend_tpde_call_argument_at(
 											adaptor->plan(),
@@ -5420,8 +5454,15 @@ register_operand:
 											&argument)) {
 										return false;
 									}
+									first_inline_machine_operand =
+										zend_mir_id_is_valid(argument.value_id)
+										&& (inline_operation
+												!= ZEND_NATIVE_INLINE_LEAF_STRING_LENGTH_ARGUMENT
+											|| adaptor
+												->plan_value_is_register_authoritative(
+													argument.value_id));
 									inline_machine_operands +=
-										zend_mir_id_is_valid(argument.value_id);
+										first_inline_machine_operand;
 									if (two_arguments) {
 										if (!zend_tpde_call_argument_at(
 												adaptor->plan(),
@@ -5504,24 +5545,45 @@ register_operand:
 									ASM(MOV64rr, first_reg, second_reg);
 								} else if (inline_operation
 										== ZEND_NATIVE_INLINE_LEAF_STRING_LENGTH_ARGUMENT) {
-									const zend_native_direct_call_argument
-										&argument =
-											call.direct_call->arguments[
+									if (first_inline_machine_operand) {
+										if (!load_inline_argument(
 												call.direct_call
-													->inline_leaf_argument];
-									ASM(CMP8mi,
-										FE_MEM(frame_reg, 0, FE_NOREG,
-											static_cast<int32_t>(
-												argument.source_frame_offset
+													->inline_leaf_argument,
+												first_reg)) {
+											return false;
+										}
+									} else {
+										const zend_native_direct_call_argument
+											&argument =
+												call.direct_call->arguments[
+													call.direct_call
+														->inline_leaf_argument];
+										if (argument.source_frame_offset
+												> INT32_MAX
+											|| argument.source_frame_offset
+												> static_cast<uint32_t>(
+													INT32_MAX
+													- offsetof(
+														zval, u1.type_info))) {
+											return false;
+										}
+										ASM(CMP8mi,
+											FE_MEM(frame_reg, 0, FE_NOREG,
+												static_cast<int32_t>(
+													argument
+														.source_frame_offset
 													+ offsetof(
-														zval, u1.type_info))),
-										IS_STRING);
-									generate_raw_jump(Jump::jne, slow_path);
-									ASM(MOV64rm, first_reg,
-										FE_MEM(frame_reg, 0, FE_NOREG,
-											static_cast<int32_t>(
-												argument
-													.source_frame_offset)));
+														zval,
+														u1.type_info))),
+											IS_STRING);
+										generate_raw_jump(
+											Jump::jne, slow_path);
+										ASM(MOV64rm, first_reg,
+											FE_MEM(frame_reg, 0, FE_NOREG,
+												static_cast<int32_t>(
+													argument
+														.source_frame_offset)));
+									}
 									ASM(MOV64rm, first_reg,
 										FE_MEM(first_reg, 0, FE_NOREG,
 											static_cast<int32_t>(offsetof(
