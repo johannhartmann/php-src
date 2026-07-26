@@ -2240,21 +2240,6 @@ register_operand:
 			return false;
 		}
 
-		/*
-		 * The guarded helper call mutates TPDE's global register state even
-		 * though it is emitted on only one local machine-code edge.  Spill all
-		 * live assignments before introducing that edge, then keep the frame
-		 * pointer in an untracked scratch register.  Both arms consequently
-		 * reach the join with the same allocator state.
-		 */
-		for (auto reg_id : register_file.used_regs()) {
-			tpde::Reg reg{reg_id};
-			if (!register_file.is_fixed(reg)
-					&& register_file.reg_local_idx(reg)
-						!= INVALID_VAL_LOCAL_IDX) {
-				evict_reg(reg);
-			}
-		}
 		auto slow = text_writer.label_create();
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
@@ -2392,11 +2377,16 @@ register_operand:
 		target_type.reset();
 		low_word.reset();
 		probe.reset();
+		const auto register_state =
+			zend::native::tpde::
+				capture_conditional_call_register_state(*this);
 		ValuePart frame_argument{tpde::x64::PlatformConfig::GP_BANK, 8};
 		frame_argument.set_value(this, std::move(frame_scratch));
 		if (!execute_value_operation(&frame_argument)) {
 			return false;
 		}
+		zend::native::tpde::restore_conditional_call_register_state(
+			*this, register_state);
 		label_place(done);
 		return true;
 	};
