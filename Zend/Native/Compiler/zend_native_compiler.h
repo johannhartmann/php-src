@@ -105,6 +105,7 @@ typedef struct _zend_native_compiler_config {
 	bool abi_conformance_probe;
 	bool source_probe;
 	bool defer_publication;
+	bool direct_reentry;
 } zend_native_compiler_config;
 
 ZEND_API zend_native_compiler *zend_native_compiler_create(

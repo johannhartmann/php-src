@@ -311,6 +311,7 @@ zend_native_executor_create_generation(zend_op_array *root)
 	config.target = zend_native_executor_target();
 	config.persistent = persistent;
 	config.source_probe = zend_native_runtime_source_probe_enabled();
+	config.direct_reentry = true;
 	generation->compiler =
 		zend_native_compiler_create(&config, &diagnostic);
 	if (generation->compiler == NULL) {
@@ -572,6 +573,9 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 {
 	zend_native_executor_dispatch *dispatch;
 	zend_native_executor_generation *generation;
+	zend_native_entry_cell *entry_cell;
+	const zend_native_code *code;
+	zend_execute_data *previous;
 	zend_native_diagnostic diagnostic;
 	zend_native_status status;
 
@@ -580,6 +584,24 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 			|| !ZEND_USER_CODE(execute_data->func->type)) {
 		zend_throw_error(NULL, "Invalid native userland executor activation");
 		return;
+	}
+	entry_cell = zend_native_reentry_resolve(execute_data->func);
+	if (entry_cell != NULL
+			&& (code = zend_native_entry_cell_load(entry_cell)) != NULL) {
+		previous = execute_data->prev_execute_data;
+		if (entry_cell->frame_probe != NULL) {
+			entry_cell->frame_probe(
+				entry_cell->frame_probe_context, previous,
+				execute_data);
+		}
+		memset(&diagnostic, 0, sizeof(diagnostic));
+		entry_cell->active_calls++;
+		EG(current_execute_data) = execute_data;
+		status = zend_native_execute_observed_frame(
+			code, execute_data, &diagnostic);
+		EG(current_execute_data) = previous;
+		entry_cell->active_calls--;
+		goto complete;
 	}
 	dispatch = zend_hash_index_find_ptr(
 		&zend_native_executor_request_state.dispatch,
@@ -642,9 +664,8 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 	memset(&diagnostic, 0, sizeof(diagnostic));
 	status = zend_native_compiler_execute_data(
 		generation->compiler, execute_data, &diagnostic);
-	zend_native_entry_cell *entry_cell =
-		zend_native_compiler_lookup(
-			generation->compiler, execute_data->func);
+	entry_cell = zend_native_compiler_lookup(
+		generation->compiler, execute_data->func);
 	if (entry_cell != NULL) {
 		dispatch = emalloc(sizeof(*dispatch));
 		dispatch->generation = generation;
