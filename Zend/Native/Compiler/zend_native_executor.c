@@ -71,6 +71,8 @@ struct _zend_native_executor_dispatch {
 
 ZEND_TLS zend_native_executor_request zend_native_executor_request_state;
 static bool zend_native_executor_installed;
+static zend_native_frame_probe_t zend_native_executor_frame_probe;
+static void *zend_native_executor_frame_probe_context;
 static uint64_t zend_native_executor_epoch = 1;
 static zend_native_executor_generation
 	*zend_native_executor_persistent_generations;
@@ -321,8 +323,10 @@ static void zend_native_executor_persistent_dispatch_dtor(zval *value)
 #define ZEND_NATIVE_OPCACHE_BUNDLE_PERSISTENT 2u
 #define ZEND_NATIVE_OPCACHE_BUNDLE_REQUEST_ARENA 3u
 #define ZEND_NATIVE_OPCACHE_BUNDLE_SOURCE_PROBE (1u << 0)
+#define ZEND_NATIVE_OPCACHE_BUNDLE_FRAME_PROBE (1u << 1)
 #define ZEND_NATIVE_OPCACHE_BUNDLE_KNOWN_FLAGS \
-	ZEND_NATIVE_OPCACHE_BUNDLE_SOURCE_PROBE
+	(ZEND_NATIVE_OPCACHE_BUNDLE_SOURCE_PROBE \
+		| ZEND_NATIVE_OPCACHE_BUNDLE_FRAME_PROBE)
 
 typedef struct _zend_native_opcache_bundle {
 	uint64_t magic;
@@ -353,8 +357,13 @@ static zend_native_opcache_bundle *zend_native_executor_bundle(
 
 static uint32_t zend_native_executor_bundle_flags(void)
 {
-	return zend_native_runtime_source_probe_enabled()
+	uint32_t flags = zend_native_runtime_source_probe_enabled()
 		? ZEND_NATIVE_OPCACHE_BUNDLE_SOURCE_PROBE : 0;
+
+	if (zend_native_executor_frame_probe != NULL) {
+		flags |= ZEND_NATIVE_OPCACHE_BUNDLE_FRAME_PROBE;
+	}
+	return flags;
 }
 
 static size_t zend_native_executor_bundle_allocation_size(
@@ -1070,6 +1079,9 @@ zend_native_executor_create_generation(zend_op_array *root)
 	config.script = &generation->script;
 	config.target = zend_native_executor_target();
 	config.persistent = persistent;
+	config.frame_probe = zend_native_executor_frame_probe;
+	config.frame_probe_context =
+		zend_native_executor_frame_probe_context;
 	config.source_probe = zend_native_runtime_source_probe_enabled();
 	config.direct_reentry = true;
 	if (persistent) {
@@ -1421,6 +1433,19 @@ void zend_native_executor_set_source_probe(
 	}
 }
 
+void zend_native_executor_set_frame_probe(
+	zend_native_frame_probe_t probe, void *context)
+{
+	bool changed = zend_native_executor_frame_probe != probe
+		|| zend_native_executor_frame_probe_context != context;
+
+	zend_native_executor_frame_probe = probe;
+	zend_native_executor_frame_probe_context = context;
+	if (zend_native_executor_installed && changed) {
+		zend_native_executor_invalidate();
+	}
+}
+
 zend_result zend_native_executor_prepare_script(zend_script *script)
 {
 	zend_native_compiler_config config;
@@ -1447,6 +1472,9 @@ zend_result zend_native_executor_prepare_script(zend_script *script)
 	memset(&diagnostic, 0, sizeof(diagnostic));
 	config.script = script;
 	config.target = zend_native_executor_target();
+	config.frame_probe = zend_native_executor_frame_probe;
+	config.frame_probe_context =
+		zend_native_executor_frame_probe_context;
 	config.source_probe = zend_native_runtime_source_probe_enabled();
 	config.defer_publication = true;
 	compiler = zend_native_compiler_create(&config, &diagnostic);
