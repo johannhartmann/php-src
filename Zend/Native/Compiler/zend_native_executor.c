@@ -316,15 +316,19 @@ static void zend_native_executor_persistent_dispatch_dtor(zval *value)
 }
 
 #define ZEND_NATIVE_OPCACHE_BUNDLE_MAGIC UINT64_C(0x313342434f4e5a)
-#define ZEND_NATIVE_OPCACHE_BUNDLE_FORMAT 1u
+#define ZEND_NATIVE_OPCACHE_BUNDLE_FORMAT 2u
 #define ZEND_NATIVE_OPCACHE_BUNDLE_HEAP 1u
 #define ZEND_NATIVE_OPCACHE_BUNDLE_PERSISTENT 2u
 #define ZEND_NATIVE_OPCACHE_BUNDLE_REQUEST_ARENA 3u
+#define ZEND_NATIVE_OPCACHE_BUNDLE_SOURCE_PROBE (1u << 0)
+#define ZEND_NATIVE_OPCACHE_BUNDLE_KNOWN_FLAGS \
+	ZEND_NATIVE_OPCACHE_BUNDLE_SOURCE_PROBE
 
 typedef struct _zend_native_opcache_bundle {
 	uint64_t magic;
 	uint32_t format;
 	uint32_t storage;
+	uint32_t flags;
 	size_t size;
 	unsigned char bytes[1];
 } zend_native_opcache_bundle;
@@ -341,8 +345,16 @@ static zend_native_opcache_bundle *zend_native_executor_bundle(
 	return bundle != NULL
 			&& bundle->magic == ZEND_NATIVE_OPCACHE_BUNDLE_MAGIC
 			&& bundle->format == ZEND_NATIVE_OPCACHE_BUNDLE_FORMAT
+			&& (bundle->flags
+				& ~ZEND_NATIVE_OPCACHE_BUNDLE_KNOWN_FLAGS) == 0
 			&& bundle->size != 0
 		? bundle : NULL;
+}
+
+static uint32_t zend_native_executor_bundle_flags(void)
+{
+	return zend_native_runtime_source_probe_enabled()
+		? ZEND_NATIVE_OPCACHE_BUNDLE_SOURCE_PROBE : 0;
 }
 
 static size_t zend_native_executor_bundle_allocation_size(
@@ -1082,6 +1094,7 @@ zend_native_executor_create_generation(zend_op_array *root)
 		return NULL;
 	}
 	if (bundle != NULL
+			&& bundle->flags == zend_native_executor_bundle_flags()
 			&& zend_native_compiler_import_bundle(
 				generation->compiler, bundle->bytes, bundle->size,
 				&diagnostic) == FAILURE) {
@@ -1403,7 +1416,13 @@ void zend_native_executor_invalidate(void)
 void zend_native_executor_set_source_probe(
 	zend_native_source_probe_t probe, void *context)
 {
+	bool was_enabled = zend_native_runtime_source_probe_enabled();
+
 	zend_native_runtime_set_source_probe(probe, context);
+	if (zend_native_executor_installed
+			&& was_enabled != (probe != NULL)) {
+		zend_native_executor_invalidate();
+	}
 }
 
 zend_result zend_native_executor_prepare_script(zend_script *script)
@@ -1420,7 +1439,13 @@ zend_result zend_native_executor_prepare_script(zend_script *script)
 		return FAILURE;
 	}
 	if (zend_native_executor_bundle(&script->main_op_array) != NULL) {
-		return SUCCESS;
+		bundle = zend_native_executor_bundle(&script->main_op_array);
+		if (bundle->flags == zend_native_executor_bundle_flags()
+				|| bundle->storage
+					!= ZEND_NATIVE_OPCACHE_BUNDLE_HEAP) {
+			return SUCCESS;
+		}
+		zend_native_executor_discard_bundle(&script->main_op_array);
 	}
 	memset(&config, 0, sizeof(config));
 	memset(&diagnostic, 0, sizeof(diagnostic));
@@ -1451,6 +1476,7 @@ zend_result zend_native_executor_prepare_script(zend_script *script)
 	bundle->magic = ZEND_NATIVE_OPCACHE_BUNDLE_MAGIC;
 	bundle->format = ZEND_NATIVE_OPCACHE_BUNDLE_FORMAT;
 	bundle->storage = ZEND_NATIVE_OPCACHE_BUNDLE_HEAP;
+	bundle->flags = zend_native_executor_bundle_flags();
 	bundle->size = size;
 	memcpy(bundle->bytes, bytes, size);
 	zend_native_compiler_bundle_destroy(bytes);
