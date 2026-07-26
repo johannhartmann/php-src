@@ -115,6 +115,7 @@ struct DarwinA64PlatformConfig : ::tpde::CompilerConfigDefault {
 
 	static constexpr ::tpde::RegBank GP_BANK{0};
 	static constexpr ::tpde::RegBank FP_BANK{1};
+	static constexpr bool DEFAULT_VAR_REF_HANDLING = false;
 	static constexpr bool FRAME_INDEXING_NEGATIVE = false;
 	static constexpr uint32_t PLATFORM_POINTER_SIZE = 8;
 	static constexpr uint32_t NUM_BANKS = 2;
