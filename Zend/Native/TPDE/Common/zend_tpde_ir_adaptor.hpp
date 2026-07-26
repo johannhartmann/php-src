@@ -123,6 +123,39 @@ public:
 		T value;
 	};
 
+	class ValueBitSet {
+		std::vector<uint64_t> words_;
+
+	public:
+		explicit ValueBitSet(uint32_t value_count = 0)
+			: words_((static_cast<size_t>(value_count) + 63) / 64) {}
+
+		bool test(uint32_t value) const {
+			return (words_[value / 64] & (uint64_t{1} << (value % 64))) != 0;
+		}
+		void set(uint32_t value) {
+			words_[value / 64] |= uint64_t{1} << (value % 64);
+		}
+		void reset(uint32_t value) {
+			words_[value / 64] &= ~(uint64_t{1} << (value % 64));
+		}
+		void union_without(
+				const ValueBitSet &other, const ValueBitSet &excluded) {
+			for (size_t word = 0; word < words_.size(); ++word) {
+				words_[word] |= other.words_[word] & ~excluded.words_[word];
+			}
+		}
+		void assign_use_and_out_without_def(
+				const ValueBitSet &use, const ValueBitSet &out,
+				const ValueBitSet &def) {
+			for (size_t word = 0; word < words_.size(); ++word) {
+				words_[word] =
+					use.words_[word] | (out.words_[word] & ~def.words_[word]);
+			}
+		}
+		bool operator==(const ValueBitSet &) const = default;
+	};
+
 	class PhiRef {
 		const ZendIRAdaptor *adaptor_;
 		IRValueRef value_;
@@ -345,25 +378,25 @@ private:
 		block_instructions.push_back({block, IRInstRef{index}});
 	}
 
-	std::vector<std::vector<uint8_t>>
+	std::vector<ValueBitSet>
 	compute_generator_resume_live_values(
 			const std::vector<uint32_t> &landing_instructions) {
 		const uint32_t block_count = plan_->block_count;
 		const uint32_t value_count = plan_->value_count;
 		std::vector<std::vector<uint32_t>> block_instructions(block_count);
-		std::vector<std::vector<uint8_t>> block_use(
-			block_count, std::vector<uint8_t>(value_count));
-		std::vector<std::vector<uint8_t>> block_def(
-			block_count, std::vector<uint8_t>(value_count));
-		std::vector<std::vector<uint8_t>> block_phi_def(
-			block_count, std::vector<uint8_t>(value_count));
-		std::vector<std::vector<uint8_t>> live_in(
-			block_count, std::vector<uint8_t>(value_count));
-		std::vector<std::vector<uint8_t>> live_out(
-			block_count, std::vector<uint8_t>(value_count));
+		std::vector<ValueBitSet> block_use(
+			block_count, ValueBitSet{value_count});
+		std::vector<ValueBitSet> block_def(
+			block_count, ValueBitSet{value_count});
+		std::vector<ValueBitSet> block_phi_def(
+			block_count, ValueBitSet{value_count});
+		std::vector<ValueBitSet> live_in(
+			block_count, ValueBitSet{value_count});
+		std::vector<ValueBitSet> live_out(
+			block_count, ValueBitSet{value_count});
 
 		auto add_uses = [&](uint32_t instruction_index,
-				std::vector<uint8_t> &live) {
+				ValueBitSet &live) {
 			const zend_tpde_instruction &instruction =
 				plan_->instructions[instruction_index];
 			const zend_mir_instruction_record record =
@@ -375,7 +408,7 @@ private:
 				const int32_t index = zend_tpde_value_index(
 					plan_, zend_tpde_operand_at(plan_, &instruction, n));
 				if (index >= 0) {
-					live[static_cast<uint32_t>(index)] = 1;
+					live.set(static_cast<uint32_t>(index));
 				}
 			}
 			for (uint32_t n = 0;
@@ -387,7 +420,7 @@ private:
 					const int32_t index =
 						zend_tpde_value_index(plan_, argument.value_id);
 					if (index >= 0) {
-						live[static_cast<uint32_t>(index)] = 1;
+						live.set(static_cast<uint32_t>(index));
 					}
 				}
 			}
@@ -403,114 +436,137 @@ private:
 			}
 			const uint32_t block_number = static_cast<uint32_t>(block);
 			block_instructions[block_number].push_back(i);
-			std::vector<uint8_t> uses(value_count);
+			ValueBitSet uses{value_count};
 			add_uses(i, uses);
 			for (uint32_t value = 0; value < value_count; ++value) {
-				if (uses[value] != 0
-						&& block_def[block_number][value] == 0) {
-					block_use[block_number][value] = 1;
+				if (uses.test(value)
+						&& !block_def[block_number].test(value)) {
+					block_use[block_number].set(value);
 				}
 			}
 			const int32_t result =
 				zend_tpde_value_index(plan_, record.result_id);
 			if (result >= 0) {
-				block_def[block_number][static_cast<uint32_t>(result)] = 1;
+				block_def[block_number].set(static_cast<uint32_t>(result));
 				if (record.opcode == ZEND_MIR_OPCODE_PHI) {
-					block_phi_def[block_number][
-						static_cast<uint32_t>(result)] = 1;
+					block_phi_def[block_number].set(
+						static_cast<uint32_t>(result));
 				}
 			}
 		}
 
-		bool changed;
-		do {
-			changed = false;
-			for (uint32_t block = block_count; block-- > 0;) {
-				std::vector<uint8_t> next_out(value_count);
-				const zend_mir_block_id block_id = plan_->block_ids[block];
-				const uint32_t successor_count =
-					plan_->view->successor_count(
-						plan_->view->context, block_id);
-				for (uint32_t n = 0; n < successor_count; ++n) {
-					zend_mir_block_id successor_id;
-					if (!plan_->view->successor_at(
-							plan_->view->context, block_id, n,
-							&successor_id)) {
-						valid_ = false;
-						continue;
-					}
-					const int32_t successor = block_index(successor_id);
-					if (successor < 0) {
-						valid_ = false;
-						continue;
-					}
-					for (uint32_t value = 0;
-							value < value_count; ++value) {
-						next_out[value] |=
-							live_in[static_cast<uint32_t>(successor)][value]
-							&& !block_phi_def[
-								static_cast<uint32_t>(successor)][value];
-					}
-					uint32_t predecessor_index = UINT32_MAX;
-					const uint32_t predecessor_count =
-						plan_->view->predecessor_count(
-							plan_->view->context, successor_id);
-					for (uint32_t predecessor = 0;
-							predecessor < predecessor_count; ++predecessor) {
-						zend_mir_block_id predecessor_id;
-						if (plan_->view->predecessor_at(
-								plan_->view->context, successor_id,
-								predecessor, &predecessor_id)
-								&& predecessor_id == block_id) {
-							predecessor_index = predecessor;
-							break;
-						}
-					}
-					if (predecessor_index == UINT32_MAX) {
-						valid_ = false;
-						continue;
-					}
-					for (uint32_t instruction_index :
-							block_instructions[
-								static_cast<uint32_t>(successor)]) {
-						const zend_tpde_instruction &instruction =
-							plan_->instructions[instruction_index];
-						const zend_mir_instruction_record record =
-							instruction_record_at(instruction_index);
-						if (record.opcode != ZEND_MIR_OPCODE_PHI) {
-							continue;
-						}
-						if (predecessor_index
-								>= instruction.operand_count) {
-							valid_ = false;
-							continue;
-						}
-						const int32_t input = zend_tpde_value_index(
-							plan_, zend_tpde_operand_at(plan_,
-								&instruction, predecessor_index));
-						if (input >= 0) {
-							next_out[static_cast<uint32_t>(input)] = 1;
-						}
+		std::vector<uint32_t> worklist;
+		std::vector<uint8_t> queued(block_count, 1);
+		worklist.reserve(block_count);
+		for (uint32_t block = block_count; block-- > 0;) {
+			worklist.push_back(block);
+		}
+		while (!worklist.empty()) {
+			const uint32_t block = worklist.back();
+			worklist.pop_back();
+			queued[block] = 0;
+			ValueBitSet next_out{value_count};
+			const zend_mir_block_id block_id = plan_->block_ids[block];
+			const uint32_t successor_count =
+				plan_->view->successor_count(
+					plan_->view->context, block_id);
+			for (uint32_t n = 0; n < successor_count; ++n) {
+				zend_mir_block_id successor_id;
+				if (!plan_->view->successor_at(
+						plan_->view->context, block_id, n,
+						&successor_id)) {
+					valid_ = false;
+					continue;
+				}
+				const int32_t successor = block_index(successor_id);
+				if (successor < 0) {
+					valid_ = false;
+					continue;
+				}
+				next_out.union_without(
+					live_in[static_cast<uint32_t>(successor)],
+					block_phi_def[static_cast<uint32_t>(successor)]);
+				uint32_t predecessor_index = UINT32_MAX;
+				const uint32_t predecessor_count =
+					plan_->view->predecessor_count(
+						plan_->view->context, successor_id);
+				for (uint32_t predecessor = 0;
+						predecessor < predecessor_count; ++predecessor) {
+					zend_mir_block_id predecessor_id;
+					if (plan_->view->predecessor_at(
+							plan_->view->context, successor_id,
+							predecessor, &predecessor_id)
+							&& predecessor_id == block_id) {
+						predecessor_index = predecessor;
+						break;
 					}
 				}
-				std::vector<uint8_t> next_in(value_count);
-				for (uint32_t value = 0; value < value_count; ++value) {
-					next_in[value] = block_use[block][value]
-						|| (next_out[value] && !block_def[block][value]);
+				if (predecessor_index == UINT32_MAX) {
+					valid_ = false;
+					continue;
 				}
-				if (next_out != live_out[block]
-						|| next_in != live_in[block]) {
-					live_out[block] = std::move(next_out);
-					live_in[block] = std::move(next_in);
-					changed = true;
+				for (uint32_t instruction_index :
+						block_instructions[
+							static_cast<uint32_t>(successor)]) {
+					const zend_tpde_instruction &instruction =
+						plan_->instructions[instruction_index];
+					const zend_mir_instruction_record record =
+						instruction_record_at(instruction_index);
+					if (record.opcode != ZEND_MIR_OPCODE_PHI) {
+						continue;
+					}
+					if (predecessor_index
+							>= instruction.operand_count) {
+						valid_ = false;
+						continue;
+					}
+					const int32_t input = zend_tpde_value_index(
+						plan_, zend_tpde_operand_at(plan_,
+							&instruction, predecessor_index));
+					if (input >= 0) {
+						next_out.set(static_cast<uint32_t>(input));
+					}
 				}
 			}
-		} while (changed);
+			ValueBitSet next_in{value_count};
+			next_in.assign_use_and_out_without_def(
+				block_use[block], next_out, block_def[block]);
+			if (!(next_out == live_out[block])
+					|| !(next_in == live_in[block])) {
+				live_out[block] = std::move(next_out);
+				live_in[block] = std::move(next_in);
+				const uint32_t predecessor_count =
+					plan_->view->predecessor_count(
+						plan_->view->context, block_id);
+				for (uint32_t predecessor = 0;
+						predecessor < predecessor_count; ++predecessor) {
+					zend_mir_block_id predecessor_id;
+					if (!plan_->view->predecessor_at(
+							plan_->view->context, block_id, predecessor,
+							&predecessor_id)) {
+						valid_ = false;
+						continue;
+					}
+					const int32_t predecessor_block =
+						block_index(predecessor_id);
+					if (predecessor_block < 0) {
+						valid_ = false;
+						continue;
+					}
+					const uint32_t predecessor_number =
+						static_cast<uint32_t>(predecessor_block);
+					if (queued[predecessor_number] == 0) {
+						queued[predecessor_number] = 1;
+						worklist.push_back(predecessor_number);
+					}
+				}
+			}
+		}
 
-		std::vector<std::vector<uint8_t>> result;
+		std::vector<ValueBitSet> result;
 		result.reserve(landing_instructions.size());
 		for (uint32_t landing_instruction : landing_instructions) {
-			std::vector<uint8_t> live(value_count);
+			ValueBitSet live{value_count};
 			if (landing_instruction == UINT32_MAX) {
 				result.push_back(std::move(live));
 				continue;
@@ -534,7 +590,7 @@ private:
 				const int32_t definition =
 					zend_tpde_value_index(plan_, record.result_id);
 				if (definition >= 0) {
-					live[static_cast<uint32_t>(definition)] = 0;
+					live.reset(static_cast<uint32_t>(definition));
 				}
 				add_uses(instruction_index, live);
 				if (instruction_index == landing_instruction) {
@@ -544,13 +600,13 @@ private:
 			for (uint32_t value = 0; value < value_count; ++value) {
 				uint64_t bits;
 				const IRValueRef ref{MIR_VALUE_BASE + value};
-				if (live[value] != 0
+				if (live.test(value)
 						&& (!zend_mir_scalar_type_is_exact(exact_type(ref))
 							|| exact_type(ref) == ZEND_MIR_SCALAR_TYPE_NULL
 							|| !zend_mir_id_is_valid(
 								canonical_storage(ref))
 							|| constant(ref, &bits))) {
-					live[value] = 0;
+					live.reset(value);
 				}
 			}
 			result.push_back(std::move(live));
@@ -620,7 +676,7 @@ public:
 		std::vector<IRBlockRef> finally_targets;
 		std::vector<uint8_t> generator_resume_emitted;
 		std::vector<uint32_t> generator_resume_landing_instructions;
-		std::vector<std::vector<uint8_t>> generator_resume_live_values;
+		std::vector<ValueBitSet> generator_resume_live_values;
 		std::vector<uint8_t> source_landing_emitted;
 		std::vector<uint32_t> source_landing_blocks;
 		std::vector<uint32_t> source_block_next;
@@ -1080,7 +1136,7 @@ public:
 				for (uint32_t value = 0;
 						value < plan_->value_count; ++value) {
 					if (generator_resume_live_values[
-							resume_index][value] != 0) {
+							resume_index].test(value)) {
 						operands_.push_back(IRValueRef{
 							MIR_VALUE_BASE + value});
 					}

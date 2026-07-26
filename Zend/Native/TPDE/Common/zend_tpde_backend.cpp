@@ -1903,15 +1903,6 @@ bool initialize_plan(
 				"source frame storage is outside the executable bound");
 			return false;
 		}
-		plan->compiled_variable_count =
-			static_cast<uint32_t>(source_op_array->last_var);
-		/*
-		 * Zend reserves the final T slot for the observer frame link. The
-		 * observer begin hook populates it before native entry, so only opcode
-		 * producer temporaries are dead and eligible for initialization here.
-		 */
-		plan->temporary_variable_count =
-			source_op_array->T - observer_temporary_count;
 	}
 	if (plan->block_count == 0 || !checked_count(plan->block_count)
 			|| !checked_count(plan->value_count)
