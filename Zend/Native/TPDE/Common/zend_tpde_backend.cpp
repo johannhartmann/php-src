@@ -666,7 +666,8 @@ bool zend_tpde_apply_machine_value_facts(
 		value->slot_state = ZEND_TPDE_CANONICAL_SLOT_UNMATERIALIZED;
 	} else if (zend_mir_id_is_valid(value->canonical_storage_id)) {
 		value->location = value->machine_kind
-				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+				&& value->argument_index < 0
 			? ZEND_TPDE_MACHINE_LOCATION_CANONICAL_FRAME_SLOT
 			: ZEND_TPDE_MACHINE_LOCATION_REGISTER;
 		value->slot_state = value->argument_index >= 0
