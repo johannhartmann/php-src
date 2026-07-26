@@ -80,6 +80,8 @@ typedef struct _zend_native_compiler_stats {
 
 typedef void (*zend_native_compile_observer_t)(
 	void *context, const zend_native_compile_diagnostic *diagnostic);
+typedef zend_native_entry_cell *(*zend_native_external_reentry_resolver_t)(
+	void *context, zend_function *function);
 
 /*
  * A compiler instance owns one request-/TSRM-local native code registry.
@@ -106,6 +108,8 @@ typedef struct _zend_native_compiler_config {
 	bool source_probe;
 	bool defer_publication;
 	bool direct_reentry;
+	zend_native_external_reentry_resolver_t external_reentry_resolver;
+	void *external_reentry_context;
 } zend_native_compiler_config;
 
 ZEND_API zend_native_compiler *zend_native_compiler_create(

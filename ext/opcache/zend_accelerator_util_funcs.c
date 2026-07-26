@@ -417,6 +417,14 @@ zend_op_array* zend_accel_load_script(zend_persistent_script *persistent_script,
 		zend_accel_do_delayed_early_binding(persistent_script, op_array);
 	}
 
+#ifdef HAVE_NATIVE_ENGINE
+	if (UNEXPECTED(zend_native_executor_register_script_owner(
+			op_array, &persistent_script->script) == FAILURE)) {
+		zend_error_noreturn(E_CORE_ERROR,
+			"Native OPcache owner registration failed");
+	}
+#endif
+
 	if (UNEXPECTED(!from_shared_memory)) {
 		free_persistent_script(persistent_script, 0); /* free only hashes */
 	}

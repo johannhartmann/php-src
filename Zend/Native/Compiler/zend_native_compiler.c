@@ -75,6 +75,8 @@ struct _zend_native_compiler {
 	bool source_probe;
 	bool defer_publication;
 	bool direct_reentry;
+	zend_native_external_reentry_resolver_t external_reentry_resolver;
+	void *external_reentry_context;
 	bool persistent;
 	zend_native_compiled_function **functions;
 	HashTable functions_by_op_array;
@@ -639,6 +641,7 @@ static zend_native_compiled_function *zend_native_compiler_add_function(
 		return NULL;
 	}
 	compiler->functions[compiler->function_count++] = function;
+	compiler->transients_released = false;
 	return function;
 }
 
@@ -1112,6 +1115,20 @@ static zend_op_array *zend_native_compiler_resolve_native_target(
 			}
 			if (function == NULL || function->type != ZEND_USER_FUNCTION) {
 				return NULL;
+			}
+			/*
+			 * A monomorphic method may belong to another OPcache owner
+			 * (notably a preloaded class).  Its process address is not a
+			 * persistent identity in this script's image.  Keep the call
+			 * indirect so runtime owner resolution selects that owner's
+			 * entry cell without serializing a foreign function pointer.
+			 */
+			if (function->op_array.opcodes == NULL
+					|| zend_hash_index_find_ptr(
+						&compiler->source_op_arrays_by_opcodes,
+						(zend_ulong) (uintptr_t)
+							function->op_array.opcodes) == NULL) {
+				return caller;
 			}
 			return &function->op_array;
 		}
@@ -2805,6 +2822,10 @@ static zend_native_entry_cell *zend_native_compiler_resolve_reentry(
 	source_op_array = zend_native_compiler_canonical_reentry_op_array(
 		compiler, &resolved->op_array);
 	if (source_op_array == NULL) {
+		if (compiler->external_reentry_resolver != NULL) {
+			return compiler->external_reentry_resolver(
+				compiler->external_reentry_context, resolved);
+		}
 		/* The exact Zend function is the owner identity for a codeunit that
 		 * became visible only after runtime declaration or autoload. */
 		source_op_array = &resolved->op_array;
@@ -3341,6 +3362,10 @@ zend_native_compiler *zend_native_compiler_create(
 	compiler->source_probe = config->source_probe;
 	compiler->defer_publication = config->defer_publication;
 	compiler->direct_reentry = config->direct_reentry;
+	compiler->external_reentry_resolver =
+		config->external_reentry_resolver;
+	compiler->external_reentry_context =
+		config->external_reentry_context;
 	zend_hash_init(
 		&compiler->source_op_arrays_by_opcodes, 32, NULL, NULL,
 		compiler->persistent);
