@@ -2099,8 +2099,9 @@ bool ZendCompilerA64::compile_inst(
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + target_storage) * sizeof(zval);
 		const uint64_t result_offset = result_storage == ZEND_MIR_ID_INVALID
 			? 0 : (uint64_t{ZEND_CALL_FRAME_SLOT} + result_storage) * sizeof(zval);
-		if (source_offset > UINT32_MAX || target_offset > UINT32_MAX
-				|| result_offset > UINT32_MAX) {
+		if (source_offset > UINT32_MAX - sizeof(zval)
+				|| target_offset > UINT32_MAX - sizeof(zval)
+				|| result_offset > UINT32_MAX - sizeof(zval)) {
 			return false;
 		}
 
@@ -2125,25 +2126,18 @@ bool ZendCompilerA64::compile_inst(
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 		auto frame_scratch = std::move(frame).into_scratch();
 		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg source_slot{this};
-		ScratchReg target_slot{this};
 		ScratchReg source_type{this};
 		ScratchReg target_type{this};
 		ScratchReg low_word{this};
 		ScratchReg probe{this};
-		auto source_slot_reg = source_slot.alloc_gp();
-		auto target_slot_reg = target_slot.alloc_gp();
 		auto source_type_reg = source_type.alloc_gp();
 		auto target_type_reg = target_type.alloc_gp();
 		auto low_word_reg = low_word.alloc_gp();
 		auto probe_reg = probe.alloc_gp();
 
-		add_unsigned_offset(source_slot_reg, frame_reg,
-			static_cast<uint32_t>(source_offset));
-		add_unsigned_offset(target_slot_reg, frame_reg,
-			static_cast<uint32_t>(target_offset));
-		load_off(source_type_reg, source_slot_reg,
-			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		load_off(source_type_reg, frame_reg,
+			static_cast<uint32_t>(
+				source_offset + offsetof(zval, u1.type_info)), 4);
 		if (source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
 			ASM(CMPwi, source_type_reg, IS_UNDEF);
 			generate_raw_jump(Jump::Jeq, slow);
@@ -2154,8 +2148,9 @@ bool ZendCompilerA64::compile_inst(
 			ASM(CMPwi, probe_reg, IS_REFERENCE);
 			generate_raw_jump(Jump::Jeq, slow);
 		}
-		load_off(target_type_reg, target_slot_reg,
-			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		load_off(target_type_reg, frame_reg,
+			static_cast<uint32_t>(
+				target_offset + offsetof(zval, u1.type_info)), 4);
 		ASM(ANDwi, probe_reg, target_type_reg, Z_TYPE_MASK);
 		ASM(CMPwi, probe_reg, IS_REFERENCE);
 		generate_raw_jump(Jump::Jeq, slow);
@@ -2171,7 +2166,8 @@ bool ZendCompilerA64::compile_inst(
 		ASM(TSTwi, target_type_reg,
 			IS_TYPE_COLLECTABLE << Z_TYPE_FLAGS_SHIFT);
 		generate_raw_jump(Jump::Jne, slow);
-		load_off(low_word_reg, target_slot_reg, 0, 8);
+		load_off(low_word_reg, frame_reg,
+			static_cast<uint32_t>(target_offset), 8);
 		load_off(probe_reg, low_word_reg,
 			static_cast<uint32_t>(
 				offsetof(zend_refcounted_h, refcount)), 4);
@@ -2179,10 +2175,9 @@ bool ZendCompilerA64::compile_inst(
 		generate_raw_jump(Jump::Jle, slow);
 		label_place(target_checked);
 		if (result_storage != ZEND_MIR_ID_INVALID) {
-			add_unsigned_offset(probe_reg, frame_reg,
-				static_cast<uint32_t>(result_offset));
-			load_off(probe_reg, probe_reg,
-				static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+			load_off(probe_reg, frame_reg,
+				static_cast<uint32_t>(
+					result_offset + offsetof(zval, u1.type_info)), 4);
 			ASM(CMPwi, probe_reg, IS_DOUBLE);
 			generate_raw_jump(Jump::Jgt, slow);
 		}
@@ -2190,7 +2185,8 @@ bool ZendCompilerA64::compile_inst(
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		auto target_released = text_writer.label_create();
 		generate_raw_jump(Jump::Jeq, target_released);
-		load_off(low_word_reg, target_slot_reg, 0, 8);
+		load_off(low_word_reg, frame_reg,
+			static_cast<uint32_t>(target_offset), 8);
 		load_off(probe_reg, low_word_reg,
 			static_cast<uint32_t>(
 				offsetof(zend_refcounted_h, refcount)), 4);
@@ -2200,7 +2196,8 @@ bool ZendCompilerA64::compile_inst(
 				offsetof(zend_refcounted_h, refcount)),
 			probe_reg, 4);
 		label_place(target_released);
-		load_off(low_word_reg, source_slot_reg, 0, 8);
+		load_off(low_word_reg, frame_reg,
+			static_cast<uint32_t>(source_offset), 8);
 		ASM(TSTwi, source_type_reg,
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		auto value_owned = text_writer.label_create();
@@ -2216,30 +2213,31 @@ bool ZendCompilerA64::compile_inst(
 				offsetof(zend_refcounted_h, refcount)),
 			probe_reg, 4);
 		label_place(value_owned);
-		store_off(target_slot_reg, 0, low_word_reg, 8);
-		store_off(target_slot_reg,
-			static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+		store_off(frame_reg, static_cast<uint32_t>(target_offset),
+			low_word_reg, 8);
+		store_off(frame_reg,
+			static_cast<uint32_t>(
+				target_offset + offsetof(zval, u1.type_info)),
 			source_type_reg, 4);
 		if (result_storage != ZEND_MIR_ID_INVALID) {
-			add_unsigned_offset(target_slot_reg, frame_reg,
-				static_cast<uint32_t>(result_offset));
-			store_off(target_slot_reg, 0, low_word_reg, 8);
-			store_off(target_slot_reg,
-				static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+			store_off(frame_reg, static_cast<uint32_t>(result_offset),
+				low_word_reg, 8);
+			store_off(frame_reg,
+				static_cast<uint32_t>(
+					result_offset + offsetof(zval, u1.type_info)),
 				source_type_reg, 4);
 		}
 		if (move_source) {
 			materialize_constant(
 				static_cast<uint64_t>(IS_UNDEF),
 				DarwinConfig::GP_BANK, 4, source_type_reg);
-			store_off(source_slot_reg,
-				static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+			store_off(frame_reg,
+				static_cast<uint32_t>(
+					source_offset + offsetof(zval, u1.type_info)),
 				source_type_reg, 4);
 		}
 		generate_raw_jump(Jump::jmp, done);
 		label_place(slow);
-		source_slot.reset();
-		target_slot.reset();
 		source_type.reset();
 		target_type.reset();
 		low_word.reset();
