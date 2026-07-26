@@ -17,4 +17,20 @@ zend_result zend_native_compiler_compile_dynamic_component(
 	zend_native_entry_cell **root_entry,
 	zend_native_compile_diagnostic *diagnostic);
 
+/*
+ * Keep one compiler's reentry and dynamic-code scopes active across warm
+ * executor entries. The executor switches this request-local scope only when
+ * control moves to another code generation.
+ */
+zend_result zend_native_compiler_activate_session(
+	zend_native_compiler *compiler);
+void zend_native_compiler_deactivate_session(
+	zend_native_compiler *compiler);
+zend_native_status zend_native_compiler_execute_observed_active(
+	zend_native_compiler *compiler,
+	zend_native_entry_cell *entry_cell,
+	const zend_native_code *code,
+	zend_execute_data *execute_data,
+	zend_native_diagnostic *diagnostic);
+
 #endif /* ZEND_NATIVE_COMPILER_INTERNAL_H */

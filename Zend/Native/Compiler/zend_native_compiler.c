@@ -3199,6 +3199,18 @@ static void zend_native_compiler_leave(zend_native_compiler *compiler)
 	}
 }
 
+zend_result zend_native_compiler_activate_session(
+	zend_native_compiler *compiler)
+{
+	return zend_native_compiler_enter(compiler);
+}
+
+void zend_native_compiler_deactivate_session(
+	zend_native_compiler *compiler)
+{
+	zend_native_compiler_leave(compiler);
+}
+
 zend_native_status zend_native_compiler_execute(
 	zend_native_compiler *compiler,
 	zend_function *function,
@@ -3294,7 +3306,7 @@ zend_native_status zend_native_compiler_execute(
 	return status;
 }
 
-static zend_native_status zend_native_compiler_execute_published_impl(
+static zend_native_status zend_native_compiler_execute_active_impl(
 	zend_native_compiler *compiler,
 	zend_native_entry_cell *entry_cell,
 	const zend_native_code *code,
@@ -3316,9 +3328,6 @@ static zend_native_status zend_native_compiler_execute_published_impl(
 			|| entry_cell == NULL || code == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	if (zend_native_compiler_enter(compiler) == FAILURE) {
-		return ZEND_NATIVE_EXCEPTION;
-	}
 	previous = execute_data->prev_execute_data;
 	EG(current_execute_data) = execute_data;
 	zend_native_entry_cell_retain_active(entry_cell);
@@ -3332,8 +3341,45 @@ static zend_native_status zend_native_compiler_execute_published_impl(
 	zend_native_entry_cell_release_active(entry_cell);
 	EG(current_execute_data) = previous;
 	zend_native_compiler_session_record_execution(compiler, elapsed);
+	return status;
+}
+
+static zend_native_status zend_native_compiler_execute_published_impl(
+	zend_native_compiler *compiler,
+	zend_native_entry_cell *entry_cell,
+	const zend_native_code *code,
+	zend_execute_data *execute_data,
+	zend_native_diagnostic *diagnostic,
+	bool observer_already_started)
+{
+	zend_native_status status;
+
+	if (zend_native_compiler_enter(compiler) == FAILURE) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	status = zend_native_compiler_execute_active_impl(
+		compiler, entry_cell, code, execute_data, diagnostic,
+		observer_already_started);
 	zend_native_compiler_leave(compiler);
 	return status;
+}
+
+zend_native_status zend_native_compiler_execute_observed_active(
+	zend_native_compiler *compiler,
+	zend_native_entry_cell *entry_cell,
+	const zend_native_code *code,
+	zend_execute_data *execute_data,
+	zend_native_diagnostic *diagnostic)
+{
+	zend_native_compiler_session *session =
+		zend_native_compiler_session_find(compiler);
+
+	if (session == NULL || !session->reentry_active
+			|| !session->dynamic_compiler_active) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	return zend_native_compiler_execute_active_impl(
+		compiler, entry_cell, code, execute_data, diagnostic, true);
 }
 
 zend_native_status zend_native_compiler_execute_published(
