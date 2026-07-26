@@ -506,3 +506,21 @@ zend_native_status zend_native_generator_user_opcode_return(
 	zend_generator_close(generator, true);
 	return ZEND_NATIVE_GENERATOR_RETURNED;
 }
+
+void zend_native_generator_uncaught_exception(
+	zend_execute_data *execute_data)
+{
+	zend_generator *generator = zend_native_running_generator(execute_data);
+
+	if (generator == NULL) {
+		return;
+	}
+	ZEND_OBSERVER_FCALL_END(execute_data, NULL);
+	EG(current_execute_data) = execute_data->prev_execute_data;
+	/*
+	 * Unlike GENERATOR_RETURN, an exceptional exit can leave source
+	 * temporaries live at the throwing opline. The unfinished close performs
+	 * their exact Zend cleanup before releasing the heap frame.
+	 */
+	zend_generator_close(generator, false);
+}

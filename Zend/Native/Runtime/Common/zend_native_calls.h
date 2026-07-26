@@ -389,6 +389,13 @@ zend_native_direct_call_result zend_native_call_dynamic_leave(
 	zend_native_status status);
 void zend_native_execution_context_init(
 	zend_native_execution_context *context);
+/*
+ * Native direct activations live inside the active fiber's Zend VM stack.
+ * Fiber switches therefore save and clear the thread-local chain before the
+ * C-stack transfer and restore the saved chain when that fiber resumes.
+ */
+void *zend_native_call_fiber_suspend(void);
+void zend_native_call_fiber_resume(void *active_direct_call);
 void zend_native_call_direct_unwind(zend_execute_data *outermost);
 void zend_native_execution_cleanup_frame(zend_execute_data *execute_data);
 zend_native_status zend_native_execution_finish_direct_frame(
