@@ -24,14 +24,26 @@ typedef struct _zend_native_executor_request {
 	zend_native_executor_generation *persistent_generations;
 	zend_native_executor_generation *request_generations;
 	zend_native_executor_generation *retired_generations;
+	HashTable dispatch;
 	uint64_t observed_epoch;
+	bool dispatch_active;
 	bool active;
 } zend_native_executor_request;
+
+typedef struct _zend_native_executor_dispatch {
+	zend_native_executor_generation *generation;
+	zend_native_entry_cell *entry_cell;
+} zend_native_executor_dispatch;
 
 ZEND_TLS zend_native_executor_request zend_native_executor_request_state;
 static bool zend_native_executor_installed;
 static uint64_t zend_native_executor_epoch = 1;
 static int zend_native_executor_rid = -1;
+
+static void zend_native_executor_dispatch_dtor(zval *value)
+{
+	efree(Z_PTR_P(value));
+}
 
 #define ZEND_NATIVE_OPCACHE_BUNDLE_MAGIC UINT64_C(0x313342434f4e5a)
 #define ZEND_NATIVE_OPCACHE_BUNDLE_FORMAT 1u
@@ -392,12 +404,17 @@ void zend_native_executor_activate(void)
 
 	ZEND_ASSERT(
 		zend_native_executor_request_state.request_generations == NULL);
+	ZEND_ASSERT(!zend_native_executor_request_state.dispatch_active);
 	if (zend_native_executor_request_state.observed_epoch != epoch) {
 		zend_native_executor_retire_stale(epoch);
 		zend_native_executor_request_state.observed_epoch = epoch;
 	} else {
 		zend_native_executor_reap_retired();
 	}
+	zend_hash_init(
+		&zend_native_executor_request_state.dispatch, 32, NULL,
+		zend_native_executor_dispatch_dtor, false);
+	zend_native_executor_request_state.dispatch_active = true;
 	zend_native_executor_request_state.active = true;
 }
 
@@ -406,6 +423,11 @@ void zend_native_executor_deactivate(void)
 	zend_native_executor_generation *generation;
 
 	zend_native_executor_request_state.active = false;
+	if (zend_native_executor_request_state.dispatch_active) {
+		zend_hash_destroy(
+			&zend_native_executor_request_state.dispatch);
+		zend_native_executor_request_state.dispatch_active = false;
+	}
 	zend_native_executor_destroy_generations(
 		&zend_native_executor_request_state.request_generations);
 	generation =
@@ -548,6 +570,7 @@ int zend_native_executor_op_array_handle(void)
 
 void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 {
+	zend_native_executor_dispatch *dispatch;
 	zend_native_executor_generation *generation;
 	zend_native_diagnostic diagnostic;
 	zend_native_status status;
@@ -557,6 +580,22 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 			|| !ZEND_USER_CODE(execute_data->func->type)) {
 		zend_throw_error(NULL, "Invalid native userland executor activation");
 		return;
+	}
+	dispatch = zend_hash_index_find_ptr(
+		&zend_native_executor_request_state.dispatch,
+		(zend_ulong) (uintptr_t) execute_data->func);
+	if (dispatch != NULL
+			&& zend_native_entry_cell_is_ready(
+				dispatch->entry_cell)) {
+		status = zend_native_compiler_execute_entry(
+			dispatch->generation->compiler, dispatch->entry_cell,
+			execute_data, &diagnostic);
+		goto complete;
+	}
+	if (dispatch != NULL) {
+		zend_hash_index_del(
+			&zend_native_executor_request_state.dispatch,
+			(zend_ulong) (uintptr_t) execute_data->func);
 	}
 	if ((execute_data->func->common.fn_flags
 			& ZEND_ACC_IMMUTABLE) != 0) {
@@ -603,6 +642,19 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 	memset(&diagnostic, 0, sizeof(diagnostic));
 	status = zend_native_compiler_execute_data(
 		generation->compiler, execute_data, &diagnostic);
+	zend_native_entry_cell *entry_cell =
+		zend_native_compiler_lookup(
+			generation->compiler, execute_data->func);
+	if (entry_cell != NULL) {
+		dispatch = emalloc(sizeof(*dispatch));
+		dispatch->generation = generation;
+		dispatch->entry_cell = entry_cell;
+		zend_hash_index_update_ptr(
+			&zend_native_executor_request_state.dispatch,
+			(zend_ulong) (uintptr_t) execute_data->func,
+			dispatch);
+	}
+complete:
 	if (status == ZEND_NATIVE_BAILOUT) {
 		zend_bailout();
 	}
