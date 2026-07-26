@@ -991,8 +991,6 @@ struct zend_tpde_plan {
 	_zend_native_user_call_descriptor **user_calls;
 	uint32_t user_call_count;
 	uint32_t argument_count;
-	uint32_t compiled_variable_count;
-	uint32_t temporary_variable_count;
 	uint32_t value_model_flags;
 	uint64_t required_runtime_capabilities;
 	uint64_t required_runtime_helpers[ZEND_NATIVE_RUNTIME_HELPER_WORD_COUNT];
