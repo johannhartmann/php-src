@@ -3364,24 +3364,6 @@ static zend_native_status zend_native_compiler_execute_published_impl(
 	return status;
 }
 
-zend_native_status zend_native_compiler_execute_observed_active(
-	zend_native_compiler *compiler,
-	zend_native_entry_cell *entry_cell,
-	const zend_native_code *code,
-	zend_execute_data *execute_data,
-	zend_native_diagnostic *diagnostic)
-{
-	zend_native_compiler_session *session =
-		zend_native_compiler_session_find(compiler);
-
-	if (session == NULL || !session->reentry_active
-			|| !session->dynamic_compiler_active) {
-		return ZEND_NATIVE_EXCEPTION;
-	}
-	return zend_native_compiler_execute_active_impl(
-		compiler, entry_cell, code, execute_data, diagnostic, true);
-}
-
 zend_native_status zend_native_compiler_execute_published(
 	zend_native_compiler *compiler,
 	zend_native_entry_cell *entry_cell,

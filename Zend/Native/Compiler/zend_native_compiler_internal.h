@@ -26,11 +26,5 @@ zend_result zend_native_compiler_activate_session(
 	zend_native_compiler *compiler);
 void zend_native_compiler_deactivate_session(
 	zend_native_compiler *compiler);
-zend_native_status zend_native_compiler_execute_observed_active(
-	zend_native_compiler *compiler,
-	zend_native_entry_cell *entry_cell,
-	const zend_native_code *code,
-	zend_execute_data *execute_data,
-	zend_native_diagnostic *diagnostic);
 
 #endif /* ZEND_NATIVE_COMPILER_INTERNAL_H */
