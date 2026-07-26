@@ -3176,13 +3176,13 @@ zend_native_status zend_native_compiler_execute(
 	return status;
 }
 
-zend_native_status zend_native_compiler_execute_entry(
+zend_native_status zend_native_compiler_execute_published(
 	zend_native_compiler *compiler,
 	zend_native_entry_cell *entry_cell,
+	const zend_native_code *code,
 	zend_execute_data *execute_data,
 	zend_native_diagnostic *diagnostic)
 {
-	const zend_native_code *code;
 	zend_execute_data *previous;
 	zend_native_status status;
 	zend_hrtime_t phase_started;
@@ -3194,11 +3194,10 @@ zend_native_status zend_native_compiler_execute_entry(
 	if (compiler == NULL || execute_data == NULL
 			|| execute_data->func == NULL
 			|| !ZEND_USER_CODE(execute_data->func->type)
-			|| entry_cell == NULL) {
+			|| entry_cell == NULL || code == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	if ((code = zend_native_entry_cell_load(entry_cell)) == NULL
-			|| zend_native_compiler_enter(compiler) == FAILURE) {
+	if (zend_native_compiler_enter(compiler) == FAILURE) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	previous = execute_data->prev_execute_data;
@@ -3213,6 +3212,17 @@ zend_native_status zend_native_compiler_execute_entry(
 	zend_native_compiler_session_record_execution(compiler, elapsed);
 	zend_native_compiler_leave(compiler);
 	return status;
+}
+
+zend_native_status zend_native_compiler_execute_entry(
+	zend_native_compiler *compiler,
+	zend_native_entry_cell *entry_cell,
+	zend_execute_data *execute_data,
+	zend_native_diagnostic *diagnostic)
+{
+	return zend_native_compiler_execute_published(
+		compiler, entry_cell, zend_native_entry_cell_load(entry_cell),
+		execute_data, diagnostic);
 }
 
 zend_native_status zend_native_compiler_execute_data(
