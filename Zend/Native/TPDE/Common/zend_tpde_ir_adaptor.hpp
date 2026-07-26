@@ -232,6 +232,46 @@ private:
 			: IRValueRef{MIR_VALUE_BASE + static_cast<uint32_t>(index)};
 	}
 
+	IRValueRef source_operand_value_ref(
+			const zend_mir_source_operand_ref &operand) const {
+		zend_mir_value_id value_id;
+
+		switch (operand.kind) {
+			case ZEND_MIR_SOURCE_OPERAND_LITERAL:
+				value_id = zend_mir_value_from_synthetic(operand.index);
+				break;
+			case ZEND_MIR_SOURCE_OPERAND_SLOT:
+			case ZEND_MIR_SOURCE_OPERAND_SSA:
+				if (operand.ssa_variable_id == ZEND_MIR_ID_INVALID) {
+					return INVALID_VALUE_REF;
+				}
+				value_id = zend_mir_value_from_original_ssa(
+					operand.ssa_variable_id);
+				break;
+			default:
+				return INVALID_VALUE_REF;
+		}
+		return value_ref(value_id);
+	}
+
+	bool long_binary_machine_operands(
+			const zend_tpde_instruction &instruction,
+			IRValueRef &left, IRValueRef &right) const {
+		zend_tpde_long_binary layout;
+
+		if (!zend_tpde_long_binary_at(instruction, &layout)) {
+			return false;
+		}
+		left = source_operand_value_ref(instruction.value_operation.op1);
+		right = source_operand_value_ref(instruction.value_operation.op2);
+		return left != INVALID_VALUE_REF
+			&& right != INVALID_VALUE_REF
+			&& exact_type(left) == ZEND_MIR_SCALAR_TYPE_I64
+			&& exact_type(right) == ZEND_MIR_SCALAR_TYPE_I64
+			&& machine_value_is_register_authoritative(left)
+			&& machine_value_is_register_authoritative(right);
+	}
+
 	IRValueRef add_derived_value(
 			zend_mir_representation representation,
 			zend_mir_scalar_type_mask exact_type,
@@ -1300,6 +1340,20 @@ public:
 				result != INVALID_VALUE_REF
 				&& zend_mir_scalar_type_is_exact(exact_type(result))
 				&& exact_type(result) != ZEND_MIR_SCALAR_TYPE_NULL;
+			IRValueRef long_left = INVALID_VALUE_REF;
+			IRValueRef long_right = INVALID_VALUE_REF;
+			if (record.opcode == ZEND_MIR_OPCODE_VALUE_BINARY_OP
+					&& long_binary_machine_operands(
+						instruction, long_left, long_right)) {
+				mark_machine_use(
+					plan_->values[
+						static_cast<uint32_t>(long_left)
+							- MIR_VALUE_BASE].id);
+				mark_machine_use(
+					plan_->values[
+						static_cast<uint32_t>(long_right)
+							- MIR_VALUE_BASE].id);
+			}
 			if (record.opcode == ZEND_MIR_OPCODE_PHI) {
 				if (result_is_machine) {
 					for (uint32_t n = 0;
@@ -1555,6 +1609,17 @@ public:
 			}
 			uint32_t operand_offset =
 				static_cast<uint32_t>(operands_.size());
+			IRValueRef long_left = INVALID_VALUE_REF;
+			IRValueRef long_right = INVALID_VALUE_REF;
+			const bool explicit_long_operands =
+				record.opcode == ZEND_MIR_OPCODE_VALUE_BINARY_OP
+				&& machine_result
+				&& long_binary_machine_operands(
+					instruction, long_left, long_right);
+			if (explicit_long_operands) {
+				operands_.push_back(long_left);
+				operands_.push_back(long_right);
+			}
 			/*
 			 * RETURN_SOURCE_ZVAL transfers the canonical zval directly from the
 			 * Zend frame, selected by its source opline.  Its MIR value operand
