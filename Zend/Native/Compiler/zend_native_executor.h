@@ -2,6 +2,7 @@
 #define ZEND_NATIVE_EXECUTOR_H
 
 #include "Zend/zend.h"
+#include "Zend/Native/Runtime/Common/zend_native_calls.h"
 #include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 
 typedef struct _zend_script zend_script;
@@ -20,6 +21,8 @@ ZEND_API void zend_native_executor_shutdown(void);
 ZEND_API void zend_native_executor_activate(void);
 ZEND_API void zend_native_executor_deactivate(void);
 ZEND_API void zend_native_executor_execute_ex(zend_execute_data *execute_data);
+ZEND_API void zend_native_executor_set_frame_probe(
+	zend_native_frame_probe_t probe, void *context);
 ZEND_API void zend_native_executor_set_source_probe(
 	zend_native_source_probe_t probe, void *context);
 

@@ -1661,6 +1661,42 @@ static void phpdbg_native_pause(zend_object *exception)
 	}
 }
 
+void phpdbg_native_frame_probe(
+	void *context,
+	const zend_execute_data *caller,
+	const zend_execute_data *callee)
+{
+	zend_execute_data *execute_data = (zend_execute_data *) callee;
+	zend_execute_data *previous;
+	phpdbg_breakbase_t *brake;
+	uint32_t entry_position;
+
+	(void) context;
+	(void) caller;
+	if (execute_data == NULL || execute_data->func == NULL
+			|| !ZEND_USER_CODE(execute_data->func->common.type)) {
+		return;
+	}
+	entry_position = execute_data->func->op_array.num_args
+		+ !!(execute_data->func->op_array.fn_flags & ZEND_ACC_VARIADIC);
+	if (entry_position >= execute_data->func->op_array.last
+			|| (brake = phpdbg_find_breakpoint_at_frame_entry(
+					execute_data->func)) == NULL) {
+		return;
+	}
+
+	execute_data->opline =
+		&execute_data->func->op_array.opcodes[entry_position];
+	previous = EG(current_execute_data);
+	EG(current_execute_data) = execute_data;
+	PHPDBG_G(in_execution) = 1;
+	phpdbg_print_opline(execute_data, 0);
+	phpdbg_hit_breakpoint(brake, 1);
+	phpdbg_native_pause(EG(exception));
+	PHPDBG_G(last_line) = execute_data->opline->lineno;
+	EG(current_execute_data) = previous;
+}
+
 void phpdbg_native_source_probe(
 	void *context,
 	zend_execute_data *execute_data,

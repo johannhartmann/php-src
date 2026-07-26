@@ -134,7 +134,9 @@ PHPDBG_API void phpdbg_set_breakpoint_expression(const char* expression, size_t 
 PHPDBG_API void phpdbg_set_breakpoint_at(const phpdbg_param_t *param); /* }}} */
 
 /* {{{ Breakpoint Detection API */
-PHPDBG_API phpdbg_breakbase_t* phpdbg_find_breakpoint(zend_execute_data*); /* }}} */
+PHPDBG_API phpdbg_breakbase_t* phpdbg_find_breakpoint(zend_execute_data*);
+PHPDBG_API phpdbg_breakbase_t* phpdbg_find_breakpoint_at_frame_entry(
+	zend_function *function); /* }}} */
 
 /* {{{ Misc Breakpoint API */
 PHPDBG_API void phpdbg_hit_breakpoint(phpdbg_breakbase_t* brake, bool output);
