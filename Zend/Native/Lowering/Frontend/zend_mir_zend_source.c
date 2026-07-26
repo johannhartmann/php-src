@@ -2276,11 +2276,23 @@ zend_mir_frontend_target_kind(uint8_t opcode, const zend_function *function,
 	if (opcode == ZEND_INIT_FCALL_BY_NAME
 			|| opcode == ZEND_INIT_NS_FCALL_BY_NAME) {
 		/*
-		 * The optimizer's currently visible target is only a hint for these
-		 * opcodes.  A request-local namespaced declaration may supersede the
-		 * global binding, so native code must retain the open named target.
+		 * An open by-name target normally remains request-bound.  A user
+		 * function declared by this immutable script is different: all
+		 * top-level declarations are installed before execution and another
+		 * binding cannot supersede it without a redeclaration error.  Keep
+		 * that target direct so forward calls participate in lazy SCC
+		 * publication and use the compiled call edge.
 		 */
-		return ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER;
+		if (function == NULL || function->type != ZEND_USER_FUNCTION
+				|| !zend_mir_frontend_function_is_in_script(
+					script, function)
+				|| function->op_array.filename == NULL
+				|| caller->filename == NULL
+				|| !zend_string_equals(
+					function->op_array.filename, caller->filename)) {
+			return ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER;
+		}
+		return ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER;
 	}
 	if (opcode != ZEND_INIT_FCALL) {
 		return ZEND_MIR_SOURCE_CALL_TARGET_DYNAMIC_USER;
