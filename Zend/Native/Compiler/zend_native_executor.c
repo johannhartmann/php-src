@@ -923,16 +923,14 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 		&execute_data->func->op_array);
 	if (dispatch != NULL
 			&& (!dispatch->persistent
-				|| (zend_native_executor_request_has_lease(
-						dispatch->generation)
-					&& dispatch->generation->epoch
-						== zend_native_executor_request_state
-							.observed_epoch))
-			&& zend_native_entry_cell_is_ready(
-				dispatch->entry_cell)) {
-		status = zend_native_compiler_execute_entry(
+				|| dispatch->generation->epoch
+					== zend_native_executor_request_state
+						.observed_epoch)
+			&& (code = zend_native_entry_cell_load(
+				dispatch->entry_cell)) != NULL) {
+		status = zend_native_compiler_execute_published(
 			dispatch->generation->compiler, dispatch->entry_cell,
-			execute_data, &diagnostic);
+			code, execute_data, &diagnostic);
 		goto complete;
 	}
 	if (dispatch != NULL) {
