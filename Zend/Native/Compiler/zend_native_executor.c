@@ -729,15 +729,10 @@ zend_native_executor_resolve_external_reentry(
 	if (generation == NULL) {
 		return NULL;
 	}
-	entry_cell = zend_native_compiler_lookup(
-		generation->compiler, function);
-	if (entry_cell != NULL) {
-		return entry_cell;
-	}
 	memset(&diagnostic, 0, sizeof(diagnostic));
-	if (zend_native_compiler_compile(
-			generation->compiler, &function->op_array, NULL, 0,
-			&diagnostic) == FAILURE) {
+	entry_cell = zend_native_compiler_prepare_function(
+		generation->compiler, function, &diagnostic);
+	if (entry_cell == NULL) {
 		if (EG(exception) == NULL) {
 			zend_throw_error(NULL, "%s",
 				diagnostic.message[0] != '\0'
@@ -746,8 +741,7 @@ zend_native_executor_resolve_external_reentry(
 		}
 		return NULL;
 	}
-	return zend_native_compiler_lookup(
-		generation->compiler, function);
+	return entry_cell;
 }
 
 zend_result zend_native_executor_startup(void)
