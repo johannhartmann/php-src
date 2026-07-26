@@ -5006,36 +5006,30 @@ register_operand:
 
 				if (zend_tpde_value_condition_at(mir, &layout)
 						&& layout.operand_offset <= INT32_MAX) {
-					for (auto reg_id : register_file.used_regs()) {
-						tpde::Reg reg{reg_id};
-						if (!register_file.is_fixed(reg)
-								&& register_file.reg_local_idx(reg)
-									!= INVALID_VAL_LOCAL_IDX) {
-							evict_reg(reg);
-						}
+					const int32_t decision_slot =
+						allocate_stack_slot(sizeof(uint32_t));
+					if (decision_slot < 0) {
+						return false;
 					}
 					auto slow = text_writer.label_create();
 					auto truthy = text_writer.label_create();
 					auto falsey = text_writer.label_create();
+					auto fast_ready = text_writer.label_create();
 					auto branch = text_writer.label_create();
 					auto [frame_ref, frame] =
 						val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 					auto frame_scratch = std::move(frame).into_scratch();
 					auto frame_reg = frame_scratch.cur_reg();
-					ScratchReg slot{this};
 					ScratchReg type{this};
 					ScratchReg value{this};
-					auto slot_reg = slot.alloc_gp();
 					auto type_reg = type.alloc_gp();
 					auto value_reg = value.alloc_gp();
 
-					ASM(MOV64rr, slot_reg, frame_reg);
-					ASM(ADD64ri, slot_reg,
-						static_cast<int32_t>(layout.operand_offset));
 					ASM(MOV32rm, type_reg,
-						FE_MEM(slot_reg, 0, FE_NOREG,
+						FE_MEM(frame_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
-								offsetof(zval, u1.type_info))));
+								layout.operand_offset
+									+ offsetof(zval, u1.type_info))));
 					ASM(AND32ri, type_reg, Z_TYPE_MASK);
 					ASM(CMP32ri, type_reg, IS_NULL);
 					generate_raw_jump(Jump::je, falsey);
@@ -5047,7 +5041,9 @@ register_operand:
 					auto not_long = text_writer.label_create();
 					generate_raw_jump(Jump::jne, not_long);
 					ASM(MOV64rm, value_reg,
-						FE_MEM(slot_reg, 0, FE_NOREG, 0));
+						FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								layout.operand_offset)));
 					ASM(TEST64rr, value_reg, value_reg);
 					generate_raw_jump(Jump::jne, truthy);
 					generate_raw_jump(Jump::jmp, falsey);
@@ -5057,14 +5053,16 @@ register_operand:
 					auto not_string = text_writer.label_create();
 					generate_raw_jump(Jump::jne, not_string);
 					ASM(MOV64rm, value_reg,
-						FE_MEM(slot_reg, 0, FE_NOREG, 0));
-					ASM(MOV64rm, slot_reg,
+						FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								layout.operand_offset)));
+					ASM(MOV64rm, type_reg,
 						FE_MEM(value_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
 								offsetof(zend_string, len))));
-					ASM(TEST64rr, slot_reg, slot_reg);
+					ASM(TEST64rr, type_reg, type_reg);
 					generate_raw_jump(Jump::je, falsey);
-					ASM(CMP64ri, slot_reg, 1);
+					ASM(CMP64ri, type_reg, 1);
 					generate_raw_jump(Jump::jne, truthy);
 					ASM(MOVZXr32m8, type_reg,
 						FE_MEM(value_reg, 0, FE_NOREG,
@@ -5079,7 +5077,9 @@ register_operand:
 					auto not_array = text_writer.label_create();
 					generate_raw_jump(Jump::jne, not_array);
 					ASM(MOV64rm, value_reg,
-						FE_MEM(slot_reg, 0, FE_NOREG, 0));
+						FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								layout.operand_offset)));
 					ASM(MOV32rm, type_reg,
 						FE_MEM(value_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
@@ -5091,7 +5091,9 @@ register_operand:
 					ASM(CMP32ri, type_reg, IS_RESOURCE);
 					generate_raw_jump(Jump::jne, slow);
 					ASM(MOV64rm, value_reg,
-						FE_MEM(slot_reg, 0, FE_NOREG, 0));
+						FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								layout.operand_offset)));
 					ASM(MOV32rm, type_reg,
 						FE_MEM(value_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
@@ -5100,11 +5102,26 @@ register_operand:
 					generate_raw_jump(Jump::jne, truthy);
 					generate_raw_jump(Jump::jmp, falsey);
 
-					slot.reset();
+					label_place(truthy);
+					ASM(MOV32mi,
+						FE_MEM(FE_BP, 0, FE_NOREG,
+							decision_slot),
+						1);
+					generate_raw_jump(Jump::jmp, fast_ready);
+					label_place(falsey);
+					ASM(MOV32mi,
+						FE_MEM(FE_BP, 0, FE_NOREG,
+							decision_slot),
+						0);
+					label_place(fast_ready);
 					type.reset();
 					value.reset();
 					const auto &successors = adaptor->block_succs(
 						adaptor->block_ref(record.block_id));
+					const auto register_state =
+						zend::native::tpde::
+							capture_conditional_call_register_state(*this);
+					generate_raw_jump(Jump::jmp, branch);
 					label_place(slow);
 
 					tpde::x64::CCAssignerSysV assigner{false};
@@ -5157,14 +5174,24 @@ register_operand:
 						tpde::CCAssignment{});
 					return_builder.ret();
 					label_place(valid);
+					ASM(MOV32mr,
+						FE_MEM(FE_BP, 0, FE_NOREG,
+							decision_slot),
+						decision_reg);
+					decision.reset(this);
+					zend::native::tpde::
+						restore_conditional_call_register_state(
+							*this, register_state);
 					generate_raw_jump(Jump::jmp, branch);
-					label_place(truthy);
-					ASM(MOV32ri, decision_reg, 1);
-					generate_raw_jump(Jump::jmp, branch);
-					label_place(falsey);
-					ASM(MOV32ri, decision_reg, 0);
 					label_place(branch);
-					ASM(TEST32rr, decision_reg, decision_reg);
+					ScratchReg branch_decision{this};
+					auto branch_decision_reg =
+						branch_decision.alloc_gp();
+					ASM(MOV32rm, branch_decision_reg,
+						FE_MEM(FE_BP, 0, FE_NOREG,
+							decision_slot));
+					ASM(TEST32rr,
+						branch_decision_reg, branch_decision_reg);
 					generate_cond_branch(
 						Jump::jne, successors[0], successors[1]);
 					return true;
