@@ -68,6 +68,7 @@ typedef struct _zend_native_reentry_scope {
 	zend_native_reentry_resolver_t resolver;
 	void *resolver_context;
 	struct _zend_native_reentry_scope *previous;
+	bool execute_hook_installed;
 } zend_native_reentry_scope;
 
 typedef enum _zend_native_internal_receiver_kind {
@@ -277,6 +278,12 @@ zend_result zend_native_reentry_scope_enter(
 	const zend_native_reentry_binding *bindings,
 	uint32_t binding_count);
 zend_result zend_native_reentry_scope_enter_resolver(
+	zend_native_reentry_scope *scope,
+	const zend_native_reentry_binding *bindings,
+	uint32_t binding_count,
+	zend_native_reentry_resolver_t resolver,
+	void *resolver_context);
+zend_result zend_native_reentry_scope_enter_resolver_direct(
 	zend_native_reentry_scope *scope,
 	const zend_native_reentry_binding *bindings,
 	uint32_t binding_count,

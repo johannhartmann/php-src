@@ -787,6 +787,45 @@ zend_result zend_native_reentry_scope_enter(
 		scope, bindings, binding_count, NULL, NULL);
 }
 
+static zend_result zend_native_reentry_scope_enter_resolver_impl(
+	zend_native_reentry_scope *scope,
+	const zend_native_reentry_binding *bindings,
+	uint32_t binding_count,
+	zend_native_reentry_resolver_t resolver,
+	void *resolver_context,
+	bool install_execute_hook)
+{
+	uint32_t index;
+
+	if (scope == NULL || bindings == NULL || binding_count == 0) {
+		return FAILURE;
+	}
+	if (install_execute_hook) {
+		for (index = 0; index < binding_count; index++) {
+			if (bindings[index].function == NULL
+					|| bindings[index].entry_cell == NULL
+					|| bindings[index].entry_cell->function
+						!= bindings[index].function
+					|| bindings[index].entry_cell->state
+						!= ZEND_NATIVE_ENTRY_READY
+					|| bindings[index].entry_cell->code == NULL) {
+				return FAILURE;
+			}
+		}
+		if (zend_native_reentry_install() == FAILURE) {
+			return FAILURE;
+		}
+	}
+	scope->bindings = bindings;
+	scope->binding_count = binding_count;
+	scope->resolver = resolver;
+	scope->resolver_context = resolver_context;
+	scope->previous = zend_native_active_reentry_scope;
+	scope->execute_hook_installed = install_execute_hook;
+	zend_native_active_reentry_scope = scope;
+	return SUCCESS;
+}
+
 zend_result zend_native_reentry_scope_enter_resolver(
 	zend_native_reentry_scope *scope,
 	const zend_native_reentry_binding *bindings,
@@ -794,43 +833,39 @@ zend_result zend_native_reentry_scope_enter_resolver(
 	zend_native_reentry_resolver_t resolver,
 	void *resolver_context)
 {
-	uint32_t index;
+	return zend_native_reentry_scope_enter_resolver_impl(
+		scope, bindings, binding_count, resolver, resolver_context,
+		true);
+}
 
-	if (scope == NULL || bindings == NULL || binding_count == 0) {
-		return FAILURE;
-	}
-	for (index = 0; index < binding_count; index++) {
-		if (bindings[index].function == NULL
-				|| bindings[index].entry_cell == NULL
-				|| bindings[index].entry_cell->function != bindings[index].function
-				|| bindings[index].entry_cell->state != ZEND_NATIVE_ENTRY_READY
-				|| bindings[index].entry_cell->code == NULL) {
-			return FAILURE;
-		}
-	}
-	if (zend_native_reentry_install() == FAILURE) {
-		return FAILURE;
-	}
-	scope->bindings = bindings;
-	scope->binding_count = binding_count;
-	scope->resolver = resolver;
-	scope->resolver_context = resolver_context;
-	scope->previous = zend_native_active_reentry_scope;
-	zend_native_active_reentry_scope = scope;
-	return SUCCESS;
+zend_result zend_native_reentry_scope_enter_resolver_direct(
+	zend_native_reentry_scope *scope,
+	const zend_native_reentry_binding *bindings,
+	uint32_t binding_count,
+	zend_native_reentry_resolver_t resolver,
+	void *resolver_context)
+{
+	return zend_native_reentry_scope_enter_resolver_impl(
+		scope, bindings, binding_count, resolver, resolver_context,
+		false);
 }
 
 void zend_native_reentry_scope_leave(zend_native_reentry_scope *scope)
 {
 	ZEND_ASSERT(scope != NULL && zend_native_active_reentry_scope == scope);
 	if (scope != NULL && zend_native_active_reentry_scope == scope) {
+		bool execute_hook_installed = scope->execute_hook_installed;
+
 		zend_native_active_reentry_scope = scope->previous;
 		scope->bindings = NULL;
 		scope->binding_count = 0;
 		scope->resolver = NULL;
 		scope->resolver_context = NULL;
 		scope->previous = NULL;
-		zend_native_reentry_uninstall();
+		scope->execute_hook_installed = false;
+		if (execute_hook_installed) {
+			zend_native_reentry_uninstall();
+		}
 	}
 }
 
