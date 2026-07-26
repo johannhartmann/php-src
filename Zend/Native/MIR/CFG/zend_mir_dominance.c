@@ -264,16 +264,6 @@ static zend_mir_cfg_status zend_mir_dominance_validate_edges(
 					|| zend_mir_dominance_find(dominance, successor_id) < 0) {
 				return ZEND_MIR_CFG_STATUS_INVALID_CFG;
 			}
-			for (reverse_slot = 0; reverse_slot < slot; reverse_slot++) {
-				zend_mir_block_id earlier;
-				if (!view->successor_at(
-						view->context, block_id, reverse_slot, &earlier)) {
-					return ZEND_MIR_CFG_STATUS_INVALID_CFG;
-				}
-				if (earlier == successor_id) {
-					return ZEND_MIR_CFG_STATUS_DUPLICATE_EDGE;
-				}
-			}
 			reverse_count = view->predecessor_count(view->context, successor_id);
 			for (reverse_slot = 0; reverse_slot < reverse_count; reverse_slot++) {
 				zend_mir_block_id predecessor_id;
@@ -321,9 +311,8 @@ static zend_mir_cfg_status zend_mir_dominance_validate_edges(
 					matches++;
 				}
 			}
-			if (matches != 1) {
-				return matches > 1 ? ZEND_MIR_CFG_STATUS_DUPLICATE_EDGE
-					: ZEND_MIR_CFG_STATUS_INVALID_CFG;
+			if (matches == 0) {
+				return ZEND_MIR_CFG_STATUS_INVALID_CFG;
 			}
 		}
 	}

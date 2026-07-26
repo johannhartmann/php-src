@@ -340,7 +340,16 @@ static uint32_t zend_mir_view_predecessor_count(const void *context,
 	edges = ZEND_MIR_CORE_ITEMS(module, edges, zend_mir_core_edge);
 	for (index = 0; index < module->edges.count; index++) {
 		if (edges[index].to == block_id) {
-			count++;
+			uint32_t earlier;
+			for (earlier = 0; earlier < index; earlier++) {
+				if (edges[earlier].to == block_id
+						&& edges[earlier].from == edges[index].from) {
+					break;
+				}
+			}
+			if (earlier == index) {
+				count++;
+			}
 		}
 	}
 	return count;
@@ -360,6 +369,16 @@ static bool zend_mir_view_predecessor_at(const void *context,
 	edges = ZEND_MIR_CORE_ITEMS(module, edges, zend_mir_core_edge);
 	for (edge_index = 0; edge_index < module->edges.count; edge_index++) {
 		if (edges[edge_index].to == block_id) {
+			uint32_t earlier;
+			for (earlier = 0; earlier < edge_index; earlier++) {
+				if (edges[earlier].to == block_id
+						&& edges[earlier].from == edges[edge_index].from) {
+					break;
+				}
+			}
+			if (earlier != edge_index) {
+				continue;
+			}
 			if (index == 0) {
 				*out = edges[edge_index].from;
 				return true;

@@ -960,6 +960,8 @@ static bool zend_native_compiler_lower_function(
 	if (result.lowering.status != ZEND_MIR_LOWERING_SUCCESS
 			|| result.lowering.module == NULL) {
 		char message[192];
+		const char *function_name = function->op_array->function_name != NULL
+			? ZSTR_VAL(function->op_array->function_name) : "{main}";
 
 		if (compiler->last_diagnostic.message[0] != '\0'
 				&& compiler->last_diagnostic.code
@@ -970,8 +972,8 @@ static bool zend_native_compiler_lower_function(
 			return false;
 		}
 		snprintf(message, sizeof(message),
-			"native lowering rejected a reachable codeunit (MIRL%04u)",
-			(unsigned int) result.lowering.diagnostic_code);
+			"native lowering rejected reachable function %.96s (MIRL%04u)",
+			function_name, (unsigned int) result.lowering.diagnostic_code);
 		zend_native_compiler_set_diagnostic(
 			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_LOWERING,
 			result.lowering.diagnostic_code,

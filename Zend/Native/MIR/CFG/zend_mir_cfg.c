@@ -150,8 +150,12 @@ uint32_t zend_mir_cfg_predecessor_count_internal(const zend_mir_cfg *cfg,
 	uint32_t i;
 
 	for (i = 0; i < cfg->edge_count; i++) {
-		if (cfg->edges[i].to == block_id) {
-			count++;
+		if (cfg->edges[i].to == block_id
+				&& cfg->edges[i].predecessor_slot >= count) {
+			if (cfg->edges[i].predecessor_slot == UINT32_MAX) {
+				return UINT32_MAX;
+			}
+			count = cfg->edges[i].predecessor_slot + 1;
 		}
 	}
 	return count;
@@ -656,9 +660,8 @@ static zend_mir_cfg_status zend_mir_cfg_snapshot_edges(zend_mir_cfg *cfg)
 					matches++;
 				}
 			}
-			if (matches != 1) {
-				return matches == 0 ? ZEND_MIR_CFG_STATUS_INVALID_CFG
-					: ZEND_MIR_CFG_STATUS_DUPLICATE_EDGE;
+			if (matches == 0) {
+				return ZEND_MIR_CFG_STATUS_INVALID_CFG;
 			}
 		}
 	}
@@ -840,16 +843,9 @@ zend_mir_cfg_status zend_mir_cfg_validate(const zend_mir_cfg *cfg)
 	for (i = 0; i < cfg->edge_count; i++) {
 		int from = zend_mir_cfg_find_block(cfg, cfg->edges[i].from);
 		int to = zend_mir_cfg_find_block(cfg, cfg->edges[i].to);
-		uint32_t j;
 		if (from < 0 || to < 0
 				|| cfg->blocks[from].function_id != cfg->blocks[to].function_id) {
 			return ZEND_MIR_CFG_STATUS_INVALID_CFG;
-		}
-		for (j = i + 1; j < cfg->edge_count; j++) {
-			if (cfg->edges[i].from == cfg->edges[j].from
-					&& cfg->edges[i].to == cfg->edges[j].to) {
-				return ZEND_MIR_CFG_STATUS_DUPLICATE_EDGE;
-			}
 		}
 	}
 	for (i = 0; i < cfg->instruction_count; i++) {

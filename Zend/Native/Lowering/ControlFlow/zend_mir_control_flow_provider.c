@@ -234,126 +234,214 @@ static bool zend_mir_w04_source_block(
 	return source->block_at(source->context, id, out) && out->id == id;
 }
 
-static bool zend_mir_w04_source_dominates(
-	const zend_mir_lowering_source_view *source,
-	zend_mir_source_block_id dominator, zend_mir_source_block_id block)
-{
-	uint32_t remaining = source->block_count(source->context);
-	while (remaining-- != 0) {
-		zend_mir_source_block_ref record;
-		if (block == dominator) {
-			return true;
-		}
-		if (!zend_mir_w04_source_block(source, block, &record)
-				|| record.immediate_dominator == ZEND_MIR_ID_INVALID
-				|| record.immediate_dominator == block) {
-			return false;
-		}
-		block = record.immediate_dominator;
-	}
-	return false;
-}
-
-static bool zend_mir_w04_ssa_definition(
-	const zend_mir_lowering_source_view *source,
-	const zend_mir_source_ssa_ref *ssa,
-	zend_mir_source_block_id *block_out, uint32_t *rank_out)
-{
-	uint32_t i;
-	for (i = 0; i < source->phi_count(source->context); i++) {
-		zend_mir_source_phi_ref phi;
-		if (!source->phi_at(source->context, i, &phi)) {
-			return false;
-		}
-		if (phi.result_ssa_variable_id == ssa->ssa_variable_id) {
-			*block_out = phi.block_id;
-			*rank_out = i + 1;
-			return true;
-		}
-	}
-	if (ssa->definition_opline_index == ZEND_MIR_ID_INVALID) {
-		zend_mir_source_block_ref entry;
-		for (i = 0; i < source->block_count(source->context); i++) {
-			if (!source->block_at(source->context, i, &entry)) {
-				return false;
-			}
-			if ((entry.flags & ZEND_MIR_SOURCE_BLOCK_ENTRY) != 0) {
-				*block_out = entry.id;
-				*rank_out = 0;
-				return true;
-			}
-		}
-		return false;
-	}
-	{
-		zend_mir_source_opcode_ref opcode;
-		if (ssa->definition_opline_index
-					>= source->opcode_count(source->context)
-				|| !source->opcode_at(source->context,
-					ssa->definition_opline_index, &opcode)) {
-			return false;
-		}
-		*block_out = opcode.block_id;
-		*rank_out = source->phi_count(source->context)
-			+ ssa->definition_opline_index + 1;
-		return true;
-	}
-}
-
-static bool zend_mir_w04_current_slot_value(
+static bool zend_mir_w04_collect_current_slot_values(
 	const zend_mir_lowering_context *context,
-	const zend_mir_source_slot_ref *slot,
 	zend_mir_source_block_id at_block,
-	zend_mir_value_id *value_out)
+	zend_mir_value_id *values_out, uint32_t slot_count)
 {
 	const zend_mir_lowering_source_view *source;
-	bool found = false;
-	zend_mir_source_block_id selected_block = ZEND_MIR_ID_INVALID;
-	uint32_t selected_rank = 0;
+	zend_mir_source_block_id entry_block = ZEND_MIR_ID_INVALID;
+	zend_mir_source_block_id *phi_blocks = NULL;
+	zend_mir_source_block_id *selected_blocks = NULL;
+	uint32_t *dominance_depth = NULL;
+	uint32_t *phi_ranks = NULL;
+	uint32_t *slot_offsets = NULL;
+	uint64_t *selected_ranks = NULL;
+	uint32_t block_count;
+	uint32_t phi_count;
+	uint32_t ssa_count;
+	uint32_t current;
+	uint32_t depth;
 	uint32_t i;
-	if (context == NULL || context->source == NULL) {
+	bool success = false;
+
+	if (context == NULL || context->source == NULL
+			|| (slot_count != 0 && values_out == NULL)) {
 		return false;
 	}
 	source = context->source;
-	for (i = 0; i < source->ssa_count(source->context); i++) {
+	if (source->block_count == NULL || source->block_at == NULL
+			|| source->opcode_count == NULL || source->opcode_at == NULL
+			|| source->ssa_count == NULL || source->ssa_at == NULL
+			|| source->phi_count == NULL || source->phi_at == NULL) {
+		return false;
+	}
+	block_count = source->block_count(source->context);
+	phi_count = source->phi_count(source->context);
+	ssa_count = source->ssa_count(source->context);
+	if (block_count == 0 || at_block >= block_count) {
+		return false;
+	}
+	for (i = 0; i < slot_count; i++) {
+		values_out[i] = ZEND_MIR_ID_INVALID;
+	}
+	dominance_depth = calloc(block_count, sizeof(*dominance_depth));
+	slot_offsets = malloc(3 * sizeof(*slot_offsets));
+	if (dominance_depth == NULL || slot_offsets == NULL) {
+		goto done;
+	}
+	for (i = 0; i < 3; i++) {
+		slot_offsets[i] = ZEND_MIR_ID_INVALID;
+	}
+	for (i = 0; i < slot_count; i++) {
+		zend_mir_source_slot_ref slot;
+		uint32_t kind;
+		if (!zend_mir_zend_source_slot_at(context->zend_source, i, &slot)
+				|| slot.slot_id != i || slot.kind < ZEND_MIR_SOURCE_SLOT_CV
+				|| slot.kind > ZEND_MIR_SOURCE_SLOT_VAR) {
+			goto done;
+		}
+		kind = (uint32_t) slot.kind;
+		if (slot_offsets[kind] == ZEND_MIR_ID_INVALID) {
+			if (slot.kind_index > i) {
+				goto done;
+			}
+			slot_offsets[kind] = i - slot.kind_index;
+		}
+		if (slot.kind_index > UINT32_MAX - slot_offsets[kind]
+				|| slot_offsets[kind] + slot.kind_index != i) {
+			goto done;
+		}
+	}
+	current = at_block;
+	depth = block_count;
+	for (i = 0; i < block_count; i++) {
+		zend_mir_source_block_ref block;
+		if (current >= block_count || dominance_depth[current] != 0
+				|| !zend_mir_w04_source_block(source, current, &block)) {
+			goto done;
+		}
+		dominance_depth[current] = depth--;
+		if (block.immediate_dominator == ZEND_MIR_ID_INVALID
+				|| block.immediate_dominator == current) {
+			break;
+		}
+		current = block.immediate_dominator;
+	}
+	if (i == block_count) {
+		goto done;
+	}
+	for (i = 0; i < block_count; i++) {
+		zend_mir_source_block_ref block;
+		if (!zend_mir_w04_source_block(source, i, &block)) {
+			goto done;
+		}
+		if ((block.flags & ZEND_MIR_SOURCE_BLOCK_ENTRY) != 0) {
+			if (entry_block != ZEND_MIR_ID_INVALID) {
+				goto done;
+			}
+			entry_block = block.id;
+		}
+	}
+	if (entry_block == ZEND_MIR_ID_INVALID) {
+		goto done;
+	}
+	if (ssa_count != 0) {
+		phi_blocks = malloc(ssa_count * sizeof(*phi_blocks));
+		phi_ranks = calloc(ssa_count, sizeof(*phi_ranks));
+	}
+	if (slot_count != 0) {
+		selected_blocks = malloc(slot_count * sizeof(*selected_blocks));
+		selected_ranks = calloc(slot_count, sizeof(*selected_ranks));
+	}
+	if ((ssa_count != 0 && (phi_blocks == NULL || phi_ranks == NULL))
+			|| (slot_count != 0
+				&& (selected_blocks == NULL || selected_ranks == NULL))) {
+		goto done;
+	}
+	for (i = 0; i < ssa_count; i++) {
+		phi_blocks[i] = ZEND_MIR_ID_INVALID;
+	}
+	for (i = 0; i < slot_count; i++) {
+		selected_blocks[i] = ZEND_MIR_ID_INVALID;
+	}
+	for (i = 0; i < phi_count; i++) {
+		zend_mir_source_phi_ref phi;
+		if (!source->phi_at(source->context, i, &phi)
+				|| phi.result_ssa_variable_id >= ssa_count
+				|| phi.block_id >= block_count
+				|| phi_blocks[phi.result_ssa_variable_id]
+					!= ZEND_MIR_ID_INVALID) {
+			goto done;
+		}
+		phi_blocks[phi.result_ssa_variable_id] = phi.block_id;
+		phi_ranks[phi.result_ssa_variable_id] = i + 1;
+	}
+	for (i = 0; i < ssa_count; i++) {
 		zend_mir_source_ssa_ref ssa;
 		zend_mir_value_fact_ref fact;
 		zend_mir_representation representation;
 		zend_mir_source_block_id definition_block;
-		uint32_t definition_rank;
+		uint64_t definition_rank;
+		uint32_t kind;
+		uint32_t slot_id;
 		bool later;
 		if (!source->ssa_at(source->context, i, &ssa)) {
-			return false;
+			goto done;
 		}
-		if (ssa.source_slot_kind != slot->kind
-				|| ssa.source_slot != slot->kind_index) {
-			continue;
+		if (ssa.ssa_variable_id >= ssa_count
+				|| ssa.source_slot_kind < ZEND_MIR_SOURCE_SLOT_CV
+				|| ssa.source_slot_kind > ZEND_MIR_SOURCE_SLOT_VAR) {
+			goto done;
 		}
 		if (!zend_mir_w04_value_fact(
 				context, ssa.ssa_variable_id, &fact, &representation)) {
 			continue;
 		}
-		if (!zend_mir_w04_ssa_definition(
-				source, &ssa, &definition_block, &definition_rank)
-				|| !zend_mir_w04_source_dominates(
-					source, definition_block, at_block)) {
+		if (phi_blocks[ssa.ssa_variable_id] != ZEND_MIR_ID_INVALID) {
+			definition_block = phi_blocks[ssa.ssa_variable_id];
+			definition_rank = phi_ranks[ssa.ssa_variable_id];
+		} else if (ssa.definition_opline_index == ZEND_MIR_ID_INVALID) {
+			definition_block = entry_block;
+			definition_rank = 0;
+		} else {
+			zend_mir_source_opcode_ref opcode;
+			if (ssa.definition_opline_index
+						>= source->opcode_count(source->context)
+					|| !source->opcode_at(source->context,
+						ssa.definition_opline_index, &opcode)
+					|| opcode.block_id >= block_count) {
+				goto done;
+			}
+			definition_block = opcode.block_id;
+			definition_rank =
+				(uint64_t) phi_count + ssa.definition_opline_index + 1;
+		}
+		if (dominance_depth[definition_block] == 0) {
 			continue;
 		}
-		later = !found
-			|| (definition_block == selected_block
-				&& definition_rank > selected_rank)
-			|| (definition_block != selected_block
-				&& zend_mir_w04_source_dominates(
-					source, selected_block, definition_block));
+		kind = (uint32_t) ssa.source_slot_kind;
+		if (slot_offsets[kind] == ZEND_MIR_ID_INVALID
+				|| ssa.source_slot > UINT32_MAX - slot_offsets[kind]) {
+			goto done;
+		}
+		slot_id = slot_offsets[kind] + ssa.source_slot;
+		if (slot_id >= slot_count) {
+			goto done;
+		}
+		later = selected_blocks[slot_id] == ZEND_MIR_ID_INVALID
+			|| (definition_block == selected_blocks[slot_id]
+				&& definition_rank > selected_ranks[slot_id])
+			|| (definition_block != selected_blocks[slot_id]
+				&& dominance_depth[definition_block]
+					> dominance_depth[selected_blocks[slot_id]]);
 		if (later) {
-			found = true;
-			selected_block = definition_block;
-			selected_rank = definition_rank;
-			*value_out =
+			selected_blocks[slot_id] = definition_block;
+			selected_ranks[slot_id] = definition_rank;
+			values_out[slot_id] =
 				zend_mir_value_from_original_ssa(ssa.ssa_variable_id);
 		}
 	}
-	return true;
+	success = true;
+
+done:
+	free(selected_ranks);
+	free(slot_offsets);
+	free(phi_ranks);
+	free(dominance_depth);
+	free(selected_blocks);
+	free(phi_blocks);
+	return success;
 }
 
 static zend_mir_frame_slot_kind zend_mir_w04_frame_slot_kind(
@@ -424,26 +512,46 @@ static bool zend_mir_w10_emit_throw_frame(
 	zend_mir_source_map_ref source_map;
 	zend_mir_frame_state_id frame_id;
 	zend_mir_source_map_id source_map_id;
+	zend_mir_value_id *slot_values = NULL;
 	uint32_t first_slot = 0;
-	uint32_t slot_count = zend_mir_zend_source_slot_count(zend_source);
+	uint32_t materialized_slot_count = 0;
+	/*
+	 * W11P gives every SSA value a canonical Zend-frame storage location.
+	 * The physical frame is therefore already the authoritative state at a
+	 * throw boundary; repeating the whole frame in every MIR frame record is
+	 * redundant and makes large functions quadratic in frame size.
+	 */
+	uint32_t slot_count = zend_source != NULL && zend_source->w11
+		? 0 : zend_mir_zend_source_slot_count(zend_source);
 	uint32_t i;
+	bool success = false;
 
 	if (zend_source == NULL || opcode == NULL || frame_id_out == NULL
+			|| mutator == NULL
 			|| mutator->add_frame_slot == NULL
 			|| mutator->add_frame_state == NULL
 			|| mutator->add_source_map == NULL) {
 		return false;
 	}
+	if (slot_count != 0) {
+		slot_values = malloc(slot_count * sizeof(*slot_values));
+		if (slot_values == NULL
+				|| !zend_mir_w04_collect_current_slot_values(
+					context, source_block_id, slot_values, slot_count)) {
+			goto done;
+		}
+	}
 	for (i = 0; i < slot_count; i++) {
 		zend_mir_source_slot_ref source_slot;
 		zend_mir_frame_slot_ref frame_slot;
-		zend_mir_value_id value_id = ZEND_MIR_ID_INVALID;
+		zend_mir_value_id value_id = slot_values[i];
 		uint32_t slot_index;
 
-		if (!zend_mir_zend_source_slot_at(zend_source, i, &source_slot)
-				|| !zend_mir_w04_current_slot_value(context,
-					&source_slot, source_block_id, &value_id)) {
-			return false;
+		if (!zend_mir_id_is_valid(value_id)) {
+			continue;
+		}
+		if (!zend_mir_zend_source_slot_at(zend_source, i, &source_slot)) {
+			goto done;
 		}
 		memset(&frame_slot, 0, sizeof(frame_slot));
 		frame_slot.slot_id = source_slot.slot_id;
@@ -451,20 +559,21 @@ static bool zend_mir_w10_emit_throw_frame(
 		frame_slot.kind = zend_mir_w04_frame_slot_kind(source_slot.kind);
 		frame_slot.representation =
 			ZEND_MIR_FRAME_SLOT_REPRESENTATION_CANONICAL_ZVAL;
-		frame_slot.materialization = zend_mir_id_is_valid(value_id)
-			? ZEND_MIR_MATERIALIZATION_MATERIALIZED
-			: ZEND_MIR_MATERIALIZATION_UNDEF;
+		frame_slot.materialization = ZEND_MIR_MATERIALIZATION_MATERIALIZED;
 		frame_slot.ownership = ZEND_MIR_FRAME_SLOT_OWNERSHIP_FRAME_OWNED;
 		frame_slot.value_id = value_id;
 		if (frame_slot.kind == ZEND_MIR_FRAME_SLOT_KIND_INVALID
 				|| !mutator->add_frame_slot(
 					mutator->context, &frame_slot, &slot_index)
-				|| (i != 0 && slot_index != first_slot + i)) {
-			return false;
+				|| (materialized_slot_count != 0
+					&& slot_index
+						!= first_slot + materialized_slot_count)) {
+			goto done;
 		}
-		if (i == 0) {
+		if (materialized_slot_count == 0) {
 			first_slot = slot_index;
 		}
+		materialized_slot_count++;
 	}
 	memset(&frame, 0, sizeof(frame));
 	frame.id = ZEND_MIR_ID_INVALID;
@@ -473,8 +582,8 @@ static bool zend_mir_w10_emit_throw_frame(
 	frame.function_kind = ZEND_MIR_FUNCTION_KIND_USER;
 	frame.opline_index = opcode->opline_index;
 	frame.opline_phase = ZEND_MIR_OPLINE_PHASE_BEFORE;
-	frame.slots.offset = slot_count == 0 ? 0 : first_slot;
-	frame.slots.count = slot_count;
+	frame.slots.offset = materialized_slot_count == 0 ? 0 : first_slot;
+	frame.slots.count = materialized_slot_count;
 	frame.return_continuation.kind = ZEND_MIR_CONTINUATION_KIND_TERMINAL;
 	frame.return_continuation.frame_state_id = ZEND_MIR_ID_INVALID;
 	frame.return_continuation.opline_index = ZEND_MIR_ID_INVALID;
@@ -494,7 +603,7 @@ static bool zend_mir_w10_emit_throw_frame(
 	frame.safepoint_class = ZEND_MIR_SAFEPOINT_CLASS_DESTRUCTOR;
 	frame.canonical = true;
 	if (!mutator->add_frame_state(mutator->context, &frame, &frame_id)) {
-		return false;
+		goto done;
 	}
 	memset(&source_map, 0, sizeof(source_map));
 	source_map.id = ZEND_MIR_ID_INVALID;
@@ -505,10 +614,14 @@ static bool zend_mir_w10_emit_throw_frame(
 	source_map.owner_frame_id = frame_id;
 	if (!mutator->add_source_map(
 			mutator->context, &source_map, &source_map_id)) {
-		return false;
+		goto done;
 	}
 	*frame_id_out = frame_id;
-	return true;
+	success = true;
+
+done:
+	free(slot_values);
+	return success;
 }
 
 static bool zend_mir_w04_emit_edge_statepoint(
@@ -526,24 +639,43 @@ static bool zend_mir_w04_emit_edge_statepoint(
 	zend_mir_frame_state_id frame_id;
 	zend_mir_source_map_id source_map_id;
 	zend_mir_instruction_id branch_id;
+	zend_mir_value_id *slot_values = NULL;
 	uint32_t first_slot = 0;
-	uint32_t slot_count = zend_mir_zend_source_slot_count(zend_source);
+	uint32_t materialized_slot_count = 0;
+	/*
+	 * Canonical W11P locations keep interrupt-visible values in the Zend
+	 * frame. Empty statepoint snapshots avoid duplicating those same physical
+	 * locations in every loop edge while retaining the source/frame identity.
+	 */
+	uint32_t slot_count = zend_source != NULL && zend_source->w11
+		? 0 : zend_mir_zend_source_slot_count(zend_source);
 	uint32_t i;
+	bool success = false;
 	if (zend_source == NULL || opcode == NULL
+			|| mutator == NULL || statepoint_id == NULL
 			|| mutator->add_frame_slot == NULL
 			|| mutator->add_frame_state == NULL
 			|| mutator->add_source_map == NULL) {
 		return false;
 	}
+	if (slot_count != 0) {
+		slot_values = malloc(slot_count * sizeof(*slot_values));
+		if (slot_values == NULL
+				|| !zend_mir_w04_collect_current_slot_values(
+					context, source_block_id, slot_values, slot_count)) {
+			goto done;
+		}
+	}
 	for (i = 0; i < slot_count; i++) {
 		zend_mir_source_slot_ref source_slot;
 		zend_mir_frame_slot_ref frame_slot;
-		zend_mir_value_id value_id = ZEND_MIR_ID_INVALID;
+		zend_mir_value_id value_id = slot_values[i];
 		uint32_t slot_index;
-		if (!zend_mir_zend_source_slot_at(zend_source, i, &source_slot)
-				|| !zend_mir_w04_current_slot_value(context,
-					&source_slot, source_block_id, &value_id)) {
-			return false;
+		if (!zend_mir_id_is_valid(value_id)) {
+			continue;
+		}
+		if (!zend_mir_zend_source_slot_at(zend_source, i, &source_slot)) {
+			goto done;
 		}
 		memset(&frame_slot, 0, sizeof(frame_slot));
 		frame_slot.slot_id = source_slot.slot_id;
@@ -551,20 +683,21 @@ static bool zend_mir_w04_emit_edge_statepoint(
 		frame_slot.kind = zend_mir_w04_frame_slot_kind(source_slot.kind);
 		frame_slot.representation =
 			ZEND_MIR_FRAME_SLOT_REPRESENTATION_CANONICAL_ZVAL;
-		frame_slot.materialization = zend_mir_id_is_valid(value_id)
-			? ZEND_MIR_MATERIALIZATION_MATERIALIZED
-			: ZEND_MIR_MATERIALIZATION_UNDEF;
+		frame_slot.materialization = ZEND_MIR_MATERIALIZATION_MATERIALIZED;
 		frame_slot.ownership = ZEND_MIR_FRAME_SLOT_OWNERSHIP_FRAME_OWNED;
 		frame_slot.value_id = value_id;
 		if (frame_slot.kind == ZEND_MIR_FRAME_SLOT_KIND_INVALID
 				|| !mutator->add_frame_slot(
 					mutator->context, &frame_slot, &slot_index)
-				|| (i != 0 && slot_index != first_slot + i)) {
-			return false;
+				|| (materialized_slot_count != 0
+					&& slot_index
+						!= first_slot + materialized_slot_count)) {
+			goto done;
 		}
-		if (i == 0) {
+		if (materialized_slot_count == 0) {
 			first_slot = slot_index;
 		}
+		materialized_slot_count++;
 	}
 	memset(&frame, 0, sizeof(frame));
 	frame.id = ZEND_MIR_ID_INVALID;
@@ -573,8 +706,8 @@ static bool zend_mir_w04_emit_edge_statepoint(
 	frame.function_kind = ZEND_MIR_FUNCTION_KIND_USER;
 	frame.opline_index = opcode == NULL ? 0 : opcode->opline_index;
 	frame.opline_phase = ZEND_MIR_OPLINE_PHASE_BEFORE;
-	frame.slots.offset = slot_count == 0 ? 0 : first_slot;
-	frame.slots.count = slot_count;
+	frame.slots.offset = materialized_slot_count == 0 ? 0 : first_slot;
+	frame.slots.count = materialized_slot_count;
 	frame.return_continuation.kind = ZEND_MIR_CONTINUATION_KIND_TERMINAL;
 	frame.return_continuation.frame_state_id = ZEND_MIR_ID_INVALID;
 	frame.return_continuation.opline_index = ZEND_MIR_ID_INVALID;
@@ -594,7 +727,7 @@ static bool zend_mir_w04_emit_edge_statepoint(
 	frame.safepoint_class = ZEND_MIR_SAFEPOINT_CLASS_OBSERVER;
 	frame.canonical = true;
 	if (!mutator->add_frame_state(mutator->context, &frame, &frame_id)) {
-		return false;
+		goto done;
 	}
 	memset(&source_map, 0, sizeof(source_map));
 	source_map.id = ZEND_MIR_ID_INVALID;
@@ -605,7 +738,7 @@ static bool zend_mir_w04_emit_edge_statepoint(
 	source_map.owner_frame_id = frame_id;
 	if (!mutator->add_source_map(
 			mutator->context, &source_map, &source_map_id)) {
-		return false;
+		goto done;
 	}
 	memset(&record, 0, sizeof(record));
 	record.id = ZEND_MIR_ID_INVALID;
@@ -627,27 +760,27 @@ static bool zend_mir_w04_emit_edge_statepoint(
 		| ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_OBSERVER)
 		| ZEND_MIR_BARRIER_MASK(ZEND_MIR_BARRIER_INTERRUPT);
 	if (!mutator->add_instruction(mutator->context, &record, statepoint_id)) {
-		return false;
+		goto done;
 	}
 	for (i = 0; i < slot_count; i++) {
-		zend_mir_source_slot_ref source_slot;
-		zend_mir_value_id value_id = ZEND_MIR_ID_INVALID;
-		if (!zend_mir_zend_source_slot_at(zend_source, i, &source_slot)
-				|| !zend_mir_w04_current_slot_value(context,
-					&source_slot, source_block_id, &value_id)
-				|| (zend_mir_id_is_valid(value_id)
+		if (zend_mir_id_is_valid(slot_values[i])
 					&& (mutator->add_operand == NULL
 						|| !mutator->add_operand(
-							mutator->context, *statepoint_id, value_id)))) {
-			return false;
+							mutator->context, *statepoint_id,
+							slot_values[i]))) {
+			goto done;
 		}
 	}
 	if (!zend_mir_w04_add_instruction(mutator, edge_block,
 				ZEND_MIR_OPCODE_BRANCH, ZEND_MIR_REPRESENTATION_CONTROL,
 				ZEND_MIR_ID_INVALID, record.source_position_id, &branch_id)) {
-		return false;
+		goto done;
 	}
-	return true;
+	success = true;
+
+done:
+	free(slot_values);
+	return success;
 }
 
 static bool zend_mir_w04_emit_terminator_edges(

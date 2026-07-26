@@ -673,9 +673,8 @@ static bool test_cfg_edge_storage_and_order(void)
 	CHECK(mutator->add_block(mutator->context, function, &entry));
 	CHECK(mutator->add_block(mutator->context, function, &merge));
 	CHECK(mutator->add_edge(mutator->context, entry, merge));
-	CHECK(!mutator->add_edge(mutator->context, entry, merge));
-	CHECK(zend_mir_module_get_state(module) == ZEND_MIR_MODULE_FAILED);
-	CHECK(diagnostics.last_code == ZEND_MIR_DIAGNOSTIC_DUPLICATE_ID);
+	CHECK(mutator->add_edge(mutator->context, entry, merge));
+	CHECK(zend_mir_module_get_state(module) == ZEND_MIR_MODULE_BUILDING);
 	zend_mir_module_destroy(module);
 
 	memset(&allocator, 0, sizeof(allocator));

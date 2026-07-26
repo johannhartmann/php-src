@@ -143,7 +143,10 @@ typedef struct _zend_mir_mutator {
 /*
  * View order is semantic: PHI operand N belongs to predecessor N. BRANCH has
  * successor 0; COND_BRANCH has true successor 0 and false successor 1.
- * RETURN, THROW, and UNREACHABLE have no successors.
+ * Multiway successors retain every source case slot, including repeated
+ * targets. Predecessors are unique source blocks, so parallel successor edges
+ * share one PHI predecessor slot. RETURN, THROW, and UNREACHABLE have no
+ * successors.
  */
 
 typedef bool (*zend_mir_text_write_fn)(void *context, const char *bytes, size_t length);
