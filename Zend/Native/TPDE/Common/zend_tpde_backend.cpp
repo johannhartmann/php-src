@@ -1520,6 +1520,19 @@ bool call_site_requires_source_fragments(
 			site.source_init_opline_index].opcode == ZEND_NEW) {
 		return true;
 	}
+	/*
+	 * CALLABLE_CONVERT does not invoke its resolved target.  It consumes the
+	 * pending source call frame to create a Closure, so it cannot use either
+	 * the direct internal-call or direct native-call completion path.  Emit
+	 * INIT/SEND/CONVERT at their source positions and let the fragment runtime
+	 * preserve the resolved function and PHP's call-frame ownership exactly.
+	 */
+	const uint8_t finish_opcode = plan->source_op_array->opcodes[
+		site.source_do_opline_index].opcode;
+	if (finish_opcode == ZEND_CALLABLE_CONVERT
+			|| finish_opcode == ZEND_CALLABLE_CONVERT_PARTIAL) {
+		return true;
+	}
 	for (uint32_t index = 0; index < site.arguments.count; ++index) {
 		zend_mir_call_argument_ref argument;
 		if (!zend_tpde_call_argument_at(
@@ -2688,6 +2701,15 @@ bool initialize_plan(
 					 * scalars remain eligible for the direct return.
 					 */
 					&& plan->values[value_index].argument_index < 0
+					&& (source_ssa == nullptr
+						|| source_ssa->var_info == nullptr
+						|| operation.op1.ssa_variable_id
+							== ZEND_MIR_ID_INVALID
+						|| operation.op1.ssa_variable_id
+							>= static_cast<uint32_t>(source_ssa->vars_count)
+						|| (source_ssa->var_info[
+								operation.op1.ssa_variable_id].type
+								& MAY_BE_UNDEF) == 0)
 					&& zend_mir_scalar_type_is_exact(
 						plan->values[value_index].exact_type)) {
 				bool helper_mutates_return_storage = false;

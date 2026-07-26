@@ -33,6 +33,10 @@
 #include "zend_fibers.h"
 #include "zend_fibers_arginfo.h"
 
+#ifdef HAVE_NATIVE_ENGINE
+# include "Zend/Native/Runtime/Common/zend_native_calls.h"
+#endif
+
 #ifdef HAVE_VALGRIND
 # include <valgrind/valgrind.h>
 #endif
@@ -113,6 +117,9 @@ typedef struct _zend_fiber_vm_state {
 	uint32_t jit_trace_num;
 	JMP_BUF *bailout;
 	zend_fiber *active_fiber;
+#ifdef HAVE_NATIVE_ENGINE
+	void *native_direct_call;
+#endif
 #ifdef ZEND_CHECK_STACK_LIMIT
 	void *stack_base;
 	void *stack_limit;
@@ -130,6 +137,9 @@ static zend_always_inline void zend_fiber_capture_vm_state(zend_fiber_vm_state *
 	state->jit_trace_num = EG(jit_trace_num);
 	state->bailout = EG(bailout);
 	state->active_fiber = EG(active_fiber);
+#ifdef HAVE_NATIVE_ENGINE
+	state->native_direct_call = zend_native_call_fiber_suspend();
+#endif
 #ifdef ZEND_CHECK_STACK_LIMIT
 	state->stack_base = EG(stack_base);
 	state->stack_limit = EG(stack_limit);
@@ -147,6 +157,9 @@ static zend_always_inline void zend_fiber_restore_vm_state(zend_fiber_vm_state *
 	EG(jit_trace_num) = state->jit_trace_num;
 	EG(bailout) = state->bailout;
 	EG(active_fiber) = state->active_fiber;
+#ifdef HAVE_NATIVE_ENGINE
+	zend_native_call_fiber_resume(state->native_direct_call);
+#endif
 #ifdef ZEND_CHECK_STACK_LIMIT
 	EG(stack_base) = state->stack_base;
 	EG(stack_limit) = state->stack_limit;

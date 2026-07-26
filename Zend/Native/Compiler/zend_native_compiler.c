@@ -3294,12 +3294,13 @@ zend_native_status zend_native_compiler_execute(
 	return status;
 }
 
-zend_native_status zend_native_compiler_execute_published(
+static zend_native_status zend_native_compiler_execute_published_impl(
 	zend_native_compiler *compiler,
 	zend_native_entry_cell *entry_cell,
 	const zend_native_code *code,
 	zend_execute_data *execute_data,
-	zend_native_diagnostic *diagnostic)
+	zend_native_diagnostic *diagnostic,
+	bool observer_already_started)
 {
 	zend_execute_data *previous;
 	zend_native_status status;
@@ -3322,14 +3323,39 @@ zend_native_status zend_native_compiler_execute_published(
 	EG(current_execute_data) = execute_data;
 	zend_native_entry_cell_retain_active(entry_cell);
 	phase_started = zend_hrtime();
-	status = zend_native_execute_frame(
-		code, execute_data, diagnostic);
+	status = observer_already_started
+		? zend_native_execute_observed_frame(
+			code, execute_data, diagnostic)
+		: zend_native_execute_frame(
+			code, execute_data, diagnostic);
 	elapsed = zend_hrtime() - phase_started;
 	zend_native_entry_cell_release_active(entry_cell);
 	EG(current_execute_data) = previous;
 	zend_native_compiler_session_record_execution(compiler, elapsed);
 	zend_native_compiler_leave(compiler);
 	return status;
+}
+
+zend_native_status zend_native_compiler_execute_published(
+	zend_native_compiler *compiler,
+	zend_native_entry_cell *entry_cell,
+	const zend_native_code *code,
+	zend_execute_data *execute_data,
+	zend_native_diagnostic *diagnostic)
+{
+	return zend_native_compiler_execute_published_impl(
+		compiler, entry_cell, code, execute_data, diagnostic, false);
+}
+
+zend_native_status zend_native_compiler_execute_observed_published(
+	zend_native_compiler *compiler,
+	zend_native_entry_cell *entry_cell,
+	const zend_native_code *code,
+	zend_execute_data *execute_data,
+	zend_native_diagnostic *diagnostic)
+{
+	return zend_native_compiler_execute_published_impl(
+		compiler, entry_cell, code, execute_data, diagnostic, true);
 }
 
 zend_native_status zend_native_compiler_execute_entry(
@@ -3343,10 +3369,11 @@ zend_native_status zend_native_compiler_execute_entry(
 		execute_data, diagnostic);
 }
 
-zend_native_status zend_native_compiler_execute_data(
+static zend_native_status zend_native_compiler_execute_data_impl(
 	zend_native_compiler *compiler,
 	zend_execute_data *execute_data,
-	zend_native_diagnostic *diagnostic)
+	zend_native_diagnostic *diagnostic,
+	bool observer_already_started)
 {
 	zend_native_compile_diagnostic compile_diagnostic;
 	zend_native_entry_cell *entry_cell;
@@ -3375,8 +3402,27 @@ zend_native_status zend_native_compiler_execute_data(
 		}
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	return zend_native_compiler_execute_entry(
-		compiler, entry_cell, execute_data, diagnostic);
+	return zend_native_compiler_execute_published_impl(
+		compiler, entry_cell, zend_native_entry_cell_load(entry_cell),
+		execute_data, diagnostic, observer_already_started);
+}
+
+zend_native_status zend_native_compiler_execute_data(
+	zend_native_compiler *compiler,
+	zend_execute_data *execute_data,
+	zend_native_diagnostic *diagnostic)
+{
+	return zend_native_compiler_execute_data_impl(
+		compiler, execute_data, diagnostic, false);
+}
+
+zend_native_status zend_native_compiler_execute_observed_data(
+	zend_native_compiler *compiler,
+	zend_execute_data *execute_data,
+	zend_native_diagnostic *diagnostic)
+{
+	return zend_native_compiler_execute_data_impl(
+		compiler, execute_data, diagnostic, true);
 }
 
 static bool zend_native_compiler_index_script_functions(

@@ -1333,10 +1333,60 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		return true;
 	}
 	if (node.kind == Adaptor::InstKind::GeneratorResume) {
-		if (node.argument_index >= generator_resume_labels_.size()) {
+		if (node.argument_index >= generator_resume_labels_.size()
+				|| node.operands.empty()
+				|| node.operands[0]
+					!= IRValueRef{Adaptor::FRAME_VALUE}) {
 			return false;
 		}
 		label_place(generator_resume_labels_[node.argument_index]);
+		auto [frame_ref, frame] = val_ref_single(node.operands[0]);
+		auto frame_reg = frame.load_to_reg();
+		for (size_t index = 1; index < node.operands.size(); ++index) {
+			const IRValueRef operand = node.operands[index];
+			const zend_mir_storage_id storage =
+				adaptor->canonical_storage(operand);
+			const zend_mir_scalar_type_mask exact_type =
+				adaptor->exact_type(operand);
+			const uint64_t offset =
+				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+			if (!zend_mir_id_is_valid(storage)
+					|| !zend_mir_scalar_type_is_exact(exact_type)
+					|| exact_type == ZEND_MIR_SCALAR_TYPE_NULL
+					|| offset + offsetof(zval, u1.type_info)
+						> UINT32_MAX) {
+				return false;
+			}
+			auto [value_ref, value] = val_ref_single(operand);
+			if (!value.has_assignment()
+					|| value.assignment().variable_ref()) {
+				return false;
+			}
+			/*
+			 * Resume redefines the machine value from its canonical Zend
+			 * slot. Invalidate TPDE's spill copy before allocating so no
+			 * stale reload is emitted ahead of the authoritative frame load.
+			 */
+			value.assignment().set_modified(true);
+			auto value_reg = value.cur_reg_or_alloc();
+			switch (exact_type) {
+				case ZEND_MIR_SCALAR_TYPE_I1:
+					load_off(value_reg, frame_reg,
+						static_cast<uint32_t>(
+							offset + offsetof(zval, u1.type_info)), 4);
+					ASM(CMPwi, value_reg, IS_TRUE);
+					generate_raw_set(Jump::Jeq, value_reg);
+					break;
+				case ZEND_MIR_SCALAR_TYPE_I64:
+				case ZEND_MIR_SCALAR_TYPE_F64:
+					load_off(value_reg, frame_reg,
+						static_cast<uint32_t>(offset), 8);
+					break;
+				default:
+					return false;
+			}
+			value.set_modified();
+		}
 		return true;
 	}
 	if (node.kind == Adaptor::InstKind::FrameSlotAddress) {
@@ -6983,6 +7033,31 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 			auto [value_ref, value] = val_ref_single(node.operands[0]);
 			auto [frame_ref, frame] = val_ref_single(node.operands[1]);
 			auto frame_reg = frame.load_to_reg();
+			ScratchReg source_position{this};
+			auto source_position_reg = source_position.alloc_gp();
+			load_off(source_position_reg, frame_reg,
+				static_cast<uint32_t>(
+					offsetof(zend_execute_data, func)), 8);
+			load_off(source_position_reg, source_position_reg,
+				static_cast<uint32_t>(
+					offsetof(zend_function, op_array.opcodes)), 8);
+			const uint64_t source_offset =
+				uint64_t{record.source_position_id} * sizeof(zend_op);
+			if (source_offset <= UINT32_C(4095)) {
+				ASM(ADDxi, source_position_reg, source_position_reg,
+					static_cast<uint32_t>(source_offset));
+			} else {
+				ScratchReg offset{this};
+				auto offset_reg = offset.alloc_gp();
+				materialize_constant(source_offset,
+					DarwinConfig::GP_BANK, 8, offset_reg);
+				ASM(ADDx, source_position_reg,
+					source_position_reg, offset_reg);
+			}
+			store_off(frame_reg,
+				static_cast<uint32_t>(
+					offsetof(zend_execute_data, opline)),
+				source_position_reg, 8);
 			ScratchReg pointer{this};
 			auto pointer_reg = pointer.alloc_gp();
 			load_off(pointer_reg, frame_reg,
@@ -7013,6 +7088,33 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 					auto [frame_ref, frame] =
 						val_ref_single(node.operands[0]);
 					auto frame_reg = frame.load_to_reg();
+					ScratchReg source_position{this};
+					auto source_position_reg = source_position.alloc_gp();
+					load_off(source_position_reg, frame_reg,
+						static_cast<uint32_t>(
+							offsetof(zend_execute_data, func)), 8);
+					load_off(source_position_reg, source_position_reg,
+						static_cast<uint32_t>(
+							offsetof(zend_function, op_array.opcodes)), 8);
+					const uint64_t source_offset =
+						uint64_t{record.source_position_id}
+							* sizeof(zend_op);
+					if (source_offset <= UINT32_C(4095)) {
+						ASM(ADDxi, source_position_reg,
+							source_position_reg,
+							static_cast<uint32_t>(source_offset));
+					} else {
+						ScratchReg offset{this};
+						auto offset_reg = offset.alloc_gp();
+						materialize_constant(source_offset,
+							DarwinConfig::GP_BANK, 8, offset_reg);
+						ASM(ADDx, source_position_reg,
+							source_position_reg, offset_reg);
+					}
+					store_off(frame_reg,
+						static_cast<uint32_t>(
+							offsetof(zend_execute_data, opline)),
+						source_position_reg, 8);
 					ScratchReg return_pointer{this};
 					auto return_reg = return_pointer.alloc_gp();
 					load_off(return_reg, frame_reg,

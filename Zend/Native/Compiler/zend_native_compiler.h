@@ -203,6 +203,16 @@ ZEND_API zend_native_status zend_native_compiler_execute_published(
 	const zend_native_code *code,
 	zend_execute_data *execute_data,
 	zend_native_diagnostic *diagnostic);
+ZEND_API zend_native_status zend_native_compiler_execute_observed_data(
+	zend_native_compiler *compiler,
+	zend_execute_data *execute_data,
+	zend_native_diagnostic *diagnostic);
+ZEND_API zend_native_status zend_native_compiler_execute_observed_published(
+	zend_native_compiler *compiler,
+	zend_native_entry_cell *entry_cell,
+	const zend_native_code *code,
+	zend_execute_data *execute_data,
+	zend_native_diagnostic *diagnostic);
 
 ZEND_API uint32_t zend_native_compiler_function_count(
 	const zend_native_compiler *compiler);

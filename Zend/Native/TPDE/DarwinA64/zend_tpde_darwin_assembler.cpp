@@ -151,6 +151,10 @@ std::vector<::tpde::u8> AssemblerDarwinA64::build_object_file() {
 		'Z', 'N', 'M', 'I', 'R', '-', 'T', 'P', 'D', 'E', '-', 'A', '6', '4', 0, 2};
 	std::vector<::tpde::u8> output(MAGIC.begin(), MAGIC.end());
 	uint32_t sections_count = static_cast<uint32_t>(section_count());
+	if (section_names_.size() < sections_count) {
+		section_names_.resize(sections_count);
+		section_symbols_.resize(sections_count);
+	}
 	uint32_t present_sections_count = 0;
 	for (uint32_t i = 1; i < sections_count; ++i) {
 		present_sections_count += section_present(i) ? 1 : 0;
