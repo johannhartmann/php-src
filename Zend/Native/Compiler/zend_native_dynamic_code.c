@@ -347,6 +347,7 @@ zend_native_status zend_native_execute_include_or_eval(
 	new_op_array->scope = execute_data->func->op_array.scope;
 	call_info = (Z_TYPE_INFO(execute_data->This) & ZEND_CALL_HAS_THIS)
 		| ZEND_CALL_NESTED_CODE | ZEND_CALL_HAS_SYMBOL_TABLE;
+	previous = EG(current_execute_data);
 	call = zend_vm_stack_push_call_frame(
 		call_info, (zend_function *) new_op_array, 0,
 		Z_PTR(execute_data->This));
@@ -357,6 +358,7 @@ zend_native_status zend_native_execute_include_or_eval(
 	}
 	call->prev_execute_data = execute_data;
 	zend_init_code_execute_data(call, new_op_array, result);
+	EG(current_execute_data) = previous;
 	if (!zend_native_dynamic_compiler_adopt(compiler, new_op_array)) {
 		zend_vm_stack_free_call_frame(call);
 		zend_destroy_static_vars(new_op_array);
@@ -396,7 +398,6 @@ zend_native_status zend_native_execute_include_or_eval(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	memset(&diagnostic, 0, sizeof(diagnostic));
-	previous = EG(current_execute_data);
 	EG(current_execute_data) = call;
 	status = zend_native_execute_frame(
 		code, call, &diagnostic);
