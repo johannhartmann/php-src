@@ -1040,16 +1040,22 @@ static bool zend_mir_core_stage_call_argument(
 {
 	zend_mir_module *module = context;
 	zend_mir_core_call_staging *staging;
+	bool machine_value;
 
 	if (!zend_mir_module_require_building(module) || argument == NULL) {
 		return false;
 	}
 	staging = &module->call_staging;
+	machine_value =
+		argument->ownership == ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR
+		|| (argument->ownership
+				== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE
+			&& zend_mir_id_is_valid(argument->value_id));
 	if (staging->committed || argument->id != staging->argument_count
 			|| argument->ownership < ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR
 			|| argument->ownership
 				> ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
-			|| (argument->ownership == ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR
+			|| (machine_value
 				? !zend_mir_module_find_value(
 					module, argument->value_id, NULL)
 				: (zend_mir_id_is_valid(argument->value_id)

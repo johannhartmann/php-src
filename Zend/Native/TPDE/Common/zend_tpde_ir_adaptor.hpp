@@ -754,6 +754,29 @@ public:
 						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
 		}
 		/*
+		 * A direct user call publishes its canonical result for Zend
+		 * observability, but that store is also the definition of the same SSA
+		 * value.  Keep arbitrary boxed results as two-part TPDE values when a
+		 * later machine consumer exists instead of forcing that consumer to
+		 * reload through the frame.
+		 */
+		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
+			const zend_mir_instruction_record record =
+				instruction_record_at(i);
+			if (record.opcode != ZEND_MIR_OPCODE_CALL_DIRECT_USER
+					|| record.representation
+						!= ZEND_MIR_REPRESENTATION_ZVAL
+					|| !zend_mir_id_is_valid(record.result_id)) {
+				continue;
+			}
+			const IRValueRef result = value_ref(record.result_id);
+			if (result != INVALID_VALUE_REF
+					&& machine_kind(result)
+						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+				register_values_[static_cast<uint32_t>(result)] = 1;
+			}
+		}
+		/*
 		 * COPY/Pi and PHI are representation-preserving identities.  Propagate
 		 * boxed register authority to a fixed point before constructing TPDE
 		 * uses, so loop-header PHIs do not depend on persistent instruction
@@ -1700,7 +1723,11 @@ public:
 					&& instruction.direct_call != nullptr) {
 				instruction.direct_call->flags &=
 					~ZEND_NATIVE_DIRECT_CALL_REQUIRE_SCALAR_RESULT;
-				if (machine_result) {
+				if (machine_result
+						&& zend_mir_scalar_type_is_exact(
+							exact_type(result))
+						&& exact_type(result)
+							!= ZEND_MIR_SCALAR_TYPE_NULL) {
 					instruction.direct_call->flags |=
 						ZEND_NATIVE_DIRECT_CALL_REQUIRE_SCALAR_RESULT;
 				}
@@ -1838,11 +1865,11 @@ public:
 					== ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
 				/*
 				 * A proven inline descriptor materializes exact scalar payloads
-				 * and boxed CV zvals in the generated Zend frame. Boxed CVs use
-				 * a frame operand because their authoritative representation
-				 * remains the canonical caller slot. Keep repeated frame/context
-				 * uses explicit so TPDE's reference counts match both generated
-				 * paths.
+				 * and boxed zvals in the generated Zend frame. Keep repeated
+				 * frame/context uses explicit so TPDE's reference counts match
+				 * both generated paths; a non-inline boxed result uses one
+				 * additional caller-frame reference to load both value parts
+				 * after the call boundary.
 				 */
 				const bool dynamic_direct_call =
 					instruction.direct_call == nullptr
@@ -1882,7 +1909,10 @@ public:
 							? 3
 							: 6 + machine_result;
 					} else {
-						frame_use_count = 2;
+						frame_use_count = 2
+							+ (machine_result
+								&& machine_kind(result)
+									== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
 					}
 				} else if (dynamic_direct_call) {
 					frame_use_count = 2;

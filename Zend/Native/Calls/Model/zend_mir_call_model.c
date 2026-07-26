@@ -322,6 +322,7 @@ static bool zend_mir_w05_argument_value(
 static bool zend_mir_w05_result_value(
 	const zend_mir_lowering_context *context,
 	const zend_mir_source_call_site_ref *site,
+	bool allow_boxed,
 	zend_mir_value_id *out)
 {
 	zend_mir_value_fact_ref fact;
@@ -338,12 +339,18 @@ static bool zend_mir_w05_result_value(
 		*out = ZEND_MIR_ID_INVALID;
 		return true;
 	}
-	if (result_flags != ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR
-			|| !zend_mir_id_is_valid(site->result_ssa_variable_id)) {
+	if (!zend_mir_id_is_valid(site->result_ssa_variable_id)) {
 		return false;
 	}
 	value = zend_mir_value_from_original_ssa(
 		site->result_ssa_variable_id);
+	if (result_flags == 0 && allow_boxed) {
+		*out = value;
+		return true;
+	}
+	if (result_flags != ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR) {
+		return false;
+	}
 	if (!zend_mir_lowering_context_value_fact(context, value, &fact)
 			|| fact.value_id != value
 			|| !zend_mir_scalar_type_is_exact(fact.exact_type)
@@ -352,6 +359,20 @@ static bool zend_mir_w05_result_value(
 	}
 	*out = value;
 	return true;
+}
+
+static bool zend_mir_w05_prior_call_result(
+	const zend_mir_w05_plan *plan, uint32_t site_index,
+	zend_mir_value_id value)
+{
+	uint32_t index;
+
+	for (index = 0; index < site_index; index++) {
+		if (plan->results[index] == value) {
+			return true;
+		}
+	}
+	return false;
 }
 
 static bool zend_mir_w05_is_call_init(uint32_t opcode)
@@ -925,7 +946,7 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 				 * and can be consumed by another W08 source-backed operation.
 				 */
 				if (!zend_mir_w05_result_value(
-						context, site, &plan->results[index])) {
+						context, site, false, &plan->results[index])) {
 					plan->results[index] = ZEND_MIR_ID_INVALID;
 				}
 			} else {
@@ -940,11 +961,11 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 			 */
 			if (!context->zend_source->w11
 					|| !zend_mir_w05_result_value(
-						context, site, &plan->results[index])) {
+						context, site, true, &plan->results[index])) {
 				plan->results[index] = ZEND_MIR_ID_INVALID;
 			}
 		} else if (!zend_mir_w05_result_value(
-				context, site, &plan->results[index])) {
+				context, site, false, &plan->results[index])) {
 			return ZEND_MIRL_W05_UNSUPPORTED_RESULT;
 		}
 		if (!w09_execution && ((!w07_execution && !w08_execution
@@ -1042,7 +1063,26 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 						? ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
 						: ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE;
 				if (!borrowed_scalar) {
-					plan->values[plan_argument_index] = ZEND_MIR_ID_INVALID;
+					zend_mir_value_id value =
+						zend_mir_id_is_valid(
+							argument->value_ssa_variable_id)
+						? zend_mir_value_from_original_ssa(
+							argument->value_ssa_variable_id)
+						: ZEND_MIR_ID_INVALID;
+					/*
+					 * A nested direct call is the first arbitrary boxed
+					 * producer whose machine definition is guaranteed here.
+					 * Other source zvals remain frame-backed until their own
+					 * lowering operation proves a register definition.
+					 */
+					plan->values[plan_argument_index] =
+						context->zend_source->w11
+							&& parameter_mode
+								== ZEND_MIR_SOURCE_PARAMETER_BY_VALUE
+							&& zend_mir_id_is_valid(value)
+							&& zend_mir_w05_prior_call_result(
+								plan, index, value)
+						? value : ZEND_MIR_ID_INVALID;
 				}
 			}
 		}
@@ -1772,6 +1812,28 @@ static bool zend_mir_w05_verify_scalar_result(
 	return true;
 }
 
+static bool zend_mir_w05_verify_machine_result(
+	const zend_mir_view *view, zend_mir_value_id value_id,
+	zend_mir_representation *representation_out)
+{
+	zend_mir_value_record value;
+	uint32_t index;
+
+	for (index = 0; index < view->value_count(view->context); index++) {
+		if (!view->value_at(view->context, index, &value)) {
+			return false;
+		}
+		if (value.id == value_id) {
+			if (value.representation == ZEND_MIR_REPRESENTATION_VOID) {
+				return false;
+			}
+			*representation_out = value.representation;
+			return true;
+		}
+	}
+	return false;
+}
+
 static bool zend_mir_w05_verify_source_order(
 	const zend_mir_view *view,
 	const zend_mir_instruction_record *call,
@@ -2412,7 +2474,8 @@ failure:
 
 static bool zend_mir_w05_verify_final_scalar(
 	const zend_mir_view *view, const zend_mir_call_view *calls,
-	zend_mir_diagnostic_sink *diagnostics, bool w08_execution)
+	zend_mir_diagnostic_sink *diagnostics, bool w08_execution,
+	bool w09_execution)
 {
 	uint32_t index;
 
@@ -2437,7 +2500,14 @@ static bool zend_mir_w05_verify_final_scalar(
 							view, argument.value_id, &representation)
 						|| representation == ZEND_MIR_REPRESENTATION_VOID)
 					: (!w08_execution
-						|| zend_mir_id_is_valid(argument.value_id)
+						|| (zend_mir_id_is_valid(argument.value_id)
+							? (!w09_execution
+								|| argument.ownership
+									!= ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE
+								|| !zend_mir_w05_verify_machine_result(
+									view, argument.value_id,
+									&representation))
+							: false)
 						|| (argument.ownership
 								!= ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE
 							&& argument.ownership
@@ -2452,10 +2522,13 @@ static bool zend_mir_w05_verify_final_scalar(
 			goto failure;
 		}
 		if (zend_mir_id_is_valid(site.result_id)
-				&& (!zend_mir_w05_verify_scalar_result(
-						view, site.result_id, &representation)
-					|| representation
-						== ZEND_MIR_REPRESENTATION_VOID)) {
+				&& ((!zend_mir_w05_verify_scalar_result(
+							view, site.result_id, &representation)
+						|| representation
+							== ZEND_MIR_REPRESENTATION_VOID)
+					&& (!w09_execution
+						|| !zend_mir_w05_verify_machine_result(
+							view, site.result_id, &representation)))) {
 			goto failure;
 		}
 	}
@@ -2689,6 +2762,7 @@ static bool zend_mir_verify_w08_calls(
 		zend_mir_representation result_representation;
 		bool internal;
 		bool scalar_arguments;
+		uint32_t result_flags;
 		uint32_t expected_operand_count;
 		uint32_t argument_index;
 		uint32_t continuation_index;
@@ -2706,6 +2780,9 @@ static bool zend_mir_verify_w08_calls(
 			goto failure;
 		}
 		internal = target.kind == ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL;
+		result_flags = source.flags
+			& (ZEND_MIR_SOURCE_CALL_SITE_RESULT_UNUSED
+				| ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR);
 		scalar_arguments = !internal;
 		for (argument_index = 0;
 			scalar_arguments && argument_index < site.arguments.count;
@@ -2731,9 +2808,18 @@ static bool zend_mir_verify_w08_calls(
 							|| site.result_id != zend_mir_value_from_original_ssa(
 								source.result_ssa_variable_id)
 							|| instruction.result_id != site.result_id
-							|| !zend_mir_w05_verify_scalar_result(
-								view, site.result_id,
-								&result_representation)
+							|| (result_flags
+									== ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR
+								? !zend_mir_w05_verify_scalar_result(
+									view, site.result_id,
+									&result_representation)
+								: (result_flags != 0
+									|| !w09_execution
+									|| !zend_mir_w05_verify_machine_result(
+										view, site.result_id,
+										&result_representation)
+									|| result_representation
+										!= ZEND_MIR_REPRESENTATION_ZVAL))
 							|| instruction.representation
 								!= result_representation)
 						: (zend_mir_id_is_valid(instruction.result_id)
@@ -2808,6 +2894,7 @@ static bool zend_mir_verify_w08_calls(
 				zend_mir_source_parameter_mode parameter_mode;
 				zend_mir_call_argument_ownership expected;
 				bool borrowed_scalar;
+				bool boxed_machine_value;
 				if (internal || source_target.kind
 						== ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER) {
 					if (!internal
@@ -2835,10 +2922,21 @@ static bool zend_mir_verify_w08_calls(
 						== ZEND_MIR_SOURCE_PARAMETER_BY_VALUE
 					&& argument.ownership
 						== ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR;
+				boxed_machine_value = w09_execution && !internal
+					&& parameter_mode
+						== ZEND_MIR_SOURCE_PARAMETER_BY_VALUE
+					&& argument.ownership
+						== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE
+					&& zend_mir_id_is_valid(
+						source_argument.value_ssa_variable_id)
+					&& argument.value_id
+						== zend_mir_value_from_original_ssa(
+							source_argument.value_ssa_variable_id);
 				if ((!borrowed_scalar && argument.ownership != expected)
 						|| (borrowed_scalar
 							? !zend_mir_id_is_valid(argument.value_id)
-							: zend_mir_id_is_valid(argument.value_id))
+							: zend_mir_id_is_valid(argument.value_id)
+								!= boxed_machine_value)
 						|| caller_slot.materialization
 							!= (borrowed_scalar
 								? ZEND_MIR_MATERIALIZATION_MATERIALIZED
@@ -2913,7 +3011,7 @@ static bool zend_mir_w05_verify_final_composition(
 		return false;
 	}
 	if (!zend_mir_w05_verify_final_scalar(
-			view, calls, diagnostics, w08_execution)) {
+			view, calls, diagnostics, w08_execution, w09_execution)) {
 		return false;
 	}
 	if (!zend_mir_w05_verify_final_control_flow(

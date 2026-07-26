@@ -6910,11 +6910,23 @@ bool ZendCompilerA64::compile_inst(
 							ASM(ADDx, result_slot_reg,
 								result_slot_reg, slot_index_reg);
 						}
-						auto [result_ref, result] =
-							result_ref_single(node.result);
-						auto result_reg = result.alloc_reg();
-						load_off(result_reg, result_slot_reg, 0, 8);
-						result.set_modified();
+						if (adaptor->machine_kind(node.result)
+								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+							auto result = result_ref(node.result);
+							for (uint32_t part = 0; part < 2; ++part) {
+								auto value = result.part(part);
+								auto value_reg = value.alloc_reg();
+								load_off(value_reg, result_slot_reg,
+									part * sizeof(uint64_t), 8);
+								value.set_modified();
+							}
+						} else {
+							auto [result_ref, result] =
+								result_ref_single(node.result);
+							auto result_reg = result.alloc_reg();
+							load_off(result_reg, result_slot_reg, 0, 8);
+							result.set_modified();
+						}
 					}
 					if (private_inline_body) {
 						free_stack_slot(
@@ -6924,9 +6936,56 @@ bool ZendCompilerA64::compile_inst(
 							static_cast<uint32_t>(leaf_private_frame_slot),
 							call.direct_call->frame_size);
 					}
+				} else if (node.has_result
+						&& adaptor->machine_kind(node.result)
+							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+					payload.reset(this);
+					auto [result_frame_ref, result_frame] =
+						val_ref_single(node.operands[frame_operand + 2]);
+					auto result_frame_scratch =
+						std::move(result_frame).into_scratch();
+					auto result_frame_reg =
+						result_frame_scratch.cur_reg();
+					ScratchReg result_slot{this};
+					auto result_slot_reg = result_slot.alloc_gp();
+					mov(result_slot_reg, result_frame_reg, 8);
+					if (call.direct_call->result_operand.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_CV) {
+						add_offset(result_slot_reg, result_slot_reg,
+							static_cast<uint64_t>(
+								ZEND_CALL_FRAME_SLOT
+									+ call.direct_call
+										->result_operand.index)
+								* sizeof(zval));
+					} else {
+						ScratchReg slot_index{this};
+						auto slot_index_reg = slot_index.alloc_gp();
+						load_off(slot_index_reg, result_frame_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_execute_data, func)), 8);
+						load_off(slot_index_reg, slot_index_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_op_array, last_var)), 4);
+						add_unsigned_offset(slot_index_reg, slot_index_reg,
+							ZEND_CALL_FRAME_SLOT
+								+ call.direct_call->result_operand.index);
+						ASM(LSLxi, slot_index_reg, slot_index_reg, 4);
+						ASM(ADDx, result_slot_reg,
+							result_slot_reg, slot_index_reg);
+					}
+					auto result = result_ref(node.result);
+					for (uint32_t part = 0; part < 2; ++part) {
+						auto value = result.part(part);
+						auto value_reg = value.alloc_reg();
+						load_off(value_reg, result_slot_reg,
+							part * sizeof(uint64_t), 8);
+						value.set_modified();
+					}
 				} else if (node.has_result) {
-					auto [result_ref, result] = result_ref_single(node.result);
-					if (val_parts(node.result).bank == DarwinConfig::FP_BANK) {
+					auto [result_ref, result] =
+						result_ref_single(node.result);
+					if (val_parts(node.result).bank
+							== DarwinConfig::FP_BANK) {
 						auto payload_reg = payload.cur_reg_or_load(this);
 						ScratchReg converted{this};
 						auto result_reg = converted.alloc(DarwinConfig::FP_BANK);
