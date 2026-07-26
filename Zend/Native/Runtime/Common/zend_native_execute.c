@@ -4,6 +4,7 @@
 
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_closures.h"
+#include "Zend/zend_dtrace.h"
 #include "Zend/zend_execute.h"
 #include "Zend/zend_observer.h"
 #include "Zend/zend_type_info.h"
@@ -16,6 +17,10 @@ typedef struct _zend_native_execution_state {
 	zval *original_return_value;
 	bool observer_started;
 	bool observer_finished;
+#ifdef HAVE_DTRACE
+	zend_dtrace_user_frame dtrace_frame;
+	bool dtrace_frame_started;
+#endif
 } zend_native_execution_state;
 
 static void zend_native_execution_cleanup_frame_ex(
@@ -162,6 +167,9 @@ static zend_native_status zend_native_execute_frame_impl(
 	state->original_return_value = execute_data->return_value;
 	state->observer_started = observer_already_started;
 	state->observer_finished = false;
+#ifdef HAVE_DTRACE
+	state->dtrace_frame_started = false;
+#endif
 	generator_frame =
 		(ZEND_CALL_INFO(execute_data) & ZEND_CALL_GENERATOR) != 0;
 	zend_native_execution_context_init(&context);
@@ -171,6 +179,13 @@ static zend_native_status zend_native_execute_frame_impl(
 	}
 
 	zend_try {
+#ifdef HAVE_DTRACE
+		if (zend_dtrace_enabled) {
+			zend_dtrace_user_frame_begin(
+				execute_data, &state->dtrace_frame);
+			state->dtrace_frame_started = true;
+		}
+#endif
 		if (!state->observer_started) {
 			state->observer_started = true;
 			ZEND_OBSERVER_FCALL_BEGIN(execute_data);
@@ -180,6 +195,20 @@ static zend_native_status zend_native_execute_frame_impl(
 		state->status = EG(exception) != NULL
 			? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
 	} zend_end_try();
+
+#ifdef HAVE_DTRACE
+	/*
+	 * The global native executor, direct native calls and generator resumes
+	 * all converge here.  Emit exactly one matching return probe for every
+	 * native invocation that returned to this boundary. A bailout has the
+	 * same non-returning probe semantics as the VM DTrace wrapper.
+	 */
+	if (state->dtrace_frame_started
+			&& state->status != ZEND_NATIVE_BAILOUT) {
+		zend_dtrace_user_frame_end(&state->dtrace_frame);
+		state->dtrace_frame_started = false;
+	}
+#endif
 
 	/*
 	 * Generator frames are owned by zend_generator after CREATE. Suspension
