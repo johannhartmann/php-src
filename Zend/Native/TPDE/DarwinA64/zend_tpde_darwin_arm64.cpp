@@ -2350,16 +2350,8 @@ bool ZendCompilerA64::compile_inst(
 		}
 		const uint64_t source_offset =
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + source_storage) * sizeof(zval);
-		if (source_offset > UINT32_MAX) {
+		if (source_offset > UINT32_MAX - sizeof(zval)) {
 			return execute_value_operation();
-		}
-		for (auto reg_id : register_file.used_regs()) {
-			::tpde::Reg reg{reg_id};
-			if (!register_file.is_fixed(reg)
-					&& register_file.reg_local_idx(reg)
-						!= INVALID_VAL_LOCAL_IDX) {
-				evict_reg(reg);
-			}
 		}
 		auto slow = text_writer.label_create();
 		auto released = text_writer.label_create();
@@ -2367,23 +2359,21 @@ bool ZendCompilerA64::compile_inst(
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 		auto frame_scratch = std::move(frame).into_scratch();
 		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg source_slot{this};
 		ScratchReg type{this};
 		ScratchReg value{this};
 		ScratchReg probe{this};
-		auto source_slot_reg = source_slot.alloc_gp();
 		auto type_reg = type.alloc_gp();
 		auto value_reg = value.alloc_gp();
 		auto probe_reg = probe.alloc_gp();
 
-		add_unsigned_offset(source_slot_reg, frame_reg,
-			static_cast<uint32_t>(source_offset));
-		load_off(type_reg, source_slot_reg,
-			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		load_off(type_reg, frame_reg,
+			static_cast<uint32_t>(
+				source_offset + offsetof(zval, u1.type_info)), 4);
 		ASM(TSTwi, type_reg,
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		generate_raw_jump(Jump::Jeq, released);
-		load_off(value_reg, source_slot_reg, 0, 8);
+		load_off(value_reg, frame_reg,
+			static_cast<uint32_t>(source_offset), 8);
 		load_off(probe_reg, value_reg,
 			static_cast<uint32_t>(
 				offsetof(zend_refcounted_h, refcount)), 4);
@@ -2398,21 +2388,26 @@ bool ZendCompilerA64::compile_inst(
 		materialize_constant(
 			static_cast<uint64_t>(IS_UNDEF),
 			DarwinConfig::GP_BANK, 4, type_reg);
-		store_off(source_slot_reg,
-			static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+		store_off(frame_reg,
+			static_cast<uint32_t>(
+				source_offset + offsetof(zval, u1.type_info)),
 			type_reg, 4);
 		auto done = text_writer.label_create();
 		generate_raw_jump(Jump::jmp, done);
 		label_place(slow);
-		source_slot.reset();
 		type.reset();
 		value.reset();
 		probe.reset();
+		const auto register_state =
+			zend::native::tpde::
+				capture_conditional_call_register_state(*this);
 		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
 		frame_argument.set_value(this, std::move(frame_scratch));
 		if (!execute_value_operation(&frame_argument)) {
 			return false;
 		}
+		zend::native::tpde::restore_conditional_call_register_state(
+			*this, register_state);
 		label_place(done);
 		return true;
 	};
