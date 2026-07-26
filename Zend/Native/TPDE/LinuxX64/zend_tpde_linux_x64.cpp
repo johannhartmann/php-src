@@ -1994,8 +1994,46 @@ bool ZendCompilerX64::compile_inst(
 		auto &[right_ref, right] = right_pair;
 		auto [result_ref, result] = result_ref_single(node.result);
 		auto left_reg = left.load_to_reg();
-		auto right_reg = right.load_to_reg();
 		auto result_reg = result.alloc_try_reuse(left);
+		uint64_t immediate_bits;
+		if (adaptor->constant(node.operands[1], &immediate_bits)) {
+			const int64_t immediate = static_cast<int64_t>(immediate_bits);
+			if (immediate >= INT32_MIN && immediate <= INT32_MAX) {
+				const int32_t immediate32 = static_cast<int32_t>(immediate);
+				if (record.opcode == ZEND_MIR_OPCODE_I64_MUL_NO_OVERFLOW) {
+					ASM(IMUL64rri, result_reg, left_reg, immediate32);
+					result.set_modified();
+					return true;
+				}
+				if (result_reg != left_reg) {
+					mov(result_reg, left_reg, 8);
+				}
+				switch (record.opcode) {
+					case ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW:
+						ASM(ADD64ri, result_reg, immediate32);
+						break;
+					case ZEND_MIR_OPCODE_I64_SUB_NO_OVERFLOW:
+						ASM(SUB64ri, result_reg, immediate32);
+						break;
+					case ZEND_MIR_OPCODE_I64_BIT_OR:
+						ASM(OR64ri, result_reg, immediate32);
+						break;
+					case ZEND_MIR_OPCODE_I64_BIT_AND:
+						ASM(AND64ri, result_reg, immediate32);
+						break;
+					case ZEND_MIR_OPCODE_I64_BIT_XOR:
+					case ZEND_MIR_OPCODE_I1_XOR:
+						ASM(XOR64ri, result_reg, immediate32);
+						break;
+					default:
+						goto register_operand;
+				}
+				result.set_modified();
+				return true;
+			}
+		}
+register_operand:
+		auto right_reg = right.load_to_reg();
 		if (result_reg != left_reg) {
 			mov(result_reg, left_reg, 8);
 		}
@@ -2033,7 +2071,17 @@ bool ZendCompilerX64::compile_inst(
 		auto [left_pair, right_pair] = binary();
 		auto &[left_ref, left] = left_pair;
 		auto &[right_ref, right] = right_pair;
-		ASM(CMP64rr, left.load_to_reg(), right.load_to_reg());
+		uint64_t immediate_bits;
+		auto left_reg = left.load_to_reg();
+		if (adaptor->constant(node.operands[1], &immediate_bits)
+				&& static_cast<int64_t>(immediate_bits) >= INT32_MIN
+				&& static_cast<int64_t>(immediate_bits) <= INT32_MAX) {
+			ASM(CMP64ri, left_reg,
+				static_cast<int32_t>(
+					static_cast<int64_t>(immediate_bits)));
+		} else {
+			ASM(CMP64rr, left_reg, right.load_to_reg());
+		}
 		if (fuse_compare_branch(condition)) {
 			return true;
 		}
