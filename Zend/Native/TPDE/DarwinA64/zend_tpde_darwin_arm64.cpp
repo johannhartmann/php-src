@@ -1461,7 +1461,7 @@ bool ZendCompilerA64::compile_inst(
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + node.storage_id) * sizeof(zval);
 		if (node.operands.size() != 1
 				|| !zend_mir_id_is_valid(node.storage_id)
-				|| offset > UINT32_MAX) {
+				|| offset > UINT32_MAX - sizeof(uint64_t)) {
 			return false;
 		}
 		auto base_reg = base.load_to_reg();
@@ -1478,9 +1478,30 @@ bool ZendCompilerA64::compile_inst(
 								!= ZEND_MIR_SCALAR_TYPE_NULL)
 						|| zend_tpde_machine_value_zval_type(
 							adaptor->machine_kind(consumer.result))
-							!= IS_UNDEF)) {
-				auto [result_ref, result] =
-					result_ref_single(consumer.result);
+							!= IS_UNDEF
+						|| adaptor->machine_kind(consumer.result)
+							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL)) {
+				if (adaptor->machine_kind(consumer.result)
+						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+					auto result_value = result_ref(consumer.result);
+					{
+						auto low = result_value.part(0);
+						auto low_reg = low.alloc_reg();
+						load_off(low_reg, base_reg,
+							static_cast<uint32_t>(offset), 8);
+						low.set_modified();
+					}
+					{
+						auto high = result_value.part(1);
+						auto high_reg = high.alloc_reg();
+						load_off(high_reg, base_reg,
+							static_cast<uint32_t>(offset + 8), 8);
+						high.set_modified();
+					}
+					adaptor->mark_fused(next);
+					return true;
+				}
+				auto [result_ref, result] = result_ref_single(consumer.result);
 				auto result_reg = result.alloc_reg();
 				switch (consumer.exact_type) {
 					case ZEND_MIR_SCALAR_TYPE_I1:
@@ -1645,12 +1666,31 @@ bool ZendCompilerA64::compile_inst(
 						|| node.exact_type == ZEND_MIR_SCALAR_TYPE_NULL)
 					&& zend_tpde_machine_value_zval_type(
 						adaptor->machine_kind(node.result))
-						== IS_UNDEF)) {
+						== IS_UNDEF
+					&& adaptor->machine_kind(node.result)
+						!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL)) {
 			return false;
 		}
 		auto [address_ref, address] = val_ref_single(node.operands[0]);
-		auto [result_ref, result] = result_ref_single(node.result);
 		auto address_reg = address.load_to_reg();
+		if (adaptor->machine_kind(node.result)
+				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+			auto result_value = result_ref(node.result);
+			{
+				auto low = result_value.part(0);
+				auto low_reg = low.alloc_reg();
+				load_off(low_reg, address_reg, 0, 8);
+				low.set_modified();
+			}
+			{
+				auto high = result_value.part(1);
+				auto high_reg = high.alloc_reg();
+				load_off(high_reg, address_reg, 8, 8);
+				high.set_modified();
+			}
+			return true;
+		}
+		auto [result_ref, result] = result_ref_single(node.result);
 		auto result_reg = result.alloc_reg();
 		switch (node.exact_type) {
 			case ZEND_MIR_SCALAR_TYPE_I1:
@@ -5397,8 +5437,9 @@ bool ZendCompilerA64::compile_inst(
 										&source_argument)) {
 									return false;
 								}
-								auto [argument_value_ref, argument] =
-									val_ref_single(node.operands[index]);
+								auto argument_value_ref =
+									val_ref(node.operands[index]);
+								auto argument = argument_value_ref.part(0);
 								const uint32_t offset = static_cast<uint32_t>(
 									(ZEND_CALL_FRAME_SLOT + index)
 										* sizeof(zval));
@@ -5490,6 +5531,46 @@ bool ZendCompilerA64::compile_inst(
 											store_off(callee_reg, offset + 8,
 												high_word_reg, 8);
 										}
+									} else if (adaptor->machine_kind(
+											node.operands[index])
+												== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+											&& adaptor
+												->machine_value_is_register_authoritative(
+													node.operands[index])) {
+										auto low_word =
+											std::move(argument).into_scratch();
+										auto high_part =
+											argument_value_ref.part(1);
+										auto high_word =
+											std::move(high_part).into_scratch();
+										store_off(callee_reg, offset,
+											low_word.cur_reg(), 8);
+										store_off(callee_reg, offset + 8,
+											high_word.cur_reg(), 8);
+										ScratchReg type_info{this};
+										auto type_info_reg =
+											type_info.alloc_gp();
+										mov(type_info_reg,
+											high_word.cur_reg(), 8);
+										ASM(TSTwi, type_info_reg,
+											IS_TYPE_REFCOUNTED
+												<< Z_TYPE_FLAGS_SHIFT);
+										auto copied =
+											text_writer.label_create();
+										generate_raw_jump(
+											Jump::Jeq, copied);
+										load_off(type_info_reg,
+											low_word.cur_reg(),
+											static_cast<uint32_t>(offsetof(
+												zend_refcounted_h, refcount)),
+											4);
+										ASM(ADDwi, type_info_reg,
+											type_info_reg, 1);
+										store_off(low_word.cur_reg(),
+											static_cast<uint32_t>(offsetof(
+												zend_refcounted_h, refcount)),
+											type_info_reg, 4);
+										label_place(copied);
 									} else {
 										auto argument_reg =
 											argument.load_to_reg();
@@ -6055,8 +6136,9 @@ bool ZendCompilerA64::compile_inst(
 								&source_argument)) {
 							return false;
 						}
-						auto [argument_value_ref, argument] =
-							val_ref_single(node.operands[index]);
+						auto argument_value_ref =
+							val_ref(node.operands[index]);
+						auto argument = argument_value_ref.part(0);
 							const uint32_t frame_slot =
 								index < callee_argument_count
 								? index
@@ -6141,6 +6223,42 @@ bool ZendCompilerA64::compile_inst(
 											4);
 									}
 								}
+							} else if (adaptor->machine_kind(
+									node.operands[index])
+										== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+									&& adaptor
+										->machine_value_is_register_authoritative(
+											node.operands[index])) {
+								auto low_word =
+									std::move(argument).into_scratch();
+								auto high_part =
+									argument_value_ref.part(1);
+								auto high_word =
+									std::move(high_part).into_scratch();
+								store_off(callee_reg, offset,
+									low_word.cur_reg(), 8);
+								store_off(callee_reg, offset + 8,
+									high_word.cur_reg(), 8);
+								ScratchReg type_info{this};
+								auto type_info_reg = type_info.alloc_gp();
+								mov(type_info_reg,
+									high_word.cur_reg(), 8);
+								ASM(TSTwi, type_info_reg,
+									IS_TYPE_REFCOUNTED
+										<< Z_TYPE_FLAGS_SHIFT);
+								auto copied = text_writer.label_create();
+								generate_raw_jump(Jump::Jeq, copied);
+								load_off(type_info_reg,
+									low_word.cur_reg(),
+									static_cast<uint32_t>(offsetof(
+										zend_refcounted_h, refcount)), 4);
+								ASM(ADDwi, type_info_reg,
+									type_info_reg, 1);
+								store_off(low_word.cur_reg(),
+									static_cast<uint32_t>(offsetof(
+										zend_refcounted_h, refcount)),
+									type_info_reg, 4);
+								label_place(copied);
 							} else {
 								auto source_frame_reg = argument.load_to_reg();
 							const uint32_t source_offset =
