@@ -2414,16 +2414,11 @@ bool ZendCompilerA64::compile_inst(
 	auto read_array = [&]() {
 		zend_tpde_array_read layout;
 
-		if (!zend_tpde_array_read_at(mir, &layout)) {
+		if (!zend_tpde_array_read_at(mir, &layout)
+				|| layout.container_offset > UINT32_MAX - 8
+				|| layout.key_offset > UINT32_MAX - 8
+				|| layout.result_offset > UINT32_MAX - 8) {
 			return execute_value_operation();
-		}
-		for (auto reg_id : register_file.used_regs()) {
-			::tpde::Reg reg{reg_id};
-			if (!register_file.is_fixed(reg)
-					&& register_file.reg_local_idx(reg)
-						!= INVALID_VAL_LOCAL_IDX) {
-				evict_reg(reg);
-			}
 		}
 		auto slow = text_writer.label_create();
 		auto key_long = text_writer.label_create();
@@ -2457,35 +2452,38 @@ bool ZendCompilerA64::compile_inst(
 		auto low_word_reg = low_word.alloc_gp();
 		auto high_word_reg = high_word.alloc_gp();
 
-		add_unsigned_offset(slot_reg, frame_reg, layout.container_offset);
-		load_off(type_reg, slot_reg,
-			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		load_off(type_reg, frame_reg,
+			layout.container_offset
+				+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+			4);
 		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
 		ASM(CMPwi, type_reg, IS_ARRAY);
 		generate_raw_jump(Jump::Jne, slow);
-		load_off(array_reg, slot_reg, 0, 8);
+		load_off(array_reg, frame_reg, layout.container_offset, 8);
 
-		add_unsigned_offset(slot_reg, frame_reg, layout.key_offset);
-		load_off(type_reg, slot_reg,
-			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		load_off(type_reg, frame_reg,
+			layout.key_offset
+				+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+			4);
 		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
 		ASM(CMPwi, type_reg, IS_LONG);
 		generate_raw_jump(Jump::Jeq, key_long);
 		ASM(CMPwi, type_reg, IS_STRING);
 		generate_raw_jump(Jump::Jne, slow);
-		load_off(key_reg, slot_reg, 0, 8);
+		load_off(key_reg, frame_reg, layout.key_offset, 8);
 		materialize_constant(
 			1, DarwinConfig::GP_BANK, 4, high_word_reg);
 		generate_raw_jump(Jump::jmp, key_ready);
 		label_place(key_long);
-		load_off(key_reg, slot_reg, 0, 8);
+		load_off(key_reg, frame_reg, layout.key_offset, 8);
 		materialize_constant(
 			uint64_t{0}, DarwinConfig::GP_BANK, 4, high_word_reg);
 		label_place(key_ready);
 
-		add_unsigned_offset(slot_reg, frame_reg, layout.result_offset);
-		load_off(limit_reg, slot_reg,
-			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		load_off(limit_reg, frame_reg,
+			layout.result_offset
+				+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+			4);
 		ASM(TSTwi, limit_reg,
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		generate_raw_jump(Jump::Jne, slow);
@@ -2575,11 +2573,10 @@ bool ZendCompilerA64::compile_inst(
 		ASM(CMPwi, type_reg, IS_UNDEF);
 		generate_raw_jump(Jump::Jeq, slow);
 
-		add_unsigned_offset(slot_reg, frame_reg, layout.result_offset);
 		load_off(low_word_reg, element_reg, 0, 8);
 		load_off(high_word_reg, element_reg, 8, 8);
-		store_off(slot_reg, 0, low_word_reg, 8);
-		store_off(slot_reg, 8, high_word_reg, 8);
+		store_off(frame_reg, layout.result_offset, low_word_reg, 8);
+		store_off(frame_reg, layout.result_offset + 8, high_word_reg, 8);
 		ASM(TSTwi, type_reg,
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		generate_raw_jump(Jump::Jeq, done);
@@ -2600,11 +2597,16 @@ bool ZendCompilerA64::compile_inst(
 		element.reset();
 		low_word.reset();
 		high_word.reset();
+		const auto register_state =
+			zend::native::tpde::
+				capture_conditional_call_register_state(*this);
 		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
 		frame_argument.set_value(this, std::move(frame_scratch));
 		if (!execute_value_operation(&frame_argument)) {
 			return false;
 		}
+		zend::native::tpde::restore_conditional_call_register_state(
+			*this, register_state);
 		label_place(done);
 		return true;
 	};
