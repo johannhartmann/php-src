@@ -1003,15 +1003,29 @@ static zend_mir_lowering_diagnostic_code zend_mir_w05_plan_calls(
 				bool borrowed_scalar;
 
 				if (plan->targets[site->target_id].kind
-						== ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
-						&& (!zend_mir_w08_target_parameter_mode_at(
-								calls, &plan->targets[site->target_id],
-								argument_index, &parameter_mode)
+						== ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER) {
+					const zend_mir_source_call_target_ref *target =
+						&plan->targets[site->target_id];
+
+					if (argument_index >= target->num_args
+							&& !target->variadic) {
+						/*
+						 * User functions retain positional extra arguments
+						 * for func_get_args(), but those arguments have no
+						 * declared parameter whose by-reference mode must be
+						 * consulted.
+						 */
+						parameter_mode =
+							ZEND_MIR_SOURCE_PARAMETER_BY_VALUE;
+					} else if (!zend_mir_w08_target_parameter_mode_at(
+								calls, target, argument_index,
+								&parameter_mode)
 							|| (parameter_mode
 									== ZEND_MIR_SOURCE_PARAMETER_BY_REFERENCE
 								&& argument->source_operand.kind
-									== ZEND_MIR_SOURCE_OPERAND_LITERAL))) {
-					return ZEND_MIRL_W05_UNSUPPORTED_ARGUMENT;
+									== ZEND_MIR_SOURCE_OPERAND_LITERAL)) {
+						return ZEND_MIRL_W05_UNSUPPORTED_ARGUMENT;
+					}
 				}
 				borrowed_scalar =
 					plan->targets[site->target_id].kind
@@ -2796,8 +2810,14 @@ static bool zend_mir_verify_w08_calls(
 				bool borrowed_scalar;
 				if (internal || source_target.kind
 						== ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER) {
-					if (!zend_mir_w08_target_parameter_mode_at(source_calls,
-							&source_target, argument_index, &parameter_mode)) {
+					if (!internal
+							&& argument_index >= source_target.num_args
+							&& !source_target.variadic) {
+						parameter_mode =
+							ZEND_MIR_SOURCE_PARAMETER_BY_VALUE;
+					} else if (!zend_mir_w08_target_parameter_mode_at(
+							source_calls, &source_target,
+							argument_index, &parameter_mode)) {
 						goto failure;
 					}
 				} else {
