@@ -2,18 +2,12 @@
 Native Engine target images survive an OPcache file-cache process boundary
 --EXTENSIONS--
 opcache
---SKIPIF--
-<?php
-if (!function_exists('native_mir_test_compile_execute')) {
-    die('skip Native Engine is not enabled');
-}
-?>
 --INI--
 opcache.file_cache="{TMP}/native-engine-file-cache"
 --FILE--
 <?php
 
-$cache = ini_get('opcache.file_cache');
+$cache = ini_get('opcache.file_cache') . '-' . getmypid();
 mkdir($cache);
 
 function run_native_engine_file_cache_child(string $cache, bool $readOnly): array
@@ -52,6 +46,15 @@ foreach ([false, true] as $readOnly) {
     echo $output, $error;
     var_dump($status);
 }
+
+$files = new RecursiveIteratorIterator(
+    new RecursiveDirectoryIterator($cache, FilesystemIterator::SKIP_DOTS),
+    RecursiveIteratorIterator::CHILD_FIRST,
+);
+foreach ($files as $file) {
+    $file->isDir() ? rmdir($file->getPathname()) : unlink($file->getPathname());
+}
+rmdir($cache);
 ?>
 --EXPECT--
 42
