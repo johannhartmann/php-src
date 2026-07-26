@@ -298,6 +298,7 @@ zend_native_executor_create_generation(zend_op_array *root)
 	config.script = &generation->script;
 	config.target = zend_native_executor_target();
 	config.persistent = persistent;
+	config.source_probe = zend_native_runtime_source_probe_enabled();
 	generation->compiler =
 		zend_native_compiler_create(&config, &diagnostic);
 	if (generation->compiler == NULL) {
@@ -422,6 +423,12 @@ void zend_native_executor_invalidate(void)
 		&zend_native_executor_epoch, 1, __ATOMIC_RELEASE);
 }
 
+void zend_native_executor_set_source_probe(
+	zend_native_source_probe_t probe, void *context)
+{
+	zend_native_runtime_set_source_probe(probe, context);
+}
+
 zend_result zend_native_executor_prepare_script(zend_script *script)
 {
 	zend_native_compiler_config config;
@@ -442,6 +449,7 @@ zend_result zend_native_executor_prepare_script(zend_script *script)
 	memset(&diagnostic, 0, sizeof(diagnostic));
 	config.script = script;
 	config.target = zend_native_executor_target();
+	config.source_probe = zend_native_runtime_source_probe_enabled();
 	config.defer_publication = true;
 	compiler = zend_native_compiler_create(&config, &diagnostic);
 	if (compiler == NULL) {

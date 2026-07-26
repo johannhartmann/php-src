@@ -1624,6 +1624,195 @@ static inline void list_code(void) {
 	goto next; \
 } while (0)
 
+#ifdef HAVE_NATIVE_ENGINE
+static void phpdbg_native_pause(zend_object *exception)
+{
+	if (exception) {
+		const zend_op *before_ex = EG(opline_before_exception);
+		const zend_op *backup_opline = NULL;
+
+		if (EG(current_execute_data) && EG(current_execute_data)->func
+				&& ZEND_USER_CODE(
+					EG(current_execute_data)->func->common.type)) {
+			backup_opline = EG(current_execute_data)->opline;
+		}
+		GC_ADDREF(exception);
+		zend_clear_exception();
+		list_code();
+		switch (phpdbg_interactive(true, NULL)) {
+			case PHPDBG_LEAVE:
+			case PHPDBG_FINISH:
+			case PHPDBG_UNTIL:
+			case PHPDBG_NEXT:
+				if (backup_opline
+						&& (backup_opline->opcode
+								== ZEND_HANDLE_EXCEPTION
+							|| backup_opline->opcode == ZEND_CATCH)) {
+					EG(current_execute_data)->opline = backup_opline;
+					EG(exception) = exception;
+				} else {
+					zend_throw_exception_internal(exception);
+				}
+				EG(opline_before_exception) = before_ex;
+		}
+	} else {
+		list_code();
+		phpdbg_interactive(true, NULL);
+	}
+}
+
+void phpdbg_native_source_probe(
+	void *context,
+	zend_execute_data *execute_data,
+	uint32_t source_position_id)
+{
+	zend_object *exception;
+
+	(void) context;
+	if (execute_data == NULL || execute_data->func == NULL
+			|| !ZEND_USER_CODE(execute_data->func->common.type)
+			|| source_position_id >= execute_data->func->op_array.last) {
+		return;
+	}
+	execute_data->opline =
+		&execute_data->func->op_array.opcodes[source_position_id];
+	exception = EG(exception);
+
+	if ((PHPDBG_G(flags) & PHPDBG_IS_STOPPING)
+			&& !(PHPDBG_G(flags) & PHPDBG_IS_RUNNING)) {
+		zend_bailout();
+	}
+	PHPDBG_G(in_execution) = 1;
+
+	if (PHPDBG_G(flags) & PHPDBG_BP_RESOLVE_MASK) {
+		phpdbg_resolve_op_array_breaks(&execute_data->func->op_array);
+	}
+	if (exception && zend_is_unwind_exit(exception)) {
+		zend_bailout();
+	}
+	if (PHPDBG_G(flags) & PHPDBG_PREVENT_INTERACTIVE) {
+		phpdbg_print_opline(execute_data, 0);
+		goto complete;
+	}
+	if (exception && PHPDBG_G(handled_exception) != exception
+			&& !(PHPDBG_G(flags) & PHPDBG_IN_EVAL)) {
+		zend_execute_data *previous = execute_data;
+		bool caught = false;
+
+		do {
+			previous = zend_generator_check_placeholder_frame(previous);
+			if (previous->func
+					&& ZEND_USER_CODE(previous->func->common.type)
+					&& phpdbg_check_caught_ex(previous, exception)) {
+				caught = true;
+				break;
+			}
+		} while ((previous = previous->prev_execute_data));
+		if (!caught) {
+			zval rv;
+			zend_string *file;
+			zend_string *message;
+			zend_long line;
+
+			PHPDBG_G(handled_exception) = exception;
+			file = zval_get_string(zend_read_property_ex(
+				zend_get_exception_base(exception), exception,
+				ZSTR_KNOWN(ZEND_STR_FILE), true, &rv));
+			line = zval_get_long(zend_read_property_ex(
+				zend_get_exception_base(exception), exception,
+				ZSTR_KNOWN(ZEND_STR_LINE), true, &rv));
+			message = zval_get_string(zend_read_property_ex(
+				zend_get_exception_base(exception), exception,
+				ZSTR_KNOWN(ZEND_STR_MESSAGE), true, &rv));
+			phpdbg_error(
+				"Uncaught %s in %s on line " ZEND_LONG_FMT ": %.*s",
+				ZSTR_VAL(exception->ce->name), ZSTR_VAL(file), line,
+				ZSTR_LEN(message) < 80
+					? (int) ZSTR_LEN(message) : 80,
+				ZSTR_VAL(message));
+			zend_string_release(message);
+			zend_string_release(file);
+			phpdbg_native_pause(exception);
+			goto complete;
+		}
+	}
+	if (PHPDBG_G(flags) & (PHPDBG_IN_COND_BP | PHPDBG_IS_INITIALIZING)) {
+		goto complete;
+	}
+
+	phpdbg_print_opline(execute_data, 0);
+
+	if ((PHPDBG_G(flags) & PHPDBG_SEEK_MASK)
+			&& !(PHPDBG_G(flags) & PHPDBG_IN_EVAL)) {
+		zend_ulong address = (zend_ulong) execute_data->opline;
+		bool reached = zend_hash_index_exists(&PHPDBG_G(seek), address)
+			|| (exception
+				&& phpdbg_check_caught_ex(execute_data, exception) == 0);
+
+		if (PHPDBG_G(seek_ex) != execute_data) {
+			if (!(PHPDBG_G(flags) & PHPDBG_IS_STEPPING)) {
+				goto complete;
+			}
+		} else if (PHPDBG_G(flags) & PHPDBG_IN_UNTIL) {
+			if (!reached) {
+				goto complete;
+			}
+			PHPDBG_G(flags) &= ~PHPDBG_IN_UNTIL;
+			zend_hash_clean(&PHPDBG_G(seek));
+		} else if (PHPDBG_G(flags) & PHPDBG_IN_FINISH) {
+			if (reached) {
+				PHPDBG_G(flags) &= ~PHPDBG_IN_FINISH;
+				zend_hash_clean(&PHPDBG_G(seek));
+			}
+			goto complete;
+		} else if (PHPDBG_G(flags) & PHPDBG_IN_LEAVE) {
+			if (!reached) {
+				goto complete;
+			}
+			PHPDBG_G(flags) &= ~PHPDBG_IN_LEAVE;
+			zend_hash_clean(&PHPDBG_G(seek));
+			phpdbg_notice("Breaking for leave at %s:%u",
+				zend_get_executed_filename(),
+				zend_get_executed_lineno());
+			phpdbg_native_pause(exception);
+			goto complete;
+		}
+	}
+	if ((PHPDBG_G(flags) & PHPDBG_IS_STEPPING)
+			&& ((PHPDBG_G(flags) & PHPDBG_STEP_OPCODE)
+				|| execute_data->opline->lineno != PHPDBG_G(last_line))) {
+		PHPDBG_G(flags) &= ~PHPDBG_IS_STEPPING;
+		phpdbg_native_pause(exception);
+		goto complete;
+	}
+	if (phpdbg_print_changed_zvals() == SUCCESS) {
+		phpdbg_native_pause(exception);
+		goto complete;
+	}
+	if (PHPDBG_G(flags) & PHPDBG_BP_MASK) {
+		phpdbg_breakbase_t *brake = phpdbg_find_breakpoint(execute_data);
+
+		if (brake != NULL
+				&& (brake->type != PHPDBG_BREAK_FILE
+					|| execute_data->opline->lineno
+						!= PHPDBG_G(last_line))) {
+			phpdbg_hit_breakpoint(brake, 1);
+			phpdbg_native_pause(exception);
+			goto complete;
+		}
+	}
+	if (PHPDBG_G(flags) & PHPDBG_IS_SIGNALED) {
+		PHPDBG_G(flags) &= ~PHPDBG_IS_SIGNALED;
+		phpdbg_out("\n");
+		phpdbg_notice("Program received signal SIGINT");
+		phpdbg_native_pause(exception);
+	}
+
+complete:
+	PHPDBG_G(last_line) = execute_data->opline->lineno;
+}
+#endif
+
 void phpdbg_execute_ex(zend_execute_data *execute_data) /* {{{ */
 {
 	bool original_in_execution = PHPDBG_G(in_execution);

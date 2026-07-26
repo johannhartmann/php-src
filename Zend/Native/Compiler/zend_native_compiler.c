@@ -72,6 +72,7 @@ struct _zend_native_compiler {
 	zend_native_compile_fault fault;
 	uint32_t unavailable_runtime_helper;
 	bool abi_conformance_probe;
+	bool source_probe;
 	bool defer_publication;
 	bool persistent;
 	zend_native_compiled_function **functions;
@@ -509,10 +510,13 @@ static bool zend_native_compiler_prepare_source_effects(
 			}
 		}
 	}
-	if (source->last > UINT32_MAX - echo_count) {
+	if (source->last > UINT32_MAX - echo_count
+			|| (compiler->source_probe
+				&& source->last + echo_count > UINT32_MAX - source->last)) {
 		return false;
 	}
-	function->source_effect_capacity = source->last + echo_count;
+	function->source_effect_capacity = source->last + echo_count
+		+ (compiler->source_probe ? source->last : 0);
 	if (function->source_effect_capacity != 0) {
 		function->source_effects = zend_native_compiler_alloc(
 			compiler,
@@ -547,6 +551,15 @@ static bool zend_native_compiler_prepare_source_effects(
 				effect->target_block_id = ZEND_MIR_ID_INVALID;
 			}
 		}
+	}
+	for (index = 0; compiler->source_probe && index < source->last; index++) {
+		zend_native_source_effect *effect =
+			&function->source_effects[function->source_effect_count++];
+
+		effect->source_position_id = index;
+		effect->kind = ZEND_NATIVE_SOURCE_EFFECT_DEBUG_PROBE;
+		effect->exact_type = ZEND_MIR_SCALAR_TYPE_NONE;
+		effect->target_block_id = ZEND_MIR_ID_INVALID;
 	}
 	function->source_effects_prepared = true;
 	return true;
@@ -1107,6 +1120,7 @@ static bool zend_native_compiler_calculate_leaf_scalar_frame(
 	if (compiler == NULL || function == NULL || function->module == NULL
 			|| function->op_array == NULL
 			|| compiler->frame_probe != NULL
+			|| compiler->source_probe
 			|| function->source_effect_count != 0
 			|| function->op_array->scope != NULL
 			|| (function->op_array->fn_flags
@@ -3024,6 +3038,7 @@ zend_native_compiler *zend_native_compiler_create(
 	compiler->unavailable_runtime_helper =
 		config->unavailable_runtime_helper;
 	compiler->abi_conformance_probe = config->abi_conformance_probe;
+	compiler->source_probe = config->source_probe;
 	compiler->defer_publication = config->defer_publication;
 	zend_hash_init(
 		&compiler->source_op_arrays_by_opcodes, 32, NULL, NULL,

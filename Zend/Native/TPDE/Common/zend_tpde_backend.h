@@ -143,7 +143,8 @@ typedef struct _zend_native_internal_call_binding {
 typedef enum _zend_native_source_effect_kind {
 	ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR = 1,
 	ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE = 2,
-	ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE = 3
+	ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE = 3,
+	ZEND_NATIVE_SOURCE_EFFECT_DEBUG_PROBE = 4
 } zend_native_source_effect_kind;
 
 /*

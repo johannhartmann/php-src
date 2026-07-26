@@ -31,6 +31,9 @@
 #include "php_main.h"
 
 #include "ext/standard/basic_functions.h"
+#ifdef HAVE_NATIVE_ENGINE
+# include "Zend/Native/Compiler/zend_native_executor.h"
+#endif
 
 #if defined(PHP_WIN32) && defined(HAVE_OPENSSL_EXT)
 # include "openssl/applink.c"
@@ -162,7 +165,11 @@ static PHP_MINIT_FUNCTION(phpdbg) /* {{{ */
 	zend_hash_init(&PHPDBG_G(file_sources), 0, NULL, php_phpdbg_destroy_file_source, 0);
 	phpdbg_setup_watchpoints();
 
+#ifdef HAVE_NATIVE_ENGINE
+	zend_native_executor_set_source_probe(phpdbg_native_source_probe, NULL);
+#else
 	zend_execute_ex = phpdbg_execute_ex;
+#endif
 
 	register_phpdbg_symbols(module_number);
 
@@ -171,6 +178,9 @@ static PHP_MINIT_FUNCTION(phpdbg) /* {{{ */
 
 static PHP_MSHUTDOWN_FUNCTION(phpdbg) /* {{{ */
 {
+#ifdef HAVE_NATIVE_ENGINE
+	zend_native_executor_set_source_probe(NULL, NULL);
+#endif
 	zend_hash_destroy(&PHPDBG_G(registered));
 	phpdbg_destroy_watchpoints();
 

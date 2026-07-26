@@ -1640,6 +1640,14 @@ bool ZendCompilerA64::compile_inst(IRInstRef instruction, InstRange) {
 		}
 		return true;
 	}
+	if (mir.debug_probe) {
+		zend::native::tpde::CCAssignerAppleA64 assigner;
+		CallBuilder builder{*this, assigner};
+		builder.add_arg(ValuePart{
+			static_cast<uint32_t>(record.source_position_id), 4,
+			DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+		builder.call(runtime_symbol(ZEND_NATIVE_HELPER_SOURCE_PROBE));
+	}
 	if (mir.source_effect == ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE) {
 		if (mir.source_effect_exact_type != ZEND_MIR_SCALAR_TYPE_I64
 				|| node.operands.empty()) {
