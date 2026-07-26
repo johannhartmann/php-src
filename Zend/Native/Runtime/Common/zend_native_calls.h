@@ -103,7 +103,6 @@ typedef struct _zend_native_reentry_scope {
 	zend_native_reentry_resolver_t resolver;
 	void *resolver_context;
 	struct _zend_native_reentry_scope *previous;
-	bool execute_hook_installed;
 } zend_native_reentry_scope;
 
 typedef enum _zend_native_internal_receiver_kind {
@@ -266,6 +265,7 @@ typedef struct _zend_native_direct_activation {
 	bool frame_initialized;
 	bool frame_requires_finish;
 	bool cell_active;
+	bool generator_created;
 	bool dynamic_target;
 	bool internal_target;
 } zend_native_direct_activation;
@@ -299,15 +299,13 @@ void zend_native_entry_cell_set_frame_probe(
 	void *context);
 
 /*
- * The execute hook is process-wide and reference-counted across active
- * thread-local, stack-disciplined component scopes. While a scope is active,
- * every userland reentry must resolve to one of its ready entry cells;
- * unknown targets are rejected instead of being dispatched by the VM.
+ * Reentry scopes are thread-local and stack-disciplined. The process-wide
+ * native executor remains installed for the process lifetime and resolves
+ * nested userland calls through the active scope without changing
+ * zend_execute_ex.
  */
 zend_result zend_native_reentry_startup(void);
 void zend_native_reentry_shutdown(void);
-zend_result zend_native_reentry_install(void);
-void zend_native_reentry_uninstall(void);
 zend_result zend_native_reentry_scope_enter(
 	zend_native_reentry_scope *scope,
 	const zend_native_reentry_binding *bindings,
@@ -528,6 +526,7 @@ zend_native_status zend_native_discard_exception(
 	uint32_t source_position_id);
 
 #define ZEND_NATIVE_FINALLY_EXCEPTION_FLAG UINT32_C(0x80000000)
+#define ZEND_NATIVE_FINALLY_GENERATOR_RETURNED (UINT32_MAX - UINT32_C(1))
 #define ZEND_NATIVE_FINALLY_PROPAGATE UINT32_MAX
 void zend_native_interrupt_poll(
 	zend_execute_data *execute_data, uint32_t source_opline_index);

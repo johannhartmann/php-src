@@ -6,6 +6,7 @@
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_closures.h"
 #include "Zend/zend_execute.h"
+#include "Zend/zend_generators.h"
 #include "Zend/zend_observer.h"
 
 #include <stdlib.h>
@@ -1694,12 +1695,28 @@ static uint32_t zend_native_finally_unwind_target(
 		}
 		if (region->finally_op != 0
 				&& source_position < region->finally_op) {
+			const zend_op *fast_ret;
+			zval *fast_call;
+
 			if (exception != NULL && zend_is_unwind_exit(exception)) {
 				continue;
 			}
-			return region->finally_op < ZEND_NATIVE_FINALLY_EXCEPTION_FLAG
-				? ZEND_NATIVE_FINALLY_EXCEPTION_FLAG | region->finally_op
-				: ZEND_NATIVE_FINALLY_PROPAGATE;
+			if (region->finally_op >= ZEND_NATIVE_FINALLY_EXCEPTION_FLAG
+					|| region->finally_end >= op_array->last) {
+				return ZEND_NATIVE_FINALLY_PROPAGATE;
+			}
+			fast_ret = &op_array->opcodes[region->finally_end];
+			if (fast_ret->opcode != ZEND_FAST_RET
+					|| fast_ret->op1_type != IS_TMP_VAR) {
+				return ZEND_NATIVE_FINALLY_PROPAGATE;
+			}
+			zend_cleanup_unfinished_execution(
+				execute_data, source_position, region->finally_op);
+			fast_call = ZEND_CALL_VAR(execute_data, fast_ret->op1.var);
+			Z_OBJ_P(fast_call) = exception;
+			EG(exception) = NULL;
+			Z_OPLINE_NUM_P(fast_call) = UINT32_MAX;
+			return ZEND_NATIVE_FINALLY_EXCEPTION_FLAG | region->finally_op;
 		}
 		if (region->finally_end != 0
 				&& source_position < region->finally_end) {
@@ -1742,6 +1759,25 @@ static uint32_t zend_native_finally_unwind_target(
 	return ZEND_NATIVE_FINALLY_PROPAGATE;
 }
 
+static uint32_t zend_native_finally_complete_forced_generator(
+	zend_execute_data *execute_data, uint32_t continuation)
+{
+	zend_generator *generator;
+
+	if (continuation != ZEND_NATIVE_FINALLY_PROPAGATE
+			|| EG(exception) != NULL
+			|| (ZEND_CALL_INFO(execute_data) & ZEND_CALL_GENERATOR) == 0
+			|| (generator =
+				(zend_generator *) execute_data->return_value) == NULL
+			|| (generator->flags & ZEND_GENERATOR_FORCED_CLOSE) == 0) {
+		return continuation;
+	}
+	ZEND_OBSERVER_FCALL_END(execute_data, NULL);
+	EG(current_execute_data) = execute_data->prev_execute_data;
+	zend_generator_close(generator, true);
+	return ZEND_NATIVE_FINALLY_GENERATOR_RETURNED;
+}
+
 uint32_t zend_native_finally_return(
 	zend_execute_data *execute_data, uint32_t fast_ret_opline_index)
 {
@@ -1768,8 +1804,10 @@ uint32_t zend_native_finally_return(
 	}
 	EG(exception) = Z_OBJ_P(fast_call);
 	Z_OBJ_P(fast_call) = NULL;
-	return zend_native_finally_unwind_target(
-		execute_data, op_array, opline->op2.num, fast_ret_opline_index);
+	return zend_native_finally_complete_forced_generator(
+		execute_data, zend_native_finally_unwind_target(
+			execute_data, op_array, opline->op2.num,
+			fast_ret_opline_index));
 }
 
 uint32_t zend_native_finally_return_explicit(
@@ -1801,8 +1839,9 @@ uint32_t zend_native_finally_return_explicit(
 	}
 	EG(exception) = Z_OBJ_P(fast_call);
 	Z_OBJ_P(fast_call) = NULL;
-	return zend_native_finally_unwind_target(
-		execute_data, op_array, try_catch_offset, source_position);
+	return zend_native_finally_complete_forced_generator(
+		execute_data, zend_native_finally_unwind_target(
+			execute_data, op_array, try_catch_offset, source_position));
 }
 
 zend_native_status zend_native_discard_exception(
