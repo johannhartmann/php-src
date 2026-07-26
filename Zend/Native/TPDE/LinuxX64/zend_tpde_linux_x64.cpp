@@ -2057,6 +2057,22 @@ bool ZendCompilerX64::compile_inst(
 			val_ref_single(node.operands[1])};
 	};
 	auto copy_result = [&]() {
+		if (adaptor->machine_kind(node.result)
+				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+			auto source_value = val_ref(node.operands[0]);
+			auto result_value = result_ref(node.result);
+			for (uint32_t part = 0; part < 2; ++part) {
+				auto source = source_value.part(part);
+				auto result = result_value.part(part);
+				auto source_reg = source.load_to_reg();
+				auto result_reg = result.alloc_try_reuse(source);
+				if (source_reg != result_reg) {
+					mov(result_reg, source_reg, 8);
+				}
+				result.set_modified();
+			}
+			return true;
+		}
 		auto [source_ref, source] = unary();
 		auto [result_ref, result] = result_ref_single(node.result);
 		auto source_reg = source.load_to_reg();
