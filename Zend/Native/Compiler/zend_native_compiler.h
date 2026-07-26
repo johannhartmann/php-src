@@ -103,6 +103,7 @@ typedef struct _zend_native_compiler_config {
 	zend_native_compile_fault fault;
 	uint32_t unavailable_runtime_helper;
 	bool abi_conformance_probe;
+	bool source_probe;
 	bool defer_publication;
 } zend_native_compiler_config;
 

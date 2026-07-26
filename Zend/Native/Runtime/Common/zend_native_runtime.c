@@ -90,6 +90,31 @@
 	| ZEND_NATIVE_EFFECT_MAY_FAIL \
 	| ZEND_NATIVE_EFFECT_MAY_REENTER)
 
+ZEND_TLS zend_native_source_probe_t zend_native_source_probe;
+ZEND_TLS void *zend_native_source_probe_context;
+
+void zend_native_runtime_set_source_probe(
+	zend_native_source_probe_t probe, void *context)
+{
+	zend_native_source_probe = probe;
+	zend_native_source_probe_context = context;
+}
+
+bool zend_native_runtime_source_probe_enabled(void)
+{
+	return zend_native_source_probe != NULL;
+}
+
+void zend_native_runtime_source_probe(uint32_t source_position_id)
+{
+	zend_native_source_probe_t probe = zend_native_source_probe;
+
+	if (probe != NULL) {
+		probe(zend_native_source_probe_context, EG(current_execute_data),
+			source_position_id);
+	}
+}
+
 static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_USER_CALL_BEGIN,
 		ZEND_NATIVE_EFFECT_FRAME_WRITE | ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
@@ -764,6 +789,12 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 			| ZEND_NATIVE_RUNTIME_EFFECT_REENTER
 			| ZEND_NATIVE_RUNTIME_EFFECT_THROW,
 		(const void *) zend_native_call_check_undef_args},
+	{ZEND_NATIVE_HELPER_SOURCE_PROBE,
+		ZEND_NATIVE_EFFECT_FRAME_WRITE
+			| ZEND_NATIVE_RUNTIME_EFFECT_USERLAND
+			| ZEND_NATIVE_RUNTIME_EFFECT_REENTER
+			| ZEND_NATIVE_RUNTIME_EFFECT_BAILOUT,
+		(const void *) zend_native_runtime_source_probe},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {

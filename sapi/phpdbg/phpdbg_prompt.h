@@ -62,5 +62,11 @@ PHPDBG_COMMAND(eol); /* }}} */
 extern const phpdbg_command_t phpdbg_prompt_commands[]; /* }}} */
 
 void phpdbg_execute_ex(zend_execute_data *execute_data);
+#ifdef HAVE_NATIVE_ENGINE
+void phpdbg_native_source_probe(
+	void *context,
+	zend_execute_data *execute_data,
+	uint32_t source_position_id);
+#endif
 
 #endif /* PHPDBG_PROMPT_H */
