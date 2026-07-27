@@ -173,7 +173,22 @@ typedef struct _zend_mir_value_location_ref {
 	zend_mir_value_id value_id;
 	zend_mir_storage_id storage_id;
 	uint32_t frame_argument_ordinal_plus_one;
+	zend_mir_value_category category;
+	zend_mir_refcount_state refcount_state;
+	bool alias_observable;
 } zend_mir_value_location_ref;
+
+/*
+ * A value that must remain available when native execution resumes at the
+ * target source position. The table is sorted by target_source_position_id,
+ * then value_id. It is computed while Zend SSA is alive and contains stable
+ * identities only; target adaptors consume it without a second liveness pass.
+ */
+typedef struct _zend_mir_suspend_live_value_ref {
+	zend_mir_source_position_id target_source_position_id;
+	zend_mir_value_id value_id;
+	zend_mir_storage_id storage_id;
+} zend_mir_suspend_live_value_ref;
 
 typedef enum _zend_mir_value_model_flag {
 	ZEND_MIR_VALUE_MODEL_NONE = 0,
@@ -264,6 +279,9 @@ typedef struct _zend_mir_value_view {
 	uint32_t (*executable_operation_count)(const void *context);
 	bool (*executable_operation_at)(const void *context, uint32_t index,
 		zend_mir_executable_value_ref *out);
+	uint32_t (*suspend_live_value_count)(const void *context);
+	bool (*suspend_live_value_at)(const void *context, uint32_t index,
+		zend_mir_suspend_live_value_ref *out);
 } zend_mir_value_view;
 
 typedef struct _zend_mir_value_mutator {
@@ -281,6 +299,8 @@ typedef struct _zend_mir_value_mutator {
 		const zend_mir_value_location_ref *record);
 	bool (*add_executable_operation)(void *context,
 		const zend_mir_executable_value_ref *record);
+	bool (*add_suspend_live_value)(void *context,
+		const zend_mir_suspend_live_value_ref *record);
 } zend_mir_value_mutator;
 
 typedef enum _zend_mir_verify_w06_code {
