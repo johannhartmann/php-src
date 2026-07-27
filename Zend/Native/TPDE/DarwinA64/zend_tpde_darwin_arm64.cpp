@@ -5496,9 +5496,8 @@ bool ZendCompilerA64::compile_inst(
 			case_labels.reserve(zend_hash_num_elements(layout.jump_table));
 			for (uint32_t i = 0; i < layout.successor_count; ++i) {
 				zend_mir_block_id target_id;
-				if (!plan->view->successor_at(
-						plan->view->context, record.block_id, i,
-						&target_id)) {
+				if (!zend_tpde_block_successor_at(
+						plan, record.block_id, i, &target_id)) {
 					return false;
 				}
 				IRBlockRef target = adaptor->block_ref(target_id);
@@ -8491,11 +8490,10 @@ bool ZendCompilerA64::compile_inst(
 							plan, &plan->instructions[i]);
 					zend_mir_block_id target;
 					if (call.opcode != ZEND_MIR_OPCODE_FINALLY_CALL
-							|| plan->view->successor_count(
-								plan->view->context, call.block_id) != 2
-							|| !plan->view->successor_at(
-								plan->view->context, call.block_id, 1,
-								&target)) {
+							|| zend_tpde_block_successor_count(
+								plan, call.block_id) != 2
+							|| !zend_tpde_block_successor_at(
+								plan, call.block_id, 1, &target)) {
 						continue;
 					}
 					compare_unsigned_immediate(
@@ -8533,10 +8531,10 @@ bool ZendCompilerA64::compile_inst(
 						plan, &plan->instructions[i]);
 				zend_mir_block_id target;
 				if (call.opcode != ZEND_MIR_OPCODE_FINALLY_CALL
-						|| plan->view->successor_count(
-							plan->view->context, call.block_id) != 2
-						|| !plan->view->successor_at(
-							plan->view->context, call.block_id, 1, &target)) {
+						|| zend_tpde_block_successor_count(
+							plan, call.block_id) != 2
+						|| !zend_tpde_block_successor_at(
+							plan, call.block_id, 1, &target)) {
 					continue;
 				}
 				compare_unsigned_immediate(
