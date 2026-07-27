@@ -604,6 +604,78 @@ private:
 			&& instruction.value_operation.opcode == record.opcode;
 	}
 
+	bool machine_use_requires_tpde_value(
+			const zend_tpde_machine_use &use) const {
+		if (use.instruction_index >= plan_->instruction_count) {
+			return false;
+		}
+		const zend_tpde_instruction &instruction =
+			plan_->instructions[use.instruction_index];
+		const zend_mir_instruction_record record =
+			instruction_record_at(use.instruction_index);
+		switch (use.kind) {
+			case ZEND_TPDE_MACHINE_USE_STATEPOINT_MATERIALIZATION:
+			case ZEND_TPDE_MACHINE_USE_SUSPEND_LIVE:
+			case ZEND_TPDE_MACHINE_USE_LOCAL_ABI_ARGUMENT:
+				return true;
+			case ZEND_TPDE_MACHINE_USE_CALL_ARGUMENT:
+				return record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
+					&& instruction.direct_call != nullptr
+					&& (instruction.direct_call->flags
+						& ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME) != 0;
+			case ZEND_TPDE_MACHINE_USE_PHI_EDGE:
+				return machine_value_has_result_representation(
+					value_ref(record.result_id));
+			case ZEND_TPDE_MACHINE_USE_INSTRUCTION_OPERAND:
+				break;
+		}
+
+		const IRValueRef result = value_ref(record.result_id);
+		const bool machine_result =
+			machine_value_has_result_representation(result);
+		if (record.opcode == ZEND_MIR_OPCODE_COPY
+				&& record.representation
+					== ZEND_MIR_REPRESENTATION_ZVAL) {
+			return machine_result && use.operand_index == 0;
+		}
+		if (!machine_result
+				&& (record.opcode == ZEND_MIR_OPCODE_COPY
+					|| record.opcode == ZEND_MIR_OPCODE_CANONICALIZE
+					|| record.opcode == ZEND_MIR_OPCODE_I1_TO_I64)) {
+			return false;
+		}
+		if (record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE) {
+			return use.operand_index == 0;
+		}
+		if (is_boxed_cond_branch(instruction, record)
+				|| record.opcode == ZEND_MIR_OPCODE_STATEPOINT
+				|| record.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
+				|| record.opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
+				|| (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
+					&& instruction.direct_call != nullptr)) {
+			return false;
+		}
+		return use.operand_index < instruction.operand_count;
+	}
+
+	bool machine_value_has_frozen_use(uint32_t value_index) const {
+		if (value_index >= plan_->value_count
+				|| plan_->value_consumer_offsets == nullptr) {
+			return false;
+		}
+		const uint32_t begin =
+			plan_->value_consumer_offsets[value_index];
+		const uint32_t end =
+			plan_->value_consumer_offsets[value_index + 1];
+		for (uint32_t use = begin; use < end; ++use) {
+			if (machine_use_requires_tpde_value(
+					plan_->value_consumers[use])) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	bool needs_explicit_cold_path(
 			const zend_tpde_instruction &instruction,
 			const zend_mir_instruction_record &record) {
@@ -1155,8 +1227,7 @@ public:
 		std::vector<zend_mir_scalar_type_mask> call_result_types(
 			plan->value_count, ZEND_MIR_SCALAR_TYPE_NONE);
 		std::vector<zend_mir_scalar_type_mask> register_source_ssa(
-			plan->source_ssa != nullptr
-				? static_cast<uint32_t>(plan->source_ssa->vars_count) : 0,
+			plan->source_ssa_variable_count,
 			ZEND_MIR_SCALAR_TYPE_NONE);
 		bool saw_return = false;
 		for (uint32_t index = 0;
@@ -1414,9 +1485,7 @@ public:
 			plan_ == nullptr ? 0 : plan_->value_count,
 			INVALID_VALUE_REF);
 		typed_body_source_ssa_overrides_.assign(
-			plan_ == nullptr || plan_->source_ssa == nullptr
-				? 0
-				: static_cast<uint32_t>(plan_->source_ssa->vars_count),
+			plan_ == nullptr ? 0 : plan_->source_ssa_variable_count,
 			INVALID_VALUE_REF);
 		if (function_mode_ == FunctionMode::ZendEntry) {
 			arguments_.push_back(IRValueRef{EXECUTE_DATA_VALUE});
@@ -1657,22 +1726,13 @@ public:
 		block_info2_.resize(tpde_block_count);
 		for (uint32_t i = 0; i < plan_->block_count; ++i) {
 			blocks_.push_back(IRBlockRef{i});
-			uint32_t count = plan_->view->successor_count(
-				plan_->view->context, plan_->block_ids[i]);
-			for (uint32_t n = 0; n < count; ++n) {
-				zend_mir_block_id target;
-				if (!plan_->view->successor_at(plan_->view->context,
-						plan_->block_ids[i], n, &target)) {
-					valid_ = false;
-					continue;
-				}
-				int32_t target_index = block_index(target);
-				if (target_index < 0) {
-					valid_ = false;
-					continue;
-				}
+			const uint32_t begin = plan_->block_successor_offsets[i];
+			const uint32_t end = plan_->block_successor_offsets[i + 1];
+			for (uint32_t edge = begin; edge < end; ++edge) {
+				const uint32_t target_index =
+					plan_->block_successors[edge];
 				block_successors.push_back({final_blocks[i], IRBlockRef{
-					static_cast<uint32_t>(target_index)}});
+					target_index}});
 			}
 		}
 		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
@@ -1703,27 +1763,29 @@ public:
 			blocks_.push_back(IRBlockRef{cold_block});
 			const zend_mir_instruction_record record =
 				instruction_record_at(i);
+			const int32_t source_predecessor =
+				block_index(record.block_id);
+			if (source_predecessor < 0) {
+				valid_ = false;
+				continue;
+			}
+			const uint32_t successor_begin =
+				plan_->block_successor_offsets[source_predecessor];
+			const uint32_t successor_end =
+				plan_->block_successor_offsets[source_predecessor + 1];
 			const uint32_t successor_count =
-				plan_->view->successor_count(
-					plan_->view->context, record.block_id);
+				successor_end - successor_begin;
 			if (successor_count != 2) {
 				valid_ = false;
 				continue;
 			}
-			for (uint32_t n = 0; n < successor_count; ++n) {
-				zend_mir_block_id target;
-				const int32_t target_index =
-					plan_->view->successor_at(
-						plan_->view->context,
-						record.block_id, n, &target)
-					? block_index(target) : -1;
-				if (target_index < 0) {
-					valid_ = false;
-					continue;
-				}
+			for (uint32_t edge = successor_begin;
+					edge < successor_end; ++edge) {
+				const uint32_t target_index =
+					plan_->block_successors[edge];
 				block_successors.push_back(
 					{cold_block, IRBlockRef{
-						static_cast<uint32_t>(target_index)}});
+						target_index}});
 			}
 		}
 		/*
@@ -1763,22 +1825,20 @@ public:
 			if (record.opcode == ZEND_MIR_OPCODE_FINALLY_RETURN) {
 				finally_return_blocks.push_back(record_block);
 			} else if (record.opcode == ZEND_MIR_OPCODE_FINALLY_CALL) {
-				zend_mir_block_id continuation;
-				if (plan_->view->successor_count(
-							plan_->view->context, record.block_id) != 2
-						|| !plan_->view->successor_at(
-							plan_->view->context, record.block_id, 1,
-							&continuation)) {
+				const int32_t source_block =
+					block_index(record.block_id);
+				if (source_block < 0
+						|| plan_->block_successor_offsets[source_block + 1]
+							- plan_->block_successor_offsets[source_block]
+							!= 2) {
 					valid_ = false;
 					continue;
 				}
-				int32_t continuation_block = block_index(continuation);
-				if (continuation_block < 0) {
-					valid_ = false;
-					continue;
-				}
+				const uint32_t continuation_block =
+					plan_->block_successors[
+						plan_->block_successor_offsets[source_block] + 1];
 				finally_targets.push_back(
-					IRBlockRef{static_cast<uint32_t>(continuation_block)});
+					IRBlockRef{continuation_block});
 			} else if ((record.opcode == ZEND_MIR_OPCODE_CATCH_ENTER
 						|| record.opcode == ZEND_MIR_OPCODE_FINALLY_ENTER)
 					&& record.block_id != plan_->function.entry_block_id) {
@@ -1798,13 +1858,14 @@ public:
 				user_opcode_next_landings_.resize(
 					plan_->source_op_array->last, UINT32_MAX);
 			}
-			if (plan_->source_ssa == nullptr
-					|| plan_->source_ssa->cfg.blocks == nullptr
-					|| plan_->source_ssa->cfg.map == nullptr) {
+			if (plan_->source_opcode_block_indices == nullptr
+					|| plan_->source_opcode_is_data == nullptr
+					|| plan_->source_block_starts == nullptr
+					|| plan_->source_block_ends == nullptr) {
 				valid_ = false;
 			} else {
-				const zend_cfg &cfg = plan_->source_ssa->cfg;
-				source_block_next.resize(cfg.blocks_count, UINT32_MAX);
+				source_block_next.resize(
+					plan_->source_block_count, UINT32_MAX);
 				for (uint32_t instruction = 0;
 						instruction < plan_->instruction_count;
 						++instruction) {
@@ -1815,10 +1876,11 @@ public:
 						continue;
 					}
 					const uint32_t source_block =
-						cfg.map[record.source_position_id];
+						plan_->source_opcode_block_indices[
+							record.source_position_id];
 					const uint32_t mir_block =
 						instruction_blocks[instruction];
-					if (source_block >= cfg.blocks_count
+					if (source_block >= plan_->source_block_count
 							|| mir_block == UINT32_MAX) {
 						valid_ = false;
 						continue;
@@ -1837,22 +1899,21 @@ public:
 					}
 				}
 				for (uint32_t source_block = 0;
-						source_block < cfg.blocks_count; ++source_block) {
-					const zend_basic_block &block =
-						cfg.blocks[source_block];
-					if ((block.flags & ZEND_BB_REACHABLE) == 0
-							|| block.start > plan_->source_op_array->last
-							|| block.len
-								> plan_->source_op_array->last - block.start) {
+						source_block < plan_->source_block_count;
+						++source_block) {
+					const uint32_t block_start =
+						plan_->source_block_starts[source_block];
+					const uint32_t block_end =
+						plan_->source_block_ends[source_block];
+					if (block_start == UINT32_MAX
+							|| block_end == UINT32_MAX) {
 						continue;
 					}
-					source_block_next[source_block] = block.start;
-					const uint32_t block_end = block.start + block.len;
+					source_block_next[source_block] = block_start;
 					uint32_t next_mir_block = UINT32_MAX;
 					for (uint32_t source = block_end;
-							source-- > block.start;) {
-						if (plan_->source_op_array->opcodes[source].opcode
-								== ZEND_OP_DATA) {
+							source-- > block_start;) {
+						if (plan_->source_opcode_is_data[source] != 0) {
 							continue;
 						}
 						if (source_landing_blocks[source] != UINT32_MAX) {
@@ -1862,10 +1923,9 @@ public:
 						}
 					}
 					uint32_t previous_mir_block = UINT32_MAX;
-					for (uint32_t source = block.start;
+					for (uint32_t source = block_start;
 							source < block_end; ++source) {
-						if (plan_->source_op_array->opcodes[source].opcode
-								== ZEND_OP_DATA) {
+						if (plan_->source_opcode_is_data[source] != 0) {
 							continue;
 						}
 						if (source_landing_blocks[source] != UINT32_MAX) {
@@ -2048,15 +2108,8 @@ public:
 		for (uint32_t value = 0;
 				value < plan_->value_count; ++value) {
 			machine_value_used[value] =
-				plan_->value_consumer_offsets[value]
-					!= plan_->value_consumer_offsets[value + 1];
+				machine_value_has_frozen_use(value);
 		}
-		auto mark_machine_use = [&](zend_mir_value_id id) {
-			const int32_t index = zend_tpde_value_index(plan_, id);
-			if (index >= 0) {
-				machine_value_used[static_cast<uint32_t>(index)] = 1;
-			}
-		};
 		auto emit_generator_resume = [&](uint32_t block,
 				uint32_t source_position, bool exact_source_position) {
 			for (uint32_t resume_index = 0;
@@ -2222,127 +2275,6 @@ public:
 				instruction_record_at(i);
 			const bool boxed_cond_branch =
 				is_boxed_cond_branch(instruction, record);
-			IRValueRef register_condition = INVALID_VALUE_REF;
-			if (is_register_cond_branch(
-					instruction, record, &register_condition)) {
-				const uint32_t condition_index =
-					static_cast<uint32_t>(register_condition);
-				if (condition_index < MIR_VALUE_BASE
-						|| condition_index - MIR_VALUE_BASE
-							>= plan_->value_count) {
-					valid_ = false;
-				} else {
-					mark_machine_use(plan_->values[
-						condition_index - MIR_VALUE_BASE].id);
-				}
-			}
-			IRValueRef type_check_input = INVALID_VALUE_REF;
-			if (function_mode_ == FunctionMode::TypedBody
-					&& record.opcode
-						== ZEND_MIR_OPCODE_VALUE_TYPE_CHECK
-					&& scalar_type_check_selection(
-						plan_, instruction, &type_check_input)
-						!= ScalarTypeCheckSelection::Invalid) {
-				const uint32_t input_index =
-					static_cast<uint32_t>(type_check_input);
-				if (input_index < MIR_VALUE_BASE
-						|| input_index - MIR_VALUE_BASE
-							>= plan_->value_count) {
-					valid_ = false;
-				} else {
-					mark_machine_use(
-						plan_->values[input_index - MIR_VALUE_BASE].id);
-				}
-			}
-			const IRValueRef result = value_ref(record.result_id);
-			const bool result_is_machine =
-				machine_value_has_result_representation(result);
-			IRValueRef long_left = INVALID_VALUE_REF;
-			IRValueRef long_right = INVALID_VALUE_REF;
-			if (record.opcode == ZEND_MIR_OPCODE_VALUE_BINARY_OP
-					&& long_binary_machine_operands(
-						instruction, long_left, long_right)) {
-				mark_machine_use(
-					plan_->values[
-						static_cast<uint32_t>(long_left)
-							- MIR_VALUE_BASE].id);
-				mark_machine_use(
-					plan_->values[
-						static_cast<uint32_t>(long_right)
-							- MIR_VALUE_BASE].id);
-			}
-			if (record.opcode == ZEND_MIR_OPCODE_PHI) {
-				if (result_is_machine) {
-					for (uint32_t n = 0;
-							n < instruction.operand_count; ++n) {
-						mark_machine_use(zend_tpde_operand_at(
-							plan_, &instruction, n));
-					}
-				}
-				continue;
-			}
-			if (record.opcode == ZEND_MIR_OPCODE_COPY
-					&& record.representation
-						== ZEND_MIR_REPRESENTATION_ZVAL) {
-				if (result_is_machine
-						&& instruction.operand_count == 1) {
-					mark_machine_use(zend_tpde_operand_at(
-						plan_, &instruction, 0));
-				}
-				continue;
-			}
-			if (!result_is_machine
-					&& (record.opcode == ZEND_MIR_OPCODE_COPY
-						|| record.opcode
-							== ZEND_MIR_OPCODE_CANONICALIZE
-						|| record.opcode
-							== ZEND_MIR_OPCODE_I1_TO_I64)) {
-				continue;
-			}
-			const uint32_t data_operand_count =
-				record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE
-					? 1
-				: boxed_cond_branch
-					? 0
-				: record.opcode == ZEND_MIR_OPCODE_STATEPOINT
-					|| record.opcode
-						== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
-					|| record.opcode
-						== ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
-					|| (record.opcode
-							== ZEND_MIR_OPCODE_CALL_DIRECT_USER
-						&& instruction.direct_call != nullptr)
-					? 0 : instruction.operand_count;
-			for (uint32_t n = 0; n < data_operand_count; ++n) {
-				mark_machine_use(zend_tpde_operand_at(
-					plan_, &instruction, n));
-			}
-			if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
-					&& instruction.direct_call != nullptr
-					&& (instruction.direct_call->flags
-						& ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME) != 0) {
-				for (uint32_t n = 0;
-						n < instruction.call_argument_count; ++n) {
-					zend_mir_call_argument_ref argument;
-					if (!zend_tpde_call_argument_at(plan_,
-							instruction.call_argument_offset + n,
-							&argument)) {
-						valid_ = false;
-						continue;
-					}
-					if (zend_mir_id_is_valid(argument.value_id)) {
-						mark_machine_use(argument.value_id);
-					}
-				}
-			}
-		}
-
-		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
-			const zend_tpde_instruction &instruction = plan_->instructions[i];
-			const zend_mir_instruction_record record =
-				instruction_record_at(i);
-			const bool boxed_cond_branch =
-				is_boxed_cond_branch(instruction, record);
 			if (!zend_mir_id_is_valid(record.id)) {
 				valid_ = false;
 				continue;
@@ -2352,20 +2284,21 @@ public:
 				valid_ = false;
 				continue;
 			}
-			if (source_landings && plan_->source_ssa != nullptr
+			if (source_landings
+					&& plan_->source_opcode_block_indices != nullptr
 					&& record.source_position_id
 						< plan_->source_op_array->last) {
 				const uint32_t source_block =
-					plan_->source_ssa->cfg.map[
+					plan_->source_opcode_block_indices[
 						record.source_position_id];
 				if (source_block < source_block_next.size()) {
-					const zend_basic_block &source =
-						plan_->source_ssa->cfg.blocks[source_block];
+					const uint32_t source_end =
+						plan_->source_block_ends[source_block];
 					uint32_t &next_source =
 						source_block_next[source_block];
 					while (next_source != UINT32_MAX
 							&& next_source <= record.source_position_id
-							&& next_source < source.start + source.len) {
+							&& next_source < source_end) {
 						emit_user_opcode_landing(
 							static_cast<uint32_t>(block), next_source++);
 					}
@@ -2488,9 +2421,17 @@ public:
 					continue;
 				}
 				if (representation(result) == ZEND_MIR_REPRESENTATION_ZVAL) {
+					const int32_t source_block =
+						block_index(record.block_id);
+					if (source_block < 0) {
+						valid_ = false;
+						continue;
+					}
+					const uint32_t predecessor_begin =
+						plan_->block_predecessor_offsets[source_block];
 					const uint32_t predecessors =
-						plan_->view->predecessor_count(
-							plan_->view->context, record.block_id);
+						plan_->block_predecessor_offsets[source_block + 1]
+							- predecessor_begin;
 					const zend_mir_storage_id result_storage =
 						canonical_storage(result);
 					if (predecessors != instruction.operand_count) {
@@ -2532,30 +2473,20 @@ public:
 						input_slice.offset =
 							static_cast<uint32_t>(phi_inputs_.size());
 						for (uint32_t n = 0; n < predecessors; ++n) {
-							zend_mir_block_id predecessor;
 							const IRValueRef input = value_ref(
 								zend_tpde_operand_at(
 									plan_, &instruction, n));
-							const int32_t source_predecessor_index =
-								plan_->view->predecessor_at(
-										plan_->view->context,
-										record.block_id, n,
-										&predecessor)
-									? block_index(predecessor) : -1;
-							if (source_predecessor_index < 0) {
-								valid_ = false;
-								continue;
-							}
+							const uint32_t source_predecessor_index =
+								plan_->block_predecessors[
+									predecessor_begin + n];
 							const uint32_t predecessor_index =
-								final_blocks[static_cast<uint32_t>(
-									source_predecessor_index)];
+								final_blocks[source_predecessor_index];
 							phi_inputs_.push_back({input,
 								IRBlockRef{predecessor_index}});
 							++input_slice.count;
 							const uint32_t cold_predecessor =
 								boxed_cond_cold_by_predecessor[
-									static_cast<uint32_t>(
-										source_predecessor_index)];
+									source_predecessor_index];
 							if (cold_predecessor != UINT32_MAX) {
 								phi_inputs_.push_back(
 									{input, IRBlockRef{cold_predecessor}});
@@ -2582,8 +2513,17 @@ public:
 				block_phis.push_back(
 					{static_cast<uint32_t>(block), result});
 				phi_values_[static_cast<uint32_t>(result)] = 1;
-				uint32_t predecessors = plan_->view->predecessor_count(
-					plan_->view->context, record.block_id);
+				const int32_t source_block =
+					block_index(record.block_id);
+				if (source_block < 0) {
+					valid_ = false;
+					continue;
+				}
+				const uint32_t predecessor_begin =
+					plan_->block_predecessor_offsets[source_block];
+				const uint32_t predecessors =
+					plan_->block_predecessor_offsets[source_block + 1]
+						- predecessor_begin;
 				if (predecessors != instruction.operand_count) {
 					valid_ = false;
 					continue;
@@ -2593,28 +2533,23 @@ public:
 				input_slice.offset =
 					static_cast<uint32_t>(phi_inputs_.size());
 				for (uint32_t n = 0; n < predecessors; ++n) {
-					zend_mir_block_id predecessor;
-					int32_t source_predecessor_index;
 					IRValueRef input = value_ref(zend_tpde_operand_at(
 						plan_, &instruction, n));
-					if (!plan_->view->predecessor_at(plan_->view->context,
-							record.block_id, n, &predecessor)
-							|| (source_predecessor_index =
-								block_index(predecessor)) < 0
-							|| input == INVALID_VALUE_REF) {
+					if (input == INVALID_VALUE_REF) {
 						valid_ = false;
 						continue;
 					}
+					const uint32_t source_predecessor_index =
+						plan_->block_predecessors[
+							predecessor_begin + n];
 					const uint32_t predecessor_index =
-						final_blocks[static_cast<uint32_t>(
-							source_predecessor_index)];
+						final_blocks[source_predecessor_index];
 					phi_inputs_.push_back(
 						{input, IRBlockRef{predecessor_index}});
 					++input_slice.count;
 					const uint32_t cold_predecessor =
 						boxed_cond_cold_by_predecessor[
-							static_cast<uint32_t>(
-								source_predecessor_index)];
+							source_predecessor_index];
 					if (cold_predecessor != UINT32_MAX) {
 						phi_inputs_.push_back(
 							{input, IRBlockRef{cold_predecessor}});
@@ -3271,16 +3206,16 @@ public:
 					static_cast<int32_t>(value_index);
 			}
 		}
-		if (source_landings && plan_->source_ssa != nullptr) {
+		if (source_landings && plan_->source_block_ends != nullptr) {
 			for (uint32_t source_block = 0;
 					source_block < source_block_next.size(); ++source_block) {
 				uint32_t &next_source = source_block_next[source_block];
 				if (next_source == UINT32_MAX) {
 					continue;
 				}
-				const zend_basic_block &source =
-					plan_->source_ssa->cfg.blocks[source_block];
-				while (next_source < source.start + source.len) {
+				const uint32_t source_end =
+					plan_->source_block_ends[source_block];
+				while (next_source < source_end) {
 					const uint32_t block =
 						source_landing_blocks[next_source];
 					if (block != UINT32_MAX) {
@@ -3295,15 +3230,9 @@ public:
 					|| argument_value_indices[argument_index] < 0) {
 				return false;
 			}
-			const IRValueRef value{
-				MIR_VALUE_BASE + static_cast<uint32_t>(
-					argument_value_indices[argument_index])};
-			return std::find(operands_.begin(), operands_.end(), value)
-						!= operands_.end()
-				|| std::any_of(phi_inputs_.begin(), phi_inputs_.end(),
-					[&](const PhiInput &input) {
-						return input.value == value;
-					});
+			const uint32_t value_index = static_cast<uint32_t>(
+				argument_value_indices[argument_index]);
+			return machine_value_has_frozen_use(value_index);
 		};
 		std::erase_if(argument_guards_,
 			[&](const ArgumentGuard &guard) {
@@ -3362,36 +3291,12 @@ public:
 	bool component_compiled_variable_used(
 			uint32_t component_index, uint32_t variable_index) const {
 		const zend_tpde_plan *component = component_plan(component_index);
-		if (component == nullptr || component->source_ssa == nullptr
-				|| component->source_ssa->vars == nullptr
-				|| component->source_ssa->vars_count < 0) {
+		if (component == nullptr
+				|| variable_index >= component->compiled_variable_count
+				|| component->compiled_variables_used == nullptr) {
 			return true;
 		}
-		bool found = false;
-		for (int index = 0;
-				index < component->source_ssa->vars_count; ++index) {
-			const zend_ssa_var &variable =
-				component->source_ssa->vars[index];
-			if (variable.var < 0
-					|| static_cast<uint32_t>(variable.var)
-						!= variable_index) {
-				continue;
-			}
-			found = true;
-			if (variable.definition >= 0
-					|| variable.definition_phi != nullptr
-					|| variable.use_chain >= 0
-					|| variable.phi_use_chain != nullptr
-					|| variable.sym_use_chain != nullptr) {
-				return true;
-			}
-		}
-		/*
-		 * An SSA value that is neither defined nor consumed cannot become
-		 * observable and cannot require cleanup.  Omit its canonical zval
-		 * from direct-frame initialization and release.
-		 */
-		return !found;
+		return component->compiled_variables_used[variable_index] != 0;
 	}
 	const void *runtime_helper(zend_native_runtime_helper_id id) const {
 		const zend_native_runtime_helper *helper =

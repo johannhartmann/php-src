@@ -140,7 +140,9 @@ public:
 	bool cur_func_may_emit_calls() const { return adaptor->plan()->may_emit_calls; }
 	tpde::SymRef cur_personality_func() const { return {}; }
 	bool try_force_fixed_assignment(IRValueRef value) const {
-		return value == IRValueRef{Adaptor::FRAME_VALUE};
+		return value == IRValueRef{Adaptor::FRAME_VALUE}
+			|| (adaptor->plan()->may_emit_calls
+				&& value == IRValueRef{Adaptor::EXECUTION_CONTEXT_VALUE});
 	}
 	ValueParts val_parts(IRValueRef value) const {
 		const zend_tpde_machine_value_kind kind =
