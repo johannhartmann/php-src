@@ -404,8 +404,7 @@ bool ZendCompilerA64::compile_boxed_cond_guard(IRInstRef instruction) {
 		return false;
 	}
 	const auto successors = adaptor->block_succs(
-		adaptor->block_ref(
-			adaptor->instruction_record(instruction).block_id));
+		IRBlockRef{node.control_block});
 	if (successors.size() != 3
 			|| static_cast<uint32_t>(successors[2])
 				!= node.argument_index) {
@@ -2379,6 +2378,15 @@ bool ZendCompilerA64::compile_inst(
 		label_place(continued);
 		return true;
 	};
+	if (node.kind == Adaptor::InstKind::GuardedCold) {
+		if (node.continuation_block == UINT32_MAX
+				|| !execute_value_operation()) {
+			return false;
+		}
+		generate_branch_to_block(Jump::jmp,
+			IRBlockRef{node.continuation_block}, false, true);
+		return true;
+	}
 	auto copy_slot = [&](
 			const zend_mir_source_operand_ref &source_operand,
 			zend_mir_storage_id source_storage,
@@ -3247,21 +3255,37 @@ bool ZendCompilerA64::compile_inst(
 	auto string_length = [&]() {
 		zend_tpde_string_length layout;
 
-		if (!zend_tpde_string_length_at(mir, &layout)
-				|| layout.operand_offset > UINT32_MAX - 8
-				|| layout.result_offset > UINT32_MAX - 8) {
+		if (!zend_tpde_string_length_at(mir, &layout)) {
 			return execute_value_operation();
 		}
+		if (layout.operand_offset > UINT32_MAX - 8
+				|| layout.result_offset > UINT32_MAX - 8
+				|| node.kind != Adaptor::InstKind::GuardedFast
+				|| node.control_block == UINT32_MAX
+				|| node.continuation_block == UINT32_MAX) {
+			return false;
+		}
+		const auto successors =
+			adaptor->block_succs(IRBlockRef{node.control_block});
+		if (successors.size() != 2
+				|| static_cast<uint32_t>(successors[0])
+					!= node.continuation_block
+				|| static_cast<uint32_t>(successors[1])
+					!= node.argument_index) {
+			return false;
+		}
 		auto slow = text_writer.label_create();
-		auto done = text_writer.label_create();
+		auto ready = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 		auto frame_scratch = std::move(frame).into_scratch();
 		auto frame_reg = frame_scratch.cur_reg();
 		ScratchReg type{this};
 		ScratchReg string{this};
+		ScratchReg decision{this};
 		auto type_reg = type.alloc_gp();
 		auto string_reg = string.alloc_gp();
+		auto decision_reg = decision.alloc_gp();
 
 		load_off(type_reg, frame_reg,
 			layout.operand_offset
@@ -3288,22 +3312,20 @@ bool ZendCompilerA64::compile_inst(
 			layout.result_offset
 				+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
 			type_reg, 4);
-		generate_raw_jump(Jump::jmp, done);
+		materialize_constant(
+			uint64_t{0}, DarwinConfig::GP_BANK, 4, decision_reg);
+		generate_raw_jump(Jump::jmp, ready);
 
 		label_place(slow);
+		materialize_constant(
+			uint64_t{1}, DarwinConfig::GP_BANK, 4, decision_reg);
+		label_place(ready);
 		type.reset();
 		string.reset();
-		const auto register_state =
-			zend::native::tpde::
-				capture_conditional_call_register_state(*this);
-		ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
-		frame_argument.set_value(this, std::move(frame_scratch));
-		if (!execute_value_operation(&frame_argument)) {
-			return false;
-		}
-		zend::native::tpde::restore_conditional_call_register_state(
-			*this, register_state);
-		label_place(done);
+		std::array<std::pair<uint64_t, IRBlockRef>, 1> cases{{
+			{1, successors[1]},
+		}};
+		generate_switch(std::move(decision), 32, successors[0], cases);
 		return true;
 	};
 	auto string_identity = [&]() {
@@ -8021,9 +8043,14 @@ zend_result zend_tpde_emit_darwin_arm64(
 	zend_native_diagnostic *diag) {
 	auto state = std::make_unique<A64ImageState>(
 		std::span<const zend_tpde_plan *const>{plans, plan_count}, image);
-	if (!state->adaptor.valid() || !state->compiler.compile()) {
+	if (!state->adaptor.valid()) {
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-			"TPDE rejected the ZNMIR arm64 adaptor graph");
+			"TPDE rejected the malformed ZNMIR arm64 adaptor graph");
+		return FAILURE;
+	}
+	if (!state->compiler.compile()) {
+		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+			"TPDE failed to compile the ZNMIR arm64 adaptor graph");
 		return FAILURE;
 	}
 	std::vector<::tpde::u8> finalized =
