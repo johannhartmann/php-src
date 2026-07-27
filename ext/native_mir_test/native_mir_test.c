@@ -3833,6 +3833,7 @@ static bool native_mir_test_compile_native_component(
 			if (target.kind == ZEND_MIR_CALL_TARGET_DYNAMIC) {
 				bindings[binding_count].target_id = target.id;
 				bindings[binding_count].entry_cell = &function->entry_cell;
+				bindings[binding_count].component_target_index = UINT32_MAX;
 				bindings[binding_count].direct_native = false;
 				bindings[binding_count].leaf_scalar_frame = false;
 				binding_count++;
@@ -3846,6 +3847,7 @@ static bool native_mir_test_compile_native_component(
 			}
 			bindings[binding_count].target_id = target.id;
 			bindings[binding_count].entry_cell = &native_callee->entry_cell;
+			bindings[binding_count].component_target_index = UINT32_MAX;
 			bindings[binding_count].direct_native =
 				native_mir_test_target_is_direct_native(
 					state, function, calls, &target, callee);

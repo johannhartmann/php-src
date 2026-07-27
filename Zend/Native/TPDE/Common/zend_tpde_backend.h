@@ -131,6 +131,11 @@ typedef bool (*zend_native_image_decode_reference_t)(
 typedef struct _zend_native_call_binding {
 	zend_mir_call_target_id target_id;
 	zend_native_entry_cell *entry_cell;
+	/*
+	 * Index in the current multi-function TPDE component.  UINT32_MAX keeps
+	 * the existing Entry-Cell path for dynamic and cross-component edges.
+	 */
+	uint32_t component_target_index;
 	bool direct_native;
 	bool leaf_scalar_frame;
 } zend_native_call_binding;
@@ -159,6 +164,25 @@ typedef struct _zend_native_source_effect {
 	zend_mir_scalar_type_mask exact_type;
 	zend_mir_block_id target_block_id;
 } zend_native_source_effect;
+
+/*
+ * One function in a statically known native component.  The member borrows
+ * all inputs for the duration of compilation; TPDE consumes the complete
+ * array in one compile invocation and emits one relocatable object containing
+ * every member function.
+ */
+typedef struct _zend_native_component_member {
+	const zend_mir_view *module;
+	const zend_native_call_binding *user_bindings;
+	uint32_t user_binding_count;
+	const zend_native_internal_call_binding *internal_bindings;
+	uint32_t internal_binding_count;
+	const zend_native_source_effect *effects;
+	uint32_t effect_count;
+	uint32_t frame_argument_count;
+	const struct _zend_op_array *source_op_array;
+	const struct _zend_ssa *source_ssa;
+} zend_native_component_member;
 
 zend_result zend_tpde_compile_module(
 	zend_native_target target,
@@ -222,6 +246,14 @@ zend_result zend_tpde_compile_module_w08_with_runtime(
 	zend_native_image **out_image,
 	zend_native_diagnostic *diag);
 
+zend_result zend_tpde_compile_component_w14_with_runtime(
+	zend_native_target target,
+	const zend_native_component_member *members,
+	uint32_t member_count,
+	const struct _zend_native_runtime_api *runtime,
+	zend_native_image **out_image,
+	zend_native_diagnostic *diag);
+
 zend_result zend_native_publish_image(
 	zend_native_target target,
 	zend_native_image *image,
@@ -269,10 +301,16 @@ zend_native_status zend_native_execute_observed_frame(
 
 void zend_native_image_destroy(zend_native_image *image);
 void zend_native_code_destroy(zend_native_code *code);
+zend_result zend_native_code_component_view(
+	zend_native_code *code,
+	uint32_t component_index,
+	zend_native_code **out_view,
+	zend_native_diagnostic *diag);
 const char *zend_native_target_id(zend_native_target target);
 const char *zend_native_target_triple(zend_native_target target);
 size_t zend_native_image_size(const zend_native_image *image);
 const unsigned char *zend_native_image_bytes(const zend_native_image *image);
+uint32_t zend_native_image_component_count(const zend_native_image *image);
 void zend_native_image_get_metrics(
 	const zend_native_image *image, zend_native_image_metrics *metrics);
 bool zend_native_code_is_writable(const zend_native_code *code);

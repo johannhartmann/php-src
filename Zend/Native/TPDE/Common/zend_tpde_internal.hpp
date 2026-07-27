@@ -229,6 +229,7 @@ struct zend_tpde_instruction {
 	zend_mir_instruction_id id;
 	uint32_t view_index;
 	uint32_t operand_count;
+	uint32_t component_target_index;
 	zend_native_entry_cell *entry_cell;
 	zend_native_internal_call_cell *internal_call_cell;
 	zend_mir_call_site_ref call_site;
@@ -1069,6 +1070,7 @@ struct zend_tpde_plan {
 	const zend_native_runtime_api *runtime;
 	const zend_op_array *source_op_array;
 	const struct _zend_ssa *source_ssa;
+	uint32_t symbol_namespace;
 	zend_mir_function_record function;
 	zend_mir_block_id *block_ids;
 	uint32_t block_count;
@@ -1244,6 +1246,7 @@ enum zend_native_image_symbol_kind : uint32_t {
 struct zend_native_image_symbol {
 	uint32_t kind;
 	uint32_t id;
+	uint32_t symbol_namespace;
 	uint32_t abi_version;
 	uint32_t effects;
 	char name[64];
@@ -1252,6 +1255,12 @@ struct zend_native_image_symbol {
 struct zend_native_image_symbol_binding {
 	uint32_t symbol_index;
 	const void *address;
+};
+
+struct zend_native_component_entry {
+	uint32_t argument_count;
+	uint32_t frame_variable_count;
+	uint32_t frame_temporary_count;
 };
 
 struct zend_native_image {
@@ -1273,6 +1282,8 @@ struct zend_native_image {
 	uint32_t argument_count;
 	uint32_t frame_variable_count;
 	uint32_t frame_temporary_count;
+	zend_native_component_entry *component_entries;
+	uint32_t component_entry_count;
 	zend_native_image_metrics metrics;
 	void *target_state;
 	void (*destroy_target_state)(void *);
@@ -1288,9 +1299,14 @@ struct zend_native_image {
 
 struct zend_native_code {
 	zend_native_target target;
+	zend_native_code *owner;
+	uint32_t owner_refcount;
 	void *mapping;
 	size_t mapping_size;
 	zend_native_frame_entry_t entry;
+	zend_native_frame_entry_t *component_entries;
+	zend_native_component_entry *component_metadata;
+	uint32_t component_entry_count;
 	uint32_t slot_count;
 	uint32_t argument_count;
 	uint32_t frame_variable_count;
@@ -1341,18 +1357,21 @@ bool zend_tpde_image_u64(zend_native_image *image, uint64_t value);
 const zend_native_image_symbol *zend_tpde_image_symbol_find(
 	const zend_native_image *image,
 	zend_native_image_symbol_kind kind,
-	uint32_t id);
+	uint32_t id,
+	uint32_t symbol_namespace);
 bool zend_tpde_image_resolve_symbol(
 	const zend_native_image *image,
 	const char *name,
 	const void **address);
 
 zend_result zend_tpde_emit_darwin_arm64(
-	const zend_tpde_plan *plan,
+	const zend_tpde_plan *const *plans,
+	uint32_t plan_count,
 	zend_native_image *image,
 	zend_native_diagnostic *diag);
 zend_result zend_tpde_emit_linux_x64(
-	const zend_tpde_plan *plan,
+	const zend_tpde_plan *const *plans,
+	uint32_t plan_count,
 	zend_native_image *image,
 	zend_native_diagnostic *diag);
 zend_result zend_tpde_map_darwin_arm64(

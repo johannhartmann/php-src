@@ -18,8 +18,8 @@
 namespace {
 constexpr uint32_t MAX_RECORDS = UINT32_C(1) << 20;
 constexpr size_t MAX_NATIVE_IMAGE_BYTES = size_t{1} << 28;
-constexpr uint32_t NATIVE_IMAGE_ABI_VERSION = 4;
-constexpr uint32_t NATIVE_IMAGE_SERIAL_FORMAT = 2;
+constexpr uint32_t NATIVE_IMAGE_ABI_VERSION = 5;
+constexpr uint32_t NATIVE_IMAGE_SERIAL_FORMAT = 3;
 constexpr uint64_t NATIVE_IMAGE_SERIAL_MAGIC = UINT64_C(0x003331474d494e5a);
 constexpr uint64_t NATIVE_IMAGE_BUILD_ID_SEED =
 	UINT64_C(0x5750313300000000)
@@ -44,6 +44,8 @@ struct zend_native_serial_image_header {
 	uint64_t text_size;
 	uint32_t symbol_count;
 	uint32_t binding_count;
+	uint32_t component_count;
+	uint32_t reserved;
 	uint64_t total_size;
 	uint64_t checksum;
 };
@@ -1257,6 +1259,7 @@ bool image_add_symbol(
 	zend_native_image *image,
 	zend_native_image_symbol_kind kind,
 	uint32_t id,
+	uint32_t symbol_namespace,
 	uint32_t abi_version,
 	uint32_t effects,
 	const void *address = nullptr) {
@@ -1265,7 +1268,8 @@ bool image_add_symbol(
 	}
 	for (uint32_t index = 0; index < image->symbol_count; ++index) {
 		const zend_native_image_symbol &symbol = image->symbols[index];
-		if (symbol.kind == kind && symbol.id == id) {
+		if (symbol.kind == kind && symbol.id == id
+				&& symbol.symbol_namespace == symbol_namespace) {
 			if (symbol.abi_version != abi_version
 					|| symbol.effects != effects) {
 				return false;
@@ -1303,10 +1307,12 @@ bool image_add_symbol(
 	std::memset(&symbol, 0, sizeof(symbol));
 	symbol.kind = kind;
 	symbol.id = id;
+	symbol.symbol_namespace = symbol_namespace;
 	symbol.abi_version = abi_version;
 	symbol.effects = effects;
 	const int written = std::snprintf(symbol.name, sizeof(symbol.name),
-		"__znmir_%u_%u", static_cast<uint32_t>(kind), id);
+		"__znmir_%u_%u_%u", static_cast<uint32_t>(kind),
+		symbol_namespace, id);
 	if (written <= 0 || static_cast<size_t>(written) >= sizeof(symbol.name)) {
 		return false;
 	}
@@ -1349,6 +1355,7 @@ bool prepare_image_symbols(
 		if (helper == nullptr
 				|| !image_add_symbol(image,
 					ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER, id,
+					0,
 					plan->runtime->abi_version, helper->effects)) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
@@ -1362,6 +1369,7 @@ bool prepare_image_symbols(
 				&& !image_add_symbol(image,
 					ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
 					instruction.call_site.target_id,
+					plan->symbol_namespace,
 					NATIVE_IMAGE_ABI_VERSION, 0,
 					instruction.entry_cell)) {
 			zend_tpde_set_diagnostic(diag,
@@ -1373,6 +1381,7 @@ bool prepare_image_symbols(
 				&& !image_add_symbol(image,
 					ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL,
 					instruction.call_site.target_id,
+					plan->symbol_namespace,
 					NATIVE_IMAGE_ABI_VERSION, 0,
 					instruction.internal_call_cell)) {
 			zend_tpde_set_diagnostic(diag,
@@ -1383,7 +1392,8 @@ bool prepare_image_symbols(
 		if (instruction.direct_call != nullptr
 				&& !image_add_symbol(image,
 					ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR,
-					instruction.id, NATIVE_IMAGE_ABI_VERSION, 0,
+					instruction.id, plan->symbol_namespace,
+					NATIVE_IMAGE_ABI_VERSION, 0,
 					instruction.direct_call)) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
@@ -1393,7 +1403,8 @@ bool prepare_image_symbols(
 		if (instruction.direct_internal_call != nullptr
 				&& !image_add_symbol(image,
 					ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
-					instruction.id, NATIVE_IMAGE_ABI_VERSION, 0,
+					instruction.id, plan->symbol_namespace,
+					NATIVE_IMAGE_ABI_VERSION, 0,
 					instruction.direct_internal_call)) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
@@ -1403,7 +1414,8 @@ bool prepare_image_symbols(
 		if (instruction.user_call != nullptr
 				&& !image_add_symbol(image,
 					ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
-					instruction.id, NATIVE_IMAGE_ABI_VERSION, 0,
+					instruction.id, plan->symbol_namespace,
+					NATIVE_IMAGE_ABI_VERSION, 0,
 					instruction.user_call)) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
@@ -2110,6 +2122,7 @@ bool initialize_plan(
 		plan->instructions[i].id = record.id;
 		plan->instructions[i].view_index = i;
 		plan->instructions[i].operand_count = count;
+		plan->instructions[i].component_target_index = UINT32_MAX;
 		plan->instructions[i].exception_block_id = ZEND_MIR_ID_INVALID;
 		plan->instructions[i].zval_store_storage_id = ZEND_MIR_ID_INVALID;
 		plan->instructions[i].runtime_helper = ZEND_NATIVE_HELPER_COUNT;
@@ -3210,6 +3223,8 @@ bool initialize_plan(
 				}
 				plan->instructions[i].entry_cell =
 					user_bindings[binding_index].entry_cell;
+				plan->instructions[i].component_target_index =
+					user_bindings[binding_index].component_target_index;
 				bool direct_descriptor =
 					!fragment_call
 					&& (target.kind == ZEND_MIR_CALL_TARGET_DIRECT_USER
@@ -4387,13 +4402,15 @@ bool zend_tpde_image_u64(zend_native_image *image, uint64_t value) {
 const zend_native_image_symbol *zend_tpde_image_symbol_find(
 	const zend_native_image *image,
 	zend_native_image_symbol_kind kind,
-	uint32_t id) {
+	uint32_t id,
+	uint32_t symbol_namespace) {
 	if (image == nullptr) {
 		return nullptr;
 	}
 	for (uint32_t index = 0; index < image->symbol_count; ++index) {
 		const zend_native_image_symbol &symbol = image->symbols[index];
-		if (symbol.kind == kind && symbol.id == id) {
+		if (symbol.kind == kind && symbol.id == id
+				&& symbol.symbol_namespace == symbol_namespace) {
 			return &symbol;
 		}
 	}
@@ -4537,22 +4554,57 @@ extern "C" zend_result zend_tpde_compile_module_w08_with_runtime(
 	const zend_native_runtime_api *runtime,
 	zend_native_image **out_image,
 	zend_native_diagnostic *diag) {
+	const zend_native_component_member member{
+		.module = module,
+		.user_bindings = user_bindings,
+		.user_binding_count = user_binding_count,
+		.internal_bindings = internal_bindings,
+		.internal_binding_count = internal_binding_count,
+		.effects = effects,
+		.effect_count = effect_count,
+		.frame_argument_count = frame_argument_count,
+		.source_op_array = source_op_array,
+		.source_ssa = source_ssa,
+	};
+	return zend_tpde_compile_component_w14_with_runtime(
+		target, &member, 1, runtime, out_image, diag);
+}
+
+extern "C" zend_result zend_tpde_compile_component_w14_with_runtime(
+	zend_native_target target,
+	const zend_native_component_member *members,
+	uint32_t member_count,
+	const zend_native_runtime_api *runtime,
+	zend_native_image **out_image,
+	zend_native_diagnostic *diag) {
 	if (diag != nullptr) {
 		std::memset(diag, 0, sizeof(*diag));
 	}
-	if (module == nullptr || out_image == nullptr
-			|| runtime == nullptr
-			|| (user_binding_count != 0 && user_bindings == nullptr)
-			|| (internal_binding_count != 0 && internal_bindings == nullptr)
-			|| (effect_count != 0 && effects == nullptr)
-			|| !checked_count(user_binding_count)
-			|| !checked_count(internal_binding_count)
-			|| !checked_count(effect_count)
-			|| (frame_argument_count != UINT32_MAX
-				&& !checked_count(frame_argument_count))) {
+	if (members == nullptr || member_count == 0
+			|| !checked_count(member_count)
+			|| out_image == nullptr || runtime == nullptr) {
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
-			"module and out_image are required");
+			"component members, runtime and out_image are required");
 		return FAILURE;
+	}
+	for (uint32_t index = 0; index < member_count; ++index) {
+		const zend_native_component_member &member = members[index];
+		if (member.module == nullptr
+				|| (member.user_binding_count != 0
+					&& member.user_bindings == nullptr)
+				|| (member.internal_binding_count != 0
+					&& member.internal_bindings == nullptr)
+				|| (member.effect_count != 0 && member.effects == nullptr)
+				|| !checked_count(member.user_binding_count)
+				|| !checked_count(member.internal_binding_count)
+				|| !checked_count(member.effect_count)
+				|| (member.frame_argument_count != UINT32_MAX
+					&& !checked_count(member.frame_argument_count))) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
+				"native component member is invalid");
+			return FAILURE;
+		}
 	}
 	*out_image = nullptr;
 	if (target != ZEND_NATIVE_TARGET_DARWIN_ARM64
@@ -4562,60 +4614,205 @@ extern "C" zend_result zend_tpde_compile_module_w08_with_runtime(
 		return FAILURE;
 	}
 
-	zend_tpde_plan plan{};
-	if (!initialize_plan(
-			module, runtime, user_bindings, user_binding_count,
-			internal_bindings, internal_binding_count, effects, effect_count,
-			frame_argument_count, source_op_array, source_ssa,
-			&plan, diag)) {
-		destroy_plan(&plan);
+	auto *plans = static_cast<zend_tpde_plan *>(
+		std::calloc(member_count, sizeof(zend_tpde_plan)));
+	auto *plan_refs = static_cast<const zend_tpde_plan **>(
+		std::calloc(member_count, sizeof(zend_tpde_plan *)));
+	if (plans == nullptr || plan_refs == nullptr) {
+		std::free(plans);
+		std::free(plan_refs);
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"unable to allocate native component plans");
+		return FAILURE;
+	}
+	uint32_t initialized = 0;
+	for (; initialized < member_count; ++initialized) {
+		const zend_native_component_member &member = members[initialized];
+		if (!initialize_plan(
+				member.module, runtime,
+				member.user_bindings, member.user_binding_count,
+				member.internal_bindings, member.internal_binding_count,
+				member.effects, member.effect_count,
+				member.frame_argument_count,
+				member.source_op_array, member.source_ssa,
+				&plans[initialized], diag)) {
+			break;
+		}
+		plans[initialized].symbol_namespace = initialized;
+		plan_refs[initialized] = &plans[initialized];
+	}
+	if (initialized != member_count) {
+		for (uint32_t index = 0; index <= initialized; ++index) {
+			destroy_plan(&plans[index]);
+		}
+		std::free(plan_refs);
+		std::free(plans);
 		return FAILURE;
 	}
 	zend_native_image *image = static_cast<zend_native_image *>(
 		std::calloc(1, sizeof(*image)));
 	if (image == nullptr) {
-		destroy_plan(&plan);
+		for (uint32_t index = 0; index < member_count; ++index) {
+			destroy_plan(&plans[index]);
+		}
+		std::free(plan_refs);
+		std::free(plans);
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
 			"unable to allocate a native image");
 		return FAILURE;
 	}
 	image->target = target;
 	image->abi_version = NATIVE_IMAGE_ABI_VERSION;
-	image->runtime_abi_version = plan.runtime->abi_version;
+	image->runtime_abi_version = runtime->abi_version;
 	image->build_id = native_image_build_id(target);
 	image->code_version = next_native_code_version.fetch_add(
 		1, std::memory_order_relaxed);
 	/* TPDE liveness and register allocation own temporaries; the reserved ABI
 	 * pointer remains present for compatibility but no value-slot array is used. */
 	image->slot_count = 0;
-	image->argument_count = plan.argument_count;
-	image->frame_variable_count = source_op_array != nullptr
-		? static_cast<uint32_t>(source_op_array->last_var)
-		: plan.argument_count;
+	image->argument_count = plans[0].argument_count;
+	image->frame_variable_count = members[0].source_op_array != nullptr
+		? static_cast<uint32_t>(members[0].source_op_array->last_var)
+		: plans[0].argument_count;
 	image->frame_temporary_count =
-		source_op_array != nullptr ? source_op_array->T : 0;
-	image->metrics = collect_plan_metrics(plan);
-	zend_result result = prepare_image_symbols(&plan, image, diag)
+		members[0].source_op_array != nullptr
+			? members[0].source_op_array->T : 0;
+	image->component_entries = static_cast<zend_native_component_entry *>(
+		std::calloc(member_count, sizeof(*image->component_entries)));
+	if (image->component_entries == nullptr) {
+		for (uint32_t index = 0; index < member_count; ++index) {
+			destroy_plan(&plans[index]);
+		}
+		std::free(plan_refs);
+		std::free(plans);
+		zend_native_image_destroy(image);
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"unable to allocate native component entry metadata");
+		return FAILURE;
+	}
+	image->component_entry_count = member_count;
+	for (uint32_t index = 0; index < member_count; ++index) {
+		image->component_entries[index].argument_count =
+			plans[index].argument_count;
+		image->component_entries[index].frame_variable_count =
+			members[index].source_op_array != nullptr
+				? static_cast<uint32_t>(
+					members[index].source_op_array->last_var)
+				: plans[index].argument_count;
+		image->component_entries[index].frame_temporary_count =
+			members[index].source_op_array != nullptr
+				? members[index].source_op_array->T : 0;
+	}
+	bool symbols_ready = true;
+	for (uint32_t index = 0; index < member_count; ++index) {
+		const zend_native_image_metrics metrics =
+			collect_plan_metrics(plans[index]);
+		image->metrics.runtime_helper_sites += metrics.runtime_helper_sites;
+		image->metrics.source_opline_decode_sites +=
+			metrics.source_opline_decode_sites;
+		image->metrics.guard_sites += metrics.guard_sites;
+		image->metrics.slow_path_sites += metrics.slow_path_sites;
+		image->metrics.direct_call_sites += metrics.direct_call_sites;
+		image->metrics.direct_leaf_scalar_sites +=
+			metrics.direct_leaf_scalar_sites;
+		image->metrics.direct_call_frame_bytes +=
+			metrics.direct_call_frame_bytes;
+		if (!prepare_image_symbols(&plans[index], image, diag)) {
+			symbols_ready = false;
+			break;
+		}
+	}
+	zend_result result = symbols_ready
 		? target == ZEND_NATIVE_TARGET_DARWIN_ARM64
-			? zend_tpde_emit_darwin_arm64(&plan, image, diag)
-			: zend_tpde_emit_linux_x64(&plan, image, diag)
+			? zend_tpde_emit_darwin_arm64(
+				plan_refs, member_count, image, diag)
+			: zend_tpde_emit_linux_x64(
+				plan_refs, member_count, image, diag)
 		: FAILURE;
 	if (result == SUCCESS) {
-		image->direct_calls = plan.direct_calls;
-		image->direct_call_count = plan.direct_call_count;
-		plan.direct_calls = nullptr;
-		plan.direct_call_count = 0;
-		image->direct_internal_calls = plan.direct_internal_calls;
-		image->direct_internal_call_count = plan.direct_internal_call_count;
-		plan.direct_internal_calls = nullptr;
-		plan.direct_internal_call_count = 0;
-		image->user_calls = plan.user_calls;
-		image->user_call_count = plan.user_call_count;
-		plan.user_calls = nullptr;
-		plan.user_call_count = 0;
+		uint32_t direct_count = 0;
+		uint32_t direct_internal_count = 0;
+		uint32_t user_count = 0;
+		for (uint32_t index = 0; index < member_count; ++index) {
+			if (plans[index].direct_call_count > MAX_RECORDS - direct_count
+					|| plans[index].direct_internal_call_count
+						> MAX_RECORDS - direct_internal_count
+					|| plans[index].user_call_count
+						> MAX_RECORDS - user_count) {
+				result = FAILURE;
+				break;
+			}
+			direct_count += plans[index].direct_call_count;
+			direct_internal_count += plans[index].direct_internal_call_count;
+			user_count += plans[index].user_call_count;
+		}
+		if (result == SUCCESS) {
+			image->direct_calls = direct_count == 0 ? nullptr
+				: static_cast<zend_native_direct_call_descriptor **>(
+					std::calloc(direct_count, sizeof(*image->direct_calls)));
+			image->direct_internal_calls =
+				direct_internal_count == 0 ? nullptr
+				: static_cast<zend_native_direct_internal_call_descriptor **>(
+					std::calloc(direct_internal_count,
+						sizeof(*image->direct_internal_calls)));
+			image->user_calls = user_count == 0 ? nullptr
+				: static_cast<zend_native_user_call_descriptor **>(
+					std::calloc(user_count, sizeof(*image->user_calls)));
+			if ((direct_count != 0 && image->direct_calls == nullptr)
+					|| (direct_internal_count != 0
+						&& image->direct_internal_calls == nullptr)
+					|| (user_count != 0 && image->user_calls == nullptr)) {
+				result = FAILURE;
+			}
+		}
+		if (result == SUCCESS) {
+			for (uint32_t index = 0; index < member_count; ++index) {
+				if (plans[index].direct_call_count != 0) {
+					std::memcpy(
+						image->direct_calls + image->direct_call_count,
+						plans[index].direct_calls,
+						static_cast<size_t>(plans[index].direct_call_count)
+							* sizeof(*image->direct_calls));
+				}
+				image->direct_call_count += plans[index].direct_call_count;
+				plans[index].direct_call_count = 0;
+				if (plans[index].direct_internal_call_count != 0) {
+					std::memcpy(
+						image->direct_internal_calls
+							+ image->direct_internal_call_count,
+						plans[index].direct_internal_calls,
+						static_cast<size_t>(
+							plans[index].direct_internal_call_count)
+							* sizeof(*image->direct_internal_calls));
+				}
+				image->direct_internal_call_count +=
+					plans[index].direct_internal_call_count;
+				plans[index].direct_internal_call_count = 0;
+				if (plans[index].user_call_count != 0) {
+					std::memcpy(
+						image->user_calls + image->user_call_count,
+						plans[index].user_calls,
+						static_cast<size_t>(plans[index].user_call_count)
+							* sizeof(*image->user_calls));
+				}
+				image->user_call_count += plans[index].user_call_count;
+				plans[index].user_call_count = 0;
+			}
+		}
 	}
-	destroy_plan(&plan);
+	for (uint32_t index = 0; index < member_count; ++index) {
+		destroy_plan(&plans[index]);
+	}
+	std::free(plan_refs);
+	std::free(plans);
 	if (result == FAILURE) {
+		if (diag != nullptr && diag->code == ZEND_NATIVE_DIAGNOSTIC_OK) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+				"unable to retain native component metadata");
+		}
 		zend_native_image_destroy(image);
 		return FAILURE;
 	}
@@ -4640,6 +4837,9 @@ extern "C" zend_result zend_native_image_serialize(
 			|| image->text_size > MAX_NATIVE_IMAGE_BYTES
 			|| !checked_count(image->symbol_count)
 			|| !checked_count(image->symbol_binding_count)
+			|| image->component_entry_count == 0
+			|| !checked_count(image->component_entry_count)
+			|| image->component_entries == nullptr
 			|| !checked_count(image->frame_variable_count)
 			|| !checked_count(image->frame_temporary_count)
 			|| image->frame_variable_count < image->argument_count
@@ -4652,6 +4852,21 @@ extern "C" zend_result zend_native_image_serialize(
 	}
 	*out_bytes = nullptr;
 	*out_size = 0;
+	for (uint32_t index = 0;
+			index < image->component_entry_count; ++index) {
+		const zend_native_component_entry &entry =
+			image->component_entries[index];
+		if (!checked_count(entry.frame_variable_count)
+				|| !checked_count(entry.frame_temporary_count)
+				|| entry.frame_variable_count < entry.argument_count
+				|| entry.frame_temporary_count
+					> MAX_RECORDS - entry.frame_variable_count) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
+				"native component metadata cannot be serialized");
+			return FAILURE;
+		}
+	}
 	header.magic = NATIVE_IMAGE_SERIAL_MAGIC;
 	header.format = NATIVE_IMAGE_SERIAL_FORMAT;
 	header.target = static_cast<uint32_t>(image->target);
@@ -4667,13 +4882,18 @@ extern "C" zend_result zend_native_image_serialize(
 	header.text_size = image->text_size;
 	header.symbol_count = image->symbol_count;
 	header.binding_count = image->symbol_binding_count;
+	header.component_count = image->component_entry_count;
 	if (!native_buffer_append(&buffer, &header, sizeof(header))
 			|| !native_buffer_append(
 				&buffer, image->text, image->text_size)
 			|| !native_buffer_append(
 				&buffer, image->symbols,
 				static_cast<size_t>(image->symbol_count)
-					* sizeof(*image->symbols))) {
+					* sizeof(*image->symbols))
+			|| !native_buffer_append(
+				&buffer, image->component_entries,
+				static_cast<size_t>(image->component_entry_count)
+					* sizeof(*image->component_entries))) {
 		goto allocation_failure;
 	}
 	for (uint32_t symbol_index = 0;
@@ -4829,6 +5049,7 @@ extern "C" zend_result zend_native_image_deserialize(
 	zend_native_image *image = nullptr;
 	size_t offset;
 	size_t symbol_bytes = 0;
+	size_t component_bytes = 0;
 	bool *bound = nullptr;
 
 	if (bytes == nullptr || out_image == nullptr
@@ -4851,6 +5072,8 @@ extern "C" zend_result zend_native_image_deserialize(
 			|| !checked_count(header.symbol_count)
 			|| !checked_count(header.binding_count)
 			|| header.binding_count > header.symbol_count
+			|| header.component_count == 0
+			|| !checked_count(header.component_count)
 			|| !checked_count(header.frame_variable_count)
 			|| !checked_count(header.frame_temporary_count)
 			|| header.frame_variable_count < header.argument_count
@@ -4866,6 +5089,13 @@ extern "C" zend_result zend_native_image_deserialize(
 		static_cast<size_t>(header.symbol_count)
 			* sizeof(zend_native_image_symbol);
 	if (symbol_bytes > size - offset - header.text_size) {
+		goto invalid_image;
+	}
+	component_bytes =
+		static_cast<size_t>(header.component_count)
+			* sizeof(zend_native_component_entry);
+	if (component_bytes
+			> size - offset - header.text_size - symbol_bytes) {
 		goto invalid_image;
 	}
 	image = static_cast<zend_native_image *>(
@@ -4907,6 +5137,27 @@ extern "C" zend_result zend_native_image_deserialize(
 		std::memcpy(image->symbols, bytes + offset, symbol_bytes);
 	}
 	offset += symbol_bytes;
+	image->component_entries = static_cast<zend_native_component_entry *>(
+		std::malloc(component_bytes));
+	if (image->component_entries == nullptr) {
+		goto allocation_failure;
+	}
+	std::memcpy(
+		image->component_entries, bytes + offset, component_bytes);
+	image->component_entry_count = header.component_count;
+	offset += component_bytes;
+	for (uint32_t index = 0;
+			index < image->component_entry_count; ++index) {
+		const zend_native_component_entry &entry =
+			image->component_entries[index];
+		if (!checked_count(entry.frame_variable_count)
+				|| !checked_count(entry.frame_temporary_count)
+				|| entry.frame_variable_count < entry.argument_count
+				|| entry.frame_temporary_count
+					> MAX_RECORDS - entry.frame_variable_count) {
+			goto invalid_image;
+		}
+	}
 	if (header.binding_count != 0) {
 		image->symbol_bindings =
 			static_cast<zend_native_image_symbol_binding *>(
@@ -5180,6 +5431,12 @@ extern "C" zend_result zend_native_publish_image(
 		live_unwind_registrations.fetch_add(1, std::memory_order_relaxed);
 	}
 	if (result == SUCCESS && *out_code != nullptr) {
+		(*out_code)->owner = *out_code;
+		(*out_code)->owner_refcount = 1;
+		(*out_code)->component_metadata = image->component_entries;
+		(*out_code)->component_entry_count = image->component_entry_count;
+		image->component_entries = nullptr;
+		image->component_entry_count = 0;
 		/*
 		 * Direct-call descriptors are resolved into process-local relocation
 		 * slots at publication. Transfer their storage with the mapping so
@@ -5352,6 +5609,7 @@ extern "C" void zend_native_image_destroy(zend_native_image *image) {
 			std::free(image->owned_internal_call_cells[index]);
 		}
 		std::free(image->owned_internal_call_cells);
+		std::free(image->component_entries);
 		if (image->destroy_target_state != nullptr) {
 			image->destroy_target_state(image->target_state);
 		}
@@ -5366,36 +5624,97 @@ extern "C" void zend_native_code_destroy(zend_native_code *code) {
 	if (code == nullptr) {
 		return;
 	}
-	for (uint32_t index = 0; index < code->direct_call_count; ++index) {
-		std::free(code->direct_calls[index]);
+	zend_native_code *owner = code->owner != nullptr ? code->owner : code;
+	const uint32_t previous = __atomic_fetch_sub(
+		&owner->owner_refcount, 1, __ATOMIC_ACQ_REL);
+	ZEND_ASSERT(previous != 0);
+	if (code != owner) {
+		std::free(code);
 	}
-	std::free(code->direct_calls);
+	if (previous != 1) {
+		return;
+	}
+	for (uint32_t index = 0; index < owner->direct_call_count; ++index) {
+		std::free(owner->direct_calls[index]);
+	}
+	std::free(owner->direct_calls);
 	for (uint32_t index = 0;
-			index < code->direct_internal_call_count; ++index) {
-		std::free(code->direct_internal_calls[index]);
+			index < owner->direct_internal_call_count; ++index) {
+		std::free(owner->direct_internal_calls[index]);
 	}
-	std::free(code->direct_internal_calls);
-	for (uint32_t index = 0; index < code->user_call_count; ++index) {
-		std::free(code->user_calls[index]);
+	std::free(owner->direct_internal_calls);
+	for (uint32_t index = 0; index < owner->user_call_count; ++index) {
+		std::free(owner->user_calls[index]);
 	}
-	std::free(code->user_calls);
+	std::free(owner->user_calls);
 	for (uint32_t index = 0;
-			index < code->owned_internal_call_cell_count; ++index) {
-		std::free(code->owned_internal_call_cells[index]);
+			index < owner->owned_internal_call_cell_count; ++index) {
+		std::free(owner->owned_internal_call_cells[index]);
 	}
-	std::free(code->owned_internal_call_cells);
-	if (code->unwind_registered) {
-		uint32_t previous = live_unwind_registrations.fetch_sub(
+	std::free(owner->owned_internal_call_cells);
+	std::free(owner->component_entries);
+	std::free(owner->component_metadata);
+	if (owner->unwind_registered) {
+		uint32_t unwind_previous = live_unwind_registrations.fetch_sub(
 			1, std::memory_order_relaxed);
-		ZEND_ASSERT(previous != 0);
-		code->unwind_registered = false;
+		ZEND_ASSERT(unwind_previous != 0);
+		owner->unwind_registered = false;
 	}
-	if (code->target == ZEND_NATIVE_TARGET_DARWIN_ARM64) {
-		zend_native_unmap_darwin_arm64(code);
-	} else if (code->target == ZEND_NATIVE_TARGET_LINUX_AMD64) {
-		zend_native_unmap_linux_x64(code);
+	if (owner->target == ZEND_NATIVE_TARGET_DARWIN_ARM64) {
+		zend_native_unmap_darwin_arm64(owner);
+	} else if (owner->target == ZEND_NATIVE_TARGET_LINUX_AMD64) {
+		zend_native_unmap_linux_x64(owner);
 	}
-	std::free(code);
+	std::free(owner);
+}
+
+extern "C" zend_result zend_native_code_component_view(
+	zend_native_code *code,
+	uint32_t component_index,
+	zend_native_code **out_view,
+	zend_native_diagnostic *diag) {
+	if (code == nullptr || out_view == nullptr) {
+		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
+			"native code and output view are required");
+		return FAILURE;
+	}
+	zend_native_code *owner = code->owner != nullptr ? code->owner : code;
+	if (component_index >= owner->component_entry_count
+			|| owner->component_entries == nullptr
+			|| owner->component_metadata == nullptr) {
+		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
+			"native component entry index is outside the published image");
+		return FAILURE;
+	}
+	if (component_index == 0 && code == owner) {
+		*out_view = code;
+		return SUCCESS;
+	}
+	zend_native_code *view = static_cast<zend_native_code *>(
+		std::calloc(1, sizeof(*view)));
+	if (view == nullptr) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"unable to allocate native component code view");
+		return FAILURE;
+	}
+	view->target = owner->target;
+	view->owner = owner;
+	view->mapping = owner->mapping;
+	view->mapping_size = owner->mapping_size;
+	view->entry = owner->component_entries[component_index];
+	view->slot_count = owner->slot_count;
+	view->argument_count =
+		owner->component_metadata[component_index].argument_count;
+	view->frame_variable_count =
+		owner->component_metadata[component_index].frame_variable_count;
+	view->frame_temporary_count =
+		owner->component_metadata[component_index].frame_temporary_count;
+	view->writable = owner->writable;
+	view->executable = owner->executable;
+	__atomic_fetch_add(&owner->owner_refcount, 1, __ATOMIC_RELAXED);
+	*out_view = view;
+	return SUCCESS;
 }
 
 extern "C" const char *zend_native_target_id(zend_native_target target) {
@@ -5411,6 +5730,10 @@ extern "C" size_t zend_native_image_size(const zend_native_image *image) {
 }
 extern "C" const unsigned char *zend_native_image_bytes(const zend_native_image *image) {
 	return image == nullptr ? nullptr : image->text;
+}
+extern "C" uint32_t zend_native_image_component_count(
+		const zend_native_image *image) {
+	return image == nullptr ? 0 : image->component_entry_count;
 }
 extern "C" void zend_native_image_get_metrics(
 		const zend_native_image *image, zend_native_image_metrics *metrics) {

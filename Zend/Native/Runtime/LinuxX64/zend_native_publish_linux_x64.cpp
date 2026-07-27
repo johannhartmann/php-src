@@ -10,6 +10,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <limits>
+#include <string>
 #include <vector>
 
 #if defined(__linux__) && defined(__x86_64__)
@@ -483,17 +484,49 @@ zend_result map_linux_x64_object(
 		}
 	}
 
-	void *entry = nullptr;
+	if (image->component_entry_count == 0) {
+		destroy_linux_x64_published_state(state);
+		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
+			"Linux native image contains no component entries");
+		return FAILURE;
+	}
+	code->component_entries = static_cast<zend_native_frame_entry_t *>(
+		std::calloc(image->component_entry_count,
+			sizeof(*code->component_entries)));
+	if (code->component_entries == nullptr) {
+		destroy_linux_x64_published_state(state);
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"unable to allocate Linux component entry table");
+		return FAILURE;
+	}
+	uint32_t mapped_entry_count = 0;
 	for (size_t i = 0; i < symbol_count && success; ++i) {
 		const char *name =
 			string_at(symbol_names, symbol_names_size, symbols[i].st_name);
-		if (name != nullptr && std::strcmp(name, "zend_native_entry") == 0
-				&& symbols[i].st_shndx != SHN_UNDEF) {
-			entry = reinterpret_cast<void *>(resolve_symbol(i));
+		if (name == nullptr || symbols[i].st_shndx == SHN_UNDEF) {
+			continue;
+		}
+		for (uint32_t index = 0;
+				index < image->component_entry_count; ++index) {
+			const std::string expected = index == 0
+				? "zend_native_entry"
+				: "zend_native_component_" + std::to_string(index);
+			if (expected != name || code->component_entries[index] != nullptr) {
+				continue;
+			}
+			code->component_entries[index] =
+				reinterpret_cast<zend_native_frame_entry_t>(
+					resolve_symbol(i));
+			if (code->component_entries[index] != nullptr) {
+				mapped_entry_count++;
+			}
 			break;
 		}
 	}
-	if (!success || entry == nullptr) {
+	if (!success || mapped_entry_count != image->component_entry_count) {
+		std::free(code->component_entries);
+		code->component_entries = nullptr;
 		destroy_linux_x64_published_state(state);
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
 			"Linux native image contains unresolved symbols or relocations");
@@ -532,7 +565,8 @@ zend_result map_linux_x64_object(
 	}
 	code->mapping = state->mapping;
 	code->mapping_size = state->mapping_size;
-	code->entry = reinterpret_cast<zend_native_frame_entry_t>(entry);
+	code->entry = code->component_entries[0];
+	code->component_entry_count = image->component_entry_count;
 	code->unwind_registered = state->unwind_registered;
 	code->target_state = state;
 	code->destroy_target_state = destroy_linux_x64_published_state;
@@ -570,6 +604,7 @@ zend_result zend_native_publish_linux_x64(
 	code->frame_variable_count = image->frame_variable_count;
 	code->frame_temporary_count = image->frame_temporary_count;
 	if (map_linux_x64_object(image, code, diag) == FAILURE) {
+		std::free(code->component_entries);
 		std::free(code);
 		return FAILURE;
 	}

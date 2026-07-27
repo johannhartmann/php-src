@@ -2274,6 +2274,385 @@ static void zend_native_compiler_fail_pending_component(
 	}
 }
 
+typedef struct _zend_native_component_build_member {
+	zend_native_compiled_function *function;
+	zend_native_component_member backend;
+	zend_native_call_binding *bindings;
+	zend_native_internal_call_binding *internal_bindings;
+} zend_native_component_build_member;
+
+static uint32_t zend_native_compiler_component_member_index(
+	const zend_native_component_build_member *members,
+	uint32_t member_count,
+	const zend_native_compiled_function *function)
+{
+	uint32_t index;
+
+	for (index = 0; index < member_count; index++) {
+		if (members[index].function == function) {
+			return index;
+		}
+	}
+	return UINT32_MAX;
+}
+
+static void zend_native_compiler_free_component_build(
+	zend_native_component_build_member *members, uint32_t member_count)
+{
+	uint32_t index;
+
+	if (members == NULL) {
+		return;
+	}
+	for (index = 0; index < member_count; index++) {
+		efree(members[index].bindings);
+		efree(members[index].internal_bindings);
+	}
+	efree(members);
+}
+
+static bool zend_native_compiler_prepare_component_member(
+	zend_native_compiler *compiler,
+	zend_native_compiled_function *function,
+	zend_native_component_build_member *member,
+	const zend_native_component_build_member *component_members,
+	uint32_t component_member_count,
+	zend_native_compile_diagnostic *product_diagnostic)
+{
+	const zend_mir_call_view *calls =
+		zend_mir_module_get_call_view(function->module);
+	uint32_t target_count = calls != NULL
+		? calls->call_target_count(calls->context) : 0;
+	uint32_t target_index;
+
+	if (target_count != 0) {
+		member->bindings = safe_emalloc(
+			target_count, sizeof(*member->bindings), 0);
+		member->internal_bindings = safe_emalloc(
+			target_count, sizeof(*member->internal_bindings), 0);
+		function->internal_call_cells = zend_native_compiler_alloc(
+			compiler,
+			target_count * sizeof(*function->internal_call_cells), true);
+	}
+	for (target_index = 0; target_index < target_count; target_index++) {
+		zend_mir_call_target_ref target;
+		zend_op_array *callee;
+		zend_native_compiled_function *native_callee;
+
+		if (!calls->call_target_at(calls->context, target_index, &target)) {
+			return false;
+		}
+		if (target.kind == ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL) {
+			zend_function *internal;
+			const zend_op *init_opline = NULL;
+			zend_native_internal_receiver_kind receiver_kind =
+				ZEND_NATIVE_INTERNAL_RECEIVER_NONE;
+			zend_class_entry *called_scope = NULL;
+
+			internal = zend_native_compiler_resolve_internal_target(
+				compiler, function, calls, &target, &init_opline);
+			if (internal == NULL || init_opline == NULL) {
+				return false;
+			}
+			if (init_opline->opcode == ZEND_INIT_METHOD_CALL) {
+				if (init_opline->op1_type == IS_UNUSED) {
+					receiver_kind =
+						ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS;
+				} else if (init_opline->op1_type == IS_CV
+						|| init_opline->op1_type == IS_VAR
+						|| init_opline->op1_type == IS_TMP_VAR) {
+					receiver_kind =
+						ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT;
+				} else {
+					zend_native_compiler_set_diagnostic(
+						compiler, product_diagnostic,
+						ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
+						ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
+						"native internal method receiver is unsupported");
+					return false;
+				}
+			} else if (init_opline->opcode == ZEND_INIT_STATIC_METHOD_CALL) {
+				receiver_kind = ZEND_NATIVE_INTERNAL_RECEIVER_CALLED_SCOPE;
+				called_scope = internal->common.scope;
+			} else if (init_opline->opcode != ZEND_INIT_FCALL
+					&& init_opline->opcode != ZEND_NEW) {
+				return false;
+			}
+			if (zend_native_internal_call_cell_init(
+					&function->internal_call_cells[
+						member->backend.internal_binding_count],
+					internal, called_scope, receiver_kind) == FAILURE) {
+				return false;
+			}
+			member->internal_bindings[
+				member->backend.internal_binding_count].target_id = target.id;
+			member->internal_bindings[
+				member->backend.internal_binding_count].call_cell =
+					&function->internal_call_cells[
+						member->backend.internal_binding_count];
+			member->backend.internal_binding_count++;
+			continue;
+		}
+		if (target.kind == ZEND_MIR_CALL_TARGET_DYNAMIC) {
+			member->bindings[member->backend.user_binding_count].target_id =
+				target.id;
+			member->bindings[
+				member->backend.user_binding_count].entry_cell =
+					&function->entry_cell;
+			member->bindings[
+				member->backend.user_binding_count].component_target_index =
+					UINT32_MAX;
+			member->bindings[
+				member->backend.user_binding_count].direct_native = false;
+			member->bindings[
+				member->backend.user_binding_count].leaf_scalar_frame = false;
+			member->backend.user_binding_count++;
+			continue;
+		}
+		callee = zend_native_compiler_resolve_native_target(
+			compiler, function, calls, &target);
+		native_callee = zend_native_compiler_find_function(compiler, callee);
+		if (native_callee == NULL
+				|| native_callee->state == ZEND_NATIVE_CODEUNIT_FAILED) {
+			return false;
+		}
+		member->bindings[member->backend.user_binding_count].target_id =
+			target.id;
+		member->bindings[member->backend.user_binding_count].entry_cell =
+			&native_callee->entry_cell;
+		member->bindings[
+			member->backend.user_binding_count].component_target_index =
+				zend_native_compiler_component_member_index(
+					component_members, component_member_count, native_callee);
+		member->bindings[member->backend.user_binding_count].direct_native =
+			zend_native_compiler_target_is_direct_native(
+				compiler, function, calls, &target, callee);
+		member->bindings[
+			member->backend.user_binding_count].leaf_scalar_frame =
+				member->bindings[
+					member->backend.user_binding_count].direct_native
+				&& zend_native_compiler_function_has_leaf_scalar_frame(
+					compiler, native_callee);
+		member->backend.user_binding_count++;
+	}
+	function->internal_call_cell_count =
+		member->backend.internal_binding_count;
+	member->backend.module =
+		zend_native_compiler_module_view(compiler, function->module);
+	member->backend.user_bindings = member->bindings;
+	member->backend.internal_bindings = member->internal_bindings;
+	member->backend.effects = function->source_effects;
+	member->backend.effect_count = function->source_effect_count;
+	member->backend.frame_argument_count = function->op_array->num_args;
+	member->backend.source_op_array = function->op_array;
+	member->backend.source_ssa = &function->ssa;
+	return true;
+}
+
+static bool zend_native_compiler_compile_shared_component(
+	zend_native_compiler *compiler,
+	uint32_t component_id,
+	zend_native_compile_diagnostic *product_diagnostic)
+{
+	zend_native_component_build_member *members;
+	zend_native_component_member *backend_members = NULL;
+	zend_native_compiled_function *function;
+	zend_native_image *image = NULL;
+	zend_native_code *owner_code = NULL;
+	zend_native_diagnostic diagnostic;
+	const zend_native_runtime_api *runtime = zend_native_runtime_get();
+	zend_native_runtime_api injected_runtime;
+	zend_native_runtime_helper injected_helpers[
+		ZEND_NATIVE_HELPER_COUNT - 1];
+	uint32_t member_count = 0;
+	uint32_t index = 0;
+	zend_hrtime_t phase_started;
+
+	for (function = compiler->component_heads[component_id];
+			function != NULL;
+			function = function->next_component_member) {
+		if (function->entry_cell.state != ZEND_NATIVE_ENTRY_READY
+				&& function->state != ZEND_NATIVE_CODEUNIT_FAILED) {
+			member_count++;
+		}
+	}
+	if (member_count == 0) {
+		return true;
+	}
+	members = ecalloc(member_count, sizeof(*members));
+	for (function = compiler->component_heads[component_id];
+			function != NULL;
+			function = function->next_component_member) {
+		if (function->entry_cell.state == ZEND_NATIVE_ENTRY_READY
+				|| function->state == ZEND_NATIVE_CODEUNIT_FAILED) {
+			continue;
+		}
+		members[index++].function = function;
+	}
+	for (index = 0; index < member_count; index++) {
+		if (!zend_native_compiler_prepare_component_member(
+				compiler, members[index].function, &members[index],
+				members, member_count,
+				product_diagnostic)) {
+			goto failure;
+		}
+	}
+	if (compiler->unavailable_runtime_helper != 0) {
+		uint32_t helper_index;
+
+		if (runtime->helper_count > ZEND_NATIVE_HELPER_COUNT - 1) {
+			goto failure;
+		}
+		memcpy(injected_helpers, runtime->helpers,
+			runtime->helper_count * sizeof(*injected_helpers));
+		for (helper_index = 0;
+				helper_index < runtime->helper_count; helper_index++) {
+			if (injected_helpers[helper_index].id
+					== compiler->unavailable_runtime_helper) {
+				injected_helpers[helper_index].address = NULL;
+				break;
+			}
+		}
+		if (helper_index == runtime->helper_count) {
+			goto failure;
+		}
+		injected_runtime = *runtime;
+		injected_runtime.helpers = injected_helpers;
+		runtime = &injected_runtime;
+	}
+	backend_members = safe_emalloc(
+		member_count, sizeof(*backend_members), 0);
+	for (index = 0; index < member_count; index++) {
+		backend_members[index] = members[index].backend;
+	}
+	memset(&diagnostic, 0, sizeof(diagnostic));
+	phase_started = zend_hrtime();
+	if (zend_tpde_compile_component_w14_with_runtime(
+			compiler->target, backend_members, member_count,
+			runtime, &image, &diagnostic) == FAILURE) {
+		compiler->stats.codegen_ns += zend_hrtime() - phase_started;
+		zend_native_compiler_backend_failure(
+			compiler, product_diagnostic,
+			ZEND_NATIVE_COMPILE_PHASE_CODEGEN, &diagnostic);
+		goto failure;
+	}
+	compiler->stats.codegen_ns += zend_hrtime() - phase_started;
+	members[0].function->image = image;
+	for (index = 0; index < member_count; index++) {
+		members[index].function->publish_pending = true;
+	}
+	{
+		zend_native_image_metrics image_metrics;
+
+		memset(&image_metrics, 0, sizeof(image_metrics));
+		zend_native_image_get_metrics(image, &image_metrics);
+		compiler->stats.native_code_bytes += zend_native_image_size(image);
+		compiler->stats.runtime_helper_sites +=
+			image_metrics.runtime_helper_sites;
+		compiler->stats.source_opline_decode_sites +=
+			image_metrics.source_opline_decode_sites;
+		compiler->stats.guard_sites += image_metrics.guard_sites;
+		compiler->stats.slow_path_sites += image_metrics.slow_path_sites;
+		compiler->stats.direct_call_sites += image_metrics.direct_call_sites;
+		compiler->stats.direct_leaf_scalar_sites +=
+			image_metrics.direct_leaf_scalar_sites;
+		compiler->stats.direct_call_frame_bytes +=
+			image_metrics.direct_call_frame_bytes;
+	}
+	if (compiler->fault == ZEND_NATIVE_COMPILE_FAULT_MAPPING) {
+		memset(&diagnostic, 0, sizeof(diagnostic));
+		diagnostic.code = ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED;
+		snprintf(diagnostic.message, sizeof(diagnostic.message),
+			"injected native mapping failure");
+		zend_native_compiler_backend_failure(
+			compiler, product_diagnostic,
+			ZEND_NATIVE_COMPILE_PHASE_PUBLISH, &diagnostic);
+		goto failure;
+	}
+	memset(&diagnostic, 0, sizeof(diagnostic));
+	phase_started = zend_hrtime();
+	if (zend_native_publish_image(
+			compiler->target, image, &owner_code,
+			&diagnostic) == FAILURE) {
+		compiler->stats.publish_ns += zend_hrtime() - phase_started;
+		zend_native_compiler_backend_failure(
+			compiler, product_diagnostic,
+			ZEND_NATIVE_COMPILE_PHASE_PUBLISH, &diagnostic);
+		goto failure;
+	}
+	compiler->stats.publish_ns += zend_hrtime() - phase_started;
+	members[0].function->code = owner_code;
+	for (index = 1; index < member_count; index++) {
+		memset(&diagnostic, 0, sizeof(diagnostic));
+		if (zend_native_code_component_view(
+				owner_code, index, &members[index].function->code,
+				&diagnostic) == FAILURE) {
+			zend_native_compiler_backend_failure(
+				compiler, product_diagnostic,
+				ZEND_NATIVE_COMPILE_PHASE_PUBLISH, &diagnostic);
+			goto failure;
+		}
+	}
+	for (index = 0; index < member_count; index++) {
+		if (zend_native_code_is_writable(members[index].function->code)
+				|| !zend_native_code_is_executable(
+					members[index].function->code)) {
+			zend_native_compiler_set_diagnostic(
+				compiler, product_diagnostic,
+				ZEND_NATIVE_COMPILE_PHASE_PUBLISH,
+				ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
+				"published component violates the W^X contract");
+			goto failure;
+		}
+	}
+	if (compiler->fault == ZEND_NATIVE_COMPILE_FAULT_ENTRY_PUBLISH) {
+		zend_native_compiler_set_diagnostic(
+			compiler, product_diagnostic,
+			ZEND_NATIVE_COMPILE_PHASE_PUBLISH,
+			ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
+			"injected entry-cell publication failure");
+		goto failure;
+	}
+	for (index = 0; index < member_count; index++) {
+		if (members[index].function->entry_cell.state
+				!= ZEND_NATIVE_ENTRY_COMPILING
+				|| zend_native_entry_cell_publish(
+					&members[index].function->entry_cell,
+					members[index].function->code) == FAILURE) {
+			goto failure;
+		}
+	}
+	for (index = 0; index < member_count; index++) {
+		members[index].function->state = ZEND_NATIVE_CODEUNIT_READY;
+		members[index].function->publish_pending = false;
+	}
+	function = compiler->component_heads[component_id];
+	while (function != NULL) {
+		zend_native_compiled_function *next =
+			function->next_component_member;
+
+		function->component_id = 0;
+		function->next_component_member = NULL;
+		function = next;
+	}
+	compiler->component_heads[component_id] = NULL;
+	compiler->published_component_count++;
+	efree(backend_members);
+	zend_native_compiler_free_component_build(members, member_count);
+	return true;
+
+failure:
+	if (product_diagnostic == NULL || product_diagnostic->message[0] == '\0') {
+		zend_native_compiler_backend_failure(
+			compiler, product_diagnostic,
+			ZEND_NATIVE_COMPILE_PHASE_CODEGEN, NULL);
+	}
+	efree(backend_members);
+	zend_native_compiler_free_component_build(members, member_count);
+	zend_native_compiler_fail_pending_component(compiler, component_id);
+	return false;
+}
+
 static bool zend_native_compiler_compile_native_component(
 	zend_native_compiler *compiler,
 	uint32_t component_id,
@@ -2281,6 +2660,11 @@ static bool zend_native_compiler_compile_native_component(
 {
 	zend_native_diagnostic diagnostic;
 	zend_native_compiled_function *function;
+
+	if (!compiler->defer_publication) {
+		return zend_native_compiler_compile_shared_component(
+			compiler, component_id, product_diagnostic);
+	}
 
 	for (function = compiler->component_heads[component_id];
 			function != NULL;
@@ -2376,6 +2760,7 @@ static bool zend_native_compiler_compile_native_component(
 			if (target.kind == ZEND_MIR_CALL_TARGET_DYNAMIC) {
 				bindings[binding_count].target_id = target.id;
 				bindings[binding_count].entry_cell = &function->entry_cell;
+				bindings[binding_count].component_target_index = UINT32_MAX;
 				bindings[binding_count].direct_native = false;
 				bindings[binding_count].leaf_scalar_frame = false;
 				binding_count++;
@@ -2391,6 +2776,7 @@ static bool zend_native_compiler_compile_native_component(
 			}
 			bindings[binding_count].target_id = target.id;
 			bindings[binding_count].entry_cell = &native_callee->entry_cell;
+			bindings[binding_count].component_target_index = UINT32_MAX;
 			bindings[binding_count].direct_native =
 				zend_native_compiler_target_is_direct_native(
 					compiler, function, calls, &target, callee);
