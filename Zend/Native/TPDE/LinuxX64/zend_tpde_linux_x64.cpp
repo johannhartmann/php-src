@@ -57,7 +57,9 @@ public:
 		tpde::RegBank bank;
 		uint32_t part_count;
 		uint32_t count() const { return part_count; }
-		uint32_t size_bytes(uint32_t) const { return 8; }
+		uint32_t size_bytes(uint32_t part) const {
+			return part_count == 2 && part == 1 ? 4 : 8;
+		}
 		tpde::RegBank reg_bank(uint32_t) const { return bank; }
 	};
 
@@ -1719,10 +1721,15 @@ bool ZendCompilerX64::compile_inst(
 				for (uint32_t part = 0; part < 2; ++part) {
 					auto value = result_value.part(part);
 					auto value_reg = value.alloc_reg();
-					ASM(MOV64rm, value_reg,
-						FE_MEM(address, 0, FE_NOREG,
-							offset + static_cast<int32_t>(
-								part * sizeof(uint64_t))));
+					if (part == 0) {
+						ASM(MOV64rm, value_reg,
+							FE_MEM(address, 0, FE_NOREG, offset));
+					} else {
+						ASM(MOV32rm, value_reg,
+							FE_MEM(address, 0, FE_NOREG,
+								offset + static_cast<int32_t>(
+									offsetof(zval, u1.type_info))));
+					}
 					value.set_modified();
 				}
 				return true;
@@ -2055,7 +2062,7 @@ bool ZendCompilerX64::compile_inst(
 				auto source_reg = source.load_to_reg();
 				auto result_reg = result.alloc_try_reuse(source);
 				if (source_reg != result_reg) {
-					mov(result_reg, source_reg, 8);
+					mov(result_reg, source_reg, part == 0 ? 8 : 4);
 				}
 				result.set_modified();
 			}
@@ -5978,13 +5985,18 @@ bool ZendCompilerX64::compile_inst(
 								ASM(MOV64mr,
 									FE_MEM(callee_reg, 0, FE_NOREG, offset),
 									low_word.cur_reg());
-								ASM(MOV64mr,
+								ASM(MOV32mr,
 									FE_MEM(callee_reg, 0, FE_NOREG,
 										offset + 8),
 									high_word.cur_reg());
+								ASM(MOV32mi,
+									FE_MEM(callee_reg, 0, FE_NOREG,
+										offset + static_cast<int32_t>(
+											offsetof(zval, u2))),
+									0);
 								ScratchReg type_info{this};
 								auto type_info_reg = type_info.alloc_gp();
-								ASM(MOV64rr, type_info_reg,
+								ASM(MOV32rr, type_info_reg,
 									high_word.cur_reg());
 								ASM(AND32ri, type_info_reg,
 									IS_TYPE_REFCOUNTED
@@ -6804,13 +6816,18 @@ bool ZendCompilerX64::compile_inst(
 								ASM(MOV64mr,
 									FE_MEM(callee_reg, 0, FE_NOREG, offset),
 									low_word.cur_reg());
-								ASM(MOV64mr,
+								ASM(MOV32mr,
 									FE_MEM(callee_reg, 0, FE_NOREG,
 										offset + 8),
 									high_word.cur_reg());
+								ASM(MOV32mi,
+									FE_MEM(callee_reg, 0, FE_NOREG,
+										offset + static_cast<int32_t>(
+											offsetof(zval, u2))),
+									0);
 								ScratchReg type_info{this};
 								auto type_info_reg = type_info.alloc_gp();
-								ASM(MOV64rr, type_info_reg,
+								ASM(MOV32rr, type_info_reg,
 									high_word.cur_reg());
 								ASM(AND32ri, type_info_reg,
 									IS_TYPE_REFCOUNTED
@@ -7580,10 +7597,17 @@ bool ZendCompilerX64::compile_inst(
 							for (uint32_t part = 0; part < 2; ++part) {
 								auto value = result.part(part);
 								auto value_reg = value.alloc_reg();
-								ASM(MOV64rm, value_reg,
-									FE_MEM(result_slot_reg, 0, FE_NOREG,
-										static_cast<int32_t>(
-											part * sizeof(uint64_t))));
+								if (part == 0) {
+									ASM(MOV64rm, value_reg,
+										FE_MEM(result_slot_reg, 0,
+											FE_NOREG, 0));
+								} else {
+									ASM(MOV32rm, value_reg,
+										FE_MEM(result_slot_reg, 0,
+											FE_NOREG,
+											static_cast<int32_t>(offsetof(
+												zval, u1.type_info))));
+								}
 								value.set_modified();
 							}
 						} else {
@@ -7653,10 +7677,15 @@ bool ZendCompilerX64::compile_inst(
 					for (uint32_t part = 0; part < 2; ++part) {
 						auto value = result.part(part);
 						auto value_reg = value.alloc_reg();
-						ASM(MOV64rm, value_reg,
-							FE_MEM(result_slot_reg, 0, FE_NOREG,
-								static_cast<int32_t>(
-									part * sizeof(uint64_t))));
+						if (part == 0) {
+							ASM(MOV64rm, value_reg,
+								FE_MEM(result_slot_reg, 0, FE_NOREG, 0));
+						} else {
+							ASM(MOV32rm, value_reg,
+								FE_MEM(result_slot_reg, 0, FE_NOREG,
+									static_cast<int32_t>(
+										offsetof(zval, u1.type_info))));
+						}
 						value.set_modified();
 					}
 				} else if (node.has_result) {
