@@ -2456,6 +2456,8 @@ static bool zend_native_compiler_compile_shared_component(
 		compiler->stats.direct_call_sites += image_metrics.direct_call_sites;
 		compiler->stats.direct_leaf_scalar_sites +=
 			image_metrics.direct_leaf_scalar_sites;
+		compiler->stats.direct_typed_body_sites +=
+			image_metrics.direct_typed_body_sites;
 		compiler->stats.direct_call_frame_bytes +=
 			image_metrics.direct_call_frame_bytes;
 	}
@@ -2768,6 +2770,8 @@ static bool zend_native_compiler_compile_native_component(
 		compiler->stats.direct_call_sites += image_metrics.direct_call_sites;
 		compiler->stats.direct_leaf_scalar_sites +=
 			image_metrics.direct_leaf_scalar_sites;
+		compiler->stats.direct_typed_body_sites +=
+			image_metrics.direct_typed_body_sites;
 		compiler->stats.direct_call_frame_bytes +=
 			image_metrics.direct_call_frame_bytes;
 		function->publish_pending = true;
@@ -3342,6 +3346,8 @@ void zend_native_compiler_get_stats(
 			compiler->stats.direct_call_sites;
 		stats->direct_leaf_scalar_sites =
 			compiler->stats.direct_leaf_scalar_sites;
+		stats->direct_typed_body_sites =
+			compiler->stats.direct_typed_body_sites;
 		stats->direct_call_frame_bytes =
 			compiler->stats.direct_call_frame_bytes;
 		stats->registered_codeunits =
@@ -4672,6 +4678,8 @@ zend_result zend_native_compiler_import_bundle(
 		compiler->stats.direct_call_sites += metrics.direct_call_sites;
 		compiler->stats.direct_leaf_scalar_sites +=
 			metrics.direct_leaf_scalar_sites;
+		compiler->stats.direct_typed_body_sites +=
+			metrics.direct_typed_body_sites;
 		compiler->stats.direct_call_frame_bytes +=
 			metrics.direct_call_frame_bytes;
 	}

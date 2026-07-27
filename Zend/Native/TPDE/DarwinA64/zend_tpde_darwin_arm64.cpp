@@ -5776,6 +5776,11 @@ bool ZendCompilerA64::compile_inst(
 					&& (call.direct_call->flags
 						& ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME) != 0;
 				const bool private_inline_body = leaf_scalar_frame;
+				const uint32_t typed_body_function =
+					local_component_call && generated_fast_path
+						? adaptor->typed_body_function_index(
+							call.component_target_index)
+						: UINT32_MAX;
 				const bool result_unused =
 					call.direct_call->result_operand.kind
 						== ZEND_MIR_SOURCE_OPERAND_UNUSED;
@@ -5844,8 +5849,17 @@ bool ZendCompilerA64::compile_inst(
 				const uint32_t slow_leave_context_use =
 					split_cold ? 2
 					: generated_fast_path ? (private_inline_body ? 4 : 6) : 2;
+				const bool typed_body_call =
+					typed_body_function != UINT32_MAX
+					&& node.kind == Adaptor::InstKind::GuardedFast
+					&& !node.inlined_user_body
+					&& zend_mir_scalar_type_is_exact(
+						call.direct_call->result_type)
+					&& call.direct_call->result_type
+						!= ZEND_MIR_SCALAR_TYPE_NULL;
 				if (generated_fast_path
-						&& node.kind == Adaptor::InstKind::GuardedFast) {
+						&& node.kind == Adaptor::InstKind::GuardedFast
+						&& !typed_body_call) {
 					const uint32_t inline_operand_count =
 						node.inlined_user_body
 							? (node.inlined_checked_source_opcode
@@ -5997,6 +6011,152 @@ bool ZendCompilerA64::compile_inst(
 				if (node.kind == Adaptor::InstKind::GuardedFast) {
 					auto spilled = spill_before_branch();
 					release_spilled_regs(spilled);
+				}
+				if (typed_body_call) {
+					const zend_tpde_plan *body_plan =
+						adaptor->component_plan(
+							call.component_target_index);
+					if (body_plan == nullptr
+							|| body_plan->argument_count != argument_count
+							|| typed_body_function
+								>= this->func_syms.size()
+							|| node.continuation_block == UINT32_MAX) {
+						return false;
+					}
+					for (uint32_t argument = 0;
+							argument < argument_count; ++argument) {
+						const int32_t body_value =
+							body_plan->argument_value_indices[argument];
+						if (body_value < 0
+								|| static_cast<uint32_t>(body_value)
+									>= body_plan->value_count
+								|| adaptor->exact_type(
+									node.operands[argument])
+									!= body_plan->values[
+										body_value].exact_type) {
+							return false;
+						}
+					}
+					auto [frame_ref, frame] =
+						val_ref_single(node.operands[frame_operand]);
+					auto frame_scratch =
+						std::move(frame).into_scratch();
+					auto [context_ref, context] =
+						val_ref_single(node.operands[context_operand]);
+					auto context_scratch =
+						std::move(context).into_scratch();
+					auto context_reg = context_scratch.cur_reg();
+					ScratchReg observed{this};
+					auto observed_reg = observed.alloc_gp();
+					load_off(observed_reg, context_reg,
+						static_cast<uint32_t>(offsetof(
+							zend_native_execution_context,
+							observers_enabled)), 1);
+					generate_raw_jump(
+						Jump{Jump::Cbnz, observed_reg, false},
+						call_slow_target());
+					observed.reset();
+					for (uint32_t use = 2;
+							use < frame_use_count; ++use) {
+						auto discarded = val_ref(
+							node.operands[frame_operand + use]);
+						(void) discarded;
+					}
+					const uint32_t context_use_count =
+						static_cast<uint32_t>(node.operands.size())
+							- context_operand;
+					for (uint32_t use = 1;
+							use < context_use_count; ++use) {
+						auto discarded = val_ref(
+							node.operands[context_operand + use]);
+						(void) discarded;
+					}
+					frame_scratch.reset();
+					context_scratch.reset();
+					zend::native::tpde::CCAssignerAppleA64 body_assigner;
+					CallBuilder body_builder{*this, body_assigner};
+					for (uint32_t argument = 0;
+							argument < argument_count; ++argument) {
+						body_builder.add_arg(
+							CallArg{node.operands[argument]});
+					}
+					body_builder.call(
+						this->func_syms[typed_body_function]);
+					ValuePart body_result{
+						call.direct_call->result_type
+								== ZEND_MIR_SCALAR_TYPE_F64
+							? DarwinConfig::FP_BANK
+							: DarwinConfig::GP_BANK,
+						8};
+					body_builder.add_ret(
+						body_result, ::tpde::CCAssignment{});
+					auto [post_frame_ref, post_frame] =
+						val_ref_single(
+							node.operands[frame_operand + 1]);
+					auto post_frame_scratch =
+						std::move(post_frame).into_scratch();
+					auto post_frame_reg =
+						post_frame_scratch.cur_reg();
+					if (!result_unused) {
+						ScratchReg result_slot{this};
+						auto result_slot_reg = result_slot.alloc_gp();
+						mov(result_slot_reg, post_frame_reg, 8);
+						if (call.direct_call->result_operand.slot_kind
+								== ZEND_MIR_SOURCE_SLOT_CV) {
+							add_offset(result_slot_reg, result_slot_reg,
+								static_cast<uint64_t>(
+									ZEND_CALL_FRAME_SLOT
+										+ call.direct_call
+											->result_operand.index)
+									* sizeof(zval));
+						} else {
+							ScratchReg slot_index{this};
+							auto slot_index_reg = slot_index.alloc_gp();
+							load_off(slot_index_reg, post_frame_reg,
+								static_cast<uint32_t>(
+									offsetof(zend_execute_data, func)), 8);
+							load_off(slot_index_reg, slot_index_reg,
+								static_cast<uint32_t>(
+									offsetof(zend_op_array, last_var)), 4);
+							add_unsigned_offset(slot_index_reg, slot_index_reg,
+								ZEND_CALL_FRAME_SLOT
+									+ call.direct_call
+										->result_operand.index);
+							ASM(LSLxi, slot_index_reg, slot_index_reg, 4);
+							ASM(ADDx, result_slot_reg,
+								result_slot_reg, slot_index_reg);
+						}
+						auto result_reg =
+							body_result.cur_reg_or_load(this);
+						store_off(result_slot_reg, 0, result_reg, 8);
+						ScratchReg kind{this};
+						auto kind_reg = kind.alloc_gp();
+						if (call.direct_call->result_type
+								== ZEND_MIR_SCALAR_TYPE_I1) {
+							ASM(ADDxi, kind_reg, result_reg, IS_FALSE);
+						} else {
+							materialize_constant(
+								zval_type(call.direct_call->result_type),
+								DarwinConfig::GP_BANK, 4, kind_reg);
+						}
+						store_off(result_slot_reg,
+							static_cast<uint32_t>(
+								offsetof(zval, u1.type_info)),
+							kind_reg, 4);
+					}
+					if (node.has_result) {
+						auto [result_ref, result] =
+							result_ref_single(node.result);
+						result.set_value(std::move(body_result));
+					} else {
+						body_result.reset(this);
+					}
+					post_frame_scratch.reset();
+					adaptor->mark_typed_body_call(
+						call.direct_call->frame_size);
+					generate_uncond_branch(
+						IRBlockRef{node.continuation_block});
+					return true;
 				}
 				if (generated_fast_path
 						&& node.kind != Adaptor::InstKind::GuardedCold) {
@@ -8246,6 +8406,19 @@ bool ZendCompilerA64::compile_inst(
 			return true;
 		}
 		case ZEND_MIR_OPCODE_RETURN: {
+			if (adaptor->typed_body()) {
+				if (node.operands.size() != 1) {
+					return false;
+				}
+				auto [value_ref, value] =
+					val_ref_single(node.operands[0]);
+				RetBuilder return_builder{
+					*this, *cur_cc_assigner()};
+				return_builder.add(
+					std::move(value), ::tpde::CCAssignment{});
+				return_builder.ret();
+				return true;
+			}
 			{
 			auto [value_ref, value] = val_ref_single(node.operands[0]);
 			auto [frame_ref, frame] = val_ref_single(node.operands[1]);
@@ -8300,6 +8473,19 @@ bool ZendCompilerA64::compile_inst(
 			return true;
 		}
 		case ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL: {
+			if (adaptor->typed_body()) {
+				if (node.operands.size() != 1) {
+					return false;
+				}
+				auto [value_ref, value] =
+					val_ref_single(node.operands[0]);
+				RetBuilder return_builder{
+					*this, *cur_cc_assigner()};
+				return_builder.add(
+					std::move(value), ::tpde::CCAssignment{});
+				return_builder.ret();
+				return true;
+			}
 			if (mir.direct_scalar_return) {
 				{
 					auto [frame_ref, frame] =
@@ -8731,6 +8917,11 @@ zend_result zend_tpde_emit_darwin_arm64(
 	}
 	image->metrics.direct_leaf_scalar_sites =
 		state->adaptor.inlined_user_body_count();
+	image->metrics.direct_typed_body_sites =
+		state->adaptor.typed_body_call_site_count();
+	image->metrics.direct_call_frame_bytes -= std::min(
+		image->metrics.direct_call_frame_bytes,
+		state->adaptor.typed_body_frame_bytes_elided());
 	return SUCCESS;
 }
 

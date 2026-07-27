@@ -6165,6 +6165,11 @@ bool ZendCompilerX64::compile_inst(
 					&& (call.direct_call->flags
 						& ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME) != 0;
 				const bool private_inline_body = leaf_scalar_frame;
+				const uint32_t typed_body_function =
+					local_component_call && generated_fast_path
+						? adaptor->typed_body_function_index(
+							call.component_target_index)
+						: UINT32_MAX;
 				const bool result_unused =
 					call.direct_call->result_operand.kind
 						== ZEND_MIR_SOURCE_OPERAND_UNUSED;
@@ -6233,8 +6238,17 @@ bool ZendCompilerX64::compile_inst(
 				const uint32_t slow_leave_context_use =
 					split_cold ? 2
 					: generated_fast_path ? (private_inline_body ? 4 : 6) : 2;
+				const bool typed_body_call =
+					typed_body_function != UINT32_MAX
+					&& node.kind == Adaptor::InstKind::GuardedFast
+					&& !node.inlined_user_body
+					&& zend_mir_scalar_type_is_exact(
+						call.direct_call->result_type)
+					&& call.direct_call->result_type
+						!= ZEND_MIR_SCALAR_TYPE_NULL;
 				if (generated_fast_path
-						&& node.kind == Adaptor::InstKind::GuardedFast) {
+						&& node.kind == Adaptor::InstKind::GuardedFast
+						&& !typed_body_call) {
 					const uint32_t inline_operand_count =
 						node.inlined_user_body
 							? (node.inlined_checked_source_opcode
@@ -6375,6 +6389,166 @@ bool ZendCompilerX64::compile_inst(
 				if (node.kind == Adaptor::InstKind::GuardedFast) {
 					auto spilled = spill_before_branch();
 					release_spilled_regs(spilled);
+				}
+				if (typed_body_call) {
+					const zend_tpde_plan *body_plan =
+						adaptor->component_plan(
+							call.component_target_index);
+					if (body_plan == nullptr
+							|| body_plan->argument_count != argument_count
+							|| typed_body_function
+								>= this->func_syms.size()
+							|| node.continuation_block == UINT32_MAX) {
+						return false;
+					}
+					for (uint32_t argument = 0;
+							argument < argument_count; ++argument) {
+						const int32_t body_value =
+							body_plan->argument_value_indices[argument];
+						if (body_value < 0
+								|| static_cast<uint32_t>(body_value)
+									>= body_plan->value_count
+								|| adaptor->exact_type(
+									node.operands[argument])
+									!= body_plan->values[
+										body_value].exact_type) {
+							return false;
+						}
+					}
+					auto [frame_ref, frame] =
+						val_ref_single(node.operands[frame_operand]);
+					auto frame_scratch =
+						std::move(frame).into_scratch();
+					auto [context_ref, context] =
+						val_ref_single(node.operands[context_operand]);
+					auto context_scratch =
+						std::move(context).into_scratch();
+					auto context_reg = context_scratch.cur_reg();
+					ASM(CMP8mi,
+						FE_MEM(context_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_native_execution_context,
+								observers_enabled))),
+						0);
+					generate_raw_jump(
+						Jump::jne, call_slow_target());
+					for (uint32_t use = 2;
+							use < frame_use_count; ++use) {
+						auto discarded = val_ref(
+							node.operands[frame_operand + use]);
+						(void) discarded;
+					}
+					const uint32_t context_use_count =
+						static_cast<uint32_t>(node.operands.size())
+							- context_operand;
+					for (uint32_t use = 1;
+							use < context_use_count; ++use) {
+						auto discarded = val_ref(
+							node.operands[context_operand + use]);
+						(void) discarded;
+					}
+					frame_scratch.reset();
+					context_scratch.reset();
+					tpde::x64::CCAssignerSysV body_assigner{false};
+					CallBuilder body_builder{*this, body_assigner};
+					for (uint32_t argument = 0;
+							argument < argument_count; ++argument) {
+						body_builder.add_arg(
+							CallArg{node.operands[argument]});
+					}
+					body_builder.call(
+						this->func_syms[typed_body_function]);
+					ValuePart body_result{
+						call.direct_call->result_type
+								== ZEND_MIR_SCALAR_TYPE_F64
+							? tpde::x64::PlatformConfig::FP_BANK
+							: tpde::x64::PlatformConfig::GP_BANK,
+						8};
+					body_builder.add_ret(
+						body_result, tpde::CCAssignment{});
+					auto [post_frame_ref, post_frame] =
+						val_ref_single(
+							node.operands[frame_operand + 1]);
+					auto post_frame_scratch =
+						std::move(post_frame).into_scratch();
+					auto post_frame_reg =
+						post_frame_scratch.cur_reg();
+					if (!result_unused) {
+						ScratchReg result_slot{this};
+						auto result_slot_reg = result_slot.alloc_gp();
+						ASM(MOV64rr, result_slot_reg, post_frame_reg);
+						if (call.direct_call->result_operand.slot_kind
+								== ZEND_MIR_SOURCE_SLOT_CV) {
+							ASM(ADD64ri, result_slot_reg,
+								static_cast<int32_t>(
+									(ZEND_CALL_FRAME_SLOT
+										+ call.direct_call
+											->result_operand.index)
+									* sizeof(zval)));
+						} else {
+							ScratchReg slot_index{this};
+							auto slot_index_reg = slot_index.alloc_gp();
+							ASM(MOV64rm, slot_index_reg,
+								FE_MEM(post_frame_reg, 0, FE_NOREG,
+									static_cast<int32_t>(offsetof(
+										zend_execute_data, func))));
+							ASM(MOV32rm, slot_index_reg,
+								FE_MEM(slot_index_reg, 0, FE_NOREG,
+									static_cast<int32_t>(offsetof(
+										zend_op_array, last_var))));
+							ASM(ADD64ri, slot_index_reg,
+								static_cast<int32_t>(
+									ZEND_CALL_FRAME_SLOT
+										+ call.direct_call
+											->result_operand.index));
+							ASM(SHL64ri, slot_index_reg, 4);
+							ASM(ADD64rr, result_slot_reg, slot_index_reg);
+						}
+						auto result_reg =
+							body_result.cur_reg_or_load(this);
+						if (call.direct_call->result_type
+								== ZEND_MIR_SCALAR_TYPE_F64) {
+							ASM(SSE_MOVSDmr,
+								FE_MEM(result_slot_reg, 0, FE_NOREG, 0),
+								result_reg);
+						} else {
+							ASM(MOV64mr,
+								FE_MEM(result_slot_reg, 0, FE_NOREG, 0),
+								result_reg);
+						}
+						if (call.direct_call->result_type
+								== ZEND_MIR_SCALAR_TYPE_I1) {
+							ScratchReg kind{this};
+							auto kind_reg = kind.alloc_gp();
+							ASM(MOV32rr, kind_reg, result_reg);
+							ASM(ADD32ri, kind_reg, IS_FALSE);
+							ASM(MOV32mr,
+								FE_MEM(result_slot_reg, 0, FE_NOREG,
+									static_cast<int32_t>(offsetof(
+										zval, u1.type_info))),
+								kind_reg);
+						} else {
+							ASM(MOV32mi,
+								FE_MEM(result_slot_reg, 0, FE_NOREG,
+									static_cast<int32_t>(offsetof(
+										zval, u1.type_info))),
+								static_cast<int32_t>(zval_type(
+									call.direct_call->result_type)));
+						}
+					}
+					if (node.has_result) {
+						auto [result_ref, result] =
+							result_ref_single(node.result);
+						result.set_value(std::move(body_result));
+					} else {
+						body_result.reset(this);
+					}
+					post_frame_scratch.reset();
+					adaptor->mark_typed_body_call(
+						call.direct_call->frame_size);
+					generate_uncond_branch(
+						IRBlockRef{node.continuation_block});
+					return true;
 				}
 				if (generated_fast_path
 						&& node.kind != Adaptor::InstKind::GuardedCold) {
@@ -8922,6 +9096,19 @@ bool ZendCompilerX64::compile_inst(
 			return true;
 		}
 		case ZEND_MIR_OPCODE_RETURN: {
+			if (adaptor->typed_body()) {
+				if (node.operands.size() != 1) {
+					return false;
+				}
+				auto [value_ref, value] =
+					val_ref_single(node.operands[0]);
+				RetBuilder return_builder{
+					*this, *cur_cc_assigner()};
+				return_builder.add(
+					std::move(value), tpde::CCAssignment{});
+				return_builder.ret();
+				return true;
+			}
 			{
 			auto [value_ref, value] = val_ref_single(node.operands[0]);
 			auto [frame_ref, frame] = val_ref_single(node.operands[1]);
@@ -8983,6 +9170,19 @@ bool ZendCompilerX64::compile_inst(
 			return true;
 		}
 		case ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL: {
+			if (adaptor->typed_body()) {
+				if (node.operands.size() != 1) {
+					return false;
+				}
+				auto [value_ref, value] =
+					val_ref_single(node.operands[0]);
+				RetBuilder return_builder{
+					*this, *cur_cc_assigner()};
+				return_builder.add(
+					std::move(value), tpde::CCAssignment{});
+				return_builder.ret();
+				return true;
+			}
 			if (mir.direct_scalar_return) {
 				{
 					auto [frame_ref, frame] =
@@ -9155,6 +9355,11 @@ zend_result zend_tpde_emit_linux_x64(
 	}
 	image->metrics.direct_leaf_scalar_sites =
 		state->adaptor.inlined_user_body_count();
+	image->metrics.direct_typed_body_sites =
+		state->adaptor.typed_body_call_site_count();
+	image->metrics.direct_call_frame_bytes -= std::min(
+		image->metrics.direct_call_frame_bytes,
+		state->adaptor.typed_body_frame_bytes_elided());
 	image->target_state = state.release();
 	image->destroy_target_state = destroy_x64_state;
 	return SUCCESS;
