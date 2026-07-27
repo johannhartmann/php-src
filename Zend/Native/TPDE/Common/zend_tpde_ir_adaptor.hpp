@@ -2332,6 +2332,44 @@ public:
 			[](const InstNode &node) { return node.inlined_user_body; }));
 	}
 	const zend_tpde_plan *plan() const { return plan_; }
+	const zend_tpde_plan *component_plan(uint32_t index) const {
+		return index < component_plans_.size()
+			? component_plans_[index] : nullptr;
+	}
+	bool component_compiled_variable_used(
+			uint32_t component_index, uint32_t variable_index) const {
+		const zend_tpde_plan *component = component_plan(component_index);
+		if (component == nullptr || component->source_ssa == nullptr
+				|| component->source_ssa->vars == nullptr
+				|| component->source_ssa->vars_count < 0) {
+			return true;
+		}
+		bool found = false;
+		for (int index = 0;
+				index < component->source_ssa->vars_count; ++index) {
+			const zend_ssa_var &variable =
+				component->source_ssa->vars[index];
+			if (variable.var < 0
+					|| static_cast<uint32_t>(variable.var)
+						!= variable_index) {
+				continue;
+			}
+			found = true;
+			if (variable.definition >= 0
+					|| variable.definition_phi != nullptr
+					|| variable.use_chain >= 0
+					|| variable.phi_use_chain != nullptr
+					|| variable.sym_use_chain != nullptr) {
+				return true;
+			}
+		}
+		/*
+		 * An SSA value that is neither defined nor consumed cannot become
+		 * observable and cannot require cleanup.  Omit its canonical zval
+		 * from direct-frame initialization and release.
+		 */
+		return !found;
+	}
 	const void *runtime_helper(zend_native_runtime_helper_id id) const {
 		const zend_native_runtime_helper *helper =
 			zend_native_runtime_helper_find(plan_->runtime, id);
@@ -2704,6 +2742,14 @@ public:
 	}
 	uint32_t current_function_index() const { return active_index_; }
 	const zend_tpde_plan *plan() const { return active_->plan(); }
+	const zend_tpde_plan *component_plan(uint32_t index) const {
+		return active_->component_plan(index);
+	}
+	bool component_compiled_variable_used(
+			uint32_t component_index, uint32_t variable_index) const {
+		return active_->component_compiled_variable_used(
+			component_index, variable_index);
+	}
 	const void *runtime_helper(zend_native_runtime_helper_id id) const {
 		return active_->runtime_helper(id);
 	}
