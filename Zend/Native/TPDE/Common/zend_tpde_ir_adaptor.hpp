@@ -274,6 +274,9 @@ private:
 	std::vector<IRValueRef> typed_body_value_overrides_;
 	std::vector<IRValueRef> typed_body_source_ssa_overrides_;
 	std::vector<IRValueRef> typed_body_instruction_results_;
+	std::vector<IRValueRef> component_value_overrides_;
+	std::vector<IRValueRef> component_source_ssa_overrides_;
+	std::vector<IRValueRef> component_instruction_results_;
 	std::vector<uint8_t> frozen_call_argument_value_used_;
 	std::vector<uint32_t> block_info_;
 	std::vector<uint32_t> block_info2_;
@@ -282,7 +285,9 @@ private:
 	std::vector<ArgumentGuard> argument_guards_;
 	std::vector<uint32_t> user_opcode_next_landings_;
 	std::vector<uint32_t> user_opcode_dispatch_to_sources_;
+	std::vector<uint8_t> typed_component_call_eligible_;
 	zend_tpde_instruction synthetic_instruction_{};
+	bool has_typed_component_calls_ = false;
 	bool valid_ = true;
 
 	static IRValueRef plan_source_operand_value_ref(
@@ -303,8 +308,55 @@ private:
 			: IRValueRef{MIR_VALUE_BASE + static_cast<uint32_t>(index)};
 	}
 
+	const std::vector<IRValueRef> &active_value_overrides() const {
+		return function_mode_ == FunctionMode::TypedBody
+			? typed_body_value_overrides_ : component_value_overrides_;
+	}
+
+	std::vector<IRValueRef> &active_value_overrides() {
+		return function_mode_ == FunctionMode::TypedBody
+			? typed_body_value_overrides_ : component_value_overrides_;
+	}
+
+	const std::vector<IRValueRef> &active_source_ssa_overrides() const {
+		return function_mode_ == FunctionMode::TypedBody
+			? typed_body_source_ssa_overrides_
+			: component_source_ssa_overrides_;
+	}
+
+	std::vector<IRValueRef> &active_source_ssa_overrides() {
+		return function_mode_ == FunctionMode::TypedBody
+			? typed_body_source_ssa_overrides_
+			: component_source_ssa_overrides_;
+	}
+
+	const std::vector<IRValueRef> &active_instruction_results() const {
+		return function_mode_ == FunctionMode::TypedBody
+			? typed_body_instruction_results_
+			: component_instruction_results_;
+	}
+
+	std::vector<IRValueRef> &active_instruction_results() {
+		return function_mode_ == FunctionMode::TypedBody
+			? typed_body_instruction_results_
+			: component_instruction_results_;
+	}
+
 	IRValueRef source_binding_value_ref(
 			const zend_tpde_source_value_binding &binding) const {
+		const auto &source_overrides = active_source_ssa_overrides();
+		const auto &instruction_results = active_instruction_results();
+		if (binding.definition_instruction_index >= 0
+				&& static_cast<uint32_t>(
+					binding.definition_instruction_index)
+					< instruction_results.size()) {
+			const IRValueRef result = instruction_results[
+				static_cast<uint32_t>(
+					binding.definition_instruction_index)];
+			if (result != INVALID_VALUE_REF) {
+				return result;
+			}
+		}
 		if (binding.value_index >= 0
 				&& static_cast<uint32_t>(binding.value_index)
 					< plan_->value_count) {
@@ -313,22 +365,14 @@ private:
 					static_cast<uint32_t>(binding.value_index)];
 			if (zend_mir_value_is_original_ssa(value.id)
 					&& value.id
-						< typed_body_source_ssa_overrides_.size()) {
+						< source_overrides.size()) {
 				const IRValueRef override =
-					typed_body_source_ssa_overrides_[value.id];
+					source_overrides[value.id];
 				if (override != INVALID_VALUE_REF) {
 					return override;
 				}
 			}
 			return value_ref(value.id);
-		}
-		if (binding.definition_instruction_index >= 0
-				&& static_cast<uint32_t>(
-					binding.definition_instruction_index)
-					< typed_body_instruction_results_.size()) {
-			return typed_body_instruction_results_[
-				static_cast<uint32_t>(
-					binding.definition_instruction_index)];
 		}
 		return INVALID_VALUE_REF;
 	}
@@ -344,16 +388,17 @@ private:
 		}
 		IRValueRef value{
 			MIR_VALUE_BASE + static_cast<uint32_t>(index)};
+		const auto &overrides = active_value_overrides();
 		for (uint32_t depth = 0;
-				depth <= typed_body_value_overrides_.size(); ++depth) {
+				depth <= overrides.size(); ++depth) {
 			const uint32_t current = static_cast<uint32_t>(value);
 			if (current < MIR_VALUE_BASE
 					|| current - MIR_VALUE_BASE
-						>= typed_body_value_overrides_.size()) {
+						>= overrides.size()) {
 				return value;
 			}
 			const IRValueRef override =
-				typed_body_value_overrides_[current - MIR_VALUE_BASE];
+				overrides[current - MIR_VALUE_BASE];
 			if (override == INVALID_VALUE_REF || override == value) {
 				return value;
 			}
@@ -365,6 +410,8 @@ private:
 	IRValueRef source_operand_value_ref(
 			const zend_mir_source_operand_ref &operand) const {
 		zend_mir_value_id value_id;
+		const auto &source_overrides = active_source_ssa_overrides();
+		const auto &value_overrides = active_value_overrides();
 
 		switch (operand.kind) {
 			case ZEND_MIR_SOURCE_OPERAND_LITERAL:
@@ -376,9 +423,9 @@ private:
 					return INVALID_VALUE_REF;
 				}
 				if (operand.ssa_variable_id
-							< typed_body_source_ssa_overrides_.size()) {
+							< source_overrides.size()) {
 					const IRValueRef override =
-						typed_body_source_ssa_overrides_[
+						source_overrides[
 							operand.ssa_variable_id];
 					if (override != INVALID_VALUE_REF) {
 						return override;
@@ -395,9 +442,9 @@ private:
 		if (value != INVALID_VALUE_REF
 				&& index >= MIR_VALUE_BASE
 				&& index - MIR_VALUE_BASE
-					< typed_body_value_overrides_.size()) {
+					< value_overrides.size()) {
 			const IRValueRef override =
-				typed_body_value_overrides_[index - MIR_VALUE_BASE];
+				value_overrides[index - MIR_VALUE_BASE];
 			if (override != INVALID_VALUE_REF) {
 				return override;
 			}
@@ -451,6 +498,19 @@ private:
 		}
 		left = source_operand_value_ref(instruction.value_operation.op1);
 		right = source_operand_value_ref(instruction.value_operation.op2);
+		const bool component_register_expression =
+			(left != INVALID_VALUE_REF
+					&& static_cast<uint32_t>(left)
+						>= MIR_VALUE_BASE + plan_->value_count)
+			|| (right != INVALID_VALUE_REF
+					&& static_cast<uint32_t>(right)
+						>= MIR_VALUE_BASE + plan_->value_count);
+		if (!component_register_expression) {
+			zend_tpde_long_binary layout{};
+			if (!zend_tpde_long_binary_at(instruction, &layout)) {
+				return false;
+			}
+		}
 		auto register_or_constant = [&](IRValueRef value) {
 			if (machine_value_is_register_authoritative(value)) {
 				return true;
@@ -804,16 +864,16 @@ private:
 		if (record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE) {
 			return use.operand_index == 0;
 		}
-		if (record.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL) {
-			/*
-			 * The outer Zend ABI is now a materialization boundary, not a
-			 * reason to suppress the producer's machine value.  Keep the
-			 * returned payload live through that boundary.
-			 */
+		if (record.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
+				&& (function_mode_ == FunctionMode::TypedBody
+					|| has_typed_component_calls_)) {
 			return use.operand_index == 0;
 		}
 		if (is_boxed_cond_branch(instruction, record)
 				|| record.opcode == ZEND_MIR_OPCODE_STATEPOINT
+				|| (record.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
+					&& function_mode_ != FunctionMode::TypedBody
+					&& !has_typed_component_calls_)
 				|| record.opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
 				|| (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
 					&& instruction.direct_call != nullptr)) {
@@ -847,6 +907,7 @@ private:
 	}
 
 	bool needs_explicit_cold_path(
+			uint32_t instruction_index,
 			const zend_tpde_instruction &instruction,
 			const zend_mir_instruction_record &record) {
 		if (record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE) {
@@ -854,10 +915,10 @@ private:
 				== ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW;
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
-			if (instruction.component_target_index
-						< typed_body_eligible_.size()
-					&& typed_body_eligible_[
-						instruction.component_target_index] != 0) {
+			if (instruction_index
+						< typed_component_call_eligible_.size()
+					&& typed_component_call_eligible_[
+						instruction_index] != 0) {
 				return function_mode_ == FunctionMode::ZendEntry;
 			}
 			return instruction.direct_call != nullptr
@@ -889,6 +950,134 @@ private:
 				return true;
 			default:
 				return false;
+		}
+	}
+
+	void freeze_typed_component_calls() {
+		typed_component_call_eligible_.assign(
+			plan_ == nullptr ? 0 : plan_->instruction_count, 0);
+		has_typed_component_calls_ = false;
+		if (plan_ == nullptr || plan_->call_argument_bindings == nullptr) {
+			return;
+		}
+
+		std::vector<TypedBodyAbiType> instruction_result_types(
+			plan_->instruction_count);
+		for (uint32_t index = 0;
+				index < plan_->instruction_count; ++index) {
+			const zend_tpde_instruction &instruction =
+				plan_->instructions[index];
+			const zend_mir_instruction_record record =
+				instruction_record_at(index);
+			if (record.opcode != ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
+				const int32_t result_index =
+					zend_tpde_value_index(plan_, record.result_id);
+				if (result_index >= 0) {
+					instruction_result_types[index] =
+						typed_body_value_abi(
+							plan_, static_cast<uint32_t>(result_index));
+				}
+				continue;
+			}
+
+			const uint32_t target = instruction.component_target_index;
+			const zend_tpde_plan *callee =
+				target < component_plans_.size()
+					? component_plans_[target] : nullptr;
+			if (instruction.direct_call == nullptr
+					|| target >= typed_body_eligible_.size()
+					|| typed_body_eligible_[target] == 0
+					|| callee == nullptr
+					|| instruction.direct_call->receiver_kind
+						!= ZEND_NATIVE_INTERNAL_RECEIVER_NONE
+					|| instruction.call_argument_count
+						!= callee->argument_count
+					|| (callee->argument_count != 0
+						&& callee->argument_value_indices == nullptr)
+					|| instruction.call_argument_offset
+						> plan_->call_argument_count
+					|| instruction.call_argument_count
+						> plan_->call_argument_count
+							- instruction.call_argument_offset) {
+				continue;
+			}
+
+			bool compatible = true;
+			for (uint32_t argument = 0;
+					argument < instruction.call_argument_count;
+					++argument) {
+				zend_mir_call_argument_ref source_argument{};
+				const uint32_t argument_index =
+					instruction.call_argument_offset + argument;
+				const int32_t callee_value =
+					callee->argument_value_indices[argument];
+				if (!zend_tpde_call_argument_at(
+						plan_, argument_index, &source_argument)
+						|| callee_value < 0
+						|| static_cast<uint32_t>(callee_value)
+							>= callee->value_count) {
+					compatible = false;
+					break;
+				}
+
+				const zend_tpde_source_value_binding &binding =
+					plan_->call_argument_bindings[argument_index];
+				TypedBodyAbiType caller_abi{};
+				const IRValueRef source_value =
+					plan_source_operand_value_ref(
+						plan_, source_argument.source_operand);
+				const uint32_t source_value_index =
+					static_cast<uint32_t>(source_value);
+				if (source_value != INVALID_VALUE_REF
+						&& source_value_index >= MIR_VALUE_BASE
+						&& source_value_index - MIR_VALUE_BASE
+							< plan_->value_count) {
+					caller_abi = typed_body_value_abi(
+						plan_, source_value_index - MIR_VALUE_BASE);
+				}
+				if (!caller_abi.valid
+						&& binding.value_index >= 0
+						&& static_cast<uint32_t>(binding.value_index)
+							< plan_->value_count) {
+					caller_abi = typed_body_value_abi(
+						plan_,
+						static_cast<uint32_t>(binding.value_index));
+				}
+				if (!caller_abi.valid
+						&& binding.definition_instruction_index >= 0
+						&& static_cast<uint32_t>(
+							binding.definition_instruction_index)
+							< instruction_result_types.size()) {
+					caller_abi = instruction_result_types[
+						static_cast<uint32_t>(
+							binding.definition_instruction_index)];
+				}
+				const TypedBodyAbiType callee_abi =
+					typed_body_value_abi(
+						callee, static_cast<uint32_t>(callee_value));
+				const bool by_reference =
+					source_argument.ownership
+						== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE;
+				if (!caller_abi.same_shape(callee_abi)
+						|| by_reference
+							!= (callee_abi.machine_kind
+								== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR)) {
+					compatible = false;
+					break;
+				}
+			}
+			if (!compatible) {
+				continue;
+			}
+
+			const TypedBodyAbiType result_abi =
+				typed_body_plan_abi(callee->return_abi);
+			if (!result_abi.valid) {
+				continue;
+			}
+			typed_component_call_eligible_[index] = 1;
+			instruction_result_types[index] = result_abi;
+			has_typed_component_calls_ = true;
 		}
 	}
 
@@ -1876,6 +2065,16 @@ public:
 		typed_body_instruction_results_.assign(
 			plan_ == nullptr ? 0 : plan_->instruction_count,
 			INVALID_VALUE_REF);
+		component_value_overrides_.assign(
+			plan_ == nullptr ? 0 : plan_->value_count,
+			INVALID_VALUE_REF);
+		component_source_ssa_overrides_.assign(
+			plan_ == nullptr ? 0 : plan_->source_ssa_variable_count,
+			INVALID_VALUE_REF);
+		component_instruction_results_.assign(
+			plan_ == nullptr ? 0 : plan_->instruction_count,
+			INVALID_VALUE_REF);
+		freeze_typed_component_calls();
 		frozen_call_argument_value_used_.assign(
 			plan_ == nullptr ? 0 : plan_->value_count, 0);
 		if (plan_ != nullptr
@@ -2120,16 +2319,14 @@ public:
 			}
 			const uint32_t source = static_cast<uint32_t>(source_block);
 			instruction_blocks[i] = final_blocks[source];
-			if (!needs_explicit_cold_path(instruction, record)) {
+			if (!needs_explicit_cold_path(i, instruction, record)) {
 				continue;
 			}
 			const bool typed_component_guard =
 				function_mode_ == FunctionMode::ZendEntry
 				&& record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
-				&& instruction.component_target_index
-					< typed_body_eligible_.size()
-				&& typed_body_eligible_[
-					instruction.component_target_index] != 0;
+				&& i < typed_component_call_eligible_.size()
+				&& typed_component_call_eligible_[i] != 0;
 			if (typed_component_guard) {
 				guarded_hot_blocks[i] =
 					plan_->block_count + synthetic_block_count++;
@@ -2853,11 +3050,12 @@ public:
 			const bool typed_component_call =
 				record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
 				&& instruction.direct_call != nullptr
-				&& instruction.component_target_index
-					< typed_body_eligible_.size()
-				&& typed_body_eligible_[
-					instruction.component_target_index] != 0;
+				&& i < typed_component_call_eligible_.size()
+				&& typed_component_call_eligible_[i] != 0;
 			if (typed_component_call) {
+				auto &value_overrides = active_value_overrides();
+				auto &source_overrides = active_source_ssa_overrides();
+				auto &instruction_results = active_instruction_results();
 				IRValueRef canonical_result =
 					source_binding_value_ref(
 						instruction.source_result_binding);
@@ -2934,18 +3132,19 @@ public:
 						? plan_->values[
 							canonical_index - MIR_VALUE_BASE].refcount_state
 						: ZEND_MIR_REFCOUNT_UNKNOWN));
-				typed_body_instruction_results_[i] = result;
-				if (canonical_result != INVALID_VALUE_REF
+				instruction_results[i] = result;
+				if (function_mode_ == FunctionMode::TypedBody
+						&& canonical_result != INVALID_VALUE_REF
 						&& canonical_index >= MIR_VALUE_BASE
 						&& canonical_index - MIR_VALUE_BASE
-							< typed_body_value_overrides_.size()) {
-					typed_body_value_overrides_[
+							< value_overrides.size()) {
+					value_overrides[
 						canonical_index - MIR_VALUE_BASE] = result;
-				} else if (result_ssa
-						< typed_body_source_ssa_overrides_.size()) {
-					typed_body_source_ssa_overrides_[
+				}
+				if (result_ssa < source_overrides.size()) {
+					source_overrides[
 						result_ssa] = result;
-				} else {
+				} else if (canonical_result == INVALID_VALUE_REF) {
 					valid_ = false;
 				}
 			}
@@ -2956,8 +3155,11 @@ public:
 					&& !machine_value_has_result_representation(result)) {
 				IRValueRef left = INVALID_VALUE_REF;
 				IRValueRef right = INVALID_VALUE_REF;
-				if (long_binary_machine_operands(
-						instruction, left, right)) {
+				if (long_binary_machine_operands(instruction, left, right)
+						&& (static_cast<uint32_t>(left)
+								>= MIR_VALUE_BASE + plan_->value_count
+							|| static_cast<uint32_t>(right)
+								>= MIR_VALUE_BASE + plan_->value_count)) {
 					const uint32_t source_opcode =
 						instruction.value_operation.source_opcode;
 					const bool boolean_result =
@@ -2967,19 +3169,19 @@ public:
 						|| source_opcode == ZEND_IS_NOT_EQUAL
 						|| source_opcode == ZEND_IS_SMALLER
 						|| source_opcode == ZEND_IS_SMALLER_OR_EQUAL;
-					const bool supported =
-						boolean_result
-						|| source_opcode == ZEND_ADD
-						|| source_opcode == ZEND_SUB
-						|| source_opcode == ZEND_BW_OR
-						|| source_opcode == ZEND_BW_AND
-						|| source_opcode == ZEND_BW_XOR;
-					if (supported) {
+					if (boolean_result
+							|| source_opcode == ZEND_ADD
+							|| source_opcode == ZEND_SUB
+							|| source_opcode == ZEND_BW_OR
+							|| source_opcode == ZEND_BW_AND
+							|| source_opcode == ZEND_BW_XOR) {
+						auto &source_overrides =
+							active_source_ssa_overrides();
+						auto &instruction_results =
+							active_instruction_results();
 						const IRValueRef canonical_result =
 							source_operand_value_ref(
 								instruction.value_operation.result);
-						const uint32_t canonical_index =
-							static_cast<uint32_t>(canonical_result);
 						const zend_mir_value_id result_ssa =
 							instruction.value_operation.result
 								.ssa_variable_id;
@@ -2992,19 +3194,9 @@ public:
 								.result_storage_id,
 							false, 0,
 							ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
-						typed_body_instruction_results_[i] = result;
-						if (canonical_result != INVALID_VALUE_REF
-								&& canonical_index >= MIR_VALUE_BASE
-								&& canonical_index - MIR_VALUE_BASE
-									< typed_body_value_overrides_.size()) {
-							typed_body_value_overrides_[
-								canonical_index - MIR_VALUE_BASE] =
-									result;
-						}
-						if (result_ssa
-								< typed_body_source_ssa_overrides_.size()) {
-							typed_body_source_ssa_overrides_[
-								result_ssa] = result;
+						instruction_results[i] = result;
+						if (result_ssa < source_overrides.size()) {
+							source_overrides[result_ssa] = result;
 						} else if (canonical_result
 								== INVALID_VALUE_REF) {
 							valid_ = false;
@@ -3342,7 +3534,9 @@ public:
 				operands_.push_back(operand);
 			}
 			if (record.opcode
-					== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL) {
+					== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
+					&& (function_mode_ == FunctionMode::TypedBody
+						|| has_typed_component_calls_)) {
 				const IRValueRef returned = source_binding_value_ref(
 					instruction.source_op1_binding);
 				if (function_mode_ == FunctionMode::TypedBody
@@ -3394,10 +3588,8 @@ public:
 			if (record.opcode
 					== ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
 				const bool typed_local_call =
-					instruction.component_target_index
-						< typed_body_eligible_.size()
-					&& typed_body_eligible_[
-						instruction.component_target_index] != 0;
+					i < typed_component_call_eligible_.size()
+					&& typed_component_call_eligible_[i] != 0;
 				if (typed_local_call) {
 					for (uint32_t n = 0;
 							n < instruction.call_argument_count; ++n) {
@@ -3747,12 +3939,21 @@ public:
 				if (mutation_result != INVALID_VALUE_REF) {
 					const zend_mir_storage_id mutation_storage =
 						canonical_storage(mutation_result);
-					const IRValueRef mutation_slot =
+					const uint32_t mutation_reference =
 						zend_mir_id_is_valid(mutation_storage)
+							? machine_reference_index(
+								ZEND_TPDE_MACHINE_REFERENCE_FRAME_SLOT,
+								mutation_storage)
+							: UINT32_MAX;
+					const IRValueRef mutation_slot =
+						mutation_reference != UINT32_MAX
 							? add_derived_value(
 								ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
 								ZEND_MIR_SCALAR_TYPE_NONE,
-								mutation_storage)
+								mutation_storage, false, 0, UINT8_MAX,
+								ZEND_MIR_OWNERSHIP_STATE_BORROWED,
+								ZEND_MIR_REFCOUNT_UNKNOWN,
+								mutation_reference)
 							: INVALID_VALUE_REF;
 					if (mutation_slot == INVALID_VALUE_REF
 							|| mutation_storage
@@ -4006,6 +4207,13 @@ public:
 	}
 
 	bool valid() const { return valid_; }
+	bool typed_component_call(IRInstRef instruction) const {
+		const InstNode &current = node(instruction);
+		return current.mir_instruction_index
+				< typed_component_call_eligible_.size()
+			&& typed_component_call_eligible_[
+				current.mir_instruction_index] != 0;
+	}
 	uint64_t inlined_user_body_count() const {
 		return static_cast<uint64_t>(std::count_if(
 			nodes_.begin(), nodes_.end(),
@@ -4602,6 +4810,9 @@ public:
 	uint32_t typed_body_function_index(uint32_t component_index) const {
 		return component_index < typed_body_function_indices_.size()
 			? typed_body_function_indices_[component_index] : UINT32_MAX;
+	}
+	bool typed_component_call(IRInstRef instruction) const {
+		return active_->typed_component_call(instruction);
 	}
 	ZendIRAdaptor::TypedBodyAbiType typed_body_return_type(
 			uint32_t component_index) const {
