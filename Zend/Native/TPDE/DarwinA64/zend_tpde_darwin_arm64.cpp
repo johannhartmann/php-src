@@ -5158,6 +5158,8 @@ bool ZendCompilerA64::compile_inst(
 				load_off(pending_reg, context_scratch.cur_reg(),
 					static_cast<uint32_t>(offsetof(
 						zend_native_execution_context, vm_interrupt)), 8);
+				generate_raw_jump(
+					Jump{Jump::Cbz, pending_reg, false}, done);
 				load_off(pending_reg, pending_reg, 0, 1);
 				ASM(CMPxi, pending_reg, 0);
 				generate_raw_jump(Jump::Jne, slow);
@@ -5789,6 +5791,39 @@ bool ZendCompilerA64::compile_inst(
 					|| (call.direct_call->flags
 						& ZEND_NATIVE_DIRECT_CALL_GENERATION_LEASED) != 0;
 				const uint32_t argument_count = call.call_argument_count;
+				if (adaptor->typed_body()
+						&& typed_body_function != UINT32_MAX) {
+					if (typed_body_function >= this->func_syms.size()
+							|| node.operands.size() != argument_count) {
+						return false;
+					}
+					zend::native::tpde::CCAssignerAppleA64 body_assigner;
+					CallBuilder body_builder{*this, body_assigner};
+					for (uint32_t argument = 0;
+							argument < argument_count; ++argument) {
+						body_builder.add_arg(
+							CallArg{node.operands[argument]});
+					}
+					body_builder.call(
+						this->func_syms[typed_body_function]);
+					if (node.has_result) {
+						auto body_result = result_ref(node.result);
+						body_builder.add_ret(body_result);
+					} else {
+						ValuePart body_result{
+							call.direct_call->result_type
+									== ZEND_MIR_SCALAR_TYPE_F64
+								? DarwinConfig::FP_BANK
+								: DarwinConfig::GP_BANK,
+							8};
+						body_builder.add_ret(
+							body_result, ::tpde::CCAssignment{});
+						body_result.reset(this);
+					}
+					adaptor->mark_typed_body_call(
+						call.direct_call->frame_size);
+					return true;
+				}
 				const uint32_t callee_argument_count =
 					generated_fast_path
 						? call.direct_call->expected_function
