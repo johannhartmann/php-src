@@ -428,6 +428,8 @@ private:
 			const zend_mir_instruction_record &record) {
 		zend_tpde_string_length string_length{};
 		zend_tpde_long_binary long_binary{};
+		zend_tpde_long_assign_op long_assign{};
+		zend_tpde_long_incdec long_incdec{};
 		if (!instruction.has_value_operation
 				|| executable_kind(instruction, record)
 					== InstKind::SlowPathCall) {
@@ -440,6 +442,30 @@ private:
 			return result != INVALID_VALUE_REF
 				&& (exact_type(result) == ZEND_MIR_SCALAR_TYPE_I64
 					|| exact_type(result) == ZEND_MIR_SCALAR_TYPE_I1)
+				&& machine_kind(result)
+					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
+		}
+		if (zend_tpde_long_assign_op_at(instruction, &long_assign)) {
+			if (!long_assign.has_result) {
+				return true;
+			}
+			const IRValueRef result =
+				source_operand_value_ref(
+					instruction.value_operation.result);
+			return result != INVALID_VALUE_REF
+				&& exact_type(result) == ZEND_MIR_SCALAR_TYPE_I64
+				&& machine_kind(result)
+					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
+		}
+		if (zend_tpde_long_incdec_at(instruction, &long_incdec)) {
+			if (!long_incdec.has_result) {
+				return true;
+			}
+			const IRValueRef result =
+				source_operand_value_ref(
+					instruction.value_operation.result);
+			return result != INVALID_VALUE_REF
+				&& exact_type(result) == ZEND_MIR_SCALAR_TYPE_I64
 				&& machine_kind(result)
 					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
 		}
