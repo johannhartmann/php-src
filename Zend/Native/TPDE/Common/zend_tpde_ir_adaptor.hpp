@@ -466,6 +466,58 @@ private:
 					== InstKind::SlowPathCall) {
 			return false;
 		}
+		const zend_mir_executable_value_ref &operation =
+			instruction.value_operation;
+		auto storage_fits_both_targets =
+			[](zend_mir_storage_id storage_id) {
+				return zend_mir_id_is_valid(storage_id)
+					&& (uint64_t{ZEND_CALL_FRAME_SLOT} + storage_id)
+							* sizeof(zval)
+						<= INT32_MAX - sizeof(zval);
+			};
+		auto distinct_optional_result =
+			[](zend_mir_storage_id result_storage,
+					zend_mir_storage_id source_storage,
+					zend_mir_storage_id target_storage) {
+				return !zend_mir_id_is_valid(result_storage)
+					|| (result_storage != source_storage
+						&& result_storage != target_storage);
+			};
+		switch (operation.opcode) {
+			case ZEND_MIR_OPCODE_VALUE_ASSIGN:
+				if (storage_fits_both_targets(operation.op2_storage_id)
+						&& storage_fits_both_targets(
+							operation.op1_storage_id)
+						&& operation.op2_storage_id
+							!= operation.op1_storage_id
+						&& distinct_optional_result(
+							operation.result_storage_id,
+							operation.op2_storage_id,
+							operation.op1_storage_id)
+						&& (!zend_mir_id_is_valid(
+								operation.result_storage_id)
+							|| storage_fits_both_targets(
+								operation.result_storage_id))) {
+					return true;
+				}
+				break;
+			case ZEND_MIR_OPCODE_VALUE_QM_ASSIGN:
+				if (storage_fits_both_targets(operation.op1_storage_id)
+						&& storage_fits_both_targets(
+							operation.result_storage_id)
+						&& operation.op1_storage_id
+							!= operation.result_storage_id) {
+					return true;
+				}
+				break;
+			case ZEND_MIR_OPCODE_VALUE_FREE:
+				if (storage_fits_both_targets(operation.op1_storage_id)) {
+					return true;
+				}
+				break;
+			default:
+				break;
+		}
 		if (zend_tpde_long_binary_at(instruction, &long_binary)) {
 			const IRValueRef result =
 				source_operand_value_ref(
