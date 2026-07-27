@@ -2552,6 +2552,20 @@ bool ZendCompilerX64::compile_inst(
 				|| result_offset > INT32_MAX - sizeof(zval)) {
 			return false;
 		}
+		if (node.kind != Adaptor::InstKind::GuardedFast
+				|| node.control_block == UINT32_MAX
+				|| node.continuation_block == UINT32_MAX) {
+			return false;
+		}
+		const auto successors =
+			adaptor->block_succs(IRBlockRef{node.control_block});
+		if (successors.size() != 2
+				|| static_cast<uint32_t>(successors[0])
+					!= node.continuation_block
+				|| static_cast<uint32_t>(successors[1])
+					!= node.argument_index) {
+			return false;
+		}
 
 		auto slow = text_writer.label_create();
 		auto done = text_writer.label_create();
@@ -2563,10 +2577,12 @@ bool ZendCompilerX64::compile_inst(
 		ScratchReg target_type{this};
 		ScratchReg low_word{this};
 		ScratchReg probe{this};
+		ScratchReg decision{this};
 		auto source_type_reg = source_type.alloc_gp();
 		auto target_type_reg = target_type.alloc_gp();
 		auto low_word_reg = low_word.alloc_gp();
 		auto probe_reg = probe.alloc_gp();
+		auto decision_reg = decision.alloc_gp();
 
 		ASM(MOV32rm, source_type_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
@@ -2681,26 +2697,22 @@ bool ZendCompilerX64::compile_inst(
 			ASM(MOV32mr,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(
-						source_offset + offsetof(zval, u1.type_info))),
+					source_offset + offsetof(zval, u1.type_info))),
 				source_type_reg);
 		}
+		ASM(MOV32ri, decision_reg, 0);
 		generate_raw_jump(Jump::jmp, done);
 		label_place(slow);
+		ASM(MOV32ri, decision_reg, 1);
+		label_place(done);
 		source_type.reset();
 		target_type.reset();
 		low_word.reset();
 		probe.reset();
-		const auto register_state =
-			zend::native::tpde::
-				capture_conditional_call_register_state(*this);
-		ValuePart frame_argument{tpde::x64::PlatformConfig::GP_BANK, 8};
-		frame_argument.set_value(this, std::move(frame_scratch));
-		if (!execute_value_operation(&frame_argument)) {
-			return false;
-		}
-		zend::native::tpde::restore_conditional_call_register_state(
-			*this, register_state);
-		label_place(done);
+		std::array<std::pair<uint64_t, IRBlockRef>, 1> cases{{
+			{1, successors[1]},
+		}};
+		generate_switch(std::move(decision), 32, successors[0], cases);
 		return true;
 	};
 	auto copy_temporary_slot = [&]() {
@@ -2772,6 +2784,20 @@ bool ZendCompilerX64::compile_inst(
 		if (source_offset > INT32_MAX - sizeof(zval)) {
 			return execute_value_operation();
 		}
+		if (node.kind != Adaptor::InstKind::GuardedFast
+				|| node.control_block == UINT32_MAX
+				|| node.continuation_block == UINT32_MAX) {
+			return false;
+		}
+		const auto successors =
+			adaptor->block_succs(IRBlockRef{node.control_block});
+		if (successors.size() != 2
+				|| static_cast<uint32_t>(successors[0])
+					!= node.continuation_block
+				|| static_cast<uint32_t>(successors[1])
+					!= node.argument_index) {
+			return false;
+		}
 		auto slow = text_writer.label_create();
 		auto released = text_writer.label_create();
 		auto [frame_ref, frame] =
@@ -2781,9 +2807,11 @@ bool ZendCompilerX64::compile_inst(
 		ScratchReg type{this};
 		ScratchReg value{this};
 		ScratchReg probe{this};
+		ScratchReg decision{this};
 		auto type_reg = type.alloc_gp();
 		auto value_reg = value.alloc_gp();
 		auto probe_reg = probe.alloc_gp();
+		auto decision_reg = decision.alloc_gp();
 
 		ASM(MOV32rm, type_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
@@ -2815,24 +2843,19 @@ bool ZendCompilerX64::compile_inst(
 				static_cast<int32_t>(
 					source_offset + offsetof(zval, u1.type_info))),
 			type_reg);
+		ASM(MOV32ri, decision_reg, 0);
 		auto done = text_writer.label_create();
 		generate_raw_jump(Jump::jmp, done);
 		label_place(slow);
+		ASM(MOV32ri, decision_reg, 1);
+		label_place(done);
 		type.reset();
 		value.reset();
 		probe.reset();
-		const auto register_state =
-			zend::native::tpde::
-				capture_conditional_call_register_state(*this);
-		ValuePart frame_argument{
-			tpde::x64::PlatformConfig::GP_BANK, 8};
-		frame_argument.set_value(this, std::move(frame_scratch));
-		if (!execute_value_operation(&frame_argument)) {
-			return false;
-		}
-		zend::native::tpde::restore_conditional_call_register_state(
-			*this, register_state);
-		label_place(done);
+		std::array<std::pair<uint64_t, IRBlockRef>, 1> cases{{
+			{1, successors[1]},
+		}};
+		generate_switch(std::move(decision), 32, successors[0], cases);
 		return true;
 	};
 	auto read_array = [&]() {
