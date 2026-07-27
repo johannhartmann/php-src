@@ -207,6 +207,7 @@ public:
 		tpde::x64::AsmReg value_reg,
 		tpde::x64::AsmReg temp_reg,
 		tpde::Label default_label);
+	bool emit_materializations(IRInstRef instruction);
 	bool compile_inst(IRInstRef instruction, InstRange);
 };
 
@@ -303,9 +304,89 @@ void ZendCompilerX64::emit_integer_dispatch(
 	emit_balanced(0, cases.size(), emit_balanced);
 }
 
+bool ZendCompilerX64::emit_materializations(IRInstRef instruction) {
+	const Adaptor::InstNode &node = adaptor->node(instruction);
+	const auto materializations = adaptor->materializations(instruction);
+	if (materializations.empty()) {
+		return true;
+	}
+	if (node.materialization_operand_index == UINT32_MAX
+			|| node.materialization_count != materializations.size()
+			|| node.materialization_operand_index
+				> node.liveness_operands.size()
+			|| materializations.size() > node.liveness_operands.size()
+				- node.materialization_operand_index) {
+		return false;
+	}
+	const AsmReg frame_reg = canonical_frame_register();
+	for (uint32_t index = 0; index < materializations.size(); ++index) {
+		const zend_tpde_materialization &materialization =
+			materializations[index];
+		const uint64_t offset =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + materialization.storage_id)
+				* sizeof(zval);
+		if (!zend_mir_id_is_valid(materialization.storage_id)
+				|| offset > static_cast<uint64_t>(INT32_MAX)
+					- sizeof(zval)) {
+			return false;
+		}
+		const IRValueRef value =
+			node.liveness_operands[
+				node.materialization_operand_index + index];
+		auto value_ref = val_ref(value);
+		auto payload = value_ref.part(0);
+		auto payload_reg = payload.load_to_reg();
+		if (materialization.machine_kind
+				== ZEND_TPDE_MACHINE_VALUE_F64) {
+			ASM(SSE_MOVSDmr,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offset)),
+				payload_reg);
+		} else {
+			ASM(MOV64mr,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offset)),
+				payload_reg);
+		}
+		const int32_t type_offset =
+			static_cast<int32_t>(offset + offsetof(zval, u1.type_info));
+		if (materialization.machine_kind
+				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+			auto type_info = value_ref.part(1);
+			auto type_info_reg = type_info.load_to_reg();
+			ASM(MOV32mr,
+				FE_MEM(frame_reg, 0, FE_NOREG, type_offset),
+				type_info_reg);
+		} else if (materialization.machine_kind
+				== ZEND_TPDE_MACHINE_VALUE_BOOL) {
+			ScratchReg type_info{this};
+			auto type_info_reg = type_info.alloc_gp();
+			ASM(MOV64rr, type_info_reg, payload_reg);
+			ASM(ADD64ri, type_info_reg, IS_FALSE);
+			ASM(MOV32mr,
+				FE_MEM(frame_reg, 0, FE_NOREG, type_offset),
+				type_info_reg);
+		} else {
+			const uint32_t type_info =
+				zend_tpde_machine_value_zval_type_info(
+					materialization.machine_kind);
+			if (type_info == IS_UNDEF) {
+				return false;
+			}
+			ASM(MOV32mi,
+				FE_MEM(frame_reg, 0, FE_NOREG, type_offset),
+				static_cast<int32_t>(type_info));
+		}
+	}
+	return true;
+}
+
 bool ZendCompilerX64::compile_inst(
 	IRInstRef instruction, InstRange remaining_instructions) {
 	const Adaptor::InstNode &node = adaptor->node(instruction);
+	if (!emit_materializations(instruction)) {
+		return false;
+	}
 	if (node.kind == Adaptor::InstKind::LoadFrame
 			|| node.kind == Adaptor::InstKind::LoadExecutionContext) {
 		auto [source_ref, source] = val_ref_single(node.operands[0]);

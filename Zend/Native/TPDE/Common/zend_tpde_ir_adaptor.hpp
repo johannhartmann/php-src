@@ -99,6 +99,9 @@ public:
 		bool inlined_user_body = false;
 		uint32_t inlined_operand_index = UINT32_MAX;
 		uint32_t inlined_checked_source_opcode = UINT32_MAX;
+		uint32_t materialization_operand_index = UINT32_MAX;
+		uint32_t materialization_count = 0;
+		std::span<const IRValueRef> liveness_operands{};
 	};
 
 	struct DerivedValue {
@@ -2045,6 +2048,32 @@ public:
 					? operand_count
 						- (inlined_user_body.checked() ? 2 : 1)
 					: UINT32_MAX;
+			const uint32_t materialization_operand_index =
+				instruction.materialization_count == 0
+					? UINT32_MAX : operand_count;
+			if (instruction.materialization_offset
+						> plan_->materialization_count
+					|| instruction.materialization_count
+						> plan_->materialization_count
+							- instruction.materialization_offset) {
+				valid_ = false;
+			} else {
+				for (uint32_t n = 0;
+						n < instruction.materialization_count; ++n) {
+					const zend_tpde_materialization &materialization =
+						plan_->materializations[
+							instruction.materialization_offset + n];
+					if (materialization.value_index >= plan_->value_count) {
+						valid_ = false;
+						operands_.push_back(INVALID_VALUE_REF);
+					} else {
+						operands_.push_back(IRValueRef{
+							MIR_VALUE_BASE
+								+ materialization.value_index});
+					}
+					++operand_count;
+				}
+			}
 			add_node(block_instructions, static_cast<uint32_t>(block), InstNode{
 				executable_kind(instruction, record), i, UINT32_MAX, result, {},
 				operand_offset,
@@ -2052,7 +2081,9 @@ public:
 				ZEND_MIR_ID_INVALID, ZEND_MIR_SCALAR_TYPE_NONE,
 				false, {}, inlined_user_body.valid,
 				inlined_operand_index,
-				inlined_user_body.checked_source_opcode});
+				inlined_user_body.checked_source_opcode,
+				materialization_operand_index,
+				instruction.materialization_count});
 		}
 		if (std::find(generator_resume_emitted.begin(),
 				generator_resume_emitted.end(), 0)
@@ -2155,8 +2186,15 @@ public:
 				}),
 			block_instructions.end());
 		for (InstNode &node : nodes_) {
-			node.operands = std::span<const IRValueRef>{operands_}.subspan(
+			node.liveness_operands =
+				std::span<const IRValueRef>{operands_}.subspan(
 				node.operand_offset, node.operand_count);
+			const uint32_t semantic_operand_count =
+				node.materialization_operand_index == UINT32_MAX
+					? node.operand_count
+					: node.materialization_operand_index;
+			node.operands = node.liveness_operands.first(
+				semantic_operand_count);
 		}
 		flatten_block_items(plan_->block_count, block_instructions,
 			instruction_slices_, instructions_);
@@ -2207,6 +2245,20 @@ public:
 	generator_resume_exception_blocks() const {
 		return {plan_->generator_resume_exception_blocks,
 			plan_->generator_resume_count};
+	}
+	std::span<const zend_tpde_materialization>
+	materializations(IRInstRef inst) const {
+		const InstNode &current = node(inst);
+		if (current.synthetic
+				|| current.mir_instruction_index >= plan_->instruction_count) {
+			return {};
+		}
+		const zend_tpde_instruction &instruction =
+			plan_->instructions[current.mir_instruction_index];
+		return std::span<const zend_tpde_materialization>{
+			plan_->materializations, plan_->materialization_count}.subspan(
+				instruction.materialization_offset,
+				instruction.materialization_count);
 	}
 	zend_mir_instruction_record instruction_record(IRInstRef inst) const {
 		const InstNode &instruction_node = node(inst);
@@ -2410,7 +2462,7 @@ public:
 	static uint32_t val_alloca_align(IRValueRef) { return 1; }
 	std::string_view value_fmt_ref(IRValueRef) const { return "znmir-value"; }
 	std::span<const IRValueRef> inst_operands(IRInstRef inst) const {
-		return node(inst).operands;
+		return node(inst).liveness_operands;
 	}
 	auto inst_results(IRInstRef inst) const {
 		const InstNode &current = node(inst);
@@ -2553,6 +2605,10 @@ public:
 	std::span<const zend_mir_block_id>
 	generator_resume_exception_blocks() const {
 		return active_->generator_resume_exception_blocks();
+	}
+	std::span<const zend_tpde_materialization>
+	materializations(IRInstRef inst) const {
+		return active_->materializations(inst);
 	}
 	zend_mir_instruction_record instruction_record(IRInstRef inst) const {
 		return active_->instruction_record(inst);
