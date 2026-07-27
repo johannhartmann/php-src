@@ -2828,6 +2828,19 @@ bool ZendCompilerX64::compile_inst(
 				|| layout.result_offset > INT32_MAX - 8) {
 			return execute_value_operation();
 		}
+		if (node.kind == Adaptor::InstKind::GuardedFast) {
+			const auto guarded_successors =
+				adaptor->block_succs(IRBlockRef{node.control_block});
+			if (node.control_block == UINT32_MAX
+					|| node.continuation_block == UINT32_MAX
+					|| guarded_successors.size() != 2
+					|| static_cast<uint32_t>(guarded_successors[0])
+						!= node.continuation_block
+					|| static_cast<uint32_t>(guarded_successors[1])
+						!= node.argument_index) {
+				return false;
+			}
+		}
 		auto slow = text_writer.label_create();
 		auto key_long = text_writer.label_create();
 		auto key_ready = text_writer.label_create();
@@ -2851,6 +2864,7 @@ bool ZendCompilerX64::compile_inst(
 		ScratchReg element{this};
 		ScratchReg low_word{this};
 		ScratchReg high_word{this};
+		ScratchReg decision{this};
 		auto slot_reg = slot.alloc_gp();
 		auto type_reg = type.alloc_gp();
 		auto array_reg = array.alloc_gp();
@@ -2859,6 +2873,7 @@ bool ZendCompilerX64::compile_inst(
 		auto element_reg = element.alloc_gp();
 		auto low_word_reg = low_word.alloc_gp();
 		auto high_word_reg = high_word.alloc_gp();
+		auto decision_reg = decision.alloc_gp();
 
 		ASM(MOV32rm, type_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
@@ -3005,32 +3020,80 @@ bool ZendCompilerX64::compile_inst(
 		ASM(CMP32ri, type_reg, IS_UNDEF);
 		generate_raw_jump(Jump::je, slow);
 
-		ASM(MOV64rm, low_word_reg,
-			FE_MEM(element_reg, 0, FE_NOREG, 0));
-		ASM(MOV64rm, high_word_reg,
-			FE_MEM(element_reg, 0, FE_NOREG, 8));
-		ASM(MOV64mr,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(layout.result_offset)),
-			low_word_reg);
-		ASM(MOV64mr,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(layout.result_offset + 8)),
-			high_word_reg);
-		ASM(AND32ri, type_reg,
-			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-		ASM(TEST32rr, type_reg, type_reg);
-		generate_raw_jump(Jump::je, done);
-		ASM(MOV32rm, limit_reg,
-			FE_MEM(low_word_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offsetof(zend_refcounted_h, refcount))));
-		ASM(ADD32ri, limit_reg, 1);
-		ASM(MOV32mr,
-			FE_MEM(low_word_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offsetof(zend_refcounted_h, refcount))),
-			limit_reg);
+		if (node.kind == Adaptor::InstKind::GuardedFast) {
+			if (adaptor->machine_kind(node.result)
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+				auto result = result_ref(node.result);
+				auto payload = result.part(0);
+				auto type_info = result.part(1);
+				auto payload_reg = payload.alloc_reg();
+				auto type_info_reg = type_info.alloc_reg();
+				ASM(MOV64rm, payload_reg,
+					FE_MEM(element_reg, 0, FE_NOREG, 0));
+				ASM(MOV32rm, type_info_reg,
+					FE_MEM(element_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zval, u1.type_info))));
+				payload.set_modified();
+				type_info.set_modified();
+				ASM(MOV64rr, low_word_reg, payload_reg);
+			} else {
+				auto [result_ref, result] =
+					result_ref_single(node.result);
+				auto result_reg = result.alloc_reg();
+				switch (adaptor->exact_type(node.result)) {
+					case ZEND_MIR_SCALAR_TYPE_I1:
+						ASM(CMP32ri, type_reg, IS_TRUE);
+						generate_raw_set(Jump::je, result_reg);
+						break;
+					case ZEND_MIR_SCALAR_TYPE_I64:
+						ASM(MOV64rm, result_reg,
+							FE_MEM(element_reg, 0, FE_NOREG, 0));
+						break;
+					case ZEND_MIR_SCALAR_TYPE_F64:
+						ASM(SSE_MOVSDrm, result_reg,
+							FE_MEM(element_reg, 0, FE_NOREG, 0));
+						break;
+					default:
+						return false;
+				}
+				result.set_modified();
+			}
+			ASM(MOV32ri, decision_reg, 0);
+		} else {
+			ASM(MOV64rm, low_word_reg,
+				FE_MEM(element_reg, 0, FE_NOREG, 0));
+			ASM(MOV64rm, high_word_reg,
+				FE_MEM(element_reg, 0, FE_NOREG, 8));
+			ASM(MOV64mr,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(layout.result_offset)),
+				low_word_reg);
+			ASM(MOV64mr,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(layout.result_offset + 8)),
+				high_word_reg);
+		}
+		if (node.kind == Adaptor::InstKind::GuardedFast
+				&& adaptor->machine_kind(node.result)
+					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+			generate_raw_jump(Jump::jmp, done);
+		} else {
+			ASM(AND32ri, type_reg,
+				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+			ASM(TEST32rr, type_reg, type_reg);
+			generate_raw_jump(Jump::je, done);
+			ASM(MOV32rm, limit_reg,
+				FE_MEM(low_word_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_refcounted_h, refcount))));
+			ASM(ADD32ri, limit_reg, 1);
+			ASM(MOV32mr,
+				FE_MEM(low_word_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_refcounted_h, refcount))),
+				limit_reg);
+		}
 		generate_raw_jump(Jump::jmp, done);
 
 		label_place(slow);
@@ -3042,18 +3105,32 @@ bool ZendCompilerX64::compile_inst(
 		element.reset();
 		low_word.reset();
 		high_word.reset();
-		const auto register_state =
-			zend::native::tpde::
-				capture_conditional_call_register_state(*this);
-		ValuePart frame_argument{
-			tpde::x64::PlatformConfig::GP_BANK, 8};
-		frame_argument.set_value(this, std::move(frame_scratch));
-		if (!execute_value_operation(&frame_argument)) {
-			return false;
+		if (node.kind == Adaptor::InstKind::GuardedFast) {
+			ASM(MOV32ri, decision_reg, 1);
+		} else {
+			decision.reset();
+			const auto register_state =
+				zend::native::tpde::
+					capture_conditional_call_register_state(*this);
+			ValuePart frame_argument{
+				tpde::x64::PlatformConfig::GP_BANK, 8};
+			frame_argument.set_value(this, std::move(frame_scratch));
+			if (!execute_value_operation(&frame_argument)) {
+				return false;
+			}
+			zend::native::tpde::restore_conditional_call_register_state(
+				*this, register_state);
 		}
-		zend::native::tpde::restore_conditional_call_register_state(
-			*this, register_state);
 		label_place(done);
+		if (node.kind == Adaptor::InstKind::GuardedFast) {
+			const auto successors =
+				adaptor->block_succs(IRBlockRef{node.control_block});
+			std::array<std::pair<uint64_t, IRBlockRef>, 1> cases{{
+				{1, successors[1]},
+			}};
+			generate_switch(
+				std::move(decision), 32, successors[0], cases);
+		}
 		return true;
 	};
 	auto isset_array = [&]() {
