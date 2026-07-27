@@ -36,7 +36,8 @@ PHP,
 
 $performance = $result['execution']['performance'];
 printf(
-    "%s return=%d executions=%d registered=%d compiled=%d direct=%d leaf=%d "
+    "%s return=%d executions=%d registered=%d compiled=%d direct=%d "
+    . "leaf=%d typed=%d frame_bytes=%d "
     . "decode=%d helper=%d heap=%d catcher=%d "
     . "compile=%s execute=%s bytes=%s\n",
     $result['status'],
@@ -46,6 +47,8 @@ printf(
     $performance['compiled_codeunits'],
     $performance['direct_call_sites'],
     $performance['direct_leaf_scalar_sites'],
+    $performance['direct_typed_body_sites'],
+    $performance['direct_call_frame_bytes'],
     $performance['source_opline_decode_sites'],
     $performance['inner_call_runtime_helper_calls'],
     $performance['inner_call_heap_allocations'],
@@ -56,4 +59,4 @@ printf(
 );
 ?>
 --EXPECT--
-accepted return=100 executions=10 registered=3 compiled=2 direct=1 leaf=1 decode=0 helper=0 heap=0 catcher=0 compile=yes execute=yes bytes=yes
+accepted return=100 executions=10 registered=3 compiled=2 direct=1 leaf=0 typed=1 frame_bytes=0 decode=0 helper=0 heap=0 catcher=0 compile=yes execute=yes bytes=yes
