@@ -447,18 +447,6 @@ private:
 	bool needs_explicit_cold_path(
 			const zend_tpde_instruction &instruction,
 			const zend_mir_instruction_record &record) {
-		zend_tpde_string_length string_length{};
-		zend_tpde_long_binary long_binary{};
-		zend_tpde_long_assign_op long_assign{};
-		zend_tpde_long_incdec long_incdec{};
-		zend_tpde_array_read array_read{};
-		zend_tpde_array_isset array_isset{};
-		zend_tpde_packed_array_append packed_array_append{};
-		zend_tpde_slot_isset_empty slot_isset_empty{};
-		zend_tpde_string_identity string_identity{};
-		zend_tpde_object_property_read object_property_read{};
-		zend_tpde_object_property_write object_property_write{};
-		zend_tpde_dynamic_fetch_read dynamic_fetch_read{};
 		if (record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE) {
 			return instruction.runtime_helper
 				== ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW;
@@ -474,126 +462,18 @@ private:
 			case ZEND_MIR_OPCODE_VALUE_ASSIGN:
 			case ZEND_MIR_OPCODE_VALUE_QM_ASSIGN:
 			case ZEND_MIR_OPCODE_VALUE_FREE:
-				return true;
-			default:
-				break;
-		}
-		if (zend_tpde_long_binary_at(instruction, &long_binary)) {
-			const IRValueRef result =
-				source_operand_value_ref(
-					instruction.value_operation.result);
-			return result != INVALID_VALUE_REF
-				&& (exact_type(result) == ZEND_MIR_SCALAR_TYPE_I64
-					|| exact_type(result) == ZEND_MIR_SCALAR_TYPE_I1)
-				&& machine_kind(result)
-					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
-		}
-		if (zend_tpde_long_assign_op_at(instruction, &long_assign)) {
-			if (!long_assign.has_result) {
-				return true;
-			}
-			const IRValueRef result =
-				source_operand_value_ref(
-					instruction.value_operation.result);
-			return result != INVALID_VALUE_REF
-				&& exact_type(result) == ZEND_MIR_SCALAR_TYPE_I64
-				&& machine_kind(result)
-					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
-		}
-		if (zend_tpde_long_incdec_at(instruction, &long_incdec)) {
-			if (!long_incdec.has_result) {
-				return true;
-			}
-			const IRValueRef result =
-				source_operand_value_ref(
-					instruction.value_operation.result);
-			return result != INVALID_VALUE_REF
-				&& exact_type(result) == ZEND_MIR_SCALAR_TYPE_I64
-				&& machine_kind(result)
-					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
-		}
-		if (zend_tpde_array_read_at(instruction, &array_read)) {
-			const IRValueRef result =
-				source_operand_value_ref(
-					instruction.value_operation.result);
-			return result != INVALID_VALUE_REF
-				&& ((zend_mir_scalar_type_is_exact(exact_type(result))
-						&& exact_type(result)
-							!= ZEND_MIR_SCALAR_TYPE_NULL)
-					|| (machine_kind(result)
-							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-						&& machine_value_is_register_authoritative(
-							result)));
-		}
-		if (zend_tpde_array_isset_at(instruction, &array_isset)) {
-			const IRValueRef result =
-				source_operand_value_ref(
-					instruction.value_operation.result);
-			return result != INVALID_VALUE_REF
-				&& exact_type(result) == ZEND_MIR_SCALAR_TYPE_I1
-				&& machine_kind(result)
-					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
-		}
-		if (zend_tpde_packed_array_append_at(
-				instruction, &packed_array_append)) {
-			return true;
-		}
-		if (zend_tpde_slot_isset_empty_at(
-				instruction, &slot_isset_empty)) {
-			const IRValueRef result =
-				source_operand_value_ref(
-					instruction.value_operation.result);
-			return result != INVALID_VALUE_REF
-				&& exact_type(result) == ZEND_MIR_SCALAR_TYPE_I1
-				&& machine_kind(result)
-					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
-		}
-		if (zend_tpde_string_identity_at(
-				instruction, &string_identity)) {
-			const IRValueRef result =
-				source_operand_value_ref(
-					instruction.value_operation.result);
-			return result != INVALID_VALUE_REF
-				&& (exact_type(result) == ZEND_MIR_SCALAR_TYPE_I1
-					|| machine_kind(result)
-						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
-		}
-		if (zend_tpde_object_property_read_at(
-				instruction, &object_property_read)) {
-			const IRValueRef result =
-				source_operand_value_ref(
-					instruction.value_operation.result);
-			return result != INVALID_VALUE_REF
-				&& ((zend_mir_scalar_type_is_exact(exact_type(result))
-						&& exact_type(result)
-							!= ZEND_MIR_SCALAR_TYPE_NULL)
-					|| (machine_kind(result)
-							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-						&& machine_value_is_register_authoritative(
-							result)));
-		}
-		if (zend_tpde_object_property_write_at(
-				instruction, &object_property_write)) {
-			return true;
-		}
-		if (zend_tpde_dynamic_fetch_read_at(
-				instruction, &dynamic_fetch_read)) {
-			const IRValueRef result =
-				source_operand_value_ref(
-					instruction.value_operation.result);
-			return result != INVALID_VALUE_REF
-				&& ((zend_mir_scalar_type_is_exact(exact_type(result))
-						&& exact_type(result)
-							!= ZEND_MIR_SCALAR_TYPE_NULL)
-					|| (machine_kind(result)
-							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-						&& machine_value_is_register_authoritative(
-							result)));
-		}
-		switch (instruction.value_operation.opcode) {
 			case ZEND_MIR_OPCODE_VALUE_UNARY_OP:
-				return zend_tpde_string_length_at(
-					instruction, &string_length);
+			case ZEND_MIR_OPCODE_VALUE_BINARY_OP:
+			case ZEND_MIR_OPCODE_VALUE_ASSIGN_OP:
+			case ZEND_MIR_OPCODE_VALUE_INCDEC:
+			case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R:
+			case ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM:
+			case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
+			case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV:
+			case ZEND_MIR_OPCODE_OBJECT_FETCH_R:
+			case ZEND_MIR_OPCODE_OBJECT_ASSIGN:
+			case ZEND_MIR_OPCODE_DYNAMIC_FETCH_R:
+				return true;
 			default:
 				return false;
 		}
@@ -1853,14 +1733,7 @@ public:
 				is_boxed_cond_branch(instruction, record);
 			const IRValueRef result = value_ref(record.result_id);
 			const bool result_is_machine =
-				result != INVALID_VALUE_REF
-				&& ((zend_mir_scalar_type_is_exact(exact_type(result))
-						&& exact_type(result)
-							!= ZEND_MIR_SCALAR_TYPE_NULL)
-					|| (machine_kind(result)
-							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-						&& machine_value_is_register_authoritative(
-							result)));
+				machine_value_has_result_representation(result);
 			IRValueRef long_left = INVALID_VALUE_REF;
 			IRValueRef long_right = INVALID_VALUE_REF;
 			if (record.opcode == ZEND_MIR_OPCODE_VALUE_BINARY_OP
@@ -2138,14 +2011,8 @@ public:
 				copy_input = value_ref(zend_tpde_operand_at(
 					plan_, &instruction, 0));
 			}
-			bool machine_result = result != INVALID_VALUE_REF
-				&& ((zend_mir_scalar_type_is_exact(exact_type(result))
-						&& exact_type(result)
-							!= ZEND_MIR_SCALAR_TYPE_NULL)
-					|| (machine_kind(result)
-							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-						&& machine_value_is_register_authoritative(
-							result)));
+			bool machine_result =
+				machine_value_has_result_representation(result);
 			if (machine_result
 					&& (record.opcode
 							== ZEND_MIR_OPCODE_CALL_DIRECT_USER
@@ -2879,6 +2746,21 @@ public:
 				|| index - MIR_VALUE_BASE >= plan_->value_count
 			? ZEND_TPDE_MACHINE_VALUE_I64
 			: plan_->values[index - MIR_VALUE_BASE].machine_kind;
+	}
+	bool machine_value_has_result_representation(IRValueRef value) const {
+		if (value == INVALID_VALUE_REF) {
+			return false;
+		}
+		if (zend_mir_scalar_type_is_exact(exact_type(value))
+				&& exact_type(value) != ZEND_MIR_SCALAR_TYPE_NULL) {
+			return true;
+		}
+		switch (machine_kind(value)) {
+			case ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL:
+				return machine_value_is_register_authoritative(value);
+			default:
+				return false;
+		}
 	}
 	bool machine_value_is_register_authoritative(IRValueRef value) const {
 		const uint32_t index = static_cast<uint32_t>(value);
