@@ -54,12 +54,19 @@ public:
 
 	struct ValueParts {
 		tpde::RegBank bank;
-		uint32_t part_count;
-		uint32_t count() const { return part_count; }
+		zend_tpde_machine_representation_desc representation;
+		uint32_t count() const { return representation.part_count; }
 		uint32_t size_bytes(uint32_t part) const {
-			return part_count == 2 && part == 1 ? 4 : 8;
+			ZEND_ASSERT(part < representation.part_count);
+			return representation.parts[part].bit_width / 8;
 		}
-		tpde::RegBank reg_bank(uint32_t) const { return bank; }
+		tpde::RegBank reg_bank(uint32_t part) const {
+			ZEND_ASSERT(part < representation.part_count);
+			return representation.parts[part].register_bank
+					== ZEND_TPDE_MACHINE_REGISTER_FP
+				? tpde::x64::PlatformConfig::FP_BANK
+				: tpde::x64::PlatformConfig::GP_BANK;
+		}
 	};
 
 	explicit ZendCompilerX64(Adaptor *adaptor, zend_native_image *image)
@@ -147,13 +154,15 @@ public:
 	ValueParts val_parts(IRValueRef value) const {
 		const zend_tpde_machine_value_kind kind =
 			adaptor->machine_kind(value);
+		const zend_tpde_machine_representation_desc representation =
+			zend_tpde_machine_representation(
+				kind, adaptor->machine_value_is_register_authoritative(value));
 		return {
-			kind == ZEND_TPDE_MACHINE_VALUE_F64
+			representation.parts[0].register_bank
+					== ZEND_TPDE_MACHINE_REGISTER_FP
 				? tpde::x64::PlatformConfig::FP_BANK
 				: tpde::x64::PlatformConfig::GP_BANK,
-			kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-					&& adaptor->machine_value_is_register_authoritative(value)
-				? 2u : 1u};
+			representation};
 	}
 	std::optional<ValRefSpecial> val_ref_special(IRValueRef value) {
 		uint64_t bits;
@@ -2024,17 +2033,22 @@ bool ZendCompilerX64::compile_inst(
 			if (result_kind
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 				auto result_value = result_ref(node.result);
-				for (uint32_t part = 0; part < 2; ++part) {
+				const ValueParts parts = val_parts(node.result);
+				for (uint32_t part = 0; part < parts.count(); ++part) {
 					auto value = result_value.part(part);
 					auto value_reg = value.alloc_reg();
-					if (part == 0) {
+					if (parts.representation.parts[part].semantic_role
+							== ZEND_TPDE_MACHINE_PART_PAYLOAD) {
 						ASM(MOV64rm, value_reg,
 							FE_MEM(address, 0, FE_NOREG, offset));
-					} else {
+					} else if (parts.representation.parts[part].semantic_role
+							== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
 						ASM(MOV32rm, value_reg,
 							FE_MEM(address, 0, FE_NOREG,
 								offset + static_cast<int32_t>(
 									offsetof(zval, u1.type_info))));
+					} else {
+						return false;
 					}
 					value.set_modified();
 				}
@@ -2431,13 +2445,14 @@ bool ZendCompilerX64::compile_inst(
 				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 			auto source_value = val_ref(node.operands[0]);
 			auto result_value = result_ref(node.result);
-			for (uint32_t part = 0; part < 2; ++part) {
+			const ValueParts parts = val_parts(node.result);
+			for (uint32_t part = 0; part < parts.count(); ++part) {
 				auto source = source_value.part(part);
 				auto result = result_value.part(part);
 				auto source_reg = source.load_to_reg();
 				auto result_reg = result.alloc_try_reuse(source);
 				if (source_reg != result_reg) {
-					mov(result_reg, source_reg, part == 0 ? 8 : 4);
+					mov(result_reg, source_reg, parts.size_bytes(part));
 				}
 				result.set_modified();
 			}
@@ -6361,19 +6376,28 @@ bool ZendCompilerX64::compile_inst(
 						if (adaptor->machine_kind(node.result)
 								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 							auto result = result_ref(node.result);
-							for (uint32_t part = 0; part < 2; ++part) {
+							const ValueParts parts = val_parts(node.result);
+							for (uint32_t part = 0;
+									part < parts.count(); ++part) {
 								auto value = result.part(part);
 								auto value_reg = value.alloc_reg();
-								if (part == 0) {
+								const zend_tpde_machine_part_role role =
+									parts.representation.parts[part]
+										.semantic_role;
+								if (role
+										== ZEND_TPDE_MACHINE_PART_PAYLOAD) {
 									ASM(MOV64rm, value_reg,
 										FE_MEM(result_slot_reg, 0,
 											FE_NOREG, 0));
-								} else {
+								} else if (role
+										== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
 									ASM(MOV32rm, value_reg,
 										FE_MEM(result_slot_reg, 0,
 											FE_NOREG,
 											static_cast<int32_t>(offsetof(
 												zval, u1.type_info))));
+								} else {
+									return;
 								}
 								value.set_modified();
 							}
@@ -8606,17 +8630,24 @@ bool ZendCompilerX64::compile_inst(
 						ASM(ADD64rr, result_slot_reg, slot_index_reg);
 					}
 					auto result = result_ref(node.result);
-					for (uint32_t part = 0; part < 2; ++part) {
+					const ValueParts parts = val_parts(node.result);
+					for (uint32_t part = 0;
+							part < parts.count(); ++part) {
 						auto value = result.part(part);
 						auto value_reg = value.alloc_reg();
-						if (part == 0) {
+						const zend_tpde_machine_part_role role =
+							parts.representation.parts[part].semantic_role;
+						if (role == ZEND_TPDE_MACHINE_PART_PAYLOAD) {
 							ASM(MOV64rm, value_reg,
 								FE_MEM(result_slot_reg, 0, FE_NOREG, 0));
-						} else {
+						} else if (role
+								== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
 							ASM(MOV32rm, value_reg,
 								FE_MEM(result_slot_reg, 0, FE_NOREG,
 									static_cast<int32_t>(
 										offsetof(zval, u1.type_info))));
+						} else {
+							return false;
 						}
 						value.set_modified();
 					}

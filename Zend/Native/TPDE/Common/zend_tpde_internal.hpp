@@ -31,6 +31,52 @@ enum zend_tpde_machine_value_kind : uint8_t {
 	ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL = 7,
 };
 
+enum zend_tpde_machine_register_bank : uint8_t {
+	ZEND_TPDE_MACHINE_REGISTER_GP = 0,
+	ZEND_TPDE_MACHINE_REGISTER_FP = 1,
+};
+
+enum zend_tpde_machine_part_role : uint8_t {
+	ZEND_TPDE_MACHINE_PART_VALUE = 0,
+	ZEND_TPDE_MACHINE_PART_PAYLOAD = 1,
+	ZEND_TPDE_MACHINE_PART_TYPE_INFO = 2,
+};
+
+struct zend_tpde_machine_part_desc {
+	zend_tpde_machine_part_role semantic_role;
+	uint16_t bit_width;
+	zend_tpde_machine_register_bank register_bank;
+};
+
+struct zend_tpde_machine_representation_desc {
+	static constexpr uint32_t MAX_PART_COUNT = 2;
+
+	uint8_t part_count;
+	zend_tpde_machine_part_desc parts[MAX_PART_COUNT];
+};
+
+static inline zend_tpde_machine_representation_desc
+zend_tpde_machine_representation(
+	zend_tpde_machine_value_kind kind, bool register_authoritative)
+{
+	const zend_tpde_machine_part_desc gp_value = {
+		ZEND_TPDE_MACHINE_PART_VALUE, 64, ZEND_TPDE_MACHINE_REGISTER_GP};
+	const zend_tpde_machine_part_desc fp_value = {
+		ZEND_TPDE_MACHINE_PART_VALUE, 64, ZEND_TPDE_MACHINE_REGISTER_FP};
+	const zend_tpde_machine_part_desc payload = {
+		ZEND_TPDE_MACHINE_PART_PAYLOAD, 64, ZEND_TPDE_MACHINE_REGISTER_GP};
+	const zend_tpde_machine_part_desc type_info = {
+		ZEND_TPDE_MACHINE_PART_TYPE_INFO, 32, ZEND_TPDE_MACHINE_REGISTER_GP};
+
+	if (kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+			&& register_authoritative) {
+		return {2, {payload, type_info}};
+	}
+	return {1, {
+		kind == ZEND_TPDE_MACHINE_VALUE_F64 ? fp_value : gp_value,
+		gp_value}};
+}
+
 enum zend_tpde_machine_location : uint8_t {
 	ZEND_TPDE_MACHINE_LOCATION_REGISTER = 0,
 	ZEND_TPDE_MACHINE_LOCATION_SPILL = 1,
