@@ -2439,8 +2439,22 @@ bool ZendCompilerX64::compile_inst(
 		auto result = result_ref(node.result);
 		return encode(left.part(0), right.part(0), result.part(0));
 	};
-	auto fuse_compare_branch = [&](Jump condition) {
+	auto can_fuse_compare_branch = [&]() {
 		if (remaining_instructions.from == remaining_instructions.to) {
+			return false;
+		}
+		const IRInstRef next = *remaining_instructions.from;
+		const Adaptor::InstNode &consumer = adaptor->node(next);
+		return consumer.kind == Adaptor::InstKind::MIR
+			&& consumer.operands.size() == 1
+			&& consumer.operands[0] == node.result
+			&& adaptor->instruction_record(next).opcode
+				== ZEND_MIR_OPCODE_COND_BRANCH
+			&& this->analyzer.liveness_info(
+				adaptor->val_local_idx(node.result)).ref_count == 2;
+	};
+	auto fuse_compare_branch = [&](Jump condition) {
+		if (!can_fuse_compare_branch()) {
 			return false;
 		}
 		const IRInstRef next = *remaining_instructions.from;
@@ -5541,16 +5555,25 @@ bool ZendCompilerX64::compile_inst(
 		}
 		case ZEND_MIR_OPCODE_I64_EQ:
 		case ZEND_MIR_OPCODE_I1_EQ:
+			if (can_fuse_compare_branch()) {
+				return integer_compare(Jump::je);
+			}
 			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
 				return EncodeBase::encode_zend_native_eq_u64(
 					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_I64_LT:
+			if (can_fuse_compare_branch()) {
+				return integer_compare(Jump::jl);
+			}
 			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
 				return EncodeBase::encode_zend_native_lt_i64(
 					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_I64_LE:
+			if (can_fuse_compare_branch()) {
+				return integer_compare(Jump::jle);
+			}
 			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
 				return EncodeBase::encode_zend_native_le_i64(
 					std::move(left), std::move(right), std::move(result));
