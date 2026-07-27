@@ -416,6 +416,13 @@ struct zend_tpde_source_value_binding {
 	int32_t definition_instruction_index;
 };
 
+enum zend_tpde_machine_control_flow_flag : uint8_t {
+	ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD = 1u << 0,
+	ZEND_TPDE_MACHINE_CONTROL_FLOW_TYPED_COMPONENT_CALL = 1u << 1,
+	ZEND_TPDE_MACHINE_CONTROL_FLOW_BOXED_BRANCH = 1u << 2,
+	ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_BRANCH = 1u << 3,
+};
+
 struct zend_tpde_instruction {
 	zend_mir_instruction_id id;
 	zend_mir_instruction_record record;
@@ -455,6 +462,7 @@ struct zend_tpde_instruction {
 	uint32_t source_auxiliary_reference_index;
 	uint32_t operation_reference_index;
 	bool local_abi_transport;
+	uint8_t machine_control_flow_flags;
 };
 
 struct zend_tpde_array_read {

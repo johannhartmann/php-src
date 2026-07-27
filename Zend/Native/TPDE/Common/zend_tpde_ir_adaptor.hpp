@@ -772,17 +772,10 @@ private:
 
 	bool is_register_cond_branch(
 			const zend_tpde_instruction &instruction,
-			const zend_mir_instruction_record &record,
 			IRValueRef *condition_out = nullptr) const {
 		if (function_mode_ != FunctionMode::TypedBody
-				|| !instruction.has_value_operation
-				|| (record.opcode != ZEND_MIR_OPCODE_VALUE_COND_BRANCH
-					&& record.opcode != ZEND_MIR_OPCODE_COND_BRANCH)
-				|| instruction.value_operation.opcode
-					!= ZEND_MIR_OPCODE_VALUE_COND_BRANCH
-				|| (instruction.value_operation.source_opcode != ZEND_JMPZ
-					&& instruction.value_operation.source_opcode
-						!= ZEND_JMPNZ)) {
+				|| (instruction.machine_control_flow_flags
+					& ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_BRANCH) == 0) {
 			return false;
 		}
 		const IRValueRef condition = source_operand_value_ref(
@@ -802,24 +795,10 @@ private:
 	}
 
 	bool is_boxed_cond_branch(
-			const zend_tpde_instruction &instruction,
-			const zend_mir_instruction_record &record) const {
-		if (!instruction.has_value_operation) {
-			return false;
-		}
-		if (is_register_cond_branch(instruction, record)) {
-			return false;
-		}
-		if (record.opcode == ZEND_MIR_OPCODE_COND_BRANCH) {
-			return instruction.value_operation.opcode
-				== ZEND_MIR_OPCODE_VALUE_COND_BRANCH;
-		}
-		return (record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
-				|| record.opcode
-					== ZEND_MIR_OPCODE_VALUE_BIND_STATIC_BRANCH
-				|| record.opcode
-					== ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH)
-			&& instruction.value_operation.opcode == record.opcode;
+			const zend_tpde_instruction &instruction) const {
+		return (instruction.machine_control_flow_flags
+				& ZEND_TPDE_MACHINE_CONTROL_FLOW_BOXED_BRANCH) != 0
+			&& !is_register_cond_branch(instruction);
 	}
 
 	bool machine_use_requires_tpde_value(
@@ -870,7 +849,7 @@ private:
 					|| has_typed_component_calls_)) {
 			return use.operand_index == 0;
 		}
-		if (is_boxed_cond_branch(instruction, record)
+		if (is_boxed_cond_branch(instruction)
 				|| record.opcode == ZEND_MIR_OPCODE_STATEPOINT
 				|| (record.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
 					&& function_mode_ != FunctionMode::TypedBody
@@ -909,49 +888,17 @@ private:
 
 	bool needs_explicit_cold_path(
 			uint32_t instruction_index,
-			const zend_tpde_instruction &instruction,
-			const zend_mir_instruction_record &record) {
-		if (record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE) {
-			return instruction.runtime_helper
-				== ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW;
+			const zend_tpde_instruction &instruction) const {
+		if ((instruction.machine_control_flow_flags
+					& ZEND_TPDE_MACHINE_CONTROL_FLOW_TYPED_COMPONENT_CALL) != 0
+				&& instruction_index
+					< typed_component_call_eligible_.size()
+				&& typed_component_call_eligible_[
+					instruction_index] != 0) {
+			return function_mode_ == FunctionMode::ZendEntry;
 		}
-		if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
-			if (instruction_index
-						< typed_component_call_eligible_.size()
-					&& typed_component_call_eligible_[
-						instruction_index] != 0) {
-				return function_mode_ == FunctionMode::ZendEntry;
-			}
-			return instruction.direct_call != nullptr
-				&& (instruction.direct_call->flags
-					& ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME) != 0;
-		}
-		if (!instruction.has_value_operation
-				|| executable_kind(instruction, record)
-					== InstKind::SlowPathCall) {
-			return false;
-		}
-		const zend_mir_executable_value_ref &operation =
-			instruction.value_operation;
-		switch (operation.opcode) {
-			case ZEND_MIR_OPCODE_VALUE_ASSIGN:
-			case ZEND_MIR_OPCODE_VALUE_QM_ASSIGN:
-			case ZEND_MIR_OPCODE_VALUE_FREE:
-			case ZEND_MIR_OPCODE_VALUE_UNARY_OP:
-			case ZEND_MIR_OPCODE_VALUE_BINARY_OP:
-			case ZEND_MIR_OPCODE_VALUE_ASSIGN_OP:
-			case ZEND_MIR_OPCODE_VALUE_INCDEC:
-			case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R:
-			case ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM:
-			case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
-			case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV:
-			case ZEND_MIR_OPCODE_OBJECT_FETCH_R:
-			case ZEND_MIR_OPCODE_OBJECT_ASSIGN:
-			case ZEND_MIR_OPCODE_DYNAMIC_FETCH_R:
-				return true;
-			default:
-				return false;
-		}
+		return (instruction.machine_control_flow_flags
+				& ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD) != 0;
 	}
 
 	void freeze_typed_component_calls() {
@@ -2320,7 +2267,7 @@ public:
 			}
 			const uint32_t source = static_cast<uint32_t>(source_block);
 			instruction_blocks[i] = final_blocks[source];
-			if (!needs_explicit_cold_path(i, instruction, record)) {
+			if (!needs_explicit_cold_path(i, instruction)) {
 				continue;
 			}
 			const bool typed_component_guard =
@@ -2343,7 +2290,7 @@ public:
 			const zend_mir_instruction_record record =
 				instruction_record_at(i);
 			zend_tpde_value_condition condition;
-			if (!is_boxed_cond_branch(instruction, record)
+			if (!is_boxed_cond_branch(instruction)
 					|| !zend_tpde_value_condition_at(
 						instruction, &condition)) {
 				continue;
@@ -2462,7 +2409,7 @@ public:
 				source_call_fragments
 				|| instruction.user_opcode_call_fragments;
 			const bool boxed_cond_branch =
-				is_boxed_cond_branch(instruction, record);
+				is_boxed_cond_branch(instruction);
 			const uint32_t record_block = instruction_blocks[i];
 			if (record_block == UINT32_MAX) {
 				valid_ = false;
@@ -2955,7 +2902,7 @@ public:
 			const zend_mir_instruction_record record =
 				instruction_record_at(i);
 			const bool boxed_cond_branch =
-				is_boxed_cond_branch(instruction, record);
+				is_boxed_cond_branch(instruction);
 			if (!zend_mir_id_is_valid(record.id)) {
 				valid_ = false;
 				continue;
@@ -3047,7 +2994,7 @@ public:
 			IRValueRef register_condition = INVALID_VALUE_REF;
 			const bool register_cond_branch =
 				is_register_cond_branch(
-					instruction, record, &register_condition);
+					instruction, &register_condition);
 			const bool typed_component_call =
 				record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
 				&& instruction.direct_call != nullptr
@@ -4319,8 +4266,7 @@ public:
 		}
 		zend_mir_instruction_record record =
 			instruction_record_at(instruction_node.mir_instruction_index);
-		if (is_boxed_cond_branch(
-				mir_instruction(inst), record)) {
+		if (is_boxed_cond_branch(mir_instruction(inst))) {
 			record.opcode =
 				mir_instruction(inst).value_operation.opcode;
 		}
