@@ -1067,6 +1067,467 @@ static bool zend_mir_w11p_index_control_value_instructions(
 	return true;
 }
 
+static bool zend_mir_w14_ssa_id_valid(int id, uint32_t value_count)
+{
+	return id < 0 || (uint32_t) id < value_count;
+}
+
+static zend_mir_value_category zend_mir_w06_type_category(uint32_t type);
+
+static zend_mir_refcount_state zend_mir_w14_type_refcount_state(
+	uint32_t type, zend_mir_value_category category)
+{
+	if (category == ZEND_MIR_VALUE_NON_REFCOUNTED_SCALAR) {
+		return ZEND_MIR_REFCOUNT_IMMORTAL;
+	}
+	if ((type & MAY_BE_RCN) != 0) {
+		return ZEND_MIR_REFCOUNT_SHARED;
+	}
+	if ((type & MAY_BE_RC1) != 0) {
+		return ZEND_MIR_REFCOUNT_UNIQUE;
+	}
+	return ZEND_MIR_REFCOUNT_UNKNOWN;
+}
+
+static void zend_mir_w14_bit_set(uint64_t *words, uint32_t value)
+{
+	words[value / 64] |= UINT64_C(1) << (value % 64);
+}
+
+static void zend_mir_w14_bit_reset(uint64_t *words, uint32_t value)
+{
+	words[value / 64] &= ~(UINT64_C(1) << (value % 64));
+}
+
+static int zend_mir_w14_compare_u32(const void *left, const void *right)
+{
+	const uint32_t a = *(const uint32_t *) left;
+	const uint32_t b = *(const uint32_t *) right;
+	return a < b ? -1 : a > b;
+}
+
+static bool zend_mir_w14_freeze_suspend_liveness(
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	zend_mir_module *module,
+	zend_mir_value_mutator *mutator)
+{
+	uint64_t *block_use = NULL;
+	uint64_t *block_def = NULL;
+	uint64_t *block_phi_def = NULL;
+	uint64_t *live_in = NULL;
+	uint64_t *live_out = NULL;
+	uint64_t *next_out = NULL;
+	uint64_t *next_in = NULL;
+	uint64_t *target_live = NULL;
+	uint32_t *targets = NULL;
+	uint32_t *worklist = NULL;
+	uint8_t *queued = NULL;
+	uint32_t target_count = 0;
+	uint32_t word_count;
+	uint64_t matrix_words;
+	uint32_t storage_count;
+	uint32_t block_index;
+	uint32_t index;
+	bool success = false;
+
+	if ((op_array->fn_flags & ZEND_ACC_GENERATOR) == 0) {
+		return true;
+	}
+	if (ssa == NULL || ssa->ops == NULL || ssa->vars == NULL
+			|| ssa->blocks == NULL || ssa->cfg.blocks == NULL
+			|| ssa->cfg.map == NULL || ssa->vars_count < 0
+			|| ssa->cfg.blocks_count > ZEND_MIR_W06_LIMIT
+			|| (uint32_t) ssa->vars_count > ZEND_MIR_W06_LIMIT
+			|| op_array->last > ZEND_MIR_W06_LIMIT
+			|| op_array->last_try_catch
+				> ZEND_MIR_W06_LIMIT - op_array->last
+			|| op_array->last_var > ZEND_MIR_W06_LIMIT
+			|| op_array->T
+				> ZEND_MIR_W06_LIMIT - op_array->last_var
+			|| mutator == NULL || mutator->add_suspend_live_value == NULL) {
+		return false;
+	}
+	if (ssa->cfg.edges_count != 0 && ssa->cfg.predecessors == NULL) {
+		return false;
+	}
+	storage_count = (uint32_t) op_array->last_var + op_array->T;
+	word_count = ((uint32_t) ssa->vars_count + 63) / 64;
+	if (word_count == 0) {
+		return true;
+	}
+	matrix_words =
+		(uint64_t) ssa->cfg.blocks_count * (uint64_t) word_count;
+	if (matrix_words > ZEND_MIR_W06_LIMIT) {
+		return false;
+	}
+
+	targets = zend_mir_w06_calloc(
+		op_array->last + op_array->last_try_catch, sizeof(*targets));
+	if ((op_array->last != 0 || op_array->last_try_catch != 0)
+			&& targets == NULL) {
+		goto done;
+	}
+	if ((op_array->fn_flags & ZEND_ACC_HAS_FINALLY_BLOCK) != 0) {
+		for (index = 0; index < op_array->last_try_catch; index++) {
+			const zend_try_catch_element *region =
+				&op_array->try_catch_array[index];
+			if (region->finally_op != 0
+					&& region->finally_op < op_array->last
+					&& region->finally_end < op_array->last) {
+				targets[target_count++] = region->finally_op;
+			}
+		}
+	}
+	for (index = 0; index < op_array->last; index++) {
+		const uint8_t opcode = op_array->opcodes[index].opcode;
+		if ((opcode == ZEND_GENERATOR_CREATE
+					|| opcode == ZEND_YIELD
+					|| opcode == ZEND_YIELD_FROM)
+				&& index + 1 < op_array->last) {
+			targets[target_count++] = index + 1;
+		}
+	}
+	if (target_count == 0) {
+		success = true;
+		goto done;
+	}
+	qsort(targets, target_count, sizeof(*targets), zend_mir_w14_compare_u32);
+	{
+		uint32_t unique = 1;
+		for (index = 1; index < target_count; index++) {
+			if (targets[index] != targets[unique - 1]) {
+				targets[unique++] = targets[index];
+			}
+		}
+		target_count = unique;
+	}
+
+	if (matrix_words != 0) {
+		block_use = zend_mir_w06_calloc(
+			(uint32_t) matrix_words, sizeof(*block_use));
+		block_def = zend_mir_w06_calloc(
+			(uint32_t) matrix_words, sizeof(*block_def));
+		block_phi_def = zend_mir_w06_calloc(
+			(uint32_t) matrix_words, sizeof(*block_phi_def));
+		live_in = zend_mir_w06_calloc(
+			(uint32_t) matrix_words, sizeof(*live_in));
+		live_out = zend_mir_w06_calloc(
+			(uint32_t) matrix_words, sizeof(*live_out));
+	}
+	next_out = zend_mir_w06_calloc(word_count, sizeof(*next_out));
+	next_in = zend_mir_w06_calloc(word_count, sizeof(*next_in));
+	target_live = zend_mir_w06_calloc(word_count, sizeof(*target_live));
+	worklist = zend_mir_w06_calloc(
+		ssa->cfg.blocks_count, sizeof(*worklist));
+	queued = zend_mir_w06_calloc(
+		ssa->cfg.blocks_count, sizeof(*queued));
+	if ((matrix_words != 0
+				&& (block_use == NULL || block_def == NULL
+					|| block_phi_def == NULL || live_in == NULL
+					|| live_out == NULL))
+			|| (word_count != 0
+				&& (next_out == NULL || next_in == NULL
+					|| target_live == NULL))
+			|| (ssa->cfg.blocks_count != 0
+				&& (worklist == NULL || queued == NULL))) {
+		goto done;
+	}
+
+	for (block_index = 0;
+			block_index < ssa->cfg.blocks_count; block_index++) {
+		const zend_basic_block *block = &ssa->cfg.blocks[block_index];
+		uint64_t *uses = block_use + (size_t) block_index * word_count;
+		uint64_t *defs = block_def + (size_t) block_index * word_count;
+		uint64_t *phi_defs =
+			block_phi_def + (size_t) block_index * word_count;
+		zend_ssa_phi *phi;
+		uint32_t op_index;
+
+		if ((block->flags & ZEND_BB_REACHABLE) == 0) {
+			continue;
+		}
+		if (block->start > op_array->last
+				|| block->len > op_array->last - block->start) {
+			goto done;
+		}
+		for (phi = ssa->blocks[block_index].phis;
+				phi != NULL; phi = phi->next) {
+			if (phi->ssa_var < 0
+					|| (uint32_t) phi->ssa_var
+						>= (uint32_t) ssa->vars_count) {
+				goto done;
+			}
+			zend_mir_w14_bit_set(defs, (uint32_t) phi->ssa_var);
+			zend_mir_w14_bit_set(phi_defs, (uint32_t) phi->ssa_var);
+		}
+		for (op_index = block->start;
+				op_index < block->start + block->len; op_index++) {
+			const zend_ssa_op *op = &ssa->ops[op_index];
+			const int op_uses[3] = {
+				op->op1_use, op->op2_use, op->result_use
+			};
+			const int op_defs[3] = {
+				op->op1_def, op->op2_def, op->result_def
+			};
+			uint32_t operand;
+
+			for (operand = 0; operand < 3; operand++) {
+				const int use = op_uses[operand];
+				if (!zend_mir_w14_ssa_id_valid(
+						use, (uint32_t) ssa->vars_count)) {
+					goto done;
+				}
+				if (use >= 0
+						&& (defs[(uint32_t) use / 64]
+							& (UINT64_C(1)
+								<< ((uint32_t) use % 64))) == 0) {
+					zend_mir_w14_bit_set(uses, (uint32_t) use);
+				}
+			}
+			for (operand = 0; operand < 3; operand++) {
+				const int def = op_defs[operand];
+				if (!zend_mir_w14_ssa_id_valid(
+						def, (uint32_t) ssa->vars_count)) {
+					goto done;
+				}
+				if (def >= 0) {
+					zend_mir_w14_bit_set(defs, (uint32_t) def);
+				}
+			}
+		}
+	}
+
+	{
+		uint32_t worklist_count = 0;
+		for (block_index = ssa->cfg.blocks_count;
+				block_index-- > 0;) {
+			if ((ssa->cfg.blocks[block_index].flags
+					& ZEND_BB_REACHABLE) != 0) {
+				worklist[worklist_count++] = block_index;
+				queued[block_index] = 1;
+			}
+		}
+		while (worklist_count != 0) {
+			const uint32_t block_number =
+				worklist[--worklist_count];
+			const zend_basic_block *block =
+				&ssa->cfg.blocks[block_number];
+			uint64_t *block_live_in =
+				live_in + (size_t) block_number * word_count;
+			uint64_t *block_live_out =
+				live_out + (size_t) block_number * word_count;
+			const uint64_t *uses =
+				block_use + (size_t) block_number * word_count;
+			const uint64_t *defs =
+				block_def + (size_t) block_number * word_count;
+			bool changed = false;
+			uint32_t successor_index;
+			uint32_t word;
+
+			queued[block_number] = 0;
+			memset(next_out, 0, (size_t) word_count * sizeof(*next_out));
+			for (successor_index = 0;
+				successor_index < block->successors_count;
+				successor_index++) {
+				const int successor_number =
+					block->successors[successor_index];
+				const zend_basic_block *successor;
+				const uint64_t *successor_live_in;
+				const uint64_t *successor_phi_defs;
+				uint32_t predecessor_index;
+				zend_ssa_phi *phi;
+
+				if (successor_number < 0
+						|| (uint32_t) successor_number
+							>= ssa->cfg.blocks_count) {
+					goto done;
+				}
+				successor = &ssa->cfg.blocks[successor_number];
+				successor_live_in = live_in
+					+ (size_t) successor_number * word_count;
+				successor_phi_defs = block_phi_def
+					+ (size_t) successor_number * word_count;
+				for (word = 0; word < word_count; word++) {
+					next_out[word] |=
+						successor_live_in[word]
+							& ~successor_phi_defs[word];
+				}
+				if (successor->predecessor_offset < 0) {
+					goto done;
+				}
+				if ((uint32_t) successor->predecessor_offset
+							> ssa->cfg.edges_count
+						|| successor->predecessors_count
+							> ssa->cfg.edges_count
+								- (uint32_t)
+									successor->predecessor_offset) {
+					goto done;
+				}
+				for (predecessor_index = 0;
+					predecessor_index
+						< successor->predecessors_count;
+					predecessor_index++) {
+					if (ssa->cfg.predecessors[
+							successor->predecessor_offset
+								+ predecessor_index]
+							== (int) block_number) {
+						break;
+					}
+				}
+				if (predecessor_index
+						== successor->predecessors_count) {
+					goto done;
+				}
+				for (phi = ssa->blocks[successor_number].phis;
+					phi != NULL; phi = phi->next) {
+					const int source =
+						phi->sources[predecessor_index];
+					if (!zend_mir_w14_ssa_id_valid(
+							source,
+							(uint32_t) ssa->vars_count)) {
+						goto done;
+					}
+					if (source >= 0) {
+						zend_mir_w14_bit_set(
+							next_out, (uint32_t) source);
+					}
+				}
+			}
+			for (word = 0; word < word_count; word++) {
+				next_in[word] =
+					uses[word] | (next_out[word] & ~defs[word]);
+				if (next_out[word] != block_live_out[word]
+						|| next_in[word] != block_live_in[word]) {
+					changed = true;
+				}
+			}
+			if (!changed) {
+				continue;
+			}
+			memcpy(block_live_out, next_out,
+				(size_t) word_count * sizeof(*block_live_out));
+			memcpy(block_live_in, next_in,
+				(size_t) word_count * sizeof(*block_live_in));
+			if (block->predecessors_count != 0
+					&& block->predecessor_offset < 0) {
+				goto done;
+			}
+			if (block->predecessors_count != 0
+					&& ((uint32_t) block->predecessor_offset
+							> ssa->cfg.edges_count
+						|| block->predecessors_count
+							> ssa->cfg.edges_count
+								- (uint32_t)
+									block->predecessor_offset)) {
+				goto done;
+			}
+			for (index = 0;
+				index < block->predecessors_count; index++) {
+				const int predecessor =
+					ssa->cfg.predecessors[
+						block->predecessor_offset + index];
+				if (predecessor < 0
+						|| (uint32_t) predecessor
+							>= ssa->cfg.blocks_count) {
+					goto done;
+				}
+				if (queued[predecessor] == 0) {
+					queued[predecessor] = 1;
+					worklist[worklist_count++] =
+						(uint32_t) predecessor;
+				}
+			}
+		}
+	}
+
+	for (index = 0; index < target_count; index++) {
+		const uint32_t target = targets[index];
+		const uint32_t target_block = ssa->cfg.map[target];
+		const zend_basic_block *block;
+		uint32_t op_index;
+		uint32_t value;
+
+		if (target_block >= ssa->cfg.blocks_count) {
+			goto done;
+		}
+		block = &ssa->cfg.blocks[target_block];
+		if ((block->flags & ZEND_BB_REACHABLE) == 0
+				|| target < block->start
+				|| target >= block->start + block->len) {
+			goto done;
+		}
+		memcpy(target_live,
+			live_out + (size_t) target_block * word_count,
+			(size_t) word_count * sizeof(*target_live));
+		for (op_index = block->start + block->len;
+			op_index-- > target;) {
+			const zend_ssa_op *op = &ssa->ops[op_index];
+			const int op_defs[3] = {
+				op->op1_def, op->op2_def, op->result_def
+			};
+			const int op_uses[3] = {
+				op->op1_use, op->op2_use, op->result_use
+			};
+			uint32_t operand;
+			for (operand = 0; operand < 3; operand++) {
+				if (op_defs[operand] >= 0) {
+					zend_mir_w14_bit_reset(
+						target_live,
+						(uint32_t) op_defs[operand]);
+				}
+			}
+			for (operand = 0; operand < 3; operand++) {
+				if (op_uses[operand] >= 0) {
+					zend_mir_w14_bit_set(
+						target_live,
+						(uint32_t) op_uses[operand]);
+				}
+			}
+		}
+		for (value = 0;
+			value < (uint32_t) ssa->vars_count; value++) {
+			zend_mir_suspend_live_value_ref live;
+			uint32_t value_index;
+			const int storage = ssa->vars[value].var;
+
+			if ((target_live[value / 64]
+					& (UINT64_C(1) << (value % 64))) == 0) {
+				continue;
+			}
+			live.target_source_position_id = target;
+			live.value_id = zend_mir_value_from_original_ssa(value);
+			if (!zend_mir_module_find_value(
+					module, live.value_id, &value_index)) {
+				continue;
+			}
+			if (storage < 0 || (uint32_t) storage >= storage_count) {
+				goto done;
+			}
+			live.storage_id = (uint32_t) storage;
+			if (!mutator->add_suspend_live_value(
+					mutator->context, &live)) {
+				goto done;
+			}
+		}
+	}
+	success = true;
+
+done:
+	free(queued);
+	free(worklist);
+	free(target_live);
+	free(next_in);
+	free(next_out);
+	free(live_out);
+	free(live_in);
+	free(block_phi_def);
+	free(block_def);
+	free(block_use);
+	free(targets);
+	return success;
+}
+
 bool zend_mir_w09_emit_executable_values(
 	const zend_op_array *op_array,
 	zend_mir_lowering_context *lowering_context,
@@ -1228,6 +1689,7 @@ bool zend_mir_w09_emit_executable_values(
 			|| value_mutator->set_model_flags == NULL
 			|| value_mutator->add_value_location == NULL
 			|| value_mutator->add_executable_operation == NULL
+			|| value_mutator->add_suspend_live_value == NULL
 			|| !value_mutator->set_model_flags(
 				value_mutator->context,
 				ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS)) {
@@ -1237,6 +1699,11 @@ bool zend_mir_w09_emit_executable_values(
 		zend_mir_source_ssa_ref ssa;
 		zend_mir_value_id value_id;
 		zend_mir_storage_id storage_id;
+		uint32_t type = semantic_ssa != NULL
+				&& semantic_ssa->var_info != NULL
+			? semantic_ssa->var_info[index].type : 0;
+		bool alias_observable =
+			(type & (MAY_BE_REF | MAY_BE_INDIRECT)) != 0;
 		uint32_t value_index;
 
 		if (!source->ssa_at(source->context, index, &ssa)) {
@@ -1254,6 +1721,20 @@ bool zend_mir_w09_emit_executable_values(
 		locations[location_count].storage_id = storage_id;
 		locations[location_count].frame_argument_ordinal_plus_one =
 			argument_by_ssa[ssa.ssa_variable_id];
+		if (locations[location_count].frame_argument_ordinal_plus_one != 0
+				&& ARG_SHOULD_BE_SENT_BY_REF(
+					(const zend_function *) op_array,
+					locations[location_count]
+						.frame_argument_ordinal_plus_one)) {
+			alias_observable = true;
+		}
+		locations[location_count].alias_observable = alias_observable;
+		locations[location_count].category = alias_observable
+			? ZEND_MIR_VALUE_REFERENCE_CELL
+			: zend_mir_w06_type_category(type);
+		locations[location_count].refcount_state =
+			zend_mir_w14_type_refcount_state(
+				type, locations[location_count].category);
 		location_count++;
 	}
 	for (index = 0; index < op_array->last; index++) {
@@ -1537,6 +2018,11 @@ bool zend_mir_w09_emit_executable_values(
 				value_mutator->context, &locations[index])) {
 			goto done;
 		}
+	}
+	if (w11_execution
+			&& !zend_mir_w14_freeze_suspend_liveness(
+				op_array, semantic_ssa, module, value_mutator)) {
+		goto done;
 	}
 	if (operation_count != 0) {
 		qsort(operations, operation_count, sizeof(*operations),

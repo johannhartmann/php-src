@@ -245,7 +245,8 @@ static bool zend_mir_w06_view_complete(
 		&& view->source_position_at != NULL
 		&& values != NULL && values->context != NULL
 		&& (values->contract_version == ZEND_MIR_W06_CONTRACT_VERSION
-			|| values->contract_version == ZEND_MIR_W11P_CONTRACT_VERSION)
+			|| values->contract_version == ZEND_MIR_W11P_CONTRACT_VERSION
+			|| values->contract_version == ZEND_MIR_W14_CONTRACT_VERSION)
 		&& values->storage_count != NULL && values->storage_at != NULL
 		&& values->payload_count != NULL && values->payload_at != NULL
 		&& values->reference_cell_count != NULL
@@ -258,11 +259,14 @@ static bool zend_mir_w06_view_complete(
 		&& values->separation_plan_at != NULL
 		&& values->call_transfer_count != NULL
 		&& values->call_transfer_at != NULL
-		&& (values->contract_version != ZEND_MIR_W11P_CONTRACT_VERSION
+		&& (values->contract_version == ZEND_MIR_W06_CONTRACT_VERSION
 			|| ((values->model_flags
 					& ~ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS) == 0
 				&& values->value_location_count != NULL
-				&& values->value_location_at != NULL));
+				&& values->value_location_at != NULL))
+		&& (values->contract_version != ZEND_MIR_W14_CONTRACT_VERSION
+			|| (values->suspend_live_value_count != NULL
+				&& values->suspend_live_value_at != NULL));
 }
 
 static bool zend_mir_w06_counts_bounded(const zend_mir_value_view *values)
@@ -279,8 +283,11 @@ static bool zend_mir_w06_counts_bounded(const zend_mir_value_view *values)
 			<= ZEND_MIR_W06_VIEW_LIMIT
 		&& values->call_transfer_count(values->context)
 			<= ZEND_MIR_W06_VIEW_LIMIT
-		&& (values->contract_version != ZEND_MIR_W11P_CONTRACT_VERSION
+		&& (values->contract_version == ZEND_MIR_W06_CONTRACT_VERSION
 			|| values->value_location_count(values->context)
+				<= ZEND_MIR_W06_VIEW_LIMIT)
+		&& (values->contract_version != ZEND_MIR_W14_CONTRACT_VERSION
+			|| values->suspend_live_value_count(values->context)
 				<= ZEND_MIR_W06_VIEW_LIMIT);
 }
 
@@ -944,13 +951,13 @@ static bool zend_mir_w11p_verify_value_locations(
 {
 	const zend_mir_module *module = zend_mir_module_from_value_view(values);
 	const uint32_t count =
-		values->contract_version == ZEND_MIR_W11P_CONTRACT_VERSION
+		values->contract_version != ZEND_MIR_W06_CONTRACT_VERSION
 			? values->value_location_count(values->context) : 0;
 	zend_mir_value_id previous = 0;
 	bool have_previous = false;
 	uint32_t index;
 
-	if (values->contract_version != ZEND_MIR_W11P_CONTRACT_VERSION) {
+	if (values->contract_version == ZEND_MIR_W06_CONTRACT_VERSION) {
 		return true;
 	}
 	if ((values->model_flags & ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS) == 0) {
@@ -974,6 +981,19 @@ static bool zend_mir_w11p_verify_value_locations(
 				|| !zend_mir_id_is_valid(location.storage_id)
 				|| location.frame_argument_ordinal_plus_one
 					== ZEND_MIR_ID_INVALID
+				|| (values->contract_version
+						== ZEND_MIR_W14_CONTRACT_VERSION
+					&& (location.category
+							< ZEND_MIR_VALUE_NON_REFCOUNTED_SCALAR
+						|| location.category
+							> ZEND_MIR_VALUE_CATEGORY_UNKNOWN
+						|| location.refcount_state
+							< ZEND_MIR_REFCOUNT_IMMORTAL
+						|| location.refcount_state
+							> ZEND_MIR_REFCOUNT_UNKNOWN
+						|| (location.alias_observable
+							&& location.category
+								!= ZEND_MIR_VALUE_REFERENCE_CELL)))
 				|| !zend_mir_module_find_value(
 					module, location.value_id, &value_index)
 				|| (have_previous && location.value_id <= previous)) {
@@ -983,6 +1003,88 @@ static bool zend_mir_w11p_verify_value_locations(
 				"invalid canonical value-location table");
 		}
 		previous = location.value_id;
+		have_previous = true;
+	}
+	return true;
+}
+
+static bool zend_mir_w14_verify_suspend_live_values(
+	const zend_mir_view *view, const zend_mir_value_view *values,
+	zend_mir_diagnostic_sink *diagnostics)
+{
+	const zend_mir_module *module = zend_mir_module_from_value_view(values);
+	zend_mir_source_position_id previous_target = 0;
+	zend_mir_value_id previous_value = 0;
+	bool have_previous = false;
+	uint32_t index;
+	uint32_t count;
+
+	if (values->contract_version != ZEND_MIR_W14_CONTRACT_VERSION) {
+		return true;
+	}
+	count = values->suspend_live_value_count(values->context);
+	for (index = 0; index < count; index++) {
+		zend_mir_suspend_live_value_ref live;
+		zend_mir_value_location_ref location;
+		uint32_t value_index;
+		uint32_t low = 0;
+		uint32_t high =
+			values->value_location_count(values->context);
+		bool location_found = false;
+
+		if (module == NULL
+				|| !values->suspend_live_value_at(
+					values->context, index, &live)
+				|| !zend_mir_id_is_valid(live.target_source_position_id)
+				|| !zend_mir_id_is_valid(live.value_id)
+				|| !zend_mir_id_is_valid(live.storage_id)
+				|| !zend_mir_module_find_value(
+					module, live.value_id, &value_index)
+				|| !zend_mir_w06_source_exists(
+					view, live.target_source_position_id)
+				|| (have_previous
+					&& (live.target_source_position_id < previous_target
+						|| (live.target_source_position_id
+								== previous_target
+							&& live.value_id <= previous_value)))) {
+			return zend_mir_w06_emit(view, diagnostics,
+				ZEND_MIR_VERIFY_W06_STORAGE_MISMATCH,
+				ZEND_MIRV_TOKEN_W06_STORAGE_MISMATCH,
+				"invalid canonical suspend-live table");
+		}
+		while (low < high) {
+			const uint32_t middle = low + (high - low) / 2;
+			if (!values->value_location_at(
+					values->context, middle, &location)) {
+				return zend_mir_w06_emit(view, diagnostics,
+					ZEND_MIR_VERIFY_W06_STORAGE_MISMATCH,
+					ZEND_MIRV_TOKEN_W06_STORAGE_MISMATCH,
+					"unreadable canonical value-location table");
+			}
+			if (location.value_id < live.value_id) {
+				low = middle + 1;
+			} else {
+				high = middle;
+			}
+		}
+		if (low < values->value_location_count(values->context)) {
+			if (!values->value_location_at(
+					values->context, low, &location)) {
+				return zend_mir_w06_emit(view, diagnostics,
+					ZEND_MIR_VERIFY_W06_STORAGE_MISMATCH,
+					ZEND_MIRV_TOKEN_W06_STORAGE_MISMATCH,
+					"unreadable canonical value-location table");
+			}
+			location_found = location.value_id == live.value_id;
+		}
+		if (!location_found || location.storage_id != live.storage_id) {
+			return zend_mir_w06_emit(view, diagnostics,
+				ZEND_MIR_VERIFY_W06_STORAGE_MISMATCH,
+				ZEND_MIRV_TOKEN_W06_STORAGE_MISMATCH,
+				"suspend-live value lacks its canonical location");
+		}
+		previous_target = live.target_source_position_id;
+		previous_value = live.value_id;
 		have_previous = true;
 	}
 	return true;
@@ -1007,5 +1109,7 @@ bool zend_mir_verify_w06_values(
 		&& zend_mir_w06_verify_separations(view, values, diagnostics)
 		&& zend_mir_w06_verify_call_transfers(view, values, diagnostics)
 		&& zend_mir_w11p_verify_value_locations(
+			view, values, diagnostics)
+		&& zend_mir_w14_verify_suspend_live_values(
 			view, values, diagnostics);
 }

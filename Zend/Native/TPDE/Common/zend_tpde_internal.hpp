@@ -228,11 +228,13 @@ struct zend_tpde_value {
 	zend_mir_scalar_type_mask exact_type;
 	zend_mir_storage_id canonical_storage_id;
 	zend_mir_ownership_state ownership;
+	zend_mir_value_category category;
 	zend_mir_refcount_state refcount_state;
 	int32_t argument_index;
 	zend_tpde_machine_value_kind machine_kind;
 	zend_tpde_machine_location location;
 	zend_tpde_canonical_slot_state slot_state;
+	bool canonical_alias_observable;
 	bool constant;
 	uint64_t constant_bits;
 };
@@ -1110,6 +1112,10 @@ struct zend_tpde_plan {
 	uint32_t instruction_count;
 	zend_tpde_id_index_entry *instruction_index;
 	uint32_t instruction_index_capacity;
+	int32_t *value_definition_instructions;
+	uint32_t *value_consumer_offsets;
+	uint32_t *value_consumers;
+	uint32_t value_consumer_count;
 	zend_tpde_id_index_entry *call_site_instruction_index;
 	uint32_t call_site_instruction_index_capacity;
 	uint32_t call_site_count;

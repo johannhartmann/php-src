@@ -87,7 +87,7 @@
       "source": "<?php function g(string $x): string{return $x;} function f(): string{return g(\"hello\");}",
       "function": "f",
       "expected_status": "accepted",
-      "required_source_opcodes": ["ZEND_DO_UCALL"],
+      "required_source_opcodes": ["ZEND_DO_FCALL"],
       "required_mir_tokens": ["kind 5 state 1", "return-action 5"]
     },
     {
@@ -96,7 +96,7 @@
       "source": "<?php function &g(int &$x): int{return $x;} function f(int &$x){return g($x);}",
       "function": "f",
       "expected_status": "accepted",
-      "required_source_opcodes": ["ZEND_DO_UCALL"],
+      "required_source_opcodes": ["ZEND_DO_FCALL"],
       "required_mir_tokens": ["return-reference rc", "return-action 5", "reference-cell rc"]
     },
     {
@@ -105,7 +105,7 @@
       "source": "<?php function g(string $x): string{return $x;} function f(): string{return g(g(\"hello\"));}",
       "function": "f",
       "expected_status": "accepted",
-      "required_source_opcodes": ["ZEND_DO_UCALL"],
+      "required_source_opcodes": ["ZEND_DO_FCALL"],
       "required_mir_tokens": ["call-transfer cs0", "call-transfer cs1", "return-storage vs"]
     },
     {
