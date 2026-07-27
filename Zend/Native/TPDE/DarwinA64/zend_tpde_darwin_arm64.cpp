@@ -3,6 +3,7 @@
 #include "Zend/Native/TPDE/Common/zend_tpde_ir_adaptor.hpp"
 #include "Zend/Native/TPDE/Common/zend_tpde_conditional_call.hpp"
 #include "Zend/Native/TPDE/DarwinA64/zend_tpde_apple_a64_abi.hpp"
+#include "Zend/Native/TPDE/DarwinA64/zend_tpde_encodegen_a64.hpp"
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
 #include "Zend/zend_execute.h"
 #include "Zend/zend_object_handlers.h"
@@ -46,8 +47,12 @@ using DarwinAssembler = zend::native::tpde::AssemblerDarwinA64;
 
 class ZendCompilerA64 final
 	: public ::tpde::a64::CompilerA64<Adaptor, ZendCompilerA64,
+		::tpde::CompilerBase, DarwinConfig>,
+	  public tpde_encodegen::EncodeCompiler<Adaptor, ZendCompilerA64,
 		::tpde::CompilerBase, DarwinConfig> {
 	using Base = ::tpde::a64::CompilerA64<Adaptor, ZendCompilerA64,
+		::tpde::CompilerBase, DarwinConfig>;
+	using EncodeBase = tpde_encodegen::EncodeCompiler<Adaptor, ZendCompilerA64,
 		::tpde::CompilerBase, DarwinConfig>;
 	zend_native_image *image_;
 	std::vector<::tpde::SymRef> image_symbols_;
@@ -77,6 +82,11 @@ public:
 		  image_{image},
 		  image_symbols_(image->symbol_count),
 		  image_slots_(image->symbol_count) {}
+
+	void reset() {
+		Base::reset();
+		EncodeBase::reset();
+	}
 
 	ValuePart image_symbol_value(
 		zend_native_image_symbol_kind kind, uint32_t id) {
@@ -1966,59 +1976,11 @@ bool ZendCompilerA64::compile_inst(
 		result.set_modified();
 		return true;
 	};
-	auto integer_binary = [&](auto emit) {
-		auto [left_pair, right_pair] = binary();
-		auto &[left_ref, left] = left_pair;
-		auto &[right_ref, right] = right_pair;
-		auto [result_ref, result] = result_ref_single(node.result);
-		auto left_reg = left.load_to_reg();
-		auto result_reg = result.alloc_try_reuse(left);
-		uint64_t immediate;
-		if (adaptor->constant(node.operands[1], &immediate)) {
-			bool emitted = false;
-			const int64_t signed_immediate =
-				static_cast<int64_t>(immediate);
-			switch (record.opcode) {
-				case ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW:
-					if (signed_immediate >= 0) {
-						emitted = ASMIF(ADDxi, result_reg, left_reg,
-							static_cast<uint64_t>(signed_immediate));
-					} else if (signed_immediate != INT64_MIN) {
-						emitted = ASMIF(SUBxi, result_reg, left_reg,
-							static_cast<uint64_t>(-signed_immediate));
-					}
-					break;
-				case ZEND_MIR_OPCODE_I64_SUB_NO_OVERFLOW:
-					if (signed_immediate >= 0) {
-						emitted = ASMIF(SUBxi, result_reg, left_reg,
-							static_cast<uint64_t>(signed_immediate));
-					} else if (signed_immediate != INT64_MIN) {
-						emitted = ASMIF(ADDxi, result_reg, left_reg,
-							static_cast<uint64_t>(-signed_immediate));
-					}
-					break;
-				case ZEND_MIR_OPCODE_I64_BIT_OR:
-					emitted = ASMIF(ORRxi, result_reg, left_reg, immediate);
-					break;
-				case ZEND_MIR_OPCODE_I64_BIT_AND:
-					emitted = ASMIF(ANDxi, result_reg, left_reg, immediate);
-					break;
-				case ZEND_MIR_OPCODE_I64_BIT_XOR:
-				case ZEND_MIR_OPCODE_I1_XOR:
-					emitted = ASMIF(EORxi, result_reg, left_reg, immediate);
-					break;
-				default:
-					break;
-			}
-			if (emitted) {
-				result.set_modified();
-				return true;
-			}
-		}
-		auto right_reg = right.load_to_reg();
-		emit(result_reg, left_reg, right_reg);
-		result.set_modified();
-		return true;
+	auto encode_binary = [&](auto encode) {
+		auto left = val_ref(node.operands[0]);
+		auto right = val_ref(node.operands[1]);
+		auto result = result_ref(node.result);
+		return encode(left.part(0), right.part(0), result.part(0));
 	};
 	auto fuse_compare_branch = [&](Jump condition) {
 		if (remaining_instructions.from == remaining_instructions.to) {
@@ -2063,18 +2025,6 @@ bool ZendCompilerA64::compile_inst(
 		auto [result_ref, result] = result_ref_single(node.result);
 		auto result_reg = result.alloc_reg();
 		generate_raw_set(condition, result_reg);
-		result.set_modified();
-		return true;
-	};
-	auto floating_binary = [&](auto emit) {
-		auto [left_pair, right_pair] = binary();
-		auto &[left_ref, left] = left_pair;
-		auto &[right_ref, right] = right_pair;
-		auto [result_ref, result] = result_ref_single(node.result);
-		auto left_reg = left.load_to_reg();
-		auto right_reg = right.load_to_reg();
-		auto result_reg = result.alloc_try_reuse(left);
-		emit(result_reg, left_reg, right_reg);
 		result.set_modified();
 		return true;
 	};
@@ -4379,29 +4329,35 @@ bool ZendCompilerA64::compile_inst(
 			}
 			return true;
 		case ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW:
-			return integer_binary([&](auto dst, auto left, auto right) {
-				ASM(ADDx, dst, left, right);
+			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+				return EncodeBase::encode_zend_native_add_u64(
+					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_I64_SUB_NO_OVERFLOW:
-			return integer_binary([&](auto dst, auto left, auto right) {
-				ASM(SUBx, dst, left, right);
+			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+				return EncodeBase::encode_zend_native_sub_u64(
+					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_I64_MUL_NO_OVERFLOW:
-			return integer_binary([&](auto dst, auto left, auto right) {
-				ASM(MULx, dst, left, right);
+			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+				return EncodeBase::encode_zend_native_mul_u64(
+					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_I64_BIT_OR:
-			return integer_binary([&](auto dst, auto left, auto right) {
-				ASM(ORRx, dst, left, right);
+			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+				return EncodeBase::encode_zend_native_or_u64(
+					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_I64_BIT_AND:
-			return integer_binary([&](auto dst, auto left, auto right) {
-				ASM(ANDx, dst, left, right);
+			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+				return EncodeBase::encode_zend_native_and_u64(
+					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_I64_BIT_XOR:
 		case ZEND_MIR_OPCODE_I1_XOR:
-			return integer_binary([&](auto dst, auto left, auto right) {
-				ASM(EORx, dst, left, right);
+			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+				return EncodeBase::encode_zend_native_xor_u64(
+					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_I64_BIT_NOT: {
 			auto [source_ref, source] = unary();
@@ -4462,24 +4418,36 @@ bool ZendCompilerA64::compile_inst(
 			return true;
 		}
 		case ZEND_MIR_OPCODE_I64_SHL_CHECKED:
-			return integer_binary([&](auto dst, auto left, auto right) {
-				ASM(LSLVx, dst, left, right);
-			});
-		case ZEND_MIR_OPCODE_I64_SHR_CHECKED:
-			return integer_binary([&](auto dst, auto left, auto right) {
-				ASM(ASRVx, dst, left, right);
-			});
+		case ZEND_MIR_OPCODE_I64_SHR_CHECKED: {
+			auto [left_pair, right_pair] = binary();
+			auto &[left_ref, left] = left_pair;
+			auto &[right_ref, right] = right_pair;
+			auto [result_ref, result] = result_ref_single(node.result);
+			auto left_reg = left.load_to_reg();
+			auto right_reg = right.load_to_reg();
+			auto result_reg = result.alloc_try_reuse(left);
+			if (record.opcode == ZEND_MIR_OPCODE_I64_SHL_CHECKED) {
+				ASM(LSLVx, result_reg, left_reg, right_reg);
+			} else {
+				ASM(ASRVx, result_reg, left_reg, right_reg);
+			}
+			result.set_modified();
+			return true;
+		}
 		case ZEND_MIR_OPCODE_F64_ADD:
-			return floating_binary([&](auto dst, auto left, auto right) {
-				ASM(FADDd, dst, left, right);
+			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+				return EncodeBase::encode_zend_native_add_f64(
+					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_F64_SUB:
-			return floating_binary([&](auto dst, auto left, auto right) {
-				ASM(FSUBd, dst, left, right);
+			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+				return EncodeBase::encode_zend_native_sub_f64(
+					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_F64_MUL:
-			return floating_binary([&](auto dst, auto left, auto right) {
-				ASM(FMULd, dst, left, right);
+			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+				return EncodeBase::encode_zend_native_mul_f64(
+					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_F64_EQ:
 			return floating_compare(Jump::Jeq);
