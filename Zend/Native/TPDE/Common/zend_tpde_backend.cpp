@@ -1995,6 +1995,225 @@ bool freeze_source_value_bindings(
 	return true;
 }
 
+bool freeze_machine_references(
+	zend_tpde_plan *plan,
+	zend_native_diagnostic *diag)
+{
+	if (plan == nullptr) {
+		return true;
+	}
+
+	std::vector<zend_tpde_machine_reference> references;
+	auto add_reference =
+		[&](const zend_tpde_machine_reference &reference) -> uint32_t {
+			for (uint32_t index = 0; index < references.size(); ++index) {
+				const zend_tpde_machine_reference &candidate =
+					references[index];
+				if (candidate.kind == reference.kind
+						&& candidate.base_value_id
+							== reference.base_value_id
+						&& candidate.index_value_id
+							== reference.index_value_id
+						&& candidate.stable_storage_or_layout_id
+							== reference.stable_storage_or_layout_id
+						&& candidate.scale == reference.scale
+						&& candidate.displacement == reference.displacement
+						&& candidate.access_width == reference.access_width) {
+					return index;
+				}
+			}
+			if (references.size() >= MAX_RECORDS) {
+				return UINT32_MAX;
+			}
+			references.push_back(reference);
+			return static_cast<uint32_t>(references.size() - 1);
+		};
+	auto binding_value_id =
+		[&](const zend_tpde_source_value_binding &binding) {
+			return binding.value_index >= 0
+					&& static_cast<uint32_t>(binding.value_index)
+						< plan->value_count
+				? plan->values[
+					static_cast<uint32_t>(binding.value_index)].id
+				: ZEND_MIR_ID_INVALID;
+		};
+	auto operand_reference =
+		[&](const zend_mir_source_operand_ref &operand,
+				zend_mir_storage_id storage_id,
+				const zend_tpde_source_value_binding &binding) {
+			if (zend_mir_id_is_valid(storage_id)) {
+				return add_reference({
+					ZEND_TPDE_MACHINE_REFERENCE_FRAME_SLOT,
+					ZEND_MIR_ID_INVALID,
+					ZEND_MIR_ID_INVALID,
+					storage_id,
+					1,
+					static_cast<int64_t>(
+						(uint64_t{ZEND_CALL_FRAME_SLOT} + storage_id)
+							* sizeof(zval)),
+					sizeof(zval),
+				});
+			}
+			if (operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+				return add_reference({
+					ZEND_TPDE_MACHINE_REFERENCE_LITERAL,
+					binding_value_id(binding),
+					ZEND_MIR_ID_INVALID,
+					operand.index,
+					1,
+					0,
+					sizeof(zval),
+				});
+			}
+			return UINT32_MAX;
+		};
+
+	plan->observers_enabled_reference_index = add_reference({
+		ZEND_TPDE_MACHINE_REFERENCE_CONTEXT_FIELD,
+		ZEND_MIR_ID_INVALID,
+		ZEND_MIR_ID_INVALID,
+		static_cast<uint32_t>(offsetof(
+			zend_native_execution_context, observers_enabled)),
+		1,
+		static_cast<int64_t>(offsetof(
+			zend_native_execution_context, observers_enabled)),
+		sizeof(bool),
+	});
+	if (plan->observers_enabled_reference_index == UINT32_MAX) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+			"machine-reference table exceeds the executable bound");
+		return false;
+	}
+
+	/*
+	 * Argument payload loads and safepoint materialization consume canonical
+	 * locations even when no source opcode names the slot.  Freeze those
+	 * locations from the value table itself so the adaptor never has to
+	 * rediscover an address from the live op_array.
+	 */
+	for (uint32_t index = 0; index < plan->value_count; ++index) {
+		const zend_tpde_value &value = plan->values[index];
+		const zend_mir_storage_id storage_id =
+			zend_mir_id_is_valid(value.canonical_storage_id)
+				? value.canonical_storage_id
+				: value.argument_index >= 0
+					&& (plan->value_model_flags
+						& ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS) == 0
+					? static_cast<zend_mir_storage_id>(
+						value.argument_index)
+					: ZEND_MIR_ID_INVALID;
+		if (!zend_mir_id_is_valid(storage_id)) {
+			continue;
+		}
+		if (add_reference({
+				ZEND_TPDE_MACHINE_REFERENCE_FRAME_SLOT,
+				ZEND_MIR_ID_INVALID,
+				ZEND_MIR_ID_INVALID,
+				storage_id,
+				1,
+				static_cast<int64_t>(
+					(uint64_t{ZEND_CALL_FRAME_SLOT} + storage_id)
+						* sizeof(zval)),
+				sizeof(zval),
+			}) == UINT32_MAX) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"machine-reference table exceeds the executable bound");
+			return false;
+		}
+	}
+
+	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+		zend_tpde_instruction &instruction = plan->instructions[index];
+		instruction.source_op1_reference_index = UINT32_MAX;
+		instruction.source_op2_reference_index = UINT32_MAX;
+		instruction.source_result_reference_index = UINT32_MAX;
+		instruction.source_auxiliary_reference_index = UINT32_MAX;
+		instruction.operation_reference_index = UINT32_MAX;
+		if (!instruction.has_value_operation) {
+			continue;
+		}
+		const zend_mir_executable_value_ref &operation =
+			instruction.value_operation;
+		instruction.source_op1_reference_index = operand_reference(
+			operation.op1, operation.op1_storage_id,
+			instruction.source_op1_binding);
+		instruction.source_op2_reference_index = operand_reference(
+			operation.op2, operation.op2_storage_id,
+			instruction.source_op2_binding);
+		instruction.source_result_reference_index = operand_reference(
+			operation.result, operation.result_storage_id,
+			instruction.source_result_binding);
+		instruction.source_auxiliary_reference_index = operand_reference(
+			operation.auxiliary, operation.auxiliary_storage_id,
+			instruction.source_auxiliary_binding);
+
+		if ((operation.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_R
+					|| operation.opcode == ZEND_MIR_OPCODE_OBJECT_ASSIGN)
+				&& operation.op2.kind
+					== ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+			instruction.operation_reference_index = add_reference({
+				ZEND_TPDE_MACHINE_REFERENCE_PROPERTY_SLOT,
+				binding_value_id(instruction.source_op1_binding),
+				binding_value_id(instruction.source_op2_binding),
+				operation.extended_value & ~ZEND_FETCH_REF,
+				1,
+				0,
+				sizeof(zval),
+			});
+		} else if (operation.opcode
+					== ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
+				|| operation.opcode
+					== ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM) {
+			instruction.operation_reference_index = add_reference({
+				ZEND_TPDE_MACHINE_REFERENCE_PACKED_ELEMENT,
+				binding_value_id(instruction.source_op1_binding),
+				operation.opcode == ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
+					? binding_value_id(instruction.source_op2_binding)
+					: ZEND_MIR_ID_INVALID,
+				0,
+				sizeof(zval),
+				0,
+				sizeof(zval),
+			});
+		}
+		if ((instruction.operation_reference_index == UINT32_MAX
+					&& (operation.opcode
+							== ZEND_MIR_OPCODE_OBJECT_FETCH_R
+						|| operation.opcode
+							== ZEND_MIR_OPCODE_OBJECT_ASSIGN
+						|| operation.opcode
+							== ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
+						|| operation.opcode
+							== ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM))
+				|| references.size() >= MAX_RECORDS) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"unable to freeze a machine address reference");
+			return false;
+		}
+	}
+
+	plan->machine_reference_count =
+		static_cast<uint32_t>(references.size());
+	if (references.empty()) {
+		return true;
+	}
+	plan->machine_references = static_cast<zend_tpde_machine_reference *>(
+		std::malloc(references.size()
+			* sizeof(*plan->machine_references)));
+	if (plan->machine_references == nullptr) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"unable to allocate the machine-reference table");
+		return false;
+	}
+	std::memcpy(plan->machine_references, references.data(),
+		references.size() * sizeof(*plan->machine_references));
+	return true;
+}
+
 bool freeze_generator_resume_liveness(
 	zend_tpde_plan *plan,
 	const zend_op_array *source_op_array,
@@ -2485,6 +2704,7 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->generator_resume_exception_blocks);
 	std::free(plan->generator_resume_live_values);
 	std::free(plan->materializations);
+	std::free(plan->machine_references);
 	std::free(plan->entry_undef_temporary_indices);
 	std::free(plan->direct_calls);
 	std::free(plan->direct_internal_calls);
@@ -5362,6 +5582,9 @@ bool initialize_plan(
 		}
 	}
 	if (!freeze_source_value_bindings(plan, source_op_array, diag)) {
+		return false;
+	}
+	if (!freeze_machine_references(plan, diag)) {
 		return false;
 	}
 	if (!freeze_entry_undef_temporaries(plan, source_op_array, diag)) {

@@ -124,6 +124,7 @@ public:
 		zend_tpde_machine_value_kind machine_kind;
 		zend_mir_ownership_state ownership;
 		zend_mir_refcount_state refcount_state;
+		uint32_t machine_reference_index = UINT32_MAX;
 		bool constant = false;
 		uint64_t constant_bits = 0;
 	};
@@ -277,7 +278,7 @@ private:
 	std::vector<uint32_t> block_info_;
 	std::vector<uint32_t> block_info2_;
 	std::vector<DerivedValue> derived_values_;
-	std::vector<IRValueRef> frame_slot_references_;
+	std::vector<IRValueRef> machine_reference_values_;
 	std::vector<ArgumentGuard> argument_guards_;
 	std::vector<uint32_t> user_opcode_next_landings_;
 	std::vector<uint32_t> user_opcode_dispatch_to_sources_;
@@ -479,7 +480,8 @@ private:
 			zend_mir_ownership_state ownership =
 				ZEND_MIR_OWNERSHIP_STATE_OWNED,
 			zend_mir_refcount_state refcount_state =
-				ZEND_MIR_REFCOUNT_UNKNOWN) {
+				ZEND_MIR_REFCOUNT_UNKNOWN,
+			uint32_t machine_reference_index = UINT32_MAX) {
 		if (derived_values_.size()
 				>= UINT32_MAX - MIR_VALUE_BASE - plan_->value_count) {
 			valid_ = false;
@@ -500,18 +502,33 @@ private:
 				+ static_cast<uint32_t>(derived_values_.size())};
 		derived_values_.push_back({
 			representation, exact_type, storage_id, kind, ownership,
-			refcount_state, constant, constant_bits});
+			refcount_state, machine_reference_index, constant, constant_bits});
 		const uint32_t required_value_count =
 			static_cast<uint32_t>(value) + 1;
 		if (phi_input_slices_.size() < required_value_count) {
 			phi_input_slices_.resize(required_value_count);
 			phi_values_.resize(required_value_count);
 		}
-		if (representation == ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER
-				&& zend_mir_id_is_valid(storage_id)) {
-			frame_slot_references_.push_back(value);
+		if (machine_reference_index != UINT32_MAX) {
+			machine_reference_values_.push_back(value);
 		}
 		return value;
+	}
+
+	uint32_t machine_reference_index(
+			zend_tpde_machine_reference_kind kind,
+			uint32_t stable_storage_or_layout_id) const {
+		for (uint32_t index = 0;
+				index < plan_->machine_reference_count; ++index) {
+			const zend_tpde_machine_reference &reference =
+				plan_->machine_references[index];
+			if (reference.kind == kind
+					&& reference.stable_storage_or_layout_id
+						== stable_storage_or_layout_id) {
+				return index;
+			}
+		}
+		return UINT32_MAX;
 	}
 
 	const DerivedValue *derived_value(IRValueRef value) const {
@@ -987,8 +1004,8 @@ private:
 		std::vector<IRValueRef> values(
 			callee->value_count, INVALID_VALUE_REF);
 		const size_t derived_value_checkpoint = derived_values_.size();
-		const size_t frame_slot_reference_checkpoint =
-			frame_slot_references_.size();
+		const size_t machine_reference_checkpoint =
+			machine_reference_values_.size();
 		const size_t operand_checkpoint = operands_.size();
 		const size_t node_checkpoint = nodes_.size();
 		const size_t fused_checkpoint = fused_instructions_.size();
@@ -998,10 +1015,10 @@ private:
 			derived_values_.erase(
 				derived_values_.begin() + derived_value_checkpoint,
 				derived_values_.end());
-			frame_slot_references_.erase(
-				frame_slot_references_.begin()
-					+ frame_slot_reference_checkpoint,
-				frame_slot_references_.end());
+			machine_reference_values_.erase(
+				machine_reference_values_.begin()
+					+ machine_reference_checkpoint,
+				machine_reference_values_.end());
 			operands_.erase(operands_.begin() + operand_checkpoint,
 				operands_.end());
 			nodes_.erase(nodes_.begin() + node_checkpoint, nodes_.end());
@@ -1928,6 +1945,18 @@ public:
 			plan_->instruction_count, UINT32_MAX);
 		std::vector<uint32_t> final_blocks(plan_->block_count);
 		bool source_call_fragments = false;
+		IRValueRef observers_enabled_reference = INVALID_VALUE_REF;
+		if (function_mode_ == FunctionMode::ZendEntry
+				&& plan_->observers_enabled_reference_index
+					< plan_->machine_reference_count) {
+			observers_enabled_reference = add_derived_value(
+				ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
+				ZEND_MIR_SCALAR_TYPE_NONE,
+				ZEND_MIR_ID_INVALID, false, 0,
+				UINT8_MAX, ZEND_MIR_OWNERSHIP_STATE_BORROWED,
+				ZEND_MIR_REFCOUNT_UNKNOWN,
+				plan_->observers_enabled_reference_index);
+		}
 
 		blocks_.reserve(plan_->block_count);
 		block_successors.reserve(plan_->block_count * 2);
@@ -2519,9 +2548,18 @@ public:
 					argument_abi.exact_type,
 					argument_abi.machine_kind});
 			}
+			const uint32_t payload_reference = machine_reference_index(
+				ZEND_TPDE_MACHINE_REFERENCE_FRAME_SLOT, storage_id);
+			if (payload_reference == UINT32_MAX) {
+				valid_ = false;
+				continue;
+			}
 			const IRValueRef payload_address = add_derived_value(
 				ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
-				ZEND_MIR_SCALAR_TYPE_NONE, storage_id);
+				ZEND_MIR_SCALAR_TYPE_NONE, storage_id, false, 0,
+				UINT8_MAX, ZEND_MIR_OWNERSHIP_STATE_BORROWED,
+				ZEND_MIR_REFCOUNT_UNKNOWN,
+				payload_reference);
 			if (payload_address == INVALID_VALUE_REF) {
 				continue;
 			}
@@ -3590,12 +3628,15 @@ public:
 						context_operand < operand_count
 							? operands_[operand_offset + context_operand]
 							: INVALID_VALUE_REF;
-					if (guard_context == INVALID_VALUE_REF) {
+					if (guard_context == INVALID_VALUE_REF
+							|| observers_enabled_reference
+								== INVALID_VALUE_REF) {
 						valid_ = false;
 					}
 					const uint32_t guard_operand_offset =
 						static_cast<uint32_t>(operands_.size());
 					operands_.push_back(guard_context);
+					operands_.push_back(observers_enabled_reference);
 					for (uint32_t n = 0;
 							n < instruction.materialization_count; ++n) {
 						const uint32_t materialization_operand =
@@ -3613,13 +3654,13 @@ public:
 						InstKind::TypedCallGuard, i,
 						guarded_cold_block, INVALID_VALUE_REF, {},
 						guard_operand_offset,
-						1 + instruction.materialization_count,
+						2 + instruction.materialization_count,
 						false,
 						ZEND_MIR_ID_INVALID,
 						ZEND_MIR_SCALAR_TYPE_NONE,
 						false, {}, false, UINT32_MAX, UINT32_MAX,
 						instruction.materialization_count == 0
-							? UINT32_MAX : 1,
+							? UINT32_MAX : 2,
 						instruction.materialization_count};
 					guard.control_block = block;
 					guard.continuation_block = guarded_hot_block;
@@ -4218,24 +4259,38 @@ public:
 			: plan_->values[index - MIR_VALUE_BASE].canonical_storage_id;
 	}
 	uint32_t frame_slot_reference_count() const {
-		return static_cast<uint32_t>(frame_slot_references_.size());
+		return static_cast<uint32_t>(machine_reference_values_.size());
 	}
 	IRValueRef frame_slot_reference(uint32_t index) const {
-		return index < frame_slot_references_.size()
-			? frame_slot_references_[index]
+		return index < machine_reference_values_.size()
+			? machine_reference_values_[index]
 			: INVALID_VALUE_REF;
+	}
+	bool machine_reference(
+			IRValueRef value,
+			const zend_tpde_machine_reference **reference) const {
+		const DerivedValue *derived = derived_value(value);
+		if (derived == nullptr
+				|| derived->machine_reference_index
+					>= plan_->machine_reference_count) {
+			return false;
+		}
+		if (reference != nullptr) {
+			*reference = &plan_->machine_references[
+				derived->machine_reference_index];
+		}
+		return true;
 	}
 	bool frame_slot_reference(
 			IRValueRef value, zend_mir_storage_id *storage_id) const {
-		const DerivedValue *derived = derived_value(value);
-		if (derived == nullptr
-				|| derived->representation
-					!= ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER
-				|| !zend_mir_id_is_valid(derived->storage_id)) {
+		const zend_tpde_machine_reference *reference = nullptr;
+		if (!machine_reference(value, &reference)
+				|| reference->kind
+					!= ZEND_TPDE_MACHINE_REFERENCE_FRAME_SLOT) {
 			return false;
 		}
 		if (storage_id != nullptr) {
-			*storage_id = derived->storage_id;
+			*storage_id = reference->stable_storage_or_layout_id;
 		}
 		return true;
 	}
@@ -4329,7 +4384,7 @@ public:
 	bool val_ignore_in_liveness_analysis(IRValueRef value) const {
 		uint64_t bits;
 		return constant(value, &bits)
-			|| frame_slot_reference(value, nullptr);
+			|| machine_reference(value, nullptr);
 	}
 	bool val_is_phi(IRValueRef value) const {
 		uint32_t index = static_cast<uint32_t>(value);
@@ -4645,6 +4700,11 @@ public:
 	bool frame_slot_reference(
 			IRValueRef value, zend_mir_storage_id *storage_id) const {
 		return active_->frame_slot_reference(value, storage_id);
+	}
+	bool machine_reference(
+			IRValueRef value,
+			const zend_tpde_machine_reference **reference) const {
+		return active_->machine_reference(value, reference);
 	}
 	bool constant(IRValueRef value, uint64_t *bits) const {
 		return active_->constant(value, bits);
