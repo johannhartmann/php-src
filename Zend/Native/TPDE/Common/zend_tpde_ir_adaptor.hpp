@@ -252,6 +252,27 @@ private:
 		return value_ref(value_id);
 	}
 
+	IRValueRef guarded_mutation_value_ref(
+			const zend_tpde_instruction &instruction) const {
+		zend_tpde_long_assign_op long_assign{};
+		zend_tpde_long_incdec long_incdec{};
+
+		if (!instruction.has_value_operation
+				|| !((zend_tpde_long_assign_op_at(
+							instruction, &long_assign)
+							&& !long_assign.has_result)
+						|| (zend_tpde_long_incdec_at(
+							instruction, &long_incdec)
+							&& !long_incdec.has_result))
+				|| instruction.value_operation
+					.op1_definition_ssa_variable_id_plus_one == 0) {
+			return INVALID_VALUE_REF;
+		}
+		return value_ref(zend_mir_value_from_original_ssa(
+			instruction.value_operation
+				.op1_definition_ssa_variable_id_plus_one - 1));
+	}
+
 	bool long_binary_machine_operands(
 			const zend_tpde_instruction &instruction,
 			IRValueRef &left, IRValueRef &right) const {
@@ -434,6 +455,8 @@ private:
 		zend_tpde_array_isset array_isset{};
 		zend_tpde_slot_isset_empty slot_isset_empty{};
 		zend_tpde_string_identity string_identity{};
+		zend_tpde_object_property_read object_property_read{};
+		zend_tpde_dynamic_fetch_read dynamic_fetch_read{};
 		if (!instruction.has_value_operation
 				|| executable_kind(instruction, record)
 					== InstKind::SlowPathCall) {
@@ -515,6 +538,34 @@ private:
 					|| machine_kind(result)
 						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
 		}
+		if (zend_tpde_object_property_read_at(
+				instruction, &object_property_read)) {
+			const IRValueRef result =
+				source_operand_value_ref(
+					instruction.value_operation.result);
+			return result != INVALID_VALUE_REF
+				&& ((zend_mir_scalar_type_is_exact(exact_type(result))
+						&& exact_type(result)
+							!= ZEND_MIR_SCALAR_TYPE_NULL)
+					|| (machine_kind(result)
+							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+						&& machine_value_is_register_authoritative(
+							result)));
+		}
+		if (zend_tpde_dynamic_fetch_read_at(
+				instruction, &dynamic_fetch_read)) {
+			const IRValueRef result =
+				source_operand_value_ref(
+					instruction.value_operation.result);
+			return result != INVALID_VALUE_REF
+				&& ((zend_mir_scalar_type_is_exact(exact_type(result))
+						&& exact_type(result)
+							!= ZEND_MIR_SCALAR_TYPE_NULL)
+					|| (machine_kind(result)
+							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+						&& machine_value_is_register_authoritative(
+							result)));
+		}
 		switch (instruction.value_operation.opcode) {
 			case ZEND_MIR_OPCODE_VALUE_UNARY_OP:
 				return zend_tpde_string_length_at(
@@ -532,6 +583,9 @@ private:
 	void add_node(
 			std::vector<BlockItem<IRInstRef>> &block_instructions,
 			uint32_t block, InstNode node) {
+		if (node.control_block == UINT32_MAX) {
+			node.control_block = block;
+		}
 		uint32_t index = static_cast<uint32_t>(nodes_.size());
 		nodes_.push_back(std::move(node));
 		fused_instructions_.push_back(0);
@@ -1048,6 +1102,35 @@ public:
 						== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR
 					|| value.machine_kind
 						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
+		}
+		/*
+		 * Zend SSA gives in-place CV mutations a distinct op1 definition even
+		 * when the opcode has no PHP result.  The executable value record
+		 * intentionally describes source operands rather than duplicating
+		 * that process-local SSA edge.  Publish the definition to TPDE here so
+		 * later loop conditions consume the post-mutation value instead of a
+		 * register holding the preceding slot version.
+		 */
+		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
+			const IRValueRef definition =
+				guarded_mutation_value_ref(plan_->instructions[i]);
+			if (definition == INVALID_VALUE_REF
+					|| static_cast<uint32_t>(definition)
+						>= register_values_.size()) {
+				continue;
+			}
+			const zend_tpde_machine_value_kind kind =
+				machine_kind(definition);
+			if ((zend_mir_scalar_type_is_exact(exact_type(definition))
+						&& exact_type(definition)
+							!= ZEND_MIR_SCALAR_TYPE_NULL)
+					|| kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+					|| kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+					|| kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
+					|| kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR
+					|| kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+				register_values_[static_cast<uint32_t>(definition)] = 1;
+			}
 		}
 		/*
 		 * A direct user call publishes its canonical result for Zend
@@ -2388,6 +2471,37 @@ public:
 				add_node(block_instructions, guarded_cold_block,
 					std::move(cold));
 
+				const IRValueRef mutation_result =
+					guarded_mutation_value_ref(instruction);
+				if (mutation_result != INVALID_VALUE_REF) {
+					const zend_mir_storage_id mutation_storage =
+						canonical_storage(mutation_result);
+					const IRValueRef mutation_slot =
+						zend_mir_id_is_valid(mutation_storage)
+							? add_derived_value(
+								ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
+								ZEND_MIR_SCALAR_TYPE_NONE,
+								mutation_storage)
+							: INVALID_VALUE_REF;
+					if (mutation_slot == INVALID_VALUE_REF
+							|| mutation_storage
+								!= instruction.value_operation
+									.op1_storage_id) {
+						valid_ = false;
+					} else {
+						const uint32_t reload_operand_offset =
+							static_cast<uint32_t>(operands_.size());
+						operands_.push_back(mutation_slot);
+						InstNode reload{
+							InstKind::ZvalPayloadLoad, i, UINT32_MAX,
+							mutation_result, {}, reload_operand_offset,
+							1, true, mutation_storage,
+							exact_type(mutation_result)};
+						reload.control_block = continuation_block;
+						add_node(block_instructions, continuation_block,
+							std::move(reload));
+					}
+				}
 				if (machine_result) {
 					const zend_mir_storage_id result_storage =
 						canonical_storage(result);

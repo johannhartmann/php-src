@@ -218,6 +218,13 @@ typedef struct _zend_mir_executable_value_ref {
 	zend_mir_storage_id op2_storage_id;
 	zend_mir_storage_id result_storage_id;
 	zend_mir_storage_id auxiliary_storage_id;
+	/*
+	 * In-place Zend operations define a new SSA version of op1 without
+	 * necessarily exposing a PHP result operand. Zero means no definition;
+	 * otherwise the stable original SSA id is stored plus one so C zero
+	 * initialization remains the canonical absence spelling.
+	 */
+	uint32_t op1_definition_ssa_variable_id_plus_one;
 	uint32_t extended_value;
 	zend_mir_source_position_id source_position_id;
 	zend_mir_frame_state_id frame_state_id;
