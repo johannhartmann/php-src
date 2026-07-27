@@ -1581,7 +1581,8 @@ bool freeze_machine_plan_consumers(
 	}
 
 	auto visit_use = [&](zend_mir_value_id id,
-			uint32_t instruction_index, bool fill,
+			uint32_t instruction_index, uint32_t operand_index,
+			uint32_t auxiliary, zend_tpde_machine_use_kind kind, bool fill,
 			std::vector<uint32_t> *cursors) -> bool {
 		if (!zend_mir_id_is_valid(id)) {
 			return true;
@@ -1603,8 +1604,12 @@ bool freeze_machine_plan_consumers(
 			}
 			++counts[value];
 		} else {
-			plan->value_consumers[(*cursors)[value]++] =
-				instruction_index;
+			plan->value_consumers[(*cursors)[value]++] = {
+				instruction_index,
+				operand_index,
+				auxiliary,
+				kind,
+			};
 		}
 		return true;
 	};
@@ -1612,9 +1617,15 @@ bool freeze_machine_plan_consumers(
 			bool fill, std::vector<uint32_t> *cursors) -> bool {
 		const zend_tpde_instruction &instruction =
 			plan->instructions[instruction_index];
+		const zend_mir_instruction_record record =
+			zend_tpde_instruction_record_at(plan, &instruction);
 		for (uint32_t n = 0; n < instruction.operand_count; ++n) {
 			if (!visit_use(zend_tpde_operand_at(
-					plan, &instruction, n), instruction_index,
+					plan, &instruction, n), instruction_index, n,
+					record.opcode == ZEND_MIR_OPCODE_PHI ? n : UINT32_MAX,
+					record.opcode == ZEND_MIR_OPCODE_PHI
+						? ZEND_TPDE_MACHINE_USE_PHI_EDGE
+						: ZEND_TPDE_MACHINE_USE_INSTRUCTION_OPERAND,
 					fill, cursors)) {
 				return false;
 			}
@@ -1629,7 +1640,17 @@ bool freeze_machine_plan_consumers(
 					"machine-plan call argument table is unreadable");
 				return false;
 			}
-			if (!visit_use(argument.value_id, instruction_index,
+			if (!visit_use(argument.value_id, instruction_index, n,
+					instruction.component_target_index != UINT32_MAX
+							&& record.opcode
+								== ZEND_MIR_OPCODE_CALL_DIRECT_USER
+						? instruction.component_target_index
+						: UINT32_MAX,
+					instruction.component_target_index != UINT32_MAX
+							&& record.opcode
+								== ZEND_MIR_OPCODE_CALL_DIRECT_USER
+						? ZEND_TPDE_MACHINE_USE_LOCAL_ABI_ARGUMENT
+						: ZEND_TPDE_MACHINE_USE_CALL_ARGUMENT,
 					fill, cursors)) {
 				return false;
 			}
@@ -1652,15 +1673,16 @@ bool freeze_machine_plan_consumers(
 			if (materialization.value_index >= plan->value_count
 					|| !visit_use(
 						plan->values[materialization.value_index].id,
-						instruction_index, fill, cursors)) {
+						instruction_index, n,
+						materialization.storage_id,
+						ZEND_TPDE_MACHINE_USE_STATEPOINT_MATERIALIZATION,
+						fill, cursors)) {
 				zend_tpde_set_diagnostic(diag,
 					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 					"machine-plan materialization references an unknown value");
 				return false;
 			}
 		}
-		const zend_mir_instruction_record record =
-			zend_tpde_instruction_record_at(plan, &instruction);
 		if (instruction.has_value_operation
 				&& record.source_position_id != UINT32_MAX
 				&& (record.opcode == ZEND_MIR_OPCODE_GENERATOR_CREATE
@@ -1678,7 +1700,9 @@ bool freeze_machine_plan_consumers(
 					if (zend_tpde_generator_resume_value_live(
 							plan, resume, value)
 							&& !visit_use(plan->values[value].id,
-								instruction_index, fill, cursors)) {
+								instruction_index, value, resume,
+								ZEND_TPDE_MACHINE_USE_SUSPEND_LIVE,
+								fill, cursors)) {
 						return false;
 					}
 				}
@@ -1730,7 +1754,7 @@ bool freeze_machine_plan_consumers(
 		static_cast<uint32_t>(consumer_count);
 	plan->value_consumer_count = static_cast<uint32_t>(consumer_count);
 	plan->value_consumers = consumer_count == 0
-		? nullptr : static_cast<uint32_t *>(std::malloc(
+		? nullptr : static_cast<zend_tpde_machine_use *>(std::malloc(
 			static_cast<size_t>(consumer_count)
 				* sizeof(*plan->value_consumers)));
 	if (consumer_count != 0 && plan->value_consumers == nullptr) {
@@ -2145,6 +2169,25 @@ bool freeze_entry_undef_temporaries(
 		required[physical_slot
 			- static_cast<uint32_t>(op_array->last_var)] = 1;
 	}
+	if (plan->user_opcode_callbacks
+			&& plan->user_opcode_source_operations != nullptr) {
+		for (uint32_t source = 0;
+				source < plan->user_opcode_source_operation_count; ++source) {
+			if (zend_get_user_opcode_handler(
+					op_array->opcodes[source].opcode) == nullptr) {
+				continue;
+			}
+			const zend_mir_source_operand_ref &result =
+				plan->user_opcode_source_operations[source].result;
+			if ((result.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+						|| result.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+					&& (result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+						|| result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)
+					&& result.index < op_array->T) {
+				required[result.index] = 1;
+			}
+		}
+	}
 
 	std::vector<uint32_t> indices;
 	indices.reserve(op_array->T);
@@ -2185,6 +2228,10 @@ void destroy_plan(zend_tpde_plan *plan) {
 	}
 	std::free(plan->block_ids);
 	std::free(plan->block_index);
+	std::free(plan->block_successor_offsets);
+	std::free(plan->block_successors);
+	std::free(plan->block_predecessor_offsets);
+	std::free(plan->block_predecessors);
 	std::free(plan->values);
 	std::free(plan->argument_value_indices);
 	std::free(plan->value_index);
@@ -2193,6 +2240,11 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->value_definition_instructions);
 	std::free(plan->value_consumer_offsets);
 	std::free(plan->value_consumers);
+	std::free(plan->source_opcode_block_indices);
+	std::free(plan->source_opcode_is_data);
+	std::free(plan->source_block_starts);
+	std::free(plan->source_block_ends);
+	std::free(plan->compiled_variables_used);
 	std::free(plan->call_site_instruction_index);
 	std::free(plan->call_target_index);
 	std::free(plan->user_binding_index);
@@ -2249,6 +2301,112 @@ bool initialize_plan(
 	plan->view = view;
 	plan->source_op_array = source_op_array;
 	plan->source_ssa = source_ssa;
+	plan->source_ssa_variable_count =
+		source_ssa != nullptr && source_ssa->vars_count > 0
+			? static_cast<uint32_t>(source_ssa->vars_count) : 0;
+	plan->source_opcode_count =
+		source_op_array != nullptr ? source_op_array->last : 0;
+	plan->compiled_variable_count =
+		source_op_array != nullptr ? source_op_array->last_var : 0;
+	if (plan->compiled_variable_count != 0) {
+		plan->compiled_variables_used = static_cast<uint8_t *>(
+			std::malloc(plan->compiled_variable_count));
+		if (plan->compiled_variables_used == nullptr) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+				"unable to freeze compiled-variable uses");
+			return false;
+		}
+		std::memset(plan->compiled_variables_used, 1,
+			plan->compiled_variable_count);
+		if (source_ssa != nullptr && source_ssa->vars != nullptr
+				&& source_ssa->vars_count >= 0) {
+			for (uint32_t variable_index = 0;
+					variable_index < plan->compiled_variable_count;
+					++variable_index) {
+				bool found = false;
+				bool used = false;
+				for (int index = 0;
+						index < source_ssa->vars_count; ++index) {
+					const zend_ssa_var &variable =
+						source_ssa->vars[index];
+					if (variable.var < 0
+							|| static_cast<uint32_t>(variable.var)
+								!= variable_index) {
+						continue;
+					}
+					found = true;
+					if (variable.definition >= 0
+							|| variable.definition_phi != nullptr
+							|| variable.use_chain >= 0
+							|| variable.phi_use_chain != nullptr
+							|| variable.sym_use_chain != nullptr) {
+						used = true;
+						break;
+					}
+				}
+				plan->compiled_variables_used[variable_index] =
+					!found || used;
+			}
+		}
+	}
+	if (source_op_array != nullptr && source_ssa != nullptr
+			&& source_ssa->cfg.blocks != nullptr
+			&& source_ssa->cfg.map != nullptr
+			&& source_ssa->cfg.blocks_count > 0) {
+		plan->source_block_count =
+			static_cast<uint32_t>(source_ssa->cfg.blocks_count);
+		plan->source_opcode_block_indices = static_cast<uint32_t *>(
+			std::malloc(static_cast<size_t>(plan->source_opcode_count)
+				* sizeof(*plan->source_opcode_block_indices)));
+		plan->source_opcode_is_data = static_cast<uint8_t *>(
+			std::malloc(plan->source_opcode_count));
+		plan->source_block_starts = static_cast<uint32_t *>(
+			std::malloc(static_cast<size_t>(plan->source_block_count)
+				* sizeof(*plan->source_block_starts)));
+		plan->source_block_ends = static_cast<uint32_t *>(
+			std::malloc(static_cast<size_t>(plan->source_block_count)
+				* sizeof(*plan->source_block_ends)));
+		if ((plan->source_opcode_count != 0
+					&& (plan->source_opcode_block_indices == nullptr
+						|| plan->source_opcode_is_data == nullptr))
+				|| plan->source_block_starts == nullptr
+				|| plan->source_block_ends == nullptr) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+				"unable to freeze source CFG landings");
+			return false;
+		}
+		for (uint32_t source = 0;
+				source < plan->source_opcode_count; ++source) {
+			const int source_block = source_ssa->cfg.map[source];
+			plan->source_opcode_block_indices[source] =
+				source_block >= 0
+						&& static_cast<uint32_t>(source_block)
+							< plan->source_block_count
+					? static_cast<uint32_t>(source_block) : UINT32_MAX;
+			plan->source_opcode_is_data[source] =
+				source_op_array->opcodes[source].opcode == ZEND_OP_DATA;
+		}
+		for (uint32_t source_block = 0;
+				source_block < plan->source_block_count; ++source_block) {
+			const zend_basic_block &block =
+				source_ssa->cfg.blocks[source_block];
+			if ((block.flags & ZEND_BB_REACHABLE) == 0
+					|| block.start > plan->source_opcode_count
+					|| block.len
+						> plan->source_opcode_count
+							- block.start) {
+				plan->source_block_starts[source_block] = UINT32_MAX;
+				plan->source_block_ends[source_block] = UINT32_MAX;
+				continue;
+			}
+			plan->source_block_starts[source_block] =
+				block.start;
+			plan->source_block_ends[source_block] =
+				block.start + block.len;
+		}
+	}
 	plan->block_count = view->block_count(view->context);
 	plan->value_count = view->value_count(view->context);
 	plan->instruction_count = view->instruction_count(view->context);
@@ -2664,6 +2822,104 @@ bool initialize_plan(
 			return false;
 		}
 		plan->block_ids[i] = block.id;
+	}
+	plan->block_successor_offsets = static_cast<uint32_t *>(
+		std::calloc(static_cast<size_t>(plan->block_count) + 1,
+			sizeof(*plan->block_successor_offsets)));
+	plan->block_predecessor_offsets = static_cast<uint32_t *>(
+		std::calloc(static_cast<size_t>(plan->block_count) + 1,
+			sizeof(*plan->block_predecessor_offsets)));
+	if (plan->block_successor_offsets == nullptr
+			|| plan->block_predecessor_offsets == nullptr) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"unable to freeze MIR CFG offsets");
+		return false;
+	}
+	for (uint32_t block = 0; block < plan->block_count; ++block) {
+		const uint32_t successor_count = view->successor_count(
+			view->context, plan->block_ids[block]);
+		const uint32_t predecessor_count = view->predecessor_count(
+			view->context, plan->block_ids[block]);
+		if (successor_count
+					> UINT32_MAX - plan->block_successor_count
+				|| predecessor_count
+					> UINT32_MAX - plan->block_predecessor_count) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"MIR CFG edge count overflows the machine plan");
+			return false;
+		}
+		plan->block_successor_count += successor_count;
+		plan->block_predecessor_count += predecessor_count;
+		plan->block_successor_offsets[block + 1] =
+			plan->block_successor_count;
+		plan->block_predecessor_offsets[block + 1] =
+			plan->block_predecessor_count;
+	}
+	if (plan->block_successor_count != 0) {
+		plan->block_successors = static_cast<uint32_t *>(
+			std::malloc(static_cast<size_t>(plan->block_successor_count)
+				* sizeof(*plan->block_successors)));
+	}
+	if (plan->block_predecessor_count != 0) {
+		plan->block_predecessors = static_cast<uint32_t *>(
+			std::malloc(static_cast<size_t>(plan->block_predecessor_count)
+				* sizeof(*plan->block_predecessors)));
+	}
+	if ((plan->block_successor_count != 0
+				&& plan->block_successors == nullptr)
+			|| (plan->block_predecessor_count != 0
+				&& plan->block_predecessors == nullptr)) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"unable to freeze MIR CFG edges");
+		return false;
+	}
+	for (uint32_t block = 0; block < plan->block_count; ++block) {
+		const uint32_t successor_begin =
+			plan->block_successor_offsets[block];
+		const uint32_t successor_count =
+			plan->block_successor_offsets[block + 1] - successor_begin;
+		for (uint32_t edge = 0; edge < successor_count; ++edge) {
+			zend_mir_block_id target;
+			const int32_t target_index =
+				view->successor_at(view->context, plan->block_ids[block],
+						edge, &target)
+					? id_index_find(plan->block_index,
+						plan->block_index_capacity, target)
+					: -1;
+			if (target_index < 0) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+					"MIR successor is outside the machine plan");
+				return false;
+			}
+			plan->block_successors[successor_begin + edge] =
+				static_cast<uint32_t>(target_index);
+		}
+		const uint32_t predecessor_begin =
+			plan->block_predecessor_offsets[block];
+		const uint32_t predecessor_count =
+			plan->block_predecessor_offsets[block + 1]
+				- predecessor_begin;
+		for (uint32_t edge = 0; edge < predecessor_count; ++edge) {
+			zend_mir_block_id predecessor;
+			const int32_t predecessor_index =
+				view->predecessor_at(view->context, plan->block_ids[block],
+						edge, &predecessor)
+					? id_index_find(plan->block_index,
+						plan->block_index_capacity, predecessor)
+					: -1;
+			if (predecessor_index < 0) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+					"MIR predecessor is outside the machine plan");
+				return false;
+			}
+			plan->block_predecessors[predecessor_begin + edge] =
+				static_cast<uint32_t>(predecessor_index);
+		}
 	}
 	for (uint32_t i = 0; i < plan->value_count; ++i) {
 		zend_mir_value_record value;
