@@ -430,6 +430,7 @@ private:
 		zend_tpde_long_binary long_binary{};
 		zend_tpde_long_assign_op long_assign{};
 		zend_tpde_long_incdec long_incdec{};
+		zend_tpde_slot_isset_empty slot_isset_empty{};
 		if (!instruction.has_value_operation
 				|| executable_kind(instruction, record)
 					== InstKind::SlowPathCall) {
@@ -466,6 +467,16 @@ private:
 					instruction.value_operation.result);
 			return result != INVALID_VALUE_REF
 				&& exact_type(result) == ZEND_MIR_SCALAR_TYPE_I64
+				&& machine_kind(result)
+					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
+		}
+		if (zend_tpde_slot_isset_empty_at(
+				instruction, &slot_isset_empty)) {
+			const IRValueRef result =
+				source_operand_value_ref(
+					instruction.value_operation.result);
+			return result != INVALID_VALUE_REF
+				&& exact_type(result) == ZEND_MIR_SCALAR_TYPE_I1
 				&& machine_kind(result)
 					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
 		}
