@@ -85,6 +85,7 @@ public:
 		ZvalGuardArguments,
 		ZvalGuardType,
 		SlowPathCall,
+		TypedCallGuard,
 		GuardedFast,
 		GuardedCold,
 		BoxedCondGuard,
@@ -1921,6 +1922,8 @@ public:
 			plan_->instruction_count, UINT32_MAX);
 		std::vector<uint32_t> guarded_cold_blocks(
 			plan_->instruction_count, UINT32_MAX);
+		std::vector<uint32_t> guarded_hot_blocks(
+			plan_->instruction_count, UINT32_MAX);
 		std::vector<uint32_t> guarded_continuation_blocks(
 			plan_->instruction_count, UINT32_MAX);
 		std::vector<uint32_t> final_blocks(plan_->block_count);
@@ -2091,6 +2094,17 @@ public:
 			if (!needs_explicit_cold_path(instruction, record)) {
 				continue;
 			}
+			const bool typed_component_guard =
+				function_mode_ == FunctionMode::ZendEntry
+				&& record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
+				&& instruction.component_target_index
+					< typed_body_eligible_.size()
+				&& typed_body_eligible_[
+					instruction.component_target_index] != 0;
+			if (typed_component_guard) {
+				guarded_hot_blocks[i] =
+					plan_->block_count + synthetic_block_count++;
+			}
 			guarded_cold_blocks[i] =
 				plan_->block_count + synthetic_block_count++;
 			guarded_continuation_blocks[i] =
@@ -2149,14 +2163,23 @@ public:
 				continue;
 			}
 			const uint32_t fast_block = instruction_blocks[i];
+			const uint32_t hot_block = guarded_hot_blocks[i];
 			const uint32_t continuation =
 				guarded_continuation_blocks[i];
+			if (hot_block != UINT32_MAX) {
+				blocks_.push_back(IRBlockRef{hot_block});
+			}
 			blocks_.push_back(IRBlockRef{cold_block});
 			blocks_.push_back(IRBlockRef{continuation});
 			block_successors.push_back(
-				{fast_block, IRBlockRef{continuation}});
+				{fast_block, IRBlockRef{
+					hot_block == UINT32_MAX ? continuation : hot_block}});
 			block_successors.push_back(
 				{fast_block, IRBlockRef{cold_block}});
+			if (hot_block != UINT32_MAX) {
+				block_successors.push_back(
+					{hot_block, IRBlockRef{continuation}});
+			}
 			block_successors.push_back(
 				{cold_block, IRBlockRef{continuation}});
 		}
@@ -3537,6 +3560,8 @@ public:
 			const uint32_t guarded_cold_block =
 				guarded_cold_blocks[i];
 			if (guarded_cold_block != UINT32_MAX) {
+				const uint32_t guarded_hot_block =
+					guarded_hot_blocks[i];
 				const uint32_t continuation_block =
 					guarded_continuation_blocks[i];
 				const IRValueRef fast_result = machine_result
@@ -3551,17 +3576,79 @@ public:
 						ZEND_MIR_ID_INVALID, false, 0,
 						machine_kind(result))
 					: INVALID_VALUE_REF;
+				uint32_t fast_operand_offset = operand_offset;
+				uint32_t fast_operand_count = operand_count;
+				uint32_t fast_materialization_operand_index =
+					materialization_operand_index;
+				uint32_t fast_materialization_count =
+					instruction.materialization_count;
+				uint32_t fast_block = block;
+				if (guarded_hot_block != UINT32_MAX) {
+					const uint32_t context_operand =
+						instruction.call_argument_count + 2;
+					const IRValueRef guard_context =
+						context_operand < operand_count
+							? operands_[operand_offset + context_operand]
+							: INVALID_VALUE_REF;
+					if (guard_context == INVALID_VALUE_REF) {
+						valid_ = false;
+					}
+					const uint32_t guard_operand_offset =
+						static_cast<uint32_t>(operands_.size());
+					operands_.push_back(guard_context);
+					for (uint32_t n = 0;
+							n < instruction.materialization_count; ++n) {
+						const uint32_t materialization_operand =
+							materialization_operand_index + n;
+						if (materialization_operand >= operand_count) {
+							valid_ = false;
+							operands_.push_back(INVALID_VALUE_REF);
+						} else {
+							operands_.push_back(
+								operands_[operand_offset
+									+ materialization_operand]);
+						}
+					}
+					InstNode guard{
+						InstKind::TypedCallGuard, i,
+						guarded_cold_block, INVALID_VALUE_REF, {},
+						guard_operand_offset,
+						1 + instruction.materialization_count,
+						false,
+						ZEND_MIR_ID_INVALID,
+						ZEND_MIR_SCALAR_TYPE_NONE,
+						false, {}, false, UINT32_MAX, UINT32_MAX,
+						instruction.materialization_count == 0
+							? UINT32_MAX : 1,
+						instruction.materialization_count};
+					guard.control_block = block;
+					guard.continuation_block = guarded_hot_block;
+					add_node(block_instructions, block, std::move(guard));
+
+					fast_operand_offset =
+						static_cast<uint32_t>(operands_.size());
+					for (uint32_t n = 0;
+							n < instruction.call_argument_count; ++n) {
+						operands_.push_back(
+							operands_[operand_offset + n]);
+					}
+					fast_operand_count =
+						instruction.call_argument_count;
+					fast_materialization_operand_index = UINT32_MAX;
+					fast_materialization_count = 0;
+					fast_block = guarded_hot_block;
+				}
 				InstNode fast{
 					InstKind::GuardedFast, i, guarded_cold_block,
-					fast_result, {}, operand_offset, operand_count,
-					machine_result,
+					fast_result, {}, fast_operand_offset,
+					fast_operand_count, machine_result,
 					ZEND_MIR_ID_INVALID, ZEND_MIR_SCALAR_TYPE_NONE,
 					false, {}, false, UINT32_MAX, UINT32_MAX,
-					materialization_operand_index,
-					instruction.materialization_count};
-				fast.control_block = block;
+					fast_materialization_operand_index,
+					fast_materialization_count};
+				fast.control_block = fast_block;
 				fast.continuation_block = continuation_block;
-				add_node(block_instructions, block, std::move(fast));
+				add_node(block_instructions, fast_block, std::move(fast));
 
 				const uint32_t cold_operand_offset =
 					static_cast<uint32_t>(operands_.size());
@@ -3657,7 +3744,9 @@ public:
 					const uint32_t phi_input_offset =
 						static_cast<uint32_t>(phi_inputs_.size());
 					phi_inputs_.push_back(
-						{fast_result, IRBlockRef{block}});
+						{fast_result, IRBlockRef{
+							guarded_hot_block == UINT32_MAX
+								? block : guarded_hot_block}});
 					phi_inputs_.push_back(
 						{cold_result, IRBlockRef{guarded_cold_block}});
 					phi_input_slices_[static_cast<uint32_t>(result)] = {
