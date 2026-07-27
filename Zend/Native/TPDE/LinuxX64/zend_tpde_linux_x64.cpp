@@ -352,18 +352,27 @@ bool ZendCompilerX64::emit_materializations(IRInstRef instruction) {
 				node.materialization_operand_index + index];
 		auto value_ref = val_ref(value);
 		auto payload = value_ref.part(0);
-		auto payload_reg = payload.load_to_reg();
 		if (materialization.machine_kind
 				== ZEND_TPDE_MACHINE_VALUE_F64) {
+			auto payload_reg = payload.load_to_reg();
 			ASM(SSE_MOVSDmr,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(offset)),
 				payload_reg);
-		} else {
+		} else if (materialization.machine_kind
+				== ZEND_TPDE_MACHINE_VALUE_BOOL) {
+			auto payload_reg = payload.load_to_reg();
 			ASM(MOV64mr,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(offset)),
 				payload_reg);
+		} else {
+			if (!EncodeBase::encode_zend_native_store_u64(
+					GenericValuePart{GenericValuePart::Expr{
+						frame_reg, static_cast<int64_t>(offset)}},
+					GenericValuePart{std::move(payload)})) {
+				return false;
+			}
 		}
 		const int32_t type_offset =
 			static_cast<int32_t>(offset + offsetof(zval, u1.type_info));
@@ -376,6 +385,8 @@ bool ZendCompilerX64::emit_materializations(IRInstRef instruction) {
 				type_info_reg);
 		} else if (materialization.machine_kind
 				== ZEND_TPDE_MACHINE_VALUE_BOOL) {
+			auto boolean = value_ref.part(0);
+			auto payload_reg = boolean.load_to_reg();
 			ScratchReg type_info{this};
 			auto type_info_reg = type_info.alloc_gp();
 			ASM(MOV64rr, type_info_reg, payload_reg);
@@ -2010,22 +2021,67 @@ bool ZendCompilerX64::compile_inst(
 		}
 		const zend_tpde_machine_value_kind result_kind =
 			adaptor->machine_kind(node.result);
-		if (node.exact_type == ZEND_MIR_SCALAR_TYPE_I64
-				|| result_kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-				|| result_kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-				|| result_kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-				|| result_kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR) {
-			auto address = val_ref(node.operands[0]);
-			auto result = result_ref(node.result);
-			return EncodeBase::encode_zend_native_load_u64(
-				address.part(0), result.part(0));
-		}
 		zend_mir_storage_id storage_id = ZEND_MIR_ID_INVALID;
 		const bool frame_slot = adaptor->frame_slot_reference(
 			node.operands[0], &storage_id);
 		const uint64_t frame_offset = frame_slot
 			? (uint64_t{ZEND_CALL_FRAME_SLOT} + storage_id) * sizeof(zval)
 			: 0;
+		if (frame_offset > static_cast<uint64_t>(INT64_MAX)
+				- sizeof(zval)) {
+			return false;
+		}
+		if (node.exact_type == ZEND_MIR_SCALAR_TYPE_I64
+				|| result_kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+				|| result_kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+				|| result_kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
+				|| result_kind == ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
+				|| result_kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR) {
+			auto result = result_ref(node.result);
+			if (frame_slot) {
+				return EncodeBase::encode_zend_native_load_u64(
+					GenericValuePart{GenericValuePart::Expr{
+						canonical_frame_register(),
+						static_cast<int64_t>(frame_offset)}},
+					result.part(0));
+			}
+			auto address = val_ref(node.operands[0]);
+			return EncodeBase::encode_zend_native_load_u64(
+				address.part(0), result.part(0));
+		}
+		if (frame_slot
+				&& result_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+			auto result_value = result_ref(node.result);
+			const ValueParts parts = val_parts(node.result);
+			for (uint32_t part = 0; part < parts.count(); ++part) {
+				const zend_tpde_machine_part_role role =
+					parts.representation.parts[part].semantic_role;
+				const uint64_t part_offset =
+					frame_offset
+					+ (role == ZEND_TPDE_MACHINE_PART_PAYLOAD
+						? 0 : offsetof(zval, u1.type_info));
+				bool encoded;
+				if (role == ZEND_TPDE_MACHINE_PART_PAYLOAD) {
+					encoded = EncodeBase::encode_zend_native_load_u64(
+						GenericValuePart{GenericValuePart::Expr{
+							canonical_frame_register(),
+							static_cast<int64_t>(part_offset)}},
+						result_value.part(part));
+				} else if (role == ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
+					encoded = EncodeBase::encode_zend_native_load_u32(
+						GenericValuePart{GenericValuePart::Expr{
+							canonical_frame_register(),
+							static_cast<int64_t>(part_offset)}},
+						result_value.part(part));
+				} else {
+					return false;
+				}
+				if (!encoded) {
+					return false;
+				}
+			}
+			return true;
+		}
 		if (frame_offset > INT32_MAX - sizeof(zval)) {
 			return false;
 		}
@@ -2078,6 +2134,7 @@ bool ZendCompilerX64::compile_inst(
 						case ZEND_TPDE_MACHINE_VALUE_STRING_PTR:
 						case ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR:
 						case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
+						case ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR:
 						case ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR:
 							ASM(MOV64rm, result_reg,
 								FE_MEM(address, 0, FE_NOREG, offset));
@@ -3264,6 +3321,7 @@ bool ZendCompilerX64::compile_inst(
 							case ZEND_TPDE_MACHINE_VALUE_STRING_PTR:
 							case ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR:
 							case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
+							case ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR:
 							case ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR:
 								ASM(MOV64rm, result_reg,
 									FE_MEM(element_reg, 0, FE_NOREG, 0));
@@ -4785,6 +4843,7 @@ bool ZendCompilerX64::compile_inst(
 							case ZEND_TPDE_MACHINE_VALUE_STRING_PTR:
 							case ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR:
 							case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
+							case ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR:
 							case ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR:
 								ASM(MOV64rm, result_reg,
 									FE_MEM(property_reg, 0, FE_NOREG, 0));
@@ -5216,6 +5275,7 @@ bool ZendCompilerX64::compile_inst(
 							case ZEND_TPDE_MACHINE_VALUE_STRING_PTR:
 							case ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR:
 							case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
+							case ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR:
 							case ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR:
 								ASM(MOV64rm, result_reg,
 									FE_MEM(slot_reg, 0, FE_NOREG, 0));
@@ -9349,6 +9409,8 @@ bool ZendCompilerX64::compile_inst(
 								== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
 							|| kind
 								== ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
+							|| kind
+								== ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
 							|| kind
 								== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR)) {
 					auto [returned_ref, returned] =

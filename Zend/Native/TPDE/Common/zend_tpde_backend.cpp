@@ -638,6 +638,15 @@ zend_tpde_local_abi_type zend_tpde_local_abi_from_declared_type(
 			true,
 		};
 	}
+	if (value_types == MAY_BE_RESOURCE) {
+		return {
+			ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
+			ZEND_MIR_SCALAR_TYPE_NONE,
+			ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR,
+			transfer,
+			true,
+		};
+	}
 	if (value_types != 0) {
 		return {
 			ZEND_MIR_REPRESENTATION_ZVAL,
@@ -698,6 +707,8 @@ zend_tpde_machine_value_kind zend_tpde_machine_kind(
 			return ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR;
 		case ZEND_MIR_VALUE_OBJECT_ABSTRACT:
 			return ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR;
+		case ZEND_MIR_VALUE_RESOURCE_ABSTRACT:
+			return ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR;
 		default:
 			break;
 	}

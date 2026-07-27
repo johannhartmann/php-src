@@ -1360,6 +1360,7 @@ public:
 			value.machine_kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
 			|| value.machine_kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
 			|| value.machine_kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
+			|| value.machine_kind == ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
 			|| value.machine_kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR;
 		const bool boxed =
 			value.machine_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
@@ -1912,6 +1913,8 @@ public:
 					|| value.machine_kind
 						== ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
 					|| value.machine_kind
+						== ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
+					|| value.machine_kind
 						== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR
 					|| value.machine_kind
 						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
@@ -1940,6 +1943,7 @@ public:
 					|| kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
 					|| kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
 					|| kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
+					|| kind == ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
 					|| kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR
 					|| kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 				register_values_[static_cast<uint32_t>(definition)] = 1;
@@ -2406,6 +2410,8 @@ public:
 						== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
 					|| argument_abi.machine_kind
 						== ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
+					|| argument_abi.machine_kind
+						== ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
 					|| argument_abi.machine_kind
 						== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR);
 			const bool boxed_register_value =
@@ -3934,6 +3940,7 @@ public:
 			case ZEND_TPDE_MACHINE_VALUE_STRING_PTR:
 			case ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR:
 			case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
+			case ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR:
 			case ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR:
 			case ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL:
 				return machine_value_is_register_authoritative(value);
