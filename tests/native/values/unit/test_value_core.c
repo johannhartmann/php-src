@@ -75,11 +75,17 @@ typedef enum _test_case {
 	TEST_TABLE_COUNT_OVERFLOW,
 	TEST_VALID_CALL_TRANSFER,
 	TEST_CALL_TRANSFER_WITHOUT_MODEL,
-	TEST_CALL_MODEL_WITHOUT_TRANSFER,
+	TEST_VALID_SOURCE_BACKED_CALL,
 	TEST_CALL_TRANSFER_WRONG_SITE,
 	TEST_CALL_TRANSFER_WRONG_ORDINAL,
 	TEST_VERIFIER_CALL_TRANSFER_MUTATION,
-	TEST_VALID_ZERO_ARGUMENT_CALL
+	TEST_VALID_ZERO_ARGUMENT_CALL,
+	TEST_VALID_SUSPEND_LIVENESS,
+	TEST_SUSPEND_LIVENESS_UNKNOWN_VALUE,
+	TEST_SUSPEND_LIVENESS_LOCATION_MISMATCH,
+	TEST_SUSPEND_LIVENESS_DUPLICATE,
+	TEST_SUSPEND_LIVENESS_SOURCE_OUT_OF_RANGE,
+	TEST_VALUE_LOCATION_ALIAS_MISMATCH
 } test_case;
 
 static void *test_allocate(void *context, size_t size, size_t alignment)
@@ -478,6 +484,42 @@ static bool test_stage_model(
 		transfer.return_action = ZEND_MIR_TRANSFER_FROM_CALLEE;
 		CHECK(mutator->add_call_transfer(mutator->context, &transfer));
 	}
+	if (mode == TEST_VALID_SUSPEND_LIVENESS
+			|| mode == TEST_SUSPEND_LIVENESS_UNKNOWN_VALUE
+			|| mode == TEST_SUSPEND_LIVENESS_LOCATION_MISMATCH
+			|| mode == TEST_SUSPEND_LIVENESS_DUPLICATE
+			|| mode == TEST_SUSPEND_LIVENESS_SOURCE_OUT_OF_RANGE
+			|| mode == TEST_VALUE_LOCATION_ALIAS_MISMATCH) {
+		zend_mir_value_location_ref location;
+		zend_mir_suspend_live_value_ref live;
+
+		CHECK(mutator->set_model_flags(
+			mutator->context, ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS));
+		memset(&location, 0, sizeof(location));
+		location.value_id = 0;
+		location.storage_id = 7;
+		location.category = ZEND_MIR_VALUE_NON_REFCOUNTED_SCALAR;
+		location.refcount_state = ZEND_MIR_REFCOUNT_IMMORTAL;
+		location.alias_observable =
+			mode == TEST_VALUE_LOCATION_ALIAS_MISMATCH;
+		CHECK(mutator->add_value_location(mutator->context, &location));
+
+		if (mode == TEST_VALUE_LOCATION_ALIAS_MISMATCH) {
+			return true;
+		}
+		memset(&live, 0, sizeof(live));
+		live.target_source_position_id =
+			mode == TEST_SUSPEND_LIVENESS_SOURCE_OUT_OF_RANGE ? 1 : 0;
+		live.value_id =
+			mode == TEST_SUSPEND_LIVENESS_UNKNOWN_VALUE ? 1 : 0;
+		live.storage_id =
+			mode == TEST_SUSPEND_LIVENESS_LOCATION_MISMATCH ? 8 : 7;
+		CHECK(mutator->add_suspend_live_value(mutator->context, &live));
+		if (mode == TEST_SUSPEND_LIVENESS_DUPLICATE) {
+			CHECK(mutator->add_suspend_live_value(
+				mutator->context, &live));
+		}
+	}
 
 	return true;
 }
@@ -527,13 +569,23 @@ static bool test_build_case(
 			core_mutator->context, &source, &source_id)
 			|| source_id != 0
 			|| ((mode == TEST_VALID_CALL_TRANSFER
-					|| mode == TEST_CALL_MODEL_WITHOUT_TRANSFER
+					|| mode == TEST_VALID_SOURCE_BACKED_CALL
 					|| mode == TEST_CALL_TRANSFER_WRONG_SITE
 					|| mode == TEST_CALL_TRANSFER_WRONG_ORDINAL
 					|| mode == TEST_VERIFIER_CALL_TRANSFER_MUTATION
 					|| mode == TEST_VALID_ZERO_ARGUMENT_CALL)
 				&& !test_stage_call_model(module, function, block,
 					mode != TEST_VALID_ZERO_ARGUMENT_CALL))
+			|| ((mode == TEST_VALID_SUSPEND_LIVENESS
+					|| mode == TEST_SUSPEND_LIVENESS_UNKNOWN_VALUE
+					|| mode == TEST_SUSPEND_LIVENESS_LOCATION_MISMATCH
+					|| mode == TEST_SUSPEND_LIVENESS_DUPLICATE
+					|| mode == TEST_SUSPEND_LIVENESS_SOURCE_OUT_OF_RANGE
+					|| mode == TEST_VALUE_LOCATION_ALIAS_MISMATCH)
+				&& !core_mutator->add_value(
+					core_mutator->context, 0,
+					ZEND_MIR_REPRESENTATION_ZVAL,
+					ZEND_MIR_OWNERSHIP_STATE_BORROWED))
 			|| !test_stage_model(value_mutator, mode)) {
 		goto destroy;
 	}
@@ -646,19 +698,52 @@ static bool test_rejections(void)
 		TEST_ALIAS_STORAGE_USE_AFTER_MOVE,
 		TEST_TABLE_COUNT_OVERFLOW,
 		TEST_CALL_TRANSFER_WITHOUT_MODEL,
-		TEST_CALL_MODEL_WITHOUT_TRANSFER,
 		TEST_CALL_TRANSFER_WRONG_SITE,
-		TEST_CALL_TRANSFER_WRONG_ORDINAL
+		TEST_CALL_TRANSFER_WRONG_ORDINAL,
+		TEST_SUSPEND_LIVENESS_UNKNOWN_VALUE,
+		TEST_SUSPEND_LIVENESS_LOCATION_MISMATCH,
+		TEST_SUSPEND_LIVENESS_DUPLICATE,
+		TEST_SUSPEND_LIVENESS_SOURCE_OUT_OF_RANGE,
+		TEST_VALUE_LOCATION_ALIAS_MISMATCH
 	};
 	uint32_t index;
 
 	for (index = 0; index < sizeof(rejected) / sizeof(rejected[0]);
 			index++) {
 		test_diagnostics diagnostics;
-		CHECK(!test_build_case(
-			rejected[index], 0, NULL, NULL, NULL, &diagnostics));
+		if (test_build_case(
+				rejected[index], 0, NULL, NULL, NULL, &diagnostics)) {
+			fprintf(stderr, "rejection case %u unexpectedly succeeded\n",
+				(unsigned int) rejected[index]);
+			return false;
+		}
 		CHECK(diagnostics.count != 0);
 	}
+	return true;
+}
+
+static bool test_source_backed_call(void)
+{
+	test_diagnostics diagnostics;
+
+	CHECK(test_build_case(
+		TEST_VALID_SOURCE_BACKED_CALL, 0, NULL, NULL, NULL, &diagnostics));
+	CHECK(diagnostics.count == 0);
+	return true;
+}
+
+static bool test_suspend_liveness(void)
+{
+	test_text text = { { 0 }, 0 };
+	test_diagnostics diagnostics;
+
+	CHECK(test_build_case(
+		TEST_VALID_SUSPEND_LIVENESS, 0, &text, NULL, NULL, &diagnostics));
+	CHECK(strstr(text.bytes,
+		"suspend-live 0 value v0 frame-storage 7") != NULL);
+	CHECK(strstr(text.bytes,
+		"category 0 refcount 0 alias-observable false") != NULL);
+	CHECK(diagnostics.count == 0);
 	return true;
 }
 
@@ -749,6 +834,8 @@ int main(void)
 {
 	if (!test_valid_model_and_read_only_verifier()
 			|| !test_rejections()
+			|| !test_source_backed_call()
+			|| !test_suspend_liveness()
 			|| !test_merge_rules()
 			|| !test_verifier_rejections()
 			|| !test_call_transfer_dump_is_complete()

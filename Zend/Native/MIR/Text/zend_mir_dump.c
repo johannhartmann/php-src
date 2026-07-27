@@ -991,7 +991,9 @@ static bool zend_mir_dump_value_model(zend_mir_dump_context *dump)
 	if (module == NULL
 			|| (values->contract_version != ZEND_MIR_W06_CONTRACT_VERSION
 				&& values->contract_version
-					!= ZEND_MIR_W11P_CONTRACT_VERSION)
+					!= ZEND_MIR_W11P_CONTRACT_VERSION
+				&& values->contract_version
+					!= ZEND_MIR_W14_CONTRACT_VERSION)
 			|| values->storage_count == NULL || values->storage_at == NULL
 			|| values->payload_count == NULL || values->payload_at == NULL
 			|| values->reference_cell_count == NULL
@@ -1004,11 +1006,14 @@ static bool zend_mir_dump_value_model(zend_mir_dump_context *dump)
 			|| values->separation_plan_at == NULL
 			|| values->call_transfer_count == NULL
 			|| values->call_transfer_at == NULL
-			|| (values->contract_version == ZEND_MIR_W11P_CONTRACT_VERSION
+			|| (values->contract_version != ZEND_MIR_W06_CONTRACT_VERSION
 				&& ((values->model_flags
 						& ~ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS) != 0
 					|| values->value_location_count == NULL
-					|| values->value_location_at == NULL))) {
+					|| values->value_location_at == NULL))
+			|| (values->contract_version == ZEND_MIR_W14_CONTRACT_VERSION
+				&& (values->suspend_live_value_count == NULL
+					|| values->suspend_live_value_at == NULL))) {
 		zend_mir_dump_diagnostic(dump, "incomplete W06 value view");
 		return false;
 	}
@@ -1061,7 +1066,7 @@ static bool zend_mir_dump_value_model(zend_mir_dump_context *dump)
 			return false;
 		}
 	}
-	if (values->contract_version == ZEND_MIR_W11P_CONTRACT_VERSION) {
+	if (values->contract_version != ZEND_MIR_W06_CONTRACT_VERSION) {
 		if (!zend_mir_dump_literal(dump, "value-model-flags ")
 				|| !zend_mir_dump_u32(dump, values->model_flags)
 				|| !zend_mir_dump_literal(dump, "\n")) {
@@ -1084,6 +1089,38 @@ static bool zend_mir_dump_value_model(zend_mir_dump_context *dump)
 							|| !zend_mir_dump_u32(
 								dump,
 								record.frame_argument_ordinal_plus_one - 1)))
+					|| (values->contract_version
+							== ZEND_MIR_W14_CONTRACT_VERSION
+						&& (!zend_mir_dump_literal(dump, " category ")
+							|| !zend_mir_dump_u32(
+								dump, (uint32_t) record.category)
+							|| !zend_mir_dump_literal(dump, " refcount ")
+							|| !zend_mir_dump_u32(
+								dump, (uint32_t) record.refcount_state)
+							|| !zend_mir_dump_literal(
+								dump, " alias-observable ")
+							|| !zend_mir_dump_bool(
+								dump, record.alias_observable)))
+					|| !zend_mir_dump_literal(dump, "\n")) {
+				return false;
+			}
+		}
+	}
+	if (values->contract_version == ZEND_MIR_W14_CONTRACT_VERSION) {
+		ZEND_MIR_VALUE_COUNT(suspend_live_value)
+		for (index = 0; index < count; index++) {
+			zend_mir_suspend_live_value_ref record;
+			if (!values->suspend_live_value_at(
+					values->context, index, &record)
+					|| !zend_mir_dump_literal(
+						dump, "suspend-live ")
+					|| !zend_mir_dump_u32(
+						dump, record.target_source_position_id)
+					|| !zend_mir_dump_literal(dump, " value ")
+					|| !zend_mir_dump_id(dump, "v", record.value_id)
+					|| !zend_mir_dump_literal(
+						dump, " frame-storage ")
+					|| !zend_mir_dump_u32(dump, record.storage_id)
 					|| !zend_mir_dump_literal(dump, "\n")) {
 				return false;
 			}

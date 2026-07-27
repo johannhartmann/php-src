@@ -77,6 +77,15 @@
 #define ZEND_MIR_W11P_CONTRACT_VERSION \
 	((ZEND_MIR_CONTRACT_VERSION_MAJOR << 16) | ZEND_MIR_W11P_CONTRACT_VERSION_MINOR)
 
+/*
+ * W14 freezes source-backed suspend liveness at the target-neutral value-model
+ * boundary. TPDE consumes this table directly and never reconstructs it from
+ * Zend SSA, projected instructions, or canonical frame locations.
+ */
+#define ZEND_MIR_W14_CONTRACT_VERSION_MINOR UINT32_C(17)
+#define ZEND_MIR_W14_CONTRACT_VERSION \
+	((ZEND_MIR_CONTRACT_VERSION_MAJOR << 16) | ZEND_MIR_W14_CONTRACT_VERSION_MINOR)
+
 #define ZEND_MIR_ID_INVALID UINT32_C(0xffffffff)
 #define ZEND_MIR_ID_MAX UINT32_C(0xfffffffe)
 

@@ -112,6 +112,9 @@ ZEND_MIR_VALUE_STAGE(zend_mir_value_stage_value_location,
 ZEND_MIR_VALUE_STAGE(zend_mir_value_stage_executable_operation,
 	zend_mir_executable_value_ref, executable_operations,
 	executable_operation_count, executable_operation_capacity)
+ZEND_MIR_VALUE_STAGE(zend_mir_value_stage_suspend_live_value,
+	zend_mir_suspend_live_value_ref, suspend_live_values,
+	suspend_live_value_count, suspend_live_value_capacity)
 
 #undef ZEND_MIR_VALUE_STAGE
 
@@ -843,7 +846,8 @@ static bool zend_mir_value_staging_counts_bounded(
 		&& staging->separation_plan_count <= limit
 		&& staging->call_transfer_count <= limit
 		&& staging->value_location_count <= limit
-		&& staging->executable_operation_count <= limit;
+		&& staging->executable_operation_count <= limit
+		&& staging->suspend_live_value_count <= limit;
 }
 
 static bool zend_mir_value_validate_locations(
@@ -864,6 +868,15 @@ static bool zend_mir_value_validate_locations(
 				|| !zend_mir_id_is_valid(location->storage_id)
 				|| location->frame_argument_ordinal_plus_one
 					== ZEND_MIR_ID_INVALID
+				|| location->category
+					< ZEND_MIR_VALUE_NON_REFCOUNTED_SCALAR
+				|| location->category > ZEND_MIR_VALUE_CATEGORY_UNKNOWN
+				|| location->refcount_state
+					< ZEND_MIR_REFCOUNT_IMMORTAL
+				|| location->refcount_state > ZEND_MIR_REFCOUNT_UNKNOWN
+				|| (location->alias_observable
+					&& location->category
+						!= ZEND_MIR_VALUE_REFERENCE_CELL)
 				|| !zend_mir_module_find_value(
 					module, location->value_id, &value_index)
 				|| (have_previous && location->value_id <= previous)) {
@@ -995,6 +1008,62 @@ static bool zend_mir_value_validate_executable_operations(
 		}
 		previous_block = operation->block_id;
 		previous_source = operation->source_position_id;
+		have_previous = true;
+	}
+	return true;
+}
+
+static bool zend_mir_value_validate_suspend_live_values(
+	const zend_mir_module *module,
+	const zend_mir_core_value_staging *staging)
+{
+	zend_mir_source_position_id previous_target = 0;
+	zend_mir_value_id previous_value = 0;
+	bool have_previous = false;
+	uint32_t index;
+
+	for (index = 0; index < staging->suspend_live_value_count; index++) {
+		const zend_mir_suspend_live_value_ref *live =
+			&staging->suspend_live_values[index];
+		const zend_mir_value_location_ref *location = NULL;
+		uint32_t value_index;
+		uint32_t low = 0;
+		uint32_t high = staging->value_location_count;
+
+		if (!zend_mir_id_is_valid(live->target_source_position_id)
+				|| live->target_source_position_id
+					>= module->source_positions.count
+				|| !zend_mir_id_is_valid(live->value_id)
+				|| !zend_mir_id_is_valid(live->storage_id)
+				|| !zend_mir_module_find_value(
+					module, live->value_id, &value_index)
+				|| (have_previous
+					&& (live->target_source_position_id < previous_target
+						|| (live->target_source_position_id
+								== previous_target
+							&& live->value_id <= previous_value)))) {
+			return false;
+		}
+		while (low < high) {
+			const uint32_t middle = low + (high - low) / 2;
+			const zend_mir_value_location_ref *candidate =
+				&staging->value_locations[middle];
+			if (candidate->value_id < live->value_id) {
+				low = middle + 1;
+			} else {
+				high = middle;
+			}
+		}
+		if (low < staging->value_location_count
+				&& staging->value_locations[low].value_id
+					== live->value_id) {
+			location = &staging->value_locations[low];
+		}
+		if (location == NULL || location->storage_id != live->storage_id) {
+			return false;
+		}
+		previous_target = live->target_source_position_id;
+		previous_value = live->value_id;
 		have_previous = true;
 	}
 	return true;
@@ -1303,7 +1372,8 @@ bool zend_mir_module_commit_value_model(zend_mir_module *module)
 			|| (staging->model_flags
 				& ~ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS) != 0
 			|| ((staging->value_location_count != 0
-					|| staging->executable_operation_count != 0)
+					|| staging->executable_operation_count != 0
+					|| staging->suspend_live_value_count != 0)
 				&& (staging->model_flags
 					& ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS) == 0)
 			|| !zend_mir_value_staging_counts_bounded(staging)
@@ -1316,6 +1386,7 @@ bool zend_mir_module_commit_value_model(zend_mir_module *module)
 			|| !zend_mir_value_validate_call_transfers(module, staging)
 			|| !zend_mir_value_validate_locations(module, staging)
 			|| !zend_mir_value_validate_executable_operations(module, staging)
+			|| !zend_mir_value_validate_suspend_live_values(module, staging)
 			|| !zend_mir_value_compose_executable_operations(module, staging)) {
 		return zend_mir_module_fail(module,
 			ZEND_MIR_DIAGNOSTIC_INVALID_OWNERSHIP,
@@ -1345,6 +1416,8 @@ bool zend_mir_module_commit_value_model(zend_mir_module *module)
 		value_location_count, zend_mir_value_location_ref)
 	ZEND_MIR_VALUE_COPY(value_executable_operations, executable_operations,
 		executable_operation_count, zend_mir_executable_value_ref)
+	ZEND_MIR_VALUE_COPY(value_suspend_live_values, suspend_live_values,
+		suspend_live_value_count, zend_mir_suspend_live_value_ref)
 #undef ZEND_MIR_VALUE_COPY
 	module->value_view.model_flags = staging->model_flags;
 	staging->committed = true;
@@ -1417,7 +1490,7 @@ bool zend_mir_value_compute_module_fingerprint(
 void zend_mir_module_init_value_mutator(zend_mir_module *module)
 {
 	memset(&module->value_mutator, 0, sizeof(module->value_mutator));
-	module->value_mutator.contract_version = ZEND_MIR_W06_CONTRACT_VERSION;
+	module->value_mutator.contract_version = ZEND_MIR_W14_CONTRACT_VERSION;
 	module->value_mutator.context = module;
 	module->value_mutator.set_model_flags = zend_mir_value_set_model_flags;
 	module->value_mutator.add_storage = zend_mir_value_stage_storage;
@@ -1436,6 +1509,8 @@ void zend_mir_module_init_value_mutator(zend_mir_module *module)
 		zend_mir_value_stage_value_location;
 	module->value_mutator.add_executable_operation =
 		zend_mir_value_stage_executable_operation;
+	module->value_mutator.add_suspend_live_value =
+		zend_mir_value_stage_suspend_live_value;
 }
 
 zend_mir_value_mutator *zend_mir_module_get_value_mutator(

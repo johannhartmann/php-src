@@ -2045,6 +2045,12 @@ public:
 		 * calls whose result is observed exclusively through Zend storage.
 		 */
 		std::vector<uint8_t> machine_value_used(plan_->value_count);
+		for (uint32_t value = 0;
+				value < plan_->value_count; ++value) {
+			machine_value_used[value] =
+				plan_->value_consumer_offsets[value]
+					!= plan_->value_consumer_offsets[value + 1];
+		}
 		auto mark_machine_use = [&](zend_mir_value_id id) {
 			const int32_t index = zend_tpde_value_index(plan_, id);
 			if (index >= 0) {
