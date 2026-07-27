@@ -49,4 +49,4 @@ printf(
 );
 ?>
 --EXPECT--
-accepted return=register-authoritative runs=20 codeunits=2 components=1 direct=1 typed=1 frame_bytes=0 vm=0 execute_ex=0 handler=0
+accepted return=register-authoritative runs=20 codeunits=2 components=1 direct=1 typed=2 frame_bytes=0 vm=0 execute_ex=0 handler=0
