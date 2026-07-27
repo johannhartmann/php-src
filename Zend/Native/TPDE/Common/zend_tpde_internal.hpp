@@ -518,11 +518,39 @@ struct zend_tpde_dynamic_fetch_read {
 	uint32_t result_offset;
 };
 
+struct zend_tpde_source_opcode {
+	uint8_t opcode;
+	uint8_t op1_type;
+	uint8_t op2_type;
+	uint8_t result_type;
+	uint32_t op1_var;
+	uint32_t op2_var;
+	uint32_t result_var;
+	uint32_t extended_value;
+};
+
+struct zend_tpde_multi_branch_case {
+	int64_t integer_key;
+	char *string_key;
+	uint32_t string_length;
+	uint32_t target;
+};
+
+struct zend_tpde_source_multi_branch {
+	uint32_t case_offset;
+	uint32_t case_count;
+	uint32_t default_target;
+	uint32_t fallback_target;
+	uint8_t source_opcode;
+	bool valid;
+};
+
 struct zend_tpde_multi_branch {
 	uint32_t operand_offset;
 	uint32_t source_opcode;
 	uint32_t successor_count;
-	HashTable *jump_table;
+	const zend_tpde_multi_branch_case *cases;
+	uint32_t case_count;
 };
 
 struct zend_tpde_user_multi_branch {
@@ -530,7 +558,8 @@ struct zend_tpde_user_multi_branch {
 	uint32_t target_opcode;
 	uint32_t default_target;
 	uint32_t fallback_target;
-	HashTable *jump_table;
+	const zend_tpde_multi_branch_case *cases;
+	uint32_t case_count;
 };
 
 struct zend_tpde_integer_case {
@@ -546,29 +575,25 @@ enum zend_tpde_integer_dispatch_kind : uint8_t {
 
 static inline zend_tpde_integer_dispatch_kind
 zend_tpde_integer_dispatch(
-	HashTable *jump_table,
+	const zend_tpde_multi_branch_case *branch_cases,
+	uint32_t branch_case_count,
 	std::vector<zend_tpde_integer_case> *cases,
 	int64_t *low,
 	uint64_t *range)
 {
-	if (jump_table == nullptr || cases == nullptr
+	if ((branch_cases == nullptr && branch_case_count != 0) || cases == nullptr
 			|| low == nullptr || range == nullptr) {
 		return ZEND_TPDE_INTEGER_DISPATCH_LINEAR;
 	}
 	cases->clear();
-	cases->reserve(zend_hash_num_elements(jump_table));
-	uint32_t label_index = 0;
-	zend_ulong numeric_key;
-	zend_string *string_key;
-	zval *jump_value;
-	ZEND_HASH_FOREACH_KEY_VAL(
-			jump_table, numeric_key, string_key, jump_value) {
-		if (string_key == nullptr) {
+	cases->reserve(branch_case_count);
+	for (uint32_t label_index = 0;
+			label_index < branch_case_count; ++label_index) {
+		if (branch_cases[label_index].string_key == nullptr) {
 			cases->push_back({
-				static_cast<int64_t>(numeric_key), label_index});
+				branch_cases[label_index].integer_key, label_index});
 		}
-		++label_index;
-	} ZEND_HASH_FOREACH_END();
+	}
 	if (cases->size() <= 4) {
 		return ZEND_TPDE_INTEGER_DISPATCH_LINEAR;
 	}
@@ -1242,9 +1267,14 @@ static inline bool zend_tpde_dynamic_fetch_read_at(
 
 struct zend_tpde_plan {
 	const zend_native_runtime_api *runtime;
-	const zend_op_array *source_op_array;
 	uint32_t source_ssa_variable_count;
 	uint32_t source_opcode_count;
+	zend_tpde_source_opcode *source_opcodes;
+	zend_tpde_source_multi_branch *source_multi_branches;
+	zend_tpde_multi_branch_case *source_multi_branch_cases;
+	uint32_t source_multi_branch_case_count;
+	uint32_t source_frame_variable_count;
+	uint32_t source_temporary_count;
 	uint32_t source_block_count;
 	uint32_t *source_opcode_block_indices;
 	uint8_t *source_opcode_is_data;
@@ -1357,8 +1387,9 @@ static inline bool zend_tpde_user_multi_branch_at(
 	uint32_t target_opcode,
 	zend_tpde_user_multi_branch *out)
 {
-	if (plan == nullptr || out == nullptr || plan->source_op_array == nullptr
-			|| operation.source_position_id >= plan->source_op_array->last
+	if (plan == nullptr || out == nullptr
+			|| plan->source_multi_branches == nullptr
+			|| operation.source_position_id >= plan->source_opcode_count
 			|| operation.op1_storage_id == ZEND_MIR_ID_INVALID
 			|| operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
 			|| (target_opcode != ZEND_SWITCH_LONG
@@ -1366,43 +1397,27 @@ static inline bool zend_tpde_user_multi_branch_at(
 				&& target_opcode != ZEND_MATCH)) {
 		return false;
 	}
-	const zend_op *opline =
-		&plan->source_op_array->opcodes[operation.source_position_id];
-	if (opline->op2_type != IS_CONST) {
-		return false;
-	}
-	const zval *jump_table = RT_CONSTANT(opline, opline->op2);
-	if (Z_TYPE_P(jump_table) != IS_ARRAY) {
+	const zend_tpde_source_multi_branch &branch =
+		plan->source_multi_branches[operation.source_position_id];
+	if (!branch.valid) {
 		return false;
 	}
 	const uint64_t operand_offset =
 		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
 			* sizeof(zval);
-	const uint32_t default_target = zend_tpde_relative_source_target(
-		plan->source_op_array, operation.source_position_id,
-		static_cast<zend_long>(opline->extended_value));
-	const uint32_t fallback_target =
-		operation.source_position_id + 1 < plan->source_op_array->last
-			? operation.source_position_id + 1 : UINT32_MAX;
-	if (operand_offset > UINT32_MAX || default_target == UINT32_MAX
+	if (operand_offset > UINT32_MAX || branch.default_target == UINT32_MAX
 			|| (target_opcode != ZEND_MATCH
-				&& fallback_target == UINT32_MAX)) {
+				&& branch.fallback_target == UINT32_MAX)) {
 		return false;
 	}
-	zval *jump_value;
-	ZEND_HASH_FOREACH_VAL(Z_ARRVAL_P(jump_table), jump_value) {
-		if (Z_TYPE_P(jump_value) != IS_LONG
-				|| zend_tpde_relative_source_target(
-					plan->source_op_array, operation.source_position_id,
-					Z_LVAL_P(jump_value)) == UINT32_MAX) {
-			return false;
-		}
-	} ZEND_HASH_FOREACH_END();
 	out->operand_offset = static_cast<uint32_t>(operand_offset);
 	out->target_opcode = target_opcode;
-	out->default_target = default_target;
-	out->fallback_target = fallback_target;
-	out->jump_table = Z_ARRVAL_P(jump_table);
+	out->default_target = branch.default_target;
+	out->fallback_target = branch.fallback_target;
+	out->cases = branch.case_count == 0
+		? nullptr
+		: plan->source_multi_branch_cases + branch.case_offset;
+	out->case_count = branch.case_count;
 	return true;
 }
 
@@ -1414,8 +1429,6 @@ static inline bool zend_tpde_multi_branch_at(
 {
 	const zend_mir_executable_value_ref &operation =
 		instruction.value_operation;
-	const zend_op *opline;
-	const zval *jump_table;
 	uint64_t operand_offset;
 	uint32_t expected_successors;
 
@@ -1423,29 +1436,21 @@ static inline bool zend_tpde_multi_branch_at(
 			|| !instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH
 			|| record.opcode != ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH
-			|| plan->source_op_array == nullptr
-			|| operation.source_position_id >= plan->source_op_array->last
+			|| plan->source_multi_branches == nullptr
+			|| operation.source_position_id >= plan->source_opcode_count
 			|| operation.source_position_id != record.source_position_id
 			|| operation.op1_storage_id == ZEND_MIR_ID_INVALID
 			|| operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
 			|| operation.result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED) {
 		return false;
 	}
-	opline =
-		&plan->source_op_array->opcodes[operation.source_position_id];
-	if (opline->opcode != operation.source_opcode
-			|| (opline->opcode != ZEND_SWITCH_LONG
-				&& opline->opcode != ZEND_SWITCH_STRING
-				&& opline->opcode != ZEND_MATCH)
-			|| opline->op2_type != IS_CONST) {
+	const zend_tpde_source_multi_branch &branch =
+		plan->source_multi_branches[operation.source_position_id];
+	if (!branch.valid || branch.source_opcode != operation.source_opcode) {
 		return false;
 	}
-	jump_table = RT_CONSTANT(opline, opline->op2);
-	if (Z_TYPE_P(jump_table) != IS_ARRAY) {
-		return false;
-	}
-	expected_successors = zend_hash_num_elements(Z_ARRVAL_P(jump_table))
-		+ (opline->opcode == ZEND_MATCH ? 1 : 2);
+	expected_successors = branch.case_count
+		+ (branch.source_opcode == ZEND_MATCH ? 1 : 2);
 	if (expected_successors < 2
 			|| zend_tpde_block_successor_count(
 				plan, record.block_id) != expected_successors) {
@@ -1458,9 +1463,12 @@ static inline bool zend_tpde_multi_branch_at(
 		return false;
 	}
 	out->operand_offset = static_cast<uint32_t>(operand_offset);
-	out->source_opcode = opline->opcode;
+	out->source_opcode = branch.source_opcode;
 	out->successor_count = expected_successors;
-	out->jump_table = Z_ARRVAL_P(jump_table);
+	out->cases = branch.case_count == 0
+		? nullptr
+		: plan->source_multi_branch_cases + branch.case_offset;
+	out->case_count = branch.case_count;
 	return true;
 }
 

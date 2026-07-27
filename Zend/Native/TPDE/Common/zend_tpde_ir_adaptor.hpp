@@ -1632,6 +1632,17 @@ public:
 						ZEND_TPDE_MACHINE_VALUE_BOOL, true};
 				continue;
 			}
+			/*
+			 * Echo is an observability boundary: its helper consumes the
+			 * active Zend frame and may invoke output handlers.  Keep the
+			 * private typed body reserved for operations whose complete ABI
+			 * is represented by its explicit TPDE arguments.
+			 */
+			if (record.opcode == ZEND_MIR_OPCODE_ECHO_SCALAR
+					|| instruction.source_effect
+						== ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR) {
+				return false;
+			}
 			if (record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
 				if (!instruction.has_value_operation
 						|| instruction.value_operation.opcode
@@ -2215,13 +2226,13 @@ public:
 			plan_->generator_resume_count, 0);
 		const bool source_landings =
 			plan_->user_opcode_callbacks || source_call_fragments;
-		if (source_landings && plan_->source_op_array != nullptr) {
-			source_landing_emitted.resize(plan_->source_op_array->last, 0);
+		if (source_landings && plan_->source_opcodes != nullptr) {
+			source_landing_emitted.resize(plan_->source_opcode_count, 0);
 			source_landing_blocks.resize(
-				plan_->source_op_array->last, UINT32_MAX);
+				plan_->source_opcode_count, UINT32_MAX);
 			if (plan_->user_opcode_callbacks) {
 				user_opcode_next_landings_.resize(
-					plan_->source_op_array->last, UINT32_MAX);
+					plan_->source_opcode_count, UINT32_MAX);
 			}
 			if (plan_->source_opcode_block_indices == nullptr
 					|| plan_->source_opcode_is_data == nullptr
@@ -2237,7 +2248,7 @@ public:
 					const zend_mir_instruction_record record =
 						instruction_record_at(instruction);
 					if (record.source_position_id
-							>= plan_->source_op_array->last) {
+							>= plan_->source_opcode_count) {
 						continue;
 					}
 					const uint32_t source_block =
@@ -2307,7 +2318,7 @@ public:
 			}
 			if (plan_->user_opcode_callbacks) {
 				uint32_t next = UINT32_MAX;
-				for (uint32_t source = plan_->source_op_array->last;
+				for (uint32_t source = plan_->source_opcode_count;
 						source-- > 0;) {
 					if (source_landing_blocks[source] != UINT32_MAX) {
 						next = source;
@@ -2315,7 +2326,7 @@ public:
 					user_opcode_next_landings_[source] = next;
 				}
 				for (uint32_t source = 0;
-						source < plan_->source_op_array->last; ++source) {
+						source < plan_->source_opcode_count; ++source) {
 					if (source_landing_blocks[source] == UINT32_MAX
 							|| source
 								>= plan_->user_opcode_source_operation_count) {
@@ -2551,8 +2562,8 @@ public:
 					0,
 					false});
 				if (zend_get_user_opcode_handler(
-						plan_->source_op_array->opcodes[
-							source_position].opcode) != nullptr) {
+						plan_->source_opcodes[source_position].opcode)
+						!= nullptr) {
 					const uint32_t operand_offset =
 						static_cast<uint32_t>(operands_.size());
 					operands_.push_back(IRValueRef{FRAME_VALUE});
@@ -2670,7 +2681,7 @@ public:
 			if (source_landings
 					&& plan_->source_opcode_block_indices != nullptr
 					&& record.source_position_id
-						< plan_->source_op_array->last) {
+						< plan_->source_opcode_count) {
 				const uint32_t source_block =
 					plan_->source_opcode_block_indices[
 						record.source_position_id];
@@ -2851,6 +2862,16 @@ public:
 					continue;
 				}
 				if (representation(result) == ZEND_MIR_REPRESENTATION_ZVAL) {
+					/*
+					 * An exact-null PHI carries neither payload nor type
+					 * entropy.  All incoming values denote the same immediate
+					 * PHP value, so allocating a two-part boxed PHI would
+					 * manufacture a definition that has no machine use.
+					 */
+					if (exact_type(result)
+							== ZEND_MIR_SCALAR_TYPE_NULL) {
+						continue;
+					}
 					const int32_t source_block =
 						block_index(record.block_id);
 					if (source_block < 0) {
