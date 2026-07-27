@@ -3224,7 +3224,7 @@ public:
 							source_binding_value_ref(
 								plan_->call_argument_bindings[
 									instruction.call_argument_offset + n]);
-						if (value == INVALID_VALUE_REF) {
+						if (!machine_value_has_result_representation(value)) {
 							valid_ = false;
 						}
 						operands_.push_back(value);
@@ -3266,6 +3266,18 @@ public:
 									&& zend_mir_id_is_valid(
 										argument.value_id)) {
 								value = value_ref(argument.value_id);
+							}
+							if (value != INVALID_VALUE_REF
+									&& !machine_value_has_result_representation(
+										value)) {
+								/*
+								 * A canonical-only source is not an SSA
+								 * machine value.  The generated frame path
+								 * consumes the caller frame plus the frozen
+								 * byte offset and performs the zval copy
+								 * directly.
+								 */
+								value = IRValueRef{FRAME_VALUE};
 							}
 							if (value == INVALID_VALUE_REF) {
 								value = IRValueRef{FRAME_VALUE};
@@ -4279,6 +4291,37 @@ public:
 		return component_index < typed_body_return_types_.size()
 			? typed_body_return_types_[component_index]
 			: ZendIRAdaptor::TypedBodyAbiType{};
+	}
+	bool typed_body_arguments_match(
+			uint32_t component_index,
+			std::span<const IRValueRef> operands) const {
+		const zend_tpde_plan *body = component_plan(component_index);
+		if (body == nullptr
+				|| body->argument_abi == nullptr
+				|| body->argument_value_indices == nullptr
+				|| operands.size() < body->argument_count) {
+			return false;
+		}
+		for (uint32_t argument = 0;
+				argument < body->argument_count; ++argument) {
+			const int32_t body_value =
+				body->argument_value_indices[argument];
+			const auto &abi = body->argument_abi[argument];
+			const IRValueRef operand = operands[argument];
+			if (body_value < 0
+					|| static_cast<uint32_t>(body_value)
+						>= body->value_count
+					|| !abi.valid
+					|| operand == INVALID_VALUE_REF
+					|| !active_->machine_value_has_result_representation(
+						operand)
+					|| active_->exact_type(operand) != abi.exact_type
+					|| active_->machine_kind(operand)
+						!= abi.machine_kind) {
+				return false;
+			}
+		}
+		return true;
 	}
 	bool typed_body() const { return active_->typed_body(); }
 	const zend_tpde_plan *plan() const { return active_->plan(); }

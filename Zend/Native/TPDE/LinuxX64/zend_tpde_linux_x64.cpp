@@ -6330,7 +6330,9 @@ bool ZendCompilerX64::compile_inst(
 					&& node.kind == Adaptor::InstKind::GuardedFast
 					&& !node.inlined_user_body
 					&& adaptor->typed_body_return_type(
-						call.component_target_index).valid;
+						call.component_target_index).valid
+					&& adaptor->typed_body_arguments_match(
+						call.component_target_index, node.operands);
 				if (generated_fast_path
 						&& node.kind == Adaptor::InstKind::GuardedFast
 						&& !typed_body_call) {
@@ -6494,26 +6496,6 @@ bool ZendCompilerX64::compile_inst(
 								>= this->func_syms.size()
 							|| node.continuation_block == UINT32_MAX) {
 						return false;
-					}
-					for (uint32_t argument = 0;
-							argument < argument_count; ++argument) {
-						const int32_t body_value =
-							body_plan->argument_value_indices[argument];
-						if (body_value < 0
-								|| static_cast<uint32_t>(body_value)
-									>= body_plan->value_count
-								|| body_plan->argument_abi == nullptr
-								|| !body_plan->argument_abi[argument].valid
-								|| adaptor->exact_type(
-									node.operands[argument])
-									!= body_plan->argument_abi[
-										argument].exact_type
-								|| adaptor->machine_kind(
-									node.operands[argument])
-									!= body_plan->argument_abi[
-										argument].machine_kind) {
-							return false;
-						}
 					}
 					auto [frame_ref, frame] =
 						val_ref_single(node.operands[frame_operand]);
