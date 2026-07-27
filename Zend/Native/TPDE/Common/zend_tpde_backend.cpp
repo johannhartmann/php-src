@@ -1438,18 +1438,18 @@ bool call_site_requires_source_fragments(
 {
 	uint32_t source_position;
 
-	if (plan == nullptr || plan->source_op_array == nullptr
-			|| site.source_init_opline_index >= plan->source_op_array->last
-			|| site.source_do_opline_index >= plan->source_op_array->last
+	if (plan == nullptr || plan->source_opcodes == nullptr
+			|| site.source_init_opline_index >= plan->source_opcode_count
+			|| site.source_do_opline_index >= plan->source_opcode_count
 			|| site.source_init_opline_index
 				>= site.source_do_opline_index) {
 		return false;
 	}
 	if (zend_get_user_opcode_handler(
-			plan->source_op_array->opcodes[
+			plan->source_opcodes[
 				site.source_init_opline_index].opcode) != nullptr
 			|| zend_get_user_opcode_handler(
-				plan->source_op_array->opcodes[
+				plan->source_opcodes[
 					site.source_do_opline_index].opcode) != nullptr) {
 		return true;
 	}
@@ -1459,7 +1459,7 @@ bool call_site_requires_source_fragments(
 	 * performs that ordering and still binds a fixed internal constructor
 	 * through the process-local call cell.
 	 */
-	if (plan->source_op_array->opcodes[
+	if (plan->source_opcodes[
 			site.source_init_opline_index].opcode == ZEND_NEW) {
 		return true;
 	}
@@ -1470,7 +1470,7 @@ bool call_site_requires_source_fragments(
 	 * INIT/SEND/CONVERT at their source positions and let the fragment runtime
 	 * preserve the resolved function and PHP's call-frame ownership exactly.
 	 */
-	const uint8_t finish_opcode = plan->source_op_array->opcodes[
+	const uint8_t finish_opcode = plan->source_opcodes[
 		site.source_do_opline_index].opcode;
 	if (finish_opcode == ZEND_CALLABLE_CONVERT
 			|| finish_opcode == ZEND_CALLABLE_CONVERT_PARTIAL) {
@@ -1481,11 +1481,11 @@ bool call_site_requires_source_fragments(
 		if (!zend_tpde_call_argument_at(
 				plan, site.arguments.offset + index, &argument)
 				|| argument.send_opline_index
-					>= plan->source_op_array->last) {
+					>= plan->source_opcode_count) {
 			return false;
 		}
 		if (zend_get_user_opcode_handler(
-				plan->source_op_array->opcodes[
+				plan->source_opcodes[
 					argument.send_opline_index].opcode) != nullptr) {
 			return true;
 		}
@@ -1501,7 +1501,7 @@ bool call_site_requires_source_fragments(
 			source_position < site.source_do_opline_index;
 			source_position++) {
 		const uint8_t opcode =
-			plan->source_op_array->opcodes[source_position].opcode;
+			plan->source_opcodes[source_position].opcode;
 		if (opcode == ZEND_CHECK_FUNC_ARG
 				|| opcode == ZEND_CHECK_UNDEF_ARGS) {
 			return true;
@@ -1512,18 +1512,19 @@ bool call_site_requires_source_fragments(
 
 zend_native_user_call_descriptor *build_user_call_descriptor(
 	zend_tpde_plan *plan,
+	const zend_op_array *source_op_array,
 	const zend_mir_call_site_ref &site,
 	const zend_mir_instruction_record &record,
 	zend_native_diagnostic *diag)
 {
-	if (plan == nullptr || plan->source_op_array == nullptr
-			|| site.source_init_opline_index >= plan->source_op_array->last
-			|| site.source_do_opline_index >= plan->source_op_array->last) {
+	if (plan == nullptr || source_op_array == nullptr
+			|| site.source_init_opline_index >= source_op_array->last
+			|| site.source_do_opline_index >= source_op_array->last) {
 		return nullptr;
 	}
-	const zend_op *init = &plan->source_op_array->opcodes[
+	const zend_op *init = &source_op_array->opcodes[
 		site.source_init_opline_index];
-	const zend_op *finish = &plan->source_op_array->opcodes[
+	const zend_op *finish = &source_op_array->opcodes[
 		site.source_do_opline_index];
 	if (init->extended_value > site.arguments.count) {
 		zend_tpde_set_diagnostic(diag,
@@ -1559,19 +1560,19 @@ zend_native_user_call_descriptor *build_user_call_descriptor(
 	descriptor->do_result_payload = finish->result.num;
 	descriptor->do_extended_value = finish->extended_value;
 	if (!source_descriptor_operand(
-				plan->source_op_array, init, init->op1_type,
+				source_op_array, init, init->op1_type,
 				init->op1, &descriptor->init_op1)
 			|| !source_descriptor_operand(
-				plan->source_op_array, init, init->op2_type,
+				source_op_array, init, init->op2_type,
 				init->op2, &descriptor->init_op2)
 			|| !source_descriptor_operand(
-				plan->source_op_array, init, init->result_type,
+				source_op_array, init, init->result_type,
 				init->result, &descriptor->init_result)
 			|| !source_descriptor_operand(
-				plan->source_op_array, finish, finish->op1_type,
+				source_op_array, finish, finish->op1_type,
 				finish->op1, &descriptor->do_op1)
 			|| !source_descriptor_operand(
-				plan->source_op_array, finish, finish->op2_type,
+				source_op_array, finish, finish->op2_type,
 				finish->op2, &descriptor->do_op2)) {
 		std::free(descriptor);
 		zend_tpde_set_diagnostic(diag,
@@ -1602,14 +1603,14 @@ zend_native_user_call_descriptor *build_user_call_descriptor(
 		if (!zend_tpde_call_argument_at(
 					plan, site.arguments.offset + index, &argument)
 				|| argument.send_opline_index
-					>= plan->source_op_array->last) {
+					>= source_op_array->last) {
 			std::free(descriptor);
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 				"source call argument table is unreadable");
 			return nullptr;
 		}
-		const zend_op *send = &plan->source_op_array->opcodes[
+		const zend_op *send = &source_op_array->opcodes[
 			argument.send_opline_index];
 		if (!source_descriptor_send_opcode(send->opcode)) {
 			std::free(descriptor);
@@ -1635,7 +1636,7 @@ zend_native_user_call_descriptor *build_user_call_descriptor(
 		encoded.result_payload = send->result.num;
 		encoded.extended_value = send->extended_value;
 		if (!source_descriptor_operand(
-				plan->source_op_array, send, send->op2_type,
+				source_op_array, send, send->op2_type,
 				send->op2, &encoded.auxiliary_operand)) {
 			std::free(descriptor);
 			zend_tpde_set_diagnostic(diag,
@@ -1872,6 +1873,7 @@ bool freeze_machine_plan_consumers(
 
 zend_tpde_source_value_binding freeze_source_value_binding(
 	const zend_tpde_plan *plan,
+	const zend_op_array *source_op_array,
 	const zend_mir_source_operand_ref &operand,
 	zend_mir_storage_id storage_id,
 	uint32_t consumer_source_position)
@@ -1902,7 +1904,7 @@ zend_tpde_source_value_binding freeze_source_value_binding(
 		if (candidate.direct_call == nullptr
 				|| candidate.call_site.source_do_opline_index
 					> consumer_source_position
-				|| source_descriptor_storage(plan->source_op_array,
+				|| source_descriptor_storage(source_op_array,
 					candidate.direct_call->result_operand) != storage_id) {
 			continue;
 		}
@@ -1918,16 +1920,18 @@ zend_tpde_source_value_binding freeze_source_value_binding(
 }
 
 bool freeze_source_value_bindings(
-	zend_tpde_plan *plan, zend_native_diagnostic *diag)
+	zend_tpde_plan *plan,
+	const zend_op_array *source_op_array,
+	zend_native_diagnostic *diag)
 {
-	if (plan == nullptr || plan->source_op_array == nullptr) {
+	if (plan == nullptr || source_op_array == nullptr) {
 		return true;
 	}
 	for (uint32_t index = 0; index < plan->call_argument_count; ++index) {
 		zend_mir_call_argument_ref argument{};
 		if (!zend_tpde_call_argument_at(plan, index, &argument)
 				|| argument.send_opline_index
-					>= plan->source_op_array->last) {
+					>= source_op_array->last) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 				"unable to freeze a source call-argument value");
@@ -1935,9 +1939,9 @@ bool freeze_source_value_bindings(
 		}
 		plan->call_argument_bindings[index] =
 			freeze_source_value_binding(
-				plan, argument.source_operand,
+				plan, source_op_array, argument.source_operand,
 				source_descriptor_storage(
-					plan->source_op_array, argument.source_operand),
+					source_op_array, argument.source_operand),
 				argument.send_opline_index);
 	}
 
@@ -1958,22 +1962,24 @@ bool freeze_source_value_bindings(
 			const zend_mir_executable_value_ref &operation =
 				instruction.value_operation;
 			instruction.source_op1_binding = freeze_source_value_binding(
-				plan, operation.op1, operation.op1_storage_id,
+				plan, source_op_array, operation.op1,
+				operation.op1_storage_id,
 				source_position);
 			instruction.source_op2_binding = freeze_source_value_binding(
-				plan, operation.op2, operation.op2_storage_id,
+				plan, source_op_array, operation.op2,
+				operation.op2_storage_id,
 				source_position);
 			instruction.source_result_binding = freeze_source_value_binding(
-				plan, operation.result, operation.result_storage_id,
+				plan, source_op_array, operation.result,
+				operation.result_storage_id,
 				source_position);
 			instruction.source_auxiliary_binding =
 				freeze_source_value_binding(
-					plan, operation.auxiliary,
+					plan, source_op_array, operation.auxiliary,
 					operation.auxiliary_storage_id, source_position);
 			const uint8_t source_opcode =
-				source_position < plan->source_op_array->last
-					? plan->source_op_array->opcodes[
-						source_position].opcode
+				source_position < plan->source_opcode_count
+					? plan->source_opcodes[source_position].opcode
 					: ZEND_NOP;
 			instruction.local_abi_transport =
 				record.opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN
@@ -1990,23 +1996,25 @@ bool freeze_source_value_bindings(
 }
 
 bool freeze_generator_resume_liveness(
-	zend_tpde_plan *plan, const zend_mir_value_view *value_model,
+	zend_tpde_plan *plan,
+	const zend_op_array *source_op_array,
+	const zend_mir_value_view *value_model,
 	zend_native_diagnostic *diag)
 {
-	if (plan->source_op_array == nullptr
-			|| (plan->source_op_array->fn_flags & ZEND_ACC_GENERATOR) == 0) {
+	if (source_op_array == nullptr
+			|| (source_op_array->fn_flags & ZEND_ACC_GENERATOR) == 0) {
 		return true;
 	}
 
 	std::vector<uint32_t> targets;
-	if ((plan->source_op_array->fn_flags & ZEND_ACC_HAS_FINALLY_BLOCK) != 0) {
+	if ((source_op_array->fn_flags & ZEND_ACC_HAS_FINALLY_BLOCK) != 0) {
 		for (uint32_t i = 0;
-				i < plan->source_op_array->last_try_catch; ++i) {
+				i < source_op_array->last_try_catch; ++i) {
 			const zend_try_catch_element &region =
-				plan->source_op_array->try_catch_array[i];
+				source_op_array->try_catch_array[i];
 			if (region.finally_op != 0
-					&& region.finally_op < plan->source_op_array->last
-					&& region.finally_end < plan->source_op_array->last) {
+					&& region.finally_op < source_op_array->last
+					&& region.finally_end < source_op_array->last) {
 				targets.push_back(region.finally_op);
 			}
 		}
@@ -2341,9 +2349,11 @@ bool freeze_statepoint_materializations(
 }
 
 bool freeze_entry_undef_temporaries(
-	zend_tpde_plan *plan, zend_native_diagnostic *diag)
+	zend_tpde_plan *plan,
+	const zend_op_array *source_op_array,
+	zend_native_diagnostic *diag)
 {
-	const zend_op_array *op_array = plan->source_op_array;
+	const zend_op_array *op_array = source_op_array;
 	if (op_array == nullptr || op_array->T == 0) {
 		return true;
 	}
@@ -2432,6 +2442,10 @@ void destroy_plan(zend_tpde_plan *plan) {
 	for (uint32_t index = 0; index < plan->user_call_count; ++index) {
 		std::free(plan->user_calls[index]);
 	}
+	for (uint32_t index = 0;
+			index < plan->source_multi_branch_case_count; ++index) {
+		std::free(plan->source_multi_branch_cases[index].string_key);
+	}
 	std::free(plan->block_ids);
 	std::free(plan->block_index);
 	std::free(plan->block_successor_offsets);
@@ -2448,6 +2462,9 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->value_definition_instructions);
 	std::free(plan->value_consumer_offsets);
 	std::free(plan->value_consumers);
+	std::free(plan->source_opcodes);
+	std::free(plan->source_multi_branches);
+	std::free(plan->source_multi_branch_cases);
 	std::free(plan->source_opcode_block_indices);
 	std::free(plan->source_opcode_is_data);
 	std::free(plan->source_block_starts);
@@ -2508,12 +2525,170 @@ bool initialize_plan(
 		return false;
 	}
 
-	plan->source_op_array = source_op_array;
 	plan->source_ssa_variable_count =
 		source_ssa != nullptr && source_ssa->vars_count > 0
 			? static_cast<uint32_t>(source_ssa->vars_count) : 0;
 	plan->source_opcode_count =
 		source_op_array != nullptr ? source_op_array->last : 0;
+	plan->source_frame_variable_count =
+		source_op_array != nullptr ? source_op_array->last_var : 0;
+	plan->source_temporary_count =
+		source_op_array != nullptr ? source_op_array->T : 0;
+	if (plan->source_opcode_count != 0) {
+		plan->source_opcodes = static_cast<zend_tpde_source_opcode *>(
+			std::calloc(plan->source_opcode_count,
+				sizeof(*plan->source_opcodes)));
+		if (plan->source_opcodes == nullptr) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+				"unable to freeze source opcode metadata");
+			return false;
+		}
+		for (uint32_t index = 0;
+				index < plan->source_opcode_count; ++index) {
+			const zend_op &source = source_op_array->opcodes[index];
+			zend_tpde_source_opcode &frozen = plan->source_opcodes[index];
+			frozen.opcode = source.opcode;
+			frozen.op1_type = source.op1_type;
+			frozen.op2_type = source.op2_type;
+			frozen.result_type = source.result_type;
+			frozen.op1_var =
+				source.op1_type == IS_CV || source.op1_type == IS_VAR
+					|| source.op1_type == IS_TMP_VAR
+				? source.op1.var : UINT32_MAX;
+			frozen.op2_var =
+				source.op2_type == IS_CV || source.op2_type == IS_VAR
+					|| source.op2_type == IS_TMP_VAR
+				? source.op2.var : UINT32_MAX;
+			frozen.result_var =
+				source.result_type == IS_CV
+					|| source.result_type == IS_VAR
+					|| source.result_type == IS_TMP_VAR
+				? source.result.var : UINT32_MAX;
+			frozen.extended_value = source.extended_value;
+		}
+		plan->source_multi_branches =
+			static_cast<zend_tpde_source_multi_branch *>(std::calloc(
+				plan->source_opcode_count,
+				sizeof(*plan->source_multi_branches)));
+		if (plan->source_multi_branches == nullptr) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+				"unable to freeze source multiway metadata");
+			return false;
+		}
+		uint64_t branch_case_count = 0;
+		for (uint32_t index = 0;
+				index < plan->source_opcode_count; ++index) {
+			const zend_op &source = source_op_array->opcodes[index];
+			if ((source.opcode != ZEND_SWITCH_LONG
+						&& source.opcode != ZEND_SWITCH_STRING
+						&& source.opcode != ZEND_MATCH)
+					|| source.op2_type != IS_CONST) {
+				continue;
+			}
+			const zval *jump_table = RT_CONSTANT(&source, source.op2);
+			if (Z_TYPE_P(jump_table) != IS_ARRAY) {
+				continue;
+			}
+			branch_case_count +=
+				zend_hash_num_elements(Z_ARRVAL_P(jump_table));
+			if (branch_case_count > MAX_RECORDS) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+					"source multiway case table exceeds executable bound");
+				return false;
+			}
+		}
+		plan->source_multi_branch_case_count =
+			static_cast<uint32_t>(branch_case_count);
+		if (branch_case_count != 0) {
+			plan->source_multi_branch_cases =
+				static_cast<zend_tpde_multi_branch_case *>(std::calloc(
+					branch_case_count,
+					sizeof(*plan->source_multi_branch_cases)));
+			if (plan->source_multi_branch_cases == nullptr) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+					"unable to freeze source multiway cases");
+				return false;
+			}
+		}
+		uint32_t case_offset = 0;
+		for (uint32_t index = 0;
+				index < plan->source_opcode_count; ++index) {
+			const zend_op &source = source_op_array->opcodes[index];
+			if ((source.opcode != ZEND_SWITCH_LONG
+						&& source.opcode != ZEND_SWITCH_STRING
+						&& source.opcode != ZEND_MATCH)
+					|| source.op2_type != IS_CONST) {
+				continue;
+			}
+			const zval *jump_table = RT_CONSTANT(&source, source.op2);
+			if (Z_TYPE_P(jump_table) != IS_ARRAY) {
+				continue;
+			}
+			zend_tpde_source_multi_branch &branch =
+				plan->source_multi_branches[index];
+			branch.case_offset = case_offset;
+			branch.case_count =
+				zend_hash_num_elements(Z_ARRVAL_P(jump_table));
+			branch.source_opcode = source.opcode;
+			branch.default_target = zend_tpde_relative_source_target(
+				source_op_array, index,
+				static_cast<zend_long>(source.extended_value));
+			branch.fallback_target =
+				index + 1 < plan->source_opcode_count
+					? index + 1 : UINT32_MAX;
+			branch.valid = branch.default_target != UINT32_MAX
+				&& (source.opcode == ZEND_MATCH
+					|| branch.fallback_target != UINT32_MAX);
+			zend_ulong numeric_key;
+			zend_string *string_key;
+			zval *jump_value;
+			ZEND_HASH_FOREACH_KEY_VAL(
+					Z_ARRVAL_P(jump_table),
+					numeric_key, string_key, jump_value) {
+				zend_tpde_multi_branch_case &frozen_case =
+					plan->source_multi_branch_cases[case_offset++];
+				if (Z_TYPE_P(jump_value) != IS_LONG) {
+					branch.valid = false;
+					continue;
+				}
+				frozen_case.target = zend_tpde_relative_source_target(
+					source_op_array, index, Z_LVAL_P(jump_value));
+				if (frozen_case.target == UINT32_MAX) {
+					branch.valid = false;
+				}
+				if (string_key == nullptr) {
+					frozen_case.integer_key =
+						static_cast<int64_t>(numeric_key);
+					continue;
+				}
+				if (ZSTR_LEN(string_key) > UINT32_MAX) {
+					branch.valid = false;
+					continue;
+				}
+				frozen_case.string_length =
+					static_cast<uint32_t>(ZSTR_LEN(string_key));
+				const size_t allocation_size =
+					frozen_case.string_length == 0
+						? 1 : frozen_case.string_length;
+				frozen_case.string_key =
+					static_cast<char *>(std::malloc(allocation_size));
+				if (frozen_case.string_key == nullptr) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+						"unable to freeze source multiway string key");
+					return false;
+				}
+				if (frozen_case.string_length != 0) {
+					std::memcpy(frozen_case.string_key,
+						ZSTR_VAL(string_key), frozen_case.string_length);
+				}
+			} ZEND_HASH_FOREACH_END();
+		}
+	}
 	plan->compiled_variable_count =
 		source_op_array != nullptr ? source_op_array->last_var : 0;
 	if (plan->compiled_variable_count != 0) {
@@ -4888,7 +5063,7 @@ bool initialize_plan(
 				if (fragment_call) {
 					zend_native_user_call_descriptor *descriptor =
 						build_user_call_descriptor(
-							plan, site, record, diag);
+							plan, source_op_array, site, record, diag);
 					if (descriptor == nullptr) {
 						return false;
 					}
@@ -5186,16 +5361,17 @@ bool initialize_plan(
 			}
 		}
 	}
-	if (!freeze_source_value_bindings(plan, diag)) {
+	if (!freeze_source_value_bindings(plan, source_op_array, diag)) {
 		return false;
 	}
-	if (!freeze_entry_undef_temporaries(plan, diag)) {
+	if (!freeze_entry_undef_temporaries(plan, source_op_array, diag)) {
 		return false;
 	}
 	if (!freeze_statepoint_materializations(plan, view, diag)) {
 		return false;
 	}
-	if (!freeze_generator_resume_liveness(plan, value_model, diag)) {
+	if (!freeze_generator_resume_liveness(
+			plan, source_op_array, value_model, diag)) {
 		return false;
 	}
 	if (!freeze_machine_plan_consumers(plan, diag)) {
