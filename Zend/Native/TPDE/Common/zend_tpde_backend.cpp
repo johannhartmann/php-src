@@ -2146,6 +2146,68 @@ bool freeze_statepoint_materializations(
 	return true;
 }
 
+bool freeze_entry_undef_temporaries(
+	zend_tpde_plan *plan, zend_native_diagnostic *diag)
+{
+	const zend_op_array *op_array = plan->source_op_array;
+	if (op_array == nullptr || op_array->T == 0) {
+		return true;
+	}
+	if (op_array->last_live_range != 0 && op_array->live_range == nullptr) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+			"source live-range table is unreadable");
+		return false;
+	}
+
+	std::vector<uint8_t> required(op_array->T);
+	for (uint32_t index = 0; index < op_array->last_live_range; ++index) {
+		const zend_live_range &range = op_array->live_range[index];
+		const uint32_t kind = range.var & ZEND_LIVE_MASK;
+		const uint32_t physical_slot =
+			EX_VAR_TO_NUM(range.var & ~ZEND_LIVE_MASK);
+		if (kind > ZEND_LIVE_NEW
+				|| physical_slot < static_cast<uint32_t>(op_array->last_var)
+				|| physical_slot
+					>= static_cast<uint32_t>(op_array->last_var)
+						+ op_array->T
+				|| range.start >= range.end
+				|| range.end > op_array->last) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"source live range is outside the executable frame");
+			return false;
+		}
+		required[physical_slot
+			- static_cast<uint32_t>(op_array->last_var)] = 1;
+	}
+
+	std::vector<uint32_t> indices;
+	indices.reserve(op_array->T);
+	for (uint32_t index = 0; index < op_array->T; ++index) {
+		if (required[index] != 0) {
+			indices.push_back(index);
+		}
+	}
+	plan->entry_undef_temporary_count =
+		static_cast<uint32_t>(indices.size());
+	if (indices.empty()) {
+		return true;
+	}
+	plan->entry_undef_temporary_indices = static_cast<uint32_t *>(
+		std::malloc(indices.size()
+			* sizeof(*plan->entry_undef_temporary_indices)));
+	if (plan->entry_undef_temporary_indices == nullptr) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"unable to allocate selective temporary initialization plan");
+		return false;
+	}
+	std::memcpy(plan->entry_undef_temporary_indices, indices.data(),
+		indices.size() * sizeof(*plan->entry_undef_temporary_indices));
+	return true;
+}
+
 void destroy_plan(zend_tpde_plan *plan) {
 	for (uint32_t index = 0; index < plan->direct_call_count; ++index) {
 		std::free(plan->direct_calls[index]);
@@ -2177,6 +2239,7 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->generator_resume_exception_blocks);
 	std::free(plan->generator_resume_live_values);
 	std::free(plan->materializations);
+	std::free(plan->entry_undef_temporary_indices);
 	std::free(plan->direct_calls);
 	std::free(plan->direct_internal_calls);
 	std::free(plan->user_calls);
@@ -4496,6 +4559,9 @@ bool initialize_plan(
 		}
 	}
 	if (!freeze_generator_resume_liveness(plan, diag)) {
+		return false;
+	}
+	if (!freeze_entry_undef_temporaries(plan, diag)) {
 		return false;
 	}
 	if (!freeze_statepoint_materializations(plan, diag)) {
