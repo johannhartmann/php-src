@@ -6568,23 +6568,24 @@ bool ZendCompilerX64::compile_inst(
 				}
 				const uint32_t callee_argument_count =
 					generated_fast_path
-						? call.direct_call->expected_function
-							->op_array.num_args
+						? call.direct_call->callee_argument_count
 						: argument_count;
 				const uint32_t first_extra_argument_slot =
 					generated_fast_path
-						? static_cast<uint32_t>(
-							call.direct_call->expected_function
-								->op_array.last_var
-							+ call.direct_call->expected_function
-								->op_array.T)
+						? call.direct_call->callee_compiled_variable_count
+							+ call.direct_call->callee_temporary_count
 						: argument_count;
 				const uint32_t compiled_variable_count =
 					generated_fast_path
-						? static_cast<uint32_t>(
-							call.direct_call->expected_function
-								->op_array.last_var)
+						? call.direct_call
+							->callee_compiled_variable_count
 						: argument_count;
+				if (generated_fast_path
+						&& argument_count < callee_argument_count
+						&& call.direct_call->default_literal_count
+							!= callee_argument_count - argument_count) {
+					return false;
+				}
 				auto compiled_variable_used =
 					[&](uint32_t variable_index) {
 						return !local_component_call
@@ -8142,14 +8143,9 @@ bool ZendCompilerX64::compile_inst(
 					}
 					for (uint32_t index = argument_count;
 							index < callee_argument_count; ++index) {
-						const zend_op_array &op_array =
-							call.direct_call->expected_function->op_array;
-						const zend_op &receive = op_array.opcodes[index];
-						const zval *default_value =
-							RT_CONSTANT(&receive, receive.op2);
 						const uint32_t literal_index =
-							static_cast<uint32_t>(
-								default_value - op_array.literals);
+							zend_native_direct_call_default_literals_const(
+								call.direct_call)[index - argument_count];
 						const int32_t offset = static_cast<int32_t>(
 							(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval));
 						ScratchReg source_address{this};
