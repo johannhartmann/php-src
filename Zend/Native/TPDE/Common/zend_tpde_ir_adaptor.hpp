@@ -432,6 +432,7 @@ private:
 		zend_tpde_long_incdec long_incdec{};
 		zend_tpde_array_isset array_isset{};
 		zend_tpde_slot_isset_empty slot_isset_empty{};
+		zend_tpde_string_identity string_identity{};
 		if (!instruction.has_value_operation
 				|| executable_kind(instruction, record)
 					== InstKind::SlowPathCall) {
@@ -489,6 +490,16 @@ private:
 				&& exact_type(result) == ZEND_MIR_SCALAR_TYPE_I1
 				&& machine_kind(result)
 					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
+		}
+		if (zend_tpde_string_identity_at(
+				instruction, &string_identity)) {
+			const IRValueRef result =
+				source_operand_value_ref(
+					instruction.value_operation.result);
+			return result != INVALID_VALUE_REF
+				&& (exact_type(result) == ZEND_MIR_SCALAR_TYPE_I1
+					|| machine_kind(result)
+						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
 		}
 		switch (instruction.value_operation.opcode) {
 			case ZEND_MIR_OPCODE_VALUE_UNARY_OP:
