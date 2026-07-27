@@ -570,6 +570,36 @@ bool ZendCompilerX64::compile_inst(
 		auto source_reg = source.load_to_reg();
 		auto result_reg = result.alloc_reg();
 		ASM(MOV64rr, result_reg, source_reg);
+		if (node.kind == Adaptor::InstKind::LoadFrame
+				&& adaptor->plan()->entry_undef_temporary_count != 0) {
+			auto initialized = text_writer.label_create();
+			ScratchReg call_info{this};
+			auto call_info_reg = call_info.alloc_gp();
+			ASM(MOV32rm, call_info_reg,
+				FE_MEM(result_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_execute_data, This)
+							+ offsetof(zval, u1.type_info))));
+			ASM(TEST32ri, call_info_reg, ZEND_CALL_GENERATOR);
+			generate_raw_jump(Jump::jne, initialized);
+			for (uint32_t required = 0;
+					required
+						< adaptor->plan()->entry_undef_temporary_count;
+					++required) {
+				const uint32_t index =
+					adaptor->plan()->entry_undef_temporary_indices[
+						required];
+				const int32_t offset = static_cast<int32_t>(
+					(uint64_t{ZEND_CALL_FRAME_SLOT}
+						+ adaptor->plan()->source_op_array->last_var
+						+ index)
+						* sizeof(zval)
+					+ sizeof(uint64_t));
+				ASM(MOV64mi,
+					FE_MEM(result_reg, 0, FE_NOREG, offset), 0);
+			}
+			label_place(initialized);
+		}
 		result.set_modified();
 		return true;
 	}

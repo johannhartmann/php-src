@@ -566,6 +566,38 @@ bool ZendCompilerA64::compile_inst(
 		auto source_reg = source.load_to_reg();
 		auto result_reg = result.alloc_reg();
 		mov(result_reg, source_reg, 8);
+		if (node.kind == Adaptor::InstKind::LoadFrame
+				&& adaptor->plan()->entry_undef_temporary_count != 0) {
+			auto initialized = text_writer.label_create();
+			ScratchReg call_info{this};
+			auto call_info_reg = call_info.alloc_gp();
+			load_off(call_info_reg, result_reg,
+				static_cast<uint32_t>(
+					offsetof(zend_execute_data, This)
+						+ offsetof(zval, u1.type_info)),
+				4);
+			ASM(ANDwi, call_info_reg, call_info_reg, ZEND_CALL_GENERATOR);
+			ASM(CMPxi, call_info_reg, 0);
+			generate_raw_jump(Jump::Jne, initialized);
+			ScratchReg zero{this};
+			auto zero_reg = zero.alloc_gp();
+			materialize_constant(
+				UINT64_C(0), DarwinConfig::GP_BANK, 8, zero_reg);
+			for (uint32_t required = 0;
+					required
+						< adaptor->plan()->entry_undef_temporary_count;
+					++required) {
+				const uint32_t index =
+					adaptor->plan()->entry_undef_temporary_indices[
+						required];
+				const uint32_t offset = static_cast<uint32_t>(
+					(uint64_t{ZEND_CALL_FRAME_SLOT}
+						+ adaptor->plan()->source_op_array->last_var + index)
+					* sizeof(zval));
+				store_off(result_reg, offset + sizeof(uint64_t), zero_reg, 8);
+			}
+			label_place(initialized);
+		}
 		result.set_modified();
 		return true;
 	}
