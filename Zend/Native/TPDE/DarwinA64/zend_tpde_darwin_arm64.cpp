@@ -590,6 +590,25 @@ bool ZendCompilerA64::compile_inst(
 	if (node.kind == Adaptor::InstKind::BoxedCondCold) {
 		return compile_boxed_cond_cold(instruction);
 	}
+	if (node.kind == Adaptor::InstKind::TypedCallGuard) {
+		if (node.operands.empty()
+				|| node.argument_index == UINT32_MAX
+				|| node.continuation_block == UINT32_MAX) {
+			return false;
+		}
+		auto [context_ref, context] = val_ref_single(node.operands[0]);
+		auto context_reg = context.load_to_reg();
+		ScratchReg observed{this};
+		auto observed_reg = observed.alloc_gp();
+		load_off(observed_reg, context_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_execution_context, observers_enabled)), 1);
+		generate_cond_branch(
+			Jump{Jump::Cbnz, observed_reg, false},
+			IRBlockRef{node.argument_index},
+			IRBlockRef{node.continuation_block});
+		return true;
+	}
 	if (node.kind == Adaptor::InstKind::LoadFrame
 			|| node.kind == Adaptor::InstKind::LoadExecutionContext) {
 		auto [source_ref, source] = val_ref_single(node.operands[0]);
@@ -6296,7 +6315,8 @@ bool ZendCompilerA64::compile_inst(
 						this->analyzer.block_idx(
 							IRBlockRef{node.argument_index}))];
 				};
-				if (node.kind == Adaptor::InstKind::GuardedFast) {
+				if (node.kind == Adaptor::InstKind::GuardedFast
+						&& !typed_body_call) {
 					auto spilled = spill_before_branch();
 					release_spilled_regs(spilled);
 				}
@@ -6308,45 +6328,10 @@ bool ZendCompilerA64::compile_inst(
 							|| body_plan->argument_count != argument_count
 							|| typed_body_function
 								>= this->func_syms.size()
-							|| node.continuation_block == UINT32_MAX) {
+							|| node.continuation_block == UINT32_MAX
+							|| node.operands.size() != argument_count) {
 						return false;
 					}
-					auto [frame_ref, frame] =
-						val_ref_single(node.operands[frame_operand]);
-					auto frame_scratch =
-						std::move(frame).into_scratch();
-					auto [context_ref, context] =
-						val_ref_single(node.operands[context_operand]);
-					auto context_scratch =
-						std::move(context).into_scratch();
-					auto context_reg = context_scratch.cur_reg();
-					ScratchReg observed{this};
-					auto observed_reg = observed.alloc_gp();
-					load_off(observed_reg, context_reg,
-						static_cast<uint32_t>(offsetof(
-							zend_native_execution_context,
-							observers_enabled)), 1);
-					generate_raw_jump(
-						Jump{Jump::Cbnz, observed_reg, false},
-						call_slow_target());
-					observed.reset();
-					for (uint32_t use = 1;
-							use < frame_use_count; ++use) {
-						auto discarded = val_ref(
-							node.operands[frame_operand + use]);
-						(void) discarded;
-					}
-					const uint32_t context_use_count =
-						static_cast<uint32_t>(node.operands.size())
-							- context_operand;
-					for (uint32_t use = 1;
-							use < context_use_count; ++use) {
-						auto discarded = val_ref(
-							node.operands[context_operand + use]);
-						(void) discarded;
-					}
-					frame_scratch.reset();
-					context_scratch.reset();
 					zend::native::tpde::CCAssignerAppleA64 body_assigner;
 					CallBuilder body_builder{*this, body_assigner};
 					for (uint32_t argument = 0;
