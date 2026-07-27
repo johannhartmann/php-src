@@ -453,9 +453,11 @@ private:
 		zend_tpde_long_incdec long_incdec{};
 		zend_tpde_array_read array_read{};
 		zend_tpde_array_isset array_isset{};
+		zend_tpde_packed_array_append packed_array_append{};
 		zend_tpde_slot_isset_empty slot_isset_empty{};
 		zend_tpde_string_identity string_identity{};
 		zend_tpde_object_property_read object_property_read{};
+		zend_tpde_object_property_write object_property_write{};
 		zend_tpde_dynamic_fetch_read dynamic_fetch_read{};
 		if (record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE) {
 			return instruction.runtime_helper
@@ -468,53 +470,11 @@ private:
 		}
 		const zend_mir_executable_value_ref &operation =
 			instruction.value_operation;
-		auto storage_fits_both_targets =
-			[](zend_mir_storage_id storage_id) {
-				return zend_mir_id_is_valid(storage_id)
-					&& (uint64_t{ZEND_CALL_FRAME_SLOT} + storage_id)
-							* sizeof(zval)
-						<= INT32_MAX - sizeof(zval);
-			};
-		auto distinct_optional_result =
-			[](zend_mir_storage_id result_storage,
-					zend_mir_storage_id source_storage,
-					zend_mir_storage_id target_storage) {
-				return !zend_mir_id_is_valid(result_storage)
-					|| (result_storage != source_storage
-						&& result_storage != target_storage);
-			};
 		switch (operation.opcode) {
 			case ZEND_MIR_OPCODE_VALUE_ASSIGN:
-				if (storage_fits_both_targets(operation.op2_storage_id)
-						&& storage_fits_both_targets(
-							operation.op1_storage_id)
-						&& operation.op2_storage_id
-							!= operation.op1_storage_id
-						&& distinct_optional_result(
-							operation.result_storage_id,
-							operation.op2_storage_id,
-							operation.op1_storage_id)
-						&& (!zend_mir_id_is_valid(
-								operation.result_storage_id)
-							|| storage_fits_both_targets(
-								operation.result_storage_id))) {
-					return true;
-				}
-				break;
 			case ZEND_MIR_OPCODE_VALUE_QM_ASSIGN:
-				if (storage_fits_both_targets(operation.op1_storage_id)
-						&& storage_fits_both_targets(
-							operation.result_storage_id)
-						&& operation.op1_storage_id
-							!= operation.result_storage_id) {
-					return true;
-				}
-				break;
 			case ZEND_MIR_OPCODE_VALUE_FREE:
-				if (storage_fits_both_targets(operation.op1_storage_id)) {
-					return true;
-				}
-				break;
+				return true;
 			default:
 				break;
 		}
@@ -574,6 +534,10 @@ private:
 				&& machine_kind(result)
 					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
 		}
+		if (zend_tpde_packed_array_append_at(
+				instruction, &packed_array_append)) {
+			return true;
+		}
 		if (zend_tpde_slot_isset_empty_at(
 				instruction, &slot_isset_empty)) {
 			const IRValueRef result =
@@ -607,6 +571,10 @@ private:
 							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 						&& machine_value_is_register_authoritative(
 							result)));
+		}
+		if (zend_tpde_object_property_write_at(
+				instruction, &object_property_write)) {
+			return true;
 		}
 		if (zend_tpde_dynamic_fetch_read_at(
 				instruction, &dynamic_fetch_read)) {
