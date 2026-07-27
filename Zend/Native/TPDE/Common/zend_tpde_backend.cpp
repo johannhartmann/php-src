@@ -137,17 +137,21 @@ bool native_descriptor_size(
 		return false;
 	}
 	uint32_t argument_count;
+	uint32_t trailing_word_count = 0;
 	size_t base_size;
 	size_t argument_size;
 	switch (kind) {
-		case ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR:
-			argument_count =
+		case ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR: {
+			const auto *descriptor =
 				static_cast<const zend_native_direct_call_descriptor *>(
-					address)->argument_count;
+					address);
+			argument_count = descriptor->argument_count;
+			trailing_word_count = descriptor->default_literal_count;
 			base_size = offsetof(
 				zend_native_direct_call_descriptor, arguments);
 			argument_size = sizeof(zend_native_direct_call_argument);
 			break;
+		}
 		case ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR:
 			argument_count =
 				static_cast<const zend_native_direct_internal_call_descriptor *>(
@@ -173,7 +177,16 @@ bool native_descriptor_size(
 				/ argument_size) {
 		return false;
 	}
-	*size = base_size + static_cast<size_t>(argument_count) * argument_size;
+	const size_t arguments_size =
+		static_cast<size_t>(argument_count) * argument_size;
+	if (!checked_count(trailing_word_count)
+			|| trailing_word_count
+				> (MAX_NATIVE_IMAGE_BYTES - base_size - arguments_size)
+					/ sizeof(uint32_t)) {
+		return false;
+	}
+	*size = base_size + arguments_size
+		+ static_cast<size_t>(trailing_word_count) * sizeof(uint32_t);
 	return true;
 }
 
@@ -4676,10 +4689,27 @@ bool initialize_plan(
 						init = &source_op_array->opcodes[
 							site.source_init_opline_index];
 					}
+					zend_function *expected_function =
+						plan->instructions[i].entry_cell != nullptr
+							? plan->instructions[i].entry_cell->function
+							: nullptr;
+					const zend_op_array *expected_op_array =
+						expected_function != nullptr
+								&& ZEND_USER_CODE(expected_function->type)
+							? &expected_function->op_array : nullptr;
+					const uint32_t default_literal_count =
+						expected_op_array != nullptr
+								&& site.arguments.count
+									< expected_op_array->num_args
+							? expected_op_array->num_args
+								- site.arguments.count
+							: 0;
 					const size_t descriptor_size =
 						offsetof(zend_native_direct_call_descriptor, arguments)
 						+ static_cast<size_t>(site.arguments.count)
-							* sizeof(zend_native_direct_call_argument);
+							* sizeof(zend_native_direct_call_argument)
+						+ static_cast<size_t>(default_literal_count)
+							* sizeof(uint32_t);
 					auto *descriptor =
 						static_cast<zend_native_direct_call_descriptor *>(
 							std::calloc(1, descriptor_size));
@@ -4690,11 +4720,19 @@ bool initialize_plan(
 						return false;
 					}
 					descriptor->argument_count = site.arguments.count;
+					descriptor->default_literal_count =
+						default_literal_count;
 					descriptor->source_position =
 						site.source_do_opline_index;
-					descriptor->expected_function =
-						plan->instructions[i].entry_cell != nullptr
-							? plan->instructions[i].entry_cell->function : nullptr;
+					descriptor->expected_function = expected_function;
+					if (expected_op_array != nullptr) {
+						descriptor->callee_argument_count =
+							expected_op_array->num_args;
+						descriptor->callee_compiled_variable_count =
+							expected_op_array->last_var;
+						descriptor->callee_temporary_count =
+							expected_op_array->T;
+					}
 					if (plan->instructions[i].entry_cell != nullptr
 							&& plan->instructions[i].entry_cell->lease_managed) {
 						descriptor->flags |=
@@ -4843,6 +4881,12 @@ bool initialize_plan(
 									<= static_cast<size_t>(INT32_MAX)
 										/ sizeof(zval)
 								&& Z_TYPE_P(default_value) != IS_CONSTANT_AST;
+							if (trivial_frame) {
+								zend_native_direct_call_default_literals(
+									descriptor)[n - site.arguments.count] =
+										static_cast<uint32_t>(
+											default_value - op_array.literals);
+							}
 						}
 						if (trivial_frame) {
 							descriptor->frame_size = zend_vm_calc_used_stack(
