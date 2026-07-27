@@ -2201,9 +2201,10 @@ bool freeze_generator_resume_liveness(
 }
 
 bool freeze_statepoint_materializations(
-	zend_tpde_plan *plan, zend_native_diagnostic *diag)
+	zend_tpde_plan *plan,
+	const zend_mir_view *view,
+	zend_native_diagnostic *diag)
 {
-	const zend_mir_view *view = plan->view;
 	const uint32_t frame_count = view->frame_state_count(view->context);
 	std::vector<zend_mir_frame_state_ref> frames(frame_count);
 	std::vector<zend_tpde_materialization> materializations;
@@ -2442,6 +2443,7 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->argument_abi);
 	std::free(plan->value_index);
 	std::free(plan->instructions);
+	std::free(plan->instruction_operands);
 	std::free(plan->instruction_index);
 	std::free(plan->value_definition_instructions);
 	std::free(plan->value_consumer_offsets);
@@ -2453,6 +2455,7 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->compiled_variables_used);
 	std::free(plan->call_site_instruction_index);
 	std::free(plan->call_target_index);
+	std::free(plan->call_arguments);
 	std::free(plan->call_argument_bindings);
 	std::free(plan->user_binding_index);
 	std::free(plan->internal_binding_index);
@@ -2505,9 +2508,7 @@ bool initialize_plan(
 		return false;
 	}
 
-	plan->view = view;
 	plan->source_op_array = source_op_array;
-	plan->source_ssa = source_ssa;
 	plan->source_ssa_variable_count =
 		source_ssa != nullptr && source_ssa->vars_count > 0
 			? static_cast<uint32_t>(source_ssa->vars_count) : 0;
@@ -2617,18 +2618,19 @@ bool initialize_plan(
 	plan->block_count = view->block_count(view->context);
 	plan->value_count = view->value_count(view->context);
 	plan->instruction_count = view->instruction_count(view->context);
-	plan->calls = zend_mir_module_call_view_from_view(view);
+	const zend_mir_call_view *calls =
+		zend_mir_module_call_view_from_view(view);
 	const zend_mir_value_view *value_model =
 		zend_mir_module_value_view_from_view(view);
-	plan->call_site_count = plan->calls != nullptr
-		&& plan->calls->call_site_count != nullptr
-		? plan->calls->call_site_count(plan->calls->context) : 0;
-	plan->call_target_count = plan->calls != nullptr
-		&& plan->calls->call_target_count != nullptr
-		? plan->calls->call_target_count(plan->calls->context) : 0;
-	plan->call_argument_count = plan->calls != nullptr
-		&& plan->calls->call_argument_count != nullptr
-		? plan->calls->call_argument_count(plan->calls->context) : 0;
+	plan->call_site_count = calls != nullptr
+		&& calls->call_site_count != nullptr
+		? calls->call_site_count(calls->context) : 0;
+	plan->call_target_count = calls != nullptr
+		&& calls->call_target_count != nullptr
+		? calls->call_target_count(calls->context) : 0;
+	plan->call_argument_count = calls != nullptr
+		&& calls->call_argument_count != nullptr
+		? calls->call_argument_count(calls->context) : 0;
 	const uint32_t constant_count = view->constant_count(view->context);
 	const uint32_t frame_slot_count = view->frame_slot_count(view->context);
 	if (source_op_array != nullptr) {
@@ -2786,6 +2788,10 @@ bool initialize_plan(
 		static_cast<zend_tpde_source_value_binding *>(std::malloc(
 			static_cast<size_t>(plan->call_argument_count)
 				* sizeof(*plan->call_argument_bindings)));
+	plan->call_arguments =
+		static_cast<zend_mir_call_argument_ref *>(std::malloc(
+			static_cast<size_t>(plan->call_argument_count)
+				* sizeof(*plan->call_arguments)));
 	plan->user_binding_index = allocate_id_index(
 		user_binding_count, &plan->user_binding_index_capacity);
 	plan->internal_binding_index = allocate_id_index(
@@ -2815,7 +2821,8 @@ bool initialize_plan(
 			|| (plan->call_target_count != 0
 				&& plan->call_target_index == nullptr)
 			|| (plan->call_argument_count != 0
-				&& plan->call_argument_bindings == nullptr)
+				&& (plan->call_arguments == nullptr
+					|| plan->call_argument_bindings == nullptr))
 			|| (user_binding_count != 0 && plan->user_binding_index == nullptr)
 			|| (internal_binding_count != 0
 				&& plan->internal_binding_index == nullptr)) {
@@ -2844,7 +2851,9 @@ bool initialize_plan(
 			return false;
 		}
 		plan->instructions[i].id = record.id;
-		plan->instructions[i].view_index = i;
+		plan->instructions[i].record = record;
+		plan->instructions[i].operand_offset =
+			static_cast<uint32_t>(operands - count);
 		plan->instructions[i].operand_count = count;
 		plan->instructions[i].component_target_index = UINT32_MAX;
 		plan->instructions[i].exception_block_id = ZEND_MIR_ID_INVALID;
@@ -2856,10 +2865,37 @@ bool initialize_plan(
 		plan->instructions[i].source_result_binding = {-1, -1};
 		plan->instructions[i].source_auxiliary_binding = {-1, -1};
 	}
+	plan->instruction_operand_count = static_cast<uint32_t>(operands);
+	plan->instruction_operands = static_cast<zend_mir_value_id *>(
+		std::malloc(static_cast<size_t>(plan->instruction_operand_count)
+			* sizeof(*plan->instruction_operands)));
+	if (plan->instruction_operand_count != 0
+			&& plan->instruction_operands == nullptr) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"unable to freeze MIR instruction operands");
+		return false;
+	}
+	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
+		zend_tpde_instruction &instruction = plan->instructions[i];
+		for (uint32_t operand = 0;
+				operand < instruction.operand_count; ++operand) {
+			zend_mir_value_id value = ZEND_MIR_ID_INVALID;
+			if (!view->instruction_operand_at(view->context,
+					instruction.id, operand, &value)) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+					"MIR instruction operand table is unreadable");
+				return false;
+			}
+			plan->instruction_operands[
+				instruction.operand_offset + operand] = value;
+		}
+	}
 	for (uint32_t i = 0; i < plan->call_site_count; ++i) {
 		zend_mir_call_site_ref site;
-		if (plan->calls == nullptr || plan->calls->call_site_at == nullptr
-				|| !plan->calls->call_site_at(plan->calls->context, i, &site)
+		if (calls == nullptr || calls->call_site_at == nullptr
+				|| !calls->call_site_at(calls->context, i, &site)
 				|| zend_tpde_instruction_index(plan, site.instruction_id) < 0
 				|| !id_index_insert(plan->call_site_instruction_index,
 					plan->call_site_instruction_index_capacity,
@@ -2872,9 +2908,8 @@ bool initialize_plan(
 	}
 	for (uint32_t i = 0; i < plan->call_target_count; ++i) {
 		zend_mir_call_target_ref target;
-		if (plan->calls == nullptr || plan->calls->call_target_at == nullptr
-				|| !plan->calls->call_target_at(
-					plan->calls->context, i, &target)
+		if (calls == nullptr || calls->call_target_at == nullptr
+				|| !calls->call_target_at(calls->context, i, &target)
 				|| !id_index_insert(plan->call_target_index,
 					plan->call_target_index_capacity, target.id, i)) {
 			zend_tpde_set_diagnostic(diag,
@@ -2886,12 +2921,15 @@ bool initialize_plan(
 	for (uint32_t i = 0; i < plan->call_argument_count; ++i) {
 		zend_mir_call_argument_ref argument;
 		plan->call_argument_bindings[i] = {-1, -1};
-		if (!zend_tpde_call_argument_at(plan, i, &argument)) {
+		if (calls == nullptr
+				|| calls->call_argument_at == nullptr
+				|| !calls->call_argument_at(calls->context, i, &argument)) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 				"MIR call-argument table is unreadable");
 			return false;
 		}
+		plan->call_arguments[i] = argument;
 	}
 	for (uint32_t i = 0; i < user_binding_count; ++i) {
 		if (user_bindings[i].entry_cell == nullptr
@@ -2965,10 +3003,8 @@ bool initialize_plan(
 	 */
 	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
 		zend_tpde_instruction &instruction = plan->instructions[i];
-		zend_mir_instruction_record record;
+		const zend_mir_instruction_record &record = instruction.record;
 		if (instruction.has_value_operation
-				|| !view->instruction_at(
-					view->context, instruction.view_index, &record)
 				|| record.opcode != ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL) {
 			continue;
 		}
@@ -4122,12 +4158,12 @@ bool initialize_plan(
 			const int32_t site_index = id_index_find(
 				plan->call_site_instruction_index,
 				plan->call_site_instruction_index_capacity, record.id);
-			if (plan->calls == nullptr || site_index < 0
-					|| plan->calls->call_site_at == nullptr
-					|| plan->calls->call_target_at == nullptr
-					|| plan->calls->call_continuation_at == nullptr
-					|| !plan->calls->call_site_at(
-						plan->calls->context,
+			if (calls == nullptr || site_index < 0
+					|| calls->call_site_at == nullptr
+					|| calls->call_target_at == nullptr
+					|| calls->call_continuation_at == nullptr
+					|| !calls->call_site_at(
+						calls->context,
 						static_cast<uint32_t>(site_index), &site)) {
 				zend_tpde_set_diagnostic(diag,
 					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
@@ -4141,12 +4177,12 @@ bool initialize_plan(
 					|| site.arguments.offset > plan->call_argument_count
 					|| site.arguments.count > plan->call_argument_count
 						- site.arguments.offset
-					|| !plan->calls->call_target_at(
-						plan->calls->context,
+					|| !calls->call_target_at(
+						calls->context,
 						static_cast<uint32_t>(target_index), &target)
 					|| target.id != site.target_id
 					|| site.continuations.count != 4
-					|| !plan->calls->call_continuation_at(plan->calls->context,
+					|| !calls->call_continuation_at(calls->context,
 						site.continuations.offset + 1,
 						&exception_continuation)
 					|| exception_continuation.kind
@@ -4518,7 +4554,7 @@ bool initialize_plan(
 									== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE) {
 							descriptor->arguments[n].exact_type =
 								exact_scalar_from_source_argument(
-									source_op_array, source_ssa, plan->calls,
+									source_op_array, source_ssa, calls,
 									user_bindings, user_binding_count, argument);
 						}
 						if (!zend_mir_scalar_type_is_exact(
@@ -5156,7 +5192,7 @@ bool initialize_plan(
 	if (!freeze_entry_undef_temporaries(plan, diag)) {
 		return false;
 	}
-	if (!freeze_statepoint_materializations(plan, diag)) {
+	if (!freeze_statepoint_materializations(plan, view, diag)) {
 		return false;
 	}
 	if (!freeze_generator_resume_liveness(plan, value_model, diag)) {
@@ -5281,6 +5317,52 @@ int32_t zend_tpde_block_index(const zend_tpde_plan *plan, zend_mir_block_id id) 
 	return id_index_find(plan->block_index, plan->block_index_capacity, id);
 }
 
+uint32_t zend_tpde_block_successor_count(
+	const zend_tpde_plan *plan, zend_mir_block_id id) {
+	if (plan == nullptr || plan->block_successor_offsets == nullptr) {
+		return 0;
+	}
+	const int32_t block_index = zend_tpde_block_index(plan, id);
+	if (block_index < 0
+			|| static_cast<uint32_t>(block_index) >= plan->block_count) {
+		return 0;
+	}
+	const uint32_t index = static_cast<uint32_t>(block_index);
+	return plan->block_successor_offsets[index + 1]
+		- plan->block_successor_offsets[index];
+}
+
+bool zend_tpde_block_successor_at(
+	const zend_tpde_plan *plan,
+	zend_mir_block_id id,
+	uint32_t successor_index,
+	zend_mir_block_id *out) {
+	if (plan == nullptr || out == nullptr
+			|| plan->block_successor_offsets == nullptr
+			|| plan->block_successors == nullptr) {
+		return false;
+	}
+	const int32_t block_index = zend_tpde_block_index(plan, id);
+	if (block_index < 0
+			|| static_cast<uint32_t>(block_index) >= plan->block_count) {
+		return false;
+	}
+	const uint32_t index = static_cast<uint32_t>(block_index);
+	const uint32_t begin = plan->block_successor_offsets[index];
+	const uint32_t count =
+		plan->block_successor_offsets[index + 1] - begin;
+	if (successor_index >= count) {
+		return false;
+	}
+	const uint32_t target_index =
+		plan->block_successors[begin + successor_index];
+	if (target_index >= plan->block_count || plan->block_ids == nullptr) {
+		return false;
+	}
+	*out = plan->block_ids[target_index];
+	return true;
+}
+
 int32_t zend_tpde_instruction_index(
 	const zend_tpde_plan *plan, zend_mir_instruction_id id) {
 	return id_index_find(
@@ -5296,12 +5378,11 @@ zend_mir_instruction_record zend_tpde_instruction_record_at(
 	const zend_tpde_plan *plan,
 	const zend_tpde_instruction *instruction) {
 	zend_mir_instruction_record record{};
-	if (instruction == nullptr
-			|| instruction->view_index >= plan->instruction_count
-			|| !plan->view->instruction_at(plan->view->context,
-				instruction->view_index, &record)
-			|| record.id != instruction->id) {
+	if (plan == nullptr || instruction == nullptr
+			|| instruction->record.id != instruction->id) {
 		record.id = ZEND_MIR_ID_INVALID;
+	} else {
+		record = instruction->record;
 	}
 	return record;
 }
@@ -5310,24 +5391,25 @@ bool zend_tpde_call_argument_at(
 	const zend_tpde_plan *plan,
 	uint32_t index,
 	zend_mir_call_argument_ref *out) {
-	return plan != nullptr && plan->calls != nullptr && out != nullptr
+	return plan != nullptr && out != nullptr
 		&& index < plan->call_argument_count
-		&& plan->calls->call_argument_at != nullptr
-		&& plan->calls->call_argument_at(plan->calls->context, index, out);
+		&& plan->call_arguments != nullptr
+		&& ((*out = plan->call_arguments[index]), true);
 }
 
 zend_mir_value_id zend_tpde_operand_at(
 	const zend_tpde_plan *plan,
 	const zend_tpde_instruction *instruction,
 	uint32_t index) {
-	if (index >= instruction->operand_count) {
+	if (plan == nullptr || instruction == nullptr
+			|| index >= instruction->operand_count
+			|| instruction->operand_offset > plan->instruction_operand_count
+			|| instruction->operand_count
+				> plan->instruction_operand_count - instruction->operand_offset
+			|| plan->instruction_operands == nullptr) {
 		return ZEND_MIR_ID_INVALID;
 	}
-	zend_mir_value_id operand = ZEND_MIR_ID_INVALID;
-	return plan->view->instruction_operand_at(plan->view->context,
-			instruction->id, index, &operand)
-		? operand
-		: ZEND_MIR_ID_INVALID;
+	return plan->instruction_operands[instruction->operand_offset + index];
 }
 
 bool zend_tpde_image_append(
