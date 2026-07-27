@@ -2183,15 +2183,8 @@ bool freeze_generator_resume_liveness(
 		 */
 		const zend_tpde_value &machine_value = plan->values[value];
 		if (machine_value.constant
-				|| !zend_mir_scalar_type_is_exact(
-					machine_value.exact_type)
-				|| machine_value.exact_type == ZEND_MIR_SCALAR_TYPE_NULL
-				|| (machine_value.machine_kind
-						!= ZEND_TPDE_MACHINE_VALUE_I64
-					&& machine_value.machine_kind
-						!= ZEND_TPDE_MACHINE_VALUE_F64
-					&& machine_value.machine_kind
-						!= ZEND_TPDE_MACHINE_VALUE_BOOL)
+				|| !zend_tpde_machine_value_is_register_authoritative(
+					machine_value.machine_kind)
 				|| machine_value.location
 					!= ZEND_TPDE_MACHINE_LOCATION_REGISTER) {
 			continue;

@@ -1744,20 +1744,20 @@ bool ZendCompilerA64::compile_inst(
 			const IRValueRef operand = node.operands[index];
 			const zend_mir_storage_id storage =
 				adaptor->canonical_storage(operand);
-			const zend_mir_scalar_type_mask exact_type =
-				adaptor->exact_type(operand);
+			const zend_tpde_machine_value_kind machine_kind =
+				adaptor->machine_kind(operand);
 			const uint64_t offset =
 				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
 			if (!zend_mir_id_is_valid(storage)
-					|| !zend_mir_scalar_type_is_exact(exact_type)
-					|| exact_type == ZEND_MIR_SCALAR_TYPE_NULL
+					|| !zend_tpde_machine_value_is_register_authoritative(
+						machine_kind)
 					|| offset + offsetof(zval, u1.type_info)
 						> UINT32_MAX) {
 				return false;
 			}
-			auto [value_ref, value] = val_ref_single(operand);
+			auto value = val_ref(operand);
 			if (!value.has_assignment()
-					|| value.assignment().variable_ref()) {
+					|| value.variable_ref()) {
 				return false;
 			}
 			/*
@@ -1765,25 +1765,34 @@ bool ZendCompilerA64::compile_inst(
 			 * slot. Invalidate TPDE's spill copy before allocating so no
 			 * stale reload is emitted ahead of the authoritative frame load.
 			 */
-			value.assignment().set_modified(true);
-			auto value_reg = value.cur_reg_or_alloc();
-			switch (exact_type) {
-				case ZEND_MIR_SCALAR_TYPE_I1:
+			const ValueParts parts = val_parts(operand);
+			for (uint32_t part = 0; part < parts.count(); ++part) {
+				auto value_part = value.part(part);
+				value_part.assignment().set_modified(true);
+				auto value_reg = value_part.cur_reg_or_alloc();
+				const zend_tpde_machine_part_role role =
+					parts.representation.parts[part].semantic_role;
+				if (machine_kind == ZEND_TPDE_MACHINE_VALUE_BOOL
+						&& role == ZEND_TPDE_MACHINE_PART_VALUE) {
 					load_off(value_reg, frame_reg,
 						static_cast<uint32_t>(
 							offset + offsetof(zval, u1.type_info)), 4);
 					ASM(CMPwi, value_reg, IS_TRUE);
 					generate_raw_set(Jump::Jeq, value_reg);
-					break;
-				case ZEND_MIR_SCALAR_TYPE_I64:
-				case ZEND_MIR_SCALAR_TYPE_F64:
+				} else if (role == ZEND_TPDE_MACHINE_PART_VALUE
+						|| role == ZEND_TPDE_MACHINE_PART_PAYLOAD) {
 					load_off(value_reg, frame_reg,
 						static_cast<uint32_t>(offset), 8);
-					break;
-				default:
+				} else if (role
+						== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
+					load_off(value_reg, frame_reg,
+						static_cast<uint32_t>(
+							offset + offsetof(zval, u1.type_info)), 4);
+				} else {
 					return false;
+				}
+				value_part.set_modified();
 			}
-			value.set_modified();
 		}
 		return true;
 	}
