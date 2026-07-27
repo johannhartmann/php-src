@@ -160,6 +160,15 @@ public:
 		ZEND_ASSERT(frame.register_valid());
 		return AsmReg{frame.get_reg().id()};
 	}
+	AsmReg canonical_context_register() {
+		::tpde::ValueAssignment *assignment = val_assignment(
+			adaptor->val_local_idx(
+				IRValueRef{Adaptor::EXECUTION_CONTEXT_VALUE}));
+		ZEND_ASSERT(assignment != nullptr);
+		::tpde::AssignmentPartRef context{assignment, 0};
+		ZEND_ASSERT(context.register_valid());
+		return AsmReg{context.get_reg().id()};
+	}
 
 	void compare_unsigned_immediate(AsmReg value, uint64_t immediate) {
 		if (ASMIF(CMPxi, value, immediate)) {
@@ -229,12 +238,22 @@ public:
 			AsmReg destination, ::tpde::AssignmentPartRef reference) {
 		const IRValueRef value =
 			adaptor->frame_slot_reference(reference.variable_ref_data());
-		zend_mir_storage_id storage_id = ZEND_MIR_ID_INVALID;
-		if (!adaptor->frame_slot_reference(value, &storage_id)) {
+		const zend_tpde_machine_reference *descriptor = nullptr;
+		if (!adaptor->machine_reference(value, &descriptor)) {
 			ZEND_UNREACHABLE();
 		}
-		add_unsigned_offset(destination, canonical_frame_register(),
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + storage_id) * sizeof(zval));
+		switch (descriptor->kind) {
+			case ZEND_TPDE_MACHINE_REFERENCE_FRAME_SLOT:
+				add_unsigned_offset(destination, canonical_frame_register(),
+					static_cast<uint64_t>(descriptor->displacement));
+				return;
+			case ZEND_TPDE_MACHINE_REFERENCE_CONTEXT_FIELD:
+				add_unsigned_offset(destination, canonical_context_register(),
+					static_cast<uint64_t>(descriptor->displacement));
+				return;
+			default:
+				ZEND_UNREACHABLE();
+		}
 	}
 
 	void emit_integer_dispatch(
@@ -591,18 +610,29 @@ bool ZendCompilerA64::compile_inst(
 		return compile_boxed_cond_cold(instruction);
 	}
 	if (node.kind == Adaptor::InstKind::TypedCallGuard) {
-		if (node.operands.empty()
+		if (node.operands.size() < 2
 				|| node.argument_index == UINT32_MAX
 				|| node.continuation_block == UINT32_MAX) {
 			return false;
 		}
-		auto [context_ref, context] = val_ref_single(node.operands[0]);
-		auto context_reg = context.load_to_reg();
+		auto context_use = val_ref(node.operands[0]);
+		(void) context_use;
+		const zend_tpde_machine_reference *observer_reference = nullptr;
+		if (!adaptor->machine_reference(
+				node.operands[1], &observer_reference)
+				|| observer_reference->kind
+					!= ZEND_TPDE_MACHINE_REFERENCE_CONTEXT_FIELD
+				|| observer_reference->access_width != sizeof(bool)
+				|| observer_reference->displacement < 0
+				|| static_cast<uint64_t>(
+					observer_reference->displacement) > UINT32_MAX) {
+			return false;
+		}
 		ScratchReg observed{this};
 		auto observed_reg = observed.alloc_gp();
-		load_off(observed_reg, context_reg,
-			static_cast<uint32_t>(offsetof(
-				zend_native_execution_context, observers_enabled)), 1);
+		load_off(observed_reg, canonical_context_register(),
+			static_cast<uint32_t>(observer_reference->displacement),
+			observer_reference->access_width);
 		generate_cond_branch(
 			Jump{Jump::Cbnz, observed_reg, false},
 			IRBlockRef{node.argument_index},
