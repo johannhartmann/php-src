@@ -147,6 +147,10 @@ typedef struct _zend_native_direct_call_argument {
 
 typedef struct _zend_native_direct_call_descriptor {
 	uint32_t argument_count;
+	uint32_t callee_argument_count;
+	uint32_t callee_compiled_variable_count;
+	uint32_t callee_temporary_count;
+	uint32_t default_literal_count;
 	uint32_t source_position;
 	uint32_t flags;
 	uint32_t frame_size;
@@ -158,6 +162,21 @@ typedef struct _zend_native_direct_call_descriptor {
 	zend_mir_source_operand_ref result_operand;
 	zend_native_direct_call_argument arguments[1];
 } zend_native_direct_call_descriptor;
+
+static zend_always_inline uint32_t *
+zend_native_direct_call_default_literals(
+	zend_native_direct_call_descriptor *descriptor)
+{
+	return (uint32_t *) (descriptor->arguments + descriptor->argument_count);
+}
+
+static zend_always_inline const uint32_t *
+zend_native_direct_call_default_literals_const(
+	const zend_native_direct_call_descriptor *descriptor)
+{
+	return (const uint32_t *) (
+		descriptor->arguments + descriptor->argument_count);
+}
 
 /*
  * Complete immutable source-call semantics for one direct internal call.
