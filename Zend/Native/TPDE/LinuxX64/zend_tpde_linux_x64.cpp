@@ -2051,7 +2051,8 @@ bool ZendCompilerX64::compile_inst(
 	}
 	if (record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE) {
 		if (node.operands.size() != 2
-				|| node.operands[1] != IRValueRef{Adaptor::FRAME_VALUE}) {
+				|| node.operands[1] != IRValueRef{Adaptor::FRAME_VALUE}
+				|| node.continuation_block == UINT32_MAX) {
 			return false;
 		}
 		const IRValueRef input = node.operands[0];
@@ -2068,26 +2069,55 @@ bool ZendCompilerX64::compile_inst(
 				|| offset + offsetof(zval, u1.type_info) > INT32_MAX) {
 			return false;
 		}
-		/*
-		 * Keep the first SysV argument register available for the conditional
-		 * release helper. Reserving it before creating the slow-path
-		 * temporaries prevents a fixed scratch value from colliding with the
-		 * helper argument while preserving assignments across the join.
-		 */
-		ScratchReg slow_argument_register{this};
-		slow_argument_register.alloc_specific(tpde::x64::AsmReg::DI);
+		if (node.kind == Adaptor::InstKind::GuardedCold) {
+			auto input_value = val_ref(node.operands[0]);
+			auto frame_value = val_ref(node.operands[1]);
+			ScratchReg slot_argument{this};
+			auto slot_argument_reg = slot_argument.alloc_gp();
+			ASM(MOV64rr, slot_argument_reg, canonical_frame_register());
+			ASM(ADD64ri, slot_argument_reg, static_cast<int32_t>(offset));
+			ValuePart slot_pointer{
+				tpde::x64::PlatformConfig::GP_BANK, 8};
+			slot_pointer.set_value(this, std::move(slot_argument));
+			tpde::x64::CCAssignerSysV assigner{false};
+			CallBuilder builder{*this, assigner};
+			builder.add_arg(
+				std::move(slot_pointer), tpde::CCAssignment{});
+			builder.call(runtime_symbol(mir.runtime_helper));
+			generate_branch_to_block(Jump::jmp,
+				IRBlockRef{node.continuation_block}, false, true);
+			return true;
+		}
+		if (node.kind != Adaptor::InstKind::GuardedFast) {
+			return false;
+		}
+		if (node.control_block == UINT32_MAX) {
+			return false;
+		}
+		const auto successors =
+			adaptor->block_succs(IRBlockRef{node.control_block});
+		if (successors.size() != 2
+				|| static_cast<uint32_t>(successors[0])
+					!= node.continuation_block
+				|| static_cast<uint32_t>(successors[1])
+					!= node.argument_index) {
+			return false;
+		}
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 		auto frame_reg = frame.load_to_reg();
 		auto slow_release = text_writer.label_create();
 		auto store_value = text_writer.label_create();
 		auto slot_resolved = text_writer.label_create();
+		auto finished = text_writer.label_create();
 		ScratchReg old_type{this};
 		ScratchReg counted{this};
 		ScratchReg refcount{this};
+		ScratchReg decision{this};
 		auto slot_reg = counted.alloc_gp();
 		auto old_type_reg = old_type.alloc_gp();
 		auto refcount_reg = refcount.alloc_gp();
+		auto decision_reg = decision.alloc_gp();
 		ASM(MOV64rr, slot_reg, frame_reg);
 		ASM(ADD64ri, slot_reg, static_cast<int32_t>(offset));
 		ASM(MOV32rm, old_type_reg,
@@ -2127,28 +2157,8 @@ bool ZendCompilerX64::compile_inst(
 		counted.reset();
 		refcount.reset();
 		label_place(slow_release);
-		{
-			const auto register_state =
-				zend::native::tpde::
-					capture_conditional_call_register_state(*this);
-			ScratchReg slot_argument{this};
-			auto slot_argument_reg = slot_argument.alloc_gp();
-			ASM(MOV64rr, slot_argument_reg, frame_reg);
-			ASM(ADD64ri, slot_argument_reg, static_cast<int32_t>(offset));
-			ValuePart slot_pointer{
-				tpde::x64::PlatformConfig::GP_BANK, 8};
-			slot_pointer.set_value(this, std::move(slot_argument));
-			slow_argument_register.reset();
-			{
-				tpde::x64::CCAssignerSysV assigner{false};
-				CallBuilder builder{*this, assigner};
-				builder.add_arg(
-					std::move(slot_pointer), tpde::CCAssignment{});
-				builder.call(runtime_symbol(mir.runtime_helper));
-			}
-			zend::native::tpde::restore_conditional_call_register_state(
-				*this, register_state);
-		}
+		ASM(MOV32ri, decision_reg, 1);
+		generate_raw_jump(Jump::jmp, finished);
 
 		label_place(store_value);
 		auto store_slot_resolved = text_writer.label_create();
@@ -2205,6 +2215,12 @@ bool ZendCompilerX64::compile_inst(
 					static_cast<int32_t>(zval_type(exact_type)));
 			}
 		}
+		ASM(MOV32ri, decision_reg, 0);
+		label_place(finished);
+		std::array<std::pair<uint64_t, IRBlockRef>, 1> cases{{
+			{1, successors[1]},
+		}};
+		generate_switch(std::move(decision), 32, successors[0], cases);
 		return true;
 	}
 	if (mir.source_effect == ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE) {
