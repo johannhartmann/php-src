@@ -67,6 +67,23 @@ static inline uint32_t zend_tpde_machine_value_zval_type(
 	return IS_UNDEF;
 }
 
+static inline uint32_t zend_tpde_machine_value_zval_type_info(
+	zend_tpde_machine_value_kind kind)
+{
+	switch (kind) {
+		case ZEND_TPDE_MACHINE_VALUE_STRING_PTR:
+			return IS_STRING_EX;
+		case ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR:
+			return IS_ARRAY_EX;
+		case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
+			return IS_OBJECT_EX;
+		case ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR:
+			return IS_REFERENCE_EX;
+		default:
+			return zend_tpde_machine_value_zval_type(kind);
+	}
+}
+
 enum zend_tpde_user_opcode_target_kind : uint8_t {
 	ZEND_TPDE_USER_OPCODE_TARGET_VALUE = 0,
 	ZEND_TPDE_USER_OPCODE_TARGET_JUMP_OP1 = 1,
@@ -220,6 +237,12 @@ struct zend_tpde_value {
 	uint64_t constant_bits;
 };
 
+struct zend_tpde_materialization {
+	uint32_t value_index;
+	zend_mir_storage_id storage_id;
+	zend_tpde_machine_value_kind machine_kind;
+};
+
 struct zend_tpde_id_index_entry {
 	uint32_t id;
 	uint32_t index;
@@ -251,6 +274,8 @@ struct zend_tpde_instruction {
 	zend_mir_scalar_type_mask direct_scalar_return_type;
 	uint32_t direct_scalar_return_offset;
 	uint32_t source_opline_index;
+	uint32_t materialization_offset;
+	uint32_t materialization_count;
 };
 
 struct zend_tpde_array_read {
@@ -1120,6 +1145,8 @@ struct zend_tpde_plan {
 	uint32_t *generator_resume_landings;
 	zend_mir_block_id *generator_resume_exception_blocks;
 	uint64_t *generator_resume_live_values;
+	zend_tpde_materialization *materializations;
+	uint32_t materialization_count;
 	bool may_emit_calls;
 	bool user_opcode_callbacks;
 };

@@ -2018,6 +2018,134 @@ bool freeze_generator_resume_liveness(
 	return true;
 }
 
+bool freeze_statepoint_materializations(
+	zend_tpde_plan *plan, zend_native_diagnostic *diag)
+{
+	const zend_mir_view *view = plan->view;
+	const uint32_t frame_count = view->frame_state_count(view->context);
+	std::vector<zend_mir_frame_state_ref> frames(frame_count);
+	std::vector<zend_tpde_materialization> materializations;
+
+	for (uint32_t index = 0; index < frame_count; ++index) {
+		if (!view->frame_state_at(view->context, index, &frames[index])) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"materialization frame-state table is unreadable");
+			return false;
+		}
+	}
+	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+		zend_tpde_instruction &instruction = plan->instructions[index];
+		const zend_mir_instruction_record record =
+			zend_tpde_instruction_record_at(plan, &instruction);
+		const bool observable_boundary =
+			record.opcode == ZEND_MIR_OPCODE_STATEPOINT
+			|| record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
+			|| record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL
+			|| instruction.runtime_helper != ZEND_NATIVE_HELPER_COUNT
+			|| instruction.source_effect != 0
+			|| instruction.debug_probe;
+
+		instruction.materialization_offset =
+			static_cast<uint32_t>(materializations.size());
+		instruction.materialization_count = 0;
+		if (!observable_boundary
+				|| !zend_mir_id_is_valid(record.frame_state_id)) {
+			continue;
+		}
+		const zend_mir_frame_state_ref *frame = nullptr;
+		for (const zend_mir_frame_state_ref &candidate : frames) {
+			if (candidate.id == record.frame_state_id) {
+				frame = &candidate;
+				break;
+			}
+		}
+		if (frame == nullptr || frame->function_id != plan->function.id
+				|| frame->slots.offset > view->frame_slot_count(view->context)
+				|| frame->slots.count
+					> view->frame_slot_count(view->context)
+						- frame->slots.offset) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"observable instruction lacks its materialization frame");
+			return false;
+		}
+		for (uint32_t slot_index = 0;
+				slot_index < frame->slots.count; ++slot_index) {
+			zend_mir_frame_slot_ref slot{};
+			if (!view->frame_slot_at(view->context,
+					frame->slots.offset + slot_index, &slot)) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+					"materialization frame slot is unreadable");
+				return false;
+			}
+			if (slot.materialization != ZEND_MIR_MATERIALIZATION_MATERIALIZED
+					|| !zend_mir_id_is_valid(slot.value_id)) {
+				continue;
+			}
+			const int32_t value_index =
+				zend_tpde_value_index(plan, slot.value_id);
+			if (value_index < 0) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+					"materialization references an unknown value");
+				return false;
+			}
+			const zend_tpde_value &value =
+				plan->values[static_cast<uint32_t>(value_index)];
+			if (value.slot_state != ZEND_TPDE_CANONICAL_SLOT_DIRTY
+					|| !zend_mir_id_is_valid(value.canonical_storage_id)
+					|| value.constant) {
+				continue;
+			}
+			bool duplicate = false;
+			for (uint32_t materialization_index =
+					instruction.materialization_offset;
+					materialization_index < materializations.size();
+					++materialization_index) {
+				if (materializations[materialization_index].storage_id
+						== value.canonical_storage_id) {
+					duplicate = true;
+					break;
+				}
+			}
+			if (duplicate) {
+				continue;
+			}
+			materializations.push_back({
+				static_cast<uint32_t>(value_index),
+				value.canonical_storage_id,
+				value.machine_kind,
+			});
+			++instruction.materialization_count;
+		}
+	}
+	if (materializations.size() > MAX_RECORDS) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+			"statepoint materialization plan exceeds executable bound");
+		return false;
+	}
+	plan->materialization_count =
+		static_cast<uint32_t>(materializations.size());
+	if (materializations.empty()) {
+		return true;
+	}
+	plan->materializations = static_cast<zend_tpde_materialization *>(
+		std::malloc(materializations.size()
+			* sizeof(*plan->materializations)));
+	if (plan->materializations == nullptr) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"unable to allocate statepoint materialization plan");
+		return false;
+	}
+	std::memcpy(plan->materializations, materializations.data(),
+		materializations.size() * sizeof(*plan->materializations));
+	return true;
+}
+
 void destroy_plan(zend_tpde_plan *plan) {
 	for (uint32_t index = 0; index < plan->direct_call_count; ++index) {
 		std::free(plan->direct_calls[index]);
@@ -2048,6 +2176,7 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->generator_resume_landings);
 	std::free(plan->generator_resume_exception_blocks);
 	std::free(plan->generator_resume_live_values);
+	std::free(plan->materializations);
 	std::free(plan->direct_calls);
 	std::free(plan->direct_internal_calls);
 	std::free(plan->user_calls);
@@ -4367,6 +4496,9 @@ bool initialize_plan(
 		}
 	}
 	if (!freeze_generator_resume_liveness(plan, diag)) {
+		return false;
+	}
+	if (!freeze_statepoint_materializations(plan, diag)) {
 		return false;
 	}
 	if (zend_native_runtime_validate(plan->runtime,
