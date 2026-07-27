@@ -104,6 +104,15 @@ public:
 		ZEND_ASSERT(frame.register_valid());
 		return AsmReg{frame.get_reg().id()};
 	}
+	AsmReg canonical_context_register() {
+		::tpde::ValueAssignment *assignment = val_assignment(
+			adaptor->val_local_idx(
+				IRValueRef{Adaptor::EXECUTION_CONTEXT_VALUE}));
+		ZEND_ASSERT(assignment != nullptr);
+		::tpde::AssignmentPartRef context{assignment, 0};
+		ZEND_ASSERT(context.register_valid());
+		return AsmReg{context.get_reg().id()};
+	}
 
 	ValuePart image_symbol_value(
 		zend_native_image_symbol_kind kind, uint32_t id) {
@@ -197,19 +206,30 @@ public:
 			AsmReg destination, ::tpde::AssignmentPartRef reference) {
 		const IRValueRef value =
 			adaptor->frame_slot_reference(reference.variable_ref_data());
-		zend_mir_storage_id storage_id = ZEND_MIR_ID_INVALID;
-		if (!adaptor->frame_slot_reference(value, &storage_id)) {
+		const zend_tpde_machine_reference *descriptor = nullptr;
+		if (!adaptor->machine_reference(value, &descriptor)) {
 			ZEND_UNREACHABLE();
 		}
-		const uint64_t offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + storage_id) * sizeof(zval);
+		AsmReg base;
+		uint64_t offset;
+		switch (descriptor->kind) {
+			case ZEND_TPDE_MACHINE_REFERENCE_FRAME_SLOT:
+				base = canonical_frame_register();
+				offset = static_cast<uint64_t>(descriptor->displacement);
+				break;
+			case ZEND_TPDE_MACHINE_REFERENCE_CONTEXT_FIELD:
+				base = canonical_context_register();
+				offset = static_cast<uint64_t>(descriptor->displacement);
+				break;
+			default:
+				ZEND_UNREACHABLE();
+		}
 		if (offset <= INT32_MAX) {
 			ASM(LEA64rm, destination,
-				FE_MEM(canonical_frame_register(), 0, FE_NOREG,
-					static_cast<int32_t>(offset)));
+				FE_MEM(base, 0, FE_NOREG, static_cast<int32_t>(offset)));
 			return;
 		}
-		ASM(MOV64rr, destination, canonical_frame_register());
+		ASM(MOV64rr, destination, base);
 		ScratchReg amount{this};
 		auto amount_reg = amount.alloc_gp();
 		materialize_constant(&offset,
@@ -595,18 +615,27 @@ bool ZendCompilerX64::compile_inst(
 		return compile_boxed_cond_cold(instruction);
 	}
 	if (node.kind == Adaptor::InstKind::TypedCallGuard) {
-		if (node.operands.empty()
+		if (node.operands.size() < 2
 				|| node.argument_index == UINT32_MAX
 				|| node.continuation_block == UINT32_MAX) {
 			return false;
 		}
-		auto [context_ref, context] = val_ref_single(node.operands[0]);
-		auto context_reg = context.load_to_reg();
+		auto context_use = val_ref(node.operands[0]);
+		(void) context_use;
+		const zend_tpde_machine_reference *observer_reference = nullptr;
+		if (!adaptor->machine_reference(
+				node.operands[1], &observer_reference)
+				|| observer_reference->kind
+					!= ZEND_TPDE_MACHINE_REFERENCE_CONTEXT_FIELD
+				|| observer_reference->access_width != sizeof(bool)
+				|| observer_reference->displacement < 0
+				|| observer_reference->displacement > INT32_MAX) {
+			return false;
+		}
 		ASM(CMP8mi,
-			FE_MEM(context_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(
-					zend_native_execution_context,
-					observers_enabled))),
+			FE_MEM(canonical_context_register(), 0, FE_NOREG,
+				static_cast<int32_t>(
+					observer_reference->displacement)),
 			0);
 		generate_cond_branch(
 			Jump::jne,

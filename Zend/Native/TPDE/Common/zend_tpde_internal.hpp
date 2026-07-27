@@ -367,6 +367,29 @@ struct zend_tpde_materialization {
 	zend_tpde_machine_value_kind machine_kind;
 };
 
+enum zend_tpde_machine_reference_kind : uint8_t {
+	ZEND_TPDE_MACHINE_REFERENCE_FRAME_SLOT = 0,
+	ZEND_TPDE_MACHINE_REFERENCE_CONTEXT_FIELD = 1,
+	ZEND_TPDE_MACHINE_REFERENCE_LITERAL = 2,
+	ZEND_TPDE_MACHINE_REFERENCE_PROPERTY_SLOT = 3,
+	ZEND_TPDE_MACHINE_REFERENCE_PACKED_ELEMENT = 4,
+};
+
+/*
+ * Pointer-free address-selection facts consumed directly by the TPDE
+ * adaptor. Values name frozen ZNMIR identities; UINT32_MAX denotes a
+ * synthetic base such as the canonical frame or execution context.
+ */
+struct zend_tpde_machine_reference {
+	zend_tpde_machine_reference_kind kind;
+	zend_mir_value_id base_value_id;
+	zend_mir_value_id index_value_id;
+	uint32_t stable_storage_or_layout_id;
+	uint32_t scale;
+	int64_t displacement;
+	uint32_t access_width;
+};
+
 enum zend_tpde_machine_use_kind : uint8_t {
 	ZEND_TPDE_MACHINE_USE_INSTRUCTION_OPERAND = 0,
 	ZEND_TPDE_MACHINE_USE_PHI_EDGE = 1,
@@ -426,6 +449,11 @@ struct zend_tpde_instruction {
 	zend_tpde_source_value_binding source_op2_binding;
 	zend_tpde_source_value_binding source_result_binding;
 	zend_tpde_source_value_binding source_auxiliary_binding;
+	uint32_t source_op1_reference_index;
+	uint32_t source_op2_reference_index;
+	uint32_t source_result_reference_index;
+	uint32_t source_auxiliary_reference_index;
+	uint32_t operation_reference_index;
 	bool local_abi_transport;
 };
 
@@ -1350,6 +1378,9 @@ struct zend_tpde_plan {
 	uint64_t *generator_resume_live_values;
 	zend_tpde_materialization *materializations;
 	uint32_t materialization_count;
+	zend_tpde_machine_reference *machine_references;
+	uint32_t machine_reference_count;
+	uint32_t observers_enabled_reference_index;
 	uint32_t *entry_undef_temporary_indices;
 	uint32_t entry_undef_temporary_count;
 	bool may_emit_calls;
