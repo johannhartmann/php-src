@@ -2140,9 +2140,7 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 					| ZEND_NATIVE_DIRECT_CALL_CONSUME_RECEIVER
 					| ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE
 					| ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME
-					| ZEND_NATIVE_DIRECT_CALL_INLINE_LEAF_BODY
 					| ZEND_NATIVE_DIRECT_CALL_REQUIRE_SCALAR_RESULT
-					| ZEND_NATIVE_DIRECT_CALL_INLINE_BOXED_LEAF_BODY
 					| ZEND_NATIVE_DIRECT_CALL_GENERATION_LEASED)) != 0
 			|| descriptor->source_position >= caller->func->op_array.last) {
 		zend_throw_error(NULL, "Invalid direct native call descriptor");

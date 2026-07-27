@@ -4919,12 +4919,7 @@ bool ZendCompilerA64::compile_inst(
 					generated_fast_path
 					&& (call.direct_call->flags
 						& ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME) != 0;
-				const bool private_inline_body =
-					leaf_scalar_frame
-					|| (generated_fast_path
-						&& (call.direct_call->flags
-							& ZEND_NATIVE_DIRECT_CALL_INLINE_BOXED_LEAF_BODY)
-							!= 0);
+				const bool private_inline_body = leaf_scalar_frame;
 				const bool result_unused =
 					call.direct_call->result_operand.kind
 						== ZEND_MIR_SOURCE_OPERAND_UNUSED;
@@ -5057,277 +5052,101 @@ bool ZendCompilerA64::compile_inst(
 						auto first_reg = first.alloc_gp();
 						auto second_reg = second.alloc_gp();
 
-						if ((call.direct_call->flags
-								& ZEND_NATIVE_DIRECT_CALL_INLINE_LEAF_BODY)
-								!= 0) {
+						if (node.inlined_user_body) {
 							load_off(first_reg, context_reg,
 								static_cast<uint32_t>(offsetof(
 									zend_native_execution_context,
 									observers_enabled)), 1);
 							ASM(CMPxi, first_reg, 0);
 							generate_raw_jump(Jump::Jne, slow_path);
-							if (call.direct_call->inline_leaf_operation
-									== ZEND_NATIVE_INLINE_LEAF_VOID) {
-								generate_raw_jump(Jump::jmp, successful);
+							if (node.inlined_operand_index
+									>= node.operands.size()) {
+								return false;
+							}
+							if (node.inlined_checked_source_opcode
+									!= UINT32_MAX) {
+								if (node.inlined_operand_index + 1
+										>= node.operands.size()) {
+									return false;
+								}
+								auto [left_ref, left] = val_ref_single(
+									node.operands[
+										node.inlined_operand_index]);
+								auto [right_ref, right] = val_ref_single(
+									node.operands[
+										node.inlined_operand_index + 1]);
+								switch (
+									node.inlined_checked_source_opcode) {
+									case ZEND_ADD:
+										ASM(ADDSx, first_reg,
+											left.load_to_reg(),
+											right.load_to_reg());
+										break;
+									case ZEND_SUB:
+										ASM(SUBSx, first_reg,
+											left.load_to_reg(),
+											right.load_to_reg());
+										break;
+									default:
+										return false;
+								}
+								generate_raw_jump(Jump::Jvs, slow_path);
 							} else {
-								const zend_native_inline_leaf_operation
-									inline_operation =
-										call.direct_call
-											->inline_leaf_operation;
-								const bool two_arguments =
-									inline_operation
-											== ZEND_NATIVE_INLINE_LEAF_LONG_ADD_ARGUMENT
-										|| inline_operation
-											== ZEND_NATIVE_INLINE_LEAF_LONG_SUB_ARGUMENT;
-								bool first_inline_machine_operand = false;
-								uint32_t inline_machine_operands = 0;
-								if (inline_operation
-										!= ZEND_NATIVE_INLINE_LEAF_SCALAR_CONSTANT) {
-									zend_mir_call_argument_ref argument;
-									if (!zend_tpde_call_argument_at(
-											adaptor->plan(),
-											call.call_argument_offset
-												+ call.direct_call
-													->inline_leaf_argument,
-											&argument)) {
-										return false;
-									}
-									first_inline_machine_operand =
-										zend_mir_id_is_valid(argument.value_id)
-										&& (inline_operation
-												!= ZEND_NATIVE_INLINE_LEAF_STRING_LENGTH_ARGUMENT
-											|| adaptor
-												->plan_value_is_register_authoritative(
-													argument.value_id));
-									inline_machine_operands +=
-										first_inline_machine_operand;
-									if (two_arguments) {
-										if (!zend_tpde_call_argument_at(
-												adaptor->plan(),
-												call.call_argument_offset
-													+ call.direct_call
-														->inline_leaf_argument2,
-												&argument)) {
-											return false;
-										}
-										inline_machine_operands +=
-											zend_mir_id_is_valid(
-												argument.value_id);
-									}
-								}
-								if (inline_machine_operands
-										> node.operands.size()) {
-									return false;
-								}
-								size_t inline_operand_cursor =
-									node.operands.size()
-										- inline_machine_operands;
-								auto load_inline_argument =
-									[this, &call, &node, frame_reg,
-										&inline_operand_cursor](
-										uint32_t argument_index,
-										AsmReg destination) -> bool {
-										if (argument_index
-												>= call.call_argument_count) {
-											return false;
-										}
-										zend_mir_call_argument_ref
-											source_argument;
-										if (!zend_tpde_call_argument_at(
-												adaptor->plan(),
-												call.call_argument_offset
-													+ argument_index,
-												&source_argument)) {
-											return false;
-										}
-										const zend_native_direct_call_argument
-											&argument =
-												call.direct_call->arguments[
-													argument_index];
-										if (argument.source_operand.kind
-												== ZEND_MIR_SOURCE_OPERAND_LITERAL) {
-											materialize_constant(
-												argument.scalar_bits,
-												DarwinConfig::GP_BANK,
-												8, destination);
-										} else if (zend_mir_id_is_valid(
-												source_argument.value_id)) {
-											if (inline_operand_cursor
-													>= node.operands.size()) {
-												return false;
-											}
-											auto [argument_ref,
-												argument_value] =
-													val_ref_single(
-														node.operands[
-															inline_operand_cursor++]);
-											mov(destination,
-												argument_value.load_to_reg(), 8);
-										} else {
-											if (argument.source_frame_offset
-													== UINT32_MAX) {
-												return false;
-											}
-											load_off(destination, frame_reg,
-												argument.source_frame_offset, 8);
-										}
-										return true;
-									};
-								if (inline_operation
-										== ZEND_NATIVE_INLINE_LEAF_SCALAR_CONSTANT) {
-									materialize_constant(
-										call.direct_call->inline_leaf_constant,
-										DarwinConfig::GP_BANK, 8, second_reg);
-									mov(first_reg, second_reg, 8);
-								} else if (inline_operation
-										== ZEND_NATIVE_INLINE_LEAF_STRING_LENGTH_ARGUMENT) {
-									if (first_inline_machine_operand) {
-										if (!load_inline_argument(
-												call.direct_call
-													->inline_leaf_argument,
-												first_reg)) {
-											return false;
-										}
-									} else {
-										const zend_native_direct_call_argument
-											&argument =
-												call.direct_call->arguments[
-													call.direct_call
-														->inline_leaf_argument];
-										if (argument.source_frame_offset
-												> UINT32_MAX
-													- static_cast<uint32_t>(
-														offsetof(
-															zval,
-															u1.type_info))) {
-											return false;
-										}
-										load_off(second_reg, frame_reg,
-											argument.source_frame_offset
-												+ static_cast<uint32_t>(
-													offsetof(
-														zval,
-														u1.type_info)),
-											1);
-										ASM(CMPxi, second_reg, IS_STRING);
-										generate_raw_jump(
-											Jump::Jne, slow_path);
-										load_off(first_reg, frame_reg,
-											argument.source_frame_offset, 8);
-									}
-									load_off(first_reg, first_reg,
-										static_cast<uint32_t>(offsetof(
-											zend_string, len)),
-										sizeof(size_t));
-								} else if (!load_inline_argument(
-										call.direct_call->inline_leaf_argument,
-										first_reg)) {
-									return false;
-								}
-								if (two_arguments) {
-									if (!load_inline_argument(
-											call.direct_call
-												->inline_leaf_argument2,
-											second_reg)) {
-										return false;
-									}
-								} else if (inline_operation
-										!= ZEND_NATIVE_INLINE_LEAF_ARGUMENT
-										&& inline_operation
-											!= ZEND_NATIVE_INLINE_LEAF_SCALAR_CONSTANT
-										&& inline_operation
-											!= ZEND_NATIVE_INLINE_LEAF_STRING_LENGTH_ARGUMENT) {
-									materialize_constant(
-										call.direct_call->inline_leaf_constant,
-										DarwinConfig::GP_BANK, 8, second_reg);
-								}
-								switch (inline_operation) {
-										case ZEND_NATIVE_INLINE_LEAF_LONG_ADD_CONSTANT:
-										case ZEND_NATIVE_INLINE_LEAF_LONG_ADD_ARGUMENT:
-											ASM(ADDSx, first_reg,
-												first_reg, second_reg);
-											break;
-										case ZEND_NATIVE_INLINE_LEAF_LONG_SUB_CONSTANT:
-										case ZEND_NATIVE_INLINE_LEAF_LONG_SUB_ARGUMENT:
-											ASM(SUBSx, first_reg,
-												first_reg, second_reg);
-											break;
-										case ZEND_NATIVE_INLINE_LEAF_CONSTANT_SUB_LONG:
-											ASM(SUBSx, first_reg,
-												second_reg, first_reg);
-											break;
-										case ZEND_NATIVE_INLINE_LEAF_ARGUMENT:
-										case ZEND_NATIVE_INLINE_LEAF_SCALAR_CONSTANT:
-										case ZEND_NATIVE_INLINE_LEAF_STRING_LENGTH_ARGUMENT:
-											break;
-										default:
-											return false;
-								}
-								if (inline_operation
-										!= ZEND_NATIVE_INLINE_LEAF_ARGUMENT
-										&& inline_operation
-											!= ZEND_NATIVE_INLINE_LEAF_SCALAR_CONSTANT
-										&& inline_operation
-											!= ZEND_NATIVE_INLINE_LEAF_STRING_LENGTH_ARGUMENT) {
-									generate_raw_jump(
-										Jump::Jvs, slow_path);
-								}
-								if (!result_unused) {
-									mov(second_reg, frame_reg, 8);
-									if (call.direct_call->result_operand
-											.slot_kind
-											== ZEND_MIR_SOURCE_SLOT_CV) {
-										add_offset(second_reg, second_reg,
-											static_cast<uint64_t>(
-												ZEND_CALL_FRAME_SLOT
-													+ call.direct_call
-														->result_operand.index)
-												* sizeof(zval));
-									} else {
-										ScratchReg slot_index{this};
-										auto slot_index_reg =
-											slot_index.alloc_gp();
-										load_off(slot_index_reg, frame_reg,
-											static_cast<uint32_t>(offsetof(
-												zend_execute_data, func)), 8);
-										load_off(slot_index_reg,
-											slot_index_reg,
-											static_cast<uint32_t>(offsetof(
-												zend_op_array, last_var)), 4);
-										add_unsigned_offset(slot_index_reg,
-											slot_index_reg,
+								auto [inline_ref, inline_value] =
+									val_ref_single(node.operands[
+										node.inlined_operand_index]);
+								mov(first_reg,
+									inline_value.load_to_reg(), 8);
+							}
+							if (!result_unused) {
+								mov(second_reg, frame_reg, 8);
+								if (call.direct_call->result_operand.slot_kind
+										== ZEND_MIR_SOURCE_SLOT_CV) {
+									add_offset(second_reg, second_reg,
+										static_cast<uint64_t>(
 											ZEND_CALL_FRAME_SLOT
 												+ call.direct_call
-													->result_operand.index);
-										ASM(LSLxi, slot_index_reg,
-											slot_index_reg, 4);
-										ASM(ADDx, second_reg,
-											second_reg, slot_index_reg);
-									}
-									store_off(second_reg, 0, first_reg, 8);
-									if (call.direct_call->result_type
-											== ZEND_MIR_SCALAR_TYPE_I1) {
-										ScratchReg kind{this};
-										auto kind_reg = kind.alloc_gp();
-										ASM(ADDwi, kind_reg, first_reg,
-											IS_FALSE);
-										store_off(second_reg,
-											static_cast<uint32_t>(offsetof(
-												zval, u1.type_info)),
-											kind_reg, 4);
-									} else {
-										store_constant(second_reg,
-											static_cast<uint32_t>(offsetof(
-												zval, u1.type_info)),
-											zval_type(call.direct_call
-												->result_type),
-											4);
-									}
+													->result_operand.index)
+											* sizeof(zval));
+								} else {
+									ScratchReg slot_index{this};
+									auto slot_index_reg = slot_index.alloc_gp();
+									load_off(slot_index_reg, frame_reg,
+										static_cast<uint32_t>(offsetof(
+											zend_execute_data, func)), 8);
+									load_off(slot_index_reg, slot_index_reg,
+										static_cast<uint32_t>(offsetof(
+											zend_op_array, last_var)), 4);
+									add_unsigned_offset(slot_index_reg,
+										slot_index_reg,
+										ZEND_CALL_FRAME_SLOT
+											+ call.direct_call
+												->result_operand.index);
+									ASM(LSLxi, slot_index_reg,
+										slot_index_reg, 4);
+									ASM(ADDx, second_reg,
+										second_reg, slot_index_reg);
 								}
-								generate_raw_jump(Jump::jmp, successful);
+								store_off(second_reg, 0, first_reg, 8);
+								if (call.direct_call->result_type
+										== ZEND_MIR_SCALAR_TYPE_I1) {
+									ScratchReg kind{this};
+									auto kind_reg = kind.alloc_gp();
+									ASM(ADDwi, kind_reg, first_reg, IS_FALSE);
+									store_off(second_reg,
+										static_cast<uint32_t>(offsetof(
+											zval, u1.type_info)),
+										kind_reg, 4);
+								} else {
+									store_constant(second_reg,
+										static_cast<uint32_t>(offsetof(
+											zval, u1.type_info)),
+										zval_type(call.direct_call->result_type),
+										4);
+								}
 							}
+							generate_raw_jump(Jump::jmp, successful);
 						}
-
 						/*
 						 * A leaf binding names an exact, already-published
 						 * immutable callee. The compiler declines this
@@ -7974,6 +7793,8 @@ zend_result zend_tpde_emit_darwin_arm64(
 			"unable to retain the relocatable TPDE arm64 image");
 		return FAILURE;
 	}
+	image->metrics.direct_leaf_scalar_sites =
+		state->adaptor.inlined_user_body_count();
 	return SUCCESS;
 }
 

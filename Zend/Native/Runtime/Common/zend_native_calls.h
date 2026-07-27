@@ -142,33 +142,14 @@ typedef struct _zend_native_direct_call_argument {
 #define ZEND_NATIVE_DIRECT_CALL_CONSUME_RECEIVER UINT32_C(2)
 #define ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE UINT32_C(4)
 #define ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME UINT32_C(8)
-#define ZEND_NATIVE_DIRECT_CALL_INLINE_LEAF_BODY UINT32_C(16)
 #define ZEND_NATIVE_DIRECT_CALL_REQUIRE_SCALAR_RESULT UINT32_C(32)
-#define ZEND_NATIVE_DIRECT_CALL_INLINE_BOXED_LEAF_BODY UINT32_C(64)
 #define ZEND_NATIVE_DIRECT_CALL_GENERATION_LEASED UINT32_C(128)
-
-typedef enum _zend_native_inline_leaf_operation {
-	ZEND_NATIVE_INLINE_LEAF_NONE = 0,
-	ZEND_NATIVE_INLINE_LEAF_VOID = 1,
-	ZEND_NATIVE_INLINE_LEAF_ARGUMENT = 2,
-	ZEND_NATIVE_INLINE_LEAF_LONG_ADD_CONSTANT = 3,
-	ZEND_NATIVE_INLINE_LEAF_LONG_SUB_CONSTANT = 4,
-	ZEND_NATIVE_INLINE_LEAF_CONSTANT_SUB_LONG = 5,
-	ZEND_NATIVE_INLINE_LEAF_SCALAR_CONSTANT = 6,
-	ZEND_NATIVE_INLINE_LEAF_LONG_ADD_ARGUMENT = 7,
-	ZEND_NATIVE_INLINE_LEAF_LONG_SUB_ARGUMENT = 8,
-	ZEND_NATIVE_INLINE_LEAF_STRING_LENGTH_ARGUMENT = 9
-} zend_native_inline_leaf_operation;
 
 typedef struct _zend_native_direct_call_descriptor {
 	uint32_t argument_count;
 	uint32_t source_position;
 	uint32_t flags;
 	uint32_t frame_size;
-	zend_native_inline_leaf_operation inline_leaf_operation;
-	uint32_t inline_leaf_argument;
-	uint32_t inline_leaf_argument2;
-	uint64_t inline_leaf_constant;
 	zend_function *expected_function;
 	zend_class_entry *called_scope;
 	zend_native_internal_receiver_kind receiver_kind;
