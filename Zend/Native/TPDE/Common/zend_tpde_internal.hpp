@@ -395,7 +395,8 @@ struct zend_tpde_source_value_binding {
 
 struct zend_tpde_instruction {
 	zend_mir_instruction_id id;
-	uint32_t view_index;
+	zend_mir_instruction_record record;
+	uint32_t operand_offset;
 	uint32_t operand_count;
 	uint32_t component_target_index;
 	zend_native_entry_cell *entry_cell;
@@ -1240,11 +1241,8 @@ static inline bool zend_tpde_dynamic_fetch_read_at(
 }
 
 struct zend_tpde_plan {
-	const zend_mir_view *view;
-	const zend_mir_call_view *calls;
 	const zend_native_runtime_api *runtime;
 	const zend_op_array *source_op_array;
-	const struct _zend_ssa *source_ssa;
 	uint32_t source_ssa_variable_count;
 	uint32_t source_opcode_count;
 	uint32_t source_block_count;
@@ -1275,6 +1273,8 @@ struct zend_tpde_plan {
 	uint32_t value_index_capacity;
 	zend_tpde_instruction *instructions;
 	uint32_t instruction_count;
+	zend_mir_value_id *instruction_operands;
+	uint32_t instruction_operand_count;
 	zend_tpde_id_index_entry *instruction_index;
 	uint32_t instruction_index_capacity;
 	int32_t *value_definition_instructions;
@@ -1288,6 +1288,7 @@ struct zend_tpde_plan {
 	uint32_t call_target_index_capacity;
 	uint32_t call_target_count;
 	uint32_t call_argument_count;
+	zend_mir_call_argument_ref *call_arguments;
 	zend_tpde_source_value_binding *call_argument_bindings;
 	zend_tpde_id_index_entry *user_binding_index;
 	uint32_t user_binding_index_capacity;
@@ -1324,6 +1325,14 @@ struct zend_tpde_plan {
 	bool may_emit_calls;
 	bool user_opcode_callbacks;
 };
+
+uint32_t zend_tpde_block_successor_count(
+	const zend_tpde_plan *plan, zend_mir_block_id id);
+bool zend_tpde_block_successor_at(
+	const zend_tpde_plan *plan,
+	zend_mir_block_id id,
+	uint32_t successor_index,
+	zend_mir_block_id *out);
 
 static inline bool zend_tpde_generator_resume_value_live(
 	const zend_tpde_plan *plan, uint32_t resume_index, uint32_t value_index)
@@ -1438,9 +1447,8 @@ static inline bool zend_tpde_multi_branch_at(
 	expected_successors = zend_hash_num_elements(Z_ARRVAL_P(jump_table))
 		+ (opline->opcode == ZEND_MATCH ? 1 : 2);
 	if (expected_successors < 2
-			|| plan->view->successor_count(
-				plan->view->context, record.block_id)
-				!= expected_successors) {
+			|| zend_tpde_block_successor_count(
+				plan, record.block_id) != expected_successors) {
 		return false;
 	}
 	operand_offset =
