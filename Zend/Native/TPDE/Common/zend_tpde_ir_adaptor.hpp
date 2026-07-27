@@ -4460,12 +4460,9 @@ public:
 private:
 	std::vector<std::unique_ptr<ZendIRAdaptor>> members_;
 	std::vector<ZendIRAdaptor *> function_views_;
-	std::vector<uint32_t> function_component_indices_;
-	std::vector<uint32_t> typed_body_function_indices_;
 	std::vector<IRFuncRef> functions_;
 	std::vector<std::string> link_names_;
 	ZendIRAdaptor *active_ = nullptr;
-	uint32_t active_index_ = 0;
 	uint64_t typed_body_call_site_count_ = 0;
 	uint64_t typed_body_frame_bytes_elided_ = 0;
 
@@ -4478,17 +4475,15 @@ public:
 			std::span<const zend_tpde_plan *const> plans) {
 		members_.reserve(plans.size());
 		function_views_.reserve(plans.size() * 2);
-		function_component_indices_.reserve(plans.size() * 2);
-		typed_body_function_indices_.assign(plans.size(), UINT32_MAX);
 		functions_.reserve(plans.size() * 2);
 		link_names_.reserve(plans.size() * 2);
 		for (uint32_t index = 0; index < plans.size(); ++index) {
 			members_.push_back(
 				std::make_unique<ZendIRAdaptor>(plans[index], plans,
 					ZendIRAdaptor::FunctionMode::ZendEntry));
-			functions_.push_back(IRFuncRef{index});
+			functions_.push_back(
+				IRFuncRef{plans[index]->wrapper_function_index});
 			function_views_.push_back(members_.back().get());
-			function_component_indices_.push_back(index);
 			link_names_.push_back(index == 0
 				? "zend_native_entry"
 				: "zend_native_component_" + std::to_string(index));
@@ -4498,14 +4493,12 @@ public:
 				continue;
 			}
 			const uint32_t function_index =
-				static_cast<uint32_t>(functions_.size());
+				plans[index]->typed_body_function_index;
 			members_.push_back(
 				std::make_unique<ZendIRAdaptor>(plans[index], plans,
 					ZendIRAdaptor::FunctionMode::TypedBody));
 			functions_.push_back(IRFuncRef{function_index});
 			function_views_.push_back(members_.back().get());
-			function_component_indices_.push_back(index);
-			typed_body_function_indices_[index] = function_index;
 			link_names_.push_back(
 				"zend_native_typed_body_" + std::to_string(index));
 		}
@@ -4537,11 +4530,7 @@ public:
 		return typed_body_frame_bytes_elided_;
 	}
 	uint32_t current_function_index() const {
-		return function_component_indices_[active_index_];
-	}
-	uint32_t typed_body_function_index(uint32_t component_index) const {
-		return component_index < typed_body_function_indices_.size()
-			? typed_body_function_indices_[component_index] : UINT32_MAX;
+		return active_->plan()->symbol_namespace;
 	}
 	bool typed_component_call(IRInstRef instruction) const {
 		return active_->typed_component_call(instruction);
@@ -4788,7 +4777,6 @@ public:
 		if (index >= function_views_.size()) {
 			return false;
 		}
-		active_index_ = index;
 		active_ = function_views_[index];
 		return true;
 	}
@@ -4796,7 +4784,6 @@ public:
 		for (auto &member : members_) {
 			member->reset();
 		}
-		active_index_ = 0;
 		active_ = function_views_.empty() ? nullptr : function_views_[0];
 	}
 };
