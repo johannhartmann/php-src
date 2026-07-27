@@ -6493,6 +6493,7 @@ bool ZendCompilerX64::compile_inst(
 				const bool private_inline_body = leaf_scalar_frame;
 				const uint32_t typed_body_function =
 					local_component_call
+						&& adaptor->typed_component_call(instruction)
 						? adaptor->typed_body_function_index(
 							call.component_target_index)
 						: UINT32_MAX;
