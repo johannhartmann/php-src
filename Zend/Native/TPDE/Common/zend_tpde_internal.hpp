@@ -29,6 +29,7 @@ enum zend_tpde_machine_value_kind : uint8_t {
 	ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR = 5,
 	ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR = 6,
 	ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL = 7,
+	ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR = 8,
 };
 
 enum zend_tpde_machine_register_bank : uint8_t {
@@ -116,6 +117,7 @@ zend_tpde_machine_representation(
 	if (kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
 			|| kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
 			|| kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
+			|| kind == ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
 			|| kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR) {
 		return {1, pointer_value};
 	}
@@ -150,6 +152,8 @@ static inline uint32_t zend_tpde_machine_value_zval_type(
 			return IS_ARRAY;
 		case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
 			return IS_OBJECT;
+		case ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR:
+			return IS_RESOURCE;
 		case ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR:
 			return IS_REFERENCE;
 		case ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL:
@@ -168,6 +172,8 @@ static inline uint32_t zend_tpde_machine_value_zval_type_info(
 			return IS_ARRAY_EX;
 		case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
 			return IS_OBJECT_EX;
+		case ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR:
+			return IS_RESOURCE_EX;
 		case ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR:
 			return IS_REFERENCE_EX;
 		default:
