@@ -114,6 +114,7 @@ public:
 		zend_mir_representation representation;
 		zend_mir_scalar_type_mask exact_type;
 		zend_mir_storage_id storage_id;
+		zend_tpde_machine_value_kind machine_kind;
 		bool constant = false;
 		uint64_t constant_bits = 0;
 	};
@@ -273,17 +274,29 @@ private:
 			zend_mir_representation representation,
 			zend_mir_scalar_type_mask exact_type,
 			zend_mir_storage_id storage_id,
-			bool constant = false, uint64_t constant_bits = 0) {
+			bool constant = false, uint64_t constant_bits = 0,
+			uint8_t explicit_machine_kind = UINT8_MAX) {
 		if (derived_values_.size()
 				>= UINT32_MAX - MIR_VALUE_BASE - plan_->value_count) {
 			valid_ = false;
 			return INVALID_VALUE_REF;
 		}
+		zend_tpde_machine_value_kind kind = ZEND_TPDE_MACHINE_VALUE_I64;
+		if (explicit_machine_kind != UINT8_MAX) {
+			kind = static_cast<zend_tpde_machine_value_kind>(
+				explicit_machine_kind);
+		} else if (exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
+			kind = ZEND_TPDE_MACHINE_VALUE_BOOL;
+		} else if (exact_type == ZEND_MIR_SCALAR_TYPE_F64
+				|| representation == ZEND_MIR_REPRESENTATION_DOUBLE) {
+			kind = ZEND_TPDE_MACHINE_VALUE_F64;
+		}
 		const IRValueRef value{
 			MIR_VALUE_BASE + plan_->value_count
 				+ static_cast<uint32_t>(derived_values_.size())};
 		derived_values_.push_back({
-			representation, exact_type, storage_id, constant, constant_bits});
+			representation, exact_type, storage_id, kind, constant,
+			constant_bits});
 		if (representation == ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER
 				&& zend_mir_id_is_valid(storage_id)) {
 			frame_slot_references_.push_back(value);
@@ -410,15 +423,25 @@ private:
 			&& instruction.value_operation.opcode == record.opcode;
 	}
 
-	static bool needs_explicit_cold_path(
+	bool needs_explicit_cold_path(
 			const zend_tpde_instruction &instruction,
 			const zend_mir_instruction_record &record) {
 		zend_tpde_string_length string_length{};
-
+		zend_tpde_long_binary long_binary{};
 		if (!instruction.has_value_operation
 				|| executable_kind(instruction, record)
 					== InstKind::SlowPathCall) {
 			return false;
+		}
+		if (zend_tpde_long_binary_at(instruction, &long_binary)) {
+			const IRValueRef result =
+				source_operand_value_ref(
+					instruction.value_operation.result);
+			return result != INVALID_VALUE_REF
+				&& (exact_type(result) == ZEND_MIR_SCALAR_TYPE_I64
+					|| exact_type(result) == ZEND_MIR_SCALAR_TYPE_I1)
+				&& machine_kind(result)
+					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
 		}
 		switch (instruction.value_operation.opcode) {
 			case ZEND_MIR_OPCODE_VALUE_UNARY_OP:
@@ -2256,10 +2279,16 @@ public:
 			if (guarded_cold_block != UINT32_MAX) {
 				const uint32_t continuation_block =
 					guarded_continuation_blocks[i];
+				const IRValueRef fast_result = machine_result
+					? add_derived_value(
+						representation(result), exact_type(result),
+						ZEND_MIR_ID_INVALID, false, 0,
+						machine_kind(result))
+					: INVALID_VALUE_REF;
 				InstNode fast{
 					InstKind::GuardedFast, i, guarded_cold_block,
-					INVALID_VALUE_REF, {}, operand_offset, operand_count,
-					false,
+					fast_result, {}, operand_offset, operand_count,
+					machine_result,
 					ZEND_MIR_ID_INVALID, ZEND_MIR_SCALAR_TYPE_NONE,
 					false, {}, false, UINT32_MAX, UINT32_MAX,
 					materialization_operand_index,
@@ -2290,6 +2319,10 @@ public:
 				if (machine_result) {
 					const zend_mir_storage_id result_storage =
 						canonical_storage(result);
+					const IRValueRef cold_result = add_derived_value(
+						representation(result), exact_type(result),
+						ZEND_MIR_ID_INVALID, false, 0,
+						machine_kind(result));
 					const IRValueRef result_slot =
 						zend_mir_id_is_valid(result_storage)
 							? add_derived_value(
@@ -2297,7 +2330,13 @@ public:
 								ZEND_MIR_SCALAR_TYPE_NONE,
 								result_storage)
 							: INVALID_VALUE_REF;
-					if (result_slot == INVALID_VALUE_REF) {
+					if (fast_result == INVALID_VALUE_REF
+							|| cold_result == INVALID_VALUE_REF
+							|| result_slot == INVALID_VALUE_REF
+							|| static_cast<uint32_t>(result)
+								>= phi_input_slices_.size()
+							|| phi_values_[
+								static_cast<uint32_t>(result)] != 0) {
 						valid_ = false;
 					}
 					const uint32_t reload_operand_offset =
@@ -2305,11 +2344,22 @@ public:
 					operands_.push_back(result_slot);
 					InstNode reload{
 						InstKind::ZvalPayloadLoad, i, UINT32_MAX,
-						result, {}, reload_operand_offset, 1, true,
+						cold_result, {}, reload_operand_offset, 1, true,
 						result_storage, exact_type(result)};
 					reload.control_block = continuation_block;
 					add_node(block_instructions, continuation_block,
 						std::move(reload));
+					const uint32_t phi_input_offset =
+						static_cast<uint32_t>(phi_inputs_.size());
+					phi_inputs_.push_back(
+						{fast_result, IRBlockRef{block}});
+					phi_inputs_.push_back(
+						{cold_result, IRBlockRef{guarded_cold_block}});
+					phi_input_slices_[static_cast<uint32_t>(result)] = {
+						phi_input_offset, 2};
+					phi_values_[static_cast<uint32_t>(result)] = 1;
+					block_phis.push_back(
+						{continuation_block, result});
 				}
 				continue;
 			}
@@ -2613,14 +2663,7 @@ public:
 	zend_tpde_machine_value_kind machine_kind(IRValueRef value) const {
 		uint32_t index = static_cast<uint32_t>(value);
 		if (const DerivedValue *derived = derived_value(value)) {
-			switch (derived->exact_type) {
-				case ZEND_MIR_SCALAR_TYPE_I1:
-					return ZEND_TPDE_MACHINE_VALUE_BOOL;
-				case ZEND_MIR_SCALAR_TYPE_F64:
-					return ZEND_TPDE_MACHINE_VALUE_F64;
-				default:
-					return ZEND_TPDE_MACHINE_VALUE_I64;
-			}
+			return derived->machine_kind;
 		}
 		return index < MIR_VALUE_BASE
 				|| index - MIR_VALUE_BASE >= plan_->value_count
