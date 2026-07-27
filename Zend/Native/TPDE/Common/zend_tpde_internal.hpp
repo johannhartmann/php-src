@@ -356,6 +356,7 @@ struct zend_tpde_value {
 	zend_tpde_machine_value_kind machine_kind;
 	zend_tpde_machine_location location;
 	zend_tpde_canonical_slot_state slot_state;
+	zend_tpde_local_abi_type local_abi;
 	bool canonical_alias_observable;
 	bool constant;
 	uint64_t constant_bits;
