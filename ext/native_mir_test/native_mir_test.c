@@ -4849,6 +4849,8 @@ static void native_mir_test_build_result(
 				(zend_long) compiler_stats.direct_call_sites);
 			add_assoc_long(&performance, "direct_leaf_scalar_sites",
 				(zend_long) compiler_stats.direct_leaf_scalar_sites);
+			add_assoc_long(&performance, "direct_typed_body_sites",
+				(zend_long) compiler_stats.direct_typed_body_sites);
 			add_assoc_long(&performance, "direct_call_frame_bytes",
 				(zend_long) compiler_stats.direct_call_frame_bytes);
 			add_assoc_long(
