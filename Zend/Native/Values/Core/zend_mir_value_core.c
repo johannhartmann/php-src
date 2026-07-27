@@ -976,6 +976,17 @@ static bool zend_mir_value_validate_executable_operations(
 				}
 			}
 		}
+		if (operation->op1_definition_ssa_variable_id_plus_one != 0) {
+			const zend_mir_value_id definition =
+				zend_mir_value_from_original_ssa(
+					operation
+						->op1_definition_ssa_variable_id_plus_one - 1);
+			if (!zend_mir_id_is_valid(operation->op1_storage_id)
+					|| !zend_mir_module_find_value(
+						module, definition, NULL)) {
+				return false;
+			}
+		}
 		if (have_previous
 				&& (operation->block_id < previous_block
 					|| (operation->block_id == previous_block

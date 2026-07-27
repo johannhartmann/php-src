@@ -1080,6 +1080,7 @@ bool zend_mir_w09_emit_executable_values(
 {
 	const zend_mir_lowering_source_view *source;
 	zend_mir_source_call_view semantic_source;
+	const zend_ssa *semantic_ssa = NULL;
 	const zend_mir_view *view;
 	zend_mir_executable_value_ref *operations;
 	zend_mir_value_location_ref *locations;
@@ -1120,6 +1121,15 @@ bool zend_mir_w09_emit_executable_values(
 		return false;
 	}
 	source_ssa_count = source->ssa_count(source->context);
+	if (w11_execution) {
+		semantic_ssa = (const zend_ssa *) lowering_context->zend_source->ssa;
+		if (semantic_ssa == NULL || semantic_ssa->ops == NULL
+				|| semantic_ssa->vars_count < 0
+				|| (uint32_t) semantic_ssa->vars_count != source_ssa_count
+				|| (source_ssa_count != 0 && semantic_ssa->vars == NULL)) {
+			return false;
+		}
+	}
 	if (source_ssa_count > ZEND_MIR_W06_LIMIT
 			|| (uint32_t) op_array->last_var
 				> ZEND_MIR_W06_LIMIT - op_array->T) {
@@ -1311,6 +1321,23 @@ bool zend_mir_w09_emit_executable_values(
 			op_array, &source_opcode.op2);
 		operation->result_storage_id = zend_mir_w09_operand_storage_id(
 			op_array, &source_opcode.result);
+		if (semantic_ssa != NULL && semantic_ssa->ops[index].op1_def >= 0) {
+			const uint32_t definition =
+				(uint32_t) semantic_ssa->ops[index].op1_def;
+			const int definition_storage =
+				definition < source_ssa_count
+					? semantic_ssa->vars[definition].var : -1;
+
+			if (definition >= source_ssa_count || definition == UINT32_MAX
+					|| definition_storage < 0
+					|| (uint32_t) definition_storage >= storage_count
+					|| operation->op1_storage_id
+						!= (uint32_t) definition_storage) {
+				goto done;
+			}
+			operation->op1_definition_ssa_variable_id_plus_one =
+				definition + 1;
+		}
 		if (opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
 				&& !zend_mir_id_is_valid(
 					operation->op1.ssa_variable_id)
