@@ -1,5 +1,5 @@
 --TEST--
-Native baseline compiles only the selected root and static dependencies
+Native baseline compiles the selected root and static dependencies as one component
 --SKIPIF--
 <?php
 if (!function_exists('native_mir_test_compile_execute')) {
@@ -37,4 +37,4 @@ printf(
 );
 ?>
 --EXPECT--
-accepted return=1554 codeunits=2 components=2 vm=0 execute_ex=0 handler=0
+accepted return=1554 codeunits=2 components=1 vm=0 execute_ex=0 handler=0

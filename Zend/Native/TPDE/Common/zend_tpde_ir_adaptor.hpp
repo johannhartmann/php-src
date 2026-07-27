@@ -61,6 +61,11 @@ public:
 	static constexpr uint32_t EXECUTION_CONTEXT_VALUE = 3;
 	static constexpr uint32_t MIR_VALUE_BASE = 4;
 
+	enum class FunctionMode : uint8_t {
+		ZendEntry,
+		TypedBody,
+	};
+
 	enum class InstKind : uint8_t {
 		LoadFrame,
 		LoadExecutionContext,
@@ -191,10 +196,9 @@ public:
 private:
 	const zend_tpde_plan *plan_;
 	std::span<const zend_tpde_plan *const> component_plans_;
+	FunctionMode function_mode_;
 	std::array<IRFuncRef, 1> functions_{IRFuncRef{0}};
-	std::array<IRValueRef, 2> arguments_{
-		IRValueRef{EXECUTE_DATA_VALUE},
-		IRValueRef{EXECUTION_CONTEXT_ARGUMENT}};
+	std::vector<IRValueRef> arguments_;
 	std::array<IRValueRef, 0> no_values_;
 	std::vector<IRBlockRef> blocks_;
 	std::vector<Slice> successor_slices_;
@@ -219,6 +223,24 @@ private:
 	std::vector<uint32_t> user_opcode_dispatch_to_sources_;
 	zend_tpde_instruction synthetic_instruction_{};
 	bool valid_ = true;
+
+	static IRValueRef plan_source_operand_value_ref(
+			const zend_tpde_plan *plan,
+			const zend_mir_source_operand_ref &operand) {
+		zend_mir_value_id value_id = ZEND_MIR_ID_INVALID;
+		if (operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+			value_id = zend_mir_value_from_synthetic(operand.index);
+		} else if ((operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+					|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+				&& operand.ssa_variable_id != ZEND_MIR_ID_INVALID) {
+			value_id = zend_mir_value_from_original_ssa(
+				operand.ssa_variable_id);
+		}
+		const int32_t index = zend_mir_id_is_valid(value_id)
+			? zend_tpde_value_index(plan, value_id) : -1;
+		return index < 0 ? INVALID_VALUE_REF
+			: IRValueRef{MIR_VALUE_BASE + static_cast<uint32_t>(index)};
+	}
 
 	int32_t block_index(zend_mir_block_id id) const {
 		return zend_tpde_block_index(plan_, id);
@@ -956,13 +978,155 @@ private:
 	}
 
 public:
+	static bool typed_body_signature(
+			const zend_tpde_plan *plan,
+			zend_mir_scalar_type_mask *return_type) {
+		if (plan == nullptr || return_type == nullptr
+				|| plan->may_emit_calls
+				|| plan->generator_resume_count != 0
+				|| plan->user_opcode_callbacks
+				|| (plan->argument_count != 0
+					&& plan->argument_value_indices == nullptr)) {
+			return false;
+		}
+		for (uint32_t argument = 0;
+				argument < plan->argument_count; ++argument) {
+			const int32_t value_index =
+				plan->argument_value_indices[argument];
+			if (value_index < 0
+					|| static_cast<uint32_t>(value_index)
+						>= plan->value_count
+					|| !zend_mir_scalar_type_is_exact(
+						plan->values[value_index].exact_type)
+					|| plan->values[value_index].exact_type
+						== ZEND_MIR_SCALAR_TYPE_NULL) {
+				return false;
+			}
+		}
+
+		zend_mir_scalar_type_mask result_type =
+			ZEND_MIR_SCALAR_TYPE_NONE;
+		bool saw_return = false;
+		for (uint32_t index = 0;
+				index < plan->instruction_count; ++index) {
+			const zend_tpde_instruction &instruction =
+				plan->instructions[index];
+			const zend_mir_instruction_record record =
+				zend_tpde_instruction_record_at(plan, &instruction);
+			if (record.effects != 0 || record.reads != 0
+					|| record.writes != 0 || record.barriers != 0
+					|| record.ownership_actions != 0) {
+				return false;
+			}
+			if (record.opcode == ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE) {
+				if (instruction.runtime_helper != ZEND_NATIVE_HELPER_COUNT) {
+					return false;
+				}
+				continue;
+			}
+			IRValueRef returned = INVALID_VALUE_REF;
+			if (record.opcode == ZEND_MIR_OPCODE_RETURN) {
+				if (instruction.operand_count != 1) {
+					return false;
+				}
+				const int32_t value_index = zend_tpde_value_index(
+					plan, zend_tpde_operand_at(plan, &instruction, 0));
+				if (value_index >= 0) {
+					returned = IRValueRef{
+						MIR_VALUE_BASE
+							+ static_cast<uint32_t>(value_index)};
+				}
+			} else if (record.opcode
+					== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL) {
+				if (!instruction.has_value_operation
+						|| instruction.value_operation.source_opcode
+							!= ZEND_RETURN) {
+					return false;
+				}
+				returned = plan_source_operand_value_ref(
+					plan, instruction.value_operation.op1);
+			} else {
+				const bool pure =
+					record.opcode == ZEND_MIR_OPCODE_CONSTANT
+					|| record.opcode == ZEND_MIR_OPCODE_PHI
+					|| record.opcode == ZEND_MIR_OPCODE_COPY
+					|| record.opcode == ZEND_MIR_OPCODE_CANONICALIZE
+					|| record.opcode == ZEND_MIR_OPCODE_STATEPOINT
+					|| record.opcode == ZEND_MIR_OPCODE_BRANCH
+					|| record.opcode == ZEND_MIR_OPCODE_COND_BRANCH
+					|| record.opcode == ZEND_MIR_OPCODE_UNREACHABLE
+					|| (record.opcode
+							>= ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW
+						&& record.opcode
+							<= ZEND_MIR_OPCODE_SCALAR_DROP);
+				if (!pure
+						|| (record.representation
+							== ZEND_MIR_REPRESENTATION_ZVAL
+						&& !(record.opcode
+								== ZEND_MIR_OPCODE_CONSTANT
+							&& record.result_id != ZEND_MIR_ID_INVALID
+							&& zend_tpde_value_index(
+								plan, record.result_id) >= 0
+							&& plan->values[zend_tpde_value_index(
+								plan, record.result_id)].exact_type
+								== ZEND_MIR_SCALAR_TYPE_NULL))) {
+					return false;
+				}
+				continue;
+			}
+			const uint32_t returned_index =
+				static_cast<uint32_t>(returned);
+			if (returned == INVALID_VALUE_REF
+					|| returned_index < MIR_VALUE_BASE
+					|| returned_index - MIR_VALUE_BASE
+						>= plan->value_count) {
+				return false;
+			}
+			const zend_mir_scalar_type_mask exact_type =
+				plan->values[returned_index - MIR_VALUE_BASE].exact_type;
+			if (!zend_mir_scalar_type_is_exact(exact_type)
+					|| exact_type == ZEND_MIR_SCALAR_TYPE_NULL
+					|| saw_return && result_type != exact_type) {
+				return false;
+			}
+			result_type = exact_type;
+			saw_return = true;
+		}
+		if (!saw_return) {
+			return false;
+		}
+		*return_type = result_type;
+		return true;
+	}
+
 	explicit ZendIRAdaptor(const zend_tpde_plan *plan)
 		: ZendIRAdaptor(plan,
-			std::span<const zend_tpde_plan *const>{&plan, 1}) {}
+			std::span<const zend_tpde_plan *const>{&plan, 1},
+			FunctionMode::ZendEntry) {}
 
 	explicit ZendIRAdaptor(const zend_tpde_plan *plan,
-			std::span<const zend_tpde_plan *const> component_plans)
-		: plan_(plan), component_plans_(component_plans) {
+			std::span<const zend_tpde_plan *const> component_plans,
+			FunctionMode function_mode = FunctionMode::ZendEntry)
+		: plan_(plan), component_plans_(component_plans),
+		  function_mode_(function_mode) {
+		if (function_mode_ == FunctionMode::ZendEntry) {
+			arguments_.push_back(IRValueRef{EXECUTE_DATA_VALUE});
+			arguments_.push_back(
+				IRValueRef{EXECUTION_CONTEXT_ARGUMENT});
+		} else {
+			zend_mir_scalar_type_mask return_type;
+			if (!typed_body_signature(plan_, &return_type)) {
+				valid_ = false;
+				return;
+			}
+			arguments_.reserve(plan_->argument_count);
+			for (uint32_t argument = 0;
+					argument < plan_->argument_count; ++argument) {
+				arguments_.push_back(IRValueRef{
+					MIR_VALUE_BASE + static_cast<uint32_t>(
+						plan_->argument_value_indices[argument])});
+			}
+		}
 		std::vector<BlockItem<IRBlockRef>> block_successors;
 		std::vector<BlockItem<IRInstRef>> block_instructions;
 		std::vector<BlockItem<IRValueRef>> block_phis;
@@ -1439,55 +1603,58 @@ public:
 			valid_ = false;
 			return;
 		}
-		operands_.push_back(IRValueRef{EXECUTE_DATA_VALUE});
-		add_node(block_instructions, static_cast<uint32_t>(entry), InstNode{
-			InstKind::LoadFrame,
-			UINT32_MAX,
-			UINT32_MAX,
-			IRValueRef{FRAME_VALUE},
-			{},
-			0,
-			1,
-			true});
-		uint32_t context_operand_offset =
-			static_cast<uint32_t>(operands_.size());
-		operands_.push_back(IRValueRef{EXECUTION_CONTEXT_ARGUMENT});
-		add_node(block_instructions, static_cast<uint32_t>(entry), InstNode{
-			InstKind::LoadExecutionContext,
-			UINT32_MAX,
-			UINT32_MAX,
-			IRValueRef{EXECUTION_CONTEXT_VALUE},
-			{},
-			context_operand_offset,
-			1,
-			true});
-		if (plan_->generator_resume_count != 0) {
-			uint32_t operand_offset =
+		if (function_mode_ == FunctionMode::ZendEntry) {
+			operands_.push_back(IRValueRef{EXECUTE_DATA_VALUE});
+			add_node(block_instructions, static_cast<uint32_t>(entry), InstNode{
+				InstKind::LoadFrame,
+				UINT32_MAX,
+				UINT32_MAX,
+				IRValueRef{FRAME_VALUE},
+				{},
+				0,
+				1,
+				true});
+			uint32_t context_operand_offset =
+				static_cast<uint32_t>(operands_.size());
+			operands_.push_back(IRValueRef{EXECUTION_CONTEXT_ARGUMENT});
+			add_node(block_instructions, static_cast<uint32_t>(entry), InstNode{
+				InstKind::LoadExecutionContext,
+				UINT32_MAX,
+				UINT32_MAX,
+				IRValueRef{EXECUTION_CONTEXT_VALUE},
+				{},
+				context_operand_offset,
+				1,
+				true});
+			if (plan_->generator_resume_count != 0) {
+				uint32_t operand_offset =
+					static_cast<uint32_t>(operands_.size());
+				operands_.push_back(IRValueRef{FRAME_VALUE});
+				operands_.push_back(IRValueRef{EXECUTION_CONTEXT_VALUE});
+				add_node(block_instructions, static_cast<uint32_t>(entry),
+					InstNode{
+						InstKind::GeneratorGateway,
+						UINT32_MAX,
+						UINT32_MAX,
+						INVALID_VALUE_REF,
+						{},
+						operand_offset,
+						2,
+						false});
+			}
+			uint32_t guard_operand_offset =
 				static_cast<uint32_t>(operands_.size());
 			operands_.push_back(IRValueRef{FRAME_VALUE});
-			operands_.push_back(IRValueRef{EXECUTION_CONTEXT_VALUE});
 			add_node(block_instructions, static_cast<uint32_t>(entry), InstNode{
-				InstKind::GeneratorGateway,
+				InstKind::ZvalGuardArguments,
 				UINT32_MAX,
 				UINT32_MAX,
 				INVALID_VALUE_REF,
 				{},
-				operand_offset,
-				2,
+				guard_operand_offset,
+				1,
 				false});
 		}
-		uint32_t guard_operand_offset =
-			static_cast<uint32_t>(operands_.size());
-		operands_.push_back(IRValueRef{FRAME_VALUE});
-		add_node(block_instructions, static_cast<uint32_t>(entry), InstNode{
-			InstKind::ZvalGuardArguments,
-			UINT32_MAX,
-			UINT32_MAX,
-			INVALID_VALUE_REF,
-			{},
-			guard_operand_offset,
-			1,
-			false});
 		for (uint32_t i = 0; i < plan_->value_count; ++i) {
 			const zend_tpde_value &value = plan_->values[i];
 			const bool exact_scalar =
@@ -1505,6 +1672,9 @@ public:
 			if (value.argument_index < 0
 					|| (!exact_scalar && !unboxed_pointer
 						&& !boxed_register_value)) {
+				continue;
+			}
+			if (function_mode_ == FunctionMode::TypedBody) {
 				continue;
 			}
 			/*
@@ -2131,8 +2301,10 @@ public:
 				: boxed_cond_branch
 					? 0
 				: record.opcode == ZEND_MIR_OPCODE_STATEPOINT
-					|| record.opcode
-						== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
+					|| (record.opcode
+							== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
+						&& function_mode_
+							== FunctionMode::ZendEntry)
 					|| record.opcode
 						== ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
 					|| (record.opcode
@@ -2147,23 +2319,36 @@ public:
 				}
 				operands_.push_back(operand);
 			}
-			if (record.opcode == ZEND_MIR_OPCODE_RETURN
+			if (function_mode_ == FunctionMode::TypedBody
+					&& record.opcode
+						== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL) {
+				const IRValueRef returned = plan_source_operand_value_ref(
+					plan_, instruction.value_operation.op1);
+				if (returned == INVALID_VALUE_REF) {
+					valid_ = false;
+				}
+				operands_.push_back(returned);
+			}
+			if (function_mode_ == FunctionMode::ZendEntry
+					&& (record.opcode == ZEND_MIR_OPCODE_RETURN
 					|| record.opcode
 						== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
 					|| record.opcode
 						== ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
 					|| record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE
-					|| instruction.source_effect != 0) {
+					|| instruction.source_effect != 0)) {
 				operands_.push_back(IRValueRef{FRAME_VALUE});
 			}
-			if (record.opcode == ZEND_MIR_OPCODE_STATEPOINT
+			if (function_mode_ == FunctionMode::ZendEntry
+					&& record.opcode == ZEND_MIR_OPCODE_STATEPOINT
 					&& (record.effects & ZEND_MIR_EFFECT_MASK(
 						ZEND_MIR_EFFECT_INTERRUPT_BOUNDARY)) != 0) {
 				operands_.push_back(IRValueRef{FRAME_VALUE});
 				operands_.push_back(
 					IRValueRef{EXECUTION_CONTEXT_VALUE});
 			}
-			if (zend_mir_opcode_is_executable_value(record.opcode)
+			if (function_mode_ == FunctionMode::ZendEntry
+					&& zend_mir_opcode_is_executable_value(record.opcode)
 					&& !boxed_cond_branch
 					&& !(record.opcode
 							== ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE
@@ -2171,11 +2356,13 @@ public:
 							== ZEND_NATIVE_HELPER_COUNT)) {
 				operands_.push_back(IRValueRef{FRAME_VALUE});
 			}
-			if (record.opcode
+			if (function_mode_ == FunctionMode::ZendEntry
+					&& record.opcode
 					== ZEND_MIR_OPCODE_ITERATOR_BRANCH) {
 				operands_.push_back(IRValueRef{FRAME_VALUE});
 			}
-			if (boxed_cond_branch) {
+			if (function_mode_ == FunctionMode::ZendEntry
+					&& boxed_cond_branch) {
 				operands_.push_back(IRValueRef{FRAME_VALUE});
 			}
 			if (record.opcode
@@ -2863,6 +3050,9 @@ public:
 		*bits = plan_->values[index - MIR_VALUE_BASE].constant_bits;
 		return true;
 	}
+	bool typed_body() const {
+		return function_mode_ == FunctionMode::TypedBody;
+	}
 
 	uint32_t func_count() const { return 1; }
 	const auto &funcs() const { return functions_; }
@@ -3010,10 +3200,15 @@ public:
 
 private:
 	std::vector<std::unique_ptr<ZendIRAdaptor>> members_;
+	std::vector<ZendIRAdaptor *> function_views_;
+	std::vector<uint32_t> function_component_indices_;
+	std::vector<uint32_t> typed_body_function_indices_;
 	std::vector<IRFuncRef> functions_;
 	std::vector<std::string> link_names_;
 	ZendIRAdaptor *active_ = nullptr;
 	uint32_t active_index_ = 0;
+	uint64_t typed_body_call_site_count_ = 0;
+	uint64_t typed_body_frame_bytes_elided_ = 0;
 
 public:
 	explicit ZendComponentIRAdaptor(const zend_tpde_plan *plan)
@@ -3023,18 +3218,42 @@ public:
 	explicit ZendComponentIRAdaptor(
 			std::span<const zend_tpde_plan *const> plans) {
 		members_.reserve(plans.size());
-		functions_.reserve(plans.size());
-		link_names_.reserve(plans.size());
+		function_views_.reserve(plans.size() * 2);
+		function_component_indices_.reserve(plans.size() * 2);
+		typed_body_function_indices_.assign(plans.size(), UINT32_MAX);
+		functions_.reserve(plans.size() * 2);
+		link_names_.reserve(plans.size() * 2);
 		for (uint32_t index = 0; index < plans.size(); ++index) {
 			members_.push_back(
-				std::make_unique<ZendIRAdaptor>(plans[index], plans));
+				std::make_unique<ZendIRAdaptor>(plans[index], plans,
+					ZendIRAdaptor::FunctionMode::ZendEntry));
 			functions_.push_back(IRFuncRef{index});
+			function_views_.push_back(members_.back().get());
+			function_component_indices_.push_back(index);
 			link_names_.push_back(index == 0
 				? "zend_native_entry"
 				: "zend_native_component_" + std::to_string(index));
 		}
+		for (uint32_t index = 0; index < plans.size(); ++index) {
+			zend_mir_scalar_type_mask return_type;
+			if (!ZendIRAdaptor::typed_body_signature(
+					plans[index], &return_type)) {
+				continue;
+			}
+			const uint32_t function_index =
+				static_cast<uint32_t>(functions_.size());
+			members_.push_back(
+				std::make_unique<ZendIRAdaptor>(plans[index], plans,
+					ZendIRAdaptor::FunctionMode::TypedBody));
+			functions_.push_back(IRFuncRef{function_index});
+			function_views_.push_back(members_.back().get());
+			function_component_indices_.push_back(index);
+			typed_body_function_indices_[index] = function_index;
+			link_names_.push_back(
+				"zend_native_typed_body_" + std::to_string(index));
+		}
 		if (!members_.empty()) {
-			active_ = members_[0].get();
+			active_ = function_views_[0];
 		}
 	}
 
@@ -3050,7 +3269,24 @@ public:
 		}
 		return count;
 	}
-	uint32_t current_function_index() const { return active_index_; }
+	void mark_typed_body_call(uint64_t frame_bytes) {
+		++typed_body_call_site_count_;
+		typed_body_frame_bytes_elided_ += frame_bytes;
+	}
+	uint64_t typed_body_call_site_count() const {
+		return typed_body_call_site_count_;
+	}
+	uint64_t typed_body_frame_bytes_elided() const {
+		return typed_body_frame_bytes_elided_;
+	}
+	uint32_t current_function_index() const {
+		return function_component_indices_[active_index_];
+	}
+	uint32_t typed_body_function_index(uint32_t component_index) const {
+		return component_index < typed_body_function_indices_.size()
+			? typed_body_function_indices_[component_index] : UINT32_MAX;
+	}
+	bool typed_body() const { return active_->typed_body(); }
 	const zend_tpde_plan *plan() const { return active_->plan(); }
 	const zend_tpde_plan *component_plan(uint32_t index) const {
 		return active_->component_plan(index);
@@ -3137,7 +3373,11 @@ public:
 			? std::string_view{link_names_[index]} : std::string_view{};
 	}
 	bool func_extern(IRFuncRef) const { return false; }
-	bool func_only_local(IRFuncRef) const { return false; }
+	bool func_only_local(IRFuncRef function) const {
+		const uint32_t index = static_cast<uint32_t>(function);
+		return index < function_views_.size()
+			&& function_views_[index]->typed_body();
+	}
 	bool func_has_weak_linkage(IRFuncRef) const { return false; }
 	bool cur_needs_unwind_info() const {
 		return active_->cur_needs_unwind_info();
@@ -3229,11 +3469,11 @@ public:
 	void end_compile() const {}
 	bool switch_func(IRFuncRef function) {
 		const uint32_t index = static_cast<uint32_t>(function);
-		if (index >= members_.size()) {
+		if (index >= function_views_.size()) {
 			return false;
 		}
 		active_index_ = index;
-		active_ = members_[index].get();
+		active_ = function_views_[index];
 		return true;
 	}
 	void reset() {
@@ -3241,7 +3481,7 @@ public:
 			member->reset();
 		}
 		active_index_ = 0;
-		active_ = members_.empty() ? nullptr : members_[0].get();
+		active_ = function_views_.empty() ? nullptr : function_views_[0];
 	}
 };
 

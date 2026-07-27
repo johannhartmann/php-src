@@ -103,6 +103,7 @@ typedef struct _zend_native_image_metrics {
 	uint64_t slow_path_sites;
 	uint64_t direct_call_sites;
 	uint64_t direct_leaf_scalar_sites;
+	uint64_t direct_typed_body_sites;
 	uint64_t direct_call_frame_bytes;
 } zend_native_image_metrics;
 
