@@ -1831,6 +1831,447 @@ zend_native_user_call_descriptor *build_user_call_descriptor(
 	return descriptor;
 }
 
+class FrozenValueBitSet {
+	std::vector<uint64_t> words_;
+
+public:
+	explicit FrozenValueBitSet(uint32_t value_count = 0)
+		: words_((static_cast<size_t>(value_count) + 63) / 64) {}
+
+	bool test(uint32_t value) const {
+		return (words_[value / 64] & (uint64_t{1} << (value % 64))) != 0;
+	}
+	void set(uint32_t value) {
+		words_[value / 64] |= uint64_t{1} << (value % 64);
+	}
+	void reset(uint32_t value) {
+		words_[value / 64] &= ~(uint64_t{1} << (value % 64));
+	}
+	void union_without(
+			const FrozenValueBitSet &other,
+			const FrozenValueBitSet &excluded) {
+		for (size_t word = 0; word < words_.size(); ++word) {
+			words_[word] |= other.words_[word] & ~excluded.words_[word];
+		}
+	}
+	void assign_use_and_out_without_def(
+			const FrozenValueBitSet &use,
+			const FrozenValueBitSet &out,
+			const FrozenValueBitSet &def) {
+		for (size_t word = 0; word < words_.size(); ++word) {
+			words_[word] =
+				use.words_[word] | (out.words_[word] & ~def.words_[word]);
+		}
+	}
+	const uint64_t *data() const {
+		return words_.data();
+	}
+	size_t size() const {
+		return words_.size();
+	}
+	bool operator==(const FrozenValueBitSet &) const = default;
+};
+
+bool freeze_generator_resume_liveness(
+	zend_tpde_plan *plan, zend_native_diagnostic *diag)
+{
+	if (plan->source_op_array == nullptr
+			|| (plan->source_op_array->fn_flags & ZEND_ACC_GENERATOR) == 0) {
+		return true;
+	}
+
+	std::vector<uint32_t> targets;
+	if ((plan->source_op_array->fn_flags & ZEND_ACC_HAS_FINALLY_BLOCK) != 0) {
+		for (uint32_t i = 0;
+				i < plan->source_op_array->last_try_catch; ++i) {
+			const zend_try_catch_element &region =
+				plan->source_op_array->try_catch_array[i];
+			if (region.finally_op != 0
+					&& region.finally_op < plan->source_op_array->last
+					&& region.finally_end < plan->source_op_array->last) {
+				targets.push_back(region.finally_op);
+			}
+		}
+	}
+	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
+		const zend_tpde_instruction &instruction = plan->instructions[i];
+		const zend_mir_instruction_record record =
+			zend_tpde_instruction_record_at(plan, &instruction);
+		if (instruction.has_value_operation
+				&& (record.opcode == ZEND_MIR_OPCODE_GENERATOR_CREATE
+					|| record.opcode == ZEND_MIR_OPCODE_GENERATOR_YIELD
+					|| record.opcode
+						== ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM)) {
+			const uint32_t source_position =
+				instruction.value_operation.source_position_id;
+			if (source_position == UINT32_MAX) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+					"generator resume source position is invalid");
+				return false;
+			}
+			targets.push_back(source_position + 1);
+		}
+	}
+	std::sort(targets.begin(), targets.end());
+	targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+	if (targets.empty()) {
+		return true;
+	}
+	if (!checked_count(static_cast<uint32_t>(targets.size()))) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+			"generator resume target count exceeds the executable bound");
+		return false;
+	}
+
+	plan->generator_resume_count = static_cast<uint32_t>(targets.size());
+	plan->generator_resume_live_word_count =
+		(plan->value_count + 63) / 64;
+	const uint64_t live_word_count_u64 =
+		static_cast<uint64_t>(plan->generator_resume_count)
+			* plan->generator_resume_live_word_count;
+	if (live_word_count_u64 > MAX_RECORDS) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+			"generator resume liveness exceeds the executable bound");
+		return false;
+	}
+	plan->generator_resume_targets = static_cast<uint32_t *>(
+		std::malloc(targets.size()
+			* sizeof(*plan->generator_resume_targets)));
+	plan->generator_resume_landings = static_cast<uint32_t *>(
+		std::malloc(targets.size()
+			* sizeof(*plan->generator_resume_landings)));
+	plan->generator_resume_exception_blocks =
+		static_cast<zend_mir_block_id *>(std::malloc(
+			targets.size()
+				* sizeof(*plan->generator_resume_exception_blocks)));
+	const size_t live_word_count =
+		static_cast<size_t>(live_word_count_u64);
+	plan->generator_resume_live_values =
+		live_word_count == 0 ? nullptr : static_cast<uint64_t *>(
+			std::calloc(live_word_count,
+				sizeof(*plan->generator_resume_live_values)));
+	if (plan->generator_resume_targets == nullptr
+			|| plan->generator_resume_landings == nullptr
+			|| plan->generator_resume_exception_blocks == nullptr
+			|| (live_word_count != 0
+				&& plan->generator_resume_live_values == nullptr)) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"unable to freeze generator resume liveness");
+		return false;
+	}
+
+	std::vector<uint32_t> landing_instructions(
+		targets.size(), UINT32_MAX);
+	for (uint32_t resume = 0;
+			resume < plan->generator_resume_count; ++resume) {
+		const uint32_t target = targets[resume];
+		uint32_t landing = UINT32_MAX;
+		zend_mir_block_id exception_block = ZEND_MIR_ID_INVALID;
+		plan->generator_resume_targets[resume] = target;
+		for (uint32_t i = 0; i < plan->instruction_count; ++i) {
+			const zend_tpde_instruction &instruction =
+				plan->instructions[i];
+			const zend_mir_instruction_record record =
+				zend_tpde_instruction_record_at(plan, &instruction);
+			const uint32_t source_position = record.source_position_id;
+			if (source_position >= target
+					&& (landing == UINT32_MAX
+						|| source_position < landing)) {
+				landing = source_position;
+				landing_instructions[resume] = i;
+			}
+			if (instruction.has_value_operation
+					&& source_position != UINT32_MAX
+					&& source_position + 1 == target
+					&& (record.opcode
+							== ZEND_MIR_OPCODE_GENERATOR_CREATE
+						|| record.opcode
+							== ZEND_MIR_OPCODE_GENERATOR_YIELD
+						|| record.opcode
+							== ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM)) {
+				if (zend_mir_id_is_valid(exception_block)
+						&& exception_block
+							!= instruction.exception_block_id) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+						"generator resume has inconsistent exception edges");
+					return false;
+				}
+				exception_block = instruction.exception_block_id;
+			}
+		}
+		if (landing == UINT32_MAX) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"generator resume target has no MIR landing");
+			return false;
+		}
+		plan->generator_resume_landings[resume] = landing;
+		plan->generator_resume_exception_blocks[resume] = exception_block;
+	}
+
+	const uint32_t block_count = plan->block_count;
+	const uint32_t value_count = plan->value_count;
+	std::vector<std::vector<uint32_t>> block_instructions(block_count);
+	std::vector<FrozenValueBitSet> block_use(
+		block_count, FrozenValueBitSet{value_count});
+	std::vector<FrozenValueBitSet> block_def(
+		block_count, FrozenValueBitSet{value_count});
+	std::vector<FrozenValueBitSet> block_phi_def(
+		block_count, FrozenValueBitSet{value_count});
+	std::vector<FrozenValueBitSet> live_in(
+		block_count, FrozenValueBitSet{value_count});
+	std::vector<FrozenValueBitSet> live_out(
+		block_count, FrozenValueBitSet{value_count});
+
+	auto add_uses = [&](uint32_t instruction_index,
+			FrozenValueBitSet &live) {
+		const zend_tpde_instruction &instruction =
+			plan->instructions[instruction_index];
+		const zend_mir_instruction_record record =
+			zend_tpde_instruction_record_at(plan, &instruction);
+		if (record.opcode == ZEND_MIR_OPCODE_PHI) {
+			return;
+		}
+		for (uint32_t n = 0; n < instruction.operand_count; ++n) {
+			const int32_t index = zend_tpde_value_index(
+				plan, zend_tpde_operand_at(plan, &instruction, n));
+			if (index >= 0) {
+				live.set(static_cast<uint32_t>(index));
+			}
+		}
+		for (uint32_t n = 0;
+				n < instruction.call_argument_count; ++n) {
+			zend_mir_call_argument_ref argument;
+			if (zend_tpde_call_argument_at(plan,
+					instruction.call_argument_offset + n, &argument)
+					&& zend_mir_id_is_valid(argument.value_id)) {
+				const int32_t index =
+					zend_tpde_value_index(plan, argument.value_id);
+				if (index >= 0) {
+					live.set(static_cast<uint32_t>(index));
+				}
+			}
+		}
+	};
+
+	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
+		const zend_tpde_instruction &instruction = plan->instructions[i];
+		const zend_mir_instruction_record record =
+			zend_tpde_instruction_record_at(plan, &instruction);
+		const int32_t block = zend_tpde_block_index(plan, record.block_id);
+		if (block < 0) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"generator liveness references an unknown block");
+			return false;
+		}
+		const uint32_t block_number = static_cast<uint32_t>(block);
+		block_instructions[block_number].push_back(i);
+		FrozenValueBitSet uses{value_count};
+		add_uses(i, uses);
+		for (uint32_t value = 0; value < value_count; ++value) {
+			if (uses.test(value)
+					&& !block_def[block_number].test(value)) {
+				block_use[block_number].set(value);
+			}
+		}
+		const int32_t result =
+			zend_tpde_value_index(plan, record.result_id);
+		if (result >= 0) {
+			block_def[block_number].set(static_cast<uint32_t>(result));
+			if (record.opcode == ZEND_MIR_OPCODE_PHI) {
+				block_phi_def[block_number].set(
+					static_cast<uint32_t>(result));
+			}
+		}
+	}
+
+	std::vector<uint32_t> worklist;
+	std::vector<uint8_t> queued(block_count, 1);
+	worklist.reserve(block_count);
+	for (uint32_t block = block_count; block-- > 0;) {
+		worklist.push_back(block);
+	}
+	while (!worklist.empty()) {
+		const uint32_t block = worklist.back();
+		worklist.pop_back();
+		queued[block] = 0;
+		FrozenValueBitSet next_out{value_count};
+		const zend_mir_block_id block_id = plan->block_ids[block];
+		const uint32_t successor_count =
+			plan->view->successor_count(plan->view->context, block_id);
+		for (uint32_t n = 0; n < successor_count; ++n) {
+			zend_mir_block_id successor_id;
+			if (!plan->view->successor_at(
+					plan->view->context, block_id, n, &successor_id)) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+					"generator liveness successor table is unreadable");
+				return false;
+			}
+			const int32_t successor =
+				zend_tpde_block_index(plan, successor_id);
+			if (successor < 0) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+					"generator liveness successor is unknown");
+				return false;
+			}
+			next_out.union_without(
+				live_in[static_cast<uint32_t>(successor)],
+				block_phi_def[static_cast<uint32_t>(successor)]);
+			uint32_t predecessor_index = UINT32_MAX;
+			const uint32_t predecessor_count =
+				plan->view->predecessor_count(
+					plan->view->context, successor_id);
+			for (uint32_t predecessor = 0;
+					predecessor < predecessor_count; ++predecessor) {
+				zend_mir_block_id predecessor_id;
+				if (plan->view->predecessor_at(
+						plan->view->context, successor_id,
+						predecessor, &predecessor_id)
+						&& predecessor_id == block_id) {
+					predecessor_index = predecessor;
+					break;
+				}
+			}
+			if (predecessor_index == UINT32_MAX) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+					"generator liveness predecessor table is inconsistent");
+				return false;
+			}
+			for (uint32_t instruction_index :
+					block_instructions[
+						static_cast<uint32_t>(successor)]) {
+				const zend_tpde_instruction &instruction =
+					plan->instructions[instruction_index];
+				const zend_mir_instruction_record record =
+					zend_tpde_instruction_record_at(plan, &instruction);
+				if (record.opcode != ZEND_MIR_OPCODE_PHI) {
+					continue;
+				}
+				if (predecessor_index >= instruction.operand_count) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+						"generator liveness PHI arity is invalid");
+					return false;
+				}
+				const int32_t input = zend_tpde_value_index(
+					plan, zend_tpde_operand_at(
+						plan, &instruction, predecessor_index));
+				if (input >= 0) {
+					next_out.set(static_cast<uint32_t>(input));
+				}
+			}
+		}
+		FrozenValueBitSet next_in{value_count};
+		next_in.assign_use_and_out_without_def(
+			block_use[block], next_out, block_def[block]);
+		if (!(next_out == live_out[block])
+				|| !(next_in == live_in[block])) {
+			live_out[block] = std::move(next_out);
+			live_in[block] = std::move(next_in);
+			const uint32_t predecessor_count =
+				plan->view->predecessor_count(
+					plan->view->context, block_id);
+			for (uint32_t predecessor = 0;
+					predecessor < predecessor_count; ++predecessor) {
+				zend_mir_block_id predecessor_id;
+				if (!plan->view->predecessor_at(
+						plan->view->context, block_id,
+						predecessor, &predecessor_id)) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+						"generator liveness predecessor table is unreadable");
+					return false;
+				}
+				const int32_t predecessor_block =
+					zend_tpde_block_index(plan, predecessor_id);
+				if (predecessor_block < 0) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+						"generator liveness predecessor is unknown");
+					return false;
+				}
+				const uint32_t predecessor_number =
+					static_cast<uint32_t>(predecessor_block);
+				if (queued[predecessor_number] == 0) {
+					queued[predecessor_number] = 1;
+					worklist.push_back(predecessor_number);
+				}
+			}
+		}
+	}
+
+	for (uint32_t resume = 0;
+			resume < plan->generator_resume_count; ++resume) {
+		const uint32_t landing_instruction =
+			landing_instructions[resume];
+		const zend_mir_instruction_record landing_record =
+			zend_tpde_instruction_record_at(
+				plan, &plan->instructions[landing_instruction]);
+		const int32_t block =
+			zend_tpde_block_index(plan, landing_record.block_id);
+		if (block < 0) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"generator resume landing block is unknown");
+			return false;
+		}
+		const uint32_t block_number = static_cast<uint32_t>(block);
+		FrozenValueBitSet live = live_out[block_number];
+		const std::vector<uint32_t> &instructions =
+			block_instructions[block_number];
+		for (size_t n = instructions.size(); n-- > 0;) {
+			const uint32_t instruction_index = instructions[n];
+			const zend_tpde_instruction &instruction =
+				plan->instructions[instruction_index];
+			const zend_mir_instruction_record record =
+				zend_tpde_instruction_record_at(plan, &instruction);
+			const int32_t definition =
+				zend_tpde_value_index(plan, record.result_id);
+			if (definition >= 0) {
+				live.reset(static_cast<uint32_t>(definition));
+			}
+			add_uses(instruction_index, live);
+			if (instruction_index == landing_instruction) {
+				break;
+			}
+		}
+		for (uint32_t value = 0; value < value_count; ++value) {
+			const zend_tpde_value &facts = plan->values[value];
+			if (live.test(value)
+					&& (!zend_mir_scalar_type_is_exact(facts.exact_type)
+						|| facts.exact_type == ZEND_MIR_SCALAR_TYPE_NULL
+						|| !zend_mir_id_is_valid(
+							facts.canonical_storage_id)
+						|| facts.constant)) {
+				live.reset(value);
+			}
+		}
+		if (live.size() != plan->generator_resume_live_word_count) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"generator resume live-set width is inconsistent");
+			return false;
+		}
+		if (live.size() != 0) {
+			std::memcpy(
+				plan->generator_resume_live_values
+					+ static_cast<size_t>(resume)
+						* plan->generator_resume_live_word_count,
+				live.data(), live.size() * sizeof(uint64_t));
+		}
+	}
+	return true;
+}
+
 void destroy_plan(zend_tpde_plan *plan) {
 	for (uint32_t index = 0; index < plan->direct_call_count; ++index) {
 		std::free(plan->direct_calls[index]);
@@ -1857,6 +2298,10 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->user_opcode_source_op1_targets);
 	std::free(plan->user_opcode_source_op2_targets);
 	std::free(plan->user_opcode_source_extended_targets);
+	std::free(plan->generator_resume_targets);
+	std::free(plan->generator_resume_landings);
+	std::free(plan->generator_resume_exception_blocks);
+	std::free(plan->generator_resume_live_values);
 	std::free(plan->direct_calls);
 	std::free(plan->direct_internal_calls);
 	std::free(plan->user_calls);
@@ -4193,6 +4638,9 @@ bool initialize_plan(
 				}
 			}
 		}
+	}
+	if (!freeze_generator_resume_liveness(plan, diag)) {
+		return false;
 	}
 	if (zend_native_runtime_validate(plan->runtime,
 			plan->required_runtime_capabilities, diag) == FAILURE) {

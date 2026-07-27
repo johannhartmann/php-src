@@ -1114,9 +1114,32 @@ struct zend_tpde_plan {
 	zend_tpde_user_opcode_target
 		user_opcode_targets[ZEND_VM_LAST_OPCODE + 1];
 	uint32_t user_opcode_target_count;
+	uint32_t generator_resume_count;
+	uint32_t generator_resume_live_word_count;
+	uint32_t *generator_resume_targets;
+	uint32_t *generator_resume_landings;
+	zend_mir_block_id *generator_resume_exception_blocks;
+	uint64_t *generator_resume_live_values;
 	bool may_emit_calls;
 	bool user_opcode_callbacks;
 };
+
+static inline bool zend_tpde_generator_resume_value_live(
+	const zend_tpde_plan *plan, uint32_t resume_index, uint32_t value_index)
+{
+	if (plan == nullptr
+			|| resume_index >= plan->generator_resume_count
+			|| value_index >= plan->value_count
+			|| plan->generator_resume_live_values == nullptr) {
+		return false;
+	}
+	const uint64_t *words =
+		plan->generator_resume_live_values
+			+ static_cast<size_t>(resume_index)
+				* plan->generator_resume_live_word_count;
+	return (words[value_index / 64]
+			& (uint64_t{1} << (value_index % 64))) != 0;
+}
 
 static inline bool zend_tpde_user_multi_branch_at(
 	const zend_tpde_plan *plan,
