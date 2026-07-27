@@ -2923,6 +2923,9 @@ bool ZendCompilerX64::compile_inst(
 			return false;
 		}
 		for (IRValueRef operand : node.operands) {
+			if (adaptor->machine_reference(operand, nullptr)) {
+				continue;
+			}
 			auto consumed = val_ref(operand);
 			(void) consumed;
 		}
@@ -2930,6 +2933,15 @@ bool ZendCompilerX64::compile_inst(
 			IRBlockRef{node.argument_index}, false, true);
 		return true;
 	};
+	auto operation_machine_reference =
+		[&](zend_tpde_machine_reference_kind expected)
+			-> const zend_tpde_machine_reference * {
+			const zend_tpde_machine_reference *reference = nullptr;
+			return adaptor->operation_machine_reference(
+						node.mir_instruction_index, &reference)
+					&& reference->kind == expected
+				? reference : nullptr;
+		};
 	auto copy_slot = [&](
 			const zend_mir_source_operand_ref &source_operand,
 			zend_mir_storage_id source_storage,
@@ -3263,8 +3275,18 @@ bool ZendCompilerX64::compile_inst(
 	};
 	auto read_array = [&]() {
 		zend_tpde_array_read layout;
+		const zend_tpde_machine_reference *element_reference =
+			operation_machine_reference(
+				ZEND_TPDE_MACHINE_REFERENCE_PACKED_ELEMENT);
 
 		if (!zend_tpde_array_read_at(mir, &layout)
+				|| element_reference == nullptr
+				|| !zend_mir_id_is_valid(
+					element_reference->base_value_id)
+				|| !zend_mir_id_is_valid(
+					element_reference->index_value_id)
+				|| element_reference->scale != sizeof(zval)
+				|| element_reference->access_width != sizeof(zval)
 				|| layout.container_offset > INT32_MAX - 8
 				|| layout.key_offset > INT32_MAX - 8
 				|| layout.result_offset > INT32_MAX - 8) {
@@ -3849,8 +3871,18 @@ bool ZendCompilerX64::compile_inst(
 	};
 	auto append_packed_array = [&]() {
 		zend_tpde_packed_array_append layout;
+		const zend_tpde_machine_reference *element_reference =
+			operation_machine_reference(
+				ZEND_TPDE_MACHINE_REFERENCE_PACKED_ELEMENT);
 
 		if (!zend_tpde_packed_array_append_at(mir, &layout)
+				|| element_reference == nullptr
+				|| !zend_mir_id_is_valid(
+					element_reference->base_value_id)
+				|| zend_mir_id_is_valid(
+					element_reference->index_value_id)
+				|| element_reference->scale != sizeof(zval)
+				|| element_reference->access_width != sizeof(zval)
 				|| layout.container_offset > INT32_MAX - 8
 				|| layout.value_offset > INT32_MAX - 8
 				|| layout.result_offset > INT32_MAX - 8) {
@@ -4908,8 +4940,15 @@ bool ZendCompilerX64::compile_inst(
 	};
 	auto object_property_read = [&]() {
 		zend_tpde_object_property_read layout;
+		const zend_tpde_machine_reference *property_reference =
+			operation_machine_reference(
+				ZEND_TPDE_MACHINE_REFERENCE_PROPERTY_SLOT);
 
 		if (!zend_tpde_object_property_read_at(mir, &layout)
+				|| property_reference == nullptr
+				|| property_reference->stable_storage_or_layout_id
+					!= layout.cache_offset
+				|| property_reference->access_width != sizeof(zval)
 				|| layout.receiver_offset > INT32_MAX
 				|| layout.result_offset > INT32_MAX
 				|| layout.cache_offset > INT32_MAX - 3 * sizeof(void *)) {
@@ -5107,8 +5146,15 @@ bool ZendCompilerX64::compile_inst(
 	};
 	auto object_property_write = [&]() {
 		zend_tpde_object_property_write layout;
+		const zend_tpde_machine_reference *property_reference =
+			operation_machine_reference(
+				ZEND_TPDE_MACHINE_REFERENCE_PROPERTY_SLOT);
 
 		if (!zend_tpde_object_property_write_at(mir, &layout)
+				|| property_reference == nullptr
+				|| property_reference->stable_storage_or_layout_id
+					!= layout.cache_offset
+				|| property_reference->access_width != sizeof(zval)
 				|| layout.receiver_offset > INT32_MAX
 				|| layout.value_offset > INT32_MAX
 				|| layout.cache_offset > INT32_MAX - 3 * sizeof(void *)) {

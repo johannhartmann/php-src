@@ -4281,6 +4281,23 @@ public:
 		}
 		return true;
 	}
+	bool operation_machine_reference(
+			uint32_t instruction_index,
+			const zend_tpde_machine_reference **reference) const {
+		if (instruction_index >= plan_->instruction_count) {
+			return false;
+		}
+		const uint32_t reference_index =
+			plan_->instructions[
+				instruction_index].operation_reference_index;
+		if (reference_index >= plan_->machine_reference_count) {
+			return false;
+		}
+		if (reference != nullptr) {
+			*reference = &plan_->machine_references[reference_index];
+		}
+		return true;
+	}
 	bool frame_slot_reference(
 			IRValueRef value, zend_mir_storage_id *storage_id) const {
 		const zend_tpde_machine_reference *reference = nullptr;
@@ -4705,6 +4722,12 @@ public:
 			IRValueRef value,
 			const zend_tpde_machine_reference **reference) const {
 		return active_->machine_reference(value, reference);
+	}
+	bool operation_machine_reference(
+			uint32_t instruction_index,
+			const zend_tpde_machine_reference **reference) const {
+		return active_->operation_machine_reference(
+			instruction_index, reference);
 	}
 	bool constant(IRValueRef value, uint64_t *bits) const {
 		return active_->constant(value, bits);
