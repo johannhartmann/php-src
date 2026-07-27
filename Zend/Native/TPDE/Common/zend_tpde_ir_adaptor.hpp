@@ -3403,6 +3403,10 @@ public:
 			return true;
 		}
 		switch (machine_kind(value)) {
+			case ZEND_TPDE_MACHINE_VALUE_STRING_PTR:
+			case ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR:
+			case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
+			case ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR:
 			case ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL:
 				return machine_value_is_register_authoritative(value);
 			default:
