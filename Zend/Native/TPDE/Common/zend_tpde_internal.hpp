@@ -130,6 +130,24 @@ enum zend_tpde_machine_location : uint8_t {
 	ZEND_TPDE_MACHINE_LOCATION_CANONICAL_FRAME_SLOT = 2,
 };
 
+static inline bool zend_tpde_machine_value_is_register_authoritative(
+	zend_tpde_machine_value_kind kind)
+{
+	switch (kind) {
+		case ZEND_TPDE_MACHINE_VALUE_I64:
+		case ZEND_TPDE_MACHINE_VALUE_F64:
+		case ZEND_TPDE_MACHINE_VALUE_BOOL:
+		case ZEND_TPDE_MACHINE_VALUE_STRING_PTR:
+		case ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR:
+		case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
+		case ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR:
+		case ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL:
+		case ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR:
+			return true;
+	}
+	return false;
+}
+
 enum zend_tpde_canonical_slot_state : uint8_t {
 	ZEND_TPDE_CANONICAL_SLOT_UNMATERIALIZED = 0,
 	ZEND_TPDE_CANONICAL_SLOT_CLEAN = 1,
