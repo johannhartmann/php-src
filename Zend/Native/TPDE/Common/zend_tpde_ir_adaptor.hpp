@@ -79,6 +79,8 @@ public:
 		ZvalGuardArguments,
 		ZvalGuardType,
 		SlowPathCall,
+		BoxedCondGuard,
+		BoxedCondCold,
 		MIR,
 	};
 
@@ -889,6 +891,10 @@ public:
 		std::vector<uint8_t> source_landing_emitted;
 		std::vector<uint32_t> source_landing_blocks;
 		std::vector<uint32_t> source_block_next;
+		std::vector<uint32_t> boxed_cond_cold_blocks(
+			plan_->instruction_count, UINT32_MAX);
+		std::vector<uint32_t> boxed_cond_cold_by_predecessor(
+			plan_->block_count, UINT32_MAX);
 		bool source_call_fragments = false;
 
 		blocks_.reserve(plan_->block_count);
@@ -992,8 +998,35 @@ public:
 				}
 			}
 		} while (register_values_changed);
-		block_info_.resize(plan_->block_count);
-		block_info2_.resize(plan_->block_count);
+		uint32_t synthetic_block_count = 0;
+		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
+			const zend_tpde_instruction &instruction = plan_->instructions[i];
+			const zend_mir_instruction_record record =
+				instruction_record_at(i);
+			zend_tpde_value_condition condition;
+			if (!is_boxed_cond_branch(instruction, record)
+					|| !zend_tpde_value_condition_at(
+						instruction, &condition)) {
+				continue;
+			}
+			const int32_t predecessor = block_index(record.block_id);
+			if (predecessor < 0
+					|| boxed_cond_cold_by_predecessor[
+						static_cast<uint32_t>(predecessor)] != UINT32_MAX) {
+				valid_ = false;
+				continue;
+			}
+			const uint32_t cold_block =
+				plan_->block_count + synthetic_block_count++;
+			boxed_cond_cold_blocks[i] = cold_block;
+			boxed_cond_cold_by_predecessor[
+				static_cast<uint32_t>(predecessor)] = cold_block;
+		}
+		const uint32_t tpde_block_count =
+			plan_->block_count + synthetic_block_count;
+		blocks_.reserve(tpde_block_count);
+		block_info_.resize(tpde_block_count);
+		block_info2_.resize(tpde_block_count);
 		for (uint32_t i = 0; i < plan_->block_count; ++i) {
 			blocks_.push_back(IRBlockRef{i});
 			uint32_t count = plan_->view->successor_count(
@@ -1012,6 +1045,41 @@ public:
 				}
 				block_successors.push_back({i, IRBlockRef{
 					static_cast<uint32_t>(target_index)}});
+			}
+			if (boxed_cond_cold_by_predecessor[i] != UINT32_MAX) {
+				block_successors.push_back(
+					{i, IRBlockRef{boxed_cond_cold_by_predecessor[i]}});
+			}
+		}
+		for (uint32_t predecessor = 0;
+				predecessor < plan_->block_count; ++predecessor) {
+			const uint32_t cold_block =
+				boxed_cond_cold_by_predecessor[predecessor];
+			if (cold_block == UINT32_MAX) {
+				continue;
+			}
+			blocks_.push_back(IRBlockRef{cold_block});
+			const uint32_t successor_count =
+				plan_->view->successor_count(
+					plan_->view->context, plan_->block_ids[predecessor]);
+			if (successor_count != 2) {
+				valid_ = false;
+				continue;
+			}
+			for (uint32_t n = 0; n < successor_count; ++n) {
+				zend_mir_block_id target;
+				const int32_t target_index =
+					plan_->view->successor_at(
+						plan_->view->context,
+						plan_->block_ids[predecessor], n, &target)
+					? block_index(target) : -1;
+				if (target_index < 0) {
+					valid_ = false;
+					continue;
+				}
+				block_successors.push_back(
+					{cold_block, IRBlockRef{
+						static_cast<uint32_t>(target_index)}});
 			}
 		}
 		/*
@@ -1193,7 +1261,7 @@ public:
 				block_successors.push_back({return_block, target});
 			}
 		}
-		flatten_unique_successors(plan_->block_count, block_successors,
+		flatten_unique_successors(tpde_block_count, block_successors,
 			successor_slices_, successors_);
 
 		int32_t entry = block_index(plan_->function.entry_block_id);
@@ -1702,6 +1770,15 @@ public:
 								IRBlockRef{static_cast<uint32_t>(
 									predecessor_index)}});
 							++input_slice.count;
+							const uint32_t cold_predecessor =
+								boxed_cond_cold_by_predecessor[
+									static_cast<uint32_t>(
+										predecessor_index)];
+							if (cold_predecessor != UINT32_MAX) {
+								phi_inputs_.push_back(
+									{input, IRBlockRef{cold_predecessor}});
+								++input_slice.count;
+							}
 						}
 						continue;
 					}
@@ -1748,6 +1825,14 @@ public:
 					phi_inputs_.push_back(
 						{input, IRBlockRef{static_cast<uint32_t>(predecessor_index)}});
 					++input_slice.count;
+					const uint32_t cold_predecessor =
+						boxed_cond_cold_by_predecessor[
+							static_cast<uint32_t>(predecessor_index)];
+					if (cold_predecessor != UINT32_MAX) {
+						phi_inputs_.push_back(
+							{input, IRBlockRef{cold_predecessor}});
+						++input_slice.count;
+					}
 				}
 				continue;
 			}
@@ -2074,10 +2159,48 @@ public:
 					++operand_count;
 				}
 			}
+			const uint32_t boxed_cond_cold_block =
+				boxed_cond_cold_blocks[i];
+			if (boxed_cond_cold_block != UINT32_MAX) {
+				const uint32_t semantic_operand_count =
+					materialization_operand_index == UINT32_MAX
+						? operand_count
+						: materialization_operand_index;
+				add_node(block_instructions,
+					static_cast<uint32_t>(block), InstNode{
+						InstKind::BoxedCondGuard, i,
+						boxed_cond_cold_block, result, {},
+						operand_offset, semantic_operand_count,
+						false});
+				const uint32_t cold_operand_offset =
+					static_cast<uint32_t>(operands_.size());
+				for (uint32_t n = 0; n < semantic_operand_count; ++n) {
+					operands_.push_back(
+						operands_[operand_offset + n]);
+				}
+				for (uint32_t n = 0;
+						n < instruction.materialization_count; ++n) {
+					operands_.push_back(
+						operands_[operand_offset
+							+ materialization_operand_index + n]);
+				}
+				add_node(block_instructions, boxed_cond_cold_block, InstNode{
+					InstKind::BoxedCondCold, i,
+					boxed_cond_cold_block, INVALID_VALUE_REF, {},
+					cold_operand_offset,
+					semantic_operand_count
+						+ instruction.materialization_count,
+					false,
+					ZEND_MIR_ID_INVALID, ZEND_MIR_SCALAR_TYPE_NONE,
+					false, {}, false, UINT32_MAX, UINT32_MAX,
+					instruction.materialization_count == 0
+						? UINT32_MAX : semantic_operand_count,
+					instruction.materialization_count});
+				continue;
+			}
 			add_node(block_instructions, static_cast<uint32_t>(block), InstNode{
 				executable_kind(instruction, record), i, UINT32_MAX, result, {},
-				operand_offset,
-				operand_count, machine_result,
+				operand_offset, operand_count, machine_result,
 				ZEND_MIR_ID_INVALID, ZEND_MIR_SCALAR_TYPE_NONE,
 				false, {}, inlined_user_body.valid,
 				inlined_operand_index,
@@ -2196,9 +2319,9 @@ public:
 			node.operands = node.liveness_operands.first(
 				semantic_operand_count);
 		}
-		flatten_block_items(plan_->block_count, block_instructions,
+		flatten_block_items(tpde_block_count, block_instructions,
 			instruction_slices_, instructions_);
-		flatten_block_items(plan_->block_count, block_phis,
+		flatten_block_items(tpde_block_count, block_phis,
 			phi_slices_, phis_);
 	}
 
@@ -2249,7 +2372,8 @@ public:
 	std::span<const zend_tpde_materialization>
 	materializations(IRInstRef inst) const {
 		const InstNode &current = node(inst);
-		if (current.synthetic
+		if (current.materialization_count == 0
+				|| current.synthetic
 				|| current.mir_instruction_index >= plan_->instruction_count) {
 			return {};
 		}
