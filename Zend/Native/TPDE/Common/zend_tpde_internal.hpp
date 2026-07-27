@@ -42,10 +42,24 @@ enum zend_tpde_machine_part_role : uint8_t {
 	ZEND_TPDE_MACHINE_PART_TYPE_INFO = 2,
 };
 
+enum zend_tpde_machine_abi_extension : uint8_t {
+	ZEND_TPDE_MACHINE_ABI_EXTENSION_NONE = 0,
+	ZEND_TPDE_MACHINE_ABI_EXTENSION_ZERO = 1,
+	ZEND_TPDE_MACHINE_ABI_EXTENSION_SIGN = 2,
+};
+
+enum zend_tpde_machine_part_ownership_role : uint8_t {
+	ZEND_TPDE_MACHINE_PART_OWNERSHIP_NONE = 0,
+	ZEND_TPDE_MACHINE_PART_OWNERSHIP_VALUE = 1,
+	ZEND_TPDE_MACHINE_PART_OWNERSHIP_METADATA = 2,
+};
+
 struct zend_tpde_machine_part_desc {
 	zend_tpde_machine_part_role semantic_role;
 	uint16_t bit_width;
 	zend_tpde_machine_register_bank register_bank;
+	zend_tpde_machine_abi_extension abi_extension;
+	zend_tpde_machine_part_ownership_role ownership_role;
 };
 
 struct zend_tpde_machine_representation_desc {
@@ -53,23 +67,57 @@ struct zend_tpde_machine_representation_desc {
 	const zend_tpde_machine_part_desc *parts;
 };
 
+enum zend_tpde_local_abi_transfer : uint8_t {
+	ZEND_TPDE_LOCAL_ABI_TRANSFER_NONE = 0,
+	ZEND_TPDE_LOCAL_ABI_TRANSFER_BORROWED = 1,
+	ZEND_TPDE_LOCAL_ABI_TRANSFER_OWNED = 2,
+	ZEND_TPDE_LOCAL_ABI_TRANSFER_MOVED = 3,
+	ZEND_TPDE_LOCAL_ABI_TRANSFER_IMMORTAL = 4,
+};
+
+struct zend_tpde_local_abi_type {
+	zend_mir_representation representation;
+	zend_mir_scalar_type_mask exact_type;
+	zend_tpde_machine_value_kind machine_kind;
+	zend_tpde_local_abi_transfer transfer;
+	bool valid;
+};
+
 static inline zend_tpde_machine_representation_desc
 zend_tpde_machine_representation(
 	zend_tpde_machine_value_kind kind, bool register_authoritative)
 {
 	static constexpr zend_tpde_machine_part_desc gp_value[] = {{
-		ZEND_TPDE_MACHINE_PART_VALUE, 64, ZEND_TPDE_MACHINE_REGISTER_GP}};
+		ZEND_TPDE_MACHINE_PART_VALUE, 64, ZEND_TPDE_MACHINE_REGISTER_GP,
+		ZEND_TPDE_MACHINE_ABI_EXTENSION_NONE,
+		ZEND_TPDE_MACHINE_PART_OWNERSHIP_NONE}};
 	static constexpr zend_tpde_machine_part_desc fp_value[] = {{
-		ZEND_TPDE_MACHINE_PART_VALUE, 64, ZEND_TPDE_MACHINE_REGISTER_FP}};
+		ZEND_TPDE_MACHINE_PART_VALUE, 64, ZEND_TPDE_MACHINE_REGISTER_FP,
+		ZEND_TPDE_MACHINE_ABI_EXTENSION_NONE,
+		ZEND_TPDE_MACHINE_PART_OWNERSHIP_NONE}};
+	static constexpr zend_tpde_machine_part_desc pointer_value[] = {{
+		ZEND_TPDE_MACHINE_PART_VALUE, 64, ZEND_TPDE_MACHINE_REGISTER_GP,
+		ZEND_TPDE_MACHINE_ABI_EXTENSION_NONE,
+		ZEND_TPDE_MACHINE_PART_OWNERSHIP_VALUE}};
 	static constexpr zend_tpde_machine_part_desc boxed_zval[] = {
 		{ZEND_TPDE_MACHINE_PART_PAYLOAD, 64,
-			ZEND_TPDE_MACHINE_REGISTER_GP},
+			ZEND_TPDE_MACHINE_REGISTER_GP,
+			ZEND_TPDE_MACHINE_ABI_EXTENSION_NONE,
+			ZEND_TPDE_MACHINE_PART_OWNERSHIP_VALUE},
 		{ZEND_TPDE_MACHINE_PART_TYPE_INFO, 32,
-			ZEND_TPDE_MACHINE_REGISTER_GP}};
+			ZEND_TPDE_MACHINE_REGISTER_GP,
+			ZEND_TPDE_MACHINE_ABI_EXTENSION_ZERO,
+			ZEND_TPDE_MACHINE_PART_OWNERSHIP_METADATA}};
 
 	if (kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 			&& register_authoritative) {
 		return {2, boxed_zval};
+	}
+	if (kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+			|| kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+			|| kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
+			|| kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR) {
+		return {1, pointer_value};
 	}
 	return {1, kind == ZEND_TPDE_MACHINE_VALUE_F64 ? fp_value : gp_value};
 }
@@ -274,6 +322,13 @@ struct zend_tpde_value {
 	zend_mir_value_category category;
 	zend_mir_refcount_state refcount_state;
 	int32_t argument_index;
+	/*
+	 * Source operations such as ZEND_RECV and a proven return-type check can
+	 * create a new Zend SSA identity without changing the machine value.
+	 * Freeze that def-edge so the adaptor does not reconstruct it from Zend
+	 * SSA or reload it through the canonical frame.
+	 */
+	int32_t register_alias_value_index;
 	zend_tpde_machine_value_kind machine_kind;
 	zend_tpde_machine_location location;
 	zend_tpde_canonical_slot_state slot_state;
@@ -309,6 +364,11 @@ struct zend_tpde_id_index_entry {
 	uint32_t index;
 };
 
+struct zend_tpde_source_value_binding {
+	int32_t value_index;
+	int32_t definition_instruction_index;
+};
+
 struct zend_tpde_instruction {
 	zend_mir_instruction_id id;
 	uint32_t view_index;
@@ -337,6 +397,11 @@ struct zend_tpde_instruction {
 	uint32_t source_opline_index;
 	uint32_t materialization_offset;
 	uint32_t materialization_count;
+	zend_tpde_source_value_binding source_op1_binding;
+	zend_tpde_source_value_binding source_op2_binding;
+	zend_tpde_source_value_binding source_result_binding;
+	zend_tpde_source_value_binding source_auxiliary_binding;
+	bool local_abi_transport;
 };
 
 struct zend_tpde_array_read {
@@ -1180,6 +1245,8 @@ struct zend_tpde_plan {
 	zend_tpde_value *values;
 	uint32_t value_count;
 	int32_t *argument_value_indices;
+	zend_tpde_local_abi_type *argument_abi;
+	zend_tpde_local_abi_type return_abi;
 	zend_tpde_id_index_entry *value_index;
 	uint32_t value_index_capacity;
 	zend_tpde_instruction *instructions;
@@ -1197,6 +1264,7 @@ struct zend_tpde_plan {
 	uint32_t call_target_index_capacity;
 	uint32_t call_target_count;
 	uint32_t call_argument_count;
+	zend_tpde_source_value_binding *call_argument_bindings;
 	zend_tpde_id_index_entry *user_binding_index;
 	uint32_t user_binding_index_capacity;
 	zend_tpde_id_index_entry *internal_binding_index;
