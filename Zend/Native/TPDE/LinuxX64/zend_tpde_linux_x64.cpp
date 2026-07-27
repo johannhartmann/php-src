@@ -2084,6 +2084,59 @@ bool ZendCompilerX64::compile_inst(
 			builder.add_arg(
 				std::move(slot_pointer), tpde::CCAssignment{});
 			builder.call(runtime_symbol(mir.runtime_helper));
+			ScratchReg store_slot{this};
+			ScratchReg store_type{this};
+			auto store_slot_reg = store_slot.alloc_gp();
+			auto store_type_reg = store_type.alloc_gp();
+			ASM(MOV64rr, store_slot_reg, canonical_frame_register());
+			ASM(ADD64ri, store_slot_reg, static_cast<int32_t>(offset));
+			ASM(MOV32rm, store_type_reg,
+				FE_MEM(store_slot_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zval, u1.type_info))));
+			auto store_slot_resolved = text_writer.label_create();
+			ASM(CMP32ri, store_type_reg, IS_REFERENCE_EX);
+			generate_raw_jump(Jump::jne, store_slot_resolved);
+			ASM(MOV64rm, store_slot_reg,
+				FE_MEM(store_slot_reg, 0, FE_NOREG, 0));
+			ASM(ADD64ri, store_slot_reg,
+				static_cast<int32_t>(offsetof(zend_reference, val)));
+			label_place(store_slot_resolved);
+			if (exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
+				ASM(MOV64mi,
+					FE_MEM(store_slot_reg, 0, FE_NOREG, 0), 0);
+				ASM(MOV32mi,
+					FE_MEM(store_slot_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zval, u1.type_info))),
+					IS_NULL);
+			} else {
+				auto input = input_value.part(0);
+				auto input_reg = input.load_to_reg();
+				if (val_parts(node.operands[0]).bank
+						== tpde::x64::PlatformConfig::FP_BANK) {
+					ASM(SSE_MOVSDmr,
+						FE_MEM(store_slot_reg, 0, FE_NOREG, 0),
+						input_reg);
+				} else {
+					ASM(MOV64mr,
+						FE_MEM(store_slot_reg, 0, FE_NOREG, 0),
+						input_reg);
+				}
+				if (exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
+					ASM(MOV64rr, store_type_reg, input_reg);
+					ASM(ADD64ri, store_type_reg, IS_FALSE);
+					ASM(MOV32mr,
+						FE_MEM(store_slot_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zval, u1.type_info))),
+						store_type_reg);
+				} else {
+					ASM(MOV32mi,
+						FE_MEM(store_slot_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zval, u1.type_info))),
+						static_cast<int32_t>(zval_type(exact_type)));
+				}
+			}
 			generate_branch_to_block(Jump::jmp,
 				IRBlockRef{node.continuation_block}, false, true);
 			return true;
@@ -2527,6 +2580,19 @@ bool ZendCompilerX64::compile_inst(
 			IRBlockRef{node.continuation_block}, false, true);
 		return true;
 	}
+	auto branch_to_guarded_cold = [&]() {
+		if (node.kind != Adaptor::InstKind::GuardedFast
+				|| node.argument_index == UINT32_MAX) {
+			return false;
+		}
+		for (IRValueRef operand : node.operands) {
+			auto consumed = val_ref(operand);
+			(void) consumed;
+		}
+		generate_branch_to_block(Jump::jmp,
+			IRBlockRef{node.argument_index}, false, true);
+		return true;
+	};
 	auto copy_slot = [&](
 			const zend_mir_source_operand_ref &source_operand,
 			zend_mir_storage_id source_storage,
@@ -2539,7 +2605,7 @@ bool ZendCompilerX64::compile_inst(
 				|| (result_storage != ZEND_MIR_ID_INVALID
 					&& (result_storage == source_storage
 						|| result_storage == target_storage))) {
-			return execute_value_operation();
+			return branch_to_guarded_cold();
 		}
 		const uint64_t source_offset =
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + source_storage) * sizeof(zval);
@@ -2550,7 +2616,7 @@ bool ZendCompilerX64::compile_inst(
 		if (source_offset > INT32_MAX - sizeof(zval)
 				|| target_offset > INT32_MAX - sizeof(zval)
 				|| result_offset > INT32_MAX - sizeof(zval)) {
-			return false;
+			return branch_to_guarded_cold();
 		}
 		if (node.kind != Adaptor::InstKind::GuardedFast
 				|| node.control_block == UINT32_MAX
@@ -2723,7 +2789,7 @@ bool ZendCompilerX64::compile_inst(
 		if (source_storage == ZEND_MIR_ID_INVALID
 				|| result_storage == ZEND_MIR_ID_INVALID
 				|| source_storage == result_storage) {
-			return execute_value_operation();
+			return branch_to_guarded_cold();
 		}
 		const uint64_t source_offset =
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + source_storage) * sizeof(zval);
@@ -2731,7 +2797,7 @@ bool ZendCompilerX64::compile_inst(
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + result_storage) * sizeof(zval);
 		if (source_offset > INT32_MAX - sizeof(zval)
 				|| result_offset > INT32_MAX - sizeof(zval)) {
-			return execute_value_operation();
+			return branch_to_guarded_cold();
 		}
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
@@ -2777,12 +2843,12 @@ bool ZendCompilerX64::compile_inst(
 		const zend_mir_storage_id source_storage =
 			mir.value_operation.op1_storage_id;
 		if (source_storage == ZEND_MIR_ID_INVALID) {
-			return execute_value_operation();
+			return branch_to_guarded_cold();
 		}
 		const uint64_t source_offset =
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + source_storage) * sizeof(zval);
 		if (source_offset > INT32_MAX - sizeof(zval)) {
-			return execute_value_operation();
+			return branch_to_guarded_cold();
 		}
 		if (node.kind != Adaptor::InstKind::GuardedFast
 				|| node.control_block == UINT32_MAX
@@ -3466,6 +3532,20 @@ bool ZendCompilerX64::compile_inst(
 				|| layout.result_offset > INT32_MAX - 8) {
 			return execute_value_operation();
 		}
+		if (node.kind != Adaptor::InstKind::GuardedFast
+				|| node.control_block == UINT32_MAX
+				|| node.continuation_block == UINT32_MAX) {
+			return false;
+		}
+		const auto successors =
+			adaptor->block_succs(IRBlockRef{node.control_block});
+		if (successors.size() != 2
+				|| static_cast<uint32_t>(successors[0])
+					!= node.continuation_block
+				|| static_cast<uint32_t>(successors[1])
+					!= node.argument_index) {
+			return false;
+		}
 		auto slow = text_writer.label_create();
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
@@ -3479,6 +3559,7 @@ bool ZendCompilerX64::compile_inst(
 		ScratchReg element{this};
 		ScratchReg low_word{this};
 		ScratchReg high_word{this};
+		ScratchReg decision{this};
 		auto type_reg = type.alloc_gp();
 		auto array_reg = array.alloc_gp();
 		auto count_reg = count.alloc_gp();
@@ -3486,6 +3567,7 @@ bool ZendCompilerX64::compile_inst(
 		auto element_reg = element.alloc_gp();
 		auto low_word_reg = low_word.alloc_gp();
 		auto high_word_reg = high_word.alloc_gp();
+		auto decision_reg = decision.alloc_gp();
 
 		ASM(MOV32rm, type_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
@@ -3639,9 +3721,12 @@ bool ZendCompilerX64::compile_inst(
 				limit_reg);
 			label_place(result_copied);
 		}
+		ASM(MOV32ri, decision_reg, 0);
 		generate_raw_jump(Jump::jmp, done);
 
 		label_place(slow);
+		ASM(MOV32ri, decision_reg, 1);
+		label_place(done);
 		type.reset();
 		array.reset();
 		count.reset();
@@ -3649,18 +3734,10 @@ bool ZendCompilerX64::compile_inst(
 		element.reset();
 		low_word.reset();
 		high_word.reset();
-		const auto register_state =
-			zend::native::tpde::
-				capture_conditional_call_register_state(*this);
-		ValuePart frame_argument{
-			tpde::x64::PlatformConfig::GP_BANK, 8};
-		frame_argument.set_value(this, std::move(frame_scratch));
-		if (!execute_value_operation(&frame_argument)) {
-			return false;
-		}
-		zend::native::tpde::restore_conditional_call_register_state(
-			*this, register_state);
-		label_place(done);
+		std::array<std::pair<uint64_t, IRBlockRef>, 1> cases{{
+			{1, successors[1]},
+		}};
+		generate_switch(std::move(decision), 32, successors[0], cases);
 		return true;
 	};
 	auto string_length = [&]() {
@@ -4830,6 +4907,20 @@ bool ZendCompilerX64::compile_inst(
 				|| layout.cache_offset > INT32_MAX - 3 * sizeof(void *)) {
 			return execute_value_operation();
 		}
+		if (node.kind != Adaptor::InstKind::GuardedFast
+				|| node.control_block == UINT32_MAX
+				|| node.continuation_block == UINT32_MAX) {
+			return false;
+		}
+		const auto successors =
+			adaptor->block_succs(IRBlockRef{node.control_block});
+		if (successors.size() != 2
+				|| static_cast<uint32_t>(successors[0])
+					!= node.continuation_block
+				|| static_cast<uint32_t>(successors[1])
+					!= node.argument_index) {
+			return false;
+		}
 		auto slow = text_writer.label_create();
 		auto old_released = text_writer.label_create();
 		auto value_owned = text_writer.label_create();
@@ -4844,12 +4935,14 @@ bool ZendCompilerX64::compile_inst(
 		ScratchReg property{this};
 		ScratchReg type{this};
 		ScratchReg low_word{this};
+		ScratchReg decision{this};
 		auto object_reg = object.alloc_gp();
 		auto cache_reg = cache.alloc_gp();
 		auto offset_reg = offset.alloc_gp();
 		auto property_reg = property.alloc_gp();
 		auto type_reg = type.alloc_gp();
 		auto low_word_reg = low_word.alloc_gp();
+		auto decision_reg = decision.alloc_gp();
 
 		ASM(MOV32rm, type_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
@@ -4975,27 +5068,22 @@ bool ZendCompilerX64::compile_inst(
 							+ offsetof(zval, u1.type_info))),
 				IS_UNDEF);
 		}
+		ASM(MOV32ri, decision_reg, 0);
 		generate_raw_jump(Jump::jmp, done);
 
 		label_place(slow);
+		ASM(MOV32ri, decision_reg, 1);
+		label_place(done);
 		object.reset();
 		cache.reset();
 		offset.reset();
 		property.reset();
 		type.reset();
 		low_word.reset();
-		const auto register_state =
-			zend::native::tpde::
-				capture_conditional_call_register_state(*this);
-		ValuePart frame_argument{
-			tpde::x64::PlatformConfig::GP_BANK, 8};
-		frame_argument.set_value(this, std::move(frame_scratch));
-		if (!execute_value_operation(&frame_argument)) {
-			return false;
-		}
-		zend::native::tpde::restore_conditional_call_register_state(
-			*this, register_state);
-		label_place(done);
+		std::array<std::pair<uint64_t, IRBlockRef>, 1> cases{{
+			{1, successors[1]},
+		}};
+		generate_switch(std::move(decision), 32, successors[0], cases);
 		return true;
 	};
 	auto dynamic_fetch_read = [&]() {
