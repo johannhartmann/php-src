@@ -451,6 +451,11 @@ private:
 			return instruction.runtime_helper
 				== ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW;
 		}
+		if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
+			return instruction.direct_call != nullptr
+				&& (instruction.direct_call->flags
+					& ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME) != 0;
+		}
 		if (!instruction.has_value_operation
 				|| executable_kind(instruction, record)
 					== InstKind::SlowPathCall) {
@@ -2331,6 +2336,14 @@ public:
 						ZEND_MIR_ID_INVALID, false, 0,
 						machine_kind(result))
 					: INVALID_VALUE_REF;
+				const IRValueRef cold_result = machine_result
+						&& record.opcode
+							== ZEND_MIR_OPCODE_CALL_DIRECT_USER
+					? add_derived_value(
+						representation(result), exact_type(result),
+						ZEND_MIR_ID_INVALID, false, 0,
+						machine_kind(result))
+					: INVALID_VALUE_REF;
 				InstNode fast{
 					InstKind::GuardedFast, i, guarded_cold_block,
 					fast_result, {}, operand_offset, operand_count,
@@ -2345,17 +2358,49 @@ public:
 
 				const uint32_t cold_operand_offset =
 					static_cast<uint32_t>(operands_.size());
-				for (uint32_t n = 0; n < operand_count; ++n) {
+				uint32_t cold_operand_count = operand_count;
+				uint32_t cold_materialization_operand_index =
+					materialization_operand_index;
+				if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
+					/*
+					 * The split direct-call cold block enters and leaves through
+					 * the runtime boundary. It observes no fast-path arguments or
+					 * inline-body values: exposing those as cold operands creates
+					 * false SSA uses and can make a chained call use a value before
+					 * its continuation PHI defines it.
+					 */
+					operands_.push_back(IRValueRef{FRAME_VALUE});
+					operands_.push_back(IRValueRef{FRAME_VALUE});
 					operands_.push_back(
-						operands_[operand_offset + n]);
+						IRValueRef{EXECUTION_CONTEXT_VALUE});
+					operands_.push_back(
+						IRValueRef{EXECUTION_CONTEXT_VALUE});
+					operands_.push_back(
+						IRValueRef{EXECUTION_CONTEXT_VALUE});
+					cold_operand_count =
+						5 + instruction.materialization_count;
+					cold_materialization_operand_index =
+						instruction.materialization_count == 0
+							? UINT32_MAX : 5;
+					for (uint32_t n = 0;
+							n < instruction.materialization_count; ++n) {
+						operands_.push_back(
+							operands_[operand_offset
+								+ materialization_operand_index + n]);
+					}
+				} else {
+					for (uint32_t n = 0; n < operand_count; ++n) {
+						operands_.push_back(
+							operands_[operand_offset + n]);
+					}
 				}
 				InstNode cold{
 					InstKind::GuardedCold, i, guarded_cold_block,
-					INVALID_VALUE_REF, {}, cold_operand_offset,
-					operand_count, false,
+					cold_result, {}, cold_operand_offset,
+					cold_operand_count, cold_result != INVALID_VALUE_REF,
 					ZEND_MIR_ID_INVALID, ZEND_MIR_SCALAR_TYPE_NONE,
 					false, {}, false, UINT32_MAX, UINT32_MAX,
-					materialization_operand_index,
+					cold_materialization_operand_index,
 					instruction.materialization_count};
 				cold.control_block = guarded_cold_block;
 				cold.continuation_block = continuation_block;
@@ -2394,38 +2439,14 @@ public:
 					}
 				}
 				if (machine_result) {
-					const zend_mir_storage_id result_storage =
-						canonical_storage(result);
-					const IRValueRef cold_result = add_derived_value(
-						representation(result), exact_type(result),
-						ZEND_MIR_ID_INVALID, false, 0,
-						machine_kind(result));
-					const IRValueRef result_slot =
-						zend_mir_id_is_valid(result_storage)
-							? add_derived_value(
-								ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
-								ZEND_MIR_SCALAR_TYPE_NONE,
-								result_storage)
-							: INVALID_VALUE_REF;
 					if (fast_result == INVALID_VALUE_REF
 							|| cold_result == INVALID_VALUE_REF
-							|| result_slot == INVALID_VALUE_REF
 							|| static_cast<uint32_t>(result)
 								>= phi_input_slices_.size()
 							|| phi_values_[
 								static_cast<uint32_t>(result)] != 0) {
 						valid_ = false;
 					}
-					const uint32_t reload_operand_offset =
-						static_cast<uint32_t>(operands_.size());
-					operands_.push_back(result_slot);
-					InstNode reload{
-						InstKind::ZvalPayloadLoad, i, UINT32_MAX,
-						cold_result, {}, reload_operand_offset, 1, true,
-						result_storage, exact_type(result)};
-					reload.control_block = continuation_block;
-					add_node(block_instructions, continuation_block,
-						std::move(reload));
 					const uint32_t phi_input_offset =
 						static_cast<uint32_t>(phi_inputs_.size());
 					phi_inputs_.push_back(
