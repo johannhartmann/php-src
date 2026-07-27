@@ -115,6 +115,7 @@ public:
 		std::span<const IRValueRef> liveness_operands{};
 		uint32_t control_block = UINT32_MAX;
 		uint32_t continuation_block = UINT32_MAX;
+		uint32_t machine_reference_operand_index = UINT32_MAX;
 	};
 
 	struct DerivedValue {
@@ -3497,6 +3498,29 @@ public:
 				operands_.push_back(long_left);
 				operands_.push_back(long_right);
 			}
+			uint32_t machine_reference_operand_index = UINT32_MAX;
+			if (record.opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN_OP
+					&& instruction.source_op2_reference_index
+						< plan_->machine_reference_count
+					&& plan_->machine_references[
+						instruction.source_op2_reference_index].kind
+						== ZEND_TPDE_MACHINE_REFERENCE_LITERAL) {
+				const IRValueRef literal_address = add_derived_value(
+					ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
+					ZEND_MIR_SCALAR_TYPE_NONE,
+					ZEND_MIR_ID_INVALID, false, 0, UINT8_MAX,
+					ZEND_MIR_OWNERSHIP_STATE_BORROWED,
+					ZEND_MIR_REFCOUNT_UNKNOWN,
+					instruction.source_op2_reference_index);
+				if (literal_address == INVALID_VALUE_REF) {
+					valid_ = false;
+				} else {
+					machine_reference_operand_index =
+						static_cast<uint32_t>(operands_.size())
+							- operand_offset;
+					operands_.push_back(literal_address);
+				}
+			}
 			/*
 			 * RETURN_SOURCE_ZVAL transfers the canonical zval directly from the
 			 * Zend frame, selected by its source opline.  Its MIR value operand
@@ -3881,6 +3905,8 @@ public:
 					fast_materialization_count};
 				fast.control_block = fast_block;
 				fast.continuation_block = continuation_block;
+				fast.machine_reference_operand_index =
+					machine_reference_operand_index;
 				add_node(block_instructions, fast_block, std::move(fast));
 
 				const uint32_t cold_operand_offset =

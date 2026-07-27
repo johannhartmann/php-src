@@ -251,6 +251,21 @@ public:
 				add_unsigned_offset(destination, canonical_context_register(),
 					static_cast<uint64_t>(descriptor->displacement));
 				return;
+			case ZEND_TPDE_MACHINE_REFERENCE_LITERAL: {
+				load_off(destination, canonical_frame_register(),
+					static_cast<uint32_t>(
+						offsetof(zend_execute_data, func)), 8);
+				load_off(destination, destination,
+					static_cast<uint32_t>(
+						offsetof(zend_op_array, literals)), 8);
+				const uint64_t literal_offset =
+					static_cast<uint64_t>(
+						descriptor->stable_storage_or_layout_id)
+						* descriptor->scale
+					+ static_cast<uint64_t>(descriptor->displacement);
+				add_unsigned_offset(destination, destination, literal_offset);
+				return;
+			}
 			default:
 				ZEND_UNREACHABLE();
 		}
@@ -4229,12 +4244,10 @@ bool ZendCompilerA64::compile_inst(
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 		auto frame_scratch = std::move(frame).into_scratch();
 		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg slot{this};
 		ScratchReg type{this};
 		ScratchReg left{this};
 		ScratchReg right{this};
 		ScratchReg decision{this};
-		auto slot_reg = slot.alloc_gp();
 		auto type_reg = type.alloc_gp();
 		auto left_reg = left.alloc_gp();
 		auto right_reg = right.alloc_gp();
@@ -4250,13 +4263,19 @@ bool ZendCompilerA64::compile_inst(
 		load_off(left_reg, frame_reg, layout.left_offset, 8);
 
 		if (layout.right.literal) {
-			load_off(slot_reg, frame_reg,
-				static_cast<uint32_t>(
-					offsetof(zend_execute_data, func)), 8);
-			load_off(slot_reg, slot_reg,
-				static_cast<uint32_t>(
-					offsetof(zend_op_array, literals)), 8);
-			add_unsigned_offset(slot_reg, slot_reg, layout.right.offset);
+			if (node.machine_reference_operand_index
+						>= node.operands.size()) {
+				return branch_to_guarded_cold();
+			}
+			auto [literal_ref, literal] = val_ref_single(
+				node.operands[node.machine_reference_operand_index]);
+			auto literal_reg = literal.load_to_reg();
+			load_off(type_reg, literal_reg,
+				static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+			ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+			ASM(CMPwi, type_reg, IS_LONG);
+			generate_raw_jump(Jump::Jne, slow);
+			load_off(right_reg, literal_reg, 0, 8);
 		} else {
 			load_off(type_reg, frame_reg,
 				layout.right.offset
@@ -4266,14 +4285,6 @@ bool ZendCompilerA64::compile_inst(
 			ASM(CMPwi, type_reg, IS_LONG);
 			generate_raw_jump(Jump::Jne, slow);
 			load_off(right_reg, frame_reg, layout.right.offset, 8);
-		}
-		if (layout.right.literal) {
-			load_off(type_reg, slot_reg,
-				static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
-			ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-			ASM(CMPwi, type_reg, IS_LONG);
-			generate_raw_jump(Jump::Jne, slow);
-			load_off(right_reg, slot_reg, 0, 8);
 		}
 
 		if (layout.has_result) {
@@ -4349,7 +4360,6 @@ bool ZendCompilerA64::compile_inst(
 		generate_raw_jump(Jump::jmp, done);
 
 		label_place(slow);
-		slot.reset();
 		type.reset();
 		left.reset();
 		right.reset();
