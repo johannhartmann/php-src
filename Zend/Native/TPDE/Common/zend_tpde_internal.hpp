@@ -1147,6 +1147,8 @@ struct zend_tpde_plan {
 	uint64_t *generator_resume_live_values;
 	zend_tpde_materialization *materializations;
 	uint32_t materialization_count;
+	uint32_t *entry_undef_temporary_indices;
+	uint32_t entry_undef_temporary_count;
 	bool may_emit_calls;
 	bool user_opcode_callbacks;
 };
