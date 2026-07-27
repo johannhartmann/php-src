@@ -238,7 +238,7 @@ bool(true)
 string(8) "accepted"
 bool(true)
 int(42)
-int(1)
+int(0)
 int(0)
 int(0)
 int(0)
