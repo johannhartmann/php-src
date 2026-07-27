@@ -2379,6 +2379,25 @@ bool ZendCompilerA64::compile_inst(
 		return true;
 	};
 	auto execute_value_operation = [&](ValuePart *frame_argument = nullptr) {
+		/*
+		 * A guarded fast node must never execute the generic helper itself.
+		 * The adaptor exposes that call as a distinct allocator-visible cold
+		 * block. Executing it here would consume temporary operands once and
+		 * then execute the same operation again in GuardedCold.
+		 */
+		if (node.kind == Adaptor::InstKind::GuardedFast) {
+			if (frame_argument != nullptr
+					|| node.argument_index == UINT32_MAX) {
+				return false;
+			}
+			for (IRValueRef operand : node.operands) {
+				auto consumed = val_ref(operand);
+				(void) consumed;
+			}
+			generate_branch_to_block(Jump::jmp,
+				IRBlockRef{node.argument_index}, false, true);
+			return true;
+		}
 		const zend_native_runtime_helper_id helper = mir.runtime_helper;
 		const bool explicit_object_operands =
 			zend_tpde_helper_has_unused_operand_payloads(helper);
@@ -2742,7 +2761,7 @@ bool ZendCompilerA64::compile_inst(
 		}
 		const auto successors =
 			adaptor->block_succs(IRBlockRef{node.control_block});
-		if (successors.size() != 2
+		if (successors.size() < 2
 				|| static_cast<uint32_t>(successors[0])
 					!= node.continuation_block
 				|| static_cast<uint32_t>(successors[1])
