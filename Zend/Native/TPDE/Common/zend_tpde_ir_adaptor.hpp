@@ -254,7 +254,6 @@ private:
 	const zend_tpde_plan *plan_;
 	std::span<const zend_tpde_plan *const> component_plans_;
 	FunctionMode function_mode_;
-	std::span<const uint8_t> typed_body_eligible_;
 	std::array<IRFuncRef, 1> functions_{IRFuncRef{0}};
 	std::vector<IRValueRef> arguments_;
 	std::array<IRValueRef, 0> no_values_;
@@ -286,9 +285,7 @@ private:
 	std::vector<ArgumentGuard> argument_guards_;
 	std::vector<uint32_t> user_opcode_next_landings_;
 	std::vector<uint32_t> user_opcode_dispatch_to_sources_;
-	std::vector<uint8_t> typed_component_call_eligible_;
 	zend_tpde_instruction synthetic_instruction_{};
-	bool has_typed_component_calls_ = false;
 	bool valid_ = true;
 
 	static IRValueRef plan_source_operand_value_ref(
@@ -341,6 +338,13 @@ private:
 		return function_mode_ == FunctionMode::TypedBody
 			? typed_body_instruction_results_
 			: component_instruction_results_;
+	}
+
+	bool frozen_typed_component_call(uint32_t instruction_index) const {
+		return plan_ != nullptr
+			&& plan_->typed_component_call_eligible != nullptr
+			&& instruction_index < plan_->instruction_count
+			&& plan_->typed_component_call_eligible[instruction_index] != 0;
 	}
 
 	IRValueRef source_binding_value_ref(
@@ -846,14 +850,14 @@ private:
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
 				&& (function_mode_ == FunctionMode::TypedBody
-					|| has_typed_component_calls_)) {
+					|| plan_->has_typed_component_calls)) {
 			return use.operand_index == 0;
 		}
 		if (is_boxed_cond_branch(instruction)
 				|| record.opcode == ZEND_MIR_OPCODE_STATEPOINT
 				|| (record.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
 					&& function_mode_ != FunctionMode::TypedBody
-					&& !has_typed_component_calls_)
+					&& !plan_->has_typed_component_calls)
 				|| record.opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
 				|| (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
 					&& instruction.direct_call != nullptr)) {
@@ -891,142 +895,11 @@ private:
 			const zend_tpde_instruction &instruction) const {
 		if ((instruction.machine_control_flow_flags
 					& ZEND_TPDE_MACHINE_CONTROL_FLOW_TYPED_COMPONENT_CALL) != 0
-				&& instruction_index
-					< typed_component_call_eligible_.size()
-				&& typed_component_call_eligible_[
-					instruction_index] != 0) {
+				&& frozen_typed_component_call(instruction_index)) {
 			return function_mode_ == FunctionMode::ZendEntry;
 		}
 		return (instruction.machine_control_flow_flags
 				& ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD) != 0;
-	}
-
-	void freeze_typed_component_calls() {
-		typed_component_call_eligible_.assign(
-			plan_ == nullptr ? 0 : plan_->instruction_count, 0);
-		has_typed_component_calls_ = false;
-		if (plan_ == nullptr || plan_->call_argument_bindings == nullptr) {
-			return;
-		}
-
-		std::vector<TypedBodyAbiType> instruction_result_types(
-			plan_->instruction_count);
-		for (uint32_t index = 0;
-				index < plan_->instruction_count; ++index) {
-			const zend_tpde_instruction &instruction =
-				plan_->instructions[index];
-			const zend_mir_instruction_record record =
-				instruction_record_at(index);
-			if (record.opcode != ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
-				const int32_t result_index =
-					zend_tpde_value_index(plan_, record.result_id);
-				if (result_index >= 0) {
-					instruction_result_types[index] =
-						typed_body_value_abi(
-							plan_, static_cast<uint32_t>(result_index));
-				}
-				continue;
-			}
-
-			const uint32_t target = instruction.component_target_index;
-			const zend_tpde_plan *callee =
-				target < component_plans_.size()
-					? component_plans_[target] : nullptr;
-			if (instruction.direct_call == nullptr
-					|| target >= typed_body_eligible_.size()
-					|| typed_body_eligible_[target] == 0
-					|| callee == nullptr
-					|| instruction.direct_call->receiver_kind
-						!= ZEND_NATIVE_INTERNAL_RECEIVER_NONE
-					|| instruction.call_argument_count
-						!= callee->argument_count
-					|| (callee->argument_count != 0
-						&& callee->argument_value_indices == nullptr)
-					|| instruction.call_argument_offset
-						> plan_->call_argument_count
-					|| instruction.call_argument_count
-						> plan_->call_argument_count
-							- instruction.call_argument_offset) {
-				continue;
-			}
-
-			bool compatible = true;
-			for (uint32_t argument = 0;
-					argument < instruction.call_argument_count;
-					++argument) {
-				zend_mir_call_argument_ref source_argument{};
-				const uint32_t argument_index =
-					instruction.call_argument_offset + argument;
-				const int32_t callee_value =
-					callee->argument_value_indices[argument];
-				if (!zend_tpde_call_argument_at(
-						plan_, argument_index, &source_argument)
-						|| callee_value < 0
-						|| static_cast<uint32_t>(callee_value)
-							>= callee->value_count) {
-					compatible = false;
-					break;
-				}
-
-				const zend_tpde_source_value_binding &binding =
-					plan_->call_argument_bindings[argument_index];
-				TypedBodyAbiType caller_abi{};
-				const IRValueRef source_value =
-					plan_source_operand_value_ref(
-						plan_, source_argument.source_operand);
-				const uint32_t source_value_index =
-					static_cast<uint32_t>(source_value);
-				if (source_value != INVALID_VALUE_REF
-						&& source_value_index >= MIR_VALUE_BASE
-						&& source_value_index - MIR_VALUE_BASE
-							< plan_->value_count) {
-					caller_abi = typed_body_value_abi(
-						plan_, source_value_index - MIR_VALUE_BASE);
-				}
-				if (!caller_abi.valid
-						&& binding.value_index >= 0
-						&& static_cast<uint32_t>(binding.value_index)
-							< plan_->value_count) {
-					caller_abi = typed_body_value_abi(
-						plan_,
-						static_cast<uint32_t>(binding.value_index));
-				}
-				if (!caller_abi.valid
-						&& binding.definition_instruction_index >= 0
-						&& static_cast<uint32_t>(
-							binding.definition_instruction_index)
-							< instruction_result_types.size()) {
-					caller_abi = instruction_result_types[
-						static_cast<uint32_t>(
-							binding.definition_instruction_index)];
-				}
-				const TypedBodyAbiType callee_abi =
-					typed_body_value_abi(
-						callee, static_cast<uint32_t>(callee_value));
-				const bool by_reference =
-					source_argument.ownership
-						== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE;
-				if (!caller_abi.same_shape(callee_abi)
-						|| by_reference
-							!= (callee_abi.machine_kind
-								== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR)) {
-					compatible = false;
-					break;
-				}
-			}
-			if (!compatible) {
-				continue;
-			}
-
-			const TypedBodyAbiType result_abi =
-				typed_body_plan_abi(callee->return_abi);
-			if (!result_abi.valid) {
-				continue;
-			}
-			typed_component_call_eligible_[index] = 1;
-			instruction_result_types[index] = result_abi;
-			has_typed_component_calls_ = true;
-		}
 	}
 
 	zend_mir_instruction_record instruction_record_at(uint32_t index) const {
@@ -1995,15 +1868,13 @@ public:
 	explicit ZendIRAdaptor(const zend_tpde_plan *plan)
 		: ZendIRAdaptor(plan,
 			std::span<const zend_tpde_plan *const>{&plan, 1},
-			FunctionMode::ZendEntry, {}) {}
+			FunctionMode::ZendEntry) {}
 
 	explicit ZendIRAdaptor(const zend_tpde_plan *plan,
 			std::span<const zend_tpde_plan *const> component_plans,
-			FunctionMode function_mode = FunctionMode::ZendEntry,
-			std::span<const uint8_t> typed_body_eligible = {})
+			FunctionMode function_mode = FunctionMode::ZendEntry)
 		: plan_(plan), component_plans_(component_plans),
-		  function_mode_(function_mode),
-		  typed_body_eligible_(typed_body_eligible) {
+		  function_mode_(function_mode) {
 		typed_body_value_overrides_.assign(
 			plan_ == nullptr ? 0 : plan_->value_count,
 			INVALID_VALUE_REF);
@@ -2022,7 +1893,6 @@ public:
 		component_instruction_results_.assign(
 			plan_ == nullptr ? 0 : plan_->instruction_count,
 			INVALID_VALUE_REF);
-		freeze_typed_component_calls();
 		frozen_call_argument_value_used_.assign(
 			plan_ == nullptr ? 0 : plan_->value_count, 0);
 		if (plan_ != nullptr
@@ -2044,9 +1914,8 @@ public:
 			arguments_.push_back(
 				IRValueRef{EXECUTION_CONTEXT_ARGUMENT});
 		} else {
-			TypedBodyAbiType return_type;
-			if (!typed_body_signature(plan_, component_plans_,
-					typed_body_eligible_, &return_type)) {
+			if (plan_ == nullptr || !plan_->typed_body_eligible
+					|| !plan_->typed_body_return_abi.valid) {
 				valid_ = false;
 				return;
 			}
@@ -2273,8 +2142,7 @@ public:
 			const bool typed_component_guard =
 				function_mode_ == FunctionMode::ZendEntry
 				&& record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
-				&& i < typed_component_call_eligible_.size()
-				&& typed_component_call_eligible_[i] != 0;
+				&& frozen_typed_component_call(i);
 			if (typed_component_guard) {
 				guarded_hot_blocks[i] =
 					plan_->block_count + synthetic_block_count++;
@@ -2998,8 +2866,7 @@ public:
 			const bool typed_component_call =
 				record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
 				&& instruction.direct_call != nullptr
-				&& i < typed_component_call_eligible_.size()
-				&& typed_component_call_eligible_[i] != 0;
+				&& frozen_typed_component_call(i);
 			if (typed_component_call) {
 				auto &value_overrides = active_value_overrides();
 				auto &source_overrides = active_source_ssa_overrides();
@@ -3507,7 +3374,7 @@ public:
 			if (record.opcode
 					== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
 					&& (function_mode_ == FunctionMode::TypedBody
-						|| has_typed_component_calls_)) {
+						|| plan_->has_typed_component_calls)) {
 				const IRValueRef returned = source_binding_value_ref(
 					instruction.source_op1_binding);
 				if (function_mode_ == FunctionMode::TypedBody
@@ -3559,8 +3426,7 @@ public:
 			if (record.opcode
 					== ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
 				const bool typed_local_call =
-					i < typed_component_call_eligible_.size()
-					&& typed_component_call_eligible_[i] != 0;
+					frozen_typed_component_call(i);
 				if (typed_local_call) {
 					for (uint32_t n = 0;
 							n < instruction.call_argument_count; ++n) {
@@ -4182,10 +4048,8 @@ public:
 	bool valid() const { return valid_; }
 	bool typed_component_call(IRInstRef instruction) const {
 		const InstNode &current = node(instruction);
-		return current.mir_instruction_index
-				< typed_component_call_eligible_.size()
-			&& typed_component_call_eligible_[
-				current.mir_instruction_index] != 0;
+		return frozen_typed_component_call(
+			current.mir_instruction_index);
 	}
 	uint64_t inlined_user_body_count() const {
 		return static_cast<uint64_t>(std::count_if(
@@ -4670,9 +4534,7 @@ private:
 	std::vector<std::unique_ptr<ZendIRAdaptor>> members_;
 	std::vector<ZendIRAdaptor *> function_views_;
 	std::vector<uint32_t> function_component_indices_;
-	std::vector<uint8_t> typed_body_eligible_;
 	std::vector<uint32_t> typed_body_function_indices_;
-	std::vector<ZendIRAdaptor::TypedBodyAbiType> typed_body_return_types_;
 	std::vector<IRFuncRef> functions_;
 	std::vector<std::string> link_names_;
 	ZendIRAdaptor *active_ = nullptr;
@@ -4690,41 +4552,13 @@ public:
 		members_.reserve(plans.size());
 		function_views_.reserve(plans.size() * 2);
 		function_component_indices_.reserve(plans.size() * 2);
-		typed_body_eligible_.assign(plans.size(), 1);
 		typed_body_function_indices_.assign(plans.size(), UINT32_MAX);
-		typed_body_return_types_.resize(plans.size());
 		functions_.reserve(plans.size() * 2);
 		link_names_.reserve(plans.size() * 2);
-		bool eligibility_changed;
-		do {
-			eligibility_changed = false;
-			for (uint32_t index = 0; index < plans.size(); ++index) {
-				if (typed_body_eligible_[index] == 0) {
-					continue;
-				}
-				ZendIRAdaptor::TypedBodyAbiType return_type;
-				if (!ZendIRAdaptor::typed_body_signature(
-						plans[index], plans, typed_body_eligible_,
-						&return_type)) {
-					typed_body_eligible_[index] = 0;
-					eligibility_changed = true;
-				}
-			}
-		} while (eligibility_changed);
-		for (uint32_t index = 0; index < plans.size(); ++index) {
-			if (typed_body_eligible_[index] == 0
-					|| !ZendIRAdaptor::typed_body_signature(
-						plans[index], plans, typed_body_eligible_,
-						&typed_body_return_types_[index])) {
-				typed_body_eligible_[index] = 0;
-				typed_body_return_types_[index] = {};
-			}
-		}
 		for (uint32_t index = 0; index < plans.size(); ++index) {
 			members_.push_back(
 				std::make_unique<ZendIRAdaptor>(plans[index], plans,
-					ZendIRAdaptor::FunctionMode::ZendEntry,
-					typed_body_eligible_));
+					ZendIRAdaptor::FunctionMode::ZendEntry));
 			functions_.push_back(IRFuncRef{index});
 			function_views_.push_back(members_.back().get());
 			function_component_indices_.push_back(index);
@@ -4733,15 +4567,14 @@ public:
 				: "zend_native_component_" + std::to_string(index));
 		}
 		for (uint32_t index = 0; index < plans.size(); ++index) {
-			if (typed_body_eligible_[index] == 0) {
+			if (!plans[index]->typed_body_eligible) {
 				continue;
 			}
 			const uint32_t function_index =
 				static_cast<uint32_t>(functions_.size());
 			members_.push_back(
 				std::make_unique<ZendIRAdaptor>(plans[index], plans,
-					ZendIRAdaptor::FunctionMode::TypedBody,
-					typed_body_eligible_));
+					ZendIRAdaptor::FunctionMode::TypedBody));
 			functions_.push_back(IRFuncRef{function_index});
 			function_views_.push_back(members_.back().get());
 			function_component_indices_.push_back(index);
@@ -4788,8 +4621,10 @@ public:
 	}
 	ZendIRAdaptor::TypedBodyAbiType typed_body_return_type(
 			uint32_t component_index) const {
-		return component_index < typed_body_return_types_.size()
-			? typed_body_return_types_[component_index]
+		const zend_tpde_plan *body = component_plan(component_index);
+		return body != nullptr && body->typed_body_eligible
+			? ZendIRAdaptor::typed_body_plan_abi(
+				body->typed_body_return_abi)
 			: ZendIRAdaptor::TypedBodyAbiType{};
 	}
 	bool typed_body_arguments_match(
