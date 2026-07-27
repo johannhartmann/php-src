@@ -73,7 +73,9 @@ public:
 		::tpde::RegBank bank;
 		uint32_t part_count;
 		uint32_t count() const { return part_count; }
-		uint32_t size_bytes(uint32_t) const { return 8; }
+		uint32_t size_bytes(uint32_t part) const {
+			return part_count == 2 && part == 1 ? 4 : 8;
+		}
 		::tpde::RegBank reg_bank(uint32_t) const { return bank; }
 	};
 
@@ -1657,7 +1659,11 @@ bool ZendCompilerA64::compile_inst(
 					auto value = result_value.part(part);
 					auto value_reg = value.alloc_reg();
 					load_off(value_reg, address,
-						offset + part * sizeof(uint64_t), 8);
+						offset + (part == 0
+							? 0
+							: static_cast<uint32_t>(
+								offsetof(zval, u1.type_info))),
+						part == 0 ? 8 : 4);
 					value.set_modified();
 				}
 				return true;
@@ -1963,7 +1969,7 @@ bool ZendCompilerA64::compile_inst(
 				auto source_reg = source.load_to_reg();
 				auto result_reg = result.alloc_try_reuse(source);
 				if (source_reg != result_reg) {
-					mov(result_reg, source_reg, 8);
+					mov(result_reg, source_reg, part == 0 ? 8 : 4);
 				}
 				result.set_modified();
 			}
@@ -5508,12 +5514,17 @@ bool ZendCompilerA64::compile_inst(
 										store_off(callee_reg, offset,
 											low_word.cur_reg(), 8);
 										store_off(callee_reg, offset + 8,
-											high_word.cur_reg(), 8);
+											high_word.cur_reg(), 4);
+										store_constant(callee_reg,
+											offset
+												+ static_cast<uint32_t>(
+													offsetof(zval, u2)),
+											0, 4);
 										ScratchReg type_info{this};
 										auto type_info_reg =
 											type_info.alloc_gp();
 										mov(type_info_reg,
-											high_word.cur_reg(), 8);
+											high_word.cur_reg(), 4);
 										ASM(TSTwi, type_info_reg,
 											IS_TYPE_REFCOUNTED
 												<< Z_TYPE_FLAGS_SHIFT);
@@ -6210,11 +6221,15 @@ bool ZendCompilerA64::compile_inst(
 								store_off(callee_reg, offset,
 									low_word.cur_reg(), 8);
 								store_off(callee_reg, offset + 8,
-									high_word.cur_reg(), 8);
+									high_word.cur_reg(), 4);
+								store_constant(callee_reg,
+									offset + static_cast<uint32_t>(
+										offsetof(zval, u2)),
+									0, 4);
 								ScratchReg type_info{this};
 								auto type_info_reg = type_info.alloc_gp();
 								mov(type_info_reg,
-									high_word.cur_reg(), 8);
+									high_word.cur_reg(), 4);
 								ASM(TSTwi, type_info_reg,
 									IS_TYPE_REFCOUNTED
 										<< Z_TYPE_FLAGS_SHIFT);
@@ -6898,7 +6913,11 @@ bool ZendCompilerA64::compile_inst(
 								auto value = result.part(part);
 								auto value_reg = value.alloc_reg();
 								load_off(value_reg, result_slot_reg,
-									part * sizeof(uint64_t), 8);
+									part == 0
+										? 0
+										: static_cast<uint32_t>(
+											offsetof(zval, u1.type_info)),
+									part == 0 ? 8 : 4);
 								value.set_modified();
 							}
 						} else {
@@ -6959,7 +6978,11 @@ bool ZendCompilerA64::compile_inst(
 						auto value = result.part(part);
 						auto value_reg = value.alloc_reg();
 						load_off(value_reg, result_slot_reg,
-							part * sizeof(uint64_t), 8);
+							part == 0
+								? 0
+								: static_cast<uint32_t>(
+									offsetof(zval, u1.type_info)),
+							part == 0 ? 8 : 4);
 						value.set_modified();
 					}
 				} else if (node.has_result) {
