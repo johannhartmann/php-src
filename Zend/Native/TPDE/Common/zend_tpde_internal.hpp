@@ -1335,6 +1335,10 @@ struct zend_tpde_plan {
 	int32_t *argument_value_indices;
 	zend_tpde_local_abi_type *argument_abi;
 	zend_tpde_local_abi_type return_abi;
+	zend_tpde_local_abi_type typed_body_return_abi;
+	uint8_t *typed_component_call_eligible;
+	bool typed_body_eligible;
+	bool has_typed_component_calls;
 	zend_tpde_id_index_entry *value_index;
 	uint32_t value_index_capacity;
 	zend_tpde_instruction *instructions;
