@@ -208,6 +208,8 @@ public:
 		tpde::x64::AsmReg temp_reg,
 		tpde::Label default_label);
 	bool emit_materializations(IRInstRef instruction);
+	bool compile_boxed_cond_guard(IRInstRef instruction);
+	bool compile_boxed_cond_cold(IRInstRef instruction);
 	bool compile_inst(IRInstRef instruction, InstRange);
 };
 
@@ -381,11 +383,187 @@ bool ZendCompilerX64::emit_materializations(IRInstRef instruction) {
 	return true;
 }
 
+bool ZendCompilerX64::compile_boxed_cond_guard(IRInstRef instruction) {
+	const Adaptor::InstNode &node = adaptor->node(instruction);
+	const zend_tpde_instruction &mir =
+		adaptor->mir_instruction(instruction);
+	zend_tpde_value_condition layout;
+	if (node.operands.size() != 1
+			|| node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
+			|| !zend_tpde_value_condition_at(mir, &layout)
+			|| layout.operand_offset > INT32_MAX
+			|| node.argument_index == UINT32_MAX) {
+		return false;
+	}
+	const auto successors = adaptor->block_succs(
+		adaptor->block_ref(
+			adaptor->instruction_record(instruction).block_id));
+	if (successors.size() != 3
+			|| static_cast<uint32_t>(successors[2])
+				!= node.argument_index) {
+		return false;
+	}
+	auto [frame_ref, frame] = val_ref_single(node.operands[0]);
+	auto frame_reg = frame.load_to_reg();
+	ScratchReg type{this};
+	ScratchReg value{this};
+	ScratchReg decision{this};
+	auto type_reg = type.alloc_gp();
+	auto value_reg = value.alloc_gp();
+	auto decision_reg = decision.alloc_gp();
+	auto slow = text_writer.label_create();
+	auto truthy = text_writer.label_create();
+	auto falsey = text_writer.label_create();
+	auto ready = text_writer.label_create();
+
+	ASM(MOV32rm, type_reg,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				layout.operand_offset + offsetof(zval, u1.type_info))));
+	ASM(AND32ri, type_reg, Z_TYPE_MASK);
+	ASM(CMP32ri, type_reg, IS_NULL);
+	generate_raw_jump(Jump::je, falsey);
+	ASM(CMP32ri, type_reg, IS_FALSE);
+	generate_raw_jump(Jump::je, falsey);
+	ASM(CMP32ri, type_reg, IS_TRUE);
+	generate_raw_jump(Jump::je, truthy);
+	ASM(CMP32ri, type_reg, IS_LONG);
+	auto not_long = text_writer.label_create();
+	generate_raw_jump(Jump::jne, not_long);
+	ASM(MOV64rm, value_reg,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(layout.operand_offset)));
+	ASM(TEST64rr, value_reg, value_reg);
+	generate_raw_jump(Jump::jne, truthy);
+	generate_raw_jump(Jump::jmp, falsey);
+
+	label_place(not_long);
+	ASM(CMP32ri, type_reg, IS_STRING);
+	auto not_string = text_writer.label_create();
+	generate_raw_jump(Jump::jne, not_string);
+	ASM(MOV64rm, value_reg,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(layout.operand_offset)));
+	ASM(MOV64rm, type_reg,
+		FE_MEM(value_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_string, len))));
+	ASM(TEST64rr, type_reg, type_reg);
+	generate_raw_jump(Jump::je, falsey);
+	ASM(CMP64ri, type_reg, 1);
+	generate_raw_jump(Jump::jne, truthy);
+	ASM(MOVZXr32m8, type_reg,
+		FE_MEM(value_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_string, val))));
+	ASM(CMP32ri, type_reg, '0');
+	generate_raw_jump(Jump::je, falsey);
+	generate_raw_jump(Jump::jmp, truthy);
+
+	label_place(not_string);
+	ASM(CMP32ri, type_reg, IS_ARRAY);
+	auto not_array = text_writer.label_create();
+	generate_raw_jump(Jump::jne, not_array);
+	ASM(MOV64rm, value_reg,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(layout.operand_offset)));
+	ASM(MOV32rm, type_reg,
+		FE_MEM(value_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(HashTable, nNumOfElements))));
+	ASM(TEST32rr, type_reg, type_reg);
+	generate_raw_jump(Jump::jne, truthy);
+	generate_raw_jump(Jump::jmp, falsey);
+
+	label_place(not_array);
+	ASM(CMP32ri, type_reg, IS_RESOURCE);
+	generate_raw_jump(Jump::jne, slow);
+	ASM(MOV64rm, value_reg,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(layout.operand_offset)));
+	ASM(MOV32rm, type_reg,
+		FE_MEM(value_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_resource, handle))));
+	ASM(TEST32rr, type_reg, type_reg);
+	generate_raw_jump(Jump::jne, truthy);
+	generate_raw_jump(Jump::jmp, falsey);
+
+	label_place(truthy);
+	ASM(MOV32ri, decision_reg, 1);
+	generate_raw_jump(Jump::jmp, ready);
+	label_place(falsey);
+	ASM(MOV32ri, decision_reg, 0);
+	generate_raw_jump(Jump::jmp, ready);
+	label_place(slow);
+	ASM(MOV32ri, decision_reg, 2);
+	label_place(ready);
+	type.reset();
+	value.reset();
+	std::array<std::pair<uint64_t, IRBlockRef>, 2> cases{{
+		{1, successors[0]},
+		{2, successors[2]},
+	}};
+	generate_switch(std::move(decision), 32, successors[1], cases);
+	return true;
+}
+
+bool ZendCompilerX64::compile_boxed_cond_cold(IRInstRef instruction) {
+	const Adaptor::InstNode &node = adaptor->node(instruction);
+	const zend_tpde_instruction &mir =
+		adaptor->mir_instruction(instruction);
+	const auto successors =
+		adaptor->block_succs(IRBlockRef{node.argument_index});
+	if (node.operands.size() != 1 || !mir.has_value_operation
+			|| successors.size() != 2) {
+		return false;
+	}
+	tpde::x64::CCAssignerSysV assigner{false};
+	CallBuilder builder{*this, assigner};
+	builder.add_arg(CallArg{node.operands[0]});
+	const zend_mir_executable_value_ref &operation = mir.value_operation;
+	builder.add_arg(ValuePart{
+		zend_tpde_encode_value_operand(operation.op1), 8,
+		tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+	builder.add_arg(ValuePart{
+		zend_tpde_encode_value_operand(operation.op2), 8,
+		tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+	builder.add_arg(ValuePart{
+		zend_tpde_encode_value_operand(operation.result), 8,
+		tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+	builder.add_arg(ValuePart{operation.extended_value, 4,
+		tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+	builder.add_arg(ValuePart{operation.source_opcode, 4,
+		tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+	builder.add_arg(ValuePart{operation.source_position_id, 4,
+		tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+	builder.call(runtime_symbol(mir.runtime_helper));
+	ValuePart decision{tpde::x64::PlatformConfig::GP_BANK};
+	builder.add_ret(decision, tpde::CCAssignment{});
+	auto decision_scratch = std::move(decision).into_scratch(this);
+	auto decision_reg = decision_scratch.cur_reg();
+	ASM(CMP32ri, decision_reg, ZEND_NATIVE_ITERATOR_EXCEPTION);
+	auto valid = text_writer.label_create();
+	generate_raw_jump(Jump::jl, valid);
+	decision_scratch.reset();
+	RetBuilder return_builder{*this, *cur_cc_assigner()};
+	return_builder.add(ValuePart{
+		ZEND_NATIVE_EXCEPTION, 4,
+		tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+	return_builder.ret();
+	label_place(valid);
+	ASM(TEST32rr, decision_reg, decision_reg);
+	generate_cond_branch(Jump::jne, successors[0], successors[1]);
+	return true;
+}
+
 bool ZendCompilerX64::compile_inst(
 	IRInstRef instruction, InstRange remaining_instructions) {
 	const Adaptor::InstNode &node = adaptor->node(instruction);
 	if (!emit_materializations(instruction)) {
 		return false;
+	}
+	if (node.kind == Adaptor::InstKind::BoxedCondGuard) {
+		return compile_boxed_cond_guard(instruction);
+	}
+	if (node.kind == Adaptor::InstKind::BoxedCondCold) {
+		return compile_boxed_cond_cold(instruction);
 	}
 	if (node.kind == Adaptor::InstKind::LoadFrame
 			|| node.kind == Adaptor::InstKind::LoadExecutionContext) {
@@ -5265,9 +5443,6 @@ bool ZendCompilerX64::compile_inst(
 					value.reset();
 					const auto &successors = adaptor->block_succs(
 						adaptor->block_ref(record.block_id));
-					const auto register_state =
-						zend::native::tpde::
-							capture_conditional_call_register_state(*this);
 					generate_raw_jump(Jump::jmp, branch);
 					label_place(slow);
 
@@ -5326,9 +5501,6 @@ bool ZendCompilerX64::compile_inst(
 							decision_slot),
 						decision_reg);
 					decision.reset(this);
-					zend::native::tpde::
-						restore_conditional_call_register_state(
-							*this, register_state);
 					generate_raw_jump(Jump::jmp, branch);
 					label_place(branch);
 					ScratchReg branch_decision{this};
