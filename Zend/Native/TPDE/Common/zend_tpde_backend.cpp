@@ -625,7 +625,8 @@ zend_tpde_machine_value_kind zend_tpde_machine_kind(
 bool zend_tpde_apply_machine_value_facts(
 	const zend_mir_value_view *value_model,
 	const zend_ssa *source_ssa,
-	zend_tpde_value *value)
+	zend_tpde_value *value,
+	bool register_definition)
 {
 	zend_mir_storage_ref storage{};
 	zend_mir_value_category category = ZEND_MIR_VALUE_CATEGORY_UNKNOWN;
@@ -674,6 +675,7 @@ bool zend_tpde_apply_machine_value_facts(
 			: ZEND_TPDE_MACHINE_LOCATION_REGISTER;
 		value->slot_state = value->argument_index >= 0
 			|| value->machine_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+			|| !register_definition
 			? ZEND_TPDE_CANONICAL_SLOT_CLEAN
 			: ZEND_TPDE_CANONICAL_SLOT_DIRTY;
 	} else {
@@ -2070,6 +2072,17 @@ bool freeze_statepoint_materializations(
 				"observable instruction lacks its materialization frame");
 			return false;
 		}
+		/*
+		 * Before the first native instruction, the incoming Zend frame is the
+		 * canonical value source. Its snapshot can name the later SSA
+		 * representative of a slot, but no register-authoritative definition
+		 * exists yet and therefore no function-entry slot can be dirty.
+		 */
+		if (record.opcode == ZEND_MIR_OPCODE_STATEPOINT
+				&& frame->safepoint_class
+					== ZEND_MIR_SAFEPOINT_CLASS_FUNCTION_ENTRY) {
+			continue;
+		}
 		for (uint32_t slot_index = 0;
 				slot_index < frame->slots.count; ++slot_index) {
 			zend_mir_frame_slot_ref slot{};
@@ -2828,9 +2841,32 @@ bool initialize_plan(
 			plan->values[index].exact_type = fact.exact_type;
 		}
 	}
+	std::vector<uint8_t> register_definitions(plan->value_count, 0);
+	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
+		zend_mir_instruction_record record{};
+		if (!view->instruction_at(view->context, i, &record)) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"MIR instruction table is unreadable while classifying value definitions");
+			return false;
+		}
+		if (!zend_mir_id_is_valid(record.result_id)) {
+			continue;
+		}
+		const int32_t value_index =
+			zend_tpde_value_index(plan, record.result_id);
+		if (value_index < 0) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"MIR instruction result is absent from the value table");
+			return false;
+		}
+		register_definitions[static_cast<uint32_t>(value_index)] = 1;
+	}
 	for (uint32_t i = 0; i < plan->value_count; ++i) {
 		if (!zend_tpde_apply_machine_value_facts(
-				value_model, source_ssa, &plan->values[i])) {
+				value_model, source_ssa, &plan->values[i],
+				register_definitions[i] != 0)) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 				"machine value facts do not match source SSA storage");
