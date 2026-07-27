@@ -1954,7 +1954,8 @@ bool ZendCompilerA64::compile_inst(
 	}
 	if (record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE) {
 		if (node.operands.size() != 2
-				|| node.operands[1] != IRValueRef{Adaptor::FRAME_VALUE}) {
+				|| node.operands[1] != IRValueRef{Adaptor::FRAME_VALUE}
+				|| node.continuation_block == UINT32_MAX) {
 			return false;
 		}
 		const IRValueRef input = node.operands[0];
@@ -1971,18 +1972,54 @@ bool ZendCompilerA64::compile_inst(
 				|| offset + offsetof(zval, u1.type_info) > UINT32_MAX) {
 			return false;
 		}
+		if (node.kind == Adaptor::InstKind::GuardedCold) {
+			auto input_value = val_ref(node.operands[0]);
+			auto frame_value = val_ref(node.operands[1]);
+			ScratchReg slot_argument{this};
+			auto slot_argument_reg = slot_argument.alloc_gp();
+			add_unsigned_offset(slot_argument_reg, canonical_frame_register(),
+				static_cast<uint32_t>(offset));
+			ValuePart slot_pointer{DarwinConfig::GP_BANK, 8};
+			slot_pointer.set_value(this, std::move(slot_argument));
+			zend::native::tpde::CCAssignerAppleA64 assigner;
+			CallBuilder builder{*this, assigner};
+			builder.add_arg(
+				std::move(slot_pointer), ::tpde::CCAssignment{});
+			builder.call(runtime_symbol(mir.runtime_helper));
+			generate_branch_to_block(Jump::jmp,
+				IRBlockRef{node.continuation_block}, false, true);
+			return true;
+		}
+		if (node.kind != Adaptor::InstKind::GuardedFast) {
+			return false;
+		}
+		if (node.control_block == UINT32_MAX) {
+			return false;
+		}
+		const auto successors =
+			adaptor->block_succs(IRBlockRef{node.control_block});
+		if (successors.size() != 2
+				|| static_cast<uint32_t>(successors[0])
+					!= node.continuation_block
+				|| static_cast<uint32_t>(successors[1])
+					!= node.argument_index) {
+			return false;
+		}
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 		auto frame_reg = frame.load_to_reg();
 		auto slow_release = text_writer.label_create();
 		auto store_value = text_writer.label_create();
 		auto slot_resolved = text_writer.label_create();
+		auto finished = text_writer.label_create();
 		ScratchReg old_type{this};
 		ScratchReg counted{this};
 		ScratchReg refcount{this};
+		ScratchReg decision{this};
 		auto slot_reg = counted.alloc_gp();
 		auto old_type_reg = old_type.alloc_gp();
 		auto refcount_reg = refcount.alloc_gp();
+		auto decision_reg = decision.alloc_gp();
 		add_unsigned_offset(
 			slot_reg, frame_reg, static_cast<uint32_t>(offset));
 		load_off(old_type_reg, slot_reg,
@@ -2023,26 +2060,9 @@ bool ZendCompilerA64::compile_inst(
 		counted.reset();
 		refcount.reset();
 		label_place(slow_release);
-		{
-			const auto register_state =
-				zend::native::tpde::
-					capture_conditional_call_register_state(*this);
-			ScratchReg slot_argument{this};
-			auto slot_argument_reg = slot_argument.alloc_gp();
-			add_unsigned_offset(slot_argument_reg, frame_reg,
-				static_cast<uint32_t>(offset));
-			ValuePart slot_pointer{DarwinConfig::GP_BANK, 8};
-			slot_pointer.set_value(this, std::move(slot_argument));
-			{
-				zend::native::tpde::CCAssignerAppleA64 assigner;
-				CallBuilder builder{*this, assigner};
-				builder.add_arg(
-					std::move(slot_pointer), ::tpde::CCAssignment{});
-				builder.call(runtime_symbol(mir.runtime_helper));
-			}
-			zend::native::tpde::restore_conditional_call_register_state(
-				*this, register_state);
-		}
+		materialize_constant(
+			uint64_t{1}, DarwinConfig::GP_BANK, 4, decision_reg);
+		generate_raw_jump(Jump::jmp, finished);
 
 		label_place(store_value);
 		auto store_slot_resolved = text_writer.label_create();
@@ -2091,6 +2111,13 @@ bool ZendCompilerA64::compile_inst(
 					offsetof(zval, u1.type_info)),
 				kind_reg, 4);
 		}
+		materialize_constant(
+			uint64_t{0}, DarwinConfig::GP_BANK, 4, decision_reg);
+		label_place(finished);
+		std::array<std::pair<uint64_t, IRBlockRef>, 1> cases{{
+			{1, successors[1]},
+		}};
+		generate_switch(std::move(decision), 32, successors[0], cases);
 		return true;
 	}
 	if (mir.source_effect == ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE) {

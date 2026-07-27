@@ -457,6 +457,10 @@ private:
 		zend_tpde_string_identity string_identity{};
 		zend_tpde_object_property_read object_property_read{};
 		zend_tpde_dynamic_fetch_read dynamic_fetch_read{};
+		if (record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE) {
+			return instruction.runtime_helper
+				== ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW;
+		}
 		if (!instruction.has_value_operation
 				|| executable_kind(instruction, record)
 					== InstKind::SlowPathCall) {
