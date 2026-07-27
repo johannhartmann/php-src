@@ -3349,6 +3349,7 @@ bool initialize_plan(
 			static_cast<uint32_t>(operands - count);
 		plan->instructions[i].operand_count = count;
 		plan->instructions[i].component_target_index = UINT32_MAX;
+		plan->instructions[i].component_body_function_index = UINT32_MAX;
 		plan->instructions[i].exception_block_id = ZEND_MIR_ID_INVALID;
 		plan->instructions[i].zval_store_storage_id = ZEND_MIR_ID_INVALID;
 		plan->instructions[i].runtime_helper = ZEND_NATIVE_HELPER_COUNT;
@@ -6257,8 +6258,7 @@ static bool freeze_typed_component_calls(
 	std::vector<zend_tpde_local_abi_type> instruction_result_types(
 		plan->instruction_count);
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
-		const zend_tpde_instruction &instruction =
-			plan->instructions[index];
+		zend_tpde_instruction &instruction = plan->instructions[index];
 		const zend_mir_instruction_record record =
 			zend_tpde_instruction_record_at(plan, &instruction);
 		if (record.opcode != ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
@@ -6347,6 +6347,8 @@ static bool freeze_typed_component_calls(
 			continue;
 		}
 		plan->typed_component_call_eligible[index] = 1;
+		instruction.component_body_function_index =
+			callee->typed_body_function_index;
 		instruction_result_types[index] =
 			callee->typed_body_return_abi;
 		plan->has_typed_component_calls = true;
@@ -6394,6 +6396,13 @@ static bool freeze_component_machine_plan(
 		plans[index].typed_body_return_abi =
 			plans[index].typed_body_eligible
 				? return_type : zend_tpde_local_abi_type{};
+	}
+	uint32_t next_typed_body_function = component_count;
+	for (uint32_t index = 0; index < component_count; ++index) {
+		plans[index].wrapper_function_index = index;
+		plans[index].typed_body_function_index =
+			plans[index].typed_body_eligible
+				? next_typed_body_function++ : UINT32_MAX;
 	}
 	for (uint32_t index = 0; index < component_count; ++index) {
 		if (!freeze_typed_component_calls(

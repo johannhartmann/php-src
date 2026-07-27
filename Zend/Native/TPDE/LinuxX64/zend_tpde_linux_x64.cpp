@@ -6513,8 +6513,7 @@ bool ZendCompilerX64::compile_inst(
 				const uint32_t typed_body_function =
 					local_component_call
 						&& adaptor->typed_component_call(instruction)
-						? adaptor->typed_body_function_index(
-							call.component_target_index)
+						? call.component_body_function_index
 						: UINT32_MAX;
 				const bool result_unused =
 					call.direct_call->result_operand.kind

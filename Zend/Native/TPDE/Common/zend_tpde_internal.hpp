@@ -430,6 +430,7 @@ struct zend_tpde_instruction {
 	uint32_t operand_offset;
 	uint32_t operand_count;
 	uint32_t component_target_index;
+	uint32_t component_body_function_index;
 	zend_native_entry_cell *entry_cell;
 	zend_native_internal_call_cell *internal_call_cell;
 	zend_mir_call_site_ref call_site;
@@ -1320,6 +1321,8 @@ struct zend_tpde_plan {
 	uint8_t *compiled_variables_used;
 	uint32_t compiled_variable_count;
 	uint32_t symbol_namespace;
+	uint32_t wrapper_function_index;
+	uint32_t typed_body_function_index;
 	zend_mir_function_record function;
 	zend_mir_block_id *block_ids;
 	uint32_t block_count;
