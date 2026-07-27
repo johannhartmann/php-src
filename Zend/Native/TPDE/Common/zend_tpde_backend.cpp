@@ -5812,6 +5812,9 @@ static zend_tpde_local_abi_type machine_plan_value_abi(
 		value_index = static_cast<uint32_t>(alias);
 	}
 	const zend_tpde_value &value = plan->values[value_index];
+	if (value.local_abi.valid) {
+		return value.local_abi;
+	}
 	if (value.argument_index >= 0
 			&& plan->argument_abi != nullptr
 			&& static_cast<uint32_t>(value.argument_index)
@@ -6356,6 +6359,14 @@ static bool freeze_component_machine_plan(
 		const zend_tpde_plan *const *component_plans,
 		uint32_t component_count,
 		zend_native_diagnostic *diag) {
+	for (uint32_t component = 0;
+			component < component_count; ++component) {
+		for (uint32_t value = 0;
+				value < plans[component].value_count; ++value) {
+			plans[component].values[value].local_abi =
+				machine_plan_value_abi(&plans[component], value);
+		}
+	}
 	std::vector<uint8_t> candidates(component_count, 1);
 	bool changed;
 	do {
