@@ -1991,6 +1991,18 @@ bool ZendCompilerX64::compile_inst(
 						!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL)) {
 			return false;
 		}
+		const zend_tpde_machine_value_kind result_kind =
+			adaptor->machine_kind(node.result);
+		if (node.exact_type == ZEND_MIR_SCALAR_TYPE_I64
+				|| result_kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+				|| result_kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+				|| result_kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
+				|| result_kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR) {
+			auto address = val_ref(node.operands[0]);
+			auto result = result_ref(node.result);
+			return EncodeBase::encode_zend_native_load_u64(
+				address.part(0), result.part(0));
+		}
 		zend_mir_storage_id storage_id = ZEND_MIR_ID_INVALID;
 		const bool frame_slot = adaptor->frame_slot_reference(
 			node.operands[0], &storage_id);
@@ -2001,7 +2013,7 @@ bool ZendCompilerX64::compile_inst(
 			return false;
 		}
 		auto emit = [&](AsmReg address, int32_t offset) {
-			if (adaptor->machine_kind(node.result)
+			if (result_kind
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 				auto result_value = result_ref(node.result);
 				for (uint32_t part = 0; part < 2; ++part) {
@@ -2040,7 +2052,7 @@ bool ZendCompilerX64::compile_inst(
 						FE_MEM(address, 0, FE_NOREG, offset));
 					break;
 				default:
-					switch (adaptor->machine_kind(node.result)) {
+					switch (result_kind) {
 						case ZEND_TPDE_MACHINE_VALUE_STRING_PTR:
 						case ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR:
 						case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
