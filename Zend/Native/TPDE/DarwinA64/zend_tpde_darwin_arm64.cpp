@@ -37,7 +37,7 @@ extern "C" void __unw_remove_dynamic_eh_frame_section(uintptr_t)
 
 namespace {
 
-using Adaptor = zend::native::tpde::ZendIRAdaptor;
+using Adaptor = zend::native::tpde::ZendComponentIRAdaptor;
 using IRValueRef = zend::native::tpde::IRValueRef;
 using IRInstRef = zend::native::tpde::IRInstRef;
 using IRBlockRef = zend::native::tpde::IRBlockRef;
@@ -91,7 +91,10 @@ public:
 	ValuePart image_symbol_value(
 		zend_native_image_symbol_kind kind, uint32_t id) {
 		const zend_native_image_symbol *symbol =
-			zend_tpde_image_symbol_find(image_, kind, id);
+			zend_tpde_image_symbol_find(
+				image_, kind, id,
+				kind == ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER
+					? 0 : adaptor->current_function_index());
 		if (symbol == nullptr) {
 			return ValuePart{DarwinConfig::GP_BANK, 8};
 		}
@@ -4896,6 +4899,13 @@ bool ZendCompilerA64::compile_inst(
 			const zend_tpde_instruction &call =
 				adaptor->mir_instruction(instruction);
 			if (call.direct_call != nullptr) {
+				const bool local_component_call =
+					call.component_target_index != UINT32_MAX;
+				if (local_component_call
+						&& call.component_target_index
+							>= this->func_syms.size()) {
+					return false;
+				}
 				const bool generated_fast_path =
 					(call.direct_call->flags
 						& ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME) != 0;
@@ -4913,7 +4923,8 @@ bool ZendCompilerA64::compile_inst(
 					call.direct_call->result_operand.kind
 						== ZEND_MIR_SOURCE_OPERAND_UNUSED;
 				const bool generation_leased =
-					(call.direct_call->flags
+					local_component_call
+					|| (call.direct_call->flags
 						& ZEND_NATIVE_DIRECT_CALL_GENERATION_LEASED) != 0;
 				const uint32_t argument_count = call.call_argument_count;
 				const uint32_t callee_argument_count =
@@ -5661,32 +5672,50 @@ bool ZendCompilerA64::compile_inst(
 					auto second_reg = second.alloc_gp();
 					auto published_code_reg = published_code.alloc_gp();
 					std::optional<ScratchReg> run_time_cache;
+					auto load_callee_function =
+						[this, local_component_call, descriptor_reg, cell_reg](
+							AsmReg destination) {
+							load_off(destination,
+								local_component_call
+									? descriptor_reg : cell_reg,
+								local_component_call
+									? static_cast<uint32_t>(offsetof(
+										zend_native_direct_call_descriptor,
+										expected_function))
+									: static_cast<uint32_t>(offsetof(
+										zend_native_entry_cell, function)),
+								8);
+						};
 
-					add_offset(published_code_reg, cell_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_native_entry_cell, code)));
-					ASM(LDARx, published_code_reg, published_code_reg);
-					ASM(CMPxi, published_code_reg, 0);
-					generate_raw_jump(Jump::Jeq, slow_path);
-					load_off(first_reg, cell_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_native_entry_cell, function)), 8);
-					load_off(second_reg, descriptor_reg,
-						static_cast<uint32_t>(offsetof(
-							zend_native_direct_call_descriptor,
-							expected_function)), 8);
-					ASM(CMPx, first_reg, second_reg);
-					generate_raw_jump(Jump::Jne, slow_path);
-					load_off(first_reg, published_code_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_native_code, executable)), 1);
-					ASM(CMPxi, first_reg, 1);
-					generate_raw_jump(Jump::Jne, slow_path);
-					load_off(first_reg, cell_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_native_entry_cell, frame_probe)), 8);
-					ASM(CMPxi, first_reg, 0);
-					generate_raw_jump(Jump::Jne, slow_path);
+					if (local_component_call) {
+						materialize_constant(
+							UINT64_C(0), DarwinConfig::GP_BANK, 8,
+							published_code_reg);
+					} else {
+						add_offset(published_code_reg, cell_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_native_entry_cell, code)));
+						ASM(LDARx, published_code_reg, published_code_reg);
+						ASM(CMPxi, published_code_reg, 0);
+						generate_raw_jump(Jump::Jeq, slow_path);
+						load_callee_function(first_reg);
+						load_off(second_reg, descriptor_reg,
+							static_cast<uint32_t>(offsetof(
+								zend_native_direct_call_descriptor,
+								expected_function)), 8);
+						ASM(CMPx, first_reg, second_reg);
+						generate_raw_jump(Jump::Jne, slow_path);
+						load_off(first_reg, published_code_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_native_code, executable)), 1);
+						ASM(CMPxi, first_reg, 1);
+						generate_raw_jump(Jump::Jne, slow_path);
+						load_off(first_reg, cell_reg,
+							static_cast<uint32_t>(offsetof(
+								zend_native_entry_cell, frame_probe)), 8);
+						ASM(CMPxi, first_reg, 0);
+						generate_raw_jump(Jump::Jne, slow_path);
+					}
 					load_off(first_reg, context_reg,
 						static_cast<uint32_t>(offsetof(
 							zend_native_execution_context,
@@ -5702,9 +5731,7 @@ bool ZendCompilerA64::compile_inst(
 							->op_array.cache_size != 0) {
 						run_time_cache.emplace(this);
 						auto cache_reg = run_time_cache->alloc_gp();
-						load_off(first_reg, cell_reg,
-							static_cast<uint32_t>(offsetof(
-								zend_native_entry_cell, function)), 8);
+						load_callee_function(first_reg);
 						load_off(cache_reg, first_reg,
 							static_cast<uint32_t>(offsetof(
 								zend_op_array, run_time_cache__ptr)), 8);
@@ -5754,9 +5781,7 @@ bool ZendCompilerA64::compile_inst(
 						label_place(called_scope_ready);
 						ASM(CMPxi, first_reg, 0);
 						generate_raw_jump(Jump::Jeq, slow_path);
-						load_off(second_reg, cell_reg,
-							static_cast<uint32_t>(
-								offsetof(zend_native_entry_cell, function)), 8);
+						load_callee_function(second_reg);
 						load_off(second_reg, second_reg,
 							static_cast<uint32_t>(
 								offsetof(zend_op_array, scope)), 8);
@@ -5791,9 +5816,7 @@ bool ZendCompilerA64::compile_inst(
 						load_off(first_reg, frame_reg, receiver_offset, 8);
 						load_off(first_reg, first_reg,
 							static_cast<uint32_t>(offsetof(zend_object, ce)), 8);
-						load_off(second_reg, cell_reg,
-							static_cast<uint32_t>(
-								offsetof(zend_native_entry_cell, function)), 8);
+						load_callee_function(second_reg);
 						load_off(second_reg, second_reg,
 							static_cast<uint32_t>(
 								offsetof(zend_op_array, scope)), 8);
@@ -5904,9 +5927,7 @@ bool ZendCompilerA64::compile_inst(
 						callee_reg, 8);
 
 					/* Initialize the exact Zend frame layout. */
-					load_off(second_reg, cell_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_native_entry_cell, function)), 8);
+					load_callee_function(second_reg);
 					store_off(callee_reg,
 						static_cast<uint32_t>(
 							offsetof(zend_execute_data, func)),
@@ -6271,9 +6292,7 @@ bool ZendCompilerA64::compile_inst(
 						auto high_word_reg = high_word.alloc_gp();
 						auto type_info_reg = type_info.alloc_gp();
 
-						load_off(source_address_reg, cell_reg,
-							static_cast<uint32_t>(offsetof(
-								zend_native_entry_cell, function)), 8);
+						load_callee_function(source_address_reg);
 						load_off(source_address_reg, source_address_reg,
 							static_cast<uint32_t>(
 								offsetof(zend_op_array, literals)), 8);
@@ -6320,10 +6339,16 @@ bool ZendCompilerA64::compile_inst(
 						static_cast<uint32_t>(offsetof(
 							zend_native_direct_activation, callee)),
 						callee_reg, 8);
-					store_off(second_reg,
-						static_cast<uint32_t>(offsetof(
-							zend_native_direct_activation, cell)),
-						cell_reg, 8);
+					if (local_component_call) {
+						store_constant(second_reg,
+							static_cast<uint32_t>(offsetof(
+								zend_native_direct_activation, cell)), 0, 8);
+					} else {
+						store_off(second_reg,
+							static_cast<uint32_t>(offsetof(
+								zend_native_direct_activation, cell)),
+							cell_reg, 8);
+					}
 					store_off(second_reg,
 						static_cast<uint32_t>(offsetof(
 							zend_native_direct_activation, code)),
@@ -6404,34 +6429,55 @@ bool ZendCompilerA64::compile_inst(
 							first_reg, 4);
 					}
 
-					/* Load the published entry and call it directly. */
+					/* Component-local edges bind directly to TPDE's function
+					 * symbol. Cross-component edges retain the published
+					 * Entry-Cell target. */
 					first.reset();
 					second.reset();
 					ValuePart callee_value{DarwinConfig::GP_BANK, 8};
 					callee_value.set_value(
 						this, std::move(callee_address));
-					ScratchReg entry_argument{this};
-					auto entry_argument_reg = entry_argument.alloc_gp();
-					load_off(entry_argument_reg, published_code_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_native_code, entry)), 8);
-					ValuePart entry_value{DarwinConfig::GP_BANK, 8};
-					entry_value.set_value(this, std::move(entry_argument));
-					frame_scratch.reset();
-					context_scratch.reset();
-					cell_scratch.reset();
-					descriptor_scratch.reset();
-					published_code.reset();
-					zend::native::tpde::CCAssignerAppleA64 fast_assigner;
-					CallBuilder fast_builder{*this, fast_assigner};
-					fast_builder.add_arg(
-						std::move(callee_value), ::tpde::CCAssignment{});
-					fast_builder.add_arg(
-						CallArg{node.operands[context_operand + 1]});
-					fast_builder.call(std::move(entry_value));
 					ValuePart fast_status{DarwinConfig::GP_BANK, 4};
-					fast_builder.add_ret(
-						fast_status, ::tpde::CCAssignment{});
+					if (local_component_call) {
+						frame_scratch.reset();
+						context_scratch.reset();
+						cell_scratch.reset();
+						descriptor_scratch.reset();
+						published_code.reset();
+						zend::native::tpde::CCAssignerAppleA64 fast_assigner;
+						CallBuilder fast_builder{*this, fast_assigner};
+						fast_builder.add_arg(
+							std::move(callee_value), ::tpde::CCAssignment{});
+						fast_builder.add_arg(
+							CallArg{node.operands[context_operand + 1]});
+						fast_builder.call(
+							this->func_syms[call.component_target_index]);
+						fast_builder.add_ret(
+							fast_status, ::tpde::CCAssignment{});
+					} else {
+						ScratchReg entry_argument{this};
+						auto entry_argument_reg = entry_argument.alloc_gp();
+						load_off(entry_argument_reg, published_code_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_native_code, entry)), 8);
+						ValuePart entry_value{DarwinConfig::GP_BANK, 8};
+						entry_value.set_value(
+							this, std::move(entry_argument));
+						frame_scratch.reset();
+						context_scratch.reset();
+						cell_scratch.reset();
+						descriptor_scratch.reset();
+						published_code.reset();
+						zend::native::tpde::CCAssignerAppleA64 fast_assigner;
+						CallBuilder fast_builder{*this, fast_assigner};
+						fast_builder.add_arg(
+							std::move(callee_value), ::tpde::CCAssignment{});
+						fast_builder.add_arg(
+							CallArg{node.operands[context_operand + 1]});
+						fast_builder.call(std::move(entry_value));
+						fast_builder.add_ret(
+							fast_status, ::tpde::CCAssignment{});
+					}
 
 					/* Reacquire frame/context after the native ABI call. */
 					auto [post_frame_ref, post_frame] =
@@ -7583,8 +7629,9 @@ struct A64ImageState {
 	ZendCompilerA64 compiler;
 
 	explicit A64ImageState(
-		const zend_tpde_plan *plan, zend_native_image *image)
-		: adaptor{plan}, compiler{&adaptor, image} {}
+		std::span<const zend_tpde_plan *const> plans,
+		zend_native_image *image)
+		: adaptor{plans}, compiler{&adaptor, image} {}
 };
 
 #if defined(__APPLE__) && defined(__aarch64__)
@@ -7885,10 +7932,12 @@ bool parse_a64_object(
 } // namespace
 
 zend_result zend_tpde_emit_darwin_arm64(
-	const zend_tpde_plan *plan,
+	const zend_tpde_plan *const *plans,
+	uint32_t plan_count,
 	zend_native_image *image,
 	zend_native_diagnostic *diag) {
-	auto state = std::make_unique<A64ImageState>(plan, image);
+	auto state = std::make_unique<A64ImageState>(
+		std::span<const zend_tpde_plan *const>{plans, plan_count}, image);
 	if (!state->adaptor.valid() || !state->compiler.compile()) {
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 			"TPDE rejected the ZNMIR arm64 adaptor graph");
@@ -8050,22 +8099,56 @@ zend_result zend_tpde_map_darwin_arm64(
 			}
 		}
 	}
-	void *entry = nullptr;
+	if (image->component_entry_count == 0) {
+		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
+			"Darwin TPDE image contains no component entries");
+		if (has_executable) pthread_jit_write_protect_np(1);
+		return FAILURE;
+	}
+	code->component_entries = static_cast<zend_native_frame_entry_t *>(
+		std::calloc(image->component_entry_count,
+			sizeof(*code->component_entries)));
+	if (code->component_entries == nullptr) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"unable to allocate Darwin component entry table");
+		if (has_executable) pthread_jit_write_protect_np(1);
+		return FAILURE;
+	}
+	uint32_t mapped_entry_count = 0;
 	uint32_t entry_section_index = UINT32_MAX;
 	for (const SerializedSymbol &symbol : object.symbols) {
-		if (symbol.name == "zend_native_entry"
-				&& symbol.defined
-				&& symbol.section < published->sections.size()
-				&& published->sections[symbol.section].mapping != nullptr) {
-			entry = static_cast<uint8_t *>(
-				published->sections[symbol.section].mapping) + symbol.offset;
-			entry_section_index = symbol.section;
+		if (!symbol.defined
+				|| symbol.section >= published->sections.size()
+				|| published->sections[symbol.section].mapping == nullptr) {
+			continue;
+		}
+		for (uint32_t index = 0;
+				index < image->component_entry_count; ++index) {
+			const std::string expected = index == 0
+				? "zend_native_entry"
+				: "zend_native_component_" + std::to_string(index);
+			if (symbol.name != expected
+					|| code->component_entries[index] != nullptr) {
+				continue;
+			}
+			code->component_entries[index] =
+				reinterpret_cast<zend_native_frame_entry_t>(
+					static_cast<uint8_t *>(
+						published->sections[symbol.section].mapping)
+					+ symbol.offset);
+			if (index == 0) {
+				entry_section_index = symbol.section;
+			}
+			mapped_entry_count++;
 			break;
 		}
 	}
-	if (entry == nullptr) {
+	if (mapped_entry_count != image->component_entry_count) {
+		std::free(code->component_entries);
+		code->component_entries = nullptr;
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
-			"Darwin TPDE entry symbol was not mapped");
+			"Darwin TPDE component entry symbol was not mapped");
 		if (has_executable) pthread_jit_write_protect_np(1);
 		return FAILURE;
 	}
@@ -8117,7 +8200,8 @@ zend_result zend_tpde_map_darwin_arm64(
 		published->sections[entry_section_index];
 	code->mapping = entry_section.mapping;
 	code->mapping_size = entry_section.mapping_size;
-	code->entry = reinterpret_cast<zend_native_frame_entry_t>(entry);
+	code->entry = code->component_entries[0];
+	code->component_entry_count = image->component_entry_count;
 	code->unwind_registered = published->unwind_registered;
 	code->target_state = published.release();
 	code->destroy_target_state = destroy_a64_published_state;

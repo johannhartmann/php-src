@@ -11,7 +11,9 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -2397,5 +2399,264 @@ public:
 };
 
 static_assert(::tpde::IRAdaptor<ZendIRAdaptor>);
+
+/*
+ * TPDE's function switch is the natural component boundary: value, block and
+ * instruction references are local to the selected function, while the
+ * compiler owns one symbol table, one allocator run and one object image for
+ * the complete component.  Keep the mature single-function view as the
+ * per-function implementation and expose it through this zero-copy
+ * multi-function adaptor instead of flattening all ZNMIR into a second IR.
+ */
+class ZendComponentIRAdaptor {
+public:
+	using IRValueRef = zend::native::tpde::IRValueRef;
+	using IRInstRef = zend::native::tpde::IRInstRef;
+	using IRBlockRef = zend::native::tpde::IRBlockRef;
+	using IRFuncRef = zend::native::tpde::IRFuncRef;
+	using InstKind = ZendIRAdaptor::InstKind;
+	using InstNode = ZendIRAdaptor::InstNode;
+	using ArgumentGuard = ZendIRAdaptor::ArgumentGuard;
+	using PhiRef = ZendIRAdaptor::PhiRef;
+
+	static constexpr IRValueRef INVALID_VALUE_REF =
+		ZendIRAdaptor::INVALID_VALUE_REF;
+	static constexpr IRBlockRef INVALID_BLOCK_REF =
+		ZendIRAdaptor::INVALID_BLOCK_REF;
+	static constexpr IRFuncRef INVALID_FUNC_REF =
+		ZendIRAdaptor::INVALID_FUNC_REF;
+	static constexpr bool TPDE_PROVIDES_HIGHEST_VAL_IDX =
+		ZendIRAdaptor::TPDE_PROVIDES_HIGHEST_VAL_IDX;
+	static constexpr bool TPDE_LIVENESS_VISIT_ARGS =
+		ZendIRAdaptor::TPDE_LIVENESS_VISIT_ARGS;
+
+	static constexpr uint32_t EXECUTE_DATA_VALUE =
+		ZendIRAdaptor::EXECUTE_DATA_VALUE;
+	static constexpr uint32_t EXECUTION_CONTEXT_ARGUMENT =
+		ZendIRAdaptor::EXECUTION_CONTEXT_ARGUMENT;
+	static constexpr uint32_t FRAME_VALUE = ZendIRAdaptor::FRAME_VALUE;
+	static constexpr uint32_t EXECUTION_CONTEXT_VALUE =
+		ZendIRAdaptor::EXECUTION_CONTEXT_VALUE;
+	static constexpr uint32_t MIR_VALUE_BASE = ZendIRAdaptor::MIR_VALUE_BASE;
+
+private:
+	std::vector<std::unique_ptr<ZendIRAdaptor>> members_;
+	std::vector<IRFuncRef> functions_;
+	std::vector<std::string> link_names_;
+	ZendIRAdaptor *active_ = nullptr;
+	uint32_t active_index_ = 0;
+
+public:
+	explicit ZendComponentIRAdaptor(const zend_tpde_plan *plan)
+		: ZendComponentIRAdaptor(
+			std::span<const zend_tpde_plan *const>{&plan, 1}) {}
+
+	explicit ZendComponentIRAdaptor(
+			std::span<const zend_tpde_plan *const> plans) {
+		members_.reserve(plans.size());
+		functions_.reserve(plans.size());
+		link_names_.reserve(plans.size());
+		for (uint32_t index = 0; index < plans.size(); ++index) {
+			members_.push_back(
+				std::make_unique<ZendIRAdaptor>(plans[index]));
+			functions_.push_back(IRFuncRef{index});
+			link_names_.push_back(index == 0
+				? "zend_native_entry"
+				: "zend_native_component_" + std::to_string(index));
+		}
+		if (!members_.empty()) {
+			active_ = members_[0].get();
+		}
+	}
+
+	bool valid() const {
+		return active_ != nullptr
+			&& std::all_of(members_.begin(), members_.end(),
+				[](const auto &member) { return member->valid(); });
+	}
+	uint32_t current_function_index() const { return active_index_; }
+	const zend_tpde_plan *plan() const { return active_->plan(); }
+	const void *runtime_helper(zend_native_runtime_helper_id id) const {
+		return active_->runtime_helper(id);
+	}
+	IRBlockRef block_ref(zend_mir_block_id id) const {
+		return active_->block_ref(id);
+	}
+	const InstNode &node(IRInstRef inst) const { return active_->node(inst); }
+	const zend_tpde_instruction &mir_instruction(IRInstRef inst) const {
+		return active_->mir_instruction(inst);
+	}
+	std::span<const ArgumentGuard> argument_guards() const {
+		return active_->argument_guards();
+	}
+	std::span<const uint32_t> user_opcode_next_landings() const {
+		return active_->user_opcode_next_landings();
+	}
+	std::span<const uint32_t> user_opcode_dispatch_to_sources() const {
+		return active_->user_opcode_dispatch_to_sources();
+	}
+	std::span<const uint32_t> generator_resume_targets() const {
+		return active_->generator_resume_targets();
+	}
+	std::span<const zend_mir_block_id>
+	generator_resume_exception_blocks() const {
+		return active_->generator_resume_exception_blocks();
+	}
+	zend_mir_instruction_record instruction_record(IRInstRef inst) const {
+		return active_->instruction_record(inst);
+	}
+	zend_mir_representation representation(IRValueRef value) const {
+		return active_->representation(value);
+	}
+	zend_mir_scalar_type_mask exact_type(IRValueRef value) const {
+		return active_->exact_type(value);
+	}
+	zend_tpde_machine_value_kind machine_kind(IRValueRef value) const {
+		return active_->machine_kind(value);
+	}
+	bool machine_value_is_register_authoritative(IRValueRef value) const {
+		return active_->machine_value_is_register_authoritative(value);
+	}
+	bool plan_value_is_register_authoritative(
+			zend_mir_value_id value_id) const {
+		return active_->plan_value_is_register_authoritative(value_id);
+	}
+	zend_mir_storage_id canonical_storage(IRValueRef value) const {
+		return active_->canonical_storage(value);
+	}
+	uint32_t frame_slot_reference_count() const {
+		return active_->frame_slot_reference_count();
+	}
+	IRValueRef frame_slot_reference(uint32_t index) const {
+		return active_->frame_slot_reference(index);
+	}
+	bool frame_slot_reference(
+			IRValueRef value, zend_mir_storage_id *storage_id) const {
+		return active_->frame_slot_reference(value, storage_id);
+	}
+	bool constant(IRValueRef value, uint64_t *bits) const {
+		return active_->constant(value, bits);
+	}
+
+	uint32_t func_count() const {
+		return static_cast<uint32_t>(functions_.size());
+	}
+	const auto &funcs() const { return functions_; }
+	const auto &funcs_to_compile() const { return functions_; }
+	std::string_view func_link_name(IRFuncRef function) const {
+		const uint32_t index = static_cast<uint32_t>(function);
+		return index < link_names_.size()
+			? std::string_view{link_names_[index]} : std::string_view{};
+	}
+	bool func_extern(IRFuncRef) const { return false; }
+	bool func_only_local(IRFuncRef) const { return false; }
+	bool func_has_weak_linkage(IRFuncRef) const { return false; }
+	bool cur_needs_unwind_info() const {
+		return active_->cur_needs_unwind_info();
+	}
+	bool cur_is_vararg() const { return false; }
+	uint32_t cur_highest_val_idx() const {
+		return active_->cur_highest_val_idx();
+	}
+	const auto &cur_args() const { return active_->cur_args(); }
+	static bool cur_arg_is_byval(uint32_t index) {
+		return ZendIRAdaptor::cur_arg_is_byval(index);
+	}
+	static uint32_t cur_arg_byval_align(uint32_t index) {
+		return ZendIRAdaptor::cur_arg_byval_align(index);
+	}
+	static uint32_t cur_arg_byval_size(uint32_t index) {
+		return ZendIRAdaptor::cur_arg_byval_size(index);
+	}
+	static bool cur_arg_is_sret(uint32_t index) {
+		return ZendIRAdaptor::cur_arg_is_sret(index);
+	}
+	const auto &cur_static_allocas() const {
+		return active_->cur_static_allocas();
+	}
+	static bool cur_has_dynamic_alloca() { return false; }
+	IRBlockRef cur_entry_block() const {
+		return active_->cur_entry_block();
+	}
+	const auto &cur_blocks() const { return active_->cur_blocks(); }
+	std::span<const IRBlockRef> block_succs(IRBlockRef block) const {
+		return active_->block_succs(block);
+	}
+	std::span<const IRInstRef> block_insts(IRBlockRef block) const {
+		return active_->block_insts(block);
+	}
+	std::span<const IRValueRef> block_phis(IRBlockRef block) const {
+		return active_->block_phis(block);
+	}
+	uint32_t block_info(IRBlockRef block) const {
+		return active_->block_info(block);
+	}
+	void block_set_info(IRBlockRef block, uint32_t value) {
+		active_->block_set_info(block, value);
+	}
+	uint32_t block_info2(IRBlockRef block) const {
+		return active_->block_info2(block);
+	}
+	void block_set_info2(IRBlockRef block, uint32_t value) {
+		active_->block_set_info2(block, value);
+	}
+	std::string_view block_fmt_ref(IRBlockRef block) const {
+		return active_->block_fmt_ref(block);
+	}
+	::tpde::ValLocalIdx val_local_idx(IRValueRef value) const {
+		return active_->val_local_idx(value);
+	}
+	bool val_ignore_in_liveness_analysis(IRValueRef value) const {
+		return active_->val_ignore_in_liveness_analysis(value);
+	}
+	bool val_is_phi(IRValueRef value) const {
+		return active_->val_is_phi(value);
+	}
+	PhiRef val_as_phi(IRValueRef value) const {
+		return active_->val_as_phi(value);
+	}
+	static uint32_t val_alloca_size(IRValueRef value) {
+		return ZendIRAdaptor::val_alloca_size(value);
+	}
+	static uint32_t val_alloca_align(IRValueRef value) {
+		return ZendIRAdaptor::val_alloca_align(value);
+	}
+	std::string_view value_fmt_ref(IRValueRef value) const {
+		return active_->value_fmt_ref(value);
+	}
+	std::span<const IRValueRef> inst_operands(IRInstRef inst) const {
+		return active_->inst_operands(inst);
+	}
+	auto inst_results(IRInstRef inst) const {
+		return active_->inst_results(inst);
+	}
+	bool inst_fused(IRInstRef inst) const {
+		return active_->inst_fused(inst);
+	}
+	void mark_fused(IRInstRef inst) { active_->mark_fused(inst); }
+	std::string_view inst_fmt_ref(IRInstRef inst) const {
+		return active_->inst_fmt_ref(inst);
+	}
+	void start_compile() const {}
+	void end_compile() const {}
+	bool switch_func(IRFuncRef function) {
+		const uint32_t index = static_cast<uint32_t>(function);
+		if (index >= members_.size()) {
+			return false;
+		}
+		active_index_ = index;
+		active_ = members_[index].get();
+		return true;
+	}
+	void reset() {
+		for (auto &member : members_) {
+			member->reset();
+		}
+		active_index_ = 0;
+		active_ = members_.empty() ? nullptr : members_[0].get();
+	}
+};
+
+static_assert(::tpde::IRAdaptor<ZendComponentIRAdaptor>);
 
 } // namespace zend::native::tpde

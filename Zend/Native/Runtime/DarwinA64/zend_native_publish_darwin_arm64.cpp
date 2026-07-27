@@ -33,6 +33,7 @@ zend_result zend_native_publish_darwin_arm64(
 	code->frame_variable_count = image->frame_variable_count;
 	code->frame_temporary_count = image->frame_temporary_count;
 	if (zend_tpde_map_darwin_arm64(image, code, diag) == FAILURE) {
+		std::free(code->component_entries);
 		std::free(code);
 		return FAILURE;
 	}
