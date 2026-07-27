@@ -722,260 +722,6 @@ uint64_t scalar_bits_from_zval(const zval *value) {
 	}
 }
 
-bool configure_inline_leaf_body(
-	zend_native_direct_call_descriptor *descriptor,
-	const zend_op_array &op_array)
-{
-	uint32_t index = op_array.num_args;
-	const zend_op *operation;
-	const zend_op *return_op;
-	uint32_t value_var;
-
-	if (descriptor == nullptr || index >= op_array.last
-			|| (descriptor->flags
-				& ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME) == 0) {
-		return false;
-	}
-	operation = &op_array.opcodes[index];
-	if (operation->opcode == ZEND_RETURN
-			&& operation->op1_type == IS_UNUSED
-			&& descriptor->result_operand.kind
-				== ZEND_MIR_SOURCE_OPERAND_UNUSED) {
-		descriptor->inline_leaf_operation = ZEND_NATIVE_INLINE_LEAF_VOID;
-		descriptor->flags |= ZEND_NATIVE_DIRECT_CALL_INLINE_LEAF_BODY;
-		return true;
-	}
-	if (operation->opcode == ZEND_RETURN
-			&& operation->op1_type == IS_CONST
-			&& descriptor->result_operand.kind
-				!= ZEND_MIR_SOURCE_OPERAND_UNUSED) {
-		const zval *constant = RT_CONSTANT(operation, operation->op1);
-		if (constant == nullptr
-				|| exact_scalar_from_zval(constant)
-					!= descriptor->result_type) {
-			return false;
-		}
-		descriptor->inline_leaf_operation =
-			ZEND_NATIVE_INLINE_LEAF_SCALAR_CONSTANT;
-		descriptor->inline_leaf_constant =
-			scalar_bits_from_zval(constant);
-		descriptor->flags |= ZEND_NATIVE_DIRECT_CALL_INLINE_LEAF_BODY;
-		return true;
-	}
-	if (operation->opcode == ZEND_VERIFY_RETURN_TYPE) {
-		if (operation->op1_type != IS_CV || index + 1 >= op_array.last) {
-			return false;
-		}
-		return_op = &op_array.opcodes[index + 1];
-		if (return_op->opcode != ZEND_RETURN
-				|| return_op->op1_type != IS_CV
-				|| return_op->op1.var != operation->op1.var) {
-			return false;
-		}
-		const uint32_t argument = EX_VAR_TO_NUM(operation->op1.var);
-		if (argument >= descriptor->argument_count
-				|| descriptor->arguments[argument].exact_type
-					!= descriptor->result_type) {
-			return false;
-		}
-		descriptor->inline_leaf_operation =
-			ZEND_NATIVE_INLINE_LEAF_ARGUMENT;
-		descriptor->inline_leaf_argument = argument;
-		descriptor->flags |= ZEND_NATIVE_DIRECT_CALL_INLINE_LEAF_BODY;
-		return true;
-	}
-	if (operation->opcode != ZEND_ADD && operation->opcode != ZEND_SUB) {
-		return false;
-	}
-	if (operation->result_type != IS_TMP_VAR
-			&& operation->result_type != IS_VAR) {
-		return false;
-	}
-	value_var = operation->result.var;
-	index++;
-	if (index < op_array.last
-			&& op_array.opcodes[index].opcode == ZEND_VERIFY_RETURN_TYPE) {
-		if ((op_array.opcodes[index].op1_type != IS_TMP_VAR
-					&& op_array.opcodes[index].op1_type != IS_VAR)
-				|| op_array.opcodes[index].op1.var != value_var) {
-			return false;
-		}
-		index++;
-	}
-	if (index >= op_array.last) {
-		return false;
-	}
-	return_op = &op_array.opcodes[index];
-	if (return_op->opcode != ZEND_RETURN
-			|| (return_op->op1_type != IS_TMP_VAR
-				&& return_op->op1_type != IS_VAR)
-			|| return_op->op1.var != value_var
-			|| descriptor->result_type != ZEND_MIR_SCALAR_TYPE_I64) {
-		return false;
-	}
-	const bool left_argument = operation->op1_type == IS_CV
-		&& operation->op2_type == IS_CONST;
-	const bool right_argument = operation->op1_type == IS_CONST
-		&& operation->op2_type == IS_CV;
-	const bool two_arguments = operation->op1_type == IS_CV
-		&& operation->op2_type == IS_CV;
-	if (two_arguments) {
-		const uint32_t argument1 = EX_VAR_TO_NUM(operation->op1.var);
-		const uint32_t argument2 = EX_VAR_TO_NUM(operation->op2.var);
-		if (argument1 >= descriptor->argument_count
-				|| argument2 >= descriptor->argument_count
-				|| descriptor->arguments[argument1].exact_type
-					!= ZEND_MIR_SCALAR_TYPE_I64
-				|| descriptor->arguments[argument2].exact_type
-					!= ZEND_MIR_SCALAR_TYPE_I64) {
-			return false;
-		}
-		descriptor->inline_leaf_operation = operation->opcode == ZEND_ADD
-			? ZEND_NATIVE_INLINE_LEAF_LONG_ADD_ARGUMENT
-			: ZEND_NATIVE_INLINE_LEAF_LONG_SUB_ARGUMENT;
-		descriptor->inline_leaf_argument = argument1;
-		descriptor->inline_leaf_argument2 = argument2;
-		descriptor->flags |= ZEND_NATIVE_DIRECT_CALL_INLINE_LEAF_BODY;
-		return true;
-	}
-	if (!left_argument && !right_argument) {
-		return false;
-	}
-	const uint32_t argument = EX_VAR_TO_NUM(
-		left_argument ? operation->op1.var : operation->op2.var);
-	const zval *constant = RT_CONSTANT(
-		operation, left_argument ? operation->op2 : operation->op1);
-	if (argument >= descriptor->argument_count || constant == nullptr
-			|| Z_TYPE_P(constant) != IS_LONG
-			|| descriptor->arguments[argument].exact_type
-				!= ZEND_MIR_SCALAR_TYPE_I64) {
-		return false;
-	}
-	if (operation->opcode == ZEND_ADD) {
-		descriptor->inline_leaf_operation =
-			ZEND_NATIVE_INLINE_LEAF_LONG_ADD_CONSTANT;
-	} else if (left_argument) {
-		descriptor->inline_leaf_operation =
-			ZEND_NATIVE_INLINE_LEAF_LONG_SUB_CONSTANT;
-	} else {
-		descriptor->inline_leaf_operation =
-			ZEND_NATIVE_INLINE_LEAF_CONSTANT_SUB_LONG;
-	}
-	descriptor->inline_leaf_argument = argument;
-	descriptor->inline_leaf_constant =
-		static_cast<uint64_t>(Z_LVAL_P(constant));
-	descriptor->flags |= ZEND_NATIVE_DIRECT_CALL_INLINE_LEAF_BODY;
-	return true;
-}
-
-bool configure_inline_boxed_leaf_body(
-	zend_native_direct_call_descriptor *descriptor,
-	const zend_op_array &op_array)
-{
-	uint32_t index = op_array.num_args;
-	uint32_t argument;
-	uint32_t result_var;
-
-	if (descriptor == nullptr || index >= op_array.last
-			|| descriptor->receiver_kind
-				!= ZEND_NATIVE_INTERNAL_RECEIVER_NONE
-			|| descriptor->result_type != ZEND_MIR_SCALAR_TYPE_I64
-			|| descriptor->result_operand.kind
-				== ZEND_MIR_SOURCE_OPERAND_UNUSED) {
-		return false;
-	}
-	const zend_op *operation = &op_array.opcodes[index];
-	if (operation->opcode == ZEND_RETURN
-			&& operation->op1_type == IS_CONST
-			&& descriptor->argument_count == op_array.num_args) {
-		for (uint32_t n = 0; n < descriptor->argument_count; ++n) {
-			const zend_mir_source_operand_ref &source =
-				descriptor->arguments[n].source_operand;
-			if (descriptor->arguments[n].mode
-					!= ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
-					|| (op_array.arg_info != nullptr
-						&& ZEND_TYPE_IS_SET(op_array.arg_info[n].type)
-						&& ZEND_TYPE_PURE_MASK(
-							op_array.arg_info[n].type) != MAY_BE_ANY)
-					/*
-					 * A temporary argument is consumed by the call. Skipping
-					 * its frame would also skip that ownership transition.
-					 * Literal and caller-CV arguments only incur a balanced
-					 * copy/release pair, so the unobserved constant body may
-					 * safely elide them.
-					 */
-					|| (source.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
-						&& !((source.kind
-									== ZEND_MIR_SOURCE_OPERAND_SLOT
-								|| source.kind
-									== ZEND_MIR_SOURCE_OPERAND_SSA)
-							&& source.slot_kind
-								== ZEND_MIR_SOURCE_SLOT_CV))) {
-				return false;
-			}
-		}
-		const zval *constant = RT_CONSTANT(operation, operation->op1);
-		if (constant == nullptr
-				|| exact_scalar_from_zval(constant)
-					!= descriptor->result_type) {
-			return false;
-		}
-		descriptor->inline_leaf_operation =
-			ZEND_NATIVE_INLINE_LEAF_SCALAR_CONSTANT;
-		descriptor->inline_leaf_constant = scalar_bits_from_zval(constant);
-		descriptor->flags |= ZEND_NATIVE_DIRECT_CALL_INLINE_LEAF_BODY
-			| ZEND_NATIVE_DIRECT_CALL_INLINE_BOXED_LEAF_BODY;
-		return true;
-	}
-	if (operation->opcode != ZEND_STRLEN
-			|| operation->op1_type != IS_CV
-			|| (operation->result_type != IS_TMP_VAR
-				&& operation->result_type != IS_VAR)) {
-		return false;
-	}
-	argument = EX_VAR_TO_NUM(operation->op1.var);
-	result_var = operation->result.var;
-	if (argument >= descriptor->argument_count
-			|| descriptor->arguments[argument].mode
-				!= ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
-			|| descriptor->arguments[argument].source_frame_offset
-				== UINT32_MAX
-			|| (descriptor->arguments[argument].source_operand.kind
-					!= ZEND_MIR_SOURCE_OPERAND_SLOT
-				&& descriptor->arguments[argument].source_operand.kind
-					!= ZEND_MIR_SOURCE_OPERAND_SSA)
-			|| descriptor->arguments[argument].source_operand.slot_kind
-				!= ZEND_MIR_SOURCE_SLOT_CV) {
-		return false;
-	}
-	index++;
-	if (index < op_array.last
-			&& op_array.opcodes[index].opcode == ZEND_VERIFY_RETURN_TYPE) {
-		if ((op_array.opcodes[index].op1_type != IS_TMP_VAR
-					&& op_array.opcodes[index].op1_type != IS_VAR)
-				|| op_array.opcodes[index].op1.var != result_var) {
-			return false;
-		}
-		index++;
-	}
-	if (index >= op_array.last) {
-		return false;
-	}
-	const zend_op *return_op = &op_array.opcodes[index];
-	if (return_op->opcode != ZEND_RETURN
-			|| (return_op->op1_type != IS_TMP_VAR
-				&& return_op->op1_type != IS_VAR)
-			|| return_op->op1.var != result_var) {
-		return false;
-	}
-	descriptor->inline_leaf_operation =
-		ZEND_NATIVE_INLINE_LEAF_STRING_LENGTH_ARGUMENT;
-	descriptor->inline_leaf_argument = argument;
-	descriptor->flags |= ZEND_NATIVE_DIRECT_CALL_INLINE_LEAF_BODY
-		| ZEND_NATIVE_DIRECT_CALL_INLINE_BOXED_LEAF_BODY;
-	return true;
-}
-
 zend_mir_scalar_type_mask exact_scalar_from_call_result(
 	const zend_op_array *op_array,
 	const zend_mir_call_view *calls,
@@ -3888,7 +3634,6 @@ bool initialize_plan(
 								site.arguments.count, callee);
 						}
 					}
-					const bool inline_frame_shape = trivial_frame;
 					if (zend_mir_id_is_valid(record.result_id)) {
 						const int32_t result_index =
 							zend_tpde_value_index(plan, record.result_id);
@@ -4057,19 +3802,7 @@ bool initialize_plan(
 									== ZEND_MIR_SOURCE_SLOT_TMP
 								|| descriptor->result_operand.slot_kind
 									== ZEND_MIR_SOURCE_SLOT_VAR));
-					/*
-					 * A tightly recognized boxed leaf body does not need to
-					 * materialize arguments on the unobserved path. Keep the
-					 * normal direct-call slow path available for observers and
-					 * failed guards, but do not reject private inlining merely
-					 * because an otherwise valid argument is a literal string,
-					 * array, object, or another boxed value.
-					 */
-					const bool boxed_leaf_body =
-						inline_frame_shape && inline_result
-						&& configure_inline_boxed_leaf_body(
-							descriptor, callee->op_array);
-					if ((trivial_frame || boxed_leaf_body) && inline_result) {
+					if (trivial_frame && inline_result) {
 						descriptor->flags |=
 							ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME;
 						bool leaf_scalar_frame =
@@ -4094,12 +3827,6 @@ bool initialize_plan(
 						if (leaf_scalar_frame) {
 							descriptor->flags |=
 								ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME;
-						}
-						if (!configure_inline_leaf_body(
-								descriptor, callee->op_array)
-								&& !boxed_leaf_body) {
-							(void) configure_inline_boxed_leaf_body(
-								descriptor, callee->op_array);
 						}
 					}
 					plan->instructions[i].direct_call = descriptor;
@@ -4731,10 +4458,6 @@ zend_native_image_metrics collect_plan_metrics(const zend_tpde_plan &plan) {
 	metrics.direct_call_sites = plan.direct_call_count;
 	for (uint32_t index = 0; index < plan.direct_call_count; ++index) {
 		if (plan.direct_calls[index] != nullptr) {
-			if ((plan.direct_calls[index]->flags
-					& ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME) != 0) {
-				metrics.direct_leaf_scalar_sites++;
-			}
 			metrics.direct_call_frame_bytes +=
 				plan.direct_calls[index]->frame_size;
 		}
