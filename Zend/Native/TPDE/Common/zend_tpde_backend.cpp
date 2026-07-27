@@ -565,6 +565,91 @@ zend_mir_scalar_type_mask exact_scalar_from_declared_type(
 	}
 }
 
+zend_tpde_local_abi_type zend_tpde_local_abi_from_declared_type(
+	const zend_type *type, bool by_reference,
+	zend_tpde_local_abi_transfer transfer)
+{
+	if (by_reference) {
+		return {
+			ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
+			ZEND_MIR_SCALAR_TYPE_NONE,
+			ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR,
+			transfer,
+			true,
+		};
+	}
+	if (type == nullptr || !ZEND_TYPE_IS_SET(*type)) {
+		return {
+			ZEND_MIR_REPRESENTATION_ZVAL,
+			ZEND_MIR_SCALAR_TYPE_NONE,
+			ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
+			transfer,
+			true,
+		};
+	}
+
+	const zend_mir_scalar_type_mask scalar =
+		exact_scalar_from_declared_type(*type);
+	if (zend_mir_scalar_type_is_exact(scalar)
+			&& scalar != ZEND_MIR_SCALAR_TYPE_NULL) {
+		return {
+			scalar == ZEND_MIR_SCALAR_TYPE_I1
+				? ZEND_MIR_REPRESENTATION_I1
+			: scalar == ZEND_MIR_SCALAR_TYPE_F64
+				? ZEND_MIR_REPRESENTATION_DOUBLE
+				: ZEND_MIR_REPRESENTATION_I64,
+			scalar,
+			scalar == ZEND_MIR_SCALAR_TYPE_I1
+				? ZEND_TPDE_MACHINE_VALUE_BOOL
+			: scalar == ZEND_MIR_SCALAR_TYPE_F64
+				? ZEND_TPDE_MACHINE_VALUE_F64
+				: ZEND_TPDE_MACHINE_VALUE_I64,
+			ZEND_TPDE_LOCAL_ABI_TRANSFER_NONE,
+			true,
+		};
+	}
+
+	const uint32_t value_types =
+		ZEND_TYPE_FULL_MASK(*type) & MAY_BE_ANY;
+	if (value_types == MAY_BE_STRING) {
+		return {
+			ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
+			ZEND_MIR_SCALAR_TYPE_NONE,
+			ZEND_TPDE_MACHINE_VALUE_STRING_PTR,
+			transfer,
+			true,
+		};
+	}
+	if (value_types == MAY_BE_ARRAY) {
+		return {
+			ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
+			ZEND_MIR_SCALAR_TYPE_NONE,
+			ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR,
+			transfer,
+			true,
+		};
+	}
+	if (value_types == MAY_BE_OBJECT) {
+		return {
+			ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
+			ZEND_MIR_SCALAR_TYPE_NONE,
+			ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR,
+			transfer,
+			true,
+		};
+	}
+	if (value_types != 0) {
+		return {
+			ZEND_MIR_REPRESENTATION_ZVAL,
+			ZEND_MIR_SCALAR_TYPE_NONE,
+			ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
+			transfer,
+			true,
+		};
+	}
+	return {};
+}
+
 zend_mir_scalar_type_mask exact_scalar_from_type_mask(uint32_t type) {
 	switch (type) {
 		case MAY_BE_NULL:
@@ -1777,6 +1862,125 @@ bool freeze_machine_plan_consumers(
 	return true;
 }
 
+zend_tpde_source_value_binding freeze_source_value_binding(
+	const zend_tpde_plan *plan,
+	const zend_mir_source_operand_ref &operand,
+	zend_mir_storage_id storage_id,
+	uint32_t consumer_source_position)
+{
+	zend_mir_value_id value_id = ZEND_MIR_ID_INVALID;
+	if (source_operand_value_id(operand, value_id)) {
+		const int32_t value_index = zend_tpde_value_index(plan, value_id);
+		if (value_index >= 0) {
+			return {value_index, -1};
+		}
+	}
+	if ((operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+			&& operand.index < plan->argument_count
+			&& plan->argument_value_indices != nullptr
+			&& plan->argument_value_indices[operand.index] >= 0) {
+		return {plan->argument_value_indices[operand.index], -1};
+	}
+	if (!zend_mir_id_is_valid(storage_id)) {
+		return {-1, -1};
+	}
+
+	int32_t definition = -1;
+	uint32_t definition_source_position = 0;
+	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+		const zend_tpde_instruction &candidate = plan->instructions[index];
+		if (candidate.direct_call == nullptr
+				|| candidate.call_site.source_do_opline_index
+					> consumer_source_position
+				|| source_descriptor_storage(plan->source_op_array,
+					candidate.direct_call->result_operand) != storage_id) {
+			continue;
+		}
+		if (definition < 0
+				|| candidate.call_site.source_do_opline_index
+					>= definition_source_position) {
+			definition = static_cast<int32_t>(index);
+			definition_source_position =
+				candidate.call_site.source_do_opline_index;
+		}
+	}
+	return {-1, definition};
+}
+
+bool freeze_source_value_bindings(
+	zend_tpde_plan *plan, zend_native_diagnostic *diag)
+{
+	if (plan == nullptr || plan->source_op_array == nullptr) {
+		return true;
+	}
+	for (uint32_t index = 0; index < plan->call_argument_count; ++index) {
+		zend_mir_call_argument_ref argument{};
+		if (!zend_tpde_call_argument_at(plan, index, &argument)
+				|| argument.send_opline_index
+					>= plan->source_op_array->last) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"unable to freeze a source call-argument value");
+			return false;
+		}
+		plan->call_argument_bindings[index] =
+			freeze_source_value_binding(
+				plan, argument.source_operand,
+				source_descriptor_storage(
+					plan->source_op_array, argument.source_operand),
+				argument.send_opline_index);
+	}
+
+	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+		zend_tpde_instruction &instruction = plan->instructions[index];
+		const zend_mir_instruction_record record =
+			zend_tpde_instruction_record_at(plan, &instruction);
+		if (!zend_mir_id_is_valid(record.id)) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"unable to freeze source values for an unknown instruction");
+			return false;
+		}
+		const uint32_t source_position =
+			zend_mir_id_is_valid(record.source_position_id)
+				? record.source_position_id : UINT32_MAX;
+		if (instruction.has_value_operation) {
+			const zend_mir_executable_value_ref &operation =
+				instruction.value_operation;
+			instruction.source_op1_binding = freeze_source_value_binding(
+				plan, operation.op1, operation.op1_storage_id,
+				source_position);
+			instruction.source_op2_binding = freeze_source_value_binding(
+				plan, operation.op2, operation.op2_storage_id,
+				source_position);
+			instruction.source_result_binding = freeze_source_value_binding(
+				plan, operation.result, operation.result_storage_id,
+				source_position);
+			instruction.source_auxiliary_binding =
+				freeze_source_value_binding(
+					plan, operation.auxiliary,
+					operation.auxiliary_storage_id, source_position);
+			const uint8_t source_opcode =
+				source_position < plan->source_op_array->last
+					? plan->source_op_array->opcodes[
+						source_position].opcode
+					: ZEND_NOP;
+			instruction.local_abi_transport =
+				record.opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN
+				&& (source_opcode == ZEND_RECV
+					|| source_opcode == ZEND_RECV_INIT
+					|| source_opcode == ZEND_RECV_VARIADIC);
+		}
+		if (instruction.direct_call != nullptr) {
+			instruction.source_result_binding = {-1,
+				static_cast<int32_t>(index)};
+		}
+	}
+	return true;
+}
+
 bool freeze_generator_resume_liveness(
 	zend_tpde_plan *plan, const zend_mir_value_view *value_model,
 	zend_native_diagnostic *diag)
@@ -2234,6 +2438,7 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->block_predecessors);
 	std::free(plan->values);
 	std::free(plan->argument_value_indices);
+	std::free(plan->argument_abi);
 	std::free(plan->value_index);
 	std::free(plan->instructions);
 	std::free(plan->instruction_index);
@@ -2247,6 +2452,7 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->compiled_variables_used);
 	std::free(plan->call_site_instruction_index);
 	std::free(plan->call_target_index);
+	std::free(plan->call_argument_bindings);
 	std::free(plan->user_binding_index);
 	std::free(plan->internal_binding_index);
 	std::free(plan->user_opcode_source_operations);
@@ -2558,6 +2764,8 @@ bool initialize_plan(
 		std::malloc(
 			static_cast<size_t>(plan->argument_count)
 				* sizeof(*plan->argument_value_indices)));
+	plan->argument_abi = static_cast<zend_tpde_local_abi_type *>(
+		std::calloc(plan->argument_count, sizeof(*plan->argument_abi)));
 	for (uint32_t i = 0;
 			i < plan->argument_count && plan->argument_value_indices != nullptr;
 			++i) {
@@ -2573,6 +2781,10 @@ bool initialize_plan(
 		plan->call_site_count, &plan->call_site_instruction_index_capacity);
 	plan->call_target_index = allocate_id_index(
 		plan->call_target_count, &plan->call_target_index_capacity);
+	plan->call_argument_bindings =
+		static_cast<zend_tpde_source_value_binding *>(std::malloc(
+			static_cast<size_t>(plan->call_argument_count)
+				* sizeof(*plan->call_argument_bindings)));
 	plan->user_binding_index = allocate_id_index(
 		user_binding_count, &plan->user_binding_index_capacity);
 	plan->internal_binding_index = allocate_id_index(
@@ -2589,7 +2801,8 @@ bool initialize_plan(
 			|| (plan->value_count != 0
 				&& (plan->values == nullptr || plan->value_index == nullptr))
 			|| (plan->argument_count != 0
-				&& plan->argument_value_indices == nullptr)
+				&& (plan->argument_value_indices == nullptr
+					|| plan->argument_abi == nullptr))
 			|| (plan->instruction_count != 0
 				&& (plan->instructions == nullptr
 					|| plan->instruction_index == nullptr))
@@ -2600,6 +2813,8 @@ bool initialize_plan(
 					|| plan->user_calls == nullptr))
 			|| (plan->call_target_count != 0
 				&& plan->call_target_index == nullptr)
+			|| (plan->call_argument_count != 0
+				&& plan->call_argument_bindings == nullptr)
 			|| (user_binding_count != 0 && plan->user_binding_index == nullptr)
 			|| (internal_binding_count != 0
 				&& plan->internal_binding_index == nullptr)) {
@@ -2635,6 +2850,10 @@ bool initialize_plan(
 		plan->instructions[i].zval_store_storage_id = ZEND_MIR_ID_INVALID;
 		plan->instructions[i].runtime_helper = ZEND_NATIVE_HELPER_COUNT;
 		plan->instructions[i].source_opline_index = UINT32_MAX;
+		plan->instructions[i].source_op1_binding = {-1, -1};
+		plan->instructions[i].source_op2_binding = {-1, -1};
+		plan->instructions[i].source_result_binding = {-1, -1};
+		plan->instructions[i].source_auxiliary_binding = {-1, -1};
 	}
 	for (uint32_t i = 0; i < plan->call_site_count; ++i) {
 		zend_mir_call_site_ref site;
@@ -2665,6 +2884,7 @@ bool initialize_plan(
 	}
 	for (uint32_t i = 0; i < plan->call_argument_count; ++i) {
 		zend_mir_call_argument_ref argument;
+		plan->call_argument_bindings[i] = {-1, -1};
 		if (!zend_tpde_call_argument_at(plan, i, &argument)) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
@@ -2939,6 +3159,7 @@ bool initialize_plan(
 			.category = ZEND_MIR_VALUE_CATEGORY_UNKNOWN,
 			.refcount_state = ZEND_MIR_REFCOUNT_UNKNOWN,
 			.argument_index = -1,
+			.register_alias_value_index = -1,
 			.machine_kind = ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
 			.location = ZEND_TPDE_MACHINE_LOCATION_CANONICAL_FRAME_SLOT,
 			.slot_state = ZEND_TPDE_CANONICAL_SLOT_UNMATERIALIZED,
@@ -3101,6 +3322,111 @@ bool initialize_plan(
 				"machine value facts do not match source SSA storage");
 			return false;
 		}
+	}
+	for (uint32_t argument = 0;
+			argument < plan->argument_count; ++argument) {
+		const zend_arg_info *arg_info =
+			source_op_array != nullptr
+				&& source_op_array->arg_info != nullptr
+				&& argument < source_op_array->num_args
+			? &source_op_array->arg_info[argument] : nullptr;
+		const bool by_reference =
+			arg_info != nullptr
+			&& (ZEND_ARG_SEND_MODE(arg_info)
+				& (ZEND_SEND_BY_REF | ZEND_SEND_PREFER_REF)) != 0;
+		plan->argument_abi[argument] =
+			zend_tpde_local_abi_from_declared_type(
+				arg_info == nullptr ? nullptr : &arg_info->type,
+				by_reference,
+				ZEND_TPDE_LOCAL_ABI_TRANSFER_BORROWED);
+	}
+	/*
+	 * A receive opcode is an SSA definition, but not a machine operation: its
+	 * result is exactly the incoming local-ABI argument. Keep that edge in the
+	 * frozen plan. This avoids both an adapter-side Zend SSA analysis and a
+	 * canonical-frame reload in the typed body.
+	 */
+	if (source_op_array != nullptr && source_ssa != nullptr
+			&& source_ssa->ops != nullptr) {
+		auto freeze_register_alias = [&](int32_t use_ssa, int32_t def_ssa) {
+			if (use_ssa < 0 || def_ssa < 0) {
+				return;
+			}
+			const int32_t source_index = zend_tpde_value_index(
+				plan, zend_mir_value_from_original_ssa(
+					static_cast<uint32_t>(use_ssa)));
+			const int32_t result_index = zend_tpde_value_index(
+				plan, zend_mir_value_from_original_ssa(
+					static_cast<uint32_t>(def_ssa)));
+			if (source_index < 0 || result_index < 0
+					|| source_index == result_index) {
+				return;
+			}
+			const zend_tpde_value &source = plan->values[source_index];
+			const zend_tpde_value &result = plan->values[result_index];
+			if (result.canonical_storage_id
+						== source.canonical_storage_id
+					&& result.machine_kind == source.machine_kind
+					&& result.exact_type == source.exact_type) {
+				plan->values[result_index].register_alias_value_index =
+					source_index;
+			}
+		};
+		for (uint32_t opline = 0;
+				opline < source_op_array->last; ++opline) {
+			const zend_op &op = source_op_array->opcodes[opline];
+			if (op.opcode == ZEND_VERIFY_RETURN_TYPE) {
+				freeze_register_alias(
+					source_ssa->ops[opline].op1_use,
+					source_ssa->ops[opline].op1_def);
+				continue;
+			}
+			if (op.opcode != ZEND_RECV
+					&& op.opcode != ZEND_RECV_INIT
+					&& op.opcode != ZEND_RECV_VARIADIC) {
+				continue;
+			}
+			const uint32_t argument = EX_VAR_TO_NUM(op.result.var);
+			const int32_t result_ssa = source_ssa->ops[opline].result_def;
+			if (argument >= plan->argument_count || result_ssa < 0
+					|| plan->argument_value_indices == nullptr
+					|| plan->argument_value_indices[argument] < 0) {
+				continue;
+			}
+			const int32_t result_index = zend_tpde_value_index(
+				plan, zend_mir_value_from_original_ssa(
+					static_cast<uint32_t>(result_ssa)));
+			if (result_index < 0) {
+				continue;
+			}
+			const int32_t argument_index =
+				plan->argument_value_indices[argument];
+			const zend_tpde_value &incoming =
+				plan->values[argument_index];
+			const zend_tpde_value &received =
+				plan->values[result_index];
+			if (argument_index != result_index
+					&& received.canonical_storage_id
+						== incoming.canonical_storage_id
+					&& received.machine_kind == incoming.machine_kind
+					&& received.exact_type == incoming.exact_type) {
+				plan->values[result_index].register_alias_value_index =
+					argument_index;
+			}
+		}
+	}
+	if (source_op_array != nullptr
+			&& source_op_array->arg_info != nullptr
+			&& (source_op_array->fn_flags
+				& ZEND_ACC_HAS_RETURN_TYPE) != 0) {
+		plan->return_abi = zend_tpde_local_abi_from_declared_type(
+			&source_op_array->arg_info[-1].type,
+			(source_op_array->fn_flags & ZEND_ACC_RETURN_REFERENCE) != 0,
+			ZEND_TPDE_LOCAL_ABI_TRANSFER_OWNED);
+	} else {
+		plan->return_abi =
+			zend_tpde_local_abi_from_declared_type(
+				nullptr, false, ZEND_TPDE_LOCAL_ABI_TRANSFER_OWNED);
 	}
 
 	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
@@ -4822,6 +5148,9 @@ bool initialize_plan(
 				}
 			}
 		}
+	}
+	if (!freeze_source_value_bindings(plan, diag)) {
+		return false;
 	}
 	if (!freeze_entry_undef_temporaries(plan, diag)) {
 		return false;
