@@ -245,6 +245,22 @@ struct zend_tpde_materialization {
 	zend_tpde_machine_value_kind machine_kind;
 };
 
+enum zend_tpde_machine_use_kind : uint8_t {
+	ZEND_TPDE_MACHINE_USE_INSTRUCTION_OPERAND = 0,
+	ZEND_TPDE_MACHINE_USE_PHI_EDGE = 1,
+	ZEND_TPDE_MACHINE_USE_CALL_ARGUMENT = 2,
+	ZEND_TPDE_MACHINE_USE_LOCAL_ABI_ARGUMENT = 3,
+	ZEND_TPDE_MACHINE_USE_STATEPOINT_MATERIALIZATION = 4,
+	ZEND_TPDE_MACHINE_USE_SUSPEND_LIVE = 5,
+};
+
+struct zend_tpde_machine_use {
+	uint32_t instruction_index;
+	uint32_t operand_index;
+	uint32_t auxiliary;
+	zend_tpde_machine_use_kind kind;
+};
+
 struct zend_tpde_id_index_entry {
 	uint32_t id;
 	uint32_t index;
@@ -1097,12 +1113,27 @@ struct zend_tpde_plan {
 	const zend_native_runtime_api *runtime;
 	const zend_op_array *source_op_array;
 	const struct _zend_ssa *source_ssa;
+	uint32_t source_ssa_variable_count;
+	uint32_t source_opcode_count;
+	uint32_t source_block_count;
+	uint32_t *source_opcode_block_indices;
+	uint8_t *source_opcode_is_data;
+	uint32_t *source_block_starts;
+	uint32_t *source_block_ends;
+	uint8_t *compiled_variables_used;
+	uint32_t compiled_variable_count;
 	uint32_t symbol_namespace;
 	zend_mir_function_record function;
 	zend_mir_block_id *block_ids;
 	uint32_t block_count;
 	zend_tpde_id_index_entry *block_index;
 	uint32_t block_index_capacity;
+	uint32_t *block_successor_offsets;
+	uint32_t *block_successors;
+	uint32_t block_successor_count;
+	uint32_t *block_predecessor_offsets;
+	uint32_t *block_predecessors;
+	uint32_t block_predecessor_count;
 	zend_tpde_value *values;
 	uint32_t value_count;
 	int32_t *argument_value_indices;
@@ -1114,7 +1145,7 @@ struct zend_tpde_plan {
 	uint32_t instruction_index_capacity;
 	int32_t *value_definition_instructions;
 	uint32_t *value_consumer_offsets;
-	uint32_t *value_consumers;
+	zend_tpde_machine_use *value_consumers;
 	uint32_t value_consumer_count;
 	zend_tpde_id_index_entry *call_site_instruction_index;
 	uint32_t call_site_instruction_index_capacity;
