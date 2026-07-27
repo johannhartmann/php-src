@@ -5541,11 +5541,20 @@ bool ZendCompilerX64::compile_inst(
 		}
 		case ZEND_MIR_OPCODE_I64_EQ:
 		case ZEND_MIR_OPCODE_I1_EQ:
-			return integer_compare(Jump::je);
+			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+				return EncodeBase::encode_zend_native_eq_u64(
+					std::move(left), std::move(right), std::move(result));
+			});
 		case ZEND_MIR_OPCODE_I64_LT:
-			return integer_compare(Jump::jl);
+			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+				return EncodeBase::encode_zend_native_lt_i64(
+					std::move(left), std::move(right), std::move(result));
+			});
 		case ZEND_MIR_OPCODE_I64_LE:
-			return integer_compare(Jump::jle);
+			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+				return EncodeBase::encode_zend_native_le_i64(
+					std::move(left), std::move(right), std::move(result));
+			});
 		case ZEND_MIR_OPCODE_I64_CMP: {
 			auto [left_pair, right_pair] = binary();
 			auto &[left_ref, left] = left_pair;
