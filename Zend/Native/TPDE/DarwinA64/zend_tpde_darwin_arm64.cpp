@@ -237,7 +237,9 @@ public:
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + storage_id) * sizeof(zval));
 	}
 
-	void emit_integer_dispatch(HashTable *jump_table,
+	void emit_integer_dispatch(
+		const zend_tpde_multi_branch_case *branch_cases,
+		uint32_t branch_case_count,
 		std::span<const ::tpde::Label> labels,
 		::tpde::a64::AsmReg value_reg,
 		::tpde::a64::AsmReg temp_reg,
@@ -269,7 +271,8 @@ uint32_t zval_type(zend_mir_scalar_type_mask type) {
 }
 
 void ZendCompilerA64::emit_integer_dispatch(
-	HashTable *jump_table,
+	const zend_tpde_multi_branch_case *branch_cases,
+	uint32_t branch_case_count,
 	std::span<const ::tpde::Label> labels,
 	::tpde::a64::AsmReg value_reg,
 	::tpde::a64::AsmReg temp_reg,
@@ -279,7 +282,8 @@ void ZendCompilerA64::emit_integer_dispatch(
 	int64_t low = 0;
 	uint64_t range = 0;
 	const zend_tpde_integer_dispatch_kind kind =
-		zend_tpde_integer_dispatch(jump_table, &cases, &low, &range);
+		zend_tpde_integer_dispatch(
+			branch_cases, branch_case_count, &cases, &low, &range);
 	auto emit_compare = [&](uint64_t expected, ::tpde::Label target) {
 		materialize_constant(
 			&expected, DarwinConfig::GP_BANK, 8, temp_reg);
@@ -619,7 +623,7 @@ bool ZendCompilerA64::compile_inst(
 						required];
 				const uint32_t offset = static_cast<uint32_t>(
 					(uint64_t{ZEND_CALL_FRAME_SLOT}
-						+ adaptor->plan()->source_op_array->last_var + index)
+						+ adaptor->plan()->source_frame_variable_count + index)
 					* sizeof(zval));
 				store_off(result_reg, offset + sizeof(uint64_t), zero_reg, 8);
 			}
@@ -630,11 +634,11 @@ bool ZendCompilerA64::compile_inst(
 	}
 	if (node.kind == Adaptor::InstKind::UserOpcodeLanding) {
 		const zend_tpde_plan *plan = adaptor->plan();
-		if (plan->source_op_array == nullptr
-				|| node.argument_index >= plan->source_op_array->last) {
+		if (plan->source_opcodes == nullptr
+				|| node.argument_index >= plan->source_opcode_count) {
 			return false;
 		}
-		while (user_opcode_labels_.size() < plan->source_op_array->last) {
+		while (user_opcode_labels_.size() < plan->source_opcode_count) {
 			user_opcode_labels_.push_back(text_writer.label_create());
 			user_opcode_dispatch_labels_.push_back(
 				text_writer.label_create());
@@ -663,11 +667,11 @@ bool ZendCompilerA64::compile_inst(
 				* zend_tpde_user_opcode_target_frame_uses(
 					plan->user_opcode_targets[target].kind);
 		}
-		if (plan->source_op_array == nullptr
+		if (plan->source_opcodes == nullptr
 				|| node.operands.size() != 4 + dispatch_operand_count
-				|| node.argument_index >= plan->source_op_array->last
+				|| node.argument_index >= plan->source_opcode_count
 				|| user_opcode_labels_.size()
-					< plan->source_op_array->last) {
+					< plan->source_opcode_count) {
 			return false;
 		}
 		const uint32_t source_position = node.argument_index;
@@ -759,7 +763,7 @@ bool ZendCompilerA64::compile_inst(
 			compare_position(source);
 			generate_raw_jump(Jump::Jne, next_candidate);
 			ASM(CMPwi, selected_opcode_reg,
-				plan->source_op_array->opcodes[source].opcode);
+				plan->source_opcodes[source].opcode);
 			generate_raw_jump(
 				Jump::Jeq, user_opcode_dispatch_labels_[source]);
 			label_place(next_candidate);
@@ -1222,10 +1226,9 @@ bool ZendCompilerA64::compile_inst(
 					continue;
 				}
 				std::vector<::tpde::Label> case_labels;
-				case_labels.reserve(
-					zend_hash_num_elements(layout.jump_table));
+				case_labels.reserve(layout.case_count);
 				for (uint32_t index = 0;
-						index < zend_hash_num_elements(layout.jump_table);
+						index < layout.case_count;
 						++index) {
 					case_labels.push_back(text_writer.label_create());
 				}
@@ -1275,24 +1278,21 @@ bool ZendCompilerA64::compile_inst(
 				}
 				generate_raw_jump(Jump::jmp, fallback_label);
 
-				uint32_t case_index = 0;
-				zend_ulong numeric_key;
-				zend_string *string_key;
-				zval *jump_value;
 				label_place(long_label);
 				load_off(value_reg, slot_reg, 0, 8);
-				emit_integer_dispatch(layout.jump_table, case_labels,
+				emit_integer_dispatch(
+					layout.cases, layout.case_count, case_labels,
 					value_reg, constant_reg, default_label);
 
 				label_place(string_label);
 				load_off(value_reg, slot_reg, 0, 8);
-				case_index = 0;
-				ZEND_HASH_FOREACH_KEY_VAL(
-						layout.jump_table, numeric_key, string_key,
-						jump_value) {
-					if (string_key != nullptr) {
+				for (uint32_t case_index = 0;
+						case_index < layout.case_count; ++case_index) {
+					const zend_tpde_multi_branch_case &branch_case =
+						layout.cases[case_index];
+					if (branch_case.string_key != nullptr) {
 						auto next_case = text_writer.label_create();
-						const uint64_t length = ZSTR_LEN(string_key);
+						const uint64_t length = branch_case.string_length;
 						load_off(probe_reg, value_reg,
 							static_cast<uint32_t>(
 								offsetof(zend_string, len)), 8);
@@ -1302,14 +1302,14 @@ bool ZendCompilerA64::compile_inst(
 						ASM(CMPx, probe_reg, constant_reg);
 						generate_raw_jump(Jump::Jne, next_case);
 						size_t offset = 0;
-						while (offset < ZSTR_LEN(string_key)) {
+						while (offset < branch_case.string_length) {
 							const uint32_t width =
-								ZSTR_LEN(string_key) - offset >= 8 ? 8
-								: ZSTR_LEN(string_key) - offset >= 4 ? 4
-								: ZSTR_LEN(string_key) - offset >= 2 ? 2 : 1;
+								branch_case.string_length - offset >= 8 ? 8
+								: branch_case.string_length - offset >= 4 ? 4
+								: branch_case.string_length - offset >= 2 ? 2 : 1;
 							uint64_t expected = 0;
 							memcpy(&expected,
-								ZSTR_VAL(string_key) + offset, width);
+								branch_case.string_key + offset, width);
 							load_off(probe_reg, value_reg,
 								static_cast<uint32_t>(
 									offsetof(zend_string, val) + offset),
@@ -1325,18 +1325,14 @@ bool ZendCompilerA64::compile_inst(
 							Jump::jmp, case_labels[case_index]);
 						label_place(next_case);
 					}
-					case_index++;
-				} ZEND_HASH_FOREACH_END();
+				}
 				generate_raw_jump(Jump::jmp, default_label);
 
-				case_index = 0;
-				ZEND_HASH_FOREACH_VAL(
-						layout.jump_table, jump_value) {
-					label_place(case_labels[case_index++]);
-					jump_to_source(zend_tpde_relative_source_target(
-						plan->source_op_array, dispatch_case.source,
-						Z_LVAL_P(jump_value)));
-				} ZEND_HASH_FOREACH_END();
+				for (uint32_t case_index = 0;
+						case_index < layout.case_count; ++case_index) {
+					label_place(case_labels[case_index]);
+					jump_to_source(layout.cases[case_index].target);
+				}
 				label_place(default_label);
 				jump_to_source(layout.default_target);
 				if (layout.target_opcode != ZEND_MATCH) {
@@ -5493,7 +5489,7 @@ bool ZendCompilerA64::compile_inst(
 			std::vector<IRBlockRef> targets;
 			std::vector<::tpde::Label> case_labels;
 			targets.reserve(layout.successor_count);
-			case_labels.reserve(zend_hash_num_elements(layout.jump_table));
+			case_labels.reserve(layout.case_count);
 			for (uint32_t i = 0; i < layout.successor_count; ++i) {
 				zend_mir_block_id target_id;
 				if (!zend_tpde_block_successor_at(
@@ -5506,8 +5502,7 @@ bool ZendCompilerA64::compile_inst(
 				}
 				targets.push_back(target);
 			}
-			for (uint32_t i = 0;
-					i < zend_hash_num_elements(layout.jump_table); ++i) {
+			for (uint32_t i = 0; i < layout.case_count; ++i) {
 				case_labels.push_back(text_writer.label_create());
 			}
 			auto default_label = text_writer.label_create();
@@ -5554,23 +5549,21 @@ bool ZendCompilerA64::compile_inst(
 			}
 			generate_raw_jump(Jump::jmp, fallback_label);
 
-			uint32_t case_index = 0;
-			zend_ulong numeric_key;
-			zend_string *string_key;
-			zval *jump_value;
 			label_place(long_label);
 			load_off(value_reg, slot_reg, 0, 8);
-			emit_integer_dispatch(layout.jump_table, case_labels,
+			emit_integer_dispatch(
+				layout.cases, layout.case_count, case_labels,
 				value_reg, constant_reg, default_label);
 
 			label_place(string_label);
 			load_off(value_reg, slot_reg, 0, 8);
-			case_index = 0;
-			ZEND_HASH_FOREACH_KEY_VAL(
-					layout.jump_table, numeric_key, string_key, jump_value) {
-				if (string_key != nullptr) {
+			for (uint32_t case_index = 0;
+					case_index < layout.case_count; ++case_index) {
+				const zend_tpde_multi_branch_case &branch_case =
+					layout.cases[case_index];
+				if (branch_case.string_key != nullptr) {
 					auto next_case = text_writer.label_create();
-					const uint64_t length = ZSTR_LEN(string_key);
+					const uint64_t length = branch_case.string_length;
 					load_off(probe_reg, value_reg,
 						static_cast<uint32_t>(
 							offsetof(zend_string, len)), 8);
@@ -5580,13 +5573,13 @@ bool ZendCompilerA64::compile_inst(
 					ASM(CMPx, probe_reg, constant_reg);
 					generate_raw_jump(Jump::Jne, next_case);
 					size_t offset = 0;
-					while (offset < ZSTR_LEN(string_key)) {
+					while (offset < branch_case.string_length) {
 						const uint32_t width =
-							ZSTR_LEN(string_key) - offset >= 8 ? 8
-							: ZSTR_LEN(string_key) - offset >= 4 ? 4
-							: ZSTR_LEN(string_key) - offset >= 2 ? 2 : 1;
+							branch_case.string_length - offset >= 8 ? 8
+							: branch_case.string_length - offset >= 4 ? 4
+							: branch_case.string_length - offset >= 2 ? 2 : 1;
 						uint64_t expected = 0;
-						memcpy(&expected, ZSTR_VAL(string_key) + offset,
+						memcpy(&expected, branch_case.string_key + offset,
 							width);
 						load_off(probe_reg, value_reg,
 							static_cast<uint32_t>(
@@ -5603,8 +5596,7 @@ bool ZendCompilerA64::compile_inst(
 						Jump::jmp, case_labels[case_index]);
 					label_place(next_case);
 				}
-				case_index++;
-			} ZEND_HASH_FOREACH_END();
+			}
 			generate_raw_jump(Jump::jmp, default_label);
 
 			for (uint32_t i = 0; i < case_labels.size(); ++i) {
@@ -8402,13 +8394,13 @@ bool ZendCompilerA64::compile_inst(
 		}
 		case ZEND_MIR_OPCODE_FINALLY_CALL: {
 			const zend_tpde_plan *plan = adaptor->plan();
-			if (plan->source_op_array == nullptr
+			if (plan->source_opcodes == nullptr
 					|| record.source_position_id
-						>= plan->source_op_array->last) {
+						>= plan->source_opcode_count) {
 				return false;
 			}
-			const zend_op &opline =
-				plan->source_op_array->opcodes[record.source_position_id];
+			const zend_tpde_source_opcode &opline =
+				plan->source_opcodes[record.source_position_id];
 			if (opline.opcode != ZEND_FAST_CALL
 					|| opline.result_type != IS_TMP_VAR) {
 				return false;
@@ -8419,12 +8411,12 @@ bool ZendCompilerA64::compile_inst(
 			auto value_reg = value.alloc_gp();
 			materialize_constant(
 				UINT64_C(0), DarwinConfig::GP_BANK, 8, value_reg);
-			store_off(frame_scratch.cur_reg(), opline.result.var,
+			store_off(frame_scratch.cur_reg(), opline.result_var,
 				value_reg, 8);
 			materialize_constant(record.source_position_id,
 				DarwinConfig::GP_BANK, 4, value_reg);
 			store_off(frame_scratch.cur_reg(),
-				opline.result.var
+				opline.result_var
 					+ static_cast<uint32_t>(
 						offsetof(zval, u2.opline_num)),
 				value_reg, 4);
@@ -8440,13 +8432,13 @@ bool ZendCompilerA64::compile_inst(
 		}
 		case ZEND_MIR_OPCODE_FINALLY_RETURN: {
 			const zend_tpde_plan *plan = adaptor->plan();
-			if (plan->source_op_array == nullptr
+			if (plan->source_opcodes == nullptr
 					|| record.source_position_id
-						>= plan->source_op_array->last) {
+						>= plan->source_opcode_count) {
 				return false;
 			}
-			const zend_op &opline =
-				plan->source_op_array->opcodes[record.source_position_id];
+			const zend_tpde_source_opcode &opline =
+				plan->source_opcodes[record.source_position_id];
 			if (opline.opcode != ZEND_FAST_RET
 					|| opline.op1_type != IS_TMP_VAR) {
 				return false;
@@ -8458,7 +8450,7 @@ bool ZendCompilerA64::compile_inst(
 			auto direct_continuation_reg =
 				direct_continuation.alloc_gp();
 			load_off(direct_continuation_reg, frame_scratch.cur_reg(),
-				opline.op1.var
+				opline.op1_var
 					+ static_cast<uint32_t>(
 						offsetof(zval, u2.opline_num)),
 				4);
