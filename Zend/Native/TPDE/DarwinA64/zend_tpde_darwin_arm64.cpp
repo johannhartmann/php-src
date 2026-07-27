@@ -203,6 +203,12 @@ public:
 		(void) function;
 		(void) index;
 	}
+	void start_func(uint32_t index) {
+		generator_resume_labels_.clear();
+		user_opcode_labels_.clear();
+		user_opcode_dispatch_labels_.clear();
+		Base::start_func(index);
+	}
 	void setup_var_ref_assignments() {
 		for (uint32_t index = 0;
 				index < adaptor->frame_slot_reference_count(); ++index) {
