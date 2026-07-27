@@ -5175,6 +5175,13 @@ bool ZendCompilerA64::compile_inst(
 							call.direct_call->expected_function
 								->op_array.last_var)
 						: argument_count;
+				auto compiled_variable_used =
+					[&](uint32_t variable_index) {
+						return !local_component_call
+							|| adaptor->component_compiled_variable_used(
+								call.component_target_index,
+								variable_index);
+					};
 				bool release_extra_arguments = false;
 				for (uint32_t index = callee_argument_count;
 						generated_fast_path && index < argument_count; ++index) {
@@ -6384,6 +6391,9 @@ bool ZendCompilerA64::compile_inst(
 					}
 					for (uint32_t index = callee_argument_count;
 							index < compiled_variable_count; ++index) {
+						if (!compiled_variable_used(index)) {
+							continue;
+						}
 						const uint32_t offset = static_cast<uint32_t>(
 							(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval));
 						store_constant(callee_reg, offset, 0, 8);
@@ -6636,6 +6646,9 @@ bool ZendCompilerA64::compile_inst(
 						auto counted_reg = counted.alloc_gp();
 						for (uint32_t index = 0;
 								index < compiled_variable_count; ++index) {
+							if (!compiled_variable_used(index)) {
+								continue;
+							}
 							const uint32_t offset = static_cast<uint32_t>(
 								(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval));
 							load_off(probe_reg, post_callee_reg,
