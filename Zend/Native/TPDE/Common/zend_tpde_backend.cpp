@@ -2580,6 +2580,90 @@ bool freeze_statepoint_materializations(
 	return true;
 }
 
+void freeze_machine_control_flow(zend_tpde_plan *plan)
+{
+	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+		zend_tpde_instruction &instruction = plan->instructions[index];
+		const zend_mir_instruction_record &record = instruction.record;
+		uint8_t flags = 0;
+
+		if (record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE) {
+			if (instruction.runtime_helper
+					== ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW) {
+				flags |= ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
+			}
+		} else if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
+			if (instruction.direct_call != nullptr
+					&& (instruction.direct_call->flags
+						& ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME) != 0) {
+				flags |= ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
+			}
+			if (instruction.component_target_index != UINT32_MAX) {
+				flags |=
+					ZEND_TPDE_MACHINE_CONTROL_FLOW_TYPED_COMPONENT_CALL;
+			}
+		} else if (instruction.has_value_operation) {
+			const zend_mir_executable_value_ref &operation =
+				instruction.value_operation;
+			switch (operation.opcode) {
+				case ZEND_MIR_OPCODE_VALUE_ASSIGN:
+					if (operation.op1.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_CV) {
+						flags |=
+							ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
+					}
+					break;
+				case ZEND_MIR_OPCODE_VALUE_QM_ASSIGN:
+				case ZEND_MIR_OPCODE_VALUE_FREE:
+				case ZEND_MIR_OPCODE_VALUE_UNARY_OP:
+				case ZEND_MIR_OPCODE_VALUE_BINARY_OP:
+				case ZEND_MIR_OPCODE_VALUE_ASSIGN_OP:
+				case ZEND_MIR_OPCODE_VALUE_INCDEC:
+				case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R:
+				case ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM:
+				case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
+				case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV:
+				case ZEND_MIR_OPCODE_OBJECT_FETCH_R:
+				case ZEND_MIR_OPCODE_OBJECT_ASSIGN:
+				case ZEND_MIR_OPCODE_DYNAMIC_FETCH_R:
+					flags |=
+						ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
+					break;
+				default:
+					break;
+			}
+		}
+
+		const bool branch_shape =
+			instruction.has_value_operation
+			&& (record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				|| record.opcode == ZEND_MIR_OPCODE_COND_BRANCH
+				|| record.opcode
+					== ZEND_MIR_OPCODE_VALUE_BIND_STATIC_BRANCH
+				|| record.opcode
+					== ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH)
+			&& (record.opcode == ZEND_MIR_OPCODE_COND_BRANCH
+				? instruction.value_operation.opcode
+					== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				: instruction.value_operation.opcode == record.opcode);
+		if (branch_shape) {
+			flags |= ZEND_TPDE_MACHINE_CONTROL_FLOW_BOXED_BRANCH;
+			if ((record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+						|| record.opcode == ZEND_MIR_OPCODE_COND_BRANCH)
+					&& instruction.value_operation.opcode
+						== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+					&& (instruction.value_operation.source_opcode
+							== ZEND_JMPZ
+						|| instruction.value_operation.source_opcode
+							== ZEND_JMPNZ)) {
+				flags |=
+					ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_BRANCH;
+			}
+		}
+		instruction.machine_control_flow_flags = flags;
+	}
+}
+
 bool freeze_entry_undef_temporaries(
 	zend_tpde_plan *plan,
 	const zend_op_array *source_op_array,
@@ -5628,6 +5712,7 @@ bool initialize_plan(
 	if (!freeze_source_value_bindings(plan, source_op_array, diag)) {
 		return false;
 	}
+	freeze_machine_control_flow(plan);
 	if (!freeze_machine_references(plan, diag)) {
 		return false;
 	}
