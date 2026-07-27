@@ -2073,7 +2073,7 @@ bool freeze_machine_references(
 					binding_value_id(binding),
 					ZEND_MIR_ID_INVALID,
 					operand.index,
-					1,
+					sizeof(zval),
 					0,
 					sizeof(zval),
 				});
