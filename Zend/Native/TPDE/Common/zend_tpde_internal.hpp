@@ -49,32 +49,29 @@ struct zend_tpde_machine_part_desc {
 };
 
 struct zend_tpde_machine_representation_desc {
-	static constexpr uint32_t MAX_PART_COUNT = 2;
-
-	uint8_t part_count;
-	zend_tpde_machine_part_desc parts[MAX_PART_COUNT];
+	uint32_t part_count;
+	const zend_tpde_machine_part_desc *parts;
 };
 
 static inline zend_tpde_machine_representation_desc
 zend_tpde_machine_representation(
 	zend_tpde_machine_value_kind kind, bool register_authoritative)
 {
-	const zend_tpde_machine_part_desc gp_value = {
-		ZEND_TPDE_MACHINE_PART_VALUE, 64, ZEND_TPDE_MACHINE_REGISTER_GP};
-	const zend_tpde_machine_part_desc fp_value = {
-		ZEND_TPDE_MACHINE_PART_VALUE, 64, ZEND_TPDE_MACHINE_REGISTER_FP};
-	const zend_tpde_machine_part_desc payload = {
-		ZEND_TPDE_MACHINE_PART_PAYLOAD, 64, ZEND_TPDE_MACHINE_REGISTER_GP};
-	const zend_tpde_machine_part_desc type_info = {
-		ZEND_TPDE_MACHINE_PART_TYPE_INFO, 32, ZEND_TPDE_MACHINE_REGISTER_GP};
+	static constexpr zend_tpde_machine_part_desc gp_value[] = {{
+		ZEND_TPDE_MACHINE_PART_VALUE, 64, ZEND_TPDE_MACHINE_REGISTER_GP}};
+	static constexpr zend_tpde_machine_part_desc fp_value[] = {{
+		ZEND_TPDE_MACHINE_PART_VALUE, 64, ZEND_TPDE_MACHINE_REGISTER_FP}};
+	static constexpr zend_tpde_machine_part_desc boxed_zval[] = {
+		{ZEND_TPDE_MACHINE_PART_PAYLOAD, 64,
+			ZEND_TPDE_MACHINE_REGISTER_GP},
+		{ZEND_TPDE_MACHINE_PART_TYPE_INFO, 32,
+			ZEND_TPDE_MACHINE_REGISTER_GP}};
 
 	if (kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 			&& register_authoritative) {
-		return {2, {payload, type_info}};
+		return {2, boxed_zval};
 	}
-	return {1, {
-		kind == ZEND_TPDE_MACHINE_VALUE_F64 ? fp_value : gp_value,
-		gp_value}};
+	return {1, kind == ZEND_TPDE_MACHINE_VALUE_F64 ? fp_value : gp_value};
 }
 
 enum zend_tpde_machine_location : uint8_t {
