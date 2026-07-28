@@ -357,6 +357,7 @@ struct zend_tpde_value {
 	zend_tpde_machine_location location;
 	zend_tpde_canonical_slot_state slot_state;
 	zend_tpde_local_abi_type local_abi;
+	bool register_authoritative;
 	bool canonical_alias_observable;
 	bool constant;
 	uint64_t constant_bits;
@@ -1371,6 +1372,8 @@ struct zend_tpde_plan {
 	uint32_t *value_consumer_offsets;
 	zend_tpde_machine_use *value_consumers;
 	uint32_t value_consumer_count;
+	uint8_t *entry_value_required;
+	uint8_t *typed_body_value_required;
 	zend_tpde_id_index_entry *call_site_instruction_index;
 	uint32_t call_site_instruction_index_capacity;
 	uint32_t call_site_count;
