@@ -2474,8 +2474,7 @@ public:
 							canonical_index - MIR_VALUE_BASE].refcount_state
 						: ZEND_MIR_REFCOUNT_UNKNOWN));
 				instruction_results[i] = result;
-				if (function_mode_ == FunctionMode::TypedBody
-						&& canonical_result != INVALID_VALUE_REF
+				if (canonical_result != INVALID_VALUE_REF
 						&& canonical_index >= MIR_VALUE_BASE
 						&& canonical_index - MIR_VALUE_BASE
 							< value_overrides.size()) {
@@ -2954,6 +2953,9 @@ public:
 				const bool typed_local_call =
 					frozen_typed_component_call(i);
 				if (typed_local_call) {
+					std::vector<IRValueRef> typed_call_values;
+					typed_call_values.reserve(
+						instruction.call_argument_count);
 					for (uint32_t n = 0;
 							n < instruction.call_argument_count; ++n) {
 						zend_mir_call_argument_ref argument{};
@@ -2961,18 +2963,113 @@ public:
 								instruction.call_argument_offset + n,
 								&argument)) {
 							valid_ = false;
-							operands_.push_back(INVALID_VALUE_REF);
+							typed_call_values.push_back(
+								INVALID_VALUE_REF);
 							continue;
 						}
-						const IRValueRef value =
-							source_binding_value_ref(
+						IRValueRef value =
+							source_operand_value_ref(
+								argument.source_operand);
+						if (value == INVALID_VALUE_REF) {
+							value = source_binding_value_ref(
 								plan_->call_argument_bindings[
 									instruction.call_argument_offset + n]);
+						}
+						const zend_tpde_plan *callee =
+							instruction.component_target_index
+									< component_plans_.size()
+								? component_plans_[
+									instruction.component_target_index]
+								: nullptr;
+						const int32_t callee_value =
+							callee != nullptr
+									&& callee->argument_value_indices != nullptr
+									&& n < callee->argument_count
+								? callee->argument_value_indices[n] : -1;
+						const TypedBodyAbiType transport_abi =
+							callee_value >= 0
+									&& static_cast<uint32_t>(callee_value)
+										< callee->value_count
+								? typed_body_value_abi(
+									callee,
+									static_cast<uint32_t>(callee_value))
+								: TypedBodyAbiType{};
+						/*
+						 * A Zend-entry value can remain canonical-slot
+						 * authoritative until a proven local ABI call needs
+						 * its scalar payload. Materialize that payload only in
+						 * the observer-free hot block; the cold call continues
+						 * to consume the canonical frame.
+						 */
+						if (function_mode_ == FunctionMode::ZendEntry
+								&& transport_abi.valid
+								&& zend_mir_scalar_type_is_exact(
+									transport_abi.exact_type)
+								&& transport_abi.exact_type
+									!= ZEND_MIR_SCALAR_TYPE_NULL
+								&& (value == INVALID_VALUE_REF
+									|| representation(value)
+										!= transport_abi.representation
+									|| exact_type(value)
+										!= transport_abi.exact_type
+									|| machine_kind(value)
+										!= transport_abi.machine_kind)) {
+							const zend_mir_storage_id storage_id =
+								canonical_storage(value);
+							const uint32_t reference =
+								zend_mir_id_is_valid(storage_id)
+									? machine_reference_index(
+										ZEND_TPDE_MACHINE_REFERENCE_FRAME_SLOT,
+										storage_id)
+									: UINT32_MAX;
+							const IRValueRef address =
+								reference != UINT32_MAX
+									? add_derived_value(
+										ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
+										ZEND_MIR_SCALAR_TYPE_NONE,
+										storage_id, false, 0, UINT8_MAX,
+										ZEND_MIR_OWNERSHIP_STATE_BORROWED,
+										ZEND_MIR_REFCOUNT_UNKNOWN,
+										reference)
+									: INVALID_VALUE_REF;
+							const IRValueRef transported =
+								address != INVALID_VALUE_REF
+									? add_derived_value(
+										transport_abi.representation,
+										transport_abi.exact_type,
+										storage_id, false, 0,
+										transport_abi.machine_kind,
+										ZEND_MIR_OWNERSHIP_STATE_BORROWED,
+										ZEND_MIR_REFCOUNT_UNKNOWN)
+									: INVALID_VALUE_REF;
+							if (transported != INVALID_VALUE_REF) {
+								const uint32_t load_operand_offset =
+									static_cast<uint32_t>(operands_.size());
+								operands_.push_back(address);
+								const uint32_t transport_block =
+									guarded_hot_blocks[i] != UINT32_MAX
+										? guarded_hot_blocks[i]
+										: static_cast<uint32_t>(block);
+								add_node(block_instructions,
+									transport_block, InstNode{
+										InstKind::ZvalPayloadLoad,
+										i, UINT32_MAX, transported, {},
+										load_operand_offset, 1, true,
+										storage_id,
+										transport_abi.exact_type});
+								value = transported;
+							}
+						}
 						if (!machine_value_has_result_representation(value)) {
 							valid_ = false;
 						}
-						operands_.push_back(value);
+						typed_call_values.push_back(value);
 					}
+					operand_offset =
+						static_cast<uint32_t>(operands_.size());
+					operands_.insert(operands_.end(),
+						typed_call_values.begin(),
+						typed_call_values.end());
 					if (function_mode_ == FunctionMode::ZendEntry) {
 						operands_.push_back(
 							IRValueRef{FRAME_VALUE});
