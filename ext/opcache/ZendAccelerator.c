@@ -1543,14 +1543,12 @@ static zend_always_inline bool is_phar_file(const zend_string *filename)
 static zend_always_inline zend_long zend_accel_native_optimization_level(void)
 {
 	/*
-	 * The native baseline builds its own SSA from the original Zend dataflow.
-	 * The VM-oriented DFA pass rewrites that dataflow without exposing its
-	 * analysis to the native compiler, producing slower native array, property
-	 * and iteration loops. Keep every independent OPcache optimization while
-	 * leaving DFA and native optimization in their respective pipelines.
+	 * TPDE deliberately performs only local optimization. Preserve the full
+	 * OPcache dataflow pipeline so the native lowering consumes globally
+	 * simplified Zend SSA instead of reconstructing equivalent work in the
+	 * machine adaptor.
 	 */
-	return ZCG(accel_directives).optimization_level
-		& ~ZEND_OPTIMIZER_PASS_6;
+	return ZCG(accel_directives).optimization_level;
 }
 
 static zend_always_inline void zend_accel_prepare_native_script(
