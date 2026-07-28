@@ -3223,6 +3223,35 @@ bool freeze_entry_undef_temporaries(
 		}
 		required[storage - first_temporary] = 1;
 	}
+	/*
+	 * Explicit value helpers produce canonical Zend results and deliberately
+	 * require a fresh destination before they allocate, invoke user code or
+	 * consume an operand.  Keep those actual helper destinations valid without
+	 * paying the old cost of clearing every temporary in the frame.
+	 */
+	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+		const zend_tpde_instruction &instruction = plan->instructions[index];
+		if (!instruction.has_value_operation
+				|| instruction.runtime_helper == ZEND_NATIVE_HELPER_COUNT
+				|| !zend_tpde_helper_has_explicit_operands(
+					instruction.runtime_helper)) {
+			continue;
+		}
+		const zend_mir_storage_id storage =
+			instruction.value_operation.result_storage_id;
+		if (!zend_mir_id_is_valid(storage)) {
+			continue;
+		}
+		if (static_cast<uint64_t>(storage) >= temporary_limit) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"value helper result is outside the temporary frame");
+			return false;
+		}
+		if (storage >= first_temporary) {
+			required[storage - first_temporary] = 1;
+		}
+	}
 	if (plan->user_opcode_callbacks
 			&& plan->user_opcode_source_operations != nullptr) {
 		for (uint32_t source = 0;
