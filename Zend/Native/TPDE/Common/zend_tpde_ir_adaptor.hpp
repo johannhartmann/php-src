@@ -802,12 +802,10 @@ private:
 	bool is_register_cond_branch(
 			const zend_tpde_instruction &instruction,
 			IRValueRef *condition_out = nullptr) const {
-		const bool frozen_typed_branch =
-			function_mode_ == FunctionMode::TypedBody
-			&& (instruction.machine_control_flow_flags
+		const bool frozen_register_branch =
+			(instruction.machine_control_flow_flags
 				& ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_BRANCH) != 0;
-		if (!frozen_typed_branch
-				&& function_mode_ != FunctionMode::ZendEntry) {
+		if (!frozen_register_branch) {
 			return false;
 		}
 		IRValueRef condition = source_binding_value_ref(
@@ -817,7 +815,7 @@ private:
 				instruction.value_operation.op1);
 		}
 		if (condition == INVALID_VALUE_REF) {
-			return frozen_typed_branch
+			return function_mode_ == FunctionMode::TypedBody
 				&& condition_out == nullptr
 				&& instruction.value_operation.op1.ssa_variable_id
 					!= ZEND_MIR_ID_INVALID;
@@ -1785,8 +1783,7 @@ public:
 							returned_binding.value_index)};
 				const zend_mir_value_id returned_ssa =
 					instruction.value_operation.op1.ssa_variable_id;
-				if (returned == INVALID_VALUE_REF
-						&& returned_binding
+				if (returned_binding
 								.definition_instruction_index >= 0
 						&& static_cast<uint32_t>(
 							returned_binding
@@ -1797,8 +1794,7 @@ public:
 							returned_binding
 								.definition_instruction_index)];
 				}
-				if (returned == INVALID_VALUE_REF
-						&& !returned_source_type.valid
+				if (!returned_source_type.valid
 						&& returned_ssa < register_source_ssa.size()) {
 					returned_source_type =
 						register_source_ssa[returned_ssa];
@@ -1849,7 +1845,7 @@ public:
 					return false;
 				}
 			TypedBodyAbiType returned_type =
-				returned == INVALID_VALUE_REF
+				returned_source_type.valid
 					? returned_source_type
 					: typed_body_value_abi(
 						plan, returned_index - MIR_VALUE_BASE);
