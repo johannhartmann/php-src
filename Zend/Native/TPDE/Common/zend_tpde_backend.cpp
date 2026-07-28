@@ -6468,16 +6468,20 @@ static void freeze_machine_register_authority(zend_tpde_plan *plan) {
 		zend_tpde_value &value = plan->values[index];
 		const bool argument_abi =
 			value.argument_index >= 0 && value.local_abi.valid;
+		const zend_mir_scalar_type_mask exact_type =
+			argument_abi ? value.local_abi.exact_type : value.exact_type;
+		const zend_tpde_machine_value_kind machine_kind =
+			argument_abi ? value.local_abi.machine_kind : value.machine_kind;
 		value.register_authoritative =
 			!value.constant
-			&& value.exact_type != ZEND_MIR_SCALAR_TYPE_NULL
+			&& exact_type != ZEND_MIR_SCALAR_TYPE_NULL
 			&& (argument_abi
 				|| value.location == ZEND_TPDE_MACHINE_LOCATION_REGISTER)
 			&& (argument_abi
-				|| (zend_mir_scalar_type_is_exact(value.exact_type)
-					&& value.exact_type != ZEND_MIR_SCALAR_TYPE_NULL)
+				|| (zend_mir_scalar_type_is_exact(exact_type)
+					&& exact_type != ZEND_MIR_SCALAR_TYPE_NULL)
 				|| machine_value_kind_can_be_register_authoritative(
-					value.machine_kind));
+					machine_kind));
 	}
 
 	for (uint32_t index = 0;
