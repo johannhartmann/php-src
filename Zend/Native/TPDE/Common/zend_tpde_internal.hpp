@@ -1303,6 +1303,20 @@ static inline bool zend_tpde_dynamic_fetch_read_at(
 	return true;
 }
 
+struct zend_tpde_machine_cfg {
+	uint32_t block_count;
+	uint32_t successor_count;
+	uint32_t *successor_offsets;
+	uint32_t *successors;
+	uint32_t *instruction_blocks;
+	uint32_t *guarded_cold_blocks;
+	uint32_t *guarded_hot_blocks;
+	uint32_t *guarded_continuation_blocks;
+	uint32_t *final_blocks;
+	uint32_t *boxed_cond_cold_blocks;
+	uint32_t *boxed_cond_cold_by_predecessor;
+};
+
 struct zend_tpde_plan {
 	const zend_native_runtime_api *runtime;
 	uint32_t source_ssa_variable_count;
@@ -1343,6 +1357,8 @@ struct zend_tpde_plan {
 	uint8_t *typed_component_call_eligible;
 	bool typed_body_eligible;
 	bool has_typed_component_calls;
+	zend_tpde_machine_cfg entry_machine_cfg;
+	zend_tpde_machine_cfg typed_body_machine_cfg;
 	zend_tpde_id_index_entry *value_index;
 	uint32_t value_index_capacity;
 	zend_tpde_instruction *instructions;

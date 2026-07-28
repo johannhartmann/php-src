@@ -890,18 +890,6 @@ private:
 		return false;
 	}
 
-	bool needs_explicit_cold_path(
-			uint32_t instruction_index,
-			const zend_tpde_instruction &instruction) const {
-		if ((instruction.machine_control_flow_flags
-					& ZEND_TPDE_MACHINE_CONTROL_FLOW_TYPED_COMPONENT_CALL) != 0
-				&& frozen_typed_component_call(instruction_index)) {
-			return function_mode_ == FunctionMode::ZendEntry;
-		}
-		return (instruction.machine_control_flow_flags
-				& ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD) != 0;
-	}
-
 	zend_mir_instruction_record instruction_record_at(uint32_t index) const {
 		return zend_tpde_instruction_record_at(
 			plan_, zend_tpde_instruction_at(plan_, index));
@@ -943,33 +931,6 @@ private:
 			Slice &slice = slices[item.block];
 			values[slice.offset + slice.count++] = item.value;
 		}
-	}
-
-	static void flatten_unique_successors(
-			uint32_t block_count,
-			const std::vector<BlockItem<IRBlockRef>> &items,
-			std::vector<Slice> &slices,
-			std::vector<IRBlockRef> &values) {
-		flatten_block_items(block_count, items, slices, values);
-		std::vector<uint32_t> seen(block_count, UINT32_MAX);
-		uint32_t write = 0;
-		for (uint32_t block = 0; block < block_count; ++block) {
-			const Slice source = slices[block];
-			Slice &result = slices[block];
-			result.offset = write;
-			result.count = 0;
-			for (uint32_t n = 0; n < source.count; ++n) {
-				IRBlockRef target = values[source.offset + n];
-				uint32_t target_index = static_cast<uint32_t>(target);
-				if (seen[target_index] == block) {
-					continue;
-				}
-				seen[target_index] = block;
-				values[write++] = target;
-				++result.count;
-			}
-		}
-		values.resize(write);
 	}
 
 	/*
@@ -1865,28 +1826,29 @@ public:
 				}
 			}
 		}
-		std::vector<BlockItem<IRBlockRef>> block_successors;
 		std::vector<BlockItem<IRInstRef>> block_instructions;
 		std::vector<BlockItem<IRValueRef>> block_phis;
-		std::vector<uint32_t> finally_return_blocks;
-		std::vector<IRBlockRef> finally_targets;
 		std::vector<uint8_t> generator_resume_emitted;
 		std::vector<uint8_t> source_landing_emitted;
 		std::vector<uint32_t> source_landing_blocks;
 		std::vector<uint32_t> source_block_next;
-		std::vector<uint32_t> boxed_cond_cold_blocks(
-			plan_->instruction_count, UINT32_MAX);
-		std::vector<uint32_t> boxed_cond_cold_by_predecessor(
-			plan_->block_count, UINT32_MAX);
-		std::vector<uint32_t> instruction_blocks(
-			plan_->instruction_count, UINT32_MAX);
-		std::vector<uint32_t> guarded_cold_blocks(
-			plan_->instruction_count, UINT32_MAX);
-		std::vector<uint32_t> guarded_hot_blocks(
-			plan_->instruction_count, UINT32_MAX);
-		std::vector<uint32_t> guarded_continuation_blocks(
-			plan_->instruction_count, UINT32_MAX);
-		std::vector<uint32_t> final_blocks(plan_->block_count);
+		const zend_tpde_machine_cfg &machine_cfg =
+			function_mode_ == FunctionMode::TypedBody
+				? plan_->typed_body_machine_cfg
+				: plan_->entry_machine_cfg;
+		const uint32_t *boxed_cond_cold_blocks =
+			machine_cfg.boxed_cond_cold_blocks;
+		const uint32_t *boxed_cond_cold_by_predecessor =
+			machine_cfg.boxed_cond_cold_by_predecessor;
+		const uint32_t *instruction_blocks =
+			machine_cfg.instruction_blocks;
+		const uint32_t *guarded_cold_blocks =
+			machine_cfg.guarded_cold_blocks;
+		const uint32_t *guarded_hot_blocks =
+			machine_cfg.guarded_hot_blocks;
+		const uint32_t *guarded_continuation_blocks =
+			machine_cfg.guarded_continuation_blocks;
+		const uint32_t *final_blocks = machine_cfg.final_blocks;
 		bool source_call_fragments = false;
 		IRValueRef observers_enabled_reference = INVALID_VALUE_REF;
 		if (function_mode_ == FunctionMode::ZendEntry
@@ -1902,7 +1864,6 @@ public:
 		}
 
 		blocks_.reserve(plan_->block_count);
-		block_successors.reserve(plan_->block_count * 2);
 		block_instructions.reserve(plan_->instruction_count + plan_->value_count + 1);
 		block_phis.reserve(plan_->value_count);
 		phi_input_slices_.resize(MIR_VALUE_BASE + plan_->value_count);
@@ -2041,210 +2002,82 @@ public:
 				}
 			}
 		} while (register_values_changed);
-		uint32_t synthetic_block_count = 0;
-		for (uint32_t block = 0; block < plan_->block_count; ++block) {
-			final_blocks[block] = block;
+		const uint32_t tpde_block_count = machine_cfg.block_count;
+		if (tpde_block_count < plan_->block_count
+				|| machine_cfg.successor_offsets == nullptr
+				|| (plan_->instruction_count != 0
+					&& (instruction_blocks == nullptr
+						|| guarded_cold_blocks == nullptr
+						|| guarded_hot_blocks == nullptr
+						|| guarded_continuation_blocks == nullptr
+						|| boxed_cond_cold_blocks == nullptr))
+				|| (plan_->block_count != 0
+					&& (final_blocks == nullptr
+						|| boxed_cond_cold_by_predecessor == nullptr))) {
+			valid_ = false;
+			return;
 		}
-		/*
-		 * Split every helper-capable fast operation before exposing the CFG to
-		 * TPDE.  The original block is the first hot segment; every guarded
-		 * operation gets an out-of-line cold block and a continuation block.
-		 * This makes calls and their clobbers ordinary allocator-visible CFG
-		 * state instead of target-local branches with saved assignments.
-		 */
-		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
-			const zend_tpde_instruction &instruction = plan_->instructions[i];
-			const zend_mir_instruction_record record =
-				instruction_record_at(i);
-			const int32_t source_block = block_index(record.block_id);
-			if (source_block < 0) {
-				valid_ = false;
-				continue;
-			}
-			const uint32_t source = static_cast<uint32_t>(source_block);
-			instruction_blocks[i] = final_blocks[source];
-			if (!needs_explicit_cold_path(i, instruction)) {
-				continue;
-			}
-			const bool typed_component_guard =
-				function_mode_ == FunctionMode::ZendEntry
-				&& record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
-				&& frozen_typed_component_call(i);
-			if (typed_component_guard) {
-				guarded_hot_blocks[i] =
-					plan_->block_count + synthetic_block_count++;
-			}
-			guarded_cold_blocks[i] =
-				plan_->block_count + synthetic_block_count++;
-			guarded_continuation_blocks[i] =
-				plan_->block_count + synthetic_block_count++;
-			final_blocks[source] = guarded_continuation_blocks[i];
-		}
-		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
-			const zend_tpde_instruction &instruction = plan_->instructions[i];
-			const zend_mir_instruction_record record =
-				instruction_record_at(i);
-			zend_tpde_value_condition condition;
-			if (!is_boxed_cond_branch(instruction)
-					|| !zend_tpde_value_condition_at(
-						instruction, &condition)) {
-				continue;
-			}
-			const uint32_t predecessor = instruction_blocks[i];
-			if (predecessor == UINT32_MAX
-					|| predecessor >= plan_->block_count
-						+ synthetic_block_count) {
-				valid_ = false;
-				continue;
-			}
-			const uint32_t cold_block =
-				plan_->block_count + synthetic_block_count++;
-			boxed_cond_cold_blocks[i] = cold_block;
-			const int32_t source_predecessor =
-				block_index(record.block_id);
-			if (source_predecessor < 0) {
-				valid_ = false;
-			} else {
-				boxed_cond_cold_by_predecessor[
-					static_cast<uint32_t>(source_predecessor)] =
-						cold_block;
-			}
-		}
-		const uint32_t tpde_block_count =
-			plan_->block_count + synthetic_block_count;
 		blocks_.reserve(tpde_block_count);
 		block_info_.resize(tpde_block_count);
 		block_info2_.resize(tpde_block_count);
-		for (uint32_t i = 0; i < plan_->block_count; ++i) {
+		for (uint32_t i = 0; i < tpde_block_count; ++i) {
 			blocks_.push_back(IRBlockRef{i});
-			const uint32_t begin = plan_->block_successor_offsets[i];
-			const uint32_t end = plan_->block_successor_offsets[i + 1];
-			for (uint32_t edge = begin; edge < end; ++edge) {
-				const uint32_t target_index =
-					plan_->block_successors[edge];
-				block_successors.push_back({final_blocks[i], IRBlockRef{
-					target_index}});
+		}
+		successor_slices_.resize(tpde_block_count);
+		successors_.reserve(machine_cfg.successor_count);
+		for (uint32_t block = 0; block < tpde_block_count; ++block) {
+			const uint32_t begin =
+				machine_cfg.successor_offsets[block];
+			const uint32_t end =
+				machine_cfg.successor_offsets[block + 1];
+			if (begin > end || end > machine_cfg.successor_count) {
+				valid_ = false;
+				return;
 			}
+			successor_slices_[block] = {begin, end - begin};
 		}
 		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
-			const uint32_t cold_block = guarded_cold_blocks[i];
-			if (cold_block == UINT32_MAX) {
-				continue;
-			}
-			const uint32_t fast_block = instruction_blocks[i];
-			const uint32_t hot_block = guarded_hot_blocks[i];
-			const uint32_t continuation =
-				guarded_continuation_blocks[i];
-			if (hot_block != UINT32_MAX) {
-				blocks_.push_back(IRBlockRef{hot_block});
-			}
-			blocks_.push_back(IRBlockRef{cold_block});
-			blocks_.push_back(IRBlockRef{continuation});
-			block_successors.push_back(
-				{fast_block, IRBlockRef{
-					hot_block == UINT32_MAX ? continuation : hot_block}});
-			block_successors.push_back(
-				{fast_block, IRBlockRef{cold_block}});
-			if (hot_block != UINT32_MAX) {
-				block_successors.push_back(
-					{hot_block, IRBlockRef{continuation}});
-			}
-			block_successors.push_back(
-				{cold_block, IRBlockRef{continuation}});
-		}
-		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
-			const uint32_t cold_block = boxed_cond_cold_blocks[i];
-			if (cold_block == UINT32_MAX) {
-				continue;
-			}
-			const uint32_t predecessor = instruction_blocks[i];
-			block_successors.push_back(
-				{predecessor, IRBlockRef{cold_block}});
-			blocks_.push_back(IRBlockRef{cold_block});
-			const zend_mir_instruction_record record =
-				instruction_record_at(i);
-			const int32_t source_predecessor =
-				block_index(record.block_id);
-			if (source_predecessor < 0) {
+			if (instruction_blocks[i] >= tpde_block_count
+					|| (guarded_cold_blocks[i] != UINT32_MAX
+						&& guarded_cold_blocks[i] >= tpde_block_count)
+					|| (guarded_hot_blocks[i] != UINT32_MAX
+						&& guarded_hot_blocks[i] >= tpde_block_count)
+					|| (guarded_continuation_blocks[i] != UINT32_MAX
+						&& guarded_continuation_blocks[i]
+							>= tpde_block_count)
+					|| (boxed_cond_cold_blocks[i] != UINT32_MAX
+						&& boxed_cond_cold_blocks[i]
+							>= tpde_block_count)) {
 				valid_ = false;
-				continue;
-			}
-			const uint32_t successor_begin =
-				plan_->block_successor_offsets[source_predecessor];
-			const uint32_t successor_end =
-				plan_->block_successor_offsets[source_predecessor + 1];
-			const uint32_t successor_count =
-				successor_end - successor_begin;
-			if (successor_count != 2) {
-				valid_ = false;
-				continue;
-			}
-			for (uint32_t edge = successor_begin;
-					edge < successor_end; ++edge) {
-				const uint32_t target_index =
-					plan_->block_successors[edge];
-				block_successors.push_back(
-					{cold_block, IRBlockRef{
-						target_index}});
+				return;
 			}
 		}
-		/*
-		 * Zend's CFG records FAST_CALL's continuation on the call block while
-		 * the executable edge is selected by FAST_RET. Add those dynamic
-		 * destinations to TPDE's internal CFG so liveness sees every machine
-		 * branch without changing persistent source identity. Collect every
-		 * continuation, handler, return block, and exception edge in one MIR
-		 * pass; the former return-by-instruction rescans were quadratic.
-		 */
+		for (uint32_t block = 0; block < plan_->block_count; ++block) {
+			if (final_blocks[block] >= tpde_block_count
+					|| (boxed_cond_cold_by_predecessor[block]
+							!= UINT32_MAX
+						&& boxed_cond_cold_by_predecessor[block]
+							>= tpde_block_count)) {
+				valid_ = false;
+				return;
+			}
+		}
+		for (uint32_t edge = 0;
+				edge < machine_cfg.successor_count; ++edge) {
+			if (machine_cfg.successors == nullptr
+					|| machine_cfg.successors[edge]
+						>= tpde_block_count) {
+				valid_ = false;
+				return;
+			}
+			successors_.push_back(
+				IRBlockRef{machine_cfg.successors[edge]});
+		}
 		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
 			const zend_tpde_instruction &instruction = plan_->instructions[i];
-			const zend_mir_instruction_record record =
-				instruction_record_at(i);
 			source_call_fragments =
 				source_call_fragments
 				|| instruction.user_opcode_call_fragments;
-			const bool boxed_cond_branch =
-				is_boxed_cond_branch(instruction);
-			const uint32_t record_block = instruction_blocks[i];
-			if (record_block == UINT32_MAX) {
-				valid_ = false;
-				continue;
-			}
-			if (zend_mir_id_is_valid(instruction.exception_block_id)) {
-				int32_t exception_block =
-					block_index(instruction.exception_block_id);
-				if (exception_block < 0) {
-					valid_ = false;
-				} else {
-					block_successors.push_back({
-						guarded_cold_blocks[i] == UINT32_MAX
-							? record_block : guarded_cold_blocks[i],
-						IRBlockRef{static_cast<uint32_t>(exception_block)}});
-				}
-			}
-			if (record.opcode == ZEND_MIR_OPCODE_FINALLY_RETURN) {
-				finally_return_blocks.push_back(record_block);
-			} else if (record.opcode == ZEND_MIR_OPCODE_FINALLY_CALL) {
-				const int32_t source_block =
-					block_index(record.block_id);
-				if (source_block < 0
-						|| plan_->block_successor_offsets[source_block + 1]
-							- plan_->block_successor_offsets[source_block]
-							!= 2) {
-					valid_ = false;
-					continue;
-				}
-				const uint32_t continuation_block =
-					plan_->block_successors[
-						plan_->block_successor_offsets[source_block] + 1];
-				finally_targets.push_back(
-					IRBlockRef{continuation_block});
-			} else if ((record.opcode == ZEND_MIR_OPCODE_CATCH_ENTER
-						|| record.opcode == ZEND_MIR_OPCODE_FINALLY_ENTER)
-					&& record.block_id != plan_->function.entry_block_id) {
-				finally_targets.push_back(
-					IRBlockRef{record_block});
-			}
 		}
 		generator_resume_emitted.resize(
 			plan_->generator_resume_count, 0);
@@ -2360,14 +2193,6 @@ public:
 				}
 			}
 		}
-		for (uint32_t return_block : finally_return_blocks) {
-			for (IRBlockRef target : finally_targets) {
-				block_successors.push_back({return_block, target});
-			}
-		}
-		flatten_unique_successors(tpde_block_count, block_successors,
-			successor_slices_, successors_);
-
 		int32_t entry = block_index(plan_->function.entry_block_id);
 		if (entry < 0) {
 			valid_ = false;
