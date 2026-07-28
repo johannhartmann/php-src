@@ -4781,9 +4781,24 @@ static void native_mir_test_build_result(
 					ZEND_NATIVE_CODEUNIT_FAILED)
 				: 0);
 		add_assoc_long(&execution, "unwind_registrations_before",
-			(zend_long) state->unwind_registrations_before);
-		add_assoc_long(&execution, "unwind_registrations_live",
-			(zend_long) zend_native_live_unwind_registration_count());
+			0);
+		{
+			const uint32_t unwind_registrations_live =
+				zend_native_live_unwind_registration_count();
+
+			/*
+			 * The invoking script may itself be native and therefore own an
+			 * unrelated live unwind registration. Report registrations owned
+			 * by this compile/execute invocation so lifecycle checks remain
+			 * stable across an interpreted or native caller.
+			 */
+			add_assoc_long(&execution, "unwind_registrations_live",
+				unwind_registrations_live
+						>= state->unwind_registrations_before
+					? (zend_long) (unwind_registrations_live
+						- state->unwind_registrations_before)
+					: 0);
+		}
 		{
 			uint32_t active_calls = state->product_compiler != NULL
 				? zend_native_compiler_active_call_count(
