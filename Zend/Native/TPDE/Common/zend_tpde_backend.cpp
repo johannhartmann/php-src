@@ -2783,6 +2783,8 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->value_definition_instructions);
 	std::free(plan->value_consumer_offsets);
 	std::free(plan->value_consumers);
+	std::free(plan->entry_value_required);
+	std::free(plan->typed_body_value_required);
 	std::free(plan->source_opcodes);
 	std::free(plan->source_multi_branches);
 	std::free(plan->source_multi_branch_cases);
@@ -6412,6 +6414,269 @@ static bool machine_cfg_register_cond_branch(
 	return plan->values[value_index].exact_type == ZEND_MIR_SCALAR_TYPE_I1;
 }
 
+static bool machine_value_kind_can_be_register_authoritative(
+		zend_tpde_machine_value_kind kind) {
+	return kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+		|| kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+		|| kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
+		|| kind == ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
+		|| kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR
+		|| kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
+}
+
+static bool machine_plan_value_has_result_representation(
+		const zend_tpde_plan *plan, zend_mir_value_id value_id) {
+	const int32_t value_index = zend_tpde_value_index(plan, value_id);
+	if (value_index < 0) {
+		return false;
+	}
+	const zend_tpde_value &value =
+		plan->values[static_cast<uint32_t>(value_index)];
+	if (zend_mir_scalar_type_is_exact(value.exact_type)
+			&& value.exact_type != ZEND_MIR_SCALAR_TYPE_NULL) {
+		return true;
+	}
+	return machine_value_kind_can_be_register_authoritative(
+			value.machine_kind)
+		&& value.register_authoritative;
+}
+
+static int32_t machine_plan_guarded_mutation_value_index(
+		const zend_tpde_plan *plan,
+		const zend_tpde_instruction &instruction) {
+	zend_tpde_long_assign_op long_assign{};
+	zend_tpde_long_incdec long_incdec{};
+	if (!instruction.has_value_operation
+			|| !((zend_tpde_long_assign_op_at(
+						instruction, &long_assign)
+						&& !long_assign.has_result)
+					|| (zend_tpde_long_incdec_at(
+						instruction, &long_incdec)
+						&& !long_incdec.has_result))
+			|| instruction.value_operation
+				.op1_definition_ssa_variable_id_plus_one == 0) {
+		return -1;
+	}
+	return zend_tpde_value_index(
+		plan, zend_mir_value_from_original_ssa(
+			instruction.value_operation
+				.op1_definition_ssa_variable_id_plus_one - 1));
+}
+
+static void freeze_machine_register_authority(zend_tpde_plan *plan) {
+	for (uint32_t index = 0; index < plan->value_count; ++index) {
+		zend_tpde_value &value = plan->values[index];
+		const bool argument_abi =
+			value.argument_index >= 0 && value.local_abi.valid;
+		value.register_authoritative =
+			!value.constant
+			&& value.exact_type != ZEND_MIR_SCALAR_TYPE_NULL
+			&& (argument_abi
+				|| value.location == ZEND_TPDE_MACHINE_LOCATION_REGISTER)
+			&& (argument_abi
+				|| (zend_mir_scalar_type_is_exact(value.exact_type)
+					&& value.exact_type != ZEND_MIR_SCALAR_TYPE_NULL)
+				|| machine_value_kind_can_be_register_authoritative(
+					value.machine_kind));
+	}
+
+	for (uint32_t index = 0;
+			index < plan->instruction_count; ++index) {
+		const zend_tpde_instruction &instruction =
+			plan->instructions[index];
+		const int32_t mutation =
+			machine_plan_guarded_mutation_value_index(
+				plan, instruction);
+		if (mutation >= 0) {
+			zend_tpde_value &value =
+				plan->values[static_cast<uint32_t>(mutation)];
+			if ((zend_mir_scalar_type_is_exact(value.exact_type)
+						&& value.exact_type
+							!= ZEND_MIR_SCALAR_TYPE_NULL)
+					|| machine_value_kind_can_be_register_authoritative(
+						value.machine_kind)) {
+				value.register_authoritative = true;
+			}
+		}
+
+		const zend_mir_instruction_record record =
+			zend_tpde_instruction_record_at(plan, &instruction);
+		if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
+				&& record.representation
+					== ZEND_MIR_REPRESENTATION_ZVAL) {
+			const int32_t result =
+				zend_tpde_value_index(plan, record.result_id);
+			if (result >= 0
+					&& plan->values[result].machine_kind
+						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+				plan->values[result].register_authoritative = true;
+			}
+		}
+	}
+
+	bool changed;
+	do {
+		changed = false;
+		for (uint32_t index = 0;
+				index < plan->instruction_count; ++index) {
+			const zend_tpde_instruction &instruction =
+				plan->instructions[index];
+			const zend_mir_instruction_record record =
+				zend_tpde_instruction_record_at(plan, &instruction);
+			if ((record.opcode != ZEND_MIR_OPCODE_COPY
+						&& record.opcode != ZEND_MIR_OPCODE_PHI)
+					|| record.representation
+						!= ZEND_MIR_REPRESENTATION_ZVAL
+					|| instruction.operand_count == 0) {
+				continue;
+			}
+			const int32_t result =
+				zend_tpde_value_index(plan, record.result_id);
+			if (result < 0
+					|| plan->values[result].machine_kind
+						!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+					|| plan->values[result].register_authoritative) {
+				continue;
+			}
+			bool all_inputs_register = true;
+			for (uint32_t operand = 0;
+					operand < instruction.operand_count; ++operand) {
+				const int32_t input = zend_tpde_value_index(
+					plan, zend_tpde_operand_at(
+						plan, &instruction, operand));
+				if (input < 0
+						|| plan->values[input].machine_kind
+							!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+						|| !plan->values[input]
+							.register_authoritative) {
+					all_inputs_register = false;
+					break;
+				}
+			}
+			if (all_inputs_register) {
+				plan->values[result].register_authoritative = true;
+				changed = true;
+			}
+		}
+	} while (changed);
+}
+
+static bool machine_plan_use_requires_value(
+		const zend_tpde_plan *plan,
+		const zend_tpde_machine_use &use,
+		bool typed_body) {
+	if (use.instruction_index >= plan->instruction_count) {
+		return false;
+	}
+	const zend_tpde_instruction &instruction =
+		plan->instructions[use.instruction_index];
+	const zend_mir_instruction_record record =
+		zend_tpde_instruction_record_at(plan, &instruction);
+	switch (use.kind) {
+		case ZEND_TPDE_MACHINE_USE_STATEPOINT_MATERIALIZATION:
+		case ZEND_TPDE_MACHINE_USE_SUSPEND_LIVE:
+		case ZEND_TPDE_MACHINE_USE_LOCAL_ABI_ARGUMENT:
+			return true;
+		case ZEND_TPDE_MACHINE_USE_CALL_ARGUMENT:
+			return record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
+				&& instruction.direct_call != nullptr
+				&& (instruction.direct_call->flags
+					& ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME) != 0;
+		case ZEND_TPDE_MACHINE_USE_PHI_EDGE:
+			return machine_plan_value_has_result_representation(
+				plan, record.result_id);
+		case ZEND_TPDE_MACHINE_USE_INSTRUCTION_OPERAND:
+			break;
+	}
+
+	const bool machine_result =
+		machine_plan_value_has_result_representation(
+			plan, record.result_id);
+	if (record.opcode == ZEND_MIR_OPCODE_COPY
+			&& record.representation == ZEND_MIR_REPRESENTATION_ZVAL) {
+		return machine_result && use.operand_index == 0;
+	}
+	if (!machine_result
+			&& (record.opcode == ZEND_MIR_OPCODE_COPY
+				|| record.opcode == ZEND_MIR_OPCODE_CANONICALIZE
+				|| record.opcode == ZEND_MIR_OPCODE_I1_TO_I64)) {
+		return false;
+	}
+	if (record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE) {
+		return use.operand_index == 0;
+	}
+	if (record.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
+			&& (typed_body || plan->has_typed_component_calls)) {
+		return use.operand_index == 0;
+	}
+	const bool boxed_cond_branch =
+		(instruction.machine_control_flow_flags
+			& ZEND_TPDE_MACHINE_CONTROL_FLOW_BOXED_BRANCH) != 0
+		&& !machine_cfg_register_cond_branch(
+			plan, instruction, typed_body);
+	if (boxed_cond_branch
+			|| record.opcode == ZEND_MIR_OPCODE_STATEPOINT
+			|| (record.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
+				&& !typed_body && !plan->has_typed_component_calls)
+			|| record.opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL
+			|| (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
+				&& instruction.direct_call != nullptr)) {
+		return false;
+	}
+	return use.operand_index < instruction.operand_count;
+}
+
+static bool freeze_machine_required_values(
+		zend_tpde_plan *plan, zend_native_diagnostic *diag) {
+	if (plan->value_count == 0) {
+		return true;
+	}
+	plan->entry_value_required = static_cast<uint8_t *>(
+		std::calloc(plan->value_count, sizeof(uint8_t)));
+	plan->typed_body_value_required = static_cast<uint8_t *>(
+		std::calloc(plan->value_count, sizeof(uint8_t)));
+	if (plan->entry_value_required == nullptr
+			|| plan->typed_body_value_required == nullptr) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"unable to freeze machine-plan value uses");
+		return false;
+	}
+
+	if (plan->call_argument_bindings != nullptr) {
+		for (uint32_t argument = 0;
+				argument < plan->call_argument_count; ++argument) {
+			const int32_t value_index =
+				plan->call_argument_bindings[argument].value_index;
+			if (value_index < 0
+					|| static_cast<uint32_t>(value_index)
+						>= plan->value_count) {
+				continue;
+			}
+			plan->entry_value_required[value_index] = 1;
+			plan->typed_body_value_required[value_index] = 1;
+		}
+	}
+	if (plan->value_consumer_offsets == nullptr) {
+		return true;
+	}
+	for (uint32_t value = 0; value < plan->value_count; ++value) {
+		const uint32_t begin = plan->value_consumer_offsets[value];
+		const uint32_t end = plan->value_consumer_offsets[value + 1];
+		for (uint32_t use = begin; use < end; ++use) {
+			const zend_tpde_machine_use &consumer =
+				plan->value_consumers[use];
+			plan->entry_value_required[value] |=
+				machine_plan_use_requires_value(
+					plan, consumer, false);
+			plan->typed_body_value_required[value] |=
+				machine_plan_use_requires_value(
+					plan, consumer, true);
+		}
+	}
+	return true;
+}
+
 static bool freeze_machine_cfg(
 		zend_tpde_plan *plan,
 		bool typed_body,
@@ -6735,6 +7000,10 @@ static bool freeze_component_machine_plan(
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
 				"unable to freeze component-local TPDE call plan");
+			return false;
+		}
+		freeze_machine_register_authority(&plans[index]);
+		if (!freeze_machine_required_values(&plans[index], diag)) {
 			return false;
 		}
 		if (!freeze_machine_cfg(
