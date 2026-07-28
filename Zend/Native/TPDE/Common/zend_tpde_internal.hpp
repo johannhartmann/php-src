@@ -367,6 +367,14 @@ struct zend_tpde_materialization {
 	uint32_t value_index;
 	zend_mir_storage_id storage_id;
 	zend_tpde_machine_value_kind machine_kind;
+	/*
+	 * A typed component call may produce a private machine value without a
+	 * persistent ZNMIR result identity. Preserve that source definition so
+	 * the adaptor can connect it to its canonical source slot at the first
+	 * observing runtime boundary.
+	 */
+	int32_t source_value_index;
+	int32_t source_definition_instruction_index;
 };
 
 enum zend_tpde_machine_reference_kind : uint8_t {

@@ -373,6 +373,9 @@ void ZendCompilerX64::emit_integer_dispatch(
 }
 
 bool ZendCompilerX64::emit_materializations(IRInstRef instruction) {
+	if (adaptor->typed_body()) {
+		return true;
+	}
 	const Adaptor::InstNode &node = adaptor->node(instruction);
 	const auto materializations = adaptor->materializations(instruction);
 	if (materializations.empty()) {
@@ -401,16 +404,18 @@ bool ZendCompilerX64::emit_materializations(IRInstRef instruction) {
 		const IRValueRef value =
 			node.liveness_operands[
 				node.materialization_operand_index + index];
+		const zend_tpde_machine_value_kind machine_kind =
+			adaptor->machine_kind(value);
 		auto value_ref = val_ref(value);
 		auto payload = value_ref.part(0);
-		if (materialization.machine_kind
+		if (machine_kind
 				== ZEND_TPDE_MACHINE_VALUE_F64) {
 			auto payload_reg = payload.load_to_reg();
 			ASM(SSE_MOVSDmr,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(offset)),
 				payload_reg);
-		} else if (materialization.machine_kind
+		} else if (machine_kind
 				== ZEND_TPDE_MACHINE_VALUE_BOOL) {
 			auto payload_reg = payload.load_to_reg();
 			ASM(MOV64mr,
@@ -427,14 +432,14 @@ bool ZendCompilerX64::emit_materializations(IRInstRef instruction) {
 		}
 		const int32_t type_offset =
 			static_cast<int32_t>(offset + offsetof(zval, u1.type_info));
-		if (materialization.machine_kind
+		if (machine_kind
 				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 			auto type_info = value_ref.part(1);
 			auto type_info_reg = type_info.load_to_reg();
 			ASM(MOV32mr,
 				FE_MEM(frame_reg, 0, FE_NOREG, type_offset),
 				type_info_reg);
-		} else if (materialization.machine_kind
+		} else if (machine_kind
 				== ZEND_TPDE_MACHINE_VALUE_BOOL) {
 			auto boolean = value_ref.part(0);
 			auto payload_reg = boolean.load_to_reg();
@@ -448,7 +453,7 @@ bool ZendCompilerX64::emit_materializations(IRInstRef instruction) {
 		} else {
 			const uint32_t type_info =
 				zend_tpde_machine_value_zval_type_info(
-					materialization.machine_kind);
+					machine_kind);
 			if (type_info == IS_UNDEF) {
 				return false;
 			}
