@@ -3219,8 +3219,11 @@ public:
 					? operand_count
 						- (inlined_user_body.checked() ? 2 : 1)
 					: UINT32_MAX;
+			const uint32_t materialization_count =
+				function_mode_ == FunctionMode::ZendEntry
+					? instruction.materialization_count : 0;
 			const uint32_t materialization_operand_index =
-				instruction.materialization_count == 0
+				materialization_count == 0
 					? UINT32_MAX : operand_count;
 			if (instruction.materialization_offset
 						> plan_->materialization_count
@@ -3230,17 +3233,27 @@ public:
 				valid_ = false;
 			} else {
 				for (uint32_t n = 0;
-						n < instruction.materialization_count; ++n) {
+						n < materialization_count; ++n) {
 					const zend_tpde_materialization &materialization =
 						plan_->materializations[
 							instruction.materialization_offset + n];
-					if (materialization.value_index >= plan_->value_count) {
+					IRValueRef value = INVALID_VALUE_REF;
+					if (materialization.value_index < plan_->value_count) {
+						value = IRValueRef{
+							MIR_VALUE_BASE + materialization.value_index};
+					} else if (materialization.value_index == UINT32_MAX) {
+						value = source_binding_value_ref({
+							materialization.source_value_index,
+							materialization
+								.source_definition_instruction_index,
+						});
+					}
+					if (value == INVALID_VALUE_REF
+							|| !machine_value_has_result_representation(value)) {
 						valid_ = false;
 						operands_.push_back(INVALID_VALUE_REF);
 					} else {
-						operands_.push_back(IRValueRef{
-							MIR_VALUE_BASE
-								+ materialization.value_index});
+						operands_.push_back(value);
 					}
 					++operand_count;
 				}
@@ -3271,7 +3284,7 @@ public:
 				uint32_t fast_materialization_operand_index =
 					materialization_operand_index;
 				uint32_t fast_materialization_count =
-					instruction.materialization_count;
+					materialization_count;
 				uint32_t fast_block = block;
 				if (guarded_hot_block != UINT32_MAX) {
 					const uint32_t context_operand =
@@ -3290,7 +3303,7 @@ public:
 					operands_.push_back(guard_context);
 					operands_.push_back(observers_enabled_reference);
 					for (uint32_t n = 0;
-							n < instruction.materialization_count; ++n) {
+							n < materialization_count; ++n) {
 						const uint32_t materialization_operand =
 							materialization_operand_index + n;
 						if (materialization_operand >= operand_count) {
@@ -3306,14 +3319,14 @@ public:
 						InstKind::TypedCallGuard, i,
 						guarded_cold_block, INVALID_VALUE_REF, {},
 						guard_operand_offset,
-						2 + instruction.materialization_count,
+						2 + materialization_count,
 						false,
 						ZEND_MIR_ID_INVALID,
 						ZEND_MIR_SCALAR_TYPE_NONE,
 						false, {}, false, UINT32_MAX, UINT32_MAX,
-						instruction.materialization_count == 0
+						materialization_count == 0
 							? UINT32_MAX : 2,
-						instruction.materialization_count};
+						materialization_count};
 					guard.control_block = block;
 					guard.continuation_block = guarded_hot_block;
 					add_node(block_instructions, block, std::move(guard));
@@ -3367,12 +3380,12 @@ public:
 					operands_.push_back(
 						IRValueRef{EXECUTION_CONTEXT_VALUE});
 					cold_operand_count =
-						5 + instruction.materialization_count;
+						5 + materialization_count;
 					cold_materialization_operand_index =
-						instruction.materialization_count == 0
+						materialization_count == 0
 							? UINT32_MAX : 5;
 					for (uint32_t n = 0;
-							n < instruction.materialization_count; ++n) {
+							n < materialization_count; ++n) {
 						operands_.push_back(
 							operands_[operand_offset
 								+ materialization_operand_index + n]);
@@ -3390,7 +3403,7 @@ public:
 					ZEND_MIR_ID_INVALID, ZEND_MIR_SCALAR_TYPE_NONE,
 					false, {}, false, UINT32_MAX, UINT32_MAX,
 					cold_materialization_operand_index,
-					instruction.materialization_count};
+					materialization_count};
 				cold.control_block = guarded_cold_block;
 				cold.continuation_block = continuation_block;
 				add_node(block_instructions, guarded_cold_block,
@@ -3480,7 +3493,7 @@ public:
 						operands_[operand_offset + n]);
 				}
 				for (uint32_t n = 0;
-						n < instruction.materialization_count; ++n) {
+						n < materialization_count; ++n) {
 					operands_.push_back(
 						operands_[operand_offset
 							+ materialization_operand_index + n]);
@@ -3490,13 +3503,13 @@ public:
 					boxed_cond_cold_block, INVALID_VALUE_REF, {},
 					cold_operand_offset,
 					semantic_operand_count
-						+ instruction.materialization_count,
+						+ materialization_count,
 					false,
 					ZEND_MIR_ID_INVALID, ZEND_MIR_SCALAR_TYPE_NONE,
 					false, {}, false, UINT32_MAX, UINT32_MAX,
-					instruction.materialization_count == 0
+					materialization_count == 0
 						? UINT32_MAX : semantic_operand_count,
-					instruction.materialization_count});
+					materialization_count});
 				nodes_.back().control_block = boxed_cond_cold_block;
 				continue;
 			}
@@ -3513,7 +3526,7 @@ public:
 				inlined_operand_index,
 				inlined_user_body.checked_source_opcode,
 				materialization_operand_index,
-				instruction.materialization_count});
+				materialization_count});
 			if (type_check_selection
 					!= ScalarTypeCheckSelection::Invalid
 					|| register_cond_branch) {
