@@ -908,6 +908,31 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		return true;
 	}
+	if (node.kind == Adaptor::InstKind::UnboxScalar) {
+		if (node.operands.size() != 1 || !node.has_result
+				|| adaptor->machine_kind(node.operands[0])
+					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+				|| (adaptor->machine_kind(node.result)
+						!= ZEND_TPDE_MACHINE_VALUE_I64
+					&& adaptor->machine_kind(node.result)
+						!= ZEND_TPDE_MACHINE_VALUE_BOOL)) {
+			return false;
+		}
+		auto source = val_ref(node.operands[0]);
+		const ValueParts parts = val_parts(node.operands[0]);
+		auto [result_ref, result] = result_ref_single(node.result);
+		for (uint32_t part = 0; part < parts.count(); ++part) {
+			if (parts.representation.parts[part].semantic_role
+					!= ZEND_TPDE_MACHINE_PART_PAYLOAD) {
+				continue;
+			}
+			auto payload = source.part(part);
+			ASM(MOV64rr, result.alloc_reg(), payload.load_to_reg());
+			result.set_modified();
+			return true;
+		}
+		return false;
+	}
 	if (node.kind == Adaptor::InstKind::LoadFrame) {
 		auto [source_ref, source] = val_ref_single(node.operands[0]);
 		auto [result_ref, result] = result_ref_single(node.result);
@@ -3207,13 +3232,26 @@ bool ZendCompilerX64::compile_inst_impl(
 									== ZEND_MIR_REPRESENTATION_ZVAL
 								&& adaptor->machine_kind(node.result)
 									== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL))
-						: adaptor->machine_kind(node.result)
-								!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL)) {
+						: !((adaptor->representation(node.result)
+										== ZEND_MIR_REPRESENTATION_I64
+									&& adaptor->exact_type(node.result)
+										== ZEND_MIR_SCALAR_TYPE_I64
+									&& adaptor->machine_kind(node.result)
+										== ZEND_TPDE_MACHINE_VALUE_I64)
+								|| (adaptor->representation(node.result)
+										== ZEND_MIR_REPRESENTATION_I1
+									&& adaptor->exact_type(node.result)
+										== ZEND_MIR_SCALAR_TYPE_I1
+									&& adaptor->machine_kind(node.result)
+										== ZEND_TPDE_MACHINE_VALUE_BOOL)
+								|| adaptor->machine_kind(node.result)
+									== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL))) {
 				return false;
 			}
-			if (node.mutation_result
-					&& adaptor->machine_kind(node.result)
-						== ZEND_TPDE_MACHINE_VALUE_I64) {
+			if (adaptor->machine_kind(node.result)
+					== ZEND_TPDE_MACHINE_VALUE_I64
+					|| adaptor->machine_kind(node.result)
+						== ZEND_TPDE_MACHINE_VALUE_BOOL) {
 				auto [result_ref, result] =
 					result_ref_single(node.result);
 				auto result_reg = result.alloc_reg();
@@ -7274,6 +7312,16 @@ bool ZendCompilerX64::compile_inst_impl(
 			ValuePart decision{tpde::x64::PlatformConfig::GP_BANK, 4};
 			builder.add_ret(decision, tpde::CCAssignment{});
 			auto decision_reg = decision.cur_reg_or_load(this);
+			const int32_t decision_slot = node.has_result
+				? allocate_stack_slot(sizeof(uint32_t)) : -1;
+			if (node.has_result && decision_slot < 0) {
+				return false;
+			}
+			if (node.has_result) {
+				ASM(MOV32mr,
+					FE_MEM(FE_BP, 0, FE_NOREG, decision_slot),
+					decision_reg);
+			}
 			ASM(CMP32ri, decision_reg, ZEND_NATIVE_ITERATOR_EXCEPTION);
 			auto valid = text_writer.label_create();
 			generate_raw_jump(Jump::jl, valid);
@@ -7286,10 +7334,53 @@ bool ZendCompilerX64::compile_inst_impl(
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 			return_builder.ret();
 			label_place(valid);
-			ASM(TEST32rr, decision_reg, decision_reg);
 			const auto &successors = adaptor->block_succs(
 				IRBlockRef{node.control_block});
-			generate_cond_branch(Jump::jne, successors[0], successors[1]);
+			if (node.has_result) {
+				const zend_mir_storage_id storage =
+					operation.result_storage_id;
+				const uint64_t frame_offset =
+					(uint64_t{ZEND_CALL_FRAME_SLOT} + storage)
+						* sizeof(zval);
+				const bool scalar_result =
+					(adaptor->representation(node.result)
+							== ZEND_MIR_REPRESENTATION_I64
+						&& adaptor->exact_type(node.result)
+							== ZEND_MIR_SCALAR_TYPE_I64
+						&& adaptor->machine_kind(node.result)
+							== ZEND_TPDE_MACHINE_VALUE_I64)
+					|| (adaptor->representation(node.result)
+							== ZEND_MIR_REPRESENTATION_I1
+						&& adaptor->exact_type(node.result)
+							== ZEND_MIR_SCALAR_TYPE_I1
+						&& adaptor->machine_kind(node.result)
+							== ZEND_TPDE_MACHINE_VALUE_BOOL);
+				if (!zend_mir_id_is_valid(storage)
+						|| frame_offset > UINT32_MAX - sizeof(zval)
+						|| !scalar_result) {
+					return false;
+				}
+				auto [result_ref, result] =
+					result_ref_single(node.result);
+				auto result_reg = result.alloc_reg();
+				ASM(MOV64rm, result_reg,
+					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+						static_cast<int32_t>(frame_offset)));
+				result.set_modified();
+				ScratchReg branch_decision{this};
+				auto branch_decision_reg =
+					branch_decision.alloc_gp();
+				ASM(MOV32rm, branch_decision_reg,
+					FE_MEM(FE_BP, 0, FE_NOREG, decision_slot));
+				ASM(TEST32rr,
+					branch_decision_reg, branch_decision_reg);
+				generate_cond_branch(
+					Jump::jne, successors[0], successors[1]);
+			} else {
+				ASM(TEST32rr, decision_reg, decision_reg);
+				generate_cond_branch(
+					Jump::jne, successors[0], successors[1]);
+			}
 			return true;
 		}
 		case ZEND_MIR_OPCODE_CALL_DIRECT_USER: {
@@ -8050,10 +8141,16 @@ bool ZendCompilerX64::compile_inst_impl(
 											descriptor_argument.exact_type)));
 								}
 							} else {
-								if (!zend_mir_id_is_valid(
-										source_argument.value_id)
-										|| source_argument.source_operand.kind
-											== ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+								if (source_argument.source_operand.kind
+											== ZEND_MIR_SOURCE_OPERAND_LITERAL
+										|| (!zend_mir_id_is_valid(
+												source_argument.value_id)
+											&& !(adaptor->machine_kind(
+													node.operands[index])
+														== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+												&& adaptor
+													->machine_value_is_register_authoritative(
+														node.operands[index])))) {
 								if (source_argument.source_operand.kind
 										== ZEND_MIR_SOURCE_OPERAND_LITERAL) {
 									ScratchReg literal{this};
@@ -8893,6 +8990,21 @@ bool ZendCompilerX64::compile_inst_impl(
 								* sizeof(zval));
 						const zend_native_direct_call_argument &descriptor_argument =
 							call.direct_call->arguments[index];
+						const zend_tpde_machine_value_kind argument_kind =
+							adaptor->machine_kind(node.operands[index]);
+						const bool register_pointer_argument =
+							adaptor->machine_value_is_register_authoritative(
+								node.operands[index])
+							&& (argument_kind
+									== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+								|| argument_kind
+									== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+								|| argument_kind
+									== ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
+								|| argument_kind
+									== ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
+								|| argument_kind
+									== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR);
 							if (zend_mir_scalar_type_is_exact(
 									descriptor_argument.exact_type)) {
 								if (!zend_mir_id_is_valid(
@@ -8988,6 +9100,32 @@ bool ZendCompilerX64::compile_inst_impl(
 												descriptor_argument
 													.exact_type)));
 									}
+								}
+							} else if (register_pointer_argument) {
+								auto pointer =
+									std::move(argument).into_scratch();
+								ScratchReg type_info{this};
+								auto type_info_reg = type_info.alloc_gp();
+								ASM(MOV64mr,
+									FE_MEM(callee_reg, 0, FE_NOREG, offset),
+									pointer.cur_reg());
+								if (!emit_machine_zval_type_info(
+										argument_kind, pointer.cur_reg(),
+										type_info_reg)) {
+									return false;
+								}
+								ASM(MOV32mr,
+									FE_MEM(callee_reg, 0, FE_NOREG,
+										offset + 8),
+									type_info_reg);
+								ASM(MOV32mi,
+									FE_MEM(callee_reg, 0, FE_NOREG,
+										offset + static_cast<int32_t>(
+											offsetof(zval, u2))),
+									0);
+								if (!emit_pointer_addref(
+										argument_kind, pointer.cur_reg())) {
+									return false;
 								}
 							} else if (adaptor->machine_kind(
 									node.operands[index])
