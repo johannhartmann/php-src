@@ -2356,7 +2356,7 @@ bool ZendCompilerX64::compile_inst(
 		}
 		const auto successors =
 			adaptor->block_succs(IRBlockRef{node.control_block});
-		if (successors.size() != 2
+		if (successors.size() < 2
 				|| static_cast<uint32_t>(successors[0])
 					!= node.continuation_block
 				|| static_cast<uint32_t>(successors[1])
@@ -2739,6 +2739,19 @@ bool ZendCompilerX64::compile_inst(
 		}
 		const zend_mir_executable_value_ref &operation =
 			mir.value_operation;
+		if (zend_tpde_helper_requires_undef_result(helper, operation)) {
+			const uint64_t result_offset =
+				(uint64_t{ZEND_CALL_FRAME_SLOT}
+					+ operation.result_storage_id) * sizeof(zval)
+				+ offsetof(zval, u1.type_info);
+			if (result_offset > INT32_MAX - sizeof(uint32_t)) {
+				return false;
+			}
+			ASM(MOV32mi,
+				FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+					static_cast<int32_t>(result_offset)),
+				IS_UNDEF);
+		}
 		auto encode_operand = [&](const zend_mir_source_operand_ref &operand,
 				uint32_t unused_payload) {
 			return explicit_object_operands
@@ -3006,7 +3019,7 @@ bool ZendCompilerX64::compile_inst(
 		}
 		const auto successors =
 			adaptor->block_succs(IRBlockRef{node.control_block});
-		if (successors.size() != 2
+		if (successors.size() < 2
 				|| static_cast<uint32_t>(successors[0])
 					!= node.continuation_block
 				|| static_cast<uint32_t>(successors[1])
@@ -3927,7 +3940,7 @@ bool ZendCompilerX64::compile_inst(
 		}
 		const auto successors =
 			adaptor->block_succs(IRBlockRef{node.control_block});
-		if (successors.size() != 2
+		if (successors.size() < 2
 				|| static_cast<uint32_t>(successors[0])
 					!= node.continuation_block
 				|| static_cast<uint32_t>(successors[1])

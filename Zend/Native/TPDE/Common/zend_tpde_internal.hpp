@@ -337,6 +337,35 @@ static inline bool zend_tpde_helper_has_explicit_auxiliary(
 		|| helper == ZEND_NATIVE_HELPER_CALL_FRAMELESS_INTERNAL;
 }
 
+/*
+ * Selective frame initialization leaves an unobserved TMP/VAR slot
+ * uninitialized until a boundary actually materializes a result there.
+ * Explicit runtime helpers that define a new Zend result require a fresh
+ * result zval.  Array-construction continuation opcodes are different: their
+ * result operand names the array accumulator created by INIT_ARRAY and must
+ * survive every ADD_ARRAY_* helper call.  Prepare only a distinct temporary
+ * result slot for the defining operations; an aliased source/result storage
+ * is an in-place operation and must retain its input.
+ */
+static inline bool zend_tpde_helper_requires_undef_result(
+	zend_native_runtime_helper_id helper,
+	const zend_mir_executable_value_ref &operation)
+{
+	if (!zend_tpde_helper_has_explicit_operands(helper)
+			|| helper == ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_ELEMENT
+			|| helper == ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_UNPACK
+			|| !zend_mir_id_is_valid(operation.result_storage_id)
+			|| (operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+				&& operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
+			|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+				&& operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_VAR)) {
+		return false;
+	}
+	return operation.result_storage_id != operation.op1_storage_id
+		&& operation.result_storage_id != operation.op2_storage_id
+		&& operation.result_storage_id != operation.auxiliary_storage_id;
+}
+
 struct zend_tpde_value {
 	zend_mir_value_id id;
 	zend_mir_representation representation;

@@ -730,6 +730,8 @@ zend_result zend_native_call_set_explicit_argument(
 	zval *target;
 	uint32_t argument_number;
 	zval *value;
+	zval *source_value;
+	bool indirect_value;
 
 	if (EG(exception) != NULL || caller == NULL || caller->func == NULL
 			|| !ZEND_USER_CODE(caller->func->type)
@@ -787,6 +789,11 @@ zend_result zend_native_call_set_explicit_argument(
 			|| argument->mode > ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE) {
 		return FAILURE;
 	}
+	source_value = value;
+	indirect_value = Z_TYPE_P(value) == IS_INDIRECT;
+	if (indirect_value) {
+		value = Z_INDIRECT_P(value);
+	}
 	function = call->func;
 	if (function == NULL
 			|| (function->type != ZEND_INTERNAL_FUNCTION
@@ -807,10 +814,9 @@ zend_result zend_native_call_set_explicit_argument(
 	}
 	if (argument->source_opcode == ZEND_SEND_FUNC_ARG) {
 		bool send_by_reference;
-		zval *source_value = value;
 
 		if (operand_type != IS_VAR) {
-			zend_native_release_source_operand(value, operand_type);
+			zend_native_release_source_operand(source_value, operand_type);
 			return FAILURE;
 		}
 		if (argument->auxiliary_operand.kind
@@ -828,7 +834,8 @@ zend_result zend_native_call_set_explicit_argument(
 					|| 2 * sizeof(void *)
 						> caller->func->op_array.cache_size
 							- argument->result_payload) {
-				zend_native_release_source_operand(value, operand_type);
+				zend_native_release_source_operand(
+					source_value, operand_type);
 				return FAILURE;
 			}
 			cache_slot = (void **) ((char *) caller->run_time_cache
@@ -837,7 +844,8 @@ zend_result zend_native_call_set_explicit_argument(
 				&call, Z_STR_P(name), &argument_number, cache_slot);
 			caller->call = call;
 			if (target == NULL) {
-				zend_native_release_source_operand(value, operand_type);
+				zend_native_release_source_operand(
+					source_value, operand_type);
 				return FAILURE;
 			}
 		} else if (argument->auxiliary_operand.kind
@@ -848,11 +856,8 @@ zend_result zend_native_call_set_explicit_argument(
 			}
 			target = ZEND_CALL_VAR(call, argument->result_payload);
 		} else {
-			zend_native_release_source_operand(value, operand_type);
+			zend_native_release_source_operand(source_value, operand_type);
 			return FAILURE;
-		}
-		if (Z_TYPE_P(value) == IS_INDIRECT) {
-			value = Z_INDIRECT_P(value);
 		}
 		send_by_reference =
 			ARG_SHOULD_BE_SENT_BY_REF(function, argument_number);
@@ -872,7 +877,16 @@ zend_result zend_native_call_set_explicit_argument(
 			zend_native_release_source_operand(source_value, operand_type);
 			return EG(exception) == NULL ? SUCCESS : FAILURE;
 		}
-		if (Z_ISREF_P(value)) {
+		if (indirect_value) {
+			/*
+			 * FETCH_*_FUNC_ARG exposes an lvalue through an IS_INDIRECT
+			 * temporary.  The temporary owns no part of the referenced
+			 * element, so a by-value send copies the referent and consumes
+			 * only the indirect wrapper.
+			 */
+			ZVAL_COPY_DEREF(target, value);
+			zend_native_release_source_operand(source_value, operand_type);
+		} else if (Z_ISREF_P(value)) {
 			zend_refcounted *reference = Z_COUNTED_P(value);
 			zval *referent = Z_REFVAL_P(value);
 
@@ -884,8 +898,8 @@ zend_result zend_native_call_set_explicit_argument(
 			}
 		} else {
 			ZVAL_COPY_VALUE(target, value);
+			ZVAL_UNDEF(source_value);
 		}
-		ZVAL_UNDEF(source_value);
 		return SUCCESS;
 	}
 	if (argument->auxiliary_operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
@@ -933,6 +947,7 @@ zend_result zend_native_call_set_explicit_argument(
 	if (argument->mode == ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
 			|| ARG_SHOULD_BE_SENT_BY_REF(function, argument_number)) {
 		ZVAL_COPY(target, value);
+		zend_native_release_source_operand(source_value, operand_type);
 		return SUCCESS;
 	}
 	/*
@@ -951,6 +966,9 @@ zend_result zend_native_call_set_explicit_argument(
 		ZVAL_COPY(target, value);
 	} else if (operand_type == IS_CV) {
 		ZVAL_COPY_DEREF(target, value);
+	} else if (indirect_value) {
+		ZVAL_COPY_DEREF(target, value);
+		zend_native_release_source_operand(source_value, operand_type);
 	} else if (operand_type == IS_VAR || operand_type == IS_TMP_VAR) {
 		if (Z_ISREF_P(value)) {
 			ZVAL_COPY_DEREF(target, value);

@@ -2469,6 +2469,7 @@ bool freeze_generator_resume_liveness(
 bool freeze_statepoint_materializations(
 	zend_tpde_plan *plan,
 	const zend_mir_view *view,
+	const zend_op_array *source_op_array,
 	zend_native_diagnostic *diag)
 {
 	const uint32_t frame_count = view->frame_state_count(view->context);
@@ -2654,6 +2655,77 @@ bool freeze_statepoint_materializations(
 				}
 			}
 		}
+
+		/*
+		 * Direct call helpers consume their source-backed arguments from the
+		 * canonical Zend frame. A producer may nevertheless keep a newer
+		 * pointer or boxed value in TPDE registers (for example FETCH_DIM_W
+		 * immediately followed by SEND_REF). Publish precisely those dirty
+		 * argument slots before entering the runtime boundary.
+		 */
+		if ((record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
+					|| record.opcode
+						== ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL)
+				&& instruction.call_argument_offset
+					<= plan->call_argument_count
+				&& instruction.call_argument_count
+					<= plan->call_argument_count
+						- instruction.call_argument_offset) {
+			if (instruction.call_argument_count != 0
+					&& plan->call_argument_bindings == nullptr) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+					"call materialization binding table is missing");
+				return false;
+			}
+			for (uint32_t argument_index = 0;
+					argument_index < instruction.call_argument_count;
+					++argument_index) {
+				const uint32_t frozen_index =
+					instruction.call_argument_offset + argument_index;
+				zend_mir_call_argument_ref argument{};
+				if (!zend_tpde_call_argument_at(
+						plan, frozen_index, &argument)) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+						"call materialization argument is unreadable");
+					return false;
+				}
+				const zend_mir_storage_id storage_id =
+					source_descriptor_storage(
+						source_op_array, argument.source_operand);
+				if (!zend_mir_id_is_valid(storage_id)) {
+					continue;
+				}
+				const zend_tpde_source_value_binding &binding =
+					plan->call_argument_bindings[frozen_index];
+				if (binding.definition_instruction_index >= 0) {
+					append_materialization(
+						UINT32_MAX, storage_id,
+						ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
+						binding.value_index,
+						binding.definition_instruction_index);
+					continue;
+				}
+				if (binding.value_index < 0
+						|| static_cast<uint32_t>(binding.value_index)
+							>= plan->value_count) {
+					continue;
+				}
+				const uint32_t value_index =
+					static_cast<uint32_t>(binding.value_index);
+				const zend_tpde_value &value =
+					plan->values[value_index];
+				if (!value.constant && value.register_authoritative
+						&& value.slot_state
+							== ZEND_TPDE_CANONICAL_SLOT_DIRTY) {
+					append_materialization(
+						value_index, storage_id, value.machine_kind,
+						binding.value_index,
+						binding.definition_instruction_index);
+				}
+			}
+		}
 	}
 	if (materializations.size() > MAX_RECORDS) {
 		zend_tpde_set_diagnostic(diag,
@@ -2800,6 +2872,30 @@ bool freeze_entry_undef_temporaries(
 		}
 		required[physical_slot
 			- static_cast<uint32_t>(op_array->last_var)] = 1;
+	}
+	const uint32_t first_temporary =
+		static_cast<uint32_t>(op_array->last_var);
+	const uint64_t temporary_limit =
+		static_cast<uint64_t>(first_temporary) + op_array->T;
+	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+		const zend_tpde_instruction &instruction =
+			plan->instructions[index];
+		if (instruction.record.opcode != ZEND_MIR_OPCODE_ZVAL_STORE) {
+			continue;
+		}
+		const zend_mir_storage_id storage =
+			instruction.zval_store_storage_id;
+		if (!zend_mir_id_is_valid(storage)
+				|| static_cast<uint64_t>(storage) >= temporary_limit) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"zval store destination is outside the executable frame");
+			return false;
+		}
+		if (storage < first_temporary) {
+			continue;
+		}
+		required[storage - first_temporary] = 1;
 	}
 	if (plan->user_opcode_callbacks
 			&& plan->user_opcode_source_operations != nullptr) {
@@ -5121,8 +5217,23 @@ bool initialize_plan(
 							return false;
 						}
 						descriptor->arguments[n].ordinal = argument.ordinal;
+						/*
+						 * An open method target is deliberately frozen before
+						 * request-local binding, so its MIR argument record can
+						 * only preserve the SEND opcode's syntactic mode. Once
+						 * the binding resolves a concrete user function, its
+						 * parameter declaration is authoritative. In
+						 * particular, SEND_VAR_EX to `array &$arg` must create
+						 * and transfer a reference cell even though the source
+						 * opcode itself is not SEND_REF.
+						 */
+						const bool parameter_by_reference =
+							callee != nullptr
+							&& ARG_MUST_BE_SENT_BY_REF(
+								callee, argument.ordinal + 1);
 						descriptor->arguments[n].mode =
-							argument.ownership
+							parameter_by_reference
+								|| argument.ownership
 									== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
 								? ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
 								: ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE;
@@ -5827,7 +5938,8 @@ bool initialize_plan(
 	if (!freeze_entry_undef_temporaries(plan, source_op_array, diag)) {
 		return false;
 	}
-	if (!freeze_statepoint_materializations(plan, view, diag)) {
+	if (!freeze_statepoint_materializations(
+			plan, view, source_op_array, diag)) {
 		return false;
 	}
 	if (!freeze_generator_resume_liveness(
@@ -6462,6 +6574,9 @@ static bool freeze_typed_component_calls(
 	return true;
 }
 
+static bool machine_plan_value_has_result_representation(
+	const zend_tpde_plan *plan, zend_mir_value_id value_id);
+
 static bool retain_typed_call_materializations(
 		zend_tpde_plan *plan,
 		zend_native_diagnostic *diag) {
@@ -6498,6 +6613,12 @@ static bool retain_typed_call_materializations(
 							static_cast<uint32_t>(definition)] == 0) {
 					continue;
 				}
+			} else if (materialization.value_index >= plan->value_count
+					|| !machine_plan_value_has_result_representation(
+						plan,
+						plan->values[
+							materialization.value_index].id)) {
+				continue;
 			}
 			retained.push_back(materialization);
 			++instruction.materialization_count;
@@ -6628,6 +6749,22 @@ static int32_t machine_plan_guarded_mutation_value_index(
 static void freeze_machine_register_authority(zend_tpde_plan *plan) {
 	for (uint32_t index = 0; index < plan->value_count; ++index) {
 		zend_tpde_value &value = plan->values[index];
+		const int32_t definition =
+			plan->value_definition_instructions != nullptr
+				? plan->value_definition_instructions[index] : -1;
+		const zend_mir_instruction_record definition_record =
+			definition >= 0
+					&& static_cast<uint32_t>(definition)
+						< plan->instruction_count
+				? zend_tpde_instruction_record_at(
+					plan, &plan->instructions[
+						static_cast<uint32_t>(definition)])
+				: zend_mir_instruction_record{};
+		const bool boxed_join =
+			value.machine_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+			&& value.representation == ZEND_MIR_REPRESENTATION_ZVAL
+			&& (definition_record.opcode == ZEND_MIR_OPCODE_COPY
+				|| definition_record.opcode == ZEND_MIR_OPCODE_PHI);
 		const bool argument_abi =
 			value.argument_index >= 0 && value.local_abi.valid;
 		const zend_mir_scalar_type_mask exact_type =
@@ -6636,6 +6773,7 @@ static void freeze_machine_register_authority(zend_tpde_plan *plan) {
 			argument_abi ? value.local_abi.machine_kind : value.machine_kind;
 		value.register_authoritative =
 			!value.constant
+			&& !boxed_join
 			&& exact_type != ZEND_MIR_SCALAR_TYPE_NULL
 			&& (argument_abi
 				|| value.location == ZEND_TPDE_MACHINE_LOCATION_REGISTER)
@@ -7168,10 +7306,10 @@ static bool freeze_component_machine_plan(
 				"unable to freeze component-local TPDE call plan");
 			return false;
 		}
+		freeze_machine_register_authority(&plans[index]);
 		if (!retain_typed_call_materializations(&plans[index], diag)) {
 			return false;
 		}
-		freeze_machine_register_authority(&plans[index]);
 		if (!freeze_machine_required_values(&plans[index], diag)) {
 			return false;
 		}
