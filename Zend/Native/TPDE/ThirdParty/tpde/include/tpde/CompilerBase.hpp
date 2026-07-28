@@ -302,6 +302,7 @@ public:
     void add(IRValueRef val);
 
     void ret();
+    void ret_local_path();
   };
 
   /// Initialize a CompilerBase, should be called by the derived classes
@@ -823,6 +824,20 @@ void CompilerBase<Adaptor, Derived, Config>::RetBuilder::ret() {
 }
 
 template <IRAdaptor Adaptor, typename Derived, CompilerConfig Config>
+void CompilerBase<Adaptor, Derived, Config>::RetBuilder::ret_local_path() {
+  assert((compiler.register_file.allocatable & ret_regs) == 0);
+  compiler.register_file.allocatable |= ret_regs;
+
+  /*
+   * Target lowering may outline a cold return behind a local machine-code
+   * branch while compilation continues at the hot label in the same IR block.
+   * The return instruction is terminal at run time, but it must not destroy
+   * the allocator state used to compile that hot continuation.
+   */
+  compiler.gen_func_epilog();
+}
+
+template <IRAdaptor Adaptor, typename Derived, CompilerConfig Config>
 bool CompilerBase<Adaptor, Derived, Config>::compile() {
   // create function symbols
   text_writer.begin_module(assembler);
@@ -924,18 +939,23 @@ void CompilerBase<Adaptor, Derived, Config>::init_assignment(
 
   const auto &liveness = analyzer.liveness_info(local_idx);
 
-  // if there is only one part, try to hand out a fixed assignment
-  // if the value is used for longer than one block and there aren't too many
-  // definitions in child loops this could interfere with
+  // Try to hand out fixed assignments to every long-lived part. Multi-part
+  // values are independent register-allocation units just like their uses and
+  // definitions; forcing them through a shared stack slot here defeats that
+  // model precisely at PHIs and loop boundaries.
+  //
+  // If the value is used for longer than one block and there aren't too many
+  // definitions in child loops this could interfere with, keep each part in a
+  // fixed register. Parts for which no register is available remain ordinary
+  // spillable assignments.
   // TODO(ts): try out only fixed assignments if the value is live for more
   // than two blocks?
   // TODO(ts): move this to ValuePartRef::alloc_reg to be able to defer this
   // for results?
-  if (part_count == 1) {
-    const auto &cur_loop =
-        analyzer.loop_from_idx(analyzer.block_loop_idx(cur_block_idx));
-    auto ap = AssignmentPartRef{assignment, 0};
-
+  const auto &cur_loop =
+      analyzer.loop_from_idx(analyzer.block_loop_idx(cur_block_idx));
+  for (u32 part_idx = 0; part_idx < part_count; ++part_idx) {
+    auto ap = AssignmentPartRef{assignment, part_idx};
     auto try_fixed =
         liveness.last > cur_block_idx &&
         cur_loop.definitions_in_childs +
@@ -961,7 +981,7 @@ void CompilerBase<Adaptor, Derived, Config>::init_assignment(
         ap.set_reg(reg);
         ap.set_register_valid(true);
         ap.set_fixed_assignment(true);
-        register_file.mark_used(reg, local_idx, 0);
+        register_file.mark_used(reg, local_idx, part_idx);
         register_file.inc_lock_count(reg); // fixed assignments always locked
         register_file.mark_clobbered(reg);
         ++assignments.cur_fixed_assignment_count[ap.bank().id()];
@@ -1199,6 +1219,21 @@ void CompilerBase<Adaptor, Derived, Config>::prologue_assign_arg(
     };
     cc_assigner->assign_arg(cca);
     derived()->prologue_assign_arg_part(std::move(vp), cca);
+
+    /*
+     * A non-fixed register argument that survives the entry block needs one
+     * canonical spill copy. Backedges and non-layout successors deliberately
+     * discard their register assignment, and the later reload must never
+     * depend on an incidental entry-register mapping. Fixed arguments remain
+     * register-only; stack arguments already have target-provided backing.
+     */
+    AssignmentPartRef ap = vr.part(part_idx).assignment();
+    const auto &liveness =
+        analyzer.liveness_info(analyzer.adaptor->val_local_idx(arg));
+    if (ap.register_valid() && !ap.fixed_assignment() && !ap.stack_valid() &&
+        liveness.last > cur_block_idx) {
+      spill(ap);
+    }
   }
 }
 
@@ -1527,7 +1562,14 @@ void CompilerBase<Adaptor, Derived, Config>::free_reg(Reg reg) {
   AssignmentPartRef ap{val_assignment(local_idx), part};
   assert(ap.register_valid());
   assert(ap.get_reg() == reg);
-  assert(!ap.modified() || ap.variable_ref());
+  /*
+   * Block liveness alone is insufficient here: target lowering may introduce
+   * an internal fast/slow branch in the middle of one IR instruction while a
+   * value still has later uses in the same IR block. Such a value must have a
+   * published stack copy before its register can be discarded.
+   */
+  assert(!ap.modified() || ap.variable_ref() ||
+         ap.assignment()->references_left == 0);
   ap.set_register_valid(false);
   register_file.unmark_used(reg);
 }
@@ -1623,8 +1665,11 @@ typename CompilerBase<Adaptor, Derived, Config>::RegisterFile::RegBitSet
     }
 
     const auto &liveness = analyzer.liveness_info(local_idx);
-    if (liveness.last <= cur_block_idx) {
-      // No need to spill value if it dies immediately after the block.
+    if (liveness.last <= cur_block_idx &&
+        ap.assignment()->references_left == 0) {
+      // No need to spill a value after its final same-block use. A value with
+      // remaining references may still be consumed after an internal branch
+      // emitted by target lowering and therefore needs a canonical copy.
       continue;
     }
 
@@ -1762,20 +1807,31 @@ void CompilerBase<Adaptor, Derived, Config>::generate_switch(
   // Labels that need an intermediate block to setup registers. This is
   // separate, because most switch targets don't need this.
   tpde::util::SmallVector<std::pair<tpde::Label, IRBlockRef>, 64> case_blocks;
+  const auto default_label = this->text_writer.label_create();
   for (auto i = 0u; i < cases.size(); ++i) {
     // If the target might need additional register moves, we can't branch there
     // immediately.
     // TODO: more precise condition?
     BlockIndex target = this->analyzer.block_idx(cases[i].second);
     if (analyzer.block_has_phis(target)) {
+      if (cases[i].second == default_block) {
+        case_labels.push_back(default_label);
+        continue;
+      }
+
+      auto existing = std::ranges::find(
+          case_blocks, cases[i].second, &decltype(case_blocks)::value_type::second);
+      if (existing != case_blocks.end()) {
+        case_labels.push_back(existing->first);
+        continue;
+      }
+
       case_labels.push_back(this->text_writer.label_create());
       case_blocks.emplace_back(case_labels.back(), cases[i].second);
     } else {
       case_labels.push_back(this->block_labels[u32(target)]);
     }
   }
-
-  const auto default_label = this->text_writer.label_create();
 
   const auto build_range = [&,
                             this](size_t begin, size_t end, const auto &self) {
@@ -2001,8 +2057,8 @@ void CompilerBase<Adaptor, Derived, Config>::move_to_phi_nodes_impl(
   assert(!nodes.empty() && "block marked has having phi nodes has none");
 
   ScratchWrapper scratch{derived()};
-  const auto move_to_phi = [this, &scratch](IRValueRef phi,
-                                            IRValueRef incoming_val) {
+  const auto move_to_phi = [this, &scratch](
+                               IRValueRef phi, IRValueRef incoming_val) {
     auto phi_vr = derived()->result_ref(phi);
     auto val_vr = derived()->val_ref(incoming_val);
     if (phi == incoming_val) {
@@ -2290,6 +2346,14 @@ bool CompilerBase<Adaptor, Derived, Config>::compile_func(const IRFuncRef func,
 
   assignments.cur_fixed_assignment_count = {};
   assert(std::ranges::none_of(assignments.value_ptrs, std::identity{}));
+  /*
+   * Value-local indices are scoped to the currently selected IR function.
+   * Multi-function adaptors therefore reuse the same indices for unrelated
+   * values.  Assertions catch an incomplete release in debug builds, but a
+   * release compiler must not carry an arena pointer from the preceding
+   * function into the next allocator epoch.
+   */
+  std::ranges::fill(assignments.value_ptrs, nullptr);
   if (assignments.value_ptrs.size() < analyzer.liveness.size()) {
     assignments.value_ptrs.resize(analyzer.liveness.size());
   }
@@ -2400,6 +2464,7 @@ bool CompilerBase<Adaptor, Derived, Config>::compile_func(const IRFuncRef func,
 
   assert(std::ranges::none_of(assignments.value_ptrs, std::identity{}) &&
          "found non-freed ValueAssignment, maybe missing ref-count?");
+  std::ranges::fill(assignments.value_ptrs, nullptr);
 
   derived()->finish_func(func_idx);
   this->text_writer.finish_func();

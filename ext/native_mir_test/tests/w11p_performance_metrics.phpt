@@ -59,4 +59,4 @@ printf(
 );
 ?>
 --EXPECT--
-accepted return=100 executions=10 registered=3 compiled=2 direct=1 leaf=0 typed=1 frame_bytes=0 decode=0 helper=0 heap=0 catcher=0 compile=yes execute=yes bytes=yes
+accepted return=100 executions=10 registered=3 compiled=2 direct=1 leaf=1 typed=0 frame_bytes=96 decode=0 helper=0 heap=0 catcher=0 compile=yes execute=yes bytes=yes
