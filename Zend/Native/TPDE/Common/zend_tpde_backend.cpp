@@ -1777,6 +1777,23 @@ bool freeze_machine_plan_consumers(
 			const zend_tpde_materialization &materialization =
 				plan->materializations[
 					instruction.materialization_offset + n];
+			if (materialization.value_index == UINT32_MAX) {
+				if (materialization
+								.source_definition_instruction_index < 0
+						|| static_cast<uint32_t>(materialization
+							.source_definition_instruction_index)
+							>= plan->instruction_count
+						|| (materialization.source_value_index >= 0
+							&& static_cast<uint32_t>(
+								materialization.source_value_index)
+								>= plan->value_count)) {
+					zend_tpde_set_diagnostic(diag,
+						ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+						"machine-plan source materialization has no definition");
+					return false;
+				}
+				continue;
+			}
 			if (materialization.value_index >= plan->value_count
 					|| !visit_use(
 						plan->values[materialization.value_index].id,
@@ -1889,25 +1906,25 @@ zend_tpde_source_value_binding freeze_source_value_binding(
 	const zend_op_array *source_op_array,
 	const zend_mir_source_operand_ref &operand,
 	zend_mir_storage_id storage_id,
-	uint32_t consumer_source_position)
+	uint32_t consumer_source_position,
+	uint32_t consumer_instruction_index)
 {
 	zend_mir_value_id value_id = ZEND_MIR_ID_INVALID;
+	int32_t value_index = -1;
 	if (source_operand_value_id(operand, value_id)) {
-		const int32_t value_index = zend_tpde_value_index(plan, value_id);
-		if (value_index >= 0) {
-			return {value_index, -1};
-		}
+		value_index = zend_tpde_value_index(plan, value_id);
 	}
-	if ((operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+	if (value_index < 0
+			&& (operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
 				|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
 			&& operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
 			&& operand.index < plan->argument_count
 			&& plan->argument_value_indices != nullptr
 			&& plan->argument_value_indices[operand.index] >= 0) {
-		return {plan->argument_value_indices[operand.index], -1};
+		value_index = plan->argument_value_indices[operand.index];
 	}
 	if (!zend_mir_id_is_valid(storage_id)) {
-		return {-1, -1};
+		return {value_index, -1};
 	}
 
 	int32_t definition = -1;
@@ -1915,10 +1932,18 @@ zend_tpde_source_value_binding freeze_source_value_binding(
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
 		const zend_tpde_instruction &candidate = plan->instructions[index];
 		if (candidate.direct_call == nullptr
+				|| index >= consumer_instruction_index
 				|| candidate.call_site.source_do_opline_index
 					> consumer_source_position
 				|| source_descriptor_storage(source_op_array,
-					candidate.direct_call->result_operand) != storage_id) {
+					candidate.direct_call->result_operand) != storage_id
+				|| (zend_mir_id_is_valid(operand.ssa_variable_id)
+					&& zend_mir_id_is_valid(
+						candidate.direct_call
+							->result_operand.ssa_variable_id)
+					&& operand.ssa_variable_id
+						!= candidate.direct_call
+							->result_operand.ssa_variable_id)) {
 			continue;
 		}
 		if (definition < 0
@@ -1929,7 +1954,7 @@ zend_tpde_source_value_binding freeze_source_value_binding(
 				candidate.call_site.source_do_opline_index;
 		}
 	}
-	return {-1, definition};
+	return {value_index, definition};
 }
 
 bool freeze_source_value_bindings(
@@ -1955,7 +1980,7 @@ bool freeze_source_value_bindings(
 				plan, source_op_array, argument.source_operand,
 				source_descriptor_storage(
 					source_op_array, argument.source_operand),
-				argument.send_opline_index);
+				argument.send_opline_index, UINT32_MAX);
 	}
 
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
@@ -1977,19 +2002,20 @@ bool freeze_source_value_bindings(
 			instruction.source_op1_binding = freeze_source_value_binding(
 				plan, source_op_array, operation.op1,
 				operation.op1_storage_id,
-				source_position);
+				source_position, index);
 			instruction.source_op2_binding = freeze_source_value_binding(
 				plan, source_op_array, operation.op2,
 				operation.op2_storage_id,
-				source_position);
+				source_position, index);
 			instruction.source_result_binding = freeze_source_value_binding(
 				plan, source_op_array, operation.result,
 				operation.result_storage_id,
-				source_position);
+				source_position, index);
 			instruction.source_auxiliary_binding =
 				freeze_source_value_binding(
 					plan, source_op_array, operation.auxiliary,
-					operation.auxiliary_storage_id, source_position);
+					operation.auxiliary_storage_id, source_position,
+					index);
 			const uint8_t source_opcode =
 				source_position < plan->source_opcode_count
 					? plan->source_opcodes[source_position].opcode
@@ -2472,87 +2498,161 @@ bool freeze_statepoint_materializations(
 		instruction.materialization_offset =
 			static_cast<uint32_t>(materializations.size());
 		instruction.materialization_count = 0;
-		if (!observable_boundary
-				|| !zend_mir_id_is_valid(record.frame_state_id)) {
+		if (!observable_boundary) {
 			continue;
 		}
-		const zend_mir_frame_state_ref *frame = nullptr;
-		for (const zend_mir_frame_state_ref &candidate : frames) {
-			if (candidate.id == record.frame_state_id) {
-				frame = &candidate;
-				break;
-			}
-		}
-		if (frame == nullptr || frame->function_id != plan->function.id
-				|| frame->slots.offset > view->frame_slot_count(view->context)
-				|| frame->slots.count
-					> view->frame_slot_count(view->context)
-						- frame->slots.offset) {
-			zend_tpde_set_diagnostic(diag,
-				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-				"observable instruction lacks its materialization frame");
-			return false;
-		}
-		/*
-		 * Before the first native instruction, the incoming Zend frame is the
-		 * canonical value source. Its snapshot can name the later SSA
-		 * representative of a slot, but no register-authoritative definition
-		 * exists yet and therefore no function-entry slot can be dirty.
-		 */
-		if (record.opcode == ZEND_MIR_OPCODE_STATEPOINT
-				&& frame->safepoint_class
-					== ZEND_MIR_SAFEPOINT_CLASS_FUNCTION_ENTRY) {
-			continue;
-		}
-		for (uint32_t slot_index = 0;
-				slot_index < frame->slots.count; ++slot_index) {
-			zend_mir_frame_slot_ref slot{};
-			if (!view->frame_slot_at(view->context,
-					frame->slots.offset + slot_index, &slot)) {
-				zend_tpde_set_diagnostic(diag,
-					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-					"materialization frame slot is unreadable");
-				return false;
-			}
-			if (slot.materialization != ZEND_MIR_MATERIALIZATION_MATERIALIZED
-					|| !zend_mir_id_is_valid(slot.value_id)) {
-				continue;
-			}
-			const int32_t value_index =
-				zend_tpde_value_index(plan, slot.value_id);
-			if (value_index < 0) {
-				zend_tpde_set_diagnostic(diag,
-					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-					"materialization references an unknown value");
-				return false;
-			}
-			const zend_tpde_value &value =
-				plan->values[static_cast<uint32_t>(value_index)];
-			if (value.slot_state != ZEND_TPDE_CANONICAL_SLOT_DIRTY
-					|| !zend_mir_id_is_valid(value.canonical_storage_id)
-					|| value.constant) {
-				continue;
-			}
-			bool duplicate = false;
+
+		auto duplicate_storage = [&](zend_mir_storage_id storage_id) {
 			for (uint32_t materialization_index =
 					instruction.materialization_offset;
 					materialization_index < materializations.size();
 					++materialization_index) {
 				if (materializations[materialization_index].storage_id
-						== value.canonical_storage_id) {
-					duplicate = true;
+						== storage_id) {
+					return true;
+				}
+			}
+			return false;
+		};
+		auto append_materialization = [&](
+				uint32_t value_index,
+				zend_mir_storage_id storage_id,
+				zend_tpde_machine_value_kind machine_kind,
+				int32_t source_value_index,
+				int32_t source_definition_instruction_index) {
+			if (!zend_mir_id_is_valid(storage_id)
+					|| duplicate_storage(storage_id)) {
+				return;
+			}
+			materializations.push_back({
+				value_index,
+				storage_id,
+				machine_kind,
+				source_value_index,
+				source_definition_instruction_index,
+			});
+			++instruction.materialization_count;
+		};
+
+		if (zend_mir_id_is_valid(record.frame_state_id)) {
+			const zend_mir_frame_state_ref *frame = nullptr;
+			for (const zend_mir_frame_state_ref &candidate : frames) {
+				if (candidate.id == record.frame_state_id) {
+					frame = &candidate;
 					break;
 				}
 			}
-			if (duplicate) {
-				continue;
+			if (frame == nullptr || frame->function_id != plan->function.id
+					|| frame->slots.offset
+						> view->frame_slot_count(view->context)
+					|| frame->slots.count
+						> view->frame_slot_count(view->context)
+							- frame->slots.offset) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+					"observable instruction lacks its materialization frame");
+				return false;
 			}
-			materializations.push_back({
-				static_cast<uint32_t>(value_index),
-				value.canonical_storage_id,
-				value.machine_kind,
-			});
-			++instruction.materialization_count;
+
+			const bool function_entry =
+				record.opcode == ZEND_MIR_OPCODE_STATEPOINT
+				&& frame->safepoint_class
+					== ZEND_MIR_SAFEPOINT_CLASS_FUNCTION_ENTRY;
+			if (!function_entry) {
+				for (uint32_t slot_index = 0;
+						slot_index < frame->slots.count; ++slot_index) {
+					zend_mir_frame_slot_ref slot{};
+					if (!view->frame_slot_at(view->context,
+							frame->slots.offset + slot_index, &slot)) {
+						zend_tpde_set_diagnostic(diag,
+							ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+							"materialization frame slot is unreadable");
+						return false;
+					}
+					if (slot.materialization
+								!= ZEND_MIR_MATERIALIZATION_MATERIALIZED
+							|| !zend_mir_id_is_valid(slot.value_id)) {
+						continue;
+					}
+					const int32_t value_index =
+						zend_tpde_value_index(plan, slot.value_id);
+					if (value_index < 0) {
+						zend_tpde_set_diagnostic(diag,
+							ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+							"materialization references an unknown value");
+						return false;
+					}
+					const zend_tpde_value &value =
+						plan->values[static_cast<uint32_t>(value_index)];
+					if (value.slot_state
+								!= ZEND_TPDE_CANONICAL_SLOT_DIRTY
+							|| !zend_mir_id_is_valid(
+								value.canonical_storage_id)
+							|| value.constant) {
+						continue;
+					}
+					append_materialization(
+						static_cast<uint32_t>(value_index),
+						value.canonical_storage_id,
+						value.machine_kind, value_index, -1);
+				}
+			}
+		}
+
+		/*
+		 * Canonical-location modules do not duplicate every source slot in
+		 * each frame state. Runtime helpers still read explicit operands from
+		 * the Zend frame, so publish authoritative inputs at that boundary.
+		 * This also covers private typed-call results without a persistent MIR
+		 * result identity.
+		 */
+		if (instruction.runtime_helper != ZEND_NATIVE_HELPER_COUNT
+				&& instruction.has_value_operation) {
+			const struct {
+				zend_tpde_source_value_binding binding;
+				zend_mir_storage_id storage_id;
+			} inputs[] = {
+				{instruction.source_op1_binding,
+					instruction.value_operation.op1_storage_id},
+				{instruction.source_op2_binding,
+					instruction.value_operation.op2_storage_id},
+				{instruction.source_auxiliary_binding,
+					instruction.value_operation.auxiliary_storage_id},
+			};
+			for (const auto &input : inputs) {
+				if (!zend_mir_id_is_valid(input.storage_id)) {
+					continue;
+				}
+				if (input.binding.definition_instruction_index >= 0) {
+					append_materialization(
+						UINT32_MAX, input.storage_id,
+						ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
+						input.binding.value_index,
+						input.binding.definition_instruction_index);
+					continue;
+				}
+				if (input.binding.value_index >= 0) {
+					const uint32_t value_index =
+						static_cast<uint32_t>(input.binding.value_index);
+					if (value_index >= plan->value_count) {
+						zend_tpde_set_diagnostic(diag,
+							ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+							"source materialization references an unknown value");
+						return false;
+					}
+					const zend_tpde_value &value =
+						plan->values[value_index];
+					if (!value.constant && value.register_authoritative
+							&& value.slot_state
+								== ZEND_TPDE_CANONICAL_SLOT_DIRTY) {
+						append_materialization(
+							value_index, input.storage_id,
+							value.machine_kind,
+							input.binding.value_index,
+							input.binding.definition_instruction_index);
+					}
+				}
+			}
 		}
 	}
 	if (materializations.size() > MAX_RECORDS) {
@@ -6362,6 +6462,68 @@ static bool freeze_typed_component_calls(
 	return true;
 }
 
+static bool retain_typed_call_materializations(
+		zend_tpde_plan *plan,
+		zend_native_diagnostic *diag) {
+	if (plan->materialization_count == 0) {
+		return true;
+	}
+	std::vector<zend_tpde_materialization> retained;
+	retained.reserve(plan->materialization_count);
+	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+		zend_tpde_instruction &instruction = plan->instructions[index];
+		const uint32_t old_offset = instruction.materialization_offset;
+		const uint32_t old_count = instruction.materialization_count;
+		instruction.materialization_offset =
+			static_cast<uint32_t>(retained.size());
+		instruction.materialization_count = 0;
+		if (old_offset > plan->materialization_count
+				|| old_count > plan->materialization_count - old_offset) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"component materialization slice is out of bounds");
+			return false;
+		}
+		for (uint32_t offset = 0; offset < old_count; ++offset) {
+			const zend_tpde_materialization &materialization =
+				plan->materializations[old_offset + offset];
+			if (materialization.value_index == UINT32_MAX) {
+				const int32_t definition =
+					materialization.source_definition_instruction_index;
+				if (definition < 0
+						|| static_cast<uint32_t>(definition)
+							>= plan->instruction_count
+						|| plan->typed_component_call_eligible == nullptr
+						|| plan->typed_component_call_eligible[
+							static_cast<uint32_t>(definition)] == 0) {
+					continue;
+				}
+			}
+			retained.push_back(materialization);
+			++instruction.materialization_count;
+		}
+	}
+
+	zend_tpde_materialization *replacement = nullptr;
+	if (!retained.empty()) {
+		replacement = static_cast<zend_tpde_materialization *>(
+			std::malloc(retained.size() * sizeof(*replacement)));
+		if (replacement == nullptr) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+				"unable to retain component materialization plan");
+			return false;
+		}
+		std::memcpy(replacement, retained.data(),
+			retained.size() * sizeof(*replacement));
+	}
+	std::free(plan->materializations);
+	plan->materializations = replacement;
+	plan->materialization_count =
+		static_cast<uint32_t>(retained.size());
+	return true;
+}
+
 static void destroy_machine_cfg(zend_tpde_machine_cfg *cfg) {
 	std::free(cfg->successor_offsets);
 	std::free(cfg->successors);
@@ -7004,6 +7166,9 @@ static bool freeze_component_machine_plan(
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
 				"unable to freeze component-local TPDE call plan");
+			return false;
+		}
+		if (!retain_typed_call_materializations(&plans[index], diag)) {
 			return false;
 		}
 		freeze_machine_register_authority(&plans[index]);
