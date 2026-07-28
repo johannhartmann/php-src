@@ -332,6 +332,13 @@ public:
 		tpde::x64::AsmReg value_reg,
 		tpde::x64::AsmReg temp_reg,
 		tpde::Label default_label);
+	bool emit_machine_zval_type_info(
+		zend_tpde_machine_value_kind kind,
+		AsmReg payload_reg,
+		AsmReg type_info_reg);
+	bool emit_pointer_addref(
+		zend_tpde_machine_value_kind kind,
+		AsmReg payload_reg);
 	bool emit_materializations(
 		IRInstRef instruction, bool interrupt_slow_path = false);
 	bool compile_boxed_cond_guard(IRInstRef instruction);
@@ -436,6 +443,69 @@ void ZendCompilerX64::emit_integer_dispatch(
 	emit_balanced(0, cases.size(), emit_balanced);
 }
 
+bool ZendCompilerX64::emit_machine_zval_type_info(
+		zend_tpde_machine_value_kind kind,
+		AsmReg payload_reg,
+		AsmReg type_info_reg) {
+	if (kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR) {
+		const uint32_t type =
+			zend_tpde_machine_value_zval_type(kind);
+		ASM(MOV32rm, type_info_reg,
+			FE_MEM(payload_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_refcounted_h, u.type_info))));
+		ASM(AND32ri, type_info_reg, GC_IMMUTABLE);
+		ASM(XOR32ri, type_info_reg, GC_IMMUTABLE);
+		ASM(SHL32ri, type_info_reg, Z_TYPE_FLAGS_SHIFT - 6);
+		ASM(ADD32ri, type_info_reg, type);
+		return true;
+	}
+	const uint32_t type_info =
+		zend_tpde_machine_value_zval_type_info(kind);
+	if (type_info == IS_UNDEF) {
+		return false;
+	}
+	ASM(MOV32ri, type_info_reg, type_info);
+	return true;
+}
+
+bool ZendCompilerX64::emit_pointer_addref(
+		zend_tpde_machine_value_kind kind,
+		AsmReg payload_reg) {
+	if (kind != ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+			&& kind != ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+			&& kind != ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
+			&& kind != ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
+			&& kind != ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR) {
+		return false;
+	}
+	if (kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+			|| kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR) {
+		const auto copied = text_writer.label_create();
+		ScratchReg header{this};
+		auto header_reg = header.alloc_gp();
+		ASM(MOV32rm, header_reg,
+			FE_MEM(payload_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_refcounted_h, u.type_info))));
+		ASM(TEST32ri, header_reg, GC_IMMUTABLE);
+		generate_raw_jump(Jump::jne, copied);
+		ASM(ADD32mi,
+			FE_MEM(payload_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_refcounted_h, refcount))),
+			1);
+		label_place(copied);
+		return true;
+	}
+	ASM(ADD32mi,
+		FE_MEM(payload_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				offsetof(zend_refcounted_h, refcount))),
+		1);
+	return true;
+}
+
 bool ZendCompilerX64::emit_materializations(
 		IRInstRef instruction, bool interrupt_slow_path) {
 	if (adaptor->typed_body()) {
@@ -482,17 +552,22 @@ bool ZendCompilerX64::emit_materializations(
 		auto value_ref = val_ref(value);
 		auto payload = value_ref.part(0);
 		AsmReg boolean_payload_reg = AsmReg::make_invalid();
+		AsmReg payload_reg = AsmReg::make_invalid();
 		if (machine_kind
 				== ZEND_TPDE_MACHINE_VALUE_F64) {
-			auto payload_reg = payload.load_to_reg();
+			payload_reg = payload.load_to_reg();
 			ASM(SSE_MOVSDmr,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(offset)),
 				payload_reg);
 		} else if (machine_kind
-				== ZEND_TPDE_MACHINE_VALUE_BOOL) {
-			auto payload_reg = payload.load_to_reg();
-			boolean_payload_reg = payload_reg;
+				== ZEND_TPDE_MACHINE_VALUE_BOOL
+				|| machine_kind
+					== ZEND_TPDE_MACHINE_VALUE_STRING_PTR) {
+			payload_reg = payload.load_to_reg();
+			if (machine_kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
+				boolean_payload_reg = payload_reg;
+			}
 			ASM(MOV64mr,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(offset)),
@@ -524,15 +599,15 @@ bool ZendCompilerX64::emit_materializations(
 				FE_MEM(frame_reg, 0, FE_NOREG, type_offset),
 				type_info_reg);
 		} else {
-			const uint32_t type_info =
-				zend_tpde_machine_value_zval_type_info(
-					machine_kind);
-			if (type_info == IS_UNDEF) {
+			ScratchReg type_info{this};
+			auto type_info_reg = type_info.alloc_gp();
+			if (!emit_machine_zval_type_info(
+					machine_kind, payload_reg, type_info_reg)) {
 				return false;
 			}
-			ASM(MOV32mi,
+			ASM(MOV32mr,
 				FE_MEM(frame_reg, 0, FE_NOREG, type_offset),
-				static_cast<int32_t>(type_info));
+				type_info_reg);
 		}
 	}
 	return true;
@@ -2888,6 +2963,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			}
 			generate_branch_to_block(Jump::jmp,
 				IRBlockRef{node.argument_index}, false, true);
+			continuation_edge_emitted_ = true;
 			return true;
 		}
 		const zend_native_runtime_helper_id helper = mir.runtime_helper;
@@ -3067,16 +3143,17 @@ bool ZendCompilerX64::compile_inst_impl(
 								offset + offsetof(zval, u1.type_info))),
 						type_info_reg);
 				} else {
-					const uint32_t type =
-						zend_tpde_machine_value_zval_type_info(kind);
-					if (type == IS_UNDEF) {
+					ScratchReg type_info{this};
+					auto type_info_reg = type_info.alloc_gp();
+					if (!emit_machine_zval_type_info(
+							kind, payload_reg, type_info_reg)) {
 						return false;
 					}
-					ASM(MOV32mi,
+					ASM(MOV32mr,
 						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
 							static_cast<int32_t>(
 								offset + offsetof(zval, u1.type_info))),
-						static_cast<int32_t>(type));
+						type_info_reg);
 				}
 			}
 			return true;
@@ -3333,13 +3410,11 @@ bool ZendCompilerX64::compile_inst_impl(
 						source_payload_reg);
 					ASM(ADD32ri, source_type_reg, IS_FALSE);
 				} else {
-					const uint32_t type_info =
-						zend_tpde_machine_value_zval_type_info(
-							source_kind);
-					if (type_info == IS_UNDEF) {
+					if (!emit_machine_zval_type_info(
+							source_kind, source_payload_reg,
+							source_type_reg)) {
 						return false;
 					}
-					ASM(MOV32ri, source_type_reg, type_info);
 				}
 			}
 		} else {
@@ -10539,11 +10614,9 @@ bool ZendCompilerX64::compile_inst_impl(
 					auto [returned_ref, returned] =
 						val_ref_single(node.operands[0]);
 					auto payload_reg = returned.load_to_reg();
-					ASM(ADD32mi,
-						FE_MEM(payload_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_refcounted_h, refcount))),
-						1);
+					if (!emit_pointer_addref(kind, payload_reg)) {
+						return false;
+					}
 					return_builder.add(
 						std::move(returned), tpde::CCAssignment{});
 				} else {
@@ -10684,14 +10757,6 @@ bool ZendCompilerX64::compile_inst_impl(
 							val_ref_single(returned_ref);
 						value_reg = returned.load_to_reg();
 					}
-					const uint32_t result_type_info =
-						zend_tpde_machine_value_zval_type(kind)
-								!= IS_UNDEF
-							? zend_tpde_machine_value_zval_type_info(kind)
-							: zval_type(*adaptor, returned_ref);
-					if (result_type_info == IS_UNDEF) {
-						return false;
-					}
 					if (return_addref
 							&& (kind
 									== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
@@ -10703,12 +10768,9 @@ bool ZendCompilerX64::compile_inst_impl(
 									== ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
 								|| kind
 									== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR)) {
-						ASM(ADD32mi,
-							FE_MEM(value_reg, 0, FE_NOREG,
-								static_cast<int32_t>(offsetof(
-									zend_refcounted_h,
-									refcount))),
-							1);
+						if (!emit_pointer_addref(kind, value_reg)) {
+							return false;
+						}
 					}
 					if (val_parts(returned_ref).bank
 							== tpde::x64::PlatformConfig::FP_BANK) {
@@ -10720,27 +10782,31 @@ bool ZendCompilerX64::compile_inst_impl(
 							FE_MEM(pointer_reg, 0, FE_NOREG, 0),
 							value_reg);
 					}
-					if (result_type_info == IS_FALSE) {
-						ScratchReg type_info{this};
-						auto type_info_reg = type_info.alloc_gp();
+					ScratchReg type_info{this};
+					auto type_info_reg = type_info.alloc_gp();
+					if (kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
 						mov(type_info_reg, value_reg, 8);
 						ASM(ADD64ri, type_info_reg, IS_FALSE);
-						ASM(MOV32mr,
-							FE_MEM(pointer_reg, 0, FE_NOREG,
-								static_cast<int32_t>(
-									offsetof(
-										zval,
-										u1.type_info))),
-							type_info_reg);
+					} else if (zend_tpde_machine_value_zval_type(kind)
+							!= IS_UNDEF) {
+						if (!emit_machine_zval_type_info(
+								kind, value_reg, type_info_reg)) {
+							return false;
+						}
 					} else {
-						ASM(MOV32mi,
-							FE_MEM(pointer_reg, 0, FE_NOREG,
-								static_cast<int32_t>(
-									offsetof(
-										zval,
-										u1.type_info))),
-							static_cast<int32_t>(result_type_info));
+						const uint32_t type_info_value =
+							zval_type(*adaptor, returned_ref);
+						if (type_info_value == IS_UNDEF) {
+							return false;
+						}
+						ASM(MOV32ri, type_info_reg,
+							type_info_value);
 					}
+					ASM(MOV32mr,
+						FE_MEM(pointer_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zval, u1.type_info))),
+						type_info_reg);
 					}
 					label_place(no_result);
 				}

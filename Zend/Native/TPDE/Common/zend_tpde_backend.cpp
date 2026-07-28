@@ -6878,8 +6878,7 @@ static bool freeze_typed_body_signature(
 			returned = instruction.source_op1_binding.value_index;
 			const zend_mir_value_id returned_ssa =
 				instruction.value_operation.op1.ssa_variable_id;
-			if (returned < 0
-					&& instruction.source_op1_binding
+			if (instruction.source_op1_binding
 							.definition_instruction_index >= 0
 					&& static_cast<uint32_t>(
 						instruction.source_op1_binding
@@ -6890,7 +6889,7 @@ static bool freeze_typed_body_signature(
 						instruction.source_op1_binding
 							.definition_instruction_index)];
 			}
-			if (returned < 0 && !returned_source_type.valid
+			if (!returned_source_type.valid
 					&& returned_ssa < register_source_ssa.size()) {
 				returned_source_type = register_source_ssa[returned_ssa];
 			}
@@ -6928,7 +6927,7 @@ static bool freeze_typed_body_signature(
 			return false;
 		}
 		zend_tpde_local_abi_type current_return =
-			returned < 0
+			returned_source_type.valid
 				? returned_source_type
 				: machine_plan_value_abi(
 					plan, static_cast<uint32_t>(returned));
@@ -7414,27 +7413,40 @@ static bool freeze_machine_cfg_array(
 	return true;
 }
 
-static bool machine_cfg_register_cond_branch(
+static int32_t machine_cfg_register_cond_branch_value_index(
 		const zend_tpde_plan *plan,
-		const zend_tpde_instruction &instruction,
-		bool typed_body) {
-	if (!typed_body
-			|| (instruction.machine_control_flow_flags
-				& ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_BRANCH) == 0) {
-		return false;
+		const zend_tpde_instruction &instruction) {
+	int32_t value_index = instruction.source_op1_binding.value_index;
+	if (value_index >= 0) {
+		return value_index;
 	}
 	zend_mir_value_id value_id;
 	if (!source_operand_value_id(
 			instruction.value_operation.op1, value_id)) {
-		return instruction.value_operation.op1.ssa_variable_id
-			!= ZEND_MIR_ID_INVALID;
+		return -1;
 	}
-	const int32_t value_index = zend_tpde_value_index(plan, value_id);
+	return zend_tpde_value_index(plan, value_id);
+}
+
+static bool machine_cfg_register_cond_branch(
+		const zend_tpde_plan *plan,
+		const zend_tpde_instruction &instruction,
+		bool typed_body) {
+	if ((instruction.machine_control_flow_flags
+				& ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_BRANCH) == 0) {
+		return false;
+	}
+	const int32_t value_index =
+		machine_cfg_register_cond_branch_value_index(plan, instruction);
 	if (value_index < 0) {
-		return instruction.value_operation.op1.ssa_variable_id
-			!= ZEND_MIR_ID_INVALID;
+		return typed_body
+			&& instruction.value_operation.op1.ssa_variable_id
+				!= ZEND_MIR_ID_INVALID;
 	}
-	return plan->values[value_index].exact_type == ZEND_MIR_SCALAR_TYPE_I1;
+	const zend_tpde_value &value =
+		plan->values[static_cast<uint32_t>(value_index)];
+	return value.exact_type == ZEND_MIR_SCALAR_TYPE_I1
+		&& (typed_body || value.register_authoritative);
 }
 
 static bool machine_value_kind_can_be_register_authoritative(
@@ -7701,21 +7713,44 @@ static bool freeze_machine_required_values(
 			plan->typed_body_value_required[value_index] = 1;
 		}
 	}
-	if (plan->value_consumer_offsets == nullptr) {
-		return true;
+	if (plan->value_consumer_offsets != nullptr) {
+		for (uint32_t value = 0; value < plan->value_count; ++value) {
+			const uint32_t begin = plan->value_consumer_offsets[value];
+			const uint32_t end = plan->value_consumer_offsets[value + 1];
+			for (uint32_t use = begin; use < end; ++use) {
+				const zend_tpde_machine_use &consumer =
+					plan->value_consumers[use];
+				plan->entry_value_required[value] |=
+					machine_plan_use_requires_value(
+						plan, consumer, false);
+				plan->typed_body_value_required[value] |=
+					machine_plan_use_requires_value(
+						plan, consumer, true);
+			}
+		}
 	}
-	for (uint32_t value = 0; value < plan->value_count; ++value) {
-		const uint32_t begin = plan->value_consumer_offsets[value];
-		const uint32_t end = plan->value_consumer_offsets[value + 1];
-		for (uint32_t use = begin; use < end; ++use) {
-			const zend_tpde_machine_use &consumer =
-				plan->value_consumers[use];
-			plan->entry_value_required[value] |=
-				machine_plan_use_requires_value(
-					plan, consumer, false);
-			plan->typed_body_value_required[value] |=
-				machine_plan_use_requires_value(
-					plan, consumer, true);
+
+	for (uint32_t instruction_index = 0;
+			instruction_index < plan->instruction_count;
+			++instruction_index) {
+		const zend_tpde_instruction &instruction =
+			plan->instructions[instruction_index];
+		const int32_t value_index =
+			machine_cfg_register_cond_branch_value_index(
+				plan, instruction);
+		if (value_index < 0
+				|| static_cast<uint32_t>(value_index)
+					>= plan->value_count) {
+			continue;
+		}
+		const uint32_t value = static_cast<uint32_t>(value_index);
+		if (machine_cfg_register_cond_branch(
+				plan, instruction, false)) {
+			plan->entry_value_required[value] = 1;
+		}
+		if (machine_cfg_register_cond_branch(
+				plan, instruction, true)) {
+			plan->typed_body_value_required[value] = 1;
 		}
 	}
 	return true;
