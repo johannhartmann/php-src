@@ -2747,6 +2747,8 @@ bool freeze_entry_undef_temporaries(
 	return true;
 }
 
+static void destroy_machine_cfg(zend_tpde_machine_cfg *cfg);
+
 void destroy_plan(zend_tpde_plan *plan) {
 	for (uint32_t index = 0; index < plan->direct_call_count; ++index) {
 		std::free(plan->direct_calls[index]);
@@ -2772,6 +2774,8 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->argument_value_indices);
 	std::free(plan->argument_abi);
 	std::free(plan->typed_component_call_eligible);
+	destroy_machine_cfg(&plan->entry_machine_cfg);
+	destroy_machine_cfg(&plan->typed_body_machine_cfg);
 	std::free(plan->value_index);
 	std::free(plan->instructions);
 	std::free(plan->instruction_operands);
@@ -6356,6 +6360,327 @@ static bool freeze_typed_component_calls(
 	return true;
 }
 
+static void destroy_machine_cfg(zend_tpde_machine_cfg *cfg) {
+	std::free(cfg->successor_offsets);
+	std::free(cfg->successors);
+	std::free(cfg->instruction_blocks);
+	std::free(cfg->guarded_cold_blocks);
+	std::free(cfg->guarded_hot_blocks);
+	std::free(cfg->guarded_continuation_blocks);
+	std::free(cfg->final_blocks);
+	std::free(cfg->boxed_cond_cold_blocks);
+	std::free(cfg->boxed_cond_cold_by_predecessor);
+	std::memset(cfg, 0, sizeof(*cfg));
+}
+
+static bool freeze_machine_cfg_array(
+		uint32_t **out,
+		const std::vector<uint32_t> &values) {
+	if (values.empty()) {
+		*out = nullptr;
+		return true;
+	}
+	*out = static_cast<uint32_t *>(
+		std::malloc(values.size() * sizeof(**out)));
+	if (*out == nullptr) {
+		return false;
+	}
+	std::memcpy(*out, values.data(), values.size() * sizeof(**out));
+	return true;
+}
+
+static bool machine_cfg_register_cond_branch(
+		const zend_tpde_plan *plan,
+		const zend_tpde_instruction &instruction,
+		bool typed_body) {
+	if (!typed_body
+			|| (instruction.machine_control_flow_flags
+				& ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_BRANCH) == 0) {
+		return false;
+	}
+	zend_mir_value_id value_id;
+	if (!source_operand_value_id(
+			instruction.value_operation.op1, value_id)) {
+		return instruction.value_operation.op1.ssa_variable_id
+			!= ZEND_MIR_ID_INVALID;
+	}
+	const int32_t value_index = zend_tpde_value_index(plan, value_id);
+	if (value_index < 0) {
+		return instruction.value_operation.op1.ssa_variable_id
+			!= ZEND_MIR_ID_INVALID;
+	}
+	return plan->values[value_index].exact_type == ZEND_MIR_SCALAR_TYPE_I1;
+}
+
+static bool freeze_machine_cfg(
+		zend_tpde_plan *plan,
+		bool typed_body,
+		zend_tpde_machine_cfg *cfg,
+		zend_native_diagnostic *diag) {
+	std::vector<uint32_t> instruction_blocks(
+		plan->instruction_count, UINT32_MAX);
+	std::vector<uint32_t> guarded_cold_blocks(
+		plan->instruction_count, UINT32_MAX);
+	std::vector<uint32_t> guarded_hot_blocks(
+		plan->instruction_count, UINT32_MAX);
+	std::vector<uint32_t> guarded_continuation_blocks(
+		plan->instruction_count, UINT32_MAX);
+	std::vector<uint32_t> boxed_cond_cold_blocks(
+		plan->instruction_count, UINT32_MAX);
+	std::vector<uint32_t> boxed_cond_cold_by_predecessor(
+		plan->block_count, UINT32_MAX);
+	std::vector<uint32_t> final_blocks(plan->block_count);
+	uint32_t synthetic_block_count = 0;
+
+	for (uint32_t block = 0; block < plan->block_count; ++block) {
+		final_blocks[block] = block;
+	}
+	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+		const zend_tpde_instruction &instruction =
+			plan->instructions[index];
+		const zend_mir_instruction_record record =
+			zend_tpde_instruction_record_at(plan, &instruction);
+		const int32_t source_block =
+			zend_tpde_block_index(plan, record.block_id);
+		if (source_block < 0) {
+			goto malformed;
+		}
+		const uint32_t source = static_cast<uint32_t>(source_block);
+		instruction_blocks[index] = final_blocks[source];
+		const bool typed_component_call =
+			(instruction.machine_control_flow_flags
+				& ZEND_TPDE_MACHINE_CONTROL_FLOW_TYPED_COMPONENT_CALL) != 0
+			&& plan->typed_component_call_eligible != nullptr
+			&& plan->typed_component_call_eligible[index] != 0;
+		const bool guarded =
+			typed_component_call
+				? !typed_body
+				: (instruction.machine_control_flow_flags
+					& ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD) != 0;
+		if (!guarded) {
+			continue;
+		}
+		if (typed_component_call && !typed_body) {
+			guarded_hot_blocks[index] =
+				plan->block_count + synthetic_block_count++;
+		}
+		guarded_cold_blocks[index] =
+			plan->block_count + synthetic_block_count++;
+		guarded_continuation_blocks[index] =
+			plan->block_count + synthetic_block_count++;
+		final_blocks[source] = guarded_continuation_blocks[index];
+	}
+	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+		const zend_tpde_instruction &instruction =
+			plan->instructions[index];
+		zend_tpde_value_condition condition{};
+		const bool boxed_branch =
+			(instruction.machine_control_flow_flags
+				& ZEND_TPDE_MACHINE_CONTROL_FLOW_BOXED_BRANCH) != 0
+			&& !machine_cfg_register_cond_branch(
+				plan, instruction, typed_body)
+			&& zend_tpde_value_condition_at(instruction, &condition);
+		if (!boxed_branch) {
+			continue;
+		}
+		const uint32_t predecessor = instruction_blocks[index];
+		if (predecessor == UINT32_MAX
+				|| predecessor >= plan->block_count
+					+ synthetic_block_count) {
+			goto malformed;
+		}
+		const uint32_t cold_block =
+			plan->block_count + synthetic_block_count++;
+		boxed_cond_cold_blocks[index] = cold_block;
+		const int32_t source_predecessor =
+			zend_tpde_block_index(plan, instruction.record.block_id);
+		if (source_predecessor < 0) {
+			goto malformed;
+		}
+		boxed_cond_cold_by_predecessor[
+			static_cast<uint32_t>(source_predecessor)] = cold_block;
+	}
+
+	{
+		const uint32_t block_count =
+			plan->block_count + synthetic_block_count;
+		std::vector<std::vector<uint32_t>> block_successors(block_count);
+		std::vector<uint32_t> finally_return_blocks;
+		std::vector<uint32_t> finally_targets;
+		auto add_edge = [&](uint32_t from, uint32_t to) {
+			if (from >= block_count || to >= block_count) {
+				return false;
+			}
+			block_successors[from].push_back(to);
+			return true;
+		};
+
+		for (uint32_t block = 0; block < plan->block_count; ++block) {
+			for (uint32_t edge = plan->block_successor_offsets[block];
+					edge < plan->block_successor_offsets[block + 1];
+					++edge) {
+				if (!add_edge(
+						final_blocks[block],
+						plan->block_successors[edge])) {
+					goto malformed;
+				}
+			}
+		}
+		for (uint32_t index = 0;
+				index < plan->instruction_count; ++index) {
+			const uint32_t cold = guarded_cold_blocks[index];
+			if (cold == UINT32_MAX) {
+				continue;
+			}
+			const uint32_t hot = guarded_hot_blocks[index];
+			const uint32_t continuation =
+				guarded_continuation_blocks[index];
+			if (!add_edge(
+					instruction_blocks[index],
+					hot == UINT32_MAX ? continuation : hot)
+					|| !add_edge(instruction_blocks[index], cold)
+					|| (hot != UINT32_MAX
+						&& !add_edge(hot, continuation))
+					|| !add_edge(cold, continuation)) {
+				goto malformed;
+			}
+		}
+		for (uint32_t index = 0;
+				index < plan->instruction_count; ++index) {
+			const uint32_t cold = boxed_cond_cold_blocks[index];
+			if (cold == UINT32_MAX) {
+				continue;
+			}
+			const int32_t source_predecessor = zend_tpde_block_index(
+				plan, plan->instructions[index].record.block_id);
+			if (source_predecessor < 0
+					|| plan->block_successor_offsets[
+							source_predecessor + 1]
+						- plan->block_successor_offsets[
+							source_predecessor]
+						!= 2
+					|| !add_edge(instruction_blocks[index], cold)) {
+				goto malformed;
+			}
+			for (uint32_t edge =
+						plan->block_successor_offsets[source_predecessor];
+					edge < plan->block_successor_offsets[
+						source_predecessor + 1];
+					++edge) {
+				if (!add_edge(cold, plan->block_successors[edge])) {
+					goto malformed;
+				}
+			}
+		}
+		for (uint32_t index = 0;
+				index < plan->instruction_count; ++index) {
+			const zend_tpde_instruction &instruction =
+				plan->instructions[index];
+			const zend_mir_instruction_record record =
+				zend_tpde_instruction_record_at(plan, &instruction);
+			const uint32_t record_block = instruction_blocks[index];
+			if (record_block == UINT32_MAX) {
+				goto malformed;
+			}
+			if (zend_mir_id_is_valid(instruction.exception_block_id)) {
+				const int32_t exception_block = zend_tpde_block_index(
+					plan, instruction.exception_block_id);
+				if (exception_block < 0
+						|| !add_edge(
+							guarded_cold_blocks[index] == UINT32_MAX
+								? record_block
+								: guarded_cold_blocks[index],
+							static_cast<uint32_t>(exception_block))) {
+					goto malformed;
+				}
+			}
+			if (record.opcode == ZEND_MIR_OPCODE_FINALLY_RETURN) {
+				finally_return_blocks.push_back(record_block);
+			} else if (record.opcode == ZEND_MIR_OPCODE_FINALLY_CALL) {
+				const int32_t source_block =
+					zend_tpde_block_index(plan, record.block_id);
+				if (source_block < 0
+						|| plan->block_successor_offsets[source_block + 1]
+							- plan->block_successor_offsets[source_block]
+							!= 2) {
+					goto malformed;
+				}
+				finally_targets.push_back(
+					plan->block_successors[
+						plan->block_successor_offsets[source_block] + 1]);
+			} else if ((record.opcode == ZEND_MIR_OPCODE_CATCH_ENTER
+						|| record.opcode == ZEND_MIR_OPCODE_FINALLY_ENTER)
+					&& record.block_id
+						!= plan->function.entry_block_id) {
+				finally_targets.push_back(record_block);
+			}
+		}
+		for (uint32_t return_block : finally_return_blocks) {
+			for (uint32_t target : finally_targets) {
+				if (!add_edge(return_block, target)) {
+					goto malformed;
+				}
+			}
+		}
+
+		std::vector<uint32_t> successor_offsets(block_count + 1);
+		std::vector<uint32_t> successors;
+		std::vector<uint32_t> seen(block_count, UINT32_MAX);
+		for (uint32_t block = 0; block < block_count; ++block) {
+			for (uint32_t target : block_successors[block]) {
+				if (seen[target] == block) {
+					continue;
+				}
+				seen[target] = block;
+				successors.push_back(target);
+			}
+			if (successors.size() > MAX_RECORDS) {
+				goto malformed;
+			}
+			successor_offsets[block + 1] =
+				static_cast<uint32_t>(successors.size());
+		}
+		cfg->block_count = block_count;
+		cfg->successor_count =
+			static_cast<uint32_t>(successors.size());
+		if (!freeze_machine_cfg_array(
+					&cfg->successor_offsets, successor_offsets)
+				|| !freeze_machine_cfg_array(
+					&cfg->successors, successors)
+				|| !freeze_machine_cfg_array(
+					&cfg->instruction_blocks, instruction_blocks)
+				|| !freeze_machine_cfg_array(
+					&cfg->guarded_cold_blocks, guarded_cold_blocks)
+				|| !freeze_machine_cfg_array(
+					&cfg->guarded_hot_blocks, guarded_hot_blocks)
+				|| !freeze_machine_cfg_array(
+					&cfg->guarded_continuation_blocks,
+					guarded_continuation_blocks)
+				|| !freeze_machine_cfg_array(
+					&cfg->final_blocks, final_blocks)
+				|| !freeze_machine_cfg_array(
+					&cfg->boxed_cond_cold_blocks,
+					boxed_cond_cold_blocks)
+				|| !freeze_machine_cfg_array(
+					&cfg->boxed_cond_cold_by_predecessor,
+					boxed_cond_cold_by_predecessor)) {
+			destroy_machine_cfg(cfg);
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+				"unable to allocate frozen TPDE control-flow plan");
+			return false;
+		}
+	}
+	return true;
+
+malformed:
+	destroy_machine_cfg(cfg);
+	zend_tpde_set_diagnostic(diag,
+		ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+		"unable to freeze TPDE control-flow plan");
+	return false;
+}
+
 static bool freeze_component_machine_plan(
 		zend_tpde_plan *plans,
 		const zend_tpde_plan *const *component_plans,
@@ -6410,6 +6735,16 @@ static bool freeze_component_machine_plan(
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
 				"unable to freeze component-local TPDE call plan");
+			return false;
+		}
+		if (!freeze_machine_cfg(
+				&plans[index], false,
+				&plans[index].entry_machine_cfg, diag)
+				|| (plans[index].typed_body_eligible
+					&& !freeze_machine_cfg(
+						&plans[index], true,
+						&plans[index].typed_body_machine_cfg,
+						diag))) {
 			return false;
 		}
 	}
