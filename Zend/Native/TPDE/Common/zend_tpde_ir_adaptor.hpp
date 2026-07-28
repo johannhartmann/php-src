@@ -2588,16 +2588,16 @@ public:
 					for (uint32_t n = 0; n < predecessors; ++n) {
 						const IRValueRef input = value_ref(
 							zend_tpde_operand_at(plan_, &instruction, n));
-						if (input == INVALID_VALUE_REF
-								|| representation(input)
-									!= ZEND_MIR_REPRESENTATION_ZVAL) {
+						if (input == INVALID_VALUE_REF) {
 							valid_ = false;
 							register_phi = false;
 							shared_storage = false;
 							break;
 						}
 						register_phi &=
-							machine_kind(input)
+							representation(input)
+									== ZEND_MIR_REPRESENTATION_ZVAL
+								&& machine_kind(input)
 									== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 								&& machine_value_is_register_authoritative(
 									input);
