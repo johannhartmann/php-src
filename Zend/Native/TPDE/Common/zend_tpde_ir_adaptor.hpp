@@ -3894,11 +3894,15 @@ public:
 				|| index - MIR_VALUE_BASE >= plan_->value_count) {
 			return false;
 		}
-		/* Null has no runtime payload. Treat every exact-null value as the
-		 * canonical zero constant, including arguments and call results, while
-		 * retaining the instruction that produces its observable call effects. */
-		if (plan_->values[index - MIR_VALUE_BASE].exact_type
-				== ZEND_MIR_SCALAR_TYPE_NULL) {
+		/*
+		 * The frozen local ABI overrides the initial source-SSA fact for
+		 * invocation-local arguments.  In particular, Zend may retain a
+		 * null/undef fact for the pre-RECV CV identity even though that
+		 * identity is loaded as a string, array, object, or boxed argument.
+		 * Only the effective machine type may therefore collapse a value to
+		 * the payload-free null constant.
+		 */
+		if (exact_type(value) == ZEND_MIR_SCALAR_TYPE_NULL) {
 			*bits = 0;
 			return true;
 		}
