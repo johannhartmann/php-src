@@ -482,6 +482,10 @@ struct zend_tpde_instruction {
 	zend_mir_scalar_type_mask source_effect_exact_type;
 	bool debug_probe;
 	zend_mir_storage_id zval_store_storage_id;
+	bool zval_store_direct_scalar;
+	bool zval_store_lazy_scalar;
+	zend_mir_storage_id mutation_storage_id;
+	bool mutation_lazy_scalar;
 	zend_native_runtime_helper_id runtime_helper;
 	zend_mir_executable_value_ref value_operation;
 	bool has_value_operation;
@@ -509,6 +513,7 @@ struct zend_tpde_array_read {
 	uint32_t container_offset;
 	uint32_t key_offset;
 	uint32_t result_offset;
+	bool container_literal;
 };
 
 struct zend_tpde_packed_array_append {
@@ -728,18 +733,29 @@ static inline bool zend_tpde_array_read_at(
 	if (out == nullptr || !instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
 			|| operation.source_opcode != ZEND_FETCH_DIM_R
-			|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+			|| (operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+				&& operation.op1.kind
+					!= ZEND_MIR_SOURCE_OPERAND_LITERAL)
 			|| operation.op2.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
-			|| operation.op1_storage_id == ZEND_MIR_ID_INVALID
+			|| (operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+				&& operation.op1_storage_id == ZEND_MIR_ID_INVALID)
+			|| (operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+				&& operation.op1_storage_id != ZEND_MIR_ID_INVALID)
 			|| operation.op2_storage_id == ZEND_MIR_ID_INVALID
 			|| operation.result_storage_id == ZEND_MIR_ID_INVALID
-			|| operation.op1_storage_id == operation.op2_storage_id
-			|| operation.op1_storage_id == operation.result_storage_id
+			|| (operation.op1_storage_id != ZEND_MIR_ID_INVALID
+				&& operation.op1_storage_id == operation.op2_storage_id)
+			|| (operation.op1_storage_id != ZEND_MIR_ID_INVALID
+				&& operation.op1_storage_id
+					== operation.result_storage_id)
 			|| operation.op2_storage_id == operation.result_storage_id) {
 		return false;
 	}
-	container_offset =
-		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
+	out->container_literal =
+		operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
+	container_offset = out->container_literal
+		? 0
+		: (uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
 			* sizeof(zval);
 	key_offset =
 		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op2_storage_id)
@@ -1393,8 +1409,9 @@ struct zend_tpde_plan {
 	zend_tpde_local_abi_type return_abi;
 	zend_tpde_local_abi_type typed_body_return_abi;
 	uint8_t *typed_component_call_eligible;
+	uint8_t *effect_closed_inline_eligible;
 	bool typed_body_eligible;
-	bool has_typed_component_calls;
+	bool has_register_component_results;
 	zend_tpde_machine_cfg entry_machine_cfg;
 	zend_tpde_machine_cfg typed_body_machine_cfg;
 	zend_tpde_id_index_entry *value_index;

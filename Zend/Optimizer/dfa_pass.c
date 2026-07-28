@@ -99,7 +99,8 @@ static zend_result zend_dfa_analyze_op_array_impl(
 
 	zend_ssa_find_sccs(op_array, ssa);
 
-	if (allow_indirect_variable_access) {
+	if (allow_indirect_variable_access
+			&& (ssa->cfg.flags & ZEND_FUNC_INDIRECT_VAR_ACCESS)) {
 		int i;
 
 		/*

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import json
 import math
 import os
@@ -1054,10 +1055,21 @@ def summarize(
         ):
             record[key] = performance.get(key)
     if baseline:
-        baseline_bridge = median_metric(baseline, ("bridge_ns",)) or 0.0
-        baseline_execute = baseline_bridge / benchmark.repeat
+        baseline_bridge = median_metric(baseline, ("bridge_ns",))
+        baseline_product_execute = median_metric(baseline, ("execute_ns",))
+        baseline_total = (
+            baseline_bridge
+            if baseline_bridge is not None
+            else baseline_product_execute or 0.0
+        )
+        baseline_execute = baseline_total / benchmark.repeat
         record["baseline_ns_per_operation"] = (
             baseline_execute / benchmark.operations
+        )
+        record["baseline_bridge_ns"] = baseline_bridge
+        record["baseline_execute_ns"] = baseline_product_execute
+        record["baseline_peak_rss_bytes"] = median_metric(
+            baseline, ("peak_rss_bytes",)
         )
         record["speedup"] = (
             baseline_execute / candidate_comparable
@@ -1109,6 +1121,11 @@ def parse_args() -> argparse.Namespace:
         help="php-fpm binary; inferred beside the candidate CLI binary",
     )
     parser.add_argument(
+        "--baseline-fpm",
+        type=Path,
+        help="baseline php-fpm binary; inferred beside the baseline CLI binary",
+    )
+    parser.add_argument(
         "--cgi-fcgi",
         type=Path,
         help="cgi-fcgi client used for persistent FPM requests",
@@ -1117,6 +1134,11 @@ def parse_args() -> argparse.Namespace:
         "--w12-baseline",
         action="store_true",
         help="enforce the W13 retention limits against the exact W12 binary",
+    )
+    parser.add_argument(
+        "--w13-baseline",
+        action="store_true",
+        help="enforce the W14 retention and cutover limits against W13",
     )
     parser.add_argument(
         "--target", choices=tuple(TARGET_BY_HOST.values())
@@ -1152,14 +1174,27 @@ def main() -> int:
         raise RuntimeError(
             "--opcache applies only to product-cli and product-fpm"
         )
+    if args.w12_baseline and args.w13_baseline:
+        raise RuntimeError("--w12-baseline and --w13-baseline are exclusive")
     opcache = args.opcache == "on"
     fpm = args.fpm
+    baseline_fpm = args.baseline_fpm
     cgi_fcgi = args.cgi_fcgi
     if args.mode == "product-fpm":
         if fpm is None:
             fpm = args.candidate.parent.parent / "fpm" / "php-fpm"
         if not fpm.is_file():
             raise RuntimeError(f"php-fpm binary does not exist: {fpm}")
+        if args.baseline is not None:
+            if baseline_fpm is None:
+                baseline_fpm = (
+                    args.baseline.parent.parent / "fpm" / "php-fpm"
+                )
+            if not baseline_fpm.is_file():
+                raise RuntimeError(
+                    "baseline php-fpm binary does not exist: "
+                    f"{baseline_fpm}"
+                )
         if cgi_fcgi is None:
             located = shutil.which("cgi-fcgi")
             if located is not None:
@@ -1200,6 +1235,8 @@ def main() -> int:
 
         file_cache = Path(temp) / "opcache-file-cache"
         file_cache.mkdir()
+        baseline_file_cache = Path(temp) / "baseline-opcache-file-cache"
+        baseline_file_cache.mkdir()
         product_sources: dict[str, Path] = {}
         if args.mode != "diagnostic":
             for benchmark in benchmarks:
@@ -1211,7 +1248,10 @@ def main() -> int:
 
         records = []
 
-        def run_benchmarks(fpm_pool: FpmPool | None) -> None:
+        def run_benchmarks(
+            fpm_pool: FpmPool | None,
+            baseline_fpm_pool: FpmPool | None,
+        ) -> None:
             for benchmark in benchmarks:
                 cold = None
                 prime = None
@@ -1233,13 +1273,24 @@ def main() -> int:
                     )
                 baseline_error = None
                 try:
-                    baseline = (
-                        measure(
+                    if args.baseline is None:
+                        baseline = None
+                    elif args.mode == "diagnostic":
+                        baseline = measure(
                             args.baseline, benchmark, target, args.samples,
                             CANDIDATE_RUNNER,
                         )
-                        if args.baseline is not None else None
-                    )
+                    else:
+                        baseline, _, _ = measure_product(
+                            args.baseline,
+                            product_sources[benchmark.name],
+                            benchmark,
+                            target,
+                            args.samples,
+                            opcache,
+                            baseline_file_cache,
+                            baseline_fpm_pool,
+                        )
                 except RuntimeError as error:
                     if benchmark.suite != "scaling":
                         raise
@@ -1262,14 +1313,27 @@ def main() -> int:
 
         if args.mode == "product-fpm":
             assert fpm is not None and cgi_fcgi is not None
-            fpm_directory = Path(temp) / "fpm"
-            fpm_directory.mkdir()
-            with FpmPool(
-                fpm, cgi_fcgi, fpm_directory, opcache
-            ) as fpm_pool:
-                run_benchmarks(fpm_pool)
+            with ExitStack() as stack:
+                fpm_directory = Path(temp) / "fpm"
+                fpm_directory.mkdir()
+                fpm_pool = stack.enter_context(
+                    FpmPool(fpm, cgi_fcgi, fpm_directory, opcache)
+                )
+                baseline_pool = None
+                if baseline_fpm is not None:
+                    baseline_fpm_directory = Path(temp) / "baseline-fpm"
+                    baseline_fpm_directory.mkdir()
+                    baseline_pool = stack.enter_context(
+                        FpmPool(
+                            baseline_fpm,
+                            cgi_fcgi,
+                            baseline_fpm_directory,
+                            opcache,
+                        )
+                    )
+                run_benchmarks(fpm_pool, baseline_pool)
         else:
-            run_benchmarks(None)
+            run_benchmarks(None, None)
 
     summary: dict[str, Any] = {
         "target": target,
@@ -1291,6 +1355,23 @@ def main() -> int:
     ]
     if warm_speedups:
         summary["warm_geomean_speedup"] = geometric_mean(warm_speedups)
+    w14_cutover_cases = {
+        "scalar_return",
+        "call_in_loop",
+        "cv_assignment_loop",
+        "packed_array_read",
+        "standard_property_cached_read",
+    }
+    w14_cutover_speedups = [
+        float(record["speedup"])
+        for record in records
+        if record["case"] in w14_cutover_cases
+        and isinstance(record.get("speedup"), (int, float))
+    ]
+    if w14_cutover_speedups:
+        summary["w14_cutover_geomean_speedup"] = geometric_mean(
+            w14_cutover_speedups
+        )
     direct_scalar = next(
         (record for record in records if record["case"] == "scalar_return"),
         None,
@@ -1337,11 +1418,17 @@ def main() -> int:
     if args.baseline is None or args.reference is None:
         failures.append("--enforce requires --baseline and --reference")
     if direct_scalar is not None:
-        minimum = 0.95 if args.w12_baseline else 3.0
+        minimum = (
+            0.95 if args.w12_baseline
+            else 0.97 if args.w13_baseline
+            else 3.0
+        )
         if summary.get("direct_scalar_speedup", 0) < minimum:
             failures.append(
                 "direct scalar call retains less than 95% of W12"
                 if args.w12_baseline
+                else "direct scalar call regresses by more than 3% from W13"
+                if args.w13_baseline
                 else "direct scalar call speedup is below 3.0x"
             )
         if summary.get("direct_scalar_vs_reference", 0) <= 1.0:
@@ -1349,11 +1436,17 @@ def main() -> int:
     elif args.suite in {"all", "direct"} and not args.cases:
         failures.append("direct scalar benchmark was not executed")
     if hot_speedups:
-        minimum = 0.95 if args.w12_baseline else 1.5
+        minimum = (
+            0.95 if args.w12_baseline
+            else 0.97 if args.w13_baseline
+            else 1.5
+        )
         if summary.get("hot_geomean_speedup", 0) < minimum:
             failures.append(
                 "hot corpus retains less than 95% of W12"
                 if args.w12_baseline
+                else "hot corpus regresses by more than 3% from W13"
+                if args.w13_baseline
                 else "hot corpus geometric mean speedup is below 1.5x"
             )
     elif args.suite in {"all", "hot"} and not args.cases:
@@ -1392,7 +1485,12 @@ def main() -> int:
         ]
         if not hit_growth:
             failures.append("FPM requests did not produce an OPcache hit")
-    if independent_1000 is not None:
+    if args.w13_baseline and w14_cutover_speedups:
+        if summary.get("w14_cutover_geomean_speedup", 0) <= 1.0:
+            failures.append(
+                "register-centered W14 cutover cases do not beat W13"
+            )
+    if independent_1000 is not None and not args.w13_baseline:
         compiled = independent_1000.get("compiled_codeunits")
         scaling_speedup = independent_1000.get("speedup", 0)
         if compiled != 1 and float(scaling_speedup) < 5.0:
