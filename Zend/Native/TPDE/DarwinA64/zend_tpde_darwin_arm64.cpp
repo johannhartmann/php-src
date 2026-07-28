@@ -3484,7 +3484,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				adaptor->block_succs(IRBlockRef{node.control_block});
 			if (node.control_block == UINT32_MAX
 					|| node.continuation_block == UINT32_MAX
-					|| guarded_successors.size() != 2
+					|| guarded_successors.size() < 2
 					|| static_cast<uint32_t>(guarded_successors[0])
 						!= node.continuation_block
 					|| static_cast<uint32_t>(guarded_successors[1])
@@ -3938,7 +3938,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				adaptor->block_succs(IRBlockRef{node.control_block});
 			if (node.control_block == UINT32_MAX
 					|| node.continuation_block == UINT32_MAX
-					|| guarded_successors.size() != 2
+					|| guarded_successors.size() < 2
 					|| static_cast<uint32_t>(guarded_successors[0])
 						!= node.continuation_block
 					|| static_cast<uint32_t>(guarded_successors[1])
@@ -4376,7 +4376,7 @@ bool ZendCompilerA64::compile_inst_impl(
 		}
 		const auto successors =
 			adaptor->block_succs(IRBlockRef{node.control_block});
-		if (successors.size() != 2
+		if (successors.size() < 2
 				|| static_cast<uint32_t>(successors[0])
 					!= node.continuation_block
 				|| static_cast<uint32_t>(successors[1])
@@ -4450,7 +4450,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				adaptor->block_succs(IRBlockRef{node.control_block});
 			if (node.control_block == UINT32_MAX
 					|| node.continuation_block == UINT32_MAX
-					|| guarded_successors.size() != 2
+					|| guarded_successors.size() < 2
 					|| static_cast<uint32_t>(guarded_successors[0])
 						!= node.continuation_block
 					|| static_cast<uint32_t>(guarded_successors[1])
@@ -4597,7 +4597,7 @@ bool ZendCompilerA64::compile_inst_impl(
 			adaptor->block_succs(IRBlockRef{node.control_block});
 		if (node.control_block == UINT32_MAX
 				|| node.continuation_block == UINT32_MAX
-				|| guarded_successors.size() != 2
+				|| guarded_successors.size() < 2
 				|| static_cast<uint32_t>(guarded_successors[0])
 					!= node.continuation_block
 				|| static_cast<uint32_t>(guarded_successors[1])
@@ -4767,7 +4767,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				adaptor->block_succs(IRBlockRef{node.control_block});
 			if (node.control_block == UINT32_MAX
 					|| node.continuation_block == UINT32_MAX
-					|| guarded_successors.size() != 2
+					|| guarded_successors.size() < 2
 					|| static_cast<uint32_t>(guarded_successors[0])
 						!= node.continuation_block
 					|| static_cast<uint32_t>(guarded_successors[1])
@@ -5024,7 +5024,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				adaptor->block_succs(IRBlockRef{node.control_block});
 			if (node.control_block == UINT32_MAX
 					|| node.continuation_block == UINT32_MAX
-					|| guarded_successors.size() != 2
+					|| guarded_successors.size() < 2
 					|| static_cast<uint32_t>(guarded_successors[0])
 						!= node.continuation_block
 					|| static_cast<uint32_t>(guarded_successors[1])
@@ -5220,7 +5220,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				adaptor->block_succs(IRBlockRef{node.control_block});
 			if (node.control_block == UINT32_MAX
 					|| node.continuation_block == UINT32_MAX
-					|| guarded_successors.size() != 2
+					|| guarded_successors.size() < 2
 					|| static_cast<uint32_t>(guarded_successors[0])
 						!= node.continuation_block
 					|| static_cast<uint32_t>(guarded_successors[1])
@@ -5390,7 +5390,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				adaptor->block_succs(IRBlockRef{node.control_block});
 			if (node.control_block == UINT32_MAX
 					|| node.continuation_block == UINT32_MAX
-					|| guarded_successors.size() != 2
+					|| guarded_successors.size() < 2
 					|| static_cast<uint32_t>(guarded_successors[0])
 						!= node.continuation_block
 					|| static_cast<uint32_t>(guarded_successors[1])
@@ -5594,7 +5594,7 @@ bool ZendCompilerA64::compile_inst_impl(
 		}
 		const auto successors =
 			adaptor->block_succs(IRBlockRef{node.control_block});
-		if (successors.size() != 2
+		if (successors.size() < 2
 				|| static_cast<uint32_t>(successors[0])
 					!= node.continuation_block
 				|| static_cast<uint32_t>(successors[1])
@@ -5758,7 +5758,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				adaptor->block_succs(IRBlockRef{node.control_block});
 			if (node.control_block == UINT32_MAX
 					|| node.continuation_block == UINT32_MAX
-					|| guarded_successors.size() != 2
+					|| guarded_successors.size() < 2
 					|| static_cast<uint32_t>(guarded_successors[0])
 						!= node.continuation_block
 					|| static_cast<uint32_t>(guarded_successors[1])
