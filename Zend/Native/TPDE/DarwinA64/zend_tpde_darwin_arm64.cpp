@@ -2231,7 +2231,7 @@ bool ZendCompilerA64::compile_inst(
 		}
 		const auto successors =
 			adaptor->block_succs(IRBlockRef{node.control_block});
-		if (successors.size() != 2
+		if (successors.size() < 2
 				|| static_cast<uint32_t>(successors[0])
 					!= node.continuation_block
 				|| static_cast<uint32_t>(successors[1])
@@ -2601,6 +2601,22 @@ bool ZendCompilerA64::compile_inst(
 		}
 		const zend_mir_executable_value_ref &operation =
 			mir.value_operation;
+		if (zend_tpde_helper_requires_undef_result(helper, operation)) {
+			const uint64_t result_offset =
+				(uint64_t{ZEND_CALL_FRAME_SLOT}
+					+ operation.result_storage_id) * sizeof(zval)
+				+ offsetof(zval, u1.type_info);
+			if (result_offset > UINT32_MAX - sizeof(uint32_t)) {
+				return false;
+			}
+			ScratchReg undef_type{this};
+			auto undef_type_reg = undef_type.alloc_gp();
+			materialize_constant(
+				uint64_t{IS_UNDEF}, DarwinConfig::GP_BANK, 4,
+				undef_type_reg);
+			store_off(canonical_frame_register(),
+				static_cast<uint32_t>(result_offset), undef_type_reg, 4);
+		}
 		auto encode_operand = [&](const zend_mir_source_operand_ref &operand,
 				uint32_t unused_payload) {
 			return explicit_object_operands
@@ -2849,7 +2865,7 @@ bool ZendCompilerA64::compile_inst(
 		}
 		const auto successors =
 			adaptor->block_succs(IRBlockRef{node.control_block});
-		if (successors.size() != 2
+		if (successors.size() < 2
 				|| static_cast<uint32_t>(successors[0])
 					!= node.continuation_block
 				|| static_cast<uint32_t>(successors[1])
@@ -3689,7 +3705,7 @@ bool ZendCompilerA64::compile_inst(
 		}
 		const auto successors =
 			adaptor->block_succs(IRBlockRef{node.control_block});
-		if (successors.size() != 2
+		if (successors.size() < 2
 				|| static_cast<uint32_t>(successors[0])
 					!= node.continuation_block
 				|| static_cast<uint32_t>(successors[1])
@@ -7741,7 +7757,8 @@ bool ZendCompilerA64::compile_inst(
 							fast_status, ::tpde::CCAssignment{});
 					} else {
 						ScratchReg entry_argument{this};
-						auto entry_argument_reg = entry_argument.alloc_gp();
+						auto entry_argument_reg =
+							entry_argument.alloc_specific(AsmReg::R15);
 						load_off(entry_argument_reg, published_code_reg,
 							static_cast<uint32_t>(
 								offsetof(zend_native_code, entry)), 8);

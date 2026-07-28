@@ -1326,6 +1326,41 @@ static bool zend_mir_w11_observes_local_symbol_table(
 }
 
 /*
+ * Compiled variables in the top-level op_array are the process global
+ * namespace.  A call can enter user code that observes them through `global`
+ * or $GLOBALS even when the caller has no explicit SSA edge to that value.
+ * Likewise, an explicit global fetch observes the same namespace directly.
+ * Publish the live top-level CV versions only at those boundaries; ordinary
+ * top-level arithmetic remains register-authoritative.
+ */
+static bool zend_mir_w11_observes_top_level_globals(
+	const zend_op_array *op_array, const zend_op *opline)
+{
+	if (op_array == NULL || opline == NULL
+			|| op_array->function_name != NULL) {
+		return false;
+	}
+	switch (opline->opcode) {
+		case ZEND_DO_FCALL:
+		case ZEND_DO_ICALL:
+		case ZEND_DO_UCALL:
+		case ZEND_DO_FCALL_BY_NAME:
+		case ZEND_BIND_GLOBAL:
+			return true;
+		case ZEND_FETCH_R:
+		case ZEND_FETCH_W:
+		case ZEND_FETCH_RW:
+		case ZEND_FETCH_IS:
+		case ZEND_FETCH_FUNC_ARG:
+		case ZEND_FETCH_UNSET:
+			return (opline->extended_value
+				& (ZEND_FETCH_GLOBAL | ZEND_FETCH_GLOBAL_LOCK)) != 0;
+		default:
+			return false;
+	}
+}
+
+/*
  * Machine lowering and boxed-frame materialization are deliberately separate
  * decisions. A scalar instruction is always the sole implementation of its
  * source opcode. If a later boxed operation consumes that value, materialize
@@ -1356,7 +1391,9 @@ static bool zend_mir_w11_plan_boxed_materialization(
 			continue;
 		}
 		if (zend_mir_w11_observes_local_symbol_table(
-				&op_array->opcodes[index])) {
+					&op_array->opcodes[index])
+				|| zend_mir_w11_observes_top_level_globals(
+					op_array, &op_array->opcodes[index])) {
 			for (variable_index = 0; variable_index < ssa_count;
 					variable_index++) {
 				const int32_t storage = ssa->vars[variable_index].var;
