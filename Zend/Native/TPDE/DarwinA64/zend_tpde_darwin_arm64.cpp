@@ -13010,12 +13010,22 @@ bool ZendCompilerA64::compile_inst_impl(
 			ASM(CMPxi, status_reg, ZEND_NATIVE_CATCH_MATCHED);
 			const auto &successors = adaptor->block_succs(
 				IRBlockRef{node.control_block});
-			if (successors.size() == 2) {
+			uint32_t successor_count =
+				static_cast<uint32_t>(successors.size());
+			if (zend_mir_id_is_valid(mir.exception_block_id)
+					&& successor_count != 0
+					&& successors[successor_count - 1]
+						== adaptor->block_ref(mir.exception_block_id)) {
+				/* The frozen exceptional edge follows the source successors. */
+				--successor_count;
+			}
+			if (successor_count == 2) {
 				generate_cond_branch(Jump::Jeq, successors[0], successors[1]);
 				status.reset(this);
 				return true;
 			}
-			if (successors.size() != 1) {
+			if (successor_count != 1) {
+				status.reset(this);
 				return false;
 			}
 			auto propagate = text_writer.label_create();
