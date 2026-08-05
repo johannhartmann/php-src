@@ -8709,10 +8709,15 @@ public:
 					continue;
 				}
 				if (static_cast<uint32_t>(argument_index)
-							>= argument_value_indices.size()
-						|| argument_value_indices[
-							static_cast<uint32_t>(argument_index)] >= 0) {
+							>= argument_value_indices.size()) {
 					valid_ = false;
+					continue;
+				}
+				if (argument_value_indices[
+						static_cast<uint32_t>(argument_index)] >= 0) {
+					/* Later SSA versions of an argument can retain the same
+					 * materialized frame slot. The first value is the incoming
+					 * argument used to decide whether its entry load is needed. */
 					continue;
 				}
 				argument_value_indices[
