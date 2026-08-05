@@ -101,6 +101,21 @@ CASES = (
         4,
         ((False, False),),
     ),
+    Case(
+        Path("tests/native/control-flow/corpus/accepted/goto_irreducible.php"),
+        "w04_goto_irreducible",
+        4,
+        ((False, False, False), (True, False, False)),
+    ),
+    Case(
+        Path(
+            "tests/native/control-flow/corpus/accepted/"
+            "unsupported_pi_constraint.php"
+        ),
+        "w04_unsupported_pi_constraint",
+        4,
+        ((2, 4), (5, 4)),
+    ),
 )
 
 
