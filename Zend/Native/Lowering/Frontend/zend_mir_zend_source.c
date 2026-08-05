@@ -39,6 +39,9 @@ typedef struct _zend_mir_frontend_phi_sort_entry {
 	uint32_t result_ssa_variable_id;
 } zend_mir_frontend_phi_sort_entry;
 
+#define ZEND_MIR_FRONTEND_BLOCK_CATCH_ENTRY UINT8_C(1)
+#define ZEND_MIR_FRONTEND_BLOCK_FINALLY_ENTRY UINT8_C(2)
+
 static void zend_mir_frontend_release_phi_index(
 	zend_mir_frontend_phi_index *index)
 {
@@ -205,10 +208,197 @@ static void zend_mir_frontend_release_source_indexes(
 	zend_mir_frontend_release_slot_index(source->slot_index);
 	zend_mir_frontend_release_slot_index(source->original_slot_index);
 	zend_mir_frontend_release_value_fact_index(source->value_fact_index);
+	free(source->block_region_flags);
+	free(source->block_loop_headers);
 	source->operand_index = NULL;
 	source->slot_index = NULL;
 	source->original_slot_index = NULL;
 	source->value_fact_index = NULL;
+	source->block_region_flags = NULL;
+	source->block_loop_headers = NULL;
+}
+
+static bool zend_mir_frontend_build_block_region_flags(
+	zend_mir_zend_source *source)
+{
+	const zend_op_array *op_array = zend_mir_source_op_array(source);
+	const zend_ssa *ssa = zend_mir_source_ssa(source);
+	uint8_t *flags;
+	uint32_t try_index;
+
+	if (op_array->last_try_catch == 0) {
+		return true;
+	}
+	if (source->block_count == 0 || ssa->cfg.map == NULL) {
+		return false;
+	}
+	flags = calloc(source->block_count, sizeof(*flags));
+	if (flags == NULL) {
+		return false;
+	}
+	for (try_index = 0; try_index < op_array->last_try_catch; try_index++) {
+		const zend_try_catch_element *region =
+			&op_array->try_catch_array[try_index];
+		const uint32_t entries[2] = {
+			region->catch_op, region->finally_op
+		};
+		const uint8_t entry_flags[2] = {
+			ZEND_MIR_FRONTEND_BLOCK_CATCH_ENTRY,
+			ZEND_MIR_FRONTEND_BLOCK_FINALLY_ENTRY
+		};
+		uint32_t entry_index;
+
+		for (entry_index = 0; entry_index < 2; entry_index++) {
+			uint32_t block_index;
+
+			if (entries[entry_index] == 0
+					|| entries[entry_index] >= op_array->last) {
+				continue;
+			}
+			block_index = ssa->cfg.map[entries[entry_index]];
+			if (block_index >= source->block_count
+					|| ssa->cfg.blocks[block_index].start
+						!= entries[entry_index]) {
+				free(flags);
+				return false;
+			}
+			flags[block_index] |= entry_flags[entry_index];
+		}
+	}
+	source->block_region_flags = flags;
+	return true;
+}
+
+static bool zend_mir_frontend_build_block_loop_headers(
+	zend_mir_zend_source *source)
+{
+	const zend_op_array *op_array = zend_mir_source_op_array(source);
+	const zend_ssa *ssa = zend_mir_source_ssa(source);
+	const uint32_t block_count = source->block_count;
+	uint32_t *headers = NULL;
+	uint32_t *child_offsets = NULL;
+	uint32_t *children = NULL;
+	uint32_t *cursor = NULL;
+	uint32_t *preorder = NULL;
+	uint32_t *subtree_end = NULL;
+	uint32_t *roots = NULL;
+	uint32_t *stack = NULL;
+	uint32_t *stack_cursor = NULL;
+	uint32_t time = 0;
+	uint32_t i;
+	bool result = false;
+
+	if (!source->w04) {
+		return true;
+	}
+	if (block_count == 0 || ssa->cfg.blocks == NULL) {
+		return false;
+	}
+	headers = malloc((size_t) block_count * sizeof(*headers));
+	child_offsets = calloc((size_t) block_count + 1, sizeof(*child_offsets));
+	children = malloc((size_t) block_count * sizeof(*children));
+	cursor = malloc((size_t) block_count * sizeof(*cursor));
+	preorder = malloc((size_t) block_count * sizeof(*preorder));
+	subtree_end = malloc((size_t) block_count * sizeof(*subtree_end));
+	roots = malloc((size_t) block_count * sizeof(*roots));
+	stack = malloc((size_t) block_count * sizeof(*stack));
+	stack_cursor = malloc((size_t) block_count * sizeof(*stack_cursor));
+	if (headers == NULL || child_offsets == NULL || children == NULL
+			|| cursor == NULL || preorder == NULL || subtree_end == NULL
+			|| roots == NULL || stack == NULL || stack_cursor == NULL) {
+		goto done;
+	}
+	for (i = 0; i < block_count; i++) {
+		const int idom = ssa->cfg.blocks[i].idom;
+		preorder[i] = ZEND_MIR_ID_INVALID;
+		subtree_end[i] = ZEND_MIR_ID_INVALID;
+		roots[i] = ZEND_MIR_ID_INVALID;
+		if (idom >= 0 && (uint32_t) idom < block_count
+				&& (uint32_t) idom != i) {
+			child_offsets[(uint32_t) idom + 1]++;
+		}
+	}
+	for (i = 1; i <= block_count; i++) {
+		child_offsets[i] += child_offsets[i - 1];
+	}
+	memcpy(cursor, child_offsets,
+		(size_t) block_count * sizeof(*cursor));
+	for (i = 0; i < block_count; i++) {
+		const int idom = ssa->cfg.blocks[i].idom;
+		if (idom >= 0 && (uint32_t) idom < block_count
+				&& (uint32_t) idom != i) {
+			children[cursor[(uint32_t) idom]++] = i;
+		}
+	}
+	for (i = 0; i < block_count; i++) {
+		const int idom = ssa->cfg.blocks[i].idom;
+		uint32_t depth;
+
+		if (idom >= 0 && (uint32_t) idom < block_count
+				&& (uint32_t) idom != i) {
+			continue;
+		}
+		depth = 1;
+		stack[0] = i;
+		stack_cursor[0] = child_offsets[i];
+		preorder[i] = time++;
+		roots[i] = i;
+		while (depth != 0) {
+			const uint32_t block = stack[depth - 1];
+			uint32_t *next_child = &stack_cursor[depth - 1];
+			if (*next_child < child_offsets[block + 1]) {
+				const uint32_t child = children[(*next_child)++];
+				if (preorder[child] != ZEND_MIR_ID_INVALID) {
+					continue;
+				}
+				preorder[child] = time++;
+				roots[child] = i;
+				stack[depth] = child;
+				stack_cursor[depth] = child_offsets[child];
+				depth++;
+			} else {
+				subtree_end[block] = time;
+				depth--;
+			}
+		}
+	}
+	for (i = 0; i < block_count; i++) {
+		const int loop_header = ssa->cfg.blocks[i].loop_header;
+		bool dominates = false;
+
+		if (loop_header < 0) {
+			headers[i] = ZEND_MIR_ID_INVALID;
+			continue;
+		}
+		if ((uint32_t) loop_header < block_count
+				&& preorder[(uint32_t) loop_header] != ZEND_MIR_ID_INVALID
+				&& preorder[i] != ZEND_MIR_ID_INVALID
+				&& roots[(uint32_t) loop_header] == roots[i]
+				&& preorder[(uint32_t) loop_header] <= preorder[i]
+				&& preorder[i] < subtree_end[(uint32_t) loop_header]) {
+			dominates = true;
+		}
+		headers[i] = op_array->last_try_catch != 0
+			&& roots[i] != ZEND_MIR_ID_INVALID && roots[i] != 0
+			&& !dominates
+			? ZEND_MIR_ID_INVALID
+			: (uint32_t) loop_header;
+	}
+	source->block_loop_headers = headers;
+	headers = NULL;
+	result = true;
+
+done:
+	free(stack_cursor);
+	free(stack);
+	free(roots);
+	free(subtree_end);
+	free(preorder);
+	free(cursor);
+	free(children);
+	free(child_offsets);
+	free(headers);
+	return result;
 }
 
 static bool zend_mir_frontend_build_source_indexes(
@@ -234,6 +424,12 @@ static bool zend_mir_frontend_build_source_indexes(
 		goto failed;
 	}
 	if (!zend_mir_frontend_build_value_fact_index(source)) {
+		goto failed;
+	}
+	if (!zend_mir_frontend_build_block_region_flags(source)) {
+		goto failed;
+	}
+	if (!zend_mir_frontend_build_block_loop_headers(source)) {
 		goto failed;
 	}
 	return true;
@@ -471,9 +667,9 @@ static zend_mir_lowering_status zend_mir_frontend_validate_cfg_w04(
 						|| block->predecessor_offset < 0
 						|| (uint32_t) block->predecessor_offset
 							> ssa->cfg.edges_count
-						|| block->predecessors_count
-							> ssa->cfg.edges_count
-								- (uint32_t) block->predecessor_offset))) {
+					|| block->predecessors_count
+						> ssa->cfg.edges_count
+							- (uint32_t) block->predecessor_offset))) {
 			goto malformed;
 		}
 		for (j = 0; j < block->successors_count; j++) {
@@ -1172,6 +1368,8 @@ static bool zend_mir_frontend_view_block_at(
 	const zend_op_array *op_array;
 	const zend_ssa *ssa;
 	const zend_basic_block *block;
+	const uint8_t *region_flags;
+	const uint32_t *loop_headers;
 	if (!zend_mir_source_is_initialized(source) || !source->w04
 			|| out == NULL || index >= source->block_count) {
 		return false;
@@ -1179,6 +1377,8 @@ static bool zend_mir_frontend_view_block_at(
 	op_array = zend_mir_source_op_array(source);
 	ssa = zend_mir_source_ssa(source);
 	block = &ssa->cfg.blocks[index];
+	region_flags = source->block_region_flags;
+	loop_headers = source->block_loop_headers;
 	memset(out, 0, sizeof(*out));
 	out->id = index;
 	out->first_opcode_ordinal = block->start;
@@ -1202,18 +1402,15 @@ static bool zend_mir_frontend_view_block_at(
 	if ((block->flags & ZEND_BB_IRREDUCIBLE_LOOP) != 0) {
 		out->flags |= ZEND_MIR_SOURCE_BLOCK_IRREDUCIBLE;
 	}
-	if (block->len != 0 && op_array->last_try_catch != 0) {
-		uint32_t try_index;
-		for (try_index = 0; try_index < op_array->last_try_catch; try_index++) {
-			const zend_try_catch_element *region =
-				&op_array->try_catch_array[try_index];
-			if (region->catch_op != 0 && region->catch_op == block->start) {
-				out->flags |= ZEND_MIR_SOURCE_BLOCK_CATCH_ENTRY;
-			}
-			if (region->finally_op != 0 && region->finally_op == block->start) {
-				out->flags |= ZEND_MIR_SOURCE_BLOCK_FINALLY_ENTRY;
-			}
-		}
+	if (region_flags != NULL
+			&& (region_flags[index]
+				& ZEND_MIR_FRONTEND_BLOCK_CATCH_ENTRY) != 0) {
+		out->flags |= ZEND_MIR_SOURCE_BLOCK_CATCH_ENTRY;
+	}
+	if (region_flags != NULL
+			&& (region_flags[index]
+				& ZEND_MIR_FRONTEND_BLOCK_FINALLY_ENTRY) != 0) {
+		out->flags |= ZEND_MIR_SOURCE_BLOCK_FINALLY_ENTRY;
 	}
 	if (source->w08 && source->w05 && source->call_op_array != NULL
 			&& block->len != 0
@@ -1224,13 +1421,9 @@ static bool zend_mir_frontend_view_block_at(
 	}
 	out->immediate_dominator =
 		block->idom < 0 ? ZEND_MIR_ID_INVALID : (uint32_t) block->idom;
-	out->loop_header = block->loop_header < 0
-		|| (op_array->last_try_catch != 0
-			&& !zend_mir_frontend_cfg_dominates(
-				&ssa->cfg, (uint32_t) block->loop_header, index)
-			&& zend_mir_frontend_cfg_has_protected_root(&ssa->cfg, index))
-		? ZEND_MIR_ID_INVALID
-		: (uint32_t) block->loop_header;
+	out->loop_header = loop_headers != NULL
+		? loop_headers[index]
+		: ZEND_MIR_ID_INVALID;
 	return true;
 }
 

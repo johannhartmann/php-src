@@ -1,6 +1,16 @@
+#include <stdlib.h>
 #include <string.h>
 
 #include "zend_mir_control_flow_internal.h"
+
+static int zend_mir_w04_compare_edge_pairs(
+	const void *left, const void *right)
+{
+	const uint64_t a = *(const uint64_t *) left;
+	const uint64_t b = *(const uint64_t *) right;
+
+	return (a > b) - (a < b);
+}
 
 static bool zend_mir_w04_source_contract_ok(
 	const zend_mir_lowering_source_view *source)
@@ -22,20 +32,17 @@ static bool zend_mir_w04_block_by_id(
 	const zend_mir_lowering_source_view *source,
 	zend_mir_source_block_id id, zend_mir_source_block_ref *out)
 {
-	uint32_t i;
-	for (i = 0; i < source->block_count(source->context); i++) {
-		zend_mir_source_block_ref block;
-		if (!source->block_at(source->context, i, &block)) {
-			return false;
-		}
-		if (block.id == id) {
-			if (out != NULL) {
-				*out = block;
-			}
-			return true;
-		}
+	zend_mir_source_block_ref block;
+
+	if (id >= source->block_count(source->context)
+			|| !source->block_at(source->context, id, &block)
+			|| block.id != id) {
+		return false;
 	}
-	return false;
+	if (out != NULL) {
+		*out = block;
+	}
+	return true;
 }
 
 static bool zend_mir_w04_ssa_exists(
@@ -144,66 +151,6 @@ static bool zend_mir_w04_dominates(
 	return false;
 }
 
-static bool zend_mir_w04_has_protected_root(
-	const zend_mir_lowering_source_view *source,
-	zend_mir_source_block_id block)
-{
-	uint32_t remaining = source->block_count(source->context);
-	while (remaining-- != 0) {
-		zend_mir_source_block_ref record;
-		if (!zend_mir_w04_block_by_id(source, block, &record)) {
-			return false;
-		}
-		if (record.immediate_dominator == ZEND_MIR_ID_INVALID) {
-			return (record.flags & ZEND_MIR_SOURCE_BLOCK_PROTECTED) != 0;
-		}
-		if (record.immediate_dominator == block) {
-			return false;
-		}
-		block = record.immediate_dominator;
-	}
-	return false;
-}
-
-static bool zend_mir_w04_ssa_definition_block(
-	const zend_mir_lowering_source_view *source, uint32_t ssa_variable_id,
-	zend_mir_source_block_id *block_id, bool *is_live_in)
-{
-	zend_mir_source_ssa_ref ssa;
-	uint32_t i;
-	if (block_id == NULL || is_live_in == NULL
-			|| !source->ssa_at(source->context, ssa_variable_id, &ssa)
-			|| ssa.ssa_variable_id != ssa_variable_id) {
-		return false;
-	}
-	for (i = 0; i < source->phi_count(source->context); i++) {
-		zend_mir_source_phi_ref phi;
-		if (!source->phi_at(source->context, i, &phi)) {
-			return false;
-		}
-		if (phi.result_ssa_variable_id == ssa_variable_id) {
-			*block_id = phi.block_id;
-			*is_live_in = false;
-			return true;
-		}
-	}
-	if (ssa.definition_opline_index == ZEND_MIR_ID_INVALID) {
-		*block_id = ZEND_MIR_ID_INVALID;
-		*is_live_in = true;
-		return true;
-	}
-	{
-		zend_mir_source_opcode_ref definition;
-		if (!source->opcode_at(source->context,
-				ssa.definition_opline_index, &definition)) {
-			return false;
-		}
-		*block_id = definition.block_id;
-		*is_live_in = false;
-		return true;
-	}
-}
-
 static bool zend_mir_w04_validate_blocks(
 	const zend_mir_lowering_source_view *source,
 	zend_mir_w04_validation *validation,
@@ -302,16 +249,77 @@ static bool zend_mir_w04_validate_blocks(
 		validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
 		return false;
 	}
-	for (i = 0; i < block_count; i++) {
-		zend_mir_source_block_ref block;
-		if (!source->block_at(source->context, i, &block)) {
+	{
+		uint32_t *roots = malloc((size_t) block_count * sizeof(*roots));
+		uint32_t *path = malloc((size_t) block_count * sizeof(*path));
+		bool valid = true;
+
+		if (roots == NULL || path == NULL) {
+			free(path);
+			free(roots);
 			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
 			return false;
 		}
-		if ((block.flags & ZEND_MIR_SOURCE_BLOCK_REACHABLE) != 0
-				&& !zend_mir_w04_dominates(
-					source, validation->entry_block_id, block.id)
-				&& !zend_mir_w04_has_protected_root(source, block.id)) {
+		for (i = 0; i < block_count; i++) {
+			roots[i] = ZEND_MIR_ID_INVALID;
+		}
+		for (i = 0; i < block_count; i++) {
+			zend_mir_source_block_ref block;
+			uint32_t current;
+			uint32_t path_length = 0;
+			uint32_t root;
+			uint32_t j;
+
+			if (!source->block_at(source->context, i, &block)) {
+				valid = false;
+				break;
+			}
+			if ((block.flags & ZEND_MIR_SOURCE_BLOCK_REACHABLE) == 0) {
+				continue;
+			}
+			current = block.id;
+			while (roots[current] == ZEND_MIR_ID_INVALID) {
+				zend_mir_source_block_ref record;
+
+				if (!source->block_at(source->context, current, &record)
+						|| record.id != current) {
+					valid = false;
+					break;
+				}
+				if (record.immediate_dominator == ZEND_MIR_ID_INVALID) {
+					roots[current] = current;
+					break;
+				}
+				if (record.immediate_dominator >= block_count
+						|| record.immediate_dominator == current
+						|| path_length == block_count) {
+					valid = false;
+					break;
+				}
+				path[path_length++] = current;
+				current = record.immediate_dominator;
+			}
+			if (!valid) {
+				break;
+			}
+			root = roots[current];
+			for (j = 0; j < path_length; j++) {
+				roots[path[j]] = root;
+			}
+			if (root != validation->entry_block_id) {
+				zend_mir_source_block_ref root_block;
+
+				if (!source->block_at(source->context, root, &root_block)
+						|| (root_block.flags
+							& ZEND_MIR_SOURCE_BLOCK_PROTECTED) == 0) {
+					valid = false;
+					break;
+				}
+			}
+		}
+		free(path);
+		free(roots);
+		if (!valid) {
 			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
 			return false;
 		}
@@ -325,12 +333,32 @@ static bool zend_mir_w04_validate_edges(
 {
 	uint32_t edge_count = source->edge_count(source->context);
 	uint32_t block_count = source->block_count(source->context);
+	uint32_t *successor_counts = NULL;
+	uint32_t *predecessor_counts = NULL;
+	uint32_t *successor_offsets = NULL;
+	uint32_t *predecessor_offsets = NULL;
+	uint8_t *successor_seen = NULL;
+	uint32_t *predecessor_from = NULL;
+	uint32_t running_successors = 0;
+	uint32_t running_predecessors = 0;
+	bool valid = false;
 	uint32_t i;
+
+	successor_counts = calloc(block_count, sizeof(*successor_counts));
+	predecessor_counts = calloc(block_count, sizeof(*predecessor_counts));
+	successor_offsets = calloc(block_count, sizeof(*successor_offsets));
+	predecessor_offsets = calloc(block_count, sizeof(*predecessor_offsets));
+	successor_seen = calloc(edge_count == 0 ? 1 : edge_count,
+		sizeof(*successor_seen));
+	predecessor_from = calloc(edge_count == 0 ? 1 : edge_count,
+		sizeof(*predecessor_from));
+	if (successor_counts == NULL || predecessor_counts == NULL
+			|| successor_offsets == NULL || predecessor_offsets == NULL
+			|| successor_seen == NULL || predecessor_from == NULL) {
+		goto done;
+	}
 	for (i = 0; i < edge_count; i++) {
 		zend_mir_source_edge_ref edge;
-		uint32_t j;
-		uint32_t same_from = 0;
-		uint32_t same_to = 0;
 		if (!source->edge_at(source->context, i, &edge)
 				|| edge.id != i
 				|| edge.from_block_id >= block_count
@@ -342,8 +370,7 @@ static bool zend_mir_w04_validate_edges(
 						| ZEND_MIR_SOURCE_EDGE_INTERRUPT_BOUNDARY)) != 0
 				|| (edge.flags & (ZEND_MIR_SOURCE_EDGE_FALLTHROUGH
 						| ZEND_MIR_SOURCE_EDGE_EXPLICIT_JUMP)) == 0) {
-			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
-			return false;
+			goto done;
 		}
 		{
 			zend_mir_source_block_ref from;
@@ -353,37 +380,15 @@ static bool zend_mir_w04_validate_edges(
 						source, edge.to_block_id, &to)
 					|| (from.flags & ZEND_MIR_SOURCE_BLOCK_REACHABLE) == 0
 					|| (to.flags & ZEND_MIR_SOURCE_BLOCK_REACHABLE) == 0) {
-				validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
-				return false;
+				goto done;
 			}
 		}
-		for (j = 0; j < edge_count; j++) {
-			zend_mir_source_edge_ref peer;
-			if (!source->edge_at(source->context, j, &peer)) {
-				validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
-				return false;
-			}
-			if (peer.from_block_id == edge.from_block_id) {
-				if (peer.successor_index == edge.successor_index && j != i) {
-					validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
-					return false;
-				}
-				same_from++;
-			}
-			if (peer.to_block_id == edge.to_block_id) {
-				if (peer.predecessor_index == edge.predecessor_index
-						&& peer.from_block_id != edge.from_block_id) {
-					validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
-					return false;
-				}
-				same_to++;
-			}
+		if (successor_counts[edge.from_block_id] == UINT32_MAX
+				|| predecessor_counts[edge.to_block_id] == UINT32_MAX) {
+			goto done;
 		}
-		if (edge.successor_index >= same_from
-				|| edge.predecessor_index >= same_to) {
-			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
-			return false;
-		}
+		successor_counts[edge.from_block_id]++;
+		predecessor_counts[edge.to_block_id]++;
 		if ((edge.flags & ZEND_MIR_SOURCE_EDGE_BACKEDGE) != 0) {
 			zend_mir_source_block_ref header;
 			if (!zend_mir_w04_dominates(
@@ -393,16 +398,62 @@ static bool zend_mir_w04_validate_edges(
 					|| (header.flags
 						& ZEND_MIR_SOURCE_BLOCK_LOOP_HEADER) == 0) {
 				validation->diagnostic = ZEND_MIRL_W04_IRREDUCIBLE_LOOP;
-				return false;
+				goto done;
 			}
 		}
 		if (((edge.flags & ZEND_MIR_SOURCE_EDGE_INTERRUPT_BOUNDARY) != 0)
 				!= ((edge.flags & ZEND_MIR_SOURCE_EDGE_BACKEDGE) != 0)) {
-			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
-			return false;
+			goto done;
 		}
 	}
-	return true;
+	for (i = 0; i < block_count; i++) {
+		successor_offsets[i] = running_successors;
+		predecessor_offsets[i] = running_predecessors;
+		running_successors += successor_counts[i];
+		running_predecessors += predecessor_counts[i];
+	}
+	if (running_successors != edge_count
+			|| running_predecessors != edge_count) {
+		goto done;
+	}
+	for (i = 0; i < edge_count; i++) {
+		zend_mir_source_edge_ref edge;
+		uint32_t successor_slot;
+		uint32_t predecessor_slot;
+
+		if (!source->edge_at(source->context, i, &edge)
+				|| edge.successor_index
+					>= successor_counts[edge.from_block_id]
+				|| edge.predecessor_index
+					>= predecessor_counts[edge.to_block_id]) {
+			goto done;
+		}
+		successor_slot = successor_offsets[edge.from_block_id]
+			+ edge.successor_index;
+		predecessor_slot = predecessor_offsets[edge.to_block_id]
+			+ edge.predecessor_index;
+		if (successor_seen[successor_slot]
+				|| (predecessor_from[predecessor_slot] != 0
+					&& predecessor_from[predecessor_slot]
+						!= edge.from_block_id + 1)) {
+			goto done;
+		}
+		successor_seen[successor_slot] = 1;
+		predecessor_from[predecessor_slot] = edge.from_block_id + 1;
+	}
+	valid = true;
+
+done:
+	free(predecessor_from);
+	free(successor_seen);
+	free(predecessor_offsets);
+	free(successor_offsets);
+	free(predecessor_counts);
+	free(successor_counts);
+	if (!valid && validation->diagnostic != ZEND_MIRL_W04_IRREDUCIBLE_LOOP) {
+		validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
+	}
+	return valid;
 }
 
 static bool zend_mir_w04_validate_terminators(
@@ -411,38 +462,46 @@ static bool zend_mir_w04_validate_terminators(
 {
 	uint32_t block_count = source->block_count(source->context);
 	uint32_t edge_count = source->edge_count(source->context);
+	uint32_t *outgoing_counts;
 	uint32_t i;
 
+	outgoing_counts = calloc(block_count, sizeof(*outgoing_counts));
+	if (outgoing_counts == NULL) {
+		validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
+		return false;
+	}
+	for (i = 0; i < edge_count; i++) {
+		zend_mir_source_edge_ref edge;
+
+		if (!source->edge_at(source->context, i, &edge)
+				|| edge.from_block_id >= block_count
+				|| outgoing_counts[edge.from_block_id] == UINT32_MAX) {
+			free(outgoing_counts);
+			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
+			return false;
+		}
+		outgoing_counts[edge.from_block_id]++;
+	}
 	for (i = 0; i < block_count; i++) {
 		zend_mir_source_block_ref block;
 		zend_mir_source_opcode_ref opcode;
 		zend_mir_w04_branch_kind kind = ZEND_MIR_W04_BRANCH_KIND_INVALID;
 		uint32_t opcode_number = 0;
-		uint32_t outgoing = 0;
 		uint32_t j;
 
 		if (!source->block_at(source->context, i, &block)) {
+			free(outgoing_counts);
 			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
 			return false;
 		}
 		if ((block.flags & ZEND_MIR_SOURCE_BLOCK_REACHABLE) == 0) {
 			continue;
 		}
-		for (j = 0; j < edge_count; j++) {
-			zend_mir_source_edge_ref edge;
-
-			if (!source->edge_at(source->context, j, &edge)) {
-				validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
-				return false;
-			}
-			if (edge.from_block_id == block.id) {
-				outgoing++;
-			}
-		}
 		if (block.opcode_count != 0) {
 			for (j = block.opcode_count; j != 0; j--) {
 				if (!source->opcode_at(source->context,
 						block.first_opcode_ordinal + j - 1, &opcode)) {
+					free(outgoing_counts);
 					validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
 					return false;
 				}
@@ -454,11 +513,13 @@ static bool zend_mir_w04_validate_terminators(
 			}
 		}
 		if (!zend_mir_w04_branch_edge_count_is_valid(
-				kind, opcode_number, outgoing)) {
+				kind, opcode_number, outgoing_counts[block.id])) {
+			free(outgoing_counts);
 			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
 			return false;
 		}
 	}
+	free(outgoing_counts);
 	return true;
 }
 
@@ -534,139 +595,375 @@ static bool zend_mir_w04_validate_phis(
 	uint32_t phi_count = source->phi_count(source->context);
 	uint32_t input_count = source->phi_input_count(source->context);
 	uint32_t block_count = source->block_count(source->context);
+	uint32_t edge_count = source->edge_count(source->context);
+	uint32_t ssa_count = source->ssa_count(source->context);
+	zend_mir_source_phi_ref *phis = NULL;
+	zend_mir_source_block_ref *blocks = NULL;
+	uint32_t *phi_by_ssa = NULL;
+	uint32_t *input_offsets = NULL;
+	uint32_t *input_indices = NULL;
+	uint32_t *predecessor_offsets = NULL;
+	uint32_t *incoming_from = NULL;
+	uint64_t *edge_pairs = NULL;
+	uint32_t *child_offsets = NULL;
+	uint32_t *children = NULL;
+	uint32_t *work = NULL;
+	uint32_t *preorder = NULL;
+	uint32_t *subtree_end = NULL;
+	uint32_t *roots = NULL;
+	uint32_t *stack = NULL;
+	uint32_t *stack_cursor = NULL;
+	uint8_t *block_has_pi = NULL;
+	uint32_t time = 0;
+	bool valid = false;
 	uint32_t i;
-	for (i = 0; i < phi_count; i++) {
-		zend_mir_source_phi_ref phi;
-		zend_mir_source_ssa_ref result_ssa;
-		uint32_t predecessor_count = 0;
-		uint32_t j;
-		uint32_t seen = 0;
-		if (!source->phi_at(source->context, i, &phi)
-				|| phi.id != i || phi.block_id >= block_count
-				|| !zend_mir_w04_ssa_exists(
-					source, phi.result_ssa_variable_id)
-				|| phi.source_slot_kind < ZEND_MIR_SOURCE_SLOT_CV
-				|| phi.source_slot_kind > ZEND_MIR_SOURCE_SLOT_VAR
-				|| phi.kind < ZEND_MIR_SOURCE_PHI_MERGE
-				|| phi.kind > ZEND_MIR_SOURCE_PHI_PI_RANGE
-				|| !source->ssa_at(source->context,
-					phi.result_ssa_variable_id, &result_ssa)
-				|| result_ssa.source_slot_kind != phi.source_slot_kind
-				|| result_ssa.source_slot != phi.source_slot_index) {
-			validation->diagnostic = ZEND_MIRL_W04_UNSUPPORTED_PHI_PI;
-			return false;
+
+	validation->diagnostic = ZEND_MIRL_W04_UNSUPPORTED_PHI_PI;
+	if (phi_count == 0) {
+		return input_count == 0;
+	}
+	phis = malloc((size_t) phi_count * sizeof(*phis));
+	blocks = malloc((size_t) block_count * sizeof(*blocks));
+	phi_by_ssa = malloc((size_t) ssa_count * sizeof(*phi_by_ssa));
+	input_offsets = calloc((size_t) phi_count + 1,
+		sizeof(*input_offsets));
+	input_indices = input_count == 0 ? NULL
+		: malloc((size_t) input_count * sizeof(*input_indices));
+	predecessor_offsets = calloc((size_t) block_count + 1,
+		sizeof(*predecessor_offsets));
+	incoming_from = edge_count == 0 ? NULL
+		: malloc((size_t) edge_count * sizeof(*incoming_from));
+	edge_pairs = edge_count == 0 ? NULL
+		: malloc((size_t) edge_count * sizeof(*edge_pairs));
+	child_offsets = calloc((size_t) block_count + 1,
+		sizeof(*child_offsets));
+	children = malloc((size_t) block_count * sizeof(*children));
+	work = malloc((size_t) (block_count > phi_count
+		? block_count : phi_count) * sizeof(*work));
+	preorder = malloc((size_t) block_count * sizeof(*preorder));
+	subtree_end = malloc((size_t) block_count * sizeof(*subtree_end));
+	roots = malloc((size_t) block_count * sizeof(*roots));
+	stack = malloc((size_t) block_count * sizeof(*stack));
+	stack_cursor = malloc((size_t) block_count * sizeof(*stack_cursor));
+	block_has_pi = calloc(block_count, sizeof(*block_has_pi));
+	if (phis == NULL || blocks == NULL || phi_by_ssa == NULL
+			|| input_offsets == NULL
+			|| (input_count != 0 && input_indices == NULL)
+			|| predecessor_offsets == NULL
+			|| (edge_count != 0
+				&& (incoming_from == NULL || edge_pairs == NULL))
+			|| child_offsets == NULL || children == NULL || work == NULL
+			|| preorder == NULL || subtree_end == NULL || roots == NULL
+			|| stack == NULL || stack_cursor == NULL
+			|| block_has_pi == NULL) {
+		validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
+		goto done;
+	}
+	for (i = 0; i < ssa_count; i++) {
+		phi_by_ssa[i] = ZEND_MIR_ID_INVALID;
+	}
+	for (i = 0; i < block_count; i++) {
+		if (!source->block_at(source->context, i, &blocks[i])
+				|| blocks[i].id != i) {
+			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
+			goto done;
 		}
-		for (j = 0; j < i; j++) {
-			zend_mir_source_phi_ref earlier;
-			if (!source->phi_at(source->context, j, &earlier)
-					|| earlier.result_ssa_variable_id
-						== phi.result_ssa_variable_id
-					|| (earlier.block_id == phi.block_id
-						&& earlier.kind != ZEND_MIR_SOURCE_PHI_MERGE
-						&& phi.kind == ZEND_MIR_SOURCE_PHI_MERGE)) {
-				validation->diagnostic = ZEND_MIRL_W04_UNSUPPORTED_PHI_PI;
-				return false;
+		preorder[i] = ZEND_MIR_ID_INVALID;
+		subtree_end[i] = ZEND_MIR_ID_INVALID;
+		roots[i] = ZEND_MIR_ID_INVALID;
+		if (blocks[i].immediate_dominator < block_count
+				&& blocks[i].immediate_dominator != i) {
+			child_offsets[blocks[i].immediate_dominator + 1]++;
+		}
+	}
+	for (i = 1; i <= block_count; i++) {
+		child_offsets[i] += child_offsets[i - 1];
+	}
+	memcpy(work, child_offsets, (size_t) block_count * sizeof(*work));
+	for (i = 0; i < block_count; i++) {
+		if (blocks[i].immediate_dominator < block_count
+				&& blocks[i].immediate_dominator != i) {
+			children[work[blocks[i].immediate_dominator]++] = i;
+		}
+	}
+	for (i = 0; i < block_count; i++) {
+		uint32_t depth;
+		if (blocks[i].immediate_dominator < block_count
+				&& blocks[i].immediate_dominator != i) {
+			continue;
+		}
+		depth = 1;
+		stack[0] = i;
+		stack_cursor[0] = child_offsets[i];
+		preorder[i] = time++;
+		roots[i] = i;
+		while (depth != 0) {
+			const uint32_t block = stack[depth - 1];
+			uint32_t *next_child = &stack_cursor[depth - 1];
+			if (*next_child < child_offsets[block + 1]) {
+				const uint32_t child = children[(*next_child)++];
+				if (preorder[child] != ZEND_MIR_ID_INVALID) {
+					continue;
+				}
+				preorder[child] = time++;
+				roots[child] = i;
+				stack[depth] = child;
+				stack_cursor[depth] = child_offsets[child];
+				depth++;
+			} else {
+				subtree_end[block] = time;
+				depth--;
 			}
 		}
-		if (phi.kind == ZEND_MIR_SOURCE_PHI_PI_TYPE
-				&& phi.constraint.type_mask == 0) {
-			validation->diagnostic = ZEND_MIRL_W04_UNSUPPORTED_PHI_PI;
-			return false;
+	}
+	for (i = 0; i < edge_count; i++) {
+		zend_mir_source_edge_ref edge;
+		if (!source->edge_at(source->context, i, &edge)
+				|| edge.to_block_id >= block_count
+				|| edge.from_block_id >= block_count
+				|| edge.predecessor_index == UINT32_MAX) {
+			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
+			goto done;
 		}
-		if (phi.kind == ZEND_MIR_SOURCE_PHI_PI_RANGE
-				&& (phi.constraint.flags
+		if (predecessor_offsets[edge.to_block_id + 1]
+				<= edge.predecessor_index) {
+			predecessor_offsets[edge.to_block_id + 1]
+				= edge.predecessor_index + 1;
+		}
+		edge_pairs[i] = ((uint64_t) edge.to_block_id << 32)
+			| edge.from_block_id;
+	}
+	for (i = 1; i <= block_count; i++) {
+		predecessor_offsets[i] += predecessor_offsets[i - 1];
+	}
+	memcpy(work, predecessor_offsets,
+		(size_t) block_count * sizeof(*work));
+	for (i = 0; i < predecessor_offsets[block_count]; i++) {
+		incoming_from[i] = ZEND_MIR_ID_INVALID;
+	}
+	for (i = 0; i < edge_count; i++) {
+		zend_mir_source_edge_ref edge;
+		if (!source->edge_at(source->context, i, &edge)
+				|| edge.predecessor_index
+					>= predecessor_offsets[edge.to_block_id + 1]
+						- predecessor_offsets[edge.to_block_id]) {
+			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
+			goto done;
+		}
+		incoming_from[predecessor_offsets[edge.to_block_id]
+			+ edge.predecessor_index] = edge.from_block_id;
+	}
+	if (edge_count > 1) {
+		qsort(edge_pairs, edge_count, sizeof(*edge_pairs),
+			zend_mir_w04_compare_edge_pairs);
+	}
+	for (i = 0; i < phi_count; i++) {
+		zend_mir_source_ssa_ref result_ssa;
+		zend_mir_source_phi_ref *phi = &phis[i];
+		if (!source->phi_at(source->context, i, phi)
+				|| phi->id != i || phi->block_id >= block_count
+				|| !zend_mir_w04_ssa_exists(
+					source, phi->result_ssa_variable_id)
+				|| phi->source_slot_kind < ZEND_MIR_SOURCE_SLOT_CV
+				|| phi->source_slot_kind > ZEND_MIR_SOURCE_SLOT_VAR
+				|| phi->kind < ZEND_MIR_SOURCE_PHI_MERGE
+				|| phi->kind > ZEND_MIR_SOURCE_PHI_PI_RANGE
+				|| !source->ssa_at(source->context,
+					phi->result_ssa_variable_id, &result_ssa)
+				|| result_ssa.source_slot_kind != phi->source_slot_kind
+				|| result_ssa.source_slot != phi->source_slot_index
+				|| phi_by_ssa[phi->result_ssa_variable_id]
+					!= ZEND_MIR_ID_INVALID
+				|| (phi->kind == ZEND_MIR_SOURCE_PHI_MERGE
+					&& block_has_pi[phi->block_id] != 0)) {
+			goto done;
+		}
+		phi_by_ssa[phi->result_ssa_variable_id] = i;
+		if (phi->kind != ZEND_MIR_SOURCE_PHI_MERGE) {
+			block_has_pi[phi->block_id] = 1;
+		}
+		if (phi->kind == ZEND_MIR_SOURCE_PHI_PI_TYPE
+				&& phi->constraint.type_mask == 0) {
+			goto done;
+		}
+		if (phi->kind == ZEND_MIR_SOURCE_PHI_PI_RANGE
+				&& (phi->constraint.flags
 					& ~(ZEND_MIR_SOURCE_PHI_RANGE_MIN_UNBOUNDED
 						| ZEND_MIR_SOURCE_PHI_RANGE_MAX_UNBOUNDED
 						| ZEND_MIR_SOURCE_PHI_RANGE_NEGATED)) != 0) {
-			validation->diagnostic = ZEND_MIRL_W04_UNSUPPORTED_PHI_PI;
-			return false;
+			goto done;
 		}
-		if (phi.kind == ZEND_MIR_SOURCE_PHI_PI_RANGE
-				&& ((phi.constraint.min_ssa_variable_id
+		if (phi->kind == ZEND_MIR_SOURCE_PHI_PI_RANGE
+				&& ((phi->constraint.min_ssa_variable_id
 						!= ZEND_MIR_ID_INVALID
-						&& !zend_mir_w04_ssa_exists(source,
-							phi.constraint.min_ssa_variable_id))
-					|| (phi.constraint.max_ssa_variable_id
+					&& !zend_mir_w04_ssa_exists(source,
+						phi->constraint.min_ssa_variable_id))
+					|| (phi->constraint.max_ssa_variable_id
 						!= ZEND_MIR_ID_INVALID
-						&& !zend_mir_w04_ssa_exists(source,
-							phi.constraint.max_ssa_variable_id)))) {
-			validation->diagnostic = ZEND_MIRL_W04_UNSUPPORTED_PHI_PI;
-			return false;
+					&& !zend_mir_w04_ssa_exists(source,
+						phi->constraint.max_ssa_variable_id)))) {
+			goto done;
 		}
-		for (j = 0; j < source->edge_count(source->context); j++) {
-			zend_mir_source_edge_ref edge;
-			if (!source->edge_at(source->context, j, &edge)) {
-				validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
-				return false;
-			}
-			if (edge.to_block_id == phi.block_id
-					&& edge.predecessor_index >= predecessor_count) {
-				if (edge.predecessor_index == UINT32_MAX) {
-					validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
-					return false;
-				}
-				predecessor_count = edge.predecessor_index + 1;
-			}
+	}
+	for (i = 0; i < input_count; i++) {
+		zend_mir_source_phi_input_ref input;
+		if (!source->phi_input_at(source->context, i, &input)
+				|| input.phi_id >= phi_count
+				|| input_offsets[input.phi_id + 1] == UINT32_MAX) {
+			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
+			goto done;
 		}
-		for (j = 0; j < input_count; j++) {
+		input_offsets[input.phi_id + 1]++;
+	}
+	for (i = 1; i <= phi_count; i++) {
+		input_offsets[i] += input_offsets[i - 1];
+	}
+	memcpy(work, input_offsets, (size_t) phi_count * sizeof(*work));
+	for (i = 0; i < input_count; i++) {
+		zend_mir_source_phi_input_ref input;
+		uint32_t position;
+		if (!source->phi_input_at(source->context, i, &input)) {
+			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
+			goto done;
+		}
+		position = work[input.phi_id]++;
+		if (position >= input_count) {
+			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
+			goto done;
+		}
+		input_indices[position] = i;
+	}
+	for (i = 0; i < phi_count; i++) {
+		const zend_mir_source_phi_ref *phi = &phis[i];
+		const uint32_t predecessor_count =
+			predecessor_offsets[phi->block_id + 1]
+				- predecessor_offsets[phi->block_id];
+		uint32_t j;
+		uint32_t seen = 0;
+		for (j = input_offsets[i]; j < input_offsets[i + 1]; j++) {
 			zend_mir_source_phi_input_ref input;
-			zend_mir_source_edge_ref edge;
 			zend_mir_source_block_id definition_block;
-			uint32_t k;
 			bool is_live_in;
 			bool predecessor_found = false;
-			if (!source->phi_input_at(source->context, j, &input)) {
+			if (!source->phi_input_at(
+					source->context, input_indices[j], &input)) {
 				validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
-				return false;
+				goto done;
 			}
-			if (input.phi_id != phi.id) {
-				continue;
-			}
-			if ((phi.kind == ZEND_MIR_SOURCE_PHI_MERGE
+			if ((phi->kind == ZEND_MIR_SOURCE_PHI_MERGE
 					&& input.input_index != seen)
 					|| !zend_mir_w04_ssa_exists(
 						source, input.source_ssa_variable_id)) {
-				validation->diagnostic = ZEND_MIRL_W04_UNSUPPORTED_PHI_PI;
-				return false;
+				goto done;
 			}
-			for (k = 0; k < source->edge_count(source->context); k++) {
-				if (!source->edge_at(source->context, k, &edge)) {
-					return false;
+			if (phi->kind == ZEND_MIR_SOURCE_PHI_MERGE) {
+				predecessor_found = input.input_index < predecessor_count
+					&& incoming_from[predecessor_offsets[phi->block_id]
+						+ input.input_index] == input.predecessor_block_id;
+			} else {
+				const uint64_t key = ((uint64_t) phi->block_id << 32)
+					| input.predecessor_block_id;
+				uint32_t left = 0;
+				uint32_t right = edge_count;
+				while (left < right) {
+					const uint32_t middle = left + (right - left) / 2;
+					if (edge_pairs[middle] < key) {
+						left = middle + 1;
+					} else {
+						right = middle;
+					}
 				}
-				if (edge.to_block_id == phi.block_id
-						&& (phi.kind != ZEND_MIR_SOURCE_PHI_MERGE
-							|| edge.predecessor_index == input.input_index)
-						&& edge.from_block_id == input.predecessor_block_id) {
-					predecessor_found = true;
-					break;
-				}
+				predecessor_found = left < edge_count
+					&& edge_pairs[left] == key;
 			}
 			if (!predecessor_found) {
-				validation->diagnostic = ZEND_MIRL_W04_UNSUPPORTED_PHI_PI;
-				return false;
+				goto done;
 			}
-			if (!zend_mir_w04_ssa_definition_block(source,
-					input.source_ssa_variable_id, &definition_block,
-					&is_live_in)
-					|| (!is_live_in
-						&& !zend_mir_w04_dominates(source,
-							definition_block,
-							input.predecessor_block_id)
-						&& !zend_mir_w04_resolve_edge_pi_input(
-							source, &phi, &input, NULL))) {
-				validation->diagnostic = ZEND_MIRL_W04_UNSUPPORTED_PHI_PI;
-				return false;
+			{
+				const uint32_t producer_index =
+					phi_by_ssa[input.source_ssa_variable_id];
+				if (producer_index != ZEND_MIR_ID_INVALID) {
+					definition_block = phis[producer_index].block_id;
+					is_live_in = false;
+				} else {
+					zend_mir_source_ssa_ref ssa;
+					if (!source->ssa_at(source->context,
+							input.source_ssa_variable_id, &ssa)) {
+						goto done;
+					}
+					is_live_in = ssa.definition_opline_index
+						== ZEND_MIR_ID_INVALID;
+					if (!is_live_in) {
+						zend_mir_source_opcode_ref definition;
+						if (!source->opcode_at(source->context,
+								ssa.definition_opline_index, &definition)) {
+							goto done;
+						}
+						definition_block = definition.block_id;
+					}
+				}
+			}
+			if (!is_live_in) {
+				const bool dominates = definition_block < block_count
+					&& input.predecessor_block_id < block_count
+					&& roots[definition_block]
+						== roots[input.predecessor_block_id]
+					&& preorder[definition_block]
+						<= preorder[input.predecessor_block_id]
+					&& preorder[input.predecessor_block_id]
+						< subtree_end[definition_block];
+				bool edge_pi = false;
+				const uint32_t producer_index =
+					phi_by_ssa[input.source_ssa_variable_id];
+				if (!dominates && producer_index != ZEND_MIR_ID_INVALID
+						&& phis[producer_index].kind
+							!= ZEND_MIR_SOURCE_PHI_MERGE
+						&& phis[producer_index].block_id == phi->block_id
+						&& input_offsets[producer_index + 1]
+							- input_offsets[producer_index] == 1) {
+					zend_mir_source_phi_input_ref producer_input;
+					if (!source->phi_input_at(source->context,
+							input_indices[input_offsets[producer_index]],
+							&producer_input)) {
+						goto done;
+					}
+					edge_pi = producer_input.predecessor_block_id
+							== input.predecessor_block_id
+						&& producer_input.input_index == 0;
+				}
+				if (!dominates && !edge_pi) {
+					goto done;
+				}
 			}
 			seen++;
 		}
-		if ((phi.kind == ZEND_MIR_SOURCE_PHI_MERGE
+		if ((phi->kind == ZEND_MIR_SOURCE_PHI_MERGE
 					&& (seen == 0 || seen != predecessor_count))
-				|| (phi.kind != ZEND_MIR_SOURCE_PHI_MERGE && seen != 1)) {
-			validation->diagnostic = ZEND_MIRL_W04_UNSUPPORTED_PHI_PI;
-			return false;
+				|| (phi->kind != ZEND_MIR_SOURCE_PHI_MERGE && seen != 1)) {
+			goto done;
 		}
 	}
-	return true;
+	valid = true;
+
+done:
+	free(block_has_pi);
+	free(stack_cursor);
+	free(stack);
+	free(roots);
+	free(subtree_end);
+	free(preorder);
+	free(work);
+	free(children);
+	free(child_offsets);
+	free(edge_pairs);
+	free(incoming_from);
+	free(predecessor_offsets);
+	free(input_indices);
+	free(input_offsets);
+	free(phi_by_ssa);
+	free(blocks);
+	free(phis);
+	return valid;
 }
 
 static bool zend_mir_w04_validate_source_impl(

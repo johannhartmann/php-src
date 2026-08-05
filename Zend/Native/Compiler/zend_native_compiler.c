@@ -26,8 +26,12 @@
 #define ZEND_NATIVE_COMPILER_ARENA_SIZE (64 * 1024)
 #define ZEND_NATIVE_COMPILER_DEFAULT_CHUNK_SIZE 64
 
+typedef struct _zend_native_compiler_module_allocation {
+	struct _zend_native_compiler_module_allocation *next;
+} zend_native_compiler_module_allocation;
+
 typedef struct _zend_native_compiler_module_host {
-	zend_arena *arena;
+	zend_native_compiler_module_allocation *allocations;
 	uint32_t successful_allocations;
 	bool fail_allocation;
 } zend_native_compiler_module_host;
@@ -412,22 +416,35 @@ static void *zend_native_compiler_module_allocate(
 	void *context, size_t size, size_t alignment)
 {
 	zend_native_compiler_module_host *host = context;
-	void *allocation;
+	zend_native_compiler_module_allocation *allocation;
 	size_t alignment_mask;
+	size_t prefix_size;
+	size_t allocation_size;
 	uintptr_t address;
 
-	if (host == NULL || host->arena == NULL || host->fail_allocation
+	if (host == NULL || host->fail_allocation
 			|| size == 0 || alignment == 0
 			|| (alignment & (alignment - 1)) != 0
-			|| size > SIZE_MAX - (alignment - 1)) {
+			|| sizeof(*allocation) > SIZE_MAX - (alignment - 1)) {
 		return NULL;
 	}
 	alignment_mask = alignment - 1;
-	allocation = zend_arena_alloc(&host->arena, size + alignment_mask);
-	address = (uintptr_t) allocation;
-	if (address > UINTPTR_MAX - alignment_mask) {
+	prefix_size = sizeof(*allocation) + alignment_mask;
+	if (size > SIZE_MAX - prefix_size) {
 		return NULL;
 	}
+	allocation_size = prefix_size + size;
+	allocation = malloc(allocation_size);
+	if (allocation == NULL) {
+		return NULL;
+	}
+	address = (uintptr_t) allocation + sizeof(*allocation);
+	if (address > UINTPTR_MAX - alignment_mask) {
+		free(allocation);
+		return NULL;
+	}
+	allocation->next = host->allocations;
+	host->allocations = allocation;
 	host->successful_allocations++;
 	return (void *) ((address + alignment_mask) & ~alignment_mask);
 }
@@ -435,11 +452,19 @@ static void *zend_native_compiler_module_allocate(
 static void zend_native_compiler_module_reset(void *context)
 {
 	zend_native_compiler_module_host *host = context;
+	zend_native_compiler_module_allocation *allocation;
 
-	if (host != NULL && host->arena != NULL) {
-		zend_arena_destroy(host->arena);
-		host->arena = NULL;
+	if (host == NULL) {
+		return;
 	}
+	allocation = host->allocations;
+	while (allocation != NULL) {
+		zend_native_compiler_module_allocation *next = allocation->next;
+
+		free(allocation);
+		allocation = next;
+	}
+	host->allocations = NULL;
 }
 
 typedef struct _zend_native_compiler_module_context {
@@ -457,16 +482,12 @@ static zend_mir_module *zend_native_compiler_module_create(
 
 	if (module_context == NULL || module_context->compiler == NULL
 			|| (host = module_context->host) == NULL
-			|| host->arena != NULL) {
+			|| host->allocations != NULL) {
 		return NULL;
 	}
 	host->fail_allocation =
 		module_context->compiler->fault
 			== ZEND_NATIVE_COMPILE_FAULT_MODULE_ALLOCATION;
-	host->arena = zend_arena_create(ZEND_NATIVE_COMPILER_ARENA_SIZE);
-	if (host->arena == NULL) {
-		return NULL;
-	}
 	allocator.context = host;
 	allocator.allocate = zend_native_compiler_module_allocate;
 	allocator.reset = zend_native_compiler_module_reset;
@@ -1073,31 +1094,100 @@ static bool zend_native_compiler_prepare_source_effects(
 	return true;
 }
 
+static uint32_t zend_native_compiler_exception_route_next(
+	uint32_t *next, uint32_t index)
+{
+	uint32_t root = index;
+
+	while (next[root] != root) {
+		root = next[root];
+	}
+	while (next[index] != index) {
+		uint32_t parent = next[index];
+
+		next[index] = root;
+		index = parent;
+	}
+	return root;
+}
+
+static void zend_native_compiler_fill_exception_route(
+	uint32_t *handler_oplines, uint32_t *next, uint32_t opcode_count,
+	uint32_t begin, uint32_t end, uint32_t handler_opline)
+{
+	uint32_t index;
+
+	if (begin >= end || end > opcode_count || handler_opline >= opcode_count) {
+		return;
+	}
+	index = zend_native_compiler_exception_route_next(next, begin);
+	while (index < end) {
+		handler_oplines[index] = handler_opline;
+		next[index] = zend_native_compiler_exception_route_next(
+			next, index + 1);
+		index = next[index];
+	}
+}
+
 static bool zend_native_compiler_prepare_exception_routes(
 	zend_native_compiler *compiler,
 	zend_native_compiled_function *function)
 {
+	const zend_op_array *op_array = function->op_array;
+	uint32_t *next;
 	uint32_t index;
 
-	if (function->op_array == NULL || function->ssa.cfg.map == NULL) {
+	if (op_array == NULL || function->ssa.cfg.map == NULL) {
 		return false;
 	}
 	function->exception_handler_oplines = zend_native_compiler_alloc(
 		compiler,
-		(function->op_array->last == 0 ? 1 : function->op_array->last)
+		(op_array->last == 0 ? 1 : op_array->last)
 			* sizeof(*function->exception_handler_oplines),
 		true);
-	for (index = 0; index < function->op_array->last; index++) {
-		zend_mir_source_block_id source_handler_block;
-		uint32_t handler_opline;
-
+	next = zend_native_compiler_alloc(
+		compiler, ((size_t) op_array->last + 1) * sizeof(*next), true);
+	for (index = 0; index < op_array->last; index++) {
 		function->exception_handler_oplines[index] = ZEND_MIR_ID_INVALID;
-		if (zend_mir_zend_op_array_exception_handler(
-				function->op_array, &function->ssa, index,
-				&source_handler_block, &handler_opline)) {
-			function->exception_handler_oplines[index] = handler_opline;
+		next[index] = index;
+	}
+	next[op_array->last] = op_array->last;
+	for (index = op_array->last_try_catch; index != 0; index--) {
+		const zend_try_catch_element *region =
+			&op_array->try_catch_array[index - 1];
+		uint32_t finally_begin = region->catch_op != 0
+			? region->catch_op : region->try_op;
+
+		if (region->catch_op != 0
+				&& region->catch_op < op_array->last
+				&& function->ssa.cfg.map[region->catch_op]
+					< function->ssa.cfg.blocks_count) {
+			zend_native_compiler_fill_exception_route(
+				function->exception_handler_oplines, next, op_array->last,
+				region->try_op, region->catch_op, region->catch_op);
+		}
+		if (region->finally_op != 0
+				&& region->finally_op < op_array->last
+				&& function->ssa.cfg.map[region->finally_op]
+					< function->ssa.cfg.blocks_count) {
+			zend_native_compiler_fill_exception_route(
+				function->exception_handler_oplines, next, op_array->last,
+				finally_begin, region->finally_op, region->finally_op);
 		}
 	}
+	for (index = 0; index < op_array->last; index++) {
+		const zend_op *opline = &op_array->opcodes[index];
+
+		if ((opline->opcode == ZEND_FREE || opline->opcode == ZEND_FE_FREE)
+				&& (opline->extended_value & ZEND_FREE_ON_RETURN) != 0) {
+			function->exception_handler_oplines[index] =
+				opline->op2.opline_num < op_array->last - index
+					? function->exception_handler_oplines[
+						index + opline->op2.opline_num]
+					: ZEND_MIR_ID_INVALID;
+		}
+	}
+	zend_native_compiler_free(compiler, next);
 	return true;
 }
 

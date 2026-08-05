@@ -1582,22 +1582,29 @@ zend_native_status zend_native_value_assign_op(
 		reference = Z_REF_P(variable);
 		variable = Z_REFVAL_P(variable);
 	}
-	if (operation(&computed, variable, value) != SUCCESS) {
-		zend_native_value_consume_operand(
-			execute_data, opline->op2_type, opline->op2, variable);
-		return ZEND_NATIVE_EXCEPTION;
-	}
 	if (reference != NULL && ZEND_REF_HAS_TYPE_SOURCES(reference)
-			&& !zend_verify_ref_assignable_zval(
+			&& !(opline->extended_value == ZEND_CONCAT
+				&& Z_TYPE_P(variable) == IS_STRING)) {
+		if (operation(&computed, variable, value) != SUCCESS) {
+			zend_native_value_consume_operand(
+				execute_data, opline->op2_type, opline->op2, variable);
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		if (!zend_verify_ref_assignable_zval(
 				reference, &computed,
 				ZEND_CALL_USES_STRICT_TYPES(execute_data))) {
-		zval_ptr_dtor(&computed);
+			zval_ptr_dtor(&computed);
+			zend_native_value_consume_operand(
+				execute_data, opline->op2_type, opline->op2, variable);
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		zval_ptr_dtor_nogc(variable);
+		ZVAL_COPY_VALUE(variable, &computed);
+	} else if (operation(variable, variable, value) != SUCCESS) {
 		zend_native_value_consume_operand(
 			execute_data, opline->op2_type, opline->op2, variable);
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	zval_ptr_dtor_nogc(variable);
-	ZVAL_COPY_VALUE(variable, &computed);
 	if (opline->result_type != IS_UNUSED) {
 		result = zend_native_value_slot(
 			execute_data, opline->result_type, opline->result);

@@ -522,7 +522,7 @@ struct zend_tpde_instruction {
 	uint32_t component_body_function_index;
 	zend_native_entry_cell *entry_cell;
 	zend_native_internal_call_cell *internal_call_cell;
-	zend_mir_call_site_ref call_site;
+	const zend_mir_call_site_ref *call_site;
 	zend_mir_block_id exception_block_id;
 	uint32_t call_argument_offset;
 	uint32_t call_argument_count;
@@ -1687,6 +1687,7 @@ struct zend_tpde_plan {
 	zend_tpde_id_index_entry *instruction_index;
 	uint32_t instruction_index_capacity;
 	int32_t *value_definition_instructions;
+	int32_t *source_value_definition_instructions;
 	uint32_t *value_consumer_offsets;
 	zend_tpde_machine_use *value_consumers;
 	uint32_t value_consumer_count;
@@ -1695,6 +1696,7 @@ struct zend_tpde_plan {
 	zend_tpde_id_index_entry *call_site_instruction_index;
 	uint32_t call_site_instruction_index_capacity;
 	uint32_t call_site_count;
+	zend_mir_call_site_ref *call_sites;
 	zend_tpde_id_index_entry *call_target_index;
 	uint32_t call_target_index_capacity;
 	uint32_t call_target_count;

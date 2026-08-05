@@ -11,7 +11,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cstdio>
 #include <cstdlib>
 #include <cstdint>
 #include <memory>
@@ -2301,6 +2300,11 @@ public:
 				return;
 			}
 		}
+		const int32_t entry = block_index(plan_->function.entry_block_id);
+		if (entry < 0) {
+			valid_ = false;
+			return;
+		}
 		for (uint32_t edge = 0;
 				edge < machine_cfg.successor_count; ++edge) {
 			if (machine_cfg.successors == nullptr
@@ -2312,14 +2316,38 @@ public:
 			successors_.push_back(
 				IRBlockRef{machine_cfg.successors[edge]});
 		}
+		std::vector<uint8_t> machine_block_reachable(tpde_block_count, 0);
+		if (tpde_block_count != 0) {
+			std::vector<uint32_t> pending{
+				static_cast<uint32_t>(entry)};
+			machine_block_reachable[static_cast<uint32_t>(entry)] = 1;
+			while (!pending.empty()) {
+				const uint32_t block = pending.back();
+				pending.pop_back();
+				const uint32_t begin = machine_cfg.successor_offsets[block];
+				const uint32_t end = machine_cfg.successor_offsets[block + 1];
+				for (uint32_t edge = begin; edge < end; ++edge) {
+					const uint32_t successor = machine_cfg.successors[edge];
+					if (machine_block_reachable[successor] == 0) {
+						machine_block_reachable[successor] = 1;
+						pending.push_back(successor);
+					}
+				}
+			}
+		}
 		auto machine_block_reachable_without = [&](uint32_t target,
 				uint32_t excluded) {
-			if (target >= tpde_block_count || excluded == 0) {
+			if (target >= tpde_block_count
+					|| excluded == static_cast<uint32_t>(entry)) {
 				return false;
 			}
+			if (excluded == UINT32_MAX) {
+				return machine_block_reachable[target] != 0;
+			}
 			std::vector<uint8_t> visited(tpde_block_count);
-			std::vector<uint32_t> pending{0};
-			visited[0] = 1;
+			std::vector<uint32_t> pending{
+				static_cast<uint32_t>(entry)};
+			visited[static_cast<uint32_t>(entry)] = 1;
 			while (!pending.empty()) {
 				const uint32_t block = pending.back();
 				pending.pop_back();
@@ -2492,11 +2520,6 @@ public:
 					user_opcode_dispatch_to_sources_.push_back(source);
 				}
 			}
-		}
-		int32_t entry = block_index(plan_->function.entry_block_id);
-		if (entry < 0) {
-			valid_ = false;
-			return;
 		}
 		if (function_mode_ == FunctionMode::ZendEntry) {
 			operands_.push_back(IRValueRef{EXECUTE_DATA_VALUE});
@@ -2982,31 +3005,72 @@ public:
 					static_cast<uint32_t>(value_index)] =
 						assignment_result;
 			}
+			struct RegisterAssignmentPhiSource {
+				zend_mir_storage_id storage_id;
+				IRValueRef value;
+			};
+			std::vector<RegisterAssignmentPhiSource>
+				register_assignment_phi_candidates;
+			register_assignment_phi_candidates.reserve(
+				register_assignment_results.size());
+			for (uint32_t i = 0;
+					i < register_assignment_results.size(); ++i) {
+				const IRValueRef candidate =
+					register_assignment_results[i];
+				if (candidate == INVALID_VALUE_REF
+						|| !machine_pointer_kind(machine_kind(candidate))
+						|| !plan_->instructions[i].has_value_operation) {
+					continue;
+				}
+				register_assignment_phi_candidates.push_back({
+					plan_->instructions[i].value_operation.op1_storage_id,
+					candidate});
+			}
+			std::stable_sort(register_assignment_phi_candidates.begin(),
+				register_assignment_phi_candidates.end(),
+				[](const RegisterAssignmentPhiSource &left,
+						const RegisterAssignmentPhiSource &right) {
+					return left.storage_id < right.storage_id;
+				});
+			std::vector<RegisterAssignmentPhiSource>
+				register_assignment_phi_sources;
+			register_assignment_phi_sources.reserve(
+				register_assignment_phi_candidates.size());
+			for (uint32_t begin = 0;
+					begin < register_assignment_phi_candidates.size();) {
+				uint32_t end = begin + 1;
+				IRValueRef selected =
+					register_assignment_phi_candidates[begin].value;
+				bool conflicting_kind = false;
+				while (end < register_assignment_phi_candidates.size()
+						&& register_assignment_phi_candidates[end].storage_id
+							== register_assignment_phi_candidates[begin]
+								.storage_id) {
+					const IRValueRef candidate =
+						register_assignment_phi_candidates[end].value;
+					if (machine_kind(selected) != machine_kind(candidate)) {
+						conflicting_kind = true;
+					}
+					selected = candidate;
+					++end;
+				}
+				register_assignment_phi_sources.push_back({
+					register_assignment_phi_candidates[begin].storage_id,
+					conflicting_kind ? INVALID_VALUE_REF : selected});
+				begin = end;
+			}
 			auto register_assignment_phi_source =
 				[&](zend_mir_storage_id storage_id) {
-					IRValueRef selected = INVALID_VALUE_REF;
-					for (uint32_t i = 0;
-							i < register_assignment_results.size(); ++i) {
-						const IRValueRef candidate =
-							register_assignment_results[i];
-						if (candidate == INVALID_VALUE_REF
-								|| !machine_pointer_kind(
-									machine_kind(candidate))
-								|| !plan_->instructions[i]
-									.has_value_operation
-								|| plan_->instructions[i]
-									.value_operation.op1_storage_id
-										!= storage_id) {
-							continue;
-						}
-						if (selected != INVALID_VALUE_REF
-								&& machine_kind(selected)
-									!= machine_kind(candidate)) {
-							return INVALID_VALUE_REF;
-						}
-						selected = candidate;
-					}
-					return selected;
+					const auto source = std::lower_bound(
+						register_assignment_phi_sources.begin(),
+						register_assignment_phi_sources.end(), storage_id,
+						[](const RegisterAssignmentPhiSource &candidate,
+								zend_mir_storage_id id) {
+							return candidate.storage_id < id;
+						});
+					return source != register_assignment_phi_sources.end()
+							&& source->storage_id == storage_id
+						? source->value : INVALID_VALUE_REF;
 				};
 			std::vector<uint8_t> source_result_used(
 				plan_->instruction_count);
@@ -3560,6 +3624,9 @@ public:
 		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
 			const zend_tpde_instruction &instruction =
 				plan_->instructions[i];
+			if (machine_block_reachable[instruction_blocks[i]] == 0) {
+				continue;
+			}
 			const zend_mir_instruction_record record =
 				instruction_record_at(i);
 			const bool typed_call =
@@ -3754,6 +3821,9 @@ public:
 		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
 			const zend_tpde_instruction &instruction =
 				plan_->instructions[i];
+			if (machine_block_reachable[instruction_blocks[i]] == 0) {
+				continue;
+			}
 			const zend_mir_instruction_record record =
 				instruction_record_at(i);
 			const int32_t result_index =
@@ -4720,6 +4790,9 @@ public:
 		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
 			const zend_tpde_instruction &instruction =
 				plan_->instructions[i];
+			if (machine_block_reachable[instruction_blocks[i]] == 0) {
+				continue;
+			}
 			const zend_mir_instruction_record record =
 				instruction_record_at(i);
 			const int32_t result_index =
@@ -5167,7 +5240,85 @@ public:
 					return !pending.emitted && pending.block == block;
 				});
 		};
+		std::vector<uint8_t> elided_silence_instructions(
+			plan_->instruction_count, 0);
+		/*
+		 * Constant-folded source expressions can leave an immediately adjacent
+		 * BEGIN_SILENCE/END_SILENCE pair with no operation between them.  Saving
+		 * and restoring error_reporting is then an identity operation, but two
+		 * generic runtime calls per pair make large generated functions exceed
+		 * the target section limit.  Remove only closed pairs whose saved value
+		 * has no other consumer and whose source positions cannot be observed by
+		 * an opcode callback, source-call fragment, debug probe, or generator
+		 * continuation.
+		 */
+		if (!source_landings
+				&& plan_->generator_resume_count == 0
+				&& plan_->source_opcodes != nullptr
+				&& plan_->value_consumer_offsets != nullptr
+				&& plan_->value_consumers != nullptr) {
+			for (uint32_t i = 0; i + 1 < plan_->instruction_count; ++i) {
+				const zend_tpde_instruction &begin = plan_->instructions[i];
+				const zend_tpde_instruction &end = plan_->instructions[i + 1];
+				const zend_mir_instruction_record begin_record =
+					instruction_record_at(i);
+				const zend_mir_instruction_record end_record =
+					instruction_record_at(i + 1);
+				if (begin_record.opcode
+						!= ZEND_MIR_OPCODE_VALUE_BEGIN_SILENCE
+						|| end_record.opcode
+							!= ZEND_MIR_OPCODE_VALUE_END_SILENCE
+						|| instruction_blocks[i] == UINT32_MAX
+						|| instruction_blocks[i] != instruction_blocks[i + 1]
+						|| begin.debug_probe || end.debug_probe
+						|| begin.source_effect != 0 || end.source_effect != 0
+						|| begin.user_opcode_call_fragments
+						|| end.user_opcode_call_fragments
+						|| begin_record.source_position_id == UINT32_MAX
+						|| end_record.source_position_id
+							!= begin_record.source_position_id + 1
+						|| end_record.source_position_id
+							>= plan_->source_opcode_count
+						|| plan_->source_opcodes[
+							begin_record.source_position_id].opcode
+							!= ZEND_BEGIN_SILENCE
+						|| plan_->source_opcodes[
+							end_record.source_position_id].opcode
+							!= ZEND_END_SILENCE) {
+					continue;
+				}
+				const int32_t saved_value =
+					begin.source_result_binding.value_index;
+				if (saved_value < 0
+						|| static_cast<uint32_t>(saved_value)
+							>= plan_->value_count
+						|| end.source_op1_binding.value_index != saved_value) {
+					continue;
+				}
+				const uint32_t consumer_begin =
+					plan_->value_consumer_offsets[
+						static_cast<uint32_t>(saved_value)];
+				const uint32_t consumer_end =
+					plan_->value_consumer_offsets[
+						static_cast<uint32_t>(saved_value) + 1];
+				bool closed_pair = consumer_begin != consumer_end;
+				for (uint32_t use = consumer_begin;
+						closed_pair && use < consumer_end; ++use) {
+					closed_pair = plan_->value_consumers[use].instruction_index
+						== i + 1;
+				}
+				if (!closed_pair) {
+					continue;
+				}
+				elided_silence_instructions[i] = 1;
+				elided_silence_instructions[i + 1] = 1;
+				++i;
+			}
+		}
 		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
+			if (elided_silence_instructions[i] != 0) {
+				continue;
+			}
 			const zend_tpde_instruction &instruction = plan_->instructions[i];
 			const zend_mir_instruction_record record =
 				instruction_record_at(i);
@@ -5184,6 +5335,9 @@ public:
 			const uint32_t block = instruction_blocks[i];
 			if (block == UINT32_MAX) {
 				valid_ = false;
+				continue;
+			}
+			if (machine_block_reachable[block] == 0) {
 				continue;
 			}
 			if (source_landings
@@ -6086,10 +6240,10 @@ public:
 				uint64_t copy_constant_bits;
 				if (machine_result
 						&& copy_input != INVALID_VALUE_REF
-							&& (machine_value_is_register_authoritative(
+							&& ((machine_value_is_register_authoritative(
 									copy_input)
 								&& machine_value_has_register_definition(
-									copy_input)
+									copy_input))
 								|| entry_argument_has_register_definition(
 									copy_input)
 								|| constant(copy_input, &copy_constant_bits))) {
@@ -6671,10 +6825,6 @@ public:
 			for (uint32_t n = 0; n < data_operand_count; ++n) {
 				IRValueRef operand = value_ref(zend_tpde_operand_at(
 					plan_, &instruction, n));
-				const zend_mir_scalar_type_mask operand_type =
-					operand == INVALID_VALUE_REF
-						? ZEND_MIR_SCALAR_TYPE_NONE
-						: exact_type(operand);
 				const uint32_t transport_index =
 					instruction.operand_offset + n;
 				const zend_tpde_operand_transport *transport =
@@ -8801,6 +8951,11 @@ public:
 					}
 				}),
 			block_instructions.end());
+		/* The adaptor remains live for the complete backend compilation.  Release
+		 * geometric growth slack before installing the operand spans and handing
+		 * the graph to TPDE, where large source functions otherwise retain a
+		 * second, mostly empty node allocation throughout code generation. */
+		operands_.shrink_to_fit();
 		for (InstNode &node : nodes_) {
 			const auto all_operands =
 				std::span<const IRValueRef>{operands_}.subspan(
@@ -8814,11 +8969,32 @@ public:
 		}
 		flatten_block_items(tpde_block_count, block_instructions,
 			instruction_slices_, instructions_);
-			flatten_block_items(tpde_block_count, block_phis,
-				phi_slices_, phis_);
+		flatten_block_items(tpde_block_count, block_phis,
+			phi_slices_, phis_);
+		block_instructions.clear();
+		block_instructions.shrink_to_fit();
+		block_phis.clear();
+		block_phis.shrink_to_fit();
+		nodes_.shrink_to_fit();
+		fused_instructions_.shrink_to_fit();
+		instructions_.shrink_to_fit();
+		phis_.shrink_to_fit();
 		}
 
 	bool valid() const { return valid_; }
+	bool compact_guarded_value_operation(IRInstRef instruction) const {
+		static constexpr uint32_t compact_instruction_threshold = 1u << 16;
+		const InstNode &current = node(instruction);
+		if (plan_->instruction_count < compact_instruction_threshold
+				|| current.kind != InstKind::GuardedFast
+				|| current.mir_instruction_index >= plan_->instruction_count) {
+			return false;
+		}
+		const zend_tpde_instruction &mir =
+			plan_->instructions[current.mir_instruction_index];
+		return mir.has_value_operation
+			&& mir.record.opcode != ZEND_MIR_OPCODE_CALL_DIRECT_USER;
+	}
 	bool typed_component_call(IRInstRef instruction) const {
 		const InstNode &current = node(instruction);
 		return frozen_typed_component_call(
@@ -9531,6 +9707,9 @@ public:
 	}
 	bool typed_component_call(IRInstRef instruction) const {
 		return active_->typed_component_call(instruction);
+	}
+	bool compact_guarded_value_operation(IRInstRef instruction) const {
+		return active_->compact_guarded_value_operation(instruction);
 	}
 	ZendIRAdaptor::TypedBodyAbiType typed_body_return_type(
 			uint32_t component_index) const {

@@ -29,6 +29,9 @@ typedef struct _zend_mir_control_flow_map_storage {
 	zend_mir_control_flow_block_mapping *blocks;
 	zend_mir_control_flow_edge_mapping *edges;
 	zend_mir_control_flow_phi_mapping *phis;
+	zend_mir_block_id *source_blocks;
+	uint8_t *source_edges;
+	uint8_t *source_phis;
 	uint32_t block_count;
 	uint32_t edge_count;
 	uint32_t phi_count;

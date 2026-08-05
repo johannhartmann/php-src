@@ -60,6 +60,8 @@ typedef struct _zend_mir_zend_source {
 	void *slot_index;
 	void *original_slot_index;
 	void *value_fact_index;
+	void *block_region_flags;
+	void *block_loop_headers;
 	zend_mir_op_array_id op_array_id;
 	zend_mir_symbol_id file_symbol_id;
 	uint32_t opcode_count;

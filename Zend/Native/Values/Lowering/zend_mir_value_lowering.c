@@ -850,42 +850,40 @@ static bool zend_mir_w09_source_block(
 	const zend_mir_lowering_source_view *source,
 	zend_mir_source_block_id id, zend_mir_source_block_ref *out)
 {
-	uint32_t index = UINT32_MAX;
-
-	for (index = 0; index < source->block_count(source->context); index++) {
-		if (!source->block_at(source->context, index, out)) {
-			return false;
-		}
-		if (out->id == id) {
-			return true;
-		}
-	}
-	return false;
+	return source != NULL && out != NULL
+		&& id < source->block_count(source->context)
+		&& source->block_at(source->context, id, out)
+		&& out->id == id;
 }
 
-static bool zend_mir_w09_mir_block(
+static bool zend_mir_w09_build_block_index(
 	const zend_mir_lowering_source_view *source,
 	const zend_mir_control_flow_map *map, const zend_mir_view *view,
-	zend_mir_source_block_id source_id, zend_mir_block_id *out)
+	zend_mir_block_id *mir_block_by_source, uint32_t source_block_count)
 {
 	uint32_t index;
 	uint32_t reachable_index = 0;
 
-	if (source == NULL || view == NULL || out == NULL
+	if (source == NULL || view == NULL || mir_block_by_source == NULL
 			|| source->block_count == NULL || source->block_at == NULL
+			|| source->block_count(source->context) != source_block_count
 			|| view->block_count == NULL || view->block_at == NULL) {
 		return false;
+	}
+	for (index = 0; index < source_block_count; index++) {
+		mir_block_by_source[index] = ZEND_MIR_ID_INVALID;
 	}
 	if (map != NULL && map->block_count != NULL && map->block_at != NULL) {
 		for (index = 0; index < map->block_count(map->context); index++) {
 			zend_mir_control_flow_block_mapping mapping;
-			if (!map->block_at(map->context, index, &mapping)) {
+			if (!map->block_at(map->context, index, &mapping)
+					|| mapping.source_block_id >= source_block_count
+					|| zend_mir_id_is_valid(
+						mir_block_by_source[mapping.source_block_id])) {
 				return false;
 			}
-			if (mapping.source_block_id == source_id) {
-				*out = mapping.mir_block_id;
-				return true;
-			}
+			mir_block_by_source[mapping.source_block_id] =
+				mapping.mir_block_id;
 		}
 	}
 	/*
@@ -904,18 +902,18 @@ static bool zend_mir_w09_mir_block(
 		if ((source_block.flags & ZEND_MIR_SOURCE_BLOCK_REACHABLE) == 0) {
 			continue;
 		}
-		if (source_block.id == source_id) {
+		if (!zend_mir_id_is_valid(
+				mir_block_by_source[source_block.id])) {
 			if (reachable_index >= view->block_count(view->context)
 					|| !view->block_at(
 						view->context, reachable_index, &mir_block)) {
 				return false;
 			}
-			*out = mir_block.id;
-			return true;
+			mir_block_by_source[source_block.id] = mir_block.id;
 		}
 		reachable_index++;
 	}
-	return false;
+	return true;
 }
 
 static int zend_mir_w09_compare_operations(const void *left, const void *right)
@@ -1598,6 +1596,7 @@ bool zend_mir_w09_emit_executable_values(
 	zend_mir_executable_value_ref *operations;
 	zend_mir_value_location_ref *locations;
 	zend_mir_instruction_id *control_instruction_by_source;
+	zend_mir_block_id *mir_block_by_source = NULL;
 	uint32_t *ssa_by_storage;
 	uint32_t *argument_by_ssa;
 	uint8_t *machine_defined_values;
@@ -1607,6 +1606,7 @@ bool zend_mir_w09_emit_executable_values(
 	uint32_t operation_count = 0;
 	uint32_t location_count = 0;
 	uint32_t source_ssa_count;
+	uint32_t source_block_count;
 	uint32_t storage_count;
 	uint32_t value_count;
 	uint32_t index;
@@ -1623,7 +1623,8 @@ bool zend_mir_w09_emit_executable_values(
 	view = lowering_context->module_ops.view(
 		lowering_context->module_ops.context, module);
 	if (source == NULL || view == NULL || source->ssa_count == NULL
-			|| source->ssa_at == NULL
+			|| source->ssa_at == NULL || source->block_count == NULL
+			|| source->block_at == NULL
 			|| source->opcode_count(source->context) != op_array->last
 			|| lowering_context->zend_source == NULL
 			|| !zend_mir_zend_source_call_view(
@@ -1635,6 +1636,7 @@ bool zend_mir_w09_emit_executable_values(
 		return false;
 	}
 	source_ssa_count = source->ssa_count(source->context);
+	source_block_count = source->block_count(source->context);
 	if (w11_execution) {
 		semantic_ssa = (const zend_ssa *) lowering_context->zend_source->ssa;
 		if (semantic_ssa == NULL || semantic_ssa->ops == NULL
@@ -1699,6 +1701,16 @@ bool zend_mir_w09_emit_executable_values(
 		free(locations);
 		free(operations);
 		return false;
+	}
+	mir_block_by_source = zend_mir_w06_calloc(
+		source_block_count, sizeof(*mir_block_by_source));
+	if (source_block_count != 0 && mir_block_by_source == NULL) {
+		goto done;
+	}
+	if (source_block_count != 0
+			&& !zend_mir_w09_build_block_index(source, control_flow_map, view,
+				mir_block_by_source, source_block_count)) {
+		goto done;
 	}
 	if (w11_execution && op_array->last != 0) {
 		expression_throw_tails = zend_mir_w06_calloc(
@@ -1838,6 +1850,7 @@ bool zend_mir_w09_emit_executable_values(
 		if (!semantic_source.source_opcode_at(
 				semantic_source.context, index, &source_opcode)
 				|| source_opcode.opline_index != index
+				|| source_opcode.block_id >= source_block_count
 				|| !zend_mir_w09_source_block(
 					source, source_opcode.block_id, &source_block)) {
 			goto done;
@@ -1928,8 +1941,8 @@ bool zend_mir_w09_emit_executable_values(
 		operation->extended_value = source_opcode.extended_value;
 		operation->source_position_id = source_opcode.source_position_id;
 		operation->frame_state_id = ZEND_MIR_ID_INVALID;
-		if (!zend_mir_w09_mir_block(source, control_flow_map, view,
-				source_opcode.block_id, &operation->block_id)
+		operation->block_id = mir_block_by_source[source_opcode.block_id];
+		if (!zend_mir_id_is_valid(operation->block_id)
 				|| !zend_mir_w09_operation_semantics(
 					opcode, operation, &frame_class)) {
 			goto done;
@@ -2103,6 +2116,7 @@ bool zend_mir_w09_emit_executable_values(
 	success = zend_mir_module_commit_value_model(module);
 
 done:
+	free(mir_block_by_source);
 	free(expression_throw_tails);
 	free(machine_defined_values);
 	free(ssa_by_storage);
