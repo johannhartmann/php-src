@@ -1958,6 +1958,7 @@ uint32_t zend_native_catch_enter(
 	zend_class_entry *exception_ce;
 	zend_object *exception;
 	uint32_t cache_offset;
+	bool chained_catch;
 
 	if (execute_data == NULL || execute_data->func == NULL
 			|| !ZEND_USER_CODE(execute_data->func->type)
@@ -1988,9 +1989,15 @@ uint32_t zend_native_catch_enter(
 			&& EG(opline_before_exception) != NULL) {
 		throw_opline = EG(opline_before_exception);
 	}
+	chained_catch = throw_opline >= op_array->opcodes
+		&& throw_opline < op_array->opcodes + op_array->last
+		&& throw_opline->opcode == ZEND_CATCH
+		&& (throw_opline->extended_value & ZEND_LAST_CATCH) == 0
+		&& OP_JMP_ADDR(throw_opline, throw_opline->op2) == opline;
 	if (throw_opline >= op_array->opcodes
 			&& throw_opline < op_array->opcodes + op_array->last
-			&& throw_opline != opline) {
+			&& throw_opline != opline
+			&& !chained_catch) {
 		uint32_t source_position =
 			(uint32_t) (throw_opline - op_array->opcodes);
 		uint32_t continuation = zend_native_finally_unwind_target(
