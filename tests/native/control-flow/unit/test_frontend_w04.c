@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "Zend/Native/Lowering/Frontend/zend_mir_zend_source.h"
+#include "Zend/Native/Lowering/Frontend/zend_mir_zend_source_internal.h"
 #include "Zend/Optimizer/zend_ssa.h"
 #include "Zend/zend_compile.h"
 #include "Zend/zend_type_info.h"
@@ -175,6 +175,7 @@ static void test_w04_diamond_projection(void)
 	assert(view.phi_input_at(view.context, 1, &input));
 	assert(input.input_index == 1 && input.predecessor_block_id == 2);
 	assert(input.source_ssa_variable_id == 2);
+	zend_mir_zend_source_release_w05(&source);
 }
 
 static void test_w04_pi_and_fail_closed_projection(void)
@@ -198,6 +199,7 @@ static void test_w04_pi_and_fail_closed_projection(void)
 	assert(view.phi_input_count(view.context) == 1);
 	assert(view.phi_input_at(view.context, 0, &input));
 	assert(input.input_index == 1 && input.predecessor_block_id == 2);
+	zend_mir_zend_source_release_w05(&source);
 
 	w04_init_diamond(&fixture);
 	fixture.cfg_blocks[2].flags |= ZEND_BB_PROTECTED;
@@ -210,8 +212,14 @@ static void test_w04_pi_and_fail_closed_projection(void)
 	fixture.cfg_blocks[2].flags |= ZEND_BB_IRREDUCIBLE_LOOP;
 	assert(zend_mir_zend_source_init_w04(
 		&source, &fixture.op_array, &fixture.ssa, 17, 23, &diagnostic)
-		== ZEND_MIR_LOWERING_DEFERRED);
-	assert(diagnostic.code == ZEND_MIRL_W04_IRREDUCIBLE_LOOP);
+		== ZEND_MIR_LOWERING_SUCCESS);
+	assert(zend_mir_zend_source_view(&source, &view));
+	{
+		zend_mir_source_block_ref block;
+		assert(view.block_at(view.context, 2, &block));
+		assert((block.flags & ZEND_MIR_SOURCE_BLOCK_IRREDUCIBLE) != 0);
+	}
+	zend_mir_zend_source_release_w05(&source);
 
 	w04_init_diamond(&fixture);
 	fixture.predecessors[3] = 0;
@@ -309,6 +317,7 @@ static void test_w04_smart_branch_result_type(void)
 	assert(zend_mir_zend_source_init_w04(
 		&source, &fixture.op_array, &fixture.ssa, 17, 23, &diagnostic)
 		== ZEND_MIR_LOWERING_SUCCESS);
+	zend_mir_zend_source_release_w05(&source);
 
 	fixture.opcodes[1].opcode = ZEND_JMPNZ;
 	assert(zend_mir_zend_source_init_w04(
@@ -317,11 +326,38 @@ static void test_w04_smart_branch_result_type(void)
 	assert(diagnostic.code == ZEND_MIRL_W04_BRANCH_PROOF_FAILED);
 }
 
+static void test_w05_dead_peer_projection(void)
+{
+	w04_frontend_fixture projected;
+	w04_frontend_fixture original;
+	zend_mir_zend_source source;
+	zend_mir_frontend_diagnostic diagnostic;
+	uint32_t slot;
+	zend_mir_source_slot_kind slot_kind;
+
+	w04_init_diamond(&projected);
+	w04_init_diamond(&original);
+	projected.ssa_blocks[3].phis = NULL;
+	projected.ssa_vars[3].definition_phi = NULL;
+	projected.ssa_ops[3].op1_use = 1;
+
+	assert(zend_mir_zend_source_init_w05_projection(
+			&source, &projected.op_array, &projected.ssa,
+			&original.op_array, &original.ssa, 17, 23, &diagnostic)
+		== ZEND_MIR_LOWERING_SUCCESS);
+	assert(source.slot_index != NULL && source.original_slot_index != NULL);
+	assert(zend_mir_frontend_indexed_dead_ssa_peer_slot(
+		source.slot_index, &projected.ssa, 3, &slot, &slot_kind));
+	assert(slot == 0 && slot_kind == ZEND_MIR_SOURCE_SLOT_TMP);
+	zend_mir_zend_source_release_w05(&source);
+}
+
 int main(void)
 {
 	test_w04_diamond_projection();
 	test_w04_pi_and_fail_closed_projection();
 	test_w04_smart_branch_result_type();
+	test_w05_dead_peer_projection();
 	puts("W04 frontend projection tests: ok");
 	return 0;
 }

@@ -356,37 +356,26 @@ zend_mir_diagnostic_location zend_mir_verify_frame_location(
 	return location;
 }
 
-#define ZEND_MIR_VERIFY_FIND_FUNCTION(name, type, field, count_field, id_field) \
+#define ZEND_MIR_VERIFY_FIND_FUNCTION(name, type, field, index_field, capacity_field) \
 	const type *name(const zend_mir_verify_context *context, uint32_t id) \
 	{ \
-		uint32_t left = 0; \
-		uint32_t right = context != NULL ? context->count_field : 0; \
-		while (left < right) { \
-			uint32_t middle = left + (right - left) / 2; \
-			uint32_t current = context->field[middle].record.id_field; \
-			if (current < id) { \
-				left = middle + 1; \
-			} else if (current > id) { \
-				right = middle; \
-			} else { \
-				return &context->field[middle]; \
-			} \
-		} \
-		return NULL; \
+		int32_t index = context == NULL ? -1 : zend_mir_id_index_find( \
+			context->index_field, context->capacity_field, id); \
+		return index < 0 ? NULL : &context->field[index]; \
 	}
 
 ZEND_MIR_VERIFY_FIND_FUNCTION(zend_mir_verify_find_function,
-	zend_mir_verify_function, functions, function_count, id)
+	zend_mir_verify_function, functions, function_index, function_index_capacity)
 ZEND_MIR_VERIFY_FIND_FUNCTION(zend_mir_verify_find_block,
-	zend_mir_verify_block, blocks, block_count, id)
+	zend_mir_verify_block, blocks, block_index, block_index_capacity)
 ZEND_MIR_VERIFY_FIND_FUNCTION(zend_mir_verify_find_instruction,
-	zend_mir_verify_instruction, instructions, instruction_count, id)
+	zend_mir_verify_instruction, instructions, instruction_index, instruction_index_capacity)
 ZEND_MIR_VERIFY_FIND_FUNCTION(zend_mir_verify_find_value,
-	zend_mir_verify_value, values, value_count, id)
+	zend_mir_verify_value, values, value_index, value_index_capacity)
 ZEND_MIR_VERIFY_FIND_FUNCTION(zend_mir_verify_find_frame,
-	zend_mir_verify_frame, frames, frame_count, id)
+	zend_mir_verify_frame, frames, frame_index, frame_index_capacity)
 ZEND_MIR_VERIFY_FIND_FUNCTION(zend_mir_verify_find_source,
-	zend_mir_verify_source, sources, source_count, id)
+	zend_mir_verify_source, sources, source_index, source_index_capacity)
 
 #undef ZEND_MIR_VERIFY_FIND_FUNCTION
 
@@ -499,6 +488,40 @@ static bool zend_mir_verify_count(zend_mir_verify_context *context,
 	zend_mir_verify_emit_fatal(context, ZEND_MIR_VERIFY_CAPACITY_EXCEEDED,
 		ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED, name);
 	return false;
+}
+
+static bool zend_mir_verify_build_id_index(zend_mir_verify_context *context,
+		zend_mir_id_index_entry **out, uint32_t *capacity_out,
+		const uint32_t *ids, uint32_t count, size_t stride)
+{
+	zend_mir_id_index_entry *entries;
+	uint32_t capacity;
+	uint32_t index;
+
+	if (count == 0) {
+		return true;
+	}
+	if (!zend_mir_id_index_capacity(count, &capacity)) {
+		zend_mir_verify_emit_fatal(context, ZEND_MIR_VERIFY_CAPACITY_EXCEEDED,
+			ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED, "ID index capacity exceeded");
+		return false;
+	}
+	entries = zend_mir_verify_allocate(context, capacity, sizeof(*entries));
+	if (entries == NULL) {
+		return false;
+	}
+	for (index = 0; index < count; index++) {
+		const uint32_t *id = (const uint32_t *)
+			((const unsigned char *) ids + (size_t) index * stride);
+		if (!zend_mir_id_index_insert(entries, capacity, *id, index, NULL)) {
+			zend_mir_verify_emit_fatal(context, ZEND_MIR_VERIFY_CAPACITY_EXCEEDED,
+				ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED, "ID index insertion failed");
+			return false;
+		}
+	}
+	*out = entries;
+	*capacity_out = capacity;
+	return true;
 }
 
 #define ZEND_MIR_VERIFY_LOAD_ARRAY(context, count_field, pointer_field, type, callback, label) \
@@ -643,7 +666,34 @@ static bool zend_mir_verify_load_entities(zend_mir_verify_context *context)
 	ZEND_MIR_VERIFY_SORT(context->source_maps,
 		context->source_map_count, zend_mir_verify_compare_source_map);
 #undef ZEND_MIR_VERIFY_SORT
-	return true;
+	return zend_mir_verify_build_id_index(context, &context->function_index,
+			&context->function_index_capacity,
+			context->function_count == 0 ? NULL : &context->functions[0].record.id,
+			context->function_count, sizeof(*context->functions))
+		&& zend_mir_verify_build_id_index(context, &context->block_index,
+			&context->block_index_capacity,
+			context->block_count == 0 ? NULL : &context->blocks[0].record.id,
+			context->block_count, sizeof(*context->blocks))
+		&& zend_mir_verify_build_id_index(context, &context->instruction_index,
+			&context->instruction_index_capacity, context->instruction_count == 0
+				? NULL : &context->instructions[0].record.id,
+			context->instruction_count, sizeof(*context->instructions))
+		&& zend_mir_verify_build_id_index(context, &context->value_index,
+			&context->value_index_capacity,
+			context->value_count == 0 ? NULL : &context->values[0].record.id,
+			context->value_count, sizeof(*context->values))
+		&& zend_mir_verify_build_id_index(context, &context->constant_index,
+			&context->constant_index_capacity, context->constant_count == 0
+				? NULL : &context->constants[0].record.value_id,
+			context->constant_count, sizeof(*context->constants))
+		&& zend_mir_verify_build_id_index(context, &context->frame_index,
+			&context->frame_index_capacity,
+			context->frame_count == 0 ? NULL : &context->frames[0].record.id,
+			context->frame_count, sizeof(*context->frames))
+		&& zend_mir_verify_build_id_index(context, &context->source_index,
+			&context->source_index_capacity,
+			context->source_count == 0 ? NULL : &context->sources[0].record.id,
+			context->source_count, sizeof(*context->sources));
 }
 
 #undef ZEND_MIR_VERIFY_LOAD_ARRAY

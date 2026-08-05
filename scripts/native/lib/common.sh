@@ -178,6 +178,10 @@ native_configure_args() {
         --without-pear
         "--prefix=$NATIVE_PROFILE_ROOT/install"
     )
+    if [[ -n ${PROFILE_TARGET_ID:-} ]]; then
+        # The V1 target matrix exercises native code across a real Unix fork.
+        NATIVE_CONFIGURE_ARGS+=(--enable-pcntl)
+    fi
     NATIVE_CONFIGURE_ARGS+=("${PROFILE_CONFIGURE_FLAGS[@]}")
 }
 

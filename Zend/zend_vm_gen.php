@@ -692,7 +692,7 @@ function format_condition($condition) {
 }
 
 // Generates code for opcode handler or helper
-function gen_code($f, $spec, $kind, $code, $op1, $op2, $name, $extra_spec=null) {
+function gen_code($f, $spec, $kind, $code, $op1, $op2, $name, $extra_spec=null, $is_handler=false) {
     global $op1_type, $op2_type, $op1_get_zval_ptr, $op2_get_zval_ptr,
         $op1_get_zval_ptr_deref, $op2_get_zval_ptr_deref,
         $op1_get_zval_ptr_undef, $op2_get_zval_ptr_undef,
@@ -790,6 +790,19 @@ function gen_code($f, $spec, $kind, $code, $op1, $op2, $name, $extra_spec=null) 
             : "",
     );
     $code = preg_replace(array_keys($specialized_replacements), array_values($specialized_replacements), $code);
+
+    if ($is_handler) {
+        $count = 0;
+        $code = preg_replace(
+            '/^(\s*\{)/',
+            "$1\n\tZEND_NATIVE_MIR_TEST_PROBE_OPLINE_HANDLER();",
+            $code,
+            1,
+            $count);
+        if ($count !== 1) {
+            throw new RuntimeException("Opcode handler $name has no opening block");
+        }
+    }
 
     if (0 && strpos($code, '{') === 0) {
         $code = "{\n\tfprintf(stderr, \"$name\\n\");\n" . substr($code, 1);
@@ -1062,7 +1075,7 @@ function gen_handler($f, $spec, $kind, $name, $op1, $op2, $use, $code, $lineno, 
         case ZEND_VM_KIND_HYBRID:
             if (is_inline_hybrid_handler($name, $opcode["hot"], $op1, $op2, $extra_spec)) {
                 $out = fopen('php://memory', 'w+');
-                gen_code($out, $spec, $kind, $code, $op1, $op2, $name, $extra_spec);
+                gen_code($out, $spec, $kind, $code, $op1, $op2, $name, $extra_spec, true);
                 rewind($out);
                 $code =
                       "\t\t\tHYBRID_CASE({$spec_name}):\n"
@@ -1125,7 +1138,7 @@ function gen_handler($f, $spec, $kind, $name, $op1, $op2, $use, $code, $lineno, 
     }
 
     // Generate opcode handler's code
-    gen_code($f, $spec, $kind, $code, $op1, $op2, $name, $extra_spec);
+    gen_code($f, $spec, $kind, $code, $op1, $op2, $name, $extra_spec, true);
 
     if ($additional_func) {
         $cconv = $kind === ZEND_VM_KIND_TAILCALL ? 'ZEND_OPCODE_HANDLER_CCONV' : 'ZEND_OPCODE_HANDLER_FUNC_CCONV';
@@ -1577,6 +1590,7 @@ function gen_null_handler($f, $kind) {
     $variant = $kind === ZEND_VM_KIND_TAILCALL ? '_TAILCALL' : '';
     out($f,"static ZEND_OPCODE_HANDLER_RET {$cconv} ZEND_NULL{$variant}_HANDLER(ZEND_OPCODE_HANDLER_ARGS)\n");
     out($f,"{\n");
+    out($f,"\tZEND_NATIVE_MIR_TEST_PROBE_OPLINE_HANDLER();\n");
     out($f,"\tUSE_OPLINE\n");
     out($f,"\n");
     out($f,"\tSAVE_OPLINE();\n");
@@ -1587,6 +1601,7 @@ function gen_null_handler($f, $kind) {
 function gen_halt_handler($f, $kind) {
     out($f,"static ZEND_OPCODE_HANDLER_RET ZEND_OPCODE_HANDLER_CCONV ZEND_HALT_TAILCALL_HANDLER(ZEND_OPCODE_HANDLER_ARGS)\n");
     out($f,"{\n");
+    out($f,"\tZEND_NATIVE_MIR_TEST_PROBE_OPLINE_HANDLER();\n");
     out($f,"\treturn (zend_op*) ZEND_VM_ENTER_BIT;\n");
     out($f,"}\n\n");
 }
@@ -1595,6 +1610,7 @@ function gen_interrupt_func($f, $kind, $spec) {
     $cconv = $kind === ZEND_VM_KIND_TAILCALL ? 'ZEND_OPCODE_HANDLER_CCONV' : 'ZEND_OPCODE_HANDLER_FUNC_CCONV';
     $variant = $kind === ZEND_VM_KIND_TAILCALL ? '_TAILCALL' : '';
     out($f, "static ZEND_COLD zend_never_inline ZEND_OPCODE_HANDLER_RET {$cconv} zend_interrupt{$variant}(ZEND_OPCODE_HANDLER_ARGS) {\n");
+    out($f,"\tZEND_NATIVE_MIR_TEST_PROBE_OPLINE_HANDLER();\n");
     out($f,"\tSAVE_OPLINE();\n");
     if ($kind === ZEND_VM_KIND_TAILCALL) {
         out($f,"\tZEND_VM_TAIL_CALL(zend_interrupt_helper".($spec?"_SPEC":"")."_TAILCALL(ZEND_OPCODE_HANDLER_ARGS_PASSTHRU));\n");
@@ -3167,6 +3183,7 @@ function gen_vm($def, $skel) {
     if (ZEND_VM_GEN_KIND == ZEND_VM_KIND_CALL || ZEND_VM_GEN_KIND == ZEND_VM_KIND_HYBRID) {
         out($f, "ZEND_API int ZEND_FASTCALL zend_vm_call_opcode_handler(zend_execute_data* ex)\n");
         out($f, "{\n");
+        out($f, "\tZEND_NATIVE_MIR_TEST_PROBE_VM_HANDLER();\n");
         if (ZEND_VM_GEN_KIND == ZEND_VM_KIND_HYBRID) {
             out($f,"#if (ZEND_VM_KIND == ZEND_VM_KIND_HYBRID || ZEND_VM_KIND == ZEND_VM_KIND_TAILCALL)\n");
             out($f, "\tzend_vm_opcode_handler_func_t handler;\n");
@@ -3241,6 +3258,7 @@ function gen_vm($def, $skel) {
     } else {
         out($f, "ZEND_API int ZEND_FASTCALL zend_vm_call_opcode_handler(zend_execute_data* ex)\n");
         out($f, "{\n");
+        out($f, "\tZEND_NATIVE_MIR_TEST_PROBE_VM_HANDLER();\n");
         out($f, "\tzend_error_noreturn(E_CORE_ERROR, \"zend_vm_call_opcode_handler() is not supported\");\n");
         out($f, "\treturn 0;\n");
         out($f, "}\n\n");

@@ -178,6 +178,63 @@ typedef struct _zend_mir_value_location_ref {
 	bool alias_observable;
 } zend_mir_value_location_ref;
 
+/* Stable physical representation chosen for one persistent MIR value. */
+typedef enum _zend_mir_value_plan_representation {
+	ZEND_MIR_VALUE_PLAN_I64 = 0,
+	ZEND_MIR_VALUE_PLAN_F64 = 1,
+	ZEND_MIR_VALUE_PLAN_BOOL = 2,
+	ZEND_MIR_VALUE_PLAN_NATIVE_POINTER = 3,
+	ZEND_MIR_VALUE_PLAN_BOXED_ZVAL_PAIR = 4,
+	ZEND_MIR_VALUE_PLAN_CANONICAL_ZVAL_SLOT = 5,
+	ZEND_MIR_VALUE_PLAN_REPRESENTATION_INVALID = -1
+} zend_mir_value_plan_representation;
+
+typedef enum _zend_mir_value_authority {
+	ZEND_MIR_VALUE_AUTHORITY_REGISTER_DIRTY = 0,
+	ZEND_MIR_VALUE_AUTHORITY_REGISTER_CLEAN = 1,
+	ZEND_MIR_VALUE_AUTHORITY_SLOT_AUTHORITATIVE = 2,
+	ZEND_MIR_VALUE_AUTHORITY_INVALID_AFTER_REENTRY = 3,
+	ZEND_MIR_VALUE_AUTHORITY_INVALID = -1
+} zend_mir_value_authority;
+
+/*
+ * Immutable target-neutral execution plan for one core MIR value. A canonical
+ * storage is present only for CANONICAL_ZVAL_SLOT. Register aliases name
+ * another plan value and form an acyclic graph.
+ */
+typedef struct _zend_mir_value_plan_ref {
+	zend_mir_value_id value_id;
+	zend_mir_value_plan_representation representation;
+	zend_mir_scalar_type_mask exact_type;
+	zend_mir_storage_id canonical_storage_id;
+	zend_mir_value_id register_alias_value_id;
+	zend_mir_ownership_state ownership;
+	zend_mir_value_category category;
+	zend_mir_refcount_state refcount_state;
+	zend_mir_value_authority authority;
+	bool canonical_alias_observable;
+} zend_mir_value_plan_ref;
+
+typedef uint32_t zend_mir_value_boundary_action_mask;
+
+enum {
+	ZEND_MIR_VALUE_BOUNDARY_MATERIALIZE_BEFORE = UINT32_C(1) << 0,
+	ZEND_MIR_VALUE_BOUNDARY_INVALIDATE_AFTER = UINT32_C(1) << 1,
+	ZEND_MIR_VALUE_BOUNDARY_RELOAD_BEFORE = UINT32_C(1) << 2,
+	ZEND_MIR_VALUE_BOUNDARY_ACTION_ALL =
+		ZEND_MIR_VALUE_BOUNDARY_MATERIALIZE_BEFORE
+		| ZEND_MIR_VALUE_BOUNDARY_INVALIDATE_AFTER
+		| ZEND_MIR_VALUE_BOUNDARY_RELOAD_BEFORE
+};
+
+/* Sorted by instruction_id and then value_id. */
+typedef struct _zend_mir_value_boundary_plan_ref {
+	zend_mir_instruction_id instruction_id;
+	zend_mir_value_id value_id;
+	zend_mir_storage_id canonical_storage_id;
+	zend_mir_value_boundary_action_mask actions;
+} zend_mir_value_boundary_plan_ref;
+
 /*
  * A value that must remain available when native execution resumes at the
  * target source position. The table is sorted by target_source_position_id,
@@ -198,7 +255,9 @@ typedef enum _zend_mir_value_model_flag {
 	 * W06–W08 models do not set this bit and retain their historical
 	 * registerless boxed values.
 	 */
-	ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS = 1u << 0
+	ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS = 1u << 0,
+	/* Every core MIR value has exactly one immutable value-plan record. */
+	ZEND_MIR_VALUE_MODEL_VALUE_PLAN_COMPLETE = 1u << 1
 } zend_mir_value_model_flag;
 
 /*
@@ -276,6 +335,12 @@ typedef struct _zend_mir_value_view {
 	uint32_t (*value_location_count)(const void *context);
 	bool (*value_location_at)(const void *context, uint32_t index,
 		zend_mir_value_location_ref *out);
+	uint32_t (*value_plan_count)(const void *context);
+	bool (*value_plan_at)(const void *context, uint32_t index,
+		zend_mir_value_plan_ref *out);
+	uint32_t (*boundary_plan_count)(const void *context);
+	bool (*boundary_plan_at)(const void *context, uint32_t index,
+		zend_mir_value_boundary_plan_ref *out);
 	uint32_t (*executable_operation_count)(const void *context);
 	bool (*executable_operation_at)(const void *context, uint32_t index,
 		zend_mir_executable_value_ref *out);
@@ -297,6 +362,10 @@ typedef struct _zend_mir_value_mutator {
 	bool (*add_call_transfer)(void *context, const zend_mir_call_transfer_ref *record);
 	bool (*add_value_location)(void *context,
 		const zend_mir_value_location_ref *record);
+	bool (*add_value_plan)(void *context,
+		const zend_mir_value_plan_ref *record);
+	bool (*add_boundary_plan)(void *context,
+		const zend_mir_value_boundary_plan_ref *record);
 	bool (*add_executable_operation)(void *context,
 		const zend_mir_executable_value_ref *record);
 	bool (*add_suspend_live_value)(void *context,
@@ -312,6 +381,8 @@ typedef enum _zend_mir_verify_w06_code {
 	ZEND_MIR_VERIFY_W06_ALIAS_MISMATCH = 804,
 	ZEND_MIR_VERIFY_W06_SEPARATION_MISMATCH = 805,
 	ZEND_MIR_VERIFY_W06_CALL_TRANSFER_MISMATCH = 806,
+	ZEND_MIR_VERIFY_W06_VALUE_PLAN_MISMATCH = 807,
+	ZEND_MIR_VERIFY_W06_BOUNDARY_PLAN_MISMATCH = 808,
 	ZEND_MIR_VERIFY_W06_CODE_INVALID = -1
 } zend_mir_verify_w06_code;
 
@@ -322,6 +393,8 @@ typedef enum _zend_mir_verify_w06_code {
 #define ZEND_MIRV_TOKEN_W06_ALIAS_MISMATCH "[MIRV0804]"
 #define ZEND_MIRV_TOKEN_W06_SEPARATION_MISMATCH "[MIRV0805]"
 #define ZEND_MIRV_TOKEN_W06_CALL_TRANSFER_MISMATCH "[MIRV0806]"
+#define ZEND_MIRV_TOKEN_W06_VALUE_PLAN_MISMATCH "[MIRV0807]"
+#define ZEND_MIRV_TOKEN_W06_BOUNDARY_PLAN_MISMATCH "[MIRV0808]"
 
 bool zend_mir_verify_w06_values(const zend_mir_view *view,
 	const zend_mir_value_view *values, zend_mir_diagnostic_sink *diagnostics);

@@ -18,21 +18,9 @@
 static uint32_t zend_mir_verify_semantics_value_index(
 		const zend_mir_verify_context *context, zend_mir_value_id id)
 {
-	uint32_t left = 0;
-	uint32_t right = context->value_count;
-
-	while (left < right) {
-		uint32_t middle = left + (right - left) / 2;
-		zend_mir_value_id current = context->values[middle].record.id;
-		if (current < id) {
-			left = middle + 1;
-		} else if (current > id) {
-			right = middle;
-		} else {
-			return middle;
-		}
-	}
-	return UINT32_MAX;
+	int32_t index = zend_mir_id_index_find(
+		context->value_index, context->value_index_capacity, id);
+	return index < 0 ? UINT32_MAX : (uint32_t) index;
 }
 
 static uint32_t zend_mir_verify_action_count(zend_mir_ownership_action_mask actions)

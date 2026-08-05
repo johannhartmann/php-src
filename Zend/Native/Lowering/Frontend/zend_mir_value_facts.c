@@ -32,7 +32,7 @@ static bool zend_mir_frontend_has_reference_or_pointer_fact(
 		|| (info->type & pointer_types) != 0;
 }
 
-bool zend_mir_frontend_fact_for_ssa(
+bool zend_mir_frontend_fact_payload_for_ssa(
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,
 	uint32_t ssa_variable_id,
@@ -40,8 +40,6 @@ bool zend_mir_frontend_fact_for_ssa(
 {
 	const zend_ssa_var_info *info;
 	zend_mir_scalar_type_mask exact_type;
-	uint32_t i;
-	uint32_t fact_id = 0;
 
 	if (op_array == NULL || ssa == NULL || out == NULL || ssa->var_info == NULL
 			|| ssa_variable_id >= (uint32_t) ssa->vars_count) {
@@ -57,17 +55,7 @@ bool zend_mir_frontend_fact_for_ssa(
 		return false;
 	}
 
-	for (i = 0; i < ssa_variable_id; i++) {
-		if (!zend_mir_frontend_has_reference_or_pointer_fact(
-				&ssa->vars[i], &ssa->var_info[i])
-				&& zend_mir_scalar_type_is_exact(
-					zend_mir_frontend_exact_scalar_type(
-						ssa->var_info[i].type))) {
-			fact_id++;
-		}
-	}
-
-	out->id = fact_id;
+	out->id = ZEND_MIR_ID_INVALID;
 	out->value_id = zend_mir_value_from_original_ssa(ssa_variable_id);
 	out->exact_type = exact_type;
 	out->flags = ZEND_MIR_VALUE_FACT_NON_REFCOUNTED;
@@ -92,6 +80,22 @@ bool zend_mir_frontend_fact_for_ssa(
 			out->flags |= ZEND_MIR_VALUE_FACT_NONZERO;
 		}
 	}
+	return true;
+}
+
+bool zend_mir_frontend_fact_for_ssa_with_id(
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	uint32_t ssa_variable_id,
+	zend_mir_value_fact_id fact_id,
+	zend_mir_value_fact_ref *out)
+{
+	if (!zend_mir_id_is_valid(fact_id)
+			|| !zend_mir_frontend_fact_payload_for_ssa(
+				op_array, ssa, ssa_variable_id, out)) {
+		return false;
+	}
+	out->id = fact_id;
 	return true;
 }
 
@@ -129,7 +133,8 @@ zend_mir_lowering_status zend_mir_frontend_validate_facts(
 				ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE, i);
 			return ZEND_MIR_LOWERING_REJECTED;
 		}
-		if (zend_mir_frontend_fact_for_ssa(op_array, ssa, i, &fact)) {
+		if (zend_mir_frontend_fact_payload_for_ssa(
+				op_array, ssa, i, &fact)) {
 			if (*fact_count == ZEND_MIR_ID_MAX) {
 				goto invalid;
 			}
@@ -146,6 +151,60 @@ invalid:
 	return ZEND_MIR_LOWERING_REJECTED;
 }
 
+bool zend_mir_frontend_build_value_fact_index(
+	zend_mir_zend_source *source)
+{
+	const zend_op_array *op_array;
+	const zend_ssa *ssa;
+	zend_mir_value_fact_ref fact;
+	uint32_t *ssa_ids;
+	uint32_t ssa_variable_id;
+	uint32_t fact_id = 0;
+
+	if (!zend_mir_source_is_initialized(source)
+			|| source->value_fact_index != NULL
+			|| source->base_value_fact_count > source->value_fact_count) {
+		return false;
+	}
+	if (source->base_value_fact_count == 0) {
+		return true;
+	}
+	if ((size_t) source->base_value_fact_count
+			> SIZE_MAX / sizeof(*ssa_ids)) {
+		return false;
+	}
+	ssa_ids = malloc(
+		(size_t) source->base_value_fact_count * sizeof(*ssa_ids));
+	if (ssa_ids == NULL) {
+		return false;
+	}
+	op_array = zend_mir_source_op_array(source);
+	ssa = zend_mir_source_ssa(source);
+	for (ssa_variable_id = 0; ssa_variable_id < source->ssa_count;
+			ssa_variable_id++) {
+		if (!zend_mir_frontend_fact_payload_for_ssa(
+				op_array, ssa, ssa_variable_id, &fact)) {
+			continue;
+		}
+		if (fact_id >= source->base_value_fact_count) {
+			free(ssa_ids);
+			return false;
+		}
+		ssa_ids[fact_id++] = ssa_variable_id;
+	}
+	if (fact_id != source->base_value_fact_count) {
+		free(ssa_ids);
+		return false;
+	}
+	source->value_fact_index = ssa_ids;
+	return true;
+}
+
+void zend_mir_frontend_release_value_fact_index(void *index)
+{
+	free(index);
+}
+
 bool zend_mir_frontend_value_fact_at(
 	const zend_mir_zend_source *source,
 	uint32_t index,
@@ -153,21 +212,17 @@ bool zend_mir_frontend_value_fact_at(
 {
 	const zend_op_array *op_array;
 	const zend_ssa *ssa;
-	uint32_t i;
-	uint32_t current = 0;
+	const uint32_t *ssa_ids;
 
 	if (!zend_mir_source_is_initialized(source) || out == NULL
-			|| index >= source->value_fact_count) {
+			|| index >= source->base_value_fact_count
+			|| source->value_fact_index == NULL) {
 		return false;
 	}
 	op_array = zend_mir_source_op_array(source);
 	ssa = zend_mir_source_ssa(source);
-	for (i = 0; i < source->ssa_count; i++) {
-		if (zend_mir_frontend_fact_for_ssa(op_array, ssa, i, out)) {
-			if (current++ == index) {
-				return true;
-			}
-		}
-	}
-	return false;
+	ssa_ids = source->value_fact_index;
+	return ssa_ids[index] < source->ssa_count
+		&& zend_mir_frontend_fact_for_ssa_with_id(
+			op_array, ssa, ssa_ids[index], index, out);
 }

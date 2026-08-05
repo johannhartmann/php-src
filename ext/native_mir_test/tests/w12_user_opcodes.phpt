@@ -633,7 +633,7 @@ $callCases = [
         'w12_user_opcode_user_call',
         [5],
         9,
-        ['ZEND_INIT_FCALL', 'ZEND_SEND_VAR', 'ZEND_DO_FCALL'],
+        ['ZEND_INIT_FCALL', 'ZEND_SEND_VAR', 'ZEND_DO_UCALL'],
     ],
     [
         'internal',
@@ -786,8 +786,8 @@ call_user_ZEND_INIT_FCALL_dispatch status=accepted result=9 calls=1 vm=0 execute
 call_user_ZEND_INIT_FCALL_dispatch_to status=accepted result=9 calls=1 vm=0 execute_ex=0 handler=0
 call_user_ZEND_SEND_VAR_dispatch status=accepted result=9 calls=1 vm=0 execute_ex=0 handler=0
 call_user_ZEND_SEND_VAR_dispatch_to status=accepted result=9 calls=1 vm=0 execute_ex=0 handler=0
-call_user_ZEND_DO_FCALL_dispatch status=accepted result=9 calls=1 vm=0 execute_ex=0 handler=0
-call_user_ZEND_DO_FCALL_dispatch_to status=accepted result=9 calls=1 vm=0 execute_ex=0 handler=0
+call_user_ZEND_DO_UCALL_dispatch status=accepted result=9 calls=1 vm=0 execute_ex=0 handler=0
+call_user_ZEND_DO_UCALL_dispatch_to status=accepted result=9 calls=1 vm=0 execute_ex=0 handler=0
 call_internal_ZEND_INIT_FCALL_dispatch status=accepted result=0 calls=1 vm=0 execute_ex=0 handler=0
 call_internal_ZEND_INIT_FCALL_dispatch_to status=accepted result=0 calls=1 vm=0 execute_ex=0 handler=0
 call_internal_ZEND_SEND_VAR_dispatch status=accepted result=0 calls=1 vm=0 execute_ex=0 handler=0

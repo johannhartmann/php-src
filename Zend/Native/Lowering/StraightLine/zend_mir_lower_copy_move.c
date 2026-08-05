@@ -350,11 +350,19 @@ zend_mir_lowering_status zend_mir_lower_copy_move(
 		}
 		return ZEND_MIR_LOWERING_FAILED;
 	}
+	if (!zend_mir_straight_line_track_value(
+			provider_context->lifetime, &result)) {
+		zend_mir_straight_line_restore_entry_state(
+			provider_context->lifetime, prior_entry_emitted,
+			prior_entry_frame_id);
+		if (diagnostic_out != NULL) {
+			*diagnostic_out = ZEND_MIRL_MUTATION_FAILED;
+		}
+		return ZEND_MIR_LOWERING_FAILED;
+	}
 	if (action == ZEND_MIR_OWNERSHIP_ACTION_MOVE) {
 		source->ownership = transition.source_after;
 	}
-	provider_context->lifetime->values[
-		provider_context->lifetime->count++] = result;
 	zend_mir_straight_line_move_slots(
 		provider_context->entry, source_id, &source_opcode->result,
 		&result, action == ZEND_MIR_OWNERSHIP_ACTION_MOVE);

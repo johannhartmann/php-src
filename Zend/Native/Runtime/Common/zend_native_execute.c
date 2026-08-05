@@ -68,6 +68,13 @@ static void zend_native_execution_cleanup_frame_ex(
 {
 	uint32_t call_info = ZEND_CALL_INFO(execute_data);
 
+	/* zend_leave_helper() publishes the caller before destroying compiled
+	 * variables. A variable destructor may reenter PHP and inspect the active
+	 * backtrace, so the dying frame must no longer be visible at that point. */
+	if (EG(current_execute_data) == execute_data) {
+		EG(current_execute_data) = execute_data->prev_execute_data;
+	}
+
 	/*
 	 * The VM's leave helper destroys every compiled variable before releasing
 	 * a user frame.  Native entries return to C instead, so this boundary owns
@@ -79,10 +86,20 @@ static void zend_native_execution_cleanup_frame_ex(
 	 */
 	if (cleanup_unfinished && execute_data->opline != NULL) {
 		const zend_op_array *op_array = &execute_data->func->op_array;
-		if (execute_data->opline >= op_array->opcodes
-				&& execute_data->opline < op_array->opcodes + op_array->last) {
-			zend_cleanup_unfinished_execution(execute_data,
-				(uint32_t) (execute_data->opline - op_array->opcodes), 0);
+		const zend_op *cleanup_opline = execute_data->opline;
+
+		/* Throwing replaces EX(opline) with the global HANDLE_EXCEPTION
+		 * sentinel. Native frames return directly to this boundary instead of
+		 * dispatching that handler, so recover the source opline before applying
+		 * Zend's live-range cleanup. */
+		if (cleanup_opline->opcode == ZEND_HANDLE_EXCEPTION
+				&& EG(opline_before_exception) != NULL) {
+			cleanup_opline = EG(opline_before_exception);
+		}
+		if (cleanup_opline >= op_array->opcodes
+				&& cleanup_opline < op_array->opcodes + op_array->last) {
+			zend_native_cleanup_unfinished_exception(execute_data,
+				(uint32_t) (cleanup_opline - op_array->opcodes), 0);
 		}
 	}
 	zend_vm_stack_free_extra_args(execute_data);
@@ -131,10 +148,26 @@ static void zend_native_execution_diagnostic(
 	snprintf(diagnostic->message, sizeof(diagnostic->message), "%s", message);
 }
 
+static void zend_native_execution_initialize_return_value(
+	zend_execute_data *execute_data, zend_native_status status)
+{
+	/*
+	 * A user opcode handler may leave a non-generator frame without running a
+	 * RETURN opcode.  The public native execution contract still promises an
+	 * initialized result whenever the frame reports ZEND_NATIVE_RETURNED.
+	 */
+	if (status == ZEND_NATIVE_RETURNED
+			&& execute_data->return_value != NULL
+			&& Z_ISUNDEF_P(execute_data->return_value)) {
+		ZVAL_NULL(execute_data->return_value);
+	}
+}
+
 zend_native_status zend_native_execution_finish_direct_frame(
 	zend_execute_data *execute_data, zend_native_status status)
 {
-	bool frame_returned = status == ZEND_NATIVE_RETURNED;
+	bool frame_returned = status == ZEND_NATIVE_RETURNED
+		&& EG(exception) == NULL;
 
 	if (status == ZEND_NATIVE_GENERATOR_CREATED
 			|| status == ZEND_NATIVE_SUSPENDED
@@ -144,6 +177,14 @@ zend_native_status zend_native_execution_finish_direct_frame(
 	if (status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
 		status = ZEND_NATIVE_EXCEPTION;
 	}
+	if (status == ZEND_NATIVE_BAILOUT) {
+		zend_native_call_direct_abandon(execute_data);
+		return status;
+	}
+	if (status == ZEND_NATIVE_EXCEPTION) {
+		zend_native_call_direct_unwind(execute_data);
+	}
+	zend_native_execution_initialize_return_value(execute_data, status);
 	if (status == ZEND_NATIVE_RETURNED
 			&& (execute_data->func->common.fn_flags
 				& ZEND_ACC_HAS_RETURN_TYPE) != 0) {
@@ -278,19 +319,28 @@ static zend_native_status zend_native_execute_frame_impl(
 			state->observer_finished = true;
 		}
 		if (status == ZEND_NATIVE_BAILOUT) {
-			zend_native_call_direct_unwind(execute_data);
+			zend_native_call_direct_abandon(execute_data);
 		}
 		zend_native_execution_state_free(state);
 		return status;
 	}
-	frame_returned = state->status == ZEND_NATIVE_RETURNED;
+	/* A machine entry may return through its ordinary epilogue after a helper
+	 * has raised. Such a frame did not complete its opcode stream and still
+	 * owns live temporaries and pending calls at its published opline. Errors
+	 * raised later by return verification remain completed-return frames. */
+	frame_returned = state->status == ZEND_NATIVE_RETURNED
+		&& EG(exception) == NULL;
 
-	if (state->status == ZEND_NATIVE_BAILOUT) {
-		zend_native_call_direct_unwind(execute_data);
-	}
 	if (state->status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
 		state->status = ZEND_NATIVE_EXCEPTION;
 	}
+	if (state->status == ZEND_NATIVE_EXCEPTION) {
+		zend_native_call_direct_unwind(execute_data);
+	} else if (state->status == ZEND_NATIVE_BAILOUT) {
+		zend_native_call_direct_abandon(execute_data);
+	}
+	zend_native_execution_initialize_return_value(
+		execute_data, state->status);
 	if (state->status == ZEND_NATIVE_RETURNED
 			&& (execute_data->func->common.fn_flags
 				& ZEND_ACC_HAS_RETURN_TYPE) != 0) {
@@ -330,6 +380,10 @@ static zend_native_status zend_native_execute_frame_impl(
 				? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
 		} zend_end_try();
 	}
+	if (state->status == ZEND_NATIVE_BAILOUT) {
+		/* An observer may itself have bailed out after creating native calls. */
+		zend_native_call_direct_abandon(execute_data);
+	}
 	if (state->status != ZEND_NATIVE_BAILOUT
 			&& UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
 		zend_try {
@@ -343,14 +397,17 @@ static zend_native_status zend_native_execute_frame_impl(
 		} zend_end_try();
 	}
 
-	zend_native_execution_cleanup_frame_ex(execute_data, !frame_returned);
+	if (state->status != ZEND_NATIVE_BAILOUT) {
+		zend_native_execution_cleanup_frame_ex(execute_data, !frame_returned);
+	}
 	/* A frame entered through zend_execute_ex is normally finalized by
 	 * zend_leave_helper(), which also releases the retained closure or
 	 * receiver.  The request-local native reentry hook replaces that helper;
 	 * its caller still owns the stack frame itself, but not this call-target
 	 * reference.  Direct native-to-native calls release their target at their
 	 * call site and therefore must not pass through this branch. */
-	if (observer_already_started) {
+	if (observer_already_started
+			&& state->status != ZEND_NATIVE_BAILOUT) {
 		uint32_t call_info = ZEND_CALL_INFO(execute_data);
 
 		if ((call_info & ZEND_CALL_RELEASE_THIS) != 0) {
@@ -361,7 +418,8 @@ static zend_native_status zend_native_execute_frame_impl(
 	}
 
 	if (state->original_return_value == NULL) {
-		if (!Z_ISUNDEF(state->discarded_return)) {
+		if (state->status != ZEND_NATIVE_BAILOUT
+				&& !Z_ISUNDEF(state->discarded_return)) {
 			zval_ptr_dtor(&state->discarded_return);
 		}
 		execute_data->return_value = NULL;

@@ -44,6 +44,17 @@
       "path": "tests/native/control-flow/integration/goldens/for_loop_counter.znmir",
       "sha256": "6a5736c2ec1cf4f96da84ea37dcf814b7641ad70716adc01b1e02724c755d91b"
     },
+    "goto_irreducible": {
+      "cfg": {
+        "backedges": 2,
+        "blocks": 7,
+        "edges": 8,
+        "phis": 4,
+        "statepoints": 3
+      },
+      "path": "tests/native/control-flow/integration/goldens/goto_irreducible.znmir",
+      "sha256": "b15fe6fa3eba8084dcb6bd2c044cf516318e0201388769a254d458bb1399c235"
+    },
     "if_else_int": {
       "cfg": {
         "backedges": 0,
@@ -64,7 +75,7 @@
         "statepoints": 2
       },
       "path": "tests/native/control-flow/integration/goldens/loop_carried_phi.znmir",
-      "sha256": "3e40822d669f03b1da9242cf6d94dbb169f2fa97663ef622e21120db4b39700a"
+      "sha256": "49f1f07dfc99fe528f99548e5c656735207d9064fb2521470b4a265316c324d9"
     },
     "multiple_backedges_reducible": {
       "cfg": {
@@ -120,6 +131,17 @@
       },
       "path": "tests/native/control-flow/integration/goldens/ternary_scalar.znmir",
       "sha256": "055dfeb9bb303acf68ae9aa0051d26a479a7dd7575e69b02cee8a2f1761fd423"
+    },
+    "unsupported_pi_constraint": {
+      "cfg": {
+        "backedges": 0,
+        "blocks": 4,
+        "edges": 4,
+        "phis": 0,
+        "statepoints": 1
+      },
+      "path": "tests/native/control-flow/integration/goldens/unsupported_pi_constraint.znmir",
+      "sha256": "6bf7837b81cec681916989bf195f31a11d6d38925318af44d7e50dcaf6e51de7"
     },
     "while_loop_counter": {
       "cfg": {

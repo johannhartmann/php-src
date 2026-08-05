@@ -1,5 +1,11 @@
 #include "zend_mir_zend_source_internal.h"
 
+typedef struct _zend_mir_frontend_operand_lookup {
+	uint32_t use_count;
+	uint32_t def_count;
+	zend_mir_source_ssa_use_ref *uses;
+	zend_mir_source_ssa_def_ref *defs;
+} zend_mir_frontend_operand_lookup;
 
 bool zend_mir_frontend_normalize_operand_type(
 	uint8_t operand_type,
@@ -149,7 +155,8 @@ static bool zend_mir_frontend_validate_operand(
 	uint32_t opline_index,
 	uint32_t operand_index,
 	uint32_t *use_count,
-	uint32_t *def_count)
+	uint32_t *def_count,
+	uint32_t *definition_occurrences)
 {
 	const zend_op *opline = &op_array->opcodes[opline_index];
 	const zend_ssa_op *ssa_op = &ssa->ops[opline_index];
@@ -177,10 +184,12 @@ static bool zend_mir_frontend_validate_operand(
 	}
 	if (def >= 0) {
 		if (*def_count == ZEND_MIR_ID_MAX
-				|| ssa->vars[def].definition != (int) opline_index) {
+				|| ssa->vars[def].definition != (int) opline_index
+				|| definition_occurrences[def] == UINT32_MAX) {
 			return false;
 		}
 		(*def_count)++;
+		definition_occurrences[def]++;
 	}
 
 	switch (operand_type) {
@@ -207,35 +216,6 @@ static bool zend_mir_frontend_validate_operand(
 	}
 }
 
-static bool zend_mir_frontend_definition_is_complete(
-	const zend_op_array *op_array,
-	const zend_ssa *ssa,
-	uint32_t ssa_variable_id)
-{
-	uint32_t i;
-	uint32_t operand_index;
-	uint32_t occurrences = 0;
-	const znode_op *node;
-	uint8_t operand_type;
-	int use;
-	int def;
-
-	for (i = 0; i < op_array->last; i++) {
-		for (operand_index = 0; operand_index < 3; operand_index++) {
-			if (!zend_mir_frontend_operand_parts(
-					&op_array->opcodes[i], &ssa->ops[i], operand_index,
-					&node, &operand_type, &use, &def)) {
-				return false;
-			}
-			if (def >= 0 && (uint32_t) def == ssa_variable_id) {
-				occurrences++;
-			}
-		}
-	}
-	return ssa->vars[ssa_variable_id].definition < 0
-		? occurrences == 0 : occurrences == 1;
-}
-
 static zend_mir_lowering_status zend_mir_frontend_validate_operands_impl(
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,
@@ -247,6 +227,7 @@ static zend_mir_lowering_status zend_mir_frontend_validate_operands_impl(
 {
 	uint32_t i;
 	uint32_t operand_index;
+	uint32_t *definition_occurrences = NULL;
 
 	if (op_array == NULL || ssa == NULL || use_count == NULL || def_count == NULL
 			|| op_array->last > ZEND_MIR_ID_MAX
@@ -259,6 +240,13 @@ static zend_mir_lowering_status zend_mir_frontend_validate_operands_impl(
 	}
 	*use_count = 0;
 	*def_count = 0;
+	if (ssa->vars_count != 0) {
+		definition_occurrences = calloc(
+			(uint32_t) ssa->vars_count, sizeof(*definition_occurrences));
+		if (definition_occurrences == NULL) {
+			goto invalid;
+		}
+	}
 	for (i = 0; i < (uint32_t) ssa->vars_count; i++) {
 		if (ssa->vars[i].definition < -1
 				|| (ssa->vars[i].definition >= 0
@@ -272,6 +260,7 @@ static zend_mir_lowering_status zend_mir_frontend_validate_operands_impl(
 				diagnostic, ZEND_MIR_LOWERING_REJECTED,
 				ZEND_MIRL_INVALID_SOURCE, op_array_id, ZEND_MIR_ID_INVALID,
 				ZEND_MIR_FRONTEND_OPERAND_NONE, i);
+			free(definition_occurrences);
 			return ZEND_MIR_LOWERING_REJECTED;
 		}
 	}
@@ -281,33 +270,40 @@ static zend_mir_lowering_status zend_mir_frontend_validate_operands_impl(
 		}
 		for (operand_index = 0; operand_index < 3; operand_index++) {
 			if (!zend_mir_frontend_validate_operand(
-					op_array, ssa, i, operand_index, use_count, def_count)) {
+					op_array, ssa, i, operand_index, use_count, def_count,
+					definition_occurrences)) {
 				goto invalid_operand;
 			}
 		}
 	}
 	for (i = 0; i < (uint32_t) ssa->vars_count; i++) {
-		if (!zend_mir_frontend_definition_is_complete(op_array, ssa, i)) {
+		if (definition_occurrences[i]
+				!= (ssa->vars[i].definition < 0 ? 0U : 1U)) {
 			zend_mir_frontend_set_diagnostic(
 				diagnostic, ZEND_MIR_LOWERING_REJECTED,
 				ZEND_MIRL_INVALID_SOURCE, op_array_id, ZEND_MIR_ID_INVALID,
 				ZEND_MIR_FRONTEND_OPERAND_NONE, i);
+			free(definition_occurrences);
 			return ZEND_MIR_LOWERING_REJECTED;
 		}
 	}
+	free(definition_occurrences);
 	return ZEND_MIR_LOWERING_SUCCESS;
 
 invalid_operand:
+	free(definition_occurrences);
 	zend_mir_frontend_set_diagnostic(
 		diagnostic, ZEND_MIR_LOWERING_REJECTED, ZEND_MIRL_INVALID_SOURCE,
 		op_array_id, i, operand_index, ZEND_MIR_ID_INVALID);
 	return ZEND_MIR_LOWERING_REJECTED;
 invalid_opline:
+	free(definition_occurrences);
 	zend_mir_frontend_set_diagnostic(
 		diagnostic, ZEND_MIR_LOWERING_REJECTED, ZEND_MIRL_INVALID_SOURCE,
 		op_array_id, i, ZEND_MIR_FRONTEND_OPERAND_NONE, ZEND_MIR_ID_INVALID);
 	return ZEND_MIR_LOWERING_REJECTED;
 invalid:
+	free(definition_occurrences);
 	zend_mir_frontend_set_diagnostic(
 		diagnostic, ZEND_MIR_LOWERING_REJECTED, ZEND_MIRL_INVALID_SOURCE,
 		op_array_id, ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE,
@@ -941,7 +937,7 @@ static bool zend_mir_frontend_operand_has_exact_scalar(
 			return zend_mir_frontend_canonical_literal_for_index(
 				op_array, operand.index, &literal);
 		case ZEND_MIR_SOURCE_OPERAND_SSA:
-			if (!zend_mir_frontend_fact_for_ssa(
+			if (!zend_mir_frontend_fact_payload_for_ssa(
 					op_array, ssa, operand.ssa_variable_id, &fact)) {
 				*missing_ssa_id = operand.ssa_variable_id;
 				return false;
@@ -1200,44 +1196,116 @@ bool zend_mir_frontend_ssa_at(
 	out->ssa_variable_id = index;
 	out->definition_opline_index = ssa->vars[index].definition < 0
 		? ZEND_MIR_ID_INVALID : (uint32_t) ssa->vars[index].definition;
+	if (source->slot_index != NULL) {
+		return zend_mir_frontend_indexed_ssa_slot(
+			source->slot_index, index,
+			&out->source_slot, &out->source_slot_kind);
+	}
 	return zend_mir_frontend_ssa_slot(
 		op_array, ssa, index, &out->source_slot, &out->source_slot_kind);
 }
 
-static bool zend_mir_frontend_nth_use_or_def(
-	const zend_mir_zend_source *source,
-	uint32_t requested,
-	bool want_def,
-	uint32_t *opline_index,
-	uint32_t *operand_index,
-	int *ssa_id)
+bool zend_mir_frontend_build_operand_index(zend_mir_zend_source *source)
 {
+	zend_mir_frontend_operand_lookup *index;
 	const zend_op_array *op_array = zend_mir_source_op_array(source);
 	const zend_ssa *ssa = zend_mir_source_ssa(source);
 	uint32_t i;
 	uint32_t operand;
-	uint32_t current = 0;
+	uint32_t use_index = 0;
+	uint32_t def_index = 0;
 	const znode_op *node;
 	uint8_t operand_type;
 	int use;
 	int def;
 
+	if (!zend_mir_source_is_initialized(source) || source->operand_index != NULL) {
+		return false;
+	}
+	index = calloc(1, sizeof(*index));
+	if (index == NULL) {
+		return false;
+	}
+	index->use_count = source->ssa_use_count;
+	index->def_count = source->ssa_def_count;
+	/* W11 direct sources deliberately publish no operand references even though
+	 * their backing SSA still contains uses and definitions. Keep an empty
+	 * lookup for that contract instead of trying to reconcile hidden operands
+	 * with zero public counts. */
+	if (index->use_count == 0 && index->def_count == 0) {
+		source->operand_index = index;
+		return true;
+	}
+#if SIZE_MAX <= UINT32_MAX
+	if ((size_t) index->use_count > SIZE_MAX / sizeof(*index->uses)
+			|| (size_t) index->def_count > SIZE_MAX / sizeof(*index->defs)) {
+		zend_mir_frontend_release_operand_index(index);
+		return false;
+	}
+#endif
+	if (index->use_count != 0) {
+		index->uses = malloc(index->use_count * sizeof(*index->uses));
+	}
+	if (index->def_count != 0) {
+		index->defs = malloc(index->def_count * sizeof(*index->defs));
+	}
+	if ((index->use_count != 0 && index->uses == NULL)
+			|| (index->def_count != 0 && index->defs == NULL)) {
+		zend_mir_frontend_release_operand_index(index);
+		return false;
+	}
 	for (i = 0; i < op_array->last; i++) {
 		for (operand = 0; operand < 3; operand++) {
 			if (!zend_mir_frontend_operand_parts(
 					&op_array->opcodes[i], &ssa->ops[i], operand,
 					&node, &operand_type, &use, &def)) {
-				return false;
+				goto failed;
 			}
-			*ssa_id = want_def ? def : use;
-			if (*ssa_id >= 0 && current++ == requested) {
-				*opline_index = i;
-				*operand_index = operand;
-				return true;
+			if (use >= 0) {
+				if (use_index >= index->use_count) {
+					goto failed;
+				}
+				index->uses[use_index].ssa_variable_id = (uint32_t) use;
+				index->uses[use_index].opline_index = i;
+				index->uses[use_index].operand_index = operand;
+				use_index++;
+			}
+			if (def >= 0) {
+				if (def_index >= index->def_count) {
+					goto failed;
+				}
+				index->defs[def_index].ssa_variable_id = (uint32_t) def;
+				index->defs[def_index].opline_index = i;
+				if (!zend_mir_frontend_operand_ref(
+						op_array, ssa, i, operand, def,
+						&index->defs[def_index].destination)) {
+					goto failed;
+				}
+				def_index++;
 			}
 		}
 	}
+	if (use_index != index->use_count || def_index != index->def_count) {
+		goto failed;
+	}
+	source->operand_index = index;
+	return true;
+
+failed:
+	zend_mir_frontend_release_operand_index(index);
 	return false;
+}
+
+void zend_mir_frontend_release_operand_index(void *opaque_index)
+{
+	zend_mir_frontend_operand_lookup *index = opaque_index;
+
+	if (index == NULL) {
+		return;
+	}
+	free(index->defs);
+	free(index->uses);
+	free(index);
 }
 
 bool zend_mir_frontend_ssa_use_at(
@@ -1245,19 +1313,17 @@ bool zend_mir_frontend_ssa_use_at(
 	uint32_t index,
 	zend_mir_source_ssa_use_ref *out)
 {
-	uint32_t opline_index;
-	uint32_t operand_index;
-	int ssa_id;
+	const zend_mir_frontend_operand_lookup *operand_index;
 
 	if (!zend_mir_source_is_initialized(source) || out == NULL
-			|| index >= source->ssa_use_count
-			|| !zend_mir_frontend_nth_use_or_def(
-				source, index, false, &opline_index, &operand_index, &ssa_id)) {
+			|| index >= source->ssa_use_count) {
 		return false;
 	}
-	out->ssa_variable_id = (uint32_t) ssa_id;
-	out->opline_index = opline_index;
-	out->operand_index = operand_index;
+	operand_index = source->operand_index;
+	if (operand_index == NULL || index >= operand_index->use_count) {
+		return false;
+	}
+	*out = operand_index->uses[index];
 	return true;
 }
 
@@ -1266,22 +1332,16 @@ bool zend_mir_frontend_ssa_def_at(
 	uint32_t index,
 	zend_mir_source_ssa_def_ref *out)
 {
-	const zend_op_array *op_array;
-	const zend_ssa *ssa;
-	uint32_t opline_index;
-	uint32_t operand_index;
-	int ssa_id;
+	const zend_mir_frontend_operand_lookup *operand_index;
 
 	if (!zend_mir_source_is_initialized(source) || out == NULL
-			|| index >= source->ssa_def_count
-			|| !zend_mir_frontend_nth_use_or_def(
-				source, index, true, &opline_index, &operand_index, &ssa_id)) {
+			|| index >= source->ssa_def_count) {
 		return false;
 	}
-	op_array = zend_mir_source_op_array(source);
-	ssa = zend_mir_source_ssa(source);
-	out->ssa_variable_id = (uint32_t) ssa_id;
-	out->opline_index = opline_index;
-	return zend_mir_frontend_operand_ref(
-		op_array, ssa, opline_index, operand_index, ssa_id, &out->destination);
+	operand_index = source->operand_index;
+	if (operand_index == NULL || index >= operand_index->def_count) {
+		return false;
+	}
+	*out = operand_index->defs[index];
+	return true;
 }

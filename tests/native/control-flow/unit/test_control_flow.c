@@ -97,6 +97,55 @@ static zend_mir_lowering_source_view test_view(test_source *source)
 	return view;
 }
 
+static bool test_cycle_block_at(
+	const void *context, uint32_t index, bool *irreducible)
+{
+	const test_source *source = context;
+
+	if (irreducible == NULL || index >= source->block_count
+			|| source->blocks[index].id != index) {
+		return false;
+	}
+	*irreducible = (source->blocks[index].flags
+		& ZEND_MIR_SOURCE_BLOCK_IRREDUCIBLE) != 0;
+	return true;
+}
+
+static bool test_cycle_edge_at(
+	const void *context, uint32_t index,
+	uint32_t *from_block_id, uint32_t *to_block_id,
+	bool *requires_statepoint)
+{
+	const test_source *source = context;
+	const zend_mir_source_edge_ref *edge;
+
+	if (from_block_id == NULL || to_block_id == NULL
+			|| requires_statepoint == NULL || index >= source->edge_count) {
+		return false;
+	}
+	edge = &source->edges[index];
+	if (edge->id != index) {
+		return false;
+	}
+	*from_block_id = edge->from_block_id;
+	*to_block_id = edge->to_block_id;
+	*requires_statepoint = zend_mir_w04_edge_requires_statepoint(edge);
+	return true;
+}
+
+static zend_mir_control_flow_cycle_graph test_cycle_graph(test_source *source)
+{
+	zend_mir_control_flow_cycle_graph graph;
+
+	memset(&graph, 0, sizeof(graph));
+	graph.context = source;
+	graph.block_count = test_block_count;
+	graph.block_at = test_cycle_block_at;
+	graph.edge_count = test_edge_count;
+	graph.edge_at = test_cycle_edge_at;
+	return graph;
+}
+
 static test_source diamond_source(void)
 {
 	test_source source;
@@ -219,6 +268,75 @@ static test_source loop_source(void)
 			| ZEND_MIR_SOURCE_EDGE_BACKEDGE
 			| ZEND_MIR_SOURCE_EDGE_INTERRUPT_BOUNDARY
 	};
+	return source;
+}
+
+static test_source irreducible_source(void)
+{
+	test_source source;
+	uint32_t i;
+
+	memset(&source, 0, sizeof(source));
+	source.opcode_count = 3;
+	source.block_count = 4;
+	source.edge_count = 5;
+	source.ssa_count = 1;
+	for (i = 0; i < source.block_count; i++) {
+		source.blocks[i].id = i;
+		source.blocks[i].first_opcode_ordinal = i < 3 ? i : 3;
+		source.blocks[i].opcode_count = i < 3 ? 1 : 0;
+		source.blocks[i].flags = ZEND_MIR_SOURCE_BLOCK_REACHABLE;
+		source.blocks[i].immediate_dominator = i == 0
+			? ZEND_MIR_ID_INVALID : i == 3 ? 2 : 0;
+		source.blocks[i].loop_header = ZEND_MIR_ID_INVALID;
+		if (i < 3) {
+			source.opcodes[i].opline_index = i;
+			source.opcodes[i].block_id = i;
+			source.opcodes[i].source_position_id = i;
+		}
+	}
+	source.blocks[0].flags |= ZEND_MIR_SOURCE_BLOCK_ENTRY;
+	source.blocks[1].flags |= ZEND_MIR_SOURCE_BLOCK_IRREDUCIBLE;
+	source.ssa[0].ssa_variable_id = 0;
+	source.ssa[0].definition_opline_index = ZEND_MIR_ID_INVALID;
+	source.ssa[0].source_slot_kind = ZEND_MIR_SOURCE_SLOT_TMP;
+	source.opcodes[0].zend_opcode_number = ZEND_MIR_W04_OPCODE_JMPNZ;
+	source.opcodes[0].op1.kind = ZEND_MIR_SOURCE_OPERAND_SSA;
+	source.opcodes[0].op1.ssa_variable_id = 0;
+	source.opcodes[1].zend_opcode_number = ZEND_MIR_W04_OPCODE_JMP;
+	source.opcodes[2].zend_opcode_number = ZEND_MIR_W04_OPCODE_JMPNZ;
+	source.opcodes[2].op1.kind = ZEND_MIR_SOURCE_OPERAND_SSA;
+	source.opcodes[2].op1.ssa_variable_id = 0;
+	source.edges[0] = (zend_mir_source_edge_ref) {
+		0, 0, 1, 0, 0, ZEND_MIR_SOURCE_EDGE_EXPLICIT_JUMP
+	};
+	source.edges[1] = (zend_mir_source_edge_ref) {
+		1, 0, 2, 1, 0, ZEND_MIR_SOURCE_EDGE_FALLTHROUGH
+	};
+	source.edges[2] = (zend_mir_source_edge_ref) {
+		2, 1, 2, 0, 1, ZEND_MIR_SOURCE_EDGE_EXPLICIT_JUMP
+	};
+	source.edges[3] = (zend_mir_source_edge_ref) {
+		3, 2, 1, 0, 1, ZEND_MIR_SOURCE_EDGE_EXPLICIT_JUMP
+	};
+	source.edges[4] = (zend_mir_source_edge_ref) {
+		4, 2, 3, 1, 0, ZEND_MIR_SOURCE_EDGE_FALLTHROUGH
+	};
+	return source;
+}
+
+static test_source irreducible_empty_block_source(void)
+{
+	test_source source = irreducible_source();
+
+	source.opcode_count = 2;
+	source.blocks[1].first_opcode_ordinal = 1;
+	source.blocks[1].opcode_count = 0;
+	source.blocks[2].first_opcode_ordinal = 1;
+	source.blocks[3].first_opcode_ordinal = 2;
+	source.opcodes[1] = source.opcodes[2];
+	source.opcodes[1].opline_index = 1;
+	source.opcodes[1].source_position_id = 1;
 	return source;
 }
 
@@ -403,11 +521,25 @@ static void test_validation(void)
 	assert((validation.proofs & ZEND_MIR_W04_PROOF_NO_PROTECTED_REGION) == 0);
 	source.blocks[2].flags &= ~ZEND_MIR_SOURCE_BLOCK_PROTECTED;
 
-	source.blocks[2].flags |= ZEND_MIR_SOURCE_BLOCK_IRREDUCIBLE;
-	assert(!zend_mir_w04_validate_source(&view, &validation));
-	assert(validation.diagnostic == ZEND_MIRL_W04_IRREDUCIBLE_LOOP);
-	source.blocks[2].flags &= ~ZEND_MIR_SOURCE_BLOCK_IRREDUCIBLE;
+	source = diamond_source();
+	view = test_view(&source);
+	source.opcode_count = 5;
+	source.block_count = 5;
+	source.blocks[4].id = 4;
+	source.blocks[4].first_opcode_ordinal = 4;
+	source.blocks[4].opcode_count = 1;
+	source.blocks[4].flags = ZEND_MIR_SOURCE_BLOCK_PROTECTED;
+	source.blocks[4].immediate_dominator = ZEND_MIR_ID_INVALID;
+	source.blocks[4].loop_header = ZEND_MIR_ID_INVALID;
+	source.opcodes[4].opline_index = 4;
+	source.opcodes[4].block_id = 4;
+	source.opcodes[4].source_position_id = 4;
+	source.opcodes[4].zend_opcode_number = ZEND_MIR_W04_OPCODE_JMP;
+	assert(zend_mir_w04_validate_source_for_protected_control_flow(
+		&view, &validation));
 
+	source = diamond_source();
+	view = test_view(&source);
 	source.inputs[1].input_index = 0;
 	assert(!zend_mir_w04_validate_source(&view, &validation));
 	assert(validation.diagnostic == ZEND_MIRL_W04_UNSUPPORTED_PHI_PI);
@@ -473,6 +605,39 @@ static void test_loop_validation(void)
 	source.edges[5].flags &= ~ZEND_MIR_SOURCE_EDGE_INTERRUPT_BOUNDARY;
 	assert(!zend_mir_w04_validate_source(&view, &validation));
 	assert(validation.diagnostic == ZEND_MIRL_W04_MALFORMED_CFG);
+}
+
+static void test_irreducible_validation_and_cycles(void)
+{
+	test_source source = irreducible_source();
+	test_source reducible = loop_source();
+	zend_mir_lowering_source_view view = test_view(&source);
+	zend_mir_w04_validation validation;
+	zend_mir_control_flow_cycle_analysis analysis;
+	zend_mir_control_flow_cycle_graph graph = test_cycle_graph(&source);
+	uint32_t i;
+
+	graph = test_cycle_graph(&reducible);
+	assert(zend_mir_control_flow_cycle_analysis_init(&analysis, &graph));
+	assert(!analysis.has_irreducible_cycle);
+	for (i = 0; i < reducible.edge_count; i++) {
+		assert(zend_mir_control_flow_cycle_edge_requires_statepoint(
+			&analysis, reducible.edges[i].id) == (i == 2));
+	}
+	zend_mir_control_flow_cycle_analysis_destroy(&analysis);
+
+	assert(zend_mir_w04_validate_source(&view, &validation));
+	assert((validation.proofs & ZEND_MIR_W04_PROOF_REDUCIBLE_CFG) == 0);
+	graph = test_cycle_graph(&source);
+	assert(zend_mir_control_flow_cycle_analysis_init(&analysis, &graph));
+	assert(analysis.has_irreducible_cycle);
+	for (i = 0; i < source.edge_count; i++) {
+		bool requires_statepoint =
+			zend_mir_control_flow_cycle_edge_requires_statepoint(
+				&analysis, source.edges[i].id);
+		assert(requires_statepoint == (i == 2 || i == 3));
+	}
+	zend_mir_control_flow_cycle_analysis_destroy(&analysis);
 }
 
 static void test_map(void)
@@ -1361,6 +1526,93 @@ static zend_mir_lowering_result run_loop_builder(bool attach_zend_source)
 	return result;
 }
 
+static void run_irreducible_builder(test_source source)
+{
+	zend_mir_lowering_source_view source_view = test_view(&source);
+	zend_mir_lowering_source_shape shape;
+	zend_mir_lowering_registry registry;
+	zend_mir_lowering_module_ops ops;
+	zend_mir_lowering_context context;
+	zend_mir_control_flow_map map;
+	zend_mir_zend_source zend_source;
+	builder_host host;
+	zend_mir_lowering_result result;
+	uint32_t statepoints_by_position[8] = { 0 };
+	uint32_t statepoint_count = 0;
+	uint32_t i;
+
+	memset(&shape, 0, sizeof(shape));
+	shape.reachable_block_count = source.block_count;
+	shape.has_control_flow = true;
+	shape.ssa_complete = true;
+	memset(&registry, 0, sizeof(registry));
+	registry.complete = true;
+	builder_host_init(&host, &ops, BUILDER_FAULT_NONE);
+	for (i = 0; i < source.opcode_count; i++) {
+		zend_mir_source_position_ref position;
+		zend_mir_source_position_id position_id;
+		memset(&position, 0, sizeof(position));
+		position.id = ZEND_MIR_ID_INVALID;
+		position.file_symbol_id = 1;
+		position.line = i + 1;
+		position.column_start = 1;
+		position.column_end = 1;
+		assert(host.fixture.mutator.add_source_position(
+			host.fixture.mutator.context, &position, &position_id));
+		assert(position_id == source.opcodes[i].source_position_id);
+	}
+	assert(zend_mir_lowering_context_init(
+		&context, &source_view, &shape, &registry, &ops, NULL, 9, 7, NULL));
+	assert(zend_mir_lowering_context_set_value_fact_resolver(
+		&context, &source, builder_fact_at));
+	memset(&zend_source, 0, sizeof(zend_source));
+	zend_source.op_array_id = 1;
+	assert(zend_mir_lowering_context_set_zend_source(
+		&context, &zend_source));
+	result = zend_mir_lower_w04_zend_source(&context, NULL, &map);
+	if (result.status != ZEND_MIR_LOWERING_SUCCESS) {
+		fprintf(stderr,
+			"irreducible builder failed: status=%u diagnostic=%u "
+			"blocks=%u instructions=%u edges=%u\n",
+			(unsigned int) result.status,
+			(unsigned int) result.diagnostic_code,
+			host.fixture.block_count, host.fixture.instruction_count,
+			host.fixture.edge_count);
+	}
+	assert(result.status == ZEND_MIR_LOWERING_SUCCESS);
+	assert(result.diagnostic_code == ZEND_MIRL_OK);
+	assert(result.guarantees == ZEND_MIR_LOWERING_GUARANTEE_W04_ALL);
+	for (i = 0; i < host.fixture.instruction_count; i++) {
+		if (host.fixture.instructions[i].opcode
+				== ZEND_MIR_OPCODE_STATEPOINT) {
+			assert(host.fixture.instructions[i].source_position_id
+				< sizeof(statepoints_by_position)
+					/ sizeof(statepoints_by_position[0]));
+			statepoints_by_position[
+				host.fixture.instructions[i].source_position_id]++;
+			statepoint_count++;
+		}
+	}
+	assert(statepoint_count == 2);
+	if (source.blocks[1].opcode_count == 0) {
+		assert(statepoints_by_position[1] == 2);
+	} else {
+		assert(statepoints_by_position[1] == 1);
+		assert(statepoints_by_position[2] == 1);
+	}
+	assert(host.fixture.block_count == source.block_count + statepoint_count);
+	assert(host.fixture.frame_state_count == statepoint_count);
+	assert(host.fixture.source_map_count == statepoint_count);
+	builder_destroy(&host, result.module);
+	assert(host.destroy_count == 1);
+}
+
+static void test_irreducible_builder(void)
+{
+	run_irreducible_builder(irreducible_source());
+	run_irreducible_builder(irreducible_empty_block_source());
+}
+
 static void test_empty_fallthrough_builder(void)
 {
 	test_source source = empty_fallthrough_source();
@@ -1482,6 +1734,7 @@ static void test_builder_and_failure_atomicity(void)
 	result = run_loop_builder(false);
 	assert(result.status == ZEND_MIR_LOWERING_FAILED);
 
+	test_irreducible_builder();
 	test_empty_fallthrough_builder();
 }
 
@@ -1490,6 +1743,7 @@ int main(void)
 	test_branch_order();
 	test_validation();
 	test_loop_validation();
+	test_irreducible_validation_and_cycles();
 	test_map();
 	test_stage3();
 	test_stage3_loop_statepoint();

@@ -67,9 +67,4 @@ zend_mir_lowering_diagnostic_code zend_mir_w05_plan_and_emit_calls(
 	const zend_mir_source_call_target_resolver *resolver,
 	zend_mir_call_mutator *call_mutator);
 
-zend_mir_lowering_diagnostic_code zend_mir_w05_validate_call_plan(
-	zend_mir_lowering_context *context,
-	const zend_mir_source_call_view *source_calls,
-	const zend_mir_source_call_target_resolver *resolver);
-
 #endif /* ZEND_MIR_CALL_MODEL_H */

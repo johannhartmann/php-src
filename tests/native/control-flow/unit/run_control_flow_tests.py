@@ -105,6 +105,7 @@ def main() -> int:
                 "-I.",
                 "-IZend",
                 *FRONTEND,
+                "tests/native/control-flow/unit/zend_hash_stubs.c",
                 "tests/native/control-flow/unit/test_frontend_w04.c",
                 "-o",
                 str(frontend_binary),

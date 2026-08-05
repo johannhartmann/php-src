@@ -214,6 +214,12 @@ def check_dump(
         result = call["result"]
         if case["expected_mirl"] not in diagnostic_codes(result):
             differences.append("diagnostic_call_{}".format(call_number))
+        source_opcodes = set(result["source_opcodes"])
+        for opcode in case["required_source_opcodes"]:
+            if opcode not in source_opcodes:
+                differences.append(
+                    "source_opcode_{}_call_{}".format(opcode, call_number)
+                )
         if case["expected_status"] == "accepted":
             if result["mir"] is not None:
                 differences.extend(cfg_differences(case, result["mir"], call_number))
@@ -350,6 +356,33 @@ codes = {
     "nullsafe_jump": "MIRL0013",
 }
 
+source_opcodes = {
+    "if_else_int": ["ZEND_JMPZ", "ZEND_RETURN"],
+    "nested_if_bool": ["ZEND_JMPZ", "ZEND_RETURN"],
+    "ternary_scalar": ["ZEND_JMPZ", "ZEND_RETURN"],
+    "short_circuit_and": ["ZEND_JMPZ_EX", "ZEND_BOOL"],
+    "short_circuit_or": ["ZEND_JMPNZ_EX", "ZEND_BOOL"],
+    "early_return": ["ZEND_JMPZ", "ZEND_RETURN"],
+    "empty_fallthrough": ["ZEND_RETURN"],
+    "while_loop_counter": ["ZEND_JMPZ", "ZEND_JMP"],
+    "do_while_counter": ["ZEND_BOOL_NOT", "ZEND_JMPZ", "ZEND_JMP"],
+    "for_loop_counter": ["ZEND_BOOL_NOT", "ZEND_JMPZ", "ZEND_JMP"],
+    "loop_carried_phi": ["ZEND_JMPZ", "ZEND_JMPZ_EX", "ZEND_BOOL", "ZEND_JMP"],
+    "multiple_backedges_reducible": ["ZEND_JMP", "ZEND_JMPZ"],
+    "try_catch_finally": ["ZEND_THROW", "ZEND_FAST_CALL", "ZEND_CATCH"],
+    "call_inside_branch": ["ZEND_JMPZ", "ZEND_INIT_FCALL", "ZEND_DO_ICALL"],
+    "reference_loop_phi": ["ZEND_JMPZ", "ZEND_JMP"],
+    "array_condition": ["ZEND_JMPZ"],
+    "object_condition": ["ZEND_JMPZ"],
+    "string_condition_without_profile": ["ZEND_JMPZ"],
+    "switch_or_match_if_not_profiled": ["ZEND_MATCH", "ZEND_MATCH_ERROR"],
+    "goto_irreducible": ["ZEND_JMP", "ZEND_JMPZ"],
+    "unsupported_pi_constraint": ["ZEND_IS_SMALLER", "ZEND_JMPZ_EX"],
+    "missing_condition_type_proof": ["ZEND_JMPZ"],
+    "coalesce_reference_semantics": ["ZEND_COALESCE", "ZEND_ASSIGN"],
+    "nullsafe_jump": ["ZEND_JMP_NULL", "ZEND_FETCH_OBJ_R", "ZEND_JMPZ"],
+}
+
 if sys.argv[-1].endswith("invoke_dump.php"):
     request = json.loads(sys.stdin.buffer.read())
     assert request["options"]["wave"] == 4
@@ -371,6 +404,7 @@ if sys.argv[-1].endswith("invoke_dump.php"):
             "phase": "lowering",
             "schema_version": 1,
             "source": {"byte_length": len(source), "filename": filename, "source_id": fnv1a64(filename, source)},
+            "source_opcodes": source_opcodes[case_id],
             "status": "rejected",
             "wave": 4,
         }
@@ -381,6 +415,7 @@ if sys.argv[-1].endswith("invoke_dump.php"):
             "phase": "complete",
             "schema_version": 1,
             "source": {"byte_length": len(source), "filename": filename, "source_id": fnv1a64(filename, source)},
+            "source_opcodes": source_opcodes[case_id],
             "status": "accepted",
             "wave": 4,
         }

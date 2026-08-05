@@ -66,7 +66,8 @@
 /*
  * W11P makes executable boxed-value instructions self-describing. Source
  * positions remain diagnostic identity; operand slots, literals, opcode flags
- * and modes are carried independently and never reconstructed from zend_op.
+ * and modes are carried independently and never reconstructed from a source
+ * instruction record.
  * Minor 13 also publishes the canonical Zend storage location of each
  * source-SSA value so boxed PHIs can be proven without a second IR. Minor 16
  * publishes the original op1 SSA definition of in-place mutations so the
@@ -79,8 +80,9 @@
 
 /*
  * W14 freezes source-backed suspend liveness at the target-neutral value-model
- * boundary. TPDE consumes this table directly and never reconstructs it from
- * Zend SSA, projected instructions, or canonical frame locations.
+ * boundary. Native lowering consumes this table directly and never
+ * reconstructs it from Zend SSA, projected instructions, or canonical frame
+ * locations.
  */
 #define ZEND_MIR_W14_CONTRACT_VERSION_MINOR UINT32_C(17)
 #define ZEND_MIR_W14_CONTRACT_VERSION \

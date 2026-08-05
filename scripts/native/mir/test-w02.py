@@ -17,6 +17,9 @@ PRODUCTION = tuple(
     str(path.relative_to(ROOT))
     for path in sorted((ROOT / "Zend/Native/MIR").rglob("*.c"))
 )
+LOWERING_SUPPORT = (
+    "Zend/Native/Lowering/ControlFlow/zend_mir_control_flow_proofs.c",
+)
 TEST_SOURCES = (
     "tests/native/mir/contracts/fixture_host.c",
     "tests/native/mir/text/text_fixtures.c",
@@ -99,6 +102,7 @@ def main() -> int:
             + common
             + sanitizer
             + list(PRODUCTION)
+            + list(LOWERING_SUPPORT)
             + list(TEST_SOURCES)
             + ["-o", str(executable)],
             environment,

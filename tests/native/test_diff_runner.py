@@ -42,9 +42,12 @@ elif name == "exit_diff.php":
 elif name == "signal_diff.php":
     os.kill(os.getpid(), signal.SIGTERM)
 elif name == "timeout_diff.php":
-    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    child_pid = os.fork()
+    if child_pid == 0:
+        time.sleep(30)
+        os._exit(0)
     with open(os.path.join(os.path.dirname(case), "child.pid"), "w") as stream:
-        stream.write(str(child.pid))
+        stream.write(str(child_pid))
     time.sleep(30)
 else:
     os.execv(php, [php, case])
@@ -129,7 +132,10 @@ class DiffRunnerTests(unittest.TestCase):
     def test_timeout_kills_process_group(self) -> None:
         copied = self.root / "timeout_diff.php"
         shutil.copyfile(str(FIXTURES / "timeout_diff.php"), str(copied))
-        completed, result, _ = self.invoke(copied, str(self.wrapper), timeout=0.25)
+        # Allow enough time for the wrapper interpreter to start before the
+        # timeout.  Slow or instrumented Python builds can otherwise be killed
+        # before they create the grandchild that this test is meant to verify.
+        completed, result, _ = self.invoke(copied, str(self.wrapper), timeout=2.0)
         self.assertEqual(3, completed.returncode)
         self.assertEqual("TIMEOUT", result["cases"][0]["status"])
         pid = int((self.root / "child.pid").read_text(encoding="ascii"))

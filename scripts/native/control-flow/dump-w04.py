@@ -206,6 +206,16 @@ def validate_diagnostics(value: Any, diagnostic_limit: int) -> None:
         previous = sort_key
 
 
+def validate_source_opcodes(value: Any) -> None:
+    if not isinstance(value, list):
+        raise DumpError("result.source_opcodes must be an array")
+    for index, opcode in enumerate(value):
+        if not isinstance(opcode, str) or re.fullmatch(r"ZEND_[A-Z0-9_]+", opcode) is None:
+            raise DumpError(
+                "result.source_opcodes[{}] is not a Zend opcode".format(index)
+            )
+
+
 def validate_call_result(
     value: Any,
     filename: str,
@@ -222,6 +232,7 @@ def validate_call_result(
             "phase",
             "schema_version",
             "source",
+            "source_opcodes",
             "status",
             "wave",
         },
@@ -238,6 +249,7 @@ def validate_call_result(
         raise DumpError("result.phase is invalid")
     validate_source(value["source"], filename, source)
     validate_diagnostics(value["diagnostics"], diagnostic_limit)
+    validate_source_opcodes(value["source_opcodes"])
     mir = value["mir"]
     codes = {diagnostic["code"] for diagnostic in value["diagnostics"]}
     if value["status"] == "accepted":

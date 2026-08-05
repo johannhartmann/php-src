@@ -41,6 +41,9 @@
 #include "zend_frameless_function.h"
 #include "zend_property_hooks.h"
 #include "zend_partial.h"
+#ifdef HAVE_NATIVE_ENGINE
+# include "Native/Compiler/zend_native_executor.h"
+#endif
 
 #define SET_NODE(target, src) do { \
 		target ## _type = (src)->op_type; \
@@ -4092,6 +4095,17 @@ static uint32_t zend_compile_args(zend_ast *ast, const zend_function *fbc, bool 
 ZEND_API uint8_t zend_get_call_op(const zend_op *init_op, const zend_function *fbc, bool result_used) /* {{{ */
 {
 	uint32_t no_discard = result_used ? 0 : ZEND_ACC_NODISCARD;
+	bool direct_user_executor = zend_execute_ex == execute_ex;
+
+#ifdef HAVE_NATIVE_ENGINE
+	/*
+	 * The native executor is the built-in userland executor in native builds,
+	 * not an extension hook.  Keep the ordinary specialized call opcodes;
+	 * their generic handler path still enters zend_native_executor_execute_ex.
+	 */
+	direct_user_executor = direct_user_executor
+		|| zend_execute_ex == zend_native_executor_execute_ex;
+#endif
 
 	if (fbc && init_op->opcode != ZEND_NEW) {
 		ZEND_ASSERT(!(fbc->common.fn_flags & ZEND_ACC_CALL_VIA_TRAMPOLINE));
@@ -4104,7 +4118,7 @@ ZEND_API uint8_t zend_get_call_op(const zend_op *init_op, const zend_function *f
 				}
 			}
 		} else if (!(CG(compiler_options) & ZEND_COMPILE_IGNORE_USER_FUNCTIONS)){
-			if (zend_execute_ex == execute_ex) {
+			if (direct_user_executor) {
 				if (!(fbc->common.fn_flags & (ZEND_ACC_DEPRECATED|no_discard))) {
 					return ZEND_DO_UCALL;
 				} else {
@@ -4112,7 +4126,7 @@ ZEND_API uint8_t zend_get_call_op(const zend_op *init_op, const zend_function *f
 				}
 			}
 		}
-	} else if (zend_execute_ex == execute_ex &&
+	} else if (direct_user_executor &&
 	           !zend_execute_internal &&
 	           (init_op->opcode == ZEND_INIT_FCALL_BY_NAME ||
 	            init_op->opcode == ZEND_INIT_NS_FCALL_BY_NAME)) {

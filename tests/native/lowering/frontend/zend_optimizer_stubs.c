@@ -100,7 +100,8 @@ void zend_dfg_add_use_def_op(
 	(void) opline;
 	(void) build_flags;
 	(void) use;
-	if (op_array == NULL || op_array->last_var > UINT32_MAX - op_array->T) {
+	if (op_array == NULL || op_array->last_var < 0
+			|| (uint32_t) op_array->last_var > UINT32_MAX - op_array->T) {
 		return;
 	}
 	/* The W03-only harness has no runtime class table. Conservatively treating
