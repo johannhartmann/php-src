@@ -305,11 +305,26 @@ bool zend_mir_control_flow_map_storage_init(
 	storage->blocks = zend_mir_cf_allocate(block_capacity, sizeof(*storage->blocks));
 	storage->edges = zend_mir_cf_allocate(edge_capacity, sizeof(*storage->edges));
 	storage->phis = zend_mir_cf_allocate(phi_capacity, sizeof(*storage->phis));
+	storage->source_blocks = zend_mir_cf_allocate(
+		block_capacity, sizeof(*storage->source_blocks));
+	storage->source_edges = zend_mir_cf_allocate(
+		edge_capacity, sizeof(*storage->source_edges));
+	storage->source_phis = zend_mir_cf_allocate(
+		phi_capacity, sizeof(*storage->source_phis));
 	if ((block_capacity != 0 && storage->blocks == NULL)
 			|| (edge_capacity != 0 && storage->edges == NULL)
-			|| (phi_capacity != 0 && storage->phis == NULL)) {
+			|| (phi_capacity != 0 && storage->phis == NULL)
+			|| (block_capacity != 0 && storage->source_blocks == NULL)
+			|| (edge_capacity != 0 && storage->source_edges == NULL)
+			|| (phi_capacity != 0 && storage->source_phis == NULL)) {
 		zend_mir_control_flow_map_storage_destroy(storage);
 		return false;
+	}
+	if (block_capacity != 0) {
+		uint32_t i;
+		for (i = 0; i < block_capacity; i++) {
+			storage->source_blocks[i] = ZEND_MIR_ID_INVALID;
+		}
 	}
 	storage->block_capacity = block_capacity;
 	storage->edge_capacity = edge_capacity;
@@ -332,6 +347,9 @@ void zend_mir_control_flow_map_storage_destroy(
 		return;
 	}
 	zend_mir_control_flow_cycle_analysis_destroy(&storage->cycle_analysis);
+	free(storage->source_phis);
+	free(storage->source_edges);
+	free(storage->source_blocks);
 	free(storage->phis);
 	free(storage->edges);
 	free(storage->blocks);
@@ -345,17 +363,24 @@ bool zend_mir_control_flow_map_add_block(
 	uint32_t i;
 	if (storage == NULL || mapping == NULL
 			|| storage->block_count >= storage->block_capacity
+			|| mapping->source_block_id >= storage->block_capacity
 			|| !zend_mir_id_is_valid(mapping->source_block_id)
-			|| !zend_mir_id_is_valid(mapping->mir_block_id)) {
+			|| !zend_mir_id_is_valid(mapping->mir_block_id)
+			|| zend_mir_id_is_valid(
+				storage->source_blocks[mapping->source_block_id])) {
 		return false;
 	}
-	for (i = 0; i < storage->block_count; i++) {
-		if (storage->blocks[i].source_block_id == mapping->source_block_id
-				|| storage->blocks[i].mir_block_id == mapping->mir_block_id) {
-			return false;
+	if (storage->block_count != 0
+			&& storage->blocks[storage->block_count - 1].mir_block_id
+				>= mapping->mir_block_id) {
+		for (i = 0; i < storage->block_count; i++) {
+			if (storage->blocks[i].mir_block_id == mapping->mir_block_id) {
+				return false;
+			}
 		}
 	}
 	storage->blocks[storage->block_count++] = *mapping;
+	storage->source_blocks[mapping->source_block_id] = mapping->mir_block_id;
 	return true;
 }
 
@@ -363,22 +388,19 @@ bool zend_mir_control_flow_map_add_edge(
 	zend_mir_control_flow_map_storage *storage,
 	const zend_mir_control_flow_edge_mapping *mapping)
 {
-	uint32_t i;
 	if (storage == NULL || mapping == NULL
 			|| storage->edge_count >= storage->edge_capacity
+			|| mapping->source_edge_id >= storage->edge_capacity
 			|| !zend_mir_id_is_valid(mapping->source_edge_id)
 			|| !zend_mir_id_is_valid(mapping->mir_from_block_id)
 			|| !zend_mir_id_is_valid(mapping->mir_to_block_id)
 			|| !zend_mir_id_is_valid(mapping->terminator_instruction_id)
-			|| mapping->mir_successor_index == UINT32_MAX) {
+			|| mapping->mir_successor_index == UINT32_MAX
+			|| storage->source_edges[mapping->source_edge_id] != 0) {
 		return false;
 	}
-	for (i = 0; i < storage->edge_count; i++) {
-		if (storage->edges[i].source_edge_id == mapping->source_edge_id) {
-			return false;
-		}
-	}
 	storage->edges[storage->edge_count++] = *mapping;
+	storage->source_edges[mapping->source_edge_id] = 1;
 	return true;
 }
 
@@ -386,20 +408,17 @@ bool zend_mir_control_flow_map_add_phi(
 	zend_mir_control_flow_map_storage *storage,
 	const zend_mir_control_flow_phi_mapping *mapping)
 {
-	uint32_t i;
 	if (storage == NULL || mapping == NULL
 			|| storage->phi_count >= storage->phi_capacity
+			|| mapping->source_phi_id >= storage->phi_capacity
 			|| !zend_mir_id_is_valid(mapping->source_phi_id)
 			|| !zend_mir_id_is_valid(mapping->mir_phi_instruction_id)
-			|| !zend_mir_id_is_valid(mapping->mir_result_value_id)) {
+			|| !zend_mir_id_is_valid(mapping->mir_result_value_id)
+			|| storage->source_phis[mapping->source_phi_id] != 0) {
 		return false;
 	}
-	for (i = 0; i < storage->phi_count; i++) {
-		if (storage->phis[i].source_phi_id == mapping->source_phi_id) {
-			return false;
-		}
-	}
 	storage->phis[storage->phi_count++] = *mapping;
+	storage->source_phis[mapping->source_phi_id] = 1;
 	return true;
 }
 
@@ -412,6 +431,17 @@ bool zend_mir_control_flow_map_find_block(
 	if (map == NULL || mir_block_id == NULL || map->block_count == NULL
 			|| map->block_at == NULL) {
 		return false;
+	}
+	if (map->block_count == zend_mir_cf_block_count
+			&& map->block_at == zend_mir_cf_block_at) {
+		const zend_mir_control_flow_map_storage *storage = map->context;
+		if (storage == NULL || source_block_id >= storage->block_capacity
+				|| !zend_mir_id_is_valid(
+					storage->source_blocks[source_block_id])) {
+			return false;
+		}
+		*mir_block_id = storage->source_blocks[source_block_id];
+		return true;
 	}
 	for (i = 0; i < map->block_count(map->context); i++) {
 		zend_mir_control_flow_block_mapping mapping;

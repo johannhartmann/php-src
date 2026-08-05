@@ -52,6 +52,8 @@ bool zend_mir_w04_emit_terminator(
 	zend_mir_mutator *mutator,
 	const zend_mir_source_opcode_ref *opcode,
 	const zend_mir_source_block_ref *block,
+	const zend_mir_source_edge_ref *edges,
+	uint32_t edge_count,
 	bool machine_condition,
 	zend_mir_control_flow_map_storage *map);
 

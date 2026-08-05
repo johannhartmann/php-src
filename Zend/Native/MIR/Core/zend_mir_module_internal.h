@@ -114,6 +114,10 @@ struct _zend_mir_module {
 	zend_mir_core_table functions;
 	zend_mir_core_table blocks;
 	zend_mir_core_table edges;
+	uint32_t *successor_offsets;
+	zend_mir_block_id *successors;
+	uint32_t *predecessor_offsets;
+	zend_mir_block_id *predecessors;
 	zend_mir_core_table instructions;
 	zend_mir_core_table values;
 	zend_mir_core_table constants;

@@ -11,8 +11,13 @@
 typedef struct _zend_mir_w04_phi_analysis {
 	uint32_t phi_count;
 	uint32_t input_count;
+	uint32_t block_count;
+	uint32_t edge_count;
 	uint32_t *input_offsets;
 	uint32_t *input_indices;
+	uint32_t *resolved_input_ssa;
+	uint32_t *edge_offsets;
+	zend_mir_source_edge_ref *edges;
 	bool *dynamic_members;
 } zend_mir_w04_phi_analysis;
 
@@ -88,6 +93,9 @@ static void zend_mir_w04_phi_analysis_destroy(
 		return;
 	}
 	free(analysis->dynamic_members);
+	free(analysis->edges);
+	free(analysis->edge_offsets);
+	free(analysis->resolved_input_ssa);
 	free(analysis->input_indices);
 	free(analysis->input_offsets);
 	memset(analysis, 0, sizeof(*analysis));
@@ -228,6 +236,7 @@ static bool zend_mir_w04_phi_analysis_init(
 {
 	uint32_t *parents = NULL;
 	uint32_t *cursors = NULL;
+	uint32_t *phi_by_result = NULL;
 	uint8_t *ranks = NULL;
 	bool *members = NULL;
 	bool *component_dynamic = NULL;
@@ -239,7 +248,10 @@ static bool zend_mir_w04_phi_analysis_init(
 			|| context->source->phi_count == NULL
 			|| context->source->phi_at == NULL
 			|| context->source->phi_input_count == NULL
-			|| context->source->phi_input_at == NULL) {
+			|| context->source->phi_input_at == NULL
+			|| context->source->block_count == NULL
+			|| context->source->edge_count == NULL
+			|| context->source->edge_at == NULL) {
 		return false;
 	}
 	memset(analysis, 0, sizeof(*analysis));
@@ -248,19 +260,67 @@ static bool zend_mir_w04_phi_analysis_init(
 		context->source->phi_count(context->source->context);
 	analysis->input_count =
 		context->source->phi_input_count(context->source->context);
+	analysis->block_count =
+		context->source->block_count(context->source->context);
+	analysis->edge_count =
+		context->source->edge_count(context->source->context);
 	if (analysis->phi_count == UINT32_MAX) {
 		return false;
+	}
+	analysis->edge_offsets = calloc(
+		(size_t) analysis->block_count + 1, sizeof(*analysis->edge_offsets));
+	if (analysis->edge_count != 0) {
+		analysis->edges = malloc(
+			(size_t) analysis->edge_count * sizeof(*analysis->edges));
 	}
 	analysis->input_offsets = calloc(
 		(size_t) analysis->phi_count + 1, sizeof(*analysis->input_offsets));
 	if (analysis->input_count != 0) {
 		analysis->input_indices = malloc(
 			(size_t) analysis->input_count * sizeof(*analysis->input_indices));
+		analysis->resolved_input_ssa = malloc(
+			(size_t) analysis->input_count
+				* sizeof(*analysis->resolved_input_ssa));
 	}
-	if (analysis->input_offsets == NULL
+	if (analysis->edge_offsets == NULL
+			|| (analysis->edge_count != 0 && analysis->edges == NULL)
+			|| analysis->input_offsets == NULL
 			|| (analysis->input_count != 0
-				&& analysis->input_indices == NULL)) {
+				&& (analysis->input_indices == NULL
+					|| analysis->resolved_input_ssa == NULL))) {
 		goto failed;
+	}
+	for (i = 0; i < analysis->edge_count; i++) {
+		zend_mir_source_edge_ref edge;
+		if (!context->source->edge_at(
+				context->source->context, i, &edge)
+				|| edge.id != i || edge.from_block_id >= analysis->block_count
+				|| analysis->edge_offsets[edge.from_block_id + 1]
+					== UINT32_MAX) {
+			goto failed;
+		}
+		analysis->edge_offsets[edge.from_block_id + 1]++;
+	}
+	for (i = 1; i <= analysis->block_count; i++) {
+		analysis->edge_offsets[i] += analysis->edge_offsets[i - 1];
+	}
+	for (i = 0; i < analysis->edge_count; i++) {
+		analysis->edges[i].id = ZEND_MIR_ID_INVALID;
+	}
+	for (i = 0; i < analysis->edge_count; i++) {
+		zend_mir_source_edge_ref edge;
+		uint32_t position;
+		if (!context->source->edge_at(
+				context->source->context, i, &edge)) {
+			goto failed;
+		}
+		position = analysis->edge_offsets[edge.from_block_id]
+			+ edge.successor_index;
+		if (position >= analysis->edge_offsets[edge.from_block_id + 1]
+				|| analysis->edges[position].id != ZEND_MIR_ID_INVALID) {
+			goto failed;
+		}
+		analysis->edges[position] = edge;
 	}
 	for (i = 0; i < analysis->input_count; i++) {
 		zend_mir_source_phi_input_ref input;
@@ -308,6 +368,77 @@ static bool zend_mir_w04_phi_analysis_init(
 	}
 	free(cursors);
 	cursors = NULL;
+	if (ssa_count != 0) {
+		phi_by_result = malloc((size_t) ssa_count * sizeof(*phi_by_result));
+		if (phi_by_result == NULL) {
+			goto failed;
+		}
+		for (i = 0; i < ssa_count; i++) {
+			phi_by_result[i] = ZEND_MIR_ID_INVALID;
+		}
+	}
+	for (i = 0; i < analysis->phi_count; i++) {
+		zend_mir_source_phi_ref phi;
+		if (!context->source->phi_at(
+				context->source->context, i, &phi)
+				|| phi.id != i || phi.result_ssa_variable_id >= ssa_count
+				|| phi_by_result[phi.result_ssa_variable_id]
+					!= ZEND_MIR_ID_INVALID) {
+			goto failed;
+		}
+		phi_by_result[phi.result_ssa_variable_id] = i;
+	}
+	for (i = 0; i < analysis->phi_count; i++) {
+		zend_mir_source_phi_ref consumer;
+		uint32_t j;
+		if (!context->source->phi_at(
+				context->source->context, i, &consumer)) {
+			goto failed;
+		}
+		for (j = analysis->input_offsets[i];
+				j < analysis->input_offsets[i + 1]; j++) {
+			zend_mir_source_phi_input_ref input;
+			uint32_t resolved;
+			if (!context->source->phi_input_at(context->source->context,
+					analysis->input_indices[j], &input)
+					|| input.source_ssa_variable_id >= ssa_count) {
+				goto failed;
+			}
+			resolved = input.source_ssa_variable_id;
+			if (consumer.kind == ZEND_MIR_SOURCE_PHI_MERGE) {
+				const uint32_t producer_index =
+					phi_by_result[input.source_ssa_variable_id];
+				if (producer_index != ZEND_MIR_ID_INVALID) {
+					zend_mir_source_phi_ref producer;
+					if (!context->source->phi_at(context->source->context,
+							producer_index, &producer)) {
+						goto failed;
+					}
+					if (producer.kind != ZEND_MIR_SOURCE_PHI_MERGE
+							&& producer.block_id == consumer.block_id
+							&& analysis->input_offsets[producer_index + 1]
+								- analysis->input_offsets[producer_index] == 1) {
+						zend_mir_source_phi_input_ref producer_input;
+						if (!context->source->phi_input_at(
+								context->source->context,
+								analysis->input_indices[
+									analysis->input_offsets[producer_index]],
+								&producer_input)) {
+							goto failed;
+						}
+						if (producer_input.predecessor_block_id
+								== input.predecessor_block_id
+								&& producer_input.input_index == 0) {
+							resolved = producer_input.source_ssa_variable_id;
+						}
+					}
+				}
+			}
+			analysis->resolved_input_ssa[j] = resolved;
+		}
+	}
+	free(phi_by_result);
+	phi_by_result = NULL;
 
 	if (context->zend_source == NULL || !context->zend_source->w09
 			|| ssa_count == 0 || analysis->phi_count == 0) {
@@ -377,6 +508,7 @@ static bool zend_mir_w04_phi_analysis_init(
 	return true;
 
 failed:
+	free(phi_by_result);
 	free(component_dynamic);
 	free(members);
 	free(ranks);
@@ -763,23 +895,10 @@ static bool zend_mir_w04_emit_phis(
 		}
 		for (j = analysis->input_offsets[i];
 			j < analysis->input_offsets[i + 1]; j++) {
-			zend_mir_source_phi_input_ref input;
-			uint32_t source_ssa_variable_id;
-			if (!context->source->phi_input_at(
-					context->source->context,
-					analysis->input_indices[j], &input)) {
-				return false;
-			}
-			source_ssa_variable_id = input.source_ssa_variable_id;
-			/* Zend may feed a merge PHI with a Pi result defined in the
-			 * merge block. The Pi is an edge constraint, not an executable
-			 * predecessor definition; use its incoming value on that edge. */
-			(void) zend_mir_w04_resolve_edge_pi_input(
-				context->source, &phi, &input, &source_ssa_variable_id);
 			if (!mutator->add_operand(mutator->context,
 						mapping.mir_phi_instruction_id,
 						zend_mir_value_from_original_ssa(
-							source_ssa_variable_id))) {
+							analysis->resolved_input_ssa[j]))) {
 				return false;
 			}
 		}
@@ -853,8 +972,11 @@ static bool zend_mir_w04_lower_blocks(
 		zend_mir_source_block_ref block;
 		zend_mir_source_opcode_ref opcode;
 		zend_mir_source_opcode_ref *terminator_source = NULL;
+		const zend_mir_source_edge_ref *edges;
 		zend_mir_block_id block_id;
 		bool machine_condition = false;
+		uint32_t edge_count;
+		uint32_t edge_offset;
 		uint32_t j;
 		if (!context->source->block_at(context->source->context, i, &block)) {
 			return false;
@@ -862,6 +984,12 @@ static bool zend_mir_w04_lower_blocks(
 		if ((block.flags & ZEND_MIR_SOURCE_BLOCK_REACHABLE) == 0) {
 			continue;
 		}
+		if (analysis == NULL || block.id >= analysis->block_count) {
+			return false;
+		}
+		edge_offset = analysis->edge_offsets[block.id];
+		edge_count = analysis->edge_offsets[block.id + 1] - edge_offset;
+		edges = edge_count == 0 ? NULL : &analysis->edges[edge_offset];
 		if (!zend_mir_control_flow_map_find_block(
 					&storage->public_map, block.id, &block_id)
 				|| !zend_mir_lowering_context_set_block_id(context, block_id)) {
@@ -990,7 +1118,7 @@ static bool zend_mir_w04_lower_blocks(
 		}
 		if (!zend_mir_w04_emit_terminator(
 				context, mutator, terminator_source, &block,
-				machine_condition, storage)) {
+				edges, edge_count, machine_condition, storage)) {
 			return false;
 		}
 	}
