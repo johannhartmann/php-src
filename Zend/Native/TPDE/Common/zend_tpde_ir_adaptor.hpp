@@ -683,14 +683,14 @@ private:
 		auto register_or_constant = [&](IRValueRef value) {
 			if (machine_value_is_register_authoritative(value)) {
 				/*
-				 * Scalar MIR values are defined by their ordinary result,
-				 * including PHI/COPY chains which do not need an entry in the
-				 * preselected instruction-result table.  Boxed values, on the
-				 * other hand, may only become register-authoritative through a
-				 * selected source operation and must retain that stronger proof.
+				 * A frozen machine kind alone does not prove that this adaptor
+				 * emits a TPDE definition.  In particular, an unselected direct
+				 * user call publishes its scalar result through the canonical
+				 * Zend slot even though its value plan remains register-
+				 * authoritative.  Require the actual definition for every
+				 * non-constant operand before selecting the register fast path.
 				 */
-				return machine_kind(value) == ZEND_TPDE_MACHINE_VALUE_I64
-					|| machine_value_has_register_definition(value);
+				return machine_value_has_register_definition(value);
 			}
 			if (const DerivedValue *derived = derived_value(value)) {
 				return derived->constant;
@@ -4172,6 +4172,42 @@ public:
 			}
 			return canonical;
 		};
+		auto entry_argument_has_register_definition =
+				[&](IRValueRef value) {
+			if (function_mode_ != FunctionMode::ZendEntry) {
+				return false;
+			}
+			const uint32_t raw = static_cast<uint32_t>(value);
+			if (raw < MIR_VALUE_BASE
+					|| raw - MIR_VALUE_BASE >= plan_->value_count) {
+				return false;
+			}
+			const uint32_t value_index = raw - MIR_VALUE_BASE;
+			const zend_tpde_value &plan_value = plan_->values[value_index];
+			if (plan_value.argument_index < 0
+					|| plan_value.representation
+						== ZEND_MIR_REPRESENTATION_ZVAL) {
+				return false;
+			}
+			const TypedBodyAbiType argument_abi =
+				typed_body_value_abi(plan_, value_index);
+			return argument_abi.valid
+				&& (zend_mir_scalar_type_is_exact(argument_abi.exact_type)
+						&& argument_abi.exact_type
+							!= ZEND_MIR_SCALAR_TYPE_NULL
+					|| argument_abi.machine_kind
+						== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+					|| argument_abi.machine_kind
+						== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+					|| argument_abi.machine_kind
+						== ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
+					|| argument_abi.machine_kind
+						== ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
+					|| argument_abi.machine_kind
+						== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR
+					|| argument_abi.machine_kind
+						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
+		};
 		auto resolve_materializable_scalar = [&](
 				uint32_t value_index, uint32_t use_block,
 				uint32_t use_instruction, uint32_t depth,
@@ -4184,7 +4220,8 @@ public:
 			IRValueRef value = value_ref_for_block(
 				plan_value.id, use_block, use_instruction);
 			if (machine_value_has_result_representation(value)
-					&& machine_value_has_register_definition(value)) {
+					&& (machine_value_has_register_definition(value)
+						|| entry_argument_has_register_definition(value))) {
 				return value;
 			}
 			const int32_t definition =
@@ -6052,6 +6089,8 @@ public:
 							&& (machine_value_is_register_authoritative(
 									copy_input)
 								&& machine_value_has_register_definition(
+									copy_input)
+								|| entry_argument_has_register_definition(
 									copy_input)
 								|| constant(copy_input, &copy_constant_bits))) {
 					/* Emit the selected machine copy below. */
