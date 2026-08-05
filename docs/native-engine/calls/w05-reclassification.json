@@ -456,13 +456,13 @@
     "w01": {
       "active_opcode_count": 212,
       "path": "docs/native-engine/semantics/opcodes/opcode-matrix.json",
-      "sha256": "a5b45ccc8d5892a80cac31297b9f25203be2bf1c085e768b039d537b5b0a64f5",
+      "sha256": "6a4efa2f8ba6593e73a396ee89f5f617e7844be00ff3fdaca0c6bc2faf33396d",
       "source_commit": "b7c524a19fa815799a858b98d39f176ca88648b1"
     },
     "w04": {
       "active_opcode_count": 212,
       "path": "docs/native-engine/control-flow/w04-opcode-profile.json",
-      "sha256": "366bc33ecc780064fe236a38da5376ff63125a26526908b51d4b565761e485a9"
+      "sha256": "ec97b1ac9a6403428f12ca00568738f3d3d3f81feeac95e0d0b8581a3cf941fa"
     }
   },
   "unresolved_w05_count": 0

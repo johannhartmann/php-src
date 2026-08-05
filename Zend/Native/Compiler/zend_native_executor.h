@@ -21,6 +21,7 @@ ZEND_API zend_result zend_native_executor_startup(void);
 ZEND_API void zend_native_executor_shutdown(void);
 ZEND_API void zend_native_executor_activate(void);
 ZEND_API void zend_native_executor_deactivate(void);
+void zend_native_executor_prepare_shutdown(void);
 ZEND_API void zend_native_executor_execute_ex(zend_execute_data *execute_data);
 ZEND_API void zend_native_executor_set_frame_probe(
 	zend_native_frame_probe_t probe, void *context);

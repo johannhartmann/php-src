@@ -60,6 +60,26 @@ static zend_mir_straight_line_value *zend_mir_straight_line_find_value(
 	if (lifetime == NULL) {
 		return NULL;
 	}
+	if (lifetime->value_index != NULL) {
+		uint32_t slot = (value_id * UINT32_C(2654435761))
+			& (lifetime->value_index_capacity - 1);
+
+		for (index = 0; index < lifetime->value_index_capacity; index++) {
+			uint32_t entry = lifetime->value_index[slot];
+
+			if (entry == 0) {
+				return NULL;
+			}
+			if (entry > lifetime->count) {
+				return NULL;
+			}
+			if (lifetime->values[entry - 1].value_id == value_id) {
+				return &lifetime->values[entry - 1];
+			}
+			slot = (slot + 1) & (lifetime->value_index_capacity - 1);
+		}
+		return NULL;
+	}
 	for (index = 0; index < lifetime->count; index++) {
 		if (lifetime->values[index].value_id == value_id) {
 			return &lifetime->values[index];
@@ -156,11 +176,34 @@ bool zend_mir_straight_line_lifetime_init(
 	return true;
 }
 
+bool zend_mir_straight_line_lifetime_init_indexed(
+	zend_mir_straight_line_lifetime *lifetime,
+	zend_mir_straight_line_value *storage, uint32_t capacity,
+	uint32_t *value_index, uint32_t value_index_capacity)
+{
+	size_t index_bytes =
+		(size_t) value_index_capacity * sizeof(*value_index);
+
+	if (value_index == NULL || value_index_capacity < 2
+			|| (value_index_capacity & (value_index_capacity - 1)) != 0
+			|| capacity > value_index_capacity / 2
+			|| index_bytes / value_index_capacity != sizeof(*value_index)
+			|| !zend_mir_straight_line_lifetime_init(
+				lifetime, storage, capacity)) {
+		return false;
+	}
+	memset(value_index, 0, index_bytes);
+	lifetime->value_index = value_index;
+	lifetime->value_index_capacity = value_index_capacity;
+	return true;
+}
+
 bool zend_mir_straight_line_track_value(
 	zend_mir_straight_line_lifetime *lifetime,
 	const zend_mir_straight_line_value *value)
 {
 	zend_mir_straight_line_value *current;
+	uint32_t index_slot = 0;
 
 	if (lifetime == NULL || value == NULL
 			|| !zend_mir_straight_line_value_contract_is_valid(value)) {
@@ -178,7 +221,26 @@ bool zend_mir_straight_line_track_value(
 	if (lifetime->count >= lifetime->capacity) {
 		return false;
 	}
+	if (lifetime->value_index != NULL) {
+		uint32_t probe;
+
+		index_slot = (value->value_id * UINT32_C(2654435761))
+			& (lifetime->value_index_capacity - 1);
+		for (probe = 0; probe < lifetime->value_index_capacity; probe++) {
+			if (lifetime->value_index[index_slot] == 0) {
+				break;
+			}
+			index_slot = (index_slot + 1)
+				& (lifetime->value_index_capacity - 1);
+		}
+		if (probe == lifetime->value_index_capacity) {
+			return false;
+		}
+	}
 	lifetime->values[lifetime->count++] = *value;
+	if (lifetime->value_index != NULL) {
+		lifetime->value_index[index_slot] = lifetime->count;
+	}
 	return true;
 }
 
@@ -189,6 +251,27 @@ bool zend_mir_straight_line_value_at(
 	uint32_t index;
 
 	if (lifetime == NULL || out == NULL) {
+		return false;
+	}
+	if (lifetime->value_index != NULL) {
+		uint32_t slot = (value_id * UINT32_C(2654435761))
+			& (lifetime->value_index_capacity - 1);
+
+		for (index = 0; index < lifetime->value_index_capacity; index++) {
+			uint32_t entry = lifetime->value_index[slot];
+
+			if (entry == 0) {
+				return false;
+			}
+			if (entry > lifetime->count) {
+				return false;
+			}
+			if (lifetime->values[entry - 1].value_id == value_id) {
+				*out = lifetime->values[entry - 1];
+				return true;
+			}
+			slot = (slot + 1) & (lifetime->value_index_capacity - 1);
+		}
 		return false;
 	}
 	for (index = 0; index < lifetime->count; index++) {

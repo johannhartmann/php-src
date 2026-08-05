@@ -72,6 +72,9 @@ typedef struct _zend_native_compiler_stats {
 	uint64_t direct_leaf_scalar_sites;
 	uint64_t direct_typed_body_sites;
 	uint64_t direct_call_frame_bytes;
+	uint64_t inner_call_runtime_helper_calls;
+	uint64_t inner_call_heap_allocations;
+	uint64_t inner_call_catcher_boundaries;
 	uint32_t registered_codeunits;
 	uint32_t native_codeunits;
 	uint32_t ready_codeunits;

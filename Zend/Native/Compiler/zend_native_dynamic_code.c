@@ -4,6 +4,8 @@
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_execute.h"
 #include "Zend/zend_observer.h"
+#include "Zend/zend_virtual_cwd.h"
+#include "Zend/Optimizer/zend_optimizer_internal.h"
 #include "Zend/Native/Compiler/zend_native_compiler_internal.h"
 #include "Zend/Native/Lowering/zend_mir_lowering_source.h"
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
@@ -51,6 +53,7 @@ void zend_native_dynamic_compiler_destroy(
 	}
 	efree(compiler->owned_op_arrays);
 	efree(compiler->entries);
+	efree(compiler->completed_include_once_sites);
 	zend_hash_destroy(&compiler->entries_by_op_array);
 	memset(compiler, 0, sizeof(*compiler));
 }
@@ -138,6 +141,116 @@ static bool zend_native_dynamic_compiler_adopt(
 	}
 	compiler->owned_op_arrays[compiler->owned_op_array_count++] = op_array;
 	return true;
+}
+
+static bool zend_native_dynamic_compiler_can_retire_last(
+	const zend_native_dynamic_compiler *compiler,
+	const zend_op_array *op_array, const zend_native_entry_cell *entry_cell)
+{
+	const zend_native_dynamic_entry *entry;
+
+	if (compiler == NULL || op_array == NULL || entry_cell == NULL
+			|| compiler->owned_op_array_count == 0
+			|| compiler->entry_count == 0
+			|| compiler->owned_op_arrays[
+				compiler->owned_op_array_count - 1] != op_array) {
+		return false;
+	}
+	entry = &compiler->entries[compiler->entry_count - 1];
+	return entry->op_array == op_array && entry->entry_cell == entry_cell
+		&& zend_native_dynamic_compiler_lookup(compiler, op_array)
+			== entry_cell;
+}
+
+static void zend_native_dynamic_compiler_retire_last(
+	zend_native_dynamic_compiler *compiler, zend_op_array *op_array)
+{
+	ZEND_ASSERT(compiler != NULL);
+	ZEND_ASSERT(compiler->owned_op_array_count != 0);
+	ZEND_ASSERT(compiler->entry_count != 0);
+	ZEND_ASSERT(compiler->owned_op_arrays[
+		compiler->owned_op_array_count - 1] == op_array);
+	ZEND_ASSERT(compiler->entries[compiler->entry_count - 1].op_array
+		== op_array);
+	zend_hash_index_del(
+		&compiler->entries_by_op_array,
+		(zend_ulong) (uintptr_t) op_array);
+	compiler->entry_count--;
+	compiler->owned_op_array_count--;
+	zend_destroy_static_vars(op_array);
+	destroy_op_array(op_array);
+	efree_size(op_array, sizeof(zend_op_array));
+}
+
+static bool zend_native_include_once_site_completed(
+	const zend_native_dynamic_compiler *compiler,
+	const zend_op *source_opline)
+{
+	uint32_t index;
+
+	for (index = compiler->completed_include_once_site_count;
+			index-- > 0;) {
+		if (compiler->completed_include_once_sites[index] == source_opline) {
+			return true;
+		}
+	}
+	return false;
+}
+
+zend_native_status zend_native_execute_const_include_once(
+	zend_execute_data *execute_data, uint64_t op1,
+	uint32_t extended_value, uint32_t source_position_id)
+{
+	zend_native_dynamic_compiler *compiler =
+		zend_native_active_dynamic_compiler;
+	const zend_op *source_opline;
+	const uint64_t unused_operand =
+		((uint64_t) ZEND_MIR_ID_INVALID) << 16;
+
+	if (compiler == NULL || execute_data == NULL
+			|| execute_data->func == NULL
+			|| !ZEND_USER_CODE(execute_data->func->type)
+			|| source_position_id >= execute_data->func->op_array.last
+			|| (extended_value != ZEND_INCLUDE_ONCE
+				&& extended_value != ZEND_REQUIRE_ONCE)) {
+		zend_throw_error(NULL,
+			"Malformed native constant include_once operation");
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	source_opline =
+		&execute_data->func->op_array.opcodes[source_position_id];
+	if (zend_native_include_once_site_completed(compiler, source_opline)) {
+		execute_data->opline = source_opline;
+		return ZEND_NATIVE_RETURNED;
+	}
+	return zend_native_execute_include_or_eval(execute_data, op1,
+		unused_operand, unused_operand, extended_value,
+		ZEND_INCLUDE_OR_EVAL, source_position_id);
+}
+
+static void zend_native_complete_include_once_site(
+	zend_native_dynamic_compiler *compiler, const zend_op *source_opline)
+{
+	uint32_t old_capacity;
+	uint32_t new_capacity;
+
+	if (zend_native_include_once_site_completed(compiler, source_opline)) {
+		return;
+	}
+	if (compiler->completed_include_once_site_count
+			== compiler->completed_include_once_site_capacity) {
+		old_capacity = compiler->completed_include_once_site_capacity;
+		new_capacity = old_capacity < 8 ? 8 : old_capacity * 2;
+		if (new_capacity <= old_capacity) {
+			return;
+		}
+		compiler->completed_include_once_sites = safe_erealloc(
+			compiler->completed_include_once_sites, new_capacity,
+			sizeof(*compiler->completed_include_once_sites), 0);
+		compiler->completed_include_once_site_capacity = new_capacity;
+	}
+	compiler->completed_include_once_sites[
+		compiler->completed_include_once_site_count++] = source_opline;
 }
 
 void zend_native_dynamic_compiler_deactivate(
@@ -265,6 +378,7 @@ zend_native_status zend_native_execute_include_or_eval(
 {
 	zend_native_dynamic_compiler *compiler =
 		zend_native_active_dynamic_compiler;
+	const zend_op *source_opline;
 	uint8_t op1_type;
 	uint8_t op2_type;
 	uint8_t result_type;
@@ -281,16 +395,34 @@ zend_native_status zend_native_execute_include_or_eval(
 	zend_native_status status;
 	zend_native_diagnostic diagnostic;
 	zend_native_compile_diagnostic compile_diagnostic;
+	zend_native_compiler *component_compiler = NULL;
 	uint32_t call_info;
 	uint32_t first_function_bucket;
 	uint32_t first_class_bucket;
+	uint32_t first_compiled_function = 0;
+	bool ephemeral_codeunit = false;
 
 	if (compiler == NULL
 			|| execute_data == NULL || execute_data->func == NULL
 			|| !ZEND_USER_CODE(execute_data->func->type)
 			|| source_opcode != ZEND_INCLUDE_OR_EVAL
-			|| source_position_id >= execute_data->func->op_array.last
-			|| !zend_native_dynamic_decode_operand(
+			|| source_position_id >= execute_data->func->op_array.last) {
+		zend_throw_error(NULL,
+			"Native dynamic compiler is unavailable for include/eval");
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	source_opline =
+		&execute_data->func->op_array.opcodes[source_position_id];
+	execute_data->opline = source_opline;
+	if ((extended_value == ZEND_INCLUDE_ONCE
+			|| extended_value == ZEND_REQUIRE_ONCE)
+			&& (encoded_result & UINT64_C(0xff))
+				== ZEND_MIR_SOURCE_OPERAND_UNUSED
+			&& zend_native_include_once_site_completed(
+				compiler, source_opline)) {
+		return ZEND_NATIVE_RETURNED;
+	}
+	if (!zend_native_dynamic_decode_operand(
 				execute_data, encoded_op1, &op1_type, &op1)
 			|| !zend_native_dynamic_decode_operand(
 				execute_data, encoded_op2, &op2_type, &op2)
@@ -315,8 +447,37 @@ zend_native_status zend_native_execute_include_or_eval(
 		zend_throw_error(NULL, "Malformed native include/eval operation");
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	execute_data->opline =
-		&execute_data->func->op_array.opcodes[source_position_id];
+	if (result_type != IS_UNUSED) {
+		result = ZEND_CALL_VAR(execute_data, result_operand.var);
+	}
+	/*
+	 * Avoid re-entering zend_include_or_eval(), including its bailout-state
+	 * allocation, after an absolute include_once operand has been resolved and
+	 * included.  A miss retains the complete semantic path.
+	 */
+	if (op1_type == IS_CONST
+			&& (extended_value == ZEND_INCLUDE_ONCE
+				|| extended_value == ZEND_REQUIRE_ONCE)
+			&& Z_TYPE_P(filename) == IS_STRING
+			&& IS_ABSOLUTE_PATH(
+				Z_STRVAL_P(filename), Z_STRLEN_P(filename))) {
+		zend_string *resolved_path = zend_resolve_path(Z_STR_P(filename));
+
+		if (resolved_path != NULL) {
+			bool already_included = zend_hash_exists(
+				&EG(included_files), resolved_path);
+
+			zend_string_release(resolved_path);
+			if (already_included) {
+				zend_native_complete_include_once_site(
+					compiler, source_opline);
+				if (result != NULL) {
+					ZVAL_TRUE(result);
+				}
+				return ZEND_NATIVE_RETURNED;
+			}
+		}
+	}
 	first_function_bucket = EG(function_table)->nNumUsed;
 	first_class_bucket = EG(class_table)->nNumUsed;
 	new_op_array = zend_include_or_eval(filename, extended_value);
@@ -332,10 +493,13 @@ zend_native_status zend_native_execute_include_or_eval(
 		}
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	if (result_type != IS_UNUSED) {
-		result = ZEND_CALL_VAR(execute_data, result_operand.var);
-	}
 	if (new_op_array == ZEND_NATIVE_FAKE_OP_ARRAY) {
+		if (op1_type == IS_CONST
+				&& (extended_value == ZEND_INCLUDE_ONCE
+					|| extended_value == ZEND_REQUIRE_ONCE)) {
+			zend_native_complete_include_once_site(
+				compiler, source_opline);
+		}
 		if (result != NULL) {
 			ZVAL_TRUE(result);
 		}
@@ -349,6 +513,8 @@ zend_native_status zend_native_execute_include_or_eval(
 	}
 
 	new_op_array->scope = execute_data->func->op_array.scope;
+	zend_optimize_runtime_op_array(
+		new_op_array, extended_value == ZEND_EVAL);
 	call_info = (Z_TYPE_INFO(execute_data->This) & ZEND_CALL_HAS_THIS)
 		| ZEND_CALL_NESTED_CODE | ZEND_CALL_HAS_SYMBOL_TABLE;
 	previous = EG(current_execute_data);
@@ -372,11 +538,15 @@ zend_native_status zend_native_execute_include_or_eval(
 			"Native dynamic codeunit owner capacity overflow");
 		return ZEND_NATIVE_EXCEPTION;
 	}
+	ephemeral_codeunit = new_op_array->num_dynamic_func_defs == 0
+		&& first_function_bucket == EG(function_table)->nNumUsed
+		&& first_class_bucket == EG(class_table)->nNumUsed;
 	if (compiler->product_compiler != NULL) {
 		memset(&compile_diagnostic, 0, sizeof(compile_diagnostic));
 		if (zend_native_compiler_compile_dynamic_component(
 				compiler->product_compiler, new_op_array,
 				first_function_bucket, first_class_bucket,
+				&component_compiler, &first_compiled_function,
 				&entry_cell, &compile_diagnostic) == FAILURE) {
 			entry_cell = NULL;
 			if (EG(exception) == NULL) {
@@ -394,6 +564,10 @@ zend_native_status zend_native_execute_include_or_eval(
 			|| (code = zend_native_entry_cell_load(entry_cell)) == NULL
 			|| zend_native_dynamic_compiler_publish(
 				compiler, new_op_array, entry_cell) == FAILURE) {
+		if (component_compiler != NULL) {
+			zend_native_compiler_release_ready_transients(
+				component_compiler, first_compiled_function);
+		}
 		zend_vm_stack_free_call_frame(call);
 		if (EG(exception) == NULL) {
 			zend_throw_error(NULL,
@@ -408,6 +582,22 @@ zend_native_status zend_native_execute_include_or_eval(
 	EG(current_execute_data) = previous;
 	call_info = ZEND_CALL_INFO(call);
 	zend_vm_stack_free_call_frame(call);
+	if (component_compiler != NULL) {
+		bool retired = ephemeral_codeunit
+			&& zend_native_dynamic_compiler_can_retire_last(
+				compiler, new_op_array, entry_cell)
+			&& zend_native_compiler_retire_dynamic_component(
+				component_compiler, first_compiled_function,
+				new_op_array);
+
+		if (retired) {
+			zend_native_dynamic_compiler_retire_last(
+				compiler, new_op_array);
+		} else {
+			zend_native_compiler_release_ready_transients(
+				component_compiler, first_compiled_function);
+		}
+	}
 	if ((call_info & ZEND_CALL_NEEDS_REATTACH) != 0) {
 		if (execute_data->func->op_array.last_var > 0) {
 			zend_attach_symbol_table(execute_data);

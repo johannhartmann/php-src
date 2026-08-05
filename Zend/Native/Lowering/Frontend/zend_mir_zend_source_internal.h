@@ -62,6 +62,16 @@ bool zend_mir_frontend_ssa_slot(
 	uint32_t *slot,
 	zend_mir_source_slot_kind *slot_kind);
 
+void *zend_mir_frontend_build_slot_index(
+	const zend_op_array *op_array, const zend_ssa *ssa);
+void zend_mir_frontend_release_slot_index(void *index);
+bool zend_mir_frontend_indexed_ssa_slot(
+	const void *index, uint32_t ssa_variable_id, uint32_t *slot,
+	zend_mir_source_slot_kind *slot_kind);
+bool zend_mir_frontend_indexed_dead_ssa_peer_slot(
+	const void *index, const zend_ssa *ssa, uint32_t ssa_variable_id,
+	uint32_t *slot, zend_mir_source_slot_kind *slot_kind);
+
 zend_mir_lowering_status zend_mir_frontend_validate_literals(
 	const zend_op_array *op_array,
 	zend_mir_op_array_id op_array_id,
@@ -161,6 +171,9 @@ bool zend_mir_frontend_ssa_def_at(
 	uint32_t index,
 	zend_mir_source_ssa_def_ref *out);
 
+bool zend_mir_frontend_build_operand_index(zend_mir_zend_source *source);
+void zend_mir_frontend_release_operand_index(void *index);
+
 zend_mir_lowering_status zend_mir_frontend_validate_facts(
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,
@@ -172,6 +185,11 @@ bool zend_mir_frontend_value_fact_at(
 	const zend_mir_zend_source *source,
 	uint32_t index,
 	zend_mir_value_fact_ref *out);
+
+bool zend_mir_frontend_build_value_fact_index(
+	zend_mir_zend_source *source);
+
+void zend_mir_frontend_release_value_fact_index(void *index);
 
 bool zend_mir_frontend_w05_result_fact_at(
 	const zend_mir_zend_source *source,
@@ -206,7 +224,14 @@ zend_mir_lowering_status zend_mir_frontend_project_w10_result_facts(
 	zend_ssa *projected_ssa,
 	zend_mir_frontend_diagnostic *diagnostic);
 
-bool zend_mir_frontend_fact_for_ssa(
+bool zend_mir_frontend_fact_for_ssa_with_id(
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	uint32_t ssa_variable_id,
+	zend_mir_value_fact_id fact_id,
+	zend_mir_value_fact_ref *out);
+
+bool zend_mir_frontend_fact_payload_for_ssa(
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,
 	uint32_t ssa_variable_id,

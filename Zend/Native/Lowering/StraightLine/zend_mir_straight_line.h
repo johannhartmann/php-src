@@ -75,6 +75,8 @@ typedef struct _zend_mir_straight_line_lifetime {
 	zend_mir_straight_line_value *values;
 	uint32_t capacity;
 	uint32_t count;
+	uint32_t *value_index;
+	uint32_t value_index_capacity;
 	bool entry_emitted;
 	zend_mir_frame_state_id entry_frame_state_id;
 } zend_mir_straight_line_lifetime;
@@ -138,6 +140,10 @@ bool zend_mir_lowering_context_set_provider_failure(
 bool zend_mir_straight_line_lifetime_init(
 	zend_mir_straight_line_lifetime *lifetime,
 	zend_mir_straight_line_value *storage, uint32_t capacity);
+bool zend_mir_straight_line_lifetime_init_indexed(
+	zend_mir_straight_line_lifetime *lifetime,
+	zend_mir_straight_line_value *storage, uint32_t capacity,
+	uint32_t *value_index, uint32_t value_index_capacity);
 bool zend_mir_straight_line_track_value(
 	zend_mir_straight_line_lifetime *lifetime,
 	const zend_mir_straight_line_value *value);

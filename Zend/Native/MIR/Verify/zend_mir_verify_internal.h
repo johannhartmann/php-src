@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "zend_mir_verify.h"
+#include "../zend_mir_id_index.h"
 
 typedef struct _zend_mir_verify_function {
 	zend_mir_function_record record;
@@ -98,6 +99,20 @@ typedef struct _zend_mir_verify_context {
 	zend_mir_value_id *operands;
 	zend_mir_block_id *successors;
 	zend_mir_block_id *predecessors;
+	zend_mir_id_index_entry *function_index;
+	zend_mir_id_index_entry *block_index;
+	zend_mir_id_index_entry *instruction_index;
+	zend_mir_id_index_entry *value_index;
+	zend_mir_id_index_entry *constant_index;
+	zend_mir_id_index_entry *frame_index;
+	zend_mir_id_index_entry *source_index;
+	uint32_t function_index_capacity;
+	uint32_t block_index_capacity;
+	uint32_t instruction_index_capacity;
+	uint32_t value_index_capacity;
+	uint32_t constant_index_capacity;
+	uint32_t frame_index_capacity;
+	uint32_t source_index_capacity;
 	uint32_t operand_count;
 	uint32_t successor_count;
 	uint32_t predecessor_count;

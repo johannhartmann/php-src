@@ -83,4 +83,10 @@ static inline bool zend_mir_w04_edge_requires_statepoint(
 		&& (edge->flags & ZEND_MIR_SOURCE_EDGE_INTERRUPT_BOUNDARY) != 0;
 }
 
+bool zend_mir_w04_resolve_edge_pi_input(
+	const zend_mir_lowering_source_view *source,
+	const zend_mir_source_phi_ref *consumer,
+	const zend_mir_source_phi_input_ref *consumer_input,
+	uint32_t *source_ssa_variable_id);
+
 #endif /* ZEND_MIR_LOWERING_CONTROL_FLOW_H */

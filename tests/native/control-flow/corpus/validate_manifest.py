@@ -31,6 +31,8 @@ ACCEPTED_INTENTIONS = {
     "for_loop_counter",
     "loop_carried_phi",
     "multiple_backedges_reducible",
+    "goto_irreducible",
+    "unsupported_pi_constraint",
 }
 REJECTED_INTENTIONS = {
     "try_catch_finally",
@@ -40,8 +42,6 @@ REJECTED_INTENTIONS = {
     "object_condition",
     "string_condition_without_profile",
     "switch_or_match_if_not_profiled",
-    "goto_irreducible",
-    "unsupported_pi_constraint",
     "missing_condition_type_proof",
     "coalesce_reference_semantics",
     "nullsafe_jump",
@@ -54,8 +54,6 @@ REJECTED_CLASSIFICATIONS = {
     "object_condition": ("W06", "MIRL0013"),
     "string_condition_without_profile": ("W06", "MIRL0013"),
     "switch_or_match_if_not_profiled": ("W07", "MIRL0011"),
-    "goto_irreducible": (None, "MIRL0016"),
-    "unsupported_pi_constraint": (None, "MIRL0017"),
     "missing_condition_type_proof": ("W06", "MIRL0013"),
     "coalesce_reference_semantics": ("W06", "MIRL0013"),
     "nullsafe_jump": ("W06", "MIRL0013"),

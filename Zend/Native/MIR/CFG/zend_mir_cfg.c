@@ -85,35 +85,175 @@ void zend_mir_cfg_emit(zend_mir_cfg *cfg, zend_mir_cfg_status status,
 	(void) zend_mir_diagnostic_sink_emit(cfg->diagnostics, &diagnostic);
 }
 
-int zend_mir_cfg_find_block(const zend_mir_cfg *cfg, zend_mir_block_id block_id)
+static bool zend_mir_cfg_build_block_index(
+		zend_mir_cfg *cfg, uint32_t required, zend_mir_cfg_status *status)
 {
+	zend_mir_id_index_entry *entries = cfg->block_index;
+	uint32_t capacity = cfg->block_index_capacity;
 	uint32_t i;
+	bool duplicate = false;
 
-	if (cfg == NULL) {
-		return -1;
+	if (entries == NULL || required > capacity / 2) {
+		if (!zend_mir_id_index_capacity(required, &capacity)) {
+			*status = ZEND_MIR_CFG_STATUS_CAPACITY_EXCEEDED;
+			return false;
+		}
+		entries = zend_mir_cfg_allocate(cfg, capacity, sizeof(*entries),
+			_Alignof(zend_mir_id_index_entry), status);
+		if (entries == NULL) {
+			return false;
+		}
+	} else {
+		memset(entries, 0, (size_t) capacity * sizeof(*entries));
 	}
 	for (i = 0; i < cfg->block_count; i++) {
-		if (cfg->blocks[i].id == block_id) {
-			return (int) i;
+		if (!zend_mir_id_index_insert(
+				entries, capacity, cfg->blocks[i].id, i, &duplicate)) {
+			*status = ZEND_MIR_CFG_STATUS_CAPACITY_EXCEEDED;
+			return false;
 		}
 	}
-	return -1;
+	cfg->block_index = entries;
+	cfg->block_index_capacity = capacity;
+	cfg->block_ids_unique = !duplicate;
+	return true;
+}
+
+static bool zend_mir_cfg_build_instruction_index(
+		zend_mir_cfg *cfg, uint32_t required, zend_mir_cfg_status *status)
+{
+	zend_mir_id_index_entry *entries = cfg->instruction_index;
+	uint32_t capacity = cfg->instruction_index_capacity;
+	uint32_t i;
+	bool duplicate = false;
+
+	if (entries == NULL || required > capacity / 2) {
+		if (!zend_mir_id_index_capacity(required, &capacity)) {
+			*status = ZEND_MIR_CFG_STATUS_CAPACITY_EXCEEDED;
+			return false;
+		}
+		entries = zend_mir_cfg_allocate(cfg, capacity, sizeof(*entries),
+			_Alignof(zend_mir_id_index_entry), status);
+		if (entries == NULL) {
+			return false;
+		}
+	} else {
+		memset(entries, 0, (size_t) capacity * sizeof(*entries));
+	}
+	for (i = 0; i < cfg->instruction_count; i++) {
+		if (!zend_mir_id_index_insert(entries, capacity,
+				cfg->instructions[i].id, i, &duplicate)) {
+			*status = ZEND_MIR_CFG_STATUS_CAPACITY_EXCEEDED;
+			return false;
+		}
+	}
+	cfg->instruction_index = entries;
+	cfg->instruction_index_capacity = capacity;
+	cfg->instruction_ids_unique = !duplicate;
+	return true;
+}
+
+static bool zend_mir_cfg_build_block_summaries(
+		zend_mir_cfg *cfg, uint32_t required, zend_mir_cfg_status *status)
+{
+	zend_mir_cfg_block_summary *summaries = cfg->block_summaries;
+	uint32_t capacity = cfg->block_summary_capacity;
+	uint32_t i;
+
+	if (required != 0 && (summaries == NULL || required > capacity)) {
+		summaries = zend_mir_cfg_allocate(cfg, required, sizeof(*summaries),
+			_Alignof(zend_mir_cfg_block_summary), status);
+		if (summaries == NULL) {
+			return false;
+		}
+		capacity = required;
+	}
+	if (cfg->block_count != 0) {
+		memset(summaries, 0, (size_t) cfg->block_count * sizeof(*summaries));
+	}
+	for (i = 0; i < cfg->block_count; i++) {
+		summaries[i].last_instruction_index = UINT32_MAX;
+		summaries[i].phi_order_valid = true;
+	}
+	for (i = 0; i < cfg->instruction_count; i++) {
+		int block_index = zend_mir_id_index_find(cfg->block_index,
+			cfg->block_index_capacity, cfg->instructions[i].block_id);
+		zend_mir_cfg_block_summary *summary;
+
+		if (block_index < 0) {
+			continue;
+		}
+		summary = &summaries[block_index];
+		if (summary->last_instruction_index != UINT32_MAX
+				&& zend_mir_opcode_is_terminator(
+					cfg->instructions[summary->last_instruction_index].opcode)) {
+			summary->has_early_terminator = true;
+		}
+		if (cfg->instructions[i].opcode == ZEND_MIR_OPCODE_PHI) {
+			if (summary->instruction_count != summary->phi_count) {
+				summary->phi_order_valid = false;
+			}
+			summary->phi_count++;
+		}
+		summary->instruction_count++;
+		summary->last_instruction_index = i;
+	}
+	cfg->block_summaries = summaries;
+	cfg->block_summary_capacity = capacity;
+	return true;
+}
+
+static bool zend_mir_cfg_build_value_index(
+		zend_mir_cfg *cfg, zend_mir_cfg_status *status)
+{
+	uint32_t count = cfg->source->value_count(cfg->source->context);
+	uint32_t capacity;
+	uint32_t i;
+	bool duplicate = false;
+
+	if (!zend_mir_id_index_capacity(count, &capacity)) {
+		*status = ZEND_MIR_CFG_STATUS_CAPACITY_EXCEEDED;
+		return false;
+	}
+	cfg->value_index = zend_mir_cfg_allocate(cfg, capacity,
+		sizeof(*cfg->value_index), _Alignof(zend_mir_id_index_entry), status);
+	if (cfg->value_index == NULL) {
+		return false;
+	}
+	cfg->value_index_capacity = capacity;
+	for (i = 0; i < count; i++) {
+		zend_mir_value_record value;
+		if (!cfg->source->value_at(cfg->source->context, i, &value)
+				|| !zend_mir_id_index_insert(cfg->value_index, capacity,
+					value.id, i, &duplicate)) {
+			*status = ZEND_MIR_CFG_STATUS_INVALID_CFG;
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool zend_mir_cfg_prepare_indexes(
+		zend_mir_cfg *cfg, uint32_t blocks, uint32_t instructions,
+		bool include_values, zend_mir_cfg_status *status)
+{
+	return zend_mir_cfg_build_block_index(cfg, blocks, status)
+		&& zend_mir_cfg_build_instruction_index(cfg, instructions, status)
+		&& zend_mir_cfg_build_block_summaries(cfg, blocks, status)
+		&& (!include_values || zend_mir_cfg_build_value_index(cfg, status));
+}
+
+int zend_mir_cfg_find_block(const zend_mir_cfg *cfg, zend_mir_block_id block_id)
+{
+	return cfg == NULL ? -1 : zend_mir_id_index_find(
+		cfg->block_index, cfg->block_index_capacity, block_id);
 }
 
 int zend_mir_cfg_find_instruction(const zend_mir_cfg *cfg,
 		zend_mir_instruction_id instruction_id)
 {
-	uint32_t i;
-
-	if (cfg == NULL) {
-		return -1;
-	}
-	for (i = 0; i < cfg->instruction_count; i++) {
-		if (cfg->instructions[i].id == instruction_id) {
-			return (int) i;
-		}
-	}
-	return -1;
+	return cfg == NULL ? -1 : zend_mir_id_index_find(
+		cfg->instruction_index, cfg->instruction_index_capacity, instruction_id);
 }
 
 bool zend_mir_cfg_block_is_selected(const zend_mir_cfg *cfg,
@@ -124,23 +264,11 @@ bool zend_mir_cfg_block_is_selected(const zend_mir_cfg *cfg,
 	return index >= 0 && cfg->blocks[index].function_id == cfg->function_id;
 }
 
-static bool zend_mir_cfg_value_exists(const zend_mir_cfg *cfg, zend_mir_value_id value_id)
+bool zend_mir_cfg_value_exists(const zend_mir_cfg *cfg, zend_mir_value_id value_id)
 {
-	uint32_t i;
-	zend_mir_value_record value;
-
-	if (!zend_mir_id_is_valid(value_id)) {
-		return false;
-	}
-	for (i = 0; i < cfg->source->value_count(cfg->source->context); i++) {
-		if (!cfg->source->value_at(cfg->source->context, i, &value)) {
-			return false;
-		}
-		if (value.id == value_id) {
-			return true;
-		}
-	}
-	return false;
+	return cfg != NULL && zend_mir_id_is_valid(value_id)
+		&& zend_mir_id_index_find(
+			cfg->value_index, cfg->value_index_capacity, value_id) >= 0;
 }
 
 uint32_t zend_mir_cfg_predecessor_count_internal(const zend_mir_cfg *cfg,
@@ -178,16 +306,9 @@ uint32_t zend_mir_cfg_successor_count_internal(const zend_mir_cfg *cfg,
 uint32_t zend_mir_cfg_phi_count_internal(const zend_mir_cfg *cfg,
 		zend_mir_block_id block_id)
 {
-	uint32_t count = 0;
-	uint32_t i;
+	int block_index = zend_mir_cfg_find_block(cfg, block_id);
 
-	for (i = 0; i < cfg->instruction_count; i++) {
-		if (cfg->instructions[i].block_id == block_id
-				&& cfg->instructions[i].opcode == ZEND_MIR_OPCODE_PHI) {
-			count++;
-		}
-	}
-	return count;
+	return block_index < 0 ? 0 : cfg->block_summaries[block_index].phi_count;
 }
 
 bool zend_mir_cfg_phi_value_at(const zend_mir_cfg *cfg,
@@ -260,25 +381,26 @@ static bool zend_mir_cfg_block_terminator(const zend_mir_cfg *cfg,
 		zend_mir_block_id block_id, zend_mir_instruction_record *out,
 		uint32_t *instruction_count)
 {
-	uint32_t count = 0;
-	uint32_t i;
-	zend_mir_instruction_record last;
+	int block_index = zend_mir_cfg_find_block(cfg, block_id);
+	const zend_mir_cfg_block_summary *summary;
+	const zend_mir_instruction_record *last;
 
-	memset(&last, 0, sizeof(last));
-	for (i = 0; i < cfg->instruction_count; i++) {
-		if (cfg->instructions[i].block_id == block_id) {
-			last = cfg->instructions[i];
-			count++;
-		}
+	if (block_index < 0) {
+		return false;
 	}
+	summary = &cfg->block_summaries[block_index];
 	if (instruction_count != NULL) {
-		*instruction_count = count;
+		*instruction_count = summary->instruction_count;
 	}
-	if (count == 0 || !zend_mir_opcode_is_terminator(last.opcode)) {
+	if (summary->last_instruction_index == UINT32_MAX) {
+		return false;
+	}
+	last = &cfg->instructions[summary->last_instruction_index];
+	if (!zend_mir_opcode_is_terminator(last->opcode)) {
 		return false;
 	}
 	if (out != NULL) {
-		*out = last;
+		*out = *last;
 	}
 	return true;
 }
@@ -742,6 +864,10 @@ zend_mir_cfg_status zend_mir_cfg_create(zend_mir_cfg **out,
 			goto fail;
 		}
 	}
+	if (!zend_mir_cfg_prepare_indexes(cfg, cfg->block_count,
+			cfg->instruction_count, true, &status)) {
+		goto fail;
+	}
 	status = zend_mir_cfg_snapshot_operands(cfg);
 	if (status != ZEND_MIR_CFG_STATUS_OK) {
 		goto fail;
@@ -814,18 +940,15 @@ zend_mir_cfg_status zend_mir_cfg_validate(const zend_mir_cfg *cfg)
 			|| !zend_mir_cfg_block_is_selected(cfg, function.entry_block_id)) {
 		return ZEND_MIR_CFG_STATUS_INVALID_CFG;
 	}
+	if (!cfg->block_ids_unique || !cfg->instruction_ids_unique) {
+		return ZEND_MIR_CFG_STATUS_INVALID_CFG;
+	}
 	for (i = 0; i < cfg->block_count; i++) {
 		uint32_t slot;
 		uint32_t successors;
 		uint32_t predecessors;
-		uint32_t j;
 		if (!zend_mir_id_is_valid(cfg->blocks[i].id)) {
 			return ZEND_MIR_CFG_STATUS_INVALID_CFG;
-		}
-		for (j = i + 1; j < cfg->block_count; j++) {
-			if (cfg->blocks[i].id == cfg->blocks[j].id) {
-				return ZEND_MIR_CFG_STATUS_INVALID_CFG;
-			}
 		}
 		successors = zend_mir_cfg_successor_count_internal(cfg, cfg->blocks[i].id);
 		predecessors = zend_mir_cfg_predecessor_count_internal(cfg, cfg->blocks[i].id);
@@ -850,15 +973,9 @@ zend_mir_cfg_status zend_mir_cfg_validate(const zend_mir_cfg *cfg)
 	}
 	for (i = 0; i < cfg->instruction_count; i++) {
 		uint32_t operands;
-		uint32_t j;
 		if (!zend_mir_id_is_valid(cfg->instructions[i].id)
 				|| zend_mir_cfg_find_block(cfg, cfg->instructions[i].block_id) < 0) {
 			return ZEND_MIR_CFG_STATUS_INVALID_CFG;
-		}
-		for (j = i + 1; j < cfg->instruction_count; j++) {
-			if (cfg->instructions[i].id == cfg->instructions[j].id) {
-				return ZEND_MIR_CFG_STATUS_INVALID_CFG;
-			}
 		}
 		operands = cfg->view.instruction_operand_count(
 			cfg->view.context, cfg->instructions[i].id);
@@ -870,10 +987,9 @@ zend_mir_cfg_status zend_mir_cfg_validate(const zend_mir_cfg *cfg)
 	}
 	for (i = 0; i < cfg->block_count; i++) {
 		zend_mir_instruction_record terminator;
+		const zend_mir_cfg_block_summary *summary = &cfg->block_summaries[i];
 		uint32_t instruction_count;
 		uint32_t expected;
-		uint32_t j;
-		bool saw_non_phi = false;
 		if (cfg->blocks[i].function_id != cfg->function_id) {
 			continue;
 		}
@@ -890,21 +1006,11 @@ zend_mir_cfg_status zend_mir_cfg_validate(const zend_mir_cfg *cfg)
 						cfg, cfg->blocks[i].id)) {
 			return ZEND_MIR_CFG_STATUS_INVALID_CFG;
 		}
-		for (j = 0; j < cfg->instruction_count; j++) {
-			if (cfg->instructions[j].block_id != cfg->blocks[i].id) {
-				continue;
-			}
-			if (zend_mir_opcode_is_terminator(cfg->instructions[j].opcode)
-					&& cfg->instructions[j].id != terminator.id) {
-				return ZEND_MIR_CFG_STATUS_INVALID_CFG;
-			}
-			if (cfg->instructions[j].opcode == ZEND_MIR_OPCODE_PHI) {
-				if (saw_non_phi) {
-					return ZEND_MIR_CFG_STATUS_INVALID_PHI;
-				}
-			} else {
-				saw_non_phi = true;
-			}
+		if (summary->has_early_terminator) {
+			return ZEND_MIR_CFG_STATUS_INVALID_CFG;
+		}
+		if (!summary->phi_order_valid) {
+			return ZEND_MIR_CFG_STATUS_INVALID_PHI;
 		}
 	}
 	return ZEND_MIR_CFG_STATUS_OK;
@@ -1338,6 +1444,10 @@ zend_mir_cfg_status zend_mir_cfg_split_edge(zend_mir_cfg *cfg,
 	if (status != ZEND_MIR_CFG_STATUS_OK) {
 		return status;
 	}
+	if (!zend_mir_cfg_prepare_indexes(cfg, cfg->block_count + 1,
+			cfg->instruction_count + 1, false, &status)) {
+		return status;
+	}
 	status = zend_mir_cfg_allocate_split_arrays(cfg, &blocks, &instructions, &edges);
 	if (status != ZEND_MIR_CFG_STATUS_OK) {
 		return status;
@@ -1365,6 +1475,10 @@ zend_mir_cfg_status zend_mir_cfg_split_edge(zend_mir_cfg *cfg,
 	cfg->instruction_count++;
 	cfg->edges = edges;
 	cfg->edge_count++;
+	if (!zend_mir_cfg_prepare_indexes(cfg, cfg->block_count,
+			cfg->instruction_count, false, &status)) {
+		return status;
+	}
 	*new_block_id = block_id;
 	return ZEND_MIR_CFG_STATUS_OK;
 }
@@ -1420,6 +1534,10 @@ zend_mir_cfg_status zend_mir_cfg_split_block(zend_mir_cfg *cfg,
 	if (status != ZEND_MIR_CFG_STATUS_OK) {
 		return status;
 	}
+	if (!zend_mir_cfg_prepare_indexes(cfg, cfg->block_count + 1,
+			cfg->instruction_count + 1, false, &status)) {
+		return status;
+	}
 	status = zend_mir_cfg_allocate_split_arrays(cfg, &blocks, &instructions, &edges);
 	if (status != ZEND_MIR_CFG_STATUS_OK) {
 		return status;
@@ -1459,6 +1577,10 @@ zend_mir_cfg_status zend_mir_cfg_split_block(zend_mir_cfg *cfg,
 	cfg->instruction_count++;
 	cfg->edges = edges;
 	cfg->edge_count++;
+	if (!zend_mir_cfg_prepare_indexes(cfg, cfg->block_count,
+			cfg->instruction_count, false, &status)) {
+		return status;
+	}
 	*new_block_id = split_id;
 	return ZEND_MIR_CFG_STATUS_OK;
 }

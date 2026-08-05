@@ -45,6 +45,22 @@ static bool zend_mir_straight_line_original_literal_is_scalar(
 		|| type == IS_LONG || type == IS_DOUBLE;
 }
 
+static bool zend_mir_straight_line_original_opcode_is(
+	const zend_mir_lowering_context *context,
+	const zend_mir_source_opcode_ref *source_opcode, uint8_t opcode)
+{
+	const zend_op_array *op_array;
+
+	if (context == NULL || context->zend_source == NULL) {
+		return false;
+	}
+	op_array = context->zend_source->call_op_array != NULL
+		? (const zend_op_array *) context->zend_source->call_op_array
+		: (const zend_op_array *) context->zend_source->op_array;
+	return op_array != NULL && source_opcode->opline_index < op_array->last
+		&& op_array->opcodes[source_opcode->opline_index].opcode == opcode;
+}
+
 static zend_mir_lowering_status zend_mir_lower_source_zval_return(
 	zend_mir_lowering_context *context,
 	const zend_mir_source_opcode_ref *source_opcode,
@@ -94,7 +110,9 @@ static zend_mir_lowering_status zend_mir_lower_source_zval_return(
 		}
 		return ZEND_MIR_LOWERING_FAILED;
 	}
-	scalar_return = zend_mir_straight_line_original_literal_is_scalar(
+	scalar_return = zend_mir_straight_line_original_opcode_is(
+		context, source_opcode, ZEND_RETURN)
+		&& zend_mir_straight_line_original_literal_is_scalar(
 		context, &source_opcode->op1)
 		&& zend_mir_straight_line_resolve_return_value(
 			provider_context, &source_opcode->op1,

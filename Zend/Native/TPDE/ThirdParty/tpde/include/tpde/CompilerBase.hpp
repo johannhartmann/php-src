@@ -1748,6 +1748,11 @@ template <IRAdaptor Adaptor, typename Derived, CompilerConfig Config>
 template <typename Jump>
 void CompilerBase<Adaptor, Derived, Config>::generate_cond_branch(
     Jump jmp, IRBlockRef true_target, IRBlockRef false_target) {
+  if (true_target == false_target) {
+    generate_uncond_branch(true_target);
+    return;
+  }
+
   IRBlockRef next = analyzer.block_ref(next_block());
 
   bool true_needs_split = branch_needs_split(true_target);

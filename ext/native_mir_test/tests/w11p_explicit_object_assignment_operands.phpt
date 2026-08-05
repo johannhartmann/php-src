@@ -26,9 +26,19 @@ function w11p_object_assign_op(): int {
     $object->value += 2;
     return $object->value;
 }
+function w11p_object_assign_dynamic(): int {
+    $object = new stdClass();
+    $property = 'answer';
+    $object->$property = 42;
+    return $object->answer;
+}
 PHP;
 
-foreach (['w11p_object_assign_ref', 'w11p_object_assign_op'] as $function) {
+foreach ([
+    'w11p_object_assign_ref',
+    'w11p_object_assign_op',
+    'w11p_object_assign_dynamic',
+] as $function) {
     $result = native_mir_test_compile_execute(
         $source,
         'w11p-explicit-object-assignment-operands.php',
@@ -49,3 +59,4 @@ foreach (['w11p_object_assign_ref', 'w11p_object_assign_op'] as $function) {
 --EXPECT--
 w11p_object_assign_ref accepted return=42 vm=0 execute_ex=0 handler=0
 w11p_object_assign_op accepted return=42 vm=0 execute_ex=0 handler=0
+w11p_object_assign_dynamic accepted return=42 vm=0 execute_ex=0 handler=0

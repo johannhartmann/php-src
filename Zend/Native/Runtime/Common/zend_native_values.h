@@ -9,6 +9,14 @@
 extern "C" {
 #endif
 
+/*
+ * Materialize a dereferenced request-local owner, duplicating persistent
+ * arrays and strings.  target may equal source only when the zval is a
+ * non-reference shallow transfer whose additional logical owner is not yet
+ * reflected in its refcount.
+ */
+void zend_native_zval_copy_deref_or_dup(zval *target, const zval *source);
+
 zend_native_status zend_native_value_make_ref(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,
@@ -230,6 +238,10 @@ zend_native_status zend_native_value_incdec(
 	uint64_t op1, uint64_t op2, uint64_t result,
 	uint32_t extended_value, uint32_t source_opcode,
 	uint32_t source_position_id);
+void zend_native_incdec_property_zval(
+	zend_execute_data *execute_data, zval *property,
+	const struct _zend_property_info *property_info, zval *result,
+	bool post, bool increment);
 
 zend_native_iterator_branch_result zend_native_value_iterator_branch(
 	zend_execute_data *execute_data,

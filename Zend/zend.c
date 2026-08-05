@@ -1373,9 +1373,6 @@ void zend_call_destructors(void) /* {{{ */
 
 ZEND_API void zend_deactivate(void) /* {{{ */
 {
-#ifdef HAVE_NATIVE_ENGINE
-	zend_native_executor_deactivate();
-#endif
 	/* we're no longer executing anything */
 	EG(current_execute_data) = NULL;
 
@@ -1383,8 +1380,23 @@ ZEND_API void zend_deactivate(void) /* {{{ */
 		shutdown_scanner();
 	} zend_end_try();
 
+	/* Release quiescent request-local native compilers before object-store
+	 * shutdown checks refcounts held by their dynamic source codeunits. Leased
+	 * or suspended generations remain pinned until the normal post-executor
+	 * native deactivation below. */
+#ifdef HAVE_NATIVE_ENGINE
+	zend_native_executor_prepare_shutdown();
+#endif
+
 	/* shutdown_executor() takes care of its own bailout handling */
 	shutdown_executor();
+
+#ifdef HAVE_NATIVE_ENGINE
+	/* Suspended generators retain their native code generation until executor
+	 * shutdown releases the remaining objects. Tear down request generations
+	 * only after those final generator frames have relinquished their leases. */
+	zend_native_executor_deactivate();
+#endif
 
 	zend_try {
 		zend_ini_deactivate();

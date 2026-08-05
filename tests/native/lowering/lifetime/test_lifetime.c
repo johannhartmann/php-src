@@ -14,6 +14,7 @@
 #include "tests/native/mir/contracts/fixture_host.h"
 
 #define TEST_VALUE_CAPACITY 16
+#define TEST_VALUE_INDEX_CAPACITY (TEST_VALUE_CAPACITY * 2)
 #define TEST_USE_CAPACITY 16
 #define TEST_DIAGNOSTIC_CAPACITY 64
 
@@ -43,6 +44,7 @@ typedef struct _test_case {
 	test_source source;
 	zend_mir_lowering_source_view source_view;
 	zend_mir_straight_line_value value_storage[TEST_VALUE_CAPACITY];
+	uint32_t value_index[TEST_VALUE_INDEX_CAPACITY];
 	zend_mir_straight_line_lifetime lifetime;
 	zend_mir_straight_line_slot slots[4];
 	zend_mir_straight_line_entry entry;
@@ -232,8 +234,9 @@ static void test_case_init(test_case *test,
 	assert(test->host.mutator.add_value(
 		test->host.mutator.context, initial->value_id,
 		initial->representation, initial->ownership));
-	assert(zend_mir_straight_line_lifetime_init(
-		&test->lifetime, test->value_storage, TEST_VALUE_CAPACITY));
+	assert(zend_mir_straight_line_lifetime_init_indexed(
+		&test->lifetime, test->value_storage, TEST_VALUE_CAPACITY,
+		test->value_index, TEST_VALUE_INDEX_CAPACITY));
 	assert(zend_mir_straight_line_track_value(&test->lifetime, initial));
 
 	test->source_view.contract_version = ZEND_MIR_CONTRACT_VERSION;
@@ -535,6 +538,67 @@ static void test_lifetime_and_entry_validation(void)
 	assert(test.host.frame_state_count == 0);
 	assert(test.host.frame_slot_count == 0);
 	assert(!test.lifetime.entry_emitted);
+}
+
+static void test_indexed_lifetime_collisions(void)
+{
+	enum {
+		VALUE_COUNT = 64,
+		INDEX_CAPACITY = VALUE_COUNT * 2
+	};
+	zend_mir_straight_line_value storage[VALUE_COUNT];
+	uint32_t index_storage[INDEX_CAPACITY];
+	zend_mir_straight_line_lifetime lifetime;
+	uint32_t occupied = 0;
+	uint32_t index;
+
+	assert(!zend_mir_straight_line_lifetime_init_indexed(
+		&lifetime, storage, VALUE_COUNT,
+		index_storage, VALUE_COUNT));
+	assert(!zend_mir_straight_line_lifetime_init_indexed(
+		&lifetime, storage, VALUE_COUNT,
+		index_storage, INDEX_CAPACITY - 1));
+	assert(zend_mir_straight_line_lifetime_init_indexed(
+		&lifetime, storage, VALUE_COUNT,
+		index_storage, INDEX_CAPACITY));
+	for (index = 0; index < VALUE_COUNT; index++) {
+		zend_mir_value_id value_id = index < VALUE_COUNT / 2
+			? zend_mir_value_from_original_ssa(index * INDEX_CAPACITY)
+			: zend_mir_value_from_synthetic(
+				(index - VALUE_COUNT / 2) * INDEX_CAPACITY);
+		zend_mir_straight_line_value value = test_value(
+			value_id, ZEND_MIR_REPRESENTATION_I64,
+			ZEND_MIR_OWNERSHIP_STATE_OWNED, ZEND_MIR_SCALAR_TYPE_I64);
+
+		assert(zend_mir_straight_line_track_value(&lifetime, &value));
+	}
+	for (index = 0; index < INDEX_CAPACITY; index++) {
+		occupied += index_storage[index] != 0;
+	}
+	assert(occupied == VALUE_COUNT);
+	assert(lifetime.count == VALUE_COUNT);
+	for (index = 0; index < VALUE_COUNT; index++) {
+		zend_mir_straight_line_value actual;
+		zend_mir_value_id value_id = index < VALUE_COUNT / 2
+			? zend_mir_value_from_original_ssa(index * INDEX_CAPACITY)
+			: zend_mir_value_from_synthetic(
+				(index - VALUE_COUNT / 2) * INDEX_CAPACITY);
+
+		assert(zend_mir_straight_line_value_at(
+			&lifetime, value_id, &actual));
+		assert(actual.value_id == value_id);
+		assert(zend_mir_straight_line_track_value(&lifetime, &actual));
+	}
+	assert(lifetime.count == VALUE_COUNT);
+	{
+		zend_mir_straight_line_value conflict = storage[VALUE_COUNT / 2];
+		zend_mir_straight_line_value actual;
+
+		conflict.ownership = ZEND_MIR_OWNERSHIP_STATE_BORROWED;
+		assert(!zend_mir_straight_line_track_value(&lifetime, &conflict));
+		assert(!zend_mir_straight_line_value_at(
+			&lifetime, zend_mir_value_from_original_ssa(1), &actual));
+	}
 }
 
 static void test_entry_and_scalar_returns(void)
@@ -919,6 +983,7 @@ int main(void)
 	test_copy_and_move();
 	test_duplicate_and_undef_rejected();
 	test_lifetime_and_entry_validation();
+	test_indexed_lifetime_collisions();
 	test_entry_and_scalar_returns();
 	test_free_and_deferred_cases();
 	test_structural_and_provider_claims();

@@ -1,0 +1,72 @@
+--TEST--
+Native Fiber GC sees pending calls without misclassifying active callees
+--SKIPIF--
+<?php
+if (!function_exists('native_mir_test_compile_execute')) {
+    die('skip native_mir_test is not available');
+}
+?>
+--FILE--
+<?php
+$result = native_mir_test_compile_execute(
+    <<<'PHP'
+<?php
+class W12FiberGcObject
+{
+    private array $trace;
+
+    public function __construct(array &$trace)
+    {
+        $this->trace =& $trace;
+    }
+
+    public function __destruct()
+    {
+        $this->trace[] = 'destroy';
+    }
+}
+
+function w12_fiber_gc_suspend(): void
+{
+    Fiber::suspend('ready');
+}
+
+function w12_fiber_gc_active_calls_root(): array
+{
+    $trace = [];
+    $fiber = new Fiber(function () use (&$trace): void {
+        $object = new W12FiberGcObject($trace);
+        $self = Fiber::getCurrent();
+        w12_fiber_gc_suspend();
+    });
+
+    $first = $fiber->start();
+    $before = gc_collect_cycles();
+    $trace[] = 'after-first';
+    $fiber = null;
+    $collected = gc_collect_cycles();
+
+    return [$first, $before === 0, $collected > 0, $trace];
+}
+PHP,
+    'w12-fiber-gc-active-calls.php',
+    [],
+    [
+        'wave' => 11,
+        'function' => 'w12_fiber_gc_active_calls_root',
+        'repeat' => 10,
+    ],
+);
+
+printf(
+    "%s result=%s vm=%d execute_ex=%d handler=%d active=%d\n",
+    $result['status'],
+    json_encode($result['execution']['return_value']),
+    $result['execution']['vm_handler_calls'],
+    $result['execution']['execute_ex_calls'],
+    $result['execution']['opline_handler_calls'],
+    $result['execution']['entry_active_calls'],
+);
+?>
+--EXPECT--
+accepted result=["ready",true,true,["after-first","destroy"]] vm=0 execute_ex=0 handler=0 active=0

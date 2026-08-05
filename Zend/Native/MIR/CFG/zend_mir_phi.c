@@ -4,26 +4,6 @@
 
 #include <string.h>
 
-static bool zend_mir_phi_value_exists(const zend_mir_cfg *cfg, zend_mir_value_id value_id)
-{
-	const zend_mir_view *view = zend_mir_cfg_view(cfg);
-	uint32_t i;
-	zend_mir_value_record value;
-
-	if (view == NULL || !zend_mir_id_is_valid(value_id)) {
-		return false;
-	}
-	for (i = 0; i < view->value_count(view->context); i++) {
-		if (!view->value_at(view->context, i, &value)) {
-			return false;
-		}
-		if (value.id == value_id) {
-			return true;
-		}
-	}
-	return false;
-}
-
 uint32_t zend_mir_phi_count(const zend_mir_cfg *cfg, zend_mir_block_id block_id)
 {
 	if (cfg == NULL || !zend_mir_cfg_block_is_selected(cfg, block_id)) {
@@ -122,7 +102,7 @@ zend_mir_cfg_status zend_mir_phi_set_incoming(zend_mir_cfg *cfg,
 	zend_mir_cfg_operand *operands;
 	zend_mir_cfg_status status;
 
-	if (cfg == NULL || !zend_mir_phi_value_exists(cfg, value_id)) {
+	if (cfg == NULL || !zend_mir_cfg_value_exists(cfg, value_id)) {
 		return ZEND_MIR_CFG_STATUS_INVALID_ARGUMENT;
 	}
 	instruction = zend_mir_cfg_find_instruction(cfg, phi_instruction_id);

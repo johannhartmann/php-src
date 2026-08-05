@@ -58,6 +58,17 @@ try {
     printf("strict=%s\n", $error->getMessage());
 }
 
+try {
+    compileReturn(
+        '<?php class BadToString { public function __toString() { return []; } }',
+        'return-bad-tostring.php',
+        'BadToString::__toString',
+    );
+    echo "tostring=missing-error\n";
+} catch (TypeError $error) {
+    printf("tostring=%s\n", $error->getMessage());
+}
+
 $recovered = compileReturn(
     '<?php function recoveredReturn(): int { return 9; }',
     'return-recovered.php',
@@ -75,4 +86,5 @@ printf(
 --EXPECT--
 exact=accepted:7 coerced=accepted:1 nullable=accepted:null vm=0/0/0
 strict=strictReturn(): Return value must be of type int, float returned
+tostring=BadToString::__toString(): Return value must be of type string, array returned
 recovered=accepted:9 vm=0 execute_ex=0 handler=0

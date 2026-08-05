@@ -235,10 +235,6 @@ static bool zend_mir_w04_validate_blocks(
 			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
 			return false;
 		}
-		if ((block.flags & ZEND_MIR_SOURCE_BLOCK_IRREDUCIBLE) != 0) {
-			validation->diagnostic = ZEND_MIRL_W04_IRREDUCIBLE_LOOP;
-			return false;
-		}
 		if ((block.flags & ZEND_MIR_SOURCE_BLOCK_PROTECTED) != 0
 				&& !allow_protected_control_flow) {
 			validation->diagnostic = ZEND_MIRL_W04_PROTECTED_REGION;
@@ -409,14 +405,76 @@ static bool zend_mir_w04_validate_edges(
 	return true;
 }
 
-static bool zend_mir_w04_phi_input_is_edge_pi(
+static bool zend_mir_w04_validate_terminators(
+	const zend_mir_lowering_source_view *source,
+	zend_mir_w04_validation *validation)
+{
+	uint32_t block_count = source->block_count(source->context);
+	uint32_t edge_count = source->edge_count(source->context);
+	uint32_t i;
+
+	for (i = 0; i < block_count; i++) {
+		zend_mir_source_block_ref block;
+		zend_mir_source_opcode_ref opcode;
+		zend_mir_w04_branch_kind kind = ZEND_MIR_W04_BRANCH_KIND_INVALID;
+		uint32_t opcode_number = 0;
+		uint32_t outgoing = 0;
+		uint32_t j;
+
+		if (!source->block_at(source->context, i, &block)) {
+			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
+			return false;
+		}
+		if ((block.flags & ZEND_MIR_SOURCE_BLOCK_REACHABLE) == 0) {
+			continue;
+		}
+		for (j = 0; j < edge_count; j++) {
+			zend_mir_source_edge_ref edge;
+
+			if (!source->edge_at(source->context, j, &edge)) {
+				validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
+				return false;
+			}
+			if (edge.from_block_id == block.id) {
+				outgoing++;
+			}
+		}
+		if (block.opcode_count != 0) {
+			for (j = block.opcode_count; j != 0; j--) {
+				if (!source->opcode_at(source->context,
+						block.first_opcode_ordinal + j - 1, &opcode)) {
+					validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
+					return false;
+				}
+				if (opcode.zend_opcode_number != ZEND_MIR_W03_OPCODE_NOP) {
+					opcode_number = opcode.zend_opcode_number;
+					kind = zend_mir_w04_branch_kind_for_opcode(opcode_number);
+					break;
+				}
+			}
+		}
+		if (!zend_mir_w04_branch_edge_count_is_valid(
+				kind, opcode_number, outgoing)) {
+			validation->diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
+			return false;
+		}
+	}
+	return true;
+}
+
+bool zend_mir_w04_resolve_edge_pi_input(
 	const zend_mir_lowering_source_view *source,
 	const zend_mir_source_phi_ref *consumer,
-	const zend_mir_source_phi_input_ref *consumer_input)
+	const zend_mir_source_phi_input_ref *consumer_input,
+	uint32_t *source_ssa_variable_id)
 {
 	uint32_t producer_index;
 
-	if (consumer->kind != ZEND_MIR_SOURCE_PHI_MERGE) {
+	if (source == NULL || consumer == NULL || consumer_input == NULL
+			|| source->phi_count == NULL || source->phi_at == NULL
+			|| source->phi_input_count == NULL
+			|| source->phi_input_at == NULL
+			|| consumer->kind != ZEND_MIR_SOURCE_PHI_MERGE) {
 		return false;
 	}
 	for (producer_index = 0;
@@ -425,6 +483,7 @@ static bool zend_mir_w04_phi_input_is_edge_pi(
 		zend_mir_source_phi_ref producer;
 		uint32_t input_index;
 		uint32_t producer_input_count = 0;
+		uint32_t producer_source_ssa_variable_id = ZEND_MIR_ID_INVALID;
 
 		if (!source->phi_at(
 				source->context, producer_index, &producer)) {
@@ -451,12 +510,19 @@ static bool zend_mir_w04_phi_input_is_edge_pi(
 			producer_input_count++;
 			if (producer_input.predecessor_block_id
 						!= consumer_input->predecessor_block_id
-					|| producer_input.input_index
-						!= consumer_input->input_index) {
+					|| producer_input.input_index != 0) {
 				return false;
 			}
+			producer_source_ssa_variable_id =
+				producer_input.source_ssa_variable_id;
 		}
-		return producer_input_count == 1;
+		if (producer_input_count != 1) {
+			return false;
+		}
+		if (source_ssa_variable_id != NULL) {
+			*source_ssa_variable_id = producer_source_ssa_variable_id;
+		}
+		return true;
 	}
 	return false;
 }
@@ -568,7 +634,8 @@ static bool zend_mir_w04_validate_phis(
 					return false;
 				}
 				if (edge.to_block_id == phi.block_id
-						&& edge.predecessor_index == input.input_index
+						&& (phi.kind != ZEND_MIR_SOURCE_PHI_MERGE
+							|| edge.predecessor_index == input.input_index)
 						&& edge.from_block_id == input.predecessor_block_id) {
 					predecessor_found = true;
 					break;
@@ -585,8 +652,8 @@ static bool zend_mir_w04_validate_phis(
 						&& !zend_mir_w04_dominates(source,
 							definition_block,
 							input.predecessor_block_id)
-						&& !zend_mir_w04_phi_input_is_edge_pi(
-							source, &phi, &input))) {
+						&& !zend_mir_w04_resolve_edge_pi_input(
+							source, &phi, &input, NULL))) {
 				validation->diagnostic = ZEND_MIRL_W04_UNSUPPORTED_PHI_PI;
 				return false;
 			}
@@ -618,17 +685,18 @@ static bool zend_mir_w04_validate_source_impl(
 			|| !zend_mir_w04_validate_blocks(
 				source, validation, allow_protected_control_flow)
 			|| !zend_mir_w04_validate_edges(source, validation)
+			|| !zend_mir_w04_validate_terminators(source, validation)
 			|| !zend_mir_w04_validate_phis(source, validation)) {
 		return false;
 	}
 	validation->proofs = ZEND_MIR_W04_PROOF_SOURCE_CFG_COMPLETE
-		| ZEND_MIR_W04_PROOF_REDUCIBLE_CFG
 		| ZEND_MIR_W04_PROOF_BRANCH_SUCCESSOR_ORDER
 		| ZEND_MIR_W04_PROOF_PHI_PREDECESSOR_ORDER
 		| ZEND_MIR_W04_PROOF_EDGE_STATEPOINTS;
 	{
 		uint32_t i;
 		bool protected_region = false;
+		bool irreducible = false;
 		for (i = 0; i < source->block_count(source->context); i++) {
 			zend_mir_source_block_ref block;
 			if (!source->block_at(source->context, i, &block)) {
@@ -636,9 +704,14 @@ static bool zend_mir_w04_validate_source_impl(
 			}
 			protected_region |=
 				(block.flags & ZEND_MIR_SOURCE_BLOCK_PROTECTED) != 0;
+			irreducible |=
+				(block.flags & ZEND_MIR_SOURCE_BLOCK_IRREDUCIBLE) != 0;
 		}
 		if (!protected_region) {
 			validation->proofs |= ZEND_MIR_W04_PROOF_NO_PROTECTED_REGION;
+		}
+		if (!irreducible) {
+			validation->proofs |= ZEND_MIR_W04_PROOF_REDUCIBLE_CFG;
 		}
 	}
 	validation->diagnostic = ZEND_MIRL_OK;
@@ -704,4 +777,26 @@ zend_mir_w04_branch_kind zend_mir_w04_branch_kind_for_opcode(uint32_t opcode)
 		default:
 			return ZEND_MIR_W04_BRANCH_KIND_INVALID;
 	}
+}
+
+bool zend_mir_w04_branch_edge_count_is_valid(
+	zend_mir_w04_branch_kind kind, uint32_t opcode, uint32_t edge_count)
+{
+	return !((kind == ZEND_MIR_W04_BRANCH_UNCONDITIONAL && edge_count != 1)
+		|| ((kind >= ZEND_MIR_W04_BRANCH_IF_FALSE
+				&& kind <= ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT)
+			&& edge_count != 2)
+		|| (kind == ZEND_MIR_W04_BRANCH_CATCH
+			&& edge_count != 1 && edge_count != 2)
+		|| (kind == ZEND_MIR_W08_BRANCH_FINALLY_CALL && edge_count != 2)
+		|| (kind == ZEND_MIR_W08_BRANCH_FINALLY_RETURN && edge_count != 0)
+		|| (kind == ZEND_MIR_W09_BRANCH_ITERATOR && edge_count != 2)
+		|| (kind == ZEND_MIR_W12_BRANCH_ASSERT_CHECK && edge_count != 2)
+		|| (kind == ZEND_MIR_W12_BRANCH_BIND_STATIC && edge_count != 2)
+		|| (kind == ZEND_MIR_W12_BRANCH_FRAMELESS && edge_count != 2)
+		|| (kind == ZEND_MIR_W12_BRANCH_MULTIWAY
+			&& (opcode == ZEND_MIR_W12_OPCODE_MATCH
+				? edge_count < 2 : edge_count < 3))
+		|| (kind == ZEND_MIR_W10_BRANCH_THROW && edge_count != 0)
+		|| (kind == ZEND_MIR_W04_BRANCH_KIND_INVALID && edge_count > 1));
 }

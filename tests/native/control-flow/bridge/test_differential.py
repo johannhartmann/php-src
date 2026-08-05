@@ -70,6 +70,49 @@ class DifferentialTests(unittest.TestCase):
         self.assertEqual(runner.cfg_differences(case, mir, 1), [])
         self.assertNotIn("sha256", runner.cfg_differences.__doc__ or "")
 
+    def test_required_source_opcodes_are_checked_per_call(self) -> None:
+        case = {
+            "expected_cfg": {
+                "min_blocks": 0,
+                "min_edges": 0,
+                "min_phis": 0,
+                "requires_backedge": False,
+                "requires_loop": False,
+            },
+            "expected_mirl": "MIRL0000",
+            "expected_status": "accepted",
+            "function": "fixture",
+            "repeat_calls": [1],
+            "required_source_opcodes": ["ZEND_JMPZ", "ZEND_RETURN"],
+            "source_path": "tests/native/control-flow/bridge/test_differential.py",
+        }
+        original = runner.dump_w04.invoke
+        try:
+            runner.dump_w04.invoke = lambda *args, **kwargs: (
+                {
+                    "calls": [
+                        {
+                            "call": 1,
+                            "result": {
+                                "diagnostics": [{"code": "MIRL0000"}],
+                                "mir": "znmir 1.3 module m0\n",
+                                "source_opcodes": ["ZEND_RETURN"],
+                            },
+                        }
+                    ],
+                    "normalization": {"enabled": False, "rules": []},
+                    "status": "accepted",
+                    "wave": 4,
+                },
+                0,
+            )
+            _, differences = runner.check_dump(
+                case, Path("/candidate"), Path(__file__), 1.0
+            )
+        finally:
+            runner.dump_w04.invoke = original
+        self.assertEqual(differences, ["source_opcode_ZEND_JMPZ_call_1"])
+
     def test_self_test_exercises_corpus_and_all_calls(self) -> None:
         runner.self_test()
 

@@ -4,7 +4,7 @@
 #include "../MIR/zend_mir_control_flow.h"
 #include "../MIR/zend_mir_call.h"
 #include "../Calls/Contracts/zend_mir_call_plan.h"
-#include "../Values/Contracts/zend_mir_value_plan.h"
+#include "../Values/Contracts/zend_mir_value_lowering_inventory.h"
 #include "zend_mir_lowering.h"
 
 typedef struct _zend_script zend_script;
@@ -91,7 +91,7 @@ zend_mir_w06_lowering_result zend_mir_lower_w06_zend_source(
 	const zend_mir_source_call_target_resolver *resolver,
 	zend_mir_call_mutator *call_mutator,
 	const zend_mir_source_value_view *source_values,
-	const zend_mir_value_plan *value_plan,
+	const zend_mir_value_lowering_inventory *value_inventory,
 	zend_mir_value_mutator *value_mutator);
 
 #endif /* ZEND_MIR_LOWERING_ZEND_H */

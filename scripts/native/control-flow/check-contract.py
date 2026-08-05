@@ -287,10 +287,29 @@ def validate_headers() -> None:
         lowering,
     ):
         raise ContractError("W03 guarantee alias changed")
+    w04_entry = re.search(
+        r"zend_mir_lowering_result\s+zend_mir_lower_w04_zend_source\s*"
+        r"\(.*?\);",
+        texts[LOWERING / "zend_mir_lowering_zend.h"],
+        re.DOTALL,
+    )
+    if w04_entry is None:
+        raise ContractError("missing W04 Zend lowering entry declaration")
+    target_neutral_surface = "\n".join(
+        texts[path]
+        for path in (
+            LOWERING / "zend_mir_lowering_source.h",
+            LOWERING / "zend_mir_lowering_diagnostic.h",
+            LOWERING / "zend_mir_lowering.h",
+            LOWERING / "zend_mir_control_flow.h",
+            MIR / "zend_mir_control_flow.h",
+            MIR / "Verify/zend_mir_verify_control_flow.h",
+        )
+    ) + "\n" + w04_entry.group(0)
     forbidden = re.search(
         r"#\s*include[^\n]*(?:tpde|x86|aarch64|arm64|riscv|zend_vm|zend_jit)"
         r"|\b(?:zend_op_array|zend_op|zval|zend_ssa)\b",
-        combined,
+        target_neutral_surface,
         re.IGNORECASE,
     )
     if forbidden:

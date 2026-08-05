@@ -783,6 +783,26 @@ done:
 	return success;
 }
 
+static bool zend_mir_w04_edge_statepoint_opcode(
+	const zend_mir_lowering_source_view *source,
+	const zend_mir_source_block_ref *block,
+	zend_mir_source_opcode_ref *opcode)
+{
+	uint32_t opcode_count;
+	uint32_t opcode_index;
+
+	if (source == NULL || block == NULL || opcode == NULL
+			|| source->opcode_count == NULL || source->opcode_at == NULL) {
+		return false;
+	}
+	opcode_count = source->opcode_count(source->context);
+	opcode_index = block->opcode_count == 0
+		? block->first_opcode_ordinal
+		: block->first_opcode_ordinal + block->opcode_count - 1;
+	return opcode_index < opcode_count
+		&& source->opcode_at(source->context, opcode_index, opcode);
+}
+
 static bool zend_mir_w04_emit_terminator_edges(
 	zend_mir_lowering_context *context,
 	zend_mir_mutator *mutator,
@@ -830,21 +850,19 @@ static bool zend_mir_w04_emit_terminator_edges(
 		mappings[i].terminator_instruction_id = terminator;
 		mappings[i].edge_statepoint_instruction_id = ZEND_MIR_ID_INVALID;
 		mappings[i].mir_successor_index = mir_index;
-		if (zend_mir_w04_edge_requires_statepoint(&edges[i])) {
-			zend_mir_source_opcode_ref implicit_edge_opcode;
+		if (zend_mir_control_flow_cycle_edge_requires_statepoint(
+				&map->cycle_analysis, edges[i].id)) {
+			zend_mir_source_opcode_ref statepoint_source_opcode;
 			const zend_mir_source_opcode_ref *statepoint_opcode = opcode;
 			zend_mir_block_id edge_block;
 
+			if (statepoint_opcode == NULL
+					&& !zend_mir_w04_edge_statepoint_opcode(
+						context->source, block, &statepoint_source_opcode)) {
+				goto done;
+			}
 			if (statepoint_opcode == NULL) {
-				if (block->opcode_count == 0
-						|| !context->source->opcode_at(
-							context->source->context,
-							block->first_opcode_ordinal
-								+ block->opcode_count - 1,
-							&implicit_edge_opcode)) {
-					goto done;
-				}
-				statepoint_opcode = &implicit_edge_opcode;
+				statepoint_opcode = &statepoint_source_opcode;
 			}
 			if (!mutator->add_block(mutator->context,
 					zend_mir_lowering_context_function_id(context),
@@ -890,13 +908,13 @@ bool zend_mir_w04_emit_terminator(
 	zend_mir_mutator *mutator,
 	const zend_mir_source_opcode_ref *opcode,
 	const zend_mir_source_block_ref *block,
+	bool machine_condition,
 	zend_mir_control_flow_map_storage *map)
 {
 	zend_mir_instruction_id terminator;
 	zend_mir_value_id condition = ZEND_MIR_ID_INVALID;
 	zend_mir_w04_branch_kind kind = ZEND_MIR_W04_BRANCH_KIND_INVALID;
 	bool source_condition = false;
-	bool machine_condition = false;
 	uint32_t edge_count = 0;
 	if (context == NULL || mutator == NULL || block == NULL || map == NULL
 			|| !zend_mir_w04_source_edge_count(
@@ -905,15 +923,6 @@ bool zend_mir_w04_emit_terminator(
 	}
 	if (opcode != NULL) {
 		kind = zend_mir_w04_branch_kind_for_opcode(opcode->zend_opcode_number);
-		if (zend_mir_id_is_valid(opcode->op1.ssa_variable_id)) {
-			zend_mir_representation representation;
-
-			machine_condition = zend_mir_w04_value_representation(
-				context, opcode->op1.ssa_variable_id, &representation)
-				&& representation != ZEND_MIR_REPRESENTATION_ZVAL
-				&& representation != ZEND_MIR_REPRESENTATION_VOID
-				&& representation != ZEND_MIR_REPRESENTATION_CONTROL;
-		}
 	}
 	source_condition = context->zend_source != NULL
 		&& context->zend_source->w09 && edge_count == 2
@@ -924,25 +933,8 @@ bool zend_mir_w04_emit_terminator(
 		&& kind != ZEND_MIR_W08_BRANCH_FINALLY_CALL
 		&& kind != ZEND_MIR_W09_BRANCH_ITERATOR
 		&& kind != ZEND_MIR_W12_BRANCH_MULTIWAY;
-	if ((kind == ZEND_MIR_W04_BRANCH_UNCONDITIONAL && edge_count != 1)
-			|| ((kind >= ZEND_MIR_W04_BRANCH_IF_FALSE
-					&& kind <= ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT)
-				&& edge_count != 2)
-			|| (kind == ZEND_MIR_W04_BRANCH_CATCH
-				&& edge_count != 1 && edge_count != 2)
-			|| (kind == ZEND_MIR_W08_BRANCH_FINALLY_CALL && edge_count != 2)
-			|| (kind == ZEND_MIR_W08_BRANCH_FINALLY_RETURN && edge_count != 0)
-			|| (kind == ZEND_MIR_W09_BRANCH_ITERATOR && edge_count != 2)
-			|| (kind == ZEND_MIR_W12_BRANCH_ASSERT_CHECK && edge_count != 2)
-			|| (kind == ZEND_MIR_W12_BRANCH_BIND_STATIC && edge_count != 2)
-			|| (kind == ZEND_MIR_W12_BRANCH_FRAMELESS && edge_count != 2)
-			|| (kind == ZEND_MIR_W12_BRANCH_MULTIWAY
-				&& (opcode == NULL
-					|| (opcode->zend_opcode_number
-							== ZEND_MIR_W12_OPCODE_MATCH
-						? edge_count < 2 : edge_count < 3)))
-			|| (kind == ZEND_MIR_W10_BRANCH_THROW && edge_count != 0)
-			|| (kind == ZEND_MIR_W04_BRANCH_KIND_INVALID && edge_count > 1)) {
+	if (!zend_mir_w04_branch_edge_count_is_valid(
+			kind, opcode == NULL ? 0 : opcode->zend_opcode_number, edge_count)) {
 		return false;
 	}
 	if (kind == ZEND_MIR_W10_BRANCH_THROW) {
@@ -991,15 +983,28 @@ bool zend_mir_w04_emit_terminator(
 	}
 	if (!source_condition
 			&& (kind == ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT
-			|| kind == ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT)) {
+				|| kind == ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT
+				|| kind == ZEND_MIR_W09_BRANCH_JMP_SET
+				|| kind == ZEND_MIR_W09_BRANCH_COALESCE
+				|| kind == ZEND_MIR_W10_BRANCH_JMP_NULL)) {
 		zend_mir_instruction_id copy_id;
+		zend_mir_value_fact_ref input_fact;
+		zend_mir_value_id input;
+		zend_mir_representation input_representation;
 		zend_mir_representation representation;
+		const bool boolean_result =
+			kind == ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT
+			|| kind == ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT;
 		if (opcode == NULL
 				|| opcode->op1.kind != ZEND_MIR_SOURCE_OPERAND_SSA
 				|| opcode->result.kind != ZEND_MIR_SOURCE_OPERAND_SSA
+				|| !zend_mir_w04_operand_value_fact(context, &opcode->op1,
+					&input, &input_fact, &input_representation)
 				|| !zend_mir_w04_value_representation(context,
 					opcode->result.ssa_variable_id, &representation)
-				|| representation != ZEND_MIR_REPRESENTATION_I1
+				|| (boolean_result
+					? representation != ZEND_MIR_REPRESENTATION_I1
+					: representation != input_representation)
 				|| !zend_mir_id_is_valid(condition)
 				|| !zend_mir_w04_add_instruction(mutator,
 					zend_mir_lowering_context_block_id(context),
@@ -1008,7 +1013,7 @@ bool zend_mir_w04_emit_terminator(
 						opcode->result.ssa_variable_id),
 					opcode->source_position_id, &copy_id)
 				|| !mutator->add_operand(mutator->context, copy_id,
-					condition)) {
+					boolean_result ? condition : input)) {
 			return false;
 		}
 	}
@@ -1022,7 +1027,7 @@ bool zend_mir_w04_emit_terminator(
 					? ZEND_MIR_OPCODE_FINALLY_RETURN
 				: kind == ZEND_MIR_W09_BRANCH_ITERATOR
 					? ZEND_MIR_OPCODE_ITERATOR_BRANCH
-				: kind == ZEND_MIR_W12_BRANCH_MULTIWAY
+				: kind == ZEND_MIR_W12_BRANCH_MULTIWAY && edge_count > 1
 					? ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH
 				: kind == ZEND_MIR_W12_BRANCH_BIND_STATIC
 					? ZEND_MIR_OPCODE_VALUE_BIND_STATIC_BRANCH

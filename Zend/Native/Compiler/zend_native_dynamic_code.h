@@ -23,6 +23,9 @@ typedef struct _zend_native_dynamic_compiler {
 	uint32_t owned_op_array_capacity;
 	zend_native_dynamic_entry *entries;
 	HashTable entries_by_op_array;
+	const zend_op **completed_include_once_sites;
+	uint32_t completed_include_once_site_count;
+	uint32_t completed_include_once_site_capacity;
 	uint32_t entry_count;
 	uint32_t entry_capacity;
 } zend_native_dynamic_compiler;
@@ -57,5 +60,8 @@ ZEND_API zend_native_status zend_native_execute_include_or_eval(
 	uint64_t op1, uint64_t op2, uint64_t result,
 	uint32_t extended_value, uint32_t source_opcode,
 	uint32_t source_position_id);
+ZEND_API zend_native_status zend_native_execute_const_include_once(
+	zend_execute_data *execute_data, uint64_t op1,
+	uint32_t extended_value, uint32_t source_position_id);
 
 #endif /* ZEND_NATIVE_DYNAMIC_CODE_H */

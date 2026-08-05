@@ -145,7 +145,7 @@ class CallModelTests(unittest.TestCase):
             "operand_count > view->value_count(view->context)", model
         )
         self.assertIn(
-            "!zend_mir_w05_find_value(view, operand)", model
+            "zend_mir_id_index_find(indexes->values", model
         )
 
     def test_final_verifier_precedes_determinism_check(self) -> None:

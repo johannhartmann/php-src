@@ -191,7 +191,7 @@
       "function": "w04_call_inside_branch",
       "reference_inputs": [[false, "abc"], [true, "abc"]],
       "repeat_calls": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-      "required_source_opcodes": ["ZEND_JMPZ", "ZEND_INIT_FCALL", "ZEND_DO_ICALL"],
+      "required_source_opcodes": ["ZEND_JMPZ", "ZEND_INIT_FCALL", "ZEND_DO_UCALL"],
       "semantic_family": "runtime_call_boundary",
       "source_path": "tests/native/control-flow/corpus/rejected/call_inside_branch.php",
       "source_sha256": "9171b4e54c09e1b89a90cda497aaa4f1c2cc0c0a4cb8c9d957955288eba15e15"
@@ -261,7 +261,7 @@
       "function": "w04_switch_or_match_if_not_profiled",
       "reference_inputs": [[0], [1], [2]],
       "repeat_calls": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-      "required_source_opcodes": ["ZEND_MATCH", "ZEND_MATCH_ERROR"],
+      "required_source_opcodes": ["ZEND_MATCH", "ZEND_QM_ASSIGN"],
       "semantic_family": "multiway_branch",
       "source_path": "tests/native/control-flow/corpus/rejected/switch_or_match_if_not_profiled.php",
       "source_sha256": "f320008f59eb1166e3c38b007ba39c5e2fbea93e724a34851a23590524625707"
@@ -269,29 +269,41 @@
     {
       "case_id": "goto_irreducible",
       "deferred_wave": null,
-      "expected_cfg": null,
-      "expected_mirl": "MIRL0016",
-      "expected_status": "rejected",
+      "expected_cfg": {
+        "min_blocks": 7,
+        "min_edges": 8,
+        "min_phis": 4,
+        "requires_backedge": true,
+        "requires_loop": true
+      },
+      "expected_mirl": "MIRL0000",
+      "expected_status": "accepted",
       "function": "w04_goto_irreducible",
-      "reference_inputs": [[0], [3]],
+      "reference_inputs": [[false, false, false], [true, false, false]],
       "repeat_calls": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
       "required_source_opcodes": ["ZEND_JMP", "ZEND_JMPZ"],
       "semantic_family": "irreducible_cfg",
-      "source_path": "tests/native/control-flow/corpus/rejected/goto_irreducible.php",
-      "source_sha256": "8e1b93c97521ae09427c1ffb618bcfac8cdcb3463f687c65e7e712ed398accb2"
+      "source_path": "tests/native/control-flow/corpus/accepted/goto_irreducible.php",
+      "source_sha256": "f6fd3af02f0da30f2145c54ed1c21eb095e07a294ac5805589c4a29ec24bfe10"
     },
     {
       "case_id": "unsupported_pi_constraint",
       "deferred_wave": null,
-      "expected_cfg": null,
-      "expected_mirl": "MIRL0017",
-      "expected_status": "rejected",
+      "expected_cfg": {
+        "min_blocks": 4,
+        "min_edges": 4,
+        "min_phis": 0,
+        "requires_backedge": false,
+        "requires_loop": false
+      },
+      "expected_mirl": "MIRL0000",
+      "expected_status": "accepted",
       "function": "w04_unsupported_pi_constraint",
       "reference_inputs": [[2, 4], [5, 4]],
       "repeat_calls": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
       "required_source_opcodes": ["ZEND_IS_SMALLER", "ZEND_JMPZ_EX"],
       "semantic_family": "unsupported_pi_constraint",
-      "source_path": "tests/native/control-flow/corpus/rejected/unsupported_pi_constraint.php",
+      "source_path": "tests/native/control-flow/corpus/accepted/unsupported_pi_constraint.php",
       "source_sha256": "21630d22df22b821e96fef2a542185e294ab28d80b6b63af11f39eece00300bf"
     },
     {

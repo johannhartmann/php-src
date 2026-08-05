@@ -16,6 +16,71 @@ typedef struct _zend_mir_w04_phi_analysis {
 	bool *dynamic_members;
 } zend_mir_w04_phi_analysis;
 
+static uint32_t zend_mir_w04_cycle_block_count(const void *context)
+{
+	const zend_mir_lowering_source_view *source = context;
+
+	return source->block_count(source->context);
+}
+
+static bool zend_mir_w04_cycle_block_at(
+	const void *context, uint32_t index, bool *irreducible)
+{
+	const zend_mir_lowering_source_view *source = context;
+	zend_mir_source_block_ref block;
+
+	if (irreducible == NULL
+			|| !source->block_at(source->context, index, &block)
+			|| block.id != index) {
+		return false;
+	}
+	*irreducible =
+		(block.flags & ZEND_MIR_SOURCE_BLOCK_IRREDUCIBLE) != 0;
+	return true;
+}
+
+static uint32_t zend_mir_w04_cycle_edge_count(const void *context)
+{
+	const zend_mir_lowering_source_view *source = context;
+
+	return source->edge_count(source->context);
+}
+
+static bool zend_mir_w04_cycle_edge_at(
+	const void *context, uint32_t index,
+	uint32_t *from_block_id, uint32_t *to_block_id,
+	bool *requires_statepoint)
+{
+	const zend_mir_lowering_source_view *source = context;
+	zend_mir_source_edge_ref edge;
+
+	if (from_block_id == NULL || to_block_id == NULL
+			|| requires_statepoint == NULL
+			|| !source->edge_at(source->context, index, &edge)
+			|| edge.id != index) {
+		return false;
+	}
+	*from_block_id = edge.from_block_id;
+	*to_block_id = edge.to_block_id;
+	*requires_statepoint = zend_mir_w04_edge_requires_statepoint(&edge);
+	return true;
+}
+
+static bool zend_mir_w04_analyze_cycles(
+	zend_mir_control_flow_cycle_analysis *analysis,
+	const zend_mir_lowering_source_view *source)
+{
+	zend_mir_control_flow_cycle_graph graph;
+
+	memset(&graph, 0, sizeof(graph));
+	graph.context = source;
+	graph.block_count = zend_mir_w04_cycle_block_count;
+	graph.block_at = zend_mir_w04_cycle_block_at;
+	graph.edge_count = zend_mir_w04_cycle_edge_count;
+	graph.edge_at = zend_mir_w04_cycle_edge_at;
+	return zend_mir_control_flow_cycle_analysis_init(analysis, &graph);
+}
+
 static void zend_mir_w04_phi_analysis_destroy(
 	zend_mir_w04_phi_analysis *analysis)
 {
@@ -625,24 +690,36 @@ static bool zend_mir_w04_validate_scalar_phis(
 				&& !(context->zend_source != NULL
 					&& context->zend_source->w09
 					&& result_representation == ZEND_MIR_REPRESENTATION_ZVAL)
-				&& (result_fact.exact_type != ZEND_MIR_SCALAR_TYPE_I64
-					|| (result_fact.flags
-						& ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) == 0
-					|| ((phi.constraint.flags
-							& (ZEND_MIR_SOURCE_PHI_RANGE_MIN_UNBOUNDED
-								| ZEND_MIR_SOURCE_PHI_RANGE_NEGATED)) == 0
-						&& phi.constraint.min_ssa_variable_id
-							== ZEND_MIR_ID_INVALID
-						&& result_fact.integer_min
+				&& !(result_fact.exact_type == ZEND_MIR_SCALAR_TYPE_F64
+					&& result_representation == ZEND_MIR_REPRESENTATION_DOUBLE)) {
+			const bool has_range = (result_fact.flags
+				& ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) != 0;
+			const bool absolute_min = (phi.constraint.flags
+				& (ZEND_MIR_SOURCE_PHI_RANGE_MIN_UNBOUNDED
+					| ZEND_MIR_SOURCE_PHI_RANGE_NEGATED)) == 0
+				&& phi.constraint.min_ssa_variable_id == ZEND_MIR_ID_INVALID;
+			const bool absolute_max = (phi.constraint.flags
+				& (ZEND_MIR_SOURCE_PHI_RANGE_MAX_UNBOUNDED
+					| ZEND_MIR_SOURCE_PHI_RANGE_NEGATED)) == 0
+				&& phi.constraint.max_ssa_variable_id == ZEND_MIR_ID_INVALID;
+			const bool impossible_edge = has_range
+				&& ((absolute_min && result_fact.integer_max
+					< phi.constraint.range_min)
+					|| (absolute_max && result_fact.integer_min
+						> phi.constraint.range_max));
+
+			/* An exact incoming fact may prove a Pi edge unreachable. Its fact
+			 * then cannot be narrowed into the edge constraint, but remains
+			 * vacuously valid because no execution can enter that edge. */
+			if (result_fact.exact_type != ZEND_MIR_SCALAR_TYPE_I64
+					|| !has_range
+					|| (!impossible_edge
+						&& ((absolute_min && result_fact.integer_min
 							< phi.constraint.range_min)
-					|| ((phi.constraint.flags
-							& (ZEND_MIR_SOURCE_PHI_RANGE_MAX_UNBOUNDED
-								| ZEND_MIR_SOURCE_PHI_RANGE_NEGATED)) == 0
-						&& phi.constraint.max_ssa_variable_id
-							== ZEND_MIR_ID_INVALID
-						&& result_fact.integer_max
-								> phi.constraint.range_max))) {
-			return false;
+							|| (absolute_max && result_fact.integer_max
+								> phi.constraint.range_max)))) {
+				return false;
+			}
 		}
 	}
 	return true;
@@ -685,17 +762,24 @@ static bool zend_mir_w04_emit_phis(
 			return false;
 		}
 		for (j = analysis->input_offsets[i];
-				j < analysis->input_offsets[i + 1]; j++) {
+			j < analysis->input_offsets[i + 1]; j++) {
 			zend_mir_source_phi_input_ref input;
+			uint32_t source_ssa_variable_id;
 			if (!context->source->phi_input_at(
 					context->source->context,
 					analysis->input_indices[j], &input)) {
 				return false;
 			}
+			source_ssa_variable_id = input.source_ssa_variable_id;
+			/* Zend may feed a merge PHI with a Pi result defined in the
+			 * merge block. The Pi is an edge constraint, not an executable
+			 * predecessor definition; use its incoming value on that edge. */
+			(void) zend_mir_w04_resolve_edge_pi_input(
+				context->source, &phi, &input, &source_ssa_variable_id);
 			if (!mutator->add_operand(mutator->context,
 						mapping.mir_phi_instruction_id,
 						zend_mir_value_from_original_ssa(
-							input.source_ssa_variable_id))) {
+							source_ssa_variable_id))) {
 				return false;
 			}
 		}
@@ -770,6 +854,7 @@ static bool zend_mir_w04_lower_blocks(
 		zend_mir_source_opcode_ref opcode;
 		zend_mir_source_opcode_ref *terminator_source = NULL;
 		zend_mir_block_id block_id;
+		bool machine_condition = false;
 		uint32_t j;
 		if (!context->source->block_at(context->source->context, i, &block)) {
 			return false;
@@ -809,11 +894,23 @@ static bool zend_mir_w04_lower_blocks(
 			}
 			if (zend_mir_w04_branch_kind_for_opcode(opcode.zend_opcode_number)
 					!= ZEND_MIR_W04_BRANCH_KIND_INVALID) {
-				if (j + 1 != block.opcode_count) {
-					return false;
+				uint32_t trailing;
+
+				for (trailing = j + 1; trailing < block.opcode_count;
+						trailing++) {
+					zend_mir_source_opcode_ref trailing_opcode;
+
+					if (!context->source->opcode_at(
+							context->source->context,
+							block.first_opcode_ordinal + trailing,
+							&trailing_opcode)
+							|| trailing_opcode.zend_opcode_number
+								!= ZEND_MIR_W03_OPCODE_NOP) {
+						return false;
+					}
 				}
 				terminator_source = &opcode;
-				continue;
+				break;
 			}
 			if (opcode.zend_opcode_number == ZEND_MIR_LOGIC_ZEND_BOOL
 					&& zend_mir_w04_emit_bool_identity(
@@ -836,8 +933,64 @@ static bool zend_mir_w04_lower_blocks(
 				return false;
 			}
 		}
+		if (terminator_source != NULL
+				&& zend_mir_id_is_valid(
+					terminator_source->op1.ssa_variable_id)) {
+			zend_mir_value_fact_ref condition_fact;
+			zend_mir_representation condition_representation;
+			zend_mir_w04_branch_kind branch_kind;
+
+			machine_condition = zend_mir_w04_fact_for_operand(
+				context, analysis, &terminator_source->op1,
+				&condition_fact, &condition_representation)
+				&& condition_fact.exact_type != ZEND_MIR_SCALAR_TYPE_F64
+				&& condition_representation != ZEND_MIR_REPRESENTATION_ZVAL
+				&& condition_representation != ZEND_MIR_REPRESENTATION_VOID
+				&& condition_representation != ZEND_MIR_REPRESENTATION_CONTROL;
+			branch_kind = zend_mir_w04_branch_kind_for_opcode(
+				terminator_source->zend_opcode_number);
+			if (machine_condition
+					&& (branch_kind
+							== ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT
+						|| branch_kind
+							== ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT
+						|| branch_kind == ZEND_MIR_W09_BRANCH_JMP_SET
+						|| branch_kind == ZEND_MIR_W09_BRANCH_COALESCE
+						|| branch_kind == ZEND_MIR_W10_BRANCH_JMP_NULL)
+					&& !(context->zend_source != NULL
+						&& context->zend_source->w11)) {
+				zend_mir_representation result_representation;
+				zend_mir_value_fact_ref result_fact;
+				const bool boolean_result = branch_kind
+						== ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT
+					|| branch_kind
+						== ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT;
+
+				/*
+				 * Result-producing branches publish either the tested boolean or
+				 * their input into the result identity.  If a dynamic PHI requires
+				 * that identity to remain boxed, execute the source branch instead
+				 * of defining one MIR value with two representations.  W11 performs
+				 * its own boxed-result materialization around the machine branch.
+				 */
+				if (terminator_source->result.kind
+						!= ZEND_MIR_SOURCE_OPERAND_SSA
+						|| !zend_mir_w04_fact_for_operand(
+							context,
+							analysis,
+							&terminator_source->result,
+							&result_fact,
+							&result_representation)
+						|| result_representation != (boolean_result
+							? ZEND_MIR_REPRESENTATION_I1
+							: condition_representation)) {
+					machine_condition = false;
+				}
+			}
+		}
 		if (!zend_mir_w04_emit_terminator(
-				context, mutator, terminator_source, &block, storage)) {
+				context, mutator, terminator_source, &block,
+				machine_condition, storage)) {
 			return false;
 		}
 	}
@@ -905,6 +1058,8 @@ zend_mir_lowering_result zend_mir_lower_w04_zend_source(
 				context->source->block_count(context->source->context),
 				context->source->edge_count(context->source->context),
 				context->source->phi_count(context->source->context))
+			|| !zend_mir_w04_analyze_cycles(
+				&storage.cycle_analysis, context->source)
 			|| !mutator->add_function(mutator->context,
 				context->function_symbol_id, &context->function_id)) {
 		return zend_mir_w04_abort(
@@ -976,7 +1131,13 @@ zend_mir_lowering_result zend_mir_lower_w04_zend_source(
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_FINALIZE_FAILED);
 	}
 	view = context->module_ops.view(context->module_ops.context, module);
-	if (view == NULL || !context->module_ops.verify_stage1(
+	if (view == NULL) {
+		return zend_mir_w04_abort(
+			context, module, &storage, &phi_analysis,
+			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_STAGE1_VERIFY_FAILED);
+	}
+#if !defined(NDEBUG)
+	if (!context->module_ops.verify_stage1(
 			context->module_ops.context, view, context->diagnostics)) {
 		return zend_mir_w04_abort(
 			context, module, &storage, &phi_analysis,
@@ -994,6 +1155,7 @@ zend_mir_lowering_result zend_mir_lower_w04_zend_source(
 			context, module, &storage, &phi_analysis,
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_STAGE3_VERIFY_FAILED);
 	}
+#endif
 	context->busy = false;
 	context->values_predeclared = false;
 	{

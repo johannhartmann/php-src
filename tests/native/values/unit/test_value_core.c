@@ -76,6 +76,7 @@ typedef enum _test_case {
 	TEST_VALID_CALL_TRANSFER,
 	TEST_CALL_TRANSFER_WITHOUT_MODEL,
 	TEST_VALID_SOURCE_BACKED_CALL,
+	TEST_VALID_SOURCE_BACKED_NAMED_CALL,
 	TEST_CALL_TRANSFER_WRONG_SITE,
 	TEST_CALL_TRANSFER_WRONG_ORDINAL,
 	TEST_VERIFIER_CALL_TRANSFER_MUTATION,
@@ -158,7 +159,7 @@ static zend_mir_diagnostic_sink test_diagnostic_sink(
 
 static bool test_stage_call_model(
 	zend_mir_module *module, zend_mir_function_id function,
-	zend_mir_block_id block, bool with_argument)
+	zend_mir_block_id block, bool with_argument, bool named_argument)
 {
 	zend_mir_mutator *core_mutator = zend_mir_module_get_mutator(module);
 	zend_mir_call_mutator *call_mutator =
@@ -190,6 +191,9 @@ static bool test_stage_call_model(
 		argument.ordinal = 0;
 		argument.value_id = 0;
 		argument.ownership = ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR;
+		argument.source_mode = named_argument
+			? ZEND_MIR_SOURCE_CALL_ARGUMENT_NAMED
+			: ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE;
 		CHECK(call_mutator->add_call_argument(
 			call_mutator->context, &argument));
 	}
@@ -570,12 +574,14 @@ static bool test_build_case(
 			|| source_id != 0
 			|| ((mode == TEST_VALID_CALL_TRANSFER
 					|| mode == TEST_VALID_SOURCE_BACKED_CALL
+					|| mode == TEST_VALID_SOURCE_BACKED_NAMED_CALL
 					|| mode == TEST_CALL_TRANSFER_WRONG_SITE
 					|| mode == TEST_CALL_TRANSFER_WRONG_ORDINAL
 					|| mode == TEST_VERIFIER_CALL_TRANSFER_MUTATION
 					|| mode == TEST_VALID_ZERO_ARGUMENT_CALL)
 				&& !test_stage_call_model(module, function, block,
-					mode != TEST_VALID_ZERO_ARGUMENT_CALL))
+					mode != TEST_VALID_ZERO_ARGUMENT_CALL,
+					mode == TEST_VALID_SOURCE_BACKED_NAMED_CALL))
 			|| ((mode == TEST_VALID_SUSPEND_LIVENESS
 					|| mode == TEST_SUSPEND_LIVENESS_UNKNOWN_VALUE
 					|| mode == TEST_SUSPEND_LIVENESS_LOCATION_MISMATCH
@@ -729,6 +735,10 @@ static bool test_source_backed_call(void)
 	CHECK(test_build_case(
 		TEST_VALID_SOURCE_BACKED_CALL, 0, NULL, NULL, NULL, &diagnostics));
 	CHECK(diagnostics.count == 0);
+	CHECK(test_build_case(
+		TEST_VALID_SOURCE_BACKED_NAMED_CALL,
+		0, NULL, NULL, NULL, &diagnostics));
+	CHECK(diagnostics.count == 0);
 	return true;
 }
 
@@ -815,6 +825,123 @@ static bool test_zero_argument_call_model(void)
 	return true;
 }
 
+static void test_init_unused_operand(zend_mir_source_operand_ref *operand)
+{
+	memset(operand, 0, sizeof(*operand));
+	operand->kind = ZEND_MIR_SOURCE_OPERAND_UNUSED;
+	operand->slot_kind = ZEND_MIR_SOURCE_SLOT_KIND_INVALID;
+	operand->index = ZEND_MIR_ID_INVALID;
+	operand->ssa_variable_id = ZEND_MIR_ID_INVALID;
+}
+
+static bool test_finally_entry_precedes_executable_value(void)
+{
+	test_allocator allocator = { { 0 }, 0, 0, 0, 0 };
+	test_diagnostics diagnostics = { 0, { 0 } };
+	zend_mir_allocator vtable = test_allocator_vtable(&allocator);
+	zend_mir_diagnostic_sink sink = test_diagnostic_sink(&diagnostics);
+	zend_mir_module *module =
+		zend_mir_module_create(61, &vtable, 128, NULL, &sink);
+	zend_mir_mutator *core_mutator;
+	zend_mir_value_mutator *value_mutator;
+	zend_mir_function_id function;
+	zend_mir_block_id block;
+	zend_mir_source_position_ref source;
+	zend_mir_source_position_id source_id;
+	zend_mir_instruction_record instruction;
+	zend_mir_instruction_id instruction_id;
+	zend_mir_executable_value_ref operation;
+	zend_mir_core_instruction *instructions;
+	bool success = false;
+
+	CHECK(module != NULL);
+	core_mutator = zend_mir_module_get_mutator(module);
+	value_mutator = zend_mir_module_get_value_mutator(module);
+	if (core_mutator == NULL || value_mutator == NULL
+			|| !core_mutator->add_function(
+				core_mutator->context, 7, &function)
+			|| !core_mutator->add_block(
+				core_mutator->context, function, &block)
+			|| !core_mutator->set_entry_block(
+				core_mutator->context, function, block)) {
+		goto destroy;
+	}
+
+	memset(&source, 0, sizeof(source));
+	source.id = 0;
+	source.file_symbol_id = 8;
+	source.line = 1;
+	source.column_start = 1;
+	source.column_end = 2;
+	if (!core_mutator->add_source_position(
+			core_mutator->context, &source, &source_id)
+			|| source_id != 0) {
+		goto destroy;
+	}
+
+	memset(&instruction, 0, sizeof(instruction));
+	instruction.id = ZEND_MIR_ID_INVALID;
+	instruction.block_id = block;
+	instruction.opcode = ZEND_MIR_OPCODE_FINALLY_ENTER;
+	instruction.representation = ZEND_MIR_REPRESENTATION_VOID;
+	instruction.result_id = ZEND_MIR_ID_INVALID;
+	instruction.frame_state_id = ZEND_MIR_ID_INVALID;
+	instruction.source_position_id = source_id;
+	if (!core_mutator->add_instruction(
+			core_mutator->context, &instruction, &instruction_id)) {
+		goto destroy;
+	}
+	instruction.opcode = ZEND_MIR_OPCODE_BRANCH;
+	instruction.representation = ZEND_MIR_REPRESENTATION_CONTROL;
+	instruction.source_position_id = ZEND_MIR_ID_INVALID;
+	if (!core_mutator->add_instruction(
+			core_mutator->context, &instruction, &instruction_id)) {
+		goto destroy;
+	}
+
+	memset(&operation, 0, sizeof(operation));
+	operation.id = ZEND_MIR_ID_INVALID;
+	operation.block_id = block;
+	operation.opcode = ZEND_MIR_OPCODE_VALUE_ECHO;
+	operation.source_opcode = 1;
+	test_init_unused_operand(&operation.op1);
+	test_init_unused_operand(&operation.op2);
+	test_init_unused_operand(&operation.result);
+	test_init_unused_operand(&operation.auxiliary);
+	operation.op1_storage_id = ZEND_MIR_ID_INVALID;
+	operation.op2_storage_id = ZEND_MIR_ID_INVALID;
+	operation.result_storage_id = ZEND_MIR_ID_INVALID;
+	operation.auxiliary_storage_id = ZEND_MIR_ID_INVALID;
+	operation.source_position_id = source_id;
+	operation.frame_state_id = ZEND_MIR_ID_INVALID;
+	if (!value_mutator->set_model_flags(
+			value_mutator->context,
+			ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS)
+			|| !value_mutator->add_executable_operation(
+				value_mutator->context, &operation)
+			|| !zend_mir_module_commit_value_model(module)) {
+		goto destroy;
+	}
+
+	instructions = ZEND_MIR_CORE_ITEMS(
+		module, instructions, zend_mir_core_instruction);
+	if (module->instructions.count != 3
+			|| instructions[0].record.opcode
+				!= ZEND_MIR_OPCODE_FINALLY_ENTER
+			|| instructions[1].record.opcode != ZEND_MIR_OPCODE_VALUE_ECHO
+			|| instructions[2].record.opcode != ZEND_MIR_OPCODE_BRANCH) {
+		goto destroy;
+	}
+	success = true;
+
+destroy:
+	zend_mir_module_destroy(module);
+	CHECK(allocator.raw_count == 0);
+	CHECK(allocator.reset_count == 1);
+	CHECK(diagnostics.count == 0);
+	return success;
+}
+
 static bool test_every_arena_allocation_failure(void)
 {
 	uint32_t allocation_count;
@@ -840,6 +967,7 @@ int main(void)
 			|| !test_verifier_rejections()
 			|| !test_call_transfer_dump_is_complete()
 			|| !test_zero_argument_call_model()
+			|| !test_finally_entry_precedes_executable_value()
 			|| !test_every_arena_allocation_failure()) {
 		return 1;
 	}

@@ -42,6 +42,11 @@ ZEND_API void zend_generator_restore_call_stack(zend_generator *generator) /* {{
 
 	call = generator->frozen_call_stack;
 	do {
+#ifdef HAVE_NATIVE_ENGINE
+		void *native_restore_state =
+			zend_native_generator_restore_call_begin(
+				generator, call, prev_call);
+#endif
 		new_call = zend_vm_stack_push_call_frame(
 			(ZEND_CALL_INFO(call) & ~ZEND_CALL_ALLOCATED),
 			call->func,
@@ -50,6 +55,10 @@ ZEND_API void zend_generator_restore_call_stack(zend_generator *generator) /* {{
 		memcpy(((zval*)new_call) + ZEND_CALL_FRAME_SLOT, ((zval*)call) + ZEND_CALL_FRAME_SLOT, ZEND_CALL_NUM_ARGS(call) * sizeof(zval));
 		new_call->extra_named_params = call->extra_named_params;
 		new_call->prev_execute_data = prev_call;
+#ifdef HAVE_NATIVE_ENGINE
+		zend_native_generator_restore_call_finish(
+			generator, native_restore_state, new_call);
+#endif
 		prev_call = new_call;
 
 		call = call->prev_execute_data;
@@ -65,6 +74,11 @@ ZEND_API zend_execute_data* zend_generator_freeze_call_stack(zend_execute_data *
 	size_t used_stack;
 	zend_execute_data *call, *new_call, *prev_call = NULL;
 	zval *stack;
+#ifdef HAVE_NATIVE_ENGINE
+	zend_generator *generator =
+		(ZEND_CALL_INFO(execute_data) & ZEND_CALL_GENERATOR) != 0
+			? (zend_generator *) execute_data->return_value : NULL;
+#endif
 
 	/* calculate required stack size */
 	used_stack = 0;
@@ -88,7 +102,14 @@ ZEND_API zend_execute_data* zend_generator_freeze_call_stack(zend_execute_data *
 		prev_call = new_call;
 
 		new_call = call->prev_execute_data;
+#ifdef HAVE_NATIVE_ENGINE
+		if (!zend_native_generator_freeze_call(
+				generator, execute_data, call, prev_call)) {
+			zend_vm_stack_free_call_frame(call);
+		}
+#else
 		zend_vm_stack_free_call_frame(call);
+#endif
 		call = new_call;
 	} while (call);
 
@@ -128,6 +149,10 @@ static void zend_generator_cleanup_unfinished_execution(
 			generator->execute_data = save_ex;
 		}
 
+#ifdef HAVE_NATIVE_ENGINE
+		zend_native_generator_cleanup_call_stack(execute_data);
+#endif
+
 		zend_cleanup_unfinished_execution(execute_data, op_num, catch_op_num);
 	}
 }
@@ -138,6 +163,26 @@ ZEND_API void zend_generator_close(zend_generator *generator, bool finished_exec
 	if (EXPECTED(generator->execute_data)) {
 		zend_execute_data *execute_data = generator->execute_data;
 #ifdef HAVE_NATIVE_ENGINE
+		/* Rethrowing an exception from a yield-from delegate can return through
+		 * the VM exception dispatcher without reentering the native continuation.
+		 * The dispatcher leaves EX(opline) at the function entry sentinel, while
+		 * EG(opline_before_exception) still identifies the suspended source
+		 * operation. Recover that location before native call planning and live
+		 * range cleanup inspect the frame. */
+		if (!finished_execution && generator->native_entry_cell != NULL
+				&& execute_data->opline
+					== execute_data->func->op_array.opcodes) {
+			const zend_op_array *op_array = &execute_data->func->op_array;
+			uintptr_t source = (uintptr_t) EG(opline_before_exception);
+			uintptr_t first = (uintptr_t) op_array->opcodes;
+			uintptr_t end = (uintptr_t) (
+				op_array->opcodes + op_array->last);
+
+			if (source >= first && source < end
+					&& (source - first) % sizeof(zend_op) == 0) {
+				execute_data->opline = EG(opline_before_exception);
+			}
+		}
 		zend_native_generator_release_generation(generator);
 #endif
 		/* Null out execute_data early, to prevent double frees if GC runs while we're
@@ -243,6 +288,21 @@ static inline bool check_node_running_in_fiber(zend_generator *generator) {
 	return false;
 }
 
+#ifdef HAVE_NATIVE_ENGINE
+static void zend_generator_cleanup_native_suspended_arguments(
+	zend_generator *generator)
+{
+	/* parent follows the active yield-from path from the exposed root to the
+	 * currently executing delegate. */
+	for (; generator != NULL; generator = generator->node.parent) {
+		if (generator->execute_data != NULL) {
+			zend_native_generator_cleanup_suspended_arguments(
+				generator->execute_data);
+		}
+	}
+}
+#endif
+
 static void zend_generator_dtor_storage(zend_object *object) /* {{{ */
 {
 	zend_generator *generator = (zend_generator*) object;
@@ -261,6 +321,12 @@ static void zend_generator_dtor_storage(zend_object *object) /* {{{ */
 	 */
 	if (current_generator->flags & ZEND_GENERATOR_IN_FIBER) {
 		if (check_node_running_in_fiber(generator)) {
+			/* Native call planning may still own already-sent argument
+			 * temporaries in the suspended source frame. A VM frame moved these
+			 * values into its pending call stack before entering the Fiber. */
+#ifdef HAVE_NATIVE_ENGINE
+			zend_generator_cleanup_native_suspended_arguments(generator);
+#endif
 			/* Prevent finally blocks from yielding */
 			generator->flags |= ZEND_GENERATOR_FORCED_CLOSE;
 			return;
@@ -415,7 +481,15 @@ HashTable *zend_generator_frame_gc(zend_get_gc_buffer *gc_buffer, zend_generator
 		call = zend_generator_revert_call_stack(generator->frozen_call_stack);
 	}
 
-	HashTable *ht = zend_unfinished_execution_gc_ex(execute_data, call, gc_buffer, true);
+#ifdef HAVE_NATIVE_ENGINE
+	bool native_call_stack =
+		zend_native_generator_frozen_call_stack_gc(
+			generator, call, gc_buffer);
+#else
+	bool native_call_stack = false;
+#endif
+	HashTable *ht = zend_unfinished_execution_gc_ex(
+		execute_data, native_call_stack ? NULL : call, gc_buffer, true);
 
 	if (UNEXPECTED(generator->frozen_call_stack)) {
 		zend_generator_revert_call_stack(call);

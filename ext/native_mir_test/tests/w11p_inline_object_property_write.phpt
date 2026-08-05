@@ -15,6 +15,11 @@ class InlineWriteBox
     public $value = 0;
 }
 
+class InlineTypedWriteBox
+{
+    public int $value = 0;
+}
+
 function inline_property_writes()
 {
     $box = new InlineWriteBox();
@@ -26,7 +31,11 @@ function inline_property_writes()
     $array = $box->value;
     $value = 42;
     $box->value = $value;
-    return [$string, $array, $box->value];
+    $typed = new InlineTypedWriteBox();
+    for ($i = 0; $i < 10; $i++) {
+        $typed->value = $i;
+    }
+    return [$string, $array, $box->value, $typed->value];
 }
 PHP;
 
@@ -51,4 +60,4 @@ printf(
 );
 ?>
 --EXPECT--
-accepted return=["native",[1,2,3],42] vm=0 execute_ex=0 handler=0 active=0
+accepted return=["native",[1,2,3],42,9] vm=0 execute_ex=0 handler=0 active=0

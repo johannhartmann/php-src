@@ -12,6 +12,8 @@
 #include "Zend/zend_operators.h"
 
 #include "Zend/Native/Lowering/zend_mir_lowering_source.h"
+#include "Zend/Native/Runtime/Common/zend_native_calls.h"
+#include "Zend/Native/Runtime/Common/zend_native_values.h"
 
 #include <string.h>
 
@@ -20,6 +22,7 @@ typedef struct _zend_native_explicit_object_operation {
 	uint8_t op2_type;
 	uint8_t result_type;
 	uint8_t auxiliary_type;
+	uint8_t opcode;
 	znode_op op1;
 	znode_op op2;
 	znode_op result;
@@ -120,6 +123,7 @@ static bool zend_native_object_init_explicit_operation(
 	}
 	operation->extended_value = extended_value;
 	operation->source_position_id = source_position_id;
+	operation->opcode = expected_opcode;
 	execute_data->opline =
 		&execute_data->func->op_array.opcodes[source_position_id];
 	return true;
@@ -167,6 +171,42 @@ static zval *zend_native_object_read_explicit(
 	return value;
 }
 
+static zval *zend_native_object_read_r_explicit(
+	zend_execute_data *execute_data, uint8_t type, znode_op operand)
+{
+	zval *value = zend_native_object_read_explicit(
+		execute_data, type, operand);
+
+	if (value != NULL && type == IS_CV
+			&& UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
+		uint32_t variable_index = EX_VAR_TO_NUM(operand.var);
+
+		if (variable_index >= execute_data->func->op_array.last_var) {
+			return NULL;
+		}
+		zend_error(E_WARNING, "Undefined variable $%s",
+			ZSTR_VAL(execute_data->func->op_array.vars[variable_index]));
+		return &EG(uninitialized_zval);
+	}
+	return value;
+}
+
+static zval *zend_native_object_read_r_source_explicit(
+	zend_execute_data *execute_data,
+	const zend_native_explicit_object_operation *operation,
+	uint8_t type, znode_op operand)
+{
+	zval *value = zend_native_object_read_r_explicit(
+		execute_data, type, operand);
+
+	if (EG(exception) != NULL) {
+		(void) zend_native_prepare_finally_exception(
+			execute_data, operation->source_position_id);
+		return NULL;
+	}
+	return value;
+}
+
 static zval *zend_native_object_receiver_explicit(
 	zend_execute_data *execute_data,
 	const zend_native_explicit_object_operation *operation)
@@ -178,6 +218,24 @@ static zval *zend_native_object_receiver_explicit(
 	} else {
 		receiver = zend_native_object_read_explicit(
 			execute_data, operation->op1_type, operation->op1);
+	}
+	if (receiver != NULL && Z_ISREF_P(receiver)) {
+		receiver = Z_REFVAL_P(receiver);
+	}
+	return receiver;
+}
+
+static zval *zend_native_object_receiver_r_explicit(
+	zend_execute_data *execute_data,
+	const zend_native_explicit_object_operation *operation)
+{
+	zval *receiver;
+
+	if (operation->op1_type == IS_UNUSED) {
+		receiver = &execute_data->This;
+	} else {
+		receiver = zend_native_object_read_r_source_explicit(
+			execute_data, operation, operation->op1_type, operation->op1);
 	}
 	if (receiver != NULL && Z_ISREF_P(receiver)) {
 		receiver = Z_REFVAL_P(receiver);
@@ -234,9 +292,51 @@ static void zend_native_object_consume(
 	}
 }
 
+static void zend_native_object_consume_fetch_receiver(
+	zend_execute_data *execute_data, uint8_t type, znode_op operand,
+	zval *result)
+{
+	zval *slot;
+
+	type &= IS_CONST | IS_TMP_VAR | IS_VAR | IS_CV;
+	if (type != IS_VAR) {
+		zend_native_object_consume(
+			execute_data, type, operand, result);
+		return;
+	}
+	slot = zend_native_object_slot(execute_data, type, operand);
+	if (slot == NULL || slot == result || Z_ISUNDEF_P(slot)) {
+		return;
+	}
+
+	/* Match FREE_VAR_PTR_AND_EXTRACT_RESULT_IF_NECESSARY(). A writable
+	 * property fetch may leave an indirect result pointing into a temporary
+	 * receiver. If releasing that receiver destroys the object, materialize
+	 * the property before its storage disappears. */
+	if (Z_REFCOUNTED_P(slot)) {
+		zend_refcounted *ref = Z_COUNTED_P(slot);
+
+		if (!GC_DELREF(ref)) {
+			if (Z_TYPE_P(result) == IS_INDIRECT) {
+				ZVAL_COPY(result, Z_INDIRECT_P(result));
+			}
+			rc_dtor_func(ref);
+		}
+	}
+	ZVAL_UNDEF(slot);
+}
+
 static zend_native_status zend_native_object_status(void)
 {
 	return EG(exception) == NULL ? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+}
+
+static zend_native_status zend_native_throw_exception_status(
+	zend_execute_data *execute_data, uint32_t source_position_id)
+{
+	zend_result result = zend_native_prepare_finally_exception(
+		execute_data, source_position_id);
+	return result == SUCCESS ? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
 }
 
 zend_native_status zend_native_throw_source_zval(
@@ -257,7 +357,8 @@ zend_native_status zend_native_throw_source_zval(
 				&& operand_type != IS_TMP_VAR
 				&& operand_type != IS_CV)) {
 		zend_throw_error(NULL, "Malformed native throw source operation");
-		return ZEND_NATIVE_EXCEPTION;
+		return zend_native_throw_exception_status(
+			execute_data, source_position_id);
 	}
 	execute_data->opline =
 		&execute_data->func->op_array.opcodes[source_position_id];
@@ -265,19 +366,22 @@ zend_native_status zend_native_throw_source_zval(
 		execute_data, operand_type, operand);
 	if (value == NULL) {
 		zend_throw_error(NULL, "Malformed native throw operand");
-		return ZEND_NATIVE_EXCEPTION;
+		return zend_native_throw_exception_status(
+			execute_data, source_position_id);
 	}
 	if (operand_type == IS_CV && UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
 		uint32_t variable_index = EX_VAR_TO_NUM(operand.var);
 
 		if (variable_index >= execute_data->func->op_array.last_var) {
 			zend_throw_error(NULL, "Malformed native throw variable");
-			return ZEND_NATIVE_EXCEPTION;
+			return zend_native_throw_exception_status(
+				execute_data, source_position_id);
 		}
 		zend_error(E_WARNING, "Undefined variable $%s",
 			ZSTR_VAL(execute_data->func->op_array.vars[variable_index]));
 		if (EG(exception) != NULL) {
-			return ZEND_NATIVE_EXCEPTION;
+			return zend_native_throw_exception_status(
+				execute_data, source_position_id);
 		}
 		value = &EG(uninitialized_zval);
 	}
@@ -288,13 +392,15 @@ zend_native_status zend_native_throw_source_zval(
 		zend_throw_error(NULL, "Can only throw objects");
 		zend_native_object_consume(
 			execute_data, operand_type, operand, NULL);
-		return ZEND_NATIVE_EXCEPTION;
+		return zend_native_throw_exception_status(
+			execute_data, source_position_id);
 	}
 	Z_TRY_ADDREF_P(value);
 	zend_throw_exception_object(value);
 	zend_native_object_consume(
 		execute_data, operand_type, operand, NULL);
-	return ZEND_NATIVE_EXCEPTION;
+	return zend_native_throw_exception_status(
+		execute_data, source_position_id);
 }
 
 static zend_native_status zend_native_declare_anon_class(
@@ -512,26 +618,31 @@ static zend_native_status zend_native_bind_lexical(
 {
 	zval *closure = zend_native_object_read_explicit(
 		execute_data, operation->op1_type, operation->op1);
-	zval *variable = zend_native_object_read_explicit(
-		execute_data, operation->op2_type, operation->op2);
+	zval *variable = (operation->extended_value
+			& (ZEND_BIND_REF | ZEND_BIND_IMPLICIT)) != 0
+		? zend_native_object_read_explicit(
+			execute_data, operation->op2_type, operation->op2)
+		: zend_native_object_read_r_source_explicit(
+			execute_data, operation, operation->op2_type, operation->op2);
 
 	if (closure == NULL || Z_TYPE_P(closure) != IS_OBJECT
 			|| variable == NULL) {
+		if (EG(exception) != NULL) {
+			return ZEND_NATIVE_EXCEPTION;
+		}
 		zend_throw_error(NULL, "Malformed native closure binding");
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if ((operation->extended_value & ZEND_BIND_REF) != 0) {
+		if (Z_ISUNDEF_P(variable)) {
+			ZVAL_NULL(variable);
+		}
 		if (Z_ISREF_P(variable)) {
 			Z_ADDREF_P(variable);
 		} else {
 			ZVAL_MAKE_REF_EX(variable, 2);
 		}
 	} else {
-		if (Z_ISUNDEF_P(variable)
-				&& (operation->extended_value & ZEND_BIND_IMPLICIT) == 0) {
-			zend_throw_error(NULL, "Undefined variable captured by native closure");
-			return ZEND_NATIVE_EXCEPTION;
-		}
 		ZVAL_DEREF(variable);
 		Z_TRY_ADDREF_P(variable);
 	}
@@ -573,12 +684,16 @@ static zend_native_status zend_native_bind_static(
 		if (!Z_ISREF_P(value)) {
 			zend_reference *reference = emalloc(sizeof(*reference));
 			zval *initial = operation->op2_type == IS_UNUSED ? value
-				: zend_native_object_read_explicit(
-					execute_data, operation->op2_type, operation->op2);
+				: zend_native_object_read_r_source_explicit(
+					execute_data, operation,
+					operation->op2_type, operation->op2);
 
 			if (initial == NULL) {
 				efree(reference);
-				zend_throw_error(NULL, "Malformed native static initializer");
+				if (EG(exception) == NULL) {
+					zend_throw_error(NULL,
+						"Malformed native static initializer");
+				}
 				return ZEND_NATIVE_EXCEPTION;
 			}
 			GC_SET_REFCOUNT(reference, 2);
@@ -611,13 +726,27 @@ static zend_native_status zend_native_bind_static(
 }
 
 static zend_native_status zend_native_object_bad_receiver(
-	zval *receiver, zval *property, bool read_context)
+	zval *receiver, zval *property, uint32_t source_opcode)
 {
-	if (read_context) {
+	if (source_opcode == ZEND_FETCH_OBJ_R) {
 		zend_wrong_property_read(receiver, property);
 	} else {
-		zend_throw_error(NULL, "Attempt to modify property on %s",
-			zend_zval_value_name(receiver));
+		zend_string *temporary;
+		zend_string *name = zval_get_tmp_string(property, &temporary);
+		const char *action = source_opcode == ZEND_PRE_INC_OBJ
+				|| source_opcode == ZEND_PRE_DEC_OBJ
+				|| source_opcode == ZEND_POST_INC_OBJ
+				|| source_opcode == ZEND_POST_DEC_OBJ
+			? "increment/decrement"
+			: source_opcode == ZEND_FETCH_OBJ_W
+				|| source_opcode == ZEND_FETCH_OBJ_RW
+				|| source_opcode == ZEND_FETCH_OBJ_FUNC_ARG
+				|| source_opcode == ZEND_ASSIGN_OBJ_REF
+			? "modify" : "assign";
+
+		zend_throw_error(NULL, "Attempt to %s property \"%s\" on %s",
+			action, ZSTR_VAL(name), zend_zval_value_name(receiver));
+		zend_tmp_string_release(temporary);
 	}
 	return zend_native_object_status();
 }
@@ -635,6 +764,9 @@ static bool zend_native_object_apply_fetch_flags(
 	}
 	if (flags == ZEND_FETCH_REF) {
 		if (!Z_ISREF_P(value)) {
+			if (!ZEND_TYPE_IS_SET(property_info->type)) {
+				return true;
+			}
 			if (Z_ISUNDEF_P(value)) {
 				if (!ZEND_TYPE_ALLOW_NULL(property_info->type)) {
 					zend_throw_error(NULL,
@@ -674,7 +806,7 @@ static zend_native_status zend_native_object_fetch_explicit(
 {
 	zval *receiver =
 		zend_native_object_receiver_explicit(execute_data, operation);
-	zval *property = zend_native_object_read_explicit(
+	zval *property = zend_native_object_read_r_explicit(
 		execute_data, operation->op2_type, operation->op2);
 	zval *result = zend_native_object_slot(
 		execute_data, operation->result_type, operation->result);
@@ -688,16 +820,38 @@ static zend_native_status zend_native_object_fetch_explicit(
 		zend_throw_error(NULL, "Malformed native object fetch operands");
 		return ZEND_NATIVE_EXCEPTION;
 	}
+	if (EG(exception) != NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	if ((fetch_type == BP_VAR_R || fetch_type == BP_VAR_RW)
+			&& operation->op1_type == IS_CV
+			&& Z_TYPE_P(receiver) == IS_UNDEF) {
+		if (zend_native_object_read_r_explicit(execute_data,
+				operation->op1_type, operation->op1) == NULL
+				|| EG(exception) != NULL) {
+			return ZEND_NATIVE_EXCEPTION;
+		}
+	}
 	if (Z_TYPE_P(receiver) != IS_OBJECT) {
 		ZVAL_NULL(result);
-		return zend_native_object_bad_receiver(
-			receiver, property,
-			fetch_type == BP_VAR_R || fetch_type == BP_VAR_IS);
+		if (fetch_type != BP_VAR_IS && fetch_type != BP_VAR_UNSET) {
+			(void) zend_native_object_bad_receiver(
+				receiver, property, operation->opcode);
+		}
+		zend_native_object_consume(
+			execute_data, operation->op2_type, operation->op2, result);
+		zend_native_object_consume_fetch_receiver(
+			execute_data, operation->op1_type, operation->op1, result);
+		return zend_native_object_status();
 	}
 	name = zend_native_object_name_explicit(
 		execute_data, operation, property, &temporary);
 	if (name == NULL) {
 		ZVAL_UNDEF(result);
+		zend_native_object_consume(
+			execute_data, operation->op2_type, operation->op2, result);
+		zend_native_object_consume_fetch_receiver(
+			execute_data, operation->op1_type, operation->op1, result);
 		return zend_native_object_status();
 	}
 	if (operation->op2_type == IS_CONST
@@ -729,21 +883,38 @@ static zend_native_status zend_native_object_fetch_explicit(
 			zend_unwrap_reference(result);
 		}
 	} else {
+		bool have_property_address = true;
+
 		value = Z_OBJ_HT_P(receiver)->get_property_ptr_ptr(
 			Z_OBJ_P(receiver), name, fetch_type, cache_slot);
 		if (value == NULL) {
 			value = Z_OBJ_HT_P(receiver)->read_property(
 				Z_OBJ_P(receiver), name, fetch_type, cache_slot, result);
-		}
-		if (value != result) {
-			ZVAL_INDIRECT(result, value);
-		}
-		if (!zend_native_object_apply_fetch_flags(
-				result, property_info, operation->extended_value)) {
-			if (temporary != NULL) {
-				zend_tmp_string_release(temporary);
+			if (value == result) {
+				if (Z_ISREF_P(result) && Z_REFCOUNT_P(result) == 1) {
+					zend_unwrap_reference(result);
+				}
+				have_property_address = false;
+			} else if (EG(exception)) {
+				ZVAL_ERROR(result);
+				have_property_address = false;
 			}
-			return ZEND_NATIVE_EXCEPTION;
+		} else if (Z_ISERROR_P(value)) {
+			ZVAL_ERROR(result);
+			have_property_address = false;
+		} else if (fetch_type == BP_VAR_UNSET && Z_ISUNDEF_P(value)) {
+			ZVAL_NULL(result);
+			have_property_address = false;
+		}
+		if (have_property_address) {
+			ZVAL_INDIRECT(result, value);
+			if (!zend_native_object_apply_fetch_flags(
+					result, property_info, operation->extended_value)) {
+				if (temporary != NULL) {
+					zend_tmp_string_release(temporary);
+				}
+				return ZEND_NATIVE_EXCEPTION;
+			}
 		}
 	}
 	if (temporary != NULL) {
@@ -751,7 +922,7 @@ static zend_native_status zend_native_object_fetch_explicit(
 	}
 	zend_native_object_consume(
 		execute_data, operation->op2_type, operation->op2, result);
-	zend_native_object_consume(
+	zend_native_object_consume_fetch_receiver(
 		execute_data, operation->op1_type, operation->op1, result);
 	return zend_native_object_status();
 }
@@ -761,10 +932,10 @@ static zend_native_status zend_native_object_assign_explicit(
 	const zend_native_explicit_object_operation *operation)
 {
 	zval *receiver;
-	zval *property = zend_native_object_read_explicit(
-		execute_data, operation->op2_type, operation->op2);
-	zval *value = zend_native_object_read_explicit(
-		execute_data, operation->auxiliary_type, operation->auxiliary);
+	zval *property;
+	zval *value = zend_native_object_read_r_source_explicit(
+		execute_data, operation, operation->auxiliary_type,
+		operation->auxiliary);
 	zval *result = operation->result_type == IS_UNUSED ? NULL
 		: zend_native_object_slot(
 			execute_data, operation->result_type, operation->result);
@@ -773,6 +944,14 @@ static zend_native_status zend_native_object_assign_explicit(
 	zval *written;
 	void **cache_slot = NULL;
 
+	if (value == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	property = zend_native_object_read_r_source_explicit(
+		execute_data, operation, operation->op2_type, operation->op2);
+	if (property == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
 	if (operation->op1_type == IS_UNUSED) {
 		receiver = &execute_data->This;
 	} else {
@@ -782,16 +961,27 @@ static zend_native_status zend_native_object_assign_explicit(
 	if (receiver != NULL && Z_ISREF_P(receiver)) {
 		receiver = Z_REFVAL_P(receiver);
 	}
-	if (receiver == NULL || property == NULL || value == NULL
+	if (receiver == NULL
 			|| (result == NULL && operation->result_type != IS_UNUSED)) {
 		zend_throw_error(NULL, "Malformed native object assignment operands");
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (Z_TYPE_P(receiver) != IS_OBJECT) {
+		zend_native_status status;
+
 		if (result != NULL) {
 			ZVAL_NULL(result);
 		}
-		return zend_native_object_bad_receiver(receiver, property, false);
+		status = zend_native_object_bad_receiver(
+			receiver, property, operation->opcode);
+		zend_native_object_consume(
+			execute_data, operation->auxiliary_type,
+			operation->auxiliary, result);
+		zend_native_object_consume(
+			execute_data, operation->op2_type, operation->op2, result);
+		zend_native_object_consume(
+			execute_data, operation->op1_type, operation->op1, result);
+		return status;
 	}
 	if (operation->op2_type == IS_CONST
 			&& Z_TYPE_P(property) == IS_STRING) {
@@ -846,7 +1036,7 @@ static zend_native_status zend_native_object_assign_ref_explicit(
 {
 	zval *receiver =
 		zend_native_object_receiver_explicit(execute_data, operation);
-	zval *property = zend_native_object_read_explicit(
+	zval *property = zend_native_object_read_r_explicit(
 		execute_data, operation->op2_type, operation->op2);
 	zval *value = zend_native_object_read_explicit(
 		execute_data, operation->auxiliary_type, operation->auxiliary);
@@ -856,6 +1046,7 @@ static zend_native_status zend_native_object_assign_ref_explicit(
 			execute_data, operation->result_type, operation->result);
 	zend_property_info *property_info = NULL;
 	zend_refcounted *garbage = NULL;
+	zval fallback;
 	zend_string *temporary = NULL;
 	zend_string *name;
 	void **cache_slot = NULL;
@@ -867,12 +1058,27 @@ static zend_native_status zend_native_object_assign_ref_explicit(
 			"Malformed native object reference assignment operands");
 		return ZEND_NATIVE_EXCEPTION;
 	}
+	/* OP_DATA is fetched with BP_VAR_W by the VM.  An undefined CV therefore
+	 * becomes NULL before reference type validation and binding. */
+	if (operation->auxiliary_type == IS_CV && Z_TYPE_P(value) == IS_UNDEF) {
+		ZVAL_NULL(value);
+	}
 	if (Z_TYPE_P(receiver) != IS_OBJECT) {
+		zend_native_status status;
+
 		if (result != NULL) {
 			ZVAL_NULL(result);
 		}
-		return zend_native_object_bad_receiver(
-			receiver, property, false);
+		status = zend_native_object_bad_receiver(
+			receiver, property, operation->opcode);
+		zend_native_object_consume(
+			execute_data, operation->auxiliary_type,
+			operation->auxiliary, result);
+		zend_native_object_consume(
+			execute_data, operation->op2_type, operation->op2, result);
+		zend_native_object_consume(
+			execute_data, operation->op1_type, operation->op1, result);
+		return status;
 	}
 	name = zend_native_object_name_explicit(
 		execute_data, operation, property, &temporary);
@@ -901,12 +1107,20 @@ static zend_native_status zend_native_object_assign_ref_explicit(
 		cache_slot = (void **) (
 			(char *) execute_data->run_time_cache + cache_offset);
 	}
+	ZVAL_UNDEF(&fallback);
 	assigned = Z_OBJ_HT_P(receiver)->get_property_ptr_ptr(
 		Z_OBJ_P(receiver), name, BP_VAR_W, cache_slot);
 	if (assigned == NULL) {
-		zend_throw_error(NULL,
-			"Cannot assign by reference to overloaded object");
-		assigned = &EG(uninitialized_zval);
+		assigned = Z_OBJ_HT_P(receiver)->read_property(
+			Z_OBJ_P(receiver), name, BP_VAR_W, cache_slot, &fallback);
+		if (assigned == &fallback || EG(exception) != NULL) {
+			if (EG(exception) == NULL) {
+				zend_throw_error(NULL,
+					"Cannot assign by reference to overloaded object");
+			}
+			zval_ptr_dtor(&fallback);
+			assigned = &EG(uninitialized_zval);
+		}
 	} else if (Z_ISERROR_P(assigned)) {
 		assigned = &EG(uninitialized_zval);
 	} else {
@@ -997,28 +1211,62 @@ static zend_native_status zend_native_object_assign_op_explicit(
 {
 	zval *receiver =
 		zend_native_object_receiver_explicit(execute_data, operation);
-	zval *property = zend_native_object_read_explicit(
+	zval *property = zend_native_object_read_r_explicit(
 		execute_data, operation->op2_type, operation->op2);
 	zval *right = zend_native_object_read_explicit(
 		execute_data, operation->auxiliary_type, operation->auxiliary);
 	zval current;
 	zval updated;
+	zval *address;
+	zval *target;
 	zval *read;
-	zval *written;
+	zend_object *object;
 	zval *result = operation->result_type == IS_UNUSED ? NULL
 		: zend_native_object_slot(
 			execute_data, operation->result_type, operation->result);
 	zend_string *temporary = NULL;
 	zend_string *name;
+	void *cache_storage[3] = {NULL, NULL, NULL};
+	zend_property_info *property_info;
 	binary_op_type binary_operation;
+	bool strict = ZEND_CALL_USES_STRICT_TYPES(execute_data);
+	bool valid;
 
 	ZVAL_UNDEF(&current);
 	ZVAL_UNDEF(&updated);
 	if (receiver == NULL || property == NULL || right == NULL
-			|| Z_TYPE_P(receiver) != IS_OBJECT) {
+			|| (result == NULL && operation->result_type != IS_UNUSED)) {
 		zend_throw_error(NULL,
 			"Malformed native object compound assignment operands");
 		return ZEND_NATIVE_EXCEPTION;
+	}
+	if (EG(exception) != NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	if (operation->op1_type == IS_CV
+			&& Z_TYPE_P(receiver) == IS_UNDEF) {
+		receiver = zend_native_object_read_r_explicit(
+			execute_data, operation->op1_type, operation->op1);
+		if (receiver == NULL || EG(exception) != NULL) {
+			return ZEND_NATIVE_EXCEPTION;
+		}
+	}
+	if (Z_TYPE_P(receiver) != IS_OBJECT) {
+		zend_native_status status;
+
+		if (result != NULL) {
+			ZVAL_NULL(result);
+		}
+		status = zend_native_object_bad_receiver(
+			receiver, property, operation->opcode);
+		zend_native_object_consume(
+			execute_data, operation->auxiliary_type,
+			operation->auxiliary, result);
+		zend_native_object_consume(
+			execute_data, operation->op2_type, operation->op2, result);
+		zend_native_object_consume(
+			execute_data, operation->op1_type, operation->op1, result);
+		return status;
 	}
 	name = zend_native_object_name_explicit(
 		execute_data, operation, property, &temporary);
@@ -1026,21 +1274,67 @@ static zend_native_status zend_native_object_assign_op_explicit(
 	if (name == NULL || binary_operation == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	read = Z_OBJ_HT_P(receiver)->read_property(
-		Z_OBJ_P(receiver), name, BP_VAR_RW, NULL, &current);
-	if (read != &current) {
-		ZVAL_COPY_DEREF(&current, read);
-	} else if (Z_ISREF_P(&current)) {
-		zend_unwrap_reference(&current);
-	}
-	if (EG(exception) == NULL
-			&& binary_operation(&updated, &current, right) == SUCCESS) {
-		written = Z_OBJ_HT_P(receiver)->write_property(
-			Z_OBJ_P(receiver), name, &updated, NULL);
-		if (result != NULL && written != NULL) {
-			zend_native_object_replace(result, written);
+	address = Z_OBJ_HT_P(receiver)->get_property_ptr_ptr(
+		Z_OBJ_P(receiver), name, BP_VAR_RW, cache_storage);
+	if (address != NULL) {
+		if (Z_ISERROR_P(address)) {
+			if (result != NULL) {
+				ZVAL_NULL(result);
+			}
+			goto done;
 		}
+		target = address;
+		property_info = (zend_property_info *) cache_storage[2];
+		if (Z_ISREF_P(target)) {
+			target = Z_REFVAL_P(target);
+		}
+		ZVAL_COPY(&current, target);
+		if (EG(exception) != NULL
+				|| binary_operation(&updated, target, right) != SUCCESS) {
+			goto done;
+		}
+		if (Z_ISREF_P(address)
+				&& ZEND_REF_HAS_TYPE_SOURCES(Z_REF_P(address))) {
+			valid = zend_verify_ref_assignable_zval(
+				Z_REF_P(address), &updated, strict);
+		} else if (property_info != NULL
+				&& ZEND_TYPE_IS_SET(property_info->type)) {
+			valid = zend_verify_property_type(
+				property_info, &updated, strict);
+		} else {
+			valid = true;
+		}
+		if (valid) {
+			zval_ptr_dtor(target);
+			ZVAL_COPY_VALUE(target, &updated);
+			ZVAL_UNDEF(&updated);
+			if (result != NULL) {
+				zend_native_object_replace(result, target);
+			}
+		}
+		goto done;
 	}
+	object = Z_OBJ_P(receiver);
+	GC_ADDREF(object);
+	read = object->handlers->read_property(
+		object, name, BP_VAR_R, cache_storage, &current);
+	if (EG(exception) != NULL) {
+		if (result != NULL) {
+			ZVAL_UNDEF(result);
+		}
+		OBJ_RELEASE(object);
+		goto done;
+	}
+	if (binary_operation(&updated, read, right) == SUCCESS) {
+		object->handlers->write_property(
+			object, name, &updated, cache_storage);
+	}
+	if (result != NULL && !Z_ISUNDEF(updated)) {
+		zend_native_object_replace(result, &updated);
+	}
+	OBJ_RELEASE(object);
+
+done:
 	if (!Z_ISUNDEF(updated)) {
 		zval_ptr_dtor(&updated);
 	}
@@ -1065,18 +1359,33 @@ static zend_native_status zend_native_object_unset_explicit(
 {
 	zval *receiver =
 		zend_native_object_receiver_explicit(execute_data, operation);
-	zval *property = zend_native_object_read_explicit(
-		execute_data, operation->op2_type, operation->op2);
+	zval *property;
 	zend_string *temporary = NULL;
 	zend_string *name;
 
-	if (receiver == NULL || property == NULL) {
+	if (receiver == NULL) {
 		zend_throw_error(NULL, "Malformed native object unset operands");
 		return ZEND_NATIVE_EXCEPTION;
 	}
+	if (operation->op1_type == IS_CV
+			&& Z_TYPE_P(receiver) == IS_UNDEF) {
+		receiver = zend_native_object_read_r_source_explicit(
+			execute_data, operation, operation->op1_type, operation->op1);
+		if (receiver == NULL) {
+			return ZEND_NATIVE_EXCEPTION;
+		}
+	}
+	property = zend_native_object_read_r_source_explicit(
+		execute_data, operation, operation->op2_type, operation->op2);
+	if (property == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
 	if (Z_TYPE_P(receiver) != IS_OBJECT) {
-		return zend_native_object_bad_receiver(
-			receiver, property, false);
+		zend_native_object_consume(
+			execute_data, operation->op2_type, operation->op2, NULL);
+		zend_native_object_consume(
+			execute_data, operation->op1_type, operation->op1, NULL);
+		return zend_native_object_status();
 	}
 	name = zend_native_object_name_explicit(
 		execute_data, operation, property, &temporary);
@@ -1100,7 +1409,7 @@ static zend_native_status zend_native_object_isset_explicit(
 {
 	zval *receiver =
 		zend_native_object_receiver_explicit(execute_data, operation);
-	zval *property = zend_native_object_read_explicit(
+	zval *property = zend_native_object_read_r_explicit(
 		execute_data, operation->op2_type, operation->op2);
 	zval *result = zend_native_object_slot(
 		execute_data, operation->result_type, operation->result);
@@ -1111,6 +1420,9 @@ static zend_native_status zend_native_object_isset_explicit(
 
 	if (receiver == NULL || property == NULL || result == NULL) {
 		zend_throw_error(NULL, "Malformed native object isset operands");
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	if (EG(exception) != NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (Z_TYPE_P(receiver) == IS_OBJECT) {
@@ -1146,23 +1458,75 @@ static zend_native_status zend_native_object_incdec_explicit(
 			execute_data, operation->result_type, operation->result);
 	zend_string *temporary = NULL;
 	zend_string *name;
+	zend_object *object;
+	void *cache_slot[3] = {NULL, NULL, NULL};
 	zval current;
+	zval *property_ptr;
 	zval *read;
 	zval *written;
+	zend_property_info *property_info;
+	zend_result update_status;
 
 	ZVAL_UNDEF(&current);
 	if (receiver == NULL || property == NULL
-			|| Z_TYPE_P(receiver) != IS_OBJECT) {
+			|| (result == NULL && operation->result_type != IS_UNUSED)) {
 		zend_throw_error(NULL, "Malformed native object incdec operands");
 		return ZEND_NATIVE_EXCEPTION;
+	}
+	if (EG(exception) != NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	if (operation->op1_type == IS_CV
+			&& Z_TYPE_P(receiver) == IS_UNDEF) {
+		receiver = zend_native_object_read_r_explicit(
+			execute_data, operation->op1_type, operation->op1);
+		if (receiver == NULL || EG(exception) != NULL) {
+			return ZEND_NATIVE_EXCEPTION;
+		}
+	}
+	if (Z_TYPE_P(receiver) != IS_OBJECT) {
+		zend_native_status status;
+
+		if (result != NULL) {
+			ZVAL_NULL(result);
+		}
+		status = zend_native_object_bad_receiver(
+			receiver, property, operation->opcode);
+		zend_native_object_consume(
+			execute_data, operation->op2_type, operation->op2, result);
+		zend_native_object_consume(
+			execute_data, operation->op1_type, operation->op1, result);
+		return status;
 	}
 	name = zend_native_object_name_explicit(
 		execute_data, operation, property, &temporary);
 	if (name == NULL) {
 		return zend_native_object_status();
 	}
-	read = Z_OBJ_HT_P(receiver)->read_property(
-		Z_OBJ_P(receiver), name, BP_VAR_RW, NULL, &current);
+	object = Z_OBJ_P(receiver);
+	/* The result slot may reuse the temporary receiver slot. Keep the object
+	 * alive until both halves of an overloaded read/write operation complete,
+	 * matching zend_{pre,post}_incdec_overloaded_property(). */
+	GC_ADDREF(object);
+	property_ptr = object->handlers->get_property_ptr_ptr(
+		object, name, BP_VAR_RW, cache_slot);
+	if (property_ptr != NULL) {
+		if (UNEXPECTED(Z_ISERROR_P(property_ptr))) {
+			if (result != NULL) {
+				ZVAL_NULL(result);
+			}
+		} else {
+			property_info = (zend_property_info *) cache_slot[2];
+			zend_native_incdec_property_zval(
+				execute_data, property_ptr,
+				property_info != NULL && ZEND_TYPE_IS_SET(property_info->type)
+					? property_info : NULL,
+				result, post, !decrement);
+		}
+		goto complete;
+	}
+	read = object->handlers->read_property(
+		object, name, BP_VAR_R, cache_slot, &current);
 	if (read != &current) {
 		ZVAL_COPY_DEREF(&current, read);
 	} else if (Z_ISREF_P(&current)) {
@@ -1171,15 +1535,22 @@ static zend_native_status zend_native_object_incdec_explicit(
 	if (result != NULL && post) {
 		zend_native_object_replace(result, &current);
 	}
-	if (EG(exception) == NULL
-			&& (decrement ? decrement_function(&current)
-				: increment_function(&current)) == SUCCESS) {
-		written = Z_OBJ_HT_P(receiver)->write_property(
-			Z_OBJ_P(receiver), name, &current, NULL);
+	update_status = decrement
+		? decrement_function(&current) : increment_function(&current);
+	/* Overloaded properties must still receive the updated value when the
+	 * inc/dec operation raises. The VM helper performs this write
+	 * unconditionally so magic-property side effects and diagnostics happen
+	 * before temporary receiver cleanup. */
+	if (property_ptr == NULL
+			|| (EG(exception) == NULL && update_status == SUCCESS)) {
+		written = object->handlers->write_property(
+			object, name, &current, cache_slot);
 		if (result != NULL && !post && written != NULL) {
 			zend_native_object_replace(result, written);
 		}
 	}
+complete:
+	OBJ_RELEASE(object);
 	if (!Z_ISUNDEF(current)) {
 		zval_ptr_dtor(&current);
 	}
@@ -1240,29 +1611,53 @@ static zend_native_status zend_native_object_clone_explicit(
 	const zend_native_explicit_object_operation *operation)
 {
 	zval *value =
-		zend_native_object_receiver_explicit(execute_data, operation);
+		zend_native_object_receiver_r_explicit(execute_data, operation);
 	zval *result = zend_native_object_slot(
 		execute_data, operation->result_type, operation->result);
 	zend_object *clone;
+	zend_function *clone_method;
+	zend_class_entry *scope;
 
 	if (value == NULL || result == NULL) {
+		if (result != NULL && EG(exception) != NULL) {
+			ZVAL_UNDEF(result);
+		}
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (Z_TYPE_P(value) != IS_OBJECT) {
 		ZVAL_UNDEF(result);
 		zend_type_error("clone(): Argument #1 ($object) must be of type object, %s given",
 			zend_zval_value_name(value));
+		zend_native_object_consume(
+			execute_data, operation->op1_type, operation->op1, result);
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (Z_OBJ_HT_P(value)->clone_obj == NULL) {
 		ZVAL_UNDEF(result);
 		zend_throw_error(NULL, "Trying to clone an uncloneable object of class %s",
 			ZSTR_VAL(Z_OBJCE_P(value)->name));
+		zend_native_object_consume(
+			execute_data, operation->op1_type, operation->op1, result);
 		return ZEND_NATIVE_EXCEPTION;
+	}
+	clone_method = Z_OBJCE_P(value)->clone;
+	if (clone_method != NULL
+			&& !(clone_method->common.fn_flags & ZEND_ACC_PUBLIC)) {
+		scope = execute_data->func->op_array.scope;
+		if (!zend_check_method_accessible(clone_method, scope)) {
+			zend_bad_method_call(
+				clone_method, clone_method->common.function_name, scope);
+			ZVAL_UNDEF(result);
+			zend_native_object_consume(
+				execute_data, operation->op1_type, operation->op1, result);
+			return ZEND_NATIVE_EXCEPTION;
+		}
 	}
 	clone = Z_OBJ_HT_P(value)->clone_obj(Z_OBJ_P(value));
 	if (clone == NULL) {
 		ZVAL_UNDEF(result);
+		zend_native_object_consume(
+			execute_data, operation->op1_type, operation->op1, result);
 		return zend_native_object_status();
 	}
 	ZVAL_OBJ(result, clone);
@@ -1384,19 +1779,29 @@ static zend_native_status zend_native_static_fetch_explicit(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (property == NULL) {
-		property = &EG(uninitialized_zval);
-	} else if (!zend_native_static_indirect_access_allowed(
-			property_info, property, fetch_type)) {
-		/* Object values remain readable for asymmetric indirect access. */
-		copy = Z_TYPE_P(property) == IS_OBJECT;
-		if (!copy) {
-			property = &EG(uninitialized_zval);
-		}
-	}
-	if (copy) {
+		ZVAL_INDIRECT(result, &EG(uninitialized_zval));
+	} else if (copy) {
 		zend_native_object_replace(result, property);
 	} else {
 		ZVAL_INDIRECT(result, property);
+		if (!zend_native_object_apply_fetch_flags(
+				result, property_info, operation->extended_value)) {
+			if (temporary != NULL) {
+				zend_tmp_string_release(temporary);
+			}
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		/* zend_fetch_static_property_address() applies FETCH_REF/DIM_WRITE to
+		 * the real property before the VM checks asymmetric set visibility.
+		 * Never apply those flags to EG(uninitialized_zval). */
+		if (!zend_native_static_indirect_access_allowed(
+				property_info, property, fetch_type)) {
+			if (Z_TYPE_P(property) == IS_OBJECT) {
+				zend_native_object_replace(result, property);
+			} else {
+				ZVAL_INDIRECT(result, &EG(uninitialized_zval));
+			}
+		}
 	}
 	if (temporary != NULL) {
 		zend_tmp_string_release(temporary);
@@ -1423,13 +1828,30 @@ static zend_native_status zend_native_static_assign_explicit(
 			execute_data, operation->result_type, operation->result);
 	zend_refcounted *garbage = NULL;
 	bool strict = ZEND_CALL_USES_STRICT_TYPES(execute_data);
+	bool auxiliary_transferred = false;
 
 	property = zend_native_static_property_explicit(
 		execute_data, operation, BP_VAR_W, &property_info, &temporary);
+	/* OP_DATA is fetched with BP_VAR_W by the VM.  An undefined CV therefore
+	 * becomes NULL before reference type validation and binding. */
+	if (value != NULL && operation->auxiliary_type == IS_CV
+			&& Z_TYPE_P(value) == IS_UNDEF) {
+		ZVAL_NULL(value);
+	}
 	if (property == NULL || property_info == NULL || value == NULL) {
 		if (temporary != NULL) {
 			zend_tmp_string_release(temporary);
 		}
+		if (result != NULL) {
+			ZVAL_UNDEF(result);
+		}
+		zend_native_object_consume(
+			execute_data, operation->auxiliary_type,
+			operation->auxiliary, result);
+		zend_native_object_consume(
+			execute_data, operation->op2_type, operation->op2, result);
+		zend_native_object_consume(
+			execute_data, operation->op1_type, operation->op1, result);
 		return zend_native_object_status();
 	}
 
@@ -1506,18 +1928,31 @@ static zend_native_status zend_native_static_assign_explicit(
 	} else {
 		assigned = zend_assign_to_variable_ex(
 			property, value, operation->auxiliary_type, strict, &garbage);
+		auxiliary_transferred = operation->auxiliary_type == IS_TMP_VAR
+			|| operation->auxiliary_type == IS_VAR;
 	}
 	if (result != NULL) {
 		ZVAL_COPY(result, assigned);
 	}
 	if (garbage != NULL) {
-		GC_DTOR(garbage);
+		if (by_reference) {
+			GC_DTOR(garbage);
+		} else {
+			GC_DTOR_NO_REF(garbage);
+		}
 	}
 	if (temporary != NULL) {
 		zend_tmp_string_release(temporary);
 	}
-	zend_native_object_consume(
-		execute_data, operation->auxiliary_type, operation->auxiliary, result);
+	if (auxiliary_transferred) {
+		if (value != result) {
+			ZVAL_UNDEF(value);
+		}
+	} else {
+		zend_native_object_consume(
+			execute_data, operation->auxiliary_type,
+			operation->auxiliary, result);
+	}
 	zend_native_object_consume(
 		execute_data, operation->op2_type, operation->op2, result);
 	zend_native_object_consume(
@@ -1554,12 +1989,31 @@ static zend_native_status zend_native_static_update_explicit(
 		if (temporary != NULL) {
 			zend_tmp_string_release(temporary);
 		}
+		if (result != NULL) {
+			ZVAL_UNDEF(result);
+		}
+		if (assign_op) {
+			zend_native_object_consume(
+				execute_data, operation->auxiliary_type,
+				operation->auxiliary, result);
+		}
+		zend_native_object_consume(
+			execute_data, operation->op2_type, operation->op2, result);
+		zend_native_object_consume(
+			execute_data, operation->op1_type, operation->op1, result);
 		return zend_native_object_status();
 	}
 	if ((property_info->flags & ZEND_ACC_PPP_SET_MASK)
 			&& !zend_asymmetric_property_has_set_access(property_info)) {
 		zend_asymmetric_visibility_property_modification_error(
 			property_info, "indirectly modify");
+		goto done;
+	}
+	if (!assign_op) {
+		zend_native_incdec_property_zval(
+			execute_data, property,
+			ZEND_TYPE_IS_SET(property_info->type) ? property_info : NULL,
+			result, post, !decrement);
 		goto done;
 	}
 	if (Z_ISREF_P(target)) {
@@ -1717,48 +2171,95 @@ static zend_native_status zend_native_class_constant_explicit(
 {
 	zend_class_entry *class_entry = zend_native_class_operand_explicit(
 		execute_data, operation->op1_type, operation->op1);
-	zend_string *temporary = NULL;
-	zval *name_value = zend_native_object_read_explicit(
-		execute_data, operation->op2_type, operation->op2);
+	zval *name_value = NULL;
 	zend_string *name = NULL;
 	zval *result = zend_native_object_slot(
 		execute_data, operation->result_type, operation->result);
 	zval *value = NULL;
 
-	if (name_value != NULL) {
-		if (operation->op2_type == IS_CONST
-				&& Z_TYPE_P(name_value) == IS_STRING) {
-			name = Z_STR_P(name_value);
-		} else {
-			name = zval_try_get_tmp_string(name_value, &temporary);
-		}
+	if (result == NULL) {
+		return ZEND_NATIVE_EXCEPTION;
 	}
-	if (result == NULL || class_entry == NULL || name == NULL) {
-		if (result != NULL) {
-			ZVAL_UNDEF(result);
-		}
-		if (temporary != NULL) {
-			zend_tmp_string_release(temporary);
-		}
-		return zend_native_object_status();
+	if (class_entry == NULL) {
+		ZVAL_UNDEF(result);
+		goto complete;
 	}
+	name_value = operation->op2_type == IS_CONST
+		? zend_native_object_read_explicit(
+			execute_data, operation->op2_type, operation->op2)
+		: zend_native_object_read_r_source_explicit(
+			execute_data, operation,
+			operation->op2_type, operation->op2);
+	if (name_value == NULL) {
+		ZVAL_UNDEF(result);
+		goto complete;
+	}
+	ZVAL_DEREF(name_value);
+	if (Z_TYPE_P(name_value) != IS_STRING) {
+		zend_invalid_class_constant_type_error(Z_TYPE_P(name_value));
+		ZVAL_UNDEF(result);
+		goto complete;
+	}
+	name = Z_STR_P(name_value);
 	if (operation->op2_type != IS_CONST
 			&& zend_string_equals_literal_ci(name, "class")) {
 		ZVAL_STR_COPY(result, class_entry->name);
 	} else {
+		zend_class_constant *constant = zend_hash_find_ptr(
+			CE_CONSTANTS_TABLE(class_entry), name);
 		const zend_class_entry *scope = execute_data->func->op_array.scope;
-		value = zend_get_class_constant_ex(
-			class_entry->name, name, scope,
-			ZEND_FETCH_CLASS_DEFAULT | ZEND_FETCH_CLASS_EXCEPTION);
+
+		if (constant == NULL) {
+			zend_throw_error(NULL, "Undefined constant %s::%s",
+				ZSTR_VAL(class_entry->name), ZSTR_VAL(name));
+		} else if (!zend_verify_const_access(constant, scope)) {
+			zend_throw_error(NULL, "Cannot access %s constant %s::%s",
+				zend_visibility_string(ZEND_CLASS_CONST_FLAGS(constant)),
+				ZSTR_VAL(class_entry->name), ZSTR_VAL(name));
+		} else if (class_entry->ce_flags & ZEND_ACC_TRAIT) {
+			zend_throw_error(NULL,
+				"Cannot access trait constant %s::%s directly",
+				ZSTR_VAL(class_entry->name), ZSTR_VAL(name));
+		} else {
+			bool deprecated =
+				(ZEND_CLASS_CONST_FLAGS(constant) & ZEND_ACC_DEPRECATED) != 0;
+
+			if (deprecated && !CONST_IS_RECURSIVE(constant)) {
+				if (constant->ce->type == ZEND_USER_CLASS) {
+					CONST_PROTECT_RECURSION(constant);
+				}
+				zend_deprecated_class_constant(constant, name);
+				if (constant->ce->type == ZEND_USER_CLASS) {
+					CONST_UNPROTECT_RECURSION(constant);
+				}
+			}
+			if (EG(exception) == NULL) {
+				value = &constant->value;
+			}
+		}
+		if (value != NULL
+				&& (class_entry->ce_flags & ZEND_ACC_ENUM)
+				&& class_entry->enum_backing_type != IS_UNDEF
+				&& class_entry->type == ZEND_USER_CLASS
+				&& !(class_entry->ce_flags & ZEND_ACC_CONSTANTS_UPDATED)
+				&& zend_update_class_constants(class_entry) == FAILURE) {
+			value = NULL;
+		}
+		/* The VM does not mark the outer class-constant AST as visited before
+		 * entering zend_update_class_constant(). That distinction determines
+		 * which member is reported for A -> B -> A recursion. */
+		if (value != NULL && Z_TYPE_P(value) == IS_CONSTANT_AST
+				&& zend_update_class_constant(constant, name, constant->ce)
+					== FAILURE) {
+			value = NULL;
+		}
 		if (value != NULL) {
 			zend_native_object_replace(result, value);
 		} else {
 			ZVAL_UNDEF(result);
 		}
 	}
-	if (temporary != NULL) {
-		zend_tmp_string_release(temporary);
-	}
+complete:
 	zend_native_object_consume(
 		execute_data, operation->op2_type, operation->op2, result);
 	zend_native_object_consume(
@@ -1849,8 +2350,16 @@ static zend_native_status zend_native_fetch_class_name_explicit(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (operation->op1_type != IS_UNUSED) {
-		zval *object = zend_native_object_read_explicit(
-			execute_data, operation->op1_type, operation->op1);
+		zval *object = zend_native_object_read_r_source_explicit(
+			execute_data, operation,
+			operation->op1_type, operation->op1);
+
+		if (object == NULL) {
+			ZVAL_UNDEF(result);
+			zend_native_object_consume(
+				execute_data, operation->op1_type, operation->op1, NULL);
+			return ZEND_NATIVE_EXCEPTION;
+		}
 
 		while (object != NULL && Z_ISREF_P(object)) {
 			object = Z_REFVAL_P(object);
@@ -2079,6 +2588,7 @@ zend_native_status zend_native_execute_object_fetch_func_arg(
 	uint32_t source_position_id)
 {
 	zend_native_explicit_object_operation operation;
+	zval *result_slot;
 	int fetch_type;
 
 	if (!zend_native_object_init_explicit_operation(
@@ -2090,6 +2600,23 @@ zend_native_status zend_native_execute_object_fetch_func_arg(
 	fetch_type = execute_data->call != NULL
 		&& (ZEND_CALL_INFO(execute_data->call)
 			& ZEND_CALL_SEND_ARG_BY_REF) != 0 ? BP_VAR_W : BP_VAR_R;
+	if (fetch_type == BP_VAR_W
+			&& (operation.op1_type == IS_CONST
+				|| operation.op1_type == IS_TMP_VAR)) {
+		result_slot = zend_native_object_slot(
+			execute_data, operation.result_type, operation.result);
+		if (result_slot == NULL) {
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		zend_throw_error(NULL,
+			"Cannot use temporary expression in write context");
+		ZVAL_UNDEF(result_slot);
+		zend_native_object_consume(
+			execute_data, operation.op2_type, operation.op2, NULL);
+		zend_native_object_consume(
+			execute_data, operation.op1_type, operation.op1, NULL);
+		return zend_native_object_status();
+	}
 	return zend_native_object_fetch_explicit(
 		execute_data, &operation, fetch_type);
 }

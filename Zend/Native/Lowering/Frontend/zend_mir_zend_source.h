@@ -56,6 +56,10 @@ typedef struct _zend_mir_zend_source {
 	const void *script;
 	void *call_inventory;
 	void *phi_index;
+	void *operand_index;
+	void *slot_index;
+	void *original_slot_index;
+	void *value_fact_index;
 	zend_mir_op_array_id op_array_id;
 	zend_mir_symbol_id file_symbol_id;
 	uint32_t opcode_count;
@@ -65,6 +69,7 @@ typedef struct _zend_mir_zend_source {
 	uint32_t literal_count;
 	uint32_t slot_count;
 	uint32_t value_fact_count;
+	uint32_t base_value_fact_count;
 	uint32_t source_position_count;
 	uint32_t block_count;
 	uint32_t edge_count;

@@ -108,6 +108,7 @@ const zend_class_constant *zend_fetch_class_const_info(
 
 void zend_optimizer_pass1(zend_op_array *op_array, zend_optimizer_ctx *ctx);
 void zend_optimizer_pass3(zend_op_array *op_array, zend_optimizer_ctx *ctx);
+void zend_optimize_runtime_op_array(zend_op_array *op_array, bool is_eval);
 void zend_optimize_func_calls(zend_op_array *op_array, zend_optimizer_ctx *ctx);
 void zend_optimize_cfg(zend_op_array *op_array, zend_optimizer_ctx *ctx);
 void zend_optimize_dfa(zend_op_array *op_array, zend_optimizer_ctx *ctx);

@@ -17,6 +17,7 @@
 
 #include <inttypes.h>
 #include <stdint.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,7 +26,6 @@
 		|| (defined(__linux__) && defined(__x86_64__))
 # include <execinfo.h>
 #endif
-
 #include "php.h"
 #include "php_native_mir_test.h"
 #include "native_mir_test_arginfo.h"
@@ -34,8 +34,10 @@
 #include "Zend/zend_compile.h"
 #include "Zend/zend_execute.h"
 #include "Zend/zend_exceptions.h"
+#include "Zend/zend_observer.h"
 #include "Zend/zend_smart_str.h"
 #include "Zend/zend_type_info.h"
+#include "Zend/zend_vm_probe.h"
 #include "Zend/zend_vm_opcodes.h"
 #include "Zend/Optimizer/zend_func_info.h"
 #include "Zend/Optimizer/zend_optimizer.h"
@@ -222,6 +224,8 @@ typedef struct _native_mir_test_state {
 	uint64_t vm_handler_calls;
 	uint64_t execute_ex_calls;
 	uint64_t opline_handler_calls;
+	uint32_t vm_probe_depth;
+	struct _native_mir_test_state *vm_probe_parent;
 	uint64_t user_opcode_calls;
 	uint64_t generator_reentry_gateway_calls;
 	user_opcode_handler_t previous_user_opcode_handler;
@@ -233,6 +237,7 @@ typedef struct _native_mir_test_state {
 	bool user_opcode_entered;
 	bool stack_probe_enabled;
 	bool abi_probe_enabled;
+	bool vm_probe_calibration_enabled;
 	bool frame_chain_valid;
 	native_mir_test_frame_probe *frame_probes;
 	uint32_t frame_probe_count;
@@ -246,6 +251,42 @@ typedef struct _native_mir_test_state {
 
 ZEND_TLS native_mir_test_state *native_mir_test_active_state;
 ZEND_TLS native_mir_test_state *native_mir_test_retained_states;
+
+void zend_native_mir_test_probe_vm_handler(void)
+{
+	native_mir_test_state *state = native_mir_test_active_state;
+
+	while (state != NULL) {
+		if (state->vm_probe_depth != 0) {
+			state->vm_handler_calls++;
+		}
+		state = state->vm_probe_parent;
+	}
+}
+
+void zend_native_mir_test_probe_execute_ex(void)
+{
+	native_mir_test_state *state = native_mir_test_active_state;
+
+	while (state != NULL) {
+		if (state->vm_probe_depth != 0) {
+			state->execute_ex_calls++;
+		}
+		state = state->vm_probe_parent;
+	}
+}
+
+void zend_native_mir_test_probe_opline_handler(void)
+{
+	native_mir_test_state *state = native_mir_test_active_state;
+
+	while (state != NULL) {
+		if (state->vm_probe_depth != 0) {
+			state->opline_handler_calls++;
+		}
+		state = state->vm_probe_parent;
+	}
+}
 
 static int native_mir_test_user_opcode_handler(zend_execute_data *execute_data)
 {
@@ -947,6 +988,11 @@ static bool native_mir_test_parse_options(
 				goto invalid_value;
 			}
 			state->abi_probe_enabled = true;
+		} else if (zend_string_equals_literal(key, "vm_probe_calibration")) {
+			if (!state->execute_mode || Z_TYPE_P(value) != IS_TRUE) {
+				goto invalid_value;
+			}
+			state->vm_probe_calibration_enabled = true;
 		} else if (zend_string_equals_literal(key, "user_opcode")) {
 			if (!native_mir_test_parse_user_opcode(state, value)) {
 				goto invalid_value;
@@ -960,7 +1006,8 @@ static bool native_mir_test_parse_options(
 			state->mir_chunk_size = (size_t) Z_LVAL_P(value);
 		} else if (zend_string_equals_literal(key, "runtime_helper_failure")) {
 			if (!state->execute_mode || Z_TYPE_P(value) != IS_LONG
-					|| Z_LVAL_P(value) < ZEND_NATIVE_HELPER_USER_CALL_BEGIN
+					|| Z_LVAL_P(value)
+						< ZEND_NATIVE_HELPER_USER_CALL_BEGIN
 					|| Z_LVAL_P(value) > ZEND_NATIVE_HELPER_ABI_CONFORMANCE) {
 				goto invalid_value;
 			}
@@ -1000,6 +1047,29 @@ invalid_value:
 		NATIVE_MIR_TEST_PHASE_COMPILE, "bridge", "INVALID_OPTIONS",
 		"compile/dump option has an invalid value");
 	return false;
+}
+
+static bool native_mir_test_validate_arguments(
+	native_mir_test_state *state, HashTable *arguments)
+{
+	zend_ulong index;
+	zend_string *key;
+	uint32_t expected_index = 0;
+
+	if (arguments == NULL) {
+		return true;
+	}
+	ZEND_HASH_FOREACH_KEY(arguments, index, key) {
+		if (key != NULL || index != expected_index) {
+			native_mir_test_fail(
+				state, NATIVE_MIR_TEST_STATUS_ERROR,
+				NATIVE_MIR_TEST_PHASE_COMPILE, "bridge", "INVALID_ARGUMENTS",
+				"arguments must be a dense zero-based numeric array");
+			return false;
+		}
+		expected_index++;
+	} ZEND_HASH_FOREACH_END();
+	return true;
 }
 
 static zend_op_array *native_mir_test_select_op_array(
@@ -1190,11 +1260,27 @@ static bool native_mir_test_bind_w10_classes(native_mir_test_state *state)
 	return true;
 }
 
+static void native_mir_test_capture_source_opcodes(native_mir_test_state *state)
+{
+	uint32_t index;
+
+	if (state->source_opcodes != NULL || state->selected->last == 0) {
+		return;
+	}
+	state->source_opcodes =
+		emalloc(state->selected->last * sizeof(*state->source_opcodes));
+	state->source_opcode_count = state->selected->last;
+	for (index = 0; index < state->source_opcode_count; index++) {
+		state->source_opcodes[index] = state->selected->opcodes[index].opcode;
+	}
+}
+
 static bool native_mir_test_build_ssa(native_mir_test_state *state)
 {
 	zend_optimizer_ctx optimizer;
 
 	state->phase = NATIVE_MIR_TEST_PHASE_SSA;
+	native_mir_test_capture_source_opcodes(state);
 	if (state->wave >= 4 && state->wave < 8
 			&& state->selected->last_try_catch != 0) {
 		native_mir_test_fail(
@@ -1229,17 +1315,6 @@ static bool native_mir_test_build_ssa(native_mir_test_state *state)
 	CG(compiler_options) = state->original_compiler_options;
 	state->compiler_options_saved = false;
 	*state->compiled = state->script.main_op_array;
-	if (state->selected->last != 0) {
-		uint32_t index;
-
-		state->source_opcodes =
-			emalloc(state->selected->last * sizeof(*state->source_opcodes));
-		state->source_opcode_count = state->selected->last;
-		for (index = 0; index < state->source_opcode_count; index++) {
-			state->source_opcodes[index] =
-				state->selected->opcodes[index].opcode;
-		}
-	}
 	state->ssa_arena = zend_arena_create(NATIVE_MIR_TEST_ARENA_SIZE);
 	if (state->ssa_arena == NULL) {
 		native_mir_test_fail(
@@ -1252,9 +1327,12 @@ static bool native_mir_test_build_ssa(native_mir_test_state *state)
 	optimizer.arena = state->ssa_arena;
 	optimizer.script = &state->script;
 	optimizer.optimization_level = ZEND_OPTIMIZER_PASS_6;
-	if ((state->wave >= 8
-			? zend_dfa_analyze_op_array_with_protected_regions(
+	if ((state->wave >= 11
+			? zend_dfa_analyze_op_array_with_dynamic_bindings(
 				state->selected, &optimizer, &state->ssa)
+			: state->wave >= 8
+				? zend_dfa_analyze_op_array_with_protected_regions(
+					state->selected, &optimizer, &state->ssa)
 			: zend_dfa_analyze_op_array(
 				state->selected, &optimizer, &state->ssa)) == FAILURE) {
 		state->ssa_arena = optimizer.arena;
@@ -4173,7 +4251,20 @@ static zend_native_status native_mir_test_execute_frame(
 	for (index = 0; index < argument_count; ++index) {
 		zval *argument = zend_hash_index_find(arguments, index);
 
-		ZEND_ASSERT(argument != NULL);
+		if (UNEXPECTED(argument == NULL)) {
+			if (state->wave >= 8) {
+				uint32_t copied_index;
+
+				for (copied_index = 0; copied_index < index; copied_index++) {
+					zval_ptr_dtor(ZEND_CALL_ARG(frame, copied_index + 1));
+				}
+			}
+			zend_vm_stack_free_call_frame(frame);
+			if (!Z_ISUNDEF(receiver)) {
+				zval_ptr_dtor(&receiver);
+			}
+			return ZEND_NATIVE_EXCEPTION;
+		}
 		if (state->wave >= 8) {
 			ZVAL_COPY(ZEND_CALL_ARG(frame, index + 1), argument);
 		} else {
@@ -4189,6 +4280,110 @@ static zend_native_status native_mir_test_execute_frame(
 		zval_ptr_dtor(&receiver);
 	}
 	return status;
+}
+
+static bool native_mir_test_calibrate_vm_probes(
+	native_mir_test_state *state, HashTable *arguments)
+{
+	zend_execute_data *previous;
+	zend_execute_data *frame;
+	zend_vm_stack previous_stack;
+	zval *previous_stack_top;
+	zval result;
+	uint32_t argument_count;
+	uint32_t index;
+	bool bailed_out = false;
+
+	if (!state->vm_probe_calibration_enabled) {
+		return true;
+	}
+	if (state->vm_handler_calls != 0 || state->execute_ex_calls != 0
+			|| state->opline_handler_calls != 0) {
+		native_mir_test_fail(
+			state, NATIVE_MIR_TEST_STATUS_ERROR,
+			NATIVE_MIR_TEST_PHASE_EXECUTE, "bridge", "VM_PROBE",
+			"native execution entered the VM before probe calibration");
+		return false;
+	}
+	if (state->selected->scope != NULL) {
+		native_mir_test_fail(
+			state, NATIVE_MIR_TEST_STATUS_ERROR,
+			NATIVE_MIR_TEST_PHASE_EXECUTE, "bridge", "VM_PROBE",
+			"VM probe calibration requires a free function");
+		return false;
+	}
+
+	argument_count = arguments != NULL
+		? zend_hash_num_elements(arguments) : 0;
+	previous = EG(current_execute_data);
+	previous_stack = EG(vm_stack);
+	previous_stack_top = EG(vm_stack_top);
+	frame = zend_vm_stack_push_call_frame(
+		ZEND_CALL_TOP_FUNCTION | ZEND_CALL_DYNAMIC,
+		(zend_function *) state->selected,
+		argument_count, NULL);
+	for (index = 0; index < argument_count; index++) {
+		zval *argument = zend_hash_index_find(arguments, index);
+
+		if (UNEXPECTED(argument == NULL)) {
+			uint32_t copied_index;
+
+			for (copied_index = 0; copied_index < index; copied_index++) {
+				zval_ptr_dtor(ZEND_CALL_ARG(frame, copied_index + 1));
+			}
+			zend_vm_stack_free_call_frame(frame);
+			native_mir_test_fail(
+				state, NATIVE_MIR_TEST_STATUS_ERROR,
+				NATIVE_MIR_TEST_PHASE_EXECUTE, "bridge", "INVALID_ARGUMENTS",
+				"arguments must be a dense zero-based numeric array");
+			return false;
+		}
+		ZVAL_COPY(ZEND_CALL_ARG(frame, index + 1), argument);
+	}
+	ZVAL_UNDEF(&result);
+	zend_init_func_execute_data(frame, state->selected, &result);
+	zend_try {
+		ZEND_OBSERVER_FCALL_BEGIN(frame);
+		execute_ex(frame);
+	} zend_catch {
+		bailed_out = true;
+	} zend_end_try();
+	EG(current_execute_data) = previous;
+	if (UNEXPECTED(bailed_out)) {
+		zend_native_execution_cleanup_frame(frame);
+		while (UNEXPECTED(EG(vm_stack) != previous_stack)) {
+			zend_vm_stack page = EG(vm_stack);
+
+			EG(vm_stack) = page->prev;
+			efree(page);
+		}
+		EG(vm_stack_top) = previous_stack_top;
+		EG(vm_stack_end) = previous_stack->end;
+	} else {
+		zend_vm_stack_free_call_frame(frame);
+	}
+	if (!Z_ISUNDEF(result)) {
+		zval_ptr_dtor(&result);
+	}
+	if (UNEXPECTED(bailed_out)) {
+		zend_bailout();
+	}
+	if (EG(exception) != NULL) {
+		native_mir_test_fail(
+			state, NATIVE_MIR_TEST_STATUS_ERROR,
+			NATIVE_MIR_TEST_PHASE_EXECUTE, "bridge", "VM_PROBE",
+			"VM probe calibration raised an exception");
+		return false;
+	}
+	if (state->vm_handler_calls == 0 || state->execute_ex_calls == 0
+			|| state->opline_handler_calls == 0) {
+		native_mir_test_fail(
+			state, NATIVE_MIR_TEST_STATUS_ERROR,
+			NATIVE_MIR_TEST_PHASE_EXECUTE, "bridge", "VM_PROBE",
+			"VM probe calibration did not reach every VM probe");
+		return false;
+	}
+	return true;
 }
 
 static bool native_mir_test_execute_product(
@@ -4285,7 +4480,7 @@ static bool native_mir_test_execute_product(
 	return true;
 }
 
-static bool native_mir_test_execute_module(
+static bool native_mir_test_execute_module_inner(
 	native_mir_test_state *state, HashTable *arguments)
 {
 	zend_native_diagnostic diagnostic;
@@ -4297,7 +4492,8 @@ static bool native_mir_test_execute_module(
 	bool reentry_entered = false;
 
 	if (state->wave >= 11) {
-		return native_mir_test_execute_product(state, arguments);
+		return native_mir_test_execute_product(state, arguments)
+			&& native_mir_test_calibrate_vm_probes(state, arguments);
 	}
 	if (!native_mir_test_prepare_native_component(state, arguments)
 			|| !native_mir_test_compile_native_component(state)) {
@@ -4373,7 +4569,26 @@ static bool native_mir_test_execute_module(
 	state->native_result_valid = true;
 	state->status = NATIVE_MIR_TEST_STATUS_ACCEPTED;
 	state->phase = NATIVE_MIR_TEST_PHASE_COMPLETE;
-	return true;
+	return native_mir_test_calibrate_vm_probes(state, arguments);
+}
+
+static bool native_mir_test_execute_module(
+	native_mir_test_state *state, HashTable *arguments)
+{
+	bool result;
+	uint32_t previous_depth = state->vm_probe_depth;
+
+	if (UNEXPECTED(previous_depth == UINT32_MAX)) {
+		native_mir_test_fail(
+			state, NATIVE_MIR_TEST_STATUS_ERROR,
+			NATIVE_MIR_TEST_PHASE_EXECUTE, "bridge", "VM_PROBE",
+			"VM probe nesting depth overflow");
+		return false;
+	}
+	state->vm_probe_depth = previous_depth + 1;
+	result = native_mir_test_execute_module_inner(state, arguments);
+	state->vm_probe_depth = previous_depth;
+	return result;
 }
 
 ZEND_FUNCTION(native_mir_test_unwind_probe)
@@ -4868,10 +5083,12 @@ static void native_mir_test_build_result(
 				(zend_long) compiler_stats.direct_typed_body_sites);
 			add_assoc_long(&performance, "direct_call_frame_bytes",
 				(zend_long) compiler_stats.direct_call_frame_bytes);
-			add_assoc_long(
-				&performance, "inner_call_runtime_helper_calls", 0);
-			add_assoc_long(&performance, "inner_call_heap_allocations", 0);
-			add_assoc_long(&performance, "inner_call_catcher_boundaries", 0);
+			add_assoc_long(&performance, "inner_call_runtime_helper_calls",
+				(zend_long) compiler_stats.inner_call_runtime_helper_calls);
+			add_assoc_long(&performance, "inner_call_heap_allocations",
+				(zend_long) compiler_stats.inner_call_heap_allocations);
+			add_assoc_long(&performance, "inner_call_catcher_boundaries",
+				(zend_long) compiler_stats.inner_call_catcher_boundaries);
 			add_assoc_long(&performance, "executions",
 				(zend_long) compiler_stats.executions);
 			add_assoc_zval(&execution, "performance", &performance);
@@ -4899,7 +5116,9 @@ static void native_mir_test_build_result(
 		if (state->native_result_valid) {
 			zval value;
 
-			ZVAL_COPY(&value, &state->native_result);
+			ZVAL_COPY_VALUE(&value, &state->native_result);
+			ZVAL_UNDEF(&state->native_result);
+			state->native_result_valid = false;
 			add_assoc_zval(&execution, "return_value", &value);
 		} else {
 			add_assoc_null(&execution, "return_value");
@@ -5073,6 +5292,13 @@ ZEND_FUNCTION(native_mir_test_compile_execute)
 		efree(state);
 		return;
 	}
+	if (!native_mir_test_validate_arguments(state, arguments)) {
+		native_mir_test_build_result(state, return_value);
+		efree(state->diagnostics);
+		efree(state->frame_probes);
+		efree(state);
+		return;
+	}
 	if (state->abi_probe_enabled && state->wave != 8) {
 		native_mir_test_fail(
 			state, NATIVE_MIR_TEST_STATUS_ERROR,
@@ -5092,8 +5318,9 @@ ZEND_FUNCTION(native_mir_test_compile_execute)
 		state->fault == NATIVE_MIR_TEST_FAULT_MODULE_OOM;
 	state->module_host.fail_after = 0;
 
-	/* Native execution never invokes an opline handler or VM dispatcher. */
+	/* Arm the VM probes only while the native module is executing. */
 	previous_active_state = native_mir_test_active_state;
+	state->vm_probe_parent = previous_active_state;
 	native_mir_test_active_state = state;
 	zend_try {
 		if (native_mir_test_compile(state)) {
@@ -5106,23 +5333,10 @@ ZEND_FUNCTION(native_mir_test_compile_execute)
 					"USER_OPCODE_INSTALL",
 					"failed to install requested user opcode handler");
 				source_ready = false;
-			} else if (state->wave >= 11) {
-				native_mir_test_init_script(state);
-				if (state->selected->last != 0) {
-					uint32_t opcode_index;
-
-					state->source_opcodes = emalloc(
-						state->selected->last
-						* sizeof(*state->source_opcodes));
-					state->source_opcode_count = state->selected->last;
-					for (opcode_index = 0;
-							opcode_index < state->source_opcode_count;
-							opcode_index++) {
-						state->source_opcodes[opcode_index] =
-							state->selected->opcodes[opcode_index].opcode;
-					}
-				}
-				source_ready = true;
+				} else if (state->wave >= 11) {
+					native_mir_test_init_script(state);
+					native_mir_test_capture_source_opcodes(state);
+					source_ready = true;
 			} else {
 				source_ready = native_mir_test_build_ssa(state);
 			}
@@ -5134,8 +5348,10 @@ ZEND_FUNCTION(native_mir_test_compile_execute)
 	} zend_catch {
 		bailed_out = true;
 	} zend_end_try();
+	state->vm_probe_depth = 0;
 	native_mir_test_restore_user_opcode(state);
 	native_mir_test_active_state = previous_active_state;
+	state->vm_probe_parent = NULL;
 
 	if (bailed_out) {
 		state->native_bailout = true;
