@@ -144,6 +144,12 @@ function scalar_null(): null
     return null;
 }
 
+function scalar_null_side_effect(): null
+{
+    echo 1;
+    return null;
+}
+
 function scalar_int_case(): int
 {
     return scalar_int(4);
@@ -162,6 +168,11 @@ function scalar_float_case(): float
 function scalar_null_case(): null
 {
     return scalar_null();
+}
+
+function scalar_null_side_effect_case(): null
+{
+    return scalar_null_side_effect();
 }
 
 function scalar_echo_case(): void
@@ -235,6 +246,7 @@ run_native($scalars, 'scalar_int_case', [], 7);
 run_native($scalars, 'scalar_bool_case', [], 7);
 run_native($scalars, 'scalar_float_case', [], 7);
 run_native($scalars, 'scalar_null_case', [], 7);
+run_native($scalars, 'scalar_null_side_effect_case', [], 7);
 run_native($scalars, 'scalar_echo_case', [], 7);
 run_native($weakTypes, 'weak_case', [], 7);
 run_native($weakReturn, 'weak_return_case', [], 7);
@@ -262,6 +274,7 @@ scalar_int_case accepted complete vm=0 execute_ex=0 handler=0 output=<empty> ret
 scalar_bool_case accepted complete vm=0 execute_ex=0 handler=0 output=<empty> return=true diagnostic=MIRL0000
 scalar_float_case accepted complete vm=0 execute_ex=0 handler=0 output=<empty> return=2.5 diagnostic=MIRL0000
 scalar_null_case accepted complete vm=0 execute_ex=0 handler=0 output=<empty> return=null diagnostic=MIRL0000
+scalar_null_side_effect_case accepted complete vm=0 execute_ex=0 handler=0 output=1 return=null diagnostic=MIRL0000
 scalar_echo_case accepted complete vm=0 execute_ex=0 handler=0 output=4 return=null diagnostic=MIRL0000
 weak_case accepted complete vm=0 execute_ex=0 handler=0 output=<empty> return=1 diagnostic=MIRL0000
 weak_return_case accepted complete vm=0 execute_ex=0 handler=0 output=<empty> return=1 diagnostic=MIRL0000

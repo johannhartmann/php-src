@@ -1044,10 +1044,10 @@ zend_op *zend_optimizer_get_loop_var_def(const zend_op_array *op_array, zend_op 
 	return NULL;
 }
 
-static void zend_optimize(zend_op_array      *op_array,
-                          zend_optimizer_ctx *ctx)
+static void zend_optimize_ex(zend_op_array *op_array,
+		zend_optimizer_ctx *ctx, bool optimize_eval)
 {
-	if (op_array->type == ZEND_EVAL_CODE) {
+	if (op_array->type == ZEND_EVAL_CODE && !optimize_eval) {
 		return;
 	}
 
@@ -1160,6 +1160,11 @@ static void zend_optimize(zend_op_array      *op_array,
 	if (ctx->debug_level & ZEND_DUMP_AFTER_OPTIMIZER) {
 		zend_dump_op_array(op_array, 0, "after optimizer", NULL);
 	}
+}
+
+static void zend_optimize(zend_op_array *op_array, zend_optimizer_ctx *ctx)
+{
+	zend_optimize_ex(op_array, ctx, false);
 }
 
 static void zend_revert_pass_two(zend_op_array *op_array)
@@ -1459,6 +1464,43 @@ static void zend_optimize_op_array(zend_op_array      *op_array,
 	if (op_array->live_range) {
 		zend_recalc_live_ranges(op_array, NULL);
 	}
+}
+
+void zend_optimize_runtime_op_array(zend_op_array *op_array, bool is_eval)
+{
+	zend_optimizer_ctx ctx;
+
+	if (op_array->last == 0) {
+		return;
+	}
+	ZEND_ASSERT(op_array->fn_flags & ZEND_ACC_DONE_PASS_TWO);
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.arena = zend_arena_create(64 * 1024);
+	/*
+	 * Request-local op arrays have no zend_script owner.  These selected
+	 * passes either need no script or deliberately consult executor tables
+	 * when ctx.script is NULL.
+	 */
+	ctx.script = NULL;
+	if (is_eval) {
+		ctx.optimization_level = ZEND_OPTIMIZER_PASS_9;
+		zend_optimize_temporary_variables(op_array, &ctx);
+		if (op_array->live_range != NULL) {
+			zend_recalc_live_ranges(op_array, NULL);
+		}
+	} else {
+		ctx.optimization_level = ZEND_OPTIMIZER_PASS_1
+			| ZEND_OPTIMIZER_PASS_3 | ZEND_OPTIMIZER_PASS_5
+			| ZEND_OPTIMIZER_PASS_9 | ZEND_OPTIMIZER_PASS_11;
+		zend_revert_pass_two(op_array);
+		zend_optimize_ex(op_array, &ctx, true);
+		zend_redo_pass_two(op_array);
+		if (op_array->live_range != NULL) {
+			zend_recalc_live_ranges(op_array, NULL);
+		}
+	}
+	zend_arena_destroy(ctx.arena);
+	ZEND_ASSERT(op_array->fn_flags & ZEND_ACC_DONE_PASS_TWO);
 }
 
 static void zend_adjust_fcall_stack_size(const zend_op_array *op_array, const zend_optimizer_ctx *ctx)

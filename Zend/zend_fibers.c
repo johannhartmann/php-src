@@ -34,6 +34,7 @@
 #include "zend_fibers_arginfo.h"
 
 #ifdef HAVE_NATIVE_ENGINE
+# include "Zend/Native/Compiler/zend_native_executor.h"
 # include "Zend/Native/Runtime/Common/zend_native_calls.h"
 #endif
 
@@ -117,16 +118,14 @@ typedef struct _zend_fiber_vm_state {
 	uint32_t jit_trace_num;
 	JMP_BUF *bailout;
 	zend_fiber *active_fiber;
-#ifdef HAVE_NATIVE_ENGINE
-	void *native_direct_call;
-#endif
 #ifdef ZEND_CHECK_STACK_LIMIT
 	void *stack_base;
 	void *stack_limit;
 #endif
 } zend_fiber_vm_state;
 
-static zend_always_inline void zend_fiber_capture_vm_state(zend_fiber_vm_state *state)
+static zend_always_inline void zend_fiber_capture_vm_state(
+	zend_fiber_vm_state *state, bool destroying)
 {
 	state->vm_stack = EG(vm_stack);
 	state->vm_stack_top = EG(vm_stack_top);
@@ -138,7 +137,17 @@ static zend_always_inline void zend_fiber_capture_vm_state(zend_fiber_vm_state *
 	state->bailout = EG(bailout);
 	state->active_fiber = EG(active_fiber);
 #ifdef HAVE_NATIVE_ENGINE
-	state->native_direct_call = zend_native_call_fiber_suspend();
+	zend_fiber_context *context = EG(current_fiber_context);
+	int native_rid = zend_native_executor_op_array_handle();
+
+	ZEND_ASSERT(native_rid >= 0 && native_rid < ZEND_MAX_RESERVED_RESOURCES);
+	if (destroying) {
+		zend_native_call_fiber_destroy();
+		context->reserved[native_rid] = NULL;
+	} else {
+		ZEND_ASSERT(context->reserved[native_rid] == NULL);
+		context->reserved[native_rid] = zend_native_call_fiber_suspend();
+	}
 #endif
 #ifdef ZEND_CHECK_STACK_LIMIT
 	state->stack_base = EG(stack_base);
@@ -158,7 +167,14 @@ static zend_always_inline void zend_fiber_restore_vm_state(zend_fiber_vm_state *
 	EG(bailout) = state->bailout;
 	EG(active_fiber) = state->active_fiber;
 #ifdef HAVE_NATIVE_ENGINE
-	zend_native_call_fiber_resume(state->native_direct_call);
+	zend_fiber_context *context = EG(current_fiber_context);
+	int native_rid = zend_native_executor_op_array_handle();
+	void *native_direct_call;
+
+	ZEND_ASSERT(native_rid >= 0 && native_rid < ZEND_MAX_RESERVED_RESOURCES);
+	native_direct_call = context->reserved[native_rid];
+	context->reserved[native_rid] = NULL;
+	zend_native_call_fiber_resume(native_direct_call);
 #endif
 #ifdef ZEND_CHECK_STACK_LIMIT
 	EG(stack_base) = state->stack_base;
@@ -465,6 +481,15 @@ ZEND_API zend_result zend_fiber_init_context(zend_fiber_context *context, void *
 
 	context->kind = kind;
 	context->function = coroutine;
+#ifdef HAVE_NATIVE_ENGINE
+	{
+		int native_rid = zend_native_executor_op_array_handle();
+
+		if (native_rid >= 0 && native_rid < ZEND_MAX_RESERVED_RESOURCES) {
+			context->reserved[native_rid] = NULL;
+		}
+	}
+#endif
 
 	// Set status in case memory has not been zeroed.
 	context->status = ZEND_FIBER_STATUS_INIT;
@@ -476,6 +501,15 @@ ZEND_API zend_result zend_fiber_init_context(zend_fiber_context *context, void *
 
 ZEND_API void zend_fiber_destroy_context(zend_fiber_context *context)
 {
+#ifdef HAVE_NATIVE_ENGINE
+	int native_rid = zend_native_executor_op_array_handle();
+
+	if (native_rid >= 0 && native_rid < ZEND_MAX_RESERVED_RESOURCES
+			&& context->reserved[native_rid] != NULL) {
+		zend_native_call_fiber_abandon(context->reserved[native_rid]);
+		context->reserved[native_rid] = NULL;
+	}
+#endif
 	zend_observer_fiber_destroy_notify(context);
 
 	if (context->cleanup) {
@@ -507,7 +541,8 @@ ZEND_API void zend_fiber_switch_context(zend_fiber_transfer *transfer)
 
 	zend_observer_fiber_switch_notify(from, to);
 
-	zend_fiber_capture_vm_state(&state);
+	zend_fiber_capture_vm_state(
+		&state, from->status == ZEND_FIBER_STATUS_DEAD);
 
 	to->status = ZEND_FIBER_STATUS_RUNNING;
 

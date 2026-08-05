@@ -55,6 +55,7 @@ result = {
         "filename": filename,
         "source_id": source_id(filename, source),
     },
+    "source_opcodes": ["ZEND_RETURN"],
     "status": "accepted",
     "wave": 4,
 }
@@ -86,6 +87,8 @@ elif mode == "wrong_wave":
     result["wave"] = 3
 elif mode == "too_many_diagnostics":
     result["diagnostics"] = result["diagnostics"] * (request["options"]["diagnostic_limit"] + 1)
+elif mode == "invalid_source_opcode":
+    result["source_opcodes"] = ["RETURN"]
 calls = [copy.deepcopy(result) for _ in range(request["repeat"])]
 if mode == "vary" and len(calls) > 1:
     calls[1]["diagnostics"][0]["message"] = "changed"
@@ -168,7 +171,14 @@ class DumpW04Tests(unittest.TestCase):
         for invalid in (0, 257, True):
             with self.subTest(limit=invalid):
                 with self.assertRaisesRegex(dump_w04.DumpError, "diagnostic limit"):
-                    dump_w04.validate_request(self.filename, 1, invalid, 4096, 5.0)
+                    dump_w04.validate_request(
+                        self.filename, 1, invalid, 4096, 5.0
+                    )
+
+    def test_source_opcodes_are_validated(self) -> None:
+        os.environ["W04_FAKE_MODE"] = "invalid_source_opcode"
+        with self.assertRaisesRegex(dump_w04.DumpError, "Zend opcode"):
+            dump_w04.invoke(str(self.candidate), self.source, self.filename)
 
     def test_invalid_function_result_and_non_determinism_are_failure_atomic(self) -> None:
         os.environ["W04_FAKE_MODE"] = "deferred"

@@ -239,7 +239,7 @@ static zend_native_status zend_native_dynamic_fetch(
 	zval *value;
 	zend_string *name;
 	zend_string *temporary_name = NULL;
-
+	zend_string *protected_name = NULL;
 	if (!zend_native_dynamic_init_explicit_operation(
 			execute_data, op1, op2, result_operand, auxiliary, extended_value,
 			source_opcode, source_position_id, expected_opcode, &operation)
@@ -278,6 +278,13 @@ static zend_native_status zend_native_dynamic_fetch(
 				execute_data, opline->op1_type, opline->op1);
 			return ZEND_NATIVE_EXCEPTION;
 		}
+		if (temporary_name == NULL) {
+			/* A warning raised below may invoke user code that overwrites the
+			 * operand slot.  Keep a non-temporary dynamic name alive until the
+			 * symbol-table lookup and possible insertion are complete. */
+			zend_string_addref(name);
+			protected_name = name;
+		}
 	}
 	value = zend_hash_find_ex(
 		symbol_table, name, opline->op1_type == IS_CONST);
@@ -288,6 +295,9 @@ static zend_native_status zend_native_dynamic_fetch(
 				execute_data, opline, fetch_type);
 
 			zend_tmp_string_release(temporary_name);
+			if (protected_name != NULL) {
+				zend_string_release(protected_name);
+			}
 			if ((opline->extended_value & ZEND_FETCH_GLOBAL_LOCK) == 0) {
 				zend_native_dynamic_consume(
 					execute_data, opline->op1_type, opline->op1);
@@ -330,6 +340,9 @@ static zend_native_status zend_native_dynamic_fetch(
 		ZVAL_INDIRECT(result, value);
 	}
 	zend_tmp_string_release(temporary_name);
+	if (protected_name != NULL) {
+		zend_string_release(protected_name);
+	}
 	if ((opline->extended_value & ZEND_FETCH_GLOBAL_LOCK) == 0) {
 		zend_native_dynamic_consume(
 			execute_data, opline->op1_type, opline->op1);
@@ -574,9 +587,11 @@ zend_native_status zend_native_dynamic_fetch_constant(
 {
 	zend_native_explicit_dynamic_operation operation;
 	const zend_native_explicit_dynamic_operation *opline = &operation;
+	const zval *literal;
 	const zval *key;
-	zval *value;
+	zval *entry;
 	zval *result;
+	zend_constant *constant = NULL;
 
 	if (!zend_native_dynamic_init_explicit_operation(
 			execute_data, op1, op2, result_operand, auxiliary, extended_value,
@@ -588,14 +603,16 @@ zend_native_status zend_native_dynamic_fetch_constant(
 			execute_data, opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	key = zend_native_dynamic_read(
-		execute_data, opline->op2_type, opline->op2) + 1;
+	literal = zend_native_dynamic_read(
+		execute_data, opline->op2_type, opline->op2);
+	key = literal + 1;
 	if (Z_TYPE_P(key) != IS_STRING) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	value = zend_get_constant_ex(
-		Z_STR_P(key), execute_data->func->op_array.scope, opline->op1.num);
-	if (value == NULL && (opline->op1.num
+	entry = zend_hash_find_known_hash(EG(zend_constants), Z_STR_P(key));
+	if (entry != NULL) {
+		constant = (zend_constant *) Z_PTR_P(entry);
+	} else if ((opline->op1.num
 			& IS_CONSTANT_UNQUALIFIED_IN_NAMESPACE) != 0) {
 		if ((uint64_t) opline->op2.constant + 2
 				>= execute_data->func->op_array.last_literal) {
@@ -604,21 +621,28 @@ zend_native_status zend_native_dynamic_fetch_constant(
 		}
 		key++;
 		if (Z_TYPE_P(key) == IS_STRING) {
-			value = zend_get_constant_ex(
-				Z_STR_P(key), execute_data->func->op_array.scope, 0);
+			entry = zend_hash_find_known_hash(
+				EG(zend_constants), Z_STR_P(key));
+			if (entry != NULL) {
+				constant = (zend_constant *) Z_PTR_P(entry);
+			}
 		}
 	}
-	if (value == NULL) {
+	if (constant == NULL) {
 		ZVAL_UNDEF(result);
-		if (EG(exception) == NULL) {
-			zend_throw_error(NULL, "Undefined constant \"%s\"",
-				Z_STRVAL_P(zend_native_dynamic_read(
-					execute_data, opline->op2_type, opline->op2)));
-		}
+		zend_throw_error(NULL, "Undefined constant \"%s\"",
+			Z_STRVAL_P(literal));
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	ZVAL_COPY_OR_DUP(result, value);
-	return ZEND_NATIVE_RETURNED;
+	ZVAL_COPY_OR_DUP(result, &constant->value);
+	if ((ZEND_CONSTANT_FLAGS(constant) & CONST_DEPRECATED) != 0
+			&& !CONST_IS_RECURSIVE(constant)) {
+		CONST_PROTECT_RECURSION(constant);
+		zend_deprecated_constant(constant, constant->name);
+		CONST_UNPROTECT_RECURSION(constant);
+	}
+	return EG(exception) == NULL
+		? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
 }
 
 static zend_native_status zend_native_dynamic_declare_constant_impl(

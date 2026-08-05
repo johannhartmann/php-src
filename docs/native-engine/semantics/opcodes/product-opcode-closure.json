@@ -1,0 +1,4092 @@
+{
+  "historical_wave_artifacts_used": false,
+  "opcode_set": {
+    "active_count": 212,
+    "holes": [
+      45,
+      79
+    ],
+    "sentinel": 213
+  },
+  "opcodes": [
+    {
+      "classification": "direct_tpde_target",
+      "helper": null,
+      "implementation": "executable_tpde",
+      "number": 0,
+      "opcode": "ZEND_NOP",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_NOP:",
+          "line": 389,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_NOP"
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_BINARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+      "number": 1,
+      "opcode": "ZEND_ADD",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ADD:",
+          "line": 314,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+          "line": 1570,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_BINARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+      "number": 2,
+      "opcode": "ZEND_SUB",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_SUB:",
+          "line": 315,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+          "line": 1570,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_BINARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+      "number": 3,
+      "opcode": "ZEND_MUL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_MUL:",
+          "line": 316,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+          "line": 1570,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_BINARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+      "number": 4,
+      "opcode": "ZEND_DIV",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_DIV:",
+          "line": 317,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+          "line": 1570,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_BINARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+      "number": 5,
+      "opcode": "ZEND_MOD",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_MOD:",
+          "line": 318,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+          "line": 1570,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_BINARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+      "number": 6,
+      "opcode": "ZEND_SL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_SL:",
+          "line": 320,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+          "line": 1570,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_BINARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+      "number": 7,
+      "opcode": "ZEND_SR",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_SR:",
+          "line": 321,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+          "line": 1570,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_CONCAT",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_CONCAT",
+      "number": 8,
+      "opcode": "ZEND_CONCAT",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_CONCAT:",
+          "line": 357,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_CONCAT",
+          "line": 1530,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_BINARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+      "number": 9,
+      "opcode": "ZEND_BW_OR",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_BW_OR:",
+          "line": 322,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+          "line": 1570,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_BINARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+      "number": 10,
+      "opcode": "ZEND_BW_AND",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_BW_AND:",
+          "line": 323,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+          "line": 1570,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_BINARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+      "number": 11,
+      "opcode": "ZEND_BW_XOR",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_BW_XOR:",
+          "line": 324,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+          "line": 1570,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_BINARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+      "number": 12,
+      "opcode": "ZEND_POW",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_POW:",
+          "line": 319,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+          "line": 1570,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_UNARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_UNARY_OP",
+      "number": 13,
+      "opcode": "ZEND_BW_NOT",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_BW_NOT:",
+          "line": 334,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_UNARY_OP",
+          "line": 1572,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_UNARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_UNARY_OP",
+      "number": 14,
+      "opcode": "ZEND_BOOL_NOT",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_BOOL_NOT:",
+          "line": 335,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_UNARY_OP",
+          "line": 1572,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_BINARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+      "number": 15,
+      "opcode": "ZEND_BOOL_XOR",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_BOOL_XOR:",
+          "line": 325,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+          "line": 1570,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_BINARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+      "number": 16,
+      "opcode": "ZEND_IS_IDENTICAL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_IS_IDENTICAL:",
+          "line": 326,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+          "line": 1570,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_BINARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+      "number": 17,
+      "opcode": "ZEND_IS_NOT_IDENTICAL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_IS_NOT_IDENTICAL:",
+          "line": 327,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+          "line": 1570,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_BINARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+      "number": 18,
+      "opcode": "ZEND_IS_EQUAL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_IS_EQUAL:",
+          "line": 328,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+          "line": 1570,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_BINARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+      "number": 19,
+      "opcode": "ZEND_IS_NOT_EQUAL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_IS_NOT_EQUAL:",
+          "line": 329,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+          "line": 1570,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_BINARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+      "number": 20,
+      "opcode": "ZEND_IS_SMALLER",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_IS_SMALLER:",
+          "line": 330,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+          "line": 1570,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_BINARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+      "number": 21,
+      "opcode": "ZEND_IS_SMALLER_OR_EQUAL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_IS_SMALLER_OR_EQUAL:",
+          "line": 331,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+          "line": 1570,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_ASSIGN",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_ASSIGN",
+      "number": 22,
+      "opcode": "ZEND_ASSIGN",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ASSIGN:",
+          "line": 105,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_ASSIGN",
+          "line": 1514,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM",
+      "number": 23,
+      "opcode": "ZEND_ASSIGN_DIM",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ASSIGN_DIM:",
+          "line": 385,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM",
+          "line": 1558,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_ASSIGN",
+      "number": 24,
+      "opcode": "ZEND_ASSIGN_OBJ",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ASSIGN_OBJ:",
+          "line": 145,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_STATIC_ASSIGN",
+      "number": 25,
+      "opcode": "ZEND_ASSIGN_STATIC_PROP",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ASSIGN_STATIC_PROP:",
+          "line": 179,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_ASSIGN_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_ASSIGN_OP",
+      "number": 26,
+      "opcode": "ZEND_ASSIGN_OP",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ASSIGN_OP:",
+          "line": 353,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_ASSIGN_OP",
+          "line": 1566,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM_OP",
+      "number": 27,
+      "opcode": "ZEND_ASSIGN_DIM_OP",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ASSIGN_DIM_OP:",
+          "line": 387,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM_OP",
+          "line": 1560,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_ASSIGN_OP",
+      "number": 28,
+      "opcode": "ZEND_ASSIGN_OBJ_OP",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ASSIGN_OBJ_OP:",
+          "line": 149,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_STATIC_ASSIGN_OP",
+      "number": 29,
+      "opcode": "ZEND_ASSIGN_STATIC_PROP_OP",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ASSIGN_STATIC_PROP_OP:",
+          "line": 183,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_ASSIGN_REF",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_ASSIGN_REF",
+      "number": 30,
+      "opcode": "ZEND_ASSIGN_REF",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ASSIGN_REF:",
+          "line": 106,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_ASSIGN_REF",
+          "line": 1514,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_QM_ASSIGN",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_QM_ASSIGN",
+      "number": 31,
+      "opcode": "ZEND_QM_ASSIGN",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_QM_ASSIGN:",
+          "line": 355,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_QM_ASSIGN",
+          "line": 1528,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_ASSIGN_REF",
+      "number": 32,
+      "opcode": "ZEND_ASSIGN_OBJ_REF",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ASSIGN_OBJ_REF:",
+          "line": 147,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_STATIC_ASSIGN_REF",
+      "number": 33,
+      "opcode": "ZEND_ASSIGN_STATIC_PROP_REF",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ASSIGN_STATIC_PROP_REF:",
+          "line": 181,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_INCDEC",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_INCDEC",
+      "number": 34,
+      "opcode": "ZEND_PRE_INC",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_PRE_INC:",
+          "line": 346,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_INCDEC",
+          "line": 1580,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_INCDEC",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_INCDEC",
+      "number": 35,
+      "opcode": "ZEND_PRE_DEC",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_PRE_DEC:",
+          "line": 347,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_INCDEC",
+          "line": 1580,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_INCDEC",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_INCDEC",
+      "number": 36,
+      "opcode": "ZEND_POST_INC",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_POST_INC:",
+          "line": 348,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_INCDEC",
+          "line": 1580,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_INCDEC",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_INCDEC",
+      "number": 37,
+      "opcode": "ZEND_POST_DEC",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_POST_DEC:",
+          "line": 349,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_INCDEC",
+          "line": 1580,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_STATIC_PRE_INC",
+      "number": 38,
+      "opcode": "ZEND_PRE_INC_STATIC_PROP",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_PRE_INC_STATIC_PROP:",
+          "line": 185,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_STATIC_PRE_DEC",
+      "number": 39,
+      "opcode": "ZEND_PRE_DEC_STATIC_PROP",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_PRE_DEC_STATIC_PROP:",
+          "line": 187,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_STATIC_POST_INC",
+      "number": 40,
+      "opcode": "ZEND_POST_INC_STATIC_PROP",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_POST_INC_STATIC_PROP:",
+          "line": 189,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_STATIC_POST_DEC",
+      "number": 41,
+      "opcode": "ZEND_POST_DEC_STATIC_PROP",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_POST_DEC_STATIC_PROP:",
+          "line": 191,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": null,
+      "implementation": "executable_tpde",
+      "number": 42,
+      "opcode": "ZEND_JMP",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_JMP:",
+          "line": 444,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_JUMP_OP1"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_COND_BRANCH",
+      "implementation": "executable_tpde",
+      "number": 43,
+      "opcode": "ZEND_JMPZ",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_JMPZ:",
+          "line": 447,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_OP2"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_COND_BRANCH",
+      "implementation": "executable_tpde",
+      "number": 44,
+      "opcode": "ZEND_JMPNZ",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_JMPNZ:",
+          "line": 452,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_COND_BRANCH",
+      "implementation": "executable_tpde",
+      "number": 46,
+      "opcode": "ZEND_JMPZ_EX",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_JMPZ_EX:",
+          "line": 448,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_OP2"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_COND_BRANCH",
+      "implementation": "executable_tpde",
+      "number": 47,
+      "opcode": "ZEND_JMPNZ_EX",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_JMPNZ_EX:",
+          "line": 453,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2"
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_CASE",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_CASE",
+      "number": 48,
+      "opcode": "ZEND_CASE",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_CASE:",
+          "line": 307,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_CASE",
+          "line": 1582,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_CHECK_VAR",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_CHECK_VAR",
+      "number": 49,
+      "opcode": "ZEND_CHECK_VAR",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_CHECK_VAR:",
+          "line": 107,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_CHECK_VAR",
+          "line": 1524,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 50,
+      "opcode": "ZEND_SEND_VAR_NO_REF_EX",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_SEND_VAR_NO_REF_EX:",
+          "line": 429,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_CAST",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_CAST",
+      "number": 51,
+      "opcode": "ZEND_CAST",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_CAST:",
+          "line": 339,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_CAST",
+          "line": 1574,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_UNARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_UNARY_OP",
+      "number": 52,
+      "opcode": "ZEND_BOOL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_BOOL:",
+          "line": 336,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_UNARY_OP",
+          "line": 1572,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_FAST_CONCAT",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_FAST_CONCAT",
+      "number": 53,
+      "opcode": "ZEND_FAST_CONCAT",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FAST_CONCAT:",
+          "line": 359,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_FAST_CONCAT",
+          "line": 1532,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_ROPE_INIT",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_ROPE_INIT",
+      "number": 54,
+      "opcode": "ZEND_ROPE_INIT",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ROPE_INIT:",
+          "line": 361,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_ROPE_INIT",
+          "line": 1534,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_ROPE_ADD",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_ROPE_ADD",
+      "number": 55,
+      "opcode": "ZEND_ROPE_ADD",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ROPE_ADD:",
+          "line": 363,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_ROPE_ADD",
+          "line": 1536,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_ROPE_END",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_ROPE_END",
+      "number": 56,
+      "opcode": "ZEND_ROPE_END",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ROPE_END:",
+          "line": 365,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_ROPE_END",
+          "line": 1538,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_BEGIN_SILENCE",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_BEGIN_SILENCE",
+      "number": 57,
+      "opcode": "ZEND_BEGIN_SILENCE",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_BEGIN_SILENCE:",
+          "line": 283,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_BEGIN_SILENCE",
+          "line": 1622,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_END_SILENCE",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_END_SILENCE",
+      "number": 58,
+      "opcode": "ZEND_END_SILENCE",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_END_SILENCE:",
+          "line": 285,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_END_SILENCE",
+          "line": 1624,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 59,
+      "opcode": "ZEND_INIT_FCALL_BY_NAME",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_INIT_FCALL_BY_NAME:",
+          "line": 411,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 60,
+      "opcode": "ZEND_DO_FCALL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_DO_FCALL:",
+          "line": 434,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 61,
+      "opcode": "ZEND_INIT_FCALL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_INIT_FCALL:",
+          "line": 410,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_RETURN_SOURCE_ZVAL",
+      "implementation": "executable_tpde",
+      "number": 62,
+      "opcode": "ZEND_RETURN",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_RETURN:",
+          "line": 480,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_RETURN"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_RECEIVE_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 63,
+      "opcode": "ZEND_RECV",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_RECV:",
+          "line": 404,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_RECEIVE"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_RECEIVE_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 64,
+      "opcode": "ZEND_RECV_INIT",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_RECV_INIT:",
+          "line": 405,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_RECEIVE"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 65,
+      "opcode": "ZEND_SEND_VAL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_SEND_VAL:",
+          "line": 419,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 66,
+      "opcode": "ZEND_SEND_VAR_EX",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_SEND_VAR_EX:",
+          "line": 422,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 67,
+      "opcode": "ZEND_SEND_REF",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_SEND_REF:",
+          "line": 423,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 68,
+      "opcode": "ZEND_NEW",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_NEW:",
+          "line": 418,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 69,
+      "opcode": "ZEND_INIT_NS_FCALL_BY_NAME",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_INIT_NS_FCALL_BY_NAME:",
+          "line": 412,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_FREE",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_FREE",
+      "number": 70,
+      "opcode": "ZEND_FREE",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FREE:",
+          "line": 110,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_FREE",
+          "line": 1520,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_INIT_ARRAY",
+      "number": 71,
+      "opcode": "ZEND_INIT_ARRAY",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_INIT_ARRAY:",
+          "line": 367,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_INIT_ARRAY",
+          "line": 1540,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_ELEMENT",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_ADD_ARRAY_ELEMENT",
+      "number": 72,
+      "opcode": "ZEND_ADD_ARRAY_ELEMENT",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ADD_ARRAY_ELEMENT:",
+          "line": 369,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_ADD_ARRAY_ELEMENT",
+          "line": 1542,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_DYNAMIC_INCLUDE_OR_EVAL",
+      "number": 73,
+      "opcode": "ZEND_INCLUDE_OR_EVAL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_INCLUDE_OR_EVAL:",
+          "line": 242,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_R",
+          "line": 1504,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_DYNAMIC_UNSET_VAR",
+      "number": 74,
+      "opcode": "ZEND_UNSET_VAR",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_UNSET_VAR:",
+          "line": 228,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_R",
+          "line": 1504,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_UNSET_DIM",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_UNSET_DIM",
+      "number": 75,
+      "opcode": "ZEND_UNSET_DIM",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_UNSET_DIM:",
+          "line": 389,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_UNSET_DIM",
+          "line": 1562,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_UNSET",
+      "number": 76,
+      "opcode": "ZEND_UNSET_OBJ",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_UNSET_OBJ:",
+          "line": 151,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_ITERATOR_BRANCH",
+      "implementation": "executable_tpde",
+      "number": 77,
+      "opcode": "ZEND_FE_RESET_R",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FE_RESET_R:",
+          "line": 461,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_OP2"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_ITERATOR_BRANCH",
+      "implementation": "executable_tpde",
+      "number": 78,
+      "opcode": "ZEND_FE_FETCH_R",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FE_FETCH_R:",
+          "line": 466,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_EXTENDED"
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_R",
+      "number": 80,
+      "opcode": "ZEND_FETCH_R",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_R:",
+          "line": 216,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_R",
+          "line": 1504,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R",
+      "number": 81,
+      "opcode": "ZEND_FETCH_DIM_R",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_DIM_R:",
+          "line": 373,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R",
+          "line": 1546,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_FETCH_R",
+      "number": 82,
+      "opcode": "ZEND_FETCH_OBJ_R",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_OBJ_R:",
+          "line": 133,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_W",
+      "number": 83,
+      "opcode": "ZEND_FETCH_W",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_W:",
+          "line": 218,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_R",
+          "line": 1504,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_W",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_FETCH_DIM_W",
+      "number": 84,
+      "opcode": "ZEND_FETCH_DIM_W",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_DIM_W:",
+          "line": 375,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_FETCH_DIM_W",
+          "line": 1548,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_FETCH_W",
+      "number": 85,
+      "opcode": "ZEND_FETCH_OBJ_W",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_OBJ_W:",
+          "line": 135,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_RW",
+      "number": 86,
+      "opcode": "ZEND_FETCH_RW",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_RW:",
+          "line": 220,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_R",
+          "line": 1504,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_RW",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_FETCH_DIM_RW",
+      "number": 87,
+      "opcode": "ZEND_FETCH_DIM_RW",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_DIM_RW:",
+          "line": 377,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_FETCH_DIM_RW",
+          "line": 1550,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_FETCH_RW",
+      "number": 88,
+      "opcode": "ZEND_FETCH_OBJ_RW",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_OBJ_RW:",
+          "line": 137,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_IS",
+      "number": 89,
+      "opcode": "ZEND_FETCH_IS",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_IS:",
+          "line": 222,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_R",
+          "line": 1504,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_IS",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_FETCH_DIM_IS",
+      "number": 90,
+      "opcode": "ZEND_FETCH_DIM_IS",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_DIM_IS:",
+          "line": 379,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_FETCH_DIM_IS",
+          "line": 1552,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_FETCH_IS",
+      "number": 91,
+      "opcode": "ZEND_FETCH_OBJ_IS",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_OBJ_IS:",
+          "line": 139,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_FUNC_ARG",
+      "number": 92,
+      "opcode": "ZEND_FETCH_FUNC_ARG",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_FUNC_ARG:",
+          "line": 224,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_R",
+          "line": 1504,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_FUNC_ARG",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_FETCH_DIM_FUNC_ARG",
+      "number": 93,
+      "opcode": "ZEND_FETCH_DIM_FUNC_ARG",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_DIM_FUNC_ARG:",
+          "line": 381,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_FETCH_DIM_FUNC_ARG",
+          "line": 1554,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_FETCH_FUNC_ARG",
+      "number": 94,
+      "opcode": "ZEND_FETCH_OBJ_FUNC_ARG",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_OBJ_FUNC_ARG:",
+          "line": 141,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_UNSET",
+      "number": 95,
+      "opcode": "ZEND_FETCH_UNSET",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_UNSET:",
+          "line": 226,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_R",
+          "line": 1504,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_UNSET",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_FETCH_DIM_UNSET",
+      "number": 96,
+      "opcode": "ZEND_FETCH_DIM_UNSET",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_DIM_UNSET:",
+          "line": 383,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_FETCH_DIM_UNSET",
+          "line": 1556,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_FETCH_UNSET",
+      "number": 97,
+      "opcode": "ZEND_FETCH_OBJ_UNSET",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_OBJ_UNSET:",
+          "line": 143,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_FETCH_LIST",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_FETCH_LIST",
+      "number": 98,
+      "opcode": "ZEND_FETCH_LIST_R",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_LIST_R:",
+          "line": 343,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_FETCH_LIST",
+          "line": 1578,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_CONSTANT",
+      "number": 99,
+      "opcode": "ZEND_FETCH_CONSTANT",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_CONSTANT:",
+          "line": 236,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_R",
+          "line": 1504,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 100,
+      "opcode": "ZEND_CHECK_FUNC_ARG",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_CHECK_FUNC_ARG:",
+          "line": 431,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_EXT_STMT",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_EXT_STMT",
+      "number": 101,
+      "opcode": "ZEND_EXT_STMT",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_EXT_STMT:",
+          "line": 297,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_EXT_STMT",
+          "line": 1636,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_EXT_FCALL_BEGIN",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_EXT_FCALL_BEGIN",
+      "number": 102,
+      "opcode": "ZEND_EXT_FCALL_BEGIN",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_EXT_FCALL_BEGIN:",
+          "line": 299,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_EXT_FCALL_BEGIN",
+          "line": 1638,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_EXT_FCALL_END",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_EXT_FCALL_END",
+      "number": 103,
+      "opcode": "ZEND_EXT_FCALL_END",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_EXT_FCALL_END:",
+          "line": 301,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_EXT_FCALL_END",
+          "line": 1640,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_EXT_NOP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_EXT_NOP",
+      "number": 104,
+      "opcode": "ZEND_EXT_NOP",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_EXT_NOP:",
+          "line": 303,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_EXT_NOP",
+          "line": 1642,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_TICKS",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_TICKS",
+      "number": 105,
+      "opcode": "ZEND_TICKS",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_TICKS:",
+          "line": 293,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_TICKS",
+          "line": 1632,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 106,
+      "opcode": "ZEND_SEND_VAR_NO_REF",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_SEND_VAR_NO_REF:",
+          "line": 428,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CATCH_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 107,
+      "opcode": "ZEND_CATCH",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_CATCH:",
+          "line": 400,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CATCH"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL",
+      "implementation": "executable_tpde",
+      "number": 108,
+      "opcode": "ZEND_THROW",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_THROW:",
+          "line": 485,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_THROW"
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS",
+      "number": 109,
+      "opcode": "ZEND_FETCH_CLASS",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_CLASS:",
+          "line": 197,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_CLONE",
+      "number": 110,
+      "opcode": "ZEND_CLONE",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_CLONE:",
+          "line": 165,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_RETURN_SOURCE_ZVAL",
+      "implementation": "executable_tpde",
+      "number": 111,
+      "opcode": "ZEND_RETURN_BY_REF",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_RETURN_BY_REF:",
+          "line": 481,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_RETURN"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 112,
+      "opcode": "ZEND_INIT_METHOD_CALL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_INIT_METHOD_CALL:",
+          "line": 415,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 113,
+      "opcode": "ZEND_INIT_STATIC_METHOD_CALL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_INIT_STATIC_METHOD_CALL:",
+          "line": 416,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_DYNAMIC_ISSET_ISEMPTY_VAR",
+      "number": 114,
+      "opcode": "ZEND_ISSET_ISEMPTY_VAR",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ISSET_ISEMPTY_VAR:",
+          "line": 230,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_R",
+          "line": 1504,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM",
+      "number": 115,
+      "opcode": "ZEND_ISSET_ISEMPTY_DIM_OBJ",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ISSET_ISEMPTY_DIM_OBJ:",
+          "line": 391,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM",
+          "line": 1564,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 116,
+      "opcode": "ZEND_SEND_VAL_EX",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_SEND_VAL_EX:",
+          "line": 420,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 117,
+      "opcode": "ZEND_SEND_VAR",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_SEND_VAR:",
+          "line": 421,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 118,
+      "opcode": "ZEND_INIT_USER_CALL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_INIT_USER_CALL:",
+          "line": 414,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 119,
+      "opcode": "ZEND_SEND_ARRAY",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_SEND_ARRAY:",
+          "line": 425,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 120,
+      "opcode": "ZEND_SEND_USER",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_SEND_USER:",
+          "line": 426,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_UNARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_UNARY_OP",
+      "number": 121,
+      "opcode": "ZEND_STRLEN",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_STRLEN:",
+          "line": 337,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_UNARY_OP",
+          "line": 1572,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_DEFINED",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_DEFINED",
+      "number": 122,
+      "opcode": "ZEND_DEFINED",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_DEFINED:",
+          "line": 291,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_DEFINED",
+          "line": 1630,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_TYPE_CHECK",
+      "number": 123,
+      "opcode": "ZEND_TYPE_CHECK",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_TYPE_CHECK:",
+          "line": 244,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE",
+      "number": 124,
+      "opcode": "ZEND_VERIFY_RETURN_TYPE",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_VERIFY_RETURN_TYPE:",
+          "line": 253,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE",
+          "line": 1588,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_ITERATOR_BRANCH",
+      "implementation": "executable_tpde",
+      "number": 125,
+      "opcode": "ZEND_FE_RESET_RW",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FE_RESET_RW:",
+          "line": 462,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_OP2"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_ITERATOR_BRANCH",
+      "implementation": "executable_tpde",
+      "number": 126,
+      "opcode": "ZEND_FE_FETCH_RW",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FE_FETCH_RW:",
+          "line": 467,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_EXTENDED"
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_FE_FREE",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_FE_FREE",
+      "number": 127,
+      "opcode": "ZEND_FE_FREE",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FE_FREE:",
+          "line": 393,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_FE_FREE",
+          "line": 1568,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 128,
+      "opcode": "ZEND_INIT_DYNAMIC_CALL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_INIT_DYNAMIC_CALL:",
+          "line": 413,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 129,
+      "opcode": "ZEND_DO_ICALL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_DO_ICALL:",
+          "line": 436,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 130,
+      "opcode": "ZEND_DO_UCALL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_DO_UCALL:",
+          "line": 433,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 131,
+      "opcode": "ZEND_DO_FCALL_BY_NAME",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_DO_FCALL_BY_NAME:",
+          "line": 435,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_PRE_INC",
+      "number": 132,
+      "opcode": "ZEND_PRE_INC_OBJ",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_PRE_INC_OBJ:",
+          "line": 155,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_PRE_DEC",
+      "number": 133,
+      "opcode": "ZEND_PRE_DEC_OBJ",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_PRE_DEC_OBJ:",
+          "line": 157,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_POST_INC",
+      "number": 134,
+      "opcode": "ZEND_POST_INC_OBJ",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_POST_INC_OBJ:",
+          "line": 159,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_POST_DEC",
+      "number": 135,
+      "opcode": "ZEND_POST_DEC_OBJ",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_POST_DEC_OBJ:",
+          "line": 161,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_ECHO",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_ECHO",
+      "number": 136,
+      "opcode": "ZEND_ECHO",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ECHO:",
+          "line": 251,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_ECHO",
+          "line": 1590,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "atomic_owner_sequence",
+      "description": "OP_DATA is consumed atomically as the auxiliary operand of its owner opcode and is marked non-landable in the frozen TPDE source CFG.",
+      "implementation": "executable_tpde",
+      "number": 137,
+      "opcode": "ZEND_OP_DATA",
+      "source_refs": [
+        {
+          "anchor": "op_array->opcodes[index + 1].opcode == ZEND_OP_DATA",
+          "line": 1912,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "operation->auxiliary = data_opcode.op1;",
+          "line": 1920,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "op_array->opcodes[source_position + 1].opcode == ZEND_OP_DATA",
+          "line": 316,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        },
+        {
+          "anchor": "plan->source_opcode_is_data[source] =",
+          "line": 5129,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_INSTANCEOF",
+      "number": 138,
+      "opcode": "ZEND_INSTANCEOF",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_INSTANCEOF:",
+          "line": 163,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_GENERATOR_CREATE",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_GENERATOR_CREATE",
+      "number": 139,
+      "opcode": "ZEND_GENERATOR_CREATE",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_GENERATOR_CREATE:",
+          "line": 259,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_GENERATOR_CREATE",
+          "line": 1602,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_MAKE_REF",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_MAKE_REF",
+      "number": 140,
+      "opcode": "ZEND_MAKE_REF",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_MAKE_REF:",
+          "line": 114,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_MAKE_REF",
+          "line": 1512,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_OBJECT_DECLARE_FUNCTION",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_DECLARE_FUNCTION",
+      "number": 141,
+      "opcode": "ZEND_DECLARE_FUNCTION",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_DECLARE_FUNCTION:",
+          "line": 210,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_FUNCTION",
+          "line": 1596,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_DECLARE_LAMBDA",
+      "number": 142,
+      "opcode": "ZEND_DECLARE_LAMBDA_FUNCTION",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_DECLARE_LAMBDA_FUNCTION:",
+          "line": 204,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_DYNAMIC_DECLARE_CONSTANT",
+      "number": 143,
+      "opcode": "ZEND_DECLARE_CONST",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_DECLARE_CONST:",
+          "line": 238,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_R",
+          "line": 1504,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_OBJECT_DECLARE_CLASS",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS",
+      "number": 144,
+      "opcode": "ZEND_DECLARE_CLASS",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_DECLARE_CLASS:",
+          "line": 212,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS",
+          "line": 1598,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_OBJECT_DECLARE_CLASS_DELAYED",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS_DELAYED",
+      "number": 145,
+      "opcode": "ZEND_DECLARE_CLASS_DELAYED",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_DECLARE_CLASS_DELAYED:",
+          "line": 214,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS_DELAYED",
+          "line": 1600,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+      "number": 146,
+      "opcode": "ZEND_DECLARE_ANON_CLASS",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_DECLARE_ANON_CLASS:",
+          "line": 129,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_UNPACK",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_ADD_ARRAY_UNPACK",
+      "number": 147,
+      "opcode": "ZEND_ADD_ARRAY_UNPACK",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ADD_ARRAY_UNPACK:",
+          "line": 371,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_ADD_ARRAY_UNPACK",
+          "line": 1544,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_ISSET_ISEMPTY",
+      "number": 148,
+      "opcode": "ZEND_ISSET_ISEMPTY_PROP_OBJ",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ISSET_ISEMPTY_PROP_OBJ:",
+          "line": 153,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "native_exception_route",
+      "description": "Exception dispatch is represented as compiler-built MIR exception edges and TPDE exception-block branches; no VM opcode handler is called.",
+      "implementation": "executable_tpde",
+      "number": 149,
+      "opcode": "ZEND_HANDLE_EXCEPTION",
+      "source_refs": [
+        {
+          "anchor": "zend_native_compiler_prepare_exception_routes",
+          "line": 1076,
+          "path": "Zend/Native/Compiler/zend_native_compiler.c"
+        },
+        {
+          "anchor": "zend_mir_zend_op_array_exception_handler",
+          "line": 1095,
+          "path": "Zend/Native/Compiler/zend_native_compiler.c"
+        },
+        {
+          "anchor": "ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE",
+          "line": 1182,
+          "path": "Zend/Native/Compiler/zend_native_compiler.c"
+        },
+        {
+          "anchor": "candidate.exception_block_id = effect.target_block_id;",
+          "line": 8063,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        },
+        {
+          "anchor": "instruction.exception_block_id",
+          "line": 3938,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        },
+        {
+          "anchor": "instruction->exception_block_id",
+          "line": 1702,
+          "path": "Zend/Native/TPDE/DarwinA64/zend_tpde_darwin_arm64.cpp"
+        },
+        {
+          "anchor": "instruction->exception_block_id",
+          "line": 1716,
+          "path": "Zend/Native/TPDE/LinuxX64/zend_tpde_linux_x64.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "native_user_opcode_callback",
+      "description": "The native entry invokes the registered user callback, interprets its action, and resolves ENTER through the native entry registry.",
+      "implementation": "bounded_native_runtime",
+      "number": 150,
+      "opcode": "ZEND_USER_OPCODE",
+      "source_refs": [
+        {
+          "anchor": "ZEND_NATIVE_HELPER_USER_OPCODE_INVOKE",
+          "line": 5236,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        },
+        {
+          "anchor": "user_opcode_target(",
+          "line": 381,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        },
+        {
+          "anchor": "zend_native_user_opcode_invoke(",
+          "line": 1066,
+          "path": "Zend/Native/Runtime/Common/zend_native_calls.c"
+        },
+        {
+          "anchor": "zend_get_user_opcode_handler",
+          "line": 1086,
+          "path": "Zend/Native/Runtime/Common/zend_native_calls.c"
+        },
+        {
+          "anchor": "action = handler(execute_data);",
+          "line": 1093,
+          "path": "Zend/Native/Runtime/Common/zend_native_calls.c"
+        },
+        {
+          "anchor": "zend_native_execute_observed_frame",
+          "line": 1122,
+          "path": "Zend/Native/Runtime/Common/zend_native_calls.c"
+        },
+        {
+          "anchor": "ZEND_USER_OPCODE_DISPATCH",
+          "line": 1273,
+          "path": "Zend/Native/TPDE/DarwinA64/zend_tpde_darwin_arm64.cpp"
+        },
+        {
+          "anchor": "ZEND_USER_OPCODE_DISPATCH",
+          "line": 1288,
+          "path": "Zend/Native/TPDE/LinuxX64/zend_tpde_linux_x64.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_COND_BRANCH",
+      "implementation": "executable_tpde",
+      "number": 151,
+      "opcode": "ZEND_ASSERT_CHECK",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ASSERT_CHECK:",
+          "line": 457,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_COND_BRANCH",
+      "implementation": "executable_tpde",
+      "number": 152,
+      "opcode": "ZEND_JMP_SET",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_JMP_SET:",
+          "line": 454,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2"
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_UNSET_CV",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_UNSET_CV",
+      "number": 153,
+      "opcode": "ZEND_UNSET_CV",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_UNSET_CV:",
+          "line": 115,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_UNSET_CV",
+          "line": 1522,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_CV",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV",
+      "number": 154,
+      "opcode": "ZEND_ISSET_ISEMPTY_CV",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ISSET_ISEMPTY_CV:",
+          "line": 116,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV",
+          "line": 1576,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_FETCH_LIST",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_FETCH_LIST",
+      "number": 155,
+      "opcode": "ZEND_FETCH_LIST_W",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_LIST_W:",
+          "line": 344,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_FETCH_LIST",
+          "line": 1578,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_SEPARATE",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_SEPARATE",
+      "number": 156,
+      "opcode": "ZEND_SEPARATE",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_SEPARATE:",
+          "line": 117,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_SEPARATE",
+          "line": 1516,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME",
+      "number": 157,
+      "opcode": "ZEND_FETCH_CLASS_NAME",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_CLASS_NAME:",
+          "line": 200,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "native_call_trampoline_normalization",
+      "description": "Dynamic magic-call trampolines are normalized to __call/__callStatic and continue through native user/internal call entries.",
+      "implementation": "bounded_native_runtime",
+      "number": 158,
+      "opcode": "ZEND_CALL_TRAMPOLINE",
+      "source_refs": [
+        {
+          "anchor": "ZEND_NATIVE_HELPER_USER_CALL_NORMALIZE_RESOLUTION",
+          "line": 7732,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        },
+        {
+          "anchor": "zend_native_call_normalize_trampoline(",
+          "line": 4452,
+          "path": "Zend/Native/Runtime/Common/zend_native_calls.c"
+        },
+        {
+          "anchor": "ZEND_NATIVE_USER_CALL_TARGET_TRAMPOLINE",
+          "line": 2372,
+          "path": "Zend/Native/Runtime/Common/zend_native_calls.c"
+        },
+        {
+          "anchor": "zend_native_call_normalize_user_resolution(",
+          "line": 4518,
+          "path": "Zend/Native/Runtime/Common/zend_native_calls.c"
+        },
+        {
+          "anchor": "resolution->ownership &= ~ZEND_NATIVE_USER_CALL_OWNS_TRAMPOLINE;",
+          "line": 4558,
+          "path": "Zend/Native/Runtime/Common/zend_native_calls.c"
+        },
+        {
+          "anchor": "ZEND_NATIVE_HELPER_USER_CALL_NORMALIZE_RESOLUTION",
+          "line": 798,
+          "path": "Zend/Native/Runtime/Common/zend_native_runtime.c"
+        },
+        {
+          "anchor": "zend_native_call_normalize_user_resolution",
+          "line": 800,
+          "path": "Zend/Native/Runtime/Common/zend_native_runtime.c"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_DISCARD_EXCEPTION",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_DISCARD_EXCEPTION",
+      "number": 159,
+      "opcode": "ZEND_DISCARD_EXCEPTION",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_DISCARD_EXCEPTION:",
+          "line": 305,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_DISCARD_EXCEPTION",
+          "line": 1644,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_GENERATOR_YIELD",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_GENERATOR_YIELD",
+      "number": 160,
+      "opcode": "ZEND_YIELD",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_YIELD:",
+          "line": 261,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_GENERATOR_YIELD",
+          "line": 1604,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_GENERATOR_RETURN",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_GENERATOR_RETURN",
+      "number": 161,
+      "opcode": "ZEND_GENERATOR_RETURN",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_GENERATOR_RETURN:",
+          "line": 265,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_GENERATOR_RETURN",
+          "line": 1608,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": null,
+      "implementation": "executable_tpde",
+      "number": 162,
+      "opcode": "ZEND_FAST_CALL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FAST_CALL:",
+          "line": 392,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_FINALLY_CALL"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_FINALLY_RETURN_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 163,
+      "opcode": "ZEND_FAST_RET",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FAST_RET:",
+          "line": 395,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_FINALLY_RETURN"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_RECEIVE_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 164,
+      "opcode": "ZEND_RECV_VARIADIC",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_RECV_VARIADIC:",
+          "line": 406,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_RECEIVE"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 165,
+      "opcode": "ZEND_SEND_UNPACK",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_SEND_UNPACK:",
+          "line": 424,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_GENERATOR_YIELD_FROM",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM",
+      "number": 166,
+      "opcode": "ZEND_YIELD_FROM",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_YIELD_FROM:",
+          "line": 263,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM",
+          "line": 1606,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_COPY_TMP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_COPY_TMP",
+      "number": 167,
+      "opcode": "ZEND_COPY_TMP",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_COPY_TMP:",
+          "line": 118,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_COPY_TMP",
+          "line": 1518,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_DYNAMIC_BIND_GLOBAL",
+      "number": 168,
+      "opcode": "ZEND_BIND_GLOBAL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_BIND_GLOBAL:",
+          "line": 232,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_R",
+          "line": 1504,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_COND_BRANCH",
+      "implementation": "executable_tpde",
+      "number": 169,
+      "opcode": "ZEND_COALESCE",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_COALESCE:",
+          "line": 455,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2"
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_BINARY_OP",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+      "number": 170,
+      "opcode": "ZEND_SPACESHIP",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_SPACESHIP:",
+          "line": 332,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_BINARY_OP",
+          "line": 1570,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_FUNC_NUM_ARGS",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_FUNC_NUM_ARGS",
+      "number": 171,
+      "opcode": "ZEND_FUNC_NUM_ARGS",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FUNC_NUM_ARGS:",
+          "line": 255,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_FUNC_NUM_ARGS",
+          "line": 1592,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_FUNC_GET_ARGS",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_FUNC_GET_ARGS",
+      "number": 172,
+      "opcode": "ZEND_FUNC_GET_ARGS",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FUNC_GET_ARGS:",
+          "line": 257,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_FUNC_GET_ARGS",
+          "line": 1594,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_STATIC_FETCH_R",
+      "number": 173,
+      "opcode": "ZEND_FETCH_STATIC_PROP_R",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_STATIC_PROP_R:",
+          "line": 167,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_STATIC_FETCH_W",
+      "number": 174,
+      "opcode": "ZEND_FETCH_STATIC_PROP_W",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_STATIC_PROP_W:",
+          "line": 169,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_STATIC_FETCH_RW",
+      "number": 175,
+      "opcode": "ZEND_FETCH_STATIC_PROP_RW",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_STATIC_PROP_RW:",
+          "line": 171,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_STATIC_FETCH_IS",
+      "number": 176,
+      "opcode": "ZEND_FETCH_STATIC_PROP_IS",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_STATIC_PROP_IS:",
+          "line": 173,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_STATIC_FETCH_FUNC_ARG",
+      "number": 177,
+      "opcode": "ZEND_FETCH_STATIC_PROP_FUNC_ARG",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_STATIC_PROP_FUNC_ARG:",
+          "line": 175,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_STATIC_FETCH_UNSET",
+      "number": 178,
+      "opcode": "ZEND_FETCH_STATIC_PROP_UNSET",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_STATIC_PROP_UNSET:",
+          "line": 177,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_STATIC_UNSET",
+      "number": 179,
+      "opcode": "ZEND_UNSET_STATIC_PROP",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_UNSET_STATIC_PROP:",
+          "line": 195,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_STATIC_ISSET_ISEMPTY",
+      "number": 180,
+      "opcode": "ZEND_ISSET_ISEMPTY_STATIC_PROP",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ISSET_ISEMPTY_STATIC_PROP:",
+          "line": 193,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_CONSTANT",
+      "number": 181,
+      "opcode": "ZEND_FETCH_CLASS_CONSTANT",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_CLASS_CONSTANT:",
+          "line": 202,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_BIND_LEXICAL",
+      "number": 182,
+      "opcode": "ZEND_BIND_LEXICAL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_BIND_LEXICAL:",
+          "line": 206,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_BIND_STATIC",
+      "number": 183,
+      "opcode": "ZEND_BIND_STATIC",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_BIND_STATIC:",
+          "line": 208,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_FETCH_THIS",
+      "number": 184,
+      "opcode": "ZEND_FETCH_THIS",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_THIS:",
+          "line": 131,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 185,
+      "opcode": "ZEND_SEND_FUNC_ARG",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_SEND_FUNC_ARG:",
+          "line": 427,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_ISSET_THIS",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_ISSET_THIS",
+      "number": 186,
+      "opcode": "ZEND_ISSET_ISEMPTY_THIS",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ISSET_ISEMPTY_THIS:",
+          "line": 279,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_ISSET_THIS",
+          "line": 1618,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": null,
+      "implementation": "executable_tpde",
+      "number": 187,
+      "opcode": "ZEND_SWITCH_LONG",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_SWITCH_LONG:",
+          "line": 489,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_MULTI_BRANCH"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": null,
+      "implementation": "executable_tpde",
+      "number": 188,
+      "opcode": "ZEND_SWITCH_STRING",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_SWITCH_STRING:",
+          "line": 490,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_MULTI_BRANCH"
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_IN_ARRAY",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_IN_ARRAY",
+      "number": 189,
+      "opcode": "ZEND_IN_ARRAY",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_IN_ARRAY:",
+          "line": 277,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_IN_ARRAY",
+          "line": 1616,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_COUNT",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_COUNT",
+      "number": 190,
+      "opcode": "ZEND_COUNT",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_COUNT:",
+          "line": 271,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_COUNT",
+          "line": 1610,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME",
+      "number": 191,
+      "opcode": "ZEND_GET_CLASS",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_GET_CLASS:",
+          "line": 199,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_GET_CALLED_CLASS",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_GET_CALLED_CLASS",
+      "number": 192,
+      "opcode": "ZEND_GET_CALLED_CLASS",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_GET_CALLED_CLASS:",
+          "line": 281,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_GET_CALLED_CLASS",
+          "line": 1620,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_GET_TYPE",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_GET_TYPE",
+      "number": 193,
+      "opcode": "ZEND_GET_TYPE",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_GET_TYPE:",
+          "line": 273,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_GET_TYPE",
+          "line": 1612,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_ARRAY_KEY_EXISTS",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_ARRAY_KEY_EXISTS",
+      "number": 194,
+      "opcode": "ZEND_ARRAY_KEY_EXISTS",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_ARRAY_KEY_EXISTS:",
+          "line": 275,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_ARRAY_KEY_EXISTS",
+          "line": 1614,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": null,
+      "implementation": "executable_tpde",
+      "number": 195,
+      "opcode": "ZEND_MATCH",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_MATCH:",
+          "line": 491,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_MULTI_BRANCH"
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_CASE",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_CASE",
+      "number": 196,
+      "opcode": "ZEND_CASE_STRICT",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_CASE_STRICT:",
+          "line": 308,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_CASE",
+          "line": 1582,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_MATCH_ERROR",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_MATCH_ERROR",
+      "number": 197,
+      "opcode": "ZEND_MATCH_ERROR",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_MATCH_ERROR:",
+          "line": 287,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_MATCH_ERROR",
+          "line": 1626,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_COND_BRANCH",
+      "implementation": "executable_tpde",
+      "number": 198,
+      "opcode": "ZEND_JMP_NULL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_JMP_NULL:",
+          "line": 456,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 199,
+      "opcode": "ZEND_CHECK_UNDEF_ARGS",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_CHECK_UNDEF_ARGS:",
+          "line": 432,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_GLOBALS",
+      "number": 200,
+      "opcode": "ZEND_FETCH_GLOBALS",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FETCH_GLOBALS:",
+          "line": 234,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_R",
+          "line": 1504,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_VERIFY_NEVER_TYPE",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_VERIFY_NEVER_TYPE",
+      "number": 201,
+      "opcode": "ZEND_VERIFY_NEVER_TYPE",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_VERIFY_NEVER_TYPE:",
+          "line": 289,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_VERIFY_NEVER_TYPE",
+          "line": 1628,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 202,
+      "opcode": "ZEND_CALLABLE_CONVERT",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_CALLABLE_CONVERT:",
+          "line": 437,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_BIND_STATIC_BRANCH",
+      "implementation": "executable_tpde",
+      "number": 203,
+      "opcode": "ZEND_BIND_INIT_STATIC_OR_JMP",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_BIND_INIT_STATIC_OR_JMP:",
+          "line": 472,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2"
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL",
+      "number": 204,
+      "opcode": "ZEND_FRAMELESS_ICALL_0",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FRAMELESS_ICALL_0:",
+          "line": 246,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL",
+      "number": 205,
+      "opcode": "ZEND_FRAMELESS_ICALL_1",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FRAMELESS_ICALL_1:",
+          "line": 247,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL",
+      "number": 206,
+      "opcode": "ZEND_FRAMELESS_ICALL_2",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FRAMELESS_ICALL_2:",
+          "line": 248,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL",
+      "number": 207,
+      "opcode": "ZEND_FRAMELESS_ICALL_3",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_FRAMELESS_ICALL_3:",
+          "line": 249,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS",
+          "line": 1496,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_FRAMELESS_BRANCH",
+      "implementation": "executable_tpde",
+      "number": 208,
+      "opcode": "ZEND_JMP_FRAMELESS",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_JMP_FRAMELESS:",
+          "line": 476,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 209,
+      "opcode": "ZEND_INIT_PARENT_PROPERTY_HOOK_CALL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_INIT_PARENT_PROPERTY_HOOK_CALL:",
+          "line": 417,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "derived_contiguous_helper",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT",
+      "number": 210,
+      "opcode": "ZEND_DECLARE_ATTRIBUTED_CONST",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_DECLARE_ATTRIBUTED_CONST:",
+          "line": 240,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_DYNAMIC_FETCH_R",
+          "line": 1504,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "bounded_runtime_helper",
+      "helper": "ZEND_NATIVE_HELPER_VALUE_TYPE_ASSERT",
+      "implementation": "bounded_native_runtime",
+      "mir_opcode": "ZEND_MIR_OPCODE_VALUE_TYPE_ASSERT",
+      "number": 211,
+      "opcode": "ZEND_TYPE_ASSERT",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_TYPE_ASSERT:",
+          "line": 295,
+          "path": "Zend/Native/Values/Lowering/zend_mir_value_lowering.c"
+        },
+        {
+          "anchor": "ZEND_MIR_OPCODE_VALUE_TYPE_ASSERT",
+          "line": 1634,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ]
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 212,
+      "opcode": "ZEND_CALLABLE_CONVERT_PARTIAL",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_CALLABLE_CONVERT_PARTIAL:",
+          "line": 438,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    },
+    {
+      "classification": "direct_tpde_target",
+      "helper": "ZEND_NATIVE_HELPER_CALL_FRAGMENT_EXPLICIT",
+      "implementation": "executable_tpde",
+      "number": 213,
+      "opcode": "ZEND_SEND_PLACEHOLDER",
+      "source_refs": [
+        {
+          "anchor": "case ZEND_SEND_PLACEHOLDER:",
+          "line": 430,
+          "path": "Zend/Native/TPDE/Common/zend_tpde_backend.cpp"
+        }
+      ],
+      "target_kind": "ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT"
+    }
+  ],
+  "proof_kind": "current_native_product_opcode_closure",
+  "schema_version": "1.0.0",
+  "source_basis": {
+    "files": {
+      "Zend/Native/Compiler/zend_native_compiler.c": "ac24f23c6a41693395b9bcd9d72c5932818e75f162434719fa20a0e5ff50151d",
+      "Zend/Native/MIR/zend_mir_opcodes.h": "293a4581f7df193904f7a2783335e479ae7d4d41baf7e994b77f8cd9a3f9eb3c",
+      "Zend/Native/Runtime/Common/zend_native_calls.c": "bacb7dd51778610880e18dfa017be47cf5942ccb690368cfc6d566a48c392c4a",
+      "Zend/Native/Runtime/Common/zend_native_runtime.c": "968689ef89b46e5af2b2771b0df8d5b7cc8d766e6d49e3e19def1e673c019029",
+      "Zend/Native/TPDE/Common/zend_tpde_backend.cpp": "0b23b9fe242d4228e08227433c086d2571cf3e29cc378d57ae32e4646a357876",
+      "Zend/Native/TPDE/Common/zend_tpde_internal.hpp": "7c5ebcad1719721b3a876eb5b7c0deafee172782d76290993c56c19915691d34",
+      "Zend/Native/TPDE/DarwinA64/zend_tpde_darwin_arm64.cpp": "d4fda55a2362c60d445534085860ee6c37eb819e8e576365b2aa164cb98174f9",
+      "Zend/Native/TPDE/LinuxX64/zend_tpde_linux_x64.cpp": "8ef2949d2c19768ad39fa8d9bcf78ccca74019bb30b916d977ad958318c226e2",
+      "Zend/Native/Values/Lowering/zend_mir_value_lowering.c": "b7ae602e53b4989b4e28880209e39265c4c1dcc68d79863c56008c08427b7afa",
+      "Zend/zend_vm_opcodes.h": "2a62c83808d7e7db31a33a53058cd7017f561ef87be0ee2bf304e85a9f04c587"
+    },
+    "native_product_source_file_count": 196,
+    "native_product_tree_sha256": "28e623ea79c430bf5ab558250b40bdccecff3099811501fd27f9209774e8a422"
+  },
+  "summary": {
+    "classification_counts": {
+      "atomic_owner_sequence": 1,
+      "bounded_runtime_helper": 151,
+      "direct_tpde_target": 57,
+      "native_call_trampoline_normalization": 1,
+      "native_exception_route": 1,
+      "native_user_opcode_callback": 1
+    },
+    "covered_count": 212,
+    "hard_zero_metrics": {
+      "active_opcodes_without_product_path": 0,
+      "deferred_paths": 0,
+      "execute_ex_fallbacks": 0,
+      "model_only_paths": 0,
+      "opline_handler_calls": 0,
+      "unsupported_valid_paths": 0,
+      "vm_handler_calls": 0
+    }
+  }
+}

@@ -24,6 +24,18 @@ function inline_reference_state()
     return [$null, [isset($value), empty($value)]];
 }
 
+function inline_slot_branch_loop($iterations)
+{
+    $sum = 0;
+    $value = 1;
+    for ($i = 0; $i < $iterations; $i++) {
+        if (isset($value) && !empty($value)) {
+            $sum++;
+        }
+    }
+    return $sum;
+}
+
 function inline_slot_states()
 {
     return [
@@ -41,6 +53,7 @@ function inline_slot_states()
         inline_slot_state([1]),
         inline_slot_state(new stdClass()),
         inline_reference_state(),
+        inline_slot_branch_loop(50),
     ];
 }
 PHP;
@@ -66,4 +79,4 @@ printf(
 );
 ?>
 --EXPECT--
-accepted return=[[false,true],[true,true],[true,false],[true,true],[true,false],[true,true],[true,false],[true,true],[true,true],[true,false],[true,true],[true,false],[true,false],[[false,true],[true,false]]] vm=0 execute_ex=0 handler=0 active=0
+accepted return=[[false,true],[true,true],[true,false],[true,true],[true,false],[true,true],[true,false],[true,true],[true,true],[true,false],[true,true],[true,false],[true,false],[[false,true],[true,false]],50] vm=0 execute_ex=0 handler=0 active=0

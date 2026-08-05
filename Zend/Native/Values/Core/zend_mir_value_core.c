@@ -124,7 +124,8 @@ static bool zend_mir_value_set_model_flags(void *context, uint32_t flags)
 	zend_mir_core_value_staging *staging;
 
 	if (!zend_mir_module_require_building(module)
-			|| (flags & ~ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS) != 0) {
+			|| (flags & ~(ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS
+				| ZEND_MIR_VALUE_MODEL_VALUE_PLAN_COMPLETE)) != 0) {
 		return false;
 	}
 	staging = &module->value_staging;
@@ -137,11 +138,13 @@ static bool zend_mir_value_set_model_flags(void *context, uint32_t flags)
 	return true;
 }
 
+#if !defined(NDEBUG)
 static bool zend_mir_value_category_valid(zend_mir_value_category category)
 {
 	return category >= ZEND_MIR_VALUE_NON_REFCOUNTED_SCALAR
 		&& category <= ZEND_MIR_VALUE_CATEGORY_UNKNOWN;
 }
+#endif
 
 static bool zend_mir_value_refcount_valid(zend_mir_refcount_state state)
 {
@@ -149,6 +152,7 @@ static bool zend_mir_value_refcount_valid(zend_mir_refcount_state state)
 		&& state <= ZEND_MIR_REFCOUNT_UNKNOWN;
 }
 
+#if !defined(NDEBUG)
 static bool zend_mir_value_resolve_staged_payload(
 	const zend_mir_core_value_staging *staging,
 	zend_mir_storage_id storage_id,
@@ -184,6 +188,7 @@ static bool zend_mir_value_resolve_staged_payload(
 	}
 	return false;
 }
+#endif
 
 bool zend_mir_value_transition_valid(
 	zend_mir_transfer_action action,
@@ -231,6 +236,7 @@ bool zend_mir_value_transition_valid(
 	}
 }
 
+#if !defined(NDEBUG)
 static int zend_mir_value_compare_u32(const void *left, const void *right)
 {
 	uint32_t lhs = *(const uint32_t *) left;
@@ -750,28 +756,26 @@ static bool zend_mir_value_validate_call_transfers(
 	if (source_backed) {
 		for (index = 0; index < module->call_arguments.count; index++) {
 			uint32_t value_index;
+			bool value_source_mode = arguments[index].source_mode
+					== ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE
+				|| arguments[index].source_mode
+					== ZEND_MIR_SOURCE_CALL_ARGUMENT_NAMED;
 			bool borrowed_scalar = arguments[index].ownership
 				== ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR;
-			bool boxed_by_value = arguments[index].ownership
+			bool machine_by_value = arguments[index].ownership
 					== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE
-				&& arguments[index].source_mode
-					== ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE
+				&& value_source_mode
 				&& zend_mir_id_is_valid(arguments[index].value_id)
 				&& zend_mir_module_find_value(
-					module, arguments[index].value_id, &value_index)
-				&& ZEND_MIR_CORE_ITEMS(
-					module, values, zend_mir_core_value)[value_index]
-						.record.representation
-					== ZEND_MIR_REPRESENTATION_ZVAL;
+					module, arguments[index].value_id, &value_index);
 			if (arguments[index].id != index
 					|| (borrowed_scalar
 						&& (!zend_mir_id_is_valid(arguments[index].value_id)
-							|| arguments[index].source_mode
-								!= ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE))
+							|| !value_source_mode))
 					|| (!borrowed_scalar
 						&& zend_mir_id_is_valid(arguments[index].value_id)
-						&& !boxed_by_value)
-					|| (!borrowed_scalar && !boxed_by_value
+						&& !machine_by_value)
+					|| (!borrowed_scalar && !machine_by_value
 						&& arguments[index].ownership
 							!= ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE
 						&& arguments[index].ownership
@@ -833,6 +837,7 @@ static bool zend_mir_value_validate_call_transfers(
 	}
 	return true;
 }
+#endif
 
 static bool zend_mir_value_staging_counts_bounded(
 	const zend_mir_core_value_staging *staging)
@@ -846,10 +851,13 @@ static bool zend_mir_value_staging_counts_bounded(
 		&& staging->separation_plan_count <= limit
 		&& staging->call_transfer_count <= limit
 		&& staging->value_location_count <= limit
+		&& staging->value_plan_count <= limit
+		&& staging->boundary_plan_count <= limit
 		&& staging->executable_operation_count <= limit
 		&& staging->suspend_live_value_count <= limit;
 }
 
+#if !defined(NDEBUG)
 static bool zend_mir_value_validate_locations(
 	const zend_mir_module *module,
 	const zend_mir_core_value_staging *staging)
@@ -1068,6 +1076,7 @@ static bool zend_mir_value_validate_suspend_live_values(
 	}
 	return true;
 }
+#endif
 
 static bool zend_mir_value_operation_operand(
 	const zend_mir_source_operand_ref *operand, zend_mir_value_id *value_id)
@@ -1232,6 +1241,7 @@ static bool zend_mir_value_compose_executable_operations(
 		 * before a call at N-1.  A source-less terminator still flushes the block.
 		 */
 		if (old->opcode != ZEND_MIR_OPCODE_PHI
+				&& old->opcode != ZEND_MIR_OPCODE_FINALLY_ENTER
 				&& (zend_mir_id_is_valid(old->source_position_id)
 					|| zend_mir_opcode_is_terminator(old->opcode))) {
 			for (operation_index = 0; operation_index < operation_count;
@@ -1376,8 +1386,13 @@ bool zend_mir_module_commit_value_model(zend_mir_module *module)
 					|| staging->suspend_live_value_count != 0)
 				&& (staging->model_flags
 					& ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS) == 0)
-			|| !zend_mir_value_staging_counts_bounded(staging)
-			|| !zend_mir_value_validate_payloads(staging)
+			|| !zend_mir_value_staging_counts_bounded(staging)) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_INVALID_OWNERSHIP,
+			"invalid W06 value/reference model");
+	}
+#if !defined(NDEBUG)
+	if (!zend_mir_value_validate_payloads(staging)
 			|| !zend_mir_value_validate_storages(staging)
 			|| !zend_mir_value_validate_references(staging)
 			|| !zend_mir_value_validate_aliases(module, staging)
@@ -1386,8 +1401,13 @@ bool zend_mir_module_commit_value_model(zend_mir_module *module)
 			|| !zend_mir_value_validate_call_transfers(module, staging)
 			|| !zend_mir_value_validate_locations(module, staging)
 			|| !zend_mir_value_validate_executable_operations(module, staging)
-			|| !zend_mir_value_validate_suspend_live_values(module, staging)
-			|| !zend_mir_value_compose_executable_operations(module, staging)) {
+			|| !zend_mir_value_validate_suspend_live_values(module, staging)) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_INVALID_OWNERSHIP,
+			"invalid W06 value/reference model");
+	}
+#endif
+	if (!zend_mir_value_compose_executable_operations(module, staging)) {
 		return zend_mir_module_fail(module,
 			ZEND_MIR_DIAGNOSTIC_INVALID_OWNERSHIP,
 			"invalid W06 value/reference model");

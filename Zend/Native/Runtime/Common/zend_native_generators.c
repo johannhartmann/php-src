@@ -116,6 +116,22 @@ static zend_always_inline zval *zend_native_generator_operand(
 	return type == IS_UNUSED ? NULL : ZEND_CALL_VAR(execute_data, operand.var);
 }
 
+static zend_always_inline zval *zend_native_generator_read_r_operand(
+	zend_execute_data *execute_data, uint8_t type, znode_op operand)
+{
+	zval *value = zend_native_generator_operand(execute_data, type, operand);
+
+	if (type == IS_CV && UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
+		uint32_t variable_index = EX_VAR_TO_NUM(operand.var);
+
+		ZEND_ASSERT(variable_index < execute_data->func->op_array.last_var);
+		zend_error_unchecked(E_WARNING, "Undefined variable $%S",
+			execute_data->func->op_array.vars[variable_index]);
+		return &EG(uninitialized_zval);
+	}
+	return value;
+}
+
 static zend_always_inline void zend_native_generator_free_operand(
 	zval *value, uint8_t type)
 {
@@ -201,6 +217,7 @@ zend_native_status zend_native_generator_create(
 	generator->func = generator_frame->func;
 	generator->execute_data = generator_frame;
 	generator->frozen_call_stack = NULL;
+	generator->native_frozen_call_stack = NULL;
 	generator->execute_fake.opline = NULL;
 	generator->execute_fake.func = NULL;
 	generator->execute_fake.prev_execute_data = NULL;
@@ -237,6 +254,7 @@ zend_native_status zend_native_generator_yield(
 	zend_native_generator_operation operation;
 	zend_generator *generator;
 	zval *value;
+	zval *value_slot;
 
 	if (!zend_native_generator_init_operation(
 			execute_data, op1, op2, result, source_opcode,
@@ -247,6 +265,7 @@ zend_native_status zend_native_generator_yield(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (UNEXPECTED(generator->flags & ZEND_GENERATOR_FORCED_CLOSE)) {
+		zend_native_generator_cleanup_suspended_arguments(execute_data);
 		zend_throw_error(NULL,
 			"Cannot yield from finally in a force-closed generator");
 		return ZEND_NATIVE_EXCEPTION;
@@ -254,8 +273,13 @@ zend_native_status zend_native_generator_yield(
 	zval_ptr_dtor(&generator->value);
 	zval_ptr_dtor(&generator->key);
 
-	value = zend_native_generator_operand(
+	value_slot = zend_native_generator_operand(
 		execute_data, operation.op1_type, operation.op1);
+	value = value_slot;
+	if (operation.op1_type == IS_VAR && value != NULL
+			&& Z_TYPE_P(value) == IS_INDIRECT) {
+		value = Z_INDIRECT_P(value);
+	}
 	if (operation.op1_type == IS_UNUSED) {
 		ZVAL_NULL(&generator->value);
 	} else if ((execute_data->func->op_array.fn_flags
@@ -274,7 +298,8 @@ zend_native_status zend_native_generator_yield(
 			zend_error(E_NOTICE,
 				"Only variable references should be yielded by reference");
 			ZVAL_COPY(&generator->value, value);
-			zend_native_generator_free_operand(value, operation.op1_type);
+			zend_native_generator_free_operand(
+				value_slot, operation.op1_type);
 		} else {
 			if (Z_ISREF_P(value)) {
 				Z_ADDREF_P(value);
@@ -282,27 +307,33 @@ zend_native_status zend_native_generator_yield(
 				ZVAL_MAKE_REF_EX(value, 2);
 			}
 			ZVAL_REF(&generator->value, Z_REF_P(value));
-			zend_native_generator_free_operand(value, operation.op1_type);
-		}
-	} else if (operation.op1_type == IS_CONST) {
-		ZVAL_COPY(&generator->value, value);
-	} else if (operation.op1_type == IS_TMP_VAR) {
-		ZVAL_COPY_VALUE(&generator->value, value);
-	} else if ((operation.op1_type & (IS_VAR | IS_CV))
-			&& Z_ISREF_P(value)) {
-		ZVAL_COPY(&generator->value, Z_REFVAL_P(value));
-		if (operation.op1_type == IS_VAR) {
-			zval_ptr_dtor_nogc(value);
+			zend_native_generator_free_operand(
+				value_slot, operation.op1_type);
 		}
 	} else {
-		ZVAL_COPY_VALUE(&generator->value, value);
-		if (operation.op1_type == IS_CV && Z_OPT_REFCOUNTED_P(value)) {
-			Z_ADDREF_P(value);
+		value = zend_native_generator_read_r_operand(
+			execute_data, operation.op1_type, operation.op1);
+		if (operation.op1_type == IS_CONST) {
+			ZVAL_COPY(&generator->value, value);
+		} else if (operation.op1_type == IS_TMP_VAR) {
+			ZVAL_COPY_VALUE(&generator->value, value);
+		} else if ((operation.op1_type & (IS_VAR | IS_CV))
+				&& Z_ISREF_P(value)) {
+			ZVAL_COPY(&generator->value, Z_REFVAL_P(value));
+			if (operation.op1_type == IS_VAR) {
+				zval_ptr_dtor_nogc(value_slot);
+			}
+		} else {
+			ZVAL_COPY_VALUE(&generator->value, value);
+			if (operation.op1_type == IS_CV
+					&& Z_OPT_REFCOUNTED_P(value)) {
+				Z_ADDREF_P(value);
+			}
 		}
 	}
 
 	if (operation.op2_type != IS_UNUSED) {
-		zval *key = zend_native_generator_operand(
+		zval *key = zend_native_generator_read_r_operand(
 			execute_data, operation.op2_type, operation.op2);
 		if ((operation.op2_type & (IS_CV | IS_VAR))
 				&& Z_TYPE_P(key) == IS_REFERENCE) {
@@ -329,7 +360,8 @@ zend_native_status zend_native_generator_yield(
 	} else {
 		generator->send_target = NULL;
 	}
-	return ZEND_NATIVE_SUSPENDED;
+	return EG(exception) == NULL
+		? ZEND_NATIVE_SUSPENDED : ZEND_NATIVE_EXCEPTION;
 }
 
 zend_native_status zend_native_generator_yield_from(
@@ -351,13 +383,21 @@ zend_native_status zend_native_generator_yield_from(
 		zend_throw_error(NULL, "Invalid native generator delegation frame");
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	if (UNEXPECTED(generator->flags & ZEND_GENERATOR_FORCED_CLOSE)) {
-		zend_throw_error(NULL,
-			"Cannot use \"yield from\" in a force-closed generator");
-		return ZEND_NATIVE_EXCEPTION;
-	}
 	value = zend_native_generator_operand(
 		execute_data, operation.op1_type, operation.op1);
+	if (UNEXPECTED(generator->flags & ZEND_GENERATOR_FORCED_CLOSE)) {
+		zend_native_generator_cleanup_suspended_arguments(execute_data);
+		zend_throw_error(NULL,
+			"Cannot use \"yield from\" in a force-closed generator");
+		zend_native_generator_free_operand(value, operation.op1_type);
+		if (operation.result_type != IS_UNUSED) {
+			ZVAL_UNDEF(zend_native_generator_operand(
+				execute_data, operation.result_type, operation.result));
+		}
+		return zend_native_prepare_finally_exception(
+			execute_data, source_position_id) == SUCCESS
+			? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
+	}
 	if ((operation.op1_type & (IS_VAR | IS_CV))
 			&& Z_TYPE_P(value) == IS_REFERENCE) {
 		value = Z_REFVAL_P(value);
@@ -511,10 +551,31 @@ void zend_native_generator_uncaught_exception(
 	zend_execute_data *execute_data)
 {
 	zend_generator *generator = zend_native_running_generator(execute_data);
+	const zend_op_array *op_array;
+	const zend_op *throw_opline;
 
 	if (generator == NULL) {
 		return;
 	}
+	op_array = &execute_data->func->op_array;
+	throw_opline = execute_data->opline;
+	if (throw_opline == EG(exception_op)) {
+		throw_opline = EG(opline_before_exception);
+	}
+	if ((uintptr_t) throw_opline < (uintptr_t) op_array->opcodes
+			|| (uintptr_t) throw_opline
+				>= (uintptr_t) (op_array->opcodes + op_array->last)
+			|| ((uintptr_t) throw_opline - (uintptr_t) op_array->opcodes)
+				% sizeof(zend_op) != 0) {
+		/* A fatal unwind may clear the process-wide source pointer before this
+		 * generator is closed. Position zero has no active temporary live range;
+		 * it is the conservative valid location for the generic close machinery. */
+		throw_opline = op_array->opcodes;
+	}
+	/* zend_generator_close() derives its unfinished live ranges from EX(opline).
+	 * Native execution never dispatches HANDLE_EXCEPTION, so publish the
+	 * recovered source location before transferring ownership. */
+	execute_data->opline = throw_opline;
 	ZEND_OBSERVER_FCALL_END(execute_data, NULL);
 	EG(current_execute_data) = execute_data->prev_execute_data;
 	/*

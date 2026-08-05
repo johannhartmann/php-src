@@ -23,6 +23,14 @@ TARGETS = {
 }
 
 
+class UsageError(RuntimeError):
+    """An invalid caller-supplied option or option combination."""
+
+
+class PrerequisiteError(RuntimeError):
+    """A required host capability, executable, or input is unavailable."""
+
+
 @dataclass(frozen=True)
 class Case:
     source: Path
@@ -237,8 +245,14 @@ def run_php(binary: Path, program: str, env: dict[str, str]) -> Any:
         check=False,
     )
     if completed.returncode != 0:
+        context = " ".join(
+            f"{key}={env[key]}"
+            for key in ("NATIVE_FILENAME", "NATIVE_FUNCTION")
+            if env.get(key)
+        )
         raise RuntimeError(
-            f"{binary} exited {completed.returncode}: {completed.stderr.strip()}"
+            f"{binary} exited {completed.returncode} ({context}): "
+            f"{completed.stderr.strip()}"
         )
     if completed.stderr:
         raise RuntimeError(f"{binary} wrote to stderr: {completed.stderr.strip()}")
@@ -311,7 +325,7 @@ def w07_environment(
     }
 
 
-def verify_no_vm_dispatch(execution: dict[str, Any]) -> None:
+def verify_compile_closure(execution: dict[str, Any]) -> None:
     for counter in (
         "vm_handler_calls",
         "execute_ex_calls",
@@ -321,6 +335,22 @@ def verify_no_vm_dispatch(execution: dict[str, Any]) -> None:
             raise AssertionError(
                 f"{counter}: expected 0, got {execution.get(counter)!r}"
             )
+    if execution.get("failed_codeunits") != 0:
+        raise AssertionError(
+            "failed_codeunits: expected 0, got "
+            f"{execution.get('failed_codeunits')!r}"
+        )
+    performance = execution.get("performance")
+    if performance is None:
+        return
+    if not isinstance(performance, dict):
+        raise AssertionError("invalid compiler metrics payload")
+    compiled = performance.get("compiled_codeunits")
+    ready = performance.get("ready_codeunits")
+    if ready != compiled:
+        raise AssertionError(
+            f"ready_codeunits: expected {compiled!r}, got {ready!r}"
+        )
 
 
 def verify_w07_result(
@@ -355,7 +385,7 @@ def verify_w07_result(
             raise AssertionError(
                 f"{key}: expected {value!r}, got {execution.get(key)!r}"
             )
-    verify_no_vm_dispatch(execution)
+    verify_compile_closure(execution)
     if not execution.get("machine_code"):
         raise AssertionError("W07 execution did not publish machine code")
     return execution
@@ -383,7 +413,7 @@ def verify_native_result(
             )
     if not execution.get("machine_code"):
         raise AssertionError("native execution did not expose emitted machine code")
-    verify_no_vm_dispatch(execution)
+    verify_compile_closure(execution)
 
 
 def llvm_mc() -> str:
@@ -395,7 +425,9 @@ def llvm_mc() -> str:
     for candidate in candidates:
         if candidate and Path(candidate).is_file():
             return candidate
-    raise RuntimeError("llvm-mc is required for native disassembly verification")
+    raise PrerequisiteError(
+        "llvm-mc is required for native disassembly verification"
+    )
 
 
 def verify_disassembly(machine_code: str, target: str) -> None:
@@ -422,7 +454,7 @@ def verify_platform(target: str) -> None:
     system = platform.system()
     machine = platform.machine()
     if (system, machine) != (expected_system, expected_machine):
-        raise RuntimeError(
+        raise PrerequisiteError(
             f"{target} requires {expected_system} {expected_machine}; "
             f"host is {system} {machine}"
         )
@@ -435,7 +467,9 @@ def verify_platform(target: str) -> None:
         )
         value = translated.stdout.strip() if translated.returncode == 0 else "0"
         if value != "0":
-            raise RuntimeError("Rosetta execution is not a valid Darwin target")
+            raise PrerequisiteError(
+                "Rosetta execution is not a valid Darwin target"
+            )
 
 
 def verify_corpus_coverage() -> None:
@@ -743,17 +777,21 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", required=True, choices=TARGETS)
     parser.add_argument("--candidate", required=True, type=Path)
-    parser.add_argument(
-        "--reference", type=Path, default=Path(shutil.which("php") or "")
-    )
+    parser.add_argument("--reference", required=True, type=Path)
     arguments = parser.parse_args()
 
     verify_platform(arguments.target)
     verify_corpus_coverage()
-    candidate = arguments.candidate.resolve(strict=True)
-    reference = arguments.reference.resolve(strict=True)
+    for role, binary in (
+        ("candidate", arguments.candidate),
+        ("reference", arguments.reference),
+    ):
+        if not binary.is_file() or not os.access(binary, os.X_OK):
+            raise PrerequisiteError(f"{role} PHP binary is unavailable: {binary}")
+    candidate = arguments.candidate.resolve()
+    reference = arguments.reference.resolve()
     if candidate == reference:
-        raise RuntimeError("reference and candidate PHP binaries must differ")
+        raise UsageError("reference and candidate PHP binaries must differ")
 
     disassembly_sample: str | None = None
     checks = 0
@@ -1008,8 +1046,8 @@ def main() -> int:
     reset_results = run_php(candidate, RESET_RUNNER, first_env)
     if [item.get("status") for item in reset_results] != ["accepted", "accepted"]:
         raise AssertionError("compiler cleanup did not permit an independent module")
-    if any(item["execution"]["vm_handler_calls"] for item in reset_results):
-        raise AssertionError("compiler reset path reached a VM handler")
+    for item in reset_results:
+        verify_compile_closure(item["execution"])
 
     repeat_case = next(
         case for case in call_cases
@@ -1028,7 +1066,7 @@ def main() -> int:
             != ["accepted", "accepted"]:
         raise AssertionError("W07 entry cells failed across repeated compilations")
     for item in repeated_compilations:
-        verify_no_vm_dispatch(item["execution"])
+        verify_compile_closure(item["execution"])
 
     fault_env = environment(CASES[0], CASES[0].inputs[0], arguments.target)
     fault_env["NATIVE_FAULT"] = "mapping_failure"
@@ -1046,11 +1084,23 @@ def main() -> int:
     print(
         f"PASS target={arguments.target} differential_cases={checks} "
         "waves=W03-W09 repeat=10 frame_depth=128 variadic_max=160 "
-        "vm_handler_calls=0 execute_ex_calls=0 "
-        "opline_handler_calls=0 mapping_failure=clean disassembly=native"
+        "vm_handler_calls=0 execute_ex_calls=0 opline_handler_calls=0 "
+        "failed_codeunits=0 ready_codeunits=compiled_codeunits "
+        "mapping_failure=clean disassembly=native"
     )
     return 0
 
 
+def cli_main() -> int:
+    try:
+        return main()
+    except UsageError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    except PrerequisiteError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 3
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(cli_main())

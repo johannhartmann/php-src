@@ -6,8 +6,14 @@ on:
       - "Zend/Native/**"
       - "Zend/Optimizer/**"
       - "Zend/zend.c"
+      - "Zend/zend_execute.*"
+      - "Zend/zend_fibers.*"
+      - "Zend/zend_generators.*"
       - "docs/native-engine/**"
       - "ext/native_mir_test/**"
+      - "ext/opcache/**"
+      - "sapi/fpm/**"
+      - "sapi/phpdbg/**"
       - "scripts/native/**"
       - "tests/native/**"
       - ".github/workflows/native-engine.yml"
@@ -16,8 +22,14 @@ on:
       - "Zend/Native/**"
       - "Zend/Optimizer/**"
       - "Zend/zend.c"
+      - "Zend/zend_execute.*"
+      - "Zend/zend_fibers.*"
+      - "Zend/zend_generators.*"
       - "docs/native-engine/**"
       - "ext/native_mir_test/**"
+      - "ext/opcache/**"
+      - "sapi/fpm/**"
+      - "sapi/phpdbg/**"
       - "scripts/native/**"
       - "tests/native/**"
       - ".github/workflows/native-engine.yml"
@@ -58,11 +70,46 @@ jobs:
           test "$translated" = 0
       - name: Build reference PHP
         run: |
+          profile="${{ matrix.profile }}"
           reference_root="$RUNNER_TEMP/php-reference"
           git worktree add --detach "$reference_root" 47355da494ba696b1bdb6d10448a225e742bd316
           cd "$reference_root"
           ./buildconf --force
-          ./configure --disable-all --enable-cli --disable-cgi --disable-phpdbg --without-pear
+          reference_flags=(
+            --disable-all
+            --enable-cli
+            --disable-cgi
+            --disable-phpdbg
+            --enable-opcache
+            --enable-pcntl
+            --enable-zend-test
+            --without-pear
+          )
+          case "$profile" in
+            *-debug-*|*-asan-*|*-ubsan-*)
+              reference_flags+=(--enable-debug)
+              ;;
+            *)
+              reference_flags+=(--disable-debug)
+              ;;
+          esac
+          case "$profile" in
+            *-zts)
+              reference_flags+=(--enable-zts)
+              ;;
+            *)
+              reference_flags+=(--disable-zts)
+              ;;
+          esac
+          case "$profile" in
+            *-asan-*)
+              reference_flags+=(--enable-address-sanitizer)
+              ;;
+            *-ubsan-*)
+              reference_flags+=(--enable-undefined-sanitizer)
+              ;;
+          esac
+          ./configure "${reference_flags[@]}"
           make -j"$NATIVE_JOBS" sapi/cli/php
           echo "REFERENCE_PHP=$reference_root/sapi/cli/php" >> "$GITHUB_ENV"
       - name: Build and execute native AArch64
@@ -93,13 +140,218 @@ jobs:
               ext/native_mir_test/tests/w09_*.phpt \
               ext/native_mir_test/tests/w10_*.phpt \
               ext/native_mir_test/tests/w11_*.phpt \
-              ext/native_mir_test/tests/w11p_*.phpt
-      - name: Verify native baseline performance
+              ext/native_mir_test/tests/w11p_*.phpt \
+              ext/native_mir_test/tests/w12_*.phpt \
+              ext/native_mir_test/tests/w14_*.phpt \
+              ext/opcache/tests/native_*.phpt
+      - name: Compare full test suite with reference PHP
+        run: |
+          profile="${{ matrix.profile }}"
+          reference_results="$RUNNER_TEMP/$profile-reference-results.txt"
+          candidate_results="$RUNNER_TEMP/$profile-candidate-results.txt"
+          reference_log="$RUNNER_TEMP/$profile-reference-tests.log"
+          candidate_log="$RUNNER_TEMP/$profile-candidate-tests.log"
+          comparator="$RUNNER_TEMP/native-compare-test-results.py"
+          cat >"$comparator" <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import sys
+
+          def load(path: str, source_root: str) -> dict[str, str]:
+              result = {}
+              root = Path(source_root).resolve()
+              for line_number, line in enumerate(
+                  Path(path).read_text().splitlines(), 1
+              ):
+                  status, separator, test = line.partition("\t")
+                  if not separator or not test:
+                      raise SystemExit(
+                          f"invalid result line {path}:{line_number}: {line!r}"
+                      )
+                  test_path = Path(test)
+                  if test_path.is_absolute():
+                      try:
+                          test = str(test_path.resolve().relative_to(root))
+                      except ValueError as error:
+                          raise SystemExit(
+                              f"test path is outside source root: {test_path}"
+                          ) from error
+                  if test in result:
+                      raise SystemExit(f"duplicate test result: {test}")
+                  result[test] = status
+              if not result:
+                  raise SystemExit(f"empty test result file: {path}")
+              return result
+
+          reference_status = int(os.environ["REFERENCE_STATUS"])
+          candidate_status = int(os.environ["CANDIDATE_STATUS"])
+          if reference_status not in (0, 1):
+              raise SystemExit(
+                  f"REFERENCE_STATUS={reference_status}; test run incomplete"
+              )
+
+          reference = load(sys.argv[1], sys.argv[3])
+          candidate = load(sys.argv[2], sys.argv[3])
+          missing = sorted(reference.keys() - candidate.keys())
+          candidate_only = sorted(candidate.keys() - reference.keys())
+
+          accepted = {"PASSED", "XFAILED"}
+          reference_skips = {
+              test for test, status in reference.items() if status == "SKIPPED"
+          }
+          candidate_skips = {
+              test for test, status in candidate.items() if status == "SKIPPED"
+          }
+          reference_failures = sorted(
+              test
+              for test, status in reference.items()
+              if status not in accepted and status != "SKIPPED"
+          )
+          candidate_failures = sorted(
+              test
+              for test, status in candidate.items()
+              if status not in accepted and status != "SKIPPED"
+          )
+          added_skips = sorted(candidate_skips - reference_skips)
+          print(json.dumps({
+              "tests": len(candidate),
+              "missing_candidate_tests": missing,
+              "candidate_only_tests": candidate_only,
+              "reference_failures": len(reference_failures),
+              "candidate_failures": candidate_failures,
+              "reference_skips": len(reference_skips),
+              "candidate_skips": len(candidate_skips),
+              "additional_candidate_skips": added_skips,
+          }, sort_keys=True))
+
+          errors = []
+          if missing or candidate_only:
+              errors.append("reference and candidate test corpora differ")
+          if candidate_status != 0:
+              errors.append(f"candidate test suite exited with {candidate_status}")
+          if candidate_failures:
+              errors.append("candidate test suite is not green")
+          if added_skips:
+              errors.append("candidate introduced non-reference skips")
+          if errors:
+              raise SystemExit("; ".join(errors))
+          PY
+          source scripts/native/lib/common.sh
+          native_load_profile "$profile"
+          native_export_sanitizer_environment
+          set +e
+          TEST_PHP_SRCDIR="$GITHUB_WORKSPACE" \
+          TEST_PHP_EXECUTABLE="$REFERENCE_PHP" \
+            "$REFERENCE_PHP" -n "$GITHUB_WORKSPACE/run-tests.php" \
+              -n -q -j"$NATIVE_JOBS" --set-timeout 180 \
+              -W "$reference_results" >"$reference_log" 2>&1
+          reference_status=$?
+          TEST_PHP_SRCDIR="$GITHUB_WORKSPACE" \
+          TEST_PHP_EXECUTABLE="$CANDIDATE_PHP" \
+            "$CANDIDATE_PHP" -n "$GITHUB_WORKSPACE/run-tests.php" \
+              -n -q -j"$NATIVE_JOBS" --set-timeout 180 \
+              -W "$candidate_results" >"$candidate_log" 2>&1
+          candidate_status=$?
+          set -e
+          tail -n 30 "$reference_log"
+          tail -n 30 "$candidate_log"
+          REFERENCE_STATUS="$reference_status" \
+          CANDIDATE_STATUS="$candidate_status" \
+            python3 "$comparator" "$reference_results" \
+              "$candidate_results" "$GITHUB_WORKSPACE"
+      - name: Verify native product performance
         if: matrix.profile == 'darwin-arm64-native-release-nts'
         run: |
+          product_candidate=$(
+            NATIVE_WORK_ROOT="$RUNNER_TEMP/php-native-product" \
+              scripts/native/build.sh \
+                --profile darwin-arm64-native-product-release-nts \
+                --print-binary | tail -n 1
+          )
+          product_sapi_root=$(dirname "$(dirname "$product_candidate")")
+          product_fpm="$product_sapi_root/fpm/php-fpm"
+          product_cgi="$product_sapi_root/cgi/php-cgi"
+          product_phpdbg="$product_sapi_root/phpdbg/phpdbg"
+          test -x "$product_candidate"
+          test -x "$product_fpm"
+          test -x "$product_cgi"
+          test -x "$product_phpdbg"
+          TEST_PHP_EXECUTABLE="$product_candidate" \
+          TEST_PHPDBG_EXECUTABLE="$product_phpdbg" \
+            "$product_candidate" -n run-tests.php -n -q --show-diff \
+              -p "$product_candidate" \
+              ext/opcache/tests/native_*.phpt \
+              sapi/phpdbg/tests/native_engine_basic.phpt
+          reference_product_root="$RUNNER_TEMP/php-reference-product"
+          git worktree add --detach "$reference_product_root" \
+            47355da494ba696b1bdb6d10448a225e742bd316
+          (
+            cd "$reference_product_root"
+            ./buildconf --force
+            ./configure \
+              --enable-option-checking=fatal \
+              --disable-all \
+              --enable-cli \
+              --enable-fpm \
+              --enable-cgi \
+              --enable-phpdbg \
+              --enable-embed=static \
+              --enable-opcache \
+              --enable-pcntl \
+              --disable-debug \
+              --disable-zts \
+              --without-pear
+            make -j"$NATIVE_JOBS"
+          )
+          reference_product_php="$reference_product_root/sapi/cli/php"
+          reference_product_cgi="$reference_product_root/sapi/cgi/php-cgi"
+          reference_product_phpdbg="$reference_product_root/sapi/phpdbg/phpdbg"
+          test -x "$reference_product_php"
+          test -x "$reference_product_root/sapi/fpm/php-fpm"
+          test -x "$reference_product_cgi"
+          test -x "$reference_product_phpdbg"
+          reference_results="$RUNNER_TEMP/darwin-product-reference-results.txt"
+          candidate_results="$RUNNER_TEMP/darwin-product-candidate-results.txt"
+          reference_log="$RUNNER_TEMP/darwin-product-reference-tests.log"
+          candidate_log="$RUNNER_TEMP/darwin-product-candidate-tests.log"
+          set +e
+          TEST_PHP_SRCDIR="$GITHUB_WORKSPACE" \
+          TEST_PHP_EXECUTABLE="$reference_product_php" \
+          TEST_PHP_CGI_EXECUTABLE="$reference_product_cgi" \
+          TEST_PHPDBG_EXECUTABLE="$reference_product_phpdbg" \
+            "$reference_product_php" -n "$GITHUB_WORKSPACE/run-tests.php" \
+              -n -q -j"$NATIVE_JOBS" --set-timeout 180 \
+              -W "$reference_results" >"$reference_log" 2>&1
+          reference_status=$?
+          TEST_PHP_SRCDIR="$GITHUB_WORKSPACE" \
+          TEST_PHP_EXECUTABLE="$product_candidate" \
+          TEST_PHP_CGI_EXECUTABLE="$product_cgi" \
+          TEST_PHPDBG_EXECUTABLE="$product_phpdbg" \
+            "$product_candidate" -n "$GITHUB_WORKSPACE/run-tests.php" \
+              -n -q -j"$NATIVE_JOBS" --set-timeout 180 \
+              -W "$candidate_results" >"$candidate_log" 2>&1
+          candidate_status=$?
+          set -e
+          tail -n 30 "$reference_log"
+          tail -n 30 "$candidate_log"
+          REFERENCE_STATUS="$reference_status" \
+          CANDIDATE_STATUS="$candidate_status" \
+            python3 "$RUNNER_TEMP/native-compare-test-results.py" \
+              "$reference_results" "$candidate_results" "$GITHUB_WORKSPACE"
+          pre_v1_root="$RUNNER_TEMP/php-pre-v1"
+          git worktree add --detach "$pre_v1_root" \
+            654b9c48c24a505c8a567df4fd2e753dff3ae356
+          pre_v1=$(
+            cd "$pre_v1_root"
+            NATIVE_WORK_ROOT="$RUNNER_TEMP/php-native-pre-v1" \
+              scripts/native/build.sh \
+                --profile darwin-arm64-native-product-release-nts \
+                --print-binary | tail -n 1
+          )
           baseline_root="$RUNNER_TEMP/php-w11p-baseline"
           git worktree add --detach "$baseline_root" 14dce285da0f849572535f49790b2a63d292685a
-          baseline=$(
+          w11p_baseline=$(
             cd "$baseline_root"
             NATIVE_WORK_ROOT="$RUNNER_TEMP/php-native-baseline" \
               scripts/native/build.sh \
@@ -107,8 +359,27 @@ jobs:
                 --print-binary | tail -n 1
           )
           python3 scripts/native/benchmark-native-performance.py \
+            --mode diagnostic \
             --candidate "$CANDIDATE_PHP" \
-            --baseline "$baseline" \
+            --baseline "$w11p_baseline" \
+            --reference "$REFERENCE_PHP" \
+            --target darwin-arm64-dev \
+            --suite all \
+            --enforce
+          python3 scripts/native/benchmark-native-performance.py \
+            --mode product-cli \
+            --opcache off \
+            --candidate "$product_candidate" \
+            --baseline "$pre_v1" \
+            --reference "$REFERENCE_PHP" \
+            --target darwin-arm64-dev \
+            --suite all \
+            --enforce
+          python3 scripts/native/benchmark-native-performance.py \
+            --mode product-cli \
+            --opcache on \
+            --candidate "$product_candidate" \
+            --baseline "$pre_v1" \
             --reference "$REFERENCE_PHP" \
             --target darwin-arm64-dev \
             --suite all \
@@ -142,11 +413,46 @@ jobs:
           test "$(uname -m)" = x86_64
       - name: Build reference PHP
         run: |
+          profile="${{ matrix.profile }}"
           reference_root="$RUNNER_TEMP/php-reference"
           git worktree add --detach "$reference_root" 47355da494ba696b1bdb6d10448a225e742bd316
           cd "$reference_root"
           ./buildconf --force
-          ./configure --disable-all --enable-cli --disable-cgi --disable-phpdbg --without-pear
+          reference_flags=(
+            --disable-all
+            --enable-cli
+            --disable-cgi
+            --disable-phpdbg
+            --enable-opcache
+            --enable-pcntl
+            --enable-zend-test
+            --without-pear
+          )
+          case "$profile" in
+            *-debug-*|*-asan-*|*-ubsan-*)
+              reference_flags+=(--enable-debug)
+              ;;
+            *)
+              reference_flags+=(--disable-debug)
+              ;;
+          esac
+          case "$profile" in
+            *-zts)
+              reference_flags+=(--enable-zts)
+              ;;
+            *)
+              reference_flags+=(--disable-zts)
+              ;;
+          esac
+          case "$profile" in
+            *-asan-*)
+              reference_flags+=(--enable-address-sanitizer)
+              ;;
+            *-ubsan-*)
+              reference_flags+=(--enable-undefined-sanitizer)
+              ;;
+          esac
+          ./configure "${reference_flags[@]}"
           make -j"$NATIVE_JOBS" sapi/cli/php
           echo "REFERENCE_PHP=$reference_root/sapi/cli/php" >> "$GITHUB_ENV"
       - name: Build and execute native x86-64
@@ -177,18 +483,227 @@ jobs:
               ext/native_mir_test/tests/w09_*.phpt \
               ext/native_mir_test/tests/w10_*.phpt \
               ext/native_mir_test/tests/w11_*.phpt \
-              ext/native_mir_test/tests/w11p_*.phpt
+              ext/native_mir_test/tests/w11p_*.phpt \
+              ext/native_mir_test/tests/w12_*.phpt \
+              ext/native_mir_test/tests/w14_*.phpt \
+              ext/opcache/tests/native_*.phpt
           if [[ "$profile" == linux-amd64-native-debug-nts ]]; then
             scripts/native/test-w08-linux-runtime.sh \
               --candidate "$candidate" \
               --fpm "$(dirname "$(dirname "$candidate")")/fpm/php-fpm"
           fi
-      - name: Verify native baseline performance
+      - name: Compare full test suite with reference PHP
+        run: |
+          profile="${{ matrix.profile }}"
+          reference_results="$RUNNER_TEMP/$profile-reference-results.txt"
+          candidate_results="$RUNNER_TEMP/$profile-candidate-results.txt"
+          reference_log="$RUNNER_TEMP/$profile-reference-tests.log"
+          candidate_log="$RUNNER_TEMP/$profile-candidate-tests.log"
+          comparator="$RUNNER_TEMP/native-compare-test-results.py"
+          cat >"$comparator" <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import sys
+
+          def load(path: str, source_root: str) -> dict[str, str]:
+              result = {}
+              root = Path(source_root).resolve()
+              for line_number, line in enumerate(
+                  Path(path).read_text().splitlines(), 1
+              ):
+                  status, separator, test = line.partition("\t")
+                  if not separator or not test:
+                      raise SystemExit(
+                          f"invalid result line {path}:{line_number}: {line!r}"
+                      )
+                  test_path = Path(test)
+                  if test_path.is_absolute():
+                      try:
+                          test = str(test_path.resolve().relative_to(root))
+                      except ValueError as error:
+                          raise SystemExit(
+                              f"test path is outside source root: {test_path}"
+                          ) from error
+                  if test in result:
+                      raise SystemExit(f"duplicate test result: {test}")
+                  result[test] = status
+              if not result:
+                  raise SystemExit(f"empty test result file: {path}")
+              return result
+
+          reference_status = int(os.environ["REFERENCE_STATUS"])
+          candidate_status = int(os.environ["CANDIDATE_STATUS"])
+          if reference_status not in (0, 1):
+              raise SystemExit(
+                  f"REFERENCE_STATUS={reference_status}; test run incomplete"
+              )
+
+          reference = load(sys.argv[1], sys.argv[3])
+          candidate = load(sys.argv[2], sys.argv[3])
+          missing = sorted(reference.keys() - candidate.keys())
+          candidate_only = sorted(candidate.keys() - reference.keys())
+
+          accepted = {"PASSED", "XFAILED"}
+          reference_skips = {
+              test for test, status in reference.items() if status == "SKIPPED"
+          }
+          candidate_skips = {
+              test for test, status in candidate.items() if status == "SKIPPED"
+          }
+          reference_failures = sorted(
+              test
+              for test, status in reference.items()
+              if status not in accepted and status != "SKIPPED"
+          )
+          candidate_failures = sorted(
+              test
+              for test, status in candidate.items()
+              if status not in accepted and status != "SKIPPED"
+          )
+          added_skips = sorted(candidate_skips - reference_skips)
+          print(json.dumps({
+              "tests": len(candidate),
+              "missing_candidate_tests": missing,
+              "candidate_only_tests": candidate_only,
+              "reference_failures": len(reference_failures),
+              "candidate_failures": candidate_failures,
+              "reference_skips": len(reference_skips),
+              "candidate_skips": len(candidate_skips),
+              "additional_candidate_skips": added_skips,
+          }, sort_keys=True))
+
+          errors = []
+          if missing or candidate_only:
+              errors.append("reference and candidate test corpora differ")
+          if candidate_status != 0:
+              errors.append(f"candidate test suite exited with {candidate_status}")
+          if candidate_failures:
+              errors.append("candidate test suite is not green")
+          if added_skips:
+              errors.append("candidate introduced non-reference skips")
+          if errors:
+              raise SystemExit("; ".join(errors))
+          PY
+          source scripts/native/lib/common.sh
+          native_load_profile "$profile"
+          native_export_sanitizer_environment
+          set +e
+          TEST_PHP_SRCDIR="$GITHUB_WORKSPACE" \
+          TEST_PHP_EXECUTABLE="$REFERENCE_PHP" \
+            "$REFERENCE_PHP" -n "$GITHUB_WORKSPACE/run-tests.php" \
+              -n -q -j"$NATIVE_JOBS" --set-timeout 180 \
+              -W "$reference_results" >"$reference_log" 2>&1
+          reference_status=$?
+          TEST_PHP_SRCDIR="$GITHUB_WORKSPACE" \
+          TEST_PHP_EXECUTABLE="$CANDIDATE_PHP" \
+            "$CANDIDATE_PHP" -n "$GITHUB_WORKSPACE/run-tests.php" \
+              -n -q -j"$NATIVE_JOBS" --set-timeout 180 \
+              -W "$candidate_results" >"$candidate_log" 2>&1
+          candidate_status=$?
+          set -e
+          tail -n 30 "$reference_log"
+          tail -n 30 "$candidate_log"
+          REFERENCE_STATUS="$reference_status" \
+          CANDIDATE_STATUS="$candidate_status" \
+            python3 "$comparator" "$reference_results" \
+              "$candidate_results" "$GITHUB_WORKSPACE"
+      - name: Verify native product performance
         if: matrix.profile == 'linux-amd64-native-release-nts'
         run: |
+          product_candidate=$(
+            NATIVE_WORK_ROOT="$RUNNER_TEMP/php-native-product" \
+              scripts/native/build.sh \
+                --profile linux-amd64-native-product-release-nts \
+                --print-binary | tail -n 1
+          )
+          product_sapi_root=$(dirname "$(dirname "$product_candidate")")
+          product_fpm="$product_sapi_root/fpm/php-fpm"
+          product_cgi="$product_sapi_root/cgi/php-cgi"
+          product_phpdbg="$product_sapi_root/phpdbg/phpdbg"
+          test -x "$product_candidate"
+          test -x "$product_fpm"
+          test -x "$product_cgi"
+          test -x "$product_phpdbg"
+          TEST_PHP_EXECUTABLE="$product_candidate" \
+          TEST_PHPDBG_EXECUTABLE="$product_phpdbg" \
+            "$product_candidate" -n run-tests.php -n -q --show-diff \
+              -p "$product_candidate" \
+              ext/opcache/tests/native_*.phpt \
+              sapi/phpdbg/tests/native_engine_basic.phpt
+          scripts/native/test-native-product-fpm.sh \
+            --candidate "$product_candidate" \
+            --fpm "$product_fpm"
+          reference_product_root="$RUNNER_TEMP/php-reference-product"
+          git worktree add --detach "$reference_product_root" \
+            47355da494ba696b1bdb6d10448a225e742bd316
+          (
+            cd "$reference_product_root"
+            ./buildconf --force
+            ./configure \
+              --enable-option-checking=fatal \
+              --disable-all \
+              --enable-cli \
+              --enable-fpm \
+              --enable-cgi \
+              --enable-phpdbg \
+              --enable-embed=static \
+              --enable-opcache \
+              --enable-pcntl \
+              --disable-debug \
+              --disable-zts \
+              --without-pear
+            make -j"$NATIVE_JOBS"
+          )
+          reference_product_php="$reference_product_root/sapi/cli/php"
+          reference_product_fpm="$reference_product_root/sapi/fpm/php-fpm"
+          reference_product_cgi="$reference_product_root/sapi/cgi/php-cgi"
+          reference_product_phpdbg="$reference_product_root/sapi/phpdbg/phpdbg"
+          test -x "$reference_product_php"
+          test -x "$reference_product_fpm"
+          test -x "$reference_product_cgi"
+          test -x "$reference_product_phpdbg"
+          reference_results="$RUNNER_TEMP/linux-product-reference-results.txt"
+          candidate_results="$RUNNER_TEMP/linux-product-candidate-results.txt"
+          reference_log="$RUNNER_TEMP/linux-product-reference-tests.log"
+          candidate_log="$RUNNER_TEMP/linux-product-candidate-tests.log"
+          set +e
+          TEST_PHP_SRCDIR="$GITHUB_WORKSPACE" \
+          TEST_PHP_EXECUTABLE="$reference_product_php" \
+          TEST_PHP_CGI_EXECUTABLE="$reference_product_cgi" \
+          TEST_PHPDBG_EXECUTABLE="$reference_product_phpdbg" \
+            "$reference_product_php" -n "$GITHUB_WORKSPACE/run-tests.php" \
+              -n -q -j"$NATIVE_JOBS" --set-timeout 180 \
+              -W "$reference_results" >"$reference_log" 2>&1
+          reference_status=$?
+          TEST_PHP_SRCDIR="$GITHUB_WORKSPACE" \
+          TEST_PHP_EXECUTABLE="$product_candidate" \
+          TEST_PHP_CGI_EXECUTABLE="$product_cgi" \
+          TEST_PHPDBG_EXECUTABLE="$product_phpdbg" \
+            "$product_candidate" -n "$GITHUB_WORKSPACE/run-tests.php" \
+              -n -q -j"$NATIVE_JOBS" --set-timeout 180 \
+              -W "$candidate_results" >"$candidate_log" 2>&1
+          candidate_status=$?
+          set -e
+          tail -n 30 "$reference_log"
+          tail -n 30 "$candidate_log"
+          REFERENCE_STATUS="$reference_status" \
+          CANDIDATE_STATUS="$candidate_status" \
+            python3 "$RUNNER_TEMP/native-compare-test-results.py" \
+              "$reference_results" "$candidate_results" "$GITHUB_WORKSPACE"
+          pre_v1_root="$RUNNER_TEMP/php-pre-v1"
+          git worktree add --detach "$pre_v1_root" \
+            654b9c48c24a505c8a567df4fd2e753dff3ae356
+          pre_v1=$(
+            cd "$pre_v1_root"
+            NATIVE_WORK_ROOT="$RUNNER_TEMP/php-native-pre-v1" \
+              scripts/native/build.sh \
+                --profile linux-amd64-native-product-release-nts \
+                --print-binary | tail -n 1
+          )
           baseline_root="$RUNNER_TEMP/php-w11p-baseline"
           git worktree add --detach "$baseline_root" 14dce285da0f849572535f49790b2a63d292685a
-          baseline=$(
+          w11p_baseline=$(
             cd "$baseline_root"
             NATIVE_WORK_ROOT="$RUNNER_TEMP/php-native-baseline" \
               scripts/native/build.sh \
@@ -196,9 +711,29 @@ jobs:
                 --print-binary | tail -n 1
           )
           python3 scripts/native/benchmark-native-performance.py \
+            --mode diagnostic \
             --candidate "$CANDIDATE_PHP" \
-            --baseline "$baseline" \
+            --baseline "$w11p_baseline" \
             --reference "$REFERENCE_PHP" \
+            --target linux-amd64-prod \
+            --suite all \
+            --enforce
+          python3 scripts/native/benchmark-native-performance.py \
+            --mode product-cli \
+            --opcache on \
+            --candidate "$product_candidate" \
+            --baseline "$pre_v1" \
+            --reference "$REFERENCE_PHP" \
+            --target linux-amd64-prod \
+            --suite all \
+            --enforce
+          python3 scripts/native/benchmark-native-performance.py \
+            --mode product-fpm \
+            --opcache on \
+            --candidate "$product_candidate" \
+            --baseline "$pre_v1" \
+            --reference "$reference_product_php" \
+            --reference-fpm "$reference_product_fpm" \
             --target linux-amd64-prod \
             --suite all \
             --enforce
@@ -213,7 +748,20 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      - name: Test native performance contract
+        run: python3 -m unittest -v tests/native/test_performance_contract.py
       - uses: ./.github/actions/apt-x64
+      - name: Validate native contracts and opcode closure
+        run: |
+          python3 scripts/native/semantics/validate-w01.py --check
+          python3 scripts/native/mir/validate-w02.py --check
+          python3 scripts/native/lowering/validate-w03.py --check
+          python3 scripts/native/control-flow/validate-w04.py --check
+          python3 scripts/native/calls/validate-w05.py --check
+          python3 scripts/native/semantics/validate-effect-model.py --check
+          python3 scripts/native/semantics/validate-frame-contract.py --check
+          python3 scripts/native/verify-opcode-closure.py --check
+          python3 -m unittest discover -s tests/native -p 'test_*.py' -v
       - name: Build reference PHP
         run: |
           reference_root="$RUNNER_TEMP/php-reference"

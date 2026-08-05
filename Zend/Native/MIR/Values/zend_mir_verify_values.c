@@ -786,8 +786,9 @@ static bool zend_mir_w06_verify_call_transfers(
 			zend_mir_call_argument_ref argument;
 			zend_mir_value_record value;
 			uint32_t value_index;
+			bool value_source_mode;
 			bool borrowed_scalar;
-			bool boxed_by_value = false;
+			bool machine_by_value = false;
 			if (!calls->call_argument_at(calls->context, index, &argument)
 					|| argument.id != index) {
 				return zend_mir_w06_emit(view, diagnostics,
@@ -795,12 +796,15 @@ static bool zend_mir_w06_verify_call_transfers(
 					ZEND_MIRV_TOKEN_W06_CALL_TRANSFER_MISMATCH,
 					"source-backed call argument is malformed");
 			}
+			value_source_mode = argument.source_mode
+					== ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE
+				|| argument.source_mode
+					== ZEND_MIR_SOURCE_CALL_ARGUMENT_NAMED;
 			borrowed_scalar = argument.ownership
 				== ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR;
 			if (argument.ownership
 					== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE
-					&& argument.source_mode
-						== ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE
+					&& value_source_mode
 					&& zend_mir_id_is_valid(argument.value_id)) {
 				for (value_index = 0;
 					value_index < view->value_count(view->context);
@@ -813,20 +817,18 @@ static bool zend_mir_w06_verify_call_transfers(
 							"source-backed call value is malformed");
 					}
 					if (value.id == argument.value_id) {
-						boxed_by_value = value.representation
-							== ZEND_MIR_REPRESENTATION_ZVAL;
+						machine_by_value = true;
 						break;
 					}
 				}
 			}
 			if ((borrowed_scalar
 						&& (!zend_mir_id_is_valid(argument.value_id)
-							|| argument.source_mode
-								!= ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE))
+							|| !value_source_mode))
 					|| (!borrowed_scalar
 						&& zend_mir_id_is_valid(argument.value_id)
-						&& !boxed_by_value)
-					|| (!borrowed_scalar && !boxed_by_value
+						&& !machine_by_value)
+					|| (!borrowed_scalar && !machine_by_value
 						&& argument.ownership
 							!= ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE
 						&& argument.ownership

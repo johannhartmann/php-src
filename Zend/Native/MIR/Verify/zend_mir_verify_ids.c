@@ -26,43 +26,17 @@ static void zend_mir_verify_bad_identifier(
 static uint32_t zend_mir_verify_value_index(
 		const zend_mir_verify_context *context, zend_mir_value_id id)
 {
-	uint32_t left = 0;
-	uint32_t right = context->value_count;
-
-	while (left < right) {
-		uint32_t middle = left + (right - left) / 2;
-		zend_mir_value_id current = context->values[middle].record.id;
-
-		if (current < id) {
-			left = middle + 1;
-		} else if (current > id) {
-			right = middle;
-		} else {
-			return middle;
-		}
-	}
-	return UINT32_MAX;
+	int32_t index = zend_mir_id_index_find(
+		context->value_index, context->value_index_capacity, id);
+	return index < 0 ? UINT32_MAX : (uint32_t) index;
 }
 
 static const zend_mir_verify_constant *zend_mir_verify_find_constant(
 		const zend_mir_verify_context *context, zend_mir_value_id id)
 {
-	uint32_t left = 0;
-	uint32_t right = context->constant_count;
-
-	while (left < right) {
-		uint32_t middle = left + (right - left) / 2;
-		zend_mir_value_id current = context->constants[middle].record.value_id;
-
-		if (current < id) {
-			left = middle + 1;
-		} else if (current > id) {
-			right = middle;
-		} else {
-			return &context->constants[middle];
-		}
-	}
-	return NULL;
+	int32_t index = zend_mir_id_index_find(
+		context->constant_index, context->constant_index_capacity, id);
+	return index < 0 ? NULL : &context->constants[index];
 }
 
 static bool zend_mir_verify_constant_representation(

@@ -20731,7 +20731,7 @@
     },
     {
       "path": "Zend/zend_vm_gen.php",
-      "sha256": "a44aea3346aa6b325de573064a35f0577c78b3c2ca229d6cb5bd82b1d8a68e92"
+      "sha256": "2adaf04b754c0951ac1e01661b618deef16a4d376e9953184dc4d8d52b550fb4"
     },
     {
       "path": "Zend/zend_compile.h",

@@ -10,20 +10,28 @@ if (!function_exists('native_mir_test_compile_execute')) {
 <?php
 $source = <<<'PHP'
 <?php
-function mixed_string_array_read(array $values, string $first, string $second): array
+function mixed_string_array_read(
+    array $values,
+    string $same,
+    string $equal,
+    string $canonical,
+): array
 {
-    return [$values[$first], $values[$second]];
+    return [$values[$same], $values[$equal], $values[$canonical]];
 }
 PHP;
+
+$same = implode('', ['ans', 'wer']);
+$equal = implode('', ['ans', 'wer']);
+$values = [
+    $same => 42,
+    'message' => 'native',
+];
 
 $result = native_mir_test_compile_execute(
     $source,
     'w11p-inline-mixed-string-array-read.php',
-    [
-        ['answer' => 42, 'message' => 'native'],
-        'answer',
-        'message',
-    ],
+    [$values, $same, $equal, 'message'],
     [
         'wave' => 11,
         'function' => 'mixed_string_array_read',
@@ -42,4 +50,4 @@ printf(
 );
 ?>
 --EXPECT--
-accepted return=[42,"native"] runs=10 vm=0 execute_ex=0 handler=0 active=0
+accepted return=[42,42,"native"] runs=10 vm=0 execute_ex=0 handler=0 active=0

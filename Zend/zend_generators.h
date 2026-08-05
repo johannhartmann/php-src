@@ -102,6 +102,10 @@ struct _zend_generator {
 	 */
 	zend_native_entry_cell *native_entry_cell;
 	uint64_t native_entry_generation;
+	/* Pending native call setup records are stack-resident while the generator
+	 * runs.  They are frozen separately from Zend's argument-only call-frame
+	 * snapshot and rebuilt when the generator resumes. */
+	void *native_frozen_call_stack;
 #endif
 
 	/* ZEND_GENERATOR_* flags */

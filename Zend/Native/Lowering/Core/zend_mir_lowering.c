@@ -533,9 +533,16 @@ zend_mir_lowering_result zend_mir_lower_source(
 			"module finalization failed");
 	}
 	view = context->module_ops.view(context->module_ops.context, module);
-	if (view == NULL || view->contract_version != ZEND_MIR_CONTRACT_VERSION
-			|| !context->module_ops.verify_stage1(
-				context->module_ops.context, view, context->diagnostics)) {
+	if (view == NULL || view->contract_version != ZEND_MIR_CONTRACT_VERSION) {
+		return zend_mir_lowering_abort(
+			context, module, ZEND_MIR_LOWERING_FAILED,
+			ZEND_MIRL_STAGE1_VERIFY_FAILED,
+			has_last_opcode ? &last_opcode : NULL,
+			"invalid finalized module view");
+	}
+#if !defined(NDEBUG)
+	if (!context->module_ops.verify_stage1(
+			context->module_ops.context, view, context->diagnostics)) {
 		return zend_mir_lowering_abort(
 			context, module, ZEND_MIR_LOWERING_FAILED,
 			ZEND_MIRL_STAGE1_VERIFY_FAILED,
@@ -550,6 +557,7 @@ zend_mir_lowering_result zend_mir_lower_source(
 			has_last_opcode ? &last_opcode : NULL,
 			"stage-2 verification failed");
 	}
+#endif
 
 	context->busy = false;
 	{

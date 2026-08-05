@@ -20,7 +20,8 @@ SOURCES = (
     FRONTEND / "zend_mir_literal_pool.c",
     FRONTEND / "zend_mir_slot_map.c",
     FRONTEND / "zend_mir_source_positions.c",
-    TEST_DIR / "zend_optimizer_stubs.c",
+	TEST_DIR / "zend_optimizer_stubs.c",
+    ROOT / "tests" / "native" / "control-flow" / "unit" / "zend_hash_stubs.c",
 )
 
 

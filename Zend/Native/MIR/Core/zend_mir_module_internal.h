@@ -73,6 +73,8 @@ typedef struct _zend_mir_core_value_staging {
 	zend_mir_separation_plan_ref *separation_plans;
 	zend_mir_call_transfer_ref *call_transfers;
 	zend_mir_value_location_ref *value_locations;
+	zend_mir_value_plan_ref *value_plans;
+	zend_mir_value_boundary_plan_ref *boundary_plans;
 	zend_mir_executable_value_ref *executable_operations;
 	zend_mir_suspend_live_value_ref *suspend_live_values;
 	uint32_t storage_count;
@@ -91,6 +93,10 @@ typedef struct _zend_mir_core_value_staging {
 	uint32_t call_transfer_capacity;
 	uint32_t value_location_count;
 	uint32_t value_location_capacity;
+	uint32_t value_plan_count;
+	uint32_t value_plan_capacity;
+	uint32_t boundary_plan_count;
+	uint32_t boundary_plan_capacity;
 	uint32_t executable_operation_count;
 	uint32_t executable_operation_capacity;
 	uint32_t suspend_live_value_count;
@@ -131,6 +137,8 @@ struct _zend_mir_module {
 	zend_mir_core_table value_separation_plans;
 	zend_mir_core_table value_call_transfers;
 	zend_mir_core_table value_locations;
+	zend_mir_core_table value_plans;
+	zend_mir_core_table value_boundary_plans;
 	zend_mir_core_table value_executable_operations;
 	zend_mir_core_table value_suspend_live_values;
 	zend_mir_core_value_staging value_staging;

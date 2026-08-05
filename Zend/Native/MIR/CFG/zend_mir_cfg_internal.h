@@ -4,6 +4,7 @@
 #define ZEND_MIR_CFG_INTERNAL_H
 
 #include "zend_mir_cfg.h"
+#include "../zend_mir_id_index.h"
 
 typedef struct _zend_mir_cfg_operand {
 	zend_mir_instruction_id instruction_id;
@@ -17,6 +18,14 @@ typedef struct _zend_mir_cfg_edge {
 	uint32_t predecessor_slot;
 } zend_mir_cfg_edge;
 
+typedef struct _zend_mir_cfg_block_summary {
+	uint32_t instruction_count;
+	uint32_t phi_count;
+	uint32_t last_instruction_index;
+	bool has_early_terminator;
+	bool phi_order_valid;
+} zend_mir_cfg_block_summary;
+
 struct _zend_mir_cfg {
 	zend_mir_allocator allocator;
 	zend_mir_diagnostic_sink *diagnostics;
@@ -25,8 +34,18 @@ struct _zend_mir_cfg {
 	zend_mir_function_id function_id;
 	zend_mir_block_record *blocks;
 	uint32_t block_count;
+	zend_mir_id_index_entry *block_index;
+	uint32_t block_index_capacity;
+	bool block_ids_unique;
+	zend_mir_cfg_block_summary *block_summaries;
+	uint32_t block_summary_capacity;
 	zend_mir_instruction_record *instructions;
 	uint32_t instruction_count;
+	zend_mir_id_index_entry *instruction_index;
+	uint32_t instruction_index_capacity;
+	bool instruction_ids_unique;
+	zend_mir_id_index_entry *value_index;
+	uint32_t value_index_capacity;
 	zend_mir_cfg_operand *operands;
 	uint32_t operand_count;
 	zend_mir_cfg_edge *edges;
@@ -44,6 +63,8 @@ int zend_mir_cfg_find_instruction(const zend_mir_cfg *cfg,
 	zend_mir_instruction_id instruction_id);
 bool zend_mir_cfg_block_is_selected(const zend_mir_cfg *cfg,
 	zend_mir_block_id block_id);
+bool zend_mir_cfg_value_exists(const zend_mir_cfg *cfg,
+	zend_mir_value_id value_id);
 uint32_t zend_mir_cfg_predecessor_count_internal(const zend_mir_cfg *cfg,
 	zend_mir_block_id block_id);
 uint32_t zend_mir_cfg_successor_count_internal(const zend_mir_cfg *cfg,

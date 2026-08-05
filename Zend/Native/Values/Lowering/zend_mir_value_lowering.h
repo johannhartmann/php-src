@@ -12,7 +12,7 @@
 #include "../../Calls/Contracts/zend_mir_call_source.h"
 #include "../../Lowering/Frontend/zend_mir_zend_source.h"
 #include "../../MIR/zend_mir_control_flow.h"
-#include "../Contracts/zend_mir_value_plan.h"
+#include "../Contracts/zend_mir_value_lowering_inventory.h"
 #include "../Core/zend_mir_value_core.h"
 
 struct _zend_op_array;
@@ -45,7 +45,7 @@ typedef enum _zend_mir_w06_test_fault {
  */
 typedef struct _zend_mir_w06_value_snapshot {
 	zend_mir_source_value_view source_view;
-	zend_mir_value_plan plan;
+	zend_mir_value_lowering_inventory inventory;
 	void *records;
 } zend_mir_w06_value_snapshot;
 
@@ -61,7 +61,7 @@ void zend_mir_w06_release_value_snapshot(
 
 bool zend_mir_w06_emit_value_snapshot(
 	const zend_mir_source_value_view *source_values,
-	const zend_mir_value_plan *plan,
+	const zend_mir_value_lowering_inventory *inventory,
 	zend_mir_module *module,
 	zend_mir_value_mutator *mutator);
 
