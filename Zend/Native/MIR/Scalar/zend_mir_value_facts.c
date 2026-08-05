@@ -38,10 +38,15 @@ bool zend_mir_core_add_value_fact(void *context,
 			"value fact exact type does not match value representation");
 	}
 	facts = ZEND_MIR_CORE_ITEMS(module, value_facts, zend_mir_value_fact_ref);
-	for (index = 0; index < module->value_facts.count; index++) {
-		if (facts[index].value_id == requested->value_id) {
-			return zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_DUPLICATE_ID,
-				"value already has a scalar fact");
+	if (module->value_facts.count != 0
+			&& facts[module->value_facts.count - 1].value_id
+				>= requested->value_id) {
+		for (index = 0; index < module->value_facts.count; index++) {
+			if (facts[index].value_id == requested->value_id) {
+				return zend_mir_module_fail(
+					module, ZEND_MIR_DIAGNOSTIC_DUPLICATE_ID,
+					"value already has a scalar fact");
+			}
 		}
 	}
 	if (!zend_mir_module_grow_table(module, &module->value_facts,

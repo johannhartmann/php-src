@@ -24,6 +24,147 @@ static bool zend_mir_checked_multiply_size(size_t left, size_t right, size_t *ou
 	return true;
 }
 
+typedef struct _zend_mir_core_edge_pair {
+	zend_mir_block_id from;
+	zend_mir_block_id to;
+	bool occupied;
+} zend_mir_core_edge_pair;
+
+static size_t zend_mir_core_edge_pair_hash(zend_mir_block_id from,
+		zend_mir_block_id to)
+{
+	uint64_t value = ((uint64_t) from << 32) | to;
+
+	value ^= value >> 30;
+	value *= UINT64_C(0xbf58476d1ce4e5b9);
+	value ^= value >> 27;
+	value *= UINT64_C(0x94d049bb133111eb);
+	value ^= value >> 31;
+	return (size_t) value;
+}
+
+static bool zend_mir_core_edge_pair_insert(zend_mir_core_edge_pair *pairs,
+		size_t capacity, zend_mir_block_id from, zend_mir_block_id to)
+{
+	size_t slot = zend_mir_core_edge_pair_hash(from, to) & (capacity - 1);
+
+	while (pairs[slot].occupied) {
+		if (pairs[slot].from == from && pairs[slot].to == to) {
+			return false;
+		}
+		slot = (slot + 1) & (capacity - 1);
+	}
+	pairs[slot].from = from;
+	pairs[slot].to = to;
+	pairs[slot].occupied = true;
+	return true;
+}
+
+static bool zend_mir_module_prepare_edge_index(zend_mir_module *module)
+{
+	zend_mir_core_edge *edges;
+	zend_mir_core_edge_pair *pairs = NULL;
+	uint32_t *successor_cursors = NULL;
+	uint32_t *predecessor_cursors = NULL;
+	size_t pair_capacity = 8;
+	size_t offsets_bytes;
+	size_t edge_bytes;
+	uint32_t predecessor_count = 0;
+	uint32_t index;
+
+	if (!zend_mir_checked_multiply_size(
+			(size_t) module->blocks.count + 1, sizeof(uint32_t),
+			&offsets_bytes)
+			|| !zend_mir_checked_multiply_size(module->edges.count,
+				sizeof(zend_mir_block_id), &edge_bytes)) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
+			"MIR edge index capacity overflow");
+	}
+	while (pair_capacity < (size_t) module->edges.count * 2) {
+		if (pair_capacity > SIZE_MAX / 2) {
+			return zend_mir_module_fail(module,
+				ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
+				"MIR edge-pair index capacity overflow");
+		}
+		pair_capacity *= 2;
+	}
+	module->successor_offsets = zend_mir_arena_allocate(&module->arena,
+		offsets_bytes, alignof(uint32_t));
+	module->predecessor_offsets = zend_mir_arena_allocate(&module->arena,
+		offsets_bytes, alignof(uint32_t));
+	pairs = calloc(pair_capacity, sizeof(*pairs));
+	if (module->successor_offsets == NULL
+			|| module->predecessor_offsets == NULL || pairs == NULL) {
+		free(pairs);
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_ALLOCATION_FAILED,
+			"MIR edge index allocation failed");
+	}
+	memset(module->successor_offsets, 0, offsets_bytes);
+	memset(module->predecessor_offsets, 0, offsets_bytes);
+	edges = ZEND_MIR_CORE_ITEMS(module, edges, zend_mir_core_edge);
+	for (index = 0; index < module->edges.count; index++) {
+		module->successor_offsets[edges[index].from + 1]++;
+		if (zend_mir_core_edge_pair_insert(pairs, pair_capacity,
+				edges[index].from, edges[index].to)) {
+			module->predecessor_offsets[edges[index].to + 1]++;
+			predecessor_count++;
+		}
+	}
+	for (index = 0; index < module->blocks.count; index++) {
+		module->successor_offsets[index + 1] +=
+			module->successor_offsets[index];
+		module->predecessor_offsets[index + 1] +=
+			module->predecessor_offsets[index];
+	}
+	if (module->edges.count != 0) {
+		module->successors = zend_mir_arena_allocate(&module->arena,
+			edge_bytes, alignof(zend_mir_block_id));
+	}
+	if (predecessor_count != 0) {
+		module->predecessors = zend_mir_arena_allocate(&module->arena,
+			(size_t) predecessor_count * sizeof(zend_mir_block_id),
+			alignof(zend_mir_block_id));
+	}
+	successor_cursors = malloc(
+		(size_t) module->blocks.count * sizeof(*successor_cursors));
+	predecessor_cursors = malloc(
+		(size_t) module->blocks.count * sizeof(*predecessor_cursors));
+	if ((module->edges.count != 0 && module->successors == NULL)
+			|| (predecessor_count != 0 && module->predecessors == NULL)
+			|| (module->blocks.count != 0
+				&& (successor_cursors == NULL
+					|| predecessor_cursors == NULL))) {
+		free(pairs);
+		free(successor_cursors);
+		free(predecessor_cursors);
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_ALLOCATION_FAILED,
+			"MIR edge index allocation failed");
+	}
+	if (module->blocks.count != 0) {
+		memcpy(successor_cursors, module->successor_offsets,
+			(size_t) module->blocks.count * sizeof(*successor_cursors));
+		memcpy(predecessor_cursors, module->predecessor_offsets,
+			(size_t) module->blocks.count * sizeof(*predecessor_cursors));
+	}
+	memset(pairs, 0, pair_capacity * sizeof(*pairs));
+	for (index = 0; index < module->edges.count; index++) {
+		module->successors[successor_cursors[edges[index].from]++] =
+			edges[index].to;
+		if (zend_mir_core_edge_pair_insert(pairs, pair_capacity,
+				edges[index].from, edges[index].to)) {
+			module->predecessors[predecessor_cursors[edges[index].to]++] =
+				edges[index].from;
+		}
+	}
+	free(pairs);
+	free(successor_cursors);
+	free(predecessor_cursors);
+	return true;
+}
+
 static bool zend_mir_representation_is_valid(
 		zend_mir_representation representation)
 {
@@ -1287,49 +1428,86 @@ static bool zend_mir_core_append_call_instruction(
 	return true;
 }
 
+typedef struct _zend_mir_core_ordered_call {
+	zend_mir_block_id block_id;
+	zend_mir_source_position_id source_position;
+	uint32_t site_index;
+} zend_mir_core_ordered_call;
+
+typedef struct _zend_mir_core_call_block_range {
+	zend_mir_block_id block_id;
+	uint32_t begin;
+	uint32_t end;
+	uint32_t cursor;
+} zend_mir_core_call_block_range;
+
+static int zend_mir_core_compare_ordered_calls(const void *left_ptr,
+	const void *right_ptr)
+{
+	const zend_mir_core_ordered_call *left = left_ptr;
+	const zend_mir_core_ordered_call *right = right_ptr;
+
+	if (left->block_id != right->block_id) {
+		return left->block_id < right->block_id ? -1 : 1;
+	}
+	if (left->source_position != right->source_position) {
+		return left->source_position < right->source_position ? -1 : 1;
+	}
+	if (left->site_index != right->site_index) {
+		return left->site_index < right->site_index ? -1 : 1;
+	}
+	return 0;
+}
+
+static zend_mir_core_call_block_range *zend_mir_core_find_call_block_range(
+	zend_mir_core_call_block_range *ranges, uint32_t range_count,
+	zend_mir_block_id block_id)
+{
+	uint32_t begin = 0;
+	uint32_t end = range_count;
+
+	while (begin < end) {
+		const uint32_t middle = begin + (end - begin) / 2;
+		if (ranges[middle].block_id < block_id) {
+			begin = middle + 1;
+		} else {
+			end = middle;
+		}
+	}
+	return begin < range_count && ranges[begin].block_id == block_id
+		? &ranges[begin] : NULL;
+}
+
 static bool zend_mir_core_append_calls_before(
 	zend_mir_module *module, zend_mir_core_instruction *instructions,
 	uint32_t *instruction_count, zend_mir_block_id block_id,
 	zend_mir_source_position_id source_position, bool flush_block,
+	const zend_mir_core_ordered_call *ordered_calls,
+	zend_mir_core_call_block_range *block_ranges, uint32_t block_range_count,
 	bool *inserted)
 {
-	zend_mir_core_call_staging *staging = &module->call_staging;
+	zend_mir_core_call_block_range *range =
+		zend_mir_core_find_call_block_range(
+			block_ranges, block_range_count, block_id);
 
-	for (;;) {
-		uint32_t selected = ZEND_MIR_ID_INVALID;
-		uint32_t selected_position = ZEND_MIR_ID_INVALID;
-		uint32_t site_index;
-
-		for (site_index = 0; site_index < staging->site_count; site_index++) {
-			zend_mir_block_id candidate_block;
-			const zend_mir_call_site_ref *site = &staging->sites[site_index];
-
-			if (inserted[site_index]
-					|| !zend_mir_core_call_site_block(
-						staging, site_index, &candidate_block)
-					|| candidate_block != block_id
-					|| (!flush_block
-						&& site->instruction_id > source_position)) {
-				continue;
-			}
-			if (!zend_mir_id_is_valid(selected)
-					|| site->instruction_id < selected_position
-					|| (site->instruction_id == selected_position
-						&& site_index < selected)) {
-				selected = site_index;
-				selected_position = site->instruction_id;
-			}
-		}
-		if (!zend_mir_id_is_valid(selected)) {
-			return true;
+	if (range == NULL) {
+		return true;
+	}
+	while (range->cursor < range->end) {
+		const zend_mir_core_ordered_call *call =
+			&ordered_calls[range->cursor];
+		if (!flush_block && call->source_position > source_position) {
+			break;
 		}
 		if (!zend_mir_core_append_call_instruction(
 				module, instructions, instruction_count,
-				selected, block_id)) {
+				call->site_index, block_id)) {
 			return false;
 		}
-		inserted[selected] = true;
+		inserted[call->site_index] = true;
+		range->cursor++;
 	}
+	return true;
 }
 
 static bool zend_mir_core_commit_call_model(zend_mir_module *module)
@@ -1339,6 +1517,8 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 	zend_mir_core_instruction *new_instructions;
 	zend_mir_frame_slot_ref *slots;
 	zend_mir_frame_state_ref *frames;
+	zend_mir_core_ordered_call *ordered_calls;
+	zend_mir_core_call_block_range *call_block_ranges;
 	bool *inserted;
 	size_t new_instruction_bytes;
 	uint32_t total_slots = module->frame_slots.count;
@@ -1347,6 +1527,7 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 	uint32_t total_instructions;
 	uint32_t next_slot_id = 0;
 	uint32_t new_instruction_count = 0;
+	uint32_t call_block_range_count = 0;
 	uint32_t site_index;
 	uint32_t index;
 
@@ -1466,11 +1647,44 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 		&module->arena, new_instruction_bytes,
 		alignof(zend_mir_core_instruction));
 	inserted = calloc(staging->site_count, sizeof(*inserted));
-	if (new_instructions == NULL || inserted == NULL) {
+	ordered_calls = malloc(
+		(size_t) staging->site_count * sizeof(*ordered_calls));
+	call_block_ranges = malloc(
+		(size_t) staging->site_count * sizeof(*call_block_ranges));
+	if (new_instructions == NULL || inserted == NULL
+			|| ordered_calls == NULL || call_block_ranges == NULL) {
 		free(inserted);
+		free(ordered_calls);
+		free(call_block_ranges);
 		return zend_mir_module_fail(module,
 			ZEND_MIR_DIAGNOSTIC_ALLOCATION_FAILED,
 			"call instruction publication failed");
+	}
+	for (site_index = 0; site_index < staging->site_count; site_index++) {
+		zend_mir_block_id block_id;
+		(void) zend_mir_core_call_site_block(
+			staging, site_index, &block_id);
+		ordered_calls[site_index].block_id = block_id;
+		ordered_calls[site_index].source_position =
+			staging->sites[site_index].instruction_id;
+		ordered_calls[site_index].site_index = site_index;
+	}
+	qsort(ordered_calls, staging->site_count, sizeof(*ordered_calls),
+		zend_mir_core_compare_ordered_calls);
+	for (site_index = 0; site_index < staging->site_count; site_index++) {
+		if (call_block_range_count == 0
+				|| call_block_ranges[call_block_range_count - 1].block_id
+					!= ordered_calls[site_index].block_id) {
+			zend_mir_core_call_block_range *range =
+				&call_block_ranges[call_block_range_count++];
+			range->block_id = ordered_calls[site_index].block_id;
+			range->begin = site_index;
+			range->end = site_index + 1;
+			range->cursor = site_index;
+		} else {
+			call_block_ranges[call_block_range_count - 1].end =
+				site_index + 1;
+		}
 	}
 	old_instructions = ZEND_MIR_CORE_ITEMS(
 		module, instructions, zend_mir_core_instruction);
@@ -1482,6 +1696,8 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 		if (slots[index].slot_id >= next_slot_id) {
 			if (slots[index].slot_id == ZEND_MIR_ID_MAX) {
 				free(inserted);
+				free(ordered_calls);
+				free(call_block_ranges);
 				return zend_mir_module_fail(module,
 					ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
 					"call frame slot ID overflow");
@@ -1492,6 +1708,8 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 	if (total_slots - module->frame_slots.count
 			> (ZEND_MIR_ID_MAX - next_slot_id) + 1) {
 		free(inserted);
+		free(ordered_calls);
+		free(call_block_ranges);
 		return zend_mir_module_fail(module,
 			ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
 			"call frame slot ID overflow");
@@ -1599,8 +1817,11 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 					module, new_instructions, &new_instruction_count,
 					old_instructions[index].record.block_id,
 					old_instructions[index].record.source_position_id,
-					terminator, inserted)) {
+					terminator, ordered_calls, call_block_ranges,
+					call_block_range_count, inserted)) {
 			free(inserted);
+			free(ordered_calls);
+			free(call_block_ranges);
 			return false;
 		}
 		new_instructions[new_instruction_count] = old_instructions[index];
@@ -1615,13 +1836,19 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 				staging, site_index, &block_id);
 			if (!zend_mir_core_append_calls_before(
 					module, new_instructions, &new_instruction_count,
-					block_id, ZEND_MIR_ID_INVALID, true, inserted)) {
+					block_id, ZEND_MIR_ID_INVALID, true,
+					ordered_calls, call_block_ranges,
+					call_block_range_count, inserted)) {
 				free(inserted);
+				free(ordered_calls);
+				free(call_block_ranges);
 				return false;
 			}
 		}
 	}
 	free(inserted);
+	free(ordered_calls);
+	free(call_block_ranges);
 	module->instructions.items = new_instructions;
 	module->instructions.count = total_instructions;
 	module->instructions.capacity = total_instructions;
@@ -1731,6 +1958,9 @@ bool zend_mir_module_finalize(zend_mir_module *module)
 			return zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_INVALID_ID,
 				"all functions must be sealed before finalization");
 		}
+	}
+	if (!zend_mir_module_prepare_edge_index(module)) {
+		return false;
 	}
 	module->state = ZEND_MIR_MODULE_FINALIZED;
 	return true;

@@ -59,6 +59,7 @@ class ZendCompilerA64 final
 	std::vector<::tpde::Label> user_opcode_labels_;
 	std::vector<::tpde::Label> user_opcode_dispatch_labels_;
 	std::vector<::tpde::Label> user_opcode_result_reload_labels_;
+	std::optional<::tpde::Label> catch_dispatch_label_;
 	uint32_t current_continuation_block_ = UINT32_MAX;
 	bool continuation_edge_emitted_ = false;
 
@@ -376,7 +377,47 @@ public:
 		user_opcode_labels_.clear();
 		user_opcode_dispatch_labels_.clear();
 		user_opcode_result_reload_labels_.clear();
+		catch_dispatch_label_.reset();
 		Base::start_func(index);
+	}
+	void finish_func(uint32_t index) {
+		if (catch_dispatch_label_.has_value()) {
+			label_place(*catch_dispatch_label_);
+			for (uint32_t i = 0; i < adaptor->plan()->instruction_count; ++i) {
+				const zend_mir_instruction_record handler =
+					zend_tpde_instruction_record_at(
+						adaptor->plan(), &adaptor->plan()->instructions[i]);
+				if ((handler.opcode != ZEND_MIR_OPCODE_CATCH_ENTER
+						&& handler.opcode != ZEND_MIR_OPCODE_FINALLY_ENTER)
+						|| handler.block_id
+							== adaptor->plan()->function.entry_block_id
+						|| !zend_mir_id_is_valid(handler.source_position_id)) {
+					continue;
+				}
+				const IRBlockRef handler_block =
+					adaptor->block_ref(handler.block_id);
+				if (static_cast<uint32_t>(
+						this->analyzer.block_idx(handler_block))
+						>= this->block_labels.size()) {
+					continue;
+				}
+				const auto expected_reg =
+					::tpde::a64::AsmReg{::tpde::a64::AsmReg::R16};
+				materialize_constant(
+					ZEND_NATIVE_FINALLY_EXCEPTION_FLAG
+						| handler.source_position_id,
+					DarwinConfig::GP_BANK, 4, expected_reg);
+				ASM(CMPx,
+					::tpde::a64::AsmReg{::tpde::a64::AsmReg::R0},
+					expected_reg);
+				const auto continued = text_writer.label_create();
+				generate_raw_jump(Jump::Jne, continued);
+				generate_exception_branch(handler_block);
+				label_place(continued);
+			}
+			gen_func_epilog();
+		}
+		Base::finish_func(index);
 	}
 	void setup_var_ref_assignments() {
 		for (uint32_t index = 0;
@@ -2500,7 +2541,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					std::move(activation_value), ::tpde::CCAssignment{});
 				builder.add_arg(image_symbol_value(
 					ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
-					call.call_site.target_id), ::tpde::CCAssignment{});
+					call.call_site->target_id), ::tpde::CCAssignment{});
 				builder.add_arg(ValuePart{
 					ZEND_NATIVE_USER_CALL_ARGUMENT_COUNT_AUTO, 4,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
@@ -3550,7 +3591,7 @@ bool ZendCompilerA64::compile_inst_impl(
 		if (call.entry_cell != nullptr) {
 			builder.add_arg(image_symbol_value(
 				ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
-				call.call_site.target_id), ::tpde::CCAssignment{});
+				call.call_site->target_id), ::tpde::CCAssignment{});
 			builder.add_arg(ValuePart{
 				UINT64_C(0), 8, DarwinConfig::GP_BANK},
 				::tpde::CCAssignment{});
@@ -3560,7 +3601,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				::tpde::CCAssignment{});
 			builder.add_arg(image_symbol_value(
 				ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL,
-				call.call_site.target_id), ::tpde::CCAssignment{});
+				call.call_site->target_id), ::tpde::CCAssignment{});
 		}
 		builder.add_arg(image_symbol_value(
 			ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
@@ -4989,6 +5030,14 @@ bool ZendCompilerA64::compile_inst_impl(
 		continuation_edge_emitted_ = true;
 		return true;
 	};
+	/* Very large source components can contain hundreds of thousands of
+	 * guarded value operations.  Keep their native control flow and canonical
+	 * runtime semantics, but avoid repeating the sizeable speculative fast
+	 * sequence at every site.  The existing cold block remains ordinary TPDE
+	 * code and calls the operation-specific native runtime helper. */
+	if (adaptor->compact_guarded_value_operation(instruction)) {
+		return branch_to_guarded_cold();
+	}
 	auto operation_machine_reference =
 		[&](zend_tpde_machine_reference_kind expected)
 			-> const zend_tpde_machine_reference * {
@@ -10338,7 +10387,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						auto context_reg = context_scratch.cur_reg();
 						auto cell_value = image_symbol_value(
 							ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
-							call.call_site.target_id);
+							call.call_site->target_id);
 						auto cell_scratch =
 							std::move(cell_value).into_scratch(this);
 						auto cell_reg = cell_scratch.cur_reg();
@@ -10713,7 +10762,7 @@ bool ZendCompilerA64::compile_inst_impl(
 							this, std::move(callee_address));
 						auto entry_image = image_symbol_value(
 							ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
-							call.call_site.target_id);
+							call.call_site->target_id);
 						auto entry_cell =
 							std::move(entry_image).into_scratch(this);
 						ScratchReg entry_argument{this};
@@ -10793,7 +10842,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					auto context_reg = context_scratch.cur_reg();
 					auto cell_value = image_symbol_value(
 						ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
-						call.call_site.target_id);
+						call.call_site->target_id);
 					auto cell_scratch =
 						std::move(cell_value).into_scratch(this);
 					auto cell_reg = cell_scratch.cur_reg();
@@ -11797,7 +11846,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						} else {
 							auto receive_cell = image_symbol_value(
 								ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
-								call.call_site.target_id);
+								call.call_site->target_id);
 							auto receive_cell_scratch =
 								std::move(receive_cell).into_scratch(this);
 							load_off(published_code_reg,
@@ -12073,7 +12122,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					if (!generation_leased) {
 						auto fast_cell = image_symbol_value(
 							ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
-							call.call_site.target_id);
+							call.call_site->target_id);
 						auto fast_cell_scratch =
 							std::move(fast_cell).into_scratch(this);
 						load_off(probe_reg, fast_cell_scratch.cur_reg(),
@@ -12189,7 +12238,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					}
 					builder.add_arg(image_symbol_value(
 						ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
-						call.call_site.target_id), ::tpde::CCAssignment{});
+						call.call_site->target_id), ::tpde::CCAssignment{});
 					builder.add_arg(image_symbol_value(
 						ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR,
 						call.id), ::tpde::CCAssignment{});
@@ -12409,7 +12458,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						CallArg{node.operands[frame_operand]});
 					enter_builder.add_arg(image_symbol_value(
 						ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
-						call.call_site.target_id), ::tpde::CCAssignment{});
+						call.call_site->target_id), ::tpde::CCAssignment{});
 					enter_builder.add_arg(image_symbol_value(
 						ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
 						call.id), ::tpde::CCAssignment{});
@@ -12510,7 +12559,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				::tpde::CCAssignment{});
 			builder.add_arg(image_symbol_value(
 				ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
-				call.call_site.target_id), ::tpde::CCAssignment{});
+				call.call_site->target_id), ::tpde::CCAssignment{});
 			builder.add_arg(image_symbol_value(
 				ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
 				call.id), ::tpde::CCAssignment{});
@@ -12543,7 +12592,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				CallBuilder result_builder{*this, result_assigner};
 				result_builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
 					result_builder.add_arg(ValuePart{
-						zend_tpde_encode_value_operand(call.call_site.result_operand), 8,
+						zend_tpde_encode_value_operand(call.call_site->result_operand), 8,
 						DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				result_builder.add_arg(ValuePart{
 					static_cast<uint32_t>(adaptor->exact_type(node.result)), 4,
@@ -12579,7 +12628,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						CallArg{node.operands[frame_base]});
 					builder.add_arg(image_symbol_value(
 						ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL,
-						call.call_site.target_id), ::tpde::CCAssignment{});
+						call.call_site->target_id), ::tpde::CCAssignment{});
 					builder.add_arg(image_symbol_value(
 						ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
 						call.id), ::tpde::CCAssignment{});
@@ -12679,7 +12728,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					node.operands[frame_base + 1 + argument_count]});
 				builder.add_arg(image_symbol_value(
 					ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL,
-					call.call_site.target_id), ::tpde::CCAssignment{});
+					call.call_site->target_id), ::tpde::CCAssignment{});
 				builder.add_arg(image_symbol_value(
 					ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
 					call.id), ::tpde::CCAssignment{});
@@ -12711,7 +12760,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						node.operands[frame_base + 2 + argument_count]});
 					result_builder.add_arg(ValuePart{
 						zend_tpde_encode_value_operand(
-							call.call_site.result_operand),
+							call.call_site->result_operand),
 						8, DarwinConfig::GP_BANK},
 						::tpde::CCAssignment{});
 					result_builder.add_arg(ValuePart{
@@ -12747,7 +12796,7 @@ bool ZendCompilerA64::compile_inst_impl(
 			builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
 			builder.add_arg(image_symbol_value(
 				ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL,
-				call.call_site.target_id), ::tpde::CCAssignment{});
+				call.call_site->target_id), ::tpde::CCAssignment{});
 			builder.add_arg(image_symbol_value(
 				ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
 				call.id), ::tpde::CCAssignment{});
@@ -13032,40 +13081,11 @@ bool ZendCompilerA64::compile_inst_impl(
 			generate_raw_jump(Jump::Jne, propagate);
 			generate_exception_branch(successors[0]);
 			label_place(propagate);
-			for (uint32_t i = 0; i < adaptor->plan()->instruction_count; ++i) {
-				const zend_mir_instruction_record handler =
-					zend_tpde_instruction_record_at(
-						adaptor->plan(), &adaptor->plan()->instructions[i]);
-				if ((handler.opcode != ZEND_MIR_OPCODE_CATCH_ENTER
-						&& handler.opcode != ZEND_MIR_OPCODE_FINALLY_ENTER)
-						|| handler.block_id
-							== adaptor->plan()->function.entry_block_id
-						|| !zend_mir_id_is_valid(
-							handler.source_position_id)) {
-					continue;
-				}
-				const IRBlockRef handler_block =
-					adaptor->block_ref(handler.block_id);
-				if (static_cast<uint32_t>(
-						this->analyzer.block_idx(handler_block))
-						>= this->block_labels.size()) {
-					continue;
-				}
-				ScratchReg expected{this};
-				auto expected_reg = expected.alloc_gp();
-				materialize_constant(
-					ZEND_NATIVE_FINALLY_EXCEPTION_FLAG
-						| handler.source_position_id,
-					DarwinConfig::GP_BANK, 4, expected_reg);
-				ASM(CMPx, status_reg, expected_reg);
-				auto continued = text_writer.label_create();
-				generate_raw_jump(Jump::Jne, continued);
-				generate_exception_branch(handler_block);
-				label_place(continued);
+			status.reset(this);
+			if (!catch_dispatch_label_.has_value()) {
+				catch_dispatch_label_ = text_writer.label_create();
 			}
-			RetBuilder return_builder{*this, *cur_cc_assigner()};
-			return_builder.add(std::move(status), ::tpde::CCAssignment{});
-			return_builder.ret();
+			generate_raw_jump(Jump::jmp, *catch_dispatch_label_);
 			return true;
 		}
 		case ZEND_MIR_OPCODE_RETURN: {

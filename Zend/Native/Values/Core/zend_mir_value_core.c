@@ -1169,10 +1169,17 @@ static bool zend_mir_value_compose_executable_operations(
 	zend_mir_core_instruction *new_instructions;
 	zend_mir_call_site_ref *call_sites;
 	uint32_t *old_to_new;
-	unsigned char *operation_emitted;
+	uint32_t *attached_operation_by_instruction;
+	uint32_t *block_operation_head;
+	uint32_t *block_operation_tail;
+	uint32_t *next_block_operation;
+	unsigned char *block_has_terminator;
 	size_t instruction_bytes;
 	size_t map_bytes;
+	size_t operation_map_bytes;
+	size_t block_map_bytes;
 	uint32_t old_count = module->instructions.count;
+	uint32_t block_count = module->blocks.count;
 	uint32_t operation_count = staging->executable_operation_count;
 	uint32_t materialized_count = 0;
 	uint32_t total_count;
@@ -1202,7 +1209,13 @@ static bool zend_mir_value_compose_executable_operations(
 	if (!zend_mir_value_checked_multiply_size(
 			(size_t) total_count, sizeof(*new_instructions), &instruction_bytes)
 			|| !zend_mir_value_checked_multiply_size(
-				(size_t) old_count, sizeof(*old_to_new), &map_bytes)) {
+				(size_t) old_count, sizeof(*old_to_new), &map_bytes)
+			|| !zend_mir_value_checked_multiply_size(
+				(size_t) operation_count, sizeof(*next_block_operation),
+				&operation_map_bytes)
+			|| !zend_mir_value_checked_multiply_size(
+				(size_t) block_count, sizeof(*block_operation_head),
+				&block_map_bytes)) {
 		return zend_mir_module_fail(module,
 			ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
 			"executable value composition size overflow");
@@ -1212,20 +1225,72 @@ static bool zend_mir_value_compose_executable_operations(
 	old_to_new = zend_mir_arena_allocate(
 		&module->arena, map_bytes == 0 ? sizeof(*old_to_new) : map_bytes,
 		alignof(uint32_t));
-	operation_emitted = zend_mir_arena_allocate(
-		&module->arena, operation_count, alignof(unsigned char));
+	attached_operation_by_instruction = zend_mir_arena_allocate(
+		&module->arena, map_bytes == 0
+			? sizeof(*attached_operation_by_instruction) : map_bytes,
+		alignof(uint32_t));
+	block_operation_head = zend_mir_arena_allocate(
+		&module->arena, block_map_bytes == 0
+			? sizeof(*block_operation_head) : block_map_bytes,
+		alignof(uint32_t));
+	block_operation_tail = zend_mir_arena_allocate(
+		&module->arena, block_map_bytes == 0
+			? sizeof(*block_operation_tail) : block_map_bytes,
+		alignof(uint32_t));
+	next_block_operation = zend_mir_arena_allocate(
+		&module->arena, operation_map_bytes,
+		alignof(uint32_t));
+	block_has_terminator = zend_mir_arena_allocate(
+		&module->arena, block_count == 0 ? 1 : block_count,
+		alignof(unsigned char));
 	if (new_instructions == NULL || old_to_new == NULL
-			|| operation_emitted == NULL) {
+			|| attached_operation_by_instruction == NULL
+			|| block_operation_head == NULL || block_operation_tail == NULL
+			|| next_block_operation == NULL || block_has_terminator == NULL) {
 		return zend_mir_module_fail(module,
 			ZEND_MIR_DIAGNOSTIC_ALLOCATION_FAILED,
 			"executable value composition allocation failed");
 	}
-	memset(operation_emitted, 0, operation_count);
+	memset(attached_operation_by_instruction, 0xff, map_bytes);
+	memset(block_operation_head, 0xff, block_map_bytes);
+	memset(block_operation_tail, 0xff, block_map_bytes);
+	memset(next_block_operation, 0xff, operation_map_bytes);
+	memset(block_has_terminator, 0, block_count);
+	for (operation_index = 0; operation_index < operation_count;
+			operation_index++) {
+		zend_mir_executable_value_ref *operation =
+			&staging->executable_operations[operation_index];
+
+		if (operation->block_id >= block_count) {
+			return zend_mir_module_fail(module,
+				ZEND_MIR_DIAGNOSTIC_INVALID_CFG,
+				"executable value operation references an unknown block");
+		}
+		if (zend_mir_id_is_valid(operation->id)) {
+			if (operation->id >= old_count
+					|| attached_operation_by_instruction[operation->id]
+						!= ZEND_MIR_ID_INVALID) {
+				return zend_mir_module_fail(module,
+					ZEND_MIR_DIAGNOSTIC_INVALID_ID,
+					"executable value operation references an invalid instruction");
+			}
+			attached_operation_by_instruction[operation->id] = operation_index;
+			continue;
+		}
+		if (block_operation_tail[operation->block_id] == ZEND_MIR_ID_INVALID) {
+			block_operation_head[operation->block_id] = operation_index;
+		} else {
+			next_block_operation[block_operation_tail[operation->block_id]] =
+				operation_index;
+		}
+		block_operation_tail[operation->block_id] = operation_index;
+	}
 	old_instructions = ZEND_MIR_CORE_ITEMS(
 		module, instructions, zend_mir_core_instruction);
 	while (old_index < old_count) {
 		const zend_mir_instruction_record *old =
 			&old_instructions[old_index].record;
+		uint32_t attached_operation;
 
 		/*
 		 * CFG lowering emits PHIs for all blocks before it emits block bodies,
@@ -1244,17 +1309,13 @@ static bool zend_mir_value_compose_executable_operations(
 				&& old->opcode != ZEND_MIR_OPCODE_FINALLY_ENTER
 				&& (zend_mir_id_is_valid(old->source_position_id)
 					|| zend_mir_opcode_is_terminator(old->opcode))) {
-			for (operation_index = 0; operation_index < operation_count;
-					operation_index++) {
+			operation_index = block_operation_head[old->block_id];
+			while (operation_index != ZEND_MIR_ID_INVALID) {
 				const zend_mir_executable_value_ref *operation =
 					&staging->executable_operations[operation_index];
 
-				if (operation_emitted[operation_index]
-						|| zend_mir_id_is_valid(operation->id)
-						|| operation->block_id != old->block_id
-						|| operation->source_position_id
-							> old->source_position_id) {
-					continue;
+				if (operation->source_position_id > old->source_position_id) {
+					break;
 				}
 				if (!zend_mir_value_emit_executable_operation(
 						module, &new_instructions[new_index],
@@ -1262,23 +1323,22 @@ static bool zend_mir_value_compose_executable_operations(
 					return false;
 				}
 				staging->executable_operations[operation_index].id = new_index;
-				operation_emitted[operation_index] = 1;
 				emitted_count++;
 				new_index++;
+				operation_index = next_block_operation[operation_index];
 			}
+			block_operation_head[old->block_id] = operation_index;
+		}
+		if (zend_mir_opcode_is_terminator(old->opcode)) {
+			block_has_terminator[old->block_id] = 1;
 		}
 		new_instructions[new_index] = old_instructions[old_index];
 		new_instructions[new_index].record.id = new_index;
 		old_to_new[old_index] = new_index;
-		for (operation_index = 0; operation_index < operation_count;
-				operation_index++) {
-			if (!operation_emitted[operation_index]
-					&& staging->executable_operations[operation_index].id
-						== old_index) {
-				staging->executable_operations[operation_index].id = new_index;
-				operation_emitted[operation_index] = 1;
-				emitted_count++;
-			}
+		attached_operation = attached_operation_by_instruction[old_index];
+		if (attached_operation != ZEND_MIR_ID_INVALID) {
+			staging->executable_operations[attached_operation].id = new_index;
+			emitted_count++;
 		}
 		new_index++;
 		old_index++;
@@ -1295,24 +1355,11 @@ static bool zend_mir_value_compose_executable_operations(
 			operation_index++) {
 		zend_mir_executable_value_ref *operation =
 			&staging->executable_operations[operation_index];
-		bool has_terminator = false;
-		uint32_t scan_index;
 
-		if (operation_emitted[operation_index]
-				|| zend_mir_id_is_valid(operation->id)) {
+		if (zend_mir_id_is_valid(operation->id)) {
 			continue;
 		}
-		for (scan_index = 0; scan_index < old_count; scan_index++) {
-			const zend_mir_instruction_record *candidate =
-				&old_instructions[scan_index].record;
-
-			if (candidate->block_id == operation->block_id
-					&& zend_mir_opcode_is_terminator(candidate->opcode)) {
-				has_terminator = true;
-				break;
-			}
-		}
-		if (has_terminator
+		if (block_has_terminator[operation->block_id]
 				|| !zend_mir_value_emit_executable_operation(
 					module, &new_instructions[new_index],
 					operation, new_index)) {
@@ -1321,7 +1368,6 @@ static bool zend_mir_value_compose_executable_operations(
 				"executable value operation follows an owning block terminator");
 		}
 		operation->id = new_index;
-		operation_emitted[operation_index] = 1;
 		emitted_count++;
 		new_index++;
 	}

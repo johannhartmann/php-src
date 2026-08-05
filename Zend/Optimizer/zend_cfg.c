@@ -646,20 +646,41 @@ ZEND_API void zend_cfg_build_predecessors(zend_arena **arena, zend_cfg *cfg) /* 
 }
 /* }}} */
 
+typedef struct _zend_cfg_postorder_frame {
+	int block_num;
+	uint32_t next_successor;
+} zend_cfg_postorder_frame;
+
 /* Computes a postorder numbering of the CFG */
-static void compute_postnum_recursive(
-		int *postnum, uint32_t *cur, const zend_cfg *cfg, int block_num) /* {{{ */
+static void compute_postnum(
+		int *postnum, uint32_t *cur, const zend_cfg *cfg, int block_num,
+		zend_cfg_postorder_frame *stack) /* {{{ */
 {
-	zend_basic_block *block = &cfg->blocks[block_num];
+	uint32_t depth = 0;
+
 	if (postnum[block_num] != -1) {
 		return;
 	}
 
 	postnum[block_num] = -2; /* Marker for "currently visiting" */
-	for (uint32_t s = 0; s < block->successors_count; s++) {
-		compute_postnum_recursive(postnum, cur, cfg, block->successors[s]);
+	stack[depth++] = (zend_cfg_postorder_frame) {block_num, 0};
+	while (depth != 0) {
+		zend_cfg_postorder_frame *frame = &stack[depth - 1];
+		zend_basic_block *block = &cfg->blocks[frame->block_num];
+
+		if (frame->next_successor < block->successors_count) {
+			int successor = block->successors[frame->next_successor++];
+
+			if (postnum[successor] == -1) {
+				postnum[successor] = -2;
+				stack[depth++] =
+					(zend_cfg_postorder_frame) {successor, 0};
+			}
+			continue;
+		}
+		postnum[frame->block_num] = (*cur)++;
+		depth--;
 	}
-	postnum[block_num] = (*cur)++;
 }
 /* }}} */
 
@@ -668,21 +689,35 @@ static void compute_postnum_recursive(
  * exception edge. Build a postorder for one such component without walking
  * back into a component whose dominators were already established.
  */
-static void compute_protected_postnum_recursive(
+static void compute_protected_postnum(
 		int *postnum, uint32_t *cur, bool *component,
-		const zend_cfg *cfg, int block_num) /* {{{ */
+		const zend_cfg *cfg, int block_num,
+		zend_cfg_postorder_frame *stack) /* {{{ */
 {
-	zend_basic_block *block = &cfg->blocks[block_num];
+	uint32_t depth = 0;
 
-	if (component[block_num] || block->idom >= 0) {
+	if (component[block_num] || cfg->blocks[block_num].idom >= 0) {
 		return;
 	}
 	component[block_num] = true;
-	for (uint32_t s = 0; s < block->successors_count; s++) {
-		compute_protected_postnum_recursive(
-			postnum, cur, component, cfg, block->successors[s]);
+	stack[depth++] = (zend_cfg_postorder_frame) {block_num, 0};
+	while (depth != 0) {
+		zend_cfg_postorder_frame *frame = &stack[depth - 1];
+		zend_basic_block *block = &cfg->blocks[frame->block_num];
+
+		if (frame->next_successor < block->successors_count) {
+			int successor = block->successors[frame->next_successor++];
+
+			if (!component[successor] && cfg->blocks[successor].idom < 0) {
+				component[successor] = true;
+				stack[depth++] =
+					(zend_cfg_postorder_frame) {successor, 0};
+			}
+			continue;
+		}
+		postnum[frame->block_num] = (*cur)++;
+		depth--;
 	}
-	postnum[block_num] = (*cur)++;
 }
 /* }}} */
 
@@ -702,10 +737,13 @@ ZEND_API void zend_cfg_compute_dominators_tree(const zend_op_array *op_array, ze
 
 	ALLOCA_FLAG(use_heap)
 	ALLOCA_FLAG(component_use_heap)
+	ALLOCA_FLAG(stack_use_heap)
 	int *postnum = do_alloca(sizeof(int) * cfg->blocks_count, use_heap);
+	zend_cfg_postorder_frame *stack = do_alloca(
+		sizeof(zend_cfg_postorder_frame) * cfg->blocks_count, stack_use_heap);
 	memset(postnum, -1, sizeof(int) * cfg->blocks_count);
 	j = 0;
-	compute_postnum_recursive(postnum, &j, cfg, 0);
+	compute_postnum(postnum, &j, cfg, 0, stack);
 
 	/* FIXME: move declarations */
 	blocks[0].idom = 0;
@@ -758,8 +796,8 @@ ZEND_API void zend_cfg_compute_dominators_tree(const zend_op_array *op_array, ze
 			continue;
 		}
 		memset(component, 0, sizeof(bool) * cfg->blocks_count);
-		compute_protected_postnum_recursive(
-			postnum, &j, component, cfg, (int) root);
+		compute_protected_postnum(
+			postnum, &j, component, cfg, (int) root, stack);
 		blocks[root].idom = (int) root;
 		do {
 			changed = 0;
@@ -839,6 +877,7 @@ ZEND_API void zend_cfg_compute_dominators_tree(const zend_op_array *op_array, ze
 
 	free_alloca(component, component_use_heap);
 	free_alloca(postnum, use_heap);
+	free_alloca(stack, stack_use_heap);
 }
 /* }}} */
 
