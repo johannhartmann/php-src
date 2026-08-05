@@ -80,7 +80,6 @@ jobs:
             --enable-cli
             --disable-cgi
             --disable-phpdbg
-            --enable-opcache
             --enable-pcntl
             --enable-zend-test
             --without-pear
@@ -297,7 +296,6 @@ jobs:
               --enable-cgi \
               --enable-phpdbg \
               --enable-embed=static \
-              --enable-opcache \
               --enable-pcntl \
               --disable-debug \
               --disable-zts \
@@ -315,21 +313,24 @@ jobs:
           candidate_results="$RUNNER_TEMP/darwin-product-candidate-results.txt"
           reference_log="$RUNNER_TEMP/darwin-product-reference-tests.log"
           candidate_log="$RUNNER_TEMP/darwin-product-candidate-tests.log"
+          product_test_list="$RUNNER_TEMP/darwin-product-tests.txt"
+          git ls-files '*.phpt' | grep -v '^sapi/phpdbg/tests/' \
+            >"$product_test_list"
           set +e
           TEST_PHP_SRCDIR="$GITHUB_WORKSPACE" \
           TEST_PHP_EXECUTABLE="$reference_product_php" \
           TEST_PHP_CGI_EXECUTABLE="$reference_product_cgi" \
-          TEST_PHPDBG_EXECUTABLE="$reference_product_phpdbg" \
             "$reference_product_php" -n "$GITHUB_WORKSPACE/run-tests.php" \
               -n -q -j"$NATIVE_JOBS" --set-timeout 180 \
+              -r "$product_test_list" \
               -W "$reference_results" >"$reference_log" 2>&1
           reference_status=$?
           TEST_PHP_SRCDIR="$GITHUB_WORKSPACE" \
           TEST_PHP_EXECUTABLE="$product_candidate" \
           TEST_PHP_CGI_EXECUTABLE="$product_cgi" \
-          TEST_PHPDBG_EXECUTABLE="$product_phpdbg" \
             "$product_candidate" -n "$GITHUB_WORKSPACE/run-tests.php" \
               -n -q -j"$NATIVE_JOBS" --set-timeout 180 \
+              -r "$product_test_list" \
               -W "$candidate_results" >"$candidate_log" 2>&1
           candidate_status=$?
           set -e
@@ -423,7 +424,6 @@ jobs:
             --enable-cli
             --disable-cgi
             --disable-phpdbg
-            --enable-opcache
             --enable-pcntl
             --enable-zend-test
             --without-pear
@@ -648,7 +648,6 @@ jobs:
               --enable-cgi \
               --enable-phpdbg \
               --enable-embed=static \
-              --enable-opcache \
               --enable-pcntl \
               --disable-debug \
               --disable-zts \
