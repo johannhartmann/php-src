@@ -91,6 +91,11 @@ zend_result zend_native_compiler_activate_session(
 void zend_native_compiler_deactivate_session(
 	zend_native_compiler *compiler);
 
+/* The executor owns the storage classification for published OPcache
+ * bundles. Dynamic execution uses it to avoid mutating shared op arrays. */
+bool zend_native_executor_op_array_is_persistent(
+	const zend_op_array *op_array);
+
 /*
  * Snapshot the append-only READY-publication log beginning at first_index.
  * No allocation or callback occurs while the compiler mutation lock is held.
