@@ -771,7 +771,11 @@ jobs:
           echo "REFERENCE_PHP=$reference_root/sapi/cli/php" >> "$GITHUB_ENV"
       - name: Build and test call model
         run: |
-          candidate=$(scripts/native/build.sh --profile w05-debug-nts --print-binary | tail -n 1)
+          set -o pipefail
+          build_output="$RUNNER_TEMP/w05-build-output.log"
+          scripts/native/build.sh --profile w05-debug-nts --print-binary \
+            | tee "$build_output"
+          candidate=$(tail -n 1 "$build_output")
           python3 scripts/native/calls/test-w05.py \
             --reference-php "$REFERENCE_PHP" --candidate-php "$candidate"
           python3 scripts/native/values/run-w06-differential.py \
