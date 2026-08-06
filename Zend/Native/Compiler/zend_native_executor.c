@@ -336,15 +336,12 @@ static void zend_native_executor_dispatch_dtor(zval *value)
 	zend_native_executor_dispatch *dispatch = Z_PTR_P(value);
 
 	/*
-	 * During request deactivation, temporary op_arrays (notably closures
-	 * owned by completed or destroyed fibers) may already be gone. Their
-	 * request-local runtime caches are gone with them, so no cache word needs
-	 * clearing. Deletions while the request is active still detach the
-	 * dispatch atomically before releasing it.
+	 * A request-local op_array can be destroyed before its generation is
+	 * reclaimed. Its runtime cache is gone at that point, so the hash-table
+	 * destructor must not dereference the retained op_array pointer. Callers
+	 * that remove a dispatch while its op_array is known to be live detach the
+	 * runtime-cache slot explicitly before deleting the hash entry.
 	 */
-	if (zend_native_executor_request_state.active) {
-		zend_native_executor_dispatch_clear(dispatch);
-	}
 	efree(dispatch);
 }
 
@@ -1145,6 +1142,7 @@ static void zend_native_executor_release_completed_main_generation(
 			&zend_native_executor_request_state.dispatch,
 			(zend_ulong) (uintptr_t) published);
 		if (dispatch != NULL && dispatch->generation == generation) {
+			zend_native_executor_dispatch_clear(dispatch);
 			zend_hash_index_del(
 				&zend_native_executor_request_state.dispatch,
 				(zend_ulong) (uintptr_t) published);
