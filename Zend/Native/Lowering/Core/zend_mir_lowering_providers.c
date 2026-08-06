@@ -1468,6 +1468,10 @@ static bool zend_mir_w11_infer_scalar_facts(
 							common.integer_max = common.integer_max
 								> input.integer_max
 								? common.integer_max : input.integer_max;
+							if (common.integer_min <= 0
+									&& common.integer_max >= 0) {
+								common.flags &= ~ZEND_MIR_VALUE_FACT_NONZERO;
+							}
 						}
 					}
 				}
