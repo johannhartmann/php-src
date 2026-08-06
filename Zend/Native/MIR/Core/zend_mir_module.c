@@ -60,7 +60,7 @@ static bool zend_mir_core_edge_pair_insert(zend_mir_core_edge_pair *pairs,
 	return true;
 }
 
-static bool zend_mir_module_prepare_edge_index(zend_mir_module *module)
+bool zend_mir_module_prepare_edge_index(zend_mir_module *module)
 {
 	zend_mir_core_edge *edges;
 	zend_mir_core_edge_pair *pairs = NULL;
@@ -72,6 +72,10 @@ static bool zend_mir_module_prepare_edge_index(zend_mir_module *module)
 	uint32_t predecessor_count = 0;
 	uint32_t index;
 
+	if (module->successor_offsets != NULL
+			&& module->predecessor_offsets != NULL) {
+		return true;
+	}
 	if (!zend_mir_checked_multiply_size(
 			(size_t) module->blocks.count + 1, sizeof(uint32_t),
 			&offsets_bytes)
@@ -778,6 +782,10 @@ static bool zend_mir_add_edge(void *context, zend_mir_block_id from,
 	edges = ZEND_MIR_CORE_ITEMS(module, edges, zend_mir_core_edge);
 	edges[module->edges.count].from = from;
 	edges[module->edges.count].to = to;
+	module->successor_offsets = NULL;
+	module->successors = NULL;
+	module->predecessor_offsets = NULL;
+	module->predecessors = NULL;
 	module->edges.count++;
 	return true;
 }

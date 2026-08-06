@@ -1739,6 +1739,10 @@ struct zend_tpde_plan {
 	uint32_t *entry_undef_temporary_indices;
 	uint32_t entry_undef_temporary_count;
 	bool may_emit_calls;
+	bool zend_entry_may_emit_calls;
+	bool typed_body_may_emit_calls;
+	bool zend_entry_needs_unwind;
+	bool typed_body_needs_unwind;
 	bool user_opcode_callbacks;
 };
 

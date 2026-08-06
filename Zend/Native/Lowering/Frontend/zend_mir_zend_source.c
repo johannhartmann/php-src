@@ -3267,15 +3267,35 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 					& ZEND_BB_REACHABLE) == 0) {
 			continue;
 		}
-		if (block_id == throw_tail_block) {
+		if (block_id == throw_tail_block && stack_count == 0) {
 			continue;
 		}
 		if (source->w11 && opline->opcode == ZEND_THROW
 				&& opline->extended_value == ZEND_THROW_IS_EXPR
 				&& index + 1 < ssa->cfg.blocks[block_id].start
 					+ ssa->cfg.blocks[block_id].len) {
-			while (stack_count != 0) {
-				discarded_sites[stack[--stack_count]] = 1;
+			uint32_t pending;
+			bool retain_new = false;
+
+			/*
+			 * The tail is unreachable, but an unfinished NEW owns the object
+			 * that exception cleanup releases.  Inventory only enough of the
+			 * lexical tail to complete such pre-throw NEW sites; all ordinary
+			 * enclosing and tail-created calls are discarded afterwards.
+			 */
+			for (pending = 0; pending < stack_count; pending++) {
+				const zend_mir_source_call_site_id site_id = stack[pending];
+				const uint32_t init_index =
+					inventory->sites[site_id].init_opline_index;
+
+				if (op_array->opcodes[init_index].opcode == ZEND_NEW) {
+					retain_new = true;
+				} else {
+					discarded_sites[site_id] = 1;
+				}
+			}
+			if (!retain_new) {
+				stack_count = 0;
 			}
 			throw_tail_block = block_id;
 			continue;
@@ -3325,6 +3345,9 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 				}
 			}
 			stack[stack_count++] = inventory->site_count++;
+			if (block_id == throw_tail_block) {
+				discarded_sites[site->id] = 1;
+			}
 			continue;
 		}
 		if (zend_mir_frontend_is_call_send(opline->opcode)) {

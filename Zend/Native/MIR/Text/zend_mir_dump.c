@@ -14,6 +14,8 @@
 
 #include "zend_mir_dump.h"
 
+#include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "../Core/zend_mir_module_internal.h"
@@ -1285,47 +1287,61 @@ static bool zend_mir_dump_invalid_record(
 		&& zend_mir_dump_literal(dump, "\n");
 }
 
+typedef struct _zend_mir_dump_sort_record {
+	uint32_t id;
+	uint32_t index;
+} zend_mir_dump_sort_record;
+
+static int zend_mir_dump_compare_sort_records(
+	const void *left_pointer, const void *right_pointer)
+{
+	const zend_mir_dump_sort_record *left = left_pointer;
+	const zend_mir_dump_sort_record *right = right_pointer;
+
+	if (left->id != right->id) {
+		return left->id < right->id ? -1 : 1;
+	}
+	if (left->index != right->index) {
+		return left->index < right->index ? -1 : 1;
+	}
+	return 0;
+}
+
 static bool zend_mir_dump_sorted(zend_mir_dump_context *dump, uint32_t count,
 		zend_mir_dump_id_at_fn id_at, zend_mir_dump_record_fn dump_record, const char *kind)
 {
-	bool have_previous = false;
-	uint32_t previous_id = 0;
-	uint32_t previous_index = 0;
-	uint32_t emitted = 0;
+	zend_mir_dump_sort_record *records;
+	uint32_t valid_count = 0;
+	uint32_t index;
 
-	while (emitted < count) {
-		bool found = false;
-		uint32_t best_id = 0;
-		uint32_t best_index = 0;
-		uint32_t index;
-
-		for (index = 0; index < count; index++) {
-			uint32_t id;
-			if (!id_at(dump->view, index, &id)) {
-				continue;
-			}
-			if (have_previous && (id < previous_id
-					|| (id == previous_id && index <= previous_index))) {
-				continue;
-			}
-			if (!found || id < best_id || (id == best_id && index < best_index)) {
-				found = true;
-				best_id = id;
-				best_index = index;
-			}
+	if (count == 0) {
+		return true;
+	}
+	if ((size_t) count > SIZE_MAX / sizeof(*records)) {
+		return false;
+	}
+	records = malloc((size_t) count * sizeof(*records));
+	if (records == NULL) {
+		return false;
+	}
+	for (index = 0; index < count; index++) {
+		uint32_t id;
+		if (id_at(dump->view, index, &id)) {
+			records[valid_count].id = id;
+			records[valid_count].index = index;
+			valid_count++;
 		}
-		if (!found) {
-			break;
-		}
-		if (!dump_record(dump, best_index)) {
+	}
+	qsort(records, valid_count, sizeof(*records),
+		zend_mir_dump_compare_sort_records);
+	for (index = 0; index < valid_count; index++) {
+		if (!dump_record(dump, records[index].index)) {
+			free(records);
 			return false;
 		}
-		have_previous = true;
-		previous_id = best_id;
-		previous_index = best_index;
-		emitted++;
 	}
-	if (emitted != count) {
+	free(records);
+	if (valid_count != count) {
 		uint32_t index;
 		for (index = 0; index < count; index++) {
 			uint32_t ignored;
