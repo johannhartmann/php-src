@@ -103,9 +103,8 @@ static bool zend_mir_cfg_build_block_index(
 		if (entries == NULL) {
 			return false;
 		}
-	} else {
-		memset(entries, 0, (size_t) capacity * sizeof(*entries));
 	}
+	memset(entries, 0, (size_t) capacity * sizeof(*entries));
 	for (i = 0; i < cfg->block_count; i++) {
 		if (!zend_mir_id_index_insert(
 				entries, capacity, cfg->blocks[i].id, i, &duplicate)) {
@@ -137,9 +136,8 @@ static bool zend_mir_cfg_build_instruction_index(
 		if (entries == NULL) {
 			return false;
 		}
-	} else {
-		memset(entries, 0, (size_t) capacity * sizeof(*entries));
 	}
+	memset(entries, 0, (size_t) capacity * sizeof(*entries));
 	for (i = 0; i < cfg->instruction_count; i++) {
 		if (!zend_mir_id_index_insert(entries, capacity,
 				cfg->instructions[i].id, i, &duplicate)) {
@@ -220,6 +218,7 @@ static bool zend_mir_cfg_build_value_index(
 	if (cfg->value_index == NULL) {
 		return false;
 	}
+	memset(cfg->value_index, 0, (size_t) capacity * sizeof(*cfg->value_index));
 	cfg->value_index_capacity = capacity;
 	for (i = 0; i < count; i++) {
 		zend_mir_value_record value;

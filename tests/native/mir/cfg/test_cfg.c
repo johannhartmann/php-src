@@ -64,6 +64,7 @@ static void *test_allocate(void *context, size_t size, size_t alignment)
 	if (allocation == NULL) {
 		return NULL;
 	}
+	memset(allocation, 0xa5, size);
 	allocator->allocations[allocator->allocation_count++] = allocation;
 	return allocation;
 }
