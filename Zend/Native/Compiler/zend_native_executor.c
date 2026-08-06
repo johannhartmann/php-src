@@ -393,6 +393,16 @@ static zend_native_opcache_bundle *zend_native_executor_bundle(
 		? bundle : NULL;
 }
 
+bool zend_native_executor_op_array_is_persistent(
+	const zend_op_array *op_array)
+{
+	zend_native_opcache_bundle *bundle =
+		zend_native_executor_bundle(op_array);
+
+	return bundle != NULL
+		&& bundle->storage == ZEND_NATIVE_OPCACHE_BUNDLE_PERSISTENT;
+}
+
 static uint32_t zend_native_executor_bundle_flags(void)
 {
 	uint32_t flags = zend_native_runtime_source_probe_enabled()

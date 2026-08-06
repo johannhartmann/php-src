@@ -43,10 +43,12 @@ def compiler_command(value: str) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cc", default=os.environ.get("CC", "cc"))
+    parser.add_argument("--cxx", default=os.environ.get("CXX", "c++"))
     arguments = parser.parse_args()
 
     try:
         cc = compiler_command(arguments.cc)
+        cxx = compiler_command(arguments.cxx)
     except ValueError as error:
         parser.error(str(error))
 
@@ -69,9 +71,9 @@ def main() -> int:
         )
         run([str(executable)], environment=environment)
 
-        for language, standard, extension in (
-            ("c", "c11", "c"),
-            ("c++", "c++20", "cpp"),
+        for compiler, language, standard, extension in (
+            (cc, "c", "c11", "c"),
+            (cxx, "c++", "c++20", "cpp"),
         ):
             source = temporary / f"public_headers.{extension}"
             source.write_text(
@@ -81,7 +83,7 @@ def main() -> int:
             )
             output = temporary / f"public_headers_{language}.o"
             run(
-                cc
+                compiler
                 + [f"-std={standard}", "-x", language]
                 + common
                 + ["-c", str(source), "-o", str(output)],

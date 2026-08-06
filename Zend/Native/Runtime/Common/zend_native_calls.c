@@ -3690,6 +3690,13 @@ void zend_native_cleanup_unfinished_exception(
 	throw_op = &op_array->opcodes[throw_op_num];
 	if ((throw_op->result_type & (IS_VAR | IS_TMP_VAR)) != 0) {
 		switch (throw_op->opcode) {
+			/* Native calls may place their result directly in a pending
+			 * argument. The source result slot is not authoritative and may
+			 * never have been initialized when a suspended call is unwound. */
+			case ZEND_DO_FCALL:
+			case ZEND_DO_UCALL:
+			case ZEND_DO_ICALL:
+			case ZEND_DO_FCALL_BY_NAME:
 			case ZEND_ADD_ARRAY_ELEMENT:
 			case ZEND_ADD_ARRAY_UNPACK:
 			case ZEND_ROPE_INIT:
@@ -3701,7 +3708,7 @@ void zend_native_cleanup_unfinished_exception(
 				if (!zend_is_smart_branch(throw_op)) {
 					zval *result = ZEND_CALL_VAR(
 						execute_data, throw_op->result.var);
-					/* A throwing call may publish EG(exception) through its
+					/* A throwing operation may publish EG(exception) through its
 					 * result slot without transferring a second reference.  The
 					 * exception remains owned by EG(exception) until CATCH moves it;
 					 * treating this borrowed alias as an ordinary temporary would
