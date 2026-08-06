@@ -513,8 +513,10 @@ zend_native_status zend_native_execute_include_or_eval(
 	}
 
 	new_op_array->scope = execute_data->func->op_array.scope;
-	zend_optimize_runtime_op_array(
-		new_op_array, extended_value == ZEND_EVAL);
+	if (!zend_native_executor_op_array_is_persistent(new_op_array)) {
+		zend_optimize_runtime_op_array(
+			new_op_array, extended_value == ZEND_EVAL);
+	}
 	call_info = (Z_TYPE_INFO(execute_data->This) & ZEND_CALL_HAS_THIS)
 		| ZEND_CALL_NESTED_CODE | ZEND_CALL_HAS_SYMBOL_TABLE;
 	previous = EG(current_execute_data);

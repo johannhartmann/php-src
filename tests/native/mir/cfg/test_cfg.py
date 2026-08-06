@@ -22,6 +22,8 @@ class CfgRunnerTest(unittest.TestCase):
                 str(TEST_DIRECTORY / "run_cfg_tests.py"),
                 "--cc",
                 environment.get("CC", "cc"),
+                "--cxx",
+                environment.get("CXX", "c++"),
             ],
             cwd=REPOSITORY_ROOT,
             env=environment,
