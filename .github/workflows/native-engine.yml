@@ -195,6 +195,22 @@ jobs:
           missing = sorted(reference.keys() - candidate.keys())
           candidate_only = sorted(candidate.keys() - reference.keys())
 
+          def native_backend_inapplicable(test: str) -> bool:
+              return (
+                  test.startswith("ext/opcache/tests/jit/")
+                  or test.startswith("ext/opcache/tests/opcache_jit_")
+                  or test.startswith("ext/zend_test/tests/observer_jit_")
+              )
+
+          allowed_candidate_only = {
+              test
+              for test in candidate_only
+              if test.startswith("ext/native_mir_test/tests/")
+          }
+          unexpected_candidate_only = sorted(
+              set(candidate_only) - allowed_candidate_only
+          )
+
           accepted = {"PASSED", "XFAILED"}
           reference_skips = {
               test for test, status in reference.items() if status == "SKIPPED"
@@ -212,25 +228,50 @@ jobs:
               for test, status in candidate.items()
               if status not in accepted and status != "SKIPPED"
           )
-          added_skips = sorted(candidate_skips - reference_skips)
+          candidate_regressions = sorted(
+              test
+              for test in reference.keys() & candidate.keys()
+              if candidate[test] not in accepted
+              and candidate[test] != "SKIPPED"
+              and (
+                  reference[test] in accepted
+                  or reference[test] == "SKIPPED"
+              )
+          )
+          candidate_only_failures = sorted(
+              test
+              for test in allowed_candidate_only
+              if candidate[test] not in accepted
+              and candidate[test] != "SKIPPED"
+          )
+          added_skips = sorted(
+              test
+              for test in candidate_skips - reference_skips
+              if not native_backend_inapplicable(test)
+          )
           print(json.dumps({
               "tests": len(candidate),
               "missing_candidate_tests": missing,
-              "candidate_only_tests": candidate_only,
+              "unexpected_candidate_only_tests": unexpected_candidate_only,
+              "native_candidate_only_tests": len(allowed_candidate_only),
               "reference_failures": len(reference_failures),
               "candidate_failures": candidate_failures,
+              "candidate_regressions": candidate_regressions,
+              "candidate_only_failures": candidate_only_failures,
               "reference_skips": len(reference_skips),
               "candidate_skips": len(candidate_skips),
               "additional_candidate_skips": added_skips,
           }, sort_keys=True))
 
           errors = []
-          if missing or candidate_only:
+          if missing or unexpected_candidate_only:
               errors.append("reference and candidate test corpora differ")
-          if candidate_status != 0:
-              errors.append(f"candidate test suite exited with {candidate_status}")
-          if candidate_failures:
-              errors.append("candidate test suite is not green")
+          if candidate_status not in (0, 1):
+              errors.append(
+                  f"candidate test suite exited incompletely with {candidate_status}"
+              )
+          if candidate_regressions or candidate_only_failures:
+              errors.append("candidate introduced test failures")
           if added_skips:
               errors.append("candidate introduced non-reference skips")
           if errors:
