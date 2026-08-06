@@ -2451,7 +2451,7 @@ static bool zend_mir_w11_prepare_overlay(
 	 * not belong to the scalar prerequisite view. */
 	for (index = 0; index < op_array->last; index++) {
 		int result = ssa->ops[index].result_def;
-		uint32_t use_index;
+		int use_index;
 		bool seen = false;
 		bool private_result = true;
 
@@ -2460,13 +2460,12 @@ static bool zend_mir_w11_prepare_overlay(
 				|| result < 0 || result >= ssa->vars_count) {
 			continue;
 		}
-		for (use_index = 0; use_index < op_array->last; use_index++) {
-			const zend_ssa_op *use = &ssa->ops[use_index];
+		for (use_index = ssa->vars[result].use_chain;
+				use_index >= 0;
+				use_index = zend_ssa_next_use(
+					ssa->ops, result, use_index)) {
 			uint8_t opcode;
-			if (use->op1_use != result && use->op2_use != result
-					&& use->result_use != result) {
-				continue;
-			}
+
 			seen = true;
 			opcode = op_array->opcodes[use_index].opcode;
 			if (!zend_mir_w06_opcode_is_accepted(opcode)

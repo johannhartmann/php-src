@@ -4256,8 +4256,28 @@ static void zend_native_call_direct_release(
 	zend_native_direct_activation *previous = activation->previous;
 	zend_native_call_target_release target_release;
 	bool setup_record = activation->setup_record;
+#if defined(__APPLE__) && defined(__aarch64__)
+	zval exceptional_internal_return;
+	bool has_exceptional_internal_return = false;
+
+	ZVAL_UNDEF(&exceptional_internal_return);
+#endif
 
 	ZEND_ASSERT(zend_native_active_direct_call == activation);
+#if defined(__APPLE__) && defined(__aarch64__)
+	/* The Darwin AArch64 universal call path releases completed internal calls
+	 * directly from generated code.  An internal handler may initialize its
+	 * result before throwing; detach that value before the call frame is retired
+	 * and destroy it only after the caller and activation chain are restored. */
+	if (activation->internal_target && EG(exception) != NULL
+			&& !activation->uses_discarded_return && callee != NULL
+			&& callee->return_value != NULL
+			&& !Z_ISUNDEF_P(callee->return_value)) {
+		ZVAL_COPY_VALUE(&exceptional_internal_return, callee->return_value);
+		ZVAL_UNDEF(callee->return_value);
+		has_exceptional_internal_return = true;
+	}
+#endif
 	if (callee != NULL && activation->frame_initialized) {
 		zend_native_execution_cleanup_frame(activation->callee);
 		activation->frame_initialized = false;
@@ -4310,6 +4330,11 @@ static void zend_native_call_direct_release(
 	 * activation chain and the physical VM stack both expose the restored
 	 * caller, so an unwind cannot skip live callee/setup storage. */
 	zend_native_call_release_snapshotted_target(&target_release);
+#if defined(__APPLE__) && defined(__aarch64__)
+	if (has_exceptional_internal_return) {
+		zval_ptr_dtor(&exceptional_internal_return);
+	}
+#endif
 }
 
 void zend_native_frame_activation_release(
@@ -5683,6 +5708,18 @@ zend_native_direct_call_result zend_native_call_fragment(
 					"Invalid native call-fragment argument");
 			}
 			result.status = zend_native_call_fragment_cleanup(caller, cell);
+#if defined(__APPLE__) && defined(__aarch64__)
+			/* The fragment cleanup has retired this nested call frame.  Resume
+			 * Zend's unfinished-call walk at the retired call's INIT, not at its
+			 * failing SEND; otherwise that SEND ordinal is applied to the now
+			 * innermost enclosing call frame. */
+			if (result.status == ZEND_NATIVE_EXCEPTION
+					&& EG(exception) != NULL
+					&& zend_native_prepare_finally_exception(caller,
+						descriptor->init_source_position) == FAILURE) {
+				result.status = ZEND_NATIVE_BAILOUT;
+			}
+#endif
 			return result;
 		}
 		result.status = ZEND_NATIVE_RETURNED;

@@ -293,6 +293,10 @@ static uint32_t zend_mir_view_successor_count(const void *context,
 	if (!zend_mir_view_is_available(module) || block_id >= module->blocks.count) {
 		return 0;
 	}
+	if (module->successor_offsets == NULL
+			&& !zend_mir_module_prepare_edge_index((zend_mir_module *) module)) {
+		return 0;
+	}
 	if (module->successor_offsets != NULL) {
 		return module->successor_offsets[block_id + 1]
 			- module->successor_offsets[block_id];
@@ -315,6 +319,10 @@ static bool zend_mir_view_successor_at(const void *context,
 
 	if (!zend_mir_view_is_available(module) || out == NULL
 			|| block_id >= module->blocks.count) {
+		return false;
+	}
+	if (module->successor_offsets == NULL
+			&& !zend_mir_module_prepare_edge_index((zend_mir_module *) module)) {
 		return false;
 	}
 	if (module->successor_offsets != NULL) {
@@ -351,6 +359,10 @@ static uint32_t zend_mir_view_predecessor_count(const void *context,
 	if (!zend_mir_view_is_available(module) || block_id >= module->blocks.count) {
 		return 0;
 	}
+	if (module->predecessor_offsets == NULL
+			&& !zend_mir_module_prepare_edge_index((zend_mir_module *) module)) {
+		return 0;
+	}
 	if (module->predecessor_offsets != NULL) {
 		return module->predecessor_offsets[block_id + 1]
 			- module->predecessor_offsets[block_id];
@@ -382,6 +394,10 @@ static bool zend_mir_view_predecessor_at(const void *context,
 
 	if (!zend_mir_view_is_available(module) || out == NULL
 			|| block_id >= module->blocks.count) {
+		return false;
+	}
+	if (module->predecessor_offsets == NULL
+			&& !zend_mir_module_prepare_edge_index((zend_mir_module *) module)) {
 		return false;
 	}
 	if (module->predecessor_offsets != NULL) {

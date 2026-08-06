@@ -2000,6 +2000,25 @@ uint32_t zend_native_catch_enter(
 			&& !chained_catch) {
 		uint32_t source_position =
 			(uint32_t) (throw_opline - op_array->opcodes);
+#if defined(__APPLE__) && defined(__aarch64__)
+		/* Match ZEND_HANDLE_EXCEPTION for a destructor raised by the synthetic
+		 * FREE emitted for return/break cleanup.  The compiler already routes
+		 * this edge from the final loop FREE; use that same logical source here
+		 * before the runtime catch/finally walk repeats the selection. */
+		if ((throw_opline->opcode == ZEND_FREE
+				|| throw_opline->opcode == ZEND_FE_FREE)
+				&& (throw_opline->extended_value
+					& ZEND_FREE_ON_RETURN) != 0
+				&& throw_opline->op2.opline_num
+					< op_array->last - source_position) {
+			const uint32_t loop_end =
+				source_position + throw_opline->op2.opline_num;
+
+			zend_native_cleanup_unfinished_exception(
+				execute_data, source_position, loop_end);
+			source_position = loop_end;
+		}
+#endif
 		uint32_t continuation = zend_native_finally_unwind_target(
 			execute_data, op_array,
 			zend_native_try_catch_offset_for_source(

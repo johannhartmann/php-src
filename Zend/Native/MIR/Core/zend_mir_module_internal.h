@@ -168,6 +168,7 @@ bool zend_mir_module_grow_table(zend_mir_module *module, zend_mir_core_table *ta
 bool zend_mir_module_find_value(const zend_mir_module *module, zend_mir_value_id id,
 	uint32_t *index_out);
 bool zend_mir_module_prepare_value_index(zend_mir_module *module);
+bool zend_mir_module_prepare_edge_index(zend_mir_module *module);
 void zend_mir_module_insert_value_index(zend_mir_module *module,
 	zend_mir_value_id id, uint32_t index);
 bool zend_mir_core_add_value_fact(void *context,
