@@ -1,6 +1,7 @@
 #include "Zend/Native/Compiler/zend_native_dynamic_code.h"
 
 #include "Zend/zend_compile.h"
+#include "Zend/zend_call_stack.h"
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_execute.h"
 #include "Zend/zend_observer.h"
@@ -543,6 +544,17 @@ zend_native_status zend_native_execute_include_or_eval(
 	ephemeral_codeunit = new_op_array->num_dynamic_func_defs == 0
 		&& first_function_bucket == EG(function_table)->nNumUsed
 		&& first_class_bucket == EG(class_table)->nNumUsed;
+#if defined(ZEND_CHECK_STACK_LIMIT) && defined(__APPLE__) \
+		&& defined(__aarch64__)
+	/* TPDE compilation consumes substantially more C stack than dispatching a
+	 * VM opcode. Preserve enough of Zend's reserved stack for the exception
+	 * path before recursively compiling an include from native code. */
+	if ((uintptr_t) zend_call_stack_position()
+			<= (uintptr_t) EG(stack_limit) + (128u * 1024u)) {
+		zend_call_stack_size_error();
+		entry_cell = NULL;
+	} else
+#endif
 	if (compiler->product_compiler != NULL) {
 		memset(&compile_diagnostic, 0, sizeof(compile_diagnostic));
 		if (zend_native_compiler_compile_dynamic_component(

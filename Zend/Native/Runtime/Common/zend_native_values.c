@@ -3774,6 +3774,17 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 		zval *returned;
 		zval undefined_offset;
 
+		if (opline->op2_type == IS_CV
+				&& Z_TYPE_P(offset) == IS_UNDEF) {
+			offset = zend_native_value_read_r_explicit(
+				execute_data, opline, opline->op2_type, opline->op2);
+			if (offset == NULL || EG(exception) != NULL) {
+				if (GC_DELREF(object) == 0) {
+					zend_objects_store_del(object);
+				}
+				goto fetch_dim_error;
+			}
+		}
 		offset = zend_native_value_object_dimension_offset(
 			opline->op2_type, offset);
 		if (offset != NULL && Z_TYPE_P(offset) == IS_UNDEF) {
@@ -3844,6 +3855,14 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 		return zend_native_value_status();
 	}
 	if (Z_TYPE_P(container) != IS_ARRAY) {
+		if (opline->op2_type == IS_CV
+				&& Z_TYPE_P(offset) == IS_UNDEF) {
+			offset = zend_native_value_read_r_explicit(
+				execute_data, opline, opline->op2_type, opline->op2);
+			if (offset == NULL || EG(exception) != NULL) {
+				goto fetch_dim_error;
+			}
+		}
 		if (mode == ZEND_NATIVE_DIM_IS) {
 			ZVAL_NULL(result);
 			zend_native_value_consume_operand(execute_data,

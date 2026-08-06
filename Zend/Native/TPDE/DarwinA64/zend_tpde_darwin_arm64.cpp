@@ -321,26 +321,15 @@ public:
 		Base::generate_cond_branch(jump, true_target, false_target);
 	}
 
-	bool cur_func_may_emit_calls() const { return adaptor->plan()->may_emit_calls; }
+	bool cur_func_may_emit_calls() const {
+		return adaptor->cur_func_may_emit_calls();
+	}
 	::tpde::SymRef cur_personality_func() const { return {}; }
 	bool try_force_fixed_assignment(IRValueRef value) const {
-		const zend_tpde_machine_value_kind kind =
-			adaptor->machine_kind(value);
-		const bool pointer_value =
-			kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-			|| kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-			|| kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-			|| kind == ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-			|| kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR;
 		return value == IRValueRef{Adaptor::FRAME_VALUE}
 			|| (!adaptor->typed_body()
 				&& value == IRValueRef{
-					Adaptor::EXECUTION_CONTEXT_ARGUMENT})
-			|| (pointer_value
-				&& adaptor->machine_value_is_register_authoritative(value))
-			|| (adaptor->val_is_phi(value)
-				&& kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-				&& adaptor->machine_value_is_register_authoritative(value));
+					Adaptor::EXECUTION_CONTEXT_ARGUMENT});
 	}
 	ValueParts val_parts(IRValueRef value) const {
 		const zend_tpde_machine_value_kind kind =
@@ -845,9 +834,35 @@ bool ZendCompilerA64::compile_boxed_cond_guard(IRInstRef instruction) {
 			type_info.load_to_reg(), 4);
 	}
 
-	if (register_string) {
+	if (register_string && layout.has_result) {
+		auto [string_ref, string] = val_ref_single(node.operands[1]);
+		auto string_reg = string.load_to_reg();
+		store_off(frame_reg, layout.operand_offset, string_reg, 8);
+		ScratchReg string_type{this};
+		auto string_type_reg = string_type.alloc_gp();
+		if (!emit_machine_zval_type_info(
+				ZEND_TPDE_MACHINE_VALUE_STRING_PTR,
+				string_reg, string_type_reg)) {
+			return false;
+		}
+		store_off(frame_reg,
+			layout.operand_offset
+				+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+			string_type_reg, 4);
+	}
+
+	/*
+	 * JMPZ_EX/JMPNZ_EX consume their source TMP before publishing the boolean
+	 * result.  The generic helper owns that lifetime transition; the scalar
+	 * truthiness fast path only observes the slot and must not overwrite a
+	 * refcounted source value directly. Register-authoritative values have been
+	 * materialized above so the helper observes the canonical frame value.
+	 */
+	if (layout.has_result) {
+		generate_raw_jump(Jump::jmp, slow);
+	} else if (register_string) {
 		bool literal_truthy = false;
-		if (!layout.has_result && adaptor->known_string_literal(
+		if (adaptor->known_string_literal(
 				node.operands[1], nullptr, &literal_truthy)) {
 			auto [string_ref, string] = val_ref_single(node.operands[1]);
 			string.reset();
@@ -868,9 +883,8 @@ bool ZendCompilerA64::compile_boxed_cond_guard(IRInstRef instruction) {
 			generate_raw_jump(Jump::Jeq, falsey);
 			generate_raw_jump(Jump::jmp, truthy);
 		}
-	} else if (!layout.has_result
-			&& (node.exact_type == ZEND_MIR_SCALAR_TYPE_I1
-				|| node.exact_type == ZEND_MIR_SCALAR_TYPE_I64)) {
+	} else if (node.exact_type == ZEND_MIR_SCALAR_TYPE_I1
+				|| node.exact_type == ZEND_MIR_SCALAR_TYPE_I64) {
 		if (node.exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
 			load_off(value_reg, frame_reg,
 				layout.operand_offset
@@ -6879,6 +6893,7 @@ bool ZendCompilerA64::compile_inst_impl(
 			|| layout.source_opcode == ZEND_BW_OR
 			|| layout.source_opcode == ZEND_BW_AND
 			|| layout.source_opcode == ZEND_BW_XOR
+			|| layout.source_opcode == ZEND_SPACESHIP
 			|| layout.source_opcode == ZEND_IS_IDENTICAL
 			|| layout.source_opcode == ZEND_IS_NOT_IDENTICAL
 			|| layout.source_opcode == ZEND_IS_EQUAL
@@ -6980,6 +6995,15 @@ bool ZendCompilerA64::compile_inst_impl(
 				case ZEND_BW_XOR:
 					ASM(EORx, result_reg, result_reg, right_reg);
 					break;
+				case ZEND_SPACESHIP: {
+					ScratchReg less{this};
+					auto less_reg = less.alloc_gp();
+					ASM(CMPx, result_reg, right_reg);
+					generate_raw_set(Jump::Jlt, less_reg);
+					generate_raw_set(Jump::Jgt, result_reg);
+					ASM(SUBx, result_reg, result_reg, less_reg);
+					break;
+				}
 				case ZEND_IS_IDENTICAL:
 				case ZEND_IS_EQUAL:
 					ASM(CMPx, result_reg, right_reg);
@@ -7915,15 +7939,12 @@ bool ZendCompilerA64::compile_inst_impl(
 		if (node.kind == Adaptor::InstKind::GuardedFast) {
 			object.reset();
 			cache.reset();
-			type.reset();
 			if (adaptor->machine_kind(node.result)
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 				/*
-				 * This register result exists only because an immediately
-				 * following scalar assign-op consumes it. Keep that hot edge
-				 * scalar: non-long properties take the existing semantic cold
-				 * path, while a long needs neither zval ownership transfer nor
-				 * a refcount update.
+				 * Keep the complete two-part boxed value authoritative on the
+				 * guarded edge. Non-long properties take the semantic cold path;
+				 * a long needs neither ownership transfer nor a refcount update.
 				 */
 				ASM(CMPwi, offset_reg, IS_LONG);
 				generate_raw_jump(Jump::Jne, slow);
@@ -7931,10 +7952,12 @@ bool ZendCompilerA64::compile_inst_impl(
 				auto payload = result.part(0);
 				auto type_info = result.part(1);
 				auto payload_reg = payload.alloc_reg();
+				auto type_info_reg = type_info.alloc_reg();
 				load_off(payload_reg, property_reg, 0, 8);
-				/* The guard already leaves the exact type tag in offset. */
-				type_info.set_value(std::move(offset));
+				materialize_constant(static_cast<uint64_t>(IS_LONG),
+					DarwinConfig::GP_BANK, 4, type_info_reg);
 				payload.set_modified();
+				type_info.set_modified();
 			} else {
 				auto [result_ref, result] =
 					result_ref_single(node.result);
@@ -7966,6 +7989,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				}
 				result.set_modified();
 			}
+			type.reset();
 			offset.reset();
 			property.reset();
 			decision_reg = decision.alloc_gp();
@@ -8909,16 +8933,15 @@ bool ZendCompilerA64::compile_inst_impl(
 			auto [left_pair, right_pair] = binary();
 			auto &[left_ref, left] = left_pair;
 			auto &[right_ref, right] = right_pair;
-			ASM(CMPx, left.load_to_reg(), right.load_to_reg());
-			ScratchReg less{this};
-			ScratchReg greater{this};
-			auto less_reg = less.alloc_gp();
-			auto greater_reg = greater.alloc_gp();
-			generate_raw_set(Jump::Jlt, less_reg);
-			generate_raw_set(Jump::Jgt, greater_reg);
-			ASM(SUBx, greater_reg, greater_reg, less_reg);
 			auto [result_ref, result] = result_ref_single(node.result);
-			result.set_value(std::move(greater));
+			auto result_reg = result.alloc_reg();
+			ScratchReg less{this};
+			auto less_reg = less.alloc_gp();
+			ASM(CMPx, left.load_to_reg(), right.load_to_reg());
+			generate_raw_set(Jump::Jlt, less_reg);
+			generate_raw_set(Jump::Jgt, result_reg);
+			ASM(SUBx, result_reg, result_reg, less_reg);
+			result.set_modified();
 			return true;
 		}
 		case ZEND_MIR_OPCODE_I64_MOD_NONZERO: {
@@ -8978,16 +9001,15 @@ bool ZendCompilerA64::compile_inst_impl(
 			auto [left_pair, right_pair] = binary();
 			auto &[left_ref, left] = left_pair;
 			auto &[right_ref, right] = right_pair;
-			ASM(FCMP_d, left.load_to_reg(), right.load_to_reg());
-			ScratchReg less{this};
-			ScratchReg greater{this};
-			auto less_reg = less.alloc_gp();
-			auto greater_reg = greater.alloc_gp();
-			generate_raw_set(Jump::Jlt, less_reg);
-			generate_raw_set(Jump::Jgt, greater_reg);
-			ASM(SUBx, greater_reg, greater_reg, less_reg);
 			auto [result_ref, result] = result_ref_single(node.result);
-			result.set_value(std::move(greater));
+			auto result_reg = result.alloc_reg();
+			ScratchReg less{this};
+			auto less_reg = less.alloc_gp();
+			ASM(FCMP_d, left.load_to_reg(), right.load_to_reg());
+			generate_raw_set(Jump::Jlt, less_reg);
+			generate_raw_set(Jump::Jgt, result_reg);
+			ASM(SUBx, result_reg, result_reg, less_reg);
+			result.set_modified();
 			return true;
 		}
 		case ZEND_MIR_OPCODE_I64_TO_F64:
@@ -9202,7 +9224,24 @@ bool ZendCompilerA64::compile_inst_impl(
 		case ZEND_MIR_OPCODE_ITERATOR_BRANCH:
 		case ZEND_MIR_OPCODE_VALUE_BIND_STATIC_BRANCH:
 		case ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH: {
-			if (node.operands.size() != 1 || !mir.has_value_operation) {
+			const bool register_machine_condition =
+				record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				&& node.operands.size() == 1
+				&& node.operands[0]
+					!= IRValueRef{Adaptor::FRAME_VALUE}
+				&& (adaptor->machine_kind(node.operands[0])
+						== ZEND_TPDE_MACHINE_VALUE_BOOL
+					|| adaptor->machine_kind(node.operands[0])
+						== ZEND_TPDE_MACHINE_VALUE_I64);
+			const bool register_boxed_condition =
+				record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				&& node.operands.size() == 2
+				&& node.operands[0]
+					== IRValueRef{Adaptor::FRAME_VALUE}
+				&& adaptor->machine_kind(node.operands[1])
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
+			if ((node.operands.size() != 1 && !register_boxed_condition)
+					|| !mir.has_value_operation) {
 				return false;
 			}
 			if (record.opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH) {
@@ -9562,9 +9601,88 @@ bool ZendCompilerA64::compile_inst_impl(
 				}
 			}
 			if (record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
+				if (register_machine_condition) {
+					auto [condition_ref, condition] =
+						val_ref_single(node.operands[0]);
+					auto condition_reg = condition.load_to_reg();
+					const auto &successors = adaptor->block_succs(
+						IRBlockRef{node.control_block});
+					generate_cond_branch(
+						Jump{Jump::Cbnz, condition_reg, false},
+						successors[0], successors[1]);
+					return true;
+				}
 				zend_tpde_value_condition layout;
+				bool have_condition_layout =
+					zend_tpde_value_condition_at(mir, &layout);
+				if (!have_condition_layout && register_boxed_condition) {
+					const zend_mir_executable_value_ref &operation =
+						mir.value_operation;
+					const bool has_result =
+						operation.source_opcode == ZEND_JMPZ_EX
+						|| operation.source_opcode == ZEND_JMPNZ_EX;
+					const bool supported_opcode =
+						operation.source_opcode == ZEND_JMPZ
+						|| operation.source_opcode == ZEND_JMPNZ
+						|| operation.source_opcode == ZEND_JMPZ_EX
+						|| operation.source_opcode == ZEND_JMPNZ_EX;
+					const uint64_t operand_offset =
+						(uint64_t{ZEND_CALL_FRAME_SLOT}
+							+ operation.op1_storage_id) * sizeof(zval);
+					const uint64_t result_offset = has_result
+						? (uint64_t{ZEND_CALL_FRAME_SLOT}
+							+ operation.result_storage_id) * sizeof(zval)
+						: 0;
+					if (supported_opcode
+							&& zend_mir_id_is_valid(
+								operation.op1_storage_id)
+							&& (!has_result || zend_mir_id_is_valid(
+								operation.result_storage_id))
+							&& operand_offset <= UINT32_MAX
+							&& result_offset <= UINT32_MAX) {
+						layout.operand_offset =
+							static_cast<uint32_t>(operand_offset);
+						layout.result_offset =
+							static_cast<uint32_t>(result_offset);
+						layout.source_opcode = operation.source_opcode;
+						layout.has_result = has_result;
+						have_condition_layout = true;
+					}
+				}
 
-				if (zend_tpde_value_condition_at(mir, &layout)) {
+				if (!have_condition_layout && register_boxed_condition) {
+					/*
+					 * JMP_NULL, COALESCE, JMP_SET, and ASSERT_CHECK retain
+					 * opcode-specific branch and result semantics in the native
+					 * helper. Publish the register-authoritative operand to its
+					 * canonical frame slot before that helper observes it.
+					 */
+					const zend_mir_executable_value_ref &operation =
+						mir.value_operation;
+					const uint64_t operand_offset =
+						(uint64_t{ZEND_CALL_FRAME_SLOT}
+							+ operation.op1_storage_id) * sizeof(zval);
+					if (!zend_mir_id_is_valid(operation.op1_storage_id)
+							|| operand_offset > UINT32_MAX - sizeof(zval)) {
+						return false;
+					}
+					auto boxed = val_ref(node.operands[1]);
+					const ValueParts parts = val_parts(node.operands[1]);
+					if (parts.count() != 2) {
+						return false;
+					}
+					auto payload = boxed.part(0);
+					auto type_info = boxed.part(1);
+					store_off(canonical_frame_register(),
+						static_cast<uint32_t>(operand_offset),
+						payload.load_to_reg(), 8);
+					store_off(canonical_frame_register(),
+						static_cast<uint32_t>(operand_offset)
+							+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+						type_info.load_to_reg(), 4);
+				}
+
+				if (have_condition_layout) {
 					const int32_t decision_slot =
 						allocate_stack_slot(sizeof(uint32_t));
 					if (decision_slot < 0) {
@@ -9583,12 +9701,57 @@ bool ZendCompilerA64::compile_inst_impl(
 					ScratchReg value{this};
 					auto type_reg = type.alloc_gp();
 					auto value_reg = value.alloc_gp();
+					std::optional<ValueRef> boxed_condition;
+					std::optional<ValuePartRef> boxed_payload;
+					std::optional<ValuePartRef> boxed_type_info;
+					AsmReg boxed_payload_reg{};
+					AsmReg boxed_type_info_reg{};
+					if (register_boxed_condition) {
+						boxed_condition.emplace(
+							val_ref(node.operands[1]));
+						const ValueParts parts =
+							val_parts(node.operands[1]);
+						if (parts.count() != 2) {
+							return false;
+						}
+						boxed_payload.emplace(
+							boxed_condition->part(0));
+						boxed_type_info.emplace(
+							boxed_condition->part(1));
+						boxed_payload_reg =
+							boxed_payload->load_to_reg();
+						boxed_type_info_reg =
+							boxed_type_info->load_to_reg();
+					}
+					auto load_condition_payload = [&]() {
+						if (register_boxed_condition) {
+							ASM(ORRx, value_reg,
+								boxed_payload_reg, boxed_payload_reg);
+						} else {
+							load_off(value_reg, frame_reg,
+								layout.operand_offset, 8);
+						}
+					};
 
-					load_off(type_reg, frame_reg,
-						layout.operand_offset
-							+ static_cast<uint32_t>(
-								offsetof(zval, u1.type_info)),
-						4);
+					/*
+					 * Result-producing short-circuit branches must consume their
+					 * source TMP.  Leave those to the native helper below instead
+					 * of overwriting the source slot in the truthiness fast path.
+					 */
+					if (layout.has_result) {
+						generate_raw_jump(Jump::jmp, slow);
+					}
+
+					if (register_boxed_condition) {
+						ASM(ORRx, type_reg,
+							boxed_type_info_reg, boxed_type_info_reg);
+					} else {
+						load_off(type_reg, frame_reg,
+							layout.operand_offset
+								+ static_cast<uint32_t>(
+									offsetof(zval, u1.type_info)),
+							4);
+					}
 					ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
 					ASM(CMPwi, type_reg, IS_NULL);
 					generate_raw_jump(Jump::Jeq, falsey);
@@ -9599,8 +9762,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					ASM(CMPwi, type_reg, IS_LONG);
 					auto not_long = text_writer.label_create();
 					generate_raw_jump(Jump::Jne, not_long);
-					load_off(value_reg, frame_reg,
-						layout.operand_offset, 8);
+					load_condition_payload();
 					generate_raw_jump(
 						Jump{Jump::Cbnz, value_reg, false}, truthy);
 					generate_raw_jump(Jump::jmp, falsey);
@@ -9609,8 +9771,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					ASM(CMPwi, type_reg, IS_STRING);
 					auto not_string = text_writer.label_create();
 					generate_raw_jump(Jump::Jne, not_string);
-					load_off(value_reg, frame_reg,
-						layout.operand_offset, 8);
+					load_condition_payload();
 					load_off(type_reg, value_reg,
 						static_cast<uint32_t>(
 							offsetof(zend_string, len)), 8);
@@ -9629,8 +9790,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					ASM(CMPwi, type_reg, IS_ARRAY);
 					auto not_array = text_writer.label_create();
 					generate_raw_jump(Jump::Jne, not_array);
-					load_off(value_reg, frame_reg,
-						layout.operand_offset, 8);
+					load_condition_payload();
 					load_off(type_reg, value_reg,
 						static_cast<uint32_t>(
 							offsetof(HashTable, nNumOfElements)), 4);
@@ -9640,8 +9800,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					label_place(not_array);
 					ASM(CMPwi, type_reg, IS_RESOURCE);
 					generate_raw_jump(Jump::Jne, slow);
-					load_off(value_reg, frame_reg,
-						layout.operand_offset, 8);
+					load_condition_payload();
 					load_off(type_reg, value_reg,
 						static_cast<uint32_t>(
 							offsetof(zend_resource, handle)), 4);
@@ -9669,6 +9828,18 @@ bool ZendCompilerA64::compile_inst_impl(
 						IRBlockRef{node.control_block});
 					generate_raw_jump(Jump::jmp, branch);
 					label_place(slow);
+					if (register_boxed_condition) {
+						store_off(frame_reg, layout.operand_offset,
+							boxed_payload_reg, 8);
+						store_off(frame_reg,
+							layout.operand_offset
+								+ static_cast<uint32_t>(
+									offsetof(zval, u1.type_info)),
+							boxed_type_info_reg, 4);
+						boxed_type_info.reset();
+						boxed_payload.reset();
+						boxed_condition.reset();
+					}
 
 					zend::native::tpde::CCAssignerAppleA64 assigner;
 					CallBuilder builder{*this, assigner};
@@ -10148,7 +10319,18 @@ bool ZendCompilerA64::compile_inst_impl(
 							auto [result_ref, result] =
 								result_ref_single(node.result);
 							auto result_reg = result.alloc_reg();
-							load_off(result_reg, result_slot_reg, 0, 8);
+							if (adaptor->exact_type(node.result)
+									== ZEND_MIR_SCALAR_TYPE_I1) {
+								load_off(result_reg, result_slot_reg,
+									static_cast<uint32_t>(offsetof(
+										zval, u1.type_info)), 4);
+								ASM(ANDwi, result_reg, result_reg,
+									Z_TYPE_MASK);
+								ASM(CMPwi, result_reg, IS_TRUE);
+								generate_raw_set(Jump::Jeq, result_reg);
+							} else {
+								load_off(result_reg, result_slot_reg, 0, 8);
+							}
 							result.set_modified();
 						}
 					}
@@ -13360,6 +13542,8 @@ bool ZendCompilerA64::compile_inst_impl(
 				} else {
 					uint64_t constant_bits = 0;
 					ScratchReg constant_value{this};
+					std::optional<ValueRef> returned_value;
+					std::optional<ValuePartRef> returned_part;
 					AsmReg value_reg;
 					if (adaptor->constant(
 							returned_ref, &constant_bits)) {
@@ -13369,9 +13553,11 @@ bool ZendCompilerA64::compile_inst_impl(
 							val_parts(returned_ref).bank, 8,
 							value_reg);
 					} else {
-						auto [returned_value_ref, returned] =
+						auto [value_ref, value_part] =
 							val_ref_single(returned_ref);
-						value_reg = returned.load_to_reg();
+						returned_value.emplace(std::move(value_ref));
+						returned_part.emplace(std::move(value_part));
+						value_reg = returned_part->load_to_reg();
 					}
 					if (return_addref
 							&& (kind
@@ -13572,7 +13758,7 @@ struct A64ImageState {
 	explicit A64ImageState(
 		std::span<const zend_tpde_plan *const> plans,
 		zend_native_image *image)
-		: adaptor{plans}, compiler{&adaptor, image} {}
+		: adaptor{plans, true}, compiler{&adaptor, image} {}
 };
 
 #if defined(__APPLE__) && defined(__aarch64__)

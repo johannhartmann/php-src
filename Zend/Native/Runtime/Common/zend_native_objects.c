@@ -1113,12 +1113,15 @@ static zend_native_status zend_native_object_assign_ref_explicit(
 	if (assigned == NULL) {
 		assigned = Z_OBJ_HT_P(receiver)->read_property(
 			Z_OBJ_P(receiver), name, BP_VAR_W, cache_slot, &fallback);
-		if (assigned == &fallback || EG(exception) != NULL) {
-			if (EG(exception) == NULL) {
-				zend_throw_error(NULL,
-					"Cannot assign by reference to overloaded object");
+		if (assigned == &fallback) {
+			if (Z_ISREF_P(assigned) && Z_REFCOUNT_P(assigned) == 1) {
+				ZVAL_UNREF(assigned);
 			}
+			zend_throw_error(NULL,
+				"Cannot assign by reference to overloaded object");
 			zval_ptr_dtor(&fallback);
+			assigned = &EG(uninitialized_zval);
+		} else if (EG(exception) != NULL) {
 			assigned = &EG(uninitialized_zval);
 		}
 	} else if (Z_ISERROR_P(assigned)) {

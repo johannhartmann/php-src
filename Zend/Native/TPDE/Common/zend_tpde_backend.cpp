@@ -2788,6 +2788,11 @@ static void freeze_register_boolean_results(zend_tpde_plan *plan)
 	std::vector<uint8_t> register_boolean_results(
 		plan->instruction_count);
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+		register_boolean_results[index] =
+			(plan->instructions[index].machine_control_flow_flags
+				& ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_RESULT) != 0;
+	}
+	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
 		zend_tpde_instruction &instruction = plan->instructions[index];
 		const zend_mir_instruction_record record =
 			zend_tpde_instruction_record_at(plan, &instruction);
@@ -9071,6 +9076,7 @@ static bool freeze_typed_body_signature(
 		const zend_tpde_plan *const *component_plans,
 		uint32_t component_count,
 		const uint8_t *typed_body_candidates,
+		bool reject_variadic_receive,
 		zend_tpde_local_abi_type *return_type) {
 	if (plan == nullptr || component_plans == nullptr
 			|| typed_body_candidates == nullptr || return_type == nullptr
@@ -9079,6 +9085,17 @@ static bool freeze_typed_body_signature(
 			|| (plan->argument_count != 0
 				&& plan->argument_value_indices == nullptr)) {
 		return false;
+	}
+	if (reject_variadic_receive && plan->source_opcodes != nullptr) {
+		for (uint32_t source = 0;
+				source < plan->source_opcode_count; ++source) {
+			if (plan->source_opcodes[source].opcode == ZEND_RECV_VARIADIC) {
+				/* A variadic receive constructs a packed array from a dynamic
+				 * number of arguments. The fixed typed-body ABI does not carry
+				 * enough information to reproduce that operation. */
+				return false;
+			}
+		}
 	}
 	for (uint32_t argument = 0;
 			argument < plan->argument_count; ++argument) {
@@ -10131,6 +10148,18 @@ static bool machine_cfg_register_cond_branch(
 	if (producer_record.opcode == ZEND_MIR_OPCODE_PHI) {
 		return true;
 	}
+	if (producer_record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
+			&& producer.direct_call != nullptr
+			&& producer.direct_call->result_type
+				== ZEND_MIR_SCALAR_TYPE_I1
+			&& ((plan->typed_component_call_eligible != nullptr
+					&& plan->typed_component_call_eligible[
+						static_cast<uint32_t>(definition)] != 0)
+				|| (plan->effect_closed_inline_eligible != nullptr
+					&& plan->effect_closed_inline_eligible[
+						static_cast<uint32_t>(definition)] != 0))) {
+		return true;
+	}
 	if (!producer.has_value_operation) {
 		return false;
 	}
@@ -10448,7 +10477,8 @@ static void freeze_machine_scalar_definitions(zend_tpde_plan *plan) {
 	} while (changed);
 }
 
-static void freeze_machine_register_authority(zend_tpde_plan *plan) {
+static void freeze_machine_register_authority(
+		zend_tpde_plan *plan, bool register_direct_scalar_results) {
 	freeze_machine_scalar_definitions(plan);
 	for (uint32_t index = 0; index < plan->value_count; ++index) {
 		zend_tpde_value &value = plan->values[index];
@@ -10508,14 +10538,20 @@ static void freeze_machine_register_authority(zend_tpde_plan *plan) {
 
 		const zend_mir_instruction_record record =
 			zend_tpde_instruction_record_at(plan, &instruction);
-		if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
-				&& record.representation == ZEND_MIR_REPRESENTATION_ZVAL) {
+		if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
 			const int32_t result =
 				zend_tpde_value_index(plan, record.result_id);
-			if (result >= 0
-					&& plan->values[result].machine_kind
-						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-				plan->values[result].register_authoritative = true;
+			if (result >= 0) {
+				zend_tpde_value &value = plan->values[result];
+				if (value.machine_kind
+						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+						|| (register_direct_scalar_results
+							&& zend_mir_scalar_type_is_exact(
+								value.exact_type)
+							&& value.exact_type
+								!= ZEND_MIR_SCALAR_TYPE_NULL)) {
+					value.register_authoritative = true;
+				}
 			}
 		}
 	}
@@ -10580,6 +10616,28 @@ static bool machine_plan_local_abi_call_eligible(
 				&& plan->typed_component_call_eligible[instruction_index] != 0)
 			|| (plan->effect_closed_inline_eligible != nullptr
 				&& plan->effect_closed_inline_eligible[instruction_index] != 0));
+}
+
+static bool machine_plan_call_arguments_require_values(
+		const zend_tpde_plan *plan,
+		uint32_t instruction_index,
+		bool register_a64_value_transports) {
+	if (machine_plan_local_abi_call_eligible(plan, instruction_index)) {
+		return true;
+	}
+	if (!register_a64_value_transports
+			|| plan == nullptr
+			|| instruction_index >= plan->instruction_count) {
+		return false;
+	}
+	const zend_tpde_instruction &instruction =
+		plan->instructions[instruction_index];
+	const zend_mir_instruction_record record =
+		zend_tpde_instruction_record_at(plan, &instruction);
+	return record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
+		&& instruction.direct_call != nullptr
+		&& (instruction.direct_call->flags
+			& ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME) != 0;
 }
 
 static bool machine_plan_use_requires_value(
@@ -10825,7 +10883,9 @@ static bool freeze_machine_operand_transports(
 }
 
 static bool freeze_machine_required_values(
-		zend_tpde_plan *plan, zend_native_diagnostic *diag) {
+		zend_tpde_plan *plan,
+		bool register_a64_value_transports,
+		zend_native_diagnostic *diag) {
 	if (plan->value_count == 0) {
 		return true;
 	}
@@ -10845,8 +10905,9 @@ static bool freeze_machine_required_values(
 		for (uint32_t instruction_index = 0;
 				instruction_index < plan->instruction_count;
 				++instruction_index) {
-			if (!machine_plan_local_abi_call_eligible(
-					plan, instruction_index)) {
+			if (!machine_plan_call_arguments_require_values(
+					plan, instruction_index,
+					register_a64_value_transports)) {
 				continue;
 			}
 			const zend_tpde_instruction &instruction =
@@ -11206,6 +11267,7 @@ static bool freeze_component_machine_plan(
 		zend_tpde_plan *plans,
 		const zend_tpde_plan *const *component_plans,
 		uint32_t component_count,
+		bool register_a64_value_transports,
 		zend_native_diagnostic *diag) {
 	for (uint32_t component = 0;
 			component < component_count; ++component) {
@@ -11226,7 +11288,8 @@ static bool freeze_component_machine_plan(
 			zend_tpde_local_abi_type return_type{};
 			if (!freeze_typed_body_signature(
 					&plans[index], component_plans, component_count,
-					candidates.data(), &return_type)) {
+					candidates.data(), register_a64_value_transports,
+					&return_type)) {
 				candidates[index] = 0;
 				changed = true;
 			}
@@ -11238,7 +11301,8 @@ static bool freeze_component_machine_plan(
 			candidates[index] != 0
 			&& freeze_typed_body_signature(
 				&plans[index], component_plans, component_count,
-				candidates.data(), &return_type);
+				candidates.data(), register_a64_value_transports,
+				&return_type);
 		plans[index].typed_body_return_abi =
 			plans[index].typed_body_eligible
 				? return_type : zend_tpde_local_abi_type{};
@@ -11258,14 +11322,39 @@ static bool freeze_component_machine_plan(
 				"unable to freeze component-local TPDE call plan");
 			return false;
 		}
-		freeze_machine_register_authority(&plans[index]);
+		bool typed_body_may_emit_calls = false;
+		for (uint32_t instruction = 0;
+				instruction < plans[index].instruction_count; ++instruction) {
+			typed_body_may_emit_calls = typed_body_may_emit_calls
+				|| (plans[index].typed_component_call_eligible != nullptr
+					&& plans[index].typed_component_call_eligible[instruction] != 0);
+		}
+		/*
+		 * Typed-body eligibility rejects effectful and helper-backed
+		 * instructions.  A frozen component-local typed call is therefore the
+		 * only remaining call-producing instruction in that function view.
+		 * Zend entries retain the aggregate helper fact and may also contain a
+		 * direct typed-body call.  Keep unwind facts separate so future cold
+		 * helper functions do not have to widen either hot function.
+		 */
+		plans[index].typed_body_may_emit_calls =
+			plans[index].typed_body_eligible && typed_body_may_emit_calls;
+		plans[index].zend_entry_may_emit_calls =
+			plans[index].may_emit_calls || typed_body_may_emit_calls;
+		plans[index].typed_body_needs_unwind =
+			plans[index].typed_body_may_emit_calls;
+		plans[index].zend_entry_needs_unwind =
+			plans[index].zend_entry_may_emit_calls;
+		freeze_machine_register_authority(
+			&plans[index], register_a64_value_transports);
 		if (!freeze_machine_operand_transports(&plans[index], diag)) {
 			return false;
 		}
 		if (!retain_typed_call_materializations(&plans[index], diag)) {
 			return false;
 		}
-		if (!freeze_machine_required_values(&plans[index], diag)) {
+		if (!freeze_machine_required_values(
+				&plans[index], register_a64_value_transports, diag)) {
 			return false;
 		}
 		if (!freeze_machine_cfg(
@@ -11793,7 +11882,8 @@ extern "C" zend_result zend_tpde_compile_component_w14_with_runtime(
 		return FAILURE;
 	}
 	if (!freeze_component_machine_plan(
-			plans, plan_refs, member_count, diag)) {
+			plans, plan_refs, member_count,
+			target == ZEND_NATIVE_TARGET_DARWIN_ARM64, diag)) {
 		for (uint32_t index = 0; index < member_count; ++index) {
 			destroy_plan(&plans[index]);
 		}
