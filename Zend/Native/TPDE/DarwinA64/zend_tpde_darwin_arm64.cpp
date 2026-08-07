@@ -9507,7 +9507,7 @@ bool ZendCompilerA64::compile_inst_impl(
 
 				zend_tpde_packed_iterator_fetch layout;
 
-				if (zend_tpde_packed_iterator_fetch_at(mir, &layout)) {
+				if (zend_tpde_packed_iterator_fetch_at(mir, &layout, true)) {
 					if (node.has_result
 							&& !((adaptor->machine_kind(node.result)
 									== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
@@ -9525,6 +9525,10 @@ bool ZendCompilerA64::compile_inst_impl(
 					}
 					auto slow = text_writer.label_create();
 					auto destination_valid = text_writer.label_create();
+					auto packed = text_writer.label_create();
+					auto packed_scan = text_writer.label_create();
+					auto mixed_scan = text_writer.label_create();
+					auto found = text_writer.label_create();
 					auto end = text_writer.label_create();
 					auto branch = text_writer.label_create();
 					auto [frame_ref, frame] =
@@ -9537,12 +9541,16 @@ bool ZendCompilerA64::compile_inst_impl(
 					ScratchReg limit{this};
 					ScratchReg element{this};
 					ScratchReg value{this};
+					ScratchReg key{this};
+					ScratchReg key_value{this};
 					auto type_reg = type.alloc_gp();
 					auto array_reg = array.alloc_gp();
 					auto position_reg = position.alloc_gp();
 					auto limit_reg = limit.alloc_gp();
 					auto element_reg = element.alloc_gp();
 					auto value_reg = value.alloc_gp();
+					auto key_reg = key.alloc_gp();
+					auto key_value_reg = key_value.alloc_gp();
 
 					load_off(type_reg, frame_reg,
 						layout.holder_offset
@@ -9553,26 +9561,52 @@ bool ZendCompilerA64::compile_inst_impl(
 					ASM(CMPwi, type_reg, IS_ARRAY);
 					generate_raw_jump(Jump::Jne, slow);
 					load_off(array_reg, frame_reg, layout.holder_offset, 8);
-					load_off(type_reg, array_reg,
-						static_cast<uint32_t>(offsetof(HashTable, u)), 4);
-					ASM(TSTwi, type_reg, HASH_FLAG_PACKED);
-					generate_raw_jump(Jump::Jeq, slow);
 					load_off(limit_reg, array_reg,
 						static_cast<uint32_t>(
 							offsetof(HashTable, nNumUsed)),
 						4);
-					load_off(type_reg, array_reg,
-						static_cast<uint32_t>(
-							offsetof(HashTable, nNumOfElements)),
-						4);
-					ASM(CMPw, limit_reg, type_reg);
-					generate_raw_jump(Jump::Jne, slow);
 					load_off(position_reg, frame_reg,
 						layout.holder_offset
 							+ static_cast<uint32_t>(offsetof(zval, u2.fe_pos)),
 						4);
+					load_off(type_reg, array_reg,
+						static_cast<uint32_t>(offsetof(HashTable, u)), 4);
+					ASM(TSTwi, type_reg, HASH_FLAG_PACKED);
+					generate_raw_jump(Jump::Jne, packed);
+
+					label_place(mixed_scan);
 					ASM(CMPw, position_reg, limit_reg);
 					generate_raw_jump(Jump::Jhs, end);
+					load_off(element_reg, array_reg,
+						static_cast<uint32_t>(offsetof(HashTable, arData)), 8);
+					ASM(ADDx_lsl, element_reg, element_reg, position_reg, 5);
+					load_off(type_reg, element_reg,
+						static_cast<uint32_t>(
+							offsetof(Bucket, val)
+								+ offsetof(zval, u1.type_info)),
+						4);
+					ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+					ASM(CMPwi, type_reg, IS_UNDEF);
+					generate_raw_jump(Jump::Jne, found);
+					ASM(ADDwi, position_reg, position_reg, 1);
+					generate_raw_jump(Jump::jmp, mixed_scan);
+
+					label_place(packed);
+					label_place(packed_scan);
+					ASM(CMPw, position_reg, limit_reg);
+					generate_raw_jump(Jump::Jhs, end);
+					load_off(element_reg, array_reg,
+						static_cast<uint32_t>(offsetof(HashTable, arPacked)), 8);
+					ASM(ADDx_lsl, element_reg, element_reg, position_reg, 4);
+					load_off(type_reg, element_reg,
+						static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+					ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+					ASM(CMPwi, type_reg, IS_UNDEF);
+					generate_raw_jump(Jump::Jne, found);
+					ASM(ADDwi, position_reg, position_reg, 1);
+					generate_raw_jump(Jump::jmp, packed_scan);
+
+					label_place(found);
 
 					if (!layout.destination_scalar_only) {
 						load_off(type_reg, frame_reg,
@@ -9588,11 +9622,6 @@ bool ZendCompilerA64::compile_inst_impl(
 						label_place(destination_valid);
 					}
 
-					load_off(element_reg, array_reg,
-						static_cast<uint32_t>(
-							offsetof(HashTable, arPacked)),
-						8);
-					ASM(ADDx_lsl, element_reg, element_reg, position_reg, 4);
 					load_off(type_reg, element_reg,
 						static_cast<uint32_t>(
 							offsetof(zval, u1.type_info)),
@@ -9601,6 +9630,34 @@ bool ZendCompilerA64::compile_inst_impl(
 					ASM(CMPwi, type_reg, IS_LONG);
 					generate_raw_jump(Jump::Jne, slow);
 					load_off(value_reg, element_reg, 0, 8);
+
+					if (layout.has_key) {
+						load_off(type_reg, frame_reg,
+							layout.key_offset
+								+ static_cast<uint32_t>(
+									offsetof(zval, u1.type_info)),
+							4);
+						ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+						ASM(CMPwi, type_reg, IS_UNDEF);
+						generate_raw_jump(Jump::Jne, slow);
+						load_off(type_reg, array_reg,
+							static_cast<uint32_t>(offsetof(HashTable, u)), 4);
+						ASM(TSTwi, type_reg, HASH_FLAG_PACKED);
+						auto packed_key = text_writer.label_create();
+						auto key_ready = text_writer.label_create();
+						generate_raw_jump(Jump::Jne, packed_key);
+						load_off(key_reg, element_reg,
+							static_cast<uint32_t>(offsetof(Bucket, key)), 8);
+						load_off(key_value_reg, element_reg,
+							static_cast<uint32_t>(offsetof(Bucket, h)), 8);
+						generate_raw_jump(Jump::jmp, key_ready);
+						label_place(packed_key);
+						materialize_constant(uint64_t{0},
+							DarwinConfig::GP_BANK, 8, key_reg);
+						ASM(ORRx, key_value_reg,
+							position_reg, position_reg);
+						label_place(key_ready);
+					}
 
 					/* All guards precede the first observable mutation. */
 					ASM(ADDwi, position_reg, position_reg, 1);
@@ -9617,6 +9674,35 @@ bool ZendCompilerA64::compile_inst_impl(
 							+ static_cast<uint32_t>(
 								offsetof(zval, u1.type_info)),
 						type_reg, 4);
+					if (layout.has_key) {
+						auto string_key = text_writer.label_create();
+						auto key_stored = text_writer.label_create();
+						ASM(CMPxi, key_reg, 0);
+						generate_raw_jump(Jump::Jne, string_key);
+						store_off(frame_reg, layout.key_offset,
+							key_value_reg, 8);
+						materialize_constant(static_cast<uint64_t>(IS_LONG),
+							DarwinConfig::GP_BANK, 4, type_reg);
+						store_off(frame_reg,
+							layout.key_offset
+								+ static_cast<uint32_t>(
+									offsetof(zval, u1.type_info)),
+							type_reg, 4);
+						generate_raw_jump(Jump::jmp, key_stored);
+						label_place(string_key);
+						emit_pointer_addref(
+							ZEND_TPDE_MACHINE_VALUE_STRING_PTR, key_reg);
+						store_off(frame_reg, layout.key_offset, key_reg, 8);
+						emit_machine_zval_type_info(
+							ZEND_TPDE_MACHINE_VALUE_STRING_PTR,
+							key_reg, type_reg);
+						store_off(frame_reg,
+							layout.key_offset
+								+ static_cast<uint32_t>(
+									offsetof(zval, u1.type_info)),
+							type_reg, 4);
+						label_place(key_stored);
+					}
 					materialize_constant(uint64_t{1}, DarwinConfig::GP_BANK,
 						4, type_reg);
 					store_off(AsmReg{AsmReg::FP},
@@ -9637,6 +9723,8 @@ bool ZendCompilerA64::compile_inst_impl(
 					limit.reset();
 					element.reset();
 					value.reset();
+					key.reset();
+					key_value.reset();
 					zend::native::tpde::CCAssignerAppleA64 assigner;
 					CallBuilder builder{*this, assigner};
 					ValuePart frame_argument{DarwinConfig::GP_BANK, 8};
