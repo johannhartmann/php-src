@@ -5858,9 +5858,6 @@ bool ZendCompilerA64::compile_inst_impl(
 					static_cast<uint32_t>(
 						offsetof(zval, u1.type_info)),
 					4);
-				ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-				ASM(CMPwi, type_reg, IS_LONG);
-				generate_raw_jump(Jump::Jne, slow);
 				if (adaptor->machine_kind(node.result)
 						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 					auto result = result_ref(node.result);
@@ -5869,12 +5866,29 @@ bool ZendCompilerA64::compile_inst_impl(
 					auto payload_reg = payload.alloc_reg();
 					auto type_info_reg = type_info.alloc_reg();
 					load_off(payload_reg, element_reg, 0, 8);
-					materialize_constant(
-						static_cast<uint64_t>(IS_LONG),
-						DarwinConfig::GP_BANK, 4, type_info_reg);
+					ASM(ORRw, type_info_reg, type_reg, type_reg);
 					payload.set_modified();
 					type_info.set_modified();
+
+					auto owned = text_writer.label_create();
+					ASM(TSTwi, type_info_reg,
+						IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+					generate_raw_jump(Jump::Jeq, owned);
+					ScratchReg count{this};
+					auto count_reg = count.alloc_gp();
+					load_off(count_reg, payload_reg,
+						static_cast<uint32_t>(
+							offsetof(zend_refcounted_h, refcount)), 4);
+					ASM(ADDwi, count_reg, count_reg, 1);
+					store_off(payload_reg,
+						static_cast<uint32_t>(
+							offsetof(zend_refcounted_h, refcount)),
+						count_reg, 4);
+					label_place(owned);
 				} else {
+					ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+					ASM(CMPwi, type_reg, IS_LONG);
+					generate_raw_jump(Jump::Jne, slow);
 					auto [result_ref, result] =
 						result_ref_single(node.result);
 					auto result_reg = result.alloc_reg();
