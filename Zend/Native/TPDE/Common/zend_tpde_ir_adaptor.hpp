@@ -3803,7 +3803,24 @@ public:
 			const bool boxed_result =
 				representation(canonical)
 					== ZEND_MIR_REPRESENTATION_ZVAL;
+			zend_tpde_long_assign_op lazy_assign{};
+			/* Darwin AArch64 transports boxed values as multi-part PHIs. Keep
+			 * result-less lazy assign-ops and in-place bitwise mutations in the
+			 * frame: their initial loop edge may not define every promoted part. */
+			const bool frame_authoritative_boxed_result =
+				register_boxed_mir_conditions_
+				&& boxed_result
+				&& ((instruction.mutation_lazy_scalar
+						&& zend_tpde_long_assign_op_at(
+							instruction, &lazy_assign)
+						&& !lazy_assign.has_result)
+					|| ((source_opcode == ZEND_BW_OR
+							|| source_opcode == ZEND_BW_AND
+							|| source_opcode == ZEND_BW_XOR)
+						&& instruction.value_operation.op1_storage_id
+							== result_storage));
 			if ((!scalar_result && !boxed_result)
+					|| frame_authoritative_boxed_result
 					|| (scalar_result
 						? machine_value_has_register_definition(canonical)
 						: machine_value_has_result_representation(canonical))) {
@@ -4043,6 +4060,20 @@ public:
 			if (canonical == INVALID_VALUE_REF) {
 				continue;
 			}
+			zend_tpde_long_assign_op lazy_assign{};
+			const bool boxed_lazy_assign =
+				register_boxed_mir_conditions_
+				&& representation(canonical)
+					== ZEND_MIR_REPRESENTATION_ZVAL
+				&& zend_tpde_long_assign_op_at(instruction, &lazy_assign)
+				&& !lazy_assign.has_result;
+			/* Darwin AArch64 supports boxed condition operands, but its current
+			 * multi-part PHI transport cannot preserve a boxed lazy assign-op across
+			 * a cyclic edge. Keep only that mutation frame-authoritative; boxed
+			 * INC/DEC and scalar loop-carried mutations retain register results. */
+			if (boxed_lazy_assign) {
+				continue;
+			}
 			if (representation(canonical)
 						!= ZEND_MIR_REPRESENTATION_ZVAL
 					|| !zend_mir_id_is_valid(
@@ -4057,10 +4088,8 @@ public:
 			const zend_mir_value_id mutation_ssa =
 				instruction.value_operation
 					.op1_definition_ssa_variable_id_plus_one - 1;
-			const int32_t mutation_index =
-				zend_tpde_value_index(
-					plan_,
-					zend_mir_value_from_original_ssa(mutation_ssa));
+			const int32_t mutation_index = zend_tpde_value_index(
+				plan_, zend_mir_value_from_original_ssa(mutation_ssa));
 			const IRValueRef mutation = add_derived_value(
 				ZEND_MIR_REPRESENTATION_ZVAL,
 				ZEND_MIR_SCALAR_TYPE_NONE,
@@ -6035,9 +6064,40 @@ public:
 			}
 			bool source_boxed_result_machine_eligible = false;
 			bool source_dynamic_direct_long = false;
+			bool source_array_constant_key = false;
+			const IRValueRef canonical_source_result =
+				instruction.has_value_operation
+					? source_binding_value_ref(
+						instruction.source_result_binding)
+					: INVALID_VALUE_REF;
 			const int32_t direct_source_consumer =
 				i < source_result_consumer.size()
 					? source_result_consumer[i] : -1;
+			IRValueRef source_array_key = INVALID_VALUE_REF;
+			if (record.opcode == ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
+					&& instruction.has_value_operation) {
+				source_array_key = source_binding_value_ref(
+					instruction.source_op2_binding);
+				if (source_array_key == INVALID_VALUE_REF) {
+					source_array_key = source_operand_value_ref(
+						instruction.value_operation.op2);
+				}
+				uint64_t key_constant_bits = 0;
+				source_array_constant_key =
+					instruction.value_operation.op2.kind
+						== ZEND_MIR_SOURCE_OPERAND_LITERAL
+					|| (source_array_key != INVALID_VALUE_REF
+						&& (known_string_literal(
+							source_array_key, nullptr, nullptr)
+						|| (machine_kind(source_array_key)
+								== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+							&& !zend_mir_id_is_valid(
+								canonical_storage(source_array_key)))
+						|| (exact_type(source_array_key)
+								== ZEND_MIR_SCALAR_TYPE_I64
+							&& constant(source_array_key,
+								&key_constant_bits))));
+			}
 			if (function_mode_ == FunctionMode::ZendEntry
 					&& instruction.has_value_operation
 					&& source_result_used[i] != 0
@@ -6046,12 +6106,6 @@ public:
 				if (record.opcode
 						== ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R) {
 					zend_tpde_array_read layout{};
-					IRValueRef key = source_binding_value_ref(
-						instruction.source_op2_binding);
-					if (key == INVALID_VALUE_REF) {
-						key = source_operand_value_ref(
-							instruction.value_operation.op2);
-					}
 					source_boxed_result_machine_eligible =
 						zend_tpde_array_read_at(instruction, &layout)
 						&& operation_machine_reference(i, &reference)
@@ -6064,22 +6118,24 @@ public:
 							reference->index_value_id)
 						&& reference->scale == sizeof(zval)
 						&& reference->access_width == sizeof(zval)
-						&& key != INVALID_VALUE_REF
-							&& ((exact_type(key)
+						&& (source_array_constant_key
+							|| (source_array_key != INVALID_VALUE_REF
+								&& ((exact_type(source_array_key)
 									== ZEND_MIR_SCALAR_TYPE_I64
-								&& representation(key)
+								&& representation(source_array_key)
 									== ZEND_MIR_REPRESENTATION_I64
-								&& machine_kind(key)
+								&& machine_kind(source_array_key)
 									== ZEND_TPDE_MACHINE_VALUE_I64)
-								|| (machine_kind(key)
+							|| (machine_kind(source_array_key)
 									== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-									&& machine_value_is_register_authoritative(
-										key))
-								|| (representation(key)
+								&& machine_value_is_register_authoritative(
+									source_array_key))
+							|| (representation(source_array_key)
 									== ZEND_MIR_REPRESENTATION_ZVAL
-								&& machine_kind(key)
+								&& machine_kind(source_array_key)
 										== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL))
-						&& machine_value_has_register_definition(key);
+								&& machine_value_has_register_definition(
+									source_array_key)));
 				} else if (record.opcode
 						== ZEND_MIR_OPCODE_OBJECT_FETCH_R) {
 					zend_tpde_object_property_read layout{};
@@ -6102,27 +6158,64 @@ public:
 							instruction, &layout);
 					source_dynamic_direct_long =
 						source_boxed_result_machine_eligible
-						&& layout.direct_long;
+							&& layout.direct_long;
 				}
 			}
+			const bool unknown_reference_result =
+				register_boxed_mir_conditions_
+				&& canonical_source_result != INVALID_VALUE_REF
+				&& machine_kind(canonical_source_result)
+					== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR
+				&& !zend_mir_scalar_type_is_exact(
+					exact_type(canonical_source_result));
+			const bool complete_boxed_source_result =
+				(record.opcode == ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
+					&& source_array_constant_key)
+				|| record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_R
+				|| record.opcode == ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
+				|| record.opcode == ZEND_MIR_OPCODE_VALUE_COUNT;
+			const bool direct_internal_argument_result =
+				unknown_reference_result
+				&& complete_boxed_source_result
+				&& instruction.has_value_operation
+				&& source_result_used[i] != 0
+				&& direct_source_consumer > static_cast<int32_t>(i)
+				&& static_cast<uint32_t>(direct_source_consumer)
+					< plan_->instruction_count
+				&& plan_->instructions[static_cast<uint32_t>(
+					direct_source_consumer)].record.opcode
+					== ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL;
+			const bool register_complete_array_result =
+				register_boxed_mir_conditions_
+				&& record.opcode == ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
+				&& source_array_constant_key
+				&& source_result_used[i] != 0
+				&& source_result_has_direct_consumer(i)
+				&& direct_source_consumer > static_cast<int32_t>(i)
+				&& static_cast<uint32_t>(direct_source_consumer)
+					< plan_->instruction_count
+				&& plan_->instructions[static_cast<uint32_t>(
+					direct_source_consumer)].record.opcode
+					== ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL;
+			const bool boxed_source_result =
+				((record.opcode == ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
+						|| record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_R
+						|| record.opcode == ZEND_MIR_OPCODE_DYNAMIC_FETCH_R)
+					&& source_boxed_result_machine_eligible)
+				|| direct_internal_argument_result
+				|| register_complete_array_result;
 			if (function_mode_ == FunctionMode::ZendEntry
-					&& (record.opcode
-							== ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
-						|| record.opcode
-							== ZEND_MIR_OPCODE_OBJECT_FETCH_R
-						|| record.opcode
-							== ZEND_MIR_OPCODE_DYNAMIC_FETCH_R)
 					&& instruction.has_value_operation
-					&& source_boxed_result_machine_eligible
-					&& !machine_value_has_result_representation(result)) {
+					&& boxed_source_result
+					&& (!machine_value_has_result_representation(result)
+						|| unknown_reference_result
+						|| register_complete_array_result)) {
 				auto &value_overrides = active_value_overrides();
 				auto &source_overrides =
 					active_source_ssa_overrides();
 				auto &instruction_results =
 					active_instruction_results();
-				const IRValueRef canonical_result =
-					source_binding_value_ref(
-						instruction.source_result_binding);
+				const IRValueRef canonical_result = canonical_source_result;
 				const uint32_t canonical_index =
 					static_cast<uint32_t>(canonical_result);
 				const zend_mir_value_id result_ssa =
@@ -6141,11 +6234,19 @@ public:
 				/*
 				 * Source value operations retain a void ZNMIR record because
 				 * their full PHP semantics live in the executable descriptor.
-				 * The successful fast path nevertheless produces a real zval.
-				 * Keep its payload and type-info as a two-part TPDE value and
-				 * join it with the cold helper result at the continuation PHI.
+				 * The successful fast path, or its existing cold continuation,
+				 * nevertheless produces a real zval. Keep its payload and
+				 * type-info as a two-part TPDE value and join it with the cold
+				 * helper result at the continuation PHI.
+				 *
+				 * On AArch64 an unknown source result may otherwise inherit the
+				 * value model's one-part reference-pointer carrier. That carrier
+				 * cannot snapshot the complete value when an optimized op array
+				 * reuses the result TMP before a direct internal call executes.
 				 */
 				result = source_dynamic_direct_long
+						&& !unknown_reference_result
+						&& !register_complete_array_result
 					? add_derived_value(
 						ZEND_MIR_REPRESENTATION_I64,
 						ZEND_MIR_SCALAR_TYPE_I64,
@@ -7313,6 +7414,8 @@ public:
 							plan_->instructions[candidate_index];
 						if (candidate.has_value_operation
 								&& ((candidate.record.opcode
+										== ZEND_MIR_OPCODE_VALUE_BINARY_OP
+									|| candidate.record.opcode
 										== ZEND_MIR_OPCODE_VALUE_ASSIGN_OP
 									|| candidate.record.opcode
 										== ZEND_MIR_OPCODE_VALUE_INCDEC
@@ -7338,8 +7441,8 @@ public:
 					valid_ = false;
 				}
 				if (instruction.value_operation.source_opcode == ZEND_RETURN
-						&& returned != INVALID_VALUE_REF
-						&& (function_mode_ == FunctionMode::TypedBody
+					&& returned != INVALID_VALUE_REF
+					&& (function_mode_ == FunctionMode::TypedBody
 							|| !immediate_call_result
 							|| immediate_register_call_result)
 						&& !stale_canonical_return
@@ -8123,13 +8226,22 @@ public:
 						canonical_storage(canonical_mutation_result))
 					&& canonical_storage(canonical_mutation_result)
 						== instruction.value_operation.op1_storage_id;
+				zend_tpde_long_assign_op lazy_assign{};
+				const bool frame_authoritative_boxed_assign =
+					register_boxed_mir_conditions_
+					&& instruction.mutation_lazy_scalar
+					&& boxed_mutation_result
+					&& zend_tpde_long_assign_op_at(
+						instruction, &lazy_assign)
+					&& !lazy_assign.has_result;
 				const bool register_mutation_result =
-					scalar_mutation_result || boxed_mutation_result;
+					!frame_authoritative_boxed_assign
+					&& (scalar_mutation_result || boxed_mutation_result);
 				IRValueRef mutation_result =
 					guarded_mutation_results[i] != INVALID_VALUE_REF
 						? guarded_mutation_results[i]
 						: canonical_mutation_result;
-				if (boxed_mutation_result
+				if (register_mutation_result && boxed_mutation_result
 						&& guarded_mutation_results[i]
 							== INVALID_VALUE_REF) {
 					const uint32_t mutation_ssa =
@@ -8164,7 +8276,7 @@ public:
 							mutation_result;
 						active_instruction_results()[i] = mutation_result;
 					}
-				} else if (scalar_mutation_result
+				} else if (register_mutation_result && scalar_mutation_result
 						&& i < active_instruction_results().size()) {
 					active_instruction_results()[i] = mutation_result;
 				}
