@@ -6183,6 +6183,23 @@ bool ZendCompilerA64::compile_inst_impl(
 		if (!node.has_result) {
 			return branch_to_guarded_cold();
 		}
+		const bool register_key = !node.operands.empty()
+			&& ((adaptor->exact_type(node.operands[0])
+						== ZEND_MIR_SCALAR_TYPE_I64
+					&& adaptor->representation(node.operands[0])
+						== ZEND_MIR_REPRESENTATION_I64
+					&& adaptor->machine_kind(node.operands[0])
+						== ZEND_TPDE_MACHINE_VALUE_I64)
+				|| adaptor->machine_kind(node.operands[0])
+					== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+				|| (adaptor->representation(node.operands[0])
+						== ZEND_MIR_REPRESENTATION_ZVAL
+					&& adaptor->machine_kind(node.operands[0])
+						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL));
+		const bool register_receiver = register_key
+			&& node.operands.size() > 1
+			&& adaptor->machine_kind(node.operands[1])
+				== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR;
 		if (node.kind == Adaptor::InstKind::GuardedFast) {
 			const auto guarded_successors =
 				adaptor->block_succs(IRBlockRef{node.control_block});
@@ -6234,30 +6251,89 @@ bool ZendCompilerA64::compile_inst_impl(
 		auto key_kind_reg = key_kind.alloc_gp();
 		auto decision_reg = decision.alloc_gp();
 
-		load_off(type_reg, frame_reg,
-			layout.container_offset
-				+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
-			4);
-		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-		ASM(CMPwi, type_reg, IS_ARRAY);
-		generate_raw_jump(Jump::Jne, slow);
-		load_off(array_reg, frame_reg, layout.container_offset, 8);
+		if (register_receiver) {
+			auto [receiver_ref, receiver] =
+				val_ref_single(node.operands[1]);
+			auto receiver_reg = receiver.load_to_reg();
+			ASM(ORRx, array_reg, receiver_reg, receiver_reg);
+		} else {
+			load_off(type_reg, frame_reg,
+				layout.container_offset
+					+ static_cast<uint32_t>(
+						offsetof(zval, u1.type_info)),
+				4);
+			ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+			ASM(CMPwi, type_reg, IS_ARRAY);
+			generate_raw_jump(Jump::Jne, slow);
+			load_off(array_reg, frame_reg, layout.container_offset, 8);
+		}
 
-		load_off(type_reg, frame_reg,
-			layout.key_offset
-				+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
-			4);
-		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-		ASM(CMPwi, type_reg, IS_LONG);
-		generate_raw_jump(Jump::Jeq, key_long);
-		ASM(CMPwi, type_reg, IS_STRING);
-		generate_raw_jump(Jump::Jne, slow);
-		load_off(key_reg, frame_reg, layout.key_offset, 8);
-		materialize_constant(
-			1, DarwinConfig::GP_BANK, 4, key_kind_reg);
-		generate_raw_jump(Jump::jmp, key_ready);
+		if (register_key) {
+			if (adaptor->machine_kind(node.operands[0])
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+				auto key_value = val_ref(node.operands[0]);
+				const ValueParts parts = val_parts(node.operands[0]);
+				bool have_payload = false;
+				bool have_type_info = false;
+				for (uint32_t part = 0; part < parts.count(); ++part) {
+					auto value = key_value.part(part);
+					auto value_reg = value.load_to_reg();
+					switch (parts.representation.parts[part].semantic_role) {
+						case ZEND_TPDE_MACHINE_PART_PAYLOAD:
+							ASM(ORRx, key_reg, value_reg, value_reg);
+							have_payload = true;
+							break;
+						case ZEND_TPDE_MACHINE_PART_TYPE_INFO:
+							ASM(ORRw, type_reg, value_reg, value_reg);
+							have_type_info = true;
+							break;
+						default:
+							return false;
+					}
+				}
+				if (!have_payload || !have_type_info) {
+					return false;
+				}
+				ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+				ASM(CMPwi, type_reg, IS_LONG);
+				generate_raw_jump(Jump::Jeq, key_long);
+				ASM(CMPwi, type_reg, IS_STRING);
+				generate_raw_jump(Jump::Jne, slow);
+				materialize_constant(
+					1, DarwinConfig::GP_BANK, 4, key_kind_reg);
+				generate_raw_jump(Jump::jmp, key_ready);
+			} else {
+				auto [source_key_ref, source_key] =
+					val_ref_single(node.operands[0]);
+				auto source_key_reg = source_key.load_to_reg();
+				ASM(ORRx, key_reg, source_key_reg, source_key_reg);
+				materialize_constant(
+					adaptor->machine_kind(node.operands[0])
+							== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+						? uint64_t{1} : uint64_t{0},
+					DarwinConfig::GP_BANK, 4, key_kind_reg);
+				generate_raw_jump(Jump::jmp, key_ready);
+			}
+		} else {
+			load_off(type_reg, frame_reg,
+				layout.key_offset
+					+ static_cast<uint32_t>(
+						offsetof(zval, u1.type_info)),
+				4);
+			ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+			ASM(CMPwi, type_reg, IS_LONG);
+			generate_raw_jump(Jump::Jeq, key_long);
+			ASM(CMPwi, type_reg, IS_STRING);
+			generate_raw_jump(Jump::Jne, slow);
+			load_off(key_reg, frame_reg, layout.key_offset, 8);
+			materialize_constant(
+				1, DarwinConfig::GP_BANK, 4, key_kind_reg);
+			generate_raw_jump(Jump::jmp, key_ready);
+		}
 		label_place(key_long);
-		load_off(key_reg, frame_reg, layout.key_offset, 8);
+		if (!register_key) {
+			load_off(key_reg, frame_reg, layout.key_offset, 8);
+		}
 		materialize_constant(
 			uint64_t{0}, DarwinConfig::GP_BANK, 4, key_kind_reg);
 		label_place(key_ready);
