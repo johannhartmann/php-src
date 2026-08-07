@@ -5743,13 +5743,48 @@ bool ZendCompilerA64::compile_inst_impl(
 				const bool register_receiver =
 					node.operands.size() > 1
 					&& node.machine_reference_operand_index != 1
-					&& adaptor->machine_kind(node.operands[1])
-						== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR;
+					&& (adaptor->machine_kind(node.operands[1])
+							== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+						|| (adaptor->representation(node.operands[1])
+								== ZEND_MIR_REPRESENTATION_ZVAL
+							&& adaptor->machine_kind(node.operands[1])
+								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL));
 				if (register_receiver) {
-					auto [receiver_ref, receiver] =
-						val_ref_single(node.operands[1]);
-					auto receiver_reg = receiver.load_to_reg();
-					ASM(ORRx, array_reg, receiver_reg, receiver_reg);
+					if (adaptor->machine_kind(node.operands[1])
+							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+						auto receiver = val_ref(node.operands[1]);
+						const ValueParts parts = val_parts(node.operands[1]);
+						bool have_payload = false;
+						bool have_type_info = false;
+						for (uint32_t part = 0; part < parts.count(); ++part) {
+							auto value = receiver.part(part);
+							auto value_reg = value.load_to_reg();
+							switch (parts.representation.parts[part]
+									.semantic_role) {
+								case ZEND_TPDE_MACHINE_PART_PAYLOAD:
+									ASM(ORRx, array_reg, value_reg, value_reg);
+									have_payload = true;
+									break;
+								case ZEND_TPDE_MACHINE_PART_TYPE_INFO:
+									ASM(ORRw, type_reg, value_reg, value_reg);
+									have_type_info = true;
+									break;
+								default:
+									return false;
+							}
+						}
+						if (!have_payload || !have_type_info) {
+							return false;
+						}
+						ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+						ASM(CMPwi, type_reg, IS_ARRAY);
+						generate_raw_jump(Jump::Jne, slow);
+					} else {
+						auto [receiver_ref, receiver] =
+							val_ref_single(node.operands[1]);
+						auto receiver_reg = receiver.load_to_reg();
+						ASM(ORRx, array_reg, receiver_reg, receiver_reg);
+					}
 				} else if (layout.container_literal) {
 					if (node.machine_reference_operand_index
 							>= node.operands.size()) {
@@ -6198,8 +6233,12 @@ bool ZendCompilerA64::compile_inst_impl(
 						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL));
 		const bool register_receiver = register_key
 			&& node.operands.size() > 1
-			&& adaptor->machine_kind(node.operands[1])
-				== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR;
+			&& (adaptor->machine_kind(node.operands[1])
+					== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+				|| (adaptor->representation(node.operands[1])
+						== ZEND_MIR_REPRESENTATION_ZVAL
+					&& adaptor->machine_kind(node.operands[1])
+						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL));
 		if (node.kind == Adaptor::InstKind::GuardedFast) {
 			const auto guarded_successors =
 				adaptor->block_succs(IRBlockRef{node.control_block});
@@ -6252,10 +6291,40 @@ bool ZendCompilerA64::compile_inst_impl(
 		auto decision_reg = decision.alloc_gp();
 
 		if (register_receiver) {
-			auto [receiver_ref, receiver] =
-				val_ref_single(node.operands[1]);
-			auto receiver_reg = receiver.load_to_reg();
-			ASM(ORRx, array_reg, receiver_reg, receiver_reg);
+			if (adaptor->machine_kind(node.operands[1])
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+				auto receiver = val_ref(node.operands[1]);
+				const ValueParts parts = val_parts(node.operands[1]);
+				bool have_payload = false;
+				bool have_type_info = false;
+				for (uint32_t part = 0; part < parts.count(); ++part) {
+					auto value = receiver.part(part);
+					auto value_reg = value.load_to_reg();
+					switch (parts.representation.parts[part].semantic_role) {
+						case ZEND_TPDE_MACHINE_PART_PAYLOAD:
+							ASM(ORRx, array_reg, value_reg, value_reg);
+							have_payload = true;
+							break;
+						case ZEND_TPDE_MACHINE_PART_TYPE_INFO:
+							ASM(ORRw, type_reg, value_reg, value_reg);
+							have_type_info = true;
+							break;
+						default:
+							return false;
+					}
+				}
+				if (!have_payload || !have_type_info) {
+					return false;
+				}
+				ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+				ASM(CMPwi, type_reg, IS_ARRAY);
+				generate_raw_jump(Jump::Jne, slow);
+			} else {
+				auto [receiver_ref, receiver] =
+					val_ref_single(node.operands[1]);
+				auto receiver_reg = receiver.load_to_reg();
+				ASM(ORRx, array_reg, receiver_reg, receiver_reg);
+			}
 		} else {
 			load_off(type_reg, frame_reg,
 				layout.container_offset
