@@ -662,6 +662,8 @@ struct zend_tpde_slot_isset_empty {
 struct zend_tpde_packed_iterator_fetch {
 	uint32_t holder_offset;
 	uint32_t destination_offset;
+	uint32_t key_offset;
+	bool has_key;
 	bool destination_scalar_only;
 };
 
@@ -1406,17 +1408,21 @@ static inline bool zend_tpde_slot_isset_empty_at(
 
 static inline bool zend_tpde_packed_iterator_fetch_at(
 	const zend_tpde_instruction &instruction,
-	zend_tpde_packed_iterator_fetch *out)
+	zend_tpde_packed_iterator_fetch *out,
+	bool allow_key = false)
 {
 	const zend_mir_executable_value_ref &operation =
 		instruction.value_operation;
 	uint64_t holder_offset;
 	uint64_t destination_offset;
+	uint64_t key_offset = 0;
+	const bool has_key = operation.result.kind
+		!= ZEND_MIR_SOURCE_OPERAND_UNUSED;
 
 	/*
-	 * This layout deliberately covers only the value-only, by-value Zend
-	 * foreach shape.  Key assignment, references, objects, mixed arrays and
-	 * sparse packed arrays retain the complete runtime primitive.
+	 * The default layout deliberately covers only the value-only, by-value
+	 * Zend foreach shape.  Targets may opt into the key temporary after they
+	 * implement the ownership rules for string keys.
 	 */
 	if (out == nullptr || !instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_ITERATOR_BRANCH
@@ -1428,11 +1434,27 @@ static inline bool zend_tpde_packed_iterator_fetch_at(
 			|| (operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
 				&& operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
 			|| operation.op2.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
-			|| operation.result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
+			|| (has_key
+				&& (!allow_key
+					|| (operation.result.kind
+							!= ZEND_MIR_SOURCE_OPERAND_SLOT
+						&& operation.result.kind
+							!= ZEND_MIR_SOURCE_OPERAND_SSA)
+					|| (operation.result.slot_kind
+							!= ZEND_MIR_SOURCE_SLOT_TMP
+						&& operation.result.slot_kind
+							!= ZEND_MIR_SOURCE_SLOT_VAR)))
 			|| operation.op1_storage_id == ZEND_MIR_ID_INVALID
 			|| operation.op2_storage_id == ZEND_MIR_ID_INVALID
-			|| operation.result_storage_id != ZEND_MIR_ID_INVALID
+			|| (has_key
+				? operation.result_storage_id == ZEND_MIR_ID_INVALID
+				: operation.result_storage_id != ZEND_MIR_ID_INVALID)
 			|| operation.op1_storage_id == operation.op2_storage_id) {
+		return false;
+	}
+	if (has_key
+			&& (operation.result_storage_id == operation.op1_storage_id
+				|| operation.result_storage_id == operation.op2_storage_id)) {
 		return false;
 	}
 	holder_offset =
@@ -1441,11 +1463,19 @@ static inline bool zend_tpde_packed_iterator_fetch_at(
 	destination_offset =
 		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op2_storage_id)
 			* sizeof(zval);
-	if (holder_offset > UINT32_MAX || destination_offset > UINT32_MAX) {
+	if (has_key) {
+		key_offset =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
+				* sizeof(zval);
+	}
+	if (holder_offset > UINT32_MAX || destination_offset > UINT32_MAX
+			|| key_offset > UINT32_MAX) {
 		return false;
 	}
 	out->holder_offset = static_cast<uint32_t>(holder_offset);
 	out->destination_offset = static_cast<uint32_t>(destination_offset);
+	out->key_offset = static_cast<uint32_t>(key_offset);
+	out->has_key = has_key;
 	out->destination_scalar_only =
 		instruction.source_op2_canonical_scalar_only;
 	return true;
