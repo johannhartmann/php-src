@@ -4258,6 +4258,7 @@ static void zend_native_call_direct_release(
 	bool setup_record = activation->setup_record;
 #if defined(__APPLE__) && defined(__aarch64__)
 	zval exceptional_internal_return;
+	zval *internal_return_value = NULL;
 	bool has_exceptional_internal_return = false;
 
 	ZVAL_UNDEF(&exceptional_internal_return);
@@ -4266,15 +4267,19 @@ static void zend_native_call_direct_release(
 	ZEND_ASSERT(zend_native_active_direct_call == activation);
 #if defined(__APPLE__) && defined(__aarch64__)
 	/* The Darwin AArch64 universal call path releases completed internal calls
-	 * directly from generated code.  An internal handler may initialize its
-	 * result before throwing; detach that value before the call frame is retired
-	 * and destroy it only after the caller and activation chain are restored. */
-	if (activation->internal_target && EG(exception) != NULL
+	 * directly from generated code.  The handler may initialize its result
+	 * before throwing, and call-owned cleanup may throw after it returns.  Keep
+	 * the result address across release, detach it whenever an exception is
+	 * observed, and destroy it only after the caller chain is restored. */
+	if (activation->internal_target
 			&& !activation->uses_discarded_return && callee != NULL
 			&& callee->return_value != NULL
 			&& !Z_ISUNDEF_P(callee->return_value)) {
-		ZVAL_COPY_VALUE(&exceptional_internal_return, callee->return_value);
-		ZVAL_UNDEF(callee->return_value);
+		internal_return_value = callee->return_value;
+	}
+	if (EG(exception) != NULL && internal_return_value != NULL) {
+		ZVAL_COPY_VALUE(&exceptional_internal_return, internal_return_value);
+		ZVAL_UNDEF(internal_return_value);
 		has_exceptional_internal_return = true;
 	}
 #endif
@@ -4331,6 +4336,13 @@ static void zend_native_call_direct_release(
 	 * caller, so an unwind cannot skip live callee/setup storage. */
 	zend_native_call_release_snapshotted_target(&target_release);
 #if defined(__APPLE__) && defined(__aarch64__)
+	if (!has_exceptional_internal_return && EG(exception) != NULL
+			&& internal_return_value != NULL
+			&& !Z_ISUNDEF_P(internal_return_value)) {
+		ZVAL_COPY_VALUE(&exceptional_internal_return, internal_return_value);
+		ZVAL_UNDEF(internal_return_value);
+		has_exceptional_internal_return = true;
+	}
 	if (has_exceptional_internal_return) {
 		zval_ptr_dtor(&exceptional_internal_return);
 	}

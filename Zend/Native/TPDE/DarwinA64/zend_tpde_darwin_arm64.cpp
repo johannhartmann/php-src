@@ -4813,6 +4813,43 @@ bool ZendCompilerA64::compile_inst_impl(
 		return_builder.add(std::move(status), ::tpde::CCAssignment{});
 		return_builder.ret_local_path();
 		label_place(continued);
+		/*
+		 * Some canonical W12 value operations, such as COUNT, execute only
+		 * through this helper path. When the adaptor selected a boxed machine
+		 * result for an optimized direct-call argument, snapshot the complete
+		 * result before OPcache reuses the temporary frame slot.
+		 */
+		if (node.kind != Adaptor::InstKind::GuardedCold && node.has_result
+				&& adaptor->machine_kind(node.result)
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+			const zend_mir_storage_id storage = node.mutation_result
+				? operation.op1_storage_id : operation.result_storage_id;
+			const uint64_t frame_offset =
+				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+			if (!zend_mir_id_is_valid(storage)
+					|| frame_offset > UINT32_MAX - sizeof(zval)) {
+				return false;
+			}
+			auto result = result_ref(node.result);
+			const ValueParts parts = val_parts(node.result);
+			for (uint32_t part = 0; part < parts.count(); ++part) {
+				auto value = result.part(part);
+				auto value_reg = value.alloc_reg();
+				const zend_tpde_machine_part_role role =
+					parts.representation.parts[part].semantic_role;
+				if (role == ZEND_TPDE_MACHINE_PART_PAYLOAD) {
+					load_off(value_reg, canonical_frame_register(),
+						static_cast<uint32_t>(frame_offset), 8);
+				} else if (role == ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
+					load_off(value_reg, canonical_frame_register(),
+						static_cast<uint32_t>(frame_offset
+							+ offsetof(zval, u1.type_info)), 4);
+				} else {
+					return false;
+				}
+				value.set_modified();
+			}
+		}
 		return true;
 	};
 	auto execute_value_operation = [&](ValuePart *frame_argument = nullptr) {
@@ -8814,6 +8851,14 @@ bool ZendCompilerA64::compile_inst_impl(
 						|| mir.source_opline_index == UINT32_MAX) {
 					return false;
 				}
+				/*
+				 * The interrupt poll contains a target-local fast/slow branch which
+				 * is invisible to TPDE's IR CFG. The slow-path call invalidates
+				 * caller-saved assignments in the shared compile-time state. Spill
+				 * live values before the branch so the fast path reaches the join
+				 * with the same canonical copies available for later reloads.
+				 */
+				const auto spilled = spill_before_branch(true);
 				auto done = text_writer.label_create();
 				auto slow = text_writer.label_create();
 				auto [context_ref, context] =
@@ -8844,6 +8889,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				builder.call(runtime_symbol(ZEND_NATIVE_HELPER_INTERRUPT_POLL));
 				label_place(done);
+				release_spilled_regs(spilled);
 				return true;
 			}
 			[[fallthrough]];

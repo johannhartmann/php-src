@@ -1370,6 +1370,10 @@ zend_native_status zend_native_internal_call_invoke_finish(
 	} else if ((ZEND_CALL_INFO(state->call) & ZEND_CALL_CLOSURE) != 0) {
 		OBJ_RELEASE(ZEND_CLOSURE_OBJECT(state->call->func));
 	}
+	/* Argument and receiver cleanup may invoke user destructors. */
+	if (state->status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
+		state->status = ZEND_NATIVE_EXCEPTION;
+	}
 	if ((state->call->func->common.fn_flags
 			& ZEND_ACC_CALL_VIA_TRAMPOLINE) != 0) {
 		zend_free_trampoline(state->call->func);
@@ -1499,6 +1503,10 @@ zend_native_status zend_native_internal_call_execute_top(
 	} else if ((ZEND_CALL_INFO(state->call) & ZEND_CALL_CLOSURE) != 0) {
 		OBJ_RELEASE(ZEND_CLOSURE_OBJECT(state->call->func));
 	}
+	/* Argument and receiver cleanup may invoke user destructors. */
+	if (state->status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
+		state->status = ZEND_NATIVE_EXCEPTION;
+	}
 	if (state->status != ZEND_NATIVE_RETURNED
 			&& !Z_ISUNDEF_P(state->return_value)) {
 		zval_ptr_dtor(state->return_value);
@@ -1507,6 +1515,10 @@ zend_native_status zend_native_internal_call_execute_top(
 	if (state->uses_discarded_return
 			&& !Z_ISUNDEF(state->discarded_return)) {
 		zval_ptr_dtor(&state->discarded_return);
+		if (state->status == ZEND_NATIVE_RETURNED
+				&& EG(exception) != NULL) {
+			state->status = ZEND_NATIVE_EXCEPTION;
+		}
 	}
 	switch (state->status) {
 		case ZEND_NATIVE_RETURNED:

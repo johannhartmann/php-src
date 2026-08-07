@@ -92,8 +92,8 @@ void zend_native_compiler_deactivate_session(
 	zend_native_compiler *compiler);
 
 /* The executor owns the storage classification for published OPcache
- * bundles. Dynamic execution uses it to avoid mutating shared op arrays. */
-bool zend_native_executor_op_array_is_persistent(
+ * bundles. Dynamic execution uses it to avoid mutating cache-owned op arrays. */
+bool zend_native_executor_op_array_is_cache_owned(
 	const zend_op_array *op_array);
 
 /*
