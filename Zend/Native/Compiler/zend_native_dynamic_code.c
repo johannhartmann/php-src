@@ -514,7 +514,7 @@ zend_native_status zend_native_execute_include_or_eval(
 	}
 
 	new_op_array->scope = execute_data->func->op_array.scope;
-	if (!zend_native_executor_op_array_is_persistent(new_op_array)) {
+	if (!zend_native_executor_op_array_is_cache_owned(new_op_array)) {
 		zend_optimize_runtime_op_array(
 			new_op_array, extended_value == ZEND_EVAL);
 	}

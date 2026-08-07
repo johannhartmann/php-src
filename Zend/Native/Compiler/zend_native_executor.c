@@ -390,14 +390,15 @@ static zend_native_opcache_bundle *zend_native_executor_bundle(
 		? bundle : NULL;
 }
 
-bool zend_native_executor_op_array_is_persistent(
+bool zend_native_executor_op_array_is_cache_owned(
 	const zend_op_array *op_array)
 {
 	zend_native_opcache_bundle *bundle =
 		zend_native_executor_bundle(op_array);
 
 	return bundle != NULL
-		&& bundle->storage == ZEND_NATIVE_OPCACHE_BUNDLE_PERSISTENT;
+		&& (bundle->storage == ZEND_NATIVE_OPCACHE_BUNDLE_PERSISTENT
+			|| bundle->storage == ZEND_NATIVE_OPCACHE_BUNDLE_REQUEST_ARENA);
 }
 
 static uint32_t zend_native_executor_bundle_flags(void)
@@ -2575,6 +2576,22 @@ complete:
 		EG(current_execute_data) = previous;
 		zend_bailout();
 	}
+#if defined(__APPLE__) && defined(__aarch64__)
+	if (EG(exception) != NULL
+			&& zend_native_runtime_source_probe_enabled()
+			&& EG(opline_before_exception) != NULL
+			&& EG(opline_before_exception)
+				>= execute_data->func->op_array.opcodes
+			&& EG(opline_before_exception)
+				< execute_data->func->op_array.opcodes
+				+ execute_data->func->op_array.last) {
+		uint32_t source_position = (uint32_t) (EG(opline_before_exception)
+			- execute_data->func->op_array.opcodes);
+
+		EG(current_execute_data) = execute_data;
+		zend_native_runtime_source_probe(source_position);
+	}
+#endif
 	if (status == ZEND_NATIVE_EXCEPTION && EG(exception) == NULL) {
 		zend_throw_error(NULL, "%s",
 			diagnostic.message[0] != '\0'

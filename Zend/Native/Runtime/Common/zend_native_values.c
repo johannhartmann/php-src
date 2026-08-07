@@ -205,7 +205,6 @@ static zval *zend_native_value_read_r_explicit(
 	if (value != NULL && operand_type == IS_CV
 			&& UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
 		uint32_t variable_index = EX_VAR_TO_NUM(operand.var);
-
 		if (variable_index >= execute_data->func->op_array.last_var) {
 			return NULL;
 		}
@@ -1098,7 +1097,7 @@ zend_native_status zend_native_value_match_error(
 	if (!zend_native_value_init_explicit_operation(
 			execute_data, op1, op2, result_operand, extended_value,
 			source_opcode, source_position_id, ZEND_MATCH_ERROR, &operation)
-			|| (value = zend_native_value_read_r_explicit(
+			|| (value = zend_native_value_read_explicit(
 				execute_data, &operation,
 				operation.op1_type, operation.op1)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
@@ -3599,6 +3598,7 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 	zval *value;
 	zend_reference *container_reference = NULL;
 	zend_object *protected_object = NULL;
+	zend_object *container_warning_exception = NULL;
 	zval protected_container;
 	zend_long string_offset;
 	bool table_valid = true;
@@ -3664,6 +3664,7 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 			}
 			zend_error(E_WARNING, "Undefined variable $%s",
 				ZSTR_VAL(execute_data->func->op_array.vars[variable_index]));
+			container_warning_exception = EG(exception);
 		} else if (zend_native_value_read_r_explicit(execute_data, opline,
 				opline->op1_type, opline->op1) == NULL
 				|| EG(exception) != NULL) {
@@ -3683,7 +3684,9 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 		: zend_native_value_read_explicit(
 			execute_data, opline, opline->op2_type, opline->op2);
 	if (opline->op2_type != IS_UNUSED
-			&& (offset == NULL || EG(exception) != NULL)) {
+			&& (offset == NULL
+				|| (EG(exception) != NULL
+					&& EG(exception) != container_warning_exception))) {
 		if (protected_object != NULL) {
 			if (GC_DELREF(protected_object) == 0) {
 				zend_objects_store_del(protected_object);
@@ -4358,15 +4361,48 @@ static zend_native_status zend_native_value_assign_dim_impl(
 	SEPARATE_ARRAY(container);
 	table = Z_ARRVAL_P(container);
 	if (opline->op2_type == IS_UNUSED && !compound) {
+		zval *source_slot = NULL;
+		bool protect_table = false;
+		bool table_owned = true;
+
 		/* ASSIGN_DIM [] transfers the RHS directly into the new bucket. An
 		 * intermediate EG(uninitialized_zval) bucket can shallow-copy a typed
 		 * reference and gives zend_assign_to_variable_ex() false authority. */
+		if (opline->auxiliary_type == IS_CV) {
+			source_slot = zend_native_value_read_explicit(
+				execute_data, opline,
+				opline->auxiliary_type, opline->auxiliary);
+			protect_table = source_slot != NULL
+				&& Z_TYPE_P(source_slot) == IS_UNDEF
+				&& !(GC_FLAGS(table) & IS_ARRAY_IMMUTABLE);
+		}
+		if (protect_table) {
+			/* The undefined-CV warning may run user code that replaces the
+			 * destination.  Keep its former array alive until the warning has
+			 * completed, then only append if the destination still owns it. */
+			GC_ADDREF(table);
+		}
 		if (!zend_native_value_take_explicit(
 				execute_data, opline, opline->auxiliary_type,
 				opline->auxiliary, false, &source)) {
+			if (protect_table && GC_DELREF(table) == 0) {
+				zend_array_destroy(table);
+			}
 			zend_native_value_consume_operand(execute_data,
 				opline->op1_type, opline->op1, NULL);
 			return ZEND_NATIVE_EXCEPTION;
+		}
+		if (protect_table) {
+			table_owned = Z_TYPE_P(container) == IS_ARRAY
+				&& Z_ARRVAL_P(container) == table;
+			if (GC_DELREF(table) == 0) {
+				zend_array_destroy(table);
+				table_owned = false;
+			}
+			if (!table_owned) {
+				zval_ptr_dtor_nogc(&source);
+				goto assign_dim_error_without_auxiliary;
+			}
 		}
 		target = zend_hash_next_index_insert(table, &source);
 		if (UNEXPECTED(target == NULL)) {
