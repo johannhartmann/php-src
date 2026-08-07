@@ -596,6 +596,7 @@ struct zend_tpde_array_isset {
 	uint32_t container_offset;
 	uint32_t key_offset;
 	uint32_t result_offset;
+	bool is_empty;
 };
 
 struct zend_tpde_string_length {
@@ -920,7 +921,8 @@ static inline bool zend_tpde_packed_array_append_at(
 
 static inline bool zend_tpde_array_isset_at(
 	const zend_tpde_instruction &instruction,
-	zend_tpde_array_isset *out)
+	zend_tpde_array_isset *out,
+	bool allow_empty = false)
 {
 	const zend_mir_executable_value_ref &operation =
 		instruction.value_operation;
@@ -932,7 +934,8 @@ static inline bool zend_tpde_array_isset_at(
 			|| operation.opcode
 				!= ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM
 			|| operation.source_opcode != ZEND_ISSET_ISEMPTY_DIM_OBJ
-			|| (operation.extended_value & ZEND_ISEMPTY) != 0
+			|| (!allow_empty
+				&& (operation.extended_value & ZEND_ISEMPTY) != 0)
 			|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
 			|| operation.op2.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
 			|| operation.op1_storage_id == ZEND_MIR_ID_INVALID
@@ -959,6 +962,7 @@ static inline bool zend_tpde_array_isset_at(
 	out->container_offset = static_cast<uint32_t>(container_offset);
 	out->key_offset = static_cast<uint32_t>(key_offset);
 	out->result_offset = static_cast<uint32_t>(result_offset);
+	out->is_empty = (operation.extended_value & ZEND_ISEMPTY) != 0;
 	return true;
 }
 
