@@ -2136,8 +2136,8 @@ public:
 					returned_index - MIR_VALUE_BASE];
 			}
 			if (!returned_type.valid
-					|| saw_return
-						&& !result_type.same_shape(returned_type)) {
+					|| (saw_return
+						&& !result_type.same_shape(returned_type))) {
 				return false;
 			}
 			result_type = returned_type;
@@ -4059,6 +4059,77 @@ public:
 				break;
 			}
 		}
+		/*
+		 * Binary and branch results are selected after the first assignment pass.
+		 * Revisit assignments whose source only became register-authoritative in
+		 * those passes so later PHI-edge copies retain that machine definition.
+		 */
+		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
+			const zend_tpde_instruction &instruction =
+				plan_->instructions[i];
+			const zend_mir_instruction_record record =
+				instruction_record_at(i);
+			if (record.opcode != ZEND_MIR_OPCODE_VALUE_ASSIGN
+					|| !instruction.has_value_operation
+					|| instruction.value_operation.op1.slot_kind
+						!= ZEND_MIR_SOURCE_SLOT_CV
+					|| guarded_cold_blocks[i] == UINT32_MAX
+					|| register_assignment_results[i]
+						!= INVALID_VALUE_REF) {
+				continue;
+			}
+			const IRValueRef assigned = source_binding_value_ref(
+				instruction.source_op2_binding);
+			const uint32_t definition_plus_one =
+				instruction.value_operation
+					.op1_definition_ssa_variable_id_plus_one;
+			if (assigned == INVALID_VALUE_REF
+					|| definition_plus_one == 0
+					|| !machine_value_is_register_authoritative(assigned)
+					|| !machine_value_has_register_definition(assigned)
+					|| !zend_tpde_machine_value_is_register_authoritative(
+						machine_kind(assigned))) {
+				continue;
+			}
+			const uint32_t definition = definition_plus_one - 1;
+			auto &source_overrides = active_source_ssa_overrides();
+			const int32_t value_index = zend_tpde_value_index(
+				plan_, zend_mir_value_from_original_ssa(definition));
+			if (definition >= source_overrides.size()
+					|| value_index < 0
+					|| static_cast<uint32_t>(value_index)
+						>= active_value_overrides().size()) {
+				valid_ = false;
+				continue;
+			}
+			IRValueRef assignment_result = assigned;
+			if (machine_pointer_kind(machine_kind(assigned))) {
+				uint64_t literal_length = 0;
+				bool literal_truthy = false;
+				const bool string_literal = known_string_literal(
+					assigned, &literal_length, &literal_truthy);
+				const uint8_t literal_first_byte = string_literal
+						&& literal_length == 1 && !literal_truthy
+					? '0' : 0;
+				assignment_result = add_derived_value(
+					ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
+					exact_type(assigned),
+					instruction.value_operation.op1_storage_id,
+					false, 0, machine_kind(assigned),
+					ownership(assigned), refcount_state(assigned),
+					UINT32_MAX, string_literal, literal_first_byte,
+					literal_length);
+				if (assignment_result == INVALID_VALUE_REF) {
+					valid_ = false;
+					continue;
+				}
+			}
+			register_assignment_sources[i] = assigned;
+			register_assignment_results[i] = assignment_result;
+			source_overrides[definition] = assignment_result;
+			active_value_overrides()[static_cast<uint32_t>(value_index)] =
+				assignment_result;
+		}
 
 		/*
 		 * Guarded mutations are discovered after their loop PHIs in MIR
@@ -4079,20 +4150,6 @@ public:
 			const IRValueRef canonical =
 				guarded_mutation_value_ref(instruction);
 			if (canonical == INVALID_VALUE_REF) {
-				continue;
-			}
-			zend_tpde_long_assign_op lazy_assign{};
-			const bool boxed_lazy_assign =
-				register_boxed_mir_conditions_
-				&& representation(canonical)
-					== ZEND_MIR_REPRESENTATION_ZVAL
-				&& zend_tpde_long_assign_op_at(instruction, &lazy_assign)
-				&& !lazy_assign.has_result;
-			/* Darwin AArch64 supports boxed condition operands, but its current
-			 * multi-part PHI transport cannot preserve a boxed lazy assign-op across
-			 * a cyclic edge. Keep only that mutation frame-authoritative; boxed
-			 * INC/DEC and scalar loop-carried mutations retain register results. */
-			if (boxed_lazy_assign) {
 				continue;
 			}
 			if (representation(canonical)
@@ -4410,9 +4467,9 @@ public:
 			const TypedBodyAbiType argument_abi =
 				typed_body_value_abi(plan_, value_index);
 			return argument_abi.valid
-				&& (zend_mir_scalar_type_is_exact(argument_abi.exact_type)
+				&& ((zend_mir_scalar_type_is_exact(argument_abi.exact_type)
 						&& argument_abi.exact_type
-							!= ZEND_MIR_SCALAR_TYPE_NULL
+							!= ZEND_MIR_SCALAR_TYPE_NULL)
 					|| argument_abi.machine_kind
 						== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
 					|| argument_abi.machine_kind
@@ -4437,15 +4494,68 @@ public:
 			const zend_tpde_value &plan_value = plan_->values[value_index];
 			IRValueRef value = value_ref_for_block(
 				plan_value.id, use_block, use_instruction);
-			if (machine_value_has_result_representation(value)
-					&& (machine_value_has_register_definition(value)
-						|| entry_argument_has_register_definition(value))) {
-				return value;
-			}
 			const int32_t definition =
 				plan_->value_definition_instructions == nullptr
 					? -1
 					: plan_->value_definition_instructions[value_index];
+			if (definition >= 0
+					&& static_cast<uint32_t>(definition)
+						< plan_->instruction_count) {
+				const zend_tpde_instruction &copy =
+					plan_->instructions[static_cast<uint32_t>(definition)];
+				const zend_mir_instruction_record copy_record =
+					instruction_record_at(static_cast<uint32_t>(definition));
+				if (copy_record.opcode == ZEND_MIR_OPCODE_COPY
+						&& copy.operand_count == 1
+						&& !plan_value.canonical_alias_observable
+						&& plan_value.representation
+							== ZEND_MIR_REPRESENTATION_ZVAL) {
+					const zend_mir_value_id input_id =
+						zend_tpde_operand_at(plan_, &copy, 0);
+					const int32_t input_index =
+						zend_tpde_value_index(plan_, input_id);
+					const IRValueRef copied_input = value_ref(input_id);
+					if (input_index >= 0
+							&& copied_input != INVALID_VALUE_REF
+							&& plan_->values[input_index].representation
+								== ZEND_MIR_REPRESENTATION_ZVAL
+							&& zend_mir_id_is_valid(
+								plan_value.canonical_storage_id)
+							&& plan_->values[input_index].canonical_storage_id
+								== plan_value.canonical_storage_id
+							&& std::ranges::find(register_assignment_results,
+								copied_input)
+								!= register_assignment_results.end()) {
+						return self(static_cast<uint32_t>(input_index),
+							use_block, use_instruction, depth + 1, self);
+					}
+				}
+			}
+			if (machine_value_has_result_representation(value)
+					&& (machine_value_has_register_definition(value)
+						|| entry_argument_has_register_definition(value))) {
+				bool assignment_result = false;
+				bool assignment_dominates = false;
+				for (uint32_t assignment_index = 0;
+						assignment_index < register_assignment_results.size();
+						++assignment_index) {
+					if (register_assignment_results[assignment_index] != value) {
+						continue;
+					}
+					assignment_result = true;
+					const uint32_t assignment_block =
+						guarded_continuation_blocks[assignment_index]
+								!= UINT32_MAX
+							? guarded_continuation_blocks[assignment_index]
+							: instruction_blocks[assignment_index];
+					assignment_dominates |= machine_block_dominates(
+						assignment_block, use_block);
+				}
+				if (assignment_result && !assignment_dominates) {
+					return INVALID_VALUE_REF;
+				}
+				return value;
+			}
 			if (definition < 0
 					|| static_cast<uint32_t>(definition)
 						>= plan_->instruction_count) {
@@ -4507,7 +4617,7 @@ public:
 				zend_tpde_value_index(plan_, input_id);
 			if (input_index < 0
 					|| plan_->values[input_index].exact_type
-						!= plan_value.exact_type) {
+					!= plan_value.exact_type) {
 				return INVALID_VALUE_REF;
 			}
 			/*
@@ -4639,8 +4749,6 @@ public:
 			std::vector<PendingPhiInput> conversions;
 			bool supported = true;
 			for (uint32_t n = 0; n < predecessor_count; ++n) {
-				const uint32_t operand_index =
-					instruction.operand_offset + n;
 				const uint32_t predecessor =
 					plan_->block_predecessors[predecessor_begin + n];
 				IRValueRef input = predecessor < plan_->block_count
@@ -5856,6 +5964,15 @@ public:
 					bool shared_storage =
 						zend_mir_id_is_valid(result_storage);
 					for (uint32_t n = 0; n < predecessors; ++n) {
+						const int32_t canonical_input_index =
+							zend_tpde_value_index(plan_,
+								zend_tpde_operand_at(
+									plan_, &instruction, n));
+						const IRValueRef canonical_input =
+							canonical_input_index < 0
+								? INVALID_VALUE_REF
+								: IRValueRef{MIR_VALUE_BASE
+									+ static_cast<uint32_t>(canonical_input_index)};
 						const IRValueRef input = phi_input_ref(n);
 						if (input == INVALID_VALUE_REF) {
 							valid_ = false;
@@ -5871,7 +5988,9 @@ public:
 									|| representation(input)
 										== ZEND_MIR_REPRESENTATION_ZVAL);
 						shared_storage &=
-							canonical_storage(input) == result_storage;
+							canonical_input != INVALID_VALUE_REF
+							&& canonical_storage(canonical_input)
+								== result_storage;
 					}
 					if (register_phi) {
 						block_phis.push_back(
@@ -8489,17 +8608,8 @@ public:
 						canonical_storage(canonical_mutation_result))
 					&& canonical_storage(canonical_mutation_result)
 						== instruction.value_operation.op1_storage_id;
-				zend_tpde_long_assign_op lazy_assign{};
-				const bool frame_authoritative_boxed_assign =
-					register_boxed_mir_conditions_
-					&& instruction.mutation_lazy_scalar
-					&& boxed_mutation_result
-					&& zend_tpde_long_assign_op_at(
-						instruction, &lazy_assign)
-					&& !lazy_assign.has_result;
 				const bool register_mutation_result =
-					!frame_authoritative_boxed_assign
-					&& (scalar_mutation_result || boxed_mutation_result);
+					scalar_mutation_result || boxed_mutation_result;
 				IRValueRef mutation_result =
 					guarded_mutation_results[i] != INVALID_VALUE_REF
 						? guarded_mutation_results[i]
