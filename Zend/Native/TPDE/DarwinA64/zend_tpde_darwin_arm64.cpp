@@ -7190,6 +7190,17 @@ bool ZendCompilerA64::compile_inst_impl(
 				result.set_modified();
 			}
 			materialize_constant(
+				layout.inverted ? uint64_t{0} : uint64_t{1},
+				DarwinConfig::GP_BANK, 8, left_reg);
+			materialize_constant(
+				layout.inverted ? IS_FALSE : IS_TRUE,
+				DarwinConfig::GP_BANK, 4, type_reg);
+			store_off(frame_reg, layout.result_offset, left_reg, 8);
+			store_off(frame_reg,
+				layout.result_offset
+					+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+				type_reg, 4);
+			materialize_constant(
 				uint64_t{0}, DarwinConfig::GP_BANK, 4, decision_reg);
 		} else {
 			materialize_constant(
@@ -9084,8 +9095,14 @@ bool ZendCompilerA64::compile_inst_impl(
 			return long_assign_op();
 		case ZEND_MIR_OPCODE_VALUE_FE_FREE:
 			return execute_value_operation();
-		case ZEND_MIR_OPCODE_VALUE_BINARY_OP:
+		case ZEND_MIR_OPCODE_VALUE_BINARY_OP: {
+			zend_tpde_string_identity framed_string_identity{};
+			if (zend_tpde_string_identity_at(
+					mir, &framed_string_identity)) {
+				return string_identity();
+			}
 			return long_binary();
+		}
 		case ZEND_MIR_OPCODE_VALUE_UNARY_OP:
 			return string_length();
 		case ZEND_MIR_OPCODE_VALUE_CAST:
@@ -11218,7 +11235,6 @@ bool ZendCompilerA64::compile_inst_impl(
 							call.id);
 						auto descriptor_scratch =
 							std::move(descriptor_value).into_scratch(this);
-						auto descriptor_reg = descriptor_scratch.cur_reg();
 						leaf_private_frame_slot = allocate_stack_slot(
 							call.direct_call->frame_size);
 						leaf_caller_frame_slot =
