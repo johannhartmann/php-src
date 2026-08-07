@@ -3219,13 +3219,14 @@ public:
 						mark_source_producer(
 							consumer.source_op2_binding);
 						break;
+					case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R:
 					case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
 						if (register_boxed_mir_conditions_) {
 							/*
 							 * AArch64 can consume both the array payload and the
-							 * dimension key directly in its guarded isset/empty
-							 * path. Keep their producers in the machine def-use
-							 * graph just as for a compositional FETCH_DIM_R.
+							 * dimension key directly in its guarded read and
+							 * isset/empty paths. Keep both producers in the
+							 * machine def-use graph.
 							 */
 							mark_source_producer(
 								consumer.source_op1_binding);
@@ -6654,8 +6655,13 @@ public:
 						source_binding_value_ref(
 							instruction.source_op1_binding);
 					if (receiver != INVALID_VALUE_REF
-							&& machine_kind(receiver)
-								== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+							&& (machine_kind(receiver)
+									== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+								|| (register_boxed_mir_conditions_
+									&& representation(receiver)
+										== ZEND_MIR_REPRESENTATION_ZVAL
+									&& machine_kind(receiver)
+										== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL))
 							&& machine_value_has_register_definition(
 								receiver)) {
 						/*
@@ -6697,8 +6703,12 @@ public:
 					const IRValueRef receiver = source_binding_value_ref(
 						instruction.source_op1_binding);
 					if (receiver != INVALID_VALUE_REF
-							&& machine_kind(receiver)
-								== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+							&& (machine_kind(receiver)
+									== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+								|| (representation(receiver)
+										== ZEND_MIR_REPRESENTATION_ZVAL
+									&& machine_kind(receiver)
+										== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL))
 							&& machine_value_has_register_definition(receiver)) {
 						operands_.push_back(receiver);
 					}
