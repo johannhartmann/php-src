@@ -82,6 +82,7 @@ public:
 		GeneratorResume,
 		ZvalTypeLoad,
 		ZvalPayloadLoad,
+		ZvalBoxedStore,
 		ZvalCopy,
 		ZvalMove,
 		ZvalStore,
@@ -135,6 +136,9 @@ public:
 		uint32_t source_position = UINT32_MAX;
 		uint32_t generator_resume_value_offset = 0;
 		uint32_t generator_resume_value_count = 0;
+		uint32_t semantic_operand_count = UINT32_MAX;
+		uint32_t boxed_op1_boundary_operand_index = UINT32_MAX;
+		uint32_t boxed_op2_boundary_operand_index = UINT32_MAX;
 	};
 
 	struct DerivedValue {
@@ -3089,6 +3093,8 @@ public:
 				plan_->instruction_count);
 			std::vector<int32_t> source_result_consumer(
 				plan_->instruction_count, -1);
+			std::vector<uint8_t> source_result_materialized_for_helper(
+				plan_->instruction_count);
 			std::vector<int32_t> source_producer_by_value(
 				plan_->value_count, -1);
 			for (uint32_t consumer_index = 0;
@@ -5442,7 +5448,27 @@ public:
 				++i;
 			}
 		}
+		std::vector<int32_t> latest_source_producer_by_ir_value;
+		auto record_source_producer = [&](uint32_t instruction_index) {
+			if (instruction_index >= active_instruction_results().size()) {
+				return;
+			}
+			const IRValueRef result =
+				active_instruction_results()[instruction_index];
+			if (result == INVALID_VALUE_REF) {
+				return;
+			}
+			const uint32_t value_index = static_cast<uint32_t>(result);
+			if (value_index >= latest_source_producer_by_ir_value.size()) {
+				latest_source_producer_by_ir_value.resize(value_index + 1, -1);
+			}
+			latest_source_producer_by_ir_value[value_index] =
+				static_cast<int32_t>(instruction_index);
+		};
 		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
+			if (i != 0) {
+				record_source_producer(i - 1);
+			}
 			if (elided_silence_instructions[i] != 0) {
 				continue;
 			}
@@ -6140,8 +6166,7 @@ public:
 						== ZEND_MIR_OPCODE_OBJECT_FETCH_R) {
 					zend_tpde_object_property_read layout{};
 					source_boxed_result_machine_eligible =
-						!register_boxed_mir_conditions_
-						&& zend_tpde_object_property_read_at(
+						zend_tpde_object_property_read_at(
 							instruction, &layout)
 						&& operation_machine_reference(i, &reference)
 						&& reference != nullptr
@@ -6204,6 +6229,15 @@ public:
 					&& source_boxed_result_machine_eligible)
 				|| direct_internal_argument_result
 				|| register_complete_array_result;
+			const bool boxed_helper_boundary_result =
+				record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_R
+				&& boxed_source_result
+				&& direct_source_consumer > static_cast<int32_t>(i)
+				&& static_cast<uint32_t>(direct_source_consumer)
+					< plan_->instruction_count
+				&& plan_->instructions[static_cast<uint32_t>(
+					direct_source_consumer)].record.opcode
+					== ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL;
 			if (function_mode_ == FunctionMode::ZendEntry
 					&& instruction.has_value_operation
 					&& boxed_source_result
@@ -6268,6 +6302,11 @@ public:
 					canonical_index - MIR_VALUE_BASE] = result;
 				if (result_ssa < source_overrides.size()) {
 					source_overrides[result_ssa] = result;
+				}
+				if (boxed_helper_boundary_result
+						&& machine_kind(result)
+							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+					source_result_materialized_for_helper[i] = 1;
 				}
 			}
 			if (function_mode_ == FunctionMode::ZendEntry
@@ -7917,9 +7956,28 @@ public:
 								== ZEND_MIR_SOURCE_SLOT_VAR)
 						&& zend_mir_id_is_valid(
 							source_operand_storage_id(argument.source_operand));
+					int32_t argument_definition =
+						binding.definition_instruction_index;
+					if (argument_definition < 0 && binding.value_index >= 0
+							&& static_cast<uint32_t>(binding.value_index)
+								< source_producer_by_value.size()) {
+						argument_definition = source_producer_by_value[
+							static_cast<uint32_t>(binding.value_index)];
+					}
+					const bool helper_materialized_boxed_temporary =
+						direct_boxed_temporary
+						&& argument_definition >= 0
+						&& static_cast<uint32_t>(argument_definition)
+							< source_result_materialized_for_helper.size()
+						&& source_result_materialized_for_helper[
+							static_cast<uint32_t>(argument_definition)] != 0;
 					const bool stable_source =
 						direct_internal_source_argument_stable(
 							argument, record.source_position_id);
+					if (helper_materialized_boxed_temporary) {
+						argument_operands.push_back(IRValueRef{FRAME_VALUE});
+						continue;
+					}
 					if (direct_scalar || direct_boxed_temporary) {
 						argument_operands.push_back(value);
 						if (direct_boxed_temporary) {
@@ -8131,6 +8189,124 @@ public:
 				boxed_cond_cold_blocks[i];
 			const uint32_t guarded_cold_block =
 				guarded_cold_blocks[i];
+			IRValueRef boxed_op1_boundary = INVALID_VALUE_REF;
+			IRValueRef boxed_op2_boundary = INVALID_VALUE_REF;
+			uint32_t boxed_op1_boundary_operand_index = UINT32_MAX;
+			uint32_t boxed_op2_boundary_operand_index = UINT32_MAX;
+			uint32_t boundary_semantic_operand_count = UINT32_MAX;
+			if (register_boxed_mir_conditions_
+					&& function_mode_ == FunctionMode::ZendEntry
+					&& instruction.has_value_operation
+					&& zend_mir_opcode_is_executable_value(record.opcode)) {
+				auto direct_boxed_source = [&](const auto &binding,
+						const zend_mir_source_operand_ref &source,
+						zend_mir_storage_id storage,
+						uint32_t definition_ssa_variable_id_plus_one) {
+					IRValueRef candidate = source_binding_value_ref(binding);
+					if ((candidate == INVALID_VALUE_REF
+							|| machine_kind(candidate)
+								!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL)
+							&& definition_ssa_variable_id_plus_one != 0) {
+						candidate = value_ref(zend_mir_value_from_original_ssa(
+							definition_ssa_variable_id_plus_one - 1));
+					}
+					if (candidate == INVALID_VALUE_REF) {
+						candidate = source_operand_value_ref(source);
+					}
+					int32_t definition = binding.definition_instruction_index;
+					if (definition < 0 && binding.value_index >= 0
+							&& static_cast<uint32_t>(binding.value_index)
+								< source_producer_by_value.size()) {
+						definition = source_producer_by_value[
+							static_cast<uint32_t>(binding.value_index)];
+					}
+					if (definition < 0 && candidate != INVALID_VALUE_REF) {
+						const uint32_t candidate_index =
+							static_cast<uint32_t>(candidate);
+						definition = candidate_index
+								< latest_source_producer_by_ir_value.size()
+							? latest_source_producer_by_ir_value[candidate_index] : -1;
+					}
+					const bool direct_definition = definition >= 0
+						&& static_cast<uint32_t>(definition)
+							< active_instruction_results().size()
+						&& static_cast<uint32_t>(definition)
+							< plan_->instruction_count
+						&& plan_->instructions[
+							static_cast<uint32_t>(definition)].record.opcode
+							== ZEND_MIR_OPCODE_OBJECT_FETCH_R
+						&& static_cast<uint32_t>(definition)
+							< source_result_consumer.size()
+						&& source_result_consumer[
+							static_cast<uint32_t>(definition)]
+							== static_cast<int32_t>(i);
+					const IRValueRef produced = direct_definition
+						? active_instruction_results()[
+							static_cast<uint32_t>(definition)]
+						: INVALID_VALUE_REF;
+					return direct_definition
+							&& produced != INVALID_VALUE_REF
+							&& canonical_storage(produced) == storage
+							&& machine_kind(produced)
+								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+							&& machine_value_is_register_authoritative(produced)
+							&& machine_value_has_register_definition(produced)
+						? produced : INVALID_VALUE_REF;
+				};
+				boxed_op1_boundary = direct_boxed_source(
+					instruction.source_op1_binding,
+					instruction.value_operation.op1,
+					instruction.value_operation.op1_storage_id,
+					instruction.value_operation
+						.op1_definition_ssa_variable_id_plus_one);
+				boxed_op2_boundary = direct_boxed_source(
+					instruction.source_op2_binding,
+					instruction.value_operation.op2,
+					instruction.value_operation.op2_storage_id,
+					instruction
+						.source_op2_definition_ssa_variable_id_plus_one);
+			}
+			auto append_boundary_operand = [&](IRValueRef candidate,
+					uint32_t segment_offset, uint32_t semantic_count,
+					uint32_t &segment_count) {
+					if (candidate == INVALID_VALUE_REF) {
+						return UINT32_MAX;
+					}
+					const auto begin = operands_.begin() + segment_offset;
+					const auto existing = std::find(
+						begin, begin + semantic_count, candidate);
+					if (existing != begin + semantic_count) {
+						return UINT32_MAX;
+					}
+					const uint32_t index = segment_count++;
+					operands_.push_back(candidate);
+					return index;
+			};
+			if (boxed_cond_cold_block == UINT32_MAX
+					&& guarded_cold_block == UINT32_MAX) {
+				const uint32_t semantic_count =
+					materialization_operand_index == UINT32_MAX
+						? operand_count : materialization_operand_index;
+				boxed_op1_boundary_operand_index = append_boundary_operand(
+					boxed_op1_boundary, operand_offset, semantic_count,
+					operand_count);
+				if (boxed_op2_boundary
+						== (boxed_op1_boundary_operand_index == UINT32_MAX
+						? INVALID_VALUE_REF
+						: operands_[operand_offset
+							+ boxed_op1_boundary_operand_index])) {
+					boxed_op2_boundary_operand_index =
+						boxed_op1_boundary_operand_index;
+				} else {
+					boxed_op2_boundary_operand_index =
+						append_boundary_operand(boxed_op2_boundary,
+							operand_offset, semantic_count, operand_count);
+				}
+				if (boxed_op1_boundary_operand_index != UINT32_MAX
+						|| boxed_op2_boundary_operand_index != UINT32_MAX) {
+					boundary_semantic_operand_count = semantic_count;
+				}
+			}
 			auto reload_slot_authoritative_source_result =
 					[&](uint32_t reload_block) {
 				if (function_mode_ != FunctionMode::ZendEntry
@@ -8202,6 +8378,30 @@ public:
 				load.control_block = reload_block;
 				add_node(block_instructions, reload_block, std::move(load));
 				active_instruction_results()[i] = loaded;
+			};
+			auto materialize_boxed_result_for_helper = [&](
+					uint32_t materialization_block, IRValueRef value) {
+				if (source_result_materialized_for_helper[i] == 0) {
+					return;
+				}
+				const zend_mir_storage_id storage = canonical_storage(value);
+				if (value == INVALID_VALUE_REF
+						|| machine_kind(value)
+							!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+						|| !zend_mir_id_is_valid(storage)) {
+					valid_ = false;
+					return;
+				}
+				const uint32_t store_operand_offset =
+					static_cast<uint32_t>(operands_.size());
+				operands_.push_back(value);
+				operands_.push_back(IRValueRef{FRAME_VALUE});
+				InstNode store{InstKind::ZvalBoxedStore, i, UINT32_MAX,
+					INVALID_VALUE_REF, {}, store_operand_offset, 2, false,
+					storage};
+				store.control_block = materialization_block;
+				add_node(block_instructions, materialization_block,
+					std::move(store));
 			};
 			if (guarded_cold_block != UINT32_MAX) {
 				const uint32_t guarded_hot_block =
@@ -8596,6 +8796,28 @@ public:
 							cold_operand_skip;
 					}
 				}
+				const uint32_t cold_semantic_operand_count =
+					cold_materialization_operand_index == UINT32_MAX
+						? cold_operand_count
+						: cold_materialization_operand_index;
+				uint32_t cold_boxed_op1_boundary_operand_index =
+					append_boundary_operand(boxed_op1_boundary,
+						cold_operand_offset, cold_semantic_operand_count,
+						cold_operand_count);
+				uint32_t cold_boxed_op2_boundary_operand_index = UINT32_MAX;
+				if (boxed_op2_boundary
+						== (cold_boxed_op1_boundary_operand_index == UINT32_MAX
+							? INVALID_VALUE_REF
+							: operands_[cold_operand_offset
+								+ cold_boxed_op1_boundary_operand_index])) {
+					cold_boxed_op2_boundary_operand_index =
+						cold_boxed_op1_boundary_operand_index;
+				} else {
+					cold_boxed_op2_boundary_operand_index =
+						append_boundary_operand(boxed_op2_boundary,
+							cold_operand_offset, cold_semantic_operand_count,
+							cold_operand_count);
+				}
 				InstNode cold{
 					InstKind::GuardedCold, i, guarded_cold_block,
 					cold_result, {}, cold_operand_offset,
@@ -8613,6 +8835,15 @@ public:
 				cold.mutation_result = register_mutation_result;
 				add_node(block_instructions, guarded_cold_block,
 					std::move(cold));
+				if (cold_boxed_op1_boundary_operand_index != UINT32_MAX
+						|| cold_boxed_op2_boundary_operand_index != UINT32_MAX) {
+					nodes_.back().semantic_operand_count =
+						cold_semantic_operand_count;
+				}
+				nodes_.back().boxed_op1_boundary_operand_index =
+					cold_boxed_op1_boundary_operand_index;
+				nodes_.back().boxed_op2_boundary_operand_index =
+					cold_boxed_op2_boundary_operand_index;
 				if (cold_result != INVALID_VALUE_REF
 						&& record.source_position_id
 							< user_opcode_result_reload_sources_.size()) {
@@ -8685,6 +8916,8 @@ public:
 					block_phis.push_back(
 						{continuation_block, guarded_result});
 				}
+				materialize_boxed_result_for_helper(
+					continuation_block, guarded_result);
 				if (function_mode_ == FunctionMode::ZendEntry
 						&& record.opcode
 							== ZEND_MIR_OPCODE_VALUE_ASSIGN
@@ -8928,6 +9161,14 @@ public:
 				packed_append_value_operand_index;
 			nodes_.back().property_write_value_operand_index =
 				property_write_value_operand_index;
+			nodes_.back().semantic_operand_count =
+				boundary_semantic_operand_count;
+			nodes_.back().boxed_op1_boundary_operand_index =
+				boxed_op1_boundary_operand_index;
+			nodes_.back().boxed_op2_boundary_operand_index =
+				boxed_op2_boundary_operand_index;
+			materialize_boxed_result_for_helper(
+				static_cast<uint32_t>(block), result);
 			reload_slot_authoritative_source_result(
 				static_cast<uint32_t>(block));
 			if (function_mode_ == FunctionMode::ZendEntry
@@ -9264,9 +9505,11 @@ public:
 				std::span<const IRValueRef>{operands_}.subspan(
 					node.operand_offset, node.operand_count);
 			const uint32_t semantic_operand_count =
-				node.materialization_operand_index == UINT32_MAX
-					? node.operand_count
-					: node.materialization_operand_index;
+				node.semantic_operand_count != UINT32_MAX
+					? node.semantic_operand_count
+					: node.materialization_operand_index == UINT32_MAX
+						? node.operand_count
+						: node.materialization_operand_index;
 			node.operands = all_operands.first(semantic_operand_count);
 			node.liveness_operands = all_operands;
 		}
