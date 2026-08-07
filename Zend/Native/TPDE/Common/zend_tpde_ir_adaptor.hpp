@@ -3219,6 +3219,20 @@ public:
 						mark_source_producer(
 							consumer.source_op2_binding);
 						break;
+					case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
+						if (register_boxed_mir_conditions_) {
+							/*
+							 * AArch64 can consume both the array payload and the
+							 * dimension key directly in its guarded isset/empty
+							 * path. Keep their producers in the machine def-use
+							 * graph just as for a compositional FETCH_DIM_R.
+							 */
+							mark_source_producer(
+								consumer.source_op1_binding);
+							mark_source_producer(
+								consumer.source_op2_binding);
+						}
+						break;
 					case ZEND_MIR_OPCODE_VALUE_COND_BRANCH:
 					case ZEND_MIR_OPCODE_VALUE_UNARY_OP:
 					case ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL:
@@ -6655,6 +6669,41 @@ public:
 					}
 				}
 			}
+			if (register_boxed_mir_conditions_
+					&& record.opcode
+						== ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM
+					&& instruction.has_value_operation) {
+				IRValueRef key = source_binding_value_ref(
+					instruction.source_op2_binding);
+				if (key == INVALID_VALUE_REF) {
+					key = source_operand_value_ref(
+						instruction.value_operation.op2);
+				}
+				if (key != INVALID_VALUE_REF
+						&& ((exact_type(key) == ZEND_MIR_SCALAR_TYPE_I64
+								&& representation(key)
+									== ZEND_MIR_REPRESENTATION_I64
+								&& machine_kind(key)
+									== ZEND_TPDE_MACHINE_VALUE_I64)
+							|| (machine_kind(key)
+									== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+								&& machine_value_is_register_authoritative(key))
+							|| (representation(key)
+									== ZEND_MIR_REPRESENTATION_ZVAL
+								&& machine_kind(key)
+									== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL))
+						&& machine_value_has_register_definition(key)) {
+					operands_.push_back(key);
+					const IRValueRef receiver = source_binding_value_ref(
+						instruction.source_op1_binding);
+					if (receiver != INVALID_VALUE_REF
+							&& machine_kind(receiver)
+								== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+							&& machine_value_has_register_definition(receiver)) {
+						operands_.push_back(receiver);
+					}
+				}
+			}
 			if (record.opcode == ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
 					&& instruction.has_value_operation) {
 				IRValueRef name = source_binding_value_ref(
@@ -8785,6 +8834,15 @@ public:
 						while (cold_operand_skip < operand_count
 								&& operands_[operand_offset
 										+ cold_operand_skip]
+									!= IRValueRef{FRAME_VALUE}) {
+							++cold_operand_skip;
+						}
+					} else if (register_boxed_mir_conditions_
+							&& record.opcode
+								== ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM) {
+						while (cold_operand_skip < operand_count
+								&& operands_[operand_offset
+									+ cold_operand_skip]
 									!= IRValueRef{FRAME_VALUE}) {
 							++cold_operand_skip;
 						}
