@@ -9668,6 +9668,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					ScratchReg limit{this};
 					ScratchReg element{this};
 					ScratchReg value{this};
+					ScratchReg value_type{this};
 					ScratchReg key{this};
 					ScratchReg key_value{this};
 					auto type_reg = type.alloc_gp();
@@ -9676,6 +9677,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					auto limit_reg = limit.alloc_gp();
 					auto element_reg = element.alloc_gp();
 					auto value_reg = value.alloc_gp();
+					auto value_type_reg = value_type.alloc_gp();
 					auto key_reg = key.alloc_gp();
 					auto key_value_reg = key_value.alloc_gp();
 
@@ -9735,38 +9737,44 @@ bool ZendCompilerA64::compile_inst_impl(
 
 					label_place(found);
 
-					if (!layout.destination_scalar_only) {
-						load_off(type_reg, frame_reg,
-							layout.destination_offset
-								+ static_cast<uint32_t>(
-									offsetof(zval, u1.type_info)),
-							4);
-						ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-						ASM(CMPwi, type_reg, IS_UNDEF);
-						generate_raw_jump(Jump::Jeq, destination_valid);
-						ASM(CMPwi, type_reg, IS_LONG);
-						generate_raw_jump(Jump::Jne, slow);
-						label_place(destination_valid);
-					}
-
-					load_off(type_reg, element_reg,
+					load_off(value_type_reg, element_reg,
 						static_cast<uint32_t>(
 							offsetof(zval, u1.type_info)),
 						4);
-					ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-					ASM(CMPwi, type_reg, IS_LONG);
-					generate_raw_jump(Jump::Jne, slow);
+					ASM(ANDwi, type_reg, value_type_reg, Z_TYPE_MASK);
+					ASM(CMPwi, type_reg, IS_UNDEF);
+					generate_raw_jump(Jump::Jeq, slow);
+					ASM(CMPwi, type_reg, IS_REFERENCE);
+					generate_raw_jump(Jump::Jeq, slow);
+					if (layout.destination_scalar_only) {
+						ASM(CMPwi, type_reg, IS_LONG);
+						generate_raw_jump(Jump::Jne, slow);
+					}
 					load_off(value_reg, element_reg, 0, 8);
 
-					if (layout.has_key) {
-						load_off(type_reg, frame_reg,
-							layout.key_offset
-								+ static_cast<uint32_t>(
-									offsetof(zval, u1.type_info)),
-							4);
-						ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-						ASM(CMPwi, type_reg, IS_UNDEF);
+					if (!layout.destination_scalar_only) {
+						/*
+						 * The inline ownership transition is deliberately limited
+						 * to mutable, non-collectable payloads.  Collectable values
+						 * require the GC protocol in the semantic helper, while an
+						 * immutable payload must never receive a refcount write.
+						 */
+						auto value_source_valid = text_writer.label_create();
+						ASM(TSTwi, value_type_reg,
+							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+						generate_raw_jump(Jump::Jeq, value_source_valid);
+						ASM(TSTwi, value_type_reg,
+							IS_TYPE_COLLECTABLE << Z_TYPE_FLAGS_SHIFT);
 						generate_raw_jump(Jump::Jne, slow);
+						load_off(type_reg, value_reg,
+							static_cast<uint32_t>(offsetof(
+								zend_refcounted_h, u.type_info)), 4);
+						ASM(TSTwi, type_reg, GC_IMMUTABLE);
+						generate_raw_jump(Jump::Jne, slow);
+						label_place(value_source_valid);
+					}
+
+					if (layout.has_key) {
 						load_off(type_reg, array_reg,
 							static_cast<uint32_t>(offsetof(HashTable, u)), 4);
 						ASM(TSTwi, type_reg, HASH_FLAG_PACKED);
@@ -9786,7 +9794,150 @@ bool ZendCompilerA64::compile_inst_impl(
 						label_place(key_ready);
 					}
 
-					/* All guards precede the first observable mutation. */
+					if (!layout.destination_scalar_only) {
+						/*
+						 * Reusing the foreach CV is cheap for scalars and for
+						 * shared non-collectable values.  Destruction of a
+						 * collectable value, or of the final reference, retains
+						 * the semantic helper because it must run the GC/dtor
+						 * protocol before any observable iterator mutation.
+						 */
+						load_off(type_reg, frame_reg,
+							layout.destination_offset
+								+ static_cast<uint32_t>(
+									offsetof(zval, u1.type_info)),
+							4);
+						ASM(TSTwi, type_reg,
+							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+						generate_raw_jump(Jump::Jeq, destination_valid);
+						ASM(TSTwi, type_reg,
+							IS_TYPE_COLLECTABLE << Z_TYPE_FLAGS_SHIFT);
+						generate_raw_jump(Jump::Jne, slow);
+						load_off(array_reg, frame_reg,
+							layout.destination_offset, 8);
+						load_off(type_reg, array_reg,
+							static_cast<uint32_t>(offsetof(
+								zend_refcounted_h, u.type_info)), 4);
+						ASM(TSTwi, type_reg, GC_IMMUTABLE);
+						generate_raw_jump(Jump::Jne, slow);
+						load_off(type_reg, array_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_refcounted_h, refcount)), 4);
+						ASM(CMPwi, type_reg, 1);
+						generate_raw_jump(Jump::Jls, slow);
+						label_place(destination_valid);
+					}
+
+					if (layout.has_key) {
+						auto key_destination_valid = text_writer.label_create();
+						auto key_destination_string = text_writer.label_create();
+						load_off(type_reg, frame_reg,
+							layout.key_offset
+								+ static_cast<uint32_t>(
+									offsetof(zval, u1.type_info)),
+							4);
+						ASM(ANDwi, limit_reg, type_reg, Z_TYPE_MASK);
+						ASM(CMPwi, limit_reg, IS_UNDEF);
+						generate_raw_jump(Jump::Jeq, key_destination_valid);
+						ASM(CMPwi, limit_reg, IS_LONG);
+						generate_raw_jump(Jump::Jeq, key_destination_valid);
+						ASM(CMPwi, limit_reg, IS_STRING);
+						generate_raw_jump(Jump::Jeq, key_destination_string);
+						generate_raw_jump(Jump::jmp, slow);
+						label_place(key_destination_string);
+						ASM(TSTwi, type_reg,
+							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+						generate_raw_jump(Jump::Jeq, key_destination_valid);
+						load_off(element_reg, frame_reg,
+							layout.key_offset, 8);
+						load_off(type_reg, element_reg,
+							static_cast<uint32_t>(offsetof(
+								zend_refcounted_h, u.type_info)), 4);
+						ASM(TSTwi, type_reg, GC_IMMUTABLE);
+						generate_raw_jump(Jump::Jne, slow);
+						load_off(type_reg, element_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_refcounted_h, refcount)), 4);
+						ASM(CMPwi, type_reg, 1);
+						generate_raw_jump(Jump::Jls, slow);
+						label_place(key_destination_valid);
+					}
+
+					/*
+					 * All semantic fallback guards precede the ownership and
+					 * iterator mutations below. Acquire the new value and key
+					 * before releasing aliases held by the reused CVs.
+					 */
+					auto value_owned = text_writer.label_create();
+					ASM(TSTwi, value_type_reg,
+						IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+					generate_raw_jump(Jump::Jeq, value_owned);
+					load_off(type_reg, value_reg,
+						static_cast<uint32_t>(
+							offsetof(zend_refcounted_h, refcount)), 4);
+					ASM(ADDwi, type_reg, type_reg, 1);
+					store_off(value_reg,
+						static_cast<uint32_t>(
+							offsetof(zend_refcounted_h, refcount)),
+						type_reg, 4);
+					label_place(value_owned);
+					if (layout.has_key) {
+						auto numeric_key = text_writer.label_create();
+						ASM(CMPxi, key_reg, 0);
+						generate_raw_jump(Jump::Jeq, numeric_key);
+						emit_pointer_addref(
+							ZEND_TPDE_MACHINE_VALUE_STRING_PTR, key_reg);
+						label_place(numeric_key);
+					}
+
+					if (!layout.destination_scalar_only) {
+						auto destination_released = text_writer.label_create();
+						load_off(type_reg, frame_reg,
+							layout.destination_offset
+								+ static_cast<uint32_t>(
+									offsetof(zval, u1.type_info)),
+							4);
+						ASM(TSTwi, type_reg,
+							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+						generate_raw_jump(Jump::Jeq, destination_released);
+						load_off(array_reg, frame_reg,
+							layout.destination_offset, 8);
+						load_off(type_reg, array_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_refcounted_h, refcount)), 4);
+						ASM(SUBwi, type_reg, type_reg, 1);
+						store_off(array_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_refcounted_h, refcount)),
+							type_reg, 4);
+						label_place(destination_released);
+					}
+					if (layout.has_key) {
+						auto key_destination_released =
+							text_writer.label_create();
+						load_off(type_reg, frame_reg,
+							layout.key_offset
+								+ static_cast<uint32_t>(
+									offsetof(zval, u1.type_info)),
+							4);
+						ASM(TSTwi, type_reg,
+							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+						generate_raw_jump(Jump::Jeq,
+							key_destination_released);
+						load_off(element_reg, frame_reg,
+							layout.key_offset, 8);
+						load_off(type_reg, element_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_refcounted_h, refcount)), 4);
+						ASM(SUBwi, type_reg, type_reg, 1);
+						store_off(element_reg,
+							static_cast<uint32_t>(
+								offsetof(zend_refcounted_h, refcount)),
+							type_reg, 4);
+						label_place(key_destination_released);
+					}
+
+					/* Publish the fully validated iterator step. */
 					ASM(ADDwi, position_reg, position_reg, 1);
 					store_off(frame_reg,
 						layout.holder_offset
@@ -9794,13 +9945,11 @@ bool ZendCompilerA64::compile_inst_impl(
 						position_reg, 4);
 					store_off(frame_reg, layout.destination_offset,
 						value_reg, 8);
-					materialize_constant(static_cast<uint64_t>(IS_LONG),
-						DarwinConfig::GP_BANK, 4, type_reg);
 					store_off(frame_reg,
 						layout.destination_offset
 							+ static_cast<uint32_t>(
 								offsetof(zval, u1.type_info)),
-						type_reg, 4);
+						value_type_reg, 4);
 					if (layout.has_key) {
 						auto string_key = text_writer.label_create();
 						auto key_stored = text_writer.label_create();
@@ -9817,8 +9966,6 @@ bool ZendCompilerA64::compile_inst_impl(
 							type_reg, 4);
 						generate_raw_jump(Jump::jmp, key_stored);
 						label_place(string_key);
-						emit_pointer_addref(
-							ZEND_TPDE_MACHINE_VALUE_STRING_PTR, key_reg);
 						store_off(frame_reg, layout.key_offset, key_reg, 8);
 						emit_machine_zval_type_info(
 							ZEND_TPDE_MACHINE_VALUE_STRING_PTR,
@@ -9850,6 +9997,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					limit.reset();
 					element.reset();
 					value.reset();
+					value_type.reset();
 					key.reset();
 					key_value.reset();
 					zend::native::tpde::CCAssignerAppleA64 assigner;
