@@ -6230,7 +6230,8 @@ public:
 				|| direct_internal_argument_result
 				|| register_complete_array_result;
 			const bool boxed_helper_boundary_result =
-				record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_R
+				(record.opcode == ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
+					|| record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_R)
 				&& boxed_source_result
 				&& direct_source_consumer > static_cast<int32_t>(i)
 				&& static_cast<uint32_t>(direct_source_consumer)
@@ -8232,9 +8233,12 @@ public:
 							< active_instruction_results().size()
 						&& static_cast<uint32_t>(definition)
 							< plan_->instruction_count
-						&& plan_->instructions[
+						&& (plan_->instructions[
 							static_cast<uint32_t>(definition)].record.opcode
-							== ZEND_MIR_OPCODE_OBJECT_FETCH_R
+								== ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
+							|| plan_->instructions[
+								static_cast<uint32_t>(definition)].record.opcode
+								== ZEND_MIR_OPCODE_OBJECT_FETCH_R)
 						&& static_cast<uint32_t>(definition)
 							< source_result_consumer.size()
 						&& source_result_consumer[
