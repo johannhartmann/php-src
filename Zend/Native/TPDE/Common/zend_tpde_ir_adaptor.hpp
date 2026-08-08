@@ -611,13 +611,12 @@ private:
 		return true;
 	}
 
-	IRValueRef guarded_mutation_value_ref(
+	IRValueRef mutation_value_ref(
 			const zend_tpde_instruction &instruction) const {
 		zend_tpde_long_assign_op long_assign{};
 		zend_tpde_long_incdec long_incdec{};
 
 		if (!instruction.has_value_operation
-				|| !instruction.mutation_lazy_scalar
 				|| !((zend_tpde_long_assign_op_at(
 							instruction, &long_assign)
 							&& !long_assign.has_result)
@@ -4133,25 +4132,28 @@ public:
 		}
 
 		/*
-		 * Guarded mutations are discovered after their loop PHIs in MIR
-		 * instruction order.  Select their boxed machine results first so a
-		 * loop-carried zval identity can be represented as a real TPDE PHI
-		 * instead of remaining a canonical-frame reload cycle.
+		 * Guarded in-place mutations are discovered after their loop PHIs in
+		 * MIR instruction order.  Select their boxed machine results first so
+		 * a loop-carried zval identity can be represented as a real TPDE PHI
+		 * instead of remaining a canonical-frame reload cycle.  An earlier
+		 * result-less mutation of the same non-reference-bound storage must use
+		 * that identity too, otherwise the PHI observes the guarded result on
+		 * only one edge.
 		 */
-		std::vector<IRValueRef> guarded_mutation_results(
+		std::vector<IRValueRef> mutation_results(
 			plan_->instruction_count, INVALID_VALUE_REF);
 		std::vector<zend_mir_storage_id> lazy_mutation_storages;
-		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
+		std::vector<zend_mir_storage_id> related_mutation_storages;
+		auto select_mutation_result = [&](uint32_t i) {
+			if (mutation_results[i] != INVALID_VALUE_REF) {
+				return;
+			}
 			const zend_tpde_instruction &instruction =
 				plan_->instructions[i];
-			if (!instruction.mutation_lazy_scalar
-					|| guarded_cold_blocks[i] == UINT32_MAX) {
-				continue;
-			}
 			const IRValueRef canonical =
-				guarded_mutation_value_ref(instruction);
+				mutation_value_ref(instruction);
 			if (canonical == INVALID_VALUE_REF) {
-				continue;
+				return;
 			}
 			if (representation(canonical)
 						!= ZEND_MIR_REPRESENTATION_ZVAL
@@ -4162,7 +4164,7 @@ public:
 					|| instruction.value_operation
 						.op1_definition_ssa_variable_id_plus_one == 0) {
 				valid_ = false;
-				continue;
+				return;
 			}
 			const zend_mir_value_id mutation_ssa =
 				instruction.value_operation
@@ -4181,15 +4183,50 @@ public:
 					|| mutation_ssa
 						>= active_source_ssa_overrides().size()) {
 				valid_ = false;
-				continue;
+				return;
 			}
 			active_value_overrides()[
 				static_cast<uint32_t>(mutation_index)] = mutation;
 			active_source_ssa_overrides()[mutation_ssa] = mutation;
 			active_instruction_results()[i] = mutation;
-			guarded_mutation_results[i] = mutation;
+			mutation_results[i] = mutation;
 			lazy_mutation_storages.push_back(
 				instruction.value_operation.op1_storage_id);
+		};
+		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
+			const zend_tpde_instruction &instruction =
+				plan_->instructions[i];
+			if (instruction.mutation_lazy_scalar
+					&& guarded_cold_blocks[i] != UINT32_MAX
+					&& mutation_value_ref(instruction)
+						!= INVALID_VALUE_REF) {
+				related_mutation_storages.push_back(
+					instruction.value_operation.op1_storage_id);
+			}
+		}
+		std::ranges::sort(related_mutation_storages);
+		related_mutation_storages.erase(
+			std::unique(related_mutation_storages.begin(),
+				related_mutation_storages.end()),
+			related_mutation_storages.end());
+		std::erase_if(related_mutation_storages,
+			[&](zend_mir_storage_id storage_id) {
+				return storage_assigned_by_reference(storage_id);
+			});
+		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
+			const zend_tpde_instruction &instruction =
+				plan_->instructions[i];
+			const bool guarded_mutation =
+				instruction.mutation_lazy_scalar
+				&& guarded_cold_blocks[i] != UINT32_MAX;
+			const bool related_mutation =
+				instruction.has_value_operation
+					&& std::ranges::binary_search(
+						related_mutation_storages,
+						instruction.value_operation.op1_storage_id);
+			if (guarded_mutation || related_mutation) {
+				select_mutation_result(i);
+			}
 		}
 		lazy_mutation_storages.insert(
 			lazy_mutation_storages.end(),
@@ -6538,6 +6575,10 @@ public:
 				copy_input = resolve_copy_input(zend_tpde_operand_at(
 					plan_, &instruction, 0), block, i);
 			}
+			if (i < mutation_results.size()
+					&& mutation_results[i] != INVALID_VALUE_REF) {
+				result = mutation_results[i];
+			}
 			bool machine_result =
 				machine_value_needs_result_assignment(result);
 			/*
@@ -8668,7 +8709,11 @@ public:
 				const uint32_t continuation_block =
 					guarded_continuation_blocks[i];
 				const IRValueRef canonical_mutation_result =
-					guarded_mutation_value_ref(instruction);
+					mutation_results[i] != INVALID_VALUE_REF
+						? mutation_results[i]
+						: instruction.mutation_lazy_scalar
+							? mutation_value_ref(instruction)
+							: INVALID_VALUE_REF;
 				const bool scalar_mutation_result =
 					canonical_mutation_result != INVALID_VALUE_REF
 					&& representation(canonical_mutation_result)
@@ -8688,11 +8733,11 @@ public:
 				const bool register_mutation_result =
 					scalar_mutation_result || boxed_mutation_result;
 				IRValueRef mutation_result =
-					guarded_mutation_results[i] != INVALID_VALUE_REF
-						? guarded_mutation_results[i]
+					mutation_results[i] != INVALID_VALUE_REF
+						? mutation_results[i]
 						: canonical_mutation_result;
 				if (register_mutation_result && boxed_mutation_result
-						&& guarded_mutation_results[i]
+						&& mutation_results[i]
 							== INVALID_VALUE_REF) {
 					const uint32_t mutation_ssa =
 						instruction.value_operation
@@ -9449,6 +9494,9 @@ public:
 				boxed_op1_boundary_operand_index;
 			nodes_.back().boxed_op2_boundary_operand_index =
 				boxed_op2_boundary_operand_index;
+			nodes_.back().mutation_result =
+				i < mutation_results.size()
+					&& mutation_results[i] != INVALID_VALUE_REF;
 			materialize_boxed_result_for_helper(
 				static_cast<uint32_t>(block), result);
 			reload_slot_authoritative_source_result(
