@@ -91,6 +91,7 @@ public:
 		ZvalGuardType,
 		BoxScalar,
 		UnboxScalar,
+		UnboxPointer,
 		UnboxReferenceScalar,
 		ZvalReferenceResolve,
 		SlowPathCall,
@@ -6666,6 +6667,9 @@ public:
 			}
 			uint32_t operand_offset =
 				static_cast<uint32_t>(operands_.size());
+			std::vector<std::pair<IRValueRef, uint32_t>>
+				typed_call_value_guards;
+			std::vector<IRValueRef> typed_call_owned_boxed_arguments;
 			uint32_t assign_op_right_operand_index = UINT32_MAX;
 			uint32_t assign_op_left_operand_index = UINT32_MAX;
 			uint32_t packed_append_value_operand_index = UINT32_MAX;
@@ -7674,8 +7678,8 @@ public:
 						 * target with register-authoritative zval extensions has
 						 * no canonical frame and must return its ABI value.
 						 */
-						&& (register_boxed_mir_conditions_
-								&& function_mode_ == FunctionMode::TypedBody
+						&& ((register_boxed_mir_conditions_
+								&& function_mode_ == FunctionMode::TypedBody)
 							|| machine_kind(returned)
 								!= ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR)
 						&& machine_value_has_register_definition(
@@ -7825,11 +7829,63 @@ public:
 							&& machine_value_is_register_authoritative(
 								value)
 							&& machine_value_has_register_definition(value);
+						const bool guarded_boxed_pointer =
+							register_boxed_mir_conditions_
+							&& function_mode_ == FunctionMode::ZendEntry
+							&& transport_pointer
+							&& value != INVALID_VALUE_REF
+							&& representation(value)
+								== ZEND_MIR_REPRESENTATION_ZVAL
+							&& machine_kind(value)
+								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+							&& machine_value_is_register_authoritative(value)
+							&& machine_value_has_register_definition(value)
+							&& n < instruction.direct_call->argument_count
+							&& instruction.direct_call->arguments[n].exact_type
+								== transport_abi.exact_type
+							&& guarded_hot_blocks[i] != UINT32_MAX
+							&& guarded_cold_blocks[i] != UINT32_MAX;
+						if (guarded_boxed_pointer) {
+							const IRValueRef boxed = value;
+							const IRValueRef transported = add_derived_value(
+								transport_abi.representation,
+								transport_abi.exact_type,
+								canonical_storage(boxed), false, 0,
+								transport_abi.machine_kind,
+								ZEND_MIR_OWNERSHIP_STATE_BORROWED,
+								ZEND_MIR_REFCOUNT_UNKNOWN);
+							if (transported == INVALID_VALUE_REF) {
+								valid_ = false;
+							} else {
+								const uint32_t unbox_operand_offset =
+									static_cast<uint32_t>(operands_.size());
+								operands_.push_back(boxed);
+								add_node(block_instructions,
+									guarded_hot_blocks[i], InstNode{
+										InstKind::UnboxPointer, i, UINT32_MAX,
+										transported, {}, unbox_operand_offset,
+										1, true, canonical_storage(boxed),
+										transport_abi.exact_type});
+								const uint32_t expected_zval_type =
+									zend_tpde_machine_value_zval_type(
+										transport_abi.machine_kind);
+								if (expected_zval_type == IS_UNDEF) {
+									valid_ = false;
+								} else {
+									typed_call_value_guards.emplace_back(
+										boxed, expected_zval_type);
+									typed_call_owned_boxed_arguments.push_back(
+										boxed);
+									value = transported;
+								}
+							}
+						}
 						if (function_mode_ == FunctionMode::ZendEntry
 								&& (transport_scalar
 									|| transport_pointer
 									|| transport_boxed)
-								&& !matching_register_value) {
+								&& !matching_register_value
+								&& !guarded_boxed_pointer) {
 							const zend_mir_storage_id storage_id =
 								canonical_storage(value);
 							const uint32_t reference =
@@ -8772,11 +8828,21 @@ public:
 									+ materialization_operand]);
 						}
 					}
+					for (const auto &[guarded_value, expected_type] :
+							typed_call_value_guards) {
+						operands_.push_back(guarded_value);
+						operands_.push_back(add_derived_value(
+							ZEND_MIR_REPRESENTATION_I64,
+							ZEND_MIR_SCALAR_TYPE_I64,
+							ZEND_MIR_ID_INVALID, true, expected_type));
+					}
 					InstNode guard{
 						InstKind::TypedCallGuard, i,
 						guarded_cold_block, INVALID_VALUE_REF, {},
 						guard_operand_offset,
-						2 + materialization_count,
+						2 + materialization_count
+							+ static_cast<uint32_t>(
+								typed_call_value_guards.size()) * 2,
 						false,
 						ZEND_MIR_ID_INVALID,
 						ZEND_MIR_SCALAR_TYPE_NONE,
@@ -8800,8 +8866,13 @@ public:
 						operands_.push_back(
 							operands_[operand_offset + n]);
 					}
-					fast_operand_count =
-						fast_call_argument_count;
+					for (IRValueRef owned_boxed :
+							typed_call_owned_boxed_arguments) {
+						operands_.push_back(owned_boxed);
+					}
+					fast_operand_count = fast_call_argument_count
+						+ static_cast<uint32_t>(
+							typed_call_owned_boxed_arguments.size());
 					uint32_t fast_inlined_operand_index = UINT32_MAX;
 					if (inlined_user_body.valid) {
 						fast_inlined_operand_index = fast_operand_count;

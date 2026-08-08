@@ -1228,10 +1228,55 @@ bool ZendCompilerA64::compile_inst_impl(
 		load_off(observed_reg, context.load_to_reg(),
 			static_cast<uint32_t>(observer_reference->displacement),
 			observer_reference->access_width);
-		generate_cond_branch(
-			Jump{Jump::Cbnz, observed_reg, false},
-			IRBlockRef{node.argument_index},
-			IRBlockRef{node.continuation_block});
+		const IRBlockRef cold{node.argument_index};
+		const IRBlockRef hot{node.continuation_block};
+		ASM(CMPxi, observed_reg, 0);
+		generate_raw_jump(Jump::Jne, this->block_labels[
+			static_cast<uint32_t>(this->analyzer.block_idx(cold))]);
+		const uint32_t guarded_operand_offset =
+			2 + node.materialization_count;
+		if (guarded_operand_offset > node.operands.size()
+				|| (node.operands.size() - guarded_operand_offset) % 2 != 0) {
+			return false;
+		}
+		for (uint32_t operand = guarded_operand_offset;
+				operand < node.operands.size(); operand += 2) {
+			if (adaptor->machine_kind(node.operands[operand])
+					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+				return false;
+			}
+			uint64_t expected_type;
+			if (!adaptor->constant(
+					node.operands[operand + 1], &expected_type)
+					|| expected_type > UINT32_MAX) {
+				return false;
+			}
+			auto boxed = val_ref(node.operands[operand]);
+			auto expected = val_ref(node.operands[operand + 1]);
+			(void) expected;
+			const ValueParts parts = val_parts(node.operands[operand]);
+			bool checked = false;
+			for (uint32_t part = 0; part < parts.count(); ++part) {
+				if (parts.representation.parts[part].semantic_role
+						!= ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
+					continue;
+				}
+				auto type = boxed.part(part);
+				ScratchReg masked_type{this};
+				auto masked_type_reg = masked_type.alloc_gp();
+				ASM(ANDwi, masked_type_reg, type.load_to_reg(), Z_TYPE_MASK);
+				ASM(CMPwi, masked_type_reg,
+					static_cast<uint32_t>(expected_type));
+				generate_raw_jump(Jump::Jne, this->block_labels[
+					static_cast<uint32_t>(this->analyzer.block_idx(cold))]);
+				checked = true;
+				break;
+			}
+			if (!checked) {
+				return false;
+			}
+		}
+		generate_uncond_branch(hot);
 		return true;
 	}
 	if (node.kind == Adaptor::InstKind::StringLengthValue) {
@@ -1312,6 +1357,35 @@ bool ZendCompilerA64::compile_inst_impl(
 						!= ZEND_TPDE_MACHINE_VALUE_I64
 					&& adaptor->machine_kind(node.result)
 						!= ZEND_TPDE_MACHINE_VALUE_BOOL)) {
+			return false;
+		}
+		auto source = val_ref(node.operands[0]);
+		const ValueParts parts = val_parts(node.operands[0]);
+		auto [result_ref, result] = result_ref_single(node.result);
+		for (uint32_t part = 0; part < parts.count(); ++part) {
+			if (parts.representation.parts[part].semantic_role
+					!= ZEND_TPDE_MACHINE_PART_PAYLOAD) {
+				continue;
+			}
+			auto payload = source.part(part);
+			auto payload_reg = payload.load_to_reg();
+			ASM(ORRx, result.alloc_reg(), payload_reg, payload_reg);
+			result.set_modified();
+			return true;
+		}
+		return false;
+	}
+	if (node.kind == Adaptor::InstKind::UnboxPointer) {
+		const zend_tpde_machine_value_kind result_kind =
+			adaptor->machine_kind(node.result);
+		if (node.operands.size() != 1 || !node.has_result
+				|| adaptor->machine_kind(node.operands[0])
+					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+				|| (result_kind != ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+					&& result_kind != ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+					&& result_kind != ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
+					&& result_kind != ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
+					&& result_kind != ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR)) {
 			return false;
 		}
 		auto source = val_ref(node.operands[0]);
@@ -11160,7 +11234,7 @@ bool ZendCompilerA64::compile_inst_impl(
 							|| typed_body_function
 								>= this->func_syms.size()
 							|| node.continuation_block == UINT32_MAX
-							|| node.operands.size() != argument_count) {
+							|| node.operands.size() < argument_count) {
 						return false;
 					}
 					zend::native::tpde::CCAssignerAppleA64 body_assigner;
@@ -11204,6 +11278,52 @@ bool ZendCompilerA64::compile_inst_impl(
 						for (auto &body_result : body_results) {
 							body_result.reset(this);
 						}
+					}
+					for (uint32_t operand = argument_count;
+							operand < node.operands.size(); ++operand) {
+						if (adaptor->machine_kind(node.operands[operand])
+								!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+								|| adaptor->ownership(node.operands[operand])
+									!= ZEND_MIR_OWNERSHIP_STATE_OWNED) {
+							return false;
+						}
+						auto boxed = val_ref(node.operands[operand]);
+						const ValueParts parts = val_parts(node.operands[operand]);
+						int32_t payload_part = -1;
+						int32_t type_part = -1;
+						for (uint32_t part = 0; part < parts.count(); ++part) {
+							if (parts.representation.parts[part].semantic_role
+									== ZEND_TPDE_MACHINE_PART_PAYLOAD) {
+								payload_part = static_cast<int32_t>(part);
+							} else if (parts.representation.parts[part].semantic_role
+									== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
+								type_part = static_cast<int32_t>(part);
+							}
+						}
+						if (payload_part < 0 || type_part < 0) {
+							return false;
+						}
+						auto payload = boxed.part(
+							static_cast<uint32_t>(payload_part));
+						auto type_info = boxed.part(
+							static_cast<uint32_t>(type_part));
+						auto payload_reg = payload.load_to_reg();
+						auto type_info_reg = type_info.load_to_reg();
+						auto released = text_writer.label_create();
+						ASM(TSTwi, type_info_reg,
+							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+						generate_raw_jump(Jump::Jeq, released);
+						ScratchReg count{this};
+						auto count_reg = count.alloc_gp();
+						load_off(count_reg, payload_reg,
+							static_cast<uint32_t>(offsetof(
+								zend_refcounted_h, refcount)), 4);
+						ASM(SUBwi, count_reg, count_reg, 1);
+						store_off(payload_reg,
+							static_cast<uint32_t>(offsetof(
+								zend_refcounted_h, refcount)),
+							count_reg, 4);
+						label_place(released);
 					}
 					adaptor->mark_typed_body_call(
 						call.direct_call->frame_size);
