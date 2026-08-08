@@ -8231,28 +8231,9 @@ public:
 								== ZEND_MIR_SOURCE_SLOT_VAR)
 						&& zend_mir_id_is_valid(
 							source_operand_storage_id(argument.source_operand));
-					int32_t argument_definition =
-						binding.definition_instruction_index;
-					if (argument_definition < 0 && binding.value_index >= 0
-							&& static_cast<uint32_t>(binding.value_index)
-								< source_producer_by_value.size()) {
-						argument_definition = source_producer_by_value[
-							static_cast<uint32_t>(binding.value_index)];
-					}
-					const bool helper_materialized_boxed_temporary =
-						direct_boxed_temporary
-						&& argument_definition >= 0
-						&& static_cast<uint32_t>(argument_definition)
-							< source_result_materialized_for_helper.size()
-						&& source_result_materialized_for_helper[
-							static_cast<uint32_t>(argument_definition)] != 0;
 					const bool stable_source =
 						direct_internal_source_argument_stable(
 							argument, record.source_position_id);
-					if (helper_materialized_boxed_temporary) {
-						argument_operands.push_back(IRValueRef{FRAME_VALUE});
-						continue;
-					}
 					if (direct_scalar || direct_boxed_temporary) {
 						argument_operands.push_back(value);
 						if (direct_boxed_temporary) {
