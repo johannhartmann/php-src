@@ -9472,7 +9472,8 @@ static bool freeze_typed_body_signature(
 static bool machine_plan_prefers_effect_closed_inline(
 		const zend_tpde_instruction &call,
 		const zend_tpde_plan *callee,
-		bool allow_checked_chain) {
+		bool allow_a64_extended_inline) {
+	zend_tpde_scalar_diamond diamond{};
 	if (call.direct_call == nullptr || callee == nullptr
 			|| (call.direct_call->receiver_kind
 					!= ZEND_NATIVE_INTERNAL_RECEIVER_NONE
@@ -9484,29 +9485,82 @@ static bool machine_plan_prefers_effect_closed_inline(
 					!= ZEND_MIR_SCALAR_TYPE_I1
 				&& call.direct_call->result_type
 					!= ZEND_MIR_SCALAR_TYPE_I64)
-			|| callee->block_count != 1
 			|| callee->block_ids == nullptr
 			|| callee->generator_resume_count != 0
 			|| callee->user_opcode_callbacks) {
+		return false;
+	}
+	const bool scalar_diamond = callee->block_count != 1;
+	if ((callee->block_count != 1
+			&& (!allow_a64_extended_inline
+				|| !zend_tpde_scalar_diamond_at(callee, &diamond)))) {
 		return false;
 	}
 
 	bool saw_return = false;
 	uint32_t checked_binary_count = 0;
 	bool saw_string_length = false;
+	uint32_t semantic_instruction_count = 0;
+	uint32_t conditional_branch_count = 0;
+	uint32_t arm_branch_count = 0;
+	uint32_t phi_count = 0;
 	for (uint32_t index = 0; index < callee->instruction_count; ++index) {
 		const zend_tpde_instruction &instruction =
 			callee->instructions[index];
 		const zend_mir_instruction_record record =
 			zend_tpde_instruction_record_at(callee, &instruction);
-		if (record.block_id != callee->block_ids[0]) {
+		const int32_t block_index =
+			zend_tpde_block_index(callee, record.block_id);
+		if (block_index < 0
+				|| (!scalar_diamond
+					&& record.block_id != callee->block_ids[0])) {
 			return false;
+		}
+		if (instruction.local_abi_transport) {
+			continue;
+		}
+		if (scalar_diamond
+				&& zend_tpde_scalar_diamond_frame_transport(
+					callee, instruction)) {
+			continue;
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_CONSTANT) {
 			continue;
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_STATEPOINT) {
 			if (record.effects != 0) {
+				return false;
+			}
+			continue;
+		}
+		if (++semantic_instruction_count > 24) {
+			return false;
+		}
+		if (record.opcode == ZEND_MIR_OPCODE_PHI) {
+			if (!scalar_diamond
+					|| static_cast<uint32_t>(block_index) != diamond.merge
+					|| !zend_mir_id_is_valid(record.result_id)
+					|| instruction.operand_count != 2) {
+				return false;
+			}
+			++phi_count;
+			continue;
+		}
+		if (record.opcode == ZEND_MIR_OPCODE_COND_BRANCH) {
+			if (!scalar_diamond
+					|| static_cast<uint32_t>(block_index) != diamond.entry
+					|| instruction.operand_count != 1
+					|| ++conditional_branch_count != 1) {
+				return false;
+			}
+			continue;
+		}
+		if (record.opcode == ZEND_MIR_OPCODE_BRANCH) {
+			const uint32_t block = static_cast<uint32_t>(block_index);
+			if (!scalar_diamond
+					|| (block != diamond.true_block
+						&& block != diamond.false_block)
+					|| ++arm_branch_count > 2) {
 				return false;
 			}
 			continue;
@@ -9532,14 +9586,20 @@ static bool machine_plan_prefers_effect_closed_inline(
 		if (record.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL) {
 			if (saw_return || !instruction.has_value_operation
 					|| instruction.value_operation.source_opcode
-						!= ZEND_RETURN) {
+						!= ZEND_RETURN
+					|| (scalar_diamond
+						&& static_cast<uint32_t>(block_index)
+							!= diamond.merge)) {
 				return false;
 			}
 			saw_return = true;
 			continue;
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_RETURN) {
-			if (saw_return || instruction.operand_count != 1) {
+			if (saw_return || instruction.operand_count != 1
+					|| (scalar_diamond
+						&& static_cast<uint32_t>(block_index)
+							!= diamond.merge)) {
 				return false;
 			}
 			saw_return = true;
@@ -9555,8 +9615,9 @@ static bool machine_plan_prefers_effect_closed_inline(
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_VALUE_BINARY_OP) {
 			const uint32_t checked_binary_limit =
-				allow_checked_chain ? 8 : 1;
-			if (checked_binary_count >= checked_binary_limit
+				allow_a64_extended_inline ? 8 : 1;
+			if (scalar_diamond
+					|| checked_binary_count >= checked_binary_limit
 					|| !instruction.has_value_operation
 					|| (instruction.value_operation.source_opcode
 							!= ZEND_ADD
@@ -9570,7 +9631,7 @@ static bool machine_plan_prefers_effect_closed_inline(
 			continue;
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_VALUE_UNARY_OP) {
-			if (checked_binary_count != 0 || saw_string_length
+			if (scalar_diamond || checked_binary_count != 0 || saw_string_length
 					|| !instruction.has_value_operation
 					|| instruction.value_operation.source_opcode
 						!= ZEND_STRLEN
@@ -9599,7 +9660,10 @@ static bool machine_plan_prefers_effect_closed_inline(
 			return false;
 		}
 	}
-	return saw_return;
+	return saw_return
+		&& (!scalar_diamond
+			|| (conditional_branch_count == 1
+				&& arm_branch_count == 2 && phi_count != 0));
 }
 
 static bool machine_plan_effect_closed_argument_is_used(

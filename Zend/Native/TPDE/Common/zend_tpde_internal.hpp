@@ -2017,6 +2017,145 @@ int32_t zend_tpde_value_index(
 	const zend_tpde_plan *plan, zend_mir_value_id id);
 int32_t zend_tpde_block_index(
 	const zend_tpde_plan *plan, zend_mir_block_id id);
+zend_mir_value_id zend_tpde_operand_at(
+	const zend_tpde_plan *plan,
+	const zend_tpde_instruction *instruction,
+	uint32_t index);
+
+struct zend_tpde_scalar_diamond {
+	uint32_t entry;
+	uint32_t true_block;
+	uint32_t false_block;
+	uint32_t merge;
+};
+
+/*
+ * Recognize the smallest acyclic multi-block scalar body.  Successor order is
+ * semantically significant: COND_BRANCH reaches successor zero when true and
+ * successor one when false, while PHI operands follow predecessor order.
+ */
+static inline bool zend_tpde_scalar_diamond_at(
+		const zend_tpde_plan *plan,
+		zend_tpde_scalar_diamond *out)
+{
+	if (plan == nullptr || out == nullptr || plan->block_count != 4
+			|| plan->block_ids == nullptr
+			|| plan->block_successor_offsets == nullptr
+			|| plan->block_successors == nullptr
+			|| plan->block_predecessor_offsets == nullptr
+			|| plan->block_predecessors == nullptr) {
+		return false;
+	}
+	const int32_t entry_index =
+		zend_tpde_block_index(plan, plan->function.entry_block_id);
+	if (entry_index < 0) {
+		return false;
+	}
+	const uint32_t entry = static_cast<uint32_t>(entry_index);
+	const uint32_t entry_successor_begin =
+		plan->block_successor_offsets[entry];
+	if (plan->block_successor_offsets[entry + 1]
+				- entry_successor_begin != 2) {
+		return false;
+	}
+	const uint32_t true_block =
+		plan->block_successors[entry_successor_begin];
+	const uint32_t false_block =
+		plan->block_successors[entry_successor_begin + 1];
+	if (true_block >= plan->block_count || false_block >= plan->block_count
+			|| true_block == false_block || true_block == entry
+			|| false_block == entry) {
+		return false;
+	}
+	const uint32_t true_successor_begin =
+		plan->block_successor_offsets[true_block];
+	const uint32_t false_successor_begin =
+		plan->block_successor_offsets[false_block];
+	if (plan->block_successor_offsets[true_block + 1]
+				- true_successor_begin != 1
+			|| plan->block_successor_offsets[false_block + 1]
+				- false_successor_begin != 1) {
+		return false;
+	}
+	const uint32_t merge = plan->block_successors[true_successor_begin];
+	if (merge >= plan->block_count
+			|| plan->block_successors[false_successor_begin] != merge
+			|| merge == entry || merge == true_block || merge == false_block
+			|| plan->block_successor_offsets[merge + 1]
+				!= plan->block_successor_offsets[merge]) {
+		return false;
+	}
+	auto has_single_predecessor = [&](uint32_t block, uint32_t predecessor) {
+		const uint32_t begin = plan->block_predecessor_offsets[block];
+		return plan->block_predecessor_offsets[block + 1] - begin == 1
+			&& plan->block_predecessors[begin] == predecessor;
+	};
+	if (!has_single_predecessor(true_block, entry)
+			|| !has_single_predecessor(false_block, entry)) {
+		return false;
+	}
+	const uint32_t merge_predecessor_begin =
+		plan->block_predecessor_offsets[merge];
+	if (plan->block_predecessor_offsets[merge + 1]
+				- merge_predecessor_begin != 2) {
+		return false;
+	}
+	const uint32_t first =
+		plan->block_predecessors[merge_predecessor_begin];
+	const uint32_t second =
+		plan->block_predecessors[merge_predecessor_begin + 1];
+	if (!((first == true_block && second == false_block)
+			|| (first == false_block && second == true_block))) {
+		return false;
+	}
+	*out = {entry, true_block, false_block, merge};
+	return true;
+}
+
+/*
+ * A scalar diamond may materialize an unaliased scalar SSA identity into its
+ * source-level zval carrier.  The cloned register body has no callee frame,
+ * so this transport must disappear with that frame.  Restrict the omission
+ * to self-identical, unaliased, non-refcounted scalar stores; assignments and
+ * reference-visible stores remain observable and reject inlining.
+ */
+static inline bool zend_tpde_scalar_diamond_frame_transport(
+		const zend_tpde_plan *plan,
+		const zend_tpde_instruction &instruction)
+{
+	if (plan == nullptr
+			|| instruction.record.opcode != ZEND_MIR_OPCODE_ZVAL_STORE
+			|| instruction.operand_count != 2
+			|| !zend_mir_id_is_valid(instruction.zval_store_storage_id)) {
+		return false;
+	}
+	const zend_mir_value_id source_id =
+		zend_tpde_operand_at(plan, &instruction, 0);
+	const zend_mir_value_id destination_id =
+		zend_tpde_operand_at(plan, &instruction, 1);
+	if (source_id != destination_id) {
+		return false;
+	}
+	const int32_t source_index = zend_tpde_value_index(
+		plan, source_id);
+	const int32_t destination_index = zend_tpde_value_index(
+		plan, destination_id);
+	if (source_index < 0 || destination_index != source_index) {
+		return false;
+	}
+	const zend_tpde_value &source = plan->values[source_index];
+	const zend_tpde_value &destination = plan->values[destination_index];
+	return (source.exact_type == ZEND_MIR_SCALAR_TYPE_I1
+			|| source.exact_type == ZEND_MIR_SCALAR_TYPE_I64)
+		&& destination.exact_type == source.exact_type
+		&& source.category == ZEND_MIR_VALUE_NON_REFCOUNTED_SCALAR
+		&& destination.category == ZEND_MIR_VALUE_NON_REFCOUNTED_SCALAR
+		&& !source.canonical_alias_observable
+		&& !destination.canonical_alias_observable
+		&& destination.canonical_storage_id
+			== instruction.zval_store_storage_id;
+}
+
 int32_t zend_tpde_instruction_index(
 	const zend_tpde_plan *plan, zend_mir_instruction_id id);
 const zend_tpde_instruction *zend_tpde_instruction_at(
@@ -2028,10 +2167,6 @@ bool zend_tpde_call_argument_at(
 	const zend_tpde_plan *plan,
 	uint32_t index,
 	zend_mir_call_argument_ref *out);
-zend_mir_value_id zend_tpde_operand_at(
-	const zend_tpde_plan *plan,
-	const zend_tpde_instruction *instruction,
-	uint32_t index);
 bool zend_tpde_image_append(
 	zend_native_image *image, const void *bytes, size_t length);
 bool zend_tpde_image_u8(zend_native_image *image, uint8_t value);
