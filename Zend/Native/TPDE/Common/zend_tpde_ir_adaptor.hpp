@@ -6235,6 +6235,7 @@ public:
 				i < source_result_consumer.size()
 					? source_result_consumer[i] : -1;
 			IRValueRef source_array_key = INVALID_VALUE_REF;
+			bool source_array_key_entry_register = false;
 			if (record.opcode == ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
 					&& instruction.has_value_operation) {
 				source_array_key = source_binding_value_ref(
@@ -6258,6 +6259,20 @@ public:
 								== ZEND_MIR_SCALAR_TYPE_I64
 							&& constant(source_array_key,
 								&key_constant_bits))));
+				const uint32_t raw_key =
+					static_cast<uint32_t>(source_array_key);
+				if (register_boxed_mir_conditions_
+						&& function_mode_ == FunctionMode::ZendEntry
+						&& raw_key >= MIR_VALUE_BASE
+						&& raw_key - MIR_VALUE_BASE < plan_->value_count
+						&& plan_->values[raw_key - MIR_VALUE_BASE]
+							.argument_index >= 0) {
+					const TypedBodyAbiType key_abi = typed_body_value_abi(
+						plan_, raw_key - MIR_VALUE_BASE);
+					source_array_key_entry_register = key_abi.valid
+						&& key_abi.machine_kind
+							== ZEND_TPDE_MACHINE_VALUE_STRING_PTR;
+				}
 			}
 			if (function_mode_ == FunctionMode::ZendEntry
 					&& instruction.has_value_operation
@@ -6295,8 +6310,9 @@ public:
 									== ZEND_MIR_REPRESENTATION_ZVAL
 								&& machine_kind(source_array_key)
 										== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL))
-								&& machine_value_has_register_definition(
-									source_array_key)));
+								&& (machine_value_has_register_definition(
+										source_array_key)
+									|| source_array_key_entry_register)));
 				} else if (record.opcode
 						== ZEND_MIR_OPCODE_OBJECT_FETCH_R) {
 					zend_tpde_object_property_read layout{};
@@ -6374,12 +6390,24 @@ public:
 				&& plan_->instructions[static_cast<uint32_t>(
 					direct_source_consumer)].record.opcode
 					== ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL;
+			const bool typed_boxed_call_result =
+				register_boxed_mir_conditions_
+				&& direct_source_consumer > static_cast<int32_t>(i)
+				&& static_cast<uint32_t>(direct_source_consumer)
+					< plan_->instruction_count
+				&& frozen_typed_component_call(
+					static_cast<uint32_t>(direct_source_consumer));
 			if (function_mode_ == FunctionMode::ZendEntry
 					&& instruction.has_value_operation
 					&& boxed_source_result
 					&& (!machine_value_has_result_representation(result)
 						|| unknown_reference_result
-						|| register_complete_array_result)) {
+						|| register_complete_array_result
+						|| (typed_boxed_call_result
+							&& machine_kind(result)
+								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+							&& ownership(result)
+								!= ZEND_MIR_OWNERSHIP_STATE_OWNED))) {
 				auto &value_overrides = active_value_overrides();
 				auto &source_overrides =
 					active_source_ssa_overrides();
@@ -7838,6 +7866,8 @@ public:
 								== ZEND_MIR_REPRESENTATION_ZVAL
 							&& machine_kind(value)
 								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+							&& ownership(value)
+								== ZEND_MIR_OWNERSHIP_STATE_OWNED
 							&& machine_value_is_register_authoritative(value)
 							&& machine_value_has_register_definition(value)
 							&& n < instruction.direct_call->argument_count
@@ -8815,6 +8845,11 @@ public:
 						static_cast<uint32_t>(operands_.size());
 					operands_.push_back(guard_context);
 					operands_.push_back(observers_enabled_reference);
+					const bool guarded_boxed_values =
+						!typed_call_value_guards.empty();
+					if (guarded_boxed_values) {
+						operands_.push_back(IRValueRef{FRAME_VALUE});
+					}
 					for (uint32_t n = 0;
 							n < materialization_count; ++n) {
 						const uint32_t materialization_operand =
@@ -8840,7 +8875,8 @@ public:
 						InstKind::TypedCallGuard, i,
 						guarded_cold_block, INVALID_VALUE_REF, {},
 						guard_operand_offset,
-						2 + materialization_count
+						2 + static_cast<uint32_t>(guarded_boxed_values)
+							+ materialization_count
 							+ static_cast<uint32_t>(
 								typed_call_value_guards.size()) * 2,
 						false,
@@ -8848,7 +8884,9 @@ public:
 						ZEND_MIR_SCALAR_TYPE_NONE,
 						false, {}, false, UINT32_MAX, UINT32_MAX,
 						materialization_count == 0
-							? UINT32_MAX : 2,
+							? UINT32_MAX
+							: 2 + static_cast<uint32_t>(
+								guarded_boxed_values),
 						materialization_count};
 					guard.control_block = block;
 					guard.continuation_block = guarded_hot_block;
