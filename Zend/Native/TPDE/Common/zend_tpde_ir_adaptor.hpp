@@ -4198,24 +4198,7 @@ public:
 			const bool boxed_result =
 				representation(canonical)
 					== ZEND_MIR_REPRESENTATION_ZVAL;
-			zend_tpde_long_assign_op lazy_assign{};
-			/* Darwin AArch64 transports boxed values as multi-part PHIs. Keep
-			 * result-less lazy assign-ops and in-place bitwise mutations in the
-			 * frame: their initial loop edge may not define every promoted part. */
-			const bool frame_authoritative_boxed_result =
-				register_boxed_mir_conditions_
-				&& boxed_result
-				&& ((instruction.mutation_lazy_scalar
-						&& zend_tpde_long_assign_op_at(
-							instruction, &lazy_assign)
-						&& !lazy_assign.has_result)
-					|| ((source_opcode == ZEND_BW_OR
-							|| source_opcode == ZEND_BW_AND
-							|| source_opcode == ZEND_BW_XOR)
-						&& instruction.value_operation.op1_storage_id
-							== result_storage));
 			if ((!scalar_result && !boxed_result)
-					|| frame_authoritative_boxed_result
 					|| (scalar_result
 						? machine_value_has_register_definition(canonical)
 						: machine_value_has_result_representation(canonical))) {
