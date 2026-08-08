@@ -9665,7 +9665,8 @@ static bool machine_value_kind_can_be_register_authoritative(
 static bool freeze_typed_component_calls(
 		zend_tpde_plan *plan,
 		const zend_tpde_plan *const *component_plans,
-		uint32_t component_count) {
+		uint32_t component_count,
+		bool register_a64_value_transports) {
 	plan->has_register_component_results = false;
 	if (plan->instruction_count == 0) {
 		return true;
@@ -9771,6 +9772,56 @@ static bool freeze_typed_component_calls(
 			const zend_tpde_local_abi_type callee_abi =
 				machine_plan_value_abi(
 					callee, static_cast<uint32_t>(callee_value));
+			const zend_tpde_instruction *property_producer =
+				binding.definition_instruction_index >= 0
+						&& static_cast<uint32_t>(
+							binding.definition_instruction_index)
+							< plan->instruction_count
+					? &plan->instructions[static_cast<uint32_t>(
+						binding.definition_instruction_index)]
+					: nullptr;
+			const zend_tpde_machine_reference *property_reference =
+				property_producer != nullptr
+						&& property_producer->operation_reference_index
+							< plan->machine_reference_count
+					? &plan->machine_references[
+						property_producer->operation_reference_index]
+					: nullptr;
+			zend_tpde_object_property_read property_layout{};
+			const bool guarded_property_pointer_transport =
+				register_a64_value_transports
+				&& !effect_closed_inline
+				&& callee_abi.valid
+				&& machine_value_kind_can_be_register_authoritative(
+					callee_abi.machine_kind)
+				&& callee_abi.representation
+					== ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER
+				&& property_producer != nullptr
+				&& property_producer->record.opcode
+					== ZEND_MIR_OPCODE_OBJECT_FETCH_R
+				&& zend_tpde_object_property_read_at(
+					*property_producer, &property_layout)
+				&& property_reference != nullptr
+				&& property_reference->kind
+					== ZEND_TPDE_MACHINE_REFERENCE_PROPERTY_SLOT
+				&& property_reference->stable_storage_or_layout_id
+					== property_layout.cache_offset
+				&& property_reference->access_width == sizeof(zval)
+				&& argument < instruction.direct_call->argument_count
+				&& instruction.direct_call->arguments[argument].exact_type
+					== callee_abi.exact_type
+				&& source_argument.ownership
+					!= ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE;
+			if (guarded_property_pointer_transport) {
+				/*
+				 * A cached property read produces a two-part register zval.
+				 * The AArch64 entry guard checks its runtime type before the
+				 * hot block extracts the refcounted payload.  Model the value
+				 * as the callee's borrowed pointer only after that guard; the
+				 * materialized cold call retains canonical Zend semantics.
+				 */
+				caller_abi = callee_abi;
+			}
 			if (effect_closed_inline
 					&& source_value >= 0
 					&& static_cast<uint32_t>(source_value)
@@ -11316,7 +11367,8 @@ static bool freeze_component_machine_plan(
 	}
 	for (uint32_t index = 0; index < component_count; ++index) {
 		if (!freeze_typed_component_calls(
-				&plans[index], component_plans, component_count)) {
+				&plans[index], component_plans, component_count,
+				register_a64_value_transports)) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
 				"unable to freeze component-local TPDE call plan");
