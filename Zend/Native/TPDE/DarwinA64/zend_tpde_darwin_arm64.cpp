@@ -1230,15 +1230,45 @@ bool ZendCompilerA64::compile_inst_impl(
 			observer_reference->access_width);
 		const IRBlockRef cold{node.argument_index};
 		const IRBlockRef hot{node.continuation_block};
-		ASM(CMPxi, observed_reg, 0);
-		generate_raw_jump(Jump::Jne, this->block_labels[
-			static_cast<uint32_t>(this->analyzer.block_idx(cold))]);
-		const uint32_t guarded_operand_offset =
+		const uint32_t unguarded_operand_offset =
 			2 + node.materialization_count;
-		if (guarded_operand_offset > node.operands.size()
+		if (unguarded_operand_offset > node.operands.size()) {
+			return false;
+		}
+		if (unguarded_operand_offset == node.operands.size()) {
+			ASM(CMPxi, observed_reg, 0);
+			generate_cond_branch(Jump::Jne, cold, hot);
+			return true;
+		}
+		const uint32_t guarded_operand_offset =
+			3 + node.materialization_count;
+		if (node.operands[2] != IRValueRef{Adaptor::FRAME_VALUE}
+				|| guarded_operand_offset > node.operands.size()
 				|| (node.operands.size() - guarded_operand_offset) % 2 != 0) {
 			return false;
 		}
+
+		/*
+		 * A guarded boxed argument owns the copy produced by its fast read.
+		 * The typed hot call releases that copy after use.  If a runtime type
+		 * or observer guard selects the canonical cold call instead, transfer
+		 * the same ownership into the source frame slot consumed by that path.
+		 */
+		auto [frame_ref, frame] = val_ref_single(node.operands[2]);
+		auto frame_reg = frame.load_to_reg();
+		std::vector<ValueRef> guarded_values;
+		std::vector<AsmReg> guarded_payload_regs;
+		std::vector<AsmReg> guarded_type_regs;
+		std::vector<uint32_t> guarded_expected_types;
+		std::vector<uint32_t> guarded_offsets;
+		const uint32_t guarded_count =
+			static_cast<uint32_t>(
+				(node.operands.size() - guarded_operand_offset) / 2);
+		guarded_values.reserve(guarded_count);
+		guarded_payload_regs.reserve(guarded_count);
+		guarded_type_regs.reserve(guarded_count);
+		guarded_expected_types.reserve(guarded_count);
+		guarded_offsets.reserve(guarded_count);
 		for (uint32_t operand = guarded_operand_offset;
 				operand < node.operands.size(); operand += 2) {
 			if (adaptor->machine_kind(node.operands[operand])
@@ -1251,32 +1281,71 @@ bool ZendCompilerA64::compile_inst_impl(
 					|| expected_type > UINT32_MAX) {
 				return false;
 			}
-			auto boxed = val_ref(node.operands[operand]);
-			auto expected = val_ref(node.operands[operand + 1]);
-			(void) expected;
-			const ValueParts parts = val_parts(node.operands[operand]);
-			bool checked = false;
-			for (uint32_t part = 0; part < parts.count(); ++part) {
-				if (parts.representation.parts[part].semantic_role
-						!= ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
-					continue;
-				}
-				auto type = boxed.part(part);
-				ScratchReg masked_type{this};
-				auto masked_type_reg = masked_type.alloc_gp();
-				ASM(ANDwi, masked_type_reg, type.load_to_reg(), Z_TYPE_MASK);
-				ASM(CMPwi, masked_type_reg,
-					static_cast<uint32_t>(expected_type));
-				generate_raw_jump(Jump::Jne, this->block_labels[
-					static_cast<uint32_t>(this->analyzer.block_idx(cold))]);
-				checked = true;
-				break;
-			}
-			if (!checked) {
+			const zend_mir_storage_id storage_id =
+				adaptor->canonical_storage(node.operands[operand]);
+			const uint64_t offset =
+				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage_id) * sizeof(zval);
+			if (!zend_mir_id_is_valid(storage_id)
+					|| offset > static_cast<uint64_t>(UINT32_MAX)
+						- sizeof(zval)) {
 				return false;
 			}
+			auto boxed = val_ref(node.operands[operand]);
+			const ValueParts parts = val_parts(node.operands[operand]);
+			int32_t payload_part = -1;
+			int32_t type_part = -1;
+			for (uint32_t part = 0; part < parts.count(); ++part) {
+				if (parts.representation.parts[part].semantic_role
+						== ZEND_TPDE_MACHINE_PART_PAYLOAD) {
+					payload_part = static_cast<int32_t>(part);
+				} else if (parts.representation.parts[part].semantic_role
+						== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
+					type_part = static_cast<int32_t>(part);
+				}
+			}
+			if (payload_part < 0 || type_part < 0) {
+				return false;
+			}
+			guarded_payload_regs.push_back(
+				boxed.part(static_cast<uint32_t>(payload_part)).load_to_reg());
+			guarded_type_regs.push_back(
+				boxed.part(static_cast<uint32_t>(type_part)).load_to_reg());
+			guarded_expected_types.push_back(
+				static_cast<uint32_t>(expected_type));
+			guarded_offsets.push_back(static_cast<uint32_t>(offset));
+			guarded_values.push_back(std::move(boxed));
 		}
-		generate_uncond_branch(hot);
+		ScratchReg masked_type{this};
+		auto masked_type_reg = masked_type.alloc_gp();
+		auto cold_transfer = text_writer.label_create();
+		auto hot_branch = text_writer.label_create();
+		const auto spilled = spill_before_branch();
+		begin_branch_region();
+		ASM(CMPxi, observed_reg, 0);
+		generate_raw_jump(Jump::Jne, cold_transfer);
+		for (uint32_t index = 0; index < guarded_count; ++index) {
+			ASM(ANDwi, masked_type_reg,
+				guarded_type_regs[index], Z_TYPE_MASK);
+			ASM(CMPwi, masked_type_reg, guarded_expected_types[index]);
+			generate_raw_jump(Jump::Jne, cold_transfer);
+		}
+		generate_raw_jump(Jump::jmp, hot_branch);
+
+		label_place(cold_transfer);
+		for (uint32_t index = 0; index < guarded_count; ++index) {
+			store_off(frame_reg, guarded_offsets[index],
+				guarded_payload_regs[index], 8);
+			store_off(frame_reg,
+				guarded_offsets[index]
+					+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+				guarded_type_regs[index], 4);
+		}
+		generate_branch_to_block(
+			Jump::jmp, cold, branch_needs_split(cold), false);
+		label_place(hot_branch);
+		generate_branch_to_block(Jump::jmp, hot, false, true);
+		end_branch_region();
+		release_spilled_regs(spilled);
 		return true;
 	}
 	if (node.kind == Adaptor::InstKind::StringLengthValue) {

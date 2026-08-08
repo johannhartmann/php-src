@@ -9772,7 +9772,7 @@ static bool freeze_typed_component_calls(
 			const zend_tpde_local_abi_type callee_abi =
 				machine_plan_value_abi(
 					callee, static_cast<uint32_t>(callee_value));
-			const zend_tpde_instruction *property_producer =
+			const zend_tpde_instruction *boxed_read_producer =
 				binding.definition_instruction_index >= 0
 						&& static_cast<uint32_t>(
 							binding.definition_instruction_index)
@@ -9780,15 +9780,43 @@ static bool freeze_typed_component_calls(
 					? &plan->instructions[static_cast<uint32_t>(
 						binding.definition_instruction_index)]
 					: nullptr;
-			const zend_tpde_machine_reference *property_reference =
-				property_producer != nullptr
-						&& property_producer->operation_reference_index
+			const zend_tpde_machine_reference *boxed_read_reference =
+				boxed_read_producer != nullptr
+						&& boxed_read_producer->operation_reference_index
 							< plan->machine_reference_count
 					? &plan->machine_references[
-						property_producer->operation_reference_index]
+						boxed_read_producer->operation_reference_index]
 					: nullptr;
 			zend_tpde_object_property_read property_layout{};
+			zend_tpde_array_read array_layout{};
 			const bool guarded_property_pointer_transport =
+				boxed_read_producer != nullptr
+				&& boxed_read_producer->record.opcode
+					== ZEND_MIR_OPCODE_OBJECT_FETCH_R
+				&& zend_tpde_object_property_read_at(
+					*boxed_read_producer, &property_layout)
+				&& boxed_read_reference != nullptr
+				&& boxed_read_reference->kind
+					== ZEND_TPDE_MACHINE_REFERENCE_PROPERTY_SLOT
+				&& boxed_read_reference->stable_storage_or_layout_id
+					== property_layout.cache_offset
+				&& boxed_read_reference->access_width == sizeof(zval);
+			const bool guarded_array_pointer_transport =
+				boxed_read_producer != nullptr
+				&& boxed_read_producer->record.opcode
+					== ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
+				&& zend_tpde_array_read_at(
+					*boxed_read_producer, &array_layout)
+				&& boxed_read_reference != nullptr
+				&& boxed_read_reference->kind
+					== ZEND_TPDE_MACHINE_REFERENCE_PACKED_ELEMENT
+				&& zend_mir_id_is_valid(
+					boxed_read_reference->base_value_id)
+				&& zend_mir_id_is_valid(
+					boxed_read_reference->index_value_id)
+				&& boxed_read_reference->scale == sizeof(zval)
+				&& boxed_read_reference->access_width == sizeof(zval);
+			const bool guarded_boxed_pointer_transport =
 				register_a64_value_transports
 				&& !effect_closed_inline
 				&& callee_abi.valid
@@ -9796,25 +9824,16 @@ static bool freeze_typed_component_calls(
 					callee_abi.machine_kind)
 				&& callee_abi.representation
 					== ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER
-				&& property_producer != nullptr
-				&& property_producer->record.opcode
-					== ZEND_MIR_OPCODE_OBJECT_FETCH_R
-				&& zend_tpde_object_property_read_at(
-					*property_producer, &property_layout)
-				&& property_reference != nullptr
-				&& property_reference->kind
-					== ZEND_TPDE_MACHINE_REFERENCE_PROPERTY_SLOT
-				&& property_reference->stable_storage_or_layout_id
-					== property_layout.cache_offset
-				&& property_reference->access_width == sizeof(zval)
+				&& (guarded_property_pointer_transport
+					|| guarded_array_pointer_transport)
 				&& argument < instruction.direct_call->argument_count
 				&& instruction.direct_call->arguments[argument].exact_type
 					== callee_abi.exact_type
 				&& source_argument.ownership
 					!= ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE;
-			if (guarded_property_pointer_transport) {
+			if (guarded_boxed_pointer_transport) {
 				/*
-				 * A cached property read produces a two-part register zval.
+				 * A property or array read produces a two-part register zval.
 				 * The AArch64 entry guard checks its runtime type before the
 				 * hot block extracts the refcounted payload.  Model the value
 				 * as the callee's borrowed pointer only after that guard; the
