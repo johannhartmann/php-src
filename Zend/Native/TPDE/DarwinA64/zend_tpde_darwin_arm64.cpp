@@ -11189,7 +11189,9 @@ bool ZendCompilerA64::compile_inst_impl(
 					}
 					const uint32_t inline_operand_count =
 						node.inlined_checked_source_opcode == UINT32_MAX
-							? 1 : 2;
+							? 1
+							: node.inlined_checked_operand_count != 0
+								? node.inlined_checked_operand_count : 2;
 					if (node.operands.size() < inline_operand_count
 							|| node.inlined_operand_index
 							> node.operands.size()
@@ -11234,6 +11236,68 @@ bool ZendCompilerA64::compile_inst_impl(
 							Jump::Jne, call_slow_target());
 					}
 					if (node.inlined_checked_source_opcode != UINT32_MAX) {
+						const auto checked_steps =
+							adaptor->inlined_checked_steps(node);
+						if (checked_steps.size() > 1) {
+							if (inline_operand_count != checked_steps.size() + 1
+									|| node.inlined_operand_index + 1
+										>= node.operands.size()) {
+								return false;
+							}
+							auto [left_ref, left] = val_ref_single(
+								node.operands[node.inlined_operand_index]);
+							auto [right_ref, right] = val_ref_single(
+								node.operands[
+									node.inlined_operand_index + 1]);
+							ScratchReg computed{this};
+							auto computed_reg = computed.alloc_gp();
+							auto emit_checked = [&](uint32_t source_opcode,
+									AsmReg left_reg, AsmReg right_reg) {
+								switch (source_opcode) {
+									case ZEND_ADD:
+										ASM(ADDSx, computed_reg,
+											left_reg, right_reg);
+										break;
+									case ZEND_SUB:
+										ASM(SUBSx, computed_reg,
+											left_reg, right_reg);
+										break;
+									default:
+										return false;
+								}
+								generate_raw_jump(
+									Jump::Jvs, call_slow_target());
+								return true;
+							};
+							if (!emit_checked(checked_steps[0].source_opcode,
+									left.load_to_reg(), right.load_to_reg())) {
+								return false;
+							}
+							for (uint32_t step = 1;
+									step < checked_steps.size(); ++step) {
+								auto [other_ref, other] = val_ref_single(
+									node.operands[node.inlined_operand_index
+										+ step + 1]);
+								const auto other_reg = other.load_to_reg();
+								if (!emit_checked(
+										checked_steps[step].source_opcode,
+										checked_steps[step].accumulator_is_left
+											? computed_reg : other_reg,
+										checked_steps[step].accumulator_is_left
+											? other_reg : computed_reg)) {
+									return false;
+								}
+							}
+							if (!node.has_result) {
+								return false;
+							}
+							auto [result_ref, result] =
+								result_ref_single(node.result);
+							result.set_value(std::move(computed));
+							generate_uncond_branch(
+								IRBlockRef{node.continuation_block});
+							return true;
+						}
 						if (node.inlined_operand_index + 1
 								>= node.operands.size()) {
 							return false;
@@ -11453,32 +11517,95 @@ bool ZendCompilerA64::compile_inst_impl(
 							}
 							if (node.inlined_checked_source_opcode
 									!= UINT32_MAX) {
-								if (node.inlined_operand_index + 1
-										>= node.operands.size()) {
-									return false;
-								}
-								auto [left_ref, left] = val_ref_single(
-									node.operands[
-										node.inlined_operand_index]);
-								auto [right_ref, right] = val_ref_single(
-									node.operands[
-										node.inlined_operand_index + 1]);
-								switch (
-									node.inlined_checked_source_opcode) {
-									case ZEND_ADD:
-										ASM(ADDSx, first_reg,
-											left.load_to_reg(),
-											right.load_to_reg());
-										break;
-									case ZEND_SUB:
-										ASM(SUBSx, first_reg,
-											left.load_to_reg(),
-											right.load_to_reg());
-										break;
-									default:
+								const auto checked_steps =
+									adaptor->inlined_checked_steps(node);
+								if (checked_steps.size() > 1) {
+									const uint32_t checked_operand_count =
+										node.inlined_checked_operand_count;
+									if (checked_operand_count
+											!= checked_steps.size() + 1
+											|| node.operands.size()
+												< checked_operand_count
+											|| node.inlined_operand_index
+												> node.operands.size()
+													- checked_operand_count) {
 										return false;
+									}
+									auto [left_ref, left] = val_ref_single(
+										node.operands[
+											node.inlined_operand_index]);
+									auto [right_ref, right] = val_ref_single(
+										node.operands[
+											node.inlined_operand_index + 1]);
+									auto emit_checked = [&](uint32_t source_opcode,
+											AsmReg left_reg, AsmReg right_reg) {
+										switch (source_opcode) {
+											case ZEND_ADD:
+												ASM(ADDSx, first_reg,
+													left_reg, right_reg);
+												break;
+											case ZEND_SUB:
+												ASM(SUBSx, first_reg,
+													left_reg, right_reg);
+												break;
+											default:
+												return false;
+										}
+										generate_raw_jump(
+											Jump::Jvs, call_slow_target());
+										return true;
+									};
+									if (!emit_checked(
+											checked_steps[0].source_opcode,
+											left.load_to_reg(),
+											right.load_to_reg())) {
+										return false;
+									}
+									for (uint32_t step = 1;
+											step < checked_steps.size(); ++step) {
+										auto [other_ref, other] = val_ref_single(
+											node.operands[
+												node.inlined_operand_index
+													+ step + 1]);
+										const auto other_reg = other.load_to_reg();
+										if (!emit_checked(
+												checked_steps[step].source_opcode,
+												checked_steps[step].accumulator_is_left
+													? first_reg : other_reg,
+												checked_steps[step].accumulator_is_left
+													? other_reg : first_reg)) {
+											return false;
+										}
+									}
+								} else {
+									if (node.inlined_operand_index + 1
+											>= node.operands.size()) {
+										return false;
+									}
+									auto [left_ref, left] = val_ref_single(
+										node.operands[
+											node.inlined_operand_index]);
+									auto [right_ref, right] = val_ref_single(
+										node.operands[
+											node.inlined_operand_index + 1]);
+									switch (
+										node.inlined_checked_source_opcode) {
+										case ZEND_ADD:
+											ASM(ADDSx, first_reg,
+												left.load_to_reg(),
+												right.load_to_reg());
+											break;
+										case ZEND_SUB:
+											ASM(SUBSx, first_reg,
+												left.load_to_reg(),
+												right.load_to_reg());
+											break;
+										default:
+											return false;
+									}
+									generate_raw_jump(
+										Jump::Jvs, call_slow_target());
 								}
-								generate_raw_jump(Jump::Jvs, call_slow_target());
 							} else {
 								auto [inline_ref, inline_value] =
 									val_ref_single(node.operands[
