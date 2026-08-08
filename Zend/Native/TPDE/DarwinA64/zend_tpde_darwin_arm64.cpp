@@ -13476,16 +13476,26 @@ bool ZendCompilerA64::compile_inst_impl(
 				for (uint32_t index = 0;
 						index < argument_count; ++index) {
 					const IRValueRef operand = node.operands[index];
+					const zend_native_direct_internal_call_argument &argument =
+						call.direct_internal_call->arguments[index];
+					const bool direct_boxed_argument =
+						operand != IRValueRef{Adaptor::FRAME_VALUE}
+						&& adaptor->machine_kind(operand)
+							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+						&& adaptor->machine_value_is_register_authoritative(
+							operand)
+						&& (argument.source_opcode == ZEND_SEND_VAL
+							|| argument.source_opcode == ZEND_SEND_VAL_EX);
 					zend::native::tpde::CCAssignerAppleA64 assigner;
 					CallBuilder builder{*this, assigner};
 					const IRValueRef frame_operand =
 						node.operands[frame_base + 1 + index];
 					if (operand != IRValueRef{Adaptor::FRAME_VALUE}
 							&& adaptor->machine_kind(operand)
-								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+							&& !direct_boxed_argument) {
 						const zend_mir_source_operand_ref &source =
-							call.direct_internal_call->arguments[index]
-								.source_operand;
+							argument.source_operand;
 						if ((source.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
 								&& source.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
 								|| (source.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
@@ -13529,6 +13539,30 @@ bool ZendCompilerA64::compile_inst_impl(
 						store_boxed_part(type_info,
 							static_cast<uint32_t>(offset
 								+ offsetof(zval, u1.type_info)), 4);
+					}
+					if (direct_boxed_argument) {
+						auto boxed = val_ref(operand);
+						{
+							auto frame_materialization_liveness =
+								val_ref(frame_operand);
+							(void) frame_materialization_liveness;
+						}
+						builder.add_arg(CallArg{frame_operand});
+						builder.add_arg(image_symbol_value(
+							ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
+							call.id), ::tpde::CCAssignment{});
+						builder.add_arg(ValuePart{index, 4,
+							DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+						for (uint32_t part = 0; part < 2; ++part) {
+							builder.add_arg(boxed.part(part),
+								::tpde::CCAssignment{});
+						}
+						boxed.reset();
+						ASM(ORRwi, AsmReg{AsmReg::R4}, AsmReg{AsmReg::R4},
+							ZEND_NATIVE_DIRECT_INTERNAL_ARGUMENT_BOXED_TYPE_INFO);
+						builder.call(runtime_symbol(
+							ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL_SET_INTEGER_ARGUMENT));
+						continue;
 					}
 					builder.add_arg(CallArg{frame_operand});
 					if (operand == IRValueRef{Adaptor::FRAME_VALUE}) {

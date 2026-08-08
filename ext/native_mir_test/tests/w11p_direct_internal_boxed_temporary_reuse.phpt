@@ -8,6 +8,13 @@ if (!function_exists('native_mir_test_compile_execute')) {
 ?>
 --FILE--
 <?php
+$first = -0.000516528926;
+$second = 548.0;
+$values = [
+    'first' => &$first,
+    'second' => &$second,
+];
+
 $source = <<<'PHP'
 <?php
 function direct_internal_boxed_temporary_reuse(array $values): string
@@ -23,7 +30,7 @@ PHP;
 $result = native_mir_test_compile_execute(
     $source,
     'w11p-direct-internal-boxed-temporary-reuse.php',
-    [['first' => -0.000516528926, 'second' => 548.0]],
+    [$values],
     [
         'wave' => 11,
         'function' => 'direct_internal_boxed_temporary_reuse',

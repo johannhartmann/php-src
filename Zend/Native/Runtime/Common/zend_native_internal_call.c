@@ -1218,6 +1218,31 @@ zend_result zend_native_direct_internal_call_set_integer_argument(
 		}
 		return FAILURE;
 	}
+	if ((exact_type
+			& ZEND_NATIVE_DIRECT_INTERNAL_ARGUMENT_BOXED_TYPE_INFO) != 0) {
+		zval source = {0};
+
+		source.value.lval = (zend_long) payload_bits;
+		Z_TYPE_INFO(source) = exact_type
+			& ~ZEND_NATIVE_DIRECT_INTERNAL_ARGUMENT_BOXED_TYPE_INFO;
+		if (Z_TYPE(source) == IS_INDIRECT) {
+			zend_native_zval_copy_deref_or_dup(
+				target, Z_INDIRECT(source));
+		} else if (Z_ISREF(source)) {
+			zend_refcounted *reference = Z_COUNTED_P(&source);
+			zval *referent = Z_REFVAL_P(&source);
+
+			ZVAL_COPY_VALUE(target, referent);
+			if (GC_DELREF(reference) == 0) {
+				efree_size(reference, sizeof(zend_reference));
+			} else {
+				zend_native_zval_copy_deref_or_dup(target, target);
+			}
+		} else {
+			ZVAL_COPY_VALUE(target, &source);
+		}
+		return SUCCESS;
+	}
 	switch (exact_type) {
 		case ZEND_MIR_SCALAR_TYPE_NULL:
 			ZVAL_NULL(target);

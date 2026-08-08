@@ -218,6 +218,15 @@ typedef struct _zend_native_direct_internal_call_descriptor {
 #define ZEND_NATIVE_DIRECT_INTERNAL_CALL_REQUIRE_SCALAR_RESULT UINT32_C(1)
 
 /*
+ * The process-local direct-internal integer setter also transports one
+ * register-authoritative boxed temporary on backends which can keep both zval
+ * words live through argument setup.  The marker occupies a bit outside both
+ * zend_mir_scalar_type_mask and zval type_info.
+ */
+#define ZEND_NATIVE_DIRECT_INTERNAL_ARGUMENT_BOXED_TYPE_INFO \
+	(UINT32_C(1) << 31)
+
+/*
  * Complete immutable source-call semantics for a user call that cannot use
  * the fixed direct-frame path. The compiler decodes INIT/SEND/DO once; runtime
  * source positions are used only to publish EX(opline) and preserve declaring
