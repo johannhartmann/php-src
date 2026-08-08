@@ -14809,7 +14809,7 @@ struct A64ImageState {
 	explicit A64ImageState(
 		std::span<const zend_tpde_plan *const> plans,
 		zend_native_image *image)
-		: adaptor{plans, true}, compiler{&adaptor, image} {}
+		: adaptor{plans}, compiler{&adaptor, image} {}
 };
 
 #if defined(__APPLE__) && defined(__aarch64__)
