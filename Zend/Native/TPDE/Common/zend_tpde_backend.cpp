@@ -9471,7 +9471,8 @@ static bool freeze_typed_body_signature(
  */
 static bool machine_plan_prefers_effect_closed_inline(
 		const zend_tpde_instruction &call,
-		const zend_tpde_plan *callee) {
+		const zend_tpde_plan *callee,
+		bool allow_checked_chain) {
 	if (call.direct_call == nullptr || callee == nullptr
 			|| (call.direct_call->receiver_kind
 					!= ZEND_NATIVE_INTERNAL_RECEIVER_NONE
@@ -9491,7 +9492,7 @@ static bool machine_plan_prefers_effect_closed_inline(
 	}
 
 	bool saw_return = false;
-	bool saw_checked_binary = false;
+	uint32_t checked_binary_count = 0;
 	bool saw_string_length = false;
 	for (uint32_t index = 0; index < callee->instruction_count; ++index) {
 		const zend_tpde_instruction &instruction =
@@ -9514,6 +9515,9 @@ static bool machine_plan_prefers_effect_closed_inline(
 				&& (instruction.runtime_helper
 						== ZEND_NATIVE_HELPER_COUNT
 					|| saw_string_length
+					|| (checked_binary_count != 0
+						&& call.direct_call->result_type
+							== ZEND_MIR_SCALAR_TYPE_I64)
 					|| (callee->typed_body_return_abi.valid
 						&& callee->typed_body_return_abi.exact_type
 							== call.direct_call->result_type))) {
@@ -9550,7 +9554,10 @@ static bool machine_plan_prefers_effect_closed_inline(
 			continue;
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_VALUE_BINARY_OP) {
-			if (saw_checked_binary || !instruction.has_value_operation
+			const uint32_t checked_binary_limit =
+				allow_checked_chain ? 8 : 1;
+			if (checked_binary_count >= checked_binary_limit
+					|| !instruction.has_value_operation
 					|| (instruction.value_operation.source_opcode
 							!= ZEND_ADD
 						&& instruction.value_operation.source_opcode
@@ -9559,11 +9566,11 @@ static bool machine_plan_prefers_effect_closed_inline(
 						!= ZEND_MIR_SCALAR_TYPE_I64) {
 				return false;
 			}
-			saw_checked_binary = true;
+			++checked_binary_count;
 			continue;
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_VALUE_UNARY_OP) {
-			if (saw_checked_binary || saw_string_length
+			if (checked_binary_count != 0 || saw_string_length
 					|| !instruction.has_value_operation
 					|| instruction.value_operation.source_opcode
 						!= ZEND_STRLEN
@@ -9584,7 +9591,7 @@ static bool machine_plan_prefers_effect_closed_inline(
 			|| record.opcode == ZEND_MIR_OPCODE_I1_EQ
 			|| record.opcode == ZEND_MIR_OPCODE_I64_TO_I1
 			|| record.opcode == ZEND_MIR_OPCODE_I1_TO_I64;
-		if (saw_checked_binary || saw_string_length
+		if (checked_binary_count != 0 || saw_string_length
 				|| !integer_or_boolean_opcode
 				|| record.effects != 0
 				|| !zend_mir_id_is_valid(record.result_id)
@@ -9723,7 +9730,8 @@ static bool freeze_typed_component_calls(
 		}
 		const bool effect_closed_inline =
 			machine_plan_prefers_effect_closed_inline(
-				instruction, callee);
+				instruction, callee,
+				register_a64_value_transports);
 		bool compatible = true;
 		for (uint32_t argument = 0;
 				argument < instruction.call_argument_count; ++argument) {

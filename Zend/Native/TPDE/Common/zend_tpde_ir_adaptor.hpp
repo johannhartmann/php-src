@@ -140,6 +140,9 @@ public:
 		uint32_t semantic_operand_count = UINT32_MAX;
 		uint32_t boxed_op1_boundary_operand_index = UINT32_MAX;
 		uint32_t boxed_op2_boundary_operand_index = UINT32_MAX;
+		uint32_t inlined_checked_step_offset = UINT32_MAX;
+		uint32_t inlined_checked_step_count = 0;
+		uint32_t inlined_checked_operand_count = 0;
 	};
 
 	struct DerivedValue {
@@ -157,15 +160,30 @@ public:
 		uint64_t known_string_length = 0;
 	};
 
+	struct InlinedCheckedStep {
+		uint32_t source_opcode = UINT32_MAX;
+		bool accumulator_is_left = true;
+	};
+
 	struct InlinedBody {
 		bool valid = false;
 		IRValueRef value = INVALID_VALUE_REF;
 		IRValueRef checked_left = INVALID_VALUE_REF;
 		IRValueRef checked_right = INVALID_VALUE_REF;
 		uint32_t checked_source_opcode = UINT32_MAX;
+		std::vector<IRValueRef> checked_operands{};
+		std::vector<InlinedCheckedStep> checked_steps{};
 
 		bool checked() const {
-			return checked_source_opcode != UINT32_MAX;
+			return !checked_steps.empty()
+				|| checked_source_opcode != UINT32_MAX;
+		}
+
+		uint32_t operand_count() const {
+			return checked()
+				? static_cast<uint32_t>(checked_operands.empty()
+					? 2 : checked_operands.size())
+				: 1;
 		}
 	};
 
@@ -344,6 +362,7 @@ private:
 	std::vector<Slice> phi_input_slices_;
 	std::vector<PhiInput> phi_inputs_;
 	std::vector<InstNode> nodes_;
+	std::vector<InlinedCheckedStep> inlined_checked_steps_;
 	std::vector<uint8_t> fused_instructions_;
 	std::vector<IRValueRef> operands_;
 	std::vector<IRValueRef> generator_resume_values_;
@@ -1117,6 +1136,8 @@ private:
 
 		std::vector<IRValueRef> values(
 			callee->value_count, INVALID_VALUE_REF);
+		std::vector<int32_t> checked_value_steps(
+			callee->value_count, -1);
 		const size_t derived_value_checkpoint = derived_values_.size();
 		const size_t machine_reference_checkpoint =
 			machine_reference_values_.size();
@@ -1376,9 +1397,9 @@ private:
 				value.constant_bits);
 			return mapped;
 		};
-		auto mapped_source_operand =
-			[&](const zend_mir_source_operand_ref &source)
-				-> IRValueRef {
+		auto source_value_id =
+			[](const zend_mir_source_operand_ref &source)
+				-> zend_mir_value_id {
 				zend_mir_value_id value_id = ZEND_MIR_ID_INVALID;
 				if (source.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
 					value_id =
@@ -1392,16 +1413,63 @@ private:
 					value_id = zend_mir_value_from_original_ssa(
 						source.ssa_variable_id);
 				}
-				return zend_mir_id_is_valid(value_id)
-					? mapped_value(value_id)
-					: INVALID_VALUE_REF;
+				return value_id;
 			};
+		auto mapped_source_operand =
+			[&](const zend_mir_source_operand_ref &source)
+				-> IRValueRef {
+				const zend_mir_value_id value_id = source_value_id(source);
+				return zend_mir_id_is_valid(value_id)
+					? mapped_value(value_id) : INVALID_VALUE_REF;
+			};
+		auto checked_step_for_index = [&](int32_t value_index) -> int32_t {
+				for (uint32_t depth = 0;
+						value_index >= 0 && depth < callee->value_count;
+						++depth) {
+					if (static_cast<uint32_t>(value_index)
+							>= checked_value_steps.size()) {
+						return -1;
+					}
+					if (checked_value_steps[
+							static_cast<uint32_t>(value_index)] >= 0) {
+						return checked_value_steps[
+							static_cast<uint32_t>(value_index)];
+					}
+					const int32_t alias = callee->values[
+						static_cast<uint32_t>(value_index)]
+						.register_alias_value_index;
+					if (alias < 0 || alias == value_index) {
+						break;
+					}
+					value_index = alias;
+				}
+				return -1;
+			};
+		auto checked_step_for_value =
+			[&](zend_mir_value_id value_id) -> int32_t {
+				return checked_step_for_index(
+					zend_tpde_value_index(callee, value_id));
+			};
+		auto checked_step_for_binding =
+			[&](const zend_tpde_source_value_binding &binding) -> int32_t {
+				return checked_step_for_index(binding.value_index);
+			};
+		auto record_checked_step = [&](int32_t value_index, int32_t step) {
+			if (value_index >= 0
+					&& static_cast<uint32_t>(value_index)
+						< checked_value_steps.size()) {
+				checked_value_steps[static_cast<uint32_t>(value_index)] = step;
+			}
+		};
 
 		IRValueRef returned = INVALID_VALUE_REF;
+		int32_t returned_checked_step = -1;
 		bool saw_return = false;
 		IRValueRef checked_left = INVALID_VALUE_REF;
 		IRValueRef checked_right = INVALID_VALUE_REF;
 		uint32_t checked_source_opcode = UINT32_MAX;
+		std::vector<IRValueRef> checked_operands;
+		std::vector<InlinedCheckedStep> checked_steps;
 		bool cloned_string_length = false;
 		for (uint32_t index = 0; index < callee->instruction_count; ++index) {
 			const zend_tpde_instruction &instruction =
@@ -1431,6 +1499,9 @@ private:
 					&& (instruction.runtime_helper
 							== ZEND_NATIVE_HELPER_COUNT
 						|| cloned_string_length
+						|| (!checked_steps.empty()
+							&& call.direct_call->result_type
+								== ZEND_MIR_SCALAR_TYPE_I64)
 						|| (callee->typed_body_return_abi.valid
 							&& callee->typed_body_return_abi.exact_type
 								== call.direct_call->result_type))) {
@@ -1462,7 +1533,14 @@ private:
 					return fail_inline();
 				}
 				returned = mapped_value(returned_id);
-				saw_return = returned != INVALID_VALUE_REF;
+				returned_checked_step = returned == INVALID_VALUE_REF
+					? checked_step_for_value(returned_id) : -1;
+				if (returned_checked_step < 0) {
+					returned_checked_step = checked_step_for_binding(
+						instruction.source_op1_binding);
+				}
+				saw_return = returned != INVALID_VALUE_REF
+					|| returned_checked_step >= 0;
 				if (!saw_return) {
 					return fail_inline();
 				}
@@ -1472,9 +1550,13 @@ private:
 				if (saw_return || instruction.operand_count != 1) {
 					return fail_inline();
 				}
-				returned = mapped_value(zend_tpde_operand_at(
-					callee, &instruction, 0));
-				saw_return = returned != INVALID_VALUE_REF;
+				const zend_mir_value_id returned_id =
+					zend_tpde_operand_at(callee, &instruction, 0);
+				returned = mapped_value(returned_id);
+				returned_checked_step = returned == INVALID_VALUE_REF
+					? checked_step_for_value(returned_id) : -1;
+				saw_return = returned != INVALID_VALUE_REF
+					|| returned_checked_step >= 0;
 				continue;
 			}
 			if (record.opcode == ZEND_MIR_OPCODE_COPY
@@ -1486,14 +1568,26 @@ private:
 				}
 				const int32_t result_index =
 					zend_tpde_value_index(callee, record.result_id);
-				const IRValueRef input = mapped_value(
-					zend_tpde_operand_at(callee, &instruction, 0));
-				if (result_index < 0 || input == INVALID_VALUE_REF
-						|| exact_type(input)
-							!= callee->values[result_index].exact_type) {
+				const zend_mir_value_id input_id = zend_tpde_operand_at(
+					callee, &instruction, 0);
+				const IRValueRef input = mapped_value(input_id);
+				const int32_t input_checked_step = input == INVALID_VALUE_REF
+					? checked_step_for_value(input_id) : -1;
+				if (result_index < 0
+						|| (input == INVALID_VALUE_REF
+							&& input_checked_step < 0)
+						|| (input != INVALID_VALUE_REF
+							&& exact_type(input)
+								!= callee->values[result_index].exact_type)) {
 					return fail_inline();
 				}
-				values[static_cast<uint32_t>(result_index)] = input;
+				if (input_checked_step >= 0) {
+					checked_value_steps[
+						static_cast<uint32_t>(result_index)] =
+						input_checked_step;
+				} else {
+					values[static_cast<uint32_t>(result_index)] = input;
+				}
 				continue;
 			}
 			if (record.opcode == ZEND_MIR_OPCODE_VALUE_BINARY_OP) {
@@ -1513,7 +1607,7 @@ private:
 					result_id = zend_mir_value_from_original_ssa(
 						operation.result.ssa_variable_id);
 				}
-				if (checked_source_opcode != UINT32_MAX
+				if (checked_steps.size() >= 8
 						|| caller_result == INVALID_VALUE_REF
 						|| !instruction.has_value_operation
 						|| (operation.source_opcode != ZEND_ADD
@@ -1525,22 +1619,76 @@ private:
 				}
 				const int32_t result_index =
 					zend_tpde_value_index(callee, result_id);
-				checked_left = mapped_source_operand(operation.op1);
-				checked_right = mapped_source_operand(operation.op2);
+				const zend_mir_value_id left_id =
+					source_value_id(operation.op1);
+				const zend_mir_value_id right_id =
+					source_value_id(operation.op2);
+				const int32_t left_checked_step =
+					zend_mir_id_is_valid(left_id)
+						? checked_step_for_value(left_id) : -1;
+				const int32_t right_checked_step =
+					zend_mir_id_is_valid(right_id)
+						? checked_step_for_value(right_id) : -1;
+				const int32_t bound_left_checked_step =
+					left_checked_step >= 0 ? left_checked_step
+						: checked_step_for_binding(
+							instruction.source_op1_binding);
+				const int32_t bound_right_checked_step =
+					right_checked_step >= 0 ? right_checked_step
+						: checked_step_for_binding(
+							instruction.source_op2_binding);
+				const IRValueRef left = bound_left_checked_step < 0
+					? mapped_source_operand(operation.op1)
+					: INVALID_VALUE_REF;
+				const IRValueRef right = bound_right_checked_step < 0
+					? mapped_source_operand(operation.op2)
+					: INVALID_VALUE_REF;
 				if (result_index < 0
-						|| callee->values[result_index].exact_type
-							!= ZEND_MIR_SCALAR_TYPE_I64
-						|| checked_left == INVALID_VALUE_REF
-						|| checked_right == INVALID_VALUE_REF
-						|| exact_type(checked_left)
-							!= ZEND_MIR_SCALAR_TYPE_I64
-						|| exact_type(checked_right)
-							!= ZEND_MIR_SCALAR_TYPE_I64) {
+						|| (bound_left_checked_step < 0
+							&& (left == INVALID_VALUE_REF
+								|| exact_type(left)
+									!= ZEND_MIR_SCALAR_TYPE_I64))
+						|| (bound_right_checked_step < 0
+							&& (right == INVALID_VALUE_REF
+								|| exact_type(right)
+									!= ZEND_MIR_SCALAR_TYPE_I64))) {
 					return fail_inline();
 				}
-				checked_source_opcode = operation.source_opcode;
-				values[static_cast<uint32_t>(result_index)] =
-					caller_result;
+				if (checked_steps.empty()) {
+					if (bound_left_checked_step >= 0
+							|| bound_right_checked_step >= 0) {
+						return fail_inline();
+					}
+					checked_left = left;
+					checked_right = right;
+					checked_source_opcode = operation.source_opcode;
+					checked_operands.push_back(left);
+					checked_operands.push_back(right);
+					checked_steps.push_back(
+						{operation.source_opcode, true});
+				} else {
+					const int32_t accumulator_step =
+						static_cast<int32_t>(checked_steps.size() - 1);
+					const bool accumulator_is_left =
+						bound_left_checked_step == accumulator_step
+						&& bound_right_checked_step < 0;
+					const bool accumulator_is_right =
+						bound_right_checked_step == accumulator_step
+						&& bound_left_checked_step < 0;
+					if (!accumulator_is_left && !accumulator_is_right) {
+						return fail_inline();
+					}
+					checked_operands.push_back(
+						accumulator_is_left ? right : left);
+					checked_steps.push_back({operation.source_opcode,
+						accumulator_is_left});
+				}
+				const int32_t checked_step =
+					static_cast<int32_t>(checked_steps.size() - 1);
+				record_checked_step(result_index, checked_step);
+				record_checked_step(
+					instruction.source_result_binding.value_index,
+					checked_step);
 				continue;
 			}
 			if (record.opcode == ZEND_MIR_OPCODE_VALUE_UNARY_OP) {
@@ -1656,21 +1804,29 @@ private:
 				ZEND_MIR_ID_INVALID, ZEND_MIR_SCALAR_TYPE_NONE,
 				true, record});
 		}
-		if (!saw_return || returned == INVALID_VALUE_REF
-				|| exact_type(returned) != call.direct_call->result_type) {
+		if (!saw_return
+				|| (returned == INVALID_VALUE_REF
+					&& returned_checked_step < 0)
+				|| (returned != INVALID_VALUE_REF
+					&& exact_type(returned)
+						!= call.direct_call->result_type)) {
 			return fail_inline();
 		}
-		if (checked_source_opcode != UINT32_MAX) {
-			if (returned != caller_result) {
+		if (!checked_steps.empty()) {
+			if (returned != INVALID_VALUE_REF
+					|| returned_checked_step
+						!= static_cast<int32_t>(checked_steps.size() - 1)) {
 				return fail_inline();
 			}
-			return {
-				true,
-				caller_result,
-				checked_left,
-				checked_right,
-				checked_source_opcode,
-			};
+			InlinedBody body;
+			body.valid = true;
+			body.value = caller_result;
+			body.checked_left = checked_left;
+			body.checked_right = checked_right;
+			body.checked_source_opcode = checked_source_opcode;
+			body.checked_operands = std::move(checked_operands);
+			body.checked_steps = std::move(checked_steps);
+			return body;
 		}
 		if (cloned_string_length) {
 			/*
@@ -8139,10 +8295,16 @@ public:
 					}
 					if (inlined_user_body.valid) {
 						if (inlined_user_body.checked()) {
-							operands_.push_back(
-								inlined_user_body.checked_left);
-							operands_.push_back(
-								inlined_user_body.checked_right);
+							if (!inlined_user_body.checked_operands.empty()) {
+								operands_.insert(operands_.end(),
+									inlined_user_body.checked_operands.begin(),
+									inlined_user_body.checked_operands.end());
+							} else {
+								operands_.push_back(
+									inlined_user_body.checked_left);
+								operands_.push_back(
+									inlined_user_body.checked_right);
+							}
 						} else {
 							operands_.push_back(
 								inlined_user_body.value);
@@ -8334,8 +8496,7 @@ public:
 				static_cast<uint32_t>(operands_.size()) - operand_offset;
 			uint32_t inlined_operand_index =
 				inlined_user_body.valid
-					? operand_count
-						- (inlined_user_body.checked() ? 2 : 1)
+					? operand_count - inlined_user_body.operand_count()
 					: UINT32_MAX;
 			const uint32_t materialization_count =
 				function_mode_ == FunctionMode::ZendEntry
@@ -8947,7 +9108,7 @@ public:
 					if (inlined_user_body.valid) {
 						fast_inlined_operand_index = fast_operand_count;
 						const uint32_t inlined_operand_count =
-							inlined_user_body.checked() ? 2 : 1;
+							inlined_user_body.operand_count();
 						for (uint32_t n = 0;
 								n < inlined_operand_count; ++n) {
 							operands_.push_back(
@@ -8987,6 +9148,18 @@ public:
 				fast.inlined_operand_index = inlined_operand_index;
 				fast.inlined_checked_source_opcode =
 					inlined_user_body.checked_source_opcode;
+				if (!inlined_user_body.checked_steps.empty()) {
+					fast.inlined_checked_step_offset =
+						static_cast<uint32_t>(inlined_checked_steps_.size());
+					fast.inlined_checked_step_count = static_cast<uint32_t>(
+						inlined_user_body.checked_steps.size());
+					fast.inlined_checked_operand_count =
+						inlined_user_body.operand_count();
+					inlined_checked_steps_.insert(
+						inlined_checked_steps_.end(),
+						inlined_user_body.checked_steps.begin(),
+						inlined_user_body.checked_steps.end());
+				}
 				fast.mutation_result = register_mutation_result;
 				if (register_bool_unary_operand != INVALID_VALUE_REF) {
 					fast.synthetic = true;
@@ -9494,6 +9667,19 @@ public:
 				boxed_op1_boundary_operand_index;
 			nodes_.back().boxed_op2_boundary_operand_index =
 				boxed_op2_boundary_operand_index;
+			if (!inlined_user_body.checked_steps.empty()) {
+				nodes_.back().inlined_checked_step_offset =
+					static_cast<uint32_t>(inlined_checked_steps_.size());
+				nodes_.back().inlined_checked_step_count =
+					static_cast<uint32_t>(
+						inlined_user_body.checked_steps.size());
+				nodes_.back().inlined_checked_operand_count =
+					inlined_user_body.operand_count();
+				inlined_checked_steps_.insert(
+					inlined_checked_steps_.end(),
+					inlined_user_body.checked_steps.begin(),
+					inlined_user_body.checked_steps.end());
+			}
 			nodes_.back().mutation_result =
 				i < mutation_results.size()
 					&& mutation_results[i] != INVALID_VALUE_REF;
@@ -9911,6 +10097,22 @@ public:
 	}
 	const InstNode &node(IRInstRef inst) const {
 		return nodes_[static_cast<uint32_t>(inst)];
+	}
+	std::span<const InlinedCheckedStep> inlined_checked_steps(
+			const InstNode &instruction) const {
+		if (instruction.inlined_checked_step_count == 0) {
+			return {};
+		}
+		if (instruction.inlined_checked_step_offset
+					> inlined_checked_steps_.size()
+				|| instruction.inlined_checked_step_count
+					> inlined_checked_steps_.size()
+						- instruction.inlined_checked_step_offset) {
+			return {};
+		}
+		return std::span<const InlinedCheckedStep>{inlined_checked_steps_}
+			.subspan(instruction.inlined_checked_step_offset,
+				instruction.inlined_checked_step_count);
 	}
 	const zend_tpde_instruction &mir_instruction(IRInstRef inst) const {
 		const InstNode &instruction_node = node(inst);
@@ -10657,6 +10859,10 @@ public:
 		return active_->block_ref(id);
 	}
 	const InstNode &node(IRInstRef inst) const { return active_->node(inst); }
+	std::span<const ZendIRAdaptor::InlinedCheckedStep>
+	inlined_checked_steps(const InstNode &instruction) const {
+		return active_->inlined_checked_steps(instruction);
+	}
 	const zend_tpde_instruction &mir_instruction(IRInstRef inst) const {
 		return active_->mir_instruction(inst);
 	}
