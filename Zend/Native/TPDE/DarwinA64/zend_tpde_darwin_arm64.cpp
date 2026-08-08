@@ -1363,6 +1363,37 @@ bool ZendCompilerA64::compile_inst_impl(
 		result.set_modified();
 		return true;
 	}
+	if (node.kind == Adaptor::InstKind::ScalarSelect) {
+		if (node.operands.size() != 3 || !node.has_result
+				|| adaptor->exact_type(node.operands[0])
+					!= ZEND_MIR_SCALAR_TYPE_I1
+				|| adaptor->machine_kind(node.operands[0])
+					!= ZEND_TPDE_MACHINE_VALUE_BOOL
+				|| adaptor->exact_type(node.operands[1])
+					!= adaptor->exact_type(node.result)
+				|| adaptor->exact_type(node.operands[2])
+					!= adaptor->exact_type(node.result)
+				|| adaptor->machine_kind(node.operands[1])
+					!= adaptor->machine_kind(node.result)
+				|| adaptor->machine_kind(node.operands[2])
+					!= adaptor->machine_kind(node.result)
+				|| (adaptor->machine_kind(node.result)
+						!= ZEND_TPDE_MACHINE_VALUE_I64
+					&& adaptor->machine_kind(node.result)
+						!= ZEND_TPDE_MACHINE_VALUE_BOOL)) {
+			return false;
+		}
+		auto [condition_ref, condition] = val_ref_single(node.operands[0]);
+		auto [true_ref, true_value] = val_ref_single(node.operands[1]);
+		auto [false_ref, false_value] = val_ref_single(node.operands[2]);
+		auto [result_ref, result] = result_ref_single(node.result);
+		auto result_reg = result.alloc_reg();
+		ASM(CMPwi, condition.load_to_reg(), 0);
+		generate_raw_select(Jump::Jne, result_reg,
+			true_value.load_to_reg(), false_value.load_to_reg(), true);
+		result.set_modified();
+		return true;
+	}
 	if (node.kind == Adaptor::InstKind::BoxScalar) {
 		if (node.operands.size() != 1 || !node.has_result
 				|| adaptor->machine_kind(node.result)
