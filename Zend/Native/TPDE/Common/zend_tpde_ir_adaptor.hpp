@@ -7665,15 +7665,19 @@ public:
 							|| immediate_register_call_result)
 						&& !stale_canonical_return
 						/*
-						 * ARRAY_PTR values may expose a borrowed
-						 * payload view of the canonical result slot.  Returning
-						 * that pointer directly would copy/addref a TMP/VAR
-						 * source instead of transferring and undefining its
-						 * zval.  Keep those returns on the ownership-aware
-						 * helper path.
+						 * ARRAY_PTR values in the Zend entry may expose a
+						 * borrowed payload view of the canonical result slot.
+						 * Returning that pointer directly would copy/addref a
+						 * TMP/VAR source instead of transferring and undefining
+						 * its zval. Keep those entry returns on the
+						 * ownership-aware helper path. A private typed body on a
+						 * target with register-authoritative zval extensions has
+						 * no canonical frame and must return its ABI value.
 						 */
-						&& machine_kind(returned)
-							!= ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+						&& (register_boxed_mir_conditions_
+								&& function_mode_ == FunctionMode::TypedBody
+							|| machine_kind(returned)
+								!= ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR)
 						&& machine_value_has_register_definition(
 							returned)) {
 					operands_.push_back(returned);
