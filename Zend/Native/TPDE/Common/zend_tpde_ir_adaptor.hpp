@@ -6387,9 +6387,15 @@ public:
 				&& direct_source_consumer > static_cast<int32_t>(i)
 				&& static_cast<uint32_t>(direct_source_consumer)
 					< plan_->instruction_count
-				&& plan_->instructions[static_cast<uint32_t>(
-					direct_source_consumer)].record.opcode
-					== ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL;
+				&& (plan_->instructions[static_cast<uint32_t>(
+						direct_source_consumer)].record.opcode
+						== ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL
+					|| (register_boxed_mir_conditions_
+						&& plan_->instructions[static_cast<uint32_t>(
+							direct_source_consumer)].record.opcode
+							== ZEND_MIR_OPCODE_CALL_DIRECT_USER
+						&& !frozen_typed_component_call(
+							static_cast<uint32_t>(direct_source_consumer))));
 			const bool typed_boxed_call_result =
 				register_boxed_mir_conditions_
 				&& direct_source_consumer > static_cast<int32_t>(i)
