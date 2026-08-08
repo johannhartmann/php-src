@@ -349,7 +349,6 @@ private:
 	const zend_tpde_plan *plan_;
 	std::span<const zend_tpde_plan *const> component_plans_;
 	FunctionMode function_mode_;
-	bool register_boxed_mir_conditions_;
 	std::array<IRFuncRef, 1> functions_{IRFuncRef{0}};
 	std::vector<IRValueRef> arguments_;
 	std::array<IRValueRef, 0> no_values_;
@@ -2533,15 +2532,13 @@ public:
 	explicit ZendIRAdaptor(const zend_tpde_plan *plan)
 		: ZendIRAdaptor(plan,
 			std::span<const zend_tpde_plan *const>{&plan, 1},
-			FunctionMode::ZendEntry, false) {}
+			FunctionMode::ZendEntry) {}
 
 	explicit ZendIRAdaptor(const zend_tpde_plan *plan,
 			std::span<const zend_tpde_plan *const> component_plans,
-			FunctionMode function_mode = FunctionMode::ZendEntry,
-			bool register_boxed_mir_conditions = false)
+			FunctionMode function_mode = FunctionMode::ZendEntry)
 		: plan_(plan), component_plans_(component_plans),
-		  function_mode_(function_mode),
-		  register_boxed_mir_conditions_(register_boxed_mir_conditions) {
+		  function_mode_(function_mode) {
 		typed_body_value_overrides_.assign(
 			plan_ == nullptr ? 0 : plan_->value_count,
 			INVALID_VALUE_REF);
@@ -3595,18 +3592,15 @@ public:
 						break;
 					case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R:
 					case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
-						if (register_boxed_mir_conditions_) {
-							/*
-							 * AArch64 can consume both the array payload and the
-							 * dimension key directly in its guarded read and
-							 * isset/empty paths. Keep both producers in the
-							 * machine def-use graph.
-							 */
-							mark_source_producer(
-								consumer.source_op1_binding);
-							mark_source_producer(
-								consumer.source_op2_binding);
-						}
+						/*
+						 * Guarded reads and isset/empty consume both the array
+						 * payload and the dimension key directly. Keep both
+						 * producers in the machine def-use graph.
+						 */
+						mark_source_producer(
+							consumer.source_op1_binding);
+						mark_source_producer(
+							consumer.source_op2_binding);
 						break;
 					case ZEND_MIR_OPCODE_VALUE_COND_BRANCH:
 					case ZEND_MIR_OPCODE_VALUE_UNARY_OP:
@@ -4680,8 +4674,7 @@ public:
 		auto phi_uses_runtime_short_circuit_slot = [&] (
 				const zend_tpde_instruction &instruction,
 				zend_mir_storage_id result_storage) {
-			if (!register_boxed_mir_conditions_
-					|| !zend_mir_id_is_valid(result_storage)) {
+			if (!zend_mir_id_is_valid(result_storage)) {
 				return false;
 			}
 			bool has_runtime_short_circuit_input = false;
@@ -6656,8 +6649,7 @@ public:
 								&key_constant_bits))));
 				const uint32_t raw_key =
 					static_cast<uint32_t>(source_array_key);
-				if (register_boxed_mir_conditions_
-						&& function_mode_ == FunctionMode::ZendEntry
+				if (function_mode_ == FunctionMode::ZendEntry
 						&& raw_key >= MIR_VALUE_BASE
 						&& raw_key - MIR_VALUE_BASE < plan_->value_count
 						&& plan_->values[raw_key - MIR_VALUE_BASE]
@@ -6733,8 +6725,7 @@ public:
 				}
 			}
 			const bool unknown_reference_result =
-				register_boxed_mir_conditions_
-				&& canonical_source_result != INVALID_VALUE_REF
+				canonical_source_result != INVALID_VALUE_REF
 				&& machine_kind(canonical_source_result)
 					== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR
 				&& !zend_mir_scalar_type_is_exact(
@@ -6757,8 +6748,7 @@ public:
 					direct_source_consumer)].record.opcode
 					== ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL;
 			const bool register_complete_array_result =
-				register_boxed_mir_conditions_
-				&& record.opcode == ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
+				record.opcode == ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
 				&& source_array_constant_key
 				&& source_result_used[i] != 0
 				&& source_result_has_direct_consumer(i)
@@ -6785,15 +6775,13 @@ public:
 				&& (plan_->instructions[static_cast<uint32_t>(
 						direct_source_consumer)].record.opcode
 						== ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL
-					|| (register_boxed_mir_conditions_
-						&& plan_->instructions[static_cast<uint32_t>(
+					|| (plan_->instructions[static_cast<uint32_t>(
 							direct_source_consumer)].record.opcode
 							== ZEND_MIR_OPCODE_CALL_DIRECT_USER
 						&& !frozen_typed_component_call(
 							static_cast<uint32_t>(direct_source_consumer))));
 			const bool typed_boxed_call_result =
-				register_boxed_mir_conditions_
-				&& direct_source_consumer > static_cast<int32_t>(i)
+				direct_source_consumer > static_cast<int32_t>(i)
 				&& static_cast<uint32_t>(direct_source_consumer)
 					< plan_->instruction_count
 				&& frozen_typed_component_call(
@@ -6838,8 +6826,8 @@ public:
 				 * type-info as a two-part TPDE value and join it with the cold
 				 * helper result at the continuation PHI.
 				 *
-				 * On AArch64 an unknown source result may otherwise inherit the
-				 * value model's one-part reference-pointer carrier. That carrier
+				 * An unknown source result may otherwise inherit the value model's
+				 * one-part reference-pointer carrier. That carrier
 				 * cannot snapshot the complete value when an optimized op array
 				 * reuses the result TMP before a direct internal call executes.
 				 */
@@ -7213,8 +7201,7 @@ public:
 					if (receiver != INVALID_VALUE_REF
 							&& (machine_kind(receiver)
 									== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-								|| (register_boxed_mir_conditions_
-									&& representation(receiver)
+								|| (representation(receiver)
 										== ZEND_MIR_REPRESENTATION_ZVAL
 									&& machine_kind(receiver)
 										== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL))
@@ -7231,8 +7218,7 @@ public:
 					}
 				}
 			}
-			if (register_boxed_mir_conditions_
-					&& record.opcode
+			if (record.opcode
 						== ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM
 					&& instruction.has_value_operation) {
 				IRValueRef key = source_binding_value_ref(
@@ -8078,8 +8064,7 @@ public:
 										== ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM
 									|| candidate.record.opcode
 										== ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM_OP)
-									|| (register_boxed_mir_conditions_
-										&& candidate.record.opcode
+									|| (candidate.record.opcode
 											== ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE
 										&& candidate.runtime_helper
 											!= ZEND_NATIVE_HELPER_COUNT))
@@ -8111,8 +8096,7 @@ public:
 						 * target with register-authoritative zval extensions has
 						 * no canonical frame and must return its ABI value.
 						 */
-						&& ((register_boxed_mir_conditions_
-								&& function_mode_ == FunctionMode::TypedBody)
+						&& ((function_mode_ == FunctionMode::TypedBody)
 							|| machine_kind(returned)
 								!= ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR)
 						&& machine_value_has_register_definition(
@@ -8146,8 +8130,7 @@ public:
 			if (function_mode_ == FunctionMode::ZendEntry
 					&& zend_mir_opcode_is_executable_value(record.opcode)
 					&& !boxed_cond_branch
-					&& !(register_boxed_mir_conditions_
-						&& register_cond_branch)
+					&& !register_cond_branch
 					&& (register_bool_unary_operand == INVALID_VALUE_REF
 						|| guarded_cold_blocks[i] != UINT32_MAX)
 					&& !(record.opcode
@@ -8176,8 +8159,7 @@ public:
 							!= INVALID_VALUE_REF) {
 						operands_.push_back(register_string_condition_operand);
 					}
-				} else if (register_boxed_mir_conditions_
-						&& register_boxed_condition_operand
+				} else if (register_boxed_condition_operand
 							!= INVALID_VALUE_REF) {
 					operands_.push_back(register_boxed_condition_operand);
 				}
@@ -8263,8 +8245,7 @@ public:
 								value)
 							&& machine_value_has_register_definition(value);
 						const bool guarded_boxed_pointer =
-							register_boxed_mir_conditions_
-							&& function_mode_ == FunctionMode::ZendEntry
+							function_mode_ == FunctionMode::ZendEntry
 							&& transport_pointer
 							&& value != INVALID_VALUE_REF
 							&& representation(value)
@@ -8854,8 +8835,7 @@ public:
 			uint32_t boxed_op1_boundary_operand_index = UINT32_MAX;
 			uint32_t boxed_op2_boundary_operand_index = UINT32_MAX;
 			uint32_t boundary_semantic_operand_count = UINT32_MAX;
-			if (register_boxed_mir_conditions_
-					&& function_mode_ == FunctionMode::ZendEntry
+			if (function_mode_ == FunctionMode::ZendEntry
 					&& instruction.has_value_operation
 					&& zend_mir_opcode_is_executable_value(record.opcode)) {
 				auto direct_boxed_source = [&](const auto &binding,
@@ -9477,8 +9457,7 @@ public:
 									!= IRValueRef{FRAME_VALUE}) {
 							++cold_operand_skip;
 						}
-					} else if (register_boxed_mir_conditions_
-							&& record.opcode
+					} else if (record.opcode
 								== ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM) {
 						while (cold_operand_skip < operand_count
 								&& operands_[operand_offset
@@ -10929,15 +10908,12 @@ private:
 	uint64_t typed_body_frame_bytes_elided_ = 0;
 
 public:
-	explicit ZendComponentIRAdaptor(const zend_tpde_plan *plan,
-			bool register_boxed_mir_conditions = false)
+	explicit ZendComponentIRAdaptor(const zend_tpde_plan *plan)
 		: ZendComponentIRAdaptor(
-			std::span<const zend_tpde_plan *const>{&plan, 1},
-			register_boxed_mir_conditions) {}
+			std::span<const zend_tpde_plan *const>{&plan, 1}) {}
 
 	explicit ZendComponentIRAdaptor(
-			std::span<const zend_tpde_plan *const> plans,
-			bool register_boxed_mir_conditions = false) {
+			std::span<const zend_tpde_plan *const> plans) {
 		members_.reserve(plans.size());
 		function_views_.reserve(plans.size() * 2);
 		functions_.reserve(plans.size() * 2);
@@ -10945,8 +10921,7 @@ public:
 		for (uint32_t index = 0; index < plans.size(); ++index) {
 			members_.push_back(
 				std::make_unique<ZendIRAdaptor>(plans[index], plans,
-					ZendIRAdaptor::FunctionMode::ZendEntry,
-					register_boxed_mir_conditions));
+					ZendIRAdaptor::FunctionMode::ZendEntry));
 			functions_.push_back(
 				IRFuncRef{plans[index]->wrapper_function_index});
 			function_views_.push_back(members_.back().get());
@@ -10962,8 +10937,7 @@ public:
 				plans[index]->typed_body_function_index;
 			members_.push_back(
 				std::make_unique<ZendIRAdaptor>(plans[index], plans,
-					ZendIRAdaptor::FunctionMode::TypedBody,
-					register_boxed_mir_conditions));
+					ZendIRAdaptor::FunctionMode::TypedBody));
 			functions_.push_back(IRFuncRef{function_index});
 			function_views_.push_back(members_.back().get());
 			link_names_.push_back(
