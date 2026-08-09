@@ -326,10 +326,23 @@ public:
 	}
 	::tpde::SymRef cur_personality_func() const { return {}; }
 	bool try_force_fixed_assignment(IRValueRef value) const {
+		const zend_tpde_machine_value_kind kind =
+			adaptor->machine_kind(value);
+		const bool pointer_value =
+			kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+			|| kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+			|| kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
+			|| kind == ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
+			|| kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR;
 		return value == IRValueRef{Adaptor::FRAME_VALUE}
 			|| (!adaptor->typed_body()
 				&& value == IRValueRef{
-					Adaptor::EXECUTION_CONTEXT_ARGUMENT});
+					Adaptor::EXECUTION_CONTEXT_ARGUMENT})
+			|| (pointer_value
+				&& adaptor->machine_value_is_register_authoritative(value))
+			|| (adaptor->val_is_phi(value)
+				&& kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+				&& adaptor->machine_value_is_register_authoritative(value));
 	}
 	ValueParts val_parts(IRValueRef value) const {
 		const zend_tpde_machine_value_kind kind =
@@ -12219,6 +12232,10 @@ bool ZendCompilerA64::compile_inst_impl(
 					for (uint32_t index = 0; index < argument_count; ++index) {
 						const zend_native_direct_call_argument &argument =
 							call.direct_call->arguments[index];
+						const zend_mir_scalar_type_mask reference_exact_type =
+							call.direct_call_reference_exact_types != nullptr
+								? call.direct_call_reference_exact_types[index]
+								: ZEND_MIR_SCALAR_TYPE_NONE;
 						if (zend_mir_scalar_type_is_exact(
 								argument.exact_type)
 								|| argument.source_operand.kind
@@ -12243,6 +12260,35 @@ bool ZendCompilerA64::compile_inst_impl(
 								== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE) {
 							ASM(CMPwi, first_reg, IS_UNDEF);
 							generate_raw_jump(Jump::Jeq, call_slow_target());
+						} else if (zend_mir_scalar_type_is_exact(
+								reference_exact_type)) {
+							if (argument.source_frame_offset == UINT32_MAX) {
+								return false;
+							}
+							load_off(second_reg, frame_reg,
+								argument.source_frame_offset, 8);
+							load_off(second_reg, second_reg,
+								static_cast<uint32_t>(
+									offsetof(zend_reference, val)
+										+ offsetof(zval, u1.type_info)),
+								4);
+							ASM(ANDwi, second_reg, second_reg, Z_TYPE_MASK);
+							if (reference_exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
+								auto reference_type_valid =
+									text_writer.label_create();
+								ASM(CMPwi, second_reg, IS_FALSE);
+								generate_raw_jump(
+									Jump::Jeq, reference_type_valid);
+								ASM(CMPwi, second_reg, IS_TRUE);
+								generate_raw_jump(
+									Jump::Jne, call_slow_target());
+								label_place(reference_type_valid);
+							} else {
+								ASM(CMPwi, second_reg,
+									zval_type(reference_exact_type));
+								generate_raw_jump(
+									Jump::Jne, call_slow_target());
+							}
 						}
 					}
 
