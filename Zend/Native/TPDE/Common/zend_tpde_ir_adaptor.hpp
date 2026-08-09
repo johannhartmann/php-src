@@ -6675,8 +6675,9 @@ public:
 						&& reference != nullptr
 						&& reference->kind
 							== ZEND_TPDE_MACHINE_REFERENCE_PACKED_ELEMENT
-						&& zend_mir_id_is_valid(
-							reference->base_value_id)
+						&& (layout.container_literal
+							|| zend_mir_id_is_valid(
+								reference->base_value_id))
 						&& zend_mir_id_is_valid(
 							reference->index_value_id)
 						&& reference->scale == sizeof(zval)
