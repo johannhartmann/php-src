@@ -275,16 +275,6 @@ static zend_result zend_native_internal_call_begin_explicit(
 				!= ZEND_MIR_SOURCE_OPERAND_UNUSED) {
 		return FAILURE;
 	}
-
-#ifdef ZEND_CHECK_STACK_LIMIT
-	if (UNEXPECTED(zend_call_stack_overflowed(EG(stack_limit)))) {
-		zend_call_stack_size_error();
-		if ((call_info & ZEND_CALL_RELEASE_THIS) != 0) {
-			OBJ_RELEASE((zend_object *) object_or_called_scope);
-		}
-		return FAILURE;
-	}
-#endif
 	call = zend_vm_stack_push_call_frame(
 		call_info, function, descriptor->initial_argument_count,
 		object_or_called_scope);
