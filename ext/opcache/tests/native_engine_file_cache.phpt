@@ -58,6 +58,12 @@ rmdir($cache);
 ?>
 --EXPECT--
 42
+42
+child
+final-method-exception
 int(0)
 42
+42
+child
+final-method-exception
 int(0)

@@ -1564,14 +1564,16 @@ static bool zend_native_compiler_target_is_direct_native(
 
 	/* Deferred OPcache bundles are built against owner class entries before
 	 * request-local classes are necessarily linked.  A direct method descriptor
-	 * would retain that owner's function and scope, while the receiver belongs to
-	 * the request-local class.  Keep method calls on the resolving user-call path
-	 * so it can bind the live function from the live receiver.  The persistent
-	 * compiler which imports and extends such a bundle has the same owner/live
-	 * split, even though publication is immediate there. */
+	 * would retain that owner's function and scope, while an overridable receiver
+	 * may belong to a request-local derived class.  Keep those calls on the
+	 * resolving user-call path.  A method declared by a final same-owner class
+	 * cannot acquire a derived override, and its source op_array is already
+	 * represented by the bundle's symbolic user-function reference. */
 	if (compiler != NULL
 			&& (compiler->defer_publication || compiler->persistent)
-			&& target->kind == ZEND_MIR_CALL_TARGET_METHOD_USER) {
+			&& target->kind == ZEND_MIR_CALL_TARGET_METHOD_USER
+			&& (callee == NULL || callee->scope == NULL
+				|| (callee->scope->ce_flags & ZEND_ACC_FINAL) == 0)) {
 		return false;
 	}
 	if (target->kind == ZEND_MIR_CALL_TARGET_DIRECT_USER) {
