@@ -1311,16 +1311,18 @@ static bool zend_mir_dump_sorted(zend_mir_dump_context *dump, uint32_t count,
 		zend_mir_dump_id_at_fn id_at, zend_mir_dump_record_fn dump_record, const char *kind)
 {
 	zend_mir_dump_sort_record *records;
+	size_t records_size;
 	uint32_t valid_count = 0;
 	uint32_t index;
 
 	if (count == 0) {
 		return true;
 	}
-	if ((size_t) count > SIZE_MAX / sizeof(*records)) {
+	records_size = (size_t) count * sizeof(*records);
+	if (records_size / count != sizeof(*records)) {
 		return false;
 	}
-	records = malloc((size_t) count * sizeof(*records));
+	records = malloc(records_size);
 	if (records == NULL) {
 		return false;
 	}
