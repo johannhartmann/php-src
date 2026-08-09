@@ -5117,6 +5117,12 @@ bool freeze_entry_undef_temporaries(
 static void destroy_machine_cfg(zend_tpde_machine_cfg *cfg);
 
 void destroy_plan(zend_tpde_plan *plan) {
+	for (uint32_t index = 0;
+			plan->instructions != nullptr && index < plan->instruction_count;
+			++index) {
+		std::free(
+			plan->instructions[index].direct_call_reference_exact_types);
+	}
 	for (uint32_t index = 0; index < plan->direct_call_count; ++index) {
 		std::free(plan->direct_calls[index]);
 	}
@@ -5200,6 +5206,7 @@ bool initialize_plan(
 	uint32_t frame_argument_count,
 	const zend_op_array *source_op_array,
 	const zend_ssa *source_ssa,
+	bool inline_typed_reference_arguments,
 	zend_tpde_plan *plan,
 	zend_native_diagnostic *diag) {
 	plan->runtime = runtime;
@@ -7536,19 +7543,34 @@ bool initialize_plan(
 						expected_function != nullptr
 						&& ARG_MUST_BE_SENT_BY_REF(
 							expected_function, parameter_ordinal + 1);
+					const bool reference_argument =
+						parameter_by_reference
+						|| argument.source_mode
+							== ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_REFERENCE
+						|| argument.ownership
+							== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
+						|| (send != nullptr && send->opcode == ZEND_SEND_REF);
+					const bool argument_may_be_undefined =
+						source_call_argument_may_be_undefined(
+							source_op_array, source_ssa, argument);
+					const bool direct_reference_cv =
+						reference_argument
+						&& !argument_may_be_undefined
+						&& (argument.source_operand.kind
+								== ZEND_MIR_SOURCE_OPERAND_SLOT
+							|| argument.source_operand.kind
+								== ZEND_MIR_SOURCE_OPERAND_SSA)
+						&& argument.source_operand.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_CV;
 					/*
 					 * A direct descriptor transfers every argument while executing
-					 * DO_FCALL. Reference arguments and possibly-undefined reads need
-					 * their original SEND opcode timing and validation instead.
+					 * DO_FCALL. A defined CV reference has no intervening source
+					 * effect here and can be transferred directly; other reference
+					 * sources and possibly-undefined reads need their original SEND
+					 * opcode timing and validation instead.
 					 */
-					if (parameter_by_reference
-							|| argument.source_mode
-								== ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_REFERENCE
-							|| argument.ownership
-								== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
-							|| (send != nullptr && send->opcode == ZEND_SEND_REF)
-							|| source_call_argument_may_be_undefined(
-								source_op_array, source_ssa, argument)) {
+					if ((reference_argument && !direct_reference_cv)
+							|| argument_may_be_undefined) {
 						direct_descriptor = false;
 					}
 				}
@@ -7717,6 +7739,10 @@ bool initialize_plan(
 						? plan->instructions[i].entry_cell->function : nullptr;
 					std::vector<uint8_t> supplied_parameters(
 						callee != nullptr ? callee->common.num_args : 0, 0);
+					std::vector<zend_mir_scalar_type_mask>
+						reference_exact_types(
+							site.arguments.count, ZEND_MIR_SCALAR_TYPE_NONE);
+					bool has_reference_exact_type = false;
 					if (trivial_frame) {
 						const zend_op_array &op_array = callee->op_array;
 						const bool inline_receiver =
@@ -7984,6 +8010,17 @@ bool initialize_plan(
 										? &callee->op_array.arg_info[
 											callee->op_array.num_args].type
 										: nullptr;
+						const zend_mir_scalar_type_mask reference_exact_type =
+							inline_typed_reference_arguments
+								&& descriptor->arguments[n].mode
+									== ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
+								&& parameter_type != nullptr
+							? exact_scalar_from_declared_type(*parameter_type)
+							: ZEND_MIR_SCALAR_TYPE_NONE;
+						if (zend_mir_scalar_type_is_exact(reference_exact_type)) {
+							reference_exact_types[n] = reference_exact_type;
+							has_reference_exact_type = true;
+						}
 						const bool inline_parameter =
 							!trivial_frame
 							|| parameter_type == nullptr
@@ -7995,7 +8032,11 @@ bool initialize_plan(
 									== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
 								&& exact_scalar_satisfies_type(
 									descriptor->arguments[n].exact_type,
-									*parameter_type));
+									*parameter_type))
+							|| (descriptor->arguments[n].mode
+									== ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
+								&& zend_mir_scalar_type_is_exact(
+									reference_exact_type));
 						trivial_frame =
 							trivial_frame && inline_argument && inline_parameter;
 					}
@@ -8046,6 +8087,25 @@ bool initialize_plan(
 								|| descriptor->result_operand.slot_kind
 									== ZEND_MIR_SOURCE_SLOT_VAR));
 					if (trivial_frame && inline_result) {
+						if (has_reference_exact_type) {
+							auto *reference_types =
+								static_cast<zend_mir_scalar_type_mask *>(
+									std::malloc(
+										static_cast<size_t>(site.arguments.count)
+											* sizeof(zend_mir_scalar_type_mask)));
+							if (reference_types == nullptr) {
+								std::free(descriptor);
+								zend_tpde_set_diagnostic(diag,
+									ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+									"unable to allocate typed reference guards");
+								return false;
+							}
+							std::memcpy(reference_types, reference_exact_types.data(),
+								static_cast<size_t>(site.arguments.count)
+									* sizeof(*reference_types));
+							plan->instructions[i]
+								.direct_call_reference_exact_types = reference_types;
+						}
 						descriptor->flags |=
 							ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME;
 						if ((callee->op_array.fn_flags & ZEND_ACC_VARIADIC) != 0) {
@@ -12010,6 +12070,7 @@ extern "C" zend_result zend_tpde_compile_component_w14_with_runtime(
 				member.effects, member.effect_count,
 				member.frame_argument_count,
 				member.source_op_array, member.source_ssa,
+				target == ZEND_NATIVE_TARGET_DARWIN_ARM64,
 				&plans[initialized], diag)) {
 			break;
 		}
