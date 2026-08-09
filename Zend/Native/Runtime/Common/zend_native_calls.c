@@ -4688,12 +4688,24 @@ zend_native_direct_call_result zend_native_call_direct_leave(
 	zval *return_value;
 
 	if (caller == NULL || descriptor == NULL || context == NULL
-			|| context->active_direct_call == NULL
-			|| (activation = (zend_native_direct_activation *)
-				*context->active_direct_call) == NULL
-			|| activation->caller != caller
-			|| activation->descriptor != descriptor) {
+			|| context->active_direct_call == NULL) {
 		if (EG(exception) == NULL) {
+			zend_throw_error(NULL, "Invalid direct native call completion");
+		}
+		return result;
+	}
+	activation = (zend_native_direct_activation *)
+		*context->active_direct_call;
+	if (activation == NULL || activation->caller != caller
+			|| activation->descriptor != descriptor) {
+		/* Direct-enter failures happen before an activation can be published.
+		 * Route their exception from the source call site exactly once instead
+		 * of treating the absent callee frame as a corrupt completion. */
+		if (status == ZEND_NATIVE_EXCEPTION && EG(exception) != NULL) {
+			result.status = zend_native_prepare_finally_exception(
+				caller, descriptor->source_position) == SUCCESS
+				? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
+		} else if (EG(exception) == NULL) {
 			zend_throw_error(NULL, "Invalid direct native call completion");
 		}
 		return result;
