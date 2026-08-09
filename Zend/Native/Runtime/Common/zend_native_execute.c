@@ -5,6 +5,7 @@
 
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_closures.h"
+#include "Zend/zend_call_stack.h"
 #include "Zend/zend_dtrace.h"
 #include "Zend/zend_execute.h"
 #include "Zend/zend_observer.h"
@@ -272,6 +273,18 @@ static zend_native_status zend_native_execute_frame_impl(
 			state->observer_started = true;
 			ZEND_OBSERVER_FCALL_BEGIN(execute_data);
 		}
+		/* Match the VM entry check at the actual native execution boundary.
+		 * Callers such as zend_call_function() check before constructing their
+		 * own execution chain, which can leave a native reentry below the limit
+		 * by the time its first opcode would run. */
+#ifdef ZEND_CHECK_STACK_LIMIT
+		if (UNEXPECTED(zend_call_stack_overflowed(EG(stack_limit)))) {
+			zend_call_stack_size_error();
+			/* No opline was executed before the exception. */
+			EG(opline_before_exception) = NULL;
+			state->status = ZEND_NATIVE_EXCEPTION;
+		} else
+#endif
 		/*
 		 * RECV initialization and argument type verification are observable
 		 * execution.  The VM starts the fcall observer before those opcodes,
