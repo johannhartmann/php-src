@@ -1226,6 +1226,44 @@ bool source_call_argument_may_be_undefined(
 		&& (ssa->var_info[ssa_variable_id].type & MAY_BE_UNDEF) != 0;
 }
 
+bool source_call_argument_stable_after_send(
+	const zend_op_array *op_array,
+	const zend_mir_call_argument_ref &argument,
+	uint32_t call_source_position) {
+	const zend_mir_storage_id storage =
+		source_descriptor_storage(op_array, argument.source_operand);
+
+	if (op_array == nullptr || !zend_mir_id_is_valid(storage)
+			|| argument.send_opline_index >= call_source_position
+			|| call_source_position > op_array->last) {
+		return false;
+	}
+	const uint32_t encoded_storage = EX_NUM_TO_VAR(storage);
+	for (uint32_t source = argument.send_opline_index + 1;
+			source < call_source_position; ++source) {
+		const zend_op *opline = &op_array->opcodes[source];
+		const bool op1_slot = opline->op1_type == IS_CV
+			|| opline->op1_type == IS_TMP_VAR
+			|| opline->op1_type == IS_VAR;
+		const bool op2_slot = opline->op2_type == IS_CV
+			|| opline->op2_type == IS_TMP_VAR
+			|| opline->op2_type == IS_VAR;
+		const bool result_slot = opline->result_type == IS_CV
+			|| opline->result_type == IS_TMP_VAR
+			|| opline->result_type == IS_VAR;
+		/*
+		 * A later read is unstable too: a delayed TMP/VAR argument must not be
+		 * consumed after another SEND has observed or reused its physical slot.
+		 */
+		if ((op1_slot && opline->op1.var == encoded_storage)
+				|| (op2_slot && opline->op2.var == encoded_storage)
+				|| (result_slot && opline->result.var == encoded_storage)) {
+			return false;
+		}
+	}
+	return true;
+}
+
 bool direct_call_parameter_ordinal(
 	const zend_op_array *source_op_array,
 	const zend_function *callee,
@@ -7562,15 +7600,23 @@ bool initialize_plan(
 								== ZEND_MIR_SOURCE_OPERAND_SSA)
 						&& argument.source_operand.slot_kind
 							== ZEND_MIR_SOURCE_SLOT_CV;
+					const bool stable_by_value_source =
+						reference_argument
+						|| argument.source_operand.kind
+							== ZEND_MIR_SOURCE_OPERAND_LITERAL
+						|| source_call_argument_stable_after_send(
+							source_op_array, argument,
+							site.source_do_opline_index);
 					/*
-					 * A direct descriptor transfers every argument while executing
-					 * DO_FCALL. A defined CV reference has no intervening source
-					 * effect here and can be transferred directly; other reference
-					 * sources and possibly-undefined reads need their original SEND
-					 * opcode timing and validation instead.
+					 * A direct descriptor transfers arguments while executing DO_FCALL.
+					 * Defined CV references may observe intervening writes, but by-value
+					 * arguments must still denote their SEND-time value. Reused storage,
+					 * other reference sources, and possibly-undefined reads therefore keep
+					 * their original SEND opcode timing and validation instead.
 					 */
 					if ((reference_argument && !direct_reference_cv)
-							|| argument_may_be_undefined) {
+							|| argument_may_be_undefined
+							|| !stable_by_value_source) {
 						direct_descriptor = false;
 					}
 				}
