@@ -5803,8 +5803,9 @@ bool ZendCompilerA64::compile_inst_impl(
 
 		if (!zend_tpde_array_read_at(mir, &layout)
 				|| element_reference == nullptr
-				|| !zend_mir_id_is_valid(
-					element_reference->base_value_id)
+				|| (!layout.container_literal
+					&& !zend_mir_id_is_valid(
+						element_reference->base_value_id))
 				|| !zend_mir_id_is_valid(
 					element_reference->index_value_id)
 				|| element_reference->scale != sizeof(zval)
@@ -7434,7 +7435,9 @@ bool ZendCompilerA64::compile_inst_impl(
 				&& (mir.value_operation.result.slot_kind
 						== ZEND_MIR_SOURCE_SLOT_TMP
 					|| mir.value_operation.result.slot_kind
-						== ZEND_MIR_SOURCE_SLOT_VAR)) {
+						== ZEND_MIR_SOURCE_SLOT_VAR
+					|| mir.value_operation.result.slot_kind
+						== ZEND_MIR_SOURCE_SLOT_CV)) {
 			const uint64_t result_offset =
 				(uint64_t{ZEND_CALL_FRAME_SLOT}
 					+ mir.value_operation.result_storage_id)
