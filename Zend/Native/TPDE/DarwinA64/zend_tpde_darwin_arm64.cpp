@@ -63,6 +63,42 @@ class ZendCompilerA64 final
 	uint32_t current_continuation_block_ = UINT32_MAX;
 	bool continuation_edge_emitted_ = false;
 
+	struct DirectCallStackGuardLabelPatch {
+		::tpde::Label label;
+		uint32_t target_function;
+		AsmReg destination;
+	};
+	struct DirectCallStackGuardOffsetPatch {
+		uint32_t offset;
+		uint32_t target_function;
+		AsmReg destination;
+	};
+	std::vector<DirectCallStackGuardLabelPatch>
+		current_direct_call_stack_guard_patches_;
+	std::vector<DirectCallStackGuardOffsetPatch>
+		pending_direct_call_stack_guard_patches_;
+	std::vector<uint32_t> function_stack_frame_sizes_;
+
+	void emit_direct_call_stack_guard_position(
+			AsmReg destination, uint32_t target_function) {
+		const auto patch_label = text_writer.label_create();
+		label_place(patch_label);
+		ASM(SUBxi, destination, AsmReg{AsmReg::SP}, 0);
+		current_direct_call_stack_guard_patches_.push_back({
+			patch_label, target_function, destination});
+	}
+
+	void patch_direct_call_stack_guard(
+			uint32_t offset, AsmReg destination, uint32_t frame_size) {
+		ZEND_ASSERT(frame_size <= UINT32_C(4095)
+			|| (frame_size < UINT32_C(16) * 1024 * 1024
+				&& frame_size % UINT32_C(4096) == 0));
+		auto *instruction = reinterpret_cast<uint32_t *>(
+			text_writer.begin_ptr() + offset);
+		*instruction = de64_SUBxi(
+			destination, AsmReg{AsmReg::SP}, frame_size);
+	}
+
 	struct TargetBranchAssignment {
 		::tpde::ValLocalIdx local_idx;
 		uint32_t part;
@@ -143,6 +179,15 @@ public:
 	void reset() {
 		Base::reset();
 		EncodeBase::reset();
+		current_direct_call_stack_guard_patches_.clear();
+		pending_direct_call_stack_guard_patches_.clear();
+		function_stack_frame_sizes_.clear();
+	}
+
+	bool hook_post_func_sym_init() {
+		function_stack_frame_sizes_.assign(
+			this->func_syms.size(), UINT32_MAX);
+		return true;
 	}
 
 	ValuePart image_symbol_value(
@@ -374,6 +419,7 @@ public:
 		(void) index;
 	}
 	void start_func(uint32_t index) {
+		ZEND_ASSERT(current_direct_call_stack_guard_patches_.empty());
 		generator_resume_labels_.clear();
 		generator_gateway_state_.clear();
 		user_opcode_labels_.clear();
@@ -419,7 +465,55 @@ public:
 			}
 			gen_func_epilog();
 		}
+		auto final_frame_size =
+			::tpde::util::align_up(this->stack.frame_size, 16);
+		if (final_frame_size > 4095) {
+			final_frame_size =
+				::tpde::util::align_up(final_frame_size, 4096);
+		}
+		const auto callee_saved =
+			cur_cc_assigner()->get_ccinfo().callee_saved_regs;
+		const uint64_t saved_registers =
+			this->register_file.clobbered & callee_saved;
+		const bool needs_stack_frame =
+			this->stack.frame_used || this->stack.generated_call
+			|| this->stack.has_dynamic_alloca || saved_registers != 0
+			|| (this->register_file.clobbered
+				& (UINT64_C(1) << AsmReg::LR));
+		const uint32_t machine_frame_size = needs_stack_frame
+			? static_cast<uint32_t>(final_frame_size) : 0;
 		Base::finish_func(index);
+
+		for (const auto &patch : current_direct_call_stack_guard_patches_) {
+			const uint32_t offset = text_writer.label_offset(patch.label);
+			const uint32_t target_frame_size =
+				function_stack_frame_sizes_[patch.target_function];
+			if (target_frame_size == UINT32_MAX) {
+				pending_direct_call_stack_guard_patches_.push_back({
+					offset, patch.target_function, patch.destination});
+			} else {
+				patch_direct_call_stack_guard(
+					offset, patch.destination, target_frame_size);
+			}
+		}
+		current_direct_call_stack_guard_patches_.clear();
+
+		ZEND_ASSERT(index < function_stack_frame_sizes_.size());
+		function_stack_frame_sizes_[index] = machine_frame_size;
+		for (size_t patch_index = 0;
+				patch_index < pending_direct_call_stack_guard_patches_.size();) {
+			const auto &patch =
+				pending_direct_call_stack_guard_patches_[patch_index];
+			if (patch.target_function != index) {
+				++patch_index;
+				continue;
+			}
+			patch_direct_call_stack_guard(
+				patch.offset, patch.destination, machine_frame_size);
+			pending_direct_call_stack_guard_patches_.erase(
+				pending_direct_call_stack_guard_patches_.begin()
+					+ static_cast<std::ptrdiff_t>(patch_index));
+		}
 	}
 	void setup_var_ref_assignments() {
 		for (uint32_t index = 0;
@@ -12306,7 +12400,12 @@ bool ZendCompilerA64::compile_inst_impl(
 						ASM(CMPxi, first_reg, 0);
 						generate_raw_jump(Jump::Jeq, stack_guarded);
 						load_off(first_reg, first_reg, 0, 8);
-						ASM(ADDxi, second_reg, AsmReg{AsmReg::SP}, 0);
+						if (local_component_call) {
+							emit_direct_call_stack_guard_position(
+								second_reg, call.component_target_index);
+						} else {
+							ASM(ADDxi, second_reg, AsmReg{AsmReg::SP}, 0);
+						}
 						ASM(CMPx, second_reg, first_reg);
 						generate_raw_jump(Jump::Jls, call_slow_target());
 						label_place(stack_guarded);
