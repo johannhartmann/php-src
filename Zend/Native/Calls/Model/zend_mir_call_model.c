@@ -1544,10 +1544,73 @@ static bool zend_mir_w05_fingerprint_write(
 	if (writer == NULL || (bytes == NULL && length != 0)) {
 		return false;
 	}
+	/* Keep the four independent FNV lanes together so debug and sanitizer
+	 * builds do not expand every emitted byte into sixteen scalar operations.
+	 * The per-lane byte sequence, and therefore the fingerprint, is unchanged. */
+#if defined(__GNUC__)
+	typedef uint32_t zend_mir_w05_fingerprint_vector
+		__attribute__((vector_size(4 * sizeof(uint32_t))));
+	zend_mir_w05_fingerprint_vector digest = {
+		writer->digest.words[0], writer->digest.words[1],
+		writer->digest.words[2], writer->digest.words[3]
+	};
+	static const zend_mir_w05_fingerprint_vector prime = {
+		UINT32_C(16777619), UINT32_C(16777619),
+		UINT32_C(16777619), UINT32_C(16777619)
+	};
+	static const zend_mir_w05_fingerprint_vector domain_bytes[4] = {
+		{UINT32_C(0x88), UINT32_C(0xd3),
+		 UINT32_C(0x2e), UINT32_C(0x44)},
+		{UINT32_C(0x6a), UINT32_C(0x08),
+		 UINT32_C(0x8a), UINT32_C(0x73)},
+		{UINT32_C(0x3f), UINT32_C(0xa3),
+		 UINT32_C(0x19), UINT32_C(0x70)},
+		{UINT32_C(0x24), UINT32_C(0x85),
+		 UINT32_C(0x13), UINT32_C(0x03)}
+	};
 	for (index = 0; index < length; index++) {
-		writer->digest = zend_mir_w05_fingerprint_mix(
-			writer->digest, (unsigned char) bytes[index]);
+		const uint32_t value = (unsigned char) bytes[index];
+		const zend_mir_w05_fingerprint_vector input = {
+			value, value, value, value
+		};
+
+		digest = (digest ^ input ^ domain_bytes[0]) * prime;
+		digest = (digest ^ domain_bytes[1]) * prime;
+		digest = (digest ^ domain_bytes[2]) * prime;
+		digest = (digest ^ domain_bytes[3]) * prime;
 	}
+	writer->digest.words[0] = digest[0];
+	writer->digest.words[1] = digest[1];
+	writer->digest.words[2] = digest[2];
+	writer->digest.words[3] = digest[3];
+#else
+#define W05_FINGERPRINT_BYTE_STEP(word, value) do { \
+	(word) ^= (uint32_t) (value); \
+	(word) *= UINT32_C(16777619); \
+} while (0)
+	for (index = 0; index < length; index++) {
+		const uint32_t value = (unsigned char) bytes[index];
+		uint32_t *words = writer->digest.words;
+
+		W05_FINGERPRINT_BYTE_STEP(words[0], value ^ UINT32_C(0x88));
+		W05_FINGERPRINT_BYTE_STEP(words[0], UINT32_C(0x6a));
+		W05_FINGERPRINT_BYTE_STEP(words[0], UINT32_C(0x3f));
+		W05_FINGERPRINT_BYTE_STEP(words[0], UINT32_C(0x24));
+		W05_FINGERPRINT_BYTE_STEP(words[1], value ^ UINT32_C(0xd3));
+		W05_FINGERPRINT_BYTE_STEP(words[1], UINT32_C(0x08));
+		W05_FINGERPRINT_BYTE_STEP(words[1], UINT32_C(0xa3));
+		W05_FINGERPRINT_BYTE_STEP(words[1], UINT32_C(0x85));
+		W05_FINGERPRINT_BYTE_STEP(words[2], value ^ UINT32_C(0x2e));
+		W05_FINGERPRINT_BYTE_STEP(words[2], UINT32_C(0x8a));
+		W05_FINGERPRINT_BYTE_STEP(words[2], UINT32_C(0x19));
+		W05_FINGERPRINT_BYTE_STEP(words[2], UINT32_C(0x13));
+		W05_FINGERPRINT_BYTE_STEP(words[3], value ^ UINT32_C(0x44));
+		W05_FINGERPRINT_BYTE_STEP(words[3], UINT32_C(0x73));
+		W05_FINGERPRINT_BYTE_STEP(words[3], UINT32_C(0x70));
+		W05_FINGERPRINT_BYTE_STEP(words[3], UINT32_C(0x03));
+	}
+#undef W05_FINGERPRINT_BYTE_STEP
+#endif
 	return true;
 }
 
