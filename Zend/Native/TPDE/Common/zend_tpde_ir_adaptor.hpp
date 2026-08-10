@@ -2723,37 +2723,167 @@ public:
 				}
 			}
 		}
-		auto machine_block_reachable_without = [&](uint32_t target,
-				uint32_t excluded) {
-			if (target >= tpde_block_count
-					|| excluded == static_cast<uint32_t>(entry)) {
-				return false;
-			}
-			if (excluded == UINT32_MAX) {
-				return machine_block_reachable[target] != 0;
-			}
-			std::vector<uint8_t> visited(tpde_block_count);
-			std::vector<uint32_t> pending{
-				static_cast<uint32_t>(entry)};
+		/* Dominance is queried from several nested instruction scans below.
+		 * Re-running a complete reachability search for each pair makes large,
+		 * mostly linear generated op arrays quadratic. Build the immediate-
+		 * dominator tree once and answer subsequent queries by tree intervals. */
+		std::vector<uint32_t> machine_block_rpo;
+		std::vector<uint32_t> machine_block_rpo_index(
+			tpde_block_count, UINT32_MAX);
+		std::vector<uint32_t> machine_block_idom(
+			tpde_block_count, UINT32_MAX);
+		std::vector<uint32_t> machine_block_dom_begin(
+			tpde_block_count, UINT32_MAX);
+		std::vector<uint32_t> machine_block_dom_end(
+			tpde_block_count, UINT32_MAX);
+		if (tpde_block_count != 0) {
+			struct DfsFrame {
+				uint32_t block;
+				uint32_t next_edge;
+			};
+			std::vector<uint8_t> visited(tpde_block_count, 0);
+			std::vector<uint32_t> postorder;
+			std::vector<DfsFrame> pending{{
+				static_cast<uint32_t>(entry),
+				machine_cfg.successor_offsets[
+					static_cast<uint32_t>(entry)]}};
 			visited[static_cast<uint32_t>(entry)] = 1;
 			while (!pending.empty()) {
-				const uint32_t block = pending.back();
-				pending.pop_back();
-				if (block == target) {
-					return true;
+				DfsFrame &frame = pending.back();
+				const uint32_t end =
+					machine_cfg.successor_offsets[frame.block + 1];
+				if (frame.next_edge < end) {
+					const uint32_t successor =
+						machine_cfg.successors[frame.next_edge++];
+					if (visited[successor] == 0) {
+						visited[successor] = 1;
+						pending.push_back({successor,
+							machine_cfg.successor_offsets[successor]});
+					}
+					continue;
 				}
-				const uint32_t begin = machine_cfg.successor_offsets[block];
-				const uint32_t end = machine_cfg.successor_offsets[block + 1];
+				postorder.push_back(frame.block);
+				pending.pop_back();
+			}
+			machine_block_rpo.assign(
+				postorder.rbegin(), postorder.rend());
+			for (uint32_t index = 0;
+					index < machine_block_rpo.size(); ++index) {
+				machine_block_rpo_index[machine_block_rpo[index]] = index;
+			}
+
+			std::vector<uint32_t> predecessor_offsets(
+				tpde_block_count + 1, 0);
+			for (uint32_t block : machine_block_rpo) {
+				const uint32_t begin =
+					machine_cfg.successor_offsets[block];
+				const uint32_t end =
+					machine_cfg.successor_offsets[block + 1];
 				for (uint32_t edge = begin; edge < end; ++edge) {
 					const uint32_t successor = machine_cfg.successors[edge];
-					if (successor != excluded && visited[successor] == 0) {
-						visited[successor] = 1;
-						pending.push_back(successor);
+					if (machine_block_reachable[successor] != 0) {
+						++predecessor_offsets[successor + 1];
 					}
 				}
 			}
-			return false;
-		};
+			for (uint32_t block = 0; block < tpde_block_count; ++block) {
+				predecessor_offsets[block + 1] += predecessor_offsets[block];
+			}
+			std::vector<uint32_t> predecessors(
+				predecessor_offsets[tpde_block_count]);
+			std::vector<uint32_t> predecessor_next = predecessor_offsets;
+			for (uint32_t block : machine_block_rpo) {
+				const uint32_t begin =
+					machine_cfg.successor_offsets[block];
+				const uint32_t end =
+					machine_cfg.successor_offsets[block + 1];
+				for (uint32_t edge = begin; edge < end; ++edge) {
+					const uint32_t successor = machine_cfg.successors[edge];
+					if (machine_block_reachable[successor] != 0) {
+						predecessors[predecessor_next[successor]++] = block;
+					}
+				}
+			}
+
+			const uint32_t entry_block = static_cast<uint32_t>(entry);
+			machine_block_idom[entry_block] = entry_block;
+			auto intersect_idom = [&](uint32_t left, uint32_t right) {
+				while (left != right) {
+					while (machine_block_rpo_index[left]
+							> machine_block_rpo_index[right]) {
+						left = machine_block_idom[left];
+					}
+					while (machine_block_rpo_index[right]
+							> machine_block_rpo_index[left]) {
+						right = machine_block_idom[right];
+					}
+				}
+				return left;
+			};
+			bool changed;
+			do {
+				changed = false;
+				for (uint32_t rpo_index = 1;
+						rpo_index < machine_block_rpo.size(); ++rpo_index) {
+					const uint32_t block = machine_block_rpo[rpo_index];
+					uint32_t immediate = UINT32_MAX;
+					for (uint32_t predecessor_index =
+							predecessor_offsets[block];
+							predecessor_index < predecessor_offsets[block + 1];
+							++predecessor_index) {
+						const uint32_t predecessor =
+							predecessors[predecessor_index];
+						if (machine_block_idom[predecessor] == UINT32_MAX) {
+							continue;
+						}
+						immediate = immediate == UINT32_MAX
+							? predecessor
+							: intersect_idom(immediate, predecessor);
+					}
+					if (immediate != UINT32_MAX
+							&& machine_block_idom[block] != immediate) {
+						machine_block_idom[block] = immediate;
+						changed = true;
+					}
+				}
+			} while (changed);
+
+			std::vector<uint32_t> child_offsets(tpde_block_count + 1, 0);
+			for (uint32_t block : machine_block_rpo) {
+				if (block != entry_block
+						&& machine_block_idom[block] != UINT32_MAX) {
+					++child_offsets[machine_block_idom[block] + 1];
+				}
+			}
+			for (uint32_t block = 0; block < tpde_block_count; ++block) {
+				child_offsets[block + 1] += child_offsets[block];
+			}
+			std::vector<uint32_t> children(child_offsets[tpde_block_count]);
+			std::vector<uint32_t> child_next = child_offsets;
+			for (uint32_t block : machine_block_rpo) {
+				if (block != entry_block
+						&& machine_block_idom[block] != UINT32_MAX) {
+					children[child_next[machine_block_idom[block]]++] = block;
+				}
+			}
+			std::vector<DfsFrame> dominator_pending{{
+				entry_block, child_offsets[entry_block]}};
+			uint32_t dominator_order = 0;
+			machine_block_dom_begin[entry_block] = dominator_order++;
+			while (!dominator_pending.empty()) {
+				DfsFrame &frame = dominator_pending.back();
+				const uint32_t end = child_offsets[frame.block + 1];
+				if (frame.next_edge < end) {
+					const uint32_t child = children[frame.next_edge++];
+					machine_block_dom_begin[child] = dominator_order++;
+					dominator_pending.push_back({
+						child, child_offsets[child]});
+					continue;
+				}
+				machine_block_dom_end[frame.block] = dominator_order;
+				dominator_pending.pop_back();
+			}
+		}
 		auto machine_block_dominates = [&](uint32_t dominator,
 				uint32_t block) {
 			if (dominator >= tpde_block_count || block >= tpde_block_count) {
@@ -2762,10 +2892,14 @@ public:
 			if (dominator == block) {
 				return true;
 			}
-			if (!machine_block_reachable_without(block, UINT32_MAX)) {
+			if (machine_block_reachable[block] == 0
+					|| machine_block_dom_begin[dominator] == UINT32_MAX) {
 				return false;
 			}
-			return !machine_block_reachable_without(block, dominator);
+			return machine_block_dom_begin[dominator]
+					<= machine_block_dom_begin[block]
+				&& machine_block_dom_end[block]
+					<= machine_block_dom_end[dominator];
 		};
 		auto phased_source_call = [&](uint32_t instruction_index) {
 			if (function_mode_ != FunctionMode::ZendEntry
