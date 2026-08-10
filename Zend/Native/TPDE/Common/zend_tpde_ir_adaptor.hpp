@@ -4495,12 +4495,140 @@ public:
 			plan_->instruction_count, INVALID_VALUE_REF);
 		std::vector<zend_mir_storage_id> lazy_mutation_storages;
 		std::vector<zend_mir_storage_id> related_mutation_storages;
+		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
+			const zend_tpde_instruction &instruction =
+				plan_->instructions[i];
+			if (instruction.mutation_lazy_scalar
+					&& guarded_cold_blocks[i] != UINT32_MAX
+					&& mutation_value_ref(instruction)
+						!= INVALID_VALUE_REF) {
+				related_mutation_storages.push_back(
+					instruction.value_operation.op1_storage_id);
+			}
+		}
+		std::ranges::sort(related_mutation_storages);
+		related_mutation_storages.erase(
+			std::unique(related_mutation_storages.begin(),
+				related_mutation_storages.end()),
+			related_mutation_storages.end());
+		std::erase_if(related_mutation_storages,
+			[&](zend_mir_storage_id storage_id) {
+				return storage_assigned_by_reference(storage_id);
+			});
+		/*
+		 * A result-bearing post-inc/dec exposes the pre-mutation value as its
+		 * instruction result.  When that result participates in a conditional
+		 * assignment chain, the assignment source has no machine definition for the
+		 * updated, loop-carried value.  Keep every PHI and mutation in that chain
+		 * frame-authoritative; selecting only part of it would make later operations
+		 * consume a register value while an outgoing edge must reload the canonical
+		 * frame slot.  Standalone post-inc/dec loops remain register-authoritative.
+		 */
+		std::vector<zend_mir_storage_id> frame_authoritative_phi_storages;
+		std::vector<zend_mir_storage_id> consumed_post_incdec_phi_storages;
+		std::vector<zend_mir_storage_id> zval_phi_storages;
+		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
+			const zend_mir_instruction_record record =
+				instruction_record_at(i);
+			if (record.opcode != ZEND_MIR_OPCODE_PHI
+					|| record.representation
+						!= ZEND_MIR_REPRESENTATION_ZVAL) {
+				continue;
+			}
+			const int32_t source_block = block_index(record.block_id);
+			if (source_block < 0) {
+				continue;
+			}
+			const uint32_t predecessor_begin =
+				plan_->block_predecessor_offsets[source_block];
+			const uint32_t predecessor_count =
+				plan_->block_predecessor_offsets[source_block + 1]
+					- predecessor_begin;
+			bool loop_phi = false;
+			for (uint32_t n = 0; n < predecessor_count; ++n) {
+				const uint32_t predecessor =
+					plan_->block_predecessors[predecessor_begin + n];
+				if (predecessor < plan_->block_count
+						&& machine_block_dominates(
+							instruction_blocks[i],
+							final_blocks[predecessor])) {
+					loop_phi = true;
+					break;
+				}
+			}
+			if (!loop_phi) {
+				continue;
+			}
+			const int32_t result_index =
+				zend_tpde_value_index(plan_, record.result_id);
+			if (result_index < 0) {
+				continue;
+			}
+			const zend_mir_storage_id storage_id = canonical_storage(
+				IRValueRef{MIR_VALUE_BASE
+					+ static_cast<uint32_t>(result_index)});
+			if (zend_mir_id_is_valid(storage_id)) {
+				zval_phi_storages.push_back(storage_id);
+			}
+		}
+		std::ranges::sort(zval_phi_storages);
+		zval_phi_storages.erase(
+			std::unique(zval_phi_storages.begin(), zval_phi_storages.end()),
+			zval_phi_storages.end());
+		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
+			const zend_tpde_instruction &instruction = plan_->instructions[i];
+			const zend_mir_storage_id storage_id =
+				instruction.has_value_operation
+					? instruction.value_operation.op1_storage_id
+					: ZEND_MIR_ID_INVALID;
+			if (!std::binary_search(zval_phi_storages.begin(),
+					zval_phi_storages.end(), storage_id)) {
+				continue;
+			}
+			zend_tpde_long_incdec incdec{};
+			if (instruction.has_value_operation
+					&& zend_tpde_long_incdec_at(instruction, &incdec)
+					&& incdec.has_result
+					&& source_result_used[i] != 0
+					&& zend_mir_id_is_valid(storage_id)) {
+				consumed_post_incdec_phi_storages.push_back(storage_id);
+			}
+			if (instruction.record.opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN
+					&& instruction.has_value_operation
+					&& zend_mir_id_is_valid(storage_id)
+					&& guarded_cold_blocks[i] != UINT32_MAX
+					&& std::binary_search(related_mutation_storages.begin(),
+						related_mutation_storages.end(), storage_id)
+					&& (register_assignment_results[i] == INVALID_VALUE_REF
+						|| !machine_value_has_register_definition(
+							register_assignment_results[i]))) {
+				frame_authoritative_phi_storages.push_back(storage_id);
+			}
+		}
+		if (!frame_authoritative_phi_storages.empty()) {
+			frame_authoritative_phi_storages.insert(
+				frame_authoritative_phi_storages.end(),
+				consumed_post_incdec_phi_storages.begin(),
+				consumed_post_incdec_phi_storages.end());
+		}
+		std::ranges::sort(frame_authoritative_phi_storages);
+		frame_authoritative_phi_storages.erase(
+			std::unique(frame_authoritative_phi_storages.begin(),
+				frame_authoritative_phi_storages.end()),
+			frame_authoritative_phi_storages.end());
 		auto select_mutation_result = [&](uint32_t i) {
 			if (mutation_results[i] != INVALID_VALUE_REF) {
 				return;
 			}
 			const zend_tpde_instruction &instruction =
 				plan_->instructions[i];
+			if (guarded_cold_blocks[i] == UINT32_MAX
+					&& std::binary_search(
+						frame_authoritative_phi_storages.begin(),
+						frame_authoritative_phi_storages.end(),
+						instruction.value_operation.op1_storage_id)) {
+				return;
+			}
 			const IRValueRef canonical =
 				mutation_value_ref(instruction);
 			if (canonical == INVALID_VALUE_REF) {
@@ -4544,26 +4672,6 @@ public:
 			lazy_mutation_storages.push_back(
 				instruction.value_operation.op1_storage_id);
 		};
-		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
-			const zend_tpde_instruction &instruction =
-				plan_->instructions[i];
-			if (instruction.mutation_lazy_scalar
-					&& guarded_cold_blocks[i] != UINT32_MAX
-					&& mutation_value_ref(instruction)
-						!= INVALID_VALUE_REF) {
-				related_mutation_storages.push_back(
-					instruction.value_operation.op1_storage_id);
-			}
-		}
-		std::ranges::sort(related_mutation_storages);
-		related_mutation_storages.erase(
-			std::unique(related_mutation_storages.begin(),
-				related_mutation_storages.end()),
-			related_mutation_storages.end());
-		std::erase_if(related_mutation_storages,
-			[&](zend_mir_storage_id storage_id) {
-				return storage_assigned_by_reference(storage_id);
-			});
 		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
 			const zend_tpde_instruction &instruction =
 				plan_->instructions[i];
@@ -4755,6 +4863,9 @@ public:
 			const bool boxed_phi =
 				zend_mir_id_is_valid(storage_id)
 				&& !runtime_short_circuit_slot_phi
+				&& !std::binary_search(
+					frame_authoritative_phi_storages.begin(),
+					frame_authoritative_phi_storages.end(), storage_id)
 				&& (scalar_transport_phi
 					|| std::binary_search(
 						lazy_mutation_storages.begin(),
@@ -5096,6 +5207,9 @@ public:
 						canonical_result));
 			const bool boxed_phi =
 				!phi_uses_runtime_short_circuit_slot(instruction, storage_id)
+				&& !std::binary_search(
+					frame_authoritative_phi_storages.begin(),
+					frame_authoritative_phi_storages.end(), storage_id)
 				&& ((selected_phi != INVALID_VALUE_REF
 					&& machine_kind(selected_phi)
 						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL)
@@ -9052,6 +9166,12 @@ public:
 					guarded_hot_blocks[i];
 				const uint32_t continuation_block =
 					guarded_continuation_blocks[i];
+				const bool frame_authoritative_mutation =
+					instruction.has_value_operation
+					&& std::binary_search(
+						frame_authoritative_phi_storages.begin(),
+						frame_authoritative_phi_storages.end(),
+						instruction.value_operation.op1_storage_id);
 				const IRValueRef canonical_mutation_result =
 					mutation_results[i] != INVALID_VALUE_REF
 						? mutation_results[i]
@@ -9600,6 +9720,22 @@ public:
 				}
 				materialize_boxed_result_for_helper(
 					continuation_block, guarded_result);
+				if (frame_authoritative_mutation
+						&& register_mutation_result
+						&& mutation_results[i] != INVALID_VALUE_REF
+						&& machine_kind(guarded_result)
+							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+					const uint32_t store_operand_offset =
+						static_cast<uint32_t>(operands_.size());
+					operands_.push_back(guarded_result);
+					operands_.push_back(IRValueRef{FRAME_VALUE});
+					InstNode store{InstKind::ZvalBoxedStore, i, UINT32_MAX,
+						INVALID_VALUE_REF, {}, store_operand_offset, 2, false,
+						instruction.value_operation.op1_storage_id};
+					store.control_block = continuation_block;
+					add_node(block_instructions, continuation_block,
+						std::move(store));
+				}
 				if (function_mode_ == FunctionMode::ZendEntry
 						&& record.opcode
 							== ZEND_MIR_OPCODE_VALUE_ASSIGN
