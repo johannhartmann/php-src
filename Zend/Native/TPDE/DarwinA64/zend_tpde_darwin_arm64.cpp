@@ -52,6 +52,15 @@ class ZendCompilerA64 final
 		::tpde::CompilerBase, DarwinConfig>;
 	using EncodeBase = tpde_encodegen::EncodeCompiler<Adaptor, ZendCompilerA64,
 		::tpde::CompilerBase, DarwinConfig>;
+
+public:
+	using AsmReg = typename Base::AsmReg;
+	using GenericValuePart = typename Base::GenericValuePart;
+	using ScratchReg = typename Base::ScratchReg;
+	using ValuePart = typename Base::ValuePart;
+	using ValuePartRef = typename Base::ValuePartRef;
+
+private:
 	zend_native_image *image_;
 	std::vector<::tpde::SymRef> image_symbols_;
 	std::vector<::tpde::SymRef> image_slots_;
