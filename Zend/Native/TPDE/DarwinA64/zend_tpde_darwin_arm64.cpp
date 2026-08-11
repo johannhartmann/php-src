@@ -10274,45 +10274,14 @@ bool ZendCompilerA64::compile_inst_impl(
 						label_place(destination_valid);
 					}
 
-					if (layout.has_key) {
-						auto key_destination_valid = text_writer.label_create();
-						auto key_destination_string = text_writer.label_create();
-						load_off(type_reg, frame_reg,
-							layout.key_offset
-								+ static_cast<uint32_t>(
-									offsetof(zval, u1.type_info)),
-							4);
-						ASM(ANDwi, limit_reg, type_reg, Z_TYPE_MASK);
-						ASM(CMPwi, limit_reg, IS_UNDEF);
-						generate_raw_jump(Jump::Jeq, key_destination_valid);
-						ASM(CMPwi, limit_reg, IS_LONG);
-						generate_raw_jump(Jump::Jeq, key_destination_valid);
-						ASM(CMPwi, limit_reg, IS_STRING);
-						generate_raw_jump(Jump::Jeq, key_destination_string);
-						generate_raw_jump(Jump::jmp, slow);
-						label_place(key_destination_string);
-						ASM(TSTwi, type_reg,
-							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-						generate_raw_jump(Jump::Jeq, key_destination_valid);
-						load_off(element_reg, frame_reg,
-							layout.key_offset, 8);
-						load_off(type_reg, element_reg,
-							static_cast<uint32_t>(offsetof(
-								zend_refcounted_h, u.type_info)), 4);
-						ASM(TSTwi, type_reg, GC_IMMUTABLE);
-						generate_raw_jump(Jump::Jne, slow);
-						load_off(type_reg, element_reg,
-							static_cast<uint32_t>(
-								offsetof(zend_refcounted_h, refcount)), 4);
-						ASM(CMPwi, type_reg, 1);
-						generate_raw_jump(Jump::Jls, slow);
-						label_place(key_destination_valid);
-					}
-
 					/*
+					 * FE_FETCH_R produces its optional key in a dead TMP/VAR.
+					 * The bytes in that physical slot do not own a previous
+					 * value and therefore must neither be inspected nor released.
+					 *
 					 * All semantic fallback guards precede the ownership and
 					 * iterator mutations below. Acquire the new value and key
-					 * before releasing aliases held by the reused CVs.
+					 * before releasing aliases held by the reused destination CV.
 					 */
 					auto value_owned = text_writer.label_create();
 					ASM(TSTwi, value_type_reg,
@@ -10358,31 +10327,6 @@ bool ZendCompilerA64::compile_inst_impl(
 							type_reg, 4);
 						label_place(destination_released);
 					}
-					if (layout.has_key) {
-						auto key_destination_released =
-							text_writer.label_create();
-						load_off(type_reg, frame_reg,
-							layout.key_offset
-								+ static_cast<uint32_t>(
-									offsetof(zval, u1.type_info)),
-							4);
-						ASM(TSTwi, type_reg,
-							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-						generate_raw_jump(Jump::Jeq,
-							key_destination_released);
-						load_off(element_reg, frame_reg,
-							layout.key_offset, 8);
-						load_off(type_reg, element_reg,
-							static_cast<uint32_t>(
-								offsetof(zend_refcounted_h, refcount)), 4);
-						ASM(SUBwi, type_reg, type_reg, 1);
-						store_off(element_reg,
-							static_cast<uint32_t>(
-								offsetof(zend_refcounted_h, refcount)),
-							type_reg, 4);
-						label_place(key_destination_released);
-					}
-
 					/* Publish the fully validated iterator step. */
 					ASM(ADDwi, position_reg, position_reg, 1);
 					store_off(frame_reg,
