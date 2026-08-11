@@ -355,6 +355,8 @@ jobs:
           reference_log="$RUNNER_TEMP/darwin-product-reference-tests.log"
           candidate_log="$RUNNER_TEMP/darwin-product-candidate-tests.log"
           product_test_list="$RUNNER_TEMP/darwin-product-tests.txt"
+          product_test_php="$RUNNER_TEMP/native-product-php"
+          ln -s "$product_candidate" "$product_test_php"
           git ls-files '*.phpt' | grep -v '^sapi/phpdbg/tests/' \
             >"$product_test_list"
           set +e
@@ -367,9 +369,9 @@ jobs:
               -W "$reference_results" >"$reference_log" 2>&1
           reference_status=$?
           TEST_PHP_SRCDIR="$GITHUB_WORKSPACE" \
-          TEST_PHP_EXECUTABLE="$product_candidate" \
+          TEST_PHP_EXECUTABLE="$product_test_php" \
           TEST_PHP_CGI_EXECUTABLE="$product_cgi" \
-            "$product_candidate" -n "$GITHUB_WORKSPACE/run-tests.php" \
+            "$product_test_php" -n "$GITHUB_WORKSPACE/run-tests.php" \
               -n -q -j1 --set-timeout 180 \
               -r "$product_test_list" \
               -W "$candidate_results" >"$candidate_log" 2>&1
