@@ -8304,6 +8304,8 @@ public:
 							plan_->instructions[candidate_index];
 						if (candidate.has_value_operation
 								&& ((candidate.record.opcode
+										== ZEND_MIR_OPCODE_VALUE_ASSIGN
+									|| candidate.record.opcode
 										== ZEND_MIR_OPCODE_VALUE_BINARY_OP
 									|| candidate.record.opcode
 										== ZEND_MIR_OPCODE_VALUE_ASSIGN_OP
