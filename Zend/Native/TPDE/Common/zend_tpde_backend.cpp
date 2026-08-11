@@ -5159,7 +5159,7 @@ void destroy_plan(zend_tpde_plan *plan) {
 			plan->instructions != nullptr && index < plan->instruction_count;
 			++index) {
 		std::free(
-			plan->instructions[index].direct_call_reference_exact_types);
+			plan->instructions[index].direct_call_argument_guard_types);
 	}
 	for (uint32_t index = 0; index < plan->direct_call_count; ++index) {
 		std::free(plan->direct_calls[index]);
@@ -5244,7 +5244,7 @@ bool initialize_plan(
 	uint32_t frame_argument_count,
 	const zend_op_array *source_op_array,
 	const zend_ssa *source_ssa,
-	bool inline_typed_reference_arguments,
+	bool inline_typed_argument_guards,
 	zend_tpde_plan *plan,
 	zend_native_diagnostic *diag) {
 	plan->runtime = runtime;
@@ -7786,9 +7786,9 @@ bool initialize_plan(
 					std::vector<uint8_t> supplied_parameters(
 						callee != nullptr ? callee->common.num_args : 0, 0);
 					std::vector<zend_mir_scalar_type_mask>
-						reference_exact_types(
+						argument_guard_types(
 							site.arguments.count, ZEND_MIR_SCALAR_TYPE_NONE);
-					bool has_reference_exact_type = false;
+					bool has_argument_guard_type = false;
 					if (trivial_frame) {
 						const zend_op_array &op_array = callee->op_array;
 						const bool inline_receiver =
@@ -7932,6 +7932,19 @@ bool initialize_plan(
 								: ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE;
 						const int32_t argument_value_index =
 							zend_tpde_value_index(plan, argument.value_id);
+						zend_mir_value_id argument_guard_value_id =
+							ZEND_MIR_ID_INVALID;
+						const int32_t argument_guard_value_index =
+							argument_value_index >= 0
+							? argument_value_index
+							: source_operand_value_id(
+								argument.source_operand, argument_guard_value_id)
+								? zend_tpde_value_index(
+									plan, argument_guard_value_id)
+								: -1;
+						const zend_mir_storage_id argument_source_storage =
+							source_descriptor_storage(
+								source_op_array, argument.source_operand);
 						descriptor->arguments[n].exact_type =
 							descriptor->arguments[n].mode
 									== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
@@ -8025,11 +8038,55 @@ bool initialize_plan(
 								== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
 							&& source_literal != nullptr
 							&& Z_TYPE_P(source_literal) != IS_CONSTANT_AST;
+						const zend_type *parameter_type =
+							callee->op_array.arg_info == nullptr
+								? nullptr
+								: parameter_ordinal < callee->op_array.num_args
+									? &callee->op_array.arg_info[
+										parameter_ordinal].type
+									: (callee->common.fn_flags
+											& ZEND_ACC_VARIADIC) != 0
+										? &callee->op_array.arg_info[
+											callee->op_array.num_args].type
+										: nullptr;
+						const zend_mir_scalar_type_mask parameter_exact_type =
+							parameter_type != nullptr
+							? exact_scalar_from_declared_type(*parameter_type)
+							: ZEND_MIR_SCALAR_TYPE_NONE;
+						const bool guarded_reference =
+							inline_typed_argument_guards
+							&& descriptor->arguments[n].mode
+								== ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
+							&& zend_mir_scalar_type_is_exact(parameter_exact_type);
+						if (guarded_reference) {
+							argument_guard_types[n] = parameter_exact_type;
+							has_argument_guard_type = true;
+						}
+						const bool guarded_boxed_value =
+							inline_typed_argument_guards
+							&& descriptor->arguments[n].mode
+								== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
+							&& !zend_mir_scalar_type_is_exact(
+								descriptor->arguments[n].exact_type)
+							&& zend_mir_scalar_type_is_exact(parameter_exact_type)
+							&& argument_guard_value_index >= 0
+							&& plan->values[argument_guard_value_index].machine_kind
+								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+							&& zend_mir_id_is_valid(argument_source_storage)
+							&& plan->values[argument_guard_value_index]
+								.canonical_storage_id == argument_source_storage
+							&& descriptor->arguments[n].source_frame_offset
+								!= UINT32_MAX;
+						if (guarded_boxed_value) {
+							argument_guard_types[n] = parameter_exact_type;
+							has_argument_guard_type = true;
+						}
 						const bool inline_argument =
 							(descriptor->arguments[n].mode
 									== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
 								&& (zend_mir_scalar_type_is_exact(
 										descriptor->arguments[n].exact_type)
+									|| guarded_boxed_value
 									|| inline_literal
 									|| ((argument.source_operand.kind
 												== ZEND_MIR_SOURCE_OPERAND_SLOT
@@ -8045,28 +8102,6 @@ bool initialize_plan(
 										== ZEND_MIR_SOURCE_OPERAND_SSA)
 								&& argument.source_operand.slot_kind
 									== ZEND_MIR_SOURCE_SLOT_CV);
-						const zend_type *parameter_type =
-							callee->op_array.arg_info == nullptr
-								? nullptr
-								: parameter_ordinal < callee->op_array.num_args
-									? &callee->op_array.arg_info[
-										parameter_ordinal].type
-									: (callee->common.fn_flags
-											& ZEND_ACC_VARIADIC) != 0
-										? &callee->op_array.arg_info[
-											callee->op_array.num_args].type
-										: nullptr;
-						const zend_mir_scalar_type_mask reference_exact_type =
-							inline_typed_reference_arguments
-								&& descriptor->arguments[n].mode
-									== ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
-								&& parameter_type != nullptr
-							? exact_scalar_from_declared_type(*parameter_type)
-							: ZEND_MIR_SCALAR_TYPE_NONE;
-						if (zend_mir_scalar_type_is_exact(reference_exact_type)) {
-							reference_exact_types[n] = reference_exact_type;
-							has_reference_exact_type = true;
-						}
 						const bool inline_parameter =
 							!trivial_frame
 							|| parameter_type == nullptr
@@ -8079,10 +8114,10 @@ bool initialize_plan(
 								&& exact_scalar_satisfies_type(
 									descriptor->arguments[n].exact_type,
 									*parameter_type))
+							|| guarded_boxed_value
 							|| (descriptor->arguments[n].mode
 									== ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
-								&& zend_mir_scalar_type_is_exact(
-									reference_exact_type));
+								&& guarded_reference);
 						trivial_frame =
 							trivial_frame && inline_argument && inline_parameter;
 					}
@@ -8133,24 +8168,33 @@ bool initialize_plan(
 								|| descriptor->result_operand.slot_kind
 									== ZEND_MIR_SOURCE_SLOT_VAR));
 					if (trivial_frame && inline_result) {
-						if (has_reference_exact_type) {
-							auto *reference_types =
+						for (uint32_t n = 0; n < site.arguments.count; ++n) {
+							if (descriptor->arguments[n].mode
+									== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
+									&& zend_mir_scalar_type_is_exact(
+										argument_guard_types[n])) {
+								descriptor->arguments[n].exact_type =
+									argument_guard_types[n];
+							}
+						}
+						if (has_argument_guard_type) {
+							auto *guard_types =
 								static_cast<zend_mir_scalar_type_mask *>(
 									std::malloc(
 										static_cast<size_t>(site.arguments.count)
 											* sizeof(zend_mir_scalar_type_mask)));
-							if (reference_types == nullptr) {
+							if (guard_types == nullptr) {
 								std::free(descriptor);
 								zend_tpde_set_diagnostic(diag,
 									ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
-									"unable to allocate typed reference guards");
+									"unable to allocate inline argument guards");
 								return false;
 							}
-							std::memcpy(reference_types, reference_exact_types.data(),
+							std::memcpy(guard_types, argument_guard_types.data(),
 								static_cast<size_t>(site.arguments.count)
-									* sizeof(*reference_types));
+									* sizeof(*guard_types));
 							plan->instructions[i]
-								.direct_call_reference_exact_types = reference_types;
+								.direct_call_argument_guard_types = guard_types;
 						}
 						descriptor->flags |=
 							ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME;
@@ -9898,10 +9942,26 @@ static bool freeze_typed_component_calls(
 						- instruction.call_argument_offset) {
 			continue;
 		}
+		bool has_guarded_boxed_value_argument = false;
+		if (instruction.direct_call_argument_guard_types != nullptr) {
+			for (uint32_t argument = 0;
+					argument < instruction.call_argument_count
+						&& argument < instruction.direct_call->argument_count;
+					++argument) {
+				if (instruction.direct_call->arguments[argument].mode
+						== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
+						&& zend_mir_scalar_type_is_exact(
+							instruction.direct_call_argument_guard_types[argument])) {
+					has_guarded_boxed_value_argument = true;
+					break;
+				}
+			}
+		}
 		const bool effect_closed_inline =
 			machine_plan_prefers_effect_closed_inline(
 				instruction, callee,
-				register_a64_value_transports);
+				register_a64_value_transports)
+			&& !has_guarded_boxed_value_argument;
 		bool compatible = true;
 		for (uint32_t argument = 0;
 				argument < instruction.call_argument_count; ++argument) {
@@ -10019,6 +10079,58 @@ static bool freeze_typed_component_calls(
 				 */
 				caller_abi = callee_abi;
 			}
+			const zend_tpde_value *guarded_integer_source =
+				source_value >= 0
+						&& static_cast<uint32_t>(source_value)
+							< plan->value_count
+					? &plan->values[static_cast<uint32_t>(source_value)]
+					: nullptr;
+			const int32_t guarded_integer_definition =
+				binding.definition_instruction_index;
+			const zend_mir_instruction_record guarded_integer_definition_record =
+				guarded_integer_definition >= 0
+						&& static_cast<uint32_t>(guarded_integer_definition)
+							< plan->instruction_count
+					? zend_tpde_instruction_record_at(plan,
+						&plan->instructions[static_cast<uint32_t>(
+							guarded_integer_definition)])
+					: zend_mir_instruction_record{};
+			const bool guarded_boxed_integer_transport =
+				register_a64_value_transports
+				&& !effect_closed_inline
+				&& guarded_integer_source != nullptr
+				&& guarded_integer_source->representation
+					== ZEND_MIR_REPRESENTATION_ZVAL
+				&& guarded_integer_source->machine_kind
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+				&& guarded_integer_definition >= 0
+				&& guarded_integer_definition_record.opcode
+					!= ZEND_MIR_OPCODE_COPY
+				&& guarded_integer_definition_record.opcode
+					!= ZEND_MIR_OPCODE_PHI
+				&& zend_mir_id_is_valid(
+					guarded_integer_source->canonical_storage_id)
+				&& callee_abi.valid
+				&& callee_abi.representation == ZEND_MIR_REPRESENTATION_I64
+				&& callee_abi.exact_type == ZEND_MIR_SCALAR_TYPE_I64
+				&& callee_abi.machine_kind == ZEND_TPDE_MACHINE_VALUE_I64
+				&& argument < instruction.direct_call->argument_count
+				&& instruction.direct_call->arguments[argument].mode
+					== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
+				&& instruction.direct_call->arguments[argument].exact_type
+					== ZEND_MIR_SCALAR_TYPE_I64
+				&& instruction.direct_call_argument_guard_types != nullptr
+				&& instruction.direct_call_argument_guard_types[argument]
+					== ZEND_MIR_SCALAR_TYPE_I64;
+			if (guarded_boxed_integer_transport) {
+				/*
+				 * The direct-call descriptor carries an explicit runtime
+				 * IS_LONG guard for this register-defined boxed argument.
+				 * Only after that guard may the typed hot edge transport the
+				 * payload as the callee's I64 local ABI.
+				 */
+				caller_abi = callee_abi;
+			}
 			if (effect_closed_inline
 					&& source_value >= 0
 					&& static_cast<uint32_t>(source_value)
@@ -10084,7 +10196,18 @@ static bool freeze_typed_component_calls(
 			const bool by_reference =
 				source_argument.ownership
 					== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE;
-			if (!machine_plan_call_argument_can_supply(
+			const bool guarded_boxed_integer_required =
+				instruction.direct_call_argument_guard_types != nullptr
+				&& instruction.direct_call_argument_guard_types[argument]
+					== ZEND_MIR_SCALAR_TYPE_I64
+				&& guarded_integer_source != nullptr
+				&& guarded_integer_source->representation
+					== ZEND_MIR_REPRESENTATION_ZVAL
+				&& guarded_integer_source->machine_kind
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
+			if ((guarded_boxed_integer_required
+					&& !guarded_boxed_integer_transport)
+					|| !machine_plan_call_argument_can_supply(
 					plan, source_argument, caller_abi, callee_abi)
 					|| by_reference
 						!= (callee_abi.machine_kind
