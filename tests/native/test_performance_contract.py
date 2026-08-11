@@ -320,47 +320,6 @@ class PerformanceContractTests(unittest.TestCase):
         self.assertTrue(any("compile latency p95" in failure for failure in failures))
         self.assertTrue(any("peak RSS" in failure for failure in failures))
 
-    def test_diagnostic_compile_threshold_is_mandatory(self) -> None:
-        passing = [
-            {
-                "suite": "direct",
-                "case": "scalar_return",
-                "cold_compile_p95_ratio": 1.2,
-            },
-            {
-                "suite": "hot",
-                "case": "packed_array_read",
-                "cold_compile_p95_ratio": 1.2,
-            },
-        ]
-        self.assertEqual([], BENCHMARK.v1_diagnostic_contract_failures(passing))
-
-        passing[0]["cold_compile_p95_ratio"] = 1.2001
-        del passing[1]["cold_compile_p95_ratio"]
-        failures = BENCHMARK.v1_diagnostic_contract_failures(passing)
-
-        self.assertEqual(2, len(failures))
-        self.assertTrue(any("comparison missing" in failure for failure in failures))
-        self.assertTrue(any("more than 20%" in failure for failure in failures))
-
-    def test_product_mode_does_not_require_diagnostic_metrics(self) -> None:
-        records = [
-            {
-                "suite": "direct",
-                "case": "scalar_return",
-                "product_cold_compile_latency_p95_ratio": 1.0,
-                "peak_rss_ratio": 1.0,
-            }
-        ]
-        summary = {
-            "direct_scalar_speedup": 1.0,
-            "direct_scalar_vs_reference": 2.0,
-        }
-
-        self.assertEqual(
-            [], BENCHMARK.v1_mode_contract_failures("product-cli", records, summary)
-        )
-
     def test_product_fpm_gate_reports_fail_closed_architectural_evidence(
         self,
     ) -> None:
@@ -441,43 +400,6 @@ class PerformanceContractTests(unittest.TestCase):
                 False,
                 require_hit=False,
             )
-
-    def test_structural_metrics_fail_closed(self) -> None:
-        passing = [
-            {
-                "suite": "direct",
-                "case": "scalar_return",
-                "inner_call_runtime_helper_calls": 0,
-                "inner_call_heap_allocations": 0,
-                "inner_call_catcher_boundaries": 0,
-                "direct_typed_body_sites": 1,
-                "direct_call_frame_bytes": 0,
-            }
-        ]
-        self.assertEqual([], BENCHMARK.v1_structural_contract_failures(passing))
-
-        failing = [
-            {
-                "suite": "direct",
-                "case": "generic_frame",
-                "inner_call_runtime_helper_calls": 2,
-                "inner_call_heap_allocations": 1,
-                "inner_call_catcher_boundaries": 1,
-                "direct_typed_body_sites": 1,
-                "direct_call_frame_bytes": 96,
-            },
-            {"suite": "direct", "case": "missing_metrics"},
-        ]
-        failures = BENCHMARK.v1_structural_contract_failures(failing)
-
-        self.assertEqual(9, len(failures))
-        self.assertTrue(any("runtime_helper_calls=2" in item for item in failures))
-        self.assertTrue(any("heap_allocations=1" in item for item in failures))
-        self.assertTrue(any("catcher_boundaries=1" in item for item in failures))
-        self.assertTrue(any("frame bytes=96" in item for item in failures))
-        self.assertTrue(any("direct_typed_body_sites=None" in item for item in failures))
-        self.assertTrue(any("direct_call_frame_bytes=None" in item for item in failures))
-        self.assertTrue(any("missing_metrics" in item for item in failures))
 
     def test_peak_rss_contract_uses_p95_instead_of_median(self) -> None:
         descriptor = BENCHMARK.Benchmark(

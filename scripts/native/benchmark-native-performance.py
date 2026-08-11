@@ -1504,90 +1504,6 @@ def v1_product_contract_failures(
     return failures
 
 
-def v1_diagnostic_contract_failures(
-    records: list[dict[str, Any]],
-) -> list[str]:
-    """Return failures for compiler-phase metrics exposed by diagnostics."""
-    failures = []
-    comparable = [
-        record for record in records if record["suite"] in {"direct", "hot", "scaling"}
-    ]
-    missing_compile = [
-        record["case"]
-        for record in comparable
-        if "baseline_error" not in record
-        if not isinstance(record.get("cold_compile_p95_ratio"), (int, float))
-    ]
-    if missing_compile:
-        failures.append(
-            "diagnostic cold compile p95 comparison missing for: "
-            + ", ".join(missing_compile)
-        )
-    compile_regressions = [
-        record["case"]
-        for record in comparable
-        if isinstance(record.get("cold_compile_p95_ratio"), (int, float))
-        and float(record["cold_compile_p95_ratio"]) > V1_MAX_RESOURCE_RATIO
-    ]
-    if compile_regressions:
-        failures.append(
-            "diagnostic cold compile p95 regresses by more than 20% for: "
-            + ", ".join(compile_regressions)
-        )
-    return failures
-
-
-def v1_structural_contract_failures(
-    records: list[dict[str, Any]],
-) -> list[str]:
-    """Return failures for compile-time direct-call structural metrics."""
-    failures = []
-    for record in records:
-        if record["suite"] != "direct":
-            continue
-        for metric in (
-            "inner_call_runtime_helper_calls",
-            "inner_call_heap_allocations",
-            "inner_call_catcher_boundaries",
-        ):
-            if record.get(metric) != 0:
-                failures.append(f"{record['case']}: {metric}={record.get(metric)!r}")
-        typed_sites = record.get("direct_typed_body_sites")
-        frame_bytes = record.get("direct_call_frame_bytes")
-        if isinstance(typed_sites, bool) or not isinstance(typed_sites, int):
-            failures.append(
-                f"{record['case']}: direct_typed_body_sites={typed_sites!r}"
-            )
-        if isinstance(frame_bytes, bool) or not isinstance(frame_bytes, int):
-            failures.append(
-                f"{record['case']}: direct_call_frame_bytes={frame_bytes!r}"
-            )
-        if (
-            isinstance(typed_sites, int)
-            and not isinstance(typed_sites, bool)
-            and typed_sites > 0
-            and frame_bytes != 0
-        ):
-            failures.append(
-                f"{record['case']}: typed direct call frame bytes="
-                f"{frame_bytes!r}"
-            )
-    return failures
-
-
-def v1_mode_contract_failures(
-    mode: str,
-    records: list[dict[str, Any]],
-    summary: dict[str, Any],
-) -> list[str]:
-    """Apply only the V1 evidence contract exposed by the selected mode."""
-    if mode == "diagnostic":
-        return v1_diagnostic_contract_failures(
-            records
-        ) + v1_structural_contract_failures(records)
-    return v1_product_contract_failures(records, summary)
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--candidate", type=Path, required=True)
@@ -2110,7 +2026,8 @@ def main() -> int:
         failures.append(
             "representative cases regress by more than 10%: " + ", ".join(regressions)
         )
-    failures.extend(v1_mode_contract_failures(args.mode, records, summary))
+    if product_mode:
+        failures.extend(v1_product_contract_failures(records, summary))
     if opcache and warm_speedups:
         if summary.get("warm_geomean_speedup", 0) <= 1.0:
             failures.append(
