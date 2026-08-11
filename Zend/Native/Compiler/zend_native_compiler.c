@@ -357,6 +357,9 @@ static void zend_native_compiler_free(
 	pefree(allocation, compiler->persistent);
 }
 
+static bool zend_native_compiler_index_script_functions(
+	zend_native_compiler *compiler);
+
 static uint64_t zend_native_compiler_dynamic_codeunit_count(
 	uint32_t first_function_bucket, uint32_t first_class_bucket);
 
@@ -3700,6 +3703,27 @@ zend_result zend_native_compiler_compile_dynamic_component(
 			first_class_bucket, component_compiler,
 			first_compiled_function, root_entry, diagnostic);
 	}
+	if (compiler->direct_reentry
+			&& compiler->script->function_table.pDestructor != NULL
+			&& compiler->script->class_table.pDestructor != NULL) {
+		/*
+		 * Dynamic include/eval may grow the request symbol tables before it
+		 * reenters a compiler that borrows their storage. Refresh those views
+		 * and the matching symbolic function index as one snapshot, so
+		 * compilation never reads released HashTable storage or resolves a new
+		 * declaration through an older index. Owner-script tables have no
+		 * element destructors; keep those independent tables intact.
+		 */
+		compiler->script->function_table = *EG(function_table);
+		compiler->script->class_table = *EG(class_table);
+		if (!zend_native_compiler_index_script_functions(compiler)) {
+			zend_native_compiler_set_diagnostic(
+				compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
+				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+				"native script function index cannot be refreshed");
+			return FAILURE;
+		}
+	}
 	if (component_compiler != NULL) {
 		*component_compiler = compiler;
 	}
@@ -4375,15 +4399,12 @@ static bool zend_native_compiler_index_script_functions(
 			count++;
 		}
 	} ZEND_HASH_FOREACH_END();
-	if (count == 0) {
-		return true;
-	}
 	compiler->script_functions_by_declaration_id =
-		zend_native_compiler_alloc(
+		zend_native_compiler_realloc(
 			compiler,
-			(count + 1)
-				* sizeof(*compiler->script_functions_by_declaration_id),
-			false);
+			compiler->script_functions_by_declaration_id,
+			count + 1,
+			sizeof(*compiler->script_functions_by_declaration_id));
 	compiler->script_functions_by_declaration_id[0] = NULL;
 	ZEND_HASH_FOREACH_PTR(&compiler->script->function_table, function) {
 		if (function == NULL || function->type != ZEND_USER_FUNCTION) {
