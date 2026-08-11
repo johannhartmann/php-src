@@ -529,11 +529,13 @@ struct zend_tpde_instruction {
 	_zend_native_user_call_descriptor *user_call;
 	_zend_native_direct_call_descriptor *direct_call;
 	/*
-	 * Compile-time-only referent guards for typed by-reference arguments.
-	 * These facts are consumed while lowering an inline frame and are never
-	 * copied into the serialized direct-call descriptor.
+	 * Compile-time-only type guards for inline-frame arguments. By-reference
+	 * entries describe the referent; by-value entries prove a canonical boxed
+	 * source before it is transported as an exact scalar. These facts are
+	 * consumed while lowering an inline frame and are never copied into the
+	 * serialized direct-call descriptor.
 	 */
-	zend_mir_scalar_type_mask *direct_call_reference_exact_types;
+	zend_mir_scalar_type_mask *direct_call_argument_guard_types;
 	_zend_native_direct_internal_call_descriptor *direct_internal_call;
 	zend_native_source_effect_kind source_effect;
 	zend_mir_scalar_type_mask source_effect_exact_type;
