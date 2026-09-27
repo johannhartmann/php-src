@@ -3410,6 +3410,18 @@ bool ZendCompilerX64::compile_inst_impl(
 			builder.add_arg(image_symbol_value(
 				ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.id),
 				tpde::CCAssignment{});
+			/*
+			 * The callee and resolution are the third and fourth SysV
+			 * arguments. Reserve RDX and RCX for them before any other
+			 * scratch is allocated: a scratch left in either register stays
+			 * fixed while the earlier argument is placed, and evicting it
+			 * then is invalid.
+			 */
+			ScratchReg callee{this};
+			ScratchReg resolution{this};
+			auto callee_reg = callee.alloc_specific(tpde::x64::AsmReg::DX);
+			auto resolution_reg =
+				resolution.alloc_specific(tpde::x64::AsmReg::CX);
 			ScratchReg activation{this};
 			ScratchReg target_kind{this};
 			auto activation_reg = activation.alloc_gp();
@@ -3428,14 +3440,10 @@ bool ZendCompilerX64::compile_inst_impl(
 				ZEND_NATIVE_USER_CALL_TARGET_TRAMPOLINE);
 			generate_raw_jump(Jump::jne, normalized);
 			target_kind.reset();
-			ScratchReg callee{this};
-			auto callee_reg = callee.alloc_gp();
 			ASM(MOV64rm, callee_reg,
 				FE_MEM(activation_reg, 0, FE_NOREG,
 					static_cast<int32_t>(offsetof(
 						zend_native_direct_activation, callee))));
-			ScratchReg resolution{this};
-			auto resolution_reg = resolution.alloc_gp();
 			ASM(MOV64rr, resolution_reg, activation_reg);
 			ASM(ADD64ri, resolution_reg,
 				static_cast<int32_t>(offsetof(
@@ -13105,24 +13113,43 @@ bool ZendCompilerX64::compile_inst_impl(
 
 					/* Rare completion retains full exception/interrupt cleanup. */
 					label_place(complete_fast);
+					post_frame_scratch.reset();
+					post_context_scratch.reset();
+					post_callee.reset();
+					probe.reset();
 					ASM(MOV32rm, activation_reg,
 						FE_MEM(activation_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
 								zend_native_direct_activation, status))));
+					/*
+					 * The status is the fourth SysV argument. Materialize it
+					 * directly in RCX: left in whichever register the
+					 * activation happened to get (often RDI), it stays fixed
+					 * while the earlier arguments are placed and their
+					 * eviction of that register would be invalid.
+					 */
 					ValuePart finish_status_argument{
 						tpde::x64::PlatformConfig::GP_BANK, 4};
-					finish_status_argument.set_value(
-						this, std::move(activation));
+					if (activation_reg
+							== tpde::x64::AsmReg{tpde::x64::AsmReg::CX}) {
+						finish_status_argument.set_value(
+							this, std::move(activation));
+					} else {
+						ScratchReg finish_status_register{this};
+						auto finish_status_reg =
+							finish_status_register.alloc_specific(
+								tpde::x64::AsmReg::CX);
+						mov(finish_status_reg, activation_reg, 4);
+						activation.reset();
+						finish_status_argument.set_value(
+							this, std::move(finish_status_register));
+					}
 					{
 						auto [finish_frame_ref, finish_frame] =
 							val_ref_single(node.operands[frame_operand + 2]);
 						(void) finish_frame_ref;
 						finish_frame.reset();
 					}
-					post_frame_scratch.reset();
-					post_context_scratch.reset();
-					post_callee.reset();
-					probe.reset();
 					tpde::x64::CCAssignerSysV finish_assigner{false};
 					CallBuilder finish_builder{*this, finish_assigner};
 					finish_builder.add_arg(
