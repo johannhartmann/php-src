@@ -2,7 +2,7 @@
 Native x64 in-place writes to owned packed arrays
 --DESCRIPTION--
 $a[$k] = $v on an owned packed array replaces an existing scalar element
-inline. Copy-on-write separation, references, holes, growth, hash arrays,
+or appends at the next free index inline. Copy-on-write separation, references, holes, growth, hash arrays,
 counted old or new values and non-integer keys keep VM behavior.
 --EXTENSIONS--
 opcache
@@ -37,6 +37,11 @@ function by_ref_param(array &$a, $n) { for ($i = 0; $i < $n; $i++) { $a[$i] = $a
 function typed_prop_ref() { $o = new class { public array $p = [1, 2, 3]; }; by_ref_param($o->p, 3); $r = &$o->p; $r[0] = 'x'; return $o->p; }
 $arr = [5, 6, 7]; by_ref_param($arr, 3); var_dump($arr, typed_prop_ref());
 $shared = [1, 2]; $copy = $shared; $ref = &$shared; by_ref_param($ref, 2); var_dump($shared, $copy);
+function build(int $n) { $x = []; for ($i = 0; $i < $n; $i++) { $x[$i] = $i * 2; } $x[] = 'tail'; return [$x, count($x)]; }
+function build_gap() { $x = [0, 1]; $x[5] = 5; $x[2] = 2; $x[] = 'n'; return $x; }
+function build_after_unset() { $x = [0, 1, 2]; unset($x[2]); $x[2] = 'again'; $x[] = 'next'; return $x; }
+function foreach_grow() { $x = [1, 2]; $s = 0; foreach ($x as $k => $v) { $x[$k + 2] = $v; $s += $v; } return [$x, $s]; }
+var_dump(build(20), build_gap(), build_after_unset(), foreach_grow());
 ?>
 --EXPECTF--
 
@@ -326,4 +331,90 @@ array(2) {
   int(1)
   [1]=>
   int(2)
+}
+array(2) {
+  [0]=>
+  array(21) {
+    [0]=>
+    int(0)
+    [1]=>
+    int(2)
+    [2]=>
+    int(4)
+    [3]=>
+    int(6)
+    [4]=>
+    int(8)
+    [5]=>
+    int(10)
+    [6]=>
+    int(12)
+    [7]=>
+    int(14)
+    [8]=>
+    int(16)
+    [9]=>
+    int(18)
+    [10]=>
+    int(20)
+    [11]=>
+    int(22)
+    [12]=>
+    int(24)
+    [13]=>
+    int(26)
+    [14]=>
+    int(28)
+    [15]=>
+    int(30)
+    [16]=>
+    int(32)
+    [17]=>
+    int(34)
+    [18]=>
+    int(36)
+    [19]=>
+    int(38)
+    [20]=>
+    string(4) "tail"
+  }
+  [1]=>
+  int(21)
+}
+array(5) {
+  [0]=>
+  int(0)
+  [1]=>
+  int(1)
+  [5]=>
+  int(5)
+  [2]=>
+  int(2)
+  [6]=>
+  string(1) "n"
+}
+array(4) {
+  [0]=>
+  int(0)
+  [1]=>
+  int(1)
+  [2]=>
+  string(5) "again"
+  [3]=>
+  string(4) "next"
+}
+array(2) {
+  [0]=>
+  array(4) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    int(1)
+    [3]=>
+    int(2)
+  }
+  [1]=>
+  int(3)
 }
