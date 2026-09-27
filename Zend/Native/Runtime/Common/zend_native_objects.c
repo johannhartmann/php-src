@@ -579,7 +579,7 @@ static zend_native_status zend_native_declare_lambda(
 {
 	zend_function *function;
 	zend_class_entry *called_scope;
-	zval *receiver = NULL;
+	zend_object *receiver = NULL;
 	zval *result = zend_native_object_slot(
 		execute_data, operation->result_type, operation->result);
 
@@ -602,7 +602,7 @@ static zend_native_status zend_native_declare_lambda(
 		called_scope = Z_OBJCE(execute_data->This);
 		if ((function->common.fn_flags & ZEND_ACC_STATIC) == 0
 				&& (execute_data->func->common.fn_flags & ZEND_ACC_STATIC) == 0) {
-			receiver = &execute_data->This;
+			receiver = Z_OBJ(execute_data->This);
 		}
 	} else {
 		called_scope = Z_CE(execute_data->This);
