@@ -707,6 +707,10 @@ struct zend_tpde_source_opcode {
 	uint8_t op1_type;
 	uint8_t op2_type;
 	uint8_t result_type;
+	/* IS_LONG or IS_DOUBLE when a literal or Zend's type inference fixes
+	 * the operand's type, IS_UNDEF otherwise. */
+	uint8_t op1_known_type;
+	uint8_t op2_known_type;
 	uint32_t op1_var;
 	uint32_t op2_var;
 	uint32_t result_var;

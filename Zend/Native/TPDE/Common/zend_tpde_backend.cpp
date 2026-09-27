@@ -5368,6 +5368,36 @@ static bool temporary_argument_slot_is_stable(
 	return true;
 }
 
+/*
+ * The numeric type of a source operand when a literal or Zend's type
+ * inference fixes it: IS_LONG or IS_DOUBLE, otherwise IS_UNDEF.
+ */
+static uint8_t source_operand_known_type(
+		const zend_op_array *op_array, const zend_ssa *ssa,
+		uint32_t opline_index, uint8_t operand_type, znode_op operand,
+		int ssa_use) {
+	if (operand_type == IS_CONST) {
+		const zval *literal = RT_CONSTANT(
+			&op_array->opcodes[opline_index], operand);
+		return Z_TYPE_P(literal) == IS_LONG || Z_TYPE_P(literal) == IS_DOUBLE
+			? Z_TYPE_P(literal) : IS_UNDEF;
+	}
+	if ((operand_type & (IS_CV | IS_TMP_VAR | IS_VAR)) == 0
+			|| ssa == nullptr || ssa->var_info == nullptr
+			|| ssa_use < 0 || ssa_use >= ssa->vars_count) {
+		return IS_UNDEF;
+	}
+	switch (ssa->var_info[ssa_use].type
+			& (MAY_BE_ANY | MAY_BE_UNDEF | MAY_BE_REF | MAY_BE_INDIRECT)) {
+		case MAY_BE_LONG:
+			return IS_LONG;
+		case MAY_BE_DOUBLE:
+			return IS_DOUBLE;
+		default:
+			return IS_UNDEF;
+	}
+}
+
 bool initialize_plan(
 	const zend_mir_view *view,
 	const zend_native_runtime_api *runtime,
@@ -5445,6 +5475,16 @@ bool initialize_plan(
 					|| source.result_type == IS_TMP_VAR
 				? source.result.var : UINT32_MAX;
 			frozen.extended_value = source.extended_value;
+			frozen.op1_known_type = source_operand_known_type(
+				source_op_array, source_ssa, index, source.op1_type,
+				source.op1,
+				source_ssa != nullptr && source_ssa->ops != nullptr
+					? source_ssa->ops[index].op1_use : -1);
+			frozen.op2_known_type = source_operand_known_type(
+				source_op_array, source_ssa, index, source.op2_type,
+				source.op2,
+				source_ssa != nullptr && source_ssa->ops != nullptr
+					? source_ssa->ops[index].op2_use : -1);
 		}
 		plan->source_multi_branches =
 			static_cast<zend_tpde_source_multi_branch *>(std::calloc(
