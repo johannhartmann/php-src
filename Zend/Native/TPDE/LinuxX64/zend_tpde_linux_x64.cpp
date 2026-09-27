@@ -14589,13 +14589,26 @@ bool ZendCompilerX64::compile_inst_impl(
 				for (uint32_t index = 0;
 						index < argument_count; ++index) {
 					const IRValueRef operand = node.operands[index];
+					const zend_native_direct_internal_call_argument &argument =
+						call.direct_internal_call->arguments[index];
+					/* A register-held boxed SEND_VAL value goes straight to the
+					 * argument helper instead of through its frame slot. */
+					const bool direct_boxed_argument =
+						operand != IRValueRef{Adaptor::FRAME_VALUE}
+						&& adaptor->machine_kind(operand)
+							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+						&& adaptor->machine_value_is_register_authoritative(
+							operand)
+						&& (argument.source_opcode == ZEND_SEND_VAL
+							|| argument.source_opcode == ZEND_SEND_VAL_EX);
 					tpde::x64::CCAssignerSysV assigner{false};
 					CallBuilder builder{*this, assigner};
 					const IRValueRef frame_operand =
 						node.operands[frame_base + 1 + index];
 					if (operand != IRValueRef{Adaptor::FRAME_VALUE}
 							&& adaptor->machine_kind(operand)
-								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+							&& !direct_boxed_argument) {
 						const zend_mir_source_operand_ref &source =
 							call.direct_internal_call->arguments[index]
 								.source_operand;
@@ -14623,15 +14636,60 @@ bool ZendCompilerX64::compile_inst_impl(
 						auto type_info = boxed.part(1);
 						auto [frame_ref, frame] = val_ref_single(frame_operand);
 						auto frame_reg = frame.load_to_reg();
-						ASM(MOV64mr,
-							FE_MEM(frame_reg, 0, FE_NOREG,
-								static_cast<int32_t>(offset)),
-							payload.load_to_reg());
-						ASM(MOV32mr,
-							FE_MEM(frame_reg, 0, FE_NOREG,
-								static_cast<int32_t>(offset
-									+ offsetof(zval, u1.type_info))),
-							type_info.load_to_reg());
+						auto store_boxed_part = [&](ValuePartRef &part,
+								int32_t part_offset, uint32_t size) {
+							AsmReg reg;
+							ScratchReg stack_reload{this};
+							if (part.has_assignment()
+									&& part.assignment().stack_valid()) {
+								auto assignment = part.assignment();
+								reg = stack_reload.alloc_gp();
+								load_from_stack(reg, assignment.frame_off(),
+									assignment.part_size());
+							} else {
+								reg = part.load_to_reg();
+							}
+							if (size == 8) {
+								ASM(MOV64mr,
+									FE_MEM(frame_reg, 0, FE_NOREG, part_offset),
+									reg);
+							} else {
+								ASM(MOV32mr,
+									FE_MEM(frame_reg, 0, FE_NOREG, part_offset),
+									reg);
+							}
+						};
+						store_boxed_part(payload,
+							static_cast<int32_t>(offset), 8);
+						store_boxed_part(type_info,
+							static_cast<int32_t>(offset
+								+ offsetof(zval, u1.type_info)), 4);
+					}
+					if (direct_boxed_argument) {
+						auto boxed = val_ref(operand);
+						{
+							auto frame_materialization_liveness =
+								val_ref(frame_operand);
+							(void) frame_materialization_liveness;
+						}
+						builder.add_arg(CallArg{frame_operand});
+						builder.add_arg(image_symbol_value(
+							ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
+							call.id), tpde::CCAssignment{});
+						builder.add_arg(ValuePart{index, 4,
+							tpde::x64::PlatformConfig::GP_BANK},
+							tpde::CCAssignment{});
+						for (uint32_t part = 0; part < 2; ++part) {
+							builder.add_arg(boxed.part(part),
+								tpde::CCAssignment{});
+						}
+						boxed.reset();
+						/* The type info is the fifth SysV argument. */
+						ASM(OR32ri, FE_R8,
+							ZEND_NATIVE_DIRECT_INTERNAL_ARGUMENT_BOXED_TYPE_INFO);
+						builder.call(runtime_symbol(
+							ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL_SET_INTEGER_ARGUMENT));
+						continue;
 					}
 					builder.add_arg(CallArg{frame_operand});
 					if (operand == IRValueRef{Adaptor::FRAME_VALUE}) {
