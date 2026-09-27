@@ -12,8 +12,8 @@ if (!function_exists('native_mir_test_compile_execute')) {
 }
 ?>
 --INI--
-zend.max_allowed_stack_size=512K
-zend.reserved_stack_size=64K
+zend.max_allowed_stack_size=2M
+zend.reserved_stack_size=512K
 --FILE--
 <?php
 /* Many values live across a recursive direct call force real spill slots, so
