@@ -38,6 +38,59 @@
 		max = i;							\
 	}
 
+static bool zend_temp_vars_is_call_end(uint8_t opcode)
+{
+	switch (opcode) {
+		case ZEND_DO_FCALL:
+		case ZEND_DO_ICALL:
+		case ZEND_DO_UCALL:
+		case ZEND_DO_FCALL_BY_NAME:
+		case ZEND_CALLABLE_CONVERT:
+		case ZEND_CALLABLE_CONVERT_PARTIAL:
+			return true;
+		default:
+			return false;
+	}
+}
+
+static bool zend_temp_vars_is_call_start(uint8_t opcode)
+{
+	switch (opcode) {
+		case ZEND_INIT_FCALL:
+		case ZEND_INIT_FCALL_BY_NAME:
+		case ZEND_INIT_NS_FCALL_BY_NAME:
+		case ZEND_INIT_METHOD_CALL:
+		case ZEND_INIT_STATIC_METHOD_CALL:
+		case ZEND_INIT_USER_CALL:
+		case ZEND_INIT_DYNAMIC_CALL:
+		case ZEND_INIT_PARENT_PROPERTY_HOOK_CALL:
+		case ZEND_NEW:
+			return true;
+		default:
+			return false;
+	}
+}
+
+static bool zend_temp_vars_is_send(uint8_t opcode)
+{
+	switch (opcode) {
+		case ZEND_SEND_VAL:
+		case ZEND_SEND_VAL_EX:
+		case ZEND_SEND_VAR:
+		case ZEND_SEND_VAR_EX:
+		case ZEND_SEND_VAR_NO_REF:
+		case ZEND_SEND_VAR_NO_REF_EX:
+		case ZEND_SEND_REF:
+		case ZEND_SEND_FUNC_ARG:
+		case ZEND_SEND_USER:
+		case ZEND_SEND_UNPACK:
+		case ZEND_SEND_ARRAY:
+			return true;
+		default:
+			return false;
+	}
+}
+
 void zend_optimize_temporary_variables(zend_op_array *op_array, zend_optimizer_ctx *ctx)
 {
 	uint32_t T = op_array->T;
@@ -163,6 +216,33 @@ void zend_optimize_temporary_variables(zend_op_array *op_array, zend_optimizer_c
 					while (num > 1) {
 						num--;
 						zend_bitset_excl(taken_T, map_T[currT]+num);
+					}
+				}
+			}
+		}
+
+		/* A temporary sent to a call stays in its slot until the call's DO,
+		 * so that code which transfers arguments at DO (the native engine's
+		 * direct calls) still finds the SEND-time value. */
+		if (zend_temp_vars_is_call_end(opline->opcode)) {
+			const zend_op *send = opline;
+			uint32_t level = 0;
+
+			while (--send >= end) {
+				if (zend_temp_vars_is_call_end(send->opcode)) {
+					level++;
+				} else if (zend_temp_vars_is_call_start(send->opcode)) {
+					if (level == 0) {
+						break;
+					}
+					level--;
+				} else if (level == 0
+						&& zend_temp_vars_is_send(send->opcode)
+						&& (send->op1_type & (IS_VAR | IS_TMP_VAR))) {
+					currT = VAR_NUM(send->op1.var) - offset;
+					if (map_T[currT] == INVALID_VAR) {
+						GET_AVAILABLE_T();
+						map_T[currT] = i;
 					}
 				}
 			}
