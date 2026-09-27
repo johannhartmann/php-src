@@ -13,6 +13,10 @@
 
 #include <stdint.h>
 
+/* C stack kept free above EG(stack_limit) before an include is compiled from
+ * native code, for Zend's parser and compiler and for TPDE. */
+#define ZEND_NATIVE_INCLUDE_STACK_RESERVE (128u * 1024u)
+
 #define ZEND_NATIVE_FAKE_OP_ARRAY ((zend_op_array *) (intptr_t) -1)
 
 ZEND_TLS zend_native_dynamic_compiler
@@ -479,6 +483,20 @@ zend_native_status zend_native_execute_include_or_eval(
 			}
 		}
 	}
+#ifdef ZEND_CHECK_STACK_LIMIT
+	/* Zend parses and compiles the include before the TPDE compile checked
+	 * below; its parser and AST compiler are deeply recursive too, so keep the
+	 * same reserve for them. */
+	if ((uintptr_t) zend_call_stack_position()
+			<= (uintptr_t) EG(stack_limit) + ZEND_NATIVE_INCLUDE_STACK_RESERVE) {
+		zend_native_dynamic_free_operand(execute_data, op1_type, op1);
+		zend_call_stack_size_error();
+		if (result_type != IS_UNUSED) {
+			ZVAL_UNDEF(ZEND_CALL_VAR(execute_data, result_operand.var));
+		}
+		return ZEND_NATIVE_EXCEPTION;
+	}
+#endif
 	first_function_bucket = EG(function_table)->nNumUsed;
 	first_class_bucket = EG(class_table)->nNumUsed;
 	new_op_array = zend_include_or_eval(filename, extended_value);
@@ -549,7 +567,7 @@ zend_native_status zend_native_execute_include_or_eval(
 	 * VM opcode. Preserve enough of Zend's reserved stack for the exception
 	 * path before recursively compiling an include from native code. */
 	if ((uintptr_t) zend_call_stack_position()
-			<= (uintptr_t) EG(stack_limit) + (128u * 1024u)) {
+			<= (uintptr_t) EG(stack_limit) + ZEND_NATIVE_INCLUDE_STACK_RESERVE) {
 		zend_call_stack_size_error();
 		entry_cell = NULL;
 	} else
