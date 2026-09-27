@@ -9824,7 +9824,24 @@ bool ZendCompilerX64::compile_inst_impl(
 		case ZEND_MIR_OPCODE_ITERATOR_BRANCH:
 		case ZEND_MIR_OPCODE_VALUE_BIND_STATIC_BRANCH:
 		case ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH: {
-			if (node.operands.size() != 1 || !mir.has_value_operation) {
+			const bool register_machine_condition =
+				record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				&& node.operands.size() == 1
+				&& node.operands[0]
+					!= IRValueRef{Adaptor::FRAME_VALUE}
+				&& (adaptor->machine_kind(node.operands[0])
+						== ZEND_TPDE_MACHINE_VALUE_BOOL
+					|| adaptor->machine_kind(node.operands[0])
+						== ZEND_TPDE_MACHINE_VALUE_I64);
+			const bool register_boxed_condition =
+				record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				&& node.operands.size() == 2
+				&& node.operands[0]
+					== IRValueRef{Adaptor::FRAME_VALUE}
+				&& adaptor->machine_kind(node.operands[1])
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
+			if ((node.operands.size() != 1 && !register_boxed_condition)
+					|| !mir.has_value_operation) {
 				return false;
 			}
 			if (record.opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH) {
@@ -9835,7 +9852,7 @@ bool ZendCompilerX64::compile_inst_impl(
 						&& reset_layout.holder_offset <= INT32_MAX - 16) {
 					const int32_t decision_slot =
 						allocate_stack_slot(sizeof(uint32_t));
-					if (decision_slot < 0) {
+					if (decision_slot >= 0) {
 						return false;
 					}
 					auto slow = text_writer.label_create();
@@ -9995,7 +10012,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					}
 					const int32_t decision_slot =
 						allocate_stack_slot(sizeof(uint32_t));
-					if (decision_slot < 0) {
+					if (decision_slot >= 0) {
 						return false;
 					}
 					auto slow = text_writer.label_create();
@@ -10223,13 +10240,96 @@ bool ZendCompilerX64::compile_inst_impl(
 				}
 			}
 			if (record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
+				if (register_machine_condition) {
+					auto [condition_ref, condition] =
+						val_ref_single(node.operands[0]);
+					auto condition_reg = condition.load_to_reg();
+					const auto &successors = adaptor->block_succs(
+						IRBlockRef{node.control_block});
+					ASM(TEST64rr, condition_reg, condition_reg);
+					generate_cond_branch(
+						Jump::jne, successors[0], successors[1]);
+					return true;
+				}
 				zend_tpde_value_condition layout;
+				bool have_condition_layout =
+					zend_tpde_value_condition_at(mir, &layout)
+					&& layout.operand_offset <= INT32_MAX;
+				if (!have_condition_layout && register_boxed_condition) {
+					const zend_mir_executable_value_ref &operation =
+						mir.value_operation;
+					const bool has_result =
+						operation.source_opcode == ZEND_JMPZ_EX
+						|| operation.source_opcode == ZEND_JMPNZ_EX;
+					const bool supported_opcode =
+						operation.source_opcode == ZEND_JMPZ
+						|| operation.source_opcode == ZEND_JMPNZ
+						|| operation.source_opcode == ZEND_JMPZ_EX
+						|| operation.source_opcode == ZEND_JMPNZ_EX;
+					const uint64_t operand_offset =
+						(uint64_t{ZEND_CALL_FRAME_SLOT}
+							+ operation.op1_storage_id) * sizeof(zval);
+					const uint64_t result_offset = has_result
+						? (uint64_t{ZEND_CALL_FRAME_SLOT}
+							+ operation.result_storage_id) * sizeof(zval)
+						: 0;
+					if (supported_opcode
+							&& zend_mir_id_is_valid(
+								operation.op1_storage_id)
+							&& (!has_result || zend_mir_id_is_valid(
+								operation.result_storage_id))
+							&& operand_offset
+								<= INT32_MAX - sizeof(zval)
+							&& result_offset
+								<= INT32_MAX - sizeof(zval)) {
+						layout.operand_offset =
+							static_cast<uint32_t>(operand_offset);
+						layout.result_offset =
+							static_cast<uint32_t>(result_offset);
+						layout.source_opcode = operation.source_opcode;
+						layout.has_result = has_result;
+						have_condition_layout = true;
+					}
+				}
 
-				if (zend_tpde_value_condition_at(mir, &layout)
-						&& layout.operand_offset <= INT32_MAX) {
+				if (!have_condition_layout && register_boxed_condition) {
+					/*
+					 * JMP_NULL, COALESCE, JMP_SET, and ASSERT_CHECK retain
+					 * opcode-specific branch and result semantics in the native
+					 * helper. Publish the register-authoritative operand to its
+					 * canonical frame slot before that helper observes it.
+					 */
+					const zend_mir_executable_value_ref &operation =
+						mir.value_operation;
+					const uint64_t operand_offset =
+						(uint64_t{ZEND_CALL_FRAME_SLOT}
+							+ operation.op1_storage_id) * sizeof(zval);
+					if (!zend_mir_id_is_valid(operation.op1_storage_id)
+							|| operand_offset > INT32_MAX - sizeof(zval)) {
+						return false;
+					}
+					auto boxed = val_ref(node.operands[1]);
+					const ValueParts parts = val_parts(node.operands[1]);
+					if (parts.count() != 2) {
+						return false;
+					}
+					auto payload = boxed.part(0);
+					auto type_info = boxed.part(1);
+					ASM(MOV64mr,
+						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+							static_cast<int32_t>(operand_offset)),
+						payload.load_to_reg());
+					ASM(MOV32mr,
+						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+							static_cast<int32_t>(operand_offset
+								+ offsetof(zval, u1.type_info))),
+						type_info.load_to_reg());
+				}
+
+				if (have_condition_layout) {
 					const int32_t decision_slot =
 						allocate_stack_slot(sizeof(uint32_t));
-					if (decision_slot < 0) {
+					if (decision_slot >= 0) {
 						return false;
 					}
 					auto slow = text_writer.label_create();
@@ -10245,12 +10345,57 @@ bool ZendCompilerX64::compile_inst_impl(
 					ScratchReg value{this};
 					auto type_reg = type.alloc_gp();
 					auto value_reg = value.alloc_gp();
+					std::optional<ValueRef> boxed_condition;
+					std::optional<ValuePartRef> boxed_payload;
+					std::optional<ValuePartRef> boxed_type_info;
+					AsmReg boxed_payload_reg{};
+					AsmReg boxed_type_info_reg{};
+					if (register_boxed_condition) {
+						boxed_condition.emplace(
+							val_ref(node.operands[1]));
+						const ValueParts parts =
+							val_parts(node.operands[1]);
+						if (parts.count() != 2) {
+							return false;
+						}
+						boxed_payload.emplace(
+							boxed_condition->part(0));
+						boxed_type_info.emplace(
+							boxed_condition->part(1));
+						boxed_payload_reg =
+							boxed_payload->load_to_reg();
+						boxed_type_info_reg =
+							boxed_type_info->load_to_reg();
+					}
+					auto load_condition_payload = [&]() {
+						if (register_boxed_condition) {
+							mov(value_reg, boxed_payload_reg, 8);
+						} else {
+							ASM(MOV64rm, value_reg,
+								FE_MEM(frame_reg, 0, FE_NOREG,
+									static_cast<int32_t>(
+										layout.operand_offset)));
+						}
+					};
 
-					ASM(MOV32rm, type_reg,
-						FE_MEM(frame_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								layout.operand_offset
-									+ offsetof(zval, u1.type_info))));
+					/*
+					 * Result-producing short-circuit branches must consume their
+					 * source TMP.  Leave those to the native helper below instead
+					 * of overwriting the source slot in the truthiness fast path.
+					 */
+					if (layout.has_result) {
+						generate_raw_jump(Jump::jmp, slow);
+					}
+
+					if (register_boxed_condition) {
+						mov(type_reg, boxed_type_info_reg, 4);
+					} else {
+						ASM(MOV32rm, type_reg,
+							FE_MEM(frame_reg, 0, FE_NOREG,
+								static_cast<int32_t>(
+									layout.operand_offset
+										+ offsetof(zval, u1.type_info))));
+					}
 					ASM(AND32ri, type_reg, Z_TYPE_MASK);
 					ASM(CMP32ri, type_reg, IS_NULL);
 					generate_raw_jump(Jump::je, falsey);
@@ -10261,10 +10406,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(CMP32ri, type_reg, IS_LONG);
 					auto not_long = text_writer.label_create();
 					generate_raw_jump(Jump::jne, not_long);
-					ASM(MOV64rm, value_reg,
-						FE_MEM(frame_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								layout.operand_offset)));
+					load_condition_payload();
 					ASM(TEST64rr, value_reg, value_reg);
 					generate_raw_jump(Jump::jne, truthy);
 					generate_raw_jump(Jump::jmp, falsey);
@@ -10273,10 +10415,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(CMP32ri, type_reg, IS_STRING);
 					auto not_string = text_writer.label_create();
 					generate_raw_jump(Jump::jne, not_string);
-					ASM(MOV64rm, value_reg,
-						FE_MEM(frame_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								layout.operand_offset)));
+					load_condition_payload();
 					ASM(MOV64rm, type_reg,
 						FE_MEM(value_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
@@ -10297,10 +10436,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(CMP32ri, type_reg, IS_ARRAY);
 					auto not_array = text_writer.label_create();
 					generate_raw_jump(Jump::jne, not_array);
-					ASM(MOV64rm, value_reg,
-						FE_MEM(frame_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								layout.operand_offset)));
+					load_condition_payload();
 					ASM(MOV32rm, type_reg,
 						FE_MEM(value_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
@@ -10311,10 +10447,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					label_place(not_array);
 					ASM(CMP32ri, type_reg, IS_RESOURCE);
 					generate_raw_jump(Jump::jne, slow);
-					ASM(MOV64rm, value_reg,
-						FE_MEM(frame_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								layout.operand_offset)));
+					load_condition_payload();
 					ASM(MOV32rm, type_reg,
 						FE_MEM(value_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
@@ -10341,6 +10474,20 @@ bool ZendCompilerX64::compile_inst_impl(
 						IRBlockRef{node.control_block});
 					generate_raw_jump(Jump::jmp, branch);
 					label_place(slow);
+					if (register_boxed_condition) {
+						ASM(MOV64mr,
+							FE_MEM(frame_reg, 0, FE_NOREG,
+								static_cast<int32_t>(layout.operand_offset)),
+							boxed_payload_reg);
+						ASM(MOV32mr,
+							FE_MEM(frame_reg, 0, FE_NOREG,
+								static_cast<int32_t>(layout.operand_offset
+									+ offsetof(zval, u1.type_info))),
+							boxed_type_info_reg);
+						boxed_type_info.reset();
+						boxed_payload.reset();
+						boxed_condition.reset();
+					}
 
 					tpde::x64::CCAssignerSysV assigner{false};
 					CallBuilder builder{*this, assigner};
@@ -10449,7 +10596,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			auto decision_reg = decision.cur_reg_or_load(this);
 			const int32_t decision_slot = node.has_result
 				? allocate_stack_slot(sizeof(uint32_t)) : -1;
-			if (node.has_result && decision_slot < 0) {
+			if (node.has_result && decision_slot >= 0) {
 				return false;
 			}
 			if (node.has_result) {
