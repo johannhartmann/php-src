@@ -58,10 +58,9 @@ done
 for tool in git python3 autoconf autoheader bison re2c make pkg-config; do
     native_require_tool "$tool"
 done
+native_load_profile "$profile"
 compiler=${CC:-cc}
 native_require_tool "$compiler"
-
-native_load_profile "$profile"
 native_prepare_profile_paths "$profile"
 native_configure_args
 source_fingerprint=$(native_source_fingerprint)
