@@ -2576,7 +2576,6 @@ complete:
 		EG(current_execute_data) = previous;
 		zend_bailout();
 	}
-#if defined(__APPLE__) && defined(__aarch64__)
 	if (EG(exception) != NULL
 			&& zend_native_runtime_source_probe_enabled()
 			&& EG(opline_before_exception) != NULL
@@ -2591,7 +2590,6 @@ complete:
 		EG(current_execute_data) = execute_data;
 		zend_native_runtime_source_probe(source_position);
 	}
-#endif
 	if (status == ZEND_NATIVE_EXCEPTION && EG(exception) == NULL) {
 		zend_throw_error(NULL, "%s",
 			diagnostic.message[0] != '\0'
