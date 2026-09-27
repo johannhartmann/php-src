@@ -9490,6 +9490,14 @@ bool ZendCompilerX64::compile_inst_impl(
 						|| mir.source_opline_index == UINT32_MAX) {
 					return false;
 				}
+				/*
+				 * The interrupt poll contains a target-local fast/slow branch which
+				 * is invisible to TPDE's IR CFG. The slow-path call invalidates
+				 * caller-saved assignments in the shared compile-time state. Spill
+				 * live values before the branch so the fast path reaches the join
+				 * with the same canonical copies available for later reloads.
+				 */
+				const auto spilled = spill_before_branch(true);
 				auto done = text_writer.label_create();
 				auto slow = text_writer.label_create();
 				auto [context_ref, context] =
@@ -9520,6 +9528,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 				builder.call(runtime_symbol(ZEND_NATIVE_HELPER_INTERRUPT_POLL));
 				label_place(done);
+				release_spilled_regs(spilled);
 				return true;
 			}
 			[[fallthrough]];
