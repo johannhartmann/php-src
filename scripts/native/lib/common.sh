@@ -128,10 +128,18 @@ native_load_profile() {
 
     unset PROFILE_NAME PROFILE_BUILD_TYPE PROFILE_THREAD_SAFETY PROFILE_SANITIZER
     unset PROFILE_TARGET_ID PROFILE_TARGET_TRIPLE PROFILE_HOST_SYSTEM PROFILE_HOST_ARCH
-    unset PROFILE_CONFIGURE_FLAGS
+    unset PROFILE_CONFIGURE_FLAGS PROFILE_CC PROFILE_CXX
     # Profile files are repository-owned declarative shell data.
     # shellcheck source=/dev/null
     source "$profile_file"
+    # A profile may name the compiler its target requires; an explicit CC/CXX
+    # from the caller still wins.
+    if [[ -z ${CC:-} && -n ${PROFILE_CC:-} ]]; then
+        export CC=$PROFILE_CC
+    fi
+    if [[ -z ${CXX:-} && -n ${PROFILE_CXX:-} ]]; then
+        export CXX=$PROFILE_CXX
+    fi
 
     [[ ${PROFILE_NAME:-} == "$profile" ]] || native_die "profile name mismatch in $profile_file"
     [[ ${PROFILE_BUILD_TYPE:-} == debug || ${PROFILE_BUILD_TYPE:-} == release ]] || native_die "invalid build type in $profile_file"
