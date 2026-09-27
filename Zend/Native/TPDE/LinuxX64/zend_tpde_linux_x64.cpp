@@ -5583,90 +5583,106 @@ bool ZendCompilerX64::compile_inst_impl(
 			mir.has_value_operation
 				? mir.value_operation.source_opcode : UINT32_MAX);
 	};
-	if (node.kind == Adaptor::InstKind::GuardedCold
-			&& record.opcode != ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
-		auto materialize_cold_operand = [&](
-				IRValueRef operand, zend_mir_storage_id storage) {
-			if (!zend_mir_id_is_valid(storage)) {
-				auto consumed = val_ref(operand);
-				(void) consumed;
-				return true;
+	/*
+	 * Publish a machine value to its canonical frame slot for a helper that
+	 * reads the slot, consuming the value. A cold block reloads parts whose
+	 * stack copy is valid instead of trusting the register.
+	 */
+	auto materialize_cold_operand = [&](
+			IRValueRef operand, zend_mir_storage_id storage) {
+		if (!zend_mir_id_is_valid(storage)) {
+			auto consumed = val_ref(operand);
+			(void) consumed;
+			return true;
+		}
+		const uint64_t offset =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+		if (offset > INT32_MAX - sizeof(zval)) {
+			return false;
+		}
+		const zend_tpde_machine_value_kind kind =
+			adaptor->machine_kind(operand);
+		auto value = val_ref(operand);
+		const ValueParts parts = val_parts(operand);
+		std::vector<ValuePartRef> locked_parts;
+		locked_parts.reserve(parts.count());
+		AsmReg payload_reg{};
+		bool have_payload = false;
+		for (uint32_t part = 0; part < parts.count(); ++part) {
+			locked_parts.emplace_back(value.part(part));
+			auto &part_value = locked_parts.back();
+			AsmReg part_reg;
+			ScratchReg stack_reload{this};
+			if (node.kind == Adaptor::InstKind::GuardedCold
+					&& part_value.has_assignment()
+					&& part_value.assignment().stack_valid()) {
+				auto assignment = part_value.assignment();
+				part_reg = stack_reload.alloc_gp();
+				load_from_stack(part_reg, assignment.frame_off(),
+					assignment.part_size());
+			} else {
+				part_reg = part_value.load_to_reg();
 			}
-			const uint64_t offset =
-				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
-			if (offset > INT32_MAX - sizeof(zval)) {
-				return false;
-			}
-			const zend_tpde_machine_value_kind kind =
-				adaptor->machine_kind(operand);
-			auto value = val_ref(operand);
-			const ValueParts parts = val_parts(operand);
-			std::vector<ValuePartRef> locked_parts;
-			locked_parts.reserve(parts.count());
-			AsmReg payload_reg{};
-			bool have_payload = false;
-			for (uint32_t part = 0; part < parts.count(); ++part) {
-				locked_parts.emplace_back(value.part(part));
-				auto &part_value = locked_parts.back();
-				auto part_reg = part_value.load_to_reg();
-				const zend_tpde_machine_part_role role =
-					parts.representation.parts[part].semantic_role;
-				if (role == ZEND_TPDE_MACHINE_PART_VALUE
-						|| role == ZEND_TPDE_MACHINE_PART_PAYLOAD) {
-					payload_reg = part_reg;
-					have_payload = true;
-					if (kind == ZEND_TPDE_MACHINE_VALUE_F64) {
-						ASM(SSE_MOVSDmr,
-							FE_MEM(canonical_frame_register(), 0,
-								FE_NOREG, static_cast<int32_t>(offset)),
-							part_reg);
-					} else {
-						ASM(MOV64mr,
-							FE_MEM(canonical_frame_register(), 0,
-								FE_NOREG, static_cast<int32_t>(offset)),
-							part_reg);
-					}
-				} else if (role
-						== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
-					ASM(MOV32mr,
-						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
-							static_cast<int32_t>(
-								offset + offsetof(zval, u1.type_info))),
+			const zend_tpde_machine_part_role role =
+				parts.representation.parts[part].semantic_role;
+			if (role == ZEND_TPDE_MACHINE_PART_VALUE
+					|| role == ZEND_TPDE_MACHINE_PART_PAYLOAD) {
+				payload_reg = part_reg;
+				have_payload = true;
+				if (kind == ZEND_TPDE_MACHINE_VALUE_F64) {
+					ASM(SSE_MOVSDmr,
+						FE_MEM(canonical_frame_register(), 0,
+							FE_NOREG, static_cast<int32_t>(offset)),
 						part_reg);
 				} else {
-					return false;
+					ASM(MOV64mr,
+						FE_MEM(canonical_frame_register(), 0,
+							FE_NOREG, static_cast<int32_t>(offset)),
+						part_reg);
 				}
-			}
-			if (!have_payload) {
+			} else if (role
+					== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
+				ASM(MOV32mr,
+					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+						static_cast<int32_t>(
+							offset + offsetof(zval, u1.type_info))),
+					part_reg);
+			} else {
 				return false;
 			}
-			if (kind != ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-				if (kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
-					ScratchReg type_info{this};
-					auto type_info_reg = type_info.alloc_gp();
-					ASM(MOV64rr, type_info_reg, payload_reg);
-					ASM(ADD64ri, type_info_reg, IS_FALSE);
-					ASM(MOV32mr,
-						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
-							static_cast<int32_t>(
-								offset + offsetof(zval, u1.type_info))),
-						type_info_reg);
-				} else {
-					ScratchReg type_info{this};
-					auto type_info_reg = type_info.alloc_gp();
-					if (!emit_machine_zval_type_info(
-							kind, payload_reg, type_info_reg)) {
-						return false;
-					}
-					ASM(MOV32mr,
-						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
-							static_cast<int32_t>(
-								offset + offsetof(zval, u1.type_info))),
-						type_info_reg);
+		}
+		if (!have_payload) {
+			return false;
+		}
+		if (kind != ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+			if (kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
+				ScratchReg type_info{this};
+				auto type_info_reg = type_info.alloc_gp();
+				ASM(MOV64rr, type_info_reg, payload_reg);
+				ASM(ADD64ri, type_info_reg, IS_FALSE);
+				ASM(MOV32mr,
+					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+						static_cast<int32_t>(
+							offset + offsetof(zval, u1.type_info))),
+					type_info_reg);
+			} else {
+				ScratchReg type_info{this};
+				auto type_info_reg = type_info.alloc_gp();
+				if (!emit_machine_zval_type_info(
+						kind, payload_reg, type_info_reg)) {
+					return false;
 				}
+				ASM(MOV32mr,
+					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+						static_cast<int32_t>(
+							offset + offsetof(zval, u1.type_info))),
+					type_info_reg);
 			}
-			return true;
-		};
+		}
+		return true;
+	};
+	if (node.kind == Adaptor::InstKind::GuardedCold
+			&& record.opcode != ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
 		/* Boundary operands are published by execute_value_operation. */
 		auto materialize_cold_operand_unless_boundary = [&](
 				IRValueRef operand, zend_mir_storage_id storage,
@@ -9634,6 +9650,23 @@ bool ZendCompilerX64::compile_inst_impl(
 			return record.opcode == ZEND_MIR_OPCODE_VALUE_FREE
 				? free_temporary_slot() : false;
 		case Adaptor::InstKind::SlowPathCall:
+			/*
+			 * The helper reads its operands from their frame slots. A value
+			 * the preceding fast node left register-authoritative (for example
+			 * the right-hand side of an assignment to a dynamic target) must be
+			 * published there first.
+			 */
+			for (IRValueRef operand : node.operands) {
+				if (operand == IRValueRef{Adaptor::FRAME_VALUE}
+						|| operand == IRValueRef{
+							Adaptor::EXECUTION_CONTEXT_ARGUMENT}) {
+					continue;
+				}
+				if (!materialize_cold_operand(
+						operand, adaptor->canonical_storage(operand))) {
+					return false;
+				}
+			}
 			return execute_value_operation();
 		default:
 			break;
