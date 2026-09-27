@@ -26,8 +26,14 @@ typedef struct _zend_native_execution_state {
 #endif
 } zend_native_execution_state;
 
+/*
+ * A resumed generator's thawed call frames lie on the VM stack below this
+ * boundary. Unwinding one of them resets vm_stack_top to that frame, which
+ * would release a state stored above it, so generator frames keep their
+ * state on the heap and leave the VM stack to their own frames.
+ */
 static zend_always_inline zend_native_execution_state *
-zend_native_execution_state_alloc(void)
+zend_native_execution_state_alloc(bool generator_frame)
 {
 	const size_t size = ZEND_MM_ALIGNED_SIZE_EX(
 		sizeof(zend_native_execution_state), sizeof(zval));
@@ -35,6 +41,12 @@ zend_native_execution_state_alloc(void)
 	zval *previous_stack_top = EG(vm_stack_top);
 	zend_native_execution_state *state;
 
+	if (UNEXPECTED(generator_frame)) {
+		state = emalloc(size);
+		state->previous_stack = NULL;
+		state->previous_stack_top = NULL;
+		return state;
+	}
 	if (EXPECTED(size <= (size_t) (
 			(char *) EG(vm_stack_end) - (char *) previous_stack_top))) {
 		state = (zend_native_execution_state *) previous_stack_top;
@@ -53,6 +65,10 @@ static zend_always_inline void zend_native_execution_state_free(
 	zend_vm_stack previous_stack = state->previous_stack;
 	zval *previous_stack_top = state->previous_stack_top;
 
+	if (UNEXPECTED(previous_stack == NULL)) {
+		efree(state);
+		return;
+	}
 	while (UNEXPECTED(EG(vm_stack) != previous_stack)) {
 		zend_vm_stack page = EG(vm_stack);
 
@@ -241,10 +257,12 @@ static zend_native_status zend_native_execute_frame_impl(
 	/*
 	 * State changed after setjmp lives in the Zend VM stack rather than in a C
 	 * automatic. The catcher therefore does not inspect an indeterminate
-	 * non-volatile automatic after longjmp, and a native entry does not require
+	 * non-volatile automatic after longjmp, and only generator frames require
 	 * a general-purpose heap allocation.
 	 */
-	state = zend_native_execution_state_alloc();
+	generator_frame =
+		(ZEND_CALL_INFO(execute_data) & ZEND_CALL_GENERATOR) != 0;
+	state = zend_native_execution_state_alloc(generator_frame);
 	state->status = ZEND_NATIVE_BAILOUT;
 	state->original_return_value = execute_data->return_value;
 	state->observer_started = observer_already_started;
@@ -252,8 +270,6 @@ static zend_native_status zend_native_execute_frame_impl(
 #ifdef HAVE_DTRACE
 	state->dtrace_frame_started = false;
 #endif
-	generator_frame =
-		(ZEND_CALL_INFO(execute_data) & ZEND_CALL_GENERATOR) != 0;
 	zend_native_execution_context_init(&context);
 	if (state->original_return_value == NULL) {
 		ZVAL_UNDEF(&state->discarded_return);
