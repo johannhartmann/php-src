@@ -7541,22 +7541,6 @@ bool ZendCompilerX64::compile_inst_impl(
 				generate_raw_jump(Jump::jne, slow);
 				ASM(MOV64rm, index_reg,
 					FE_MEM(key_base, 0, FE_NOREG, key.offset));
-				ASM(MOV32rm, type_reg,
-					FE_MEM(array_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(HashTable, nNumUsed))));
-				ASM(CMP64rr, index_reg, type_reg);
-				generate_raw_jump(Jump::jae, slow);
-				ASM(SHL64ri, index_reg, 4);
-				ASM(ADD64rm, index_reg,
-					FE_MEM(array_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(HashTable, arPacked))));
-				/* The old element must exist and need no release. */
-				ASM(MOV32rm, type_reg,
-					FE_MEM(index_reg, 0, FE_NOREG, type_info));
-				ASM(CMP8ri, type_reg, IS_UNDEF);
-				generate_raw_jump(Jump::je, slow);
-				ASM(TEST32ri, type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-				generate_raw_jump(Jump::jne, slow);
 				/* The new value must be defined and need no reference. */
 				const AsmReg value_base =
 					value.literal ? literals_reg : frame_reg;
@@ -7568,9 +7552,66 @@ bool ZendCompilerX64::compile_inst_impl(
 				generate_raw_jump(Jump::jne, slow);
 				ASM(MOV64rm, payload_reg,
 					FE_MEM(value_base, 0, FE_NOREG, value.offset));
+				literals.reset();
+				ScratchReg bound{this};
+				auto bound_reg = bound.alloc_gp();
+				auto existing = text_writer.label_create();
+				auto store = text_writer.label_create();
+				ASM(MOV32rm, bound_reg,
+					FE_MEM(array_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(HashTable, nNumUsed))));
+				ASM(CMP64rr, index_reg, bound_reg);
+				generate_raw_jump(Jump::jb, existing);
+				generate_raw_jump(Jump::jne, slow);
+				/* $k == nNumUsed appends like $a[] = $v when the next free
+				 * element is $k and the packed table has room. */
+				ASM(CMP32rm, bound_reg,
+					FE_MEM(array_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(HashTable, nTableSize))));
+				generate_raw_jump(Jump::jae, slow);
+				ASM(CMP64rm, index_reg,
+					FE_MEM(array_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(HashTable, nNextFreeElement))));
+				generate_raw_jump(Jump::jne, slow);
+				ASM(ADD32ri, bound_reg, 1);
+				ASM(MOV32mr,
+					FE_MEM(array_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(HashTable, nNumUsed))),
+					bound_reg);
+				ASM(MOV64mr,
+					FE_MEM(array_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(HashTable, nNextFreeElement))),
+					bound_reg);
+				ASM(ADD32mi,
+					FE_MEM(array_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(HashTable, nNumOfElements))),
+					1);
+				ASM(SHL64ri, index_reg, 4);
+				ASM(ADD64rm, index_reg,
+					FE_MEM(array_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(HashTable, arPacked))));
+				generate_raw_jump(Jump::jmp, store);
+				label_place(existing);
+				ASM(SHL64ri, index_reg, 4);
+				ASM(ADD64rm, index_reg,
+					FE_MEM(array_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(HashTable, arPacked))));
+				/* The old element must exist and need no release. */
+				ASM(MOV32rm, bound_reg,
+					FE_MEM(index_reg, 0, FE_NOREG, type_info));
+				ASM(CMP8ri, bound_reg, IS_UNDEF);
+				generate_raw_jump(Jump::je, slow);
+				ASM(TEST32ri, bound_reg,
+					IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+				generate_raw_jump(Jump::jne, slow);
+				label_place(store);
 				ASM(MOV64mr, FE_MEM(index_reg, 0, FE_NOREG, 0), payload_reg);
 				ASM(MOV32mr, FE_MEM(index_reg, 0, FE_NOREG, type_info),
 					type_reg);
+				bound.reset();
 				if (guarded) {
 					array.reset();
 					index.reset();
