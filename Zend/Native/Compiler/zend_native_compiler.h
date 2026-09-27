@@ -112,6 +112,12 @@ typedef struct _zend_native_compiler_config {
 	bool source_probe;
 	bool defer_publication;
 	bool direct_reentry;
+	/*
+	 * The script tables are the request's global symbol tables. Index a
+	 * declaration only when compilation reaches it instead of scanning every
+	 * function and class at creation.
+	 */
+	bool lazy_source_index;
 	zend_native_external_reentry_resolver_t external_reentry_resolver;
 	void *external_reentry_context;
 } zend_native_compiler_config;

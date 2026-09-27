@@ -1408,6 +1408,9 @@ zend_native_executor_create_generation(zend_op_array *root)
 		zend_native_executor_frame_probe_context;
 	config.source_probe = zend_native_runtime_source_probe_enabled();
 	config.direct_reentry = true;
+	/* A request generation borrows the global symbol tables; indexing all of
+	 * them for every root made each include cost O(all declarations). */
+	config.lazy_source_index = !persistent && bundle == NULL;
 	if (persistent) {
 		config.external_reentry_resolver =
 			zend_native_executor_resolve_external_reentry;
