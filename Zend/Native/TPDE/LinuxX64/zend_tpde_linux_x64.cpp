@@ -6402,10 +6402,24 @@ bool ZendCompilerX64::compile_inst_impl(
 				const AsmReg container_base = layout.container_literal
 					? literals_reg : frame_reg;
 				const AsmReg key_base = key_literal ? literals_reg : frame_reg;
-				ASM(CMP8mi,
+				/* A CV may hold the array through a reference, as for an
+				 * array &$a parameter. */
+				auto container_ready = text_writer.label_create();
+				ASM(LEA64rm, array_reg,
 					FE_MEM(container_base, 0, FE_NOREG,
-						static_cast<int32_t>(container_offset
-							+ offsetof(zval, u1.type_info))),
+						static_cast<int32_t>(container_offset)));
+				ASM(CMP8mi,
+					FE_MEM(array_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zval, u1.type_info))),
+					IS_REFERENCE);
+				generate_raw_jump(Jump::jne, container_ready);
+				ASM(MOV64rm, array_reg, FE_MEM(array_reg, 0, FE_NOREG, 0));
+				ASM(ADD64ri, array_reg,
+					static_cast<int32_t>(offsetof(zend_reference, val)));
+				label_place(container_ready);
+				ASM(CMP8mi,
+					FE_MEM(array_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zval, u1.type_info))),
 					IS_ARRAY);
 				generate_raw_jump(Jump::jne, slow);
 				ASM(CMP8mi,
@@ -6414,9 +6428,7 @@ bool ZendCompilerX64::compile_inst_impl(
 							+ offsetof(zval, u1.type_info))),
 					IS_LONG);
 				generate_raw_jump(Jump::jne, slow);
-				ASM(MOV64rm, array_reg,
-					FE_MEM(container_base, 0, FE_NOREG,
-						static_cast<int32_t>(container_offset)));
+				ASM(MOV64rm, array_reg, FE_MEM(array_reg, 0, FE_NOREG, 0));
 				ASM(MOV64rm, key_reg,
 					FE_MEM(key_base, 0, FE_NOREG,
 						static_cast<int32_t>(key_offset)));
@@ -7493,13 +7505,24 @@ bool ZendCompilerX64::compile_inst_impl(
 				}
 				const int32_t type_info =
 					static_cast<int32_t>(offsetof(zval, u1.type_info));
+				/* An array held through a reference, as for an array &$a
+				 * parameter, is owned by that reference. */
+				auto container_ready = text_writer.label_create();
+				ASM(LEA64rm, array_reg,
+					FE_MEM(frame_reg, 0, FE_NOREG, container.offset));
 				ASM(CMP8mi,
-					FE_MEM(frame_reg, 0, FE_NOREG,
-						container.offset + type_info),
+					FE_MEM(array_reg, 0, FE_NOREG, type_info),
+					IS_REFERENCE);
+				generate_raw_jump(Jump::jne, container_ready);
+				ASM(MOV64rm, array_reg, FE_MEM(array_reg, 0, FE_NOREG, 0));
+				ASM(ADD64ri, array_reg,
+					static_cast<int32_t>(offsetof(zend_reference, val)));
+				label_place(container_ready);
+				ASM(CMP8mi,
+					FE_MEM(array_reg, 0, FE_NOREG, type_info),
 					IS_ARRAY);
 				generate_raw_jump(Jump::jne, slow);
-				ASM(MOV64rm, array_reg,
-					FE_MEM(frame_reg, 0, FE_NOREG, container.offset));
+				ASM(MOV64rm, array_reg, FE_MEM(array_reg, 0, FE_NOREG, 0));
 				ASM(CMP32mi,
 					FE_MEM(array_reg, 0, FE_NOREG,
 						static_cast<int32_t>(offsetof(

@@ -33,6 +33,10 @@ function null_val() { $a = [1, 2]; $n = null; $a[0] = $n; $a[1] = true; return $
 for ($r = 0; $r < 2; $r++) {
     var_dump(cow(), during_foreach(), via_ref(), ref_elem(), counted(), grow(), hash_arr(), nested(), neg(), floats(), sieve_like(), null_val());
 }
+function by_ref_param(array &$a, $n) { for ($i = 0; $i < $n; $i++) { $a[$i] = $a[$i] + 1; } }
+function typed_prop_ref() { $o = new class { public array $p = [1, 2, 3]; }; by_ref_param($o->p, 3); $r = &$o->p; $r[0] = 'x'; return $o->p; }
+$arr = [5, 6, 7]; by_ref_param($arr, 3); var_dump($arr, typed_prop_ref());
+$shared = [1, 2]; $copy = $shared; $ref = &$shared; by_ref_param($ref, 2); var_dump($shared, $copy);
 ?>
 --EXPECTF--
 
@@ -294,4 +298,32 @@ array(2) {
   NULL
   [1]=>
   bool(true)
+}
+array(3) {
+  [0]=>
+  int(6)
+  [1]=>
+  int(7)
+  [2]=>
+  int(8)
+}
+array(3) {
+  [0]=>
+  string(1) "x"
+  [1]=>
+  int(3)
+  [2]=>
+  int(4)
+}
+array(2) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(3)
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
 }
