@@ -12,6 +12,7 @@
 #include "Zend/zend_operators.h"
 
 #include "Zend/Native/Lowering/zend_mir_lowering_source.h"
+#include "Zend/Native/Runtime/Common/zend_native_operands.h"
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
 #include "Zend/Native/Runtime/Common/zend_native_values.h"
 
@@ -31,74 +32,12 @@ typedef struct _zend_native_explicit_object_operation {
 	uint32_t source_position_id;
 } zend_native_explicit_object_operation;
 
-static bool zend_native_object_decode_explicit_operand(
+static zend_always_inline bool zend_native_object_decode_explicit_operand(
 	zend_execute_data *execute_data, uint64_t encoded,
 	uint8_t *operand_type, znode_op *operand)
 {
-	zend_mir_source_operand_kind kind =
-		(zend_mir_source_operand_kind) (encoded & UINT64_C(0xff));
-	zend_mir_source_slot_kind slot_kind =
-		(zend_mir_source_slot_kind) ((encoded >> 8) & UINT64_C(0xff));
-	uint32_t index = (uint32_t) (encoded >> 16);
-	uint32_t physical_slot;
-
-	if (execute_data == NULL || execute_data->func == NULL
-			|| !ZEND_USER_CODE(execute_data->func->type)
-			|| operand_type == NULL || operand == NULL) {
-		return false;
-	}
-	memset(operand, 0, sizeof(*operand));
-	if (kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
-		*operand_type = IS_UNUSED;
-		operand->num = index;
-		return true;
-	}
-	if (kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
-		if (index >= execute_data->func->op_array.last_literal) {
-			return false;
-		}
-		*operand_type = IS_CONST;
-		operand->constant = index;
-		return true;
-	}
-	if (kind != ZEND_MIR_SOURCE_OPERAND_SLOT
-			&& kind != ZEND_MIR_SOURCE_OPERAND_SSA) {
-		return false;
-	}
-	switch (slot_kind) {
-		case ZEND_MIR_SOURCE_SLOT_CV:
-			if (index >= (uint32_t) execute_data->func->op_array.last_var) {
-				return false;
-			}
-			*operand_type = IS_CV;
-			physical_slot = index;
-			break;
-		case ZEND_MIR_SOURCE_SLOT_TMP:
-			if (index >= execute_data->func->op_array.T) {
-				return false;
-			}
-			*operand_type = IS_TMP_VAR;
-			physical_slot =
-				(uint32_t) execute_data->func->op_array.last_var + index;
-			break;
-		case ZEND_MIR_SOURCE_SLOT_VAR:
-			if (index >= execute_data->func->op_array.T) {
-				return false;
-			}
-			*operand_type = IS_VAR;
-			physical_slot =
-				(uint32_t) execute_data->func->op_array.last_var + index;
-			break;
-		default:
-			return false;
-	}
-	if (physical_slot > (UINT32_MAX / sizeof(zval))
-			- (uint32_t) ZEND_CALL_FRAME_SLOT) {
-		return false;
-	}
-	operand->var =
-		((uint32_t) ZEND_CALL_FRAME_SLOT + physical_slot) * sizeof(zval);
-	return true;
+	return zend_native_decode_explicit_operand(
+		execute_data, encoded, operand_type, operand);
 }
 
 static bool zend_native_object_init_explicit_operation(
