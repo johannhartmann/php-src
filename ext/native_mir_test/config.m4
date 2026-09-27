@@ -33,6 +33,14 @@ AS_VAR_IF([PHP_NATIVE_ENGINE], [no], [], [
   PHP_REQUIRE_CXX()
   PHP_CXX_COMPILE_STDCXX([20], [mandatory], [PHP_NATIVE_MIR_TEST_STDCXX])
   PHP_NATIVE_MIR_TEST_CXXFLAGS="$PHP_NATIVE_MIR_TEST_STDCXX -fno-exceptions -fno-rtti"
+  dnl PHP enables C++ after it has set CXXFLAGS, so AC_PROG_CXX adds no
+  dnl default optimization. The native compiler is C++; optimize it in every
+  dnl non-debug build that does not choose its own level.
+  AS_VAR_IF([ZEND_DEBUG], [no], [
+    AS_CASE([" $CXXFLAGS "],
+      [*" -O"*], [],
+      [PHP_NATIVE_MIR_TEST_CXXFLAGS="$PHP_NATIVE_MIR_TEST_CXXFLAGS -O2"])
+  ])
   dnl Zend API changes that C would only warn about, such as a zval * passed
   dnl where a zend_object * is now expected, must fail the native build.
   PHP_NATIVE_MIR_TEST_CFLAGS="-Werror=incompatible-pointer-types -Werror=int-conversion"
