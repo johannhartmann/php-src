@@ -544,8 +544,7 @@ zend_native_status zend_native_execute_include_or_eval(
 	ephemeral_codeunit = new_op_array->num_dynamic_func_defs == 0
 		&& first_function_bucket == EG(function_table)->nNumUsed
 		&& first_class_bucket == EG(class_table)->nNumUsed;
-#if defined(ZEND_CHECK_STACK_LIMIT) && defined(__APPLE__) \
-		&& defined(__aarch64__)
+#ifdef ZEND_CHECK_STACK_LIMIT
 	/* TPDE compilation consumes substantially more C stack than dispatching a
 	 * VM opcode. Preserve enough of Zend's reserved stack for the exception
 	 * path before recursively compiling an include from native code. */
