@@ -19,6 +19,10 @@ Options:
   --jobs N             Jobs used when the selected profile must be built.
   -h, --help           Show this help.
 
+Environment:
+  NATIVE_PHPT_RUNNER   Plain PHP CLI that runs run-tests.php instead of the
+                       binary under test (started with -n, no ini).
+
 Raw command/PHPT logs and smoke-summary.json are stored below NATIVE_WORK_ROOT.
 Test failures and sanitizer diagnostics produce a non-zero exit status.
 EOF
@@ -107,8 +111,15 @@ tests=(
 export NO_INTERACTION=1
 export TEST_PHP_EXECUTABLE="$binary"
 export TEST_PHP_SRCDIR="$NATIVE_REPO_ROOT"
+# The binary under test drives run-tests.php unless NATIVE_PHPT_RUNNER names a
+# separate CLI, which then runs without any ini of its own.
+runner=("$binary")
+if [[ -n ${NATIVE_PHPT_RUNNER:-} && ${NATIVE_PHPT_RUNNER} != "$binary" ]]; then
+    [[ -x $NATIVE_PHPT_RUNNER ]] || native_die "NATIVE_PHPT_RUNNER is not executable: $NATIVE_PHPT_RUNNER"
+    runner=(env -u PHP_INI_SCAN_DIR -u PHPRC "$NATIVE_PHPT_RUNNER" -n)
+fi
 set +e
-"$binary" "$NATIVE_REPO_ROOT/run-tests.php" \
+"${runner[@]}" "$NATIVE_REPO_ROOT/run-tests.php" \
     -q -n -p "$binary" -W "$results_file" --offline --set-timeout 60 \
     "${tests[@]}" >"$phpt_log" 2>&1
 phpt_status=$?
