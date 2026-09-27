@@ -4300,6 +4300,53 @@ bool ZendCompilerX64::compile_inst_impl(
 		result.set_modified();
 		return true;
 	}
+	if (node.kind == Adaptor::InstKind::ZvalBoxedStore) {
+		if (node.operands.size() != 2
+				|| node.operands[1] != IRValueRef{Adaptor::FRAME_VALUE}
+				|| adaptor->machine_kind(node.operands[0])
+					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+				|| !zend_mir_id_is_valid(node.storage_id)) {
+			return false;
+		}
+		const uint64_t offset =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + node.storage_id) * sizeof(zval);
+		if (offset > INT32_MAX - sizeof(zval)) {
+			return false;
+		}
+		auto boxed = val_ref(node.operands[0]);
+		auto payload = boxed.part(0);
+		auto type_info = boxed.part(1);
+		auto [frame_ref, frame] = val_ref_single(node.operands[1]);
+		auto frame_reg = frame.load_to_reg();
+		auto store_part = [&](ValuePartRef &part, uint32_t part_offset,
+				uint32_t size) {
+			AsmReg reg;
+			ScratchReg stack_reload{this};
+			if (part.has_assignment() && part.assignment().stack_valid()) {
+				auto assignment = part.assignment();
+				reg = stack_reload.alloc_gp();
+				load_from_stack(reg, assignment.frame_off(),
+					assignment.part_size());
+			} else {
+				reg = part.load_to_reg();
+			}
+			if (size == 8) {
+				ASM(MOV64mr,
+					FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(part_offset)),
+					reg);
+			} else {
+				ASM(MOV32mr,
+					FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(part_offset)),
+					reg);
+			}
+		};
+		store_part(payload, static_cast<uint32_t>(offset), 8);
+		store_part(type_info,
+			static_cast<uint32_t>(offset + offsetof(zval, u1.type_info)), 4);
+		return true;
+	}
 	if (node.kind == Adaptor::InstKind::ZvalPayloadLoad) {
 		if (node.operands.size() != 1
 				|| ((!zend_mir_scalar_type_is_exact(node.exact_type)
