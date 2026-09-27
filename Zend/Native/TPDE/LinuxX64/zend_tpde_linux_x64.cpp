@@ -12595,6 +12595,76 @@ bool ZendCompilerX64::compile_inst_impl(
 					for (uint32_t index = 0; index < argument_count; ++index) {
 						const zend_native_direct_call_argument &argument =
 							call.direct_call->arguments[index];
+						const zend_mir_scalar_type_mask argument_guard_type =
+							call.direct_call_argument_guard_types != nullptr
+								? call.direct_call_argument_guard_types[index]
+								: ZEND_MIR_SCALAR_TYPE_NONE;
+						if (argument.mode
+									== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
+								&& zend_mir_scalar_type_is_exact(
+									argument_guard_type)) {
+							/*
+							 * A typed callee receives this boxed argument without
+							 * coercion. Check its runtime type; any other type
+							 * takes the canonical call, which coerces or throws.
+							 */
+							if (argument.source_frame_offset == UINT32_MAX
+									|| argument.source_frame_offset
+										> INT32_MAX - sizeof(zval)) {
+								return false;
+							}
+							const bool register_boxed_argument =
+								node.operands[index]
+									!= IRValueRef{Adaptor::FRAME_VALUE}
+								&& adaptor->machine_kind(node.operands[index])
+									== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+								&& adaptor->machine_value_is_register_authoritative(
+									node.operands[index])
+								&& val_assignment(adaptor->val_local_idx(
+									node.operands[index])) != nullptr;
+							if (register_boxed_argument) {
+								const auto boxed_local = adaptor->val_local_idx(
+									node.operands[index]);
+								auto *boxed_assignment = val_assignment(boxed_local);
+								const ValueParts parts = val_parts(node.operands[index]);
+								int32_t type_part = -1;
+								for (uint32_t part = 0; part < parts.count(); ++part) {
+									if (parts.representation.parts[part].semantic_role
+											== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
+										type_part = static_cast<int32_t>(part);
+										break;
+									}
+								}
+								if (type_part < 0) {
+									return false;
+								}
+								ValuePartRef type_info{this, boxed_local,
+									boxed_assignment,
+									static_cast<uint32_t>(type_part), false};
+								mov(first_reg, type_info.load_to_reg(), 4);
+							} else {
+								ASM(MOV32rm, first_reg,
+									FE_MEM(frame_reg, 0, FE_NOREG,
+										static_cast<int32_t>(
+											argument.source_frame_offset
+												+ offsetof(zval, u1.type_info))));
+							}
+							ASM(AND32ri, first_reg, Z_TYPE_MASK);
+							if (argument_guard_type == ZEND_MIR_SCALAR_TYPE_I1) {
+								auto value_type_valid = text_writer.label_create();
+								ASM(CMP32ri, first_reg, IS_FALSE);
+								generate_raw_jump(Jump::je, value_type_valid);
+								ASM(CMP32ri, first_reg, IS_TRUE);
+								generate_raw_jump(Jump::jne, call_slow_target());
+								label_place(value_type_valid);
+							} else {
+								ASM(CMP32ri, first_reg,
+									static_cast<int32_t>(
+										zval_type(argument_guard_type)));
+								generate_raw_jump(Jump::jne, call_slow_target());
+							}
+							continue;
+						}
 						if (zend_mir_scalar_type_is_exact(
 								argument.exact_type)
 								|| argument.source_operand.kind
@@ -12620,6 +12690,40 @@ bool ZendCompilerX64::compile_inst_impl(
 								== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE) {
 							ASM(CMP32ri, first_reg, IS_UNDEF);
 							generate_raw_jump(Jump::je, call_slow_target());
+						} else if (zend_mir_scalar_type_is_exact(
+								argument_guard_type)) {
+							/*
+							 * By reference, the typed callee sees the referenced
+							 * value. A mismatch must take the canonical call so
+							 * its RECV coerces through the reference.
+							 */
+							if (argument.source_frame_offset == UINT32_MAX
+									|| argument.source_frame_offset > INT32_MAX) {
+								return false;
+							}
+							ASM(MOV64rm, second_reg,
+								FE_MEM(frame_reg, 0, FE_NOREG,
+									static_cast<int32_t>(
+										argument.source_frame_offset)));
+							ASM(MOV32rm, second_reg,
+								FE_MEM(second_reg, 0, FE_NOREG,
+									static_cast<int32_t>(
+										offsetof(zend_reference, val)
+											+ offsetof(zval, u1.type_info))));
+							ASM(AND32ri, second_reg, Z_TYPE_MASK);
+							if (argument_guard_type == ZEND_MIR_SCALAR_TYPE_I1) {
+								auto reference_type_valid = text_writer.label_create();
+								ASM(CMP32ri, second_reg, IS_FALSE);
+								generate_raw_jump(Jump::je, reference_type_valid);
+								ASM(CMP32ri, second_reg, IS_TRUE);
+								generate_raw_jump(Jump::jne, call_slow_target());
+								label_place(reference_type_valid);
+							} else {
+								ASM(CMP32ri, second_reg,
+									static_cast<int32_t>(
+										zval_type(argument_guard_type)));
+								generate_raw_jump(Jump::jne, call_slow_target());
+							}
 						}
 					}
 
