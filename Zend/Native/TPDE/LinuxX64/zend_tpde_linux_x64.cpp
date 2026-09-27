@@ -9715,6 +9715,49 @@ bool ZendCompilerX64::compile_inst_impl(
 					return false;
 				}
 			}
+			if (mir.runtime_helper == ZEND_NATIVE_HELPER_VALUE_FE_FREE
+					&& mir.has_value_operation
+					&& zend_mir_id_is_valid(
+						mir.value_operation.op1_storage_id)
+					&& (mir.value_operation.op1.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_TMP
+						|| mir.value_operation.op1.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_VAR)) {
+				/*
+				 * A foreach over an immutable array leaves a holder that
+				 * needs no release; only clear it as the helper would.
+				 * Iterators and counted arrays keep the runtime primitive.
+				 */
+				const uint64_t holder_offset =
+					(uint64_t{ZEND_CALL_FRAME_SLOT}
+						+ mir.value_operation.op1_storage_id)
+					* sizeof(zval);
+				if (holder_offset > INT32_MAX - sizeof(zval)) {
+					return execute_value_operation();
+				}
+				const int32_t type_offset = static_cast<int32_t>(
+					holder_offset + offsetof(zval, u1.type_info));
+				const auto spilled = spill_before_branch(true);
+				auto done = text_writer.label_create();
+				auto slow = text_writer.label_create();
+				ASM(CMP32mi,
+					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+						type_offset),
+					IS_ARRAY);
+				generate_raw_jump(Jump::jne, slow);
+				ASM(MOV32mi,
+					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+						type_offset),
+					IS_UNDEF);
+				generate_raw_jump(Jump::jmp, done);
+				label_place(slow);
+				if (!execute_value_operation()) {
+					return false;
+				}
+				label_place(done);
+				release_spilled_regs(spilled);
+				return true;
+			}
 			return execute_value_operation();
 		default:
 			break;
@@ -10425,7 +10468,10 @@ bool ZendCompilerX64::compile_inst_impl(
 			if (record.opcode == ZEND_MIR_OPCODE_ITERATOR_BRANCH) {
 				zend_tpde_array_iterator_reset reset_layout;
 
-				if (zend_tpde_array_iterator_reset_at(mir, &reset_layout)
+				if (zend_tpde_array_iterator_reset_at(
+							mir, &reset_layout, true)
+						&& reset_layout.source_literal_index
+							<= INT32_MAX / sizeof(zval)
 						&& reset_layout.source_offset <= INT32_MAX
 						&& reset_layout.holder_offset <= INT32_MAX - 16) {
 					const int32_t decision_slot =
@@ -10445,21 +10491,44 @@ bool ZendCompilerX64::compile_inst_impl(
 					ScratchReg type_info{this};
 					ScratchReg high_word{this};
 					ScratchReg refcount{this};
+					ScratchReg literal{this};
 					auto array_reg = array.alloc_gp();
 					auto type_info_reg = type_info.alloc_gp();
 					auto high_word_reg = high_word.alloc_gp();
 					auto refcount_reg = refcount.alloc_gp();
+					/* OPcache propagates a literal array into FE_RESET_R.
+					 * Address it through the executing op array. */
+					AsmReg source_reg = frame_reg;
+					int32_t source_offset =
+						static_cast<int32_t>(reset_layout.source_offset);
+					if (reset_layout.source_literal) {
+						source_reg = literal.alloc_gp();
+						ASM(MOV64rm, source_reg,
+							FE_MEM(frame_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_execute_data, func))));
+						ASM(MOV64rm, source_reg,
+							FE_MEM(source_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_op_array, literals))));
+						source_offset = static_cast<int32_t>(
+							reset_layout.source_literal_index * sizeof(zval));
+					}
+					auto copy = text_writer.label_create();
 
+					/* An array zval without the refcounted flag, such as an
+					 * immutable literal, is copied without a reference. */
 					ASM(MOV32rm, type_info_reg,
-						FE_MEM(frame_reg, 0, FE_NOREG,
-							static_cast<int32_t>(reset_layout.source_offset
-								+ offsetof(zval, u1.type_info))));
+						FE_MEM(source_reg, 0, FE_NOREG,
+							source_offset + static_cast<int32_t>(
+								offsetof(zval, u1.type_info))));
+					ASM(MOV64rm, array_reg,
+						FE_MEM(source_reg, 0, FE_NOREG, source_offset));
+					ASM(CMP32ri, type_info_reg, IS_ARRAY);
+					generate_raw_jump(Jump::je, copy);
 					ASM(AND32ri, type_info_reg, Z_TYPE_MASK);
 					ASM(CMP32ri, type_info_reg, IS_ARRAY);
 					generate_raw_jump(Jump::jne, slow);
-					ASM(MOV64rm, array_reg,
-						FE_MEM(frame_reg, 0, FE_NOREG,
-							static_cast<int32_t>(reset_layout.source_offset)));
 					ASM(MOV32rm, type_info_reg,
 						FE_MEM(array_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
@@ -10476,10 +10545,9 @@ bool ZendCompilerX64::compile_inst_impl(
 							static_cast<int32_t>(offsetof(
 								zend_refcounted_h, refcount))),
 						refcount_reg);
+					label_place(copy);
 					ASM(MOV64rm, high_word_reg,
-						FE_MEM(frame_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								reset_layout.source_offset + 8)));
+						FE_MEM(source_reg, 0, FE_NOREG, source_offset + 8));
 					ASM(MOV64mr,
 						FE_MEM(frame_reg, 0, FE_NOREG,
 							static_cast<int32_t>(reset_layout.holder_offset)),
@@ -10502,6 +10570,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					type_info.reset();
 					high_word.reset();
 					refcount.reset();
+					literal.reset();
 					label_place(slow);
 
 					tpde::x64::CCAssignerSysV assigner{false};
