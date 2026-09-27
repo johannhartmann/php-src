@@ -9879,18 +9879,74 @@ bool ZendCompilerX64::compile_inst_impl(
 			 * Consume it here before either eliding the proven typed-body check
 			 * or emitting the ordinary helper call.
 			 */
+		{
+			/*
+			 * Like the VM, accept a register-held boxed result whose type is
+			 * in the declared return mask without calling the helper, which
+			 * handles coercion, references and errors.
+			 */
+			const bool needs_helper = !adaptor->typed_body()
+				&& mir.runtime_helper != ZEND_NATIVE_HELPER_COUNT;
+			const bool inline_check = needs_helper
+				&& mir.has_value_operation
+				&& mir.value_operation.op1.kind
+					!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+				&& mir.value_operation.result.kind
+					== ZEND_MIR_SOURCE_OPERAND_UNUSED;
+			ScratchReg verified_type{this};
+			bool have_type = false;
 			for (IRValueRef operand : node.operands) {
 				if (operand != IRValueRef{Adaptor::FRAME_VALUE}
 						&& operand != IRValueRef{
 							Adaptor::EXECUTION_CONTEXT_ARGUMENT}) {
 					auto verified = val_ref(operand);
+					if (inline_check && !have_type
+							&& adaptor->machine_kind(operand)
+								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+							&& val_parts(operand).count() == 2) {
+						auto type_info = verified.part(1);
+						auto type_reg = verified_type.alloc_gp();
+						ASM(MOVZXr32r8, type_reg, type_info.load_to_reg());
+						have_type = true;
+					}
 				}
 			}
-			if (adaptor->typed_body()
-					|| mir.runtime_helper == ZEND_NATIVE_HELPER_COUNT) {
+			if (!needs_helper) {
 				return true;
 			}
-			return execute_value_operation();
+			if (!have_type) {
+				return execute_value_operation();
+			}
+			const auto spilled = spill_before_branch(true);
+			auto done = text_writer.label_create();
+			{
+				ScratchReg mask{this};
+				auto mask_reg = mask.alloc_gp();
+				ASM(MOV64rm, mask_reg,
+					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(
+							zend_execute_data, func))));
+				ASM(MOV64rm, mask_reg,
+					FE_MEM(mask_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(
+							zend_function, common.arg_info))));
+				ASM(MOV32rm, mask_reg,
+					FE_MEM(mask_reg, 0, FE_NOREG,
+						-static_cast<int32_t>(sizeof(zend_arg_info))
+							+ static_cast<int32_t>(
+								offsetof(zend_arg_info, type)
+									+ offsetof(zend_type, type_mask))));
+				ASM(BT32rr, mask_reg, verified_type.cur_reg());
+				generate_raw_jump(Jump::jb, done);
+			}
+			verified_type.reset();
+			if (!execute_value_operation()) {
+				return false;
+			}
+			label_place(done);
+			release_spilled_regs(spilled);
+			return true;
+		}
 		case ZEND_MIR_OPCODE_VALUE_ECHO:
 			return execute_value_operation();
 		case ZEND_MIR_OPCODE_FUNC_NUM_ARGS: {
