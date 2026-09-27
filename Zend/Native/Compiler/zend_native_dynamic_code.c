@@ -532,7 +532,14 @@ zend_native_status zend_native_execute_include_or_eval(
 	}
 
 	new_op_array->scope = execute_data->func->op_array.scope;
-	if (!zend_native_executor_op_array_is_cache_owned(new_op_array)) {
+	/*
+	 * An op array without a refcount does not own its opcodes. OPcache
+	 * preloading returns such an array after sharing its opcodes with the
+	 * persistent script it optimizes later, so optimizing it here would free
+	 * opcodes that the script still references.
+	 */
+	if (new_op_array->refcount != NULL
+			&& !zend_native_executor_op_array_is_cache_owned(new_op_array)) {
 		zend_optimize_runtime_op_array(
 			new_op_array, extended_value == ZEND_EVAL);
 	}
