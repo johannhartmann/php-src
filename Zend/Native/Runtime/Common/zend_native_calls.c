@@ -5565,35 +5565,52 @@ zend_native_status zend_native_call_convert_explicit(
 		caller->call = pending_call;
 		return ZEND_NATIVE_RETURNED;
 	}
-	if (caller->run_time_cache == NULL
-			|| op1_payload > op_array->cache_size
-			|| 2 * sizeof(void *) > op_array->cache_size - op1_payload) {
-		return ZEND_NATIVE_EXCEPTION;
-	}
 	{
+		/* Mirrors ZEND_CALLABLE_CONVERT_PARTIAL: op1 is the PFA name literal,
+		 * extended_value carries the cache slot offset plus
+		 * ZEND_PARTIAL_FLAGS, and const_args lives in op2.num when op2 is
+		 * unused or in the named-positions literal's Z_EXTRA otherwise. */
+		uint32_t cache_offset = extended_value & ~ZEND_PARTIAL_FLAGS;
 		void **cache_slot;
+		zval *pfa_name;
 		zval *named_positions = NULL;
+		uint32_t const_args;
 		uint32_t call_info;
 
+		if (caller->run_time_cache == NULL
+				|| cache_offset > op_array->cache_size
+				|| 2 * sizeof(void *) > op_array->cache_size - cache_offset
+				|| opline->opcode != ZEND_CALLABLE_CONVERT_PARTIAL
+				|| opline->op1_type != IS_CONST) {
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		pfa_name = RT_CONSTANT(opline, opline->op1);
+		if (Z_TYPE_P(pfa_name) != IS_STRING) {
+			return ZEND_NATIVE_EXCEPTION;
+		}
 		if (op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
 			named_positions = zend_native_direct_operand(caller, &op2, true);
 			if (named_positions == NULL
 					|| Z_TYPE_P(named_positions) != IS_ARRAY) {
 				return ZEND_NATIVE_EXCEPTION;
 			}
-		} else if (op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+			const_args = Z_EXTRA_P(named_positions);
+		} else if (op2.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+			const_args = opline->op2.num;
+		} else {
 			return ZEND_NATIVE_EXCEPTION;
 		}
-		cache_slot = (void **) ((char *) caller->run_time_cache + op1_payload);
+		cache_slot = (void **) ((char *) caller->run_time_cache + cache_offset);
 		call_info = ZEND_CALL_INFO(call);
 		zend_partial_create(return_value,
-			&call->This, call->func,
+			op_array->scope, &call->This, call->func,
 			ZEND_CALL_NUM_ARGS(call), ZEND_CALL_ARG(call, 1),
 			(call_info & ZEND_CALL_HAS_EXTRA_NAMED_PARAMS) != 0
 				? call->extra_named_params : NULL,
 			named_positions != NULL ? Z_ARRVAL_P(named_positions) : NULL,
-			op_array, opline, cache_slot,
-			(extended_value & ZEND_FCALL_USES_VARIADIC_PLACEHOLDER) != 0);
+			op_array->filename, &opline->lineno, cache_slot,
+			Z_STR_P(pfa_name), extended_value & ZEND_PARTIAL_FLAGS,
+			const_args);
 		if ((call_info & ZEND_CALL_HAS_EXTRA_NAMED_PARAMS) != 0) {
 			zend_array_release(call->extra_named_params);
 		}
