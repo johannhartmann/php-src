@@ -678,6 +678,8 @@ struct zend_tpde_packed_iterator_fetch {
 struct zend_tpde_array_iterator_reset {
 	uint32_t source_offset;
 	uint32_t holder_offset;
+	bool source_literal;
+	uint32_t source_literal_index;
 };
 
 struct zend_tpde_object_property_read {
@@ -1491,7 +1493,8 @@ static inline bool zend_tpde_packed_iterator_fetch_at(
 
 static inline bool zend_tpde_array_iterator_reset_at(
 	const zend_tpde_instruction &instruction,
-	zend_tpde_array_iterator_reset *out)
+	zend_tpde_array_iterator_reset *out,
+	bool allow_literal = false)
 {
 	const zend_mir_executable_value_ref &operation =
 		instruction.value_operation;
@@ -1500,27 +1503,36 @@ static inline bool zend_tpde_array_iterator_reset_at(
 
 	/*
 	 * A direct CV array can use the ordinary FE_RESET_R copy semantics in the
-	 * generated entry. References, temporaries, objects and by-reference
-	 * iteration retain the complete runtime primitive.
+	 * generated entry. Targets may opt into a literal array, which OPcache
+	 * propagates into FE_RESET_R. References, temporaries, objects and
+	 * by-reference iteration retain the complete runtime primitive.
 	 */
+	const bool source_literal = allow_literal
+		&& operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
 	if (out == nullptr || !instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_ITERATOR_BRANCH
 			|| operation.source_opcode != ZEND_FE_RESET_R
-			|| (operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
-				&& operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
-			|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+			|| (!source_literal
+				&& ((operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+						&& operation.op1.kind
+							!= ZEND_MIR_SOURCE_OPERAND_SSA)
+					|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+					|| operation.op1_storage_id == ZEND_MIR_ID_INVALID
+					|| operation.op1_storage_id
+						== operation.result_storage_id))
+			|| (source_literal
+				&& operation.op1_storage_id != ZEND_MIR_ID_INVALID)
 			|| (operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
 				&& operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
 			|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
 				&& operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_VAR)
 			|| operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
-			|| operation.op1_storage_id == ZEND_MIR_ID_INVALID
-			|| operation.result_storage_id == ZEND_MIR_ID_INVALID
-			|| operation.op1_storage_id == operation.result_storage_id) {
+			|| operation.result_storage_id == ZEND_MIR_ID_INVALID) {
 		return false;
 	}
-	source_offset =
-		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
+	source_offset = source_literal
+		? 0
+		: (uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
 			* sizeof(zval);
 	holder_offset =
 		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
@@ -1530,6 +1542,8 @@ static inline bool zend_tpde_array_iterator_reset_at(
 	}
 	out->source_offset = static_cast<uint32_t>(source_offset);
 	out->holder_offset = static_cast<uint32_t>(holder_offset);
+	out->source_literal = source_literal;
+	out->source_literal_index = source_literal ? operation.op1.index : 0;
 	return true;
 }
 
