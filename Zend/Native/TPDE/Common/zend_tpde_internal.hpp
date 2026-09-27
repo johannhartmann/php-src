@@ -827,7 +827,8 @@ static inline uint32_t zend_tpde_relative_source_target(
  */
 static inline bool zend_tpde_array_read_at(
 	const zend_tpde_instruction &instruction,
-	zend_tpde_array_read *out)
+	zend_tpde_array_read *out,
+	bool allow_temporary_key = false)
 {
 	const zend_mir_executable_value_ref &operation =
 		instruction.value_operation;
@@ -841,7 +842,11 @@ static inline bool zend_tpde_array_read_at(
 			|| (operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
 				&& operation.op1.kind
 					!= ZEND_MIR_SOURCE_OPERAND_LITERAL)
-			|| operation.op2.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+			|| (operation.op2.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+				&& (!allow_temporary_key
+					|| (operation.op2.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+						&& operation.op2.slot_kind
+							!= ZEND_MIR_SOURCE_SLOT_VAR)))
 			|| (operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
 				&& operation.op1_storage_id == ZEND_MIR_ID_INVALID)
 			|| (operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
@@ -1794,6 +1799,8 @@ struct zend_tpde_plan {
 	uint32_t observers_enabled_reference_index;
 	uint32_t *entry_undef_temporary_indices;
 	uint32_t entry_undef_temporary_count;
+	/* The target reads an array through an integer temporary key inline. */
+	bool temporary_integer_array_keys;
 	bool may_emit_calls;
 	bool zend_entry_may_emit_calls;
 	bool typed_body_may_emit_calls;
