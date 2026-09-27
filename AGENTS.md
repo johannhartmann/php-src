@@ -31,6 +31,30 @@ The native-engine build and test entry points are:
 
 See `docs/native-engine/test-command-contract.md` for exit semantics.
 
+## Building and testing efficiently
+
+- Build in parallel. `build.sh` defaults to all cores; do not pass `--jobs 1`
+  or `make -j1`. A clean native build takes seconds on a large host, and
+  configure is the slow step, so reuse a configured profile instead of
+  passing `--force`.
+- The linux-amd64 profiles build with clang (`PROFILE_CC`). GCC cannot
+  compile the TPDE x64 templates; do not override `CC` with it.
+- The native CLI cannot yet run `run-tests.php` itself. Run PHPTs with a
+  separate plain PHP as the runner, with no ini loaded, and the native binary
+  under test:
+  `env -u PHP_INI_SCAN_DIR -u PHPRC TEST_PHP_EXECUTABLE=<native php>
+  TEST_PHP_SRCDIR=$PWD <runner php> -n run-tests.php -j$(nproc) <paths>`.
+  A distribution PHP wrapper that injects its own extensions makes every
+  test fail. `scripts/native/test-smoke.sh` takes the same runner through
+  `NATIVE_PHPT_RUNNER`.
+- Compare against a baseline before claiming a fix: record the failing PHPT
+  set before and after a change and report any test that newly fails.
+- To triage many compile failures at once, run the failing PHPTs under gdb in
+  parallel, stop where `compile_inst_impl` returns false, and tally the node
+  kind and MIR opcode. One missing lowering is often behind many failures.
+- Rebase onto upstream with `git rebase --rebase-merges`. Do not hand-merge
+  `Zend/zend_vm_execute.h`; regenerate it with `php Zend/zend_vm_gen.php`.
+
 ## Completion
 
 Run the task-specific checks and the applicable php-src tests before completion.
