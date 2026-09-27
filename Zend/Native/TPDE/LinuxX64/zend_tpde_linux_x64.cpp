@@ -10455,6 +10455,14 @@ bool ZendCompilerX64::compile_inst_impl(
 				}
 
 				if (have_condition_layout) {
+					/*
+					 * The truthiness fast path and the helper slow path are
+					 * target-local branches invisible to TPDE's CFG, and only the
+					 * slow path calls. Publish every live assignment first so the
+					 * join reloads the same value on either path; on x86-64 few
+					 * values survive a call in callee-saved registers.
+					 */
+					(void) spill_before_branch(true);
 					const int32_t decision_slot =
 						allocate_stack_slot(sizeof(uint32_t));
 					if (decision_slot >= 0) {
