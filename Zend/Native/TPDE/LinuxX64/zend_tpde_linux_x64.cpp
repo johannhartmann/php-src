@@ -11941,6 +11941,21 @@ bool ZendCompilerX64::compile_inst_impl(
 						ASM(TEST64rr, first_reg, first_reg);
 						generate_raw_jump(Jump::jne, call_slow_target());
 					}
+					/*
+					 * The validated code pointer is next needed when the
+					 * activation is linked. x86-64 has too few registers to keep
+					 * it live across frame construction; spill the exact value
+					 * rather than reloading the cell, which may be republished.
+					 */
+					const int32_t published_code_slot =
+						allocate_stack_slot(sizeof(void *));
+					if (published_code_slot >= 0) {
+						return false;
+					}
+					ASM(MOV64mr,
+						FE_MEM(FE_BP, 0, FE_NOREG, published_code_slot),
+						published_code_reg);
+					published_code.reset();
 					ASM(CMP8mi,
 						FE_MEM(context_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
@@ -12884,6 +12899,9 @@ bool ZendCompilerX64::compile_inst_impl(
 									zend_native_direct_activation, cell))),
 							cell_reg);
 					}
+					published_code_reg = published_code.alloc_gp();
+					ASM(MOV64rm, published_code_reg,
+						FE_MEM(FE_BP, 0, FE_NOREG, published_code_slot));
 					ASM(MOV64mr,
 						FE_MEM(metadata_second_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
