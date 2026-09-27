@@ -1809,8 +1809,12 @@ struct zend_tpde_plan {
 	uint32_t observers_enabled_reference_index;
 	uint32_t *entry_undef_temporary_indices;
 	uint32_t entry_undef_temporary_count;
-	/* The target reads an array inline through a temporary or literal key. */
-	bool temporary_integer_array_keys;
+	/*
+	 * Linux x64 lowers forms DarwinA64 does not: array reads through
+	 * temporary or literal keys, and inline call frames that move temporary
+	 * arguments.
+	 */
+	bool linux_inline_forms;
 	bool may_emit_calls;
 	bool zend_entry_may_emit_calls;
 	bool typed_body_may_emit_calls;

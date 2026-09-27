@@ -6318,7 +6318,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				ZEND_TPDE_MACHINE_REFERENCE_PACKED_ELEMENT);
 
 		if (!zend_tpde_array_read_at(mir, &layout,
-					adaptor->plan()->temporary_integer_array_keys)
+					adaptor->plan()->linux_inline_forms)
 				|| element_reference == nullptr
 				|| (!layout.container_literal
 					&& !zend_mir_id_is_valid(
@@ -13807,12 +13807,11 @@ bool ZendCompilerX64::compile_inst_impl(
 							static_cast<int32_t>(
 								offsetof(zend_execute_data, return_value))),
 						second_reg);
-					ASM(MOV32mi,
-						FE_MEM(second_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(zval, u1.type_info))),
-						IS_UNDEF);
 					/*
+					 * The result slot is cleared after the arguments are copied:
+					 * the optimizer may assign a temporary argument and the DO
+					 * result the same slot.
+					 *
 					 * Argument copying may need four temporary registers for a
 					 * boxed zval. The two preflight temporaries are dead here;
 					 * release them and reacquire dedicated metadata temporaries
@@ -14186,6 +14185,19 @@ bool ZendCompilerX64::compile_inst_impl(
 									IS_UNDEF);
 							}
 						}
+					}
+					{
+						ScratchReg result_slot{this};
+						auto result_slot_reg = result_slot.alloc_gp();
+						ASM(MOV64rm, result_slot_reg,
+							FE_MEM(callee_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_execute_data, return_value))));
+						ASM(MOV32mi,
+							FE_MEM(result_slot_reg, 0, FE_NOREG,
+								static_cast<int32_t>(
+									offsetof(zval, u1.type_info))),
+							IS_UNDEF);
 					}
 					for (uint32_t index = 0;
 							index < callee_argument_count; ++index) {
