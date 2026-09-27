@@ -6332,6 +6332,149 @@ bool ZendCompilerX64::compile_inst_impl(
 				|| layout.result_offset > INT32_MAX - 8) {
 			return branch_to_guarded_cold();
 		}
+		/*
+		 * A read whose container, key and result all live in frame slots or
+		 * literals has no machine operands at all. Read a packed element by
+		 * integer key inline and publish it to the result slot; hash arrays,
+		 * other keys, holes and references keep the helper.
+		 */
+		if (!node.has_result && node.kind == Adaptor::InstKind::GuardedFast) {
+			const zend_mir_executable_value_ref &operation =
+				mir.value_operation;
+			bool frame_operands = true;
+			for (IRValueRef operand : node.operands) {
+				frame_operands = frame_operands
+					&& (operand == IRValueRef{Adaptor::FRAME_VALUE}
+						|| operand == IRValueRef{
+							Adaptor::EXECUTION_CONTEXT_ARGUMENT});
+			}
+			const bool key_literal =
+				operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
+			const uint64_t key_offset = key_literal
+				? uint64_t{operation.op2.index} * sizeof(zval)
+				: layout.key_offset;
+			const uint64_t container_offset = layout.container_literal
+				? uint64_t{operation.op1.index} * sizeof(zval)
+				: layout.container_offset;
+			const auto guarded_successors =
+				adaptor->block_succs(IRBlockRef{node.control_block});
+			if (frame_operands
+					&& (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+						|| operation.result.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_VAR)
+					&& key_offset <= INT32_MAX - sizeof(zval)
+					&& container_offset <= INT32_MAX - sizeof(zval)
+					&& node.control_block != UINT32_MAX
+					&& node.continuation_block != UINT32_MAX
+					&& guarded_successors.size() >= 2
+					&& static_cast<uint32_t>(guarded_successors[0])
+						== node.continuation_block
+					&& static_cast<uint32_t>(guarded_successors[1])
+						== node.argument_index) {
+				auto slow = text_writer.label_create();
+				auto done = text_writer.label_create();
+				auto copied = text_writer.label_create();
+				auto [frame_ref, frame] =
+					val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+				auto frame_scratch = std::move(frame).into_scratch();
+				auto frame_reg = frame_scratch.cur_reg();
+				ScratchReg literals{this};
+				ScratchReg type{this};
+				ScratchReg array{this};
+				ScratchReg key{this};
+				ScratchReg element{this};
+				auto type_reg = type.alloc_gp();
+				auto array_reg = array.alloc_gp();
+				auto key_reg = key.alloc_gp();
+				auto element_reg = element.alloc_gp();
+				AsmReg literals_reg = frame_reg;
+				if (key_literal || layout.container_literal) {
+					literals_reg = literals.alloc_gp();
+					ASM(MOV64rm, literals_reg,
+						FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_execute_data, func))));
+					ASM(MOV64rm, literals_reg,
+						FE_MEM(literals_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_op_array, literals))));
+				}
+				const AsmReg container_base = layout.container_literal
+					? literals_reg : frame_reg;
+				const AsmReg key_base = key_literal ? literals_reg : frame_reg;
+				ASM(CMP8mi,
+					FE_MEM(container_base, 0, FE_NOREG,
+						static_cast<int32_t>(container_offset
+							+ offsetof(zval, u1.type_info))),
+					IS_ARRAY);
+				generate_raw_jump(Jump::jne, slow);
+				ASM(CMP8mi,
+					FE_MEM(key_base, 0, FE_NOREG,
+						static_cast<int32_t>(key_offset
+							+ offsetof(zval, u1.type_info))),
+					IS_LONG);
+				generate_raw_jump(Jump::jne, slow);
+				ASM(MOV64rm, array_reg,
+					FE_MEM(container_base, 0, FE_NOREG,
+						static_cast<int32_t>(container_offset)));
+				ASM(MOV64rm, key_reg,
+					FE_MEM(key_base, 0, FE_NOREG,
+						static_cast<int32_t>(key_offset)));
+				literals.reset();
+				ASM(TEST32mi,
+					FE_MEM(array_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(HashTable, u))),
+					HASH_FLAG_PACKED);
+				generate_raw_jump(Jump::je, slow);
+				ASM(MOV32rm, type_reg,
+					FE_MEM(array_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(HashTable, nNumUsed))));
+				ASM(CMP64rr, key_reg, type_reg);
+				generate_raw_jump(Jump::jae, slow);
+				ASM(MOV64rm, element_reg,
+					FE_MEM(array_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(HashTable, arPacked))));
+				ASM(SHL64ri, key_reg, 4);
+				ASM(ADD64rr, element_reg, key_reg);
+				ASM(MOV32rm, type_reg,
+					FE_MEM(element_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zval, u1.type_info))));
+				ASM(CMP8ri, type_reg, IS_UNDEF);
+				generate_raw_jump(Jump::je, slow);
+				ASM(CMP8ri, type_reg, IS_REFERENCE);
+				generate_raw_jump(Jump::je, slow);
+				ASM(MOV64rm, key_reg, FE_MEM(element_reg, 0, FE_NOREG, 0));
+				ASM(TEST32ri, type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+				generate_raw_jump(Jump::je, copied);
+				ASM(ADD32mi,
+					FE_MEM(key_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(
+							zend_refcounted_h, refcount))),
+					1);
+				label_place(copied);
+				ASM(MOV64mr,
+					FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(layout.result_offset)),
+					key_reg);
+				ASM(MOV32mr,
+					FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(layout.result_offset
+							+ offsetof(zval, u1.type_info))),
+					type_reg);
+				ASM(MOV32ri, type_reg, 0);
+				generate_raw_jump(Jump::jmp, done);
+				label_place(slow);
+				ASM(MOV32ri, type_reg, 1);
+				label_place(done);
+				array.reset();
+				key.reset();
+				element.reset();
+				generate_guarded_decision_branch(
+					std::move(type), guarded_successors[1],
+					guarded_successors[0]);
+				return true;
+			}
+		}
 		if (!node.has_result) {
 			return branch_to_guarded_cold();
 		}
