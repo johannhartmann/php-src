@@ -6319,8 +6319,9 @@ bool ZendCompilerX64::compile_inst_impl(
 
 		if (!zend_tpde_array_read_at(mir, &layout)
 				|| element_reference == nullptr
-				|| !zend_mir_id_is_valid(
-					element_reference->base_value_id)
+				|| (!layout.container_literal
+					&& !zend_mir_id_is_valid(
+						element_reference->base_value_id))
 				|| !zend_mir_id_is_valid(
 					element_reference->index_value_id)
 				|| element_reference->scale != sizeof(zval)
@@ -6432,12 +6433,47 @@ bool ZendCompilerX64::compile_inst_impl(
 				const bool register_receiver =
 					node.operands.size() > 1
 					&& node.machine_reference_operand_index != 1
-					&& adaptor->machine_kind(node.operands[1])
-						== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR;
+					&& (adaptor->machine_kind(node.operands[1])
+							== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+						|| (adaptor->representation(node.operands[1])
+								== ZEND_MIR_REPRESENTATION_ZVAL
+							&& adaptor->machine_kind(node.operands[1])
+								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL));
 				if (register_receiver) {
-					auto [receiver_ref, receiver] =
-						val_ref_single(node.operands[1]);
-					ASM(MOV64rr, array_reg, receiver.load_to_reg());
+					if (adaptor->machine_kind(node.operands[1])
+							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+						auto receiver = val_ref(node.operands[1]);
+						const ValueParts parts = val_parts(node.operands[1]);
+						bool have_payload = false;
+						bool have_type_info = false;
+						for (uint32_t part = 0; part < parts.count(); ++part) {
+							auto value = receiver.part(part);
+							auto value_reg = value.load_to_reg();
+							switch (parts.representation.parts[part]
+									.semantic_role) {
+								case ZEND_TPDE_MACHINE_PART_PAYLOAD:
+									ASM(MOV64rr, array_reg, value_reg);
+									have_payload = true;
+									break;
+								case ZEND_TPDE_MACHINE_PART_TYPE_INFO:
+									ASM(MOV32rr, type_reg, value_reg);
+									have_type_info = true;
+									break;
+								default:
+									return false;
+							}
+						}
+						if (!have_payload || !have_type_info) {
+							return false;
+						}
+						ASM(AND32ri, type_reg, Z_TYPE_MASK);
+						ASM(CMP32ri, type_reg, IS_ARRAY);
+						generate_raw_jump(Jump::jne, slow);
+					} else {
+						auto [receiver_ref, receiver] =
+							val_ref_single(node.operands[1]);
+						ASM(MOV64rr, array_reg, receiver.load_to_reg());
+					}
 				} else if (layout.container_literal) {
 					if (node.machine_reference_operand_index
 							>= node.operands.size()) {
@@ -7814,7 +7850,9 @@ bool ZendCompilerX64::compile_inst_impl(
 				&& (mir.value_operation.result.slot_kind
 						== ZEND_MIR_SOURCE_SLOT_TMP
 					|| mir.value_operation.result.slot_kind
-						== ZEND_MIR_SOURCE_SLOT_VAR)) {
+						== ZEND_MIR_SOURCE_SLOT_VAR
+					|| mir.value_operation.result.slot_kind
+						== ZEND_MIR_SOURCE_SLOT_CV)) {
 			const uint64_t result_offset =
 				(uint64_t{ZEND_CALL_FRAME_SLOT}
 					+ mir.value_operation.result_storage_id)
@@ -7847,6 +7885,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			|| layout.source_opcode == ZEND_BW_OR
 			|| layout.source_opcode == ZEND_BW_AND
 			|| layout.source_opcode == ZEND_BW_XOR
+			|| layout.source_opcode == ZEND_SPACESHIP
 			|| layout.source_opcode == ZEND_IS_IDENTICAL
 			|| layout.source_opcode == ZEND_IS_NOT_IDENTICAL
 			|| layout.source_opcode == ZEND_IS_EQUAL
@@ -7947,6 +7986,15 @@ bool ZendCompilerX64::compile_inst_impl(
 				case ZEND_BW_XOR:
 					ASM(XOR64rr, result_reg, right_reg);
 					break;
+				case ZEND_SPACESHIP: {
+					ScratchReg less{this};
+					auto less_reg = less.alloc_gp();
+					ASM(CMP64rr, result_reg, right_reg);
+					generate_raw_set(Jump::jl, less_reg);
+					generate_raw_set(Jump::jg, result_reg);
+					ASM(SUB64rr, result_reg, less_reg);
+					break;
+				}
 				case ZEND_IS_IDENTICAL:
 				case ZEND_IS_EQUAL:
 					ASM(CMP64rr, result_reg, right_reg);
