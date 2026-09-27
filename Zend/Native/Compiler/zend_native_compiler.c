@@ -16,6 +16,7 @@
 #include "Zend/Native/MIR/Core/zend_mir_arena.h"
 #include "Zend/Native/MIR/Core/zend_mir_module_internal.h"
 #include "Zend/Native/MIR/zend_mir.h"
+#include "Zend/Native/Runtime/Common/zend_native_calls.h"
 #include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 #include "Zend/zend_hrtime.h"
 
@@ -4286,6 +4287,9 @@ static zend_native_status zend_native_compiler_execute_published_impl(
 	zend_native_status status;
 
 	if (zend_native_compiler_enter(compiler) == FAILURE) {
+		if (execute_data != NULL) {
+			zend_native_execution_cleanup_frame(execute_data);
+		}
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	status = zend_native_compiler_execute_active_impl(
@@ -4359,6 +4363,8 @@ static zend_native_status zend_native_compiler_execute_data_impl(
 			snprintf(diagnostic->message, sizeof(diagnostic->message), "%s",
 				compile_diagnostic.message);
 		}
+		/* The frame will not run; it still has to leave like one that did. */
+		zend_native_execution_cleanup_frame(execute_data);
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	return zend_native_compiler_execute_published_impl(
