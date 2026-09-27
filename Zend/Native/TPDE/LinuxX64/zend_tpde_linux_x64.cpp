@@ -837,9 +837,52 @@ bool ZendCompilerX64::compile_boxed_cond_guard(IRInstRef instruction) {
 			type_info.load_to_reg());
 	}
 
-	if (register_string) {
+	/*
+	 * A register string without a result branches straight to the successor
+	 * blocks. Every path jumps before the branch region is emitted, so spill
+	 * live values here, ahead of the first jump; spilling at the region itself
+	 * would place the stores on an unreachable fall-through.
+	 */
+	const bool direct_successor_branches =
+		register_string && !layout.has_result;
+	decltype(spill_before_branch()) spilled{};
+	if (direct_successor_branches) {
+		spilled = spill_before_branch();
+	}
+
+	if (register_string && layout.has_result) {
+		auto [string_ref, string] = val_ref_single(node.operands[1]);
+		auto string_reg = string.load_to_reg();
+		ASM(MOV64mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.operand_offset)),
+			string_reg);
+		ScratchReg string_type{this};
+		auto string_type_reg = string_type.alloc_gp();
+		if (!emit_machine_zval_type_info(
+				ZEND_TPDE_MACHINE_VALUE_STRING_PTR,
+				string_reg, string_type_reg)) {
+			return false;
+		}
+		ASM(MOV32mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.operand_offset
+					+ offsetof(zval, u1.type_info))),
+			string_type_reg);
+	}
+
+	/*
+	 * JMPZ_EX/JMPNZ_EX consume their source TMP before publishing the boolean
+	 * result. The generic helper owns that lifetime transition; the scalar
+	 * truthiness fast path only observes the slot and must not overwrite a
+	 * refcounted source value directly. Register-authoritative values have been
+	 * materialized above so the helper observes the canonical frame value.
+	 */
+	if (layout.has_result) {
+		generate_raw_jump(Jump::jmp, slow);
+	} else if (register_string) {
 		bool literal_truthy = false;
-		if (!layout.has_result && adaptor->known_string_literal(
+		if (adaptor->known_string_literal(
 				node.operands[1], nullptr, &literal_truthy)) {
 			auto [string_ref, string] = val_ref_single(node.operands[1]);
 			string.reset();
@@ -953,12 +996,11 @@ bool ZendCompilerX64::compile_boxed_cond_guard(IRInstRef instruction) {
 		generate_raw_jump(Jump::jmp, falsey);
 	}
 
-	if (register_string && !layout.has_result) {
+	if (direct_successor_branches) {
 		frame.reset();
 		type.reset();
 		value.reset();
 		decision.reset();
-		auto spilled = spill_before_branch();
 		begin_branch_region();
 		label_place(truthy);
 		generate_branch_to_block(
