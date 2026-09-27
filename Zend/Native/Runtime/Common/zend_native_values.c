@@ -5026,7 +5026,11 @@ static bool zend_native_iterator_assign_value(
 		if (destination != value) {
 			zend_reference *reference = Z_REF_P(value);
 			GC_ADDREF(reference);
-			zval_ptr_dtor_nogc(destination);
+			/* Like the VM, release only a CV. A VAR destination, as in
+			 * foreach ($a as &$obj->prop), holds no owned value yet. */
+			if (opline->op2_type == IS_CV) {
+				zval_ptr_dtor_nogc(destination);
+			}
 			ZVAL_REF(destination, reference);
 		}
 		return true;
