@@ -397,31 +397,42 @@ static zend_native_status zend_native_execute_frame_impl(
 		} zend_end_try();
 	}
 
-	if (state->status != ZEND_NATIVE_BAILOUT) {
-		zend_native_execution_cleanup_frame_ex(execute_data, !frame_returned);
-	}
-	/* A frame entered through zend_execute_ex is normally finalized by
-	 * zend_leave_helper(), which also releases the retained closure or
-	 * receiver.  The request-local native reentry hook replaces that helper;
-	 * its caller still owns the stack frame itself, but not this call-target
-	 * reference.  Direct native-to-native calls release their target at their
-	 * call site and therefore must not pass through this branch. */
-	if (observer_already_started
-			&& state->status != ZEND_NATIVE_BAILOUT) {
-		uint32_t call_info = ZEND_CALL_INFO(execute_data);
-
-		if ((call_info & ZEND_CALL_RELEASE_THIS) != 0) {
-			OBJ_RELEASE(Z_OBJ(execute_data->This));
-		} else if ((call_info & ZEND_CALL_CLOSURE) != 0) {
-			OBJ_RELEASE(ZEND_CLOSURE_OBJECT(execute_data->func));
+	/*
+	 * Releasing CVs, the receiver or a discarded return value may run a
+	 * destructor that bails out, for example on an uncaught exception during
+	 * shutdown.  Report that as this frame's bailout so callers still release
+	 * their activation state before propagating it.
+	 */
+	zend_try {
+		if (state->status != ZEND_NATIVE_BAILOUT) {
+			zend_native_execution_cleanup_frame_ex(execute_data, !frame_returned);
 		}
-	}
+		/* A frame entered through zend_execute_ex is normally finalized by
+		 * zend_leave_helper(), which also releases the retained closure or
+		 * receiver.  The request-local native reentry hook replaces that helper;
+		 * its caller still owns the stack frame itself, but not this call-target
+		 * reference.  Direct native-to-native calls release their target at their
+		 * call site and therefore must not pass through this branch. */
+		if (observer_already_started
+				&& state->status != ZEND_NATIVE_BAILOUT) {
+			uint32_t call_info = ZEND_CALL_INFO(execute_data);
 
-	if (state->original_return_value == NULL) {
-		if (state->status != ZEND_NATIVE_BAILOUT
+			if ((call_info & ZEND_CALL_RELEASE_THIS) != 0) {
+				OBJ_RELEASE(Z_OBJ(execute_data->This));
+			} else if ((call_info & ZEND_CALL_CLOSURE) != 0) {
+				OBJ_RELEASE(ZEND_CLOSURE_OBJECT(execute_data->func));
+			}
+		}
+
+		if (state->original_return_value == NULL
+				&& state->status != ZEND_NATIVE_BAILOUT
 				&& !Z_ISUNDEF(state->discarded_return)) {
 			zval_ptr_dtor(&state->discarded_return);
 		}
+	} zend_catch {
+		state->status = ZEND_NATIVE_BAILOUT;
+	} zend_end_try();
+	if (state->original_return_value == NULL) {
 		execute_data->return_value = NULL;
 	}
 	{
