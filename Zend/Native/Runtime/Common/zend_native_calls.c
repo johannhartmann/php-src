@@ -3672,6 +3672,86 @@ void zend_native_call_set_double_argument(
 	ZVAL_DOUBLE(ZEND_CALL_ARG(call, ordinal + 1), value);
 }
 
+static bool zend_native_is_call_start(uint8_t opcode)
+{
+	switch (opcode) {
+		case ZEND_INIT_FCALL:
+		case ZEND_INIT_FCALL_BY_NAME:
+		case ZEND_INIT_NS_FCALL_BY_NAME:
+		case ZEND_INIT_DYNAMIC_CALL:
+		case ZEND_INIT_USER_CALL:
+		case ZEND_INIT_METHOD_CALL:
+		case ZEND_INIT_STATIC_METHOD_CALL:
+		case ZEND_INIT_PARENT_PROPERTY_HOOK_CALL:
+		case ZEND_NEW:
+			return true;
+		default:
+			return false;
+	}
+}
+
+static bool zend_native_is_call_end(uint8_t opcode)
+{
+	switch (opcode) {
+		case ZEND_DO_FCALL:
+		case ZEND_DO_ICALL:
+		case ZEND_DO_UCALL:
+		case ZEND_DO_FCALL_BY_NAME:
+		case ZEND_CALLABLE_CONVERT:
+		case ZEND_CALLABLE_CONVERT_PARTIAL:
+			return true;
+		default:
+			return false;
+	}
+}
+
+/*
+ * A direct call transfers its arguments at DO, so it never builds the
+ * pending frame through which the VM releases arguments already sent when an
+ * exception interrupts the argument list. Their temporaries are outside
+ * Zend's live ranges but still own the values: release those of every call
+ * enclosing the throwing opline, found as cleanup_unfinished_calls() does.
+ * Only valid while no call frame is pending; a group of overlapping calls is
+ * either all direct or all materialized.
+ */
+static void zend_native_release_direct_pending_arguments(
+	zend_execute_data *execute_data, const zend_op_array *op_array,
+	uint32_t throw_op_num)
+{
+	const zend_op *opline = &op_array->opcodes[throw_op_num];
+	uint32_t level = 0;
+
+	if (zend_native_is_call_start(opline->opcode)) {
+		if (throw_op_num == 0) {
+			return;
+		}
+		opline--;
+	}
+	for (; opline >= op_array->opcodes; opline--) {
+		if (zend_native_is_call_end(opline->opcode)) {
+			level++;
+		} else if (zend_native_is_call_start(opline->opcode)) {
+			if (level != 0) {
+				level--;
+			}
+		} else if (level == 0
+				&& zend_native_generator_is_send(opline->opcode)
+				&& (opline->op1_type & (IS_TMP_VAR | IS_VAR)) != 0) {
+			zval *value = ZEND_CALL_VAR(execute_data, opline->op1.var);
+
+			if (!Z_ISUNDEF_P(value)
+					&& !zend_native_generator_temporary_is_live(op_array,
+						EX_VAR_TO_NUM(opline->op1.var), throw_op_num)) {
+				zval detached;
+
+				ZVAL_COPY_VALUE(&detached, value);
+				ZVAL_UNDEF(value);
+				zval_ptr_dtor_nogc(&detached);
+			}
+		}
+	}
+}
+
 void zend_native_cleanup_unfinished_exception(
 	zend_execute_data *execute_data, uint32_t throw_op_num,
 	uint32_t catch_op_num)
@@ -3723,6 +3803,10 @@ void zend_native_cleanup_unfinished_exception(
 					}
 				}
 		}
+	}
+	if (execute_data->call == NULL) {
+		zend_native_release_direct_pending_arguments(
+			execute_data, op_array, throw_op_num);
 	}
 	zend_cleanup_unfinished_execution(
 		execute_data, throw_op_num, catch_op_num);
