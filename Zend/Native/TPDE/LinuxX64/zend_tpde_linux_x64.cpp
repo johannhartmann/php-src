@@ -4934,6 +4934,59 @@ bool ZendCompilerX64::compile_inst_impl(
 		result.set_modified();
 		return true;
 	};
+	auto materialize_boxed_boundary_operand = [&](uint32_t operand_index,
+			zend_mir_storage_id storage) {
+		if (operand_index == UINT32_MAX) {
+			return true;
+		}
+		if (!zend_mir_id_is_valid(storage)
+				|| operand_index >= node.liveness_operands.size()) {
+			return false;
+		}
+		const uint64_t offset =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+		if (offset > INT32_MAX - sizeof(zval)) {
+			return false;
+		}
+		const IRValueRef operand = node.liveness_operands[operand_index];
+		if (adaptor->machine_kind(operand)
+				!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+			return false;
+		}
+		auto boxed = val_ref(operand);
+		auto payload = boxed.part(0);
+		auto type_info = boxed.part(1);
+		auto store_part = [&](ValuePartRef &part, uint32_t part_offset,
+				uint32_t size) {
+			AsmReg reg;
+			ScratchReg stack_reload{this};
+			if (node.kind == Adaptor::InstKind::GuardedCold
+					&& part.has_assignment()
+					&& part.assignment().stack_valid()) {
+				auto assignment = part.assignment();
+				reg = stack_reload.alloc_gp();
+				load_from_stack(reg, assignment.frame_off(),
+					assignment.part_size());
+			} else {
+				reg = part.load_to_reg();
+			}
+			if (size == 8) {
+				ASM(MOV64mr,
+					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+						static_cast<int32_t>(part_offset)),
+					reg);
+			} else {
+				ASM(MOV32mr,
+					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+						static_cast<int32_t>(part_offset)),
+					reg);
+			}
+		};
+		store_part(payload, static_cast<uint32_t>(offset), 8);
+		store_part(type_info,
+			static_cast<uint32_t>(offset + offsetof(zval, u1.type_info)), 4);
+		return true;
+	};
 	auto execute_value_operation_with = [&](ValuePart *frame_argument,
 			zend_native_runtime_helper_id helper, uint32_t source_opcode) {
 		/*
@@ -4985,6 +5038,14 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		const zend_mir_executable_value_ref &operation =
 			mir.value_operation;
+		if (!materialize_boxed_boundary_operand(
+				node.boxed_op1_boundary_operand_index,
+				operation.op1_storage_id)
+				|| !materialize_boxed_boundary_operand(
+					node.boxed_op2_boundary_operand_index,
+					operation.op2_storage_id)) {
+			return false;
+		}
 		const bool const_include_once =
 			helper == ZEND_NATIVE_HELPER_DYNAMIC_INCLUDE_OR_EVAL
 			&& operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
@@ -5190,12 +5251,21 @@ bool ZendCompilerX64::compile_inst_impl(
 			}
 			return true;
 		};
+		/* Boundary operands are published by execute_value_operation. */
+		auto materialize_cold_operand_unless_boundary = [&](
+				IRValueRef operand, zend_mir_storage_id storage,
+				uint32_t boundary_operand_index) {
+			return boundary_operand_index != UINT32_MAX
+				|| materialize_cold_operand(operand, storage);
+		};
 		if (record.opcode == ZEND_MIR_OPCODE_VALUE_BINARY_OP
 				&& node.operands.size() >= 2
-				&& (!materialize_cold_operand(node.operands[0],
-						mir.value_operation.op1_storage_id)
-					|| !materialize_cold_operand(node.operands[1],
-						mir.value_operation.op2_storage_id))) {
+				&& (!materialize_cold_operand_unless_boundary(node.operands[0],
+						mir.value_operation.op1_storage_id,
+						node.boxed_op1_boundary_operand_index)
+					|| !materialize_cold_operand_unless_boundary(node.operands[1],
+						mir.value_operation.op2_storage_id,
+						node.boxed_op2_boundary_operand_index))) {
 			return false;
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN_OP
@@ -5203,9 +5273,10 @@ bool ZendCompilerX64::compile_inst_impl(
 					< node.operands.size()
 				&& node.operands[node.assign_op_right_operand_index]
 					!= IRValueRef{Adaptor::FRAME_VALUE}
-				&& !materialize_cold_operand(
+				&& !materialize_cold_operand_unless_boundary(
 					node.operands[node.assign_op_right_operand_index],
-					mir.value_operation.op2_storage_id)) {
+					mir.value_operation.op2_storage_id,
+					node.boxed_op2_boundary_operand_index)) {
 			return false;
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN_OP
@@ -5213,9 +5284,10 @@ bool ZendCompilerX64::compile_inst_impl(
 					< node.operands.size()
 				&& node.operands[node.assign_op_left_operand_index]
 					!= IRValueRef{Adaptor::FRAME_VALUE}
-				&& !materialize_cold_operand(
+				&& !materialize_cold_operand_unless_boundary(
 					node.operands[node.assign_op_left_operand_index],
-					mir.value_operation.op1_storage_id)) {
+					mir.value_operation.op1_storage_id,
+					node.boxed_op1_boundary_operand_index)) {
 			return false;
 		}
 		if (node.continuation_block == UINT32_MAX
