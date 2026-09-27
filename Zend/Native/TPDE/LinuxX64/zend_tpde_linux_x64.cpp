@@ -123,9 +123,75 @@ public:
 		  image_symbols_(image->symbol_count),
 		  image_slots_(image->symbol_count) {}
 
+	/*
+	 * Direct calls into a component-local function check the C stack against
+	 * the callee's projected low-water mark, RSP - frame, instead of RSP
+	 * alone. The frame is known only once the callee is compiled, so the guard
+	 * encodes SUB with a 32-bit immediate and is patched then; callees
+	 * compiled later (forward calls, recursion) are patched when they finish.
+	 */
+	struct DirectCallStackGuardLabelPatch {
+		tpde::Label label;
+		uint32_t target_function;
+	};
+	struct DirectCallStackGuardOffsetPatch {
+		uint32_t offset;
+		uint32_t target_function;
+	};
+	std::vector<DirectCallStackGuardLabelPatch>
+		current_direct_call_stack_guard_patches_;
+	std::vector<DirectCallStackGuardOffsetPatch>
+		pending_direct_call_stack_guard_patches_;
+	std::vector<uint32_t> function_stack_frame_sizes_;
+
+	void emit_direct_call_stack_guard_position(
+			AsmReg destination, uint32_t target_function) {
+		ASM(MOV64rr, destination, FE_SP);
+		/* Any placeholder outside int8 selects the imm32 encoding. */
+		ASM(SUB64ri, destination, INT32_C(0x10000));
+		const auto patch_label = text_writer.label_create();
+		label_place(patch_label);
+		current_direct_call_stack_guard_patches_.push_back({
+			patch_label, target_function});
+	}
+
+	void patch_direct_call_stack_guard(uint32_t offset, uint32_t frame_size) {
+		ZEND_ASSERT(offset >= sizeof(int32_t));
+		ZEND_ASSERT(frame_size <= INT32_MAX);
+		const int32_t immediate = static_cast<int32_t>(frame_size);
+		std::memcpy(text_writer.begin_ptr() + offset - sizeof(int32_t),
+			&immediate, sizeof(immediate));
+	}
+
+	/* Bytes the function's machine frame occupies below the caller's RSP. */
+	uint32_t machine_frame_size() {
+		const uint64_t saved_registers = this->register_file.clobbered
+			& cur_cc_assigner()->get_ccinfo().callee_saved_regs;
+		const bool needs_stack_frame = this->stack.frame_used
+			|| this->stack.generated_call || this->stack.has_dynamic_alloca
+			|| saved_registers != 0;
+		const uint32_t return_address = sizeof(void *);
+		if (!needs_stack_frame) {
+			return return_address;
+		}
+		/* return address + saved RBP + saved registers and locals */
+		return return_address + sizeof(void *)
+			+ tpde::util::align_up(
+				this->stack.frame_size + this->max_callee_stack_arg_size, 16);
+	}
+
 	void reset() {
 		Base::reset();
 		EncodeBase::reset();
+		current_direct_call_stack_guard_patches_.clear();
+		pending_direct_call_stack_guard_patches_.clear();
+		function_stack_frame_sizes_.clear();
+	}
+
+	bool hook_post_func_sym_init() {
+		function_stack_frame_sizes_.assign(
+			this->func_syms.size(), UINT32_MAX);
+		return true;
 	}
 
 	tpde::SymRef runtime_symbol(zend_native_runtime_helper_id id) {
@@ -333,6 +399,7 @@ public:
 		(void) index;
 	}
 	void start_func(uint32_t index) {
+		ZEND_ASSERT(current_direct_call_stack_guard_patches_.empty());
 		generator_resume_labels_.clear();
 		generator_gateway_state_.clear();
 		user_opcode_labels_.clear();
@@ -372,7 +439,37 @@ public:
 			}
 			gen_func_epilog();
 		}
+		const uint32_t frame_size = machine_frame_size();
 		Base::finish_func(index);
+
+		for (const auto &patch : current_direct_call_stack_guard_patches_) {
+			const uint32_t offset = text_writer.label_offset(patch.label);
+			const uint32_t target_frame_size =
+				function_stack_frame_sizes_[patch.target_function];
+			if (target_frame_size == UINT32_MAX) {
+				pending_direct_call_stack_guard_patches_.push_back({
+					offset, patch.target_function});
+			} else {
+				patch_direct_call_stack_guard(offset, target_frame_size);
+			}
+		}
+		current_direct_call_stack_guard_patches_.clear();
+
+		ZEND_ASSERT(index < function_stack_frame_sizes_.size());
+		function_stack_frame_sizes_[index] = frame_size;
+		for (size_t patch_index = 0;
+				patch_index < pending_direct_call_stack_guard_patches_.size();) {
+			const auto &patch =
+				pending_direct_call_stack_guard_patches_[patch_index];
+			if (patch.target_function != index) {
+				++patch_index;
+				continue;
+			}
+			patch_direct_call_stack_guard(patch.offset, frame_size);
+			pending_direct_call_stack_guard_patches_.erase(
+				pending_direct_call_stack_guard_patches_.begin()
+					+ static_cast<std::ptrdiff_t>(patch_index));
+		}
 	}
 	void setup_var_ref_assignments() {
 		for (uint32_t index = 0;
@@ -12312,7 +12409,12 @@ bool ZendCompilerX64::compile_inst_impl(
 						generate_raw_jump(Jump::je, stack_guarded);
 						ASM(MOV64rm, first_reg,
 							FE_MEM(first_reg, 0, FE_NOREG, 0));
-						ASM(MOV64rr, second_reg, FE_SP);
+						if (local_component_call) {
+							emit_direct_call_stack_guard_position(
+								second_reg, call.component_target_index);
+						} else {
+							ASM(MOV64rr, second_reg, FE_SP);
+						}
 						ASM(CMP64rr, second_reg, first_reg);
 						generate_raw_jump(Jump::jbe, call_slow_target());
 						label_place(stack_guarded);
