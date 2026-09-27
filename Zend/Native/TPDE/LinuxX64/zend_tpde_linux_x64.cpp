@@ -8309,26 +8309,60 @@ bool ZendCompilerX64::compile_inst_impl(
 			const bool comparison = opcode == ZEND_IS_SMALLER
 				|| opcode == ZEND_IS_SMALLER_OR_EQUAL
 				|| opcode == ZEND_IS_EQUAL || opcode == ZEND_IS_NOT_EQUAL;
-			if (register_layout || (!arithmetic && !comparison)
+			if ((!arithmetic && !comparison)
 					|| node.kind != Adaptor::InstKind::GuardedFast
 					|| !mir.has_value_operation
 					|| operation.opcode != ZEND_MIR_OPCODE_VALUE_BINARY_OP) {
 				return -1;
 			}
-			for (IRValueRef operand : node.operands) {
-				if (operand != IRValueRef{Adaptor::FRAME_VALUE}
-						&& operand != IRValueRef{
-							Adaptor::EXECUTION_CONTEXT_ARGUMENT}) {
+			/*
+			 * Register operands, such as the boxed result of a preceding
+			 * numeric node, take this form only where the long-only register
+			 * form cannot: MUL and DIV, or any result that can hold a double
+			 * or a boolean.
+			 */
+			const bool register_operands = register_layout;
+			if (register_operands) {
+				const zend_tpde_machine_value_kind kind = node.has_result
+					? adaptor->machine_kind(node.result)
+					: ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
+				if (!(opcode == ZEND_MUL || opcode == ZEND_DIV
+						|| kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+						|| (comparison
+							&& kind == ZEND_TPDE_MACHINE_VALUE_BOOL))) {
 					return -1;
+				}
+				for (uint32_t index = 0; index < 2; ++index) {
+					const IRValueRef operand = node.operands[index];
+					if (!(adaptor->machine_kind(operand)
+								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+							&& val_parts(operand).count() == 2)
+							&& !(adaptor->machine_kind(operand)
+									== ZEND_TPDE_MACHINE_VALUE_I64
+								&& adaptor->exact_type(operand)
+									== ZEND_MIR_SCALAR_TYPE_I64)) {
+						return -1;
+					}
+				}
+			} else {
+				for (IRValueRef operand : node.operands) {
+					if (operand != IRValueRef{Adaptor::FRAME_VALUE}
+							&& operand != IRValueRef{
+								Adaptor::EXECUTION_CONTEXT_ARGUMENT}) {
+						return -1;
+					}
 				}
 			}
 			struct FramedOperand {
 				bool literal;
 				int32_t offset;
+				bool reg;
+				uint32_t index;
 			};
 			auto framed_operand = [&](const zend_mir_source_operand_ref &operand,
 					zend_mir_storage_id storage, FramedOperand *out) {
 				uint64_t offset;
+				out->reg = false;
 				if (operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
 					out->literal = true;
 					offset = uint64_t{operand.index} * sizeof(zval);
@@ -8352,10 +8386,13 @@ bool ZendCompilerX64::compile_inst_impl(
 				out->offset = static_cast<int32_t>(offset);
 				return true;
 			};
-			FramedOperand left{}, right{};
-			if (!framed_operand(operation.op1, operation.op1_storage_id, &left)
-					|| !framed_operand(
-						operation.op2, operation.op2_storage_id, &right)
+			FramedOperand left{false, 0, true, 0}, right{false, 0, true, 1};
+			if ((!register_operands
+						&& (!framed_operand(
+								operation.op1, operation.op1_storage_id, &left)
+							|| !framed_operand(
+								operation.op2, operation.op2_storage_id,
+								&right)))
 					|| (operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
 						&& operation.result.kind
 							!= ZEND_MIR_SOURCE_OPERAND_SSA)
@@ -8364,17 +8401,23 @@ bool ZendCompilerX64::compile_inst_impl(
 							!= ZEND_MIR_SOURCE_SLOT_VAR
 						&& operation.result.slot_kind
 							!= ZEND_MIR_SOURCE_SLOT_CV)
-					|| !zend_mir_id_is_valid(operation.result_storage_id)) {
+					|| (!register_operands
+						&& !zend_mir_id_is_valid(
+							operation.result_storage_id))) {
 				return -1;
 			}
+			const bool result_slot =
+				zend_mir_id_is_valid(operation.result_storage_id);
 			/* A CV result only replaces a non-refcounted value: OPcache
 			 * contracts ASSIGN into it only then, and an aliased input was
 			 * just checked to be numeric. A temporary never aliases input. */
-			const uint64_t result_offset64 =
-				(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
-				* sizeof(zval);
+			const uint64_t result_offset64 = result_slot
+				? (uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
+					* sizeof(zval)
+				: 0;
 			if (result_offset64 > INT32_MAX - sizeof(zval)
-					|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+					|| (!register_operands
+						&& operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
 						&& ((!left.literal && operation.op1_storage_id
 								== operation.result_storage_id)
 							|| (!right.literal && operation.op2_storage_id
@@ -8445,6 +8488,22 @@ bool ZendCompilerX64::compile_inst_impl(
 			}
 			auto load = [&](const FramedOperand &operand, AsmReg type_reg,
 					AsmReg value_reg) {
+				if (operand.reg) {
+					const IRValueRef source = node.operands[operand.index];
+					if (adaptor->machine_kind(source)
+							== ZEND_TPDE_MACHINE_VALUE_I64) {
+						auto [value_ref, value] = val_ref_single(source);
+						ASM(MOV64rr, value_reg, value.load_to_reg());
+						ASM(MOV32ri, type_reg, IS_LONG);
+					} else {
+						auto value = val_ref(source);
+						auto payload = value.part(0);
+						auto type_info = value.part(1);
+						ASM(MOV64rr, value_reg, payload.load_to_reg());
+						ASM(MOVZXr32r8, type_reg, type_info.load_to_reg());
+					}
+					return;
+				}
 				const AsmReg base = operand.literal ? literals_reg : frame_reg;
 				ASM(MOVZXr32m8, type_reg,
 					FE_MEM(base, 0, FE_NOREG, operand.offset
@@ -8570,12 +8629,14 @@ bool ZendCompilerX64::compile_inst_impl(
 			literals.reset();
 			left_double.reset();
 			right_double.reset();
-			ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG, result_offset),
-				left_reg);
-			ASM(MOV32mr,
-				FE_MEM(frame_reg, 0, FE_NOREG, result_offset
-					+ static_cast<int32_t>(offsetof(zval, u1.type_info))),
-				result_type_reg);
+			if (result_slot) {
+				ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG, result_offset),
+					left_reg);
+				ASM(MOV32mr,
+					FE_MEM(frame_reg, 0, FE_NOREG, result_offset
+						+ static_cast<int32_t>(offsetof(zval, u1.type_info))),
+					result_type_reg);
+			}
 			if (node.has_result) {
 				if (result_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 					auto fast_result = result_ref(node.result);
