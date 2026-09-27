@@ -11777,6 +11777,22 @@ bool ZendCompilerX64::compile_inst_impl(
 							tpde::x64::PlatformConfig::GP_BANK, 8};
 						callee_value.set_value(
 							this, std::move(fast_callee_argument_register));
+						/*
+						 * R11 carries the entry target. Release the dead frame
+						 * scratches first and move the cell out of R11 if the
+						 * allocator placed it there: claiming a fixed register
+						 * is invalid.
+						 */
+						frame_scratch.reset();
+						context_scratch.reset();
+						descriptor_scratch.reset();
+						if (cell_reg == tpde::x64::AsmReg{tpde::x64::AsmReg::R11}) {
+							ScratchReg moved_cell{this};
+							auto moved_cell_reg = moved_cell.alloc_gp();
+							mov(moved_cell_reg, cell_reg, 8);
+							cell_scratch = std::move(moved_cell);
+							cell_reg = moved_cell_reg;
+						}
 						ScratchReg entry_argument{this};
 						auto entry_argument_reg =
 							entry_argument.alloc_specific(
@@ -11793,10 +11809,7 @@ bool ZendCompilerX64::compile_inst_impl(
 							tpde::x64::PlatformConfig::GP_BANK, 8};
 						entry_value.set_value(
 							this, std::move(entry_argument));
-						frame_scratch.reset();
-						context_scratch.reset();
 						cell_scratch.reset();
-						descriptor_scratch.reset();
 						tpde::x64::CCAssignerSysV fast_assigner{false};
 						CallBuilder fast_builder{*this, fast_assigner};
 						fast_builder.add_arg(std::move(callee_value),
@@ -13056,6 +13069,12 @@ bool ZendCompilerX64::compile_inst_impl(
 								static_cast<int32_t>(
 									offsetof(zend_execute_data, call))));
 						receive_frame.reset();
+						if (received_callee_reg == tpde::x64::AsmReg{tpde::x64::AsmReg::R11}) {
+							ScratchReg moved_callee{this};
+							auto moved_callee_reg = moved_callee.alloc_gp();
+							mov(moved_callee_reg, received_callee_reg, 8);
+							received_callee = std::move(moved_callee);
+						}
 						published_code_reg = published_code.alloc_gp();
 						if (local_component_call) {
 							ASM(MOV64ri, published_code_reg, 0);
@@ -13095,6 +13114,18 @@ bool ZendCompilerX64::compile_inst_impl(
 						fast_builder.add_ret(
 							fast_status, tpde::CCAssignment{});
 					} else {
+						/* R11 carries the entry target; see the direct path above. */
+						frame_scratch.reset();
+						context_scratch.reset();
+						cell_scratch.reset();
+						descriptor_scratch.reset();
+						if (published_code_reg == tpde::x64::AsmReg{tpde::x64::AsmReg::R11}) {
+							ScratchReg moved_code{this};
+							auto moved_code_reg = moved_code.alloc_gp();
+							mov(moved_code_reg, published_code_reg, 8);
+							published_code = std::move(moved_code);
+							published_code_reg = moved_code_reg;
+						}
 						ScratchReg entry_argument{this};
 						auto entry_argument_reg =
 							entry_argument.alloc_specific(
@@ -13107,10 +13138,6 @@ bool ZendCompilerX64::compile_inst_impl(
 							tpde::x64::PlatformConfig::GP_BANK, 8};
 						entry_value.set_value(
 							this, std::move(entry_argument));
-						frame_scratch.reset();
-						context_scratch.reset();
-						cell_scratch.reset();
-						descriptor_scratch.reset();
 						published_code.reset();
 						tpde::x64::CCAssignerSysV fast_assigner{false};
 						CallBuilder fast_builder{*this, fast_assigner};
