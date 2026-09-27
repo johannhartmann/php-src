@@ -1323,6 +1323,27 @@ static bool zend_mir_w11_infer_scalar_facts(
 			return false;
 		}
 	}
+	/*
+	 * A W11 source carries no base facts: one pointer-typed variable would
+	 * defer the whole function's fact set. Take the exact long or double
+	 * type that Zend's type inference proved for each remaining SSA variable
+	 * instead. A boolean zval keeps its value in the type, not the payload.
+	 */
+	for (index = 0; index < (uint32_t) ssa->vars_count; index++) {
+		zend_mir_value_fact_ref fact;
+
+		if (integration->w11_inferred_fact_valid[index]
+				|| !zend_mir_frontend_fact_payload_for_ssa(
+					op_array, ssa, index, &fact)
+				|| (fact.exact_type != ZEND_MIR_SCALAR_TYPE_I64
+					&& fact.exact_type != ZEND_MIR_SCALAR_TYPE_F64)) {
+			continue;
+		}
+		(void) zend_mir_w11_set_inferred_fact(
+			integration, index, fact.exact_type, fact.flags,
+			fact.integer_min, fact.integer_max,
+			fact.provenance_source_position_id);
+	}
 	for (index = 0; index < op_array->last; index++) {
 		const zend_op *opline = &op_array->opcodes[index];
 		const zend_ssa_op *ssa_op = &ssa->ops[index];
