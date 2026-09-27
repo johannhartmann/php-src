@@ -846,12 +846,17 @@ static inline bool zend_tpde_array_read_at(
 				&& (!allow_temporary_key
 					|| (operation.op2.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
 						&& operation.op2.slot_kind
-							!= ZEND_MIR_SOURCE_SLOT_VAR)))
+							!= ZEND_MIR_SOURCE_SLOT_VAR
+						&& operation.op2.kind
+							!= ZEND_MIR_SOURCE_OPERAND_LITERAL)))
 			|| (operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
 				&& operation.op1_storage_id == ZEND_MIR_ID_INVALID)
 			|| (operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
 				&& operation.op1_storage_id != ZEND_MIR_ID_INVALID)
-			|| operation.op2_storage_id == ZEND_MIR_ID_INVALID
+			|| (operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+				&& operation.op2_storage_id == ZEND_MIR_ID_INVALID)
+			|| (operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+				&& operation.op2_storage_id != ZEND_MIR_ID_INVALID)
 			|| operation.result_storage_id == ZEND_MIR_ID_INVALID
 			|| (operation.op1_storage_id != ZEND_MIR_ID_INVALID
 				&& operation.op1_storage_id == operation.op2_storage_id)
@@ -867,8 +872,10 @@ static inline bool zend_tpde_array_read_at(
 		? 0
 		: (uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
 			* sizeof(zval);
-	key_offset =
-		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op2_storage_id)
+	/* A literal key has no frame slot; its fast path takes the key operand. */
+	key_offset = operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+		? 0
+		: (uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op2_storage_id)
 			* sizeof(zval);
 	result_offset =
 		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
@@ -1799,7 +1806,7 @@ struct zend_tpde_plan {
 	uint32_t observers_enabled_reference_index;
 	uint32_t *entry_undef_temporary_indices;
 	uint32_t entry_undef_temporary_count;
-	/* The target reads an array through an integer temporary key inline. */
+	/* The target reads an array inline through a temporary or literal key. */
 	bool temporary_integer_array_keys;
 	bool may_emit_calls;
 	bool zend_entry_may_emit_calls;

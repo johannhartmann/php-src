@@ -1,8 +1,8 @@
 --TEST--
-Native x64 array reads through temporary keys
+Native x64 array reads through temporary and literal keys
 --DESCRIPTION--
 x64 reads packed elements inline when the key is an integer temporary, such
-as $a[$i & 7]. String, float, null and bool temporaries, missing keys,
+as $a[$i & 7], or a literal key. String, float, null and bool temporaries, missing keys,
 references and non-array containers keep VM results through the helper.
 --EXTENSIONS--
 opcache
@@ -68,10 +68,16 @@ function nested(int $n) {
     }
     return $r;
 }
+function literal_keys(array $a, $v) {
+    $r = [$a[0] ?? 'u', @$a[1], $a['name'] ?? 'u', @$a['missing'], @$a[-3]];
+    $r[] = @$v[0];
+    return $r;
+}
 for ($round = 0; $round < 3; $round++) {
     var_dump(literal_int(20), cv_int(10, [1, 10, 100, 1000]));
     var_dump(string_key(['k1' => 'a', 'k3' => 'c'], 'k'));
     var_dump(odd_keys([-1 => 'm', 0 => 'z', 1 => 'o', 2 => 't', '' => 'e']));
+    var_dump(literal_keys([7, 'x', 'name' => 'n'], 'str'), literal_keys([], null));
     var_dump(missing_and_refs(4), not_an_array('xyz'), not_an_array(null), nested(5));
 }
 ?>
@@ -108,6 +114,34 @@ array(7) {
   [6]=>
   NULL
 }
+array(6) {
+  [0]=>
+  int(7)
+  [1]=>
+  string(1) "x"
+  [2]=>
+  string(1) "n"
+  [3]=>
+  NULL
+  [4]=>
+  NULL
+  [5]=>
+  string(1) "s"
+}
+array(6) {
+  [0]=>
+  string(1) "u"
+  [1]=>
+  NULL
+  [2]=>
+  string(1) "u"
+  [3]=>
+  NULL
+  [4]=>
+  NULL
+  [5]=>
+  NULL
+}
 array(4) {
   [0]=>
   int(10)
@@ -156,6 +190,34 @@ array(7) {
   [6]=>
   NULL
 }
+array(6) {
+  [0]=>
+  int(7)
+  [1]=>
+  string(1) "x"
+  [2]=>
+  string(1) "n"
+  [3]=>
+  NULL
+  [4]=>
+  NULL
+  [5]=>
+  string(1) "s"
+}
+array(6) {
+  [0]=>
+  string(1) "u"
+  [1]=>
+  NULL
+  [2]=>
+  string(1) "u"
+  [3]=>
+  NULL
+  [4]=>
+  NULL
+  [5]=>
+  NULL
+}
 array(4) {
   [0]=>
   int(10)
@@ -202,6 +264,34 @@ array(7) {
   [5]=>
   string(1) "t"
   [6]=>
+  NULL
+}
+array(6) {
+  [0]=>
+  int(7)
+  [1]=>
+  string(1) "x"
+  [2]=>
+  string(1) "n"
+  [3]=>
+  NULL
+  [4]=>
+  NULL
+  [5]=>
+  string(1) "s"
+}
+array(6) {
+  [0]=>
+  string(1) "u"
+  [1]=>
+  NULL
+  [2]=>
+  string(1) "u"
+  [3]=>
+  NULL
+  [4]=>
+  NULL
+  [5]=>
   NULL
 }
 array(4) {
