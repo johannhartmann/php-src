@@ -1360,6 +1360,70 @@ bool ZendCompilerX64::compile_inst_impl(
 	if (node.kind == Adaptor::InstKind::BoxedCondColdBranch) {
 		return compile_boxed_cond_cold_branch(instruction);
 	}
+	if (node.kind == Adaptor::InstKind::ScalarSelect) {
+		if (node.operands.size() != 3 || !node.has_result
+				|| adaptor->exact_type(node.operands[0])
+					!= ZEND_MIR_SCALAR_TYPE_I1
+				|| adaptor->machine_kind(node.operands[0])
+					!= ZEND_TPDE_MACHINE_VALUE_BOOL
+				|| adaptor->exact_type(node.operands[1])
+					!= adaptor->exact_type(node.result)
+				|| adaptor->exact_type(node.operands[2])
+					!= adaptor->exact_type(node.result)
+				|| adaptor->machine_kind(node.operands[1])
+					!= adaptor->machine_kind(node.result)
+				|| adaptor->machine_kind(node.operands[2])
+					!= adaptor->machine_kind(node.result)
+				|| (adaptor->machine_kind(node.result)
+						!= ZEND_TPDE_MACHINE_VALUE_I64
+					&& adaptor->machine_kind(node.result)
+						!= ZEND_TPDE_MACHINE_VALUE_BOOL)) {
+			return false;
+		}
+		auto [condition_ref, condition] = val_ref_single(node.operands[0]);
+		auto [true_ref, true_value] = val_ref_single(node.operands[1]);
+		auto [false_ref, false_value] = val_ref_single(node.operands[2]);
+		auto condition_reg = condition.load_to_reg();
+		auto true_reg = true_value.load_to_reg();
+		auto false_reg = false_value.load_to_reg();
+		auto [result_ref, result] = result_ref_single(node.result);
+		auto result_reg = result.alloc_reg();
+		/* result = condition ? true_value : false_value */
+		ASM(MOV64rr, result_reg, false_reg);
+		ASM(TEST64rr, condition_reg, condition_reg);
+		generate_raw_cmov(Jump::jne, result_reg, true_reg, true);
+		result.set_modified();
+		return true;
+	}
+	if (node.kind == Adaptor::InstKind::UnboxPointer) {
+		const zend_tpde_machine_value_kind result_kind =
+			adaptor->machine_kind(node.result);
+		if (node.operands.size() != 1 || !node.has_result
+				|| adaptor->machine_kind(node.operands[0])
+					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+				|| (result_kind != ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+					&& result_kind != ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+					&& result_kind != ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
+					&& result_kind != ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
+					&& result_kind != ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR)) {
+			return false;
+		}
+		auto source = val_ref(node.operands[0]);
+		const ValueParts parts = val_parts(node.operands[0]);
+		auto [result_ref, result] = result_ref_single(node.result);
+		for (uint32_t part = 0; part < parts.count(); ++part) {
+			if (parts.representation.parts[part].semantic_role
+					!= ZEND_TPDE_MACHINE_PART_PAYLOAD) {
+				continue;
+			}
+			auto payload = source.part(part);
+			auto payload_reg = payload.load_to_reg();
+			ASM(MOV64rr, result.alloc_reg(), payload_reg);
+			result.set_modified();
+			return true;
+		}
+		return false;
+	}
 	if (node.kind == Adaptor::InstKind::TypedCallGuard) {
 		if (node.operands.size() < 2
 				|| node.argument_index == UINT32_MAX
@@ -1378,15 +1442,135 @@ bool ZendCompilerX64::compile_inst_impl(
 				|| observer_reference->displacement > INT32_MAX) {
 			return false;
 		}
-		ASM(CMP8mi,
+		const IRBlockRef cold{node.argument_index};
+		const IRBlockRef hot{node.continuation_block};
+		const uint32_t unguarded_operand_offset =
+			2 + node.materialization_count;
+		if (unguarded_operand_offset > node.operands.size()) {
+			return false;
+		}
+		if (unguarded_operand_offset == node.operands.size()) {
+			ASM(CMP8mi,
+				FE_MEM(context.load_to_reg(), 0, FE_NOREG,
+					static_cast<int32_t>(
+						observer_reference->displacement)),
+				0);
+			generate_cond_branch(Jump::jne, cold, hot);
+			return true;
+		}
+		const uint32_t guarded_operand_offset =
+			3 + node.materialization_count;
+		if (node.operands[2] != IRValueRef{Adaptor::FRAME_VALUE}
+				|| guarded_operand_offset > node.operands.size()
+				|| (node.operands.size() - guarded_operand_offset) % 2 != 0) {
+			return false;
+		}
+		ScratchReg observed{this};
+		auto observed_reg = observed.alloc_gp();
+		ASM(MOVZXr32m8, observed_reg,
 			FE_MEM(context.load_to_reg(), 0, FE_NOREG,
-				static_cast<int32_t>(
-					observer_reference->displacement)),
-			0);
-		generate_cond_branch(
-			Jump::jne,
-			IRBlockRef{node.argument_index},
-			IRBlockRef{node.continuation_block});
+				static_cast<int32_t>(observer_reference->displacement)));
+
+		/*
+		 * A guarded boxed argument owns the copy produced by its fast read.
+		 * The typed hot call releases that copy after use.  If a runtime type
+		 * or observer guard selects the canonical cold call instead, transfer
+		 * the same ownership into the source frame slot consumed by that path.
+		 */
+		auto [frame_ref, frame] = val_ref_single(node.operands[2]);
+		auto frame_reg = frame.load_to_reg();
+		std::vector<ValueRef> guarded_values;
+		std::vector<AsmReg> guarded_payload_regs;
+		std::vector<AsmReg> guarded_type_regs;
+		std::vector<uint32_t> guarded_expected_types;
+		std::vector<int32_t> guarded_offsets;
+		const uint32_t guarded_count =
+			static_cast<uint32_t>(
+				(node.operands.size() - guarded_operand_offset) / 2);
+		guarded_values.reserve(guarded_count);
+		guarded_payload_regs.reserve(guarded_count);
+		guarded_type_regs.reserve(guarded_count);
+		guarded_expected_types.reserve(guarded_count);
+		guarded_offsets.reserve(guarded_count);
+		for (uint32_t operand = guarded_operand_offset;
+				operand < node.operands.size(); operand += 2) {
+			if (adaptor->machine_kind(node.operands[operand])
+					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+				return false;
+			}
+			uint64_t expected_type;
+			if (!adaptor->constant(
+					node.operands[operand + 1], &expected_type)
+					|| expected_type > UINT32_MAX) {
+				return false;
+			}
+			const zend_mir_storage_id storage_id =
+				adaptor->canonical_storage(node.operands[operand]);
+			const uint64_t offset =
+				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage_id) * sizeof(zval);
+			if (!zend_mir_id_is_valid(storage_id)
+					|| offset > INT32_MAX - sizeof(zval)) {
+				return false;
+			}
+			auto boxed = val_ref(node.operands[operand]);
+			const ValueParts parts = val_parts(node.operands[operand]);
+			int32_t payload_part = -1;
+			int32_t type_part = -1;
+			for (uint32_t part = 0; part < parts.count(); ++part) {
+				if (parts.representation.parts[part].semantic_role
+						== ZEND_TPDE_MACHINE_PART_PAYLOAD) {
+					payload_part = static_cast<int32_t>(part);
+				} else if (parts.representation.parts[part].semantic_role
+						== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
+					type_part = static_cast<int32_t>(part);
+				}
+			}
+			if (payload_part < 0 || type_part < 0) {
+				return false;
+			}
+			guarded_payload_regs.push_back(
+				boxed.part(static_cast<uint32_t>(payload_part)).load_to_reg());
+			guarded_type_regs.push_back(
+				boxed.part(static_cast<uint32_t>(type_part)).load_to_reg());
+			guarded_expected_types.push_back(
+				static_cast<uint32_t>(expected_type));
+			guarded_offsets.push_back(static_cast<int32_t>(offset));
+			guarded_values.push_back(std::move(boxed));
+		}
+		ScratchReg masked_type{this};
+		auto masked_type_reg = masked_type.alloc_gp();
+		auto cold_transfer = text_writer.label_create();
+		auto hot_branch = text_writer.label_create();
+		const auto spilled = spill_before_branch();
+		begin_branch_region();
+		ASM(TEST32rr, observed_reg, observed_reg);
+		generate_raw_jump(Jump::jne, cold_transfer);
+		for (uint32_t index = 0; index < guarded_count; ++index) {
+			ASM(MOV32rr, masked_type_reg, guarded_type_regs[index]);
+			ASM(AND32ri, masked_type_reg, Z_TYPE_MASK);
+			ASM(CMP32ri, masked_type_reg,
+				static_cast<int32_t>(guarded_expected_types[index]));
+			generate_raw_jump(Jump::jne, cold_transfer);
+		}
+		generate_raw_jump(Jump::jmp, hot_branch);
+
+		label_place(cold_transfer);
+		for (uint32_t index = 0; index < guarded_count; ++index) {
+			ASM(MOV64mr,
+				FE_MEM(frame_reg, 0, FE_NOREG, guarded_offsets[index]),
+				guarded_payload_regs[index]);
+			ASM(MOV32mr,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					guarded_offsets[index]
+						+ static_cast<int32_t>(offsetof(zval, u1.type_info))),
+				guarded_type_regs[index]);
+		}
+		generate_branch_to_block(
+			Jump::jmp, cold, branch_needs_split(cold), false);
+		label_place(hot_branch);
+		generate_branch_to_block(Jump::jmp, hot, false, true);
+		end_branch_region();
+		release_spilled_regs(spilled);
 		return true;
 	}
 	if (node.kind == Adaptor::InstKind::StringLengthValue) {
