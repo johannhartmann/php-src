@@ -38,4 +38,5 @@ printf(
 );
 ?>
 --EXPECT--
+Deprecated: Returning from a finally block is deprecated in w12-exception-cleanup.php on line 9
 accepted result=2 vm=0 execute_ex=0 handler=0
