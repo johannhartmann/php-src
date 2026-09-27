@@ -81,8 +81,10 @@ def rendered() -> str:
             suffix = (
                 ", [-DZEND_MIR_W06_TEST_FAULTS=1], [PHP_GLOBAL_OBJS]"
             )
+        elif macro.endswith("_X"):
+            suffix = ",, [PHP_GLOBAL_OBJS]"
         else:
-            suffix = ",, [PHP_GLOBAL_OBJS]" if macro.endswith("_X") else ""
+            suffix = ",\n    [$PHP_NATIVE_MIR_TEST_CFLAGS]"
         lines.append(
             f"  {macro}([{directory}], [{filename}]{suffix})"
         )
