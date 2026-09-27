@@ -1829,6 +1829,112 @@ bool call_site_participates_in_nested_call(
 	return false;
 }
 
+/*
+ * A nested call keeps VM-ordered INIT/SEND/DO fragments unless every call of
+ * its overlapping group can transfer its arguments at DO instead. A call
+ * qualifies when it statically targets a user function with by-value
+ * arguments whose slots nothing touches before its DO. An argument sent
+ * before an inner call completes must also be one that call cannot change,
+ * so not a reference. If the inner call throws, the exception cleanup
+ * releases the arguments already sent (see
+ * zend_native_cleanup_unfinished_exception()).
+ */
+bool nested_call_site_direct_candidate(
+	const zend_tpde_plan *plan, const zend_mir_call_view *calls,
+	const zend_native_call_binding *user_bindings,
+	const zend_op_array *op_array, const zend_ssa *ssa,
+	const zend_mir_call_site_ref &site)
+{
+	if (op_array == nullptr || ssa == nullptr || ssa->var_info == nullptr
+			|| ssa->ops == nullptr || op_array->function_name == nullptr
+			|| calls == nullptr || calls->call_target_at == nullptr
+			|| site.source_init_opline_index >= op_array->last
+			|| site.source_do_opline_index >= op_array->last
+			|| op_array->opcodes[site.source_init_opline_index].opcode
+				!= ZEND_INIT_FCALL
+			|| (op_array->opcodes[site.source_do_opline_index].opcode
+					!= ZEND_DO_UCALL
+				&& op_array->opcodes[site.source_do_opline_index].opcode
+					!= ZEND_DO_FCALL)
+			|| call_site_requires_source_fragments(plan, site)) {
+		return false;
+	}
+	const int32_t target_index = id_index_find(plan->call_target_index,
+		plan->call_target_index_capacity, site.target_id);
+	zend_mir_call_target_ref target{};
+	if (target_index < 0
+			|| !calls->call_target_at(calls->context,
+				static_cast<uint32_t>(target_index), &target)
+			|| target.kind != ZEND_MIR_CALL_TARGET_DIRECT_USER) {
+		return false;
+	}
+	const int32_t binding_index = id_index_find(plan->user_binding_index,
+		plan->user_binding_index_capacity, site.target_id);
+	const zend_function *callee = binding_index >= 0
+			&& user_bindings[binding_index].entry_cell != nullptr
+		? user_bindings[binding_index].entry_cell->function : nullptr;
+	if (callee == nullptr || callee->type != ZEND_USER_FUNCTION
+			|| site.arguments.count < callee->common.required_num_args) {
+		return false;
+	}
+	for (uint32_t n = 0; n < site.arguments.count; ++n) {
+		zend_mir_call_argument_ref argument{};
+		if (!zend_tpde_call_argument_at(
+				plan, site.arguments.offset + n, &argument)
+				|| argument.source_mode
+					!= ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE
+				|| argument.ownership
+					== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
+				|| argument.send_opline_index
+					>= site.source_do_opline_index
+				|| ARG_SHOULD_BE_SENT_BY_REF(callee, argument.ordinal + 1)) {
+			return false;
+		}
+		const zend_op *send = &op_array->opcodes[argument.send_opline_index];
+		if (send->opcode != ZEND_SEND_VAL && send->opcode != ZEND_SEND_VAR) {
+			return false;
+		}
+		if (argument.source_operand.kind
+				== ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+			continue;
+		}
+		if ((argument.source_operand.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+					&& argument.source_operand.kind
+						!= ZEND_MIR_SOURCE_OPERAND_SSA)
+				|| source_call_argument_may_be_undefined(
+					op_array, ssa, argument)
+				|| !source_call_argument_stable_after_send(
+					op_array, argument, site.source_do_opline_index)) {
+			return false;
+		}
+		bool before_inner_call = false;
+		for (uint32_t position = argument.send_opline_index + 1;
+				position < site.source_do_opline_index; ++position) {
+			const uint8_t opcode = op_array->opcodes[position].opcode;
+			if (opcode == ZEND_DO_FCALL || opcode == ZEND_DO_ICALL
+					|| opcode == ZEND_DO_UCALL
+					|| opcode == ZEND_DO_FCALL_BY_NAME
+					|| opcode == ZEND_CALLABLE_CONVERT
+					|| opcode == ZEND_CALLABLE_CONVERT_PARTIAL) {
+				before_inner_call = true;
+				break;
+			}
+		}
+		if (!before_inner_call) {
+			continue;
+		}
+		const int ssa_variable =
+			ssa->ops[argument.send_opline_index].op1_use;
+		if (ssa_variable < 0 || ssa_variable >= ssa->vars_count) {
+			return false;
+		}
+		if ((ssa->var_info[ssa_variable].type & MAY_BE_REF) != 0) {
+			return false;
+		}
+	}
+	return true;
+}
+
 zend_native_user_call_descriptor *build_user_call_descriptor(
 	zend_tpde_plan *plan,
 	const zend_op_array *source_op_array,
@@ -6595,6 +6701,61 @@ bool initialize_plan(
 		return std::binary_search(reference_assigned_storages.begin(),
 			reference_assigned_storages.end(), storage_id);
 	};
+	/*
+	 * Per call site: 1 when its group of overlapping calls may use direct
+	 * calls, 0 when it may not, -1 before the group is examined.
+	 */
+	std::vector<int8_t> nested_direct_groups;
+	auto nested_call_group_direct = [&](
+			const zend_mir_call_site_ref &site) {
+		const uint32_t site_count = calls->call_site_count(calls->context);
+		std::vector<zend_mir_call_site_ref> sites(site_count);
+		uint32_t site_index = UINT32_MAX;
+		for (uint32_t index = 0; index < site_count; ++index) {
+			if (!calls->call_site_at(calls->context, index, &sites[index])) {
+				return false;
+			}
+			if (sites[index].id == site.id) {
+				site_index = index;
+			}
+		}
+		if (site_index == UINT32_MAX) {
+			return false;
+		}
+		if (nested_direct_groups.empty()) {
+			nested_direct_groups.assign(site_count, -1);
+		}
+		if (nested_direct_groups[site_index] >= 0) {
+			return nested_direct_groups[site_index] == 1;
+		}
+		auto overlap = [&](uint32_t left, uint32_t right) {
+			const zend_mir_call_site_ref &a = sites[left];
+			const zend_mir_call_site_ref &b = sites[right];
+			return (a.source_init_opline_index > b.source_init_opline_index
+					&& a.source_do_opline_index < b.source_do_opline_index)
+				|| (b.source_init_opline_index > a.source_init_opline_index
+					&& b.source_do_opline_index < a.source_do_opline_index);
+		};
+		std::vector<uint32_t> group{site_index};
+		std::vector<uint8_t> in_group(site_count, 0);
+		in_group[site_index] = 1;
+		bool direct = true;
+		for (size_t next = 0; next < group.size(); ++next) {
+			direct = direct && nested_call_site_direct_candidate(plan, calls,
+				user_bindings, source_op_array, source_ssa,
+				sites[group[next]]);
+			for (uint32_t index = 0; index < site_count; ++index) {
+				if (!in_group[index] && overlap(group[next], index)) {
+					in_group[index] = 1;
+					group.push_back(index);
+				}
+			}
+		}
+		for (uint32_t member : group) {
+			nested_direct_groups[member] = direct ? 1 : 0;
+		}
+		return direct;
+	};
 	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
 		zend_mir_instruction_record record;
 		if (!view->instruction_at(view->context, i, &record)
@@ -7525,8 +7686,13 @@ bool initialize_plan(
 			const bool internal_under_arity_call =
 				record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL
 				&& site.arguments.count < target.required_num_args;
-			const bool nested_source_call =
+			bool nested_source_call =
 				call_site_participates_in_nested_call(calls, site);
+			if (nested_source_call && plan->linux_inline_forms) {
+				nested_source_call = !nested_call_group_direct(site);
+				plan->nested_direct_calls =
+					plan->nested_direct_calls || !nested_source_call;
+			}
 			const bool fragment_call =
 				internal_constructor_call
 				|| internal_static_method_call
@@ -11713,6 +11879,9 @@ static bool freeze_component_machine_plan(
 		}
 	}
 	std::vector<uint8_t> candidates(component_count, 1);
+	for (uint32_t index = 0; index < component_count; ++index) {
+		candidates[index] = plans[index].nested_direct_calls ? 0 : 1;
+	}
 	bool changed;
 	do {
 		changed = false;
