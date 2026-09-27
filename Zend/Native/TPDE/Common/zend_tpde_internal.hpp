@@ -1815,6 +1815,9 @@ struct zend_tpde_plan {
 	 * arguments.
 	 */
 	bool linux_inline_forms;
+	/* Overlapping calls transfer their arguments at DO (see
+	 * nested_call_site_direct_candidate()); no typed body. */
+	bool nested_direct_calls;
 	bool may_emit_calls;
 	bool zend_entry_may_emit_calls;
 	bool typed_body_may_emit_calls;
