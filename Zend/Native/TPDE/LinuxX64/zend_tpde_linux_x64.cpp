@@ -5536,6 +5536,45 @@ bool ZendCompilerX64::compile_inst_impl(
 		return_builder.add(std::move(status), tpde::CCAssignment{});
 		return_builder.ret_local_path();
 		label_place(continued);
+		/*
+		 * Some canonical W12 value operations, such as COUNT, execute only
+		 * through this helper path. When the adaptor selected a boxed machine
+		 * result for an optimized direct-call argument, snapshot the complete
+		 * result before OPcache reuses the temporary frame slot.
+		 */
+		if (node.kind != Adaptor::InstKind::GuardedCold && node.has_result
+				&& adaptor->machine_kind(node.result)
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+			const zend_mir_storage_id storage = node.mutation_result
+				? operation.op1_storage_id : operation.result_storage_id;
+			const uint64_t frame_offset =
+				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+			if (!zend_mir_id_is_valid(storage)
+					|| frame_offset > INT32_MAX - sizeof(zval)) {
+				return false;
+			}
+			auto result = result_ref(node.result);
+			const ValueParts parts = val_parts(node.result);
+			for (uint32_t part = 0; part < parts.count(); ++part) {
+				auto value = result.part(part);
+				auto value_reg = value.alloc_reg();
+				const zend_tpde_machine_part_role role =
+					parts.representation.parts[part].semantic_role;
+				if (role == ZEND_TPDE_MACHINE_PART_PAYLOAD) {
+					ASM(MOV64rm, value_reg,
+						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+							static_cast<int32_t>(frame_offset)));
+				} else if (role == ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
+					ASM(MOV32rm, value_reg,
+						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+							static_cast<int32_t>(frame_offset
+								+ offsetof(zval, u1.type_info))));
+				} else {
+					return false;
+				}
+				value.set_modified();
+			}
+		}
 		return true;
 	};
 	auto execute_value_operation = [&](ValuePart *frame_argument = nullptr) {
