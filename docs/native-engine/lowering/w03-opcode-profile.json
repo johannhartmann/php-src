@@ -59,9 +59,9 @@
           "symbol": "ZEND_NOP"
         },
         {
-          "end_line": 2729,
+          "end_line": 2755,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2729,
+          "start_line": 2755,
           "symbol": "ZEND_NOP"
         }
       ]
@@ -124,15 +124,15 @@
           "symbol": "ZEND_ADD"
         },
         {
-          "end_line": 1712,
+          "end_line": 1717,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1712,
+          "start_line": 1717,
           "symbol": "ZEND_ADD"
         },
         {
-          "end_line": 4551,
+          "end_line": 4562,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4551,
+          "start_line": 4562,
           "symbol": "ZEND_ADD"
         }
       ]
@@ -195,15 +195,15 @@
           "symbol": "ZEND_SUB"
         },
         {
-          "end_line": 1713,
+          "end_line": 1718,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1713,
+          "start_line": 1718,
           "symbol": "ZEND_SUB"
         },
         {
-          "end_line": 4552,
+          "end_line": 4563,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4552,
+          "start_line": 4563,
           "symbol": "ZEND_SUB"
         }
       ]
@@ -266,15 +266,15 @@
           "symbol": "ZEND_MUL"
         },
         {
-          "end_line": 1714,
+          "end_line": 1719,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1714,
+          "start_line": 1719,
           "symbol": "ZEND_MUL"
         },
         {
-          "end_line": 4553,
+          "end_line": 4564,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4553,
+          "start_line": 4564,
           "symbol": "ZEND_MUL"
         }
       ]
@@ -324,9 +324,9 @@
           "symbol": "ZEND_DIV"
         },
         {
-          "end_line": 1398,
+          "end_line": 1403,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1398,
+          "start_line": 1403,
           "symbol": "ZEND_DIV"
         }
       ]
@@ -394,15 +394,15 @@
           "symbol": "ZEND_MOD"
         },
         {
-          "end_line": 1668,
+          "end_line": 1673,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1668,
+          "start_line": 1673,
           "symbol": "ZEND_MOD"
         },
         {
-          "end_line": 4517,
+          "end_line": 4528,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4517,
+          "start_line": 4528,
           "symbol": "ZEND_MOD"
         }
       ]
@@ -463,15 +463,15 @@
           "symbol": "ZEND_SL"
         },
         {
-          "end_line": 1666,
+          "end_line": 1671,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1666,
+          "start_line": 1671,
           "symbol": "ZEND_SL"
         },
         {
-          "end_line": 4515,
+          "end_line": 4526,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4515,
+          "start_line": 4526,
           "symbol": "ZEND_SL"
         }
       ]
@@ -531,15 +531,15 @@
           "symbol": "ZEND_SR"
         },
         {
-          "end_line": 1667,
+          "end_line": 1672,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1667,
+          "start_line": 1672,
           "symbol": "ZEND_SR"
         },
         {
-          "end_line": 4516,
+          "end_line": 4527,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4516,
+          "start_line": 4527,
           "symbol": "ZEND_SR"
         }
       ]
@@ -591,15 +591,15 @@
           "symbol": "ZEND_CONCAT"
         },
         {
-          "end_line": 1776,
+          "end_line": 1781,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1776,
+          "start_line": 1781,
           "symbol": "ZEND_CONCAT"
         },
         {
-          "end_line": 4664,
+          "end_line": 4675,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4664,
+          "start_line": 4675,
           "symbol": "ZEND_CONCAT"
         }
       ]
@@ -658,15 +658,15 @@
           "symbol": "ZEND_BW_OR"
         },
         {
-          "end_line": 1663,
+          "end_line": 1668,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1663,
+          "start_line": 1668,
           "symbol": "ZEND_BW_OR"
         },
         {
-          "end_line": 4512,
+          "end_line": 4523,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4512,
+          "start_line": 4523,
           "symbol": "ZEND_BW_OR"
         }
       ]
@@ -725,15 +725,15 @@
           "symbol": "ZEND_BW_AND"
         },
         {
-          "end_line": 1664,
+          "end_line": 1669,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1664,
+          "start_line": 1669,
           "symbol": "ZEND_BW_AND"
         },
         {
-          "end_line": 4513,
+          "end_line": 4524,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4513,
+          "start_line": 4524,
           "symbol": "ZEND_BW_AND"
         }
       ]
@@ -792,15 +792,15 @@
           "symbol": "ZEND_BW_XOR"
         },
         {
-          "end_line": 1665,
+          "end_line": 1670,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1665,
+          "start_line": 1670,
           "symbol": "ZEND_BW_XOR"
         },
         {
-          "end_line": 4514,
+          "end_line": 4525,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4514,
+          "start_line": 4525,
           "symbol": "ZEND_BW_XOR"
         }
       ]
@@ -850,9 +850,9 @@
           "symbol": "ZEND_POW"
         },
         {
-          "end_line": 1397,
+          "end_line": 1402,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1397,
+          "start_line": 1402,
           "symbol": "ZEND_POW"
         }
       ]
@@ -964,15 +964,15 @@
           "symbol": "ZEND_BOOL_NOT"
         },
         {
-          "end_line": 2298,
+          "end_line": 2303,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2298,
+          "start_line": 2303,
           "symbol": "ZEND_BOOL_NOT"
         },
         {
-          "end_line": 5657,
+          "end_line": 5668,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5657,
+          "start_line": 5668,
           "symbol": "ZEND_BOOL_NOT"
         }
       ]
@@ -1087,15 +1087,15 @@
           "symbol": "ZEND_IS_IDENTICAL"
         },
         {
-          "end_line": 2202,
+          "end_line": 2207,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2202,
+          "start_line": 2207,
           "symbol": "ZEND_IS_IDENTICAL"
         },
         {
-          "end_line": 5479,
+          "end_line": 5490,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5479,
+          "start_line": 5490,
           "symbol": "ZEND_IS_IDENTICAL"
         }
       ]
@@ -1158,15 +1158,15 @@
           "symbol": "ZEND_IS_NOT_IDENTICAL"
         },
         {
-          "end_line": 2203,
+          "end_line": 2208,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2203,
+          "start_line": 2208,
           "symbol": "ZEND_IS_NOT_IDENTICAL"
         },
         {
-          "end_line": 5480,
+          "end_line": 5491,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5480,
+          "start_line": 5491,
           "symbol": "ZEND_IS_NOT_IDENTICAL"
         }
       ]
@@ -1234,15 +1234,15 @@
           "symbol": "ZEND_IS_EQUAL"
         },
         {
-          "end_line": 2164,
+          "end_line": 2169,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2164,
+          "start_line": 2169,
           "symbol": "ZEND_IS_EQUAL"
         },
         {
-          "end_line": 5429,
+          "end_line": 5440,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5429,
+          "start_line": 5440,
           "symbol": "ZEND_IS_EQUAL"
         }
       ]
@@ -1311,15 +1311,15 @@
           "symbol": "ZEND_IS_NOT_EQUAL"
         },
         {
-          "end_line": 2165,
+          "end_line": 2170,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2165,
+          "start_line": 2170,
           "symbol": "ZEND_IS_NOT_EQUAL"
         },
         {
-          "end_line": 5430,
+          "end_line": 5441,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5430,
+          "start_line": 5441,
           "symbol": "ZEND_IS_NOT_EQUAL"
         }
       ]
@@ -1381,15 +1381,15 @@
           "symbol": "ZEND_IS_SMALLER"
         },
         {
-          "end_line": 2166,
+          "end_line": 2171,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2166,
+          "start_line": 2171,
           "symbol": "ZEND_IS_SMALLER"
         },
         {
-          "end_line": 5431,
+          "end_line": 5442,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5431,
+          "start_line": 5442,
           "symbol": "ZEND_IS_SMALLER"
         }
       ]
@@ -1451,15 +1451,15 @@
           "symbol": "ZEND_IS_SMALLER_OR_EQUAL"
         },
         {
-          "end_line": 2167,
+          "end_line": 2172,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2167,
+          "start_line": 2172,
           "symbol": "ZEND_IS_SMALLER_OR_EQUAL"
         },
         {
-          "end_line": 5432,
+          "end_line": 5443,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5432,
+          "start_line": 5443,
           "symbol": "ZEND_IS_SMALLER_OR_EQUAL"
         }
       ]
@@ -1511,15 +1511,15 @@
           "symbol": "ZEND_ASSIGN"
         },
         {
-          "end_line": 2018,
+          "end_line": 2023,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2018,
+          "start_line": 2023,
           "symbol": "ZEND_ASSIGN"
         },
         {
-          "end_line": 5119,
+          "end_line": 5130,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5119,
+          "start_line": 5130,
           "symbol": "ZEND_ASSIGN"
         }
       ]
@@ -1574,15 +1574,15 @@
           "symbol": "ZEND_ASSIGN_DIM"
         },
         {
-          "end_line": 1855,
+          "end_line": 1860,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1855,
+          "start_line": 1860,
           "symbol": "ZEND_ASSIGN_DIM"
         },
         {
-          "end_line": 5062,
+          "end_line": 5073,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5062,
+          "start_line": 5073,
           "symbol": "ZEND_ASSIGN_DIM"
         }
       ]
@@ -1638,15 +1638,15 @@
           "symbol": "ZEND_ASSIGN_OBJ"
         },
         {
-          "end_line": 1972,
+          "end_line": 1977,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1972,
+          "start_line": 1977,
           "symbol": "ZEND_ASSIGN_OBJ"
         },
         {
-          "end_line": 4972,
+          "end_line": 4983,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4972,
+          "start_line": 4983,
           "symbol": "ZEND_ASSIGN_OBJ"
         }
       ]
@@ -1698,9 +1698,9 @@
           "symbol": "ZEND_ASSIGN_STATIC_PROP"
         },
         {
-          "end_line": 6787,
+          "end_line": 6798,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6787,
+          "start_line": 6798,
           "symbol": "ZEND_ASSIGN_STATIC_PROP"
         }
       ]
@@ -1753,15 +1753,15 @@
           "symbol": "ZEND_ASSIGN_OP"
         },
         {
-          "end_line": 1805,
+          "end_line": 1810,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1805,
+          "start_line": 1810,
           "symbol": "ZEND_ASSIGN_OP"
         },
         {
-          "end_line": 4691,
+          "end_line": 4702,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4691,
+          "start_line": 4702,
           "symbol": "ZEND_ASSIGN_OP"
         }
       ]
@@ -1816,15 +1816,15 @@
           "symbol": "ZEND_ASSIGN_DIM_OP"
         },
         {
-          "end_line": 1835,
+          "end_line": 1840,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1835,
+          "start_line": 1840,
           "symbol": "ZEND_ASSIGN_DIM_OP"
         },
         {
-          "end_line": 4734,
+          "end_line": 4745,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4734,
+          "start_line": 4745,
           "symbol": "ZEND_ASSIGN_DIM_OP"
         }
       ]
@@ -1877,15 +1877,15 @@
           "symbol": "ZEND_ASSIGN_OBJ_OP"
         },
         {
-          "end_line": 1921,
+          "end_line": 1926,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1921,
+          "start_line": 1926,
           "symbol": "ZEND_ASSIGN_OBJ_OP"
         },
         {
-          "end_line": 4876,
+          "end_line": 4887,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4876,
+          "start_line": 4887,
           "symbol": "ZEND_ASSIGN_OBJ_OP"
         }
       ]
@@ -1938,9 +1938,9 @@
           "symbol": "ZEND_ASSIGN_STATIC_PROP_OP"
         },
         {
-          "end_line": 6790,
+          "end_line": 6801,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6790,
+          "start_line": 6801,
           "symbol": "ZEND_ASSIGN_STATIC_PROP_OP"
         }
       ]
@@ -2042,15 +2042,15 @@
           "symbol": "ZEND_QM_ASSIGN"
         },
         {
-          "end_line": 2064,
+          "end_line": 2069,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2064,
+          "start_line": 2069,
           "symbol": "ZEND_QM_ASSIGN"
         },
         {
-          "end_line": 5238,
+          "end_line": 5249,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5238,
+          "start_line": 5249,
           "symbol": "ZEND_QM_ASSIGN"
         }
       ]
@@ -2102,9 +2102,9 @@
           "symbol": "ZEND_ASSIGN_OBJ_REF"
         },
         {
-          "end_line": 6791,
+          "end_line": 6802,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6791,
+          "start_line": 6802,
           "symbol": "ZEND_ASSIGN_OBJ_REF"
         }
       ]
@@ -2157,9 +2157,9 @@
           "symbol": "ZEND_ASSIGN_STATIC_PROP_REF"
         },
         {
-          "end_line": 6792,
+          "end_line": 6803,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6792,
+          "start_line": 6803,
           "symbol": "ZEND_ASSIGN_STATIC_PROP_REF"
         }
       ]
@@ -2214,15 +2214,15 @@
           "symbol": "ZEND_PRE_INC"
         },
         {
-          "end_line": 1619,
+          "end_line": 1624,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1619,
+          "start_line": 1624,
           "symbol": "ZEND_PRE_INC"
         },
         {
-          "end_line": 4450,
+          "end_line": 4461,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4450,
+          "start_line": 4461,
           "symbol": "ZEND_PRE_INC"
         }
       ]
@@ -2277,15 +2277,15 @@
           "symbol": "ZEND_PRE_DEC"
         },
         {
-          "end_line": 1620,
+          "end_line": 1625,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1620,
+          "start_line": 1625,
           "symbol": "ZEND_PRE_DEC"
         },
         {
-          "end_line": 4451,
+          "end_line": 4462,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4451,
+          "start_line": 4462,
           "symbol": "ZEND_PRE_DEC"
         }
       ]
@@ -2339,15 +2339,15 @@
           "symbol": "ZEND_POST_INC"
         },
         {
-          "end_line": 1621,
+          "end_line": 1626,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1621,
+          "start_line": 1626,
           "symbol": "ZEND_POST_INC"
         },
         {
-          "end_line": 4452,
+          "end_line": 4463,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4452,
+          "start_line": 4463,
           "symbol": "ZEND_POST_INC"
         }
       ]
@@ -2401,15 +2401,15 @@
           "symbol": "ZEND_POST_DEC"
         },
         {
-          "end_line": 1622,
+          "end_line": 1627,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1622,
+          "start_line": 1627,
           "symbol": "ZEND_POST_DEC"
         },
         {
-          "end_line": 4453,
+          "end_line": 4464,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4453,
+          "start_line": 4464,
           "symbol": "ZEND_POST_DEC"
         }
       ]
@@ -2669,9 +2669,9 @@
       },
       "source_refs": [
         {
-          "end_line": 4357,
+          "end_line": 4376,
           "path": "Zend/zend_execute.c",
-          "start_line": 4321,
+          "start_line": 4340,
           "symbol": "vm_interrupt"
         },
         {
@@ -2681,15 +2681,15 @@
           "symbol": "ZEND_JMPZ"
         },
         {
-          "end_line": 2307,
+          "end_line": 2312,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2307,
+          "start_line": 2312,
           "symbol": "ZEND_JMPZ"
         },
         {
-          "end_line": 5668,
+          "end_line": 5679,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5668,
+          "start_line": 5679,
           "symbol": "ZEND_JMPZ"
         }
       ]
@@ -2736,9 +2736,9 @@
       },
       "source_refs": [
         {
-          "end_line": 4357,
+          "end_line": 4376,
           "path": "Zend/zend_execute.c",
-          "start_line": 4321,
+          "start_line": 4340,
           "symbol": "vm_interrupt"
         },
         {
@@ -2748,15 +2748,15 @@
           "symbol": "ZEND_JMPNZ"
         },
         {
-          "end_line": 2308,
+          "end_line": 2313,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2308,
+          "start_line": 2313,
           "symbol": "ZEND_JMPNZ"
         },
         {
-          "end_line": 5669,
+          "end_line": 5680,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5669,
+          "start_line": 5680,
           "symbol": "ZEND_JMPNZ"
         }
       ]
@@ -2802,9 +2802,9 @@
       },
       "source_refs": [
         {
-          "end_line": 4357,
+          "end_line": 4376,
           "path": "Zend/zend_execute.c",
-          "start_line": 4321,
+          "start_line": 4340,
           "symbol": "vm_interrupt"
         },
         {
@@ -2814,15 +2814,15 @@
           "symbol": "ZEND_JMPZ_EX"
         },
         {
-          "end_line": 2318,
+          "end_line": 2323,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2318,
+          "start_line": 2323,
           "symbol": "ZEND_JMPZ_EX"
         },
         {
-          "end_line": 5670,
+          "end_line": 5681,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5670,
+          "start_line": 5681,
           "symbol": "ZEND_JMPZ_EX"
         }
       ]
@@ -2868,9 +2868,9 @@
       },
       "source_refs": [
         {
-          "end_line": 4357,
+          "end_line": 4376,
           "path": "Zend/zend_execute.c",
-          "start_line": 4321,
+          "start_line": 4340,
           "symbol": "vm_interrupt"
         },
         {
@@ -2880,15 +2880,15 @@
           "symbol": "ZEND_JMPNZ_EX"
         },
         {
-          "end_line": 2319,
+          "end_line": 2324,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2319,
+          "start_line": 2324,
           "symbol": "ZEND_JMPNZ_EX"
         },
         {
-          "end_line": 5671,
+          "end_line": 5682,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5671,
+          "start_line": 5682,
           "symbol": "ZEND_JMPNZ_EX"
         }
       ]
@@ -2945,15 +2945,15 @@
           "symbol": "ZEND_CASE"
         },
         {
-          "end_line": 2168,
+          "end_line": 2173,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2168,
+          "start_line": 2173,
           "symbol": "ZEND_CASE"
         },
         {
-          "end_line": 5433,
+          "end_line": 5444,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5433,
+          "start_line": 5444,
           "symbol": "ZEND_CASE"
         }
       ]
@@ -2989,9 +2989,9 @@
       },
       "source_refs": [
         {
-          "end_line": 9367,
+          "end_line": 9380,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9355,
+          "start_line": 9368,
           "symbol": "ZEND_CHECK_VAR"
         }
       ]
@@ -3046,15 +3046,15 @@
           "symbol": "ZEND_SEND_VAR_NO_REF_EX"
         },
         {
-          "end_line": 2114,
+          "end_line": 2119,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2114,
+          "start_line": 2119,
           "symbol": "ZEND_SEND_VAR_NO_REF_EX"
         },
         {
-          "end_line": 5339,
+          "end_line": 5350,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5339,
+          "start_line": 5350,
           "symbol": "ZEND_SEND_VAR_NO_REF_EX"
         }
       ]
@@ -3124,9 +3124,9 @@
           "symbol": "ZEND_CAST"
         },
         {
-          "end_line": 5233,
+          "end_line": 5244,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5233,
+          "start_line": 5244,
           "symbol": "ZEND_CAST"
         }
       ]
@@ -3185,15 +3185,15 @@
           "symbol": "ZEND_BOOL"
         },
         {
-          "end_line": 2297,
+          "end_line": 2302,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2297,
+          "start_line": 2302,
           "symbol": "ZEND_BOOL"
         },
         {
-          "end_line": 5656,
+          "end_line": 5667,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5656,
+          "start_line": 5667,
           "symbol": "ZEND_BOOL"
         }
       ]
@@ -3247,15 +3247,15 @@
           "symbol": "ZEND_FAST_CONCAT"
         },
         {
-          "end_line": 1777,
+          "end_line": 1782,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1777,
+          "start_line": 1782,
           "symbol": "ZEND_FAST_CONCAT"
         },
         {
-          "end_line": 4665,
+          "end_line": 4676,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4665,
+          "start_line": 4676,
           "symbol": "ZEND_FAST_CONCAT"
         }
       ]
@@ -3307,15 +3307,15 @@
           "symbol": "ZEND_ROPE_INIT"
         },
         {
-          "end_line": 2683,
+          "end_line": 2709,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2683,
+          "start_line": 2709,
           "symbol": "ZEND_ROPE_INIT"
         },
         {
-          "end_line": 6464,
+          "end_line": 6475,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6464,
+          "start_line": 6475,
           "symbol": "ZEND_ROPE_INIT"
         }
       ]
@@ -3367,15 +3367,15 @@
           "symbol": "ZEND_ROPE_ADD"
         },
         {
-          "end_line": 2684,
+          "end_line": 2710,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2684,
+          "start_line": 2710,
           "symbol": "ZEND_ROPE_ADD"
         },
         {
-          "end_line": 6465,
+          "end_line": 6476,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6465,
+          "start_line": 6476,
           "symbol": "ZEND_ROPE_ADD"
         }
       ]
@@ -3428,15 +3428,15 @@
           "symbol": "ZEND_ROPE_END"
         },
         {
-          "end_line": 2685,
+          "end_line": 2711,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2685,
+          "start_line": 2711,
           "symbol": "ZEND_ROPE_END"
         },
         {
-          "end_line": 6466,
+          "end_line": 6477,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6466,
+          "start_line": 6477,
           "symbol": "ZEND_ROPE_END"
         }
       ]
@@ -3475,9 +3475,9 @@
           "symbol": "ZEND_BEGIN_SILENCE"
         },
         {
-          "end_line": 3741,
+          "end_line": 3781,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 3741,
+          "start_line": 3781,
           "symbol": "ZEND_BEGIN_SILENCE"
         }
       ]
@@ -3515,9 +3515,9 @@
           "symbol": "ZEND_END_SILENCE"
         },
         {
-          "end_line": 3742,
+          "end_line": 3782,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 3742,
+          "start_line": 3782,
           "symbol": "ZEND_END_SILENCE"
         }
       ]
@@ -3568,15 +3568,15 @@
           "symbol": "ZEND_INIT_FCALL_BY_NAME"
         },
         {
-          "end_line": 2080,
+          "end_line": 2085,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2080,
+          "start_line": 2085,
           "symbol": "ZEND_INIT_FCALL_BY_NAME"
         },
         {
-          "end_line": 5287,
+          "end_line": 5298,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5287,
+          "start_line": 5298,
           "symbol": "ZEND_INIT_FCALL_BY_NAME"
         }
       ]
@@ -3627,9 +3627,9 @@
       },
       "source_refs": [
         {
-          "end_line": 4357,
+          "end_line": 4376,
           "path": "Zend/zend_execute.c",
-          "start_line": 4321,
+          "start_line": 4340,
           "symbol": "vm_interrupt"
         },
         {
@@ -3639,15 +3639,15 @@
           "symbol": "ZEND_DO_FCALL"
         },
         {
-          "end_line": 2159,
+          "end_line": 2164,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2159,
+          "start_line": 2164,
           "symbol": "ZEND_DO_FCALL"
         },
         {
-          "end_line": 5424,
+          "end_line": 5435,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5424,
+          "start_line": 5435,
           "symbol": "ZEND_DO_FCALL"
         }
       ]
@@ -3690,15 +3690,15 @@
           "symbol": "ZEND_INIT_FCALL"
         },
         {
-          "end_line": 2079,
+          "end_line": 2084,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2079,
+          "start_line": 2084,
           "symbol": "ZEND_INIT_FCALL"
         },
         {
-          "end_line": 5286,
+          "end_line": 5297,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5286,
+          "start_line": 5297,
           "symbol": "ZEND_INIT_FCALL"
         }
       ]
@@ -3773,15 +3773,15 @@
           "symbol": "ZEND_RETURN"
         },
         {
-          "end_line": 2279,
+          "end_line": 2284,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2279,
+          "start_line": 2284,
           "symbol": "ZEND_RETURN"
         },
         {
-          "end_line": 5578,
+          "end_line": 5589,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5578,
+          "start_line": 5589,
           "symbol": "ZEND_RETURN"
         }
       ]
@@ -3836,15 +3836,15 @@
           "symbol": "ZEND_RECV"
         },
         {
-          "end_line": 2520,
+          "end_line": 2546,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2520,
+          "start_line": 2546,
           "symbol": "ZEND_RECV"
         },
         {
-          "end_line": 6185,
+          "end_line": 6196,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6185,
+          "start_line": 6196,
           "symbol": "ZEND_RECV"
         }
       ]
@@ -3898,15 +3898,15 @@
           "symbol": "ZEND_RECV_INIT"
         },
         {
-          "end_line": 2525,
+          "end_line": 2551,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2525,
+          "start_line": 2551,
           "symbol": "ZEND_RECV_INIT"
         },
         {
-          "end_line": 6190,
+          "end_line": 6201,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6190,
+          "start_line": 6201,
           "symbol": "ZEND_RECV_INIT"
         }
       ]
@@ -3959,15 +3959,15 @@
           "symbol": "ZEND_SEND_VAL"
         },
         {
-          "end_line": 2086,
+          "end_line": 2091,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2086,
+          "start_line": 2091,
           "symbol": "ZEND_SEND_VAL"
         },
         {
-          "end_line": 5294,
+          "end_line": 5305,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5294,
+          "start_line": 5305,
           "symbol": "ZEND_SEND_VAL"
         }
       ]
@@ -4021,15 +4021,15 @@
           "symbol": "ZEND_SEND_VAR_EX"
         },
         {
-          "end_line": 2112,
+          "end_line": 2117,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2112,
+          "start_line": 2117,
           "symbol": "ZEND_SEND_VAR_EX"
         },
         {
-          "end_line": 5337,
+          "end_line": 5348,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5337,
+          "start_line": 5348,
           "symbol": "ZEND_SEND_VAR_EX"
         }
       ]
@@ -4081,15 +4081,15 @@
           "symbol": "ZEND_SEND_REF"
         },
         {
-          "end_line": 2101,
+          "end_line": 2106,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2101,
+          "start_line": 2106,
           "symbol": "ZEND_SEND_REF"
         },
         {
-          "end_line": 5321,
+          "end_line": 5332,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5321,
+          "start_line": 5332,
           "symbol": "ZEND_SEND_REF"
         }
       ]
@@ -4192,15 +4192,15 @@
           "symbol": "ZEND_INIT_NS_FCALL_BY_NAME"
         },
         {
-          "end_line": 2081,
+          "end_line": 2086,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2081,
+          "start_line": 2086,
           "symbol": "ZEND_INIT_NS_FCALL_BY_NAME"
         },
         {
-          "end_line": 5288,
+          "end_line": 5299,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5288,
+          "start_line": 5299,
           "symbol": "ZEND_INIT_NS_FCALL_BY_NAME"
         }
       ]
@@ -4259,15 +4259,15 @@
           "symbol": "ZEND_FREE"
         },
         {
-          "end_line": 2532,
+          "end_line": 2558,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2532,
+          "start_line": 2558,
           "symbol": "ZEND_FREE"
         },
         {
-          "end_line": 6209,
+          "end_line": 6220,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6209,
+          "start_line": 6220,
           "symbol": "ZEND_FREE"
         }
       ]
@@ -4431,9 +4431,9 @@
           "symbol": "ZEND_INCLUDE_OR_EVAL"
         },
         {
-          "end_line": 2783,
+          "end_line": 2809,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2783,
+          "start_line": 2809,
           "symbol": "ZEND_INCLUDE_OR_EVAL"
         }
       ]
@@ -4484,9 +4484,9 @@
           "symbol": "ZEND_UNSET_VAR"
         },
         {
-          "end_line": 1384,
+          "end_line": 1393,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 1384,
+          "start_line": 1393,
           "symbol": "ZEND_UNSET_VAR"
         }
       ]
@@ -4540,9 +4540,9 @@
           "symbol": "ZEND_UNSET_DIM"
         },
         {
-          "end_line": 939,
+          "end_line": 948,
           "path": "ext/opcache/jit/zend_jit_vm_helpers.c",
-          "start_line": 939,
+          "start_line": 948,
           "symbol": "ZEND_UNSET_DIM"
         }
       ]
@@ -4595,9 +4595,9 @@
           "symbol": "ZEND_UNSET_OBJ"
         },
         {
-          "end_line": 1000,
+          "end_line": 1009,
           "path": "ext/opcache/jit/zend_jit_vm_helpers.c",
-          "start_line": 1000,
+          "start_line": 1009,
           "symbol": "ZEND_UNSET_OBJ"
         }
       ]
@@ -4649,9 +4649,9 @@
       },
       "source_refs": [
         {
-          "end_line": 4357,
+          "end_line": 4376,
           "path": "Zend/zend_execute.c",
-          "start_line": 4321,
+          "start_line": 4340,
           "symbol": "vm_interrupt"
         },
         {
@@ -4661,15 +4661,15 @@
           "symbol": "ZEND_FE_RESET_R"
         },
         {
-          "end_line": 2599,
+          "end_line": 2625,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2599,
+          "start_line": 2625,
           "symbol": "ZEND_FE_RESET_R"
         },
         {
-          "end_line": 6313,
+          "end_line": 6324,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6313,
+          "start_line": 6324,
           "symbol": "ZEND_FE_RESET_R"
         }
       ]
@@ -4722,15 +4722,15 @@
           "symbol": "ZEND_FE_FETCH_R"
         },
         {
-          "end_line": 2608,
+          "end_line": 2634,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2608,
+          "start_line": 2634,
           "symbol": "ZEND_FE_FETCH_R"
         },
         {
-          "end_line": 6323,
+          "end_line": 6334,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6323,
+          "start_line": 6334,
           "symbol": "ZEND_FE_FETCH_R"
         }
       ]
@@ -4785,9 +4785,9 @@
           "symbol": "ZEND_FETCH_R"
         },
         {
-          "end_line": 1378,
+          "end_line": 1387,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 1378,
+          "start_line": 1387,
           "symbol": "ZEND_FETCH_R"
         }
       ]
@@ -4841,15 +4841,15 @@
           "symbol": "ZEND_FETCH_DIM_R"
         },
         {
-          "end_line": 2388,
+          "end_line": 2393,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2388,
+          "start_line": 2393,
           "symbol": "ZEND_FETCH_DIM_R"
         },
         {
-          "end_line": 5843,
+          "end_line": 5854,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5843,
+          "start_line": 5854,
           "symbol": "ZEND_FETCH_DIM_R"
         }
       ]
@@ -4907,15 +4907,15 @@
           "symbol": "ZEND_FETCH_OBJ_R"
         },
         {
-          "end_line": 2450,
+          "end_line": 2456,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2450,
+          "start_line": 2456,
           "symbol": "ZEND_FETCH_OBJ_R"
         },
         {
-          "end_line": 6050,
+          "end_line": 6061,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6050,
+          "start_line": 6061,
           "symbol": "ZEND_FETCH_OBJ_R"
         }
       ]
@@ -4970,9 +4970,9 @@
           "symbol": "ZEND_FETCH_W"
         },
         {
-          "end_line": 1379,
+          "end_line": 1388,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 1379,
+          "start_line": 1388,
           "symbol": "ZEND_FETCH_W"
         }
       ]
@@ -5023,15 +5023,15 @@
           "symbol": "ZEND_FETCH_DIM_W"
         },
         {
-          "end_line": 2401,
+          "end_line": 2406,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2401,
+          "start_line": 2406,
           "symbol": "ZEND_FETCH_DIM_W"
         },
         {
-          "end_line": 5900,
+          "end_line": 5911,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5900,
+          "start_line": 5911,
           "symbol": "ZEND_FETCH_DIM_W"
         }
       ]
@@ -5082,15 +5082,15 @@
           "symbol": "ZEND_FETCH_OBJ_W"
         },
         {
-          "end_line": 2452,
+          "end_line": 2458,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2452,
+          "start_line": 2458,
           "symbol": "ZEND_FETCH_OBJ_W"
         },
         {
-          "end_line": 6052,
+          "end_line": 6063,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6052,
+          "start_line": 6063,
           "symbol": "ZEND_FETCH_OBJ_W"
         }
       ]
@@ -5145,9 +5145,9 @@
           "symbol": "ZEND_FETCH_RW"
         },
         {
-          "end_line": 1380,
+          "end_line": 1389,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 1380,
+          "start_line": 1389,
           "symbol": "ZEND_FETCH_RW"
         }
       ]
@@ -5198,15 +5198,15 @@
           "symbol": "ZEND_FETCH_DIM_RW"
         },
         {
-          "end_line": 2402,
+          "end_line": 2407,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2402,
+          "start_line": 2407,
           "symbol": "ZEND_FETCH_DIM_RW"
         },
         {
-          "end_line": 5901,
+          "end_line": 5912,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5901,
+          "start_line": 5912,
           "symbol": "ZEND_FETCH_DIM_RW"
         }
       ]
@@ -5257,9 +5257,9 @@
           "symbol": "ZEND_FETCH_OBJ_RW"
         },
         {
-          "end_line": 994,
+          "end_line": 1003,
           "path": "ext/opcache/jit/zend_jit_vm_helpers.c",
-          "start_line": 994,
+          "start_line": 1003,
           "symbol": "ZEND_FETCH_OBJ_RW"
         }
       ]
@@ -5314,9 +5314,9 @@
           "symbol": "ZEND_FETCH_IS"
         },
         {
-          "end_line": 1382,
+          "end_line": 1391,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 1382,
+          "start_line": 1391,
           "symbol": "ZEND_FETCH_IS"
         }
       ]
@@ -5368,15 +5368,15 @@
           "symbol": "ZEND_FETCH_DIM_IS"
         },
         {
-          "end_line": 2389,
+          "end_line": 2394,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2389,
+          "start_line": 2394,
           "symbol": "ZEND_FETCH_DIM_IS"
         },
         {
-          "end_line": 5844,
+          "end_line": 5855,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5844,
+          "start_line": 5855,
           "symbol": "ZEND_FETCH_DIM_IS"
         }
       ]
@@ -5431,15 +5431,15 @@
           "symbol": "ZEND_FETCH_OBJ_IS"
         },
         {
-          "end_line": 2451,
+          "end_line": 2457,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2451,
+          "start_line": 2457,
           "symbol": "ZEND_FETCH_OBJ_IS"
         },
         {
-          "end_line": 6051,
+          "end_line": 6062,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6051,
+          "start_line": 6062,
           "symbol": "ZEND_FETCH_OBJ_IS"
         }
       ]
@@ -5494,9 +5494,9 @@
           "symbol": "ZEND_FETCH_FUNC_ARG"
         },
         {
-          "end_line": 1381,
+          "end_line": 1390,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 1381,
+          "start_line": 1390,
           "symbol": "ZEND_FETCH_FUNC_ARG"
         }
       ]
@@ -5574,9 +5574,9 @@
           "symbol": "ZEND_FETCH_DIM_FUNC_ARG"
         },
         {
-          "end_line": 5835,
+          "end_line": 5846,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5835,
+          "start_line": 5846,
           "symbol": "ZEND_FETCH_DIM_FUNC_ARG"
         }
       ]
@@ -5652,9 +5652,9 @@
           "symbol": "ZEND_FETCH_OBJ_FUNC_ARG"
         },
         {
-          "end_line": 6037,
+          "end_line": 6048,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6037,
+          "start_line": 6048,
           "symbol": "ZEND_FETCH_OBJ_FUNC_ARG"
         }
       ]
@@ -5709,9 +5709,9 @@
           "symbol": "ZEND_FETCH_UNSET"
         },
         {
-          "end_line": 1383,
+          "end_line": 1392,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 1383,
+          "start_line": 1392,
           "symbol": "ZEND_FETCH_UNSET"
         }
       ]
@@ -5762,9 +5762,9 @@
           "symbol": "ZEND_FETCH_DIM_UNSET"
         },
         {
-          "end_line": 13066,
+          "end_line": 13110,
           "path": "ext/opcache/jit/zend_jit_ir.c",
-          "start_line": 13066,
+          "start_line": 13110,
           "symbol": "ZEND_FETCH_DIM_UNSET"
         }
       ]
@@ -5815,9 +5815,9 @@
           "symbol": "ZEND_FETCH_OBJ_UNSET"
         },
         {
-          "end_line": 996,
+          "end_line": 1005,
           "path": "ext/opcache/jit/zend_jit_vm_helpers.c",
-          "start_line": 996,
+          "start_line": 1005,
           "symbol": "ZEND_FETCH_OBJ_UNSET"
         }
       ]
@@ -5868,15 +5868,15 @@
           "symbol": "ZEND_FETCH_LIST_R"
         },
         {
-          "end_line": 2390,
+          "end_line": 2395,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2390,
+          "start_line": 2395,
           "symbol": "ZEND_FETCH_LIST_R"
         },
         {
-          "end_line": 5845,
+          "end_line": 5856,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5845,
+          "start_line": 5856,
           "symbol": "ZEND_FETCH_LIST_R"
         }
       ]
@@ -5920,15 +5920,15 @@
           "symbol": "ZEND_FETCH_CONSTANT"
         },
         {
-          "end_line": 2618,
+          "end_line": 2644,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2618,
+          "start_line": 2644,
           "symbol": "ZEND_FETCH_CONSTANT"
         },
         {
-          "end_line": 6356,
+          "end_line": 6367,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6356,
+          "start_line": 6367,
           "symbol": "ZEND_FETCH_CONSTANT"
         }
       ]
@@ -5967,15 +5967,15 @@
           "symbol": "ZEND_CHECK_FUNC_ARG"
         },
         {
-          "end_line": 2138,
+          "end_line": 2143,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2138,
+          "start_line": 2143,
           "symbol": "ZEND_CHECK_FUNC_ARG"
         },
         {
-          "end_line": 5396,
+          "end_line": 5407,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5396,
+          "start_line": 5407,
           "symbol": "ZEND_CHECK_FUNC_ARG"
         }
       ]
@@ -6222,15 +6222,15 @@
           "symbol": "ZEND_SEND_VAR_NO_REF"
         },
         {
-          "end_line": 2113,
+          "end_line": 2118,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2113,
+          "start_line": 2118,
           "symbol": "ZEND_SEND_VAR_NO_REF"
         },
         {
-          "end_line": 5338,
+          "end_line": 5349,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5338,
+          "start_line": 5349,
           "symbol": "ZEND_SEND_VAR_NO_REF"
         }
       ]
@@ -6336,9 +6336,9 @@
           "symbol": "ZEND_THROW"
         },
         {
-          "end_line": 2761,
+          "end_line": 2787,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2761,
+          "start_line": 2787,
           "symbol": "ZEND_THROW"
         }
       ]
@@ -6499,9 +6499,9 @@
           "symbol": "ZEND_RETURN_BY_REF"
         },
         {
-          "end_line": 2755,
+          "end_line": 2781,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2755,
+          "start_line": 2781,
           "symbol": "ZEND_RETURN_BY_REF"
         }
       ]
@@ -6555,15 +6555,15 @@
           "symbol": "ZEND_INIT_METHOD_CALL"
         },
         {
-          "end_line": 2628,
+          "end_line": 2654,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2628,
+          "start_line": 2654,
           "symbol": "ZEND_INIT_METHOD_CALL"
         },
         {
-          "end_line": 6361,
+          "end_line": 6372,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6361,
+          "start_line": 6372,
           "symbol": "ZEND_INIT_METHOD_CALL"
         }
       ]
@@ -6616,15 +6616,15 @@
           "symbol": "ZEND_INIT_STATIC_METHOD_CALL"
         },
         {
-          "end_line": 2670,
+          "end_line": 2696,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2670,
+          "start_line": 2696,
           "symbol": "ZEND_INIT_STATIC_METHOD_CALL"
         },
         {
-          "end_line": 6431,
+          "end_line": 6442,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6431,
+          "start_line": 6442,
           "symbol": "ZEND_INIT_STATIC_METHOD_CALL"
         }
       ]
@@ -6676,9 +6676,9 @@
           "symbol": "ZEND_ISSET_ISEMPTY_VAR"
         },
         {
-          "end_line": 286,
+          "end_line": 291,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 286,
+          "start_line": 291,
           "symbol": "ZEND_ISSET_ISEMPTY_VAR"
         }
       ]
@@ -6730,15 +6730,15 @@
           "symbol": "ZEND_ISSET_ISEMPTY_DIM_OBJ"
         },
         {
-          "end_line": 2419,
+          "end_line": 2424,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2419,
+          "start_line": 2424,
           "symbol": "ZEND_ISSET_ISEMPTY_DIM_OBJ"
         },
         {
-          "end_line": 5952,
+          "end_line": 5963,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5952,
+          "start_line": 5963,
           "symbol": "ZEND_ISSET_ISEMPTY_DIM_OBJ"
         }
       ]
@@ -6797,15 +6797,15 @@
           "symbol": "ZEND_SEND_VAL_EX"
         },
         {
-          "end_line": 2087,
+          "end_line": 2092,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2087,
+          "start_line": 2092,
           "symbol": "ZEND_SEND_VAL_EX"
         },
         {
-          "end_line": 5295,
+          "end_line": 5306,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5295,
+          "start_line": 5306,
           "symbol": "ZEND_SEND_VAL_EX"
         }
       ]
@@ -6859,15 +6859,15 @@
           "symbol": "ZEND_SEND_VAR"
         },
         {
-          "end_line": 2111,
+          "end_line": 2116,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2111,
+          "start_line": 2116,
           "symbol": "ZEND_SEND_VAR"
         },
         {
-          "end_line": 5336,
+          "end_line": 5347,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5336,
+          "start_line": 5347,
           "symbol": "ZEND_SEND_VAR"
         }
       ]
@@ -6977,9 +6977,9 @@
           "symbol": "ZEND_SEND_ARRAY"
         },
         {
-          "end_line": 6457,
+          "end_line": 6468,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6457,
+          "start_line": 6468,
           "symbol": "ZEND_SEND_ARRAY"
         }
       ]
@@ -7082,21 +7082,21 @@
       },
       "source_refs": [
         {
-          "end_line": 8889,
+          "end_line": 8902,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 8828,
+          "start_line": 8841,
           "symbol": "ZEND_STRLEN"
         },
         {
-          "end_line": 2548,
+          "end_line": 2574,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2548,
+          "start_line": 2574,
           "symbol": "ZEND_STRLEN"
         },
         {
-          "end_line": 6227,
+          "end_line": 6238,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6227,
+          "start_line": 6238,
           "symbol": "ZEND_STRLEN"
         }
       ]
@@ -7130,21 +7130,21 @@
       },
       "source_refs": [
         {
-          "end_line": 8981,
+          "end_line": 8994,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 8959,
+          "start_line": 8972,
           "symbol": "ZEND_DEFINED"
         },
         {
-          "end_line": 2237,
+          "end_line": 2242,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2237,
+          "start_line": 2242,
           "symbol": "ZEND_DEFINED"
         },
         {
-          "end_line": 5530,
+          "end_line": 5541,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5530,
+          "start_line": 5541,
           "symbol": "ZEND_DEFINED"
         }
       ]
@@ -7190,21 +7190,21 @@
       },
       "source_refs": [
         {
-          "end_line": 8925,
+          "end_line": 8938,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 8890,
+          "start_line": 8903,
           "symbol": "ZEND_TYPE_CHECK"
         },
         {
-          "end_line": 2256,
+          "end_line": 2261,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2256,
+          "start_line": 2261,
           "symbol": "ZEND_TYPE_CHECK"
         },
         {
-          "end_line": 5549,
+          "end_line": 5560,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5549,
+          "start_line": 5560,
           "symbol": "ZEND_TYPE_CHECK"
         }
       ]
@@ -7249,15 +7249,15 @@
           "symbol": "ZEND_VERIFY_RETURN_TYPE"
         },
         {
-          "end_line": 2578,
+          "end_line": 2604,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2578,
+          "start_line": 2604,
           "symbol": "ZEND_VERIFY_RETURN_TYPE"
         },
         {
-          "end_line": 6290,
+          "end_line": 6301,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6290,
+          "start_line": 6301,
           "symbol": "ZEND_VERIFY_RETURN_TYPE"
         }
       ]
@@ -7310,9 +7310,9 @@
       },
       "source_refs": [
         {
-          "end_line": 4357,
+          "end_line": 4376,
           "path": "Zend/zend_execute.c",
-          "start_line": 4321,
+          "start_line": 4340,
           "symbol": "vm_interrupt"
         },
         {
@@ -7322,9 +7322,9 @@
           "symbol": "ZEND_FE_RESET_RW"
         },
         {
-          "end_line": 17228,
+          "end_line": 17330,
           "path": "ext/opcache/jit/zend_jit_ir.c",
-          "start_line": 17228,
+          "start_line": 17330,
           "symbol": "ZEND_FE_RESET_RW"
         }
       ]
@@ -7379,9 +7379,9 @@
           "symbol": "ZEND_FE_FETCH_RW"
         },
         {
-          "end_line": 17234,
+          "end_line": 17336,
           "path": "ext/opcache/jit/zend_jit_ir.c",
-          "start_line": 17234,
+          "start_line": 17336,
           "symbol": "ZEND_FE_FETCH_RW"
         }
       ]
@@ -7433,15 +7433,15 @@
           "symbol": "ZEND_FE_FREE"
         },
         {
-          "end_line": 2533,
+          "end_line": 2559,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2533,
+          "start_line": 2559,
           "symbol": "ZEND_FE_FREE"
         },
         {
-          "end_line": 6210,
+          "end_line": 6221,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6210,
+          "start_line": 6221,
           "symbol": "ZEND_FE_FREE"
         }
       ]
@@ -7493,9 +7493,9 @@
           "symbol": "ZEND_INIT_DYNAMIC_CALL"
         },
         {
-          "end_line": 6446,
+          "end_line": 6457,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6446,
+          "start_line": 6457,
           "symbol": "ZEND_INIT_DYNAMIC_CALL"
         }
       ]
@@ -7546,9 +7546,9 @@
       },
       "source_refs": [
         {
-          "end_line": 4357,
+          "end_line": 4376,
           "path": "Zend/zend_execute.c",
-          "start_line": 4321,
+          "start_line": 4340,
           "symbol": "vm_interrupt"
         },
         {
@@ -7558,15 +7558,15 @@
           "symbol": "ZEND_DO_ICALL"
         },
         {
-          "end_line": 2157,
+          "end_line": 2162,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2157,
+          "start_line": 2162,
           "symbol": "ZEND_DO_ICALL"
         },
         {
-          "end_line": 5422,
+          "end_line": 5433,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5422,
+          "start_line": 5433,
           "symbol": "ZEND_DO_ICALL"
         }
       ]
@@ -7616,15 +7616,15 @@
           "symbol": "ZEND_DO_UCALL"
         },
         {
-          "end_line": 2155,
+          "end_line": 2160,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2155,
+          "start_line": 2160,
           "symbol": "ZEND_DO_UCALL"
         },
         {
-          "end_line": 5421,
+          "end_line": 5432,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5421,
+          "start_line": 5432,
           "symbol": "ZEND_DO_UCALL"
         }
       ]
@@ -7675,9 +7675,9 @@
       },
       "source_refs": [
         {
-          "end_line": 4357,
+          "end_line": 4376,
           "path": "Zend/zend_execute.c",
-          "start_line": 4321,
+          "start_line": 4340,
           "symbol": "vm_interrupt"
         },
         {
@@ -7687,15 +7687,15 @@
           "symbol": "ZEND_DO_FCALL_BY_NAME"
         },
         {
-          "end_line": 2158,
+          "end_line": 2163,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2158,
+          "start_line": 2163,
           "symbol": "ZEND_DO_FCALL_BY_NAME"
         },
         {
-          "end_line": 5423,
+          "end_line": 5434,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5423,
+          "start_line": 5434,
           "symbol": "ZEND_DO_FCALL_BY_NAME"
         }
       ]
@@ -7747,15 +7747,15 @@
           "symbol": "ZEND_PRE_INC_OBJ"
         },
         {
-          "end_line": 1874,
+          "end_line": 1879,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1874,
+          "start_line": 1879,
           "symbol": "ZEND_PRE_INC_OBJ"
         },
         {
-          "end_line": 4792,
+          "end_line": 4803,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4792,
+          "start_line": 4803,
           "symbol": "ZEND_PRE_INC_OBJ"
         }
       ]
@@ -7813,15 +7813,15 @@
           "symbol": "ZEND_PRE_DEC_OBJ"
         },
         {
-          "end_line": 1875,
+          "end_line": 1880,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1875,
+          "start_line": 1880,
           "symbol": "ZEND_PRE_DEC_OBJ"
         },
         {
-          "end_line": 4793,
+          "end_line": 4804,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4793,
+          "start_line": 4804,
           "symbol": "ZEND_PRE_DEC_OBJ"
         }
       ]
@@ -7873,15 +7873,15 @@
           "symbol": "ZEND_POST_INC_OBJ"
         },
         {
-          "end_line": 1876,
+          "end_line": 1881,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1876,
+          "start_line": 1881,
           "symbol": "ZEND_POST_INC_OBJ"
         },
         {
-          "end_line": 4794,
+          "end_line": 4805,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4794,
+          "start_line": 4805,
           "symbol": "ZEND_POST_INC_OBJ"
         }
       ]
@@ -7939,15 +7939,15 @@
           "symbol": "ZEND_POST_DEC_OBJ"
         },
         {
-          "end_line": 1877,
+          "end_line": 1882,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 1877,
+          "start_line": 1882,
           "symbol": "ZEND_POST_DEC_OBJ"
         },
         {
-          "end_line": 4795,
+          "end_line": 4806,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 4795,
+          "start_line": 4806,
           "symbol": "ZEND_POST_DEC_OBJ"
         }
       ]
@@ -7999,15 +7999,15 @@
           "symbol": "ZEND_ECHO"
         },
         {
-          "end_line": 2539,
+          "end_line": 2565,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2539,
+          "start_line": 2565,
           "symbol": "ZEND_ECHO"
         },
         {
-          "end_line": 6217,
+          "end_line": 6228,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6217,
+          "start_line": 6228,
           "symbol": "ZEND_ECHO"
         }
       ]
@@ -8035,15 +8035,15 @@
       },
       "source_refs": [
         {
-          "end_line": 10690,
+          "end_line": 10711,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 10689,
+          "start_line": 10710,
           "symbol": "ZEND_OP_DATA"
         },
         {
-          "end_line": 2730,
+          "end_line": 2756,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2730,
+          "start_line": 2756,
           "symbol": "ZEND_OP_DATA"
         }
       ]
@@ -8095,9 +8095,9 @@
           "symbol": "ZEND_INSTANCEOF"
         },
         {
-          "end_line": 290,
+          "end_line": 295,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 290,
+          "start_line": 295,
           "symbol": "ZEND_INSTANCEOF"
         }
       ]
@@ -8154,9 +8154,9 @@
           "symbol": "ZEND_GENERATOR_CREATE"
         },
         {
-          "end_line": 2753,
+          "end_line": 2779,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2753,
+          "start_line": 2779,
           "symbol": "ZEND_GENERATOR_CREATE"
         }
       ]
@@ -8192,9 +8192,9 @@
       },
       "source_refs": [
         {
-          "end_line": 9400,
+          "end_line": 9413,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9368,
+          "start_line": 9381,
           "symbol": "ZEND_MAKE_REF"
         }
       ]
@@ -8269,7 +8269,7 @@
       },
       "source_refs": [
         {
-          "end_line": 8438,
+          "end_line": 8450,
           "path": "Zend/zend_vm_def.h",
           "start_line": 8412,
           "symbol": "ZEND_DECLARE_LAMBDA_FUNCTION"
@@ -8544,9 +8544,9 @@
           "symbol": "ZEND_ISSET_ISEMPTY_PROP_OBJ"
         },
         {
-          "end_line": 288,
+          "end_line": 293,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 288,
+          "start_line": 293,
           "symbol": "ZEND_ISSET_ISEMPTY_PROP_OBJ"
         }
       ]
@@ -8688,9 +8688,9 @@
       },
       "source_refs": [
         {
-          "end_line": 8996,
+          "end_line": 9009,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 8982,
+          "start_line": 8995,
           "symbol": "ZEND_ASSERT_CHECK"
         },
         {
@@ -8749,9 +8749,9 @@
           "symbol": "ZEND_JMP_SET"
         },
         {
-          "end_line": 17224,
+          "end_line": 17326,
           "path": "ext/opcache/jit/zend_jit_ir.c",
-          "start_line": 17224,
+          "start_line": 17326,
           "symbol": "ZEND_JMP_SET"
         }
       ]
@@ -8838,15 +8838,15 @@
           "symbol": "ZEND_ISSET_ISEMPTY_CV"
         },
         {
-          "end_line": 2333,
+          "end_line": 2338,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2333,
+          "start_line": 2338,
           "symbol": "ZEND_ISSET_ISEMPTY_CV"
         },
         {
-          "end_line": 5765,
+          "end_line": 5776,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5765,
+          "start_line": 5776,
           "symbol": "ZEND_ISSET_ISEMPTY_CV"
         }
       ]
@@ -8898,15 +8898,15 @@
           "symbol": "ZEND_FETCH_LIST_W"
         },
         {
-          "end_line": 2404,
+          "end_line": 2409,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2404,
+          "start_line": 2409,
           "symbol": "ZEND_FETCH_LIST_W"
         },
         {
-          "end_line": 5903,
+          "end_line": 5914,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5903,
+          "start_line": 5914,
           "symbol": "ZEND_FETCH_LIST_W"
         }
       ]
@@ -8941,9 +8941,9 @@
       },
       "source_refs": [
         {
-          "end_line": 8453,
+          "end_line": 8466,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 8439,
+          "start_line": 8452,
           "symbol": "ZEND_SEPARATE"
         }
       ]
@@ -8989,9 +8989,9 @@
       },
       "source_refs": [
         {
-          "end_line": 9058,
+          "end_line": 9071,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 8997,
+          "start_line": 9010,
           "symbol": "ZEND_FETCH_CLASS_NAME"
         }
       ]
@@ -9043,9 +9043,9 @@
       },
       "source_refs": [
         {
-          "end_line": 9206,
+          "end_line": 9219,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9059,
+          "start_line": 9072,
           "symbol": "ZEND_CALL_TRAMPOLINE"
         }
       ]
@@ -9090,9 +9090,9 @@
       },
       "source_refs": [
         {
-          "end_line": 8716,
+          "end_line": 8729,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 8689,
+          "start_line": 8702,
           "symbol": "ZEND_DISCARD_EXCEPTION"
         }
       ]
@@ -9142,21 +9142,21 @@
       },
       "source_refs": [
         {
-          "end_line": 8465,
+          "end_line": 8478,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 8454,
+          "start_line": 8467,
           "symbol": "zend_yield_in_closed_generator_helper"
         },
         {
-          "end_line": 8586,
+          "end_line": 8599,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 8466,
+          "start_line": 8479,
           "symbol": "ZEND_YIELD"
         },
         {
-          "end_line": 2759,
+          "end_line": 2785,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2759,
+          "start_line": 2785,
           "symbol": "ZEND_YIELD"
         }
       ]
@@ -9213,9 +9213,9 @@
           "symbol": "ZEND_GENERATOR_RETURN"
         },
         {
-          "end_line": 2754,
+          "end_line": 2780,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2754,
+          "start_line": 2780,
           "symbol": "ZEND_GENERATOR_RETURN"
         }
       ]
@@ -9248,9 +9248,9 @@
       },
       "source_refs": [
         {
-          "end_line": 8727,
+          "end_line": 8740,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 8717,
+          "start_line": 8730,
           "symbol": "ZEND_FAST_CALL"
         },
         {
@@ -9304,15 +9304,15 @@
           "symbol": "zend_dispatch_try_catch_finally_helper"
         },
         {
-          "end_line": 8747,
+          "end_line": 8760,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 8728,
+          "start_line": 8741,
           "symbol": "ZEND_FAST_RET"
         },
         {
-          "end_line": 2752,
+          "end_line": 2778,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2752,
+          "start_line": 2778,
           "symbol": "ZEND_FAST_RET"
         }
       ]
@@ -9413,9 +9413,9 @@
           "symbol": "ZEND_SEND_UNPACK"
         },
         {
-          "end_line": 6458,
+          "end_line": 6469,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6458,
+          "start_line": 6469,
           "symbol": "ZEND_SEND_UNPACK"
         }
       ]
@@ -9467,15 +9467,15 @@
       },
       "source_refs": [
         {
-          "end_line": 8688,
+          "end_line": 8701,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 8587,
+          "start_line": 8600,
           "symbol": "ZEND_YIELD_FROM"
         },
         {
-          "end_line": 2760,
+          "end_line": 2786,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2760,
+          "start_line": 2786,
           "symbol": "ZEND_YIELD_FROM"
         }
       ]
@@ -9509,9 +9509,9 @@
       },
       "source_refs": [
         {
-          "end_line": 9830,
+          "end_line": 9843,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9822,
+          "start_line": 9835,
           "symbol": "ZEND_COPY_TMP"
         }
       ]
@@ -9558,21 +9558,21 @@
       },
       "source_refs": [
         {
-          "end_line": 8827,
+          "end_line": 8840,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 8748,
+          "start_line": 8761,
           "symbol": "ZEND_BIND_GLOBAL"
         },
         {
-          "end_line": 2510,
+          "end_line": 2536,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2510,
+          "start_line": 2536,
           "symbol": "ZEND_BIND_GLOBAL"
         },
         {
-          "end_line": 6160,
+          "end_line": 6171,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6160,
+          "start_line": 6171,
           "symbol": "ZEND_BIND_GLOBAL"
         }
       ]
@@ -9625,9 +9625,9 @@
           "symbol": "ZEND_COALESCE"
         },
         {
-          "end_line": 17225,
+          "end_line": 17327,
           "path": "ext/opcache/jit/zend_jit_ir.c",
-          "start_line": 17225,
+          "start_line": 17327,
           "symbol": "ZEND_COALESCE"
         }
       ]
@@ -9716,9 +9716,9 @@
       },
       "source_refs": [
         {
-          "end_line": 9744,
+          "end_line": 9757,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9737,
+          "start_line": 9750,
           "symbol": "ZEND_FUNC_NUM_ARGS"
         }
       ]
@@ -9756,9 +9756,9 @@
       },
       "source_refs": [
         {
-          "end_line": 9821,
+          "end_line": 9834,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9745,
+          "start_line": 9758,
           "symbol": "ZEND_FUNC_GET_ARGS"
         }
       ]
@@ -9810,15 +9810,15 @@
           "symbol": "ZEND_FETCH_STATIC_PROP_R"
         },
         {
-          "end_line": 2494,
+          "end_line": 2520,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2494,
+          "start_line": 2520,
           "symbol": "ZEND_FETCH_STATIC_PROP_R"
         },
         {
-          "end_line": 6144,
+          "end_line": 6155,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6144,
+          "start_line": 6155,
           "symbol": "ZEND_FETCH_STATIC_PROP_R"
         }
       ]
@@ -9870,15 +9870,15 @@
           "symbol": "ZEND_FETCH_STATIC_PROP_W"
         },
         {
-          "end_line": 2496,
+          "end_line": 2522,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2496,
+          "start_line": 2522,
           "symbol": "ZEND_FETCH_STATIC_PROP_W"
         },
         {
-          "end_line": 6146,
+          "end_line": 6157,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6146,
+          "start_line": 6157,
           "symbol": "ZEND_FETCH_STATIC_PROP_W"
         }
       ]
@@ -9930,15 +9930,15 @@
           "symbol": "ZEND_FETCH_STATIC_PROP_RW"
         },
         {
-          "end_line": 2497,
+          "end_line": 2523,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2497,
+          "start_line": 2523,
           "symbol": "ZEND_FETCH_STATIC_PROP_RW"
         },
         {
-          "end_line": 6147,
+          "end_line": 6158,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6147,
+          "start_line": 6158,
           "symbol": "ZEND_FETCH_STATIC_PROP_RW"
         }
       ]
@@ -9990,15 +9990,15 @@
           "symbol": "ZEND_FETCH_STATIC_PROP_IS"
         },
         {
-          "end_line": 2495,
+          "end_line": 2521,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2495,
+          "start_line": 2521,
           "symbol": "ZEND_FETCH_STATIC_PROP_IS"
         },
         {
-          "end_line": 6145,
+          "end_line": 6156,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6145,
+          "start_line": 6156,
           "symbol": "ZEND_FETCH_STATIC_PROP_IS"
         }
       ]
@@ -10062,9 +10062,9 @@
           "symbol": "ZEND_FETCH_STATIC_PROP_FUNC_ARG"
         },
         {
-          "end_line": 6137,
+          "end_line": 6148,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6137,
+          "start_line": 6148,
           "symbol": "ZEND_FETCH_STATIC_PROP_FUNC_ARG"
         }
       ]
@@ -10116,15 +10116,15 @@
           "symbol": "ZEND_FETCH_STATIC_PROP_UNSET"
         },
         {
-          "end_line": 2498,
+          "end_line": 2524,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2498,
+          "start_line": 2524,
           "symbol": "ZEND_FETCH_STATIC_PROP_UNSET"
         },
         {
-          "end_line": 6148,
+          "end_line": 6159,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6148,
+          "start_line": 6159,
           "symbol": "ZEND_FETCH_STATIC_PROP_UNSET"
         }
       ]
@@ -10212,9 +10212,9 @@
           "symbol": "ZEND_ISSET_ISEMPTY_STATIC_PROP"
         },
         {
-          "end_line": 289,
+          "end_line": 294,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 289,
+          "start_line": 294,
           "symbol": "ZEND_ISSET_ISEMPTY_STATIC_PROP"
         }
       ]
@@ -10302,9 +10302,9 @@
       },
       "source_refs": [
         {
-          "end_line": 9238,
+          "end_line": 9251,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9207,
+          "start_line": 9220,
           "symbol": "ZEND_BIND_LEXICAL"
         }
       ]
@@ -10354,9 +10354,9 @@
       },
       "source_refs": [
         {
-          "end_line": 9291,
+          "end_line": 9304,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9239,
+          "start_line": 9252,
           "symbol": "ZEND_BIND_STATIC"
         }
       ]
@@ -10399,21 +10399,21 @@
           "symbol": "zend_this_not_in_object_context_helper"
         },
         {
-          "end_line": 9334,
+          "end_line": 9347,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9320,
+          "start_line": 9333,
           "symbol": "ZEND_FETCH_THIS"
         },
         {
-          "end_line": 2566,
+          "end_line": 2592,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2566,
+          "start_line": 2592,
           "symbol": "ZEND_FETCH_THIS"
         },
         {
-          "end_line": 6271,
+          "end_line": 6282,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6271,
+          "start_line": 6282,
           "symbol": "ZEND_FETCH_THIS"
         }
       ]
@@ -10467,15 +10467,15 @@
           "symbol": "ZEND_SEND_FUNC_ARG"
         },
         {
-          "end_line": 2115,
+          "end_line": 2120,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2115,
+          "start_line": 2120,
           "symbol": "ZEND_SEND_FUNC_ARG"
         },
         {
-          "end_line": 5340,
+          "end_line": 5351,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5340,
+          "start_line": 5351,
           "symbol": "ZEND_SEND_FUNC_ARG"
         }
       ]
@@ -10508,9 +10508,9 @@
       },
       "source_refs": [
         {
-          "end_line": 9354,
+          "end_line": 9367,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9345,
+          "start_line": 9358,
           "symbol": "ZEND_ISSET_ISEMPTY_THIS"
         }
       ]
@@ -10545,21 +10545,21 @@
       },
       "source_refs": [
         {
-          "end_line": 9428,
+          "end_line": 9441,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9401,
+          "start_line": 9414,
           "symbol": "ZEND_SWITCH_LONG"
         },
         {
-          "end_line": 2571,
+          "end_line": 2597,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2571,
+          "start_line": 2597,
           "symbol": "ZEND_SWITCH_LONG"
         },
         {
-          "end_line": 6283,
+          "end_line": 6294,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6283,
+          "start_line": 6294,
           "symbol": "ZEND_SWITCH_LONG"
         }
       ]
@@ -10594,21 +10594,21 @@
       },
       "source_refs": [
         {
-          "end_line": 9461,
+          "end_line": 9474,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9429,
+          "start_line": 9442,
           "symbol": "ZEND_SWITCH_STRING"
         },
         {
-          "end_line": 2572,
+          "end_line": 2598,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2572,
+          "start_line": 2598,
           "symbol": "ZEND_SWITCH_STRING"
         },
         {
-          "end_line": 6284,
+          "end_line": 6295,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6284,
+          "start_line": 6295,
           "symbol": "ZEND_SWITCH_STRING"
         }
       ]
@@ -10654,21 +10654,21 @@
       },
       "source_refs": [
         {
-          "end_line": 9585,
+          "end_line": 9598,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9514,
+          "start_line": 9527,
           "symbol": "ZEND_IN_ARRAY"
         },
         {
-          "end_line": 2359,
+          "end_line": 2364,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2359,
+          "start_line": 2364,
           "symbol": "ZEND_IN_ARRAY"
         },
         {
-          "end_line": 5805,
+          "end_line": 5816,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5805,
+          "start_line": 5816,
           "symbol": "ZEND_IN_ARRAY"
         }
       ]
@@ -10715,21 +10715,21 @@
       },
       "source_refs": [
         {
-          "end_line": 9642,
+          "end_line": 9655,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9586,
+          "start_line": 9599,
           "symbol": "ZEND_COUNT"
         },
         {
-          "end_line": 2557,
+          "end_line": 2583,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2557,
+          "start_line": 2583,
           "symbol": "ZEND_COUNT"
         },
         {
-          "end_line": 6249,
+          "end_line": 6260,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6249,
+          "start_line": 6260,
           "symbol": "ZEND_COUNT"
         }
       ]
@@ -10775,9 +10775,9 @@
       },
       "source_refs": [
         {
-          "end_line": 9700,
+          "end_line": 9713,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9658,
+          "start_line": 9671,
           "symbol": "ZEND_GET_CLASS"
         }
       ]
@@ -10814,9 +10814,9 @@
       },
       "source_refs": [
         {
-          "end_line": 9718,
+          "end_line": 9731,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9701,
+          "start_line": 9714,
           "symbol": "ZEND_GET_CALLED_CLASS"
         }
       ]
@@ -10862,9 +10862,9 @@
       },
       "source_refs": [
         {
-          "end_line": 9736,
+          "end_line": 9749,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9719,
+          "start_line": 9732,
           "symbol": "ZEND_GET_TYPE"
         }
       ]
@@ -10916,9 +10916,9 @@
           "symbol": "ZEND_ARRAY_KEY_EXISTS"
         },
         {
-          "end_line": 294,
+          "end_line": 299,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 294,
+          "start_line": 299,
           "symbol": "ZEND_ARRAY_KEY_EXISTS"
         }
       ]
@@ -10956,21 +10956,21 @@
       },
       "source_refs": [
         {
-          "end_line": 9502,
+          "end_line": 9515,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9462,
+          "start_line": 9475,
           "symbol": "ZEND_MATCH"
         },
         {
-          "end_line": 2573,
+          "end_line": 2599,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2573,
+          "start_line": 2599,
           "symbol": "ZEND_MATCH"
         },
         {
-          "end_line": 6285,
+          "end_line": 6296,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6285,
+          "start_line": 6296,
           "symbol": "ZEND_MATCH"
         }
       ]
@@ -11021,15 +11021,15 @@
           "symbol": "ZEND_CASE_STRICT"
         },
         {
-          "end_line": 2204,
+          "end_line": 2209,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2204,
+          "start_line": 2209,
           "symbol": "ZEND_CASE_STRICT"
         },
         {
-          "end_line": 5481,
+          "end_line": 5492,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5481,
+          "start_line": 5492,
           "symbol": "ZEND_CASE_STRICT"
         }
       ]
@@ -11066,15 +11066,15 @@
       },
       "source_refs": [
         {
-          "end_line": 9513,
+          "end_line": 9526,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9503,
+          "start_line": 9516,
           "symbol": "ZEND_MATCH_ERROR"
         },
         {
-          "end_line": 2757,
+          "end_line": 2783,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2757,
+          "start_line": 2783,
           "symbol": "ZEND_MATCH_ERROR"
         }
       ]
@@ -11125,9 +11125,9 @@
           "symbol": "ZEND_JMP_NULL"
         },
         {
-          "end_line": 17226,
+          "end_line": 17328,
           "path": "ext/opcache/jit/zend_jit_ir.c",
-          "start_line": 17226,
+          "start_line": 17328,
           "symbol": "ZEND_JMP_NULL"
         }
       ]
@@ -11170,15 +11170,15 @@
           "symbol": "ZEND_CHECK_UNDEF_ARGS"
         },
         {
-          "end_line": 2150,
+          "end_line": 2155,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2150,
+          "start_line": 2155,
           "symbol": "ZEND_CHECK_UNDEF_ARGS"
         },
         {
-          "end_line": 5412,
+          "end_line": 5423,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5412,
+          "start_line": 5423,
           "symbol": "ZEND_CHECK_UNDEF_ARGS"
         }
       ]
@@ -11212,9 +11212,9 @@
       },
       "source_refs": [
         {
-          "end_line": 9344,
+          "end_line": 9357,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9335,
+          "start_line": 9348,
           "symbol": "ZEND_FETCH_GLOBALS"
         }
       ]
@@ -11257,9 +11257,9 @@
           "symbol": "ZEND_VERIFY_NEVER_TYPE"
         },
         {
-          "end_line": 2762,
+          "end_line": 2788,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2762,
+          "start_line": 2788,
           "symbol": "ZEND_VERIFY_NEVER_TYPE"
         }
       ]
@@ -11304,9 +11304,9 @@
       },
       "source_refs": [
         {
-          "end_line": 9868,
+          "end_line": 9881,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9831,
+          "start_line": 9844,
           "symbol": "ZEND_CALLABLE_CONVERT"
         },
         {
@@ -11358,15 +11358,15 @@
       },
       "source_refs": [
         {
-          "end_line": 9319,
+          "end_line": 9332,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9292,
+          "start_line": 9305,
           "symbol": "ZEND_BIND_INIT_STATIC_OR_JMP"
         },
         {
-          "end_line": 17252,
+          "end_line": 17354,
           "path": "ext/opcache/jit/zend_jit_ir.c",
-          "start_line": 17252,
+          "start_line": 17354,
           "symbol": "ZEND_BIND_INIT_STATIC_OR_JMP"
         }
       ]
@@ -11411,21 +11411,21 @@
       },
       "source_refs": [
         {
-          "end_line": 9950,
+          "end_line": 9971,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9931,
+          "start_line": 9952,
           "symbol": "ZEND_FRAMELESS_ICALL_0"
         },
         {
-          "end_line": 2694,
+          "end_line": 2720,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2694,
+          "start_line": 2720,
           "symbol": "ZEND_FRAMELESS_ICALL_0"
         },
         {
-          "end_line": 6476,
+          "end_line": 6487,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6476,
+          "start_line": 6487,
           "symbol": "ZEND_FRAMELESS_ICALL_0"
         }
       ]
@@ -11474,21 +11474,21 @@
       },
       "source_refs": [
         {
-          "end_line": 9976,
+          "end_line": 9997,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9951,
+          "start_line": 9972,
           "symbol": "ZEND_FRAMELESS_ICALL_1"
         },
         {
-          "end_line": 2697,
+          "end_line": 2723,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2697,
+          "start_line": 2723,
           "symbol": "ZEND_FRAMELESS_ICALL_1"
         },
         {
-          "end_line": 6479,
+          "end_line": 6490,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6479,
+          "start_line": 6490,
           "symbol": "ZEND_FRAMELESS_ICALL_1"
         }
       ]
@@ -11537,21 +11537,21 @@
       },
       "source_refs": [
         {
-          "end_line": 10010,
+          "end_line": 10031,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9977,
+          "start_line": 9998,
           "symbol": "ZEND_FRAMELESS_ICALL_2"
         },
         {
-          "end_line": 2701,
+          "end_line": 2727,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2701,
+          "start_line": 2727,
           "symbol": "ZEND_FRAMELESS_ICALL_2"
         },
         {
-          "end_line": 6483,
+          "end_line": 6494,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6483,
+          "start_line": 6494,
           "symbol": "ZEND_FRAMELESS_ICALL_2"
         }
       ]
@@ -11600,21 +11600,21 @@
       },
       "source_refs": [
         {
-          "end_line": 10050,
+          "end_line": 10071,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 10011,
+          "start_line": 10032,
           "symbol": "ZEND_FRAMELESS_ICALL_3"
         },
         {
-          "end_line": 2706,
+          "end_line": 2732,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2706,
+          "start_line": 2732,
           "symbol": "ZEND_FRAMELESS_ICALL_3"
         },
         {
-          "end_line": 6488,
+          "end_line": 6499,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 6488,
+          "start_line": 6499,
           "symbol": "ZEND_FRAMELESS_ICALL_3"
         }
       ]
@@ -11648,21 +11648,21 @@
       },
       "source_refs": [
         {
-          "end_line": 9930,
+          "end_line": 9951,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9908,
+          "start_line": 9929,
           "symbol": "ZEND_JMP_FRAMELESS"
         },
         {
-          "end_line": 2623,
+          "end_line": 2649,
           "path": "ext/opcache/jit/zend_jit.c",
-          "start_line": 2623,
+          "start_line": 2649,
           "symbol": "ZEND_JMP_FRAMELESS"
         },
         {
-          "end_line": 5738,
+          "end_line": 5749,
           "path": "ext/opcache/jit/zend_jit_trace.c",
-          "start_line": 5738,
+          "start_line": 5749,
           "symbol": "ZEND_JMP_FRAMELESS"
         }
       ]
@@ -11701,9 +11701,9 @@
       },
       "source_refs": [
         {
-          "end_line": 10106,
+          "end_line": 10127,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 10051,
+          "start_line": 10072,
           "symbol": "ZEND_INIT_PARENT_PROPERTY_HOOK_CALL"
         },
         {
@@ -11761,9 +11761,9 @@
           "symbol": "ZEND_DECLARE_ATTRIBUTED_CONST"
         },
         {
-          "end_line": 4170,
+          "end_line": 4177,
           "path": "ext/opcache/jit/zend_jit_ir.c",
-          "start_line": 4170,
+          "start_line": 4177,
           "symbol": "ZEND_DECLARE_ATTRIBUTED_CONST"
         }
       ]
@@ -11808,9 +11808,9 @@
       },
       "source_refs": [
         {
-          "end_line": 8958,
+          "end_line": 8971,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 8926,
+          "start_line": 8939,
           "symbol": "ZEND_TYPE_ASSERT"
         }
       ]
@@ -11857,21 +11857,21 @@
       },
       "source_refs": [
         {
-          "end_line": 1126,
+          "end_line": 1132,
           "path": "Zend/zend_partial.c",
           "start_line": 1079,
           "symbol": "zp_bind"
         },
         {
-          "end_line": 1167,
+          "end_line": 1183,
           "path": "Zend/zend_partial.c",
-          "start_line": 1128,
+          "start_line": 1134,
           "symbol": "zend_partial_create"
         },
         {
-          "end_line": 9906,
+          "end_line": 9927,
           "path": "Zend/zend_vm_def.h",
-          "start_line": 9869,
+          "start_line": 9882,
           "symbol": "ZEND_CALLABLE_CONVERT_PARTIAL"
         },
         {
@@ -11918,9 +11918,9 @@
       },
       "source_refs": [
         {
-          "end_line": 5602,
+          "end_line": 5610,
           "path": "Zend/zend_execute.c",
-          "start_line": 5541,
+          "start_line": 5549,
           "symbol": "zend_handle_named_arg"
         },
         {

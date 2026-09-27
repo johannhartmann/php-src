@@ -260,12 +260,12 @@ class OpcodeMatrixTests(unittest.TestCase):
             refs = row["source_refs"]
             function = any(
                 ref["path"] == "ext/opcache/jit/zend_jit.c"
-                and 1416 <= ref["start_line"] <= 2707
+                and 1421 <= ref["start_line"] <= 2733
                 for ref in refs
             )
             trace = any(
-                (ref["path"] == "ext/opcache/jit/zend_jit_trace.c" and 4099 <= ref["start_line"] <= 7427)
-                or (ref["path"] == "ext/opcache/jit/zend_jit_ir.c" and 17126 <= ref["start_line"] <= 17295)
+                (ref["path"] == "ext/opcache/jit/zend_jit_trace.c" and 4110 <= ref["start_line"] <= 7438)
+                or (ref["path"] == "ext/opcache/jit/zend_jit_ir.c" and 17228 <= ref["start_line"] <= 17397)
                 for ref in refs
             )
             support = row["existing_jit_support"]
