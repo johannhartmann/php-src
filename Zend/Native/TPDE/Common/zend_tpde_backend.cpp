@@ -11634,6 +11634,18 @@ malformed:
 	return false;
 }
 
+/*
+ * Register value transports (typed arguments/results, guarded boxed
+ * arguments, pointer unboxing) and extended effect-closed inlining (checked
+ * chains, scalar diamonds). Both need matching target emitters; the AArch64
+ * and x86-64 backends implement them.
+ */
+static bool zend_tpde_target_has_value_transports(zend_native_target target)
+{
+	return target == ZEND_NATIVE_TARGET_DARWIN_ARM64
+		|| target == ZEND_NATIVE_TARGET_LINUX_AMD64;
+}
+
 static bool freeze_component_machine_plan(
 		zend_tpde_plan *plans,
 		const zend_tpde_plan *const *component_plans,
@@ -12239,7 +12251,7 @@ extern "C" zend_result zend_tpde_compile_component_w14_with_runtime(
 				member.effects, member.effect_count,
 				member.frame_argument_count,
 				member.source_op_array, member.source_ssa,
-				target == ZEND_NATIVE_TARGET_DARWIN_ARM64,
+				zend_tpde_target_has_value_transports(target),
 				&plans[initialized], diag)) {
 			break;
 		}
@@ -12256,7 +12268,7 @@ extern "C" zend_result zend_tpde_compile_component_w14_with_runtime(
 	}
 	if (!freeze_component_machine_plan(
 			plans, plan_refs, member_count,
-			target == ZEND_NATIVE_TARGET_DARWIN_ARM64, diag)) {
+			zend_tpde_target_has_value_transports(target), diag)) {
 		for (uint32_t index = 0; index < member_count; ++index) {
 			destroy_plan(&plans[index]);
 		}
