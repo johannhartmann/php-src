@@ -274,7 +274,14 @@ public:
 		Base::generate_cond_branch(jump, true_target, false_target);
 	}
 
-	bool cur_func_may_emit_calls() const { return adaptor->plan()->may_emit_calls; }
+	/*
+	 * Ask the adaptor per function view: a Zend entry whose only call is a
+	 * direct typed-body call needs no runtime helper, yet is not a leaf, and a
+	 * typed body can be a leaf even when its Zend entry uses helpers.
+	 */
+	bool cur_func_may_emit_calls() const {
+		return adaptor->cur_func_may_emit_calls();
+	}
 	tpde::SymRef cur_personality_func() const { return {}; }
 	bool try_force_fixed_assignment(IRValueRef value) const {
 		const zend_tpde_machine_value_kind kind =
