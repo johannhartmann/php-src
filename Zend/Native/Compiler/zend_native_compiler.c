@@ -89,6 +89,7 @@ struct _zend_native_compiler {
 	bool source_probe;
 	bool defer_publication;
 	bool direct_reentry;
+	bool lazy_source_index;
 	zend_native_external_reentry_resolver_t external_reentry_resolver;
 	void *external_reentry_context;
 	bool persistent;
@@ -97,8 +98,6 @@ struct _zend_native_compiler {
 	HashTable functions_by_op_array;
 	HashTable source_op_arrays_by_opcodes;
 	zend_native_runtime_source *runtime_sources;
-	zend_op_array **script_functions_by_declaration_id;
-	uint32_t script_function_count;
 	uint32_t function_count;
 	uint32_t function_capacity;
 	uint32_t publication_count;
@@ -358,8 +357,8 @@ static void zend_native_compiler_free(
 	pefree(allocation, compiler->persistent);
 }
 
-static bool zend_native_compiler_index_script_functions(
-	zend_native_compiler *compiler);
+static zend_op_array *zend_native_compiler_find_source(
+	zend_native_compiler *compiler, const zend_op_array *op_array);
 
 static uint64_t zend_native_compiler_dynamic_codeunit_count(
 	uint32_t first_function_bucket, uint32_t first_class_bucket);
@@ -1538,10 +1537,8 @@ static zend_op_array *zend_native_compiler_resolve_native_target(
 			 * entry cell without serializing a foreign function pointer.
 			 */
 			if (function->op_array.opcodes == NULL
-					|| zend_hash_index_find_ptr(
-						&compiler->source_op_arrays_by_opcodes,
-						(zend_ulong) (uintptr_t)
-							function->op_array.opcodes) == NULL) {
+					|| zend_native_compiler_find_source(
+						compiler, &function->op_array) == NULL) {
 				return caller;
 			}
 			return &function->op_array;
@@ -1551,9 +1548,20 @@ static zend_op_array *zend_native_compiler_resolve_native_target(
 	if (target->op_array_id == 0) {
 		return caller;
 	}
-	return target->op_array_id <= compiler->script_function_count
-		? compiler->script_functions_by_declaration_id[target->op_array_id]
-		: NULL;
+	/* Declaration ids are function-table bucket positions plus one. */
+	{
+		const HashTable *table = &compiler->script->function_table;
+		const uint32_t index = target->op_array_id - 1;
+		zend_function *function;
+
+		if (HT_IS_PACKED(table) || index >= table->nNumUsed
+				|| Z_TYPE(table->arData[index].val) == IS_UNDEF) {
+			return NULL;
+		}
+		function = Z_PTR(table->arData[index].val);
+		return function->type == ZEND_USER_FUNCTION
+			? &function->op_array : NULL;
+	}
 }
 
 static bool zend_native_compiler_target_is_direct_native(
@@ -2296,6 +2304,9 @@ static bool zend_native_compiler_index_source_op_arrays(
 			compiler, &compiler->script->main_op_array, 0)) {
 		return false;
 	}
+	if (compiler->lazy_source_index) {
+		return true;
+	}
 	ZEND_HASH_FOREACH_PTR(&compiler->script->function_table, function) {
 		if (function != NULL && function->type == ZEND_USER_FUNCTION
 				&& !zend_native_compiler_index_source_op_array(
@@ -2312,6 +2323,74 @@ static bool zend_native_compiler_index_source_op_arrays(
 	return true;
 }
 
+/*
+ * A class shares opcodes with the traits it uses. Index those traits first so
+ * their original op_arrays stay canonical for every using class, as when the
+ * whole class table is indexed in declaration order.
+ */
+static bool zend_native_compiler_index_source_class_lazy(
+	zend_native_compiler *compiler, zend_class_entry *class_entry,
+	uint32_t depth)
+{
+	uint32_t index;
+
+	if (depth > 64) {
+		return false;
+	}
+	for (index = 0; index < class_entry->num_traits; index++) {
+		zend_class_entry *trait = zend_hash_find_ptr(
+			&compiler->script->class_table,
+			class_entry->trait_names[index].lc_name);
+
+		if (trait != NULL && trait != class_entry
+				&& !zend_native_compiler_index_source_class_lazy(
+					compiler, trait, depth + 1)) {
+			return false;
+		}
+	}
+	return zend_native_compiler_index_source_class(compiler, class_entry);
+}
+
+/*
+ * Find the indexed source op_array that shares op_array's opcodes. A lazily
+ * indexed compiler first indexes the declaration that owns op_array when it
+ * is part of the script: the function under its name, or a method's class.
+ */
+static zend_op_array *zend_native_compiler_find_source(
+	zend_native_compiler *compiler, const zend_op_array *op_array)
+{
+	const zend_ulong key = (zend_ulong) (uintptr_t) op_array->opcodes;
+	zend_op_array *source = zend_hash_index_find_ptr(
+		&compiler->source_op_arrays_by_opcodes, key);
+
+	if (source != NULL || !compiler->lazy_source_index
+			|| op_array->function_name == NULL) {
+		return source;
+	}
+	if (op_array->scope != NULL) {
+		zend_class_entry *class_entry = zend_hash_find_ptr_lc(
+			&compiler->script->class_table, op_array->scope->name);
+
+		if (class_entry != op_array->scope
+				|| !zend_native_compiler_index_source_class_lazy(
+					compiler, class_entry, 0)) {
+			return NULL;
+		}
+	} else {
+		zend_function *function = zend_hash_find_ptr_lc(
+			&compiler->script->function_table, op_array->function_name);
+
+		if (function == NULL || function->type != ZEND_USER_FUNCTION
+				|| function->op_array.opcodes != op_array->opcodes
+				|| !zend_native_compiler_index_source_op_array(
+					compiler, &function->op_array, 0)) {
+			return NULL;
+		}
+	}
+	return zend_hash_index_find_ptr(
+		&compiler->source_op_arrays_by_opcodes, key);
+}
+
 static zend_op_array *zend_native_compiler_canonical_reentry_op_array(
 	zend_native_compiler *compiler, const zend_op_array *resolved)
 {
@@ -2320,9 +2399,7 @@ static zend_op_array *zend_native_compiler_canonical_reentry_op_array(
 	if (compiler == NULL || resolved == NULL || resolved->opcodes == NULL) {
 		return NULL;
 	}
-	source = zend_hash_index_find_ptr(
-		&compiler->source_op_arrays_by_opcodes,
-		(zend_ulong) (uintptr_t) resolved->opcodes);
+	source = zend_native_compiler_find_source(compiler, resolved);
 	return source != NULL && source->last == resolved->last
 		? source : NULL;
 }
@@ -2338,8 +2415,7 @@ static zend_op_array *zend_native_compiler_retain_runtime_source(
 		return resolved;
 	}
 	key = (zend_ulong) (uintptr_t) resolved->opcodes;
-	source = zend_hash_index_find_ptr(
-		&compiler->source_op_arrays_by_opcodes, key);
+	source = zend_native_compiler_find_source(compiler, resolved);
 	if (source != NULL) {
 		return source->last == resolved->last ? source : NULL;
 	}
@@ -3710,20 +3786,12 @@ zend_result zend_native_compiler_compile_dynamic_component(
 		/*
 		 * Dynamic include/eval may grow the request symbol tables before it
 		 * reenters a compiler that borrows their storage. Refresh those views
-		 * and the matching symbolic function index as one snapshot, so
-		 * compilation never reads released HashTable storage or resolves a new
-		 * declaration through an older index. Owner-script tables have no
+		 * so compilation never reads released HashTable storage; declaration
+		 * ids address buckets of this snapshot. Owner-script tables have no
 		 * element destructors; keep those independent tables intact.
 		 */
 		compiler->script->function_table = *EG(function_table);
 		compiler->script->class_table = *EG(class_table);
-		if (!zend_native_compiler_index_script_functions(compiler)) {
-			zend_native_compiler_set_diagnostic(
-				compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
-				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
-				"native script function index cannot be refreshed");
-			return FAILURE;
-		}
 	}
 	if (component_compiler != NULL) {
 		*component_compiler = compiler;
@@ -4390,39 +4458,6 @@ zend_native_status zend_native_compiler_execute_observed_data(
 		compiler, execute_data, diagnostic, true);
 }
 
-static bool zend_native_compiler_index_script_functions(
-	zend_native_compiler *compiler)
-{
-	zend_function *function;
-	uint32_t count = 0;
-	uint32_t declaration_id = 1;
-
-	ZEND_HASH_FOREACH_PTR(&compiler->script->function_table, function) {
-		if (function != NULL && function->type == ZEND_USER_FUNCTION) {
-			if (count == ZEND_MIR_ID_MAX) {
-				return false;
-			}
-			count++;
-		}
-	} ZEND_HASH_FOREACH_END();
-	compiler->script_functions_by_declaration_id =
-		zend_native_compiler_realloc(
-			compiler,
-			compiler->script_functions_by_declaration_id,
-			count + 1,
-			sizeof(*compiler->script_functions_by_declaration_id));
-	compiler->script_functions_by_declaration_id[0] = NULL;
-	ZEND_HASH_FOREACH_PTR(&compiler->script->function_table, function) {
-		if (function == NULL || function->type != ZEND_USER_FUNCTION) {
-			continue;
-		}
-		compiler->script_functions_by_declaration_id[declaration_id++] =
-			&function->op_array;
-	} ZEND_HASH_FOREACH_END();
-	compiler->script_function_count = count;
-	return true;
-}
-
 zend_native_compiler *zend_native_compiler_create(
 	const zend_native_compiler_config *config,
 	zend_native_compile_diagnostic *diagnostic)
@@ -4455,6 +4490,7 @@ zend_native_compiler *zend_native_compiler_create(
 	compiler->source_probe = config->source_probe;
 	compiler->defer_publication = config->defer_publication;
 	compiler->direct_reentry = config->direct_reentry;
+	compiler->lazy_source_index = config->lazy_source_index;
 	compiler->external_reentry_resolver =
 		config->external_reentry_resolver;
 	compiler->external_reentry_context =
@@ -4473,15 +4509,6 @@ zend_native_compiler *zend_native_compiler_create(
 	}
 	compiler->stats.registered_codeunits =
 		zend_hash_num_elements(&compiler->source_op_arrays_by_opcodes);
-	if (!zend_native_compiler_index_script_functions(compiler)) {
-		zend_native_compiler_set_diagnostic(
-			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
-			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
-			"native script function index cannot be constructed");
-		zend_hash_destroy(&compiler->source_op_arrays_by_opcodes);
-		pefree(compiler, compiler->persistent);
-		return NULL;
-	}
 	zend_hash_init(
 		&compiler->functions_by_op_array, 8, NULL, NULL,
 		compiler->persistent);
@@ -4490,9 +4517,6 @@ zend_native_compiler *zend_native_compiler_create(
 		compiler->mutation_mutex = tsrm_mutex_alloc();
 		if (compiler->mutation_mutex == NULL) {
 			zend_hash_destroy(&compiler->functions_by_op_array);
-			zend_native_compiler_free(
-				compiler,
-				compiler->script_functions_by_declaration_id);
 			zend_hash_destroy(
 				&compiler->source_op_arrays_by_opcodes);
 			pefree(compiler, true);
@@ -5725,8 +5749,6 @@ void zend_native_compiler_destroy(zend_native_compiler *compiler)
 		zend_native_compiler_free(compiler, function);
 	}
 	zend_native_compiler_free(compiler, compiler->component_heads);
-	zend_native_compiler_free(
-		compiler, compiler->script_functions_by_declaration_id);
 	zend_hash_destroy(&compiler->functions_by_op_array);
 	zend_hash_destroy(&compiler->source_op_arrays_by_opcodes);
 	runtime_source = compiler->runtime_sources;

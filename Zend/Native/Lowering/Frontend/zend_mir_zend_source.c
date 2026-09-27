@@ -2720,12 +2720,18 @@ zend_mir_frontend_target_kind(uint8_t opcode, const zend_function *function,
 	return ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER;
 }
 
+/*
+ * A declaration id is the function's bucket position in the script function
+ * table plus one, so the compiler resolves it without an index. Find the
+ * bucket through the function's own key; only functions that are not stored
+ * under their name, such as runtime declaration keys, need a scan.
+ */
 static bool zend_mir_frontend_declaration_id(
 	const zend_script *script, const zend_op_array *caller,
 	const zend_function *function, uint32_t *id_out)
 {
-	zend_function *candidate;
-	uint32_t declaration_id = 1;
+	const HashTable *table;
+	uint32_t index;
 
 	if (script == NULL || caller == NULL || function == NULL
 			|| function->type != ZEND_USER_FUNCTION || id_out == NULL) {
@@ -2735,19 +2741,33 @@ static bool zend_mir_frontend_declaration_id(
 		*id_out = 0;
 		return true;
 	}
-	ZEND_HASH_FOREACH_PTR(&script->function_table, candidate) {
-		if (candidate == NULL || candidate->type != ZEND_USER_FUNCTION) {
-			continue;
-		}
-		if (candidate == function) {
-			*id_out = declaration_id;
+	table = &script->function_table;
+	if (function->common.function_name != NULL) {
+		zend_string *key = zend_string_tolower(function->common.function_name);
+		zval *slot = zend_hash_find(table, key);
+
+		zend_string_release(key);
+		if (slot != NULL && Z_PTR_P(slot) == function) {
+			index = (uint32_t) ((Bucket *) slot - table->arData);
+			if (index >= ZEND_MIR_ID_MAX) {
+				return false;
+			}
+			*id_out = index + 1;
 			return true;
 		}
-		if (declaration_id == ZEND_MIR_ID_MAX) {
-			return false;
+	}
+	for (index = 0; index < table->nNumUsed; index++) {
+		const Bucket *bucket = table->arData + index;
+
+		if (Z_TYPE(bucket->val) != IS_UNDEF
+				&& Z_PTR(bucket->val) == function) {
+			if (index >= ZEND_MIR_ID_MAX) {
+				return false;
+			}
+			*id_out = index + 1;
+			return true;
 		}
-		declaration_id++;
-	} ZEND_HASH_FOREACH_END();
+	}
 	return false;
 }
 
