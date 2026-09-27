@@ -2605,6 +2605,8 @@ bool ZendCompilerX64::compile_inst_impl(
 						static_cast<int32_t>(offsetof(
 							zend_execute_data, This)
 							+ offsetof(zval, u1.type_info))), 0);
+				/* The new top is top + size; available only held end - top. */
+				mov(available_reg, setup_reg, 8);
 				ASM(ADD64ri, available_reg,
 					static_cast<int32_t>(setup_size));
 				ASM(MOV64mr,
@@ -2953,6 +2955,8 @@ bool ZendCompilerX64::compile_inst_impl(
 								frame_size))));
 				ASM(CMP64rr, available_reg, active_address_reg);
 				generate_raw_jump(Jump::jb, slow_callee);
+				/* The new top is top + size; available only held end - top. */
+				mov(available_reg, callee_reg, 8);
 				ASM(ADD64rr, available_reg, active_address_reg);
 				ASM(MOV64mr,
 					FE_MEM(top_address_reg, 0, FE_NOREG, 0), available_reg);
