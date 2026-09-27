@@ -4732,15 +4732,11 @@ bool ZendCompilerX64::compile_inst_impl(
 				const zend_tpde_machine_part_role role =
 					parts.representation.parts[part].semantic_role;
 				if (role == ZEND_TPDE_MACHINE_PART_PAYLOAD) {
-					if (node.exact_type == ZEND_MIR_SCALAR_TYPE_F64) {
-						ASM(SSE_MOVSDrm, value_reg,
-							FE_MEM(canonical_frame_register(), 0,
-								FE_NOREG, static_cast<int32_t>(frame_offset)));
-					} else {
-						ASM(MOV64rm, value_reg,
-							FE_MEM(canonical_frame_register(), 0,
-								FE_NOREG, static_cast<int32_t>(frame_offset)));
-					}
+					/* A boxed payload is a general-purpose part, a double
+					 * included. */
+					ASM(MOV64rm, value_reg,
+						FE_MEM(canonical_frame_register(), 0,
+							FE_NOREG, static_cast<int32_t>(frame_offset)));
 				} else if (role == ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
 					if (node.exact_type
 							== ZEND_MIR_SCALAR_TYPE_I64
