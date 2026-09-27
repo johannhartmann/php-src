@@ -7382,7 +7382,201 @@ bool ZendCompilerX64::compile_inst_impl(
 				|| layout.container_offset > INT32_MAX - 8
 				|| layout.value_offset > INT32_MAX - 8
 				|| layout.result_offset > INT32_MAX - 8) {
-			return execute_value_operation();
+			/*
+			 * $a[$k] = $v on an owned packed array replaces an existing
+			 * scalar element in place. Separation, growth, holes, counted old
+			 * or new values, used results and every other container keep the
+			 * helper, which runs only when the inline checks fail.
+			 */
+			const zend_mir_executable_value_ref &operation =
+				mir.value_operation;
+			const bool guarded = node.kind == Adaptor::InstKind::GuardedFast;
+			const auto guarded_successors = guarded
+				? adaptor->block_succs(IRBlockRef{node.control_block})
+				: decltype(adaptor->block_succs(
+					IRBlockRef{node.control_block})){};
+			bool frame_operands = (node.kind == Adaptor::InstKind::MIR
+					|| (guarded && node.control_block != UINT32_MAX
+						&& node.continuation_block != UINT32_MAX
+						&& guarded_successors.size() >= 2
+						&& static_cast<uint32_t>(guarded_successors[0])
+							== node.continuation_block
+						&& static_cast<uint32_t>(guarded_successors[1])
+							== node.argument_index))
+				&& mir.has_value_operation
+				&& operation.source_opcode == ZEND_ASSIGN_DIM
+				&& !zend_mir_id_is_valid(operation.result_storage_id);
+			for (IRValueRef operand : node.operands) {
+				frame_operands = frame_operands
+					&& (operand == IRValueRef{Adaptor::FRAME_VALUE}
+						|| operand == IRValueRef{
+							Adaptor::EXECUTION_CONTEXT_ARGUMENT});
+			}
+			struct SlotOperand {
+				bool literal;
+				int32_t offset;
+			};
+			auto slot_operand = [&](const zend_mir_source_operand_ref &operand,
+					zend_mir_storage_id storage, bool allow_literal,
+					SlotOperand *out) {
+				uint64_t offset;
+				if (operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+					if (!allow_literal) {
+						return false;
+					}
+					out->literal = true;
+					offset = uint64_t{operand.index} * sizeof(zval);
+				} else if ((operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+							|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+						&& (operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+							|| operand.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP)
+						&& zend_mir_id_is_valid(storage)) {
+					out->literal = false;
+					offset = (uint64_t{ZEND_CALL_FRAME_SLOT} + storage)
+						* sizeof(zval);
+				} else {
+					return false;
+				}
+				if (offset > INT32_MAX - sizeof(zval)) {
+					return false;
+				}
+				out->offset = static_cast<int32_t>(offset);
+				return true;
+			};
+			SlotOperand container{}, key{}, value{};
+			if (!frame_operands
+					|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+					|| !slot_operand(operation.op1, operation.op1_storage_id,
+						false, &container)
+					|| !slot_operand(operation.op2, operation.op2_storage_id,
+						true, &key)
+					|| !slot_operand(operation.auxiliary,
+						operation.auxiliary_storage_id, true, &value)) {
+				return execute_value_operation();
+			}
+			const auto spilled = guarded
+				? decltype(spill_before_branch(true)){}
+				: spill_before_branch(true);
+			if (guarded) {
+				/* The guarded form owns its frame operand uses; the helper
+				 * form consumes them in execute_value_operation(). */
+				for (IRValueRef operand : node.operands) {
+					auto consumed = val_ref(operand);
+					(void) consumed;
+				}
+			}
+			auto slow = text_writer.label_create();
+			auto done = text_writer.label_create();
+			ScratchReg decision{this};
+			{
+				const AsmReg frame_reg = canonical_frame_register();
+				ScratchReg literals{this};
+				ScratchReg array{this};
+				ScratchReg index{this};
+				ScratchReg type{this};
+				ScratchReg payload{this};
+				auto array_reg = array.alloc_gp();
+				auto index_reg = index.alloc_gp();
+				auto type_reg = type.alloc_gp();
+				auto payload_reg = payload.alloc_gp();
+				AsmReg literals_reg = frame_reg;
+				if (key.literal || value.literal) {
+					literals_reg = literals.alloc_gp();
+					ASM(MOV64rm, literals_reg,
+						FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_execute_data, func))));
+					ASM(MOV64rm, literals_reg,
+						FE_MEM(literals_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_op_array, literals))));
+				}
+				const int32_t type_info =
+					static_cast<int32_t>(offsetof(zval, u1.type_info));
+				ASM(CMP8mi,
+					FE_MEM(frame_reg, 0, FE_NOREG,
+						container.offset + type_info),
+					IS_ARRAY);
+				generate_raw_jump(Jump::jne, slow);
+				ASM(MOV64rm, array_reg,
+					FE_MEM(frame_reg, 0, FE_NOREG, container.offset));
+				ASM(CMP32mi,
+					FE_MEM(array_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(
+							zend_refcounted_h, refcount))),
+					1);
+				generate_raw_jump(Jump::jne, slow);
+				ASM(TEST32mi,
+					FE_MEM(array_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(HashTable, u))),
+					HASH_FLAG_PACKED);
+				generate_raw_jump(Jump::je, slow);
+				const AsmReg key_base = key.literal ? literals_reg : frame_reg;
+				ASM(CMP8mi,
+					FE_MEM(key_base, 0, FE_NOREG, key.offset + type_info),
+					IS_LONG);
+				generate_raw_jump(Jump::jne, slow);
+				ASM(MOV64rm, index_reg,
+					FE_MEM(key_base, 0, FE_NOREG, key.offset));
+				ASM(MOV32rm, type_reg,
+					FE_MEM(array_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(HashTable, nNumUsed))));
+				ASM(CMP64rr, index_reg, type_reg);
+				generate_raw_jump(Jump::jae, slow);
+				ASM(SHL64ri, index_reg, 4);
+				ASM(ADD64rm, index_reg,
+					FE_MEM(array_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(HashTable, arPacked))));
+				/* The old element must exist and need no release. */
+				ASM(MOV32rm, type_reg,
+					FE_MEM(index_reg, 0, FE_NOREG, type_info));
+				ASM(CMP8ri, type_reg, IS_UNDEF);
+				generate_raw_jump(Jump::je, slow);
+				ASM(TEST32ri, type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+				generate_raw_jump(Jump::jne, slow);
+				/* The new value must be defined and need no reference. */
+				const AsmReg value_base =
+					value.literal ? literals_reg : frame_reg;
+				ASM(MOV32rm, type_reg,
+					FE_MEM(value_base, 0, FE_NOREG, value.offset + type_info));
+				ASM(CMP8ri, type_reg, IS_UNDEF);
+				generate_raw_jump(Jump::je, slow);
+				ASM(TEST32ri, type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+				generate_raw_jump(Jump::jne, slow);
+				ASM(MOV64rm, payload_reg,
+					FE_MEM(value_base, 0, FE_NOREG, value.offset));
+				ASM(MOV64mr, FE_MEM(index_reg, 0, FE_NOREG, 0), payload_reg);
+				ASM(MOV32mr, FE_MEM(index_reg, 0, FE_NOREG, type_info),
+					type_reg);
+				if (guarded) {
+					array.reset();
+					index.reset();
+					payload.reset();
+					literals.reset();
+					type.reset();
+					auto decision_reg = decision.alloc_gp();
+					ASM(MOV32ri, decision_reg, 0);
+					generate_raw_jump(Jump::jmp, done);
+					label_place(slow);
+					ASM(MOV32ri, decision_reg, 1);
+					label_place(done);
+				} else {
+					generate_raw_jump(Jump::jmp, done);
+				}
+			}
+			if (guarded) {
+				generate_guarded_decision_branch(
+					std::move(decision), guarded_successors[1],
+					guarded_successors[0]);
+				return true;
+			}
+			label_place(slow);
+			if (!execute_value_operation()) {
+				return false;
+			}
+			label_place(done);
+			release_spilled_regs(spilled);
+			return true;
 		}
 		if (node.kind != Adaptor::InstKind::GuardedFast
 				|| node.control_block == UINT32_MAX
