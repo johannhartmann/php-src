@@ -10044,7 +10044,8 @@ static bool freeze_typed_component_calls(
 				&& boxed_read_producer->record.opcode
 					== ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
 				&& zend_tpde_array_read_at(
-					*boxed_read_producer, &array_layout)
+					*boxed_read_producer, &array_layout,
+					plan->temporary_integer_array_keys)
 				&& boxed_read_reference != nullptr
 				&& boxed_read_reference->kind
 					== ZEND_TPDE_MACHINE_REFERENCE_PACKED_ELEMENT
@@ -12256,6 +12257,8 @@ extern "C" zend_result zend_tpde_compile_component_w14_with_runtime(
 			break;
 		}
 		plans[initialized].symbol_namespace = initialized;
+		plans[initialized].temporary_integer_array_keys =
+			target == ZEND_NATIVE_TARGET_LINUX_AMD64;
 		plan_refs[initialized] = &plans[initialized];
 	}
 	if (initialized != member_count) {

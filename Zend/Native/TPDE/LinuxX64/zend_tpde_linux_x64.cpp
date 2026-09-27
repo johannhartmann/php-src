@@ -6317,7 +6317,8 @@ bool ZendCompilerX64::compile_inst_impl(
 			operation_machine_reference(
 				ZEND_TPDE_MACHINE_REFERENCE_PACKED_ELEMENT);
 
-		if (!zend_tpde_array_read_at(mir, &layout)
+		if (!zend_tpde_array_read_at(mir, &layout,
+					adaptor->plan()->temporary_integer_array_keys)
 				|| element_reference == nullptr
 				|| (!layout.container_literal
 					&& !zend_mir_id_is_valid(
@@ -6332,6 +6333,15 @@ bool ZendCompilerX64::compile_inst_impl(
 			return branch_to_guarded_cold();
 		}
 		if (!node.has_result) {
+			return branch_to_guarded_cold();
+		}
+		/* A temporary key is consumed by the read. The fast path accepts only
+		 * integer keys, which need no release; a string temporary goes to the
+		 * helper, which frees it. */
+		if (mir.value_operation.op2.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+				&& (node.operands.empty()
+					|| adaptor->machine_kind(node.operands[0])
+						== ZEND_TPDE_MACHINE_VALUE_STRING_PTR)) {
 			return branch_to_guarded_cold();
 		}
 		if (node.kind == Adaptor::InstKind::GuardedFast) {
