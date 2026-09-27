@@ -7474,7 +7474,7 @@ bool ZendCompilerX64::compile_inst_impl(
 	auto string_length = [&]() {
 		zend_tpde_string_length layout;
 
-		if (!zend_tpde_string_length_at(mir, &layout)) {
+		if (!zend_tpde_string_length_at(mir, &layout, true)) {
 			zend_tpde_bool_unary boolean;
 			const bool boolean_layout =
 				zend_tpde_bool_unary_at(mir, &boolean);
@@ -7689,21 +7689,29 @@ bool ZendCompilerX64::compile_inst_impl(
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(layout.operand_offset)));
 
-		auto [result_ref, result] = result_ref_single(node.result);
-		auto result_reg = result.alloc_reg();
-		ASM(MOV64rm, result_reg,
-			FE_MEM(string_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zend_string, len))));
-		result.set_modified();
-		ASM(MOV64mr,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(layout.result_offset)),
-			result_reg);
-		ASM(MOV32mi,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(layout.result_offset
-					+ offsetof(zval, u1.type_info))),
-			IS_LONG);
+		/* A frame-only consumer such as RETURN reads the published slot. */
+		auto store_length = [&](AsmReg length_reg) {
+			ASM(MOV64rm, length_reg,
+				FE_MEM(string_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_string, len))));
+			ASM(MOV64mr,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(layout.result_offset)),
+				length_reg);
+			ASM(MOV32mi,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(layout.result_offset
+						+ offsetof(zval, u1.type_info))),
+				IS_LONG);
+		};
+		if (node.has_result) {
+			auto [result_ref, result] = result_ref_single(node.result);
+			store_length(result.alloc_reg());
+			result.set_modified();
+		} else {
+			ScratchReg length{this};
+			store_length(length.alloc_gp());
+		}
 		ASM(MOV32ri, decision_reg, 0);
 		generate_raw_jump(Jump::jmp, ready);
 
@@ -8404,6 +8412,9 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto value_reg = value.alloc_gp();
 		auto limit_reg = limit.alloc_gp();
 		auto decision_reg = decision.alloc_gp();
+		/* Address of the updated integer when it is not the CV slot itself. */
+		ScratchReg target{this};
+		AsmReg target_reg{};
 
 		if (!node.operands.empty()
 				&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
@@ -8428,6 +8439,49 @@ bool ZendCompilerX64::compile_inst_impl(
 			ASM(AND32ri, type_reg, Z_TYPE_MASK);
 			ASM(CMP32ri, type_reg, IS_LONG);
 			generate_raw_jump(Jump::jne, slow);
+		} else if (!(node.mutation_result && mir.mutation_lazy_scalar)) {
+			/*
+			 * The CV may hold a reference, as for an int &$value parameter.
+			 * Update an untyped reference's integer in place; typed
+			 * references need the helper's type checks.
+			 */
+			auto direct = text_writer.label_create();
+			auto loaded = text_writer.label_create();
+			target_reg = target.alloc_gp();
+			ASM(MOV32rm, type_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						layout.operand_offset
+							+ offsetof(zval, u1.type_info))));
+			ASM(AND32ri, type_reg, Z_TYPE_MASK);
+			ASM(CMP32ri, type_reg, IS_LONG);
+			generate_raw_jump(Jump::je, direct);
+			ASM(CMP32ri, type_reg, IS_REFERENCE);
+			generate_raw_jump(Jump::jne, slow);
+			ASM(MOV64rm, target_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(layout.operand_offset)));
+			ASM(CMP64mi,
+				FE_MEM(target_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_reference, sources.ptr))),
+				0);
+			generate_raw_jump(Jump::jne, slow);
+			ASM(ADD64ri, target_reg,
+				static_cast<int32_t>(offsetof(zend_reference, val)));
+			ASM(MOV32rm, type_reg,
+				FE_MEM(target_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zval, u1.type_info))));
+			ASM(AND32ri, type_reg, Z_TYPE_MASK);
+			ASM(CMP32ri, type_reg, IS_LONG);
+			generate_raw_jump(Jump::jne, slow);
+			generate_raw_jump(Jump::jmp, loaded);
+			label_place(direct);
+			ASM(LEA64rm, target_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(layout.operand_offset)));
+			label_place(loaded);
+			ASM(MOV64rm, value_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
 		} else {
 			ASM(MOV32rm, type_reg,
 				FE_MEM(frame_reg, 0, FE_NOREG,
@@ -8502,7 +8556,9 @@ bool ZendCompilerX64::compile_inst_impl(
 				return false;
 			}
 		}
-		if (!(node.kind == Adaptor::InstKind::GuardedFast
+		if (target.has_reg()) {
+			ASM(MOV64mr, FE_MEM(target_reg, 0, FE_NOREG, 0), value_reg);
+		} else if (!(node.kind == Adaptor::InstKind::GuardedFast
 					&& node.mutation_result
 					&& mir.mutation_lazy_scalar)) {
 			ASM(MOV64mr,

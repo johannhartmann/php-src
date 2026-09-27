@@ -992,7 +992,8 @@ static inline bool zend_tpde_array_isset_at(
 
 static inline bool zend_tpde_string_length_at(
 	const zend_tpde_instruction &instruction,
-	zend_tpde_string_length *out)
+	zend_tpde_string_length *out,
+	bool allow_ssa_result = false)
 {
 	const zend_mir_executable_value_ref &operation =
 		instruction.value_operation;
@@ -1003,7 +1004,9 @@ static inline bool zend_tpde_string_length_at(
 			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_UNARY_OP
 			|| operation.source_opcode != ZEND_STRLEN
 			|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
-			|| operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+			|| (operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+				&& (!allow_ssa_result
+					|| operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SSA))
 			|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
 				&& operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
 				&& operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_VAR)
