@@ -33,6 +33,9 @@ AS_VAR_IF([PHP_NATIVE_ENGINE], [no], [], [
   PHP_REQUIRE_CXX()
   PHP_CXX_COMPILE_STDCXX([20], [mandatory], [PHP_NATIVE_MIR_TEST_STDCXX])
   PHP_NATIVE_MIR_TEST_CXXFLAGS="$PHP_NATIVE_MIR_TEST_STDCXX -fno-exceptions -fno-rtti"
+  dnl Zend API changes that C would only warn about, such as a zval * passed
+  dnl where a zend_object * is now expected, must fail the native build.
+  PHP_NATIVE_MIR_TEST_CFLAGS="-Werror=incompatible-pointer-types -Werror=int-conversion"
 
   AC_PATH_PROG([NATIVE_MIR_TEST_PYTHON], [python3])
   AS_IF([test -z "$NATIVE_MIR_TEST_PYTHON"], [
@@ -99,108 +102,160 @@ AS_VAR_IF([PHP_NATIVE_ENGINE], [no], [], [
     [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
   PHP_ADD_BUILD_DIR([Zend/Native/Runtime/Common])
   PHP_ADD_SOURCES([Zend/Native/Runtime/Common],
-    [zend_native_bindings.c zend_native_calls.c zend_native_execute.c zend_native_generators.c zend_native_internal_call.c zend_native_objects.c zend_native_runtime.c zend_native_values.c])
+    [zend_native_bindings.c zend_native_calls.c zend_native_execute.c zend_native_generators.c zend_native_internal_call.c zend_native_objects.c zend_native_runtime.c zend_native_values.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Compiler])
-  PHP_ADD_SOURCES([Zend/Native/Compiler], [zend_native_dynamic_code.c])
-  PHP_ADD_SOURCES([Zend/Native/Compiler], [zend_native_compiler.c])
-  PHP_ADD_SOURCES([Zend/Native/Compiler], [zend_native_executor.c])
+  PHP_ADD_SOURCES([Zend/Native/Compiler], [zend_native_dynamic_code.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
+  PHP_ADD_SOURCES([Zend/Native/Compiler], [zend_native_compiler.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
+  PHP_ADD_SOURCES([Zend/Native/Compiler], [zend_native_executor.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   dnl BEGIN GENERATED NATIVE SOURCES
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/CFG])
-  PHP_ADD_SOURCES([Zend/Native/MIR/CFG], [zend_mir_cfg.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/CFG], [zend_mir_cfg.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/CFG])
-  PHP_ADD_SOURCES([Zend/Native/MIR/CFG], [zend_mir_dominance.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/CFG], [zend_mir_dominance.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/CFG])
-  PHP_ADD_SOURCES([Zend/Native/MIR/CFG], [zend_mir_phi.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/CFG], [zend_mir_phi.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/Core])
-  PHP_ADD_SOURCES([Zend/Native/MIR/Core], [zend_mir_arena.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/Core], [zend_mir_arena.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/Core])
-  PHP_ADD_SOURCES([Zend/Native/MIR/Core], [zend_mir_ids.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/Core], [zend_mir_ids.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/Core])
-  PHP_ADD_SOURCES([Zend/Native/MIR/Core], [zend_mir_module.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/Core], [zend_mir_module.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/Core])
-  PHP_ADD_SOURCES([Zend/Native/MIR/Core], [zend_mir_view.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/Core], [zend_mir_view.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/Frame])
-  PHP_ADD_SOURCES([Zend/Native/MIR/Frame], [zend_mir_frame_intern.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/Frame], [zend_mir_frame_intern.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/Frame])
-  PHP_ADD_SOURCES([Zend/Native/MIR/Frame], [zend_mir_frame_state.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/Frame], [zend_mir_frame_state.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/Frame])
-  PHP_ADD_SOURCES([Zend/Native/MIR/Frame], [zend_mir_source_map.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/Frame], [zend_mir_source_map.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/Scalar])
-  PHP_ADD_SOURCES([Zend/Native/MIR/Scalar], [zend_mir_scalar_descriptors.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/Scalar], [zend_mir_scalar_descriptors.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/Scalar])
-  PHP_ADD_SOURCES([Zend/Native/MIR/Scalar], [zend_mir_value_facts.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/Scalar], [zend_mir_value_facts.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/Scalar])
-  PHP_ADD_SOURCES([Zend/Native/MIR/Scalar], [zend_mir_verify_scalar.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/Scalar], [zend_mir_verify_scalar.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/Semantics])
-  PHP_ADD_SOURCES([Zend/Native/MIR/Semantics], [zend_mir_alias.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/Semantics], [zend_mir_alias.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/Semantics])
-  PHP_ADD_SOURCES([Zend/Native/MIR/Semantics], [zend_mir_effect_summary.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/Semantics], [zend_mir_effect_summary.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/Semantics])
-  PHP_ADD_SOURCES([Zend/Native/MIR/Semantics], [zend_mir_ownership.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/Semantics], [zend_mir_ownership.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/Semantics])
-  PHP_ADD_SOURCES([Zend/Native/MIR/Semantics], [zend_mir_semantic_catalog.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/Semantics], [zend_mir_semantic_catalog.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/Text])
-  PHP_ADD_SOURCES([Zend/Native/MIR/Text], [zend_mir_dump.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/Text], [zend_mir_dump.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/Verify])
-  PHP_ADD_SOURCES([Zend/Native/MIR/Verify], [zend_mir_verify.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/Verify], [zend_mir_verify.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/Verify])
-  PHP_ADD_SOURCES([Zend/Native/MIR/Verify], [zend_mir_verify_cfg.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/Verify], [zend_mir_verify_cfg.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/Verify])
-  PHP_ADD_SOURCES([Zend/Native/MIR/Verify], [zend_mir_verify_dominance.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/Verify], [zend_mir_verify_dominance.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/Verify])
-  PHP_ADD_SOURCES([Zend/Native/MIR/Verify], [zend_mir_verify_frames.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/Verify], [zend_mir_verify_frames.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/Verify])
-  PHP_ADD_SOURCES([Zend/Native/MIR/Verify], [zend_mir_verify_ids.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/Verify], [zend_mir_verify_ids.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/Verify])
-  PHP_ADD_SOURCES([Zend/Native/MIR/Verify], [zend_mir_verify_semantics.c])
+  PHP_ADD_SOURCES([Zend/Native/MIR/Verify], [zend_mir_verify_semantics.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/Core])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/Core], [zend_mir_lowering.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/Core], [zend_mir_lowering.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/Core])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/Core], [zend_mir_lowering_context.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/Core], [zend_mir_lowering_context.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/Core])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/Core], [zend_mir_lowering_diagnostics.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/Core], [zend_mir_lowering_diagnostics.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/Core])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/Core], [zend_mir_lowering_providers.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/Core], [zend_mir_lowering_providers.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/Core])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/Core], [zend_mir_lowering_registry.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/Core], [zend_mir_lowering_registry.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/Frontend])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/Frontend], [zend_mir_literal_pool.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/Frontend], [zend_mir_literal_pool.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/Frontend])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/Frontend], [zend_mir_operand_map.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/Frontend], [zend_mir_operand_map.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/Frontend])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/Frontend], [zend_mir_slot_map.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/Frontend], [zend_mir_slot_map.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/Frontend])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/Frontend], [zend_mir_source_positions.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/Frontend], [zend_mir_source_positions.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/Frontend])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/Frontend], [zend_mir_value_facts.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/Frontend], [zend_mir_value_facts.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/Frontend])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/Frontend], [zend_mir_zend_source.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/Frontend], [zend_mir_zend_source.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/Scalar/Logic])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/Scalar/Logic], [zend_mir_logic_proofs.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/Scalar/Logic], [zend_mir_logic_proofs.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/Scalar/Logic])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/Scalar/Logic], [zend_mir_logic_provider.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/Scalar/Logic], [zend_mir_logic_provider.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/Scalar/Logic])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/Scalar/Logic], [zend_mir_lower_boolean.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/Scalar/Logic], [zend_mir_lower_boolean.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/Scalar/Logic])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/Scalar/Logic], [zend_mir_lower_cast.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/Scalar/Logic], [zend_mir_lower_cast.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/Scalar/Logic])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/Scalar/Logic], [zend_mir_lower_compare.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/Scalar/Logic], [zend_mir_lower_compare.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/Scalar/Numeric])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/Scalar/Numeric], [zend_mir_lower_numeric.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/Scalar/Numeric], [zend_mir_lower_numeric.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/Scalar/Numeric])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/Scalar/Numeric], [zend_mir_numeric_proofs.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/Scalar/Numeric], [zend_mir_numeric_proofs.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/Scalar/Numeric])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/Scalar/Numeric], [zend_mir_numeric_provider.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/Scalar/Numeric], [zend_mir_numeric_provider.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/StraightLine])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/StraightLine], [zend_mir_lifetime_provider.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/StraightLine], [zend_mir_lifetime_provider.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/StraightLine])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/StraightLine], [zend_mir_lower_copy_move.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/StraightLine], [zend_mir_lower_copy_move.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/StraightLine])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/StraightLine], [zend_mir_lower_entry_state.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/StraightLine], [zend_mir_lower_entry_state.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/StraightLine])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/StraightLine], [zend_mir_lower_return.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/StraightLine], [zend_mir_lower_return.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/StraightLine])
-  PHP_ADD_SOURCES([Zend/Native/Lowering/StraightLine], [zend_mir_lower_structural.c])
+  PHP_ADD_SOURCES([Zend/Native/Lowering/StraightLine], [zend_mir_lower_structural.c],
+    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/ControlFlow])
   PHP_ADD_SOURCES_X([Zend/Native/Lowering/ControlFlow], [zend_mir_control_flow_proofs.c],, [PHP_GLOBAL_OBJS])
   PHP_ADD_BUILD_DIR([Zend/Native/Lowering/ControlFlow])
