@@ -2855,6 +2855,61 @@ static bool zend_mir_frontend_snapshot_target(
 		inventory, &target->record, function);
 }
 
+/*
+ * The VM captures a method receiver at INIT_METHOD_CALL, while a resolved
+ * native method call reads it from its source slot when the call frame is
+ * pushed at DO time.  Resolve the call only when that slot provably still
+ * holds the same value there: the optimizer reuses a consumed temporary as
+ * soon as INIT has read it, and argument code may reassign a CV receiver.
+ */
+static bool zend_mir_frontend_method_receiver_is_stable(
+	const zend_op_array *op_array, const zend_ssa *ssa,
+	uint32_t init_opline_index)
+{
+	const zend_op *init = &op_array->opcodes[init_opline_index];
+	int receiver_ssa;
+	int receiver_var;
+	uint32_t depth = 1;
+	uint32_t index;
+
+	if (init->opcode != ZEND_INIT_METHOD_CALL || init->op1_type == IS_UNUSED
+			|| init->op1_type == IS_CONST) {
+		return true;
+	}
+	if (ssa == NULL || ssa->ops == NULL || ssa->vars == NULL
+			|| (ssa->cfg.flags & ZEND_FUNC_INDIRECT_VAR_ACCESS) != 0) {
+		return false;
+	}
+	receiver_ssa = ssa->ops[init_opline_index].op1_use;
+	if (receiver_ssa < 0 || receiver_ssa >= ssa->vars_count) {
+		return false;
+	}
+	if (init->op1_type == IS_CV
+			&& (ssa->var_info == NULL
+				|| (ssa->var_info[receiver_ssa].type & MAY_BE_REF) != 0)) {
+		return false;
+	}
+	receiver_var = ssa->vars[receiver_ssa].var;
+	for (index = init_opline_index + 1; index < op_array->last; index++) {
+		const zend_ssa_op *op = &ssa->ops[index];
+
+		if (zend_mir_frontend_is_call_init(op_array->opcodes[index].opcode)) {
+			depth++;
+		} else if (zend_mir_frontend_is_call_do(
+				op_array->opcodes[index].opcode) && --depth == 0) {
+			return true;
+		}
+		if ((op->op1_def >= 0 && ssa->vars[op->op1_def].var == receiver_var)
+				|| (op->op2_def >= 0
+					&& ssa->vars[op->op2_def].var == receiver_var)
+				|| (op->result_def >= 0
+					&& ssa->vars[op->result_def].var == receiver_var)) {
+			return false;
+		}
+	}
+	return false;
+}
+
 static bool zend_mir_frontend_target_for_call(
 	zend_mir_frontend_call_inventory *inventory,
 	const zend_script *script, const zend_op_array *op_array,
@@ -2902,6 +2957,11 @@ static bool zend_mir_frontend_target_for_call(
 		}
 		function = zend_mir_frontend_canonical_script_function(
 			script, function);
+		if (function != NULL
+				&& !zend_mir_frontend_method_receiver_is_stable(
+					op_array, ssa, opline_index)) {
+			function = NULL;
+		}
 	}
 	kind = zend_mir_frontend_target_kind(
 		opline->opcode, function, script, op_array);
