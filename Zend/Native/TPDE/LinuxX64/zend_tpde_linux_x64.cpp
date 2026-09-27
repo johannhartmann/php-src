@@ -6338,7 +6338,10 @@ bool ZendCompilerX64::compile_inst_impl(
 		/* A temporary key is consumed by the read. The fast path accepts only
 		 * integer keys, which need no release; a string temporary goes to the
 		 * helper, which frees it. */
-		if (mir.value_operation.op2.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+		const bool temporary_key =
+			mir.value_operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+			|| mir.value_operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR;
+		if (temporary_key
 				&& (node.operands.empty()
 					|| adaptor->machine_kind(node.operands[0])
 						== ZEND_TPDE_MACHINE_VALUE_STRING_PTR)) {
@@ -6651,6 +6654,12 @@ bool ZendCompilerX64::compile_inst_impl(
 					guarded_successors[0]);
 				return true;
 			}
+		}
+		/* The framed form reads both operands from their canonical CV slots. */
+		if (layout.container_literal
+				|| mir.value_operation.op2.slot_kind
+					!= ZEND_MIR_SOURCE_SLOT_CV) {
+			return branch_to_guarded_cold();
 		}
 		auto slow = text_writer.label_create();
 		auto key_long = text_writer.label_create();
