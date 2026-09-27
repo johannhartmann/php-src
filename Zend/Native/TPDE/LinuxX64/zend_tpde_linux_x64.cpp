@@ -15831,6 +15831,71 @@ bool ZendCompilerX64::compile_inst_impl(
 					|| node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}) {
 				return false;
 			}
+			/*
+			 * Returning a temporary moves it into the caller's return zval.
+			 * Do that inline; a reference, an undefined slot or a discarded
+			 * result (no return zval) keeps the helper.
+			 */
+			const uint64_t temporary_return_offset =
+				(uint64_t{ZEND_CALL_FRAME_SLOT}
+					+ mir.value_operation.op1_storage_id) * sizeof(zval);
+			if (mir.value_operation.source_opcode == ZEND_RETURN
+					&& (mir.value_operation.op1.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_TMP
+						|| mir.value_operation.op1.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_VAR)
+					&& zend_mir_id_is_valid(
+						mir.value_operation.op1_storage_id)
+					&& temporary_return_offset
+						<= INT32_MAX - sizeof(zval)) {
+				const int32_t payload_offset =
+					static_cast<int32_t>(temporary_return_offset);
+				const int32_t type_offset = payload_offset
+					+ static_cast<int32_t>(offsetof(zval, u1.type_info));
+				auto helper = text_writer.label_create();
+				{
+					const AsmReg frame_reg = canonical_frame_register();
+					ScratchReg return_value{this};
+					ScratchReg payload{this};
+					ScratchReg type{this};
+					auto return_value_reg = return_value.alloc_gp();
+					auto payload_reg = payload.alloc_gp();
+					auto type_reg = type.alloc_gp();
+					ASM(MOV64rm, return_value_reg,
+						FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_execute_data, return_value))));
+					ASM(TEST64rr, return_value_reg, return_value_reg);
+					generate_raw_jump(Jump::je, helper);
+					ASM(MOV32rm, type_reg,
+						FE_MEM(frame_reg, 0, FE_NOREG, type_offset));
+					ASM(CMP8ri, type_reg, IS_REFERENCE);
+					generate_raw_jump(Jump::je, helper);
+					ASM(CMP8ri, type_reg, IS_UNDEF);
+					generate_raw_jump(Jump::je, helper);
+					ASM(MOV64rm, payload_reg,
+						FE_MEM(frame_reg, 0, FE_NOREG, payload_offset));
+					ASM(MOV64mr,
+						FE_MEM(return_value_reg, 0, FE_NOREG, 0),
+						payload_reg);
+					ASM(MOV32mr,
+						FE_MEM(return_value_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zval, u1.type_info))),
+						type_reg);
+					ASM(MOV32mi,
+						FE_MEM(frame_reg, 0, FE_NOREG, type_offset),
+						IS_UNDEF);
+				}
+				{
+					RetBuilder return_builder{*this, *cur_cc_assigner()};
+					return_builder.add(ValuePart{ZEND_NATIVE_RETURNED, 4,
+						tpde::x64::PlatformConfig::GP_BANK},
+						tpde::CCAssignment{});
+					return_builder.ret();
+				}
+				label_place(helper);
+			}
 			tpde::x64::CCAssignerSysV assigner{false};
 			CallBuilder builder{*this, assigner};
 			builder.add_arg(
