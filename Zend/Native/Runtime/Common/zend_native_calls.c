@@ -5569,8 +5569,12 @@ zend_native_status zend_native_call_convert_explicit(
 		/* Mirrors ZEND_CALLABLE_CONVERT_PARTIAL: op1 is the PFA name literal,
 		 * extended_value carries the cache slot offset plus
 		 * ZEND_PARTIAL_FLAGS, and const_args lives in op2.num when op2 is
-		 * unused or in the named-positions literal's Z_EXTRA otherwise. */
-		uint32_t cache_offset = extended_value & ~ZEND_PARTIAL_FLAGS;
+		 * unused or in the named-positions literal's Z_EXTRA otherwise.
+		 * Read extended_value from the live opline: OPcache adds
+		 * ZEND_PARTIAL_CACHEABLE_IN_SHM when it persists the script, after
+		 * the native descriptor captured its copy. */
+		const uint32_t partial_extended_value = opline->extended_value;
+		uint32_t cache_offset = partial_extended_value & ~ZEND_PARTIAL_FLAGS;
 		void **cache_slot;
 		zval *pfa_name;
 		zval *named_positions = NULL;
@@ -5609,7 +5613,7 @@ zend_native_status zend_native_call_convert_explicit(
 				? call->extra_named_params : NULL,
 			named_positions != NULL ? Z_ARRVAL_P(named_positions) : NULL,
 			op_array->filename, &opline->lineno, cache_slot,
-			Z_STR_P(pfa_name), extended_value & ZEND_PARTIAL_FLAGS,
+			Z_STR_P(pfa_name), partial_extended_value & ZEND_PARTIAL_FLAGS,
 			const_args);
 		if ((call_info & ZEND_CALL_HAS_EXTRA_NAMED_PARAMS) != 0) {
 			zend_array_release(call->extra_named_params);
