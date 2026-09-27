@@ -6925,7 +6925,7 @@ public:
 					zend_tpde_array_read layout{};
 					source_boxed_result_machine_eligible =
 						zend_tpde_array_read_at(instruction, &layout,
-							plan_->temporary_integer_array_keys)
+							plan_->linux_inline_forms)
 						&& operation_machine_reference(i, &reference)
 						&& reference != nullptr
 						&& reference->kind

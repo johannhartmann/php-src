@@ -5232,6 +5232,36 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::memset(plan, 0, sizeof(*plan));
 }
 
+/*
+ * An inline call frame copies a SEND_VAL temporary when the call starts at
+ * DO, while the VM copies it at SEND. The optimizer may reuse the slot in
+ * between, for example for a nested call. Only a temporary whose slot no
+ * opline after the SEND and before the DO writes can move at DO; the x64
+ * frame copies arguments before it clears the DO result slot.
+ */
+static bool temporary_argument_slot_is_stable(
+		const zend_op_array *op_array, uint32_t send_opline,
+		uint32_t do_opline, uint32_t temporary_index) {
+	if (op_array == nullptr || send_opline >= do_opline
+			|| do_opline >= op_array->last) {
+		return false;
+	}
+	const uint32_t var = EX_NUM_TO_VAR(
+		static_cast<uint32_t>(op_array->last_var) + temporary_index);
+	for (uint32_t index = send_opline + 1; index < do_opline; ++index) {
+		const zend_op &opline = op_array->opcodes[index];
+		if (((opline.result_type & (IS_TMP_VAR | IS_VAR)) != 0
+					&& opline.result.var == var)
+				|| ((opline.op2_type & (IS_TMP_VAR | IS_VAR)) != 0
+					&& opline.op2.var == var
+					&& (opline.opcode == ZEND_FE_FETCH_R
+						|| opline.opcode == ZEND_FE_FETCH_RW))) {
+			return false;
+		}
+	}
+	return true;
+}
+
 bool initialize_plan(
 	const zend_mir_view *view,
 	const zend_native_runtime_api *runtime,
@@ -5245,9 +5275,11 @@ bool initialize_plan(
 	const zend_op_array *source_op_array,
 	const zend_ssa *source_ssa,
 	bool inline_typed_argument_guards,
+	bool linux_inline_forms,
 	zend_tpde_plan *plan,
 	zend_native_diagnostic *diag) {
 	plan->runtime = runtime;
+	plan->linux_inline_forms = linux_inline_forms;
 	plan->required_runtime_capabilities =
 		ZEND_NATIVE_RUNTIME_CAP_BAILOUT_BOUNDARY;
 	if (zend_native_runtime_validate(plan->runtime,
@@ -8093,7 +8125,26 @@ bool initialize_plan(
 											|| argument.source_operand.kind
 												== ZEND_MIR_SOURCE_OPERAND_SSA)
 										&& argument.source_operand.slot_kind
-											== ZEND_MIR_SOURCE_SLOT_CV)))
+											== ZEND_MIR_SOURCE_SLOT_CV)
+									/* A temporary moves into the callee
+									 * frame; it never holds a reference.
+									 * The frame reads it at DO, so no later
+									 * opline may reuse its slot first. */
+									|| (plan->linux_inline_forms
+										&& (argument.source_operand.kind
+												== ZEND_MIR_SOURCE_OPERAND_SLOT
+											|| argument.source_operand.kind
+												== ZEND_MIR_SOURCE_OPERAND_SSA)
+										&& argument.source_operand.slot_kind
+											== ZEND_MIR_SOURCE_SLOT_TMP
+										&& descriptor->arguments[n]
+											.source_frame_offset
+											!= UINT32_MAX
+										&& temporary_argument_slot_is_stable(
+											source_op_array,
+											argument.send_opline_index,
+											site.source_do_opline_index,
+											argument.source_operand.index))))
 							|| (descriptor->arguments[n].mode
 									== ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
 								&& (argument.source_operand.kind
@@ -10045,7 +10096,7 @@ static bool freeze_typed_component_calls(
 					== ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
 				&& zend_tpde_array_read_at(
 					*boxed_read_producer, &array_layout,
-					plan->temporary_integer_array_keys)
+					plan->linux_inline_forms)
 				&& boxed_read_reference != nullptr
 				&& boxed_read_reference->kind
 					== ZEND_TPDE_MACHINE_REFERENCE_PACKED_ELEMENT
@@ -12253,12 +12304,11 @@ extern "C" zend_result zend_tpde_compile_component_w14_with_runtime(
 				member.frame_argument_count,
 				member.source_op_array, member.source_ssa,
 				zend_tpde_target_has_value_transports(target),
+				target == ZEND_NATIVE_TARGET_LINUX_AMD64,
 				&plans[initialized], diag)) {
 			break;
 		}
 		plans[initialized].symbol_namespace = initialized;
-		plans[initialized].temporary_integer_array_keys =
-			target == ZEND_NATIVE_TARGET_LINUX_AMD64;
 		plan_refs[initialized] = &plans[initialized];
 	}
 	if (initialized != member_count) {
