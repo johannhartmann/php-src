@@ -8443,6 +8443,176 @@ bool ZendCompilerX64::compile_inst_impl(
 				return 0;
 			}
 
+			/* Zend's type inference fixes most operand types in numeric
+			 * code; test only the unknown ones. */
+			uint8_t left_known = IS_UNDEF;
+			uint8_t right_known = IS_UNDEF;
+			if (!register_operands
+					&& operation.source_position_id
+						< adaptor->plan()->source_opcode_count) {
+				const zend_tpde_source_opcode &source =
+					adaptor->plan()->source_opcodes[
+						operation.source_position_id];
+				if (source.opcode == opcode) {
+					left_known = source.op1_known_type;
+					right_known = source.op2_known_type;
+				}
+			}
+			const bool known_long =
+				left_known == IS_LONG && right_known == IS_LONG;
+			const bool known_double =
+				(left_known == IS_DOUBLE && right_known != IS_UNDEF)
+				|| (right_known == IS_DOUBLE && left_known != IS_UNDEF);
+			/*
+			 * Double arithmetic other than division and every comparison of
+			 * known numbers cannot fail: compute in SSE registers straight
+			 * from the slots and store a double or boolean.
+			 */
+			if (known_double && opcode != ZEND_DIV
+					&& (arithmetic
+						|| !node.has_result
+						|| result_kind == ZEND_TPDE_MACHINE_VALUE_BOOL
+						|| result_kind
+							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL)) {
+				auto [frame_ref, frame] =
+					val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+				auto frame_scratch = std::move(frame).into_scratch();
+				auto frame_reg = frame_scratch.cur_reg();
+				ScratchReg literals{this};
+				ScratchReg value{this};
+				ScratchReg left_double{this};
+				ScratchReg right_double{this};
+				auto value_reg = value.alloc_gp();
+				auto left_fp = left_double.alloc(
+					tpde::x64::PlatformConfig::FP_BANK);
+				auto right_fp = right_double.alloc(
+					tpde::x64::PlatformConfig::FP_BANK);
+				AsmReg literals_reg = frame_reg;
+				if (left.literal || right.literal) {
+					literals_reg = literals.alloc_gp();
+					ASM(MOV64rm, literals_reg,
+						FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_execute_data, func))));
+					ASM(MOV64rm, literals_reg,
+						FE_MEM(literals_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_op_array, literals))));
+				}
+				auto load_double = [&](const FramedOperand &operand,
+						uint8_t known, AsmReg fp_reg) {
+					const AsmReg base =
+						operand.literal ? literals_reg : frame_reg;
+					if (known == IS_DOUBLE) {
+						ASM(SSE_MOVSDrm, fp_reg,
+							FE_MEM(base, 0, FE_NOREG, operand.offset));
+					} else {
+						ASM(MOV64rm, value_reg,
+							FE_MEM(base, 0, FE_NOREG, operand.offset));
+						ASM(SSE_CVTSI2SD64rr, fp_reg, value_reg);
+					}
+				};
+				load_double(left, left_known, left_fp);
+				load_double(right, right_known, right_fp);
+				literals.reset();
+				if (arithmetic) {
+					switch (opcode) {
+						case ZEND_ADD:
+							ASM(SSE_ADDSDrr, left_fp, right_fp);
+							break;
+						case ZEND_SUB:
+							ASM(SSE_SUBSDrr, left_fp, right_fp);
+							break;
+						default:
+							ASM(SSE_MULSDrr, left_fp, right_fp);
+							break;
+					}
+					if (result_slot) {
+						ASM(SSE_MOVSDmr,
+							FE_MEM(frame_reg, 0, FE_NOREG, result_offset),
+							left_fp);
+						ASM(MOV32mi,
+							FE_MEM(frame_reg, 0, FE_NOREG, result_offset
+								+ static_cast<int32_t>(
+									offsetof(zval, u1.type_info))),
+							IS_DOUBLE);
+					}
+					if (node.has_result) {
+						auto fast_result = result_ref(node.result);
+						auto payload = fast_result.part(0);
+						auto type_info = fast_result.part(1);
+						auto payload_reg = payload.alloc_reg();
+						auto type_info_reg = type_info.alloc_reg();
+						ASM(SSE_MOVQ_X2Grr, payload_reg, left_fp);
+						ASM(MOV32ri, type_info_reg, IS_DOUBLE);
+						payload.set_modified();
+						type_info.set_modified();
+					}
+				} else {
+					ScratchReg parity{this};
+					auto parity_reg = parity.alloc_gp();
+					switch (opcode) {
+						case ZEND_IS_SMALLER:
+							ASM(SSE_UCOMISDrr, right_fp, left_fp);
+							generate_raw_set(Jump::ja, value_reg);
+							break;
+						case ZEND_IS_SMALLER_OR_EQUAL:
+							ASM(SSE_UCOMISDrr, right_fp, left_fp);
+							generate_raw_set(Jump::jae, value_reg);
+							break;
+						case ZEND_IS_EQUAL:
+							ASM(SSE_UCOMISDrr, left_fp, right_fp);
+							generate_raw_set(Jump::je, value_reg);
+							generate_raw_set(Jump::jnp, parity_reg);
+							ASM(AND32rr, value_reg, parity_reg);
+							break;
+						default:
+							ASM(SSE_UCOMISDrr, left_fp, right_fp);
+							generate_raw_set(Jump::jne, value_reg);
+							generate_raw_set(Jump::jp, parity_reg);
+							ASM(OR32rr, value_reg, parity_reg);
+							break;
+					}
+					if (result_slot) {
+						ASM(MOV32rr, parity_reg, value_reg);
+						ASM(ADD32ri, parity_reg, IS_FALSE);
+						ASM(MOV32mr,
+							FE_MEM(frame_reg, 0, FE_NOREG, result_offset
+								+ static_cast<int32_t>(
+									offsetof(zval, u1.type_info))),
+							parity_reg);
+					}
+					if (node.has_result) {
+						if (result_kind
+								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+							auto fast_result = result_ref(node.result);
+							auto payload = fast_result.part(0);
+							auto type_info = fast_result.part(1);
+							auto payload_reg = payload.alloc_reg();
+							auto type_info_reg = type_info.alloc_reg();
+							ASM(MOV64rr, payload_reg, value_reg);
+							ASM(MOV32rr, type_info_reg, value_reg);
+							ASM(ADD32ri, type_info_reg, IS_FALSE);
+							payload.set_modified();
+							type_info.set_modified();
+						} else {
+							auto [bool_ref, bool_result] =
+								result_ref_single(node.result);
+							auto bool_reg = bool_result.alloc_reg();
+							ASM(MOV64rr, bool_reg, value_reg);
+							bool_result.set_modified();
+						}
+					}
+				}
+				left_double.reset();
+				right_double.reset();
+				ASM(MOV32ri, value_reg, 0);
+				generate_guarded_decision_branch(
+					std::move(value), guarded_successors[1],
+					guarded_successors[0]);
+				return 1;
+			}
+
 			auto slow = text_writer.label_create();
 			auto done = text_writer.label_create();
 			auto mixed = text_writer.label_create();
@@ -8511,10 +8681,14 @@ bool ZendCompilerX64::compile_inst_impl(
 			load(right, right_type_reg, right_reg);
 
 			/* long op long */
-			ASM(CMP32ri, left_type_reg, IS_LONG);
-			generate_raw_jump(Jump::jne, mixed);
-			ASM(CMP32ri, right_type_reg, IS_LONG);
-			generate_raw_jump(Jump::jne, mixed);
+			if (known_double) {
+				generate_raw_jump(Jump::jmp, mixed);
+			} else if (!known_long) {
+				ASM(CMP32ri, left_type_reg, IS_LONG);
+				generate_raw_jump(Jump::jne, mixed);
+				ASM(CMP32ri, right_type_reg, IS_LONG);
+				generate_raw_jump(Jump::jne, mixed);
+			}
 			switch (opcode) {
 				case ZEND_ADD:
 					ASM(ADD64rr, left_reg, right_reg);
@@ -8552,7 +8726,15 @@ bool ZendCompilerX64::compile_inst_impl(
 			/* long or double, at least one double */
 			label_place(mixed);
 			auto to_double = [&](AsmReg type_reg, AsmReg value_reg,
-					AsmReg fp_reg) {
+					AsmReg fp_reg, uint8_t known) {
+				if (known == IS_DOUBLE) {
+					ASM(SSE_MOVQ_G2Xrr, fp_reg, value_reg);
+					return;
+				}
+				if (known == IS_LONG) {
+					ASM(SSE_CVTSI2SD64rr, fp_reg, value_reg);
+					return;
+				}
 				auto is_long = text_writer.label_create();
 				auto converted = text_writer.label_create();
 				ASM(CMP32ri, type_reg, IS_LONG);
@@ -8565,8 +8747,8 @@ bool ZendCompilerX64::compile_inst_impl(
 				ASM(SSE_CVTSI2SD64rr, fp_reg, value_reg);
 				label_place(converted);
 			};
-			to_double(left_type_reg, left_reg, left_fp);
-			to_double(right_type_reg, right_reg, right_fp);
+			to_double(left_type_reg, left_reg, left_fp, left_known);
+			to_double(right_type_reg, right_reg, right_fp, right_known);
 			switch (opcode) {
 				case ZEND_ADD:
 					ASM(SSE_ADDSDrr, left_fp, right_fp);
