@@ -11083,6 +11083,20 @@ bool ZendCompilerX64::compile_inst_impl(
 									== tpde::x64::PlatformConfig::FP_BANK) {
 								ASM(SSE_MOVSDrm, result_reg,
 									FE_MEM(result_slot_reg, 0, FE_NOREG, 0));
+							} else if (adaptor->exact_type(node.result)
+									== ZEND_MIR_SCALAR_TYPE_I1) {
+								/*
+								 * A bool zval carries its value in the type;
+								 * the payload is undefined (ZVAL_TRUE does not
+								 * write it).
+								 */
+								ASM(MOV32rm, result_reg,
+									FE_MEM(result_slot_reg, 0, FE_NOREG,
+										static_cast<int32_t>(offsetof(
+											zval, u1.type_info))));
+								ASM(AND32ri, result_reg, Z_TYPE_MASK);
+								ASM(CMP32ri, result_reg, IS_TRUE);
+								generate_raw_set(Jump::je, result_reg);
 							} else {
 								ASM(MOV64rm, result_reg,
 									FE_MEM(result_slot_reg, 0, FE_NOREG, 0));
