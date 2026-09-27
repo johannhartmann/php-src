@@ -11703,7 +11703,7 @@ bool ZendCompilerX64::compile_inst_impl(
 							|| typed_body_function
 								>= this->func_syms.size()
 							|| node.continuation_block == UINT32_MAX
-							|| node.operands.size() != argument_count) {
+							|| node.operands.size() < argument_count) {
 						return false;
 					}
 					tpde::x64::CCAssignerSysV body_assigner{false};
@@ -11747,6 +11747,52 @@ bool ZendCompilerX64::compile_inst_impl(
 						for (auto &body_result : body_results) {
 							body_result.reset(this);
 						}
+					}
+					/*
+					 * Operands after the arguments are owned boxed copies made by
+					 * the caller's fast reads; the typed body only borrowed them.
+					 * Drop the caller's reference now that the call returned.
+					 */
+					for (uint32_t operand = argument_count;
+							operand < node.operands.size(); ++operand) {
+						if (adaptor->machine_kind(node.operands[operand])
+								!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+								|| adaptor->ownership(node.operands[operand])
+									!= ZEND_MIR_OWNERSHIP_STATE_OWNED) {
+							return false;
+						}
+						auto boxed = val_ref(node.operands[operand]);
+						const ValueParts parts = val_parts(node.operands[operand]);
+						int32_t payload_part = -1;
+						int32_t type_part = -1;
+						for (uint32_t part = 0; part < parts.count(); ++part) {
+							if (parts.representation.parts[part].semantic_role
+									== ZEND_TPDE_MACHINE_PART_PAYLOAD) {
+								payload_part = static_cast<int32_t>(part);
+							} else if (parts.representation.parts[part].semantic_role
+									== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
+								type_part = static_cast<int32_t>(part);
+							}
+						}
+						if (payload_part < 0 || type_part < 0) {
+							return false;
+						}
+						auto payload = boxed.part(
+							static_cast<uint32_t>(payload_part));
+						auto type_info = boxed.part(
+							static_cast<uint32_t>(type_part));
+						auto payload_reg = payload.load_to_reg();
+						auto type_info_reg = type_info.load_to_reg();
+						auto released = text_writer.label_create();
+						ASM(TEST32ri, type_info_reg,
+							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+						generate_raw_jump(Jump::je, released);
+						ASM(SUB32mi,
+							FE_MEM(payload_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_refcounted_h, refcount))),
+							1);
+						label_place(released);
 					}
 					adaptor->mark_typed_body_call(
 						call.direct_call->frame_size);
