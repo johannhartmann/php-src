@@ -61,7 +61,8 @@ Hard boundaries:
   infrastructure;
 - semantic regressions belong in the existing PHPT suites, primarily
   `ext/native_mir_test/tests`, not in a parallel Python model;
-- use serial local builds and tests: `--jobs 1`, `make -j1`, and PHPT `-j1`;
+- build with all cores (`build.sh` defaults to them) and run focused PHPTs in
+  parallel; keep the full-suite and reference-comparison PHPT runs serial;
 - do not use Docker for this work;
 - do not weaken or skip a failing test to make the matrix green.
 
@@ -142,6 +143,13 @@ acceptable.
 
 ## First Linux blocker: compiler type-name ambiguity
 
+Status 2026-09-27: resolved for builds by compiling with clang. The
+linux-amd64 profiles now declare `PROFILE_CC=clang`/`PROFILE_CXX=clang++`
+(commit `96f12424c28`); the errors below are GCC-only. Clang is also the
+compiler the VM handlers are designed for: GCC ignores the `preserve_none`
+calling convention. Making the backend compile with GCC as well, by mirroring
+the Darwin class-scope `using` declarations, remains optional follow-up work.
+
 The first GCC errors in every Linux build are:
 
 ```text
@@ -211,11 +219,13 @@ Before the full suite, install the complete canonical list from
 `.github/actions/apt-x64/action.yml`; otherwise extension skips and failures are
 not comparable to CI.
 
-Use an external artifact root and keep execution serial:
+Use an external artifact root:
 
 ```bash
 export NATIVE_WORK_ROOT=/var/tmp/php-native-linux-amd64
-export NATIVE_JOBS=1
+# The native CLI cannot drive run-tests.php yet; use a plain PHP CLI with no
+# extensions or ini of its own as the PHPT runner.
+export NATIVE_PHPT_RUNNER=/path/to/plain/php
 ```
 
 Do not point `NATIVE_WORK_ROOT` at the source tree.
@@ -232,7 +242,6 @@ From the repository root:
 ```bash
 scripts/native/build.sh \
   --profile linux-amd64-native-debug-nts \
-  --jobs 1 \
   --print-binary
 ```
 
@@ -243,7 +252,6 @@ to that exact path:
 LINUX_NATIVE_PHP=$(
   scripts/native/build.sh \
     --profile linux-amd64-native-debug-nts \
-    --jobs 1 \
     --print-binary | tail -n 1
 )
 test -x "$LINUX_NATIVE_PHP"
@@ -254,13 +262,12 @@ test -x "$LINUX_NATIVE_PHP"
 
 ```bash
 scripts/native/test-smoke.sh \
-  --profile linux-amd64-native-debug-nts \
-  --jobs 1
+  --profile linux-amd64-native-debug-nts
 
 TEST_PHP_SRCDIR="$PWD" \
 TEST_PHP_EXECUTABLE="$LINUX_NATIVE_PHP" \
-  "$LINUX_NATIVE_PHP" -n run-tests.php \
-    -n -q -j1 --show-diff --set-timeout 600 \
+  env -u PHP_INI_SCAN_DIR -u PHPRC "$NATIVE_PHPT_RUNNER" -n run-tests.php \
+    -n -q -j"$(nproc)" --show-diff --set-timeout 600 \
     ext/native_mir_test/tests/w07_*.phpt \
     ext/native_mir_test/tests/w08_*.phpt \
     ext/native_mir_test/tests/w09_*.phpt \
@@ -320,7 +327,7 @@ git worktree add --detach \
     --enable-debug \
     --disable-zts \
     --without-pear
-  make -j1 sapi/cli/php
+  make -j"$(nproc)" sapi/cli/php
 )
 LINUX_REFERENCE_PHP="$LINUX_REFERENCE_ROOT/sapi/cli/php"
 test -x "$LINUX_REFERENCE_PHP"
@@ -337,7 +344,7 @@ Run from the candidate source root, not from an out-of-tree build directory:
 ```bash
 TEST_PHP_SRCDIR="$PWD" \
 TEST_PHP_EXECUTABLE="$LINUX_NATIVE_PHP" \
-  "$LINUX_NATIVE_PHP" -n run-tests.php \
+  env -u PHP_INI_SCAN_DIR -u PHPRC "$NATIVE_PHPT_RUNNER" -n run-tests.php \
     -n -q -j1 --set-timeout 600 \
     -W /var/tmp/linux-native-debug-nts-results.tsv
 ```
@@ -362,19 +369,19 @@ Only after Debug NTS is green:
 
 ```bash
 scripts/native/build.sh \
-  --profile linux-amd64-native-debug-zts --jobs 1
+  --profile linux-amd64-native-debug-zts
 scripts/native/test-smoke.sh \
-  --profile linux-amd64-native-debug-zts --jobs 1
+  --profile linux-amd64-native-debug-zts
 
 scripts/native/build.sh \
-  --profile linux-amd64-native-release-nts --jobs 1
+  --profile linux-amd64-native-release-nts
 scripts/native/test-smoke.sh \
-  --profile linux-amd64-native-release-nts --jobs 1
+  --profile linux-amd64-native-release-nts
 
 scripts/native/test-sanitizers.sh \
-  --profile linux-amd64-native-asan-nts --jobs 1
+  --profile linux-amd64-native-asan-nts
 scripts/native/test-sanitizers.sh \
-  --profile linux-amd64-native-ubsan-nts --jobs 1
+  --profile linux-amd64-native-ubsan-nts
 ```
 
 The sanitizer wrapper supplies the repository defaults. On Linux they include
@@ -424,7 +431,6 @@ are green:
 LINUX_PRODUCT_PHP=$(
   scripts/native/build.sh \
     --profile linux-amd64-native-product-release-nts \
-    --jobs 1 \
     --print-binary | tail -n 1
 )
 LINUX_PRODUCT_SAPI=$(dirname "$(dirname "$LINUX_PRODUCT_PHP")")
@@ -443,7 +449,7 @@ Run the product-native PHPTs:
 TEST_PHP_SRCDIR="$PWD" \
 TEST_PHP_EXECUTABLE="$LINUX_PRODUCT_PHP" \
 TEST_PHPDBG_EXECUTABLE="$LINUX_PRODUCT_PHPDBG" \
-  "$LINUX_PRODUCT_PHP" -n run-tests.php \
+  env -u PHP_INI_SCAN_DIR -u PHPRC "$NATIVE_PHPT_RUNNER" -n run-tests.php \
     -n -q -j1 --show-diff --set-timeout 600 \
     -p "$LINUX_PRODUCT_PHP" \
     ext/opcache/tests/native_*.phpt \
