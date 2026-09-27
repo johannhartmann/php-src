@@ -1207,7 +1207,13 @@ static bool zend_native_executor_acquire_generation_locked(
 	if (generation == NULL) {
 		return false;
 	}
-	if (zend_native_executor_request_has_lease(generation)) {
+	/*
+	 * Leases keep shared generations alive across requests. A request
+	 * generation is owned by the request list, which destroys it before the
+	 * leases are released, so it must not be leased.
+	 */
+	if (!generation->persistent
+			|| zend_native_executor_request_has_lease(generation)) {
 		return true;
 	}
 	lease = emalloc(sizeof(*lease));
