@@ -8755,14 +8755,18 @@ public:
 								value = value_ref(argument.value_id);
 							}
 							if (value != INVALID_VALUE_REF
-									&& !machine_value_has_result_representation(
-										value)) {
+									&& (!machine_value_has_result_representation(
+											value)
+										|| !machine_value_has_register_definition(
+											value))) {
 								/*
 								 * A canonical-only source is not an SSA
-								 * machine value.  The generated frame path
-								 * consumes the caller frame plus the frozen
-								 * byte offset and performs the zval copy
-								 * directly.
+								 * machine value, and neither is one without
+								 * a machine definition, such as the pi of a
+								 * CV narrowed by a comparison. The generated
+								 * frame path consumes the caller frame plus
+								 * the frozen byte offset and performs the
+								 * zval copy directly.
 								 */
 								value = IRValueRef{FRAME_VALUE};
 							}
