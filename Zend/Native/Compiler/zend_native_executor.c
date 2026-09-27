@@ -2369,6 +2369,8 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 	zend_execute_data *previous;
 	zend_native_diagnostic diagnostic;
 	zend_native_status status;
+	zend_function *func;
+	bool generator_frame;
 
 	if (!zend_native_executor_request_state.active
 			|| execute_data == NULL || execute_data->func == NULL
@@ -2416,6 +2418,13 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 		EG(current_execute_data) = previous;
 		return;
 	}
+	/*
+	 * A generator that closes during execution frees its heap frame. Keep
+	 * everything read after execution out of that frame.
+	 */
+	func = execute_data->func;
+	generator_frame =
+		(ZEND_CALL_INFO(execute_data) & ZEND_CALL_GENERATOR) != 0;
 	entry_cell = NULL;
 	if ((ZEND_CALL_INFO(execute_data) & ZEND_CALL_GENERATOR) != 0
 			&& execute_data->return_value != NULL) {
@@ -2569,29 +2578,28 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 		snprintf(diagnostic.message, sizeof(diagnostic.message), "%s",
 			"Native generation function index allocation failed");
 	}
-	entry_cell = zend_native_compiler_lookup(
-		generation->compiler, execute_data->func);
+	entry_cell = zend_native_compiler_lookup(generation->compiler, func);
 	if (entry_cell != NULL) {
 		zend_native_executor_bind_dispatch(
-			generation, &execute_data->func->op_array, entry_cell);
+			generation, &func->op_array, entry_cell);
 	}
 	zend_native_executor_release_completed_main_generation(
-		generation, &execute_data->func->op_array);
+		generation, &func->op_array);
 complete:
 	if (status == ZEND_NATIVE_BAILOUT) {
 		EG(current_execute_data) = previous;
 		zend_bailout();
 	}
 	if (EG(exception) != NULL
+			&& !generator_frame
 			&& zend_native_runtime_source_probe_enabled()
 			&& EG(opline_before_exception) != NULL
 			&& EG(opline_before_exception)
-				>= execute_data->func->op_array.opcodes
+				>= func->op_array.opcodes
 			&& EG(opline_before_exception)
-				< execute_data->func->op_array.opcodes
-				+ execute_data->func->op_array.last) {
+				< func->op_array.opcodes + func->op_array.last) {
 		uint32_t source_position = (uint32_t) (EG(opline_before_exception)
-			- execute_data->func->op_array.opcodes);
+			- func->op_array.opcodes);
 
 		EG(current_execute_data) = execute_data;
 		zend_native_runtime_source_probe(source_position);
