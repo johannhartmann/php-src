@@ -39,6 +39,7 @@ Repository-wide and path-specific agent rules live in:
 19. [W05 direct-call model corrections](adr/0021-w05-call-model-corrections.md)
 20. [W06 storage, reference, and alias model](adr/0022-w06-storage-reference-alias-model.md)
 21. [W06 separation protocol, not container clone](adr/0023-w06-separation-protocol-not-container-clone.md)
+22. [Typed lowering tier replaces the W11 scalar overlay](adr/0024-typed-lowering-tier.md)
 
 ## Development contracts
 
