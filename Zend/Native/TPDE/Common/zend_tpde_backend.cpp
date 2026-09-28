@@ -5456,6 +5456,8 @@ static uint8_t source_operand_known_type(
 			return IS_LONG;
 		case MAY_BE_DOUBLE:
 			return IS_DOUBLE;
+		case MAY_BE_LONG | MAY_BE_DOUBLE:
+			return ZEND_TPDE_KNOWN_NUMBER;
 		default:
 			return IS_UNDEF;
 	}
@@ -7915,8 +7917,6 @@ bool initialize_plan(
 				call_site_participates_in_nested_call(calls, site);
 			if (nested_source_call && plan->linux_inline_forms) {
 				nested_source_call = !nested_call_group_direct(site);
-				plan->nested_direct_calls =
-					plan->nested_direct_calls || !nested_source_call;
 			}
 			const bool fragment_call =
 				internal_constructor_call
@@ -9983,6 +9983,54 @@ static bool freeze_typed_body_signature(
 			}
 			continue;
 		}
+		if (zend_tpde_typed_body_frame_transport(plan, instruction)) {
+			continue;
+		}
+		if (zend_tpde_typed_numeric_arithmetic(plan, instruction)) {
+			/* Both operands are register longs or boxed numbers; the result
+			 * is a boxed number that needs no ownership. */
+			auto operand_abi = [&](
+					const zend_tpde_source_value_binding &binding,
+					const zend_mir_source_operand_ref &operand) {
+				zend_tpde_local_abi_type abi{};
+				if (binding.value_index >= 0
+						&& static_cast<uint32_t>(binding.value_index)
+							< plan->value_count) {
+					abi = machine_plan_value_abi(plan,
+						static_cast<uint32_t>(binding.value_index));
+				}
+				if (!abi.valid && binding.definition_instruction_index >= 0
+						&& static_cast<uint32_t>(
+							binding.definition_instruction_index)
+							< instruction_result_types.size()) {
+					abi = instruction_result_types[static_cast<uint32_t>(
+						binding.definition_instruction_index)];
+				}
+				if (!abi.valid
+						&& operand.ssa_variable_id
+							< register_source_ssa.size()) {
+					abi = register_source_ssa[operand.ssa_variable_id];
+				}
+				return abi.valid
+					&& (abi.machine_kind == ZEND_TPDE_MACHINE_VALUE_I64
+						|| abi.machine_kind
+							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
+			};
+			if (!operand_abi(instruction.source_op1_binding,
+						instruction.value_operation.op1)
+					|| !operand_abi(instruction.source_op2_binding,
+						instruction.value_operation.op2)) {
+				return false;
+			}
+			const zend_tpde_local_abi_type number = machine_plan_abi(
+				ZEND_MIR_REPRESENTATION_ZVAL, ZEND_MIR_SCALAR_TYPE_NONE,
+				ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
+				ZEND_TPDE_LOCAL_ABI_TRANSFER_IMMORTAL);
+			instruction_result_types[index] = number;
+			register_source_ssa[
+				instruction.value_operation.result.ssa_variable_id] = number;
+			continue;
+		}
 		if (record.effects != 0 || record.reads != 0
 				|| record.writes != 0 || record.barriers != 0
 				|| record.ownership_actions != 0) {
@@ -10073,6 +10121,16 @@ static bool freeze_typed_body_signature(
 		if (returned >= 0 && !current_return.valid) {
 			current_return =
 				call_result_types[static_cast<uint32_t>(returned)];
+		}
+		/* A scalar returned through an untyped result is boxed at the
+		 * return. */
+		if (current_return.valid
+				&& zend_mir_scalar_type_is_exact(current_return.exact_type)
+				&& current_return.exact_type != ZEND_MIR_SCALAR_TYPE_NULL
+				&& plan->return_abi.valid
+				&& plan->return_abi.machine_kind
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+			current_return = plan->return_abi;
 		}
 		if (!current_return.valid
 				|| (saw_return
@@ -12145,12 +12203,151 @@ static bool zend_tpde_target_has_value_transports(zend_native_target target)
 		|| target == ZEND_NATIVE_TARGET_LINUX_AMD64;
 }
 
+/*
+ * A member returns a number when each of its returns yields a long or a
+ * double. Results of calls to such members are numbers too, so arithmetic on
+ * them cannot fail. Start from all members and drop those with another
+ * return until nothing changes; by induction on the call depth every result
+ * of a remaining member is a number.
+ */
+static void freeze_component_numeric_operands(
+		zend_tpde_plan *plans, uint32_t component_count) {
+	std::vector<uint8_t> returns_number(component_count, 1);
+	for (uint32_t member = 0; member < component_count; ++member) {
+		const zend_tpde_plan &plan = plans[member];
+		if (!plan.linux_inline_forms || plan.generator_resume_count != 0
+				|| plan.source_opcodes == nullptr
+				|| plan.return_abi.machine_kind
+					== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR) {
+			returns_number[member] = 0;
+		}
+	}
+	auto numeric_binary = [](const zend_tpde_plan &plan,
+			const zend_tpde_instruction &instruction) {
+		const uint32_t opcode = instruction.value_operation.source_opcode;
+		return instruction.has_value_operation
+			&& instruction.value_operation.opcode
+				== ZEND_MIR_OPCODE_VALUE_BINARY_OP
+			&& (opcode == ZEND_ADD || opcode == ZEND_SUB
+				|| opcode == ZEND_MUL || opcode == ZEND_IS_SMALLER
+				|| opcode == ZEND_IS_SMALLER_OR_EQUAL
+				|| opcode == ZEND_IS_EQUAL || opcode == ZEND_IS_NOT_EQUAL)
+			&& instruction.value_operation.source_position_id
+				< plan.source_opcode_count
+			&& plan.source_opcodes[
+				instruction.value_operation.source_position_id].opcode
+				== opcode;
+	};
+	auto number_value = [&](const zend_tpde_plan &plan,
+			const zend_tpde_source_value_binding &binding, uint8_t known) {
+		if (zend_tpde_known_numeric_type(known)) {
+			return true;
+		}
+		if (binding.value_index >= 0
+				&& static_cast<uint32_t>(binding.value_index)
+					< plan.value_count
+				&& (plan.values[binding.value_index].exact_type
+						== ZEND_MIR_SCALAR_TYPE_I64
+					|| plan.values[binding.value_index].exact_type
+						== ZEND_MIR_SCALAR_TYPE_F64)) {
+			return true;
+		}
+		int32_t definition = binding.definition_instruction_index;
+		if (definition < 0 && binding.value_index >= 0
+				&& static_cast<uint32_t>(binding.value_index)
+					< plan.value_count
+				&& plan.source_value_definition_instructions != nullptr) {
+			definition = plan.source_value_definition_instructions[
+				binding.value_index];
+		}
+		if (definition < 0
+				|| static_cast<uint32_t>(definition)
+					>= plan.instruction_count) {
+			return false;
+		}
+		const zend_tpde_instruction &producer =
+			plan.instructions[definition];
+		const zend_mir_instruction_record record =
+			zend_tpde_instruction_record_at(&plan, &producer);
+		if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
+			return producer.direct_call != nullptr
+				&& producer.component_target_index < component_count
+				&& returns_number[producer.component_target_index] != 0;
+		}
+		return producer.numeric_operands_proven
+			&& (producer.value_operation.source_opcode == ZEND_ADD
+				|| producer.value_operation.source_opcode == ZEND_SUB
+				|| producer.value_operation.source_opcode == ZEND_MUL);
+	};
+	bool changed;
+	do {
+		changed = false;
+		for (uint32_t member = 0; member < component_count; ++member) {
+			zend_tpde_plan &plan = plans[member];
+			if (!plan.linux_inline_forms || plan.source_opcodes == nullptr) {
+				continue;
+			}
+			bool saw_return = false;
+			bool all_numbers = true;
+			for (uint32_t index = 0; index < plan.instruction_count; ++index) {
+				zend_tpde_instruction &instruction = plan.instructions[index];
+				const zend_mir_instruction_record record =
+					zend_tpde_instruction_record_at(&plan, &instruction);
+				if (numeric_binary(plan, instruction)) {
+					const zend_tpde_source_opcode &source =
+						plan.source_opcodes[
+							instruction.value_operation.source_position_id];
+					instruction.numeric_operands_proven =
+						number_value(plan, instruction.source_op1_binding,
+							source.op1_known_type)
+						&& number_value(plan, instruction.source_op2_binding,
+							source.op2_known_type);
+				}
+				if (record.opcode == ZEND_MIR_OPCODE_RETURN) {
+					saw_return = true;
+					const int32_t returned = instruction.operand_count == 1
+						? zend_tpde_value_index(&plan,
+							zend_tpde_operand_at(&plan, &instruction, 0))
+						: -1;
+					all_numbers = all_numbers && returned >= 0
+						&& (plan.values[returned].exact_type
+								== ZEND_MIR_SCALAR_TYPE_I64
+							|| plan.values[returned].exact_type
+								== ZEND_MIR_SCALAR_TYPE_F64);
+				} else if (record.opcode
+						== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL) {
+					saw_return = true;
+					const uint32_t position =
+						instruction.value_operation.source_position_id;
+					all_numbers = all_numbers
+						&& instruction.has_value_operation
+						&& instruction.value_operation.source_opcode
+							== ZEND_RETURN
+						&& position < plan.source_opcode_count
+						&& number_value(plan, instruction.source_op1_binding,
+							plan.source_opcodes[position].op1_known_type);
+				} else if (record.opcode == ZEND_MIR_OPCODE_FINALLY_RETURN
+						|| record.opcode == ZEND_MIR_OPCODE_GENERATOR_RETURN) {
+					all_numbers = false;
+				}
+			}
+			const uint8_t number = returns_number[member] != 0
+				&& saw_return && all_numbers;
+			if (number != returns_number[member]) {
+				returns_number[member] = number;
+				changed = true;
+			}
+		}
+	} while (changed);
+}
+
 static bool freeze_component_machine_plan(
 		zend_tpde_plan *plans,
 		const zend_tpde_plan *const *component_plans,
 		uint32_t component_count,
 		bool register_a64_value_transports,
 		zend_native_diagnostic *diag) {
+	freeze_component_numeric_operands(plans, component_count);
 	for (uint32_t component = 0;
 			component < component_count; ++component) {
 		for (uint32_t value = 0;
@@ -12194,14 +12391,21 @@ static bool freeze_component_machine_plan(
 	}
 	/*
 	 * A typed body has no frame for a phased call, so every direct user call
-	 * in it must become a typed component call. For bodies with nested calls,
-	 * whose inner results feed outer arguments, check this with a dry run of
-	 * the call freeze, and give up the typed body otherwise; callers of that
-	 * member then have to be decided again.
+	 * in it must become a typed component call; nested calls feed inner
+	 * results to outer arguments. Check this with a dry run of the call
+	 * freeze, and give up the typed body otherwise; callers of that member
+	 * then have to be decided again.
 	 */
 	for (uint32_t index = 0; index < component_count; ++index) {
 		zend_tpde_plan &plan = plans[index];
-		if (!plan.typed_body_eligible || !plan.nested_direct_calls) {
+		bool has_direct_call = false;
+		for (uint32_t i = 0; !has_direct_call && i < plan.instruction_count;
+				++i) {
+			has_direct_call = zend_tpde_instruction_record_at(
+					&plan, &plan.instructions[i]).opcode
+				== ZEND_MIR_OPCODE_CALL_DIRECT_USER;
+		}
+		if (!plan.typed_body_eligible || !has_direct_call) {
 			continue;
 		}
 		std::vector<uint8_t> saved_flags(plan.instruction_count);

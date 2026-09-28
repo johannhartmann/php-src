@@ -228,6 +228,49 @@ public:
 		return canonical_value_register(
 			IRValueRef{Adaptor::FRAME_VALUE});
 	}
+	/*
+	 * A typed body with an untyped result returns a scalar as a boxed zval:
+	 * payload and type register. Returns false for any other value.
+	 */
+	bool add_boxed_scalar_return(RetBuilder &return_builder, IRValueRef value) {
+		const zend_tpde_machine_value_kind kind = adaptor->machine_kind(value);
+		if (adaptor->plan()->typed_body_return_abi.machine_kind
+					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+				|| (kind != ZEND_TPDE_MACHINE_VALUE_I64
+					&& kind != ZEND_TPDE_MACHINE_VALUE_F64
+					&& kind != ZEND_TPDE_MACHINE_VALUE_BOOL)) {
+			return false;
+		}
+		/* Build the parts in their return registers, so that neither
+		 * blocks the other's assignment. */
+		ScratchReg payload{this};
+		ScratchReg type_info{this};
+		auto payload_reg = payload.alloc_specific(
+			tpde::x64::AsmReg{tpde::x64::AsmReg::AX});
+		auto type_info_reg = type_info.alloc_specific(
+			tpde::x64::AsmReg{tpde::x64::AsmReg::DX});
+		auto [scalar_ref, scalar] = val_ref_single(value);
+		auto scalar_reg = scalar.load_to_reg();
+		if (kind == ZEND_TPDE_MACHINE_VALUE_F64) {
+			ASM(SSE_MOVQ_X2Grr, payload_reg, scalar_reg);
+			ASM(MOV32ri, type_info_reg, IS_DOUBLE);
+		} else if (kind == ZEND_TPDE_MACHINE_VALUE_I64) {
+			ASM(MOV64rr, payload_reg, scalar_reg);
+			ASM(MOV32ri, type_info_reg, IS_LONG);
+		} else {
+			ASM(MOV64rr, payload_reg, scalar_reg);
+			ASM(MOVZXr32r8, type_info_reg, scalar_reg);
+			ASM(ADD32ri, type_info_reg, IS_FALSE);
+		}
+		ValuePart payload_part{
+			tpde::x64::PlatformConfig::GP_BANK, sizeof(zend_value)};
+		payload_part.set_value(this, std::move(payload));
+		ValuePart type_info_part{tpde::x64::PlatformConfig::GP_BANK, 4};
+		type_info_part.set_value(this, std::move(type_info));
+		return_builder.add(std::move(payload_part), tpde::CCAssignment{});
+		return_builder.add(std::move(type_info_part), tpde::CCAssignment{});
+		return true;
+	}
 	ValuePart copy_fixed_argument(AsmReg source) {
 		ScratchReg copy{this};
 		auto copy_reg = copy.alloc_gp();
@@ -8511,8 +8554,14 @@ bool ZendCompilerX64::compile_inst_impl(
 			const bool comparison = opcode == ZEND_IS_SMALLER
 				|| opcode == ZEND_IS_SMALLER_OR_EQUAL
 				|| opcode == ZEND_IS_EQUAL || opcode == ZEND_IS_NOT_EQUAL;
+			/* A proven operation of two numbers cannot fail: integer
+			 * overflow continues in double. A typed body emits it without a
+			 * guarded diamond; in a Zend entry its cold edge is dead. */
+			const bool proven =
+				zend_tpde_numeric_binary_proven(adaptor->plan(), mir);
+			const bool guarded = node.kind == Adaptor::InstKind::GuardedFast;
 			if ((!arithmetic && !comparison)
-					|| node.kind != Adaptor::InstKind::GuardedFast
+					|| (!guarded && !(proven && adaptor->typed_body()))
 					|| !mir.has_value_operation
 					|| operation.opcode != ZEND_MIR_OPCODE_VALUE_BINARY_OP) {
 				return -1;
@@ -8523,7 +8572,12 @@ bool ZendCompilerX64::compile_inst_impl(
 			 * form cannot: MUL and DIV, or any result that can hold a double
 			 * or a boolean.
 			 */
-			const bool register_operands = register_layout;
+			/* A typed body passes both operands without a frame operand. */
+			const bool register_operands = register_layout
+				|| (adaptor->typed_body() && !guarded
+					&& node.has_result && node.operands.size() == 2
+					&& register_long_operand(node.operands[0])
+					&& register_long_operand(node.operands[1]));
 			if (register_operands) {
 				const zend_tpde_machine_value_kind kind = node.has_result
 					? adaptor->machine_kind(node.result)
@@ -8608,8 +8662,10 @@ bool ZendCompilerX64::compile_inst_impl(
 							operation.result_storage_id))) {
 				return -1;
 			}
+			/* A typed body has no frame; its result lives in registers. */
 			const bool result_slot =
-				zend_mir_id_is_valid(operation.result_storage_id);
+				zend_mir_id_is_valid(operation.result_storage_id)
+				&& !adaptor->typed_body();
 			/* A CV result only replaces a non-refcounted value: OPcache
 			 * contracts ASSIGN into it only then, and an aliased input was
 			 * just checked to be numeric. A temporary never aliases input. */
@@ -8637,15 +8693,18 @@ bool ZendCompilerX64::compile_inst_impl(
 						&& result_kind == ZEND_TPDE_MACHINE_VALUE_BOOL)) {
 				return -1;
 			}
-			const auto guarded_successors =
-				adaptor->block_succs(IRBlockRef{node.control_block});
-			if (node.control_block == UINT32_MAX
-					|| node.continuation_block == UINT32_MAX
-					|| guarded_successors.size() < 2
-					|| static_cast<uint32_t>(guarded_successors[0])
-						!= node.continuation_block
-					|| static_cast<uint32_t>(guarded_successors[1])
-						!= node.argument_index) {
+			const auto guarded_successors = guarded
+				? adaptor->block_succs(IRBlockRef{node.control_block})
+				: decltype(adaptor->block_succs(
+					IRBlockRef{node.control_block})){};
+			if (guarded
+					&& (node.control_block == UINT32_MAX
+						|| node.continuation_block == UINT32_MAX
+						|| guarded_successors.size() < 2
+						|| static_cast<uint32_t>(guarded_successors[0])
+							!= node.continuation_block
+						|| static_cast<uint32_t>(guarded_successors[1])
+							!= node.argument_index)) {
 				return 0;
 			}
 
@@ -8664,11 +8723,22 @@ bool ZendCompilerX64::compile_inst_impl(
 					right_known = source.op2_known_type;
 				}
 			}
+			if (proven) {
+				if (left_known == IS_UNDEF) {
+					left_known = ZEND_TPDE_KNOWN_NUMBER;
+				}
+				if (right_known == IS_UNDEF) {
+					right_known = ZEND_TPDE_KNOWN_NUMBER;
+				}
+			}
 			const bool known_long =
 				left_known == IS_LONG && right_known == IS_LONG;
-			const bool known_double =
-				(left_known == IS_DOUBLE && right_known != IS_UNDEF)
-				|| (right_known == IS_DOUBLE && left_known != IS_UNDEF);
+			const bool known_double = !register_operands
+				&& ((left_known == IS_DOUBLE
+						&& (right_known == IS_LONG
+							|| right_known == IS_DOUBLE))
+					|| (right_known == IS_DOUBLE
+						&& left_known == IS_LONG));
 			/*
 			 * Double arithmetic other than division and every comparison of
 			 * known numbers cannot fail: compute in SSE registers straight
@@ -8812,6 +8882,9 @@ bool ZendCompilerX64::compile_inst_impl(
 				}
 				left_double.reset();
 				right_double.reset();
+				if (!guarded) {
+					return 1;
+				}
 				ASM(MOV32ri, value_reg, 0);
 				generate_guarded_decision_branch(
 					std::move(value), guarded_successors[1],
@@ -8823,10 +8896,14 @@ bool ZendCompilerX64::compile_inst_impl(
 			auto done = text_writer.label_create();
 			auto mixed = text_writer.label_create();
 			auto store = text_writer.label_create();
-			auto [frame_ref, frame] =
-				val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-			auto frame_scratch = std::move(frame).into_scratch();
-			auto frame_reg = frame_scratch.cur_reg();
+			ScratchReg frame_scratch{this};
+			AsmReg frame_reg = AsmReg::make_invalid();
+			if (!register_operands || result_slot) {
+				auto [frame_ref, frame] =
+					val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+				frame_scratch = std::move(frame).into_scratch();
+				frame_reg = frame_scratch.cur_reg();
+			}
 			ScratchReg literals{this};
 			ScratchReg left_type{this};
 			ScratchReg right_type{this};
@@ -8895,20 +8972,30 @@ bool ZendCompilerX64::compile_inst_impl(
 				ASM(CMP32ri, right_type_reg, IS_LONG);
 				generate_raw_jump(Jump::jne, mixed);
 			}
+			/* Proven arithmetic keeps the left operand in the dead right type
+			 * register and recomputes an overflowing result in double. */
+			auto overflow = text_writer.label_create();
+			const bool overflow_edge = proven && arithmetic;
+			if (overflow_edge) {
+				ASM(MOV64rr, result_type_reg, left_reg);
+			}
 			switch (opcode) {
 				case ZEND_ADD:
 					ASM(ADD64rr, left_reg, right_reg);
-					generate_raw_jump(Jump::jo, slow);
+					generate_raw_jump(Jump::jo,
+						overflow_edge ? overflow : slow);
 					ASM(MOV32ri, result_type_reg, IS_LONG);
 					break;
 				case ZEND_SUB:
 					ASM(SUB64rr, left_reg, right_reg);
-					generate_raw_jump(Jump::jo, slow);
+					generate_raw_jump(Jump::jo,
+						overflow_edge ? overflow : slow);
 					ASM(MOV32ri, result_type_reg, IS_LONG);
 					break;
 				case ZEND_MUL:
 					ASM(IMUL64rr, left_reg, right_reg);
-					generate_raw_jump(Jump::jo, slow);
+					generate_raw_jump(Jump::jo,
+						overflow_edge ? overflow : slow);
 					ASM(MOV32ri, result_type_reg, IS_LONG);
 					break;
 				case ZEND_DIV:
@@ -8928,6 +9015,25 @@ bool ZendCompilerX64::compile_inst_impl(
 				}
 			}
 			generate_raw_jump(Jump::jmp, store);
+			if (overflow_edge) {
+				label_place(overflow);
+				ASM(SSE_CVTSI2SD64rr, left_fp, result_type_reg);
+				ASM(SSE_CVTSI2SD64rr, right_fp, right_reg);
+				switch (opcode) {
+					case ZEND_ADD:
+						ASM(SSE_ADDSDrr, left_fp, right_fp);
+						break;
+					case ZEND_SUB:
+						ASM(SSE_SUBSDrr, left_fp, right_fp);
+						break;
+					default:
+						ASM(SSE_MULSDrr, left_fp, right_fp);
+						break;
+				}
+				ASM(SSE_MOVQ_X2Grr, left_reg, left_fp);
+				ASM(MOV32ri, result_type_reg, IS_DOUBLE);
+				generate_raw_jump(Jump::jmp, store);
+			}
 
 			/* long or double, at least one double */
 			label_place(mixed);
@@ -8945,8 +9051,10 @@ bool ZendCompilerX64::compile_inst_impl(
 				auto converted = text_writer.label_create();
 				ASM(CMP32ri, type_reg, IS_LONG);
 				generate_raw_jump(Jump::je, is_long);
-				ASM(CMP32ri, type_reg, IS_DOUBLE);
-				generate_raw_jump(Jump::jne, slow);
+				if (known != ZEND_TPDE_KNOWN_NUMBER) {
+					ASM(CMP32ri, type_reg, IS_DOUBLE);
+					generate_raw_jump(Jump::jne, slow);
+				}
 				ASM(SSE_MOVQ_G2Xrr, fp_reg, value_reg);
 				generate_raw_jump(Jump::jmp, converted);
 				label_place(is_long);
@@ -9039,6 +9147,10 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(MOV64rr, bool_reg, left_reg);
 					bool_result.set_modified();
 				}
+			}
+			if (!guarded) {
+				right_value.reset();
+				return 1;
 			}
 			ASM(MOV32ri, decision_reg, 0);
 			generate_raw_jump(Jump::jmp, done);
@@ -16795,7 +16907,10 @@ bool ZendCompilerX64::compile_inst_impl(
 				}
 				RetBuilder return_builder{
 					*this, *cur_cc_assigner()};
-				return_builder.add(node.operands[0]);
+				if (!add_boxed_scalar_return(
+						return_builder, node.operands[0])) {
+					return_builder.add(node.operands[0]);
+				}
 				return_builder.ret();
 				return true;
 			}
@@ -16921,7 +17036,8 @@ bool ZendCompilerX64::compile_inst_impl(
 					}
 					return_builder.add(
 						std::move(returned), tpde::CCAssignment{});
-				} else {
+				} else if (!add_boxed_scalar_return(
+						return_builder, node.operands[0])) {
 				return_builder.add(node.operands[0]);
 				}
 				return_builder.ret();

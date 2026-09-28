@@ -552,6 +552,9 @@ struct zend_tpde_instruction {
 	 * frozen separately from long-term register authority so alias-observable
 	 * CVs are never treated as register-resident after publication.
 	 */
+	/* Both operands of this binary operation are numbers: known from type
+	 * inference or results of component members that return numbers. */
+	bool numeric_operands_proven;
 	bool transient_scalar_result;
 	zend_mir_representation transient_result_representation;
 	zend_mir_scalar_type_mask transient_result_exact_type;
@@ -705,13 +708,17 @@ struct zend_tpde_dynamic_fetch_read {
 	bool direct_long;
 };
 
+/* Known operand type: a long or a double, never undefined or a reference. */
+#define ZEND_TPDE_KNOWN_NUMBER 0xfe
+
 struct zend_tpde_source_opcode {
 	uint8_t opcode;
 	uint8_t op1_type;
 	uint8_t op2_type;
 	uint8_t result_type;
 	/* IS_LONG or IS_DOUBLE when a literal or Zend's type inference fixes
-	 * the operand's type, IS_UNDEF otherwise. */
+	 * the operand's type, ZEND_TPDE_KNOWN_NUMBER when inference proves a
+	 * long or a double, IS_UNDEF otherwise. */
 	uint8_t op1_known_type;
 	uint8_t op2_known_type;
 	uint32_t op1_var;
@@ -2014,9 +2021,6 @@ struct zend_tpde_plan {
 	 * arguments.
 	 */
 	bool linux_inline_forms;
-	/* Overlapping calls transfer their arguments at DO (see
-	 * nested_call_site_direct_candidate()); no typed body. */
-	bool nested_direct_calls;
 	bool may_emit_calls;
 	bool zend_entry_may_emit_calls;
 	bool typed_body_may_emit_calls;
@@ -2061,6 +2065,68 @@ static inline bool zend_tpde_generator_resume_value_live(
 				* plan->generator_resume_live_word_count;
 	return (words[value_index / 64]
 			& (uint64_t{1} << (value_index % 64))) != 0;
+}
+
+static inline bool zend_tpde_known_numeric_type(uint8_t known)
+{
+	return known == IS_LONG || known == IS_DOUBLE
+		|| known == ZEND_TPDE_KNOWN_NUMBER;
+}
+
+/*
+ * Arithmetic other than division and every ordering or equality comparison
+ * of two numbers cannot fail: integer overflow continues in double precision
+ * and NaN compares unordered. Such a binary operation needs no slow path.
+ */
+static inline bool zend_tpde_numeric_binary_proven(
+	const zend_tpde_plan *plan,
+	const zend_tpde_instruction &instruction)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	if (plan == nullptr || !plan->linux_inline_forms
+			|| !instruction.has_value_operation
+			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_BINARY_OP
+			|| (operation.source_opcode != ZEND_ADD
+				&& operation.source_opcode != ZEND_SUB
+				&& operation.source_opcode != ZEND_MUL
+				&& operation.source_opcode != ZEND_IS_SMALLER
+				&& operation.source_opcode != ZEND_IS_SMALLER_OR_EQUAL
+				&& operation.source_opcode != ZEND_IS_EQUAL
+				&& operation.source_opcode != ZEND_IS_NOT_EQUAL)
+			|| plan->source_opcodes == nullptr
+			|| operation.source_position_id >= plan->source_opcode_count) {
+		return false;
+	}
+	const zend_tpde_source_opcode &source =
+		plan->source_opcodes[operation.source_position_id];
+	return source.opcode == operation.source_opcode
+		&& (instruction.numeric_operands_proven
+			|| (zend_tpde_known_numeric_type(source.op1_known_type)
+				&& zend_tpde_known_numeric_type(source.op2_known_type)));
+}
+
+/*
+ * Proven arithmetic whose temporary result a typed body keeps in registers
+ * as a boxed number.
+ */
+static inline bool zend_tpde_typed_numeric_arithmetic(
+	const zend_tpde_plan *plan,
+	const zend_tpde_instruction &instruction)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	return zend_tpde_numeric_binary_proven(plan, instruction)
+		&& (operation.source_opcode == ZEND_ADD
+			|| operation.source_opcode == ZEND_SUB
+			|| operation.source_opcode == ZEND_MUL)
+		&& (operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+			|| operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+		&& (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+			|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)
+		&& operation.result.ssa_variable_id != ZEND_MIR_ID_INVALID
+		&& operation.result.ssa_variable_id
+			< plan->source_ssa_variable_count;
 }
 
 static inline bool zend_tpde_user_multi_branch_at(
@@ -2399,6 +2465,17 @@ static inline bool zend_tpde_scalar_diamond_frame_transport(
 		&& !destination.canonical_alias_observable
 		&& destination.canonical_storage_id
 			== instruction.zval_store_storage_id;
+}
+
+/*
+ * A typed body has no frame either: the same self-identical scalar store
+ * into an unaliased carrier disappears, as the value travels in registers.
+ */
+static inline bool zend_tpde_typed_body_frame_transport(
+		const zend_tpde_plan *plan,
+		const zend_tpde_instruction &instruction)
+{
+	return zend_tpde_scalar_diamond_frame_transport(plan, instruction);
 }
 
 int32_t zend_tpde_instruction_index(
