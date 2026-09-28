@@ -6362,7 +6362,18 @@ bool ZendCompilerX64::compile_inst_impl(
 			operation_machine_reference(
 				ZEND_TPDE_MACHINE_REFERENCE_PACKED_ELEMENT);
 
-		if (!zend_tpde_array_read_at(mir, &layout,
+		const bool temporary_container =
+			adaptor->plan()->linux_inline_forms
+			&& !node.has_result
+			&& node.kind == Adaptor::InstKind::GuardedFast
+			&& zend_tpde_temporary_container_array_read_at(mir, &layout);
+		if (temporary_container) {
+			if (layout.container_offset > INT32_MAX - 8
+					|| layout.key_offset > INT32_MAX - 8
+					|| layout.result_offset > INT32_MAX - 8) {
+				return branch_to_guarded_cold();
+			}
+		} else if (!zend_tpde_array_read_at(mir, &layout,
 					adaptor->plan()->linux_inline_forms)
 				|| element_reference == nullptr
 				|| (!layout.container_literal
@@ -6453,20 +6464,44 @@ bool ZendCompilerX64::compile_inst_impl(
 				ASM(LEA64rm, array_reg,
 					FE_MEM(container_base, 0, FE_NOREG,
 						static_cast<int32_t>(container_offset)));
-				ASM(CMP8mi,
-					FE_MEM(array_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zval, u1.type_info))),
-					IS_REFERENCE);
-				generate_raw_jump(Jump::jne, container_ready);
-				ASM(MOV64rm, array_reg, FE_MEM(array_reg, 0, FE_NOREG, 0));
-				ASM(ADD64ri, array_reg,
-					static_cast<int32_t>(offsetof(zend_reference, val)));
+				if (!temporary_container) {
+					ASM(CMP8mi,
+						FE_MEM(array_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zval, u1.type_info))),
+						IS_REFERENCE);
+					generate_raw_jump(Jump::jne, container_ready);
+					ASM(MOV64rm, array_reg,
+						FE_MEM(array_reg, 0, FE_NOREG, 0));
+					ASM(ADD64ri, array_reg,
+						static_cast<int32_t>(offsetof(zend_reference, val)));
+				}
 				label_place(container_ready);
 				ASM(CMP8mi,
 					FE_MEM(array_reg, 0, FE_NOREG,
 						static_cast<int32_t>(offsetof(zval, u1.type_info))),
 					IS_ARRAY);
 				generate_raw_jump(Jump::jne, slow);
+				if (temporary_container) {
+					/* The read releases the container; its sole owner
+					 * would destroy it, which the helper does. */
+					auto shared = text_writer.label_create();
+					ASM(TEST8mi,
+						FE_MEM(array_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zval, u1.v.type_flags))),
+						IS_TYPE_REFCOUNTED);
+					generate_raw_jump(Jump::je, shared);
+					ASM(MOV64rm, element_reg,
+						FE_MEM(array_reg, 0, FE_NOREG, 0));
+					ASM(CMP32mi,
+						FE_MEM(element_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_refcounted_h, refcount))),
+						1);
+					generate_raw_jump(Jump::jbe, slow);
+					label_place(shared);
+				}
 				ASM(CMP8mi,
 					FE_MEM(key_base, 0, FE_NOREG,
 						static_cast<int32_t>(key_offset
@@ -6518,6 +6553,24 @@ bool ZendCompilerX64::compile_inst_impl(
 						static_cast<int32_t>(layout.result_offset
 							+ offsetof(zval, u1.type_info))),
 					type_reg);
+				if (temporary_container) {
+					auto released = text_writer.label_create();
+					ASM(TEST8mi,
+						FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(layout.container_offset
+								+ offsetof(zval, u1.v.type_flags))),
+						IS_TYPE_REFCOUNTED);
+					generate_raw_jump(Jump::je, released);
+					ASM(MOV64rm, element_reg,
+						FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(layout.container_offset)));
+					ASM(SUB32mi,
+						FE_MEM(element_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_refcounted_h, refcount))),
+						1);
+					label_place(released);
+				}
 				ASM(MOV32ri, type_reg, 0);
 				generate_raw_jump(Jump::jmp, done);
 				label_place(slow);
