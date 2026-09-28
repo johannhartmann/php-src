@@ -241,6 +241,20 @@ overflow. hash2 measured slower in the kernel harness only through a call-depth
 layout effect: an extra wrapper call reverses it, instruction and cache-miss
 counts are unchanged.
 
+**Result, part 2 (2026-09-28): nested calls in typed bodies.** The blanket
+exclusion of typed bodies for functions with nested direct calls is replaced
+by a check: such a body stays typed when a dry run of the call freeze turns
+every direct user call in it into a typed component call (inner results then
+feed outer arguments in registers); otherwise it and, through the candidate
+fixpoint, its callers keep their Zend entries. Typed `Ack(int, int): int`
+still gets no typed body: `$n + 1` may overflow into a `TypeError` against the
+`int` return type, so the body is not effect-free.
+
+**Open:** integer operations with an overflow edge to double and exception
+propagation through the typed-call ABI (ADR 0024 item 3). They decide the
+remaining call kernels (ackermann 1.49, fibo 1.14) and need a new MIR
+operation class with an exceptional successor in typed bodies.
+
 ## 5. Rules for every package
 
 - **Optimize chains, not operations.** A new producer form lands only
