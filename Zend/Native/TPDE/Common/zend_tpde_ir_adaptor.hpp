@@ -8278,8 +8278,40 @@ public:
 			}
 			if (record.opcode
 					== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL) {
-				const IRValueRef returned = source_binding_value_ref(
+				IRValueRef returned = source_binding_value_ref(
 					instruction.source_op1_binding);
+				/* A typed body elides the COPY of a returned pi, such as
+				 * $value after if ($value > $max); return its source. */
+				for (uint32_t depth = 0;
+						function_mode_ == FunctionMode::TypedBody
+							&& returned != INVALID_VALUE_REF
+							&& !machine_value_has_register_definition(returned)
+							&& depth < plan_->value_count;
+						++depth) {
+					const uint32_t raw = static_cast<uint32_t>(returned);
+					if (raw < MIR_VALUE_BASE
+							|| raw - MIR_VALUE_BASE >= plan_->value_count
+							|| plan_->value_definition_instructions == nullptr) {
+						break;
+					}
+					const int32_t definition =
+						plan_->value_definition_instructions[
+							raw - MIR_VALUE_BASE];
+					if (definition < 0 || static_cast<uint32_t>(definition)
+								>= plan_->instruction_count) {
+						break;
+					}
+					const zend_tpde_instruction &copy =
+						plan_->instructions[static_cast<uint32_t>(definition)];
+					if (instruction_record_at(
+								static_cast<uint32_t>(definition)).opcode
+							!= ZEND_MIR_OPCODE_COPY
+							|| copy.operand_count != 1) {
+						break;
+					}
+					returned = value_ref(zend_tpde_operand_at(
+						plan_, &copy, 0));
+				}
 				const uint32_t return_source_position =
 					instruction.value_operation.source_position_id;
 				const uint8_t return_producer_opcode =

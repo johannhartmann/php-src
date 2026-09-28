@@ -53,6 +53,9 @@ enum {
 	ZEND_MIR_LOGIC_PROOF_NO_DESTRUCTOR = UINT32_C(1) << 6,
 	ZEND_MIR_LOGIC_PROOF_NO_EXCEPTION = UINT32_C(1) << 7,
 	ZEND_MIR_LOGIC_PROOF_SOURCE_CFG = UINT32_C(1) << 8,
+	/* The target compares doubles with IEEE semantics, so equality and
+	 * ordering need no FINITE operands (ADR 0024 typed tier). */
+	ZEND_MIR_LOGIC_PROOF_IEEE_F64_COMPARE = UINT32_C(1) << 9,
 	ZEND_MIR_LOGIC_PROOF_ALL = (UINT32_C(1) << 8) - UINT32_C(1)
 };
 

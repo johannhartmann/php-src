@@ -406,6 +406,11 @@ public:
 		user_opcode_dispatch_labels_.clear();
 		user_opcode_result_reload_labels_.clear();
 		catch_dispatch_label_.reset();
+		/* A typed body returns doubles in XMM0 and XMM1. A value fixed there
+		 * across blocks would block the result registers at a RETURN. */
+		this->fixed_assignment_nonallocatable_mask |=
+			(uint64_t{1} << tpde::x64::AsmReg::XMM0)
+			| (uint64_t{1} << tpde::x64::AsmReg::XMM1);
 		Base::start_func(index);
 	}
 	void finish_func(uint32_t index) {
@@ -5342,11 +5347,32 @@ bool ZendCompilerX64::compile_inst_impl(
 		result.set_modified();
 		return true;
 	};
-	auto floating_compare = [&](Jump condition) {
+	/*
+	 * PHP compares doubles with IEEE semantics: an unordered (NaN) operand
+	 * makes <, <= and == false. UCOMISD sets ZF, PF and CF when unordered,
+	 * so order the operands to test "above" and check parity for equality.
+	 */
+	auto floating_compare = [&](zend_mir_opcode opcode) {
 		auto [left_pair, right_pair] = binary();
 		auto &[left_ref, left] = left_pair;
 		auto &[right_ref, right] = right_pair;
-		ASM(SSE_UCOMISDrr, left.load_to_reg(), right.load_to_reg());
+		if (opcode == ZEND_MIR_OPCODE_F64_EQ) {
+			ASM(SSE_UCOMISDrr, left.load_to_reg(), right.load_to_reg());
+			auto [result_ref, result] = result_ref_single(node.result);
+			auto result_reg = result.alloc_reg();
+			ScratchReg ordered{this};
+			auto ordered_reg = ordered.alloc_gp();
+			generate_raw_set(Jump::je, result_reg);
+			generate_raw_set(Jump::jnp, ordered_reg);
+			ASM(AND32rr, result_reg, ordered_reg);
+			result.set_modified();
+			return true;
+		}
+		const Jump condition = opcode == ZEND_MIR_OPCODE_F64_LT
+			? Jump::ja : Jump::jae;
+		auto left_reg = left.load_to_reg();
+		auto right_reg = right.load_to_reg();
+		ASM(SSE_UCOMISDrr, right_reg, left_reg);
 		if (fuse_compare_branch(condition)) {
 			return true;
 		}
@@ -11585,11 +11611,9 @@ bool ZendCompilerX64::compile_inst_impl(
 					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_F64_EQ:
-			return floating_compare(Jump::je);
 		case ZEND_MIR_OPCODE_F64_LT:
-			return floating_compare(Jump::jb);
 		case ZEND_MIR_OPCODE_F64_LE:
-			return floating_compare(Jump::jbe);
+			return floating_compare(record.opcode);
 		case ZEND_MIR_OPCODE_F64_CMP: {
 			auto [left_pair, right_pair] = binary();
 			auto &[left_ref, left] = left_pair;

@@ -167,7 +167,8 @@ static bool zend_mir_logic_opcode_proof_at(
 	}
 	if ((match->proofs
 			& ~(ZEND_MIR_LOGIC_PROOF_ALL
-				| ZEND_MIR_LOGIC_PROOF_SOURCE_CFG)) != 0) {
+				| ZEND_MIR_LOGIC_PROOF_SOURCE_CFG
+				| ZEND_MIR_LOGIC_PROOF_IEEE_F64_COMPARE)) != 0) {
 		*diagnostic_out = ZEND_MIRL_CONTRADICTORY_FACT;
 		return false;
 	}
