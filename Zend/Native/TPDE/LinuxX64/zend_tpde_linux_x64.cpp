@@ -6099,7 +6099,9 @@ bool ZendCompilerX64::compile_inst_impl(
 			builder.add_arg(ValuePart{frameless_direct.more_slots, 8,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 			builder.call(runtime_symbol(
-				ZEND_NATIVE_HELPER_CALL_FRAMELESS_DIRECT));
+				source_opcode == ZEND_FRAMELESS_ICALL_1
+					? ZEND_NATIVE_HELPER_CALL_FRAMELESS_1
+					: ZEND_NATIVE_HELPER_CALL_FRAMELESS_DIRECT));
 		} else if (helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_OP
 				&& adaptor->plan()->linux_inline_forms
 				&& zend_tpde_concat_assign_direct_at(

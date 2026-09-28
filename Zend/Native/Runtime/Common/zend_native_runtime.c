@@ -908,6 +908,9 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 			| ZEND_NATIVE_EFFECT_MAY_FAIL
 			| ZEND_NATIVE_EFFECT_MAY_REENTER,
 		(const void *) zend_native_value_concat_assign_direct},
+	{ZEND_NATIVE_HELPER_CALL_FRAMELESS_1,
+		ZEND_NATIVE_EFFECT_CALL,
+		(const void *) zend_native_call_frameless_1},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {

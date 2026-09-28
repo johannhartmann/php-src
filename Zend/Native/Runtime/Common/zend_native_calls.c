@@ -991,6 +991,44 @@ cleanup:
 	return EG(exception) == NULL ? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
 }
 
+/*
+ * The VM's FRAMELESS_ICALL_1 handler: the handler writes the result from
+ * the (dereferenced) argument, and a temporary argument is released. An
+ * undefined CV, which warns, and an observed function take the general form.
+ */
+zend_native_status zend_native_call_frameless_1(
+	zend_execute_data *execute_data, uint64_t encoded_op1,
+	uint64_t descriptor, uint64_t slots, uint64_t more_slots)
+{
+	const uint32_t handler_index = (uint32_t) (descriptor & 0xffff);
+	zval *result = (zval *) ((char *) execute_data + (uint32_t) slots);
+	zval *argument = ((descriptor
+			>> ZEND_NATIVE_FRAMELESS_DIRECT_CONST_SHIFT) & 1)
+		? &execute_data->func->op_array.literals[(uint32_t) (slots >> 32)]
+		: (zval *) ((char *) execute_data + (uint32_t) (slots >> 32));
+
+	if (UNEXPECTED(Z_TYPE_P(argument) == IS_UNDEF)
+#if !ZEND_VM_SPEC || ZEND_OBSERVER_ENABLED
+			|| (ZEND_OBSERVER_ENABLED
+				&& UNEXPECTED(!zend_observer_handler_is_unobserved(
+					ZEND_OBSERVER_DATA(zend_flf_functions[handler_index]))))
+#endif
+			) {
+		return zend_native_call_frameless_direct(
+			execute_data, encoded_op1, descriptor, slots, more_slots);
+	}
+	execute_data->opline =
+		&execute_data->func->op_array.opcodes[descriptor >> 32];
+	ZVAL_NULL(result);
+	((zend_frameless_function_1) zend_flf_handlers[handler_index])(
+		result, Z_ISREF_P(argument) ? Z_REFVAL_P(argument) : argument);
+	if ((descriptor >> ZEND_NATIVE_FRAMELESS_DIRECT_TMP_SHIFT) & 1) {
+		zval_ptr_dtor_nogc(argument);
+		ZVAL_UNDEF(argument);
+	}
+	return EG(exception) == NULL ? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+}
+
 zend_native_status zend_native_call_frameless_internal(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result_operand, uint64_t auxiliary,

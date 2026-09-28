@@ -562,6 +562,10 @@ zend_native_status zend_native_frame_observer_end(
 zend_native_status zend_native_call_frameless_direct(
 	zend_execute_data *execute_data, uint64_t encoded_op1,
 	uint64_t descriptor, uint64_t slots, uint64_t more_slots);
+/* The same for a one-argument call, specialized like the VM's handler. */
+zend_native_status zend_native_call_frameless_1(
+	zend_execute_data *execute_data, uint64_t encoded_op1,
+	uint64_t descriptor, uint64_t slots, uint64_t more_slots);
 
 zend_native_status zend_native_call_frameless_internal(
 	zend_execute_data *execute_data,

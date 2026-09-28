@@ -7554,6 +7554,10 @@ bool initialize_plan(
 							plan->instructions[i], 0, &frameless_direct)) {
 					require_runtime_helper(
 						plan, ZEND_NATIVE_HELPER_CALL_FRAMELESS_DIRECT);
+					if (operation.source_opcode == ZEND_FRAMELESS_ICALL_1) {
+						require_runtime_helper(
+							plan, ZEND_NATIVE_HELPER_CALL_FRAMELESS_1);
+					}
 				}
 				const uint32_t argument_count =
 					operation.source_opcode - ZEND_FRAMELESS_ICALL_0;
