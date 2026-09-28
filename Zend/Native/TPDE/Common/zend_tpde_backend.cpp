@@ -2923,6 +2923,66 @@ static bool machine_short_circuit_branch_is_register_only(
 	return true;
 }
 
+/*
+ * A guarded numeric comparison feeding only the JMPZ/JMPNZ that follows it
+ * would box a boolean in its hot path for the branch to test again. Let the
+ * branch evaluate it instead, like the VM's smart branches: operands that
+ * are both numbers compare and jump inline; the helper computes any other
+ * comparison into the temporary the branch then tests.
+ */
+static void freeze_fused_compare_branches(zend_tpde_plan *plan)
+{
+	if (plan->value_consumer_offsets == nullptr
+			|| plan->value_consumers == nullptr) {
+		return;
+	}
+	for (uint32_t index = 0; index + 1 < plan->instruction_count; ++index) {
+		zend_tpde_instruction &compare = plan->instructions[index];
+		zend_tpde_instruction &branch = plan->instructions[index + 1];
+		const zend_mir_executable_value_ref &operation =
+			compare.value_operation;
+		if (!compare.has_value_operation || !branch.has_value_operation
+				|| operation.opcode != ZEND_MIR_OPCODE_VALUE_BINARY_OP
+				|| (operation.source_opcode != ZEND_IS_SMALLER
+					&& operation.source_opcode != ZEND_IS_SMALLER_OR_EQUAL
+					&& operation.source_opcode != ZEND_IS_EQUAL
+					&& operation.source_opcode != ZEND_IS_NOT_EQUAL)
+				|| (compare.machine_control_flow_flags
+					& ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD) == 0
+				|| (compare.machine_control_flow_flags
+					& ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_RESULT) != 0
+				|| operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+				|| !zend_mir_id_is_valid(operation.result_storage_id)
+				|| branch.value_operation.opcode
+					!= ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				|| (branch.value_operation.source_opcode != ZEND_JMPZ
+					&& branch.value_operation.source_opcode != ZEND_JMPNZ)
+				|| (branch.machine_control_flow_flags
+					& ZEND_TPDE_MACHINE_CONTROL_FLOW_BOXED_BRANCH) == 0
+				|| branch.value_operation.op1_storage_id
+					!= operation.result_storage_id
+				|| compare.record.block_id != branch.record.block_id) {
+			continue;
+		}
+		zend_tpde_long_binary layout{};
+		zend_tpde_value_condition condition{};
+		/* A branch with its own guard and cold blocks keeps its form. */
+		if (!zend_tpde_long_binary_at(compare, &layout)
+				|| zend_tpde_value_condition_at(branch, &condition)) {
+			continue;
+		}
+		const int32_t result_index = machine_source_binding_value_index(
+			plan, compare.source_result_binding);
+		if (result_index < 0
+				|| machine_single_source_consumer(plan, result_index)
+					!= static_cast<int32_t>(index + 1)) {
+			continue;
+		}
+		compare.fused_into_branch = true;
+		branch.fused_compare_plus_one = index + 1;
+	}
+}
+
 static void freeze_register_boolean_results(zend_tpde_plan *plan)
 {
 	if (plan->value_consumer_offsets == nullptr) {
@@ -9522,6 +9582,7 @@ bool initialize_plan(
 		return false;
 	}
 	freeze_register_boolean_results(plan);
+	freeze_fused_compare_branches(plan);
 	if (zend_native_runtime_validate(plan->runtime,
 			plan->required_runtime_capabilities, diag) == FAILURE) {
 		return false;
@@ -12192,6 +12253,7 @@ static bool freeze_machine_cfg(
 				? !typed_body
 				: (instruction.machine_control_flow_flags
 						& ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD) != 0
+					&& !(!typed_body && instruction.fused_into_branch)
 					&& !(typed_body
 						&& (zend_tpde_typed_numeric_binary(plan, instruction)
 							|| zend_tpde_typed_forward_assign(instruction)));
