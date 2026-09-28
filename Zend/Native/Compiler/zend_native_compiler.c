@@ -1328,9 +1328,13 @@ static bool zend_native_compiler_lower_function(
 	diagnostics.limit = UINT32_MAX;
 	memset(&compiler->last_diagnostic, 0,
 		sizeof(compiler->last_diagnostic));
-	result = zend_mir_lower_w11_zend_op_array(
-		compiler->script, function->op_array,
-		&function->ssa, &module_ops, &diagnostics);
+	result = compiler->target == ZEND_NATIVE_TARGET_LINUX_AMD64
+		? zend_mir_lower_typed_zend_op_array(
+			compiler->script, function->op_array,
+			&function->ssa, &module_ops, &diagnostics)
+		: zend_mir_lower_w11_zend_op_array(
+			compiler->script, function->op_array,
+			&function->ssa, &module_ops, &diagnostics);
 	if (!zend_mir_lowering_result_is_w08_failure_atomic(&result)) {
 		if (result.lowering.module != NULL) {
 			zend_mir_module_destroy(result.lowering.module);

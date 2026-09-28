@@ -543,6 +543,9 @@ struct zend_tpde_instruction {
 	zend_mir_storage_id zval_store_storage_id;
 	bool zval_store_direct_scalar;
 	bool zval_store_lazy_scalar;
+	/* The store needs no release of the destination's previous value: an
+	 * unguarded payload and type store. */
+	bool zval_store_plain;
 	/*
 	 * A slot-authoritative exact scalar may still need a short-lived machine
 	 * definition for the ZVAL_STORE that publishes it.  This transport is

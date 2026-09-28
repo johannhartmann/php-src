@@ -17,6 +17,8 @@ typedef struct _zend_mir_numeric_plan {
 	zend_mir_value_fact_flags fact_flags;
 	zend_mir_numeric_range result_range;
 	zend_mir_value_id operands[2];
+	/* Long operands of double arithmetic, converted before the operation. */
+	bool convert[2];
 	uint32_t operand_count;
 	zend_mir_value_id result_id;
 	zend_mir_source_position_ref source_position;
@@ -82,7 +84,8 @@ static bool zend_mir_numeric_resolve_fact(
 static bool zend_mir_numeric_validate_use(
 	const zend_mir_lowering_source_view *source,
 	const zend_mir_source_opcode_ref *source_opcode,
-	const zend_mir_source_operand_ref *operand, uint32_t operand_index)
+	const zend_mir_source_operand_ref *operand, uint32_t operand_index,
+	bool typed)
 {
 	uint32_t matching_uses = 0;
 	uint32_t index;
@@ -102,6 +105,10 @@ static bool zend_mir_numeric_validate_use(
 		}
 		if (use.ssa_variable_id == operand->ssa_variable_id
 				&& use.opline_index == source_opcode->opline_index) {
+			/* $x * $x uses one value as both operands. */
+			if (typed && use.operand_index != operand_index) {
+				continue;
+			}
 			if (use.operand_index != operand_index || ++matching_uses != 1) {
 				return false;
 			}
@@ -237,7 +244,8 @@ static zend_mir_lowering_status zend_mir_numeric_prepare_operands(
 			index == 0 ? &source_opcode->op1 : &source_opcode->op2;
 
 		if (!zend_mir_numeric_validate_use(
-				provider_context->source, source_opcode, operand, index)) {
+				provider_context->source, source_opcode, operand, index,
+				provider_context->typed)) {
 			zend_mir_numeric_set_diagnostic(
 				diagnostic_out, ZEND_MIRL_INVALID_SOURCE);
 			return ZEND_MIR_LOWERING_REJECTED;
@@ -274,13 +282,31 @@ static zend_mir_lowering_status zend_mir_numeric_prepare_operands(
 
 static zend_mir_lowering_status zend_mir_numeric_prepare_arithmetic(
 	uint32_t zend_opcode_number, const zend_mir_value_fact_ref facts[2],
-	zend_mir_numeric_plan *plan,
+	zend_mir_numeric_plan *plan, bool typed,
 	zend_mir_lowering_diagnostic_code *diagnostic_out)
 {
 	zend_mir_numeric_range left;
 	zend_mir_numeric_range right;
 	bool proven;
 
+	/* Long op double computes in double precision, as the VM does. */
+	if (typed && facts[0].exact_type != facts[1].exact_type
+			&& (facts[0].exact_type == ZEND_MIR_SCALAR_TYPE_I64
+				|| facts[0].exact_type == ZEND_MIR_SCALAR_TYPE_F64)
+			&& (facts[1].exact_type == ZEND_MIR_SCALAR_TYPE_I64
+				|| facts[1].exact_type == ZEND_MIR_SCALAR_TYPE_F64)) {
+		plan->convert[0] = facts[0].exact_type == ZEND_MIR_SCALAR_TYPE_I64;
+		plan->convert[1] = facts[1].exact_type == ZEND_MIR_SCALAR_TYPE_I64;
+		plan->exact_type = ZEND_MIR_SCALAR_TYPE_F64;
+		plan->fact_flags = ZEND_MIR_VALUE_FACT_NON_REFCOUNTED;
+		plan->representation = ZEND_MIR_REPRESENTATION_DOUBLE;
+		plan->opcode = zend_opcode_number == ZEND_MIR_NUMERIC_OPCODE_ADD
+			? ZEND_MIR_OPCODE_F64_ADD
+			: zend_opcode_number == ZEND_MIR_NUMERIC_OPCODE_SUB
+				? ZEND_MIR_OPCODE_F64_SUB
+				: ZEND_MIR_OPCODE_F64_MUL;
+		return ZEND_MIR_LOWERING_SUCCESS;
+	}
 	if (facts[0].exact_type != facts[1].exact_type
 			|| (facts[0].exact_type != ZEND_MIR_SCALAR_TYPE_I64
 				&& facts[0].exact_type != ZEND_MIR_SCALAR_TYPE_F64)) {
@@ -477,7 +503,7 @@ static zend_mir_lowering_status zend_mir_numeric_build_plan(
 		case ZEND_MIR_NUMERIC_OPCODE_MUL:
 			status = zend_mir_numeric_prepare_arithmetic(
 				source_opcode->zend_opcode_number, facts, plan,
-				diagnostic_out);
+				provider_context->typed, diagnostic_out);
 			break;
 		case ZEND_MIR_NUMERIC_OPCODE_MOD:
 		case ZEND_MIR_NUMERIC_OPCODE_SL:
@@ -512,7 +538,7 @@ static zend_mir_lowering_status zend_mir_numeric_build_plan(
 static zend_mir_lowering_status zend_mir_numeric_emit(
 	zend_mir_lowering_context *context,
 	const zend_mir_source_opcode_ref *source_opcode,
-	zend_mir_mutator *mutator, const zend_mir_numeric_plan *plan,
+	zend_mir_mutator *mutator, zend_mir_numeric_plan *plan,
 	const zend_mir_numeric_provider_context *provider_context,
 	zend_mir_lowering_diagnostic_code *diagnostic_out)
 {
@@ -557,6 +583,34 @@ static zend_mir_lowering_status zend_mir_numeric_emit(
 		return ZEND_MIR_LOWERING_FAILED;
 	}
 	instruction.block_id = zend_mir_lowering_context_block_id(context);
+	for (index = 0; index < plan->operand_count; index++) {
+		zend_mir_instruction_record conversion = instruction;
+		zend_mir_instruction_id conversion_id;
+
+		if (!plan->convert[index]) {
+			continue;
+		}
+		conversion.opcode = ZEND_MIR_OPCODE_I64_TO_F64;
+		conversion.representation = ZEND_MIR_REPRESENTATION_DOUBLE;
+		conversion.result_id = provider_context->conversion_value == NULL
+			? ZEND_MIR_ID_INVALID
+			: provider_context->conversion_value(
+				provider_context->source_context,
+				source_opcode->opline_index, index);
+		conversion.source_position_id = source_position_id;
+		if (!zend_mir_id_is_valid(conversion.block_id)
+				|| !zend_mir_id_is_valid(conversion.result_id)
+				|| !mutator->add_instruction(
+					mutator->context, &conversion, &conversion_id)
+				|| !mutator->add_operand(
+					mutator->context, conversion_id,
+					plan->operands[index])) {
+			zend_mir_numeric_set_diagnostic(
+				diagnostic_out, ZEND_MIRL_MUTATION_FAILED);
+			return ZEND_MIR_LOWERING_FAILED;
+		}
+		plan->operands[index] = conversion.result_id;
+	}
 	instruction.opcode = plan->opcode;
 	instruction.representation = plan->representation;
 	instruction.result_id = plan->result_id;

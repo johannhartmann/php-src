@@ -4647,6 +4647,67 @@ bool freeze_statepoint_materializations(
 			}
 			return false;
 		};
+		/*
+		 * A value materialized from its defining instruction is a boxed zval
+		 * unless it is a scalar machine value, such as a typed-tier result
+		 * (ADR 0024), which has a single payload part.
+		 */
+		auto defined_machine_kind = [&](
+				const zend_tpde_source_value_binding &binding) {
+			if (binding.value_index >= 0
+					&& static_cast<uint32_t>(binding.value_index)
+						< plan->value_count) {
+				const zend_tpde_machine_value_kind kind =
+					plan->values[binding.value_index].machine_kind;
+				if (kind == ZEND_TPDE_MACHINE_VALUE_I64
+						|| kind == ZEND_TPDE_MACHINE_VALUE_F64
+						|| kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
+					return kind;
+				}
+			}
+			return ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
+		};
+		/*
+		 * A typed-tier value (ADR 0024) that a helper or call reads from the
+		 * frame is stored into its slot right after its definition by a plain
+		 * ZVAL_STORE; publishing it again at the boundary is redundant.
+		 */
+		auto stored_after_definition = [&](
+				zend_mir_storage_id storage_id, int32_t source_value_index,
+				int32_t source_definition_instruction_index) {
+			if (!plan->linux_inline_forms || source_value_index < 0) {
+				return false;
+			}
+			const zend_mir_value_id value_id =
+				plan->values[source_value_index].id;
+			for (uint32_t cursor = index;
+					source_definition_instruction_index < 0 && cursor > 0;
+					--cursor) {
+				if (plan->instructions[cursor - 1].record.result_id
+						== value_id) {
+					source_definition_instruction_index =
+						static_cast<int32_t>(cursor - 1);
+				}
+			}
+			if (source_definition_instruction_index < 0) {
+				return false;
+			}
+			for (uint32_t candidate_index =
+						static_cast<uint32_t>(
+							source_definition_instruction_index) + 1;
+					candidate_index < index; ++candidate_index) {
+				const zend_tpde_instruction &candidate =
+					plan->instructions[candidate_index];
+				if (candidate.record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE
+						&& candidate.zval_store_plain
+						&& candidate.zval_store_storage_id == storage_id
+						&& zend_tpde_operand_at(plan, &candidate, 0)
+							== value_id) {
+					return true;
+				}
+			}
+			return false;
+		};
 		auto append_materialization = [&](
 				uint32_t value_index,
 				zend_mir_storage_id storage_id,
@@ -4654,7 +4715,9 @@ bool freeze_statepoint_materializations(
 				int32_t source_value_index,
 				int32_t source_definition_instruction_index) {
 			if (!zend_mir_id_is_valid(storage_id)
-					|| duplicate_storage(storage_id)) {
+					|| duplicate_storage(storage_id)
+					|| stored_after_definition(storage_id, source_value_index,
+						source_definition_instruction_index)) {
 				return;
 			}
 			materializations.push_back({
@@ -4892,7 +4955,7 @@ bool freeze_statepoint_materializations(
 				if (input.binding.definition_instruction_index >= 0) {
 					append_materialization(
 						UINT32_MAX, input.storage_id,
-						ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
+						defined_machine_kind(input.binding),
 						input.binding.value_index,
 						input.binding.definition_instruction_index);
 					continue;
@@ -4975,7 +5038,7 @@ bool freeze_statepoint_materializations(
 				if (binding.definition_instruction_index >= 0) {
 					append_materialization(
 						UINT32_MAX, storage_id,
-						ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
+						defined_machine_kind(binding),
 						binding.value_index,
 						binding.definition_instruction_index);
 					continue;
@@ -6857,15 +6920,57 @@ bool initialize_plan(
 			 * scanning the slot's entire history: an earlier refcounted value
 			 * may already have been released by a dominating assignment.
 			 */
-			if (source_op_array != nullptr && source_ssa != nullptr
+			/*
+			 * On Linux x64 the typed tier also stores the results of other
+			 * scalar definitions; the value reaching the destination is the
+			 * use paired with the definition being stored.
+			 */
+			const zend_ssa_op *store_ssa_op =
+				source_op_array != nullptr && source_ssa != nullptr
 					&& source_ssa->ops != nullptr
-					&& source_ssa->vars != nullptr
 					&& record.source_position_id < source_op_array->last
-					&& source_op_array->opcodes[
-						record.source_position_id].opcode == ZEND_ASSIGN) {
-				const int32_t previous_ssa =
-					source_ssa->ops[
-						record.source_position_id].op1_use;
+				? &source_ssa->ops[record.source_position_id] : nullptr;
+			const int destination_ssa =
+				zend_mir_value_is_original_ssa(destination_id)
+				? static_cast<int>(destination_id) : -1;
+			const bool assign_store = store_ssa_op != nullptr
+				&& source_op_array->opcodes[
+					record.source_position_id].opcode == ZEND_ASSIGN;
+			int32_t reaching_ssa = -1;
+			if (assign_store) {
+				reaching_ssa = store_ssa_op->op1_use;
+			} else if (store_ssa_op != nullptr && plan->linux_inline_forms
+					&& destination_ssa >= 0) {
+				reaching_ssa = store_ssa_op->op1_def == destination_ssa
+					? store_ssa_op->op1_use
+					: store_ssa_op->result_def == destination_ssa
+						? store_ssa_op->result_use
+						: -1;
+			}
+			/* Only ASSIGN stores may become lazy; other producers qualify for
+			 * a plain store alone. */
+			bool plain_scalar_destination = false;
+			if (reaching_ssa >= 0 && source_ssa->vars != nullptr
+					&& !assign_store) {
+				const int32_t previous_index = zend_tpde_value_index(
+					plan, zend_mir_value_from_original_ssa(
+						static_cast<uint32_t>(reaching_ssa)));
+				if (previous_index >= 0
+						&& source_ssa->vars[reaching_ssa].alias == NO_ALIAS) {
+					const zend_tpde_value &previous =
+						plan->values[previous_index];
+					plain_scalar_destination =
+						previous.canonical_storage_id
+								== plan->instructions[i]
+									.zval_store_storage_id
+						&& previous.category
+								== ZEND_MIR_VALUE_NON_REFCOUNTED_SCALAR
+						&& !previous.canonical_alias_observable;
+				}
+				reaching_ssa = -1;
+			}
+			if (reaching_ssa >= 0 && source_ssa->vars != nullptr) {
+				const int32_t previous_ssa = reaching_ssa;
 				const int32_t previous_index =
 					previous_ssa >= 0
 					? zend_tpde_value_index(
@@ -6907,7 +7012,23 @@ bool initialize_plan(
 					block_is_cyclic(record.block_id)
 					&& (!phi_storage || loop_carried_integer_transport);
 			}
-			if (!plan->instructions[i].zval_store_lazy_scalar) {
+			/*
+			 * A temporary or VAR result slot never owns a value that the
+			 * store must release (the VM writes result slots without
+			 * releasing them either), nor does a CV whose reaching value is
+			 * an unaliased non-refcounted scalar.
+			 */
+			plan->instructions[i].zval_store_plain =
+				plan->linux_inline_forms
+				&& !plan->instructions[i].zval_store_lazy_scalar
+				&& (plan->instructions[i].zval_store_direct_scalar
+					|| plain_scalar_destination
+					|| (source_op_array != nullptr
+						&& plan->instructions[i].zval_store_storage_id
+							>= static_cast<uint32_t>(
+								source_op_array->last_var)));
+			if (!plan->instructions[i].zval_store_lazy_scalar
+					&& !plan->instructions[i].zval_store_plain) {
 				plan->instructions[i].runtime_helper =
 					ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW;
 				require_runtime_helper(
