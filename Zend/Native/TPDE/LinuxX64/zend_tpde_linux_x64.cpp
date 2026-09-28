@@ -6343,12 +6343,14 @@ bool ZendCompilerX64::compile_inst_impl(
 		ScratchReg low_word{this};
 		ScratchReg probe{this};
 		ScratchReg decision{this};
+		ScratchReg target_address{this};
 		auto source_type_reg = source_type.alloc_gp();
 		auto target_type_reg = target_type.alloc_gp();
 		auto source_payload_reg = source_payload.alloc_gp();
 		auto low_word_reg = low_word.alloc_gp();
 		auto probe_reg = probe.alloc_gp();
 		auto decision_reg = decision.alloc_gp();
+		auto target_reg = target_address.alloc_gp();
 
 		const bool register_source =
 			!node.operands.empty()
@@ -6446,14 +6448,32 @@ bool ZendCompilerX64::compile_inst_impl(
 		ASM(TEST32ri, probe_reg, GC_IMMUTABLE);
 		generate_raw_jump(Jump::jne, slow);
 		label_place(source_mutable);
-		ASM(MOV32rm, target_type_reg,
+		/* A CV bound by global, static or & is written through its
+		 * reference, like zend_assign_to_variable(); a reference with typed
+		 * property sources needs the helper's coercion. */
+		ASM(LEA64rm, target_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					target_offset + offsetof(zval, u1.type_info))));
+				static_cast<int32_t>(target_offset)));
+		ASM(MOV32rm, target_type_reg,
+			FE_MEM(target_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
 		ASM(MOV32rr, probe_reg, target_type_reg);
 		ASM(AND32ri, probe_reg, Z_TYPE_MASK);
 		ASM(CMP32ri, probe_reg, IS_REFERENCE);
-		generate_raw_jump(Jump::je, slow);
+		auto target_plain = text_writer.label_create();
+		generate_raw_jump(Jump::jne, target_plain);
+		ASM(MOV64rm, target_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
+		ASM(CMP64mi,
+			FE_MEM(target_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_reference, sources.ptr))),
+			0);
+		generate_raw_jump(Jump::jne, slow);
+		ASM(ADD64ri, target_reg,
+			static_cast<int32_t>(offsetof(zend_reference, val)));
+		ASM(MOV32rm, target_type_reg,
+			FE_MEM(target_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		label_place(target_plain);
 		ASM(MOV32rr, probe_reg, target_type_reg);
 		ASM(AND32ri, probe_reg,
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
@@ -6471,8 +6491,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		ASM(TEST32rr, probe_reg, probe_reg);
 		generate_raw_jump(Jump::jne, slow);
 		ASM(MOV64rm, low_word_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(target_offset)));
+			FE_MEM(target_reg, 0, FE_NOREG, 0));
 		ASM(MOV32rm, probe_reg,
 			FE_MEM(low_word_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
@@ -6495,8 +6514,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto target_released = text_writer.label_create();
 		generate_raw_jump(Jump::je, target_released);
 		ASM(MOV64rm, low_word_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(target_offset)));
+			FE_MEM(target_reg, 0, FE_NOREG, 0));
 		ASM(SUB32mi,
 			FE_MEM(low_word_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
@@ -6528,13 +6546,11 @@ bool ZendCompilerX64::compile_inst_impl(
 			label_place(value_owned);
 		}
 		ASM(MOV64mr,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(target_offset)),
+			FE_MEM(target_reg, 0, FE_NOREG, 0),
 			low_word_reg);
 		ASM(MOV32mr,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					target_offset + offsetof(zval, u1.type_info))),
+			FE_MEM(target_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))),
 			source_type_reg);
 		if (result_storage != ZEND_MIR_ID_INVALID) {
 			ASM(MOV64mr,
@@ -8779,13 +8795,18 @@ bool ZendCompilerX64::compile_inst_impl(
 			const bool comparison = opcode == ZEND_IS_SMALLER
 				|| opcode == ZEND_IS_SMALLER_OR_EQUAL
 				|| opcode == ZEND_IS_EQUAL || opcode == ZEND_IS_NOT_EQUAL;
+			/* Integer-only operations: two longs inline, anything else,
+			 * a zero or -1 divisor and a shift count outside 0..63 use the
+			 * helper. */
+			const bool integer_op = opcode == ZEND_MOD
+				|| opcode == ZEND_SL || opcode == ZEND_SR;
 			/* A proven operation of two numbers cannot fail: integer
 			 * overflow continues in double. A typed body emits it without a
 			 * guarded diamond; in a Zend entry its cold edge is dead. */
 			const bool proven =
 				zend_tpde_numeric_binary_proven(adaptor->plan(), mir);
 			const bool guarded = node.kind == Adaptor::InstKind::GuardedFast;
-			if ((!arithmetic && !comparison)
+			if ((!arithmetic && !comparison && !integer_op)
 					|| (!guarded && !(proven && adaptor->typed_body()))
 					|| !mir.has_value_operation
 					|| operation.opcode != ZEND_MIR_OPCODE_VALUE_BINARY_OP) {
@@ -9019,7 +9040,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			 * known numbers cannot fail: compute in SSE registers straight
 			 * from the slots and store a double or boolean.
 			 */
-			if (known_double && opcode != ZEND_DIV
+			if (known_double && opcode != ZEND_DIV && !integer_op
 					&& (arithmetic
 						|| !node.has_result
 						|| result_kind == ZEND_TPDE_MACHINE_VALUE_BOOL
@@ -9171,6 +9192,20 @@ bool ZendCompilerX64::compile_inst_impl(
 			auto done = text_writer.label_create();
 			auto mixed = text_writer.label_create();
 			auto store = text_writer.label_create();
+			/* IDIV takes rdx:rax and a variable shift its count in cl;
+			 * reserve them before the operands are placed. */
+			ScratchReg fixed_ax{this};
+			ScratchReg fixed_dx{this};
+			ScratchReg fixed_cx{this};
+			const AsmReg ax_reg{AsmReg::AX};
+			const AsmReg dx_reg{AsmReg::DX};
+			const AsmReg cx_reg{AsmReg::CX};
+			if (opcode == ZEND_DIV || opcode == ZEND_MOD) {
+				fixed_ax.alloc_specific(ax_reg);
+				fixed_dx.alloc_specific(dx_reg);
+			} else if (opcode == ZEND_SL || opcode == ZEND_SR) {
+				fixed_cx.alloc_specific(cx_reg);
+			}
 			ScratchReg frame_scratch{this};
 			AsmReg frame_reg = AsmReg::make_invalid();
 			if (!register_operands || result_slot) {
@@ -9211,7 +9246,8 @@ bool ZendCompilerX64::compile_inst_impl(
 							zend_op_array, literals))));
 			}
 			auto load = [&](const FramedOperand &operand, AsmReg type_reg,
-					AsmReg value_reg) {
+					AsmReg value_reg, uint8_t known,
+					zend_mir_storage_id storage) {
 				if (operand.reg) {
 					const IRValueRef source = node.operands[operand.index];
 					if (adaptor->machine_kind(source)
@@ -9234,9 +9270,33 @@ bool ZendCompilerX64::compile_inst_impl(
 						+ static_cast<int32_t>(offsetof(zval, u1.type_info))));
 				ASM(MOV64rm, value_reg,
 					FE_MEM(base, 0, FE_NOREG, operand.offset));
+				/* A CV bound by global, static or & holds a reference; read
+				 * through it like the VM. A CV result written back into the
+				 * same slot keeps the helper, which updates the referent. */
+				if (!operand.literal
+						&& (known == IS_UNDEF
+							|| known == ZEND_TPDE_KNOWN_BOOL)
+						&& !(operation.result.slot_kind
+								== ZEND_MIR_SOURCE_SLOT_CV
+							&& storage == operation.result_storage_id)) {
+					auto plain = text_writer.label_create();
+					ASM(CMP32ri, type_reg, IS_REFERENCE);
+					generate_raw_jump(Jump::jne, plain);
+					ASM(MOVZXr32m8, type_reg,
+						FE_MEM(value_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(zend_reference, val)
+								+ offsetof(zval, u1.type_info))));
+					ASM(MOV64rm, value_reg,
+						FE_MEM(value_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zend_reference, val))));
+					label_place(plain);
+				}
 			};
-			load(left, left_type_reg, left_reg);
-			load(right, right_type_reg, right_reg);
+			load(left, left_type_reg, left_reg, left_known,
+				operation.op1_storage_id);
+			load(right, right_type_reg, right_reg, right_known,
+				operation.op2_storage_id);
 
 			/* long op long */
 			if (known_double) {
@@ -9274,7 +9334,43 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(MOV32ri, result_type_reg, IS_LONG);
 					break;
 				case ZEND_DIV:
-					generate_raw_jump(Jump::jmp, slow);
+					/* An exact quotient stays a long; otherwise divide both
+					 * operands in double precision below. */
+					ASM(TEST64rr, right_reg, right_reg);
+					generate_raw_jump(Jump::je, slow);
+					ASM(CMP64ri, right_reg, -1);
+					generate_raw_jump(Jump::je, slow);
+					ASM(MOV64rr, ax_reg, left_reg);
+					ASM(CQO);
+					ASM(IDIV64r, right_reg);
+					ASM(TEST64rr, dx_reg, dx_reg);
+					generate_raw_jump(Jump::jne, mixed);
+					ASM(MOV64rr, left_reg, ax_reg);
+					ASM(MOV32ri, result_type_reg, IS_LONG);
+					break;
+				case ZEND_MOD:
+					ASM(TEST64rr, right_reg, right_reg);
+					generate_raw_jump(Jump::je, slow);
+					ASM(CMP64ri, right_reg, -1);
+					generate_raw_jump(Jump::je, slow);
+					ASM(MOV64rr, ax_reg, left_reg);
+					ASM(CQO);
+					ASM(IDIV64r, right_reg);
+					ASM(MOV64rr, left_reg, dx_reg);
+					ASM(MOV32ri, result_type_reg, IS_LONG);
+					break;
+				case ZEND_SL:
+				case ZEND_SR:
+					/* Unsigned: a negative count is out of range too. */
+					ASM(CMP64ri, right_reg, 63);
+					generate_raw_jump(Jump::ja, slow);
+					ASM(MOV64rr, cx_reg, right_reg);
+					if (opcode == ZEND_SL) {
+						ASM(SHL64rr, left_reg, cx_reg);
+					} else {
+						ASM(SAR64rr, left_reg, cx_reg);
+					}
+					ASM(MOV32ri, result_type_reg, IS_LONG);
 					break;
 				default: {
 					const Jump condition =
@@ -9312,6 +9408,9 @@ bool ZendCompilerX64::compile_inst_impl(
 
 			/* long or double, at least one double */
 			label_place(mixed);
+			if (integer_op) {
+				generate_raw_jump(Jump::jmp, slow);
+			}
 			auto to_double = [&](AsmReg type_reg, AsmReg value_reg,
 					AsmReg fp_reg, uint8_t known) {
 				if (known == IS_DOUBLE) {
@@ -10976,6 +11075,122 @@ bool ZendCompilerX64::compile_inst_impl(
 			std::move(decision), successors[1], successors[0]);
 		return true;
 	};
+	/*
+	 * FETCH_CONSTANT reads the constant the runtime cache slot names, like
+	 * the VM: a cached constant with a non-refcounted value is copied to the
+	 * result slot inline. An empty or special slot, a counted value and a
+	 * result held in registers use the helper, which also fills the slot.
+	 */
+	auto fetch_constant_inline = [&]() {
+		const zend_mir_executable_value_ref &operation = mir.value_operation;
+		const bool guarded = node.kind == Adaptor::InstKind::GuardedFast;
+		const auto guarded_successors = guarded
+			? adaptor->block_succs(IRBlockRef{node.control_block})
+			: decltype(adaptor->block_succs(
+				IRBlockRef{node.control_block})){};
+		bool frame_operands = (node.kind == Adaptor::InstKind::MIR
+				|| (guarded && node.control_block != UINT32_MAX
+					&& node.continuation_block != UINT32_MAX
+					&& guarded_successors.size() >= 2
+					&& static_cast<uint32_t>(guarded_successors[0])
+						== node.continuation_block
+					&& static_cast<uint32_t>(guarded_successors[1])
+						== node.argument_index))
+			&& !node.has_result
+			&& mir.has_value_operation
+			&& operation.source_opcode == ZEND_FETCH_CONSTANT
+			&& (operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+				|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)
+			&& zend_mir_id_is_valid(operation.result_storage_id)
+			&& operation.extended_value <= INT32_MAX - sizeof(void *);
+		for (IRValueRef operand : node.operands) {
+			frame_operands = frame_operands
+				&& (operand == IRValueRef{Adaptor::FRAME_VALUE}
+					|| operand == IRValueRef{
+						Adaptor::EXECUTION_CONTEXT_ARGUMENT});
+		}
+		const uint64_t result_offset64 =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
+				* sizeof(zval);
+		if (!frame_operands || result_offset64 > INT32_MAX - sizeof(zval)) {
+			return execute_value_operation();
+		}
+		const int32_t result_offset = static_cast<int32_t>(result_offset64);
+		const auto spilled = guarded
+			? decltype(spill_before_branch(true)){}
+			: spill_before_branch(true);
+		if (guarded) {
+			for (IRValueRef operand : node.operands) {
+				auto consumed = val_ref(operand);
+				(void) consumed;
+			}
+		}
+		auto slow = text_writer.label_create();
+		auto done = text_writer.label_create();
+		ScratchReg decision{this};
+		{
+			const AsmReg frame_reg = canonical_frame_register();
+			ScratchReg constant{this};
+			ScratchReg type{this};
+			auto constant_reg = constant.alloc_gp();
+			auto type_reg = type.alloc_gp();
+			ASM(MOV64rm, constant_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_execute_data, run_time_cache))));
+			ASM(TEST64rr, constant_reg, constant_reg);
+			generate_raw_jump(Jump::je, slow);
+			ASM(MOV64rm, constant_reg,
+				FE_MEM(constant_reg, 0, FE_NOREG,
+					static_cast<int32_t>(operation.extended_value)));
+			ASM(TEST64rr, constant_reg, constant_reg);
+			generate_raw_jump(Jump::je, slow);
+			ASM(TEST32ri, constant_reg, CACHE_SPECIAL);
+			generate_raw_jump(Jump::jne, slow);
+			ASM(MOV32rm, type_reg,
+				FE_MEM(constant_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_constant, value)
+						+ offsetof(zval, u1.type_info))));
+			ASM(TEST32ri, type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+			generate_raw_jump(Jump::jne, slow);
+			ASM(MOV32mr,
+				FE_MEM(frame_reg, 0, FE_NOREG, result_offset
+					+ static_cast<int32_t>(offsetof(zval, u1.type_info))),
+				type_reg);
+			ASM(MOV64rm, constant_reg,
+				FE_MEM(constant_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_constant, value))));
+			ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG, result_offset),
+				constant_reg);
+			if (guarded) {
+				constant.reset();
+				type.reset();
+				auto decision_reg = decision.alloc_gp();
+				ASM(MOV32ri, decision_reg, 0);
+				generate_raw_jump(Jump::jmp, done);
+				label_place(slow);
+				ASM(MOV32ri, decision_reg, 1);
+				label_place(done);
+			} else {
+				generate_raw_jump(Jump::jmp, done);
+			}
+		}
+		if (guarded) {
+			generate_guarded_decision_branch(
+				std::move(decision), guarded_successors[1],
+				guarded_successors[0]);
+			return true;
+		}
+		label_place(slow);
+		if (!execute_value_operation()) {
+			return false;
+		}
+		label_place(done);
+		release_spilled_regs(spilled);
+		return true;
+	};
 	auto dynamic_fetch_read = [&]() {
 		zend_tpde_dynamic_fetch_read layout;
 
@@ -11725,6 +11940,9 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_DYNAMIC_FETCH_R) {
 			return dynamic_fetch_read();
+		}
+		if (record.opcode == ZEND_MIR_OPCODE_DYNAMIC_FETCH_CONSTANT) {
+			return fetch_constant_inline();
 		}
 		return execute_value_operation();
 	}
