@@ -102,6 +102,15 @@ zend_native_status zend_native_value_assign(
 	uint64_t op1, uint64_t op2, uint64_t result,
 	uint32_t extended_value, uint32_t source_opcode,
 	uint32_t source_position_id);
+/*
+ * $cv .= value with the operands resolved to frame offsets: descriptor holds
+ * the value kind (ZEND_NATIVE_CONCAT_DIRECT_*) in bits 0-1 and the source
+ * position in bits 32-63; slots holds the CV offset (bits 0-31) and the value
+ * offset or literal index (32-63). The result is unused.
+ */
+zend_native_status zend_native_value_concat_assign_direct(
+	zend_execute_data *execute_data, uint64_t encoded_op1,
+	uint64_t descriptor, uint64_t slots);
 zend_native_status zend_native_value_assign_op(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,

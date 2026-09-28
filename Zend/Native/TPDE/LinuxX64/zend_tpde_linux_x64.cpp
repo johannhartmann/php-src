@@ -5502,6 +5502,8 @@ bool ZendCompilerX64::compile_inst_impl(
 				|| operation.extended_value == ZEND_REQUIRE_ONCE);
 		tpde::x64::CCAssignerSysV assigner{false};
 		CallBuilder builder{*this, assigner};
+		zend_tpde_frameless_direct frameless_direct{};
+		zend_tpde_concat_assign_direct concat_assign_direct{};
 		if (zend_tpde_helper_requires_undef_result(helper, operation)) {
 			const uint64_t result_offset =
 				(uint64_t{ZEND_CALL_FRAME_SLOT}
@@ -5540,6 +5542,29 @@ bool ZendCompilerX64::compile_inst_impl(
 				tpde::CCAssignment{});
 			builder.call(runtime_symbol(
 				ZEND_NATIVE_HELPER_CONST_INCLUDE_ONCE));
+		} else if (helper == ZEND_NATIVE_HELPER_CALL_FRAMELESS_INTERNAL
+				&& adaptor->plan()->linux_inline_forms
+				&& zend_tpde_frameless_direct_at(mir, 0, &frameless_direct)) {
+			/* The encoded first operand above is ignored by this form. */
+			builder.add_arg(ValuePart{frameless_direct.descriptor, 8,
+				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			builder.add_arg(ValuePart{frameless_direct.slots, 8,
+				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			builder.add_arg(ValuePart{frameless_direct.more_slots, 8,
+				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			builder.call(runtime_symbol(
+				ZEND_NATIVE_HELPER_CALL_FRAMELESS_DIRECT));
+		} else if (helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_OP
+				&& adaptor->plan()->linux_inline_forms
+				&& zend_tpde_concat_assign_direct_at(
+					mir, &concat_assign_direct)) {
+			/* The encoded first operand above is ignored by this form. */
+			builder.add_arg(ValuePart{concat_assign_direct.descriptor, 8,
+				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			builder.add_arg(ValuePart{concat_assign_direct.slots, 8,
+				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			builder.call(runtime_symbol(
+				ZEND_NATIVE_HELPER_VALUE_CONCAT_ASSIGN_DIRECT));
 		} else if (helper == ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL) {
 			builder.add_arg(ValuePart{source_opcode, 4,
 				tpde::x64::PlatformConfig::GP_BANK},

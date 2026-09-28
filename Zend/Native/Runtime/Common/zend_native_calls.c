@@ -904,6 +904,93 @@ static void zend_native_frameless_observed_call_explicit(
 	}
 }
 
+zend_native_status zend_native_call_frameless_direct(
+	zend_execute_data *execute_data, uint64_t encoded_op1,
+	uint64_t descriptor, uint64_t slots, uint64_t more_slots)
+{
+	const uint32_t handler_index = (uint32_t) (descriptor & 0xffff);
+	const uint32_t argument_count = (uint32_t) ((descriptor >> 16) & 3);
+	const uint32_t offsets[3] = {
+		(uint32_t) (slots >> 32), (uint32_t) more_slots,
+		(uint32_t) (more_slots >> 32)};
+	zend_op_array *op_array = &execute_data->func->op_array;
+	zval *result = (zval *) ((char *) execute_data + (uint32_t) slots);
+	zval *arguments[3] = {NULL, NULL, NULL};
+	uint32_t index;
+
+	(void) encoded_op1;
+	ZEND_ASSERT(handler_index < zend_flf_count);
+	execute_data->opline = &op_array->opcodes[descriptor >> 32];
+	for (index = 0; index < argument_count; index++) {
+		zval *value;
+
+		if ((descriptor >> (ZEND_NATIVE_FRAMELESS_DIRECT_CONST_SHIFT + index))
+				& 1) {
+			value = &op_array->literals[offsets[index]];
+		} else {
+			value = (zval *) ((char *) execute_data + offsets[index]);
+		}
+		if (((descriptor >> (ZEND_NATIVE_FRAMELESS_DIRECT_CV_SHIFT + index))
+					& 1)
+				&& UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
+			uint32_t variable_index = (uint32_t)
+				(value - ZEND_CALL_VAR_NUM(execute_data, 0));
+
+			zend_error(E_WARNING, "Undefined variable $%s",
+				ZSTR_VAL(op_array->vars[variable_index]));
+			if (EG(exception) != NULL) {
+				goto cleanup;
+			}
+			value = &EG(uninitialized_zval);
+		}
+		ZVAL_DEREF(value);
+		arguments[index] = value;
+	}
+	ZVAL_NULL(result);
+#if !ZEND_VM_SPEC || ZEND_OBSERVER_ENABLED
+	if (ZEND_OBSERVER_ENABLED && UNEXPECTED(!zend_observer_handler_is_unobserved(
+			ZEND_OBSERVER_DATA(zend_flf_functions[handler_index])))) {
+		zend_native_frameless_observed_call_explicit(
+			execute_data, zend_flf_functions[handler_index],
+			result, arguments, argument_count);
+	} else
+#endif
+	switch (argument_count) {
+		case 0:
+			((zend_frameless_function_0)
+				zend_flf_handlers[handler_index])(result);
+			break;
+		case 1:
+			((zend_frameless_function_1)
+				zend_flf_handlers[handler_index])(result, arguments[0]);
+			break;
+		case 2:
+			((zend_frameless_function_2)
+				zend_flf_handlers[handler_index])(
+					result, arguments[0], arguments[1]);
+			break;
+		default:
+			((zend_frameless_function_3)
+				zend_flf_handlers[handler_index])(
+					result, arguments[0], arguments[1], arguments[2]);
+			break;
+	}
+
+cleanup:
+	for (index = 0; index < argument_count; index++) {
+		if ((descriptor >> (ZEND_NATIVE_FRAMELESS_DIRECT_TMP_SHIFT + index))
+				& 1) {
+			zval *slot = (zval *) ((char *) execute_data + offsets[index]);
+
+			if (!Z_ISUNDEF_P(slot)) {
+				zval_ptr_dtor(slot);
+				ZVAL_UNDEF(slot);
+			}
+		}
+	}
+	return EG(exception) == NULL ? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+}
+
 zend_native_status zend_native_call_frameless_internal(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result_operand, uint64_t auxiliary,

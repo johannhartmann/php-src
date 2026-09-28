@@ -953,6 +953,139 @@ static inline bool zend_tpde_temporary_container_array_read_at(
 	return true;
 }
 
+/*
+ * A frameless internal call whose result and arguments are frame slots or
+ * literals calls zend_native_call_frameless_direct() with precomputed
+ * offsets instead of encoded operands. VAR arguments may be indirect and keep
+ * the general helper.
+ */
+struct zend_tpde_frameless_direct {
+	uint64_t descriptor;
+	uint64_t slots;
+	uint64_t more_slots;
+};
+
+static inline bool zend_tpde_frameless_direct_at(
+	const zend_tpde_instruction &instruction,
+	uint32_t compiled_variable_count,
+	zend_tpde_frameless_direct *out)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+
+	if (out == nullptr || !instruction.has_value_operation
+			|| operation.source_opcode < ZEND_FRAMELESS_ICALL_0
+			|| operation.source_opcode > ZEND_FRAMELESS_ICALL_3
+			|| operation.extended_value > 0xffff
+			|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+				&& operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_VAR)
+			|| !zend_mir_id_is_valid(operation.result_storage_id)) {
+		return false;
+	}
+	(void) compiled_variable_count;
+	const uint32_t argument_count =
+		operation.source_opcode - ZEND_FRAMELESS_ICALL_0;
+	const zend_mir_source_operand_ref *arguments[3] = {
+		&operation.op1, &operation.op2, &operation.auxiliary};
+	const zend_mir_storage_id storages[3] = {
+		operation.op1_storage_id, operation.op2_storage_id,
+		operation.auxiliary_storage_id};
+	uint64_t offsets[3] = {0, 0, 0};
+	uint64_t descriptor = operation.extended_value
+		| (uint64_t{argument_count} << 16)
+		| (uint64_t{operation.source_position_id} << 32);
+	for (uint32_t index = 0; index < argument_count; ++index) {
+		const zend_mir_source_operand_ref &argument = *arguments[index];
+		if (argument.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+			offsets[index] = argument.index;
+			descriptor |= uint64_t{1}
+				<< (ZEND_NATIVE_FRAMELESS_DIRECT_CONST_SHIFT + index);
+			continue;
+		}
+		if ((argument.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+					&& argument.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
+				|| !zend_mir_id_is_valid(storages[index])
+				|| (argument.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+					&& argument.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP)
+				|| storages[index] == operation.result_storage_id) {
+			return false;
+		}
+		offsets[index] = (uint64_t{ZEND_CALL_FRAME_SLOT} + storages[index])
+			* sizeof(zval);
+		descriptor |= uint64_t{1} << (
+			(argument.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+				? ZEND_NATIVE_FRAMELESS_DIRECT_CV_SHIFT
+				: ZEND_NATIVE_FRAMELESS_DIRECT_TMP_SHIFT) + index);
+	}
+	const uint64_t result_offset =
+		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
+			* sizeof(zval);
+	if (result_offset > UINT32_MAX || offsets[0] > UINT32_MAX
+			|| offsets[1] > UINT32_MAX || offsets[2] > UINT32_MAX) {
+		return false;
+	}
+	out->descriptor = descriptor;
+	out->slots = result_offset | (offsets[0] << 32);
+	out->more_slots = offsets[1] | (offsets[2] << 32);
+	return true;
+}
+
+/*
+ * $cv .= value with a literal, CV or temporary value and an unused result
+ * calls zend_native_value_concat_assign_direct() with precomputed offsets.
+ */
+struct zend_tpde_concat_assign_direct {
+	uint64_t descriptor;
+	uint64_t slots;
+};
+
+static inline bool zend_tpde_concat_assign_direct_at(
+	const zend_tpde_instruction &instruction,
+	zend_tpde_concat_assign_direct *out)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	uint64_t value_kind;
+	uint64_t value_offset;
+
+	if (out == nullptr || !instruction.has_value_operation
+			|| operation.source_opcode != ZEND_ASSIGN_OP
+			|| operation.extended_value != ZEND_CONCAT
+			|| operation.result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
+			|| (operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+				&& operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
+			|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+			|| !zend_mir_id_is_valid(operation.op1_storage_id)) {
+		return false;
+	}
+	if (operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+		value_kind = ZEND_NATIVE_CONCAT_DIRECT_CONST;
+		value_offset = operation.op2.index;
+	} else if ((operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& (operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+				|| operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP)
+			&& zend_mir_id_is_valid(operation.op2_storage_id)
+			&& operation.op2_storage_id != operation.op1_storage_id) {
+		value_kind = operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+			? ZEND_NATIVE_CONCAT_DIRECT_CV : ZEND_NATIVE_CONCAT_DIRECT_TMP;
+		value_offset = (uint64_t{ZEND_CALL_FRAME_SLOT}
+			+ operation.op2_storage_id) * sizeof(zval);
+	} else {
+		return false;
+	}
+	const uint64_t variable_offset =
+		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
+			* sizeof(zval);
+	if (variable_offset > UINT32_MAX || value_offset > UINT32_MAX) {
+		return false;
+	}
+	out->descriptor = value_kind
+		| (uint64_t{operation.source_position_id} << 32);
+	out->slots = variable_offset | (value_offset << 32);
+	return true;
+}
+
 static inline bool zend_tpde_packed_array_append_at(
 	const zend_tpde_instruction &instruction,
 	zend_tpde_packed_array_append *out)
