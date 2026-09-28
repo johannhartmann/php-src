@@ -4400,7 +4400,23 @@ static zend_native_status zend_native_value_assign_dim_impl(
 		} else {
 			offset = zend_native_value_read_explicit(execute_data, opline,
 				opline->op2_type, opline->op2);
-			if (offset == NULL
+			/* An integer or string key converts without diagnostics, so no
+			 * user code can replace the table meanwhile. */
+			if (offset != NULL && Z_TYPE_P(offset) == IS_LONG) {
+				key.kind = ZEND_NATIVE_ARRAY_KEY_LONG;
+				key.index = (zend_ulong) Z_LVAL_P(offset);
+				key.string = NULL;
+			} else if (offset != NULL && Z_TYPE_P(offset) == IS_STRING) {
+				if (opline->op2_type != IS_CONST
+						&& ZEND_HANDLE_NUMERIC(Z_STR_P(offset), key.index)) {
+					key.kind = ZEND_NATIVE_ARRAY_KEY_LONG;
+					key.string = NULL;
+				} else {
+					key.kind = ZEND_NATIVE_ARRAY_KEY_STRING;
+					key.index = 0;
+					key.string = Z_STR_P(offset);
+				}
+			} else if (offset == NULL
 					|| !zend_native_array_key_from_explicit_zval_protected(
 					execute_data, opline, table, true,
 					offset, opline->op2_type, opline->op2,
