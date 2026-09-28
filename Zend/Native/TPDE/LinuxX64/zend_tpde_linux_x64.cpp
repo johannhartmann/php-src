@@ -9443,11 +9443,15 @@ bool ZendCompilerX64::compile_inst_impl(
 				|| layout.result_offset > INT32_MAX - 8) {
 			return branch_to_guarded_cold();
 		}
+		/* A result without a machine value is published to its slot. */
 		if (layout.has_result != node.has_result
 				&& !(node.mutation_result
-					&& !layout.has_result && node.has_result)) {
+					&& !layout.has_result && node.has_result)
+				&& !(layout.has_result && !node.has_result)) {
 			return branch_to_guarded_cold();
 		}
+		const bool machine_result =
+			node.kind == Adaptor::InstKind::GuardedFast && node.has_result;
 		if (node.kind == Adaptor::InstKind::GuardedFast) {
 			const auto guarded_successors =
 				adaptor->block_succs(IRBlockRef{node.control_block});
@@ -9573,7 +9577,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 			generate_raw_jump(Jump::jne, slow);
 			if (layout.post) {
-				if (node.kind == Adaptor::InstKind::GuardedFast) {
+				if (machine_result) {
 					auto [result_ref, result] =
 						result_ref_single(node.result);
 					auto result_reg = result.alloc_reg();
@@ -9631,7 +9635,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		if (layout.has_result) {
 			if (!layout.post) {
-				if (node.kind == Adaptor::InstKind::GuardedFast) {
+				if (machine_result) {
 					auto [result_ref, result] =
 						result_ref_single(node.result);
 					auto result_reg = result.alloc_reg();
@@ -9644,7 +9648,7 @@ bool ZendCompilerX64::compile_inst_impl(
 						value_reg);
 				}
 			}
-			if (node.kind != Adaptor::InstKind::GuardedFast) {
+			if (!machine_result) {
 				ASM(MOV32ri, type_reg, IS_LONG);
 				ASM(MOV32mr,
 					FE_MEM(frame_reg, 0, FE_NOREG,
