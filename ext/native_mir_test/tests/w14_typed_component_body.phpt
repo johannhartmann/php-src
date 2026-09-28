@@ -54,4 +54,4 @@ printf(
 );
 ?>
 --EXPECT--
-accepted return=42 runs=20 codeunits=2 components=1 direct=2 typed=2 inline=0 frame_bytes=0 unwind=0 vm=0 execute_ex=0 handler=0
+accepted return=42 runs=20 codeunits=2 components=1 direct=2 typed=4 inline=0 frame_bytes=0 unwind=0 vm=0 execute_ex=0 handler=0

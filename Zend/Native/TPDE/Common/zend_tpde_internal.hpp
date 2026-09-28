@@ -562,6 +562,9 @@ struct zend_tpde_instruction {
 	uint32_t numeric_variant_plus_one;
 	uint32_t numeric_variant_general;
 	uint32_t numeric_variant_mask;
+	/* A Zend-entry typed call whose body may fail: a failed call takes the
+	 * canonical cold call instead. */
+	bool typed_call_may_fail;
 	bool transient_scalar_result;
 	zend_mir_representation transient_result_representation;
 	zend_mir_scalar_type_mask transient_result_exact_type;
@@ -1940,6 +1943,15 @@ struct zend_tpde_plan {
 	bool entry_variant_numeric;
 	/* Every return of this member yields a long or a double. */
 	bool returns_number;
+	/*
+	 * The typed body may fail: an operation needs Zend semantics, such as a
+	 * double returned as int or an integer overflow the plan excludes, or a
+	 * typed call it makes failed. It then returns a zero status (the type
+	 * part of a boxed result, otherwise an extra register) and the outermost
+	 * Zend-entry caller repeats the effect-free call through its canonical
+	 * path, which throws or coerces exactly.
+	 */
+	bool typed_body_may_fail;
 	/* Parameters declared with a type a boxed zval does not prove; a
 	 * typed call skips their receive checks. Numbers pass those in
 	 * number_argument_mask unchanged. */
@@ -2494,6 +2506,38 @@ static inline bool zend_tpde_typed_body_frame_transport(
 		const zend_tpde_instruction &instruction)
 {
 	return zend_tpde_scalar_diamond_frame_transport(plan, instruction);
+}
+
+/*
+ * The value a binding names is a number: the result of proven arithmetic or
+ * of a direct call to a member that returns numbers.
+ */
+static inline bool zend_tpde_binding_is_number(
+	const zend_tpde_plan *plan,
+	const zend_tpde_plan *const *component_plans,
+	uint32_t component_count,
+	const zend_tpde_source_value_binding &binding)
+{
+	int32_t producer = binding.definition_instruction_index;
+	if (producer < 0 && binding.value_index >= 0
+			&& static_cast<uint32_t>(binding.value_index) < plan->value_count
+			&& plan->source_value_definition_instructions != nullptr) {
+		producer = plan->source_value_definition_instructions[
+			binding.value_index];
+	}
+	if (producer < 0
+			|| static_cast<uint32_t>(producer) >= plan->instruction_count) {
+		return false;
+	}
+	const zend_tpde_instruction &instruction = plan->instructions[producer];
+	if (instruction.direct_call != nullptr) {
+		return instruction.component_target_index < component_count
+			&& component_plans[instruction.component_target_index]
+				->returns_number;
+	}
+	return zend_tpde_typed_numeric_binary(plan, instruction)
+		&& !zend_tpde_numeric_comparison(
+			instruction.value_operation.source_opcode);
 }
 
 int32_t zend_tpde_instruction_index(

@@ -7259,7 +7259,19 @@ bool initialize_plan(
 						== ZEND_MIR_SCALAR_TYPE_I64
 					&& source_operand_exact_type(plan, operation.op2)
 						== ZEND_MIR_SCALAR_TYPE_I64;
-				if (long_operands
+				/* Addition and subtraction of longs may overflow into a
+				 * double on the cold path: only inference proves a long. */
+				const bool may_overflow =
+					(operation.source_opcode == ZEND_ADD
+						|| operation.source_opcode == ZEND_SUB)
+					&& (source_ssa == nullptr || source_ssa->var_info == nullptr
+						|| operation.result.ssa_variable_id
+							>= static_cast<uint32_t>(source_ssa->vars_count)
+						|| (source_ssa->var_info[
+								operation.result.ssa_variable_id].type
+							& (MAY_BE_ANY | MAY_BE_UNDEF | MAY_BE_REF))
+							!= MAY_BE_LONG);
+				if (long_operands && !may_overflow
 						&& zend_tpde_long_binary_at(
 							plan->instructions[i], &binary)
 						&& source_operand_value_id(
@@ -9747,7 +9759,9 @@ static bool freeze_typed_body_signature(
 		uint32_t component_count,
 		const uint8_t *typed_body_candidates,
 		bool reject_variadic_receive,
-		zend_tpde_local_abi_type *return_type) {
+		zend_tpde_local_abi_type *return_type,
+		bool *may_fail) {
+	*may_fail = false;
 	if (plan == nullptr || component_plans == nullptr
 			|| typed_body_candidates == nullptr || return_type == nullptr
 			|| plan->generator_resume_count != 0
@@ -9969,6 +9983,14 @@ static bool freeze_typed_body_signature(
 				verified_type = machine_plan_value_abi(
 					plan, static_cast<uint32_t>(verified));
 			}
+			/* A number returned as int or float is checked at the return. */
+			if ((plan->return_abi.machine_kind == ZEND_TPDE_MACHINE_VALUE_I64
+						|| plan->return_abi.machine_kind
+							== ZEND_TPDE_MACHINE_VALUE_F64)
+					&& zend_tpde_binding_is_number(plan, component_plans,
+						component_count, instruction.source_op1_binding)) {
+				continue;
+			}
 			/* A boxed zval proves no declared type; keep the check. */
 			if (!machine_plan_abi_same_shape(
 					verified_type, plan->return_abi)
@@ -10065,8 +10087,21 @@ static bool freeze_typed_body_signature(
 						instruction.value_operation.op2)) {
 				return false;
 			}
+			const int32_t result_value =
+				instruction.source_result_binding.value_index >= 0
+					? instruction.source_result_binding.value_index
+					: machine_plan_source_value_index(
+						plan, instruction.value_operation.result);
+			const bool exact_long = result_value >= 0
+				&& plan->values[result_value].exact_type
+					== ZEND_MIR_SCALAR_TYPE_I64;
 			const zend_tpde_local_abi_type result =
-				zend_tpde_numeric_comparison(
+				exact_long && !zend_tpde_numeric_comparison(
+						instruction.value_operation.source_opcode)
+					? machine_plan_abi(ZEND_MIR_REPRESENTATION_I64,
+						ZEND_MIR_SCALAR_TYPE_I64, ZEND_TPDE_MACHINE_VALUE_I64,
+						ZEND_TPDE_LOCAL_ABI_TRANSFER_NONE)
+				: zend_tpde_numeric_comparison(
 						instruction.value_operation.source_opcode)
 					? machine_plan_abi(ZEND_MIR_REPRESENTATION_I1,
 						ZEND_MIR_SCALAR_TYPE_I1, ZEND_TPDE_MACHINE_VALUE_BOOL,
@@ -10075,6 +10110,10 @@ static bool freeze_typed_body_signature(
 						ZEND_MIR_SCALAR_TYPE_NONE,
 						ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
 						ZEND_TPDE_LOCAL_ABI_TRANSFER_IMMORTAL);
+			/* Its overflow check fails the body. */
+			*may_fail = *may_fail || (exact_long
+				&& !zend_tpde_numeric_comparison(
+					instruction.value_operation.source_opcode));
 			instruction_result_types[index] = result;
 			register_source_ssa[
 				instruction.value_operation.result.ssa_variable_id] = result;
@@ -10170,6 +10209,23 @@ static bool freeze_typed_body_signature(
 		if (returned >= 0 && !current_return.valid) {
 			current_return =
 				call_result_types[static_cast<uint32_t>(returned)];
+		}
+		/* A number returned as int may fail: a double needs Zend's coercion
+		 * or TypeError. As float it converts. */
+		if (record.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
+				&& (plan->return_abi.machine_kind
+						== ZEND_TPDE_MACHINE_VALUE_I64
+					|| plan->return_abi.machine_kind
+						== ZEND_TPDE_MACHINE_VALUE_F64)
+				&& zend_mir_scalar_type_is_exact(plan->return_abi.exact_type)
+				&& current_return.valid
+				&& current_return.machine_kind
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+				&& zend_tpde_binding_is_number(plan, component_plans,
+					component_count, instruction.source_op1_binding)) {
+			*may_fail = *may_fail || plan->return_abi.machine_kind
+				== ZEND_TPDE_MACHINE_VALUE_I64;
+			current_return = plan->return_abi;
 		}
 		/* A scalar returned through an untyped result is boxed at the
 		 * return. */
@@ -10596,39 +10652,17 @@ static bool freeze_typed_component_calls(
 			}
 			/* A proven arithmetic result, or the result of a member that
 			 * returns numbers, owns nothing. */
-			{
-				int32_t producer = binding.definition_instruction_index;
-				if (producer < 0 && binding.value_index >= 0
-						&& static_cast<uint32_t>(binding.value_index)
-							< plan->value_count
-						&& plan->source_value_definition_instructions
-							!= nullptr) {
-					producer = plan->source_value_definition_instructions[
-						binding.value_index];
-				}
-				const zend_tpde_instruction *numeric_producer =
-					producer >= 0
-							&& static_cast<uint32_t>(producer)
-								< plan->instruction_count
-						? &plan->instructions[producer] : nullptr;
-				if (numeric_producer != nullptr
-						&& ((zend_tpde_typed_numeric_binary(plan,
-									*numeric_producer)
-								&& !zend_tpde_numeric_comparison(
-									numeric_producer->value_operation
-										.source_opcode))
-							|| (numeric_producer->direct_call != nullptr
-								&& numeric_producer->component_target_index
-									< component_count
-								&& component_plans[numeric_producer
-									->component_target_index]
-									->returns_number))) {
-					caller_abi = machine_plan_abi(
-						ZEND_MIR_REPRESENTATION_ZVAL,
-						ZEND_MIR_SCALAR_TYPE_NONE,
-						ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
-						ZEND_TPDE_LOCAL_ABI_TRANSFER_IMMORTAL);
-				}
+			const bool number_binding = zend_tpde_binding_is_number(
+				plan, component_plans, component_count, binding);
+			if (number_binding
+					&& (!caller_abi.valid
+						|| caller_abi.machine_kind
+							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL)) {
+				caller_abi = machine_plan_abi(
+					ZEND_MIR_REPRESENTATION_ZVAL,
+					ZEND_MIR_SCALAR_TYPE_NONE,
+					ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
+					ZEND_TPDE_LOCAL_ABI_TRANSFER_IMMORTAL);
 			}
 			const zend_tpde_local_abi_type callee_abi =
 				machine_plan_value_abi(
@@ -10641,12 +10675,7 @@ static bool freeze_typed_component_calls(
 						!= 0) {
 				const bool number_argument =
 					caller_abi.valid
-					&& ((caller_abi.machine_kind
-								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-							&& caller_abi.transfer
-								== ZEND_TPDE_LOCAL_ABI_TRANSFER_IMMORTAL
-							&& caller_abi.exact_type
-								== ZEND_MIR_SCALAR_TYPE_NONE)
+					&& (number_binding
 						|| caller_abi.exact_type == ZEND_MIR_SCALAR_TYPE_I64
 						|| caller_abi.exact_type == ZEND_MIR_SCALAR_TYPE_F64
 						|| (source_argument.send_opline_index
@@ -12162,6 +12191,9 @@ static bool freeze_machine_cfg(
 					|| !add_edge(instruction_blocks[index], cold)
 					|| (hot != UINT32_MAX
 						&& !add_edge(hot, continuation))
+					|| (hot != UINT32_MAX
+						&& plan->instructions[index].typed_call_may_fail
+						&& !add_edge(hot, cold))
 					|| !add_edge(cold, continuation)) {
 				goto malformed;
 			}
@@ -12551,10 +12583,11 @@ static bool freeze_component_machine_plan(
 				continue;
 			}
 			zend_tpde_local_abi_type return_type{};
+			bool may_fail;
 			if (!freeze_typed_body_signature(
 					&plans[index], component_plans, component_count,
 					candidates.data(), register_a64_value_transports,
-					&return_type)) {
+					&return_type, &may_fail)) {
 				candidates[index] = 0;
 				changed = true;
 			}
@@ -12562,12 +12595,15 @@ static bool freeze_component_machine_plan(
 	} while (changed);
 	for (uint32_t index = 0; index < component_count; ++index) {
 		zend_tpde_local_abi_type return_type{};
+		bool may_fail = false;
 		plans[index].typed_body_eligible =
 			candidates[index] != 0
 			&& freeze_typed_body_signature(
 				&plans[index], component_plans, component_count,
 				candidates.data(), register_a64_value_transports,
-				&return_type);
+				&return_type, &may_fail);
+		plans[index].typed_body_may_fail =
+			plans[index].typed_body_eligible && may_fail;
 		plans[index].typed_body_return_abi =
 			plans[index].typed_body_eligible
 				? return_type : zend_tpde_local_abi_type{};
@@ -12601,14 +12637,16 @@ static bool freeze_component_machine_plan(
 		bool all_typed = freeze_typed_component_calls(
 			&plan, component_plans, component_count,
 			register_a64_value_transports);
+		/* Only a Zend entry clones an effect-closed callee; a typed body
+		 * needs a typed call. */
 		for (uint32_t i = 0; all_typed && i < plan.instruction_count; ++i) {
 			all_typed = zend_tpde_instruction_record_at(
 					&plan, &plan.instructions[i]).opcode
 						!= ZEND_MIR_OPCODE_CALL_DIRECT_USER
 				|| (plan.typed_component_call_eligible != nullptr
-					&& plan.typed_component_call_eligible[i] != 0)
-				|| (plan.effect_closed_inline_eligible != nullptr
-					&& plan.effect_closed_inline_eligible[i] != 0);
+					&& plan.typed_component_call_eligible[i] != 0
+					&& (plan.effect_closed_inline_eligible == nullptr
+						|| plan.effect_closed_inline_eligible[i] == 0));
 		}
 		std::free(plan.typed_component_call_eligible);
 		std::free(plan.effect_closed_inline_eligible);
@@ -12626,6 +12664,31 @@ static bool freeze_component_machine_plan(
 		}
 	}
 	} while (nested_dropped);
+	/* A typed body that makes a typed call to a body that may fail may fail
+	 * too; all its direct calls are typed. */
+	for (bool grew = true; grew;) {
+		grew = false;
+		for (uint32_t index = 0; index < component_count; ++index) {
+			zend_tpde_plan &plan = plans[index];
+			if (!plan.typed_body_eligible || plan.typed_body_may_fail) {
+				continue;
+			}
+			for (uint32_t i = 0; i < plan.instruction_count; ++i) {
+				const uint32_t target =
+					plan.instructions[i].component_target_index;
+				if (zend_tpde_instruction_record_at(
+							&plan, &plan.instructions[i]).opcode
+						== ZEND_MIR_OPCODE_CALL_DIRECT_USER
+						&& target < component_count
+						&& plans[target].typed_body_eligible
+						&& plans[target].typed_body_may_fail) {
+					plan.typed_body_may_fail = true;
+					grew = true;
+					break;
+				}
+			}
+		}
+	}
 	uint32_t next_typed_body_function = component_count;
 	for (uint32_t index = 0; index < component_count; ++index) {
 		plans[index].wrapper_function_index = index;
@@ -12657,6 +12720,20 @@ static bool freeze_component_machine_plan(
 		 * direct typed-body call.  Keep unwind facts separate so future cold
 		 * helper functions do not have to widen either hot function.
 		 */
+		for (uint32_t instruction = 0;
+				instruction < plans[index].instruction_count; ++instruction) {
+			const uint32_t target =
+				plans[index].instructions[instruction].component_target_index;
+			plans[index].instructions[instruction].typed_call_may_fail =
+				plans[index].typed_component_call_eligible != nullptr
+				&& plans[index].typed_component_call_eligible[instruction] != 0
+				&& (plans[index].effect_closed_inline_eligible == nullptr
+					|| plans[index].effect_closed_inline_eligible[instruction]
+						== 0)
+				&& target < component_count
+				&& plans[target].typed_body_eligible
+				&& plans[target].typed_body_may_fail;
+		}
 		plans[index].typed_body_may_emit_calls =
 			plans[index].typed_body_eligible && typed_body_may_emit_calls;
 		plans[index].zend_entry_may_emit_calls =
