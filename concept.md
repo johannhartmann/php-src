@@ -285,9 +285,30 @@ typed call skipped the receive check, for declared types a boxed zval does
 not prove (`?array`, `int|float`). Such returns keep the Zend entry; such
 parameters take typed calls only with arguments proven to be numbers.
 
-**Open:** exception propagation through the typed-call ABI (typed returns
-that a double would violate, like `Ack(int, int): int`, still keep the Zend
-entry).
+**Result, part 5 (2026-09-28): failure propagation through the typed-call
+ABI.** A typed body has no frame, so it cannot throw. It is effect-free, so
+it does not have to: an operation that needs Zend semantics (a number
+returned as `int` that turns out to be a double, an integer overflow the plan
+excludes) returns a zero status, the type part of a boxed result or an extra
+integer register otherwise. Every typed caller passes the failure on, and the
+outermost Zend-entry call site repeats the call through its canonical cold
+call, which throws, coerces or deprecates exactly once with the complete
+trace. Numbers returned as `float` convert. Functions with `int` returns
+whose results may overflow, like `Ack($m, $n): int` through its numeric
+variant, now get typed bodies.
+
+Fixed on the way: the Zend-entry long form marked the sum of two longs an
+exact long although only its fast path proves that, so return checks through
+leaf frames passed doubles (`Ak(0, PHP_INT_MAX)` called from a wrapper
+returned a float from an `int` function); a proven check of a constant return
+that OPcache folds into VERIFY_RETURN_TYPE left its result unwritten
+(`function sr(): int { return i7() + i7(); }` returned null); and a typed body
+relied on effect-closed clones that only Zend entries make.
+
+Not covered: deep recursion through native frames ends in a segmentation
+fault instead of a stack-limit error (also before this package), and typed
+bodies still reject phis that merge a constant with a number
+(`$n < 2 ? 1 : f($n - 2) + f($n - 1)` with an `int` return).
 
 ## 5. Rules for every package
 

@@ -6383,6 +6383,35 @@ public:
 					if (value == INVALID_VALUE_REF) {
 						value = source_operand_value_ref(source);
 					}
+					/* A pi COPY carries its input unchanged. */
+					for (uint32_t depth = 0; value != INVALID_VALUE_REF
+							&& depth < plan_->value_count; ++depth) {
+						const uint32_t raw = static_cast<uint32_t>(value);
+						if (raw < MIR_VALUE_BASE
+								|| raw - MIR_VALUE_BASE >= plan_->value_count) {
+							break;
+						}
+						const int32_t definition =
+							plan_->value_definition_instructions[
+								raw - MIR_VALUE_BASE];
+						if (definition < 0
+								|| instruction_record_at(
+									static_cast<uint32_t>(definition)).opcode
+									!= ZEND_MIR_OPCODE_COPY
+								|| plan_->instructions[definition]
+									.operand_count != 1) {
+							break;
+						}
+						const IRValueRef input = value_ref(zend_tpde_operand_at(
+							plan_, &plan_->instructions[definition], 0));
+						if (input == INVALID_VALUE_REF
+								|| representation(input)
+									!= representation(value)
+								|| machine_kind(input) != machine_kind(value)) {
+							break;
+						}
+						value = input;
+					}
 					return value;
 				};
 				const IRValueRef left = operand(
@@ -6393,7 +6422,25 @@ public:
 					instruction.value_operation.op2);
 				const bool comparison = zend_tpde_numeric_comparison(
 					instruction.value_operation.source_opcode);
-				const IRValueRef result = comparison
+				/* Inference may prove the result an exact long. */
+				const int32_t result_value =
+					instruction.source_result_binding.value_index >= 0
+						? instruction.source_result_binding.value_index
+						: zend_tpde_value_index(plan_,
+							zend_mir_value_from_original_ssa(
+								instruction.value_operation.result
+									.ssa_variable_id));
+				const bool exact_long = !comparison && result_value >= 0
+					&& plan_->values[result_value].exact_type
+						== ZEND_MIR_SCALAR_TYPE_I64;
+				const IRValueRef result = exact_long
+					? add_derived_value(
+						ZEND_MIR_REPRESENTATION_I64, ZEND_MIR_SCALAR_TYPE_I64,
+						ZEND_MIR_ID_INVALID, false, 0,
+						ZEND_TPDE_MACHINE_VALUE_I64,
+						ZEND_MIR_OWNERSHIP_STATE_OWNED,
+						ZEND_MIR_REFCOUNT_IMMORTAL)
+					: comparison
 					? add_derived_value(
 						ZEND_MIR_REPRESENTATION_I1, ZEND_MIR_SCALAR_TYPE_I1,
 						ZEND_MIR_ID_INVALID, false, 0,

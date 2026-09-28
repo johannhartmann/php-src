@@ -45,6 +45,8 @@ class ZendCompilerX64 final
 	std::vector<tpde::Label> user_opcode_dispatch_labels_;
 	std::vector<tpde::Label> user_opcode_result_reload_labels_;
 	std::optional<tpde::Label> catch_dispatch_label_;
+	/* The zero-status exit of a typed body that may fail. */
+	std::optional<tpde::Label> typed_failure_label_;
 	uint32_t current_continuation_block_ = UINT32_MAX;
 	bool continuation_edge_emitted_ = false;
 
@@ -271,6 +273,119 @@ public:
 		return_builder.add(std::move(type_info_part), tpde::CCAssignment{});
 		return true;
 	}
+	tpde::Label typed_failure_label() {
+		if (!typed_failure_label_.has_value()) {
+			typed_failure_label_ = text_writer.label_create();
+		}
+		return *typed_failure_label_;
+	}
+	/*
+	 * A typed body that may fail returns a status besides a value that is no
+	 * boxed zval (whose type part is the status): 1 in the first free integer
+	 * return register. Reserve it before the value parts are assigned.
+	 */
+	bool typed_return_needs_status() const {
+		return adaptor->typed_body()
+			&& adaptor->plan()->typed_body_may_fail
+			&& adaptor->plan()->typed_body_return_abi.machine_kind
+				!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
+	}
+	void reserve_typed_return_status(ScratchReg &status) {
+		if (!typed_return_needs_status()) {
+			return;
+		}
+		auto status_reg = status.alloc_specific(
+			adaptor->plan()->typed_body_return_abi.machine_kind
+					== ZEND_TPDE_MACHINE_VALUE_F64
+				? tpde::x64::AsmReg{tpde::x64::AsmReg::AX}
+				: tpde::x64::AsmReg{tpde::x64::AsmReg::DX});
+		ASM(MOV32ri, status_reg, 1);
+	}
+	void add_typed_return_status(
+			RetBuilder &return_builder, ScratchReg &&status) {
+		if (!typed_return_needs_status()) {
+			return;
+		}
+		ValuePart status_part{tpde::x64::PlatformConfig::GP_BANK, 4};
+		status_part.set_value(this, std::move(status));
+		return_builder.add(std::move(status_part), tpde::CCAssignment{});
+	}
+	/*
+	 * A number returned as int or float: an int passes, a double converts to
+	 * float and otherwise fails, so that the caller repeats the call with
+	 * Zend's coercion or TypeError. Returns false for any other value.
+	 */
+	bool add_number_return(RetBuilder &return_builder, IRValueRef value) {
+		const zend_tpde_machine_value_kind return_kind =
+			adaptor->plan()->typed_body_return_abi.machine_kind;
+		if (adaptor->machine_kind(value)
+					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+				|| (return_kind != ZEND_TPDE_MACHINE_VALUE_I64
+					&& return_kind != ZEND_TPDE_MACHINE_VALUE_F64)) {
+			return false;
+		}
+		auto number = val_ref(value);
+		auto payload = number.part(0);
+		auto type_info = number.part(1);
+		auto payload_reg = payload.load_to_reg();
+		auto type_info_reg = type_info.load_to_reg();
+		if (return_kind == ZEND_TPDE_MACHINE_VALUE_I64) {
+			ASM(CMP32ri, type_info_reg, IS_LONG);
+			generate_raw_jump(Jump::jne, typed_failure_label());
+			return_builder.add(std::move(payload), tpde::CCAssignment{});
+			return true;
+		}
+		ScratchReg converted{this};
+		auto converted_reg = converted.alloc(
+			tpde::x64::PlatformConfig::FP_BANK);
+		auto is_double = text_writer.label_create();
+		auto done = text_writer.label_create();
+		ASM(CMP32ri, type_info_reg, IS_LONG);
+		generate_raw_jump(Jump::jne, is_double);
+		ASM(SSE_CVTSI2SD64rr, converted_reg, payload_reg);
+		generate_raw_jump(Jump::jmp, done);
+		label_place(is_double);
+		ASM(SSE_MOVQ_G2Xrr, converted_reg, payload_reg);
+		label_place(done);
+		ValuePart result{tpde::x64::PlatformConfig::FP_BANK, 8};
+		result.set_value(this, std::move(converted));
+		return_builder.add(std::move(result), tpde::CCAssignment{});
+		return true;
+	}
+	/*
+	 * After a typed call to a body that may fail, test its status: the type
+	 * part of a boxed result, otherwise an extra integer return. Without a
+	 * decision register a zero status leaves through this body's failure
+	 * exit; with one, the register receives the status for the caller.
+	 */
+	bool check_typed_call_status(uint32_t target, CallBuilder &builder,
+			std::vector<ValuePart> &results, ScratchReg *decision) {
+		const zend_tpde_plan *body = adaptor->component_plan(target);
+		if (body == nullptr || !body->typed_body_may_fail) {
+			return true;
+		}
+		const bool boxed = body->typed_body_return_abi.machine_kind
+			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
+		ValuePart status_part{tpde::x64::PlatformConfig::GP_BANK, 4};
+		if (!boxed) {
+			builder.add_ret(status_part, tpde::CCAssignment{});
+		} else if (results.size() != 2) {
+			return false;
+		}
+		ValuePart &status = boxed ? results[1] : status_part;
+		auto status_reg = status.cur_reg_or_load(this);
+		if (decision != nullptr) {
+			auto decision_reg = decision->alloc_gp();
+			ASM(MOV32rr, decision_reg, status_reg);
+		} else {
+			ASM(TEST32rr, status_reg, status_reg);
+			generate_raw_jump(Jump::je, typed_failure_label());
+		}
+		if (!boxed) {
+			status_part.reset(this);
+		}
+		return true;
+	}
 	ValuePart copy_fixed_argument(AsmReg source) {
 		ScratchReg copy{this};
 		auto copy_reg = copy.alloc_gp();
@@ -449,11 +564,18 @@ public:
 		user_opcode_dispatch_labels_.clear();
 		user_opcode_result_reload_labels_.clear();
 		catch_dispatch_label_.reset();
+		typed_failure_label_.reset();
 		/* A typed body returns doubles in XMM0 and XMM1. A value fixed there
 		 * across blocks would block the result registers at a RETURN. */
 		this->fixed_assignment_nonallocatable_mask |=
 			(uint64_t{1} << tpde::x64::AsmReg::XMM0)
 			| (uint64_t{1} << tpde::x64::AsmReg::XMM1);
+		/* Nor may one block the status register of a body that may fail. */
+		if (adaptor->typed_body() && adaptor->plan()->typed_body_may_fail) {
+			this->fixed_assignment_nonallocatable_mask |=
+				(uint64_t{1} << tpde::x64::AsmReg::AX)
+				| (uint64_t{1} << tpde::x64::AsmReg::DX);
+		}
 		Base::start_func(index);
 		entry_variant_dispatch_pending_ = has_entry_variant();
 	}
@@ -520,6 +642,12 @@ public:
 		return true;
 	}
 	void finish_func(uint32_t index) {
+		if (typed_failure_label_.has_value()) {
+			label_place(*typed_failure_label_);
+			ASM(XOR32rr, FE_AX, FE_AX);
+			ASM(XOR32rr, FE_DX, FE_DX);
+			gen_func_epilog();
+		}
 		if (catch_dispatch_label_.has_value()) {
 			label_place(*catch_dispatch_label_);
 			for (uint32_t i = 0; i < adaptor->plan()->instruction_count; ++i) {
@@ -8586,6 +8714,56 @@ bool ZendCompilerX64::compile_inst_impl(
 			 * form cannot: MUL and DIV, or any result that can hold a double
 			 * or a boolean.
 			 */
+			/* The plan keeps the result of two longs an exact long: an
+			 * overflow fails the typed body, whose caller repeats the call. */
+			if (adaptor->typed_body() && !guarded && arithmetic
+					&& opcode != ZEND_DIV && node.has_result
+					&& node.operands.size() == 2
+					&& adaptor->machine_kind(node.result)
+						== ZEND_TPDE_MACHINE_VALUE_I64) {
+				ScratchReg left_value{this};
+				ScratchReg right_value{this};
+				auto left_reg = left_value.alloc_gp();
+				auto right_reg = right_value.alloc_gp();
+				auto load_long = [&](IRValueRef operand, AsmReg target) {
+					if (adaptor->machine_kind(operand)
+							== ZEND_TPDE_MACHINE_VALUE_I64) {
+						auto [value_ref, value] = val_ref_single(operand);
+						ASM(MOV64rr, target, value.load_to_reg());
+						return true;
+					}
+					if (adaptor->machine_kind(operand)
+							!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+						return false;
+					}
+					auto value = val_ref(operand);
+					auto payload = value.part(0);
+					ASM(MOV64rr, target, payload.load_to_reg());
+					return true;
+				};
+				if (!load_long(node.operands[0], left_reg)
+						|| !load_long(node.operands[1], right_reg)) {
+					return 0;
+				}
+				switch (opcode) {
+					case ZEND_ADD:
+						ASM(ADD64rr, left_reg, right_reg);
+						break;
+					case ZEND_SUB:
+						ASM(SUB64rr, left_reg, right_reg);
+						break;
+					default:
+						ASM(IMUL64rr, left_reg, right_reg);
+						break;
+				}
+				generate_raw_jump(Jump::jo, typed_failure_label());
+				auto [result_ref_value, result] =
+					result_ref_single(node.result);
+				auto result_reg = result.alloc_reg();
+				ASM(MOV64rr, result_reg, left_reg);
+				result.set_modified();
+				return 1;
+			}
 			/* A typed body passes both operands without a frame operand. */
 			const bool register_operands = register_layout
 				|| (adaptor->typed_body() && !guarded
@@ -11492,6 +11670,54 @@ bool ZendCompilerX64::compile_inst_impl(
 				}
 			}
 			if (!needs_helper) {
+				/* OPcache folds a constant return into VERIFY_RETURN_TYPE
+				 * with a result the RETURN reads: publish the literal. */
+				const zend_mir_executable_value_ref &verify =
+					mir.value_operation;
+				if (!adaptor->typed_body() && mir.has_value_operation
+						&& verify.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+						&& verify.result.kind
+							!= ZEND_MIR_SOURCE_OPERAND_UNUSED
+						&& zend_mir_id_is_valid(verify.result_storage_id)) {
+					const uint64_t literal_offset =
+						uint64_t{verify.op1.index} * sizeof(zval);
+					const uint64_t result_offset =
+						(uint64_t{ZEND_CALL_FRAME_SLOT}
+							+ verify.result_storage_id) * sizeof(zval);
+					if (literal_offset > INT32_MAX - sizeof(zval)
+							|| result_offset > INT32_MAX - sizeof(zval)) {
+						return false;
+					}
+					const AsmReg frame_reg = canonical_frame_register();
+					ScratchReg literals{this};
+					ScratchReg value{this};
+					auto literals_reg = literals.alloc_gp();
+					auto value_reg = value.alloc_gp();
+					ASM(MOV64rm, literals_reg,
+						FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_execute_data, func))));
+					ASM(MOV64rm, literals_reg,
+						FE_MEM(literals_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_op_array, literals))));
+					ASM(MOV64rm, value_reg,
+						FE_MEM(literals_reg, 0, FE_NOREG,
+							static_cast<int32_t>(literal_offset)));
+					ASM(MOV64mr,
+						FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(result_offset)),
+						value_reg);
+					ASM(MOV32rm, value_reg,
+						FE_MEM(literals_reg, 0, FE_NOREG,
+							static_cast<int32_t>(literal_offset
+								+ offsetof(zval, u1.type_info))));
+					ASM(MOV32mr,
+						FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(result_offset
+								+ offsetof(zval, u1.type_info))),
+						value_reg);
+				}
 				return true;
 			}
 			if (!have_type) {
@@ -13044,6 +13270,11 @@ bool ZendCompilerX64::compile_inst_impl(
 						body_builder.add_ret(
 							body_results.back(), tpde::CCAssignment{});
 					}
+					/* A failed call fails this body too. */
+					if (!check_typed_call_status(call.component_target_index,
+							body_builder, body_results, nullptr)) {
+						return false;
+					}
 					if (node.has_result) {
 						const ValueParts destination_parts =
 							val_parts(node.result);
@@ -13559,6 +13790,12 @@ bool ZendCompilerX64::compile_inst_impl(
 						body_builder.add_ret(
 							body_results.back(), tpde::CCAssignment{});
 					}
+					/* A failed call repeats through the canonical cold call. */
+					ScratchReg failure_decision{this};
+					if (!check_typed_call_status(call.component_target_index,
+							body_builder, body_results, &failure_decision)) {
+						return false;
+					}
 					if (node.has_result) {
 						auto destination = result_ref(node.result);
 						for (uint32_t part = 0;
@@ -13619,6 +13856,16 @@ bool ZendCompilerX64::compile_inst_impl(
 					}
 					adaptor->mark_typed_body_call(
 						call.direct_call->frame_size);
+					if (failure_decision.has_reg()) {
+						if (node.argument_index == UINT32_MAX) {
+							return false;
+						}
+						generate_guarded_decision_branch(
+							std::move(failure_decision),
+							IRBlockRef{node.continuation_block},
+							IRBlockRef{node.argument_index});
+						return true;
+					}
 					generate_uncond_branch(
 						IRBlockRef{node.continuation_block});
 					return true;
@@ -16919,12 +17166,15 @@ bool ZendCompilerX64::compile_inst_impl(
 				if (node.operands.size() != 1) {
 					return false;
 				}
+				ScratchReg status{this};
+				reserve_typed_return_status(status);
 				RetBuilder return_builder{
 					*this, *cur_cc_assigner()};
 				if (!add_boxed_scalar_return(
 						return_builder, node.operands[0])) {
 					return_builder.add(node.operands[0]);
 				}
+				add_typed_return_status(return_builder, std::move(status));
 				return_builder.ret();
 				return true;
 			}
@@ -17008,9 +17258,12 @@ bool ZendCompilerX64::compile_inst_impl(
 							!= ZEND_MIR_OWNERSHIP_STATE_SHARED_OWNED) {
 					return false;
 				}
+				ScratchReg status{this};
+				reserve_typed_return_status(status);
 				RetBuilder return_builder{
 					*this, *cur_cc_assigner()};
-				if (return_addref
+				if (add_number_return(return_builder, node.operands[0])) {
+				} else if (return_addref
 						&& kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 					auto returned = val_ref(node.operands[0]);
 					auto payload = returned.part(0);
@@ -17054,6 +17307,7 @@ bool ZendCompilerX64::compile_inst_impl(
 						return_builder, node.operands[0])) {
 				return_builder.add(node.operands[0]);
 				}
+				add_typed_return_status(return_builder, std::move(status));
 				return_builder.ret();
 				return true;
 			}
