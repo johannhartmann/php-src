@@ -5458,6 +5458,10 @@ static uint8_t source_operand_known_type(
 			return IS_DOUBLE;
 		case MAY_BE_LONG | MAY_BE_DOUBLE:
 			return ZEND_TPDE_KNOWN_NUMBER;
+		case MAY_BE_FALSE:
+		case MAY_BE_TRUE:
+		case MAY_BE_FALSE | MAY_BE_TRUE:
+			return ZEND_TPDE_KNOWN_BOOL;
 		default:
 			return IS_UNDEF;
 	}

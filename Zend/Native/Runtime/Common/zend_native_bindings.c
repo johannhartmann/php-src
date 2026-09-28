@@ -531,6 +531,7 @@ zend_native_status zend_native_dynamic_fetch_constant(
 	zval *entry;
 	zval *result;
 	zend_constant *constant = NULL;
+	void **cache_slot;
 
 	if (!zend_native_dynamic_init_explicit_operation(
 			execute_data, op1, op2, result_operand, auxiliary, extended_value,
@@ -541,6 +542,15 @@ zend_native_status zend_native_dynamic_fetch_constant(
 			|| (result = zend_native_dynamic_slot(
 			execute_data, opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
+	}
+	/* Like the VM, the runtime cache slot names a found constant. */
+	cache_slot = execute_data->run_time_cache != NULL
+		? (void **) ((char *) execute_data->run_time_cache + extended_value)
+		: NULL;
+	if (cache_slot != NULL && *cache_slot != NULL
+			&& !IS_SPECIAL_CACHE_VAL(*cache_slot)) {
+		ZVAL_COPY_OR_DUP(result, &((zend_constant *) *cache_slot)->value);
+		return ZEND_NATIVE_RETURNED;
 	}
 	literal = zend_native_dynamic_read(
 		execute_data, opline->op2_type, opline->op2);
@@ -574,6 +584,10 @@ zend_native_status zend_native_dynamic_fetch_constant(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	ZVAL_COPY_OR_DUP(result, &constant->value);
+	if ((ZEND_CONSTANT_FLAGS(constant) & CONST_DEPRECATED) == 0
+			&& cache_slot != NULL) {
+		*cache_slot = constant;
+	}
 	if ((ZEND_CONSTANT_FLAGS(constant) & CONST_DEPRECATED) != 0
 			&& !CONST_IS_RECURSIVE(constant)) {
 		CONST_PROTECT_RECURSION(constant);

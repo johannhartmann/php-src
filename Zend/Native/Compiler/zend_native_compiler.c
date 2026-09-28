@@ -790,6 +790,11 @@ static bool zend_native_compiler_numeric_use(uint8_t opcode)
 		case ZEND_ADD:
 		case ZEND_SUB:
 		case ZEND_MUL:
+		case ZEND_SL:
+		case ZEND_SR:
+		case ZEND_BW_AND:
+		case ZEND_BW_OR:
+		case ZEND_BW_XOR:
 		case ZEND_IS_SMALLER:
 		case ZEND_IS_SMALLER_OR_EQUAL:
 		case ZEND_IS_EQUAL:
