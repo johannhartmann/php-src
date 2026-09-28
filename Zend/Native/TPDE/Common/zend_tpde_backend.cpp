@@ -9816,6 +9816,22 @@ static bool freeze_typed_body_signature(
 							static_cast<uint32_t>(value_index)] >= 0)) {
 				return true;
 			}
+			/* A typed numeric operation or forwarding assignment defines
+			 * its result in registers. */
+			if (plan->source_value_definition_instructions != nullptr) {
+				const int32_t producer =
+					plan->source_value_definition_instructions[
+						static_cast<uint32_t>(value_index)];
+				if (producer >= 0
+						&& static_cast<uint32_t>(producer)
+							< plan->instruction_count
+						&& (zend_tpde_typed_numeric_binary(
+								plan, plan->instructions[producer])
+							|| zend_tpde_typed_forward_assign(
+								plan->instructions[producer]))) {
+					return true;
+				}
+			}
 			if (value.register_alias_value_index < 0
 					|| value.register_alias_value_index == value_index) {
 				return false;
@@ -10117,6 +10133,50 @@ static bool freeze_typed_body_signature(
 			instruction_result_types[index] = result;
 			register_source_ssa[
 				instruction.value_operation.result.ssa_variable_id] = result;
+			continue;
+		}
+		/* A ternary's QM_ASSIGN of a register scalar or number forwards
+		 * its source. */
+		if (zend_tpde_typed_forward_assign(instruction)
+				&& instruction.value_operation.result.ssa_variable_id
+					< register_source_ssa.size()) {
+			zend_tpde_local_abi_type source{};
+			const zend_tpde_source_value_binding &binding =
+				instruction.source_op1_binding;
+			const int32_t literal = instruction.value_operation.op1.kind
+					== ZEND_MIR_SOURCE_OPERAND_LITERAL
+				? machine_plan_source_value_index(
+					plan, instruction.value_operation.op1)
+				: -1;
+			if (literal >= 0 && plan->values[literal].constant
+					&& (plan->values[literal].exact_type
+							== ZEND_MIR_SCALAR_TYPE_I64
+						|| plan->values[literal].exact_type
+							== ZEND_MIR_SCALAR_TYPE_F64)) {
+				source = machine_plan_value_abi(
+					plan, static_cast<uint32_t>(literal));
+			} else if (zend_tpde_binding_is_number(plan, component_plans,
+					component_count, binding)) {
+				int32_t producer = binding.definition_instruction_index;
+				if (producer < 0 && binding.value_index >= 0
+						&& plan->source_value_definition_instructions
+							!= nullptr) {
+					producer = plan->source_value_definition_instructions[
+						binding.value_index];
+				}
+				source = producer >= 0
+						&& static_cast<uint32_t>(producer)
+							< instruction_result_types.size()
+					? instruction_result_types[
+						static_cast<uint32_t>(producer)]
+					: zend_tpde_local_abi_type{};
+			}
+			if (!source.valid) {
+				return false;
+			}
+			instruction_result_types[index] = source;
+			register_source_ssa[
+				instruction.value_operation.result.ssa_variable_id] = source;
 			continue;
 		}
 		if (record.effects != 0 || record.reads != 0
@@ -12102,11 +12162,15 @@ static bool freeze_machine_cfg(
 				& ZEND_TPDE_MACHINE_CONTROL_FLOW_TYPED_COMPONENT_CALL) != 0
 			&& plan->typed_component_call_eligible != nullptr
 			&& plan->typed_component_call_eligible[index] != 0;
+		/* A typed body emits proven operations without a cold edge. */
 		const bool guarded =
 			typed_component_call
 				? !typed_body
 				: (instruction.machine_control_flow_flags
-					& ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD) != 0;
+						& ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD) != 0
+					&& !(typed_body
+						&& (zend_tpde_typed_numeric_binary(plan, instruction)
+							|| zend_tpde_typed_forward_assign(instruction)));
 		if (!guarded) {
 			continue;
 		}

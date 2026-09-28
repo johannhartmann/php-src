@@ -2153,6 +2153,24 @@ static inline bool zend_tpde_typed_numeric_binary(
 			< plan->source_ssa_variable_count;
 }
 
+/*
+ * A QM_ASSIGN into a temporary, as a ternary makes, that a typed body forwards
+ * as a register value: its source must name a register value itself.
+ */
+static inline bool zend_tpde_typed_forward_assign(
+	const zend_tpde_instruction &instruction)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	return instruction.has_value_operation
+		&& operation.opcode == ZEND_MIR_OPCODE_VALUE_QM_ASSIGN
+		&& (operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+			|| operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+		&& (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+			|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)
+		&& operation.result.ssa_variable_id != ZEND_MIR_ID_INVALID;
+}
+
 static inline bool zend_tpde_numeric_comparison(uint32_t opcode)
 {
 	return opcode == ZEND_IS_SMALLER || opcode == ZEND_IS_SMALLER_OR_EQUAL
@@ -2510,20 +2528,34 @@ static inline bool zend_tpde_typed_body_frame_transport(
 
 /*
  * The value a binding names is a number: the result of proven arithmetic or
- * of a direct call to a member that returns numbers.
+ * of a direct call to a member that returns numbers, a numeric constant, a
+ * forwarding assignment or a phi of numbers.
  */
-static inline bool zend_tpde_binding_is_number(
+static inline bool zend_tpde_value_is_number(
 	const zend_tpde_plan *plan,
 	const zend_tpde_plan *const *component_plans,
 	uint32_t component_count,
-	const zend_tpde_source_value_binding &binding)
+	int32_t value_index, int32_t producer, uint32_t depth)
 {
-	int32_t producer = binding.definition_instruction_index;
-	if (producer < 0 && binding.value_index >= 0
-			&& static_cast<uint32_t>(binding.value_index) < plan->value_count
-			&& plan->source_value_definition_instructions != nullptr) {
-		producer = plan->source_value_definition_instructions[
-			binding.value_index];
+	if (depth > 8) {
+		return false;
+	}
+	if (value_index >= 0
+			&& static_cast<uint32_t>(value_index) < plan->value_count) {
+		const zend_tpde_value &value = plan->values[value_index];
+		if (value.constant
+				&& (value.exact_type == ZEND_MIR_SCALAR_TYPE_I64
+					|| value.exact_type == ZEND_MIR_SCALAR_TYPE_F64)) {
+			return true;
+		}
+		if (producer < 0 && plan->source_value_definition_instructions
+				!= nullptr) {
+			producer = plan->source_value_definition_instructions[
+				value_index];
+		}
+		if (producer < 0 && plan->value_definition_instructions != nullptr) {
+			producer = plan->value_definition_instructions[value_index];
+		}
 	}
 	if (producer < 0
 			|| static_cast<uint32_t>(producer) >= plan->instruction_count) {
@@ -2535,9 +2567,47 @@ static inline bool zend_tpde_binding_is_number(
 			&& component_plans[instruction.component_target_index]
 				->returns_number;
 	}
+	if (zend_tpde_typed_forward_assign(instruction)) {
+		const zend_mir_executable_value_ref &operation =
+			instruction.value_operation;
+		if (operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+			const zend_mir_value_id id =
+				zend_mir_value_from_synthetic(operation.op1.index);
+			return zend_tpde_value_is_number(plan, component_plans,
+				component_count, zend_tpde_value_index(plan, id), -1,
+				depth + 1);
+		}
+		return zend_tpde_value_is_number(plan, component_plans,
+			component_count, instruction.source_op1_binding.value_index,
+			instruction.source_op1_binding.definition_instruction_index,
+			depth + 1);
+	}
+	if (instruction.record.opcode == ZEND_MIR_OPCODE_PHI) {
+		for (uint32_t operand = 0; operand < instruction.operand_count;
+				++operand) {
+			if (!zend_tpde_value_is_number(plan, component_plans,
+					component_count,
+					zend_tpde_value_index(plan,
+						zend_tpde_operand_at(plan, &instruction, operand)),
+					-1, depth + 1)) {
+				return false;
+			}
+		}
+		return instruction.operand_count != 0;
+	}
 	return zend_tpde_typed_numeric_binary(plan, instruction)
 		&& !zend_tpde_numeric_comparison(
 			instruction.value_operation.source_opcode);
+}
+
+static inline bool zend_tpde_binding_is_number(
+	const zend_tpde_plan *plan,
+	const zend_tpde_plan *const *component_plans,
+	uint32_t component_count,
+	const zend_tpde_source_value_binding &binding)
+{
+	return zend_tpde_value_is_number(plan, component_plans, component_count,
+		binding.value_index, binding.definition_instruction_index, 0);
 }
 
 int32_t zend_tpde_instruction_index(

@@ -305,10 +305,18 @@ that OPcache folds into VERIFY_RETURN_TYPE left its result unwritten
 (`function sr(): int { return i7() + i7(); }` returned null); and a typed body
 relied on effect-closed clones that only Zend entries make.
 
+**Result, part 6 (2026-09-28): number phis.** A ternary assigns a constant or
+a computed number to one temporary. In a typed body its QM_ASSIGN forwards
+(and boxes) the source, and the phi becomes a register zval of its own whose
+inputs are resolved after the pass that defines them; the typed-body CFG no
+longer splits blocks around operations it emits without a cold edge. Typed
+`fib(int $n): int` (fib(30)) 60.6 ms -> 6.45 ms (stock PHP 53 ms); the bench
+fibo kernel drops from 358 to 304 million instructions.
+
 Not covered: deep recursion through native frames ends in a segmentation
-fault instead of a stack-limit error (also before this package), and typed
-bodies still reject phis that merge a constant with a number
-(`$n < 2 ? 1 : f($n - 2) + f($n - 1)` with an `int` return).
+fault instead of a stack-limit error (also before this package). A stack
+check on every typed call would fix it at a cost on every recursive call; it
+waits for a decision.
 
 ## 5. Rules for every package
 
