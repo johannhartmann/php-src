@@ -313,10 +313,12 @@ longer splits blocks around operations it emits without a cold edge. Typed
 `fib(int $n): int` (fib(30)) 60.6 ms -> 6.45 ms (stock PHP 53 ms); the bench
 fibo kernel drops from 358 to 304 million instructions.
 
-Not covered: deep recursion through native frames ends in a segmentation
-fault instead of a stack-limit error (also before this package). A stack
-check on every typed call would fix it at a cost on every recursive call; it
-waits for a decision.
+Not planned: a stack-limit check in typed bodies. Deep recursion through
+typed calls ends in a segmentation fault instead of the stack-limit error
+(also before this package). A guard on typed bodies that recurse, failing to
+the repeated Zend call which raises the error, was implemented and measured:
+fibo +15% time (+24% instructions), ackermann unchanged. Under the
+performance-first rule it is not enabled.
 
 ## 5. Rules for every package
 
