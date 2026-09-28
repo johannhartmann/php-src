@@ -6759,32 +6759,18 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(MOV64rm, array_reg,
 						FE_MEM(literal_reg, 0, FE_NOREG, 0));
 				} else {
-					/* A CV may hold the array through a reference, as for
-					 * an array &$a parameter. */
-					auto container_ready = text_writer.label_create();
-					ASM(LEA64rm, array_reg,
+					ASM(MOV32rm, type_reg,
+						FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								layout.container_offset
+									+ offsetof(zval, u1.type_info))));
+					ASM(AND32ri, type_reg, Z_TYPE_MASK);
+					ASM(CMP32ri, type_reg, IS_ARRAY);
+					generate_raw_jump(Jump::jne, slow);
+					ASM(MOV64rm, array_reg,
 						FE_MEM(frame_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
 								layout.container_offset)));
-					ASM(CMP8mi,
-						FE_MEM(array_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(zval, u1.type_info))),
-						IS_REFERENCE);
-					generate_raw_jump(Jump::jne, container_ready);
-					ASM(MOV64rm, array_reg,
-						FE_MEM(array_reg, 0, FE_NOREG, 0));
-					ASM(ADD64ri, array_reg,
-						static_cast<int32_t>(offsetof(zend_reference, val)));
-					label_place(container_ready);
-					ASM(CMP8mi,
-						FE_MEM(array_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(zval, u1.type_info))),
-						IS_ARRAY);
-					generate_raw_jump(Jump::jne, slow);
-					ASM(MOV64rm, array_reg,
-						FE_MEM(array_reg, 0, FE_NOREG, 0));
 				}
 				ASM(MOV32rm, type_reg,
 					FE_MEM(array_reg, 0, FE_NOREG,
@@ -6884,14 +6870,10 @@ bool ZendCompilerX64::compile_inst_impl(
 						static_cast<int32_t>(
 							offsetof(zval, u1.type_info))));
 				ASM(AND32ri, type_reg, Z_TYPE_MASK);
+				ASM(CMP32ri, type_reg, IS_LONG);
+				generate_raw_jump(Jump::jne, slow);
 				if (adaptor->machine_kind(node.result)
 						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-					/* A boxed result takes any non-refcounted scalar; holes
-					 * and counted values keep the helper. */
-					ASM(TEST32rr, type_reg, type_reg);
-					generate_raw_jump(Jump::je, slow);
-					ASM(CMP32ri, type_reg, IS_DOUBLE);
-					generate_raw_jump(Jump::ja, slow);
 					auto result = result_ref(node.result);
 					auto payload = result.part(0);
 					auto type_info = result.part(1);
@@ -6899,12 +6881,10 @@ bool ZendCompilerX64::compile_inst_impl(
 					auto type_info_reg = type_info.alloc_reg();
 					ASM(MOV64rm, payload_reg,
 						FE_MEM(element_reg, 0, FE_NOREG, 0));
-					ASM(MOV32rr, type_info_reg, type_reg);
+					ASM(MOV32ri, type_info_reg, IS_LONG);
 					payload.set_modified();
 					type_info.set_modified();
 				} else {
-					ASM(CMP32ri, type_reg, IS_LONG);
-					generate_raw_jump(Jump::jne, slow);
 					auto [result_ref, result] =
 						result_ref_single(node.result);
 					auto result_reg = result.alloc_reg();
