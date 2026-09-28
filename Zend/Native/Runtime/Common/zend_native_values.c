@@ -3564,6 +3564,45 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 				opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
+	/*
+	 * Reading an existing element of an array by integer or string key is
+	 * the common case, as in the VM's fetch handlers: copy it before the operands are
+	 * consumed, since a temporary container may own it.
+	 */
+	if ((mode == ZEND_NATIVE_DIM_R || mode == ZEND_NATIVE_DIM_IS)
+			&& opline->op2_type != IS_UNUSED) {
+		zval *fast_container = zend_native_value_read_explicit(
+			execute_data, opline, opline->op1_type, opline->op1);
+		zval *fast_offset = zend_native_value_read_explicit(
+			execute_data, opline, opline->op2_type, opline->op2);
+
+		if (fast_container != NULL && fast_offset != NULL) {
+			if (opline->op1_type & (IS_CV | IS_VAR)) {
+				ZVAL_DEREF(fast_container);
+			}
+			if (Z_TYPE_P(fast_container) == IS_ARRAY
+					&& (Z_TYPE_P(fast_offset) == IS_LONG
+						|| Z_TYPE_P(fast_offset) == IS_STRING)) {
+				zval *element = Z_TYPE_P(fast_offset) == IS_LONG
+					? zend_hash_index_find(Z_ARRVAL_P(fast_container),
+						Z_LVAL_P(fast_offset))
+					: zend_symtable_find(Z_ARRVAL_P(fast_container),
+						Z_STR_P(fast_offset));
+
+				if (element != NULL && Z_TYPE_P(element) != IS_INDIRECT) {
+					zval copy;
+
+					ZVAL_COPY_DEREF(&copy, element);
+					zend_native_value_consume_operand(execute_data,
+						opline->op2_type, opline->op2, NULL);
+					zend_native_value_consume_operand(execute_data,
+						opline->op1_type, opline->op1, NULL);
+					ZVAL_COPY_VALUE(result, &copy);
+					return zend_native_value_status();
+				}
+			}
+		}
+	}
 	/* The VM rejects an append fetch in read context before evaluating the
 	 * container.  Optimized op arrays can expose this otherwise invalid shape,
 	 * so preserve that ordering instead of first diagnosing an undefined CV. */
