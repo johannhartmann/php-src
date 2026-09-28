@@ -12160,9 +12160,9 @@ static bool freeze_component_machine_plan(
 		}
 	}
 	std::vector<uint8_t> candidates(component_count, 1);
-	for (uint32_t index = 0; index < component_count; ++index) {
-		candidates[index] = plans[index].nested_direct_calls ? 0 : 1;
-	}
+	bool nested_dropped;
+	do {
+	nested_dropped = false;
 	bool changed;
 	do {
 		changed = false;
@@ -12192,6 +12192,53 @@ static bool freeze_component_machine_plan(
 			plans[index].typed_body_eligible
 				? return_type : zend_tpde_local_abi_type{};
 	}
+	/*
+	 * A typed body has no frame for a phased call, so every direct user call
+	 * in it must become a typed component call. For bodies with nested calls,
+	 * whose inner results feed outer arguments, check this with a dry run of
+	 * the call freeze, and give up the typed body otherwise; callers of that
+	 * member then have to be decided again.
+	 */
+	for (uint32_t index = 0; index < component_count; ++index) {
+		zend_tpde_plan &plan = plans[index];
+		if (!plan.typed_body_eligible || !plan.nested_direct_calls) {
+			continue;
+		}
+		std::vector<uint8_t> saved_flags(plan.instruction_count);
+		std::vector<uint32_t> saved_body_indices(plan.instruction_count);
+		for (uint32_t i = 0; i < plan.instruction_count; ++i) {
+			saved_flags[i] = plan.instructions[i].machine_control_flow_flags;
+			saved_body_indices[i] =
+				plan.instructions[i].component_body_function_index;
+		}
+		bool all_typed = freeze_typed_component_calls(
+			&plan, component_plans, component_count,
+			register_a64_value_transports);
+		for (uint32_t i = 0; all_typed && i < plan.instruction_count; ++i) {
+			all_typed = zend_tpde_instruction_record_at(
+					&plan, &plan.instructions[i]).opcode
+						!= ZEND_MIR_OPCODE_CALL_DIRECT_USER
+				|| (plan.typed_component_call_eligible != nullptr
+					&& plan.typed_component_call_eligible[i] != 0)
+				|| (plan.effect_closed_inline_eligible != nullptr
+					&& plan.effect_closed_inline_eligible[i] != 0);
+		}
+		std::free(plan.typed_component_call_eligible);
+		std::free(plan.effect_closed_inline_eligible);
+		plan.typed_component_call_eligible = nullptr;
+		plan.effect_closed_inline_eligible = nullptr;
+		plan.has_register_component_results = false;
+		for (uint32_t i = 0; i < plan.instruction_count; ++i) {
+			plan.instructions[i].machine_control_flow_flags = saved_flags[i];
+			plan.instructions[i].component_body_function_index =
+				saved_body_indices[i];
+		}
+		if (!all_typed) {
+			candidates[index] = 0;
+			nested_dropped = true;
+		}
+	}
+	} while (nested_dropped);
 	uint32_t next_typed_body_function = component_count;
 	for (uint32_t index = 0; index < component_count; ++index) {
 		plans[index].wrapper_function_index = index;
