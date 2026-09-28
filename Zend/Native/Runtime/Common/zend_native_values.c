@@ -4792,7 +4792,9 @@ static zend_always_inline bool zend_native_value_assign_dim_store(
 		if (UNEXPECTED(table->nNextFreeElement == ZEND_LONG_MAX)) {
 			return false;
 		}
-		element = zend_hash_next_index_insert_new(table, value);
+		/* Not the _new form: after an unset of the last element the next
+		 * index lies beyond nNumUsed and the hole must become UNDEF. */
+		element = zend_hash_next_index_insert(table, value);
 		if (UNEXPECTED(element == NULL)) {
 			return false;
 		}
