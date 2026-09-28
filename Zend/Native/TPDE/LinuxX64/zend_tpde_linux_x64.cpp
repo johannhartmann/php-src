@@ -13633,8 +13633,19 @@ bool ZendCompilerX64::compile_inst_impl(
 				bool have_condition_layout =
 					zend_tpde_value_condition_at(mir, &layout)
 					&& layout.operand_offset <= INT32_MAX;
+				/* A JMPZ/JMPNZ on a temporary in its frame slot tests it
+				 * inline; a counted value keeps the helper, which releases
+				 * the temporary. */
+				const bool frame_temporary_condition =
+					!register_boxed_condition
+					&& node.operands.size() == 1
+					&& mir.value_operation.op1.slot_kind
+						== ZEND_MIR_SOURCE_SLOT_TMP
+					&& (mir.value_operation.source_opcode == ZEND_JMPZ
+						|| mir.value_operation.source_opcode == ZEND_JMPNZ);
 				if (!have_condition_layout
-						&& (register_boxed_condition || fused)) {
+						&& (register_boxed_condition || fused
+							|| frame_temporary_condition)) {
 					const zend_mir_executable_value_ref &operation =
 						mir.value_operation;
 					const bool has_result =
@@ -13795,6 +13806,11 @@ bool ZendCompilerX64::compile_inst_impl(
 								static_cast<int32_t>(
 									layout.operand_offset
 										+ offsetof(zval, u1.type_info))));
+					}
+					if (frame_temporary_condition) {
+						ASM(TEST32ri, type_reg,
+							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+						generate_raw_jump(Jump::jne, slow);
 					}
 					/* Inference may know the condition is a boolean, such as a
 					 * comparison result. */
