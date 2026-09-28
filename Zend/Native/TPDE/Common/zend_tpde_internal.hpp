@@ -1055,6 +1055,59 @@ static inline bool zend_tpde_frameless_direct_at(
 }
 
 /*
+ * The operands of a comparison fused into its branch: a CV, a temporary or
+ * a literal, and a temporary result distinct from both.
+ */
+struct zend_tpde_fused_operand {
+	uint32_t offset;
+	bool literal;
+	bool temporary;
+};
+
+static inline bool zend_tpde_fused_operand_at(
+	const zend_mir_source_operand_ref &operand, zend_mir_storage_id storage,
+	zend_mir_storage_id result_storage, zend_tpde_fused_operand *out)
+{
+	uint64_t offset;
+
+	out->literal = operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
+	out->temporary = false;
+	if (out->literal) {
+		offset = uint64_t{operand.index} * sizeof(zval);
+	} else if ((operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& (operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+				|| operand.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP)
+			&& zend_mir_id_is_valid(storage) && storage != result_storage) {
+		out->temporary = operand.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP;
+		offset = (uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+	} else {
+		return false;
+	}
+	if (offset > INT32_MAX - sizeof(zval)) {
+		return false;
+	}
+	out->offset = static_cast<uint32_t>(offset);
+	return true;
+}
+
+static inline bool zend_tpde_fused_compare_at(
+	const zend_tpde_instruction &instruction,
+	zend_tpde_fused_operand *left, zend_tpde_fused_operand *right)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	return instruction.has_value_operation
+		&& operation.opcode == ZEND_MIR_OPCODE_VALUE_BINARY_OP
+		&& operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+		&& zend_mir_id_is_valid(operation.result_storage_id)
+		&& zend_tpde_fused_operand_at(operation.op1, operation.op1_storage_id,
+			operation.result_storage_id, left)
+		&& zend_tpde_fused_operand_at(operation.op2, operation.op2_storage_id,
+			operation.result_storage_id, right);
+}
+
+/*
  * $cv[$key] into a temporary, and $cv[$key] = $value (or $cv[] = $value)
  * with an unused result, call the _direct helpers with precomputed offsets
  * (ZEND_NATIVE_DIM_DIRECT_*) instead of encoded operands.

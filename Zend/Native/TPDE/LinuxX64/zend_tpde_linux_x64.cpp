@@ -472,6 +472,37 @@ public:
 		label_place(loaded);
 	}
 	/*
+	 * Whether a liveness operand of a node was already consumed before its
+	 * own code: a statepoint materialization (emit_materializations()) or
+	 * a generator resume value (reload_generator_values()).
+	 */
+	bool materialized_operand(IRInstRef instruction, size_t index) {
+		const Adaptor::InstNode &node = adaptor->node(instruction);
+		const auto resumed_values =
+			adaptor->generator_resume_values(instruction);
+		if (node.kind != Adaptor::InstKind::GeneratorResume
+				&& !resumed_values.empty()) {
+			/* The reload also took the execution context's use. */
+			if (node.liveness_operands[index]
+					== IRValueRef{Adaptor::EXECUTION_CONTEXT_ARGUMENT}) {
+				return true;
+			}
+			for (const IRValueRef resumed : resumed_values) {
+				if (resumed == node.liveness_operands[index]) {
+					return true;
+				}
+			}
+		}
+		if (adaptor->typed_body()
+				|| node.materialization_operand_index == UINT32_MAX) {
+			return false;
+		}
+		const size_t count = adaptor->materializations(instruction).size();
+		return index >= node.materialization_operand_index
+			&& index < node.materialization_operand_index + count;
+	}
+
+	/*
 	 * The hot part of a comparison fused into its JMPZ/JMPNZ: two numbers
 	 * (through a CV's reference) compare and jump to the branch's truthy or
 	 * falsey label; any other operand jumps to slow.
@@ -480,11 +511,13 @@ public:
 			const zend_tpde_instruction *compare, AsmReg frame_reg,
 			AsmReg left_type, AsmReg left_value, tpde::Label truthy,
 			tpde::Label falsey, tpde::Label slow) {
-		zend_tpde_long_binary layout{};
+		struct {
+			zend_tpde_fused_operand left;
+			zend_tpde_fused_operand right;
+		} layout{};
 		if (compare == nullptr
-				|| !zend_tpde_long_binary_at(*compare, &layout)
-				|| layout.left.offset > INT32_MAX - sizeof(zval)
-				|| layout.right.offset > INT32_MAX - sizeof(zval)) {
+				|| !zend_tpde_fused_compare_at(
+					*compare, &layout.left, &layout.right)) {
 			return false;
 		}
 		const uint32_t opcode = compare->value_operation.source_opcode;
@@ -505,7 +538,7 @@ public:
 				FE_MEM(literals_reg, 0, FE_NOREG,
 					static_cast<int32_t>(offsetof(zend_op_array, literals))));
 		}
-		auto load = [&](const zend_tpde_long_operand &operand,
+		auto load = [&](const zend_tpde_fused_operand &operand,
 				AsmReg type_reg, AsmReg value_reg) {
 			const AsmReg base = operand.literal ? literals_reg : frame_reg;
 			const int32_t offset = static_cast<int32_t>(operand.offset);
@@ -514,7 +547,7 @@ public:
 					offset + static_cast<int32_t>(
 						offsetof(zval, u1.type_info))));
 			ASM(MOV64rm, value_reg, FE_MEM(base, 0, FE_NOREG, offset));
-			if (!operand.literal) {
+			if (!operand.literal && !operand.temporary) {
 				auto plain = text_writer.label_create();
 				ASM(CMP32ri, type_reg, IS_REFERENCE);
 				generate_raw_jump(Jump::jne, plain);
@@ -12383,12 +12416,33 @@ bool ZendCompilerX64::compile_inst_impl(
 				/* The following branch evaluates this comparison. Its
 				 * operands, including boundary transports, are dead;
 				 * statepoint materializations were consumed already. */
-				const size_t consumed_operands =
-					node.materialization_operand_index == UINT32_MAX
-						? node.liveness_operands.size()
-						: node.materialization_operand_index;
-				for (size_t index = 0; index < consumed_operands; ++index) {
-					auto consumed = val_ref(node.liveness_operands[index]);
+				/* A register-held operand is published to its slot, which
+				 * the branch reads. */
+				const zend_mir_executable_value_ref &compare_operation =
+					mir.value_operation;
+				for (size_t index = 0;
+						index < node.liveness_operands.size(); ++index) {
+					if (materialized_operand(instruction, index)) {
+						continue;
+					}
+					const IRValueRef operand = node.liveness_operands[index];
+					const zend_mir_storage_id storage =
+						operand == IRValueRef{Adaptor::FRAME_VALUE}
+							|| operand == IRValueRef{
+								Adaptor::EXECUTION_CONTEXT_ARGUMENT}
+						? ZEND_MIR_ID_INVALID
+						: adaptor->canonical_storage(operand);
+					if (index < node.operands.size()
+							&& zend_mir_id_is_valid(storage)
+							&& (storage == compare_operation.op1_storage_id
+								|| storage
+									== compare_operation.op2_storage_id)) {
+						if (!materialize_cold_operand(operand, storage)) {
+							return false;
+						}
+						continue;
+					}
+					auto consumed = val_ref(operand);
 					(void) consumed;
 				}
 				if (node.has_result) {
@@ -13764,10 +13818,23 @@ bool ZendCompilerX64::compile_inst_impl(
 					ScratchReg value{this};
 					auto type_reg = type.alloc_gp();
 					auto value_reg = value.alloc_gp();
-					if (fused && register_boxed_condition) {
-						/* The comparison defined only a placeholder. */
-						auto placeholder = val_ref(node.operands[1]);
-						(void) placeholder;
+					if (fused) {
+						/* The comparison defined only a placeholder, and
+						 * the branch reads no boundary operand. */
+						if (register_boxed_condition) {
+							auto placeholder = val_ref(node.operands[1]);
+							(void) placeholder;
+						}
+						for (size_t index = node.operands.size();
+								index < node.liveness_operands.size();
+								++index) {
+							if (materialized_operand(instruction, index)) {
+								continue;
+							}
+							auto boundary =
+								val_ref(node.liveness_operands[index]);
+							(void) boundary;
+						}
 					}
 					std::optional<ValueRef> boxed_condition;
 					std::optional<ValuePartRef> boxed_payload;

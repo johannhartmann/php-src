@@ -2964,10 +2964,11 @@ static void freeze_fused_compare_branches(zend_tpde_plan *plan)
 				|| compare.record.block_id != branch.record.block_id) {
 			continue;
 		}
-		zend_tpde_long_binary layout{};
+		zend_tpde_fused_operand left{};
+		zend_tpde_fused_operand right{};
 		zend_tpde_value_condition condition{};
 		/* A branch with its own guard and cold blocks keeps its form. */
-		if (!zend_tpde_long_binary_at(compare, &layout)
+		if (!zend_tpde_fused_compare_at(compare, &left, &right)
 				|| zend_tpde_value_condition_at(branch, &condition)) {
 			continue;
 		}
