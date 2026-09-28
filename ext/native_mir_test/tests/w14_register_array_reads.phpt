@@ -1,9 +1,9 @@
 --TEST--
-Native x64 register-key array reads through references and of scalar elements
+Native x64 array reads through references and of every element type
 --DESCRIPTION--
-An integer-keyed packed read with a register key reads through a CV that
-holds the array by reference and returns any non-refcounted scalar element
-inline. Holes, strings, arrays and non-array containers keep the helper.
+Integer-keyed packed reads through a CV that holds the array by reference,
+of scalar elements of every type, holes, strings, arrays and non-array
+containers return what the VM returns.
 --INI--
 opcache.enable=1
 opcache.enable_cli=1
