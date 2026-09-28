@@ -19,8 +19,8 @@ Tiers:
           Seconds; run it after every change.
   commit  debug profile: the native, Zend, OPcache, array, math, string,
           SPL and reflection suites plus PATHs. Run it before a commit.
-  full    commit, then ASan and UBSan concurrently, each with half the jobs.
-          Run it before a push.
+  full    commit, then ASan and UBSan, built concurrently and run one after
+          the other. Run it before a push.
 
 Options:
   --jobs N         Worker count (default: NATIVE_JOBS or CPU count).
@@ -193,20 +193,14 @@ if [[ $tier == full ]]; then
     asan_binary=$(<"$asan_binary_file")
     ubsan_binary=$(<"$ubsan_binary_file")
     rm -f -- "$asan_binary_file" "$ubsan_binary_file"
-    asan_output=$(mktemp)
-    ubsan_output=$(mktemp)
     asan_status=0
     ubsan_status=0
-    run_profile "$prefix-asan-nts" "$asan_binary" "$half" \
-        "${sanitizer_paths[@]}" >"$asan_output" &
-    asan_pid=$!
-    run_profile "$prefix-ubsan-nts" "$ubsan_binary" "$half" \
-        "${sanitizer_paths[@]}" >"$ubsan_output" &
-    ubsan_pid=$!
-    wait "$asan_pid" || asan_status=1
-    wait "$ubsan_pid" || ubsan_status=1
-    cat -- "$asan_output" "$ubsan_output"
-    rm -f -- "$asan_output" "$ubsan_output"
+    # Tests share the source tree (some write fixed files next to
+    # themselves), so the two suites run one after the other.
+    run_profile "$prefix-asan-nts" "$asan_binary" "$jobs" \
+        "${sanitizer_paths[@]}" || asan_status=1
+    run_profile "$prefix-ubsan-nts" "$ubsan_binary" "$jobs" \
+        "${sanitizer_paths[@]}" || ubsan_status=1
     ((asan_status == 0 && ubsan_status == 0)) || status=1
 fi
 exit "$status"

@@ -8941,6 +8941,8 @@ public:
 							== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
 						&& value != INVALID_VALUE_REF
 						&& machine_value_has_result_representation(value)
+						&& (type == ZEND_MIR_SCALAR_TYPE_NULL
+							|| machine_value_has_register_definition(value))
 						&& direct_scalar_representation
 						&& zend_mir_scalar_type_is_exact(type)
 						&& (type == ZEND_MIR_SCALAR_TYPE_NULL
