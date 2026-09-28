@@ -237,6 +237,34 @@ static bool zend_mir_w04_phi_is_dead(
 		&& ssa->vars[ssa_variable_id].phi_use_chain == NULL;
 }
 
+static bool zend_mir_w04_phi_join_inputs(
+	const zend_mir_lowering_context *context,
+	const zend_mir_w04_phi_analysis *analysis, uint32_t phi_index,
+	uint32_t ssa_count, uint32_t *parents, uint8_t *ranks, bool *members)
+{
+	zend_mir_source_phi_ref phi;
+	uint32_t j;
+
+	if (!context->source->phi_at(context->source->context, phi_index, &phi)) {
+		return false;
+	}
+	for (j = analysis->input_offsets[phi_index];
+		j < analysis->input_offsets[phi_index + 1]; j++) {
+		zend_mir_source_phi_input_ref input;
+		if (!context->source->phi_input_at(
+				context->source->context,
+				analysis->input_indices[j], &input)
+				|| input.source_ssa_variable_id >= ssa_count) {
+			return false;
+		}
+		members[input.source_ssa_variable_id] = true;
+		zend_mir_w04_phi_component_union(
+			parents, ranks, phi.result_ssa_variable_id,
+			input.source_ssa_variable_id);
+	}
+	return true;
+}
+
 /*
  * W09 executes refcounted and dynamically typed value operations against the
  * real source frame.  Zend SSA can still contain merge nodes for those slots
@@ -254,6 +282,7 @@ static bool zend_mir_w04_phi_analysis_init(
 	uint32_t *phi_by_result = NULL;
 	uint8_t *ranks = NULL;
 	bool *members = NULL;
+	bool changed;
 	bool *component_dynamic = NULL;
 	uint32_t ssa_count;
 	uint32_t i;
@@ -484,24 +513,15 @@ static bool zend_mir_w04_phi_analysis_init(
 		}
 		members[phi.result_ssa_variable_id] = true;
 		/* A PHI nothing uses (Zend SSA's NOVAL, such as a loop counter's
-		 * merge after an outer loop) stays its own component: joining it
-		 * would box every value its inputs connect to. */
+		 * merge after an outer loop) joins its inputs only below, when it
+		 * or one of them is dynamic: joining a scalar one would box every
+		 * value its inputs connect to. */
 		if (zend_mir_w04_phi_is_dead(context, phi.result_ssa_variable_id)) {
 			continue;
 		}
-		for (j = analysis->input_offsets[i];
-			j < analysis->input_offsets[i + 1]; j++) {
-			zend_mir_source_phi_input_ref input;
-			if (!context->source->phi_input_at(
-					context->source->context,
-					analysis->input_indices[j], &input)
-					|| input.source_ssa_variable_id >= ssa_count) {
-				goto failed;
-			}
-			members[input.source_ssa_variable_id] = true;
-			zend_mir_w04_phi_component_union(
-				parents, ranks, phi.result_ssa_variable_id,
-				input.source_ssa_variable_id);
+		if (!zend_mir_w04_phi_join_inputs(
+				context, analysis, i, ssa_count, parents, ranks, members)) {
+			goto failed;
 		}
 	}
 	for (i = 0; i < analysis->phi_count; i++) {
@@ -513,6 +533,70 @@ static bool zend_mir_w04_phi_analysis_init(
 		if (zend_mir_w09_phi_is_dynamic(context, analysis, &phi)) {
 			component_dynamic[zend_mir_w04_phi_component_find(
 				parents, phi.result_ssa_variable_id)] = true;
+		}
+	}
+	/* A dead PHI with a dynamic input or result must share the zval
+	 * representation of its inputs. Joining it can make further components
+	 * dynamic, so repeat until nothing changes. */
+	for (changed = true; changed;) {
+		changed = false;
+		for (i = 0; i < analysis->phi_count; i++) {
+			zend_mir_source_phi_ref phi;
+			uint32_t root;
+			bool dynamic;
+			uint32_t j;
+
+			if (!context->source->phi_at(
+					context->source->context, i, &phi)) {
+				goto failed;
+			}
+			if (!zend_mir_w04_phi_is_dead(
+					context, phi.result_ssa_variable_id)) {
+				continue;
+			}
+			root = zend_mir_w04_phi_component_find(
+				parents, phi.result_ssa_variable_id);
+			dynamic = component_dynamic[root];
+			for (j = analysis->input_offsets[i];
+				!dynamic && j < analysis->input_offsets[i + 1]; j++) {
+				zend_mir_source_phi_input_ref input;
+				if (!context->source->phi_input_at(
+						context->source->context,
+						analysis->input_indices[j], &input)
+						|| input.source_ssa_variable_id >= ssa_count) {
+					goto failed;
+				}
+				dynamic = component_dynamic[zend_mir_w04_phi_component_find(
+					parents, input.source_ssa_variable_id)];
+			}
+			if (!dynamic) {
+				continue;
+			}
+			for (j = analysis->input_offsets[i];
+				j < analysis->input_offsets[i + 1]; j++) {
+				zend_mir_source_phi_input_ref input;
+				uint32_t input_root;
+				if (!context->source->phi_input_at(
+						context->source->context,
+						analysis->input_indices[j], &input)) {
+					goto failed;
+				}
+				input_root = zend_mir_w04_phi_component_find(
+					parents, input.source_ssa_variable_id);
+				if (root == input_root) {
+					continue;
+				}
+				if (!component_dynamic[input_root]) {
+					changed = true;
+				}
+				members[input.source_ssa_variable_id] = true;
+				zend_mir_w04_phi_component_union(
+					parents, ranks, root, input_root);
+				root = zend_mir_w04_phi_component_find(
+					parents, phi.result_ssa_variable_id);
+				component_dynamic[root] = true;
+			}
+			component_dynamic[root] = true;
 		}
 	}
 	for (i = 0; i < ssa_count; i++) {

@@ -2271,12 +2271,48 @@ static void zend_mir_w11_invalidate_inferred_fact(
  * their inputs) as one component, and as zvals as soon as one member has no
  * exact fact. A scalar definition inside such a component would produce a
  * machine value for an identity W04 declared a zval, and nothing would store
- * it to its slot. Invalidate whole components here, as W04 will. A PHI that
- * nothing uses joins no component, in both places.
+ * it to its slot. Invalidate whole components here, as W04 will, except the
+ * results of JMPZ_EX and JMPNZ_EX: the logic provider binds them from their
+ * facts and stores them itself. A PHI that nothing uses joins its inputs only
+ * once it or one of them is dynamic, in both places.
  */
+static bool zend_mir_w11_logic_result(
+	const zend_op_array *op_array, const zend_ssa *ssa, uint32_t variable)
+{
+	const int definition = ssa->vars[variable].definition;
+
+	if (definition < 0 || (uint32_t) definition >= op_array->last) {
+		return false;
+	}
+	switch (op_array->opcodes[definition].opcode) {
+		case ZEND_JMPZ_EX:
+		case ZEND_JMPNZ_EX:
+			return ssa->ops[definition].result_def == (int) variable;
+		default:
+			return false;
+	}
+}
+
+static uint32_t zend_mir_w11_component_find(
+	uint32_t *parents, uint32_t member)
+{
+	uint32_t root = member;
+
+	while (parents[root] != root) {
+		root = parents[root];
+	}
+	while (parents[member] != root) {
+		const uint32_t next = parents[member];
+
+		parents[member] = root;
+		member = next;
+	}
+	return root;
+}
+
 static bool zend_mir_w11_close_phi_components(
-	zend_mir_w03_integration *integration, const zend_ssa *ssa,
-	bool *changed)
+	zend_mir_w03_integration *integration, const zend_op_array *op_array,
+	const zend_ssa *ssa, bool *changed)
 {
 	const uint32_t count = (uint32_t) ssa->vars_count;
 	uint32_t *parents;
@@ -2342,12 +2378,69 @@ static bool zend_mir_w11_close_phi_components(
 			}
 		}
 	}
+	/* A dead PHI joins its inputs once it or one of them is invalid, as in
+	 * W04. */
+	for (bool joined = true; joined;) {
+		joined = false;
+		for (block = 0; block < (uint32_t) ssa->cfg.blocks_count; block++) {
+			const zend_ssa_phi *phi;
+
+			for (phi = ssa->blocks[block].phis; phi != NULL;
+					phi = phi->next) {
+				const uint32_t sources = phi->pi >= 0
+					? 1 : (uint32_t) ssa->cfg.blocks[block].predecessors_count;
+				uint32_t root;
+				bool dynamic;
+				uint32_t source;
+
+				if (phi->ssa_var < 0 || (uint32_t) phi->ssa_var >= count
+						|| ssa->vars[phi->ssa_var].use_chain >= 0
+						|| ssa->vars[phi->ssa_var].phi_use_chain != NULL) {
+					continue;
+				}
+				root = zend_mir_w11_component_find(
+					parents, (uint32_t) phi->ssa_var);
+				dynamic = invalid[root]
+					|| !integration->w11_inferred_fact_valid[phi->ssa_var];
+				for (source = 0; !dynamic && source < sources; source++) {
+					if (phi->sources[source] >= 0
+							&& (uint32_t) phi->sources[source] < count) {
+						dynamic = !integration->w11_inferred_fact_valid[
+								phi->sources[source]]
+							|| invalid[zend_mir_w11_component_find(
+								parents, (uint32_t) phi->sources[source])];
+					}
+				}
+				if (!dynamic) {
+					continue;
+				}
+				for (source = 0; source < sources; source++) {
+					uint32_t input_root;
+
+					if (phi->sources[source] < 0
+							|| (uint32_t) phi->sources[source] >= count) {
+						continue;
+					}
+					input_root = zend_mir_w11_component_find(
+						parents, (uint32_t) phi->sources[source]);
+					if (input_root != root) {
+						if (!invalid[input_root]) {
+							joined = true;
+						}
+						parents[input_root] = root;
+					}
+				}
+				invalid[root] = 1;
+			}
+		}
+	}
 	for (index = 0; index < count; index++) {
-		const uint32_t root = parents[index];
+		const uint32_t root = zend_mir_w11_component_find(parents, index);
 
 		if (invalid[root] && integration->w11_inferred_fact_valid[index]
 				&& (root != index
-					|| ssa->vars[index].definition_phi != NULL)) {
+					|| ssa->vars[index].definition_phi != NULL)
+				&& !zend_mir_w11_logic_result(op_array, ssa, index)) {
 			zend_mir_w11_invalidate_inferred_fact(integration, (int) index);
 			*changed = true;
 		}
@@ -2366,7 +2459,8 @@ static bool zend_mir_w11_close_scalar_overlay(
 
 	do {
 		changed = false;
-		if (!zend_mir_w11_close_phi_components(integration, ssa, &changed)) {
+		if (!zend_mir_w11_close_phi_components(
+				integration, op_array, ssa, &changed)) {
 			return false;
 		}
 		for (index = 0; index < ssa->cfg.blocks_count; index++) {
@@ -4695,6 +4789,20 @@ static zend_mir_value_id zend_mir_w11_materialization_alias(
 	return (zend_mir_value_id) alias;
 }
 
+static bool zend_mir_w11_is_pi(
+	const zend_mir_w03_integration *integration, zend_mir_value_id value)
+{
+	const zend_ssa *ssa;
+
+	if (!zend_mir_value_is_original_ssa(value)
+			|| value >= integration->source.ssa_count) {
+		return false;
+	}
+	ssa = zend_mir_source_ssa(&integration->source);
+	return ssa != NULL && ssa->vars[value].definition_phi != NULL
+		&& ssa->vars[value].definition_phi->pi >= 0;
+}
+
 static bool zend_mir_w11_emit_zval_store(
 	zend_mir_w03_integration *integration, zend_mir_block_id block_id,
 	zend_mir_source_position_id source_position_id,
@@ -4782,6 +4890,15 @@ static bool zend_mir_w03_forward_add_instruction(
 		integration->w11_pending_store_block = record->block_id;
 		integration->w11_pending_store_source_position =
 			record->source_position_id;
+		return true;
+	}
+	/*
+	 * A pi names the value of its source in the same slot, which the source
+	 * definition already stored. Its copy may also sit in a block that its
+	 * source does not dominate, so it gets no store of its own.
+	 */
+	if (zend_mir_w11_is_pi(integration, result_id)
+			&& alias_destination == ZEND_MIR_ID_INVALID) {
 		return true;
 	}
 	/*
