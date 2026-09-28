@@ -156,6 +156,15 @@ time in `zend_native_value_iterator_branch`, `zend_native_iterator_set_key`,
 Success: hash2 well below 3.95; ary and ary2 improve through the same
 assignment path.
 
+**Result (2026-09-28).** `zend_native_value_assign_dim_op` first tries an
+in-place update (existing `long`/`double` element, numeric operand, `+ - *`,
+unused result, unshared array) in a separate function, so the plain write
+path of `zend_native_value_assign_dim_impl` keeps its code (inlining the check
+there slowed ary by 0.4 ms). The foreach value assignment copies into a CV
+that holds no counted value directly, as the VM does. hash2 3.56 -> 2.55; the
+per-element iterator protocol (explicit operation decoding, key publication)
+remains and is the next step if hash2 stays a priority.
+
 ### Package 3: call and operator wrappers
 
 - **Frameless calls** (`zend_native_call_frameless_internal`,
