@@ -55,7 +55,7 @@ static zend_always_inline bool zend_native_value_decode_explicit_operand(
 		execute_data, encoded, operand_type, operand);
 }
 
-static bool zend_native_value_init_explicit_operation(
+static zend_always_inline bool zend_native_value_init_explicit_operation(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,
 	uint32_t extended_value, uint32_t source_opcode,

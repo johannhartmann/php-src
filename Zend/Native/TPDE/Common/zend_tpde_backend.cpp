@@ -6859,6 +6859,55 @@ bool initialize_plan(
 		}
 		return direct;
 	};
+	/*
+	 * The result of a call to a user function that does not return by
+	 * reference, sent by SEND_VAR, is a plain value: the send moves it like a
+	 * temporary, as f(g($x)) does.
+	 */
+	auto call_result_argument_is_value = [&](
+			const zend_mir_call_argument_ref &argument) {
+		if (source_op_array == nullptr
+				|| argument.send_opline_index >= source_op_array->last) {
+			return false;
+		}
+		const zend_op &send =
+			source_op_array->opcodes[argument.send_opline_index];
+		if (send.opcode != ZEND_SEND_VAR || send.op1_type != IS_VAR) {
+			return false;
+		}
+		uint32_t producer = argument.send_opline_index;
+		while (producer-- > 0) {
+			const zend_op &candidate = source_op_array->opcodes[producer];
+			if ((candidate.result_type & (IS_TMP_VAR | IS_VAR)) != 0
+					&& candidate.result.var == send.op1.var) {
+				break;
+			}
+		}
+		if (producer >= argument.send_opline_index
+				|| source_op_array->opcodes[producer].result_type != IS_VAR
+				|| (source_op_array->opcodes[producer].opcode != ZEND_DO_UCALL
+					&& source_op_array->opcodes[producer].opcode
+						!= ZEND_DO_FCALL)) {
+			return false;
+		}
+		const uint32_t site_count = calls->call_site_count(calls->context);
+		for (uint32_t index = 0; index < site_count; ++index) {
+			zend_mir_call_site_ref producer_site{};
+			if (!calls->call_site_at(calls->context, index, &producer_site)
+					|| producer_site.source_do_opline_index != producer) {
+				continue;
+			}
+			const int32_t binding_index = id_index_find(
+				plan->user_binding_index,
+				plan->user_binding_index_capacity, producer_site.target_id);
+			const zend_function *callee = binding_index >= 0
+					&& user_bindings[binding_index].entry_cell != nullptr
+				? user_bindings[binding_index].entry_cell->function : nullptr;
+			return callee != nullptr && callee->type == ZEND_USER_FUNCTION
+				&& (callee->common.fn_flags & ZEND_ACC_RETURN_REFERENCE) == 0;
+		}
+		return false;
+	};
 	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
 		zend_mir_instruction_record record;
 		if (!view->instruction_at(view->context, i, &record)
@@ -8453,7 +8502,8 @@ bool initialize_plan(
 												== ZEND_MIR_SOURCE_OPERAND_SSA)
 										&& argument.source_operand.slot_kind
 											== ZEND_MIR_SOURCE_SLOT_CV)
-									/* A temporary moves into the callee
+									/* A temporary, or a call result that is
+									 * a plain value, moves into the callee
 									 * frame; it never holds a reference.
 									 * The frame reads it at DO, so no later
 									 * opline may reuse its slot first. */
@@ -8462,8 +8512,12 @@ bool initialize_plan(
 												== ZEND_MIR_SOURCE_OPERAND_SLOT
 											|| argument.source_operand.kind
 												== ZEND_MIR_SOURCE_OPERAND_SSA)
-										&& argument.source_operand.slot_kind
-											== ZEND_MIR_SOURCE_SLOT_TMP
+										&& (argument.source_operand.slot_kind
+												== ZEND_MIR_SOURCE_SLOT_TMP
+											|| (argument.source_operand.slot_kind
+													== ZEND_MIR_SOURCE_SLOT_VAR
+												&& call_result_argument_is_value(
+													argument)))
 										&& descriptor->arguments[n]
 											.source_frame_offset
 											!= UINT32_MAX
