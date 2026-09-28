@@ -6050,6 +6050,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		CallBuilder builder{*this, assigner};
 		zend_tpde_frameless_direct frameless_direct{};
 		zend_tpde_concat_assign_direct concat_assign_direct{};
+		zend_tpde_dim_direct dim_direct{};
 		if (zend_tpde_helper_requires_undef_result(helper, operation)) {
 			const uint64_t result_offset =
 				(uint64_t{ZEND_CALL_FRAME_SLOT}
@@ -6102,6 +6103,21 @@ bool ZendCompilerX64::compile_inst_impl(
 				source_opcode == ZEND_FRAMELESS_ICALL_1
 					? ZEND_NATIVE_HELPER_CALL_FRAMELESS_1
 					: ZEND_NATIVE_HELPER_CALL_FRAMELESS_DIRECT));
+		} else if ((helper == ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R
+					|| helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM)
+				&& adaptor->plan()->linux_inline_forms
+				&& zend_tpde_dim_direct_at(mir, &dim_direct)) {
+			/* The encoded first operand above is ignored by this form. */
+			builder.add_arg(ValuePart{dim_direct.descriptor, 8,
+				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			builder.add_arg(ValuePart{dim_direct.slots, 8,
+				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			builder.add_arg(ValuePart{dim_direct.more_slots, 8,
+				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			builder.call(runtime_symbol(
+				helper == ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R
+					? ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R_DIRECT
+					: ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_DIRECT));
 		} else if (helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_OP
 				&& adaptor->plan()->linux_inline_forms
 				&& zend_tpde_concat_assign_direct_at(

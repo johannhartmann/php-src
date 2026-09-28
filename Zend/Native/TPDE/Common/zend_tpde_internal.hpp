@@ -1055,6 +1055,96 @@ static inline bool zend_tpde_frameless_direct_at(
 }
 
 /*
+ * $cv[$key] into a temporary, and $cv[$key] = $value (or $cv[] = $value)
+ * with an unused result, call the _direct helpers with precomputed offsets
+ * (ZEND_NATIVE_DIM_DIRECT_*) instead of encoded operands.
+ */
+struct zend_tpde_dim_direct {
+	uint64_t descriptor;
+	uint64_t slots;
+	uint64_t more_slots;
+};
+
+static inline bool zend_tpde_dim_direct_operand(
+	const zend_mir_source_operand_ref &operand, zend_mir_storage_id storage,
+	bool allow_unused, uint64_t *kind, uint64_t *offset)
+{
+	if (operand.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+		*kind = ZEND_NATIVE_DIM_DIRECT_UNUSED;
+		*offset = 0;
+		return allow_unused;
+	}
+	if (operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+		*kind = ZEND_NATIVE_DIM_DIRECT_CONST;
+		*offset = operand.index;
+		return true;
+	}
+	if ((operand.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+				&& operand.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
+			|| !zend_mir_id_is_valid(storage)
+			|| (operand.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+				&& operand.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP)) {
+		return false;
+	}
+	*kind = operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+		? ZEND_NATIVE_DIM_DIRECT_CV : ZEND_NATIVE_DIM_DIRECT_TMP;
+	*offset = (uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+	return *offset <= UINT32_MAX;
+}
+
+static inline bool zend_tpde_dim_direct_at(
+	const zend_tpde_instruction &instruction, zend_tpde_dim_direct *out)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	const bool read = operation.opcode == ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
+		&& operation.source_opcode == ZEND_FETCH_DIM_R;
+	const bool write = operation.opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM
+		&& operation.source_opcode == ZEND_ASSIGN_DIM;
+	uint64_t container_kind;
+	uint64_t container_offset;
+	uint64_t key_kind;
+	uint64_t key_offset;
+	uint64_t value_kind = ZEND_NATIVE_DIM_DIRECT_UNUSED;
+	uint64_t value_offset = 0;
+	uint64_t result_offset = 0;
+
+	if (out == nullptr || !instruction.has_value_operation
+			|| (!read && !write)
+			|| operation.extended_value > 0xffff
+			|| !zend_tpde_dim_direct_operand(operation.op1,
+				operation.op1_storage_id, false,
+				&container_kind, &container_offset)
+			|| container_kind != ZEND_NATIVE_DIM_DIRECT_CV
+			|| !zend_tpde_dim_direct_operand(operation.op2,
+				operation.op2_storage_id, write, &key_kind, &key_offset)) {
+		return false;
+	}
+	if (read) {
+		if (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+				|| !zend_mir_id_is_valid(operation.result_storage_id)) {
+			return false;
+		}
+		result_offset = (uint64_t{ZEND_CALL_FRAME_SLOT}
+			+ operation.result_storage_id) * sizeof(zval);
+	} else if (operation.result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
+			|| !zend_tpde_dim_direct_operand(operation.auxiliary,
+				operation.auxiliary_storage_id, false,
+				&value_kind, &value_offset)) {
+		return false;
+	}
+	if (result_offset > UINT32_MAX) {
+		return false;
+	}
+	out->descriptor = key_kind | (value_kind << 2)
+		| (uint64_t{operation.extended_value} << 8)
+		| (uint64_t{operation.source_position_id} << 32);
+	out->slots = container_offset | (key_offset << 32);
+	out->more_slots = value_offset | (result_offset << 32);
+	return true;
+}
+
+/*
  * $cv .= value with a literal, CV or temporary value and an unused result
  * calls zend_native_value_concat_assign_direct() with precomputed offsets.
  */
