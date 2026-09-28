@@ -1494,6 +1494,34 @@ zend_native_status zend_native_value_concat_assign_direct(
 	const uint32_t value_kind = (uint32_t) (descriptor & 3);
 
 	(void) encoded_op1;
+	/*
+	 * An owned string gains the bytes of a literal or variable string in
+	 * place, as concat_function does for $a .= $b, without its dispatch.
+	 */
+	if (value_kind != ZEND_NATIVE_CONCAT_DIRECT_TMP) {
+		zval *variable = (zval *) ((char *) execute_data + (uint32_t) slots);
+		const zval *value = value_kind == ZEND_NATIVE_CONCAT_DIRECT_CONST
+			? &execute_data->func->op_array.literals[(uint32_t) (slots >> 32)]
+			: (const zval *) ((char *) execute_data
+				+ (uint32_t) (slots >> 32));
+
+		if (Z_TYPE_P(variable) == IS_STRING && Z_TYPE_P(value) == IS_STRING
+				&& !ZSTR_IS_INTERNED(Z_STR_P(variable))
+				&& GC_REFCOUNT(Z_STR_P(variable)) == 1
+				&& Z_STR_P(variable) != Z_STR_P(value)) {
+			zend_string *string = Z_STR_P(variable);
+			const size_t length = ZSTR_LEN(string);
+			const size_t added = Z_STRLEN_P(value);
+
+			if (EXPECTED(added <= ZSTR_MAX_LEN - length)) {
+				string = zend_string_extend(string, length + added, 0);
+				memcpy(ZSTR_VAL(string) + length, Z_STRVAL_P(value), added);
+				ZSTR_VAL(string)[length + added] = '\0';
+				ZVAL_NEW_STR(variable, string);
+				return ZEND_NATIVE_RETURNED;
+			}
+		}
+	}
 	memset(&operation_record, 0, sizeof(operation_record));
 	operation_record.opcode = ZEND_ASSIGN_OP;
 	operation_record.op1_type = IS_CV;
@@ -4569,12 +4597,141 @@ assign_dim_error:
 	return zend_native_value_status();
 }
 
+/*
+ * Decode one encoded explicit operand to its zval without building a
+ * zend_native_explicit_value_operation. CONST, CV and TMP only; VAR and
+ * unused operands return NULL.
+ */
+static zend_always_inline zval *zend_native_value_fast_operand(
+	zend_execute_data *execute_data, uint64_t encoded, bool *tmp)
+{
+	const uint32_t index = (uint32_t) (encoded >> 16);
+
+	*tmp = false;
+	switch ((zend_mir_source_operand_kind) (encoded & UINT64_C(0xff))) {
+		case ZEND_MIR_SOURCE_OPERAND_LITERAL:
+			return &execute_data->func->op_array.literals[index];
+		case ZEND_MIR_SOURCE_OPERAND_SLOT:
+		case ZEND_MIR_SOURCE_OPERAND_SSA:
+			break;
+		default:
+			return NULL;
+	}
+	switch ((zend_mir_source_slot_kind) ((encoded >> 8) & UINT64_C(0xff))) {
+		case ZEND_MIR_SOURCE_SLOT_CV:
+			return ZEND_CALL_VAR_NUM(execute_data, index);
+		case ZEND_MIR_SOURCE_SLOT_TMP:
+			*tmp = true;
+			return ZEND_CALL_VAR_NUM(execute_data,
+				execute_data->func->op_array.last_var + index);
+		default:
+			return NULL;
+	}
+}
+
+/*
+ * $a[int] = scalar-or-string on an array container with an unused result:
+ * no diagnostics, conversions or user code can run before the store, so
+ * write the element directly. Everything else takes the general path.
+ */
+static zend_always_inline bool zend_native_value_assign_dim_fast(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result, uint64_t auxiliary,
+	uint32_t source_position_id, zend_native_status *status)
+{
+	zval *container;
+	zval *offset = NULL;
+	zval *value;
+	zval *element;
+	zval garbage;
+	HashTable *table;
+	bool container_tmp;
+	bool offset_tmp;
+	bool value_tmp;
+
+	if ((result & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_UNUSED
+			|| (container = zend_native_value_fast_operand(
+				execute_data, op1, &container_tmp)) == NULL
+			|| container_tmp
+			|| (value = zend_native_value_fast_operand(
+				execute_data, auxiliary, &value_tmp)) == NULL) {
+		return false;
+	}
+	ZVAL_DEREF(container);
+	if (Z_TYPE_P(container) != IS_ARRAY) {
+		return false;
+	}
+	if ((op2 & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+		offset = zend_native_value_fast_operand(
+			execute_data, op2, &offset_tmp);
+		if (offset == NULL) {
+			return false;
+		}
+		ZVAL_DEREF(offset);
+		if (Z_TYPE_P(offset) != IS_LONG) {
+			return false;
+		}
+	}
+	if (!value_tmp) {
+		ZVAL_DEREF(value);
+	}
+	if (Z_TYPE_P(value) > IS_STRING || Z_TYPE_P(value) == IS_UNDEF) {
+		return false;
+	}
+	SEPARATE_ARRAY(container);
+	table = Z_ARRVAL_P(container);
+	if (offset == NULL) {
+		if (UNEXPECTED(table->nNextFreeElement == ZEND_LONG_MAX)) {
+			return false;
+		}
+		element = zend_hash_next_index_insert_new(table, value);
+		if (UNEXPECTED(element == NULL)) {
+			return false;
+		}
+		if (value_tmp) {
+			ZVAL_UNDEF(value);
+		} else {
+			Z_TRY_ADDREF_P(element);
+		}
+		*status = ZEND_NATIVE_RETURNED;
+		return true;
+	}
+	/* A missing key is inserted as NULL, which the store overwrites; an
+	 * existing reference element has not been changed by the lookup. */
+	element = zend_hash_index_lookup(table, Z_LVAL_P(offset));
+	if (Z_ISREF_P(element)) {
+		return false;
+	}
+	ZVAL_COPY_VALUE(&garbage, element);
+	ZVAL_COPY_VALUE(element, value);
+	if (value_tmp) {
+		ZVAL_UNDEF(value);
+	} else {
+		Z_TRY_ADDREF_P(element);
+	}
+	if (Z_REFCOUNTED(garbage)) {
+		execute_data->opline =
+			&execute_data->func->op_array.opcodes[source_position_id];
+		zval_ptr_dtor(&garbage);
+		*status = zend_native_value_status();
+		return true;
+	}
+	*status = ZEND_NATIVE_RETURNED;
+	return true;
+}
+
 zend_native_status zend_native_value_assign_dim(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result, uint64_t auxiliary,
 	uint32_t extended_value, uint32_t source_opcode,
 	uint32_t source_position_id)
 {
+	zend_native_status status;
+
+	if (zend_native_value_assign_dim_fast(execute_data, op1, op2, result,
+			auxiliary, source_position_id, &status)) {
+		return status;
+	}
 	return zend_native_value_assign_dim_impl(
 		execute_data, op1, op2, result, auxiliary, extended_value,
 		source_opcode, source_position_id, false);
