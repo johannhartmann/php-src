@@ -1920,6 +1920,9 @@ struct zend_tpde_plan {
 	uint32_t compiled_variable_count;
 	uint32_t symbol_namespace;
 	uint32_t wrapper_function_index;
+	/* See zend_native_component_member.entry_variant_member_plus_one. */
+	uint32_t entry_variant_member_plus_one;
+	uint32_t entry_variant_long_mask;
 	uint32_t typed_body_function_index;
 	zend_mir_function_record function;
 	zend_mir_block_id *block_ids;

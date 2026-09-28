@@ -224,6 +224,9 @@ ZEND_API zend_native_status zend_native_compiler_execute_observed_published(
 	zend_execute_data *execute_data,
 	zend_native_diagnostic *diagnostic);
 
+/* Registered PHP functions, without entry-specialization variants. */
+ZEND_API uint32_t zend_native_compiler_native_codeunit_count(
+	const zend_native_compiler *compiler);
 ZEND_API uint32_t zend_native_compiler_function_count(
 	const zend_native_compiler *compiler);
 ZEND_API const zend_native_code *zend_native_compiler_code_at(

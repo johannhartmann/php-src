@@ -223,6 +223,24 @@ Needs the ADR amendment in section 3. Three separate problems:
 Success: nestedloop runs without per-iteration type classification; fibo and
 ackermann take typed component calls on their recursive edges.
 
+**Result, part 1 (2026-09-28): entry specialization.** A function whose
+untyped by-value parameters (plain `RECV`, inferred type admits `long`) feed
+integer arithmetic or comparisons, directly or through phi/pi versions, also
+compiles a variant from a private op array copy whose `arg_info` declares
+those parameters `int`; opcodes, literals and variables stay shared. Before
+its first instruction the general Zend entry checks those argument slots for
+`IS_LONG` and calls the variant on the same frame, returning its status. Calls
+whose arguments are exact integers bind to the variant directly. A variant is
+kept when its body loops or all its recursive calls pass exact integers;
+otherwise the extra call would cost more than it saves. Variants are no
+codeunits of their own: they are not published, not reentry targets, not in
+the bundle records (their code lives in the component image), and they come
+after the image owner. nestedloop 1.81 -> 0.54, matrix 1.10 -> 0.86, fibo
+1.23 -> 1.14; ackermann unchanged because its recursive arguments may
+overflow. hash2 measured slower in the kernel harness only through a call-depth
+layout effect: an extra wrapper call reverses it, instruction and cache-miss
+counts are unchanged.
+
 ## 5. Rules for every package
 
 - **Optimize chains, not operations.** A new producer form lands only
