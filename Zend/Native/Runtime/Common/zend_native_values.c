@@ -4536,12 +4536,95 @@ zend_native_status zend_native_value_assign_dim(
 		source_opcode, source_position_id, false);
 }
 
+/*
+ * $a[$k] += $n on an existing numeric element of an unshared array: the
+ * operator is known and numeric operands cannot fail or run user code, so
+ * update the element in place. Missing keys, references to the element,
+ * shared arrays, other operands and a used result take the general path.
+ */
+static zend_never_inline bool zend_native_value_assign_dim_op_in_place(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand, uint64_t auxiliary,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
+{
+	zend_native_explicit_value_operation operation;
+	const zend_native_explicit_value_operation *opline = &operation;
+	zval *container;
+	zval *fast_offset;
+	zval *fast_value;
+	zval *element = NULL;
+
+	if ((extended_value != ZEND_ADD && extended_value != ZEND_SUB
+				&& extended_value != ZEND_MUL)
+			|| !zend_native_value_init_explicit_dim_assignment(
+				execute_data, op1, op2, result_operand, auxiliary,
+				extended_value, source_opcode, source_position_id,
+				ZEND_ASSIGN_DIM_OP, &operation)
+			|| opline->op2_type == IS_UNUSED
+			|| opline->result_type != IS_UNUSED
+			|| (container = zend_native_value_read_explicit(execute_data,
+				opline, opline->op1_type, opline->op1)) == NULL) {
+		return false;
+	}
+	ZVAL_DEREF(container);
+	if (Z_TYPE_P(container) != IS_ARRAY
+			|| GC_REFCOUNT(Z_ARRVAL_P(container)) != 1) {
+		return false;
+	}
+	fast_offset = zend_native_value_read_explicit(
+		execute_data, opline, opline->op2_type, opline->op2);
+	fast_value = zend_native_value_read_explicit(
+		execute_data, opline, opline->auxiliary_type, opline->auxiliary);
+	if (fast_value == NULL || fast_offset == NULL
+			|| (Z_TYPE_P(fast_value) != IS_LONG
+				&& Z_TYPE_P(fast_value) != IS_DOUBLE)) {
+		return false;
+	}
+	if (Z_TYPE_P(fast_offset) == IS_LONG) {
+		element = zend_hash_index_find(
+			Z_ARRVAL_P(container), Z_LVAL_P(fast_offset));
+	} else if (Z_TYPE_P(fast_offset) == IS_STRING) {
+		element = zend_symtable_find(
+			Z_ARRVAL_P(container), Z_STR_P(fast_offset));
+	}
+	if (element == NULL
+			|| (Z_TYPE_P(element) != IS_LONG
+				&& Z_TYPE_P(element) != IS_DOUBLE)) {
+		return false;
+	}
+	if (Z_TYPE_P(element) == IS_LONG && Z_TYPE_P(fast_value) == IS_LONG
+			&& extended_value != ZEND_MUL) {
+		if (extended_value == ZEND_ADD) {
+			fast_long_add_function(element, element, fast_value);
+		} else {
+			fast_long_sub_function(element, element, fast_value);
+		}
+	} else if (extended_value == ZEND_ADD) {
+		add_function(element, element, fast_value);
+	} else if (extended_value == ZEND_SUB) {
+		sub_function(element, element, fast_value);
+	} else {
+		mul_function(element, element, fast_value);
+	}
+	zend_native_value_consume_operand(execute_data,
+		opline->auxiliary_type, opline->auxiliary, NULL);
+	zend_native_value_consume_operand(execute_data,
+		opline->op2_type, opline->op2, NULL);
+	return true;
+}
+
 zend_native_status zend_native_value_assign_dim_op(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result, uint64_t auxiliary,
 	uint32_t extended_value, uint32_t source_opcode,
 	uint32_t source_position_id)
 {
+	if (zend_native_value_assign_dim_op_in_place(
+			execute_data, op1, op2, result, auxiliary, extended_value,
+			source_opcode, source_position_id)) {
+		return zend_native_value_status();
+	}
 	return zend_native_value_assign_dim_impl(
 		execute_data, op1, op2, result, auxiliary, extended_value,
 		source_opcode, source_position_id, true);
@@ -5030,7 +5113,11 @@ static bool zend_native_iterator_assign_value(
 		}
 		return true;
 	}
-	if (opline->op2_type == IS_CV) {
+	if (opline->op2_type == IS_CV && !Z_REFCOUNTED_P(destination)) {
+		/* A CV holding no reference and no counted value needs no
+		 * assignment protocol, as in the VM's FE_FETCH_R. */
+		zend_native_zval_copy_deref_or_dup(destination, value);
+	} else if (opline->op2_type == IS_CV) {
 		zval copy;
 
 		zend_native_zval_copy_deref_or_dup(&copy, value);
