@@ -75,6 +75,14 @@ typedef bool (*zend_mir_numeric_source_position_fn)(
 	const void *context, zend_mir_source_position_id requested_id,
 	zend_mir_source_position_ref *position_out);
 
+/*
+ * The predeclared DOUBLE value that holds operand operand_index of the
+ * opline converted from long, for mixed long/double arithmetic.
+ */
+typedef zend_mir_value_id (*zend_mir_numeric_conversion_value_fn)(
+	const void *source_context, uint32_t opline_index,
+	uint32_t operand_index);
+
 typedef struct _zend_mir_numeric_provider_context {
 	const zend_mir_lowering_source_view *source;
 	const void *source_context;
@@ -84,6 +92,13 @@ typedef struct _zend_mir_numeric_provider_context {
 	zend_mir_numeric_proof_mask proofs;
 	zend_mir_numeric_hazard_mask hazards;
 	bool values_predeclared;
+	/*
+	 * Typed lowering tier (ADR 0024): one SSA value may be both operands,
+	 * and a long operand of double arithmetic is converted through
+	 * conversion_value.
+	 */
+	bool typed;
+	zend_mir_numeric_conversion_value_fn conversion_value;
 } zend_mir_numeric_provider_context;
 
 typedef enum _zend_mir_numeric_provider_group {

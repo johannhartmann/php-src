@@ -78,6 +78,17 @@ zend_mir_w08_lowering_result zend_mir_lower_w11_zend_op_array(
 	zend_mir_diagnostic_sink *diagnostics);
 
 /*
+ * Product compiler entry for targets with the typed lowering tier (ADR
+ * 0024): the W11 lowering with whole-function typed scalar operations.
+ */
+zend_mir_w08_lowering_result zend_mir_lower_typed_zend_op_array(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	const zend_mir_lowering_module_ops *module_ops,
+	zend_mir_diagnostic_sink *diagnostics);
+
+/*
  * Internal modeling-only W06 entry. Source inventory and the complete value
  * plan are validated before either mutator is called. All source, call and
  * value views remain process-local until every receipt is emitted for one

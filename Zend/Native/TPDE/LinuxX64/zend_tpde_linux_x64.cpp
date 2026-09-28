@@ -4862,6 +4862,55 @@ bool ZendCompilerX64::compile_inst_impl(
 			(void) frame_value;
 			return true;
 		}
+		if (mir.zval_store_plain) {
+			const zend_mir_storage_id storage = mir.zval_store_storage_id;
+			const uint64_t offset =
+				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+			if (node.operands.size() != 2
+					|| node.operands[1] != IRValueRef{Adaptor::FRAME_VALUE}
+					|| !zend_mir_id_is_valid(storage)
+					|| offset > INT32_MAX - sizeof(zval)) {
+				return false;
+			}
+			const IRValueRef input = node.operands[0];
+			const zend_mir_scalar_type_mask exact_type =
+				adaptor->exact_type(input);
+			auto frame_value = val_ref(node.operands[1]);
+			(void) frame_value;
+			const int32_t payload_offset = static_cast<int32_t>(offset);
+			const int32_t type_offset = static_cast<int32_t>(
+				offset + offsetof(zval, u1.type_info));
+			if (exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
+				ASM(MOV32mi, FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+					type_offset), IS_NULL);
+				return true;
+			}
+			if (!zend_mir_scalar_type_is_exact(exact_type)) {
+				return false;
+			}
+			auto [value_ref, value] = val_ref_single(input);
+			auto value_reg = value.load_to_reg();
+			if (val_parts(input).bank == tpde::x64::PlatformConfig::FP_BANK) {
+				ASM(SSE_MOVSDmr, FE_MEM(canonical_frame_register(), 0,
+					FE_NOREG, payload_offset), value_reg);
+			} else {
+				ASM(MOV64mr, FE_MEM(canonical_frame_register(), 0,
+					FE_NOREG, payload_offset), value_reg);
+			}
+			if (exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
+				ScratchReg kind{this};
+				auto kind_reg = kind.alloc_gp();
+				ASM(MOV32rr, kind_reg, value_reg);
+				ASM(ADD32ri, kind_reg, IS_FALSE);
+				ASM(MOV32mr, FE_MEM(canonical_frame_register(), 0,
+					FE_NOREG, type_offset), kind_reg);
+			} else {
+				ASM(MOV32mi, FE_MEM(canonical_frame_register(), 0,
+					FE_NOREG, type_offset),
+					static_cast<int32_t>(zval_type(exact_type)));
+			}
+			return true;
+		}
 		if (node.operands.size() != 2
 				|| node.operands[1] != IRValueRef{Adaptor::FRAME_VALUE}
 				|| node.continuation_block == UINT32_MAX) {

@@ -1,6 +1,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "Zend/zend_compile.h"
+#include "Zend/Optimizer/zend_ssa.h"
+
 #include "../zend_mir_lowering_zend.h"
 #include "../Frontend/zend_mir_zend_source.h"
 #include "../Scalar/Logic/zend_mir_logic.h"
@@ -220,6 +223,18 @@ static bool zend_mir_w09_phi_is_dynamic(
 		}
 	}
 	return false;
+}
+
+static bool zend_mir_w04_phi_is_dead(
+	const zend_mir_lowering_context *context, uint32_t ssa_variable_id)
+{
+	const zend_ssa *ssa = context->zend_source != NULL
+		? (const zend_ssa *) context->zend_source->ssa : NULL;
+
+	return ssa != NULL && ssa->vars != NULL
+		&& ssa_variable_id < (uint32_t) ssa->vars_count
+		&& ssa->vars[ssa_variable_id].use_chain < 0
+		&& ssa->vars[ssa_variable_id].phi_use_chain == NULL;
 }
 
 /*
@@ -468,6 +483,12 @@ static bool zend_mir_w04_phi_analysis_init(
 			goto failed;
 		}
 		members[phi.result_ssa_variable_id] = true;
+		/* A PHI nothing uses (Zend SSA's NOVAL, such as a loop counter's
+		 * merge after an outer loop) stays its own component: joining it
+		 * would box every value its inputs connect to. */
+		if (zend_mir_w04_phi_is_dead(context, phi.result_ssa_variable_id)) {
+			continue;
+		}
 		for (j = analysis->input_offsets[i];
 			j < analysis->input_offsets[i + 1]; j++) {
 			zend_mir_source_phi_input_ref input;
