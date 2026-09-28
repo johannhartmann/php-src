@@ -9,6 +9,7 @@
 #include "Zend/zend_system_id.h"
 #include "Zend/zend_type_info.h"
 #include "Zend/Optimizer/zend_ssa.h"
+#include "Zend/Optimizer/zend_func_info.h"
 
 #include <atomic>
 #include <cstddef>
@@ -795,8 +796,23 @@ bool zend_tpde_apply_machine_value_facts(
 	return true;
 }
 
+/*
+ * Zend SSA leaves global-scope CVs NO_ALIAS; like the JIT, treat them and
+ * the CVs of a function with indirect variable access as rebindable by any
+ * call, so NO_ALIAS does not prove them register-authoritative.
+ */
+static bool zend_tpde_ssa_variable_rebindable(
+	const zend_op_array *op_array, const zend_ssa *ssa, uint32_t variable)
+{
+	return op_array == nullptr
+		|| ((op_array->function_name == nullptr
+				|| (ssa->cfg.flags & ZEND_FUNC_INDIRECT_VAR_ACCESS) != 0)
+			&& ssa->vars[variable].var < op_array->last_var);
+}
+
 static void zend_tpde_refine_non_alias_scalar_values(
 	zend_tpde_plan *plan,
+	const zend_op_array *source_op_array,
 	const zend_ssa *source_ssa,
 	const std::vector<uint8_t> &register_definitions)
 {
@@ -807,7 +823,9 @@ static void zend_tpde_refine_non_alias_scalar_values(
 	for (uint32_t ssa_variable = 0;
 			ssa_variable < static_cast<uint32_t>(source_ssa->vars_count);
 			++ssa_variable) {
-		if (source_ssa->vars[ssa_variable].alias != NO_ALIAS) {
+		if (source_ssa->vars[ssa_variable].alias != NO_ALIAS
+				|| zend_tpde_ssa_variable_rebindable(
+					source_op_array, source_ssa, ssa_variable)) {
 			continue;
 		}
 		const int32_t value_index = zend_tpde_value_index(
@@ -881,7 +899,9 @@ static void zend_tpde_refine_literal_assignment_values(
 		 * this SSA definition is an exact string or array payload even when
 		 * a later by-value use made the generic SSA type mask conservative.
 		 */
-		if (source_ssa->vars[ssa_variable].alias != NO_ALIAS) {
+		if (source_ssa->vars[ssa_variable].alias != NO_ALIAS
+				|| zend_tpde_ssa_variable_rebindable(
+					source_op_array, source_ssa, ssa_variable)) {
 			continue;
 		}
 		if (ssa_op.op1_use >= 0) {
@@ -6569,7 +6589,7 @@ bool initialize_plan(
 		}
 	}
 	zend_tpde_refine_non_alias_scalar_values(
-		plan, source_ssa, register_definitions);
+		plan, source_op_array, source_ssa, register_definitions);
 	zend_tpde_refine_literal_assignment_values(
 		plan, source_op_array, source_ssa);
 	zend_tpde_refine_boxed_scalar_copies(plan);
