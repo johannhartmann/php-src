@@ -97,8 +97,12 @@ zend_mir_lowering_status zend_mir_logic_build_compare_plan(
 		*diagnostic_out = ZEND_MIRL_DEFERRED_OPCODE;
 		return ZEND_MIR_LOWERING_DEFERRED;
 	}
-	if (!zend_mir_logic_require_finite(proof, &left, diagnostic_out)
-			|| !zend_mir_logic_require_finite(proof, &right, diagnostic_out)) {
+	if ((zend_opcode == ZEND_MIR_LOGIC_ZEND_SPACESHIP
+				|| (proof->proofs
+					& ZEND_MIR_LOGIC_PROOF_IEEE_F64_COMPARE) == 0)
+			&& (!zend_mir_logic_require_finite(proof, &left, diagnostic_out)
+				|| !zend_mir_logic_require_finite(
+					proof, &right, diagnostic_out))) {
 		return ZEND_MIR_LOWERING_DEFERRED;
 	}
 	if (zend_mir_logic_is_equality(zend_opcode)) {

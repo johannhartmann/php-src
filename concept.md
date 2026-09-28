@@ -118,6 +118,19 @@ Goal: array read → numeric comparison → branch stays in registers.
 Success: heapsort gets faster than 24 ms as a whole; a regression test covers
 NaN, INF and mixed int/double comparisons read from arrays.
 
+**Result (2026-09-28).** Typed double comparisons no longer need FINITE facts:
+the x64 emitter compares with IEEE semantics and the logic provider accepts
+non-finite operands under a new `IEEE_F64_COMPARE` proof, set only by the typed
+tier (DarwinA64 keeps the requirement). This made more functions typed bodies
+and exposed two latent typed-body faults, now fixed: TPDE handed out XMM0/XMM1
+as fixed registers, which blocked double returns after a branch, and a
+returned pi had its COPY elided. Heapsort did not change: its keys are
+`long|double` and its elements come from a by-reference untyped array, so the
+comparisons stay boxed. Re-applying the wider register read still costs about
+12 % more instructions in heapsort by itself (measured with the harness
+`--perf`), so the read form stays reverted; the cost lies in the read path,
+not in its consumer. Heapsort moves to package 4 (typed parameters).
+
 ### Package 2: foreach and compound array updates
 
 `foreach ($hash1 as $key => $value) { $hash2[$key] += $value; }` spends its

@@ -1430,6 +1430,7 @@ static bool zend_mir_w11_infer_scalar_facts(
 								!= ZEND_MIR_SCALAR_TYPE_F64)
 						|| (left.exact_type
 								== ZEND_MIR_SCALAR_TYPE_F64
+							&& !integration->typed
 							&& (((left.flags
 									& ZEND_MIR_VALUE_FACT_FINITE) == 0)
 								|| ((right.flags
@@ -1591,6 +1592,7 @@ static bool zend_mir_w11_infer_scalar_facts(
 						ZEND_MIR_FRONTEND_OP2, &right)
 					&& left.exact_type == right.exact_type
 					&& (left.exact_type != ZEND_MIR_SCALAR_TYPE_F64
+						|| integration->typed
 						|| (((left.flags
 								& ZEND_MIR_VALUE_FACT_FINITE) != 0)
 							&& ((right.flags
@@ -1852,6 +1854,7 @@ static bool zend_mir_w11_scalarizable_opcode(
 					ZEND_MIR_FRONTEND_OP2, &right)
 				&& left.exact_type == right.exact_type
 				&& (left.exact_type != ZEND_MIR_SCALAR_TYPE_F64
+					|| integration->typed
 					|| (((left.flags & ZEND_MIR_VALUE_FACT_FINITE) != 0)
 						&& ((right.flags
 							& ZEND_MIR_VALUE_FACT_FINITE) != 0)));
@@ -4308,6 +4311,9 @@ static bool zend_mir_w03_prepare_logic(
 			proof->proofs &=
 				~ZEND_MIR_LOGIC_PROOF_SINGLE_REACHABLE_BLOCK;
 			proof->proofs |= ZEND_MIR_LOGIC_PROOF_SOURCE_CFG;
+		}
+		if (integration->typed) {
+			proof->proofs |= ZEND_MIR_LOGIC_PROOF_IEEE_F64_COMPARE;
 		}
 		proof->temporary_value_id =
 			zend_mir_value_from_synthetic(temporary_payload);

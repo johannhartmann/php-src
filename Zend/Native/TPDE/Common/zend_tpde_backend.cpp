@@ -11780,6 +11780,24 @@ static bool freeze_machine_required_values(
 		}
 	}
 
+	/* A typed body returns the value bound to RETURN_SOURCE_ZVAL, which is
+	 * no MIR operand of it; keep that value, such as the COPY of a returned
+	 * pi, defined in the typed body. */
+	for (uint32_t instruction_index = 0;
+			instruction_index < plan->instruction_count;
+			++instruction_index) {
+		const zend_tpde_instruction &instruction =
+			plan->instructions[instruction_index];
+		const int32_t value_index =
+			instruction.source_op1_binding.value_index;
+		if (zend_tpde_instruction_record_at(plan, &instruction).opcode
+					== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
+				&& value_index >= 0
+				&& static_cast<uint32_t>(value_index) < plan->value_count) {
+			plan->typed_body_value_required[value_index] = 1;
+		}
+	}
+
 	/* A required TPDE value must have a machine representation in the
 	 * corresponding function. Canonical-slot-only values remain available to
 	 * source helpers, but cannot participate in register liveness. */
