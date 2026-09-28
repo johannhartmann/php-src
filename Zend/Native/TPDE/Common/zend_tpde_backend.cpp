@@ -6585,6 +6585,20 @@ bool initialize_plan(
 				arg_info == nullptr ? nullptr : &arg_info->type,
 				by_reference,
 				ZEND_TPDE_LOCAL_ABI_TRANSFER_BORROWED);
+		if (arg_info != nullptr && ZEND_TYPE_IS_SET(arg_info->type)
+				&& plan->argument_abi[argument].machine_kind
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+				&& (ZEND_TYPE_FULL_MASK(arg_info->type) & MAY_BE_ANY)
+					!= MAY_BE_ANY) {
+			const uint32_t bit = argument < 32
+				? UINT32_C(1) << argument : UINT32_C(0);
+			plan->checked_boxed_argument_mask |= argument < 32 ? bit : ~0u;
+			if ((ZEND_TYPE_FULL_MASK(arg_info->type)
+						& (MAY_BE_LONG | MAY_BE_DOUBLE))
+					== (MAY_BE_LONG | MAY_BE_DOUBLE)) {
+				plan->number_argument_mask |= bit;
+			}
+		}
 	}
 	/*
 	 * A receive opcode is an SSA definition, but not a machine operation: its
@@ -7944,7 +7958,19 @@ bool initialize_plan(
 					user_bindings[binding_index].component_target_index;
 				/* Entry specialization: exact integer arguments call the
 				 * target's integer variant without the entry check. */
-				if (user_bindings[binding_index]
+				if (user_bindings[binding_index].variant_numeric
+						&& user_bindings[binding_index]
+							.variant_component_index_plus_one != 0
+						&& user_bindings[binding_index].component_target_index
+							!= UINT32_MAX) {
+					plan->instructions[i].numeric_variant_plus_one =
+						user_bindings[binding_index]
+							.variant_component_index_plus_one;
+					plan->instructions[i].numeric_variant_general =
+						user_bindings[binding_index].component_target_index;
+					plan->instructions[i].numeric_variant_mask =
+						user_bindings[binding_index].variant_long_mask;
+				} else if (user_bindings[binding_index]
 							.variant_component_index_plus_one != 0
 						&& user_bindings[binding_index].component_target_index
 							!= UINT32_MAX) {
@@ -9526,6 +9552,20 @@ static bool machine_plan_abi_same_shape(
 static bool machine_plan_abi_can_supply_argument(
 		const zend_tpde_local_abi_type &caller,
 		const zend_tpde_local_abi_type &callee) {
+	/* A scalar is boxed for a zval parameter; it owns nothing. */
+	if (caller.valid && callee.valid
+			&& callee.machine_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+			&& callee.representation == ZEND_MIR_REPRESENTATION_ZVAL
+			&& caller.transfer == ZEND_TPDE_LOCAL_ABI_TRANSFER_NONE
+			&& ((caller.exact_type == ZEND_MIR_SCALAR_TYPE_I64
+					&& caller.machine_kind == ZEND_TPDE_MACHINE_VALUE_I64)
+				|| (caller.exact_type == ZEND_MIR_SCALAR_TYPE_F64
+					&& caller.machine_kind == ZEND_TPDE_MACHINE_VALUE_F64)
+				|| (caller.exact_type == ZEND_MIR_SCALAR_TYPE_I1
+					&& caller.machine_kind
+						== ZEND_TPDE_MACHINE_VALUE_BOOL))) {
+		return true;
+	}
 	if (!machine_plan_abi_same_shape(caller, callee)) {
 		return false;
 	}
@@ -9929,8 +9969,11 @@ static bool freeze_typed_body_signature(
 				verified_type = machine_plan_value_abi(
 					plan, static_cast<uint32_t>(verified));
 			}
+			/* A boxed zval proves no declared type; keep the check. */
 			if (!machine_plan_abi_same_shape(
-					verified_type, plan->return_abi)) {
+					verified_type, plan->return_abi)
+					|| plan->return_abi.machine_kind
+						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 				return false;
 			}
 			continue;
@@ -9986,9 +10029,9 @@ static bool freeze_typed_body_signature(
 		if (zend_tpde_typed_body_frame_transport(plan, instruction)) {
 			continue;
 		}
-		if (zend_tpde_typed_numeric_arithmetic(plan, instruction)) {
+		if (zend_tpde_typed_numeric_binary(plan, instruction)) {
 			/* Both operands are register longs or boxed numbers; the result
-			 * is a boxed number that needs no ownership. */
+			 * is a boolean or a boxed number that needs no ownership. */
 			auto operand_abi = [&](
 					const zend_tpde_source_value_binding &binding,
 					const zend_mir_source_operand_ref &operand) {
@@ -10022,13 +10065,19 @@ static bool freeze_typed_body_signature(
 						instruction.value_operation.op2)) {
 				return false;
 			}
-			const zend_tpde_local_abi_type number = machine_plan_abi(
-				ZEND_MIR_REPRESENTATION_ZVAL, ZEND_MIR_SCALAR_TYPE_NONE,
-				ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
-				ZEND_TPDE_LOCAL_ABI_TRANSFER_IMMORTAL);
-			instruction_result_types[index] = number;
+			const zend_tpde_local_abi_type result =
+				zend_tpde_numeric_comparison(
+						instruction.value_operation.source_opcode)
+					? machine_plan_abi(ZEND_MIR_REPRESENTATION_I1,
+						ZEND_MIR_SCALAR_TYPE_I1, ZEND_TPDE_MACHINE_VALUE_BOOL,
+						ZEND_TPDE_LOCAL_ABI_TRANSFER_NONE)
+					: machine_plan_abi(ZEND_MIR_REPRESENTATION_ZVAL,
+						ZEND_MIR_SCALAR_TYPE_NONE,
+						ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
+						ZEND_TPDE_LOCAL_ABI_TRANSFER_IMMORTAL);
+			instruction_result_types[index] = result;
 			register_source_ssa[
-				instruction.value_operation.result.ssa_variable_id] = number;
+				instruction.value_operation.result.ssa_variable_id] = result;
 			continue;
 		}
 		if (record.effects != 0 || record.reads != 0
@@ -10545,9 +10594,74 @@ static bool freeze_typed_component_calls(
 					static_cast<uint32_t>(
 						binding.definition_instruction_index)];
 			}
+			/* A proven arithmetic result, or the result of a member that
+			 * returns numbers, owns nothing. */
+			{
+				int32_t producer = binding.definition_instruction_index;
+				if (producer < 0 && binding.value_index >= 0
+						&& static_cast<uint32_t>(binding.value_index)
+							< plan->value_count
+						&& plan->source_value_definition_instructions
+							!= nullptr) {
+					producer = plan->source_value_definition_instructions[
+						binding.value_index];
+				}
+				const zend_tpde_instruction *numeric_producer =
+					producer >= 0
+							&& static_cast<uint32_t>(producer)
+								< plan->instruction_count
+						? &plan->instructions[producer] : nullptr;
+				if (numeric_producer != nullptr
+						&& ((zend_tpde_typed_numeric_binary(plan,
+									*numeric_producer)
+								&& !zend_tpde_numeric_comparison(
+									numeric_producer->value_operation
+										.source_opcode))
+							|| (numeric_producer->direct_call != nullptr
+								&& numeric_producer->component_target_index
+									< component_count
+								&& component_plans[numeric_producer
+									->component_target_index]
+									->returns_number))) {
+					caller_abi = machine_plan_abi(
+						ZEND_MIR_REPRESENTATION_ZVAL,
+						ZEND_MIR_SCALAR_TYPE_NONE,
+						ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
+						ZEND_TPDE_LOCAL_ABI_TRANSFER_IMMORTAL);
+				}
+			}
 			const zend_tpde_local_abi_type callee_abi =
 				machine_plan_value_abi(
 					callee, static_cast<uint32_t>(callee_value));
+			/* A typed call skips the receive check: a parameter with a
+			 * declared type needs an argument that already satisfies it. */
+			if (argument >= 32
+					? callee->checked_boxed_argument_mask != 0
+					: ((callee->checked_boxed_argument_mask >> argument) & 1)
+						!= 0) {
+				const bool number_argument =
+					caller_abi.valid
+					&& ((caller_abi.machine_kind
+								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+							&& caller_abi.transfer
+								== ZEND_TPDE_LOCAL_ABI_TRANSFER_IMMORTAL
+							&& caller_abi.exact_type
+								== ZEND_MIR_SCALAR_TYPE_NONE)
+						|| caller_abi.exact_type == ZEND_MIR_SCALAR_TYPE_I64
+						|| caller_abi.exact_type == ZEND_MIR_SCALAR_TYPE_F64
+						|| (source_argument.send_opline_index
+								< plan->source_opcode_count
+							&& zend_tpde_known_numeric_type(
+								plan->source_opcodes[
+									source_argument.send_opline_index]
+									.op1_known_type)));
+				if (argument >= 32 || !number_argument
+						|| ((callee->number_argument_mask >> argument) & 1)
+							== 0) {
+					compatible = false;
+					break;
+				}
+			}
 			const zend_tpde_instruction *boxed_read_producer =
 				binding.definition_instruction_index >= 0
 						&& static_cast<uint32_t>(
@@ -12208,7 +12322,9 @@ static bool zend_tpde_target_has_value_transports(zend_native_target target)
  * double. Results of calls to such members are numbers too, so arithmetic on
  * them cannot fail. Start from all members and drop those with another
  * return until nothing changes; by induction on the call depth every result
- * of a remaining member is a number.
+ * of a remaining member is a number. A call whose checked arguments are all
+ * numbers targets the callee's numeric variant; a call that loses this proof
+ * keeps the general target, so both sets only shrink.
  */
 static void freeze_component_numeric_operands(
 		zend_tpde_plan *plans, uint32_t component_count) {
@@ -12279,6 +12395,18 @@ static void freeze_component_numeric_operands(
 				|| producer.value_operation.source_opcode == ZEND_SUB
 				|| producer.value_operation.source_opcode == ZEND_MUL);
 	};
+	for (uint32_t member = 0; member < component_count; ++member) {
+		zend_tpde_plan &plan = plans[member];
+		for (uint32_t index = 0; index < plan.instruction_count; ++index) {
+			zend_tpde_instruction &call = plan.instructions[index];
+			if (call.numeric_variant_plus_one != 0) {
+				call.component_target_index = plan.linux_inline_forms
+						&& call.numeric_variant_plus_one - 1 < component_count
+					? call.numeric_variant_plus_one - 1
+					: call.numeric_variant_general;
+			}
+		}
+	}
 	bool changed;
 	do {
 		changed = false;
@@ -12286,6 +12414,58 @@ static void freeze_component_numeric_operands(
 			zend_tpde_plan &plan = plans[member];
 			if (!plan.linux_inline_forms || plan.source_opcodes == nullptr) {
 				continue;
+			}
+			for (uint32_t index = 0; index < plan.instruction_count; ++index) {
+				zend_tpde_instruction &call = plan.instructions[index];
+				if (call.numeric_variant_plus_one == 0
+						|| call.component_target_index
+							== call.numeric_variant_general) {
+					continue;
+				}
+				bool numbers = plan.call_argument_bindings != nullptr;
+				for (uint32_t argument = 0; numbers
+						&& argument < call.call_argument_count; ++argument) {
+					zend_mir_call_argument_ref source_argument{};
+					const uint32_t argument_index =
+						call.call_argument_offset + argument;
+					if (!zend_tpde_call_argument_at(
+							&plan, argument_index, &source_argument)) {
+						numbers = false;
+						break;
+					}
+					if (source_argument.ordinal >= 32
+							|| ((call.numeric_variant_mask
+								>> source_argument.ordinal) & 1) == 0) {
+						continue;
+					}
+					numbers = source_argument.source_mode
+							== ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE
+						&& source_argument.send_opline_index
+							< plan.source_opcode_count
+						&& number_value(plan,
+							plan.call_argument_bindings[argument_index],
+							plan.source_opcodes[
+								source_argument.send_opline_index]
+								.op1_known_type);
+				}
+				/* Every checked argument must be present. */
+				uint32_t present = 0;
+				for (uint32_t argument = 0; numbers
+						&& argument < call.call_argument_count; ++argument) {
+					zend_mir_call_argument_ref source_argument{};
+					if (zend_tpde_call_argument_at(&plan,
+							call.call_argument_offset + argument,
+							&source_argument)
+							&& source_argument.ordinal < 32) {
+						present |= UINT32_C(1) << source_argument.ordinal;
+					}
+				}
+				if (!numbers
+						|| (present & call.numeric_variant_mask)
+							!= call.numeric_variant_mask) {
+					call.component_target_index = call.numeric_variant_general;
+					changed = true;
+				}
 			}
 			bool saw_return = false;
 			bool all_numbers = true;
@@ -12339,6 +12519,9 @@ static void freeze_component_numeric_operands(
 			}
 		}
 	} while (changed);
+	for (uint32_t member = 0; member < component_count; ++member) {
+		plans[member].returns_number = returns_number[member] != 0;
+	}
 }
 
 static bool freeze_component_machine_plan(
@@ -13015,6 +13198,8 @@ extern "C" zend_result zend_tpde_compile_component_w14_with_runtime(
 				? member.entry_variant_member_plus_one : 0;
 		plans[initialized].entry_variant_long_mask =
 			member.entry_variant_long_mask;
+		plans[initialized].entry_variant_numeric =
+			member.entry_variant_numeric;
 		plan_refs[initialized] = &plans[initialized];
 	}
 	if (initialized != member_count) {

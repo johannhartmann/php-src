@@ -80,11 +80,13 @@ typedef struct _zend_native_compiled_function {
 	 * The general entry checks the arguments once and jumps to the variant,
 	 * which runs on the same frame. variant_plus_one names the variant,
 	 * variant_of_plus_one its general function; variant_long_mask the
-	 * parameters the entry checks.
+	 * parameters the entry checks. A numeric variant declares them int|float
+	 * instead, for recursion whose arguments may overflow into doubles.
 	 */
 	uint32_t variant_plus_one;
 	uint32_t variant_of_plus_one;
 	uint32_t variant_long_mask;
+	bool variant_numeric;
 	zend_arg_info *variant_arg_info;
 } zend_native_compiled_function;
 
@@ -882,6 +884,21 @@ static uint32_t zend_native_compiler_variant_long_mask(
  * and differs only in arg_info; it is never published as an entry of its
  * own and is reached only through the general entry's check.
  */
+static void zend_native_compiler_type_variant_parameters(
+	zend_arg_info *arg_info, uint32_t argument_count, uint32_t long_mask,
+	bool numeric)
+{
+	uint32_t argument;
+
+	for (argument = 0; argument < argument_count; argument++) {
+		if ((long_mask >> argument) & 1) {
+			arg_info[argument].type = numeric
+				? (zend_type) ZEND_TYPE_INIT_MASK(MAY_BE_LONG | MAY_BE_DOUBLE)
+				: (zend_type) ZEND_TYPE_INIT_CODE(IS_LONG, 0, 0);
+		}
+	}
+}
+
 static bool zend_native_compiler_add_variant(
 	zend_native_compiler *compiler,
 	zend_native_compiled_function *function,
@@ -894,7 +911,6 @@ static bool zend_native_compiler_add_variant(
 	zend_native_compiled_function *variant;
 	zend_op_array *copy;
 	zend_arg_info *arg_info;
-	uint32_t argument;
 
 	if (!zend_native_compiler_reserve_functions(
 			compiler, compiler->function_count + 1)) {
@@ -906,12 +922,8 @@ static bool zend_native_compiler_add_variant(
 		compiler, arg_info_count * sizeof(*arg_info), false);
 	memcpy(arg_info, op_array->arg_info - prefix,
 		arg_info_count * sizeof(*arg_info));
-	for (argument = 0; argument < op_array->num_args; argument++) {
-		if ((long_mask >> argument) & 1) {
-			arg_info[prefix + argument].type =
-				(zend_type) ZEND_TYPE_INIT_CODE(IS_LONG, 0, 0);
-		}
-	}
+	zend_native_compiler_type_variant_parameters(
+		arg_info + prefix, op_array->num_args, long_mask, false);
 	copy->arg_info = arg_info + prefix;
 	copy->fn_flags |= ZEND_ACC_HAS_TYPE_HINTS;
 	variant = zend_native_compiler_alloc(
@@ -944,13 +956,17 @@ static bool zend_native_compiler_add_variant(
 
 /*
  * A variant pays for its entry check when its body loops, or when every
- * recursive call passes the checked parameters as exact integers, which
- * then call the variant directly. Otherwise each call would take the check
- * and an extra call for little gain.
+ * recursive call passes the checked parameters as exact integers (numbers
+ * for a numeric variant, including results of calls), which then call the
+ * variant directly. Otherwise each call would take the check and an extra
+ * call for little gain.
  */
 static bool zend_native_compiler_variant_pays_off(
-	const zend_native_compiled_function *variant, uint32_t long_mask)
+	const zend_native_compiled_function *variant, uint32_t long_mask,
+	bool numeric)
 {
+	const uint32_t argument_types = numeric
+		? MAY_BE_LONG | MAY_BE_DOUBLE : MAY_BE_LONG;
 	const zend_op_array *op_array = variant->op_array;
 	const zend_ssa *ssa = &variant->ssa;
 	int32_t self_call_depth[64];
@@ -1003,15 +1019,32 @@ static bool zend_native_compiler_variant_pays_off(
 					const int use = ssa->ops[index].op1_use;
 
 					recursive = true;
-					if (argument < 32 && ((long_mask >> argument) & 1)
-							&& (opline->op1_type == IS_CONST
-								? Z_TYPE_P(RT_CONSTANT(opline, opline->op1))
-									!= IS_LONG
-								: use < 0
-									|| (ssa->var_info[use].type
-										& (MAY_BE_ANY | MAY_BE_REF))
-										!= MAY_BE_LONG)) {
-						return false;
+					if (argument >= 32 || ((long_mask >> argument) & 1) == 0) {
+						break;
+					}
+					if (opline->op1_type == IS_CONST) {
+						const uint8_t type =
+							Z_TYPE_P(RT_CONSTANT(opline, opline->op1));
+						if (type != IS_LONG
+								&& (!numeric || type != IS_DOUBLE)) {
+							return false;
+						}
+					} else if (use < 0
+							|| ((ssa->var_info[use].type
+									& (MAY_BE_ANY | MAY_BE_UNDEF
+										| MAY_BE_REF))
+									& ~argument_types) != 0) {
+						/* A call result may be proven a number later. */
+						if (!numeric || use < 0
+								|| ssa->vars[use].definition < 0
+								|| (op_array->opcodes[
+										ssa->vars[use].definition].opcode
+									!= ZEND_DO_UCALL
+									&& op_array->opcodes[
+										ssa->vars[use].definition].opcode
+										!= ZEND_DO_FCALL)) {
+							return false;
+						}
 					}
 				}
 				break;
@@ -3103,6 +3136,8 @@ static bool zend_native_compiler_prepare_component_member(
 				.variant_component_index_plus_one = 0;
 			member->bindings[member->backend.user_binding_count]
 				.variant_long_mask = 0;
+			member->bindings[member->backend.user_binding_count]
+				.variant_numeric = false;
 			member->backend.user_binding_count++;
 			continue;
 		}
@@ -3136,6 +3171,8 @@ static bool zend_native_compiler_prepare_component_member(
 			.variant_component_index_plus_one = 0;
 		member->bindings[member->backend.user_binding_count]
 			.variant_long_mask = 0;
+		member->bindings[member->backend.user_binding_count]
+			.variant_numeric = false;
 		if (native_callee->variant_plus_one != 0) {
 			const zend_native_compiled_function *variant =
 				compiler->functions[native_callee->variant_plus_one - 1];
@@ -3149,6 +3186,8 @@ static bool zend_native_compiler_prepare_component_member(
 							variant->registry_index] + 1;
 				member->bindings[member->backend.user_binding_count]
 					.variant_long_mask = native_callee->variant_long_mask;
+				member->bindings[member->backend.user_binding_count]
+					.variant_numeric = native_callee->variant_numeric;
 			}
 		}
 		member->backend.user_binding_count++;
@@ -3265,6 +3304,7 @@ static bool zend_native_compiler_compile_shared_component(
 		backend_members[index] = members[index].backend;
 		backend_members[index].entry_variant_member_plus_one = 0;
 		backend_members[index].entry_variant_long_mask = 0;
+		backend_members[index].entry_variant_numeric = false;
 		if (member_function->variant_plus_one != 0) {
 			const uint32_t variant_member = component_member_by_registry[
 				member_function->variant_plus_one - 1];
@@ -3274,6 +3314,8 @@ static bool zend_native_compiler_compile_shared_component(
 				variant_member + 1;
 			backend_members[index].entry_variant_long_mask =
 				member_function->variant_long_mask;
+			backend_members[index].entry_variant_numeric =
+				member_function->variant_numeric;
 		}
 	}
 	memset(&diagnostic, 0, sizeof(diagnostic));
@@ -3563,6 +3605,7 @@ static bool zend_native_compiler_compile_native_component(
 				bindings[binding_count].component_target_index = UINT32_MAX;
 				bindings[binding_count].variant_component_index_plus_one = 0;
 				bindings[binding_count].variant_long_mask = 0;
+				bindings[binding_count].variant_numeric = false;
 				bindings[binding_count].direct_native = false;
 				bindings[binding_count].leaf_scalar_frame = false;
 				binding_count++;
@@ -3581,6 +3624,7 @@ static bool zend_native_compiler_compile_native_component(
 			bindings[binding_count].component_target_index = UINT32_MAX;
 			bindings[binding_count].variant_component_index_plus_one = 0;
 			bindings[binding_count].variant_long_mask = 0;
+			bindings[binding_count].variant_numeric = false;
 			bindings[binding_count].direct_native =
 				zend_native_compiler_target_is_direct_native(
 					compiler, function, calls, &target, callee);
@@ -3943,15 +3987,40 @@ static zend_result zend_native_compiler_compile_locked(
 			phase_result = zend_native_compiler_build_ssa(
 				compiler, function, diagnostic);
 			compiler->stats.ssa_ns += zend_hrtime() - phase_started;
+			/* An integer variant whose recursion may overflow becomes a
+			 * numeric one. */
+			if (phase_result && zend_native_compiler_is_variant(function)
+					&& !function->variant_numeric
+					&& !zend_native_compiler_variant_pays_off(function,
+						compiler->functions[function->variant_of_plus_one - 1]
+							->variant_long_mask, false)) {
+				zend_native_compiled_function *general = compiler->functions[
+					function->variant_of_plus_one - 1];
+
+				zend_native_compiler_type_variant_parameters(
+					(zend_arg_info *) function->op_array->arg_info,
+					function->op_array->num_args, general->variant_long_mask,
+					true);
+				function->variant_numeric = true;
+				general->variant_numeric = true;
+				zend_arena_destroy(function->ssa_arena);
+				function->ssa_arena = NULL;
+				memset(&function->ssa, 0, sizeof(function->ssa));
+				phase_started = zend_hrtime();
+				phase_result = zend_native_compiler_build_ssa(
+					compiler, function, diagnostic);
+				compiler->stats.ssa_ns += zend_hrtime() - phase_started;
+			}
 			if (phase_result && zend_native_compiler_is_variant(function)
 					&& !zend_native_compiler_variant_pays_off(function,
 						compiler->functions[function->variant_of_plus_one - 1]
-							->variant_long_mask)) {
+							->variant_long_mask, function->variant_numeric)) {
 				zend_native_compiled_function *general = compiler->functions[
 					function->variant_of_plus_one - 1];
 
 				general->variant_plus_one = 0;
 				general->variant_long_mask = 0;
+				general->variant_numeric = false;
 				function->state = ZEND_NATIVE_CODEUNIT_FAILED;
 				zend_native_entry_cell_fail(&function->entry_cell);
 				/* The SSA arena is request memory; a persistent compiler

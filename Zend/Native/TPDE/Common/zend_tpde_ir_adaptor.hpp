@@ -221,7 +221,24 @@ public:
 				&& machine_kind == other.machine_kind;
 		}
 
+		bool boxes_into(const TypedBodyAbiType &callee) const {
+			return valid && callee.valid
+				&& callee.machine_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+				&& callee.representation == ZEND_MIR_REPRESENTATION_ZVAL
+				&& transfer == ZEND_TPDE_LOCAL_ABI_TRANSFER_NONE
+				&& ((exact_type == ZEND_MIR_SCALAR_TYPE_I64
+						&& machine_kind == ZEND_TPDE_MACHINE_VALUE_I64)
+					|| (exact_type == ZEND_MIR_SCALAR_TYPE_F64
+						&& machine_kind == ZEND_TPDE_MACHINE_VALUE_F64)
+					|| (exact_type == ZEND_MIR_SCALAR_TYPE_I1
+						&& machine_kind == ZEND_TPDE_MACHINE_VALUE_BOOL));
+		}
+
 		bool can_supply_argument(const TypedBodyAbiType &callee) const {
+			/* A scalar is boxed for a zval parameter; it owns nothing. */
+			if (boxes_into(callee)) {
+				return true;
+			}
 			if (!same_shape(callee)) {
 				return false;
 			}
@@ -2341,8 +2358,11 @@ public:
 						plan, static_cast<uint32_t>(
 							verified_binding.value_index));
 				}
+				/* A boxed zval proves no declared type; keep the check. */
 				if (!verified_type.same_shape(
-						typed_body_plan_abi(plan->return_abi))) {
+						typed_body_plan_abi(plan->return_abi))
+						|| plan->return_abi.machine_kind
+							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 					return false;
 				}
 				continue;
@@ -2412,7 +2432,7 @@ public:
 			if (zend_tpde_typed_body_frame_transport(plan, instruction)) {
 				continue;
 			}
-			if (zend_tpde_typed_numeric_arithmetic(plan, instruction)) {
+			if (zend_tpde_typed_numeric_binary(plan, instruction)) {
 				auto operand_abi = [&](
 						const zend_tpde_source_value_binding &binding,
 						const zend_mir_source_operand_ref &operand) {
@@ -2448,15 +2468,20 @@ public:
 							instruction.value_operation.op2)) {
 					return false;
 				}
-				const TypedBodyAbiType number{
-					ZEND_MIR_REPRESENTATION_ZVAL,
-					ZEND_MIR_SCALAR_TYPE_NONE,
-					ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL, true,
-					ZEND_TPDE_LOCAL_ABI_TRANSFER_IMMORTAL};
-				instruction_result_types[index] = number;
+				const TypedBodyAbiType result =
+					zend_tpde_numeric_comparison(
+							instruction.value_operation.source_opcode)
+						? TypedBodyAbiType{ZEND_MIR_REPRESENTATION_I1,
+							ZEND_MIR_SCALAR_TYPE_I1,
+							ZEND_TPDE_MACHINE_VALUE_BOOL, true}
+						: TypedBodyAbiType{ZEND_MIR_REPRESENTATION_ZVAL,
+							ZEND_MIR_SCALAR_TYPE_NONE,
+							ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL, true,
+							ZEND_TPDE_LOCAL_ABI_TRANSFER_IMMORTAL};
+				instruction_result_types[index] = result;
 				register_source_ssa[
 					instruction.value_operation.result.ssa_variable_id] =
-						number;
+						result;
 				continue;
 			}
 				if (record.effects != 0 || record.reads != 0
@@ -6348,10 +6373,10 @@ public:
 					& ZEND_TPDE_MACHINE_CONTROL_FLOW_RESULT_ALIAS) != 0) {
 				continue;
 			}
-			/* Proven arithmetic in a typed body: register operands, a boxed
-			 * number result and no slow edge. */
+			/* A proven operation in a typed body: register operands, a boxed
+			 * number or boolean result and no slow edge. */
 			if (function_mode_ == FunctionMode::TypedBody
-					&& zend_tpde_typed_numeric_arithmetic(plan_, instruction)) {
+					&& zend_tpde_typed_numeric_binary(plan_, instruction)) {
 				auto operand = [&](const zend_tpde_source_value_binding &binding,
 						const zend_mir_source_operand_ref &source) {
 					IRValueRef value = source_binding_value_ref(binding);
@@ -6366,12 +6391,21 @@ public:
 				const IRValueRef right = operand(
 					instruction.source_op2_binding,
 					instruction.value_operation.op2);
-				const IRValueRef result = add_derived_value(
-					ZEND_MIR_REPRESENTATION_ZVAL, ZEND_MIR_SCALAR_TYPE_NONE,
-					ZEND_MIR_ID_INVALID, false, 0,
-					ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
-					ZEND_MIR_OWNERSHIP_STATE_OWNED,
-					ZEND_MIR_REFCOUNT_IMMORTAL);
+				const bool comparison = zend_tpde_numeric_comparison(
+					instruction.value_operation.source_opcode);
+				const IRValueRef result = comparison
+					? add_derived_value(
+						ZEND_MIR_REPRESENTATION_I1, ZEND_MIR_SCALAR_TYPE_I1,
+						ZEND_MIR_ID_INVALID, false, 0,
+						ZEND_TPDE_MACHINE_VALUE_BOOL,
+						ZEND_MIR_OWNERSHIP_STATE_OWNED,
+						ZEND_MIR_REFCOUNT_IMMORTAL)
+					: add_derived_value(
+						ZEND_MIR_REPRESENTATION_ZVAL, ZEND_MIR_SCALAR_TYPE_NONE,
+						ZEND_MIR_ID_INVALID, false, 0,
+						ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
+						ZEND_MIR_OWNERSHIP_STATE_OWNED,
+						ZEND_MIR_REFCOUNT_IMMORTAL);
 				if (left == INVALID_VALUE_REF || right == INVALID_VALUE_REF
 						|| result == INVALID_VALUE_REF
 						|| !machine_value_has_register_definition(left)
@@ -6387,14 +6421,6 @@ public:
 					InstKind::MIR, i, UINT32_MAX, result, {},
 					operand_offset, 2, true});
 				active_instruction_results()[i] = result;
-				const int32_t result_index = zend_tpde_value_index(plan_,
-					zend_mir_value_from_original_ssa(
-						instruction.value_operation.result
-							.ssa_variable_id));
-				if (result_index >= 0) {
-					active_value_overrides()[
-						static_cast<uint32_t>(result_index)] = result;
-				}
 				active_source_ssa_overrides()[
 					instruction.value_operation.result.ssa_variable_id] =
 						result;
@@ -8781,13 +8807,56 @@ public:
 								value = transported;
 							}
 						}
+						/* A register or constant scalar is boxed for a zval
+						 * parameter. */
+						uint64_t box_constant_bits;
+						const bool box_scalar =
+							!binding_stayed_canonical
+							&& transport_boxed
+							&& value != INVALID_VALUE_REF
+							&& !guarded_boxed_pointer
+							&& !guarded_boxed_integer
+							&& TypedBodyAbiType{representation(value),
+								exact_type(value), machine_kind(value), true}
+								.boxes_into(transport_abi)
+							&& (constant(value, &box_constant_bits)
+								|| (machine_value_is_register_authoritative(
+										value)
+									&& machine_value_has_register_definition(
+										value)));
+						if (box_scalar) {
+							const IRValueRef boxed = add_derived_value(
+								ZEND_MIR_REPRESENTATION_ZVAL,
+								transport_abi.exact_type, ZEND_MIR_ID_INVALID,
+								false, 0, ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
+								ZEND_MIR_OWNERSHIP_STATE_BORROWED,
+								ZEND_MIR_REFCOUNT_IMMORTAL);
+							if (boxed == INVALID_VALUE_REF) {
+								valid_ = false;
+							} else {
+								const uint32_t box_operand_offset =
+									static_cast<uint32_t>(operands_.size());
+								operands_.push_back(value);
+								add_node(block_instructions,
+									guarded_hot_blocks[i] != UINT32_MAX
+										? guarded_hot_blocks[i]
+										: static_cast<uint32_t>(block),
+									InstNode{InstKind::BoxScalar, i,
+										UINT32_MAX, boxed, {},
+										box_operand_offset, 1, true,
+										ZEND_MIR_ID_INVALID,
+										exact_type(value)});
+								value = boxed;
+							}
+						}
 						if (function_mode_ == FunctionMode::ZendEntry
 								&& (transport_scalar
 									|| transport_pointer
 									|| transport_boxed)
 								&& !matching_register_value
 								&& !guarded_boxed_pointer
-								&& !guarded_boxed_integer) {
+								&& !guarded_boxed_integer
+								&& !box_scalar) {
 							zend_mir_storage_id storage_id =
 								canonical_storage(value);
 							if (!zend_mir_id_is_valid(storage_id)) {
@@ -11072,8 +11141,18 @@ public:
 				&& plan_value.exact_type != ZEND_MIR_SCALAR_TYPE_NULL) {
 			return true;
 		}
-		/* A typed body has no frame: its scalar operations define their
-		 * results in registers. */
+		/* A typed body has no frame: its scalar operations and copies,
+		 * and copies of register zvals, define their results in
+		 * registers. */
+		if (function_mode_ == FunctionMode::TypedBody
+				&& (definition_record.opcode == ZEND_MIR_OPCODE_COPY
+					|| definition_record.opcode
+						== ZEND_MIR_OPCODE_CANONICALIZE)
+				&& plan_value.machine_kind
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+				&& plan_value.register_authoritative) {
+			return true;
+		}
 		if (function_mode_ == FunctionMode::TypedBody
 				&& ((definition_record.opcode
 							>= ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW

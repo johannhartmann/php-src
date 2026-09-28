@@ -1819,6 +1819,18 @@ bool zend_mir_w09_emit_executable_values(
 		zend_mir_opcode opcode = zend_mir_w12_executable_opcode(
 			op_array->opcodes[index].opcode);
 
+		/* Every definition of a temporary, a call result included, replaces
+		 * the identity a reused slot carries. */
+		if (semantic_ssa != NULL
+				&& (op_array->opcodes[index].result_type
+					& (IS_TMP_VAR | IS_VAR)) != 0
+				&& semantic_ssa->ops[index].result_def >= 0
+				&& EX_VAR_TO_NUM(op_array->opcodes[index].result.var)
+					< storage_count) {
+			ssa_by_storage[EX_VAR_TO_NUM(
+				op_array->opcodes[index].result.var)] =
+					(uint32_t) semantic_ssa->ops[index].result_def;
+		}
 		if (expression_throw_tails != NULL
 				&& expression_throw_tails[index]) {
 			continue;

@@ -3842,8 +3842,7 @@ static bool native_mir_test_compile_native_component(
 		uint32_t target_index;
 
 		if (target_count != 0) {
-			bindings = safe_emalloc(
-				target_count, sizeof(*bindings), 0);
+			bindings = ecalloc(target_count, sizeof(*bindings));
 			internal_bindings = safe_emalloc(
 				target_count, sizeof(*internal_bindings), 0);
 			function->internal_call_cells = ecalloc(

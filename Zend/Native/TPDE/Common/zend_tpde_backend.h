@@ -146,6 +146,8 @@ typedef struct _zend_native_call_binding {
 	 * whose arguments in variant_long_mask are exact integers targets it. */
 	uint32_t variant_component_index_plus_one;
 	uint32_t variant_long_mask;
+	/* The variant declares those arguments int|float: numbers suffice. */
+	bool variant_numeric;
 } zend_native_call_binding;
 
 typedef struct _zend_native_internal_call_binding {
@@ -195,6 +197,8 @@ typedef struct _zend_native_component_member {
 	 * when those arguments hold integers. */
 	uint32_t entry_variant_member_plus_one;
 	uint32_t entry_variant_long_mask;
+	/* The variant declares them int|float; the entry checks for numbers. */
+	bool entry_variant_numeric;
 } zend_native_component_member;
 
 zend_result zend_tpde_compile_module(
