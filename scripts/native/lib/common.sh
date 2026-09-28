@@ -128,7 +128,7 @@ native_load_profile() {
 
     unset PROFILE_NAME PROFILE_BUILD_TYPE PROFILE_THREAD_SAFETY PROFILE_SANITIZER
     unset PROFILE_TARGET_ID PROFILE_TARGET_TRIPLE PROFILE_HOST_SYSTEM PROFILE_HOST_ARCH
-    unset PROFILE_CONFIGURE_FLAGS PROFILE_CC PROFILE_CXX
+    unset PROFILE_CONFIGURE_FLAGS PROFILE_CC PROFILE_CXX PROFILE_EXTRA_CFLAGS
     # Profile files are repository-owned declarative shell data.
     # shellcheck source=/dev/null
     source "$profile_file"
@@ -139,6 +139,13 @@ native_load_profile() {
     fi
     if [[ -z ${CXX:-} && -n ${PROFILE_CXX:-} ]]; then
         export CXX=$PROFILE_CXX
+    fi
+
+    # A host whose compiler lacks the sanitizer runtime headers names their
+    # include flags once in NATIVE_SANITIZER_CPPFLAGS.
+    if [[ ${PROFILE_SANITIZER:-none} != none && -n ${NATIVE_SANITIZER_CPPFLAGS:-} \
+            && " ${CPPFLAGS:-} " != *" $NATIVE_SANITIZER_CPPFLAGS "* ]]; then
+        export CPPFLAGS="${CPPFLAGS:+$CPPFLAGS }$NATIVE_SANITIZER_CPPFLAGS"
     fi
 
     [[ ${PROFILE_NAME:-} == "$profile" ]] || native_die "profile name mismatch in $profile_file"
@@ -222,6 +229,21 @@ native_source_fingerprint() {
     } | native_sha256_stream
 }
 
+# The files buildconf and configure read. Source edits outside them are
+# compiled incrementally by make and must not force a reconfigure.
+native_build_system_files() {
+    git -C "$NATIVE_REPO_ROOT" ls-files --cached --others --exclude-standard -- \
+        configure.ac buildconf 'build/*' '*.m4' '*/config*.m4' '*Makefile.frag*' \
+        | LC_ALL=C sort -u
+}
+
+native_build_system_fingerprint() {
+    native_build_system_files | while IFS= read -r file; do
+        [[ -f $NATIVE_REPO_ROOT/$file ]] || continue
+        printf '%s  %s\n' "$(native_sha256_file "$NATIVE_REPO_ROOT/$file")" "$file"
+    done | native_sha256_stream
+}
+
 native_configuration_fingerprint() {
     local cc=$1
     local args=()
@@ -231,6 +253,7 @@ native_configuration_fingerprint() {
     done
     "$NATIVE_HELPER" fingerprint \
         --repo "$NATIVE_REPO_ROOT" \
+        --build-system "$(native_build_system_fingerprint)" \
         --profile-file "$NATIVE_PROFILE_FILE" \
         --compiler "$cc" \
         --env-cc "${CC:-}" \
@@ -282,6 +305,15 @@ native_release_lock() {
     rm -f -- "$NATIVE_LOCK_CONTROL_DIR/input" "$NATIVE_LOCK_CONTROL_DIR/output"
     rmdir -- "$NATIVE_LOCK_CONTROL_DIR"
     unset NATIVE_LOCK_PID NATIVE_LOCK_INPUT_FD NATIVE_LOCK_CONTROL_DIR
+}
+
+# Optimization flags appended after configure's own flags (a debug build
+# forces -O0). PHP's Makefile reads EXTRA_CFLAGS/EXTRA_CXXFLAGS from the
+# environment; a caller's own values are kept in front.
+native_export_build_flags() {
+    [[ -n ${PROFILE_EXTRA_CFLAGS:-} ]] || return 0
+    export EXTRA_CFLAGS="${EXTRA_CFLAGS:+$EXTRA_CFLAGS }$PROFILE_EXTRA_CFLAGS"
+    export EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:+$EXTRA_CXXFLAGS }$PROFILE_EXTRA_CFLAGS"
 }
 
 native_print_command() {

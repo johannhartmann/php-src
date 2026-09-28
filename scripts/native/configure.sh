@@ -64,6 +64,7 @@ native_require_tool "$compiler"
 native_prepare_profile_paths "$profile"
 native_configure_args
 source_fingerprint=$(native_source_fingerprint)
+build_system_fingerprint=$(native_build_system_fingerprint)
 
 native_acquire_lock "$NATIVE_WORKTREE_ROOT/.buildconf.lock"
 buildconf_stamp="$NATIVE_WORKTREE_ROOT/buildconf-source.sha256"
@@ -71,7 +72,7 @@ recorded_buildconf_fingerprint=
 if [[ -f $buildconf_stamp ]]; then
     recorded_buildconf_fingerprint=$(<"$buildconf_stamp")
 fi
-if [[ ! -x $NATIVE_REPO_ROOT/configure || $recorded_buildconf_fingerprint != "$source_fingerprint" ]]; then
+if [[ ! -x $NATIVE_REPO_ROOT/configure || $recorded_buildconf_fingerprint != "$build_system_fingerprint" ]]; then
     buildconf_log="$NATIVE_WORKTREE_ROOT/buildconf.log"
     printf 'Generating configure from %s\n' "$NATIVE_REPO_ROOT/configure.ac"
     set +e
@@ -79,7 +80,7 @@ if [[ ! -x $NATIVE_REPO_ROOT/configure || $recorded_buildconf_fingerprint != "$s
     buildconf_status=${PIPESTATUS[0]}
     set -e
     ((buildconf_status == 0)) || native_die "buildconf failed; see $buildconf_log"
-    printf '%s\n' "$source_fingerprint" >"$buildconf_stamp"
+    printf '%s\n' "$build_system_fingerprint" >"$buildconf_stamp"
 fi
 native_release_lock
 

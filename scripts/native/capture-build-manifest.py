@@ -76,33 +76,9 @@ def command_fingerprint(args: argparse.Namespace) -> str:
     def add(label: str, value: bytes) -> None:
         digest.update(label.encode("utf-8") + b"\0" + value + b"\0")
 
-    add("commit", run(["git", "rev-parse", "HEAD"], repo).encode())
-    add(
-        "status",
-        subprocess.run(
-            ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
-            cwd=str(repo),
-            check=True,
-            stdout=subprocess.PIPE,
-        ).stdout,
-    )
-    add(
-        "tracked-diff",
-        subprocess.run(
-            ["git", "diff", "--binary", "HEAD"],
-            cwd=str(repo),
-            check=True,
-            stdout=subprocess.PIPE,
-        ).stdout,
-    )
-    untracked = run(
-        ["git", "ls-files", "--others", "--exclude-standard"], repo
-    ).splitlines()
-    for relative in sorted(untracked):
-        path = repo / relative
-        add("untracked-name", relative.encode())
-        if path.is_file():
-            add("untracked-content", path.read_bytes())
+    # Only the inputs of buildconf and configure: make compiles every other
+    # source edit incrementally in the reused build directory.
+    add("build-system", args.build_system.encode())
     add("profile", profile_file.read_bytes())
     add("compiler", args.compiler.encode())
     add("compiler-version", first_line([args.compiler, "--version"]).encode())
@@ -280,6 +256,7 @@ def parser() -> argparse.ArgumentParser:
     fingerprint = commands.add_parser("fingerprint")
     fingerprint.add_argument("--repo", required=True)
     fingerprint.add_argument("--profile-file", required=True)
+    fingerprint.add_argument("--build-system", required=True)
     fingerprint.add_argument("--compiler", required=True)
     fingerprint.add_argument("--env-cc", default="")
     fingerprint.add_argument("--env-cflags", default="")

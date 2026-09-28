@@ -36,7 +36,18 @@ See `docs/native-engine/test-command-contract.md` for exit semantics.
 - Build in parallel. `build.sh` defaults to all cores; do not pass `--jobs 1`
   or `make -j1`. A clean native build takes seconds on a large host, and
   configure is the slow step, so reuse a configured profile instead of
-  passing `--force`.
+  passing `--force`. `build.sh` reconfigures only when build-system inputs
+  (`configure.ac`, `*.m4`, `config*.m4`, `Makefile.frag*`), the profile or
+  the toolchain change; source edits rebuild incrementally.
+- Test in tiers with `scripts/native/test-phpt.sh`: `--tier quick` (native
+  PHPTs plus given paths, seconds) after every change, `--tier commit` (full
+  debug suites) before a commit, `--tier full` (commit plus ASan and UBSan
+  in parallel) before a push. It builds incrementally, reports tests slower
+  than `--show-slow` ms, and lists failures missing from a `--baseline`.
+- The linux debug profiles compile at `-Og` and the sanitizer profiles at
+  `-O1` (`PROFILE_EXTRA_CFLAGS`); assertions and MIR verification stay on.
+  Hosts whose clang lacks the sanitizer headers set
+  `NATIVE_SANITIZER_CPPFLAGS`.
 - The linux-amd64 profiles build with clang (`PROFILE_CC`). GCC cannot
   compile the TPDE x64 templates; do not override `CC` with it.
 - The native CLI cannot yet run `run-tests.php` itself. Run PHPTs with a

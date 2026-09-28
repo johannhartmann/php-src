@@ -81,11 +81,14 @@ also have disjoint directories. `buildconf` writes only Git-ignored generated
 files in the assigned source worktree and is serialized per worktree; all
 compiled objects, logs, manifests, and test artifacts remain external.
 
-Configure is reused only when its fingerprint matches the repository commit,
-tracked/untracked source state, profile, configure arguments, compiler version,
-and relevant flag environment. A mismatch resets only that validated external
-profile build directory and reconfigures it. Re-running a compatible build is
-idempotent and lets Make rebuild only what changed.
+Configure is reused only when its fingerprint matches the build-system inputs
+(`configure.ac`, `buildconf`, `build/`, `*.m4`, `config*.m4` and
+`Makefile.frag*`), profile, configure arguments, compiler version, and
+relevant flag environment. Other source edits do not reconfigure: Make
+rebuilds only what changed. A mismatch resets only that validated external
+profile build directory and reconfigures it. A profile's
+`PROFILE_EXTRA_CFLAGS` are passed to Make as `EXTRA_CFLAGS`/`EXTRA_CXXFLAGS`
+after configure's own flags; a change of those flags cleans the objects once.
 
 ## Smoke and sanitizer behavior
 
