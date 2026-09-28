@@ -41,8 +41,11 @@ remain the boxed form of any operation the tier does not type.
    Values that must stay authoritative in their canonical frame slot are
    those bound to references, aliases, globals or statics, CVs visible to
    dynamic variable access or include, CVs live into catch or finally, and
-   values live across a generator suspension. No speculation, no guards,
-   no deoptimization.
+   values live across a generator suspension. No redundant guards for
+   proven facts. A bounded entry specialization may check the types of
+   unknown inputs once, before a specialized body or loop runs; other
+   inputs take the general native form. There is no deoptimization and no
+   VM fallback.
 2. **Per-opline typing.** Each opline is lowered by a rule selected by its
    operand classes. When no rule applies, only that opline becomes a boxed
    W09 operation, with explicit box and unbox at its boundary. The tier
@@ -55,7 +58,10 @@ remain the boxed form of any operation the tier does not type.
    pointer representations with ownership, and typed array and string
    operations with a slow edge. A verifier covers them over the whole CFG.
 4. **Backend.** Operations that cannot fail emit no guarded diamond. Slow
-   edges are out-of-line blocks that do not merge back into the hot path.
+   edges are out-of-line blocks. A slow edge that completes an operation
+   normally may rejoin the hot path at a merge that keeps the typed
+   representations of live values; only an observation boundary forces
+   materialization into Zend slots.
    Typed helpers take native arguments (`zend_long`, `double`,
    `zend_string *`, `HashTable *`) instead of encoded operands.
 5. **Target gating.** The tier runs only for Linux x64 (`linux_inline_forms`).
@@ -78,6 +84,13 @@ regressions:
    frame for helpers, exceptions and backtraces.
 6. Removal of the W11 scalar overlay and of per-operation inline forms the
    tier covers.
+
+## Amendments
+
+2026-09-28 (`concept.md`): entry specialization for unknown input types and
+slow edges that rejoin at typed merges, replacing "no guards" and "slow edges
+do not merge back". The work order after phase 1 follows `concept.md`
+section 4 rather than the phase list.
 
 ## Consequences
 
