@@ -554,6 +554,15 @@ zend_native_status zend_native_frame_observer_begin(
 	zend_native_direct_activation *activation);
 zend_native_status zend_native_frame_observer_end(
 	zend_native_direct_activation *activation, zend_native_status status);
+/*
+ * A frameless internal call whose operands the compiler resolved to frame
+ * offsets (ZEND_NATIVE_FRAMELESS_DIRECT_*). The encoded first operand is
+ * passed as in the general form and ignored.
+ */
+zend_native_status zend_native_call_frameless_direct(
+	zend_execute_data *execute_data, uint64_t encoded_op1,
+	uint64_t descriptor, uint64_t slots, uint64_t more_slots);
+
 zend_native_status zend_native_call_frameless_internal(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result, uint64_t auxiliary,

@@ -214,8 +214,26 @@ typedef enum _zend_native_runtime_helper_id {
 	ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL_SET_INTEGER_ARGUMENT = 182,
 	ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL_SET_DOUBLE_ARGUMENT = 183,
 	ZEND_NATIVE_HELPER_PREPARE_FINALLY_EXCEPTION = 184,
-	ZEND_NATIVE_HELPER_COUNT = 185
+	ZEND_NATIVE_HELPER_CALL_FRAMELESS_DIRECT = 185,
+	ZEND_NATIVE_HELPER_VALUE_CONCAT_ASSIGN_DIRECT = 186,
+	ZEND_NATIVE_HELPER_COUNT = 187
 } zend_native_runtime_helper_id;
+
+/*
+ * zend_native_call_frameless_direct() descriptor: handler index (bits 0-15),
+ * argument count (16-17), CV arguments (18-20), temporary arguments (21-23),
+ * literal arguments (24-26) and source position (32-63). Its slot words hold
+ * the result offset and the first argument offset, then the second and third
+ * argument offsets; a literal argument's offset indexes the literal table.
+ */
+#define ZEND_NATIVE_FRAMELESS_DIRECT_CV_SHIFT 18
+#define ZEND_NATIVE_FRAMELESS_DIRECT_TMP_SHIFT 21
+#define ZEND_NATIVE_FRAMELESS_DIRECT_CONST_SHIFT 24
+
+/* zend_native_value_concat_assign_direct() value kinds. */
+#define ZEND_NATIVE_CONCAT_DIRECT_CONST 0
+#define ZEND_NATIVE_CONCAT_DIRECT_CV 1
+#define ZEND_NATIVE_CONCAT_DIRECT_TMP 2
 
 #define ZEND_NATIVE_RUNTIME_HELPER_WORD_COUNT \
 	((ZEND_NATIVE_HELPER_COUNT + 63u) / 64u)

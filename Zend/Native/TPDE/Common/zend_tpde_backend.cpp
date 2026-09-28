@@ -7416,6 +7416,14 @@ bool initialize_plan(
 				require_runtime_helper(plan, helper);
 				continue;
 			}
+			zend_tpde_concat_assign_direct concat_assign_direct{};
+			if (record.opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN_OP
+					&& plan->linux_inline_forms
+					&& zend_tpde_concat_assign_direct_at(
+						plan->instructions[i], &concat_assign_direct)) {
+				require_runtime_helper(
+					plan, ZEND_NATIVE_HELPER_VALUE_CONCAT_ASSIGN_DIRECT);
+			}
 			if (record.opcode == ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL) {
 				const zend_mir_executable_value_ref &operation =
 					plan->instructions[i].value_operation;
@@ -7427,6 +7435,13 @@ bool initialize_plan(
 						ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 						"frameless internal call lacks explicit operands");
 					return false;
+				}
+				zend_tpde_frameless_direct frameless_direct{};
+				if (plan->linux_inline_forms
+						&& zend_tpde_frameless_direct_at(
+							plan->instructions[i], 0, &frameless_direct)) {
+					require_runtime_helper(
+						plan, ZEND_NATIVE_HELPER_CALL_FRAMELESS_DIRECT);
 				}
 				const uint32_t argument_count =
 					operation.source_opcode - ZEND_FRAMELESS_ICALL_0;

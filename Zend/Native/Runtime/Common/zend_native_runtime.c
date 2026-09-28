@@ -899,6 +899,15 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_PREPARE_FINALLY_EXCEPTION,
 		ZEND_NATIVE_EFFECT_CALL,
 		(const void *) zend_native_prepare_finally_exception},
+	{ZEND_NATIVE_HELPER_CALL_FRAMELESS_DIRECT,
+		ZEND_NATIVE_EFFECT_CALL,
+		(const void *) zend_native_call_frameless_direct},
+	{ZEND_NATIVE_HELPER_VALUE_CONCAT_ASSIGN_DIRECT,
+		ZEND_NATIVE_EFFECT_FRAME_WRITE | ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
+			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_EFFECT_MAY_FAIL
+			| ZEND_NATIVE_EFFECT_MAY_REENTER,
+		(const void *) zend_native_value_concat_assign_direct},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {

@@ -186,6 +186,15 @@ profiles (`zend_native_call_frameless_internal`,
 `zend_native_value_init_explicit_operation`); `concat_function` and
 `_erealloc` stay.
 
+**Result (2026-09-28).** Two helpers take operand offsets precomputed by the
+compiler instead of encoded operands: `zend_native_call_frameless_direct()`
+(literal, CV and temporary arguments; observers, undefined CVs and references
+as before) and `zend_native_value_concat_assign_direct()`, which builds the
+operation record from offsets and calls `concat_function` without
+`get_binary_op`. A call with the handler bound directly in native code needs
+image relocations for Zend's handler table and stays open. hash1 2.39 ->
+2.05, strcat 2.60 -> 2.05.
+
 ### Package 4: entry specialization and typed calls
 
 Needs the ADR amendment in section 3. Three separate problems:
