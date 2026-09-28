@@ -4052,30 +4052,14 @@ fetch_dim_error:
  * element. The element is copied, then a temporary key is released. Missing
  * keys, other containers and keys, and VAR results take the general path.
  */
-static zend_always_inline bool zend_native_value_fetch_dim_r_fast(
-	zend_execute_data *execute_data,
-	uint64_t op1, uint64_t op2, uint64_t result, zend_native_status *status)
+static zend_always_inline bool zend_native_value_fetch_dim_r_read(
+	zval *container, zval *offset, bool offset_tmp, zval *target,
+	zend_native_status *status)
 {
-	zval *container;
-	zval *offset;
-	zval *target;
 	zval *element;
 	zval copy;
 	zend_ulong index;
-	bool container_tmp;
-	bool offset_tmp;
-	bool target_tmp;
 
-	if ((container = zend_native_value_fast_operand(
-				execute_data, op1, &container_tmp)) == NULL
-			|| container_tmp
-			|| (offset = zend_native_value_fast_operand(
-				execute_data, op2, &offset_tmp)) == NULL
-			|| (target = zend_native_value_fast_operand(
-				execute_data, result, &target_tmp)) == NULL
-			|| !target_tmp) {
-		return false;
-	}
 	ZVAL_DEREF(container);
 	if (Z_TYPE_P(container) != IS_ARRAY) {
 		return false;
@@ -4112,6 +4096,63 @@ static zend_always_inline bool zend_native_value_fetch_dim_r_fast(
 	ZVAL_COPY_VALUE(target, &copy);
 	*status = ZEND_NATIVE_RETURNED;
 	return true;
+}
+
+static zend_always_inline bool zend_native_value_fetch_dim_r_fast(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result, zend_native_status *status)
+{
+	zval *container;
+	zval *offset;
+	zval *target;
+	bool container_tmp;
+	bool offset_tmp;
+	bool target_tmp;
+
+	if ((container = zend_native_value_fast_operand(
+				execute_data, op1, &container_tmp)) == NULL
+			|| container_tmp
+			|| (offset = zend_native_value_fast_operand(
+				execute_data, op2, &offset_tmp)) == NULL
+			|| (target = zend_native_value_fast_operand(
+				execute_data, result, &target_tmp)) == NULL
+			|| !target_tmp) {
+		return false;
+	}
+	return zend_native_value_fetch_dim_r_read(
+		container, offset, offset_tmp, target, status);
+}
+
+static uint64_t zend_native_value_direct_encoding(
+	const zend_execute_data *execute_data, uint32_t kind, uint32_t offset);
+
+zend_native_status zend_native_value_fetch_dim_r_direct(
+	zend_execute_data *execute_data, uint64_t encoded_op1,
+	uint64_t descriptor, uint64_t slots, uint64_t more_slots)
+{
+	const uint32_t key_kind = (uint32_t) (descriptor & 3);
+	const uint32_t key_offset = (uint32_t) (slots >> 32);
+	const uint32_t result_offset = (uint32_t) (more_slots >> 32);
+	zend_native_status status;
+
+	(void) encoded_op1;
+	if (zend_native_value_fetch_dim_r_read(
+			(zval *) ((char *) execute_data + (uint32_t) slots),
+			key_kind == ZEND_NATIVE_DIM_DIRECT_CONST
+				? &execute_data->func->op_array.literals[key_offset]
+				: (zval *) ((char *) execute_data + key_offset),
+			key_kind == ZEND_NATIVE_DIM_DIRECT_TMP,
+			(zval *) ((char *) execute_data + result_offset), &status)) {
+		return status;
+	}
+	return zend_native_value_fetch_dim_impl(execute_data,
+		zend_native_value_direct_encoding(execute_data,
+			ZEND_NATIVE_DIM_DIRECT_CV, (uint32_t) slots),
+		zend_native_value_direct_encoding(execute_data, key_kind, key_offset),
+		zend_native_value_direct_encoding(execute_data,
+			ZEND_NATIVE_DIM_DIRECT_TMP, result_offset),
+		(uint32_t) ((descriptor >> 8) & 0xffff), ZEND_FETCH_DIM_R,
+		(uint32_t) (descriptor >> 32), ZEND_FETCH_DIM_R, ZEND_NATIVE_DIM_R);
 }
 
 zend_native_status zend_native_value_fetch_dim_r(
@@ -4718,39 +4759,20 @@ assign_dim_error:
  * no diagnostics, conversions or user code can run before the store, so
  * write the element directly. Everything else takes the general path.
  */
-static zend_always_inline bool zend_native_value_assign_dim_fast(
-	zend_execute_data *execute_data,
-	uint64_t op1, uint64_t op2, uint64_t result, uint64_t auxiliary,
+static zend_always_inline bool zend_native_value_assign_dim_store(
+	zend_execute_data *execute_data, zval *container,
+	zval *offset, bool offset_tmp, zval *value, bool value_tmp,
 	uint32_t source_position_id, zend_native_status *status)
 {
-	zval *container;
-	zval *offset = NULL;
-	zval *value;
 	zval *element;
 	zval garbage;
 	HashTable *table;
-	bool container_tmp;
-	bool offset_tmp;
-	bool value_tmp;
 
-	if ((result & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_UNUSED
-			|| (container = zend_native_value_fast_operand(
-				execute_data, op1, &container_tmp)) == NULL
-			|| container_tmp
-			|| (value = zend_native_value_fast_operand(
-				execute_data, auxiliary, &value_tmp)) == NULL) {
-		return false;
-	}
 	ZVAL_DEREF(container);
 	if (Z_TYPE_P(container) != IS_ARRAY) {
 		return false;
 	}
-	if ((op2 & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_UNUSED) {
-		offset = zend_native_value_fast_operand(
-			execute_data, op2, &offset_tmp);
-		if (offset == NULL) {
-			return false;
-		}
+	if (offset != NULL) {
 		if (!offset_tmp) {
 			ZVAL_DEREF(offset);
 		}
@@ -4818,6 +4840,101 @@ static zend_always_inline bool zend_native_value_assign_dim_fast(
 	}
 	*status = ZEND_NATIVE_RETURNED;
 	return true;
+}
+
+static zend_always_inline bool zend_native_value_assign_dim_fast(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result, uint64_t auxiliary,
+	uint32_t source_position_id, zend_native_status *status)
+{
+	zval *container;
+	zval *offset = NULL;
+	zval *value;
+	bool container_tmp;
+	bool offset_tmp = false;
+	bool value_tmp;
+
+	if ((result & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_UNUSED
+			|| (container = zend_native_value_fast_operand(
+				execute_data, op1, &container_tmp)) == NULL
+			|| container_tmp
+			|| (value = zend_native_value_fast_operand(
+				execute_data, auxiliary, &value_tmp)) == NULL
+			|| ((op2 & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_UNUSED
+				&& (offset = zend_native_value_fast_operand(
+					execute_data, op2, &offset_tmp)) == NULL)) {
+		return false;
+	}
+	return zend_native_value_assign_dim_store(execute_data, container,
+		offset, offset_tmp, value, value_tmp, source_position_id, status);
+}
+
+/* A direct-form operand: its slot or literal, and its encoding for the
+ * general path. */
+static zend_always_inline zval *zend_native_value_direct_operand(
+	zend_execute_data *execute_data, uint32_t kind, uint32_t offset)
+{
+	return kind == ZEND_NATIVE_DIM_DIRECT_CONST
+		? &execute_data->func->op_array.literals[offset]
+		: kind == ZEND_NATIVE_DIM_DIRECT_UNUSED
+			? NULL
+			: (zval *) ((char *) execute_data + offset);
+}
+
+static uint64_t zend_native_value_direct_encoding(
+	const zend_execute_data *execute_data, uint32_t kind, uint32_t offset)
+{
+	const uint32_t slot = offset / sizeof(zval) - ZEND_CALL_FRAME_SLOT;
+
+	switch (kind) {
+		case ZEND_NATIVE_DIM_DIRECT_CONST:
+			return ZEND_MIR_SOURCE_OPERAND_LITERAL | ((uint64_t) offset << 16);
+		case ZEND_NATIVE_DIM_DIRECT_CV:
+			return ZEND_MIR_SOURCE_OPERAND_SLOT
+				| (ZEND_MIR_SOURCE_SLOT_CV << 8) | ((uint64_t) slot << 16);
+		case ZEND_NATIVE_DIM_DIRECT_TMP:
+			return ZEND_MIR_SOURCE_OPERAND_SLOT
+				| (ZEND_MIR_SOURCE_SLOT_TMP << 8)
+				| ((uint64_t) (slot
+					- (uint32_t) execute_data->func->op_array.last_var) << 16);
+		default:
+			return ZEND_MIR_SOURCE_OPERAND_UNUSED
+				| ((uint64_t) ZEND_MIR_ID_INVALID << 16);
+	}
+}
+
+zend_native_status zend_native_value_assign_dim_direct(
+	zend_execute_data *execute_data, uint64_t encoded_op1,
+	uint64_t descriptor, uint64_t slots, uint64_t more_slots)
+{
+	const uint32_t key_kind = (uint32_t) (descriptor & 3);
+	const uint32_t value_kind = (uint32_t) ((descriptor >> 2) & 3);
+	const uint32_t source_position_id = (uint32_t) (descriptor >> 32);
+	zend_native_status status;
+
+	(void) encoded_op1;
+	if (zend_native_value_assign_dim_store(execute_data,
+			(zval *) ((char *) execute_data + (uint32_t) slots),
+			zend_native_value_direct_operand(
+				execute_data, key_kind, (uint32_t) (slots >> 32)),
+			key_kind == ZEND_NATIVE_DIM_DIRECT_TMP,
+			zend_native_value_direct_operand(
+				execute_data, value_kind, (uint32_t) more_slots),
+			value_kind == ZEND_NATIVE_DIM_DIRECT_TMP,
+			source_position_id, &status)) {
+		return status;
+	}
+	return zend_native_value_assign_dim_impl(execute_data,
+		zend_native_value_direct_encoding(execute_data,
+			ZEND_NATIVE_DIM_DIRECT_CV, (uint32_t) slots),
+		zend_native_value_direct_encoding(execute_data,
+			key_kind, (uint32_t) (slots >> 32)),
+		zend_native_value_direct_encoding(execute_data,
+			ZEND_NATIVE_DIM_DIRECT_UNUSED, 0),
+		zend_native_value_direct_encoding(execute_data,
+			value_kind, (uint32_t) more_slots),
+		(uint32_t) ((descriptor >> 8) & 0xffff), ZEND_ASSIGN_DIM,
+		source_position_id, false);
 }
 
 zend_native_status zend_native_value_assign_dim(

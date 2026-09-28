@@ -217,7 +217,9 @@ typedef enum _zend_native_runtime_helper_id {
 	ZEND_NATIVE_HELPER_CALL_FRAMELESS_DIRECT = 185,
 	ZEND_NATIVE_HELPER_VALUE_CONCAT_ASSIGN_DIRECT = 186,
 	ZEND_NATIVE_HELPER_CALL_FRAMELESS_1 = 187,
-	ZEND_NATIVE_HELPER_COUNT = 188
+	ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R_DIRECT = 188,
+	ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_DIRECT = 189,
+	ZEND_NATIVE_HELPER_COUNT = 190
 } zend_native_runtime_helper_id;
 
 /*
@@ -230,6 +232,18 @@ typedef enum _zend_native_runtime_helper_id {
 #define ZEND_NATIVE_FRAMELESS_DIRECT_CV_SHIFT 18
 #define ZEND_NATIVE_FRAMELESS_DIRECT_TMP_SHIFT 21
 #define ZEND_NATIVE_FRAMELESS_DIRECT_CONST_SHIFT 24
+
+/*
+ * zend_native_value_fetch_dim_r_direct() and _assign_dim_direct()
+ * descriptor: key kind (bits 0-1), value kind (2-3), extended value (8-23)
+ * and source position (32-63). Their slot words hold the container (a CV)
+ * and key offsets, then the value and result offsets; a literal's offset
+ * indexes the literal table.
+ */
+#define ZEND_NATIVE_DIM_DIRECT_UNUSED 0
+#define ZEND_NATIVE_DIM_DIRECT_CONST 1
+#define ZEND_NATIVE_DIM_DIRECT_CV 2
+#define ZEND_NATIVE_DIM_DIRECT_TMP 3
 
 /* zend_native_value_concat_assign_direct() value kinds. */
 #define ZEND_NATIVE_CONCAT_DIRECT_CONST 0

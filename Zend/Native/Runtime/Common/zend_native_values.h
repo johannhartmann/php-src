@@ -184,6 +184,12 @@ ZEND_NATIVE_EXPLICIT_VALUE_HELPER(zend_native_value_fetch_dim_unset)
 		uint32_t source_position_id);
 
 ZEND_NATIVE_EXPLICIT_DIM_ASSIGN_HELPER(zend_native_value_assign_dim)
+zend_native_status zend_native_value_fetch_dim_r_direct(
+	zend_execute_data *execute_data, uint64_t encoded_op1,
+	uint64_t descriptor, uint64_t slots, uint64_t more_slots);
+zend_native_status zend_native_value_assign_dim_direct(
+	zend_execute_data *execute_data, uint64_t encoded_op1,
+	uint64_t descriptor, uint64_t slots, uint64_t more_slots);
 ZEND_NATIVE_EXPLICIT_DIM_ASSIGN_HELPER(zend_native_value_assign_dim_op)
 
 #undef ZEND_NATIVE_EXPLICIT_DIM_ASSIGN_HELPER

@@ -911,6 +911,12 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_CALL_FRAMELESS_1,
 		ZEND_NATIVE_EFFECT_CALL,
 		(const void *) zend_native_call_frameless_1},
+	{ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R_DIRECT,
+		ZEND_NATIVE_EFFECT_ARRAY_SLOW_READ,
+		(const void *) zend_native_value_fetch_dim_r_direct},
+	{ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_DIRECT,
+		ZEND_NATIVE_EFFECT_ARRAY_SLOW_WRITE,
+		(const void *) zend_native_value_assign_dim_direct},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
