@@ -71,12 +71,21 @@ fi
 
 native_acquire_lock "$NATIVE_PROFILE_ROOT/.build.lock"
 build_log="$NATIVE_LOG_DIR/build.log"
+native_export_build_flags
+# make does not track flags: rebuild every object once when they change.
+flags_stamp="$NATIVE_BUILD_DIR/.native-extra-flags"
+build_flags="${EXTRA_CFLAGS:-}|${EXTRA_CXXFLAGS:-}"
+if [[ ! -f $flags_stamp || $(<"$flags_stamp") != "$build_flags" ]]; then
+    printf 'Build flags changed to %q; cleaning %s\n' "$build_flags" "$profile"
+    make -C "$NATIVE_BUILD_DIR" clean >/dev/null
+fi
 printf 'Building profile %s with %s job(s)\n' "$profile" "$jobs"
 set +e
 make -C "$NATIVE_BUILD_DIR" -j"$jobs" 2>&1 | tee "$build_log"
 build_status=${PIPESTATUS[0]}
 set -e
 ((build_status == 0)) || native_die "build failed for $profile; see $build_log"
+printf '%s' "$build_flags" >"$flags_stamp"
 [[ -x $NATIVE_BINARY_PATH ]] || native_die "build succeeded but PHP binary is missing: $NATIVE_BINARY_PATH"
 
 runtime_state=$(
