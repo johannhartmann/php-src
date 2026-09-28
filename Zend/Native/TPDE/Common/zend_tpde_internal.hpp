@@ -562,6 +562,11 @@ struct zend_tpde_instruction {
 	uint32_t numeric_variant_plus_one;
 	uint32_t numeric_variant_general;
 	uint32_t numeric_variant_mask;
+	/* A numeric comparison whose only consumer is the JMPZ/JMPNZ right
+	 * after it: in a Zend entry the branch evaluates it and jumps to its
+	 * targets directly (1 + the comparison's index on the branch). */
+	bool fused_into_branch;
+	uint32_t fused_compare_plus_one;
 	/* A Zend-entry typed call whose body may fail: a failed call takes the
 	 * canonical cold call instead. */
 	bool typed_call_may_fail;
