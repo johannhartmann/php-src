@@ -250,10 +250,28 @@ fixpoint, its callers keep their Zend entries. Typed `Ack(int, int): int`
 still gets no typed body: `$n + 1` may overflow into a `TypeError` against the
 `int` return type, so the body is not effect-free.
 
-**Open:** integer operations with an overflow edge to double and exception
-propagation through the typed-call ABI (ADR 0024 item 3). They decide the
-remaining call kernels (ackermann 1.49, fibo 1.14) and need a new MIR
-operation class with an exceptional successor in typed bodies.
+**Result, part 3 (2026-09-28): numbers in typed bodies.** Addition,
+subtraction, multiplication and comparisons whose operands are proven longs
+or doubles cannot fail. The proof comes from type inference (a new
+`long|double` operand fact) or from the component: a member returns a number
+when each of its returns yields one, where results of calls to such members
+count as numbers (an optimistic fixpoint, sound by induction on the call
+depth). Such operations recompute an overflowing integer result in double
+precision inline and test no other type; in Zend entries the cold edge
+becomes dead, in typed bodies they have no slow edge and produce a boxed
+number in registers. Typed bodies also box scalars returned through an
+untyped result, drop self-identical scalar stores into frame carriers, and
+take register results of scalar operations as call arguments. Every typed
+body candidate with direct calls now gets the call-freeze dry run (callees
+such as `#[NoDiscard]` functions keep phased calls). fibo 1.14 -> 0.12 (the
+recursive edge is a typed component call); other kernels keep their
+instruction counts.
+
+**Open:** ackermann (1.49): its recursive arguments `$m - 1` may overflow, so
+they are numbers rather than integers and do not reach the integer variant.
+This needs a variant over number parameters, typed number comparisons with a
+register boolean, and a number entry check. Exception propagation through the
+typed-call ABI is still missing.
 
 ## 5. Rules for every package
 
