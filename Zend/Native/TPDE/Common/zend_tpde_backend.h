@@ -142,6 +142,10 @@ typedef struct _zend_native_call_binding {
 	uint32_t component_target_index;
 	bool direct_native;
 	bool leaf_scalar_frame;
+	/* 1 + the component index of the target's integer variant, or 0; a call
+	 * whose arguments in variant_long_mask are exact integers targets it. */
+	uint32_t variant_component_index_plus_one;
+	uint32_t variant_long_mask;
 } zend_native_call_binding;
 
 typedef struct _zend_native_internal_call_binding {
@@ -186,6 +190,11 @@ typedef struct _zend_native_component_member {
 	uint32_t frame_argument_count;
 	const struct _zend_op_array *source_op_array;
 	const struct _zend_ssa *source_ssa;
+	/* Entry specialization: 1 + the member compiled with the parameters in
+	 * entry_variant_long_mask declared int, or 0. The Zend entry jumps to it
+	 * when those arguments hold integers. */
+	uint32_t entry_variant_member_plus_one;
+	uint32_t entry_variant_long_mask;
 } zend_native_component_member;
 
 zend_result zend_tpde_compile_module(

@@ -346,7 +346,7 @@ public:
 	 * typed body can be a leaf even when its Zend entry uses helpers.
 	 */
 	bool cur_func_may_emit_calls() const {
-		return adaptor->cur_func_may_emit_calls();
+		return adaptor->cur_func_may_emit_calls() || has_entry_variant();
 	}
 	tpde::SymRef cur_personality_func() const { return {}; }
 	bool try_force_fixed_assignment(IRValueRef value) const {
@@ -412,6 +412,59 @@ public:
 			(uint64_t{1} << tpde::x64::AsmReg::XMM0)
 			| (uint64_t{1} << tpde::x64::AsmReg::XMM1);
 		Base::start_func(index);
+		entry_variant_dispatch_pending_ = has_entry_variant();
+	}
+	/*
+	 * Entry specialization: before the first instruction of a Zend entry
+	 * whose member has an integer variant, call the variant on the same frame
+	 * when every checked argument slot holds an integer and return its
+	 * status. The variant runs the whole body; the general entry continues
+	 * only for other argument types.
+	 */
+	bool entry_variant_dispatch_pending_ = false;
+	bool has_entry_variant() const {
+		const zend_tpde_plan *plan = adaptor->plan();
+		return !adaptor->typed_body() && plan != nullptr
+			&& plan->entry_variant_member_plus_one != 0
+			&& plan->entry_variant_long_mask != 0;
+	}
+	bool emit_entry_variant_dispatch() {
+		const zend_tpde_plan *plan = adaptor->plan();
+		if (plan->entry_variant_member_plus_one - 1
+				>= this->func_syms.size()) {
+			return false;
+		}
+		/* Before the first instruction only the prologue has run: RDI and
+		 * RSI still hold the entry's frame and execution context. */
+		auto general = text_writer.label_create();
+		for (uint32_t argument = 0; argument < 32; ++argument) {
+			if (((plan->entry_variant_long_mask >> argument) & 1) == 0) {
+				continue;
+			}
+			const int32_t type_offset = static_cast<int32_t>(
+				(ZEND_CALL_FRAME_SLOT + argument) * sizeof(zval)
+				+ offsetof(zval, u1.type_info));
+			ASM(CMP8mi, FE_MEM(FE_DI, 0, FE_NOREG, type_offset), IS_LONG);
+			generate_raw_jump(Jump::jne, general);
+		}
+		/* A terminal cold path: the raw call leaves the allocator state of
+		 * the general continuation untouched. */
+		text_writer.ensure_space(16);
+		ASM(CALL, text_writer.cur_ptr() + 5);
+		reloc_text(this->func_syms[plan->entry_variant_member_plus_one - 1],
+			tpde::elf::R_X86_64_PLT32, text_writer.offset() - 4, -4);
+		if (register_file.is_used(tpde::x64::AsmReg{tpde::x64::AsmReg::AX})) {
+			return false;
+		}
+		ScratchReg status_scratch{this};
+		status_scratch.alloc_specific(tpde::x64::AsmReg{tpde::x64::AsmReg::AX});
+		ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
+		status.set_value(this, std::move(status_scratch));
+		RetBuilder return_builder{*this, *cur_cc_assigner()};
+		return_builder.add(std::move(status), tpde::CCAssignment{});
+		return_builder.ret_local_path();
+		label_place(general);
+		return true;
 	}
 	void finish_func(uint32_t index) {
 		if (catch_dispatch_label_.has_value()) {
@@ -17273,6 +17326,12 @@ bool ZendCompilerX64::compile_inst_impl(
 
 bool ZendCompilerX64::compile_inst(
 	IRInstRef instruction, InstRange remaining_instructions) {
+	if (entry_variant_dispatch_pending_) {
+		entry_variant_dispatch_pending_ = false;
+		if (!emit_entry_variant_dispatch()) {
+			return false;
+		}
+	}
 	const Adaptor::InstNode &node = adaptor->node(instruction);
 	current_continuation_block_ = node.continuation_block;
 	continuation_edge_emitted_ = false;

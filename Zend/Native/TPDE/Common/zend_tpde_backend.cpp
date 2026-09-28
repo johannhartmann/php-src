@@ -7942,6 +7942,39 @@ bool initialize_plan(
 					user_bindings[binding_index].entry_cell;
 				plan->instructions[i].component_target_index =
 					user_bindings[binding_index].component_target_index;
+				/* Entry specialization: exact integer arguments call the
+				 * target's integer variant without the entry check. */
+				if (user_bindings[binding_index]
+							.variant_component_index_plus_one != 0
+						&& user_bindings[binding_index].component_target_index
+							!= UINT32_MAX) {
+					const uint32_t mask =
+						user_bindings[binding_index].variant_long_mask;
+					uint32_t proven = 0;
+					for (uint32_t n = 0; n < site.arguments.count; ++n) {
+						zend_mir_call_argument_ref argument{};
+						if (!zend_tpde_call_argument_at(
+								plan, site.arguments.offset + n, &argument)
+								|| argument.ordinal >= 32
+								|| ((mask >> argument.ordinal) & 1) == 0
+								|| argument.source_mode
+									!= ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE) {
+							continue;
+						}
+						const int32_t value_index = zend_tpde_value_index(
+							plan, argument.value_id);
+						if (value_index >= 0
+								&& plan->values[value_index].exact_type
+									== ZEND_MIR_SCALAR_TYPE_I64) {
+							proven |= UINT32_C(1) << argument.ordinal;
+						}
+					}
+					if (proven == mask) {
+						plan->instructions[i].component_target_index =
+							user_bindings[binding_index]
+								.variant_component_index_plus_one - 1;
+					}
+				}
 				zend_function *expected_function =
 					plan->instructions[i].entry_cell != nullptr
 						? plan->instructions[i].entry_cell->function
@@ -12726,6 +12759,11 @@ extern "C" zend_result zend_tpde_compile_component_w14_with_runtime(
 			break;
 		}
 		plans[initialized].symbol_namespace = initialized;
+		plans[initialized].entry_variant_member_plus_one =
+			member.entry_variant_member_plus_one <= member_count
+				? member.entry_variant_member_plus_one : 0;
+		plans[initialized].entry_variant_long_mask =
+			member.entry_variant_long_mask;
 		plan_refs[initialized] = &plans[initialized];
 	}
 	if (initialized != member_count) {

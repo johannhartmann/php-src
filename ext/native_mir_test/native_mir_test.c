@@ -4974,7 +4974,7 @@ static void native_mir_test_build_result(
 			(zend_long) state->completed_executions);
 		add_assoc_long(&execution, "native_codeunits",
 			state->product_compiler != NULL
-				? (zend_long) zend_native_compiler_function_count(
+				? (zend_long) zend_native_compiler_native_codeunit_count(
 					state->product_compiler)
 				: (zend_long) state->native_function_count);
 		add_assoc_long(&execution, "native_components",
