@@ -267,11 +267,27 @@ such as `#[NoDiscard]` functions keep phased calls). fibo 1.14 -> 0.12 (the
 recursive edge is a typed component call); other kernels keep their
 instruction counts.
 
-**Open:** ackermann (1.49): its recursive arguments `$m - 1` may overflow, so
-they are numbers rather than integers and do not reach the integer variant.
-This needs a variant over number parameters, typed number comparisons with a
-register boolean, and a number entry check. Exception propagation through the
-typed-call ABI is still missing.
+**Result, part 4 (2026-09-28): numeric variants.** An integer variant that
+does not pay off because its recursive arguments may overflow (`$m - 1` in
+ackermann) is rebuilt with `int|float` parameters; the entry checks for a
+long or a double. Calls reach it when every checked argument is a number,
+including results of number-returning members; this is decided in the
+component fixpoint together with the return proof. Typed bodies now also
+compare numbers into register booleans and box scalar arguments for zval
+parameters. ackermann 1.49 -> 0.27, geomean 0.77 -> 0.68.
+
+Fixed on the way: the MIR operand of a RETURN whose temporary slot a call
+result reuses named the earlier arithmetic (the value lowering tracked only
+value operations per slot); a typed-call guard with statepoint
+materializations indexed past its operands; and two latent typed-call holes
+that scalar boxing exposed: a typed body elided `VERIFY_RETURN_TYPE`, and a
+typed call skipped the receive check, for declared types a boxed zval does
+not prove (`?array`, `int|float`). Such returns keep the Zend entry; such
+parameters take typed calls only with arguments proven to be numbers.
+
+**Open:** exception propagation through the typed-call ABI (typed returns
+that a double would violate, like `Ack(int, int): int`, still keep the Zend
+entry).
 
 ## 5. Rules for every package
 

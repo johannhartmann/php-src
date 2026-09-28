@@ -487,8 +487,18 @@ public:
 			const int32_t type_offset = static_cast<int32_t>(
 				(ZEND_CALL_FRAME_SLOT + argument) * sizeof(zval)
 				+ offsetof(zval, u1.type_info));
-			ASM(CMP8mi, FE_MEM(FE_DI, 0, FE_NOREG, type_offset), IS_LONG);
-			generate_raw_jump(Jump::jne, general);
+			if (plan->entry_variant_numeric) {
+				auto number = text_writer.label_create();
+				ASM(CMP8mi, FE_MEM(FE_DI, 0, FE_NOREG, type_offset), IS_LONG);
+				generate_raw_jump(Jump::je, number);
+				ASM(CMP8mi, FE_MEM(FE_DI, 0, FE_NOREG, type_offset),
+					IS_DOUBLE);
+				generate_raw_jump(Jump::jne, general);
+				label_place(number);
+			} else {
+				ASM(CMP8mi, FE_MEM(FE_DI, 0, FE_NOREG, type_offset), IS_LONG);
+				generate_raw_jump(Jump::jne, general);
+			}
 		}
 		/* A terminal cold path: the raw call leaves the allocator state of
 		 * the general continuation untouched. */
@@ -1526,16 +1536,20 @@ bool ZendCompilerX64::compile_inst_impl(
 		return false;
 	}
 	if (node.kind == Adaptor::InstKind::TypedCallGuard) {
-		if (node.operands.size() < 2
+		/* Statepoint materializations precede the guarded values; they
+		 * are liveness operands only. */
+		const std::span<const IRValueRef> guard_operands =
+			node.liveness_operands;
+		if (guard_operands.size() < 2
 				|| node.argument_index == UINT32_MAX
 				|| node.continuation_block == UINT32_MAX) {
 			return false;
 		}
-		auto context_use = val_ref(node.operands[0]);
+		auto context_use = val_ref(guard_operands[0]);
 		auto context = context_use.part(0);
 		const zend_tpde_machine_reference *observer_reference = nullptr;
 		if (!adaptor->machine_reference(
-				node.operands[1], &observer_reference)
+				guard_operands[1], &observer_reference)
 				|| observer_reference->kind
 					!= ZEND_TPDE_MACHINE_REFERENCE_CONTEXT_FIELD
 				|| observer_reference->access_width != sizeof(bool)
@@ -1547,10 +1561,10 @@ bool ZendCompilerX64::compile_inst_impl(
 		const IRBlockRef hot{node.continuation_block};
 		const uint32_t unguarded_operand_offset =
 			2 + node.materialization_count;
-		if (unguarded_operand_offset > node.operands.size()) {
+		if (unguarded_operand_offset > guard_operands.size()) {
 			return false;
 		}
-		if (unguarded_operand_offset == node.operands.size()) {
+		if (unguarded_operand_offset == guard_operands.size()) {
 			ASM(CMP8mi,
 				FE_MEM(context.load_to_reg(), 0, FE_NOREG,
 					static_cast<int32_t>(
@@ -1561,9 +1575,9 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		const uint32_t guarded_operand_offset =
 			3 + node.materialization_count;
-		if (node.operands[2] != IRValueRef{Adaptor::FRAME_VALUE}
-				|| guarded_operand_offset > node.operands.size()
-				|| (node.operands.size() - guarded_operand_offset) % 2 != 0) {
+		if (guard_operands[2] != IRValueRef{Adaptor::FRAME_VALUE}
+				|| guarded_operand_offset > guard_operands.size()
+				|| (guard_operands.size() - guarded_operand_offset) % 2 != 0) {
 			return false;
 		}
 		ScratchReg observed{this};
@@ -1578,7 +1592,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		 * or observer guard selects the canonical cold call instead, transfer
 		 * the same ownership into the source frame slot consumed by that path.
 		 */
-		auto [frame_ref, frame] = val_ref_single(node.operands[2]);
+		auto [frame_ref, frame] = val_ref_single(guard_operands[2]);
 		auto frame_reg = frame.load_to_reg();
 		std::vector<ValueRef> guarded_values;
 		std::vector<AsmReg> guarded_payload_regs;
@@ -1587,34 +1601,34 @@ bool ZendCompilerX64::compile_inst_impl(
 		std::vector<int32_t> guarded_offsets;
 		const uint32_t guarded_count =
 			static_cast<uint32_t>(
-				(node.operands.size() - guarded_operand_offset) / 2);
+				(guard_operands.size() - guarded_operand_offset) / 2);
 		guarded_values.reserve(guarded_count);
 		guarded_payload_regs.reserve(guarded_count);
 		guarded_type_regs.reserve(guarded_count);
 		guarded_expected_types.reserve(guarded_count);
 		guarded_offsets.reserve(guarded_count);
 		for (uint32_t operand = guarded_operand_offset;
-				operand < node.operands.size(); operand += 2) {
-			if (adaptor->machine_kind(node.operands[operand])
+				operand < guard_operands.size(); operand += 2) {
+			if (adaptor->machine_kind(guard_operands[operand])
 					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 				return false;
 			}
 			uint64_t expected_type;
 			if (!adaptor->constant(
-					node.operands[operand + 1], &expected_type)
+					guard_operands[operand + 1], &expected_type)
 					|| expected_type > UINT32_MAX) {
 				return false;
 			}
 			const zend_mir_storage_id storage_id =
-				adaptor->canonical_storage(node.operands[operand]);
+				adaptor->canonical_storage(guard_operands[operand]);
 			const uint64_t offset =
 				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage_id) * sizeof(zval);
 			if (!zend_mir_id_is_valid(storage_id)
 					|| offset > INT32_MAX - sizeof(zval)) {
 				return false;
 			}
-			auto boxed = val_ref(node.operands[operand]);
-			const ValueParts parts = val_parts(node.operands[operand]);
+			auto boxed = val_ref(guard_operands[operand]);
+			const ValueParts parts = val_parts(guard_operands[operand]);
 			int32_t payload_part = -1;
 			int32_t type_part = -1;
 			for (uint32_t part = 0; part < parts.count(); ++part) {

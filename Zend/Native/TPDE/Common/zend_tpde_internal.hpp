@@ -555,6 +555,13 @@ struct zend_tpde_instruction {
 	/* Both operands of this binary operation are numbers: known from type
 	 * inference or results of component members that return numbers. */
 	bool numeric_operands_proven;
+	/* A direct call whose target has a numeric variant: 1 + the variant's
+	 * component index, the general target and the checked arguments. The
+	 * component decides the target once it knows which arguments are
+	 * numbers. */
+	uint32_t numeric_variant_plus_one;
+	uint32_t numeric_variant_general;
+	uint32_t numeric_variant_mask;
 	bool transient_scalar_result;
 	zend_mir_representation transient_result_representation;
 	zend_mir_scalar_type_mask transient_result_exact_type;
@@ -1930,6 +1937,14 @@ struct zend_tpde_plan {
 	/* See zend_native_component_member.entry_variant_member_plus_one. */
 	uint32_t entry_variant_member_plus_one;
 	uint32_t entry_variant_long_mask;
+	bool entry_variant_numeric;
+	/* Every return of this member yields a long or a double. */
+	bool returns_number;
+	/* Parameters declared with a type a boxed zval does not prove; a
+	 * typed call skips their receive checks. Numbers pass those in
+	 * number_argument_mask unchanged. */
+	uint32_t checked_boxed_argument_mask;
+	uint32_t number_argument_mask;
 	uint32_t typed_body_function_index;
 	zend_mir_function_record function;
 	zend_mir_block_id *block_ids;
@@ -2107,19 +2122,16 @@ static inline bool zend_tpde_numeric_binary_proven(
 }
 
 /*
- * Proven arithmetic whose temporary result a typed body keeps in registers
- * as a boxed number.
+ * A proven operation whose temporary result a typed body keeps in registers:
+ * a boxed number for arithmetic, a boolean for comparisons.
  */
-static inline bool zend_tpde_typed_numeric_arithmetic(
+static inline bool zend_tpde_typed_numeric_binary(
 	const zend_tpde_plan *plan,
 	const zend_tpde_instruction &instruction)
 {
 	const zend_mir_executable_value_ref &operation =
 		instruction.value_operation;
 	return zend_tpde_numeric_binary_proven(plan, instruction)
-		&& (operation.source_opcode == ZEND_ADD
-			|| operation.source_opcode == ZEND_SUB
-			|| operation.source_opcode == ZEND_MUL)
 		&& (operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
 			|| operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
 		&& (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
@@ -2127,6 +2139,12 @@ static inline bool zend_tpde_typed_numeric_arithmetic(
 		&& operation.result.ssa_variable_id != ZEND_MIR_ID_INVALID
 		&& operation.result.ssa_variable_id
 			< plan->source_ssa_variable_count;
+}
+
+static inline bool zend_tpde_numeric_comparison(uint32_t opcode)
+{
+	return opcode == ZEND_IS_SMALLER || opcode == ZEND_IS_SMALLER_OR_EQUAL
+		|| opcode == ZEND_IS_EQUAL || opcode == ZEND_IS_NOT_EQUAL;
 }
 
 static inline bool zend_tpde_user_multi_branch_at(
