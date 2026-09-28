@@ -521,6 +521,16 @@ private:
 		return zend_tpde_block_index(plan_, id);
 	}
 
+	void override_ssa_value(uint32_t ssa_variable_id, IRValueRef value) {
+		const int32_t index = zend_tpde_value_index(plan_,
+			zend_mir_value_from_original_ssa(ssa_variable_id));
+		if (index >= 0
+				&& static_cast<uint32_t>(index)
+					< active_value_overrides().size()) {
+			active_value_overrides()[static_cast<uint32_t>(index)] = value;
+		}
+	}
+
 	IRValueRef value_ref(zend_mir_value_id id) const {
 		int32_t index = zend_tpde_value_index(plan_, id);
 		if (index < 0) {
@@ -4942,6 +4952,8 @@ public:
 			zend_mir_scalar_type_mask exact_type;
 			bool emitted = false;
 		};
+		std::vector<std::pair<uint32_t, zend_mir_value_id>>
+			deferred_typed_phi_inputs;
 		std::vector<IRValueRef> boxed_phi_input_overrides(
 			plan_->instruction_operand_count, INVALID_VALUE_REF);
 		std::vector<IRValueRef> boxed_phi_cold_input_overrides(
@@ -6471,6 +6483,71 @@ public:
 				active_source_ssa_overrides()[
 					instruction.value_operation.result.ssa_variable_id] =
 						result;
+				override_ssa_value(
+					instruction.value_operation.result.ssa_variable_id,
+					result);
+				continue;
+			}
+			/* A ternary's QM_ASSIGN forwards its register source. */
+			if (function_mode_ == FunctionMode::TypedBody
+					&& zend_tpde_typed_forward_assign(instruction)) {
+				IRValueRef source =
+					instruction.value_operation.op1.kind
+							== ZEND_MIR_SOURCE_OPERAND_LITERAL
+						? source_operand_value_ref(
+							instruction.value_operation.op1)
+						: source_binding_value_ref(
+							instruction.source_op1_binding);
+				if (source == INVALID_VALUE_REF) {
+					valid_ = false;
+					continue;
+				}
+				/* A boxed result, such as a phi of numbers, boxes a scalar
+				 * source in this block. */
+				const int32_t result_value = zend_tpde_value_index(plan_,
+					zend_mir_value_from_original_ssa(
+						instruction.value_operation.result.ssa_variable_id));
+				if (result_value >= 0
+						&& plan_->values[result_value].machine_kind
+							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+						&& machine_kind(source)
+							!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+					const zend_mir_scalar_type_mask source_type =
+						exact_type(source);
+					const bool scalar =
+						(source_type == ZEND_MIR_SCALAR_TYPE_I64
+							&& machine_kind(source)
+								== ZEND_TPDE_MACHINE_VALUE_I64)
+						|| (source_type == ZEND_MIR_SCALAR_TYPE_F64
+							&& machine_kind(source)
+								== ZEND_TPDE_MACHINE_VALUE_F64);
+					const IRValueRef boxed = scalar
+						? add_derived_value(ZEND_MIR_REPRESENTATION_ZVAL,
+							ZEND_MIR_SCALAR_TYPE_NONE, ZEND_MIR_ID_INVALID,
+							false, 0, ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
+							ZEND_MIR_OWNERSHIP_STATE_OWNED,
+							ZEND_MIR_REFCOUNT_IMMORTAL)
+						: INVALID_VALUE_REF;
+					if (boxed == INVALID_VALUE_REF) {
+						valid_ = false;
+						continue;
+					}
+					const uint32_t box_offset =
+						static_cast<uint32_t>(operands_.size());
+					operands_.push_back(source);
+					add_node(block_instructions, block, InstNode{
+						InstKind::BoxScalar, i, UINT32_MAX, boxed, {},
+						box_offset, 1, true, ZEND_MIR_ID_INVALID,
+						source_type});
+					source = boxed;
+				}
+				active_instruction_results()[i] = source;
+				active_source_ssa_overrides()[
+					instruction.value_operation.result.ssa_variable_id] =
+						source;
+				override_ssa_value(
+					instruction.value_operation.result.ssa_variable_id,
+					source);
 				continue;
 			}
 			if (zend_mir_opcode_is_terminator(record.opcode)) {
@@ -6790,6 +6867,74 @@ public:
 							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
 					const bool pointer_result =
 						machine_pointer_kind(result_kind);
+					/* A typed body's phi of numbers: its forwarded or computed
+					 * inputs are defined later in plan order, so resolve them
+					 * once the pass has defined them. */
+					bool typed_number_phi = function_mode_
+							== FunctionMode::TypedBody
+						&& boxed_result;
+					for (uint32_t n = 0; typed_number_phi
+							&& n < predecessors; ++n) {
+						const int32_t input_index = zend_tpde_value_index(
+							plan_, zend_tpde_operand_at(
+								plan_, &instruction, n));
+						const int32_t producer = input_index >= 0
+								&& plan_->source_value_definition_instructions
+									!= nullptr
+							? plan_->source_value_definition_instructions[
+								input_index]
+							: -1;
+						typed_number_phi = producer >= 0
+							&& static_cast<uint32_t>(producer)
+								< plan_->instruction_count
+							&& (zend_tpde_typed_forward_assign(
+									plan_->instructions[producer])
+								|| zend_tpde_typed_numeric_binary(plan_,
+									plan_->instructions[producer]));
+					}
+					if (typed_number_phi) {
+						/* The phi is a register zval of its own. */
+						const IRValueRef canonical_phi = result;
+						result = add_derived_value(
+							ZEND_MIR_REPRESENTATION_ZVAL,
+							ZEND_MIR_SCALAR_TYPE_NONE, ZEND_MIR_ID_INVALID,
+							false, 0, ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
+							ZEND_MIR_OWNERSHIP_STATE_OWNED,
+							ZEND_MIR_REFCOUNT_IMMORTAL);
+						if (result == INVALID_VALUE_REF) {
+							valid_ = false;
+							continue;
+						}
+						active_value_overrides()[
+							static_cast<uint32_t>(canonical_phi)
+								- MIR_VALUE_BASE] = result;
+						if (zend_mir_value_is_original_ssa(record.result_id)
+								&& record.result_id
+									< active_source_ssa_overrides().size()) {
+							active_source_ssa_overrides()[record.result_id] =
+								result;
+						}
+						active_instruction_results()[i] = result;
+						block_phis.push_back(
+							{static_cast<uint32_t>(block), result});
+						phi_values_[static_cast<uint32_t>(result)] = 1;
+						Slice &input_slice =
+							phi_input_slices_[static_cast<uint32_t>(result)];
+						input_slice.offset =
+							static_cast<uint32_t>(phi_inputs_.size());
+						for (uint32_t n = 0; n < predecessors; ++n) {
+							const uint32_t predecessor_index = final_blocks[
+								plan_->block_predecessors[
+									predecessor_begin + n]];
+							deferred_typed_phi_inputs.push_back({
+								static_cast<uint32_t>(phi_inputs_.size()),
+								zend_tpde_operand_at(plan_, &instruction, n)});
+							phi_inputs_.push_back({INVALID_VALUE_REF,
+								IRBlockRef{predecessor_index}});
+							++input_slice.count;
+						}
+						continue;
+					}
 					bool register_phi =
 						boxed_result || pointer_result;
 					bool shared_storage =
@@ -10830,6 +10975,17 @@ public:
 		 * geometric growth slack before installing the operand spans and handing
 		 * the graph to TPDE, where large source functions otherwise retain a
 		 * second, mostly empty node allocation throughout code generation. */
+		for (const auto &[input, value_id] : deferred_typed_phi_inputs) {
+			const IRValueRef value = value_ref(value_id);
+			if (value == INVALID_VALUE_REF
+					|| machine_kind(value)
+						!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+					|| !machine_value_has_register_definition(value)) {
+				valid_ = false;
+				continue;
+			}
+			phi_inputs_[input].value = value;
+		}
 		operands_.shrink_to_fit();
 		for (InstNode &node : nodes_) {
 			const auto all_operands =
@@ -11186,6 +11342,12 @@ public:
 					!= ZEND_MIR_REPRESENTATION_ZVAL
 				&& zend_mir_scalar_type_is_exact(plan_value.exact_type)
 				&& plan_value.exact_type != ZEND_MIR_SCALAR_TYPE_NULL) {
+			return true;
+		}
+		/* A phi of register values that TPDE materializes. */
+		if (function_mode_ == FunctionMode::TypedBody
+				&& definition_record.opcode == ZEND_MIR_OPCODE_PHI
+				&& raw < phi_values_.size() && phi_values_[raw] != 0) {
 			return true;
 		}
 		/* A typed body has no frame: its scalar operations and copies,

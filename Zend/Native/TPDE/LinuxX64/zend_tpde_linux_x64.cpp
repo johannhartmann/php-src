@@ -386,6 +386,61 @@ public:
 		}
 		return true;
 	}
+	/* Return a number as int (failing for a double) or as float. */
+	bool emit_number_return(IRValueRef value) {
+		const bool as_long = adaptor->plan()->typed_body_return_abi.machine_kind
+			== ZEND_TPDE_MACHINE_VALUE_I64;
+		ScratchReg result{this};
+		{
+			auto number = val_ref(value);
+			auto payload = number.part(0);
+			auto type_info = number.part(1);
+			auto payload_reg = payload.load_to_reg();
+			auto type_info_reg = type_info.load_to_reg();
+			if (as_long) {
+				auto result_reg = result.alloc_gp();
+				ASM(MOV64rr, result_reg, payload_reg);
+				ASM(CMP32ri, type_info_reg, IS_LONG);
+				generate_raw_jump(Jump::jne, typed_failure_label());
+			} else {
+				auto result_reg = result.alloc(
+					tpde::x64::PlatformConfig::FP_BANK);
+				auto is_double = text_writer.label_create();
+				auto done = text_writer.label_create();
+				ASM(CMP32ri, type_info_reg, IS_LONG);
+				generate_raw_jump(Jump::jne, is_double);
+				ASM(SSE_CVTSI2SD64rr, result_reg, payload_reg);
+				generate_raw_jump(Jump::jmp, done);
+				label_place(is_double);
+				ASM(SSE_MOVQ_G2Xrr, result_reg, payload_reg);
+				label_place(done);
+			}
+		}
+		const bool needs_status = typed_return_needs_status();
+		const auto status_target = as_long
+			? tpde::x64::AsmReg{tpde::x64::AsmReg::DX}
+			: tpde::x64::AsmReg{tpde::x64::AsmReg::AX};
+		if (needs_status && result.cur_reg() == status_target) {
+			ScratchReg moved{this};
+			auto moved_reg = moved.alloc_gp();
+			ASM(MOV64rr, moved_reg, result.cur_reg());
+			result = std::move(moved);
+		}
+		ScratchReg status{this};
+		if (needs_status) {
+			auto status_reg = status.alloc_specific(status_target);
+			ASM(MOV32ri, status_reg, 1);
+		}
+		RetBuilder return_builder{*this, *cur_cc_assigner()};
+		ValuePart result_part{as_long
+				? tpde::x64::PlatformConfig::GP_BANK
+				: tpde::x64::PlatformConfig::FP_BANK, 8};
+		result_part.set_value(this, std::move(result));
+		return_builder.add(std::move(result_part), tpde::CCAssignment{});
+		add_typed_return_status(return_builder, std::move(status));
+		return_builder.ret();
+		return true;
+	}
 	ValuePart copy_fixed_argument(AsmReg source) {
 		ScratchReg copy{this};
 		auto copy_reg = copy.alloc_gp();
@@ -17258,11 +17313,22 @@ bool ZendCompilerX64::compile_inst_impl(
 							!= ZEND_MIR_OWNERSHIP_STATE_SHARED_OWNED) {
 					return false;
 				}
+				/* Read a returned number before reserving the status
+				 * register, so that no live part of it is evicted. */
+				if (adaptor->machine_kind(node.operands[0])
+							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+						&& (adaptor->plan()->typed_body_return_abi.machine_kind
+								== ZEND_TPDE_MACHINE_VALUE_I64
+							|| adaptor->plan()->typed_body_return_abi
+									.machine_kind
+								== ZEND_TPDE_MACHINE_VALUE_F64)) {
+					return emit_number_return(node.operands[0]);
+				}
 				ScratchReg status{this};
 				reserve_typed_return_status(status);
 				RetBuilder return_builder{
 					*this, *cur_cc_assigner()};
-				if (add_number_return(return_builder, node.operands[0])) {
+				if (false) {
 				} else if (return_addref
 						&& kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 					auto returned = val_ref(node.operands[0]);
