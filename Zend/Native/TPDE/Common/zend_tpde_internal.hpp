@@ -720,6 +720,8 @@ struct zend_tpde_dynamic_fetch_read {
 
 /* Known operand type: a long or a double, never undefined or a reference. */
 #define ZEND_TPDE_KNOWN_NUMBER 0xfe
+/* Known operand type: false or true. */
+#define ZEND_TPDE_KNOWN_BOOL 0xfd
 
 struct zend_tpde_source_opcode {
 	uint8_t opcode;

@@ -10531,6 +10531,18 @@ public:
 				if (boxed_condition != INVALID_VALUE_REF) {
 					nodes_.back().exact_type = exact_type(boxed_condition);
 				}
+				/* Inference may know the condition is a boolean, such as a
+				 * comparison result. */
+				const uint32_t condition_position =
+					instruction.value_operation.source_position_id;
+				if (nodes_.back().exact_type == ZEND_MIR_SCALAR_TYPE_NONE
+						&& plan_->source_opcodes != nullptr
+						&& condition_position < plan_->source_opcode_count
+						&& plan_->source_opcodes[condition_position]
+								.op1_known_type
+							== ZEND_TPDE_KNOWN_BOOL) {
+					nodes_.back().exact_type = ZEND_MIR_SCALAR_TYPE_I1;
+				}
 				const uint32_t cold_operand_offset =
 					static_cast<uint32_t>(operands_.size());
 					const uint32_t cold_semantic_operand_count =
