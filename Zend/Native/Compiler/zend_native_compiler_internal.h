@@ -67,6 +67,17 @@ zend_result zend_native_compiler_compile_dynamic_component(
 	zend_native_entry_cell **root_entry,
 	zend_native_compile_diagnostic *diagnostic);
 
+/*
+ * Opt-in compile trace: ZEND_NATIVE_COMPILE_TRACE=<file> appends one JSON line
+ * per real compilation, bundle import, transient release and request end.
+ * The variable is read once at startup, before FPM clears worker
+ * environments. When it is unset every event costs one branch.
+ */
+void zend_native_compile_trace_startup(void);
+void zend_native_compile_trace_request_end(const char *stage);
+/* The reason recorded for the next compilation; callers restore it. */
+extern const char *zend_native_compile_trace_reason;
+
 /* Release lowering-only state for a completed dynamic component while its
  * published code and entry cells remain available for request-local reentry. */
 void zend_native_compiler_release_ready_transients(

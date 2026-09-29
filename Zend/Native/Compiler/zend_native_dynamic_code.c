@@ -580,12 +580,19 @@ zend_native_status zend_native_execute_include_or_eval(
 	} else
 #endif
 	if (compiler->product_compiler != NULL) {
+		const char *reason = zend_native_compile_trace_reason;
+		zend_result compiled;
+
 		memset(&compile_diagnostic, 0, sizeof(compile_diagnostic));
-		if (zend_native_compiler_compile_dynamic_component(
-				compiler->product_compiler, new_op_array,
-				first_function_bucket, first_class_bucket,
-				&component_compiler, &first_compiled_function,
-				&entry_cell, &compile_diagnostic) == FAILURE) {
+		zend_native_compile_trace_reason =
+			extended_value == ZEND_EVAL ? "eval" : "include";
+		compiled = zend_native_compiler_compile_dynamic_component(
+			compiler->product_compiler, new_op_array,
+			first_function_bucket, first_class_bucket,
+			&component_compiler, &first_compiled_function,
+			&entry_cell, &compile_diagnostic);
+		zend_native_compile_trace_reason = reason;
+		if (compiled == FAILURE) {
 			entry_cell = NULL;
 			if (EG(exception) == NULL) {
 				zend_throw_error(NULL, "%s",
