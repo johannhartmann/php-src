@@ -108,6 +108,15 @@ bool zend_native_executor_op_array_is_cache_owned(
 	const zend_op_array *op_array);
 
 /*
+ * The entry of an included OPcache script from its persistent generation,
+ * which imports the script's native bundle once per process and serves every
+ * later request. NULL without an exception when the script has no registered
+ * owner, so the caller compiles it request-locally.
+ */
+zend_native_entry_cell *zend_native_executor_resolve_cached_include(
+	zend_op_array *op_array);
+
+/*
  * Snapshot the append-only READY-publication log beginning at first_index.
  * No allocation or callback occurs while the compiler mutation lock is held.
  * On insufficient capacity, FAILURE is returned and ready_count reports the

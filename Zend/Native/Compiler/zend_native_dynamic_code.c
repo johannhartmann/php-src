@@ -406,6 +406,7 @@ zend_native_status zend_native_execute_include_or_eval(
 	uint32_t first_class_bucket;
 	uint32_t first_compiled_function = 0;
 	bool ephemeral_codeunit = false;
+	bool cached_include = false;
 
 	if (compiler == NULL
 			|| execute_data == NULL || execute_data->func == NULL
@@ -579,7 +580,15 @@ zend_native_status zend_native_execute_include_or_eval(
 		entry_cell = NULL;
 	} else
 #endif
-	if (compiler->product_compiler != NULL) {
+	if (compiler->product_compiler != NULL
+			&& extended_value != ZEND_EVAL
+			&& ((entry_cell = zend_native_executor_resolve_cached_include(
+					new_op_array)) != NULL
+				|| EG(exception) != NULL)) {
+		/* The persistent generation of the cached script serves the code;
+		 * the include itself still executes on this frame below. */
+		cached_include = entry_cell != NULL;
+	} else if (compiler->product_compiler != NULL) {
 		const char *reason = zend_native_compile_trace_reason;
 		zend_result compiled;
 
@@ -621,10 +630,16 @@ zend_native_status zend_native_execute_include_or_eval(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	memset(&diagnostic, 0, sizeof(diagnostic));
+	if (cached_include) {
+		zend_native_entry_cell_retain_active(entry_cell);
+	}
 	EG(current_execute_data) = call;
 	status = zend_native_execute_frame(
 		code, call, &diagnostic);
 	EG(current_execute_data) = previous;
+	if (cached_include) {
+		zend_native_entry_cell_release_active(entry_cell);
+	}
 	call_info = ZEND_CALL_INFO(call);
 	zend_vm_stack_free_call_frame(call);
 	if (component_compiler != NULL) {
