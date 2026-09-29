@@ -763,6 +763,21 @@ public:
 	 * unspilled value (the branch spill emits no code the checks would
 	 * skip). Otherwise it selects the edge through a decision register.
 	 */
+	/*
+	 * General-purpose registers neither locked as scratch nor held by a
+	 * fixed assignment. Inline forms that need many scratch registers take
+	 * their helper instead when a large function leaves too few.
+	 */
+	uint32_t unlocked_gp_registers() const {
+		uint32_t count = 0;
+		for (uint32_t id = 0; id < 16; ++id) {
+			if (((register_file.allocatable >> id) & 1) != 0
+					&& register_file.lock_counts[id] == 0) {
+				++count;
+			}
+		}
+		return count;
+	}
 	bool guarded_exit_can_jump_directly(IRBlockRef cold, IRBlockRef hot) {
 		if (branch_needs_split(cold) || branch_needs_split(hot)) {
 			return false;
@@ -7094,6 +7109,11 @@ bool ZendCompilerX64::compile_inst_impl(
 				auto slow = text_writer.label_create();
 				auto done = text_writer.label_create();
 				auto copied = text_writer.label_create();
+				/* Scratch set, operands and result; see
+				 * unlocked_gp_registers(). */
+				if (unlocked_gp_registers() < 8) {
+					return branch_to_guarded_cold();
+				}
 				auto [frame_ref, frame] =
 					val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 				auto frame_scratch = std::move(frame).into_scratch();
@@ -7314,6 +7334,11 @@ bool ZendCompilerX64::compile_inst_impl(
 				auto mixed_next = text_writer.label_create();
 				auto found = text_writer.label_create();
 				auto done = text_writer.label_create();
+				/* Scratch set, operands and result; see
+				 * unlocked_gp_registers(). */
+				if (unlocked_gp_registers() < 11) {
+					return branch_to_guarded_cold();
+				}
 				auto [frame_ref, frame] =
 					val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 				auto frame_scratch = std::move(frame).into_scratch();
@@ -7631,6 +7656,9 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto mixed_string_next = text_writer.label_create();
 		auto found = text_writer.label_create();
 		auto done = text_writer.label_create();
+		if (unlocked_gp_registers() < 12) {
+			return branch_to_guarded_cold();
+		}
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 		auto frame_scratch = std::move(frame).into_scratch();
@@ -8265,6 +8293,10 @@ bool ZendCompilerX64::compile_inst_impl(
 					(void) consumed;
 				}
 			}
+			/* Up to seven scratch registers; see unlocked_gp_registers(). */
+			if (guarded && unlocked_gp_registers() < 8) {
+				return branch_to_guarded_cold();
+			}
 			auto slow = text_writer.label_create();
 			auto done = text_writer.label_create();
 			ScratchReg decision{this};
@@ -8467,6 +8499,10 @@ bool ZendCompilerX64::compile_inst_impl(
 				== ZEND_TPDE_MACHINE_VALUE_I64;
 		auto slow = text_writer.label_create();
 		auto done = text_writer.label_create();
+		/* Nine scratch registers; see unlocked_gp_registers(). */
+		if (unlocked_gp_registers() < 10) {
+			return branch_to_guarded_cold();
+		}
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 		auto frame_scratch = std::move(frame).into_scratch();
@@ -16351,8 +16387,7 @@ bool ZendCompilerX64::compile_inst_impl(
 									high_word_reg);
 								ASM(MOV32rm, type_info_reg,
 									FE_MEM(source_address_reg, 0, FE_NOREG,
-										static_cast<int32_t>(offsetof(
-											zval, u1.type_info))));
+										static_cast<int32_t>(offsetof(zval, u1.type_info))));
 								ASM(AND32ri, type_info_reg,
 									IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 								ASM(TEST32rr, type_info_reg, type_info_reg);
@@ -16459,6 +16494,57 @@ bool ZendCompilerX64::compile_inst_impl(
 												+ offsetof(zval, u1.type_info))),
 										IS_UNDEF);
 								}
+							} else if (node.operands[index]
+										!= IRValueRef{Adaptor::FRAME_VALUE}
+									&& (argument_kind
+											== ZEND_TPDE_MACHINE_VALUE_I64
+										|| argument_kind
+											== ZEND_TPDE_MACHINE_VALUE_F64
+										|| argument_kind
+											== ZEND_TPDE_MACHINE_VALUE_BOOL)) {
+								/* A scalar in a register although the call
+								 * descriptor records no exact type: store its
+								 * payload and type instead of copying a slot. */
+								auto payload_reg = argument.load_to_reg();
+								ScratchReg bits{this};
+								auto bits_reg = bits.alloc_gp();
+								if (argument_kind
+										== ZEND_TPDE_MACHINE_VALUE_F64) {
+									ASM(SSE_MOVQ_X2Grr, bits_reg, payload_reg);
+								} else {
+									ASM(MOV64rr, bits_reg, payload_reg);
+								}
+								ASM(MOV64mr,
+									FE_MEM(callee_reg, 0, FE_NOREG, offset),
+									bits_reg);
+								if (argument_kind
+										== ZEND_TPDE_MACHINE_VALUE_BOOL) {
+									ASM(ADD64ri, bits_reg, IS_FALSE);
+									ASM(MOV64mr,
+										FE_MEM(callee_reg, 0, FE_NOREG,
+											offset + 8),
+										bits_reg);
+								} else {
+									ASM(MOV64mi,
+										FE_MEM(callee_reg, 0, FE_NOREG,
+											offset + 8),
+										argument_kind
+												== ZEND_TPDE_MACHINE_VALUE_F64
+											? IS_DOUBLE : IS_LONG);
+								}
+								if (!copy_argument) {
+									if (descriptor_argument.source_frame_offset
+											> INT32_MAX) {
+										return false;
+									}
+									ASM(MOV32mi,
+										FE_MEM(frame_reg, 0, FE_NOREG,
+											static_cast<int32_t>(
+												descriptor_argument
+													.source_frame_offset
+												+ offsetof(zval, u1.type_info))),
+										IS_UNDEF);
+								}
 							} else {
 								auto source_frame_reg = argument.load_to_reg();
 							if (descriptor_argument.source_frame_offset
@@ -16468,21 +16554,18 @@ bool ZendCompilerX64::compile_inst_impl(
 							const int32_t source_offset =
 								static_cast<int32_t>(
 									descriptor_argument.source_frame_offset);
-							ScratchReg source_address{this};
+							/* Two scratch registers: the source slot is addressed through
+							 * its frame and the type info is the low half of the high word. */
 							ScratchReg low_word{this};
 							ScratchReg high_word{this};
-							ScratchReg type_info{this};
-							auto source_address_reg =
-								source_address.alloc_gp();
 							auto low_word_reg = low_word.alloc_gp();
 							auto high_word_reg = high_word.alloc_gp();
-							auto type_info_reg = type_info.alloc_gp();
-							ASM(MOV64rr, source_address_reg, source_frame_reg);
-							ASM(ADD64ri, source_address_reg, source_offset);
+							const AsmReg source_address_reg = source_frame_reg;
+							const AsmReg type_info_reg = high_word_reg;
 							ASM(MOV64rm, low_word_reg,
-								FE_MEM(source_address_reg, 0, FE_NOREG, 0));
+								FE_MEM(source_address_reg, 0, FE_NOREG, source_offset));
 							ASM(MOV64rm, high_word_reg,
-								FE_MEM(source_address_reg, 0, FE_NOREG, 8));
+								FE_MEM(source_address_reg, 0, FE_NOREG, source_offset + 8));
 							ASM(MOV64mr,
 								FE_MEM(callee_reg, 0, FE_NOREG, offset),
 								low_word_reg);
@@ -16491,8 +16574,7 @@ bool ZendCompilerX64::compile_inst_impl(
 								high_word_reg);
 							ASM(MOV32rm, type_info_reg,
 								FE_MEM(source_address_reg, 0, FE_NOREG,
-									static_cast<int32_t>(
-										offsetof(zval, u1.type_info))));
+									source_offset + static_cast<int32_t>(offsetof(zval, u1.type_info))));
 							if (copy_argument) {
 								ASM(AND32ri, type_info_reg,
 									IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
@@ -16508,8 +16590,7 @@ bool ZendCompilerX64::compile_inst_impl(
 							} else {
 								ASM(MOV32mi,
 									FE_MEM(source_address_reg, 0, FE_NOREG,
-										static_cast<int32_t>(offsetof(
-											zval, u1.type_info))),
+										source_offset + static_cast<int32_t>(offsetof(zval, u1.type_info))),
 									IS_UNDEF);
 							}
 						}
@@ -16568,8 +16649,7 @@ bool ZendCompilerX64::compile_inst_impl(
 							high_word_reg);
 						ASM(MOV32rm, type_info_reg,
 							FE_MEM(source_address_reg, 0, FE_NOREG,
-								static_cast<int32_t>(
-									offsetof(zval, u1.type_info))));
+								static_cast<int32_t>(offsetof(zval, u1.type_info))));
 						ASM(AND32ri, type_info_reg,
 							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 						ASM(TEST32rr, type_info_reg, type_info_reg);
