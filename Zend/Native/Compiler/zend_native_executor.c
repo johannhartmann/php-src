@@ -1607,6 +1607,23 @@ zend_native_executor_resolve_external_reentry(
 		generation = zend_native_executor_find_persistent_function(function);
 	}
 	if (generation == NULL) {
+		/*
+		 * A request generation that already published this function, or
+		 * that this function roots, serves every later reentry; creating a
+		 * generation per call compiled a hot function thousands of times.
+		 */
+		generation = zend_native_executor_find_function_generation(function);
+		if (generation == NULL) {
+			generation = zend_native_executor_find_root_generation(
+				&function->op_array);
+		}
+		if (generation != NULL) {
+			/* Include and autoload may have grown the borrowed tables. */
+			generation->script.function_table = *EG(function_table);
+			generation->script.class_table = *EG(class_table);
+		}
+	}
+	if (generation == NULL) {
 		generation = zend_native_executor_create_or_acquire_generation(
 			&function->op_array);
 	}
@@ -1616,11 +1633,19 @@ zend_native_executor_resolve_external_reentry(
 	memset(&diagnostic, 0, sizeof(diagnostic));
 	{
 		const char *reason = zend_native_compile_trace_reason;
+		uint32_t first_compiled_function =
+			zend_native_compiler_function_count(generation->compiler);
 
 		zend_native_compile_trace_reason = "external-reentry";
 		entry_cell = zend_native_compiler_prepare_function(
 			generation->compiler, function, &diagnostic);
 		zend_native_compile_trace_reason = reason;
+		if (entry_cell != NULL) {
+			/* Like lazy reentry: the published code and its cell stay,
+			 * while SSA, MIR and image data can no longer be observed. */
+			zend_native_compiler_release_ready_transients(
+				generation->compiler, first_compiled_function);
+		}
 	}
 	if (entry_cell == NULL) {
 		if (EG(exception) == NULL) {
@@ -1639,6 +1664,63 @@ zend_native_executor_resolve_external_reentry(
 		}
 		return NULL;
 	}
+	return entry_cell;
+}
+
+zend_native_entry_cell *zend_native_executor_resolve_cached_include(
+	zend_op_array *op_array)
+{
+	zend_native_executor_generation *generation;
+	zend_native_compile_diagnostic diagnostic;
+	zend_native_entry_cell *entry_cell;
+	uint32_t first_compiled_function;
+	const zend_script *owner;
+	zend_class_entry *class_entry;
+
+	if (op_array == NULL || !zend_native_executor_request_state.active
+			|| !zend_native_executor_op_array_is_cache_owned(op_array)
+			|| (owner = zend_native_executor_script_owner(op_array)) == NULL) {
+		return NULL;
+	}
+	/*
+	 * Persistent code binds the script's class entries. A class that the
+	 * include links at runtime gets another entry than the cached one, so
+	 * only scripts whose classes are all linked when loaded share code.
+	 */
+	ZEND_HASH_MAP_FOREACH_PTR(&owner->class_table, class_entry) {
+		if ((class_entry->ce_flags & ZEND_ACC_LINKED) == 0) {
+			return NULL;
+		}
+	} ZEND_HASH_FOREACH_END();
+	generation = zend_native_executor_find_leased_function(
+		(zend_function *) op_array);
+	if (generation == NULL) {
+		generation = zend_native_executor_find_persistent_function(
+			(zend_function *) op_array);
+	}
+	if (generation == NULL) {
+		generation = zend_native_executor_create_or_acquire_generation(
+			op_array);
+	}
+	if (generation == NULL || !generation->persistent) {
+		return NULL;
+	}
+	memset(&diagnostic, 0, sizeof(diagnostic));
+	first_compiled_function =
+		zend_native_compiler_function_count(generation->compiler);
+	entry_cell = zend_native_compiler_prepare_function(
+		generation->compiler, (zend_function *) op_array, &diagnostic);
+	if (entry_cell == NULL) {
+		if (EG(exception) == NULL) {
+			zend_throw_error(NULL, "%s",
+				diagnostic.message[0] != '\0'
+					? diagnostic.message
+					: "Native include codeunit compilation failed");
+		}
+		return NULL;
+	}
+	zend_native_compiler_release_ready_transients(
+		generation->compiler, first_compiled_function);
 	return entry_cell;
 }
 
