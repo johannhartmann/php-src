@@ -23,6 +23,10 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+#ifdef __GLIBC__
+# include <malloc.h>
+#endif
 
 #define ZEND_NATIVE_COMPILER_ARENA_SIZE (64 * 1024)
 #define ZEND_NATIVE_COMPILER_DEFAULT_CHUNK_SIZE 64
@@ -33,6 +37,7 @@ typedef struct _zend_native_compiler_module_allocation {
 
 typedef struct _zend_native_compiler_module_host {
 	zend_native_compiler_module_allocation *allocations;
+	size_t allocated_bytes;
 	uint32_t successful_allocations;
 	bool fail_allocation;
 } zend_native_compiler_module_host;
@@ -149,6 +154,181 @@ typedef struct _zend_native_compiler_session {
 
 ZEND_TLS HashTable zend_native_compiler_sessions;
 ZEND_TLS bool zend_native_compiler_sessions_active;
+
+static FILE *zend_native_compile_trace_file;
+static uint64_t zend_native_compile_trace_request_index;
+static uint32_t zend_native_compile_trace_depth;
+const char *zend_native_compile_trace_reason = "execute";
+
+void zend_native_compile_trace_startup(void)
+{
+	const char *path = getenv("ZEND_NATIVE_COMPILE_TRACE");
+
+	if (zend_native_compile_trace_file == NULL && path != NULL
+			&& path[0] != '\0') {
+		zend_native_compile_trace_file = fopen(path, "a");
+		if (zend_native_compile_trace_file != NULL) {
+			setvbuf(zend_native_compile_trace_file, NULL, _IOLBF, 0);
+		}
+	}
+}
+
+static uint64_t zend_native_compile_trace_malloc_bytes(void)
+{
+#ifdef __GLIBC__
+	struct mallinfo2 info = mallinfo2();
+
+	return (uint64_t) info.uordblks + (uint64_t) info.hblkhd;
+#else
+	return 0;
+#endif
+}
+
+typedef struct _zend_native_compile_trace_live {
+	uint64_t ssa_bytes;
+	uint64_t mir_bytes;
+	uint64_t image_bytes;
+	uint64_t side_bytes;
+	uint32_t holding;
+	uint32_t holding_active;
+} zend_native_compile_trace_live;
+
+/* Compile scratch the registry still holds: SSA arenas, MIR modules,
+ * unpublished images, source effects and call-site indexes. */
+static void zend_native_compile_trace_live_scan(
+	const zend_native_compiler *compiler,
+	zend_native_compile_trace_live *live)
+{
+	uint32_t index;
+
+	memset(live, 0, sizeof(*live));
+	for (index = 0; index < compiler->function_count; index++) {
+		const zend_native_compiled_function *function =
+			compiler->functions[index];
+		uint64_t ssa = 0;
+		uint64_t side;
+		const zend_arena *arena;
+
+		if (function == NULL) {
+			continue;
+		}
+#ifndef ZEND_TRACK_ARENA_ALLOC
+		/* A tracked arena (sanitizer builds) records no chunk sizes. */
+		for (arena = function->ssa_arena; arena != NULL; arena = arena->prev) {
+			ssa += (uint64_t) (arena->end - (const char *) arena);
+		}
+#else
+		(void) arena;
+#endif
+		side = (uint64_t) function->source_effect_capacity
+				* sizeof(zend_native_source_effect)
+			+ (uint64_t) (function->call_target_count
+				+ function->call_site_count) * sizeof(uint32_t);
+		live->ssa_bytes += ssa;
+		live->mir_bytes += function->module_host.allocated_bytes;
+		live->image_bytes += function->image != NULL
+			? zend_native_image_size(function->image) : 0;
+		live->side_bytes += side;
+		if (ssa != 0 || function->module_host.allocated_bytes != 0
+				|| function->image != NULL || side != 0) {
+			live->holding++;
+			if (function->entry_cell.active_calls != 0
+					|| function->entry_cell.suspended_frames != 0) {
+				live->holding_active++;
+			}
+		}
+	}
+}
+
+static void zend_native_compile_trace_string(FILE *file, const char *value,
+	size_t length)
+{
+	size_t index;
+
+	fputc('"', file);
+	for (index = 0; index < length; index++) {
+		unsigned char c = (unsigned char) value[index];
+
+		if (c == '"' || c == '\\') {
+			fputc('\\', file);
+			fputc(c, file);
+		} else if (c < 0x20) {
+			fprintf(file, "\\u%04x", c);
+		} else {
+			fputc(c, file);
+		}
+	}
+	fputc('"', file);
+}
+
+static void zend_native_compile_trace_source(FILE *file,
+	const zend_op_array *op_array)
+{
+	fputs(",\"file\":", file);
+	if (op_array != NULL && op_array->filename != NULL) {
+		zend_native_compile_trace_string(file,
+			ZSTR_VAL(op_array->filename), ZSTR_LEN(op_array->filename));
+	} else {
+		fputs("null", file);
+	}
+	fputs(",\"scope\":", file);
+	if (op_array != NULL && op_array->scope != NULL) {
+		zend_native_compile_trace_string(file,
+			ZSTR_VAL(op_array->scope->name), ZSTR_LEN(op_array->scope->name));
+	} else {
+		fputs("null", file);
+	}
+	fputs(",\"function\":", file);
+	if (op_array != NULL && op_array->function_name != NULL) {
+		zend_native_compile_trace_string(file,
+			ZSTR_VAL(op_array->function_name),
+			ZSTR_LEN(op_array->function_name));
+	} else {
+		fputs("\"{main}\"", file);
+	}
+}
+
+static void zend_native_compile_trace_head(FILE *file, const char *event)
+{
+	fprintf(file,
+		"{\"event\":\"%s\",\"pid\":%ld,\"request\":%" PRIu64
+		",\"memory\":%zu,\"peak\":%zu,\"malloc\":%" PRIu64,
+		event, (long) getpid(), zend_native_compile_trace_request_index,
+		zend_memory_usage(false), zend_memory_peak_usage(false),
+		zend_native_compile_trace_malloc_bytes());
+}
+
+static void zend_native_compile_trace_live_fields(FILE *file,
+	const zend_native_compiler *compiler)
+{
+	zend_native_compile_trace_live live;
+
+	zend_native_compile_trace_live_scan(compiler, &live);
+	fprintf(file,
+		",\"compiler\":\"%s\",\"registry\":%u"
+		",\"live_ssa\":%" PRIu64 ",\"live_mir\":%" PRIu64
+		",\"live_image\":%" PRIu64 ",\"live_side\":%" PRIu64
+		",\"holding\":%u,\"holding_active\":%u",
+		compiler->defer_publication ? "prepare"
+			: compiler->persistent ? "persistent" : "request",
+		compiler->function_count, live.ssa_bytes, live.mir_bytes,
+		live.image_bytes, live.side_bytes, live.holding,
+		live.holding_active);
+}
+
+void zend_native_compile_trace_request_end(const char *stage)
+{
+	FILE *file = zend_native_compile_trace_file;
+
+	if (file == NULL) {
+		return;
+	}
+	zend_native_compile_trace_head(file, stage);
+	fputs("}\n", file);
+	if (strcmp(stage, "request_end") == 0) {
+		zend_native_compile_trace_request_index++;
+	}
+}
 
 static void zend_native_compiler_mutation_lock(
 	const zend_native_compiler *compiler)
@@ -463,6 +643,7 @@ static void *zend_native_compiler_module_allocate(
 	}
 	allocation->next = host->allocations;
 	host->allocations = allocation;
+	host->allocated_bytes += allocation_size;
 	host->successful_allocations++;
 	return (void *) ((address + alignment_mask) & ~alignment_mask);
 }
@@ -483,6 +664,7 @@ static void zend_native_compiler_module_reset(void *context)
 		allocation = next;
 	}
 	host->allocations = NULL;
+	host->allocated_bytes = 0;
 }
 
 typedef struct _zend_native_compiler_module_context {
@@ -3900,7 +4082,7 @@ binding_rejected:
 	return true;
 }
 
-static zend_result zend_native_compiler_compile_locked(
+static zend_result zend_native_compiler_compile_locked_impl(
 	zend_native_compiler *compiler,
 	zend_op_array *root,
 	const zend_mir_scalar_type_mask *supplied_argument_types,
@@ -4106,6 +4288,84 @@ failure:
 	return FAILURE;
 }
 
+static zend_result zend_native_compiler_compile_locked(
+	zend_native_compiler *compiler,
+	zend_op_array *root,
+	const zend_mir_scalar_type_mask *supplied_argument_types,
+	uint32_t supplied_argument_count,
+	zend_native_compile_diagnostic *diagnostic)
+{
+	FILE *file = zend_native_compile_trace_file;
+	zend_native_compiler_stats before;
+	zend_hrtime_t started;
+	size_t memory_before;
+	uint64_t malloc_before;
+	uint32_t functions_before;
+	uint32_t components_before;
+	uint64_t opcodes = 0;
+	uint32_t variants = 0;
+	uint32_t failed = 0;
+	uint32_t index;
+	zend_result result;
+
+	if (EXPECTED(file == NULL) || compiler == NULL) {
+		return zend_native_compiler_compile_locked_impl(compiler, root,
+			supplied_argument_types, supplied_argument_count, diagnostic);
+	}
+	before = compiler->stats;
+	functions_before = compiler->function_count;
+	components_before = compiler->published_component_count;
+	memory_before = zend_memory_usage(false);
+	malloc_before = zend_native_compile_trace_malloc_bytes();
+	zend_native_compile_trace_depth++;
+	started = zend_hrtime();
+	result = zend_native_compiler_compile_locked_impl(compiler, root,
+		supplied_argument_types, supplied_argument_count, diagnostic);
+	started = zend_hrtime() - started;
+	zend_native_compile_trace_depth--;
+	if (compiler->function_count == functions_before
+			&& result == SUCCESS) {
+		/* A registry hit compiles nothing. */
+		return result;
+	}
+	for (index = functions_before; index < compiler->function_count; index++) {
+		const zend_native_compiled_function *function =
+			compiler->functions[index];
+
+		if (function == NULL) {
+			continue;
+		}
+		opcodes += function->op_array->last;
+		variants += zend_native_compiler_is_variant(function);
+		failed += function->state == ZEND_NATIVE_CODEUNIT_FAILED;
+	}
+	zend_native_compile_trace_head(file, "compile");
+	fprintf(file, ",\"reason\":\"%s\",\"depth\":%u,\"ok\":%s",
+		zend_native_compile_trace_reason, zend_native_compile_trace_depth,
+		result == SUCCESS ? "true" : "false");
+	zend_native_compile_trace_source(file, root);
+	fprintf(file,
+		",\"new_functions\":%u,\"new_variants\":%u,\"new_failed\":%u"
+		",\"new_opcodes\":%" PRIu64 ",\"new_components\":%u"
+		",\"ns\":%" PRIu64 ",\"ssa_ns\":%" PRIu64
+		",\"lowering_ns\":%" PRIu64 ",\"codegen_ns\":%" PRIu64
+		",\"publish_ns\":%" PRIu64 ",\"code_bytes\":%" PRIu64
+		",\"memory_delta\":%" PRId64 ",\"malloc_delta\":%" PRId64,
+		compiler->function_count - functions_before, variants, failed,
+		opcodes, compiler->published_component_count - components_before,
+		(uint64_t) started, compiler->stats.ssa_ns - before.ssa_ns,
+		compiler->stats.lowering_ns - before.lowering_ns,
+		compiler->stats.codegen_ns - before.codegen_ns,
+		compiler->stats.publish_ns - before.publish_ns,
+		compiler->stats.native_code_bytes - before.native_code_bytes,
+		(int64_t) zend_memory_usage(false) - (int64_t) memory_before,
+		(int64_t) zend_native_compile_trace_malloc_bytes()
+			- (int64_t) malloc_before);
+	zend_native_compile_trace_live_fields(file, compiler);
+	fputs("}\n", file);
+	return result;
+}
+
 zend_result zend_native_compiler_compile(
 	zend_native_compiler *compiler,
 	zend_op_array *root,
@@ -4270,6 +4530,7 @@ static zend_native_entry_cell *zend_native_compiler_resolve_reentry(
 	zend_native_external_reentry_resolver_t external_resolver;
 	void *external_context;
 	uint32_t first_compiled_function;
+	const char *reason;
 
 	if (compiler == NULL || resolved == NULL
 			|| !ZEND_USER_CODE(resolved->type)) {
@@ -4291,8 +4552,11 @@ static zend_native_entry_cell *zend_native_compiler_resolve_reentry(
 		 * became visible only after runtime declaration or autoload. */
 		source_op_array = &resolved->op_array;
 	}
+	reason = zend_native_compile_trace_reason;
+	zend_native_compile_trace_reason = "reentry";
 	entry_cell = zend_native_compiler_prepare_op_array_locked(
 		compiler, source_op_array, &diagnostic);
+	zend_native_compile_trace_reason = reason;
 	zend_native_compiler_mutation_unlock(compiler);
 	if (entry_cell != NULL) {
 		/* Lazy reentry publishes immutable code before returning the entry cell.
@@ -5697,7 +5961,54 @@ success:
 	return *out_bytes != NULL ? SUCCESS : FAILURE;
 }
 
+static zend_result zend_native_compiler_import_bundle_impl(
+	zend_native_compiler *compiler,
+	const unsigned char *bytes,
+	size_t size,
+	zend_native_compile_diagnostic *diagnostic);
+
 zend_result zend_native_compiler_import_bundle(
+	zend_native_compiler *compiler,
+	const unsigned char *bytes,
+	size_t size,
+	zend_native_compile_diagnostic *diagnostic)
+{
+	FILE *file = zend_native_compile_trace_file;
+	uint32_t functions_before;
+	size_t memory_before;
+	uint64_t malloc_before;
+	zend_hrtime_t started;
+	zend_result result;
+
+	if (EXPECTED(file == NULL) || compiler == NULL) {
+		return zend_native_compiler_import_bundle_impl(
+			compiler, bytes, size, diagnostic);
+	}
+	functions_before = compiler->function_count;
+	memory_before = zend_memory_usage(false);
+	malloc_before = zend_native_compile_trace_malloc_bytes();
+	started = zend_hrtime();
+	result = zend_native_compiler_import_bundle_impl(
+		compiler, bytes, size, diagnostic);
+	started = zend_hrtime() - started;
+	zend_native_compile_trace_head(file, "import");
+	fprintf(file,
+		",\"ok\":%s,\"bundle_bytes\":%zu,\"new_functions\":%u"
+		",\"ns\":%" PRIu64 ",\"memory_delta\":%" PRId64
+		",\"malloc_delta\":%" PRId64,
+		result == SUCCESS ? "true" : "false", size,
+		compiler->function_count - functions_before, (uint64_t) started,
+		(int64_t) zend_memory_usage(false) - (int64_t) memory_before,
+		(int64_t) zend_native_compile_trace_malloc_bytes()
+			- (int64_t) malloc_before);
+	zend_native_compile_trace_source(file,
+		compiler->script != NULL ? &compiler->script->main_op_array : NULL);
+	zend_native_compile_trace_live_fields(file, compiler);
+	fputs("}\n", file);
+	return result;
+}
+
+static zend_result zend_native_compiler_import_bundle_impl(
 	zend_native_compiler *compiler,
 	const unsigned char *bytes,
 	size_t size,
@@ -5998,10 +6309,19 @@ static void zend_native_compiler_release_function_transients(
 void zend_native_compiler_release_ready_transients(
 	zend_native_compiler *compiler, uint32_t first_function_index)
 {
+	FILE *file = zend_native_compile_trace_file;
+	size_t memory_before = 0;
+	uint64_t malloc_before = 0;
+	uint32_t released = 0;
+	uint32_t skipped_active = 0;
 	uint32_t index;
 
 	if (compiler == NULL || first_function_index >= compiler->function_count) {
 		return;
+	}
+	if (UNEXPECTED(file != NULL)) {
+		memory_before = zend_memory_usage(false);
+		malloc_before = zend_native_compile_trace_malloc_bytes();
 	}
 	zend_native_compiler_mutation_lock(compiler);
 	for (index = first_function_index; index < compiler->function_count;
@@ -6009,9 +6329,12 @@ void zend_native_compiler_release_ready_transients(
 		zend_native_compiled_function *function = compiler->functions[index];
 
 		if (function == NULL
-				|| function->state != ZEND_NATIVE_CODEUNIT_READY
-				|| function->entry_cell.active_calls != 0
+				|| function->state != ZEND_NATIVE_CODEUNIT_READY) {
+			continue;
+		}
+		if (function->entry_cell.active_calls != 0
 				|| function->entry_cell.suspended_frames != 0) {
+			skipped_active++;
 			continue;
 		}
 		if (!function->leaf_scalar_frame_known) {
@@ -6020,6 +6343,19 @@ void zend_native_compiler_release_ready_transients(
 		}
 		zend_native_compiler_release_function_transients(
 			compiler, function);
+		released++;
+	}
+	if (UNEXPECTED(file != NULL)) {
+		zend_native_compile_trace_head(file, "release");
+		fprintf(file,
+			",\"first\":%u,\"released\":%u,\"skipped_active\":%u"
+			",\"memory_delta\":%" PRId64 ",\"malloc_delta\":%" PRId64,
+			first_function_index, released, skipped_active,
+			(int64_t) zend_memory_usage(false) - (int64_t) memory_before,
+			(int64_t) zend_native_compile_trace_malloc_bytes()
+				- (int64_t) malloc_before);
+		zend_native_compile_trace_live_fields(file, compiler);
+		fputs("}\n", file);
 	}
 	zend_native_compiler_mutation_unlock(compiler);
 }

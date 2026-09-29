@@ -1614,8 +1614,14 @@ zend_native_executor_resolve_external_reentry(
 		return NULL;
 	}
 	memset(&diagnostic, 0, sizeof(diagnostic));
-	entry_cell = zend_native_compiler_prepare_function(
-		generation->compiler, function, &diagnostic);
+	{
+		const char *reason = zend_native_compile_trace_reason;
+
+		zend_native_compile_trace_reason = "external-reentry";
+		entry_cell = zend_native_compiler_prepare_function(
+			generation->compiler, function, &diagnostic);
+		zend_native_compile_trace_reason = reason;
+	}
 	if (entry_cell == NULL) {
 		if (EG(exception) == NULL) {
 			zend_throw_error(NULL, "%s",
@@ -1641,6 +1647,7 @@ zend_result zend_native_executor_startup(void)
 	if (zend_native_executor_installed) {
 		return FAILURE;
 	}
+	zend_native_compile_trace_startup();
 #ifdef ZTS
 	zend_native_executor_generation_mutex = tsrm_mutex_alloc();
 	if (zend_native_executor_generation_mutex == NULL) {
@@ -1802,6 +1809,7 @@ void zend_native_executor_prepare_shutdown(void)
 
 void zend_native_executor_deactivate(void)
 {
+	zend_native_compile_trace_request_end("request_shutdown");
 	zend_native_executor_request_state.active = false;
 	zend_native_executor_request_state.pending_opcodes = NULL;
 	zend_native_executor_request_state.pending_dispatch = NULL;
@@ -1830,6 +1838,7 @@ void zend_native_executor_deactivate(void)
 		zend_native_executor_request_state.lookup_indexes_active = false;
 	}
 	zend_native_executor_release_request_epoch();
+	zend_native_compile_trace_request_end("request_end");
 }
 
 void zend_native_executor_invalidate(void)
@@ -2067,18 +2076,21 @@ static zend_result zend_native_executor_prepare_script_impl(
 		}
 		return FAILURE;
 	}
+	zend_native_compile_trace_reason = "opcache-prepare";
 	if ((compile_main
 				&& zend_native_compiler_compile(
 					compiler, &script->main_op_array, NULL, 0,
 					&diagnostic) == FAILURE)
 			|| !zend_native_executor_compile_captured_script(
 				compiler, script, &diagnostic, &selected_count)) {
+		zend_native_compile_trace_reason = "execute";
 		if (product_diagnostic != NULL) {
 			*product_diagnostic = diagnostic;
 		}
 		zend_native_compiler_destroy(compiler);
 		return FAILURE;
 	}
+	zend_native_compile_trace_reason = "execute";
 	if (!compile_main && selected_count == 0) {
 		zend_native_compiler_destroy(compiler);
 		return SUCCESS;
