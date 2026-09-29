@@ -7347,11 +7347,18 @@ public:
 				&& plan_->instructions[static_cast<uint32_t>(
 					direct_source_consumer)].record.opcode
 					== ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL;
+			/*
+			 * The register result skips the result slot, which only a
+			 * temporary may do: a CV result (opcache folds the ASSIGN into
+			 * the fetch) is read from its slot later and owns its old value.
+			 */
 			const bool boxed_source_result =
 				((record.opcode == ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
 						|| record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_R
 						|| record.opcode == ZEND_MIR_OPCODE_DYNAMIC_FETCH_R)
-					&& source_boxed_result_machine_eligible)
+					&& source_boxed_result_machine_eligible
+					&& instruction.value_operation.result.slot_kind
+						!= ZEND_MIR_SOURCE_SLOT_CV)
 				|| direct_internal_argument_result
 				|| register_complete_array_result;
 			const bool boxed_helper_boundary_result =

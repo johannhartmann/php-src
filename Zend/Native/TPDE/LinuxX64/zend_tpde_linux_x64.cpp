@@ -12452,8 +12452,9 @@ bool ZendCompilerX64::compile_inst_impl(
 				/* The following branch evaluates this comparison. Its
 				 * operands, including boundary transports, are dead;
 				 * statepoint materializations were consumed already. */
-				/* A register-held operand is published to its slot, which
-				 * the branch reads. */
+				/* A register-held operand, whether a node operand or a
+				 * liveness-only register result such as a property read, is
+				 * published to its slot, which the branch reads. */
 				const zend_mir_executable_value_ref &compare_operation =
 					mir.value_operation;
 				for (size_t index = 0;
@@ -12468,8 +12469,7 @@ bool ZendCompilerX64::compile_inst_impl(
 								Adaptor::EXECUTION_CONTEXT_ARGUMENT}
 						? ZEND_MIR_ID_INVALID
 						: adaptor->canonical_storage(operand);
-					if (index < node.operands.size()
-							&& zend_mir_id_is_valid(storage)
+					if (zend_mir_id_is_valid(storage)
 							&& (storage == compare_operation.op1_storage_id
 								|| storage
 									== compare_operation.op2_storage_id)) {
