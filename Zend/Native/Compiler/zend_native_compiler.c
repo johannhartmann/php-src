@@ -1543,13 +1543,20 @@ static bool zend_native_compiler_prepare_source_effects(
 			}
 		}
 	}
-	if (source->last > UINT32_MAX - echo_count
-			|| (compiler->source_probe
-				&& source->last + echo_count > UINT32_MAX - source->last)) {
+	/*
+	 * Echo effects exist only for the ABI probe and debug probes only for
+	 * the source probe. Exception routes need at most one effect per opline,
+	 * and only a function with a try/catch/finally region has any.
+	 */
+	if ((uint64_t) echo_count
+			+ (compiler->source_probe ? source->last : 0)
+			+ (source->last_try_catch != 0 ? source->last : 0)
+			> UINT32_MAX) {
 		return false;
 	}
-	function->source_effect_capacity = source->last + echo_count
-		+ (compiler->source_probe ? source->last : 0);
+	function->source_effect_capacity = echo_count
+		+ (compiler->source_probe ? source->last : 0)
+		+ (source->last_try_catch != 0 ? source->last : 0);
 	if (function->source_effect_capacity != 0) {
 		function->source_effects = zend_native_compiler_alloc(
 			compiler,
