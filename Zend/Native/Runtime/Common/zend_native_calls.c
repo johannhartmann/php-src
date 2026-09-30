@@ -7952,6 +7952,49 @@ uint32_t zend_native_call_universal_init(
 	return ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS;
 }
 
+/*
+ * The universal Do of a source call site, out of line: normalize a
+ * trampoline, then call the internal target's entry or invoke the user
+ * target, releasing the activation as the generated universal Do did.
+ * Returns ZEND_NATIVE_CALL_UNIVERSAL_DONE, _RELEASED_EXCEPTION after a
+ * completed call that left an exception, or _FAILED with the activation
+ * still active for the caller's phase failure.
+ */
+uint32_t zend_native_call_universal_do(
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor,
+	zend_native_execution_context *context)
+{
+	zend_native_direct_activation *activation = zend_native_active_direct_call;
+	zend_native_user_call_resolution *resolution = &activation->resolution;
+
+	if (resolution->target_kind == ZEND_NATIVE_USER_CALL_TARGET_NO_CALL) {
+		zend_native_frame_activation_release(activation);
+		return EG(exception) != NULL
+			? ZEND_NATIVE_CALL_UNIVERSAL_RELEASED_EXCEPTION
+			: ZEND_NATIVE_CALL_UNIVERSAL_DONE;
+	}
+	if (resolution->target_kind == ZEND_NATIVE_USER_CALL_TARGET_TRAMPOLINE
+			&& zend_native_call_normalize_user_resolution(caller, descriptor,
+				activation->callee, resolution)
+				!= ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS) {
+		return ZEND_NATIVE_CALL_UNIVERSAL_FAILED;
+	}
+	if (resolution->target_kind == ZEND_NATIVE_USER_CALL_TARGET_INTERNAL) {
+		activation->internal_target = true;
+		if (resolution->invoke_entry(activation->callee, context)
+				!= ZEND_NATIVE_RETURNED) {
+			return ZEND_NATIVE_CALL_UNIVERSAL_FAILED;
+		}
+		zend_native_frame_activation_release(activation);
+	} else if (zend_native_call_invoke_user(activation, context) != 0) {
+		return ZEND_NATIVE_CALL_UNIVERSAL_FAILED;
+	}
+	return EG(exception) != NULL
+		? ZEND_NATIVE_CALL_UNIVERSAL_RELEASED_EXCEPTION
+		: ZEND_NATIVE_CALL_UNIVERSAL_DONE;
+}
+
 zend_execute_data *zend_native_call_reserve_dynamic_frame(
 	zend_execute_data *caller, uint32_t reservation_size)
 {

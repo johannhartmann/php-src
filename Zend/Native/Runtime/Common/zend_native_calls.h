@@ -742,6 +742,13 @@ zend_native_status zend_native_call_convert_descriptor_explicit(
  */
 zend_execute_data *zend_native_call_reserve_dynamic_frame(
 	zend_execute_data *caller, uint32_t reservation_size);
+#define ZEND_NATIVE_CALL_UNIVERSAL_DONE UINT32_C(0)
+#define ZEND_NATIVE_CALL_UNIVERSAL_FAILED UINT32_C(1)
+#define ZEND_NATIVE_CALL_UNIVERSAL_RELEASED_EXCEPTION UINT32_C(2)
+uint32_t zend_native_call_universal_do(
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor,
+	zend_native_execution_context *context);
 uint32_t zend_native_call_universal_init(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor,
