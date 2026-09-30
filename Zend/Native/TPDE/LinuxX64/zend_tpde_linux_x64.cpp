@@ -269,7 +269,8 @@ class ZendCompilerX64 final
 						&& argument.source_opcode != ZEND_SEND_VAL_EX
 						&& argument.source_opcode != ZEND_SEND_VAR
 						&& argument.source_opcode != ZEND_SEND_VAR_EX
-						&& argument.source_opcode != ZEND_SEND_FUNC_ARG)
+						&& argument.source_opcode != ZEND_SEND_FUNC_ARG
+						&& argument.source_opcode != ZEND_SEND_VAR_NO_REF_EX)
 					|| (source.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
 						&& (!frame_slot(source)
 							|| (source.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
@@ -277,11 +278,14 @@ class ZendCompilerX64 final
 									!= ZEND_MIR_SOURCE_SLOT_TMP
 								/* A by-value FUNC_ARG fetch reads its
 								 * operand: the VAR holds a plain value
-								 * the send moves. */
+								 * the send moves. A call result sent with
+								 * NO_REF_EX moves, or is dereferenced. */
 								&& (source.slot_kind
 										!= ZEND_MIR_SOURCE_SLOT_VAR
-									|| argument.source_opcode
-										!= ZEND_SEND_FUNC_ARG))))) {
+									|| (argument.source_opcode
+											!= ZEND_SEND_FUNC_ARG
+										&& argument.source_opcode
+											!= ZEND_SEND_VAR_NO_REF_EX)))))) {
 				return false;
 			}
 			if (zend_tpde_source_call_phase_at(
@@ -4672,6 +4676,10 @@ bool ZendCompilerX64::compile_inst_impl(
 				source.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
 			const bool cv = !literal
 				&& source.slot_kind == ZEND_MIR_SOURCE_SLOT_CV;
+			/* A VAR a function result filled may hold a reference. */
+			const bool var_reference = !literal
+				&& source.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR
+				&& argument.source_opcode == ZEND_SEND_VAR_NO_REF_EX;
 			const uint64_t source_offset = literal
 				? uint64_t{source.index} * sizeof(zval)
 				: (uint64_t{ZEND_CALL_FRAME_SLOT} + source.index
@@ -4808,6 +4816,52 @@ bool ZendCompilerX64::compile_inst_impl(
 				}
 				generate_raw_jump(Jump::jmp, sent);
 				label_place(defined);
+			} else if (var_reference) {
+				/* ZEND_SEND_VAR of a reference: the helper moves the
+				 * referenced value and releases the reference. No scratch
+				 * register is live across the call. */
+				auto plain = text_writer.label_create();
+				{
+					ScratchReg type{this};
+					auto type_reg = type.alloc_gp();
+					ASM(MOVZXr32m8, type_reg,
+						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+							static_cast<int32_t>(source_offset
+								+ offsetof(zval, u1.type_info))));
+					ASM(CMP32ri, type_reg, IS_REFERENCE);
+					generate_raw_jump(Jump::jne, plain);
+				}
+				{
+					tpde::x64::CCAssignerSysV assigner{false};
+					CallBuilder builder{*this, assigner};
+					ScratchReg target{this};
+					ScratchReg variable{this};
+					auto target_reg = target.alloc_gp();
+					auto variable_reg = variable.alloc_gp();
+					ASM(MOV64rm, target_reg,
+						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zend_execute_data, call))));
+					ASM(ADD64ri, target_reg,
+						static_cast<int32_t>(target_offset));
+					ASM(LEA64rm, variable_reg,
+						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+							static_cast<int32_t>(source_offset)));
+					ValuePart target_value{
+						tpde::x64::PlatformConfig::GP_BANK, 8};
+					target_value.set_value(this, std::move(target));
+					builder.add_arg(
+						std::move(target_value), tpde::CCAssignment{});
+					ValuePart variable_value{
+						tpde::x64::PlatformConfig::GP_BANK, 8};
+					variable_value.set_value(this, std::move(variable));
+					builder.add_arg(
+						std::move(variable_value), tpde::CCAssignment{});
+					builder.call(runtime_symbol(
+						ZEND_NATIVE_HELPER_CALL_FAST_SEND_VAR_REFERENCE));
+				}
+				generate_raw_jump(Jump::jmp, sent);
+				label_place(plain);
 			}
 			if (!direct) {
 				ScratchReg address{this};

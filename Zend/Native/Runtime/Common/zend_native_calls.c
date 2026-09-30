@@ -4367,7 +4367,8 @@ static void zend_native_call_fast_publish(
 					&& argument->source_opcode != ZEND_SEND_VAL_EX
 					&& argument->source_opcode != ZEND_SEND_VAR
 					&& argument->source_opcode != ZEND_SEND_VAR_EX
-					&& argument->source_opcode != ZEND_SEND_FUNC_ARG)
+					&& argument->source_opcode != ZEND_SEND_FUNC_ARG
+					&& argument->source_opcode != ZEND_SEND_VAR_NO_REF_EX)
 				|| (index < op_array->num_args
 					? ZEND_ARG_SEND_MODE(&op_array->arg_info[index]) != 0
 					: (op_array->fn_flags & ZEND_ACC_VARIADIC) != 0
@@ -8067,6 +8068,24 @@ bool zend_native_call_fast_new(
 	call->prev_execute_data = caller->call;
 	caller->call = call;
 	return true;
+}
+
+/*
+ * A fast send of a VAR holding a reference to a by-value parameter, as
+ * ZEND_SEND_VAR sends it: the referenced value moves into the argument and
+ * the reference is released, freed when this was its last owner.
+ */
+void zend_native_call_fast_send_var_reference(zval *argument, zval *variable)
+{
+	zend_refcounted *reference = Z_COUNTED_P(variable);
+
+	ZVAL_COPY_VALUE(argument, Z_REFVAL_P(variable));
+	if (GC_DELREF(reference) == 0) {
+		efree_size(reference, sizeof(zend_reference));
+	} else if (Z_OPT_REFCOUNTED_P(argument)) {
+		Z_ADDREF_P(argument);
+	}
+	ZVAL_UNDEF(variable);
 }
 
 zend_execute_data *zend_native_call_reserve_dynamic_frame(
