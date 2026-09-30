@@ -4278,6 +4278,16 @@ static void zend_native_call_fast_publish(
 		if ((resolution->call_info & ZEND_CALL_HAS_THIS) != 0) {
 			return;
 		}
+	} else if (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_NEW) {
+		/* new C(...) of a literal class: the constructor is called on the
+		 * object the Init creates in the result slot. */
+		if (descriptor->init_op1.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+				|| entry->callable_class == NULL
+				|| (resolution->call_info
+					& (ZEND_CALL_HAS_THIS | ZEND_CALL_RELEASE_THIS))
+					!= (ZEND_CALL_HAS_THIS | ZEND_CALL_RELEASE_THIS)) {
+			return;
+		}
 	} else if (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_STATIC) {
 		const uint32_t fetch =
 			descriptor->init_op1_payload & ZEND_FETCH_CLASS_MASK;
@@ -4367,6 +4377,7 @@ static void zend_native_call_fast_publish(
 		}
 	}
 	header->fast_key = entry->lookup == ZEND_NATIVE_CALL_LOOKUP_METHOD
+			|| entry->lookup == ZEND_NATIVE_CALL_LOOKUP_NEW
 		? (const void *) entry->callable_class
 		: entry->lookup == ZEND_NATIVE_CALL_LOOKUP_STATIC
 			? resolution->object_or_called_scope : NULL;
@@ -8017,6 +8028,45 @@ zend_result zend_native_call_universal_send(
 	}
 	return zend_native_call_set_source_argument(
 		caller, descriptor, argument_index);
+}
+
+/*
+ * The fast Init of new C(...) whose site published C's constructor: create
+ * the object in the result slot and push the constructor frame as ZEND_NEW
+ * does. Returns false with nothing changed when the class could fail to
+ * instantiate or no longer has that constructor.
+ */
+bool zend_native_call_fast_new(
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor,
+	uint32_t result_offset)
+{
+	const zend_native_user_call_site_header *header =
+		ZEND_NATIVE_USER_CALL_SITE_HEADER(descriptor);
+	zend_class_entry *ce = (zend_class_entry *) header->fast_key;
+	zval *result = (zval *) ((char *) caller + result_offset);
+	zend_execute_data *call;
+	zend_object *object;
+
+	if (ce == NULL || ce->constructor != header->fast_function
+			|| ce->create_object != NULL
+			|| (ce->ce_flags & ZEND_ACC_CONSTANTS_UPDATED) == 0
+			|| (ce->ce_flags & (ZEND_ACC_INTERFACE | ZEND_ACC_TRAIT
+				| ZEND_ACC_IMPLICIT_ABSTRACT_CLASS
+				| ZEND_ACC_EXPLICIT_ABSTRACT_CLASS | ZEND_ACC_ENUM
+				| ZEND_ACC_UNINSTANTIABLE)) != 0) {
+		return false;
+	}
+	if (object_init_ex(result, ce) != SUCCESS) {
+		return false;
+	}
+	object = Z_OBJ_P(result);
+	call = zend_vm_stack_push_call_frame(header->fast_call_info,
+		header->fast_function, descriptor->argument_count, object);
+	GC_ADDREF(object);
+	call->prev_execute_data = caller->call;
+	caller->call = call;
+	return true;
 }
 
 zend_execute_data *zend_native_call_reserve_dynamic_frame(
