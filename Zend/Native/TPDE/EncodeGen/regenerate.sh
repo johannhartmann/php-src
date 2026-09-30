@@ -9,8 +9,9 @@
 # ../ThirdParty/tpde/REVISION (TPDE_ENABLE_ENCODEGEN=ON, TPDE_ENABLE_LLVM=OFF)
 # into $ENCODEGEN_ROOT (default $NATIVE_WORK_ROOT/tpde-encodegen) and compiles
 # the snippets with the matching clang. zend_tpde_encodegen_values.c reads the
-# Zend layouts of a configured build: ENCODEGEN_BUILD_DIR (default the
-# linux-amd64-native-debug-nts build under $NATIVE_WORK_ROOT). The tuning
+# Zend layouts of a configured release build, so no debug-only expansion
+# (assertions, RC checks) reaches a snippet: ENCODEGEN_BUILD_DIR (default the
+# linux-amd64-native-release-nts build under $NATIVE_WORK_ROOT). The tuning
 # feature slow-incdec keeps refcount increments in instruction forms EncodeGen
 # encodes; the ISA stays -march=x86-64. -fno-jump-tables keeps switches free
 # of indirect branches and -fno-builtin keeps loops from becoming library
@@ -25,9 +26,10 @@ repo=$(cd "$here/../../../.." && pwd)
 root=${ENCODEGEN_ROOT:-${NATIVE_WORK_ROOT:-/tmp}/tpde-encodegen}
 toolchain=${ENCODEGEN_TOOLCHAIN-nix shell nixpkgs#cmake nixpkgs#ninja nixpkgs#llvmPackages_21.llvm.dev nixpkgs#llvmPackages_21.llvm nixpkgs#llvmPackages_21.clang nixpkgs#lit --command}
 revision=$(awk '$1 == "TPDE" { print $3 }' "$here/../ThirdParty/tpde/REVISION")
-build=${ENCODEGEN_BUILD_DIR:-$(ls -d "${NATIVE_WORK_ROOT:-/nonexistent}"/php-src-*/linux-amd64-native-debug-nts/build 2>/dev/null | head -1)}
-if [ -z "$build" ] || [ ! -f "$build/main/php_config.h" ]; then
-	echo "set ENCODEGEN_BUILD_DIR to a configured php-src build directory" >&2
+build=${ENCODEGEN_BUILD_DIR:-$(ls -d "${NATIVE_WORK_ROOT:-/nonexistent}"/php-src-*/linux-amd64-native-release-nts/build 2>/dev/null | head -1)}
+if [ -z "$build" ] || [ ! -f "$build/main/php_config.h" ] \
+		|| ! grep -q '^#define ZEND_DEBUG 0' "$build/main/php_config.h"; then
+	echo "set ENCODEGEN_BUILD_DIR to a configured php-src release build" >&2
 	exit 1
 fi
 

@@ -23,6 +23,9 @@
  * generated header depend on the build configuration.
  */
 #define ZEND_NATIVE_ADDREF(counted) ((void) ++(counted)->gc.refcount)
+
+/* Snippets may not call: shared logic is always inlined. */
+#define ZEND_NATIVE_SNIPPET_INLINE static inline __attribute__((always_inline))
 #define ZEND_NATIVE_DELREF(counted) ((void) --(counted)->gc.refcount)
 
 /* The value of a zval as its two machine words. */
@@ -90,7 +93,7 @@ double zend_native_load_f64(const double *address)
  * literal's hash but is another string.
  */
 
-static zend_always_inline const HashTable *zend_native_probe_array(
+ZEND_NATIVE_SNIPPET_INLINE const HashTable *zend_native_probe_array(
 	const zval *container)
 {
 	if (Z_TYPE_P(container) == IS_REFERENCE) {
@@ -99,13 +102,13 @@ static zend_always_inline const HashTable *zend_native_probe_array(
 	return Z_TYPE_P(container) == IS_ARRAY ? Z_ARRVAL_P(container) : NULL;
 }
 
-static zend_always_inline uintptr_t zend_native_probe_element(zval *element)
+ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_probe_element(zval *element)
 {
 	return Z_TYPE_P(element) == IS_INDIRECT
 		? ZEND_NATIVE_ELEMENT_UNKNOWN : (uintptr_t) element;
 }
 
-static zend_always_inline uintptr_t zend_native_find_index(
+ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_index(
 	const HashTable *table, zend_ulong h)
 {
 	uint32_t index;
@@ -130,31 +133,17 @@ static zend_always_inline uintptr_t zend_native_find_index(
 }
 
 /*
- * The element under a literal key. The compiler already turned numeric
- * string literals into integers and interned the others, so identity with
- * the bucket key decides string equality; a bucket with the same hash but
- * another key string is left to the helper.
+ * The element under an interned non-numeric literal key: identity with the
+ * bucket key decides; a bucket with the same hash but another key string is
+ * left to the helper.
  */
-uintptr_t zend_native_array_find_literal(
-	const zval *container, const zval *key)
+ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_literal_string(
+	const HashTable *table, const zend_string *name)
 {
-	const HashTable *table = zend_native_probe_array(container);
-	const zend_string *name;
-	zend_ulong h;
+	zend_ulong h = ZSTR_H(name);
 	uint32_t index;
 
-	if (table == NULL) {
-		return ZEND_NATIVE_ELEMENT_UNKNOWN;
-	}
-	if (Z_TYPE_P(key) == IS_LONG) {
-		return zend_native_find_index(table, (zend_ulong) Z_LVAL_P(key));
-	}
-	if (Z_TYPE_P(key) != IS_STRING) {
-		return ZEND_NATIVE_ELEMENT_UNKNOWN;
-	}
-	name = Z_STR_P(key);
-	h = ZSTR_H(name);
-	if (h == 0 || !ZSTR_IS_INTERNED(name)) {
+	if (h == 0) {
 		return ZEND_NATIVE_ELEMENT_UNKNOWN;
 	}
 	if (HT_IS_PACKED(table)) {
@@ -176,71 +165,103 @@ uintptr_t zend_native_array_find_literal(
 }
 
 /*
- * The element under a runtime key, as FETCH_DIM_R with a CV key sees it: an
- * integer, or a string that cannot be numeric (it does not start with a
- * digit or '-') and already carries its hash. Other strings are undecided,
- * so the helper handles numeric conversion and computes the hash, which the
- * string then keeps.
+ * The element under a runtime string key: an interned key (one that cannot
+ * be numeric, starting with neither a digit nor '-') is decided by identity
+ * like a literal. A key of another string, whose equal-content bucket key
+ * would need a byte comparison, is left to the helper, as are keys without
+ * their hash.
  */
-uintptr_t zend_native_array_find_key(const zval *container, const zval *key)
+ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_string(
+	const HashTable *table, const zend_string *name)
 {
-	const HashTable *table = zend_native_probe_array(container);
-	const zend_string *name;
-	zend_ulong h;
-	size_t length;
-	uint32_t index;
 	unsigned char first;
 
-	if (table == NULL) {
-		return ZEND_NATIVE_ELEMENT_UNKNOWN;
-	}
-	if (Z_TYPE_P(key) == IS_REFERENCE) {
-		key = &Z_REF_P(key)->val;
-	}
-	if (Z_TYPE_P(key) == IS_LONG) {
-		return zend_native_find_index(table, (zend_ulong) Z_LVAL_P(key));
-	}
-	if (Z_TYPE_P(key) != IS_STRING) {
-		return ZEND_NATIVE_ELEMENT_UNKNOWN;
-	}
-	name = Z_STR_P(key);
-	h = ZSTR_H(name);
-	length = ZSTR_LEN(name);
-	if (h == 0 || length == 0) {
+	if (!ZSTR_IS_INTERNED(name) || ZSTR_LEN(name) == 0) {
 		return ZEND_NATIVE_ELEMENT_UNKNOWN;
 	}
 	first = (unsigned char) ZSTR_VAL(name)[0];
 	if ((first >= '0' && first <= '9') || first == '-') {
 		return ZEND_NATIVE_ELEMENT_UNKNOWN;
 	}
-	if (HT_IS_PACKED(table)) {
-		return ZEND_NATIVE_ELEMENT_ABSENT;
-	}
-	index = HT_HASH_EX(table->arData, (uint32_t) h | table->nTableMask);
-	while (index != HT_INVALID_IDX) {
-		Bucket *bucket = HT_HASH_TO_BUCKET_EX(table->arData, index);
+	return zend_native_find_literal_string(table, name);
+}
 
-		if (bucket->key == name) {
-			return zend_native_probe_element(&bucket->val);
-		}
-		if (bucket->h == h && bucket->key != NULL
-				&& ZSTR_LEN(bucket->key) == length) {
-			const unsigned char *left =
-				(const unsigned char *) ZSTR_VAL(bucket->key);
-			const unsigned char *right =
-				(const unsigned char *) ZSTR_VAL(name);
-			size_t offset = 0;
-
-			while (offset < length && left[offset] == right[offset]) {
-				offset++;
-			}
-			if (offset == length) {
-				return zend_native_probe_element(&bucket->val);
-			}
-		}
-		index = Z_NEXT(bucket->val);
+ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_value(
+	const HashTable *table, uint64_t payload, uint32_t type, bool literal)
+{
+	if (table == NULL) {
+		return ZEND_NATIVE_ELEMENT_UNKNOWN;
 	}
-	return ZEND_NATIVE_ELEMENT_ABSENT;
+	if (type == IS_LONG) {
+		return zend_native_find_index(table, (zend_ulong) payload);
+	}
+	if (type != IS_STRING) {
+		return ZEND_NATIVE_ELEMENT_UNKNOWN;
+	}
+	return literal
+		? zend_native_find_literal_string(
+			table, (const zend_string *) (uintptr_t) payload)
+		: zend_native_find_string(
+			table, (const zend_string *) (uintptr_t) payload);
+}
+
+/*
+ * The element under a literal key of a container zval. The compiler turned
+ * numeric string literals into integers.
+ */
+uintptr_t zend_native_array_find_literal(
+	const zval *container, const zval *key)
+{
+	return zend_native_find_value(zend_native_probe_array(container),
+		(uint64_t) Z_LVAL_P(key), Z_TYPE_P(key), true);
+}
+
+/* The element under a runtime key of a container zval (see above). */
+uintptr_t zend_native_array_find_key(const zval *container, const zval *key)
+{
+	if (Z_TYPE_P(key) == IS_REFERENCE) {
+		key = &Z_REF_P(key)->val;
+	}
+	return zend_native_find_value(zend_native_probe_array(container),
+		(uint64_t) Z_LVAL_P(key), Z_TYPE_P(key), false);
+}
+
+/* The array of a container zval, through a reference, or NULL. */
+const HashTable *zend_native_zval_table(const zval *container)
+{
+	return zend_native_probe_array(container);
+}
+
+/* The array of a boxed value, or NULL. */
+const HashTable *zend_native_boxed_table(uint64_t payload, uint64_t type_info)
+{
+	return (uint8_t) type_info == IS_ARRAY
+		? (const HashTable *) (uintptr_t) payload : NULL;
+}
+
+/* The element of an array under an integer, string or boxed key value. */
+uintptr_t zend_native_table_find_long(const HashTable *table, int64_t key)
+{
+	return zend_native_find_index(table, (zend_ulong) key);
+}
+
+uintptr_t zend_native_table_find_string(
+	const HashTable *table, const zend_string *key)
+{
+	return zend_native_find_string(table, key);
+}
+
+uintptr_t zend_native_table_find_boxed(
+	const HashTable *table, uint64_t payload, uint64_t type_info)
+{
+	return zend_native_find_value(
+		table, payload, (uint8_t) type_info, false);
+}
+
+/* Whether a zval holds exactly an integer. */
+uint64_t zend_native_zval_is_long(const zval *value)
+{
+	return Z_TYPE_INFO_P(value) == IS_LONG;
 }
 
 /*
