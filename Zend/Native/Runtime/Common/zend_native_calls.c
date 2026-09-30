@@ -1771,6 +1771,31 @@ static zend_class_entry *zend_native_call_source_class(
 	return Z_CE_P(value);
 }
 
+/*
+ * The run-time cache slot of the caller's INIT opline, which the VM uses
+ * for the same call site (one pointer for a function name, the class and
+ * method pair for a method name), or NULL without a run-time cache.
+ */
+static void **zend_native_call_init_cache_slot(
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor, uint32_t slots)
+{
+	const zend_op_array *op_array = &caller->func->op_array;
+	const zend_op *init;
+
+	if (caller->run_time_cache == NULL
+			|| descriptor->init_source_position >= op_array->last) {
+		return NULL;
+	}
+	init = &op_array->opcodes[descriptor->init_source_position];
+	if (init->opcode != descriptor->init_opcode
+			|| init->result.num + slots * sizeof(void *)
+				> (uint32_t) op_array->cache_size) {
+		return NULL;
+	}
+	return (void **) ((char *) caller->run_time_cache + init->result.num);
+}
+
 static zend_function *zend_native_call_object_method(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor,
@@ -1780,6 +1805,7 @@ static zend_function *zend_native_call_object_method(
 	zval *receiver;
 	zval *name;
 	zval *cache_name = NULL;
+	void **cache_slot;
 	zend_object *object;
 	zend_object *original;
 	zend_function *function;
@@ -1824,8 +1850,25 @@ static zend_function *zend_native_call_object_method(
 		return NULL;
 	}
 	original = object = Z_OBJ_P(receiver);
-	function = object->handlers->get_method(
-		&object, Z_STR_P(name), cache_name);
+	cache_slot = cache_name != NULL
+		? zend_native_call_init_cache_slot(caller, descriptor, 2) : NULL;
+	if (cache_slot != NULL && cache_slot[0] == object->ce) {
+		function = cache_slot[1];
+	} else {
+		function = object->handlers->get_method(
+			&object, Z_STR_P(name), cache_name);
+		if (function != NULL && cache_slot != NULL && object == original
+				&& (function->common.fn_flags
+					& (ZEND_ACC_CALL_VIA_TRAMPOLINE
+						| ZEND_ACC_NEVER_CACHE)) == 0) {
+			cache_slot[0] = original->ce;
+			cache_slot[1] = function;
+		}
+		if (function != NULL && function->type == ZEND_USER_FUNCTION
+				&& RUN_TIME_CACHE(&function->op_array) == NULL) {
+			zend_init_func_run_time_cache(&function->op_array);
+		}
+	}
 	if (function == NULL) {
 		if (function == NULL && EG(exception) == NULL) {
 			zend_undefined_method(original->ce, Z_STR_P(name));
@@ -2409,6 +2452,7 @@ static bool zend_native_call_named_target(
 	const zend_op_array *op_array = &caller->func->op_array;
 	zval *encoded_name;
 	zval *function;
+	void **cache_slot;
 	uint32_t literal_index;
 
 	if (descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
@@ -2425,6 +2469,15 @@ static bool zend_native_call_named_target(
 		return false;
 	}
 	encoded_name = &op_array->literals[literal_index];
+	/* Like the VM, the INIT opline's run-time cache slot keeps the
+	 * resolved function for the request. */
+	cache_slot = zend_native_call_init_cache_slot(caller, descriptor, 1);
+	if (cache_slot != NULL && cache_slot[0] != NULL) {
+		*function_out = cache_slot[0];
+		*object_or_scope_out = NULL;
+		*call_info_out = ZEND_CALL_NESTED_FUNCTION;
+		return true;
+	}
 	function = zend_hash_find_known_hash(
 		EG(function_table), Z_STR(encoded_name[1]));
 	if (function == NULL && namespace_fallback) {
@@ -2440,6 +2493,9 @@ static bool zend_native_call_named_target(
 	if ((*function_out)->type == ZEND_USER_FUNCTION
 			&& RUN_TIME_CACHE(&(*function_out)->op_array) == NULL) {
 		zend_init_func_run_time_cache(&(*function_out)->op_array);
+	}
+	if (cache_slot != NULL) {
+		cache_slot[0] = *function_out;
 	}
 	*object_or_scope_out = NULL;
 	*call_info_out = ZEND_CALL_NESTED_FUNCTION;
