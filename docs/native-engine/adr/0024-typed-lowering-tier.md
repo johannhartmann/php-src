@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Linux x64 only; DarwinA64 keeps the W11 path.
+Accepted. Linux x64 only; DarwinA64 keeps the W11 path. The rule "there is no deoptimization" is superseded by [ADR 0025](0025-native-canonical-execution.md), which adds speculation with deoptimization into generic native code.
 
 ## Context
 

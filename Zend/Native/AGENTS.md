@@ -10,6 +10,11 @@ instructions.
   production fallback path.
 - Preserve Zend value, call, bailout, and lifetime semantics. Require an ADR and
   focused compatibility tests before changing an ABI boundary.
+- Follow ADR 0025 (native state canonical, lazy Zend-frame reconstruction,
+  native call ABI, speculation with deoptimization into generic native code,
+  guarded inlining). Every observation point needs complete frame-state
+  metadata; a missing or wrong frame state is a correctness bug, not a
+  performance issue.
 - Put architecture-specific lowering and target code only under `TPDE/`.
 - Keep `MIR/`, `TPDE/`, and `Runtime/` as explicit architectural boundaries and
   read their `AGENTS.md` before changing them.

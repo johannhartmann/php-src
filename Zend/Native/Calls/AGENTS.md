@@ -16,5 +16,10 @@ W05 positional-scalar model.
   address may enter MIR.
 - Keep target ABI mechanics in `TPDE/` and Zend call-frame semantics in
   `Runtime/`; do not add a VM fallback, opcode handler call, or MIR interpreter.
+- Calls between compiled PHP functions may use the native calling convention of
+  ADR 0025 (arguments and results in registers, no VM-stack frame). A Zend
+  frame is built lazily from frame-state metadata when the callee's state
+  becomes observable, and at every boundary to internal functions, callbacks,
+  reflection and observers that need one.
 - Extend the existing execution and PHPT coverage without introducing per-wave
   call gates, profiles, manifests, receipts, or ledgers.

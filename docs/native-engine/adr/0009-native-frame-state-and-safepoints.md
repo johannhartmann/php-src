@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted on 2026-07-17.
+Accepted on 2026-07-17. Superseded in part by [ADR 0025](0025-native-canonical-execution.md): native state is canonical, and only the state an observer reads is materialized at a safepoint, from verified machine frame-state maps.
 
 ## Context
 
