@@ -1852,10 +1852,27 @@ uint32_t zend_native_call_fast_leave(
 			ZVAL_UNDEF(callee->return_value);
 		}
 		/* A variable destructor may inspect the backtrace: the dying frame
-		 * is no longer current. */
+		 * is no longer current. The CVs are released as
+		 * i_free_compiled_variables() releases them. */
 		EG(current_execute_data) = caller;
 		zend_vm_stack_free_extra_args(callee);
-		zend_free_compiled_variables(callee);
+		{
+			zval *cv = ZEND_CALL_VAR_NUM(callee, 0);
+			zval *end = cv + callee->func->op_array.last_var;
+
+			for (; cv < end; cv++) {
+				if (Z_REFCOUNTED_P(cv)) {
+					zend_refcounted *counted = Z_COUNTED_P(cv);
+
+					if (!GC_DELREF(counted)) {
+						ZVAL_NULL(cv);
+						rc_dtor_func(counted);
+					} else {
+						gc_check_possible_root(counted);
+					}
+				}
+			}
+		}
 	} else {
 		status = zend_native_execution_finish_direct_frame(callee, status);
 		if (status == ZEND_NATIVE_BAILOUT) {
