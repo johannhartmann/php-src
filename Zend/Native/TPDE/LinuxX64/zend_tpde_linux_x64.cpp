@@ -4290,6 +4290,8 @@ bool ZendCompilerX64::compile_inst_impl(
 		/* A direct scalar send has one TPDE use; the fast and universal
 		 * paths share its ValueRef. */
 		std::optional<ValueRef> shared_direct;
+		/* A fast site's Send branches here for a pending exception. */
+		auto send_exception = text_writer.label_create();
 		auto direct_value_ref = [&]() -> ValueRef & {
 			if (!shared_direct) {
 				shared_direct.emplace(val_ref(node.operands[2]));
@@ -4324,7 +4326,8 @@ bool ZendCompilerX64::compile_inst_impl(
 				ASM(CMP32ri, status.cur_reg_or_load(this), SUCCESS);
 				generate_raw_jump(Jump::je, sent_universal);
 				status.reset(this);
-				emit_phase_failure();
+				/* The helper released the activation. */
+				generate_raw_jump(Jump::jmp, send_exception);
 				label_place(sent_universal);
 				status.reset(this);
 				return true;
@@ -4651,13 +4654,20 @@ bool ZendCompilerX64::compile_inst_impl(
 				status.reset(this);
 			}
 			generate_raw_jump(Jump::je, sent);
-			emit_fast_failure();
+			generate_raw_jump(Jump::jmp, send_exception);
 			label_place(universal);
 			reconcile_target_branch_state(fast_spilled);
 			if (!compile_universal_send()) {
 				return false;
 			}
 			label_place(sent);
+			{
+				auto send_done = text_writer.label_create();
+				generate_raw_jump(Jump::jmp, send_done);
+				label_place(send_exception);
+				emit_fast_failure();
+				label_place(send_done);
+			}
 			return true;
 		}
 		if (node.kind == Adaptor::InstKind::UserCallSend && fast_site) {
@@ -4796,11 +4806,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(MOV64rm, exception_reg,
 						FE_MEM(exception_reg, 0, FE_NOREG, 0));
 					ASM(TEST64rr, exception_reg, exception_reg);
-					auto no_exception = text_writer.label_create();
-					generate_raw_jump(Jump::je, no_exception);
-					exception.reset();
-					emit_fast_failure();
-					label_place(no_exception);
+					generate_raw_jump(Jump::jne, send_exception);
 				}
 				{
 					ScratchReg callee{this};
@@ -4934,6 +4940,13 @@ bool ZendCompilerX64::compile_inst_impl(
 			}
 			label_place(sent);
 			reconcile_target_branch_state(fast_spilled);
+			{
+				auto send_done = text_writer.label_create();
+				generate_raw_jump(Jump::jmp, send_done);
+				label_place(send_exception);
+				emit_fast_failure();
+				label_place(send_done);
+			}
 			return true;
 		}
 		if (node.kind == Adaptor::InstKind::UserCallSend) {
