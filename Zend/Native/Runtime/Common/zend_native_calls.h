@@ -774,6 +774,13 @@ zend_native_direct_call_result zend_native_call_dynamic_leave(
 const uint64_t *zend_native_call_cache_epoch_address(void);
 uint32_t zend_native_call_fast_prepare(zend_execute_data *callee);
 void zend_native_call_fast_scalar_violation(void);
+zend_native_frame_entry_t zend_native_call_fast_dynamic_init(
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor);
+uint32_t zend_native_call_fast_send(
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor,
+	uint32_t index);
 uint32_t zend_native_call_fast_leave(
 	zend_execute_data *callee, uint32_t status, bool discard_result);
 void zend_native_call_fast_undefined_argument(
