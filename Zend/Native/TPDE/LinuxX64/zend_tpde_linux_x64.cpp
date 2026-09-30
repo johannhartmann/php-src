@@ -13294,6 +13294,127 @@ bool ZendCompilerX64::compile_inst_impl(
 		return true;
 #endif
 	};
+	/*
+	 * FETCH_CLASS_CONSTANT of a literal name as the VM reads it: the
+	 * run-time cache keeps the class and the constant's value; for a literal
+	 * class the value alone decides, for self::, parent:: and static:: the
+	 * class, resolved from the caller, must match. An uncounted value is
+	 * copied into the result; anything else runs the helper, which also
+	 * fills the cache.
+	 */
+	auto class_constant_inline = [&]() {
+		const zend_mir_executable_value_ref &operation = mir.value_operation;
+		const uint32_t fetch =
+			operation.op1_unused_payload & ZEND_FETCH_CLASS_MASK;
+		const bool literal_class =
+			operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
+		bool frame_operands = node.kind == Adaptor::InstKind::MIR
+			&& !node.has_result && mir.has_value_operation
+			&& operation.source_opcode == ZEND_FETCH_CLASS_CONSTANT
+			&& operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+			&& (literal_class
+				|| (operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+					&& (fetch == ZEND_FETCH_CLASS_SELF
+						|| fetch == ZEND_FETCH_CLASS_PARENT
+						|| fetch == ZEND_FETCH_CLASS_STATIC)))
+			&& (operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+				|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)
+			&& zend_mir_id_is_valid(operation.result_storage_id)
+			&& operation.extended_value <= INT32_MAX - 2 * sizeof(void *);
+		for (IRValueRef operand : node.operands) {
+			frame_operands = frame_operands
+				&& (operand == IRValueRef{Adaptor::FRAME_VALUE}
+					|| operand == IRValueRef{
+						Adaptor::EXECUTION_CONTEXT_ARGUMENT});
+		}
+		const uint64_t result_offset64 =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
+				* sizeof(zval);
+		if (!frame_operands || result_offset64 > INT32_MAX - sizeof(zval)) {
+			return execute_value_operation();
+		}
+		const int32_t result_offset = static_cast<int32_t>(result_offset64);
+		const int32_t class_slot =
+			static_cast<int32_t>(operation.extended_value);
+		const int32_t value_slot = class_slot
+			+ static_cast<int32_t>(sizeof(void *));
+		const auto spilled = spill_before_branch(true);
+		auto slow = text_writer.label_create();
+		auto done = text_writer.label_create();
+		{
+			const AsmReg frame_reg = canonical_frame_register();
+			ScratchReg cache{this};
+			ScratchReg scope{this};
+			ScratchReg value{this};
+			auto cache_reg = cache.alloc_gp();
+			auto scope_reg = scope.alloc_gp();
+			auto value_reg = value.alloc_gp();
+			ASM(MOV64rm, cache_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_execute_data, run_time_cache))));
+			ASM(TEST64rr, cache_reg, cache_reg);
+			generate_raw_jump(Jump::je, slow);
+			if (!literal_class) {
+				if (fetch == ZEND_FETCH_CLASS_STATIC) {
+					/* The called scope: $this's class or the class This
+					 * holds. */
+					auto have_scope = text_writer.label_create();
+					ASM(MOV64rm, scope_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zend_execute_data, This))));
+					ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_execute_data, This)
+							+ offsetof(zval, u1.type_info))), IS_OBJECT);
+					generate_raw_jump(Jump::jne, have_scope);
+					ASM(MOV64rm, scope_reg, FE_MEM(scope_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_object, ce))));
+					label_place(have_scope);
+				} else {
+					ASM(MOV64rm, scope_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zend_execute_data, func))));
+					ASM(MOV64rm, scope_reg, FE_MEM(scope_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zend_op_array, scope))));
+					if (fetch == ZEND_FETCH_CLASS_PARENT) {
+						ASM(TEST64rr, scope_reg, scope_reg);
+						generate_raw_jump(Jump::je, slow);
+						ASM(MOV64rm, scope_reg, FE_MEM(scope_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zend_class_entry, parent))));
+					}
+				}
+				ASM(TEST64rr, scope_reg, scope_reg);
+				generate_raw_jump(Jump::je, slow);
+				ASM(CMP64rm, scope_reg,
+					FE_MEM(cache_reg, 0, FE_NOREG, class_slot));
+				generate_raw_jump(Jump::jne, slow);
+			}
+			ASM(MOV64rm, cache_reg, FE_MEM(cache_reg, 0, FE_NOREG, value_slot));
+			ASM(TEST64rr, cache_reg, cache_reg);
+			generate_raw_jump(Jump::je, slow);
+			ASM(MOV32rm, value_reg, FE_MEM(cache_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+			ASM(TEST32ri, value_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+			generate_raw_jump(Jump::jne, slow);
+			ASM(MOV32mr, FE_MEM(frame_reg, 0, FE_NOREG, result_offset
+				+ static_cast<int32_t>(offsetof(zval, u1.type_info))),
+				value_reg);
+			ASM(MOV64rm, value_reg, FE_MEM(cache_reg, 0, FE_NOREG, 0));
+			ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG, result_offset),
+				value_reg);
+			generate_raw_jump(Jump::jmp, done);
+		}
+		label_place(slow);
+		if (!execute_value_operation()) {
+			return false;
+		}
+		label_place(done);
+		release_spilled_regs(spilled);
+		return true;
+	};
 	auto dynamic_fetch_read = [&]() {
 		zend_tpde_dynamic_fetch_read layout;
 
@@ -14056,6 +14177,9 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_DYNAMIC_BIND_GLOBAL) {
 			return bind_global_inline();
+		}
+		if (record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_CONSTANT) {
+			return class_constant_inline();
 		}
 		return execute_value_operation();
 	}

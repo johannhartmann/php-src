@@ -2197,6 +2197,22 @@ static zend_native_status zend_native_class_constant_explicit(
 					== FAILURE) {
 			value = NULL;
 		}
+		/* As the VM does, the run-time cache keeps the class and the
+		 * constant's value for a literal name, which the generated fast
+		 * path reads. */
+		if (value != NULL && operation->op2_type == IS_CONST
+				&& Z_TYPE_P(value) != IS_CONSTANT_AST
+				&& (ZEND_CLASS_CONST_FLAGS(constant) & ZEND_ACC_DEPRECATED)
+					== 0
+				&& execute_data->run_time_cache != NULL
+				&& (uint64_t) operation->extended_value + 2 * sizeof(void *)
+					<= execute_data->func->op_array.cache_size) {
+			void **slot = (void **) ((char *) execute_data->run_time_cache
+				+ operation->extended_value);
+
+			slot[0] = class_entry;
+			slot[1] = value;
+		}
 		if (value != NULL) {
 			zend_native_object_replace(result, value);
 		} else {
