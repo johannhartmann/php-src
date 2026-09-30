@@ -770,6 +770,11 @@ zend_native_direct_call_result zend_native_call_dynamic_leave(
 #define ZEND_NATIVE_CALL_FAST_PREPARE UINT32_C(1)
 #define ZEND_NATIVE_CALL_FAST_CHECK_ARGS UINT32_C(2)
 #define ZEND_NATIVE_CALL_FAST_DEFAULTS UINT32_C(4)
+/* A static-method site: the callee's $this is the caller's object
+ * (STATIC_THIS), its called scope the caller's (STATIC_FORWARD), or else
+ * the class fast_key names. */
+#define ZEND_NATIVE_CALL_FAST_STATIC_THIS UINT32_C(8)
+#define ZEND_NATIVE_CALL_FAST_STATIC_FORWARD UINT32_C(16)
 
 const uint64_t *zend_native_call_cache_epoch_address(void);
 uint32_t zend_native_call_fast_prepare(zend_execute_data *callee);
