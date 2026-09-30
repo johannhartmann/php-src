@@ -7782,12 +7782,37 @@ bool ZendCompilerX64::compile_inst_impl(
 				|| node.continuation_block == UINT32_MAX) {
 			return 0;
 		}
+		/* A container or key held as a machine value is published to its
+		 * frame slot first, as the helper of the cold block reads it. */
+		std::vector<std::pair<IRValueRef, zend_mir_storage_id>> published;
 		for (IRValueRef operand : node.operands) {
-			if (operand != IRValueRef{Adaptor::FRAME_VALUE}
-					&& operand != IRValueRef{
+			if (operand == IRValueRef{Adaptor::FRAME_VALUE}
+					|| operand == IRValueRef{
 						Adaptor::EXECUTION_CONTEXT_ARGUMENT}) {
+				continue;
+			}
+			const zend_mir_storage_id storage =
+				adaptor->canonical_storage(operand);
+			const zend_tpde_machine_value_kind kind =
+				adaptor->machine_kind(operand);
+			if (!zend_mir_id_is_valid(storage)
+					|| (storage != operation.op1_storage_id
+						&& storage != operation.op2_storage_id)
+					|| (kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+						? val_parts(operand).count() != 2
+						: kind != ZEND_TPDE_MACHINE_VALUE_BOOL
+							&& kind != ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+							&& kind != ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+							&& zend_tpde_machine_value_zval_type_info(kind)
+								== IS_UNDEF)) {
 				return 0;
 			}
+			for (const auto &[other, other_storage] : published) {
+				if (other_storage == storage) {
+					return 0;
+				}
+			}
+			published.emplace_back(operand, storage);
 		}
 		const auto successors =
 			adaptor->block_succs(IRBlockRef{node.control_block});
@@ -7867,6 +7892,11 @@ bool ZendCompilerX64::compile_inst_impl(
 				|| result_offset > INT32_MAX - sizeof(zval)
 				|| unlocked_gp_registers() < 9) {
 			return 0;
+		}
+		for (const auto &[operand, storage] : published) {
+			if (!materialize_cold_operand(operand, storage)) {
+				return -1;
+			}
 		}
 
 		auto slow = text_writer.label_create();
