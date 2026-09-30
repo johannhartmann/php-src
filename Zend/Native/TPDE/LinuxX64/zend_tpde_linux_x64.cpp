@@ -196,6 +196,19 @@ class ZendCompilerX64 final
 			case ZEND_INIT_FCALL_BY_NAME:
 			case ZEND_INIT_NS_FCALL_BY_NAME:
 				break;
+			case ZEND_NEW:
+				/* new of a literal class; the Init creates the object in
+				 * the result slot. */
+				if (descriptor->init_op1.kind
+						!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+						|| !frame_slot(descriptor->init_result)
+						|| (descriptor->init_result.slot_kind
+								!= ZEND_MIR_SOURCE_SLOT_TMP
+							&& descriptor->init_result.slot_kind
+								!= ZEND_MIR_SOURCE_SLOT_VAR)) {
+					return false;
+				}
+				break;
 			case ZEND_INIT_STATIC_METHOD_CALL: {
 				/* A named class or self::/parent::. */
 				const uint32_t fetch =
@@ -3754,7 +3767,70 @@ bool ZendCompilerX64::compile_inst_impl(
 				auto fast_miss = text_writer.label_create();
 				const zend_native_user_call_descriptor *descriptor =
 					call.user_call;
-				if (source_call_fast_dynamic(call)) {
+				if (descriptor->init_opcode == ZEND_NEW) {
+					/* The published constructor: the helper creates the
+					 * object in the result slot and pushes the frame. */
+					const uint64_t object_offset =
+						(uint64_t{ZEND_CALL_FRAME_SLOT}
+							+ adaptor->plan()->source_frame_variable_count
+							+ descriptor->init_result.index) * sizeof(zval);
+					if (object_offset > INT32_MAX - sizeof(zval)) {
+						return false;
+					}
+					{
+						auto descriptor_value = image_symbol_value(
+							ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
+							call.id);
+						auto descriptor_scratch =
+							std::move(descriptor_value).into_scratch(this);
+						ScratchReg value{this};
+						auto value_reg = value.alloc_gp();
+						ASM(MOV64rm, value_reg,
+							FE_MEM(context_register(), 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_native_execution_context,
+									call_cache_epoch))));
+						ASM(MOV64rm, value_reg,
+							FE_MEM(value_reg, 0, FE_NOREG, 0));
+						ASM(CMP64rm, value_reg,
+							FE_MEM(descriptor_scratch.cur_reg(), 0, FE_NOREG,
+								-static_cast<int32_t>(sizeof(
+									zend_native_user_call_site_header))
+								+ static_cast<int32_t>(offsetof(
+									zend_native_user_call_site_header,
+									fast_epoch))));
+						generate_raw_jump(Jump::jne, fast_miss);
+						ASM(CMP8mi,
+							FE_MEM(context_register(), 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_native_execution_context,
+									observers_enabled))), 0);
+						generate_raw_jump(Jump::jne, fast_miss);
+					}
+					{
+						tpde::x64::CCAssignerSysV assigner{false};
+						CallBuilder builder{*this, assigner};
+						builder.add_arg(copy_fixed_argument(
+							canonical_frame_register()), tpde::CCAssignment{});
+						builder.add_arg(image_symbol_value(
+							ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
+							call.id), tpde::CCAssignment{});
+						builder.add_arg(ValuePart{object_offset, 4,
+							tpde::x64::PlatformConfig::GP_BANK},
+							tpde::CCAssignment{});
+						builder.call(runtime_symbol(
+							ZEND_NATIVE_HELPER_CALL_FAST_NEW));
+						ValuePart created{
+							tpde::x64::PlatformConfig::GP_BANK, 1};
+						builder.add_ret(created, tpde::CCAssignment{});
+						ASM(TEST8rr, created.cur_reg_or_load(this),
+							created.cur_reg_or_load(this));
+						created.reset(this);
+					}
+					generate_raw_jump(Jump::je, fast_miss);
+					ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 1);
+					generate_raw_jump(Jump::jmp, fast_join);
+				} else if (source_call_fast_dynamic(call)) {
 					/* A recorded native target of the callable: the helper
 					 * pushes and links its frame and returns its entry. */
 					const int32_t entry_slot =

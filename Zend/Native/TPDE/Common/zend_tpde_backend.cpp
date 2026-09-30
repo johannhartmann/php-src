@@ -9131,6 +9131,9 @@ bool initialize_plan(
 							ZEND_NATIVE_HELPER_CALL_UNIVERSAL_SEND);
 						require_runtime_helper(
 							plan,
+							ZEND_NATIVE_HELPER_CALL_FAST_NEW);
+						require_runtime_helper(
+							plan,
 							ZEND_NATIVE_HELPER_FRAME_ACTIVATION_RESERVE);
 						require_runtime_helper(
 							plan,
