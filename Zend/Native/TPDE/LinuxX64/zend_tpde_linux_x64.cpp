@@ -222,8 +222,12 @@ class ZendCompilerX64 final
 					break;
 				}
 				if (!frame_slot(descriptor->init_op1)
-						|| descriptor->init_op1.slot_kind
-							!= ZEND_MIR_SOURCE_SLOT_CV) {
+						|| (descriptor->init_op1.slot_kind
+								!= ZEND_MIR_SOURCE_SLOT_CV
+							&& descriptor->init_op1.slot_kind
+								!= ZEND_MIR_SOURCE_SLOT_TMP
+							&& descriptor->init_op1.slot_kind
+								!= ZEND_MIR_SOURCE_SLOT_VAR)) {
 					return false;
 				}
 				break;
@@ -3792,9 +3796,15 @@ bool ZendCompilerX64::compile_inst_impl(
 				const bool this_receiver = method
 					&& descriptor->init_op1.kind
 						== ZEND_MIR_SOURCE_OPERAND_UNUSED;
+				const bool temporary_receiver = method && !this_receiver
+					&& descriptor->init_op1.slot_kind
+						!= ZEND_MIR_SOURCE_SLOT_CV;
 				const uint64_t receiver_offset = method && !this_receiver
 					? (uint64_t{ZEND_CALL_FRAME_SLOT}
-						+ descriptor->init_op1.index) * sizeof(zval)
+						+ descriptor->init_op1.index
+						+ (temporary_receiver ? uint64_t{
+							adaptor->plan()->source_frame_variable_count} : 0))
+						* sizeof(zval)
 					: 0;
 				if (receiver_offset > INT32_MAX - sizeof(zval)) {
 					return false;
@@ -3853,16 +3863,19 @@ bool ZendCompilerX64::compile_inst_impl(
 								FE_MEM(canonical_frame_register(), 0,
 									FE_NOREG,
 									static_cast<int32_t>(receiver_offset)));
-							ASM(CMP8mi,
-								FE_MEM(value_reg, 0, FE_NOREG,
-									static_cast<int32_t>(
-										offsetof(zval, u1.type_info))),
-								IS_REFERENCE);
-							generate_raw_jump(Jump::jne, plain);
-							ASM(MOV64rm, value_reg,
-								FE_MEM(value_reg, 0, FE_NOREG, 0));
-							ASM(ADD64ri, value_reg, static_cast<int32_t>(
-								offsetof(zend_reference, val)));
+							if (!temporary_receiver) {
+								/* A global or static CV is a reference. */
+								ASM(CMP8mi,
+									FE_MEM(value_reg, 0, FE_NOREG,
+										static_cast<int32_t>(
+											offsetof(zval, u1.type_info))),
+									IS_REFERENCE);
+								generate_raw_jump(Jump::jne, plain);
+								ASM(MOV64rm, value_reg,
+									FE_MEM(value_reg, 0, FE_NOREG, 0));
+								ASM(ADD64ri, value_reg, static_cast<int32_t>(
+									offsetof(zend_reference, val)));
+							}
 							label_place(plain);
 							ASM(CMP8mi,
 								FE_MEM(value_reg, 0, FE_NOREG,
@@ -3973,7 +3986,15 @@ bool ZendCompilerX64::compile_inst_impl(
 								static_cast<int32_t>(
 									offsetof(zend_execute_data, This))),
 							object_reg);
-						if (method && !this_receiver) {
+						if (temporary_receiver) {
+							/* ZEND_CALL_RELEASE_THIS takes the temporary's
+							 * reference, as ZEND_INIT_METHOD_CALL moves it. */
+							ASM(MOV32mi,
+								FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+									static_cast<int32_t>(receiver_offset
+										+ offsetof(zval, u1.type_info))),
+								IS_UNDEF);
+						} else if (method && !this_receiver) {
 							/* ZEND_CALL_RELEASE_THIS owns one reference. */
 							ASM(ADD32mi,
 								FE_MEM(object_reg, 0, FE_NOREG,

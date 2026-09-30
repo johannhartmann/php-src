@@ -27,3 +27,5 @@ function lib_typed_defaults(int $a, float $f = 1.5, ?string $s = null, array $l 
 function lib_coerce(float $f, int $i = 3) { return var_export($f, true) . "/$i"; }
 function lib_const_default($a = PHP_INT_SIZE, $b = D::class) { return "$a$b"; }
 function lib_obj(Point $p, $d = 1) { return $p->get($d); }
+class Chain { public $n; function __construct($n) { $this->n = $n; } function next() { return new Chain($this->n + 1); } function val($d) { return $this->n + $d; } function __destruct() { echo "~chain{$this->n} "; } }
+class Holder { public $p; function __construct() { $this->p = new Point; } }

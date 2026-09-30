@@ -4305,10 +4305,13 @@ static void zend_native_call_fast_publish(
 			static_mode = ZEND_NATIVE_CALL_FAST_STATIC_FORWARD;
 		}
 	} else if (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_METHOD) {
-		/* $this keeps its receiver; a CV receiver is retained by the call. */
+		/* $this keeps its receiver; a CV receiver is retained by the call,
+		 * a temporary one moves into it. */
 		if (entry->receiver == ZEND_NATIVE_CALL_RECEIVER_THIS
 				? (resolution->call_info & ZEND_CALL_RELEASE_THIS) != 0
-				: entry->receiver != ZEND_NATIVE_CALL_RECEIVER_CV
+				: (entry->receiver != ZEND_NATIVE_CALL_RECEIVER_CV
+						&& entry->receiver
+							!= ZEND_NATIVE_CALL_RECEIVER_TEMPORARY)
 					|| (resolution->call_info & ZEND_CALL_RELEASE_THIS)
 						== 0) {
 			return;
