@@ -45,13 +45,13 @@ $toolchain bash -euo pipefail -c '
 root=$1; here=$2; repo=$3; build=$4
 llvm_dir=$(dirname "$(dirname "$(command -v llvm-config)")")
 llvm_cmake=$(llvm-config --cmakedir 2>/dev/null || echo "$llvm_dir/lib/cmake/llvm")
-if [ ! -x "$root/build/tpde-encodegen/tpde_encodegen" ]; then
-	cmake -S "$root/tpde" -B "$root/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-		-DTPDE_ENABLE_ENCODEGEN=ON -DTPDE_ENABLE_LLVM=OFF -DTPDE_INCLUDE_TESTS=OFF \
-		-DLLVM_DIR="$llvm_cmake" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-		> "$root/configure.log"
-	ninja -C "$root/build" tpde_encodegen > "$root/build.log"
-fi
+# Configure and build after every checkout: an existing binary may belong to
+# an earlier revision. Both steps are incremental.
+cmake -S "$root/tpde" -B "$root/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+	-DTPDE_ENABLE_ENCODEGEN=ON -DTPDE_ENABLE_LLVM=OFF -DTPDE_INCLUDE_TESTS=OFF \
+	-DLLVM_DIR="$llvm_cmake" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+	> "$root/configure.log"
+ninja -C "$root/build" tpde_encodegen > "$root/build.log"
 for source in zend_tpde_encodegen zend_tpde_encodegen_values; do
 	clang -c -emit-llvm -ffreestanding -fcf-protection=none -O3 -fomit-frame-pointer \
 		-fno-math-errno --target=x86_64-unknown-linux-gnu -march=x86-64 \
