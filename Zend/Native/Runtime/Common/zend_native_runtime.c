@@ -988,6 +988,14 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 			| ZEND_NATIVE_RUNTIME_EFFECT_THROW
 			| ZEND_NATIVE_RUNTIME_EFFECT_BAILOUT,
 		(const void *) zend_native_call_universal_do},
+	{ZEND_NATIVE_HELPER_CALL_UNIVERSAL_SEND,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
+			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_RUNTIME_EFFECT_USERLAND
+			| ZEND_NATIVE_RUNTIME_EFFECT_REENTER
+			| ZEND_NATIVE_RUNTIME_EFFECT_THROW
+			| ZEND_NATIVE_RUNTIME_EFFECT_BAILOUT,
+		(const void *) zend_native_call_universal_send},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
