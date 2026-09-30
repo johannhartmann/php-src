@@ -5025,43 +5025,28 @@ bool ZendCompilerX64::compile_inst_impl(
 			return true;
 		}
 		if (node.kind == Adaptor::InstKind::UserCallExpand) {
-			/* A fast frame received every argument by position. */
+			/* A fast frame received every argument by position; the
+			 * universal protocol expands out of line. */
 			auto fast_expanded = text_writer.label_create();
 			if (fast_site) {
 				ASM(CMP32mi, FE_MEM(FE_BP, 0, FE_NOREG,
 					fast_call_slot(node.mir_instruction_index)), 0);
 				generate_raw_jump(Jump::jne, fast_expanded);
 			}
-			ScratchReg activation{this};
-			auto activation_reg = activation.alloc_gp();
-			load_active_activation(activation_reg);
-			ASM(TEST32mi,
-				FE_MEM(activation_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(
-						zend_native_direct_activation, resolution)
-						+ offsetof(zend_native_user_call_resolution,
-							placement_flags))),
-				ZEND_NATIVE_USER_CALL_PLACEMENTS_RUNTIME_EXPANSION);
-			auto complete = text_writer.label_create();
-			generate_raw_jump(Jump::je, complete);
-			tpde::x64::CCAssignerSysV assigner{false};
-			CallBuilder builder{*this, assigner};
-			ValuePart activation_value{
-				tpde::x64::PlatformConfig::GP_BANK, 8};
-			activation_value.set_value(this, std::move(activation));
-			builder.add_arg(
-				std::move(activation_value), tpde::CCAssignment{});
-			builder.call(runtime_symbol(
-				ZEND_NATIVE_HELPER_USER_CALL_EXPAND_ARGUMENTS));
-			ValuePart expanded{tpde::x64::PlatformConfig::GP_BANK, 8};
-			builder.add_ret(expanded, tpde::CCAssignment{});
-			auto expanded_reg = expanded.cur_reg_or_load(this);
-			ASM(TEST64rr, expanded_reg, expanded_reg);
-			generate_raw_jump(Jump::jne, complete);
+			ValuePart expanded{tpde::x64::PlatformConfig::GP_BANK, 4};
+			{
+				tpde::x64::CCAssignerSysV assigner{false};
+				CallBuilder builder{*this, assigner};
+				builder.call(runtime_symbol(
+					ZEND_NATIVE_HELPER_CALL_UNIVERSAL_EXPAND));
+				builder.add_ret(expanded, tpde::CCAssignment{});
+			}
+			ASM(CMP32ri, expanded.cur_reg_or_load(this), SUCCESS);
+			generate_raw_jump(Jump::je, fast_expanded);
 			expanded.reset(this);
-			emit_phase_failure();
-			label_place(complete);
+			emit_fast_failure();
 			label_place(fast_expanded);
+			expanded.reset(this);
 			return true;
 		}
 		if (node.kind != Adaptor::InstKind::UserCallDo) {

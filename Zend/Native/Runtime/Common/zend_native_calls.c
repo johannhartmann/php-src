@@ -8192,6 +8192,25 @@ uint32_t zend_native_call_fast_do(
 	return zend_native_call_fast_leave_inline(callee, status, discard);
 }
 
+/*
+ * The universal Expand of a source call site, out of line: a resolution
+ * that expands arguments at run time expands them into the callee frame,
+ * as the generated universal Expand did. On failure the activation is
+ * released and FAILURE returned with the exception pending.
+ */
+zend_result zend_native_call_universal_expand(void)
+{
+	zend_native_direct_activation *activation = zend_native_active_direct_call;
+
+	if ((activation->resolution.placement_flags
+				& ZEND_NATIVE_USER_CALL_PLACEMENTS_RUNTIME_EXPANSION) == 0
+			|| zend_native_call_expand_user_arguments(activation) != NULL) {
+		return SUCCESS;
+	}
+	zend_native_frame_activation_release(activation);
+	return FAILURE;
+}
+
 zend_execute_data *zend_native_call_reserve_dynamic_frame(
 	zend_execute_data *caller, uint32_t reservation_size)
 {
