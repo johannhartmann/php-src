@@ -12,7 +12,9 @@
 # Zend layouts of a configured build: ENCODEGEN_BUILD_DIR (default the
 # linux-amd64-native-debug-nts build under $NATIVE_WORK_ROOT). The tuning
 # feature slow-incdec keeps refcount increments in instruction forms EncodeGen
-# encodes; the ISA stays -march=x86-64. The last regeneration used LLVM and
+# encodes; the ISA stays -march=x86-64. -fno-jump-tables keeps switches free
+# of indirect branches, which EncodeGen does not encode. A snippet EncodeGen
+# cannot encode fails the regeneration. The last regeneration used LLVM and
 # clang 21.1.8 (TPDE's preferred version at the pin) from nixpkgs; set
 # ENCODEGEN_TOOLCHAIN="" to use cmake, ninja, clang and LLVM from PATH.
 set -euo pipefail
@@ -50,14 +52,19 @@ fi
 for source in zend_tpde_encodegen zend_tpde_encodegen_values; do
 	clang -c -emit-llvm -ffreestanding -fcf-protection=none -O3 -fomit-frame-pointer \
 		-fno-math-errno --target=x86_64-unknown-linux-gnu -march=x86-64 \
-		-Xclang -target-feature -Xclang +slow-incdec \
+		-fno-jump-tables -Xclang -target-feature -Xclang +slow-incdec \
 		-I"$build" -I"$build/main" -I"$build/Zend" -I"$build/TSRM" \
 		-I"$repo" -I"$repo/main" -I"$repo/Zend" -I"$repo/TSRM" \
 		-o "$root/${source}_x64.bc" "$here/$source.c"
 done
 "$root/build/tpde-encodegen/tpde_encodegen" \
 	-o "$root/zend_tpde_encodegen_x64.hpp" \
-	"$root/zend_tpde_encodegen_x64.bc" "$root/zend_tpde_encodegen_values_x64.bc"
+	"$root/zend_tpde_encodegen_x64.bc" "$root/zend_tpde_encodegen_values_x64.bc" \
+	2> "$root/encodegen.log" || { cat "$root/encodegen.log" >&2; exit 1; }
+if grep -q "Failed to generate" "$root/encodegen.log"; then
+	grep -B2 "Failed to generate" "$root/encodegen.log" >&2
+	exit 1
+fi
 ' _ "$root" "$here" "$repo" "$build"
 
 # The repository keeps generated headers free of trailing whitespace.
