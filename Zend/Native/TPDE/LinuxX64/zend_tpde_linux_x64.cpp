@@ -15182,16 +15182,19 @@ bool ZendCompilerX64::compile_inst_impl(
 								zend_refcounted_h, u.type_info))));
 					ASM(TEST32ri, type_info_reg, GC_IMMUTABLE);
 					generate_raw_jump(Jump::jne, slow);
-					ASM(MOV32rm, refcount_reg,
-						FE_MEM(array_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_refcounted_h, refcount))));
-					ASM(ADD32ri, refcount_reg, 1);
-					ASM(MOV32mr,
-						FE_MEM(array_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_refcounted_h, refcount))),
-						refcount_reg);
+					if (!reset_layout.source_temporary) {
+						/* A temporary's reference moves into the holder. */
+						ASM(MOV32rm, refcount_reg,
+							FE_MEM(array_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_refcounted_h, refcount))));
+						ASM(ADD32ri, refcount_reg, 1);
+						ASM(MOV32mr,
+							FE_MEM(array_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_refcounted_h, refcount))),
+							refcount_reg);
+					}
 					label_place(copy);
 					ASM(MOV64rm, high_word_reg,
 						FE_MEM(source_reg, 0, FE_NOREG, source_offset + 8));
