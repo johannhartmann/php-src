@@ -1,0 +1,73 @@
+--TEST--
+Native call-site fast path for resolved user functions and methods
+--DESCRIPTION--
+Calls to functions and methods of another file take the native fast path of
+ADR 0025 once their site publishes the target: the frame is pushed and
+linked as the VM does, arguments are stored directly and the native entry
+is called. Defaults, typed parameters and return types, extra arguments,
+argument exceptions with pending frames, undefined arguments, discarded
+results with destructors, receiver rebinding during argument evaluation,
+alternating receiver classes and deep recursion keep stock semantics.
+--EXTENSIONS--
+opcache
+--INI--
+opcache.enable=1
+opcache.enable_cli=1
+opcache.file_update_protection=0
+--FILE--
+<?php
+require __DIR__ . '/w14_call_fast_path.inc';
+function run($round, $p, $q) {
+    $out = [];
+    $out[] = lib_add($round, 2);
+    $out[] = lib_defaults($round);
+    $out[] = lib_defaults($round, 'b');
+    $out[] = lib_typed("s$round");
+    $out[] = lib_typed("s", [1, 2]);
+    $out[] = lib_extra($round, 'x', 'y');
+    $out[] = lib_rec(3 + $round);
+    $out[] = $p->get($round);
+    $out[] = $q->get($round);                 // other class at a monomorphic site
+    $out[] = $p->self_call($round);
+    $out[] = $p->defaults($round);
+    $out[] = $p->typed($round);
+    foreach ([$p, $q, $p] as $obj) { $out[] = $obj->get(1); }   // alternating classes
+    try { $out[] = $p->typed("x$round"); } catch (TypeError $e) { $out[] = 'TypeError'; }
+    try { $out[] = lib_typed(); } catch (ArgumentCountError $e) { $out[] = 'ArgumentCountError'; }
+    try { $out[] = $p->bad_return("str"); } catch (TypeError $e) { $out[] = 'ReturnTypeError'; }
+    try { $out[] = lib_add(lib_throw($round), 1); } catch (LogicException $e) { $out[] = $e->getMessage(); }
+    try { $out[] = $p->get($p->thrower($round)); } catch (RuntimeException $e) { $out[] = $e->getMessage(); }
+    $out[] = lib_add($undefined_var, 1);       // warning, null
+    echo "[discard ";
+    lib_make("a$round");                        // result discarded: destructor now
+    $p->make("b$round");
+    echo "] ";
+    $d = lib_make("c$round");
+    $o = $p;
+    $out[] = $o->get(($o = $q) ? 5 : 0);        // receiver bound before argument evaluation
+    $s = 'str';
+    $out[] = lib_ref_arg($s) . $s;
+    $big = str_repeat('x', 10);
+    $out[] = strlen(lib_ref_arg($big));
+    unset($d);
+    echo "\n";
+    return $out;
+}
+$p = new Point; $q = new Other;
+for ($i = 0; $i < 3; $i++) { echo json_encode(run($i, $p, $q)), "\n"; }
+echo lib_rec(20000), "\n";                      // deep recursion grows the VM stack
+?>
+--EXPECTF--
+
+Warning: Undefined variable $undefined_var in %s on line %d
+[discard ~a0 ~b0 ] ~c0 
+[2,"[0,[1,2],null]","[0,\"b\",null]","s00","s2","3:0",3,1,0,2,"0\/10\/c",0,2,-1,2,"TypeError","ArgumentCountError","ReturnTypeError","l0","t0",1,6,"strstr",10]
+
+Warning: Undefined variable $undefined_var in %s on line %d
+[discard ~a1 ~b1 ] ~c1 
+[3,"[1,[1,2],null]","[1,\"b\",null]","s10","s2","3:1",4,2,-1,4,"1\/10\/c",3,2,-1,2,"TypeError","ArgumentCountError","ReturnTypeError","l1","t1",1,6,"strstr",10]
+
+Warning: Undefined variable $undefined_var in %s on line %d
+[discard ~a2 ~b2 ] ~c2 
+[4,"[2,[1,2],null]","[2,\"b\",null]","s20","s2","3:2",5,3,-2,6,"2\/10\/c",6,2,-1,2,"TypeError","ArgumentCountError","ReturnTypeError","l2","t2",1,6,"strstr",10]
+20000

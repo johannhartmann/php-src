@@ -83,6 +83,8 @@ typedef struct _zend_native_execution_context {
 	zend_object **exception;
 	const struct _zend_op **opline_before_exception;
 	void **stack_limit;
+	/* The call-cache epoch that validates call-site fast paths. */
+	const uint64_t *call_cache_epoch;
 	bool observers_enabled;
 } zend_native_execution_context;
 
