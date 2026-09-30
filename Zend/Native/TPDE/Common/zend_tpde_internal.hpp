@@ -1158,6 +1158,9 @@ static inline bool zend_tpde_dim_direct_at(
 		&& operation.source_opcode == ZEND_FETCH_DIM_R;
 	const bool write = operation.opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM
 		&& operation.source_opcode == ZEND_ASSIGN_DIM;
+	const bool test = operation.opcode
+			== ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM
+		&& operation.source_opcode == ZEND_ISSET_ISEMPTY_DIM_OBJ;
 	uint64_t container_kind;
 	uint64_t container_offset;
 	uint64_t key_kind;
@@ -1167,17 +1170,22 @@ static inline bool zend_tpde_dim_direct_at(
 	uint64_t result_offset = 0;
 
 	if (out == nullptr || !instruction.has_value_operation
-			|| (!read && !write)
+			|| (!read && !write && !test)
 			|| operation.extended_value > 0xffff
 			|| !zend_tpde_dim_direct_operand(operation.op1,
 				operation.op1_storage_id, false,
 				&container_kind, &container_offset)
-			|| container_kind != ZEND_NATIVE_DIM_DIRECT_CV
+			|| (container_kind != ZEND_NATIVE_DIM_DIRECT_CV
+				&& !(test && container_kind == ZEND_NATIVE_DIM_DIRECT_TMP))
 			|| !zend_tpde_dim_direct_operand(operation.op2,
 				operation.op2_storage_id, write, &key_kind, &key_offset)) {
 		return false;
 	}
-	if (read) {
+	if (test) {
+		/* The container kind rides in the value kind field. */
+		value_kind = container_kind;
+	}
+	if (read || test) {
 		if (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
 				|| !zend_mir_id_is_valid(operation.result_storage_id)) {
 			return false;

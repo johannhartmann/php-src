@@ -2053,6 +2053,7 @@ void zend_native_executor_deactivate(void)
 		zend_native_executor_request_state.lookup_indexes_active = false;
 	}
 	zend_native_executor_release_request_epoch();
+	zend_native_call_resolution_cache_destroy();
 	zend_native_compile_trace_request_end("request_end");
 }
 

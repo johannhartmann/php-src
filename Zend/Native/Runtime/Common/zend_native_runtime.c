@@ -917,6 +917,9 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_DIRECT,
 		ZEND_NATIVE_EFFECT_ARRAY_SLOW_WRITE,
 		(const void *) zend_native_value_assign_dim_direct},
+	{ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM_DIRECT,
+		ZEND_NATIVE_EFFECT_ARRAY_SLOW_READ,
+		(const void *) zend_native_value_isset_isempty_dim_direct},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
