@@ -12893,6 +12893,14 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto type_reg = type.alloc_gp();
 		auto low_word_reg = low_word.alloc_gp();
 		auto decision_reg = decision.alloc_gp();
+		/* A literal value lives in the literal table: its base goes into
+		 * base_reg, otherwise the value is a frame slot. */
+		auto load_literal_base = [&](AsmReg base_reg) {
+			ASM(MOV64rm, base_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_execute_data, func))));
+			ASM(MOV64rm, base_reg, FE_MEM(base_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_op_array, literals))));
+		};
 
 		ASM(MOV32rm, type_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
@@ -12966,8 +12974,13 @@ bool ZendCompilerX64::compile_inst_impl(
 		ASM(TEST32ri, cache_reg, 1u << IS_LONG);
 		generate_raw_jump(Jump::je, slow);
 		if (!scalar_value) {
+			AsmReg value_base = frame_reg;
+			if (layout.literal_value) {
+				load_literal_base(cache_reg);
+				value_base = cache_reg;
+			}
 			ASM(MOV32rm, cache_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
+				FE_MEM(value_base, 0, FE_NOREG,
 					static_cast<int32_t>(
 						layout.value_offset
 							+ offsetof(zval, u1.type_info))));
@@ -12991,8 +13004,13 @@ bool ZendCompilerX64::compile_inst_impl(
 		if (scalar_value) {
 			ASM(MOV32ri, type_reg, IS_LONG);
 		} else {
+			AsmReg value_base = frame_reg;
+			if (layout.literal_value) {
+				load_literal_base(low_word_reg);
+				value_base = low_word_reg;
+			}
 			ASM(MOV32rm, type_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
+				FE_MEM(value_base, 0, FE_NOREG,
 					static_cast<int32_t>(
 						layout.value_offset
 							+ offsetof(zval, u1.type_info))));
@@ -13030,9 +13048,10 @@ bool ZendCompilerX64::compile_inst_impl(
 			auto value_reg = value.load_to_reg();
 			ASM(MOV64rr, low_word_reg, value_reg);
 		} else {
+			/* For a literal, low_word still holds the literal base. */
 			ASM(MOV64rm, low_word_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.value_offset)));
+				FE_MEM(layout.literal_value ? low_word_reg : frame_reg, 0,
+					FE_NOREG, static_cast<int32_t>(layout.value_offset)));
 		}
 		if (!scalar_value && !layout.move_value) {
 			ASM(MOV32rr, offset_reg, type_reg);
