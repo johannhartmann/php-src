@@ -1727,7 +1727,9 @@ static zval *zend_native_static_property_explicit(
 	}
 	property = zend_std_get_static_property_with_info(
 		class_entry, name, fetch_type, property_info);
+	/* A trait's static property deprecates every direct access. */
 	if (property != NULL && *property_info != NULL
+			&& (class_entry->ce_flags & ZEND_ACC_TRAIT) == 0
 			&& (cache_slot = zend_native_static_cache_slot(
 				execute_data, operation)) != NULL) {
 		cache_slot[0] = class_entry;
