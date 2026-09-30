@@ -2262,6 +2262,52 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 	zval *value;
 	bool truth;
 
+	/*
+	 * ?? of a temporary or CV and &&/|| of null, a boolean or an integer decide
+	 * without decoding the operation: a temporary moves into the result or
+	 * is null, a CV is copied, and a scalar's truth is published as the
+	 * boolean. References, undefined CVs and counted conditions take the
+	 * general path.
+	 */
+	if (source_opcode == ZEND_COALESCE || source_opcode == ZEND_JMPZ_EX
+			|| source_opcode == ZEND_JMPNZ_EX) {
+		bool value_tmp;
+		bool result_tmp;
+		zval *result = zend_native_value_fast_operand(
+			execute_data, result_operand, &result_tmp);
+
+		value = zend_native_value_fast_operand(execute_data, op1, &value_tmp);
+		if (value != NULL && result != NULL && result_tmp
+				&& Z_TYPE_P(value) != IS_UNDEF
+				&& Z_TYPE_P(value) != IS_REFERENCE) {
+			if (source_opcode == ZEND_COALESCE) {
+				if (Z_TYPE_P(value) <= IS_NULL) {
+					return ZEND_NATIVE_ITERATOR_END;
+				}
+				if (value_tmp) {
+					if (result != value) {
+						ZVAL_COPY_VALUE(result, value);
+						ZVAL_UNDEF(value);
+					}
+					return ZEND_NATIVE_ITERATOR_NEXT;
+				}
+				if (!Z_REFCOUNTED_P(value)
+						|| (GC_FLAGS(Z_COUNTED_P(value)) & GC_PERSISTENT)
+							== 0) {
+					ZVAL_COPY(result, value);
+					return ZEND_NATIVE_ITERATOR_NEXT;
+				}
+			} else if (Z_TYPE_P(value) <= IS_LONG) {
+				/* A double is left to zend_is_true(), which warns about
+				 * NAN. */
+				truth = Z_TYPE_P(value) == IS_TRUE
+					|| (Z_TYPE_P(value) == IS_LONG && Z_LVAL_P(value) != 0);
+				ZVAL_BOOL(result, truth);
+				return truth
+					? ZEND_NATIVE_ITERATOR_NEXT : ZEND_NATIVE_ITERATOR_END;
+			}
+		}
+	}
 	if ((source_opcode != ZEND_JMPZ && source_opcode != ZEND_JMPNZ
 			&& source_opcode != ZEND_JMPZ_EX
 			&& source_opcode != ZEND_JMPNZ_EX
