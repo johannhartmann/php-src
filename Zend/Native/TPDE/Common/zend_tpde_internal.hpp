@@ -704,6 +704,8 @@ struct zend_tpde_array_iterator_reset {
 	uint32_t source_offset;
 	uint32_t holder_offset;
 	bool source_literal;
+	/* A temporary array moves into the holder. */
+	bool source_temporary;
 	uint32_t source_literal_index;
 };
 
@@ -1913,12 +1915,17 @@ static inline bool zend_tpde_array_iterator_reset_at(
 
 	/*
 	 * A direct CV array can use the ordinary FE_RESET_R copy semantics in the
-	 * generated entry. Targets may opt into a literal array, which OPcache
-	 * propagates into FE_RESET_R. References, temporaries, objects and
-	 * by-reference iteration retain the complete runtime primitive.
+	 * generated entry, and a temporary array moves into the holder as
+	 * FE_RESET_R moves a TMP operand. Targets may opt into both and into a
+	 * literal array, which OPcache propagates into FE_RESET_R. References,
+	 * objects and by-reference iteration retain the complete runtime
+	 * primitive.
 	 */
 	const bool source_literal = allow_literal
 		&& operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
+	const bool source_temporary = allow_literal
+		&& !source_literal
+		&& operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP;
 	if (out == nullptr || !instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_ITERATOR_BRANCH
 			|| operation.source_opcode != ZEND_FE_RESET_R
@@ -1926,7 +1933,8 @@ static inline bool zend_tpde_array_iterator_reset_at(
 				&& ((operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
 						&& operation.op1.kind
 							!= ZEND_MIR_SOURCE_OPERAND_SSA)
-					|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+					|| (operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+						&& !source_temporary)
 					|| operation.op1_storage_id == ZEND_MIR_ID_INVALID
 					|| operation.op1_storage_id
 						== operation.result_storage_id))
@@ -1953,6 +1961,7 @@ static inline bool zend_tpde_array_iterator_reset_at(
 	out->source_offset = static_cast<uint32_t>(source_offset);
 	out->holder_offset = static_cast<uint32_t>(holder_offset);
 	out->source_literal = source_literal;
+	out->source_temporary = source_temporary;
 	out->source_literal_index = source_literal ? operation.op1.index : 0;
 	return true;
 }
