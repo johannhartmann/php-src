@@ -3472,6 +3472,81 @@ static bool zend_native_array_add_explicit_element(
 	return EG(exception) == NULL;
 }
 
+/*
+ * An array literal element as ZEND_INIT_ARRAY/ZEND_ADD_ARRAY_ELEMENT add it,
+ * without decoding the operation: a temporary value moves in, a CV or
+ * literal is copied with a reference, under the next index, an integer
+ * key or a (numeric) string key. By-reference elements, undefined CVs,
+ * persistent values and other keys return false with nothing changed.
+ */
+static zend_always_inline bool zend_native_array_add_fast(
+	zend_execute_data *execute_data, HashTable *table,
+	uint64_t op1, uint64_t op2, uint32_t extended_value)
+{
+	zval *value;
+	zval *offset = NULL;
+	zval copy;
+	zend_ulong index;
+	bool value_tmp;
+	bool offset_tmp = false;
+	bool by_index = false;
+
+	if ((extended_value & ZEND_ARRAY_ELEMENT_REF) != 0
+			|| (value = zend_native_value_fast_operand(
+				execute_data, op1, &value_tmp)) == NULL
+			|| Z_TYPE_P(value) == IS_UNDEF) {
+		return false;
+	}
+	if ((op2 & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+		offset = zend_native_value_fast_operand(
+			execute_data, op2, &offset_tmp);
+		if (offset == NULL) {
+			return false;
+		}
+		if (!offset_tmp) {
+			ZVAL_DEREF(offset);
+		}
+		if (Z_TYPE_P(offset) == IS_LONG) {
+			index = (zend_ulong) Z_LVAL_P(offset);
+			by_index = true;
+		} else if (Z_TYPE_P(offset) == IS_STRING) {
+			by_index = ZEND_HANDLE_NUMERIC_STR(Z_STRVAL_P(offset),
+				Z_STRLEN_P(offset), index);
+		} else {
+			return false;
+		}
+	} else if (table->nNextFreeElement == ZEND_LONG_MAX) {
+		return false;
+	}
+	if (value_tmp) {
+		ZVAL_COPY_VALUE(&copy, value);
+	} else {
+		zval *source = value;
+
+		ZVAL_DEREF(source);
+		if (Z_REFCOUNTED_P(source)
+				&& (GC_FLAGS(Z_COUNTED_P(source)) & GC_PERSISTENT) != 0) {
+			return false;
+		}
+		ZVAL_COPY(&copy, source);
+	}
+	if (offset == NULL) {
+		zend_hash_next_index_insert(table, &copy);
+	} else if (by_index) {
+		zend_hash_index_update(table, index, &copy);
+	} else {
+		zend_hash_update(table, Z_STR_P(offset), &copy);
+	}
+	if (value_tmp) {
+		ZVAL_UNDEF(value);
+	}
+	if (offset_tmp) {
+		zval_ptr_dtor_nogc(offset);
+		ZVAL_UNDEF(offset);
+	}
+	return true;
+}
+
 zend_native_status zend_native_value_init_array(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result_operand,
@@ -3482,7 +3557,27 @@ zend_native_status zend_native_value_init_array(
 	const zend_native_explicit_value_operation *opline = &operation;
 	zval *result;
 	uint32_t size;
+	bool result_tmp;
 
+	/* The literal's array with its first element, without decoding. */
+	result = zend_native_value_fast_operand(
+		execute_data, result_operand, &result_tmp);
+	if (source_opcode == ZEND_INIT_ARRAY && result != NULL && result_tmp) {
+		HashTable *table;
+
+		size = extended_value >> ZEND_ARRAY_SIZE_SHIFT;
+		table = zend_new_array(size);
+		if ((extended_value & ZEND_ARRAY_NOT_PACKED) != 0) {
+			zend_hash_real_init_mixed(table);
+		}
+		if ((op1 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_UNUSED
+				|| zend_native_array_add_fast(
+					execute_data, table, op1, op2, extended_value)) {
+			ZVAL_ARR(result, table);
+			return ZEND_NATIVE_RETURNED;
+		}
+		zend_array_destroy(table);
+	}
 	if (!zend_native_value_init_explicit_operation(
 			execute_data, op1, op2, result_operand, extended_value,
 			source_opcode, source_position_id, ZEND_INIT_ARRAY, &operation)
@@ -3513,7 +3608,16 @@ zend_native_status zend_native_value_add_array_element(
 	zend_native_explicit_value_operation operation;
 	const zend_native_explicit_value_operation *opline = &operation;
 	zval *result;
+	bool result_tmp;
 
+	result = zend_native_value_fast_operand(
+		execute_data, result_operand, &result_tmp);
+	if (source_opcode == ZEND_ADD_ARRAY_ELEMENT && result != NULL
+			&& result_tmp && Z_TYPE_P(result) == IS_ARRAY
+			&& zend_native_array_add_fast(execute_data, Z_ARRVAL_P(result),
+				op1, op2, extended_value)) {
+		return ZEND_NATIVE_RETURNED;
+	}
 	if (!zend_native_value_init_explicit_operation(
 			execute_data, op1, op2, result_operand, extended_value,
 			source_opcode, source_position_id, ZEND_ADD_ARRAY_ELEMENT,
