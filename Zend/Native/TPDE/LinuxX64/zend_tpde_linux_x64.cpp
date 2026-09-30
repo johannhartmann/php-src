@@ -8153,12 +8153,18 @@ bool ZendCompilerX64::compile_inst_impl(
 						+ offsetof(zval, u1.type_info))),
 				answer_reg);
 		}
+		answer.reset();
+		if (guarded_exit_can_jump_directly(successors[1], successors[0])) {
+			decision.reset();
+			frame_scratch.reset();
+			generate_guarded_direct_exit(slow, successors[1], successors[0]);
+			return 1;
+		}
 		ASM(MOV32ri, decision_reg, 0);
 		generate_raw_jump(Jump::jmp, done);
 		label_place(slow);
 		ASM(MOV32ri, decision_reg, 1);
 		label_place(done);
-		answer.reset();
 		frame_scratch.reset();
 		generate_guarded_decision_branch(
 			std::move(decision), successors[1], successors[0]);
@@ -8919,12 +8925,18 @@ bool ZendCompilerX64::compile_inst_impl(
 				}
 			}
 		}
+		answer.reset();
+		if (guarded_exit_can_jump_directly(successors[1], successors[0])) {
+			decision.reset();
+			frame_scratch.reset();
+			generate_guarded_direct_exit(slow, successors[1], successors[0]);
+			return 1;
+		}
 		ASM(MOV32ri, decision_reg, 0);
 		generate_raw_jump(Jump::jmp, done);
 		label_place(slow);
 		ASM(MOV32ri, decision_reg, 1);
 		label_place(done);
-		answer.reset();
 		frame_scratch.reset();
 		generate_guarded_decision_branch(
 			std::move(decision), successors[1], successors[0]);
