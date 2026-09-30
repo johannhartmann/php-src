@@ -7923,7 +7923,18 @@ bool ZendCompilerX64::compile_inst_impl(
 			zend_mir_storage_id target_storage,
 			zend_mir_storage_id result_storage,
 			bool move_source) {
-		if (source_storage == ZEND_MIR_ID_INVALID
+		/* A literal source is copied from the literal table, as
+		 * ZEND_ASSIGN copies a CONST operand. */
+		const bool literal_source =
+			source_operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
+		const uint64_t literal_offset =
+			uint64_t{source_operand.index} * sizeof(zval);
+		if (literal_source) {
+			move_source = false;
+		}
+		if ((literal_source
+				? literal_offset > INT32_MAX - sizeof(zval)
+				: source_storage == ZEND_MIR_ID_INVALID)
 				|| target_storage == ZEND_MIR_ID_INVALID
 				|| source_storage == target_storage
 				|| (result_storage != ZEND_MIR_ID_INVALID
@@ -7931,8 +7942,8 @@ bool ZendCompilerX64::compile_inst_impl(
 						|| result_storage == target_storage))) {
 			return branch_to_guarded_cold();
 		}
-		const uint64_t source_offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + source_storage) * sizeof(zval);
+		const uint64_t source_offset = literal_source ? 0
+			: (uint64_t{ZEND_CALL_FRAME_SLOT} + source_storage) * sizeof(zval);
 		const uint64_t target_offset =
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + target_storage) * sizeof(zval);
 		const uint64_t result_offset = result_storage == ZEND_MIR_ID_INVALID
@@ -7978,8 +7989,8 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto decision_reg = decision.alloc_gp();
 		auto target_reg = target_address.alloc_gp();
 
-		const bool register_source =
-			!node.operands.empty()
+		const bool register_source = !literal_source
+			&& !node.operands.empty()
 			&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
 			&& adaptor->machine_value_is_register_authoritative(
 				node.operands[0])
@@ -8033,18 +8044,34 @@ bool ZendCompilerX64::compile_inst_impl(
 					}
 				}
 			}
+		} else if (literal_source) {
+			ASM(MOV64rm, probe_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_execute_data, func))));
+			ASM(MOV64rm, probe_reg,
+				FE_MEM(probe_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_op_array, literals))));
+			ASM(MOV64rm, source_payload_reg,
+				FE_MEM(probe_reg, 0, FE_NOREG,
+					static_cast<int32_t>(literal_offset)));
+			ASM(MOV32rm, source_type_reg,
+				FE_MEM(probe_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						literal_offset + offsetof(zval, u1.type_info))));
 		} else {
 			ASM(MOV32rm, source_type_reg,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(
 						source_offset + offsetof(zval, u1.type_info))));
 		}
-		if (source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+		if (!literal_source
+				&& source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
 			ASM(CMP32ri, source_type_reg, IS_UNDEF);
 			generate_raw_jump(Jump::je, slow);
 		}
-		if (source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
-				|| source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR) {
+		if (!literal_source
+				&& (source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+					|| source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)) {
 			ASM(MOV32rr, probe_reg, source_type_reg);
 			ASM(AND32ri, probe_reg, Z_TYPE_MASK);
 			ASM(CMP32ri, probe_reg, IS_REFERENCE);
@@ -8062,7 +8089,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		ASM(TEST32rr, probe_reg, probe_reg);
 		auto source_mutable = text_writer.label_create();
 		generate_raw_jump(Jump::je, source_mutable);
-		if (!register_source) {
+		if (!register_source && !literal_source) {
 			ASM(MOV64rm, source_payload_reg,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(source_offset)));
@@ -8107,15 +8134,11 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto target_checked = text_writer.label_create();
 		generate_raw_jump(Jump::je, target_checked);
 		/*
-		 * GC_DTOR_NO_REF() must purple a shared collectable value.  Keep
-		 * that transition in the semantic helper; strings and resources
-		 * only need the refcount decrement performed here.
+		 * The old value keeps another owner, so only its refcount drops.
+		 * GC_DTOR_NO_REF() must still purple a shared collectable value
+		 * that may leak; one already buffered or not collectable needs
+		 * nothing more. The helper does the rest.
 		 */
-		ASM(MOV32rr, probe_reg, target_type_reg);
-		ASM(AND32ri, probe_reg,
-			IS_TYPE_COLLECTABLE << Z_TYPE_FLAGS_SHIFT);
-		ASM(TEST32rr, probe_reg, probe_reg);
-		generate_raw_jump(Jump::jne, slow);
 		ASM(MOV64rm, low_word_reg,
 			FE_MEM(target_reg, 0, FE_NOREG, 0));
 		ASM(MOV32rm, probe_reg,
@@ -8124,6 +8147,18 @@ bool ZendCompilerX64::compile_inst_impl(
 					offsetof(zend_refcounted_h, refcount))));
 		ASM(CMP32ri, probe_reg, 1);
 		generate_raw_jump(Jump::jle, slow);
+		ASM(MOV32rr, probe_reg, target_type_reg);
+		ASM(AND32ri, probe_reg,
+			IS_TYPE_COLLECTABLE << Z_TYPE_FLAGS_SHIFT);
+		ASM(TEST32rr, probe_reg, probe_reg);
+		generate_raw_jump(Jump::je, target_checked);
+		ASM(TEST32mi,
+			FE_MEM(low_word_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_refcounted_h, u.type_info))),
+			static_cast<int32_t>(
+				GC_INFO_MASK | (GC_NOT_COLLECTABLE << GC_FLAGS_SHIFT)));
+		generate_raw_jump(Jump::je, slow);
 		label_place(target_checked);
 		if (result_storage != ZEND_MIR_ID_INVALID) {
 			ASM(MOV32rm, probe_reg,
@@ -8147,7 +8182,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					offsetof(zend_refcounted_h, refcount))),
 			1);
 		label_place(target_released);
-		if (register_source) {
+		if (register_source || literal_source) {
 			ASM(MOV64rr, low_word_reg, source_payload_reg);
 		} else {
 			ASM(MOV64rm, low_word_reg,
