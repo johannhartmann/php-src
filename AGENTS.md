@@ -25,6 +25,32 @@ Do not introduce a production VM fallback in native-engine code. Do not change
 public ABI, persistent formats, or dependencies without an explicit contract,
 compatibility analysis, and the tests required by that contract.
 
+## Execution-model direction
+
+The goal is maximum execution performance for real PHP applications such as
+WordPress, measured on warm requests. ADR
+`docs/native-engine/adr/0025-native-canonical-execution.md` defines the
+execution model and supersedes the "no deoptimization / no speculation /
+no separate call ABI" rules of ADR 0024 and of earlier plans:
+
+- Native state (registers, native stack) is canonical. The Zend frame is
+  reconstructed on demand from compiler frame-state metadata wherever PHP
+  state is observable (exceptions, warnings, observers, backtraces, reentry,
+  generators, fibers); it is not kept in sync on every operation.
+- Native-to-native PHP calls may use their own native calling convention;
+  Zend frames exist only where the frame contract requires them.
+- Speculative specialization from type feedback is allowed. A failed guard
+  deoptimizes into the generic native version of the same function, never
+  into the VM.
+- Inlining across functions is allowed with class and target guards.
+- Runtime helpers take values and addresses (semantic primitives), not
+  encoded opcode operands.
+
+Still forbidden: a production VM fallback, reuse of Zend VM opcode handlers,
+the Zend JIT IR, and a second register allocator. Every optimization must keep
+PHP-observable behaviour identical at every observation point; prove it with
+PHPTs against a stock PHP oracle and the WordPress page checks.
+
 The native-engine build and test entry points are:
 
 - `scripts/native/configure-dev.sh`

@@ -17,6 +17,9 @@
   records contain stable IDs only.
 - Preserve frame states, roots, cleanup obligations, exceptional edges, and
   failure atomicity until executable code has been produced.
+- Speculative guards from type feedback (ADR 0025) carry the frame state their
+  deoptimization needs; lowering must not drop a value, root or cleanup
+  obligation that a deoptimization target reads.
 - Extend existing direct execution tests and CI. Do not introduce new wave
   profiles, ownership manifests, gate frameworks, receipts, ledgers, or status
   dashboards.

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted on 2026-07-17.
+Accepted on 2026-07-17. Superseded in part by [ADR 0025](0025-native-canonical-execution.md): the rejection of lazy, exact frame reconstruction and of a native calling convention between compiled functions no longer applies; the frame header and a valid `EX` chain at every C transition remain required.
 
 ## Context
 
