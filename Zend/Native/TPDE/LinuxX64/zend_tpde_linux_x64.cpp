@@ -8160,6 +8160,12 @@ bool ZendCompilerX64::compile_inst_impl(
 			generate_guarded_direct_exit(slow, successors[1], successors[0]);
 			return 1;
 		}
+		if (guarded_exit_can_jump_directly(successors[1], successors[0])) {
+			decision.reset();
+			frame_scratch.reset();
+			generate_guarded_direct_exit(slow, successors[1], successors[0]);
+			return 1;
+		}
 		ASM(MOV32ri, decision_reg, 0);
 		generate_raw_jump(Jump::jmp, done);
 		label_place(slow);
@@ -8420,6 +8426,12 @@ bool ZendCompilerX64::compile_inst_impl(
 			}
 		}
 		element.reset(this);
+		if (guarded_exit_can_jump_directly(successors[1], successors[0])) {
+			decision.reset();
+			frame_scratch.reset();
+			generate_guarded_direct_exit(slow, successors[1], successors[0]);
+			return 1;
+		}
 		ASM(MOV32ri, decision_reg, 0);
 		generate_raw_jump(Jump::jmp, done);
 		label_place(slow);
@@ -8573,6 +8585,12 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		matched.reset(this);
 		type.reset();
+		if (guarded_exit_can_jump_directly(successors[1], successors[0])) {
+			decision.reset();
+			frame_scratch.reset();
+			generate_guarded_direct_exit(slow, successors[1], successors[0]);
+			return 1;
+		}
 		ASM(MOV32ri, decision_reg, 0);
 		generate_raw_jump(Jump::jmp, done);
 		label_place(slow);
@@ -8747,6 +8765,12 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		matched.reset(this);
 		type.reset();
+		if (guarded_exit_can_jump_directly(successors[1], successors[0])) {
+			decision.reset();
+			frame_scratch.reset();
+			generate_guarded_direct_exit(slow, successors[1], successors[0]);
+			return 1;
+		}
 		ASM(MOV32ri, decision_reg, 0);
 		generate_raw_jump(Jump::jmp, done);
 		label_place(slow);
@@ -8932,6 +8956,12 @@ bool ZendCompilerX64::compile_inst_impl(
 			generate_guarded_direct_exit(slow, successors[1], successors[0]);
 			return 1;
 		}
+		if (guarded_exit_can_jump_directly(successors[1], successors[0])) {
+			decision.reset();
+			frame_scratch.reset();
+			generate_guarded_direct_exit(slow, successors[1], successors[0]);
+			return 1;
+		}
 		ASM(MOV32ri, decision_reg, 0);
 		generate_raw_jump(Jump::jmp, done);
 		label_place(slow);
@@ -9011,6 +9041,12 @@ bool ZendCompilerX64::compile_inst_impl(
 		generate_raw_jump(Jump::je, slow);
 		if (!EncodeBase::encode_zend_native_release_shared(holder())) {
 			return -1;
+		}
+		if (guarded_exit_can_jump_directly(successors[1], successors[0])) {
+			decision.reset();
+			frame_scratch.reset();
+			generate_guarded_direct_exit(slow, successors[1], successors[0]);
+			return 1;
 		}
 		ASM(MOV32ri, decision_reg, 0);
 		generate_raw_jump(Jump::jmp, done);
@@ -9240,6 +9276,12 @@ bool ZendCompilerX64::compile_inst_impl(
 			}
 		}
 		count.reset(this);
+		if (guarded_exit_can_jump_directly(successors[1], successors[0])) {
+			decision.reset();
+			frame_scratch.reset();
+			generate_guarded_direct_exit(slow, successors[1], successors[0]);
+			return 1;
+		}
 		ASM(MOV32ri, decision_reg, 0);
 		generate_raw_jump(Jump::jmp, done);
 		label_place(slow);
@@ -12197,6 +12239,14 @@ bool ZendCompilerX64::compile_inst_impl(
 			if (!encoded) {
 				return false;
 			}
+		}
+		if (guarded_exit_can_jump_directly(
+				guarded_successors[1], guarded_successors[0])) {
+			decision.reset();
+			frame_scratch.reset();
+			generate_guarded_direct_exit(
+				slow, guarded_successors[1], guarded_successors[0]);
+			return true;
 		}
 		ASM(MOV32ri, decision_reg, 0);
 		generate_raw_jump(Jump::jmp, done);
