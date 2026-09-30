@@ -15,6 +15,15 @@
 #include "Zend/zend_types.h"
 #include "Zend/zend_compile.h"
 #include "Zend/zend_object_handlers.h"
+#include "Zend/Native/TPDE/EncodeGen/zend_tpde_encodegen_values.h"
+
+/*
+ * Refcounts change through the field itself: GC_ADDREF and GC_DELREF add the
+ * debug build's RC checks, a global access and a call, and would make the
+ * generated header depend on the build configuration.
+ */
+#define ZEND_NATIVE_ADDREF(counted) ((void) ++(counted)->gc.refcount)
+#define ZEND_NATIVE_DELREF(counted) ((void) --(counted)->gc.refcount)
 
 /* The value of a zval as its two machine words. */
 typedef struct _zend_native_boxed {
@@ -58,7 +67,7 @@ zend_native_boxed zend_native_zval_copy(const zval *value)
 	boxed.payload = (uint64_t) Z_LVAL_P(value);
 	boxed.type_info = Z_TYPE_INFO_P(value);
 	if (Z_TYPE_INFO_REFCOUNTED(Z_TYPE_INFO_P(value))) {
-		GC_ADDREF(Z_COUNTED_P(value));
+		ZEND_NATIVE_ADDREF(Z_COUNTED_P(value));
 	}
 	return boxed;
 }
@@ -72,4 +81,174 @@ uint64_t zend_native_zval_is_true_type(const zval *value)
 double zend_native_load_f64(const double *address)
 {
 	return *address;
+}
+
+/*
+ * Array element probes return the element's zval, ZEND_NATIVE_ELEMENT_ABSENT,
+ * or ZEND_NATIVE_ELEMENT_UNKNOWN when they cannot decide: not an array, a key
+ * of another type, an indirect element, or a bucket whose key has the
+ * literal's hash but is another string.
+ */
+
+static zend_always_inline const HashTable *zend_native_probe_array(
+	const zval *container)
+{
+	if (Z_TYPE_P(container) == IS_REFERENCE) {
+		container = &Z_REF_P(container)->val;
+	}
+	return Z_TYPE_P(container) == IS_ARRAY ? Z_ARRVAL_P(container) : NULL;
+}
+
+static zend_always_inline uintptr_t zend_native_probe_element(zval *element)
+{
+	return Z_TYPE_P(element) == IS_INDIRECT
+		? ZEND_NATIVE_ELEMENT_UNKNOWN : (uintptr_t) element;
+}
+
+static zend_always_inline uintptr_t zend_native_find_index(
+	const HashTable *table, zend_ulong h)
+{
+	uint32_t index;
+
+	if (HT_IS_PACKED(table)) {
+		if (h >= table->nNumUsed
+				|| Z_TYPE(table->arPacked[h]) == IS_UNDEF) {
+			return ZEND_NATIVE_ELEMENT_ABSENT;
+		}
+		return zend_native_probe_element(&table->arPacked[h]);
+	}
+	index = HT_HASH_EX(table->arData, (uint32_t) h | table->nTableMask);
+	while (index != HT_INVALID_IDX) {
+		Bucket *bucket = HT_HASH_TO_BUCKET_EX(table->arData, index);
+
+		if (bucket->h == h && bucket->key == NULL) {
+			return zend_native_probe_element(&bucket->val);
+		}
+		index = Z_NEXT(bucket->val);
+	}
+	return ZEND_NATIVE_ELEMENT_ABSENT;
+}
+
+/* The element under an integer key; a key of another type is undecided. */
+uintptr_t zend_native_array_find_long(const zval *container, const zval *key)
+{
+	const HashTable *table = zend_native_probe_array(container);
+
+	if (table == NULL || Z_TYPE_P(key) != IS_LONG) {
+		return ZEND_NATIVE_ELEMENT_UNKNOWN;
+	}
+	return zend_native_find_index(table, (zend_ulong) Z_LVAL_P(key));
+}
+
+/*
+ * The element under a literal key. The compiler already turned numeric
+ * string literals into integers and interned the others, so identity with
+ * the bucket key decides string equality; a bucket with the same hash but
+ * another key string is left to the helper.
+ */
+uintptr_t zend_native_array_find_literal(
+	const zval *container, const zval *key)
+{
+	const HashTable *table = zend_native_probe_array(container);
+	const zend_string *name;
+	zend_ulong h;
+	uint32_t index;
+
+	if (table == NULL) {
+		return ZEND_NATIVE_ELEMENT_UNKNOWN;
+	}
+	if (Z_TYPE_P(key) == IS_LONG) {
+		return zend_native_find_index(table, (zend_ulong) Z_LVAL_P(key));
+	}
+	if (Z_TYPE_P(key) != IS_STRING) {
+		return ZEND_NATIVE_ELEMENT_UNKNOWN;
+	}
+	name = Z_STR_P(key);
+	h = ZSTR_H(name);
+	if (h == 0 || !ZSTR_IS_INTERNED(name)) {
+		return ZEND_NATIVE_ELEMENT_UNKNOWN;
+	}
+	if (HT_IS_PACKED(table)) {
+		return ZEND_NATIVE_ELEMENT_ABSENT;
+	}
+	index = HT_HASH_EX(table->arData, (uint32_t) h | table->nTableMask);
+	while (index != HT_INVALID_IDX) {
+		Bucket *bucket = HT_HASH_TO_BUCKET_EX(table->arData, index);
+
+		if (bucket->key == name) {
+			return zend_native_probe_element(&bucket->val);
+		}
+		if (bucket->h == h && bucket->key != NULL) {
+			return ZEND_NATIVE_ELEMENT_UNKNOWN;
+		}
+		index = Z_NEXT(bucket->val);
+	}
+	return ZEND_NATIVE_ELEMENT_ABSENT;
+}
+
+/*
+ * Whether consuming a temporary container only drops a reference: an
+ * uncounted value, or a counted one with another owner. A sole owner would
+ * destroy the container, which the helper does.
+ */
+uint64_t zend_native_container_shared(const zval *container)
+{
+	return !Z_REFCOUNTED_P(container) || Z_REFCOUNT_P(container) > 1;
+}
+
+/* Drop one reference of a shared value (see zend_native_container_shared). */
+void zend_native_release_shared(const zval *container)
+{
+	if (Z_REFCOUNTED_P(container)) {
+		ZEND_NATIVE_DELREF(Z_COUNTED_P(container));
+	}
+}
+
+/* ZVAL_COPY_DEREF as two machine words. */
+zend_native_boxed zend_native_zval_copy_deref(const zval *value)
+{
+	if (Z_TYPE_P(value) == IS_REFERENCE) {
+		value = &Z_REF_P(value)->val;
+	}
+	return zend_native_zval_copy(value);
+}
+
+/* isset() of an element: set and not null, looking through a reference. */
+uint64_t zend_native_zval_isset(const zval *value)
+{
+	if (Z_TYPE_P(value) == IS_REFERENCE) {
+		value = &Z_REF_P(value)->val;
+	}
+	return Z_TYPE_P(value) > IS_NULL;
+}
+
+/*
+ * empty() of an element: 1 when empty, 0 when not, ZEND_NATIVE_EMPTY_UNKNOWN
+ * when deciding needs the helper (an object's cast or count handler, or
+ * another type).
+ */
+uint64_t zend_native_zval_empty(const zval *value)
+{
+	if (Z_TYPE_P(value) == IS_REFERENCE) {
+		value = &Z_REF_P(value)->val;
+	}
+	switch (Z_TYPE_P(value)) {
+		case IS_UNDEF:
+		case IS_NULL:
+		case IS_FALSE:
+			return 1;
+		case IS_TRUE:
+			return 0;
+		case IS_LONG:
+			return Z_LVAL_P(value) == 0;
+		case IS_DOUBLE:
+			return Z_DVAL_P(value) == 0.0;
+		case IS_STRING:
+			return Z_STRLEN_P(value) == 0
+				|| (Z_STRLEN_P(value) == 1 && Z_STRVAL_P(value)[0] == '0');
+		case IS_ARRAY:
+			return zend_hash_num_elements(Z_ARRVAL_P(value)) == 0;
+		default:
+			return ZEND_NATIVE_EMPTY_UNKNOWN;
+	}
 }
