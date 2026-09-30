@@ -4207,10 +4207,134 @@ ZEND_NATIVE_DIM_WRAPPER(zend_native_value_fetch_dim_w,
 	ZEND_FETCH_DIM_W, ZEND_NATIVE_DIM_W)
 ZEND_NATIVE_DIM_WRAPPER(zend_native_value_fetch_dim_rw,
 	ZEND_FETCH_DIM_RW, ZEND_NATIVE_DIM_RW)
-ZEND_NATIVE_DIM_WRAPPER(zend_native_value_fetch_dim_is,
-	ZEND_FETCH_DIM_IS, ZEND_NATIVE_DIM_IS)
-ZEND_NATIVE_DIM_WRAPPER(zend_native_value_fetch_dim_func_arg,
-	ZEND_FETCH_DIM_FUNC_ARG, ZEND_NATIVE_DIM_FUNC_ARG)
+
+#undef ZEND_NATIVE_DIM_WRAPPER
+
+/*
+ * FETCH_DIM_IS of an array or of null with an integer or string key, as
+ * zend_fetch_dimension_address_read_IS() reads it: a missing element or a
+ * null container reads null without a notice. Any other container or key
+ * keeps the generic fetch.
+ */
+static zend_always_inline bool zend_native_value_fetch_dim_is_fast(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result, zend_native_status *status)
+{
+	zval *container;
+	zval *container_slot;
+	zval *offset;
+	zval *target;
+	zval *element;
+	zval copy;
+	zend_ulong index;
+	bool container_tmp;
+	bool offset_tmp;
+	bool target_tmp;
+
+	if ((container = zend_native_value_fast_operand(
+				execute_data, op1, &container_tmp)) == NULL
+			|| (offset = zend_native_value_fast_operand(
+				execute_data, op2, &offset_tmp)) == NULL
+			|| (target = zend_native_value_fast_operand(
+				execute_data, result, &target_tmp)) == NULL
+			|| !target_tmp) {
+		return false;
+	}
+	container_slot = container;
+	ZVAL_DEREF(container);
+	if (!offset_tmp) {
+		ZVAL_DEREF(offset);
+	}
+	if (Z_TYPE_P(offset) != IS_LONG && Z_TYPE_P(offset) != IS_STRING) {
+		return false;
+	}
+	if (Z_TYPE_P(container) == IS_ARRAY) {
+		if (Z_TYPE_P(offset) == IS_LONG) {
+			element = zend_hash_index_find(
+				Z_ARRVAL_P(container), Z_LVAL_P(offset));
+		} else {
+			element = ZEND_HANDLE_NUMERIC_STR(Z_STRVAL_P(offset),
+					Z_STRLEN_P(offset), index)
+				? zend_hash_index_find(Z_ARRVAL_P(container), index)
+				: zend_hash_find(Z_ARRVAL_P(container), Z_STR_P(offset));
+		}
+		if (element != NULL && Z_TYPE_P(element) == IS_INDIRECT) {
+			element = Z_INDIRECT_P(element);
+		}
+		if (element == NULL || Z_TYPE_P(element) == IS_UNDEF) {
+			ZVAL_NULL(&copy);
+		} else {
+			/* The result may reuse the key's or the container's slot. */
+			ZVAL_COPY_DEREF(&copy, element);
+		}
+	} else if (Z_TYPE_P(container) <= IS_NULL) {
+		ZVAL_NULL(&copy);
+	} else {
+		return false;
+	}
+	if (offset_tmp) {
+		zval_ptr_dtor_nogc(offset);
+		ZVAL_UNDEF(offset);
+	}
+	if (container_tmp) {
+		zval_ptr_dtor_nogc(container_slot);
+		ZVAL_UNDEF(container_slot);
+	}
+	ZVAL_COPY_VALUE(target, &copy);
+	*status = ZEND_NATIVE_RETURNED;
+	return true;
+}
+
+zend_native_status zend_native_value_fetch_dim_is(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
+{
+	zend_native_status status;
+
+	if (zend_native_value_fetch_dim_is_fast(
+			execute_data, op1, op2, result, &status)) {
+		return status;
+	}
+	return zend_native_value_fetch_dim_impl(
+		execute_data, op1, op2, result, extended_value, source_opcode,
+		source_position_id, ZEND_FETCH_DIM_IS, ZEND_NATIVE_DIM_IS);
+}
+
+/* FETCH_DIM_FUNC_ARG for a by-value parameter reads like FETCH_DIM_R. */
+zend_native_status zend_native_value_fetch_dim_func_arg(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
+{
+	zend_native_status status;
+
+	if (execute_data->call != NULL
+			&& (ZEND_CALL_INFO(execute_data->call)
+				& ZEND_CALL_SEND_ARG_BY_REF) == 0
+			&& zend_native_value_fetch_dim_r_fast(
+				execute_data, op1, op2, result, &status)) {
+		return status;
+	}
+	return zend_native_value_fetch_dim_impl(
+		execute_data, op1, op2, result, extended_value, source_opcode,
+		source_position_id, ZEND_FETCH_DIM_FUNC_ARG, ZEND_NATIVE_DIM_FUNC_ARG);
+}
+
+#define ZEND_NATIVE_DIM_WRAPPER(name, opcode, mode) \
+	zend_native_status name( \
+			zend_execute_data *execute_data, \
+			uint64_t op1, uint64_t op2, uint64_t result, \
+			uint32_t extended_value, uint32_t source_opcode, \
+			uint32_t source_position_id) \
+	{ \
+		return zend_native_value_fetch_dim_impl( \
+			execute_data, op1, op2, result, extended_value, source_opcode, \
+			source_position_id, opcode, mode); \
+	}
+
 ZEND_NATIVE_DIM_WRAPPER(zend_native_value_fetch_dim_unset,
 	ZEND_FETCH_DIM_UNSET, ZEND_NATIVE_DIM_UNSET)
 
