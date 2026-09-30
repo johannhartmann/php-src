@@ -4650,7 +4650,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 
 		label_place(user_call);
-		ValuePart prepared{tpde::x64::PlatformConfig::GP_BANK, 4};
+		ValuePart invoked{tpde::x64::PlatformConfig::GP_BANK, 4};
 		{
 			ScratchReg activation{this};
 			auto activation_reg = activation.alloc_gp();
@@ -4662,163 +4662,20 @@ bool ZendCompilerX64::compile_inst_impl(
 			activation_value.set_value(this, std::move(activation));
 			builder.add_arg(
 				std::move(activation_value), tpde::CCAssignment{});
-			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_FRAME_PREPARE));
-			builder.add_ret(prepared, tpde::CCAssignment{});
-		}
-		{
-			auto prepared_reg = prepared.cur_reg_or_load(this);
-			ASM(CMP32ri, prepared_reg, SUCCESS);
-			auto prepare_ok = text_writer.label_create();
-			generate_raw_jump(Jump::je, prepare_ok);
-			prepared.reset(this);
-			emit_phase_failure();
-			label_place(prepare_ok);
-			prepared.reset(this);
-		}
-		ValuePart begin_status{
-			tpde::x64::PlatformConfig::GP_BANK, 4};
-		{
-			ScratchReg activation{this};
-			auto activation_reg = activation.alloc_gp();
-			load_active_activation(activation_reg);
-			tpde::x64::CCAssignerSysV assigner{false};
-			CallBuilder builder{*this, assigner};
-			ValuePart activation_value{
-				tpde::x64::PlatformConfig::GP_BANK, 8};
-			activation_value.set_value(this, std::move(activation));
-			builder.add_arg(
-				std::move(activation_value), tpde::CCAssignment{});
-			builder.call(runtime_symbol(
-				ZEND_NATIVE_HELPER_FRAME_OBSERVER_BEGIN));
-			builder.add_ret(begin_status, tpde::CCAssignment{});
-		}
-		auto invoke_user = text_writer.label_create();
-		auto observer_end = text_writer.label_create();
-		{
-			auto begin_reg = begin_status.cur_reg_or_load(this);
-			ScratchReg activation{this};
-			auto activation_reg = activation.alloc_gp();
-			load_active_activation(activation_reg);
-			ASM(MOV32mr,
-				FE_MEM(activation_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(
-						zend_native_direct_activation, status))), begin_reg);
-			activation.reset();
-			ASM(CMP32ri, begin_reg, ZEND_NATIVE_RETURNED);
-			generate_raw_jump(Jump::je, invoke_user);
-			begin_status.reset(this);
-			generate_raw_jump(Jump::jmp, observer_end);
-		}
-		label_place(invoke_user);
-		begin_status.reset(this);
-		{
-			ScratchReg activation{this};
-			ScratchReg callee{this};
-			ScratchReg entry{this};
-			auto activation_reg = activation.alloc_gp();
-			auto callee_reg = callee.alloc_gp();
-			auto entry_reg = entry.alloc_gp();
-			load_active_activation(activation_reg);
-			ASM(MOV64rm, callee_reg,
-				FE_MEM(activation_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(
-						zend_native_direct_activation, callee))));
-			ASM(MOV64rm, entry_reg,
-				FE_MEM(activation_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(
-						zend_native_direct_activation, resolution)
-						+ offsetof(zend_native_user_call_resolution,
-							invoke_entry))));
-			activation.reset();
-			tpde::x64::CCAssignerSysV assigner{false};
-			CallBuilder builder{*this, assigner};
-			ValuePart callee_value{
-				tpde::x64::PlatformConfig::GP_BANK, 8};
-			callee_value.set_value(this, std::move(callee));
-			builder.add_arg(
-				std::move(callee_value), tpde::CCAssignment{});
 			builder.add_arg(context_argument(), tpde::CCAssignment{});
-			ValuePart entry_value{
-				tpde::x64::PlatformConfig::GP_BANK, 8};
-			entry_value.set_value(this, std::move(entry));
-			builder.call(std::move(entry_value));
-			ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
-			builder.add_ret(status, tpde::CCAssignment{});
-			auto status_reg = status.cur_reg_or_load(this);
-			ScratchReg active{this};
-			auto active_reg = active.alloc_gp();
-			load_active_activation(active_reg);
-			ASM(MOV32mr,
-				FE_MEM(active_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(
-						zend_native_direct_activation, status))), status_reg);
-			active.reset();
-			status.reset(this);
-		}
-		label_place(observer_end);
-		{
-			ScratchReg activation{this};
-			ScratchReg status{this};
-			auto activation_reg = activation.alloc_gp();
-			auto status_reg = status.alloc_gp();
-			load_active_activation(activation_reg);
-			ASM(MOV32rm, status_reg,
-				FE_MEM(activation_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(
-						zend_native_direct_activation, status))));
-			tpde::x64::CCAssignerSysV assigner{false};
-			CallBuilder builder{*this, assigner};
-			ValuePart activation_value{
-				tpde::x64::PlatformConfig::GP_BANK, 8};
-			activation_value.set_value(this, std::move(activation));
-			builder.add_arg(
-				std::move(activation_value), tpde::CCAssignment{});
-			ValuePart status_value{
-				tpde::x64::PlatformConfig::GP_BANK, 4};
-			status_value.set_value(this, std::move(status));
-			builder.add_arg(
-				std::move(status_value), tpde::CCAssignment{});
 			builder.call(runtime_symbol(
-				ZEND_NATIVE_HELPER_FRAME_OBSERVER_END));
-		}
-		ValuePart finalized{tpde::x64::PlatformConfig::GP_BANK, 4};
-		{
-			ScratchReg activation{this};
-			ScratchReg status{this};
-			auto activation_reg = activation.alloc_gp();
-			auto status_reg = status.alloc_gp();
-			load_active_activation(activation_reg);
-			ASM(MOV32rm, status_reg,
-				FE_MEM(activation_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(
-						zend_native_direct_activation, status))));
-			tpde::x64::CCAssignerSysV assigner{false};
-			CallBuilder builder{*this, assigner};
-			ValuePart activation_value{
-				tpde::x64::PlatformConfig::GP_BANK, 8};
-			activation_value.set_value(this, std::move(activation));
-			builder.add_arg(
-				std::move(activation_value), tpde::CCAssignment{});
-			ValuePart status_value{
-				tpde::x64::PlatformConfig::GP_BANK, 4};
-			status_value.set_value(this, std::move(status));
-			builder.add_arg(
-				std::move(status_value), tpde::CCAssignment{});
-			builder.call(runtime_symbol(ZEND_NATIVE_HELPER_FRAME_FINALIZE));
-			builder.add_ret(finalized, tpde::CCAssignment{});
+				ZEND_NATIVE_HELPER_USER_CALL_INVOKE));
+			builder.add_ret(invoked, tpde::CCAssignment{});
 		}
 		{
-			auto finalized_reg = finalized.cur_reg_or_load(this);
-			auto user_returned = text_writer.label_create();
-			ASM(CMP32ri, finalized_reg, ZEND_NATIVE_RETURNED);
-			generate_raw_jump(Jump::je, user_returned);
-			ASM(CMP32ri, finalized_reg, ZEND_NATIVE_GENERATOR_CREATED);
-			generate_raw_jump(Jump::je, user_returned);
-			finalized.reset(this);
+			auto invoked_reg = invoked.cur_reg_or_load(this);
+			auto user_released = text_writer.label_create();
+			ASM(TEST32rr, invoked_reg, invoked_reg);
+			generate_raw_jump(Jump::je, user_released);
+			invoked.reset(this);
 			emit_phase_failure();
-			label_place(user_returned);
-			finalized.reset(this);
-			release_active();
+			label_place(user_released);
+			invoked.reset(this);
 			branch_released_exception();
 			generate_raw_jump(Jump::jmp, do_succeeded);
 		}

@@ -260,6 +260,38 @@ typedef struct _zend_native_user_call_descriptor {
 
 #define ZEND_NATIVE_USER_CALL_REQUIRE_SCALAR_RESULT UINT32_C(1)
 
+/*
+ * Every user call descriptor is allocated behind a process-local site header
+ * that links the call site to its request-local resolution cache entry while
+ * the header epoch is current. Only the descriptor itself is serialized.
+ */
+typedef struct _zend_native_user_call_site_header {
+	void *resolution;
+	uint64_t epoch;
+} zend_native_user_call_site_header;
+
+#define ZEND_NATIVE_USER_CALL_SITE_HEADER(descriptor) \
+	((zend_native_user_call_site_header *) (descriptor) - 1)
+
+static zend_always_inline zend_native_user_call_descriptor *
+zend_native_user_call_descriptor_alloc(size_t size)
+{
+	zend_native_user_call_site_header *header =
+		(zend_native_user_call_site_header *) calloc(
+			1, sizeof(*header) + size);
+
+	return header != NULL
+		? (zend_native_user_call_descriptor *) (header + 1) : NULL;
+}
+
+static zend_always_inline void zend_native_user_call_descriptor_free(
+	zend_native_user_call_descriptor *descriptor)
+{
+	if (descriptor != NULL) {
+		free(ZEND_NATIVE_USER_CALL_SITE_HEADER(descriptor));
+	}
+}
+
 typedef enum _zend_native_user_call_resolution_status {
 	ZEND_NATIVE_USER_CALL_RESOLUTION_FAILURE = 0,
 	ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS = 1
@@ -317,6 +349,10 @@ typedef struct _zend_native_user_call_placement {
 #define ZEND_NATIVE_USER_CALL_PLACEMENTS_HAS_DEFAULTS UINT32_C(8)
 #define ZEND_NATIVE_USER_CALL_PLACEMENTS_METADATA_PREFLIGHT UINT32_C(16)
 #define ZEND_NATIVE_USER_CALL_PLACEMENTS_RUNTIME_STARTED UINT32_C(32)
+/* Cached resolutions only: an untyped, non-variadic, non-generator native user
+ * function receiving at least its declared arguments, so the frame needs no
+ * RECV work, preflight or return verification. */
+#define ZEND_NATIVE_USER_CALL_PLACEMENTS_FAST_FRAME UINT32_C(64)
 
 /*
  * Frame-less result of resolving one universal call. SUCCESS always names one
@@ -562,6 +598,16 @@ zend_native_status zend_native_frame_observer_begin(
 	zend_native_direct_activation *activation);
 zend_native_status zend_native_frame_observer_end(
 	zend_native_direct_activation *activation, zend_native_status status);
+/*
+ * The DO phase of a resolved dynamic user call in one transition: prepare the
+ * frame, notify observers, invoke the resolved entry, finalize the frame and
+ * release the activation. Returns 0 once the activation is released (the
+ * caller then checks for a pending exception) and 1 when preparation or
+ * finalization failed with the activation still active.
+ */
+uint32_t zend_native_call_invoke_user(
+	zend_native_direct_activation *activation,
+	zend_native_execution_context *context);
 /*
  * A frameless internal call whose operands the compiler resolved to frame
  * offsets (ZEND_NATIVE_FRAMELESS_DIRECT_*). The encoded first operand is
