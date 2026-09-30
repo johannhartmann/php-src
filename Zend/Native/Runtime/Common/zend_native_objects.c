@@ -2476,6 +2476,83 @@ ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(
 ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_fetch_this,
 	ZEND_FETCH_THIS,
 	zend_native_fetch_this_explicit(execute_data, &operation))
+/*
+ * A declared property of a CV or $this receiver under a literal name whose
+ * class and offset the VM run-time cache slot holds: R and IS copy the value,
+ * W addresses it unless the property is typed (the slot then names its
+ * property info). Everything else takes the general fetch.
+ */
+static zend_always_inline bool zend_native_object_fetch_cached(
+	zend_execute_data *execute_data, uint64_t op1, uint64_t op2,
+	uint64_t result, uint32_t extended_value, int fetch_type)
+{
+	const zend_op_array *op_array = &execute_data->func->op_array;
+	const uint32_t op1_index = (uint32_t) (op1 >> 16);
+	const uint32_t result_index = (uint32_t) (result >> 16);
+	const uint32_t result_slot = (uint32_t) ((result >> 8) & UINT64_C(0xff));
+	const uint32_t cache_offset = extended_value & ~ZEND_FETCH_OBJ_FLAGS;
+	zval *receiver;
+	zval *property;
+	zval *target;
+	zend_object *object;
+	void **cache_slot;
+	uintptr_t property_offset;
+
+	if ((op2 & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| execute_data->run_time_cache == NULL
+			|| cache_offset > (uint32_t) op_array->cache_size
+			|| 3 * sizeof(void *)
+				> (uint32_t) op_array->cache_size - cache_offset) {
+		return false;
+	}
+	switch ((zend_mir_source_operand_kind) (op1 & UINT64_C(0xff))) {
+		case ZEND_MIR_SOURCE_OPERAND_UNUSED:
+			receiver = &execute_data->This;
+			break;
+		case ZEND_MIR_SOURCE_OPERAND_SLOT:
+		case ZEND_MIR_SOURCE_OPERAND_SSA:
+			if (((op1 >> 8) & UINT64_C(0xff)) != ZEND_MIR_SOURCE_SLOT_CV
+					|| op1_index >= (uint32_t) op_array->last_var) {
+				return false;
+			}
+			receiver = ZEND_CALL_VAR_NUM(execute_data, op1_index);
+			break;
+		default:
+			return false;
+	}
+	if (((result & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_SLOT
+				&& (result & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_SSA)
+			|| (result_slot != ZEND_MIR_SOURCE_SLOT_TMP
+				&& result_slot != ZEND_MIR_SOURCE_SLOT_VAR)
+			|| result_index >= op_array->T
+			|| Z_TYPE_P(receiver) != IS_OBJECT) {
+		return false;
+	}
+	object = Z_OBJ_P(receiver);
+	cache_slot = (void **) ((char *) execute_data->run_time_cache
+		+ cache_offset);
+	if (cache_slot[0] != object->ce) {
+		return false;
+	}
+	property_offset = (uintptr_t) cache_slot[1];
+	if (!IS_VALID_PROPERTY_OFFSET(property_offset)) {
+		return false;
+	}
+	property = OBJ_PROP(object, property_offset);
+	if (Z_TYPE_P(property) == IS_UNDEF
+			|| (fetch_type == BP_VAR_W && cache_slot[2] != NULL)) {
+		return false;
+	}
+	target = ZEND_CALL_VAR_NUM(execute_data,
+		(uint32_t) op_array->last_var + result_index);
+	if (fetch_type == BP_VAR_W) {
+		ZVAL_INDIRECT(target, property);
+	} else {
+		ZVAL_COPY_DEREF(target, property);
+	}
+	return true;
+}
+
 zend_native_status zend_native_execute_object_fetch_r(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,
@@ -2483,6 +2560,11 @@ zend_native_status zend_native_execute_object_fetch_r(
 	uint32_t source_position_id)
 {
 	zend_native_explicit_object_operation operation;
+
+	if (zend_native_object_fetch_cached(execute_data, op1, op2, result,
+			extended_value, BP_VAR_R)) {
+		return ZEND_NATIVE_RETURNED;
+	}
 
 	if (!zend_native_object_init_explicit_operation(
 			execute_data, op1, op2, result, extended_value, source_opcode,
@@ -2503,6 +2585,11 @@ zend_native_status zend_native_execute_object_fetch_r(
 		uint32_t source_position_id) \
 	{ \
 		zend_native_explicit_object_operation operation; \
+		if ((fetch_type == BP_VAR_W || fetch_type == BP_VAR_IS) \
+				&& zend_native_object_fetch_cached(execute_data, op1, op2, \
+					result, extended_value, fetch_type)) { \
+			return ZEND_NATIVE_RETURNED; \
+		} \
 		if (!zend_native_object_init_explicit_operation( \
 				execute_data, op1, op2, result, extended_value, \
 				actual_source_opcode, source_position_id, source_opcode, \

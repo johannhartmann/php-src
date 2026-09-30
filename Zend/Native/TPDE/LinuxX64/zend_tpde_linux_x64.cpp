@@ -11157,26 +11157,45 @@ bool ZendCompilerX64::compile_inst_impl(
 		if (node.kind == Adaptor::InstKind::GuardedFast) {
 			object.reset();
 			cache.reset();
-			type.reset();
 			if (adaptor->machine_kind(node.result)
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 				/*
-				 * The boxed register result is synthesized for an immediate
-				 * scalar assign-op. Specialize the successful edge to long and
-				 * let every other PHP value use the existing cold helper.
+				 * Like the cold path, which loads the temporary the helper
+				 * wrote, the fast path publishes the value to the result slot,
+				 * where a counted property value holds a new reference, and
+				 * mirrors it in the boxed registers. Undefined and reference
+				 * slots already took the helper.
 				 */
-				ASM(CMP32ri, offset_reg, IS_LONG);
-				generate_raw_jump(Jump::jne, slow);
+				offset.reset();
 				auto result = result_ref(node.result);
 				auto payload = result.part(0);
 				auto type_info = result.part(1);
 				auto payload_reg = payload.alloc_reg();
 				ASM(MOV64rm, payload_reg,
 					FE_MEM(property_reg, 0, FE_NOREG, 0));
-				/* The guard already leaves the exact type tag in offset. */
-				type_info.set_value(std::move(offset));
+				auto value_owned = text_writer.label_create();
+				ASM(TEST32ri, type_reg,
+					IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+				generate_raw_jump(Jump::je, value_owned);
+				ASM(ADD32mi,
+					FE_MEM(payload_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zend_refcounted_h, refcount))),
+					1);
+				label_place(value_owned);
+				ASM(MOV64mr,
+					FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(layout.result_offset)),
+					payload_reg);
+				ASM(MOV32mr,
+					FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(layout.result_offset
+							+ offsetof(zval, u1.type_info))),
+					type_reg);
+				type_info.set_value(std::move(type));
 				payload.set_modified();
 			} else {
+				type.reset();
 				auto [result_ref, result] =
 					result_ref_single(node.result);
 				auto result_reg = result.alloc_reg();

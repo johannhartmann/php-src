@@ -1163,25 +1163,42 @@ static inline bool zend_tpde_dim_direct_at(
 		&& operation.source_opcode == ZEND_ISSET_ISEMPTY_DIM_OBJ;
 	uint64_t container_kind;
 	uint64_t container_offset;
+	uint64_t indirect_container = 0;
 	uint64_t key_kind;
 	uint64_t key_offset;
 	uint64_t value_kind = ZEND_NATIVE_DIM_DIRECT_UNUSED;
 	uint64_t value_offset = 0;
 	uint64_t result_offset = 0;
 
+	/* A write may address the property FETCH_OBJ_W left in a VAR. */
+	if (write && out != nullptr && instruction.has_value_operation
+			&& (operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR
+			&& zend_mir_id_is_valid(operation.op1_storage_id)) {
+		container_kind = ZEND_NATIVE_DIM_DIRECT_CV;
+		container_offset = (uint64_t{ZEND_CALL_FRAME_SLOT}
+			+ operation.op1_storage_id) * sizeof(zval);
+		indirect_container = 1;
+		if (container_offset > UINT32_MAX) {
+			return false;
+		}
+	}
 	if (out == nullptr || !instruction.has_value_operation
 			|| (!read && !write && !test)
 			|| operation.extended_value > 0xffff
-			|| !zend_tpde_dim_direct_operand(operation.op1,
-				operation.op1_storage_id, false,
-				&container_kind, &container_offset)
+			|| (indirect_container == 0
+				&& !zend_tpde_dim_direct_operand(operation.op1,
+					operation.op1_storage_id, false,
+					&container_kind, &container_offset))
 			|| (container_kind != ZEND_NATIVE_DIM_DIRECT_CV
-				&& !(test && container_kind == ZEND_NATIVE_DIM_DIRECT_TMP))
+				&& !((test || read)
+					&& container_kind == ZEND_NATIVE_DIM_DIRECT_TMP))
 			|| !zend_tpde_dim_direct_operand(operation.op2,
 				operation.op2_storage_id, write, &key_kind, &key_offset)) {
 		return false;
 	}
-	if (test) {
+	if (test || read) {
 		/* The container kind rides in the value kind field. */
 		value_kind = container_kind;
 	}
@@ -1202,6 +1219,7 @@ static inline bool zend_tpde_dim_direct_at(
 		return false;
 	}
 	out->descriptor = key_kind | (value_kind << 2)
+		| (indirect_container << ZEND_NATIVE_DIM_DIRECT_INDIRECT_CONTAINER_SHIFT)
 		| (uint64_t{operation.extended_value} << 8)
 		| (uint64_t{operation.source_position_id} << 32);
 	out->slots = container_offset | (key_offset << 32);

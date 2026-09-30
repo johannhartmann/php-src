@@ -238,11 +238,13 @@ typedef enum _zend_native_runtime_helper_id {
 /*
  * zend_native_value_fetch_dim_r_direct(), _assign_dim_direct() and
  * _isset_isempty_dim_direct() descriptor: key kind (bits 0-1), value kind
- * (2-3; the container kind, a CV or a temporary, for isset/empty), extended
- * value (8-23) and source position (32-63). Their slot words hold the
- * container (a CV unless stated) and key offsets, then the value and result
- * offsets; a literal's offset indexes the literal table.
+ * (2-3; the container kind, a CV or a temporary, for reads and isset/empty),
+ * extended value (8-23) and source position (32-63). Their slot words hold
+ * the container (a CV unless stated) and key offsets, then the value and
+ * result offsets; a literal's offset indexes the literal table.
  */
+/* _assign_dim_direct(): the container is a VAR holding an INDIRECT. */
+#define ZEND_NATIVE_DIM_DIRECT_INDIRECT_CONTAINER_SHIFT 4
 #define ZEND_NATIVE_DIM_DIRECT_UNUSED 0
 #define ZEND_NATIVE_DIM_DIRECT_CONST 1
 #define ZEND_NATIVE_DIM_DIRECT_CV 2
