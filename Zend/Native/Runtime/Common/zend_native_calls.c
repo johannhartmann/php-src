@@ -14,6 +14,7 @@
 #include "Zend/zend_partial.h"
 
 #include <string.h>
+#include <unistd.h>
 
 ZEND_TLS zend_native_reentry_scope *zend_native_active_reentry_scope;
 
@@ -1366,6 +1367,41 @@ zend_result zend_native_entry_cell_begin_compile(zend_native_entry_cell *cell)
 	return SUCCESS;
 }
 
+/* Development aid: with ZEND_NATIVE_PERF_MAP set, record which PHP function
+ * each published entry runs, to rename the entries of perf's JIT map. */
+static void zend_native_perf_name_entry(
+	const zend_native_entry_cell *cell, const zend_native_code *code)
+{
+	static int enabled = -1;
+	const zend_function *function = cell->function;
+	char path[64];
+	FILE *names;
+
+	if (enabled < 0) {
+		const char *perf_map = getenv("ZEND_NATIVE_PERF_MAP");
+		enabled = perf_map != NULL && perf_map[0] != '\0';
+	}
+	if (!enabled || function == NULL) {
+		return;
+	}
+	snprintf(path, sizeof(path), "/tmp/perf-%d.names", (int) getpid());
+	names = fopen(path, "a");
+	if (names == NULL) {
+		return;
+	}
+	fprintf(names, "%lx %s%s%s %s:%u\n",
+		(unsigned long) (uintptr_t) zend_native_code_frame_entry(code),
+		function->common.scope != NULL
+			? ZSTR_VAL(function->common.scope->name) : "",
+		function->common.scope != NULL ? "::" : "",
+		function->common.function_name != NULL
+			? ZSTR_VAL(function->common.function_name) : "{main}",
+		ZEND_USER_CODE(function->type) && function->op_array.filename
+			? ZSTR_VAL(function->op_array.filename) : "",
+		ZEND_USER_CODE(function->type) ? function->op_array.line_start : 0);
+	fclose(names);
+}
+
 zend_result zend_native_entry_cell_publish(
 	zend_native_entry_cell *cell, const zend_native_code *code)
 {
@@ -1373,6 +1409,7 @@ zend_result zend_native_entry_cell_publish(
 			|| cell->state != ZEND_NATIVE_ENTRY_COMPILING) {
 		return FAILURE;
 	}
+	zend_native_perf_name_entry(cell, code);
 	cell->generation++;
 	cell->published_epoch = cell->generation;
 	cell->state = ZEND_NATIVE_ENTRY_READY;
