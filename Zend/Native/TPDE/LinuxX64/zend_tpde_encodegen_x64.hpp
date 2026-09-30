@@ -1279,7 +1279,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_load_u
     //
     // bb.0 (%ir-block.1):
     //   liveins: $rdi
-    //   renamable $rax = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !8)
+    //   renamable $rax = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
     //   RET64 killed $rax
     //
     // # End machine code for function zend_native_load_u64.
@@ -1290,7 +1290,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_load_u
     ScratchReg scratch_di{derived()};
 
 
-    // renamable $rax = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !8)
+    // renamable $rax = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
     do {
     {
     auto cond0 = encodeable_with(param_0, FE_MEM(FE_NOREG, 0, FE_NOREG, 0), false);
@@ -1332,7 +1332,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_load_u
     //
     // bb.0 (%ir-block.1):
     //   liveins: $rdi
-    //   renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s32) from %ir.0, !tbaa !4)
+    //   renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s32) from %ir.0, !tbaa !8)
     //   RET64 killed $eax
     //
     // # End machine code for function zend_native_load_u32.
@@ -1343,7 +1343,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_load_u
     ScratchReg scratch_di{derived()};
 
 
-    // renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s32) from %ir.0, !tbaa !4)
+    // renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s32) from %ir.0, !tbaa !8)
     do {
     {
     auto cond0 = encodeable_with(param_0, FE_MEM(FE_NOREG, 0, FE_NOREG, 0), false);
@@ -1385,7 +1385,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_store_
     //
     // bb.0 (%ir-block.2):
     //   liveins: $rdi, $rsi
-    //   MOV64mr killed renamable $rdi, 1, $noreg, 0, $noreg, killed renamable $rsi :: (store (s64) into %ir.0, !tbaa !8)
+    //   MOV64mr killed renamable $rdi, 1, $noreg, 0, $noreg, killed renamable $rsi :: (store (s64) into %ir.0, !tbaa !4)
     //   RET64
     //
     // # End machine code for function zend_native_store_u64.
@@ -1397,7 +1397,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_store_
     ScratchReg scratch_si{derived()};
 
 
-    // MOV64mr killed renamable $rdi, 1, $noreg, 0, $noreg, killed renamable $rsi :: (store (s64) into %ir.0, !tbaa !8)
+    // MOV64mr killed renamable $rdi, 1, $noreg, 0, $noreg, killed renamable $rsi :: (store (s64) into %ir.0, !tbaa !4)
     do {
     {
     auto cond0 = encodeable_as_imm32_sext(param_1);
