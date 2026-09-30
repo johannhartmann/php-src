@@ -5201,6 +5201,9 @@ bool freeze_statepoint_materializations(
 	return true;
 }
 
+static bool machine_plan_type_check_supported(
+	const zend_tpde_plan *plan, const zend_tpde_instruction &instruction);
+
 void freeze_machine_control_flow(zend_tpde_plan *plan)
 {
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
@@ -5239,6 +5242,14 @@ void freeze_machine_control_flow(zend_tpde_plan *plan)
 						ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
 					break;
 				}
+				case ZEND_MIR_OPCODE_VALUE_TYPE_CHECK:
+					/* A check of an exact scalar is a typed operation. */
+					if (!machine_plan_type_check_supported(
+							plan, instruction)) {
+						flags |=
+							ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
+					}
+					break;
 				case ZEND_MIR_OPCODE_VALUE_QM_ASSIGN:
 				case ZEND_MIR_OPCODE_VALUE_FREE:
 				case ZEND_MIR_OPCODE_VALUE_BINARY_OP:

@@ -15,4 +15,7 @@
 /* zend_native_zval_empty(): the helper decides (objects, other types). */
 #define ZEND_NATIVE_EMPTY_UNKNOWN 2
 
+/* zend_native_zval_type_check(): an undefined variable, which warns. */
+#define ZEND_NATIVE_TYPE_CHECK_UNDEFINED 2
+
 #endif

@@ -341,6 +341,21 @@ uint64_t zend_native_container_shared(const zval *container)
 }
 
 /*
+ * TYPE_CHECK of a CV: 1 when its value, through a reference, has a type in
+ * mask, 0 when not, ZEND_NATIVE_TYPE_CHECK_UNDEFINED for an undefined one.
+ */
+uint64_t zend_native_zval_type_check(const zval *value, uint64_t mask)
+{
+	if (Z_TYPE_P(value) == IS_UNDEF) {
+		return ZEND_NATIVE_TYPE_CHECK_UNDEFINED;
+	}
+	if (Z_TYPE_P(value) == IS_REFERENCE) {
+		value = &Z_REF_P(value)->val;
+	}
+	return (mask >> Z_TYPE_P(value)) & 1;
+}
+
+/*
  * 1 when a container, through a reference, is undefined, null, a bool or a
  * number: FETCH_DIM_IS of it is null without a diagnostic.
  */
