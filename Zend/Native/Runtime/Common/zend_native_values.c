@@ -2120,6 +2120,53 @@ zend_native_status zend_native_value_incdec(
 	bool post;
 	zend_result status;
 
+	/*
+	 * ++/-- of an integer CV, or of the integer element or property a
+	 * write fetch's VAR points to, without decoding the operation. An
+	 * overflow, a reference or any other value takes the general path.
+	 */
+	if ((source_opcode == ZEND_PRE_INC || source_opcode == ZEND_PRE_DEC
+				|| source_opcode == ZEND_POST_INC
+				|| source_opcode == ZEND_POST_DEC)
+			&& ((op1 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| (op1 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SSA)) {
+		const uint32_t slot_kind = (uint32_t) ((op1 >> 8) & UINT64_C(0xff));
+		const uint32_t index = (uint32_t) (op1 >> 16);
+		const bool has_result = (result_operand & UINT64_C(0xff))
+			!= ZEND_MIR_SOURCE_OPERAND_UNUSED;
+		bool result_tmp = false;
+		zval *target = has_result ? zend_native_value_fast_operand(
+			execute_data, result_operand, &result_tmp) : NULL;
+
+		value = NULL;
+		if (slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+				&& index < (uint32_t) execute_data->func->op_array.last_var) {
+			value = ZEND_CALL_VAR_NUM(execute_data, index);
+		} else if (slot_kind == ZEND_MIR_SOURCE_SLOT_VAR
+				&& index < (uint32_t) execute_data->func->op_array.T) {
+			slot = ZEND_CALL_VAR_NUM(execute_data,
+				execute_data->func->op_array.last_var + index);
+			if (Z_TYPE_P(slot) == IS_INDIRECT) {
+				value = Z_INDIRECT_P(slot);
+			}
+		}
+		if (value != NULL && Z_TYPE_P(value) == IS_LONG
+				&& (!has_result || (target != NULL && result_tmp))) {
+			const zend_long old = Z_LVAL_P(value);
+
+			increment = source_opcode == ZEND_PRE_INC
+				|| source_opcode == ZEND_POST_INC;
+			if (increment ? old != ZEND_LONG_MAX : old != ZEND_LONG_MIN) {
+				Z_LVAL_P(value) = increment ? old + 1 : old - 1;
+				if (has_result) {
+					ZVAL_LONG(target, source_opcode == ZEND_POST_INC
+							|| source_opcode == ZEND_POST_DEC
+						? old : Z_LVAL_P(value));
+				}
+				return ZEND_NATIVE_RETURNED;
+			}
+		}
+	}
 	if ((source_opcode != ZEND_PRE_INC && source_opcode != ZEND_PRE_DEC
 			&& source_opcode != ZEND_POST_INC
 			&& source_opcode != ZEND_POST_DEC)
