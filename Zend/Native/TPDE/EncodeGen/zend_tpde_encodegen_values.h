@@ -18,4 +18,11 @@
 /* zend_native_zval_type_check(): an undefined variable, which warns. */
 #define ZEND_NATIVE_TYPE_CHECK_UNDEFINED 2
 
+/* zend_native_zval_identical(): the helper compares (doubles, arrays,
+ * objects, undefined variables). */
+#define ZEND_NATIVE_IDENTICAL_UNKNOWN 2
+
+/* zend_native_zval_array_count(): not an array; the helper counts. */
+#define ZEND_NATIVE_COUNT_UNKNOWN UINT64_MAX
+
 #endif

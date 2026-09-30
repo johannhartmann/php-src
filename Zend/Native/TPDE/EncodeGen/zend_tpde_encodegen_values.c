@@ -341,6 +341,75 @@ uint64_t zend_native_container_shared(const zval *container)
 }
 
 /*
+ * zend_is_identical() of a value, through a reference, and a literal: 1 or
+ * 0 for null, bools, integers and strings, ZEND_NATIVE_IDENTICAL_UNKNOWN for
+ * an undefined value, doubles (signed zeros, NaN), arrays and objects.
+ */
+uint64_t zend_native_zval_identical(const zval *value, const zval *literal)
+{
+	const char *left;
+	const char *right;
+	size_t length;
+
+	if (Z_TYPE_P(value) == IS_REFERENCE) {
+		value = &Z_REF_P(value)->val;
+	}
+	if (Z_TYPE_P(value) == IS_UNDEF) {
+		return ZEND_NATIVE_IDENTICAL_UNKNOWN;
+	}
+	if (Z_TYPE_P(value) != Z_TYPE_P(literal)) {
+		return 0;
+	}
+	if (Z_TYPE_P(value) <= IS_TRUE) {
+		return 1;
+	}
+	if (Z_TYPE_P(value) == IS_LONG) {
+		return Z_LVAL_P(value) == Z_LVAL_P(literal);
+	}
+	if (Z_TYPE_P(value) != IS_STRING) {
+		return ZEND_NATIVE_IDENTICAL_UNKNOWN;
+	}
+	if (Z_STR_P(value) == Z_STR_P(literal)) {
+		return 1;
+	}
+	length = Z_STRLEN_P(value);
+	if (length != Z_STRLEN_P(literal)) {
+		return 0;
+	}
+	/* Word by word, then the last bytes; no library call and few
+	 * registers: two cursors and the remaining length. */
+	left = Z_STRVAL_P(value);
+	right = Z_STRVAL_P(literal);
+	for (; length >= sizeof(uint64_t); length -= sizeof(uint64_t)) {
+		if (*(const uint64_t *) left != *(const uint64_t *) right) {
+			return 0;
+		}
+		left += sizeof(uint64_t);
+		right += sizeof(uint64_t);
+	}
+	for (; length != 0; length--) {
+		if (*left++ != *right++) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+/*
+ * count() of an array, through a reference, or ZEND_NATIVE_COUNT_UNKNOWN
+ * for any other value (Countable objects, warnings and errors).
+ */
+uint64_t zend_native_zval_array_count(const zval *value)
+{
+	if (Z_TYPE_P(value) == IS_REFERENCE) {
+		value = &Z_REF_P(value)->val;
+	}
+	return Z_TYPE_P(value) == IS_ARRAY
+		? zend_hash_num_elements(Z_ARRVAL_P(value))
+		: ZEND_NATIVE_COUNT_UNKNOWN;
+}
+
+/*
  * TYPE_CHECK of a CV: 1 when its value, through a reference, has a type in
  * mask, 0 when not, ZEND_NATIVE_TYPE_CHECK_UNDEFINED for an undefined one.
  */
