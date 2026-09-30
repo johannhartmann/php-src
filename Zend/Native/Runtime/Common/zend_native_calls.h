@@ -742,6 +742,8 @@ zend_native_status zend_native_call_convert_descriptor_explicit(
  */
 zend_execute_data *zend_native_call_reserve_dynamic_frame(
 	zend_execute_data *caller, uint32_t reservation_size);
+void zend_native_call_fast_send_var_reference(
+	zval *argument, zval *variable);
 bool zend_native_call_fast_new(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor,

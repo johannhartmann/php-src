@@ -999,6 +999,9 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_CALL_FAST_NEW,
 		ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE,
 		(const void *) zend_native_call_fast_new},
+	{ZEND_NATIVE_HELPER_CALL_FAST_SEND_VAR_REFERENCE,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE,
+		(const void *) zend_native_call_fast_send_var_reference},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
