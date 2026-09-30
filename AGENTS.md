@@ -16,7 +16,10 @@ wave ownership manifests.
 Use these pinned references when work depends on the native-engine design:
 
 - php-src baseline: `47355da494ba696b1bdb6d10448a225e742bd316`;
-- TPDE reference: `338d41890e424b058e2053b6a5787e1348e3dd57`.
+- TPDE: current upstream `master`, pinned in
+  `Zend/Native/TPDE/ThirdParty/tpde/REVISION` (local changes in `PATCHES.md`);
+  no compatibility with older TPDE revisions. The capability analysis in
+  `docs/native-engine/tpde` reviewed `338d41890e424b058e2053b6a5787e1348e3dd57`.
 
 Do not introduce a production VM fallback in native-engine code. Do not change
 public ABI, persistent formats, or dependencies without an explicit contract,

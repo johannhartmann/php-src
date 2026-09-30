@@ -1,8 +1,11 @@
 # TPDE backend
 
-The W06 baseline is pinned to upstream TPDE commit
-`d19a36fe9a3657f36b6bf6777d87c5cec0cfce5b`. The previous design reference
-was `338d41890e424b058e2053b6a5787e1348e3dd57`.
+The backend follows current upstream TPDE: `ThirdParty/tpde/REVISION` pins
+`master` commit `9779acf4ada3736e779391da1e4b3369dba08024`, and
+`ThirdParty/tpde/PATCHES.md` lists every local change. Updates move the pin to
+newer upstream revisions; compatibility with older revisions is not kept. The
+capability analysis in `docs/native-engine/tpde` records the earlier revision
+`338d41890e424b058e2053b6a5787e1348e3dd57` it reviewed.
 
 The build is network-independent. The exact TPDE and Fadec revisions and their
 upstream licenses are stored in `ThirdParty/tpde`. Linux x86-64 compiles the
