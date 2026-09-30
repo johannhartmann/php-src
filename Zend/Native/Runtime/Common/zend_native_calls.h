@@ -754,6 +754,7 @@ bool zend_native_call_fast_new(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor,
 	uint32_t result_offset);
+zend_result zend_native_call_universal_expand(void);
 zend_result zend_native_call_universal_send(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor,
