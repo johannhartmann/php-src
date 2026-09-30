@@ -8216,6 +8216,86 @@ bool ZendCompilerX64::compile_inst_impl(
 			std::move(decision), successors[1], successors[0]);
 		return 1;
 	};
+	/*
+	 * FE_FREE of an array holder that another owner keeps alive drops one
+	 * reference (zend_native_iterator_shared, _release_shared), as the VM's
+	 * inlined zval_ptr_dtor_nogc does. Object iterators and a last reference
+	 * take the guarded cold block. Returns 1 when emitted, 0 when the form
+	 * does not apply and -1 on an encoding failure.
+	 */
+	auto iterator_free_inline = [&]() -> int {
+		const zend_mir_executable_value_ref &operation = mir.value_operation;
+		if (!adaptor->plan()->linux_inline_forms
+				|| node.kind != Adaptor::InstKind::GuardedFast
+				|| !mir.has_value_operation
+				|| operation.source_opcode != ZEND_FE_FREE
+				|| node.has_result
+				|| node.control_block == UINT32_MAX
+				|| node.continuation_block == UINT32_MAX
+				|| (operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+					&& operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
+				|| (operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+					&& operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_VAR)
+				|| !zend_mir_id_is_valid(operation.op1_storage_id)
+				|| unlocked_gp_registers() < 6) {
+			return 0;
+		}
+		for (IRValueRef operand : node.operands) {
+			if (operand != IRValueRef{Adaptor::FRAME_VALUE}
+					&& operand != IRValueRef{
+						Adaptor::EXECUTION_CONTEXT_ARGUMENT}) {
+				return 0;
+			}
+		}
+		const auto successors =
+			adaptor->block_succs(IRBlockRef{node.control_block});
+		if (successors.size() < 2
+				|| static_cast<uint32_t>(successors[0])
+					!= node.continuation_block
+				|| static_cast<uint32_t>(successors[1])
+					!= node.argument_index) {
+			return 0;
+		}
+		const uint64_t holder_offset =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
+				* sizeof(zval);
+		if (holder_offset > INT32_MAX - sizeof(zval)) {
+			return 0;
+		}
+		auto slow = text_writer.label_create();
+		auto done = text_writer.label_create();
+		auto [frame_ref, frame] =
+			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_reg = frame_scratch.cur_reg();
+		auto holder = [&]() {
+			return GenericValuePart{GenericValuePart::Expr{frame_reg,
+				static_cast<int64_t>(holder_offset)}};
+		};
+		ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
+		if (!EncodeBase::encode_zend_native_iterator_shared(
+				holder(), shared)) {
+			return -1;
+		}
+		const AsmReg shared_reg = shared.cur_reg_or_load(this);
+		ScratchReg decision{this};
+		auto decision_reg = decision.alloc_gp();
+		ASM(TEST64rr, shared_reg, shared_reg);
+		shared.reset(this);
+		generate_raw_jump(Jump::je, slow);
+		if (!EncodeBase::encode_zend_native_release_shared(holder())) {
+			return -1;
+		}
+		ASM(MOV32ri, decision_reg, 0);
+		generate_raw_jump(Jump::jmp, done);
+		label_place(slow);
+		ASM(MOV32ri, decision_reg, 1);
+		label_place(done);
+		frame_scratch.reset();
+		generate_guarded_decision_branch(
+			std::move(decision), successors[1], successors[0]);
+		return 1;
+	};
 	auto copy_literal = [&]() -> int {
 		const zend_mir_executable_value_ref &operation = mir.value_operation;
 		if (!adaptor->plan()->linux_inline_forms
@@ -12642,6 +12722,12 @@ bool ZendCompilerX64::compile_inst_impl(
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN_OP:
 			return long_assign_op();
 		case ZEND_MIR_OPCODE_VALUE_FE_FREE:
+			if (node.kind == Adaptor::InstKind::GuardedFast) {
+				if (const int freed = iterator_free_inline(); freed != 0) {
+					return freed > 0;
+				}
+				return branch_to_guarded_cold();
+			}
 			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_BINARY_OP:
 			if (mir.fused_into_branch && !adaptor->typed_body()) {
@@ -13636,6 +13722,25 @@ bool ZendCompilerX64::compile_inst_impl(
 						val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 					auto frame_scratch = std::move(frame).into_scratch();
 					auto frame_reg = frame_scratch.cur_reg();
+					if (!layout.destination_scalar_only) {
+						/* The loop variable usually holds the previous element,
+						 * which the array still owns: overwrite it inline unless
+						 * it is a reference, the last owner or a new GC root. */
+						ValuePart overwritable{
+							tpde::x64::PlatformConfig::GP_BANK, 8};
+						if (!EncodeBase::encode_zend_native_cv_overwritable(
+								GenericValuePart{GenericValuePart::Expr{
+									frame_reg, static_cast<int64_t>(
+										layout.destination_offset)}},
+								overwritable)) {
+							return false;
+						}
+						const AsmReg overwritable_reg =
+							overwritable.cur_reg_or_load(this);
+						ASM(TEST64rr, overwritable_reg, overwritable_reg);
+						overwritable.reset(this);
+						generate_raw_jump(Jump::je, slow);
+					}
 					ScratchReg type{this};
 					ScratchReg array{this};
 					ScratchReg position{this};
@@ -13758,17 +13863,6 @@ bool ZendCompilerX64::compile_inst_impl(
 					}
 					label_place(element_ready);
 					(void) destination_valid;
-					if (!layout.destination_scalar_only) {
-						/* The CV is overwritten without the assignment
-						 * protocol only while it owns nothing: no counted
-						 * value and no reference. */
-						ASM(TEST32mi,
-							FE_MEM(frame_reg, 0, FE_NOREG,
-								static_cast<int32_t>(layout.destination_offset
-									+ offsetof(zval, u1.type_info))),
-							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-						generate_raw_jump(Jump::jne, slow);
-					}
 					ASM(MOV32rm, type_reg,
 						FE_MEM(element_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
@@ -13811,6 +13905,24 @@ bool ZendCompilerX64::compile_inst_impl(
 								+ offsetof(zval, u2.fe_pos))),
 						position_reg);
 					if (!layout.destination_scalar_only) {
+						/* Drop the old value's reference; another owner keeps
+						 * it (zend_native_cv_overwritable). */
+						auto old_released = text_writer.label_create();
+						ASM(TEST32mi,
+							FE_MEM(frame_reg, 0, FE_NOREG,
+								static_cast<int32_t>(layout.destination_offset
+									+ offsetof(zval, u1.type_info))),
+							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+						generate_raw_jump(Jump::je, old_released);
+						ASM(MOV64rm, limit_reg,
+							FE_MEM(frame_reg, 0, FE_NOREG,
+								static_cast<int32_t>(layout.destination_offset)));
+						ASM(SUB32mi,
+							FE_MEM(limit_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_refcounted_h, refcount))),
+							1);
+						label_place(old_released);
 						auto value_counted = text_writer.label_create();
 						ASM(TEST32ri, type_reg,
 							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
