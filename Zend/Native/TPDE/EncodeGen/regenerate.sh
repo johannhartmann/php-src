@@ -2,13 +2,17 @@
 # SPDX-License-Identifier: PHP-3.01
 #
 # Developer tool: regenerate the checked-in Linux x86-64 EncodeGen header
-# from zend_tpde_encodegen.c. Normal builds never run this script; they use
-# the checked-in header and need no LLVM.
+# from zend_tpde_encodegen.c and zend_tpde_encodegen_values.c. Normal builds
+# never run this script; they use the checked-in header and need no LLVM.
 #
 # It builds tpde_encodegen from the TPDE revision recorded in
 # ../ThirdParty/tpde/REVISION (TPDE_ENABLE_ENCODEGEN=ON, TPDE_ENABLE_LLVM=OFF)
 # into $ENCODEGEN_ROOT (default $NATIVE_WORK_ROOT/tpde-encodegen) and compiles
-# the snippets with the matching clang. The last regeneration used LLVM and
+# the snippets with the matching clang. zend_tpde_encodegen_values.c reads the
+# Zend layouts of a configured build: ENCODEGEN_BUILD_DIR (default the
+# linux-amd64-native-debug-nts build under $NATIVE_WORK_ROOT). The tuning
+# feature slow-incdec keeps refcount increments in instruction forms EncodeGen
+# encodes; the ISA stays -march=x86-64. The last regeneration used LLVM and
 # clang 21.1.8 (TPDE's preferred version at the pin) from nixpkgs; set
 # ENCODEGEN_TOOLCHAIN="" to use cmake, ninja, clang and LLVM from PATH.
 set -euo pipefail
@@ -18,6 +22,11 @@ repo=$(cd "$here/../../../.." && pwd)
 root=${ENCODEGEN_ROOT:-${NATIVE_WORK_ROOT:-/tmp}/tpde-encodegen}
 toolchain=${ENCODEGEN_TOOLCHAIN-nix shell nixpkgs#cmake nixpkgs#ninja nixpkgs#llvmPackages_21.llvm.dev nixpkgs#llvmPackages_21.llvm nixpkgs#llvmPackages_21.clang nixpkgs#lit --command}
 revision=$(awk '$1 == "TPDE" { print $3 }' "$here/../ThirdParty/tpde/REVISION")
+build=${ENCODEGEN_BUILD_DIR:-$(ls -d "${NATIVE_WORK_ROOT:-/nonexistent}"/php-src-*/linux-amd64-native-debug-nts/build 2>/dev/null | head -1)}
+if [ -z "$build" ] || [ ! -f "$build/main/php_config.h" ]; then
+	echo "set ENCODEGEN_BUILD_DIR to a configured php-src build directory" >&2
+	exit 1
+fi
 
 mkdir -p "$root"
 if [ ! -d "$root/tpde" ]; then
@@ -28,7 +37,7 @@ git -C "$root/tpde" checkout -q "$revision"
 git -C "$root/tpde" submodule update -q --init --recursive
 
 $toolchain bash -euo pipefail -c '
-root=$1; here=$2; repo=$3
+root=$1; here=$2; repo=$3; build=$4
 llvm_dir=$(dirname "$(dirname "$(command -v llvm-config)")")
 llvm_cmake=$(llvm-config --cmakedir 2>/dev/null || echo "$llvm_dir/lib/cmake/llvm")
 if [ ! -x "$root/build/tpde-encodegen/tpde_encodegen" ]; then
@@ -38,13 +47,18 @@ if [ ! -x "$root/build/tpde-encodegen/tpde_encodegen" ]; then
 		> "$root/configure.log"
 	ninja -C "$root/build" tpde_encodegen > "$root/build.log"
 fi
-clang -c -emit-llvm -ffreestanding -fcf-protection=none -O3 -fomit-frame-pointer \
-	-fno-math-errno --target=x86_64-unknown-linux-gnu -march=x86-64 \
-	-I"$repo" -I"$repo/main" -I"$repo/Zend" -I"$repo/TSRM" \
-	-o "$root/zend_tpde_encodegen_x64.bc" "$here/zend_tpde_encodegen.c"
+for source in zend_tpde_encodegen zend_tpde_encodegen_values; do
+	clang -c -emit-llvm -ffreestanding -fcf-protection=none -O3 -fomit-frame-pointer \
+		-fno-math-errno --target=x86_64-unknown-linux-gnu -march=x86-64 \
+		-Xclang -target-feature -Xclang +slow-incdec \
+		-I"$build" -I"$build/main" -I"$build/Zend" -I"$build/TSRM" \
+		-I"$repo" -I"$repo/main" -I"$repo/Zend" -I"$repo/TSRM" \
+		-o "$root/${source}_x64.bc" "$here/$source.c"
+done
 "$root/build/tpde-encodegen/tpde_encodegen" \
-	-o "$root/zend_tpde_encodegen_x64.hpp" "$root/zend_tpde_encodegen_x64.bc"
-' _ "$root" "$here" "$repo"
+	-o "$root/zend_tpde_encodegen_x64.hpp" \
+	"$root/zend_tpde_encodegen_x64.bc" "$root/zend_tpde_encodegen_values_x64.bc"
+' _ "$root" "$here" "$repo" "$build"
 
 # The repository keeps generated headers free of trailing whitespace.
 sed -e 's/[[:space:]]*$//' "$root/zend_tpde_encodegen_x64.hpp" \
