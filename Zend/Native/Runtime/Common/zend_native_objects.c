@@ -1512,7 +1512,8 @@ static zend_native_status zend_native_object_instanceof(
 	zend_execute_data *execute_data,
 	const zend_native_explicit_object_operation *operation)
 {
-	zval *value = zend_native_object_read_explicit(
+	/* An undefined CV warns, as ZEND_INSTANCEOF reads BP_VAR_R. */
+	zval *value = zend_native_object_read_r_explicit(
 		execute_data, operation->op1_type, operation->op1);
 	zval *result = zend_native_object_slot(
 		execute_data, operation->result_type, operation->result);
@@ -1525,14 +1526,28 @@ static zend_native_status zend_native_object_instanceof(
 		value = Z_REFVAL_P(value);
 	}
 	if (operation->op2_type == IS_CONST) {
+		/* As the VM does, the run-time cache keeps the class once it is
+		 * declared; the generated fast path reads it there. */
+		void **cache_slot = execute_data->run_time_cache != NULL
+				&& (uint64_t) operation->extended_value + sizeof(void *)
+					<= execute_data->func->op_array.cache_size
+			? (void **) ((char *) execute_data->run_time_cache
+				+ operation->extended_value)
+			: NULL;
 		zval *name = zend_native_object_read_explicit(
 			execute_data, operation->op2_type, operation->op2);
-		if (name != NULL && Z_TYPE_P(name) == IS_STRING) {
+
+		class_entry = cache_slot != NULL ? *cache_slot : NULL;
+		if (class_entry == NULL && name != NULL
+				&& Z_TYPE_P(name) == IS_STRING) {
 			zval *lower_name = name + 1;
 			class_entry = zend_lookup_class_ex(
 				Z_STR_P(name), Z_TYPE_P(lower_name) == IS_STRING
 					? Z_STR_P(lower_name) : NULL,
 				ZEND_FETCH_CLASS_NO_AUTOLOAD);
+			if (class_entry != NULL && cache_slot != NULL) {
+				*cache_slot = class_entry;
+			}
 		}
 	} else if (operation->op2_type == IS_UNUSED) {
 		class_entry = zend_fetch_class(NULL, operation->op2.num);
