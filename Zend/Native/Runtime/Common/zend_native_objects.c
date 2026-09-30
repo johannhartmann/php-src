@@ -812,7 +812,6 @@ static zend_native_status zend_native_object_fetch_explicit(
 		cache_slot = (void **) (
 			(char *) execute_data->run_time_cache + cache_offset);
 	}
-	property_info = zend_get_property_info(Z_OBJCE_P(receiver), name, 1);
 	if (fetch_type == BP_VAR_R || fetch_type == BP_VAR_IS) {
 		value = Z_OBJ_HT_P(receiver)->read_property(
 			Z_OBJ_P(receiver), name, fetch_type, cache_slot, result);
@@ -824,6 +823,9 @@ static zend_native_status zend_native_object_fetch_explicit(
 	} else {
 		bool have_property_address = true;
 
+		/* Only the write fetch flags need the declared property. */
+		property_info = zend_get_property_info(
+			Z_OBJCE_P(receiver), name, 1);
 		value = Z_OBJ_HT_P(receiver)->get_property_ptr_ptr(
 			Z_OBJ_P(receiver), name, fetch_type, cache_slot);
 		if (value == NULL) {
