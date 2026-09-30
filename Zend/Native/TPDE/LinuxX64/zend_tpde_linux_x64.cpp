@@ -196,6 +196,22 @@ class ZendCompilerX64 final
 			case ZEND_INIT_FCALL_BY_NAME:
 			case ZEND_INIT_NS_FCALL_BY_NAME:
 				break;
+			case ZEND_INIT_STATIC_METHOD_CALL: {
+				/* A named class or self::/parent::. */
+				const uint32_t fetch =
+					descriptor->init_op1_payload & ZEND_FETCH_CLASS_MASK;
+				if (descriptor->init_op2.kind
+						!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+						|| (descriptor->init_op1.kind
+								!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+							&& (descriptor->init_op1.kind
+									!= ZEND_MIR_SOURCE_OPERAND_UNUSED
+								|| (fetch != ZEND_FETCH_CLASS_SELF
+									&& fetch != ZEND_FETCH_CLASS_PARENT)))) {
+					return false;
+				}
+				break;
+			}
 			case ZEND_INIT_METHOD_CALL:
 				if (descriptor->init_op2.kind
 						!= ZEND_MIR_SOURCE_OPERAND_LITERAL) {
@@ -3771,6 +3787,8 @@ bool ZendCompilerX64::compile_inst_impl(
 				} else {
 				const bool method =
 					descriptor->init_opcode == ZEND_INIT_METHOD_CALL;
+				const bool static_call =
+					descriptor->init_opcode == ZEND_INIT_STATIC_METHOD_CALL;
 				const bool this_receiver = method
 					&& descriptor->init_op1.kind
 						== ZEND_MIR_SOURCE_OPERAND_UNUSED;
@@ -3864,6 +3882,49 @@ bool ZendCompilerX64::compile_inst_impl(
 								fast_key)));
 						generate_raw_jump(Jump::jne, fast_miss);
 					}
+					if (static_call) {
+						/* The callee's This: the caller's object for an
+						 * instance method, the caller's called scope for a
+						 * forwarding static call, else the named class. */
+						const int32_t this_offset = static_cast<int32_t>(
+							offsetof(zend_execute_data, This));
+						const int32_t this_type = static_cast<int32_t>(
+							offsetof(zend_execute_data, This)
+							+ offsetof(zval, u1.type_info));
+						auto not_this = text_writer.label_create();
+						auto fixed = text_writer.label_create();
+						auto have_scope = text_writer.label_create();
+						ASM(TEST32mi, header_field(descriptor_reg,
+							offsetof(zend_native_user_call_site_header,
+								fast_flags)),
+							ZEND_NATIVE_CALL_FAST_STATIC_THIS);
+						generate_raw_jump(Jump::je, not_this);
+						ASM(CMP8mi, FE_MEM(canonical_frame_register(), 0,
+							FE_NOREG, this_type), IS_OBJECT);
+						generate_raw_jump(Jump::jne, fast_miss);
+						ASM(MOV64rm, object_reg, FE_MEM(canonical_frame_register(),
+							0, FE_NOREG, this_offset));
+						generate_raw_jump(Jump::jmp, have_scope);
+						label_place(not_this);
+						ASM(TEST32mi, header_field(descriptor_reg,
+							offsetof(zend_native_user_call_site_header,
+								fast_flags)),
+							ZEND_NATIVE_CALL_FAST_STATIC_FORWARD);
+						generate_raw_jump(Jump::je, fixed);
+						ASM(MOV64rm, object_reg, FE_MEM(canonical_frame_register(),
+							0, FE_NOREG, this_offset));
+						ASM(CMP8mi, FE_MEM(canonical_frame_register(), 0,
+							FE_NOREG, this_type), IS_OBJECT);
+						generate_raw_jump(Jump::jne, have_scope);
+						ASM(MOV64rm, object_reg, FE_MEM(object_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(zend_object, ce))));
+						generate_raw_jump(Jump::jmp, have_scope);
+						label_place(fixed);
+						ASM(MOV64rm, object_reg, header_field(descriptor_reg,
+							offsetof(zend_native_user_call_site_header,
+								fast_key)));
+						label_place(have_scope);
+					}
 					/* VM stack space for the callee frame. */
 					ASM(MOV64rm, callee_reg,
 						FE_MEM(context_register(), 0, FE_NOREG,
@@ -3906,13 +3967,13 @@ bool ZendCompilerX64::compile_inst_impl(
 						FE_MEM(callee_reg, 0, FE_NOREG, static_cast<int32_t>(
 							offsetof(zend_execute_data, func))),
 						value_reg);
-					if (method) {
+					if (method || static_call) {
 						ASM(MOV64mr,
 							FE_MEM(callee_reg, 0, FE_NOREG,
 								static_cast<int32_t>(
 									offsetof(zend_execute_data, This))),
 							object_reg);
-						if (!this_receiver) {
+						if (method && !this_receiver) {
 							/* ZEND_CALL_RELEASE_THIS owns one reference. */
 							ASM(ADD32mi,
 								FE_MEM(object_reg, 0, FE_NOREG,

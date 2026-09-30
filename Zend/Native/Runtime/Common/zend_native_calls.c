@@ -4250,6 +4250,7 @@ static void zend_native_call_fast_publish(
 	const zend_op_array *op_array;
 	void **run_time_cache;
 	uint32_t index;
+	uint32_t static_mode = 0;
 
 	header->fast_epoch = 0;
 	header->fast_checked_epoch = zend_native_call_resolution_cache_epoch;
@@ -4276,6 +4277,32 @@ static void zend_native_call_fast_publish(
 	if (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_FUNCTION) {
 		if ((resolution->call_info & ZEND_CALL_HAS_THIS) != 0) {
 			return;
+		}
+	} else if (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_STATIC) {
+		const uint32_t fetch =
+			descriptor->init_op1_payload & ZEND_FETCH_CLASS_MASK;
+		const bool forwarding =
+			descriptor->init_op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+			&& (fetch == ZEND_FETCH_CLASS_SELF
+				|| fetch == ZEND_FETCH_CLASS_PARENT);
+
+		/* A named class or self::/parent:: names one class per request;
+		 * static:: follows the caller's called scope. */
+		if (descriptor->init_op1.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+				&& !forwarding) {
+			return;
+		}
+		if ((function->common.fn_flags & ZEND_ACC_STATIC) == 0) {
+			/* self::/parent:: of an instance method keeps $this. */
+			if (!forwarding || resolution->call_info
+					!= (ZEND_CALL_NESTED_FUNCTION | ZEND_CALL_HAS_THIS)) {
+				return;
+			}
+			static_mode = ZEND_NATIVE_CALL_FAST_STATIC_THIS;
+		} else if (resolution->call_info != ZEND_CALL_NESTED_FUNCTION) {
+			return;
+		} else if (forwarding) {
+			static_mode = ZEND_NATIVE_CALL_FAST_STATIC_FORWARD;
 		}
 	} else if (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_METHOD) {
 		/* $this keeps its receiver; a CV receiver is retained by the call. */
@@ -4306,13 +4333,18 @@ static void zend_native_call_fast_publish(
 		/* A runtime by-reference check is decided here: the target takes
 		 * this parameter by value. An argument past the declared parameters
 		 * of a variadic target stays positional; the prepare collects it. */
-		const bool variadic = index >= op_array->num_args
-			&& (op_array->fn_flags & ZEND_ACC_VARIADIC) != 0;
+		const bool variadic_target =
+			(op_array->fn_flags & ZEND_ACC_VARIADIC) != 0;
+		const bool variadic = variadic_target && index >= op_array->num_args;
+		/* Placements flag the last declared parameter of a variadic
+		 * target, too; it still receives its argument positionally. */
+		const bool variadic_flag = variadic_target
+			&& index + 1 >= op_array->num_args;
 		if (placement->source_index != index
 				|| (!variadic && placement->target_index != index)
 				|| (placement->flags
 					& ~(ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_REF_CHECK
-						| (variadic
+						| (variadic_flag
 							? ZEND_NATIVE_USER_CALL_PLACEMENT_VARIADIC
 							: 0))) != 0
 				|| argument->mode != ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
@@ -4332,7 +4364,9 @@ static void zend_native_call_fast_publish(
 		}
 	}
 	header->fast_key = entry->lookup == ZEND_NATIVE_CALL_LOOKUP_METHOD
-		? (const void *) entry->callable_class : NULL;
+		? (const void *) entry->callable_class
+		: entry->lookup == ZEND_NATIVE_CALL_LOOKUP_STATIC
+			? resolution->object_or_called_scope : NULL;
 	header->fast_function = (zend_function *) function;
 	header->fast_entry = resolution->invoke_entry;
 	header->fast_run_time_cache = run_time_cache;
@@ -4365,6 +4399,7 @@ static void zend_native_call_fast_publish(
 				op_array->num_args - entry->argument_count;
 		}
 	}
+	header->fast_flags |= static_mode;
 	header->fast_epoch = zend_native_call_resolution_cache_epoch;
 }
 
