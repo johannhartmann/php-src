@@ -75,6 +75,7 @@ void zend_native_execution_context_init(
 #else
 	context->stack_limit = NULL;
 #endif
+	context->call_cache_epoch = zend_native_call_cache_epoch_address();
 	context->observers_enabled = ZEND_OBSERVER_ENABLED;
 }
 
@@ -1826,6 +1827,92 @@ finalize:
 	return 0;
 }
 
+/*
+ * Leave a frame the call-site fast path pushed and entered (see
+ * zend_native_user_call_site_header): the completion of
+ * zend_native_call_invoke_user()'s FAST_FRAME path without an activation.
+ * Returns ZEND_NATIVE_RETURNED when the caller continues, otherwise the
+ * status its exception path propagates.
+ */
+uint32_t zend_native_call_fast_leave(
+	zend_execute_data *callee, uint32_t status, bool discard_result)
+{
+	zend_execute_data *caller = callee->prev_execute_data;
+	zend_object *release_object;
+
+	if (EXPECTED(status == ZEND_NATIVE_RETURNED && EG(exception) == NULL
+			&& !zend_atomic_bool_load_ex(&EG(vm_interrupt))
+			&& (ZEND_CALL_INFO(callee) & (ZEND_CALL_HAS_SYMBOL_TABLE
+				| ZEND_CALL_HAS_EXTRA_NAMED_PARAMS)) == 0
+			&& zend_native_call_fast_return_valid(callee))) {
+		/* An unused result is released at return, before the callee's CVs,
+		 * as a NULL return_value makes the VM's RETURN do. */
+		if (discard_result) {
+			zval_ptr_dtor(callee->return_value);
+			ZVAL_UNDEF(callee->return_value);
+		}
+		/* A variable destructor may inspect the backtrace: the dying frame
+		 * is no longer current. */
+		EG(current_execute_data) = caller;
+		zend_vm_stack_free_extra_args(callee);
+		zend_free_compiled_variables(callee);
+	} else {
+		status = zend_native_execution_finish_direct_frame(callee, status);
+		if (status == ZEND_NATIVE_BAILOUT) {
+			return status;
+		}
+		EG(current_execute_data) = caller;
+		if (discard_result && callee->return_value != NULL
+				&& !Z_ISUNDEF_P(callee->return_value)) {
+			zval_ptr_dtor(callee->return_value);
+			ZVAL_UNDEF(callee->return_value);
+		}
+		if (status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
+			status = ZEND_NATIVE_EXCEPTION;
+		}
+	}
+	release_object = (ZEND_CALL_INFO(callee) & ZEND_CALL_RELEASE_THIS) != 0
+		? Z_OBJ(callee->This) : NULL;
+	zend_vm_stack_free_call_frame(callee);
+	if (release_object != NULL) {
+		OBJ_RELEASE(release_object);
+		if (status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
+			status = ZEND_NATIVE_EXCEPTION;
+		}
+	}
+	return status;
+}
+
+/*
+ * zend_init_func_execute_data() and zend_native_frame_prepare() for a fast
+ * frame whose target has typed parameters, defaults or extra arguments, as
+ * zend_native_call_invoke_user() does for such a FAST_FRAME target. Returns
+ * ZEND_NATIVE_RETURNED to enter, ZEND_NATIVE_EXCEPTION to leave.
+ */
+uint32_t zend_native_call_fast_prepare(zend_execute_data *callee)
+{
+	zend_execute_data *caller = callee->prev_execute_data;
+
+	EG(current_execute_data) = caller;
+	zend_init_func_execute_data(
+		callee, &callee->func->op_array, callee->return_value);
+	return zend_native_frame_prepare(callee) == SUCCESS
+		? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+}
+
+/* SEND of an undefined CV on the fast path: warn; the caller sends null. */
+void zend_native_call_fast_undefined_argument(
+	zend_execute_data *caller, uint32_t variable, uint32_t source_position)
+{
+	if (source_position < caller->func->op_array.last) {
+		caller->opline = &caller->func->op_array.opcodes[source_position];
+	}
+	if (variable < (uint32_t) caller->func->op_array.last_var) {
+		zend_error(E_WARNING, "Undefined variable $%s",
+			ZSTR_VAL(caller->func->op_array.vars[variable]));
+	}
+}
+
 static ZEND_COLD ZEND_NORETURN void zend_native_call_abort(const char *message)
 {
 	zend_throw_error(NULL, "%s", message);
@@ -3407,6 +3494,11 @@ static zend_native_call_resolution_cache_entry *
 	zend_native_call_resolution_cache_entries;
 static uint64_t zend_native_call_resolution_cache_epoch = 1;
 
+const uint64_t *zend_native_call_cache_epoch_address(void)
+{
+	return &zend_native_call_resolution_cache_epoch;
+}
+
 void zend_native_call_resolution_cache_invalidate(void)
 {
 	zend_native_call_resolution_cache_epoch++;
@@ -4023,6 +4115,105 @@ static bool zend_native_call_callable_identity(
 	return false;
 }
 
+/*
+ * Publish a site's native fast path (see zend_native_user_call_site_header)
+ * for the target just resolved, or withdraw it. The generated fast path
+ * pushes a Zend frame for exactly the sent positional arguments and enters
+ * the target like zend_native_call_invoke_user()'s FAST_FRAME path.
+ */
+static void zend_native_call_fast_publish(
+	zend_native_user_call_site_header *header,
+	const zend_native_user_call_descriptor *descriptor,
+	const zend_native_call_resolution_cache_entry *entry)
+{
+	const zend_native_user_call_resolution *resolution = &entry->resolution;
+	const zend_function *function = resolution->function;
+	const zend_op_array *op_array;
+	void **run_time_cache;
+	uint32_t index;
+
+	header->fast_epoch = 0;
+	if ((resolution->placement_flags
+				& ZEND_NATIVE_USER_CALL_PLACEMENTS_FAST_FRAME) == 0
+			|| resolution->target_kind
+				!= ZEND_NATIVE_USER_CALL_TARGET_NATIVE_USER
+			|| function == NULL || function->type != ZEND_USER_FUNCTION
+			|| resolution->entry_cell == NULL
+			|| !resolution->entry_cell->lease_managed
+			|| resolution->invoke_entry == NULL
+			|| (resolution->placement_flags
+				& ~(ZEND_NATIVE_USER_CALL_PLACEMENTS_FAST_FRAME
+					| ZEND_NATIVE_USER_CALL_PLACEMENTS_HAS_DEFAULTS)) != 0
+			|| (resolution->call_info
+				& ~(ZEND_CALL_NESTED_FUNCTION | ZEND_CALL_HAS_THIS
+					| ZEND_CALL_RELEASE_THIS)) != 0
+			|| entry->argument_count != descriptor->argument_count
+			|| entry->argument_count != resolution->placement_count
+			|| descriptor->initial_argument_count
+				!= descriptor->argument_count) {
+		return;
+	}
+	if (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_FUNCTION) {
+		if ((resolution->call_info & ZEND_CALL_HAS_THIS) != 0) {
+			return;
+		}
+	} else if (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_METHOD) {
+		/* $this keeps its receiver; a CV receiver is retained by the call. */
+		if (entry->receiver == ZEND_NATIVE_CALL_RECEIVER_THIS
+				? (resolution->call_info & ZEND_CALL_RELEASE_THIS) != 0
+				: entry->receiver != ZEND_NATIVE_CALL_RECEIVER_CV
+					|| (resolution->call_info & ZEND_CALL_RELEASE_THIS)
+						== 0) {
+			return;
+		}
+	} else {
+		return;
+	}
+	op_array = &function->op_array;
+	run_time_cache = RUN_TIME_CACHE(op_array);
+	if (run_time_cache == NULL
+			|| (op_array->fn_flags & (ZEND_ACC_VARIADIC | ZEND_ACC_GENERATOR
+				| ZEND_ACC_CLOSURE)) != 0
+			|| resolution->frame_size == 0) {
+		return;
+	}
+	for (index = 0; index < entry->argument_count; index++) {
+		const zend_native_user_call_placement *placement =
+			&entry->placements[index];
+		const zend_native_direct_internal_call_argument *argument =
+			&descriptor->arguments[index];
+
+		/* A runtime by-reference check is decided here: the target takes
+		 * this parameter by value. */
+		if (placement->source_index != index
+				|| placement->target_index != index
+				|| (placement->flags
+					& ~ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_REF_CHECK) != 0
+				|| argument->mode != ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
+				|| argument->auxiliary_operand.kind
+					!= ZEND_MIR_SOURCE_OPERAND_UNUSED
+				|| (argument->source_opcode != ZEND_SEND_VAL
+					&& argument->source_opcode != ZEND_SEND_VAL_EX
+					&& argument->source_opcode != ZEND_SEND_VAR
+					&& argument->source_opcode != ZEND_SEND_VAR_EX)
+				|| (index < op_array->num_args
+					&& ZEND_ARG_SEND_MODE(&op_array->arg_info[index]) != 0)) {
+			return;
+		}
+	}
+	header->fast_key = entry->lookup == ZEND_NATIVE_CALL_LOOKUP_METHOD
+		? (const void *) entry->callable_class : NULL;
+	header->fast_function = (zend_function *) function;
+	header->fast_entry = resolution->invoke_entry;
+	header->fast_run_time_cache = run_time_cache;
+	header->fast_frame_size = resolution->frame_size;
+	header->fast_call_info = resolution->call_info;
+	header->fast_flags = (op_array->fn_flags & ZEND_ACC_HAS_TYPE_HINTS) != 0
+			|| entry->argument_count != op_array->num_args
+		? ZEND_NATIVE_CALL_FAST_PREPARE : 0;
+	header->fast_epoch = zend_native_call_resolution_cache_epoch;
+}
+
 static void zend_native_call_resolution_cache_store(
 	const zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor,
@@ -4181,6 +4372,7 @@ static void zend_native_call_resolution_cache_store(
 		entry->resolution.placement_flags |=
 			ZEND_NATIVE_USER_CALL_PLACEMENTS_FAST_FRAME;
 	}
+	zend_native_call_fast_publish(header, descriptor, entry);
 }
 
 zend_native_user_call_resolution_status zend_native_call_resolve_user(

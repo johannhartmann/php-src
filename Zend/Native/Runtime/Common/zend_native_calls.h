@@ -272,6 +272,27 @@ typedef struct _zend_native_user_call_descriptor {
  * the header epoch is current. Only the descriptor itself is serialized.
  */
 typedef struct _zend_native_user_call_site_header {
+	/*
+	 * Native fast path (ADR 0025 section 3): while fast_epoch equals the
+	 * current call-cache epoch, the site's generated code calls fast_function
+	 * as the VM does, without resolution or activation: it pushes the frame,
+	 * stores the positional arguments and calls fast_entry. fast_key is the
+	 * receiver class of a method site; a function site needs none, since a
+	 * name binds one function per request. Published only for lease-managed
+	 * entry cells, untyped non-variadic targets taking exactly the sent
+	 * arguments by value, with identity placements.
+	 */
+	uint64_t fast_epoch;
+	const void *fast_key;
+	zend_function *fast_function;
+	zend_native_frame_entry_t fast_entry;
+	void **fast_run_time_cache;
+	uint32_t fast_frame_size;
+	uint32_t fast_call_info;
+	/* ZEND_NATIVE_CALL_FAST_PREPARE: typed parameters, defaults or extra
+	 * arguments need zend_native_call_fast_prepare(). */
+	uint32_t fast_flags;
+	uint32_t fast_reserved;
 	void *resolution;
 	uint64_t epoch;
 } zend_native_user_call_site_header;
@@ -714,6 +735,14 @@ zend_native_direct_call_result zend_native_call_dynamic_leave(
 	const zend_native_user_call_descriptor *descriptor,
 	zend_native_execution_context *context,
 	zend_native_status status);
+#define ZEND_NATIVE_CALL_FAST_PREPARE UINT32_C(1)
+
+const uint64_t *zend_native_call_cache_epoch_address(void);
+uint32_t zend_native_call_fast_prepare(zend_execute_data *callee);
+uint32_t zend_native_call_fast_leave(
+	zend_execute_data *callee, uint32_t status, bool discard_result);
+void zend_native_call_fast_undefined_argument(
+	zend_execute_data *caller, uint32_t variable, uint32_t source_position);
 void zend_native_execution_context_init(
 	zend_native_execution_context *context);
 /*

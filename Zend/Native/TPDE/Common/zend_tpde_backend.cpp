@@ -9104,6 +9104,15 @@ bool initialize_plan(
 							ZEND_NATIVE_HELPER_USER_CALL_INVOKE);
 						require_runtime_helper(
 							plan,
+							ZEND_NATIVE_HELPER_CALL_FAST_LEAVE);
+						require_runtime_helper(
+							plan,
+							ZEND_NATIVE_HELPER_CALL_FAST_UNDEFINED_ARGUMENT);
+						require_runtime_helper(
+							plan,
+							ZEND_NATIVE_HELPER_CALL_FAST_PREPARE);
+						require_runtime_helper(
+							plan,
 							ZEND_NATIVE_HELPER_FRAME_ACTIVATION_RESERVE);
 						require_runtime_helper(
 							plan,

@@ -2065,7 +2065,9 @@ zend_native_status zend_native_return_source_zval(
 		return ZEND_NATIVE_RETURNED;
 	}
 	if (return_value == NULL) {
-		if (operand_type != IS_CV && !Z_ISUNDEF_P(source)) {
+		/* A literal is shared and never released. */
+		if (operand_type != IS_CV && operand_type != IS_CONST
+				&& !Z_ISUNDEF_P(source)) {
 			zval_ptr_dtor(source);
 			ZVAL_UNDEF(source);
 		}
