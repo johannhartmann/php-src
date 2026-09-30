@@ -4220,6 +4220,35 @@ bool ZendCompilerX64::compile_inst_impl(
 			if (node.argument_index >= call.user_call->argument_count) {
 				return false;
 			}
+			if (fast_site && (phase->operand_flags
+					& ZEND_TPDE_SOURCE_CALL_OPERAND_DIRECT_VALUE) == 0) {
+				/* A fast site's universal Send is cold: one out-of-line
+				 * call keeps the site small. */
+				ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
+				{
+					tpde::x64::CCAssignerSysV assigner{false};
+					CallBuilder builder{*this, assigner};
+					builder.add_arg(copy_fixed_argument(
+						canonical_frame_register()), tpde::CCAssignment{});
+					builder.add_arg(image_symbol_value(
+						ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
+						call.id), tpde::CCAssignment{});
+					builder.add_arg(ValuePart{node.argument_index, 4,
+						tpde::x64::PlatformConfig::GP_BANK},
+						tpde::CCAssignment{});
+					builder.call(runtime_symbol(
+						ZEND_NATIVE_HELPER_CALL_UNIVERSAL_SEND));
+					builder.add_ret(status, tpde::CCAssignment{});
+				}
+				auto sent_universal = text_writer.label_create();
+				ASM(CMP32ri, status.cur_reg_or_load(this), SUCCESS);
+				generate_raw_jump(Jump::je, sent_universal);
+				status.reset(this);
+				emit_phase_failure();
+				label_place(sent_universal);
+				status.reset(this);
+				return true;
+			}
 			auto deferred = text_writer.label_create();
 			auto completed = text_writer.label_create();
 			ScratchReg activation{this};

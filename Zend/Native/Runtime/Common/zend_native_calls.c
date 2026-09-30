@@ -7995,6 +7995,30 @@ uint32_t zend_native_call_universal_do(
 		: ZEND_NATIVE_CALL_UNIVERSAL_DONE;
 }
 
+/*
+ * The universal Send of a frame-held argument, out of line: a placement the
+ * resolution expands at run time is sent through the activation, any other
+ * through the source setter, as the generated universal Send did.
+ */
+zend_result zend_native_call_universal_send(
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor,
+	uint32_t argument_index)
+{
+	zend_native_direct_activation *activation = zend_native_active_direct_call;
+
+	if (activation != NULL
+			&& argument_index < activation->resolution.placement_count
+			&& activation->resolution.placements != NULL
+			&& (activation->resolution.placements[argument_index].flags
+				& ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_EXPANSION) != 0) {
+		return zend_native_call_send_resolved_argument(
+			activation, argument_index);
+	}
+	return zend_native_call_set_source_argument(
+		caller, descriptor, argument_index);
+}
+
 zend_execute_data *zend_native_call_reserve_dynamic_frame(
 	zend_execute_data *caller, uint32_t reservation_size)
 {
