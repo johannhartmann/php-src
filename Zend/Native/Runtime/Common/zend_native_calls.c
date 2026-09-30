@@ -1900,6 +1900,13 @@ uint32_t zend_native_call_fast_prepare(zend_execute_data *callee)
 		? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
 }
 
+/* A fast call whose scalar result consumer received another type. */
+void zend_native_call_fast_scalar_violation(void)
+{
+	zend_throw_error(
+		NULL, "Dynamic native callee violated its scalar result contract");
+}
+
 /* SEND of an undefined CV on the fast path: warn; the caller sends null. */
 void zend_native_call_fast_undefined_argument(
 	zend_execute_data *caller, uint32_t variable, uint32_t source_position)
@@ -3494,6 +3501,11 @@ static zend_native_call_resolution_cache_entry *
 	zend_native_call_resolution_cache_entries;
 static uint64_t zend_native_call_resolution_cache_epoch = 1;
 
+static void zend_native_call_fast_publish(
+	zend_native_user_call_site_header *header,
+	const zend_native_user_call_descriptor *descriptor,
+	const zend_native_call_resolution_cache_entry *entry);
+
 const uint64_t *zend_native_call_cache_epoch_address(void)
 {
 	return &zend_native_call_resolution_cache_epoch;
@@ -4004,6 +4016,16 @@ static zend_always_inline bool zend_native_call_resolve_cached(
 			entry != NULL; entry = entry->next_site) {
 		if (zend_native_call_resolve_cached_entry(activation, caller,
 				descriptor, argument_count_hint, entry)) {
+			zend_native_user_call_site_header *header =
+				ZEND_NATIVE_USER_CALL_SITE_HEADER(descriptor);
+
+			/* A site first resolved in an earlier request, or whose entry
+			 * survived, publishes its fast path on a hit; a published one
+			 * keeps its target rather than following each receiver class. */
+			if (header->fast_checked_epoch
+					!= zend_native_call_resolution_cache_epoch) {
+				zend_native_call_fast_publish(header, descriptor, entry);
+			}
 			return true;
 		}
 	}
@@ -4133,6 +4155,7 @@ static void zend_native_call_fast_publish(
 	uint32_t index;
 
 	header->fast_epoch = 0;
+	header->fast_checked_epoch = zend_native_call_resolution_cache_epoch;
 	if ((resolution->placement_flags
 				& ZEND_NATIVE_USER_CALL_PLACEMENTS_FAST_FRAME) == 0
 			|| resolution->target_kind
@@ -4172,7 +4195,7 @@ static void zend_native_call_fast_publish(
 	op_array = &function->op_array;
 	run_time_cache = RUN_TIME_CACHE(op_array);
 	if (run_time_cache == NULL
-			|| (op_array->fn_flags & (ZEND_ACC_VARIADIC | ZEND_ACC_GENERATOR
+			|| (op_array->fn_flags & (ZEND_ACC_GENERATOR
 				| ZEND_ACC_CLOSURE)) != 0
 			|| resolution->frame_size == 0) {
 		return;
@@ -4197,7 +4220,10 @@ static void zend_native_call_fast_publish(
 					&& argument->source_opcode != ZEND_SEND_VAR
 					&& argument->source_opcode != ZEND_SEND_VAR_EX)
 				|| (index < op_array->num_args
-					&& ZEND_ARG_SEND_MODE(&op_array->arg_info[index]) != 0)) {
+					? ZEND_ARG_SEND_MODE(&op_array->arg_info[index]) != 0
+					: (op_array->fn_flags & ZEND_ACC_VARIADIC) != 0
+						&& ZEND_ARG_SEND_MODE(
+							&op_array->arg_info[op_array->num_args]) != 0)) {
 			return;
 		}
 	}
@@ -4208,7 +4234,8 @@ static void zend_native_call_fast_publish(
 	header->fast_run_time_cache = run_time_cache;
 	header->fast_frame_size = resolution->frame_size;
 	header->fast_call_info = resolution->call_info;
-	header->fast_flags = (op_array->fn_flags & ZEND_ACC_HAS_TYPE_HINTS) != 0
+	header->fast_flags = (op_array->fn_flags
+				& (ZEND_ACC_HAS_TYPE_HINTS | ZEND_ACC_VARIADIC)) != 0
 			|| entry->argument_count != op_array->num_args
 		? ZEND_NATIVE_CALL_FAST_PREPARE : 0;
 	header->fast_epoch = zend_native_call_resolution_cache_epoch;

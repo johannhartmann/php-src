@@ -7,7 +7,8 @@ linked as the VM does, arguments are stored directly and the native entry
 is called. Defaults, typed parameters and return types, extra arguments,
 argument exceptions with pending frames, undefined arguments, discarded
 results with destructors, receiver rebinding during argument evaluation,
-alternating receiver classes and deep recursion keep stock semantics.
+alternating receiver classes, variadics, directly sent scalar results and
+deep recursion and calls pending across a yield keep stock semantics.
 --EXTENSIONS--
 opcache
 --INI--
@@ -49,6 +50,13 @@ function run($round, $p, $q) {
     $out[] = lib_ref_arg($s) . $s;
     $big = str_repeat('x', 10);
     $out[] = strlen(lib_ref_arg($big));
+    $out[] = lib_variadic($round);
+    $out[] = lib_variadic($round, 1, 2);
+    $v1 = $round; $v2 = 5;
+    lib_variadic_ref($v1, $v2);                 // by-reference variadic stays universal
+    $out[] = "$v1/$v2";
+    $out[] = lib_sq(lib_sq($round + 1) - 1);    // scalar results sent directly
+    $out[] = $p->typed($p->typed($round) + 1);
     unset($d);
     echo "\n";
     return $out;
@@ -56,18 +64,23 @@ function run($round, $p, $q) {
 $p = new Point; $q = new Other;
 for ($i = 0; $i < 3; $i++) { echo json_encode(run($i, $p, $q)), "\n"; }
 echo lib_rec(20000), "\n";                      // deep recursion grows the VM stack
+$g1 = lib_gen($p); $g1->current();             // calls pending across a yield
+$g2 = lib_gen($q); $g2->current();
+$g1->send(1); $g2->send(2);
+echo $g1->getReturn(), ' ', $g2->getReturn(), "\n";
 ?>
 --EXPECTF--
 
 Warning: Undefined variable $undefined_var in %s on line %d
 [discard ~a0 ~b0 ] ~c0 
-[2,"[0,[1,2],null]","[0,\"b\",null]","s00","s2","3:0",3,1,0,2,"0\/10\/c",0,2,-1,2,"TypeError","ArgumentCountError","ReturnTypeError","l0","t0",1,6,"strstr",10]
+[2,"[0,[1,2],null]","[0,\"b\",null]","s00","s2","3:0",3,1,0,2,"0\/10\/c",0,2,-1,2,"TypeError","ArgumentCountError","ReturnTypeError","l0","t0",1,6,"strstr",10,"0:","0:1,2","1\/6",0,3]
 
 Warning: Undefined variable $undefined_var in %s on line %d
 [discard ~a1 ~b1 ] ~c1 
-[3,"[1,[1,2],null]","[1,\"b\",null]","s10","s2","3:1",4,2,-1,4,"1\/10\/c",3,2,-1,2,"TypeError","ArgumentCountError","ReturnTypeError","l1","t1",1,6,"strstr",10]
+[3,"[1,[1,2],null]","[1,\"b\",null]","s10","s2","3:1",4,2,-1,4,"1\/10\/c",3,2,-1,2,"TypeError","ArgumentCountError","ReturnTypeError","l1","t1",1,6,"strstr",10,"1:","1:1,2","2\/6",9,12]
 
 Warning: Undefined variable $undefined_var in %s on line %d
 [discard ~a2 ~b2 ] ~c2 
-[4,"[2,[1,2],null]","[2,\"b\",null]","s20","s2","3:2",5,3,-2,6,"2\/10\/c",6,2,-1,2,"TypeError","ArgumentCountError","ReturnTypeError","l2","t2",1,6,"strstr",10]
+[4,"[2,[1,2],null]","[2,\"b\",null]","s20","s2","3:2",5,3,-2,6,"2\/10\/c",6,2,-1,2,"TypeError","ArgumentCountError","ReturnTypeError","l2","t2",1,6,"strstr",10,"2:","2:1,2","3\/6",64,21]
 20000
+3 -3

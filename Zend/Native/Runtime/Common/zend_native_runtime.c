@@ -954,6 +954,10 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 			| ZEND_NATIVE_RUNTIME_EFFECT_THROW
 			| ZEND_NATIVE_RUNTIME_EFFECT_BAILOUT,
 		(const void *) zend_native_call_fast_prepare},
+	{ZEND_NATIVE_HELPER_CALL_FAST_SCALAR_VIOLATION,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
+			| ZEND_NATIVE_RUNTIME_EFFECT_THROW,
+		(const void *) zend_native_call_fast_scalar_violation},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
