@@ -4113,6 +4113,12 @@ static zend_result zend_native_compiler_compile_locked_impl(
 			"invalid native compiler input");
 		return FAILURE;
 	}
+	/* A published root needs no source indexing or registration. */
+	root_function = zend_native_compiler_find_function(compiler, root);
+	if (root_function != NULL
+			&& root_function->entry_cell.state == ZEND_NATIVE_ENTRY_READY) {
+		return SUCCESS;
+	}
 	/*
 	 * Runtime declarations extend the script after compiler creation. Index
 	 * the selected root and its nested definitions before lowering so a
