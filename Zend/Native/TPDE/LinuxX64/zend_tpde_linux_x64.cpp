@@ -7074,7 +7074,7 @@ bool ZendCompilerX64::compile_inst_impl(
 	/*
 	 * FETCH_DIM_R, isset() and empty() of an array element whose container,
 	 * key and result live in frame slots or literals, composed of EncodeGen
-	 * snippets: zend_native_array_find_literal() or _find_long() probe the
+	 * snippets: zend_native_array_find_literal() or _find_key() probe the
 	 * element without changing anything, a temporary container is consumed
 	 * only when another owner keeps it alive, and every undecided probe takes
 	 * the guarded cold block, whose helper repeats the whole operation.
@@ -7132,7 +7132,12 @@ bool ZendCompilerX64::compile_inst_impl(
 				|| !zend_mir_id_is_valid(operation.result_storage_id)
 				|| operation.result_storage_id == operation.op1_storage_id
 				|| operation.result_storage_id == operation.op2_storage_id
-				|| (access == ElementAccess::Read) == node.has_result) {
+				|| (node.has_result && access == ElementAccess::Read
+					&& (adaptor->machine_kind(node.result)
+							!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+						|| val_parts(node.result).count() != 2))
+				|| (node.has_result && access != ElementAccess::Read
+					&& val_parts(node.result).count() != 1)) {
 			return 0;
 		}
 		auto frame_offset = [](zend_mir_storage_id storage) {
@@ -7187,7 +7192,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			? EncodeBase::encode_zend_native_array_find_literal(
 				address(container_base, container_offset),
 				address(literals_reg, key_offset), element)
-			: EncodeBase::encode_zend_native_array_find_long(
+			: EncodeBase::encode_zend_native_array_find_key(
 				address(container_base, container_offset),
 				address(frame_reg, key_offset), element);
 		if (!found) {
@@ -7224,15 +7229,28 @@ bool ZendCompilerX64::compile_inst_impl(
 					address(element_reg, 0), payload, type_info)) {
 				return -1;
 			}
+			const AsmReg payload_reg = payload.cur_reg_or_load(this);
+			const AsmReg type_info_reg = type_info.cur_reg_or_load(this);
+			/* The owned copy lives in the result temporary; a boxed register
+			 * result mirrors it, as the cold path reloads it. */
 			ASM(MOV64mr,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(result_offset)),
-				payload.cur_reg_or_load(this));
+				payload_reg);
 			ASM(MOV32mr,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(result_offset
 						+ offsetof(zval, u1.type_info))),
-				type_info.cur_reg_or_load(this));
+				type_info_reg);
+			if (node.has_result) {
+				auto result = result_ref(node.result);
+				auto result_payload = result.part(0);
+				auto result_type = result.part(1);
+				mov(result_payload.alloc_reg(), payload_reg, 8);
+				mov(result_type.alloc_reg(), type_info_reg, 4);
+				result_payload.set_modified();
+				result_type.set_modified();
+			}
 			payload.reset(this);
 			type_info.reset(this);
 		} else {
@@ -7276,11 +7294,19 @@ bool ZendCompilerX64::compile_inst_impl(
 				return -1;
 			}
 		}
-		if (access != ElementAccess::Read) {
+		if (access != ElementAccess::Read && node.has_result) {
 			auto [result_ref, result] = result_ref_single(node.result);
 			auto result_reg = result.alloc_reg();
 			mov(result_reg, answer_reg, 8);
 			result.set_modified();
+		} else if (access != ElementAccess::Read) {
+			/* IS_FALSE + answer is IS_FALSE or IS_TRUE. */
+			ASM(ADD32ri, answer_reg, IS_FALSE);
+			ASM(MOV32mr,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(result_offset
+						+ offsetof(zval, u1.type_info))),
+				answer_reg);
 		}
 		ASM(MOV32ri, decision_reg, 0);
 		generate_raw_jump(Jump::jmp, done);
