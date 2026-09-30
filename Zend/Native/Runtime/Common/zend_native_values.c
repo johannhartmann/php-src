@@ -4711,6 +4711,61 @@ zend_native_status zend_native_value_fetch_list(
 	zend_long string_offset;
 	bool writable;
 
+	/*
+	 * [$a, $b] = $array reads an existing element under an integer or
+	 * string key without decoding the operation; the container is kept, as
+	 * ZEND_FETCH_LIST_R keeps it. A missing element, which warns, and other
+	 * containers and keys take the general path.
+	 */
+	if (source_opcode == ZEND_FETCH_LIST_R) {
+		bool container_tmp;
+		bool key_tmp;
+		bool result_tmp;
+		zval *fast_container = zend_native_value_fast_operand(
+			execute_data, op1, &container_tmp);
+		zval *fast_key = zend_native_value_fast_operand(
+			execute_data, op2, &key_tmp);
+		zval *fast_result = zend_native_value_fast_operand(
+			execute_data, result_operand, &result_tmp);
+
+		if (fast_container != NULL && fast_key != NULL && fast_result != NULL
+				&& result_tmp && fast_result != fast_container) {
+			zval *array = fast_container;
+			zval *name = fast_key;
+			zval *found = NULL;
+			zend_ulong index;
+
+			ZVAL_DEREF(array);
+			if (!key_tmp) {
+				ZVAL_DEREF(name);
+			}
+			if (Z_TYPE_P(array) == IS_ARRAY) {
+				if (Z_TYPE_P(name) == IS_LONG) {
+					found = zend_hash_index_find(
+						Z_ARRVAL_P(array), Z_LVAL_P(name));
+				} else if (Z_TYPE_P(name) == IS_STRING) {
+					found = ZEND_HANDLE_NUMERIC_STR(Z_STRVAL_P(name),
+							Z_STRLEN_P(name), index)
+						? zend_hash_index_find(Z_ARRVAL_P(array), index)
+						: zend_hash_find(Z_ARRVAL_P(array), Z_STR_P(name));
+				}
+				if (found != NULL && Z_TYPE_P(found) == IS_INDIRECT) {
+					found = Z_INDIRECT_P(found);
+				}
+				if (found != NULL && Z_TYPE_P(found) != IS_UNDEF) {
+					zval copy;
+
+					ZVAL_COPY_DEREF(&copy, found);
+					if (key_tmp) {
+						zval_ptr_dtor_nogc(fast_key);
+						ZVAL_UNDEF(fast_key);
+					}
+					ZVAL_COPY_VALUE(fast_result, &copy);
+					return ZEND_NATIVE_RETURNED;
+				}
+			}
+		}
+	}
 	if ((source_opcode != ZEND_FETCH_LIST_R
 			&& source_opcode != ZEND_FETCH_LIST_W)
 			|| !zend_native_value_init_explicit_operation(
