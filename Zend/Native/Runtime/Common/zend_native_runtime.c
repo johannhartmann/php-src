@@ -958,6 +958,20 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 		ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
 			| ZEND_NATIVE_RUNTIME_EFFECT_THROW,
 		(const void *) zend_native_call_fast_scalar_violation},
+	{ZEND_NATIVE_HELPER_CALL_FAST_DYNAMIC_INIT,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
+			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_RUNTIME_EFFECT_USERLAND
+			| ZEND_NATIVE_RUNTIME_EFFECT_REENTER,
+		(const void *) zend_native_call_fast_dynamic_init},
+	{ZEND_NATIVE_HELPER_CALL_FAST_SEND,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
+			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_RUNTIME_EFFECT_USERLAND
+			| ZEND_NATIVE_RUNTIME_EFFECT_REENTER
+			| ZEND_NATIVE_RUNTIME_EFFECT_THROW
+			| ZEND_NATIVE_RUNTIME_EFFECT_BAILOUT,
+		(const void *) zend_native_call_fast_send},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {

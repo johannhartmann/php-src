@@ -47,6 +47,7 @@ class ZendCompilerX64 final
 	/* Per source call (MIR instruction), the stack slot recording whether
 	 * its Init took the native fast path (ADR 0025 section 3). */
 	std::vector<std::pair<uint32_t, int32_t>> fast_call_slots_;
+	std::vector<std::pair<uint32_t, int32_t>> fast_entry_slots_;
 	std::vector<tpde::Label> user_opcode_result_reload_labels_;
 	std::optional<tpde::Label> catch_dispatch_label_;
 	/* The zero-status exit of a typed body that may fail. */
@@ -72,6 +73,76 @@ class ZendCompilerX64 final
 		return slot;
 	}
 
+	/* The native entry a dynamic fast call site resolved in its Init. */
+	int32_t fast_entry_slot(uint32_t call_instruction) {
+		for (const auto &[instruction, slot] : fast_entry_slots_) {
+			if (instruction == call_instruction) {
+				return slot;
+			}
+		}
+		const int32_t slot = allocate_stack_slot(sizeof(void *));
+		fast_entry_slots_.emplace_back(call_instruction, slot);
+		return slot;
+	}
+
+	/*
+	 * Whether a call_user_func*() or $f(...) site takes the dynamic fast
+	 * path: zend_native_call_fast_dynamic_init() pushes the frame of a
+	 * recorded native target, every argument is sent to EX(call) by
+	 * zend_native_call_fast_send() and the frame is prepared generically.
+	 * Sends of register values and named or by-reference-checked
+	 * arguments keep the universal protocol.
+	 */
+	bool source_call_fast_dynamic(const zend_tpde_instruction &call) const {
+		const zend_native_user_call_descriptor *descriptor = call.user_call;
+		const zend_tpde_plan *plan = adaptor->plan();
+		if (!adaptor->generator_resume_targets().empty()
+				|| descriptor == nullptr || descriptor->flags != 0
+				|| (descriptor->init_opcode != ZEND_INIT_USER_CALL
+					&& descriptor->init_opcode != ZEND_INIT_DYNAMIC_CALL)
+				|| (descriptor->do_opcode != ZEND_DO_UCALL
+					&& descriptor->do_opcode != ZEND_DO_FCALL
+					&& descriptor->do_opcode != ZEND_DO_FCALL_BY_NAME)
+				|| call.call_argument_count != descriptor->argument_count) {
+			return false;
+		}
+		if (descriptor->do_result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
+				&& ((descriptor->do_result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+						&& descriptor->do_result.kind
+							!= ZEND_MIR_SOURCE_OPERAND_SSA)
+					|| (descriptor->do_result.slot_kind
+							!= ZEND_MIR_SOURCE_SLOT_TMP
+						&& descriptor->do_result.slot_kind
+							!= ZEND_MIR_SOURCE_SLOT_VAR))) {
+			return false;
+		}
+		for (uint32_t index = 0; index < descriptor->argument_count;
+				++index) {
+			const zend_native_direct_internal_call_argument &argument =
+				descriptor->arguments[index];
+			const zend_tpde_source_call_phase_entry *phase =
+				zend_tpde_source_call_phase_at(
+					plan, argument.source_position);
+			if ((argument.source_opcode != ZEND_SEND_VAL
+						&& argument.source_opcode != ZEND_SEND_VAL_EX
+						&& argument.source_opcode != ZEND_SEND_VAR
+						&& argument.source_opcode != ZEND_SEND_VAR_EX
+						&& argument.source_opcode != ZEND_SEND_USER
+						&& argument.source_opcode != ZEND_SEND_ARRAY)
+					|| (argument.source_opcode != ZEND_SEND_ARRAY
+						&& argument.auxiliary_operand.kind
+							!= ZEND_MIR_SOURCE_OPERAND_UNUSED)
+					|| phase == nullptr
+					|| (phase->operand_flags
+						& ZEND_TPDE_SOURCE_CALL_OPERAND_DIRECT_VALUE) != 0
+					|| (phase->phases & ZEND_TPDE_SOURCE_CALL_PHASE_CHECK)
+						!= 0) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	/*
 	 * Whether a source call may take the native call-site fast path of ADR
 	 * 0025 (see zend_native_user_call_site_header): a function call or an
@@ -82,6 +153,10 @@ class ZendCompilerX64 final
 	 * takes exactly these arguments by value.
 	 */
 	bool source_call_fast_eligible(const zend_tpde_instruction &call) const {
+		return source_call_fast_static(call) || source_call_fast_dynamic(call);
+	}
+
+	bool source_call_fast_static(const zend_tpde_instruction &call) const {
 		const zend_native_user_call_descriptor *descriptor = call.user_call;
 		const zend_tpde_plan *plan = adaptor->plan();
 		auto frame_slot = [](const zend_mir_source_operand_ref &operand) {
@@ -160,12 +235,20 @@ class ZendCompilerX64 final
 					|| (argument.source_opcode != ZEND_SEND_VAL
 						&& argument.source_opcode != ZEND_SEND_VAL_EX
 						&& argument.source_opcode != ZEND_SEND_VAR
-						&& argument.source_opcode != ZEND_SEND_VAR_EX)
+						&& argument.source_opcode != ZEND_SEND_VAR_EX
+						&& argument.source_opcode != ZEND_SEND_FUNC_ARG)
 					|| (source.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
 						&& (!frame_slot(source)
 							|| (source.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
 								&& source.slot_kind
-									!= ZEND_MIR_SOURCE_SLOT_TMP)))) {
+									!= ZEND_MIR_SOURCE_SLOT_TMP
+								/* A by-value FUNC_ARG fetch reads its
+								 * operand: the VAR holds a plain value
+								 * the send moves. */
+								&& (source.slot_kind
+										!= ZEND_MIR_SOURCE_SLOT_VAR
+									|| argument.source_opcode
+										!= ZEND_SEND_FUNC_ARG))))) {
 				return false;
 			}
 			if (zend_tpde_source_call_phase_at(
@@ -1039,6 +1122,7 @@ public:
 		user_opcode_labels_.clear();
 		user_opcode_dispatch_labels_.clear();
 		fast_call_slots_.clear();
+		fast_entry_slots_.clear();
 		user_opcode_result_reload_labels_.clear();
 		catch_dispatch_label_.reset();
 		typed_failure_label_.reset();
@@ -3650,6 +3734,41 @@ bool ZendCompilerX64::compile_inst_impl(
 				auto fast_miss = text_writer.label_create();
 				const zend_native_user_call_descriptor *descriptor =
 					call.user_call;
+				if (source_call_fast_dynamic(call)) {
+					/* A recorded native target of the callable: the helper
+					 * pushes and links its frame and returns its entry. */
+					const int32_t entry_slot =
+						fast_entry_slot(node.mir_instruction_index);
+					{
+						tpde::x64::CCAssignerSysV assigner{false};
+						CallBuilder builder{*this, assigner};
+						builder.add_arg(copy_fixed_argument(
+							canonical_frame_register()), tpde::CCAssignment{});
+						auto descriptor_value = image_symbol_value(
+							ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
+							call.id);
+						auto descriptor_scratch =
+							std::move(descriptor_value).into_scratch(this);
+						ValuePart descriptor_part{
+							tpde::x64::PlatformConfig::GP_BANK, 8};
+						descriptor_part.set_value(
+							this, std::move(descriptor_scratch));
+						builder.add_arg(std::move(descriptor_part),
+							tpde::CCAssignment{});
+						builder.call(runtime_symbol(
+							ZEND_NATIVE_HELPER_CALL_FAST_DYNAMIC_INIT));
+						ValuePart entry{tpde::x64::PlatformConfig::GP_BANK, 8};
+						builder.add_ret(entry, tpde::CCAssignment{});
+						auto entry_reg = entry.cur_reg_or_load(this);
+						ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, entry_slot),
+							entry_reg);
+						ASM(TEST64rr, entry_reg, entry_reg);
+						entry.reset(this);
+					}
+					generate_raw_jump(Jump::je, fast_miss);
+					ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 1);
+					generate_raw_jump(Jump::jmp, fast_join);
+				} else {
 				const bool method =
 					descriptor->init_opcode == ZEND_INIT_METHOD_CALL;
 				const bool this_receiver = method
@@ -3836,6 +3955,7 @@ bool ZendCompilerX64::compile_inst_impl(
 						callee_reg);
 					ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 1);
 					generate_raw_jump(Jump::jmp, fast_join);
+				}
 				}
 				label_place(fast_miss);
 				ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 0);
@@ -4693,6 +4813,51 @@ bool ZendCompilerX64::compile_inst_impl(
 			label_place(completed);
 			return true;
 		};
+		if (node.kind == Adaptor::InstKind::UserCallSend && fast_site
+				&& source_call_fast_dynamic(call)) {
+			if (node.argument_index >= call.user_call->argument_count) {
+				return false;
+			}
+			/* A dynamic fast frame is EX(call): send to it as the VM does. */
+			auto fast_spilled = spill_target_branch_state();
+			auto universal = text_writer.label_create();
+			auto sent = text_writer.label_create();
+			ASM(CMP32mi, FE_MEM(FE_BP, 0, FE_NOREG,
+				fast_call_slot(node.mir_instruction_index)), 0);
+			generate_raw_jump(Jump::je, universal);
+			{
+				tpde::x64::CCAssignerSysV assigner{false};
+				CallBuilder builder{*this, assigner};
+				builder.add_arg(copy_fixed_argument(
+					canonical_frame_register()), tpde::CCAssignment{});
+				auto descriptor_value = image_symbol_value(
+					ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.id);
+				auto descriptor_scratch =
+					std::move(descriptor_value).into_scratch(this);
+				ValuePart descriptor_part{
+					tpde::x64::PlatformConfig::GP_BANK, 8};
+				descriptor_part.set_value(this, std::move(descriptor_scratch));
+				builder.add_arg(
+					std::move(descriptor_part), tpde::CCAssignment{});
+				builder.add_arg(ValuePart{node.argument_index, 4,
+					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+				builder.call(runtime_symbol(ZEND_NATIVE_HELPER_CALL_FAST_SEND));
+				ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
+				builder.add_ret(status, tpde::CCAssignment{});
+				ASM(CMP32ri, status.cur_reg_or_load(this),
+					ZEND_NATIVE_RETURNED);
+				status.reset(this);
+			}
+			generate_raw_jump(Jump::je, sent);
+			emit_fast_failure();
+			label_place(universal);
+			reconcile_target_branch_state(fast_spilled);
+			if (!compile_universal_send()) {
+				return false;
+			}
+			label_place(sent);
+			return true;
+		}
 		if (node.kind == Adaptor::InstKind::UserCallSend && fast_site) {
 			if (node.argument_index >= call.user_call->argument_count) {
 				return false;
@@ -4922,19 +5087,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		if (node.kind == Adaptor::InstKind::UserCallSend) {
 			return compile_universal_send();
 		}
-		if (node.kind == Adaptor::InstKind::UserCallCheck) {
-			if (node.source_position >= adaptor->plan()->source_opcode_count) {
-				return false;
-			}
-			const uint8_t source_opcode =
-				adaptor->plan()->source_opcodes[node.source_position].opcode;
-			if (source_opcode == ZEND_CHECK_UNDEF_ARGS) {
-				return node.argument_index == UINT32_MAX;
-			}
-			if (source_opcode != ZEND_CHECK_FUNC_ARG
-					|| node.argument_index >= call.user_call->argument_count) {
-				return false;
-			}
+		auto compile_universal_check = [&]() -> bool {
 			ScratchReg activation{this};
 			auto activation_reg = activation.alloc_gp();
 			load_active_activation(activation_reg);
@@ -4987,6 +5140,36 @@ bool ZendCompilerX64::compile_inst_impl(
 				FE_MEM(callee_reg, 0, FE_NOREG,
 					static_cast<int32_t>(offsetof(zend_execute_data, This)
 						+ offsetof(zval, u1.type_info))), call_info_reg);
+			return true;
+		};
+		if (node.kind == Adaptor::InstKind::UserCallCheck) {
+			if (node.source_position >= adaptor->plan()->source_opcode_count) {
+				return false;
+			}
+			const uint8_t source_opcode =
+				adaptor->plan()->source_opcodes[node.source_position].opcode;
+			if (source_opcode == ZEND_CHECK_UNDEF_ARGS) {
+				return node.argument_index == UINT32_MAX;
+			}
+			if (source_opcode != ZEND_CHECK_FUNC_ARG
+					|| node.argument_index >= call.user_call->argument_count) {
+				return false;
+			}
+			/* A fast frame's target takes the argument by value and its
+			 * call info has no by-reference send: nothing to check. */
+			std::optional<TargetBranchState> check_spilled;
+			auto checked_done = text_writer.label_create();
+			if (fast_site) {
+				check_spilled.emplace(spill_target_branch_state());
+				ASM(CMP32mi, FE_MEM(FE_BP, 0, FE_NOREG,
+					fast_call_slot(node.mir_instruction_index)), 0);
+				generate_raw_jump(Jump::jne, checked_done);
+				reconcile_target_branch_state(*check_spilled);
+			}
+			if (!compile_universal_check()) {
+				return false;
+			}
+			label_place(checked_done);
 			return true;
 		}
 		if (node.kind == Adaptor::InstKind::UserCallExpand) {
@@ -5135,6 +5318,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			 */
 			const zend_native_user_call_descriptor *descriptor =
 				call.user_call;
+			const bool dynamic = source_call_fast_dynamic(call);
 			const int32_t fast_slot =
 				fast_call_slot(node.mir_instruction_index);
 			const int32_t callee_slot = allocate_stack_slot(sizeof(void *));
@@ -5217,71 +5401,80 @@ bool ZendCompilerX64::compile_inst_impl(
 				ASM(MOV64mi,
 					FE_MEM(callee_reg, 0, FE_NOREG, static_cast<int32_t>(
 						offsetof(zend_execute_data, call))), 0);
-				/* EX(opline) skips the RECV of every supplied parameter. */
-				ASM(MOV64rm, value_reg,
-					FE_MEM(callee_reg, 0, FE_NOREG, static_cast<int32_t>(
-						offsetof(zend_execute_data, func))));
-				ASM(MOV32rm, count_reg,
-					FE_MEM(value_reg, 0, FE_NOREG, static_cast<int32_t>(
-						offsetof(zend_function, op_array.last_var))));
-				ASM(MOV64rm, value_reg,
-					FE_MEM(value_reg, 0, FE_NOREG, static_cast<int32_t>(
-						offsetof(zend_function, op_array.opcodes))));
-				if (argument_count != 0) {
-					ASM(ADD64ri, value_reg, static_cast<int32_t>(
-						argument_count * sizeof(zend_op)));
-				}
-				ASM(MOV64mr,
-					FE_MEM(callee_reg, 0, FE_NOREG, static_cast<int32_t>(
-						offsetof(zend_execute_data, opline))),
-					value_reg);
-				/* The remaining CVs start undefined. */
-				{
-					auto locals_done = text_writer.label_create();
-					auto locals_loop = text_writer.label_create();
-					ASM(SUB32ri, count_reg,
-						static_cast<int32_t>(argument_count));
-					generate_raw_jump(Jump::jle, locals_done);
-					ASM(LEA64rm, value_reg,
-						FE_MEM(callee_reg, 0, FE_NOREG,
-							static_cast<int32_t>(first_local_offset)));
-					label_place(locals_loop);
-					ASM(MOV32mi,
-						FE_MEM(value_reg, 0, FE_NOREG, static_cast<int32_t>(
-							offsetof(zval, u1.type_info))), IS_UNDEF);
-					ASM(ADD64ri, value_reg, static_cast<int32_t>(sizeof(zval)));
-					ASM(SUB32ri, count_reg, 1);
-					generate_raw_jump(Jump::jne, locals_loop);
-					label_place(locals_done);
-				}
-				{
-					auto descriptor_value = image_symbol_value(
-						ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.id);
-					auto descriptor_scratch =
-						std::move(descriptor_value).into_scratch(this);
-					auto descriptor_reg = descriptor_scratch.cur_reg();
+				if (dynamic) {
+					/* zend_native_call_fast_prepare() initializes the frame
+					 * for the arguments sent at run time. */
+					ASM(MOV64rm, count_reg, FE_MEM(FE_BP, 0, FE_NOREG,
+						fast_entry_slot(node.mir_instruction_index)));
+					ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, entry_slot),
+						count_reg);
+				} else {
+					/* EX(opline) skips the RECV of every supplied parameter. */
 					ASM(MOV64rm, value_reg,
-						FE_MEM(descriptor_reg, 0, FE_NOREG, header_offset
-							+ static_cast<int32_t>(offsetof(
-								zend_native_user_call_site_header,
-								fast_run_time_cache))));
+						FE_MEM(callee_reg, 0, FE_NOREG, static_cast<int32_t>(
+							offsetof(zend_execute_data, func))));
+					ASM(MOV32rm, count_reg,
+						FE_MEM(value_reg, 0, FE_NOREG, static_cast<int32_t>(
+							offsetof(zend_function, op_array.last_var))));
+					ASM(MOV64rm, value_reg,
+						FE_MEM(value_reg, 0, FE_NOREG, static_cast<int32_t>(
+							offsetof(zend_function, op_array.opcodes))));
+					if (argument_count != 0) {
+						ASM(ADD64ri, value_reg, static_cast<int32_t>(
+							argument_count * sizeof(zend_op)));
+					}
 					ASM(MOV64mr,
 						FE_MEM(callee_reg, 0, FE_NOREG, static_cast<int32_t>(
-							offsetof(zend_execute_data, run_time_cache))),
+							offsetof(zend_execute_data, opline))),
 						value_reg);
-					ASM(MOV64rm, count_reg,
-						FE_MEM(descriptor_reg, 0, FE_NOREG, header_offset
-							+ static_cast<int32_t>(offsetof(
-								zend_native_user_call_site_header,
-								fast_entry))));
+					/* The remaining CVs start undefined. */
+					{
+						auto locals_done = text_writer.label_create();
+						auto locals_loop = text_writer.label_create();
+						ASM(SUB32ri, count_reg,
+							static_cast<int32_t>(argument_count));
+						generate_raw_jump(Jump::jle, locals_done);
+						ASM(LEA64rm, value_reg,
+							FE_MEM(callee_reg, 0, FE_NOREG,
+								static_cast<int32_t>(first_local_offset)));
+						label_place(locals_loop);
+						ASM(MOV32mi,
+							FE_MEM(value_reg, 0, FE_NOREG, static_cast<int32_t>(
+								offsetof(zval, u1.type_info))), IS_UNDEF);
+						ASM(ADD64ri, value_reg, static_cast<int32_t>(sizeof(zval)));
+						ASM(SUB32ri, count_reg, 1);
+						generate_raw_jump(Jump::jne, locals_loop);
+						label_place(locals_done);
+					}
+					{
+						auto descriptor_value = image_symbol_value(
+							ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.id);
+						auto descriptor_scratch =
+							std::move(descriptor_value).into_scratch(this);
+						auto descriptor_reg = descriptor_scratch.cur_reg();
+						ASM(MOV64rm, value_reg,
+							FE_MEM(descriptor_reg, 0, FE_NOREG, header_offset
+								+ static_cast<int32_t>(offsetof(
+									zend_native_user_call_site_header,
+									fast_run_time_cache))));
+						ASM(MOV64mr,
+							FE_MEM(callee_reg, 0, FE_NOREG, static_cast<int32_t>(
+								offsetof(zend_execute_data, run_time_cache))),
+							value_reg);
+						ASM(MOV64rm, count_reg,
+							FE_MEM(descriptor_reg, 0, FE_NOREG, header_offset
+								+ static_cast<int32_t>(offsetof(
+									zend_native_user_call_site_header,
+									fast_entry))));
+					}
+					ASM(MOV64rm, value_reg,
+						FE_MEM(context_register(), 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_native_execution_context,
+								current_execute_data))));
+					ASM(MOV64mr, FE_MEM(value_reg, 0, FE_NOREG, 0), callee_reg);
+					ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, entry_slot), count_reg);
 				}
-				ASM(MOV64rm, value_reg,
-					FE_MEM(context_register(), 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_execution_context,
-							current_execute_data))));
-				ASM(MOV64mr, FE_MEM(value_reg, 0, FE_NOREG, 0), callee_reg);
-				ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, entry_slot), count_reg);
 				ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, status_slot),
 					ZEND_NATIVE_RETURNED);
 			}
@@ -5310,7 +5503,9 @@ bool ZendCompilerX64::compile_inst_impl(
 				ASM(TEST32mi, FE_MEM(descriptor_reg, 0, FE_NOREG, flags_offset),
 					ZEND_NATIVE_CALL_FAST_PREPARE);
 				generate_raw_jump(Jump::jne, prepare);
-				if (argument_count > ZEND_NATIVE_CALL_FAST_RECEIVE_MAX) {
+				if (dynamic) {
+					generate_raw_jump(Jump::jmp, prepare);
+				} else if (argument_count > ZEND_NATIVE_CALL_FAST_RECEIVE_MAX) {
 					/* Published only with the prepare flag. */
 					generate_raw_jump(Jump::jmp, enter);
 				} else {
