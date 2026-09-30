@@ -2847,9 +2847,57 @@ ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_declare_lambda,
 ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_bind_lexical,
 	ZEND_BIND_LEXICAL,
 	zend_native_bind_lexical(execute_data, &operation))
-ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_bind_static,
-	ZEND_BIND_STATIC,
-	zend_native_bind_static(execute_data, &operation))
+/*
+ * static $x; binds the CV without decoding the operation when the static
+ * variable already is a reference and the CV holds no counted value: the
+ * CV takes another reference to it, as ZEND_BIND_STATIC does. An
+ * initializer, a first binding and a counted CV take the general path.
+ */
+zend_native_status zend_native_execute_object_bind_static(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t actual_source_opcode,
+	uint32_t source_position_id)
+{
+	zend_native_explicit_object_operation operation;
+
+	if (actual_source_opcode == ZEND_BIND_STATIC
+			&& (extended_value & ZEND_BIND_REF) != 0
+			&& (op2 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_UNUSED
+			&& ((op1 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| (op1 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& ((op1 >> 8) & UINT64_C(0xff)) == ZEND_MIR_SOURCE_SLOT_CV
+			&& (uint32_t) (op1 >> 16)
+				< (uint32_t) execute_data->func->op_array.last_var) {
+		zend_op_array *op_array = &execute_data->func->op_array;
+		HashTable *static_variables =
+			ZEND_MAP_PTR_GET(op_array->static_variables_ptr);
+		uint32_t offset = extended_value
+			& ~(ZEND_BIND_REF | ZEND_BIND_IMPLICIT | ZEND_BIND_EXPLICIT);
+		zval *variable = ZEND_CALL_VAR_NUM(execute_data, (uint32_t) (op1 >> 16));
+
+		if (static_variables != NULL
+				&& offset < HT_USED_SIZE(static_variables)
+				&& !Z_REFCOUNTED_P(variable)) {
+			zval *value = (zval *) ((char *) static_variables->arData + offset);
+
+			if (Z_ISREF_P(value)) {
+				Z_ADDREF_P(value);
+				ZVAL_REF(variable, Z_REF_P(value));
+				return ZEND_NATIVE_RETURNED;
+			}
+		}
+	}
+	if (!zend_native_object_init_explicit_operation(
+			execute_data, op1, op2, result, extended_value,
+			actual_source_opcode, source_position_id, ZEND_BIND_STATIC,
+			&operation)) {
+		zend_throw_error(NULL,
+			"Malformed explicit native object operation");
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	return zend_native_bind_static(execute_data, &operation);
+}
 ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_declare_function,
 	ZEND_DECLARE_FUNCTION,
 	zend_native_declare_function(execute_data, &operation))
