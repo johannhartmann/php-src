@@ -9113,6 +9113,9 @@ bool initialize_plan(
 							ZEND_NATIVE_HELPER_CALL_FAST_PREPARE);
 						require_runtime_helper(
 							plan,
+							ZEND_NATIVE_HELPER_CALL_FAST_SCALAR_VIOLATION);
+						require_runtime_helper(
+							plan,
 							ZEND_NATIVE_HELPER_FRAME_ACTIVATION_RESERVE);
 						require_runtime_helper(
 							plan,

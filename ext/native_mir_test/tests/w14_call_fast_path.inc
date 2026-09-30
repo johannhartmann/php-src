@@ -19,3 +19,7 @@ function lib_rec($n) { return $n <= 0 ? 0 : 1 + lib_rec($n - 1); }
 function lib_make($n) { return new D($n); }
 function lib_throw($a) { throw new LogicException("l$a"); }
 function lib_ref_arg($a) { return $a; }
+function lib_variadic($a, ...$r) { return $a . ':' . implode(',', $r); }
+function lib_variadic_ref(&...$r) { foreach ($r as &$v) { $v++; } }
+function lib_sq(int $a): int { return $a * $a; }
+function lib_gen($obj) { return $obj->get(lib_add(yield, 1)); }

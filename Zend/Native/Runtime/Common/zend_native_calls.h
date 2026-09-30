@@ -293,6 +293,9 @@ typedef struct _zend_native_user_call_site_header {
 	 * arguments need zend_native_call_fast_prepare(). */
 	uint32_t fast_flags;
 	uint32_t fast_reserved;
+	/* The epoch in which the site's target was last considered, published
+	 * or not: a cache hit reconsiders it only in a later epoch. */
+	uint64_t fast_checked_epoch;
 	void *resolution;
 	uint64_t epoch;
 } zend_native_user_call_site_header;
@@ -739,6 +742,7 @@ zend_native_direct_call_result zend_native_call_dynamic_leave(
 
 const uint64_t *zend_native_call_cache_epoch_address(void);
 uint32_t zend_native_call_fast_prepare(zend_execute_data *callee);
+void zend_native_call_fast_scalar_violation(void);
 uint32_t zend_native_call_fast_leave(
 	zend_execute_data *callee, uint32_t status, bool discard_result);
 void zend_native_call_fast_undefined_argument(

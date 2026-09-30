@@ -88,7 +88,26 @@ class ZendCompilerX64 final
 			return operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
 				|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA;
 		};
-		if (descriptor == nullptr || descriptor->flags != 0
+		const bool scalar_result = descriptor != nullptr
+			&& (descriptor->flags
+				& ZEND_NATIVE_USER_CALL_REQUIRE_SCALAR_RESULT) != 0;
+		/* The fast-path flag lives in a native stack slot, which a
+		 * generator resume does not restore. */
+		if (!adaptor->generator_resume_targets().empty()) {
+			return false;
+		}
+		if (descriptor == nullptr
+				|| (descriptor->flags
+					& ~ZEND_NATIVE_USER_CALL_REQUIRE_SCALAR_RESULT) != 0
+				|| (scalar_result
+					&& (descriptor->do_result.kind
+							== ZEND_MIR_SOURCE_OPERAND_UNUSED
+						|| (descriptor->result_type
+								!= ZEND_MIR_SCALAR_TYPE_I1
+							&& descriptor->result_type
+								!= ZEND_MIR_SCALAR_TYPE_I64
+							&& descriptor->result_type
+								!= ZEND_MIR_SCALAR_TYPE_F64)))
 				|| descriptor->argument_count
 					!= descriptor->initial_argument_count
 				|| descriptor->argument_count != call.call_argument_count
@@ -149,12 +168,8 @@ class ZendCompilerX64 final
 									!= ZEND_MIR_SOURCE_SLOT_TMP)))) {
 				return false;
 			}
-			const zend_tpde_source_call_phase_entry *phase =
-				zend_tpde_source_call_phase_at(
-					plan, argument.source_position);
-			if (phase == nullptr
-					|| (phase->operand_flags
-						& ZEND_TPDE_SOURCE_CALL_OPERAND_DIRECT_VALUE) != 0) {
+			if (zend_tpde_source_call_phase_at(
+					plan, argument.source_position) == nullptr) {
 				return false;
 			}
 		}
@@ -4379,6 +4394,15 @@ bool ZendCompilerX64::compile_inst_impl(
 			}
 		};
 		const bool fast_site = source_call_fast_eligible(call);
+		/* A direct scalar send has one TPDE use; the fast and universal
+		 * paths share its ValueRef. */
+		std::optional<ValueRef> shared_direct;
+		auto direct_value_ref = [&]() -> ValueRef & {
+			if (!shared_direct) {
+				shared_direct.emplace(val_ref(node.operands[2]));
+			}
+			return *shared_direct;
+		};
 		auto compile_universal_send = [&]() -> bool {
 			if (node.argument_index >= call.user_call->argument_count) {
 				return false;
@@ -4438,7 +4462,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(SHL64ri, target_reg, 4);
 					ASM(ADD64rr, target_reg, callee_reg);
 				}
-				auto direct_value = val_ref(node.operands[2]);
+				auto &direct_value = direct_value_ref();
 				auto direct_part = direct_value.part(0);
 				if (direct_type == ZEND_MIR_SCALAR_TYPE_F64) {
 					ASM(SSE_MOVSDmr, FE_MEM(target_reg, 0, FE_NOREG, argument_base),
@@ -4698,12 +4722,72 @@ bool ZendCompilerX64::compile_inst_impl(
 					|| target_offset > INT32_MAX - sizeof(zval)) {
 				return false;
 			}
+			const zend_tpde_source_call_phase_entry *send_phase =
+				zend_tpde_source_call_phase_at(
+					adaptor->plan(), node.source_position);
+			const bool direct = send_phase != nullptr
+				&& (send_phase->operand_flags
+					& ZEND_TPDE_SOURCE_CALL_OPERAND_DIRECT_VALUE) != 0;
+			if (direct && node.operands.size() != 3) {
+				return false;
+			}
+			if (direct) {
+				/* Both paths read the scalar; it enters the branch in a
+				 * register so the branch state covers it. */
+				auto part = direct_value_ref().part_unowned(0);
+				(void) part.load_to_reg();
+			}
 			auto fast_spilled = spill_target_branch_state();
 			auto universal = text_writer.label_create();
 			auto sent = text_writer.label_create();
 			ASM(CMP32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 0);
 			generate_raw_jump(Jump::je, universal);
-			if (cv) {
+			if (direct) {
+				/* A scalar held in a register goes straight into the
+				 * argument zval. */
+				const zend_mir_scalar_type_mask direct_type =
+					adaptor->exact_type(node.operands[2]);
+				ScratchReg callee{this};
+				auto callee_reg = callee.alloc_gp();
+				ASM(MOV64rm, callee_reg,
+					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zend_execute_data, call))));
+				const int32_t payload_offset =
+					static_cast<int32_t>(target_offset);
+				const int32_t type_offset = static_cast<int32_t>(
+					target_offset + offsetof(zval, u1.type_info));
+				auto part = direct_value_ref().part_unowned(0);
+				if (direct_type == ZEND_MIR_SCALAR_TYPE_F64) {
+					ASM(SSE_MOVSDmr,
+						FE_MEM(callee_reg, 0, FE_NOREG, payload_offset),
+						part.load_to_reg());
+					ASM(MOV32mi, FE_MEM(callee_reg, 0, FE_NOREG, type_offset),
+						IS_DOUBLE);
+				} else if (direct_type == ZEND_MIR_SCALAR_TYPE_I64) {
+					ASM(MOV64mr,
+						FE_MEM(callee_reg, 0, FE_NOREG, payload_offset),
+						part.load_to_reg());
+					ASM(MOV32mi, FE_MEM(callee_reg, 0, FE_NOREG, type_offset),
+						IS_LONG);
+				} else if (direct_type == ZEND_MIR_SCALAR_TYPE_I1) {
+					auto payload_reg = part.load_to_reg();
+					ScratchReg type{this};
+					auto type_reg = type.alloc_gp();
+					ASM(TEST64rr, payload_reg, payload_reg);
+					generate_raw_set(Jump::jne, type_reg);
+					ASM(ADD32ri, type_reg, IS_FALSE);
+					ASM(MOV32mr, FE_MEM(callee_reg, 0, FE_NOREG, type_offset),
+						type_reg);
+				} else if (direct_type == ZEND_MIR_SCALAR_TYPE_NULL) {
+					ASM(MOV32mi, FE_MEM(callee_reg, 0, FE_NOREG, type_offset),
+						IS_NULL);
+				} else {
+					return false;
+				}
+				part.reset();
+				generate_raw_jump(Jump::jmp, sent);
+			} else if (cv) {
 				/* SEND_VAR of an undefined CV warns and sends null. No scratch
 				 * register is live across the warning call. */
 				auto defined = text_writer.label_create();
@@ -4762,7 +4846,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				generate_raw_jump(Jump::jmp, sent);
 				label_place(defined);
 			}
-			{
+			if (!direct) {
 				ScratchReg address{this};
 				ScratchReg payload{this};
 				ScratchReg type{this};
@@ -5300,7 +5384,44 @@ bool ZendCompilerX64::compile_inst_impl(
 				ASM(CMP32mi, FE_MEM(FE_BP, 0, FE_NOREG, status_slot),
 					ZEND_NATIVE_RETURNED);
 				generate_raw_jump(Jump::jne, failed);
-				generate_raw_jump(Jump::jmp, do_succeeded);
+				if ((descriptor->flags
+						& ZEND_NATIVE_USER_CALL_REQUIRE_SCALAR_RESULT) != 0) {
+					/* The consumer takes an exact scalar; another result type
+					 * violates the contract, as the universal call reports. */
+					auto violated = text_writer.label_create();
+					{
+						ScratchReg type{this};
+						auto type_reg = type.alloc_gp();
+						ASM(MOVZXr32m8, type_reg,
+							FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+								static_cast<int32_t>(result_offset
+									+ offsetof(zval, u1.type_info))));
+						if (descriptor->result_type
+								== ZEND_MIR_SCALAR_TYPE_I1) {
+							ASM(SUB32ri, type_reg, IS_FALSE);
+							ASM(CMP32ri, type_reg, 1);
+							generate_raw_jump(Jump::ja, violated);
+						} else {
+							ASM(CMP32ri, type_reg,
+								descriptor->result_type
+										== ZEND_MIR_SCALAR_TYPE_I64
+									? IS_LONG : IS_DOUBLE);
+							generate_raw_jump(Jump::jne, violated);
+						}
+					}
+					generate_raw_jump(Jump::jmp, do_succeeded);
+					label_place(violated);
+					{
+						tpde::x64::CCAssignerSysV violation_assigner{false};
+						CallBuilder violation_builder{
+							*this, violation_assigner};
+						violation_builder.call(runtime_symbol(
+							ZEND_NATIVE_HELPER_CALL_FAST_SCALAR_VIOLATION));
+					}
+					emit_fast_failure();
+				} else {
+					generate_raw_jump(Jump::jmp, do_succeeded);
+				}
 				label_place(failed);
 				ASM(CMP32mi, FE_MEM(FE_BP, 0, FE_NOREG, status_slot),
 					ZEND_NATIVE_BAILOUT);
