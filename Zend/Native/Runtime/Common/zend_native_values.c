@@ -1710,6 +1710,53 @@ zend_native_status zend_native_value_binary_op(
 	zval *strict_right;
 	zend_result operation_status;
 
+	/*
+	 * === and !== of scalars, strings or values of different types decide
+	 * without decoding the operation, as ZEND_IS_IDENTICAL does: compare,
+	 * release the temporaries, then publish the boolean, which may reuse
+	 * an operand's slot. A temporary array or object, whose release may
+	 * run destructors, and undefined CVs take the general path.
+	 */
+	if (source_opcode == ZEND_IS_IDENTICAL
+			|| source_opcode == ZEND_IS_NOT_IDENTICAL) {
+		bool left_tmp;
+		bool right_tmp;
+		bool result_tmp;
+		zval *fast_left = zend_native_value_fast_operand(
+			execute_data, op1, &left_tmp);
+		zval *fast_right = zend_native_value_fast_operand(
+			execute_data, op2, &right_tmp);
+		zval *fast_result = zend_native_value_fast_operand(
+			execute_data, result_operand, &result_tmp);
+
+		if (fast_left != NULL && fast_right != NULL && fast_result != NULL
+				&& result_tmp && Z_TYPE_P(fast_left) != IS_UNDEF
+				&& Z_TYPE_P(fast_right) != IS_UNDEF
+				&& (!left_tmp || Z_TYPE_P(fast_left) <= IS_STRING)
+				&& (!right_tmp || Z_TYPE_P(fast_right) <= IS_STRING)) {
+			zval *a = fast_left;
+			zval *b = fast_right;
+			bool identical;
+
+			ZVAL_DEREF(a);
+			ZVAL_DEREF(b);
+			if ((Z_TYPE_P(a) <= IS_STRING && Z_TYPE_P(b) <= IS_STRING)
+					|| Z_TYPE_P(a) != Z_TYPE_P(b)) {
+				identical = zend_is_identical(a, b);
+				if (left_tmp) {
+					zval_ptr_dtor_str(fast_left);
+					ZVAL_UNDEF(fast_left);
+				}
+				if (right_tmp) {
+					zval_ptr_dtor_str(fast_right);
+					ZVAL_UNDEF(fast_right);
+				}
+				ZVAL_BOOL(fast_result, source_opcode == ZEND_IS_IDENTICAL
+					? identical : !identical);
+				return ZEND_NATIVE_RETURNED;
+			}
+		}
+	}
 	if (source_opcode > UINT8_MAX
 			|| !zend_native_value_is_binary_opcode((uint8_t) source_opcode)
 			|| !zend_native_value_init_explicit_operation(
