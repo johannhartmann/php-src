@@ -4043,201 +4043,42 @@ bool ZendCompilerX64::compile_inst_impl(
 				ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 0);
 			}
 
-			/* The fast and growth paths are target-local control flow, so TPDE's
-			 * block allocator cannot reconcile their register assignments.  Give
-			 * every live value canonical backing before the split and discard the
-			 * emitted slow-path register state at the join. */
-			auto setup_spilled = spill_target_branch_state();
-			auto slow_setup = text_writer.label_create();
-			auto setup_ready = text_writer.label_create();
-			{
-				ScratchReg top_address{this};
-				ScratchReg setup{this};
-				ScratchReg available{this};
-				auto top_address_reg = top_address.alloc_gp();
-				auto setup_reg = setup.alloc_gp();
-				auto available_reg = available.alloc_gp();
-				ASM(MOV64rm, top_address_reg,
-					FE_MEM(context_register(), 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_execution_context, vm_stack_top))));
-				ASM(MOV64rm, setup_reg,
-					FE_MEM(top_address_reg, 0, FE_NOREG, 0));
-				ASM(MOV64rm, available_reg,
-					FE_MEM(context_register(), 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_execution_context, vm_stack_end))));
-				ASM(MOV64rm, available_reg,
-					FE_MEM(available_reg, 0, FE_NOREG, 0));
-				ASM(SUB64rr, available_reg, setup_reg);
-				ASM(CMP64ri, available_reg, static_cast<int32_t>(setup_size));
-				generate_raw_jump(Jump::jb, slow_setup);
-				ASM(MOV32mi,
-					FE_MEM(setup_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_execute_data, This)
-							+ offsetof(zval, u1.type_info))), 0);
-				/* The new top is top + size; available only held end - top. */
-				mov(available_reg, setup_reg, 8);
-				ASM(ADD64ri, available_reg,
-					static_cast<int32_t>(setup_size));
-				ASM(MOV64mr,
-					FE_MEM(top_address_reg, 0, FE_NOREG, 0), available_reg);
-				initialize_setup(setup_reg);
-				generate_raw_jump(Jump::jmp, setup_ready);
-			}
-			label_place(slow_setup);
-			{
-				tpde::x64::CCAssignerSysV assigner{false};
-				CallBuilder builder{*this, assigner};
-				builder.add_arg(ValuePart{setup_size, 4,
-					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-				builder.call(runtime_symbol(
-					ZEND_NATIVE_HELPER_FRAME_ACTIVATION_RESERVE));
-				ValuePart setup_value{
-					tpde::x64::PlatformConfig::GP_BANK, 8};
-				builder.add_ret(setup_value, tpde::CCAssignment{});
-				auto setup_scratch =
-					std::move(setup_value).into_scratch(this);
-				initialize_setup(setup_scratch.cur_reg());
-			}
-			label_place(setup_ready);
-			reconcile_target_branch_state(setup_spilled);
+			/*
+			 * The universal protocol: zend_native_call_universal_init()
+			 * reserves the setup frame and activation, resolves the target
+			 * and pushes the callee frame out of line, keeping call sites
+			 * small now that resolved targets take the fast path.
+			 */
 			ValuePart resolution_status{
 				tpde::x64::PlatformConfig::GP_BANK, 4};
 			{
-				ScratchReg activation{this};
-				auto activation_reg = activation.alloc_gp();
-				ASM(MOV64rm, activation_reg,
-					FE_MEM(context_register(), 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_execution_context,
-							active_direct_call))));
-				ASM(MOV64rm, activation_reg,
-					FE_MEM(activation_reg, 0, FE_NOREG, 0));
 				tpde::x64::CCAssignerSysV assigner{false};
 				CallBuilder builder{*this, assigner};
-				ValuePart activation_value{
-					tpde::x64::PlatformConfig::GP_BANK, 8};
-				activation_value.set_value(this, std::move(activation));
-				builder.add_arg(
-					std::move(activation_value), tpde::CCAssignment{});
+				builder.add_arg(copy_fixed_argument(
+					canonical_frame_register()), tpde::CCAssignment{});
+				builder.add_arg(image_symbol_value(
+					ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.id),
+					tpde::CCAssignment{});
 				builder.add_arg(image_symbol_value(
 					ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
 					call.call_site->target_id), tpde::CCAssignment{});
-				builder.add_arg(ValuePart{
-					ZEND_NATIVE_USER_CALL_ARGUMENT_COUNT_AUTO, 4,
+				builder.add_arg(ValuePart{setup_size, 4,
+					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+				builder.add_arg(ValuePart{argument_count, 4,
+					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+				builder.add_arg(ValuePart{uses_discarded_return
+						? uint64_t{UINT32_MAX} : result_offset, 4,
 					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 				builder.call(runtime_symbol(
-					ZEND_NATIVE_HELPER_USER_CALL_RESOLVE));
+					ZEND_NATIVE_HELPER_CALL_UNIVERSAL_INIT));
 				builder.add_ret(resolution_status, tpde::CCAssignment{});
 			}
 			auto resolution_spilled = spill_target_branch_state();
 			auto resolved = text_writer.label_create();
-			auto status_reg = resolution_status.cur_reg_or_load(this);
-			ASM(CMP32ri, status_reg,
+			ASM(CMP32ri, resolution_status.cur_reg_or_load(this),
 				ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS);
 			generate_raw_jump(Jump::je, resolved);
 			resolution_status.reset(this);
-			{
-				ScratchReg resolution{this};
-				auto resolution_reg = resolution.alloc_gp();
-				ASM(MOV64rm, resolution_reg,
-					FE_MEM(context_register(), 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_execution_context,
-							active_direct_call))));
-				ASM(MOV64rm, resolution_reg,
-					FE_MEM(resolution_reg, 0, FE_NOREG, 0));
-				ASM(ADD64ri, resolution_reg,
-					static_cast<int32_t>(offsetof(
-						zend_native_direct_activation, resolution)));
-				ASM(CMP32mi,
-					FE_MEM(resolution_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_user_call_resolution, ownership))), 0);
-				auto ownership_free = text_writer.label_create();
-				generate_raw_jump(Jump::je, ownership_free);
-				{
-					tpde::x64::CCAssignerSysV assigner{false};
-					CallBuilder builder{*this, assigner};
-					ValuePart resolution_value{
-						tpde::x64::PlatformConfig::GP_BANK, 8};
-					resolution_value.set_value(this, std::move(resolution));
-					builder.add_arg(
-						std::move(resolution_value), tpde::CCAssignment{});
-					builder.call(runtime_symbol(
-						ZEND_NATIVE_HELPER_USER_CALL_RELEASE_RESOLUTION));
-				}
-				label_place(ownership_free);
-			}
-			{
-				ScratchReg active_address{this};
-				ScratchReg activation{this};
-				ScratchReg previous{this};
-				ScratchReg setup{this};
-				auto active_address_reg = active_address.alloc_gp();
-				auto activation_reg = activation.alloc_gp();
-				auto previous_reg = previous.alloc_gp();
-				auto setup_reg = setup.alloc_gp();
-				ASM(MOV64rm, active_address_reg,
-					FE_MEM(context_register(), 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_execution_context,
-							active_direct_call))));
-				ASM(MOV64rm, activation_reg,
-					FE_MEM(active_address_reg, 0, FE_NOREG, 0));
-				ASM(MOV64rm, previous_reg,
-					FE_MEM(activation_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_direct_activation, previous))));
-				ASM(MOV64mr,
-					FE_MEM(active_address_reg, 0, FE_NOREG, 0), previous_reg);
-				previous.reset();
-				active_address.reset();
-				ASM(MOV64rm, setup_reg,
-					FE_MEM(activation_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_direct_activation, setup_frame))));
-				ASM(TEST32mi,
-					FE_MEM(setup_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_execute_data, This)
-							+ offsetof(zval, u1.type_info))),
-					ZEND_CALL_ALLOCATED);
-				auto pop_allocated = text_writer.label_create();
-				auto popped = text_writer.label_create();
-				generate_raw_jump(Jump::jne, pop_allocated);
-				ASM(MOV8mi,
-					FE_MEM(activation_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_direct_activation, setup_record))),
-					0);
-				ScratchReg top_address{this};
-				auto top_address_reg = top_address.alloc_gp();
-				ASM(MOV64rm, top_address_reg,
-					FE_MEM(context_register(), 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_execution_context, vm_stack_top))));
-				ASM(MOV64mr,
-					FE_MEM(top_address_reg, 0, FE_NOREG, 0), setup_reg);
-				setup.reset();
-				top_address.reset();
-				generate_raw_jump(Jump::jmp, popped);
-				label_place(pop_allocated);
-				{
-					tpde::x64::CCAssignerSysV assigner{false};
-					CallBuilder builder{*this, assigner};
-					ValuePart activation_value{
-						tpde::x64::PlatformConfig::GP_BANK, 8};
-					activation_value.set_value(this, std::move(activation));
-					builder.add_arg(
-						std::move(activation_value), tpde::CCAssignment{});
-					builder.call(runtime_symbol(
-						ZEND_NATIVE_HELPER_FRAME_ACTIVATION_POP));
-				}
-				label_place(popped);
-			}
 			if (zend_mir_id_is_valid(call.exception_block_id)) {
 				generate_exception_branch(
 					adaptor->block_ref(call.exception_block_id));
@@ -4251,236 +4092,6 @@ bool ZendCompilerX64::compile_inst_impl(
 			label_place(resolved);
 			resolution_status.reset(this);
 			reconcile_target_branch_state(resolution_spilled);
-			auto initialize_callee = [&](auto callee_reg,
-					auto activation_reg, bool allocated) {
-				ScratchReg scratch{this};
-				auto scratch_reg = scratch.alloc_gp();
-				for (uint32_t offset = 0;
-						offset < frame_header_size;
-						offset += sizeof(uint64_t)) {
-					ASM(MOV64mi,
-						FE_MEM(callee_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offset)), 0);
-				}
-				ASM(MOV64rm, scratch_reg,
-					FE_MEM(activation_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_direct_activation, resolution)
-							+ offsetof(zend_native_user_call_resolution,
-								object_or_called_scope))));
-				ASM(MOV64mr,
-					FE_MEM(callee_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_execute_data, This))), scratch_reg);
-				ASM(MOV32rm, scratch_reg,
-					FE_MEM(activation_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_direct_activation, resolution)
-							+ offsetof(zend_native_user_call_resolution,
-								call_info))));
-				if (allocated) {
-					ASM(OR32ri, scratch_reg, ZEND_CALL_ALLOCATED);
-				}
-				ASM(MOV32mr,
-					FE_MEM(callee_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_execute_data, This)
-							+ offsetof(zval, u1.type_info))), scratch_reg);
-				ASM(MOV32rm, scratch_reg,
-					FE_MEM(activation_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_direct_activation, resolution)
-							+ offsetof(zend_native_user_call_resolution,
-								argument_count))));
-				ASM(MOV32mr,
-					FE_MEM(callee_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_execute_data, This)
-							+ offsetof(zval, u2.num_args))), scratch_reg);
-				ASM(MOV64rm, scratch_reg,
-					FE_MEM(activation_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_direct_activation, resolution)
-							+ offsetof(zend_native_user_call_resolution,
-								function))));
-				ASM(MOV64mr,
-					FE_MEM(callee_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_execute_data, func))), scratch_reg);
-				ASM(MOV64rm, scratch_reg,
-					FE_MEM(activation_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_direct_activation, pending_call))));
-				ASM(MOV64mr,
-					FE_MEM(callee_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_execute_data, prev_execute_data))),
-					scratch_reg);
-				if (uses_discarded_return) {
-					ASM(MOV64rr, scratch_reg, activation_reg);
-					ASM(ADD64ri, scratch_reg,
-						static_cast<int32_t>(offsetof(
-							zend_native_direct_activation,
-							discarded_return)));
-				} else {
-					ASM(MOV64rr, scratch_reg, canonical_frame_register());
-					ASM(ADD64ri, scratch_reg,
-						static_cast<int32_t>(result_offset));
-				}
-				ASM(MOV64mr,
-					FE_MEM(callee_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_execute_data, return_value))), scratch_reg);
-				ASM(MOV64mr,
-					FE_MEM(activation_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_direct_activation, callee))), callee_reg);
-				ASM(MOV64mr,
-					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_execute_data, call))), callee_reg);
-				ASM(MOV8mi,
-					FE_MEM(activation_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_direct_activation,
-							raw_arguments_owned))), 1);
-				ASM(MOV8mi,
-					FE_MEM(activation_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_direct_activation,
-							uses_discarded_return))),
-					uses_discarded_return ? 1 : 0);
-				ASM(MOV8mi,
-					FE_MEM(activation_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_direct_activation,
-							dynamic_target))), 1);
-
-				ScratchReg argument_ptr{this};
-				ScratchReg remaining{this};
-				auto argument_ptr_reg = argument_ptr.alloc_gp();
-				auto remaining_reg = remaining.alloc_gp();
-				ASM(MOV64rr, argument_ptr_reg, callee_reg);
-				ASM(ADD64ri, argument_ptr_reg,
-					static_cast<int32_t>(frame_header_size));
-				ASM(MOV32rm, remaining_reg,
-					FE_MEM(activation_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_direct_activation, resolution)
-							+ offsetof(zend_native_user_call_resolution,
-								argument_count))));
-				auto arguments_done = text_writer.label_create();
-				auto argument_loop = text_writer.label_create();
-				ASM(TEST32rr, remaining_reg, remaining_reg);
-				generate_raw_jump(Jump::je, arguments_done);
-				label_place(argument_loop);
-				ASM(MOV32mi,
-					FE_MEM(argument_ptr_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zval, u1.type_info))),
-					IS_UNDEF);
-				ASM(ADD64ri, argument_ptr_reg,
-					static_cast<int32_t>(sizeof(zval)));
-				ASM(SUB32ri, remaining_reg, 1);
-				generate_raw_jump(Jump::jne, argument_loop);
-				label_place(arguments_done);
-			};
-
-			auto callee_spilled = spill_target_branch_state();
-			auto slow_callee = text_writer.label_create();
-			auto callee_ready = text_writer.label_create();
-			{
-				ScratchReg active_address{this};
-				ScratchReg activation{this};
-				ScratchReg top_address{this};
-				ScratchReg callee{this};
-				ScratchReg available{this};
-				auto active_address_reg = active_address.alloc_gp();
-				auto activation_reg = activation.alloc_gp();
-				auto top_address_reg = top_address.alloc_gp();
-				auto callee_reg = callee.alloc_gp();
-				auto available_reg = available.alloc_gp();
-				ASM(MOV64rm, active_address_reg,
-					FE_MEM(context_register(), 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_execution_context,
-							active_direct_call))));
-				ASM(MOV64rm, activation_reg,
-					FE_MEM(active_address_reg, 0, FE_NOREG, 0));
-				ASM(MOV64rm, top_address_reg,
-					FE_MEM(context_register(), 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_execution_context, vm_stack_top))));
-				ASM(MOV64rm, callee_reg,
-					FE_MEM(top_address_reg, 0, FE_NOREG, 0));
-				ASM(MOV64rm, available_reg,
-					FE_MEM(context_register(), 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_execution_context, vm_stack_end))));
-				ASM(MOV64rm, available_reg,
-					FE_MEM(available_reg, 0, FE_NOREG, 0));
-				ASM(SUB64rr, available_reg, callee_reg);
-				ASM(MOV32rm, active_address_reg,
-					FE_MEM(activation_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_direct_activation, resolution)
-							+ offsetof(zend_native_user_call_resolution,
-								frame_size))));
-				ASM(CMP64rr, available_reg, active_address_reg);
-				generate_raw_jump(Jump::jb, slow_callee);
-				/* The new top is top + size; available only held end - top. */
-				mov(available_reg, callee_reg, 8);
-				ASM(ADD64rr, available_reg, active_address_reg);
-				ASM(MOV64mr,
-					FE_MEM(top_address_reg, 0, FE_NOREG, 0), available_reg);
-				initialize_callee(callee_reg, activation_reg, false);
-				generate_raw_jump(Jump::jmp, callee_ready);
-			}
-			label_place(slow_callee);
-			{
-				tpde::x64::CCAssignerSysV assigner{false};
-				CallBuilder builder{*this, assigner};
-				builder.add_arg(copy_fixed_argument(
-					canonical_frame_register()), tpde::CCAssignment{});
-				ScratchReg size{this};
-				auto size_reg = size.alloc_gp();
-				ASM(MOV64rm, size_reg,
-					FE_MEM(context_register(), 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_execution_context,
-							active_direct_call))));
-				ASM(MOV64rm, size_reg,
-					FE_MEM(size_reg, 0, FE_NOREG, 0));
-				ASM(MOV32rm, size_reg,
-					FE_MEM(size_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_direct_activation, resolution)
-							+ offsetof(zend_native_user_call_resolution,
-								frame_size))));
-				ValuePart size_value{
-					tpde::x64::PlatformConfig::GP_BANK, 4};
-				size_value.set_value(this, std::move(size));
-				builder.add_arg(std::move(size_value), tpde::CCAssignment{});
-				builder.call(runtime_symbol(
-					ZEND_NATIVE_HELPER_CALL_RESERVE_DYNAMIC_FRAME));
-				ValuePart callee_value{
-					tpde::x64::PlatformConfig::GP_BANK, 8};
-				builder.add_ret(callee_value, tpde::CCAssignment{});
-				auto callee_scratch =
-					std::move(callee_value).into_scratch(this);
-				ScratchReg activation{this};
-				auto activation_reg = activation.alloc_gp();
-				ASM(MOV64rm, activation_reg,
-					FE_MEM(context_register(), 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_native_execution_context,
-							active_direct_call))));
-				ASM(MOV64rm, activation_reg,
-					FE_MEM(activation_reg, 0, FE_NOREG, 0));
-				initialize_callee(
-					callee_scratch.cur_reg(), activation_reg, true);
-			}
-			label_place(callee_ready);
-			reconcile_target_branch_state(callee_spilled);
 			if (fast_site) {
 				label_place(fast_join);
 				reconcile_target_branch_state(fast_spilled);

@@ -742,6 +742,13 @@ zend_native_status zend_native_call_convert_descriptor_explicit(
  */
 zend_execute_data *zend_native_call_reserve_dynamic_frame(
 	zend_execute_data *caller, uint32_t reservation_size);
+uint32_t zend_native_call_universal_init(
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor,
+	zend_native_entry_cell *entry_cell_hint,
+	uint32_t setup_size,
+	uint32_t argument_count,
+	uint32_t result_offset);
 zend_native_direct_call_result zend_native_call_direct(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,

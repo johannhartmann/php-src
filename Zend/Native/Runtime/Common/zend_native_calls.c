@@ -7857,6 +7857,101 @@ zend_native_status zend_native_call_convert_descriptor_explicit(
 	return zend_native_call_invoke_finish_source(caller, cell, descriptor);
 }
 
+/*
+ * The universal Init of a source call site, out of line: reserve the setup
+ * frame and its activation, make the activation active, resolve the target
+ * and push the callee frame, as the generated universal Init did inline.
+ * result_offset is the result slot's frame offset, or UINT32_MAX for a
+ * discarded result. On failure nothing stays active and the status is
+ * returned with the exception set.
+ */
+uint32_t zend_native_call_universal_init(
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor,
+	zend_native_entry_cell *entry_cell_hint,
+	uint32_t setup_size,
+	uint32_t argument_count,
+	uint32_t result_offset)
+{
+	const size_t header_size = ZEND_CALL_FRAME_SLOT * sizeof(zval);
+	const size_t activation_offset = ZEND_MM_ALIGNED_SIZE_EX(header_size,
+		_Alignof(zend_native_direct_activation));
+	const size_t placement_offset =
+		activation_offset + sizeof(zend_native_direct_activation);
+	zend_native_direct_activation *activation;
+	zend_execute_data *setup;
+	zend_execute_data *callee;
+	uint32_t status;
+	uint32_t frame_size;
+	uint32_t call_info;
+	bool allocated = false;
+
+	setup = zend_native_frame_activation_reserve(setup_size);
+	if (setup == NULL) {
+		return ZEND_NATIVE_USER_CALL_RESOLUTION_FAILURE;
+	}
+	activation = (zend_native_direct_activation *)
+		((char *) setup + activation_offset);
+	memset(activation, 0, sizeof(*activation));
+	activation->setup_frame = setup;
+	activation->caller = caller;
+	activation->pending_call = caller->call;
+	activation->descriptor = descriptor;
+	activation->setup_size = setup_size;
+	activation->placement_capacity = argument_count;
+	activation->resolution.placements = (zend_native_user_call_placement *)
+		((char *) setup + placement_offset);
+	activation->setup_record = true;
+	activation->previous = zend_native_active_direct_call;
+	zend_native_active_direct_call = activation;
+	status = zend_native_call_resolve_user(activation, entry_cell_hint,
+		ZEND_NATIVE_USER_CALL_ARGUMENT_COUNT_AUTO);
+	if (status != ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS) {
+		if (activation->resolution.ownership != 0) {
+			zend_native_call_release_user_resolution(&activation->resolution);
+		}
+		zend_native_active_direct_call = activation->previous;
+		if ((ZEND_CALL_INFO(setup) & ZEND_CALL_ALLOCATED) == 0) {
+			activation->setup_record = false;
+			EG(vm_stack_top) = (zval *) setup;
+		} else {
+			zend_native_frame_activation_pop(activation);
+		}
+		return status;
+	}
+	frame_size = activation->resolution.frame_size;
+	callee = (zend_execute_data *) EG(vm_stack_top);
+	if ((size_t) ((char *) EG(vm_stack_end) - (char *) callee) >= frame_size) {
+		EG(vm_stack_top) = (zval *) ((char *) callee + frame_size);
+	} else {
+		callee = zend_native_call_reserve_dynamic_frame(caller, frame_size);
+		allocated = true;
+	}
+	memset(callee, 0, header_size);
+	callee->This.value.ptr = activation->resolution.object_or_called_scope;
+	call_info = activation->resolution.call_info;
+	if (allocated) {
+		call_info |= ZEND_CALL_ALLOCATED;
+	}
+	ZEND_CALL_INFO(callee) = call_info;
+	ZEND_CALL_NUM_ARGS(callee) = activation->resolution.argument_count;
+	callee->func = activation->resolution.function;
+	callee->prev_execute_data = activation->pending_call;
+	callee->return_value = result_offset == UINT32_MAX
+		? &activation->discarded_return
+		: (zval *) ((char *) caller + result_offset);
+	activation->callee = callee;
+	caller->call = callee;
+	activation->raw_arguments_owned = true;
+	activation->uses_discarded_return = result_offset == UINT32_MAX;
+	activation->dynamic_target = true;
+	for (uint32_t index = 0; index < activation->resolution.argument_count;
+			index++) {
+		Z_TYPE_INFO_P(ZEND_CALL_ARG(callee, index + 1)) = IS_UNDEF;
+	}
+	return ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS;
+}
+
 zend_execute_data *zend_native_call_reserve_dynamic_frame(
 	zend_execute_data *caller, uint32_t reservation_size)
 {
