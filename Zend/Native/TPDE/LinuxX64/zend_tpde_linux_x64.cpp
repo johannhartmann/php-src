@@ -7885,8 +7885,8 @@ bool ZendCompilerX64::compile_inst_impl(
 			: frame_offset(operation.op2_storage_id);
 		const uint64_t result_offset =
 			frame_offset(operation.result_storage_id);
-		/* The lookup snippets use up to six scratch registers; with the
-		 * frame and literal registers held across them, one stays spare. */
+		/* The lookup snippets use up to seven scratch registers; with the
+		 * literal register held across them, one stays spare. */
 		if (container_offset > INT32_MAX - sizeof(zval)
 				|| key_offset > INT32_MAX - sizeof(zval)
 				|| result_offset > INT32_MAX - sizeof(zval)
@@ -8268,7 +8268,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			return 0;
 		}
 		/* The lookup snippets use up to six scratch registers, with the
-		 * frame, the array and the key parts held across them. */
+		 * array and the key parts held across them. */
 		if (unlocked_gp_registers() < (key_boxed ? 10u : 9u)) {
 			return 0;
 		}
@@ -8823,9 +8823,9 @@ bool ZendCompilerX64::compile_inst_impl(
 					&& operation.result_storage_id
 						== operation.op1_storage_id)
 				|| (node.has_result && val_parts(node.result).count() > 2)
-				/* The probe's six scratch registers, its result, the frame
-				 * and the literals. */
-				|| unlocked_gp_registers() < 9) {
+				/* The probe's seven scratch registers, its result and the
+				 * literals, with one to spare. */
+				|| unlocked_gp_registers() < 10) {
 			return 0;
 		}
 		for (IRValueRef operand : node.operands) {
