@@ -1849,6 +1849,52 @@ zend_native_status zend_native_value_unary_op(
 	zval *result;
 	zend_result operation_status = SUCCESS;
 
+	/*
+	 * ! and (bool) of null, a boolean, an integer or a string, and strlen()
+	 * of a string, decide without decoding the operation; a string
+	 * temporary is released before the result, which may reuse its slot,
+	 * is published. References, undefined CVs and other types take the
+	 * general path.
+	 */
+	if (source_opcode == ZEND_BOOL_NOT || source_opcode == ZEND_BOOL
+			|| source_opcode == ZEND_STRLEN) {
+		bool operand_tmp;
+		bool result_tmp;
+		zval *value = zend_native_value_fast_operand(
+			execute_data, op1, &operand_tmp);
+		zval *target = zend_native_value_fast_operand(
+			execute_data, result_operand, &result_tmp);
+
+		if (value != NULL && target != NULL && result_tmp
+				&& Z_TYPE_P(value) != IS_UNDEF
+				&& (Z_TYPE_P(value) <= IS_LONG
+					|| Z_TYPE_P(value) == IS_STRING)
+				&& (source_opcode != ZEND_STRLEN
+					|| Z_TYPE_P(value) == IS_STRING)) {
+			zend_long computed;
+
+			if (source_opcode == ZEND_STRLEN) {
+				computed = (zend_long) Z_STRLEN_P(value);
+			} else if (Z_TYPE_P(value) == IS_STRING) {
+				computed = Z_STRLEN_P(value) > 1
+					|| (Z_STRLEN_P(value) == 1 && Z_STRVAL_P(value)[0] != '0');
+			} else {
+				computed = Z_TYPE_P(value) == IS_TRUE
+					|| (Z_TYPE_P(value) == IS_LONG && Z_LVAL_P(value) != 0);
+			}
+			if (operand_tmp) {
+				zval_ptr_dtor_str(value);
+				ZVAL_UNDEF(value);
+			}
+			if (source_opcode == ZEND_STRLEN) {
+				ZVAL_LONG(target, computed);
+			} else {
+				ZVAL_BOOL(target, source_opcode == ZEND_BOOL_NOT
+					? !computed : computed != 0);
+			}
+			return ZEND_NATIVE_RETURNED;
+		}
+	}
 	if ((source_opcode != ZEND_BW_NOT
 			&& source_opcode != ZEND_BOOL_NOT
 			&& source_opcode != ZEND_BOOL
@@ -2300,6 +2346,45 @@ zend_native_status zend_native_value_cast(
 	zval *result;
 	zval *value;
 
+	/*
+	 * (int) of an integer, null, boolean or string, (string) of a string,
+	 * integer, null or boolean, and (array) of an array convert a CV or
+	 * literal without decoding the operation; none of them warns. Doubles,
+	 * objects, temporaries and undefined CVs take the general path.
+	 */
+	if (source_opcode == ZEND_CAST) {
+		bool operand_tmp;
+		bool result_tmp;
+		zval *source = zend_native_value_fast_operand(
+			execute_data, op1, &operand_tmp);
+		zval *target = zend_native_value_fast_operand(
+			execute_data, result_operand, &result_tmp);
+
+		if (source != NULL && target != NULL && result_tmp && !operand_tmp
+				&& source != target) {
+			ZVAL_DEREF(source);
+			if (extended_value == IS_LONG
+					&& (Z_TYPE_P(source) == IS_LONG
+						|| (Z_TYPE_P(source) >= IS_NULL
+							&& Z_TYPE_P(source) <= IS_TRUE)
+						|| Z_TYPE_P(source) == IS_STRING)) {
+				ZVAL_LONG(target, zval_get_long(source));
+				return ZEND_NATIVE_RETURNED;
+			}
+			if (extended_value == IS_STRING
+					&& ((Z_TYPE_P(source) >= IS_NULL
+							&& Z_TYPE_P(source) <= IS_LONG)
+						|| Z_TYPE_P(source) == IS_STRING)) {
+				ZVAL_STR(target, zval_get_string(source));
+				return ZEND_NATIVE_RETURNED;
+			}
+			if (extended_value == IS_ARRAY
+					&& Z_TYPE_P(source) == IS_ARRAY) {
+				zend_native_zval_copy_deref_or_dup(target, source);
+				return ZEND_NATIVE_RETURNED;
+			}
+		}
+	}
 	if (!zend_native_value_init_explicit_operation(
 			execute_data, op1, op2, result_operand, extended_value,
 			source_opcode, source_position_id, ZEND_CAST, &operation)
