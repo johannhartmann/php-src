@@ -4802,7 +4802,14 @@ static zend_always_inline bool zend_native_value_assign_dim_store(
 	if (!value_tmp) {
 		ZVAL_DEREF(value);
 	}
-	if (Z_TYPE_P(value) > IS_STRING || Z_TYPE_P(value) == IS_UNDEF) {
+	/* Scalars, strings, objects and other arrays are copied like
+	 * zend_assign_to_variable() copies them; the container's own array as
+	 * the value keeps the helper. */
+	if (Z_TYPE_P(value) == IS_UNDEF
+			|| (Z_TYPE_P(value) > IS_STRING && Z_TYPE_P(value) != IS_ARRAY
+				&& Z_TYPE_P(value) != IS_OBJECT)
+			|| (Z_TYPE_P(value) == IS_ARRAY
+				&& Z_ARR_P(value) == Z_ARR_P(container))) {
 		return false;
 	}
 	SEPARATE_ARRAY(container);
