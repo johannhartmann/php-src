@@ -2487,6 +2487,29 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 			}
 		}
 	}
+	/* if/while on null, a boolean, an integer or a string: the truth
+	 * decides, and a string temporary is released. */
+	if (source_opcode == ZEND_JMPZ || source_opcode == ZEND_JMPNZ) {
+		bool value_tmp;
+
+		value = zend_native_value_fast_operand(execute_data, op1, &value_tmp);
+		if (value != NULL && Z_TYPE_P(value) != IS_UNDEF
+				&& (Z_TYPE_P(value) <= IS_LONG
+					|| Z_TYPE_P(value) == IS_STRING)) {
+			if (Z_TYPE_P(value) == IS_STRING) {
+				truth = Z_STRLEN_P(value) > 1
+					|| (Z_STRLEN_P(value) == 1 && Z_STRVAL_P(value)[0] != '0');
+				if (value_tmp) {
+					zval_ptr_dtor_str(value);
+					ZVAL_UNDEF(value);
+				}
+			} else {
+				truth = Z_TYPE_P(value) == IS_TRUE
+					|| (Z_TYPE_P(value) == IS_LONG && Z_LVAL_P(value) != 0);
+			}
+			return truth ? ZEND_NATIVE_ITERATOR_NEXT : ZEND_NATIVE_ITERATOR_END;
+		}
+	}
 	if ((source_opcode != ZEND_JMPZ && source_opcode != ZEND_JMPNZ
 			&& source_opcode != ZEND_JMPZ_EX
 			&& source_opcode != ZEND_JMPNZ_EX
@@ -5776,6 +5799,72 @@ zend_native_status zend_native_value_isset_isempty_dim(
 	bool answer;
 	bool table_valid;
 
+	/*
+	 * isset()/empty() of an array element under an integer or string key,
+	 * with any container a CV, temporary or literal holds, without decoding
+	 * the operation, as the direct form tests it; temporaries are released
+	 * before the result, which may reuse a slot, is published.
+	 */
+	if (source_opcode == ZEND_ISSET_ISEMPTY_DIM_OBJ) {
+		bool container_tmp;
+		bool key_tmp;
+		bool result_tmp;
+		zval *fast_container = zend_native_value_fast_operand(
+			execute_data, op1, &container_tmp);
+		zval *fast_key = zend_native_value_fast_operand(
+			execute_data, op2, &key_tmp);
+		zval *fast_result = zend_native_value_fast_operand(
+			execute_data, result_operand, &result_tmp);
+
+		if (fast_container != NULL && fast_key != NULL && fast_result != NULL
+				&& result_tmp) {
+			zval *array = fast_container;
+			zval *name = fast_key;
+			zval *element = NULL;
+			zend_ulong index;
+
+			ZVAL_DEREF(array);
+			if (!key_tmp) {
+				ZVAL_DEREF(name);
+			}
+			if (Z_TYPE_P(array) == IS_ARRAY
+					&& (Z_TYPE_P(name) == IS_LONG
+						|| Z_TYPE_P(name) == IS_STRING)) {
+				if (Z_TYPE_P(name) == IS_LONG) {
+					element = zend_hash_index_find(
+						Z_ARRVAL_P(array), Z_LVAL_P(name));
+				} else if (ZEND_HANDLE_NUMERIC_STR(
+						Z_STRVAL_P(name), Z_STRLEN_P(name), index)) {
+					element = zend_hash_index_find(Z_ARRVAL_P(array), index);
+				} else {
+					element = zend_hash_find(Z_ARRVAL_P(array), Z_STR_P(name));
+				}
+				if (element != NULL && Z_TYPE_P(element) == IS_INDIRECT) {
+					element = Z_INDIRECT_P(element);
+					if (Z_TYPE_P(element) == IS_UNDEF) {
+						element = NULL;
+					}
+				}
+				if ((extended_value & ZEND_ISEMPTY) != 0) {
+					answer = element == NULL || !i_zend_is_true(element);
+				} else {
+					answer = element != NULL && Z_TYPE_P(element) > IS_NULL
+						&& (!Z_ISREF_P(element)
+							|| Z_TYPE_P(Z_REFVAL_P(element)) != IS_NULL);
+				}
+				if (key_tmp) {
+					zval_ptr_dtor_nogc(fast_key);
+					ZVAL_UNDEF(fast_key);
+				}
+				if (container_tmp) {
+					zval_ptr_dtor_nogc(fast_container);
+					ZVAL_UNDEF(fast_container);
+				}
+				ZVAL_BOOL(fast_result, answer);
+				return zend_native_value_status();
+			}
+		}
+	}
 	if (!zend_native_value_init_explicit_operation(
 			execute_data, op1, op2, result_operand, extended_value,
 			source_opcode, source_position_id,
