@@ -3348,7 +3348,14 @@ typedef enum _zend_native_call_resolution_lookup {
 	 * entry; the function copy, bound object or receiver come from the
 	 * callable called.
 	 */
-	ZEND_NATIVE_CALL_LOOKUP_CALLABLE = 4
+	ZEND_NATIVE_CALL_LOOKUP_CALLABLE = 4,
+	/*
+	 * The constructor of new: the entry's class, whose objects need no
+	 * create_object handler and whose public constructor needs no scope
+	 * check. The object is created per call into the slot at
+	 * receiver_offset; a literal class name keeps its class for the request.
+	 */
+	ZEND_NATIVE_CALL_LOOKUP_NEW = 5
 } zend_native_call_resolution_lookup;
 
 typedef enum _zend_native_call_callable_kind {
@@ -3371,6 +3378,8 @@ typedef struct _zend_native_call_resolution_cache_entry
 
 struct _zend_native_call_resolution_cache_entry {
 	zend_native_call_resolution_cache_entry *next_allocated;
+	/* The next entry of the same call site, most recently stored first. */
+	zend_native_call_resolution_cache_entry *next_site;
 	const zend_native_user_call_descriptor *descriptor;
 	/* The target, or NULL for a closure callable, which matches code. */
 	zend_function *function;
@@ -3391,8 +3400,9 @@ struct _zend_native_call_resolution_cache_entry {
 	zend_native_user_call_placement placements[1];
 };
 
-/* A call site reaches its entry through the header of its descriptor; the
- * request's entries are chained for release at request end. */
+/* A call site reaches its entries through the header of its descriptor;
+ * the request's entries are chained for release at request end. */
+#define ZEND_NATIVE_CALL_SITE_ENTRIES 2
 static zend_native_call_resolution_cache_entry *
 	zend_native_call_resolution_cache_entries;
 static uint64_t zend_native_call_resolution_cache_epoch = 1;
@@ -3434,18 +3444,22 @@ zend_native_call_resolution_cache_find(
 	const zend_native_user_call_descriptor *descriptor,
 	zend_function *function, uint32_t argument_count)
 {
-	const zend_native_call_resolution_cache_entry *entry =
-		zend_native_call_resolution_cache_site(descriptor);
+	const zend_native_call_resolution_cache_entry *entry;
 
 	/* A descriptor address can recur after its image was freed; the
 	 * caller's opcodes tell the call sites apart. */
-	return entry != NULL && entry->descriptor == descriptor
-			&& entry->lookup != ZEND_NATIVE_CALL_LOOKUP_CALLABLE
-			&& entry->function == function
-			&& entry->caller_opcodes == caller->func->op_array.opcodes
-			&& entry->argument_count == argument_count
-			&& entry->epoch == zend_native_call_resolution_cache_epoch
-		? entry : NULL;
+	for (entry = zend_native_call_resolution_cache_site(descriptor);
+			entry != NULL; entry = entry->next_site) {
+		if (entry->descriptor == descriptor
+				&& entry->lookup != ZEND_NATIVE_CALL_LOOKUP_CALLABLE
+				&& entry->function == function
+				&& entry->caller_opcodes == caller->func->op_array.opcodes
+				&& entry->argument_count == argument_count
+				&& entry->epoch == zend_native_call_resolution_cache_epoch) {
+			return entry;
+		}
+	}
+	return NULL;
 }
 
 /* Record how a hit finds its target without the general resolver: only where
@@ -3521,6 +3535,35 @@ static void zend_native_call_resolution_cache_bind_lookup(
 			}
 			entry->lookup = ZEND_NATIVE_CALL_LOOKUP_METHOD;
 			break;
+		}
+		case ZEND_NEW: {
+			const zend_object *object = resolution->object_or_called_scope;
+			const zval *result;
+
+			if (object == NULL || object->ce->create_object != NULL
+					|| object->handlers != object->ce->default_object_handlers
+					|| object->handlers->get_constructor
+						!= zend_std_get_constructor
+					|| object->ce->constructor != resolution->function
+					|| (resolution->function->common.fn_flags
+						& ZEND_ACC_PUBLIC) == 0
+					|| (descriptor->init_op1.kind
+							!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+						&& descriptor->init_op1.kind
+							!= ZEND_MIR_SOURCE_OPERAND_UNUSED)) {
+				return;
+			}
+			result = zend_native_call_source_slot(
+				(zend_execute_data *) caller, &descriptor->init_result);
+			if (result == NULL || (const char *) result
+					< (const char *) ZEND_CALL_VAR_NUM(caller, 0)) {
+				return;
+			}
+			entry->lookup = ZEND_NATIVE_CALL_LOOKUP_NEW;
+			entry->receiver = ZEND_NATIVE_CALL_RECEIVER_TEMPORARY;
+			entry->receiver_offset =
+				(uint32_t) ((const char *) result - (const char *) caller);
+			return;
 		}
 		case ZEND_INIT_STATIC_METHOD_CALL: {
 			const zend_mir_source_operand_ref *class_operand =
@@ -3721,13 +3764,13 @@ static zend_always_inline bool zend_native_call_resolve_cached_callable(
  * cached resolution and take the ownership the general resolver would take,
  * without looking the target up or validating the descriptor again.
  */
-static zend_always_inline bool zend_native_call_resolve_cached(
+static zend_always_inline bool zend_native_call_resolve_cached_entry(
 	zend_native_direct_activation *activation,
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor,
-	uint32_t argument_count_hint)
+	uint32_t argument_count_hint,
+	const zend_native_call_resolution_cache_entry *entry)
 {
-	const zend_native_call_resolution_cache_entry *entry;
 	zend_native_user_call_resolution *resolution = &activation->resolution;
 	zend_native_user_call_placement *placements = resolution->placements;
 	zend_function *function;
@@ -3737,8 +3780,7 @@ static zend_always_inline bool zend_native_call_resolve_cached(
 	void **slot;
 	uint32_t count;
 
-	entry = zend_native_call_resolution_cache_site(descriptor);
-	if (entry == NULL || entry->descriptor != descriptor
+	if (entry->descriptor != descriptor
 			|| entry->lookup == ZEND_NATIVE_CALL_LOOKUP_NONE
 			|| entry->epoch != zend_native_call_resolution_cache_epoch
 			|| entry->caller_opcodes != caller->func->op_array.opcodes
@@ -3756,7 +3798,27 @@ static zend_always_inline bool zend_native_call_resolve_cached(
 	}
 	slot = (void **) ((char *) caller->run_time_cache
 		+ entry->cache_slot_offset);
-	if (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_FUNCTION) {
+	if (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_NEW) {
+		zend_class_entry *ce = entry->callable_class;
+
+		/* self:: and parent:: follow the caller's scope and static:: its
+		 * called scope; a literal name resolved once per request. */
+		if (descriptor->init_op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+				&& zend_fetch_class(NULL, descriptor->init_op1_payload) != ce) {
+			return false;
+		}
+		if ((ce->ce_flags & ZEND_ACC_CONSTANTS_UPDATED) == 0
+				|| ce->constructor != entry->function) {
+			return false;
+		}
+		receiver = (zval *) ((char *) caller + entry->receiver_offset);
+		if (object_init_ex(receiver, ce) != SUCCESS) {
+			return false;
+		}
+		object = Z_OBJ_P(receiver);
+		GC_ADDREF(object);
+		function = entry->function;
+	} else if (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_FUNCTION) {
 		function = slot[0];
 	} else if (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_STATIC) {
 		zend_class_entry *ce = zend_native_call_resolve_cached_static_class(
@@ -3786,14 +3848,18 @@ static zend_always_inline bool zend_native_call_resolve_cached(
 		receiver = entry->receiver == ZEND_NATIVE_CALL_RECEIVER_THIS
 			? &caller->This
 			: (zval *) ((char *) caller + entry->receiver_offset);
+		/* A global or static CV receiver is a reference. */
+		if (entry->receiver == ZEND_NATIVE_CALL_RECEIVER_CV) {
+			ZVAL_DEREF(receiver);
+		}
 		if (Z_TYPE_P(receiver) != IS_OBJECT) {
 			return false;
 		}
 		object = Z_OBJ_P(receiver);
-		if (slot[0] != object->ce) {
+		if (object->ce != entry->callable_class) {
 			return false;
 		}
-		function = slot[1];
+		function = entry->function;
 	}
 	if (function != entry->function) {
 		return false;
@@ -3806,7 +3872,12 @@ static zend_always_inline bool zend_native_call_resolve_cached(
 	for (uint32_t i = 0; i < count; i++) {
 		placements[i] = entry->placements[i];
 	}
-	if (object != NULL
+	if (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_NEW) {
+		/* The result slot keeps the new object; the call owns a second
+		 * reference, released with $this. */
+		resolution->owned_target = object;
+		resolution->ownership |= ZEND_NATIVE_USER_CALL_OWNS_TARGET_OBJECT;
+	} else if (object != NULL
 			&& entry->lookup == ZEND_NATIVE_CALL_LOOKUP_METHOD
 			&& entry->receiver != ZEND_NATIVE_CALL_RECEIVER_THIS) {
 		resolution->owned_target = object;
@@ -3826,6 +3897,25 @@ static zend_always_inline bool zend_native_call_resolve_cached(
 		descriptor->init_source_position];
 	EG(current_execute_data) = caller;
 	return true;
+}
+
+/* A hit on any entry of the call site; every miss leaves all unchanged. */
+static zend_always_inline bool zend_native_call_resolve_cached(
+	zend_native_direct_activation *activation,
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor,
+	uint32_t argument_count_hint)
+{
+	const zend_native_call_resolution_cache_entry *entry;
+
+	for (entry = zend_native_call_resolution_cache_site(descriptor);
+			entry != NULL; entry = entry->next_site) {
+		if (zend_native_call_resolve_cached_entry(activation, caller,
+				descriptor, argument_count_hint, entry)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 /*
@@ -3947,6 +4037,9 @@ static void zend_native_call_resolution_cache_store(
 	uint8_t callable_kind = 0;
 	uint8_t callable_receiver = 0;
 	uint32_t callable_offset = 0;
+	zend_string *callable_name = NULL;
+	zend_class_entry *callable_class = NULL;
+	const zend_op *code;
 
 	/* A dynamic call is cached only under a stable identity of its callable:
 	 * a closure's function lives in its object, and the address of a freed
@@ -3965,15 +4058,85 @@ static void zend_native_call_resolution_cache_store(
 		return;
 	}
 	header = ZEND_NATIVE_USER_CALL_SITE_HEADER(descriptor);
-	entry = zend_native_call_resolution_cache_site(descriptor);
-	/* A smaller entry stays chained until request end: a caller may still
-	 * be copying from it. */
-	if (entry == NULL || entry->placement_capacity < count) {
-		entry = emalloc(offsetof(zend_native_call_resolution_cache_entry,
-			placements) + (count == 0 ? 1 : count) * sizeof(entry->placements[0]));
-		entry->placement_capacity = count == 0 ? 1 : count;
-		entry->next_allocated = zend_native_call_resolution_cache_entries;
-		zend_native_call_resolution_cache_entries = entry;
+	if (dynamic) {
+		zval *callable = callable_receiver == ZEND_NATIVE_CALL_RECEIVER_LITERAL
+			? &caller->func->op_array.literals[callable_offset]
+			: (zval *) ((char *) caller + callable_offset);
+
+		ZVAL_DEREF(callable);
+		if (callable_kind == ZEND_NATIVE_CALL_CALLABLE_FUNCTION) {
+			callable_name = Z_STR_P(callable);
+		} else if (callable_kind == ZEND_NATIVE_CALL_CALLABLE_METHOD) {
+			callable_class = Z_OBJCE_P(
+				zend_hash_index_find(Z_ARRVAL_P(callable), 0));
+			callable_name = Z_STR_P(
+				zend_hash_index_find(Z_ARRVAL_P(callable), 1));
+		}
+	} else if ((descriptor->init_opcode == ZEND_INIT_METHOD_CALL
+				|| descriptor->init_opcode == ZEND_NEW)
+			&& resolution->object_or_called_scope != NULL) {
+		/* A method or new entry is keyed by the object's class: the runtime
+		 * cache slot holds only the last class of a polymorphic site. */
+		callable_class =
+			((const zend_object *) resolution->object_or_called_scope)->ce;
+	}
+	code = resolution->function->type == ZEND_USER_FUNCTION
+		? resolution->function->op_array.opcodes : NULL;
+	/*
+	 * A site keeps up to ZEND_NATIVE_CALL_SITE_ENTRIES entries, most recent
+	 * first: a polymorphic site, such as a hook dispatcher, finds each of its
+	 * targets. The entry of the same target is refreshed; beyond the limit
+	 * the least recent one is reused. A replaced or too small entry stays
+	 * allocated until request end.
+	 */
+	{
+		zend_native_call_resolution_cache_entry *head =
+			zend_native_call_resolution_cache_site(descriptor);
+		zend_native_call_resolution_cache_entry **link = &head;
+		zend_native_call_resolution_cache_entry **last = NULL;
+		uint32_t depth = 0;
+
+		for (entry = head; entry != NULL; entry = *link) {
+			const bool same = entry->argument_count
+					== resolution->argument_count
+				&& (dynamic
+					? entry->lookup == ZEND_NATIVE_CALL_LOOKUP_CALLABLE
+						&& entry->callable_kind == callable_kind
+						&& entry->callable_name == callable_name
+						&& entry->callable_class == callable_class
+						&& (callable_kind
+								!= ZEND_NATIVE_CALL_CALLABLE_CLOSURE
+							|| entry->code == code)
+					: entry->lookup != ZEND_NATIVE_CALL_LOOKUP_CALLABLE
+						&& entry->function == resolution->function
+						&& entry->callable_class == callable_class);
+			if (same) {
+				break;
+			}
+			last = link;
+			link = &entry->next_site;
+			depth++;
+		}
+		if (entry == NULL && depth >= ZEND_NATIVE_CALL_SITE_ENTRIES
+				&& last != NULL) {
+			link = last;
+			entry = *last;
+		}
+		if (entry != NULL) {
+			*link = entry->next_site;
+			if (entry->placement_capacity < count) {
+				entry = NULL;
+			}
+		}
+		if (entry == NULL) {
+			entry = emalloc(offsetof(zend_native_call_resolution_cache_entry,
+				placements)
+				+ (count == 0 ? 1 : count) * sizeof(entry->placements[0]));
+			entry->placement_capacity = count == 0 ? 1 : count;
+			entry->next_allocated = zend_native_call_resolution_cache_entries;
+			zend_native_call_resolution_cache_entries = entry;
+		}
+		entry->next_site = head;
 		header->resolution = entry;
 		header->epoch = zend_native_call_resolution_cache_epoch;
 	}
@@ -3981,32 +4144,18 @@ static void zend_native_call_resolution_cache_store(
 	entry->function = dynamic
 			&& callable_kind == ZEND_NATIVE_CALL_CALLABLE_CLOSURE
 		? NULL : resolution->function;
-	entry->code = resolution->function->type == ZEND_USER_FUNCTION
-		? resolution->function->op_array.opcodes : NULL;
-	entry->callable_name = NULL;
-	entry->callable_class = NULL;
+	entry->code = code;
+	entry->callable_name = callable_name;
+	entry->callable_class = callable_class;
 	entry->callable_kind = callable_kind;
 	entry->lookup = ZEND_NATIVE_CALL_LOOKUP_NONE;
 	entry->receiver = ZEND_NATIVE_CALL_RECEIVER_THIS;
 	entry->receiver_offset = 0;
 	entry->cache_slot_offset = 0;
 	if (dynamic) {
-		zval *callable = callable_receiver == ZEND_NATIVE_CALL_RECEIVER_LITERAL
-			? &caller->func->op_array.literals[callable_offset]
-			: (zval *) ((char *) caller + callable_offset);
-
-		ZVAL_DEREF(callable);
 		entry->lookup = ZEND_NATIVE_CALL_LOOKUP_CALLABLE;
 		entry->receiver = callable_receiver;
 		entry->receiver_offset = callable_offset;
-		if (callable_kind == ZEND_NATIVE_CALL_CALLABLE_FUNCTION) {
-			entry->callable_name = Z_STR_P(callable);
-		} else if (callable_kind == ZEND_NATIVE_CALL_CALLABLE_METHOD) {
-			entry->callable_class = Z_OBJCE_P(
-				zend_hash_index_find(Z_ARRVAL_P(callable), 0));
-			entry->callable_name = Z_STR_P(
-				zend_hash_index_find(Z_ARRVAL_P(callable), 1));
-		}
 	} else {
 		zend_native_call_resolution_cache_bind_lookup(
 			entry, caller, descriptor, resolution);

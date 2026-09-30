@@ -914,7 +914,8 @@ public:
 		(void) index;
 	}
 	void start_func(uint32_t index) {
-		ZEND_ASSERT(current_direct_call_stack_guard_patches_.empty());
+		/* A function that failed to compile left its guard patches. */
+		current_direct_call_stack_guard_patches_.clear();
 		generator_resume_labels_.clear();
 		generator_gateway_state_.clear();
 		user_opcode_labels_.clear();

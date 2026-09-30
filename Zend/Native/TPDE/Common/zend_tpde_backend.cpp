@@ -2244,10 +2244,14 @@ bool freeze_source_call_phases(
 				const zend_tpde_value &value = plan->values[
 					static_cast<uint32_t>(binding.value_index)];
 				const zend_mir_scalar_type_mask exact_type = value.exact_type;
+				/* A value the plan keeps as a zval
+				 * is sent from its zval. */
 				direct_value = zend_mir_scalar_type_is_exact(exact_type)
 					&& (exact_type == ZEND_MIR_SCALAR_TYPE_I1
 						|| exact_type == ZEND_MIR_SCALAR_TYPE_I64
 						|| exact_type == ZEND_MIR_SCALAR_TYPE_F64)
+					&& value.machine_kind
+						!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 					&& (binding.definition_instruction_index >= 0
 						|| value.constant || value.argument_index >= 0);
 			}
