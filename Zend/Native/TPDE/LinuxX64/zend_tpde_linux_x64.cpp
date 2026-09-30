@@ -7720,6 +7720,126 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		return branch_to_guarded_cold();
 	};
+	/*
+	 * TYPE_CHECK of a CV through zend_native_zval_type_check(): the bool
+	 * lands in the result temporary and a register result. An undefined
+	 * variable, which warns, and a resource check, which asks the resource
+	 * list, take the guarded cold block. Returns 1 when emitted, 0 when the
+	 * form does not apply and -1 on an encoding failure.
+	 */
+	auto type_check_inline = [&]() -> int {
+		const zend_mir_executable_value_ref &operation = mir.value_operation;
+		auto frame_slot = [](const zend_mir_source_operand_ref &operand) {
+			return operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA;
+		};
+		if (!adaptor->plan()->linux_inline_forms
+				|| node.kind != Adaptor::InstKind::GuardedFast
+				|| !mir.has_value_operation
+				|| operation.source_opcode != ZEND_TYPE_CHECK
+				|| node.control_block == UINT32_MAX
+				|| node.continuation_block == UINT32_MAX
+				|| operation.extended_value == MAY_BE_RESOURCE
+				|| !frame_slot(operation.op1)
+				|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+				|| !zend_mir_id_is_valid(operation.op1_storage_id)
+				|| !frame_slot(operation.result)
+				|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+					&& operation.result.slot_kind
+						!= ZEND_MIR_SOURCE_SLOT_VAR)
+				|| !zend_mir_id_is_valid(operation.result_storage_id)
+				|| (node.has_result && val_parts(node.result).count() > 2)
+				|| unlocked_gp_registers() < 6) {
+			return 0;
+		}
+		for (IRValueRef operand : node.operands) {
+			if (operand != IRValueRef{Adaptor::FRAME_VALUE}
+					&& operand != IRValueRef{
+						Adaptor::EXECUTION_CONTEXT_ARGUMENT}) {
+				return 0;
+			}
+		}
+		const auto successors =
+			adaptor->block_succs(IRBlockRef{node.control_block});
+		if (successors.size() < 2
+				|| static_cast<uint32_t>(successors[0])
+					!= node.continuation_block
+				|| static_cast<uint32_t>(successors[1])
+					!= node.argument_index) {
+			return 0;
+		}
+		const uint64_t value_offset =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
+				* sizeof(zval);
+		const uint64_t result_offset =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
+				* sizeof(zval);
+		if (value_offset > INT32_MAX - sizeof(zval)
+				|| result_offset > INT32_MAX - sizeof(zval)) {
+			return 0;
+		}
+		auto slow = text_writer.label_create();
+		auto done = text_writer.label_create();
+		auto [frame_ref, frame] =
+			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_reg = frame_scratch.cur_reg();
+		ScratchReg mask{this};
+		ASM(MOV32ri, mask.alloc_gp(),
+			static_cast<int32_t>(operation.extended_value));
+		ValuePart matched{tpde::x64::PlatformConfig::GP_BANK, 8};
+		if (!EncodeBase::encode_zend_native_zval_type_check(
+				GenericValuePart{GenericValuePart::Expr{frame_reg,
+					static_cast<int64_t>(value_offset)}},
+				GenericValuePart{std::move(mask)}, matched)) {
+			return -1;
+		}
+		const AsmReg matched_reg = matched.cur_reg_or_load(this);
+		ScratchReg decision{this};
+		ScratchReg type{this};
+		auto decision_reg = decision.alloc_gp();
+		auto type_reg = type.alloc_gp();
+		ASM(CMP64ri, matched_reg, ZEND_NATIVE_TYPE_CHECK_UNDEFINED);
+		generate_raw_jump(Jump::je, slow);
+		/* IS_FALSE + matched is IS_FALSE or IS_TRUE. */
+		ASM(LEA32rm, type_reg,
+			FE_MEM(matched_reg, 0, FE_NOREG, IS_FALSE));
+		ASM(MOV32mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(result_offset
+					+ offsetof(zval, u1.type_info))),
+			type_reg);
+		if (node.has_result && val_parts(node.result).count() == 1) {
+			auto [result_ref, result] = result_ref_single(node.result);
+			mov(result.alloc_reg(), matched_reg, 8);
+			result.set_modified();
+		} else if (node.has_result) {
+			auto result = result_ref(node.result);
+			const ValueParts parts = val_parts(node.result);
+			for (uint32_t part = 0; part < parts.count(); ++part) {
+				auto result_part = result.part(part);
+				if (parts.representation.parts[part].semantic_role
+						== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
+					mov(result_part.alloc_reg(), type_reg, 4);
+				} else {
+					ASM(XOR32rr, result_part.alloc_reg(),
+						result_part.cur_reg());
+				}
+				result_part.set_modified();
+			}
+		}
+		matched.reset(this);
+		type.reset();
+		ASM(MOV32ri, decision_reg, 0);
+		generate_raw_jump(Jump::jmp, done);
+		label_place(slow);
+		ASM(MOV32ri, decision_reg, 1);
+		label_place(done);
+		frame_scratch.reset();
+		generate_guarded_decision_branch(
+			std::move(decision), successors[1], successors[0]);
+		return 1;
+	};
 	auto write_array = [&]() {
 		if (const int element = array_element(ElementAccess::Write);
 				element != 0) {
@@ -11812,6 +11932,13 @@ bool ZendCompilerX64::compile_inst_impl(
 			|| record.opcode == ZEND_MIR_OPCODE_VALUE_TYPE_CHECK
 			|| record.opcode == ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL
 			|| record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME) {
+		if (record.opcode == ZEND_MIR_OPCODE_VALUE_TYPE_CHECK
+				&& node.kind == Adaptor::InstKind::GuardedFast) {
+			if (const int checked = type_check_inline(); checked != 0) {
+				return checked > 0;
+			}
+			return branch_to_guarded_cold();
+		}
 		if (record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_R) {
 			return object_property_read();
 		}
