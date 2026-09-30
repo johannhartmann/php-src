@@ -5562,6 +5562,62 @@ zend_native_status zend_native_value_unset_dim(
 	zval *offset;
 	bool table_valid;
 
+	/*
+	 * unset($a[k]) of an array CV, or of the array a write fetch's VAR
+	 * points to, with an integer or string key, deletes without decoding
+	 * the operation, as ZEND_UNSET_DIM does. Objects, other containers,
+	 * other keys and the symbol table take the general path.
+	 */
+	if (source_opcode == ZEND_UNSET_DIM
+			&& ((op1 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| (op1 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SSA)) {
+		const uint32_t slot_kind = (uint32_t) ((op1 >> 8) & UINT64_C(0xff));
+		const uint32_t index = (uint32_t) (op1 >> 16);
+		bool offset_tmp;
+		zend_ulong numeric;
+
+		container = NULL;
+		if (slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+				&& index < (uint32_t) execute_data->func->op_array.last_var) {
+			container = ZEND_CALL_VAR_NUM(execute_data, index);
+		} else if (slot_kind == ZEND_MIR_SOURCE_SLOT_VAR
+				&& index < (uint32_t) execute_data->func->op_array.T) {
+			zval *slot = ZEND_CALL_VAR_NUM(execute_data,
+				execute_data->func->op_array.last_var + index);
+
+			if (Z_TYPE_P(slot) == IS_INDIRECT) {
+				container = Z_INDIRECT_P(slot);
+			}
+		}
+		offset = zend_native_value_fast_operand(
+			execute_data, op2, &offset_tmp);
+		if (container != NULL && offset != NULL) {
+			ZVAL_DEREF(container);
+			if (!offset_tmp) {
+				ZVAL_DEREF(offset);
+			}
+			if (Z_TYPE_P(container) == IS_ARRAY
+					&& Z_ARRVAL_P(container) != &EG(symbol_table)
+					&& (Z_TYPE_P(offset) == IS_LONG
+						|| Z_TYPE_P(offset) == IS_STRING)) {
+				SEPARATE_ARRAY(container);
+				table = Z_ARRVAL_P(container);
+				if (Z_TYPE_P(offset) == IS_LONG) {
+					zend_hash_index_del(table, (zend_ulong) Z_LVAL_P(offset));
+				} else if (ZEND_HANDLE_NUMERIC_STR(Z_STRVAL_P(offset),
+						Z_STRLEN_P(offset), numeric)) {
+					zend_hash_index_del(table, numeric);
+				} else {
+					zend_hash_del(table, Z_STR_P(offset));
+				}
+				if (offset_tmp) {
+					zval_ptr_dtor_nogc(offset);
+					ZVAL_UNDEF(offset);
+				}
+				return zend_native_value_status();
+			}
+		}
+	}
 	if (!zend_native_value_init_explicit_operation(
 			execute_data, op1, op2, result_operand, extended_value,
 			source_opcode, source_position_id, ZEND_UNSET_DIM, &operation)
