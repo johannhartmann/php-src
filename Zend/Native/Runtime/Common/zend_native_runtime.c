@@ -920,6 +920,15 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM_DIRECT,
 		ZEND_NATIVE_EFFECT_ARRAY_SLOW_READ,
 		(const void *) zend_native_value_isset_isempty_dim_direct},
+	{ZEND_NATIVE_HELPER_USER_CALL_INVOKE,
+		ZEND_NATIVE_EFFECT_CALL | ZEND_NATIVE_EFFECT_FRAME_READ | ZEND_NATIVE_EFFECT_FRAME_WRITE
+			| ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
+			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_RUNTIME_EFFECT_USERLAND
+			| ZEND_NATIVE_RUNTIME_EFFECT_REENTER
+			| ZEND_NATIVE_RUNTIME_EFFECT_THROW
+			| ZEND_NATIVE_RUNTIME_EFFECT_BAILOUT,
+		(const void *) zend_native_call_invoke_user},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
