@@ -226,6 +226,72 @@ uintptr_t zend_native_array_find_key(const zval *container, const zval *key)
 		(uint64_t) Z_LVAL_P(key), Z_TYPE_P(key), false);
 }
 
+/*
+ * The array a write fetch (FETCH_DIM_W, RW, UNSET) of a CV may change in
+ * place: one, through a reference, with no other owner, which SEPARATE_ARRAY
+ * leaves as it is. NULL otherwise.
+ */
+ZEND_NATIVE_SNIPPET_INLINE const HashTable *zend_native_probe_array_w(
+	const zval *container)
+{
+	if (Z_TYPE_P(container) == IS_REFERENCE) {
+		container = &Z_REF_P(container)->val;
+	}
+	return Z_TYPE_P(container) == IS_ARRAY
+			&& GC_REFCOUNT(Z_ARRVAL_P(container)) == 1
+		? Z_ARRVAL_P(container) : NULL;
+}
+
+/*
+ * The same for a VAR container, which a write fetch may change only through
+ * the INDIRECT of a previous fetch: a VAR that owns its value is released by
+ * the fetch.
+ */
+ZEND_NATIVE_SNIPPET_INLINE const HashTable *zend_native_probe_indirect_w(
+	const zval *var)
+{
+	return Z_TYPE_P(var) == IS_INDIRECT
+		? zend_native_probe_array_w(Z_INDIRECT_P(var)) : NULL;
+}
+
+ZEND_NATIVE_SNIPPET_INLINE const zval *zend_native_key_deref(const zval *key)
+{
+	return Z_TYPE_P(key) == IS_REFERENCE ? &Z_REF_P(key)->val : key;
+}
+
+/* The element a write fetch of a CV under a literal key returns. */
+uintptr_t zend_native_array_find_literal_w(
+	const zval *container, const zval *key)
+{
+	return zend_native_find_value(zend_native_probe_array_w(container),
+		(uint64_t) Z_LVAL_P(key), Z_TYPE_P(key), true);
+}
+
+/* The element a write fetch of a CV under a runtime key returns. */
+uintptr_t zend_native_array_find_key_w(
+	const zval *container, const zval *key)
+{
+	key = zend_native_key_deref(key);
+	return zend_native_find_value(zend_native_probe_array_w(container),
+		(uint64_t) Z_LVAL_P(key), Z_TYPE_P(key), false);
+}
+
+/* The element a write fetch of a VAR under a literal key returns. */
+uintptr_t zend_native_indirect_find_literal_w(
+	const zval *var, const zval *key)
+{
+	return zend_native_find_value(zend_native_probe_indirect_w(var),
+		(uint64_t) Z_LVAL_P(key), Z_TYPE_P(key), true);
+}
+
+/* The element a write fetch of a VAR under a runtime key returns. */
+uintptr_t zend_native_indirect_find_key_w(const zval *var, const zval *key)
+{
+	key = zend_native_key_deref(key);
+	return zend_native_find_value(zend_native_probe_indirect_w(var),
+		(uint64_t) Z_LVAL_P(key), Z_TYPE_P(key), false);
+}
+
 /* The array of a container zval, through a reference, or NULL. */
 const HashTable *zend_native_zval_table(const zval *container)
 {

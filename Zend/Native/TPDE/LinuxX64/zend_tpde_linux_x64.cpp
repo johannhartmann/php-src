@@ -7083,8 +7083,12 @@ bool ZendCompilerX64::compile_inst_impl(
 	 * encoding failure.
 	 */
 	/* Coalesce is FETCH_DIM_IS: a read whose missing key or scalar
-	 * container yields null without a diagnostic. */
-	enum class ElementAccess : uint8_t { Read, Coalesce, Isset, Empty };
+	 * container yields null without a diagnostic. Write is FETCH_DIM_W, RW
+	 * and UNSET, which return the INDIRECT of an existing element of an
+	 * unshared array. */
+	enum class ElementAccess : uint8_t {
+		Read, Coalesce, Write, Isset, Empty
+	};
 	auto array_element = [&](ElementAccess access) -> int {
 		const zend_mir_executable_value_ref &operation = mir.value_operation;
 		if (!adaptor->plan()->linux_inline_forms
@@ -7117,14 +7121,22 @@ bool ZendCompilerX64::compile_inst_impl(
 		};
 		const bool reads = access == ElementAccess::Read
 			|| access == ElementAccess::Coalesce;
+		const bool tests = access == ElementAccess::Isset
+			|| access == ElementAccess::Empty;
+		const bool writes = access == ElementAccess::Write;
 		const bool container_literal =
 			operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
 		const bool container_temporary =
 			slot_kind(operation.op1) == ZEND_MIR_SOURCE_SLOT_TMP;
+		/* The VAR of a write fetch holds a previous fetch's INDIRECT. */
+		const bool container_var = writes
+			&& slot_kind(operation.op1) == ZEND_MIR_SOURCE_SLOT_VAR;
 		const bool key_literal =
 			operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
-		if ((!container_literal && !container_temporary
+		if ((!container_literal && !container_temporary && !container_var
 					&& slot_kind(operation.op1) != ZEND_MIR_SOURCE_SLOT_CV)
+				|| (writes && (container_literal || container_temporary
+					|| node.has_result))
 				|| (!key_literal
 					&& slot_kind(operation.op2) != ZEND_MIR_SOURCE_SLOT_CV)
 				|| (slot_kind(operation.result) != ZEND_MIR_SOURCE_SLOT_TMP
@@ -7146,7 +7158,7 @@ bool ZendCompilerX64::compile_inst_impl(
 							&& adaptor->exact_type(node.result)
 								== ZEND_MIR_SCALAR_TYPE_I64
 							&& val_parts(node.result).count() == 1)))
-				|| (node.has_result && !reads
+				|| (node.has_result && tests
 					&& val_parts(node.result).count() != 1)
 				|| (node.has_result && access == ElementAccess::Coalesce
 					&& adaptor->machine_kind(node.result)
@@ -7201,13 +7213,36 @@ bool ZendCompilerX64::compile_inst_impl(
 		const AsmReg container_base =
 			container_literal ? literals_reg : frame_reg;
 		ValuePart element{tpde::x64::PlatformConfig::GP_BANK, 8};
-		const bool found = key_literal
-			? EncodeBase::encode_zend_native_array_find_literal(
-				address(container_base, container_offset),
-				address(literals_reg, key_offset), element)
-			: EncodeBase::encode_zend_native_array_find_key(
-				address(container_base, container_offset),
-				address(frame_reg, key_offset), element);
+		auto container_address = address(container_base, container_offset);
+		auto key_address = key_literal
+			? address(literals_reg, key_offset)
+			: address(frame_reg, key_offset);
+		bool found;
+		if (container_var) {
+			found = key_literal
+				? EncodeBase::encode_zend_native_indirect_find_literal_w(
+					std::move(container_address), std::move(key_address),
+					element)
+				: EncodeBase::encode_zend_native_indirect_find_key_w(
+					std::move(container_address), std::move(key_address),
+					element);
+		} else if (writes) {
+			found = key_literal
+				? EncodeBase::encode_zend_native_array_find_literal_w(
+					std::move(container_address), std::move(key_address),
+					element)
+				: EncodeBase::encode_zend_native_array_find_key_w(
+					std::move(container_address), std::move(key_address),
+					element);
+		} else {
+			found = key_literal
+				? EncodeBase::encode_zend_native_array_find_literal(
+					std::move(container_address), std::move(key_address),
+					element)
+				: EncodeBase::encode_zend_native_array_find_key(
+					std::move(container_address), std::move(key_address),
+					element);
+		}
 		if (!found) {
 			return -1;
 		}
@@ -7220,9 +7255,10 @@ bool ZendCompilerX64::compile_inst_impl(
 			static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT));
 		generate_raw_jump(Jump::jb,
 			access == ElementAccess::Coalesce ? unknown : slow);
-		/* A read of a missing key warns; the helper does that. */
+		/* A read of a missing key warns and a write fetch inserts it; the
+		 * helper does that. */
 		generate_raw_jump(Jump::je,
-			access == ElementAccess::Read ? slow : absent);
+			access == ElementAccess::Read || writes ? slow : absent);
 		if (container_temporary) {
 			ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
 			if (!EncodeBase::encode_zend_native_container_shared(
@@ -7324,6 +7360,16 @@ bool ZendCompilerX64::compile_inst_impl(
 					IS_NULL);
 				label_place(answered);
 			}
+		} else if (writes) {
+			ASM(MOV64mr,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(result_offset)),
+				element_reg);
+			ASM(MOV32mi,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(result_offset
+						+ offsetof(zval, u1.type_info))),
+				IS_INDIRECT);
 		} else {
 			ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
 			const bool tested = access == ElementAccess::Isset
@@ -7379,12 +7425,12 @@ bool ZendCompilerX64::compile_inst_impl(
 						+ offsetof(zval, u1.type_info))));
 			result_payload.set_modified();
 			result_type.set_modified();
-		} else if (!reads && node.has_result) {
+		} else if (tests && node.has_result) {
 			auto [result_ref, result] = result_ref_single(node.result);
 			auto result_reg = result.alloc_reg();
 			mov(result_reg, answer_reg, 8);
 			result.set_modified();
-		} else if (!reads) {
+		} else if (tests) {
 			/* IS_FALSE + answer is IS_FALSE or IS_TRUE. */
 			ASM(ADD32ri, answer_reg, IS_FALSE);
 			ASM(MOV32mr,
@@ -7670,6 +7716,13 @@ bool ZendCompilerX64::compile_inst_impl(
 			return element > 0;
 		}
 		if (const int element = array_element_register(); element != 0) {
+			return element > 0;
+		}
+		return branch_to_guarded_cold();
+	};
+	auto write_array = [&]() {
+		if (const int element = array_element(ElementAccess::Write);
+				element != 0) {
 			return element > 0;
 		}
 		return branch_to_guarded_cold();
@@ -11829,15 +11882,15 @@ bool ZendCompilerX64::compile_inst_impl(
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R:
 			return read_array();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_W:
-			return execute_value_operation();
+			return write_array();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_RW:
-			return execute_value_operation();
+			return write_array();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_IS:
 			return coalesce_array();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_FUNC_ARG:
 			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_UNSET:
-			return execute_value_operation();
+			return write_array();
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM:
 			return append_packed_array();
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM_OP:
