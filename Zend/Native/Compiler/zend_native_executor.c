@@ -67,6 +67,9 @@ typedef struct _zend_native_executor_request {
 	/* Cached scripts by their interned filename, for functions and methods
 	 * whose op arrays do not share the main op array's opcodes. */
 	HashTable owners_by_file;
+	/* Entry cells that persistent generations resolved for functions this
+	 * request called; their generations stay leased until the request ends. */
+	HashTable external_entries;
 	HashTable request_generations_by_root;
 	HashTable request_generations_by_opcodes;
 	HashTable leased_generations;
@@ -1709,6 +1712,15 @@ zend_native_executor_resolve_external_reentry(
 	if (function == NULL || !ZEND_USER_CODE(function->type)) {
 		return NULL;
 	}
+	if (zend_native_executor_request_state.dispatch_active) {
+		entry_cell = zend_hash_index_find_ptr(
+			&zend_native_executor_request_state.external_entries,
+			(zend_ulong) (uintptr_t) function);
+		if (entry_cell != NULL && entry_cell->function == function
+				&& entry_cell->state == ZEND_NATIVE_ENTRY_READY) {
+			return entry_cell;
+		}
+	}
 	if (UNEXPECTED(!zend_native_executor_capture_preload_root(
 			&function->op_array))) {
 		zend_throw_error(NULL,
@@ -1779,6 +1791,12 @@ zend_native_executor_resolve_external_reentry(
 				"Native generation function index allocation failed");
 		}
 		return NULL;
+	}
+	if (generation->persistent
+			&& zend_native_executor_request_state.dispatch_active) {
+		(void) zend_hash_index_update_ptr(
+			&zend_native_executor_request_state.external_entries,
+			(zend_ulong) (uintptr_t) function, entry_cell);
 	}
 	return entry_cell;
 }
@@ -1942,6 +1960,9 @@ void zend_native_executor_activate(void)
 		&zend_native_executor_request_state.owners_by_file, 8, NULL, NULL,
 		false);
 	zend_hash_init(
+		&zend_native_executor_request_state.external_entries, 64, NULL, NULL,
+		false);
+	zend_hash_init(
 		&zend_native_executor_request_state.request_generations_by_root,
 		8, NULL, NULL, false);
 	zend_hash_init(
@@ -2009,6 +2030,8 @@ void zend_native_executor_deactivate(void)
 			&zend_native_executor_request_state.owners);
 		zend_hash_destroy(
 			&zend_native_executor_request_state.owners_by_file);
+		zend_hash_destroy(
+			&zend_native_executor_request_state.external_entries);
 		zend_hash_destroy(
 			&zend_native_executor_request_state.dispatch);
 		zend_native_executor_request_state.dispatch_active = false;
