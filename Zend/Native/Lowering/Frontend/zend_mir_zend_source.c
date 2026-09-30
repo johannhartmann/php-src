@@ -2268,6 +2268,7 @@ zend_function *zend_mir_zend_source_resolve_internal_call(
 		catch_receiver = receiver_class != NULL;
 	}
 	if (receiver_class == NULL || receiver_class->default_object_handlers == NULL
+			|| (receiver_class->ce_flags & ZEND_ACC_LINKED) == 0
 			|| receiver_class->default_object_handlers->get_method
 				!= zend_std_get_method) {
 		return NULL;
@@ -2485,7 +2486,14 @@ static zend_function *zend_mir_zend_source_resolve_user_method_call_ex(
 			}
 		}
 	}
+	/*
+	 * A class that is not linked yet (an anonymous class or a cached class
+	 * with a parent or interfaces) gets another class entry when its
+	 * declaration runs, so a method bound to this one never matches the
+	 * runtime receiver.
+	 */
 	if (receiver_class == NULL
+			|| (receiver_class->ce_flags & ZEND_ACC_LINKED) == 0
 			|| (receiver_class->default_object_handlers != NULL
 				&& receiver_class->default_object_handlers->get_method
 					!= zend_std_get_method)) {
