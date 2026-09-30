@@ -274,6 +274,18 @@ uint64_t zend_native_container_shared(const zval *container)
 	return !Z_REFCOUNTED_P(container) || Z_REFCOUNT_P(container) > 1;
 }
 
+/*
+ * 1 when a container, through a reference, is undefined, null, a bool or a
+ * number: FETCH_DIM_IS of it is null without a diagnostic.
+ */
+uint64_t zend_native_zval_is_scalar(const zval *container)
+{
+	if (Z_TYPE_P(container) == IS_REFERENCE) {
+		container = &Z_REF_P(container)->val;
+	}
+	return Z_TYPE_P(container) <= IS_DOUBLE;
+}
+
 /* Drop one reference of a shared value (see zend_native_container_shared). */
 void zend_native_release_shared(const zval *container)
 {

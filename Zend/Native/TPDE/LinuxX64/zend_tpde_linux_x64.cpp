@@ -7073,16 +7073,18 @@ bool ZendCompilerX64::compile_inst_impl(
 		return true;
 	};
 	/*
-	 * FETCH_DIM_R, isset() and empty() of an array element whose container,
-	 * key and result live in frame slots or literals, composed of EncodeGen
-	 * snippets: zend_native_array_find_literal() or _find_key() probe the
+	 * FETCH_DIM_R, FETCH_DIM_IS (??), isset() and empty() of an array
+	 * element whose container, key and result live in frame slots or
+	 * literals, composed of EncodeGen snippets: zend_native_array_find_literal() or _find_key() probe the
 	 * element without changing anything, a temporary container is consumed
 	 * only when another owner keeps it alive, and every undecided probe takes
 	 * the guarded cold block, whose helper repeats the whole operation.
 	 * Returns 1 when emitted, 0 when the form does not apply and -1 on an
 	 * encoding failure.
 	 */
-	enum class ElementAccess : uint8_t { Read, Isset, Empty };
+	/* Coalesce is FETCH_DIM_IS: a read whose missing key or scalar
+	 * container yields null without a diagnostic. */
+	enum class ElementAccess : uint8_t { Read, Coalesce, Isset, Empty };
 	auto array_element = [&](ElementAccess access) -> int {
 		const zend_mir_executable_value_ref &operation = mir.value_operation;
 		if (!adaptor->plan()->linux_inline_forms
@@ -7113,6 +7115,8 @@ bool ZendCompilerX64::compile_inst_impl(
 					|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA
 				? operand.slot_kind : ZEND_MIR_SOURCE_SLOT_KIND_INVALID;
 		};
+		const bool reads = access == ElementAccess::Read
+			|| access == ElementAccess::Coalesce;
 		const bool container_literal =
 			operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
 		const bool container_temporary =
@@ -7133,7 +7137,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				|| !zend_mir_id_is_valid(operation.result_storage_id)
 				|| operation.result_storage_id == operation.op1_storage_id
 				|| operation.result_storage_id == operation.op2_storage_id
-				|| (node.has_result && access == ElementAccess::Read
+				|| (node.has_result && reads
 					&& !((adaptor->machine_kind(node.result)
 								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 							&& val_parts(node.result).count() == 2)
@@ -7142,8 +7146,11 @@ bool ZendCompilerX64::compile_inst_impl(
 							&& adaptor->exact_type(node.result)
 								== ZEND_MIR_SCALAR_TYPE_I64
 							&& val_parts(node.result).count() == 1)))
-				|| (node.has_result && access != ElementAccess::Read
-					&& val_parts(node.result).count() != 1)) {
+				|| (node.has_result && !reads
+					&& val_parts(node.result).count() != 1)
+				|| (node.has_result && access == ElementAccess::Coalesce
+					&& adaptor->machine_kind(node.result)
+						!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL)) {
 			return 0;
 		}
 		auto frame_offset = [](zend_mir_storage_id storage) {
@@ -7158,11 +7165,11 @@ bool ZendCompilerX64::compile_inst_impl(
 		const uint64_t result_offset =
 			frame_offset(operation.result_storage_id);
 		/* The lookup snippets use up to six scratch registers; with the
-		 * frame and literal registers held across them, two stay spare. */
+		 * frame and literal registers held across them, one stays spare. */
 		if (container_offset > INT32_MAX - sizeof(zval)
 				|| key_offset > INT32_MAX - sizeof(zval)
 				|| result_offset > INT32_MAX - sizeof(zval)
-				|| unlocked_gp_registers() < 10) {
+				|| unlocked_gp_registers() < 9) {
 			return 0;
 		}
 
@@ -7208,15 +7215,14 @@ bool ZendCompilerX64::compile_inst_impl(
 		/* Held from here on; the lookup needed the registers before. */
 		auto decision_reg = decision.alloc_gp();
 		auto answer_reg = answer.alloc_gp();
+		auto unknown = text_writer.label_create();
 		ASM(CMP64ri, element_reg,
 			static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT));
+		generate_raw_jump(Jump::jb,
+			access == ElementAccess::Coalesce ? unknown : slow);
 		/* A read of a missing key warns; the helper does that. */
-		generate_raw_jump(Jump::jb, slow);
-		if (access == ElementAccess::Read) {
-			generate_raw_jump(Jump::je, slow);
-		} else {
-			generate_raw_jump(Jump::je, absent);
-		}
+		generate_raw_jump(Jump::je,
+			access == ElementAccess::Read ? slow : absent);
 		if (container_temporary) {
 			ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
 			if (!EncodeBase::encode_zend_native_container_shared(
@@ -7255,7 +7261,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					static_cast<int32_t>(result_offset
 						+ offsetof(zval, u1.type_info))),
 				IS_LONG);
-		} else if (access == ElementAccess::Read) {
+		} else if (reads) {
 			ValuePart payload{tpde::x64::PlatformConfig::GP_BANK, 8};
 			ValuePart type_info{tpde::x64::PlatformConfig::GP_BANK, 8};
 			if (!EncodeBase::encode_zend_native_zval_copy_deref(
@@ -7275,7 +7281,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					static_cast<int32_t>(result_offset
 						+ offsetof(zval, u1.type_info))),
 				type_info_reg);
-			if (node.has_result) {
+			if (node.has_result && access == ElementAccess::Read) {
 				auto result = result_ref(node.result);
 				auto result_payload = result.part(0);
 				auto result_type = result.part(1);
@@ -7286,6 +7292,38 @@ bool ZendCompilerX64::compile_inst_impl(
 			}
 			payload.reset(this);
 			type_info.reset(this);
+			if (access == ElementAccess::Coalesce) {
+				generate_raw_jump(Jump::jmp, answered);
+				/* Not an array: a scalar container reads as null. */
+				label_place(unknown);
+				ValuePart scalar{tpde::x64::PlatformConfig::GP_BANK, 8};
+				if (!EncodeBase::encode_zend_native_zval_is_scalar(
+						address(container_base, container_offset), scalar)) {
+					return -1;
+				}
+				const AsmReg scalar_reg = scalar.cur_reg_or_load(this);
+				ASM(TEST64rr, scalar_reg, scalar_reg);
+				scalar.reset(this);
+				generate_raw_jump(Jump::je, slow);
+				label_place(absent);
+				if (container_temporary) {
+					ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
+					if (!EncodeBase::encode_zend_native_container_shared(
+							address(frame_reg, container_offset), shared)) {
+						return -1;
+					}
+					const AsmReg shared_reg = shared.cur_reg_or_load(this);
+					ASM(TEST64rr, shared_reg, shared_reg);
+					shared.reset(this);
+					generate_raw_jump(Jump::je, slow);
+				}
+				ASM(MOV32mi,
+					FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(result_offset
+							+ offsetof(zval, u1.type_info))),
+					IS_NULL);
+				label_place(answered);
+			}
 		} else {
 			ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
 			const bool tested = access == ElementAccess::Isset
@@ -7327,12 +7365,26 @@ bool ZendCompilerX64::compile_inst_impl(
 				return -1;
 			}
 		}
-		if (access != ElementAccess::Read && node.has_result) {
+		if (access == ElementAccess::Coalesce && node.has_result) {
+			/* Both answers are in the result temporary. */
+			auto result = result_ref(node.result);
+			auto result_payload = result.part(0);
+			auto result_type = result.part(1);
+			ASM(MOV64rm, result_payload.alloc_reg(),
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(result_offset)));
+			ASM(MOV32rm, result_type.alloc_reg(),
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(result_offset
+						+ offsetof(zval, u1.type_info))));
+			result_payload.set_modified();
+			result_type.set_modified();
+		} else if (!reads && node.has_result) {
 			auto [result_ref, result] = result_ref_single(node.result);
 			auto result_reg = result.alloc_reg();
 			mov(result_reg, answer_reg, 8);
 			result.set_modified();
-		} else if (access != ElementAccess::Read) {
+		} else if (!reads) {
 			/* IS_FALSE + answer is IS_FALSE or IS_TRUE. */
 			ASM(ADD32ri, answer_reg, IS_FALSE);
 			ASM(MOV32mr,
@@ -7443,10 +7495,9 @@ bool ZendCompilerX64::compile_inst_impl(
 					!= ZEND_MIR_SOURCE_SLOT_CV) {
 			return 0;
 		}
-		/* The lookup snippets use up to six scratch registers; with the
-		 * frame, the array and up to two key parts held across them, two stay
-		 * spare. */
-		if (unlocked_gp_registers() < 12) {
+		/* The lookup snippets use up to six scratch registers, with the
+		 * frame, the array and the key parts held across them. */
+		if (unlocked_gp_registers() < (key_boxed ? 10u : 9u)) {
 			return 0;
 		}
 		auto part_index = [&](IRValueRef value,
@@ -7619,6 +7670,13 @@ bool ZendCompilerX64::compile_inst_impl(
 			return element > 0;
 		}
 		if (const int element = array_element_register(); element != 0) {
+			return element > 0;
+		}
+		return branch_to_guarded_cold();
+	};
+	auto coalesce_array = [&]() {
+		if (const int element = array_element(ElementAccess::Coalesce);
+				element != 0) {
 			return element > 0;
 		}
 		return branch_to_guarded_cold();
@@ -11775,7 +11833,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_RW:
 			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_IS:
-			return execute_value_operation();
+			return coalesce_array();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_FUNC_ARG:
 			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_UNSET:
