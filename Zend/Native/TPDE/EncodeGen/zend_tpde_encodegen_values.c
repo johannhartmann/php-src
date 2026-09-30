@@ -133,9 +133,34 @@ ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_index(
 }
 
 /*
- * The element under an interned non-numeric literal key: identity with the
- * bucket key decides; a bucket with the same hash but another key string is
- * left to the helper.
+ * Whether two key strings of the same hash and a length of at most 16 bytes
+ * hold the same bytes: one or two 8-byte words each; below 8 bytes the
+ * lowest differing byte of the first words must lie past the key.
+ * A zend_string's value starts 8-byte aligned and its allocation is rounded
+ * up to 8 bytes, so the words stay inside both strings.
+ */
+ZEND_NATIVE_SNIPPET_INLINE bool zend_native_short_key_equal(
+	const zend_string *left, const zend_string *right, size_t length)
+{
+	const char *a = ZSTR_VAL(left);
+	const char *b = ZSTR_VAL(right);
+	const uint64_t first = *(const uint64_t *) (const void *) a
+		^ *(const uint64_t *) (const void *) b;
+
+	if (length < 8) {
+		/* The lowest differing byte must lie past the key. */
+		return first == 0
+			|| (size_t) __builtin_ctzll(first) >= length * 8;
+	}
+	return first == 0
+		&& *(const uint64_t *) (const void *) (a + length - 8)
+			== *(const uint64_t *) (const void *) (b + length - 8);
+}
+
+/*
+ * The element under a non-numeric string key: identity with the bucket key
+ * decides, and a bucket key of the same hash and length up to 16 bytes is
+ * compared by content; a longer one is left to the helper.
  */
 ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_literal_string(
 	const HashTable *table, const zend_string *name)
@@ -157,7 +182,13 @@ ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_literal_string(
 			return zend_native_probe_element(&bucket->val);
 		}
 		if (bucket->h == h && bucket->key != NULL) {
-			return ZEND_NATIVE_ELEMENT_UNKNOWN;
+			/* A true collision of the full hash is left to the helper. */
+			return ZSTR_LEN(bucket->key) == ZSTR_LEN(name)
+					&& ZSTR_LEN(name) <= 16
+					&& zend_native_short_key_equal(
+						bucket->key, name, ZSTR_LEN(name))
+				? zend_native_probe_element(&bucket->val)
+				: ZEND_NATIVE_ELEMENT_UNKNOWN;
 		}
 		index = Z_NEXT(bucket->val);
 	}
@@ -165,18 +196,16 @@ ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_literal_string(
 }
 
 /*
- * The element under a runtime string key: an interned key (one that cannot
- * be numeric, starting with neither a digit nor '-') is decided by identity
- * like a literal. A key of another string, whose equal-content bucket key
- * would need a byte comparison, is left to the helper, as are keys without
- * their hash.
+ * The element under a runtime string key that cannot be numeric (starting
+ * with neither a digit nor '-') is decided like a literal's, interned or
+ * not; keys without their hash are left to the helper.
  */
 ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_string(
 	const HashTable *table, const zend_string *name)
 {
 	unsigned char first;
 
-	if (!ZSTR_IS_INTERNED(name) || ZSTR_LEN(name) == 0) {
+	if (ZSTR_LEN(name) == 0) {
 		return ZEND_NATIVE_ELEMENT_UNKNOWN;
 	}
 	first = (unsigned char) ZSTR_VAL(name)[0];
