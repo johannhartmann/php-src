@@ -210,7 +210,7 @@ class ZendCompilerX64 final
 				}
 				break;
 			case ZEND_INIT_STATIC_METHOD_CALL: {
-				/* A named class or self::/parent::. */
+				/* A named class, self::, parent:: or static::. */
 				const uint32_t fetch =
 					descriptor->init_op1_payload & ZEND_FETCH_CLASS_MASK;
 				if (descriptor->init_op2.kind
@@ -220,7 +220,8 @@ class ZendCompilerX64 final
 							&& (descriptor->init_op1.kind
 									!= ZEND_MIR_SOURCE_OPERAND_UNUSED
 								|| (fetch != ZEND_FETCH_CLASS_SELF
-									&& fetch != ZEND_FETCH_CLASS_PARENT)))) {
+									&& fetch != ZEND_FETCH_CLASS_PARENT
+									&& fetch != ZEND_FETCH_CLASS_STATIC)))) {
 					return false;
 				}
 				break;
@@ -3870,6 +3871,11 @@ bool ZendCompilerX64::compile_inst_impl(
 					descriptor->init_opcode == ZEND_INIT_METHOD_CALL;
 				const bool static_call =
 					descriptor->init_opcode == ZEND_INIT_STATIC_METHOD_CALL;
+				const bool late_static = static_call
+					&& descriptor->init_op1.kind
+						== ZEND_MIR_SOURCE_OPERAND_UNUSED
+					&& (descriptor->init_op1_payload & ZEND_FETCH_CLASS_MASK)
+						== ZEND_FETCH_CLASS_STATIC;
 				const bool this_receiver = method
 					&& descriptor->init_op1.kind
 						== ZEND_MIR_SOURCE_OPERAND_UNUSED;
@@ -3970,9 +3976,42 @@ bool ZendCompilerX64::compile_inst_impl(
 						ASM(CMP64rm, value_reg, header_field(descriptor_reg,
 							offsetof(zend_native_user_call_site_header,
 								fast_key)));
-						generate_raw_jump(Jump::jne, fast_miss);
+						if (this_receiver) {
+							/* Another class of $this still calls a
+							 * receiver-independent target. */
+							auto key_matched = text_writer.label_create();
+							generate_raw_jump(Jump::je, key_matched);
+							ASM(TEST32mi, header_field(descriptor_reg,
+								offsetof(zend_native_user_call_site_header,
+									fast_flags)),
+								ZEND_NATIVE_CALL_FAST_ANY_THIS);
+							generate_raw_jump(Jump::je, fast_miss);
+							label_place(key_matched);
+						} else {
+							generate_raw_jump(Jump::jne, fast_miss);
+						}
 					}
-					if (static_call) {
+					if (static_call && late_static) {
+						/* static::: the caller's called scope, which is the
+						 * callee's, must be the class the site was
+						 * published for. */
+						const int32_t this_offset = static_cast<int32_t>(
+							offsetof(zend_execute_data, This));
+						auto have_scope = text_writer.label_create();
+						ASM(MOV64rm, object_reg, FE_MEM(canonical_frame_register(),
+							0, FE_NOREG, this_offset));
+						ASM(CMP8mi, FE_MEM(canonical_frame_register(), 0,
+							FE_NOREG, static_cast<int32_t>(this_offset
+								+ offsetof(zval, u1.type_info))), IS_OBJECT);
+						generate_raw_jump(Jump::jne, have_scope);
+						ASM(MOV64rm, object_reg, FE_MEM(object_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(zend_object, ce))));
+						label_place(have_scope);
+						ASM(CMP64rm, object_reg, header_field(descriptor_reg,
+							offsetof(zend_native_user_call_site_header,
+								fast_key)));
+						generate_raw_jump(Jump::jne, fast_miss);
+					} else if (static_call) {
 						/* The callee's This: the caller's object for an
 						 * instance method, the caller's called scope for a
 						 * forwarding static call, else the named class. */
