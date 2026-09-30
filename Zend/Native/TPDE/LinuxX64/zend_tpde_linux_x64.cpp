@@ -2399,10 +2399,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		ASM(TEST32rr, observed_reg, observed_reg);
 		generate_raw_jump(Jump::jne, cold_transfer);
 		for (uint32_t index = 0; index < guarded_count; ++index) {
-			ASM(MOV32rr, masked_type_reg, guarded_type_regs[index]);
-			ASM(AND32ri, masked_type_reg, Z_TYPE_MASK);
-			ASM(CMP32ri, masked_type_reg,
-				static_cast<int32_t>(guarded_expected_types[index]));
+			ASM(CMP8ri, guarded_type_regs[index], static_cast<int32_t>(guarded_expected_types[index]));
 			generate_raw_jump(Jump::jne, cold_transfer);
 		}
 		generate_raw_jump(Jump::jmp, hot_branch);
@@ -7410,9 +7407,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		if (!literal_source
 				&& (source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
 					|| source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)) {
-			ASM(MOV32rr, probe_reg, source_type_reg);
-			ASM(AND32ri, probe_reg, Z_TYPE_MASK);
-			ASM(CMP32ri, probe_reg, IS_REFERENCE);
+			ASM(CMP8ri, source_type_reg, IS_REFERENCE);
 			generate_raw_jump(Jump::je, slow);
 		}
 		/*
@@ -7421,10 +7416,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		 * native refcount write.  Keep that ownership transition on the
 		 * semantic cold path.
 		 */
-		ASM(MOV32rr, probe_reg, source_type_reg);
-		ASM(AND32ri, probe_reg,
-			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-		ASM(TEST32rr, probe_reg, probe_reg);
+		ASM(TEST32ri, source_type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		auto source_mutable = text_writer.label_create();
 		generate_raw_jump(Jump::je, source_mutable);
 		if (!register_source && !literal_source) {
@@ -7448,9 +7440,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		ASM(MOV32rm, target_type_reg,
 			FE_MEM(target_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(zval, u1.type_info))));
-		ASM(MOV32rr, probe_reg, target_type_reg);
-		ASM(AND32ri, probe_reg, Z_TYPE_MASK);
-		ASM(CMP32ri, probe_reg, IS_REFERENCE);
+		ASM(CMP8ri, target_type_reg, IS_REFERENCE);
 		auto target_plain = text_writer.label_create();
 		generate_raw_jump(Jump::jne, target_plain);
 		ASM(MOV64rm, target_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
@@ -7465,10 +7455,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			FE_MEM(target_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(zval, u1.type_info))));
 		label_place(target_plain);
-		ASM(MOV32rr, probe_reg, target_type_reg);
-		ASM(AND32ri, probe_reg,
-			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-		ASM(TEST32rr, probe_reg, probe_reg);
+		ASM(TEST32ri, target_type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		auto target_checked = text_writer.label_create();
 		generate_raw_jump(Jump::je, target_checked);
 		/*
@@ -7485,10 +7472,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					offsetof(zend_refcounted_h, refcount))));
 		ASM(CMP32ri, probe_reg, 1);
 		generate_raw_jump(Jump::jle, slow);
-		ASM(MOV32rr, probe_reg, target_type_reg);
-		ASM(AND32ri, probe_reg,
-			IS_TYPE_COLLECTABLE << Z_TYPE_FLAGS_SHIFT);
-		ASM(TEST32rr, probe_reg, probe_reg);
+		ASM(TEST32ri, target_type_reg, IS_TYPE_COLLECTABLE << Z_TYPE_FLAGS_SHIFT);
 		generate_raw_jump(Jump::je, target_checked);
 		ASM(TEST32mi,
 			FE_MEM(low_word_reg, 0, FE_NOREG,
@@ -7506,10 +7490,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			ASM(CMP32ri, probe_reg, IS_DOUBLE);
 			generate_raw_jump(Jump::ja, slow);
 		}
-		ASM(MOV32rr, probe_reg, target_type_reg);
-		ASM(AND32ri, probe_reg,
-			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-		ASM(TEST32rr, probe_reg, probe_reg);
+		ASM(TEST32ri, target_type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		auto target_released = text_writer.label_create();
 		generate_raw_jump(Jump::je, target_released);
 		ASM(MOV64rm, low_word_reg,
@@ -7531,10 +7512,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			(!move_source ? 1 : 0)
 			+ (result_storage != ZEND_MIR_ID_INVALID ? 1 : 0);
 		if (source_refcount_increments != 0) {
-			ASM(MOV32rr, probe_reg, source_type_reg);
-			ASM(AND32ri, probe_reg,
-				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-			ASM(TEST32rr, probe_reg, probe_reg);
+			ASM(TEST32ri, source_type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 			auto value_owned = text_writer.label_create();
 			generate_raw_jump(Jump::je, value_owned);
 			ASM(ADD32mi,
@@ -7637,10 +7615,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		ASM(MOV64rm, value_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(source_offset)));
-		ASM(MOV32rr, probe_reg, type_reg);
-		ASM(AND32ri, probe_reg,
-			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-		ASM(TEST32rr, probe_reg, probe_reg);
+		ASM(TEST32ri, type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		auto copied = text_writer.label_create();
 		generate_raw_jump(Jump::je, copied);
 		ASM(ADD32mi,
@@ -7704,10 +7679,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
 					source_offset + offsetof(zval, u1.type_info))));
-		ASM(MOV32rr, probe_reg, type_reg);
-		ASM(AND32ri, probe_reg,
-			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-		ASM(TEST32rr, probe_reg, probe_reg);
+		ASM(TEST32ri, type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		generate_raw_jump(Jump::je, released);
 		ASM(MOV64rm, value_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
@@ -9593,13 +9565,11 @@ bool ZendCompilerX64::compile_inst_impl(
 					static_cast<int32_t>(
 						layout.value_offset
 							+ offsetof(zval, u1.type_info))));
-			ASM(MOV32rr, limit_reg, type_reg);
-			ASM(AND32ri, limit_reg, Z_TYPE_MASK);
-			ASM(CMP32ri, limit_reg, IS_UNDEF);
+			ASM(CMP8ri, type_reg, IS_UNDEF);
 			generate_raw_jump(Jump::je, slow);
-			ASM(CMP32ri, limit_reg, IS_REFERENCE);
+			ASM(CMP8ri, type_reg, IS_REFERENCE);
 			generate_raw_jump(Jump::je, slow);
-			ASM(CMP32ri, limit_reg, IS_INDIRECT);
+			ASM(CMP8ri, type_reg, IS_INDIRECT);
 			generate_raw_jump(Jump::je, slow);
 		}
 		if (layout.has_result) {
@@ -9645,10 +9615,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				IS_UNDEF);
 		} else if (!scalar_value) {
 			auto copied = text_writer.label_create();
-			ASM(MOV32rr, limit_reg, type_reg);
-			ASM(AND32ri, limit_reg,
-				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-			ASM(TEST32rr, limit_reg, limit_reg);
+			ASM(TEST32ri, type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 			generate_raw_jump(Jump::je, copied);
 			ASM(MOV32rm, limit_reg,
 				FE_MEM(low_word_reg, 0, FE_NOREG,
@@ -9690,10 +9657,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				high_word_reg);
 			if (!scalar_value) {
 				auto result_copied = text_writer.label_create();
-				ASM(MOV32rr, limit_reg, type_reg);
-				ASM(AND32ri, limit_reg,
-					IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-				ASM(TEST32rr, limit_reg, limit_reg);
+				ASM(TEST32ri, type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 				generate_raw_jump(Jump::je, result_copied);
 				ASM(MOV32rm, limit_reg,
 					FE_MEM(low_word_reg, 0, FE_NOREG,
@@ -11234,9 +11198,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			auto payload = left_value.part(0);
 			auto type_info = left_value.part(1);
 			ASM(MOV64rr, left_reg, payload.load_to_reg());
-			ASM(MOV32rr, type_reg, type_info.load_to_reg());
-			ASM(AND32ri, type_reg, Z_TYPE_MASK);
-			ASM(CMP32ri, type_reg, IS_LONG);
+			ASM(CMP8ri, type_info.load_to_reg(), IS_LONG);
 			generate_raw_jump(Jump::jne, slow);
 		} else {
 			ASM(MOV32rm, type_reg,
@@ -11277,9 +11239,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			auto payload_reg = payload.load_to_reg();
 			auto type_info_reg = type_info.load_to_reg();
 			ASM(MOV64rr, right_reg, payload_reg);
-			ASM(MOV32rr, type_reg, type_info_reg);
-			ASM(AND32ri, type_reg, Z_TYPE_MASK);
-			ASM(CMP32ri, type_reg, IS_LONG);
+			ASM(CMP8ri, type_info_reg, IS_LONG);
 			generate_raw_jump(Jump::jne, slow);
 		} else if (layout.right.literal) {
 			if (node.machine_reference_operand_index
@@ -11512,9 +11472,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			auto payload = operand.part(0);
 			auto type_info = operand.part(1);
 			ASM(MOV64rr, value_reg, payload.load_to_reg());
-			ASM(MOV32rr, type_reg, type_info.load_to_reg());
-			ASM(AND32ri, type_reg, Z_TYPE_MASK);
-			ASM(CMP32ri, type_reg, IS_LONG);
+			ASM(CMP8ri, type_info.load_to_reg(), IS_LONG);
 			generate_raw_jump(Jump::jne, slow);
 		} else if (!(node.mutation_result && mir.mutation_lazy_scalar)) {
 			/*
@@ -12332,11 +12290,9 @@ bool ZendCompilerX64::compile_inst_impl(
 		ASM(MOV32rm, type_reg,
 			FE_MEM(property_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(zval, u1.type_info))));
-		ASM(MOV32rr, offset_reg, type_reg);
-		ASM(AND32ri, offset_reg, Z_TYPE_MASK);
-		ASM(CMP32ri, offset_reg, IS_UNDEF);
+		ASM(CMP8ri, type_reg, IS_UNDEF);
 		generate_raw_jump(Jump::je, slow);
-		ASM(CMP32ri, offset_reg, IS_REFERENCE);
+		ASM(CMP8ri, type_reg, IS_REFERENCE);
 		generate_raw_jump(Jump::je, slow);
 
 		if (scalar_value) {
@@ -12352,9 +12308,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					static_cast<int32_t>(
 						layout.value_offset
 							+ offsetof(zval, u1.type_info))));
-			ASM(MOV32rr, offset_reg, type_reg);
-			ASM(AND32ri, offset_reg, Z_TYPE_MASK);
-			ASM(CMP32ri, offset_reg, IS_REFERENCE);
+			ASM(CMP8ri, type_reg, IS_REFERENCE);
 			generate_raw_jump(Jump::je, slow);
 		}
 
@@ -12392,10 +12346,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					FE_NOREG, static_cast<int32_t>(layout.value_offset)));
 		}
 		if (!scalar_value && !layout.move_value) {
-			ASM(MOV32rr, offset_reg, type_reg);
-			ASM(AND32ri, offset_reg,
-				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-			ASM(TEST32rr, offset_reg, offset_reg);
+			ASM(TEST32ri, type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 			generate_raw_jump(Jump::je, value_owned);
 			ASM(ADD32mi,
 				FE_MEM(low_word_reg, 0, FE_NOREG,
@@ -13115,18 +13066,14 @@ bool ZendCompilerX64::compile_inst_impl(
 		ASM(MOV32rm, type_reg,
 			FE_MEM(slot_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(zval, u1.type_info))));
-		ASM(MOV32rr, index_reg, type_reg);
-		ASM(AND32ri, index_reg, Z_TYPE_MASK);
-		ASM(CMP32ri, index_reg, IS_INDIRECT);
+		ASM(CMP8ri, type_reg, IS_INDIRECT);
 		generate_raw_jump(Jump::jne, not_indirect);
 		ASM(MOV64rm, slot_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
 		ASM(MOV32rm, type_reg,
 			FE_MEM(slot_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(zval, u1.type_info))));
 		label_place(not_indirect);
-		ASM(MOV32rr, index_reg, type_reg);
-		ASM(AND32ri, index_reg, Z_TYPE_MASK);
-		ASM(CMP32ri, index_reg, IS_UNDEF);
+		ASM(CMP8ri, type_reg, IS_UNDEF);
 		generate_raw_jump(Jump::je, slow);
 
 		if (node.kind == Adaptor::InstKind::GuardedFast) {
@@ -14904,19 +14851,15 @@ bool ZendCompilerX64::compile_inst_impl(
 						FE_MEM(element_reg, 0, FE_NOREG, 0));
 					auto value_owned = text_writer.label_create();
 					if (layout.destination_scalar_only) {
-						ASM(MOV32rr, limit_reg, type_reg);
-						ASM(AND32ri, limit_reg, Z_TYPE_MASK);
-						ASM(CMP32ri, limit_reg, IS_LONG);
+						ASM(CMP8ri, type_reg, IS_LONG);
 						generate_raw_jump(Jump::jne, slow);
 					} else {
 						/* FE_FETCH_R copies like ZVAL_COPY_OR_DUP; a
 						 * reference, an indirect slot or a persistent
 						 * counted value keeps the helper. */
-						ASM(MOV32rr, limit_reg, type_reg);
-						ASM(AND32ri, limit_reg, Z_TYPE_MASK);
-						ASM(CMP32ri, limit_reg, IS_REFERENCE);
+						ASM(CMP8ri, type_reg, IS_REFERENCE);
 						generate_raw_jump(Jump::je, slow);
-						ASM(CMP32ri, limit_reg, IS_INDIRECT);
+						ASM(CMP8ri, type_reg, IS_INDIRECT);
 						generate_raw_jump(Jump::je, slow);
 						ASM(TEST32ri, type_reg,
 							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
@@ -16696,13 +16639,8 @@ bool ZendCompilerX64::compile_inst_impl(
 								if (copy_argument) {
 									ScratchReg type_info{this};
 									auto type_info_reg = type_info.alloc_gp();
-									ASM(MOV32rr, type_info_reg,
-										high_word.cur_reg());
-									ASM(AND32ri, type_info_reg,
-										IS_TYPE_REFCOUNTED
+									ASM(TEST32ri, high_word.cur_reg(), IS_TYPE_REFCOUNTED
 											<< Z_TYPE_FLAGS_SHIFT);
-									ASM(TEST32rr, type_info_reg,
-										type_info_reg);
 									auto copied = text_writer.label_create();
 									generate_raw_jump(Jump::je, copied);
 									ASM(ADD32mi,
@@ -17873,13 +17811,8 @@ bool ZendCompilerX64::compile_inst_impl(
 								if (copy_argument) {
 									ScratchReg type_info{this};
 									auto type_info_reg = type_info.alloc_gp();
-									ASM(MOV32rr, type_info_reg,
-										high_word.cur_reg());
-									ASM(AND32ri, type_info_reg,
-										IS_TYPE_REFCOUNTED
+									ASM(TEST32ri, high_word.cur_reg(), IS_TYPE_REFCOUNTED
 											<< Z_TYPE_FLAGS_SHIFT);
-									ASM(TEST32rr, type_info_reg,
-										type_info_reg);
 									auto copied = text_writer.label_create();
 									generate_raw_jump(Jump::je, copied);
 									ASM(ADD32mi,
