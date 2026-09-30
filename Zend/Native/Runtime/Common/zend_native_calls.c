@@ -1834,7 +1834,17 @@ finalize:
  * Returns ZEND_NATIVE_RETURNED when the caller continues, otherwise the
  * status its exception path propagates.
  */
+static zend_always_inline uint32_t zend_native_call_fast_leave_inline(
+	zend_execute_data *callee, uint32_t status, bool discard_result);
+
 uint32_t zend_native_call_fast_leave(
+	zend_execute_data *callee, uint32_t status, bool discard_result)
+{
+	return zend_native_call_fast_leave_inline(
+		callee, status, discard_result);
+}
+
+static zend_always_inline uint32_t zend_native_call_fast_leave_inline(
 	zend_execute_data *callee, uint32_t status, bool discard_result)
 {
 	zend_execute_data *caller = callee->prev_execute_data;
@@ -8103,6 +8113,83 @@ void zend_native_call_fast_send_var_reference(zval *argument, zval *variable)
 		Z_ADDREF_P(argument);
 	}
 	ZVAL_UNDEF(variable);
+}
+
+/*
+ * The fast Do of a call site whose Init pushed the frame (see
+ * zend_native_user_call_site_header), out of line: unlink the frame from
+ * EX(call), initialize it for its target as i_init_func_execute_data()
+ * does, receive the parameters natively or through
+ * zend_native_call_fast_prepare(), enter the target and leave through
+ * zend_native_call_fast_leave(). dynamic_entry is the entry a dynamic
+ * site's Init resolved, NULL for a published one; result_offset is the
+ * result slot's frame offset, UINT32_MAX for a discarded result.
+ */
+uint32_t zend_native_call_fast_do(
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor,
+	zend_native_execution_context *context,
+	zend_native_frame_entry_t dynamic_entry,
+	uint32_t result_offset)
+{
+	const zend_native_user_call_site_header *header =
+		ZEND_NATIVE_USER_CALL_SITE_HEADER(descriptor);
+	zend_execute_data *callee = caller->call;
+	const uint32_t flags = dynamic_entry != NULL
+		? ZEND_NATIVE_CALL_FAST_PREPARE : header->fast_flags;
+	const bool discard = result_offset == UINT32_MAX;
+	zval discarded;
+	uint32_t status = ZEND_NATIVE_RETURNED;
+
+	caller->call = callee->prev_execute_data;
+	callee->return_value = discard
+		? &discarded : (zval *) ((char *) caller + result_offset);
+	ZVAL_UNDEF(callee->return_value);
+	callee->prev_execute_data = caller;
+	callee->call = NULL;
+	if ((flags & ZEND_NATIVE_CALL_FAST_PREPARE) != 0) {
+		status = zend_native_call_fast_prepare(callee);
+	} else {
+		const uint32_t argument_count = descriptor->argument_count;
+		const zend_op_array *op_array = &callee->func->op_array;
+		const zend_native_call_fast_receive *receive = header->fast_receive;
+		bool prepare = false;
+
+		/* EX(opline) skips the RECV of every supplied parameter; the
+		 * remaining CVs start undefined. */
+		callee->opline = op_array->opcodes + argument_count;
+		for (uint32_t index = argument_count;
+				index < (uint32_t) op_array->last_var; index++) {
+			ZVAL_UNDEF(ZEND_CALL_VAR_NUM(callee, index));
+		}
+		callee->run_time_cache = header->fast_run_time_cache;
+		EG(current_execute_data) = callee;
+		if ((flags & ZEND_NATIVE_CALL_FAST_CHECK_ARGS) != 0) {
+			for (uint32_t index = 0; index < argument_count; index++) {
+				if ((receive->type_masks[index]
+						& (UINT32_C(1) << Z_TYPE_P(
+							ZEND_CALL_ARG(callee, index + 1)))) == 0) {
+					prepare = true;
+					break;
+				}
+			}
+		}
+		if (prepare) {
+			status = zend_native_call_fast_prepare(callee);
+		} else if ((flags & ZEND_NATIVE_CALL_FAST_DEFAULTS) != 0) {
+			for (uint32_t index = 0; index < header->fast_default_count;
+					index++) {
+				ZVAL_COPY_VALUE(ZEND_CALL_ARG(callee,
+						argument_count + index + 1),
+					receive->defaults[argument_count + index]);
+			}
+		}
+	}
+	if (status == ZEND_NATIVE_RETURNED) {
+		status = (dynamic_entry != NULL ? dynamic_entry : header->fast_entry)(
+			callee, context);
+	}
+	return zend_native_call_fast_leave_inline(callee, status, discard);
 }
 
 zend_execute_data *zend_native_call_reserve_dynamic_frame(
