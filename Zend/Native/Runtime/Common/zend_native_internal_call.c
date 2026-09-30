@@ -92,7 +92,20 @@ zend_result zend_native_internal_call_cell_init(
 	cell->function = function;
 	cell->called_scope = called_scope;
 	cell->receiver_kind = receiver_kind;
+	zend_native_internal_call_cell_derive(cell);
 	return SUCCESS;
+}
+
+void zend_native_internal_call_cell_derive(zend_native_internal_call_cell *cell)
+{
+	uint32_t mask = 0;
+
+	for (uint32_t number = 1; number <= 32; number++) {
+		if (!ARG_SHOULD_BE_SENT_BY_REF(cell->function, number)) {
+			mask |= UINT32_C(1) << (number - 1);
+		}
+	}
+	cell->by_value_arguments = mask;
 }
 
 zend_result zend_native_call_set_zval_argument(
@@ -293,6 +306,33 @@ zend_result zend_native_internal_call_begin(
 	const zend_native_internal_call_cell *cell,
 	const zend_native_direct_internal_call_descriptor *descriptor)
 {
+	/* A function without receiver: push its frame as ZEND_INIT_FCALL does. */
+	if (EXPECTED(caller != NULL && cell != NULL && descriptor != NULL
+			&& cell->receiver_kind == ZEND_NATIVE_INTERNAL_RECEIVER_NONE
+			&& descriptor->receiver_operand.kind
+				== ZEND_MIR_SOURCE_OPERAND_UNUSED
+			&& cell->function != NULL
+			&& cell->function->type == ZEND_INTERNAL_FUNCTION
+			&& cell->function->common.scope == NULL
+			&& descriptor->initial_argument_count
+				<= descriptor->argument_count
+			&& caller->func != NULL
+			&& descriptor->init_source_position
+				< caller->func->op_array.last)) {
+		zend_execute_data *call = zend_vm_stack_push_call_frame(
+			ZEND_CALL_NESTED_FUNCTION, cell->function,
+			descriptor->initial_argument_count, NULL);
+
+		for (uint32_t index = 0;
+				index < descriptor->initial_argument_count; index++) {
+			ZVAL_UNDEF(ZEND_CALL_ARG(call, index + 1));
+		}
+		call->prev_execute_data = caller->call;
+		caller->call = call;
+		caller->opline = &caller->func->op_array.opcodes[
+			descriptor->init_source_position];
+		return SUCCESS;
+	}
 	return zend_native_internal_call_begin_explicit(caller, cell, descriptor);
 }
 
@@ -1272,6 +1312,79 @@ zend_result zend_native_direct_internal_call_set_double_argument(
 	return SUCCESS;
 }
 
+/*
+ * zend_native_internal_call_invoke_finish() for a call that needs no preflight,
+ * undefined-argument handling or observer notification. Like ZEND_DO_ICALL it
+ * does not catch a bailout: the enclosing native frame boundary abandons the
+ * native activations it skips, and the request ends as after a VM bailout.
+ */
+static zend_never_inline zend_native_status
+zend_native_internal_call_invoke_fast(
+	zend_execute_data *caller, zend_execute_data *call, zval *return_value)
+{
+	zend_native_status status;
+	uint32_t call_info;
+#if ZEND_DEBUG
+	bool should_throw;
+#endif
+
+	caller->call = call->prev_execute_data;
+	call->prev_execute_data = caller;
+	ZVAL_NULL(return_value);
+	EG(current_execute_data) = call;
+#if ZEND_DEBUG
+	should_throw = zend_internal_call_should_throw(call->func, call);
+#endif
+	call->func->internal_function.handler(call, return_value);
+#if ZEND_DEBUG
+	if (EG(exception) == NULL && call->func != NULL
+			&& (call->func->common.fn_flags & ZEND_ACC_FAKE_CLOSURE) == 0) {
+		if (should_throw) {
+			zend_internal_call_arginfo_violation(call->func);
+		}
+		if ((call->func->common.fn_flags & ZEND_ACC_HAS_RETURN_TYPE) != 0) {
+			bool valid = zend_verify_internal_return_type(
+				call->func, return_value);
+			ZEND_ASSERT(valid);
+		}
+		ZEND_ASSERT((call->func->common.fn_flags
+				& ZEND_ACC_RETURN_REFERENCE) != 0
+			? Z_ISREF_P(return_value) : !Z_ISREF_P(return_value));
+	}
+#endif
+	status = EG(exception) == NULL
+		? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+	if (UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+		zend_fcall_interrupt(call);
+		if (EG(exception) != NULL) {
+			status = ZEND_NATIVE_EXCEPTION;
+		}
+	}
+	EG(current_execute_data) = caller;
+	zend_vm_stack_free_args(call);
+	call_info = ZEND_CALL_INFO(call);
+	if ((call_info & ZEND_CALL_HAS_EXTRA_NAMED_PARAMS) != 0) {
+		zend_free_extra_named_params(call->extra_named_params);
+		call->extra_named_params = NULL;
+		ZEND_DEL_CALL_FLAG(call, ZEND_CALL_HAS_EXTRA_NAMED_PARAMS);
+	}
+	if ((call_info & ZEND_CALL_RELEASE_THIS) != 0) {
+		OBJ_RELEASE(Z_OBJ(call->This));
+	} else if ((call_info & ZEND_CALL_CLOSURE) != 0) {
+		OBJ_RELEASE(ZEND_CLOSURE_OBJECT(call->func));
+	}
+	/* Argument and receiver cleanup may invoke user destructors. */
+	if (status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
+		status = ZEND_NATIVE_EXCEPTION;
+	}
+	zend_vm_stack_free_call_frame(call);
+	if (status != ZEND_NATIVE_RETURNED && !Z_ISUNDEF_P(return_value)) {
+		zval_ptr_dtor(return_value);
+		ZVAL_UNDEF(return_value);
+	}
+	return status;
+}
+
 zend_native_status zend_native_internal_call_invoke_finish(
 	zend_execute_data *caller,
 	const zend_native_internal_call_cell *cell,
@@ -1284,6 +1397,16 @@ zend_native_status zend_native_internal_call_invoke_finish(
 			|| cell->function == NULL || caller->call->func != cell->function
 			|| return_value == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
+	}
+	if (EXPECTED(!ZEND_OBSERVER_ENABLED && zend_execute_internal == NULL
+			&& EG(exception) == NULL
+			&& (cell->function->common.fn_flags
+				& (ZEND_ACC_DEPRECATED | ZEND_ACC_NODISCARD
+					| ZEND_ACC_CALL_VIA_TRAMPOLINE)) == 0
+			&& (ZEND_CALL_INFO(caller->call)
+				& ZEND_CALL_MAY_HAVE_UNDEF) == 0)) {
+		return zend_native_internal_call_invoke_fast(
+			caller, caller->call, return_value);
 	}
 	state = emalloc(sizeof(*state));
 	state->caller = caller;
@@ -1718,6 +1841,19 @@ zend_native_status zend_native_internal_call_invoke_finish_source(
 			== ZEND_MIR_SOURCE_OPERAND_UNUSED) {
 		ZVAL_UNDEF(&temporary);
 		return_value = &temporary;
+	} else if ((descriptor->result_operand.kind
+				== ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| descriptor->result_operand.kind
+					== ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& descriptor->result_operand.slot_kind
+				== ZEND_MIR_SOURCE_SLOT_TMP
+			&& descriptor->result_operand.index
+				< caller->func->op_array.T) {
+		/* The usual temporary result, addressed as the VM does. */
+		return_value = ZEND_CALL_VAR_NUM(caller,
+			(uint32_t) caller->func->op_array.last_var
+				+ descriptor->result_operand.index);
+		ZVAL_UNDEF(return_value);
 	} else {
 		return_value = zend_native_explicit_operand(
 			caller, &descriptor->result_operand, false,
