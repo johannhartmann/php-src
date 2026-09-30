@@ -341,6 +341,23 @@ uint64_t zend_native_container_shared(const zval *container)
 }
 
 /*
+ * 1 when an assignment may overwrite a CV without the runtime: it holds no
+ * reference, and its old value is not counted, or has another owner and
+ * needs no new GC root (GC_MAY_LEAK is false, as for strings). The caller
+ * then drops one reference itself.
+ */
+uint64_t zend_native_cv_overwritable(const zval *variable)
+{
+	if (!Z_REFCOUNTED_P(variable)) {
+		return 1;
+	}
+	if (Z_TYPE_P(variable) == IS_REFERENCE || Z_REFCOUNT_P(variable) == 1) {
+		return 0;
+	}
+	return !GC_MAY_LEAK(Z_COUNTED_P(variable));
+}
+
+/*
  * zend_is_identical() of a value, through a reference, and a literal: 1 or
  * 0 for null, bools, integers and strings, ZEND_NATIVE_IDENTICAL_UNKNOWN for
  * an undefined value, doubles (signed zeros, NaN), arrays and objects.
@@ -434,6 +451,17 @@ uint64_t zend_native_zval_is_scalar(const zval *container)
 		container = &Z_REF_P(container)->val;
 	}
 	return Z_TYPE_P(container) <= IS_DOUBLE;
+}
+
+/*
+ * 1 when FE_FREE of a foreach holder is one dropped reference: an array
+ * that another owner keeps alive. Object iterators and a last reference
+ * need the runtime.
+ */
+uint64_t zend_native_iterator_shared(const zval *holder)
+{
+	return Z_TYPE_P(holder) == IS_ARRAY
+		&& (!Z_REFCOUNTED_P(holder) || Z_REFCOUNT_P(holder) > 1);
 }
 
 /* Drop one reference of a shared value (see zend_native_container_shared). */
