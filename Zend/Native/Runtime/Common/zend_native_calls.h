@@ -522,6 +522,14 @@ zend_native_call_normalize_user_resolution(
  * destruction may invoke user code, reenter, throw, or bail out; generated code
  * must therefore publish all live state before calling this helper.
  */
+/*
+ * Request-local cache of target-dependent call resolution per call site (see
+ * zend_native_call_resolve_user()). Entry cell resets and compiler
+ * destruction invalidate every entry; the executor frees the cache when a
+ * request ends.
+ */
+void zend_native_call_resolution_cache_invalidate(void);
+void zend_native_call_resolution_cache_destroy(void);
 void zend_native_call_release_user_resolution(
 	zend_native_user_call_resolution *resolution);
 zend_native_user_opcode_result zend_native_user_opcode_invoke(

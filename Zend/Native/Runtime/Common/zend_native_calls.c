@@ -1398,6 +1398,7 @@ zend_result zend_native_entry_cell_reset(zend_native_entry_cell *cell)
 			|| cell->suspended_frames != 0) {
 		return FAILURE;
 	}
+	zend_native_call_resolution_cache_invalidate();
 	__atomic_store_n(&cell->code, NULL, __ATOMIC_RELEASE);
 	cell->retired_epoch = cell->published_epoch;
 	cell->state = ZEND_NATIVE_ENTRY_UNCOMPILED;
@@ -2880,6 +2881,7 @@ static bool zend_native_call_resolution_build_placements(
 		? descriptor->initial_argument_count : argument_count_hint;
 	uint32_t direct_argument_count = 0;
 	bool runtime_tail = false;
+	bool positional;
 	uint32_t index;
 
 	if (placements == NULL || target_set == NULL
@@ -2890,7 +2892,26 @@ static bool zend_native_call_resolution_build_placements(
 			"Native user call placement storage is too small");
 		return false;
 	}
-	memset(target_set, 0xff, target_capacity * sizeof(*target_set));
+	/* Positional arguments 0..n-1 in source order can neither overwrite one
+	 * another nor leave a gap, so they need no target set. */
+	for (index = 0; index < descriptor->argument_count; index++) {
+		const zend_native_direct_internal_call_argument *argument =
+			&descriptor->arguments[index];
+
+		if (argument->mode > ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
+				|| zend_native_call_argument_runtime_expansion(argument)
+				|| argument->auxiliary_operand.kind
+					!= ZEND_MIR_SOURCE_OPERAND_UNUSED
+				|| (argument->auxiliary_payload != 0
+					? argument->auxiliary_payload - 1
+					: argument->ordinal) != index) {
+			break;
+		}
+	}
+	positional = index == descriptor->argument_count;
+	if (!positional) {
+		memset(target_set, 0xff, target_capacity * sizeof(*target_set));
+	}
 	resolution->placements = placements;
 	resolution->placement_count = descriptor->argument_count;
 	for (index = 0; index < descriptor->argument_count; index++) {
@@ -2961,8 +2982,8 @@ static bool zend_native_call_resolution_build_placements(
 		if (target_index
 				!= ZEND_NATIVE_USER_CALL_PLACEMENT_TARGET_INVALID) {
 			if (target_index >= ZEND_MIR_ID_MAX
-					|| !zend_native_call_target_set_insert(
-						target_set, target_capacity, target_index)) {
+					|| (!positional && !zend_native_call_target_set_insert(
+						target_set, target_capacity, target_index))) {
 				caller->opline = &caller->func->op_array.opcodes[
 					argument->source_position];
 				if (name != NULL) {
@@ -3039,8 +3060,9 @@ static bool zend_native_call_resolution_build_placements(
 		resolution->placement_flags |=
 			ZEND_NATIVE_USER_CALL_PLACEMENTS_HAS_DEFAULTS;
 	}
-	for (index = 0; index < planned_argument_count; index++) {
-		if (!zend_native_call_target_set_contains(
+	for (index = positional ? descriptor->argument_count : 0;
+			index < planned_argument_count; index++) {
+		if (positional || !zend_native_call_target_set_contains(
 				target_set, target_capacity, index)) {
 			resolution->placement_flags |=
 				ZEND_NATIVE_USER_CALL_PLACEMENTS_MAY_HAVE_UNDEF;
@@ -3079,11 +3101,114 @@ void *zend_native_frame_activation_reserve(uint32_t setup_size)
 	return setup_frame;
 }
 
+/*
+ * Everything a call site's resolution derives from its target alone: the
+ * target kind and entry, the frame sizes and the argument placement. A hit
+ * for the same function and argument count reuses it, so only the target
+ * lookup and the ownership transfer run per call.
+ */
+typedef struct _zend_native_call_resolution_cache_entry {
+	zend_function *function;
+	const zend_op *caller_opcodes;
+	uint64_t epoch;
+	uint32_t argument_count;
+	zend_native_user_call_resolution resolution;
+	zend_native_user_call_placement placements[1];
+} zend_native_call_resolution_cache_entry;
+
+static HashTable zend_native_call_resolution_cache;
+static bool zend_native_call_resolution_cache_active;
+static uint64_t zend_native_call_resolution_cache_epoch = 1;
+
+void zend_native_call_resolution_cache_invalidate(void)
+{
+	zend_native_call_resolution_cache_epoch++;
+}
+
+static void zend_native_call_resolution_cache_entry_dtor(zval *entry)
+{
+	efree(Z_PTR_P(entry));
+}
+
+void zend_native_call_resolution_cache_destroy(void)
+{
+	if (zend_native_call_resolution_cache_active) {
+		zend_hash_destroy(&zend_native_call_resolution_cache);
+		zend_native_call_resolution_cache_active = false;
+	}
+	zend_native_call_resolution_cache_epoch++;
+}
+
+static const zend_native_call_resolution_cache_entry *
+zend_native_call_resolution_cache_find(
+	const zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor,
+	zend_function *function, uint32_t argument_count)
+{
+	const zend_native_call_resolution_cache_entry *entry;
+
+	if (!zend_native_call_resolution_cache_active) {
+		return NULL;
+	}
+	entry = zend_hash_index_find_ptr(&zend_native_call_resolution_cache,
+		(zend_ulong) (uintptr_t) descriptor);
+	/* A descriptor address can recur after its image was freed; the
+	 * caller's opcodes tell the call sites apart. */
+	return entry != NULL && entry->function == function
+			&& entry->caller_opcodes == caller->func->op_array.opcodes
+			&& entry->argument_count == argument_count
+			&& entry->epoch == zend_native_call_resolution_cache_epoch
+		? entry : NULL;
+}
+
+static void zend_native_call_resolution_cache_store(
+	const zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor,
+	const zend_native_user_call_resolution *resolution)
+{
+	zend_native_call_resolution_cache_entry *entry;
+	const uint32_t count = resolution->placement_count;
+
+	/* A closure's function lives in its object; the address of a freed
+	 * closure identifies nothing. */
+	if ((resolution->function->common.fn_flags & ZEND_ACC_CLOSURE) != 0
+			|| (resolution->call_info & ZEND_CALL_CLOSURE) != 0
+			|| (resolution->target_kind != ZEND_NATIVE_USER_CALL_TARGET_NATIVE_USER
+				&& resolution->target_kind
+					!= ZEND_NATIVE_USER_CALL_TARGET_INTERNAL)
+			|| resolution->ownership != 0
+			|| resolution->extra_named_params != NULL
+			|| (resolution->placement_flags
+				& (ZEND_NATIVE_USER_CALL_PLACEMENTS_RUNTIME_EXPANSION
+					| ZEND_NATIVE_USER_CALL_PLACEMENTS_EXTRA_NAMED)) != 0
+			|| count > ZEND_MIR_ID_MAX) {
+		return;
+	}
+	if (!zend_native_call_resolution_cache_active) {
+		zend_hash_init(&zend_native_call_resolution_cache, 64, NULL,
+			zend_native_call_resolution_cache_entry_dtor, false);
+		zend_native_call_resolution_cache_active = true;
+	}
+	entry = emalloc(offsetof(zend_native_call_resolution_cache_entry,
+		placements) + (count == 0 ? 1 : count) * sizeof(entry->placements[0]));
+	entry->function = resolution->function;
+	entry->caller_opcodes = caller->func->op_array.opcodes;
+	entry->epoch = zend_native_call_resolution_cache_epoch;
+	entry->argument_count = resolution->argument_count;
+	entry->resolution = *resolution;
+	entry->resolution.placements = NULL;
+	memcpy(entry->placements, resolution->placements,
+		count * sizeof(entry->placements[0]));
+	zend_hash_index_update_ptr(&zend_native_call_resolution_cache,
+		(zend_ulong) (uintptr_t) descriptor, entry);
+}
+
 zend_native_user_call_resolution_status zend_native_call_resolve_user(
 	zend_native_direct_activation *activation,
 	zend_native_entry_cell *entry_cell_hint,
 	uint32_t argument_count_hint)
 {
+	const zend_native_call_resolution_cache_entry *cached;
 	zend_execute_data *caller;
 	const zend_native_user_call_descriptor *descriptor;
 	zend_native_user_call_placement *placements;
@@ -3293,17 +3418,32 @@ zend_native_user_call_resolution_status zend_native_call_resolve_user(
 		}
 		return ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS;
 	}
-	if (!zend_native_call_resolution_classify(
-			entry_cell_hint, resolution)
-			|| !zend_native_call_resolution_build_placements(
-				caller, descriptor, argument_count,
-				placements, placement_capacity,
-				target_set, target_capacity, resolution)
-			|| !zend_native_call_resolution_set_sizes(
-				resolution, resolution->argument_count)) {
-		zend_native_call_release_user_resolution(resolution);
-		zend_native_call_consume_resolved_init_operands(caller, descriptor);
-		return ZEND_NATIVE_USER_CALL_RESOLUTION_FAILURE;
+	cached = zend_native_call_resolution_cache_find(
+		caller, descriptor, function, argument_count);
+	if (cached != NULL && cached->resolution.placement_count
+			<= placement_capacity) {
+		*resolution = cached->resolution;
+		resolution->placements = placements;
+		resolution->object_or_called_scope = object_or_called_scope;
+		resolution->call_info = call_info;
+		memcpy(placements, cached->placements,
+			cached->resolution.placement_count * sizeof(*placements));
+	} else {
+		if (!zend_native_call_resolution_classify(
+				entry_cell_hint, resolution)
+				|| !zend_native_call_resolution_build_placements(
+					caller, descriptor, argument_count,
+					placements, placement_capacity,
+					target_set, target_capacity, resolution)
+				|| !zend_native_call_resolution_set_sizes(
+					resolution, resolution->argument_count)) {
+			zend_native_call_release_user_resolution(resolution);
+			zend_native_call_consume_resolved_init_operands(
+				caller, descriptor);
+			return ZEND_NATIVE_USER_CALL_RESOLUTION_FAILURE;
+		}
+		zend_native_call_resolution_cache_store(
+			caller, descriptor, resolution);
 	}
 	zend_native_call_resolution_retain_target(resolution);
 	zend_native_call_consume_resolved_init_operands(caller, descriptor);

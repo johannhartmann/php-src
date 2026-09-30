@@ -6405,6 +6405,7 @@ bool zend_native_compiler_retire_dynamic_component(
 	if (compiler == NULL || root == NULL || compiler->persistent) {
 		return false;
 	}
+	zend_native_call_resolution_cache_invalidate();
 	zend_native_compiler_mutation_lock(compiler);
 	if (first_function_index >= compiler->function_count) {
 		zend_native_compiler_mutation_unlock(compiler);
@@ -6543,6 +6544,7 @@ void zend_native_compiler_destroy(zend_native_compiler *compiler)
 	uint32_t index;
 	zend_native_runtime_source *runtime_source;
 
+	zend_native_call_resolution_cache_invalidate();
 	if (compiler == NULL) {
 		return;
 	}

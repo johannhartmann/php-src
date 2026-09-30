@@ -7565,7 +7565,10 @@ bool initialize_plan(
 				require_runtime_helper(plan,
 					record.opcode == ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
 						? ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R_DIRECT
-						: ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_DIRECT);
+						: record.opcode
+								== ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM
+							? ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM_DIRECT
+							: ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_DIRECT);
 			}
 			zend_tpde_concat_assign_direct concat_assign_direct{};
 			if (record.opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN_OP

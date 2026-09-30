@@ -5131,6 +5131,80 @@ zend_native_status zend_native_value_unset_dim(
 	return zend_native_value_status();
 }
 
+/*
+ * isset()/empty() of an array element under a literal, CV or temporary key,
+ * with precomputed offsets. Any other container or key takes the generic
+ * operation.
+ */
+zend_native_status zend_native_value_isset_isempty_dim_direct(
+	zend_execute_data *execute_data, uint64_t encoded_op1,
+	uint64_t descriptor, uint64_t slots, uint64_t more_slots)
+{
+	const uint32_t key_kind = (uint32_t) (descriptor & 3);
+	const uint32_t container_kind = (uint32_t) ((descriptor >> 2) & 3);
+	const uint32_t extended_value = (uint32_t) ((descriptor >> 8) & 0xffff);
+	const uint32_t key_offset = (uint32_t) (slots >> 32);
+	const uint32_t result_offset = (uint32_t) (more_slots >> 32);
+	zval *container_slot = (zval *) ((char *) execute_data + (uint32_t) slots);
+	zval *container = container_slot;
+	zval *key = key_kind == ZEND_NATIVE_DIM_DIRECT_CONST
+		? &execute_data->func->op_array.literals[key_offset]
+		: (zval *) ((char *) execute_data + key_offset);
+	zval *element = NULL;
+	zend_ulong index;
+	bool answer;
+
+	(void) encoded_op1;
+	ZVAL_DEREF(container);
+	if (key_kind != ZEND_NATIVE_DIM_DIRECT_TMP) {
+		ZVAL_DEREF(key);
+	}
+	if (EXPECTED(Z_TYPE_P(container) == IS_ARRAY)
+			&& (Z_TYPE_P(key) == IS_LONG || Z_TYPE_P(key) == IS_STRING)) {
+		if (Z_TYPE_P(key) == IS_LONG) {
+			element = zend_hash_index_find(
+				Z_ARRVAL_P(container), Z_LVAL_P(key));
+		} else if (ZEND_HANDLE_NUMERIC_STR(
+				Z_STRVAL_P(key), Z_STRLEN_P(key), index)) {
+			element = zend_hash_index_find(Z_ARRVAL_P(container), index);
+		} else {
+			element = zend_hash_find(Z_ARRVAL_P(container), Z_STR_P(key));
+		}
+		if (element != NULL && Z_TYPE_P(element) == IS_INDIRECT) {
+			element = Z_INDIRECT_P(element);
+			if (Z_TYPE_P(element) == IS_UNDEF) {
+				element = NULL;
+			}
+		}
+		if ((extended_value & ZEND_ISEMPTY) != 0) {
+			answer = element == NULL || !i_zend_is_true(element);
+		} else {
+			answer = element != NULL && Z_TYPE_P(element) > IS_NULL
+				&& (!Z_ISREF_P(element)
+					|| Z_TYPE_P(Z_REFVAL_P(element)) != IS_NULL);
+		}
+		if (key_kind == ZEND_NATIVE_DIM_DIRECT_TMP) {
+			zval_ptr_dtor_nogc(key);
+			ZVAL_UNDEF(key);
+		}
+		if (container_kind == ZEND_NATIVE_DIM_DIRECT_TMP) {
+			zval_ptr_dtor_nogc(container_slot);
+			ZVAL_UNDEF(container_slot);
+		}
+		ZVAL_BOOL((zval *) ((char *) execute_data + result_offset), answer);
+		return EG(exception) == NULL
+			? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+	}
+	return zend_native_value_isset_isempty_dim(execute_data,
+		zend_native_value_direct_encoding(execute_data,
+			container_kind, (uint32_t) slots),
+		zend_native_value_direct_encoding(execute_data, key_kind, key_offset),
+		zend_native_value_direct_encoding(execute_data,
+			ZEND_NATIVE_DIM_DIRECT_TMP, result_offset),
+		extended_value, ZEND_ISSET_ISEMPTY_DIM_OBJ,
+		(uint32_t) (descriptor >> 32));
+}
+
 zend_native_status zend_native_value_isset_isempty_dim(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result_operand,
