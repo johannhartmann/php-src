@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <cstdlib>
 #include <limits>
@@ -562,6 +563,43 @@ zend_result map_linux_x64_object(
 			state->mapping + section_offsets[eh_frame_section];
 		register_eh_frame(state->eh_frame);
 		state->unwind_registered = true;
+	}
+	/* Development aid: with ZEND_NATIVE_PERF_MAP set, list the mapped
+	 * functions in perf's JIT map; entry cell publication names them. */
+	static int perf_map_enabled = -1;
+	if (perf_map_enabled < 0) {
+		const char *perf_map = std::getenv("ZEND_NATIVE_PERF_MAP");
+		perf_map_enabled = perf_map != nullptr && perf_map[0] != '\0';
+	}
+	if (perf_map_enabled) {
+		char path[64];
+		std::snprintf(path, sizeof(path), "/tmp/perf-%d.map",
+			static_cast<int>(::getpid()));
+		if (FILE *map = std::fopen(path, "a")) {
+			for (size_t i = 0; i < symbol_count; ++i) {
+				const char *name = string_at(
+					symbol_names, symbol_names_size, symbols[i].st_name);
+				if (name == nullptr || symbols[i].st_shndx == SHN_UNDEF
+						|| symbols[i].st_type() != STT_FUNC
+						|| symbols[i].st_size == 0) {
+					continue;
+				}
+				std::fprintf(map, "%lx %lx zn:%p:%s\n",
+					static_cast<unsigned long>(resolve_symbol(i)),
+					static_cast<unsigned long>(symbols[i].st_size),
+					static_cast<void *>(state->mapping), name);
+			}
+			std::fclose(map);
+		}
+		/* The mapped bytes, for disassembling the functions offline. */
+		std::snprintf(path, sizeof(path), "/tmp/perf-%d-%lx.bin",
+			static_cast<int>(::getpid()),
+			static_cast<unsigned long>(
+				reinterpret_cast<uintptr_t>(state->mapping)));
+		if (FILE *bytes = std::fopen(path, "w")) {
+			std::fwrite(state->mapping, 1, state->mapping_size, bytes);
+			std::fclose(bytes);
+		}
 	}
 	code->mapping = state->mapping;
 	code->mapping_size = state->mapping_size;
