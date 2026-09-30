@@ -4143,6 +4143,63 @@ static bool zend_native_call_callable_identity(
  * pushes a Zend frame for exactly the sent positional arguments and enters
  * the target like zend_native_call_invoke_user()'s FAST_FRAME path.
  */
+/* The type bits a parameter accepts without a check or coercion; class
+ * types, callable and other special types always take the generic check. */
+static uint32_t zend_native_call_fast_receive_mask(const zend_arg_info *info)
+{
+	const uint32_t scalar_types = (UINT32_C(1) << (IS_RESOURCE + 1)) - 1;
+
+	if (!ZEND_TYPE_IS_SET(info->type)) {
+		return UINT32_MAX;
+	}
+	return (uint32_t) ZEND_TYPE_PURE_MASK(info->type) & scalar_types;
+}
+
+static const zend_native_call_fast_receive *
+zend_native_call_fast_receive_prepare(
+	zend_native_entry_cell *cell, const zend_op_array *op_array)
+{
+	zend_native_call_fast_receive *receive = &cell->fast_receive;
+	uint32_t index;
+
+	if (receive->state != ZEND_NATIVE_CALL_FAST_RECEIVE_UNKNOWN) {
+		return receive;
+	}
+	receive->state = ZEND_NATIVE_CALL_FAST_RECEIVE_GENERIC;
+	if (op_array->num_args > ZEND_NATIVE_CALL_FAST_RECEIVE_MAX
+			|| (op_array->num_args != 0 && op_array->arg_info == NULL)) {
+		return receive;
+	}
+	receive->num_args = op_array->num_args;
+	for (index = 0; index < op_array->num_args; index++) {
+		const zend_op *opline = &op_array->opcodes[index];
+		const zval *value;
+
+		receive->type_masks[index] =
+			zend_native_call_fast_receive_mask(&op_array->arg_info[index]);
+		receive->defaults[index] = NULL;
+		if (opline->opcode == ZEND_RECV) {
+			continue;
+		}
+		if (opline->opcode != ZEND_RECV_INIT
+				|| opline->op1.num != index + 1
+				|| opline->op2_type != IS_CONST) {
+			return receive;
+		}
+		value = RT_CONSTANT(opline, opline->op2);
+		/* A constant expression, a counted value or one the parameter
+		 * type would coerce keeps the generic receive. */
+		if (Z_TYPE_P(value) == IS_CONSTANT_AST || Z_REFCOUNTED_P(value)
+				|| (receive->type_masks[index]
+					& (UINT32_C(1) << Z_TYPE_P(value))) == 0) {
+			return receive;
+		}
+		receive->defaults[index] = value;
+	}
+	receive->state = ZEND_NATIVE_CALL_FAST_RECEIVE_INLINE;
+	return receive;
+}
+
 static void zend_native_call_fast_publish(
 	zend_native_user_call_site_header *header,
 	const zend_native_user_call_descriptor *descriptor,
@@ -4234,10 +4291,33 @@ static void zend_native_call_fast_publish(
 	header->fast_run_time_cache = run_time_cache;
 	header->fast_frame_size = resolution->frame_size;
 	header->fast_call_info = resolution->call_info;
-	header->fast_flags = (op_array->fn_flags
-				& (ZEND_ACC_HAS_TYPE_HINTS | ZEND_ACC_VARIADIC)) != 0
-			|| entry->argument_count != op_array->num_args
-		? ZEND_NATIVE_CALL_FAST_PREPARE : 0;
+	header->fast_receive = zend_native_call_fast_receive_prepare(
+		resolution->entry_cell, op_array);
+	header->fast_default_count = 0;
+	if ((op_array->fn_flags & ZEND_ACC_VARIADIC) != 0
+			|| entry->argument_count > op_array->num_args
+			|| header->fast_receive->state
+				!= ZEND_NATIVE_CALL_FAST_RECEIVE_INLINE) {
+		header->fast_flags = ZEND_NATIVE_CALL_FAST_PREPARE;
+	} else {
+		header->fast_flags =
+			(op_array->fn_flags & ZEND_ACC_HAS_TYPE_HINTS) != 0
+				? ZEND_NATIVE_CALL_FAST_CHECK_ARGS : 0;
+		for (index = entry->argument_count; index < op_array->num_args;
+				index++) {
+			if (header->fast_receive->defaults[index] == NULL) {
+				/* A missing required argument throws. */
+				header->fast_flags = ZEND_NATIVE_CALL_FAST_PREPARE;
+				break;
+			}
+		}
+		if (header->fast_flags != ZEND_NATIVE_CALL_FAST_PREPARE
+				&& entry->argument_count < op_array->num_args) {
+			header->fast_flags |= ZEND_NATIVE_CALL_FAST_DEFAULTS;
+			header->fast_default_count =
+				op_array->num_args - entry->argument_count;
+		}
+	}
 	header->fast_epoch = zend_native_call_resolution_cache_epoch;
 }
 

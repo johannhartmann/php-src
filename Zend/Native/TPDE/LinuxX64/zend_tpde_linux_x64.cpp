@@ -5289,20 +5289,112 @@ bool ZendCompilerX64::compile_inst_impl(
 			 * no register is live at the target-local labels. */
 			auto enter = text_writer.label_create();
 			auto leave = text_writer.label_create();
+			auto prepare = text_writer.label_create();
 			{
-				/* Typed parameters, defaults and extra arguments go through
+				/* The site receives its parameters natively: supplied
+				 * arguments of an accepted type need no check and missing
+				 * ones copy immutable defaults. Anything else, including a
+				 * type check miss, goes through
 				 * zend_native_call_fast_prepare(). */
 				auto descriptor_value = image_symbol_value(
 					ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.id);
 				auto descriptor_scratch =
 					std::move(descriptor_value).into_scratch(this);
-				ASM(TEST32mi,
-					FE_MEM(descriptor_scratch.cur_reg(), 0, FE_NOREG,
-						header_offset + static_cast<int32_t>(offsetof(
-							zend_native_user_call_site_header, fast_flags))),
+				auto descriptor_reg = descriptor_scratch.cur_reg();
+				const int32_t flags_offset = header_offset
+					+ static_cast<int32_t>(offsetof(
+						zend_native_user_call_site_header, fast_flags));
+				const int32_t receive_offset = header_offset
+					+ static_cast<int32_t>(offsetof(
+						zend_native_user_call_site_header, fast_receive));
+				ASM(TEST32mi, FE_MEM(descriptor_reg, 0, FE_NOREG, flags_offset),
 					ZEND_NATIVE_CALL_FAST_PREPARE);
+				generate_raw_jump(Jump::jne, prepare);
+				if (argument_count > ZEND_NATIVE_CALL_FAST_RECEIVE_MAX) {
+					/* Published only with the prepare flag. */
+					generate_raw_jump(Jump::jmp, enter);
+				} else {
+					ScratchReg receive{this};
+					ScratchReg frame{this};
+					ScratchReg work{this};
+					auto receive_reg = receive.alloc_gp();
+					auto frame_reg = frame.alloc_gp();
+					auto work_reg = work.alloc_gp();
+					ASM(MOV64rm, receive_reg,
+						FE_MEM(descriptor_reg, 0, FE_NOREG, receive_offset));
+					ASM(MOV64rm, frame_reg,
+						FE_MEM(FE_BP, 0, FE_NOREG, callee_slot));
+					if (argument_count != 0) {
+						auto checked = text_writer.label_create();
+						ASM(TEST32mi,
+							FE_MEM(descriptor_reg, 0, FE_NOREG, flags_offset),
+							ZEND_NATIVE_CALL_FAST_CHECK_ARGS);
+						generate_raw_jump(Jump::je, checked);
+						ScratchReg mask{this};
+						auto mask_reg = mask.alloc_gp();
+						for (uint32_t index = 0; index < argument_count;
+								index++) {
+							ASM(MOVZXr32m8, work_reg,
+								FE_MEM(frame_reg, 0, FE_NOREG,
+									static_cast<int32_t>(
+										(ZEND_CALL_FRAME_SLOT + index)
+											* sizeof(zval)
+										+ offsetof(zval, u1.type_info))));
+							ASM(MOV32rm, mask_reg,
+								FE_MEM(receive_reg, 0, FE_NOREG,
+									static_cast<int32_t>(
+										offsetof(zend_native_call_fast_receive,
+											type_masks)
+										+ index * sizeof(uint32_t))));
+							ASM(BT32rr, mask_reg, work_reg);
+							generate_raw_jump(Jump::jae, prepare);
+						}
+						label_place(checked);
+					}
+					if (argument_count < ZEND_NATIVE_CALL_FAST_RECEIVE_MAX) {
+						ScratchReg count{this};
+						auto count_reg = count.alloc_gp();
+						auto copy = text_writer.label_create();
+						ASM(TEST32mi,
+							FE_MEM(descriptor_reg, 0, FE_NOREG, flags_offset),
+							ZEND_NATIVE_CALL_FAST_DEFAULTS);
+						generate_raw_jump(Jump::je, enter);
+						ASM(MOV32rm, count_reg,
+							FE_MEM(descriptor_reg, 0, FE_NOREG, header_offset
+								+ static_cast<int32_t>(offsetof(
+									zend_native_user_call_site_header,
+									fast_default_count))));
+						ASM(ADD64ri, receive_reg, static_cast<int32_t>(
+							offsetof(zend_native_call_fast_receive, defaults)
+							+ argument_count * sizeof(const zval *)));
+						ASM(ADD64ri, frame_reg, static_cast<int32_t>(
+							(ZEND_CALL_FRAME_SLOT + argument_count)
+								* sizeof(zval)));
+						descriptor_scratch.reset();
+						ScratchReg value{this};
+						auto value_reg = value.alloc_gp();
+						label_place(copy);
+						ASM(MOV64rm, work_reg,
+							FE_MEM(receive_reg, 0, FE_NOREG, 0));
+						ASM(MOV64rm, value_reg, FE_MEM(work_reg, 0, FE_NOREG, 0));
+						ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG, 0), value_reg);
+						ASM(MOV32rm, value_reg,
+							FE_MEM(work_reg, 0, FE_NOREG, static_cast<int32_t>(
+								offsetof(zval, u1.type_info))));
+						ASM(MOV32mr,
+							FE_MEM(frame_reg, 0, FE_NOREG, static_cast<int32_t>(
+								offsetof(zval, u1.type_info))), value_reg);
+						ASM(ADD64ri, receive_reg,
+							static_cast<int32_t>(sizeof(const zval *)));
+						ASM(ADD64ri, frame_reg,
+							static_cast<int32_t>(sizeof(zval)));
+						ASM(SUB32ri, count_reg, 1);
+						generate_raw_jump(Jump::jne, copy);
+					}
+					generate_raw_jump(Jump::jmp, enter);
+				}
 			}
-			generate_raw_jump(Jump::je, enter);
+			label_place(prepare);
 			{
 				tpde::x64::CCAssignerSysV prepare_assigner{false};
 				CallBuilder prepare_builder{*this, prepare_assigner};
@@ -20235,18 +20327,22 @@ bool ZendCompilerX64::compile_inst_impl(
 				return false;
 			}
 			/*
-			 * Returning a temporary moves it into the caller's return zval.
-			 * Do that inline; a reference, an undefined slot or a discarded
-			 * result (no return zval) keeps the helper.
+			 * Returning a temporary moves it into the caller's return zval;
+			 * returning a CV copies it with a reference the frame's CV
+			 * release balances. Do that inline; a reference, an undefined
+			 * slot or a discarded result (no return zval) keeps the helper.
 			 */
 			const uint64_t temporary_return_offset =
 				(uint64_t{ZEND_CALL_FRAME_SLOT}
 					+ mir.value_operation.op1_storage_id) * sizeof(zval);
+			const bool cv_return = mir.value_operation.op1.slot_kind
+				== ZEND_MIR_SOURCE_SLOT_CV;
 			if (mir.value_operation.source_opcode == ZEND_RETURN
 					&& (mir.value_operation.op1.slot_kind
 							== ZEND_MIR_SOURCE_SLOT_TMP
 						|| mir.value_operation.op1.slot_kind
-							== ZEND_MIR_SOURCE_SLOT_VAR)
+							== ZEND_MIR_SOURCE_SLOT_VAR
+						|| cv_return)
 					&& zend_mir_id_is_valid(
 						mir.value_operation.op1_storage_id)
 					&& temporary_return_offset
@@ -20286,9 +20382,21 @@ bool ZendCompilerX64::compile_inst_impl(
 							static_cast<int32_t>(
 								offsetof(zval, u1.type_info))),
 						type_reg);
-					ASM(MOV32mi,
-						FE_MEM(frame_reg, 0, FE_NOREG, type_offset),
-						IS_UNDEF);
+					if (cv_return) {
+						auto uncounted = text_writer.label_create();
+						ASM(TEST32ri, type_reg,
+							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+						generate_raw_jump(Jump::je, uncounted);
+						ASM(ADD32mi,
+							FE_MEM(payload_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_refcounted_h, refcount))), 1);
+						label_place(uncounted);
+					} else {
+						ASM(MOV32mi,
+							FE_MEM(frame_reg, 0, FE_NOREG, type_offset),
+							IS_UNDEF);
+					}
 				}
 				{
 					RetBuilder return_builder{*this, *cur_cc_assigner()};

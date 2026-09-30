@@ -57,6 +57,13 @@ function run($round, $p, $q) {
     $out[] = "$v1/$v2";
     $out[] = lib_sq(lib_sq($round + 1) - 1);    // scalar results sent directly
     $out[] = $p->typed($p->typed($round) + 1);
+    $out[] = lib_typed_defaults($round);
+    $out[] = lib_typed_defaults($round, 2.5, "x");
+    $out[] = lib_coerce($round);                // int coerced to float
+    $out[] = lib_coerce("1.5", 7);
+    $out[] = lib_const_default();
+    $out[] = lib_obj($p);
+    try { $out[] = lib_typed_defaults("nope"); } catch (TypeError $e) { $out[] = 'DefaultsTypeError'; }
     unset($d);
     echo "\n";
     return $out;
@@ -73,14 +80,14 @@ echo $g1->getReturn(), ' ', $g2->getReturn(), "\n";
 
 Warning: Undefined variable $undefined_var in %s on line %d
 [discard ~a0 ~b0 ] ~c0 
-[2,"[0,[1,2],null]","[0,\"b\",null]","s00","s2","3:0",3,1,0,2,"0\/10\/c",0,2,-1,2,"TypeError","ArgumentCountError","ReturnTypeError","l0","t0",1,6,"strstr",10,"0:","0:1,2","1\/6",0,3]
+[2,"[0,[1,2],null]","[0,\"b\",null]","s00","s2","3:0",3,1,0,2,"0\/10\/c",0,2,-1,2,"TypeError","ArgumentCountError","ReturnTypeError","l0","t0",1,6,"strstr",10,"0:","0:1,2","1\/6",0,3,"[0,1.5,null,[1,2],true]","[0,2.5,\"x\",[1,2],true]","0.0\/3","1.5\/7","8D",2,"DefaultsTypeError"]
 
 Warning: Undefined variable $undefined_var in %s on line %d
 [discard ~a1 ~b1 ] ~c1 
-[3,"[1,[1,2],null]","[1,\"b\",null]","s10","s2","3:1",4,2,-1,4,"1\/10\/c",3,2,-1,2,"TypeError","ArgumentCountError","ReturnTypeError","l1","t1",1,6,"strstr",10,"1:","1:1,2","2\/6",9,12]
+[3,"[1,[1,2],null]","[1,\"b\",null]","s10","s2","3:1",4,2,-1,4,"1\/10\/c",3,2,-1,2,"TypeError","ArgumentCountError","ReturnTypeError","l1","t1",1,6,"strstr",10,"1:","1:1,2","2\/6",9,12,"[1,1.5,null,[1,2],true]","[1,2.5,\"x\",[1,2],true]","1.0\/3","1.5\/7","8D",2,"DefaultsTypeError"]
 
 Warning: Undefined variable $undefined_var in %s on line %d
 [discard ~a2 ~b2 ] ~c2 
-[4,"[2,[1,2],null]","[2,\"b\",null]","s20","s2","3:2",5,3,-2,6,"2\/10\/c",6,2,-1,2,"TypeError","ArgumentCountError","ReturnTypeError","l2","t2",1,6,"strstr",10,"2:","2:1,2","3\/6",64,21]
+[4,"[2,[1,2],null]","[2,\"b\",null]","s20","s2","3:2",5,3,-2,6,"2\/10\/c",6,2,-1,2,"TypeError","ArgumentCountError","ReturnTypeError","l2","t2",1,6,"strstr",10,"2:","2:1,2","3\/6",64,21,"[2,1.5,null,[1,2],true]","[2,2.5,\"x\",[1,2],true]","2.0\/3","1.5\/7","8D",2,"DefaultsTypeError"]
 20000
 3 -3

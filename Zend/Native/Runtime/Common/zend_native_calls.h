@@ -23,6 +23,28 @@ typedef void (*zend_native_frame_probe_t)(
 	const zend_execute_data *callee);
 
 /*
+ * How a fast call site receives its parameters without
+ * zend_native_call_fast_prepare(), derived once per entry cell from the
+ * op_array: a supplied argument whose type bit is in type_masks[i] needs no
+ * check or coercion (untyped parameters accept every type), and a missing
+ * parameter takes the immutable RECV_INIT literal defaults[i] as is.
+ */
+#define ZEND_NATIVE_CALL_FAST_RECEIVE_MAX 8
+
+typedef enum _zend_native_call_fast_receive_state {
+	ZEND_NATIVE_CALL_FAST_RECEIVE_UNKNOWN = 0,
+	ZEND_NATIVE_CALL_FAST_RECEIVE_INLINE,
+	ZEND_NATIVE_CALL_FAST_RECEIVE_GENERIC,
+} zend_native_call_fast_receive_state;
+
+typedef struct _zend_native_call_fast_receive {
+	uint32_t state;
+	uint32_t num_args;
+	uint32_t type_masks[ZEND_NATIVE_CALL_FAST_RECEIVE_MAX];
+	const zval *defaults[ZEND_NATIVE_CALL_FAST_RECEIVE_MAX];
+} zend_native_call_fast_receive;
+
+/*
  * Entry cells are process-local indirections. The code pointer is the publish
  * word: NULL is not ready and a non-NULL acquire load pins one fully immutable
  * code version for the duration of an activation. The owner may replace or
@@ -41,6 +63,7 @@ typedef struct _zend_native_entry_cell {
 	zend_native_frame_probe_t frame_probe;
 	void *frame_probe_context;
 	bool lease_managed;
+	zend_native_call_fast_receive fast_receive;
 } zend_native_entry_cell;
 
 static zend_always_inline const zend_native_code *
@@ -289,13 +312,19 @@ typedef struct _zend_native_user_call_site_header {
 	void **fast_run_time_cache;
 	uint32_t fast_frame_size;
 	uint32_t fast_call_info;
-	/* ZEND_NATIVE_CALL_FAST_PREPARE: typed parameters, defaults or extra
-	 * arguments need zend_native_call_fast_prepare(). */
+	/* ZEND_NATIVE_CALL_FAST_PREPARE: extra arguments, variadics or
+	 * parameters fast_receive cannot take need
+	 * zend_native_call_fast_prepare(). ZEND_NATIVE_CALL_FAST_CHECK_ARGS:
+	 * the supplied arguments are checked against fast_receive's type masks
+	 * and a miss prepares the frame generically.
+	 * ZEND_NATIVE_CALL_FAST_DEFAULTS: fast_default_count missing parameters
+	 * take fast_receive's defaults. */
 	uint32_t fast_flags;
-	uint32_t fast_reserved;
+	uint32_t fast_default_count;
 	/* The epoch in which the site's target was last considered, published
 	 * or not: a cache hit reconsiders it only in a later epoch. */
 	uint64_t fast_checked_epoch;
+	const zend_native_call_fast_receive *fast_receive;
 	void *resolution;
 	uint64_t epoch;
 } zend_native_user_call_site_header;
@@ -739,6 +768,8 @@ zend_native_direct_call_result zend_native_call_dynamic_leave(
 	zend_native_execution_context *context,
 	zend_native_status status);
 #define ZEND_NATIVE_CALL_FAST_PREPARE UINT32_C(1)
+#define ZEND_NATIVE_CALL_FAST_CHECK_ARGS UINT32_C(2)
+#define ZEND_NATIVE_CALL_FAST_DEFAULTS UINT32_C(4)
 
 const uint64_t *zend_native_call_cache_epoch_address(void);
 uint32_t zend_native_call_fast_prepare(zend_execute_data *callee);
