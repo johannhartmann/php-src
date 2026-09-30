@@ -3531,6 +3531,7 @@ static zend_native_call_resolution_cache_entry *
 static uint64_t zend_native_call_resolution_cache_epoch = 1;
 
 static void zend_native_call_fast_publish(
+	const zend_execute_data *caller,
 	zend_native_user_call_site_header *header,
 	const zend_native_user_call_descriptor *descriptor,
 	const zend_native_call_resolution_cache_entry *entry);
@@ -4091,7 +4092,7 @@ static zend_always_inline bool zend_native_call_resolve_cached(
 			 * keeps its target rather than following each receiver class. */
 			if (header->fast_checked_epoch
 					!= zend_native_call_resolution_cache_epoch) {
-				zend_native_call_fast_publish(header, descriptor, entry);
+				zend_native_call_fast_publish(caller, header, descriptor, entry);
 			}
 			return true;
 		}
@@ -4268,6 +4269,7 @@ zend_native_call_fast_receive_prepare(
 }
 
 static void zend_native_call_fast_publish(
+	const zend_execute_data *caller,
 	zend_native_user_call_site_header *header,
 	const zend_native_user_call_descriptor *descriptor,
 	const zend_native_call_resolution_cache_entry *entry)
@@ -4322,11 +4324,15 @@ static void zend_native_call_fast_publish(
 			descriptor->init_op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
 			&& (fetch == ZEND_FETCH_CLASS_SELF
 				|| fetch == ZEND_FETCH_CLASS_PARENT);
+		const bool late =
+			descriptor->init_op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+			&& fetch == ZEND_FETCH_CLASS_STATIC;
 
 		/* A named class or self::/parent:: names one class per request;
-		 * static:: follows the caller's called scope. */
+		 * static:: follows the caller's called scope, which the site
+		 * compares with the class it was published for. */
 		if (descriptor->init_op1.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
-				&& !forwarding) {
+				&& !forwarding && !late) {
 			return;
 		}
 		if ((function->common.fn_flags & ZEND_ACC_STATIC) == 0) {
@@ -4340,6 +4346,8 @@ static void zend_native_call_fast_publish(
 			return;
 		} else if (forwarding) {
 			static_mode = ZEND_NATIVE_CALL_FAST_STATIC_FORWARD;
+		} else if (late) {
+			static_mode = ZEND_NATIVE_CALL_FAST_STATIC_LATE;
 		}
 	} else if (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_METHOD) {
 		/* $this keeps its receiver; a CV receiver is retained by the call,
@@ -4352,6 +4360,17 @@ static void zend_native_call_fast_publish(
 					|| (resolution->call_info & ZEND_CALL_RELEASE_THIS)
 						== 0) {
 			return;
+		}
+		/* $this->m() of a private method of the caller's class calls it
+		 * for every receiver: $this is an instance of that class, and a
+		 * subclass method of the same name does not override it (see
+		 * zend_std_get_method()). A closure may bind another $this. */
+		if (entry->receiver == ZEND_NATIVE_CALL_RECEIVER_THIS
+				&& (function->common.fn_flags & ZEND_ACC_PRIVATE) != 0
+				&& function->common.scope != NULL
+				&& function->common.scope == caller->func->common.scope
+				&& (caller->func->common.fn_flags & ZEND_ACC_CLOSURE) == 0) {
+			static_mode = ZEND_NATIVE_CALL_FAST_ANY_THIS;
 		}
 	} else {
 		return;
@@ -5021,7 +5040,7 @@ static void zend_native_call_resolution_cache_store(
 		entry->resolution.placement_flags |=
 			ZEND_NATIVE_USER_CALL_PLACEMENTS_FAST_FRAME;
 	}
-	zend_native_call_fast_publish(header, descriptor, entry);
+	zend_native_call_fast_publish(caller, header, descriptor, entry);
 }
 
 zend_native_user_call_resolution_status zend_native_call_resolve_user(
