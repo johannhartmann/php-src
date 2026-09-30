@@ -2570,13 +2570,16 @@ static zend_always_inline bool zend_native_object_fetch_cached(
 		return false;
 	}
 	property = OBJ_PROP(object, property_offset);
+	/* Write, read-write and unset fetches address an untyped property. */
+	const bool writes = fetch_type == BP_VAR_W || fetch_type == BP_VAR_RW
+		|| fetch_type == BP_VAR_UNSET;
 	if (Z_TYPE_P(property) == IS_UNDEF
-			|| (fetch_type == BP_VAR_W && cache_slot[2] != NULL)) {
+			|| (writes && cache_slot[2] != NULL)) {
 		return false;
 	}
 	target = ZEND_CALL_VAR_NUM(execute_data,
 		(uint32_t) op_array->last_var + result_index);
-	if (fetch_type == BP_VAR_W) {
+	if (writes) {
 		ZVAL_INDIRECT(target, property);
 	} else {
 		ZVAL_COPY_DEREF(target, property);
@@ -2616,7 +2619,8 @@ zend_native_status zend_native_execute_object_fetch_r(
 		uint32_t source_position_id) \
 	{ \
 		zend_native_explicit_object_operation operation; \
-		if ((fetch_type == BP_VAR_W || fetch_type == BP_VAR_IS) \
+		if ((fetch_type == BP_VAR_W || fetch_type == BP_VAR_RW \
+					|| fetch_type == BP_VAR_UNSET || fetch_type == BP_VAR_IS) \
 				&& zend_native_object_fetch_cached(execute_data, op1, op2, \
 					result, extended_value, fetch_type)) { \
 			return ZEND_NATIVE_RETURNED; \
@@ -2653,6 +2657,14 @@ zend_native_status zend_native_execute_object_fetch_func_arg(
 	zval *result_slot;
 	int fetch_type;
 
+	/* A by-value parameter reads the property like FETCH_OBJ_R. */
+	if (execute_data->call != NULL
+			&& (ZEND_CALL_INFO(execute_data->call)
+				& ZEND_CALL_SEND_ARG_BY_REF) == 0
+			&& zend_native_object_fetch_cached(execute_data, op1, op2, result,
+				extended_value, BP_VAR_R)) {
+		return ZEND_NATIVE_RETURNED;
+	}
 	if (!zend_native_object_init_explicit_operation(
 			execute_data, op1, op2, result, extended_value, source_opcode,
 			source_position_id, ZEND_FETCH_OBJ_FUNC_ARG, &operation)) {
