@@ -1679,6 +1679,31 @@ static zend_string *zend_native_static_name_explicit(
 	return zval_try_get_tmp_string(name, temporary);
 }
 
+/*
+ * The run-time cache slots of a static property whose class and name the
+ * operation fixes, as zend_fetch_static_property_address() caches them:
+ * a literal name with a literal class, self:: or parent::. NULL otherwise.
+ */
+static void **zend_native_static_cache_slot(
+	zend_execute_data *execute_data,
+	const zend_native_explicit_object_operation *operation)
+{
+	const uint32_t offset = operation->extended_value & ~ZEND_FETCH_OBJ_FLAGS;
+	const uint32_t fetch = operation->op2.num & ZEND_FETCH_CLASS_MASK;
+
+	if (operation->op1_type != IS_CONST
+			|| (operation->op2_type != IS_CONST
+				&& (operation->op2_type != IS_UNUSED
+					|| (fetch != ZEND_FETCH_CLASS_SELF
+						&& fetch != ZEND_FETCH_CLASS_PARENT)))
+			|| execute_data->run_time_cache == NULL
+			|| (uint64_t) offset + 3 * sizeof(void *)
+				> execute_data->func->op_array.cache_size) {
+		return NULL;
+	}
+	return (void **) ((char *) execute_data->run_time_cache + offset);
+}
+
 static zval *zend_native_static_property_explicit(
 	zend_execute_data *execute_data,
 	const zend_native_explicit_object_operation *operation, int fetch_type,
@@ -1687,6 +1712,8 @@ static zval *zend_native_static_property_explicit(
 	zend_class_entry *class_entry =
 		zend_native_static_class_explicit(execute_data, operation);
 	zend_string *name;
+	zval *property;
+	void **cache_slot;
 
 	*property_info = NULL;
 	*temporary = NULL;
@@ -1698,8 +1725,16 @@ static zval *zend_native_static_property_explicit(
 	if (name == NULL) {
 		return NULL;
 	}
-	return zend_std_get_static_property_with_info(
+	property = zend_std_get_static_property_with_info(
 		class_entry, name, fetch_type, property_info);
+	if (property != NULL && *property_info != NULL
+			&& (cache_slot = zend_native_static_cache_slot(
+				execute_data, operation)) != NULL) {
+		cache_slot[0] = class_entry;
+		cache_slot[1] = property;
+		cache_slot[2] = *property_info;
+	}
+	return property;
 }
 
 static bool zend_native_static_indirect_access_allowed(
@@ -2779,9 +2814,52 @@ ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_instanceof,
 ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_clone,
 	ZEND_CLONE,
 	zend_native_object_clone_explicit(execute_data, &operation))
-ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_static_fetch_r,
-	ZEND_FETCH_STATIC_PROP_R,
-	zend_native_static_fetch_explicit(execute_data, &operation, BP_VAR_R))
+/*
+ * FETCH_STATIC_PROP_R of a property the run-time cache names, as the VM
+ * reads it there without resolving the class and name: the value is
+ * copied into the result. An uninitialized typed property takes the
+ * general path, which throws.
+ */
+zend_native_status zend_native_execute_static_fetch_r(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t actual_source_opcode,
+	uint32_t source_position_id)
+{
+	zend_native_explicit_object_operation operation;
+	const uint32_t cache_offset = extended_value & ~ZEND_FETCH_OBJ_FLAGS;
+
+	if (actual_source_opcode == ZEND_FETCH_STATIC_PROP_R
+			&& (op1 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_LITERAL
+			&& execute_data->run_time_cache != NULL
+			&& (uint64_t) cache_offset + 3 * sizeof(void *)
+				<= execute_data->func->op_array.cache_size
+			&& ((result & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| (result & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& ((result >> 8) & UINT64_C(0xff)) == ZEND_MIR_SOURCE_SLOT_TMP
+			&& (uint32_t) (result >> 16)
+				< (uint32_t) execute_data->func->op_array.T) {
+		void **cache_slot = (void **) ((char *) execute_data->run_time_cache
+			+ cache_offset);
+		zval *property = cache_slot[1];
+
+		if (property != NULL && Z_TYPE_P(property) != IS_UNDEF) {
+			ZVAL_COPY_DEREF(ZEND_CALL_VAR_NUM(execute_data,
+				execute_data->func->op_array.last_var
+					+ (uint32_t) (result >> 16)), property);
+			return ZEND_NATIVE_RETURNED;
+		}
+	}
+	if (!zend_native_object_init_explicit_operation(
+			execute_data, op1, op2, result, extended_value,
+			actual_source_opcode, source_position_id,
+			ZEND_FETCH_STATIC_PROP_R, &operation)) {
+		zend_throw_error(NULL,
+			"Malformed explicit native object operation");
+		return ZEND_NATIVE_EXCEPTION;
+	}
+	return zend_native_static_fetch_explicit(execute_data, &operation, BP_VAR_R);
+}
 ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_static_fetch_w,
 	ZEND_FETCH_STATIC_PROP_W,
 	zend_native_static_fetch_explicit(execute_data, &operation, BP_VAR_W))
