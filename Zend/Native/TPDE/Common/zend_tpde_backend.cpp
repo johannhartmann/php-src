@@ -14082,6 +14082,7 @@ extern "C" zend_result zend_native_image_deserialize(
 				cell->receiver_kind =
 					static_cast<zend_native_internal_receiver_kind>(
 						serialized.receiver_kind);
+				zend_native_internal_call_cell_derive(cell);
 				void *resized = std::realloc(
 					image->owned_internal_call_cells,
 					static_cast<size_t>(

@@ -117,7 +117,13 @@ typedef struct _zend_native_internal_call_cell {
 	zend_function *function;
 	zend_class_entry *called_scope;
 	zend_native_internal_receiver_kind receiver_kind;
+	/* Derived from the bound function, never serialized: bit n is set when
+	 * argument n + 1 is sent neither by nor preferably by reference. */
+	uint32_t by_value_arguments;
 } zend_native_internal_call_cell;
+
+/* Recompute the derived fields of a cell after binding its function. */
+void zend_native_internal_call_cell_derive(zend_native_internal_call_cell *cell);
 
 typedef enum _zend_native_call_argument_mode {
 	ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE = 0,
