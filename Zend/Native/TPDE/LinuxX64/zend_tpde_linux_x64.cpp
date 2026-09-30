@@ -5157,6 +5157,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 
 		auto do_succeeded = text_writer.label_create();
+		auto do_exception = text_writer.label_create();
 		if (fast_site) {
 			/*
 			 * The fast frame (see the Init phase): unlink it from EX(call),
@@ -5273,14 +5274,14 @@ bool ZendCompilerX64::compile_inst_impl(
 						violation_builder.call(runtime_symbol(
 							ZEND_NATIVE_HELPER_CALL_FAST_SCALAR_VIOLATION));
 					}
-					emit_fast_failure();
+					generate_raw_jump(Jump::jmp, do_exception);
 				} else {
 					generate_raw_jump(Jump::jmp, do_succeeded);
 				}
 				label_place(failed);
 				ASM(CMP32mi, FE_MEM(FE_BP, 0, FE_NOREG, status_slot),
 					ZEND_NATIVE_BAILOUT);
-				generate_raw_jump(Jump::jne, exception);
+				generate_raw_jump(Jump::jne, do_exception);
 				{
 					RetBuilder return_builder{*this, *cur_cc_assigner()};
 					return_builder.add(ValuePart{ZEND_NATIVE_BAILOUT, 4,
@@ -5288,8 +5289,7 @@ bool ZendCompilerX64::compile_inst_impl(
 						tpde::CCAssignment{});
 					return_builder.ret();
 				}
-				label_place(exception);
-				emit_fast_failure();
+				(void) exception;
 			}
 			label_place(universal_do);
 			reconcile_target_branch_state(fast_spilled);
@@ -5314,17 +5314,13 @@ bool ZendCompilerX64::compile_inst_impl(
 					ZEND_NATIVE_HELPER_CALL_UNIVERSAL_DO));
 				builder.add_ret(done, tpde::CCAssignment{});
 			}
-			auto failed = text_writer.label_create();
-			ASM(CMP32ri, done.cur_reg_or_load(this),
-				ZEND_NATIVE_CALL_UNIVERSAL_FAILED);
-			generate_raw_jump(Jump::je, failed);
+			ASM(CMP32ri, done.cur_reg_or_load(this), ZEND_NATIVE_RETURNED);
+			generate_raw_jump(Jump::je, do_succeeded);
 			done.reset(this);
-			branch_released_exception();
-			generate_raw_jump(Jump::jmp, do_succeeded);
-			label_place(failed);
-			done.reset(this);
-			emit_phase_failure();
 		}
+		/* The pending exception of either protocol, once per site. */
+		label_place(do_exception);
+		emit_fast_failure();
 
 		label_place(do_succeeded);
 		if (node.has_result) {
