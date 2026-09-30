@@ -13178,6 +13178,122 @@ bool ZendCompilerX64::compile_inst_impl(
 		release_spilled_regs(spilled);
 		return true;
 	};
+	/*
+	 * BIND_GLOBAL of a CV as the VM binds it: the run-time cache keeps the
+	 * global's bucket offset in EG(symbol_table); while that bucket still
+	 * holds the name and a reference, the CV takes another reference to
+	 * it. Anything else, including a CV that holds a counted value, runs
+	 * the helper, which also refreshes the cached offset. The code is
+	 * process-local, so a non-ZTS build addresses EG(symbol_table) directly.
+	 */
+	auto bind_global_inline = [&]() {
+#ifdef ZTS
+		return execute_value_operation();
+#else
+		const zend_mir_executable_value_ref &operation = mir.value_operation;
+		bool frame_operands = node.kind == Adaptor::InstKind::MIR
+			&& !node.has_result && mir.has_value_operation
+			&& operation.source_opcode == ZEND_BIND_GLOBAL
+			&& (operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+			&& zend_mir_id_is_valid(operation.op1_storage_id)
+			&& operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+			&& operation.extended_value <= INT32_MAX - sizeof(void *)
+			&& uint64_t{operation.op2.index} * sizeof(zval) <= INT32_MAX;
+		for (IRValueRef operand : node.operands) {
+			frame_operands = frame_operands
+				&& (operand == IRValueRef{Adaptor::FRAME_VALUE}
+					|| operand == IRValueRef{
+						Adaptor::EXECUTION_CONTEXT_ARGUMENT});
+		}
+		const uint64_t local_offset64 =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
+				* sizeof(zval);
+		if (!frame_operands || local_offset64 > INT32_MAX - sizeof(zval)) {
+			return execute_value_operation();
+		}
+		const int32_t local_offset = static_cast<int32_t>(local_offset64);
+		const auto spilled = spill_before_branch(true);
+		auto slow = text_writer.label_create();
+		auto done = text_writer.label_create();
+		{
+			const AsmReg frame_reg = canonical_frame_register();
+			ScratchReg offset{this};
+			ScratchReg table{this};
+			ScratchReg bucket{this};
+			auto offset_reg = offset.alloc_gp();
+			auto table_reg = table.alloc_gp();
+			auto bucket_reg = bucket.alloc_gp();
+			ASM(MOV64rm, offset_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG, static_cast<int32_t>(
+					offsetof(zend_execute_data, run_time_cache))));
+			ASM(TEST64rr, offset_reg, offset_reg);
+			generate_raw_jump(Jump::je, slow);
+			/* The cache holds offset + 1; an empty slot wraps below. */
+			ASM(MOV64rm, offset_reg, FE_MEM(offset_reg, 0, FE_NOREG,
+				static_cast<int32_t>(operation.extended_value)));
+			ASM(SUB64ri, offset_reg, 1);
+			ASM(MOV64ri, table_reg, static_cast<int64_t>(
+				reinterpret_cast<uintptr_t>(&EG(symbol_table))));
+			ASM(MOV32rm, bucket_reg, FE_MEM(table_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(HashTable, nNumUsed))));
+			ASM(SHL64ri, bucket_reg, 5);
+			static_assert(sizeof(Bucket) == 32);
+			ASM(CMP64rr, offset_reg, bucket_reg);
+			generate_raw_jump(Jump::jae, slow);
+			ASM(MOV64rm, bucket_reg, FE_MEM(table_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(HashTable, arData))));
+			ASM(ADD64rr, bucket_reg, offset_reg);
+			/* The literal name must be the bucket's key string. */
+			ASM(MOV64rm, table_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_execute_data, func))));
+			ASM(MOV64rm, table_reg, FE_MEM(table_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_op_array, literals))));
+			ASM(MOV64rm, table_reg, FE_MEM(table_reg, 0, FE_NOREG,
+				static_cast<int32_t>(operation.op2.index * sizeof(zval))));
+			ASM(CMP64rm, table_reg, FE_MEM(bucket_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(Bucket, key))));
+			generate_raw_jump(Jump::jne, slow);
+			{
+				auto direct = text_writer.label_create();
+				ASM(CMP8mi, FE_MEM(bucket_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zval, u1.type_info))),
+					IS_INDIRECT);
+				generate_raw_jump(Jump::jne, direct);
+				ASM(MOV64rm, bucket_reg, FE_MEM(bucket_reg, 0, FE_NOREG, 0));
+				label_place(direct);
+			}
+			ASM(CMP8mi, FE_MEM(bucket_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))),
+				IS_REFERENCE);
+			generate_raw_jump(Jump::jne, slow);
+			ASM(TEST32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				local_offset + static_cast<int32_t>(
+					offsetof(zval, u1.type_info))),
+				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+			generate_raw_jump(Jump::jne, slow);
+			ASM(MOV64rm, bucket_reg, FE_MEM(bucket_reg, 0, FE_NOREG, 0));
+			ASM(ADD32mi, FE_MEM(bucket_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_refcounted_h, refcount))),
+				1);
+			ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG, local_offset),
+				bucket_reg);
+			ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				local_offset + static_cast<int32_t>(
+					offsetof(zval, u1.type_info))),
+				IS_REFERENCE_EX);
+			generate_raw_jump(Jump::jmp, done);
+		}
+		label_place(slow);
+		if (!execute_value_operation()) {
+			return false;
+		}
+		label_place(done);
+		release_spilled_regs(spilled);
+		return true;
+#endif
+	};
 	auto dynamic_fetch_read = [&]() {
 		zend_tpde_dynamic_fetch_read layout;
 
@@ -13937,6 +14053,9 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_DYNAMIC_FETCH_CONSTANT) {
 			return fetch_constant_inline();
+		}
+		if (record.opcode == ZEND_MIR_OPCODE_DYNAMIC_BIND_GLOBAL) {
+			return bind_global_inline();
 		}
 		return execute_value_operation();
 	}

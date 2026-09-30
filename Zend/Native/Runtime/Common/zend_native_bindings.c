@@ -468,7 +468,19 @@ zend_native_status zend_native_dynamic_bind_global(
 	if (global == NULL) {
 		global = zend_hash_add_new(
 			&EG(symbol_table), Z_STR_P(name), &EG(uninitialized_zval));
-	} else if (Z_TYPE_P(global) == IS_INDIRECT) {
+	}
+	/* As the VM does, the run-time cache keeps the bucket's offset, which
+	 * the generated fast path checks against the table and key. */
+	if (execute_data->run_time_cache != NULL
+			&& (uint64_t) opline->extended_value + sizeof(void *)
+				<= execute_data->func->op_array.cache_size) {
+		CACHE_PTR_EX(
+			(void **) ((char *) execute_data->run_time_cache
+				+ opline->extended_value),
+			(void *) ((uintptr_t) ((char *) global
+				- (char *) EG(symbol_table).arData) + 1));
+	}
+	if (Z_TYPE_P(global) == IS_INDIRECT) {
 		global = Z_INDIRECT_P(global);
 		if (Z_TYPE_P(global) == IS_UNDEF) {
 			ZVAL_NULL(global);
