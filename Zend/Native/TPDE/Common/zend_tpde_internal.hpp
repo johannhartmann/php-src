@@ -715,9 +715,11 @@ struct zend_tpde_object_property_read {
 
 struct zend_tpde_object_property_write {
 	uint32_t receiver_offset;
+	/* The value's frame offset, or its literal table offset. */
 	uint32_t value_offset;
 	uint32_t cache_offset;
 	bool move_value;
+	bool literal_value;
 };
 
 struct zend_tpde_dynamic_fetch_read {
@@ -2015,11 +2017,13 @@ static inline bool zend_tpde_object_property_write_at(
 					!= ZEND_MIR_SOURCE_OPERAND_UNUSED)
 			|| operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
 			|| operation.result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
-			|| (operation.auxiliary.slot_kind
-					!= ZEND_MIR_SOURCE_SLOT_CV
-				&& operation.auxiliary.slot_kind
-					!= ZEND_MIR_SOURCE_SLOT_TMP)
-			|| operation.auxiliary_storage_id == ZEND_MIR_ID_INVALID
+			|| (operation.auxiliary.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+				&& ((operation.auxiliary.slot_kind
+						!= ZEND_MIR_SOURCE_SLOT_CV
+					&& operation.auxiliary.slot_kind
+						!= ZEND_MIR_SOURCE_SLOT_TMP)
+					|| operation.auxiliary_storage_id
+						== ZEND_MIR_ID_INVALID))
 			|| (operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
 				&& (operation.op1_storage_id == ZEND_MIR_ID_INVALID
 					|| operation.op1_storage_id
@@ -2031,8 +2035,11 @@ static inline bool zend_tpde_object_property_write_at(
 		? offsetof(zend_execute_data, This)
 		: (uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
 			* sizeof(zval);
-	value_offset =
-		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.auxiliary_storage_id)
+	out->literal_value =
+		operation.auxiliary.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
+	value_offset = out->literal_value
+		? uint64_t{operation.auxiliary.index} * sizeof(zval)
+		: (uint64_t{ZEND_CALL_FRAME_SLOT} + operation.auxiliary_storage_id)
 			* sizeof(zval);
 	if (receiver_offset > UINT32_MAX || value_offset > UINT32_MAX
 			|| operation.extended_value
@@ -2042,8 +2049,8 @@ static inline bool zend_tpde_object_property_write_at(
 	out->receiver_offset = static_cast<uint32_t>(receiver_offset);
 	out->value_offset = static_cast<uint32_t>(value_offset);
 	out->cache_offset = operation.extended_value;
-	out->move_value =
-		operation.auxiliary.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP;
+	out->move_value = !out->literal_value
+		&& operation.auxiliary.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP;
 	return true;
 }
 
