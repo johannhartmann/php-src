@@ -62,25 +62,30 @@ share an ID.
 ## Observable boundary state
 
 Before any call, allocation, possible destructor, exception transfer, bailout
-helper, observer, interrupt, suspension, resumption, or future deoptimization:
+helper, observer, interrupt, suspension, resumption, or deoptimization (the
+per-class detail is in the [safepoint contract](safepoint-contract.md)):
 
 1. `EG(current_execute_data)` names the frame the Zend operation expects.
 2. Every published frame has final `func`, `This`, argument count,
    `prev_execute_data`, return storage, call chain, and opline state.
-3. Every live PHP value is in a canonical zval reachable through a frame,
-   persistent suspend record, executor-global root, or helper-owned argument.
-4. The `roots` list names every live rooted slot. A register copy does not add a
-   root and cannot outlive mutation or reentry of the canonical zval.
+3. Every live PHP value has exactly one owner: a frame slot, a persistent
+   suspend record, an executor-global root, a helper-owned argument, or a
+   native location named by the machine frame-state map of that point
+   ([ADR 0025](../../adr/0025-native-canonical-execution.md)). The frame slot of
+   a native-owned value holds `IS_UNDEF` or a non-refcounted value.
+4. The `roots` list names every live rooted slot. A borrowed register copy of
+   a frame-owned value does not add a root and cannot outlive a write the
+   boundary may perform.
 5. Every slot with `cleanup_required: true` has exactly one pending or
    transferred cleanup obligation. The obligation identifies the state that
    remains reachable if local control does not return.
 6. Return and exception continuations identify a frame and opline. The bailout
    continuation is explicitly `nonlocal_bailout` and has no local target.
 
-Unobservable straight-line native code may keep non-refcounted scalars in
-registers. A live PHP value may also be cached in a register only while its
-canonical zval remains authoritative and rooted; reentry invalidates that
-cache.
+The boundary class decides which native-owned values move into their slots
+first (arguments, parameters, alias-observable values and, for dynamic-scope
+operations, every CV are always frame-owned there). Values the boundary may
+write are reloaded after it returns.
 
 ## Calls and returns
 
@@ -118,11 +123,12 @@ calls in [`zend_vm_def.h`](../../../../Zend/zend_vm_def.h#L8222).
 
 `parent_frame_id` describes the logical `prev_execute_data` chain. IDs are
 unique inside a state set, every non-null parent exists, and the graph is
-acyclic. W01 represents physical baseline frames. A future optimizer may add
-logical inlined frames to metadata, but before an observable boundary it must
-materialize a Zend-compatible acyclic chain with the same arguments, locals,
-oplines, roots, and cleanup. This allowance does not define a separate
-optimizer ABI.
+acyclic. Inlined callees (ADR 0025) are logical frames in this metadata;
+before a boundary that reads frames (backtrace, exception trace, warning,
+observer) a Zend-compatible acyclic chain with the same arguments, oplines and
+header state is built from it, and active call observers still receive their
+begin and end events. This allowance does not define a separate optimizer
+ABI.
 
 ## Publication invariant
 

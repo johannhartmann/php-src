@@ -21,7 +21,12 @@ against 137M). The difference is the layer that replaces the interpreter:
 | Opcode-shaped value and object helpers | 126.3M | |
 | Call protocol (resolve, invoke, activation, frames, arguments) | 112.8M | |
 
-The generated code alone costs more than the whole stock interpreter. An empty
+The generated code alone costs more than the whole stock interpreter. (The
+5.9M stock instructions in generated code are PCRE JIT code for regular
+expressions; stock runs without the PHP JIT. The native figure contains the
+same share.) Altogether the native execution layer, including the remaining
+native runtime, costs 420.5M against 121.0M in stock: 93 % of the extra
+instructions are in our own layer, 22M in the shared runtime. An empty
 integer loop takes 48 instructions per iteration against 54 in the VM. A method
 call takes 703 instructions against 285.
 
@@ -119,8 +124,23 @@ uses a native calling convention:
 The universal activation, `zend_native_call_resolve_user`,
 `zend_native_call_invoke_user` and per-argument
 `zend_native_call_set_explicit_argument` remain as the cold path for a cache
-miss and for the forms the fast path does not cover: named, variadic,
-by-reference and unpacked arguments, magic `__call`, observers.
+miss and for the forms the fast path does not cover: named, variadic and
+by-reference arguments, magic `__call`, trampolines, observers.
+
+Two WordPress forms are fast-path forms, not cold ones:
+
+- `call_user_func_array` / `SEND_ARRAY` with packed positional arguments and
+  no named or by-reference parameter: the argument array is copied directly
+  into the callee's parameter slots;
+- hook dispatch sites with changing targets: an already resolved target
+  (entry cell, valid native binding) is invoked without re-running the
+  general resolution and activation machine; the per-site cache is only the
+  first level.
+
+The call fast path uses the same ownership, observation and suspension rules
+as section 1 (a caller's native-owned locals are described by the map at the
+call-return PC); it is developed in parallel with, not independently of, the
+frame-state and cleanup work.
 
 The callee frame header stays eager (section 1), so extensions and runtime
 services keep a walkable `EX` chain. Building headers lazily as well, from the
@@ -170,6 +190,24 @@ observers. This is exact reconstruction under the section 1 contract.
 
 ## Delivery
 
+The phase targets below are intermediate targets, not a budget for parity:
+with helper and call costs just below their targets and the shared runtime
+unchanged, 270M instructions would already be spent before any application
+code. The acceptance measure is the total per warm request against stock.
+
+Order (review of 2026-09-30): first the contract documents and the snippet
+regeneration build; then phases 1 and 2 together (native value handling for
+typed and untyped, boxed SSA values, targeted materialization with its
+reverse direction, native cleanup, value-based primitives); phase 3 in
+parallel with the shared state contract; then bounded speculation with
+deoptimization, then bounded inlining. The generic native baseline must be
+competitive on its own; speculation and inlining add to it and do not
+replace it. The existing mechanisms are extended rather than duplicated:
+frame states, entry cells, generations, the resume contract, and
+`generate_guarded_direct_exit` for guard exits instead of materialized
+decision registers. Code size is analysed (executed code, cold code, stubs,
+metadata, mapping) before the publisher is changed; W^X stays.
+
 Each phase is measured on the same warm WordPress request (retired
 instructions, cycles, L1i and iTLB misses, hot code size, cold compile time),
 with unchanged page output, and must pass the full PHPT tier. The loop, call
@@ -177,18 +215,24 @@ and property targets use the micro-benchmark from this ADR's context.
 
 1. **Frame states as machine maps; lazy CV/TMP slots.** The backend emits
    verified machine frame-state maps. Non-parameter CVs and TMPs stop being
-   store-through outside the materialization points of section 1. Helpers
-   declare the slots they read. Target: the empty integer loop falls from 48
-   to 10 or fewer instructions per iteration; generated code on WordPress
-   falls clearly below 170M.
+   store-through outside the materialization points of section 1, with the
+   single-owner rule of the safepoint contract (a native-owned value's slot
+   holds `IS_UNDEF`) and native exception cleanup for native-owned values.
+   Helpers declare the slots they read and write. The empty integer loop is a
+   focused regression target (48 instructions per iteration now), not the
+   proof of the phase; generated code on WordPress falls clearly below 170M.
 2. **Helper primitives.** Rewrite the helpers in instruction order of the
    profile (`ASSIGN_DIM`, `ASSIGN`, `FETCH_DIM`, object read and write,
    conditional branches, array construction, iteration) to take values, with
-   the shared release sequence. Target: helper instructions per request from
-   126M to under 60M.
+   the shared release sequence. Array probes handle non-interned string keys
+   by hash, length and content (numeric strings and real collisions stay
+   correct) instead of leaving them to the operand-decoding helper. Target:
+   helper instructions per request from 126M to under 60M.
 3. **Native calls.** Section 3 for user functions, methods, static methods,
-   closures and `new`. Target: a monomorphic method call from 703 to under
-   150 instructions; call protocol on WordPress from 113M to under 40M.
+   closures, `new`, packed `call_user_func_array` and changing hook targets.
+   Target: a method call from 703 to under 150 instructions, the same order
+   for a hook site with changing targets; call protocol on WordPress from 113M
+   to under 40M.
 4. **Type feedback, specialization, deoptimization.** Section 4, starting
    with integer and float operations, packed arrays and property offsets.
    Target: loops and property-heavy code run on unboxed values; every
@@ -207,10 +251,12 @@ the frame-state maps from phase 1. Phase 5 needs phases 3 and 4.
 - The Zend frame is no longer the only copy of a function's state. Every
   change to generated code, helpers or observation points must keep the
   frame-state maps complete; a missing entry is a correctness bug.
-- Tests must force every observation point at every relevant program point:
-  warnings, exceptions and traces, backtraces with modified parameters,
-  observers, dynamic-scope functions, generators, fibers, and each
-  deoptimization site. Compare against stock PHP as the oracle.
+- Tests must force every observation class: warnings, exceptions and traces,
+  backtraces with modified parameters, observers, dynamic-scope functions,
+  generators, fibers, and each guard/transfer class of deoptimization in the
+  relevant combinations with aliasing, pending calls, side effects,
+  suspension and register pressure (not one PHPT per dynamic deopt instance).
+  Compare against stock PHP as the oracle.
 - Compile time grows with specialization and inlining. Compilation of the
   generic version stays single-pass TPDE; specialized versions are compiled
   only for hot functions.

@@ -8,18 +8,18 @@ they are not proposed public headers and do not fix concrete structure layout.
 | Transfer | Published state | Control transfer | Cleanup owner |
 |---|---|---|---|
 | Normal return | Canonical result or `UNDEF`, parent frame, successor opline | Direct native return/continuation | Callee completes its obligations; result ownership moves to caller. |
-| PHP exception | `EG(exception)`, throwing opline, canonical frame and roots | Explicit native branch to exception continuation | Frame/unwind metadata, exactly once. |
-| Zend bailout | Active bailout catcher plus reachable canonical roots/obligations | Nonlocal longjmp-style transfer | Catcher-owned recovery state; local continuation is unreachable. |
+| PHP exception | `EG(exception)`, throwing opline | Explicit native branch to exception continuation | The frame's native exception path releases native-owned values, then frame/unwind metadata releases frame-owned ones, each exactly once. |
+| Zend bailout | Active bailout catcher plus reachable non-memory obligations | Nonlocal longjmp-style transfer | Catcher-owned recovery state; local continuation is unreachable. |
 | Generator suspend | Persistent generator frame, yielded state, roots, resume ID, code-version reference | Return to generator caller | Generator suspend record. |
 | Fiber switch | Captured VM/fiber state, active frame chain, roots, transfer reason | Context transfer | Suspended fiber state. |
-| Native resume/deopt | Validated persistent state, resume ID, immutable active code version | Single native entry then direct registered continuation | Reconstructed frame or destination continuation. |
+| Native resume/deopt | Validated persistent state or deoptimized frame, resume ID, immutable active code version | Single native entry then direct registered continuation | Reconstructed frame or destination continuation. |
 
 ## PHP exception protocol
 
 PHP exceptions are executor state, not C++ unwinding:
 
-1. Before a throwing call or explicit throw, canonicalize the responsible frame
-   under the [safepoint protocol](safepoint-contract.md).
+1. Before a throwing call or explicit throw, publish the state the boundary
+   class reads under the [safepoint protocol](safepoint-contract.md).
 2. Preserve the responsible user-opline index as the throwing position.
 3. Publish or observe the exception through `EG(exception)`. Zend currently
    records the pre-dispatch opline and then installs its exception sentinel in
@@ -27,7 +27,9 @@ PHP exceptions are executor state, not C++ unwinding:
 4. Test `EG(exception)` on every locally returning may-throw edge and branch to
    that frame's verified native exception continuation.
 5. Use the throwing index to select try/catch/finally and the exact pending-call
-   and live-value cleanup set. Do not advance to the normal successor.
+   and live-value cleanup set. The native exception path releases the
+   frame's native-owned live values in Zend's live-range order; frame-owned
+   values follow Zend's frame cleanup. Do not advance to the normal successor.
 6. When propagating to a parent, finish or transfer each cleanup obligation once,
    restore the canonical parent, and preserve Zend exception identity.
 
@@ -45,10 +47,14 @@ and code after a may-bailout call is not guaranteed to run.
 
 Before a may-bailout boundary:
 
-- materialize the full frame chain, roots, responsible oplines, pending calls,
-  return state, and exception state;
-- move every required cleanup action to a record reachable by the active
-  catcher, or complete it before the call;
+- keep the frame header chain and responsible oplines current (they are
+  always current under the safepoint contract);
+- native-owned PHP values need no action: after a bailout Zend drops the
+  frames without releasing their values, and objects reach their destructors
+  through the object store during shutdown, exactly as for frame-owned values
+  in stock PHP;
+- move every required non-memory cleanup action to a record reachable by the
+  active catcher, or complete it before the call;
 - ensure no C++ automatic object whose destructor is required for correctness
   remains live across the call;
 - ensure locks, pin counts, code-version references, temporary buffers, and
@@ -65,21 +71,22 @@ back into the abandoned native activation. Cleanup must tolerate
 ## Destructor and reentry protocol
 
 Destroying or overwriting a refcounted value is a safepoint whenever its release
-can invoke an object destructor or related user hook. Before release, the value
-and all other live values are rooted, and the release obligation is reachable
-outside volatile local state.
+can invoke an object destructor or related user hook. Before release, the
+value has its single owner and the release obligation is reachable outside
+volatile local state.
 
-The destructor may call PHP, allocate, mutate aliased values, throw, switch a
-fiber, or bail out. If it returns locally, native code reloads
-`EG(current_execute_data)`, `EG(exception)`, the frame opline, aliases, and every
-live canonical slot. It does not use pre-call register caches. If an exception
-exists, the exception edge wins; if bailout occurred, no local code executes.
-The obligation is completed exactly once even when the destructor reenters the
-same logical operation.
+The destructor may call PHP, allocate, mutate aliased values and heap
+objects, throw, switch a fiber, or bail out. It cannot name the caller's
+non-alias locals. If it returns locally, native code reloads
+`EG(current_execute_data)`, `EG(exception)`, the frame opline, alias-observable
+slots and every heap fact the release may invalidate; native-owned non-alias
+locals stay valid. If an exception exists, the exception edge wins; if bailout
+occurred, no local code executes. The obligation is completed exactly once
+even when the destructor reenters the same logical operation.
 
 Observer and interrupt callbacks use the same reentry discipline. Their
-execute-data argument and responsible opline are canonical before entry; all
-observable state is reloaded after local return.
+execute-data argument, arguments and responsible opline are canonical before
+entry; alias-observable slots and heap facts are reloaded after local return.
 
 ## Persistent suspension state
 
@@ -196,10 +203,30 @@ bailout continuation. They cannot fall through to another resume target.
 Missing metadata makes a code version ineligible for publication, so production
 execution never repairs a resume by interpreting the saved opcode.
 
-## Future deoptimization
+## Deoptimization
 
-A future optimizing tier may produce the same request after materializing every
-logical frame and live value described by a verified frame recipe. It uses the
-same baseline frame, version identity, roots, cleanup, and single entry. This
-contract reserves no on-stack replacement protocol and permits no second
-resume ABI.
+A specialized code version ([ADR 0025](../../adr/0025-native-canonical-execution.md))
+produces the same request after moving ownership of every value its guard's
+frame-state map names into the frame slots. It uses the same baseline frame,
+version identity, roots, cleanup, and single entry; there is no second resume
+ABI.
+
+- **Semantic continuation:** a resume ID names the continuation that follows
+  the work already done, not just a source position. Side effects, argument
+  evaluation, `RECV` processing and releases performed before the guard are
+  never repeated; a guard therefore precedes every side effect of its
+  operation, or its resume ID names the successor of the completed part.
+- **Invalidation:** code lifetime and assumption validity are separate. When
+  an assumption (class layout, function or constant binding, declaration
+  epoch) is invalidated, no operation that depends on it runs afterwards in
+  any activation: such operations re-check the assumption's generation, or
+  the invalidation deoptimizes the affected activations before they reach
+  one. Retired code stays mapped while an activation uses it.
+- **Bounded specialization:** each function and site keeps a bounded number
+  of specialized assumptions. A site whose guard keeps failing gives up that
+  assumption in the next version instead of adding variants. Array shape
+  facts (packed, hash) do not imply that a bucket address or shape survives a
+  mutation.
+
+This contract reserves no on-stack replacement protocol beyond these resume
+entries.
