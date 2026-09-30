@@ -13582,27 +13582,51 @@ bool ZendCompilerX64::compile_inst_impl(
 						ASM(MOV32ri, key_type_reg, IS_LONG);
 					}
 					label_place(element_ready);
+					(void) destination_valid;
 					if (!layout.destination_scalar_only) {
-						ASM(MOV32rm, type_reg,
+						/* The CV is overwritten without the assignment
+						 * protocol only while it owns nothing: no counted
+						 * value and no reference. */
+						ASM(TEST32mi,
 							FE_MEM(frame_reg, 0, FE_NOREG,
 								static_cast<int32_t>(layout.destination_offset
-									+ offsetof(zval, u1.type_info))));
-						ASM(AND32ri, type_reg, Z_TYPE_MASK);
-						ASM(CMP32ri, type_reg, IS_UNDEF);
-						generate_raw_jump(Jump::je, destination_valid);
-						ASM(CMP32ri, type_reg, IS_LONG);
+									+ offsetof(zval, u1.type_info))),
+							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 						generate_raw_jump(Jump::jne, slow);
-						label_place(destination_valid);
 					}
 					ASM(MOV32rm, type_reg,
 						FE_MEM(element_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
 								offsetof(zval, u1.type_info))));
-					ASM(AND32ri, type_reg, Z_TYPE_MASK);
-					ASM(CMP32ri, type_reg, IS_LONG);
-					generate_raw_jump(Jump::jne, slow);
 					ASM(MOV64rm, value_reg,
 						FE_MEM(element_reg, 0, FE_NOREG, 0));
+					auto value_owned = text_writer.label_create();
+					if (layout.destination_scalar_only) {
+						ASM(MOV32rr, limit_reg, type_reg);
+						ASM(AND32ri, limit_reg, Z_TYPE_MASK);
+						ASM(CMP32ri, limit_reg, IS_LONG);
+						generate_raw_jump(Jump::jne, slow);
+					} else {
+						/* FE_FETCH_R copies like ZVAL_COPY_OR_DUP; a
+						 * reference, an indirect slot or a persistent
+						 * counted value keeps the helper. */
+						ASM(MOV32rr, limit_reg, type_reg);
+						ASM(AND32ri, limit_reg, Z_TYPE_MASK);
+						ASM(CMP32ri, limit_reg, IS_REFERENCE);
+						generate_raw_jump(Jump::je, slow);
+						ASM(CMP32ri, limit_reg, IS_INDIRECT);
+						generate_raw_jump(Jump::je, slow);
+						ASM(TEST32ri, type_reg,
+							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+						generate_raw_jump(Jump::je, value_owned);
+						ASM(TEST32mi,
+							FE_MEM(value_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_refcounted_h, u.type_info))),
+							GC_PERSISTENT);
+						generate_raw_jump(Jump::jne, slow);
+					}
+					label_place(value_owned);
 
 					/* All guards precede the first observable mutation. */
 					ASM(ADD32ri, position_reg, 1);
@@ -13611,15 +13635,27 @@ bool ZendCompilerX64::compile_inst_impl(
 							static_cast<int32_t>(layout.holder_offset
 								+ offsetof(zval, u2.fe_pos))),
 						position_reg);
+					if (!layout.destination_scalar_only) {
+						auto value_counted = text_writer.label_create();
+						ASM(TEST32ri, type_reg,
+							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+						generate_raw_jump(Jump::je, value_counted);
+						ASM(ADD32mi,
+							FE_MEM(value_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_refcounted_h, refcount))),
+							1);
+						label_place(value_counted);
+					}
 					ASM(MOV64mr,
 						FE_MEM(frame_reg, 0, FE_NOREG,
 							static_cast<int32_t>(layout.destination_offset)),
 						value_reg);
-					ASM(MOV32mi,
+					ASM(MOV32mr,
 						FE_MEM(frame_reg, 0, FE_NOREG,
 							static_cast<int32_t>(layout.destination_offset
 								+ offsetof(zval, u1.type_info))),
-						IS_LONG);
+						type_reg);
 					if (layout.has_key) {
 						auto key_stored = text_writer.label_create();
 						ASM(MOV64mr,
