@@ -27,6 +27,8 @@ typedef struct _zend_native_executor_generation {
 	uint32_t active_requests;
 	bool persistent;
 	bool owns_script_tables;
+	/* See zend_native_executor_script_links_at_runtime(). */
+	bool links_at_runtime;
 	struct _zend_native_executor_generation *next;
 } zend_native_executor_generation;
 
@@ -62,6 +64,9 @@ typedef struct _zend_native_executor_request {
 	zend_native_executor_epoch_ref *epoch;
 	HashTable dispatch;
 	HashTable owners;
+	/* Cached scripts by their interned filename, for functions and methods
+	 * whose op arrays do not share the main op array's opcodes. */
+	HashTable owners_by_file;
 	HashTable request_generations_by_root;
 	HashTable request_generations_by_opcodes;
 	HashTable leased_generations;
@@ -645,6 +650,43 @@ static const zend_script *zend_native_executor_script_owner(
 		: NULL;
 }
 
+/*
+ * A script whose classes are not all linked when it is loaded links them
+ * while the include runs, from OPcache's inheritance cache. Its bundle was
+ * compiled against the unlinked entries, so its persistent generation
+ * compiles on demand and binds only linked class entries.
+ */
+static bool zend_native_executor_script_links_at_runtime(
+	const zend_script *owner)
+{
+	zend_class_entry *class_entry;
+
+	if (owner == NULL) {
+		return false;
+	}
+	ZEND_HASH_MAP_FOREACH_PTR(&owner->class_table, class_entry) {
+		if ((class_entry->ce_flags & ZEND_ACC_LINKED) == 0) {
+			return true;
+		}
+	} ZEND_HASH_FOREACH_END();
+	return false;
+}
+
+/* A class entry persistent code may bind: linked, and shared by every
+ * request (immutable) unless the owner script itself holds it. */
+static zend_class_entry *zend_native_executor_bindable_class(
+	zend_class_entry *cached, zend_class_entry *runtime)
+{
+	const uint32_t shared = ZEND_ACC_LINKED | ZEND_ACC_IMMUTABLE;
+
+	if (runtime != NULL && runtime != cached) {
+		return runtime->type == ZEND_USER_CLASS
+				&& (runtime->ce_flags & shared) == shared
+			? runtime : NULL;
+	}
+	return (cached->ce_flags & ZEND_ACC_LINKED) != 0 ? cached : NULL;
+}
+
 static bool zend_native_executor_build_owner_script(
 	zend_native_executor_generation *generation,
 	zend_op_array *root, const zend_script *owner, bool persistent)
@@ -707,7 +749,13 @@ static bool zend_native_executor_build_owner_script(
 			continue;
 		}
 		runtime_class = zend_hash_find_ptr(EG(class_table), name);
-		if (runtime_class != NULL
+		if (generation->links_at_runtime) {
+			class_entry = zend_native_executor_bindable_class(
+				class_entry, runtime_class);
+			if (class_entry == NULL) {
+				continue;
+			}
+		} else if (runtime_class != NULL
 				&& runtime_class->type == ZEND_USER_CLASS) {
 			class_entry = runtime_class;
 		}
@@ -1380,6 +1428,8 @@ zend_native_executor_create_generation(zend_op_array *root)
 	}
 	generation->owner = owner;
 	generation->persistent = persistent;
+	generation->links_at_runtime = persistent
+		&& zend_native_executor_script_links_at_runtime(owner);
 	generation->epoch = zend_native_executor_request_state.epoch != NULL
 		? zend_native_executor_request_state.observed_epoch
 		: __atomic_load_n(
@@ -1432,7 +1482,7 @@ zend_native_executor_create_generation(zend_op_array *root)
 		}
 		return NULL;
 	}
-	if (bundle != NULL
+	if (bundle != NULL && !generation->links_at_runtime
 			&& bundle->flags == zend_native_executor_bundle_flags()
 			&& zend_native_compiler_import_bundle(
 				generation->compiler, bundle->bytes, bundle->size,
@@ -1584,6 +1634,69 @@ zend_native_executor_create_or_acquire_generation(zend_op_array *root)
 	return generation;
 }
 
+/*
+ * The persistent generation of the cached script that declares an immutable
+ * function or method, found by the script's filename. A method of a class
+ * the include linked at runtime joins the generation once its immutable,
+ * inheritance-cached class entry exists, so every later request reuses the
+ * compiled code. NULL keeps the request-local compilation.
+ */
+static zend_native_executor_generation *
+zend_native_executor_find_owner_generation(zend_function *function)
+{
+	const uint32_t shared = ZEND_ACC_LINKED | ZEND_ACC_IMMUTABLE;
+	zend_native_executor_generation *generation;
+	zend_class_entry *scope = function->common.scope;
+	const zend_script *owner;
+	HashTable *table;
+	zend_string *key;
+	void *indexed;
+	bool usable;
+
+	if (!ZEND_USER_CODE(function->type)
+			|| (function->common.fn_flags & ZEND_ACC_IMMUTABLE) == 0
+			|| (function->common.fn_flags & ZEND_ACC_CLOSURE) != 0
+			|| function->common.function_name == NULL
+			|| function->op_array.filename == NULL
+			|| !zend_native_executor_request_state.dispatch_active
+			|| (scope != NULL && (scope->type != ZEND_USER_CLASS
+				|| (scope->ce_flags & shared) != shared))
+			|| (owner = zend_hash_index_find_ptr(
+				&zend_native_executor_request_state.owners_by_file,
+				(zend_ulong) (uintptr_t) function->op_array.filename))
+				== NULL) {
+		return NULL;
+	}
+	generation = zend_native_executor_create_or_acquire_generation(
+		(zend_op_array *) &owner->main_op_array);
+	if (generation == NULL || !generation->persistent
+			|| generation->owner != owner) {
+		if (EG(exception) != NULL) {
+			zend_clear_exception();
+		}
+		return NULL;
+	}
+	table = scope != NULL
+		? &generation->script.class_table
+		: &generation->script.function_table;
+	key = zend_string_tolower(
+		scope != NULL ? scope->name : function->common.function_name);
+	zend_native_executor_generation_lock();
+	indexed = zend_hash_find_ptr(table, key);
+	usable = scope != NULL ? indexed == scope : indexed == function;
+	if (indexed == NULL && scope != NULL && generation->links_at_runtime) {
+		zend_string *persistent_key = zend_string_init(
+			ZSTR_VAL(key), ZSTR_LEN(key), true);
+
+		usable = zend_hash_add_ptr(table, persistent_key, scope) != NULL
+			&& zend_native_executor_index_class_locked(generation, scope);
+		zend_string_release_ex(persistent_key, true);
+	}
+	zend_native_executor_generation_unlock();
+	zend_string_release(key);
+	return usable ? generation : NULL;
+}
+
 static zend_native_entry_cell *
 zend_native_executor_resolve_external_reentry(
 	void *context, zend_function *function)
@@ -1612,6 +1725,9 @@ zend_native_executor_resolve_external_reentry(
 		 * that this function roots, serves every later reentry; creating a
 		 * generation per call compiled a hot function thousands of times.
 		 */
+		generation = zend_native_executor_find_owner_generation(function);
+	}
+	if (generation == NULL) {
 		generation = zend_native_executor_find_function_generation(function);
 		if (generation == NULL) {
 			generation = zend_native_executor_find_root_generation(
@@ -1675,23 +1791,12 @@ zend_native_entry_cell *zend_native_executor_resolve_cached_include(
 	zend_native_entry_cell *entry_cell;
 	uint32_t first_compiled_function;
 	const zend_script *owner;
-	zend_class_entry *class_entry;
 
 	if (op_array == NULL || !zend_native_executor_request_state.active
 			|| !zend_native_executor_op_array_is_cache_owned(op_array)
 			|| (owner = zend_native_executor_script_owner(op_array)) == NULL) {
 		return NULL;
 	}
-	/*
-	 * Persistent code binds the script's class entries. A class that the
-	 * include links at runtime gets another entry than the cached one, so
-	 * only scripts whose classes are all linked when loaded share code.
-	 */
-	ZEND_HASH_MAP_FOREACH_PTR(&owner->class_table, class_entry) {
-		if ((class_entry->ce_flags & ZEND_ACC_LINKED) == 0) {
-			return NULL;
-		}
-	} ZEND_HASH_FOREACH_END();
 	generation = zend_native_executor_find_leased_function(
 		(zend_function *) op_array);
 	if (generation == NULL) {
@@ -1834,6 +1939,9 @@ void zend_native_executor_activate(void)
 	zend_hash_init(
 		&zend_native_executor_request_state.owners, 8, NULL, NULL, false);
 	zend_hash_init(
+		&zend_native_executor_request_state.owners_by_file, 8, NULL, NULL,
+		false);
+	zend_hash_init(
 		&zend_native_executor_request_state.request_generations_by_root,
 		8, NULL, NULL, false);
 	zend_hash_init(
@@ -1899,6 +2007,8 @@ void zend_native_executor_deactivate(void)
 	if (zend_native_executor_request_state.dispatch_active) {
 		zend_hash_destroy(
 			&zend_native_executor_request_state.owners);
+		zend_hash_destroy(
+			&zend_native_executor_request_state.owners_by_file);
 		zend_hash_destroy(
 			&zend_native_executor_request_state.dispatch);
 		zend_native_executor_request_state.dispatch_active = false;
@@ -2339,7 +2449,12 @@ zend_result zend_native_executor_register_script_owner(
 			|| zend_hash_index_update_ptr(
 				&zend_native_executor_request_state.owners,
 				(zend_ulong) (uintptr_t) op_array->opcodes,
-				(void *) script) == NULL) {
+				(void *) script) == NULL
+			|| (op_array->filename != NULL
+				&& zend_hash_index_update_ptr(
+					&zend_native_executor_request_state.owners_by_file,
+					(zend_ulong) (uintptr_t) op_array->filename,
+					(void *) script) == NULL)) {
 		return FAILURE;
 	}
 	dispatch = zend_native_executor_dispatch_load(op_array);
@@ -2623,6 +2738,10 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 		if (generation == NULL) {
 			generation = zend_native_executor_find_persistent_function(
 				execute_data->func);
+			if (generation == NULL) {
+				generation = zend_native_executor_find_owner_generation(
+					execute_data->func);
+			}
 			if (generation == NULL) {
 				generation =
 					zend_native_executor_find_function_generation(
