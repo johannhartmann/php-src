@@ -129,17 +129,6 @@ static zend_always_inline uintptr_t zend_native_find_index(
 	return ZEND_NATIVE_ELEMENT_ABSENT;
 }
 
-/* The element under an integer key; a key of another type is undecided. */
-uintptr_t zend_native_array_find_long(const zval *container, const zval *key)
-{
-	const HashTable *table = zend_native_probe_array(container);
-
-	if (table == NULL || Z_TYPE_P(key) != IS_LONG) {
-		return ZEND_NATIVE_ELEMENT_UNKNOWN;
-	}
-	return zend_native_find_index(table, (zend_ulong) Z_LVAL_P(key));
-}
-
 /*
  * The element under a literal key. The compiler already turned numeric
  * string literals into integers and interned the others, so identity with
@@ -180,6 +169,74 @@ uintptr_t zend_native_array_find_literal(
 		}
 		if (bucket->h == h && bucket->key != NULL) {
 			return ZEND_NATIVE_ELEMENT_UNKNOWN;
+		}
+		index = Z_NEXT(bucket->val);
+	}
+	return ZEND_NATIVE_ELEMENT_ABSENT;
+}
+
+/*
+ * The element under a runtime key, as FETCH_DIM_R with a CV key sees it: an
+ * integer, or a string that cannot be numeric (it does not start with a
+ * digit or '-') and already carries its hash. Other strings are undecided,
+ * so the helper handles numeric conversion and computes the hash, which the
+ * string then keeps.
+ */
+uintptr_t zend_native_array_find_key(const zval *container, const zval *key)
+{
+	const HashTable *table = zend_native_probe_array(container);
+	const zend_string *name;
+	zend_ulong h;
+	size_t length;
+	uint32_t index;
+	unsigned char first;
+
+	if (table == NULL) {
+		return ZEND_NATIVE_ELEMENT_UNKNOWN;
+	}
+	if (Z_TYPE_P(key) == IS_REFERENCE) {
+		key = &Z_REF_P(key)->val;
+	}
+	if (Z_TYPE_P(key) == IS_LONG) {
+		return zend_native_find_index(table, (zend_ulong) Z_LVAL_P(key));
+	}
+	if (Z_TYPE_P(key) != IS_STRING) {
+		return ZEND_NATIVE_ELEMENT_UNKNOWN;
+	}
+	name = Z_STR_P(key);
+	h = ZSTR_H(name);
+	length = ZSTR_LEN(name);
+	if (h == 0 || length == 0) {
+		return ZEND_NATIVE_ELEMENT_UNKNOWN;
+	}
+	first = (unsigned char) ZSTR_VAL(name)[0];
+	if ((first >= '0' && first <= '9') || first == '-') {
+		return ZEND_NATIVE_ELEMENT_UNKNOWN;
+	}
+	if (HT_IS_PACKED(table)) {
+		return ZEND_NATIVE_ELEMENT_ABSENT;
+	}
+	index = HT_HASH_EX(table->arData, (uint32_t) h | table->nTableMask);
+	while (index != HT_INVALID_IDX) {
+		Bucket *bucket = HT_HASH_TO_BUCKET_EX(table->arData, index);
+
+		if (bucket->key == name) {
+			return zend_native_probe_element(&bucket->val);
+		}
+		if (bucket->h == h && bucket->key != NULL
+				&& ZSTR_LEN(bucket->key) == length) {
+			const unsigned char *left =
+				(const unsigned char *) ZSTR_VAL(bucket->key);
+			const unsigned char *right =
+				(const unsigned char *) ZSTR_VAL(name);
+			size_t offset = 0;
+
+			while (offset < length && left[offset] == right[offset]) {
+				offset++;
+			}
+			if (offset == length) {
+				return zend_native_probe_element(&bucket->val);
+			}
 		}
 		index = Z_NEXT(bucket->val);
 	}
