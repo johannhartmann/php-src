@@ -1002,6 +1002,14 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_CALL_FAST_SEND_VAR_REFERENCE,
 		ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE,
 		(const void *) zend_native_call_fast_send_var_reference},
+	{ZEND_NATIVE_HELPER_CALL_FAST_DO,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
+			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_RUNTIME_EFFECT_USERLAND
+			| ZEND_NATIVE_RUNTIME_EFFECT_REENTER
+			| ZEND_NATIVE_RUNTIME_EFFECT_THROW
+			| ZEND_NATIVE_RUNTIME_EFFECT_BAILOUT,
+		(const void *) zend_native_call_fast_do},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
