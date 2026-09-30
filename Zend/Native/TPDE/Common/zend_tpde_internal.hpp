@@ -597,6 +597,10 @@ struct zend_tpde_instruction {
 	zend_tpde_source_value_binding source_auxiliary_binding;
 	uint32_t source_op2_definition_ssa_variable_id_plus_one;
 	bool source_op2_canonical_scalar_only;
+	/* The op1 CV can never hold a reference: it has no alias, no call can
+	 * rebind it (see zend_tpde_ssa_variable_rebindable) and inference
+	 * excludes MAY_BE_REF, so its value lives in the slot itself. */
+	bool source_op1_reference_free;
 	uint32_t source_op1_reference_index;
 	uint32_t source_op2_reference_index;
 	uint32_t source_result_reference_index;

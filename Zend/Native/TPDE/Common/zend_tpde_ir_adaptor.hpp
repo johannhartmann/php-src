@@ -3563,10 +3563,17 @@ public:
 					plan_->instructions[i];
 				const zend_mir_instruction_record record =
 					instruction_record_at(i);
+				/*
+				 * The assigned value becomes the CV's register definition,
+				 * which a boundary later stores into the slot. A CV that may
+				 * hold a reference (bound by global, static or &, or any
+				 * global-scope CV) keeps the value inside that reference.
+				 */
 				if (record.opcode != ZEND_MIR_OPCODE_VALUE_ASSIGN
 						|| !instruction.has_value_operation
 						|| instruction.value_operation.op1.slot_kind
 							!= ZEND_MIR_SOURCE_SLOT_CV
+						|| !instruction.source_op1_reference_free
 						|| guarded_cold_blocks[i] == UINT32_MAX) {
 					continue;
 				}
@@ -4660,6 +4667,7 @@ public:
 					|| !instruction.has_value_operation
 					|| instruction.value_operation.op1.slot_kind
 						!= ZEND_MIR_SOURCE_SLOT_CV
+					|| !instruction.source_op1_reference_free
 					|| guarded_cold_blocks[i] == UINT32_MAX
 					|| register_assignment_results[i]
 						!= INVALID_VALUE_REF) {

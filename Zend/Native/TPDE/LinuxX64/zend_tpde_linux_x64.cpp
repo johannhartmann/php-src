@@ -1515,8 +1515,13 @@ bool ZendCompilerX64::compile_boxed_cond_guard(IRInstRef instruction) {
 	auto truthy = text_writer.label_create();
 	auto falsey = text_writer.label_create();
 	auto ready = text_writer.label_create();
+	/* A CV that may hold a reference keeps its value inside the reference
+	 * in its slot; storing the loaded value there would replace it. */
+	const bool publish_operand =
+		!(mir.value_operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+			&& !mir.source_op1_reference_free);
 
-	if (register_boxed) {
+	if (register_boxed && publish_operand) {
 		/*
 		 * The preceding fast node may leave a TMP register-authoritative.
 		 * Materialize that value before the boxed branch observes the
@@ -1549,7 +1554,14 @@ bool ZendCompilerX64::compile_boxed_cond_guard(IRInstRef instruction) {
 		spilled = spill_before_branch();
 	}
 
-	if (register_string && layout.has_result) {
+	if (register_boxed && !publish_operand) {
+		auto boxed = val_ref(node.operands[1]);
+		(void) boxed;
+	}
+	if (register_string && layout.has_result && !publish_operand) {
+		auto [string_ref, string] = val_ref_single(node.operands[1]);
+		(void) string;
+	} else if (register_string && layout.has_result) {
 		auto [string_ref, string] = val_ref_single(node.operands[1]);
 		auto string_reg = string.load_to_reg();
 		ASM(MOV64mr,
@@ -13208,6 +13220,13 @@ bool ZendCompilerX64::compile_inst_impl(
 				: nullptr;
 			const bool register_condition =
 				register_boxed_condition && !fused;
+			/* The helper reads the condition from its slot. A CV that may
+			 * hold a reference already has its value there, inside the
+			 * reference, which a store of the loaded value would replace. */
+			const bool publish_boxed_condition = register_boxed_condition
+				&& !(mir.value_operation.op1.slot_kind
+						== ZEND_MIR_SOURCE_SLOT_CV
+					&& !mir.source_op1_reference_free);
 			if ((node.operands.size() != 1 && !register_boxed_condition)
 					|| !mir.has_value_operation) {
 				return false;
@@ -13811,17 +13830,19 @@ bool ZendCompilerX64::compile_inst_impl(
 					if (parts.count() != 2) {
 						return false;
 					}
-					auto payload = boxed.part(0);
-					auto type_info = boxed.part(1);
-					ASM(MOV64mr,
-						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
-							static_cast<int32_t>(operand_offset)),
-						payload.load_to_reg());
-					ASM(MOV32mr,
-						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
-							static_cast<int32_t>(operand_offset
-								+ offsetof(zval, u1.type_info))),
-						type_info.load_to_reg());
+					if (publish_boxed_condition) {
+						auto payload = boxed.part(0);
+						auto type_info = boxed.part(1);
+						ASM(MOV64mr,
+							FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+								static_cast<int32_t>(operand_offset)),
+							payload.load_to_reg());
+						ASM(MOV32mr,
+							FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+								static_cast<int32_t>(operand_offset
+									+ offsetof(zval, u1.type_info))),
+							type_info.load_to_reg());
+					}
 				}
 
 				if (fused && !have_condition_layout) {
@@ -13928,7 +13949,12 @@ bool ZendCompilerX64::compile_inst_impl(
 									layout.operand_offset
 										+ offsetof(zval, u1.type_info))));
 					}
-					if (frame_temporary_condition) {
+					/* A counted temporary, in its slot or held in registers,
+					 * owns a reference that only the helper releases. */
+					if (frame_temporary_condition
+							|| (register_condition
+								&& mir.value_operation.op1.slot_kind
+									== ZEND_MIR_SOURCE_SLOT_TMP)) {
 						ASM(TEST32ri, type_reg,
 							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 						generate_raw_jump(Jump::jne, slow);
@@ -14043,15 +14069,18 @@ bool ZendCompilerX64::compile_inst_impl(
 						return false;
 					}
 					if (register_condition) {
-						ASM(MOV64mr,
-							FE_MEM(frame_reg, 0, FE_NOREG,
-								static_cast<int32_t>(layout.operand_offset)),
-							boxed_payload_reg);
-						ASM(MOV32mr,
-							FE_MEM(frame_reg, 0, FE_NOREG,
-								static_cast<int32_t>(layout.operand_offset
-									+ offsetof(zval, u1.type_info))),
-							boxed_type_info_reg);
+						if (publish_boxed_condition) {
+							ASM(MOV64mr,
+								FE_MEM(frame_reg, 0, FE_NOREG,
+									static_cast<int32_t>(
+										layout.operand_offset)),
+								boxed_payload_reg);
+							ASM(MOV32mr,
+								FE_MEM(frame_reg, 0, FE_NOREG,
+									static_cast<int32_t>(layout.operand_offset
+										+ offsetof(zval, u1.type_info))),
+								boxed_type_info_reg);
+						}
 						boxed_type_info.reset();
 						boxed_payload.reset();
 						boxed_condition.reset();

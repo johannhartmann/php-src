@@ -3709,6 +3709,17 @@ bool freeze_source_value_bindings(
 				operation.op2_storage_id,
 				source_position, index, definitions);
 			if (source_ssa != nullptr && source_ssa->var_info != nullptr
+					&& source_position < source_op_array->last) {
+				const int use = source_ssa->ops[source_position].op1_use;
+				instruction.source_op1_reference_free = use >= 0
+					&& use < source_ssa->vars_count
+					&& source_ssa->vars[use].alias == NO_ALIAS
+					&& !zend_tpde_ssa_variable_rebindable(
+						source_op_array, source_ssa,
+						static_cast<uint32_t>(use))
+					&& (source_ssa->var_info[use].type & MAY_BE_REF) == 0;
+			}
+			if (source_ssa != nullptr && source_ssa->var_info != nullptr
 					&& source_position < source_op_array->last
 					&& source_ssa->ops[source_position].op2_def >= 0) {
 				const zend_ssa_op &source_op =
@@ -4976,6 +4987,24 @@ bool freeze_statepoint_materializations(
 					}
 					const zend_tpde_value &value =
 						plan->values[value_index];
+					/*
+					 * A pointer whose slot is authoritative may have been
+					 * replaced there by a helper that separated it (an
+					 * append to a shared array); the resume reloads it from
+					 * the slot, so storing the register copy would restore
+					 * the old pointer.
+					 */
+					if (!value.register_authoritative
+							&& (value.machine_kind
+									== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+								|| value.machine_kind
+									== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+								|| value.machine_kind
+									== ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
+								|| value.machine_kind
+									== ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR)) {
+						continue;
+					}
 					append_materialization(
 						value_index, value.canonical_storage_id,
 						value.machine_kind, value_index, -1);
