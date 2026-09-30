@@ -1917,14 +1917,26 @@ bool zend_mir_w09_emit_executable_values(
 				&& operation->op1_storage_id < storage_count
 				&& zend_mir_id_is_valid(
 					ssa_by_storage[operation->op1_storage_id])) {
+			const bool verified = index > 0
+				&& op_array->opcodes[index - 1].opcode
+					== ZEND_VERIFY_RETURN_TYPE;
+			const int use = semantic_ssa != NULL && !verified
+				? semantic_ssa->ops[index].op1_use : -1;
+
 			/*
 			 * VERIFY_RETURN_TYPE and the following RETURN share the same
 			 * physical carrier, but Zend SSA intentionally omits the second
 			 * use. Preserve the last explicit source-backed SSA identity so
 			 * the attached return descriptor remains exact and pointer-free.
+			 * Any other RETURN keeps its own use: a join such as the result of
+			 * `$a && $b` is a PHI, not the last definition in opline order.
 			 */
 			operation->op1.ssa_variable_id =
-				ssa_by_storage[operation->op1_storage_id];
+				use >= 0 && (uint32_t) use < source_ssa_count
+					&& semantic_ssa->vars[use].var
+						== (int) operation->op1_storage_id
+				? (uint32_t) use
+				: ssa_by_storage[operation->op1_storage_id];
 		}
 		operation->auxiliary.kind = ZEND_MIR_SOURCE_OPERAND_UNUSED;
 		operation->auxiliary.slot_kind =
