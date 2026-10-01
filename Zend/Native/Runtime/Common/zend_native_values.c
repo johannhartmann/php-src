@@ -4672,6 +4672,23 @@ static zend_always_inline bool zend_native_value_fetch_dim_r_read(
 		container, false, offset, offset_tmp, target, status);
 }
 
+/* The temporary or VAR slot a value result is written to, or NULL. */
+static zend_always_inline zval *zend_native_value_fast_result_slot(
+	zend_execute_data *execute_data, uint64_t encoded)
+{
+	const uint32_t index = (uint32_t) (encoded >> 16);
+
+	if (((encoded & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_SLOT
+				&& (encoded & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_SSA)
+			|| (((encoded >> 8) & UINT64_C(0xff)) != ZEND_MIR_SOURCE_SLOT_TMP
+				&& ((encoded >> 8) & UINT64_C(0xff)) != ZEND_MIR_SOURCE_SLOT_VAR)
+			|| index >= execute_data->func->op_array.T) {
+		return NULL;
+	}
+	return ZEND_CALL_VAR_NUM(execute_data,
+		execute_data->func->op_array.last_var + index);
+}
+
 static zend_always_inline bool zend_native_value_fetch_dim_r_fast(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result, zend_native_status *status)
@@ -4681,16 +4698,15 @@ static zend_always_inline bool zend_native_value_fetch_dim_r_fast(
 	zval *target;
 	bool container_tmp;
 	bool offset_tmp;
-	bool target_tmp;
 
+	/* A by-value FUNC_ARG fetch writes its value to a VAR. */
 	if ((container = zend_native_value_fast_operand(
 				execute_data, op1, &container_tmp)) == NULL
 			|| container_tmp
 			|| (offset = zend_native_value_fast_operand(
 				execute_data, op2, &offset_tmp)) == NULL
-			|| (target = zend_native_value_fast_operand(
-				execute_data, result, &target_tmp)) == NULL
-			|| !target_tmp) {
+			|| (target = zend_native_value_fast_result_slot(
+				execute_data, result)) == NULL) {
 		return false;
 	}
 	return zend_native_value_fetch_dim_r_read(
