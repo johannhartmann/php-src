@@ -76,6 +76,33 @@ protected:
   u32 growth_size = 0x10000;
 
 public:
+  /// Offsets at and above this belong to the cold area of the current
+  /// function until append_cold_area() moves it behind the hot code.
+  static constexpr u32 ColdAreaBase = 0x40000000u;
+
+protected:
+  /// Whether code is currently written to the cold area.
+  bool cold_active = false;
+  /// Cold code of the current function; its size is the allocated space.
+  util::SmallVector<u8, 0> cold_data;
+  /// Bytes written to the cold area.
+  u32 cold_used = 0;
+  /// Where the cold area was appended, for translate_cold_offset().
+  u32 cold_final_base = 0;
+  /// The hot writer state while the cold area is active.
+  u8 *hot_data_begin = nullptr;
+  u8 *hot_data_cur = nullptr;
+  u8 *hot_data_reserve_end = nullptr;
+  struct ColdReloc {
+    SymRef sym;
+    u32 type;
+    u64 off;
+    i64 addend;
+  };
+  /// Relocations of cold code, recorded when the area is appended.
+  util::SmallVector<ColdReloc, 0> cold_relocs;
+
+public:
   struct JumpTable {
     u32 size; ///< Number of jump table entries.
     u32 off;  ///< Start offset in code, must hold sufficient space for jump.
@@ -178,8 +205,39 @@ protected:
 public:
   /// Record relocation at the given offset.
   void reloc(SymRef sym, u32 type, u64 off, i64 addend = 0) {
+    if (cold_active) {
+      cold_relocs.push_back(ColdReloc{sym, type, off, addend});
+      return;
+    }
     assembler->reloc_sec(get_sec_ref(), sym, type, off, addend);
   }
+
+  /// \name Cold area
+  /// Code written between begin_cold_area() and end_cold_area() is placed
+  /// behind the hot code of the function, at append_cold_area(). Offsets in
+  /// the area start at ColdAreaBase; jumps between the areas always take
+  /// fixups (label_needs_fixup()), and no branch falls through out of the
+  /// area.
+  /// @{
+  bool in_cold_area() const { return cold_active; }
+  void begin_cold_area();
+  void end_cold_area();
+  /// Move the cold area behind the hot code and translate the labels,
+  /// fixups, jump tables and relocations recorded in it.
+  void append_cold_area();
+  /// A cold-area offset recorded elsewhere, after append_cold_area().
+  u32 translate_cold_offset(u32 off) const {
+    return off >= ColdAreaBase && off != ~0u
+               ? off - ColdAreaBase + cold_final_base
+               : off;
+  }
+  /// Whether a jump to label must be fixed up at the end: the label is not
+  /// placed yet, or lies in the other area.
+  bool label_needs_fixup(Label label) const {
+    const u32 off = label_offsets[u32(label)];
+    return off == ~0u || ((off >= ColdAreaBase) != cold_active);
+  }
+  /// @}
 
   /// Remove bytes and adjust labels/relocations accordingly. The covered region
   /// must be before the first label, i.e., this function can only be used to

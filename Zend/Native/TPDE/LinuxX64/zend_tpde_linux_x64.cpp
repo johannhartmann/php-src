@@ -4307,6 +4307,9 @@ bool ZendCompilerX64::compile_inst_impl(
 						(8 * saved_gp.size() + 15) & ~size_t{15});
 					const int32_t save_area = xmm_base
 						+ 16 * static_cast<int32_t>(saved_xmm.size()) + 16;
+					/* The stub runs once per site and request: out of the
+					 * hot code. */
+					text_writer.begin_cold_area();
 					label_place(fast_rearm);
 					ASM(LEA64rm, FE_SP, FE_MEM(FE_SP, 0, FE_NOREG, -save_area));
 					for (size_t i = 0; i < saved_gp.size(); ++i) {
@@ -4339,6 +4342,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(LEA64rm, FE_SP, FE_MEM(FE_SP, 0, FE_NOREG, save_area));
 					generate_raw_jump(Jump::jne, fast_retry);
 					generate_raw_jump(Jump::jmp, fast_miss);
+					text_writer.end_cold_area();
 				}
 				}
 				label_place(fast_miss);
