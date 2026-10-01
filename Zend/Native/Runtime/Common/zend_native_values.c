@@ -4944,16 +4944,16 @@ zend_native_status zend_native_value_fetch_list(
 	if (source_opcode == ZEND_FETCH_LIST_R) {
 		bool container_tmp;
 		bool key_tmp;
-		bool result_tmp;
 		zval *fast_container = zend_native_value_fast_operand(
 			execute_data, op1, &container_tmp);
 		zval *fast_key = zend_native_value_fast_operand(
 			execute_data, op2, &key_tmp);
-		zval *fast_result = zend_native_value_fast_operand(
-			execute_data, result_operand, &result_tmp);
+		/* FETCH_LIST_R writes its element to a VAR or a temporary. */
+		zval *fast_result = zend_native_value_fast_result_slot(
+			execute_data, result_operand);
 
 		if (fast_container != NULL && fast_key != NULL && fast_result != NULL
-				&& result_tmp && fast_result != fast_container) {
+				&& fast_result != fast_container) {
 			zval *array = fast_container;
 			zval *name = fast_key;
 			zval *found = NULL;
