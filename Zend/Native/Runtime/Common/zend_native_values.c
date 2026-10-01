@@ -3271,6 +3271,24 @@ static zend_native_status zend_native_value_rope_store(
 	zend_string **rope;
 	zend_string *piece;
 
+	/* A string piece stored without decoding, with the piece semantics of
+	 * zend_native_value_rope_piece(). */
+	if (source_opcode == expected_opcode) {
+		bool rope_tmp, value_tmp;
+		zval *fast_rope = zend_native_value_fast_operand(execute_data,
+			initialize ? result_operand : op1, &rope_tmp);
+		zval *fast_value = zend_native_value_fast_operand(
+			execute_data, op2, &value_tmp);
+
+		if (fast_rope != NULL && rope_tmp && fast_value != NULL
+				&& Z_TYPE_P(fast_value) == IS_STRING) {
+			piece = value_tmp ? Z_STR_P(fast_value)
+				: zend_string_copy(Z_STR_P(fast_value));
+			((zend_string **) fast_rope)[initialize ? 0 : extended_value] =
+				piece;
+			return ZEND_NATIVE_RETURNED;
+		}
+	}
 	if (!zend_native_value_init_explicit_operation(
 			execute_data, op1, op2, result_operand, extended_value,
 			source_opcode, source_position_id, expected_opcode, &operation)
