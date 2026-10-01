@@ -6955,6 +6955,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		CallBuilder builder{*this, assigner};
 		zend_tpde_frameless_direct frameless_direct{};
 		zend_tpde_concat_assign_direct concat_assign_direct{};
+		zend_tpde_concat_direct concat_direct{};
 		zend_tpde_dim_direct dim_direct{};
 		if (zend_tpde_helper_requires_undef_result(helper, operation)) {
 			const uint64_t result_offset =
@@ -7026,6 +7027,19 @@ bool ZendCompilerX64::compile_inst_impl(
 					: helper == ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM
 						? ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM_DIRECT
 						: ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_DIRECT));
+		} else if ((helper == ZEND_NATIVE_HELPER_VALUE_CONCAT
+					|| helper == ZEND_NATIVE_HELPER_VALUE_FAST_CONCAT)
+				&& adaptor->plan()->linux_inline_forms
+				&& zend_tpde_concat_direct_at(mir, &concat_direct)) {
+			/* The encoded first operand above is ignored by this form. */
+			builder.add_arg(ValuePart{concat_direct.descriptor, 8,
+				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			builder.add_arg(ValuePart{concat_direct.slots, 8,
+				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			builder.add_arg(ValuePart{concat_direct.result_offset, 8,
+				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			builder.call(runtime_symbol(
+				ZEND_NATIVE_HELPER_VALUE_CONCAT_DIRECT));
 		} else if (helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_OP
 				&& adaptor->plan()->linux_inline_forms
 				&& zend_tpde_concat_assign_direct_at(

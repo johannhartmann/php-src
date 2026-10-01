@@ -3190,6 +3190,105 @@ zend_native_status zend_native_value_verify_return_type(
 	return zend_native_value_status();
 }
 
+/*
+ * Two strings into a temporary: concat_function() without decoding the
+ * operation, releasing temporary operands. Returns false, with nothing
+ * changed, when an operand is no string.
+ */
+static zend_always_inline bool zend_native_value_concat_strings(
+	zend_execute_data *execute_data,
+	zval *fast_left, bool left_tmp, zval *fast_right, bool right_tmp,
+	zval *fast_result, uint32_t source_position_id,
+	zend_native_status *out)
+{
+	zend_result status;
+
+	zval *left_value = fast_left;
+	zval *right_value = fast_right;
+
+	if (!left_tmp) {
+		ZVAL_DEREF(left_value);
+	}
+	if (!right_tmp) {
+		ZVAL_DEREF(right_value);
+	}
+	if (Z_TYPE_P(left_value) != IS_STRING
+			|| Z_TYPE_P(right_value) != IS_STRING) {
+		return false;
+	}
+	{
+		zend_string *left_string = Z_STR_P(left_value);
+		zend_string *right_string = Z_STR_P(right_value);
+		const size_t left_length = ZSTR_LEN(left_string);
+		const size_t right_length = ZSTR_LEN(right_string);
+
+		/* As ZEND_CONCAT: an empty side passes the other string
+		 * on, an owned temporary left string is extended in place,
+		 * otherwise one new string. */
+		if (EXPECTED(left_length <= ZSTR_MAX_LEN - right_length)) {
+			const uint32_t flags =
+				ZSTR_GET_COPYABLE_CONCAT_PROPERTIES_BOTH(
+					left_string, right_string);
+			zend_string *string;
+
+			if (left_length == 0) {
+				if (right_tmp) {
+					ZVAL_STR(fast_result, right_string);
+					ZVAL_UNDEF(fast_right);
+					right_tmp = false;
+				} else {
+					ZVAL_STR_COPY(fast_result, right_string);
+				}
+			} else if (right_length == 0) {
+				if (left_tmp) {
+					ZVAL_STR(fast_result, left_string);
+					ZVAL_UNDEF(fast_left);
+					left_tmp = false;
+				} else {
+					ZVAL_STR_COPY(fast_result, left_string);
+				}
+			} else if (left_tmp && !ZSTR_IS_INTERNED(left_string)
+					&& GC_REFCOUNT(left_string) == 1) {
+				string = zend_string_extend(left_string,
+					left_length + right_length, 0);
+				memcpy(ZSTR_VAL(string) + left_length,
+					ZSTR_VAL(right_string), right_length + 1);
+				GC_ADD_FLAGS(string, flags);
+				ZVAL_NEW_STR(fast_result, string);
+				ZVAL_UNDEF(fast_left);
+				left_tmp = false;
+			} else {
+				string = zend_string_alloc(
+					left_length + right_length, 0);
+				memcpy(ZSTR_VAL(string), ZSTR_VAL(left_string),
+					left_length);
+				memcpy(ZSTR_VAL(string) + left_length,
+					ZSTR_VAL(right_string), right_length + 1);
+				GC_ADD_FLAGS(string, flags);
+				ZVAL_NEW_STR(fast_result, string);
+			}
+			status = SUCCESS;
+		} else {
+			execute_data->opline =
+				&execute_data->func->op_array.opcodes[
+					source_position_id];
+			status = concat_function(
+				fast_result, left_value, right_value);
+		}
+		if (left_tmp) {
+			zval_ptr_dtor_nogc(fast_left);
+			ZVAL_UNDEF(fast_left);
+		}
+		if (right_tmp) {
+			zval_ptr_dtor_nogc(fast_right);
+			ZVAL_UNDEF(fast_right);
+		}
+		*out = status == SUCCESS ? zend_native_value_status()
+			: ZEND_NATIVE_EXCEPTION;
+		return true;
+	}
+}
+
 static zend_native_status zend_native_value_concat_impl(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result_operand,
@@ -3218,85 +3317,12 @@ static zend_native_status zend_native_value_concat_impl(
 		if (fast_left != NULL && fast_right != NULL && fast_result != NULL
 				&& result_tmp && fast_result != fast_left
 				&& fast_result != fast_right) {
-			zval *left_value = fast_left;
-			zval *right_value = fast_right;
+			zend_native_status fast_status;
 
-			if (!left_tmp) {
-				ZVAL_DEREF(left_value);
-			}
-			if (!right_tmp) {
-				ZVAL_DEREF(right_value);
-			}
-			if (Z_TYPE_P(left_value) == IS_STRING
-					&& Z_TYPE_P(right_value) == IS_STRING) {
-				zend_string *left_string = Z_STR_P(left_value);
-				zend_string *right_string = Z_STR_P(right_value);
-				const size_t left_length = ZSTR_LEN(left_string);
-				const size_t right_length = ZSTR_LEN(right_string);
-
-				/* As ZEND_CONCAT: an empty side passes the other string
-				 * on, an owned temporary left string is extended in place,
-				 * otherwise one new string. */
-				if (EXPECTED(left_length <= ZSTR_MAX_LEN - right_length)) {
-					const uint32_t flags =
-						ZSTR_GET_COPYABLE_CONCAT_PROPERTIES_BOTH(
-							left_string, right_string);
-					zend_string *string;
-
-					if (left_length == 0) {
-						if (right_tmp) {
-							ZVAL_STR(fast_result, right_string);
-							ZVAL_UNDEF(fast_right);
-							right_tmp = false;
-						} else {
-							ZVAL_STR_COPY(fast_result, right_string);
-						}
-					} else if (right_length == 0) {
-						if (left_tmp) {
-							ZVAL_STR(fast_result, left_string);
-							ZVAL_UNDEF(fast_left);
-							left_tmp = false;
-						} else {
-							ZVAL_STR_COPY(fast_result, left_string);
-						}
-					} else if (left_tmp && !ZSTR_IS_INTERNED(left_string)
-							&& GC_REFCOUNT(left_string) == 1) {
-						string = zend_string_extend(left_string,
-							left_length + right_length, 0);
-						memcpy(ZSTR_VAL(string) + left_length,
-							ZSTR_VAL(right_string), right_length + 1);
-						GC_ADD_FLAGS(string, flags);
-						ZVAL_NEW_STR(fast_result, string);
-						ZVAL_UNDEF(fast_left);
-						left_tmp = false;
-					} else {
-						string = zend_string_alloc(
-							left_length + right_length, 0);
-						memcpy(ZSTR_VAL(string), ZSTR_VAL(left_string),
-							left_length);
-						memcpy(ZSTR_VAL(string) + left_length,
-							ZSTR_VAL(right_string), right_length + 1);
-						GC_ADD_FLAGS(string, flags);
-						ZVAL_NEW_STR(fast_result, string);
-					}
-					status = SUCCESS;
-				} else {
-					execute_data->opline =
-						&execute_data->func->op_array.opcodes[
-							source_position_id];
-					status = concat_function(
-						fast_result, left_value, right_value);
-				}
-				if (left_tmp) {
-					zval_ptr_dtor_nogc(fast_left);
-					ZVAL_UNDEF(fast_left);
-				}
-				if (right_tmp) {
-					zval_ptr_dtor_nogc(fast_right);
-					ZVAL_UNDEF(fast_right);
-				}
-				return status == SUCCESS ? zend_native_value_status()
-					: ZEND_NATIVE_EXCEPTION;
+			if (zend_native_value_concat_strings(execute_data,
+					fast_left, left_tmp, fast_right, right_tmp, fast_result,
+					source_position_id, &fast_status)) {
+				return fast_status;
 			}
 		}
 	}
@@ -5891,6 +5917,43 @@ static uint64_t zend_native_value_direct_encoding(
 			return ZEND_MIR_SOURCE_OPERAND_UNUSED
 				| ((uint64_t) ZEND_MIR_ID_INVALID << 16);
 	}
+}
+
+/*
+ * ZEND_CONCAT/ZEND_FAST_CONCAT into a temporary with precomputed operand
+ * kinds and offsets (zend_tpde_concat_direct_at()): two strings concatenate
+ * without decoding; anything else takes the general path.
+ */
+zend_native_status zend_native_value_concat_direct(
+	zend_execute_data *execute_data, uint64_t encoded_op1,
+	uint64_t descriptor, uint64_t slots, uint64_t result_offset)
+{
+	const uint32_t left_kind = (uint32_t) (descriptor & 3);
+	const uint32_t right_kind = (uint32_t) ((descriptor >> 2) & 3);
+	const uint32_t source_opcode = (uint32_t) ((descriptor >> 8) & 0xff);
+	const uint32_t source_position_id = (uint32_t) (descriptor >> 32);
+	zval *left = zend_native_value_direct_operand(
+		execute_data, left_kind, (uint32_t) slots);
+	zval *right = zend_native_value_direct_operand(
+		execute_data, right_kind, (uint32_t) (slots >> 32));
+	zval *result = (zval *) ((char *) execute_data + (uint32_t) result_offset);
+	zend_native_status status;
+
+	(void) encoded_op1;
+	if (EXPECTED(zend_native_value_concat_strings(execute_data,
+			left, left_kind == ZEND_NATIVE_DIM_DIRECT_TMP,
+			right, right_kind == ZEND_NATIVE_DIM_DIRECT_TMP,
+			result, source_position_id, &status))) {
+		return status;
+	}
+	return zend_native_value_concat_impl(execute_data,
+		zend_native_value_direct_encoding(
+			execute_data, left_kind, (uint32_t) slots),
+		zend_native_value_direct_encoding(
+			execute_data, right_kind, (uint32_t) (slots >> 32)),
+		zend_native_value_direct_encoding(execute_data,
+			ZEND_NATIVE_DIM_DIRECT_TMP, (uint32_t) result_offset),
+		0, source_opcode, source_position_id, (uint8_t) source_opcode);
 }
 
 zend_native_status zend_native_value_assign_dim_direct(
