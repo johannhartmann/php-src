@@ -1507,7 +1507,79 @@ zend_native_status zend_native_value_check_var(
 	return zend_native_value_status();
 }
 
+static zend_never_inline zend_native_status zend_native_value_assign_general(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
+
+/*
+ * $cv = $tmp or $cv = $cv2 with an unused result, the common shapes the
+ * inline assignment leaves here when the old value needs releasing: move or
+ * copy the value and release the old one, as zend_assign_to_variable()
+ * does. Everything else, references included, takes the general path.
+ */
 zend_native_status zend_native_value_assign(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
+{
+	const uint32_t variable_index = (uint32_t) (op1 >> 16);
+
+	if (EXPECTED(source_opcode == ZEND_ASSIGN
+			&& (result_operand & UINT64_C(0xff))
+				== ZEND_MIR_SOURCE_OPERAND_UNUSED
+			&& ((op1 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| (op1 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& ((op1 >> 8) & UINT64_C(0xff)) == ZEND_MIR_SOURCE_SLOT_CV
+			&& ((op2 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| (op2 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& variable_index
+				< (uint32_t) execute_data->func->op_array.last_var
+			&& source_position_id < execute_data->func->op_array.last)) {
+		const uint32_t source_kind = (uint32_t) ((op2 >> 8) & UINT64_C(0xff));
+		zval *variable = ZEND_CALL_VAR_NUM(execute_data, variable_index);
+		zval *value;
+
+		if (source_kind == ZEND_MIR_SOURCE_SLOT_TMP) {
+			value = ZEND_CALL_VAR_NUM(execute_data,
+				execute_data->func->op_array.last_var
+					+ (uint32_t) (op2 >> 16));
+		} else if (source_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+			value = ZEND_CALL_VAR_NUM(execute_data, (uint32_t) (op2 >> 16));
+		} else {
+			value = NULL;
+		}
+		if (value != NULL && value != variable
+				&& Z_TYPE_P(variable) != IS_REFERENCE
+				&& Z_TYPE_P(value) != IS_UNDEF
+				&& Z_TYPE_P(value) != IS_INDIRECT) {
+			zend_refcounted *garbage = Z_REFCOUNTED_P(variable)
+				? Z_COUNTED_P(variable) : NULL;
+
+			if (source_kind == ZEND_MIR_SOURCE_SLOT_TMP) {
+				ZVAL_COPY_VALUE(variable, value);
+				ZVAL_UNDEF(value);
+			} else {
+				ZVAL_DEREF(value);
+				ZVAL_COPY(variable, value);
+			}
+			if (garbage == NULL) {
+				return ZEND_NATIVE_RETURNED;
+			}
+			/* A destructor may observe the line. */
+			execute_data->opline = &execute_data->func->op_array.opcodes[
+				source_position_id];
+			GC_DTOR_NO_REF(garbage);
+			return zend_native_value_status();
+		}
+	}
+	return zend_native_value_assign_general(execute_data, op1, op2,
+		result_operand, extended_value, source_opcode, source_position_id);
+}
+
+static zend_never_inline zend_native_status zend_native_value_assign_general(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result_operand,
 	uint32_t extended_value, uint32_t source_opcode,
@@ -3157,9 +3229,64 @@ static zend_native_status zend_native_value_concat_impl(
 			}
 			if (Z_TYPE_P(left_value) == IS_STRING
 					&& Z_TYPE_P(right_value) == IS_STRING) {
-				execute_data->opline = &execute_data->func->op_array.opcodes[
-					source_position_id];
-				status = concat_function(fast_result, left_value, right_value);
+				zend_string *left_string = Z_STR_P(left_value);
+				zend_string *right_string = Z_STR_P(right_value);
+				const size_t left_length = ZSTR_LEN(left_string);
+				const size_t right_length = ZSTR_LEN(right_string);
+
+				/* As ZEND_CONCAT: an empty side passes the other string
+				 * on, an owned temporary left string is extended in place,
+				 * otherwise one new string. */
+				if (EXPECTED(left_length <= ZSTR_MAX_LEN - right_length)) {
+					const uint32_t flags =
+						ZSTR_GET_COPYABLE_CONCAT_PROPERTIES_BOTH(
+							left_string, right_string);
+					zend_string *string;
+
+					if (left_length == 0) {
+						if (right_tmp) {
+							ZVAL_STR(fast_result, right_string);
+							ZVAL_UNDEF(fast_right);
+							right_tmp = false;
+						} else {
+							ZVAL_STR_COPY(fast_result, right_string);
+						}
+					} else if (right_length == 0) {
+						if (left_tmp) {
+							ZVAL_STR(fast_result, left_string);
+							ZVAL_UNDEF(fast_left);
+							left_tmp = false;
+						} else {
+							ZVAL_STR_COPY(fast_result, left_string);
+						}
+					} else if (left_tmp && !ZSTR_IS_INTERNED(left_string)
+							&& GC_REFCOUNT(left_string) == 1) {
+						string = zend_string_extend(left_string,
+							left_length + right_length, 0);
+						memcpy(ZSTR_VAL(string) + left_length,
+							ZSTR_VAL(right_string), right_length + 1);
+						GC_ADD_FLAGS(string, flags);
+						ZVAL_NEW_STR(fast_result, string);
+						ZVAL_UNDEF(fast_left);
+						left_tmp = false;
+					} else {
+						string = zend_string_alloc(
+							left_length + right_length, 0);
+						memcpy(ZSTR_VAL(string), ZSTR_VAL(left_string),
+							left_length);
+						memcpy(ZSTR_VAL(string) + left_length,
+							ZSTR_VAL(right_string), right_length + 1);
+						GC_ADD_FLAGS(string, flags);
+						ZVAL_NEW_STR(fast_result, string);
+					}
+					status = SUCCESS;
+				} else {
+					execute_data->opline =
+						&execute_data->func->op_array.opcodes[
+							source_position_id];
+					status = concat_function(
+						fast_result, left_value, right_value);
+				}
 				if (left_tmp) {
 					zval_ptr_dtor_nogc(fast_left);
 					ZVAL_UNDEF(fast_left);
