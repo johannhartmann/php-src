@@ -2652,10 +2652,25 @@ static zend_always_inline bool zend_native_object_fetch_cached(
 	}
 	if (((result & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_SLOT
 				&& (result & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_SSA)
-			|| (result_slot != ZEND_MIR_SOURCE_SLOT_TMP
-				&& result_slot != ZEND_MIR_SOURCE_SLOT_VAR)
-			|| result_index >= op_array->T
 			|| Z_TYPE_P(receiver) != IS_OBJECT) {
+		return false;
+	}
+	if (result_slot == ZEND_MIR_SOURCE_SLOT_CV
+			&& (fetch_type == BP_VAR_R || fetch_type == BP_VAR_IS)) {
+		/* A read straight into a CV whose old value needs no release. */
+		if (result_index >= (uint32_t) op_array->last_var) {
+			return false;
+		}
+		target = ZEND_CALL_VAR_NUM(execute_data, result_index);
+		if (Z_REFCOUNTED_P(target)) {
+			return false;
+		}
+	} else if ((result_slot == ZEND_MIR_SOURCE_SLOT_TMP
+				|| result_slot == ZEND_MIR_SOURCE_SLOT_VAR)
+			&& result_index < op_array->T) {
+		target = ZEND_CALL_VAR_NUM(execute_data,
+			(uint32_t) op_array->last_var + result_index);
+	} else {
 		return false;
 	}
 	object = Z_OBJ_P(receiver);
@@ -2676,8 +2691,6 @@ static zend_always_inline bool zend_native_object_fetch_cached(
 			|| (writes && cache_slot[2] != NULL)) {
 		return false;
 	}
-	target = ZEND_CALL_VAR_NUM(execute_data,
-		(uint32_t) op_array->last_var + result_index);
 	if (writes) {
 		ZVAL_INDIRECT(target, property);
 	} else {
