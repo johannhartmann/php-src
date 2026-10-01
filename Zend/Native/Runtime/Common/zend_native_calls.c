@@ -4491,6 +4491,7 @@ typedef struct _zend_native_call_recorded_target {
 	zend_function *function;
 	zend_class_entry *called_scope;
 	zend_native_frame_entry_t entry;
+	const zend_native_call_fast_receive *receive;
 	uint8_t kind;
 } zend_native_call_recorded_target;
 
@@ -4619,6 +4620,8 @@ static void zend_native_call_recorded_target_record(
 	target->called_scope = kind == ZEND_NATIVE_CALL_RECORDED_STATIC
 		? (zend_class_entry *) resolution->object_or_called_scope : NULL;
 	target->entry = resolution->invoke_entry;
+	target->receive = zend_native_call_fast_receive_prepare(
+		resolution->entry_cell, &resolution->function->op_array);
 	target->kind = kind;
 }
 
@@ -4758,6 +4761,9 @@ zend_native_frame_entry_t zend_native_call_fast_dynamic_init(
 	} else if (owned != NULL) {
 		GC_ADDREF(owned);
 	}
+	/* Until the Do, the frame's run-time cache slot carries how the
+	 * target receives its parameters (zend_native_call_fast_do()). */
+	call->run_time_cache = (void **) target->receive;
 	call->prev_execute_data = caller->call;
 	caller->call = call;
 	return target->entry;
@@ -8206,6 +8212,118 @@ void zend_native_call_fast_send_var_reference(zval *argument, zval *variable)
 }
 
 /*
+ * Extra positional arguments move behind the CVs and temporaries, as
+ * zend_copy_extra_args() moves them for the VM.
+ */
+static void zend_native_call_fast_copy_extra_args(
+	zend_execute_data *callee, const zend_op_array *op_array,
+	uint32_t supplied)
+{
+	zval *source = ZEND_CALL_VAR_NUM(callee, supplied - 1);
+	size_t delta = op_array->last_var + op_array->T - op_array->num_args;
+	uint32_t count = supplied - op_array->num_args;
+	uint32_t type_flags = 0;
+
+	if (delta != 0) {
+		delta *= sizeof(zval);
+		do {
+			type_flags |= Z_TYPE_INFO_P(source);
+			ZVAL_COPY_VALUE((zval *) ((char *) source + delta), source);
+			ZVAL_UNDEF(source);
+			source--;
+		} while (--count);
+		if (Z_TYPE_INFO_REFCOUNTED(type_flags)) {
+			ZEND_ADD_CALL_FLAG(callee, ZEND_CALL_FREE_EXTRA_ARGS);
+		}
+	} else {
+		do {
+			if (Z_REFCOUNTED_P(source)) {
+				ZEND_ADD_CALL_FLAG(callee, ZEND_CALL_FREE_EXTRA_ARGS);
+				break;
+			}
+			source--;
+		} while (--count);
+	}
+}
+
+/*
+ * What zend_native_call_fast_prepare() does for a frame whose supplied
+ * arguments need no check or coercion, whose missing parameters have
+ * literal defaults and whose variadic parameter, if any, is untyped: the
+ * frame initialization of i_init_func_execute_data() and the RECV,
+ * RECV_INIT and RECV_VARIADIC of the parameters. Returns false with the
+ * frame unchanged for anything else.
+ */
+static bool zend_native_call_fast_receive_frame(
+	zend_execute_data *callee, const zend_native_call_fast_receive *receive,
+	void **run_time_cache)
+{
+	const zend_op_array *op_array = &callee->func->op_array;
+	const uint32_t supplied = ZEND_CALL_NUM_ARGS(callee);
+	const uint32_t declared = op_array->num_args;
+	const uint32_t received = MIN(supplied, declared);
+	const bool variadic = (op_array->fn_flags & ZEND_ACC_VARIADIC) != 0;
+	uint32_t index;
+
+	if (receive == NULL
+			|| receive->state != ZEND_NATIVE_CALL_FAST_RECEIVE_INLINE
+			|| receive->num_args != declared || run_time_cache == NULL
+			|| (ZEND_CALL_INFO(callee) & (ZEND_CALL_HAS_EXTRA_NAMED_PARAMS
+				| ZEND_CALL_MAY_HAVE_UNDEF)) != 0
+			|| (variadic
+				&& ZEND_TYPE_IS_SET(op_array->arg_info[declared].type))) {
+		return false;
+	}
+	for (index = 0; index < received; index++) {
+		if ((receive->type_masks[index] & (UINT32_C(1) << Z_TYPE_P(
+				ZEND_CALL_ARG(callee, index + 1)))) == 0) {
+			return false;
+		}
+	}
+	for (index = supplied; index < declared; index++) {
+		if (receive->defaults[index] == NULL) {
+			return false;
+		}
+	}
+	callee->opline = op_array->opcodes + received;
+	if (supplied > declared) {
+		zend_native_call_fast_copy_extra_args(callee, op_array, supplied);
+	}
+	for (index = supplied; index < (uint32_t) op_array->last_var; index++) {
+		ZVAL_UNDEF(ZEND_CALL_VAR_NUM(callee, index));
+	}
+	for (index = supplied; index < declared; index++) {
+		ZVAL_COPY_VALUE(ZEND_CALL_ARG(callee, index + 1),
+			receive->defaults[index]);
+	}
+	if (variadic) {
+		zval *parameters = ZEND_CALL_VAR_NUM(callee, declared);
+
+		if (supplied > declared) {
+			zval *argument = ZEND_CALL_VAR_NUM(callee,
+				op_array->last_var + op_array->T);
+			uint32_t count = supplied - declared;
+
+			array_init_size(parameters, count);
+			zend_hash_real_init_packed(Z_ARRVAL_P(parameters));
+			ZEND_HASH_FILL_PACKED(Z_ARRVAL_P(parameters)) {
+				do {
+					ZEND_HASH_FILL_SET(argument);
+					Z_TRY_ADDREF_P(argument);
+					ZEND_HASH_FILL_NEXT();
+					argument++;
+				} while (--count);
+			} ZEND_HASH_FILL_END();
+		} else {
+			ZVAL_EMPTY_ARRAY(parameters);
+		}
+	}
+	callee->run_time_cache = run_time_cache;
+	EG(current_execute_data) = callee;
+	return true;
+}
+
+/*
  * The fast Do of a call site whose Init pushed the frame (see
  * zend_native_user_call_site_header), out of line: unlink the frame from
  * EX(call), initialize it for its target as i_init_func_execute_data()
@@ -8243,7 +8361,19 @@ uint32_t zend_native_call_fast_do(
 	callee->prev_execute_data = caller;
 	callee->call = NULL;
 	if ((flags & ZEND_NATIVE_CALL_FAST_PREPARE) != 0) {
-		status = zend_native_call_fast_prepare(callee);
+		/* A dynamic site's Init left the target's receive in the run-time
+		 * cache slot. */
+		const bool received = dynamic_entry != NULL
+			? zend_native_call_fast_receive_frame(callee,
+				(const zend_native_call_fast_receive *)
+					callee->run_time_cache,
+				RUN_TIME_CACHE(&callee->func->op_array))
+			: zend_native_call_fast_receive_frame(callee,
+				header->fast_receive, header->fast_run_time_cache);
+
+		if (!received) {
+			status = zend_native_call_fast_prepare(callee);
+		}
 	} else {
 		const uint32_t argument_count = descriptor->argument_count;
 		const zend_op_array *op_array = &callee->func->op_array;
