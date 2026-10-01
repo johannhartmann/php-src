@@ -4025,6 +4025,26 @@ static zend_always_inline bool zend_native_call_resolve_cached_callable(
 }
 
 /*
+ * Whether C's constants and default properties are evaluated: in its flags,
+ * or, for an immutable class, in the request's mutable data.
+ */
+static zend_always_inline bool zend_native_call_class_constants_updated(
+	const zend_class_entry *ce)
+{
+	if ((ce->ce_flags & ZEND_ACC_CONSTANTS_UPDATED) != 0) {
+		return true;
+	}
+	if (ZEND_MAP_PTR(ce->mutable_data) != NULL) {
+		const zend_class_mutable_data *mutable_data =
+			ZEND_MAP_PTR_GET_IMM(ce->mutable_data);
+
+		return mutable_data != NULL
+			&& (mutable_data->ce_flags & ZEND_ACC_CONSTANTS_UPDATED) != 0;
+	}
+	return false;
+}
+
+/*
  * A hit on a call site whose target the VM run-time cache names: copy the
  * cached resolution and take the ownership the general resolver would take,
  * without looking the target up or validating the descriptor again.
@@ -4072,7 +4092,7 @@ static zend_always_inline bool zend_native_call_resolve_cached_entry(
 				&& zend_fetch_class(NULL, descriptor->init_op1_payload) != ce) {
 			return false;
 		}
-		if ((ce->ce_flags & ZEND_ACC_CONSTANTS_UPDATED) == 0
+		if (!zend_native_call_class_constants_updated(ce)
 				|| ce->constructor != entry->function) {
 			return false;
 		}
@@ -8291,7 +8311,7 @@ bool zend_native_call_fast_new(
 		if ((header->fast_flags & ZEND_NATIVE_CALL_FAST_NO_CALL) == 0
 				|| ce == NULL || ce->constructor != NULL
 				|| ce->create_object != NULL
-				|| (ce->ce_flags & ZEND_ACC_CONSTANTS_UPDATED) == 0
+				|| !zend_native_call_class_constants_updated(ce)
 				|| (ce->ce_flags & (ZEND_ACC_INTERFACE | ZEND_ACC_TRAIT
 					| ZEND_ACC_IMPLICIT_ABSTRACT_CLASS
 					| ZEND_ACC_EXPLICIT_ABSTRACT_CLASS | ZEND_ACC_ENUM
@@ -8302,7 +8322,7 @@ bool zend_native_call_fast_new(
 	}
 	if (ce == NULL || ce->constructor != header->fast_function
 			|| ce->create_object != NULL
-			|| (ce->ce_flags & ZEND_ACC_CONSTANTS_UPDATED) == 0
+			|| !zend_native_call_class_constants_updated(ce)
 			|| (ce->ce_flags & (ZEND_ACC_INTERFACE | ZEND_ACC_TRAIT
 				| ZEND_ACC_IMPLICIT_ABSTRACT_CLASS
 				| ZEND_ACC_EXPLICIT_ABSTRACT_CLASS | ZEND_ACC_ENUM
