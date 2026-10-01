@@ -1392,8 +1392,24 @@ static zend_native_status zend_native_object_isset_explicit(
 		name = zend_native_object_name_explicit(
 			execute_data, operation, property, &temporary);
 		if (name != NULL) {
+			/* A literal name uses the VM run-time cache slot, as
+			 * ZEND_ISSET_ISEMPTY_PROP_OBJ does. */
+			void **cache_slot = NULL;
+			const uint32_t cache_offset =
+				operation->extended_value & ~ZEND_ISEMPTY;
+
+			if (operation->op2_type == IS_CONST
+					&& execute_data->run_time_cache != NULL
+					&& cache_offset
+						<= (uint32_t) execute_data->func->op_array.cache_size
+					&& 3 * sizeof(void *)
+						<= (uint32_t) execute_data->func->op_array.cache_size
+							- cache_offset) {
+				cache_slot = (void **) ((char *) execute_data->run_time_cache
+					+ cache_offset);
+			}
 			found = Z_OBJ_HT_P(receiver)->has_property(
-				Z_OBJ_P(receiver), name, isempty, NULL) != 0;
+				Z_OBJ_P(receiver), name, isempty, cache_slot) != 0;
 		}
 		if (temporary != NULL) {
 			zend_tmp_string_release(temporary);
@@ -2997,9 +3013,115 @@ ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_unset,
 	ZEND_UNSET_OBJ,
 	zend_native_object_unset_explicit(execute_data, &operation))
 ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(
-	zend_native_execute_object_isset_isempty,
+	zend_native_execute_object_isset_isempty_explicit,
 	ZEND_ISSET_ISEMPTY_PROP_OBJ,
 	zend_native_object_isset_explicit(execute_data, &operation))
+
+/*
+ * isset() and empty() of a defined declared property of $this, a CV or a
+ * shared temporary object under a literal name whose class and offset the
+ * run-time cache slot holds, as
+ * zend_std_has_property() answers them; an undefined slot, an object value
+ * of empty() and every other form take the explicit operation.
+ */
+zend_native_status zend_native_execute_object_isset_isempty(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t actual_source_opcode,
+	uint32_t source_position_id)
+{
+	const zend_op_array *op_array = &execute_data->func->op_array;
+	const uint32_t op1_index = (uint32_t) (op1 >> 16);
+	const uint32_t result_index = (uint32_t) (result >> 16);
+	const uint32_t result_slot = (uint32_t) ((result >> 8) & UINT64_C(0xff));
+	const uint32_t cache_offset = extended_value & ~ZEND_ISEMPTY;
+	const bool isempty = (extended_value & ZEND_ISEMPTY) != 0;
+	zval *receiver = NULL;
+	zval *temporary = NULL;
+	zval *target;
+	zval *property;
+	zend_object *object;
+	void **cache_slot;
+	uintptr_t property_offset;
+	bool answer;
+
+	if (actual_source_opcode != ZEND_ISSET_ISEMPTY_PROP_OBJ
+			|| (op2 & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| execute_data->run_time_cache == NULL
+			|| cache_offset > (uint32_t) op_array->cache_size
+			|| 3 * sizeof(void *)
+				> (uint32_t) op_array->cache_size - cache_offset
+			|| ((result & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_SLOT
+				&& (result & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_SSA)
+			|| (result_slot != ZEND_MIR_SOURCE_SLOT_TMP
+				&& result_slot != ZEND_MIR_SOURCE_SLOT_VAR)
+			|| result_index >= op_array->T) {
+		goto general;
+	}
+	switch ((zend_mir_source_operand_kind) (op1 & UINT64_C(0xff))) {
+		case ZEND_MIR_SOURCE_OPERAND_UNUSED:
+			receiver = &execute_data->This;
+			break;
+		case ZEND_MIR_SOURCE_OPERAND_SLOT:
+		case ZEND_MIR_SOURCE_OPERAND_SSA:
+			if (((op1 >> 8) & UINT64_C(0xff)) == ZEND_MIR_SOURCE_SLOT_CV
+					&& op1_index < (uint32_t) op_array->last_var) {
+				receiver = ZEND_CALL_VAR_NUM(execute_data, op1_index);
+				ZVAL_DEREF(receiver);
+			} else if (((op1 >> 8) & UINT64_C(0xff)) == ZEND_MIR_SOURCE_SLOT_TMP
+					&& op1_index < op_array->T) {
+				/* A fetched object the test consumes, still shared, so
+				 * releasing it runs no destructor. */
+				temporary = ZEND_CALL_VAR_NUM(execute_data,
+					(uint32_t) op_array->last_var + op1_index);
+				if (Z_TYPE_P(temporary) == IS_OBJECT
+						&& GC_REFCOUNT(Z_OBJ_P(temporary)) > 1) {
+					receiver = temporary;
+				}
+			}
+			break;
+		default:
+			break;
+	}
+	if (receiver == NULL || Z_TYPE_P(receiver) != IS_OBJECT) {
+		goto general;
+	}
+	object = Z_OBJ_P(receiver);
+	cache_slot = (void **) ((char *) execute_data->run_time_cache
+		+ cache_offset);
+	if (cache_slot[0] != object->ce) {
+		goto general;
+	}
+	property_offset = (uintptr_t) cache_slot[1];
+	if (!IS_VALID_PROPERTY_OFFSET(property_offset)) {
+		goto general;
+	}
+	property = OBJ_PROP(object, property_offset);
+	if (Z_TYPE_P(property) == IS_UNDEF) {
+		goto general;
+	}
+	ZVAL_DEREF(property);
+	if (!isempty) {
+		answer = Z_TYPE_P(property) > IS_NULL;
+	} else if (Z_TYPE_P(property) == IS_OBJECT) {
+		goto general;
+	} else {
+		answer = !i_zend_is_true(property);
+	}
+	if (temporary != NULL) {
+		GC_DELREF(object);
+		ZVAL_UNDEF(temporary);
+	}
+	/* The result may reuse the receiver temporary. */
+	target = ZEND_CALL_VAR_NUM(execute_data,
+		(uint32_t) op_array->last_var + result_index);
+	ZVAL_BOOL(target, answer);
+	return ZEND_NATIVE_RETURNED;
+general:
+	return zend_native_execute_object_isset_isempty_explicit(execute_data,
+		op1, op2, result, extended_value, actual_source_opcode,
+		source_position_id);
+}
 ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_pre_inc_explicit,
 	ZEND_PRE_INC_OBJ,
 	zend_native_object_incdec_explicit(
