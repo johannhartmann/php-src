@@ -2057,6 +2057,33 @@ static inline bool zend_tpde_object_property_isset_read_at(
 	return zend_tpde_object_property_read_at(read, out);
 }
 
+/*
+ * FETCH_OBJ_W of a literal property into a VAR: a cached untyped declared
+ * property is addressed by an IS_INDIRECT result; anything else keeps the
+ * helper.
+ */
+static inline bool zend_tpde_object_property_write_fetch_at(
+	const zend_tpde_instruction &instruction,
+	zend_tpde_object_property_read *out)
+{
+	zend_tpde_instruction read = instruction;
+
+	if (!instruction.has_value_operation
+			|| instruction.value_operation.opcode
+				!= ZEND_MIR_OPCODE_OBJECT_FETCH_W
+			|| instruction.value_operation.source_opcode != ZEND_FETCH_OBJ_W
+			|| instruction.value_operation.result.slot_kind
+				!= ZEND_MIR_SOURCE_SLOT_VAR) {
+		return false;
+	}
+	/* The fetch flags only concern typed properties, which the inline
+	 * form leaves to the helper. */
+	read.value_operation.opcode = ZEND_MIR_OPCODE_OBJECT_FETCH_R;
+	read.value_operation.source_opcode = ZEND_FETCH_OBJ_R;
+	read.value_operation.extended_value &= ~ZEND_FETCH_OBJ_FLAGS;
+	return zend_tpde_object_property_read_at(read, out);
+}
+
 static inline bool zend_tpde_object_property_write_at(
 	const zend_tpde_instruction &instruction,
 	zend_tpde_object_property_write *out)
