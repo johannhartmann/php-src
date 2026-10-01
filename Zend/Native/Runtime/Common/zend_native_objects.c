@@ -2824,6 +2824,43 @@ zend_native_status zend_native_execute_object_fetch_func_arg(
 }
 
 #undef ZEND_NATIVE_OBJECT_EXPLICIT_FETCH_HELPER
+/*
+ * An operand of a decode-free ASSIGN_OBJ: a literal, a CV or a temporary
+ * slot; *temporary tells whether the slot is consumed afterwards.
+ */
+static zend_always_inline zval *zend_native_object_assign_operand(
+	zend_execute_data *execute_data, uint64_t encoded, bool *temporary)
+{
+	const zend_op_array *op_array = &execute_data->func->op_array;
+	const uint32_t index = (uint32_t) (encoded >> 16);
+
+	*temporary = false;
+	switch ((zend_mir_source_operand_kind) (encoded & UINT64_C(0xff))) {
+		case ZEND_MIR_SOURCE_OPERAND_LITERAL:
+			return index < (uint32_t) op_array->last_literal
+				? &op_array->literals[index] : NULL;
+		case ZEND_MIR_SOURCE_OPERAND_SLOT:
+		case ZEND_MIR_SOURCE_OPERAND_SSA:
+			break;
+		default:
+			return NULL;
+	}
+	switch ((zend_mir_source_slot_kind) ((encoded >> 8) & UINT64_C(0xff))) {
+		case ZEND_MIR_SOURCE_SLOT_CV:
+			return index < (uint32_t) op_array->last_var
+				? ZEND_CALL_VAR_NUM(execute_data, index) : NULL;
+		case ZEND_MIR_SOURCE_SLOT_TMP:
+			if (index >= op_array->T) {
+				return NULL;
+			}
+			*temporary = true;
+			return ZEND_CALL_VAR_NUM(execute_data,
+				(uint32_t) op_array->last_var + index);
+		default:
+			return NULL;
+	}
+}
+
 zend_native_status zend_native_execute_object_assign(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result, uint64_t auxiliary,
@@ -2831,6 +2868,82 @@ zend_native_status zend_native_execute_object_assign(
 	uint32_t source_position_id)
 {
 	zend_native_explicit_object_operation operation;
+
+	/*
+	 * $this->name = value or $cv->name = value with an unused result and a
+	 * string name, as zend_native_object_assign_explicit() does it without
+	 * decoding the operation: an undefined CV value, which warns, a
+	 * non-object receiver and a non-string name take the general path.
+	 */
+	if ((result & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_UNUSED
+			&& source_opcode == ZEND_ASSIGN_OBJ
+			&& source_position_id < execute_data->func->op_array.last) {
+		bool receiver_temporary, name_temporary, value_temporary;
+		zval *receiver = (op1 & UINT64_C(0xff))
+				== ZEND_MIR_SOURCE_OPERAND_UNUSED
+			? &execute_data->This
+			: zend_native_object_assign_operand(
+				execute_data, op1, &receiver_temporary);
+		zval *name = zend_native_object_assign_operand(
+			execute_data, op2, &name_temporary);
+		zval *value_slot = zend_native_object_assign_operand(
+			execute_data, auxiliary, &value_temporary);
+		zval *name_value = name;
+		zval *value = value_slot;
+
+		if ((op1 & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_UNUSED
+				&& (receiver == NULL || receiver_temporary)) {
+			receiver = NULL;
+		}
+		if (receiver != NULL && Z_ISREF_P(receiver)) {
+			receiver = Z_REFVAL_P(receiver);
+		}
+		if (name_value != NULL && Z_ISREF_P(name_value)) {
+			name_value = Z_REFVAL_P(name_value);
+		}
+		if (value != NULL && !value_temporary
+				&& (auxiliary & UINT64_C(0xff))
+					!= ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+			if (Z_TYPE_P(value) == IS_UNDEF) {
+				value = NULL;
+			} else {
+				ZVAL_DEREF(value);
+			}
+		}
+		if (receiver != NULL && Z_TYPE_P(receiver) == IS_OBJECT
+				&& name_value != NULL && Z_TYPE_P(name_value) == IS_STRING
+				&& value != NULL && Z_TYPE_P(value) != IS_UNDEF
+				&& Z_TYPE_P(value) != IS_INDIRECT) {
+			void **cache_slot = NULL;
+
+			if ((op2 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_LITERAL
+					&& execute_data->run_time_cache != NULL) {
+				const uint32_t cache_size =
+					execute_data->func->op_array.cache_size;
+
+				if (extended_value > cache_size
+						|| 3 * sizeof(void *) > cache_size - extended_value) {
+					goto general;
+				}
+				cache_slot = (void **) (
+					(char *) execute_data->run_time_cache + extended_value);
+			}
+			execute_data->opline = &execute_data->func->op_array.opcodes[
+				source_position_id];
+			Z_OBJ_HT_P(receiver)->write_property(
+				Z_OBJ_P(receiver), Z_STR_P(name_value), value, cache_slot);
+			if (value_temporary && !Z_ISUNDEF_P(value_slot)) {
+				zval_ptr_dtor_nogc(value_slot);
+				ZVAL_UNDEF(value_slot);
+			}
+			if (name_temporary && !Z_ISUNDEF_P(name)) {
+				zval_ptr_dtor_nogc(name);
+				ZVAL_UNDEF(name);
+			}
+			return zend_native_object_status();
+		}
+	}
+general:
 
 	if (!zend_native_object_init_explicit_assignment(
 			execute_data, op1, op2, result, auxiliary, extended_value,
