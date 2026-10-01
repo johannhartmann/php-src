@@ -8716,6 +8716,8 @@ bool zend_native_call_fast_rearm(
 	zend_native_user_call_site_header *header =
 		(zend_native_user_call_site_header *)
 			ZEND_NATIVE_USER_CALL_SITE_HEADER(descriptor);
+	zend_native_entry_cell *cell;
+	bool shared;
 
 	if (header->fast_epoch == zend_native_call_resolution_cache_epoch
 			|| header->fast_rearm_epoch
@@ -8723,8 +8725,26 @@ bool zend_native_call_fast_rearm(
 		return false;
 	}
 	header->fast_rearm_epoch = zend_native_call_resolution_cache_epoch;
-	if (!zend_native_call_fast_rearm_site(caller, descriptor)) {
+	cell = header->fast_cell;
+	shared = cell != NULL && header->fast_function != NULL
+		&& (descriptor->init_opcode == ZEND_INIT_FCALL
+			|| descriptor->init_opcode == ZEND_INIT_FCALL_BY_NAME
+			|| (descriptor->init_opcode == ZEND_INIT_METHOD_CALL
+				&& header->fast_key != NULL
+				&& (((const zend_class_entry *) header->fast_key)->ce_flags
+					& ZEND_ACC_IMMUTABLE) != 0));
+	/* Another site already verified this target in the epoch: a name binds
+	 * one function per request, and a method site's guard checks the class
+	 * of every receiver. */
+	if (shared && cell->fast_bound_epoch == zend_native_call_resolution_cache_epoch
+			&& cell->fast_bound_entry == header->fast_entry) {
+		header->fast_run_time_cache = cell->fast_bound_run_time_cache;
+	} else if (!zend_native_call_fast_rearm_site(caller, descriptor)) {
 		return false;
+	} else if (shared) {
+		cell->fast_bound_epoch = zend_native_call_resolution_cache_epoch;
+		cell->fast_bound_entry = header->fast_entry;
+		cell->fast_bound_run_time_cache = header->fast_run_time_cache;
 	}
 	header->fast_checked_epoch = zend_native_call_resolution_cache_epoch;
 	header->fast_epoch = zend_native_call_resolution_cache_epoch;

@@ -64,6 +64,13 @@ typedef struct _zend_native_entry_cell {
 	void *frame_probe_context;
 	bool lease_managed;
 	zend_native_call_fast_receive fast_receive;
+	/* The call-cache epoch in which a fast call site's re-arm last
+	 * verified this immutable target under a function name or as a method
+	 * (zend_native_call_fast_rearm()), with the entry and the run-time
+	 * cache it found: another stale site of the target re-arms from them. */
+	uint64_t fast_bound_epoch;
+	zend_native_frame_entry_t fast_bound_entry;
+	void **fast_bound_run_time_cache;
 } zend_native_entry_cell;
 
 static zend_always_inline const zend_native_code *
