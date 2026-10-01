@@ -880,6 +880,65 @@ zend_result zend_native_call_set_explicit_argument(
 		return FAILURE;
 	}
 	call = caller->call;
+	/*
+	 * A positional by-value SEND_VAL/SEND_VAR(_EX) of a defined CV, a plain
+	 * temporary or a literal to a parameter that takes no reference copies
+	 * or moves the value, as the general path below does, without decoding
+	 * the operand.
+	 */
+	if (argument->mode == ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
+			&& argument->auxiliary_operand.kind
+				== ZEND_MIR_SOURCE_OPERAND_UNUSED
+			&& (argument->source_opcode == ZEND_SEND_VAL
+				|| argument->source_opcode == ZEND_SEND_VAL_EX
+				|| argument->source_opcode == ZEND_SEND_VAR
+				|| argument->source_opcode == ZEND_SEND_VAR_EX)) {
+		const zend_op_array *op_array = &caller->func->op_array;
+		const zend_mir_source_operand_ref *source = &argument->source_operand;
+		const uint32_t number = argument->auxiliary_payload != 0
+			? argument->auxiliary_payload : argument->ordinal + 1;
+		zend_function *fast_function = call->func;
+		zval *fast_value = NULL;
+
+		if (fast_function != NULL && number != 0
+				&& number <= ZEND_CALL_NUM_ARGS(call)
+				&& (fast_function->type == ZEND_INTERNAL_FUNCTION
+					|| fast_function->type == ZEND_USER_FUNCTION)
+				&& (fast_function->common.fn_flags
+					& ZEND_ACC_CALL_VIA_TRAMPOLINE) == 0
+				&& !ARG_SHOULD_BE_SENT_BY_REF(fast_function, number)) {
+			zval *fast_target = ZEND_CALL_ARG(call, number);
+
+			if (source->kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+				if (source->index < op_array->last_literal) {
+					zend_native_zval_copy_deref_or_dup(
+						fast_target, &op_array->literals[source->index]);
+					return SUCCESS;
+				}
+			} else if (source->kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+					|| source->kind == ZEND_MIR_SOURCE_OPERAND_SSA) {
+				if (source->slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+						&& source->index < (uint32_t) op_array->last_var) {
+					fast_value = ZEND_CALL_VAR_NUM(caller, source->index);
+					if (!Z_ISUNDEF_P(fast_value)) {
+						zend_native_zval_copy_deref_or_dup(
+							fast_target, fast_value);
+						return SUCCESS;
+					}
+				} else if (source->slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+						&& source->index < op_array->T) {
+					fast_value = ZEND_CALL_VAR_NUM(caller,
+						(uint32_t) op_array->last_var + source->index);
+					if (Z_TYPE_P(fast_value) != IS_INDIRECT
+							&& !Z_ISREF_P(fast_value)) {
+						ZVAL_COPY_VALUE(fast_target, fast_value);
+						ZVAL_UNDEF(fast_value);
+						return SUCCESS;
+					}
+				}
+			}
+		}
+	}
 	caller->opline = &caller->func->op_array.opcodes[
 		argument->source_position];
 	if (argument->mode == ZEND_NATIVE_CALL_ARGUMENT_PLACEHOLDER) {
