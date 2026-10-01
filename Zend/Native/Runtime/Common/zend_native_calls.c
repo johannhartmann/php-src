@@ -906,7 +906,100 @@ static void zend_native_frameless_observed_call_explicit(
 	}
 }
 
+static zend_never_inline zend_native_status
+zend_native_call_frameless_general(
+	zend_execute_data *execute_data, uint64_t encoded_op1,
+	uint64_t descriptor, uint64_t slots, uint64_t more_slots);
+
+static zend_always_inline zval *zend_native_call_frameless_argument(
+	zend_execute_data *execute_data, uint64_t descriptor, uint32_t index,
+	uint32_t offset)
+{
+	return ((descriptor >> (ZEND_NATIVE_FRAMELESS_DIRECT_CONST_SHIFT + index))
+			& 1)
+		? &execute_data->func->op_array.literals[offset]
+		: (zval *) ((char *) execute_data + offset);
+}
+
+static zend_always_inline void zend_native_call_frameless_release(
+	zend_execute_data *execute_data, uint64_t descriptor, uint32_t index,
+	uint32_t offset)
+{
+	if ((descriptor >> (ZEND_NATIVE_FRAMELESS_DIRECT_TMP_SHIFT + index)) & 1) {
+		zval *slot = (zval *) ((char *) execute_data + offset);
+
+		if (!Z_ISUNDEF_P(slot)) {
+			zval_ptr_dtor(slot);
+			ZVAL_UNDEF(slot);
+		}
+	}
+}
+
+/*
+ * The VM's FRAMELESS_ICALL_2 and _3 handlers for defined arguments of an
+ * unobserved function; an undefined CV, which warns, and everything else
+ * take the general form below.
+ */
 zend_native_status zend_native_call_frameless_direct(
+	zend_execute_data *execute_data, uint64_t encoded_op1,
+	uint64_t descriptor, uint64_t slots, uint64_t more_slots)
+{
+	const uint32_t handler_index = (uint32_t) (descriptor & 0xffff);
+	const uint32_t argument_count = (uint32_t) ((descriptor >> 16) & 3);
+
+	if (EXPECTED(argument_count >= 2)
+#if !ZEND_VM_SPEC || ZEND_OBSERVER_ENABLED
+			&& !(ZEND_OBSERVER_ENABLED
+				&& UNEXPECTED(!zend_observer_handler_is_unobserved(
+					ZEND_OBSERVER_DATA(zend_flf_functions[handler_index]))))
+#endif
+			) {
+		zval *first = zend_native_call_frameless_argument(
+			execute_data, descriptor, 0, (uint32_t) (slots >> 32));
+		zval *second = zend_native_call_frameless_argument(
+			execute_data, descriptor, 1, (uint32_t) more_slots);
+		zval *third = argument_count == 3
+			? zend_native_call_frameless_argument(
+				execute_data, descriptor, 2, (uint32_t) (more_slots >> 32))
+			: NULL;
+
+		if (Z_TYPE_P(first) != IS_UNDEF && Z_TYPE_P(second) != IS_UNDEF
+				&& (third == NULL || Z_TYPE_P(third) != IS_UNDEF)) {
+			zval *result = (zval *) ((char *) execute_data + (uint32_t) slots);
+
+			execute_data->opline =
+				&execute_data->func->op_array.opcodes[descriptor >> 32];
+			ZVAL_NULL(result);
+			if (third == NULL) {
+				((zend_frameless_function_2)
+					zend_flf_handlers[handler_index])(result,
+						Z_ISREF_P(first) ? Z_REFVAL_P(first) : first,
+						Z_ISREF_P(second) ? Z_REFVAL_P(second) : second);
+			} else {
+				((zend_frameless_function_3)
+					zend_flf_handlers[handler_index])(result,
+						Z_ISREF_P(first) ? Z_REFVAL_P(first) : first,
+						Z_ISREF_P(second) ? Z_REFVAL_P(second) : second,
+						Z_ISREF_P(third) ? Z_REFVAL_P(third) : third);
+			}
+			zend_native_call_frameless_release(execute_data, descriptor, 0,
+				(uint32_t) (slots >> 32));
+			zend_native_call_frameless_release(execute_data, descriptor, 1,
+				(uint32_t) more_slots);
+			if (third != NULL) {
+				zend_native_call_frameless_release(execute_data, descriptor,
+					2, (uint32_t) (more_slots >> 32));
+			}
+			return EG(exception) == NULL
+				? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+		}
+	}
+	return zend_native_call_frameless_general(execute_data, encoded_op1,
+		descriptor, slots, more_slots);
+}
+
+static zend_never_inline zend_native_status
+zend_native_call_frameless_general(
 	zend_execute_data *execute_data, uint64_t encoded_op1,
 	uint64_t descriptor, uint64_t slots, uint64_t more_slots)
 {
