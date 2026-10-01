@@ -2082,6 +2082,56 @@ zend_native_status zend_native_internal_call_invoke_finish_source(
 	bool mutable_result;
 	uint8_t result_operand_type;
 
+	/*
+	 * The common DO_ICALL: an unobserved, plain function whose pushed frame
+	 * holds no undefined arguments, its result unused or a temporary. The
+	 * checks of zend_native_internal_call_invoke_finish() are made once
+	 * and the handler is called through the fast invoke directly.
+	 */
+	if (EXPECTED(caller != NULL && descriptor != NULL && cell != NULL
+			&& !ZEND_OBSERVER_ENABLED && zend_execute_internal == NULL
+			&& EG(exception) == NULL
+			&& caller->call != NULL && cell->function != NULL
+			&& caller->call->func == cell->function
+			&& (cell->function->common.fn_flags
+				& (ZEND_ACC_DEPRECATED | ZEND_ACC_NODISCARD
+					| ZEND_ACC_CALL_VIA_TRAMPOLINE)) == 0
+			&& (ZEND_CALL_INFO(caller->call) & ZEND_CALL_MAY_HAVE_UNDEF) == 0
+			&& descriptor->do_opcode != ZEND_CALLABLE_CONVERT
+			&& descriptor->do_opcode != ZEND_CALLABLE_CONVERT_PARTIAL
+			&& caller->func != NULL && ZEND_USER_CODE(caller->func->type)
+			&& descriptor->do_source_position < caller->func->op_array.last
+			&& (descriptor->result_operand.kind
+					== ZEND_MIR_SOURCE_OPERAND_UNUSED
+				|| ((descriptor->result_operand.kind
+							== ZEND_MIR_SOURCE_OPERAND_SLOT
+						|| descriptor->result_operand.kind
+							== ZEND_MIR_SOURCE_OPERAND_SSA)
+					&& descriptor->result_operand.slot_kind
+						== ZEND_MIR_SOURCE_SLOT_TMP
+					&& descriptor->result_operand.index
+						< caller->func->op_array.T)))) {
+		caller->opline = &caller->func->op_array.opcodes[
+			descriptor->do_source_position];
+		return_value = descriptor->result_operand.kind
+				== ZEND_MIR_SOURCE_OPERAND_UNUSED
+			? &temporary
+			: ZEND_CALL_VAR_NUM(caller,
+				(uint32_t) caller->func->op_array.last_var
+					+ descriptor->result_operand.index);
+		status = zend_native_internal_call_invoke_fast(
+			caller, caller->call, return_value);
+		if (status == ZEND_NATIVE_EXCEPTION && EG(exception) != NULL) {
+			status = zend_native_prepare_finally_exception(
+				caller, descriptor->do_source_position) == SUCCESS
+				? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
+		}
+		if (return_value == &temporary && !Z_ISUNDEF(temporary)) {
+			zval_ptr_dtor(&temporary);
+		}
+		return status;
+	}
+
 	if (caller == NULL || descriptor == NULL || caller->func == NULL
 			|| !ZEND_USER_CODE(caller->func->type)
 			|| descriptor->do_source_position
