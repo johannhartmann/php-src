@@ -1167,9 +1167,18 @@ public:
 			tpde::Label slow, IRBlockRef cold, IRBlockRef hot) {
 		const auto spilled = spill_before_branch();
 		begin_branch_region();
-		generate_branch_to_block(Jump::jmp, hot, false, false);
+		/* The failed checks' jump to the cold block waits in the cold area,
+		 * so the success path falls through to a following hot block. */
+		const bool cold_stub = !text_writer.in_cold_area();
+		generate_branch_to_block(Jump::jmp, hot, false, cold_stub);
+		if (cold_stub) {
+			text_writer.begin_cold_area();
+		}
 		label_place(slow);
-		generate_branch_to_block(Jump::jmp, cold, false, true);
+		generate_branch_to_block(Jump::jmp, cold, false, !cold_stub);
+		if (cold_stub) {
+			text_writer.end_cold_area();
+		}
 		end_branch_region();
 		release_spilled_regs(spilled);
 	}
@@ -2105,6 +2114,12 @@ bool ZendCompilerX64::compile_boxed_cond_guard(IRInstRef instruction) {
 		type.reset();
 		value.reset();
 		decision.reset();
+		/* The tails only forward (jump threading resolves the jumps to
+		 * them): out of the hot code. */
+		const bool cold_tails = !text_writer.in_cold_area();
+		if (cold_tails) {
+			text_writer.begin_cold_area();
+		}
 		begin_branch_region();
 		label_place(truthy);
 		generate_branch_to_block(
@@ -2116,6 +2131,9 @@ bool ZendCompilerX64::compile_boxed_cond_guard(IRInstRef instruction) {
 		generate_branch_to_block(
 			Jump::jmp, successors[2], false, false);
 		end_branch_region();
+		if (cold_tails) {
+			text_writer.end_cold_area();
+		}
 		release_spilled_regs(spilled);
 		return true;
 	}
@@ -16307,12 +16325,16 @@ bool ZendCompilerX64::compile_inst_impl(
 						decision.reset(this);
 						generate_raw_jump(Jump::jne, truthy);
 						generate_raw_jump(Jump::jmp, falsey);
-						text_writer.end_cold_area();
+						/* The truthy tail only forwards (jump threading
+						 * resolves the jumps to it to the block): it stays in
+						 * the cold area, so the inline code's last jump to the
+						 * falsey tail is one to the next instruction. */
 						const auto spilled = spill_before_branch();
 						begin_branch_region();
 						label_place(truthy);
 						generate_branch_to_block(
 							Jump::jmp, successors[0], false, false);
+						text_writer.end_cold_area();
 						label_place(falsey);
 						generate_branch_to_block(
 							Jump::jmp, successors[1], false, true);
