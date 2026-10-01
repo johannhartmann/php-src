@@ -4386,7 +4386,8 @@ static void zend_native_call_fast_publish(
 			|| resolution->invoke_entry == NULL
 			|| (resolution->placement_flags
 				& ~(ZEND_NATIVE_USER_CALL_PLACEMENTS_FAST_FRAME
-					| ZEND_NATIVE_USER_CALL_PLACEMENTS_HAS_DEFAULTS)) != 0
+					| ZEND_NATIVE_USER_CALL_PLACEMENTS_HAS_DEFAULTS
+					| ZEND_NATIVE_USER_CALL_PLACEMENTS_RUNTIME_EXPANSION)) != 0
 			|| (resolution->call_info
 				& ~(ZEND_CALL_NESTED_FUNCTION | ZEND_CALL_HAS_THIS
 					| ZEND_CALL_RELEASE_THIS)) != 0
@@ -4476,11 +4477,44 @@ static void zend_native_call_fast_publish(
 			|| resolution->frame_size == 0) {
 		return;
 	}
+	header->fast_ref_mask = 0;
 	for (index = 0; index < entry->argument_count; index++) {
 		const zend_native_user_call_placement *placement =
 			&entry->placements[index];
 		const zend_native_direct_internal_call_argument *argument =
 			&descriptor->arguments[index];
+
+		/* A CV sent with SEND_VAR_EX to a declared by-reference parameter:
+		 * the resolution leaves it to the runtime tail, and the fast Do
+		 * passes the reference instead (fast_ref_mask). */
+		if (index < 32 && index < op_array->num_args
+				&& ZEND_ARG_SEND_MODE(&op_array->arg_info[index]) != 0
+				&& argument->source_opcode == ZEND_SEND_VAR_EX
+				&& argument->mode == ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
+				&& argument->auxiliary_operand.kind
+					== ZEND_MIR_SOURCE_OPERAND_UNUSED
+				&& (argument->source_operand.kind
+						== ZEND_MIR_SOURCE_OPERAND_SLOT
+					|| argument->source_operand.kind
+						== ZEND_MIR_SOURCE_OPERAND_SSA)
+				&& argument->source_operand.slot_kind
+					== ZEND_MIR_SOURCE_SLOT_CV
+				&& placement->source_index == index
+				&& placement->target_index == index
+				&& (placement->flags
+					& ~(ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_REF_CHECK
+						| ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_EXPANSION
+						| ZEND_NATIVE_USER_CALL_PLACEMENT_TARGET_SHOULD_REF
+						| ZEND_NATIVE_USER_CALL_PLACEMENT_TARGET_MUST_REF))
+					== 0) {
+			header->fast_ref_mask |= UINT32_C(1) << index;
+			continue;
+		}
+		/* Any other runtime-tail placement keeps the universal protocol. */
+		if ((placement->flags
+				& ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_EXPANSION) != 0) {
+			return;
+		}
 
 		/* A runtime by-reference check is decided here: the target takes
 		 * this parameter by value. An argument past the declared parameters
@@ -8443,6 +8477,31 @@ uint32_t zend_native_call_fast_do(
 	if ((flags & ZEND_NATIVE_CALL_FAST_NO_CALL) != 0) {
 		/* new C without a constructor: the Init pushed no frame. */
 		return ZEND_NATIVE_RETURNED;
+	}
+	if (UNEXPECTED(dynamic_entry == NULL && header->fast_ref_mask != 0)) {
+		/* SEND_VAR_EX to by-reference parameters: the sends copied the
+		 * CVs; pass references to them instead, as the VM's send makes
+		 * them (an undefined CV becoming null). */
+		uint32_t mask = header->fast_ref_mask;
+
+		do {
+			const uint32_t index = (uint32_t) __builtin_ctz(mask);
+			zval *argument = ZEND_CALL_ARG(callee, index + 1);
+			zval *variable = ZEND_CALL_VAR_NUM(caller,
+				descriptor->arguments[index].source_operand.index);
+
+			zval_ptr_dtor_nogc(argument);
+			if (Z_ISREF_P(variable)) {
+				Z_ADDREF_P(variable);
+			} else {
+				if (Z_ISUNDEF_P(variable)) {
+					ZVAL_NULL(variable);
+				}
+				ZVAL_MAKE_REF_EX(variable, 2);
+			}
+			ZVAL_REF(argument, Z_REF_P(variable));
+			mask &= mask - 1;
+		} while (mask != 0);
 	}
 	const bool discard = result_offset == UINT32_MAX;
 	zval discarded;
