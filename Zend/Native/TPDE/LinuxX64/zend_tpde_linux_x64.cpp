@@ -931,7 +931,11 @@ public:
 		}
 		generate_raw_jump(Jump::jmp, falsey);
 
-		/* long or double, at least one double */
+		/* long or double, at least one double: out of the hot code */
+		const bool cold_doubles = !text_writer.in_cold_area();
+		if (cold_doubles) {
+			text_writer.begin_cold_area();
+		}
 		label_place(not_longs);
 		const auto left_fp =
 			left_double.alloc(tpde::x64::PlatformConfig::FP_BANK);
@@ -974,6 +978,9 @@ public:
 				break;
 		}
 		generate_raw_jump(Jump::jmp, falsey);
+		if (cold_doubles) {
+			text_writer.end_cold_area();
+		}
 		return true;
 	}
 
@@ -4051,8 +4058,13 @@ bool ZendCompilerX64::compile_inst_impl(
 						offsetof(zend_native_user_call_site_header,
 							fast_epoch)));
 					/* The registers the stub must preserve: those in use
-					 * here, where the retry and the miss resume. */
+					 * here, where the retry and the miss resume, but for the
+					 * scratch registers above, which the retry reloads
+					 * (all but the descriptor). */
 					rearm_live_registers = register_file.used;
+					rearm_live_registers &= ~(uint64_t{1} << value_reg.id());
+					rearm_live_registers &= ~(uint64_t{1} << callee_reg.id());
+					rearm_live_registers &= ~(uint64_t{1} << object_reg.id());
 					generate_raw_jump(Jump::jne, fast_rearm);
 					ASM(CMP8mi,
 						FE_MEM(context_register(), 0, FE_NOREG,
@@ -16078,99 +16090,107 @@ bool ZendCompilerX64::compile_inst_impl(
 						return false;
 					}
 
-					if (register_condition) {
-						mov(type_reg, boxed_type_info_reg, 4);
-					} else {
-						ASM(MOV32rm, type_reg,
-							FE_MEM(frame_reg, 0, FE_NOREG,
-								static_cast<int32_t>(
-									layout.operand_offset
-										+ offsetof(zval, u1.type_info))));
-					}
-					/* Inference may know the condition is a boolean, such as a
-					 * comparison result, which owns nothing. */
-					const uint32_t condition_position =
-						mir.value_operation.source_position_id;
-					if (!layout.has_result
+					/* The truthiness of the condition operand, unless a
+					 * result-producing or fused form above decided every
+					 * outcome. */
+					if (!layout.has_result && !fused) {
+						if (register_condition) {
+							mov(type_reg, boxed_type_info_reg, 4);
+						} else {
+							ASM(MOV32rm, type_reg,
+								FE_MEM(frame_reg, 0, FE_NOREG,
+									static_cast<int32_t>(
+										layout.operand_offset
+											+ offsetof(zval, u1.type_info))));
+						}
+						/* Inference may know the condition is a boolean, such as a
+						 * comparison result, which owns nothing. */
+						const uint32_t condition_position =
+							mir.value_operation.source_position_id;
+						const bool known_bool = !layout.has_result
 							&& adaptor->plan()->source_opcodes != nullptr
 							&& condition_position
 								< adaptor->plan()->source_opcode_count
 							&& adaptor->plan()->source_opcodes[
 									condition_position].op1_known_type
-								== ZEND_TPDE_KNOWN_BOOL) {
-						ASM(CMP8ri, type_reg, IS_TRUE);
-						generate_raw_jump(Jump::je, truthy);
-						generate_raw_jump(Jump::jmp, falsey);
-					}
-					/* A counted temporary, in its slot or held in registers,
-					 * owns a reference that only the helper releases. */
-					if (frame_temporary_condition
-							|| (register_condition
-								&& mir.value_operation.op1.slot_kind
-									== ZEND_MIR_SOURCE_SLOT_TMP)) {
-						ASM(TEST32ri, type_reg,
-							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-						generate_raw_jump(Jump::jne, slow);
-					}
-					ASM(AND32ri, type_reg, Z_TYPE_MASK);
-					ASM(CMP32ri, type_reg, IS_NULL);
-					generate_raw_jump(Jump::je, falsey);
-					ASM(CMP32ri, type_reg, IS_FALSE);
-					generate_raw_jump(Jump::je, falsey);
-					ASM(CMP32ri, type_reg, IS_TRUE);
-					generate_raw_jump(Jump::je, truthy);
-					ASM(CMP32ri, type_reg, IS_LONG);
-					auto not_long = text_writer.label_create();
-					generate_raw_jump(Jump::jne, not_long);
-					load_condition_payload();
-					ASM(TEST64rr, value_reg, value_reg);
-					generate_raw_jump(Jump::jne, truthy);
-					generate_raw_jump(Jump::jmp, falsey);
+								== ZEND_TPDE_KNOWN_BOOL;
+						if (known_bool) {
+							ASM(CMP8ri, type_reg, IS_TRUE);
+							generate_raw_jump(Jump::je, truthy);
+							generate_raw_jump(Jump::jmp, falsey);
+						}
+						if (!known_bool) {
+							/* A counted temporary, in its slot or held in registers,
+							 * owns a reference that only the helper releases. */
+							if (frame_temporary_condition
+									|| (register_condition
+										&& mir.value_operation.op1.slot_kind
+											== ZEND_MIR_SOURCE_SLOT_TMP)) {
+								ASM(TEST32ri, type_reg,
+									IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+								generate_raw_jump(Jump::jne, slow);
+							}
+							ASM(AND32ri, type_reg, Z_TYPE_MASK);
+							ASM(CMP32ri, type_reg, IS_NULL);
+							generate_raw_jump(Jump::je, falsey);
+							ASM(CMP32ri, type_reg, IS_FALSE);
+							generate_raw_jump(Jump::je, falsey);
+							ASM(CMP32ri, type_reg, IS_TRUE);
+							generate_raw_jump(Jump::je, truthy);
+							ASM(CMP32ri, type_reg, IS_LONG);
+							auto not_long = text_writer.label_create();
+							generate_raw_jump(Jump::jne, not_long);
+							load_condition_payload();
+							ASM(TEST64rr, value_reg, value_reg);
+							generate_raw_jump(Jump::jne, truthy);
+							generate_raw_jump(Jump::jmp, falsey);
 
-					label_place(not_long);
-					ASM(CMP32ri, type_reg, IS_STRING);
-					auto not_string = text_writer.label_create();
-					generate_raw_jump(Jump::jne, not_string);
-					load_condition_payload();
-					ASM(MOV64rm, type_reg,
-						FE_MEM(value_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(zend_string, len))));
-					ASM(TEST64rr, type_reg, type_reg);
-					generate_raw_jump(Jump::je, falsey);
-					ASM(CMP64ri, type_reg, 1);
-					generate_raw_jump(Jump::jne, truthy);
-					ASM(MOVZXr32m8, type_reg,
-						FE_MEM(value_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(zend_string, val))));
-					ASM(CMP32ri, type_reg, '0');
-					generate_raw_jump(Jump::je, falsey);
-					generate_raw_jump(Jump::jmp, truthy);
+							label_place(not_long);
+							ASM(CMP32ri, type_reg, IS_STRING);
+							auto not_string = text_writer.label_create();
+							generate_raw_jump(Jump::jne, not_string);
+							load_condition_payload();
+							ASM(MOV64rm, type_reg,
+								FE_MEM(value_reg, 0, FE_NOREG,
+									static_cast<int32_t>(
+										offsetof(zend_string, len))));
+							ASM(TEST64rr, type_reg, type_reg);
+							generate_raw_jump(Jump::je, falsey);
+							ASM(CMP64ri, type_reg, 1);
+							generate_raw_jump(Jump::jne, truthy);
+							ASM(MOVZXr32m8, type_reg,
+								FE_MEM(value_reg, 0, FE_NOREG,
+									static_cast<int32_t>(
+										offsetof(zend_string, val))));
+							ASM(CMP32ri, type_reg, '0');
+							generate_raw_jump(Jump::je, falsey);
+							generate_raw_jump(Jump::jmp, truthy);
 
-					label_place(not_string);
-					ASM(CMP32ri, type_reg, IS_ARRAY);
-					auto not_array = text_writer.label_create();
-					generate_raw_jump(Jump::jne, not_array);
-					load_condition_payload();
-					ASM(MOV32rm, type_reg,
-						FE_MEM(value_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(HashTable, nNumOfElements))));
-					ASM(TEST32rr, type_reg, type_reg);
-					generate_raw_jump(Jump::jne, truthy);
-					generate_raw_jump(Jump::jmp, falsey);
-					label_place(not_array);
-					ASM(CMP32ri, type_reg, IS_RESOURCE);
-					generate_raw_jump(Jump::jne, slow);
-					load_condition_payload();
-					ASM(MOV32rm, type_reg,
-						FE_MEM(value_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(zend_resource, handle))));
-					ASM(TEST32rr, type_reg, type_reg);
-					generate_raw_jump(Jump::jne, truthy);
-					generate_raw_jump(Jump::jmp, falsey);
+							label_place(not_string);
+							ASM(CMP32ri, type_reg, IS_ARRAY);
+							auto not_array = text_writer.label_create();
+							generate_raw_jump(Jump::jne, not_array);
+							load_condition_payload();
+							ASM(MOV32rm, type_reg,
+								FE_MEM(value_reg, 0, FE_NOREG,
+									static_cast<int32_t>(
+										offsetof(HashTable, nNumOfElements))));
+							ASM(TEST32rr, type_reg, type_reg);
+							generate_raw_jump(Jump::jne, truthy);
+							generate_raw_jump(Jump::jmp, falsey);
+							label_place(not_array);
+							ASM(CMP32ri, type_reg, IS_RESOURCE);
+							generate_raw_jump(Jump::jne, slow);
+							load_condition_payload();
+							ASM(MOV32rm, type_reg,
+								FE_MEM(value_reg, 0, FE_NOREG,
+									static_cast<int32_t>(
+										offsetof(zend_resource, handle))));
+							ASM(TEST32rr, type_reg, type_reg);
+							generate_raw_jump(Jump::jne, truthy);
+							generate_raw_jump(Jump::jmp, falsey);
+						}
+					}
 
 					const auto &successors = adaptor->block_succs(
 						IRBlockRef{node.control_block});
