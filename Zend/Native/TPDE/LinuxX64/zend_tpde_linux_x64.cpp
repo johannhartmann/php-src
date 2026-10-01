@@ -280,13 +280,19 @@ class ZendCompilerX64 final
 								/* A by-value FUNC_ARG fetch reads its
 								 * operand: the VAR holds a plain value
 								 * the send moves. A call result sent with
-								 * NO_REF_EX moves, or is dereferenced. */
+								 * NO_REF_EX, and any VAR sent with
+								 * SEND_VAR(_EX), moves, or is
+								 * dereferenced. */
 								&& (source.slot_kind
 										!= ZEND_MIR_SOURCE_SLOT_VAR
 									|| (argument.source_opcode
 											!= ZEND_SEND_FUNC_ARG
 										&& argument.source_opcode
-											!= ZEND_SEND_VAR_NO_REF_EX)))))) {
+											!= ZEND_SEND_VAR_NO_REF_EX
+										&& argument.source_opcode
+											!= ZEND_SEND_VAR
+										&& argument.source_opcode
+											!= ZEND_SEND_VAR_EX)))))) {
 				return false;
 			}
 			if (zend_tpde_source_call_phase_at(
@@ -4779,10 +4785,13 @@ bool ZendCompilerX64::compile_inst_impl(
 				source.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
 			const bool cv = !literal
 				&& source.slot_kind == ZEND_MIR_SOURCE_SLOT_CV;
-			/* A VAR a function result filled may hold a reference. */
+			/* A VAR a function result filled may hold a reference, which
+			 * ZEND_SEND_VAR unwraps as NO_REF_EX does. */
 			const bool var_reference = !literal
 				&& source.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR
-				&& argument.source_opcode == ZEND_SEND_VAR_NO_REF_EX;
+				&& (argument.source_opcode == ZEND_SEND_VAR_NO_REF_EX
+					|| argument.source_opcode == ZEND_SEND_VAR
+					|| argument.source_opcode == ZEND_SEND_VAR_EX);
 			const uint64_t source_offset = literal
 				? uint64_t{source.index} * sizeof(zval)
 				: (uint64_t{ZEND_CALL_FRAME_SLOT} + source.index
