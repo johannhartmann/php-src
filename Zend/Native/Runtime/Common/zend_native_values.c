@@ -2631,8 +2631,8 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 			}
 		}
 	}
-	/* if/while on null, a boolean, an integer or a string: the truth
-	 * decides, and a string temporary is released. */
+	/* if/while on null, a boolean, an integer, a string, an array or a
+	 * plain object: the truth decides, and a temporary is released. */
 	if (source_opcode == ZEND_JMPZ || source_opcode == ZEND_JMPNZ) {
 		bool value_tmp;
 
@@ -2650,6 +2650,26 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 			} else {
 				truth = Z_TYPE_P(value) == IS_TRUE
 					|| (Z_TYPE_P(value) == IS_LONG && Z_LVAL_P(value) != 0);
+			}
+			return truth ? ZEND_NATIVE_ITERATOR_NEXT : ZEND_NATIVE_ITERATOR_END;
+		}
+		/* An array is true when it has elements; an object whose cast is
+		 * the standard one is true. A temporary is released when it stays
+		 * shared, so that no destructor runs here. */
+		if (value != NULL
+				&& (Z_TYPE_P(value) == IS_ARRAY
+					|| (Z_TYPE_P(value) == IS_OBJECT
+						&& Z_OBJ_HT_P(value)->cast_object
+							== zend_std_cast_object_tostring))
+				&& (!value_tmp || !Z_REFCOUNTED_P(value)
+					|| GC_REFCOUNT(Z_COUNTED_P(value)) > 1)) {
+			truth = Z_TYPE_P(value) == IS_OBJECT
+				|| zend_hash_num_elements(Z_ARRVAL_P(value)) != 0;
+			if (value_tmp) {
+				if (Z_REFCOUNTED_P(value)) {
+					GC_DELREF(Z_COUNTED_P(value));
+				}
+				ZVAL_UNDEF(value);
 			}
 			return truth ? ZEND_NATIVE_ITERATOR_NEXT : ZEND_NATIVE_ITERATOR_END;
 		}
