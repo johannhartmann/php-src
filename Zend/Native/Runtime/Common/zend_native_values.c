@@ -2967,6 +2967,48 @@ static zend_native_status zend_native_value_concat_impl(
 	zval *right;
 	zend_result status;
 
+	if (source_opcode == expected_opcode
+			&& source_position_id < execute_data->func->op_array.last) {
+		/* Two strings into a temporary: concat_function() without decoding
+		 * the operation, releasing temporary operands as below. */
+		bool left_tmp, right_tmp, result_tmp;
+		zval *fast_left = zend_native_value_fast_operand(
+			execute_data, op1, &left_tmp);
+		zval *fast_right = zend_native_value_fast_operand(
+			execute_data, op2, &right_tmp);
+		zval *fast_result = zend_native_value_fast_operand(
+			execute_data, result_operand, &result_tmp);
+
+		if (fast_left != NULL && fast_right != NULL && fast_result != NULL
+				&& result_tmp && fast_result != fast_left
+				&& fast_result != fast_right) {
+			zval *left_value = fast_left;
+			zval *right_value = fast_right;
+
+			if (!left_tmp) {
+				ZVAL_DEREF(left_value);
+			}
+			if (!right_tmp) {
+				ZVAL_DEREF(right_value);
+			}
+			if (Z_TYPE_P(left_value) == IS_STRING
+					&& Z_TYPE_P(right_value) == IS_STRING) {
+				execute_data->opline = &execute_data->func->op_array.opcodes[
+					source_position_id];
+				status = concat_function(fast_result, left_value, right_value);
+				if (left_tmp) {
+					zval_ptr_dtor_nogc(fast_left);
+					ZVAL_UNDEF(fast_left);
+				}
+				if (right_tmp) {
+					zval_ptr_dtor_nogc(fast_right);
+					ZVAL_UNDEF(fast_right);
+				}
+				return status == SUCCESS ? zend_native_value_status()
+					: ZEND_NATIVE_EXCEPTION;
+			}
+		}
+	}
 	if (!zend_native_value_init_explicit_operation(
 			execute_data, op1, op2, result_operand, extended_value,
 			source_opcode, source_position_id, expected_opcode, &operation)
