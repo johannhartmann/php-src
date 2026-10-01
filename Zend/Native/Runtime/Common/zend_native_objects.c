@@ -1403,7 +1403,8 @@ static zend_native_status zend_native_object_incdec_explicit(
 	zend_string *temporary = NULL;
 	zend_string *name;
 	zend_object *object;
-	void *cache_slot[3] = {NULL, NULL, NULL};
+	void *local_cache_slot[3] = {NULL, NULL, NULL};
+	void **cache_slot = local_cache_slot;
 	zval current;
 	zval *property_ptr;
 	zval *read;
@@ -1448,6 +1449,18 @@ static zend_native_status zend_native_object_incdec_explicit(
 		return zend_native_object_status();
 	}
 	object = Z_OBJ_P(receiver);
+	/* A literal name uses the VM run-time cache slot, as ZEND_PRE_INC_OBJ
+	 * does, so later executions find the property offset there. */
+	if (operation->op2_type == IS_CONST
+			&& execute_data->run_time_cache != NULL
+			&& operation->extended_value
+				<= (uint32_t) execute_data->func->op_array.cache_size
+			&& 3 * sizeof(void *)
+				<= (uint32_t) execute_data->func->op_array.cache_size
+					- operation->extended_value) {
+		cache_slot = (void **) ((char *) execute_data->run_time_cache
+			+ operation->extended_value);
+	}
 	/* The result slot may reuse the temporary receiver slot. Keep the object
 	 * alive until both halves of an overloaded read/write operation complete,
 	 * matching zend_{pre,post}_incdec_overloaded_property(). */
@@ -2541,9 +2554,39 @@ ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(
 	zend_native_execute_object_declare_anon_class,
 	ZEND_DECLARE_ANON_CLASS,
 	zend_native_declare_anon_class(execute_data, &operation))
-ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_fetch_this,
+ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_fetch_this_explicit,
 	ZEND_FETCH_THIS,
 	zend_native_fetch_this_explicit(execute_data, &operation))
+
+/* FETCH_THIS into a temporary of an object frame takes a reference to $this
+ * without decoding; everything else, such as the error outside an object
+ * context, takes the explicit operation. */
+zend_native_status zend_native_execute_object_fetch_this(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t actual_source_opcode,
+	uint32_t source_position_id)
+{
+	const uint32_t result_index = (uint32_t) (result >> 16);
+	const uint32_t result_slot = (uint32_t) ((result >> 8) & UINT64_C(0xff));
+
+	if (actual_source_opcode == ZEND_FETCH_THIS
+			&& Z_TYPE(execute_data->This) == IS_OBJECT
+			&& ((result & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| (result & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& (result_slot == ZEND_MIR_SOURCE_SLOT_TMP
+				|| result_slot == ZEND_MIR_SOURCE_SLOT_VAR)
+			&& result_index < execute_data->func->op_array.T) {
+		ZVAL_OBJ_COPY(ZEND_CALL_VAR_NUM(execute_data,
+				(uint32_t) execute_data->func->op_array.last_var
+					+ result_index),
+			Z_OBJ(execute_data->This));
+		return ZEND_NATIVE_RETURNED;
+	}
+	return zend_native_execute_object_fetch_this_explicit(execute_data,
+		op1, op2, result, extended_value, actual_source_opcode,
+		source_position_id);
+}
 /*
  * A declared property of a CV or $this receiver under a literal name whose
  * class and offset the VM run-time cache slot holds: R and IS copy the value,
@@ -2794,22 +2837,146 @@ ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(
 	zend_native_execute_object_isset_isempty,
 	ZEND_ISSET_ISEMPTY_PROP_OBJ,
 	zend_native_object_isset_explicit(execute_data, &operation))
-ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_pre_inc,
+ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_pre_inc_explicit,
 	ZEND_PRE_INC_OBJ,
 	zend_native_object_incdec_explicit(
 		execute_data, &operation, false, false))
-ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_pre_dec,
+ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_pre_dec_explicit,
 	ZEND_PRE_DEC_OBJ,
 	zend_native_object_incdec_explicit(
 		execute_data, &operation, false, true))
-ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_post_inc,
+ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_post_inc_explicit,
 	ZEND_POST_INC_OBJ,
 	zend_native_object_incdec_explicit(
 		execute_data, &operation, true, false))
-ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_post_dec,
+ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_post_dec_explicit,
 	ZEND_POST_DEC_OBJ,
 	zend_native_object_incdec_explicit(
 		execute_data, &operation, true, true))
+
+/*
+ * ++/-- of an untyped declared integer property of a CV or $this receiver
+ * under a literal name whose class and offset the run-time cache slot
+ * holds, as get_property_ptr_ptr() and increment_function() do, below the
+ * overflow; everything else takes the explicit operation.
+ */
+static zend_always_inline bool zend_native_object_incdec_cached(
+	zend_execute_data *execute_data, uint64_t op1, uint64_t op2,
+	uint64_t result, uint32_t cache_offset, bool post, bool decrement)
+{
+	const zend_op_array *op_array = &execute_data->func->op_array;
+	const uint32_t op1_index = (uint32_t) (op1 >> 16);
+	const uint32_t result_index = (uint32_t) (result >> 16);
+	const uint32_t result_slot = (uint32_t) ((result >> 8) & UINT64_C(0xff));
+	const bool has_result = (result & UINT64_C(0xff))
+		!= ZEND_MIR_SOURCE_OPERAND_UNUSED;
+	zval *receiver;
+	zval *property;
+	zval *target = NULL;
+	zend_object *object;
+	void **cache_slot;
+	uintptr_t property_offset;
+	zend_long value;
+
+	if ((op2 & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| execute_data->run_time_cache == NULL
+			|| cache_offset > (uint32_t) op_array->cache_size
+			|| 3 * sizeof(void *)
+				> (uint32_t) op_array->cache_size - cache_offset) {
+		return false;
+	}
+	switch ((zend_mir_source_operand_kind) (op1 & UINT64_C(0xff))) {
+		case ZEND_MIR_SOURCE_OPERAND_UNUSED:
+			receiver = &execute_data->This;
+			break;
+		case ZEND_MIR_SOURCE_OPERAND_SLOT:
+		case ZEND_MIR_SOURCE_OPERAND_SSA:
+			if (((op1 >> 8) & UINT64_C(0xff)) != ZEND_MIR_SOURCE_SLOT_CV
+					|| op1_index >= (uint32_t) op_array->last_var) {
+				return false;
+			}
+			receiver = ZEND_CALL_VAR_NUM(execute_data, op1_index);
+			break;
+		default:
+			return false;
+	}
+	if (Z_TYPE_P(receiver) != IS_OBJECT) {
+		return false;
+	}
+	if (has_result) {
+		/* A temporary, or a CV whose old value needs no release. */
+		if ((result & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_SLOT
+				&& (result & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_SSA) {
+			return false;
+		}
+		if (result_slot == ZEND_MIR_SOURCE_SLOT_CV) {
+			if (result_index >= (uint32_t) op_array->last_var) {
+				return false;
+			}
+			target = ZEND_CALL_VAR_NUM(execute_data, result_index);
+			if (Z_REFCOUNTED_P(target)) {
+				return false;
+			}
+		} else if ((result_slot == ZEND_MIR_SOURCE_SLOT_TMP
+					|| result_slot == ZEND_MIR_SOURCE_SLOT_VAR)
+				&& result_index < op_array->T) {
+			target = ZEND_CALL_VAR_NUM(execute_data,
+				(uint32_t) op_array->last_var + result_index);
+		} else {
+			return false;
+		}
+	}
+	object = Z_OBJ_P(receiver);
+	cache_slot = (void **) ((char *) execute_data->run_time_cache
+		+ cache_offset);
+	if (cache_slot[0] != object->ce || cache_slot[2] != NULL) {
+		return false;
+	}
+	property_offset = (uintptr_t) cache_slot[1];
+	if (!IS_VALID_PROPERTY_OFFSET(property_offset)) {
+		return false;
+	}
+	property = OBJ_PROP(object, property_offset);
+	if (Z_TYPE_P(property) != IS_LONG) {
+		return false;
+	}
+	value = Z_LVAL_P(property);
+	if (decrement ? value == ZEND_LONG_MIN : value == ZEND_LONG_MAX) {
+		return false;
+	}
+	Z_LVAL_P(property) = decrement ? value - 1 : value + 1;
+	if (target != NULL) {
+		ZVAL_LONG(target, post ? value : Z_LVAL_P(property));
+	}
+	return true;
+}
+
+#define ZEND_NATIVE_OBJECT_INCDEC_HELPER(name, post, decrement) \
+	zend_native_status name( \
+		zend_execute_data *execute_data, \
+		uint64_t op1, uint64_t op2, uint64_t result, \
+		uint32_t extended_value, uint32_t actual_source_opcode, \
+		uint32_t source_position_id) \
+	{ \
+		if (source_position_id < execute_data->func->op_array.last \
+				&& execute_data->func->op_array.opcodes[ \
+					source_position_id].extended_value == extended_value \
+				&& zend_native_object_incdec_cached(execute_data, op1, op2, \
+					result, extended_value, post, decrement)) { \
+			return ZEND_NATIVE_RETURNED; \
+		} \
+		return name##_explicit(execute_data, op1, op2, result, \
+			extended_value, actual_source_opcode, source_position_id); \
+	}
+ZEND_NATIVE_OBJECT_INCDEC_HELPER(
+	zend_native_execute_object_pre_inc, false, false)
+ZEND_NATIVE_OBJECT_INCDEC_HELPER(
+	zend_native_execute_object_pre_dec, false, true)
+ZEND_NATIVE_OBJECT_INCDEC_HELPER(
+	zend_native_execute_object_post_inc, true, false)
+ZEND_NATIVE_OBJECT_INCDEC_HELPER(
+	zend_native_execute_object_post_dec, true, true)
+#undef ZEND_NATIVE_OBJECT_INCDEC_HELPER
 ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_instanceof,
 	ZEND_INSTANCEOF,
 	zend_native_object_instanceof(execute_data, &operation))
