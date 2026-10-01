@@ -12256,15 +12256,24 @@ bool ZendCompilerX64::compile_inst_impl(
 			operation_machine_reference(
 				ZEND_TPDE_MACHINE_REFERENCE_PROPERTY_SLOT);
 
+		/* A result without a machine value lives only in its temporary:
+		 * the copy goes there, as the helper's cached read puts it. */
+		const bool frame_result = !node.has_result
+			&& (mir.value_operation.result.slot_kind
+					== ZEND_MIR_SOURCE_SLOT_TMP
+				|| mir.value_operation.result.slot_kind
+					== ZEND_MIR_SOURCE_SLOT_VAR);
 		if (!zend_tpde_object_property_read_at(mir, &layout)
-				|| property_reference == nullptr
-				|| property_reference->stable_storage_or_layout_id
-					!= layout.cache_offset
-				|| property_reference->access_width != sizeof(zval)
+				|| (!frame_result && !node.has_result)
+				|| (!frame_result
+					&& (property_reference == nullptr
+						|| property_reference->stable_storage_or_layout_id
+							!= layout.cache_offset
+						|| property_reference->access_width
+							!= sizeof(zval)))
 				|| layout.receiver_offset > INT32_MAX
 				|| layout.result_offset > INT32_MAX
 				|| layout.cache_offset > INT32_MAX - 3 * sizeof(void *)
-				|| !node.has_result
 				|| node.kind != Adaptor::InstKind::GuardedFast) {
 			return branch_to_guarded_cold();
 		}
@@ -12279,9 +12288,11 @@ bool ZendCompilerX64::compile_inst_impl(
 					!= node.argument_index) {
 			return false;
 		}
-		const zend_tpde_machine_value_kind result_kind =
-			adaptor->machine_kind(node.result);
-		const zend_mir_scalar_type_mask exact = adaptor->exact_type(node.result);
+		const zend_tpde_machine_value_kind result_kind = frame_result
+			? ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+			: adaptor->machine_kind(node.result);
+		const zend_mir_scalar_type_mask exact = frame_result
+			? ZEND_MIR_SCALAR_TYPE_NONE : adaptor->exact_type(node.result);
 		const bool boxed = result_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
 		const bool pointer = result_kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
 			|| result_kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
@@ -12328,41 +12339,65 @@ bool ZendCompilerX64::compile_inst_impl(
 			const AsmReg slot_reg = slot.cur_reg_or_load(this);
 			ASM(TEST64rr, slot_reg, slot_reg);
 			generate_raw_jump(Jump::je, slow);
-			auto result = result_ref(node.result);
 			GenericValuePart property{
 				GenericValuePart::Expr{slot_reg, 0}};
 			bool encoded;
-			if (boxed) {
-				/* An owned copy, published to the result temporary as the
-				 * helper does, since consumers such as RETURN read it there. */
-				auto payload = result.part(0);
-				auto type_info = result.part(1);
+			if (frame_result) {
+				ValuePart payload{tpde::x64::PlatformConfig::GP_BANK, 8};
+				ValuePart type_info{tpde::x64::PlatformConfig::GP_BANK, 4};
 				encoded = EncodeBase::encode_zend_native_zval_copy(
 					std::move(property), payload, type_info);
 				if (encoded) {
 					ASM(MOV64mr,
 						FE_MEM(frame_reg, 0, FE_NOREG,
 							static_cast<int32_t>(layout.result_offset)),
-						payload.load_to_reg());
+						payload.cur_reg_or_load(this));
 					ASM(MOV32mr,
 						FE_MEM(frame_reg, 0, FE_NOREG,
 							static_cast<int32_t>(layout.result_offset
 								+ offsetof(zval, u1.type_info))),
-						type_info.load_to_reg());
+						type_info.cur_reg_or_load(this));
 				}
-			} else if (exact == ZEND_MIR_SCALAR_TYPE_I1) {
-				encoded = EncodeBase::encode_zend_native_zval_is_true_type(
-					std::move(property), result.part(0));
-			} else if (exact == ZEND_MIR_SCALAR_TYPE_F64) {
-				encoded = EncodeBase::encode_zend_native_load_f64(
-					std::move(property), result.part(0));
+				payload.reset(this);
+				type_info.reset(this);
+				slot.reset(this);
+				if (!encoded) {
+					return false;
+				}
 			} else {
-				encoded = EncodeBase::encode_zend_native_load_u64(
-					std::move(property), result.part(0));
-			}
-			slot.reset(this);
-			if (!encoded) {
-				return false;
+				auto result = result_ref(node.result);
+				if (boxed) {
+					/* An owned copy, published to the result temporary as the
+					 * helper does, since consumers such as RETURN read it there. */
+					auto payload = result.part(0);
+					auto type_info = result.part(1);
+					encoded = EncodeBase::encode_zend_native_zval_copy(
+						std::move(property), payload, type_info);
+					if (encoded) {
+						ASM(MOV64mr,
+							FE_MEM(frame_reg, 0, FE_NOREG,
+								static_cast<int32_t>(layout.result_offset)),
+							payload.load_to_reg());
+						ASM(MOV32mr,
+							FE_MEM(frame_reg, 0, FE_NOREG,
+								static_cast<int32_t>(layout.result_offset
+									+ offsetof(zval, u1.type_info))),
+							type_info.load_to_reg());
+					}
+				} else if (exact == ZEND_MIR_SCALAR_TYPE_I1) {
+					encoded = EncodeBase::encode_zend_native_zval_is_true_type(
+						std::move(property), result.part(0));
+				} else if (exact == ZEND_MIR_SCALAR_TYPE_F64) {
+					encoded = EncodeBase::encode_zend_native_load_f64(
+						std::move(property), result.part(0));
+				} else {
+					encoded = EncodeBase::encode_zend_native_load_u64(
+						std::move(property), result.part(0));
+				}
+				slot.reset(this);
+				if (!encoded) {
+					return false;
+				}
 			}
 		}
 		if (guarded_exit_can_jump_directly(
