@@ -7948,6 +7948,15 @@ bool ZendCompilerX64::compile_inst_impl(
 				: EncodeBase::encode_zend_native_array_find_key_w(
 					std::move(container_address), std::move(key_address),
 					element);
+		} else if (tests || access == ElementAccess::Coalesce) {
+			/* An undefined or null container has no element to test. */
+			found = key_literal
+				? EncodeBase::encode_zend_native_array_test_literal(
+					std::move(container_address), std::move(key_address),
+					element)
+				: EncodeBase::encode_zend_native_array_test_key(
+					std::move(container_address), std::move(key_address),
+					element);
 		} else {
 			found = key_literal
 				? EncodeBase::encode_zend_native_array_find_literal(
