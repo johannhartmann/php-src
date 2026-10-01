@@ -2643,6 +2643,7 @@ static zend_always_inline bool zend_native_object_fetch_cached(
 	zend_object *object;
 	void **cache_slot;
 	uintptr_t property_offset;
+	zval *receiver_slot = NULL;
 
 	if ((op2 & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_LITERAL
 			|| execute_data->run_time_cache == NULL
@@ -2657,11 +2658,26 @@ static zend_always_inline bool zend_native_object_fetch_cached(
 			break;
 		case ZEND_MIR_SOURCE_OPERAND_SLOT:
 		case ZEND_MIR_SOURCE_OPERAND_SSA:
-			if (((op1 >> 8) & UINT64_C(0xff)) != ZEND_MIR_SOURCE_SLOT_CV
-					|| op1_index >= (uint32_t) op_array->last_var) {
+			if (((op1 >> 8) & UINT64_C(0xff)) == ZEND_MIR_SOURCE_SLOT_CV
+					&& op1_index < (uint32_t) op_array->last_var) {
+				receiver = ZEND_CALL_VAR_NUM(execute_data, op1_index);
+				ZVAL_DEREF(receiver);
+			} else if (((op1 >> 8) & UINT64_C(0xff))
+						== ZEND_MIR_SOURCE_SLOT_TMP
+					&& op1_index < op_array->T
+					&& (fetch_type == BP_VAR_R || fetch_type == BP_VAR_IS)) {
+				/* A temporary receiver is released after the read; only
+				 * when another reference keeps the object alive. */
+				receiver_slot = ZEND_CALL_VAR_NUM(execute_data,
+					(uint32_t) op_array->last_var + op1_index);
+				receiver = receiver_slot;
+				if (Z_TYPE_P(receiver) != IS_OBJECT
+						|| GC_REFCOUNT(Z_OBJ_P(receiver)) <= 1) {
+					return false;
+				}
+			} else {
 				return false;
 			}
-			receiver = ZEND_CALL_VAR_NUM(execute_data, op1_index);
 			break;
 		default:
 			return false;
@@ -2696,10 +2712,42 @@ static zend_always_inline bool zend_native_object_fetch_cached(
 		return false;
 	}
 	property_offset = (uintptr_t) cache_slot[1];
-	if (!IS_VALID_PROPERTY_OFFSET(property_offset)) {
+	if (EXPECTED(IS_VALID_PROPERTY_OFFSET(property_offset))) {
+		property = OBJ_PROP(object, property_offset);
+	} else if (IS_DYNAMIC_PROPERTY_OFFSET(property_offset)
+			&& (fetch_type == BP_VAR_R || fetch_type == BP_VAR_IS)
+			&& object->properties != NULL) {
+		/* A dynamic property, found as zend_std_read_property() finds it:
+		 * at the cached bucket, else by its name. */
+		const zend_string *name =
+			Z_STR(op_array->literals[(uint32_t) (op2 >> 16)]);
+		property = NULL;
+		if (!IS_UNKNOWN_DYNAMIC_PROPERTY_OFFSET(property_offset)) {
+			const uintptr_t index =
+				ZEND_DECODE_DYN_PROP_OFFSET(property_offset);
+
+			if (index < object->properties->nNumUsed * sizeof(Bucket)) {
+				Bucket *bucket = (Bucket *) ((char *)
+					object->properties->arData + index);
+
+				if (bucket->key == name) {
+					property = &bucket->val;
+				}
+			}
+		}
+		if (property == NULL) {
+			property = zend_hash_find_known_hash(
+				object->properties, name);
+			if (property == NULL) {
+				return false;
+			}
+		}
+		if (Z_TYPE_P(property) == IS_INDIRECT) {
+			property = Z_INDIRECT_P(property);
+		}
+	} else {
 		return false;
 	}
-	property = OBJ_PROP(object, property_offset);
 	/* Write, read-write and unset fetches address an untyped property. */
 	const bool writes = fetch_type == BP_VAR_W || fetch_type == BP_VAR_RW
 		|| fetch_type == BP_VAR_UNSET;
@@ -2711,6 +2759,12 @@ static zend_always_inline bool zend_native_object_fetch_cached(
 		ZVAL_INDIRECT(target, property);
 	} else {
 		ZVAL_COPY_DEREF(target, property);
+	}
+	if (receiver_slot != NULL) {
+		GC_DELREF(object);
+		if (receiver_slot != target) {
+			ZVAL_UNDEF(receiver_slot);
+		}
 	}
 	return true;
 }
