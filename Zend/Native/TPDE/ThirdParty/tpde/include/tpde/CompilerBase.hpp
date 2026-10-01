@@ -2292,22 +2292,21 @@ void CompilerBase<Adaptor, Derived, Config>::move_to_phi_nodes_impl(
 template <IRAdaptor Adaptor, typename Derived, CompilerConfig Config>
 typename CompilerBase<Adaptor, Derived, Config>::BlockIndex
     CompilerBase<Adaptor, Derived, Config>::next_block() const {
-  // A block in the other area (see FunctionWriterBase::begin_cold_area()) is
-  // compiled next but not placed next: report no next block.
-  const u32 next = static_cast<u32>(cur_block_idx) + 1;
+  // The block placed next: the next one in layout order written to the same
+  // area (see FunctionWriterBase::begin_cold_area()), else none.
+  u32 next = static_cast<u32>(cur_block_idx) + 1;
   const u32 count = static_cast<u32>(analyzer.block_layout.size());
-  if (next >= count) {
-    return static_cast<BlockIndex>(next);
-  }
-  bool next_cold = false;
   if constexpr (requires(IRBlockRef b) { this->adaptor->block_is_cold(b); }) {
-    next_cold = this->adaptor->block_is_cold(analyzer.block_ref(
-        static_cast<BlockIndex>(next)));
+    const bool cold = this->text_writer.in_cold_area();
+    while (next < count
+           && this->adaptor->block_is_cold(analyzer.block_ref(
+                  static_cast<BlockIndex>(next))) != cold) {
+      ++next;
+    }
+  } else if (this->text_writer.in_cold_area()) {
+    next = count;
   }
-  if (next_cold != this->text_writer.in_cold_area()) {
-    return static_cast<BlockIndex>(count);
-  }
-  return static_cast<BlockIndex>(next);
+  return static_cast<BlockIndex>(next < count ? next : count);
 }
 
 template <IRAdaptor Adaptor, typename Derived, CompilerConfig Config>
@@ -2499,6 +2498,15 @@ bool CompilerBase<Adaptor, Derived, Config>::compile_block(
   cur_block_idx =
       static_cast<typename Analyzer<Adaptor>::BlockIndex>(block_idx);
 
+  // A block the adaptor marks cold is written to the cold area.
+  bool cold_block = false;
+  if constexpr (requires(IRBlockRef b) { this->adaptor->block_is_cold(b); }) {
+    cold_block = block_idx != 0 && this->adaptor->block_is_cold(block);
+  }
+  if (cold_block) {
+    this->text_writer.begin_cold_area();
+  }
+
   label_place(block_labels[block_idx]);
   auto &&val_range = adaptor->block_insts(block);
   auto end = val_range.end();
@@ -2541,6 +2549,9 @@ bool CompilerBase<Adaptor, Derived, Config>::compile_block(
       derived()->free_assignment(list_entry, assignment);
       list_entry = next_entry;
     }
+  }
+  if (cold_block) {
+    this->text_writer.end_cold_area();
   }
   return true;
 }
