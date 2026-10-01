@@ -325,6 +325,9 @@ typedef struct _zend_native_user_call_site_header {
 	 * or not: a cache hit reconsiders it only in a later epoch. */
 	uint64_t fast_checked_epoch;
 	const zend_native_call_fast_receive *fast_receive;
+	/* The published target's entry cell, which a later request's re-arm
+	 * (zend_native_call_fast_rearm()) checks still holds fast_entry. */
+	struct _zend_native_entry_cell *fast_cell;
 	void *resolution;
 	uint64_t epoch;
 } zend_native_user_call_site_header;
@@ -755,6 +758,9 @@ bool zend_native_call_fast_new(
 	const zend_native_user_call_descriptor *descriptor,
 	uint32_t result_offset);
 zend_result zend_native_call_universal_expand(void);
+bool zend_native_call_fast_rearm(
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor);
 zend_result zend_native_call_universal_send(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor,

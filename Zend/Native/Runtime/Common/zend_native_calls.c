@@ -4528,6 +4528,7 @@ static void zend_native_call_fast_publish(
 	header->fast_call_info = resolution->call_info;
 	header->fast_receive = zend_native_call_fast_receive_prepare(
 		resolution->entry_cell, op_array);
+	header->fast_cell = resolution->entry_cell;
 	header->fast_default_count = 0;
 	if ((op_array->fn_flags & ZEND_ACC_VARIADIC) != 0
 			|| entry->argument_count > op_array->num_args
@@ -8527,6 +8528,97 @@ zend_result zend_native_call_universal_expand(void)
 	}
 	zend_native_frame_activation_release(activation);
 	return FAILURE;
+}
+
+/*
+ * A published fast site whose epoch is stale, as every site is after a
+ * request ends, would take the universal protocol once to be published
+ * again. Re-arm it in place when its target still applies, as the VM's
+ * first call in a request looks the function up again: a function name
+ * must still bind the published function, and a method site's class must
+ * be an immutable (persistent) class, whose identity and methods cannot
+ * change between requests. The target must be immutable, so its entry cell
+ * outlives the request that published it; the cell must still hold the
+ * published native entry, and the run-time cache is the current request's.
+ * Tried once per site and epoch; false leaves the site to the universal
+ * protocol.
+ */
+bool zend_native_call_fast_rearm(
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor)
+{
+	zend_native_user_call_site_header *header =
+		(zend_native_user_call_site_header *)
+			ZEND_NATIVE_USER_CALL_SITE_HEADER(descriptor);
+	zend_function *function = header->fast_function;
+	zend_native_entry_cell *cell = header->fast_cell;
+	const zend_native_code *code;
+	const zend_op_array *op_array = &caller->func->op_array;
+
+	/* Only an immutable (persistent) target keeps its function, entry cell
+	 * and native code across requests; anything else may have been freed
+	 * with the request that published it. */
+	if (function == NULL || cell == NULL
+			|| header->fast_epoch == zend_native_call_resolution_cache_epoch
+			|| header->fast_checked_epoch
+				== zend_native_call_resolution_cache_epoch
+			|| function->type != ZEND_USER_FUNCTION
+			|| (function->op_array.fn_flags & ZEND_ACC_IMMUTABLE) == 0) {
+		return false;
+	}
+	header->fast_checked_epoch = zend_native_call_resolution_cache_epoch;
+	switch (descriptor->init_opcode) {
+		case ZEND_INIT_FCALL:
+		case ZEND_INIT_FCALL_BY_NAME:
+		case ZEND_INIT_NS_FCALL_BY_NAME: {
+			/* The lowercased name, as the VM's Init looks it up. */
+			const uint32_t index = descriptor->init_op2.index
+				+ (descriptor->init_opcode == ZEND_INIT_FCALL ? 0 : 1);
+			zval *bound;
+
+			if (descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+					|| index >= (uint32_t) op_array->last_literal
+					|| Z_TYPE(op_array->literals[index]) != IS_STRING) {
+				return false;
+			}
+			bound = zend_hash_find_known_hash(EG(function_table),
+				Z_STR(op_array->literals[index]));
+			if (bound == NULL
+					&& descriptor->init_opcode == ZEND_INIT_NS_FCALL_BY_NAME
+					&& index + 1 < (uint32_t) op_array->last_literal
+					&& Z_TYPE(op_array->literals[index + 1]) == IS_STRING) {
+				bound = zend_hash_find_known_hash(EG(function_table),
+					Z_STR(op_array->literals[index + 1]));
+			}
+			if (bound == NULL || Z_PTR_P(bound) != function) {
+				return false;
+			}
+			break;
+		}
+		case ZEND_INIT_METHOD_CALL:
+			if (header->fast_key == NULL
+					|| (((const zend_class_entry *) header->fast_key)->ce_flags
+						& ZEND_ACC_IMMUTABLE) == 0
+					|| (function->common.scope != NULL
+						&& (function->common.scope->ce_flags
+							& ZEND_ACC_IMMUTABLE) == 0)) {
+				return false;
+			}
+			break;
+		default:
+			return false;
+	}
+	if (cell->state != ZEND_NATIVE_ENTRY_READY || cell->function != function
+			|| (code = zend_native_entry_cell_load(cell)) == NULL
+			|| zend_native_code_frame_entry(code) != header->fast_entry) {
+		return false;
+	}
+	if (RUN_TIME_CACHE(&function->op_array) == NULL) {
+		zend_init_func_run_time_cache(&function->op_array);
+	}
+	header->fast_run_time_cache = RUN_TIME_CACHE(&function->op_array);
+	header->fast_epoch = zend_native_call_resolution_cache_epoch;
+	return true;
 }
 
 zend_execute_data *zend_native_call_reserve_dynamic_frame(

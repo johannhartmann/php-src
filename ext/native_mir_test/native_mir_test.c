@@ -4590,6 +4590,14 @@ static bool native_mir_test_execute_module(
 	return result;
 }
 
+void zend_native_call_resolution_cache_invalidate(void);
+
+ZEND_FUNCTION(native_mir_test_call_cache_invalidate)
+{
+	ZEND_PARSE_PARAMETERS_NONE();
+	zend_native_call_resolution_cache_invalidate();
+}
+
 ZEND_FUNCTION(native_mir_test_unwind_probe)
 {
 	void *frames[64];

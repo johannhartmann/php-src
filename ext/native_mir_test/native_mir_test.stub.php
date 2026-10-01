@@ -74,3 +74,9 @@ function native_mir_test_compile_execute(
  * unwinder. This test-only probe returns zero outside native execution.
  */
 function native_mir_test_unwind_probe(): int {}
+
+/**
+ * Advance the native call-cache epoch as the end of a request does: published
+ * fast call sites must be re-armed or resolved again. Test-only.
+ */
+function native_mir_test_call_cache_invalidate(): void {}
