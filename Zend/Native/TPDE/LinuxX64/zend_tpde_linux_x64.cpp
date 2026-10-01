@@ -12263,7 +12263,13 @@ bool ZendCompilerX64::compile_inst_impl(
 					== ZEND_MIR_SOURCE_SLOT_TMP
 				|| mir.value_operation.result.slot_kind
 					== ZEND_MIR_SOURCE_SLOT_VAR);
-		if (!zend_tpde_object_property_read_at(mir, &layout)
+		const bool isset_read = record.opcode
+			== ZEND_MIR_OPCODE_OBJECT_FETCH_IS;
+		if (!(isset_read
+					? frame_result
+						&& zend_tpde_object_property_isset_read_at(
+							mir, &layout)
+					: zend_tpde_object_property_read_at(mir, &layout))
 				|| (!frame_result && !node.has_result)
 				|| (!frame_result
 					&& (property_reference == nullptr
@@ -13889,7 +13895,9 @@ bool ZendCompilerX64::compile_inst_impl(
 			}
 			return branch_to_guarded_cold();
 		}
-		if (record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_R) {
+		if (record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_R
+				|| (record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_IS
+					&& node.kind == Adaptor::InstKind::GuardedFast)) {
 			return object_property_read();
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_OBJECT_ASSIGN) {

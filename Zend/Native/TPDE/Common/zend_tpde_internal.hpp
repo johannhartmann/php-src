@@ -2031,6 +2031,32 @@ static inline bool zend_tpde_object_property_read_at(
 	return true;
 }
 
+/*
+ * FETCH_OBJ_IS of a literal property into a temporary: a cached declared
+ * property holding a value reads like FETCH_OBJ_R; anything else, which
+ * may be missing, magic or a reference, keeps the helper.
+ */
+static inline bool zend_tpde_object_property_isset_read_at(
+	const zend_tpde_instruction &instruction,
+	zend_tpde_object_property_read *out)
+{
+	zend_tpde_instruction read = instruction;
+
+	if (!instruction.has_value_operation
+			|| instruction.value_operation.opcode
+				!= ZEND_MIR_OPCODE_OBJECT_FETCH_IS
+			|| instruction.value_operation.source_opcode != ZEND_FETCH_OBJ_IS
+			|| (instruction.value_operation.result.slot_kind
+					!= ZEND_MIR_SOURCE_SLOT_TMP
+				&& instruction.value_operation.result.slot_kind
+					!= ZEND_MIR_SOURCE_SLOT_VAR)) {
+		return false;
+	}
+	read.value_operation.opcode = ZEND_MIR_OPCODE_OBJECT_FETCH_R;
+	read.value_operation.source_opcode = ZEND_FETCH_OBJ_R;
+	return zend_tpde_object_property_read_at(read, out);
+}
+
 static inline bool zend_tpde_object_property_write_at(
 	const zend_tpde_instruction &instruction,
 	zend_tpde_object_property_write *out)

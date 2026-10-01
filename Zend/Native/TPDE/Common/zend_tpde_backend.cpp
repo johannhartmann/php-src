@@ -5279,6 +5279,14 @@ void freeze_machine_control_flow(zend_tpde_plan *plan)
 						ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
 					break;
 				}
+				case ZEND_MIR_OPCODE_OBJECT_FETCH_IS:
+					/* The Linux backend reads a cached declared property
+					 * inline (zend_tpde_object_property_isset_read_at). */
+					if (plan->linux_inline_forms) {
+						flags |=
+							ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
+					}
+					break;
 				case ZEND_MIR_OPCODE_VALUE_TYPE_CHECK:
 					/* A check of an exact scalar is a typed operation. */
 					if (!machine_plan_type_check_supported(
