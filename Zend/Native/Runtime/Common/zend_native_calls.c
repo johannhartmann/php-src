@@ -4876,6 +4876,51 @@ uint32_t zend_native_call_fast_send(
 		? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
 }
 
+/*
+ * new C of a literal class without a constructor and without arguments:
+ * the site's fast Init creates the object, as ZEND_NEW does, and its Do
+ * has no frame to call (ZEND_NATIVE_CALL_FAST_NO_CALL).
+ */
+static void zend_native_call_fast_publish_new_without_constructor(
+	const zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor,
+	const zend_native_user_call_resolution *resolution)
+{
+	zend_native_user_call_site_header *header =
+		ZEND_NATIVE_USER_CALL_SITE_HEADER(descriptor);
+	const zend_object *object;
+	const zval *result;
+
+	(void) resolution;
+	if (header->fast_checked_epoch == zend_native_call_resolution_cache_epoch) {
+		return;
+	}
+	header->fast_epoch = 0;
+	header->fast_checked_epoch = zend_native_call_resolution_cache_epoch;
+	/* The Init created the object in its result slot. */
+	result = zend_native_call_source_slot(
+		(zend_execute_data *) caller, &descriptor->init_result);
+	if (result == NULL || (const char *) result
+			< (const char *) ZEND_CALL_VAR_NUM(caller, 0)
+			|| Z_TYPE_P(result) != IS_OBJECT) {
+		return;
+	}
+	object = Z_OBJ_P(result);
+	if (descriptor->argument_count != 0
+			|| descriptor->initial_argument_count != 0
+			|| descriptor->init_op1.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| object->ce->constructor != NULL
+			|| object->ce->create_object != NULL
+			|| object->handlers != object->ce->default_object_handlers
+			|| object->handlers->get_constructor != zend_std_get_constructor) {
+		return;
+	}
+	header->fast_key = object->ce;
+	header->fast_function = NULL;
+	header->fast_flags = ZEND_NATIVE_CALL_FAST_NO_CALL;
+	header->fast_epoch = zend_native_call_resolution_cache_epoch;
+}
+
 static void zend_native_call_resolution_cache_store(
 	const zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor,
@@ -5270,6 +5315,10 @@ zend_native_user_call_resolution_status zend_native_call_resolve_user(
 			zend_native_call_release_user_resolution(resolution);
 			zend_native_call_consume_resolved_init_operands(caller, descriptor);
 			return ZEND_NATIVE_USER_CALL_RESOLUTION_FAILURE;
+		}
+		if (descriptor->init_opcode == ZEND_NEW) {
+			zend_native_call_fast_publish_new_without_constructor(
+				caller, descriptor, resolution);
 		}
 		return ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS;
 	}
@@ -8103,6 +8152,20 @@ bool zend_native_call_fast_new(
 	zend_execute_data *call;
 	zend_object *object;
 
+	if (header->fast_function == NULL) {
+		/* No constructor: only the object, no frame. */
+		if ((header->fast_flags & ZEND_NATIVE_CALL_FAST_NO_CALL) == 0
+				|| ce == NULL || ce->constructor != NULL
+				|| ce->create_object != NULL
+				|| (ce->ce_flags & ZEND_ACC_CONSTANTS_UPDATED) == 0
+				|| (ce->ce_flags & (ZEND_ACC_INTERFACE | ZEND_ACC_TRAIT
+					| ZEND_ACC_IMPLICIT_ABSTRACT_CLASS
+					| ZEND_ACC_EXPLICIT_ABSTRACT_CLASS | ZEND_ACC_ENUM
+					| ZEND_ACC_UNINSTANTIABLE)) != 0) {
+			return false;
+		}
+		return object_init_ex(result, ce) == SUCCESS;
+	}
 	if (ce == NULL || ce->constructor != header->fast_function
 			|| ce->create_object != NULL
 			|| (ce->ce_flags & ZEND_ACC_CONSTANTS_UPDATED) == 0
@@ -8164,6 +8227,11 @@ uint32_t zend_native_call_fast_do(
 	zend_execute_data *callee = caller->call;
 	const uint32_t flags = dynamic_entry != NULL
 		? ZEND_NATIVE_CALL_FAST_PREPARE : header->fast_flags;
+
+	if ((flags & ZEND_NATIVE_CALL_FAST_NO_CALL) != 0) {
+		/* new C without a constructor: the Init pushed no frame. */
+		return ZEND_NATIVE_RETURNED;
+	}
 	const bool discard = result_offset == UINT32_MAX;
 	zval discarded;
 	uint32_t status = ZEND_NATIVE_RETURNED;
