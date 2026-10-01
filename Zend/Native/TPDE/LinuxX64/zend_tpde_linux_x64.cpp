@@ -4939,6 +4939,30 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(CMP32ri, type_reg, IS_UNDEF);
 					generate_raw_jump(Jump::jne, defined);
 				}
+				/* A by-reference parameter (the site's fast_ref_mask) takes
+				 * the undefined CV without a warning; the fast Do makes it
+				 * a null reference. */
+				auto undefined_null = text_writer.label_create();
+				if (argument.source_opcode == ZEND_SEND_VAR_EX
+						&& node.argument_index < 32) {
+					auto descriptor_value = image_symbol_value(
+						ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.id);
+					auto descriptor_scratch =
+						std::move(descriptor_value).into_scratch(this);
+					ASM(TEST32mi,
+						FE_MEM(descriptor_scratch.cur_reg(), 0, FE_NOREG,
+							-static_cast<int32_t>(sizeof(
+								zend_native_user_call_site_header))
+							+ static_cast<int32_t>(offsetof(
+								zend_native_user_call_site_header,
+								fast_ref_mask))),
+						static_cast<int32_t>(
+							UINT32_C(1) << node.argument_index));
+				}
+				if (argument.source_opcode == ZEND_SEND_VAR_EX
+						&& node.argument_index < 32) {
+					generate_raw_jump(Jump::jne, undefined_null);
+				}
 				{
 					tpde::x64::CCAssignerSysV assigner{false};
 					CallBuilder builder{*this, assigner};
@@ -4965,6 +4989,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(TEST64rr, exception_reg, exception_reg);
 					generate_raw_jump(Jump::jne, send_exception);
 				}
+				label_place(undefined_null);
 				{
 					ScratchReg callee{this};
 					auto callee_reg = callee.alloc_gp();

@@ -328,6 +328,10 @@ typedef struct _zend_native_user_call_site_header {
 	/* The published target's entry cell, which a later request's re-arm
 	 * (zend_native_call_fast_rearm()) checks still holds fast_entry. */
 	struct _zend_native_entry_cell *fast_cell;
+	/* Bit n: the target takes argument n by reference. The site sends that
+	 * CV with SEND_VAR_EX by value, and the fast Do replaces the copy with a
+	 * reference to the CV before the target receives it. */
+	uint32_t fast_ref_mask;
 	void *resolution;
 	uint64_t epoch;
 } zend_native_user_call_site_header;
