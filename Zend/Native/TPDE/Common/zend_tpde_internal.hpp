@@ -1116,6 +1116,28 @@ static inline bool zend_tpde_fused_compare_at(
 }
 
 /*
+ * A TYPE_CHECK of a CV into a temporary, fused into its JMPZ/JMPNZ like a
+ * comparison: the branch tests the type mask itself. A resource check,
+ * which asks the resource list, keeps its own form.
+ */
+static inline bool zend_tpde_fused_type_check_at(
+	const zend_tpde_instruction &instruction, zend_tpde_fused_operand *value)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	return instruction.has_value_operation
+		&& operation.opcode == ZEND_MIR_OPCODE_VALUE_TYPE_CHECK
+		&& operation.source_opcode == ZEND_TYPE_CHECK
+		&& operation.extended_value != (UINT32_C(1) << IS_RESOURCE)
+		&& operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+		&& operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+		&& zend_mir_id_is_valid(operation.result_storage_id)
+		&& zend_tpde_fused_operand_at(operation.op1, operation.op1_storage_id,
+			operation.result_storage_id, value)
+		&& !value->literal;
+}
+
+/*
  * $cv[$key] into a temporary, and $cv[$key] = $value (or $cv[] = $value)
  * with an unused result, call the _direct helpers with precomputed offsets
  * (ZEND_NATIVE_DIM_DIRECT_*) instead of encoded operands.

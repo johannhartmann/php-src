@@ -743,6 +743,27 @@ public:
 	}
 
 	/*
+	 * A fused comparison's result temporary still receives a boolean on the
+	 * hot path: a later definition of the same slot may release its old
+	 * value, which would otherwise be whatever the slot held before.
+	 */
+	bool store_fused_result_placeholder(
+			const zend_tpde_instruction *compare, AsmReg frame_reg) {
+		const uint64_t result_offset = (uint64_t{ZEND_CALL_FRAME_SLOT}
+			+ compare->value_operation.result_storage_id) * sizeof(zval);
+		if (!zend_mir_id_is_valid(compare->value_operation.result_storage_id)
+				|| result_offset > INT32_MAX - sizeof(zval)) {
+			return false;
+		}
+		ASM(MOV32mi,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(result_offset
+					+ offsetof(zval, u1.type_info))),
+			IS_FALSE);
+		return true;
+	}
+
+	/*
 	 * The hot part of a comparison fused into its JMPZ/JMPNZ: two numbers
 	 * (through a CV's reference) compare and jump to the branch's truthy or
 	 * falsey label; any other operand jumps to slow.
@@ -755,9 +776,45 @@ public:
 			zend_tpde_fused_operand left;
 			zend_tpde_fused_operand right;
 		} layout{};
+		if (compare != nullptr
+				&& zend_tpde_fused_type_check_at(*compare, &layout.left)) {
+			/* TYPE_CHECK: the mask bit of the type, or of a reference's
+			 * referent; an undefined CV, which warns, takes the helper. */
+			if (!store_fused_result_placeholder(compare, frame_reg)) {
+				return false;
+			}
+			const int32_t offset = static_cast<int32_t>(layout.left.offset);
+			ScratchReg mask{this};
+			const AsmReg mask_reg = mask.alloc_gp();
+			auto not_reference = text_writer.label_create();
+			ASM(MOV32ri, mask_reg, static_cast<int32_t>(
+				compare->value_operation.extended_value));
+			ASM(MOVZXr32m8, left_type,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					offset + static_cast<int32_t>(
+						offsetof(zval, u1.type_info))));
+			ASM(BT32rr, mask_reg, left_type);
+			generate_raw_jump(Jump::jb, truthy);
+			ASM(CMP32ri, left_type, IS_REFERENCE);
+			generate_raw_jump(Jump::jne, not_reference);
+			ASM(MOV64rm, left_value, FE_MEM(frame_reg, 0, FE_NOREG, offset));
+			ASM(MOVZXr32m8, left_type,
+				FE_MEM(left_value, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_reference, val)
+						+ offsetof(zval, u1.type_info))));
+			ASM(BT32rr, mask_reg, left_type);
+			generate_raw_jump(Jump::jb, truthy);
+			generate_raw_jump(Jump::jmp, falsey);
+			label_place(not_reference);
+			ASM(TEST32rr, left_type, left_type);
+			generate_raw_jump(Jump::je, slow);
+			generate_raw_jump(Jump::jmp, falsey);
+			return true;
+		}
 		if (compare == nullptr
 				|| !zend_tpde_fused_compare_at(
-					*compare, &layout.left, &layout.right)) {
+					*compare, &layout.left, &layout.right)
+				|| !store_fused_result_placeholder(compare, frame_reg)) {
 			return false;
 		}
 		const uint32_t opcode = compare->value_operation.source_opcode;
@@ -8474,6 +8531,53 @@ bool ZendCompilerX64::compile_inst_impl(
 		return branch_to_guarded_cold();
 	};
 	/*
+	 * A comparison or TYPE_CHECK fused into the following branch (see
+	 * freeze_fused_compare_branches): the branch evaluates it. Its operands,
+	 * including boundary transports, are dead; statepoint materializations
+	 * were consumed already.
+	 */
+	auto fused_into_branch_placeholder = [&]() -> bool {
+		/* A register-held operand, whether a node operand or a
+		 * liveness-only register result such as a property read, is
+		 * published to its slot, which the branch reads. */
+		const zend_mir_executable_value_ref &compare_operation =
+			mir.value_operation;
+		for (size_t index = 0;
+				index < node.liveness_operands.size(); ++index) {
+			if (materialized_operand(instruction, index)) {
+				continue;
+			}
+			const IRValueRef operand = node.liveness_operands[index];
+			const zend_mir_storage_id storage =
+				operand == IRValueRef{Adaptor::FRAME_VALUE}
+					|| operand == IRValueRef{
+						Adaptor::EXECUTION_CONTEXT_ARGUMENT}
+				? ZEND_MIR_ID_INVALID
+				: adaptor->canonical_storage(operand);
+			if (zend_mir_id_is_valid(storage)
+					&& (storage == compare_operation.op1_storage_id
+						|| storage
+							== compare_operation.op2_storage_id)) {
+				if (!materialize_cold_operand(operand, storage)) {
+					return false;
+				}
+				continue;
+			}
+			auto consumed = val_ref(operand);
+			(void) consumed;
+		}
+		if (node.has_result) {
+			auto result = result_ref(node.result);
+			for (uint32_t part = 0;
+					part < val_parts(node.result).count(); ++part) {
+				auto value = result.part(part);
+				ASM(MOV32ri, value.alloc_reg(), IS_FALSE);
+				value.set_modified();
+			}
+		}
+		return true;
+	};
+	/*
 	 * TYPE_CHECK of a CV or temporary through zend_native_zval_type_check():
 	 * the bool lands in the result temporary and a register result; a
 	 * temporary is consumed only when another owner keeps it alive. An
@@ -13740,6 +13844,10 @@ bool ZendCompilerX64::compile_inst_impl(
 			|| record.opcode == ZEND_MIR_OPCODE_CALL_FRAMELESS_INTERNAL
 			|| record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME) {
 		if (record.opcode == ZEND_MIR_OPCODE_VALUE_TYPE_CHECK
+				&& mir.fused_into_branch && !adaptor->typed_body()) {
+			return fused_into_branch_placeholder();
+		}
+		if (record.opcode == ZEND_MIR_OPCODE_VALUE_TYPE_CHECK
 				&& node.kind == Adaptor::InstKind::GuardedFast) {
 			if (const int checked = type_check_inline(); checked != 0) {
 				return checked > 0;
@@ -13860,48 +13968,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_BINARY_OP:
 			if (mir.fused_into_branch && !adaptor->typed_body()) {
-				/* The following branch evaluates this comparison. Its
-				 * operands, including boundary transports, are dead;
-				 * statepoint materializations were consumed already. */
-				/* A register-held operand, whether a node operand or a
-				 * liveness-only register result such as a property read, is
-				 * published to its slot, which the branch reads. */
-				const zend_mir_executable_value_ref &compare_operation =
-					mir.value_operation;
-				for (size_t index = 0;
-						index < node.liveness_operands.size(); ++index) {
-					if (materialized_operand(instruction, index)) {
-						continue;
-					}
-					const IRValueRef operand = node.liveness_operands[index];
-					const zend_mir_storage_id storage =
-						operand == IRValueRef{Adaptor::FRAME_VALUE}
-							|| operand == IRValueRef{
-								Adaptor::EXECUTION_CONTEXT_ARGUMENT}
-						? ZEND_MIR_ID_INVALID
-						: adaptor->canonical_storage(operand);
-					if (zend_mir_id_is_valid(storage)
-							&& (storage == compare_operation.op1_storage_id
-								|| storage
-									== compare_operation.op2_storage_id)) {
-						if (!materialize_cold_operand(operand, storage)) {
-							return false;
-						}
-						continue;
-					}
-					auto consumed = val_ref(operand);
-					(void) consumed;
-				}
-				if (node.has_result) {
-					auto result = result_ref(node.result);
-					for (uint32_t part = 0;
-							part < val_parts(node.result).count(); ++part) {
-						auto value = result.part(part);
-						ASM(MOV32ri, value.alloc_reg(), IS_FALSE);
-						value.set_modified();
-					}
-				}
-				return true;
+				return fused_into_branch_placeholder();
 			}
 			return long_binary();
 		case ZEND_MIR_OPCODE_VALUE_UNARY_OP:
