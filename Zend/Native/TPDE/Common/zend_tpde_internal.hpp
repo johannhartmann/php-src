@@ -1396,6 +1396,54 @@ static inline bool zend_tpde_concat_direct_at(
 	return true;
 }
 
+/*
+ * ZEND_IS_IDENTICAL/ZEND_IS_NOT_IDENTICAL of literal, CV or temporary
+ * operands into a temporary or an optimizer-named CV calls
+ * zend_native_value_identical_direct(), laid out as the direct
+ * concatenation.
+ */
+static inline bool zend_tpde_identical_direct_at(
+	const zend_tpde_instruction &instruction, zend_tpde_concat_direct *out)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	uint64_t left_kind, left_offset, right_kind, right_offset;
+
+	if (out == nullptr || !instruction.has_value_operation
+			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_BINARY_OP
+			|| (operation.source_opcode != ZEND_IS_IDENTICAL
+				&& operation.source_opcode != ZEND_IS_NOT_IDENTICAL)
+			|| (operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+				&& operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
+			|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+				&& operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_CV)
+			|| !zend_mir_id_is_valid(operation.result_storage_id)
+			|| (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+				&& (operation.result_storage_id == operation.op1_storage_id
+					|| operation.result_storage_id
+						== operation.op2_storage_id))
+			|| !zend_tpde_concat_direct_operand(operation.op1,
+				operation.op1_storage_id, &left_kind, &left_offset)
+			|| !zend_tpde_concat_direct_operand(operation.op2,
+				operation.op2_storage_id, &right_kind, &right_offset)) {
+		return false;
+	}
+	const uint64_t result_offset =
+		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
+			* sizeof(zval);
+	if (result_offset > UINT32_MAX) {
+		return false;
+	}
+	out->descriptor = left_kind | (right_kind << 2)
+		| (uint64_t{operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV}
+			<< ZEND_NATIVE_DIM_DIRECT_RESULT_CV_SHIFT)
+		| (uint64_t{operation.source_opcode} << 8)
+		| (uint64_t{operation.source_position_id} << 32);
+	out->slots = left_offset | (right_offset << 32);
+	out->result_offset = result_offset;
+	return true;
+}
+
 static inline bool zend_tpde_packed_array_append_at(
 	const zend_tpde_instruction &instruction,
 	zend_tpde_packed_array_append *out)
