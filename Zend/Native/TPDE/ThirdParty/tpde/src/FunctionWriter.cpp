@@ -56,7 +56,10 @@ void FunctionWriterBase::begin_func() {
   except_spec_table.clear();
   except_action_table.resize(2); // cleanup entry
 
-  assert(!cold_active);
+  // A failed compilation may leave the cold area active.
+  if (cold_active) {
+    end_cold_area();
+  }
   cold_used = 0;
   cold_final_base = 0;
   cold_relocs.clear();
