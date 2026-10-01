@@ -2187,6 +2187,61 @@ bool ZendCompilerX64::compile_boxed_cond_cold(IRInstRef instruction) {
 			|| successors.size() != 2) {
 		return false;
 	}
+	/*
+	 * JMPZ/JMPNZ of a CV and JMPZ_EX/JMPNZ_EX of null, a boolean or an
+	 * integer decide here without the helper, publishing the boolean result
+	 * of &&/||, as the helper's own fast path does; the decision joins the
+	 * helper's through a stack slot. Every value is spilled first, so both
+	 * paths reach the join with the same register state.
+	 */
+	zend_tpde_value_condition scalar_layout;
+	const bool scalar_inline = zend_tpde_value_condition_at(mir, &scalar_layout)
+		&& scalar_layout.operand_offset <= INT32_MAX - sizeof(zval)
+		&& scalar_layout.result_offset <= INT32_MAX - sizeof(zval);
+	int32_t scalar_slot = 0;
+	auto scalar_join = text_writer.label_create();
+	auto scalar_helper = text_writer.label_create();
+	if (scalar_inline) {
+		scalar_slot = allocate_stack_slot(sizeof(uint32_t));
+		release_spilled_regs(spill_before_branch(true));
+		const auto frame_reg = canonical_frame_register();
+		ScratchReg type{this};
+		ScratchReg truth{this};
+		const auto type_reg = type.alloc_gp();
+		const auto truth_reg = truth.alloc_gp();
+		const int32_t operand =
+			static_cast<int32_t>(scalar_layout.operand_offset);
+		auto is_long = text_writer.label_create();
+		auto decided = text_writer.label_create();
+		ASM(MOVZXr32m8, type_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+			operand + static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		ASM(CMP32ri, type_reg, IS_LONG);
+		generate_raw_jump(Jump::je, is_long);
+		generate_raw_jump(Jump::ja, scalar_helper);
+		ASM(CMP32ri, type_reg, IS_NULL);
+		generate_raw_jump(Jump::jb, scalar_helper);
+		ASM(XOR32rr, truth_reg, truth_reg);
+		ASM(CMP32ri, type_reg, IS_TRUE);
+		generate_raw_set(Jump::je, truth_reg);
+		generate_raw_jump(Jump::jmp, decided);
+		label_place(is_long);
+		ASM(XOR32rr, truth_reg, truth_reg);
+		ASM(CMP64mi, FE_MEM(frame_reg, 0, FE_NOREG, operand), 0);
+		generate_raw_set(Jump::jne, truth_reg);
+		label_place(decided);
+		if (scalar_layout.has_result) {
+			const int32_t result =
+				static_cast<int32_t>(scalar_layout.result_offset);
+			ASM(LEA32rm, type_reg,
+				FE_MEM(truth_reg, 0, FE_NOREG, IS_FALSE));
+			ASM(MOV32mr, FE_MEM(frame_reg, 0, FE_NOREG,
+				result + static_cast<int32_t>(offsetof(zval, u1.type_info))),
+				type_reg);
+		}
+		ASM(MOV32mr, FE_MEM(FE_BP, 0, FE_NOREG, scalar_slot), truth_reg);
+		generate_raw_jump(Jump::jmp, scalar_join);
+		label_place(scalar_helper);
+	}
 	tpde::x64::CCAssignerSysV assigner{false};
 	CallBuilder builder{*this, assigner};
 	builder.add_arg(CallArg{node.operands[0]});
@@ -2226,6 +2281,14 @@ bool ZendCompilerX64::compile_boxed_cond_cold(IRInstRef instruction) {
 		return_builder.ret();
 	}
 	label_place(valid);
+	if (scalar_inline) {
+		ASM(MOV32mr, FE_MEM(FE_BP, 0, FE_NOREG, scalar_slot), decision_reg);
+		decision_scratch.reset();
+		label_place(scalar_join);
+		decision_scratch.alloc_gp();
+		decision_reg = decision_scratch.cur_reg();
+		ASM(MOV32rm, decision_reg, FE_MEM(FE_BP, 0, FE_NOREG, scalar_slot));
+	}
 	if (node.has_result) {
 		auto result = result_ref(node.result);
 		auto value = result.part(0);
