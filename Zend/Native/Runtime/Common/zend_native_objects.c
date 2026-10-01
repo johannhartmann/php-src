@@ -3259,8 +3259,9 @@ ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_bind_lexical,
 /*
  * static $x; binds the CV without decoding the operation when the static
  * variable already is a reference and the CV holds no counted value: the
- * CV takes another reference to it, as ZEND_BIND_STATIC does. An
- * initializer, a first binding and a counted CV take the general path.
+ * CV takes another reference to it, as ZEND_BIND_STATIC does. A closure's
+ * by-value use ($x) copies the bound value the same way. An initializer, a
+ * first binding and a counted CV take the general path.
  */
 zend_native_status zend_native_execute_object_bind_static(
 	zend_execute_data *execute_data,
@@ -3271,7 +3272,6 @@ zend_native_status zend_native_execute_object_bind_static(
 	zend_native_explicit_object_operation operation;
 
 	if (actual_source_opcode == ZEND_BIND_STATIC
-			&& (extended_value & ZEND_BIND_REF) != 0
 			&& (op2 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_UNUSED
 			&& ((op1 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SLOT
 				|| (op1 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SSA)
@@ -3290,7 +3290,13 @@ zend_native_status zend_native_execute_object_bind_static(
 				&& !Z_REFCOUNTED_P(variable)) {
 			zval *value = (zval *) ((char *) static_variables->arData + offset);
 
-			if (Z_ISREF_P(value)) {
+			if ((extended_value & ZEND_BIND_REF) == 0) {
+				/* A closure's use ($x) copies the bound value. */
+				if (Z_TYPE_P(value) != IS_CONSTANT_AST) {
+					ZVAL_COPY(variable, value);
+					return ZEND_NATIVE_RETURNED;
+				}
+			} else if (Z_ISREF_P(value)) {
 				Z_ADDREF_P(value);
 				ZVAL_REF(variable, Z_REF_P(value));
 				return ZEND_NATIVE_RETURNED;
