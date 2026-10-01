@@ -1170,7 +1170,8 @@ static zend_native_status zend_native_object_assign_op_explicit(
 			execute_data, operation->result_type, operation->result);
 	zend_string *temporary = NULL;
 	zend_string *name;
-	void *cache_storage[3] = {NULL, NULL, NULL};
+	void *local_cache_storage[3] = {NULL, NULL, NULL};
+	void **cache_storage = local_cache_storage;
 	zend_property_info *property_info;
 	binary_op_type binary_operation;
 	bool strict = ZEND_CALL_USES_STRICT_TYPES(execute_data);
@@ -1217,6 +1218,24 @@ static zend_native_status zend_native_object_assign_op_explicit(
 	binary_operation = get_binary_op(operation->extended_value);
 	if (name == NULL || binary_operation == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
+	}
+	/* A literal name uses the VM run-time cache slot of the OP_DATA, as
+	 * ZEND_ASSIGN_OBJ_OP does. */
+	if (operation->op2_type == IS_CONST
+			&& execute_data->run_time_cache != NULL
+			&& operation->source_position_id + 1
+				< execute_data->func->op_array.last) {
+		const zend_op *data = &execute_data->func->op_array.opcodes[
+			operation->source_position_id + 1];
+		const uint32_t cache_size =
+			(uint32_t) execute_data->func->op_array.cache_size;
+
+		if (data->opcode == ZEND_OP_DATA
+				&& data->extended_value <= cache_size
+				&& 3 * sizeof(void *) <= cache_size - data->extended_value) {
+			cache_storage = (void **) ((char *) execute_data->run_time_cache
+				+ data->extended_value);
+		}
 	}
 	address = Z_OBJ_HT_P(receiver)->get_property_ptr_ptr(
 		Z_OBJ_P(receiver), name, BP_VAR_RW, cache_storage);
@@ -2815,7 +2834,7 @@ ZEND_NATIVE_OBJECT_EXPLICIT_ASSIGNMENT_HELPER(
 	zend_native_execute_object_assign_ref, ZEND_ASSIGN_OBJ_REF,
 	zend_native_object_assign_ref_explicit(execute_data, &operation))
 ZEND_NATIVE_OBJECT_EXPLICIT_ASSIGNMENT_HELPER(
-	zend_native_execute_object_assign_op, ZEND_ASSIGN_OBJ_OP,
+	zend_native_execute_object_assign_op_explicit, ZEND_ASSIGN_OBJ_OP,
 	zend_native_object_assign_op_explicit(execute_data, &operation))
 ZEND_NATIVE_OBJECT_EXPLICIT_ASSIGNMENT_HELPER(
 	zend_native_execute_static_assign, ZEND_ASSIGN_STATIC_PROP,
@@ -2830,6 +2849,137 @@ ZEND_NATIVE_OBJECT_EXPLICIT_ASSIGNMENT_HELPER(
 	zend_native_static_update_explicit(
 		execute_data, &operation, true, false, false))
 #undef ZEND_NATIVE_OBJECT_EXPLICIT_ASSIGNMENT_HELPER
+
+/* An integer operand of a cached compound property assignment: a literal,
+ * a CV or a temporary holding an integer, through a CV's reference. */
+static zend_always_inline bool zend_native_object_long_operand(
+	zend_execute_data *execute_data, uint64_t encoded, zend_long *value)
+{
+	const zend_op_array *op_array = &execute_data->func->op_array;
+	const uint32_t index = (uint32_t) (encoded >> 16);
+	const zval *operand;
+
+	switch ((zend_mir_source_operand_kind) (encoded & UINT64_C(0xff))) {
+		case ZEND_MIR_SOURCE_OPERAND_LITERAL:
+			if (index >= (uint32_t) op_array->last_literal) {
+				return false;
+			}
+			operand = &op_array->literals[index];
+			break;
+		case ZEND_MIR_SOURCE_OPERAND_SLOT:
+		case ZEND_MIR_SOURCE_OPERAND_SSA:
+			switch ((zend_mir_source_slot_kind) ((encoded >> 8) & UINT64_C(0xff))) {
+				case ZEND_MIR_SOURCE_SLOT_CV:
+					if (index >= (uint32_t) op_array->last_var) {
+						return false;
+					}
+					operand = ZEND_CALL_VAR_NUM(execute_data, index);
+					ZVAL_DEREF(operand);
+					break;
+				case ZEND_MIR_SOURCE_SLOT_TMP:
+					if (index >= op_array->T) {
+						return false;
+					}
+					operand = ZEND_CALL_VAR_NUM(execute_data,
+						(uint32_t) op_array->last_var + index);
+					break;
+				default:
+					return false;
+			}
+			break;
+		default:
+			return false;
+	}
+	if (Z_TYPE_P(operand) != IS_LONG) {
+		return false;
+	}
+	*value = Z_LVAL_P(operand);
+	return true;
+}
+
+/*
+ * $receiver->name += or -= an integer, of an untyped declared integer
+ * property of $this or a CV whose class and offset the OP_DATA's run-time
+ * cache slot holds, without overflow and without a used result; everything
+ * else takes the explicit operation.
+ */
+zend_native_status zend_native_execute_object_assign_op(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result, uint64_t auxiliary,
+	uint32_t extended_value, uint32_t actual_source_opcode,
+	uint32_t source_position_id)
+{
+	const zend_op_array *op_array = &execute_data->func->op_array;
+	const uint32_t op1_index = (uint32_t) (op1 >> 16);
+	zval *receiver = NULL;
+	zval *property;
+	zend_object *object;
+	void **cache_slot;
+	uintptr_t property_offset;
+	zend_long right;
+	zend_long updated;
+	const zend_op *data;
+
+	if ((extended_value != ZEND_ADD && extended_value != ZEND_SUB)
+			|| (op2 & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| (result & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_UNUSED
+			|| execute_data->run_time_cache == NULL
+			|| source_position_id + 1 >= op_array->last) {
+		goto general;
+	}
+	data = &op_array->opcodes[source_position_id + 1];
+	if (op_array->opcodes[source_position_id].opcode != ZEND_ASSIGN_OBJ_OP
+			|| op_array->opcodes[source_position_id].extended_value
+				!= extended_value
+			|| data->opcode != ZEND_OP_DATA
+			|| data->extended_value > (uint32_t) op_array->cache_size
+			|| 3 * sizeof(void *)
+				> (uint32_t) op_array->cache_size - data->extended_value) {
+		goto general;
+	}
+	switch ((zend_mir_source_operand_kind) (op1 & UINT64_C(0xff))) {
+		case ZEND_MIR_SOURCE_OPERAND_UNUSED:
+			receiver = &execute_data->This;
+			break;
+		case ZEND_MIR_SOURCE_OPERAND_SLOT:
+		case ZEND_MIR_SOURCE_OPERAND_SSA:
+			if (((op1 >> 8) & UINT64_C(0xff)) == ZEND_MIR_SOURCE_SLOT_CV
+					&& op1_index < (uint32_t) op_array->last_var) {
+				receiver = ZEND_CALL_VAR_NUM(execute_data, op1_index);
+			}
+			break;
+		default:
+			break;
+	}
+	if (receiver == NULL || Z_TYPE_P(receiver) != IS_OBJECT
+			|| !zend_native_object_long_operand(
+				execute_data, auxiliary, &right)) {
+		goto general;
+	}
+	object = Z_OBJ_P(receiver);
+	cache_slot = (void **) ((char *) execute_data->run_time_cache
+		+ data->extended_value);
+	if (cache_slot[0] != object->ce || cache_slot[2] != NULL) {
+		goto general;
+	}
+	property_offset = (uintptr_t) cache_slot[1];
+	if (!IS_VALID_PROPERTY_OFFSET(property_offset)) {
+		goto general;
+	}
+	property = OBJ_PROP(object, property_offset);
+	if (Z_TYPE_P(property) != IS_LONG
+			|| (extended_value == ZEND_ADD
+				? __builtin_add_overflow(Z_LVAL_P(property), right, &updated)
+				: __builtin_sub_overflow(Z_LVAL_P(property), right, &updated))) {
+		goto general;
+	}
+	Z_LVAL_P(property) = updated;
+	return ZEND_NATIVE_RETURNED;
+general:
+	return zend_native_execute_object_assign_op_explicit(execute_data,
+		op1, op2, result, auxiliary, extended_value, actual_source_opcode,
+		source_position_id);
+}
 ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(zend_native_execute_object_unset,
 	ZEND_UNSET_OBJ,
 	zend_native_object_unset_explicit(execute_data, &operation))
