@@ -7639,6 +7639,13 @@ bool initialize_plan(
 							? ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM_DIRECT
 							: ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_DIRECT);
 			}
+			zend_tpde_concat_direct concat_direct{};
+			if (plan->linux_inline_forms
+					&& zend_tpde_concat_direct_at(
+						plan->instructions[i], &concat_direct)) {
+				require_runtime_helper(
+					plan, ZEND_NATIVE_HELPER_VALUE_CONCAT_DIRECT);
+			}
 			zend_tpde_concat_assign_direct concat_assign_direct{};
 			if (record.opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN_OP
 					&& plan->linux_inline_forms

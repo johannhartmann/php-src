@@ -1031,6 +1031,11 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL_PLAIN,
 		ZEND_NATIVE_EFFECT_CALL,
 		(const void *) zend_native_internal_call_direct_plain},
+	{ZEND_NATIVE_HELPER_VALUE_CONCAT_DIRECT,
+		ZEND_NATIVE_EFFECT_FRAME_WRITE | ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
+			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_EFFECT_MAY_FAIL,
+		(const void *) zend_native_value_concat_direct},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {

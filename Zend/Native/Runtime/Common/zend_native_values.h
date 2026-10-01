@@ -108,6 +108,9 @@ zend_native_status zend_native_value_assign(
  * position in bits 32-63; slots holds the CV offset (bits 0-31) and the value
  * offset or literal index (32-63). The result is unused.
  */
+zend_native_status zend_native_value_concat_direct(
+	zend_execute_data *execute_data, uint64_t encoded_op1,
+	uint64_t descriptor, uint64_t slots, uint64_t result_offset);
 zend_native_status zend_native_value_concat_assign_direct(
 	zend_execute_data *execute_data, uint64_t encoded_op1,
 	uint64_t descriptor, uint64_t slots);
