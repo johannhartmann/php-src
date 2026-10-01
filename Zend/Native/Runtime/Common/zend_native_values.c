@@ -4415,11 +4415,33 @@ static zend_always_inline bool zend_native_value_fetch_dim_r_read_ex(
 	zend_ulong index;
 
 	ZVAL_DEREF(container);
-	if (Z_TYPE_P(container) != IS_ARRAY) {
-		return false;
-	}
 	if (!offset_tmp) {
 		ZVAL_DEREF(offset);
+	}
+	if (Z_TYPE_P(container) == IS_STRING && Z_TYPE_P(offset) == IS_LONG) {
+		/* $string[$index] inside the string is the interned one-character
+		 * string, as zend_fetch_dimension_str() reads it; an offset outside
+		 * warns in the general path. */
+		const zend_string *string = Z_STR_P(container);
+		zend_long position = Z_LVAL_P(offset);
+
+		if (position < 0) {
+			position += (zend_long) ZSTR_LEN(string);
+		}
+		if (position < 0 || (size_t) position >= ZSTR_LEN(string)) {
+			return false;
+		}
+		ZVAL_CHAR(&copy, (zend_uchar) ZSTR_VAL(string)[position]);
+		if (container_tmp) {
+			zval_ptr_dtor_nogc(container_slot);
+			ZVAL_UNDEF(container_slot);
+		}
+		ZVAL_COPY_VALUE(target, &copy);
+		*status = ZEND_NATIVE_RETURNED;
+		return true;
+	}
+	if (Z_TYPE_P(container) != IS_ARRAY) {
+		return false;
 	}
 	if (Z_TYPE_P(offset) == IS_LONG) {
 		element = zend_hash_index_find(
