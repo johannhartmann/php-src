@@ -7103,6 +7103,18 @@ bool ZendCompilerX64::compile_inst_impl(
 					: helper == ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM
 						? ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM_DIRECT
 						: ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_DIRECT));
+		} else if (helper == ZEND_NATIVE_HELPER_VALUE_BINARY_OP
+				&& adaptor->plan()->linux_inline_forms
+				&& zend_tpde_identical_direct_at(mir, &concat_direct)) {
+			/* The encoded first operand above is ignored by this form. */
+			builder.add_arg(ValuePart{concat_direct.descriptor, 8,
+				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			builder.add_arg(ValuePart{concat_direct.slots, 8,
+				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			builder.add_arg(ValuePart{concat_direct.result_offset, 8,
+				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			builder.call(runtime_symbol(
+				ZEND_NATIVE_HELPER_VALUE_IDENTICAL_DIRECT));
 		} else if ((helper == ZEND_NATIVE_HELPER_VALUE_CONCAT
 					|| helper == ZEND_NATIVE_HELPER_VALUE_FAST_CONCAT)
 				&& adaptor->plan()->linux_inline_forms

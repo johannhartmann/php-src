@@ -1910,6 +1910,46 @@ static bool zend_native_value_is_binary_opcode(uint8_t opcode)
 	}
 }
 
+/*
+ * === and !== of scalars, strings or values of different types decide
+ * without decoding the operation, as ZEND_IS_IDENTICAL does: compare,
+ * release the temporaries, then publish the boolean, which may reuse an
+ * operand's slot. A temporary array or object, whose release may run
+ * destructors, and undefined CVs return false with nothing changed.
+ */
+static zend_always_inline bool zend_native_value_identical_values(
+	zval *fast_left, bool left_tmp, zval *fast_right, bool right_tmp,
+	zval *fast_result, uint32_t source_opcode)
+{
+	zval *a = fast_left;
+	zval *b = fast_right;
+	bool identical;
+
+	if (Z_TYPE_P(fast_left) == IS_UNDEF || Z_TYPE_P(fast_right) == IS_UNDEF
+			|| (left_tmp && Z_TYPE_P(fast_left) > IS_STRING)
+			|| (right_tmp && Z_TYPE_P(fast_right) > IS_STRING)) {
+		return false;
+	}
+	ZVAL_DEREF(a);
+	ZVAL_DEREF(b);
+	if ((Z_TYPE_P(a) > IS_STRING || Z_TYPE_P(b) > IS_STRING)
+			&& Z_TYPE_P(a) == Z_TYPE_P(b)) {
+		return false;
+	}
+	identical = zend_is_identical(a, b);
+	if (left_tmp) {
+		zval_ptr_dtor_str(fast_left);
+		ZVAL_UNDEF(fast_left);
+	}
+	if (right_tmp) {
+		zval_ptr_dtor_str(fast_right);
+		ZVAL_UNDEF(fast_right);
+	}
+	ZVAL_BOOL(fast_result, source_opcode == ZEND_IS_IDENTICAL
+		? identical : !identical);
+	return true;
+}
+
 zend_native_status zend_native_value_binary_op(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result_operand,
@@ -1946,31 +1986,10 @@ zend_native_status zend_native_value_binary_op(
 			execute_data, result_operand, &result_tmp);
 
 		if (fast_left != NULL && fast_right != NULL && fast_result != NULL
-				&& result_tmp && Z_TYPE_P(fast_left) != IS_UNDEF
-				&& Z_TYPE_P(fast_right) != IS_UNDEF
-				&& (!left_tmp || Z_TYPE_P(fast_left) <= IS_STRING)
-				&& (!right_tmp || Z_TYPE_P(fast_right) <= IS_STRING)) {
-			zval *a = fast_left;
-			zval *b = fast_right;
-			bool identical;
-
-			ZVAL_DEREF(a);
-			ZVAL_DEREF(b);
-			if ((Z_TYPE_P(a) <= IS_STRING && Z_TYPE_P(b) <= IS_STRING)
-					|| Z_TYPE_P(a) != Z_TYPE_P(b)) {
-				identical = zend_is_identical(a, b);
-				if (left_tmp) {
-					zval_ptr_dtor_str(fast_left);
-					ZVAL_UNDEF(fast_left);
-				}
-				if (right_tmp) {
-					zval_ptr_dtor_str(fast_right);
-					ZVAL_UNDEF(fast_right);
-				}
-				ZVAL_BOOL(fast_result, source_opcode == ZEND_IS_IDENTICAL
-					? identical : !identical);
-				return ZEND_NATIVE_RETURNED;
-			}
+				&& result_tmp && zend_native_value_identical_values(
+					fast_left, left_tmp, fast_right, right_tmp,
+					fast_result, source_opcode)) {
+			return ZEND_NATIVE_RETURNED;
 		}
 	}
 	if (source_opcode > UINT8_MAX
@@ -5958,6 +5977,45 @@ zend_native_status zend_native_value_concat_direct(
 				? ZEND_NATIVE_DIM_DIRECT_CV : ZEND_NATIVE_DIM_DIRECT_TMP,
 			(uint32_t) result_offset),
 		0, source_opcode, source_position_id, (uint8_t) source_opcode);
+}
+
+/*
+ * ZEND_IS_IDENTICAL/ZEND_IS_NOT_IDENTICAL with precomputed operand kinds
+ * and offsets (zend_tpde_identical_direct_at()), laid out as for the
+ * direct concatenation; anything the fast comparison leaves takes the
+ * general path.
+ */
+zend_native_status zend_native_value_identical_direct(
+	zend_execute_data *execute_data, uint64_t encoded_op1,
+	uint64_t descriptor, uint64_t slots, uint64_t result_offset)
+{
+	const uint32_t left_kind = (uint32_t) (descriptor & 3);
+	const uint32_t right_kind = (uint32_t) ((descriptor >> 2) & 3);
+	const uint32_t source_opcode = (uint32_t) ((descriptor >> 8) & 0xff);
+	const uint32_t source_position_id = (uint32_t) (descriptor >> 32);
+	zval *left = zend_native_value_direct_operand(
+		execute_data, left_kind, (uint32_t) slots);
+	zval *right = zend_native_value_direct_operand(
+		execute_data, right_kind, (uint32_t) (slots >> 32));
+	zval *result = (zval *) ((char *) execute_data + (uint32_t) result_offset);
+
+	(void) encoded_op1;
+	if (EXPECTED(zend_native_value_identical_values(
+			left, left_kind == ZEND_NATIVE_DIM_DIRECT_TMP,
+			right, right_kind == ZEND_NATIVE_DIM_DIRECT_TMP,
+			result, source_opcode))) {
+		return ZEND_NATIVE_RETURNED;
+	}
+	return zend_native_value_binary_op(execute_data,
+		zend_native_value_direct_encoding(
+			execute_data, left_kind, (uint32_t) slots),
+		zend_native_value_direct_encoding(
+			execute_data, right_kind, (uint32_t) (slots >> 32)),
+		zend_native_value_direct_encoding(execute_data,
+			((descriptor >> ZEND_NATIVE_DIM_DIRECT_RESULT_CV_SHIFT) & 1) != 0
+				? ZEND_NATIVE_DIM_DIRECT_CV : ZEND_NATIVE_DIM_DIRECT_TMP,
+			(uint32_t) result_offset),
+		0, source_opcode, source_position_id);
 }
 
 zend_native_status zend_native_value_assign_dim_direct(
