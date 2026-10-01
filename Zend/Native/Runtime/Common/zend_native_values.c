@@ -693,6 +693,44 @@ static void zend_native_w12_value_prepare_result(
 	}
 }
 
+/*
+ * The result slot of a decode-free w12 fast path, with the rules of
+ * zend_native_w12_value_result(): an undefined temporary, or a CV whose old
+ * value zend_native_w12_fast_store() releases after the operands were read.
+ */
+static zend_always_inline zval *zend_native_w12_fast_result(
+	zend_execute_data *execute_data, uint64_t result_operand, bool *is_cv)
+{
+	const uint32_t index = (uint32_t) (result_operand >> 16);
+	const zend_op_array *op_array = &execute_data->func->op_array;
+	zval *result;
+
+	if ((result_operand & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_SLOT
+			&& (result_operand & UINT64_C(0xff))
+				!= ZEND_MIR_SOURCE_OPERAND_SSA) {
+		return NULL;
+	}
+	switch ((zend_mir_source_slot_kind) ((result_operand >> 8) & UINT64_C(0xff))) {
+		case ZEND_MIR_SOURCE_SLOT_CV:
+			if (index >= (uint32_t) op_array->last_var) {
+				return NULL;
+			}
+			*is_cv = true;
+			return ZEND_CALL_VAR_NUM(execute_data, index);
+		case ZEND_MIR_SOURCE_SLOT_TMP:
+		case ZEND_MIR_SOURCE_SLOT_VAR:
+			if (index >= op_array->T) {
+				return NULL;
+			}
+			result = ZEND_CALL_VAR_NUM(execute_data,
+				(uint32_t) op_array->last_var + index);
+			*is_cv = false;
+			return Z_ISUNDEF_P(result) ? result : NULL;
+		default:
+			return NULL;
+	}
+}
+
 zend_native_status zend_native_value_count(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result_operand,
@@ -703,6 +741,31 @@ zend_native_status zend_native_value_count(
 	zval *value;
 	zval *result;
 	zend_long count = 0;
+
+	/* count() of an array CV or literal without decoding; a temporary,
+	 * whose release may run a destructor, takes the general path. */
+	if (source_opcode == ZEND_COUNT
+			&& (op2 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+		bool value_tmp, result_cv = false;
+		zval *fast_value = zend_native_value_fast_operand(
+			execute_data, op1, &value_tmp);
+		zval *fast_result = zend_native_w12_fast_result(
+			execute_data, result_operand, &result_cv);
+
+		if (fast_value != NULL && fast_result != NULL && !value_tmp) {
+			zval *array = fast_value;
+
+			if (!value_tmp) {
+				ZVAL_DEREF(array);
+			}
+			if (Z_TYPE_P(array) == IS_ARRAY
+					&& (!result_cv || !Z_REFCOUNTED_P(fast_result))) {
+				count = zend_hash_num_elements(Z_ARRVAL_P(array));
+				ZVAL_LONG(fast_result, count);
+				return ZEND_NATIVE_RETURNED;
+			}
+		}
+	}
 
 	if (!zend_native_value_init_explicit_operation(
 			execute_data, op1, op2, result_operand, extended_value,
@@ -899,6 +962,34 @@ zend_native_status zend_native_value_in_array(
 	zval *result;
 	bool found = false;
 
+	/* A string CV or literal needle in the constant array without
+	 * decoding. */
+	if (source_opcode == ZEND_IN_ARRAY
+			&& (op2 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+		bool needle_tmp, table_tmp, result_cv = false;
+		zval *fast_needle = zend_native_value_fast_operand(
+			execute_data, op1, &needle_tmp);
+		zval *fast_table = zend_native_value_fast_operand(
+			execute_data, op2, &table_tmp);
+		zval *fast_result = zend_native_w12_fast_result(
+			execute_data, result_operand, &result_cv);
+
+		if (fast_needle != NULL && fast_table != NULL && fast_result != NULL
+				&& !needle_tmp && Z_TYPE_P(fast_table) == IS_ARRAY) {
+			zval *value = fast_needle;
+
+			if (!needle_tmp) {
+				ZVAL_DEREF(value);
+			}
+			if (Z_TYPE_P(value) == IS_STRING
+					&& (!result_cv || !Z_REFCOUNTED_P(fast_result))) {
+				found = zend_hash_exists(
+					Z_ARRVAL_P(fast_table), Z_STR_P(value));
+				ZVAL_BOOL(fast_result, found);
+				return ZEND_NATIVE_RETURNED;
+			}
+		}
+	}
 	if (!zend_native_value_init_explicit_operation(
 			execute_data, op1, op2, result_operand, extended_value,
 			source_opcode, source_position_id, ZEND_IN_ARRAY, &operation)
@@ -6641,6 +6732,25 @@ zend_native_status zend_native_value_fe_free(
 	const zend_native_explicit_value_operation *opline = &operation;
 	zval *value;
 
+	/* The array a foreach iterated: released without decoding. */
+	if (source_opcode == ZEND_FE_FREE
+			&& source_position_id < execute_data->func->op_array.last
+			&& ((op1 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| (op1 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& (((op1 >> 8) & UINT64_C(0xff)) == ZEND_MIR_SOURCE_SLOT_TMP
+				|| ((op1 >> 8) & UINT64_C(0xff)) == ZEND_MIR_SOURCE_SLOT_VAR)
+			&& (uint32_t) (op1 >> 16) < execute_data->func->op_array.T) {
+		value = ZEND_CALL_VAR_NUM(execute_data,
+			(uint32_t) execute_data->func->op_array.last_var
+				+ (uint32_t) (op1 >> 16));
+		if (Z_TYPE_P(value) == IS_ARRAY) {
+			execute_data->opline = &execute_data->func->op_array.opcodes[
+				source_position_id];
+			zval_ptr_dtor_nogc(value);
+			ZVAL_UNDEF(value);
+			return zend_native_value_status();
+		}
+	}
 	if (!zend_native_value_init_explicit_operation(
 			execute_data, op1, op2, result_operand, extended_value,
 			source_opcode, source_position_id, ZEND_FE_FREE, &operation)
