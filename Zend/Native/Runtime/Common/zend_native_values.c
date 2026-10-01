@@ -1432,6 +1432,59 @@ zend_native_status zend_native_value_assign(
 	zval *variable;
 	uint8_t value_type;
 
+	/*
+	 * $cv = a defined CV, a temporary or a literal, with an unused or
+	 * temporary result: the steps below without decoding the operation.
+	 */
+	if (source_opcode == ZEND_ASSIGN
+			&& source_position_id < execute_data->func->op_array.last
+			&& ((op1 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| (op1 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& ((op1 >> 8) & UINT64_C(0xff)) == ZEND_MIR_SOURCE_SLOT_CV
+			&& (uint32_t) (op1 >> 16)
+				< (uint32_t) execute_data->func->op_array.last_var) {
+		bool value_tmp, result_tmp = false;
+		zval *fast_value = zend_native_value_fast_operand(
+			execute_data, op2, &value_tmp);
+		zval *fast_result = (result_operand & UINT64_C(0xff))
+				== ZEND_MIR_SOURCE_OPERAND_UNUSED
+			? NULL
+			: zend_native_value_fast_operand(
+				execute_data, result_operand, &result_tmp);
+
+		variable = ZEND_CALL_VAR_NUM(execute_data, (uint32_t) (op1 >> 16));
+		if (fast_value != NULL && fast_value != variable
+				&& ((result_operand & UINT64_C(0xff))
+						== ZEND_MIR_SOURCE_OPERAND_UNUSED
+					|| (fast_result != NULL && result_tmp
+						&& fast_result != fast_value))
+				&& Z_TYPE_P(fast_value) != IS_UNDEF
+				&& (!value_tmp || Z_TYPE_P(fast_value) != IS_INDIRECT)) {
+			execute_data->opline = &execute_data->func->op_array.opcodes[
+				source_position_id];
+			value_slot = fast_value;
+			if (value_tmp) {
+				value = fast_value;
+				value_type = IS_TMP_VAR;
+			} else {
+				zend_native_zval_copy_deref_or_dup(&materialized, fast_value);
+				value = &materialized;
+				value_type = IS_TMP_VAR;
+			}
+			value = zend_assign_to_variable_ex(variable, value, value_type,
+				ZEND_CALL_USES_STRICT_TYPES(execute_data), &garbage);
+			if (value_tmp && value_slot != variable) {
+				ZVAL_UNDEF(value_slot);
+			}
+			if (fast_result != NULL) {
+				zend_native_zval_copy_deref_or_dup(fast_result, value);
+			}
+			if (garbage != NULL) {
+				GC_DTOR_NO_REF(garbage);
+			}
+			return zend_native_value_status();
+		}
+	}
 	if (!zend_native_value_init_explicit_operation(
 			execute_data, op1, op2, result_operand, extended_value,
 			source_opcode, source_position_id, ZEND_ASSIGN, &operation)
