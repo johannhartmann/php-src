@@ -256,6 +256,42 @@ uintptr_t zend_native_array_find_key(const zval *container, const zval *key)
 }
 
 /*
+ * The element isset(), empty() and ?? test: as zend_native_array_find_*(),
+ * but an undefined or null container, through a reference, has no element
+ * (FETCH_DIM_IS and ISSET_ISEMPTY_DIM_OBJ answer it without a notice about
+ * the container; an undefined key is still reported).
+ */
+ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_test_value(
+	const zval *container, const zval *key, bool literal)
+{
+	if (Z_TYPE_P(container) == IS_REFERENCE) {
+		container = &Z_REF_P(container)->val;
+	}
+	if (Z_TYPE_P(container) <= IS_NULL) {
+		/* An undefined key CV still warns in the helper. */
+		return Z_TYPE_P(key) == IS_UNDEF
+			? ZEND_NATIVE_ELEMENT_UNKNOWN : ZEND_NATIVE_ELEMENT_ABSENT;
+	}
+	return zend_native_find_value(
+		Z_TYPE_P(container) == IS_ARRAY ? Z_ARRVAL_P(container) : NULL,
+		(uint64_t) Z_LVAL_P(key), Z_TYPE_P(key), literal);
+}
+
+uintptr_t zend_native_array_test_literal(
+	const zval *container, const zval *key)
+{
+	return zend_native_test_value(container, key, true);
+}
+
+uintptr_t zend_native_array_test_key(const zval *container, const zval *key)
+{
+	if (Z_TYPE_P(key) == IS_REFERENCE) {
+		key = &Z_REF_P(key)->val;
+	}
+	return zend_native_test_value(container, key, false);
+}
+
+/*
  * The array a write fetch (FETCH_DIM_W, RW, UNSET) of a CV may change in
  * place: one, through a reference, with no other owner, which SEPARATE_ARRAY
  * leaves as it is. NULL otherwise.
