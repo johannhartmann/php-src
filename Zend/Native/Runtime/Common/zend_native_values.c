@@ -4944,13 +4944,39 @@ zend_native_status zend_native_value_fetch_list(
 	if (source_opcode == ZEND_FETCH_LIST_R) {
 		bool container_tmp;
 		bool key_tmp;
+		/* The container may also be the VAR of a call result, which
+		 * FETCH_LIST_R keeps. */
 		zval *fast_container = zend_native_value_fast_operand(
 			execute_data, op1, &container_tmp);
 		zval *fast_key = zend_native_value_fast_operand(
 			execute_data, op2, &key_tmp);
-		/* FETCH_LIST_R writes its element to a VAR or a temporary. */
+		if (fast_container == NULL) {
+			fast_container = zend_native_value_fast_result_slot(
+				execute_data, op1);
+		}
+		/* FETCH_LIST_R writes its element to a VAR or a temporary, or
+		 * straight to the CV the list assigns. */
 		zval *fast_result = zend_native_value_fast_result_slot(
 			execute_data, result_operand);
+		bool result_cv = false;
+
+		if (fast_result == NULL
+				&& ((result_operand & UINT64_C(0xff))
+						== ZEND_MIR_SOURCE_OPERAND_SLOT
+					|| (result_operand & UINT64_C(0xff))
+						== ZEND_MIR_SOURCE_OPERAND_SSA)
+				&& ((result_operand >> 8) & UINT64_C(0xff))
+					== ZEND_MIR_SOURCE_SLOT_CV
+				&& (uint32_t) (result_operand >> 16)
+					< (uint32_t) execute_data->func->op_array.last_var) {
+			fast_result = ZEND_CALL_VAR_NUM(execute_data,
+				(uint32_t) (result_operand >> 16));
+			/* A referenced CV is written through by the general path. */
+			result_cv = !Z_ISREF_P(fast_result);
+			if (!result_cv) {
+				fast_result = NULL;
+			}
+		}
 
 		if (fast_container != NULL && fast_key != NULL && fast_result != NULL
 				&& fast_result != fast_container) {
@@ -4983,6 +5009,22 @@ zend_native_status zend_native_value_fetch_list(
 					if (key_tmp) {
 						zval_ptr_dtor_nogc(fast_key);
 						ZVAL_UNDEF(fast_key);
+					}
+					if (result_cv) {
+						/* The old value is released after the write; its
+						 * destructor may run. */
+						zval old;
+
+						ZVAL_COPY_VALUE(&old, fast_result);
+						ZVAL_COPY_VALUE(fast_result, &copy);
+						if (Z_REFCOUNTED(old)) {
+							execute_data->opline =
+								&execute_data->func->op_array.opcodes[
+									source_position_id];
+							zval_ptr_dtor(&old);
+							return zend_native_value_status();
+						}
+						return ZEND_NATIVE_RETURNED;
 					}
 					ZVAL_COPY_VALUE(fast_result, &copy);
 					return ZEND_NATIVE_RETURNED;
