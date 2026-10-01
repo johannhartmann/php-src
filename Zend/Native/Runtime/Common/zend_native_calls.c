@@ -4632,6 +4632,11 @@ typedef struct _zend_native_call_recorded_target {
 	zend_class_entry *called_scope;
 	zend_native_frame_entry_t entry;
 	const zend_native_call_fast_receive *receive;
+	/* The target's entry cell, and whether the target outlives the request
+	 * that recorded it: an immutable function and class, and permanent
+	 * interned names (see zend_native_call_recorded_target_current()). */
+	zend_native_entry_cell *cell;
+	bool persistent;
 	uint8_t kind;
 } zend_native_call_recorded_target;
 
@@ -4762,7 +4767,58 @@ static void zend_native_call_recorded_target_record(
 	target->entry = resolution->invoke_entry;
 	target->receive = zend_native_call_fast_receive_prepare(
 		resolution->entry_cell, &resolution->function->op_array);
+	target->cell = resolution->entry_cell;
+	target->persistent = function != NULL
+		&& (function->op_array.fn_flags & ZEND_ACC_IMMUTABLE) != 0
+		&& (kind == ZEND_NATIVE_CALL_RECORDED_METHOD
+			? (((const zend_class_entry *) key)->ce_flags
+				& ZEND_ACC_IMMUTABLE) != 0
+			: kind == ZEND_NATIVE_CALL_RECORDED_FUNCTION
+				|| kind == ZEND_NATIVE_CALL_RECORDED_STATIC)
+		&& (kind == ZEND_NATIVE_CALL_RECORDED_METHOD
+			|| (GC_FLAGS((const zend_string *) key) & IS_STR_PERMANENT) != 0)
+		&& (method == NULL || (GC_FLAGS(method) & IS_STR_PERMANENT) != 0)
+		&& (scope == NULL || (scope->ce_flags & ZEND_ACC_IMMUTABLE) != 0)
+		&& (kind != ZEND_NATIVE_CALL_RECORDED_STATIC
+			|| (target->called_scope->ce_flags & ZEND_ACC_IMMUTABLE) != 0);
 	target->kind = kind;
+}
+
+/*
+ * Whether a recorded target found for a callable is current: recorded in
+ * this request, or recorded in an earlier one for a target that outlives
+ * it and still applies, as the VM resolves the callable again in every
+ * request. Its entry cell must still hold the recorded entry, a function
+ * name must still bind the function and a class name the class; it is then
+ * current again.
+ */
+static zend_always_inline bool zend_native_call_recorded_target_current(
+	zend_native_call_recorded_target *target)
+{
+	const zend_native_entry_cell *cell;
+	const zend_native_code *code;
+
+	if (EXPECTED(target->epoch == zend_native_call_resolution_cache_epoch)) {
+		return true;
+	}
+	if (!target->persistent || (cell = target->cell) == NULL
+			|| cell->state != ZEND_NATIVE_ENTRY_READY
+			|| cell->function != target->function
+			|| (code = zend_native_entry_cell_load(
+				(zend_native_entry_cell *) cell)) == NULL
+			|| zend_native_code_frame_entry(code) != target->entry) {
+		return false;
+	}
+	if (target->kind == ZEND_NATIVE_CALL_RECORDED_FUNCTION
+			? zend_hash_find_ptr_lc(EG(function_table),
+				(zend_string *) target->key) != target->function
+			: target->kind == ZEND_NATIVE_CALL_RECORDED_STATIC
+				&& zend_hash_find_ptr_lc(EG(class_table),
+					(zend_string *) target->key) != target->called_scope) {
+		return false;
+	}
+	target->epoch = zend_native_call_resolution_cache_epoch;
+	return true;
 }
 
 /*
@@ -4776,7 +4832,7 @@ zend_native_frame_entry_t zend_native_call_fast_dynamic_init(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor)
 {
-	const zend_native_call_recorded_target *target;
+	zend_native_call_recorded_target *target;
 	zend_function *function = NULL;
 	zend_object *owned = NULL;
 	void *object_or_called_scope = NULL;
@@ -4800,9 +4856,9 @@ zend_native_frame_entry_t zend_native_call_fast_dynamic_init(
 	if (Z_TYPE_P(callable) == IS_STRING) {
 		target = zend_native_call_recorded_target_slot(
 			Z_STR_P(callable), NULL, NULL);
-		if (target->epoch != zend_native_call_resolution_cache_epoch
-				|| target->key != Z_STR_P(callable)
-				|| target->kind != ZEND_NATIVE_CALL_RECORDED_FUNCTION) {
+		if (target->key != Z_STR_P(callable)
+				|| target->kind != ZEND_NATIVE_CALL_RECORDED_FUNCTION
+				|| !zend_native_call_recorded_target_current(target)) {
 			return NULL;
 		}
 		function = target->function;
@@ -4853,13 +4909,13 @@ zend_native_frame_entry_t zend_native_call_fast_dynamic_init(
 		}
 		target = zend_native_call_recorded_target_slot(
 			key, Z_STR_P(method), caller->func->common.scope);
-		if (target->epoch != zend_native_call_resolution_cache_epoch
-				|| target->key != key
+		if (target->key != key
 				|| target->method != Z_STR_P(method)
 				|| target->scope != caller->func->common.scope
 				|| target->kind != (Z_TYPE_P(object) == IS_OBJECT
 					? ZEND_NATIVE_CALL_RECORDED_METHOD
-					: ZEND_NATIVE_CALL_RECORDED_STATIC)) {
+					: ZEND_NATIVE_CALL_RECORDED_STATIC)
+				|| !zend_native_call_recorded_target_current(target)) {
 			return NULL;
 		}
 		function = target->function;
