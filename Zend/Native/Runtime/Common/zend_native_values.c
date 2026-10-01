@@ -4373,6 +4373,9 @@ static bool zend_native_assign_string_offset(
 	return true;
 }
 
+static zend_always_inline zval *zend_native_value_fast_result_slot(
+	zend_execute_data *execute_data, uint64_t encoded);
+
 static zend_native_status zend_native_value_fetch_dim_impl(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result_operand,
@@ -4408,6 +4411,74 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 		mode = ZEND_NATIVE_DIM_W;
 	} else if (mode == ZEND_NATIVE_DIM_FUNC_ARG) {
 		mode = ZEND_NATIVE_DIM_R;
+	}
+	/*
+	 * A write or read-write fetch of an integer or string key of an array
+	 * CV, as ZEND_FETCH_DIM_W/RW make it without decoding the operation:
+	 * separate the array, find the element (a write inserts a missing key
+	 * as null) and publish it INDIRECT. A missing key of a read-write fetch,
+	 * which warns, and anything else take the general path.
+	 */
+	if ((mode == ZEND_NATIVE_DIM_W || mode == ZEND_NATIVE_DIM_RW)
+			&& (source_opcode == ZEND_FETCH_DIM_W
+				|| source_opcode == ZEND_FETCH_DIM_RW
+				|| source_opcode == ZEND_FETCH_DIM_FUNC_ARG)
+			&& (op2 & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_UNUSED
+			&& ((op1 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| (op1 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& ((op1 >> 8) & UINT64_C(0xff)) == ZEND_MIR_SOURCE_SLOT_CV) {
+		bool container_tmp;
+		bool key_tmp;
+		zval *fast_container = zend_native_value_fast_operand(
+			execute_data, op1, &container_tmp);
+		zval *fast_key = zend_native_value_fast_operand(
+			execute_data, op2, &key_tmp);
+		zval *target = zend_native_value_fast_result_slot(
+			execute_data, result_operand);
+
+		if (fast_container != NULL && !container_tmp && fast_key != NULL
+				&& target != NULL) {
+			zval *array = fast_container;
+			zval *key = fast_key;
+
+			ZVAL_DEREF(array);
+			if (!key_tmp) {
+				ZVAL_DEREF(key);
+			}
+			if (Z_TYPE_P(array) == IS_ARRAY
+					&& (Z_TYPE_P(key) == IS_LONG
+						|| Z_TYPE_P(key) == IS_STRING)) {
+				const bool insert = mode == ZEND_NATIVE_DIM_W;
+				zval *element;
+				zend_ulong index;
+
+				SEPARATE_ARRAY(array);
+				if (Z_TYPE_P(key) == IS_LONG) {
+					element = insert
+						? zend_hash_index_lookup(
+							Z_ARRVAL_P(array), Z_LVAL_P(key))
+						: zend_hash_index_find(
+							Z_ARRVAL_P(array), Z_LVAL_P(key));
+				} else if (ZEND_HANDLE_NUMERIC_STR(Z_STRVAL_P(key),
+						Z_STRLEN_P(key), index)) {
+					element = insert
+						? zend_hash_index_lookup(Z_ARRVAL_P(array), index)
+						: zend_hash_index_find(Z_ARRVAL_P(array), index);
+				} else {
+					element = insert
+						? zend_hash_lookup(Z_ARRVAL_P(array), Z_STR_P(key))
+						: zend_hash_find(Z_ARRVAL_P(array), Z_STR_P(key));
+				}
+				if (element != NULL && Z_TYPE_P(element) != IS_INDIRECT) {
+					if (key_tmp) {
+						zval_ptr_dtor_nogc(fast_key);
+						ZVAL_UNDEF(fast_key);
+					}
+					ZVAL_INDIRECT(target, element);
+					return ZEND_NATIVE_RETURNED;
+				}
+			}
+		}
 	}
 	if (!zend_native_value_init_explicit_operation(
 			execute_data, op1, op2, result_operand, extended_value,
