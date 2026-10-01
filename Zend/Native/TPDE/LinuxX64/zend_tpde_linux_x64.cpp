@@ -3961,18 +3961,24 @@ bool ZendCompilerX64::compile_inst_impl(
 					return FE_MEM(descriptor_reg, 0, FE_NOREG,
 						header_offset + static_cast<int32_t>(field));
 				};
+				/* A stale epoch first tries the re-arm stub below. */
+				auto fast_retry = text_writer.label_create();
+				auto fast_rearm = text_writer.label_create();
+				AsmReg rearm_descriptor_reg{};
 				{
 					auto descriptor_value = image_symbol_value(
 						ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.id);
 					auto descriptor_scratch =
 						std::move(descriptor_value).into_scratch(this);
 					auto descriptor_reg = descriptor_scratch.cur_reg();
+					rearm_descriptor_reg = descriptor_reg;
 					ScratchReg value{this};
 					ScratchReg callee{this};
 					ScratchReg object{this};
 					auto value_reg = value.alloc_gp();
 					auto callee_reg = callee.alloc_gp();
 					auto object_reg = object.alloc_gp();
+					label_place(fast_retry);
 					ASM(MOV64rm, value_reg,
 						FE_MEM(context_register(), 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
@@ -3983,7 +3989,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(CMP64rm, value_reg, header_field(descriptor_reg,
 						offsetof(zend_native_user_call_site_header,
 							fast_epoch)));
-					generate_raw_jump(Jump::jne, fast_miss);
+					generate_raw_jump(Jump::jne, fast_rearm);
 					ASM(CMP8mi,
 						FE_MEM(context_register(), 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
@@ -4216,6 +4222,55 @@ bool ZendCompilerX64::compile_inst_impl(
 						callee_reg);
 					ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 1);
 					generate_raw_jump(Jump::jmp, fast_join);
+				}
+				/*
+				 * The re-arm stub: zend_native_call_fast_rearm() called with
+				 * every caller-saved register preserved by hand, so the
+				 * allocator state of the check above holds again at the
+				 * retry, and of the universal protocol at the miss.
+				 */
+				{
+					static constexpr FeRegGP saved_gp[] = {
+						FE_AX, FE_CX, FE_DX, FE_SI, FE_DI,
+						FE_R8, FE_R9, FE_R10, FE_R11};
+					static constexpr FeRegXMM saved_xmm[] = {
+						FE_XMM0, FE_XMM1, FE_XMM2, FE_XMM3, FE_XMM4, FE_XMM5,
+						FE_XMM6, FE_XMM7, FE_XMM8, FE_XMM9, FE_XMM10, FE_XMM11,
+						FE_XMM12, FE_XMM13, FE_XMM14, FE_XMM15};
+					constexpr int32_t xmm_base = 80;
+					constexpr int32_t save_area = xmm_base + 16 * 16;
+					label_place(fast_rearm);
+					ASM(LEA64rm, FE_SP, FE_MEM(FE_SP, 0, FE_NOREG, -save_area));
+					for (size_t i = 0; i < std::size(saved_gp); ++i) {
+						ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG,
+							static_cast<int32_t>(8 * i)), saved_gp[i]);
+					}
+					for (size_t i = 0; i < std::size(saved_xmm); ++i) {
+						ASM(SSE_MOVDQUmr, FE_MEM(FE_SP, 0, FE_NOREG,
+							xmm_base + static_cast<int32_t>(16 * i)),
+							saved_xmm[i]);
+					}
+					ASM(MOV64rr, FE_SI, rearm_descriptor_reg);
+					ASM(MOV64rr, FE_DI, canonical_frame_register());
+					text_writer.ensure_space(16);
+					ASM(CALL, text_writer.cur_ptr() + 5);
+					reloc_text(runtime_symbol(
+							ZEND_NATIVE_HELPER_CALL_FAST_REARM),
+						tpde::elf::R_X86_64_PLT32,
+						text_writer.offset() - 4, -4);
+					ASM(TEST8rr, FE_AX, FE_AX);
+					for (size_t i = 0; i < std::size(saved_xmm); ++i) {
+						ASM(SSE_MOVDQUrm, saved_xmm[i], FE_MEM(FE_SP, 0,
+							FE_NOREG,
+							xmm_base + static_cast<int32_t>(16 * i)));
+					}
+					for (size_t i = 0; i < std::size(saved_gp); ++i) {
+						ASM(MOV64rm, saved_gp[i], FE_MEM(FE_SP, 0, FE_NOREG,
+							static_cast<int32_t>(8 * i)));
+					}
+					ASM(LEA64rm, FE_SP, FE_MEM(FE_SP, 0, FE_NOREG, save_area));
+					generate_raw_jump(Jump::jne, fast_retry);
+					generate_raw_jump(Jump::jmp, fast_miss);
 				}
 				}
 				label_place(fast_miss);
