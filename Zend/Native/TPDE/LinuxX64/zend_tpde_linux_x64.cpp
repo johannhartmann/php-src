@@ -472,6 +472,32 @@ public:
 		}
 		return AsmReg{part.get_reg().id()};
 	}
+	/*
+	 * The frame for an inline form: its fixed register when it has one,
+	 * which no form writes, else a scratch copy, as into_scratch() makes.
+	 */
+	struct FrameRegister {
+		std::optional<ScratchReg> scratch;
+		AsmReg fixed{};
+		AsmReg cur_reg() const {
+			return scratch.has_value() ? scratch->cur_reg() : fixed;
+		}
+		void reset() {
+			if (scratch.has_value()) {
+				scratch->reset();
+			}
+		}
+	};
+	FrameRegister frame_register(ValuePartRef &&frame) {
+		FrameRegister result;
+		if (frame.has_assignment() && frame.assignment().fixed_assignment()) {
+			result.fixed = frame.load_to_reg();
+			frame.reset();
+		} else {
+			result.scratch.emplace(std::move(frame).into_scratch());
+		}
+		return result;
+	}
 	AsmReg canonical_frame_register() {
 		return canonical_value_register(
 			IRValueRef{Adaptor::FRAME_VALUE});
@@ -2913,7 +2939,7 @@ bool ZendCompilerX64::compile_inst_impl(
 						* sizeof(zval));
 				auto [frame_ref, frame] = val_ref_single(
 					node.operands[dispatch_case.frame_operand]);
-				auto frame_scratch = std::move(frame).into_scratch();
+				auto frame_scratch = frame_register(std::move(frame));
 				ASM(MOV64mi,
 					FE_MEM(frame_scratch.cur_reg(), 0, FE_NOREG,
 						result_offset),
@@ -2954,7 +2980,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				auto slow_exception = text_writer.label_create();
 				auto [frame_ref, frame] = val_ref_single(
 					node.operands[dispatch_case.frame_operand]);
-				auto frame_scratch = std::move(frame).into_scratch();
+				auto frame_scratch = frame_register(std::move(frame));
 				ScratchReg continuation{this};
 				auto continuation_reg = continuation.alloc_gp();
 				ASM(MOV32rm, continuation_reg,
@@ -3279,7 +3305,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				auto string_label = text_writer.label_create();
 				auto [frame_ref, frame] = val_ref_single(
 					node.operands[dispatch_case.frame_operand]);
-				auto frame_scratch = std::move(frame).into_scratch();
+				auto frame_scratch = frame_register(std::move(frame));
 				ScratchReg slot{this};
 				ScratchReg type{this};
 				ScratchReg value{this};
@@ -5903,6 +5929,19 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		return true;
 	}
+	/* A reload whose value nothing uses emits no load; its operands are
+	 * still consumed. */
+	if ((node.kind == Adaptor::InstKind::ZvalTypeLoad
+				|| node.kind == Adaptor::InstKind::ZvalPayloadLoad)
+			&& node.has_result
+			&& this->analyzer.liveness_info(
+				adaptor->val_local_idx(node.result)).ref_count <= 1) {
+		for (IRValueRef operand : node.liveness_operands) {
+			auto unused_use = val_ref(operand);
+			(void) unused_use;
+		}
+		return true;
+	}
 	if (node.kind == Adaptor::InstKind::ZvalTypeLoad) {
 		if (node.operands.size() != 1) {
 			return false;
@@ -7509,7 +7548,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
 		ScratchReg source_type{this};
 		ScratchReg target_type{this};
@@ -7882,7 +7921,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto released = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
 		ScratchReg type{this};
 		ScratchReg value{this};
@@ -8082,7 +8121,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
 		ScratchReg decision{this};
 		ScratchReg answer{this};
@@ -8473,7 +8512,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
 		ScratchReg decision{this};
 		/* The container's array, or null. */
@@ -8752,7 +8791,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
 		ScratchReg mask{this};
 		ASM(MOV32ri, mask.alloc_gp(),
@@ -8934,7 +8973,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
 		if (register_temporary) {
 			auto boxed = val_ref(node.operands[0]);
@@ -9127,7 +9166,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
 		auto address = [](AsmReg base, uint64_t offset) {
 			return GenericValuePart{GenericValuePart::Expr{
@@ -9287,7 +9326,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
 		auto holder = [&]() {
 			return GenericValuePart{GenericValuePart::Expr{frame_reg,
@@ -9372,7 +9411,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
 		ScratchReg literals{this};
 		auto literals_reg = literals.alloc_gp();
@@ -9482,7 +9521,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
 		auto value_address = [&]() {
 			return GenericValuePart{GenericValuePart::Expr{frame_reg,
@@ -9892,7 +9931,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
 		ScratchReg type{this};
 		ScratchReg array{this};
@@ -10127,7 +10166,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					&& boolean_layout) {
 				auto [frame_ref, frame] =
 					val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-				auto frame_scratch = std::move(frame).into_scratch();
+				auto frame_scratch = frame_register(std::move(frame));
 				auto frame_reg = frame_scratch.cur_reg();
 				ScratchReg result{this};
 				auto result_reg = result.alloc_gp();
@@ -10176,7 +10215,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		if (normal_register_string) {
 			auto [frame_ref, frame] = val_ref_single(node.operands[1]);
-			auto frame_scratch = std::move(frame).into_scratch();
+			auto frame_scratch = frame_register(std::move(frame));
 			auto frame_reg = frame_scratch.cur_reg();
 			auto string = val_ref(node.operands[0]);
 			auto [result_ref, result] = result_ref_single(node.result);
@@ -10212,7 +10251,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		if (normal_frame_string) {
 			auto [frame_ref, frame] =
 				val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-			auto frame_scratch = std::move(frame).into_scratch();
+			auto frame_scratch = frame_register(std::move(frame));
 			auto frame_reg = frame_scratch.cur_reg();
 			ScratchReg string{this};
 			auto string_reg = string.alloc_gp();
@@ -10252,7 +10291,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		if (register_string) {
 			auto [frame_ref, frame] = val_ref_single(node.operands[1]);
-			auto frame_scratch = std::move(frame).into_scratch();
+			auto frame_scratch = frame_register(std::move(frame));
 			auto frame_reg = frame_scratch.cur_reg();
 			auto [result_ref, result] = result_ref_single(node.result);
 			auto result_reg = result.alloc_reg();
@@ -10285,7 +10324,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto ready = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
 		ScratchReg type{this};
 		ScratchReg string{this};
@@ -10379,7 +10418,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
 		ScratchReg type{this};
 		ScratchReg left{this};
@@ -10790,7 +10829,7 @@ bool ZendCompilerX64::compile_inst_impl(
 							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL)) {
 				auto [frame_ref, frame] =
 					val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-				auto frame_scratch = std::move(frame).into_scratch();
+				auto frame_scratch = frame_register(std::move(frame));
 				auto frame_reg = frame_scratch.cur_reg();
 				ScratchReg literals{this};
 				ScratchReg value{this};
@@ -11345,7 +11384,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
 		ScratchReg result_value{this};
 		ScratchReg decision{this};
@@ -11552,7 +11591,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
 		ScratchReg type{this};
 		ScratchReg left{this};
@@ -11827,7 +11866,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
 		ScratchReg type{this};
 		ScratchReg value{this};
@@ -12083,7 +12122,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					|| node.exact_type == ZEND_MIR_SCALAR_TYPE_I64)) {
 			auto [frame_ref, frame] =
 				val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-			auto frame_scratch = std::move(frame).into_scratch();
+			auto frame_scratch = frame_register(std::move(frame));
 			auto frame_reg = frame_scratch.cur_reg();
 			ScratchReg result{this};
 			ScratchReg type{this};
@@ -12157,7 +12196,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				} else {
 					auto [frame_ref, frame] =
 						val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-					auto frame_scratch = std::move(frame).into_scratch();
+					auto frame_scratch = frame_register(std::move(frame));
 					ScratchReg value{this};
 					auto value_reg = value.alloc_gp();
 					if (type == ZEND_MIR_SCALAR_TYPE_I1) {
@@ -12178,7 +12217,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				if (node.kind == Adaptor::InstKind::GuardedFast) {
 					auto [frame_ref, frame] =
 						val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-					auto frame_scratch = std::move(frame).into_scratch();
+					auto frame_scratch = frame_register(std::move(frame));
 					ScratchReg result_type{this};
 					auto type_reg = result_type.alloc_gp();
 					ASM(MOV64mr,
@@ -12207,7 +12246,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
 		ScratchReg type{this};
 		ScratchReg value{this};
@@ -12459,7 +12498,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
 		ScratchReg decision{this};
 		auto decision_reg = decision.alloc_gp();
@@ -12595,7 +12634,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
 		ScratchReg decision{this};
 		auto decision_reg = decision.alloc_gp();
@@ -12704,7 +12743,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
 		ScratchReg object{this};
 		ScratchReg cache{this};
@@ -17485,7 +17524,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					}
 					auto [frame_ref, frame] =
 						val_ref_single(node.operands[frame_operand]);
-					auto frame_scratch = std::move(frame).into_scratch();
+					auto frame_scratch = frame_register(std::move(frame));
 					auto frame_reg = frame_scratch.cur_reg();
 					auto [context_ref, context] =
 						val_ref_single(node.operands[context_operand]);
@@ -20375,7 +20414,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				return false;
 			}
 			auto [frame_ref, frame] = val_ref_single(node.operands[0]);
-			auto frame_scratch = std::move(frame).into_scratch();
+			auto frame_scratch = frame_register(std::move(frame));
 			ASM(MOV64mi,
 				FE_MEM(frame_scratch.cur_reg(), 0, FE_NOREG,
 					static_cast<int32_t>(opline.result_var)),
@@ -20415,7 +20454,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			}
 			auto slow_exception = text_writer.label_create();
 			auto [frame_ref, frame] = val_ref_single(node.operands[0]);
-			auto frame_scratch = std::move(frame).into_scratch();
+			auto frame_scratch = frame_register(std::move(frame));
 			ScratchReg direct_continuation{this};
 			auto direct_continuation_reg =
 				direct_continuation.alloc_gp();
