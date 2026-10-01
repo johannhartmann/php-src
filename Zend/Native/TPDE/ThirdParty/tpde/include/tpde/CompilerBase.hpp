@@ -580,8 +580,8 @@ public:
   void analysis_end() {}
 
   void reloc_text(SymRef sym, u32 type, u64 offset, i64 addend = 0) {
-    this->assembler.reloc_sec(
-        text_writer.get_sec_ref(), sym, type, offset, addend);
+    // Through the writer, which defers relocations of cold code.
+    this->text_writer.reloc(sym, type, offset, addend);
   }
 
   /// Convenience function to place a label at the current position.
@@ -1621,7 +1621,8 @@ typename CompilerBase<Adaptor, Derived, Config>::RegisterFile::RegBitSet
     for (const IRBlockRef succ : adaptor->block_succs(cur_block_ref)) {
       ++succ_count;
       BlockIndex succ_idx = analyzer.block_idx(succ);
-      if (u32(succ_idx) == u32(cur_block_idx) + 1) {
+      if (u32(succ_idx) == u32(cur_block_idx) + 1
+          && !this->text_writer.in_cold_area()) {
         next_block_is_succ = true;
         if (analyzer.block_has_multiple_incoming(succ)) {
           next_block_has_multiple_incoming = true;
@@ -2291,6 +2292,10 @@ void CompilerBase<Adaptor, Derived, Config>::move_to_phi_nodes_impl(
 template <IRAdaptor Adaptor, typename Derived, CompilerConfig Config>
 typename CompilerBase<Adaptor, Derived, Config>::BlockIndex
     CompilerBase<Adaptor, Derived, Config>::next_block() const {
+  // Code in the cold area is not followed by the next block.
+  if (this->text_writer.in_cold_area()) {
+    return Analyzer<Adaptor>::INVALID_BLOCK_IDX;
+  }
   return static_cast<BlockIndex>(static_cast<u32>(cur_block_idx) + 1);
 }
 

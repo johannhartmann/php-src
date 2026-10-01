@@ -65,3 +65,23 @@ IR-visible guard, cold and join blocks:
 - A value with remaining references is spilled before a branch even when its
   block liveness ends, and `free_reg` accepts discarding a modified register
   only once no reference remains.
+
+## Cold code area (`include/tpde/FunctionWriter.hpp`, `src/FunctionWriter.cpp`, `include/tpde/x64/CompilerX64.hpp`, `include/tpde/CompilerBase.hpp`)
+
+Code that rarely runs can be written out of the hot instruction stream while
+it is compiled in place, so the allocator state stays that of its position:
+
+- `FunctionWriterBase::begin_cold_area()`/`end_cold_area()` redirect writing
+  to a per-function side buffer whose offsets start at
+  `FunctionWriterBase::ColdAreaBase`; `more_space` grows that buffer and
+  relocations recorded meanwhile are deferred (`reloc()`, and
+  `CompilerBase::reloc_text`, which now writes through it).
+- `append_cold_area()` moves the buffer behind the hot code of the function
+  and translates label offsets, label fixups, jump tables and the deferred
+  relocations; `translate_cold_offset()` maps other recorded offsets.
+  `CompilerX64::finish_func` appends the area first and translates its
+  return-patch offsets.
+- `CompilerX64::generate_raw_jump` takes a fixup for a label in the other
+  area (`label_needs_fixup()`), and in the cold area `next_block()` is invalid
+  and `spill_before_branch` sees no fall-through successor, so no branch
+  falls through out of it.

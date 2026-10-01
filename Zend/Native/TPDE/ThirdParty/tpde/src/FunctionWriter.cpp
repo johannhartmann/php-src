@@ -3,6 +3,9 @@
 
 #include "tpde/FunctionWriter.hpp"
 
+#include <algorithm>
+#include <cstring>
+
 #include "tpde/Assembler.hpp"
 #include "tpde/DWARF.hpp"
 #include "tpde/util/VectorWriter.hpp"
@@ -52,6 +55,68 @@ void FunctionWriterBase::begin_func() {
   except_type_info_table.clear();
   except_spec_table.clear();
   except_action_table.resize(2); // cleanup entry
+
+  assert(!cold_active);
+  cold_used = 0;
+  cold_final_base = 0;
+  cold_relocs.clear();
+}
+
+void FunctionWriterBase::begin_cold_area() {
+  assert(!cold_active);
+  hot_data_begin = data_begin;
+  hot_data_cur = data_cur;
+  hot_data_reserve_end = data_reserve_end;
+  if (cold_data.size() < cold_used + 0x1000) {
+    cold_data.resize_uninitialized(cold_used + 0x10000);
+  }
+  // Offsets inside the area start at ColdAreaBase.
+  data_begin = cold_data.data() - ColdAreaBase;
+  data_cur = cold_data.data() + cold_used;
+  data_reserve_end = cold_data.data() + cold_data.size();
+  cold_active = true;
+}
+
+void FunctionWriterBase::end_cold_area() {
+  assert(cold_active);
+  cold_used = static_cast<u32>(data_cur - cold_data.data());
+  data_begin = hot_data_begin;
+  data_cur = hot_data_cur;
+  data_reserve_end = hot_data_reserve_end;
+  cold_active = false;
+}
+
+void FunctionWriterBase::append_cold_area() {
+  assert(!cold_active);
+  if (cold_used == 0) {
+    cold_final_base = 0;
+    return;
+  }
+  if (size_t(data_reserve_end - data_cur) < cold_used) {
+    more_space(cold_used);
+  }
+  const u32 base = static_cast<u32>(offset());
+  std::memcpy(data_cur, cold_data.data(), cold_used);
+  data_cur += cold_used;
+  cold_final_base = base;
+  for (u32 &off : label_offsets) {
+    off = translate_cold_offset(off);
+  }
+  for (LabelFixup &fixup : label_fixups) {
+    fixup.off = translate_cold_offset(fixup.off);
+  }
+  for (JumpTable *jt : jump_tables) {
+    jt->off = translate_cold_offset(jt->off);
+  }
+  for (const ColdReloc &cold : cold_relocs) {
+    assembler->reloc_sec(get_sec_ref(), cold.sym, cold.type,
+                         translate_cold_offset(static_cast<u32>(cold.off)),
+                         cold.addend);
+  }
+  cold_relocs.clear();
+  label_place_off = ~0u;
+  labels_at_place_off.clear();
+  cold_used = 0;
 }
 
 void FunctionWriterBase::remove_prologue_bytes(u32 start, u32 size) {
@@ -461,6 +526,15 @@ u32 FunctionWriterBase::except_type_idx_for_sym(const SymRef sym) {
 }
 
 void FunctionWriterBase::more_space(size_t size) {
+  if (cold_active) {
+    const size_t used = data_cur - cold_data.data();
+    const size_t new_size = std::max(cold_data.size() * 2, used + size + 0x1000);
+    cold_data.resize_uninitialized(new_size);
+    data_begin = cold_data.data() - ColdAreaBase;
+    data_cur = cold_data.data() + used;
+    data_reserve_end = cold_data.data() + new_size;
+    return;
+  }
   // NB: data_reserved_end can point before section->data.end().
   size_t cur_size = allocated_size();
   size_t new_size;

@@ -686,6 +686,11 @@ template <IRAdaptor Adaptor,
           template <typename, typename, typename> typename BaseTy,
           typename Config>
 void CompilerX64<Adaptor, Derived, BaseTy, Config>::finish_func(u32 func_idx) {
+  // Cold code goes behind the hot code, before the returns are patched.
+  this->text_writer.append_cold_area();
+  for (u32 &ret_off : func_ret_offs) {
+    ret_off = this->text_writer.translate_cold_offset(ret_off);
+  }
   const CCInfo &ccinfo = derived()->cur_cc_assigner()->get_ccinfo();
   auto csr = ccinfo.callee_saved_regs;
   u64 saved_regs = this->register_file.clobbered & csr;
@@ -1451,7 +1456,7 @@ template <IRAdaptor Adaptor,
 void CompilerX64<Adaptor, Derived, BaseTy, Config>::generate_raw_jump(
     Jump jmp, Label target_label) {
   this->text_writer.ensure_space(6); // For safe ptr arithmetic on code buffer.
-  bool pending = this->text_writer.label_is_pending(target_label);
+  bool pending = this->text_writer.label_needs_fixup(target_label);
   void *target = this->text_writer.cur_ptr();
   if (!pending) {
     target = this->text_writer.begin_ptr() +
