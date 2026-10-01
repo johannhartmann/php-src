@@ -4345,6 +4345,9 @@ bool ZendCompilerX64::compile_inst_impl(
 					text_writer.end_cold_area();
 				}
 				}
+				/* A published site takes the universal protocol once per
+				 * request at most: out of the hot code. */
+				text_writer.begin_cold_area();
 				label_place(fast_miss);
 				ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 0);
 			}
@@ -4399,6 +4402,8 @@ bool ZendCompilerX64::compile_inst_impl(
 			resolution_status.reset(this);
 			reconcile_target_branch_state(resolution_spilled);
 			if (fast_site) {
+				generate_raw_jump(Jump::jmp, fast_join);
+				text_writer.end_cold_area();
 				label_place(fast_join);
 				reconcile_target_branch_state(fast_spilled);
 			}
@@ -4881,19 +4886,20 @@ bool ZendCompilerX64::compile_inst_impl(
 			}
 			generate_raw_jump(Jump::je, sent);
 			generate_raw_jump(Jump::jmp, send_exception);
+			/* The universal Send and the exception path run at most once
+			 * per site and request: out of the hot code. */
+			text_writer.begin_cold_area();
 			label_place(universal);
 			reconcile_target_branch_state(fast_spilled);
 			if (!compile_universal_send()) {
+				text_writer.end_cold_area();
 				return false;
 			}
+			generate_raw_jump(Jump::jmp, sent);
+			label_place(send_exception);
+			emit_fast_failure();
+			text_writer.end_cold_area();
 			label_place(sent);
-			{
-				auto send_done = text_writer.label_create();
-				generate_raw_jump(Jump::jmp, send_done);
-				label_place(send_exception);
-				emit_fast_failure();
-				label_place(send_done);
-			}
 			return true;
 		}
 		if (node.kind == Adaptor::InstKind::UserCallSend && fast_site) {
@@ -5187,20 +5193,23 @@ bool ZendCompilerX64::compile_inst_impl(
 					type_reg);
 				generate_raw_jump(Jump::jmp, sent);
 			}
+			/* The universal Send and the exception path: out of the hot
+			 * code. */
+			text_writer.begin_cold_area();
 			label_place(universal);
 			reconcile_target_branch_state(fast_spilled);
 			if (!compile_universal_send()) {
+				text_writer.end_cold_area();
 				return false;
 			}
+			generate_raw_jump(Jump::jmp, sent);
+			text_writer.end_cold_area();
 			label_place(sent);
 			reconcile_target_branch_state(fast_spilled);
-			{
-				auto send_done = text_writer.label_create();
-				generate_raw_jump(Jump::jmp, send_done);
-				label_place(send_exception);
-				emit_fast_failure();
-				label_place(send_done);
-			}
+			text_writer.begin_cold_area();
+			label_place(send_exception);
+			emit_fast_failure();
+			text_writer.end_cold_area();
 			return true;
 		}
 		if (node.kind == Adaptor::InstKind::UserCallSend) {
@@ -5543,6 +5552,9 @@ bool ZendCompilerX64::compile_inst_impl(
 				}
 				(void) exception;
 			}
+			/* The universal Do and the exception path: out of the hot
+			 * code. */
+			text_writer.begin_cold_area();
 			label_place(universal_do);
 			reconcile_target_branch_state(fast_spilled);
 		}
@@ -5573,6 +5585,9 @@ bool ZendCompilerX64::compile_inst_impl(
 		/* The pending exception of either protocol, once per site. */
 		label_place(do_exception);
 		emit_fast_failure();
+		if (text_writer.in_cold_area()) {
+			text_writer.end_cold_area();
+		}
 
 		label_place(do_succeeded);
 		if (node.has_result) {
