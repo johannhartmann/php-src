@@ -809,6 +809,9 @@ zend_native_direct_call_result zend_native_call_dynamic_leave(
 /* A $this method site whose target does not depend on the receiver class:
  * fast_key only records the class it was published for. */
 #define ZEND_NATIVE_CALL_FAST_ANY_THIS UINT32_C(64)
+/* A new site of a class without a constructor: the Init only creates the
+ * object (fast_function is NULL) and the Do calls nothing. */
+#define ZEND_NATIVE_CALL_FAST_NO_CALL UINT32_C(128)
 
 const uint64_t *zend_native_call_cache_epoch_address(void);
 uint32_t zend_native_call_fast_prepare(zend_execute_data *callee);
