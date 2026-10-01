@@ -2954,11 +2954,12 @@ static bool machine_short_circuit_branch_is_register_only(
 }
 
 /*
- * A guarded numeric comparison feeding only the JMPZ/JMPNZ that follows it
- * would box a boolean in its hot path for the branch to test again. Let the
- * branch evaluate it instead, like the VM's smart branches: operands that
- * are both numbers compare and jump inline; the helper computes any other
- * comparison into the temporary the branch then tests.
+ * A guarded numeric comparison or CV TYPE_CHECK feeding only the
+ * JMPZ/JMPNZ that follows it would box a boolean in its hot path for the
+ * branch to test again. Let the branch evaluate it instead, like the VM's
+ * smart branches: operands that are both numbers compare and a type tests
+ * its mask inline; the helper computes anything else into the temporary
+ * the branch then tests.
  */
 static void freeze_fused_compare_branches(zend_tpde_plan *plan)
 {
@@ -2971,12 +2972,21 @@ static void freeze_fused_compare_branches(zend_tpde_plan *plan)
 		zend_tpde_instruction &branch = plan->instructions[index + 1];
 		const zend_mir_executable_value_ref &operation =
 			compare.value_operation;
+		/* The branch reads a fused TYPE_CHECK's CV from its slot: the check
+		 * must have no machine operand, as its inline form requires. */
+		zend_tpde_fused_operand checked{};
+		const bool type_check =
+			zend_tpde_fused_type_check_at(compare, &checked)
+			&& compare.operand_count == 0;
 		if (!compare.has_value_operation || !branch.has_value_operation
-				|| operation.opcode != ZEND_MIR_OPCODE_VALUE_BINARY_OP
-				|| (operation.source_opcode != ZEND_IS_SMALLER
-					&& operation.source_opcode != ZEND_IS_SMALLER_OR_EQUAL
-					&& operation.source_opcode != ZEND_IS_EQUAL
-					&& operation.source_opcode != ZEND_IS_NOT_EQUAL)
+				|| (!type_check
+					&& (operation.opcode != ZEND_MIR_OPCODE_VALUE_BINARY_OP
+						|| (operation.source_opcode != ZEND_IS_SMALLER
+							&& operation.source_opcode
+								!= ZEND_IS_SMALLER_OR_EQUAL
+							&& operation.source_opcode != ZEND_IS_EQUAL
+							&& operation.source_opcode
+								!= ZEND_IS_NOT_EQUAL)))
 				|| (compare.machine_control_flow_flags
 					& ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD) == 0
 				|| (compare.machine_control_flow_flags
@@ -2998,7 +3008,7 @@ static void freeze_fused_compare_branches(zend_tpde_plan *plan)
 		zend_tpde_fused_operand right{};
 		zend_tpde_value_condition condition{};
 		/* A branch with its own guard and cold blocks keeps its form. */
-		if (!zend_tpde_fused_compare_at(compare, &left, &right)
+		if ((!type_check && !zend_tpde_fused_compare_at(compare, &left, &right))
 				|| zend_tpde_value_condition_at(branch, &condition)) {
 			continue;
 		}
