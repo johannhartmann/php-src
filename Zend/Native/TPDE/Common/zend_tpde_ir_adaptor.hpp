@@ -11640,6 +11640,18 @@ public:
 		return std::span<const IRInstRef>{instructions_}.subspan(
 			slice.offset, slice.count);
 	}
+	/* A guard's cold block: TPDE writes it to the cold area of the
+	 * function, behind the hot code. */
+	bool block_is_cold(IRBlockRef block) const {
+		for (IRInstRef inst : block_insts(block)) {
+			const InstKind kind = node(inst).kind;
+			if (kind == InstKind::GuardedCold
+					|| kind == InstKind::BoxedCondCold) {
+				return true;
+			}
+		}
+		return false;
+	}
 	std::span<const IRValueRef> block_phis(IRBlockRef block) const {
 		const Slice &slice = phi_slices_[static_cast<uint32_t>(block)];
 		return std::span<const IRValueRef>{phis_}.subspan(
@@ -12032,6 +12044,9 @@ public:
 	}
 	std::span<const IRInstRef> block_insts(IRBlockRef block) const {
 		return active_->block_insts(block);
+	}
+	bool block_is_cold(IRBlockRef block) const {
+		return active_->block_is_cold(block);
 	}
 	std::span<const IRValueRef> block_phis(IRBlockRef block) const {
 		return active_->block_phis(block);
