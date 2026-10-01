@@ -8875,11 +8875,23 @@ bool ZendCompilerX64::compile_inst_impl(
 				|| unlocked_gp_registers() < 9) {
 			return 0;
 		}
-		for (IRValueRef operand : node.operands) {
-			if (operand != IRValueRef{Adaptor::FRAME_VALUE}
-					&& operand != IRValueRef{
-						Adaptor::EXECUTION_CONTEXT_ARGUMENT}) {
-				return 0;
+		/* A temporary may be held boxed in registers: it is stored into its
+		 * slot first, and a register copy of the literal is not needed. */
+		const bool register_temporary = temporary
+			&& node.operands.size() == 3
+			&& node.materialization_count == 0
+			&& node.operands[2] == IRValueRef{Adaptor::FRAME_VALUE}
+			&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
+			&& adaptor->machine_kind(node.operands[0])
+				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+			&& val_parts(node.operands[0]).count() == 2;
+		if (!register_temporary) {
+			for (IRValueRef operand : node.operands) {
+				if (operand != IRValueRef{Adaptor::FRAME_VALUE}
+						&& operand != IRValueRef{
+							Adaptor::EXECUTION_CONTEXT_ARGUMENT}) {
+					return 0;
+				}
 			}
 		}
 		const auto successors =
@@ -8910,6 +8922,26 @@ bool ZendCompilerX64::compile_inst_impl(
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 		auto frame_scratch = std::move(frame).into_scratch();
 		auto frame_reg = frame_scratch.cur_reg();
+		if (register_temporary) {
+			auto boxed = val_ref(node.operands[0]);
+			auto payload = boxed.part(0);
+			auto type_info = boxed.part(1);
+			ASM(MOV64mr,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(value_offset)),
+				payload.load_to_reg());
+			ASM(MOV32mr,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(value_offset
+						+ offsetof(zval, u1.type_info))),
+				type_info.load_to_reg());
+			payload.reset();
+			type_info.reset();
+			if (node.operands[1] != IRValueRef{Adaptor::FRAME_VALUE}) {
+				auto literal_copy = val_ref(node.operands[1]);
+				(void) literal_copy;
+			}
+		}
 		ScratchReg literals{this};
 		auto literals_reg = literals.alloc_gp();
 		ASM(MOV64rm, literals_reg,
