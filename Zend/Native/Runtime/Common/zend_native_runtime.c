@@ -1028,6 +1028,9 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_INTERNAL_CALL_DO_PLAIN,
 		ZEND_NATIVE_EFFECT_CALL,
 		(const void *) zend_native_internal_call_do_plain},
+	{ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL_PLAIN,
+		ZEND_NATIVE_EFFECT_CALL,
+		(const void *) zend_native_internal_call_direct_plain},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {

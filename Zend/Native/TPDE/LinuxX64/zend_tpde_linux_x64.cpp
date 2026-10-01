@@ -20084,8 +20084,11 @@ bool ZendCompilerX64::compile_inst_impl(
 			builder.add_arg(image_symbol_value(
 				ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
 				call.id), tpde::CCAssignment{});
-			builder.call(runtime_symbol(
-				ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL));
+			builder.call(runtime_symbol(call.internal_call_cell != nullptr
+					&& zend_native_internal_call_descriptor_plain(
+						call.internal_call_cell, call.direct_internal_call)
+				? ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL_PLAIN
+				: ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL));
 			ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 8};
 			ValuePart payload{tpde::x64::PlatformConfig::GP_BANK, 8};
 			builder.add_ret(status, tpde::CCAssignment{});

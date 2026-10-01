@@ -9437,6 +9437,8 @@ bool initialize_plan(
 					require_runtime_helper(
 						plan, ZEND_NATIVE_HELPER_INTERNAL_CALL_BEGIN);
 					require_runtime_helper(
+						plan, ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL_PLAIN);
+					require_runtime_helper(
 						plan, ZEND_NATIVE_HELPER_INTERNAL_CALL_PUSH);
 					require_runtime_helper(
 						plan, ZEND_NATIVE_HELPER_INTERNAL_CALL_DO_PLAIN);

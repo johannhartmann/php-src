@@ -247,6 +247,19 @@ typedef struct _zend_native_direct_internal_call_descriptor {
 #define ZEND_NATIVE_DIRECT_INTERNAL_CALL_REQUIRE_SCALAR_RESULT UINT32_C(1)
 
 /*
+ * The static part of a plain direct internal call (see
+ * zend_native_internal_call_direct()): a bound function without receiver or
+ * scope that is neither deprecated, nodiscard nor a trampoline, positional
+ * arguments sent by value from literals, CVs and temporaries, or by
+ * SEND_REF from CVs and VARs, a source Do and an unused or temporary result.
+ * The compiler decides it once per site; the operand indices are those of
+ * the op array the descriptor was built from.
+ */
+bool zend_native_internal_call_descriptor_plain(
+	const zend_native_internal_call_cell *cell,
+	const zend_native_direct_internal_call_descriptor *descriptor);
+
+/*
  * The process-local direct-internal integer setter also transports one
  * register-authoritative boxed temporary on backends which can keep both zval
  * words live through argument setup.  The marker occupies a bit outside both
@@ -984,6 +997,10 @@ zend_native_status zend_native_internal_call_do_plain(
 	const zend_native_internal_call_cell *cell,
 	const zend_native_direct_internal_call_descriptor *descriptor);
 zend_native_direct_call_result zend_native_internal_call_direct(
+	zend_execute_data *caller,
+	const zend_native_internal_call_cell *cell,
+	const zend_native_direct_internal_call_descriptor *descriptor);
+zend_native_direct_call_result zend_native_internal_call_direct_plain(
 	zend_execute_data *caller,
 	const zend_native_internal_call_cell *cell,
 	const zend_native_direct_internal_call_descriptor *descriptor);
