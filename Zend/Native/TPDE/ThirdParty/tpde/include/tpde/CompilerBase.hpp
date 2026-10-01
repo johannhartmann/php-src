@@ -2292,11 +2292,22 @@ void CompilerBase<Adaptor, Derived, Config>::move_to_phi_nodes_impl(
 template <IRAdaptor Adaptor, typename Derived, CompilerConfig Config>
 typename CompilerBase<Adaptor, Derived, Config>::BlockIndex
     CompilerBase<Adaptor, Derived, Config>::next_block() const {
-  // Code in the cold area is not followed by the next block.
-  if (this->text_writer.in_cold_area()) {
-    return Analyzer<Adaptor>::INVALID_BLOCK_IDX;
+  // A block in the other area (see FunctionWriterBase::begin_cold_area()) is
+  // compiled next but not placed next: report no next block.
+  const u32 next = static_cast<u32>(cur_block_idx) + 1;
+  const u32 count = static_cast<u32>(analyzer.block_layout.size());
+  if (next >= count) {
+    return static_cast<BlockIndex>(next);
   }
-  return static_cast<BlockIndex>(static_cast<u32>(cur_block_idx) + 1);
+  bool next_cold = false;
+  if constexpr (requires(IRBlockRef b) { this->adaptor->block_is_cold(b); }) {
+    next_cold = this->adaptor->block_is_cold(analyzer.block_ref(
+        static_cast<BlockIndex>(next)));
+  }
+  if (next_cold != this->text_writer.in_cold_area()) {
+    return static_cast<BlockIndex>(count);
+  }
+  return static_cast<BlockIndex>(next);
 }
 
 template <IRAdaptor Adaptor, typename Derived, CompilerConfig Config>
