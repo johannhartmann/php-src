@@ -36,13 +36,31 @@ const FunctionWriterX64::TargetCIEInfo FunctionWriterX64::CIEInfo{
 
 void FunctionWriterX64::handle_fixups() {
   for (const LabelFixup &fixup : label_fixups) {
-    u32 label_off = label_offset(fixup.label);
     u32 fixup_off = fixup.off - label_skew;
     u8 *dst_ptr = begin_ptr() + fixup_off;
+    // A jmp rel32 (E9) or jcc rel32 (0F 8x) precedes its displacement; no
+    // RIP-relative operand has such a ModRM byte.
+    const bool is_jmp = fixup_off >= 1 && dst_ptr[-1] == 0xe9;
+    const bool is_jcc = fixup_off >= 2 && dst_ptr[-2] == 0x0f
+                        && (dst_ptr[-1] & 0xf0) == 0x80;
+    u32 label_off = label_offset(is_jmp || is_jcc
+                                     ? label_resolve_jump(fixup.label)
+                                     : fixup.label);
     switch (fixup.kind) {
     case LabelFixupKind::X64_JMP_OR_MEM_DISP: {
       // fix the jump immediate
       u32 value = (label_off - fixup_off) - 4;
+      if (value == 0 && is_jmp) {
+        // A jump to the next instruction becomes a 5-byte NOP.
+        static constexpr u8 nop5[5] = {0x0f, 0x1f, 0x44, 0x00, 0x00};
+        std::memcpy(dst_ptr - 1, nop5, sizeof(nop5));
+        break;
+      }
+      if (value == 0 && is_jcc) {
+        static constexpr u8 nop6[6] = {0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00};
+        std::memcpy(dst_ptr - 2, nop6, sizeof(nop6));
+        break;
+      }
       std::memcpy(dst_ptr, &value, sizeof(u32));
       break;
     }

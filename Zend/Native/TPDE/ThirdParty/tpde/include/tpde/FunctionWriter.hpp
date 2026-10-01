@@ -55,6 +55,12 @@ protected:
   u32 label_skew; ///< Offset to subtract from all label offsets.
   /// Label offsets into section, ~0u indicates unplaced label.
   util::SmallVector<u32> label_offsets;
+  /// The label whose position holds an unconditional jump to it, ~0u if
+  /// none: jump fixups to a label follow these aliases (jump threading).
+  util::SmallVector<u32> label_jump_alias;
+  /// The offset the labels in labels_at_place_off were placed at.
+  u32 label_place_off = ~0u;
+  util::SmallVector<u32, 4> labels_at_place_off;
 
 protected:
   struct LabelFixup {
@@ -197,6 +203,7 @@ public:
   Label label_create() {
     const Label label = Label(label_offsets.size());
     label_offsets.push_back(~0u);
+    label_jump_alias.push_back(~0u);
     return label;
   }
 
@@ -214,6 +221,37 @@ public:
     assert(label_skew == 0 && "label_place called after prologue truncation");
     assert(label_is_pending(label));
     label_offsets[u32(label)] = off;
+    if (off != label_place_off) {
+      labels_at_place_off.clear();
+      label_place_off = off;
+    }
+    labels_at_place_off.push_back(u32(label));
+  }
+
+  /// An unconditional jump to target is emitted at the current offset:
+  /// labels placed right here alias target for jump fixups.
+  void label_alias_jump(Label target, u32 off) {
+    if (off != label_place_off) {
+      return;
+    }
+    for (const u32 label : labels_at_place_off) {
+      if (label != u32(target)) {
+        label_jump_alias[label] = u32(target);
+      }
+    }
+  }
+
+  /// The label a jump fixup to label resolves to through jump aliases.
+  Label label_resolve_jump(Label label) const {
+    u32 cur = u32(label);
+    for (u32 hops = 0; hops < 8 && label_jump_alias[cur] != ~0u; ++hops) {
+      const u32 next = label_jump_alias[cur];
+      if (label_offsets[next] == ~0u || next == u32(label)) {
+        break;
+      }
+      cur = next;
+    }
+    return Label(cur);
   }
 
   /// Reference label at given offset inside the code section.
