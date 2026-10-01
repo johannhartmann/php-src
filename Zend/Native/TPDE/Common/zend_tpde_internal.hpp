@@ -1231,8 +1231,16 @@ static inline bool zend_tpde_dim_direct_at(
 		/* The container kind rides in the value kind field. */
 		value_kind = container_kind;
 	}
+	bool result_cv = false;
 	if (read || test) {
-		if (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+		/* A read may write a CV the optimizer named as its result, which
+		 * holds no counted value; ZEND_FETCH_DIM_R overwrites it. */
+		result_cv = read
+			&& operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+			&& operation.result_storage_id != operation.op1_storage_id
+			&& operation.result_storage_id != operation.op2_storage_id;
+		if ((operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+					&& !result_cv)
 				|| !zend_mir_id_is_valid(operation.result_storage_id)) {
 			return false;
 		}
@@ -1248,6 +1256,7 @@ static inline bool zend_tpde_dim_direct_at(
 		return false;
 	}
 	out->descriptor = key_kind | (value_kind << 2)
+		| (uint64_t{result_cv} << ZEND_NATIVE_DIM_DIRECT_RESULT_CV_SHIFT)
 		| (indirect_container << ZEND_NATIVE_DIM_DIRECT_INDIRECT_CONTAINER_SHIFT)
 		| (uint64_t{operation.extended_value} << 8)
 		| (uint64_t{operation.source_position_id} << 32);
@@ -1314,7 +1323,8 @@ static inline bool zend_tpde_concat_assign_direct_at(
 
 /*
  * ZEND_CONCAT/ZEND_FAST_CONCAT of literal, CV or temporary operands into a
- * temporary calls zend_native_value_concat_direct() with precomputed kinds
+ * temporary, or a CV the optimizer named (no counted old value), calls
+ * zend_native_value_concat_direct() with precomputed kinds
  * (ZEND_NATIVE_DIM_DIRECT_*) and offsets.
  */
 struct zend_tpde_concat_direct {
@@ -1359,7 +1369,8 @@ static inline bool zend_tpde_concat_direct_at(
 				&& operation.source_opcode != ZEND_FAST_CONCAT)
 			|| (operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
 				&& operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
-			|| operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+			|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+				&& operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_CV)
 			|| !zend_mir_id_is_valid(operation.result_storage_id)
 			|| operation.result_storage_id == operation.op1_storage_id
 			|| operation.result_storage_id == operation.op2_storage_id
@@ -1376,6 +1387,8 @@ static inline bool zend_tpde_concat_direct_at(
 		return false;
 	}
 	out->descriptor = left_kind | (right_kind << 2)
+		| (uint64_t{operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV}
+			<< ZEND_NATIVE_DIM_DIRECT_RESULT_CV_SHIFT)
 		| (uint64_t{operation.source_opcode} << 8)
 		| (uint64_t{operation.source_position_id} << 32);
 	out->slots = left_offset | (right_offset << 32);

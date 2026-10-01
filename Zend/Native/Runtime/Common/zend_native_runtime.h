@@ -263,6 +263,8 @@ typedef enum _zend_native_runtime_helper_id {
  */
 /* _assign_dim_direct(): the container is a VAR holding an INDIRECT. */
 #define ZEND_NATIVE_DIM_DIRECT_INDIRECT_CONTAINER_SHIFT 4
+/* A read's result is a CV the optimizer named (no counted old value). */
+#define ZEND_NATIVE_DIM_DIRECT_RESULT_CV_SHIFT 5
 #define ZEND_NATIVE_DIM_DIRECT_UNUSED 0
 #define ZEND_NATIVE_DIM_DIRECT_CONST 1
 #define ZEND_NATIVE_DIM_DIRECT_CV 2

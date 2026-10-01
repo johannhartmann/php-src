@@ -4936,7 +4936,9 @@ zend_native_status zend_native_value_fetch_dim_r_direct(
 			container_kind, (uint32_t) slots),
 		zend_native_value_direct_encoding(execute_data, key_kind, key_offset),
 		zend_native_value_direct_encoding(execute_data,
-			ZEND_NATIVE_DIM_DIRECT_TMP, result_offset),
+			((descriptor >> ZEND_NATIVE_DIM_DIRECT_RESULT_CV_SHIFT) & 1) != 0
+				? ZEND_NATIVE_DIM_DIRECT_CV : ZEND_NATIVE_DIM_DIRECT_TMP,
+			result_offset),
 		(uint32_t) ((descriptor >> 8) & 0xffff), ZEND_FETCH_DIM_R,
 		(uint32_t) (descriptor >> 32), ZEND_FETCH_DIM_R, ZEND_NATIVE_DIM_R);
 }
@@ -5952,7 +5954,9 @@ zend_native_status zend_native_value_concat_direct(
 		zend_native_value_direct_encoding(
 			execute_data, right_kind, (uint32_t) (slots >> 32)),
 		zend_native_value_direct_encoding(execute_data,
-			ZEND_NATIVE_DIM_DIRECT_TMP, (uint32_t) result_offset),
+			((descriptor >> ZEND_NATIVE_DIM_DIRECT_RESULT_CV_SHIFT) & 1) != 0
+				? ZEND_NATIVE_DIM_DIRECT_CV : ZEND_NATIVE_DIM_DIRECT_TMP,
+			(uint32_t) result_offset),
 		0, source_opcode, source_position_id, (uint8_t) source_opcode);
 }
 
