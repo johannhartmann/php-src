@@ -1459,6 +1459,9 @@ void CompilerX64<Adaptor, Derived, BaseTy, Config>::generate_raw_jump(
   }
 
   if (jmp == Jump::jmp) {
+    // Labels placed right here only forward to target_label.
+    this->text_writer.label_alias_jump(target_label,
+                                       this->text_writer.offset());
     ASMNCF(JMP, pending ? FE_JMPL : 0, target);
   } else {
     ASMNCF(Jcc, (pending ? FE_JMPL : 0) | jump_to_cond(jmp), target);

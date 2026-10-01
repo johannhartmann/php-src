@@ -27,6 +27,17 @@ keeps no compatibility with older TPDE revisions.
   unassigned non-constant part used as call result and snippet output
   scratch.
 
+## Jump threading (`include/tpde/FunctionWriter.hpp`, `src/FunctionWriter.cpp`, `src/x64/FunctionWriterX64.cpp`, `include/tpde/x64/CompilerX64.hpp`)
+
+- `FunctionWriter` records the labels placed at the current offset; when
+  `CompilerX64::generate_raw_jump` emits an unconditional jump there, those
+  labels alias its target (`label_alias_jump`). `FunctionWriterX64::
+  handle_fixups` resolves the fixups of jmp rel32 and jcc rel32 instructions
+  through these aliases (`label_resolve_jump`, at most eight hops), so a jump
+  to a block or label that only forwards goes straight to the final target,
+  and turns a jump to the immediately following instruction into a NOP.
+  `label_offset()` and RIP-relative operands are unchanged.
+
 ## Allocator and control flow (`include/tpde/CompilerBase.hpp`)
 
 General corrections:

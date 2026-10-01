@@ -38,6 +38,9 @@ void FunctionWriterBase::begin_func() {
   reloc_begin = section->reloc_count();
 
   label_offsets.clear();
+  label_jump_alias.clear();
+  label_place_off = ~0u;
+  labels_at_place_off.clear();
   label_skew = 0;
   label_fixups.clear();
 
