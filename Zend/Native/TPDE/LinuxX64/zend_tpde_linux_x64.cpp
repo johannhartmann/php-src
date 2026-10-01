@@ -1048,13 +1048,15 @@ public:
 		return value;
 	}
 
-	ValuePart image_symbol_value(
+	/* The data slot holding an image symbol's address, created on first
+	 * use; invalid when the image has no such symbol. */
+	tpde::SymRef image_symbol_slot(
 		zend_native_image_symbol_kind kind, uint32_t id) {
 		const zend_native_image_symbol *symbol =
 			zend_tpde_image_symbol_find(
 				image_, kind, id, adaptor->current_function_index());
 		if (symbol == nullptr) {
-			return ValuePart{tpde::x64::PlatformConfig::GP_BANK, 8};
+			return {};
 		}
 		const uint32_t index =
 			static_cast<uint32_t>(symbol - image_->symbols);
@@ -1072,6 +1074,14 @@ public:
 			slot = assembler.sym_def_data(section, "", zero, alignof(uintptr_t),
 				tpde::Assembler::SymBinding::LOCAL, &offset);
 			assembler.reloc_abs(section, reference, offset, 0);
+		}
+		return slot;
+	}
+	ValuePart image_symbol_value(
+		zend_native_image_symbol_kind kind, uint32_t id) {
+		const tpde::SymRef slot = image_symbol_slot(kind, id);
+		if (!slot.valid()) {
+			return ValuePart{tpde::x64::PlatformConfig::GP_BANK, 8};
 		}
 		ValuePart target{tpde::x64::PlatformConfig::GP_BANK, 8};
 		const auto target_reg = target.alloc_reg(this);
@@ -20049,7 +20059,193 @@ bool ZendCompilerX64::compile_inst_impl(
 									== ZEND_MIR_SOURCE_OPERAND_SSA)
 							&& internal_descriptor->result_operand.slot_kind
 								== ZEND_MIR_SOURCE_SLOT_TMP));
-				{
+				const uint64_t push_frame_size = plain_internal
+					? (uint64_t{ZEND_CALL_FRAME_SLOT}
+						+ internal_descriptor->initial_argument_count
+						+ bound_function->common.T) * sizeof(zval)
+					: 0;
+				const uint64_t push_opline_offset = plain_internal
+					? uint64_t{internal_descriptor->init_source_position}
+						* sizeof(zend_op)
+					: 0;
+				/* The context, which the inline push reads, must be held
+				 * in a register here. */
+				const bool context_held = val_assignment(adaptor->val_local_idx(
+						IRValueRef{Adaptor::EXECUTION_CONTEXT_ARGUMENT}))
+					!= nullptr;
+				if (plain_internal && context_held
+						&& image_symbol_slot(
+							ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
+							call.id).valid()
+						&& push_frame_size <= INT32_MAX
+						&& push_opline_offset <= INT32_MAX
+						&& internal_descriptor->initial_argument_count <= 8) {
+					/*
+					 * ZEND_INIT_FCALL inline: push the frame of the bound
+					 * function, as zend_native_internal_call_push() does. A
+					 * full VM stack page takes that helper out of line, with
+					 * every caller-saved register in use preserved.
+					 */
+					{
+						auto frame_use = val_ref(node.operands[frame_base]);
+						(void) frame_use;
+					}
+					auto cell_value = image_symbol_value(
+						ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL,
+						call.call_site->target_id);
+					auto cell_scratch = std::move(cell_value).into_scratch(this);
+					const AsmReg cell_reg = cell_scratch.cur_reg();
+					const tpde::SymRef descriptor_slot = image_symbol_slot(
+						ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
+						call.id);
+					ScratchReg top_pointer{this};
+					ScratchReg top{this};
+					ScratchReg work{this};
+					const AsmReg top_pointer_reg = top_pointer.alloc_gp();
+					const AsmReg top_reg = top.alloc_gp();
+					const AsmReg work_reg = work.alloc_gp();
+					const AsmReg frame_reg = canonical_frame_register();
+					const AsmReg push_context_reg = canonical_value_register(
+						IRValueRef{Adaptor::EXECUTION_CONTEXT_ARGUMENT});
+					auto overflow = text_writer.label_create();
+					auto pushed = text_writer.label_create();
+					const uint64_t live_registers = register_file.used;
+					ASM(MOV64rm, top_pointer_reg,
+						FE_MEM(push_context_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_native_execution_context, vm_stack_top))));
+					ASM(MOV64rm, top_reg, FE_MEM(top_pointer_reg, 0, FE_NOREG, 0));
+					ASM(MOV64rm, work_reg,
+						FE_MEM(push_context_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_native_execution_context, vm_stack_end))));
+					ASM(MOV64rm, work_reg, FE_MEM(work_reg, 0, FE_NOREG, 0));
+					ASM(SUB64rr, work_reg, top_reg);
+					ASM(CMP64ri, work_reg, static_cast<int32_t>(push_frame_size));
+					generate_raw_jump(Jump::jb, overflow);
+					ASM(LEA64rm, work_reg, FE_MEM(top_reg, 0, FE_NOREG,
+						static_cast<int32_t>(push_frame_size)));
+					ASM(MOV64mr, FE_MEM(top_pointer_reg, 0, FE_NOREG, 0), work_reg);
+					ASM(MOV64rm, work_reg, FE_MEM(cell_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(
+							zend_native_internal_call_cell, function))));
+					ASM(MOV64mr, FE_MEM(top_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_execute_data, func))),
+						work_reg);
+					ASM(MOV64mi, FE_MEM(top_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_execute_data, This))),
+						0);
+					ASM(MOV32mi, FE_MEM(top_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_execute_data, This)
+							+ offsetof(zval, u1.type_info))),
+						ZEND_CALL_NESTED_FUNCTION);
+					ASM(MOV32mi, FE_MEM(top_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_execute_data, This)
+							+ offsetof(zval, u2.num_args))),
+						static_cast<int32_t>(
+							internal_descriptor->initial_argument_count));
+					for (uint32_t index = 0;
+							index < internal_descriptor->initial_argument_count;
+							++index) {
+						ASM(MOV32mi, FE_MEM(top_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval)
+								+ offsetof(zval, u1.type_info))),
+							IS_UNDEF);
+					}
+					ASM(MOV64rm, work_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_execute_data, call))));
+					ASM(MOV64mr, FE_MEM(top_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(
+							zend_execute_data, prev_execute_data))),
+						work_reg);
+					ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_execute_data, call))),
+						top_reg);
+					ASM(MOV64rm, work_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_execute_data, func))));
+					ASM(MOV64rm, work_reg, FE_MEM(work_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_op_array, opcodes))));
+					if (push_opline_offset != 0) {
+						ASM(ADD64ri, work_reg,
+							static_cast<int32_t>(push_opline_offset));
+					}
+					ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_execute_data, opline))),
+						work_reg);
+					label_place(pushed);
+					{
+						static constexpr std::pair<uint32_t, FeRegGP>
+							caller_saved_gp[] = {
+								{0, FE_AX}, {1, FE_CX}, {2, FE_DX}, {6, FE_SI},
+								{7, FE_DI}, {8, FE_R8}, {9, FE_R9}, {10, FE_R10},
+								{11, FE_R11}};
+						static constexpr FeRegXMM caller_saved_xmm[] = {
+							FE_XMM0, FE_XMM1, FE_XMM2, FE_XMM3, FE_XMM4, FE_XMM5,
+							FE_XMM6, FE_XMM7, FE_XMM8, FE_XMM9, FE_XMM10,
+							FE_XMM11, FE_XMM12, FE_XMM13, FE_XMM14, FE_XMM15};
+						std::vector<FeRegGP> saved_gp;
+						std::vector<FeRegXMM> saved_xmm;
+						for (const auto &[id, reg] : caller_saved_gp) {
+							if (((live_registers >> id) & 1) != 0) {
+								saved_gp.push_back(reg);
+							}
+						}
+						for (uint32_t i = 0; i < 16; ++i) {
+							if (((live_registers >> (32 + i)) & 1) != 0) {
+								saved_xmm.push_back(caller_saved_xmm[i]);
+							}
+						}
+						const int32_t xmm_base = static_cast<int32_t>(
+							(8 * saved_gp.size() + 15) & ~size_t{15});
+						const int32_t save_area = xmm_base
+							+ 16 * static_cast<int32_t>(saved_xmm.size()) + 16;
+						text_writer.begin_cold_area();
+						label_place(overflow);
+						ASM(LEA64rm, FE_SP,
+							FE_MEM(FE_SP, 0, FE_NOREG, -save_area));
+						for (size_t i = 0; i < saved_gp.size(); ++i) {
+							ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG,
+								static_cast<int32_t>(8 * i)), saved_gp[i]);
+						}
+						for (size_t i = 0; i < saved_xmm.size(); ++i) {
+							ASM(SSE_MOVDQUmr, FE_MEM(FE_SP, 0, FE_NOREG,
+								xmm_base + static_cast<int32_t>(16 * i)),
+								saved_xmm[i]);
+						}
+						/* The cell and the descriptor, loaded from its slot,
+						 * go to the second and third arguments. */
+						ASM(MOV64rr, FE_SI, cell_reg);
+						text_writer.ensure_space(16);
+						ASM(MOV64rm, FE_DX, FE_MEM(FE_IP, 0, FE_NOREG, -1));
+						reloc_text(descriptor_slot, tpde::elf::R_X86_64_PC32,
+							text_writer.offset() - 4, -4);
+						ASM(MOV64rr, FE_DI, frame_reg);
+						text_writer.ensure_space(16);
+						ASM(CALL, text_writer.cur_ptr() + 5);
+						reloc_text(runtime_symbol(
+								ZEND_NATIVE_HELPER_INTERNAL_CALL_PUSH),
+							tpde::elf::R_X86_64_PLT32,
+							text_writer.offset() - 4, -4);
+						for (size_t i = 0; i < saved_xmm.size(); ++i) {
+							ASM(SSE_MOVDQUrm, saved_xmm[i], FE_MEM(FE_SP, 0,
+								FE_NOREG,
+								xmm_base + static_cast<int32_t>(16 * i)));
+						}
+						for (size_t i = 0; i < saved_gp.size(); ++i) {
+							ASM(MOV64rm, saved_gp[i], FE_MEM(FE_SP, 0, FE_NOREG,
+								static_cast<int32_t>(8 * i)));
+						}
+						ASM(LEA64rm, FE_SP,
+							FE_MEM(FE_SP, 0, FE_NOREG, save_area));
+						generate_raw_jump(Jump::jmp, pushed);
+						text_writer.end_cold_area();
+					}
+					work.reset();
+					top.reset();
+					top_pointer.reset();
+					cell_scratch.reset();
+				} else {
 					tpde::x64::CCAssignerSysV assigner{false};
 					CallBuilder builder{*this, assigner};
 					builder.add_arg(
