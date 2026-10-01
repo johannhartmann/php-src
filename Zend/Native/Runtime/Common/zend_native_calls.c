@@ -1819,29 +1819,21 @@ static void zend_native_call_fast_complete(
 	}
 }
 
-/* Whether a returned frame passes its return type as
- * zend_native_execution_finish_direct_frame() verifies it; an undefined
- * result becomes null first. */
+/*
+ * Whether a returned frame completes on the fast path; an undefined result
+ * becomes null first. Its return type needs no check here: as in the VM,
+ * the callee's own VERIFY_RETURN_TYPE (or VERIFY_NEVER_TYPE) checked or
+ * coerced every returned value, unless the optimizer proved the type.
+ */
 static zend_always_inline bool zend_native_call_fast_return_valid(
 	zend_execute_data *callee)
 {
-	const zend_arg_info *return_info;
-	uint32_t type_mask;
 	zval *return_value = callee->return_value;
 
 	if (Z_ISUNDEF_P(return_value)) {
 		ZVAL_NULL(return_value);
 	}
-	if ((callee->func->common.fn_flags & ZEND_ACC_HAS_RETURN_TYPE) == 0) {
-		return true;
-	}
-	return_info = callee->func->common.arg_info - 1;
-	type_mask = ZEND_TYPE_FULL_MASK(return_info->type);
-	if ((type_mask & MAY_BE_NEVER) != 0) {
-		return false;
-	}
-	return (type_mask & MAY_BE_VOID) != 0
-		|| zend_check_type_ex(&return_info->type, return_value, true, false);
+	return true;
 }
 
 uint32_t zend_native_call_invoke_user(
@@ -8560,9 +8552,13 @@ uint32_t zend_native_call_fast_do(
 		/* EX(opline) skips the RECV of every supplied parameter; the
 		 * remaining CVs start undefined. */
 		callee->opline = op_array->opcodes + argument_count;
-		for (uint32_t index = argument_count;
-				index < (uint32_t) op_array->last_var; index++) {
-			ZVAL_UNDEF(ZEND_CALL_VAR_NUM(callee, index));
+		{
+			zval *variable = ZEND_CALL_VAR_NUM(callee, argument_count);
+			zval *end = ZEND_CALL_VAR_NUM(callee, op_array->last_var);
+
+			for (; variable < end; variable++) {
+				ZVAL_UNDEF(variable);
+			}
 		}
 		callee->run_time_cache = header->fast_run_time_cache;
 		EG(current_execute_data) = callee;
