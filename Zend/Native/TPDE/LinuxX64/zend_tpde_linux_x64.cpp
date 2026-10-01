@@ -15578,19 +15578,48 @@ bool ZendCompilerX64::compile_inst_impl(
 						== ZEND_MIR_SOURCE_SLOT_TMP
 					&& (mir.value_operation.source_opcode == ZEND_JMPZ
 						|| mir.value_operation.source_opcode == ZEND_JMPNZ);
+				/* ?? and &&/|| of a temporary or CV in its slot, or of a
+				 * temporary held in registers, whose result lives in its
+				 * slot only. */
+				const bool result_condition = !node.has_result
+					&& (mir.value_operation.source_opcode == ZEND_COALESCE
+						|| mir.value_operation.source_opcode == ZEND_JMPZ_EX
+						|| mir.value_operation.source_opcode == ZEND_JMPNZ_EX)
+					&& (mir.value_operation.op1.kind
+							== ZEND_MIR_SOURCE_OPERAND_SLOT
+						|| mir.value_operation.op1.kind
+							== ZEND_MIR_SOURCE_OPERAND_SSA)
+					&& (register_boxed_condition
+						? mir.value_operation.op1.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_TMP
+						: node.operands.size() == 1
+							&& (mir.value_operation.op1.slot_kind
+									== ZEND_MIR_SOURCE_SLOT_TMP
+								|| mir.value_operation.op1.slot_kind
+									== ZEND_MIR_SOURCE_SLOT_CV))
+					&& (mir.value_operation.result.kind
+							== ZEND_MIR_SOURCE_OPERAND_SLOT
+						|| mir.value_operation.result.kind
+							== ZEND_MIR_SOURCE_OPERAND_SSA)
+					&& mir.value_operation.result.slot_kind
+						== ZEND_MIR_SOURCE_SLOT_TMP;
 				if (!have_condition_layout
 						&& (register_boxed_condition || fused
-							|| frame_temporary_condition)) {
+							|| frame_temporary_condition
+							|| result_condition)) {
 					const zend_mir_executable_value_ref &operation =
 						mir.value_operation;
 					const bool has_result =
 						operation.source_opcode == ZEND_JMPZ_EX
-						|| operation.source_opcode == ZEND_JMPNZ_EX;
+						|| operation.source_opcode == ZEND_JMPNZ_EX
+						|| operation.source_opcode == ZEND_COALESCE;
 					const bool supported_opcode =
 						operation.source_opcode == ZEND_JMPZ
 						|| operation.source_opcode == ZEND_JMPNZ
-						|| operation.source_opcode == ZEND_JMPZ_EX
-						|| operation.source_opcode == ZEND_JMPNZ_EX;
+						|| ((operation.source_opcode == ZEND_JMPZ_EX
+								|| operation.source_opcode == ZEND_JMPNZ_EX
+								|| operation.source_opcode == ZEND_COALESCE)
+							&& !fused && result_condition);
 					const uint64_t operand_offset =
 						(uint64_t{ZEND_CALL_FRAME_SLOT}
 							+ operation.op1_storage_id) * sizeof(zval);
@@ -15740,7 +15769,116 @@ bool ZendCompilerX64::compile_inst_impl(
 					 * of overwriting the source slot in the truthiness fast path.
 					 */
 					if (layout.has_result) {
-						generate_raw_jump(Jump::jmp, slow);
+						/* ?? moves a defined non-null temporary into the
+						 * result or copies a CV; &&/|| publish the truth
+						 * of a null, boolean or integer, which owns
+						 * nothing. Anything else takes the helper. */
+						const bool coalesce =
+							layout.source_opcode == ZEND_COALESCE;
+						const bool from_cv =
+							mir.value_operation.op1.slot_kind
+								== ZEND_MIR_SOURCE_SLOT_CV;
+						const int32_t operand_offset =
+							static_cast<int32_t>(layout.operand_offset);
+						const int32_t result_offset =
+							static_cast<int32_t>(layout.result_offset);
+						auto store_result_type = [&](uint32_t type_info) {
+							ASM(MOV32mi,
+								FE_MEM(frame_reg, 0, FE_NOREG,
+									result_offset
+										+ static_cast<int32_t>(offsetof(
+											zval, u1.type_info))),
+								type_info);
+						};
+						if (register_condition) {
+							mov(type_reg, boxed_type_info_reg, 4);
+						} else {
+							ASM(MOV32rm, type_reg,
+								FE_MEM(frame_reg, 0, FE_NOREG,
+									operand_offset + static_cast<int32_t>(
+										offsetof(zval, u1.type_info))));
+						}
+						ASM(MOVZXr32r8, value_reg, type_reg);
+						if (coalesce) {
+							ASM(CMP32ri, value_reg, IS_NULL);
+							/* Undefined and null fall through to the
+							 * default, as isset() decides. */
+							generate_raw_jump(Jump::jbe, falsey);
+							ASM(CMP32ri, value_reg, IS_REFERENCE);
+							generate_raw_jump(Jump::je, slow);
+							ASM(CMP32ri, value_reg, IS_INDIRECT);
+							generate_raw_jump(Jump::je, slow);
+							if (from_cv) {
+								auto counted_done =
+									text_writer.label_create();
+								ASM(MOV64rm, value_reg,
+									FE_MEM(frame_reg, 0, FE_NOREG,
+										operand_offset));
+								ASM(TEST32ri, type_reg,
+									IS_TYPE_REFCOUNTED
+										<< Z_TYPE_FLAGS_SHIFT);
+								generate_raw_jump(Jump::je, counted_done);
+								ASM(TEST32mi,
+									FE_MEM(value_reg, 0, FE_NOREG,
+										static_cast<int32_t>(offsetof(
+											zend_refcounted_h,
+											u.type_info))),
+									GC_PERSISTENT);
+								generate_raw_jump(Jump::jne, slow);
+								ASM(ADD32mi,
+									FE_MEM(value_reg, 0, FE_NOREG,
+										static_cast<int32_t>(offsetof(
+											zend_refcounted_h, refcount))),
+									1);
+								label_place(counted_done);
+							} else if (register_condition) {
+								mov(value_reg, boxed_payload_reg, 8);
+							} else {
+								ASM(MOV64rm, value_reg,
+									FE_MEM(frame_reg, 0, FE_NOREG,
+										operand_offset));
+							}
+							ASM(MOV64mr,
+								FE_MEM(frame_reg, 0, FE_NOREG,
+									result_offset),
+								value_reg);
+							ASM(MOV32mr,
+								FE_MEM(frame_reg, 0, FE_NOREG,
+									result_offset + static_cast<int32_t>(
+										offsetof(zval, u1.type_info))),
+								type_reg);
+							if (!from_cv
+									&& layout.operand_offset
+										!= layout.result_offset) {
+								ASM(MOV32mi,
+									FE_MEM(frame_reg, 0, FE_NOREG,
+										operand_offset
+											+ static_cast<int32_t>(offsetof(
+												zval, u1.type_info))),
+									IS_UNDEF);
+							}
+							generate_raw_jump(Jump::jmp, truthy);
+						} else {
+							auto result_true = text_writer.label_create();
+							auto result_false = text_writer.label_create();
+							ASM(CMP32ri, value_reg, IS_TRUE);
+							generate_raw_jump(Jump::je, result_true);
+							ASM(CMP32ri, value_reg, IS_NULL);
+							generate_raw_jump(Jump::jb, slow);
+							ASM(CMP32ri, value_reg, IS_FALSE);
+							generate_raw_jump(Jump::jbe, result_false);
+							ASM(CMP32ri, value_reg, IS_LONG);
+							generate_raw_jump(Jump::jne, slow);
+							load_condition_payload();
+							ASM(TEST64rr, value_reg, value_reg);
+							generate_raw_jump(Jump::je, result_false);
+							label_place(result_true);
+							store_result_type(IS_TRUE);
+							generate_raw_jump(Jump::jmp, truthy);
+							label_place(result_false);
+							store_result_type(IS_FALSE);
+							generate_raw_jump(Jump::jmp, falsey);
+						}
 					}
 					if (fused && !emit_fused_compare(
 							fused_compare, frame_reg, type_reg, value_reg,
