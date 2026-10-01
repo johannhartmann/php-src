@@ -8306,6 +8306,10 @@ bool zend_native_call_fast_new(
 	zend_execute_data *call;
 	zend_object *object;
 
+	if (header->fast_epoch != zend_native_call_resolution_cache_epoch
+			&& !zend_native_call_fast_rearm(caller, descriptor)) {
+		return false;
+	}
 	if (header->fast_function == NULL) {
 		/* No constructor: only the object, no frame. */
 		if ((header->fast_flags & ZEND_NATIVE_CALL_FAST_NO_CALL) == 0
@@ -8610,6 +8614,28 @@ zend_result zend_native_call_universal_expand(void)
 }
 
 /*
+ * Whether the literal class name of a stale new C or C::m() site still
+ * binds the immutable class the site was published for, without loading.
+ */
+static bool zend_native_call_rearm_class_binding(
+	const zend_op_array *op_array,
+	const zend_native_user_call_descriptor *descriptor,
+	const zend_class_entry *key)
+{
+	const uint32_t index = descriptor->init_op1.index + 1;
+	zval *bound;
+
+	if (key == NULL || (key->ce_flags & ZEND_ACC_IMMUTABLE) == 0
+			|| descriptor->init_op1.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| index >= (uint32_t) op_array->last_literal
+			|| Z_TYPE(op_array->literals[index]) != IS_STRING) {
+		return false;
+	}
+	bound = zend_hash_find(EG(class_table), Z_STR(op_array->literals[index]));
+	return bound != NULL && Z_PTR_P(bound) == key;
+}
+
+/*
  * A published fast site whose epoch is stale, as every site is after a
  * request ends, would take the universal protocol once to be published
  * again. Re-arm it in place when its target still applies, as the VM's
@@ -8620,9 +8646,39 @@ zend_result zend_native_call_universal_expand(void)
  * outlives the request that published it; the cell must still hold the
  * published native entry, and the run-time cache is the current request's.
  * Tried once per site and epoch; false leaves the site to the universal
- * protocol.
+ * protocol, which may still publish it in this epoch.
  */
+static bool zend_native_call_fast_rearm_site(
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor);
+
 bool zend_native_call_fast_rearm(
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor)
+{
+	zend_native_user_call_site_header *header =
+		(zend_native_user_call_site_header *)
+			ZEND_NATIVE_USER_CALL_SITE_HEADER(descriptor);
+
+	if (header->fast_epoch == zend_native_call_resolution_cache_epoch
+			|| header->fast_rearm_epoch
+				== zend_native_call_resolution_cache_epoch) {
+		return false;
+	}
+	header->fast_rearm_epoch = zend_native_call_resolution_cache_epoch;
+	if (!zend_native_call_fast_rearm_site(caller, descriptor)) {
+		return false;
+	}
+	header->fast_checked_epoch = zend_native_call_resolution_cache_epoch;
+	header->fast_epoch = zend_native_call_resolution_cache_epoch;
+	return true;
+}
+
+/*
+ * Whether a stale site's published target still applies; the universal
+ * protocol, which runs on false, may still publish the site this epoch.
+ */
+static bool zend_native_call_fast_rearm_site(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor)
 {
@@ -8633,19 +8689,25 @@ bool zend_native_call_fast_rearm(
 	zend_native_entry_cell *cell = header->fast_cell;
 	const zend_native_code *code;
 	const zend_op_array *op_array = &caller->func->op_array;
+	const zend_class_entry *key = (const zend_class_entry *) header->fast_key;
 
+	if (function == NULL) {
+		/* new C of a class without a constructor: only the class. */
+		if (descriptor->init_opcode != ZEND_NEW
+				|| (header->fast_flags & ZEND_NATIVE_CALL_FAST_NO_CALL) == 0
+				|| !zend_native_call_rearm_class_binding(
+					op_array, descriptor, key)) {
+			return false;
+		}
+		return true;
+	}
 	/* Only an immutable (persistent) target keeps its function, entry cell
 	 * and native code across requests; anything else may have been freed
 	 * with the request that published it. */
-	if (function == NULL || cell == NULL
-			|| header->fast_epoch == zend_native_call_resolution_cache_epoch
-			|| header->fast_checked_epoch
-				== zend_native_call_resolution_cache_epoch
-			|| function->type != ZEND_USER_FUNCTION
+	if (cell == NULL || function->type != ZEND_USER_FUNCTION
 			|| (function->op_array.fn_flags & ZEND_ACC_IMMUTABLE) == 0) {
 		return false;
 	}
-	header->fast_checked_epoch = zend_native_call_resolution_cache_epoch;
 	switch (descriptor->init_opcode) {
 		case ZEND_INIT_FCALL:
 		case ZEND_INIT_FCALL_BY_NAME:
@@ -8684,6 +8746,73 @@ bool zend_native_call_fast_rearm(
 				return false;
 			}
 			break;
+		case ZEND_NEW:
+			if (!zend_native_call_rearm_class_binding(
+					op_array, descriptor, key)) {
+				return false;
+			}
+			break;
+		case ZEND_INIT_STATIC_METHOD_CALL:
+			if (function->common.scope == NULL
+					|| (function->common.scope->ce_flags
+						& ZEND_ACC_IMMUTABLE) == 0) {
+				return false;
+			}
+			if (descriptor->init_op1.kind
+					== ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+				/* C::m(): the name must still bind the published class; a
+				 * call keeping the caller's $this keyed its object, so its
+				 * class must be immutable and still have that method. */
+				if ((header->fast_flags & ZEND_NATIVE_CALL_FAST_STATIC_THIS)
+						== 0) {
+					if (!zend_native_call_rearm_class_binding(
+							op_array, descriptor, key)) {
+						return false;
+					}
+				} else {
+					const uint32_t class_index = descriptor->init_op1.index + 1;
+					const uint32_t method_index = descriptor->init_op2.index + 1;
+					zval *bound;
+					const zend_class_entry *ce;
+
+					if (descriptor->init_op2.kind
+								!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+							|| class_index >= (uint32_t) op_array->last_literal
+							|| method_index >= (uint32_t) op_array->last_literal
+							|| Z_TYPE(op_array->literals[class_index]) != IS_STRING
+							|| Z_TYPE(op_array->literals[method_index])
+								!= IS_STRING
+							|| (bound = zend_hash_find(EG(class_table),
+								Z_STR(op_array->literals[class_index]))) == NULL
+							|| ((ce = Z_PTR_P(bound))->ce_flags
+								& ZEND_ACC_IMMUTABLE) == 0
+							|| zend_hash_find_ptr(&ce->function_table,
+								Z_STR(op_array->literals[method_index]))
+								!= function) {
+						return false;
+					}
+				}
+			} else if ((descriptor->init_op1_payload & ZEND_FETCH_CLASS_MASK)
+					== ZEND_FETCH_CLASS_STATIC) {
+				/* static::m() compares the called scope with the key. */
+				if (key == NULL || (key->ce_flags & ZEND_ACC_IMMUTABLE) == 0) {
+					return false;
+				}
+			} else {
+				/* self::/parent:: name the caller's (immutable) scope or
+				 * its parent; a closure may be bound to another scope. */
+				if ((op_array->fn_flags & ZEND_ACC_CLOSURE) != 0
+						|| op_array->scope == NULL
+						|| (op_array->scope->ce_flags & ZEND_ACC_IMMUTABLE)
+							== 0) {
+					return false;
+				}
+				if ((header->fast_flags & (ZEND_NATIVE_CALL_FAST_STATIC_THIS
+						| ZEND_NATIVE_CALL_FAST_STATIC_FORWARD)) == 0) {
+					return false;
+				}
+			}
+			break;
 		default:
 			return false;
 	}
@@ -8696,7 +8825,6 @@ bool zend_native_call_fast_rearm(
 		zend_init_func_run_time_cache(&function->op_array);
 	}
 	header->fast_run_time_cache = RUN_TIME_CACHE(&function->op_array);
-	header->fast_epoch = zend_native_call_resolution_cache_epoch;
 	return true;
 }
 

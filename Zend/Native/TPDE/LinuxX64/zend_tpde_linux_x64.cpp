@@ -3842,29 +3842,9 @@ bool ZendCompilerX64::compile_inst_impl(
 					if (object_offset > INT32_MAX - sizeof(zval)) {
 						return false;
 					}
+					/* The helper checks the epoch and re-arms a stale
+					 * site. */
 					{
-						auto descriptor_value = image_symbol_value(
-							ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
-							call.id);
-						auto descriptor_scratch =
-							std::move(descriptor_value).into_scratch(this);
-						ScratchReg value{this};
-						auto value_reg = value.alloc_gp();
-						ASM(MOV64rm, value_reg,
-							FE_MEM(context_register(), 0, FE_NOREG,
-								static_cast<int32_t>(offsetof(
-									zend_native_execution_context,
-									call_cache_epoch))));
-						ASM(MOV64rm, value_reg,
-							FE_MEM(value_reg, 0, FE_NOREG, 0));
-						ASM(CMP64rm, value_reg,
-							FE_MEM(descriptor_scratch.cur_reg(), 0, FE_NOREG,
-								-static_cast<int32_t>(sizeof(
-									zend_native_user_call_site_header))
-								+ static_cast<int32_t>(offsetof(
-									zend_native_user_call_site_header,
-									fast_epoch))));
-						generate_raw_jump(Jump::jne, fast_miss);
 						ASM(CMP8mi,
 							FE_MEM(context_register(), 0, FE_NOREG,
 								static_cast<int32_t>(offsetof(
