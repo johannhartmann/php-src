@@ -5017,6 +5017,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				/* SEND_VAR of an undefined CV warns and sends null. No scratch
 				 * register is live across the warning call. */
 				auto defined = text_writer.label_create();
+				auto undefined = text_writer.label_create();
 				{
 					ScratchReg type{this};
 					auto type_reg = type.alloc_gp();
@@ -5025,8 +5026,11 @@ bool ZendCompilerX64::compile_inst_impl(
 							static_cast<int32_t>(source_offset
 								+ offsetof(zval, u1.type_info))));
 					ASM(CMP32ri, type_reg, IS_UNDEF);
-					generate_raw_jump(Jump::jne, defined);
+					generate_raw_jump(Jump::je, undefined);
 				}
+				/* The warning path: out of the hot code. */
+				text_writer.begin_cold_area();
+				label_place(undefined);
 				/* A by-reference parameter (the site's fast_ref_mask) takes
 				 * the undefined CV without a warning; the fast Do makes it
 				 * a null reference. */
@@ -5091,12 +5095,14 @@ bool ZendCompilerX64::compile_inst_impl(
 						IS_NULL);
 				}
 				generate_raw_jump(Jump::jmp, sent);
+				text_writer.end_cold_area();
 				label_place(defined);
 			} else if (var_reference) {
 				/* ZEND_SEND_VAR of a reference: the helper moves the
 				 * referenced value and releases the reference. No scratch
 				 * register is live across the call. */
 				auto plain = text_writer.label_create();
+				auto reference = text_writer.label_create();
 				{
 					ScratchReg type{this};
 					auto type_reg = type.alloc_gp();
@@ -5105,8 +5111,10 @@ bool ZendCompilerX64::compile_inst_impl(
 							static_cast<int32_t>(source_offset
 								+ offsetof(zval, u1.type_info))));
 					ASM(CMP32ri, type_reg, IS_REFERENCE);
-					generate_raw_jump(Jump::jne, plain);
+					generate_raw_jump(Jump::je, reference);
 				}
+				text_writer.begin_cold_area();
+				label_place(reference);
 				{
 					tpde::x64::CCAssignerSysV assigner{false};
 					CallBuilder builder{*this, assigner};
@@ -5137,6 +5145,7 @@ bool ZendCompilerX64::compile_inst_impl(
 						ZEND_NATIVE_HELPER_CALL_FAST_SEND_VAR_REFERENCE));
 				}
 				generate_raw_jump(Jump::jmp, sent);
+				text_writer.end_cold_area();
 				label_place(plain);
 			}
 			if (!direct) {
@@ -5314,10 +5323,13 @@ bool ZendCompilerX64::compile_inst_impl(
 			/* A fast frame received every argument by position; the
 			 * universal protocol expands out of line. */
 			auto fast_expanded = text_writer.label_create();
+			auto universal_expand = text_writer.label_create();
 			if (fast_site) {
 				ASM(CMP32mi, FE_MEM(FE_BP, 0, FE_NOREG,
 					fast_call_slot(node.mir_instruction_index)), 0);
-				generate_raw_jump(Jump::jne, fast_expanded);
+				generate_raw_jump(Jump::je, universal_expand);
+				text_writer.begin_cold_area();
+				label_place(universal_expand);
 			}
 			ValuePart expanded{tpde::x64::PlatformConfig::GP_BANK, 4};
 			{
@@ -5331,6 +5343,9 @@ bool ZendCompilerX64::compile_inst_impl(
 			generate_raw_jump(Jump::je, fast_expanded);
 			expanded.reset(this);
 			emit_fast_failure();
+			if (fast_site) {
+				text_writer.end_cold_area();
+			}
 			label_place(fast_expanded);
 			expanded.reset(this);
 			return true;
@@ -5501,15 +5516,18 @@ bool ZendCompilerX64::compile_inst_impl(
 				builder.call(runtime_symbol(ZEND_NATIVE_HELPER_CALL_FAST_DO));
 				ValuePart left{tpde::x64::PlatformConfig::GP_BANK, 4};
 				builder.add_ret(left, tpde::CCAssignment{});
+				const auto left_reg = left.cur_reg_or_load(this);
 				ASM(MOV32mr, FE_MEM(FE_BP, 0, FE_NOREG, status_slot),
-					left.cur_reg_or_load(this));
+					left_reg);
+				ASM(CMP32ri, left_reg, ZEND_NATIVE_RETURNED);
 				left.reset(this);
 			}
 			{
+				/* A returned call continues inline; failures, the scalar
+				 * contract violation and the universal Do run out of the
+				 * hot code. */
 				auto failed = text_writer.label_create();
 				auto exception = text_writer.label_create();
-				ASM(CMP32mi, FE_MEM(FE_BP, 0, FE_NOREG, status_slot),
-					ZEND_NATIVE_RETURNED);
 				generate_raw_jump(Jump::jne, failed);
 				if ((descriptor->flags
 						& ZEND_NATIVE_USER_CALL_REQUIRE_SCALAR_RESULT) != 0) {
@@ -5536,7 +5554,7 @@ bool ZendCompilerX64::compile_inst_impl(
 							generate_raw_jump(Jump::jne, violated);
 						}
 					}
-					generate_raw_jump(Jump::jmp, do_succeeded);
+					text_writer.begin_cold_area();
 					label_place(violated);
 					{
 						tpde::x64::CCAssignerSysV violation_assigner{false};
@@ -5547,7 +5565,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					}
 					generate_raw_jump(Jump::jmp, do_exception);
 				} else {
-					generate_raw_jump(Jump::jmp, do_succeeded);
+					text_writer.begin_cold_area();
 				}
 				label_place(failed);
 				ASM(CMP32mi, FE_MEM(FE_BP, 0, FE_NOREG, status_slot),
@@ -5563,8 +5581,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				(void) exception;
 			}
 			/* The universal Do and the exception path: out of the hot
-			 * code. */
-			text_writer.begin_cold_area();
+			 * code, after the failure paths. */
 			label_place(universal_do);
 			reconcile_target_branch_state(fast_spilled);
 		}
@@ -15319,6 +15336,29 @@ bool ZendCompilerX64::compile_inst_impl(
 						val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 					auto frame_scratch = frame_register(std::move(frame));
 					auto frame_reg = frame_scratch.cur_reg();
+					/* Without a result or edge moves, each path leaves for
+					 * its successor directly instead of merging a decision:
+					 * the next element falls through to the loop body, the
+					 * end jumps to the exit and the helper path, out of the
+					 * hot code, branches on its returned decision. All values
+					 * are spilled first so that every exit has one state. */
+					const auto &fetch_successors = adaptor->block_succs(
+						IRBlockRef{node.control_block});
+					const bool direct_exits = !node.has_result
+						&& fetch_successors.size() == 2
+						&& fetch_successors[0] != fetch_successors[1]
+						&& !branch_needs_split(fetch_successors[0])
+						&& !branch_needs_split(fetch_successors[1]);
+					auto exit_to = [&](Jump jump, uint32_t successor,
+							bool last_inst) {
+						begin_branch_region();
+						generate_branch_to_block(jump,
+							fetch_successors[successor], false, last_inst);
+						end_branch_region();
+					};
+					if (direct_exits) {
+						release_spilled_regs(spill_before_branch(true));
+					}
 					if (!layout.destination_scalar_only) {
 						/* The loop variable usually holds the previous element,
 						 * which the array still owns: overwrite it inline unless
@@ -15387,7 +15427,11 @@ bool ZendCompilerX64::compile_inst_impl(
 									+ offsetof(zval, u2.fe_pos))));
 						label_place(scan);
 						ASM(CMP32rr, position_reg, limit_reg);
-						generate_raw_jump(Jump::jae, end);
+						if (direct_exits) {
+							exit_to(Jump::jae, 1, false);
+						} else {
+							generate_raw_jump(Jump::jae, end);
+						}
 						ASM(MOV64rr, element_reg, position_reg);
 						ASM(SHL64ri, element_reg, 5);
 						ASM(ADD64rm, element_reg,
@@ -15445,7 +15489,11 @@ bool ZendCompilerX64::compile_inst_impl(
 							static_cast<int32_t>(layout.holder_offset
 								+ offsetof(zval, u2.fe_pos))));
 					ASM(CMP32rr, position_reg, limit_reg);
-					generate_raw_jump(Jump::jae, end);
+					if (direct_exits) {
+						exit_to(Jump::jae, 1, false);
+					} else {
+						generate_raw_jump(Jump::jae, end);
+					}
 
 					ASM(MOV64rm, element_reg,
 						FE_MEM(array_reg, 0, FE_NOREG,
@@ -15556,14 +15604,19 @@ bool ZendCompilerX64::compile_inst_impl(
 							1);
 						label_place(key_stored);
 					}
-					ASM(MOV32mi,
-						FE_MEM(FE_BP, 0, FE_NOREG, decision_slot), 1);
-					generate_raw_jump(Jump::jmp, branch);
+					if (direct_exits) {
+						exit_to(Jump::jmp, 0, true);
+						text_writer.begin_cold_area();
+					} else {
+						ASM(MOV32mi,
+							FE_MEM(FE_BP, 0, FE_NOREG, decision_slot), 1);
+						generate_raw_jump(Jump::jmp, branch);
 
-					label_place(end);
-					ASM(MOV32mi,
-						FE_MEM(FE_BP, 0, FE_NOREG, decision_slot), 0);
-					generate_raw_jump(Jump::jmp, branch);
+						label_place(end);
+						ASM(MOV32mi,
+							FE_MEM(FE_BP, 0, FE_NOREG, decision_slot), 0);
+						generate_raw_jump(Jump::jmp, branch);
+					}
 
 					label_place(slow);
 					type.reset();
@@ -15626,6 +15679,14 @@ bool ZendCompilerX64::compile_inst_impl(
 						return_builder.ret();
 					}
 					label_place(valid);
+					if (direct_exits) {
+						ASM(TEST32rr, decision_reg, decision_reg);
+						decision.reset(this);
+						exit_to(Jump::jne, 0, false);
+						exit_to(Jump::jmp, 1, false);
+						text_writer.end_cold_area();
+						return true;
+					}
 					ASM(MOV32mr,
 						FE_MEM(FE_BP, 0, FE_NOREG, decision_slot),
 						decision_reg);
