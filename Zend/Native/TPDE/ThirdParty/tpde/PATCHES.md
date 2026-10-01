@@ -82,6 +82,7 @@ it is compiled in place, so the allocator state stays that of its position:
   `CompilerX64::finish_func` appends the area first and translates its
   return-patch offsets.
 - `CompilerX64::generate_raw_jump` takes a fixup for a label in the other
-  area (`label_needs_fixup()`), and in the cold area `next_block()` is invalid
+  area (`label_needs_fixup()`), and in the cold area `next_block()` reports
+  no next block (one past the last one, as for the last block)
   and `spill_before_branch` sees no fall-through successor, so no branch
   falls through out of it.
