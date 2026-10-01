@@ -16130,6 +16130,9 @@ bool ZendCompilerX64::compile_inst_impl(
 					if (!direct_tails) {
 						generate_raw_jump(Jump::jmp, branch);
 					}
+					/* The helper decides the uncommon conditions: out of the
+					 * hot code. */
+					text_writer.begin_cold_area();
 					label_place(slow);
 					if (fused && !emit_fused_compare_helper(
 							fused_compare, mir, frame_scratch)) {
@@ -16213,6 +16216,7 @@ bool ZendCompilerX64::compile_inst_impl(
 						decision.reset(this);
 						generate_raw_jump(Jump::jne, truthy);
 						generate_raw_jump(Jump::jmp, falsey);
+						text_writer.end_cold_area();
 						const auto spilled = spill_before_branch();
 						begin_branch_region();
 						label_place(truthy);
@@ -16231,6 +16235,7 @@ bool ZendCompilerX64::compile_inst_impl(
 						decision_reg);
 					decision.reset(this);
 					generate_raw_jump(Jump::jmp, branch);
+					text_writer.end_cold_area();
 					label_place(branch);
 					ScratchReg branch_decision{this};
 					auto branch_decision_reg =
