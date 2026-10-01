@@ -988,7 +988,9 @@ static inline bool zend_tpde_temporary_container_array_read_at(
 /*
  * A frameless internal call whose result and arguments are frame slots or
  * literals calls zend_native_call_frameless_direct() with precomputed
- * offsets instead of encoded operands. VAR arguments may be indirect and keep
+ * offsets instead of encoded operands. A CV result is overwritten without a
+ * release, as ZEND_FRAMELESS_ICALL_* does: the optimizer only names a CV
+ * that holds no counted value. VAR arguments may be indirect and keep
  * the general helper.
  */
 struct zend_tpde_frameless_direct {
@@ -1010,7 +1012,8 @@ static inline bool zend_tpde_frameless_direct_at(
 			|| operation.source_opcode > ZEND_FRAMELESS_ICALL_3
 			|| operation.extended_value > 0xffff
 			|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
-				&& operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_VAR)
+				&& operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_VAR
+				&& operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_CV)
 			|| !zend_mir_id_is_valid(operation.result_storage_id)) {
 		return false;
 	}
