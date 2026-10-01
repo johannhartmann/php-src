@@ -975,6 +975,14 @@ zend_native_status zend_native_internal_call_invoke_finish_source(
 	zend_execute_data *caller,
 	const zend_native_internal_call_cell *cell,
 	const zend_native_direct_internal_call_descriptor *descriptor);
+zend_result zend_native_internal_call_push(
+	zend_execute_data *caller,
+	const zend_native_internal_call_cell *cell,
+	const zend_native_direct_internal_call_descriptor *descriptor);
+zend_native_status zend_native_internal_call_do_plain(
+	zend_execute_data *caller,
+	const zend_native_internal_call_cell *cell,
+	const zend_native_direct_internal_call_descriptor *descriptor);
 zend_native_direct_call_result zend_native_internal_call_direct(
 	zend_execute_data *caller,
 	const zend_native_internal_call_cell *cell,

@@ -1021,6 +1021,13 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_CALL_FAST_REARM,
 		ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE,
 		(const void *) zend_native_call_fast_rearm},
+	{ZEND_NATIVE_HELPER_INTERNAL_CALL_PUSH,
+		ZEND_NATIVE_EFFECT_FRAME_WRITE | ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
+			| ZEND_NATIVE_EFFECT_MAY_FAIL,
+		(const void *) zend_native_internal_call_push},
+	{ZEND_NATIVE_HELPER_INTERNAL_CALL_DO_PLAIN,
+		ZEND_NATIVE_EFFECT_CALL,
+		(const void *) zend_native_internal_call_do_plain},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {

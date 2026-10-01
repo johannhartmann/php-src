@@ -19692,6 +19692,42 @@ bool ZendCompilerX64::compile_inst_impl(
 				const uint32_t argument_count =
 					call.call_argument_count;
 				const uint32_t frame_base = argument_count;
+				/*
+				 * A plain site, decided once here: a bound function without
+				 * receiver or scope that is neither deprecated, nodiscard nor
+				 * a trampoline, a source Do and an unused or temporary
+				 * result. Its Init and Do skip the checks of the general
+				 * helpers.
+				 */
+				const zend_native_direct_internal_call_descriptor
+					*internal_descriptor = call.direct_internal_call;
+				const zend_function *bound_function =
+					call.internal_call_cell != nullptr
+						? call.internal_call_cell->function : nullptr;
+				const bool plain_internal = bound_function != nullptr
+					&& call.internal_call_cell->receiver_kind
+						== ZEND_NATIVE_INTERNAL_RECEIVER_NONE
+					&& internal_descriptor->receiver_operand.kind
+						== ZEND_MIR_SOURCE_OPERAND_UNUSED
+					&& bound_function->type == ZEND_INTERNAL_FUNCTION
+					&& bound_function->common.scope == nullptr
+					&& (bound_function->common.fn_flags
+						& (ZEND_ACC_DEPRECATED | ZEND_ACC_NODISCARD
+							| ZEND_ACC_CALL_VIA_TRAMPOLINE)) == 0
+					&& internal_descriptor->initial_argument_count
+						<= internal_descriptor->argument_count
+					&& internal_descriptor->do_opcode
+						!= ZEND_CALLABLE_CONVERT
+					&& internal_descriptor->do_opcode
+						!= ZEND_CALLABLE_CONVERT_PARTIAL
+					&& (internal_descriptor->result_operand.kind
+							== ZEND_MIR_SOURCE_OPERAND_UNUSED
+						|| ((internal_descriptor->result_operand.kind
+									== ZEND_MIR_SOURCE_OPERAND_SLOT
+								|| internal_descriptor->result_operand.kind
+									== ZEND_MIR_SOURCE_OPERAND_SSA)
+							&& internal_descriptor->result_operand.slot_kind
+								== ZEND_MIR_SOURCE_SLOT_TMP));
 				{
 					tpde::x64::CCAssignerSysV assigner{false};
 					CallBuilder builder{*this, assigner};
@@ -19703,8 +19739,9 @@ bool ZendCompilerX64::compile_inst_impl(
 					builder.add_arg(image_symbol_value(
 						ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
 						call.id), tpde::CCAssignment{});
-					builder.call(runtime_symbol(
-						ZEND_NATIVE_HELPER_INTERNAL_CALL_BEGIN));
+					builder.call(runtime_symbol(plain_internal
+						? ZEND_NATIVE_HELPER_INTERNAL_CALL_PUSH
+						: ZEND_NATIVE_HELPER_INTERNAL_CALL_BEGIN));
 				}
 
 				for (uint32_t index = 0;
@@ -19976,8 +20013,9 @@ bool ZendCompilerX64::compile_inst_impl(
 				builder.add_arg(image_symbol_value(
 					ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
 					call.id), tpde::CCAssignment{});
-				builder.call(runtime_symbol(
-					ZEND_NATIVE_HELPER_INTERNAL_CALL_FINISH_SOURCE));
+				builder.call(runtime_symbol(plain_internal
+					? ZEND_NATIVE_HELPER_INTERNAL_CALL_DO_PLAIN
+					: ZEND_NATIVE_HELPER_INTERNAL_CALL_FINISH_SOURCE));
 				ValuePart status{
 					tpde::x64::PlatformConfig::GP_BANK, 4};
 				builder.add_ret(status, tpde::CCAssignment{});

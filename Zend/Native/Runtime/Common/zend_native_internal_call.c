@@ -1377,8 +1377,20 @@ zend_result zend_native_direct_internal_call_set_double_argument(
  * does not catch a bailout: the enclosing native frame boundary abandons the
  * native activations it skips, and the request ends as after a VM bailout.
  */
+static zend_always_inline zend_native_status
+zend_native_internal_call_invoke_fast_inline(
+	zend_execute_data *caller, zend_execute_data *call, zval *return_value);
+
 static zend_never_inline zend_native_status
 zend_native_internal_call_invoke_fast(
+	zend_execute_data *caller, zend_execute_data *call, zval *return_value)
+{
+	return zend_native_internal_call_invoke_fast_inline(
+		caller, call, return_value);
+}
+
+static zend_always_inline zend_native_status
+zend_native_internal_call_invoke_fast_inline(
 	zend_execute_data *caller, zend_execute_data *call, zval *return_value)
 {
 	zend_native_status status;
@@ -2189,6 +2201,76 @@ zend_native_status zend_native_internal_call_invoke_finish_source(
 	status = zend_native_internal_call_invoke_finish(
 		caller, cell, return_value);
 	if (status == ZEND_NATIVE_EXCEPTION && EG(exception) != NULL) {
+		status = zend_native_prepare_finally_exception(
+			caller, descriptor->do_source_position) == SUCCESS
+			? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
+	}
+	if (return_value == &temporary && !Z_ISUNDEF(temporary)) {
+		zval_ptr_dtor(&temporary);
+	}
+	return status;
+}
+
+/*
+ * zend_native_internal_call_begin() for a site the compiler proved plain:
+ * a function without receiver or scope, as ZEND_INIT_FCALL pushes it.
+ */
+zend_result zend_native_internal_call_push(
+	zend_execute_data *caller,
+	const zend_native_internal_call_cell *cell,
+	const zend_native_direct_internal_call_descriptor *descriptor)
+{
+	const uint32_t count = descriptor->initial_argument_count;
+	zend_execute_data *call = zend_vm_stack_push_call_frame(
+		ZEND_CALL_NESTED_FUNCTION, cell->function, count, NULL);
+	zval *argument = ZEND_CALL_ARG(call, 1);
+	zval *end = argument + count;
+
+	for (; argument < end; argument++) {
+		ZVAL_UNDEF(argument);
+	}
+	call->prev_execute_data = caller->call;
+	caller->call = call;
+	caller->opline = &caller->func->op_array.opcodes[
+		descriptor->init_source_position];
+	return SUCCESS;
+}
+
+/*
+ * zend_native_internal_call_invoke_finish_source() for a site the compiler
+ * proved plain: the frame zend_native_internal_call_push() pushed, of a
+ * function that is neither deprecated, nodiscard nor a trampoline, and a
+ * result that is unused or a temporary. Only what can change at run time is
+ * checked here; anything else takes the general finish.
+ */
+zend_native_status zend_native_internal_call_do_plain(
+	zend_execute_data *caller,
+	const zend_native_internal_call_cell *cell,
+	const zend_native_direct_internal_call_descriptor *descriptor)
+{
+	zend_execute_data *call = caller->call;
+	zval temporary;
+	zval *return_value;
+	zend_native_status status;
+
+	if (UNEXPECTED(ZEND_OBSERVER_ENABLED || zend_execute_internal != NULL
+			|| EG(exception) != NULL
+			|| (ZEND_CALL_INFO(call) & ZEND_CALL_MAY_HAVE_UNDEF) != 0)) {
+		return zend_native_internal_call_invoke_finish_source(
+			caller, cell, descriptor);
+	}
+	caller->opline = &caller->func->op_array.opcodes[
+		descriptor->do_source_position];
+	return_value = descriptor->result_operand.kind
+			== ZEND_MIR_SOURCE_OPERAND_UNUSED
+		? &temporary
+		: ZEND_CALL_VAR_NUM(caller,
+			(uint32_t) caller->func->op_array.last_var
+				+ descriptor->result_operand.index);
+	status = zend_native_internal_call_invoke_fast_inline(
+		caller, call, return_value);
+	if (UNEXPECTED(status == ZEND_NATIVE_EXCEPTION)
+			&& EG(exception) != NULL) {
 		status = zend_native_prepare_finally_exception(
 			caller, descriptor->do_source_position) == SUCCESS
 			? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
