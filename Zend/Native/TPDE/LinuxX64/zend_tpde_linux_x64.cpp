@@ -6445,10 +6445,8 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		ASM(MOV32ri, decision_reg, 0);
 		label_place(finished);
-		std::array<std::pair<uint64_t, IRBlockRef>, 1> cases{{
-			{1, successors[1]},
-		}};
-		generate_switch(std::move(decision), 32, successors[0], cases);
+		generate_guarded_decision_branch(
+			std::move(decision), successors[1], successors[0]);
 		return true;
 	}
 	if (mir.source_effect == ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE) {
@@ -7587,6 +7585,22 @@ bool ZendCompilerX64::compile_inst_impl(
 					source_offset + offsetof(zval, u1.type_info))),
 				source_type_reg);
 		}
+		if (!register_source) {
+			/* Nothing to publish on the cold edge: leave directly. */
+			source_type.reset();
+			target_type.reset();
+			source_payload.reset();
+			low_word.reset();
+			probe.reset();
+			target_address.reset();
+			if (guarded_exit_can_jump_directly(successors[1], successors[0])) {
+				decision.reset();
+				frame_scratch.reset();
+				generate_guarded_direct_exit(
+					slow, successors[1], successors[0]);
+				return true;
+			}
+		}
 		ASM(MOV32ri, decision_reg, 0);
 		generate_raw_jump(Jump::jmp, done);
 		label_place(slow);
@@ -7613,10 +7627,10 @@ bool ZendCompilerX64::compile_inst_impl(
 		source_payload.reset();
 		low_word.reset();
 		probe.reset();
-		std::array<std::pair<uint64_t, IRBlockRef>, 1> cases{{
-			{1, successors[1]},
-		}};
-		generate_switch(std::move(decision), 32, successors[0], cases);
+		target_address.reset();
+		frame_scratch.reset();
+		generate_guarded_decision_branch(
+			std::move(decision), successors[1], successors[0]);
 		return true;
 	};
 	auto copy_temporary_slot = [&]() {
@@ -7750,10 +7764,8 @@ bool ZendCompilerX64::compile_inst_impl(
 		type.reset();
 		value.reset();
 		probe.reset();
-		std::array<std::pair<uint64_t, IRBlockRef>, 1> cases{{
-			{1, successors[1]},
-		}};
-		generate_switch(std::move(decision), 32, successors[0], cases);
+		generate_guarded_decision_branch(
+			std::move(decision), successors[1], successors[0]);
 		return true;
 	};
 	/*
