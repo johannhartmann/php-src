@@ -1773,23 +1773,22 @@ zend_native_internal_call_direct_general(
 	const zend_native_direct_internal_call_descriptor *descriptor);
 
 /*
- * Whether an internal call can be made as ZEND_INIT_FCALL, SEND_VAL/VAR/REF
- * and ZEND_DO_ICALL make it: an unobserved function without receiver taking
- * positional by-value literals, defined CVs and plain temporaries, or
- * SEND_REF CVs and IS_INDIRECT VARs, its result unused or a temporary.
+ * The static part of a plain direct internal call (see
+ * zend_native_internal_call_direct()): a bound function without receiver or
+ * scope that is neither deprecated, nodiscard nor a trampoline, positional
+ * arguments sent by value from literals, CVs and temporaries, or by
+ * SEND_REF from CVs and VARs, a source Do and an unused or temporary result.
+ * The compiler decides it once per site; the operand indices are those of
+ * the op array the descriptor was built from.
  */
-static zend_always_inline bool zend_native_internal_call_plain(
-	const zend_execute_data *caller,
+bool zend_native_internal_call_descriptor_plain(
 	const zend_native_internal_call_cell *cell,
 	const zend_native_direct_internal_call_descriptor *descriptor)
 {
-	const zend_op_array *op_array = &caller->func->op_array;
 	const zend_function *function = cell->function;
 	uint32_t index;
 
-	if (ZEND_OBSERVER_ENABLED || zend_execute_internal != NULL
-			|| EG(exception) != NULL
-			|| cell->receiver_kind != ZEND_NATIVE_INTERNAL_RECEIVER_NONE
+	if (cell->receiver_kind != ZEND_NATIVE_INTERNAL_RECEIVER_NONE
 			|| descriptor->receiver_operand.kind
 				!= ZEND_MIR_SOURCE_OPERAND_UNUSED
 			|| function == NULL || function->type != ZEND_INTERNAL_FUNCTION
@@ -1797,11 +1796,11 @@ static zend_always_inline bool zend_native_internal_call_plain(
 			|| (function->common.fn_flags
 				& (ZEND_ACC_DEPRECATED | ZEND_ACC_NODISCARD
 					| ZEND_ACC_CALL_VIA_TRAMPOLINE)) != 0
+			|| (descriptor->flags
+				& ZEND_NATIVE_DIRECT_INTERNAL_CALL_REQUIRE_SCALAR_RESULT) != 0
 			|| descriptor->initial_argument_count != descriptor->argument_count
 			|| descriptor->do_opcode == ZEND_CALLABLE_CONVERT
 			|| descriptor->do_opcode == ZEND_CALLABLE_CONVERT_PARTIAL
-			|| descriptor->init_source_position >= op_array->last
-			|| descriptor->do_source_position >= op_array->last
 			|| (descriptor->result_operand.kind
 					!= ZEND_MIR_SOURCE_OPERAND_UNUSED
 				&& ((descriptor->result_operand.kind
@@ -1809,97 +1808,131 @@ static zend_always_inline bool zend_native_internal_call_plain(
 						&& descriptor->result_operand.kind
 							!= ZEND_MIR_SOURCE_OPERAND_SSA)
 					|| descriptor->result_operand.slot_kind
-						!= ZEND_MIR_SOURCE_SLOT_TMP
-					|| descriptor->result_operand.index >= op_array->T))) {
+						!= ZEND_MIR_SOURCE_SLOT_TMP))) {
 		return false;
 	}
 	for (index = 0; index < descriptor->argument_count; index++) {
 		const zend_native_direct_internal_call_argument *argument =
 			&descriptor->arguments[index];
 		const zend_mir_source_operand_ref *source = &argument->source_operand;
-		const zval *value;
+		const bool slot = source->kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+			|| source->kind == ZEND_MIR_SOURCE_OPERAND_SSA;
 
-		if (argument->mode == ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
-				&& argument->source_opcode == ZEND_SEND_REF
-				&& argument->ordinal == index
-				&& (argument->auxiliary_payload == 0
-					|| argument->auxiliary_payload == index + 1)
-				&& argument->auxiliary_operand.kind
-					== ZEND_MIR_SOURCE_OPERAND_UNUSED
-				&& (source->kind == ZEND_MIR_SOURCE_OPERAND_SLOT
-					|| source->kind == ZEND_MIR_SOURCE_OPERAND_SSA)) {
-			if (source->slot_kind == ZEND_MIR_SOURCE_SLOT_CV
-					&& source->index < (uint32_t) op_array->last_var) {
-				continue;
-			}
-			if (source->slot_kind == ZEND_MIR_SOURCE_SLOT_VAR
-					&& source->index < op_array->T) {
-				value = ZEND_CALL_VAR_NUM(caller,
-					(uint32_t) op_array->last_var + source->index);
-				if (Z_TYPE_P(value) == IS_INDIRECT
-						&& Z_TYPE_P(Z_INDIRECT_P(value)) != _IS_ERROR) {
-					continue;
-				}
-			}
-			return false;
-		}
-		if (argument->mode != ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
-				|| argument->ordinal != index
+		if (argument->ordinal != index
 				|| (argument->auxiliary_payload != 0
 					&& argument->auxiliary_payload != index + 1)
 				|| argument->auxiliary_operand.kind
-					!= ZEND_MIR_SOURCE_OPERAND_UNUSED
-				|| (argument->source_opcode != ZEND_SEND_VAL
-					&& argument->source_opcode != ZEND_SEND_VAL_EX
-					&& argument->source_opcode != ZEND_SEND_VAR
-					&& argument->source_opcode != ZEND_SEND_VAR_EX)
-				|| ARG_SHOULD_BE_SENT_BY_REF(function, index + 1)) {
+					!= ZEND_MIR_SOURCE_OPERAND_UNUSED) {
 			return false;
 		}
-		if (source->kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
-			if (source->index >= op_array->last_literal) {
+		if (argument->mode == ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE) {
+			if (argument->source_opcode != ZEND_SEND_REF || !slot
+					|| (source->slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+						&& source->slot_kind != ZEND_MIR_SOURCE_SLOT_VAR)) {
 				return false;
 			}
 			continue;
 		}
-		if (source->kind != ZEND_MIR_SOURCE_OPERAND_SLOT
-				&& source->kind != ZEND_MIR_SOURCE_OPERAND_SSA) {
-			return false;
-		}
-		if (source->slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
-			if (source->index >= (uint32_t) op_array->last_var) {
-				return false;
-			}
-			value = ZEND_CALL_VAR_NUM(caller, source->index);
-			if (Z_ISUNDEF_P(value)) {
-				return false;
-			}
-		} else if (source->slot_kind == ZEND_MIR_SOURCE_SLOT_TMP) {
-			if (source->index >= op_array->T) {
-				return false;
-			}
-			value = ZEND_CALL_VAR_NUM(caller,
-				(uint32_t) op_array->last_var + source->index);
-			if (Z_TYPE_P(value) == IS_INDIRECT || Z_ISREF_P(value)) {
-				return false;
-			}
-		} else {
+		if (argument->mode != ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
+				|| (argument->source_opcode != ZEND_SEND_VAL
+					&& argument->source_opcode != ZEND_SEND_VAL_EX
+					&& argument->source_opcode != ZEND_SEND_VAR
+					&& argument->source_opcode != ZEND_SEND_VAR_EX)
+				|| ARG_SHOULD_BE_SENT_BY_REF(function, index + 1)
+				|| (source->kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+					&& (!slot
+						|| (source->slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+							&& source->slot_kind
+								!= ZEND_MIR_SOURCE_SLOT_TMP)))) {
 			return false;
 		}
 	}
 	return true;
 }
 
-zend_native_direct_call_result zend_native_internal_call_direct(
+/*
+ * Whether an internal call can be made as ZEND_INIT_FCALL, SEND_VAL/VAR/REF
+ * and ZEND_DO_ICALL make it: an unobserved function without receiver taking
+ * positional by-value literals, defined CVs and plain temporaries, or
+ * SEND_REF CVs and IS_INDIRECT VARs, its result unused or a temporary. The
+ * static part is zend_native_internal_call_descriptor_plain(); this part
+ * checks what can change at run time.
+ */
+static zend_always_inline bool zend_native_internal_call_plain_dynamic(
+	const zend_execute_data *caller,
+	const zend_native_direct_internal_call_descriptor *descriptor)
+{
+	const uint32_t last_var = (uint32_t) caller->func->op_array.last_var;
+
+	if (ZEND_OBSERVER_ENABLED || zend_execute_internal != NULL
+			|| EG(exception) != NULL) {
+		return false;
+	}
+	for (uint32_t index = 0; index < descriptor->argument_count; index++) {
+		const zend_native_direct_internal_call_argument *argument =
+			&descriptor->arguments[index];
+		const zend_mir_source_operand_ref *source = &argument->source_operand;
+		const zval *value;
+
+		if (source->kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+			continue;
+		}
+		if (source->slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+			if (argument->mode != ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
+					&& Z_ISUNDEF_P(ZEND_CALL_VAR_NUM(caller, source->index))) {
+				return false;
+			}
+			continue;
+		}
+		value = ZEND_CALL_VAR_NUM(caller, last_var + source->index);
+		if (argument->mode == ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
+				? Z_TYPE_P(value) != IS_INDIRECT
+					|| Z_TYPE_P(Z_INDIRECT_P(value)) == _IS_ERROR
+				: Z_TYPE_P(value) == IS_INDIRECT || Z_ISREF_P(value)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static zend_always_inline bool zend_native_internal_call_plain(
+	const zend_execute_data *caller,
+	const zend_native_internal_call_cell *cell,
+	const zend_native_direct_internal_call_descriptor *descriptor)
+{
+	const zend_op_array *op_array = &caller->func->op_array;
+
+	if (!zend_native_internal_call_descriptor_plain(cell, descriptor)
+			|| descriptor->init_source_position >= op_array->last
+			|| descriptor->do_source_position >= op_array->last
+			|| (descriptor->result_operand.kind
+					!= ZEND_MIR_SOURCE_OPERAND_UNUSED
+				&& descriptor->result_operand.index >= op_array->T)) {
+		return false;
+	}
+	for (uint32_t index = 0; index < descriptor->argument_count; index++) {
+		const zend_mir_source_operand_ref *source =
+			&descriptor->arguments[index].source_operand;
+
+		if (source->kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+				? source->index >= op_array->last_literal
+				: source->index >= (source->slot_kind
+						== ZEND_MIR_SOURCE_SLOT_CV
+					? (uint32_t) op_array->last_var : op_array->T)) {
+			return false;
+		}
+	}
+	return zend_native_internal_call_plain_dynamic(caller, descriptor);
+}
+
+/* The plain call itself, once zend_native_internal_call_plain() holds. */
+static zend_always_inline zend_native_direct_call_result
+zend_native_internal_call_direct_execute(
 	zend_execute_data *caller,
 	const zend_native_internal_call_cell *cell,
 	const zend_native_direct_internal_call_descriptor *descriptor)
 {
-	if (EXPECTED(caller != NULL && cell != NULL && descriptor != NULL
-			&& caller->func != NULL && ZEND_USER_CODE(caller->func->type)
-			&& (descriptor->flags
-				& ZEND_NATIVE_DIRECT_INTERNAL_CALL_REQUIRE_SCALAR_RESULT) == 0
-			&& zend_native_internal_call_plain(caller, cell, descriptor))) {
+	{
 		const zend_op_array *op_array = &caller->func->op_array;
 		zend_native_direct_call_result result = {
 			.status = ZEND_NATIVE_EXCEPTION,
@@ -1973,7 +2006,38 @@ zend_native_direct_call_result zend_native_internal_call_direct(
 		}
 		return result;
 	}
+}
+
+zend_native_direct_call_result zend_native_internal_call_direct(
+	zend_execute_data *caller,
+	const zend_native_internal_call_cell *cell,
+	const zend_native_direct_internal_call_descriptor *descriptor)
+{
+	if (EXPECTED(caller != NULL && cell != NULL && descriptor != NULL
+			&& caller->func != NULL && ZEND_USER_CODE(caller->func->type)
+			&& zend_native_internal_call_plain(caller, cell, descriptor))) {
+		return zend_native_internal_call_direct_execute(
+			caller, cell, descriptor);
+	}
 	return zend_native_internal_call_direct_general(caller, cell, descriptor);
+}
+
+/*
+ * zend_native_internal_call_direct() for a site whose descriptor the
+ * compiler found plain (zend_native_internal_call_descriptor_plain()): only
+ * what can change at run time is checked before the call.
+ */
+zend_native_direct_call_result zend_native_internal_call_direct_plain(
+	zend_execute_data *caller,
+	const zend_native_internal_call_cell *cell,
+	const zend_native_direct_internal_call_descriptor *descriptor)
+{
+	if (EXPECTED(zend_native_internal_call_plain_dynamic(
+			caller, descriptor))) {
+		return zend_native_internal_call_direct_execute(
+			caller, cell, descriptor);
+	}
+	return zend_native_internal_call_direct(caller, cell, descriptor);
 }
 
 static zend_never_inline zend_native_direct_call_result
