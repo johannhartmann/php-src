@@ -1852,7 +1852,8 @@ bool call_site_participates_in_nested_call(
 /*
  * A nested call keeps VM-ordered INIT/SEND/DO fragments unless every call of
  * its overlapping group can transfer its arguments at DO instead. A call
- * qualifies when it statically targets a user function with by-value
+ * qualifies when it statically targets a user function, or an internal
+ * function bound without scope (INIT_FCALL/DO_ICALL), with by-value
  * arguments whose slots nothing touches before its DO. An argument sent
  * before an inner call completes must also be one that call cannot change,
  * so not a reference. If the inner call throws, the exception cleanup
@@ -1862,6 +1863,7 @@ bool call_site_participates_in_nested_call(
 bool nested_call_site_direct_candidate(
 	const zend_tpde_plan *plan, const zend_mir_call_view *calls,
 	const zend_native_call_binding *user_bindings,
+	const zend_native_internal_call_binding *internal_bindings,
 	const zend_op_array *op_array, const zend_ssa *ssa,
 	const zend_mir_call_site_ref &site)
 {
@@ -1872,29 +1874,54 @@ bool nested_call_site_direct_candidate(
 			|| site.source_do_opline_index >= op_array->last
 			|| op_array->opcodes[site.source_init_opline_index].opcode
 				!= ZEND_INIT_FCALL
-			|| (op_array->opcodes[site.source_do_opline_index].opcode
-					!= ZEND_DO_UCALL
-				&& op_array->opcodes[site.source_do_opline_index].opcode
-					!= ZEND_DO_FCALL)
 			|| call_site_requires_source_fragments(plan, site)) {
 		return false;
 	}
+	const uint8_t do_opcode =
+		op_array->opcodes[site.source_do_opline_index].opcode;
 	const int32_t target_index = id_index_find(plan->call_target_index,
 		plan->call_target_index_capacity, site.target_id);
 	zend_mir_call_target_ref target{};
 	if (target_index < 0
 			|| !calls->call_target_at(calls->context,
-				static_cast<uint32_t>(target_index), &target)
-			|| target.kind != ZEND_MIR_CALL_TARGET_DIRECT_USER) {
+				static_cast<uint32_t>(target_index), &target)) {
 		return false;
 	}
-	const int32_t binding_index = id_index_find(plan->user_binding_index,
-		plan->user_binding_index_capacity, site.target_id);
-	const zend_function *callee = binding_index >= 0
-			&& user_bindings[binding_index].entry_cell != nullptr
-		? user_bindings[binding_index].entry_cell->function : nullptr;
-	if (callee == nullptr || callee->type != ZEND_USER_FUNCTION
-			|| site.arguments.count < callee->common.required_num_args) {
+	const zend_function *callee = nullptr;
+	if (target.kind == ZEND_MIR_CALL_TARGET_DIRECT_USER) {
+		const int32_t binding_index = id_index_find(plan->user_binding_index,
+			plan->user_binding_index_capacity, site.target_id);
+		callee = binding_index >= 0
+				&& user_bindings[binding_index].entry_cell != nullptr
+			? user_bindings[binding_index].entry_cell->function : nullptr;
+		if (callee == nullptr || callee->type != ZEND_USER_FUNCTION
+				|| (do_opcode != ZEND_DO_UCALL && do_opcode != ZEND_DO_FCALL)) {
+			return false;
+		}
+	} else if (target.kind == ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL
+			&& internal_bindings != nullptr) {
+		const int32_t binding_index = id_index_find(
+			plan->internal_binding_index,
+			plan->internal_binding_index_capacity, site.target_id);
+		callee = binding_index >= 0
+				&& internal_bindings[binding_index].call_cell != nullptr
+			? internal_bindings[binding_index].call_cell->function : nullptr;
+		/* A declared exact scalar result becomes a register value of the
+		 * call, which the direct group does not transport. */
+		if (callee == nullptr || callee->type != ZEND_INTERNAL_FUNCTION
+				|| callee->common.scope != nullptr
+				|| do_opcode != ZEND_DO_ICALL
+				|| ((callee->common.fn_flags & ZEND_ACC_HAS_RETURN_TYPE) != 0
+					&& callee->common.arg_info != nullptr
+					&& zend_mir_scalar_type_is_exact(
+						exact_scalar_from_declared_type(
+							callee->common.arg_info[-1].type)))) {
+			return false;
+		}
+	} else {
+		return false;
+	}
+	if (site.arguments.count < callee->common.required_num_args) {
 		return false;
 	}
 	for (uint32_t n = 0; n < site.arguments.count; ++n) {
@@ -6996,7 +7023,7 @@ bool initialize_plan(
 		bool direct = true;
 		for (size_t next = 0; next < group.size(); ++next) {
 			direct = direct && nested_call_site_direct_candidate(plan, calls,
-				user_bindings, source_op_array, source_ssa,
+				user_bindings, internal_bindings, source_op_array, source_ssa,
 				sites[group[next]]);
 			for (uint32_t index = 0; index < site_count; ++index) {
 				if (!in_group[index] && overlap(group[next], index)) {
