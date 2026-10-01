@@ -19660,6 +19660,108 @@ bool ZendCompilerX64::compile_inst_impl(
 								call, argument, index, frame_operand)) {
 						continue;
 					}
+					/*
+					 * A register-held by-value argument of the bound function
+					 * is stored into ZEND_CALL_ARG(EX(call), n) directly, as
+					 * SEND_VAL stores it: a temporary's bits, or an exact
+					 * scalar with its type. By-reference, named and extra
+					 * arguments keep the argument helpers.
+					 */
+					{
+						const zend_function *internal_function =
+							call.internal_call_cell != nullptr
+								? call.internal_call_cell->function : nullptr;
+						const uint32_t argument_number =
+							argument.auxiliary_payload != 0
+								? argument.auxiliary_payload
+								: argument.ordinal + 1;
+						const zend_mir_scalar_type_mask exact =
+							operand != IRValueRef{Adaptor::FRAME_VALUE}
+								? adaptor->exact_type(operand)
+								: ZEND_MIR_SCALAR_TYPE_NONE;
+						const bool scalar = operand
+								!= IRValueRef{Adaptor::FRAME_VALUE}
+							&& adaptor->machine_kind(operand)
+								!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+							&& (exact == ZEND_MIR_SCALAR_TYPE_I64
+								|| exact == ZEND_MIR_SCALAR_TYPE_I1
+								|| exact == ZEND_MIR_SCALAR_TYPE_NULL
+								|| exact == ZEND_MIR_SCALAR_TYPE_F64);
+						const uint64_t argument_offset =
+							(uint64_t{ZEND_CALL_FRAME_SLOT} + argument_number - 1)
+								* sizeof(zval);
+						if (internal_function != nullptr
+								&& (direct_boxed_argument || scalar)
+								&& argument.mode
+									== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
+								&& argument.auxiliary_operand.kind
+									== ZEND_MIR_SOURCE_OPERAND_UNUSED
+								&& argument_number != 0
+								&& argument_number <= call.direct_internal_call
+									->initial_argument_count
+								&& !ARG_SHOULD_BE_SENT_BY_REF(
+									internal_function, argument_number)
+								&& argument_offset
+									<= INT32_MAX - sizeof(zval)) {
+							const int32_t payload_offset =
+								static_cast<int32_t>(argument_offset);
+							const int32_t type_offset = payload_offset
+								+ static_cast<int32_t>(
+									offsetof(zval, u1.type_info));
+							auto [frame_ref, frame] =
+								val_ref_single(frame_operand);
+							auto frame_reg = frame.load_to_reg();
+							ScratchReg callee{this};
+							auto callee_reg = callee.alloc_gp();
+							ASM(MOV64rm, callee_reg,
+								FE_MEM(frame_reg, 0, FE_NOREG,
+									static_cast<int32_t>(
+										offsetof(zend_execute_data, call))));
+							if (direct_boxed_argument) {
+								auto boxed = val_ref(operand);
+								/* The boxed transport's second frame use, as
+								 * the helper form consumes it. */
+								auto frame_materialization_liveness =
+									val_ref(frame_operand);
+								(void) frame_materialization_liveness;
+								auto payload = boxed.part(0);
+								auto type_info = boxed.part(1);
+								ASM(MOV64mr, FE_MEM(callee_reg, 0, FE_NOREG,
+									payload_offset), payload.load_to_reg());
+								ASM(MOV32mr, FE_MEM(callee_reg, 0, FE_NOREG,
+									type_offset), type_info.load_to_reg());
+							} else if (exact == ZEND_MIR_SCALAR_TYPE_NULL) {
+								auto [value_ref, value] =
+									val_ref_single(operand);
+								(void) value;
+								ASM(MOV32mi, FE_MEM(callee_reg, 0, FE_NOREG,
+									type_offset), IS_NULL);
+							} else {
+								auto [value_ref, value] =
+									val_ref_single(operand);
+								auto value_reg = value.load_to_reg();
+								if (exact == ZEND_MIR_SCALAR_TYPE_F64) {
+									ASM(SSE_MOVSDmr, FE_MEM(callee_reg, 0,
+										FE_NOREG, payload_offset), value_reg);
+									ASM(MOV32mi, FE_MEM(callee_reg, 0,
+										FE_NOREG, type_offset), IS_DOUBLE);
+								} else if (exact == ZEND_MIR_SCALAR_TYPE_I64) {
+									ASM(MOV64mr, FE_MEM(callee_reg, 0,
+										FE_NOREG, payload_offset), value_reg);
+									ASM(MOV32mi, FE_MEM(callee_reg, 0,
+										FE_NOREG, type_offset), IS_LONG);
+								} else {
+									ScratchReg type{this};
+									auto type_reg = type.alloc_gp();
+									ASM(MOV32rr, type_reg, value_reg);
+									ASM(ADD32ri, type_reg, IS_FALSE);
+									ASM(MOV32mr, FE_MEM(callee_reg, 0,
+										FE_NOREG, type_offset), type_reg);
+								}
+							}
+							continue;
+						}
+					}
 					tpde::x64::CCAssignerSysV assigner{false};
 					CallBuilder builder{*this, assigner};
 					if (operand != IRValueRef{Adaptor::FRAME_VALUE}
