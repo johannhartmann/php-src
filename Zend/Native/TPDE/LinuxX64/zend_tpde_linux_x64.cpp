@@ -479,6 +479,7 @@ public:
 	struct FrameRegister {
 		std::optional<ScratchReg> scratch;
 		AsmReg fixed{};
+		bool is_fixed = false;
 		AsmReg cur_reg() const {
 			return scratch.has_value() ? scratch->cur_reg() : fixed;
 		}
@@ -488,10 +489,25 @@ public:
 			}
 		}
 	};
+	/* A ScratchReg holding the frame, to hand on as a call argument: the
+	 * scratch copy itself, or a copy of the fixed register made here, on
+	 * the path that passes it. */
+	ScratchReg take_frame(FrameRegister &frame) {
+		if (!frame.is_fixed) {
+			ScratchReg taken = std::move(*frame.scratch);
+			frame.scratch.reset();
+			return taken;
+		}
+		ScratchReg copy{this};
+		const AsmReg reg = copy.alloc_gp();
+		ASM(MOV64rr, reg, frame.fixed);
+		return copy;
+	}
 	FrameRegister frame_register(ValuePartRef &&frame) {
 		FrameRegister result;
 		if (frame.has_assignment() && frame.assignment().fixed_assignment()) {
 			result.fixed = frame.load_to_reg();
+			result.is_fixed = true;
 			frame.reset();
 		} else {
 			result.scratch.emplace(std::move(frame).into_scratch());
@@ -968,14 +984,14 @@ public:
 	 */
 	bool emit_fused_compare_helper(
 			const zend_tpde_instruction *compare,
-			const zend_tpde_instruction &branch, ScratchReg &frame_scratch) {
+			const zend_tpde_instruction &branch, FrameRegister &frame_scratch) {
 		const zend_mir_executable_value_ref &operation =
 			compare->value_operation;
 		{
 			tpde::x64::CCAssignerSysV assigner{false};
 			CallBuilder builder{*this, assigner};
 			ValuePart frame_argument{tpde::x64::PlatformConfig::GP_BANK, 8};
-			frame_argument.set_value(this, std::move(frame_scratch));
+			frame_argument.set_value(this, take_frame(frame_scratch));
 			builder.add_arg(std::move(frame_argument), tpde::CCAssignment{});
 			builder.add_arg(ValuePart{
 				zend_tpde_encode_value_operand(operation.op1), 8,
@@ -1014,8 +1030,11 @@ public:
 			}
 			label_place(returned);
 		}
-		const AsmReg frame_reg = frame_scratch.alloc_gp();
-		ASM(MOV64rr, frame_reg, canonical_frame_register());
+		if (!frame_scratch.is_fixed) {
+			frame_scratch.scratch.emplace(this);
+			const AsmReg frame_reg = frame_scratch.scratch->alloc_gp();
+			ASM(MOV64rr, frame_reg, canonical_frame_register());
+		}
 		return true;
 	}
 
@@ -13496,7 +13515,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
 		ScratchReg slot{this};
 		ScratchReg type{this};
@@ -14814,7 +14833,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				targets.push_back(target);
 			}
 			auto [frame_ref, frame] = val_ref_single(node.operands[0]);
-			auto frame_scratch = std::move(frame).into_scratch();
+			auto frame_scratch = frame_register(std::move(frame));
 			if (layout.constant_successor != UINT32_MAX) {
 				generate_uncond_branch(targets[layout.constant_successor]);
 				return true;
@@ -14838,7 +14857,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			if (check_undefined_cv) {
 				ValuePart frame_argument{
 					tpde::x64::PlatformConfig::GP_BANK, 8};
-				frame_argument.set_value(this, std::move(frame_scratch));
+				frame_argument.set_value(this, take_frame(frame_scratch));
 				if (!execute_value_operation_with(
 						&frame_argument,
 						ZEND_NATIVE_HELPER_VALUE_CHECK_VAR,
@@ -15049,7 +15068,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					auto branch = text_writer.label_create();
 					auto [frame_ref, frame] =
 						val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-					auto frame_scratch = std::move(frame).into_scratch();
+					auto frame_scratch = frame_register(std::move(frame));
 					auto spilled = spill_before_branch();
 					release_spilled_regs(spilled);
 					auto frame_reg = frame_scratch.cur_reg();
@@ -15147,7 +15166,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					ValuePart frame_argument{
 						tpde::x64::PlatformConfig::GP_BANK, 8};
 					frame_argument.set_value(
-						this, std::move(frame_scratch));
+						this, take_frame(frame_scratch));
 					builder.add_arg(std::move(frame_argument),
 						tpde::CCAssignment{});
 					const zend_mir_executable_value_ref &operation =
@@ -15239,7 +15258,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					auto branch = text_writer.label_create();
 					auto [frame_ref, frame] =
 						val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-					auto frame_scratch = std::move(frame).into_scratch();
+					auto frame_scratch = frame_register(std::move(frame));
 					auto frame_reg = frame_scratch.cur_reg();
 					if (!layout.destination_scalar_only) {
 						/* The loop variable usually holds the previous element,
@@ -15501,7 +15520,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					ValuePart frame_argument{
 						tpde::x64::PlatformConfig::GP_BANK, 8};
 					frame_argument.set_value(
-						this, std::move(frame_scratch));
+						this, take_frame(frame_scratch));
 					builder.add_arg(std::move(frame_argument),
 						tpde::CCAssignment{});
 					const zend_mir_executable_value_ref &operation =
@@ -15759,7 +15778,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					auto branch = text_writer.label_create();
 					auto [frame_ref, frame] =
 						val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-					auto frame_scratch = std::move(frame).into_scratch();
+					auto frame_scratch = frame_register(std::move(frame));
 					auto frame_reg = frame_scratch.cur_reg();
 					ScratchReg type{this};
 					ScratchReg value{this};
@@ -15948,18 +15967,8 @@ bool ZendCompilerX64::compile_inst_impl(
 									layout.operand_offset
 										+ offsetof(zval, u1.type_info))));
 					}
-					/* A counted temporary, in its slot or held in registers,
-					 * owns a reference that only the helper releases. */
-					if (frame_temporary_condition
-							|| (register_condition
-								&& mir.value_operation.op1.slot_kind
-									== ZEND_MIR_SOURCE_SLOT_TMP)) {
-						ASM(TEST32ri, type_reg,
-							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-						generate_raw_jump(Jump::jne, slow);
-					}
 					/* Inference may know the condition is a boolean, such as a
-					 * comparison result. */
+					 * comparison result, which owns nothing. */
 					const uint32_t condition_position =
 						mir.value_operation.source_position_id;
 					if (!layout.has_result
@@ -15972,6 +15981,16 @@ bool ZendCompilerX64::compile_inst_impl(
 						ASM(CMP8ri, type_reg, IS_TRUE);
 						generate_raw_jump(Jump::je, truthy);
 						generate_raw_jump(Jump::jmp, falsey);
+					}
+					/* A counted temporary, in its slot or held in registers,
+					 * owns a reference that only the helper releases. */
+					if (frame_temporary_condition
+							|| (register_condition
+								&& mir.value_operation.op1.slot_kind
+									== ZEND_MIR_SOURCE_SLOT_TMP)) {
+						ASM(TEST32ri, type_reg,
+							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+						generate_raw_jump(Jump::jne, slow);
 					}
 					ASM(AND32ri, type_reg, Z_TYPE_MASK);
 					ASM(CMP32ri, type_reg, IS_NULL);
@@ -16090,7 +16109,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					ValuePart frame_argument{
 						tpde::x64::PlatformConfig::GP_BANK, 8};
 					frame_argument.set_value(
-						this, std::move(frame_scratch));
+						this, take_frame(frame_scratch));
 					builder.add_arg(
 						std::move(frame_argument), tpde::CCAssignment{});
 					const zend_mir_executable_value_ref &operation =
