@@ -4015,6 +4015,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				auto fast_retry = text_writer.label_create();
 				auto fast_rearm = text_writer.label_create();
 				AsmReg rearm_descriptor_reg{};
+				uint64_t rearm_live_registers = ~uint64_t{0};
 				{
 					auto descriptor_value = image_symbol_value(
 						ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.id);
@@ -4039,6 +4040,9 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(CMP64rm, value_reg, header_field(descriptor_reg,
 						offsetof(zend_native_user_call_site_header,
 							fast_epoch)));
+					/* The registers the stub must preserve: those in use
+					 * here, where the retry and the miss resume. */
+					rearm_live_registers = register_file.used;
 					generate_raw_jump(Jump::jne, fast_rearm);
 					ASM(CMP8mi,
 						FE_MEM(context_register(), 0, FE_NOREG,
@@ -4280,22 +4284,36 @@ bool ZendCompilerX64::compile_inst_impl(
 				 * retry, and of the universal protocol at the miss.
 				 */
 				{
-					static constexpr FeRegGP saved_gp[] = {
-						FE_AX, FE_CX, FE_DX, FE_SI, FE_DI,
-						FE_R8, FE_R9, FE_R10, FE_R11};
-					static constexpr FeRegXMM saved_xmm[] = {
+					static constexpr std::pair<uint32_t, FeRegGP> caller_saved_gp[] = {
+						{0, FE_AX}, {1, FE_CX}, {2, FE_DX}, {6, FE_SI}, {7, FE_DI},
+						{8, FE_R8}, {9, FE_R9}, {10, FE_R10}, {11, FE_R11}};
+					static constexpr FeRegXMM caller_saved_xmm[] = {
 						FE_XMM0, FE_XMM1, FE_XMM2, FE_XMM3, FE_XMM4, FE_XMM5,
 						FE_XMM6, FE_XMM7, FE_XMM8, FE_XMM9, FE_XMM10, FE_XMM11,
 						FE_XMM12, FE_XMM13, FE_XMM14, FE_XMM15};
-					constexpr int32_t xmm_base = 80;
-					constexpr int32_t save_area = xmm_base + 16 * 16;
+					std::vector<FeRegGP> saved_gp;
+					std::vector<FeRegXMM> saved_xmm;
+					for (const auto &[id, reg] : caller_saved_gp) {
+						if (((rearm_live_registers >> id) & 1) != 0) {
+							saved_gp.push_back(reg);
+						}
+					}
+					for (uint32_t i = 0; i < 16; ++i) {
+						if (((rearm_live_registers >> (32 + i)) & 1) != 0) {
+							saved_xmm.push_back(caller_saved_xmm[i]);
+						}
+					}
+					const int32_t xmm_base = static_cast<int32_t>(
+						(8 * saved_gp.size() + 15) & ~size_t{15});
+					const int32_t save_area = xmm_base
+						+ 16 * static_cast<int32_t>(saved_xmm.size()) + 16;
 					label_place(fast_rearm);
 					ASM(LEA64rm, FE_SP, FE_MEM(FE_SP, 0, FE_NOREG, -save_area));
-					for (size_t i = 0; i < std::size(saved_gp); ++i) {
+					for (size_t i = 0; i < saved_gp.size(); ++i) {
 						ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG,
 							static_cast<int32_t>(8 * i)), saved_gp[i]);
 					}
-					for (size_t i = 0; i < std::size(saved_xmm); ++i) {
+					for (size_t i = 0; i < saved_xmm.size(); ++i) {
 						ASM(SSE_MOVDQUmr, FE_MEM(FE_SP, 0, FE_NOREG,
 							xmm_base + static_cast<int32_t>(16 * i)),
 							saved_xmm[i]);
@@ -4309,12 +4327,12 @@ bool ZendCompilerX64::compile_inst_impl(
 						tpde::elf::R_X86_64_PLT32,
 						text_writer.offset() - 4, -4);
 					ASM(TEST8rr, FE_AX, FE_AX);
-					for (size_t i = 0; i < std::size(saved_xmm); ++i) {
+					for (size_t i = 0; i < saved_xmm.size(); ++i) {
 						ASM(SSE_MOVDQUrm, saved_xmm[i], FE_MEM(FE_SP, 0,
 							FE_NOREG,
 							xmm_base + static_cast<int32_t>(16 * i)));
 					}
-					for (size_t i = 0; i < std::size(saved_gp); ++i) {
+					for (size_t i = 0; i < saved_gp.size(); ++i) {
 						ASM(MOV64rm, saved_gp[i], FE_MEM(FE_SP, 0, FE_NOREG,
 							static_cast<int32_t>(8 * i)));
 					}
