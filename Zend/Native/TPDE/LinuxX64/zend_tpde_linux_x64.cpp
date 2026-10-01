@@ -1895,8 +1895,33 @@ bool ZendCompilerX64::compile_boxed_cond_guard(IRInstRef instruction) {
 	 * refcounted source value directly. Register-authoritative values have been
 	 * materialized above so the helper observes the canonical frame value.
 	 */
-	if (layout.has_result) {
+	if (layout.has_result
+			&& (node.materialization_count != 0 || node.cold_phi_inputs)) {
+		/* The cold block alone materializes the condition into its slot
+		 * or defines the PHI inputs of the branch. */
 		generate_raw_jump(Jump::jmp, slow);
+	} else if (layout.has_result) {
+		/* A null, boolean or integer owns nothing: its truth decides inline
+		 * and the result is published on both edges, as the VM's
+		 * JMPZ_EX/JMPNZ_EX publish it. */
+		ASM(MOV32rm, type_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.operand_offset
+					+ offsetof(zval, u1.type_info))));
+		ASM(AND32ri, type_reg, Z_TYPE_MASK);
+		ASM(CMP32ri, type_reg, IS_TRUE);
+		generate_raw_jump(Jump::je, truthy);
+		ASM(CMP32ri, type_reg, IS_NULL);
+		generate_raw_jump(Jump::jb, slow);
+		ASM(CMP32ri, type_reg, IS_FALSE);
+		generate_raw_jump(Jump::jbe, falsey);
+		ASM(CMP32ri, type_reg, IS_LONG);
+		generate_raw_jump(Jump::jne, slow);
+		ASM(CMP64mi,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.operand_offset)), 0);
+		generate_raw_jump(Jump::jne, truthy);
+		generate_raw_jump(Jump::jmp, falsey);
 	} else if (register_string) {
 		bool literal_truthy = false;
 		if (adaptor->known_string_literal(
@@ -2034,7 +2059,7 @@ bool ZendCompilerX64::compile_boxed_cond_guard(IRInstRef instruction) {
 	}
 
 	label_place(truthy);
-	if (layout.has_result && layout.source_opcode == ZEND_JMPNZ_EX) {
+	if (layout.has_result) {
 		ASM(MOV64mi,
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(layout.result_offset)), 1);
@@ -2047,7 +2072,7 @@ bool ZendCompilerX64::compile_boxed_cond_guard(IRInstRef instruction) {
 	ASM(MOV32ri, decision_reg, 1);
 	generate_raw_jump(Jump::jmp, ready);
 	label_place(falsey);
-	if (layout.has_result && layout.source_opcode == ZEND_JMPZ_EX) {
+	if (layout.has_result) {
 		ASM(MOV64mi,
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(layout.result_offset)), 0);

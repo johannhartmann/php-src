@@ -144,6 +144,9 @@ public:
 		uint32_t inlined_checked_step_offset = UINT32_MAX;
 		uint32_t inlined_checked_step_count = 0;
 		uint32_t inlined_checked_operand_count = 0;
+		/* A BoxedCondGuard whose cold block carries the PHI inputs of the
+		 * branch: only the cold edges define them. */
+		bool cold_phi_inputs = false;
 	};
 
 	struct DerivedValue {
@@ -10537,6 +10540,8 @@ public:
 						materialization_operand_index,
 						materialization_count});
 				nodes_.back().control_block = block;
+				nodes_.back().cold_phi_inputs =
+					has_pending_phi_inputs(boxed_cond_cold_block);
 				IRValueRef boxed_condition = source_binding_value_ref(
 					instruction.source_op1_binding);
 				if (boxed_condition == INVALID_VALUE_REF) {

@@ -8433,8 +8433,13 @@ static bool zend_native_call_fast_receive_frame(
 	if (supplied > declared) {
 		zend_native_call_fast_copy_extra_args(callee, op_array, supplied);
 	}
-	for (index = supplied; index < (uint32_t) op_array->last_var; index++) {
-		ZVAL_UNDEF(ZEND_CALL_VAR_NUM(callee, index));
+	{
+		zval *variable = ZEND_CALL_VAR_NUM(callee, supplied);
+		zval *end = ZEND_CALL_VAR_NUM(callee, op_array->last_var);
+
+		for (; variable < end; variable++) {
+			ZVAL_UNDEF(variable);
+		}
 	}
 	for (index = supplied; index < declared; index++) {
 		ZVAL_COPY_VALUE(ZEND_CALL_ARG(callee, index + 1),
