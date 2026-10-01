@@ -15392,21 +15392,48 @@ bool ZendCompilerX64::compile_inst_impl(
 					if (!layout.destination_scalar_only) {
 						/* The loop variable usually holds the previous element,
 						 * which the array still owns: overwrite it inline unless
-						 * it is a reference, the last owner or a new GC root. */
-						ValuePart overwritable{
-							tpde::x64::PlatformConfig::GP_BANK, 8};
-						if (!EncodeBase::encode_zend_native_cv_overwritable(
-								GenericValuePart{GenericValuePart::Expr{
-									frame_reg, static_cast<int64_t>(
-										layout.destination_offset)}},
-								overwritable)) {
-							return false;
+						 * it is a reference, the last owner or a new GC root
+						 * (zend_native_cv_overwritable()). An uncounted value
+						 * falls through; a counted one is checked out of line. */
+						const int32_t destination =
+							static_cast<int32_t>(layout.destination_offset);
+						auto overwritable = text_writer.label_create();
+						auto counted = text_writer.label_create();
+						ScratchReg counted_value{this};
+						const AsmReg counted_reg = counted_value.alloc_gp();
+						ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+							destination + static_cast<int32_t>(
+								offsetof(zval, u1.v.type_flags))), 0);
+						generate_raw_jump(Jump::jne, counted);
+						const bool cold_counted = !text_writer.in_cold_area();
+						if (cold_counted) {
+							text_writer.begin_cold_area();
+						} else {
+							generate_raw_jump(Jump::jmp, overwritable);
 						}
-						const AsmReg overwritable_reg =
-							overwritable.cur_reg_or_load(this);
-						ASM(TEST64rr, overwritable_reg, overwritable_reg);
-						overwritable.reset(this);
+						label_place(counted);
+						ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+							destination + static_cast<int32_t>(
+								offsetof(zval, u1.v.type))), IS_REFERENCE);
 						generate_raw_jump(Jump::je, slow);
+						ASM(MOV64rm, counted_reg,
+							FE_MEM(frame_reg, 0, FE_NOREG, destination));
+						ASM(CMP32mi, FE_MEM(counted_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_refcounted_h, refcount))), 1);
+						generate_raw_jump(Jump::je, slow);
+						ASM(TEST32mi, FE_MEM(counted_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_refcounted_h, u.type_info))),
+							static_cast<int32_t>(GC_INFO_MASK
+								| (GC_NOT_COLLECTABLE << GC_FLAGS_SHIFT)));
+						generate_raw_jump(Jump::je, slow);
+						generate_raw_jump(Jump::jmp, overwritable);
+						if (cold_counted) {
+							text_writer.end_cold_area();
+						}
+						label_place(overwritable);
+						counted_value.reset();
 					}
 					ScratchReg type{this};
 					ScratchReg array{this};
