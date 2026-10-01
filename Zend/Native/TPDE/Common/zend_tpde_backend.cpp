@@ -5280,8 +5280,11 @@ void freeze_machine_control_flow(zend_tpde_plan *plan)
 					break;
 				}
 				case ZEND_MIR_OPCODE_OBJECT_FETCH_IS:
-					/* The Linux backend reads a cached declared property
-					 * inline (zend_tpde_object_property_isset_read_at). */
+				case ZEND_MIR_OPCODE_OBJECT_FETCH_W:
+					/* The Linux backend reads or addresses a cached
+					 * declared property inline
+					 * (zend_tpde_object_property_isset_read_at,
+					 * zend_tpde_object_property_write_fetch_at). */
 					if (plan->linux_inline_forms) {
 						flags |=
 							ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;

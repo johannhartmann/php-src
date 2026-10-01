@@ -12424,6 +12424,100 @@ bool ZendCompilerX64::compile_inst_impl(
 			guarded_successors[1], guarded_successors[0]);
 		return true;
 	};
+	/*
+	 * FETCH_OBJ_W of a cached untyped declared property: the VAR result
+	 * addresses the slot through IS_INDIRECT, as the helper's cached fetch
+	 * does; anything else takes the guarded cold block.
+	 */
+	auto object_property_address = [&]() {
+		zend_tpde_object_property_read layout;
+
+		if (node.kind != Adaptor::InstKind::GuardedFast
+				|| node.has_result
+				|| !zend_tpde_object_property_write_fetch_at(mir, &layout)
+				|| layout.receiver_offset > INT32_MAX
+				|| layout.result_offset > INT32_MAX
+				|| layout.cache_offset > INT32_MAX - 3 * sizeof(void *)) {
+			return branch_to_guarded_cold();
+		}
+		const auto guarded_successors =
+			adaptor->block_succs(IRBlockRef{node.control_block});
+		if (node.control_block == UINT32_MAX
+				|| node.continuation_block == UINT32_MAX
+				|| guarded_successors.size() < 2
+				|| static_cast<uint32_t>(guarded_successors[0])
+					!= node.continuation_block
+				|| static_cast<uint32_t>(guarded_successors[1])
+					!= node.argument_index) {
+			return false;
+		}
+		auto slow = text_writer.label_create();
+		auto done = text_writer.label_create();
+		auto [frame_ref, frame] =
+			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+		auto frame_scratch = std::move(frame).into_scratch();
+		auto frame_reg = frame_scratch.cur_reg();
+		ScratchReg decision{this};
+		auto decision_reg = decision.alloc_gp();
+		{
+			ScratchReg cache{this};
+			auto cache_reg = cache.alloc_gp();
+			ASM(MOV64rm, cache_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_execute_data, run_time_cache))));
+			ASM(TEST64rr, cache_reg, cache_reg);
+			generate_raw_jump(Jump::je, slow);
+			/* A typed property's info in the cache entry needs the
+			 * helper's checks. */
+			ASM(CMP64mi,
+				FE_MEM(cache_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						layout.cache_offset + 2 * sizeof(void *))),
+				0);
+			generate_raw_jump(Jump::jne, slow);
+			ValuePart slot{tpde::x64::PlatformConfig::GP_BANK, 8};
+			if (!EncodeBase::encode_zend_native_property_slot(
+					GenericValuePart{GenericValuePart::Expr{frame_reg,
+						static_cast<int64_t>(layout.receiver_offset)}},
+					GenericValuePart{GenericValuePart::Expr{
+						std::move(cache),
+						static_cast<int64_t>(layout.cache_offset)}},
+					slot)) {
+				return false;
+			}
+			const AsmReg slot_reg = slot.cur_reg_or_load(this);
+			ASM(TEST64rr, slot_reg, slot_reg);
+			generate_raw_jump(Jump::je, slow);
+			ASM(MOV64mr,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(layout.result_offset)),
+				slot_reg);
+			ASM(MOV32mi,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(layout.result_offset
+						+ offsetof(zval, u1.type_info))),
+				IS_INDIRECT);
+			slot.reset(this);
+		}
+		if (guarded_exit_can_jump_directly(
+				guarded_successors[1], guarded_successors[0])) {
+			decision.reset();
+			frame_scratch.reset();
+			generate_guarded_direct_exit(
+				slow, guarded_successors[1], guarded_successors[0]);
+			return true;
+		}
+		ASM(MOV32ri, decision_reg, 0);
+		generate_raw_jump(Jump::jmp, done);
+		label_place(slow);
+		ASM(MOV32ri, decision_reg, 1);
+		label_place(done);
+		frame_scratch.reset();
+		generate_guarded_decision_branch(std::move(decision),
+			guarded_successors[1], guarded_successors[0]);
+		return true;
+	};
 	auto object_property_write = [&]() {
 		zend_tpde_object_property_write layout;
 		const zend_tpde_machine_reference *property_reference =
@@ -13899,6 +13993,10 @@ bool ZendCompilerX64::compile_inst_impl(
 				|| (record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_IS
 					&& node.kind == Adaptor::InstKind::GuardedFast)) {
 			return object_property_read();
+		}
+		if (record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_W
+				&& node.kind == Adaptor::InstKind::GuardedFast) {
+			return object_property_address();
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_OBJECT_ASSIGN) {
 			return object_property_write();
