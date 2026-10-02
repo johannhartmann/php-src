@@ -1041,6 +1041,9 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
 			| ZEND_NATIVE_EFFECT_MAY_FAIL,
 		(const void *) zend_native_value_identical_direct},
+	{ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_ADDRESS,
+		ZEND_NATIVE_EFFECT_ARRAY_SLOW_WRITE,
+		(const void *) zend_native_value_assign_dim_address},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {

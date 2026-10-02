@@ -7197,11 +7197,56 @@ bool ZendCompilerX64::compile_inst_impl(
 				? zend_tpde_encode_value_operand(operand, unused_payload)
 				: zend_tpde_encode_value_operand(operand);
 		};
-		builder.add_arg(ValuePart{
-			encode_operand(
-				operation.op1, operation.op1_unused_payload), 8,
-			tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-		if (const_include_once) {
+		/* ASSIGN_DIM takes the addresses of its container slot, key and
+		 * value: the helper decodes nothing. */
+		const bool assign_dim_address =
+			helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM
+			&& adaptor->plan()->linux_inline_forms
+			&& zend_tpde_dim_direct_at(mir, &dim_direct);
+		if (!assign_dim_address) {
+			builder.add_arg(ValuePart{
+				encode_operand(
+					operation.op1, operation.op1_unused_payload), 8,
+				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+		}
+		if (assign_dim_address) {
+			auto address_arg = [&](uint32_t kind, uint32_t offset) {
+				ScratchReg address{this};
+				const AsmReg address_reg = address.alloc_gp();
+				if (kind == ZEND_NATIVE_DIM_DIRECT_CONST) {
+					ASM(MOV64rm, address_reg,
+						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zend_execute_data, func))));
+					ASM(MOV64rm, address_reg,
+						FE_MEM(address_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zend_op_array, literals))));
+					ASM(LEA64rm, address_reg,
+						FE_MEM(address_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offset * sizeof(zval))));
+				} else if (kind == ZEND_NATIVE_DIM_DIRECT_UNUSED) {
+					ASM(XOR32rr, address_reg, address_reg);
+				} else {
+					ASM(LEA64rm, address_reg,
+						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+							static_cast<int32_t>(offset)));
+				}
+				ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
+				value.set_value(this, std::move(address));
+				builder.add_arg(std::move(value), tpde::CCAssignment{});
+			};
+			address_arg(ZEND_NATIVE_DIM_DIRECT_CV,
+				static_cast<uint32_t>(dim_direct.slots));
+			address_arg(static_cast<uint32_t>(dim_direct.descriptor & 3),
+				static_cast<uint32_t>(dim_direct.slots >> 32));
+			address_arg(static_cast<uint32_t>((dim_direct.descriptor >> 2) & 3),
+				static_cast<uint32_t>(dim_direct.more_slots));
+			builder.add_arg(ValuePart{dim_direct.descriptor, 8,
+				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			builder.call(runtime_symbol(
+				ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_ADDRESS));
+		} else if (const_include_once) {
 			builder.add_arg(ValuePart{operation.extended_value, 4,
 				tpde::x64::PlatformConfig::GP_BANK},
 				tpde::CCAssignment{});
