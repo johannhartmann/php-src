@@ -4549,7 +4549,12 @@ static zend_native_entry_cell *zend_native_compiler_resolve_reentry(
 			|| !ZEND_USER_CODE(resolved->type)) {
 		return NULL;
 	}
-	memset(&diagnostic, 0, sizeof(diagnostic));
+	/* A failure fills the message; nothing reads past its start. */
+	diagnostic.phase = ZEND_NATIVE_COMPILE_PHASE_SSA;
+	diagnostic.code = 0;
+	diagnostic.source_opline = 0;
+	diagnostic.has_source_opline = false;
+	diagnostic.message[0] = '\0';
 	zend_native_compiler_mutation_lock(compiler);
 	first_compiled_function = compiler->function_count;
 	source_op_array = zend_native_compiler_canonical_reentry_op_array(

@@ -2689,7 +2689,9 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 				entry_cell->frame_probe_context, previous,
 				execute_data);
 		}
-		memset(&diagnostic, 0, sizeof(diagnostic));
+		/* Only the code and the message start are read back. */
+		diagnostic.code = ZEND_NATIVE_DIAGNOSTIC_OK;
+		diagnostic.message[0] = '\0';
 		zend_native_entry_cell_retain_active(entry_cell);
 		EG(current_execute_data) = execute_data;
 		zend_native_executor_request_state.execution_depth++;
@@ -2732,7 +2734,8 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 			memset(&diagnostic, 0, sizeof(diagnostic));
 			status = ZEND_NATIVE_EXCEPTION;
 		} else {
-			memset(&diagnostic, 0, sizeof(diagnostic));
+			diagnostic.code = ZEND_NATIVE_DIAGNOSTIC_OK;
+			diagnostic.message[0] = '\0';
 			zend_native_entry_cell_retain_active(
 				dispatch->entry_cell);
 			EG(current_execute_data) = execute_data;

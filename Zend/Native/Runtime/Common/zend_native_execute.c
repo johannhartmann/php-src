@@ -384,6 +384,11 @@ static zend_native_status zend_native_execute_frame_impl(
 	 * observer unwinding.  Keep it behind a second Zend bailout boundary because
 	 * observers are extension code and may themselves throw or bail out.
 	 */
+	if (state->observer_started && !state->observer_finished
+			&& !ZEND_OBSERVER_ENABLED) {
+		/* ZEND_OBSERVER_FCALL_END() notifies nothing. */
+		state->observer_finished = true;
+	}
 	if (state->observer_started && !state->observer_finished) {
 		zend_try {
 			ZEND_OBSERVER_FCALL_END(execute_data,
