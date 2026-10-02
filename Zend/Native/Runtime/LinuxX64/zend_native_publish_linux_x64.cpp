@@ -11,6 +11,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <limits>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,7 @@
 # include <sys/mman.h>
 # include <unistd.h>
 
+extern "C" char __executable_start;
 extern "C" void __register_frame(void *);
 extern "C" void __deregister_frame(void *);
 extern "C" void __unw_add_dynamic_eh_frame_section(uintptr_t)
@@ -95,6 +97,8 @@ void deregister_eh_frame(void *eh_frame) {
 	}
 }
 
+void unmap_linux_x64_image(unsigned char *mapping, size_t size);
+
 void destroy_linux_x64_published_state(void *opaque) {
 	auto *state = static_cast<LinuxX64PublishedState *>(opaque);
 	if (state == nullptr) {
@@ -104,9 +108,110 @@ void destroy_linux_x64_published_state(void *opaque) {
 		deregister_eh_frame(state->eh_frame);
 	}
 	if (state->mapping != nullptr) {
-		::munmap(state->mapping, state->mapping_size);
+		unmap_linux_x64_image(state->mapping, state->mapping_size);
 	}
 	delete state;
+}
+
+/*
+ * Images are mapped just below the executable while that range has room, so
+ * the generated code calls the runtime helpers with a direct rel32 instead
+ * of through a PLT entry's indirect jump. The area is handed out downwards
+ * from the executable; unmapped images return their ranges for reuse, so a
+ * long-running process keeps placing images there. Anything else is mapped
+ * wherever the kernel chooses and keeps the PLT entries.
+ */
+struct LinuxX64NearArea {
+	std::mutex lock;
+	uintptr_t top = 0;
+	uintptr_t cursor = 0;
+	std::vector<std::pair<uintptr_t, size_t>> free_ranges;
+};
+
+LinuxX64NearArea &linux_x64_near_area() {
+	static LinuxX64NearArea area;
+	return area;
+}
+
+constexpr uintptr_t LINUX_X64_NEAR_REACH = UINT64_C(1) << 30;
+
+unsigned char *try_map_linux_x64_at(uintptr_t address, size_t size) {
+	void *mapping = ::mmap(reinterpret_cast<void *>(address), size,
+		PROT_READ | PROT_WRITE,
+		MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+	if (mapping == reinterpret_cast<void *>(address)) {
+		return static_cast<unsigned char *>(mapping);
+	}
+	if (mapping != MAP_FAILED) {
+		/* A kernel without MAP_FIXED_NOREPLACE took the address as a
+		 * hint only. */
+		::munmap(mapping, size);
+	}
+	return nullptr;
+}
+
+unsigned char *map_linux_x64_image(size_t size) {
+	LinuxX64NearArea &area = linux_x64_near_area();
+	{
+		std::lock_guard<std::mutex> guard{area.lock};
+		if (area.top == 0) {
+			area.top = reinterpret_cast<uintptr_t>(&__executable_start)
+				& ~((UINT64_C(1) << 21) - 1);
+			area.cursor = area.top;
+		}
+		for (auto it = area.free_ranges.begin();
+				it != area.free_ranges.end(); ++it) {
+			if (it->second < size) {
+				continue;
+			}
+			if (unsigned char *mapping = try_map_linux_x64_at(it->first, size)) {
+				it->first += size;
+				it->second -= size;
+				if (it->second == 0) {
+					area.free_ranges.erase(it);
+				}
+				return mapping;
+			}
+		}
+		for (int attempt = 0; attempt < 8 && area.cursor > size
+				&& area.top - (area.cursor - size) <= LINUX_X64_NEAR_REACH;
+				++attempt) {
+			area.cursor -= size;
+			if (unsigned char *mapping =
+					try_map_linux_x64_at(area.cursor, size)) {
+				return mapping;
+			}
+		}
+	}
+	void *mapping = ::mmap(nullptr, size, PROT_READ | PROT_WRITE,
+		MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	return mapping == MAP_FAILED
+		? nullptr : static_cast<unsigned char *>(mapping);
+}
+
+void unmap_linux_x64_image(unsigned char *mapping, size_t size) {
+	LinuxX64NearArea &area = linux_x64_near_area();
+	const uintptr_t start = reinterpret_cast<uintptr_t>(mapping);
+
+	::munmap(mapping, size);
+	std::lock_guard<std::mutex> guard{area.lock};
+	if (start < area.cursor || start + size > area.top) {
+		return;
+	}
+	auto it = std::lower_bound(area.free_ranges.begin(),
+		area.free_ranges.end(), std::make_pair(start, size_t{0}));
+	it = area.free_ranges.insert(it, {start, size});
+	/* Merge with the neighbours. */
+	if (it + 1 != area.free_ranges.end()
+			&& it->first + it->second == (it + 1)->first) {
+		it->second += (it + 1)->second;
+		area.free_ranges.erase(it + 1);
+	}
+	if (it != area.free_ranges.begin()
+			&& (it - 1)->first + (it - 1)->second == it->first) {
+		(it - 1)->second += it->second;
+		area.free_ranges.erase(it);
+	}
 }
 
 bool signed_32_displacement(uintptr_t target, int64_t addend, uintptr_t pc,
@@ -319,10 +424,8 @@ zend_result map_linux_x64_object(
 			"unable to allocate Linux mapping state");
 		return FAILURE;
 	}
-	state->mapping = static_cast<unsigned char *>(::mmap(nullptr, mapped_size,
-		PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
-	if (state->mapping == MAP_FAILED) {
-		state->mapping = nullptr;
+	state->mapping = map_linux_x64_image(mapped_size);
+	if (state->mapping == nullptr) {
 		delete state;
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
 			"unable to allocate Linux native mapping");
