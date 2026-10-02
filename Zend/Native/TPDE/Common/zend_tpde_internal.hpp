@@ -2454,6 +2454,13 @@ struct zend_tpde_plan {
 	 * arguments.
 	 */
 	bool linux_inline_forms;
+	/* The source op array is a generator: only then can an entry frame be
+	 * a generator frame. */
+	bool source_generator;
+	/* The literal table of the source op array, which outlives the
+	 * compilation: lets the emitter specialize code on literal keys. */
+	const zval *source_literals;
+	uint32_t source_literal_count;
 	bool may_emit_calls;
 	bool zend_entry_may_emit_calls;
 	bool typed_body_may_emit_calls;

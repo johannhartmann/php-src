@@ -157,6 +157,22 @@ struct EncodeCompiler {
   bool encode_zend_native_indirect_find_literal_w(GenericValuePart &&param_0, GenericValuePart &&param_1, ValuePart &&result_0) {  return encode_zend_native_indirect_find_literal_w(std::move(param_0), std::move(param_1), result_0); }
   bool encode_zend_native_indirect_find_key_w(GenericValuePart &&param_0, GenericValuePart &&param_1, ValuePart &result_0);
   bool encode_zend_native_indirect_find_key_w(GenericValuePart &&param_0, GenericValuePart &&param_1, ValuePart &&result_0) {  return encode_zend_native_indirect_find_key_w(std::move(param_0), std::move(param_1), result_0); }
+  bool encode_zend_native_array_find_str(GenericValuePart &&param_0, GenericValuePart &&param_1, GenericValuePart &&param_2, ValuePart &result_0);
+  bool encode_zend_native_array_find_str(GenericValuePart &&param_0, GenericValuePart &&param_1, GenericValuePart &&param_2, ValuePart &&result_0) {  return encode_zend_native_array_find_str(std::move(param_0), std::move(param_1), std::move(param_2), result_0); }
+  bool encode_zend_native_array_find_idx(GenericValuePart &&param_0, GenericValuePart &&param_1, ValuePart &result_0);
+  bool encode_zend_native_array_find_idx(GenericValuePart &&param_0, GenericValuePart &&param_1, ValuePart &&result_0) {  return encode_zend_native_array_find_idx(std::move(param_0), std::move(param_1), result_0); }
+  bool encode_zend_native_array_test_str(GenericValuePart &&param_0, GenericValuePart &&param_1, GenericValuePart &&param_2, ValuePart &result_0);
+  bool encode_zend_native_array_test_str(GenericValuePart &&param_0, GenericValuePart &&param_1, GenericValuePart &&param_2, ValuePart &&result_0) {  return encode_zend_native_array_test_str(std::move(param_0), std::move(param_1), std::move(param_2), result_0); }
+  bool encode_zend_native_array_test_idx(GenericValuePart &&param_0, GenericValuePart &&param_1, ValuePart &result_0);
+  bool encode_zend_native_array_test_idx(GenericValuePart &&param_0, GenericValuePart &&param_1, ValuePart &&result_0) {  return encode_zend_native_array_test_idx(std::move(param_0), std::move(param_1), result_0); }
+  bool encode_zend_native_array_find_str_w(GenericValuePart &&param_0, GenericValuePart &&param_1, GenericValuePart &&param_2, ValuePart &result_0);
+  bool encode_zend_native_array_find_str_w(GenericValuePart &&param_0, GenericValuePart &&param_1, GenericValuePart &&param_2, ValuePart &&result_0) {  return encode_zend_native_array_find_str_w(std::move(param_0), std::move(param_1), std::move(param_2), result_0); }
+  bool encode_zend_native_array_find_idx_w(GenericValuePart &&param_0, GenericValuePart &&param_1, ValuePart &result_0);
+  bool encode_zend_native_array_find_idx_w(GenericValuePart &&param_0, GenericValuePart &&param_1, ValuePart &&result_0) {  return encode_zend_native_array_find_idx_w(std::move(param_0), std::move(param_1), result_0); }
+  bool encode_zend_native_indirect_find_str_w(GenericValuePart &&param_0, GenericValuePart &&param_1, GenericValuePart &&param_2, ValuePart &result_0);
+  bool encode_zend_native_indirect_find_str_w(GenericValuePart &&param_0, GenericValuePart &&param_1, GenericValuePart &&param_2, ValuePart &&result_0) {  return encode_zend_native_indirect_find_str_w(std::move(param_0), std::move(param_1), std::move(param_2), result_0); }
+  bool encode_zend_native_indirect_find_idx_w(GenericValuePart &&param_0, GenericValuePart &&param_1, ValuePart &result_0);
+  bool encode_zend_native_indirect_find_idx_w(GenericValuePart &&param_0, GenericValuePart &&param_1, ValuePart &&result_0) {  return encode_zend_native_indirect_find_idx_w(std::move(param_0), std::move(param_1), result_0); }
   bool encode_zend_native_zval_table(GenericValuePart &&param_0, ValuePart &result_0);
   bool encode_zend_native_zval_table(GenericValuePart &&param_0, ValuePart &&result_0) {  return encode_zend_native_zval_table(std::move(param_0), result_0); }
   bool encode_zend_native_boxed_table(GenericValuePart &&param_0, GenericValuePart &&param_1, ValuePart &result_0);
@@ -2099,219 +2115,212 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     //
     // bb.2 (%ir-block.11):
     // ; predecessors: %bb.1, %bb.0
-    //   successors: %bb.3(0x40000000), %bb.29(0x40000000); %bb.3(50.00%), %bb.29(50.00%)
+    //   successors: %bb.3(0x40000000), %bb.28(0x40000000); %bb.3(50.00%), %bb.28(50.00%)
     //   liveins: $al, $rdi, $rsi
     //   CMP8ri killed renamable $al, 7, implicit-def $eflags
-    //   JCC_1 %bb.29, 5, implicit killed $eflags
+    //   JCC_1 %bb.28, 5, implicit killed $eflags
     //
     // bb.3 (%ir-block.15):
     // ; predecessors: %bb.2
-    //   successors: %bb.29(0x30000000), %bb.4(0x50000000); %bb.29(37.50%), %bb.4(62.50%)
+    //   successors: %bb.15(0x2aaaaaab), %bb.4(0x55555555); %bb.15(33.33%), %bb.4(66.67%)
     //   liveins: $rdi, $rsi
     //   renamable $rdx = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.13, !tbaa !4)
-    //   TEST64rr renamable $rdx, renamable $rdx, implicit-def $eflags
-    //   JCC_1 %bb.29, 4, implicit killed $eflags
-    //
-    // bb.4 (%ir-block.19):
-    // ; predecessors: %bb.3
-    //   successors: %bb.16(0x2aaaaaab), %bb.5(0x55555555); %bb.16(33.33%), %bb.5(66.67%)
-    //   liveins: $rdx, $rsi
     //   renamable $rcx = MOV64rm renamable $rsi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.1, !tbaa !4)
-    //   renamable $eax = MOVZX32rm8 killed renamable $rsi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.20, align 8, !tbaa !4)
+    //   renamable $eax = MOVZX32rm8 killed renamable $rsi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.18, align 8, !tbaa !4)
     //   CMP32ri renamable $eax, 6, implicit-def $eflags
-    //   JCC_1 %bb.16, 4, implicit killed $eflags
+    //   JCC_1 %bb.15, 4, implicit killed $eflags
     //
-    // bb.5 (%ir-block.19):
-    // ; predecessors: %bb.4
-    //   successors: %bb.6(0x40000001), %bb.29(0x3fffffff); %bb.6(50.00%), %bb.29(50.00%)
+    // bb.4 (%ir-block.15):
+    // ; predecessors: %bb.3
+    //   successors: %bb.5(0x40000001), %bb.28(0x3fffffff); %bb.5(50.00%), %bb.28(50.00%)
     //   liveins: $eax, $rcx, $rdx
     //   CMP32ri killed renamable $eax, 4, implicit-def $eflags
-    //   JCC_1 %bb.29, 5, implicit killed $eflags
+    //   JCC_1 %bb.28, 5, implicit killed $eflags
     //
-    // bb.6 (%ir-block.23):
+    // bb.5 (%ir-block.21):
+    // ; predecessors: %bb.4
+    //   successors: %bb.9(0x40000000), %bb.6(0x40000000); %bb.9(50.00%), %bb.6(50.00%)
+    //   liveins: $rcx, $rdx
+    //   TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.22, align 8)
+    //   JCC_1 %bb.6, 5, implicit killed $eflags
+    //
+    // bb.9 (%ir-block.42):
     // ; predecessors: %bb.5
-    //   successors: %bb.10(0x40000000), %bb.7(0x40000000); %bb.10(50.00%), %bb.7(50.00%)
+    //   successors: %bb.10(0x80000000); %bb.10(100.00%)
     //   liveins: $rcx, $rdx
-    //   TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.24, align 8)
-    //   JCC_1 %bb.7, 5, implicit killed $eflags
-    //
-    // bb.10 (%ir-block.44):
-    // ; predecessors: %bb.6
-    //   successors: %bb.11(0x80000000); %bb.11(100.00%)
-    //   liveins: $rcx, $rdx
-    //   renamable $rsi = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.45, !tbaa !4)
-    //   renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.48, !tbaa !23)
+    //   renamable $rsi = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.43, !tbaa !4)
+    //   renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.46, !tbaa !24)
     //   renamable $eax = OR32rr killed renamable $eax(tied-def 0), renamable $ecx, implicit-def dead $eflags
     //   renamable $rax = MOVSX64rr32 killed renamable $eax
-    //   renamable $edx = MOV32rm renamable $rsi, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.51, !tbaa !4)
+    //   renamable $edx = MOV32rm renamable $rsi, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.49, !tbaa !4)
     //   $eax = MOV32ri 1, implicit-def $rax
-    //   JMP_1 %bb.11
+    //   JMP_1 %bb.10
     //
-    // bb.15 (%ir-block.71, align 16):
-    // ; predecessors: %bb.12, %bb.13
-    //   successors: %bb.11(0x80000000); %bb.11(100.00%)
+    // bb.14 (%ir-block.69, align 16):
+    // ; predecessors: %bb.11, %bb.12
+    //   successors: %bb.10(0x80000000); %bb.10(100.00%)
     //   liveins: $rax, $rcx, $rdx, $rsi
-    //   renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.72, !tbaa !4)
+    //   renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.70, !tbaa !4)
     //
-    // bb.11 (%ir-block.44):
-    // ; predecessors: %bb.10, %bb.15
-    //   successors: %bb.30(0x0715ba18), %bb.12(0x78ea45e7); %bb.30(5.54%), %bb.12(94.46%)
+    // bb.10 (%ir-block.42):
+    // ; predecessors: %bb.9, %bb.14
+    //   successors: %bb.29(0x0715ba19), %bb.11(0x78ea45e7); %bb.29(5.54%), %bb.11(94.46%)
     //   liveins: $rax, $edx, $rcx, $rsi
     //   CMP32ri renamable $edx, -1, implicit-def $eflags
-    //   JCC_1 %bb.30, 4, implicit killed $eflags
+    //   JCC_1 %bb.29, 4, implicit killed $eflags
     //
-    // bb.12 (%ir-block.54):
-    // ; predecessors: %bb.11
-    //   successors: %bb.13(0x40000000), %bb.15(0x40000000); %bb.13(50.00%), %bb.15(50.00%)
+    // bb.11 (%ir-block.52):
+    // ; predecessors: %bb.10
+    //   successors: %bb.12(0x40000000), %bb.14(0x40000000); %bb.12(50.00%), %bb.14(50.00%)
     //   liveins: $edx, $rax, $rcx, $rsi
     //   renamable $edi = MOV32rr killed renamable $edx, implicit-def $rdi
     //   renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
     //   renamable $rdx = LEA64r renamable $rsi, 1, renamable $rdi, 0, $noreg
-    //   CMP64mr renamable $rsi, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.58, !tbaa !24)
-    //   JCC_1 %bb.15, 5, implicit killed $eflags
+    //   CMP64mr renamable $rsi, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.56, !tbaa !25)
+    //   JCC_1 %bb.14, 5, implicit killed $eflags
     //
-    // bb.13 (%ir-block.61):
-    // ; predecessors: %bb.12
-    //   successors: %bb.14(0x04000000), %bb.15(0x7c000000); %bb.14(3.12%), %bb.15(96.88%)
+    // bb.12 (%ir-block.59):
+    // ; predecessors: %bb.11
+    //   successors: %bb.13(0x04000000), %bb.14(0x7c000000); %bb.13(3.12%), %bb.14(96.88%)
     //   liveins: $rax, $rcx, $rdx, $rsi
-    //   CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.62, !tbaa !28)
-    //   JCC_1 %bb.15, 5, implicit killed $eflags
+    //   CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.60, !tbaa !29)
+    //   JCC_1 %bb.14, 5, implicit killed $eflags
     //
-    // bb.14 (%ir-block.65):
-    // ; predecessors: %bb.13, %bb.20, %bb.28, %bb.25, %bb.26
+    // bb.13 (%ir-block.63):
+    // ; predecessors: %bb.12, %bb.19, %bb.27, %bb.24, %bb.25
     //   liveins: $rdx
     //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
-    //   CMP8mi renamable $rdx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.66, align 8, !tbaa !4), (load (s8) from %ir.145, align 8, !tbaa !4), (load (s8) from %ir.104, align 8, !tbaa !4)
+    //   CMP8mi renamable $rdx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.64, align 8, !tbaa !4), (load (s8) from %ir.143, align 8, !tbaa !4), (load (s8) from %ir.102, align 8, !tbaa !4)
     //   renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rdx, 5, implicit killed $eflags
     //   RET64 killed $rax
     //
-    // bb.16 (%ir-block.75):
-    // ; predecessors: %bb.4
-    //   successors: %bb.29(0x30000000), %bb.17(0x50000000); %bb.29(37.50%), %bb.17(62.50%)
+    // bb.15 (%ir-block.73):
+    // ; predecessors: %bb.3
+    //   successors: %bb.28(0x30000000), %bb.16(0x50000000); %bb.28(37.50%), %bb.16(62.50%)
     //   liveins: $rcx, $rdx
-    //   renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.77, !tbaa !31)
+    //   renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.75, !tbaa !32)
     //   TEST64rr renamable $rsi, renamable $rsi, implicit-def $eflags
-    //   JCC_1 %bb.29, 4, implicit killed $eflags
+    //   JCC_1 %bb.28, 4, implicit killed $eflags
     //
-    // bb.17 (%ir-block.80):
-    // ; predecessors: %bb.16
-    //   successors: %bb.18(0x40000000), %bb.30(0x40000000); %bb.18(50.00%), %bb.30(50.00%)
+    // bb.16 (%ir-block.78):
+    // ; predecessors: %bb.15
+    //   successors: %bb.17(0x40000000), %bb.29(0x40000000); %bb.17(50.00%), %bb.29(50.00%)
     //   liveins: $rcx, $rdx, $rsi
     //   $eax = MOV32ri 1, implicit-def $rax
-    //   TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.81, align 8)
-    //   JCC_1 %bb.30, 5, implicit killed $eflags
+    //   TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.79, align 8)
+    //   JCC_1 %bb.29, 5, implicit killed $eflags
     //
-    // bb.18 (%ir-block.85):
-    // ; predecessors: %bb.17
-    //   successors: %bb.19(0x80000000); %bb.19(100.00%)
+    // bb.17 (%ir-block.83):
+    // ; predecessors: %bb.16
+    //   successors: %bb.18(0x80000000); %bb.18(100.00%)
     //   liveins: $rax, $rcx, $rdx, $rsi
-    //   renamable $rdi = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.86, !tbaa !4)
-    //   renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.89, !tbaa !23)
+    //   renamable $rdi = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.84, !tbaa !4)
+    //   renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.87, !tbaa !24)
     //   renamable $edx = OR32rr killed renamable $edx(tied-def 0), renamable $esi, implicit-def dead $eflags
     //   renamable $rdx = MOVSX64rr32 killed renamable $edx
-    //   renamable $edx = MOV32rm renamable $rdi, 4, killed renamable $rdx, 0, $noreg :: (load (s32) from %ir.92, !tbaa !4)
-    //   JMP_1 %bb.19
+    //   renamable $edx = MOV32rm renamable $rdi, 4, killed renamable $rdx, 0, $noreg :: (load (s32) from %ir.90, !tbaa !4)
+    //   JMP_1 %bb.18
     //
-    // bb.31 (%ir-block.150, align 16):
-    // ; predecessors: %bb.21, %bb.22
-    //   successors: %bb.19(0x80000000); %bb.19(100.00%)
+    // bb.30 (%ir-block.148, align 16):
+    // ; predecessors: %bb.20, %bb.21
+    //   successors: %bb.18(0x80000000); %bb.18(100.00%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi
-    //   renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.151, !tbaa !4)
+    //   renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.149, !tbaa !4)
     //
-    // bb.19 (%ir-block.85):
-    // ; predecessors: %bb.18, %bb.31
-    //   successors: %bb.30(0x09e6b247), %bb.20(0x76194db8); %bb.30(7.74%), %bb.20(92.26%)
+    // bb.18 (%ir-block.83):
+    // ; predecessors: %bb.17, %bb.30
+    //   successors: %bb.29(0x09e6b247), %bb.19(0x76194db9); %bb.29(7.74%), %bb.19(92.26%)
     //   liveins: $rax, $edx, $rcx, $rdi, $rsi
     //   CMP32ri renamable $edx, -1, implicit-def $eflags
-    //   JCC_1 %bb.30, 4, implicit killed $eflags
+    //   JCC_1 %bb.29, 4, implicit killed $eflags
     //
-    // bb.20 (%ir-block.95):
-    // ; predecessors: %bb.19
-    //   successors: %bb.14(0x04000000), %bb.21(0x7c000000); %bb.14(3.12%), %bb.21(96.88%)
+    // bb.19 (%ir-block.93):
+    // ; predecessors: %bb.18
+    //   successors: %bb.13(0x04000000), %bb.20(0x7c000000); %bb.13(3.12%), %bb.20(96.88%)
     //   liveins: $edx, $rax, $rcx, $rdi, $rsi
     //   renamable $r8d = MOV32rr killed renamable $edx, implicit-def $r8
     //   renamable $r8 = nuw nsw SHL64ri killed renamable $r8(tied-def 0), 5, implicit-def dead $eflags
     //   renamable $rdx = LEA64r renamable $rdi, 1, renamable $r8, 0, $noreg
-    //   renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.100, !tbaa !28)
+    //   renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.98, !tbaa !29)
     //   CMP64rr renamable $r8, renamable $rcx, implicit-def $eflags
-    //   JCC_1 %bb.14, 4, implicit killed $eflags
+    //   JCC_1 %bb.13, 4, implicit killed $eflags
     //
-    // bb.21 (%ir-block.109):
-    // ; predecessors: %bb.20
-    //   successors: %bb.31(0x3e000000), %bb.22(0x42000000); %bb.31(48.44%), %bb.22(51.56%)
+    // bb.20 (%ir-block.107):
+    // ; predecessors: %bb.19
+    //   successors: %bb.30(0x3e000000), %bb.21(0x42000000); %bb.30(48.44%), %bb.21(51.56%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
     //   TEST64rr renamable $r8, renamable $r8, implicit-def $eflags
-    //   JCC_1 %bb.31, 4, implicit killed $eflags
+    //   JCC_1 %bb.30, 4, implicit killed $eflags
     //
-    // bb.22 (%ir-block.109):
-    // ; predecessors: %bb.21
-    //   successors: %bb.31(0x783e0f84), %bb.23(0x07c1f07c); %bb.31(93.94%), %bb.23(6.06%)
+    // bb.21 (%ir-block.107):
+    // ; predecessors: %bb.20
+    //   successors: %bb.30(0x783e0f84), %bb.22(0x07c1f07c); %bb.30(93.94%), %bb.22(6.06%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
-    //   CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.110, !tbaa !24)
-    //   JCC_1 %bb.31, 5, implicit killed $eflags
+    //   CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.108, !tbaa !25)
+    //   JCC_1 %bb.30, 5, implicit killed $eflags
     //
-    // bb.23 (%ir-block.115):
-    // ; predecessors: %bb.22
-    //   successors: %bb.24(0x40000000), %bb.29(0x40000000); %bb.24(50.00%), %bb.29(50.00%)
+    // bb.22 (%ir-block.113):
+    // ; predecessors: %bb.21
+    //   successors: %bb.23(0x40000000), %bb.28(0x40000000); %bb.23(50.00%), %bb.28(50.00%)
     //   liveins: $rcx, $rdx, $r8
-    //   renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.117, !tbaa !33)
-    //   renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.119, !tbaa !33)
+    //   renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.115, !tbaa !34)
+    //   renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.117, !tbaa !34)
     //   CMP64rr renamable $rax, renamable $rsi, implicit-def $eflags
     //   renamable $bl = SETCCr 5, implicit killed $eflags
     //   CMP64ri32 killed renamable $rsi, 17, implicit-def $eflags
     //   renamable $sil = SETCCr 3, implicit killed $eflags
     //   dead renamable $sil = OR8rr killed renamable $sil(tied-def 0), killed renamable $bl, implicit-def $eflags
-    //   JCC_1 %bb.29, 5, implicit killed $eflags
+    //   JCC_1 %bb.28, 5, implicit killed $eflags
     //
-    // bb.24 (%ir-block.124):
-    // ; predecessors: %bb.23
-    //   successors: %bb.25(0x40000000), %bb.27(0x40000000); %bb.25(50.00%), %bb.27(50.00%)
+    // bb.23 (%ir-block.122):
+    // ; predecessors: %bb.22
+    //   successors: %bb.24(0x40000000), %bb.26(0x40000000); %bb.24(50.00%), %bb.26(50.00%)
     //   liveins: $rax, $rcx, $rdx, $r8
-    //   renamable $rsi = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.126, !tbaa !34)
-    //   renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.127, !tbaa !34)
+    //   renamable $rsi = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.124, !tbaa !35)
+    //   renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.125, !tbaa !35)
     //   CMP64ri32 renamable $rax, 7, implicit-def $eflags
-    //   JCC_1 %bb.27, 7, implicit killed $eflags
+    //   JCC_1 %bb.26, 7, implicit killed $eflags
     //
-    // bb.25 (%ir-block.131):
-    // ; predecessors: %bb.24
-    //   successors: %bb.14(0x20000000), %bb.26(0x60000000); %bb.14(25.00%), %bb.26(75.00%)
+    // bb.24 (%ir-block.129):
+    // ; predecessors: %bb.23
+    //   successors: %bb.13(0x20000000), %bb.25(0x60000000); %bb.13(25.00%), %bb.25(75.00%)
     //   liveins: $rax, $rdi, $rdx, $rsi
     //   $rcx = MOV64rr $rdi
     //   dead renamable $rcx = XOR64rr killed renamable $rcx(tied-def 0), renamable $rsi, implicit-def $eflags
-    //   JCC_1 %bb.14, 4, implicit killed $eflags
+    //   JCC_1 %bb.13, 4, implicit killed $eflags
     //
-    // bb.26 (%ir-block.131):
-    // ; predecessors: %bb.25
-    //   successors: %bb.14(0x2aaaaaab), %bb.29(0x55555555); %bb.14(33.33%), %bb.29(66.67%)
+    // bb.25 (%ir-block.129):
+    // ; predecessors: %bb.24
+    //   successors: %bb.13(0x2aaaaaab), %bb.28(0x55555555); %bb.13(33.33%), %bb.28(66.67%)
     //   liveins: $rax, $rdi, $rdx, $rsi
     //   renamable $rdi = XOR64rr killed renamable $rdi(tied-def 0), killed renamable $rsi, implicit-def dead $eflags
     //   renamable $rcx = BSF64rr undef renamable $rcx(tied-def 0), killed renamable $rdi, implicit-def dead $eflags
     //   renamable $rax = nuw nsw SHL64ri killed renamable $rax(tied-def 0), 3, implicit-def dead $eflags
     //   CMP64rr killed renamable $rcx, killed renamable $rax, implicit-def $eflags
-    //   JCC_1 %bb.29, 2, implicit killed $eflags
-    //   JMP_1 %bb.14
+    //   JCC_1 %bb.28, 2, implicit killed $eflags
+    //   JMP_1 %bb.13
     //
-    // bb.7 (%ir-block.28):
-    // ; predecessors: %bb.6
-    //   successors: %bb.8(0x40000000), %bb.30(0x40000000); %bb.8(50.00%), %bb.30(50.00%)
+    // bb.6 (%ir-block.26):
+    // ; predecessors: %bb.5
+    //   successors: %bb.7(0x40000000), %bb.29(0x40000000); %bb.7(50.00%), %bb.29(50.00%)
     //   liveins: $rcx, $rdx
-    //   renamable $esi = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rsi :: (load (s32) from %ir.29, align 8, !tbaa !20)
+    //   renamable $esi = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rsi :: (load (s32) from %ir.27, align 8, !tbaa !21)
     //   $eax = MOV32ri 1, implicit-def $rax
     //   CMP64rr renamable $rcx, killed renamable $rsi, implicit-def $eflags
-    //   JCC_1 %bb.30, 3, implicit killed $eflags
+    //   JCC_1 %bb.29, 3, implicit killed $eflags
     //
-    // bb.8 (%ir-block.33):
-    // ; predecessors: %bb.7
-    //   successors: %bb.30(0x30000000), %bb.9(0x50000000); %bb.30(37.50%), %bb.9(62.50%)
+    // bb.7 (%ir-block.31):
+    // ; predecessors: %bb.6
+    //   successors: %bb.29(0x30000000), %bb.8(0x50000000); %bb.29(37.50%), %bb.8(62.50%)
     //   liveins: $rax, $rcx, $rdx
-    //   renamable $rdx = MOV64rm killed renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.34, !tbaa !4)
+    //   renamable $rdx = MOV64rm killed renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.32, !tbaa !4)
     //   renamable $rcx = nuw nsw SHL64ri killed renamable $rcx(tied-def 0), 4, implicit-def dead $eflags
-    //   $ebx = MOVZX32rm8 renamable $rdx, 1, renamable $rcx, 8, $noreg :: (load (s8) from %ir.37, align 8, !tbaa !4)
+    //   $ebx = MOVZX32rm8 renamable $rdx, 1, renamable $rcx, 8, $noreg :: (load (s8) from %ir.35, align 8, !tbaa !4)
     //   TEST8rr renamable $bl, renamable $bl, implicit-def $eflags
-    //   JCC_1 %bb.30, 4, implicit killed $eflags
+    //   JCC_1 %bb.29, 4, implicit killed $eflags
     //
-    // bb.9 (%ir-block.40):
-    // ; predecessors: %bb.8
+    // bb.8 (%ir-block.38):
+    // ; predecessors: %bb.7
     //   liveins: $bl, $rcx, $rdx
     //   renamable $rdx = nuw ADD64rr killed renamable $rdx(tied-def 0), killed renamable $rcx, implicit-def dead $eflags
     //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
@@ -2319,29 +2328,29 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     //   renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rdx, 5, implicit killed $eflags
     //   RET64 killed $rax
     //
-    // bb.27 (%ir-block.138):
-    // ; predecessors: %bb.24
-    //   successors: %bb.28(0x40000000), %bb.29(0x40000000); %bb.28(50.00%), %bb.29(50.00%)
+    // bb.26 (%ir-block.136):
+    // ; predecessors: %bb.23
+    //   successors: %bb.27(0x40000000), %bb.28(0x40000000); %bb.27(50.00%), %bb.28(50.00%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
     //   CMP64rr killed renamable $rsi, killed renamable $rdi, implicit-def $eflags
-    //   JCC_1 %bb.29, 5, implicit killed $eflags
+    //   JCC_1 %bb.28, 5, implicit killed $eflags
     //
-    // bb.28 (%ir-block.140):
-    // ; predecessors: %bb.27
-    //   successors: %bb.14(0x40000000), %bb.29(0x40000000); %bb.14(50.00%), %bb.29(50.00%)
+    // bb.27 (%ir-block.138):
+    // ; predecessors: %bb.26
+    //   successors: %bb.13(0x40000000), %bb.28(0x40000000); %bb.13(50.00%), %bb.28(50.00%)
     //   liveins: $rax, $rcx, $rdx, $r8
-    //   renamable $rsi = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !34)
-    //   CMP64rm killed renamable $rsi, killed renamable $rcx, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr9, !tbaa !34)
-    //   JCC_1 %bb.14, 4, implicit killed $eflags
+    //   renamable $rsi = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !35)
+    //   CMP64rm killed renamable $rsi, killed renamable $rcx, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr9, !tbaa !35)
+    //   JCC_1 %bb.13, 4, implicit killed $eflags
     //
-    // bb.29:
-    // ; predecessors: %bb.28, %bb.2, %bb.3, %bb.5, %bb.16, %bb.23, %bb.26, %bb.27
-    //   successors: %bb.30(0x80000000); %bb.30(100.00%)
+    // bb.28:
+    // ; predecessors: %bb.27, %bb.2, %bb.4, %bb.15, %bb.22, %bb.25, %bb.26
+    //   successors: %bb.29(0x80000000); %bb.29(100.00%)
     //
     //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
     //
-    // bb.30 (%ir-block.154):
-    // ; predecessors: %bb.8, %bb.29, %bb.7, %bb.17, %bb.11, %bb.19
+    // bb.29 (%ir-block.152):
+    // ; predecessors: %bb.7, %bb.28, %bb.6, %bb.16, %bb.10, %bb.18
     //   liveins: $rax
     //   RET64 killed $rax
     //
@@ -2359,17 +2368,17 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     tpde::Label block3_label = derived()->text_writer.label_create();
     tpde::Label block4_label = derived()->text_writer.label_create();
     tpde::Label block5_label = derived()->text_writer.label_create();
-    tpde::Label block6_label = derived()->text_writer.label_create();
+    tpde::Label block9_label = derived()->text_writer.label_create();
+    tpde::Label block14_label = derived()->text_writer.label_create();
     tpde::Label block10_label = derived()->text_writer.label_create();
-    tpde::Label block15_label = derived()->text_writer.label_create();
     tpde::Label block11_label = derived()->text_writer.label_create();
     tpde::Label block12_label = derived()->text_writer.label_create();
     tpde::Label block13_label = derived()->text_writer.label_create();
-    tpde::Label block14_label = derived()->text_writer.label_create();
+    tpde::Label block15_label = derived()->text_writer.label_create();
     tpde::Label block16_label = derived()->text_writer.label_create();
     tpde::Label block17_label = derived()->text_writer.label_create();
+    tpde::Label block30_label = derived()->text_writer.label_create();
     tpde::Label block18_label = derived()->text_writer.label_create();
-    tpde::Label block31_label = derived()->text_writer.label_create();
     tpde::Label block19_label = derived()->text_writer.label_create();
     tpde::Label block20_label = derived()->text_writer.label_create();
     tpde::Label block21_label = derived()->text_writer.label_create();
@@ -2377,14 +2386,13 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     tpde::Label block23_label = derived()->text_writer.label_create();
     tpde::Label block24_label = derived()->text_writer.label_create();
     tpde::Label block25_label = derived()->text_writer.label_create();
-    tpde::Label block26_label = derived()->text_writer.label_create();
+    tpde::Label block6_label = derived()->text_writer.label_create();
     tpde::Label block7_label = derived()->text_writer.label_create();
     tpde::Label block8_label = derived()->text_writer.label_create();
-    tpde::Label block9_label = derived()->text_writer.label_create();
+    tpde::Label block26_label = derived()->text_writer.label_create();
     tpde::Label block27_label = derived()->text_writer.label_create();
     tpde::Label block28_label = derived()->text_writer.label_create();
     tpde::Label block29_label = derived()->text_writer.label_create();
-    tpde::Label block30_label = derived()->text_writer.label_create();
 
     ValuePart &scratch_ax = result_0;
     ScratchReg scratch_di{derived()};
@@ -2491,9 +2499,9 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.29, 5, implicit killed $eflags
+    // JCC_1 %bb.28, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block29_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block28_label);
 
   // Start of block 3
   derived()->label_place(block3_label);
@@ -2513,26 +2521,6 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // TEST64rr renamable $rdx, renamable $rdx, implicit-def $eflags
-    do {
-    {
-    if (1) {
-        AsmReg op0 = scratch_dx.cur_reg();
-    ASMD(TEST64rr, op0, op0);
-        break;
-    }
-    }
-    } while (false);
-
-
-    // JCC_1 %bb.29, 4, implicit killed $eflags
-  // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block29_label);
-
-  // Start of block 4
-  derived()->label_place(block4_label);
-
-
     // renamable $rcx = MOV64rm renamable $rsi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.1, !tbaa !4)
     do {
     {
@@ -2547,7 +2535,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $eax = MOVZX32rm8 killed renamable $rsi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.20, align 8, !tbaa !4)
+    // renamable $eax = MOVZX32rm8 killed renamable $rsi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.18, align 8, !tbaa !4)
     do {
     {
     if (1) {
@@ -2570,12 +2558,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.16, 4, implicit killed $eflags
+    // JCC_1 %bb.15, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block16_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block15_label);
 
-  // Start of block 5
-  derived()->label_place(block5_label);
+  // Start of block 4
+  derived()->label_place(block4_label);
 
 
     // CMP32ri killed renamable $eax, 4, implicit-def $eflags
@@ -2587,15 +2575,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.29, 5, implicit killed $eflags
+    // JCC_1 %bb.28, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block29_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block28_label);
 
-  // Start of block 6
-  derived()->label_place(block6_label);
+  // Start of block 5
+  derived()->label_place(block5_label);
 
 
-    // TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.24, align 8)
+    // TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.22, align 8)
     do {
     {
     if (1) {
@@ -2607,15 +2595,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.7, 5, implicit killed $eflags
+    // JCC_1 %bb.6, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block7_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block6_label);
 
-  // Start of block 10
-  derived()->label_place(block10_label);
+  // Start of block 9
+  derived()->label_place(block9_label);
 
 
-    // renamable $rsi = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.45, !tbaa !4)
+    // renamable $rsi = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.43, !tbaa !4)
     do {
     {
     if (1) {
@@ -2629,7 +2617,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.48, !tbaa !23)
+    // renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.46, !tbaa !24)
     do {
     {
     if (1) {
@@ -2669,7 +2657,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $edx = MOV32rm renamable $rsi, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.51, !tbaa !4)
+    // renamable $edx = MOV32rm renamable $rsi, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.49, !tbaa !4)
     do {
     {
     if (1) {
@@ -2694,15 +2682,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JMP_1 %bb.11
+    // JMP_1 %bb.10
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jmp, block11_label);
+  derived()->generate_raw_jump(Derived::Jump::jmp, block10_label);
 
-  // Start of block 15
-  derived()->label_place(block15_label);
+  // Start of block 14
+  derived()->label_place(block14_label);
 
 
-    // renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.72, !tbaa !4)
+    // renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.70, !tbaa !4)
     do {
     {
     if (1) {
@@ -2714,8 +2702,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
     }
     } while (false);
-  // Start of block 11
-  derived()->label_place(block11_label);
+  // Start of block 10
+  derived()->label_place(block10_label);
 
 
     // CMP32ri renamable $edx, -1, implicit-def $eflags
@@ -2727,12 +2715,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.30, 4, implicit killed $eflags
+    // JCC_1 %bb.29, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block30_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block29_label);
 
-  // Start of block 12
-  derived()->label_place(block12_label);
+  // Start of block 11
+  derived()->label_place(block11_label);
 
 
     // renamable $edi = MOV32rr killed renamable $edx, implicit-def $rdi
@@ -2772,7 +2760,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // CMP64mr renamable $rsi, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.58, !tbaa !24)
+    // CMP64mr renamable $rsi, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.56, !tbaa !25)
     do {
     {
     if (1) {
@@ -2786,15 +2774,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.15, 5, implicit killed $eflags
+    // JCC_1 %bb.14, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block15_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block14_label);
 
-  // Start of block 13
-  derived()->label_place(block13_label);
+  // Start of block 12
+  derived()->label_place(block12_label);
 
 
-    // CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.62, !tbaa !28)
+    // CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.60, !tbaa !29)
     do {
     {
     if (1) {
@@ -2806,12 +2794,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.15, 5, implicit killed $eflags
+    // JCC_1 %bb.14, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block15_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block14_label);
 
-  // Start of block 14
-  derived()->label_place(block14_label);
+  // Start of block 13
+  derived()->label_place(block13_label);
 
 
     // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
@@ -2820,18 +2808,18 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     if (1) {
         // undef tied
         // undef allocate scratch
-        AsmReg inst36_op2 = scratch_ax.cur_reg_or_alloc(derived());
+        AsmReg inst34_op2 = scratch_ax.cur_reg_or_alloc(derived());
 
         // def ax has not been allocated yet
         scratch_ax.cur_reg_or_alloc(derived());
-    ASMD(XOR32rr, scratch_ax.cur_reg(), inst36_op2);
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst34_op2);
         break;
     }
     }
     } while (false);
 
 
-    // CMP8mi renamable $rdx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.66, align 8, !tbaa !4), (load (s8) from %ir.145, align 8, !tbaa !4), (load (s8) from %ir.104, align 8, !tbaa !4)
+    // CMP8mi renamable $rdx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.64, align 8, !tbaa !4), (load (s8) from %ir.143, align 8, !tbaa !4), (load (s8) from %ir.102, align 8, !tbaa !4)
     do {
     {
     if (1) {
@@ -2854,11 +2842,11 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
 
     // RET64 killed $rax
   derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
-  // Start of block 16
-  derived()->label_place(block16_label);
+  // Start of block 15
+  derived()->label_place(block15_label);
 
 
-    // renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.77, !tbaa !31)
+    // renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.75, !tbaa !32)
     do {
     {
     if (1) {
@@ -2884,12 +2872,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.29, 4, implicit killed $eflags
+    // JCC_1 %bb.28, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block29_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block28_label);
 
-  // Start of block 17
-  derived()->label_place(block17_label);
+  // Start of block 16
+  derived()->label_place(block16_label);
 
 
     // $eax = MOV32ri 1, implicit-def $rax
@@ -2902,7 +2890,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.81, align 8)
+    // TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.79, align 8)
     do {
     {
     if (1) {
@@ -2914,15 +2902,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.30, 5, implicit killed $eflags
+    // JCC_1 %bb.29, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block30_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block29_label);
 
-  // Start of block 18
-  derived()->label_place(block18_label);
+  // Start of block 17
+  derived()->label_place(block17_label);
 
 
-    // renamable $rdi = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.86, !tbaa !4)
+    // renamable $rdi = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.84, !tbaa !4)
     do {
     {
     if (1) {
@@ -2936,7 +2924,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.89, !tbaa !23)
+    // renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.87, !tbaa !24)
     do {
     {
     if (1) {
@@ -2976,7 +2964,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $edx = MOV32rm renamable $rdi, 4, killed renamable $rdx, 0, $noreg :: (load (s32) from %ir.92, !tbaa !4)
+    // renamable $edx = MOV32rm renamable $rdi, 4, killed renamable $rdx, 0, $noreg :: (load (s32) from %ir.90, !tbaa !4)
     do {
     {
     if (1) {
@@ -2991,15 +2979,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JMP_1 %bb.19
+    // JMP_1 %bb.18
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jmp, block19_label);
+  derived()->generate_raw_jump(Derived::Jump::jmp, block18_label);
 
-  // Start of block 31
-  derived()->label_place(block31_label);
+  // Start of block 30
+  derived()->label_place(block30_label);
 
 
-    // renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.151, !tbaa !4)
+    // renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.149, !tbaa !4)
     do {
     {
     if (1) {
@@ -3011,8 +2999,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
     }
     } while (false);
-  // Start of block 19
-  derived()->label_place(block19_label);
+  // Start of block 18
+  derived()->label_place(block18_label);
 
 
     // CMP32ri renamable $edx, -1, implicit-def $eflags
@@ -3024,12 +3012,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.30, 4, implicit killed $eflags
+    // JCC_1 %bb.29, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block30_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block29_label);
 
-  // Start of block 20
-  derived()->label_place(block20_label);
+  // Start of block 19
+  derived()->label_place(block19_label);
 
 
     // renamable $r8d = MOV32rr killed renamable $edx, implicit-def $r8
@@ -3069,7 +3057,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.100, !tbaa !28)
+    // renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.98, !tbaa !29)
     do {
     {
     if (1) {
@@ -3097,12 +3085,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.14, 4, implicit killed $eflags
+    // JCC_1 %bb.13, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block14_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block13_label);
 
-  // Start of block 21
-  derived()->label_place(block21_label);
+  // Start of block 20
+  derived()->label_place(block20_label);
 
 
     // TEST64rr renamable $r8, renamable $r8, implicit-def $eflags
@@ -3117,15 +3105,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.31, 4, implicit killed $eflags
+    // JCC_1 %bb.30, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block31_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block30_label);
 
-  // Start of block 22
-  derived()->label_place(block22_label);
+  // Start of block 21
+  derived()->label_place(block21_label);
 
 
-    // CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.110, !tbaa !24)
+    // CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.108, !tbaa !25)
     do {
     {
     if (1) {
@@ -3138,15 +3126,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.31, 5, implicit killed $eflags
+    // JCC_1 %bb.30, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block31_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block30_label);
 
-  // Start of block 23
-  derived()->label_place(block23_label);
+  // Start of block 22
+  derived()->label_place(block22_label);
 
 
-    // renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.117, !tbaa !33)
+    // renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.115, !tbaa !34)
     do {
     {
     if (1) {
@@ -3160,7 +3148,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.119, !tbaa !33)
+    // renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.117, !tbaa !34)
     do {
     {
     if (1) {
@@ -3228,15 +3216,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.29, 5, implicit killed $eflags
+    // JCC_1 %bb.28, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block29_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block28_label);
 
-  // Start of block 24
-  derived()->label_place(block24_label);
+  // Start of block 23
+  derived()->label_place(block23_label);
 
 
-    // renamable $rsi = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.126, !tbaa !34)
+    // renamable $rsi = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.124, !tbaa !35)
     do {
     {
     if (1) {
@@ -3250,7 +3238,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.127, !tbaa !34)
+    // renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.125, !tbaa !35)
     do {
     {
     if (1) {
@@ -3273,12 +3261,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.27, 7, implicit killed $eflags
+    // JCC_1 %bb.26, 7, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::ja, block27_label);
+  derived()->generate_raw_jump(Derived::Jump::ja, block26_label);
 
-  // Start of block 25
-  derived()->label_place(block25_label);
+  // Start of block 24
+  derived()->label_place(block24_label);
 
 
     // $rcx = MOV64rr $rdi
@@ -3307,12 +3295,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.14, 4, implicit killed $eflags
+    // JCC_1 %bb.13, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block14_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block13_label);
 
-  // Start of block 26
-  derived()->label_place(block26_label);
+  // Start of block 25
+  derived()->label_place(block25_label);
 
 
     // renamable $rdi = XOR64rr killed renamable $rdi(tied-def 0), killed renamable $rsi, implicit-def dead $eflags
@@ -3363,21 +3351,21 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.29, 2, implicit killed $eflags
+    // JCC_1 %bb.28, 2, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jb, block29_label);
+  derived()->generate_raw_jump(Derived::Jump::jb, block28_label);
 
 
 
-    // JMP_1 %bb.14
+    // JMP_1 %bb.13
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jmp, block14_label);
+  derived()->generate_raw_jump(Derived::Jump::jmp, block13_label);
 
-  // Start of block 7
-  derived()->label_place(block7_label);
+  // Start of block 6
+  derived()->label_place(block6_label);
 
 
-    // renamable $esi = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rsi :: (load (s32) from %ir.29, align 8, !tbaa !20)
+    // renamable $esi = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rsi :: (load (s32) from %ir.27, align 8, !tbaa !21)
     do {
     {
     if (1) {
@@ -3414,15 +3402,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.30, 3, implicit killed $eflags
+    // JCC_1 %bb.29, 3, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jae, block30_label);
+  derived()->generate_raw_jump(Derived::Jump::jae, block29_label);
 
-  // Start of block 8
-  derived()->label_place(block8_label);
+  // Start of block 7
+  derived()->label_place(block7_label);
 
 
-    // renamable $rdx = MOV64rm killed renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.34, !tbaa !4)
+    // renamable $rdx = MOV64rm killed renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.32, !tbaa !4)
     do {
     {
     if (1) {
@@ -3444,7 +3432,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // $ebx = MOVZX32rm8 renamable $rdx, 1, renamable $rcx, 8, $noreg :: (load (s8) from %ir.37, align 8, !tbaa !4)
+    // $ebx = MOVZX32rm8 renamable $rdx, 1, renamable $rcx, 8, $noreg :: (load (s8) from %ir.35, align 8, !tbaa !4)
     do {
     {
     if (1) {
@@ -3471,12 +3459,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.30, 4, implicit killed $eflags
+    // JCC_1 %bb.29, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block30_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block29_label);
 
-  // Start of block 9
-  derived()->label_place(block9_label);
+  // Start of block 8
+  derived()->label_place(block8_label);
 
 
     // renamable $rdx = nuw ADD64rr killed renamable $rdx(tied-def 0), killed renamable $rcx, implicit-def dead $eflags
@@ -3497,11 +3485,11 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     if (1) {
         // undef tied
         // undef allocate scratch
-        AsmReg inst96_op2 = scratch_ax.cur_reg_or_alloc(derived());
+        AsmReg inst94_op2 = scratch_ax.cur_reg_or_alloc(derived());
 
         // def ax has not been allocated yet
         scratch_ax.cur_reg_or_alloc(derived());
-    ASMD(XOR32rr, scratch_ax.cur_reg(), inst96_op2);
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst94_op2);
         break;
     }
     }
@@ -3528,8 +3516,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
 
     // RET64 killed $rax
   derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
-  // Start of block 27
-  derived()->label_place(block27_label);
+  // Start of block 26
+  derived()->label_place(block26_label);
 
 
     // CMP64rr killed renamable $rsi, killed renamable $rdi, implicit-def $eflags
@@ -3545,15 +3533,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.29, 5, implicit killed $eflags
+    // JCC_1 %bb.28, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block29_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block28_label);
 
-  // Start of block 28
-  derived()->label_place(block28_label);
+  // Start of block 27
+  derived()->label_place(block27_label);
 
 
-    // renamable $rsi = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !34)
+    // renamable $rsi = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !35)
     do {
     {
     if (1) {
@@ -3568,7 +3556,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // CMP64rm killed renamable $rsi, killed renamable $rcx, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr9, !tbaa !34)
+    // CMP64rm killed renamable $rsi, killed renamable $rcx, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr9, !tbaa !35)
     do {
     {
     if (1) {
@@ -3582,12 +3570,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.14, 4, implicit killed $eflags
+    // JCC_1 %bb.13, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block14_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block13_label);
 
-  // Start of block 29
-  derived()->label_place(block29_label);
+  // Start of block 28
+  derived()->label_place(block28_label);
 
 
     // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
@@ -3596,17 +3584,17 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     if (1) {
         // undef tied
         // undef allocate scratch
-        AsmReg inst105_op2 = scratch_ax.cur_reg_or_alloc(derived());
+        AsmReg inst103_op2 = scratch_ax.cur_reg_or_alloc(derived());
 
         // def ax has not been allocated yet
         scratch_ax.cur_reg_or_alloc(derived());
-    ASMD(XOR32rr, scratch_ax.cur_reg(), inst105_op2);
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst103_op2);
         break;
     }
     }
     } while (false);
-  // Start of block 30
-  derived()->label_place(block30_label);
+  // Start of block 29
+  derived()->label_place(block29_label);
 
 
     // RET64 killed $rax
@@ -3643,11 +3631,11 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     //
     // bb.4 (%ir-block.19):
     // ; predecessors: %bb.2, %bb.1
-    //   successors: %bb.5(0x40000000), %bb.34(0x40000000); %bb.5(50.00%), %bb.34(50.00%)
+    //   successors: %bb.5(0x40000000), %bb.33(0x40000000); %bb.5(50.00%), %bb.33(50.00%)
     //   liveins: $al, $rdi, $rsi
     //   CMP8ri killed renamable $al, 7, implicit-def $eflags
     //   JCC_1 %bb.5, 4, implicit killed $eflags
-    //   JMP_1 %bb.34
+    //   JMP_1 %bb.33
     //
     // bb.1 (%ir-block.6):
     // ; predecessors: %bb.0
@@ -3661,245 +3649,238 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     //
     // bb.3 (%ir-block.14):
     // ; predecessors: %bb.2, %bb.1
-    //   successors: %bb.5(0x40000000), %bb.34(0x40000000); %bb.5(50.00%), %bb.34(50.00%)
+    //   successors: %bb.5(0x40000000), %bb.33(0x40000000); %bb.5(50.00%), %bb.33(50.00%)
     //   liveins: $rdi, $rsi
     //   renamable $rdi = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
     //   $eax = MOVZX32rm8 renamable $rdi, 1, $noreg, 16, $noreg :: (load (s8) from %ir.17, align 8, !tbaa !4)
     //   renamable $rdi = nuw ADD64ri32 killed renamable $rdi(tied-def 0), 8, implicit-def dead $eflags
     //   CMP8ri killed renamable $al, 7, implicit-def $eflags
-    //   JCC_1 %bb.34, 5, implicit killed $eflags
+    //   JCC_1 %bb.33, 5, implicit killed $eflags
     //
     // bb.5 (%ir-block.23):
     // ; predecessors: %bb.4, %bb.3
-    //   successors: %bb.34(0x30000000), %bb.6(0x50000000); %bb.34(37.50%), %bb.6(62.50%)
+    //   successors: %bb.17(0x2aaaaaab), %bb.6(0x55555555); %bb.17(33.33%), %bb.6(66.67%)
     //   liveins: $rdi, $rsi
     //   renamable $rdi = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.21, !tbaa !4)
-    //   TEST64rr renamable $rdi, renamable $rdi, implicit-def $eflags
-    //   JCC_1 %bb.34, 4, implicit killed $eflags
-    //
-    // bb.6 (%ir-block.27):
-    // ; predecessors: %bb.5
-    //   successors: %bb.18(0x2aaaaaab), %bb.7(0x55555555); %bb.18(33.33%), %bb.7(66.67%)
-    //   liveins: $rdi, $rsi
     //   renamable $rcx = MOV64rm renamable $rsi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.10, !tbaa !4)
-    //   renamable $eax = MOVZX32rm8 killed renamable $rsi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.28, align 8, !tbaa !4)
+    //   renamable $eax = MOVZX32rm8 killed renamable $rsi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.26, align 8, !tbaa !4)
     //   CMP32ri renamable $eax, 6, implicit-def $eflags
-    //   JCC_1 %bb.18, 4, implicit killed $eflags
+    //   JCC_1 %bb.17, 4, implicit killed $eflags
     //
-    // bb.7 (%ir-block.27):
-    // ; predecessors: %bb.6
-    //   successors: %bb.8(0x40000001), %bb.34(0x3fffffff); %bb.8(50.00%), %bb.34(50.00%)
+    // bb.6 (%ir-block.23):
+    // ; predecessors: %bb.5
+    //   successors: %bb.7(0x40000001), %bb.33(0x3fffffff); %bb.7(50.00%), %bb.33(50.00%)
     //   liveins: $eax, $rcx, $rdi
     //   CMP32ri killed renamable $eax, 4, implicit-def $eflags
-    //   JCC_1 %bb.34, 5, implicit killed $eflags
+    //   JCC_1 %bb.33, 5, implicit killed $eflags
     //
-    // bb.8 (%ir-block.31):
+    // bb.7 (%ir-block.29):
+    // ; predecessors: %bb.6
+    //   successors: %bb.11(0x40000000), %bb.8(0x40000000); %bb.11(50.00%), %bb.8(50.00%)
+    //   liveins: $rcx, $rdi
+    //   TEST8mi renamable $rdi, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.30, align 8)
+    //   JCC_1 %bb.8, 5, implicit killed $eflags
+    //
+    // bb.11 (%ir-block.50):
     // ; predecessors: %bb.7
-    //   successors: %bb.12(0x40000000), %bb.9(0x40000000); %bb.12(50.00%), %bb.9(50.00%)
+    //   successors: %bb.12(0x80000000); %bb.12(100.00%)
     //   liveins: $rcx, $rdi
-    //   TEST8mi renamable $rdi, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.32, align 8)
-    //   JCC_1 %bb.9, 5, implicit killed $eflags
-    //
-    // bb.12 (%ir-block.52):
-    // ; predecessors: %bb.8
-    //   successors: %bb.13(0x80000000); %bb.13(100.00%)
-    //   liveins: $rcx, $rdi
-    //   renamable $rdx = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.53, !tbaa !4)
-    //   renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.56, !tbaa !23)
+    //   renamable $rdx = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.51, !tbaa !4)
+    //   renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.54, !tbaa !24)
     //   renamable $eax = OR32rr killed renamable $eax(tied-def 0), renamable $ecx, implicit-def dead $eflags
     //   renamable $rax = MOVSX64rr32 killed renamable $eax
-    //   renamable $esi = MOV32rm renamable $rdx, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.59, !tbaa !4)
+    //   renamable $esi = MOV32rm renamable $rdx, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.57, !tbaa !4)
     //   $eax = MOV32ri 1, implicit-def $rax
-    //   JMP_1 %bb.13
+    //   JMP_1 %bb.12
     //
-    // bb.17 (%ir-block.79, align 16):
-    // ; predecessors: %bb.14, %bb.15
-    //   successors: %bb.13(0x80000000); %bb.13(100.00%)
+    // bb.16 (%ir-block.77, align 16):
+    // ; predecessors: %bb.13, %bb.14
+    //   successors: %bb.12(0x80000000); %bb.12(100.00%)
     //   liveins: $rax, $rcx, $rdx, $rsi
-    //   renamable $esi = MOV32rm killed renamable $rsi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.80, !tbaa !4)
+    //   renamable $esi = MOV32rm killed renamable $rsi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.78, !tbaa !4)
     //
-    // bb.13 (%ir-block.52):
-    // ; predecessors: %bb.12, %bb.17
-    //   successors: %bb.35(0x0715ba18), %bb.14(0x78ea45e7); %bb.35(5.54%), %bb.14(94.46%)
+    // bb.12 (%ir-block.50):
+    // ; predecessors: %bb.11, %bb.16
+    //   successors: %bb.34(0x0715ba19), %bb.13(0x78ea45e7); %bb.34(5.54%), %bb.13(94.46%)
     //   liveins: $rax, $esi, $rcx, $rdx
     //   CMP32ri renamable $esi, -1, implicit-def $eflags
-    //   JCC_1 %bb.35, 4, implicit killed $eflags
+    //   JCC_1 %bb.34, 4, implicit killed $eflags
     //
-    // bb.14 (%ir-block.62):
-    // ; predecessors: %bb.13
-    //   successors: %bb.15(0x40000000), %bb.17(0x40000000); %bb.15(50.00%), %bb.17(50.00%)
+    // bb.13 (%ir-block.60):
+    // ; predecessors: %bb.12
+    //   successors: %bb.14(0x40000000), %bb.16(0x40000000); %bb.14(50.00%), %bb.16(50.00%)
     //   liveins: $esi, $rax, $rcx, $rdx
     //   renamable $edi = MOV32rr killed renamable $esi, implicit-def $rdi
     //   renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
     //   renamable $rsi = LEA64r renamable $rdx, 1, renamable $rdi, 0, $noreg
-    //   CMP64mr renamable $rdx, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.66, !tbaa !24)
-    //   JCC_1 %bb.17, 5, implicit killed $eflags
+    //   CMP64mr renamable $rdx, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.64, !tbaa !25)
+    //   JCC_1 %bb.16, 5, implicit killed $eflags
     //
-    // bb.15 (%ir-block.69):
-    // ; predecessors: %bb.14
-    //   successors: %bb.16(0x04000000), %bb.17(0x7c000000); %bb.16(3.12%), %bb.17(96.88%)
+    // bb.14 (%ir-block.67):
+    // ; predecessors: %bb.13
+    //   successors: %bb.15(0x04000000), %bb.16(0x7c000000); %bb.15(3.12%), %bb.16(96.88%)
     //   liveins: $rax, $rcx, $rdx, $rsi
-    //   CMP64mi32 renamable $rsi, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.70, !tbaa !28)
-    //   JCC_1 %bb.17, 5, implicit killed $eflags
+    //   CMP64mi32 renamable $rsi, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.68, !tbaa !29)
+    //   JCC_1 %bb.16, 5, implicit killed $eflags
     //
-    // bb.16 (%ir-block.73):
-    // ; predecessors: %bb.15, %bb.24, %bb.33, %bb.30, %bb.31
+    // bb.15 (%ir-block.71):
+    // ; predecessors: %bb.14, %bb.23, %bb.32, %bb.29, %bb.30
     //   liveins: $rsi
     //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
-    //   CMP8mi renamable $rsi, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.74, align 8, !tbaa !4), (load (s8) from %ir.161, align 8, !tbaa !4), (load (s8) from %ir.125, align 8, !tbaa !4)
+    //   CMP8mi renamable $rsi, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.72, align 8, !tbaa !4), (load (s8) from %ir.159, align 8, !tbaa !4), (load (s8) from %ir.123, align 8, !tbaa !4)
     //   renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rsi, 5, implicit killed $eflags
     //   RET64 killed $rax
     //
-    // bb.18 (%ir-block.83):
-    // ; predecessors: %bb.6
-    //   successors: %bb.34(0x30000000), %bb.19(0x50000000); %bb.34(37.50%), %bb.19(62.50%)
+    // bb.17 (%ir-block.81):
+    // ; predecessors: %bb.5
+    //   successors: %bb.33(0x30000000), %bb.18(0x50000000); %bb.33(37.50%), %bb.18(62.50%)
     //   liveins: $rcx, $rdi
-    //   renamable $rdx = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.85, !tbaa !33)
+    //   renamable $rdx = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.83, !tbaa !34)
     //   TEST64rr renamable $rdx, renamable $rdx, implicit-def $eflags
-    //   JCC_1 %bb.34, 4, implicit killed $eflags
+    //   JCC_1 %bb.33, 4, implicit killed $eflags
     //
-    // bb.19 (%ir-block.88):
-    // ; predecessors: %bb.18
-    //   successors: %bb.34(0x40000000), %bb.20(0x40000000); %bb.34(50.00%), %bb.20(50.00%)
+    // bb.18 (%ir-block.86):
+    // ; predecessors: %bb.17
+    //   successors: %bb.33(0x40000000), %bb.19(0x40000000); %bb.33(50.00%), %bb.19(50.00%)
     //   liveins: $rcx, $rdi, $rdx
-    //   $eax = MOVZX32rm8 renamable $rcx, 1, $noreg, 24, $noreg, implicit-def $rax :: (load (s8) from %ir.90, align 8, !tbaa !4)
+    //   $eax = MOVZX32rm8 renamable $rcx, 1, $noreg, 24, $noreg, implicit-def $rax :: (load (s8) from %ir.88, align 8, !tbaa !4)
     //   renamable $esi = LEA64_32r renamable $rax, 1, $noreg, -48, $noreg
     //   CMP8ri killed renamable $sil, 10, implicit-def $eflags, implicit killed $esi
     //   renamable $bl = SETCCr 2, implicit killed $eflags
     //   CMP8ri killed renamable $al, 45, implicit-def $eflags, implicit killed $rax
     //   renamable $al = SETCCr 4, implicit killed $eflags
     //   dead renamable $al = OR8rr killed renamable $al(tied-def 0), killed renamable $bl, implicit-def $eflags
-    //   JCC_1 %bb.34, 5, implicit killed $eflags
+    //   JCC_1 %bb.33, 5, implicit killed $eflags
     //
-    // bb.20 (%ir-block.96):
-    // ; predecessors: %bb.19
-    //   successors: %bb.34(0x30000000), %bb.21(0x50000000); %bb.34(37.50%), %bb.21(62.50%)
+    // bb.19 (%ir-block.94):
+    // ; predecessors: %bb.18
+    //   successors: %bb.33(0x30000000), %bb.20(0x50000000); %bb.33(37.50%), %bb.20(62.50%)
     //   liveins: $rcx, $rdi, $rdx
-    //   renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.98, !tbaa !31)
+    //   renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.96, !tbaa !32)
     //   TEST64rr renamable $r8, renamable $r8, implicit-def $eflags
-    //   JCC_1 %bb.34, 4, implicit killed $eflags
+    //   JCC_1 %bb.33, 4, implicit killed $eflags
     //
-    // bb.21 (%ir-block.101):
-    // ; predecessors: %bb.20
-    //   successors: %bb.22(0x40000000), %bb.35(0x40000000); %bb.22(50.00%), %bb.35(50.00%)
+    // bb.20 (%ir-block.99):
+    // ; predecessors: %bb.19
+    //   successors: %bb.21(0x40000000), %bb.34(0x40000000); %bb.21(50.00%), %bb.34(50.00%)
     //   liveins: $rcx, $rdi, $rdx, $r8
     //   $eax = MOV32ri 1, implicit-def $rax
-    //   TEST8mi renamable $rdi, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.102, align 8)
-    //   JCC_1 %bb.35, 5, implicit killed $eflags
+    //   TEST8mi renamable $rdi, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.100, align 8)
+    //   JCC_1 %bb.34, 5, implicit killed $eflags
     //
-    // bb.22 (%ir-block.106):
-    // ; predecessors: %bb.21
-    //   successors: %bb.23(0x80000000); %bb.23(100.00%)
+    // bb.21 (%ir-block.104):
+    // ; predecessors: %bb.20
+    //   successors: %bb.22(0x80000000); %bb.22(100.00%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $r8
-    //   renamable $r9 = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.107, !tbaa !4)
-    //   renamable $esi = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.110, !tbaa !23)
+    //   renamable $r9 = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.105, !tbaa !4)
+    //   renamable $esi = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.108, !tbaa !24)
     //   renamable $esi = OR32rr killed renamable $esi(tied-def 0), renamable $r8d, implicit-def dead $eflags
     //   renamable $rsi = MOVSX64rr32 killed renamable $esi
-    //   renamable $esi = MOV32rm renamable $r9, 4, killed renamable $rsi, 0, $noreg :: (load (s32) from %ir.113, !tbaa !4)
-    //   JMP_1 %bb.23
+    //   renamable $esi = MOV32rm renamable $r9, 4, killed renamable $rsi, 0, $noreg :: (load (s32) from %ir.111, !tbaa !4)
+    //   JMP_1 %bb.22
     //
-    // bb.36 (%ir-block.166):
-    // ; predecessors: %bb.25, %bb.26
-    //   successors: %bb.23(0x80000000); %bb.23(100.00%)
+    // bb.35 (%ir-block.164):
+    // ; predecessors: %bb.24, %bb.25
+    //   successors: %bb.22(0x80000000); %bb.22(100.00%)
     //   liveins: $rax, $rcx, $rdx, $rsi, $r8, $r9
-    //   renamable $esi = MOV32rm killed renamable $rsi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.167, !tbaa !4)
+    //   renamable $esi = MOV32rm killed renamable $rsi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.165, !tbaa !4)
     //
-    // bb.23 (%ir-block.106):
-    // ; predecessors: %bb.22, %bb.36
-    //   successors: %bb.35(0x09e6b247), %bb.24(0x76194db9); %bb.35(7.74%), %bb.24(92.26%)
+    // bb.22 (%ir-block.104):
+    // ; predecessors: %bb.21, %bb.35
+    //   successors: %bb.34(0x09e6b247), %bb.23(0x76194db9); %bb.34(7.74%), %bb.23(92.26%)
     //   liveins: $rax, $esi, $rcx, $rdx, $r8, $r9
     //   CMP32ri renamable $esi, -1, implicit-def $eflags
-    //   JCC_1 %bb.35, 4, implicit killed $eflags
+    //   JCC_1 %bb.34, 4, implicit killed $eflags
     //
-    // bb.24 (%ir-block.116):
-    // ; predecessors: %bb.23
-    //   successors: %bb.16(0x04000000), %bb.25(0x7c000000); %bb.16(3.12%), %bb.25(96.88%)
+    // bb.23 (%ir-block.114):
+    // ; predecessors: %bb.22
+    //   successors: %bb.15(0x04000000), %bb.24(0x7c000000); %bb.15(3.12%), %bb.24(96.88%)
     //   liveins: $esi, $rax, $rcx, $rdx, $r8, $r9
     //   renamable $edi = MOV32rr killed renamable $esi, implicit-def $rdi
     //   renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
     //   renamable $rsi = LEA64r renamable $r9, 1, renamable $rdi, 0, $noreg
-    //   renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.121, !tbaa !28)
+    //   renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.119, !tbaa !29)
     //   CMP64rr renamable $rdi, renamable $rcx, implicit-def $eflags
-    //   JCC_1 %bb.16, 4, implicit killed $eflags
+    //   JCC_1 %bb.15, 4, implicit killed $eflags
     //
-    // bb.25 (%ir-block.130):
-    // ; predecessors: %bb.24
-    //   successors: %bb.36(0x3e000000), %bb.26(0x42000000); %bb.36(48.44%), %bb.26(51.56%)
+    // bb.24 (%ir-block.128):
+    // ; predecessors: %bb.23
+    //   successors: %bb.35(0x3e000000), %bb.25(0x42000000); %bb.35(48.44%), %bb.25(51.56%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8, $r9
     //   TEST64rr renamable $rdi, renamable $rdi, implicit-def $eflags
-    //   JCC_1 %bb.36, 4, implicit killed $eflags
+    //   JCC_1 %bb.35, 4, implicit killed $eflags
     //
-    // bb.26 (%ir-block.130):
-    // ; predecessors: %bb.25
-    //   successors: %bb.36(0x783e0f84), %bb.27(0x07c1f07c); %bb.36(93.94%), %bb.27(6.06%)
+    // bb.25 (%ir-block.128):
+    // ; predecessors: %bb.24
+    //   successors: %bb.35(0x783e0f84), %bb.26(0x07c1f07c); %bb.35(93.94%), %bb.26(6.06%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8, $r9
-    //   CMP64mr renamable $rsi, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.131, !tbaa !24)
-    //   JCC_1 %bb.36, 5, implicit killed $eflags
+    //   CMP64mr renamable $rsi, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.129, !tbaa !25)
+    //   JCC_1 %bb.35, 5, implicit killed $eflags
     //
-    // bb.27 (%ir-block.136):
-    // ; predecessors: %bb.26
-    //   successors: %bb.28(0x60000000), %bb.35(0x20000000); %bb.28(75.00%), %bb.35(25.00%)
+    // bb.26 (%ir-block.134):
+    // ; predecessors: %bb.25
+    //   successors: %bb.27(0x60000000), %bb.34(0x20000000); %bb.27(75.00%), %bb.34(25.00%)
     //   liveins: $rcx, $rdi, $rdx, $rsi
     //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
     //   CMP64ri32 renamable $rdx, 16, implicit-def $eflags
-    //   JCC_1 %bb.35, 7, implicit killed $eflags
+    //   JCC_1 %bb.34, 7, implicit killed $eflags
     //
-    // bb.28 (%ir-block.136):
-    // ; predecessors: %bb.27
-    //   successors: %bb.29(0x55555555), %bb.35(0x2aaaaaab); %bb.29(66.67%), %bb.35(33.33%)
+    // bb.27 (%ir-block.134):
+    // ; predecessors: %bb.26
+    //   successors: %bb.28(0x55555555), %bb.34(0x2aaaaaab); %bb.28(66.67%), %bb.34(33.33%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi
-    //   CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.137, !tbaa !33)
-    //   JCC_1 %bb.35, 5, implicit killed $eflags
+    //   CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.135, !tbaa !34)
+    //   JCC_1 %bb.34, 5, implicit killed $eflags
     //
-    // bb.29 (%ir-block.142):
-    // ; predecessors: %bb.28
-    //   successors: %bb.30(0x40000000), %bb.32(0x40000000); %bb.30(50.00%), %bb.32(50.00%)
+    // bb.28 (%ir-block.140):
+    // ; predecessors: %bb.27
+    //   successors: %bb.29(0x40000000), %bb.31(0x40000000); %bb.29(50.00%), %bb.31(50.00%)
     //   liveins: $rcx, $rdi, $rdx, $rsi
-    //   renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.143, !tbaa !34)
-    //   renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !34)
+    //   renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.141, !tbaa !35)
+    //   renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !35)
     //   CMP64ri32 renamable $rdx, 7, implicit-def $eflags
-    //   JCC_1 %bb.32, 7, implicit killed $eflags
+    //   JCC_1 %bb.31, 7, implicit killed $eflags
     //
-    // bb.30 (%ir-block.147):
-    // ; predecessors: %bb.29
-    //   successors: %bb.16(0x20000000), %bb.31(0x60000000); %bb.16(25.00%), %bb.31(75.00%)
+    // bb.29 (%ir-block.145):
+    // ; predecessors: %bb.28
+    //   successors: %bb.15(0x20000000), %bb.30(0x60000000); %bb.15(25.00%), %bb.30(75.00%)
     //   liveins: $rax, $rdx, $rsi, $r8
     //   $rcx = MOV64rr $r8
     //   dead renamable $rcx = XOR64rr killed renamable $rcx(tied-def 0), renamable $rax, implicit-def $eflags
-    //   JCC_1 %bb.16, 4, implicit killed $eflags
+    //   JCC_1 %bb.15, 4, implicit killed $eflags
     //
-    // bb.31 (%ir-block.147):
-    // ; predecessors: %bb.30
-    //   successors: %bb.16(0x2aaaaaab), %bb.34(0x55555555); %bb.16(33.33%), %bb.34(66.67%)
+    // bb.30 (%ir-block.145):
+    // ; predecessors: %bb.29
+    //   successors: %bb.15(0x2aaaaaab), %bb.33(0x55555555); %bb.15(33.33%), %bb.33(66.67%)
     //   liveins: $rax, $rdx, $rsi, $r8
     //   renamable $r8 = XOR64rr killed renamable $r8(tied-def 0), killed renamable $rax, implicit-def dead $eflags
     //   renamable $rax = BSF64rr undef renamable $rax(tied-def 0), killed renamable $r8, implicit-def dead $eflags
     //   renamable $rdx = nuw nsw SHL64ri killed renamable $rdx(tied-def 0), 3, implicit-def dead $eflags
     //   CMP64rr killed renamable $rax, killed renamable $rdx, implicit-def $eflags
-    //   JCC_1 %bb.34, 2, implicit killed $eflags
-    //   JMP_1 %bb.16
+    //   JCC_1 %bb.33, 2, implicit killed $eflags
+    //   JMP_1 %bb.15
     //
-    // bb.9 (%ir-block.36):
-    // ; predecessors: %bb.8
-    //   successors: %bb.10(0x40000000), %bb.35(0x40000000); %bb.10(50.00%), %bb.35(50.00%)
+    // bb.8 (%ir-block.34):
+    // ; predecessors: %bb.7
+    //   successors: %bb.9(0x40000000), %bb.34(0x40000000); %bb.9(50.00%), %bb.34(50.00%)
     //   liveins: $rcx, $rdi
-    //   renamable $edx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rdx :: (load (s32) from %ir.37, align 8, !tbaa !20)
+    //   renamable $edx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rdx :: (load (s32) from %ir.35, align 8, !tbaa !21)
     //   $eax = MOV32ri 1, implicit-def $rax
     //   CMP64rr renamable $rcx, killed renamable $rdx, implicit-def $eflags
-    //   JCC_1 %bb.35, 3, implicit killed $eflags
+    //   JCC_1 %bb.34, 3, implicit killed $eflags
     //
-    // bb.10 (%ir-block.41):
-    // ; predecessors: %bb.9
-    //   successors: %bb.35(0x30000000), %bb.11(0x50000000); %bb.35(37.50%), %bb.11(62.50%)
+    // bb.9 (%ir-block.39):
+    // ; predecessors: %bb.8
+    //   successors: %bb.34(0x30000000), %bb.10(0x50000000); %bb.34(37.50%), %bb.10(62.50%)
     //   liveins: $rax, $rcx, $rdi
-    //   renamable $rdx = MOV64rm killed renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.42, !tbaa !4)
+    //   renamable $rdx = MOV64rm killed renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.40, !tbaa !4)
     //   renamable $rcx = nuw nsw SHL64ri killed renamable $rcx(tied-def 0), 4, implicit-def dead $eflags
-    //   $ebx = MOVZX32rm8 renamable $rdx, 1, renamable $rcx, 8, $noreg :: (load (s8) from %ir.45, align 8, !tbaa !4)
+    //   $ebx = MOVZX32rm8 renamable $rdx, 1, renamable $rcx, 8, $noreg :: (load (s8) from %ir.43, align 8, !tbaa !4)
     //   TEST8rr renamable $bl, renamable $bl, implicit-def $eflags
-    //   JCC_1 %bb.35, 4, implicit killed $eflags
+    //   JCC_1 %bb.34, 4, implicit killed $eflags
     //
-    // bb.11 (%ir-block.48):
-    // ; predecessors: %bb.10
+    // bb.10 (%ir-block.46):
+    // ; predecessors: %bb.9
     //   liveins: $bl, $rcx, $rdx
     //   renamable $rdx = nuw ADD64rr killed renamable $rdx(tied-def 0), killed renamable $rcx, implicit-def dead $eflags
     //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
@@ -3907,29 +3888,29 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     //   renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rdx, 5, implicit killed $eflags
     //   RET64 killed $rax
     //
-    // bb.32 (%ir-block.154):
-    // ; predecessors: %bb.29
-    //   successors: %bb.33(0x40000000), %bb.34(0x40000000); %bb.33(50.00%), %bb.34(50.00%)
+    // bb.31 (%ir-block.152):
+    // ; predecessors: %bb.28
+    //   successors: %bb.32(0x40000000), %bb.33(0x40000000); %bb.32(50.00%), %bb.33(50.00%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
     //   CMP64rr killed renamable $rax, killed renamable $r8, implicit-def $eflags
-    //   JCC_1 %bb.34, 5, implicit killed $eflags
+    //   JCC_1 %bb.33, 5, implicit killed $eflags
     //
-    // bb.33 (%ir-block.156):
-    // ; predecessors: %bb.32
-    //   successors: %bb.16(0x40000000), %bb.34(0x40000000); %bb.16(50.00%), %bb.34(50.00%)
+    // bb.32 (%ir-block.154):
+    // ; predecessors: %bb.31
+    //   successors: %bb.15(0x40000000), %bb.33(0x40000000); %bb.15(50.00%), %bb.33(50.00%)
     //   liveins: $rcx, $rdi, $rdx, $rsi
-    //   renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rdx, 16, $noreg :: (load (s64) from %ir.sunkaddr8, !tbaa !34)
-    //   CMP64rm killed renamable $rax, killed renamable $rcx, 1, killed renamable $rdx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr11, !tbaa !34)
-    //   JCC_1 %bb.16, 4, implicit killed $eflags
+    //   renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rdx, 16, $noreg :: (load (s64) from %ir.sunkaddr8, !tbaa !35)
+    //   CMP64rm killed renamable $rax, killed renamable $rcx, 1, killed renamable $rdx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr11, !tbaa !35)
+    //   JCC_1 %bb.15, 4, implicit killed $eflags
     //
-    // bb.34:
-    // ; predecessors: %bb.33, %bb.4, %bb.5, %bb.7, %bb.18, %bb.19, %bb.20, %bb.31, %bb.32, %bb.3
-    //   successors: %bb.35(0x80000000); %bb.35(100.00%)
+    // bb.33:
+    // ; predecessors: %bb.32, %bb.4, %bb.6, %bb.17, %bb.18, %bb.19, %bb.30, %bb.31, %bb.3
+    //   successors: %bb.34(0x80000000); %bb.34(100.00%)
     //
     //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
     //
-    // bb.35 (%ir-block.170):
-    // ; predecessors: %bb.28, %bb.10, %bb.34, %bb.9, %bb.21, %bb.27, %bb.13, %bb.23
+    // bb.34 (%ir-block.168):
+    // ; predecessors: %bb.27, %bb.9, %bb.33, %bb.8, %bb.20, %bb.26, %bb.12, %bb.22
     //   liveins: $rax
     //   RET64 killed $rax
     //
@@ -3949,19 +3930,19 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     tpde::Label block5_label = derived()->text_writer.label_create();
     tpde::Label block6_label = derived()->text_writer.label_create();
     tpde::Label block7_label = derived()->text_writer.label_create();
-    tpde::Label block8_label = derived()->text_writer.label_create();
+    tpde::Label block11_label = derived()->text_writer.label_create();
+    tpde::Label block16_label = derived()->text_writer.label_create();
     tpde::Label block12_label = derived()->text_writer.label_create();
-    tpde::Label block17_label = derived()->text_writer.label_create();
     tpde::Label block13_label = derived()->text_writer.label_create();
     tpde::Label block14_label = derived()->text_writer.label_create();
     tpde::Label block15_label = derived()->text_writer.label_create();
-    tpde::Label block16_label = derived()->text_writer.label_create();
+    tpde::Label block17_label = derived()->text_writer.label_create();
     tpde::Label block18_label = derived()->text_writer.label_create();
     tpde::Label block19_label = derived()->text_writer.label_create();
     tpde::Label block20_label = derived()->text_writer.label_create();
     tpde::Label block21_label = derived()->text_writer.label_create();
+    tpde::Label block35_label = derived()->text_writer.label_create();
     tpde::Label block22_label = derived()->text_writer.label_create();
-    tpde::Label block36_label = derived()->text_writer.label_create();
     tpde::Label block23_label = derived()->text_writer.label_create();
     tpde::Label block24_label = derived()->text_writer.label_create();
     tpde::Label block25_label = derived()->text_writer.label_create();
@@ -3970,14 +3951,13 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     tpde::Label block28_label = derived()->text_writer.label_create();
     tpde::Label block29_label = derived()->text_writer.label_create();
     tpde::Label block30_label = derived()->text_writer.label_create();
-    tpde::Label block31_label = derived()->text_writer.label_create();
+    tpde::Label block8_label = derived()->text_writer.label_create();
     tpde::Label block9_label = derived()->text_writer.label_create();
     tpde::Label block10_label = derived()->text_writer.label_create();
-    tpde::Label block11_label = derived()->text_writer.label_create();
+    tpde::Label block31_label = derived()->text_writer.label_create();
     tpde::Label block32_label = derived()->text_writer.label_create();
     tpde::Label block33_label = derived()->text_writer.label_create();
     tpde::Label block34_label = derived()->text_writer.label_create();
-    tpde::Label block35_label = derived()->text_writer.label_create();
 
     ValuePart &scratch_ax = result_0;
     ScratchReg scratch_di{derived()};
@@ -4072,9 +4052,9 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
 
 
 
-    // JMP_1 %bb.34
+    // JMP_1 %bb.33
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jmp, block34_label);
+  derived()->generate_raw_jump(Derived::Jump::jmp, block33_label);
 
   // Start of block 1
   derived()->label_place(block1_label);
@@ -4178,9 +4158,9 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.34, 5, implicit killed $eflags
+    // JCC_1 %bb.33, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block34_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block33_label);
 
   // Start of block 5
   derived()->label_place(block5_label);
@@ -4200,26 +4180,6 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // TEST64rr renamable $rdi, renamable $rdi, implicit-def $eflags
-    do {
-    {
-    if (1) {
-        AsmReg op0 = scratch_di.cur_reg();
-    ASMD(TEST64rr, op0, op0);
-        break;
-    }
-    }
-    } while (false);
-
-
-    // JCC_1 %bb.34, 4, implicit killed $eflags
-  // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block34_label);
-
-  // Start of block 6
-  derived()->label_place(block6_label);
-
-
     // renamable $rcx = MOV64rm renamable $rsi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.10, !tbaa !4)
     do {
     {
@@ -4234,7 +4194,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $eax = MOVZX32rm8 killed renamable $rsi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.28, align 8, !tbaa !4)
+    // renamable $eax = MOVZX32rm8 killed renamable $rsi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.26, align 8, !tbaa !4)
     do {
     {
     if (1) {
@@ -4257,12 +4217,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.18, 4, implicit killed $eflags
+    // JCC_1 %bb.17, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block18_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block17_label);
 
-  // Start of block 7
-  derived()->label_place(block7_label);
+  // Start of block 6
+  derived()->label_place(block6_label);
 
 
     // CMP32ri killed renamable $eax, 4, implicit-def $eflags
@@ -4274,15 +4234,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.34, 5, implicit killed $eflags
+    // JCC_1 %bb.33, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block34_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block33_label);
 
-  // Start of block 8
-  derived()->label_place(block8_label);
+  // Start of block 7
+  derived()->label_place(block7_label);
 
 
-    // TEST8mi renamable $rdi, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.32, align 8)
+    // TEST8mi renamable $rdi, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.30, align 8)
     do {
     {
     if (1) {
@@ -4294,15 +4254,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.9, 5, implicit killed $eflags
+    // JCC_1 %bb.8, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block9_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block8_label);
 
-  // Start of block 12
-  derived()->label_place(block12_label);
+  // Start of block 11
+  derived()->label_place(block11_label);
 
 
-    // renamable $rdx = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.53, !tbaa !4)
+    // renamable $rdx = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.51, !tbaa !4)
     do {
     {
     if (1) {
@@ -4316,7 +4276,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.56, !tbaa !23)
+    // renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.54, !tbaa !24)
     do {
     {
     if (1) {
@@ -4356,7 +4316,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $esi = MOV32rm renamable $rdx, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.59, !tbaa !4)
+    // renamable $esi = MOV32rm renamable $rdx, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.57, !tbaa !4)
     do {
     {
     if (1) {
@@ -4381,15 +4341,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JMP_1 %bb.13
+    // JMP_1 %bb.12
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jmp, block13_label);
+  derived()->generate_raw_jump(Derived::Jump::jmp, block12_label);
 
-  // Start of block 17
-  derived()->label_place(block17_label);
+  // Start of block 16
+  derived()->label_place(block16_label);
 
 
-    // renamable $esi = MOV32rm killed renamable $rsi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.80, !tbaa !4)
+    // renamable $esi = MOV32rm killed renamable $rsi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.78, !tbaa !4)
     do {
     {
     if (1) {
@@ -4401,8 +4361,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
     }
     } while (false);
-  // Start of block 13
-  derived()->label_place(block13_label);
+  // Start of block 12
+  derived()->label_place(block12_label);
 
 
     // CMP32ri renamable $esi, -1, implicit-def $eflags
@@ -4414,12 +4374,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.35, 4, implicit killed $eflags
+    // JCC_1 %bb.34, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block35_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block34_label);
 
-  // Start of block 14
-  derived()->label_place(block14_label);
+  // Start of block 13
+  derived()->label_place(block13_label);
 
 
     // renamable $edi = MOV32rr killed renamable $esi, implicit-def $rdi
@@ -4459,7 +4419,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // CMP64mr renamable $rdx, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.66, !tbaa !24)
+    // CMP64mr renamable $rdx, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.64, !tbaa !25)
     do {
     {
     if (1) {
@@ -4473,15 +4433,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.17, 5, implicit killed $eflags
+    // JCC_1 %bb.16, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block17_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block16_label);
 
-  // Start of block 15
-  derived()->label_place(block15_label);
+  // Start of block 14
+  derived()->label_place(block14_label);
 
 
-    // CMP64mi32 renamable $rsi, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.70, !tbaa !28)
+    // CMP64mi32 renamable $rsi, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.68, !tbaa !29)
     do {
     {
     if (1) {
@@ -4493,12 +4453,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.17, 5, implicit killed $eflags
+    // JCC_1 %bb.16, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block17_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block16_label);
 
-  // Start of block 16
-  derived()->label_place(block16_label);
+  // Start of block 15
+  derived()->label_place(block15_label);
 
 
     // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
@@ -4507,18 +4467,18 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     if (1) {
         // undef tied
         // undef allocate scratch
-        AsmReg inst46_op2 = scratch_ax.cur_reg_or_alloc(derived());
+        AsmReg inst44_op2 = scratch_ax.cur_reg_or_alloc(derived());
 
         // def ax has not been allocated yet
         scratch_ax.cur_reg_or_alloc(derived());
-    ASMD(XOR32rr, scratch_ax.cur_reg(), inst46_op2);
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst44_op2);
         break;
     }
     }
     } while (false);
 
 
-    // CMP8mi renamable $rsi, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.74, align 8, !tbaa !4), (load (s8) from %ir.161, align 8, !tbaa !4), (load (s8) from %ir.125, align 8, !tbaa !4)
+    // CMP8mi renamable $rsi, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.72, align 8, !tbaa !4), (load (s8) from %ir.159, align 8, !tbaa !4), (load (s8) from %ir.123, align 8, !tbaa !4)
     do {
     {
     if (1) {
@@ -4541,11 +4501,11 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
 
     // RET64 killed $rax
   derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
-  // Start of block 18
-  derived()->label_place(block18_label);
+  // Start of block 17
+  derived()->label_place(block17_label);
 
 
-    // renamable $rdx = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.85, !tbaa !33)
+    // renamable $rdx = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.83, !tbaa !34)
     do {
     {
     if (1) {
@@ -4571,15 +4531,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.34, 4, implicit killed $eflags
+    // JCC_1 %bb.33, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block34_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block33_label);
 
-  // Start of block 19
-  derived()->label_place(block19_label);
+  // Start of block 18
+  derived()->label_place(block18_label);
 
 
-    // $eax = MOVZX32rm8 renamable $rcx, 1, $noreg, 24, $noreg, implicit-def $rax :: (load (s8) from %ir.90, align 8, !tbaa !4)
+    // $eax = MOVZX32rm8 renamable $rcx, 1, $noreg, 24, $noreg, implicit-def $rax :: (load (s8) from %ir.88, align 8, !tbaa !4)
     do {
     {
     if (1) {
@@ -4657,15 +4617,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.34, 5, implicit killed $eflags
+    // JCC_1 %bb.33, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block34_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block33_label);
 
-  // Start of block 20
-  derived()->label_place(block20_label);
+  // Start of block 19
+  derived()->label_place(block19_label);
 
 
-    // renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.98, !tbaa !31)
+    // renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.96, !tbaa !32)
     do {
     {
     if (1) {
@@ -4691,12 +4651,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.34, 4, implicit killed $eflags
+    // JCC_1 %bb.33, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block34_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block33_label);
 
-  // Start of block 21
-  derived()->label_place(block21_label);
+  // Start of block 20
+  derived()->label_place(block20_label);
 
 
     // $eax = MOV32ri 1, implicit-def $rax
@@ -4709,7 +4669,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // TEST8mi renamable $rdi, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.102, align 8)
+    // TEST8mi renamable $rdi, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.100, align 8)
     do {
     {
     if (1) {
@@ -4721,15 +4681,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.35, 5, implicit killed $eflags
+    // JCC_1 %bb.34, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block35_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block34_label);
 
-  // Start of block 22
-  derived()->label_place(block22_label);
+  // Start of block 21
+  derived()->label_place(block21_label);
 
 
-    // renamable $r9 = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.107, !tbaa !4)
+    // renamable $r9 = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.105, !tbaa !4)
     do {
     {
     if (1) {
@@ -4743,7 +4703,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $esi = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.110, !tbaa !23)
+    // renamable $esi = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.108, !tbaa !24)
     do {
     {
     if (1) {
@@ -4783,7 +4743,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $esi = MOV32rm renamable $r9, 4, killed renamable $rsi, 0, $noreg :: (load (s32) from %ir.113, !tbaa !4)
+    // renamable $esi = MOV32rm renamable $r9, 4, killed renamable $rsi, 0, $noreg :: (load (s32) from %ir.111, !tbaa !4)
     do {
     {
     if (1) {
@@ -4798,15 +4758,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JMP_1 %bb.23
+    // JMP_1 %bb.22
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jmp, block23_label);
+  derived()->generate_raw_jump(Derived::Jump::jmp, block22_label);
 
-  // Start of block 36
-  derived()->label_place(block36_label);
+  // Start of block 35
+  derived()->label_place(block35_label);
 
 
-    // renamable $esi = MOV32rm killed renamable $rsi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.167, !tbaa !4)
+    // renamable $esi = MOV32rm killed renamable $rsi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.165, !tbaa !4)
     do {
     {
     if (1) {
@@ -4818,8 +4778,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
     }
     } while (false);
-  // Start of block 23
-  derived()->label_place(block23_label);
+  // Start of block 22
+  derived()->label_place(block22_label);
 
 
     // CMP32ri renamable $esi, -1, implicit-def $eflags
@@ -4831,12 +4791,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.35, 4, implicit killed $eflags
+    // JCC_1 %bb.34, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block35_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block34_label);
 
-  // Start of block 24
-  derived()->label_place(block24_label);
+  // Start of block 23
+  derived()->label_place(block23_label);
 
 
     // renamable $edi = MOV32rr killed renamable $esi, implicit-def $rdi
@@ -4876,7 +4836,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.121, !tbaa !28)
+    // renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.119, !tbaa !29)
     do {
     {
     if (1) {
@@ -4904,12 +4864,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.16, 4, implicit killed $eflags
+    // JCC_1 %bb.15, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block16_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block15_label);
 
-  // Start of block 25
-  derived()->label_place(block25_label);
+  // Start of block 24
+  derived()->label_place(block24_label);
 
 
     // TEST64rr renamable $rdi, renamable $rdi, implicit-def $eflags
@@ -4924,15 +4884,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.36, 4, implicit killed $eflags
+    // JCC_1 %bb.35, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block36_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block35_label);
 
-  // Start of block 26
-  derived()->label_place(block26_label);
+  // Start of block 25
+  derived()->label_place(block25_label);
 
 
-    // CMP64mr renamable $rsi, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.131, !tbaa !24)
+    // CMP64mr renamable $rsi, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.129, !tbaa !25)
     do {
     {
     if (1) {
@@ -4945,12 +4905,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.36, 5, implicit killed $eflags
+    // JCC_1 %bb.35, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block36_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block35_label);
 
-  // Start of block 27
-  derived()->label_place(block27_label);
+  // Start of block 26
+  derived()->label_place(block26_label);
 
 
     // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
@@ -4959,11 +4919,11 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     if (1) {
         // undef tied
         // undef allocate scratch
-        AsmReg inst86_op2 = scratch_ax.cur_reg_or_alloc(derived());
+        AsmReg inst84_op2 = scratch_ax.cur_reg_or_alloc(derived());
 
         // def ax has not been allocated yet
         scratch_ax.cur_reg_or_alloc(derived());
-    ASMD(XOR32rr, scratch_ax.cur_reg(), inst86_op2);
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst84_op2);
         break;
     }
     }
@@ -4979,15 +4939,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.35, 7, implicit killed $eflags
+    // JCC_1 %bb.34, 7, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::ja, block35_label);
+  derived()->generate_raw_jump(Derived::Jump::ja, block34_label);
 
-  // Start of block 28
-  derived()->label_place(block28_label);
+  // Start of block 27
+  derived()->label_place(block27_label);
 
 
-    // CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.137, !tbaa !33)
+    // CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.135, !tbaa !34)
     do {
     {
     if (1) {
@@ -5000,15 +4960,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.35, 5, implicit killed $eflags
+    // JCC_1 %bb.34, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block35_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block34_label);
 
-  // Start of block 29
-  derived()->label_place(block29_label);
+  // Start of block 28
+  derived()->label_place(block28_label);
 
 
-    // renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.143, !tbaa !34)
+    // renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.141, !tbaa !35)
     do {
     {
     if (1) {
@@ -5022,7 +4982,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !34)
+    // renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !35)
     do {
     {
     if (1) {
@@ -5045,12 +5005,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.32, 7, implicit killed $eflags
+    // JCC_1 %bb.31, 7, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::ja, block32_label);
+  derived()->generate_raw_jump(Derived::Jump::ja, block31_label);
 
-  // Start of block 30
-  derived()->label_place(block30_label);
+  // Start of block 29
+  derived()->label_place(block29_label);
 
 
     // $rcx = MOV64rr $r8
@@ -5079,12 +5039,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.16, 4, implicit killed $eflags
+    // JCC_1 %bb.15, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block16_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block15_label);
 
-  // Start of block 31
-  derived()->label_place(block31_label);
+  // Start of block 30
+  derived()->label_place(block30_label);
 
 
     // renamable $r8 = XOR64rr killed renamable $r8(tied-def 0), killed renamable $rax, implicit-def dead $eflags
@@ -5135,21 +5095,21 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.34, 2, implicit killed $eflags
+    // JCC_1 %bb.33, 2, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jb, block34_label);
+  derived()->generate_raw_jump(Derived::Jump::jb, block33_label);
 
 
 
-    // JMP_1 %bb.16
+    // JMP_1 %bb.15
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jmp, block16_label);
+  derived()->generate_raw_jump(Derived::Jump::jmp, block15_label);
 
-  // Start of block 9
-  derived()->label_place(block9_label);
+  // Start of block 8
+  derived()->label_place(block8_label);
 
 
-    // renamable $edx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rdx :: (load (s32) from %ir.37, align 8, !tbaa !20)
+    // renamable $edx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rdx :: (load (s32) from %ir.35, align 8, !tbaa !21)
     do {
     {
     if (1) {
@@ -5186,15 +5146,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.35, 3, implicit killed $eflags
+    // JCC_1 %bb.34, 3, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jae, block35_label);
+  derived()->generate_raw_jump(Derived::Jump::jae, block34_label);
 
-  // Start of block 10
-  derived()->label_place(block10_label);
+  // Start of block 9
+  derived()->label_place(block9_label);
 
 
-    // renamable $rdx = MOV64rm killed renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.42, !tbaa !4)
+    // renamable $rdx = MOV64rm killed renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.40, !tbaa !4)
     do {
     {
     if (1) {
@@ -5216,7 +5176,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // $ebx = MOVZX32rm8 renamable $rdx, 1, renamable $rcx, 8, $noreg :: (load (s8) from %ir.45, align 8, !tbaa !4)
+    // $ebx = MOVZX32rm8 renamable $rdx, 1, renamable $rcx, 8, $noreg :: (load (s8) from %ir.43, align 8, !tbaa !4)
     do {
     {
     if (1) {
@@ -5243,12 +5203,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.35, 4, implicit killed $eflags
+    // JCC_1 %bb.34, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block35_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block34_label);
 
-  // Start of block 11
-  derived()->label_place(block11_label);
+  // Start of block 10
+  derived()->label_place(block10_label);
 
 
     // renamable $rdx = nuw ADD64rr killed renamable $rdx(tied-def 0), killed renamable $rcx, implicit-def dead $eflags
@@ -5269,11 +5229,11 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     if (1) {
         // undef tied
         // undef allocate scratch
-        AsmReg inst114_op2 = scratch_ax.cur_reg_or_alloc(derived());
+        AsmReg inst112_op2 = scratch_ax.cur_reg_or_alloc(derived());
 
         // def ax has not been allocated yet
         scratch_ax.cur_reg_or_alloc(derived());
-    ASMD(XOR32rr, scratch_ax.cur_reg(), inst114_op2);
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst112_op2);
         break;
     }
     }
@@ -5300,8 +5260,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
 
     // RET64 killed $rax
   derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
-  // Start of block 32
-  derived()->label_place(block32_label);
+  // Start of block 31
+  derived()->label_place(block31_label);
 
 
     // CMP64rr killed renamable $rax, killed renamable $r8, implicit-def $eflags
@@ -5317,15 +5277,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.34, 5, implicit killed $eflags
+    // JCC_1 %bb.33, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block34_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block33_label);
 
-  // Start of block 33
-  derived()->label_place(block33_label);
+  // Start of block 32
+  derived()->label_place(block32_label);
 
 
-    // renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rdx, 16, $noreg :: (load (s64) from %ir.sunkaddr8, !tbaa !34)
+    // renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rdx, 16, $noreg :: (load (s64) from %ir.sunkaddr8, !tbaa !35)
     do {
     {
     if (1) {
@@ -5340,7 +5300,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // CMP64rm killed renamable $rax, killed renamable $rcx, 1, killed renamable $rdx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr11, !tbaa !34)
+    // CMP64rm killed renamable $rax, killed renamable $rcx, 1, killed renamable $rdx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr11, !tbaa !35)
     do {
     {
     if (1) {
@@ -5354,12 +5314,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.16, 4, implicit killed $eflags
+    // JCC_1 %bb.15, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block16_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block15_label);
 
-  // Start of block 34
-  derived()->label_place(block34_label);
+  // Start of block 33
+  derived()->label_place(block33_label);
 
 
     // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
@@ -5368,17 +5328,17 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     if (1) {
         // undef tied
         // undef allocate scratch
-        AsmReg inst123_op2 = scratch_ax.cur_reg_or_alloc(derived());
+        AsmReg inst121_op2 = scratch_ax.cur_reg_or_alloc(derived());
 
         // def ax has not been allocated yet
         scratch_ax.cur_reg_or_alloc(derived());
-    ASMD(XOR32rr, scratch_ax.cur_reg(), inst123_op2);
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst121_op2);
         break;
     }
     }
     } while (false);
-  // Start of block 35
-  derived()->label_place(block35_label);
+  // Start of block 34
+  derived()->label_place(block34_label);
 
 
     // RET64 killed $rax
@@ -5431,219 +5391,212 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     //
     // bb.4 (%ir-block.20):
     // ; predecessors: %bb.2
-    //   successors: %bb.5(0x40000000), %bb.31(0x40000000); %bb.5(50.00%), %bb.31(50.00%)
+    //   successors: %bb.5(0x40000000), %bb.30(0x40000000); %bb.5(50.00%), %bb.30(50.00%)
     //   liveins: $al, $rdi, $rsi
     //   CMP8ri killed renamable $al, 7, implicit-def $eflags
-    //   JCC_1 %bb.31, 5, implicit killed $eflags
+    //   JCC_1 %bb.30, 5, implicit killed $eflags
     //
     // bb.5 (%ir-block.22):
     // ; predecessors: %bb.4
-    //   successors: %bb.31(0x30000000), %bb.6(0x50000000); %bb.31(37.50%), %bb.6(62.50%)
+    //   successors: %bb.17(0x2aaaaaab), %bb.6(0x55555555); %bb.17(33.33%), %bb.6(66.67%)
     //   liveins: $rdi, $rsi
     //   renamable $rdx = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.13, !tbaa !4)
-    //   TEST64rr renamable $rdx, renamable $rdx, implicit-def $eflags
-    //   JCC_1 %bb.31, 4, implicit killed $eflags
-    //
-    // bb.6 (%ir-block.26):
-    // ; predecessors: %bb.5
-    //   successors: %bb.18(0x2aaaaaab), %bb.7(0x55555555); %bb.18(33.33%), %bb.7(66.67%)
-    //   liveins: $rdx, $rsi
     //   renamable $rcx = MOV64rm renamable $rsi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.1, !tbaa !4)
-    //   renamable $eax = MOVZX32rm8 killed renamable $rsi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.27, align 8, !tbaa !4)
+    //   renamable $eax = MOVZX32rm8 killed renamable $rsi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.25, align 8, !tbaa !4)
     //   CMP32ri renamable $eax, 6, implicit-def $eflags
-    //   JCC_1 %bb.18, 4, implicit killed $eflags
+    //   JCC_1 %bb.17, 4, implicit killed $eflags
     //
-    // bb.7 (%ir-block.26):
-    // ; predecessors: %bb.6
-    //   successors: %bb.8(0x40000001), %bb.31(0x3fffffff); %bb.8(50.00%), %bb.31(50.00%)
+    // bb.6 (%ir-block.22):
+    // ; predecessors: %bb.5
+    //   successors: %bb.7(0x40000001), %bb.30(0x3fffffff); %bb.7(50.00%), %bb.30(50.00%)
     //   liveins: $eax, $rcx, $rdx
     //   CMP32ri killed renamable $eax, 4, implicit-def $eflags
-    //   JCC_1 %bb.31, 5, implicit killed $eflags
+    //   JCC_1 %bb.30, 5, implicit killed $eflags
     //
-    // bb.8 (%ir-block.30):
+    // bb.7 (%ir-block.28):
+    // ; predecessors: %bb.6
+    //   successors: %bb.11(0x40000000), %bb.8(0x40000000); %bb.11(50.00%), %bb.8(50.00%)
+    //   liveins: $rcx, $rdx
+    //   TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.29, align 8)
+    //   JCC_1 %bb.8, 5, implicit killed $eflags
+    //
+    // bb.11 (%ir-block.49):
     // ; predecessors: %bb.7
-    //   successors: %bb.12(0x40000000), %bb.9(0x40000000); %bb.12(50.00%), %bb.9(50.00%)
+    //   successors: %bb.12(0x80000000); %bb.12(100.00%)
     //   liveins: $rcx, $rdx
-    //   TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.31, align 8)
-    //   JCC_1 %bb.9, 5, implicit killed $eflags
-    //
-    // bb.12 (%ir-block.51):
-    // ; predecessors: %bb.8
-    //   successors: %bb.13(0x80000000); %bb.13(100.00%)
-    //   liveins: $rcx, $rdx
-    //   renamable $rsi = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.52, !tbaa !4)
-    //   renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.55, !tbaa !23)
+    //   renamable $rsi = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.50, !tbaa !4)
+    //   renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.53, !tbaa !24)
     //   renamable $eax = OR32rr killed renamable $eax(tied-def 0), renamable $ecx, implicit-def dead $eflags
     //   renamable $rax = MOVSX64rr32 killed renamable $eax
-    //   renamable $edx = MOV32rm renamable $rsi, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.58, !tbaa !4)
+    //   renamable $edx = MOV32rm renamable $rsi, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.56, !tbaa !4)
     //   $eax = MOV32ri 1, implicit-def $rax
-    //   JMP_1 %bb.13
+    //   JMP_1 %bb.12
     //
-    // bb.17 (%ir-block.78, align 16):
-    // ; predecessors: %bb.14, %bb.15
-    //   successors: %bb.13(0x80000000); %bb.13(100.00%)
+    // bb.16 (%ir-block.76, align 16):
+    // ; predecessors: %bb.13, %bb.14
+    //   successors: %bb.12(0x80000000); %bb.12(100.00%)
     //   liveins: $rax, $rcx, $rdx, $rsi
-    //   renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.79, !tbaa !4)
+    //   renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.77, !tbaa !4)
     //
-    // bb.13 (%ir-block.51):
-    // ; predecessors: %bb.12, %bb.17
-    //   successors: %bb.32(0x0715ba18), %bb.14(0x78ea45e7); %bb.32(5.54%), %bb.14(94.46%)
+    // bb.12 (%ir-block.49):
+    // ; predecessors: %bb.11, %bb.16
+    //   successors: %bb.31(0x0715ba19), %bb.13(0x78ea45e7); %bb.31(5.54%), %bb.13(94.46%)
     //   liveins: $rax, $edx, $rcx, $rsi
     //   CMP32ri renamable $edx, -1, implicit-def $eflags
-    //   JCC_1 %bb.32, 4, implicit killed $eflags
+    //   JCC_1 %bb.31, 4, implicit killed $eflags
     //
-    // bb.14 (%ir-block.61):
-    // ; predecessors: %bb.13
-    //   successors: %bb.15(0x40000000), %bb.17(0x40000000); %bb.15(50.00%), %bb.17(50.00%)
+    // bb.13 (%ir-block.59):
+    // ; predecessors: %bb.12
+    //   successors: %bb.14(0x40000000), %bb.16(0x40000000); %bb.14(50.00%), %bb.16(50.00%)
     //   liveins: $edx, $rax, $rcx, $rsi
     //   renamable $edi = MOV32rr killed renamable $edx, implicit-def $rdi
     //   renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
     //   renamable $rdx = LEA64r renamable $rsi, 1, renamable $rdi, 0, $noreg
-    //   CMP64mr renamable $rsi, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.65, !tbaa !24)
-    //   JCC_1 %bb.17, 5, implicit killed $eflags
+    //   CMP64mr renamable $rsi, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.63, !tbaa !25)
+    //   JCC_1 %bb.16, 5, implicit killed $eflags
     //
-    // bb.15 (%ir-block.68):
-    // ; predecessors: %bb.14
-    //   successors: %bb.16(0x04000000), %bb.17(0x7c000000); %bb.16(3.12%), %bb.17(96.88%)
+    // bb.14 (%ir-block.66):
+    // ; predecessors: %bb.13
+    //   successors: %bb.15(0x04000000), %bb.16(0x7c000000); %bb.15(3.12%), %bb.16(96.88%)
     //   liveins: $rax, $rcx, $rdx, $rsi
-    //   CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.69, !tbaa !28)
-    //   JCC_1 %bb.17, 5, implicit killed $eflags
+    //   CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.67, !tbaa !29)
+    //   JCC_1 %bb.16, 5, implicit killed $eflags
     //
-    // bb.16 (%ir-block.72):
-    // ; predecessors: %bb.15, %bb.22, %bb.30, %bb.27, %bb.28
+    // bb.15 (%ir-block.70):
+    // ; predecessors: %bb.14, %bb.21, %bb.29, %bb.26, %bb.27
     //   liveins: $rdx
     //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
-    //   CMP8mi renamable $rdx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.73, align 8, !tbaa !4), (load (s8) from %ir.152, align 8, !tbaa !4), (load (s8) from %ir.111, align 8, !tbaa !4)
+    //   CMP8mi renamable $rdx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.71, align 8, !tbaa !4), (load (s8) from %ir.150, align 8, !tbaa !4), (load (s8) from %ir.109, align 8, !tbaa !4)
     //   renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rdx, 5, implicit killed $eflags
     //   RET64 killed $rax
     //
-    // bb.18 (%ir-block.82):
-    // ; predecessors: %bb.6
-    //   successors: %bb.31(0x30000000), %bb.19(0x50000000); %bb.31(37.50%), %bb.19(62.50%)
+    // bb.17 (%ir-block.80):
+    // ; predecessors: %bb.5
+    //   successors: %bb.30(0x30000000), %bb.18(0x50000000); %bb.30(37.50%), %bb.18(62.50%)
     //   liveins: $rcx, $rdx
-    //   renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.84, !tbaa !31)
+    //   renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.82, !tbaa !32)
     //   TEST64rr renamable $rsi, renamable $rsi, implicit-def $eflags
-    //   JCC_1 %bb.31, 4, implicit killed $eflags
+    //   JCC_1 %bb.30, 4, implicit killed $eflags
     //
-    // bb.19 (%ir-block.87):
-    // ; predecessors: %bb.18
-    //   successors: %bb.20(0x40000000), %bb.32(0x40000000); %bb.20(50.00%), %bb.32(50.00%)
+    // bb.18 (%ir-block.85):
+    // ; predecessors: %bb.17
+    //   successors: %bb.19(0x40000000), %bb.31(0x40000000); %bb.19(50.00%), %bb.31(50.00%)
     //   liveins: $rcx, $rdx, $rsi
     //   $eax = MOV32ri 1, implicit-def $rax
-    //   TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.88, align 8)
-    //   JCC_1 %bb.32, 5, implicit killed $eflags
+    //   TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.86, align 8)
+    //   JCC_1 %bb.31, 5, implicit killed $eflags
     //
-    // bb.20 (%ir-block.92):
-    // ; predecessors: %bb.19
-    //   successors: %bb.21(0x80000000); %bb.21(100.00%)
+    // bb.19 (%ir-block.90):
+    // ; predecessors: %bb.18
+    //   successors: %bb.20(0x80000000); %bb.20(100.00%)
     //   liveins: $rax, $rcx, $rdx, $rsi
-    //   renamable $rdi = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.93, !tbaa !4)
-    //   renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.96, !tbaa !23)
+    //   renamable $rdi = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.91, !tbaa !4)
+    //   renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.94, !tbaa !24)
     //   renamable $edx = OR32rr killed renamable $edx(tied-def 0), renamable $esi, implicit-def dead $eflags
     //   renamable $rdx = MOVSX64rr32 killed renamable $edx
-    //   renamable $edx = MOV32rm renamable $rdi, 4, killed renamable $rdx, 0, $noreg :: (load (s32) from %ir.99, !tbaa !4)
-    //   JMP_1 %bb.21
+    //   renamable $edx = MOV32rm renamable $rdi, 4, killed renamable $rdx, 0, $noreg :: (load (s32) from %ir.97, !tbaa !4)
+    //   JMP_1 %bb.20
     //
-    // bb.33 (%ir-block.157):
-    // ; predecessors: %bb.23, %bb.24
-    //   successors: %bb.21(0x80000000); %bb.21(100.00%)
+    // bb.32 (%ir-block.155):
+    // ; predecessors: %bb.22, %bb.23
+    //   successors: %bb.20(0x80000000); %bb.20(100.00%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi
-    //   renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.158, !tbaa !4)
+    //   renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.156, !tbaa !4)
     //
-    // bb.21 (%ir-block.92):
-    // ; predecessors: %bb.20, %bb.33
-    //   successors: %bb.32(0x09e6b247), %bb.22(0x76194db8); %bb.32(7.74%), %bb.22(92.26%)
+    // bb.20 (%ir-block.90):
+    // ; predecessors: %bb.19, %bb.32
+    //   successors: %bb.31(0x09e6b247), %bb.21(0x76194db9); %bb.31(7.74%), %bb.21(92.26%)
     //   liveins: $rax, $edx, $rcx, $rdi, $rsi
     //   CMP32ri renamable $edx, -1, implicit-def $eflags
-    //   JCC_1 %bb.32, 4, implicit killed $eflags
+    //   JCC_1 %bb.31, 4, implicit killed $eflags
     //
-    // bb.22 (%ir-block.102):
-    // ; predecessors: %bb.21
-    //   successors: %bb.16(0x04000000), %bb.23(0x7c000000); %bb.16(3.12%), %bb.23(96.88%)
+    // bb.21 (%ir-block.100):
+    // ; predecessors: %bb.20
+    //   successors: %bb.15(0x04000000), %bb.22(0x7c000000); %bb.15(3.12%), %bb.22(96.88%)
     //   liveins: $edx, $rax, $rcx, $rdi, $rsi
     //   renamable $r8d = MOV32rr killed renamable $edx, implicit-def $r8
     //   renamable $r8 = nuw nsw SHL64ri killed renamable $r8(tied-def 0), 5, implicit-def dead $eflags
     //   renamable $rdx = LEA64r renamable $rdi, 1, renamable $r8, 0, $noreg
-    //   renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.107, !tbaa !28)
+    //   renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.105, !tbaa !29)
     //   CMP64rr renamable $r8, renamable $rcx, implicit-def $eflags
-    //   JCC_1 %bb.16, 4, implicit killed $eflags
+    //   JCC_1 %bb.15, 4, implicit killed $eflags
     //
-    // bb.23 (%ir-block.116):
-    // ; predecessors: %bb.22
-    //   successors: %bb.33(0x3e000000), %bb.24(0x42000000); %bb.33(48.44%), %bb.24(51.56%)
+    // bb.22 (%ir-block.114):
+    // ; predecessors: %bb.21
+    //   successors: %bb.32(0x3e000000), %bb.23(0x42000000); %bb.32(48.44%), %bb.23(51.56%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
     //   TEST64rr renamable $r8, renamable $r8, implicit-def $eflags
-    //   JCC_1 %bb.33, 4, implicit killed $eflags
+    //   JCC_1 %bb.32, 4, implicit killed $eflags
     //
-    // bb.24 (%ir-block.116):
-    // ; predecessors: %bb.23
-    //   successors: %bb.33(0x783e0f84), %bb.25(0x07c1f07c); %bb.33(93.94%), %bb.25(6.06%)
+    // bb.23 (%ir-block.114):
+    // ; predecessors: %bb.22
+    //   successors: %bb.32(0x783e0f84), %bb.24(0x07c1f07c); %bb.32(93.94%), %bb.24(6.06%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
-    //   CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.117, !tbaa !24)
-    //   JCC_1 %bb.33, 5, implicit killed $eflags
+    //   CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.115, !tbaa !25)
+    //   JCC_1 %bb.32, 5, implicit killed $eflags
     //
-    // bb.25 (%ir-block.122):
-    // ; predecessors: %bb.24
-    //   successors: %bb.26(0x40000000), %bb.31(0x40000000); %bb.26(50.00%), %bb.31(50.00%)
+    // bb.24 (%ir-block.120):
+    // ; predecessors: %bb.23
+    //   successors: %bb.25(0x40000000), %bb.30(0x40000000); %bb.25(50.00%), %bb.30(50.00%)
     //   liveins: $rcx, $rdx, $r8
-    //   renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.124, !tbaa !33)
-    //   renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.126, !tbaa !33)
+    //   renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.122, !tbaa !34)
+    //   renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.124, !tbaa !34)
     //   CMP64rr renamable $rax, renamable $rsi, implicit-def $eflags
     //   renamable $bl = SETCCr 5, implicit killed $eflags
     //   CMP64ri32 killed renamable $rsi, 17, implicit-def $eflags
     //   renamable $sil = SETCCr 3, implicit killed $eflags
     //   dead renamable $sil = OR8rr killed renamable $sil(tied-def 0), killed renamable $bl, implicit-def $eflags
-    //   JCC_1 %bb.31, 5, implicit killed $eflags
+    //   JCC_1 %bb.30, 5, implicit killed $eflags
     //
-    // bb.26 (%ir-block.131):
-    // ; predecessors: %bb.25
-    //   successors: %bb.27(0x40000000), %bb.29(0x40000000); %bb.27(50.00%), %bb.29(50.00%)
+    // bb.25 (%ir-block.129):
+    // ; predecessors: %bb.24
+    //   successors: %bb.26(0x40000000), %bb.28(0x40000000); %bb.26(50.00%), %bb.28(50.00%)
     //   liveins: $rax, $rcx, $rdx, $r8
-    //   renamable $rsi = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.133, !tbaa !34)
-    //   renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.134, !tbaa !34)
+    //   renamable $rsi = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.131, !tbaa !35)
+    //   renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.132, !tbaa !35)
     //   CMP64ri32 renamable $rax, 7, implicit-def $eflags
-    //   JCC_1 %bb.29, 7, implicit killed $eflags
+    //   JCC_1 %bb.28, 7, implicit killed $eflags
     //
-    // bb.27 (%ir-block.138):
-    // ; predecessors: %bb.26
-    //   successors: %bb.16(0x20000000), %bb.28(0x60000000); %bb.16(25.00%), %bb.28(75.00%)
+    // bb.26 (%ir-block.136):
+    // ; predecessors: %bb.25
+    //   successors: %bb.15(0x20000000), %bb.27(0x60000000); %bb.15(25.00%), %bb.27(75.00%)
     //   liveins: $rax, $rdi, $rdx, $rsi
     //   $rcx = MOV64rr $rdi
     //   dead renamable $rcx = XOR64rr killed renamable $rcx(tied-def 0), renamable $rsi, implicit-def $eflags
-    //   JCC_1 %bb.16, 4, implicit killed $eflags
+    //   JCC_1 %bb.15, 4, implicit killed $eflags
     //
-    // bb.28 (%ir-block.138):
-    // ; predecessors: %bb.27
-    //   successors: %bb.16(0x2aaaaaab), %bb.31(0x55555555); %bb.16(33.33%), %bb.31(66.67%)
+    // bb.27 (%ir-block.136):
+    // ; predecessors: %bb.26
+    //   successors: %bb.15(0x2aaaaaab), %bb.30(0x55555555); %bb.15(33.33%), %bb.30(66.67%)
     //   liveins: $rax, $rdi, $rdx, $rsi
     //   renamable $rdi = XOR64rr killed renamable $rdi(tied-def 0), killed renamable $rsi, implicit-def dead $eflags
     //   renamable $rcx = BSF64rr undef renamable $rcx(tied-def 0), killed renamable $rdi, implicit-def dead $eflags
     //   renamable $rax = nuw nsw SHL64ri killed renamable $rax(tied-def 0), 3, implicit-def dead $eflags
     //   CMP64rr killed renamable $rcx, killed renamable $rax, implicit-def $eflags
-    //   JCC_1 %bb.31, 2, implicit killed $eflags
-    //   JMP_1 %bb.16
+    //   JCC_1 %bb.30, 2, implicit killed $eflags
+    //   JMP_1 %bb.15
     //
-    // bb.9 (%ir-block.35):
-    // ; predecessors: %bb.8
-    //   successors: %bb.10(0x40000000), %bb.32(0x40000000); %bb.10(50.00%), %bb.32(50.00%)
+    // bb.8 (%ir-block.33):
+    // ; predecessors: %bb.7
+    //   successors: %bb.9(0x40000000), %bb.31(0x40000000); %bb.9(50.00%), %bb.31(50.00%)
     //   liveins: $rcx, $rdx
-    //   renamable $esi = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rsi :: (load (s32) from %ir.36, align 8, !tbaa !20)
+    //   renamable $esi = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rsi :: (load (s32) from %ir.34, align 8, !tbaa !21)
     //   $eax = MOV32ri 1, implicit-def $rax
     //   CMP64rr renamable $rcx, killed renamable $rsi, implicit-def $eflags
-    //   JCC_1 %bb.32, 3, implicit killed $eflags
+    //   JCC_1 %bb.31, 3, implicit killed $eflags
     //
-    // bb.10 (%ir-block.40):
-    // ; predecessors: %bb.9
-    //   successors: %bb.32(0x30000000), %bb.11(0x50000000); %bb.32(37.50%), %bb.11(62.50%)
+    // bb.9 (%ir-block.38):
+    // ; predecessors: %bb.8
+    //   successors: %bb.31(0x30000000), %bb.10(0x50000000); %bb.31(37.50%), %bb.10(62.50%)
     //   liveins: $rax, $rcx, $rdx
-    //   renamable $rdx = MOV64rm killed renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.41, !tbaa !4)
+    //   renamable $rdx = MOV64rm killed renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.39, !tbaa !4)
     //   renamable $rcx = nuw nsw SHL64ri killed renamable $rcx(tied-def 0), 4, implicit-def dead $eflags
-    //   $ebx = MOVZX32rm8 renamable $rdx, 1, renamable $rcx, 8, $noreg :: (load (s8) from %ir.44, align 8, !tbaa !4)
+    //   $ebx = MOVZX32rm8 renamable $rdx, 1, renamable $rcx, 8, $noreg :: (load (s8) from %ir.42, align 8, !tbaa !4)
     //   TEST8rr renamable $bl, renamable $bl, implicit-def $eflags
-    //   JCC_1 %bb.32, 4, implicit killed $eflags
+    //   JCC_1 %bb.31, 4, implicit killed $eflags
     //
-    // bb.11 (%ir-block.47):
-    // ; predecessors: %bb.10
+    // bb.10 (%ir-block.45):
+    // ; predecessors: %bb.9
     //   liveins: $bl, $rcx, $rdx
     //   renamable $rdx = nuw ADD64rr killed renamable $rdx(tied-def 0), killed renamable $rcx, implicit-def dead $eflags
     //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
@@ -5651,29 +5604,29 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     //   renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rdx, 5, implicit killed $eflags
     //   RET64 killed $rax
     //
-    // bb.29 (%ir-block.145):
-    // ; predecessors: %bb.26
-    //   successors: %bb.30(0x40000000), %bb.31(0x40000000); %bb.30(50.00%), %bb.31(50.00%)
+    // bb.28 (%ir-block.143):
+    // ; predecessors: %bb.25
+    //   successors: %bb.29(0x40000000), %bb.30(0x40000000); %bb.29(50.00%), %bb.30(50.00%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
     //   CMP64rr killed renamable $rsi, killed renamable $rdi, implicit-def $eflags
-    //   JCC_1 %bb.31, 5, implicit killed $eflags
+    //   JCC_1 %bb.30, 5, implicit killed $eflags
     //
-    // bb.30 (%ir-block.147):
-    // ; predecessors: %bb.29
-    //   successors: %bb.16(0x40000000), %bb.31(0x40000000); %bb.16(50.00%), %bb.31(50.00%)
+    // bb.29 (%ir-block.145):
+    // ; predecessors: %bb.28
+    //   successors: %bb.15(0x40000000), %bb.30(0x40000000); %bb.15(50.00%), %bb.30(50.00%)
     //   liveins: $rax, $rcx, $rdx, $r8
-    //   renamable $rsi = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !34)
-    //   CMP64rm killed renamable $rsi, killed renamable $rcx, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr9, !tbaa !34)
-    //   JCC_1 %bb.16, 4, implicit killed $eflags
+    //   renamable $rsi = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !35)
+    //   CMP64rm killed renamable $rsi, killed renamable $rcx, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr9, !tbaa !35)
+    //   JCC_1 %bb.15, 4, implicit killed $eflags
     //
-    // bb.31:
-    // ; predecessors: %bb.30, %bb.4, %bb.5, %bb.7, %bb.18, %bb.25, %bb.28, %bb.29
-    //   successors: %bb.32(0x80000000); %bb.32(100.00%)
+    // bb.30:
+    // ; predecessors: %bb.29, %bb.4, %bb.6, %bb.17, %bb.24, %bb.27, %bb.28
+    //   successors: %bb.31(0x80000000); %bb.31(100.00%)
     //
     //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
     //
-    // bb.32 (%ir-block.161):
-    // ; predecessors: %bb.10, %bb.31, %bb.9, %bb.19, %bb.13, %bb.21
+    // bb.31 (%ir-block.159):
+    // ; predecessors: %bb.9, %bb.30, %bb.8, %bb.18, %bb.12, %bb.20
     //   liveins: $rax
     //   RET64 killed $rax
     //
@@ -5693,17 +5646,17 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     tpde::Label block5_label = derived()->text_writer.label_create();
     tpde::Label block6_label = derived()->text_writer.label_create();
     tpde::Label block7_label = derived()->text_writer.label_create();
-    tpde::Label block8_label = derived()->text_writer.label_create();
+    tpde::Label block11_label = derived()->text_writer.label_create();
+    tpde::Label block16_label = derived()->text_writer.label_create();
     tpde::Label block12_label = derived()->text_writer.label_create();
-    tpde::Label block17_label = derived()->text_writer.label_create();
     tpde::Label block13_label = derived()->text_writer.label_create();
     tpde::Label block14_label = derived()->text_writer.label_create();
     tpde::Label block15_label = derived()->text_writer.label_create();
-    tpde::Label block16_label = derived()->text_writer.label_create();
+    tpde::Label block17_label = derived()->text_writer.label_create();
     tpde::Label block18_label = derived()->text_writer.label_create();
     tpde::Label block19_label = derived()->text_writer.label_create();
+    tpde::Label block32_label = derived()->text_writer.label_create();
     tpde::Label block20_label = derived()->text_writer.label_create();
-    tpde::Label block33_label = derived()->text_writer.label_create();
     tpde::Label block21_label = derived()->text_writer.label_create();
     tpde::Label block22_label = derived()->text_writer.label_create();
     tpde::Label block23_label = derived()->text_writer.label_create();
@@ -5711,14 +5664,13 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     tpde::Label block25_label = derived()->text_writer.label_create();
     tpde::Label block26_label = derived()->text_writer.label_create();
     tpde::Label block27_label = derived()->text_writer.label_create();
-    tpde::Label block28_label = derived()->text_writer.label_create();
+    tpde::Label block8_label = derived()->text_writer.label_create();
     tpde::Label block9_label = derived()->text_writer.label_create();
     tpde::Label block10_label = derived()->text_writer.label_create();
-    tpde::Label block11_label = derived()->text_writer.label_create();
+    tpde::Label block28_label = derived()->text_writer.label_create();
     tpde::Label block29_label = derived()->text_writer.label_create();
     tpde::Label block30_label = derived()->text_writer.label_create();
     tpde::Label block31_label = derived()->text_writer.label_create();
-    tpde::Label block32_label = derived()->text_writer.label_create();
 
     ValuePart &scratch_ax = result_0;
     ScratchReg scratch_di{derived()};
@@ -5887,9 +5839,9 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.31, 5, implicit killed $eflags
+    // JCC_1 %bb.30, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block31_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block30_label);
 
   // Start of block 5
   derived()->label_place(block5_label);
@@ -5909,26 +5861,6 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // TEST64rr renamable $rdx, renamable $rdx, implicit-def $eflags
-    do {
-    {
-    if (1) {
-        AsmReg op0 = scratch_dx.cur_reg();
-    ASMD(TEST64rr, op0, op0);
-        break;
-    }
-    }
-    } while (false);
-
-
-    // JCC_1 %bb.31, 4, implicit killed $eflags
-  // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block31_label);
-
-  // Start of block 6
-  derived()->label_place(block6_label);
-
-
     // renamable $rcx = MOV64rm renamable $rsi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.1, !tbaa !4)
     do {
     {
@@ -5943,7 +5875,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $eax = MOVZX32rm8 killed renamable $rsi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.27, align 8, !tbaa !4)
+    // renamable $eax = MOVZX32rm8 killed renamable $rsi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.25, align 8, !tbaa !4)
     do {
     {
     if (1) {
@@ -5966,12 +5898,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.18, 4, implicit killed $eflags
+    // JCC_1 %bb.17, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block18_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block17_label);
 
-  // Start of block 7
-  derived()->label_place(block7_label);
+  // Start of block 6
+  derived()->label_place(block6_label);
 
 
     // CMP32ri killed renamable $eax, 4, implicit-def $eflags
@@ -5983,15 +5915,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.31, 5, implicit killed $eflags
+    // JCC_1 %bb.30, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block31_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block30_label);
 
-  // Start of block 8
-  derived()->label_place(block8_label);
+  // Start of block 7
+  derived()->label_place(block7_label);
 
 
-    // TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.31, align 8)
+    // TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.29, align 8)
     do {
     {
     if (1) {
@@ -6003,15 +5935,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.9, 5, implicit killed $eflags
+    // JCC_1 %bb.8, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block9_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block8_label);
 
-  // Start of block 12
-  derived()->label_place(block12_label);
+  // Start of block 11
+  derived()->label_place(block11_label);
 
 
-    // renamable $rsi = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.52, !tbaa !4)
+    // renamable $rsi = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.50, !tbaa !4)
     do {
     {
     if (1) {
@@ -6025,7 +5957,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.55, !tbaa !23)
+    // renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.53, !tbaa !24)
     do {
     {
     if (1) {
@@ -6065,7 +5997,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $edx = MOV32rm renamable $rsi, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.58, !tbaa !4)
+    // renamable $edx = MOV32rm renamable $rsi, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.56, !tbaa !4)
     do {
     {
     if (1) {
@@ -6090,15 +6022,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JMP_1 %bb.13
+    // JMP_1 %bb.12
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jmp, block13_label);
+  derived()->generate_raw_jump(Derived::Jump::jmp, block12_label);
 
-  // Start of block 17
-  derived()->label_place(block17_label);
+  // Start of block 16
+  derived()->label_place(block16_label);
 
 
-    // renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.79, !tbaa !4)
+    // renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.77, !tbaa !4)
     do {
     {
     if (1) {
@@ -6110,8 +6042,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
     }
     } while (false);
-  // Start of block 13
-  derived()->label_place(block13_label);
+  // Start of block 12
+  derived()->label_place(block12_label);
 
 
     // CMP32ri renamable $edx, -1, implicit-def $eflags
@@ -6123,12 +6055,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.32, 4, implicit killed $eflags
+    // JCC_1 %bb.31, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block32_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block31_label);
 
-  // Start of block 14
-  derived()->label_place(block14_label);
+  // Start of block 13
+  derived()->label_place(block13_label);
 
 
     // renamable $edi = MOV32rr killed renamable $edx, implicit-def $rdi
@@ -6168,7 +6100,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // CMP64mr renamable $rsi, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.65, !tbaa !24)
+    // CMP64mr renamable $rsi, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.63, !tbaa !25)
     do {
     {
     if (1) {
@@ -6182,15 +6114,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.17, 5, implicit killed $eflags
+    // JCC_1 %bb.16, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block17_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block16_label);
 
-  // Start of block 15
-  derived()->label_place(block15_label);
+  // Start of block 14
+  derived()->label_place(block14_label);
 
 
-    // CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.69, !tbaa !28)
+    // CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.67, !tbaa !29)
     do {
     {
     if (1) {
@@ -6202,12 +6134,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.17, 5, implicit killed $eflags
+    // JCC_1 %bb.16, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block17_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block16_label);
 
-  // Start of block 16
-  derived()->label_place(block16_label);
+  // Start of block 15
+  derived()->label_place(block15_label);
 
 
     // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
@@ -6216,18 +6148,18 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     if (1) {
         // undef tied
         // undef allocate scratch
-        AsmReg inst42_op2 = scratch_ax.cur_reg_or_alloc(derived());
+        AsmReg inst40_op2 = scratch_ax.cur_reg_or_alloc(derived());
 
         // def ax has not been allocated yet
         scratch_ax.cur_reg_or_alloc(derived());
-    ASMD(XOR32rr, scratch_ax.cur_reg(), inst42_op2);
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst40_op2);
         break;
     }
     }
     } while (false);
 
 
-    // CMP8mi renamable $rdx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.73, align 8, !tbaa !4), (load (s8) from %ir.152, align 8, !tbaa !4), (load (s8) from %ir.111, align 8, !tbaa !4)
+    // CMP8mi renamable $rdx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.71, align 8, !tbaa !4), (load (s8) from %ir.150, align 8, !tbaa !4), (load (s8) from %ir.109, align 8, !tbaa !4)
     do {
     {
     if (1) {
@@ -6250,11 +6182,11 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
 
     // RET64 killed $rax
   derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
-  // Start of block 18
-  derived()->label_place(block18_label);
+  // Start of block 17
+  derived()->label_place(block17_label);
 
 
-    // renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.84, !tbaa !31)
+    // renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.82, !tbaa !32)
     do {
     {
     if (1) {
@@ -6280,12 +6212,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.31, 4, implicit killed $eflags
+    // JCC_1 %bb.30, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block31_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block30_label);
 
-  // Start of block 19
-  derived()->label_place(block19_label);
+  // Start of block 18
+  derived()->label_place(block18_label);
 
 
     // $eax = MOV32ri 1, implicit-def $rax
@@ -6298,7 +6230,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.88, align 8)
+    // TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.86, align 8)
     do {
     {
     if (1) {
@@ -6310,15 +6242,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.32, 5, implicit killed $eflags
+    // JCC_1 %bb.31, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block32_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block31_label);
 
-  // Start of block 20
-  derived()->label_place(block20_label);
+  // Start of block 19
+  derived()->label_place(block19_label);
 
 
-    // renamable $rdi = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.93, !tbaa !4)
+    // renamable $rdi = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.91, !tbaa !4)
     do {
     {
     if (1) {
@@ -6332,7 +6264,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.96, !tbaa !23)
+    // renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.94, !tbaa !24)
     do {
     {
     if (1) {
@@ -6372,7 +6304,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $edx = MOV32rm renamable $rdi, 4, killed renamable $rdx, 0, $noreg :: (load (s32) from %ir.99, !tbaa !4)
+    // renamable $edx = MOV32rm renamable $rdi, 4, killed renamable $rdx, 0, $noreg :: (load (s32) from %ir.97, !tbaa !4)
     do {
     {
     if (1) {
@@ -6387,15 +6319,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JMP_1 %bb.21
+    // JMP_1 %bb.20
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jmp, block21_label);
+  derived()->generate_raw_jump(Derived::Jump::jmp, block20_label);
 
-  // Start of block 33
-  derived()->label_place(block33_label);
+  // Start of block 32
+  derived()->label_place(block32_label);
 
 
-    // renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.158, !tbaa !4)
+    // renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.156, !tbaa !4)
     do {
     {
     if (1) {
@@ -6407,8 +6339,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
     }
     } while (false);
-  // Start of block 21
-  derived()->label_place(block21_label);
+  // Start of block 20
+  derived()->label_place(block20_label);
 
 
     // CMP32ri renamable $edx, -1, implicit-def $eflags
@@ -6420,12 +6352,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.32, 4, implicit killed $eflags
+    // JCC_1 %bb.31, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block32_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block31_label);
 
-  // Start of block 22
-  derived()->label_place(block22_label);
+  // Start of block 21
+  derived()->label_place(block21_label);
 
 
     // renamable $r8d = MOV32rr killed renamable $edx, implicit-def $r8
@@ -6465,7 +6397,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.107, !tbaa !28)
+    // renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.105, !tbaa !29)
     do {
     {
     if (1) {
@@ -6493,12 +6425,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.16, 4, implicit killed $eflags
+    // JCC_1 %bb.15, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block16_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block15_label);
 
-  // Start of block 23
-  derived()->label_place(block23_label);
+  // Start of block 22
+  derived()->label_place(block22_label);
 
 
     // TEST64rr renamable $r8, renamable $r8, implicit-def $eflags
@@ -6513,15 +6445,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.33, 4, implicit killed $eflags
+    // JCC_1 %bb.32, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block33_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block32_label);
 
-  // Start of block 24
-  derived()->label_place(block24_label);
+  // Start of block 23
+  derived()->label_place(block23_label);
 
 
-    // CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.117, !tbaa !24)
+    // CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.115, !tbaa !25)
     do {
     {
     if (1) {
@@ -6534,15 +6466,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.33, 5, implicit killed $eflags
+    // JCC_1 %bb.32, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block33_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block32_label);
 
-  // Start of block 25
-  derived()->label_place(block25_label);
+  // Start of block 24
+  derived()->label_place(block24_label);
 
 
-    // renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.124, !tbaa !33)
+    // renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.122, !tbaa !34)
     do {
     {
     if (1) {
@@ -6556,7 +6488,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.126, !tbaa !33)
+    // renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.124, !tbaa !34)
     do {
     {
     if (1) {
@@ -6624,15 +6556,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.31, 5, implicit killed $eflags
+    // JCC_1 %bb.30, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block31_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block30_label);
 
-  // Start of block 26
-  derived()->label_place(block26_label);
+  // Start of block 25
+  derived()->label_place(block25_label);
 
 
-    // renamable $rsi = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.133, !tbaa !34)
+    // renamable $rsi = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.131, !tbaa !35)
     do {
     {
     if (1) {
@@ -6646,7 +6578,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.134, !tbaa !34)
+    // renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.132, !tbaa !35)
     do {
     {
     if (1) {
@@ -6669,12 +6601,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.29, 7, implicit killed $eflags
+    // JCC_1 %bb.28, 7, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::ja, block29_label);
+  derived()->generate_raw_jump(Derived::Jump::ja, block28_label);
 
-  // Start of block 27
-  derived()->label_place(block27_label);
+  // Start of block 26
+  derived()->label_place(block26_label);
 
 
     // $rcx = MOV64rr $rdi
@@ -6703,12 +6635,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.16, 4, implicit killed $eflags
+    // JCC_1 %bb.15, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block16_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block15_label);
 
-  // Start of block 28
-  derived()->label_place(block28_label);
+  // Start of block 27
+  derived()->label_place(block27_label);
 
 
     // renamable $rdi = XOR64rr killed renamable $rdi(tied-def 0), killed renamable $rsi, implicit-def dead $eflags
@@ -6759,21 +6691,21 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.31, 2, implicit killed $eflags
+    // JCC_1 %bb.30, 2, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jb, block31_label);
+  derived()->generate_raw_jump(Derived::Jump::jb, block30_label);
 
 
 
-    // JMP_1 %bb.16
+    // JMP_1 %bb.15
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jmp, block16_label);
+  derived()->generate_raw_jump(Derived::Jump::jmp, block15_label);
 
-  // Start of block 9
-  derived()->label_place(block9_label);
+  // Start of block 8
+  derived()->label_place(block8_label);
 
 
-    // renamable $esi = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rsi :: (load (s32) from %ir.36, align 8, !tbaa !20)
+    // renamable $esi = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rsi :: (load (s32) from %ir.34, align 8, !tbaa !21)
     do {
     {
     if (1) {
@@ -6810,15 +6742,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.32, 3, implicit killed $eflags
+    // JCC_1 %bb.31, 3, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jae, block32_label);
+  derived()->generate_raw_jump(Derived::Jump::jae, block31_label);
 
-  // Start of block 10
-  derived()->label_place(block10_label);
+  // Start of block 9
+  derived()->label_place(block9_label);
 
 
-    // renamable $rdx = MOV64rm killed renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.41, !tbaa !4)
+    // renamable $rdx = MOV64rm killed renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.39, !tbaa !4)
     do {
     {
     if (1) {
@@ -6840,7 +6772,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // $ebx = MOVZX32rm8 renamable $rdx, 1, renamable $rcx, 8, $noreg :: (load (s8) from %ir.44, align 8, !tbaa !4)
+    // $ebx = MOVZX32rm8 renamable $rdx, 1, renamable $rcx, 8, $noreg :: (load (s8) from %ir.42, align 8, !tbaa !4)
     do {
     {
     if (1) {
@@ -6867,12 +6799,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.32, 4, implicit killed $eflags
+    // JCC_1 %bb.31, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block32_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block31_label);
 
-  // Start of block 11
-  derived()->label_place(block11_label);
+  // Start of block 10
+  derived()->label_place(block10_label);
 
 
     // renamable $rdx = nuw ADD64rr killed renamable $rdx(tied-def 0), killed renamable $rcx, implicit-def dead $eflags
@@ -6893,11 +6825,11 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     if (1) {
         // undef tied
         // undef allocate scratch
-        AsmReg inst102_op2 = scratch_ax.cur_reg_or_alloc(derived());
+        AsmReg inst100_op2 = scratch_ax.cur_reg_or_alloc(derived());
 
         // def ax has not been allocated yet
         scratch_ax.cur_reg_or_alloc(derived());
-    ASMD(XOR32rr, scratch_ax.cur_reg(), inst102_op2);
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst100_op2);
         break;
     }
     }
@@ -6924,8 +6856,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
 
     // RET64 killed $rax
   derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
-  // Start of block 29
-  derived()->label_place(block29_label);
+  // Start of block 28
+  derived()->label_place(block28_label);
 
 
     // CMP64rr killed renamable $rsi, killed renamable $rdi, implicit-def $eflags
@@ -6941,15 +6873,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.31, 5, implicit killed $eflags
+    // JCC_1 %bb.30, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block31_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block30_label);
 
-  // Start of block 30
-  derived()->label_place(block30_label);
+  // Start of block 29
+  derived()->label_place(block29_label);
 
 
-    // renamable $rsi = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !34)
+    // renamable $rsi = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !35)
     do {
     {
     if (1) {
@@ -6964,7 +6896,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // CMP64rm killed renamable $rsi, killed renamable $rcx, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr9, !tbaa !34)
+    // CMP64rm killed renamable $rsi, killed renamable $rcx, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr9, !tbaa !35)
     do {
     {
     if (1) {
@@ -6978,12 +6910,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.16, 4, implicit killed $eflags
+    // JCC_1 %bb.15, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block16_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block15_label);
 
-  // Start of block 31
-  derived()->label_place(block31_label);
+  // Start of block 30
+  derived()->label_place(block30_label);
 
 
     // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
@@ -6992,17 +6924,17 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     if (1) {
         // undef tied
         // undef allocate scratch
-        AsmReg inst111_op2 = scratch_ax.cur_reg_or_alloc(derived());
+        AsmReg inst109_op2 = scratch_ax.cur_reg_or_alloc(derived());
 
         // def ax has not been allocated yet
         scratch_ax.cur_reg_or_alloc(derived());
-    ASMD(XOR32rr, scratch_ax.cur_reg(), inst111_op2);
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst109_op2);
         break;
     }
     }
     } while (false);
-  // Start of block 32
-  derived()->label_place(block32_label);
+  // Start of block 31
+  derived()->label_place(block31_label);
 
 
     // RET64 killed $rax
@@ -7074,242 +7006,235 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     //
     // bb.6 (%ir-block.28):
     // ; predecessors: %bb.4, %bb.3
-    //   successors: %bb.7(0x40000000), %bb.36(0x40000000); %bb.7(50.00%), %bb.36(50.00%)
+    //   successors: %bb.7(0x40000000), %bb.35(0x40000000); %bb.7(50.00%), %bb.35(50.00%)
     //   liveins: $al, $rdi, $rsi
     //   CMP8ri killed renamable $al, 7, implicit-def $eflags
-    //   JCC_1 %bb.36, 5, implicit killed $eflags
+    //   JCC_1 %bb.35, 5, implicit killed $eflags
     //
     // bb.7 (%ir-block.30):
     // ; predecessors: %bb.6
-    //   successors: %bb.36(0x30000000), %bb.8(0x50000000); %bb.36(37.50%), %bb.8(62.50%)
+    //   successors: %bb.19(0x2aaaaaab), %bb.8(0x55555555); %bb.19(33.33%), %bb.8(66.67%)
     //   liveins: $rdi, $rsi
     //   renamable $rdi = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.21, !tbaa !4)
-    //   TEST64rr renamable $rdi, renamable $rdi, implicit-def $eflags
-    //   JCC_1 %bb.36, 4, implicit killed $eflags
-    //
-    // bb.8 (%ir-block.34):
-    // ; predecessors: %bb.7
-    //   successors: %bb.20(0x2aaaaaab), %bb.9(0x55555555); %bb.20(33.33%), %bb.9(66.67%)
-    //   liveins: $rdi, $rsi
     //   renamable $rcx = MOV64rm renamable $rsi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.10, !tbaa !4)
-    //   renamable $eax = MOVZX32rm8 killed renamable $rsi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.35, align 8, !tbaa !4)
+    //   renamable $eax = MOVZX32rm8 killed renamable $rsi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.33, align 8, !tbaa !4)
     //   CMP32ri renamable $eax, 6, implicit-def $eflags
-    //   JCC_1 %bb.20, 4, implicit killed $eflags
+    //   JCC_1 %bb.19, 4, implicit killed $eflags
     //
-    // bb.9 (%ir-block.34):
-    // ; predecessors: %bb.8
-    //   successors: %bb.10(0x40000001), %bb.36(0x3fffffff); %bb.10(50.00%), %bb.36(50.00%)
+    // bb.8 (%ir-block.30):
+    // ; predecessors: %bb.7
+    //   successors: %bb.9(0x40000001), %bb.35(0x3fffffff); %bb.9(50.00%), %bb.35(50.00%)
     //   liveins: $eax, $rcx, $rdi
     //   CMP32ri killed renamable $eax, 4, implicit-def $eflags
-    //   JCC_1 %bb.36, 5, implicit killed $eflags
+    //   JCC_1 %bb.35, 5, implicit killed $eflags
     //
-    // bb.10 (%ir-block.38):
+    // bb.9 (%ir-block.36):
+    // ; predecessors: %bb.8
+    //   successors: %bb.13(0x40000000), %bb.10(0x40000000); %bb.13(50.00%), %bb.10(50.00%)
+    //   liveins: $rcx, $rdi
+    //   TEST8mi renamable $rdi, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.37, align 8)
+    //   JCC_1 %bb.10, 5, implicit killed $eflags
+    //
+    // bb.13 (%ir-block.57):
     // ; predecessors: %bb.9
-    //   successors: %bb.14(0x40000000), %bb.11(0x40000000); %bb.14(50.00%), %bb.11(50.00%)
+    //   successors: %bb.14(0x80000000); %bb.14(100.00%)
     //   liveins: $rcx, $rdi
-    //   TEST8mi renamable $rdi, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.39, align 8)
-    //   JCC_1 %bb.11, 5, implicit killed $eflags
-    //
-    // bb.14 (%ir-block.59):
-    // ; predecessors: %bb.10
-    //   successors: %bb.15(0x80000000); %bb.15(100.00%)
-    //   liveins: $rcx, $rdi
-    //   renamable $rdx = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.60, !tbaa !4)
-    //   renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.63, !tbaa !23)
+    //   renamable $rdx = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.58, !tbaa !4)
+    //   renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.61, !tbaa !24)
     //   renamable $eax = OR32rr killed renamable $eax(tied-def 0), renamable $ecx, implicit-def dead $eflags
     //   renamable $rax = MOVSX64rr32 killed renamable $eax
-    //   renamable $esi = MOV32rm renamable $rdx, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.66, !tbaa !4)
+    //   renamable $esi = MOV32rm renamable $rdx, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.64, !tbaa !4)
     //   $eax = MOV32ri 1, implicit-def $rax
-    //   JMP_1 %bb.15
+    //   JMP_1 %bb.14
     //
-    // bb.19 (%ir-block.86, align 16):
-    // ; predecessors: %bb.16, %bb.17
-    //   successors: %bb.15(0x80000000); %bb.15(100.00%)
+    // bb.18 (%ir-block.84, align 16):
+    // ; predecessors: %bb.15, %bb.16
+    //   successors: %bb.14(0x80000000); %bb.14(100.00%)
     //   liveins: $rax, $rcx, $rdx, $rsi
-    //   renamable $esi = MOV32rm killed renamable $rsi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.87, !tbaa !4)
+    //   renamable $esi = MOV32rm killed renamable $rsi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.85, !tbaa !4)
     //
-    // bb.15 (%ir-block.59):
-    // ; predecessors: %bb.14, %bb.19
-    //   successors: %bb.37(0x0715ba18), %bb.16(0x78ea45e7); %bb.37(5.54%), %bb.16(94.46%)
+    // bb.14 (%ir-block.57):
+    // ; predecessors: %bb.13, %bb.18
+    //   successors: %bb.36(0x0715ba19), %bb.15(0x78ea45e7); %bb.36(5.54%), %bb.15(94.46%)
     //   liveins: $rax, $esi, $rcx, $rdx
     //   CMP32ri renamable $esi, -1, implicit-def $eflags
-    //   JCC_1 %bb.37, 4, implicit killed $eflags
+    //   JCC_1 %bb.36, 4, implicit killed $eflags
     //
-    // bb.16 (%ir-block.69):
-    // ; predecessors: %bb.15
-    //   successors: %bb.17(0x40000000), %bb.19(0x40000000); %bb.17(50.00%), %bb.19(50.00%)
+    // bb.15 (%ir-block.67):
+    // ; predecessors: %bb.14
+    //   successors: %bb.16(0x40000000), %bb.18(0x40000000); %bb.16(50.00%), %bb.18(50.00%)
     //   liveins: $esi, $rax, $rcx, $rdx
     //   renamable $edi = MOV32rr killed renamable $esi, implicit-def $rdi
     //   renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
     //   renamable $rsi = LEA64r renamable $rdx, 1, renamable $rdi, 0, $noreg
-    //   CMP64mr renamable $rdx, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.73, !tbaa !24)
-    //   JCC_1 %bb.19, 5, implicit killed $eflags
+    //   CMP64mr renamable $rdx, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.71, !tbaa !25)
+    //   JCC_1 %bb.18, 5, implicit killed $eflags
     //
-    // bb.17 (%ir-block.76):
-    // ; predecessors: %bb.16
-    //   successors: %bb.18(0x04000000), %bb.19(0x7c000000); %bb.18(3.12%), %bb.19(96.88%)
+    // bb.16 (%ir-block.74):
+    // ; predecessors: %bb.15
+    //   successors: %bb.17(0x04000000), %bb.18(0x7c000000); %bb.17(3.12%), %bb.18(96.88%)
     //   liveins: $rax, $rcx, $rdx, $rsi
-    //   CMP64mi32 renamable $rsi, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.77, !tbaa !28)
-    //   JCC_1 %bb.19, 5, implicit killed $eflags
+    //   CMP64mi32 renamable $rsi, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.75, !tbaa !29)
+    //   JCC_1 %bb.18, 5, implicit killed $eflags
     //
-    // bb.18 (%ir-block.80):
-    // ; predecessors: %bb.17, %bb.26, %bb.35, %bb.32, %bb.33
+    // bb.17 (%ir-block.78):
+    // ; predecessors: %bb.16, %bb.25, %bb.34, %bb.31, %bb.32
     //   liveins: $rsi
     //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
-    //   CMP8mi renamable $rsi, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.81, align 8, !tbaa !4), (load (s8) from %ir.168, align 8, !tbaa !4), (load (s8) from %ir.132, align 8, !tbaa !4)
+    //   CMP8mi renamable $rsi, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.79, align 8, !tbaa !4), (load (s8) from %ir.166, align 8, !tbaa !4), (load (s8) from %ir.130, align 8, !tbaa !4)
     //   renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rsi, 5, implicit killed $eflags
     //   RET64 killed $rax
     //
-    // bb.20 (%ir-block.90):
-    // ; predecessors: %bb.8
-    //   successors: %bb.36(0x30000000), %bb.21(0x50000000); %bb.36(37.50%), %bb.21(62.50%)
+    // bb.19 (%ir-block.88):
+    // ; predecessors: %bb.7
+    //   successors: %bb.35(0x30000000), %bb.20(0x50000000); %bb.35(37.50%), %bb.20(62.50%)
     //   liveins: $rcx, $rdi
-    //   renamable $rdx = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.92, !tbaa !33)
+    //   renamable $rdx = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.90, !tbaa !34)
     //   TEST64rr renamable $rdx, renamable $rdx, implicit-def $eflags
-    //   JCC_1 %bb.36, 4, implicit killed $eflags
+    //   JCC_1 %bb.35, 4, implicit killed $eflags
     //
-    // bb.21 (%ir-block.95):
-    // ; predecessors: %bb.20
-    //   successors: %bb.36(0x40000000), %bb.22(0x40000000); %bb.36(50.00%), %bb.22(50.00%)
+    // bb.20 (%ir-block.93):
+    // ; predecessors: %bb.19
+    //   successors: %bb.35(0x40000000), %bb.21(0x40000000); %bb.35(50.00%), %bb.21(50.00%)
     //   liveins: $rcx, $rdi, $rdx
-    //   $eax = MOVZX32rm8 renamable $rcx, 1, $noreg, 24, $noreg, implicit-def $rax :: (load (s8) from %ir.97, align 8, !tbaa !4)
+    //   $eax = MOVZX32rm8 renamable $rcx, 1, $noreg, 24, $noreg, implicit-def $rax :: (load (s8) from %ir.95, align 8, !tbaa !4)
     //   renamable $esi = LEA64_32r renamable $rax, 1, $noreg, -48, $noreg
     //   CMP8ri killed renamable $sil, 10, implicit-def $eflags, implicit killed $esi
     //   renamable $bl = SETCCr 2, implicit killed $eflags
     //   CMP8ri killed renamable $al, 45, implicit-def $eflags, implicit killed $rax
     //   renamable $al = SETCCr 4, implicit killed $eflags
     //   dead renamable $al = OR8rr killed renamable $al(tied-def 0), killed renamable $bl, implicit-def $eflags
-    //   JCC_1 %bb.36, 5, implicit killed $eflags
+    //   JCC_1 %bb.35, 5, implicit killed $eflags
     //
-    // bb.22 (%ir-block.103):
-    // ; predecessors: %bb.21
-    //   successors: %bb.36(0x30000000), %bb.23(0x50000000); %bb.36(37.50%), %bb.23(62.50%)
+    // bb.21 (%ir-block.101):
+    // ; predecessors: %bb.20
+    //   successors: %bb.35(0x30000000), %bb.22(0x50000000); %bb.35(37.50%), %bb.22(62.50%)
     //   liveins: $rcx, $rdi, $rdx
-    //   renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.105, !tbaa !31)
+    //   renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.103, !tbaa !32)
     //   TEST64rr renamable $r8, renamable $r8, implicit-def $eflags
-    //   JCC_1 %bb.36, 4, implicit killed $eflags
+    //   JCC_1 %bb.35, 4, implicit killed $eflags
     //
-    // bb.23 (%ir-block.108):
-    // ; predecessors: %bb.22
-    //   successors: %bb.24(0x40000000), %bb.37(0x40000000); %bb.24(50.00%), %bb.37(50.00%)
+    // bb.22 (%ir-block.106):
+    // ; predecessors: %bb.21
+    //   successors: %bb.23(0x40000000), %bb.36(0x40000000); %bb.23(50.00%), %bb.36(50.00%)
     //   liveins: $rcx, $rdi, $rdx, $r8
     //   $eax = MOV32ri 1, implicit-def $rax
-    //   TEST8mi renamable $rdi, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.109, align 8)
-    //   JCC_1 %bb.37, 5, implicit killed $eflags
+    //   TEST8mi renamable $rdi, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.107, align 8)
+    //   JCC_1 %bb.36, 5, implicit killed $eflags
     //
-    // bb.24 (%ir-block.113):
-    // ; predecessors: %bb.23
-    //   successors: %bb.25(0x80000000); %bb.25(100.00%)
+    // bb.23 (%ir-block.111):
+    // ; predecessors: %bb.22
+    //   successors: %bb.24(0x80000000); %bb.24(100.00%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $r8
-    //   renamable $r9 = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.114, !tbaa !4)
-    //   renamable $esi = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.117, !tbaa !23)
+    //   renamable $r9 = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.112, !tbaa !4)
+    //   renamable $esi = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.115, !tbaa !24)
     //   renamable $esi = OR32rr killed renamable $esi(tied-def 0), renamable $r8d, implicit-def dead $eflags
     //   renamable $rsi = MOVSX64rr32 killed renamable $esi
-    //   renamable $esi = MOV32rm renamable $r9, 4, killed renamable $rsi, 0, $noreg :: (load (s32) from %ir.120, !tbaa !4)
-    //   JMP_1 %bb.25
+    //   renamable $esi = MOV32rm renamable $r9, 4, killed renamable $rsi, 0, $noreg :: (load (s32) from %ir.118, !tbaa !4)
+    //   JMP_1 %bb.24
     //
-    // bb.38 (%ir-block.173):
-    // ; predecessors: %bb.27, %bb.28
-    //   successors: %bb.25(0x80000000); %bb.25(100.00%)
+    // bb.37 (%ir-block.171):
+    // ; predecessors: %bb.26, %bb.27
+    //   successors: %bb.24(0x80000000); %bb.24(100.00%)
     //   liveins: $rax, $rcx, $rdx, $rsi, $r8, $r9
-    //   renamable $esi = MOV32rm killed renamable $rsi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.174, !tbaa !4)
+    //   renamable $esi = MOV32rm killed renamable $rsi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.172, !tbaa !4)
     //
-    // bb.25 (%ir-block.113):
-    // ; predecessors: %bb.24, %bb.38
-    //   successors: %bb.37(0x09e6b247), %bb.26(0x76194db9); %bb.37(7.74%), %bb.26(92.26%)
+    // bb.24 (%ir-block.111):
+    // ; predecessors: %bb.23, %bb.37
+    //   successors: %bb.36(0x09e6b247), %bb.25(0x76194db8); %bb.36(7.74%), %bb.25(92.26%)
     //   liveins: $rax, $esi, $rcx, $rdx, $r8, $r9
     //   CMP32ri renamable $esi, -1, implicit-def $eflags
-    //   JCC_1 %bb.37, 4, implicit killed $eflags
+    //   JCC_1 %bb.36, 4, implicit killed $eflags
     //
-    // bb.26 (%ir-block.123):
-    // ; predecessors: %bb.25
-    //   successors: %bb.18(0x04000000), %bb.27(0x7c000000); %bb.18(3.12%), %bb.27(96.88%)
+    // bb.25 (%ir-block.121):
+    // ; predecessors: %bb.24
+    //   successors: %bb.17(0x04000000), %bb.26(0x7c000000); %bb.17(3.12%), %bb.26(96.88%)
     //   liveins: $esi, $rax, $rcx, $rdx, $r8, $r9
     //   renamable $edi = MOV32rr killed renamable $esi, implicit-def $rdi
     //   renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
     //   renamable $rsi = LEA64r renamable $r9, 1, renamable $rdi, 0, $noreg
-    //   renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.128, !tbaa !28)
+    //   renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.126, !tbaa !29)
     //   CMP64rr renamable $rdi, renamable $rcx, implicit-def $eflags
-    //   JCC_1 %bb.18, 4, implicit killed $eflags
+    //   JCC_1 %bb.17, 4, implicit killed $eflags
     //
-    // bb.27 (%ir-block.137):
-    // ; predecessors: %bb.26
-    //   successors: %bb.38(0x3e000000), %bb.28(0x42000000); %bb.38(48.44%), %bb.28(51.56%)
+    // bb.26 (%ir-block.135):
+    // ; predecessors: %bb.25
+    //   successors: %bb.37(0x3e000000), %bb.27(0x42000000); %bb.37(48.44%), %bb.27(51.56%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8, $r9
     //   TEST64rr renamable $rdi, renamable $rdi, implicit-def $eflags
-    //   JCC_1 %bb.38, 4, implicit killed $eflags
+    //   JCC_1 %bb.37, 4, implicit killed $eflags
     //
-    // bb.28 (%ir-block.137):
-    // ; predecessors: %bb.27
-    //   successors: %bb.38(0x783e0f84), %bb.29(0x07c1f07c); %bb.38(93.94%), %bb.29(6.06%)
+    // bb.27 (%ir-block.135):
+    // ; predecessors: %bb.26
+    //   successors: %bb.37(0x783e0f84), %bb.28(0x07c1f07c); %bb.37(93.94%), %bb.28(6.06%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8, $r9
-    //   CMP64mr renamable $rsi, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.138, !tbaa !24)
-    //   JCC_1 %bb.38, 5, implicit killed $eflags
+    //   CMP64mr renamable $rsi, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.136, !tbaa !25)
+    //   JCC_1 %bb.37, 5, implicit killed $eflags
     //
-    // bb.29 (%ir-block.143):
-    // ; predecessors: %bb.28
-    //   successors: %bb.30(0x60000000), %bb.37(0x20000000); %bb.30(75.00%), %bb.37(25.00%)
+    // bb.28 (%ir-block.141):
+    // ; predecessors: %bb.27
+    //   successors: %bb.29(0x60000000), %bb.36(0x20000000); %bb.29(75.00%), %bb.36(25.00%)
     //   liveins: $rcx, $rdi, $rdx, $rsi
     //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
     //   CMP64ri32 renamable $rdx, 16, implicit-def $eflags
-    //   JCC_1 %bb.37, 7, implicit killed $eflags
+    //   JCC_1 %bb.36, 7, implicit killed $eflags
     //
-    // bb.30 (%ir-block.143):
-    // ; predecessors: %bb.29
-    //   successors: %bb.31(0x55555555), %bb.37(0x2aaaaaab); %bb.31(66.67%), %bb.37(33.33%)
+    // bb.29 (%ir-block.141):
+    // ; predecessors: %bb.28
+    //   successors: %bb.30(0x55555555), %bb.36(0x2aaaaaab); %bb.30(66.67%), %bb.36(33.33%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi
-    //   CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.144, !tbaa !33)
-    //   JCC_1 %bb.37, 5, implicit killed $eflags
+    //   CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.142, !tbaa !34)
+    //   JCC_1 %bb.36, 5, implicit killed $eflags
     //
-    // bb.31 (%ir-block.149):
-    // ; predecessors: %bb.30
-    //   successors: %bb.32(0x40000000), %bb.34(0x40000000); %bb.32(50.00%), %bb.34(50.00%)
+    // bb.30 (%ir-block.147):
+    // ; predecessors: %bb.29
+    //   successors: %bb.31(0x40000000), %bb.33(0x40000000); %bb.31(50.00%), %bb.33(50.00%)
     //   liveins: $rcx, $rdi, $rdx, $rsi
-    //   renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.150, !tbaa !34)
-    //   renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !34)
+    //   renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.148, !tbaa !35)
+    //   renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !35)
     //   CMP64ri32 renamable $rdx, 7, implicit-def $eflags
-    //   JCC_1 %bb.34, 7, implicit killed $eflags
+    //   JCC_1 %bb.33, 7, implicit killed $eflags
     //
-    // bb.32 (%ir-block.154):
-    // ; predecessors: %bb.31
-    //   successors: %bb.18(0x20000000), %bb.33(0x60000000); %bb.18(25.00%), %bb.33(75.00%)
+    // bb.31 (%ir-block.152):
+    // ; predecessors: %bb.30
+    //   successors: %bb.17(0x20000000), %bb.32(0x60000000); %bb.17(25.00%), %bb.32(75.00%)
     //   liveins: $rax, $rdx, $rsi, $r8
     //   $rcx = MOV64rr $r8
     //   dead renamable $rcx = XOR64rr killed renamable $rcx(tied-def 0), renamable $rax, implicit-def $eflags
-    //   JCC_1 %bb.18, 4, implicit killed $eflags
+    //   JCC_1 %bb.17, 4, implicit killed $eflags
     //
-    // bb.33 (%ir-block.154):
-    // ; predecessors: %bb.32
-    //   successors: %bb.18(0x2aaaaaab), %bb.36(0x55555555); %bb.18(33.33%), %bb.36(66.67%)
+    // bb.32 (%ir-block.152):
+    // ; predecessors: %bb.31
+    //   successors: %bb.17(0x2aaaaaab), %bb.35(0x55555555); %bb.17(33.33%), %bb.35(66.67%)
     //   liveins: $rax, $rdx, $rsi, $r8
     //   renamable $r8 = XOR64rr killed renamable $r8(tied-def 0), killed renamable $rax, implicit-def dead $eflags
     //   renamable $rax = BSF64rr undef renamable $rax(tied-def 0), killed renamable $r8, implicit-def dead $eflags
     //   renamable $rdx = nuw nsw SHL64ri killed renamable $rdx(tied-def 0), 3, implicit-def dead $eflags
     //   CMP64rr killed renamable $rax, killed renamable $rdx, implicit-def $eflags
-    //   JCC_1 %bb.36, 2, implicit killed $eflags
-    //   JMP_1 %bb.18
+    //   JCC_1 %bb.35, 2, implicit killed $eflags
+    //   JMP_1 %bb.17
     //
-    // bb.11 (%ir-block.43):
-    // ; predecessors: %bb.10
-    //   successors: %bb.12(0x40000000), %bb.37(0x40000000); %bb.12(50.00%), %bb.37(50.00%)
+    // bb.10 (%ir-block.41):
+    // ; predecessors: %bb.9
+    //   successors: %bb.11(0x40000000), %bb.36(0x40000000); %bb.11(50.00%), %bb.36(50.00%)
     //   liveins: $rcx, $rdi
-    //   renamable $edx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rdx :: (load (s32) from %ir.44, align 8, !tbaa !20)
+    //   renamable $edx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rdx :: (load (s32) from %ir.42, align 8, !tbaa !21)
     //   $eax = MOV32ri 1, implicit-def $rax
     //   CMP64rr renamable $rcx, killed renamable $rdx, implicit-def $eflags
-    //   JCC_1 %bb.37, 3, implicit killed $eflags
+    //   JCC_1 %bb.36, 3, implicit killed $eflags
     //
-    // bb.12 (%ir-block.48):
-    // ; predecessors: %bb.11
-    //   successors: %bb.37(0x30000000), %bb.13(0x50000000); %bb.37(37.50%), %bb.13(62.50%)
+    // bb.11 (%ir-block.46):
+    // ; predecessors: %bb.10
+    //   successors: %bb.36(0x30000000), %bb.12(0x50000000); %bb.36(37.50%), %bb.12(62.50%)
     //   liveins: $rax, $rcx, $rdi
-    //   renamable $rdx = MOV64rm killed renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.49, !tbaa !4)
+    //   renamable $rdx = MOV64rm killed renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.47, !tbaa !4)
     //   renamable $rcx = nuw nsw SHL64ri killed renamable $rcx(tied-def 0), 4, implicit-def dead $eflags
-    //   $ebx = MOVZX32rm8 renamable $rdx, 1, renamable $rcx, 8, $noreg :: (load (s8) from %ir.52, align 8, !tbaa !4)
+    //   $ebx = MOVZX32rm8 renamable $rdx, 1, renamable $rcx, 8, $noreg :: (load (s8) from %ir.50, align 8, !tbaa !4)
     //   TEST8rr renamable $bl, renamable $bl, implicit-def $eflags
-    //   JCC_1 %bb.37, 4, implicit killed $eflags
+    //   JCC_1 %bb.36, 4, implicit killed $eflags
     //
-    // bb.13 (%ir-block.55):
-    // ; predecessors: %bb.12
+    // bb.12 (%ir-block.53):
+    // ; predecessors: %bb.11
     //   liveins: $bl, $rcx, $rdx
     //   renamable $rdx = nuw ADD64rr killed renamable $rdx(tied-def 0), killed renamable $rcx, implicit-def dead $eflags
     //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
@@ -7317,29 +7242,29 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     //   renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rdx, 5, implicit killed $eflags
     //   RET64 killed $rax
     //
-    // bb.34 (%ir-block.161):
-    // ; predecessors: %bb.31
-    //   successors: %bb.35(0x40000000), %bb.36(0x40000000); %bb.35(50.00%), %bb.36(50.00%)
+    // bb.33 (%ir-block.159):
+    // ; predecessors: %bb.30
+    //   successors: %bb.34(0x40000000), %bb.35(0x40000000); %bb.34(50.00%), %bb.35(50.00%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
     //   CMP64rr killed renamable $rax, killed renamable $r8, implicit-def $eflags
-    //   JCC_1 %bb.36, 5, implicit killed $eflags
+    //   JCC_1 %bb.35, 5, implicit killed $eflags
     //
-    // bb.35 (%ir-block.163):
-    // ; predecessors: %bb.34
-    //   successors: %bb.18(0x40000000), %bb.36(0x40000000); %bb.18(50.00%), %bb.36(50.00%)
+    // bb.34 (%ir-block.161):
+    // ; predecessors: %bb.33
+    //   successors: %bb.17(0x40000000), %bb.35(0x40000000); %bb.17(50.00%), %bb.35(50.00%)
     //   liveins: $rcx, $rdi, $rdx, $rsi
-    //   renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rdx, 16, $noreg :: (load (s64) from %ir.sunkaddr8, !tbaa !34)
-    //   CMP64rm killed renamable $rax, killed renamable $rcx, 1, killed renamable $rdx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr11, !tbaa !34)
-    //   JCC_1 %bb.18, 4, implicit killed $eflags
+    //   renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rdx, 16, $noreg :: (load (s64) from %ir.sunkaddr8, !tbaa !35)
+    //   CMP64rm killed renamable $rax, killed renamable $rcx, 1, killed renamable $rdx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr11, !tbaa !35)
+    //   JCC_1 %bb.17, 4, implicit killed $eflags
     //
-    // bb.36:
-    // ; predecessors: %bb.35, %bb.6, %bb.7, %bb.9, %bb.20, %bb.21, %bb.22, %bb.33, %bb.34
-    //   successors: %bb.37(0x80000000); %bb.37(100.00%)
+    // bb.35:
+    // ; predecessors: %bb.34, %bb.6, %bb.8, %bb.19, %bb.20, %bb.21, %bb.32, %bb.33
+    //   successors: %bb.36(0x80000000); %bb.36(100.00%)
     //
     //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
     //
-    // bb.37 (%ir-block.177):
-    // ; predecessors: %bb.30, %bb.12, %bb.36, %bb.11, %bb.23, %bb.29, %bb.15, %bb.25
+    // bb.36 (%ir-block.175):
+    // ; predecessors: %bb.29, %bb.11, %bb.35, %bb.10, %bb.22, %bb.28, %bb.14, %bb.24
     //   liveins: $rax
     //   RET64 killed $rax
     //
@@ -7361,19 +7286,19 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     tpde::Label block7_label = derived()->text_writer.label_create();
     tpde::Label block8_label = derived()->text_writer.label_create();
     tpde::Label block9_label = derived()->text_writer.label_create();
-    tpde::Label block10_label = derived()->text_writer.label_create();
+    tpde::Label block13_label = derived()->text_writer.label_create();
+    tpde::Label block18_label = derived()->text_writer.label_create();
     tpde::Label block14_label = derived()->text_writer.label_create();
-    tpde::Label block19_label = derived()->text_writer.label_create();
     tpde::Label block15_label = derived()->text_writer.label_create();
     tpde::Label block16_label = derived()->text_writer.label_create();
     tpde::Label block17_label = derived()->text_writer.label_create();
-    tpde::Label block18_label = derived()->text_writer.label_create();
+    tpde::Label block19_label = derived()->text_writer.label_create();
     tpde::Label block20_label = derived()->text_writer.label_create();
     tpde::Label block21_label = derived()->text_writer.label_create();
     tpde::Label block22_label = derived()->text_writer.label_create();
     tpde::Label block23_label = derived()->text_writer.label_create();
+    tpde::Label block37_label = derived()->text_writer.label_create();
     tpde::Label block24_label = derived()->text_writer.label_create();
-    tpde::Label block38_label = derived()->text_writer.label_create();
     tpde::Label block25_label = derived()->text_writer.label_create();
     tpde::Label block26_label = derived()->text_writer.label_create();
     tpde::Label block27_label = derived()->text_writer.label_create();
@@ -7382,14 +7307,13 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     tpde::Label block30_label = derived()->text_writer.label_create();
     tpde::Label block31_label = derived()->text_writer.label_create();
     tpde::Label block32_label = derived()->text_writer.label_create();
-    tpde::Label block33_label = derived()->text_writer.label_create();
+    tpde::Label block10_label = derived()->text_writer.label_create();
     tpde::Label block11_label = derived()->text_writer.label_create();
     tpde::Label block12_label = derived()->text_writer.label_create();
-    tpde::Label block13_label = derived()->text_writer.label_create();
+    tpde::Label block33_label = derived()->text_writer.label_create();
     tpde::Label block34_label = derived()->text_writer.label_create();
     tpde::Label block35_label = derived()->text_writer.label_create();
     tpde::Label block36_label = derived()->text_writer.label_create();
-    tpde::Label block37_label = derived()->text_writer.label_create();
 
     ValuePart &scratch_ax = result_0;
     ScratchReg scratch_di{derived()};
@@ -7646,9 +7570,9 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.36, 5, implicit killed $eflags
+    // JCC_1 %bb.35, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block36_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block35_label);
 
   // Start of block 7
   derived()->label_place(block7_label);
@@ -7668,26 +7592,6 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // TEST64rr renamable $rdi, renamable $rdi, implicit-def $eflags
-    do {
-    {
-    if (1) {
-        AsmReg op0 = scratch_di.cur_reg();
-    ASMD(TEST64rr, op0, op0);
-        break;
-    }
-    }
-    } while (false);
-
-
-    // JCC_1 %bb.36, 4, implicit killed $eflags
-  // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block36_label);
-
-  // Start of block 8
-  derived()->label_place(block8_label);
-
-
     // renamable $rcx = MOV64rm renamable $rsi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.10, !tbaa !4)
     do {
     {
@@ -7702,7 +7606,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $eax = MOVZX32rm8 killed renamable $rsi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.35, align 8, !tbaa !4)
+    // renamable $eax = MOVZX32rm8 killed renamable $rsi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.33, align 8, !tbaa !4)
     do {
     {
     if (1) {
@@ -7725,12 +7629,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.20, 4, implicit killed $eflags
+    // JCC_1 %bb.19, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block20_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block19_label);
 
-  // Start of block 9
-  derived()->label_place(block9_label);
+  // Start of block 8
+  derived()->label_place(block8_label);
 
 
     // CMP32ri killed renamable $eax, 4, implicit-def $eflags
@@ -7742,15 +7646,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.36, 5, implicit killed $eflags
+    // JCC_1 %bb.35, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block36_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block35_label);
 
-  // Start of block 10
-  derived()->label_place(block10_label);
+  // Start of block 9
+  derived()->label_place(block9_label);
 
 
-    // TEST8mi renamable $rdi, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.39, align 8)
+    // TEST8mi renamable $rdi, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.37, align 8)
     do {
     {
     if (1) {
@@ -7762,15 +7666,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.11, 5, implicit killed $eflags
+    // JCC_1 %bb.10, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block11_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block10_label);
 
-  // Start of block 14
-  derived()->label_place(block14_label);
+  // Start of block 13
+  derived()->label_place(block13_label);
 
 
-    // renamable $rdx = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.60, !tbaa !4)
+    // renamable $rdx = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.58, !tbaa !4)
     do {
     {
     if (1) {
@@ -7784,7 +7688,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.63, !tbaa !23)
+    // renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.61, !tbaa !24)
     do {
     {
     if (1) {
@@ -7824,7 +7728,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $esi = MOV32rm renamable $rdx, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.66, !tbaa !4)
+    // renamable $esi = MOV32rm renamable $rdx, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.64, !tbaa !4)
     do {
     {
     if (1) {
@@ -7849,15 +7753,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JMP_1 %bb.15
+    // JMP_1 %bb.14
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jmp, block15_label);
+  derived()->generate_raw_jump(Derived::Jump::jmp, block14_label);
 
-  // Start of block 19
-  derived()->label_place(block19_label);
+  // Start of block 18
+  derived()->label_place(block18_label);
 
 
-    // renamable $esi = MOV32rm killed renamable $rsi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.87, !tbaa !4)
+    // renamable $esi = MOV32rm killed renamable $rsi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.85, !tbaa !4)
     do {
     {
     if (1) {
@@ -7869,8 +7773,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
     }
     } while (false);
-  // Start of block 15
-  derived()->label_place(block15_label);
+  // Start of block 14
+  derived()->label_place(block14_label);
 
 
     // CMP32ri renamable $esi, -1, implicit-def $eflags
@@ -7882,12 +7786,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.37, 4, implicit killed $eflags
+    // JCC_1 %bb.36, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block37_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block36_label);
 
-  // Start of block 16
-  derived()->label_place(block16_label);
+  // Start of block 15
+  derived()->label_place(block15_label);
 
 
     // renamable $edi = MOV32rr killed renamable $esi, implicit-def $rdi
@@ -7927,7 +7831,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // CMP64mr renamable $rdx, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.73, !tbaa !24)
+    // CMP64mr renamable $rdx, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.71, !tbaa !25)
     do {
     {
     if (1) {
@@ -7941,15 +7845,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.19, 5, implicit killed $eflags
+    // JCC_1 %bb.18, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block19_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block18_label);
 
-  // Start of block 17
-  derived()->label_place(block17_label);
+  // Start of block 16
+  derived()->label_place(block16_label);
 
 
-    // CMP64mi32 renamable $rsi, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.77, !tbaa !28)
+    // CMP64mi32 renamable $rsi, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.75, !tbaa !29)
     do {
     {
     if (1) {
@@ -7961,12 +7865,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.19, 5, implicit killed $eflags
+    // JCC_1 %bb.18, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block19_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block18_label);
 
-  // Start of block 18
-  derived()->label_place(block18_label);
+  // Start of block 17
+  derived()->label_place(block17_label);
 
 
     // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
@@ -7975,18 +7879,18 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     if (1) {
         // undef tied
         // undef allocate scratch
-        AsmReg inst51_op2 = scratch_ax.cur_reg_or_alloc(derived());
+        AsmReg inst49_op2 = scratch_ax.cur_reg_or_alloc(derived());
 
         // def ax has not been allocated yet
         scratch_ax.cur_reg_or_alloc(derived());
-    ASMD(XOR32rr, scratch_ax.cur_reg(), inst51_op2);
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst49_op2);
         break;
     }
     }
     } while (false);
 
 
-    // CMP8mi renamable $rsi, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.81, align 8, !tbaa !4), (load (s8) from %ir.168, align 8, !tbaa !4), (load (s8) from %ir.132, align 8, !tbaa !4)
+    // CMP8mi renamable $rsi, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.79, align 8, !tbaa !4), (load (s8) from %ir.166, align 8, !tbaa !4), (load (s8) from %ir.130, align 8, !tbaa !4)
     do {
     {
     if (1) {
@@ -8009,11 +7913,11 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
 
     // RET64 killed $rax
   derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
-  // Start of block 20
-  derived()->label_place(block20_label);
+  // Start of block 19
+  derived()->label_place(block19_label);
 
 
-    // renamable $rdx = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.92, !tbaa !33)
+    // renamable $rdx = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.90, !tbaa !34)
     do {
     {
     if (1) {
@@ -8039,15 +7943,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.36, 4, implicit killed $eflags
+    // JCC_1 %bb.35, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block36_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block35_label);
 
-  // Start of block 21
-  derived()->label_place(block21_label);
+  // Start of block 20
+  derived()->label_place(block20_label);
 
 
-    // $eax = MOVZX32rm8 renamable $rcx, 1, $noreg, 24, $noreg, implicit-def $rax :: (load (s8) from %ir.97, align 8, !tbaa !4)
+    // $eax = MOVZX32rm8 renamable $rcx, 1, $noreg, 24, $noreg, implicit-def $rax :: (load (s8) from %ir.95, align 8, !tbaa !4)
     do {
     {
     if (1) {
@@ -8125,15 +8029,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.36, 5, implicit killed $eflags
+    // JCC_1 %bb.35, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block36_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block35_label);
 
-  // Start of block 22
-  derived()->label_place(block22_label);
+  // Start of block 21
+  derived()->label_place(block21_label);
 
 
-    // renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.105, !tbaa !31)
+    // renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.103, !tbaa !32)
     do {
     {
     if (1) {
@@ -8159,12 +8063,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.36, 4, implicit killed $eflags
+    // JCC_1 %bb.35, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block36_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block35_label);
 
-  // Start of block 23
-  derived()->label_place(block23_label);
+  // Start of block 22
+  derived()->label_place(block22_label);
 
 
     // $eax = MOV32ri 1, implicit-def $rax
@@ -8177,7 +8081,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // TEST8mi renamable $rdi, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.109, align 8)
+    // TEST8mi renamable $rdi, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.107, align 8)
     do {
     {
     if (1) {
@@ -8189,15 +8093,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.37, 5, implicit killed $eflags
+    // JCC_1 %bb.36, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block37_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block36_label);
 
-  // Start of block 24
-  derived()->label_place(block24_label);
+  // Start of block 23
+  derived()->label_place(block23_label);
 
 
-    // renamable $r9 = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.114, !tbaa !4)
+    // renamable $r9 = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.112, !tbaa !4)
     do {
     {
     if (1) {
@@ -8211,7 +8115,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $esi = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.117, !tbaa !23)
+    // renamable $esi = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.115, !tbaa !24)
     do {
     {
     if (1) {
@@ -8251,7 +8155,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $esi = MOV32rm renamable $r9, 4, killed renamable $rsi, 0, $noreg :: (load (s32) from %ir.120, !tbaa !4)
+    // renamable $esi = MOV32rm renamable $r9, 4, killed renamable $rsi, 0, $noreg :: (load (s32) from %ir.118, !tbaa !4)
     do {
     {
     if (1) {
@@ -8266,15 +8170,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JMP_1 %bb.25
+    // JMP_1 %bb.24
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jmp, block25_label);
+  derived()->generate_raw_jump(Derived::Jump::jmp, block24_label);
 
-  // Start of block 38
-  derived()->label_place(block38_label);
+  // Start of block 37
+  derived()->label_place(block37_label);
 
 
-    // renamable $esi = MOV32rm killed renamable $rsi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.174, !tbaa !4)
+    // renamable $esi = MOV32rm killed renamable $rsi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.172, !tbaa !4)
     do {
     {
     if (1) {
@@ -8286,8 +8190,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
     }
     } while (false);
-  // Start of block 25
-  derived()->label_place(block25_label);
+  // Start of block 24
+  derived()->label_place(block24_label);
 
 
     // CMP32ri renamable $esi, -1, implicit-def $eflags
@@ -8299,12 +8203,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.37, 4, implicit killed $eflags
+    // JCC_1 %bb.36, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block37_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block36_label);
 
-  // Start of block 26
-  derived()->label_place(block26_label);
+  // Start of block 25
+  derived()->label_place(block25_label);
 
 
     // renamable $edi = MOV32rr killed renamable $esi, implicit-def $rdi
@@ -8344,7 +8248,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.128, !tbaa !28)
+    // renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.126, !tbaa !29)
     do {
     {
     if (1) {
@@ -8372,12 +8276,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.18, 4, implicit killed $eflags
+    // JCC_1 %bb.17, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block18_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block17_label);
 
-  // Start of block 27
-  derived()->label_place(block27_label);
+  // Start of block 26
+  derived()->label_place(block26_label);
 
 
     // TEST64rr renamable $rdi, renamable $rdi, implicit-def $eflags
@@ -8392,15 +8296,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.38, 4, implicit killed $eflags
+    // JCC_1 %bb.37, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block38_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block37_label);
 
-  // Start of block 28
-  derived()->label_place(block28_label);
+  // Start of block 27
+  derived()->label_place(block27_label);
 
 
-    // CMP64mr renamable $rsi, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.138, !tbaa !24)
+    // CMP64mr renamable $rsi, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.136, !tbaa !25)
     do {
     {
     if (1) {
@@ -8413,12 +8317,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.38, 5, implicit killed $eflags
+    // JCC_1 %bb.37, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block38_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block37_label);
 
-  // Start of block 29
-  derived()->label_place(block29_label);
+  // Start of block 28
+  derived()->label_place(block28_label);
 
 
     // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
@@ -8427,11 +8331,11 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     if (1) {
         // undef tied
         // undef allocate scratch
-        AsmReg inst91_op2 = scratch_ax.cur_reg_or_alloc(derived());
+        AsmReg inst89_op2 = scratch_ax.cur_reg_or_alloc(derived());
 
         // def ax has not been allocated yet
         scratch_ax.cur_reg_or_alloc(derived());
-    ASMD(XOR32rr, scratch_ax.cur_reg(), inst91_op2);
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst89_op2);
         break;
     }
     }
@@ -8447,15 +8351,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.37, 7, implicit killed $eflags
+    // JCC_1 %bb.36, 7, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::ja, block37_label);
+  derived()->generate_raw_jump(Derived::Jump::ja, block36_label);
 
-  // Start of block 30
-  derived()->label_place(block30_label);
+  // Start of block 29
+  derived()->label_place(block29_label);
 
 
-    // CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.144, !tbaa !33)
+    // CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.142, !tbaa !34)
     do {
     {
     if (1) {
@@ -8468,15 +8372,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.37, 5, implicit killed $eflags
+    // JCC_1 %bb.36, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block37_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block36_label);
 
-  // Start of block 31
-  derived()->label_place(block31_label);
+  // Start of block 30
+  derived()->label_place(block30_label);
 
 
-    // renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.150, !tbaa !34)
+    // renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.148, !tbaa !35)
     do {
     {
     if (1) {
@@ -8490,7 +8394,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !34)
+    // renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !35)
     do {
     {
     if (1) {
@@ -8513,12 +8417,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // JCC_1 %bb.34, 7, implicit killed $eflags
+    // JCC_1 %bb.33, 7, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::ja, block34_label);
+  derived()->generate_raw_jump(Derived::Jump::ja, block33_label);
 
-  // Start of block 32
-  derived()->label_place(block32_label);
+  // Start of block 31
+  derived()->label_place(block31_label);
 
 
     // $rcx = MOV64rr $r8
@@ -8547,12 +8451,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.18, 4, implicit killed $eflags
+    // JCC_1 %bb.17, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block18_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block17_label);
 
-  // Start of block 33
-  derived()->label_place(block33_label);
+  // Start of block 32
+  derived()->label_place(block32_label);
 
 
     // renamable $r8 = XOR64rr killed renamable $r8(tied-def 0), killed renamable $rax, implicit-def dead $eflags
@@ -8603,21 +8507,21 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.36, 2, implicit killed $eflags
+    // JCC_1 %bb.35, 2, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jb, block36_label);
+  derived()->generate_raw_jump(Derived::Jump::jb, block35_label);
 
 
 
-    // JMP_1 %bb.18
+    // JMP_1 %bb.17
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jmp, block18_label);
+  derived()->generate_raw_jump(Derived::Jump::jmp, block17_label);
 
-  // Start of block 11
-  derived()->label_place(block11_label);
+  // Start of block 10
+  derived()->label_place(block10_label);
 
 
-    // renamable $edx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rdx :: (load (s32) from %ir.44, align 8, !tbaa !20)
+    // renamable $edx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rdx :: (load (s32) from %ir.42, align 8, !tbaa !21)
     do {
     {
     if (1) {
@@ -8654,15 +8558,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.37, 3, implicit killed $eflags
+    // JCC_1 %bb.36, 3, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jae, block37_label);
+  derived()->generate_raw_jump(Derived::Jump::jae, block36_label);
 
-  // Start of block 12
-  derived()->label_place(block12_label);
+  // Start of block 11
+  derived()->label_place(block11_label);
 
 
-    // renamable $rdx = MOV64rm killed renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.49, !tbaa !4)
+    // renamable $rdx = MOV64rm killed renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.47, !tbaa !4)
     do {
     {
     if (1) {
@@ -8684,7 +8588,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     }
 
 
-    // $ebx = MOVZX32rm8 renamable $rdx, 1, renamable $rcx, 8, $noreg :: (load (s8) from %ir.52, align 8, !tbaa !4)
+    // $ebx = MOVZX32rm8 renamable $rdx, 1, renamable $rcx, 8, $noreg :: (load (s8) from %ir.50, align 8, !tbaa !4)
     do {
     {
     if (1) {
@@ -8711,12 +8615,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.37, 4, implicit killed $eflags
+    // JCC_1 %bb.36, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block37_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block36_label);
 
-  // Start of block 13
-  derived()->label_place(block13_label);
+  // Start of block 12
+  derived()->label_place(block12_label);
 
 
     // renamable $rdx = nuw ADD64rr killed renamable $rdx(tied-def 0), killed renamable $rcx, implicit-def dead $eflags
@@ -8737,11 +8641,11 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     if (1) {
         // undef tied
         // undef allocate scratch
-        AsmReg inst119_op2 = scratch_ax.cur_reg_or_alloc(derived());
+        AsmReg inst117_op2 = scratch_ax.cur_reg_or_alloc(derived());
 
         // def ax has not been allocated yet
         scratch_ax.cur_reg_or_alloc(derived());
-    ASMD(XOR32rr, scratch_ax.cur_reg(), inst119_op2);
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst117_op2);
         break;
     }
     }
@@ -8768,8 +8672,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
 
     // RET64 killed $rax
   derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
-  // Start of block 34
-  derived()->label_place(block34_label);
+  // Start of block 33
+  derived()->label_place(block33_label);
 
 
     // CMP64rr killed renamable $rax, killed renamable $r8, implicit-def $eflags
@@ -8785,15 +8689,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.36, 5, implicit killed $eflags
+    // JCC_1 %bb.35, 5, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::jne, block36_label);
+  derived()->generate_raw_jump(Derived::Jump::jne, block35_label);
 
-  // Start of block 35
-  derived()->label_place(block35_label);
+  // Start of block 34
+  derived()->label_place(block34_label);
 
 
-    // renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rdx, 16, $noreg :: (load (s64) from %ir.sunkaddr8, !tbaa !34)
+    // renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rdx, 16, $noreg :: (load (s64) from %ir.sunkaddr8, !tbaa !35)
     do {
     {
     if (1) {
@@ -8808,7 +8712,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // CMP64rm killed renamable $rax, killed renamable $rcx, 1, killed renamable $rdx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr11, !tbaa !34)
+    // CMP64rm killed renamable $rax, killed renamable $rcx, 1, killed renamable $rdx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr11, !tbaa !35)
     do {
     {
     if (1) {
@@ -8822,12 +8726,12 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // JCC_1 %bb.18, 4, implicit killed $eflags
+    // JCC_1 %bb.17, 4, implicit killed $eflags
   // Preparing jump to other block
-  derived()->generate_raw_jump(Derived::Jump::je, block18_label);
+  derived()->generate_raw_jump(Derived::Jump::je, block17_label);
 
-  // Start of block 36
-  derived()->label_place(block36_label);
+  // Start of block 35
+  derived()->label_place(block35_label);
 
 
     // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
@@ -8836,17 +8740,17 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     if (1) {
         // undef tied
         // undef allocate scratch
-        AsmReg inst128_op2 = scratch_ax.cur_reg_or_alloc(derived());
+        AsmReg inst126_op2 = scratch_ax.cur_reg_or_alloc(derived());
 
         // def ax has not been allocated yet
         scratch_ax.cur_reg_or_alloc(derived());
-    ASMD(XOR32rr, scratch_ax.cur_reg(), inst128_op2);
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst126_op2);
         break;
     }
     }
     } while (false);
-  // Start of block 37
-  derived()->label_place(block37_label);
+  // Start of block 36
+  derived()->label_place(block36_label);
 
 
     // RET64 killed $rax
@@ -8894,7 +8798,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     //   successors: %bb.4(0x40000000), %bb.29(0x40000000); %bb.4(50.00%), %bb.29(50.00%)
     //   liveins: $rdi, $rsi
     //   renamable $rdx = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.13, !tbaa !4)
-    //   CMP32mi renamable $rdx, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.16, !tbaa !36)
+    //   CMP32mi renamable $rdx, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.16, !tbaa !37)
     //   JCC_1 %bb.29, 5, implicit killed $eflags
     //
     // bb.4 (%ir-block.19):
@@ -8925,7 +8829,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     //   successors: %bb.11(0x80000000); %bb.11(100.00%)
     //   liveins: $rcx, $rdx
     //   renamable $rsi = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.46, !tbaa !4)
-    //   renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.49, !tbaa !23)
+    //   renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.49, !tbaa !24)
     //   renamable $eax = OR32rr killed renamable $eax(tied-def 0), renamable $ecx, implicit-def dead $eflags
     //   renamable $rax = MOVSX64rr32 killed renamable $eax
     //   renamable $edx = MOV32rm renamable $rsi, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.52, !tbaa !4)
@@ -8952,14 +8856,14 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     //   renamable $edi = MOV32rr killed renamable $edx, implicit-def $rdi
     //   renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
     //   renamable $rdx = LEA64r renamable $rsi, 1, renamable $rdi, 0, $noreg
-    //   CMP64mr renamable $rsi, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.59, !tbaa !24)
+    //   CMP64mr renamable $rsi, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.59, !tbaa !25)
     //   JCC_1 %bb.15, 5, implicit killed $eflags
     //
     // bb.13 (%ir-block.62):
     // ; predecessors: %bb.12
     //   successors: %bb.14(0x04000000), %bb.15(0x7c000000); %bb.14(3.12%), %bb.15(96.88%)
     //   liveins: $rax, $rcx, $rdx, $rsi
-    //   CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.63, !tbaa !28)
+    //   CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.63, !tbaa !29)
     //   JCC_1 %bb.15, 5, implicit killed $eflags
     //
     // bb.14 (%ir-block.66):
@@ -8974,7 +8878,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     // ; predecessors: %bb.4
     //   successors: %bb.29(0x30000000), %bb.17(0x50000000); %bb.29(37.50%), %bb.17(62.50%)
     //   liveins: $rcx, $rdx
-    //   renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.78, !tbaa !31)
+    //   renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.78, !tbaa !32)
     //   TEST64rr renamable $rsi, renamable $rsi, implicit-def $eflags
     //   JCC_1 %bb.29, 4, implicit killed $eflags
     //
@@ -8991,7 +8895,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     //   successors: %bb.19(0x80000000); %bb.19(100.00%)
     //   liveins: $rax, $rcx, $rdx, $rsi
     //   renamable $rdi = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.87, !tbaa !4)
-    //   renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.90, !tbaa !23)
+    //   renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.90, !tbaa !24)
     //   renamable $edx = OR32rr killed renamable $edx(tied-def 0), renamable $esi, implicit-def dead $eflags
     //   renamable $rdx = MOVSX64rr32 killed renamable $edx
     //   renamable $edx = MOV32rm renamable $rdi, 4, killed renamable $rdx, 0, $noreg :: (load (s32) from %ir.93, !tbaa !4)
@@ -9017,7 +8921,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     //   renamable $r8d = MOV32rr killed renamable $edx, implicit-def $r8
     //   renamable $r8 = nuw nsw SHL64ri killed renamable $r8(tied-def 0), 5, implicit-def dead $eflags
     //   renamable $rdx = LEA64r renamable $rdi, 1, renamable $r8, 0, $noreg
-    //   renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.101, !tbaa !28)
+    //   renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.101, !tbaa !29)
     //   CMP64rr renamable $r8, renamable $rcx, implicit-def $eflags
     //   JCC_1 %bb.14, 4, implicit killed $eflags
     //
@@ -9032,15 +8936,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     // ; predecessors: %bb.21
     //   successors: %bb.31(0x783e0f84), %bb.23(0x07c1f07c); %bb.31(93.94%), %bb.23(6.06%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
-    //   CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.111, !tbaa !24)
+    //   CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.111, !tbaa !25)
     //   JCC_1 %bb.31, 5, implicit killed $eflags
     //
     // bb.23 (%ir-block.116):
     // ; predecessors: %bb.22
     //   successors: %bb.24(0x40000000), %bb.29(0x40000000); %bb.24(50.00%), %bb.29(50.00%)
     //   liveins: $rcx, $rdx, $r8
-    //   renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.118, !tbaa !33)
-    //   renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.120, !tbaa !33)
+    //   renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.118, !tbaa !34)
+    //   renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.120, !tbaa !34)
     //   CMP64rr renamable $rax, renamable $rsi, implicit-def $eflags
     //   renamable $bl = SETCCr 5, implicit killed $eflags
     //   CMP64ri32 killed renamable $rsi, 17, implicit-def $eflags
@@ -9052,8 +8956,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     // ; predecessors: %bb.23
     //   successors: %bb.25(0x40000000), %bb.27(0x40000000); %bb.25(50.00%), %bb.27(50.00%)
     //   liveins: $rax, $rcx, $rdx, $r8
-    //   renamable $rsi = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.127, !tbaa !34)
-    //   renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.128, !tbaa !34)
+    //   renamable $rsi = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.127, !tbaa !35)
+    //   renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.128, !tbaa !35)
     //   CMP64ri32 renamable $rax, 7, implicit-def $eflags
     //   JCC_1 %bb.27, 7, implicit killed $eflags
     //
@@ -9080,7 +8984,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     // ; predecessors: %bb.6
     //   successors: %bb.8(0x40000000), %bb.30(0x40000000); %bb.8(50.00%), %bb.30(50.00%)
     //   liveins: $rcx, $rdx
-    //   renamable $esi = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rsi :: (load (s32) from %ir.30, align 8, !tbaa !20)
+    //   renamable $esi = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rsi :: (load (s32) from %ir.30, align 8, !tbaa !21)
     //   $eax = MOV32ri 1, implicit-def $rax
     //   CMP64rr renamable $rcx, killed renamable $rsi, implicit-def $eflags
     //   JCC_1 %bb.30, 3, implicit killed $eflags
@@ -9115,8 +9019,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     // ; predecessors: %bb.27
     //   successors: %bb.14(0x40000000), %bb.29(0x40000000); %bb.14(50.00%), %bb.29(50.00%)
     //   liveins: $rax, $rcx, $rdx, $r8
-    //   renamable $rsi = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !34)
-    //   CMP64rm killed renamable $rsi, killed renamable $rcx, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr9, !tbaa !34)
+    //   renamable $rsi = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !35)
+    //   CMP64rm killed renamable $rsi, killed renamable $rcx, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr9, !tbaa !35)
     //   JCC_1 %bb.14, 4, implicit killed $eflags
     //
     // bb.29:
@@ -9298,7 +9202,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // CMP32mi renamable $rdx, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.16, !tbaa !36)
+    // CMP32mi renamable $rdx, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.16, !tbaa !37)
     do {
     {
     if (1) {
@@ -9414,7 +9318,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.49, !tbaa !23)
+    // renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.49, !tbaa !24)
     do {
     {
     if (1) {
@@ -9557,7 +9461,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // CMP64mr renamable $rsi, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.59, !tbaa !24)
+    // CMP64mr renamable $rsi, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.59, !tbaa !25)
     do {
     {
     if (1) {
@@ -9579,7 +9483,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
   derived()->label_place(block13_label);
 
 
-    // CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.63, !tbaa !28)
+    // CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.63, !tbaa !29)
     do {
     {
     if (1) {
@@ -9643,7 +9547,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
   derived()->label_place(block16_label);
 
 
-    // renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.78, !tbaa !31)
+    // renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.78, !tbaa !32)
     do {
     {
     if (1) {
@@ -9721,7 +9625,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.90, !tbaa !23)
+    // renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.90, !tbaa !24)
     do {
     {
     if (1) {
@@ -9854,7 +9758,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.101, !tbaa !28)
+    // renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.101, !tbaa !29)
     do {
     {
     if (1) {
@@ -9910,7 +9814,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
   derived()->label_place(block22_label);
 
 
-    // CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.111, !tbaa !24)
+    // CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.111, !tbaa !25)
     do {
     {
     if (1) {
@@ -9931,7 +9835,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
   derived()->label_place(block23_label);
 
 
-    // renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.118, !tbaa !33)
+    // renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.118, !tbaa !34)
     do {
     {
     if (1) {
@@ -9945,7 +9849,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.120, !tbaa !33)
+    // renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.120, !tbaa !34)
     do {
     {
     if (1) {
@@ -10021,7 +9925,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
   derived()->label_place(block24_label);
 
 
-    // renamable $rsi = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.127, !tbaa !34)
+    // renamable $rsi = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.127, !tbaa !35)
     do {
     {
     if (1) {
@@ -10035,7 +9939,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.128, !tbaa !34)
+    // renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.128, !tbaa !35)
     do {
     {
     if (1) {
@@ -10162,7 +10066,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
   derived()->label_place(block7_label);
 
 
-    // renamable $esi = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rsi :: (load (s32) from %ir.30, align 8, !tbaa !20)
+    // renamable $esi = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rsi :: (load (s32) from %ir.30, align 8, !tbaa !21)
     do {
     {
     if (1) {
@@ -10338,7 +10242,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
   derived()->label_place(block28_label);
 
 
-    // renamable $rsi = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !34)
+    // renamable $rsi = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !35)
     do {
     {
     if (1) {
@@ -10353,7 +10257,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // CMP64rm killed renamable $rsi, killed renamable $rcx, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr9, !tbaa !34)
+    // CMP64rm killed renamable $rsi, killed renamable $rcx, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr9, !tbaa !35)
     do {
     {
     if (1) {
@@ -10459,7 +10363,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     //   successors: %bb.6(0x40000000), %bb.34(0x40000000); %bb.6(50.00%), %bb.34(50.00%)
     //   liveins: $rdi, $rsi
     //   renamable $rdi = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.21, !tbaa !4)
-    //   CMP32mi renamable $rdi, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.24, !tbaa !36)
+    //   CMP32mi renamable $rdi, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.24, !tbaa !37)
     //   JCC_1 %bb.34, 5, implicit killed $eflags
     //
     // bb.6 (%ir-block.27):
@@ -10490,7 +10394,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     //   successors: %bb.13(0x80000000); %bb.13(100.00%)
     //   liveins: $rcx, $rdi
     //   renamable $rdx = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.54, !tbaa !4)
-    //   renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.57, !tbaa !23)
+    //   renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.57, !tbaa !24)
     //   renamable $eax = OR32rr killed renamable $eax(tied-def 0), renamable $ecx, implicit-def dead $eflags
     //   renamable $rax = MOVSX64rr32 killed renamable $eax
     //   renamable $esi = MOV32rm renamable $rdx, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.60, !tbaa !4)
@@ -10517,14 +10421,14 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     //   renamable $edi = MOV32rr killed renamable $esi, implicit-def $rdi
     //   renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
     //   renamable $rsi = LEA64r renamable $rdx, 1, renamable $rdi, 0, $noreg
-    //   CMP64mr renamable $rdx, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.67, !tbaa !24)
+    //   CMP64mr renamable $rdx, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.67, !tbaa !25)
     //   JCC_1 %bb.17, 5, implicit killed $eflags
     //
     // bb.15 (%ir-block.70):
     // ; predecessors: %bb.14
     //   successors: %bb.16(0x04000000), %bb.17(0x7c000000); %bb.16(3.12%), %bb.17(96.88%)
     //   liveins: $rax, $rcx, $rdx, $rsi
-    //   CMP64mi32 renamable $rsi, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.71, !tbaa !28)
+    //   CMP64mi32 renamable $rsi, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.71, !tbaa !29)
     //   JCC_1 %bb.17, 5, implicit killed $eflags
     //
     // bb.16 (%ir-block.74):
@@ -10539,7 +10443,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     // ; predecessors: %bb.6
     //   successors: %bb.34(0x30000000), %bb.19(0x50000000); %bb.34(37.50%), %bb.19(62.50%)
     //   liveins: $rcx, $rdi
-    //   renamable $rdx = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.86, !tbaa !33)
+    //   renamable $rdx = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.86, !tbaa !34)
     //   TEST64rr renamable $rdx, renamable $rdx, implicit-def $eflags
     //   JCC_1 %bb.34, 4, implicit killed $eflags
     //
@@ -10560,7 +10464,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     // ; predecessors: %bb.19
     //   successors: %bb.34(0x30000000), %bb.21(0x50000000); %bb.34(37.50%), %bb.21(62.50%)
     //   liveins: $rcx, $rdi, $rdx
-    //   renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.99, !tbaa !31)
+    //   renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.99, !tbaa !32)
     //   TEST64rr renamable $r8, renamable $r8, implicit-def $eflags
     //   JCC_1 %bb.34, 4, implicit killed $eflags
     //
@@ -10577,7 +10481,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     //   successors: %bb.23(0x80000000); %bb.23(100.00%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $r8
     //   renamable $r9 = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.108, !tbaa !4)
-    //   renamable $esi = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.111, !tbaa !23)
+    //   renamable $esi = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.111, !tbaa !24)
     //   renamable $esi = OR32rr killed renamable $esi(tied-def 0), renamable $r8d, implicit-def dead $eflags
     //   renamable $rsi = MOVSX64rr32 killed renamable $esi
     //   renamable $esi = MOV32rm renamable $r9, 4, killed renamable $rsi, 0, $noreg :: (load (s32) from %ir.114, !tbaa !4)
@@ -10603,7 +10507,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     //   renamable $edi = MOV32rr killed renamable $esi, implicit-def $rdi
     //   renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
     //   renamable $rsi = LEA64r renamable $r9, 1, renamable $rdi, 0, $noreg
-    //   renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.122, !tbaa !28)
+    //   renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.122, !tbaa !29)
     //   CMP64rr renamable $rdi, renamable $rcx, implicit-def $eflags
     //   JCC_1 %bb.16, 4, implicit killed $eflags
     //
@@ -10618,7 +10522,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     // ; predecessors: %bb.25
     //   successors: %bb.36(0x783e0f84), %bb.27(0x07c1f07c); %bb.36(93.94%), %bb.27(6.06%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8, $r9
-    //   CMP64mr renamable $rsi, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.132, !tbaa !24)
+    //   CMP64mr renamable $rsi, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.132, !tbaa !25)
     //   JCC_1 %bb.36, 5, implicit killed $eflags
     //
     // bb.27 (%ir-block.137):
@@ -10633,15 +10537,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     // ; predecessors: %bb.27
     //   successors: %bb.29(0x55555555), %bb.35(0x2aaaaaab); %bb.29(66.67%), %bb.35(33.33%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi
-    //   CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.138, !tbaa !33)
+    //   CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.138, !tbaa !34)
     //   JCC_1 %bb.35, 5, implicit killed $eflags
     //
     // bb.29 (%ir-block.143):
     // ; predecessors: %bb.28
     //   successors: %bb.30(0x40000000), %bb.32(0x40000000); %bb.30(50.00%), %bb.32(50.00%)
     //   liveins: $rcx, $rdi, $rdx, $rsi
-    //   renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.144, !tbaa !34)
-    //   renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !34)
+    //   renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.144, !tbaa !35)
+    //   renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !35)
     //   CMP64ri32 renamable $rdx, 7, implicit-def $eflags
     //   JCC_1 %bb.32, 7, implicit killed $eflags
     //
@@ -10668,7 +10572,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     // ; predecessors: %bb.8
     //   successors: %bb.10(0x40000000), %bb.35(0x40000000); %bb.10(50.00%), %bb.35(50.00%)
     //   liveins: $rcx, $rdi
-    //   renamable $edx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rdx :: (load (s32) from %ir.38, align 8, !tbaa !20)
+    //   renamable $edx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rdx :: (load (s32) from %ir.38, align 8, !tbaa !21)
     //   $eax = MOV32ri 1, implicit-def $rax
     //   CMP64rr renamable $rcx, killed renamable $rdx, implicit-def $eflags
     //   JCC_1 %bb.35, 3, implicit killed $eflags
@@ -10703,8 +10607,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     // ; predecessors: %bb.32
     //   successors: %bb.16(0x40000000), %bb.34(0x40000000); %bb.16(50.00%), %bb.34(50.00%)
     //   liveins: $rcx, $rdi, $rdx, $rsi
-    //   renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rdx, 16, $noreg :: (load (s64) from %ir.sunkaddr8, !tbaa !34)
-    //   CMP64rm killed renamable $rax, killed renamable $rcx, 1, killed renamable $rdx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr11, !tbaa !34)
+    //   renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rdx, 16, $noreg :: (load (s64) from %ir.sunkaddr8, !tbaa !35)
+    //   CMP64rm killed renamable $rax, killed renamable $rcx, 1, killed renamable $rdx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr11, !tbaa !35)
     //   JCC_1 %bb.16, 4, implicit killed $eflags
     //
     // bb.34:
@@ -10985,7 +10889,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // CMP32mi renamable $rdi, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.24, !tbaa !36)
+    // CMP32mi renamable $rdi, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.24, !tbaa !37)
     do {
     {
     if (1) {
@@ -11101,7 +11005,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.57, !tbaa !23)
+    // renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.57, !tbaa !24)
     do {
     {
     if (1) {
@@ -11244,7 +11148,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // CMP64mr renamable $rdx, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.67, !tbaa !24)
+    // CMP64mr renamable $rdx, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.67, !tbaa !25)
     do {
     {
     if (1) {
@@ -11266,7 +11170,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
   derived()->label_place(block15_label);
 
 
-    // CMP64mi32 renamable $rsi, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.71, !tbaa !28)
+    // CMP64mi32 renamable $rsi, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.71, !tbaa !29)
     do {
     {
     if (1) {
@@ -11330,7 +11234,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
   derived()->label_place(block18_label);
 
 
-    // renamable $rdx = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.86, !tbaa !33)
+    // renamable $rdx = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.86, !tbaa !34)
     do {
     {
     if (1) {
@@ -11450,7 +11354,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
   derived()->label_place(block20_label);
 
 
-    // renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.99, !tbaa !31)
+    // renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.99, !tbaa !32)
     do {
     {
     if (1) {
@@ -11528,7 +11432,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $esi = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.111, !tbaa !23)
+    // renamable $esi = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.111, !tbaa !24)
     do {
     {
     if (1) {
@@ -11661,7 +11565,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.122, !tbaa !28)
+    // renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.122, !tbaa !29)
     do {
     {
     if (1) {
@@ -11717,7 +11621,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
   derived()->label_place(block26_label);
 
 
-    // CMP64mr renamable $rsi, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.132, !tbaa !24)
+    // CMP64mr renamable $rsi, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.132, !tbaa !25)
     do {
     {
     if (1) {
@@ -11772,7 +11676,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
   derived()->label_place(block28_label);
 
 
-    // CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.138, !tbaa !33)
+    // CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.138, !tbaa !34)
     do {
     {
     if (1) {
@@ -11793,7 +11697,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
   derived()->label_place(block29_label);
 
 
-    // renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.144, !tbaa !34)
+    // renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.144, !tbaa !35)
     do {
     {
     if (1) {
@@ -11807,7 +11711,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !34)
+    // renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !35)
     do {
     {
     if (1) {
@@ -11934,7 +11838,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
   derived()->label_place(block9_label);
 
 
-    // renamable $edx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rdx :: (load (s32) from %ir.38, align 8, !tbaa !20)
+    // renamable $edx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rdx :: (load (s32) from %ir.38, align 8, !tbaa !21)
     do {
     {
     if (1) {
@@ -12110,7 +12014,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
   derived()->label_place(block33_label);
 
 
-    // renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rdx, 16, $noreg :: (load (s64) from %ir.sunkaddr8, !tbaa !34)
+    // renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rdx, 16, $noreg :: (load (s64) from %ir.sunkaddr8, !tbaa !35)
     do {
     {
     if (1) {
@@ -12125,7 +12029,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_
     } while (false);
 
 
-    // CMP64rm killed renamable $rax, killed renamable $rcx, 1, killed renamable $rdx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr11, !tbaa !34)
+    // CMP64rm killed renamable $rax, killed renamable $rcx, 1, killed renamable $rdx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr11, !tbaa !35)
     do {
     {
     if (1) {
@@ -12219,7 +12123,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     //   successors: %bb.7(0x40000000), %bb.1(0x40000000); %bb.7(50.00%), %bb.1(50.00%)
     //   liveins: $rax, $rsi
     //   renamable $rdx = MOV64rm killed renamable $rax, 1, $noreg, 0, $noreg :: (load (s64) from %ir.18, !tbaa !4)
-    //   CMP32mi renamable $rdx, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.21, !tbaa !36)
+    //   CMP32mi renamable $rdx, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.21, !tbaa !37)
     //   JCC_1 %bb.1, 5, implicit killed $eflags
     //
     // bb.7 (%ir-block.24):
@@ -12250,7 +12154,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     //   successors: %bb.18(0x80000000); %bb.18(100.00%)
     //   liveins: $rcx, $rdx
     //   renamable $rsi = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.51, !tbaa !4)
-    //   renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.54, !tbaa !23)
+    //   renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.54, !tbaa !24)
     //   renamable $eax = OR32rr killed renamable $eax(tied-def 0), renamable $ecx, implicit-def dead $eflags
     //   renamable $rax = MOVSX64rr32 killed renamable $eax
     //   renamable $edx = MOV32rm renamable $rsi, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.57, !tbaa !4)
@@ -12277,14 +12181,14 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     //   renamable $edi = MOV32rr killed renamable $edx, implicit-def $rdi
     //   renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
     //   renamable $rdx = LEA64r renamable $rsi, 1, renamable $rdi, 0, $noreg
-    //   CMP64mr renamable $rsi, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.64, !tbaa !24)
+    //   CMP64mr renamable $rsi, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.64, !tbaa !25)
     //   JCC_1 %bb.17, 5, implicit killed $eflags
     //
     // bb.15 (%ir-block.67):
     // ; predecessors: %bb.14
     //   successors: %bb.16(0x04000000), %bb.17(0x7c000000); %bb.16(3.12%), %bb.17(96.88%)
     //   liveins: $rax, $rcx, $rdx, $rsi
-    //   CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.68, !tbaa !28)
+    //   CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.68, !tbaa !29)
     //   JCC_1 %bb.17, 5, implicit killed $eflags
     //
     // bb.16 (%ir-block.71):
@@ -12299,7 +12203,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     // ; predecessors: %bb.7
     //   successors: %bb.1(0x30000000), %bb.20(0x50000000); %bb.1(37.50%), %bb.20(62.50%)
     //   liveins: $rcx, $rdx
-    //   renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.83, !tbaa !31)
+    //   renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.83, !tbaa !32)
     //   TEST64rr renamable $rsi, renamable $rsi, implicit-def $eflags
     //   JCC_1 %bb.1, 4, implicit killed $eflags
     //
@@ -12316,7 +12220,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     //   successors: %bb.32(0x80000000); %bb.32(100.00%)
     //   liveins: $rax, $rcx, $rdx, $rsi
     //   renamable $rdi = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.92, !tbaa !4)
-    //   renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.95, !tbaa !23)
+    //   renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.95, !tbaa !24)
     //   renamable $edx = OR32rr killed renamable $edx(tied-def 0), renamable $esi, implicit-def dead $eflags
     //   renamable $rdx = MOVSX64rr32 killed renamable $edx
     //   renamable $edx = MOV32rm renamable $rdi, 4, killed renamable $rdx, 0, $noreg :: (load (s32) from %ir.98, !tbaa !4)
@@ -12342,7 +12246,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     //   renamable $r8d = MOV32rr killed renamable $edx, implicit-def $r8
     //   renamable $r8 = nuw nsw SHL64ri killed renamable $r8(tied-def 0), 5, implicit-def dead $eflags
     //   renamable $rdx = LEA64r renamable $rdi, 1, renamable $r8, 0, $noreg
-    //   renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.106, !tbaa !28)
+    //   renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.106, !tbaa !29)
     //   CMP64rr renamable $r8, renamable $rcx, implicit-def $eflags
     //   JCC_1 %bb.16, 4, implicit killed $eflags
     //
@@ -12357,15 +12261,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     // ; predecessors: %bb.23
     //   successors: %bb.31(0x783e0f84), %bb.25(0x07c1f07c); %bb.31(93.94%), %bb.25(6.06%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
-    //   CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.116, !tbaa !24)
+    //   CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.116, !tbaa !25)
     //   JCC_1 %bb.31, 5, implicit killed $eflags
     //
     // bb.25 (%ir-block.121):
     // ; predecessors: %bb.24
     //   successors: %bb.26(0x40000000), %bb.1(0x40000000); %bb.26(50.00%), %bb.1(50.00%)
     //   liveins: $rcx, $rdx, $r8
-    //   renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.123, !tbaa !33)
-    //   renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.125, !tbaa !33)
+    //   renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.123, !tbaa !34)
+    //   renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.125, !tbaa !34)
     //   CMP64rr renamable $rax, renamable $rsi, implicit-def $eflags
     //   renamable $bl = SETCCr 5, implicit killed $eflags
     //   CMP64ri32 killed renamable $rsi, 17, implicit-def $eflags
@@ -12377,8 +12281,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     // ; predecessors: %bb.25
     //   successors: %bb.27(0x40000000), %bb.29(0x40000000); %bb.27(50.00%), %bb.29(50.00%)
     //   liveins: $rax, $rcx, $rdx, $r8
-    //   renamable $rsi = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.132, !tbaa !34)
-    //   renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.133, !tbaa !34)
+    //   renamable $rsi = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.132, !tbaa !35)
+    //   renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.133, !tbaa !35)
     //   CMP64ri32 renamable $rax, 7, implicit-def $eflags
     //   JCC_1 %bb.29, 7, implicit killed $eflags
     //
@@ -12405,7 +12309,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     // ; predecessors: %bb.9
     //   successors: %bb.11(0x40000000), %bb.2(0x40000000); %bb.11(50.00%), %bb.2(50.00%)
     //   liveins: $rcx, $rdx
-    //   renamable $esi = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rsi :: (load (s32) from %ir.35, align 8, !tbaa !20)
+    //   renamable $esi = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rsi :: (load (s32) from %ir.35, align 8, !tbaa !21)
     //   $eax = MOV32ri 1, implicit-def $rax
     //   CMP64rr renamable $rcx, killed renamable $rsi, implicit-def $eflags
     //   JCC_1 %bb.2, 3, implicit killed $eflags
@@ -12440,8 +12344,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     // ; predecessors: %bb.29
     //   successors: %bb.16(0x40000000), %bb.1(0x40000000); %bb.16(50.00%), %bb.1(50.00%)
     //   liveins: $rax, $rcx, $rdx, $r8
-    //   renamable $rsi = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !34)
-    //   CMP64rm killed renamable $rsi, killed renamable $rcx, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr9, !tbaa !34)
+    //   renamable $rsi = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !35)
+    //   CMP64rm killed renamable $rsi, killed renamable $rcx, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr9, !tbaa !35)
     //   JCC_1 %bb.16, 4, implicit killed $eflags
     //
     // bb.1:
@@ -12656,7 +12560,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     } while (false);
 
 
-    // CMP32mi renamable $rdx, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.21, !tbaa !36)
+    // CMP32mi renamable $rdx, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.21, !tbaa !37)
     do {
     {
     if (1) {
@@ -12772,7 +12676,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     } while (false);
 
 
-    // renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.54, !tbaa !23)
+    // renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.54, !tbaa !24)
     do {
     {
     if (1) {
@@ -12915,7 +12819,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     } while (false);
 
 
-    // CMP64mr renamable $rsi, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.64, !tbaa !24)
+    // CMP64mr renamable $rsi, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.64, !tbaa !25)
     do {
     {
     if (1) {
@@ -12937,7 +12841,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
   derived()->label_place(block15_label);
 
 
-    // CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.68, !tbaa !28)
+    // CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.68, !tbaa !29)
     do {
     {
     if (1) {
@@ -13001,7 +12905,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
   derived()->label_place(block19_label);
 
 
-    // renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.83, !tbaa !31)
+    // renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.83, !tbaa !32)
     do {
     {
     if (1) {
@@ -13079,7 +12983,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     } while (false);
 
 
-    // renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.95, !tbaa !23)
+    // renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.95, !tbaa !24)
     do {
     {
     if (1) {
@@ -13212,7 +13116,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     } while (false);
 
 
-    // renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.106, !tbaa !28)
+    // renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.106, !tbaa !29)
     do {
     {
     if (1) {
@@ -13268,7 +13172,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
   derived()->label_place(block24_label);
 
 
-    // CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.116, !tbaa !24)
+    // CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.116, !tbaa !25)
     do {
     {
     if (1) {
@@ -13289,7 +13193,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
   derived()->label_place(block25_label);
 
 
-    // renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.123, !tbaa !33)
+    // renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.123, !tbaa !34)
     do {
     {
     if (1) {
@@ -13303,7 +13207,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     } while (false);
 
 
-    // renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.125, !tbaa !33)
+    // renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.125, !tbaa !34)
     do {
     {
     if (1) {
@@ -13379,7 +13283,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
   derived()->label_place(block26_label);
 
 
-    // renamable $rsi = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.132, !tbaa !34)
+    // renamable $rsi = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.132, !tbaa !35)
     do {
     {
     if (1) {
@@ -13393,7 +13297,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     } while (false);
 
 
-    // renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.133, !tbaa !34)
+    // renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.133, !tbaa !35)
     do {
     {
     if (1) {
@@ -13520,7 +13424,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
   derived()->label_place(block10_label);
 
 
-    // renamable $esi = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rsi :: (load (s32) from %ir.35, align 8, !tbaa !20)
+    // renamable $esi = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rsi :: (load (s32) from %ir.35, align 8, !tbaa !21)
     do {
     {
     if (1) {
@@ -13696,7 +13600,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
   derived()->label_place(block30_label);
 
 
-    // renamable $rsi = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !34)
+    // renamable $rsi = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !35)
     do {
     {
     if (1) {
@@ -13711,7 +13615,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     } while (false);
 
 
-    // CMP64rm killed renamable $rsi, killed renamable $rcx, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr9, !tbaa !34)
+    // CMP64rm killed renamable $rsi, killed renamable $rcx, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr9, !tbaa !35)
     do {
     {
     if (1) {
@@ -13819,7 +13723,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     //   successors: %bb.9(0x40000000), %bb.3(0x40000000); %bb.9(50.00%), %bb.3(50.00%)
     //   liveins: $rax, $rsi
     //   renamable $rdi = MOV64rm killed renamable $rax, 1, $noreg, 0, $noreg :: (load (s64) from %ir.26, !tbaa !4)
-    //   CMP32mi renamable $rdi, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.29, !tbaa !36)
+    //   CMP32mi renamable $rdi, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.29, !tbaa !37)
     //   JCC_1 %bb.3, 5, implicit killed $eflags
     //
     // bb.9 (%ir-block.32):
@@ -13850,7 +13754,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     //   successors: %bb.20(0x80000000); %bb.20(100.00%)
     //   liveins: $rcx, $rdi
     //   renamable $rdx = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.59, !tbaa !4)
-    //   renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.62, !tbaa !23)
+    //   renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.62, !tbaa !24)
     //   renamable $eax = OR32rr killed renamable $eax(tied-def 0), renamable $ecx, implicit-def dead $eflags
     //   renamable $rax = MOVSX64rr32 killed renamable $eax
     //   renamable $esi = MOV32rm renamable $rdx, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.65, !tbaa !4)
@@ -13877,14 +13781,14 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     //   renamable $edi = MOV32rr killed renamable $esi, implicit-def $rdi
     //   renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
     //   renamable $rsi = LEA64r renamable $rdx, 1, renamable $rdi, 0, $noreg
-    //   CMP64mr renamable $rdx, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.72, !tbaa !24)
+    //   CMP64mr renamable $rdx, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.72, !tbaa !25)
     //   JCC_1 %bb.19, 5, implicit killed $eflags
     //
     // bb.17 (%ir-block.75):
     // ; predecessors: %bb.16
     //   successors: %bb.18(0x04000000), %bb.19(0x7c000000); %bb.18(3.12%), %bb.19(96.88%)
     //   liveins: $rax, $rcx, $rdx, $rsi
-    //   CMP64mi32 renamable $rsi, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.76, !tbaa !28)
+    //   CMP64mi32 renamable $rsi, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.76, !tbaa !29)
     //   JCC_1 %bb.19, 5, implicit killed $eflags
     //
     // bb.18 (%ir-block.79):
@@ -13899,7 +13803,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     // ; predecessors: %bb.9
     //   successors: %bb.3(0x30000000), %bb.22(0x50000000); %bb.3(37.50%), %bb.22(62.50%)
     //   liveins: $rcx, $rdi
-    //   renamable $rdx = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.91, !tbaa !33)
+    //   renamable $rdx = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.91, !tbaa !34)
     //   TEST64rr renamable $rdx, renamable $rdx, implicit-def $eflags
     //   JCC_1 %bb.3, 4, implicit killed $eflags
     //
@@ -13920,7 +13824,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     // ; predecessors: %bb.22
     //   successors: %bb.3(0x30000000), %bb.24(0x50000000); %bb.3(37.50%), %bb.24(62.50%)
     //   liveins: $rcx, $rdi, $rdx
-    //   renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.104, !tbaa !31)
+    //   renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.104, !tbaa !32)
     //   TEST64rr renamable $r8, renamable $r8, implicit-def $eflags
     //   JCC_1 %bb.3, 4, implicit killed $eflags
     //
@@ -13937,7 +13841,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     //   successors: %bb.37(0x80000000); %bb.37(100.00%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $r8
     //   renamable $r9 = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.113, !tbaa !4)
-    //   renamable $esi = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.116, !tbaa !23)
+    //   renamable $esi = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.116, !tbaa !24)
     //   renamable $esi = OR32rr killed renamable $esi(tied-def 0), renamable $r8d, implicit-def dead $eflags
     //   renamable $rsi = MOVSX64rr32 killed renamable $esi
     //   renamable $esi = MOV32rm renamable $r9, 4, killed renamable $rsi, 0, $noreg :: (load (s32) from %ir.119, !tbaa !4)
@@ -13963,7 +13867,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     //   renamable $edi = MOV32rr killed renamable $esi, implicit-def $rdi
     //   renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
     //   renamable $rsi = LEA64r renamable $r9, 1, renamable $rdi, 0, $noreg
-    //   renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.127, !tbaa !28)
+    //   renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.127, !tbaa !29)
     //   CMP64rr renamable $rdi, renamable $rcx, implicit-def $eflags
     //   JCC_1 %bb.18, 4, implicit killed $eflags
     //
@@ -13978,7 +13882,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     // ; predecessors: %bb.27
     //   successors: %bb.36(0x783e0f84), %bb.29(0x07c1f07c); %bb.36(93.94%), %bb.29(6.06%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8, $r9
-    //   CMP64mr renamable $rsi, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.137, !tbaa !24)
+    //   CMP64mr renamable $rsi, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.137, !tbaa !25)
     //   JCC_1 %bb.36, 5, implicit killed $eflags
     //
     // bb.29 (%ir-block.142):
@@ -13993,15 +13897,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     // ; predecessors: %bb.29
     //   successors: %bb.31(0x55555555), %bb.4(0x2aaaaaab); %bb.31(66.67%), %bb.4(33.33%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi
-    //   CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.143, !tbaa !33)
+    //   CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.143, !tbaa !34)
     //   JCC_1 %bb.4, 5, implicit killed $eflags
     //
     // bb.31 (%ir-block.148):
     // ; predecessors: %bb.30
     //   successors: %bb.32(0x40000000), %bb.34(0x40000000); %bb.32(50.00%), %bb.34(50.00%)
     //   liveins: $rcx, $rdi, $rdx, $rsi
-    //   renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.149, !tbaa !34)
-    //   renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !34)
+    //   renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.149, !tbaa !35)
+    //   renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !35)
     //   CMP64ri32 renamable $rdx, 7, implicit-def $eflags
     //   JCC_1 %bb.34, 7, implicit killed $eflags
     //
@@ -14028,7 +13932,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     // ; predecessors: %bb.11
     //   successors: %bb.13(0x40000000), %bb.4(0x40000000); %bb.13(50.00%), %bb.4(50.00%)
     //   liveins: $rcx, $rdi
-    //   renamable $edx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rdx :: (load (s32) from %ir.43, align 8, !tbaa !20)
+    //   renamable $edx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rdx :: (load (s32) from %ir.43, align 8, !tbaa !21)
     //   $eax = MOV32ri 1, implicit-def $rax
     //   CMP64rr renamable $rcx, killed renamable $rdx, implicit-def $eflags
     //   JCC_1 %bb.4, 3, implicit killed $eflags
@@ -14063,8 +13967,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     // ; predecessors: %bb.34
     //   successors: %bb.18(0x40000000), %bb.3(0x40000000); %bb.18(50.00%), %bb.3(50.00%)
     //   liveins: $rcx, $rdi, $rdx, $rsi
-    //   renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rdx, 16, $noreg :: (load (s64) from %ir.sunkaddr8, !tbaa !34)
-    //   CMP64rm killed renamable $rax, killed renamable $rcx, 1, killed renamable $rdx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr11, !tbaa !34)
+    //   renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rdx, 16, $noreg :: (load (s64) from %ir.sunkaddr8, !tbaa !35)
+    //   CMP64rm killed renamable $rax, killed renamable $rcx, 1, killed renamable $rdx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr11, !tbaa !35)
     //   JCC_1 %bb.18, 4, implicit killed $eflags
     //
     // bb.3:
@@ -14330,7 +14234,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     } while (false);
 
 
-    // CMP32mi renamable $rdi, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.29, !tbaa !36)
+    // CMP32mi renamable $rdi, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.29, !tbaa !37)
     do {
     {
     if (1) {
@@ -14446,7 +14350,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     } while (false);
 
 
-    // renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.62, !tbaa !23)
+    // renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.62, !tbaa !24)
     do {
     {
     if (1) {
@@ -14589,7 +14493,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     } while (false);
 
 
-    // CMP64mr renamable $rdx, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.72, !tbaa !24)
+    // CMP64mr renamable $rdx, 1, killed renamable $rdi, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.72, !tbaa !25)
     do {
     {
     if (1) {
@@ -14611,7 +14515,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
   derived()->label_place(block17_label);
 
 
-    // CMP64mi32 renamable $rsi, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.76, !tbaa !28)
+    // CMP64mi32 renamable $rsi, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.76, !tbaa !29)
     do {
     {
     if (1) {
@@ -14675,7 +14579,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
   derived()->label_place(block21_label);
 
 
-    // renamable $rdx = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.91, !tbaa !33)
+    // renamable $rdx = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.91, !tbaa !34)
     do {
     {
     if (1) {
@@ -14795,7 +14699,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
   derived()->label_place(block23_label);
 
 
-    // renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.104, !tbaa !31)
+    // renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 8, $noreg :: (load (s64) from %ir.104, !tbaa !32)
     do {
     {
     if (1) {
@@ -14873,7 +14777,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     } while (false);
 
 
-    // renamable $esi = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.116, !tbaa !23)
+    // renamable $esi = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.116, !tbaa !24)
     do {
     {
     if (1) {
@@ -15006,7 +14910,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     } while (false);
 
 
-    // renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.127, !tbaa !28)
+    // renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.127, !tbaa !29)
     do {
     {
     if (1) {
@@ -15062,7 +14966,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
   derived()->label_place(block28_label);
 
 
-    // CMP64mr renamable $rsi, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.137, !tbaa !24)
+    // CMP64mr renamable $rsi, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.137, !tbaa !25)
     do {
     {
     if (1) {
@@ -15117,7 +15021,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
   derived()->label_place(block30_label);
 
 
-    // CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.143, !tbaa !33)
+    // CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.143, !tbaa !34)
     do {
     {
     if (1) {
@@ -15138,7 +15042,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
   derived()->label_place(block31_label);
 
 
-    // renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.149, !tbaa !34)
+    // renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.149, !tbaa !35)
     do {
     {
     if (1) {
@@ -15152,7 +15056,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     } while (false);
 
 
-    // renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !34)
+    // renamable $r8 = MOV64rm renamable $rcx, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !35)
     do {
     {
     if (1) {
@@ -15279,7 +15183,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
   derived()->label_place(block12_label);
 
 
-    // renamable $edx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rdx :: (load (s32) from %ir.43, align 8, !tbaa !20)
+    // renamable $edx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rdx :: (load (s32) from %ir.43, align 8, !tbaa !21)
     do {
     {
     if (1) {
@@ -15455,7 +15359,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
   derived()->label_place(block35_label);
 
 
-    // renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rdx, 16, $noreg :: (load (s64) from %ir.sunkaddr8, !tbaa !34)
+    // renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rdx, 16, $noreg :: (load (s64) from %ir.sunkaddr8, !tbaa !35)
     do {
     {
     if (1) {
@@ -15470,7 +15374,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     } while (false);
 
 
-    // CMP64rm killed renamable $rax, killed renamable $rcx, 1, killed renamable $rdx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr11, !tbaa !34)
+    // CMP64rm killed renamable $rax, killed renamable $rcx, 1, killed renamable $rdx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr11, !tbaa !35)
     do {
     {
     if (1) {
@@ -15509,6 +15413,6871 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indire
     } while (false);
   // Start of block 4
   derived()->label_place(block4_label);
+
+
+    // RET64 killed $rax
+  derived()->label_place(ret_converge_label);
+  if (result_0.has_assignment())
+    result_0.unlock(derived());
+  derived()->set_preserve_flags(false);
+  return true;
+
+}
+
+template <typename Adaptor,
+          typename Derived,
+          template <typename, typename, typename>
+          class BaseTy,
+          typename Config>
+bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_find_str(GenericValuePart &&param_0, GenericValuePart &&param_1, GenericValuePart &&param_2, ValuePart &result_0) {
+    // # Machine code for function zend_native_array_find_str: NoPHIs, TracksLiveness, NoVRegs, TiedOpsRewritten, TracksDebugUserValues
+    // Function Live Ins: $rdi, $rsi, $rdx
+    //
+    // bb.0 (%ir-block.3):
+    //   successors: %bb.1(0x40000000), %bb.2(0x40000000); %bb.1(50.00%), %bb.2(50.00%)
+    //   liveins: $rdi, $rdx, $rsi
+    //   $eax = MOVZX32rm8 renamable $rdi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.4, align 8, !tbaa !4)
+    //   CMP8ri renamable $al, 10, implicit-def $eflags
+    //   JCC_1 %bb.2, 5, implicit killed $eflags
+    //
+    // bb.1 (%ir-block.7):
+    // ; predecessors: %bb.0
+    //   successors: %bb.2(0x80000000); %bb.2(100.00%)
+    //   liveins: $rdi, $rdx, $rsi
+    //   renamable $rdi = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
+    //   $eax = MOVZX32rm8 renamable $rdi, 1, $noreg, 16, $noreg :: (load (s8) from %ir.10, align 8, !tbaa !4)
+    //   renamable $rdi = nuw ADD64ri32 killed renamable $rdi(tied-def 0), 8, implicit-def dead $eflags
+    //
+    // bb.2 (%ir-block.12):
+    // ; predecessors: %bb.1, %bb.0
+    //   successors: %bb.3(0x40000000), %bb.15(0x40000000); %bb.3(50.00%), %bb.15(50.00%)
+    //   liveins: $al, $rdi, $rdx, $rsi
+    //   CMP8ri killed renamable $al, 7, implicit-def $eflags
+    //   JCC_1 %bb.15, 5, implicit killed $eflags
+    //
+    // bb.3 (%ir-block.16):
+    // ; predecessors: %bb.2
+    //   successors: %bb.4(0x40000000), %bb.20(0x40000000); %bb.4(50.00%), %bb.20(50.00%)
+    //   liveins: $rdi, $rdx, $rsi
+    //   renamable $rcx = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.14, !tbaa !4)
+    //   $eax = MOV32ri 1, implicit-def $rax
+    //   TEST8mi renamable $rcx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.18, align 8)
+    //   JCC_1 %bb.20, 5, implicit killed $eflags
+    //
+    // bb.4 (%ir-block.22):
+    // ; predecessors: %bb.3
+    //   successors: %bb.6(0x80000000); %bb.6(100.00%)
+    //   liveins: $rax, $rcx, $rdx, $rsi
+    //   renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.23, !tbaa !4)
+    //   renamable $ecx = MOV32rm killed renamable $rcx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.26, !tbaa !24)
+    //   renamable $ecx = OR32rr killed renamable $ecx(tied-def 0), renamable $edx, implicit-def dead $eflags
+    //   renamable $rcx = MOVSX64rr32 killed renamable $ecx
+    //   renamable $ecx = MOV32rm renamable $rdi, 4, killed renamable $rcx, 0, $noreg :: (load (s32) from %ir.29, !tbaa !4)
+    //   JMP_1 %bb.6
+    //
+    // bb.5 (%ir-block.72, align 16):
+    // ; predecessors: %bb.8, %bb.9
+    //   successors: %bb.6(0x80000000); %bb.6(100.00%)
+    //   liveins: $rax, $rcx, $rdi, $rdx, $rsi
+    //   renamable $ecx = MOV32rm killed renamable $rcx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.73, !tbaa !4)
+    //
+    // bb.6 (%ir-block.22):
+    // ; predecessors: %bb.4, %bb.5
+    //   successors: %bb.20(0x09e6b247), %bb.7(0x76194db8); %bb.20(7.74%), %bb.7(92.26%)
+    //   liveins: $rax, $ecx, $rdi, $rdx, $rsi
+    //   CMP32ri renamable $ecx, -1, implicit-def $eflags
+    //   JCC_1 %bb.20, 4, implicit killed $eflags
+    //
+    // bb.7 (%ir-block.32):
+    // ; predecessors: %bb.6
+    //   successors: %bb.19(0x04000000), %bb.8(0x7c000000); %bb.19(3.12%), %bb.8(96.88%)
+    //   liveins: $ecx, $rax, $rdi, $rdx, $rsi
+    //   renamable $r8d = MOV32rr killed renamable $ecx, implicit-def $r8
+    //   renamable $r8 = nuw nsw SHL64ri killed renamable $r8(tied-def 0), 5, implicit-def dead $eflags
+    //   renamable $rcx = LEA64r renamable $rdi, 1, renamable $r8, 0, $noreg
+    //   renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.36, !tbaa !29)
+    //   CMP64rr renamable $r8, renamable $rsi, implicit-def $eflags
+    //   JCC_1 %bb.19, 4, implicit killed $eflags
+    //
+    // bb.8 (%ir-block.39):
+    // ; predecessors: %bb.7
+    //   successors: %bb.5(0x3e000000), %bb.9(0x42000000); %bb.5(48.44%), %bb.9(51.56%)
+    //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
+    //   TEST64rr renamable $r8, renamable $r8, implicit-def $eflags
+    //   JCC_1 %bb.5, 4, implicit killed $eflags
+    //
+    // bb.9 (%ir-block.39):
+    // ; predecessors: %bb.8
+    //   successors: %bb.5(0x783e0f84), %bb.10(0x07c1f07c); %bb.5(93.94%), %bb.10(6.06%)
+    //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
+    //   CMP64mr renamable $rcx, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.40, !tbaa !25)
+    //   JCC_1 %bb.5, 5, implicit killed $eflags
+    //
+    // bb.10 (%ir-block.45):
+    // ; predecessors: %bb.9
+    //   successors: %bb.11(0x40000000), %bb.15(0x40000000); %bb.11(50.00%), %bb.15(50.00%)
+    //   liveins: $rcx, $rsi, $r8
+    //   renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.46, !tbaa !34)
+    //   renamable $rdx = MOV64rm renamable $rsi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.48, !tbaa !34)
+    //   CMP64rr renamable $rax, renamable $rdx, implicit-def $eflags
+    //   renamable $bl = SETCCr 5, implicit killed $eflags
+    //   CMP64ri32 killed renamable $rdx, 17, implicit-def $eflags
+    //   renamable $dl = SETCCr 3, implicit killed $eflags
+    //   dead renamable $dl = OR8rr killed renamable $dl(tied-def 0), killed renamable $bl, implicit-def $eflags
+    //   JCC_1 %bb.15, 5, implicit killed $eflags
+    //
+    // bb.11 (%ir-block.53):
+    // ; predecessors: %bb.10
+    //   successors: %bb.12(0x40000000), %bb.17(0x40000000); %bb.12(50.00%), %bb.17(50.00%)
+    //   liveins: $rax, $rcx, $rsi, $r8
+    //   renamable $rdx = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.54, !tbaa !35)
+    //   renamable $rdi = MOV64rm renamable $rsi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.55, !tbaa !35)
+    //   CMP64ri32 renamable $rax, 7, implicit-def $eflags
+    //   JCC_1 %bb.17, 7, implicit killed $eflags
+    //
+    // bb.12 (%ir-block.59):
+    // ; predecessors: %bb.11
+    //   successors: %bb.19(0x20000000), %bb.13(0x60000000); %bb.19(25.00%), %bb.13(75.00%)
+    //   liveins: $rax, $rcx, $rdi, $rdx
+    //   $rsi = MOV64rr $rdi
+    //   dead renamable $rsi = XOR64rr killed renamable $rsi(tied-def 0), renamable $rdx, implicit-def $eflags
+    //   JCC_1 %bb.19, 4, implicit killed $eflags
+    //
+    // bb.13 (%ir-block.59):
+    // ; predecessors: %bb.12
+    //   successors: %bb.19(0x2aaaaaab), %bb.15(0x55555555); %bb.19(33.33%), %bb.15(66.67%)
+    //   liveins: $rax, $rcx, $rdi, $rdx
+    //   renamable $rdi = XOR64rr killed renamable $rdi(tied-def 0), killed renamable $rdx, implicit-def dead $eflags
+    //   renamable $rdx = BSF64rr undef renamable $rdx(tied-def 0), killed renamable $rdi, implicit-def dead $eflags
+    //   renamable $rax = nuw nsw SHL64ri killed renamable $rax(tied-def 0), 3, implicit-def dead $eflags
+    //   CMP64rr killed renamable $rdx, killed renamable $rax, implicit-def $eflags
+    //   JCC_1 %bb.15, 2, implicit killed $eflags
+    //   JMP_1 %bb.19
+    //
+    // bb.17 (%ir-block.66):
+    // ; predecessors: %bb.11
+    //   successors: %bb.18(0x40000000), %bb.15(0x40000000); %bb.18(50.00%), %bb.15(50.00%)
+    //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
+    //   CMP64rr killed renamable $rdx, killed renamable $rdi, implicit-def $eflags
+    //   JCC_1 %bb.15, 5, implicit killed $eflags
+    //
+    // bb.18 (%ir-block.68):
+    // ; predecessors: %bb.17
+    //   successors: %bb.19(0x40000000), %bb.15(0x40000000); %bb.19(50.00%), %bb.15(50.00%)
+    //   liveins: $rax, $rcx, $rsi, $r8
+    //   renamable $rdx = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr3, !tbaa !35)
+    //   CMP64rm killed renamable $rdx, killed renamable $rsi, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr5, !tbaa !35)
+    //   JCC_1 %bb.15, 5, implicit killed $eflags
+    //
+    // bb.19 (%ir-block.76):
+    // ; predecessors: %bb.7, %bb.18, %bb.12, %bb.13
+    //   successors: %bb.20(0x80000000); %bb.20(100.00%)
+    //   liveins: $rcx
+    //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    //   CMP8mi renamable $rcx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.77, align 8, !tbaa !4)
+    //   renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rcx, 5, implicit killed $eflags
+    //
+    // bb.20 (%ir-block.82):
+    // ; predecessors: %bb.19, %bb.3, %bb.6
+    //   liveins: $rax
+    //   RET64 killed $rax
+    //
+    // bb.15:
+    // ; predecessors: %bb.2, %bb.13, %bb.10, %bb.17, %bb.18
+    //
+    //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    //   RET64 killed $rax
+    //
+    // # End machine code for function zend_native_array_find_str.
+    //
+
+    // Mapping di to param_0
+    // Mapping si to param_1
+    // Mapping dx to param_2
+
+    // Creating label for convergence point at the end of the function
+    tpde::Label ret_converge_label = derived()->text_writer.label_create();
+    // Creating labels for blocks that are jump targets
+    tpde::Label block1_label = derived()->text_writer.label_create();
+    tpde::Label block2_label = derived()->text_writer.label_create();
+    tpde::Label block3_label = derived()->text_writer.label_create();
+    tpde::Label block4_label = derived()->text_writer.label_create();
+    tpde::Label block5_label = derived()->text_writer.label_create();
+    tpde::Label block6_label = derived()->text_writer.label_create();
+    tpde::Label block7_label = derived()->text_writer.label_create();
+    tpde::Label block8_label = derived()->text_writer.label_create();
+    tpde::Label block9_label = derived()->text_writer.label_create();
+    tpde::Label block10_label = derived()->text_writer.label_create();
+    tpde::Label block11_label = derived()->text_writer.label_create();
+    tpde::Label block12_label = derived()->text_writer.label_create();
+    tpde::Label block13_label = derived()->text_writer.label_create();
+    tpde::Label block17_label = derived()->text_writer.label_create();
+    tpde::Label block18_label = derived()->text_writer.label_create();
+    tpde::Label block19_label = derived()->text_writer.label_create();
+    tpde::Label block20_label = derived()->text_writer.label_create();
+    tpde::Label block15_label = derived()->text_writer.label_create();
+
+    ValuePart &scratch_ax = result_0;
+    ScratchReg scratch_di{derived()};
+    ScratchReg scratch_dx{derived()};
+    ScratchReg scratch_si{derived()};
+    ScratchReg scratch_cx{derived()};
+    ScratchReg scratch_r8{derived()};
+    ScratchReg scratch_bx{derived()};
+  derived()->set_preserve_flags(true);
+
+
+    // $eax = MOVZX32rm8 renamable $rdi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.4, align 8, !tbaa !4)
+    do {
+    {
+    auto cond0 = encodeable_with(param_0, FE_MEM(FE_NOREG, 0, FE_NOREG, 8), false);
+    if (cond0) {
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOVZXr32m8, scratch_ax.cur_reg(), (*cond0));
+        break;
+    }
+    }
+    {
+    if (1) {
+        AsmReg op1 = derived()->gval_as_reg(param_0);
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOVZXr32m8, scratch_ax.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 8));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP8ri renamable $al, 10, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_ax.cur_reg();
+    ASMD(CMP8ri, op0, 0xa);
+    }
+    }
+
+
+    // JCC_1 %bb.2, 5, implicit killed $eflags
+  // allocate registers used later on in the function
+  scratch_ax.cur_reg_or_alloc(derived());
+  scratch_cx.alloc(RegBank(0));
+  try_salvage_or_materialize(param_2, scratch_dx, 0, 8);
+  scratch_bx.alloc(RegBank(0));
+  try_salvage_or_materialize(param_1, scratch_si, 0, 8);
+  try_salvage_or_materialize(param_0, scratch_di, 0, 8);
+  scratch_r8.alloc(RegBank(0));
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block2_label);
+
+  // Start of block 1
+  derived()->label_place(block1_label);
+
+
+    // renamable $rdi = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def di has not been allocated yet
+        scratch_di.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_di.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // $eax = MOVZX32rm8 renamable $rdi, 1, $noreg, 16, $noreg :: (load (s8) from %ir.10, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOVZXr32m8, scratch_ax.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdi = nuw ADD64ri32 killed renamable $rdi(tied-def 0), 8, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(ADD64ri, scratch_di.cur_reg(), 0x8);
+    }
+    }
+  // Start of block 2
+  derived()->label_place(block2_label);
+
+
+    // CMP8ri killed renamable $al, 7, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_ax.cur_reg();
+    ASMD(CMP8ri, op0, 0x7);
+    }
+    }
+
+
+    // JCC_1 %bb.15, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block15_label);
+
+  // Start of block 3
+  derived()->label_place(block3_label);
+
+
+    // renamable $rcx = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.14, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // $eax = MOV32ri 1, implicit-def $rax
+    {
+    if (1) {
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV32ri, scratch_ax.cur_reg(), 0x1);
+    }
+    }
+
+
+    // TEST8mi renamable $rcx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.18, align 8)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(TEST8mi, FE_MEM(op0, 0, FE_NOREG, 8), 0x4);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.20, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block20_label);
+
+  // Start of block 4
+  derived()->label_place(block4_label);
+
+
+    // renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.23, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        // def di has not been allocated yet
+        scratch_di.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_di.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $ecx = MOV32rm killed renamable $rcx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.26, !tbaa !24)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 12));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $ecx = OR32rr killed renamable $ecx(tied-def 0), renamable $edx, implicit-def dead $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_dx.cur_reg();
+    ASMD(OR32rr, scratch_cx.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rcx = MOVSX64rr32 killed renamable $ecx
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOVSXr64r32, scratch_cx.cur_reg(), op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $ecx = MOV32rm renamable $rdi, 4, killed renamable $rcx, 0, $noreg :: (load (s32) from %ir.29, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        AsmReg op3 = scratch_cx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_cx.cur_reg(), FE_MEM(op1, 4, op3, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JMP_1 %bb.6
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jmp, block6_label);
+
+  // Start of block 5
+  derived()->label_place(block5_label);
+
+
+    // renamable $ecx = MOV32rm killed renamable $rcx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.73, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 12));
+        break;
+    }
+    }
+    } while (false);
+  // Start of block 6
+  derived()->label_place(block6_label);
+
+
+    // CMP32ri renamable $ecx, -1, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(CMP32ri, op0, -0x1);
+    }
+    }
+
+
+    // JCC_1 %bb.20, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block20_label);
+
+  // Start of block 7
+  derived()->label_place(block7_label);
+
+
+    // renamable $r8d = MOV32rr killed renamable $ecx, implicit-def $r8
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        // def r8 has not been allocated yet
+        scratch_r8.alloc(RegBank(0));
+    ASMD(MOV32rr, scratch_r8.cur_reg(), op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $r8 = nuw nsw SHL64ri killed renamable $r8(tied-def 0), 5, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(SHL64ri, scratch_r8.cur_reg(), 0x5);
+    }
+    }
+
+
+    // renamable $rcx = LEA64r renamable $rdi, 1, renamable $r8, 0, $noreg
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        AsmReg op3 = scratch_r8.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(LEA64rm, scratch_cx.cur_reg(), FE_MEM(op1, 1, op3, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.36, !tbaa !29)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        AsmReg op3 = scratch_r8.cur_reg();
+        // def r8 has not been allocated yet
+        scratch_r8.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_r8.cur_reg(), FE_MEM(op1, 1, op3, 24));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP64rr renamable $r8, renamable $rsi, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_r8.cur_reg();
+        AsmReg op1 = scratch_si.cur_reg();
+    ASMD(CMP64rr, op0, op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.19, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block19_label);
+
+  // Start of block 8
+  derived()->label_place(block8_label);
+
+
+    // TEST64rr renamable $r8, renamable $r8, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_r8.cur_reg();
+    ASMD(TEST64rr, op0, op0);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.5, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block5_label);
+
+  // Start of block 9
+  derived()->label_place(block9_label);
+
+
+    // CMP64mr renamable $rcx, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.40, !tbaa !25)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+        AsmReg op5 = scratch_dx.cur_reg();
+    ASMD(CMP64mr, FE_MEM(op0, 0, FE_NOREG, 16), op5);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.5, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block5_label);
+
+  // Start of block 10
+  derived()->label_place(block10_label);
+
+
+    // renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.46, !tbaa !34)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_r8.cur_reg();
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV64rm, scratch_ax.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdx = MOV64rm renamable $rsi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.48, !tbaa !34)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_si.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_dx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP64rr renamable $rax, renamable $rdx, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_ax.cur_reg();
+        AsmReg op1 = scratch_dx.cur_reg();
+    ASMD(CMP64rr, op0, op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $bl = SETCCr 5, implicit killed $eflags
+    {
+    if (1) {
+        // def bx has not been allocated yet
+        scratch_bx.alloc(RegBank(0));
+    ASMD(SETNZ8r, scratch_bx.cur_reg());
+    }
+    }
+
+
+    // CMP64ri32 killed renamable $rdx, 17, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP64ri, op0, 0x11);
+    }
+    }
+
+
+    // renamable $dl = SETCCr 3, implicit killed $eflags
+    {
+    if (1) {
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(SETNC8r, scratch_dx.cur_reg());
+    }
+    }
+
+
+    // dead renamable $dl = OR8rr killed renamable $dl(tied-def 0), killed renamable $bl, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_bx.cur_reg();
+    ASMD(OR8rr, scratch_dx.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.15, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block15_label);
+
+  // Start of block 11
+  derived()->label_place(block11_label);
+
+
+    // renamable $rdx = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.54, !tbaa !35)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_r8.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_dx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 24));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdi = MOV64rm renamable $rsi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.55, !tbaa !35)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_si.cur_reg();
+        // def di has not been allocated yet
+        scratch_di.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_di.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 24));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP64ri32 renamable $rax, 7, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_ax.cur_reg();
+    ASMD(CMP64ri, op0, 0x7);
+    }
+    }
+
+
+    // JCC_1 %bb.17, 7, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::ja, block17_label);
+
+  // Start of block 12
+  derived()->label_place(block12_label);
+
+
+    // $rsi = MOV64rr $rdi
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def si has not been allocated yet
+        scratch_si.alloc(RegBank(0));
+    ASMD(MOV64rr, scratch_si.cur_reg(), op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // dead renamable $rsi = XOR64rr killed renamable $rsi(tied-def 0), renamable $rdx, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_dx.cur_reg();
+    ASMD(XOR64rr, scratch_si.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.19, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block19_label);
+
+  // Start of block 13
+  derived()->label_place(block13_label);
+
+
+    // renamable $rdi = XOR64rr killed renamable $rdi(tied-def 0), killed renamable $rdx, implicit-def dead $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_dx.cur_reg();
+    ASMD(XOR64rr, scratch_di.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdx = BSF64rr undef renamable $rdx(tied-def 0), killed renamable $rdi, implicit-def dead $eflags
+    do {
+    {
+    if (1) {
+        // undef tied
+        AsmReg op2 = scratch_di.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(BSF64rr, scratch_dx.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rax = nuw nsw SHL64ri killed renamable $rax(tied-def 0), 3, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(SHL64ri, scratch_ax.cur_reg(), 0x3);
+    }
+    }
+
+
+    // CMP64rr killed renamable $rdx, killed renamable $rax, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+        AsmReg op1 = scratch_ax.cur_reg();
+    ASMD(CMP64rr, op0, op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.15, 2, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jb, block15_label);
+
+
+
+    // JMP_1 %bb.19
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jmp, block19_label);
+
+  // Start of block 17
+  derived()->label_place(block17_label);
+
+
+    // CMP64rr killed renamable $rdx, killed renamable $rdi, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+        AsmReg op1 = scratch_di.cur_reg();
+    ASMD(CMP64rr, op0, op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.15, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block15_label);
+
+  // Start of block 18
+  derived()->label_place(block18_label);
+
+
+    // renamable $rdx = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr3, !tbaa !35)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_r8.cur_reg();
+        AsmReg op3 = scratch_ax.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_dx.cur_reg(), FE_MEM(op1, 1, op3, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP64rm killed renamable $rdx, killed renamable $rsi, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr5, !tbaa !35)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+        AsmReg op1 = scratch_si.cur_reg();
+        AsmReg op3 = scratch_ax.cur_reg();
+    ASMD(CMP64rm, op0, FE_MEM(op1, 1, op3, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.15, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block15_label);
+
+  // Start of block 19
+  derived()->label_place(block19_label);
+
+
+    // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    do {
+    {
+    if (1) {
+        // undef tied
+        // undef allocate scratch
+        AsmReg inst57_op2 = scratch_ax.cur_reg_or_alloc(derived());
+
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst57_op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP8mi renamable $rcx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.77, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(CMP8mi, FE_MEM(op0, 0, FE_NOREG, 8), 0xc);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rcx, 5, implicit killed $eflags
+    {
+    if (1) {
+        AsmReg op2 = scratch_cx.cur_reg();
+    ASMD(CMOVNZ64rr, scratch_ax.cur_reg(), op2);
+    }
+    }
+  // Start of block 20
+  derived()->label_place(block20_label);
+
+
+    // RET64 killed $rax
+  derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
+  // Start of block 15
+  derived()->label_place(block15_label);
+
+
+    // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    do {
+    {
+    if (1) {
+        // undef tied
+        // undef allocate scratch
+        AsmReg inst61_op2 = scratch_ax.cur_reg_or_alloc(derived());
+
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst61_op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // RET64 killed $rax
+  derived()->label_place(ret_converge_label);
+  if (result_0.has_assignment())
+    result_0.unlock(derived());
+  derived()->set_preserve_flags(false);
+  return true;
+
+}
+
+template <typename Adaptor,
+          typename Derived,
+          template <typename, typename, typename>
+          class BaseTy,
+          typename Config>
+bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_find_idx(GenericValuePart &&param_0, GenericValuePart &&param_1, ValuePart &result_0) {
+    // # Machine code for function zend_native_array_find_idx: NoPHIs, TracksLiveness, NoVRegs, TiedOpsRewritten, TracksDebugUserValues
+    // Function Live Ins: $rdi, $rsi
+    //
+    // bb.0 (%ir-block.2):
+    //   successors: %bb.1(0x40000000), %bb.2(0x40000000); %bb.1(50.00%), %bb.2(50.00%)
+    //   liveins: $rdi, $rsi
+    //   $eax = MOVZX32rm8 renamable $rdi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.3, align 8, !tbaa !4)
+    //   CMP8ri renamable $al, 10, implicit-def $eflags
+    //   JCC_1 %bb.2, 5, implicit killed $eflags
+    //
+    // bb.1 (%ir-block.6):
+    // ; predecessors: %bb.0
+    //   successors: %bb.2(0x80000000); %bb.2(100.00%)
+    //   liveins: $rdi, $rsi
+    //   renamable $rdi = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
+    //   $eax = MOVZX32rm8 renamable $rdi, 1, $noreg, 16, $noreg :: (load (s8) from %ir.9, align 8, !tbaa !4)
+    //   renamable $rdi = nuw ADD64ri32 killed renamable $rdi(tied-def 0), 8, implicit-def dead $eflags
+    //
+    // bb.2 (%ir-block.11):
+    // ; predecessors: %bb.1, %bb.0
+    //   successors: %bb.3(0x40000000), %bb.10(0x40000000); %bb.3(50.00%), %bb.10(50.00%)
+    //   liveins: $al, $rdi, $rsi
+    //   CMP8ri killed renamable $al, 7, implicit-def $eflags
+    //   JCC_1 %bb.10, 5, implicit killed $eflags
+    //
+    // bb.3 (%ir-block.15):
+    // ; predecessors: %bb.2
+    //   successors: %bb.4(0x40000000), %bb.11(0x40000000); %bb.4(50.00%), %bb.11(50.00%)
+    //   liveins: $rdi, $rsi
+    //   renamable $rdx = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.13, !tbaa !4)
+    //   TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.17, align 8)
+    //   JCC_1 %bb.11, 5, implicit killed $eflags
+    //
+    // bb.4 (%ir-block.37):
+    // ; predecessors: %bb.3
+    //   successors: %bb.6(0x80000000); %bb.6(100.00%)
+    //   liveins: $rdx, $rsi
+    //   renamable $rcx = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.38, !tbaa !4)
+    //   renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.41, !tbaa !24)
+    //   renamable $eax = OR32rr killed renamable $eax(tied-def 0), renamable $esi, implicit-def dead $eflags
+    //   renamable $rax = MOVSX64rr32 killed renamable $eax
+    //   renamable $edx = MOV32rm renamable $rcx, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.44, !tbaa !4)
+    //   $eax = MOV32ri 1, implicit-def $rax
+    //   JMP_1 %bb.6
+    //
+    // bb.5 (%ir-block.64, align 16):
+    // ; predecessors: %bb.7, %bb.8
+    //   successors: %bb.6(0x80000000); %bb.6(100.00%)
+    //   liveins: $rax, $rcx, $rdx, $rsi
+    //   renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.65, !tbaa !4)
+    //
+    // bb.6 (%ir-block.37):
+    // ; predecessors: %bb.4, %bb.5
+    //   successors: %bb.14(0x0715ba19), %bb.7(0x78ea45e7); %bb.14(5.54%), %bb.7(94.46%)
+    //   liveins: $rax, $edx, $rcx, $rsi
+    //   CMP32ri renamable $edx, -1, implicit-def $eflags
+    //   JCC_1 %bb.14, 4, implicit killed $eflags
+    //
+    // bb.7 (%ir-block.47):
+    // ; predecessors: %bb.6
+    //   successors: %bb.8(0x40000000), %bb.5(0x40000000); %bb.8(50.00%), %bb.5(50.00%)
+    //   liveins: $edx, $rax, $rcx, $rsi
+    //   renamable $edi = MOV32rr killed renamable $edx, implicit-def $rdi
+    //   renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
+    //   renamable $rdx = LEA64r renamable $rcx, 1, renamable $rdi, 0, $noreg
+    //   CMP64mr renamable $rcx, 1, killed renamable $rdi, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.51, !tbaa !25)
+    //   JCC_1 %bb.5, 5, implicit killed $eflags
+    //
+    // bb.8 (%ir-block.54):
+    // ; predecessors: %bb.7
+    //   successors: %bb.9(0x04000000), %bb.5(0x7c000000); %bb.9(3.12%), %bb.5(96.88%)
+    //   liveins: $rax, $rcx, $rdx, $rsi
+    //   CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.55, !tbaa !29)
+    //   JCC_1 %bb.5, 5, implicit killed $eflags
+    //
+    // bb.9 (%ir-block.58):
+    // ; predecessors: %bb.8
+    //   successors: %bb.14(0x80000000); %bb.14(100.00%)
+    //   liveins: $rdx
+    //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    //   CMP8mi renamable $rdx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.59, align 8, !tbaa !4)
+    //   renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rdx, 5, implicit killed $eflags
+    //
+    // bb.14 (%ir-block.68):
+    // ; predecessors: %bb.12, %bb.9, %bb.11, %bb.6
+    //   liveins: $rax
+    //   RET64 killed $rax
+    //
+    // bb.10:
+    // ; predecessors: %bb.2
+    //
+    //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    //   RET64 killed $rax
+    //
+    // bb.11 (%ir-block.21):
+    // ; predecessors: %bb.3
+    //   successors: %bb.12(0x40000000), %bb.14(0x40000000); %bb.12(50.00%), %bb.14(50.00%)
+    //   liveins: $rdx, $rsi
+    //   renamable $ecx = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rcx :: (load (s32) from %ir.22, align 8, !tbaa !21)
+    //   $eax = MOV32ri 1, implicit-def $rax
+    //   CMP64rr renamable $rsi, killed renamable $rcx, implicit-def $eflags
+    //   JCC_1 %bb.14, 3, implicit killed $eflags
+    //
+    // bb.12 (%ir-block.26):
+    // ; predecessors: %bb.11
+    //   successors: %bb.14(0x30000000), %bb.13(0x50000000); %bb.14(37.50%), %bb.13(62.50%)
+    //   liveins: $rax, $rdx, $rsi
+    //   renamable $rcx = MOV64rm killed renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.27, !tbaa !4)
+    //   renamable $rsi = nuw nsw SHL64ri killed renamable $rsi(tied-def 0), 4, implicit-def dead $eflags
+    //   $edx = MOVZX32rm8 renamable $rcx, 1, renamable $rsi, 8, $noreg :: (load (s8) from %ir.30, align 8, !tbaa !4)
+    //   TEST8rr renamable $dl, renamable $dl, implicit-def $eflags
+    //   JCC_1 %bb.14, 4, implicit killed $eflags
+    //
+    // bb.13 (%ir-block.33):
+    // ; predecessors: %bb.12
+    //   liveins: $dl, $rcx, $rsi
+    //   renamable $rcx = nuw ADD64rr killed renamable $rcx(tied-def 0), killed renamable $rsi, implicit-def dead $eflags
+    //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    //   CMP8ri killed renamable $dl, 12, implicit-def $eflags
+    //   renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rcx, 5, implicit killed $eflags
+    //   RET64 killed $rax
+    //
+    // # End machine code for function zend_native_array_find_idx.
+    //
+
+    // Mapping di to param_0
+    // Mapping si to param_1
+
+    // Creating label for convergence point at the end of the function
+    tpde::Label ret_converge_label = derived()->text_writer.label_create();
+    // Creating labels for blocks that are jump targets
+    tpde::Label block1_label = derived()->text_writer.label_create();
+    tpde::Label block2_label = derived()->text_writer.label_create();
+    tpde::Label block3_label = derived()->text_writer.label_create();
+    tpde::Label block4_label = derived()->text_writer.label_create();
+    tpde::Label block5_label = derived()->text_writer.label_create();
+    tpde::Label block6_label = derived()->text_writer.label_create();
+    tpde::Label block7_label = derived()->text_writer.label_create();
+    tpde::Label block8_label = derived()->text_writer.label_create();
+    tpde::Label block9_label = derived()->text_writer.label_create();
+    tpde::Label block14_label = derived()->text_writer.label_create();
+    tpde::Label block10_label = derived()->text_writer.label_create();
+    tpde::Label block11_label = derived()->text_writer.label_create();
+    tpde::Label block12_label = derived()->text_writer.label_create();
+    tpde::Label block13_label = derived()->text_writer.label_create();
+
+    ValuePart &scratch_ax = result_0;
+    ScratchReg scratch_di{derived()};
+    ScratchReg scratch_dx{derived()};
+    ScratchReg scratch_si{derived()};
+    ScratchReg scratch_cx{derived()};
+  derived()->set_preserve_flags(true);
+
+
+    // $eax = MOVZX32rm8 renamable $rdi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.3, align 8, !tbaa !4)
+    do {
+    {
+    auto cond0 = encodeable_with(param_0, FE_MEM(FE_NOREG, 0, FE_NOREG, 8), false);
+    if (cond0) {
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOVZXr32m8, scratch_ax.cur_reg(), (*cond0));
+        break;
+    }
+    }
+    {
+    if (1) {
+        AsmReg op1 = derived()->gval_as_reg(param_0);
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOVZXr32m8, scratch_ax.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 8));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP8ri renamable $al, 10, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_ax.cur_reg();
+    ASMD(CMP8ri, op0, 0xa);
+    }
+    }
+
+
+    // JCC_1 %bb.2, 5, implicit killed $eflags
+  // allocate registers used later on in the function
+  scratch_ax.cur_reg_or_alloc(derived());
+  scratch_cx.alloc(RegBank(0));
+  scratch_dx.alloc(RegBank(0));
+  try_salvage_or_materialize(param_1, scratch_si, 0, 8);
+  try_salvage_or_materialize(param_0, scratch_di, 0, 8);
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block2_label);
+
+  // Start of block 1
+  derived()->label_place(block1_label);
+
+
+    // renamable $rdi = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def di has not been allocated yet
+        scratch_di.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_di.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // $eax = MOVZX32rm8 renamable $rdi, 1, $noreg, 16, $noreg :: (load (s8) from %ir.9, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOVZXr32m8, scratch_ax.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdi = nuw ADD64ri32 killed renamable $rdi(tied-def 0), 8, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(ADD64ri, scratch_di.cur_reg(), 0x8);
+    }
+    }
+  // Start of block 2
+  derived()->label_place(block2_label);
+
+
+    // CMP8ri killed renamable $al, 7, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_ax.cur_reg();
+    ASMD(CMP8ri, op0, 0x7);
+    }
+    }
+
+
+    // JCC_1 %bb.10, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block10_label);
+
+  // Start of block 3
+  derived()->label_place(block3_label);
+
+
+    // renamable $rdx = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.13, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_dx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.17, align 8)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(TEST8mi, FE_MEM(op0, 0, FE_NOREG, 8), 0x4);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.11, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block11_label);
+
+  // Start of block 4
+  derived()->label_place(block4_label);
+
+
+    // renamable $rcx = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.38, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.41, !tbaa !24)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV32rm, scratch_ax.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 12));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $eax = OR32rr killed renamable $eax(tied-def 0), renamable $esi, implicit-def dead $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_si.cur_reg();
+    ASMD(OR32rr, scratch_ax.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rax = MOVSX64rr32 killed renamable $eax
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_ax.cur_reg();
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOVSXr64r32, scratch_ax.cur_reg(), op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $edx = MOV32rm renamable $rcx, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.44, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        AsmReg op3 = scratch_ax.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_dx.cur_reg(), FE_MEM(op1, 4, op3, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // $eax = MOV32ri 1, implicit-def $rax
+    {
+    if (1) {
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV32ri, scratch_ax.cur_reg(), 0x1);
+    }
+    }
+
+
+    // JMP_1 %bb.6
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jmp, block6_label);
+
+  // Start of block 5
+  derived()->label_place(block5_label);
+
+
+    // renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.65, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_dx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 12));
+        break;
+    }
+    }
+    } while (false);
+  // Start of block 6
+  derived()->label_place(block6_label);
+
+
+    // CMP32ri renamable $edx, -1, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP32ri, op0, -0x1);
+    }
+    }
+
+
+    // JCC_1 %bb.14, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block14_label);
+
+  // Start of block 7
+  derived()->label_place(block7_label);
+
+
+    // renamable $edi = MOV32rr killed renamable $edx, implicit-def $rdi
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def di has not been allocated yet
+        scratch_di.alloc(RegBank(0));
+    ASMD(MOV32rr, scratch_di.cur_reg(), op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(SHL64ri, scratch_di.cur_reg(), 0x5);
+    }
+    }
+
+
+    // renamable $rdx = LEA64r renamable $rcx, 1, renamable $rdi, 0, $noreg
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        AsmReg op3 = scratch_di.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(LEA64rm, scratch_dx.cur_reg(), FE_MEM(op1, 1, op3, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP64mr renamable $rcx, 1, killed renamable $rdi, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.51, !tbaa !25)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+        AsmReg op2 = scratch_di.cur_reg();
+        AsmReg op5 = scratch_si.cur_reg();
+    ASMD(CMP64mr, FE_MEM(op0, 1, op2, 16), op5);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.5, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block5_label);
+
+  // Start of block 8
+  derived()->label_place(block8_label);
+
+
+    // CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.55, !tbaa !29)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP64mi, FE_MEM(op0, 0, FE_NOREG, 24), 0x0);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.5, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block5_label);
+
+  // Start of block 9
+  derived()->label_place(block9_label);
+
+
+    // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    do {
+    {
+    if (1) {
+        // undef tied
+        // undef allocate scratch
+        AsmReg inst28_op2 = scratch_ax.cur_reg_or_alloc(derived());
+
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst28_op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP8mi renamable $rdx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.59, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP8mi, FE_MEM(op0, 0, FE_NOREG, 8), 0xc);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rdx, 5, implicit killed $eflags
+    {
+    if (1) {
+        AsmReg op2 = scratch_dx.cur_reg();
+    ASMD(CMOVNZ64rr, scratch_ax.cur_reg(), op2);
+    }
+    }
+  // Start of block 14
+  derived()->label_place(block14_label);
+
+
+    // RET64 killed $rax
+  derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
+  // Start of block 10
+  derived()->label_place(block10_label);
+
+
+    // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    do {
+    {
+    if (1) {
+        // undef tied
+        // undef allocate scratch
+        AsmReg inst32_op2 = scratch_ax.cur_reg_or_alloc(derived());
+
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst32_op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // RET64 killed $rax
+  derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
+  // Start of block 11
+  derived()->label_place(block11_label);
+
+
+    // renamable $ecx = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rcx :: (load (s32) from %ir.22, align 8, !tbaa !21)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 24));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // $eax = MOV32ri 1, implicit-def $rax
+    {
+    if (1) {
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV32ri, scratch_ax.cur_reg(), 0x1);
+    }
+    }
+
+
+    // CMP64rr renamable $rsi, killed renamable $rcx, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_si.cur_reg();
+        AsmReg op1 = scratch_cx.cur_reg();
+    ASMD(CMP64rr, op0, op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.14, 3, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jae, block14_label);
+
+  // Start of block 12
+  derived()->label_place(block12_label);
+
+
+    // renamable $rcx = MOV64rm killed renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.27, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rsi = nuw nsw SHL64ri killed renamable $rsi(tied-def 0), 4, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(SHL64ri, scratch_si.cur_reg(), 0x4);
+    }
+    }
+
+
+    // $edx = MOVZX32rm8 renamable $rcx, 1, renamable $rsi, 8, $noreg :: (load (s8) from %ir.30, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        AsmReg op3 = scratch_si.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOVZXr32m8, scratch_dx.cur_reg(), FE_MEM(op1, 1, op3, 8));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // TEST8rr renamable $dl, renamable $dl, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(TEST8rr, op0, op0);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.14, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block14_label);
+
+  // Start of block 13
+  derived()->label_place(block13_label);
+
+
+    // renamable $rcx = nuw ADD64rr killed renamable $rcx(tied-def 0), killed renamable $rsi, implicit-def dead $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_si.cur_reg();
+    ASMD(ADD64rr, scratch_cx.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    do {
+    {
+    if (1) {
+        // undef tied
+        // undef allocate scratch
+        AsmReg inst44_op2 = scratch_ax.cur_reg_or_alloc(derived());
+
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst44_op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP8ri killed renamable $dl, 12, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP8ri, op0, 0xc);
+    }
+    }
+
+
+    // renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rcx, 5, implicit killed $eflags
+    {
+    if (1) {
+        AsmReg op2 = scratch_cx.cur_reg();
+    ASMD(CMOVNZ64rr, scratch_ax.cur_reg(), op2);
+    }
+    }
+
+
+    // RET64 killed $rax
+  derived()->label_place(ret_converge_label);
+  if (result_0.has_assignment())
+    result_0.unlock(derived());
+  derived()->set_preserve_flags(false);
+  return true;
+
+}
+
+template <typename Adaptor,
+          typename Derived,
+          template <typename, typename, typename>
+          class BaseTy,
+          typename Config>
+bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_test_str(GenericValuePart &&param_0, GenericValuePart &&param_1, GenericValuePart &&param_2, ValuePart &result_0) {
+    // # Machine code for function zend_native_array_test_str: NoPHIs, TracksLiveness, NoVRegs, TiedOpsRewritten, TracksDebugUserValues
+    // Function Live Ins: $rdi, $rsi, $rdx
+    //
+    // bb.0 (%ir-block.3):
+    //   successors: %bb.1(0x40000000), %bb.2(0x40000000); %bb.1(50.00%), %bb.2(50.00%)
+    //   liveins: $rdi, $rdx, $rsi
+    //   $ecx = MOVZX32rm8 renamable $rdi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.4, align 8, !tbaa !4)
+    //   CMP8ri renamable $cl, 10, implicit-def $eflags
+    //   JCC_1 %bb.2, 5, implicit killed $eflags
+    //
+    // bb.1 (%ir-block.7):
+    // ; predecessors: %bb.0
+    //   successors: %bb.2(0x80000000); %bb.2(100.00%)
+    //   liveins: $rdi, $rdx, $rsi
+    //   renamable $rdi = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
+    //   $ecx = MOVZX32rm8 renamable $rdi, 1, $noreg, 16, $noreg :: (load (s8) from %ir.10, align 8, !tbaa !4)
+    //   renamable $rdi = nuw ADD64ri32 killed renamable $rdi(tied-def 0), 8, implicit-def dead $eflags
+    //
+    // bb.2 (%ir-block.12):
+    // ; predecessors: %bb.1, %bb.0
+    //   successors: %bb.19(0x40000000), %bb.3(0x40000000); %bb.19(50.00%), %bb.3(50.00%)
+    //   liveins: $cl, $rdi, $rdx, $rsi
+    //   $eax = MOV32ri 1, implicit-def $rax
+    //   CMP8ri renamable $cl, 2, implicit-def $eflags
+    //   JCC_1 %bb.3, 3, implicit killed $eflags
+    //
+    // bb.19 (%ir-block.84):
+    // ; predecessors: %bb.2, %bb.4, %bb.7
+    //   liveins: $rax
+    //   RET64 killed $rax
+    //
+    // bb.3 (%ir-block.16):
+    // ; predecessors: %bb.2
+    //   successors: %bb.4(0x40000000), %bb.15(0x40000000); %bb.4(50.00%), %bb.15(50.00%)
+    //   liveins: $cl, $rax, $rdi, $rdx, $rsi
+    //   CMP8ri killed renamable $cl, 7, implicit-def $eflags
+    //   JCC_1 %bb.15, 5, implicit killed $eflags
+    //
+    // bb.4 (%ir-block.18):
+    // ; predecessors: %bb.3
+    //   successors: %bb.5(0x40000000), %bb.19(0x40000000); %bb.5(50.00%), %bb.19(50.00%)
+    //   liveins: $rax, $rdi, $rdx, $rsi
+    //   renamable $rcx = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.14, !tbaa !4)
+    //   TEST8mi renamable $rcx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.20, align 8)
+    //   JCC_1 %bb.19, 5, implicit killed $eflags
+    //
+    // bb.5 (%ir-block.24):
+    // ; predecessors: %bb.4
+    //   successors: %bb.7(0x80000000); %bb.7(100.00%)
+    //   liveins: $rax, $rcx, $rdx, $rsi
+    //   renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.25, !tbaa !4)
+    //   renamable $ecx = MOV32rm killed renamable $rcx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.28, !tbaa !24)
+    //   renamable $ecx = OR32rr killed renamable $ecx(tied-def 0), renamable $edx, implicit-def dead $eflags
+    //   renamable $rcx = MOVSX64rr32 killed renamable $ecx
+    //   renamable $ecx = MOV32rm renamable $rdi, 4, killed renamable $rcx, 0, $noreg :: (load (s32) from %ir.31, !tbaa !4)
+    //   JMP_1 %bb.7
+    //
+    // bb.6 (%ir-block.74, align 16):
+    // ; predecessors: %bb.9, %bb.10
+    //   successors: %bb.7(0x80000000); %bb.7(100.00%)
+    //   liveins: $rax, $rcx, $rdi, $rdx, $rsi
+    //   renamable $ecx = MOV32rm killed renamable $rcx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.75, !tbaa !4)
+    //
+    // bb.7 (%ir-block.24):
+    // ; predecessors: %bb.5, %bb.6
+    //   successors: %bb.19(0x09e6b247), %bb.8(0x76194db9); %bb.19(7.74%), %bb.8(92.26%)
+    //   liveins: $rax, $ecx, $rdi, $rdx, $rsi
+    //   CMP32ri renamable $ecx, -1, implicit-def $eflags
+    //   JCC_1 %bb.19, 4, implicit killed $eflags
+    //
+    // bb.8 (%ir-block.34):
+    // ; predecessors: %bb.7
+    //   successors: %bb.18(0x04000000), %bb.9(0x7c000000); %bb.18(3.12%), %bb.9(96.88%)
+    //   liveins: $ecx, $rax, $rdi, $rdx, $rsi
+    //   renamable $r8d = MOV32rr killed renamable $ecx, implicit-def $r8
+    //   renamable $r8 = nuw nsw SHL64ri killed renamable $r8(tied-def 0), 5, implicit-def dead $eflags
+    //   renamable $rcx = LEA64r renamable $rdi, 1, renamable $r8, 0, $noreg
+    //   renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.38, !tbaa !29)
+    //   CMP64rr renamable $r8, renamable $rsi, implicit-def $eflags
+    //   JCC_1 %bb.18, 4, implicit killed $eflags
+    //
+    // bb.9 (%ir-block.41):
+    // ; predecessors: %bb.8
+    //   successors: %bb.6(0x3e000000), %bb.10(0x42000000); %bb.6(48.44%), %bb.10(51.56%)
+    //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
+    //   TEST64rr renamable $r8, renamable $r8, implicit-def $eflags
+    //   JCC_1 %bb.6, 4, implicit killed $eflags
+    //
+    // bb.10 (%ir-block.41):
+    // ; predecessors: %bb.9
+    //   successors: %bb.6(0x783e0f84), %bb.11(0x07c1f07c); %bb.6(93.94%), %bb.11(6.06%)
+    //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
+    //   CMP64mr renamable $rcx, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.42, !tbaa !25)
+    //   JCC_1 %bb.6, 5, implicit killed $eflags
+    //
+    // bb.11 (%ir-block.47):
+    // ; predecessors: %bb.10
+    //   successors: %bb.12(0x40000000), %bb.15(0x40000000); %bb.12(50.00%), %bb.15(50.00%)
+    //   liveins: $rcx, $rsi, $r8
+    //   renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.48, !tbaa !34)
+    //   renamable $rdx = MOV64rm renamable $rsi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.50, !tbaa !34)
+    //   CMP64rr renamable $rax, renamable $rdx, implicit-def $eflags
+    //   renamable $bl = SETCCr 5, implicit killed $eflags
+    //   CMP64ri32 killed renamable $rdx, 17, implicit-def $eflags
+    //   renamable $dl = SETCCr 3, implicit killed $eflags
+    //   dead renamable $dl = OR8rr killed renamable $dl(tied-def 0), killed renamable $bl, implicit-def $eflags
+    //   JCC_1 %bb.15, 5, implicit killed $eflags
+    //
+    // bb.12 (%ir-block.55):
+    // ; predecessors: %bb.11
+    //   successors: %bb.13(0x40000000), %bb.16(0x40000000); %bb.13(50.00%), %bb.16(50.00%)
+    //   liveins: $rax, $rcx, $rsi, $r8
+    //   renamable $rdx = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.56, !tbaa !35)
+    //   renamable $rdi = MOV64rm renamable $rsi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.57, !tbaa !35)
+    //   CMP64ri32 renamable $rax, 7, implicit-def $eflags
+    //   JCC_1 %bb.16, 7, implicit killed $eflags
+    //
+    // bb.13 (%ir-block.61):
+    // ; predecessors: %bb.12
+    //   successors: %bb.18(0x20000000), %bb.14(0x60000000); %bb.18(25.00%), %bb.14(75.00%)
+    //   liveins: $rax, $rcx, $rdi, $rdx
+    //   $rsi = MOV64rr $rdi
+    //   dead renamable $rsi = XOR64rr killed renamable $rsi(tied-def 0), renamable $rdx, implicit-def $eflags
+    //   JCC_1 %bb.18, 4, implicit killed $eflags
+    //
+    // bb.14 (%ir-block.61):
+    // ; predecessors: %bb.13
+    //   successors: %bb.18(0x2aaaaaab), %bb.15(0x55555555); %bb.18(33.33%), %bb.15(66.67%)
+    //   liveins: $rax, $rcx, $rdi, $rdx
+    //   renamable $rdi = XOR64rr killed renamable $rdi(tied-def 0), killed renamable $rdx, implicit-def dead $eflags
+    //   renamable $rdx = BSF64rr undef renamable $rdx(tied-def 0), killed renamable $rdi, implicit-def dead $eflags
+    //   renamable $rax = nuw nsw SHL64ri killed renamable $rax(tied-def 0), 3, implicit-def dead $eflags
+    //   CMP64rr killed renamable $rdx, killed renamable $rax, implicit-def $eflags
+    //   JCC_1 %bb.15, 2, implicit killed $eflags
+    //   JMP_1 %bb.18
+    //
+    // bb.16 (%ir-block.68):
+    // ; predecessors: %bb.12
+    //   successors: %bb.17(0x40000000), %bb.15(0x40000000); %bb.17(50.00%), %bb.15(50.00%)
+    //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
+    //   CMP64rr killed renamable $rdx, killed renamable $rdi, implicit-def $eflags
+    //   JCC_1 %bb.15, 5, implicit killed $eflags
+    //
+    // bb.17 (%ir-block.70):
+    // ; predecessors: %bb.16
+    //   successors: %bb.18(0x40000000), %bb.15(0x40000000); %bb.18(50.00%), %bb.15(50.00%)
+    //   liveins: $rax, $rcx, $rsi, $r8
+    //   renamable $rdx = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr3, !tbaa !35)
+    //   CMP64rm killed renamable $rdx, killed renamable $rsi, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr5, !tbaa !35)
+    //   JCC_1 %bb.15, 5, implicit killed $eflags
+    //
+    // bb.18 (%ir-block.78):
+    // ; predecessors: %bb.8, %bb.17, %bb.13, %bb.14
+    //   liveins: $rcx
+    //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    //   CMP8mi renamable $rcx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.79, align 8, !tbaa !4)
+    //   renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rcx, 5, implicit killed $eflags
+    //   RET64 killed $rax
+    //
+    // bb.15:
+    // ; predecessors: %bb.3, %bb.14, %bb.11, %bb.16, %bb.17
+    //
+    //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    //   RET64 killed $rax
+    //
+    // # End machine code for function zend_native_array_test_str.
+    //
+
+    // Mapping di to param_0
+    // Mapping si to param_1
+    // Mapping dx to param_2
+
+    // Creating label for convergence point at the end of the function
+    tpde::Label ret_converge_label = derived()->text_writer.label_create();
+    // Creating labels for blocks that are jump targets
+    tpde::Label block1_label = derived()->text_writer.label_create();
+    tpde::Label block2_label = derived()->text_writer.label_create();
+    tpde::Label block19_label = derived()->text_writer.label_create();
+    tpde::Label block3_label = derived()->text_writer.label_create();
+    tpde::Label block4_label = derived()->text_writer.label_create();
+    tpde::Label block5_label = derived()->text_writer.label_create();
+    tpde::Label block6_label = derived()->text_writer.label_create();
+    tpde::Label block7_label = derived()->text_writer.label_create();
+    tpde::Label block8_label = derived()->text_writer.label_create();
+    tpde::Label block9_label = derived()->text_writer.label_create();
+    tpde::Label block10_label = derived()->text_writer.label_create();
+    tpde::Label block11_label = derived()->text_writer.label_create();
+    tpde::Label block12_label = derived()->text_writer.label_create();
+    tpde::Label block13_label = derived()->text_writer.label_create();
+    tpde::Label block14_label = derived()->text_writer.label_create();
+    tpde::Label block16_label = derived()->text_writer.label_create();
+    tpde::Label block17_label = derived()->text_writer.label_create();
+    tpde::Label block18_label = derived()->text_writer.label_create();
+    tpde::Label block15_label = derived()->text_writer.label_create();
+
+    ValuePart &scratch_ax = result_0;
+    ScratchReg scratch_di{derived()};
+    ScratchReg scratch_dx{derived()};
+    ScratchReg scratch_si{derived()};
+    ScratchReg scratch_cx{derived()};
+    ScratchReg scratch_r8{derived()};
+    ScratchReg scratch_bx{derived()};
+  derived()->set_preserve_flags(true);
+
+
+    // $ecx = MOVZX32rm8 renamable $rdi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.4, align 8, !tbaa !4)
+    do {
+    {
+    auto cond0 = encodeable_with(param_0, FE_MEM(FE_NOREG, 0, FE_NOREG, 8), false);
+    if (cond0) {
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOVZXr32m8, scratch_cx.cur_reg(), (*cond0));
+        break;
+    }
+    }
+    {
+    if (1) {
+        AsmReg op1 = derived()->gval_as_reg(param_0);
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOVZXr32m8, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 8));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP8ri renamable $cl, 10, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(CMP8ri, op0, 0xa);
+    }
+    }
+
+
+    // JCC_1 %bb.2, 5, implicit killed $eflags
+  // allocate registers used later on in the function
+  scratch_ax.cur_reg_or_alloc(derived());
+  scratch_cx.alloc(RegBank(0));
+  try_salvage_or_materialize(param_2, scratch_dx, 0, 8);
+  scratch_bx.alloc(RegBank(0));
+  try_salvage_or_materialize(param_1, scratch_si, 0, 8);
+  try_salvage_or_materialize(param_0, scratch_di, 0, 8);
+  scratch_r8.alloc(RegBank(0));
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block2_label);
+
+  // Start of block 1
+  derived()->label_place(block1_label);
+
+
+    // renamable $rdi = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def di has not been allocated yet
+        scratch_di.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_di.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // $ecx = MOVZX32rm8 renamable $rdi, 1, $noreg, 16, $noreg :: (load (s8) from %ir.10, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOVZXr32m8, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdi = nuw ADD64ri32 killed renamable $rdi(tied-def 0), 8, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(ADD64ri, scratch_di.cur_reg(), 0x8);
+    }
+    }
+  // Start of block 2
+  derived()->label_place(block2_label);
+
+
+    // $eax = MOV32ri 1, implicit-def $rax
+    {
+    if (1) {
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV32ri, scratch_ax.cur_reg(), 0x1);
+    }
+    }
+
+
+    // CMP8ri renamable $cl, 2, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(CMP8ri, op0, 0x2);
+    }
+    }
+
+
+    // JCC_1 %bb.3, 3, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jae, block3_label);
+
+  // Start of block 19
+  derived()->label_place(block19_label);
+
+
+    // RET64 killed $rax
+  derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
+  // Start of block 3
+  derived()->label_place(block3_label);
+
+
+    // CMP8ri killed renamable $cl, 7, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(CMP8ri, op0, 0x7);
+    }
+    }
+
+
+    // JCC_1 %bb.15, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block15_label);
+
+  // Start of block 4
+  derived()->label_place(block4_label);
+
+
+    // renamable $rcx = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.14, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // TEST8mi renamable $rcx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.20, align 8)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(TEST8mi, FE_MEM(op0, 0, FE_NOREG, 8), 0x4);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.19, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block19_label);
+
+  // Start of block 5
+  derived()->label_place(block5_label);
+
+
+    // renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.25, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        // def di has not been allocated yet
+        scratch_di.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_di.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $ecx = MOV32rm killed renamable $rcx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.28, !tbaa !24)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 12));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $ecx = OR32rr killed renamable $ecx(tied-def 0), renamable $edx, implicit-def dead $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_dx.cur_reg();
+    ASMD(OR32rr, scratch_cx.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rcx = MOVSX64rr32 killed renamable $ecx
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOVSXr64r32, scratch_cx.cur_reg(), op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $ecx = MOV32rm renamable $rdi, 4, killed renamable $rcx, 0, $noreg :: (load (s32) from %ir.31, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        AsmReg op3 = scratch_cx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_cx.cur_reg(), FE_MEM(op1, 4, op3, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JMP_1 %bb.7
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jmp, block7_label);
+
+  // Start of block 6
+  derived()->label_place(block6_label);
+
+
+    // renamable $ecx = MOV32rm killed renamable $rcx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.75, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 12));
+        break;
+    }
+    }
+    } while (false);
+  // Start of block 7
+  derived()->label_place(block7_label);
+
+
+    // CMP32ri renamable $ecx, -1, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(CMP32ri, op0, -0x1);
+    }
+    }
+
+
+    // JCC_1 %bb.19, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block19_label);
+
+  // Start of block 8
+  derived()->label_place(block8_label);
+
+
+    // renamable $r8d = MOV32rr killed renamable $ecx, implicit-def $r8
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        // def r8 has not been allocated yet
+        scratch_r8.alloc(RegBank(0));
+    ASMD(MOV32rr, scratch_r8.cur_reg(), op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $r8 = nuw nsw SHL64ri killed renamable $r8(tied-def 0), 5, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(SHL64ri, scratch_r8.cur_reg(), 0x5);
+    }
+    }
+
+
+    // renamable $rcx = LEA64r renamable $rdi, 1, renamable $r8, 0, $noreg
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        AsmReg op3 = scratch_r8.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(LEA64rm, scratch_cx.cur_reg(), FE_MEM(op1, 1, op3, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.38, !tbaa !29)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        AsmReg op3 = scratch_r8.cur_reg();
+        // def r8 has not been allocated yet
+        scratch_r8.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_r8.cur_reg(), FE_MEM(op1, 1, op3, 24));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP64rr renamable $r8, renamable $rsi, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_r8.cur_reg();
+        AsmReg op1 = scratch_si.cur_reg();
+    ASMD(CMP64rr, op0, op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.18, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block18_label);
+
+  // Start of block 9
+  derived()->label_place(block9_label);
+
+
+    // TEST64rr renamable $r8, renamable $r8, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_r8.cur_reg();
+    ASMD(TEST64rr, op0, op0);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.6, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block6_label);
+
+  // Start of block 10
+  derived()->label_place(block10_label);
+
+
+    // CMP64mr renamable $rcx, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.42, !tbaa !25)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+        AsmReg op5 = scratch_dx.cur_reg();
+    ASMD(CMP64mr, FE_MEM(op0, 0, FE_NOREG, 16), op5);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.6, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block6_label);
+
+  // Start of block 11
+  derived()->label_place(block11_label);
+
+
+    // renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.48, !tbaa !34)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_r8.cur_reg();
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV64rm, scratch_ax.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdx = MOV64rm renamable $rsi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.50, !tbaa !34)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_si.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_dx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP64rr renamable $rax, renamable $rdx, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_ax.cur_reg();
+        AsmReg op1 = scratch_dx.cur_reg();
+    ASMD(CMP64rr, op0, op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $bl = SETCCr 5, implicit killed $eflags
+    {
+    if (1) {
+        // def bx has not been allocated yet
+        scratch_bx.alloc(RegBank(0));
+    ASMD(SETNZ8r, scratch_bx.cur_reg());
+    }
+    }
+
+
+    // CMP64ri32 killed renamable $rdx, 17, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP64ri, op0, 0x11);
+    }
+    }
+
+
+    // renamable $dl = SETCCr 3, implicit killed $eflags
+    {
+    if (1) {
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(SETNC8r, scratch_dx.cur_reg());
+    }
+    }
+
+
+    // dead renamable $dl = OR8rr killed renamable $dl(tied-def 0), killed renamable $bl, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_bx.cur_reg();
+    ASMD(OR8rr, scratch_dx.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.15, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block15_label);
+
+  // Start of block 12
+  derived()->label_place(block12_label);
+
+
+    // renamable $rdx = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.56, !tbaa !35)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_r8.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_dx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 24));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdi = MOV64rm renamable $rsi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.57, !tbaa !35)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_si.cur_reg();
+        // def di has not been allocated yet
+        scratch_di.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_di.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 24));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP64ri32 renamable $rax, 7, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_ax.cur_reg();
+    ASMD(CMP64ri, op0, 0x7);
+    }
+    }
+
+
+    // JCC_1 %bb.16, 7, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::ja, block16_label);
+
+  // Start of block 13
+  derived()->label_place(block13_label);
+
+
+    // $rsi = MOV64rr $rdi
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def si has not been allocated yet
+        scratch_si.alloc(RegBank(0));
+    ASMD(MOV64rr, scratch_si.cur_reg(), op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // dead renamable $rsi = XOR64rr killed renamable $rsi(tied-def 0), renamable $rdx, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_dx.cur_reg();
+    ASMD(XOR64rr, scratch_si.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.18, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block18_label);
+
+  // Start of block 14
+  derived()->label_place(block14_label);
+
+
+    // renamable $rdi = XOR64rr killed renamable $rdi(tied-def 0), killed renamable $rdx, implicit-def dead $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_dx.cur_reg();
+    ASMD(XOR64rr, scratch_di.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdx = BSF64rr undef renamable $rdx(tied-def 0), killed renamable $rdi, implicit-def dead $eflags
+    do {
+    {
+    if (1) {
+        // undef tied
+        AsmReg op2 = scratch_di.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(BSF64rr, scratch_dx.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rax = nuw nsw SHL64ri killed renamable $rax(tied-def 0), 3, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(SHL64ri, scratch_ax.cur_reg(), 0x3);
+    }
+    }
+
+
+    // CMP64rr killed renamable $rdx, killed renamable $rax, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+        AsmReg op1 = scratch_ax.cur_reg();
+    ASMD(CMP64rr, op0, op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.15, 2, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jb, block15_label);
+
+
+
+    // JMP_1 %bb.18
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jmp, block18_label);
+
+  // Start of block 16
+  derived()->label_place(block16_label);
+
+
+    // CMP64rr killed renamable $rdx, killed renamable $rdi, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+        AsmReg op1 = scratch_di.cur_reg();
+    ASMD(CMP64rr, op0, op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.15, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block15_label);
+
+  // Start of block 17
+  derived()->label_place(block17_label);
+
+
+    // renamable $rdx = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr3, !tbaa !35)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_r8.cur_reg();
+        AsmReg op3 = scratch_ax.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_dx.cur_reg(), FE_MEM(op1, 1, op3, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP64rm killed renamable $rdx, killed renamable $rsi, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr5, !tbaa !35)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+        AsmReg op1 = scratch_si.cur_reg();
+        AsmReg op3 = scratch_ax.cur_reg();
+    ASMD(CMP64rm, op0, FE_MEM(op1, 1, op3, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.15, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block15_label);
+
+  // Start of block 18
+  derived()->label_place(block18_label);
+
+
+    // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    do {
+    {
+    if (1) {
+        // undef tied
+        // undef allocate scratch
+        AsmReg inst60_op2 = scratch_ax.cur_reg_or_alloc(derived());
+
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst60_op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP8mi renamable $rcx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.79, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(CMP8mi, FE_MEM(op0, 0, FE_NOREG, 8), 0xc);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rcx, 5, implicit killed $eflags
+    {
+    if (1) {
+        AsmReg op2 = scratch_cx.cur_reg();
+    ASMD(CMOVNZ64rr, scratch_ax.cur_reg(), op2);
+    }
+    }
+
+
+    // RET64 killed $rax
+  derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
+  // Start of block 15
+  derived()->label_place(block15_label);
+
+
+    // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    do {
+    {
+    if (1) {
+        // undef tied
+        // undef allocate scratch
+        AsmReg inst64_op2 = scratch_ax.cur_reg_or_alloc(derived());
+
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst64_op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // RET64 killed $rax
+  derived()->label_place(ret_converge_label);
+  if (result_0.has_assignment())
+    result_0.unlock(derived());
+  derived()->set_preserve_flags(false);
+  return true;
+
+}
+
+template <typename Adaptor,
+          typename Derived,
+          template <typename, typename, typename>
+          class BaseTy,
+          typename Config>
+bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_test_idx(GenericValuePart &&param_0, GenericValuePart &&param_1, ValuePart &result_0) {
+    // # Machine code for function zend_native_array_test_idx: NoPHIs, TracksLiveness, NoVRegs, TiedOpsRewritten, TracksDebugUserValues
+    // Function Live Ins: $rdi, $rsi
+    //
+    // bb.0 (%ir-block.2):
+    //   successors: %bb.1(0x40000000), %bb.2(0x40000000); %bb.1(50.00%), %bb.2(50.00%)
+    //   liveins: $rdi, $rsi
+    //   $ecx = MOVZX32rm8 renamable $rdi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.3, align 8, !tbaa !4)
+    //   CMP8ri renamable $cl, 10, implicit-def $eflags
+    //   JCC_1 %bb.2, 5, implicit killed $eflags
+    //
+    // bb.1 (%ir-block.6):
+    // ; predecessors: %bb.0
+    //   successors: %bb.2(0x80000000); %bb.2(100.00%)
+    //   liveins: $rdi, $rsi
+    //   renamable $rdi = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
+    //   $ecx = MOVZX32rm8 renamable $rdi, 1, $noreg, 16, $noreg :: (load (s8) from %ir.9, align 8, !tbaa !4)
+    //   renamable $rdi = nuw ADD64ri32 killed renamable $rdi(tied-def 0), 8, implicit-def dead $eflags
+    //
+    // bb.2 (%ir-block.11):
+    // ; predecessors: %bb.1, %bb.0
+    //   successors: %bb.14(0x40000000), %bb.3(0x40000000); %bb.14(50.00%), %bb.3(50.00%)
+    //   liveins: $cl, $rdi, $rsi
+    //   $eax = MOV32ri 1, implicit-def $rax
+    //   CMP8ri renamable $cl, 2, implicit-def $eflags
+    //   JCC_1 %bb.3, 3, implicit killed $eflags
+    //
+    // bb.14 (%ir-block.70):
+    // ; predecessors: %bb.7, %bb.2, %bb.6, %bb.10
+    //   liveins: $rax
+    //   RET64 killed $rax
+    //
+    // bb.3 (%ir-block.15):
+    // ; predecessors: %bb.2
+    //   successors: %bb.5(0x40000000), %bb.4(0x40000000); %bb.5(50.00%), %bb.4(50.00%)
+    //   liveins: $cl, $rax, $rdi, $rsi
+    //   CMP8ri killed renamable $cl, 7, implicit-def $eflags
+    //   JCC_1 %bb.4, 5, implicit killed $eflags
+    //
+    // bb.5 (%ir-block.17):
+    // ; predecessors: %bb.3
+    //   successors: %bb.9(0x40000000), %bb.6(0x40000000); %bb.9(50.00%), %bb.6(50.00%)
+    //   liveins: $rax, $rdi, $rsi
+    //   renamable $rdx = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.13, !tbaa !4)
+    //   TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.19, align 8)
+    //   JCC_1 %bb.6, 5, implicit killed $eflags
+    //
+    // bb.9 (%ir-block.39):
+    // ; predecessors: %bb.5
+    //   successors: %bb.10(0x80000000); %bb.10(100.00%)
+    //   liveins: $rax, $rdx, $rsi
+    //   renamable $rcx = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.40, !tbaa !4)
+    //   renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.43, !tbaa !24)
+    //   renamable $edx = OR32rr killed renamable $edx(tied-def 0), renamable $esi, implicit-def dead $eflags
+    //   renamable $rdx = MOVSX64rr32 killed renamable $edx
+    //   renamable $edx = MOV32rm renamable $rcx, 4, killed renamable $rdx, 0, $noreg :: (load (s32) from %ir.46, !tbaa !4)
+    //   JMP_1 %bb.10
+    //
+    // bb.15 (%ir-block.66, align 16):
+    // ; predecessors: %bb.11, %bb.12
+    //   successors: %bb.10(0x80000000); %bb.10(100.00%)
+    //   liveins: $rax, $rcx, $rdx, $rsi
+    //   renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.67, !tbaa !4)
+    //
+    // bb.10 (%ir-block.39):
+    // ; predecessors: %bb.9, %bb.15
+    //   successors: %bb.14(0x0715ba19), %bb.11(0x78ea45e7); %bb.14(5.54%), %bb.11(94.46%)
+    //   liveins: $rax, $edx, $rcx, $rsi
+    //   CMP32ri renamable $edx, -1, implicit-def $eflags
+    //   JCC_1 %bb.14, 4, implicit killed $eflags
+    //
+    // bb.11 (%ir-block.49):
+    // ; predecessors: %bb.10
+    //   successors: %bb.12(0x40000000), %bb.15(0x40000000); %bb.12(50.00%), %bb.15(50.00%)
+    //   liveins: $edx, $rax, $rcx, $rsi
+    //   renamable $edi = MOV32rr killed renamable $edx, implicit-def $rdi
+    //   renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
+    //   renamable $rdx = LEA64r renamable $rcx, 1, renamable $rdi, 0, $noreg
+    //   CMP64mr renamable $rcx, 1, killed renamable $rdi, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.53, !tbaa !25)
+    //   JCC_1 %bb.15, 5, implicit killed $eflags
+    //
+    // bb.12 (%ir-block.56):
+    // ; predecessors: %bb.11
+    //   successors: %bb.13(0x04000000), %bb.15(0x7c000000); %bb.13(3.12%), %bb.15(96.88%)
+    //   liveins: $rax, $rcx, $rdx, $rsi
+    //   CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.57, !tbaa !29)
+    //   JCC_1 %bb.15, 5, implicit killed $eflags
+    //
+    // bb.13 (%ir-block.60):
+    // ; predecessors: %bb.12
+    //   liveins: $rdx
+    //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    //   CMP8mi renamable $rdx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.61, align 8, !tbaa !4)
+    //   renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rdx, 5, implicit killed $eflags
+    //   RET64 killed $rax
+    //
+    // bb.4:
+    // ; predecessors: %bb.3
+    //
+    //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    //   RET64 killed $rax
+    //
+    // bb.6 (%ir-block.23):
+    // ; predecessors: %bb.5
+    //   successors: %bb.7(0x40000000), %bb.14(0x40000000); %bb.7(50.00%), %bb.14(50.00%)
+    //   liveins: $rax, $rdx, $rsi
+    //   renamable $ecx = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rcx :: (load (s32) from %ir.24, align 8, !tbaa !21)
+    //   CMP64rr renamable $rsi, killed renamable $rcx, implicit-def $eflags
+    //   JCC_1 %bb.14, 3, implicit killed $eflags
+    //
+    // bb.7 (%ir-block.28):
+    // ; predecessors: %bb.6
+    //   successors: %bb.14(0x30000000), %bb.8(0x50000000); %bb.14(37.50%), %bb.8(62.50%)
+    //   liveins: $rax, $rdx, $rsi
+    //   renamable $rcx = MOV64rm killed renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.29, !tbaa !4)
+    //   renamable $rsi = nuw nsw SHL64ri killed renamable $rsi(tied-def 0), 4, implicit-def dead $eflags
+    //   $edx = MOVZX32rm8 renamable $rcx, 1, renamable $rsi, 8, $noreg :: (load (s8) from %ir.32, align 8, !tbaa !4)
+    //   TEST8rr renamable $dl, renamable $dl, implicit-def $eflags
+    //   JCC_1 %bb.14, 4, implicit killed $eflags
+    //
+    // bb.8 (%ir-block.35):
+    // ; predecessors: %bb.7
+    //   liveins: $dl, $rcx, $rsi
+    //   renamable $rcx = nuw ADD64rr killed renamable $rcx(tied-def 0), killed renamable $rsi, implicit-def dead $eflags
+    //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    //   CMP8ri killed renamable $dl, 12, implicit-def $eflags
+    //   renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rcx, 5, implicit killed $eflags
+    //   RET64 killed $rax
+    //
+    // # End machine code for function zend_native_array_test_idx.
+    //
+
+    // Mapping di to param_0
+    // Mapping si to param_1
+
+    // Creating label for convergence point at the end of the function
+    tpde::Label ret_converge_label = derived()->text_writer.label_create();
+    // Creating labels for blocks that are jump targets
+    tpde::Label block1_label = derived()->text_writer.label_create();
+    tpde::Label block2_label = derived()->text_writer.label_create();
+    tpde::Label block14_label = derived()->text_writer.label_create();
+    tpde::Label block3_label = derived()->text_writer.label_create();
+    tpde::Label block5_label = derived()->text_writer.label_create();
+    tpde::Label block9_label = derived()->text_writer.label_create();
+    tpde::Label block15_label = derived()->text_writer.label_create();
+    tpde::Label block10_label = derived()->text_writer.label_create();
+    tpde::Label block11_label = derived()->text_writer.label_create();
+    tpde::Label block12_label = derived()->text_writer.label_create();
+    tpde::Label block13_label = derived()->text_writer.label_create();
+    tpde::Label block4_label = derived()->text_writer.label_create();
+    tpde::Label block6_label = derived()->text_writer.label_create();
+    tpde::Label block7_label = derived()->text_writer.label_create();
+    tpde::Label block8_label = derived()->text_writer.label_create();
+
+    ValuePart &scratch_ax = result_0;
+    ScratchReg scratch_di{derived()};
+    ScratchReg scratch_dx{derived()};
+    ScratchReg scratch_si{derived()};
+    ScratchReg scratch_cx{derived()};
+  derived()->set_preserve_flags(true);
+
+
+    // $ecx = MOVZX32rm8 renamable $rdi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.3, align 8, !tbaa !4)
+    do {
+    {
+    auto cond0 = encodeable_with(param_0, FE_MEM(FE_NOREG, 0, FE_NOREG, 8), false);
+    if (cond0) {
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOVZXr32m8, scratch_cx.cur_reg(), (*cond0));
+        break;
+    }
+    }
+    {
+    if (1) {
+        AsmReg op1 = derived()->gval_as_reg(param_0);
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOVZXr32m8, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 8));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP8ri renamable $cl, 10, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(CMP8ri, op0, 0xa);
+    }
+    }
+
+
+    // JCC_1 %bb.2, 5, implicit killed $eflags
+  // allocate registers used later on in the function
+  scratch_ax.cur_reg_or_alloc(derived());
+  scratch_cx.alloc(RegBank(0));
+  scratch_dx.alloc(RegBank(0));
+  try_salvage_or_materialize(param_1, scratch_si, 0, 8);
+  try_salvage_or_materialize(param_0, scratch_di, 0, 8);
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block2_label);
+
+  // Start of block 1
+  derived()->label_place(block1_label);
+
+
+    // renamable $rdi = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def di has not been allocated yet
+        scratch_di.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_di.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // $ecx = MOVZX32rm8 renamable $rdi, 1, $noreg, 16, $noreg :: (load (s8) from %ir.9, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOVZXr32m8, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdi = nuw ADD64ri32 killed renamable $rdi(tied-def 0), 8, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(ADD64ri, scratch_di.cur_reg(), 0x8);
+    }
+    }
+  // Start of block 2
+  derived()->label_place(block2_label);
+
+
+    // $eax = MOV32ri 1, implicit-def $rax
+    {
+    if (1) {
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV32ri, scratch_ax.cur_reg(), 0x1);
+    }
+    }
+
+
+    // CMP8ri renamable $cl, 2, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(CMP8ri, op0, 0x2);
+    }
+    }
+
+
+    // JCC_1 %bb.3, 3, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jae, block3_label);
+
+  // Start of block 14
+  derived()->label_place(block14_label);
+
+
+    // RET64 killed $rax
+  derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
+  // Start of block 3
+  derived()->label_place(block3_label);
+
+
+    // CMP8ri killed renamable $cl, 7, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(CMP8ri, op0, 0x7);
+    }
+    }
+
+
+    // JCC_1 %bb.4, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block4_label);
+
+  // Start of block 5
+  derived()->label_place(block5_label);
+
+
+    // renamable $rdx = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.13, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_dx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.19, align 8)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(TEST8mi, FE_MEM(op0, 0, FE_NOREG, 8), 0x4);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.6, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block6_label);
+
+  // Start of block 9
+  derived()->label_place(block9_label);
+
+
+    // renamable $rcx = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.40, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.43, !tbaa !24)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_dx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 12));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $edx = OR32rr killed renamable $edx(tied-def 0), renamable $esi, implicit-def dead $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_si.cur_reg();
+    ASMD(OR32rr, scratch_dx.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdx = MOVSX64rr32 killed renamable $edx
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOVSXr64r32, scratch_dx.cur_reg(), op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $edx = MOV32rm renamable $rcx, 4, killed renamable $rdx, 0, $noreg :: (load (s32) from %ir.46, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        AsmReg op3 = scratch_dx.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_dx.cur_reg(), FE_MEM(op1, 4, op3, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JMP_1 %bb.10
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jmp, block10_label);
+
+  // Start of block 15
+  derived()->label_place(block15_label);
+
+
+    // renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.67, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_dx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 12));
+        break;
+    }
+    }
+    } while (false);
+  // Start of block 10
+  derived()->label_place(block10_label);
+
+
+    // CMP32ri renamable $edx, -1, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP32ri, op0, -0x1);
+    }
+    }
+
+
+    // JCC_1 %bb.14, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block14_label);
+
+  // Start of block 11
+  derived()->label_place(block11_label);
+
+
+    // renamable $edi = MOV32rr killed renamable $edx, implicit-def $rdi
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def di has not been allocated yet
+        scratch_di.alloc(RegBank(0));
+    ASMD(MOV32rr, scratch_di.cur_reg(), op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(SHL64ri, scratch_di.cur_reg(), 0x5);
+    }
+    }
+
+
+    // renamable $rdx = LEA64r renamable $rcx, 1, renamable $rdi, 0, $noreg
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        AsmReg op3 = scratch_di.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(LEA64rm, scratch_dx.cur_reg(), FE_MEM(op1, 1, op3, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP64mr renamable $rcx, 1, killed renamable $rdi, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.53, !tbaa !25)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+        AsmReg op2 = scratch_di.cur_reg();
+        AsmReg op5 = scratch_si.cur_reg();
+    ASMD(CMP64mr, FE_MEM(op0, 1, op2, 16), op5);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.15, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block15_label);
+
+  // Start of block 12
+  derived()->label_place(block12_label);
+
+
+    // CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.57, !tbaa !29)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP64mi, FE_MEM(op0, 0, FE_NOREG, 24), 0x0);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.15, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block15_label);
+
+  // Start of block 13
+  derived()->label_place(block13_label);
+
+
+    // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    do {
+    {
+    if (1) {
+        // undef tied
+        // undef allocate scratch
+        AsmReg inst31_op2 = scratch_ax.cur_reg_or_alloc(derived());
+
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst31_op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP8mi renamable $rdx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.61, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP8mi, FE_MEM(op0, 0, FE_NOREG, 8), 0xc);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rdx, 5, implicit killed $eflags
+    {
+    if (1) {
+        AsmReg op2 = scratch_dx.cur_reg();
+    ASMD(CMOVNZ64rr, scratch_ax.cur_reg(), op2);
+    }
+    }
+
+
+    // RET64 killed $rax
+  derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
+  // Start of block 4
+  derived()->label_place(block4_label);
+
+
+    // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    do {
+    {
+    if (1) {
+        // undef tied
+        // undef allocate scratch
+        AsmReg inst35_op2 = scratch_ax.cur_reg_or_alloc(derived());
+
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst35_op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // RET64 killed $rax
+  derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
+  // Start of block 6
+  derived()->label_place(block6_label);
+
+
+    // renamable $ecx = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rcx :: (load (s32) from %ir.24, align 8, !tbaa !21)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 24));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP64rr renamable $rsi, killed renamable $rcx, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_si.cur_reg();
+        AsmReg op1 = scratch_cx.cur_reg();
+    ASMD(CMP64rr, op0, op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.14, 3, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jae, block14_label);
+
+  // Start of block 7
+  derived()->label_place(block7_label);
+
+
+    // renamable $rcx = MOV64rm killed renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.29, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rsi = nuw nsw SHL64ri killed renamable $rsi(tied-def 0), 4, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(SHL64ri, scratch_si.cur_reg(), 0x4);
+    }
+    }
+
+
+    // $edx = MOVZX32rm8 renamable $rcx, 1, renamable $rsi, 8, $noreg :: (load (s8) from %ir.32, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        AsmReg op3 = scratch_si.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOVZXr32m8, scratch_dx.cur_reg(), FE_MEM(op1, 1, op3, 8));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // TEST8rr renamable $dl, renamable $dl, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(TEST8rr, op0, op0);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.14, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block14_label);
+
+  // Start of block 8
+  derived()->label_place(block8_label);
+
+
+    // renamable $rcx = nuw ADD64rr killed renamable $rcx(tied-def 0), killed renamable $rsi, implicit-def dead $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_si.cur_reg();
+    ASMD(ADD64rr, scratch_cx.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    do {
+    {
+    if (1) {
+        // undef tied
+        // undef allocate scratch
+        AsmReg inst46_op2 = scratch_ax.cur_reg_or_alloc(derived());
+
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst46_op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP8ri killed renamable $dl, 12, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP8ri, op0, 0xc);
+    }
+    }
+
+
+    // renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rcx, 5, implicit killed $eflags
+    {
+    if (1) {
+        AsmReg op2 = scratch_cx.cur_reg();
+    ASMD(CMOVNZ64rr, scratch_ax.cur_reg(), op2);
+    }
+    }
+
+
+    // RET64 killed $rax
+  derived()->label_place(ret_converge_label);
+  if (result_0.has_assignment())
+    result_0.unlock(derived());
+  derived()->set_preserve_flags(false);
+  return true;
+
+}
+
+template <typename Adaptor,
+          typename Derived,
+          template <typename, typename, typename>
+          class BaseTy,
+          typename Config>
+bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_find_str_w(GenericValuePart &&param_0, GenericValuePart &&param_1, GenericValuePart &&param_2, ValuePart &result_0) {
+    // # Machine code for function zend_native_array_find_str_w: NoPHIs, TracksLiveness, NoVRegs, TiedOpsRewritten, TracksDebugUserValues
+    // Function Live Ins: $rdi, $rsi, $rdx
+    //
+    // bb.0 (%ir-block.3):
+    //   successors: %bb.1(0x40000000), %bb.2(0x40000000); %bb.1(50.00%), %bb.2(50.00%)
+    //   liveins: $rdi, $rdx, $rsi
+    //   $eax = MOVZX32rm8 renamable $rdi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.4, align 8, !tbaa !4)
+    //   CMP8ri renamable $al, 10, implicit-def $eflags
+    //   JCC_1 %bb.2, 5, implicit killed $eflags
+    //
+    // bb.1 (%ir-block.7):
+    // ; predecessors: %bb.0
+    //   successors: %bb.2(0x80000000); %bb.2(100.00%)
+    //   liveins: $rdi, $rdx, $rsi
+    //   renamable $rdi = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
+    //   $eax = MOVZX32rm8 renamable $rdi, 1, $noreg, 16, $noreg :: (load (s8) from %ir.10, align 8, !tbaa !4)
+    //   renamable $rdi = nuw ADD64ri32 killed renamable $rdi(tied-def 0), 8, implicit-def dead $eflags
+    //
+    // bb.2 (%ir-block.12):
+    // ; predecessors: %bb.1, %bb.0
+    //   successors: %bb.3(0x40000000), %bb.16(0x40000000); %bb.3(50.00%), %bb.16(50.00%)
+    //   liveins: $al, $rdi, $rdx, $rsi
+    //   CMP8ri killed renamable $al, 7, implicit-def $eflags
+    //   JCC_1 %bb.16, 5, implicit killed $eflags
+    //
+    // bb.3 (%ir-block.16):
+    // ; predecessors: %bb.2
+    //   successors: %bb.4(0x40000000), %bb.16(0x40000000); %bb.4(50.00%), %bb.16(50.00%)
+    //   liveins: $rdi, $rdx, $rsi
+    //   renamable $rcx = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.14, !tbaa !4)
+    //   CMP32mi renamable $rcx, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.17, !tbaa !37)
+    //   JCC_1 %bb.16, 5, implicit killed $eflags
+    //
+    // bb.4 (%ir-block.20):
+    // ; predecessors: %bb.3
+    //   successors: %bb.5(0x40000000), %bb.22(0x40000000); %bb.5(50.00%), %bb.22(50.00%)
+    //   liveins: $rcx, $rdx, $rsi
+    //   $eax = MOV32ri 1, implicit-def $rax
+    //   TEST8mi renamable $rcx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.21, align 8)
+    //   JCC_1 %bb.22, 5, implicit killed $eflags
+    //
+    // bb.5 (%ir-block.25):
+    // ; predecessors: %bb.4
+    //   successors: %bb.7(0x80000000); %bb.7(100.00%)
+    //   liveins: $rax, $rcx, $rdx, $rsi
+    //   renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.26, !tbaa !4)
+    //   renamable $ecx = MOV32rm killed renamable $rcx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.29, !tbaa !24)
+    //   renamable $ecx = OR32rr killed renamable $ecx(tied-def 0), renamable $edx, implicit-def dead $eflags
+    //   renamable $rcx = MOVSX64rr32 killed renamable $ecx
+    //   renamable $ecx = MOV32rm renamable $rdi, 4, killed renamable $rcx, 0, $noreg :: (load (s32) from %ir.32, !tbaa !4)
+    //   JMP_1 %bb.7
+    //
+    // bb.6 (%ir-block.75, align 16):
+    // ; predecessors: %bb.9, %bb.10
+    //   successors: %bb.7(0x80000000); %bb.7(100.00%)
+    //   liveins: $rax, $rcx, $rdi, $rdx, $rsi
+    //   renamable $ecx = MOV32rm killed renamable $rcx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.76, !tbaa !4)
+    //
+    // bb.7 (%ir-block.25):
+    // ; predecessors: %bb.5, %bb.6
+    //   successors: %bb.22(0x09e6b247), %bb.8(0x76194db9); %bb.22(7.74%), %bb.8(92.26%)
+    //   liveins: $rax, $ecx, $rdi, $rdx, $rsi
+    //   CMP32ri renamable $ecx, -1, implicit-def $eflags
+    //   JCC_1 %bb.22, 4, implicit killed $eflags
+    //
+    // bb.8 (%ir-block.35):
+    // ; predecessors: %bb.7
+    //   successors: %bb.21(0x04000000), %bb.9(0x7c000000); %bb.21(3.12%), %bb.9(96.88%)
+    //   liveins: $ecx, $rax, $rdi, $rdx, $rsi
+    //   renamable $r8d = MOV32rr killed renamable $ecx, implicit-def $r8
+    //   renamable $r8 = nuw nsw SHL64ri killed renamable $r8(tied-def 0), 5, implicit-def dead $eflags
+    //   renamable $rcx = LEA64r renamable $rdi, 1, renamable $r8, 0, $noreg
+    //   renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.39, !tbaa !29)
+    //   CMP64rr renamable $r8, renamable $rsi, implicit-def $eflags
+    //   JCC_1 %bb.21, 4, implicit killed $eflags
+    //
+    // bb.9 (%ir-block.42):
+    // ; predecessors: %bb.8
+    //   successors: %bb.6(0x3e000000), %bb.10(0x42000000); %bb.6(48.44%), %bb.10(51.56%)
+    //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
+    //   TEST64rr renamable $r8, renamable $r8, implicit-def $eflags
+    //   JCC_1 %bb.6, 4, implicit killed $eflags
+    //
+    // bb.10 (%ir-block.42):
+    // ; predecessors: %bb.9
+    //   successors: %bb.6(0x783e0f84), %bb.11(0x07c1f07c); %bb.6(93.94%), %bb.11(6.06%)
+    //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
+    //   CMP64mr renamable $rcx, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.43, !tbaa !25)
+    //   JCC_1 %bb.6, 5, implicit killed $eflags
+    //
+    // bb.11 (%ir-block.48):
+    // ; predecessors: %bb.10
+    //   successors: %bb.12(0x40000000), %bb.16(0x40000000); %bb.12(50.00%), %bb.16(50.00%)
+    //   liveins: $rcx, $rsi, $r8
+    //   renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.49, !tbaa !34)
+    //   renamable $rdx = MOV64rm renamable $rsi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.51, !tbaa !34)
+    //   CMP64rr renamable $rax, renamable $rdx, implicit-def $eflags
+    //   renamable $bl = SETCCr 5, implicit killed $eflags
+    //   CMP64ri32 killed renamable $rdx, 17, implicit-def $eflags
+    //   renamable $dl = SETCCr 3, implicit killed $eflags
+    //   dead renamable $dl = OR8rr killed renamable $dl(tied-def 0), killed renamable $bl, implicit-def $eflags
+    //   JCC_1 %bb.16, 5, implicit killed $eflags
+    //
+    // bb.12 (%ir-block.56):
+    // ; predecessors: %bb.11
+    //   successors: %bb.13(0x40000000), %bb.19(0x40000000); %bb.13(50.00%), %bb.19(50.00%)
+    //   liveins: $rax, $rcx, $rsi, $r8
+    //   renamable $rdx = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.57, !tbaa !35)
+    //   renamable $rdi = MOV64rm renamable $rsi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.58, !tbaa !35)
+    //   CMP64ri32 renamable $rax, 7, implicit-def $eflags
+    //   JCC_1 %bb.19, 7, implicit killed $eflags
+    //
+    // bb.13 (%ir-block.62):
+    // ; predecessors: %bb.12
+    //   successors: %bb.21(0x20000000), %bb.14(0x60000000); %bb.21(25.00%), %bb.14(75.00%)
+    //   liveins: $rax, $rcx, $rdi, $rdx
+    //   $rsi = MOV64rr $rdi
+    //   dead renamable $rsi = XOR64rr killed renamable $rsi(tied-def 0), renamable $rdx, implicit-def $eflags
+    //   JCC_1 %bb.21, 4, implicit killed $eflags
+    //
+    // bb.14 (%ir-block.62):
+    // ; predecessors: %bb.13
+    //   successors: %bb.21(0x2aaaaaab), %bb.16(0x55555555); %bb.21(33.33%), %bb.16(66.67%)
+    //   liveins: $rax, $rcx, $rdi, $rdx
+    //   renamable $rdi = XOR64rr killed renamable $rdi(tied-def 0), killed renamable $rdx, implicit-def dead $eflags
+    //   renamable $rdx = BSF64rr undef renamable $rdx(tied-def 0), killed renamable $rdi, implicit-def dead $eflags
+    //   renamable $rax = nuw nsw SHL64ri killed renamable $rax(tied-def 0), 3, implicit-def dead $eflags
+    //   CMP64rr killed renamable $rdx, killed renamable $rax, implicit-def $eflags
+    //   JCC_1 %bb.16, 2, implicit killed $eflags
+    //   JMP_1 %bb.21
+    //
+    // bb.19 (%ir-block.69):
+    // ; predecessors: %bb.12
+    //   successors: %bb.20(0x40000000), %bb.16(0x40000000); %bb.20(50.00%), %bb.16(50.00%)
+    //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
+    //   CMP64rr killed renamable $rdx, killed renamable $rdi, implicit-def $eflags
+    //   JCC_1 %bb.16, 5, implicit killed $eflags
+    //
+    // bb.20 (%ir-block.71):
+    // ; predecessors: %bb.19
+    //   successors: %bb.21(0x40000000), %bb.16(0x40000000); %bb.21(50.00%), %bb.16(50.00%)
+    //   liveins: $rax, $rcx, $rsi, $r8
+    //   renamable $rdx = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr3, !tbaa !35)
+    //   CMP64rm killed renamable $rdx, killed renamable $rsi, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr5, !tbaa !35)
+    //   JCC_1 %bb.16, 5, implicit killed $eflags
+    //
+    // bb.21 (%ir-block.79):
+    // ; predecessors: %bb.8, %bb.20, %bb.13, %bb.14
+    //   successors: %bb.22(0x80000000); %bb.22(100.00%)
+    //   liveins: $rcx
+    //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    //   CMP8mi renamable $rcx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.80, align 8, !tbaa !4)
+    //   renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rcx, 5, implicit killed $eflags
+    //
+    // bb.22 (%ir-block.85):
+    // ; predecessors: %bb.21, %bb.4, %bb.7
+    //   liveins: $rax
+    //   RET64 killed $rax
+    //
+    // bb.16:
+    // ; predecessors: %bb.2, %bb.14, %bb.3, %bb.11, %bb.19, %bb.20
+    //
+    //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    //   RET64 killed $rax
+    //
+    // # End machine code for function zend_native_array_find_str_w.
+    //
+
+    // Mapping di to param_0
+    // Mapping si to param_1
+    // Mapping dx to param_2
+
+    // Creating label for convergence point at the end of the function
+    tpde::Label ret_converge_label = derived()->text_writer.label_create();
+    // Creating labels for blocks that are jump targets
+    tpde::Label block1_label = derived()->text_writer.label_create();
+    tpde::Label block2_label = derived()->text_writer.label_create();
+    tpde::Label block3_label = derived()->text_writer.label_create();
+    tpde::Label block4_label = derived()->text_writer.label_create();
+    tpde::Label block5_label = derived()->text_writer.label_create();
+    tpde::Label block6_label = derived()->text_writer.label_create();
+    tpde::Label block7_label = derived()->text_writer.label_create();
+    tpde::Label block8_label = derived()->text_writer.label_create();
+    tpde::Label block9_label = derived()->text_writer.label_create();
+    tpde::Label block10_label = derived()->text_writer.label_create();
+    tpde::Label block11_label = derived()->text_writer.label_create();
+    tpde::Label block12_label = derived()->text_writer.label_create();
+    tpde::Label block13_label = derived()->text_writer.label_create();
+    tpde::Label block14_label = derived()->text_writer.label_create();
+    tpde::Label block19_label = derived()->text_writer.label_create();
+    tpde::Label block20_label = derived()->text_writer.label_create();
+    tpde::Label block21_label = derived()->text_writer.label_create();
+    tpde::Label block22_label = derived()->text_writer.label_create();
+    tpde::Label block16_label = derived()->text_writer.label_create();
+
+    ValuePart &scratch_ax = result_0;
+    ScratchReg scratch_di{derived()};
+    ScratchReg scratch_dx{derived()};
+    ScratchReg scratch_si{derived()};
+    ScratchReg scratch_cx{derived()};
+    ScratchReg scratch_r8{derived()};
+    ScratchReg scratch_bx{derived()};
+  derived()->set_preserve_flags(true);
+
+
+    // $eax = MOVZX32rm8 renamable $rdi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.4, align 8, !tbaa !4)
+    do {
+    {
+    auto cond0 = encodeable_with(param_0, FE_MEM(FE_NOREG, 0, FE_NOREG, 8), false);
+    if (cond0) {
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOVZXr32m8, scratch_ax.cur_reg(), (*cond0));
+        break;
+    }
+    }
+    {
+    if (1) {
+        AsmReg op1 = derived()->gval_as_reg(param_0);
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOVZXr32m8, scratch_ax.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 8));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP8ri renamable $al, 10, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_ax.cur_reg();
+    ASMD(CMP8ri, op0, 0xa);
+    }
+    }
+
+
+    // JCC_1 %bb.2, 5, implicit killed $eflags
+  // allocate registers used later on in the function
+  scratch_ax.cur_reg_or_alloc(derived());
+  scratch_cx.alloc(RegBank(0));
+  try_salvage_or_materialize(param_2, scratch_dx, 0, 8);
+  scratch_bx.alloc(RegBank(0));
+  try_salvage_or_materialize(param_1, scratch_si, 0, 8);
+  try_salvage_or_materialize(param_0, scratch_di, 0, 8);
+  scratch_r8.alloc(RegBank(0));
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block2_label);
+
+  // Start of block 1
+  derived()->label_place(block1_label);
+
+
+    // renamable $rdi = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def di has not been allocated yet
+        scratch_di.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_di.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // $eax = MOVZX32rm8 renamable $rdi, 1, $noreg, 16, $noreg :: (load (s8) from %ir.10, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOVZXr32m8, scratch_ax.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdi = nuw ADD64ri32 killed renamable $rdi(tied-def 0), 8, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(ADD64ri, scratch_di.cur_reg(), 0x8);
+    }
+    }
+  // Start of block 2
+  derived()->label_place(block2_label);
+
+
+    // CMP8ri killed renamable $al, 7, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_ax.cur_reg();
+    ASMD(CMP8ri, op0, 0x7);
+    }
+    }
+
+
+    // JCC_1 %bb.16, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block16_label);
+
+  // Start of block 3
+  derived()->label_place(block3_label);
+
+
+    // renamable $rcx = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.14, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP32mi renamable $rcx, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.17, !tbaa !37)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(CMP32mi, FE_MEM(op0, 0, FE_NOREG, 0), 0x1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.16, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block16_label);
+
+  // Start of block 4
+  derived()->label_place(block4_label);
+
+
+    // $eax = MOV32ri 1, implicit-def $rax
+    {
+    if (1) {
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV32ri, scratch_ax.cur_reg(), 0x1);
+    }
+    }
+
+
+    // TEST8mi renamable $rcx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.21, align 8)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(TEST8mi, FE_MEM(op0, 0, FE_NOREG, 8), 0x4);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.22, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block22_label);
+
+  // Start of block 5
+  derived()->label_place(block5_label);
+
+
+    // renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.26, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        // def di has not been allocated yet
+        scratch_di.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_di.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $ecx = MOV32rm killed renamable $rcx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.29, !tbaa !24)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 12));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $ecx = OR32rr killed renamable $ecx(tied-def 0), renamable $edx, implicit-def dead $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_dx.cur_reg();
+    ASMD(OR32rr, scratch_cx.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rcx = MOVSX64rr32 killed renamable $ecx
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOVSXr64r32, scratch_cx.cur_reg(), op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $ecx = MOV32rm renamable $rdi, 4, killed renamable $rcx, 0, $noreg :: (load (s32) from %ir.32, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        AsmReg op3 = scratch_cx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_cx.cur_reg(), FE_MEM(op1, 4, op3, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JMP_1 %bb.7
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jmp, block7_label);
+
+  // Start of block 6
+  derived()->label_place(block6_label);
+
+
+    // renamable $ecx = MOV32rm killed renamable $rcx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.76, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 12));
+        break;
+    }
+    }
+    } while (false);
+  // Start of block 7
+  derived()->label_place(block7_label);
+
+
+    // CMP32ri renamable $ecx, -1, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(CMP32ri, op0, -0x1);
+    }
+    }
+
+
+    // JCC_1 %bb.22, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block22_label);
+
+  // Start of block 8
+  derived()->label_place(block8_label);
+
+
+    // renamable $r8d = MOV32rr killed renamable $ecx, implicit-def $r8
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        // def r8 has not been allocated yet
+        scratch_r8.alloc(RegBank(0));
+    ASMD(MOV32rr, scratch_r8.cur_reg(), op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $r8 = nuw nsw SHL64ri killed renamable $r8(tied-def 0), 5, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(SHL64ri, scratch_r8.cur_reg(), 0x5);
+    }
+    }
+
+
+    // renamable $rcx = LEA64r renamable $rdi, 1, renamable $r8, 0, $noreg
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        AsmReg op3 = scratch_r8.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(LEA64rm, scratch_cx.cur_reg(), FE_MEM(op1, 1, op3, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.39, !tbaa !29)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        AsmReg op3 = scratch_r8.cur_reg();
+        // def r8 has not been allocated yet
+        scratch_r8.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_r8.cur_reg(), FE_MEM(op1, 1, op3, 24));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP64rr renamable $r8, renamable $rsi, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_r8.cur_reg();
+        AsmReg op1 = scratch_si.cur_reg();
+    ASMD(CMP64rr, op0, op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.21, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block21_label);
+
+  // Start of block 9
+  derived()->label_place(block9_label);
+
+
+    // TEST64rr renamable $r8, renamable $r8, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_r8.cur_reg();
+    ASMD(TEST64rr, op0, op0);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.6, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block6_label);
+
+  // Start of block 10
+  derived()->label_place(block10_label);
+
+
+    // CMP64mr renamable $rcx, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.43, !tbaa !25)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+        AsmReg op5 = scratch_dx.cur_reg();
+    ASMD(CMP64mr, FE_MEM(op0, 0, FE_NOREG, 16), op5);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.6, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block6_label);
+
+  // Start of block 11
+  derived()->label_place(block11_label);
+
+
+    // renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.49, !tbaa !34)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_r8.cur_reg();
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV64rm, scratch_ax.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdx = MOV64rm renamable $rsi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.51, !tbaa !34)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_si.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_dx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP64rr renamable $rax, renamable $rdx, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_ax.cur_reg();
+        AsmReg op1 = scratch_dx.cur_reg();
+    ASMD(CMP64rr, op0, op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $bl = SETCCr 5, implicit killed $eflags
+    {
+    if (1) {
+        // def bx has not been allocated yet
+        scratch_bx.alloc(RegBank(0));
+    ASMD(SETNZ8r, scratch_bx.cur_reg());
+    }
+    }
+
+
+    // CMP64ri32 killed renamable $rdx, 17, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP64ri, op0, 0x11);
+    }
+    }
+
+
+    // renamable $dl = SETCCr 3, implicit killed $eflags
+    {
+    if (1) {
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(SETNC8r, scratch_dx.cur_reg());
+    }
+    }
+
+
+    // dead renamable $dl = OR8rr killed renamable $dl(tied-def 0), killed renamable $bl, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_bx.cur_reg();
+    ASMD(OR8rr, scratch_dx.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.16, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block16_label);
+
+  // Start of block 12
+  derived()->label_place(block12_label);
+
+
+    // renamable $rdx = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.57, !tbaa !35)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_r8.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_dx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 24));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdi = MOV64rm renamable $rsi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.58, !tbaa !35)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_si.cur_reg();
+        // def di has not been allocated yet
+        scratch_di.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_di.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 24));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP64ri32 renamable $rax, 7, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_ax.cur_reg();
+    ASMD(CMP64ri, op0, 0x7);
+    }
+    }
+
+
+    // JCC_1 %bb.19, 7, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::ja, block19_label);
+
+  // Start of block 13
+  derived()->label_place(block13_label);
+
+
+    // $rsi = MOV64rr $rdi
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def si has not been allocated yet
+        scratch_si.alloc(RegBank(0));
+    ASMD(MOV64rr, scratch_si.cur_reg(), op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // dead renamable $rsi = XOR64rr killed renamable $rsi(tied-def 0), renamable $rdx, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_dx.cur_reg();
+    ASMD(XOR64rr, scratch_si.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.21, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block21_label);
+
+  // Start of block 14
+  derived()->label_place(block14_label);
+
+
+    // renamable $rdi = XOR64rr killed renamable $rdi(tied-def 0), killed renamable $rdx, implicit-def dead $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_dx.cur_reg();
+    ASMD(XOR64rr, scratch_di.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdx = BSF64rr undef renamable $rdx(tied-def 0), killed renamable $rdi, implicit-def dead $eflags
+    do {
+    {
+    if (1) {
+        // undef tied
+        AsmReg op2 = scratch_di.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(BSF64rr, scratch_dx.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rax = nuw nsw SHL64ri killed renamable $rax(tied-def 0), 3, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(SHL64ri, scratch_ax.cur_reg(), 0x3);
+    }
+    }
+
+
+    // CMP64rr killed renamable $rdx, killed renamable $rax, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+        AsmReg op1 = scratch_ax.cur_reg();
+    ASMD(CMP64rr, op0, op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.16, 2, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jb, block16_label);
+
+
+
+    // JMP_1 %bb.21
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jmp, block21_label);
+
+  // Start of block 19
+  derived()->label_place(block19_label);
+
+
+    // CMP64rr killed renamable $rdx, killed renamable $rdi, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+        AsmReg op1 = scratch_di.cur_reg();
+    ASMD(CMP64rr, op0, op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.16, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block16_label);
+
+  // Start of block 20
+  derived()->label_place(block20_label);
+
+
+    // renamable $rdx = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr3, !tbaa !35)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_r8.cur_reg();
+        AsmReg op3 = scratch_ax.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_dx.cur_reg(), FE_MEM(op1, 1, op3, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP64rm killed renamable $rdx, killed renamable $rsi, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr5, !tbaa !35)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+        AsmReg op1 = scratch_si.cur_reg();
+        AsmReg op3 = scratch_ax.cur_reg();
+    ASMD(CMP64rm, op0, FE_MEM(op1, 1, op3, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.16, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block16_label);
+
+  // Start of block 21
+  derived()->label_place(block21_label);
+
+
+    // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    do {
+    {
+    if (1) {
+        // undef tied
+        // undef allocate scratch
+        AsmReg inst59_op2 = scratch_ax.cur_reg_or_alloc(derived());
+
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst59_op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP8mi renamable $rcx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.80, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(CMP8mi, FE_MEM(op0, 0, FE_NOREG, 8), 0xc);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rcx, 5, implicit killed $eflags
+    {
+    if (1) {
+        AsmReg op2 = scratch_cx.cur_reg();
+    ASMD(CMOVNZ64rr, scratch_ax.cur_reg(), op2);
+    }
+    }
+  // Start of block 22
+  derived()->label_place(block22_label);
+
+
+    // RET64 killed $rax
+  derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
+  // Start of block 16
+  derived()->label_place(block16_label);
+
+
+    // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    do {
+    {
+    if (1) {
+        // undef tied
+        // undef allocate scratch
+        AsmReg inst63_op2 = scratch_ax.cur_reg_or_alloc(derived());
+
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst63_op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // RET64 killed $rax
+  derived()->label_place(ret_converge_label);
+  if (result_0.has_assignment())
+    result_0.unlock(derived());
+  derived()->set_preserve_flags(false);
+  return true;
+
+}
+
+template <typename Adaptor,
+          typename Derived,
+          template <typename, typename, typename>
+          class BaseTy,
+          typename Config>
+bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_array_find_idx_w(GenericValuePart &&param_0, GenericValuePart &&param_1, ValuePart &result_0) {
+    // # Machine code for function zend_native_array_find_idx_w: NoPHIs, TracksLiveness, NoVRegs, TiedOpsRewritten, TracksDebugUserValues
+    // Function Live Ins: $rdi, $rsi
+    //
+    // bb.0 (%ir-block.2):
+    //   successors: %bb.1(0x40000000), %bb.2(0x40000000); %bb.1(50.00%), %bb.2(50.00%)
+    //   liveins: $rdi, $rsi
+    //   $eax = MOVZX32rm8 renamable $rdi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.3, align 8, !tbaa !4)
+    //   CMP8ri renamable $al, 10, implicit-def $eflags
+    //   JCC_1 %bb.2, 5, implicit killed $eflags
+    //
+    // bb.1 (%ir-block.6):
+    // ; predecessors: %bb.0
+    //   successors: %bb.2(0x80000000); %bb.2(100.00%)
+    //   liveins: $rdi, $rsi
+    //   renamable $rdi = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
+    //   $eax = MOVZX32rm8 renamable $rdi, 1, $noreg, 16, $noreg :: (load (s8) from %ir.9, align 8, !tbaa !4)
+    //   renamable $rdi = nuw ADD64ri32 killed renamable $rdi(tied-def 0), 8, implicit-def dead $eflags
+    //
+    // bb.2 (%ir-block.11):
+    // ; predecessors: %bb.1, %bb.0
+    //   successors: %bb.3(0x40000000), %bb.12(0x40000000); %bb.3(50.00%), %bb.12(50.00%)
+    //   liveins: $al, $rdi, $rsi
+    //   CMP8ri killed renamable $al, 7, implicit-def $eflags
+    //   JCC_1 %bb.12, 5, implicit killed $eflags
+    //
+    // bb.3 (%ir-block.15):
+    // ; predecessors: %bb.2
+    //   successors: %bb.4(0x40000000), %bb.12(0x40000000); %bb.4(50.00%), %bb.12(50.00%)
+    //   liveins: $rdi, $rsi
+    //   renamable $rdx = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.13, !tbaa !4)
+    //   CMP32mi renamable $rdx, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.16, !tbaa !37)
+    //   JCC_1 %bb.12, 5, implicit killed $eflags
+    //
+    // bb.4 (%ir-block.19):
+    // ; predecessors: %bb.3
+    //   successors: %bb.5(0x40000000), %bb.13(0x40000000); %bb.5(50.00%), %bb.13(50.00%)
+    //   liveins: $rdx, $rsi
+    //   TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.20, align 8)
+    //   JCC_1 %bb.13, 5, implicit killed $eflags
+    //
+    // bb.5 (%ir-block.40):
+    // ; predecessors: %bb.4
+    //   successors: %bb.7(0x80000000); %bb.7(100.00%)
+    //   liveins: $rdx, $rsi
+    //   renamable $rcx = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.41, !tbaa !4)
+    //   renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.44, !tbaa !24)
+    //   renamable $eax = OR32rr killed renamable $eax(tied-def 0), renamable $esi, implicit-def dead $eflags
+    //   renamable $rax = MOVSX64rr32 killed renamable $eax
+    //   renamable $edx = MOV32rm renamable $rcx, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.47, !tbaa !4)
+    //   $eax = MOV32ri 1, implicit-def $rax
+    //   JMP_1 %bb.7
+    //
+    // bb.6 (%ir-block.67, align 16):
+    // ; predecessors: %bb.8, %bb.9
+    //   successors: %bb.7(0x80000000); %bb.7(100.00%)
+    //   liveins: $rax, $rcx, $rdx, $rsi
+    //   renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.68, !tbaa !4)
+    //
+    // bb.7 (%ir-block.40):
+    // ; predecessors: %bb.5, %bb.6
+    //   successors: %bb.16(0x0715ba19), %bb.8(0x78ea45e7); %bb.16(5.54%), %bb.8(94.46%)
+    //   liveins: $rax, $edx, $rcx, $rsi
+    //   CMP32ri renamable $edx, -1, implicit-def $eflags
+    //   JCC_1 %bb.16, 4, implicit killed $eflags
+    //
+    // bb.8 (%ir-block.50):
+    // ; predecessors: %bb.7
+    //   successors: %bb.9(0x40000000), %bb.6(0x40000000); %bb.9(50.00%), %bb.6(50.00%)
+    //   liveins: $edx, $rax, $rcx, $rsi
+    //   renamable $edi = MOV32rr killed renamable $edx, implicit-def $rdi
+    //   renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
+    //   renamable $rdx = LEA64r renamable $rcx, 1, renamable $rdi, 0, $noreg
+    //   CMP64mr renamable $rcx, 1, killed renamable $rdi, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.54, !tbaa !25)
+    //   JCC_1 %bb.6, 5, implicit killed $eflags
+    //
+    // bb.9 (%ir-block.57):
+    // ; predecessors: %bb.8
+    //   successors: %bb.10(0x04000000), %bb.6(0x7c000000); %bb.10(3.12%), %bb.6(96.88%)
+    //   liveins: $rax, $rcx, $rdx, $rsi
+    //   CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.58, !tbaa !29)
+    //   JCC_1 %bb.6, 5, implicit killed $eflags
+    //
+    // bb.10 (%ir-block.61):
+    // ; predecessors: %bb.9
+    //   successors: %bb.16(0x80000000); %bb.16(100.00%)
+    //   liveins: $rdx
+    //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    //   CMP8mi renamable $rdx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.62, align 8, !tbaa !4)
+    //   renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rdx, 5, implicit killed $eflags
+    //
+    // bb.16 (%ir-block.71):
+    // ; predecessors: %bb.14, %bb.10, %bb.13, %bb.7
+    //   liveins: $rax
+    //   RET64 killed $rax
+    //
+    // bb.12:
+    // ; predecessors: %bb.3, %bb.2
+    //
+    //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    //   RET64 killed $rax
+    //
+    // bb.13 (%ir-block.24):
+    // ; predecessors: %bb.4
+    //   successors: %bb.14(0x40000000), %bb.16(0x40000000); %bb.14(50.00%), %bb.16(50.00%)
+    //   liveins: $rdx, $rsi
+    //   renamable $ecx = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rcx :: (load (s32) from %ir.25, align 8, !tbaa !21)
+    //   $eax = MOV32ri 1, implicit-def $rax
+    //   CMP64rr renamable $rsi, killed renamable $rcx, implicit-def $eflags
+    //   JCC_1 %bb.16, 3, implicit killed $eflags
+    //
+    // bb.14 (%ir-block.29):
+    // ; predecessors: %bb.13
+    //   successors: %bb.16(0x30000000), %bb.15(0x50000000); %bb.16(37.50%), %bb.15(62.50%)
+    //   liveins: $rax, $rdx, $rsi
+    //   renamable $rcx = MOV64rm killed renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.30, !tbaa !4)
+    //   renamable $rsi = nuw nsw SHL64ri killed renamable $rsi(tied-def 0), 4, implicit-def dead $eflags
+    //   $edx = MOVZX32rm8 renamable $rcx, 1, renamable $rsi, 8, $noreg :: (load (s8) from %ir.33, align 8, !tbaa !4)
+    //   TEST8rr renamable $dl, renamable $dl, implicit-def $eflags
+    //   JCC_1 %bb.16, 4, implicit killed $eflags
+    //
+    // bb.15 (%ir-block.36):
+    // ; predecessors: %bb.14
+    //   liveins: $dl, $rcx, $rsi
+    //   renamable $rcx = nuw ADD64rr killed renamable $rcx(tied-def 0), killed renamable $rsi, implicit-def dead $eflags
+    //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    //   CMP8ri killed renamable $dl, 12, implicit-def $eflags
+    //   renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rcx, 5, implicit killed $eflags
+    //   RET64 killed $rax
+    //
+    // # End machine code for function zend_native_array_find_idx_w.
+    //
+
+    // Mapping di to param_0
+    // Mapping si to param_1
+
+    // Creating label for convergence point at the end of the function
+    tpde::Label ret_converge_label = derived()->text_writer.label_create();
+    // Creating labels for blocks that are jump targets
+    tpde::Label block1_label = derived()->text_writer.label_create();
+    tpde::Label block2_label = derived()->text_writer.label_create();
+    tpde::Label block3_label = derived()->text_writer.label_create();
+    tpde::Label block4_label = derived()->text_writer.label_create();
+    tpde::Label block5_label = derived()->text_writer.label_create();
+    tpde::Label block6_label = derived()->text_writer.label_create();
+    tpde::Label block7_label = derived()->text_writer.label_create();
+    tpde::Label block8_label = derived()->text_writer.label_create();
+    tpde::Label block9_label = derived()->text_writer.label_create();
+    tpde::Label block10_label = derived()->text_writer.label_create();
+    tpde::Label block16_label = derived()->text_writer.label_create();
+    tpde::Label block12_label = derived()->text_writer.label_create();
+    tpde::Label block13_label = derived()->text_writer.label_create();
+    tpde::Label block14_label = derived()->text_writer.label_create();
+    tpde::Label block15_label = derived()->text_writer.label_create();
+
+    ValuePart &scratch_ax = result_0;
+    ScratchReg scratch_di{derived()};
+    ScratchReg scratch_dx{derived()};
+    ScratchReg scratch_si{derived()};
+    ScratchReg scratch_cx{derived()};
+  derived()->set_preserve_flags(true);
+
+
+    // $eax = MOVZX32rm8 renamable $rdi, 1, $noreg, 8, $noreg :: (load (s8) from %ir.3, align 8, !tbaa !4)
+    do {
+    {
+    auto cond0 = encodeable_with(param_0, FE_MEM(FE_NOREG, 0, FE_NOREG, 8), false);
+    if (cond0) {
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOVZXr32m8, scratch_ax.cur_reg(), (*cond0));
+        break;
+    }
+    }
+    {
+    if (1) {
+        AsmReg op1 = derived()->gval_as_reg(param_0);
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOVZXr32m8, scratch_ax.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 8));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP8ri renamable $al, 10, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_ax.cur_reg();
+    ASMD(CMP8ri, op0, 0xa);
+    }
+    }
+
+
+    // JCC_1 %bb.2, 5, implicit killed $eflags
+  // allocate registers used later on in the function
+  scratch_ax.cur_reg_or_alloc(derived());
+  scratch_cx.alloc(RegBank(0));
+  scratch_dx.alloc(RegBank(0));
+  try_salvage_or_materialize(param_1, scratch_si, 0, 8);
+  try_salvage_or_materialize(param_0, scratch_di, 0, 8);
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block2_label);
+
+  // Start of block 1
+  derived()->label_place(block1_label);
+
+
+    // renamable $rdi = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def di has not been allocated yet
+        scratch_di.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_di.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // $eax = MOVZX32rm8 renamable $rdi, 1, $noreg, 16, $noreg :: (load (s8) from %ir.9, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOVZXr32m8, scratch_ax.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdi = nuw ADD64ri32 killed renamable $rdi(tied-def 0), 8, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(ADD64ri, scratch_di.cur_reg(), 0x8);
+    }
+    }
+  // Start of block 2
+  derived()->label_place(block2_label);
+
+
+    // CMP8ri killed renamable $al, 7, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_ax.cur_reg();
+    ASMD(CMP8ri, op0, 0x7);
+    }
+    }
+
+
+    // JCC_1 %bb.12, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block12_label);
+
+  // Start of block 3
+  derived()->label_place(block3_label);
+
+
+    // renamable $rdx = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.13, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_dx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP32mi renamable $rdx, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.16, !tbaa !37)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP32mi, FE_MEM(op0, 0, FE_NOREG, 0), 0x1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.12, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block12_label);
+
+  // Start of block 4
+  derived()->label_place(block4_label);
+
+
+    // TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.20, align 8)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(TEST8mi, FE_MEM(op0, 0, FE_NOREG, 8), 0x4);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.13, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block13_label);
+
+  // Start of block 5
+  derived()->label_place(block5_label);
+
+
+    // renamable $rcx = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.41, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.44, !tbaa !24)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV32rm, scratch_ax.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 12));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $eax = OR32rr killed renamable $eax(tied-def 0), renamable $esi, implicit-def dead $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_si.cur_reg();
+    ASMD(OR32rr, scratch_ax.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rax = MOVSX64rr32 killed renamable $eax
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_ax.cur_reg();
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOVSXr64r32, scratch_ax.cur_reg(), op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $edx = MOV32rm renamable $rcx, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.47, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        AsmReg op3 = scratch_ax.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_dx.cur_reg(), FE_MEM(op1, 4, op3, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // $eax = MOV32ri 1, implicit-def $rax
+    {
+    if (1) {
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV32ri, scratch_ax.cur_reg(), 0x1);
+    }
+    }
+
+
+    // JMP_1 %bb.7
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jmp, block7_label);
+
+  // Start of block 6
+  derived()->label_place(block6_label);
+
+
+    // renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.68, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_dx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 12));
+        break;
+    }
+    }
+    } while (false);
+  // Start of block 7
+  derived()->label_place(block7_label);
+
+
+    // CMP32ri renamable $edx, -1, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP32ri, op0, -0x1);
+    }
+    }
+
+
+    // JCC_1 %bb.16, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block16_label);
+
+  // Start of block 8
+  derived()->label_place(block8_label);
+
+
+    // renamable $edi = MOV32rr killed renamable $edx, implicit-def $rdi
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def di has not been allocated yet
+        scratch_di.alloc(RegBank(0));
+    ASMD(MOV32rr, scratch_di.cur_reg(), op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(SHL64ri, scratch_di.cur_reg(), 0x5);
+    }
+    }
+
+
+    // renamable $rdx = LEA64r renamable $rcx, 1, renamable $rdi, 0, $noreg
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        AsmReg op3 = scratch_di.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(LEA64rm, scratch_dx.cur_reg(), FE_MEM(op1, 1, op3, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP64mr renamable $rcx, 1, killed renamable $rdi, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.54, !tbaa !25)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+        AsmReg op2 = scratch_di.cur_reg();
+        AsmReg op5 = scratch_si.cur_reg();
+    ASMD(CMP64mr, FE_MEM(op0, 1, op2, 16), op5);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.6, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block6_label);
+
+  // Start of block 9
+  derived()->label_place(block9_label);
+
+
+    // CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.58, !tbaa !29)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP64mi, FE_MEM(op0, 0, FE_NOREG, 24), 0x0);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.6, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block6_label);
+
+  // Start of block 10
+  derived()->label_place(block10_label);
+
+
+    // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    do {
+    {
+    if (1) {
+        // undef tied
+        // undef allocate scratch
+        AsmReg inst30_op2 = scratch_ax.cur_reg_or_alloc(derived());
+
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst30_op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP8mi renamable $rdx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.62, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP8mi, FE_MEM(op0, 0, FE_NOREG, 8), 0xc);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rdx, 5, implicit killed $eflags
+    {
+    if (1) {
+        AsmReg op2 = scratch_dx.cur_reg();
+    ASMD(CMOVNZ64rr, scratch_ax.cur_reg(), op2);
+    }
+    }
+  // Start of block 16
+  derived()->label_place(block16_label);
+
+
+    // RET64 killed $rax
+  derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
+  // Start of block 12
+  derived()->label_place(block12_label);
+
+
+    // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    do {
+    {
+    if (1) {
+        // undef tied
+        // undef allocate scratch
+        AsmReg inst34_op2 = scratch_ax.cur_reg_or_alloc(derived());
+
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst34_op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // RET64 killed $rax
+  derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
+  // Start of block 13
+  derived()->label_place(block13_label);
+
+
+    // renamable $ecx = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rcx :: (load (s32) from %ir.25, align 8, !tbaa !21)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 24));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // $eax = MOV32ri 1, implicit-def $rax
+    {
+    if (1) {
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV32ri, scratch_ax.cur_reg(), 0x1);
+    }
+    }
+
+
+    // CMP64rr renamable $rsi, killed renamable $rcx, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_si.cur_reg();
+        AsmReg op1 = scratch_cx.cur_reg();
+    ASMD(CMP64rr, op0, op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.16, 3, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jae, block16_label);
+
+  // Start of block 14
+  derived()->label_place(block14_label);
+
+
+    // renamable $rcx = MOV64rm killed renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.30, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rsi = nuw nsw SHL64ri killed renamable $rsi(tied-def 0), 4, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(SHL64ri, scratch_si.cur_reg(), 0x4);
+    }
+    }
+
+
+    // $edx = MOVZX32rm8 renamable $rcx, 1, renamable $rsi, 8, $noreg :: (load (s8) from %ir.33, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        AsmReg op3 = scratch_si.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOVZXr32m8, scratch_dx.cur_reg(), FE_MEM(op1, 1, op3, 8));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // TEST8rr renamable $dl, renamable $dl, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(TEST8rr, op0, op0);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.16, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block16_label);
+
+  // Start of block 15
+  derived()->label_place(block15_label);
+
+
+    // renamable $rcx = nuw ADD64rr killed renamable $rcx(tied-def 0), killed renamable $rsi, implicit-def dead $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_si.cur_reg();
+    ASMD(ADD64rr, scratch_cx.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    do {
+    {
+    if (1) {
+        // undef tied
+        // undef allocate scratch
+        AsmReg inst46_op2 = scratch_ax.cur_reg_or_alloc(derived());
+
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst46_op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP8ri killed renamable $dl, 12, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP8ri, op0, 0xc);
+    }
+    }
+
+
+    // renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rcx, 5, implicit killed $eflags
+    {
+    if (1) {
+        AsmReg op2 = scratch_cx.cur_reg();
+    ASMD(CMOVNZ64rr, scratch_ax.cur_reg(), op2);
+    }
+    }
+
+
+    // RET64 killed $rax
+  derived()->label_place(ret_converge_label);
+  if (result_0.has_assignment())
+    result_0.unlock(derived());
+  derived()->set_preserve_flags(false);
+  return true;
+
+}
+
+template <typename Adaptor,
+          typename Derived,
+          template <typename, typename, typename>
+          class BaseTy,
+          typename Config>
+bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indirect_find_str_w(GenericValuePart &&param_0, GenericValuePart &&param_1, GenericValuePart &&param_2, ValuePart &result_0) {
+    // # Machine code for function zend_native_indirect_find_str_w: NoPHIs, TracksLiveness, NoVRegs, TiedOpsRewritten, TracksDebugUserValues
+    // Function Live Ins: $rdi, $rsi, $rdx
+    //
+    // bb.0 (%ir-block.3):
+    //   successors: %bb.3(0x40000000), %bb.1(0x40000000); %bb.3(50.00%), %bb.1(50.00%)
+    //   liveins: $rdi, $rdx, $rsi
+    //   CMP8mi renamable $rdi, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.4, align 8, !tbaa !4)
+    //   JCC_1 %bb.1, 5, implicit killed $eflags
+    //
+    // bb.3 (%ir-block.7):
+    // ; predecessors: %bb.0
+    //   successors: %bb.4(0x40000000), %bb.5(0x40000000); %bb.4(50.00%), %bb.5(50.00%)
+    //   liveins: $rdi, $rdx, $rsi
+    //   renamable $rax = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
+    //   $ecx = MOVZX32rm8 renamable $rax, 1, $noreg, 8, $noreg :: (load (s8) from %ir.9, align 8, !tbaa !4)
+    //   CMP8ri renamable $cl, 10, implicit-def $eflags
+    //   JCC_1 %bb.5, 5, implicit killed $eflags
+    //
+    // bb.4 (%ir-block.12):
+    // ; predecessors: %bb.3
+    //   successors: %bb.5(0x80000000); %bb.5(100.00%)
+    //   liveins: $rax, $rdx, $rsi
+    //   renamable $rax = MOV64rm killed renamable $rax, 1, $noreg, 0, $noreg :: (load (s64) from %ir.8, !tbaa !4)
+    //   $ecx = MOVZX32rm8 renamable $rax, 1, $noreg, 16, $noreg :: (load (s8) from %ir.15, align 8, !tbaa !4)
+    //   renamable $rax = nuw ADD64ri32 killed renamable $rax(tied-def 0), 8, implicit-def dead $eflags
+    //
+    // bb.5 (%ir-block.17):
+    // ; predecessors: %bb.4, %bb.3
+    //   successors: %bb.6(0x40000000), %bb.1(0x40000000); %bb.6(50.00%), %bb.1(50.00%)
+    //   liveins: $cl, $rax, $rdx, $rsi
+    //   CMP8ri killed renamable $cl, 7, implicit-def $eflags
+    //   JCC_1 %bb.1, 5, implicit killed $eflags
+    //
+    // bb.6 (%ir-block.21):
+    // ; predecessors: %bb.5
+    //   successors: %bb.7(0x40000000), %bb.1(0x40000000); %bb.7(50.00%), %bb.1(50.00%)
+    //   liveins: $rax, $rdx, $rsi
+    //   renamable $rcx = MOV64rm killed renamable $rax, 1, $noreg, 0, $noreg :: (load (s64) from %ir.19, !tbaa !4)
+    //   CMP32mi renamable $rcx, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.22, !tbaa !37)
+    //   JCC_1 %bb.1, 5, implicit killed $eflags
+    //
+    // bb.7 (%ir-block.25):
+    // ; predecessors: %bb.6
+    //   successors: %bb.8(0x40000000), %bb.2(0x40000000); %bb.8(50.00%), %bb.2(50.00%)
+    //   liveins: $rcx, $rdx, $rsi
+    //   $eax = MOV32ri 1, implicit-def $rax
+    //   TEST8mi renamable $rcx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.26, align 8)
+    //   JCC_1 %bb.2, 5, implicit killed $eflags
+    //
+    // bb.8 (%ir-block.30):
+    // ; predecessors: %bb.7
+    //   successors: %bb.20(0x80000000); %bb.20(100.00%)
+    //   liveins: $rax, $rcx, $rdx, $rsi
+    //   renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.31, !tbaa !4)
+    //   renamable $ecx = MOV32rm killed renamable $rcx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.34, !tbaa !24)
+    //   renamable $ecx = OR32rr killed renamable $ecx(tied-def 0), renamable $edx, implicit-def dead $eflags
+    //   renamable $rcx = MOVSX64rr32 killed renamable $ecx
+    //   renamable $ecx = MOV32rm renamable $rdi, 4, killed renamable $rcx, 0, $noreg :: (load (s32) from %ir.37, !tbaa !4)
+    //   JMP_1 %bb.20
+    //
+    // bb.19 (%ir-block.80, align 16):
+    // ; predecessors: %bb.10, %bb.11
+    //   successors: %bb.20(0x80000000); %bb.20(100.00%)
+    //   liveins: $rax, $rcx, $rdi, $rdx, $rsi
+    //   renamable $ecx = MOV32rm killed renamable $rcx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.81, !tbaa !4)
+    //
+    // bb.20 (%ir-block.80):
+    // ; predecessors: %bb.19, %bb.8
+    //   successors: %bb.2(0x09e6b247), %bb.9(0x76194db9); %bb.2(7.74%), %bb.9(92.26%)
+    //   liveins: $rax, $ecx, $rdi, $rdx, $rsi
+    //   CMP32ri renamable $ecx, -1, implicit-def $eflags
+    //   JCC_1 %bb.2, 4, implicit killed $eflags
+    //
+    // bb.9 (%ir-block.40):
+    // ; predecessors: %bb.20
+    //   successors: %bb.18(0x04000000), %bb.10(0x7c000000); %bb.18(3.12%), %bb.10(96.88%)
+    //   liveins: $ecx, $rax, $rdi, $rdx, $rsi
+    //   renamable $r8d = MOV32rr killed renamable $ecx, implicit-def $r8
+    //   renamable $r8 = nuw nsw SHL64ri killed renamable $r8(tied-def 0), 5, implicit-def dead $eflags
+    //   renamable $rcx = LEA64r renamable $rdi, 1, renamable $r8, 0, $noreg
+    //   renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.44, !tbaa !29)
+    //   CMP64rr renamable $r8, renamable $rsi, implicit-def $eflags
+    //   JCC_1 %bb.18, 4, implicit killed $eflags
+    //
+    // bb.10 (%ir-block.47):
+    // ; predecessors: %bb.9
+    //   successors: %bb.19(0x3e000000), %bb.11(0x42000000); %bb.19(48.44%), %bb.11(51.56%)
+    //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
+    //   TEST64rr renamable $r8, renamable $r8, implicit-def $eflags
+    //   JCC_1 %bb.19, 4, implicit killed $eflags
+    //
+    // bb.11 (%ir-block.47):
+    // ; predecessors: %bb.10
+    //   successors: %bb.19(0x783e0f84), %bb.12(0x07c1f07c); %bb.19(93.94%), %bb.12(6.06%)
+    //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
+    //   CMP64mr renamable $rcx, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.48, !tbaa !25)
+    //   JCC_1 %bb.19, 5, implicit killed $eflags
+    //
+    // bb.12 (%ir-block.53):
+    // ; predecessors: %bb.11
+    //   successors: %bb.13(0x40000000), %bb.1(0x40000000); %bb.13(50.00%), %bb.1(50.00%)
+    //   liveins: $rcx, $rsi, $r8
+    //   renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.54, !tbaa !34)
+    //   renamable $rdx = MOV64rm renamable $rsi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.56, !tbaa !34)
+    //   CMP64rr renamable $rax, renamable $rdx, implicit-def $eflags
+    //   renamable $bl = SETCCr 5, implicit killed $eflags
+    //   CMP64ri32 killed renamable $rdx, 17, implicit-def $eflags
+    //   renamable $dl = SETCCr 3, implicit killed $eflags
+    //   dead renamable $dl = OR8rr killed renamable $dl(tied-def 0), killed renamable $bl, implicit-def $eflags
+    //   JCC_1 %bb.1, 5, implicit killed $eflags
+    //
+    // bb.13 (%ir-block.61):
+    // ; predecessors: %bb.12
+    //   successors: %bb.14(0x40000000), %bb.16(0x40000000); %bb.14(50.00%), %bb.16(50.00%)
+    //   liveins: $rax, $rcx, $rsi, $r8
+    //   renamable $rdx = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.62, !tbaa !35)
+    //   renamable $rdi = MOV64rm renamable $rsi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.63, !tbaa !35)
+    //   CMP64ri32 renamable $rax, 7, implicit-def $eflags
+    //   JCC_1 %bb.16, 7, implicit killed $eflags
+    //
+    // bb.14 (%ir-block.67):
+    // ; predecessors: %bb.13
+    //   successors: %bb.18(0x20000000), %bb.15(0x60000000); %bb.18(25.00%), %bb.15(75.00%)
+    //   liveins: $rax, $rcx, $rdi, $rdx
+    //   $rsi = MOV64rr $rdi
+    //   dead renamable $rsi = XOR64rr killed renamable $rsi(tied-def 0), renamable $rdx, implicit-def $eflags
+    //   JCC_1 %bb.18, 4, implicit killed $eflags
+    //
+    // bb.15 (%ir-block.67):
+    // ; predecessors: %bb.14
+    //   successors: %bb.18(0x2aaaaaab), %bb.1(0x55555555); %bb.18(33.33%), %bb.1(66.67%)
+    //   liveins: $rax, $rcx, $rdi, $rdx
+    //   renamable $rdi = XOR64rr killed renamable $rdi(tied-def 0), killed renamable $rdx, implicit-def dead $eflags
+    //   renamable $rdx = BSF64rr undef renamable $rdx(tied-def 0), killed renamable $rdi, implicit-def dead $eflags
+    //   renamable $rax = nuw nsw SHL64ri killed renamable $rax(tied-def 0), 3, implicit-def dead $eflags
+    //   CMP64rr killed renamable $rdx, killed renamable $rax, implicit-def $eflags
+    //   JCC_1 %bb.1, 2, implicit killed $eflags
+    //   JMP_1 %bb.18
+    //
+    // bb.16 (%ir-block.74):
+    // ; predecessors: %bb.13
+    //   successors: %bb.17(0x40000000), %bb.1(0x40000000); %bb.17(50.00%), %bb.1(50.00%)
+    //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8
+    //   CMP64rr killed renamable $rdx, killed renamable $rdi, implicit-def $eflags
+    //   JCC_1 %bb.1, 5, implicit killed $eflags
+    //
+    // bb.17 (%ir-block.76):
+    // ; predecessors: %bb.16
+    //   successors: %bb.18(0x40000000), %bb.1(0x40000000); %bb.18(50.00%), %bb.1(50.00%)
+    //   liveins: $rax, $rcx, $rsi, $r8
+    //   renamable $rdx = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr3, !tbaa !35)
+    //   CMP64rm killed renamable $rdx, killed renamable $rsi, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr5, !tbaa !35)
+    //   JCC_1 %bb.1, 5, implicit killed $eflags
+    //
+    // bb.18 (%ir-block.84):
+    // ; predecessors: %bb.9, %bb.17, %bb.14, %bb.15
+    //   liveins: $rcx
+    //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    //   CMP8mi renamable $rcx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.85, align 8, !tbaa !4)
+    //   renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rcx, 5, implicit killed $eflags
+    //   RET64 killed $rax
+    //
+    // bb.1:
+    // ; predecessors: %bb.0, %bb.5, %bb.6, %bb.12, %bb.15, %bb.16, %bb.17
+    //   successors: %bb.2(0x80000000); %bb.2(100.00%)
+    //
+    //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    //
+    // bb.2 (%ir-block.90):
+    // ; predecessors: %bb.1, %bb.7, %bb.20
+    //   liveins: $rax
+    //   RET64 killed $rax
+    //
+    // # End machine code for function zend_native_indirect_find_str_w.
+    //
+
+    // Mapping di to param_0
+    // Mapping si to param_1
+    // Mapping dx to param_2
+
+    // Creating label for convergence point at the end of the function
+    tpde::Label ret_converge_label = derived()->text_writer.label_create();
+    // Creating labels for blocks that are jump targets
+    tpde::Label block3_label = derived()->text_writer.label_create();
+    tpde::Label block4_label = derived()->text_writer.label_create();
+    tpde::Label block5_label = derived()->text_writer.label_create();
+    tpde::Label block6_label = derived()->text_writer.label_create();
+    tpde::Label block7_label = derived()->text_writer.label_create();
+    tpde::Label block8_label = derived()->text_writer.label_create();
+    tpde::Label block19_label = derived()->text_writer.label_create();
+    tpde::Label block20_label = derived()->text_writer.label_create();
+    tpde::Label block9_label = derived()->text_writer.label_create();
+    tpde::Label block10_label = derived()->text_writer.label_create();
+    tpde::Label block11_label = derived()->text_writer.label_create();
+    tpde::Label block12_label = derived()->text_writer.label_create();
+    tpde::Label block13_label = derived()->text_writer.label_create();
+    tpde::Label block14_label = derived()->text_writer.label_create();
+    tpde::Label block15_label = derived()->text_writer.label_create();
+    tpde::Label block16_label = derived()->text_writer.label_create();
+    tpde::Label block17_label = derived()->text_writer.label_create();
+    tpde::Label block18_label = derived()->text_writer.label_create();
+    tpde::Label block1_label = derived()->text_writer.label_create();
+    tpde::Label block2_label = derived()->text_writer.label_create();
+
+    ValuePart &scratch_ax = result_0;
+    ScratchReg scratch_di{derived()};
+    ScratchReg scratch_dx{derived()};
+    ScratchReg scratch_si{derived()};
+    ScratchReg scratch_cx{derived()};
+    ScratchReg scratch_r8{derived()};
+    ScratchReg scratch_bx{derived()};
+  derived()->set_preserve_flags(true);
+
+
+    // CMP8mi renamable $rdi, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.4, align 8, !tbaa !4)
+    do {
+    {
+    auto cond0 = encodeable_with(param_0, FE_MEM(FE_NOREG, 0, FE_NOREG, 8), false);
+    if (cond0) {
+    ASMD(CMP8mi, (*cond0), 12);
+        break;
+    }
+    }
+    {
+    if (1) {
+        AsmReg op0 = derived()->gval_as_reg(param_0);
+    ASMD(CMP8mi, FE_MEM(op0, 0, FE_NOREG, 8), 0xc);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.1, 5, implicit killed $eflags
+  // allocate registers used later on in the function
+  scratch_ax.cur_reg_or_alloc(derived());
+  scratch_cx.alloc(RegBank(0));
+  try_salvage_or_materialize(param_2, scratch_dx, 0, 8);
+  scratch_bx.alloc(RegBank(0));
+  try_salvage_or_materialize(param_1, scratch_si, 0, 8);
+  try_salvage_or_materialize(param_0, scratch_di, 0, 8);
+  scratch_r8.alloc(RegBank(0));
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block1_label);
+
+  // Start of block 3
+  derived()->label_place(block3_label);
+
+
+    // renamable $rax = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV64rm, scratch_ax.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // $ecx = MOVZX32rm8 renamable $rax, 1, $noreg, 8, $noreg :: (load (s8) from %ir.9, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_ax.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOVZXr32m8, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 8));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP8ri renamable $cl, 10, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(CMP8ri, op0, 0xa);
+    }
+    }
+
+
+    // JCC_1 %bb.5, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block5_label);
+
+  // Start of block 4
+  derived()->label_place(block4_label);
+
+
+    // renamable $rax = MOV64rm killed renamable $rax, 1, $noreg, 0, $noreg :: (load (s64) from %ir.8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_ax.cur_reg();
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV64rm, scratch_ax.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // $ecx = MOVZX32rm8 renamable $rax, 1, $noreg, 16, $noreg :: (load (s8) from %ir.15, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_ax.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOVZXr32m8, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rax = nuw ADD64ri32 killed renamable $rax(tied-def 0), 8, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(ADD64ri, scratch_ax.cur_reg(), 0x8);
+    }
+    }
+  // Start of block 5
+  derived()->label_place(block5_label);
+
+
+    // CMP8ri killed renamable $cl, 7, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(CMP8ri, op0, 0x7);
+    }
+    }
+
+
+    // JCC_1 %bb.1, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block1_label);
+
+  // Start of block 6
+  derived()->label_place(block6_label);
+
+
+    // renamable $rcx = MOV64rm killed renamable $rax, 1, $noreg, 0, $noreg :: (load (s64) from %ir.19, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_ax.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP32mi renamable $rcx, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.22, !tbaa !37)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(CMP32mi, FE_MEM(op0, 0, FE_NOREG, 0), 0x1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.1, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block1_label);
+
+  // Start of block 7
+  derived()->label_place(block7_label);
+
+
+    // $eax = MOV32ri 1, implicit-def $rax
+    {
+    if (1) {
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV32ri, scratch_ax.cur_reg(), 0x1);
+    }
+    }
+
+
+    // TEST8mi renamable $rcx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.26, align 8)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(TEST8mi, FE_MEM(op0, 0, FE_NOREG, 8), 0x4);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.2, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block2_label);
+
+  // Start of block 8
+  derived()->label_place(block8_label);
+
+
+    // renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.31, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        // def di has not been allocated yet
+        scratch_di.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_di.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $ecx = MOV32rm killed renamable $rcx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.34, !tbaa !24)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 12));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $ecx = OR32rr killed renamable $ecx(tied-def 0), renamable $edx, implicit-def dead $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_dx.cur_reg();
+    ASMD(OR32rr, scratch_cx.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rcx = MOVSX64rr32 killed renamable $ecx
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOVSXr64r32, scratch_cx.cur_reg(), op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $ecx = MOV32rm renamable $rdi, 4, killed renamable $rcx, 0, $noreg :: (load (s32) from %ir.37, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        AsmReg op3 = scratch_cx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_cx.cur_reg(), FE_MEM(op1, 4, op3, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JMP_1 %bb.20
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jmp, block20_label);
+
+  // Start of block 19
+  derived()->label_place(block19_label);
+
+
+    // renamable $ecx = MOV32rm killed renamable $rcx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.81, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 12));
+        break;
+    }
+    }
+    } while (false);
+  // Start of block 20
+  derived()->label_place(block20_label);
+
+
+    // CMP32ri renamable $ecx, -1, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(CMP32ri, op0, -0x1);
+    }
+    }
+
+
+    // JCC_1 %bb.2, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block2_label);
+
+  // Start of block 9
+  derived()->label_place(block9_label);
+
+
+    // renamable $r8d = MOV32rr killed renamable $ecx, implicit-def $r8
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        // def r8 has not been allocated yet
+        scratch_r8.alloc(RegBank(0));
+    ASMD(MOV32rr, scratch_r8.cur_reg(), op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $r8 = nuw nsw SHL64ri killed renamable $r8(tied-def 0), 5, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(SHL64ri, scratch_r8.cur_reg(), 0x5);
+    }
+    }
+
+
+    // renamable $rcx = LEA64r renamable $rdi, 1, renamable $r8, 0, $noreg
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        AsmReg op3 = scratch_r8.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(LEA64rm, scratch_cx.cur_reg(), FE_MEM(op1, 1, op3, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $r8 = MOV64rm renamable $rdi, 1, killed renamable $r8, 24, $noreg :: (load (s64) from %ir.44, !tbaa !29)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        AsmReg op3 = scratch_r8.cur_reg();
+        // def r8 has not been allocated yet
+        scratch_r8.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_r8.cur_reg(), FE_MEM(op1, 1, op3, 24));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP64rr renamable $r8, renamable $rsi, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_r8.cur_reg();
+        AsmReg op1 = scratch_si.cur_reg();
+    ASMD(CMP64rr, op0, op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.18, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block18_label);
+
+  // Start of block 10
+  derived()->label_place(block10_label);
+
+
+    // TEST64rr renamable $r8, renamable $r8, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_r8.cur_reg();
+    ASMD(TEST64rr, op0, op0);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.19, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block19_label);
+
+  // Start of block 11
+  derived()->label_place(block11_label);
+
+
+    // CMP64mr renamable $rcx, 1, $noreg, 16, $noreg, renamable $rdx, implicit-def $eflags :: (load (s64) from %ir.48, !tbaa !25)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+        AsmReg op5 = scratch_dx.cur_reg();
+    ASMD(CMP64mr, FE_MEM(op0, 0, FE_NOREG, 16), op5);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.19, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block19_label);
+
+  // Start of block 12
+  derived()->label_place(block12_label);
+
+
+    // renamable $rax = MOV64rm renamable $r8, 1, $noreg, 16, $noreg :: (load (s64) from %ir.54, !tbaa !34)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_r8.cur_reg();
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV64rm, scratch_ax.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdx = MOV64rm renamable $rsi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.56, !tbaa !34)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_si.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_dx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP64rr renamable $rax, renamable $rdx, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_ax.cur_reg();
+        AsmReg op1 = scratch_dx.cur_reg();
+    ASMD(CMP64rr, op0, op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $bl = SETCCr 5, implicit killed $eflags
+    {
+    if (1) {
+        // def bx has not been allocated yet
+        scratch_bx.alloc(RegBank(0));
+    ASMD(SETNZ8r, scratch_bx.cur_reg());
+    }
+    }
+
+
+    // CMP64ri32 killed renamable $rdx, 17, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP64ri, op0, 0x11);
+    }
+    }
+
+
+    // renamable $dl = SETCCr 3, implicit killed $eflags
+    {
+    if (1) {
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(SETNC8r, scratch_dx.cur_reg());
+    }
+    }
+
+
+    // dead renamable $dl = OR8rr killed renamable $dl(tied-def 0), killed renamable $bl, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_bx.cur_reg();
+    ASMD(OR8rr, scratch_dx.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.1, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block1_label);
+
+  // Start of block 13
+  derived()->label_place(block13_label);
+
+
+    // renamable $rdx = MOV64rm renamable $r8, 1, $noreg, 24, $noreg :: (load (s64) from %ir.62, !tbaa !35)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_r8.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_dx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 24));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdi = MOV64rm renamable $rsi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.63, !tbaa !35)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_si.cur_reg();
+        // def di has not been allocated yet
+        scratch_di.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_di.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 24));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP64ri32 renamable $rax, 7, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_ax.cur_reg();
+    ASMD(CMP64ri, op0, 0x7);
+    }
+    }
+
+
+    // JCC_1 %bb.16, 7, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::ja, block16_label);
+
+  // Start of block 14
+  derived()->label_place(block14_label);
+
+
+    // $rsi = MOV64rr $rdi
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def si has not been allocated yet
+        scratch_si.alloc(RegBank(0));
+    ASMD(MOV64rr, scratch_si.cur_reg(), op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // dead renamable $rsi = XOR64rr killed renamable $rsi(tied-def 0), renamable $rdx, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_dx.cur_reg();
+    ASMD(XOR64rr, scratch_si.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.18, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block18_label);
+
+  // Start of block 15
+  derived()->label_place(block15_label);
+
+
+    // renamable $rdi = XOR64rr killed renamable $rdi(tied-def 0), killed renamable $rdx, implicit-def dead $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_dx.cur_reg();
+    ASMD(XOR64rr, scratch_di.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdx = BSF64rr undef renamable $rdx(tied-def 0), killed renamable $rdi, implicit-def dead $eflags
+    do {
+    {
+    if (1) {
+        // undef tied
+        AsmReg op2 = scratch_di.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(BSF64rr, scratch_dx.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rax = nuw nsw SHL64ri killed renamable $rax(tied-def 0), 3, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(SHL64ri, scratch_ax.cur_reg(), 0x3);
+    }
+    }
+
+
+    // CMP64rr killed renamable $rdx, killed renamable $rax, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+        AsmReg op1 = scratch_ax.cur_reg();
+    ASMD(CMP64rr, op0, op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.1, 2, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jb, block1_label);
+
+
+
+    // JMP_1 %bb.18
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jmp, block18_label);
+
+  // Start of block 16
+  derived()->label_place(block16_label);
+
+
+    // CMP64rr killed renamable $rdx, killed renamable $rdi, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+        AsmReg op1 = scratch_di.cur_reg();
+    ASMD(CMP64rr, op0, op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.1, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block1_label);
+
+  // Start of block 17
+  derived()->label_place(block17_label);
+
+
+    // renamable $rdx = MOV64rm killed renamable $r8, 1, renamable $rax, 16, $noreg :: (load (s64) from %ir.sunkaddr3, !tbaa !35)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_r8.cur_reg();
+        AsmReg op3 = scratch_ax.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_dx.cur_reg(), FE_MEM(op1, 1, op3, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP64rm killed renamable $rdx, killed renamable $rsi, 1, killed renamable $rax, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr5, !tbaa !35)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+        AsmReg op1 = scratch_si.cur_reg();
+        AsmReg op3 = scratch_ax.cur_reg();
+    ASMD(CMP64rm, op0, FE_MEM(op1, 1, op3, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.1, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block1_label);
+
+  // Start of block 18
+  derived()->label_place(block18_label);
+
+
+    // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    do {
+    {
+    if (1) {
+        // undef tied
+        // undef allocate scratch
+        AsmReg inst62_op2 = scratch_ax.cur_reg_or_alloc(derived());
+
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst62_op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP8mi renamable $rcx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.85, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(CMP8mi, FE_MEM(op0, 0, FE_NOREG, 8), 0xc);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rcx, 5, implicit killed $eflags
+    {
+    if (1) {
+        AsmReg op2 = scratch_cx.cur_reg();
+    ASMD(CMOVNZ64rr, scratch_ax.cur_reg(), op2);
+    }
+    }
+
+
+    // RET64 killed $rax
+  derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
+  // Start of block 1
+  derived()->label_place(block1_label);
+
+
+    // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    do {
+    {
+    if (1) {
+        // undef tied
+        // undef allocate scratch
+        AsmReg inst66_op2 = scratch_ax.cur_reg_or_alloc(derived());
+
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst66_op2);
+        break;
+    }
+    }
+    } while (false);
+  // Start of block 2
+  derived()->label_place(block2_label);
+
+
+    // RET64 killed $rax
+  derived()->label_place(ret_converge_label);
+  if (result_0.has_assignment())
+    result_0.unlock(derived());
+  derived()->set_preserve_flags(false);
+  return true;
+
+}
+
+template <typename Adaptor,
+          typename Derived,
+          template <typename, typename, typename>
+          class BaseTy,
+          typename Config>
+bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_indirect_find_idx_w(GenericValuePart &&param_0, GenericValuePart &&param_1, ValuePart &result_0) {
+    // # Machine code for function zend_native_indirect_find_idx_w: NoPHIs, TracksLiveness, NoVRegs, TiedOpsRewritten, TracksDebugUserValues
+    // Function Live Ins: $rdi, $rsi
+    //
+    // bb.0 (%ir-block.2):
+    //   successors: %bb.3(0x40000000), %bb.1(0x40000000); %bb.3(50.00%), %bb.1(50.00%)
+    //   liveins: $rdi, $rsi
+    //   CMP8mi renamable $rdi, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.3, align 8, !tbaa !4)
+    //   JCC_1 %bb.1, 5, implicit killed $eflags
+    //
+    // bb.3 (%ir-block.6):
+    // ; predecessors: %bb.0
+    //   successors: %bb.4(0x40000000), %bb.5(0x40000000); %bb.4(50.00%), %bb.5(50.00%)
+    //   liveins: $rdi, $rsi
+    //   renamable $rax = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
+    //   $ecx = MOVZX32rm8 renamable $rax, 1, $noreg, 8, $noreg :: (load (s8) from %ir.8, align 8, !tbaa !4)
+    //   CMP8ri renamable $cl, 10, implicit-def $eflags
+    //   JCC_1 %bb.5, 5, implicit killed $eflags
+    //
+    // bb.4 (%ir-block.11):
+    // ; predecessors: %bb.3
+    //   successors: %bb.5(0x80000000); %bb.5(100.00%)
+    //   liveins: $rax, $rsi
+    //   renamable $rax = MOV64rm killed renamable $rax, 1, $noreg, 0, $noreg :: (load (s64) from %ir.7, !tbaa !4)
+    //   $ecx = MOVZX32rm8 renamable $rax, 1, $noreg, 16, $noreg :: (load (s8) from %ir.14, align 8, !tbaa !4)
+    //   renamable $rax = nuw ADD64ri32 killed renamable $rax(tied-def 0), 8, implicit-def dead $eflags
+    //
+    // bb.5 (%ir-block.16):
+    // ; predecessors: %bb.4, %bb.3
+    //   successors: %bb.6(0x40000000), %bb.1(0x40000000); %bb.6(50.00%), %bb.1(50.00%)
+    //   liveins: $cl, $rax, $rsi
+    //   CMP8ri killed renamable $cl, 7, implicit-def $eflags
+    //   JCC_1 %bb.1, 5, implicit killed $eflags
+    //
+    // bb.6 (%ir-block.20):
+    // ; predecessors: %bb.5
+    //   successors: %bb.7(0x40000000), %bb.1(0x40000000); %bb.7(50.00%), %bb.1(50.00%)
+    //   liveins: $rax, $rsi
+    //   renamable $rdx = MOV64rm killed renamable $rax, 1, $noreg, 0, $noreg :: (load (s64) from %ir.18, !tbaa !4)
+    //   CMP32mi renamable $rdx, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.21, !tbaa !37)
+    //   JCC_1 %bb.1, 5, implicit killed $eflags
+    //
+    // bb.7 (%ir-block.24):
+    // ; predecessors: %bb.6
+    //   successors: %bb.11(0x40000000), %bb.8(0x40000000); %bb.11(50.00%), %bb.8(50.00%)
+    //   liveins: $rdx, $rsi
+    //   TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.25, align 8)
+    //   JCC_1 %bb.8, 5, implicit killed $eflags
+    //
+    // bb.11 (%ir-block.45):
+    // ; predecessors: %bb.7
+    //   successors: %bb.16(0x80000000); %bb.16(100.00%)
+    //   liveins: $rdx, $rsi
+    //   renamable $rcx = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.46, !tbaa !4)
+    //   renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.49, !tbaa !24)
+    //   renamable $eax = OR32rr killed renamable $eax(tied-def 0), renamable $esi, implicit-def dead $eflags
+    //   renamable $rax = MOVSX64rr32 killed renamable $eax
+    //   renamable $edx = MOV32rm renamable $rcx, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.52, !tbaa !4)
+    //   $eax = MOV32ri 1, implicit-def $rax
+    //   JMP_1 %bb.16
+    //
+    // bb.1:
+    // ; predecessors: %bb.0, %bb.5, %bb.6
+    //   successors: %bb.2(0x80000000); %bb.2(100.00%)
+    //
+    //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    //
+    // bb.2 (%ir-block.76):
+    // ; predecessors: %bb.1, %bb.9, %bb.8, %bb.16
+    //   liveins: $rax
+    //   RET64 killed $rax
+    //
+    // bb.15 (%ir-block.72, align 16):
+    // ; predecessors: %bb.12, %bb.13
+    //   successors: %bb.16(0x80000000); %bb.16(100.00%)
+    //   liveins: $rax, $rcx, $rdx, $rsi
+    //   renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.73, !tbaa !4)
+    //
+    // bb.16 (%ir-block.72):
+    // ; predecessors: %bb.15, %bb.11
+    //   successors: %bb.2(0x0715ba18), %bb.12(0x78ea45e8); %bb.2(5.54%), %bb.12(94.46%)
+    //   liveins: $rax, $edx, $rcx, $rsi
+    //   CMP32ri renamable $edx, -1, implicit-def $eflags
+    //   JCC_1 %bb.2, 4, implicit killed $eflags
+    //
+    // bb.12 (%ir-block.55):
+    // ; predecessors: %bb.16
+    //   successors: %bb.13(0x40000000), %bb.15(0x40000000); %bb.13(50.00%), %bb.15(50.00%)
+    //   liveins: $edx, $rax, $rcx, $rsi
+    //   renamable $edi = MOV32rr killed renamable $edx, implicit-def $rdi
+    //   renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
+    //   renamable $rdx = LEA64r renamable $rcx, 1, renamable $rdi, 0, $noreg
+    //   CMP64mr renamable $rcx, 1, killed renamable $rdi, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.59, !tbaa !25)
+    //   JCC_1 %bb.15, 5, implicit killed $eflags
+    //
+    // bb.13 (%ir-block.62):
+    // ; predecessors: %bb.12
+    //   successors: %bb.14(0x04000000), %bb.15(0x7c000000); %bb.14(3.12%), %bb.15(96.88%)
+    //   liveins: $rax, $rcx, $rdx, $rsi
+    //   CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.63, !tbaa !29)
+    //   JCC_1 %bb.15, 5, implicit killed $eflags
+    //
+    // bb.14 (%ir-block.66):
+    // ; predecessors: %bb.13
+    //   liveins: $rdx
+    //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    //   CMP8mi renamable $rdx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.67, align 8, !tbaa !4)
+    //   renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rdx, 5, implicit killed $eflags
+    //   RET64 killed $rax
+    //
+    // bb.8 (%ir-block.29):
+    // ; predecessors: %bb.7
+    //   successors: %bb.9(0x40000000), %bb.2(0x40000000); %bb.9(50.00%), %bb.2(50.00%)
+    //   liveins: $rdx, $rsi
+    //   renamable $ecx = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rcx :: (load (s32) from %ir.30, align 8, !tbaa !21)
+    //   $eax = MOV32ri 1, implicit-def $rax
+    //   CMP64rr renamable $rsi, killed renamable $rcx, implicit-def $eflags
+    //   JCC_1 %bb.2, 3, implicit killed $eflags
+    //
+    // bb.9 (%ir-block.34):
+    // ; predecessors: %bb.8
+    //   successors: %bb.2(0x30000000), %bb.10(0x50000000); %bb.2(37.50%), %bb.10(62.50%)
+    //   liveins: $rax, $rdx, $rsi
+    //   renamable $rcx = MOV64rm killed renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.35, !tbaa !4)
+    //   renamable $rsi = nuw nsw SHL64ri killed renamable $rsi(tied-def 0), 4, implicit-def dead $eflags
+    //   $edx = MOVZX32rm8 renamable $rcx, 1, renamable $rsi, 8, $noreg :: (load (s8) from %ir.38, align 8, !tbaa !4)
+    //   TEST8rr renamable $dl, renamable $dl, implicit-def $eflags
+    //   JCC_1 %bb.2, 4, implicit killed $eflags
+    //
+    // bb.10 (%ir-block.41):
+    // ; predecessors: %bb.9
+    //   liveins: $dl, $rcx, $rsi
+    //   renamable $rcx = nuw ADD64rr killed renamable $rcx(tied-def 0), killed renamable $rsi, implicit-def dead $eflags
+    //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    //   CMP8ri killed renamable $dl, 12, implicit-def $eflags
+    //   renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rcx, 5, implicit killed $eflags
+    //   RET64 killed $rax
+    //
+    // # End machine code for function zend_native_indirect_find_idx_w.
+    //
+
+    // Mapping di to param_0
+    // Mapping si to param_1
+
+    // Creating label for convergence point at the end of the function
+    tpde::Label ret_converge_label = derived()->text_writer.label_create();
+    // Creating labels for blocks that are jump targets
+    tpde::Label block3_label = derived()->text_writer.label_create();
+    tpde::Label block4_label = derived()->text_writer.label_create();
+    tpde::Label block5_label = derived()->text_writer.label_create();
+    tpde::Label block6_label = derived()->text_writer.label_create();
+    tpde::Label block7_label = derived()->text_writer.label_create();
+    tpde::Label block11_label = derived()->text_writer.label_create();
+    tpde::Label block1_label = derived()->text_writer.label_create();
+    tpde::Label block2_label = derived()->text_writer.label_create();
+    tpde::Label block15_label = derived()->text_writer.label_create();
+    tpde::Label block16_label = derived()->text_writer.label_create();
+    tpde::Label block12_label = derived()->text_writer.label_create();
+    tpde::Label block13_label = derived()->text_writer.label_create();
+    tpde::Label block14_label = derived()->text_writer.label_create();
+    tpde::Label block8_label = derived()->text_writer.label_create();
+    tpde::Label block9_label = derived()->text_writer.label_create();
+    tpde::Label block10_label = derived()->text_writer.label_create();
+
+    ValuePart &scratch_ax = result_0;
+    ScratchReg scratch_di{derived()};
+    ScratchReg scratch_dx{derived()};
+    ScratchReg scratch_si{derived()};
+    ScratchReg scratch_cx{derived()};
+  derived()->set_preserve_flags(true);
+
+
+    // CMP8mi renamable $rdi, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.3, align 8, !tbaa !4)
+    do {
+    {
+    auto cond0 = encodeable_with(param_0, FE_MEM(FE_NOREG, 0, FE_NOREG, 8), false);
+    if (cond0) {
+    ASMD(CMP8mi, (*cond0), 12);
+        break;
+    }
+    }
+    {
+    if (1) {
+        AsmReg op0 = derived()->gval_as_reg(param_0);
+    ASMD(CMP8mi, FE_MEM(op0, 0, FE_NOREG, 8), 0xc);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.1, 5, implicit killed $eflags
+  // allocate registers used later on in the function
+  scratch_ax.cur_reg_or_alloc(derived());
+  scratch_cx.alloc(RegBank(0));
+  scratch_dx.alloc(RegBank(0));
+  try_salvage_or_materialize(param_1, scratch_si, 0, 8);
+  try_salvage_or_materialize(param_0, scratch_di, 0, 8);
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block1_label);
+
+  // Start of block 3
+  derived()->label_place(block3_label);
+
+
+    // renamable $rax = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_di.cur_reg();
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV64rm, scratch_ax.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // $ecx = MOVZX32rm8 renamable $rax, 1, $noreg, 8, $noreg :: (load (s8) from %ir.8, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_ax.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOVZXr32m8, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 8));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP8ri renamable $cl, 10, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(CMP8ri, op0, 0xa);
+    }
+    }
+
+
+    // JCC_1 %bb.5, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block5_label);
+
+  // Start of block 4
+  derived()->label_place(block4_label);
+
+
+    // renamable $rax = MOV64rm killed renamable $rax, 1, $noreg, 0, $noreg :: (load (s64) from %ir.7, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_ax.cur_reg();
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV64rm, scratch_ax.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // $ecx = MOVZX32rm8 renamable $rax, 1, $noreg, 16, $noreg :: (load (s8) from %ir.14, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_ax.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOVZXr32m8, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rax = nuw ADD64ri32 killed renamable $rax(tied-def 0), 8, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(ADD64ri, scratch_ax.cur_reg(), 0x8);
+    }
+    }
+  // Start of block 5
+  derived()->label_place(block5_label);
+
+
+    // CMP8ri killed renamable $cl, 7, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+    ASMD(CMP8ri, op0, 0x7);
+    }
+    }
+
+
+    // JCC_1 %bb.1, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block1_label);
+
+  // Start of block 6
+  derived()->label_place(block6_label);
+
+
+    // renamable $rdx = MOV64rm killed renamable $rax, 1, $noreg, 0, $noreg :: (load (s64) from %ir.18, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_ax.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_dx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP32mi renamable $rdx, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.21, !tbaa !37)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP32mi, FE_MEM(op0, 0, FE_NOREG, 0), 0x1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.1, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block1_label);
+
+  // Start of block 7
+  derived()->label_place(block7_label);
+
+
+    // TEST8mi renamable $rdx, 1, $noreg, 8, $noreg, 4, implicit-def $eflags :: (load (s8) from %ir.25, align 8)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(TEST8mi, FE_MEM(op0, 0, FE_NOREG, 8), 0x4);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.8, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block8_label);
+
+  // Start of block 11
+  derived()->label_place(block11_label);
+
+
+    // renamable $rcx = MOV64rm renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.46, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $eax = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.49, !tbaa !24)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV32rm, scratch_ax.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 12));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $eax = OR32rr killed renamable $eax(tied-def 0), renamable $esi, implicit-def dead $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_si.cur_reg();
+    ASMD(OR32rr, scratch_ax.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rax = MOVSX64rr32 killed renamable $eax
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_ax.cur_reg();
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOVSXr64r32, scratch_ax.cur_reg(), op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $edx = MOV32rm renamable $rcx, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.52, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        AsmReg op3 = scratch_ax.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_dx.cur_reg(), FE_MEM(op1, 4, op3, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // $eax = MOV32ri 1, implicit-def $rax
+    {
+    if (1) {
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV32ri, scratch_ax.cur_reg(), 0x1);
+    }
+    }
+
+
+    // JMP_1 %bb.16
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jmp, block16_label);
+
+  // Start of block 1
+  derived()->label_place(block1_label);
+
+
+    // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    do {
+    {
+    if (1) {
+        // undef tied
+        // undef allocate scratch
+        AsmReg inst23_op2 = scratch_ax.cur_reg_or_alloc(derived());
+
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst23_op2);
+        break;
+    }
+    }
+    } while (false);
+  // Start of block 2
+  derived()->label_place(block2_label);
+
+
+    // RET64 killed $rax
+  derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
+  // Start of block 15
+  derived()->label_place(block15_label);
+
+
+    // renamable $edx = MOV32rm killed renamable $rdx, 1, $noreg, 12, $noreg :: (load (s32) from %ir.73, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_dx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 12));
+        break;
+    }
+    }
+    } while (false);
+  // Start of block 16
+  derived()->label_place(block16_label);
+
+
+    // CMP32ri renamable $edx, -1, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP32ri, op0, -0x1);
+    }
+    }
+
+
+    // JCC_1 %bb.2, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block2_label);
+
+  // Start of block 12
+  derived()->label_place(block12_label);
+
+
+    // renamable $edi = MOV32rr killed renamable $edx, implicit-def $rdi
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def di has not been allocated yet
+        scratch_di.alloc(RegBank(0));
+    ASMD(MOV32rr, scratch_di.cur_reg(), op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(SHL64ri, scratch_di.cur_reg(), 0x5);
+    }
+    }
+
+
+    // renamable $rdx = LEA64r renamable $rcx, 1, renamable $rdi, 0, $noreg
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        AsmReg op3 = scratch_di.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(LEA64rm, scratch_dx.cur_reg(), FE_MEM(op1, 1, op3, 0));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP64mr renamable $rcx, 1, killed renamable $rdi, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.59, !tbaa !25)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_cx.cur_reg();
+        AsmReg op2 = scratch_di.cur_reg();
+        AsmReg op5 = scratch_si.cur_reg();
+    ASMD(CMP64mr, FE_MEM(op0, 1, op2, 16), op5);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.15, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block15_label);
+
+  // Start of block 13
+  derived()->label_place(block13_label);
+
+
+    // CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.63, !tbaa !29)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP64mi, FE_MEM(op0, 0, FE_NOREG, 24), 0x0);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.15, 5, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jne, block15_label);
+
+  // Start of block 14
+  derived()->label_place(block14_label);
+
+
+    // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    do {
+    {
+    if (1) {
+        // undef tied
+        // undef allocate scratch
+        AsmReg inst35_op2 = scratch_ax.cur_reg_or_alloc(derived());
+
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst35_op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP8mi renamable $rdx, 1, $noreg, 8, $noreg, 12, implicit-def $eflags :: (load (s8) from %ir.67, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP8mi, FE_MEM(op0, 0, FE_NOREG, 8), 0xc);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rdx, 5, implicit killed $eflags
+    {
+    if (1) {
+        AsmReg op2 = scratch_dx.cur_reg();
+    ASMD(CMOVNZ64rr, scratch_ax.cur_reg(), op2);
+    }
+    }
+
+
+    // RET64 killed $rax
+  derived()->generate_raw_jump(Derived::Jump::jmp, ret_converge_label);
+  // Start of block 8
+  derived()->label_place(block8_label);
+
+
+    // renamable $ecx = MOV32rm renamable $rdx, 1, $noreg, 24, $noreg, implicit-def $rcx :: (load (s32) from %ir.30, align 8, !tbaa !21)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV32rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 24));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // $eax = MOV32ri 1, implicit-def $rax
+    {
+    if (1) {
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(MOV32ri, scratch_ax.cur_reg(), 0x1);
+    }
+    }
+
+
+    // CMP64rr renamable $rsi, killed renamable $rcx, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_si.cur_reg();
+        AsmReg op1 = scratch_cx.cur_reg();
+    ASMD(CMP64rr, op0, op1);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.2, 3, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::jae, block2_label);
+
+  // Start of block 9
+  derived()->label_place(block9_label);
+
+
+    // renamable $rcx = MOV64rm killed renamable $rdx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.35, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_dx.cur_reg();
+        // def cx has not been allocated yet
+        scratch_cx.alloc(RegBank(0));
+    ASMD(MOV64rm, scratch_cx.cur_reg(), FE_MEM(op1, 0, FE_NOREG, 16));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $rsi = nuw nsw SHL64ri killed renamable $rsi(tied-def 0), 4, implicit-def dead $eflags
+    {
+    if (1) {
+    ASMD(SHL64ri, scratch_si.cur_reg(), 0x4);
+    }
+    }
+
+
+    // $edx = MOVZX32rm8 renamable $rcx, 1, renamable $rsi, 8, $noreg :: (load (s8) from %ir.38, align 8, !tbaa !4)
+    do {
+    {
+    if (1) {
+        AsmReg op1 = scratch_cx.cur_reg();
+        AsmReg op3 = scratch_si.cur_reg();
+        // def dx has not been allocated yet
+        scratch_dx.alloc(RegBank(0));
+    ASMD(MOVZXr32m8, scratch_dx.cur_reg(), FE_MEM(op1, 1, op3, 8));
+        break;
+    }
+    }
+    } while (false);
+
+
+    // TEST8rr renamable $dl, renamable $dl, implicit-def $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(TEST8rr, op0, op0);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // JCC_1 %bb.2, 4, implicit killed $eflags
+  // Preparing jump to other block
+  derived()->generate_raw_jump(Derived::Jump::je, block2_label);
+
+  // Start of block 10
+  derived()->label_place(block10_label);
+
+
+    // renamable $rcx = nuw ADD64rr killed renamable $rcx(tied-def 0), killed renamable $rsi, implicit-def dead $eflags
+    do {
+    {
+    if (1) {
+        AsmReg op2 = scratch_si.cur_reg();
+    ASMD(ADD64rr, scratch_cx.cur_reg(), op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
+    do {
+    {
+    if (1) {
+        // undef tied
+        // undef allocate scratch
+        AsmReg inst49_op2 = scratch_ax.cur_reg_or_alloc(derived());
+
+        // def ax has not been allocated yet
+        scratch_ax.cur_reg_or_alloc(derived());
+    ASMD(XOR32rr, scratch_ax.cur_reg(), inst49_op2);
+        break;
+    }
+    }
+    } while (false);
+
+
+    // CMP8ri killed renamable $dl, 12, implicit-def $eflags
+    {
+    if (1) {
+        AsmReg op0 = scratch_dx.cur_reg();
+    ASMD(CMP8ri, op0, 0xc);
+    }
+    }
+
+
+    // renamable $rax = CMOV64rr killed renamable $rax(tied-def 0), killed renamable $rcx, 5, implicit killed $eflags
+    {
+    if (1) {
+        AsmReg op2 = scratch_cx.cur_reg();
+    ASMD(CMOVNZ64rr, scratch_ax.cur_reg(), op2);
+    }
+    }
 
 
     // RET64 killed $rax
@@ -15817,7 +22586,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     //   successors: %bb.3(0x80000000); %bb.3(100.00%)
     //   liveins: $rdi, $rsi
     //   renamable $rcx = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.24, !tbaa !4)
-    //   renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.27, !tbaa !23)
+    //   renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.27, !tbaa !24)
     //   renamable $eax = OR32rr killed renamable $eax(tied-def 0), renamable $esi, implicit-def dead $eflags
     //   renamable $rax = MOVSX64rr32 killed renamable $eax
     //   renamable $edx = MOV32rm renamable $rcx, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.30, !tbaa !4)
@@ -15844,14 +22613,14 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     //   renamable $edi = MOV32rr killed renamable $edx, implicit-def $rdi
     //   renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
     //   renamable $rdx = LEA64r renamable $rcx, 1, renamable $rdi, 0, $noreg
-    //   CMP64mr renamable $rcx, 1, killed renamable $rdi, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.37, !tbaa !24)
+    //   CMP64mr renamable $rcx, 1, killed renamable $rdi, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.37, !tbaa !25)
     //   JCC_1 %bb.2, 5, implicit killed $eflags
     //
     // bb.5 (%ir-block.40):
     // ; predecessors: %bb.4
     //   successors: %bb.6(0x04000000), %bb.2(0x7c000000); %bb.6(3.12%), %bb.2(96.88%)
     //   liveins: $rax, $rcx, $rdx, $rsi
-    //   CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.41, !tbaa !28)
+    //   CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.41, !tbaa !29)
     //   JCC_1 %bb.2, 5, implicit killed $eflags
     //
     // bb.6 (%ir-block.44):
@@ -15871,7 +22640,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     // ; predecessors: %bb.0
     //   successors: %bb.8(0x40000000), %bb.10(0x40000000); %bb.8(50.00%), %bb.10(50.00%)
     //   liveins: $rdi, $rsi
-    //   renamable $ecx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rcx :: (load (s32) from %ir.8, align 8, !tbaa !20)
+    //   renamable $ecx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rcx :: (load (s32) from %ir.8, align 8, !tbaa !21)
     //   $eax = MOV32ri 1, implicit-def $rax
     //   CMP64rr renamable $rsi, killed renamable $rcx, implicit-def $eflags
     //   JCC_1 %bb.10, 3, implicit killed $eflags
@@ -15970,7 +22739,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     } while (false);
 
 
-    // renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.27, !tbaa !23)
+    // renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.27, !tbaa !24)
     do {
     {
     if (1) {
@@ -16113,7 +22882,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     } while (false);
 
 
-    // CMP64mr renamable $rcx, 1, killed renamable $rdi, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.37, !tbaa !24)
+    // CMP64mr renamable $rcx, 1, killed renamable $rdi, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.37, !tbaa !25)
     do {
     {
     if (1) {
@@ -16135,7 +22904,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
   derived()->label_place(block5_label);
 
 
-    // CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.41, !tbaa !28)
+    // CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.41, !tbaa !29)
     do {
     {
     if (1) {
@@ -16201,7 +22970,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
   derived()->label_place(block7_label);
 
 
-    // renamable $ecx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rcx :: (load (s32) from %ir.8, align 8, !tbaa !20)
+    // renamable $ecx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rcx :: (load (s32) from %ir.8, align 8, !tbaa !21)
     do {
     {
     if (1) {
@@ -16371,7 +23140,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     // bb.0 (%ir-block.2):
     //   successors: %bb.1(0x30000000), %bb.3(0x50000000); %bb.1(37.50%), %bb.3(62.50%)
     //   liveins: $rdi, $rsi
-    //   renamable $rcx = MOV64rm renamable $rsi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.3, !tbaa !33)
+    //   renamable $rcx = MOV64rm renamable $rsi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.3, !tbaa !34)
     //   TEST64rr renamable $rcx, renamable $rcx, implicit-def $eflags
     //   JCC_1 %bb.1, 4, implicit killed $eflags
     //
@@ -16392,7 +23161,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     // ; predecessors: %bb.3
     //   successors: %bb.1(0x30000000), %bb.5(0x50000000); %bb.1(37.50%), %bb.5(62.50%)
     //   liveins: $rcx, $rdi, $rsi
-    //   renamable $r8 = MOV64rm renamable $rsi, 1, $noreg, 8, $noreg :: (load (s64) from %ir.14, !tbaa !31)
+    //   renamable $r8 = MOV64rm renamable $rsi, 1, $noreg, 8, $noreg :: (load (s64) from %ir.14, !tbaa !32)
     //   TEST64rr renamable $r8, renamable $r8, implicit-def $eflags
     //   JCC_1 %bb.1, 4, implicit killed $eflags
     //
@@ -16409,7 +23178,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     //   successors: %bb.19(0x80000000); %bb.19(100.00%)
     //   liveins: $rax, $rcx, $rdi, $rsi, $r8
     //   renamable $r9 = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.23, !tbaa !4)
-    //   renamable $edx = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.26, !tbaa !23)
+    //   renamable $edx = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.26, !tbaa !24)
     //   renamable $edx = OR32rr killed renamable $edx(tied-def 0), renamable $r8d, implicit-def dead $eflags
     //   renamable $rdx = MOVSX64rr32 killed renamable $edx
     //   renamable $edx = MOV32rm renamable $r9, 4, killed renamable $rdx, 0, $noreg :: (load (s32) from %ir.29, !tbaa !4)
@@ -16435,7 +23204,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     //   renamable $edi = MOV32rr killed renamable $edx, implicit-def $rdi
     //   renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
     //   renamable $rdx = LEA64r renamable $r9, 1, renamable $rdi, 0, $noreg
-    //   renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.36, !tbaa !28)
+    //   renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.36, !tbaa !29)
     //   CMP64rr renamable $rdi, renamable $rsi, implicit-def $eflags
     //   JCC_1 %bb.17, 4, implicit killed $eflags
     //
@@ -16450,7 +23219,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     // ; predecessors: %bb.8
     //   successors: %bb.18(0x783e0f84), %bb.10(0x07c1f07c); %bb.18(93.94%), %bb.10(6.06%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8, $r9
-    //   CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.40, !tbaa !24)
+    //   CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.40, !tbaa !25)
     //   JCC_1 %bb.18, 5, implicit killed $eflags
     //
     // bb.10 (%ir-block.45):
@@ -16465,15 +23234,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     // ; predecessors: %bb.10
     //   successors: %bb.12(0x55555555), %bb.2(0x2aaaaaab); %bb.12(66.67%), %bb.2(33.33%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi
-    //   CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.46, !tbaa !33)
+    //   CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.46, !tbaa !34)
     //   JCC_1 %bb.2, 5, implicit killed $eflags
     //
     // bb.12 (%ir-block.51):
     // ; predecessors: %bb.11
     //   successors: %bb.13(0x40000000), %bb.15(0x40000000); %bb.13(50.00%), %bb.15(50.00%)
     //   liveins: $rcx, $rdi, $rdx, $rsi
-    //   renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.52, !tbaa !34)
-    //   renamable $r8 = MOV64rm renamable $rsi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr, !tbaa !34)
+    //   renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.52, !tbaa !35)
+    //   renamable $r8 = MOV64rm renamable $rsi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr, !tbaa !35)
     //   CMP64ri32 renamable $rcx, 7, implicit-def $eflags
     //   JCC_1 %bb.15, 7, implicit killed $eflags
     //
@@ -16507,8 +23276,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     // ; predecessors: %bb.15
     //   successors: %bb.17(0x40000000), %bb.1(0x40000000); %bb.17(50.00%), %bb.1(50.00%)
     //   liveins: $rcx, $rdi, $rdx, $rsi
-    //   renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rcx, 16, $noreg :: (load (s64) from %ir.sunkaddr4, !tbaa !34)
-    //   CMP64rm killed renamable $rax, killed renamable $rsi, 1, killed renamable $rcx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr6, !tbaa !34)
+    //   renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rcx, 16, $noreg :: (load (s64) from %ir.sunkaddr4, !tbaa !35)
+    //   CMP64rm killed renamable $rax, killed renamable $rsi, 1, killed renamable $rcx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr6, !tbaa !35)
     //   JCC_1 %bb.1, 5, implicit killed $eflags
     //
     // bb.17 (%ir-block.73):
@@ -16569,7 +23338,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
   derived()->set_preserve_flags(true);
 
 
-    // renamable $rcx = MOV64rm renamable $rsi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.3, !tbaa !33)
+    // renamable $rcx = MOV64rm renamable $rsi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.3, !tbaa !34)
     do {
     {
     auto cond0 = encodeable_with(param_1, FE_MEM(FE_NOREG, 0, FE_NOREG, 16), false);
@@ -16706,7 +23475,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
   derived()->label_place(block4_label);
 
 
-    // renamable $r8 = MOV64rm renamable $rsi, 1, $noreg, 8, $noreg :: (load (s64) from %ir.14, !tbaa !31)
+    // renamable $r8 = MOV64rm renamable $rsi, 1, $noreg, 8, $noreg :: (load (s64) from %ir.14, !tbaa !32)
     do {
     {
     if (1) {
@@ -16784,7 +23553,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     } while (false);
 
 
-    // renamable $edx = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.26, !tbaa !23)
+    // renamable $edx = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.26, !tbaa !24)
     do {
     {
     if (1) {
@@ -16917,7 +23686,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     } while (false);
 
 
-    // renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.36, !tbaa !28)
+    // renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.36, !tbaa !29)
     do {
     {
     if (1) {
@@ -16973,7 +23742,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
   derived()->label_place(block9_label);
 
 
-    // CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.40, !tbaa !24)
+    // CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.40, !tbaa !25)
     do {
     {
     if (1) {
@@ -17028,7 +23797,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
   derived()->label_place(block11_label);
 
 
-    // CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.46, !tbaa !33)
+    // CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.46, !tbaa !34)
     do {
     {
     if (1) {
@@ -17049,7 +23818,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
   derived()->label_place(block12_label);
 
 
-    // renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.52, !tbaa !34)
+    // renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.52, !tbaa !35)
     do {
     {
     if (1) {
@@ -17063,7 +23832,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     } while (false);
 
 
-    // renamable $r8 = MOV64rm renamable $rsi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr, !tbaa !34)
+    // renamable $r8 = MOV64rm renamable $rsi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr, !tbaa !35)
     do {
     {
     if (1) {
@@ -17211,7 +23980,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
   derived()->label_place(block16_label);
 
 
-    // renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rcx, 16, $noreg :: (load (s64) from %ir.sunkaddr4, !tbaa !34)
+    // renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rcx, 16, $noreg :: (load (s64) from %ir.sunkaddr4, !tbaa !35)
     do {
     {
     if (1) {
@@ -17226,7 +23995,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     } while (false);
 
 
-    // CMP64rm killed renamable $rax, killed renamable $rsi, 1, killed renamable $rcx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr6, !tbaa !34)
+    // CMP64rm killed renamable $rax, killed renamable $rsi, 1, killed renamable $rcx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr6, !tbaa !35)
     do {
     {
     if (1) {
@@ -17362,7 +24131,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     //   successors: %bb.8(0x80000000); %bb.8(100.00%)
     //   liveins: $rdi, $rsi
     //   renamable $rcx = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.30, !tbaa !4)
-    //   renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.33, !tbaa !23)
+    //   renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.33, !tbaa !24)
     //   renamable $eax = OR32rr killed renamable $eax(tied-def 0), renamable $esi, implicit-def dead $eflags
     //   renamable $rax = MOVSX64rr32 killed renamable $eax
     //   renamable $edx = MOV32rm renamable $rcx, 4, killed renamable $rax, 0, $noreg :: (load (s32) from %ir.36, !tbaa !4)
@@ -17389,14 +24158,14 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     //   renamable $edi = MOV32rr killed renamable $edx, implicit-def $rdi
     //   renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
     //   renamable $rdx = LEA64r renamable $rcx, 1, renamable $rdi, 0, $noreg
-    //   CMP64mr renamable $rcx, 1, killed renamable $rdi, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.43, !tbaa !24)
+    //   CMP64mr renamable $rcx, 1, killed renamable $rdi, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.43, !tbaa !25)
     //   JCC_1 %bb.12, 5, implicit killed $eflags
     //
     // bb.10 (%ir-block.46):
     // ; predecessors: %bb.9
     //   successors: %bb.11(0x04000000), %bb.12(0x7c000000); %bb.11(3.12%), %bb.12(96.88%)
     //   liveins: $rax, $rcx, $rdx, $rsi
-    //   CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.47, !tbaa !28)
+    //   CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.47, !tbaa !29)
     //   JCC_1 %bb.12, 5, implicit killed $eflags
     //
     // bb.11 (%ir-block.50):
@@ -17411,7 +24180,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     // ; predecessors: %bb.1
     //   successors: %bb.29(0x30000000), %bb.14(0x50000000); %bb.29(37.50%), %bb.14(62.50%)
     //   liveins: $rdi, $rsi
-    //   renamable $rcx = MOV64rm renamable $rsi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.62, !tbaa !33)
+    //   renamable $rcx = MOV64rm renamable $rsi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.62, !tbaa !34)
     //   TEST64rr renamable $rcx, renamable $rcx, implicit-def $eflags
     //   JCC_1 %bb.29, 4, implicit killed $eflags
     //
@@ -17432,7 +24201,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     // ; predecessors: %bb.14
     //   successors: %bb.29(0x30000000), %bb.16(0x50000000); %bb.29(37.50%), %bb.16(62.50%)
     //   liveins: $rcx, $rdi, $rsi
-    //   renamable $r8 = MOV64rm renamable $rsi, 1, $noreg, 8, $noreg :: (load (s64) from %ir.75, !tbaa !31)
+    //   renamable $r8 = MOV64rm renamable $rsi, 1, $noreg, 8, $noreg :: (load (s64) from %ir.75, !tbaa !32)
     //   TEST64rr renamable $r8, renamable $r8, implicit-def $eflags
     //   JCC_1 %bb.29, 4, implicit killed $eflags
     //
@@ -17449,7 +24218,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     //   successors: %bb.18(0x80000000); %bb.18(100.00%)
     //   liveins: $rax, $rcx, $rdi, $rsi, $r8
     //   renamable $r9 = MOV64rm renamable $rdi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.84, !tbaa !4)
-    //   renamable $edx = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.87, !tbaa !23)
+    //   renamable $edx = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.87, !tbaa !24)
     //   renamable $edx = OR32rr killed renamable $edx(tied-def 0), renamable $r8d, implicit-def dead $eflags
     //   renamable $rdx = MOVSX64rr32 killed renamable $edx
     //   renamable $edx = MOV32rm renamable $r9, 4, killed renamable $rdx, 0, $noreg :: (load (s32) from %ir.90, !tbaa !4)
@@ -17475,7 +24244,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     //   renamable $edi = MOV32rr killed renamable $edx, implicit-def $rdi
     //   renamable $rdi = nuw nsw SHL64ri killed renamable $rdi(tied-def 0), 5, implicit-def dead $eflags
     //   renamable $rdx = LEA64r renamable $r9, 1, renamable $rdi, 0, $noreg
-    //   renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.98, !tbaa !28)
+    //   renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.98, !tbaa !29)
     //   CMP64rr renamable $rdi, renamable $rsi, implicit-def $eflags
     //   JCC_1 %bb.11, 4, implicit killed $eflags
     //
@@ -17490,7 +24259,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     // ; predecessors: %bb.20
     //   successors: %bb.31(0x783e0f84), %bb.22(0x07c1f07c); %bb.31(93.94%), %bb.22(6.06%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi, $r8, $r9
-    //   CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.108, !tbaa !24)
+    //   CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.108, !tbaa !25)
     //   JCC_1 %bb.31, 5, implicit killed $eflags
     //
     // bb.22 (%ir-block.113):
@@ -17505,15 +24274,15 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     // ; predecessors: %bb.22
     //   successors: %bb.24(0x55555555), %bb.30(0x2aaaaaab); %bb.24(66.67%), %bb.30(33.33%)
     //   liveins: $rax, $rcx, $rdi, $rdx, $rsi
-    //   CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.114, !tbaa !33)
+    //   CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.114, !tbaa !34)
     //   JCC_1 %bb.30, 5, implicit killed $eflags
     //
     // bb.24 (%ir-block.119):
     // ; predecessors: %bb.23
     //   successors: %bb.25(0x40000000), %bb.27(0x40000000); %bb.25(50.00%), %bb.27(50.00%)
     //   liveins: $rcx, $rdi, $rdx, $rsi
-    //   renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.120, !tbaa !34)
-    //   renamable $r8 = MOV64rm renamable $rsi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !34)
+    //   renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.120, !tbaa !35)
+    //   renamable $r8 = MOV64rm renamable $rsi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !35)
     //   CMP64ri32 renamable $rcx, 7, implicit-def $eflags
     //   JCC_1 %bb.27, 7, implicit killed $eflags
     //
@@ -17540,7 +24309,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     // ; predecessors: %bb.3
     //   successors: %bb.5(0x40000000), %bb.30(0x40000000); %bb.5(50.00%), %bb.30(50.00%)
     //   liveins: $rdi, $rsi
-    //   renamable $ecx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rcx :: (load (s32) from %ir.14, align 8, !tbaa !20)
+    //   renamable $ecx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rcx :: (load (s32) from %ir.14, align 8, !tbaa !21)
     //   $eax = MOV32ri 1, implicit-def $rax
     //   CMP64rr renamable $rsi, killed renamable $rcx, implicit-def $eflags
     //   JCC_1 %bb.30, 3, implicit killed $eflags
@@ -17575,8 +24344,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     // ; predecessors: %bb.27
     //   successors: %bb.11(0x40000000), %bb.29(0x40000000); %bb.11(50.00%), %bb.29(50.00%)
     //   liveins: $rcx, $rdi, $rdx, $rsi
-    //   renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rcx, 16, $noreg :: (load (s64) from %ir.sunkaddr8, !tbaa !34)
-    //   CMP64rm killed renamable $rax, killed renamable $rsi, 1, killed renamable $rcx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr11, !tbaa !34)
+    //   renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rcx, 16, $noreg :: (load (s64) from %ir.sunkaddr8, !tbaa !35)
+    //   CMP64rm killed renamable $rax, killed renamable $rsi, 1, killed renamable $rcx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr11, !tbaa !35)
     //   JCC_1 %bb.11, 4, implicit killed $eflags
     //
     // bb.29:
@@ -17760,7 +24529,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     } while (false);
 
 
-    // renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.33, !tbaa !23)
+    // renamable $eax = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.33, !tbaa !24)
     do {
     {
     if (1) {
@@ -17903,7 +24672,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     } while (false);
 
 
-    // CMP64mr renamable $rcx, 1, killed renamable $rdi, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.43, !tbaa !24)
+    // CMP64mr renamable $rcx, 1, killed renamable $rdi, 16, $noreg, renamable $rsi, implicit-def $eflags :: (load (s64) from %ir.43, !tbaa !25)
     do {
     {
     if (1) {
@@ -17925,7 +24694,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
   derived()->label_place(block10_label);
 
 
-    // CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.47, !tbaa !28)
+    // CMP64mi32 renamable $rdx, 1, $noreg, 24, $noreg, 0, implicit-def $eflags :: (load (s64) from %ir.47, !tbaa !29)
     do {
     {
     if (1) {
@@ -17989,7 +24758,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
   derived()->label_place(block13_label);
 
 
-    // renamable $rcx = MOV64rm renamable $rsi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.62, !tbaa !33)
+    // renamable $rcx = MOV64rm renamable $rsi, 1, $noreg, 16, $noreg :: (load (s64) from %ir.62, !tbaa !34)
     do {
     {
     if (1) {
@@ -18109,7 +24878,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
   derived()->label_place(block15_label);
 
 
-    // renamable $r8 = MOV64rm renamable $rsi, 1, $noreg, 8, $noreg :: (load (s64) from %ir.75, !tbaa !31)
+    // renamable $r8 = MOV64rm renamable $rsi, 1, $noreg, 8, $noreg :: (load (s64) from %ir.75, !tbaa !32)
     do {
     {
     if (1) {
@@ -18187,7 +24956,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     } while (false);
 
 
-    // renamable $edx = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.87, !tbaa !23)
+    // renamable $edx = MOV32rm killed renamable $rdi, 1, $noreg, 12, $noreg :: (load (s32) from %ir.87, !tbaa !24)
     do {
     {
     if (1) {
@@ -18320,7 +25089,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     } while (false);
 
 
-    // renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.98, !tbaa !28)
+    // renamable $rdi = MOV64rm renamable $r9, 1, killed renamable $rdi, 24, $noreg :: (load (s64) from %ir.98, !tbaa !29)
     do {
     {
     if (1) {
@@ -18376,7 +25145,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
   derived()->label_place(block21_label);
 
 
-    // CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.108, !tbaa !24)
+    // CMP64mr renamable $rdx, 1, $noreg, 16, $noreg, renamable $r8, implicit-def $eflags :: (load (s64) from %ir.108, !tbaa !25)
     do {
     {
     if (1) {
@@ -18431,7 +25200,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
   derived()->label_place(block23_label);
 
 
-    // CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.114, !tbaa !33)
+    // CMP64mr renamable $rdi, 1, $noreg, 16, $noreg, renamable $rcx, implicit-def $eflags :: (load (s64) from %ir.114, !tbaa !34)
     do {
     {
     if (1) {
@@ -18452,7 +25221,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
   derived()->label_place(block24_label);
 
 
-    // renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.120, !tbaa !34)
+    // renamable $rax = MOV64rm renamable $rdi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.120, !tbaa !35)
     do {
     {
     if (1) {
@@ -18466,7 +25235,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     } while (false);
 
 
-    // renamable $r8 = MOV64rm renamable $rsi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !34)
+    // renamable $r8 = MOV64rm renamable $rsi, 1, $noreg, 24, $noreg :: (load (s64) from %ir.sunkaddr6, !tbaa !35)
     do {
     {
     if (1) {
@@ -18593,7 +25362,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
   derived()->label_place(block4_label);
 
 
-    // renamable $ecx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rcx :: (load (s32) from %ir.14, align 8, !tbaa !20)
+    // renamable $ecx = MOV32rm renamable $rdi, 1, $noreg, 24, $noreg, implicit-def $rcx :: (load (s32) from %ir.14, align 8, !tbaa !21)
     do {
     {
     if (1) {
@@ -18769,7 +25538,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
   derived()->label_place(block28_label);
 
 
-    // renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rcx, 16, $noreg :: (load (s64) from %ir.sunkaddr8, !tbaa !34)
+    // renamable $rax = MOV64rm killed renamable $rdi, 1, renamable $rcx, 16, $noreg :: (load (s64) from %ir.sunkaddr8, !tbaa !35)
     do {
     {
     if (1) {
@@ -18784,7 +25553,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_table_
     } while (false);
 
 
-    // CMP64rm killed renamable $rax, killed renamable $rsi, 1, killed renamable $rcx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr11, !tbaa !34)
+    // CMP64rm killed renamable $rax, killed renamable $rsi, 1, killed renamable $rcx, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.sunkaddr11, !tbaa !35)
     do {
     {
     if (1) {
@@ -18934,7 +25703,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_contai
     //   liveins: $rdi
     //   renamable $rcx = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
     //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
-    //   CMP32mi killed renamable $rcx, 1, $noreg, 0, $noreg, 2, implicit-def $eflags :: (load (s32) from %ir.6, !tbaa !36)
+    //   CMP32mi killed renamable $rcx, 1, $noreg, 0, $noreg, 2, implicit-def $eflags :: (load (s32) from %ir.6, !tbaa !37)
     //   renamable $al = SETCCr 3, implicit killed $eflags, implicit killed $rax, implicit-def $rax
     //   RET64 killed $rax
     //
@@ -19023,7 +25792,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_contai
     } while (false);
 
 
-    // CMP32mi killed renamable $rcx, 1, $noreg, 0, $noreg, 2, implicit-def $eflags :: (load (s32) from %ir.6, !tbaa !36)
+    // CMP32mi killed renamable $rcx, 1, $noreg, 0, $noreg, 2, implicit-def $eflags :: (load (s32) from %ir.6, !tbaa !37)
     do {
     {
     if (1) {
@@ -19109,7 +25878,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_cv_ove
     //   successors: %bb.6(0x40000000), %bb.7(0x40000000); %bb.6(50.00%), %bb.7(50.00%)
     //   liveins: $rdi
     //   renamable $rcx = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
-    //   CMP32mi renamable $rcx, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.10, !tbaa !36)
+    //   CMP32mi renamable $rcx, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.10, !tbaa !37)
     //   JCC_1 %bb.7, 5, implicit killed $eflags
     //
     // bb.6:
@@ -19251,7 +26020,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_cv_ove
     } while (false);
 
 
-    // CMP32mi renamable $rcx, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.10, !tbaa !36)
+    // CMP32mi renamable $rcx, 1, $noreg, 0, $noreg, 1, implicit-def $eflags :: (load (s32) from %ir.10, !tbaa !37)
     do {
     {
     if (1) {
@@ -19432,8 +26201,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_zval_i
     // ; predecessors: %bb.10
     //   successors: %bb.12(0x40000000), %bb.6(0x40000000); %bb.12(50.00%), %bb.6(50.00%)
     //   liveins: $rcx, $rdx
-    //   renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.33, !tbaa !33)
-    //   CMP64rm renamable $rsi, renamable $rdx, 1, $noreg, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.35, !tbaa !33)
+    //   renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.33, !tbaa !34)
+    //   CMP64rm renamable $rsi, renamable $rdx, 1, $noreg, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.35, !tbaa !34)
     //   JCC_1 %bb.6, 5, implicit killed $eflags
     //
     // bb.12 (%ir-block.38):
@@ -19455,8 +26224,8 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_zval_i
     // ; predecessors: %bb.15, %bb.13
     //   successors: %bb.15(0x7c000000), %bb.20(0x04000000); %bb.15(96.88%), %bb.20(3.12%)
     //   liveins: $rax, $rcx, $rdx, $rsi
-    //   renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 0, $noreg :: (load (s64) from %ir.50, !tbaa !34)
-    //   CMP64rm killed renamable $rdi, renamable $rdx, 1, $noreg, 0, $noreg, implicit-def $eflags :: (load (s64) from %ir.49, !tbaa !34)
+    //   renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 0, $noreg :: (load (s64) from %ir.50, !tbaa !35)
+    //   CMP64rm killed renamable $rdi, renamable $rdx, 1, $noreg, 0, $noreg, implicit-def $eflags :: (load (s64) from %ir.49, !tbaa !35)
     //   JCC_1 %bb.20, 5, implicit killed $eflags
     //
     // bb.15 (%ir-block.54):
@@ -19878,7 +26647,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_zval_i
   derived()->label_place(block11_label);
 
 
-    // renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.33, !tbaa !33)
+    // renamable $rsi = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.33, !tbaa !34)
     do {
     {
     if (1) {
@@ -19892,7 +26661,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_zval_i
     } while (false);
 
 
-    // CMP64rm renamable $rsi, renamable $rdx, 1, $noreg, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.35, !tbaa !33)
+    // CMP64rm renamable $rsi, renamable $rdx, 1, $noreg, 16, $noreg, implicit-def $eflags :: (load (s64) from %ir.35, !tbaa !34)
     do {
     {
     if (1) {
@@ -19965,7 +26734,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_zval_i
   derived()->label_place(block14_label);
 
 
-    // renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 0, $noreg :: (load (s64) from %ir.50, !tbaa !34)
+    // renamable $rdi = MOV64rm renamable $rcx, 1, $noreg, 0, $noreg :: (load (s64) from %ir.50, !tbaa !35)
     do {
     {
     if (1) {
@@ -19979,7 +26748,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_zval_i
     } while (false);
 
 
-    // CMP64rm killed renamable $rdi, renamable $rdx, 1, $noreg, 0, $noreg, implicit-def $eflags :: (load (s64) from %ir.49, !tbaa !34)
+    // CMP64rm killed renamable $rdi, renamable $rdx, 1, $noreg, 0, $noreg, implicit-def $eflags :: (load (s64) from %ir.49, !tbaa !35)
     do {
     {
     if (1) {
@@ -20245,7 +27014,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_zval_a
     // ; predecessors: %bb.2, %bb.1
     //   liveins: $rdi
     //   renamable $rax = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.12, !tbaa !4)
-    //   renamable $eax = MOV32rm killed renamable $rax, 1, $noreg, 28, $noreg, implicit-def $rax :: (load (s32) from %ir.16, !tbaa !39)
+    //   renamable $eax = MOV32rm killed renamable $rax, 1, $noreg, 28, $noreg, implicit-def $rax :: (load (s32) from %ir.16, !tbaa !40)
     //   RET64 killed $rax
     //
     // # End machine code for function zend_native_zval_array_count.
@@ -20421,7 +27190,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_zval_a
     } while (false);
 
 
-    // renamable $eax = MOV32rm killed renamable $rax, 1, $noreg, 28, $noreg, implicit-def $rax :: (load (s32) from %ir.16, !tbaa !39)
+    // renamable $eax = MOV32rm killed renamable $rax, 1, $noreg, 28, $noreg, implicit-def $rax :: (load (s32) from %ir.16, !tbaa !40)
     do {
     {
     if (1) {
@@ -20875,7 +27644,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_iterat
     //   liveins: $rdi
     //   renamable $rcx = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.0, !tbaa !4)
     //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
-    //   CMP32mi killed renamable $rcx, 1, $noreg, 0, $noreg, 2, implicit-def $eflags :: (load (s32) from %ir.10, !tbaa !36)
+    //   CMP32mi killed renamable $rcx, 1, $noreg, 0, $noreg, 2, implicit-def $eflags :: (load (s32) from %ir.10, !tbaa !37)
     //   renamable $al = SETCCr 3, implicit killed $eflags, implicit killed $rax, implicit-def $rax
     //   RET64 killed $rax
     //
@@ -20992,7 +27761,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_iterat
     } while (false);
 
 
-    // CMP32mi killed renamable $rcx, 1, $noreg, 0, $noreg, 2, implicit-def $eflags :: (load (s32) from %ir.10, !tbaa !36)
+    // CMP32mi killed renamable $rcx, 1, $noreg, 0, $noreg, 2, implicit-def $eflags :: (load (s32) from %ir.10, !tbaa !37)
     do {
     {
     if (1) {
@@ -21616,7 +28385,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_zval_e
     //   liveins: $rdi
     //   renamable $rcx = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.12, !tbaa !4)
     //   renamable $eax = XOR32rr undef $eax(tied-def 0), undef $eax, implicit-def dead $eflags, implicit-def $rax
-    //   CMP32mi killed renamable $rcx, 1, $noreg, 28, $noreg, 0, implicit-def $eflags :: (load (s32) from %ir.35, !tbaa !39)
+    //   CMP32mi killed renamable $rcx, 1, $noreg, 28, $noreg, 0, implicit-def $eflags :: (load (s32) from %ir.35, !tbaa !40)
     //   renamable $al = SETCCr 4, implicit killed $eflags, implicit killed $rax, implicit-def $rax
     //   RET64 killed $rax
     //
@@ -21645,7 +28414,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_zval_e
     //   successors: %bb.18(0x2aaaaaab), %bb.15(0x55555555); %bb.18(33.33%), %bb.15(66.67%)
     //   liveins: $rax, $rdi
     //   renamable $rcx = MOV64rm killed renamable $rdi, 1, $noreg, 0, $noreg :: (load (s64) from %ir.12, !tbaa !4)
-    //   renamable $rdx = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.25, !tbaa !33)
+    //   renamable $rdx = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.25, !tbaa !34)
     //   TEST64rr renamable $rdx, renamable $rdx, implicit-def $eflags
     //   JCC_1 %bb.18, 4, implicit killed $eflags
     //
@@ -22014,7 +28783,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_zval_e
     } while (false);
 
 
-    // CMP32mi killed renamable $rcx, 1, $noreg, 28, $noreg, 0, implicit-def $eflags :: (load (s32) from %ir.35, !tbaa !39)
+    // CMP32mi killed renamable $rcx, 1, $noreg, 28, $noreg, 0, implicit-def $eflags :: (load (s32) from %ir.35, !tbaa !40)
     do {
     {
     if (1) {
@@ -22132,7 +28901,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_zval_e
     } while (false);
 
 
-    // renamable $rdx = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.25, !tbaa !33)
+    // renamable $rdx = MOV64rm renamable $rcx, 1, $noreg, 16, $noreg :: (load (s64) from %ir.25, !tbaa !34)
     do {
     {
     if (1) {
