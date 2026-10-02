@@ -5854,6 +5854,26 @@ assign_dim_error:
 
 
 /*
+ * The store of zend_native_value_assign_dim_store() into an element that is
+ * a reference: the assignment of ZEND_ASSIGN_DIM, with the type checks of a
+ * typed reference.
+ */
+static zend_never_inline zend_native_status
+zend_native_value_assign_dim_to_reference(
+	zend_execute_data *execute_data, zval *element, zval *value,
+	bool value_tmp, uint32_t source_position_id)
+{
+	execute_data->opline =
+		&execute_data->func->op_array.opcodes[source_position_id];
+	zend_assign_to_variable(element, value,
+		value_tmp ? IS_TMP_VAR : IS_CV, EX_USES_STRICT_TYPES());
+	if (value_tmp) {
+		ZVAL_UNDEF(value);
+	}
+	return zend_native_value_status();
+}
+
+/*
  * $a[int] = scalar-or-string on an array container with an unused result:
  * no diagnostics, conversions or user code can run before the store, so
  * write the element directly. Everything else takes the general path.
@@ -5912,9 +5932,8 @@ static zend_always_inline bool zend_native_value_assign_dim_store(
 		*status = ZEND_NATIVE_RETURNED;
 		return true;
 	}
-	/* A missing key is inserted as NULL, which the store overwrites; an
-	 * existing reference or indirect element has not been changed by the
-	 * lookup. Numeric strings name integer keys. */
+	/* A missing key is inserted as NULL, which the store overwrites.
+	 * Numeric strings name integer keys. */
 	if (Z_TYPE_P(offset) == IS_LONG) {
 		element = zend_hash_index_lookup(table, Z_LVAL_P(offset));
 	} else {
@@ -5925,12 +5944,22 @@ static zend_always_inline bool zend_native_value_assign_dim_store(
 			? zend_hash_index_lookup(table, index)
 			: zend_hash_lookup(table, Z_STR_P(offset));
 	}
-	if (Z_ISREF_P(element) || Z_TYPE_P(element) == IS_INDIRECT) {
-		return false;
-	}
 	if (offset_tmp) {
 		zval_ptr_dtor_nogc(offset);
 		ZVAL_UNDEF(offset);
+	}
+	if (UNEXPECTED(Z_TYPE_P(element) == IS_INDIRECT)) {
+		/* A symbol table's slot: a deleted variable is written as null,
+		 * as the write fetch makes it. */
+		element = Z_INDIRECT_P(element);
+		if (Z_TYPE_P(element) == IS_UNDEF) {
+			ZVAL_NULL(element);
+		}
+	}
+	if (UNEXPECTED(Z_ISREF_P(element))) {
+		*status = zend_native_value_assign_dim_to_reference(execute_data,
+			element, value, value_tmp, source_position_id);
+		return true;
 	}
 	ZVAL_COPY_VALUE(&garbage, element);
 	ZVAL_COPY_VALUE(element, value);
