@@ -3221,6 +3221,9 @@ static zend_always_inline bool zend_native_value_concat_strings(
 	zend_native_status *out)
 {
 	zend_result status;
+	/* Only concat_function() can raise; releasing a temporary string
+	 * cannot, as ZEND_CONCAT's own result shows. */
+	bool may_raise = false;
 
 	zval *left_value = fast_left;
 	zval *right_value = fast_right;
@@ -3293,6 +3296,7 @@ static zend_always_inline bool zend_native_value_concat_strings(
 					source_position_id];
 			status = concat_function(
 				fast_result, left_value, right_value);
+			may_raise = true;
 		}
 		if (left_tmp) {
 			zval_ptr_dtor_nogc(fast_left);
@@ -3302,8 +3306,8 @@ static zend_always_inline bool zend_native_value_concat_strings(
 			zval_ptr_dtor_nogc(fast_right);
 			ZVAL_UNDEF(fast_right);
 		}
-		*out = status == SUCCESS ? zend_native_value_status()
-			: ZEND_NATIVE_EXCEPTION;
+		*out = status != SUCCESS ? ZEND_NATIVE_EXCEPTION
+			: may_raise ? zend_native_value_status() : ZEND_NATIVE_RETURNED;
 		return true;
 	}
 }

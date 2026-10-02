@@ -871,12 +871,14 @@ zend_result zend_native_call_set_explicit_argument(
 	bool indirect_value;
 	bool direct_send_by_reference;
 
-	if (EG(exception) != NULL || caller == NULL || caller->func == NULL
-			|| !ZEND_USER_CODE(caller->func->type)
-			|| caller->call == NULL
-			|| argument == NULL
-			|| argument->source_position >= caller->func->op_array.last
-			|| argument->mode > ZEND_NATIVE_CALL_ARGUMENT_PLACEHOLDER) {
+	/* The compiler built the argument from the executing op array, after
+	 * the call's Init linked its frame. */
+	ZEND_ASSERT(caller != NULL && caller->func != NULL
+		&& ZEND_USER_CODE(caller->func->type) && caller->call != NULL
+		&& argument != NULL
+		&& argument->source_position < caller->func->op_array.last
+		&& argument->mode <= ZEND_NATIVE_CALL_ARGUMENT_PLACEHOLDER);
+	if (EG(exception) != NULL) {
 		return FAILURE;
 	}
 	call = caller->call;
@@ -910,23 +912,22 @@ zend_result zend_native_call_set_explicit_argument(
 			zval *fast_target = ZEND_CALL_ARG(call, number);
 
 			if (source->kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
-				if (source->index < op_array->last_literal) {
-					zend_native_zval_copy_deref_or_dup(
-						fast_target, &op_array->literals[source->index]);
-					return SUCCESS;
-				}
+				ZEND_ASSERT(source->index < op_array->last_literal);
+				zend_native_zval_copy_deref_or_dup(
+					fast_target, &op_array->literals[source->index]);
+				return SUCCESS;
 			} else if (source->kind == ZEND_MIR_SOURCE_OPERAND_SLOT
 					|| source->kind == ZEND_MIR_SOURCE_OPERAND_SSA) {
-				if (source->slot_kind == ZEND_MIR_SOURCE_SLOT_CV
-						&& source->index < (uint32_t) op_array->last_var) {
+				if (source->slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+					ZEND_ASSERT(source->index < (uint32_t) op_array->last_var);
 					fast_value = ZEND_CALL_VAR_NUM(caller, source->index);
 					if (!Z_ISUNDEF_P(fast_value)) {
 						zend_native_zval_copy_deref_or_dup(
 							fast_target, fast_value);
 						return SUCCESS;
 					}
-				} else if (source->slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
-						&& source->index < op_array->T) {
+				} else if (source->slot_kind == ZEND_MIR_SOURCE_SLOT_TMP) {
+					ZEND_ASSERT(source->index < op_array->T);
 					fast_value = ZEND_CALL_VAR_NUM(caller,
 						(uint32_t) op_array->last_var + source->index);
 					if (Z_TYPE_P(fast_value) != IS_INDIRECT
