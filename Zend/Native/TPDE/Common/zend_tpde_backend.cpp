@@ -5311,7 +5311,6 @@ void freeze_machine_control_flow(zend_tpde_plan *plan)
 				case ZEND_MIR_OPCODE_VALUE_COUNT:
 				case ZEND_MIR_OPCODE_VALUE_ARRAY_KEY_EXISTS:
 				case ZEND_MIR_OPCODE_VALUE_FE_FREE:
-				case ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM:
 				case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
 				case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV:
 				case ZEND_MIR_OPCODE_OBJECT_FETCH_R:
@@ -5319,6 +5318,16 @@ void freeze_machine_control_flow(zend_tpde_plan *plan)
 				case ZEND_MIR_OPCODE_DYNAMIC_FETCH_R:
 					flags |=
 						ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
+					break;
+				case ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM:
+					/* Only the append has an inline form worth its guard:
+					 * on applications the packed in-place replacement of a
+					 * keyed assignment almost never applies, and the helper
+					 * then repeats its checks. */
+					if (operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+						flags |=
+							ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
+					}
 					break;
 				default:
 					break;
@@ -7689,6 +7698,10 @@ bool initialize_plan(
 							plan->instructions[i], 0, &frameless_direct)) {
 					require_runtime_helper(
 						plan, ZEND_NATIVE_HELPER_CALL_FRAMELESS_DIRECT);
+					require_runtime_helper(
+						plan, ZEND_NATIVE_HELPER_CALL_FRAMELESS_2_ADDRESS);
+					require_runtime_helper(
+						plan, ZEND_NATIVE_HELPER_CALL_FRAMELESS_3_ADDRESS);
 					if (operation.source_opcode == ZEND_FRAMELESS_ICALL_1) {
 						require_runtime_helper(
 							plan, ZEND_NATIVE_HELPER_CALL_FRAMELESS_1);

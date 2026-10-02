@@ -706,6 +706,17 @@ uint32_t zend_native_call_invoke_user(
 zend_native_status zend_native_call_frameless_direct(
 	zend_execute_data *execute_data, uint64_t encoded_op1,
 	uint64_t descriptor, uint64_t slots, uint64_t more_slots);
+/*
+ * The same for two or three arguments with their addresses and the
+ * result's computed by the caller: no operand is decoded. The descriptor
+ * is that of zend_native_call_frameless_direct().
+ */
+zend_native_status zend_native_call_frameless_2_address(
+	zend_execute_data *execute_data, zval *result, zval *first,
+	zval *second, uint64_t descriptor);
+zend_native_status zend_native_call_frameless_3_address(
+	zend_execute_data *execute_data, zval *result, zval *first,
+	zval *second, zval *third, uint64_t descriptor);
 /* The same for a one-argument call, specialized like the VM's handler. */
 zend_native_status zend_native_call_frameless_1(
 	zend_execute_data *execute_data, uint64_t encoded_op1,

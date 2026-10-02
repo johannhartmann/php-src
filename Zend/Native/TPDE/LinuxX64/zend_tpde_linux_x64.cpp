@@ -7207,13 +7207,68 @@ bool ZendCompilerX64::compile_inst_impl(
 			helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM
 			&& adaptor->plan()->linux_inline_forms
 			&& zend_tpde_dim_direct_at(mir, &dim_direct);
-		if (!assign_dim_address) {
+		/* So does a two- or three-argument frameless call. */
+		const bool frameless_address =
+			helper == ZEND_NATIVE_HELPER_CALL_FRAMELESS_INTERNAL
+			&& adaptor->plan()->linux_inline_forms
+			&& (source_opcode == ZEND_FRAMELESS_ICALL_2
+				|| source_opcode == ZEND_FRAMELESS_ICALL_3)
+			&& zend_tpde_frameless_direct_at(mir, 0, &frameless_direct);
+		if (!assign_dim_address && !frameless_address) {
 			builder.add_arg(ValuePart{
 				encode_operand(
 					operation.op1, operation.op1_unused_payload), 8,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 		}
-		if (assign_dim_address) {
+		if (frameless_address) {
+			/* The result slot, then each argument from its literal or
+			 * frame slot (the descriptor's CONST bits). */
+			auto slot_arg = [&](bool literal, uint32_t offset) {
+				ScratchReg address{this};
+				const AsmReg address_reg = address.alloc_gp();
+				if (literal) {
+					ASM(MOV64rm, address_reg,
+						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zend_execute_data, func))));
+					ASM(MOV64rm, address_reg,
+						FE_MEM(address_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zend_op_array, literals))));
+					ASM(LEA64rm, address_reg,
+						FE_MEM(address_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offset * sizeof(zval))));
+				} else {
+					ASM(LEA64rm, address_reg,
+						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+							static_cast<int32_t>(offset)));
+				}
+				ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
+				value.set_value(this, std::move(address));
+				builder.add_arg(std::move(value), tpde::CCAssignment{});
+			};
+			const uint64_t descriptor = frameless_direct.descriptor;
+			auto literal_argument = [&](uint32_t index) {
+				return ((descriptor
+					>> (ZEND_NATIVE_FRAMELESS_DIRECT_CONST_SHIFT + index)) & 1)
+					!= 0;
+			};
+			slot_arg(false, static_cast<uint32_t>(frameless_direct.slots));
+			slot_arg(literal_argument(0),
+				static_cast<uint32_t>(frameless_direct.slots >> 32));
+			slot_arg(literal_argument(1),
+				static_cast<uint32_t>(frameless_direct.more_slots));
+			if (source_opcode == ZEND_FRAMELESS_ICALL_3) {
+				slot_arg(literal_argument(2),
+					static_cast<uint32_t>(frameless_direct.more_slots >> 32));
+			}
+			builder.add_arg(ValuePart{descriptor, 8,
+				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			builder.call(runtime_symbol(
+				source_opcode == ZEND_FRAMELESS_ICALL_3
+					? ZEND_NATIVE_HELPER_CALL_FRAMELESS_3_ADDRESS
+					: ZEND_NATIVE_HELPER_CALL_FRAMELESS_2_ADDRESS));
+		} else if (assign_dim_address) {
 			auto address_arg = [&](uint32_t kind, uint32_t offset) {
 				ScratchReg address{this};
 				const AsmReg address_reg = address.alloc_gp();
@@ -10001,6 +10056,11 @@ bool ZendCompilerX64::compile_inst_impl(
 				return true;
 			};
 			SlotOperand container{}, key{}, value{};
+			/* A keyed assignment calls the helper (see
+			 * freeze_machine_control_flow()). */
+			if (node.kind == Adaptor::InstKind::MIR) {
+				return execute_value_operation();
+			}
 			if (!frame_operands
 					|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
 					|| !slot_operand(operation.op1, operation.op1_storage_id,
