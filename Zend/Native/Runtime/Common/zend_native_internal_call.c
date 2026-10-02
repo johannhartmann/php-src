@@ -1389,9 +1389,16 @@ zend_native_internal_call_invoke_fast(
 		caller, call, return_value);
 }
 
+/*
+ * The frame of a plain call (zend_native_internal_call_descriptor_plain())
+ * has no receiver, closure or extra named parameters, and nothing between
+ * the handler and the cleanup can clear an exception: plain checks neither
+ * and decides the status once, after the cleanup.
+ */
 static zend_always_inline zend_native_status
-zend_native_internal_call_invoke_fast_inline(
-	zend_execute_data *caller, zend_execute_data *call, zval *return_value)
+zend_native_internal_call_invoke(
+	zend_execute_data *caller, zend_execute_data *call, zval *return_value,
+	const bool plain)
 {
 	zend_native_status status;
 	uint32_t call_info;
@@ -1423,6 +1430,24 @@ zend_native_internal_call_invoke_fast_inline(
 			? Z_ISREF_P(return_value) : !Z_ISREF_P(return_value));
 	}
 #endif
+	if (plain) {
+		if (UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+			zend_fcall_interrupt(call);
+		}
+		EG(current_execute_data) = caller;
+		zend_vm_stack_free_args(call);
+		ZEND_ASSERT((ZEND_CALL_INFO(call) & (ZEND_CALL_HAS_EXTRA_NAMED_PARAMS
+			| ZEND_CALL_RELEASE_THIS | ZEND_CALL_CLOSURE)) == 0);
+		zend_vm_stack_free_call_frame(call);
+		/* Argument cleanup may invoke user destructors. */
+		status = EG(exception) == NULL
+			? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+		if (status != ZEND_NATIVE_RETURNED && !Z_ISUNDEF_P(return_value)) {
+			zval_ptr_dtor(return_value);
+			ZVAL_UNDEF(return_value);
+		}
+		return status;
+	}
 	status = EG(exception) == NULL
 		? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
 	if (UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
@@ -1454,6 +1479,21 @@ zend_native_internal_call_invoke_fast_inline(
 		ZVAL_UNDEF(return_value);
 	}
 	return status;
+}
+
+static zend_always_inline zend_native_status
+zend_native_internal_call_invoke_fast_inline(
+	zend_execute_data *caller, zend_execute_data *call, zval *return_value)
+{
+	return zend_native_internal_call_invoke(
+		caller, call, return_value, false);
+}
+
+static zend_always_inline zend_native_status
+zend_native_internal_call_invoke_plain(
+	zend_execute_data *caller, zend_execute_data *call, zval *return_value)
+{
+	return zend_native_internal_call_invoke(caller, call, return_value, true);
 }
 
 zend_native_status zend_native_internal_call_invoke_finish(
@@ -1994,7 +2034,7 @@ zend_native_internal_call_direct_execute(
 				(uint32_t) op_array->last_var
 					+ descriptor->result_operand.index);
 		}
-		result.status = zend_native_internal_call_invoke_fast(
+		result.status = zend_native_internal_call_invoke_plain(
 			caller, call, return_value);
 		if (result.status == ZEND_NATIVE_EXCEPTION && EG(exception) != NULL) {
 			result.status = zend_native_prepare_finally_exception(
@@ -2331,7 +2371,7 @@ zend_native_status zend_native_internal_call_do_plain(
 		: ZEND_CALL_VAR_NUM(caller,
 			(uint32_t) caller->func->op_array.last_var
 				+ descriptor->result_operand.index);
-	status = zend_native_internal_call_invoke_fast_inline(
+	status = zend_native_internal_call_invoke_plain(
 		caller, call, return_value);
 	if (UNEXPECTED(status == ZEND_NATIVE_EXCEPTION)
 			&& EG(exception) != NULL) {

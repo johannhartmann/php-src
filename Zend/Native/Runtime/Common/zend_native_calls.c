@@ -1087,6 +1087,153 @@ cleanup:
 }
 
 /*
+ * The general form of zend_native_call_frameless_*_address(): undefined
+ * CVs warn, observers are notified; the arguments are given by address.
+ */
+static zend_never_inline zend_native_status
+zend_native_call_frameless_address_general(
+	zend_execute_data *execute_data, zval *result, zval **arguments,
+	uint32_t argument_count, uint64_t descriptor)
+{
+	const uint32_t handler_index = (uint32_t) (descriptor & 0xffff);
+	zend_op_array *op_array = &execute_data->func->op_array;
+	zval *values[3] = {NULL, NULL, NULL};
+	uint32_t index;
+
+	ZEND_ASSERT(handler_index < zend_flf_count);
+	execute_data->opline = &op_array->opcodes[descriptor >> 32];
+	for (index = 0; index < argument_count; index++) {
+		zval *value = arguments[index];
+
+		if (((descriptor >> (ZEND_NATIVE_FRAMELESS_DIRECT_CV_SHIFT + index))
+					& 1)
+				&& UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
+			uint32_t variable_index = (uint32_t)
+				(value - ZEND_CALL_VAR_NUM(execute_data, 0));
+
+			zend_error(E_WARNING, "Undefined variable $%s",
+				ZSTR_VAL(op_array->vars[variable_index]));
+			if (EG(exception) != NULL) {
+				goto cleanup;
+			}
+			value = &EG(uninitialized_zval);
+		}
+		ZVAL_DEREF(value);
+		values[index] = value;
+	}
+	ZVAL_NULL(result);
+#if !ZEND_VM_SPEC || ZEND_OBSERVER_ENABLED
+	if (ZEND_OBSERVER_ENABLED && UNEXPECTED(!zend_observer_handler_is_unobserved(
+			ZEND_OBSERVER_DATA(zend_flf_functions[handler_index])))) {
+		zend_native_frameless_observed_call_explicit(
+			execute_data, zend_flf_functions[handler_index],
+			result, values, argument_count);
+	} else
+#endif
+	if (argument_count == 2) {
+		((zend_frameless_function_2) zend_flf_handlers[handler_index])(
+			result, values[0], values[1]);
+	} else {
+		((zend_frameless_function_3) zend_flf_handlers[handler_index])(
+			result, values[0], values[1], values[2]);
+	}
+
+cleanup:
+	for (index = 0; index < argument_count; index++) {
+		if ((descriptor >> (ZEND_NATIVE_FRAMELESS_DIRECT_TMP_SHIFT + index))
+				& 1) {
+			zval *slot = arguments[index];
+
+			if (!Z_ISUNDEF_P(slot)) {
+				zval_ptr_dtor(slot);
+				ZVAL_UNDEF(slot);
+			}
+		}
+	}
+	return EG(exception) == NULL ? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+}
+
+static zend_always_inline void zend_native_call_frameless_release_address(
+	uint64_t descriptor, uint32_t index, zval *slot)
+{
+	if (((descriptor >> (ZEND_NATIVE_FRAMELESS_DIRECT_TMP_SHIFT + index)) & 1)
+			&& !Z_ISUNDEF_P(slot)) {
+		zval_ptr_dtor(slot);
+		ZVAL_UNDEF(slot);
+	}
+}
+
+static zend_always_inline bool zend_native_call_frameless_unobserved(
+	uint32_t handler_index)
+{
+#if !ZEND_VM_SPEC || ZEND_OBSERVER_ENABLED
+	return !(ZEND_OBSERVER_ENABLED
+		&& UNEXPECTED(!zend_observer_handler_is_unobserved(
+			ZEND_OBSERVER_DATA(zend_flf_functions[handler_index]))));
+#else
+	(void) handler_index;
+	return true;
+#endif
+}
+
+zend_native_status zend_native_call_frameless_2_address(
+	zend_execute_data *execute_data, zval *result, zval *first,
+	zval *second, uint64_t descriptor)
+{
+	const uint32_t handler_index = (uint32_t) (descriptor & 0xffff);
+
+	if (EXPECTED(Z_TYPE_P(first) != IS_UNDEF && Z_TYPE_P(second) != IS_UNDEF
+			&& zend_native_call_frameless_unobserved(handler_index))) {
+		execute_data->opline =
+			&execute_data->func->op_array.opcodes[descriptor >> 32];
+		ZVAL_NULL(result);
+		((zend_frameless_function_2) zend_flf_handlers[handler_index])(result,
+			Z_ISREF_P(first) ? Z_REFVAL_P(first) : first,
+			Z_ISREF_P(second) ? Z_REFVAL_P(second) : second);
+		zend_native_call_frameless_release_address(descriptor, 0, first);
+		zend_native_call_frameless_release_address(descriptor, 1, second);
+		return EG(exception) == NULL
+			? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+	}
+	{
+		zval *arguments[2] = {first, second};
+
+		return zend_native_call_frameless_address_general(
+			execute_data, result, arguments, 2, descriptor);
+	}
+}
+
+zend_native_status zend_native_call_frameless_3_address(
+	zend_execute_data *execute_data, zval *result, zval *first,
+	zval *second, zval *third, uint64_t descriptor)
+{
+	const uint32_t handler_index = (uint32_t) (descriptor & 0xffff);
+
+	if (EXPECTED(Z_TYPE_P(first) != IS_UNDEF && Z_TYPE_P(second) != IS_UNDEF
+			&& Z_TYPE_P(third) != IS_UNDEF
+			&& zend_native_call_frameless_unobserved(handler_index))) {
+		execute_data->opline =
+			&execute_data->func->op_array.opcodes[descriptor >> 32];
+		ZVAL_NULL(result);
+		((zend_frameless_function_3) zend_flf_handlers[handler_index])(result,
+			Z_ISREF_P(first) ? Z_REFVAL_P(first) : first,
+			Z_ISREF_P(second) ? Z_REFVAL_P(second) : second,
+			Z_ISREF_P(third) ? Z_REFVAL_P(third) : third);
+		zend_native_call_frameless_release_address(descriptor, 0, first);
+		zend_native_call_frameless_release_address(descriptor, 1, second);
+		zend_native_call_frameless_release_address(descriptor, 2, third);
+		return EG(exception) == NULL
+			? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+	}
+	{
+		zval *arguments[3] = {first, second, third};
+
+		return zend_native_call_frameless_address_general(
+			execute_data, result, arguments, 3, descriptor);
+	}
+}
+
+/*
  * The VM's FRAMELESS_ICALL_1 handler: the handler writes the result from
  * the (dereferenced) argument, and a temporary argument is released. An
  * undefined CV, which warns, and an observed function take the general form.
