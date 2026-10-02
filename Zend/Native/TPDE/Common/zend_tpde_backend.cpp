@@ -5664,6 +5664,12 @@ bool initialize_plan(
 	zend_native_diagnostic *diag) {
 	plan->runtime = runtime;
 	plan->linux_inline_forms = linux_inline_forms;
+	plan->source_generator = source_op_array == nullptr
+		|| (source_op_array->fn_flags & ZEND_ACC_GENERATOR) != 0;
+	plan->source_literals =
+		source_op_array != nullptr ? source_op_array->literals : nullptr;
+	plan->source_literal_count = source_op_array != nullptr
+		? static_cast<uint32_t>(source_op_array->last_literal) : 0;
 	plan->required_runtime_capabilities =
 		ZEND_NATIVE_RUNTIME_CAP_BAILOUT_BOUNDARY;
 	if (zend_native_runtime_validate(plan->runtime,
