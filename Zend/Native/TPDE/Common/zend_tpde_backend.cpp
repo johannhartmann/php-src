@@ -7638,6 +7638,10 @@ bool initialize_plan(
 								== ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM
 							? ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM_DIRECT
 							: ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_DIRECT);
+				if (record.opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM) {
+					require_runtime_helper(plan,
+						ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_ADDRESS);
+				}
 			}
 			zend_tpde_concat_direct identical_direct{};
 			if (plan->linux_inline_forms

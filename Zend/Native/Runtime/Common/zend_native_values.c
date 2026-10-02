@@ -6142,6 +6142,76 @@ zend_native_status zend_native_value_assign_dim_direct(
 		source_position_id, false);
 }
 
+/*
+ * The general path of an address-form ASSIGN_DIM, out of line: the operand
+ * encodings are rebuilt from the addresses, so that the fast path keeps
+ * nothing but the addresses alive across its hash calls.
+ */
+static zend_never_inline zend_native_status
+zend_native_value_assign_dim_address_general(
+	zend_execute_data *execute_data, zval *container_slot, zval *key,
+	zval *value, uint64_t descriptor)
+{
+	const uint32_t key_kind = (uint32_t) (descriptor & 3);
+	const uint32_t value_kind = (uint32_t) ((descriptor >> 2) & 3);
+	const bool indirect_container = ((descriptor
+		>> ZEND_NATIVE_DIM_DIRECT_INDIRECT_CONTAINER_SHIFT) & 1) != 0;
+	const zval *literals = execute_data->func->op_array.literals;
+	const uint32_t container_offset =
+		(uint32_t) ((char *) container_slot - (char *) execute_data);
+	const uint32_t key_offset = key_kind == ZEND_NATIVE_DIM_DIRECT_CONST
+		? (uint32_t) (key - literals)
+		: key_kind == ZEND_NATIVE_DIM_DIRECT_UNUSED
+			? 0 : (uint32_t) ((char *) key - (char *) execute_data);
+	const uint32_t value_offset = value_kind == ZEND_NATIVE_DIM_DIRECT_CONST
+		? (uint32_t) (value - literals)
+		: (uint32_t) ((char *) value - (char *) execute_data);
+	const uint64_t container_encoding = indirect_container
+		? ZEND_MIR_SOURCE_OPERAND_SLOT | (ZEND_MIR_SOURCE_SLOT_VAR << 8)
+			| ((uint64_t) (container_offset / sizeof(zval)
+				- ZEND_CALL_FRAME_SLOT
+				- (uint32_t) execute_data->func->op_array.last_var) << 16)
+		: zend_native_value_direct_encoding(execute_data,
+			ZEND_NATIVE_DIM_DIRECT_CV, container_offset);
+
+	return zend_native_value_assign_dim_impl(execute_data,
+		container_encoding,
+		zend_native_value_direct_encoding(execute_data, key_kind, key_offset),
+		zend_native_value_direct_encoding(execute_data,
+			ZEND_NATIVE_DIM_DIRECT_UNUSED, 0),
+		zend_native_value_direct_encoding(execute_data,
+			value_kind, value_offset),
+		(uint32_t) ((descriptor >> 8) & 0xffff), ZEND_ASSIGN_DIM,
+		(uint32_t) (descriptor >> 32), false);
+}
+
+zend_native_status zend_native_value_assign_dim_address(
+	zend_execute_data *execute_data, zval *container_slot, zval *key,
+	zval *value, uint64_t descriptor)
+{
+	zval *container = container_slot;
+	zend_native_status status;
+
+	if (((descriptor >> ZEND_NATIVE_DIM_DIRECT_INDIRECT_CONTAINER_SHIFT)
+			& 1) != 0) {
+		/* The VAR only addresses the property; consuming it frees nothing. */
+		container = Z_TYPE_P(container_slot) == IS_INDIRECT
+			? Z_INDIRECT_P(container_slot) : NULL;
+	}
+	if (container != NULL && zend_native_value_assign_dim_store(execute_data,
+			container, key,
+			(descriptor & 3) == ZEND_NATIVE_DIM_DIRECT_TMP,
+			value, ((descriptor >> 2) & 3) == ZEND_NATIVE_DIM_DIRECT_TMP,
+			(uint32_t) (descriptor >> 32), &status)) {
+		if (container != container_slot) {
+			ZVAL_UNDEF(container_slot);
+		}
+		return status;
+	}
+	return zend_native_value_assign_dim_address_general(
+		execute_data, container_slot, key, value, descriptor);
+}
+
 zend_native_status zend_native_value_assign_dim(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result, uint64_t auxiliary,
