@@ -1050,6 +1050,13 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_CALL_FRAMELESS_3_ADDRESS,
 		ZEND_NATIVE_EFFECT_CALL,
 		(const void *) zend_native_call_frameless_3_address},
+	{ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY_ADDRESS,
+		ZEND_NATIVE_EFFECT_ARRAY_WRITE | ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
+			| ZEND_NATIVE_EFFECT_MAY_FAIL,
+		(const void *) zend_native_value_init_array_address},
+	{ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_ELEMENT_ADDRESS,
+		ZEND_NATIVE_EFFECT_ARRAY_SLOW_WRITE,
+		(const void *) zend_native_value_add_array_element_address},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {

@@ -467,6 +467,60 @@ uintptr_t zend_native_indirect_find_idx_w(const zval *var, uint64_t h)
 		: ZEND_NATIVE_ELEMENT_UNKNOWN;
 }
 
+/*
+ * isset() of an element in one step: 1 when set, 0 when absent or null,
+ * ZEND_NATIVE_ISSET_UNKNOWN when the helper decides (see
+ * zend_native_array_test_*()).
+ */
+ZEND_NATIVE_SNIPPET_INLINE uint64_t zend_native_element_isset(
+	uintptr_t element)
+{
+	const zval *value = (const zval *) element;
+
+	if (element == ZEND_NATIVE_ELEMENT_UNKNOWN) {
+		return ZEND_NATIVE_ISSET_UNKNOWN;
+	}
+	if (element == ZEND_NATIVE_ELEMENT_ABSENT) {
+		return 0;
+	}
+	if (Z_TYPE_P(value) == IS_REFERENCE) {
+		value = &Z_REF_P(value)->val;
+	}
+	return Z_TYPE_P(value) > IS_NULL;
+}
+
+uint64_t zend_native_array_isset_key(const zval *container, const zval *key)
+{
+	return zend_native_element_isset(
+		zend_native_test_value(container, zend_native_key_deref(key), false));
+}
+
+uint64_t zend_native_array_isset_literal(
+	const zval *container, const zval *key)
+{
+	return zend_native_element_isset(
+		zend_native_test_value(container, key, true));
+}
+
+uint64_t zend_native_array_isset_str(
+	const zval *container, const zend_string *name, uint64_t h)
+{
+	const HashTable *table = NULL;
+	uintptr_t answer = zend_native_test_table(container, &table);
+
+	return zend_native_element_isset(table != NULL
+		? zend_native_find_string_h(table, name, h) : answer);
+}
+
+uint64_t zend_native_array_isset_idx(const zval *container, uint64_t h)
+{
+	const HashTable *table = NULL;
+	uintptr_t answer = zend_native_test_table(container, &table);
+
+	return zend_native_element_isset(table != NULL
+		? zend_native_find_index(table, h) : answer);
+}
+
 /* The array of a container zval, through a reference, or NULL. */
 const HashTable *zend_native_zval_table(const zval *container)
 {

@@ -6045,6 +6045,148 @@ static uint64_t zend_native_value_direct_encoding(
 }
 
 /*
+ * The address forms of explicit-operand helpers: the caller passes the
+ * addresses of op1, op2 and the result and a descriptor with their kinds
+ * (ZEND_NATIVE_DIM_DIRECT_*, bits 0-1, 2-3 and 4-5), the source opcode
+ * (8-15) and the source position (32-63). The general path gets the
+ * encodings back from the addresses.
+ */
+#define ZEND_NATIVE_VALUE_ADDRESS_KIND(descriptor, operand) \
+	((uint32_t) ((descriptor) >> (2 * (operand))) & 3)
+
+static uint64_t zend_native_value_address_encoding(
+	const zend_execute_data *execute_data, uint64_t descriptor,
+	uint32_t operand, const zval *address)
+{
+	const uint32_t kind = ZEND_NATIVE_VALUE_ADDRESS_KIND(descriptor, operand);
+
+	return zend_native_value_direct_encoding(execute_data, kind,
+		kind == ZEND_NATIVE_DIM_DIRECT_CONST
+			? (uint32_t) (address - execute_data->func->op_array.literals)
+			: kind == ZEND_NATIVE_DIM_DIRECT_UNUSED
+				? 0 : (uint32_t) ((const char *) address
+					- (const char *) execute_data));
+}
+
+/* zend_native_array_add_fast() for operands given by address. */
+static zend_always_inline bool zend_native_array_add_fast_address(
+	HashTable *table, zval *value, bool value_tmp, zval *offset,
+	bool offset_tmp, uint32_t extended_value)
+{
+	zval copy;
+	zend_ulong index;
+	bool by_index = false;
+
+	if ((extended_value & ZEND_ARRAY_ELEMENT_REF) != 0
+			|| Z_TYPE_P(value) == IS_UNDEF) {
+		return false;
+	}
+	if (offset != NULL) {
+		if (!offset_tmp) {
+			ZVAL_DEREF(offset);
+		}
+		if (Z_TYPE_P(offset) == IS_LONG) {
+			index = (zend_ulong) Z_LVAL_P(offset);
+			by_index = true;
+		} else if (Z_TYPE_P(offset) == IS_STRING) {
+			by_index = ZEND_HANDLE_NUMERIC_STR(Z_STRVAL_P(offset),
+				Z_STRLEN_P(offset), index);
+		} else {
+			return false;
+		}
+	} else if (table->nNextFreeElement == ZEND_LONG_MAX) {
+		return false;
+	}
+	if (value_tmp) {
+		ZVAL_COPY_VALUE(&copy, value);
+	} else {
+		zval *source = value;
+
+		ZVAL_DEREF(source);
+		if (Z_REFCOUNTED_P(source)
+				&& (GC_FLAGS(Z_COUNTED_P(source)) & GC_PERSISTENT) != 0) {
+			return false;
+		}
+		ZVAL_COPY(&copy, source);
+	}
+	if (offset == NULL) {
+		zend_hash_next_index_insert(table, &copy);
+	} else if (by_index) {
+		zend_hash_index_update(table, index, &copy);
+	} else {
+		zend_hash_update(table, Z_STR_P(offset), &copy);
+	}
+	if (value_tmp) {
+		ZVAL_UNDEF(value);
+	}
+	if (offset_tmp) {
+		zval_ptr_dtor_nogc(offset);
+		ZVAL_UNDEF(offset);
+	}
+	return true;
+}
+
+zend_native_status zend_native_value_init_array_address(
+	zend_execute_data *execute_data, zval *op1, zval *op2, zval *result,
+	uint32_t extended_value, uint64_t descriptor)
+{
+	const uint32_t op1_kind = ZEND_NATIVE_VALUE_ADDRESS_KIND(descriptor, 0);
+	const uint32_t op2_kind = ZEND_NATIVE_VALUE_ADDRESS_KIND(descriptor, 1);
+
+	/* The literal's array with its first element. */
+	if (ZEND_NATIVE_VALUE_ADDRESS_KIND(descriptor, 2)
+			== ZEND_NATIVE_DIM_DIRECT_TMP) {
+		HashTable *table =
+			zend_new_array(extended_value >> ZEND_ARRAY_SIZE_SHIFT);
+
+		if ((extended_value & ZEND_ARRAY_NOT_PACKED) != 0) {
+			zend_hash_real_init_mixed(table);
+		}
+		if (op1_kind == ZEND_NATIVE_DIM_DIRECT_UNUSED
+				|| zend_native_array_add_fast_address(table, op1,
+					op1_kind == ZEND_NATIVE_DIM_DIRECT_TMP,
+					op2_kind == ZEND_NATIVE_DIM_DIRECT_UNUSED ? NULL : op2,
+					op2_kind == ZEND_NATIVE_DIM_DIRECT_TMP, extended_value)) {
+			ZVAL_ARR(result, table);
+			return ZEND_NATIVE_RETURNED;
+		}
+		zend_array_destroy(table);
+	}
+	return zend_native_value_init_array(execute_data,
+		zend_native_value_address_encoding(execute_data, descriptor, 0, op1),
+		zend_native_value_address_encoding(execute_data, descriptor, 1, op2),
+		zend_native_value_address_encoding(
+			execute_data, descriptor, 2, result),
+		extended_value, (uint32_t) ((descriptor >> 8) & 0xff),
+		(uint32_t) (descriptor >> 32));
+}
+
+zend_native_status zend_native_value_add_array_element_address(
+	zend_execute_data *execute_data, zval *op1, zval *op2, zval *result,
+	uint32_t extended_value, uint64_t descriptor)
+{
+	const uint32_t op2_kind = ZEND_NATIVE_VALUE_ADDRESS_KIND(descriptor, 1);
+
+	if (ZEND_NATIVE_VALUE_ADDRESS_KIND(descriptor, 2)
+				== ZEND_NATIVE_DIM_DIRECT_TMP
+			&& Z_TYPE_P(result) == IS_ARRAY
+			&& zend_native_array_add_fast_address(Z_ARRVAL_P(result), op1,
+				ZEND_NATIVE_VALUE_ADDRESS_KIND(descriptor, 0)
+					== ZEND_NATIVE_DIM_DIRECT_TMP,
+				op2_kind == ZEND_NATIVE_DIM_DIRECT_UNUSED ? NULL : op2,
+				op2_kind == ZEND_NATIVE_DIM_DIRECT_TMP, extended_value)) {
+		return ZEND_NATIVE_RETURNED;
+	}
+	return zend_native_value_add_array_element(execute_data,
+		zend_native_value_address_encoding(execute_data, descriptor, 0, op1),
+		zend_native_value_address_encoding(execute_data, descriptor, 1, op2),
+		zend_native_value_address_encoding(
+			execute_data, descriptor, 2, result),
+		extended_value, (uint32_t) ((descriptor >> 8) & 0xff),
+		(uint32_t) (descriptor >> 32));
+}
+
+/*
  * ZEND_CONCAT/ZEND_FAST_CONCAT into a temporary with precomputed operand
  * kinds and offsets (zend_tpde_concat_direct_at()): two strings concatenate
  * without decoding; anything else takes the general path.
