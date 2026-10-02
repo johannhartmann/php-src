@@ -7214,13 +7214,99 @@ bool ZendCompilerX64::compile_inst_impl(
 			&& (source_opcode == ZEND_FRAMELESS_ICALL_2
 				|| source_opcode == ZEND_FRAMELESS_ICALL_3)
 			&& zend_tpde_frameless_direct_at(mir, 0, &frameless_direct);
-		if (!assign_dim_address && !frameless_address) {
+		/* INIT_ARRAY and ADD_ARRAY_ELEMENT of literal, CV and temporary
+		 * operands take addresses too. */
+		struct ValueAddress {
+			uint32_t kind;
+			uint64_t value;
+		};
+		auto value_address = [&](const zend_mir_source_operand_ref &operand,
+				zend_mir_storage_id storage, ValueAddress *out) {
+			if (operand.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+				*out = {ZEND_NATIVE_DIM_DIRECT_UNUSED, 0};
+				return true;
+			}
+			if (operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+				*out = {ZEND_NATIVE_DIM_DIRECT_CONST, operand.index};
+				return uint64_t{operand.index} * sizeof(zval) <= INT32_MAX;
+			}
+			if ((operand.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+						&& operand.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
+					|| !zend_mir_id_is_valid(storage)
+					|| (operand.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+						&& operand.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP)) {
+				return false;
+			}
+			const uint64_t offset =
+				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+			*out = {operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+					? uint32_t{ZEND_NATIVE_DIM_DIRECT_CV}
+					: uint32_t{ZEND_NATIVE_DIM_DIRECT_TMP},
+				offset};
+			return offset <= INT32_MAX - sizeof(zval);
+		};
+		ValueAddress address_op1{}, address_op2{}, address_result{};
+		const zend_native_runtime_helper_id address_helper =
+			helper == ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY
+				? ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY_ADDRESS
+			: helper == ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_ELEMENT
+				? ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_ELEMENT_ADDRESS
+			: ZEND_NATIVE_HELPER_COUNT;
+		const bool array_address = adaptor->plan()->linux_inline_forms
+			&& address_helper != ZEND_NATIVE_HELPER_COUNT
+			&& value_address(operation.op1, operation.op1_storage_id,
+				&address_op1)
+			&& value_address(operation.op2, operation.op2_storage_id,
+				&address_op2)
+			&& value_address(operation.result, operation.result_storage_id,
+				&address_result)
+			&& address_result.kind != ZEND_NATIVE_DIM_DIRECT_UNUSED
+			&& address_result.kind != ZEND_NATIVE_DIM_DIRECT_CONST;
+		if (!assign_dim_address && !frameless_address && !array_address) {
 			builder.add_arg(ValuePart{
 				encode_operand(
 					operation.op1, operation.op1_unused_payload), 8,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 		}
-		if (frameless_address) {
+		if (array_address) {
+			for (const ValueAddress *operand :
+					{&address_op1, &address_op2, &address_result}) {
+				ScratchReg address{this};
+				const AsmReg address_reg = address.alloc_gp();
+				if (operand->kind == ZEND_NATIVE_DIM_DIRECT_UNUSED) {
+					ASM(XOR32rr, address_reg, address_reg);
+				} else if (operand->kind == ZEND_NATIVE_DIM_DIRECT_CONST) {
+					ASM(MOV64rm, address_reg,
+						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zend_execute_data, func))));
+					ASM(MOV64rm, address_reg,
+						FE_MEM(address_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zend_op_array, literals))));
+					ASM(LEA64rm, address_reg,
+						FE_MEM(address_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								operand->value * sizeof(zval))));
+				} else {
+					ASM(LEA64rm, address_reg,
+						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+							static_cast<int32_t>(operand->value)));
+				}
+				ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
+				value.set_value(this, std::move(address));
+				builder.add_arg(std::move(value), tpde::CCAssignment{});
+			}
+			builder.add_arg(ValuePart{operation.extended_value, 4,
+				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			builder.add_arg(ValuePart{
+				uint64_t{address_op1.kind} | (uint64_t{address_op2.kind} << 2)
+					| (uint64_t{address_result.kind} << 4)
+					| (uint64_t{source_opcode & 0xff} << 8)
+					| (uint64_t{operation.source_position_id} << 32),
+				8, tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			builder.call(runtime_symbol(address_helper));
+		} else if (frameless_address) {
 			/* The result slot, then each argument from its literal or
 			 * frame slot (the descriptor's CONST bits). */
 			auto slot_arg = [&](bool literal, uint32_t offset) {
@@ -8458,6 +8544,76 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto key_address = key_literal
 			? address(literals_reg, key_offset)
 			: address(frame_reg, key_offset);
+		/* isset() of an array element decides in one snippet: set, not
+		 * set, or the helper's. */
+		if (access == ElementAccess::Isset && !container_temporary) {
+			ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
+			bool tested;
+			if (literal_key == LiteralKey::Index) {
+				tested = EncodeBase::encode_zend_native_array_isset_idx(
+					std::move(container_address),
+					GenericValuePart{ValuePartRef{this, literal_key_value, 8,
+						tpde::x64::PlatformConfig::GP_BANK}}, value);
+			} else if (literal_key == LiteralKey::String) {
+				ScratchReg name{this};
+				ASM(MOV64rm, name.alloc_gp(),
+					FE_MEM(literals_reg, 0, FE_NOREG,
+						static_cast<int32_t>(key_offset)));
+				tested = EncodeBase::encode_zend_native_array_isset_str(
+					std::move(container_address),
+					GenericValuePart{std::move(name)},
+					GenericValuePart{ValuePartRef{this, literal_key_value, 8,
+						tpde::x64::PlatformConfig::GP_BANK}}, value);
+			} else if (key_literal) {
+				tested = EncodeBase::encode_zend_native_array_isset_literal(
+					std::move(container_address), std::move(key_address),
+					value);
+			} else {
+				tested = EncodeBase::encode_zend_native_array_isset_key(
+					std::move(container_address), std::move(key_address),
+					value);
+			}
+			if (!tested) {
+				return -1;
+			}
+			auto decision_reg = decision.alloc_gp();
+			auto answer_reg = answer.alloc_gp();
+			mov(answer_reg, value.cur_reg_or_load(this), 8);
+			value.reset(this);
+			literals.reset();
+			ASM(CMP64ri, answer_reg, ZEND_NATIVE_ISSET_UNKNOWN);
+			generate_raw_jump(Jump::je, slow);
+			if (node.has_result) {
+				auto [result_ref, result] = result_ref_single(node.result);
+				mov(result.alloc_reg(), answer_reg, 8);
+				result.set_modified();
+			} else {
+				/* IS_FALSE + answer is IS_FALSE or IS_TRUE. */
+				ASM(ADD32ri, answer_reg, IS_FALSE);
+				ASM(MOV32mr,
+					FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(result_offset
+							+ offsetof(zval, u1.type_info))),
+					answer_reg);
+			}
+			answer.reset();
+			if (guarded_exit_can_jump_directly(successors[1], successors[0])) {
+				decision.reset();
+				frame_scratch.reset();
+				generate_guarded_direct_exit(
+					slow, successors[1], successors[0]);
+				return 1;
+			}
+			ASM(MOV32ri, decision_reg, 0);
+			generate_raw_jump(Jump::jmp, done);
+			label_place(slow);
+			ASM(MOV32ri, decision_reg, 1);
+			label_place(done);
+			frame_scratch.reset();
+			generate_guarded_decision_branch(
+				std::move(decision), successors[1], successors[0]);
+			return 1;
+		}
 		bool found;
 		if (literal_key != LiteralKey::None) {
 			auto constant = [&]() {

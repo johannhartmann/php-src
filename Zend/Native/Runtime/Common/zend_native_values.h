@@ -152,6 +152,17 @@ zend_native_status zend_native_value_rope_end(
 	uint64_t op1, uint64_t op2, uint64_t result,
 	uint32_t extended_value, uint32_t source_opcode,
 	uint32_t source_position_id);
+/*
+ * The address forms of INIT_ARRAY and ADD_ARRAY_ELEMENT: the operands and
+ * the result by address, their kinds, the source opcode and position in
+ * the descriptor (see zend_native_value_init_array_address()).
+ */
+zend_native_status zend_native_value_init_array_address(
+	zend_execute_data *execute_data, zval *op1, zval *op2, zval *result,
+	uint32_t extended_value, uint64_t descriptor);
+zend_native_status zend_native_value_add_array_element_address(
+	zend_execute_data *execute_data, zval *op1, zval *op2, zval *result,
+	uint32_t extended_value, uint64_t descriptor);
 zend_native_status zend_native_value_init_array(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,

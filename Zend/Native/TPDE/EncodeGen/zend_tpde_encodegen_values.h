@@ -12,6 +12,9 @@
 #define ZEND_NATIVE_ELEMENT_UNKNOWN ((uintptr_t) 0)
 #define ZEND_NATIVE_ELEMENT_ABSENT ((uintptr_t) 1)
 
+/* zend_native_array_isset_*(): the helper decides. */
+#define ZEND_NATIVE_ISSET_UNKNOWN 2
+
 /* zend_native_zval_empty(): the helper decides (objects, other types). */
 #define ZEND_NATIVE_EMPTY_UNKNOWN 2
 

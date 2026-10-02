@@ -7658,6 +7658,21 @@ bool initialize_plan(
 						ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_ADDRESS);
 				}
 			}
+			if (plan->linux_inline_forms) {
+				/* The address forms of explicit-operand helpers. */
+				switch (record.opcode) {
+					case ZEND_MIR_OPCODE_VALUE_INIT_ARRAY:
+						require_runtime_helper(plan,
+							ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY_ADDRESS);
+						break;
+					case ZEND_MIR_OPCODE_VALUE_ADD_ARRAY_ELEMENT:
+						require_runtime_helper(plan,
+							ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_ELEMENT_ADDRESS);
+						break;
+					default:
+						break;
+				}
+			}
 			zend_tpde_concat_direct identical_direct{};
 			if (plan->linux_inline_forms
 					&& zend_tpde_identical_direct_at(
