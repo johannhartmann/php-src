@@ -27,8 +27,6 @@ void zend_native_dynamic_compiler_init(
 {
 	ZEND_ASSERT(compiler != NULL);
 	memset(compiler, 0, sizeof(*compiler));
-	zend_hash_init(
-		&compiler->entries_by_op_array, 8, NULL, NULL, false);
 }
 
 void zend_native_dynamic_compiler_bind_product(
@@ -59,7 +57,6 @@ void zend_native_dynamic_compiler_destroy(
 	efree(compiler->owned_op_arrays);
 	efree(compiler->entries);
 	efree(compiler->completed_include_once_sites);
-	zend_hash_destroy(&compiler->entries_by_op_array);
 	memset(compiler, 0, sizeof(*compiler));
 }
 
@@ -77,15 +74,18 @@ zend_native_entry_cell *zend_native_dynamic_compiler_lookup(
 	const zend_native_dynamic_compiler *compiler,
 	const zend_op_array *op_array)
 {
-	zend_native_entry_cell *entry_cell;
+	uint32_t index;
 
 	if (compiler == NULL || op_array == NULL) {
 		return NULL;
 	}
-	entry_cell = zend_hash_index_find_ptr(
-		&compiler->entries_by_op_array,
-		(zend_ulong) (uintptr_t) op_array);
-	return entry_cell;
+	/* Code created last is looked up first. */
+	for (index = compiler->entry_count; index-- > 0;) {
+		if (compiler->entries[index].op_array == op_array) {
+			return compiler->entries[index].entry_cell;
+		}
+	}
+	return NULL;
 }
 
 zend_result zend_native_dynamic_compiler_publish(
@@ -101,9 +101,9 @@ zend_result zend_native_dynamic_compiler_publish(
 			|| entry_cell->code == NULL) {
 		return FAILURE;
 	}
-	if (zend_native_dynamic_compiler_lookup(compiler, op_array) != NULL) {
-		return FAILURE;
-	}
+	/* The op_array was created and adopted for this publication. */
+	ZEND_ASSERT(zend_native_dynamic_compiler_lookup(compiler, op_array)
+		== NULL);
 	if (compiler->entry_count == compiler->entry_capacity) {
 		old_capacity = compiler->entry_capacity;
 		new_capacity = old_capacity < 8 ? 8 : old_capacity * 2;
@@ -114,11 +114,6 @@ zend_result zend_native_dynamic_compiler_publish(
 			compiler->entries, new_capacity,
 			sizeof(*compiler->entries), 0);
 		compiler->entry_capacity = new_capacity;
-	}
-	if (zend_hash_index_add_ptr(
-			&compiler->entries_by_op_array,
-			(zend_ulong) (uintptr_t) op_array, entry_cell) == NULL) {
-		return FAILURE;
 	}
 	compiler->entries[compiler->entry_count].op_array = op_array;
 	compiler->entries[compiler->entry_count].entry_cell = entry_cell;
@@ -162,9 +157,7 @@ static bool zend_native_dynamic_compiler_can_retire_last(
 		return false;
 	}
 	entry = &compiler->entries[compiler->entry_count - 1];
-	return entry->op_array == op_array && entry->entry_cell == entry_cell
-		&& zend_native_dynamic_compiler_lookup(compiler, op_array)
-			== entry_cell;
+	return entry->op_array == op_array && entry->entry_cell == entry_cell;
 }
 
 static void zend_native_dynamic_compiler_retire_last(
@@ -177,9 +170,6 @@ static void zend_native_dynamic_compiler_retire_last(
 		compiler->owned_op_array_count - 1] == op_array);
 	ZEND_ASSERT(compiler->entries[compiler->entry_count - 1].op_array
 		== op_array);
-	zend_hash_index_del(
-		&compiler->entries_by_op_array,
-		(zend_ulong) (uintptr_t) op_array);
 	compiler->entry_count--;
 	compiler->owned_op_array_count--;
 	zend_destroy_static_vars(op_array);

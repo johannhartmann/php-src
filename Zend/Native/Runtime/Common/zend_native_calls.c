@@ -17,6 +17,14 @@
 #include <unistd.h>
 
 ZEND_TLS zend_native_reentry_scope *zend_native_active_reentry_scope;
+/* Defined with the call-resolution cache below. */
+static uint64_t zend_native_call_resolution_cache_epoch;
+
+static zend_always_inline uint64_t
+zend_native_call_resolution_cache_epoch_value(void)
+{
+	return zend_native_call_resolution_cache_epoch;
+}
 
 ZEND_TLS zend_native_direct_activation *zend_native_active_direct_call;
 
@@ -1158,7 +1166,8 @@ static zend_always_inline void zend_native_call_frameless_release_address(
 {
 	if (((descriptor >> (ZEND_NATIVE_FRAMELESS_DIRECT_TMP_SHIFT + index)) & 1)
 			&& !Z_ISUNDEF_P(slot)) {
-		zval_ptr_dtor(slot);
+		/* FREE_OP of a temporary argument. */
+		zval_ptr_dtor_nogc(slot);
 		ZVAL_UNDEF(slot);
 	}
 }
@@ -1395,14 +1404,68 @@ static zend_native_entry_cell *zend_native_reentry_find(
 	return NULL;
 }
 
+/*
+ * The cells reentries resolved under the active scope, by code: a
+ * closure or an inherited copy shares the opcodes of the function it was
+ * made from and resolves to the same cell. Entering or leaving a scope and
+ * every call-resolution invalidation (a retired or reset cell, a destroyed
+ * compiler, request end) start a new epoch.
+ */
+#define ZEND_NATIVE_REENTRY_CACHE_SIZE 64
+typedef struct _zend_native_reentry_cache_entry {
+	const zend_native_reentry_scope *scope;
+	const zend_op *opcodes;
+	zend_native_entry_cell *cell;
+	uint64_t epoch;
+	uint32_t last;
+} zend_native_reentry_cache_entry;
+static ZEND_TLS zend_native_reentry_cache_entry
+	zend_native_reentry_cache[ZEND_NATIVE_REENTRY_CACHE_SIZE];
+static ZEND_TLS uint64_t zend_native_reentry_cache_scope_epoch;
+
+static zend_always_inline uint64_t zend_native_reentry_cache_epoch(void)
+{
+	return zend_native_call_resolution_cache_epoch_value()
+		+ (zend_native_reentry_cache_scope_epoch << 40);
+}
+
 zend_native_entry_cell *zend_native_reentry_resolve(
 	zend_function *function)
 {
+	zend_native_reentry_cache_entry *cached;
+	zend_native_entry_cell *cell;
+	uint64_t epoch;
+
 	if (function == NULL || !ZEND_USER_CODE(function->type)) {
 		return NULL;
 	}
-	return zend_native_reentry_find(
+	epoch = zend_native_reentry_cache_epoch();
+	cached = &zend_native_reentry_cache[
+		((uintptr_t) function->op_array.opcodes >> 6)
+			& (ZEND_NATIVE_REENTRY_CACHE_SIZE - 1)];
+	if (cached->opcodes == function->op_array.opcodes
+			&& cached->last == function->op_array.last
+			&& cached->scope == zend_native_active_reentry_scope
+			&& cached->epoch == epoch
+			&& cached->cell->state == ZEND_NATIVE_ENTRY_READY) {
+		return cached->cell;
+	}
+	cell = zend_native_reentry_find(
 		zend_native_active_reentry_scope, function);
+	/* Resolution may compile and invalidate: cache under the epoch that
+	 * holds afterwards, and only cells naming this code. */
+	if (cell != NULL && cell->state == ZEND_NATIVE_ENTRY_READY
+			&& cell->function != NULL
+			&& cell->function->op_array.opcodes
+				== function->op_array.opcodes
+			&& cell->function->op_array.last == function->op_array.last) {
+		cached->scope = zend_native_active_reentry_scope;
+		cached->opcodes = function->op_array.opcodes;
+		cached->last = function->op_array.last;
+		cached->cell = cell;
+		cached->epoch = zend_native_reentry_cache_epoch();
+	}
+	return cell;
 }
 
 static zend_native_user_opcode_result zend_native_user_opcode_result_make(
@@ -1550,6 +1613,7 @@ static zend_result zend_native_reentry_scope_enter_resolver_impl(
 	scope->resolver_context = resolver_context;
 	scope->previous = zend_native_active_reentry_scope;
 	zend_native_active_reentry_scope = scope;
+	zend_native_reentry_cache_scope_epoch++;
 	return SUCCESS;
 }
 
@@ -1579,6 +1643,7 @@ void zend_native_reentry_scope_leave(zend_native_reentry_scope *scope)
 {
 	ZEND_ASSERT(scope != NULL && zend_native_active_reentry_scope == scope);
 	if (scope != NULL && zend_native_active_reentry_scope == scope) {
+		zend_native_reentry_cache_scope_epoch++;
 		zend_native_active_reentry_scope = scope->previous;
 		scope->bindings = NULL;
 		scope->binding_count = 0;
@@ -2081,23 +2146,27 @@ static zend_always_inline uint32_t zend_native_call_fast_leave_inline(
 {
 	zend_execute_data *caller = callee->prev_execute_data;
 	zend_object *release_object;
+	/* Read once: releasing the frame's values cannot change its flags,
+	 * as the dying frame is no longer current. */
+	uint32_t call_info = ZEND_CALL_INFO(callee);
 
 	if (EXPECTED(status == ZEND_NATIVE_RETURNED && EG(exception) == NULL
 			&& !zend_atomic_bool_load_ex(&EG(vm_interrupt))
-			&& (ZEND_CALL_INFO(callee) & (ZEND_CALL_HAS_SYMBOL_TABLE
+			&& (call_info & (ZEND_CALL_HAS_SYMBOL_TABLE
 				| ZEND_CALL_HAS_EXTRA_NAMED_PARAMS)) == 0
 			&& zend_native_call_fast_return_valid(callee))) {
 		/* An unused result is released at return, before the callee's CVs,
-		 * as a NULL return_value makes the VM's RETURN do. */
+		 * as a NULL return_value makes the VM's RETURN do: a temporary dies
+		 * without a GC root check, a CV's copy only drops its reference. */
 		if (discard_result) {
-			zval_ptr_dtor(callee->return_value);
+			zval_ptr_dtor_nogc(callee->return_value);
 			ZVAL_UNDEF(callee->return_value);
 		}
 		/* A variable destructor may inspect the backtrace: the dying frame
 		 * is no longer current. The CVs are released as
 		 * i_free_compiled_variables() releases them. */
 		EG(current_execute_data) = caller;
-		zend_vm_stack_free_extra_args(callee);
+		zend_vm_stack_free_extra_args_ex(call_info, callee);
 		{
 			zval *cv = ZEND_CALL_VAR_NUM(callee, 0);
 			zval *end = cv + callee->func->op_array.last_var;
@@ -2129,12 +2198,14 @@ static zend_always_inline uint32_t zend_native_call_fast_leave_inline(
 		if (status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
 			status = ZEND_NATIVE_EXCEPTION;
 		}
+		/* The general finish may have changed the frame's flags. */
+		call_info = ZEND_CALL_INFO(callee);
 	}
-	release_object = (ZEND_CALL_INFO(callee) & ZEND_CALL_RELEASE_THIS) != 0
+	release_object = (call_info & ZEND_CALL_RELEASE_THIS) != 0
 		? Z_OBJ(callee->This)
-		: (ZEND_CALL_INFO(callee) & ZEND_CALL_CLOSURE) != 0
+		: (call_info & ZEND_CALL_CLOSURE) != 0
 			? ZEND_CLOSURE_OBJECT(callee->func) : NULL;
-	zend_vm_stack_free_call_frame(callee);
+	zend_vm_stack_free_call_frame_ex(call_info, callee);
 	if (release_object != NULL) {
 		OBJ_RELEASE(release_object);
 		if (status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
