@@ -138,7 +138,7 @@ void FunctionWriterBase::remove_prologue_bytes(u32 start, u32 size) {
 
   size_t move_len = offset() - (start + size);
   std::memmove(data_begin + start, data_begin + start + size, move_len);
-  section->adjust_relocation_offsets(reloc_begin, size);
+  section->adjust_relocation_offsets(reloc_begin, size, start + size);
   data_cur -= size;
   label_skew += size;
 }

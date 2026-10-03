@@ -2364,6 +2364,17 @@ struct zend_tpde_plan {
 	uint32_t checked_boxed_argument_mask;
 	uint32_t number_argument_mask;
 	uint32_t typed_body_function_index;
+	/*
+	 * The fast-call entry (zend_native_code_fast_call_entry()): frameless
+	 * code placed before this member's Zend entry, with
+	 * zend_native_call_fast_do()'s signature, that initializes the frame
+	 * for exactly source_num_args arguments, calls the Zend entry and
+	 * leaves through zend_native_call_fast_leave(), as the fast Do does for
+	 * an untyped target. Only for functions, which are neither generators
+	 * nor variadic.
+	 */
+	bool fast_call_eligible;
+	uint32_t source_num_args;
 	zend_mir_function_record function;
 	zend_mir_block_id *block_ids;
 	uint32_t block_count;
@@ -2760,6 +2771,10 @@ struct zend_native_code {
 	size_t mapping_size;
 	zend_native_frame_entry_t entry;
 	zend_native_frame_entry_t *component_entries;
+	/* Each component's fast-call entry (zend_native_call_fast_do()'s
+	 * signature), NULL where the image has none. */
+	void *fast_call_entry;
+	void **component_fast_entries;
 	zend_native_component_entry *component_metadata;
 	uint32_t component_entry_count;
 	uint32_t slot_count;

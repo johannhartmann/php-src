@@ -356,6 +356,11 @@ typedef struct _zend_native_user_call_site_header {
 	 * CV with SEND_VAR_EX by value, and the fast Do replaces the copy with a
 	 * reference to the CV before the target receives it. */
 	uint32_t fast_ref_mask;
+	/* What the site's fast Do calls: zend_native_call_fast_do(), or the
+	 * published target's own fast-call entry when the site needs none of
+	 * the generic preparation (no fast_flags but static modes, no
+	 * fast_ref_mask). NULL means zend_native_call_fast_do(). */
+	void *fast_do_entry;
 	void *resolution;
 	uint64_t epoch;
 } zend_native_user_call_site_header;
@@ -784,12 +789,24 @@ zend_native_status zend_native_call_convert_descriptor_explicit(
  */
 zend_execute_data *zend_native_call_reserve_dynamic_frame(
 	zend_execute_data *caller, uint32_t reservation_size);
+/*
+ * The caller and context come first, as for a frame entry: a target's
+ * generated fast-call entry (zend_native_code_fast_call_entry()) takes the
+ * same arguments and replaces this function at a published site.
+ */
 uint32_t zend_native_call_fast_do(
 	zend_execute_data *caller,
-	const zend_native_user_call_descriptor *descriptor,
 	zend_native_execution_context *context,
+	const zend_native_user_call_descriptor *descriptor,
 	zend_native_frame_entry_t dynamic_entry,
 	uint32_t result_offset);
+typedef uint32_t (*zend_native_call_fast_do_t)(
+	zend_execute_data *caller,
+	zend_native_execution_context *context,
+	const zend_native_user_call_descriptor *descriptor,
+	zend_native_frame_entry_t dynamic_entry,
+	uint32_t result_offset);
+
 void zend_native_call_fast_send_var_reference(
 	zval *argument, zval *variable);
 bool zend_native_call_fast_new(
@@ -870,6 +887,9 @@ uint32_t zend_native_call_fast_send(
 	uint32_t index);
 uint32_t zend_native_call_fast_leave(
 	zend_execute_data *callee, uint32_t status, bool discard_result);
+/* A counted CV of a frame a fast-call entry leaves, as
+ * zend_native_call_fast_leave() releases it. */
+void zend_native_call_fast_release_cv(zval *variable);
 void zend_native_call_fast_undefined_argument(
 	zend_execute_data *caller, uint32_t variable, uint32_t source_position);
 void zend_native_execution_context_init(

@@ -604,11 +604,38 @@ zend_result map_linux_x64_object(
 			"unable to allocate Linux component entry table");
 		return FAILURE;
 	}
+	code->component_fast_entries = static_cast<void **>(
+		std::calloc(image->component_entry_count,
+			sizeof(*code->component_fast_entries)));
+	if (code->component_fast_entries == nullptr) {
+		std::free(code->component_entries);
+		code->component_entries = nullptr;
+		destroy_linux_x64_published_state(state);
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"unable to allocate Linux component entry table");
+		return FAILURE;
+	}
 	uint32_t mapped_entry_count = 0;
 	for (size_t i = 0; i < symbol_count && success; ++i) {
 		const char *name =
 			string_at(symbol_names, symbol_names_size, symbols[i].st_name);
 		if (name == nullptr || symbols[i].st_shndx == SHN_UNDEF) {
+			continue;
+		}
+		/* An optional fast-call entry: zend_native_fast_call_<index>. */
+		static constexpr char fast_call_prefix[] = "zend_native_fast_call_";
+		if (std::strncmp(name, fast_call_prefix,
+				sizeof(fast_call_prefix) - 1) == 0) {
+			char *end = nullptr;
+			const unsigned long index = std::strtoul(
+				name + sizeof(fast_call_prefix) - 1, &end, 10);
+			if (end != nullptr && *end == '\0'
+					&& index < image->component_entry_count
+					&& code->component_fast_entries[index] == nullptr) {
+				code->component_fast_entries[index] =
+					reinterpret_cast<void *>(resolve_symbol(i));
+			}
 			continue;
 		}
 		for (uint32_t index = 0;
@@ -631,6 +658,8 @@ zend_result map_linux_x64_object(
 	if (!success || mapped_entry_count != image->component_entry_count) {
 		std::free(code->component_entries);
 		code->component_entries = nullptr;
+		std::free(code->component_fast_entries);
+		code->component_fast_entries = nullptr;
 		destroy_linux_x64_published_state(state);
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
 			"Linux native image contains unresolved symbols or relocations");
@@ -707,6 +736,7 @@ zend_result map_linux_x64_object(
 	code->mapping = state->mapping;
 	code->mapping_size = state->mapping_size;
 	code->entry = code->component_entries[0];
+	code->fast_call_entry = code->component_fast_entries[0];
 	code->component_entry_count = image->component_entry_count;
 	code->unwind_registered = state->unwind_registered;
 	code->target_state = state;
@@ -746,6 +776,7 @@ zend_result zend_native_publish_linux_x64(
 	code->frame_temporary_count = image->frame_temporary_count;
 	if (map_linux_x64_object(image, code, diag) == FAILURE) {
 		std::free(code->component_entries);
+		std::free(code->component_fast_entries);
 		std::free(code);
 		return FAILURE;
 	}

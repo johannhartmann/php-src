@@ -368,6 +368,10 @@ private:
 public:
   void eh_begin_fde(SymRef personality_func_addr = SymRef());
   void eh_end_fde();
+  /// Ends code written between begin_func() and the prologue, which carries
+  /// its own FDE (eh_begin_fde()/eh_end_fde() around it): the function, its
+  /// FDE and its exception table begin here.
+  void begin_func_after_prefix() { func_begin = offset(); }
 
   /// @}
 

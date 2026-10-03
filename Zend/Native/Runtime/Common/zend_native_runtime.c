@@ -1057,6 +1057,14 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_ELEMENT_ADDRESS,
 		ZEND_NATIVE_EFFECT_ARRAY_SLOW_WRITE,
 		(const void *) zend_native_value_add_array_element_address},
+	{ZEND_NATIVE_HELPER_CALL_FAST_RELEASE_CV,
+		ZEND_NATIVE_EFFECT_CALL | ZEND_NATIVE_EFFECT_FRAME_READ | ZEND_NATIVE_EFFECT_FRAME_WRITE
+			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_RUNTIME_EFFECT_USERLAND
+			| ZEND_NATIVE_RUNTIME_EFFECT_REENTER
+			| ZEND_NATIVE_RUNTIME_EFFECT_THROW
+			| ZEND_NATIVE_RUNTIME_EFFECT_BAILOUT,
+		(const void *) zend_native_call_fast_release_cv},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {

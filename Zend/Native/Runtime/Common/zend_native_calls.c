@@ -1419,9 +1419,9 @@ typedef struct _zend_native_reentry_cache_entry {
 	uint64_t epoch;
 	uint32_t last;
 } zend_native_reentry_cache_entry;
-static ZEND_TLS zend_native_reentry_cache_entry
+ZEND_TLS zend_native_reentry_cache_entry
 	zend_native_reentry_cache[ZEND_NATIVE_REENTRY_CACHE_SIZE];
-static ZEND_TLS uint64_t zend_native_reentry_cache_scope_epoch;
+ZEND_TLS uint64_t zend_native_reentry_cache_scope_epoch;
 
 static zend_always_inline uint64_t zend_native_reentry_cache_epoch(void)
 {
@@ -2133,6 +2133,18 @@ finalize:
  */
 static zend_always_inline uint32_t zend_native_call_fast_leave_inline(
 	zend_execute_data *callee, uint32_t status, bool discard_result);
+
+void zend_native_call_fast_release_cv(zval *variable)
+{
+	zend_refcounted *counted = Z_COUNTED_P(variable);
+
+	if (!GC_DELREF(counted)) {
+		ZVAL_NULL(variable);
+		rc_dtor_func(counted);
+	} else {
+		gc_check_possible_root(counted);
+	}
+}
 
 uint32_t zend_native_call_fast_leave(
 	zend_execute_data *callee, uint32_t status, bool discard_result)
@@ -4819,6 +4831,25 @@ static void zend_native_call_fast_publish(
 		}
 	}
 	header->fast_flags |= static_mode;
+	/* A target that takes exactly the sent arguments by value, untyped,
+	 * is entered through its own fast-call entry. */
+	header->fast_do_entry = (void *) zend_native_call_fast_do;
+	if ((header->fast_flags & (ZEND_NATIVE_CALL_FAST_PREPARE
+				| ZEND_NATIVE_CALL_FAST_CHECK_ARGS
+				| ZEND_NATIVE_CALL_FAST_DEFAULTS
+				| ZEND_NATIVE_CALL_FAST_NO_CALL)) == 0
+			&& header->fast_ref_mask == 0
+			&& entry->argument_count == op_array->num_args) {
+		const zend_native_code *code =
+			zend_native_entry_cell_load(resolution->entry_cell);
+		void *fast_call_entry = code != NULL
+			? zend_native_code_fast_call_entry(code) : NULL;
+
+		if (fast_call_entry != NULL
+				&& zend_native_code_frame_entry(code) == header->fast_entry) {
+			header->fast_do_entry = fast_call_entry;
+		}
+	}
 	header->fast_epoch = zend_native_call_resolution_cache_epoch;
 }
 
@@ -5338,6 +5369,7 @@ static void zend_native_call_fast_publish_new_without_constructor(
 	header->fast_key = object->ce;
 	header->fast_function = NULL;
 	header->fast_flags = ZEND_NATIVE_CALL_FAST_NO_CALL;
+	header->fast_do_entry = (void *) zend_native_call_fast_do;
 	header->fast_epoch = zend_native_call_resolution_cache_epoch;
 }
 
@@ -8758,8 +8790,8 @@ static bool zend_native_call_fast_receive_frame(
  */
 uint32_t zend_native_call_fast_do(
 	zend_execute_data *caller,
-	const zend_native_user_call_descriptor *descriptor,
 	zend_native_execution_context *context,
+	const zend_native_user_call_descriptor *descriptor,
 	zend_native_frame_entry_t dynamic_entry,
 	uint32_t result_offset)
 {
