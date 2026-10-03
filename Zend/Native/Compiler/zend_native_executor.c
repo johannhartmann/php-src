@@ -29,6 +29,10 @@ typedef struct _zend_native_executor_generation {
 	bool owns_script_tables;
 	/* See zend_native_executor_script_links_at_runtime(). */
 	bool links_at_runtime;
+	/* The ready entry of the last script this persistent generation
+	 * resolved for an include (zend_native_executor_resolve_cached_include());
+	 * immutable code of the generation, valid while it is leased. */
+	zend_native_entry_cell *include_entry_cell;
 	struct _zend_native_executor_generation *next;
 } zend_native_executor_generation;
 
@@ -1348,15 +1352,25 @@ static void zend_native_executor_release_request_leases(void)
 		zend_hash_clean(
 			&zend_native_executor_request_state.leased_generations);
 	}
+	if (lease == NULL) {
+		return;
+	}
+	for (zend_native_executor_lease *current = lease; current != NULL;
+			current = current->next) {
+		zend_native_compiler_end_request(current->generation->compiler);
+	}
+	/* Retired generations are reaped once all leases are dropped. */
+	zend_native_executor_generation_lock();
+	for (zend_native_executor_lease *current = lease; current != NULL;
+			current = current->next) {
+		ZEND_ASSERT(current->generation->active_requests != 0);
+		current->generation->active_requests--;
+	}
+	zend_native_executor_reap_retired_locked();
+	zend_native_executor_generation_unlock();
 	while (lease != NULL) {
 		zend_native_executor_lease *next = lease->next;
 
-		zend_native_compiler_end_request(lease->generation->compiler);
-		zend_native_executor_generation_lock();
-		ZEND_ASSERT(lease->generation->active_requests != 0);
-		lease->generation->active_requests--;
-		zend_native_executor_reap_retired_locked();
-		zend_native_executor_generation_unlock();
 		efree(lease);
 		lease = next;
 	}
@@ -1716,8 +1730,19 @@ zend_native_executor_resolve_external_reentry(
 		entry_cell = zend_hash_index_find_ptr(
 			&zend_native_executor_request_state.external_entries,
 			(zend_ulong) (uintptr_t) function);
-		if (entry_cell != NULL && entry_cell->function == function
-				&& entry_cell->state == ZEND_NATIVE_ENTRY_READY) {
+		/*
+		 * The cell names the compiler's source op_array; a closure or an
+		 * inherited copy shares its opcodes (the compiler's identity, see
+		 * zend_native_compiler_canonical_reentry_op_array()) and resolves
+		 * to the same cell. A recycled address with other code misses.
+		 */
+		if (entry_cell != NULL
+				&& entry_cell->state == ZEND_NATIVE_ENTRY_READY
+				&& (entry_cell->function == function
+					|| (entry_cell->function->op_array.opcodes
+							== function->op_array.opcodes
+						&& entry_cell->function->op_array.last
+							== function->op_array.last))) {
 			return entry_cell;
 		}
 	}
@@ -1815,18 +1840,22 @@ zend_native_entry_cell *zend_native_executor_resolve_cached_include(
 			|| (owner = zend_native_executor_script_owner(op_array)) == NULL) {
 		return NULL;
 	}
-	generation = zend_native_executor_find_leased_function(
+	/* The persistent lookup also finds a generation this request leased. */
+	generation = zend_native_executor_find_persistent_function(
 		(zend_function *) op_array);
-	if (generation == NULL) {
-		generation = zend_native_executor_find_persistent_function(
-			(zend_function *) op_array);
-	}
 	if (generation == NULL) {
 		generation = zend_native_executor_create_or_acquire_generation(
 			op_array);
 	}
 	if (generation == NULL || !generation->persistent) {
 		return NULL;
+	}
+	entry_cell = generation->include_entry_cell;
+	if (entry_cell != NULL
+			&& entry_cell->state == ZEND_NATIVE_ENTRY_READY
+			&& entry_cell->function->op_array.opcodes == op_array->opcodes
+			&& entry_cell->function->op_array.last == op_array->last) {
+		return entry_cell;
 	}
 	memset(&diagnostic, 0, sizeof(diagnostic));
 	first_compiled_function =
@@ -1844,6 +1873,9 @@ zend_native_entry_cell *zend_native_executor_resolve_cached_include(
 	}
 	zend_native_compiler_release_ready_transients(
 		generation->compiler, first_compiled_function);
+	zend_native_executor_generation_lock();
+	generation->include_entry_cell = entry_cell;
+	zend_native_executor_generation_unlock();
 	return entry_cell;
 }
 

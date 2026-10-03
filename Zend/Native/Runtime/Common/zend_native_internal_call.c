@@ -205,7 +205,7 @@ static zval *zend_native_explicit_operand(
 	return ZEND_CALL_VAR_NUM(caller, physical_slot);
 }
 
-static void zend_native_release_source_operand(
+static zend_always_inline void zend_native_release_source_operand(
 	zval *value, uint8_t operand_type);
 
 static zend_result zend_native_internal_call_begin_explicit(
@@ -336,11 +336,13 @@ zend_result zend_native_internal_call_begin(
 	return zend_native_internal_call_begin_explicit(caller, cell, descriptor);
 }
 
-static void zend_native_release_source_operand(zval *value, uint8_t operand_type)
+static zend_always_inline void zend_native_release_source_operand(
+	zval *value, uint8_t operand_type)
 {
+	/* FREE_OP: a temporary operand dies without a GC root check. */
 	if (value != NULL
 			&& (operand_type == IS_VAR || operand_type == IS_TMP_VAR)) {
-		zval_ptr_dtor(value);
+		zval_ptr_dtor_nogc(value);
 		ZVAL_UNDEF(value);
 	}
 }
@@ -662,7 +664,7 @@ static zval *zend_native_source_op2(
 		&mutable_value, operand_type);
 }
 
-static void zend_native_send_array_copy_argument(
+static zend_always_inline void zend_native_send_array_copy_argument(
 	zend_function *function, uint32_t argument_number,
 	zval *target, zval *argument)
 {
@@ -681,7 +683,7 @@ static void zend_native_send_array_copy_argument(
 	if (!wrap_reference && !Z_ISREF_P(argument)
 			&& !ARG_SHOULD_BE_SENT_BY_REF(
 			function, argument_number)) {
-		zend_native_zval_copy_deref_or_dup(target, argument);
+		ZVAL_COPY_OR_DUP(target, argument);
 	} else if (!wrap_reference) {
 		/* CALL_VIA_TRAMPOLINE retains reference wrappers until __call()
 		 * repacks the raw arguments. Non-trampoline references were already
@@ -2042,8 +2044,9 @@ zend_native_internal_call_direct_execute(
 				caller, descriptor->do_source_position) == SUCCESS
 				? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
 		}
+		/* An unused result dies as DO_ICALL releases it. */
 		if (return_value == &temporary && !Z_ISUNDEF(temporary)) {
-			zval_ptr_dtor(&temporary);
+			i_zval_ptr_dtor(&temporary);
 		}
 		return result;
 	}

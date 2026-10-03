@@ -139,7 +139,17 @@ static void zend_native_execution_cleanup_frame_ex(
 		}
 		return;
 	}
-	zend_free_compiled_variables(execute_data);
+	/* i_free_compiled_variables(), inline as in the VM's leave helper. */
+	{
+		zval *cv = ZEND_CALL_VAR_NUM(execute_data, 0);
+		uint32_t count = execute_data->func->op_array.last_var;
+
+		while (count != 0) {
+			i_zval_ptr_dtor(cv);
+			cv++;
+			count--;
+		}
+	}
 	if ((call_info & ZEND_CALL_HAS_SYMBOL_TABLE) != 0) {
 		zend_clean_and_cache_symbol_table(execute_data->symbol_table);
 		execute_data->symbol_table = NULL;

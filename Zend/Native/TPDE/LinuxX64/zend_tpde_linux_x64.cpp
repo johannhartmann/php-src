@@ -1975,11 +1975,10 @@ bool ZendCompilerX64::compile_boxed_cond_guard(IRInstRef instruction) {
 		/* A null, boolean or integer owns nothing: its truth decides inline
 		 * and the result is published on both edges, as the VM's
 		 * JMPZ_EX/JMPNZ_EX publish it. */
-		ASM(MOV32rm, type_reg,
+		ASM(MOVZXr32m8, type_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(layout.operand_offset
 					+ offsetof(zval, u1.type_info))));
-		ASM(AND32ri, type_reg, Z_TYPE_MASK);
 		ASM(CMP32ri, type_reg, IS_TRUE);
 		generate_raw_jump(Jump::je, truthy);
 		ASM(CMP32ri, type_reg, IS_NULL);
@@ -2023,11 +2022,10 @@ bool ZendCompilerX64::compile_boxed_cond_guard(IRInstRef instruction) {
 			&& (node.exact_type == ZEND_MIR_SCALAR_TYPE_I1
 				|| node.exact_type == ZEND_MIR_SCALAR_TYPE_I64)) {
 		if (node.exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
-			ASM(MOV32rm, value_reg,
+			ASM(MOVZXr32m8, value_reg,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(layout.operand_offset
 						+ offsetof(zval, u1.type_info))));
-			ASM(AND32ri, value_reg, Z_TYPE_MASK);
 			ASM(CMP32ri, value_reg, IS_TRUE);
 		} else {
 			ASM(MOV64rm, value_reg,
@@ -2039,11 +2037,10 @@ bool ZendCompilerX64::compile_boxed_cond_guard(IRInstRef instruction) {
 			? Jump::je : Jump::jne, truthy);
 		generate_raw_jump(Jump::jmp, falsey);
 	} else {
-		ASM(MOV32rm, type_reg,
+		ASM(MOVZXr32m8, type_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(layout.operand_offset
 					+ offsetof(zval, u1.type_info))));
-		ASM(AND32ri, type_reg, Z_TYPE_MASK);
 		ASM(CMP32ri, type_reg, IS_NULL);
 		generate_raw_jump(Jump::je, falsey);
 		ASM(CMP32ri, type_reg, IS_FALSE);
@@ -3440,11 +3437,10 @@ bool ZendCompilerX64::compile_inst_impl(
 				ASM(MOV64rr, slot_reg, frame_scratch.cur_reg());
 				ASM(ADD64ri, slot_reg,
 					static_cast<int32_t>(layout.operand_offset));
-				ASM(MOV32rm, type_reg,
+				ASM(MOVZXr32m8, type_reg,
 					FE_MEM(slot_reg, 0, FE_NOREG,
 						static_cast<int32_t>(
 							offsetof(zval, u1.type_info))));
-				ASM(AND32ri, type_reg, Z_TYPE_MASK);
 				auto spilled = spill_before_branch();
 				begin_branch_region();
 				auto dereferenced = text_writer.label_create();
@@ -3454,11 +3450,10 @@ bool ZendCompilerX64::compile_inst_impl(
 					FE_MEM(slot_reg, 0, FE_NOREG, 0));
 				ASM(ADD64ri, slot_reg,
 					static_cast<int32_t>(offsetof(zend_reference, val)));
-				ASM(MOV32rm, type_reg,
+				ASM(MOVZXr32m8, type_reg,
 					FE_MEM(slot_reg, 0, FE_NOREG,
 						static_cast<int32_t>(
 							offsetof(zval, u1.type_info))));
-				ASM(AND32ri, type_reg, Z_TYPE_MASK);
 				label_place(dereferenced);
 				if (layout.target_opcode != ZEND_SWITCH_STRING) {
 					ASM(CMP32ri, type_reg, IS_LONG);
@@ -4046,7 +4041,8 @@ bool ZendCompilerX64::compile_inst_impl(
 					}
 					generate_raw_jump(Jump::je, fast_miss);
 					ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 1);
-					generate_raw_jump(Jump::jmp, fast_join);
+					/* Falls through to fast_join: the re-arm stub and the miss
+					 * path between them are emitted into the cold area. */
 				} else if (source_call_fast_dynamic(call)) {
 					/* A recorded native target of the callable: the helper
 					 * pushes and links its frame and returns its entry. */
@@ -4080,7 +4076,8 @@ bool ZendCompilerX64::compile_inst_impl(
 					}
 					generate_raw_jump(Jump::je, fast_miss);
 					ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 1);
-					generate_raw_jump(Jump::jmp, fast_join);
+					/* Falls through to fast_join: the re-arm stub and the miss
+					 * path between them are emitted into the cold area. */
 				} else {
 				const bool method =
 					descriptor->init_opcode == ZEND_INIT_METHOD_CALL;
@@ -4382,7 +4379,8 @@ bool ZendCompilerX64::compile_inst_impl(
 								offsetof(zend_execute_data, call))),
 						callee_reg);
 					ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 1);
-					generate_raw_jump(Jump::jmp, fast_join);
+					/* Falls through to fast_join: the re-arm stub and the miss
+					 * path between them are emitted into the cold area. */
 				}
 				/*
 				 * The re-arm stub: zend_native_call_fast_rearm() called with
@@ -6138,11 +6136,10 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto emit = [&](AsmReg address, int32_t offset) {
 			auto [result_ref, result] = result_ref_single(node.result);
 			auto result_reg = result.alloc_reg();
-			ASM(MOV32rm, result_reg,
+			ASM(MOVZXr32m8, result_reg,
 				FE_MEM(address, 0, FE_NOREG,
 					offset + static_cast<int32_t>(
 						offsetof(zval, u1.type_info))));
-			ASM(AND32ri, result_reg, Z_TYPE_MASK);
 			result.set_modified();
 		};
 		if (frame_slot) {
@@ -6183,11 +6180,10 @@ bool ZendCompilerX64::compile_inst_impl(
 			}
 			ScratchReg type{this};
 			auto type_reg = type.alloc_gp();
-			ASM(MOV32rm, type_reg,
+			ASM(MOVZXr32m8, type_reg,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(
 						offset + offsetof(zval, u1.type_info))));
-			ASM(AND32ri, type_reg, Z_TYPE_MASK);
 			if (guard.exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
 				auto matched_boolean = text_writer.label_create();
 				ASM(CMP32ri, type_reg, IS_FALSE);
@@ -6236,11 +6232,10 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto frame_reg = frame.load_to_reg();
 		ScratchReg type{this};
 		auto type_reg = type.alloc_gp();
-		ASM(MOV32rm, type_reg,
+		ASM(MOVZXr32m8, type_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
 					offset + offsetof(zval, u1.type_info))));
-		ASM(AND32ri, type_reg, Z_TYPE_MASK);
 		auto matched = text_writer.label_create();
 		if (node.exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
 			ASM(CMP32ri, type_reg, IS_FALSE);
@@ -6292,11 +6287,10 @@ bool ZendCompilerX64::compile_inst_impl(
 		ScratchReg referenced{this};
 		auto type_reg = type.alloc_gp();
 		auto referenced_reg = referenced.alloc_gp();
-		ASM(MOV32rm, type_reg,
+		ASM(MOVZXr32m8, type_reg,
 			FE_MEM(result_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
 					offsetof(zval, u1.type_info))));
-		ASM(AND32ri, type_reg, Z_TYPE_MASK);
 		ASM(MOV64rm, referenced_reg,
 			FE_MEM(result_reg, 0, FE_NOREG, 0));
 		ASM(ADD64ri, referenced_reg,
@@ -10852,11 +10846,10 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto string_reg = string.alloc_gp();
 		auto decision_reg = decision.alloc_gp();
 
-		ASM(MOV32rm, type_reg,
+		ASM(MOVZXr32m8, type_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
 					layout.operand_offset + offsetof(zval, u1.type_info))));
-		ASM(AND32ri, type_reg, Z_TYPE_MASK);
 		ASM(CMP32ri, type_reg, IS_STRING);
 		generate_raw_jump(Jump::jne, slow);
 		ASM(MOV64rm, string_reg,
@@ -10948,22 +10941,20 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto right_reg = right.alloc_gp();
 		auto decision_reg = decision.alloc_gp();
 
-		ASM(MOV32rm, type_reg,
+		ASM(MOVZXr32m8, type_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
 					layout.left_offset + offsetof(zval, u1.type_info))));
-		ASM(AND32ri, type_reg, Z_TYPE_MASK);
 		ASM(CMP32ri, type_reg, IS_STRING);
 		generate_raw_jump(Jump::jne, slow);
 		ASM(MOV64rm, left_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(layout.left_offset)));
 
-		ASM(MOV32rm, type_reg,
+		ASM(MOVZXr32m8, type_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
 					layout.right_offset + offsetof(zval, u1.type_info))));
-		ASM(AND32ri, type_reg, Z_TYPE_MASK);
 		ASM(CMP32ri, type_reg, IS_STRING);
 		generate_raw_jump(Jump::jne, slow);
 		ASM(MOV64rm, right_reg,
@@ -12147,12 +12138,11 @@ bool ZendCompilerX64::compile_inst_impl(
 			ASM(CMP8ri, type_info.load_to_reg(), IS_LONG);
 			generate_raw_jump(Jump::jne, slow);
 		} else {
-			ASM(MOV32rm, type_reg,
+			ASM(MOVZXr32m8, type_reg,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(
 						layout.left_offset
 							+ offsetof(zval, u1.type_info))));
-			ASM(AND32ri, type_reg, Z_TYPE_MASK);
 			ASM(CMP32ri, type_reg, IS_LONG);
 			generate_raw_jump(Jump::jne, slow);
 			ASM(MOV64rm, left_reg,
@@ -12195,22 +12185,20 @@ bool ZendCompilerX64::compile_inst_impl(
 			auto [literal_ref, literal] = val_ref_single(
 				node.operands[node.machine_reference_operand_index]);
 			auto literal_reg = literal.load_to_reg();
-			ASM(MOV32rm, type_reg,
+			ASM(MOVZXr32m8, type_reg,
 				FE_MEM(literal_reg, 0, FE_NOREG,
 					static_cast<int32_t>(
 						offsetof(zval, u1.type_info))));
-			ASM(AND32ri, type_reg, Z_TYPE_MASK);
 			ASM(CMP32ri, type_reg, IS_LONG);
 			generate_raw_jump(Jump::jne, slow);
 			ASM(MOV64rm, right_reg,
 				FE_MEM(literal_reg, 0, FE_NOREG, 0));
 		} else {
-			ASM(MOV32rm, type_reg,
+			ASM(MOVZXr32m8, type_reg,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(
 						layout.right.offset
 							+ offsetof(zval, u1.type_info))));
-			ASM(AND32ri, type_reg, Z_TYPE_MASK);
 			ASM(CMP32ri, type_reg, IS_LONG);
 			generate_raw_jump(Jump::jne, slow);
 			ASM(MOV64rm, right_reg,
@@ -12429,12 +12417,11 @@ bool ZendCompilerX64::compile_inst_impl(
 			auto direct = text_writer.label_create();
 			auto loaded = text_writer.label_create();
 			target_reg = target.alloc_gp();
-			ASM(MOV32rm, type_reg,
+			ASM(MOVZXr32m8, type_reg,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(
 						layout.operand_offset
 							+ offsetof(zval, u1.type_info))));
-			ASM(AND32ri, type_reg, Z_TYPE_MASK);
 			ASM(CMP32ri, type_reg, IS_LONG);
 			generate_raw_jump(Jump::je, direct);
 			ASM(CMP32ri, type_reg, IS_REFERENCE);
@@ -12450,10 +12437,9 @@ bool ZendCompilerX64::compile_inst_impl(
 			generate_raw_jump(Jump::jne, slow);
 			ASM(ADD64ri, target_reg,
 				static_cast<int32_t>(offsetof(zend_reference, val)));
-			ASM(MOV32rm, type_reg,
+			ASM(MOVZXr32m8, type_reg,
 				FE_MEM(target_reg, 0, FE_NOREG,
 					static_cast<int32_t>(offsetof(zval, u1.type_info))));
-			ASM(AND32ri, type_reg, Z_TYPE_MASK);
 			ASM(CMP32ri, type_reg, IS_LONG);
 			generate_raw_jump(Jump::jne, slow);
 			generate_raw_jump(Jump::jmp, loaded);
@@ -12464,12 +12450,11 @@ bool ZendCompilerX64::compile_inst_impl(
 			label_place(loaded);
 			ASM(MOV64rm, value_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
 		} else {
-			ASM(MOV32rm, type_reg,
+			ASM(MOVZXr32m8, type_reg,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(
 						layout.operand_offset
 							+ offsetof(zval, u1.type_info))));
-			ASM(AND32ri, type_reg, Z_TYPE_MASK);
 			ASM(CMP32ri, type_reg, IS_LONG);
 			generate_raw_jump(Jump::jne, slow);
 			ASM(MOV64rm, value_reg,
@@ -12797,12 +12782,11 @@ bool ZendCompilerX64::compile_inst_impl(
 				generate_raw_jump(Jump::jmp, falsey);
 			}
 		} else {
-		ASM(MOV32rm, type_reg,
+		ASM(MOVZXr32m8, type_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
 					layout.operand_offset
 						+ offsetof(zval, u1.type_info))));
-		ASM(AND32ri, type_reg, Z_TYPE_MASK);
 		ASM(CMP32ri, type_reg, IS_NULL);
 		generate_raw_jump(Jump::jle, falsey);
 		ASM(CMP32ri, type_reg, IS_REFERENCE);
@@ -13287,12 +13271,11 @@ bool ZendCompilerX64::compile_inst_impl(
 				static_cast<int32_t>(offsetof(zend_op_array, literals))));
 		};
 
-		ASM(MOV32rm, type_reg,
+		ASM(MOVZXr32m8, type_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
 					layout.receiver_offset
 						+ offsetof(zval, u1.type_info))));
-		ASM(AND32ri, type_reg, Z_TYPE_MASK);
 		ASM(CMP32ri, type_reg, IS_OBJECT);
 		generate_raw_jump(Jump::jne, slow);
 		ASM(MOV64rm, object_reg,
@@ -13364,12 +13347,11 @@ bool ZendCompilerX64::compile_inst_impl(
 				load_literal_base(cache_reg);
 				value_base = cache_reg;
 			}
-			ASM(MOV32rm, cache_reg,
+			ASM(MOVZXr32m8, cache_reg,
 				FE_MEM(value_base, 0, FE_NOREG,
 					static_cast<int32_t>(
 						layout.value_offset
 							+ offsetof(zval, u1.type_info))));
-			ASM(AND32ri, cache_reg, Z_TYPE_MASK);
 			ASM(CMP32ri, cache_reg, IS_LONG);
 			generate_raw_jump(Jump::jne, slow);
 		}
@@ -14044,12 +14026,11 @@ bool ZendCompilerX64::compile_inst_impl(
 			auto source_name_reg = name_value.load_to_reg();
 			ASM(MOV64rr, name_reg, source_name_reg);
 		} else {
-			ASM(MOV32rm, type_reg,
+			ASM(MOVZXr32m8, type_reg,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(
 						layout.name_offset
 							+ offsetof(zval, u1.type_info))));
-			ASM(AND32ri, type_reg, Z_TYPE_MASK);
 			ASM(CMP32ri, type_reg, IS_STRING);
 			generate_raw_jump(Jump::jne, slow);
 			ASM(MOV64rm, name_reg,
@@ -15394,11 +15375,10 @@ bool ZendCompilerX64::compile_inst_impl(
 					? canonical_frame_register() : frame_scratch.cur_reg());
 			ASM(ADD64ri, slot_reg,
 				static_cast<int32_t>(layout.operand_offset));
-			ASM(MOV32rm, type_reg,
+			ASM(MOVZXr32m8, type_reg,
 				FE_MEM(slot_reg, 0, FE_NOREG,
 					static_cast<int32_t>(
 						offsetof(zval, u1.type_info))));
-			ASM(AND32ri, type_reg, Z_TYPE_MASK);
 			auto spilled = spill_before_branch();
 			begin_branch_region();
 			auto dereferenced = text_writer.label_create();
@@ -15408,11 +15388,10 @@ bool ZendCompilerX64::compile_inst_impl(
 				FE_MEM(slot_reg, 0, FE_NOREG, 0));
 			ASM(ADD64ri, slot_reg,
 				static_cast<int32_t>(offsetof(zend_reference, val)));
-			ASM(MOV32rm, type_reg,
+			ASM(MOVZXr32m8, type_reg,
 				FE_MEM(slot_reg, 0, FE_NOREG,
 					static_cast<int32_t>(
 						offsetof(zval, u1.type_info))));
-			ASM(AND32ri, type_reg, Z_TYPE_MASK);
 			label_place(dereferenced);
 			if (layout.source_opcode != ZEND_SWITCH_STRING) {
 				ASM(CMP32ri, type_reg, IS_LONG);
@@ -15815,11 +15794,10 @@ bool ZendCompilerX64::compile_inst_impl(
 					auto key_type_reg = key_type.alloc_gp();
 					auto element_ready = text_writer.label_create();
 
-					ASM(MOV32rm, type_reg,
+					ASM(MOVZXr32m8, type_reg,
 						FE_MEM(frame_reg, 0, FE_NOREG,
 							static_cast<int32_t>(layout.holder_offset
 								+ offsetof(zval, u1.type_info))));
-					ASM(AND32ri, type_reg, Z_TYPE_MASK);
 					ASM(CMP32ri, type_reg, IS_ARRAY);
 					generate_raw_jump(Jump::jne, slow);
 					ASM(MOV64rm, array_reg,
@@ -17193,11 +17171,10 @@ bool ZendCompilerX64::compile_inst_impl(
 								 * the payload is undefined (ZVAL_TRUE does not
 								 * write it).
 								 */
-								ASM(MOV32rm, result_reg,
+								ASM(MOVZXr32m8, result_reg,
 									FE_MEM(result_slot_reg, 0, FE_NOREG,
 										static_cast<int32_t>(offsetof(
 											zval, u1.type_info))));
-								ASM(AND32ri, result_reg, Z_TYPE_MASK);
 								ASM(CMP32ri, result_reg, IS_TRUE);
 								generate_raw_set(Jump::je, result_reg);
 							} else {
@@ -18257,12 +18234,11 @@ bool ZendCompilerX64::compile_inst_impl(
 					}
 					if (call.direct_call->receiver_kind
 							== ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS) {
-						ASM(MOV32rm, first_reg,
+						ASM(MOVZXr32m8, first_reg,
 							FE_MEM(frame_reg, 0, FE_NOREG,
 								static_cast<int32_t>(
 									offsetof(zend_execute_data, This)
 										+ offsetof(zval, u1.type_info))));
-						ASM(AND32ri, first_reg, Z_TYPE_MASK);
 						ASM(CMP32ri, first_reg, IS_OBJECT);
 						generate_raw_jump(Jump::jne, call_slow_target());
 					} else if (call.direct_call->receiver_kind
@@ -18274,12 +18250,11 @@ bool ZendCompilerX64::compile_inst_impl(
 							FE_MEM(frame_reg, 0, FE_NOREG,
 								static_cast<int32_t>(
 									offsetof(zend_execute_data, This))));
-						ASM(MOV32rm, second_reg,
+						ASM(MOVZXr32m8, second_reg,
 							FE_MEM(frame_reg, 0, FE_NOREG,
 								static_cast<int32_t>(
 									offsetof(zend_execute_data, This)
 										+ offsetof(zval, u1.type_info))));
-						ASM(AND32ri, second_reg, Z_TYPE_MASK);
 						ASM(CMP32ri, second_reg, IS_OBJECT);
 						auto called_scope_ready = text_writer.label_create();
 						generate_raw_jump(Jump::jne, called_scope_ready);
@@ -18316,11 +18291,10 @@ bool ZendCompilerX64::compile_inst_impl(
 						const int32_t receiver_offset =
 							static_cast<int32_t>(
 								call.direct_call->receiver_source_frame_offset);
-						ASM(MOV32rm, first_reg,
+						ASM(MOVZXr32m8, first_reg,
 							FE_MEM(frame_reg, 0, FE_NOREG,
 								receiver_offset + static_cast<int32_t>(
 									offsetof(zval, u1.type_info))));
-						ASM(AND32ri, first_reg, Z_TYPE_MASK);
 						ASM(CMP32ri, first_reg, IS_OBJECT);
 						generate_raw_jump(Jump::jne, call_slow_target());
 						ASM(MOV64rm, first_reg,
@@ -18452,9 +18426,8 @@ bool ZendCompilerX64::compile_inst_impl(
 									+ argument.source_operand.index)
 								* sizeof(zval)
 								+ offsetof(zval, u1.type_info));
-						ASM(MOV32rm, first_reg,
+						ASM(MOVZXr32m8, first_reg,
 							FE_MEM(frame_reg, 0, FE_NOREG, source_offset));
-						ASM(AND32ri, first_reg, Z_TYPE_MASK);
 						ASM(CMP32ri, first_reg, IS_REFERENCE);
 						generate_raw_jump(
 							argument.mode
@@ -18480,12 +18453,11 @@ bool ZendCompilerX64::compile_inst_impl(
 								FE_MEM(frame_reg, 0, FE_NOREG,
 									static_cast<int32_t>(
 										argument.source_frame_offset)));
-							ASM(MOV32rm, second_reg,
+							ASM(MOVZXr32m8, second_reg,
 								FE_MEM(second_reg, 0, FE_NOREG,
 									static_cast<int32_t>(
 										offsetof(zend_reference, val)
 											+ offsetof(zval, u1.type_info))));
-							ASM(AND32ri, second_reg, Z_TYPE_MASK);
 							if (argument_guard_type == ZEND_MIR_SCALAR_TYPE_I1) {
 								auto reference_type_valid = text_writer.label_create();
 								ASM(CMP32ri, second_reg, IS_FALSE);
@@ -18636,12 +18608,11 @@ bool ZendCompilerX64::compile_inst_impl(
 								FE_MEM(frame_reg, 0, FE_NOREG,
 									static_cast<int32_t>(
 										offsetof(zend_execute_data, This))));
-							ASM(MOV32rm, first_reg,
+							ASM(MOVZXr32m8, first_reg,
 								FE_MEM(frame_reg, 0, FE_NOREG,
 									static_cast<int32_t>(
 										offsetof(zend_execute_data, This)
 											+ offsetof(zval, u1.type_info))));
-							ASM(AND32ri, first_reg, Z_TYPE_MASK);
 							ASM(CMP32ri, first_reg, IS_OBJECT);
 							auto called_scope_ready =
 								text_writer.label_create();

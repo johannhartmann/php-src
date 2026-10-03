@@ -1936,7 +1936,7 @@ static zend_always_inline bool zend_native_value_identical_values(
 			&& Z_TYPE_P(a) == Z_TYPE_P(b)) {
 		return false;
 	}
-	identical = zend_is_identical(a, b);
+	identical = fast_is_identical_function(a, b);
 	if (left_tmp) {
 		zval_ptr_dtor_str(fast_left);
 		ZVAL_UNDEF(fast_left);
@@ -5939,7 +5939,8 @@ static zend_always_inline bool zend_native_value_assign_dim_store(
 	/* A missing key is inserted as NULL, which the store overwrites.
 	 * Numeric strings name integer keys. */
 	if (Z_TYPE_P(offset) == IS_LONG) {
-		element = zend_hash_index_lookup(table, Z_LVAL_P(offset));
+		/* A packed hit inline, as the VM's ASSIGN_DIM finds it. */
+		ZEND_HASH_INDEX_LOOKUP(table, Z_LVAL_P(offset), element);
 	} else {
 		zend_ulong index;
 
@@ -5972,12 +5973,20 @@ static zend_always_inline bool zend_native_value_assign_dim_store(
 	} else {
 		Z_TRY_ADDREF_P(element);
 	}
+	/* GC_DTOR_NO_REF() as zend_assign_to_variable() releases the old
+	 * value: only a destructor, run when the count drops to zero, can
+	 * observe the opline or raise. */
 	if (Z_REFCOUNTED(garbage)) {
-		execute_data->opline =
-			&execute_data->func->op_array.opcodes[source_position_id];
-		zval_ptr_dtor(&garbage);
-		*status = zend_native_value_status();
-		return true;
+		zend_refcounted *counted = Z_COUNTED(garbage);
+
+		if (GC_DELREF(counted) == 0) {
+			execute_data->opline =
+				&execute_data->func->op_array.opcodes[source_position_id];
+			rc_dtor_func(counted);
+			*status = zend_native_value_status();
+			return true;
+		}
+		gc_check_possible_root_no_ref(counted);
 	}
 	*status = ZEND_NATIVE_RETURNED;
 	return true;
@@ -6251,6 +6260,39 @@ zend_native_status zend_native_value_identical_direct(
 			right, right_kind == ZEND_NATIVE_DIM_DIRECT_TMP,
 			result, source_opcode))) {
 		return ZEND_NATIVE_RETURNED;
+	}
+	/*
+	 * Arrays and objects, also as temporaries: compare, then free the
+	 * operands as ZEND_IS_IDENTICAL does (a destructor may run and raise),
+	 * then publish the boolean, which may reuse an operand's slot.
+	 */
+	if (Z_TYPE_P(left) != IS_UNDEF && Z_TYPE_P(right) != IS_UNDEF
+			&& ((descriptor >> ZEND_NATIVE_DIM_DIRECT_RESULT_CV_SHIFT) & 1)
+				== 0) {
+		zval *a = left;
+		zval *b = right;
+		bool identical;
+
+		ZVAL_DEREF(a);
+		ZVAL_DEREF(b);
+		/* A nested comparison may throw (recursion, stack limit). */
+		execute_data->opline =
+			&execute_data->func->op_array.opcodes[source_position_id];
+		identical = zend_is_identical(a, b);
+		if (left_kind == ZEND_NATIVE_DIM_DIRECT_TMP
+				|| right_kind == ZEND_NATIVE_DIM_DIRECT_TMP) {
+			if (left_kind == ZEND_NATIVE_DIM_DIRECT_TMP) {
+				zval_ptr_dtor_nogc(left);
+				ZVAL_UNDEF(left);
+			}
+			if (right_kind == ZEND_NATIVE_DIM_DIRECT_TMP) {
+				zval_ptr_dtor_nogc(right);
+				ZVAL_UNDEF(right);
+			}
+		}
+		ZVAL_BOOL(result, source_opcode == ZEND_IS_IDENTICAL
+			? identical : !identical);
+		return zend_native_value_status();
 	}
 	return zend_native_value_binary_op(execute_data,
 		zend_native_value_direct_encoding(
