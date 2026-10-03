@@ -1311,6 +1311,270 @@ public:
 		}
 		Base::start_func(index);
 		entry_variant_dispatch_pending_ = has_entry_variant();
+		if (!adaptor->typed_body() && adaptor->plan() != nullptr
+				&& adaptor->plan()->fast_call_eligible) {
+			emit_fast_call_entry(index);
+		}
+	}
+	/*
+	 * The member's fast-call entry (zend_native_code_fast_call_entry()),
+	 * written before the Zend entry so that both share their cache lines:
+	 * frameless code with zend_native_call_fast_do()'s arguments (RDI the
+	 * caller, RSI the context, RDX the descriptor, R8D the result offset or
+	 * UINT32_MAX) that does the fast Do's work for a site sending exactly
+	 * the parameters by value to this untyped function. It links and
+	 * initializes the frame the Init pushed, calls the Zend entry and
+	 * leaves through the shared zend_native_call_fast_leave(). Only
+	 * caller-saved registers are used; the stack area holds the frame, the
+	 * result offset and the discarded result.
+	 */
+	void emit_fast_call_entry(uint32_t function_index) {
+		const zend_tpde_plan *plan = adaptor->plan();
+		const uint32_t num_args = plan->source_num_args;
+		const uint32_t last_var = plan->source_frame_variable_count;
+		const tpde::SymRef leave_symbol =
+			runtime_symbol(ZEND_NATIVE_HELPER_CALL_FAST_LEAVE);
+		const tpde::SymRef release_symbol =
+			runtime_symbol(ZEND_NATIVE_HELPER_CALL_FAST_RELEASE_CV);
+		if (num_args > last_var || function_index >= this->func_syms.size()
+				|| !leave_symbol.valid() || !release_symbol.valid()) {
+			return;
+		}
+		/* No labels before the prologue (remove_prologue_bytes()): forward
+		 * branches are rel32 jumps patched once their target is known. */
+		auto branch = [&](bool conditional) {
+			text_writer.ensure_space(16);
+			if (conditional) {
+				ASMF(JNZ, FE_JMPL, text_writer.cur_ptr());
+			} else {
+				ASMF(JMP, FE_JMPL, text_writer.cur_ptr());
+			}
+			return static_cast<uint32_t>(text_writer.offset());
+		};
+		auto patch = [&](uint32_t branch_end, uint32_t target) {
+			const int32_t displacement = static_cast<int32_t>(
+				static_cast<int64_t>(target) - branch_end);
+			std::memcpy(text_writer.begin_ptr() + branch_end - 4,
+				&displacement, sizeof(displacement));
+		};
+		auto call_symbol = [&](tpde::SymRef symbol) {
+			text_writer.ensure_space(16);
+			ASM(CALL, text_writer.cur_ptr() + 5);
+			reloc_text(symbol, tpde::elf::R_X86_64_PLT32,
+				text_writer.offset() - 4, -4);
+		};
+		constexpr int32_t area = 56;
+		auto member = [](size_t offset) {
+			return static_cast<int32_t>(offset);
+		};
+		constexpr int32_t header_offset = -static_cast<int32_t>(
+			sizeof(zend_native_user_call_site_header));
+		const uint32_t start = text_writer.offset();
+		/* Its own FDE: the CFA is RSP + 48 between the stack adjustments. */
+		text_writer.eh_begin_fde();
+		ASM(SUB64ri, FE_SP, area);
+		const uint32_t cfi_location = text_writer.offset();
+		text_writer.eh_advance(cfi_location - start);
+		text_writer.eh_write_inst(
+			tpde::dwarf::DW_CFA_def_cfa_offset, area + 8);
+		ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, 32), FE_SI);
+		/* Unlink the frame from EX(call). */
+		ASM(MOV64rm, FE_AX, FE_MEM(FE_DI, 0, FE_NOREG,
+			member(offsetof(zend_execute_data, call))));
+		ASM(MOV64rm, FE_R9, FE_MEM(FE_AX, 0, FE_NOREG,
+			member(offsetof(zend_execute_data, prev_execute_data))));
+		ASM(MOV64mr, FE_MEM(FE_DI, 0, FE_NOREG,
+			member(offsetof(zend_execute_data, call))), FE_R9);
+		ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, 0), FE_AX);
+		/* The return value: the result slot, or the local zval. */
+		ASM(MOV32rr, FE_R8, FE_R8);
+		ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, 8), FE_R8);
+		ASM(LEA64rm, FE_R9, FE_MEM(FE_SP, 0, FE_NOREG, 16));
+		ASM(LEA64rm, FE_R10, FE_MEM(FE_DI, 1, FE_R8, 0));
+		ASM(CMP32ri, FE_R8, -1);
+		ASM(CMOVNZ64rr, FE_R9, FE_R10);
+		ASM(MOV64mr, FE_MEM(FE_AX, 0, FE_NOREG,
+			member(offsetof(zend_execute_data, return_value))), FE_R9);
+		ASM(MOV32mi, FE_MEM(FE_R9, 0, FE_NOREG,
+			member(offsetof(zval, u1.type_info))), IS_UNDEF);
+		ASM(MOV64mr, FE_MEM(FE_AX, 0, FE_NOREG,
+			member(offsetof(zend_execute_data, prev_execute_data))), FE_DI);
+		ASM(MOV64mi, FE_MEM(FE_AX, 0, FE_NOREG,
+			member(offsetof(zend_execute_data, call))), 0);
+		/* EX(opline) skips the RECV of every parameter. */
+		ASM(MOV64rm, FE_R9, FE_MEM(FE_AX, 0, FE_NOREG,
+			member(offsetof(zend_execute_data, func))));
+		ASM(MOV64rm, FE_R9, FE_MEM(FE_R9, 0, FE_NOREG,
+			member(offsetof(zend_op_array, opcodes))));
+		if (num_args != 0) {
+			ASM(ADD64ri, FE_R9,
+				static_cast<int32_t>(num_args * sizeof(zend_op)));
+		}
+		ASM(MOV64mr, FE_MEM(FE_AX, 0, FE_NOREG,
+			member(offsetof(zend_execute_data, opline))), FE_R9);
+		/* The other CVs start undefined: a few stores, else a loop. */
+		const int32_t first_variable = static_cast<int32_t>(
+			(ZEND_CALL_FRAME_SLOT + num_args) * sizeof(zval)
+				+ offsetof(zval, u1.type_info));
+		if (last_var - num_args <= 6) {
+			for (uint32_t variable = 0; variable < last_var - num_args;
+					++variable) {
+				ASM(MOV32mi, FE_MEM(FE_AX, 0, FE_NOREG, first_variable
+					+ static_cast<int32_t>(variable * sizeof(zval))),
+					IS_UNDEF);
+			}
+		} else {
+			/* No labels before the prologue (remove_prologue_bytes()):
+			 * the backward branch is encoded directly. */
+			ASM(LEA64rm, FE_R9, FE_MEM(FE_AX, 0, FE_NOREG, first_variable));
+			ASM(MOV32ri, FE_R10, static_cast<int32_t>(last_var - num_args));
+			const uint32_t loop = text_writer.offset();
+			ASM(MOV32mi, FE_MEM(FE_R9, 0, FE_NOREG, 0), IS_UNDEF);
+			ASM(ADD64ri, FE_R9, static_cast<int32_t>(sizeof(zval)));
+			ASM(SUB32ri, FE_R10, 1);
+			text_writer.ensure_space(16);
+			ASM(JNZ, text_writer.begin_ptr() + loop);
+		}
+		ASM(MOV64rm, FE_R9, FE_MEM(FE_DX, 0, FE_NOREG,
+			header_offset + member(offsetof(
+				zend_native_user_call_site_header, fast_run_time_cache))));
+		ASM(MOV64mr, FE_MEM(FE_AX, 0, FE_NOREG,
+			member(offsetof(zend_execute_data, run_time_cache))), FE_R9);
+		ASM(MOV64rm, FE_R9, FE_MEM(FE_SI, 0, FE_NOREG,
+			member(offsetof(zend_native_execution_context,
+				current_execute_data))));
+		ASM(MOV64mr, FE_MEM(FE_R9, 0, FE_NOREG, 0), FE_AX);
+		/* The Zend entry on the linked frame; RSI still holds the context. */
+		ASM(MOV64rr, FE_DI, FE_AX);
+		text_writer.ensure_space(16);
+		ASM(CALL, text_writer.cur_ptr() + 5);
+		reloc_text(this->func_syms[function_index], tpde::elf::R_X86_64_PLT32,
+			text_writer.offset() - 4, -4);
+		/*
+		 * The leave, as zend_native_call_fast_leave_inline() does it for a
+		 * plain return: anything else leaves through
+		 * zend_native_call_fast_leave(), which starts from this state.
+		 */
+		std::vector<uint32_t> to_general;
+		ASM(MOV64rm, FE_DI, FE_MEM(FE_SP, 0, FE_NOREG, 0));
+		ASM(TEST32rr, FE_AX, FE_AX);
+		to_general.push_back(branch(true));
+		ASM(MOV64rm, FE_R9, FE_MEM(FE_SP, 0, FE_NOREG, 32));
+		ASM(MOV64rm, FE_R10, FE_MEM(FE_R9, 0, FE_NOREG,
+			member(offsetof(zend_native_execution_context, exception))));
+		ASM(CMP64mi, FE_MEM(FE_R10, 0, FE_NOREG, 0), 0);
+		to_general.push_back(branch(true));
+		ASM(MOV64rm, FE_R10, FE_MEM(FE_R9, 0, FE_NOREG,
+			member(offsetof(zend_native_execution_context, vm_interrupt))));
+		ASM(CMP8mi, FE_MEM(FE_R10, 0, FE_NOREG, 0), 0);
+		to_general.push_back(branch(true));
+		ASM(TEST32mi, FE_MEM(FE_DI, 0, FE_NOREG,
+			member(offsetof(zend_execute_data, This)
+				+ offsetof(zval, u1.type_info))),
+			static_cast<int32_t>(ZEND_CALL_HAS_SYMBOL_TABLE
+				| ZEND_CALL_HAS_EXTRA_NAMED_PARAMS
+				| ZEND_CALL_RELEASE_THIS | ZEND_CALL_CLOSURE
+				| ZEND_CALL_ALLOCATED | ZEND_CALL_FREE_EXTRA_ARGS));
+		to_general.push_back(branch(true));
+		/* An undefined result becomes null; a discarded counted result is
+		 * released by the general leave. */
+		ASM(MOV64rm, FE_R10, FE_MEM(FE_DI, 0, FE_NOREG,
+			member(offsetof(zend_execute_data, return_value))));
+		ASM(CMP8mi, FE_MEM(FE_R10, 0, FE_NOREG,
+			member(offsetof(zval, u1.v.type))), IS_UNDEF);
+		{
+			text_writer.ensure_space(16);
+			ASMF(JNZ, FE_JMPL, text_writer.cur_ptr());
+			const uint32_t defined = text_writer.offset();
+			ASM(MOV32mi, FE_MEM(FE_R10, 0, FE_NOREG,
+				member(offsetof(zval, u1.type_info))), IS_NULL);
+			patch(defined, text_writer.offset());
+		}
+		ASM(CMP32mi, FE_MEM(FE_SP, 0, FE_NOREG, 8), -1);
+		{
+			text_writer.ensure_space(16);
+			ASMF(JNZ, FE_JMPL, text_writer.cur_ptr());
+			const uint32_t kept = text_writer.offset();
+			ASM(TEST8mi, FE_MEM(FE_R10, 0, FE_NOREG,
+				member(offsetof(zval, u1.v.type_flags))), IS_TYPE_REFCOUNTED);
+			to_general.push_back(branch(true));
+			patch(kept, text_writer.offset());
+		}
+		/* A variable destructor may inspect the backtrace: the dying frame
+		 * is no longer current. */
+		ASM(MOV64rm, FE_R10, FE_MEM(FE_DI, 0, FE_NOREG,
+			member(offsetof(zend_execute_data, prev_execute_data))));
+		ASM(MOV64rm, FE_R11, FE_MEM(FE_R9, 0, FE_NOREG,
+			member(offsetof(zend_native_execution_context,
+				current_execute_data))));
+		ASM(MOV64mr, FE_MEM(FE_R11, 0, FE_NOREG, 0), FE_R10);
+		/* The CVs, as i_free_compiled_variables() releases them: a counted
+		 * one out of line, after which the cursor is reloaded. */
+		std::vector<std::pair<uint32_t, uint32_t>> counted_branches;
+		if (last_var != 0) {
+			ASM(LEA64rm, FE_R10, FE_MEM(FE_DI, 0, FE_NOREG,
+				static_cast<int32_t>(ZEND_CALL_FRAME_SLOT * sizeof(zval))));
+			ASM(LEA64rm, FE_R11, FE_MEM(FE_DI, 0, FE_NOREG,
+				static_cast<int32_t>((ZEND_CALL_FRAME_SLOT + last_var)
+					* sizeof(zval))));
+			const uint32_t loop = text_writer.offset();
+			ASM(TEST8mi, FE_MEM(FE_R10, 0, FE_NOREG,
+				member(offsetof(zval, u1.v.type_flags))), IS_TYPE_REFCOUNTED);
+			const uint32_t counted = branch(true);
+			const uint32_t next = text_writer.offset();
+			counted_branches.emplace_back(counted, next);
+			ASM(ADD64ri, FE_R10, static_cast<int32_t>(sizeof(zval)));
+			ASM(CMP64rr, FE_R10, FE_R11);
+			text_writer.ensure_space(16);
+			ASM(JNZ, text_writer.begin_ptr() + loop);
+		}
+		/* The frame lies on top of the VM stack. */
+		ASM(MOV64rm, FE_DI, FE_MEM(FE_SP, 0, FE_NOREG, 0));
+		ASM(MOV64rm, FE_R9, FE_MEM(FE_SP, 0, FE_NOREG, 32));
+		ASM(MOV64rm, FE_R10, FE_MEM(FE_R9, 0, FE_NOREG,
+			member(offsetof(zend_native_execution_context, vm_stack_top))));
+		ASM(MOV64mr, FE_MEM(FE_R10, 0, FE_NOREG, 0), FE_DI);
+		ASM(XOR32rr, FE_AX, FE_AX);
+		const uint32_t epilogue = text_writer.offset();
+		ASM(ADD64ri, FE_SP, area);
+		text_writer.eh_advance(text_writer.offset() - cfi_location);
+		text_writer.eh_write_inst(tpde::dwarf::DW_CFA_def_cfa_offset, 8);
+		ASM(RET);
+		/* Out of the return path, the CFA is RSP + area + 8 again. */
+		const uint32_t out_of_line = text_writer.offset();
+		text_writer.eh_advance(out_of_line - (epilogue + 4));
+		text_writer.eh_write_inst(
+			tpde::dwarf::DW_CFA_def_cfa_offset, area + 8);
+		for (const auto &[counted, next] : counted_branches) {
+			patch(counted, text_writer.offset());
+			ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, 40), FE_R10);
+			ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, 48), FE_R11);
+			ASM(MOV64rr, FE_DI, FE_R10);
+			call_symbol(release_symbol);
+			ASM(MOV64rm, FE_R10, FE_MEM(FE_SP, 0, FE_NOREG, 40));
+			ASM(MOV64rm, FE_R11, FE_MEM(FE_SP, 0, FE_NOREG, 48));
+			const uint32_t back = branch(false);
+			patch(back, next);
+		}
+		/* zend_native_call_fast_leave(callee, status, discarded). */
+		for (uint32_t general : to_general) {
+			patch(general, text_writer.offset());
+		}
+		ASM(MOV64rm, FE_DI, FE_MEM(FE_SP, 0, FE_NOREG, 0));
+		ASM(MOV32rr, FE_SI, FE_AX);
+		ASM(XOR32rr, FE_DX, FE_DX);
+		ASM(CMP32mi, FE_MEM(FE_SP, 0, FE_NOREG, 8), -1);
+		ASM(SETZ8r, FE_DX);
+		call_symbol(leave_symbol);
+		ASM(ADD64ri, FE_SP, area);
+		ASM(RET);
+		text_writer.eh_end_fde();
+		const tpde::SymRef symbol = assembler.sym_predef_func(
+			"zend_native_fast_call_" + std::to_string(function_index),
+			tpde::Assembler::SymBinding::GLOBAL);
+		assembler.sym_def(symbol, text_writer.get_sec_ref(), start,
+			text_writer.offset() - start);
+		text_writer.begin_func_after_prefix();
 	}
 	/*
 	 * Entry specialization: before the first instruction of a Zend entry
@@ -5598,17 +5862,34 @@ bool ZendCompilerX64::compile_inst_impl(
 				}
 				builder.add_arg(copy_fixed_argument(
 					canonical_frame_register()), tpde::CCAssignment{});
+				builder.add_arg(context_argument(), tpde::CCAssignment{});
 				builder.add_arg(image_symbol_value(
 					ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.id),
 					tpde::CCAssignment{});
-				builder.add_arg(context_argument(), tpde::CCAssignment{});
 				ValuePart entry_value{tpde::x64::PlatformConfig::GP_BANK, 8};
 				entry_value.set_value(this, std::move(entry));
 				builder.add_arg(std::move(entry_value), tpde::CCAssignment{});
 				builder.add_arg(ValuePart{result_used
 						? result_offset : uint64_t{UINT32_MAX}, 4,
 					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-				builder.call(runtime_symbol(ZEND_NATIVE_HELPER_CALL_FAST_DO));
+				if (dynamic) {
+					builder.call(runtime_symbol(ZEND_NATIVE_HELPER_CALL_FAST_DO));
+				} else {
+					/* The published site's fast Do: the target's fast-call
+					 * entry or zend_native_call_fast_do(), from the header
+					 * before the descriptor in RDX. */
+					ScratchReg target{this};
+					const auto target_reg = target.alloc_specific(
+						tpde::x64::AsmReg{tpde::x64::AsmReg::R11});
+					ASM(MOV64rm, target_reg, FE_MEM(FE_DX, 0, FE_NOREG,
+						header_offset + static_cast<int32_t>(offsetof(
+							zend_native_user_call_site_header,
+							fast_do_entry))));
+					ValuePart target_value{
+						tpde::x64::PlatformConfig::GP_BANK, 8};
+					target_value.set_value(this, std::move(target));
+					builder.call(std::move(target_value));
+				}
 				ValuePart left{tpde::x64::PlatformConfig::GP_BANK, 4};
 				builder.add_ret(left, tpde::CCAssignment{});
 				const auto left_reg = left.cur_reg_or_load(this);

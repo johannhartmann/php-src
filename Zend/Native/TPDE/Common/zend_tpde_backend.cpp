@@ -5675,6 +5675,15 @@ bool initialize_plan(
 	plan->linux_inline_forms = linux_inline_forms;
 	plan->source_generator = source_op_array == nullptr
 		|| (source_op_array->fn_flags & ZEND_ACC_GENERATOR) != 0;
+	plan->source_num_args =
+		source_op_array != nullptr ? source_op_array->num_args : 0;
+	plan->fast_call_eligible = linux_inline_forms
+		&& source_op_array != nullptr
+		&& source_op_array->function_name != nullptr
+		&& (source_op_array->fn_flags
+			& (ZEND_ACC_GENERATOR | ZEND_ACC_VARIADIC)) == 0
+		&& source_op_array->last_var <= 64
+		&& source_op_array->num_args <= (uint32_t) source_op_array->last_var;
 	plan->source_literals =
 		source_op_array != nullptr ? source_op_array->literals : nullptr;
 	plan->source_literal_count = source_op_array != nullptr
@@ -13064,6 +13073,15 @@ static bool freeze_component_machine_plan(
 			plans[index].typed_body_eligible
 				? next_typed_body_function++ : UINT32_MAX;
 	}
+	/* A fast-call entry leaves through the shared leave. */
+	for (uint32_t index = 0; index < component_count; ++index) {
+		if (plans[index].fast_call_eligible) {
+			require_runtime_helper(
+				&plans[index], ZEND_NATIVE_HELPER_CALL_FAST_LEAVE);
+			require_runtime_helper(
+				&plans[index], ZEND_NATIVE_HELPER_CALL_FAST_RELEASE_CV);
+		}
+	}
 	for (uint32_t index = 0; index < component_count; ++index) {
 		if (!freeze_typed_component_calls(
 				&plans[index], component_plans, component_count,
@@ -14690,6 +14708,7 @@ extern "C" void zend_native_code_destroy(zend_native_code *code) {
 	}
 	std::free(owner->owned_internal_call_cells);
 	std::free(owner->component_entries);
+	std::free(owner->component_fast_entries);
 	std::free(owner->component_metadata);
 	if (owner->unwind_registered) {
 		uint32_t unwind_previous = live_unwind_registrations.fetch_sub(
@@ -14740,6 +14759,8 @@ extern "C" zend_result zend_native_code_component_view(
 	view->mapping = owner->mapping;
 	view->mapping_size = owner->mapping_size;
 	view->entry = owner->component_entries[component_index];
+	view->fast_call_entry = owner->component_fast_entries != nullptr
+		? owner->component_fast_entries[component_index] : nullptr;
 	view->slot_count = owner->slot_count;
 	view->argument_count =
 		owner->component_metadata[component_index].argument_count;
@@ -14808,6 +14829,11 @@ extern "C" bool zend_native_code_contains_address(
 extern "C" zend_native_frame_entry_t zend_native_code_frame_entry(
 	const zend_native_code *code) {
 	return code != nullptr ? code->entry : nullptr;
+}
+
+extern "C" void *zend_native_code_fast_call_entry(
+	const zend_native_code *code) {
+	return code != nullptr ? code->fast_call_entry : nullptr;
 }
 
 extern "C" uint32_t zend_native_code_argument_count(

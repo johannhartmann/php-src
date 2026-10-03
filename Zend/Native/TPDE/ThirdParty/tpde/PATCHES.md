@@ -91,3 +91,12 @@ it is compiled in place, so the allocator state stays that of its position:
   written to the cold area by `CompilerBase::compile_block`; they are still
   compiled in layout order, so the allocator state is that of their
   position.
+
+## Code before the prologue (`include/tpde/Assembler.hpp`, `src/FunctionWriter.cpp`)
+
+`remove_prologue_bytes` moves only the relocations behind the removed bytes
+(`adjust_relocation_offsets` takes the first moved offset). A compiler may
+write code between `begin_func` and the prologue, such as an alternative
+entry with its own symbol, whose relocations keep their offsets.
+`FunctionWriterBase::begin_func_after_prefix()` then starts the function at
+the end of such code, which writes its own FDE first.

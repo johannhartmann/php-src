@@ -144,11 +144,16 @@ public:
     return {relocs.data(), relocs.size()};
   }
 
-  /// Moves all offsets of relocations backwards by the specified offset.
+  /// Moves the offsets of relocations at or behind \p min_offset backwards
+  /// by the specified offset; relocations before it (code a function writes
+  /// before its prologue) stay.
   void adjust_relocation_offsets(const size_t reloc_start_off,
-                                 const u32 offset) {
+                                 const u32 offset,
+                                 const u64 min_offset = 0) {
     for (size_t i = reloc_start_off; i < relocs.size(); i++) {
-      relocs[i].offset -= offset;
+      if (relocs[i].offset >= min_offset) {
+        relocs[i].offset -= offset;
+      }
     }
   }
 };
