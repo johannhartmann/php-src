@@ -2193,6 +2193,33 @@ static inline bool zend_tpde_object_property_isset_read_at(
 }
 
 /*
+ * FETCH_OBJ_FUNC_ARG of a literal property into a VAR: an argument sent by
+ * value reads the property like FETCH_OBJ_R; the emitted form checks the
+ * call's ZEND_CALL_SEND_ARG_BY_REF and leaves a by-reference send to the
+ * helper.
+ */
+static inline bool zend_tpde_object_property_func_arg_read_at(
+	const zend_tpde_instruction &instruction,
+	zend_tpde_object_property_read *out)
+{
+	zend_tpde_instruction read = instruction;
+
+	if (!instruction.has_value_operation
+			|| instruction.value_operation.opcode
+				!= ZEND_MIR_OPCODE_OBJECT_FETCH_FUNC_ARG
+			|| instruction.value_operation.source_opcode
+				!= ZEND_FETCH_OBJ_FUNC_ARG
+			|| instruction.value_operation.result.slot_kind
+				!= ZEND_MIR_SOURCE_SLOT_VAR) {
+		return false;
+	}
+	read.value_operation.opcode = ZEND_MIR_OPCODE_OBJECT_FETCH_R;
+	read.value_operation.source_opcode = ZEND_FETCH_OBJ_R;
+	read.value_operation.extended_value &= ~ZEND_FETCH_OBJ_FLAGS;
+	return zend_tpde_object_property_read_at(read, out);
+}
+
+/*
  * FETCH_OBJ_W of a literal property into a VAR: a cached untyped declared
  * property is addressed by an IS_INDIRECT result; anything else keeps the
  * helper.
