@@ -13228,11 +13228,17 @@ bool ZendCompilerX64::compile_inst_impl(
 					== ZEND_MIR_SOURCE_SLOT_VAR);
 		const bool isset_read = record.opcode
 			== ZEND_MIR_OPCODE_OBJECT_FETCH_IS;
+		const bool func_arg_read = record.opcode
+			== ZEND_MIR_OPCODE_OBJECT_FETCH_FUNC_ARG;
 		if (!(isset_read
 					? frame_result
 						&& zend_tpde_object_property_isset_read_at(
 							mir, &layout)
-					: zend_tpde_object_property_read_at(mir, &layout))
+					: func_arg_read
+						? frame_result
+							&& zend_tpde_object_property_func_arg_read_at(
+								mir, &layout)
+						: zend_tpde_object_property_read_at(mir, &layout))
 				|| (!frame_result && !node.has_result)
 				|| (!frame_result
 					&& (property_reference == nullptr
@@ -13289,14 +13295,28 @@ bool ZendCompilerX64::compile_inst_impl(
 		{
 			ScratchReg cache{this};
 			auto cache_reg = cache.alloc_gp();
+			if (func_arg_read) {
+				/* An argument sent by reference fetches for writing. */
+				ASM(MOV64rm, cache_reg,
+					FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zend_execute_data, call))));
+				ASM(TEST32mi,
+					FE_MEM(cache_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_execute_data, This)
+							+ offsetof(zval, u1.type_info))),
+					static_cast<int32_t>(ZEND_CALL_SEND_ARG_BY_REF));
+				generate_raw_jump(Jump::jne, slow);
+			}
 			ASM(MOV64rm, cache_reg,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(
 						offsetof(zend_execute_data, run_time_cache))));
 			ASM(TEST64rr, cache_reg, cache_reg);
 			generate_raw_jump(Jump::je, slow);
+			/* A reference property reads as its value (ZVAL_COPY_DEREF). */
 			ValuePart slot{tpde::x64::PlatformConfig::GP_BANK, 8};
-			if (!EncodeBase::encode_zend_native_property_slot(
+			if (!EncodeBase::encode_zend_native_property_read_slot(
 					GenericValuePart{GenericValuePart::Expr{frame_reg,
 						static_cast<int64_t>(layout.receiver_offset)}},
 					GenericValuePart{GenericValuePart::Expr{
@@ -14950,7 +14970,9 @@ bool ZendCompilerX64::compile_inst_impl(
 			return branch_to_guarded_cold();
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_R
-				|| (record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_IS
+				|| ((record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_IS
+						|| record.opcode
+							== ZEND_MIR_OPCODE_OBJECT_FETCH_FUNC_ARG)
 					&& node.kind == Adaptor::InstKind::GuardedFast)) {
 			return object_property_read();
 		}

@@ -62,6 +62,36 @@ zval *zend_native_property_slot(const zval *receiver, void *const *cache_slot)
 		? NULL : property;
 }
 
+/*
+ * The value a read of the cached declared property sees, as
+ * ZVAL_COPY_DEREF() reads it: the property, or the value of the reference
+ * it holds. NULL when the cache does not apply or the property is unset.
+ */
+zval *zend_native_property_read_slot(
+	const zval *receiver, void *const *cache_slot)
+{
+	const zend_object *object;
+	uintptr_t offset;
+	zval *property;
+
+	if (Z_TYPE_P(receiver) != IS_OBJECT) {
+		return NULL;
+	}
+	object = Z_OBJ_P(receiver);
+	if (cache_slot[0] != object->ce) {
+		return NULL;
+	}
+	offset = (uintptr_t) cache_slot[1];
+	if (!IS_VALID_PROPERTY_OFFSET(offset)) {
+		return NULL;
+	}
+	property = OBJ_PROP(object, offset);
+	if (Z_TYPE_P(property) == IS_REFERENCE) {
+		return &Z_REF_P(property)->val;
+	}
+	return Z_TYPE_P(property) == IS_UNDEF ? NULL : property;
+}
+
 /* ZVAL_COPY: the value with a new reference to a counted payload. */
 zend_native_boxed zend_native_zval_copy(const zval *value)
 {
