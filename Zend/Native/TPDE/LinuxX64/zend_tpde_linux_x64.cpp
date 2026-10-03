@@ -843,8 +843,18 @@ public:
 						offsetof(zval, u1.type_info))));
 			ASM(BT32rr, mask_reg, left_type);
 			generate_raw_jump(Jump::jb, truthy);
+			ASM(TEST32rr, left_type, left_type);
+			generate_raw_jump(Jump::je, slow);
 			ASM(CMP32ri, left_type, IS_REFERENCE);
-			generate_raw_jump(Jump::jne, not_reference);
+			/* A reference's referent is tested out of the hot code. */
+			auto reference = text_writer.label_create();
+			generate_raw_jump(Jump::je, reference);
+			generate_raw_jump(Jump::jmp, falsey);
+			const bool cold_reference = !text_writer.in_cold_area();
+			if (cold_reference) {
+				text_writer.begin_cold_area();
+			}
+			label_place(reference);
 			ASM(MOV64rm, left_value, FE_MEM(frame_reg, 0, FE_NOREG, offset));
 			ASM(MOVZXr32m8, left_type,
 				FE_MEM(left_value, 0, FE_NOREG,
@@ -853,10 +863,10 @@ public:
 			ASM(BT32rr, mask_reg, left_type);
 			generate_raw_jump(Jump::jb, truthy);
 			generate_raw_jump(Jump::jmp, falsey);
-			label_place(not_reference);
-			ASM(TEST32rr, left_type, left_type);
-			generate_raw_jump(Jump::je, slow);
-			generate_raw_jump(Jump::jmp, falsey);
+			if (cold_reference) {
+				text_writer.end_cold_area();
+			}
+			(void) not_reference;
 			return true;
 		}
 		if (compare == nullptr
@@ -8346,7 +8356,16 @@ bool ZendCompilerX64::compile_inst_impl(
 					static_cast<int32_t>(offsetof(zval, u1.type_info))));
 			ASM(CMP8ri, target_type_reg, IS_REFERENCE);
 			auto target_plain = text_writer.label_create();
-			generate_raw_jump(Jump::jne, target_plain);
+			auto target_reference = text_writer.label_create();
+			generate_raw_jump(Jump::je, target_reference);
+			/* The reference is followed out of the hot code. */
+			const bool cold_reference = !text_writer.in_cold_area();
+			if (cold_reference) {
+				text_writer.begin_cold_area();
+			} else {
+				generate_raw_jump(Jump::jmp, target_plain);
+			}
+			label_place(target_reference);
 			ASM(MOV64rm, target_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
 			ASM(CMP64mi,
 				FE_MEM(target_reg, 0, FE_NOREG,
@@ -8359,6 +8378,10 @@ bool ZendCompilerX64::compile_inst_impl(
 			ASM(MOV32rm, target_type_reg,
 				FE_MEM(target_reg, 0, FE_NOREG,
 					static_cast<int32_t>(offsetof(zval, u1.type_info))));
+			if (cold_reference) {
+				generate_raw_jump(Jump::jmp, target_plain);
+				text_writer.end_cold_area();
+			}
 			label_place(target_plain);
 			ASM(TEST32ri, target_type_reg,
 				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
