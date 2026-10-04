@@ -688,9 +688,24 @@ template <IRAdaptor Adaptor,
 void CompilerX64<Adaptor, Derived, BaseTy, Config>::finish_func(u32 func_idx) {
   // Cold code goes behind the hot code, before the returns are patched.
   this->text_writer.append_cold_area();
-  for (u32 &ret_off : func_ret_offs) {
-    ret_off = this->text_writer.translate_cold_offset(ret_off);
+  // Returns jump to the epilogue behind all code. As label fixups, they are
+  // shortened with the other jumps; the last one disappears if the epilogue
+  // directly follows it.
+  const bool has_returns = !func_ret_offs.empty();
+  if (has_returns) {
+    const Label epilogue = this->text_writer.label_create();
+    for (u32 ret_off : func_ret_offs) {
+      ret_off = this->text_writer.translate_cold_offset(ret_off);
+      u8 *jmp = this->text_writer.begin_ptr() + ret_off;
+      jmp[0] = 0xe9;
+      std::memset(jmp + 1, 0, 4);
+      this->text_writer.label_ref(
+          epilogue, ret_off + 1, LabelFixupKind::X64_JMP_OR_MEM_DISP);
+    }
+    func_ret_offs.clear();
+    this->text_writer.label_place(epilogue, this->text_writer.offset());
   }
+  this->text_writer.relax_jumps(func_start_off + func_prologue_alloc);
   const CCInfo &ccinfo = derived()->cur_cc_assigner()->get_ccinfo();
   auto csr = ccinfo.callee_saved_regs;
   u64 saved_regs = this->register_file.clobbered & csr;
@@ -707,7 +722,7 @@ void CompilerX64<Adaptor, Derived, BaseTy, Config>::finish_func(u32 func_idx) {
   this->text_writer.eh_begin_fde(this->get_personality_sym());
 
   if (needs_stack_frame) {
-    if (!func_ret_offs.empty()) {
+    if (has_returns) {
       this->text_writer.eh_write_inst(dwarf::DW_CFA_remember_state);
     }
     // push rbp
@@ -789,15 +804,7 @@ void CompilerX64<Adaptor, Derived, BaseTy, Config>::finish_func(u32 func_idx) {
     }
   }
 
-  if (!func_ret_offs.empty()) {
-    u8 *text_data = this->text_writer.begin_ptr();
-    if (func_ret_offs.back() == this->text_writer.offset() - 5) {
-      this->text_writer.cur_ptr() -= 5;
-      func_ret_offs.pop_back();
-    }
-    for (auto ret_off : func_ret_offs) {
-      fe64_JMP(text_data + ret_off, FE_JMPL, this->text_writer.cur_ptr());
-    }
+  if (has_returns) {
 
     // Epilogue mirrors prologue (POP has the same size, ADD/LEA/MOV is not
     // larger than SUB), but RET is 2B shorter than MOV RSP,RBP. However,
@@ -1456,27 +1463,22 @@ template <IRAdaptor Adaptor,
 void CompilerX64<Adaptor, Derived, BaseTy, Config>::generate_raw_jump(
     Jump jmp, Label target_label) {
   this->text_writer.ensure_space(6); // For safe ptr arithmetic on code buffer.
-  bool pending = this->text_writer.label_needs_fixup(target_label);
+  // Every jump is a rel32 label fixup, also to a label that is already
+  // placed: relax_jumps() shortens it once the final layout is known.
   void *target = this->text_writer.cur_ptr();
-  if (!pending) {
-    target = this->text_writer.begin_ptr() +
-             this->text_writer.label_offset(target_label);
-  }
 
   if (jmp == Jump::jmp) {
     // Labels placed right here only forward to target_label.
     this->text_writer.label_alias_jump(target_label,
                                        this->text_writer.offset());
-    ASMNCF(JMP, pending ? FE_JMPL : 0, target);
+    ASMNCF(JMP, FE_JMPL, target);
   } else {
-    ASMNCF(Jcc, (pending ? FE_JMPL : 0) | jump_to_cond(jmp), target);
+    ASMNCF(Jcc, FE_JMPL | jump_to_cond(jmp), target);
   }
 
-  if (pending) {
-    this->text_writer.label_ref(target_label,
-                                this->text_writer.offset() - 4,
-                                LabelFixupKind::X64_JMP_OR_MEM_DISP);
-  }
+  this->text_writer.label_ref(target_label,
+                              this->text_writer.offset() - 4,
+                              LabelFixupKind::X64_JMP_OR_MEM_DISP);
 }
 
 template <IRAdaptor Adaptor,
