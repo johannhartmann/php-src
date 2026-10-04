@@ -2166,19 +2166,26 @@ void CompilerBase<Adaptor, Derived, Config>::move_to_phi_nodes_impl(
 
       if (cur_tmp_part_count == 2) {
         AssignmentPartRef ap_high{phi_vr.assignment(), 1};
-        assert(!ap_high.fixed_assignment());
         assert(!tmp_reg2.cur_reg.invalid());
-        derived()->spill_reg(
-            tmp_reg2.cur_reg, ap_high.frame_off(), ap_high.part_size());
+        if (ap_high.fixed_assignment()) {
+          derived()->mov(ap_high.get_reg(), tmp_reg2.cur_reg,
+                         ap_high.part_size());
+        } else {
+          derived()->spill_reg(
+              tmp_reg2.cur_reg, ap_high.frame_off(), ap_high.part_size());
+        }
       }
       return;
     }
 
     for (u32 i = 0; i < cur_tmp_part_count; ++i) {
       AssignmentPartRef phi_ap{phi_vr.assignment(), i};
-      assert(!phi_ap.fixed_assignment());
-
       auto slot_off = cur_tmp_slot + phi_ap.part_off();
+      if (phi_ap.fixed_assignment()) {
+        derived()->load_from_stack(
+            phi_ap.get_reg(), slot_off, phi_ap.part_size());
+        continue;
+      }
       auto reg = tmp_reg1.alloc_from_bank(phi_ap.bank());
       derived()->load_from_stack(reg, slot_off, phi_ap.part_size());
       derived()->spill_reg(reg, phi_ap.frame_off(), phi_ap.part_size());
@@ -2207,7 +2214,8 @@ void CompilerBase<Adaptor, Derived, Config>::move_to_phi_nodes_impl(
 
         for (u32 i = 0; i < cur_tmp_part_count; ++i) {
           auto ap = AssignmentPartRef{assignment, i};
-          assert(!ap.fixed_assignment());
+          // A fixed part always has its register.
+          assert(!ap.fixed_assignment() || ap.register_valid());
           auto slot_off = cur_tmp_slot + ap.part_off();
 
           if (ap.register_valid()) {
