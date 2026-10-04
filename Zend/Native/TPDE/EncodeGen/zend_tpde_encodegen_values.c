@@ -790,23 +790,6 @@ uint64_t zend_native_container_shared(const zval *container)
 }
 
 /*
- * 1 when an assignment may overwrite a CV without the runtime: it holds no
- * reference, and its old value is not counted, or has another owner and
- * needs no new GC root (GC_MAY_LEAK is false, as for strings). The caller
- * then drops one reference itself.
- */
-uint64_t zend_native_cv_overwritable(const zval *variable)
-{
-	if (!Z_REFCOUNTED_P(variable)) {
-		return 1;
-	}
-	if (Z_TYPE_P(variable) == IS_REFERENCE || Z_REFCOUNT_P(variable) == 1) {
-		return 0;
-	}
-	return !GC_MAY_LEAK(Z_COUNTED_P(variable));
-}
-
-/*
  * zend_is_identical() of a value, through a reference, and a literal: 1 or
  * 0 for null, bools, integers and strings, ZEND_NATIVE_IDENTICAL_UNKNOWN for
  * an undefined value, doubles (signed zeros, NaN), arrays and objects.

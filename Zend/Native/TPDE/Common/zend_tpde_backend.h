@@ -19,6 +19,15 @@ typedef enum _zend_native_target {
 	ZEND_NATIVE_TARGET_LINUX_AMD64 = 1
 } zend_native_target;
 
+/* Each host builds and runs only its own target backend (ADR 0006). */
+#if defined(__APPLE__) && defined(__aarch64__)
+# define ZEND_NATIVE_HOST_TARGET ZEND_NATIVE_TARGET_DARWIN_ARM64
+#elif defined(__linux__) && defined(__x86_64__)
+# define ZEND_NATIVE_HOST_TARGET ZEND_NATIVE_TARGET_LINUX_AMD64
+#else
+# error "the native engine supports Linux x86-64 and Darwin arm64 hosts"
+#endif
+
 typedef enum _zend_native_diagnostic_code {
 	ZEND_NATIVE_DIAGNOSTIC_OK = 0,
 	ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT = 1,
@@ -34,19 +43,6 @@ typedef struct _zend_native_diagnostic {
 	zend_native_diagnostic_code code;
 	char message[192];
 } zend_native_diagnostic;
-
-typedef enum _zend_native_scalar_kind {
-	ZEND_NATIVE_SCALAR_NULL = 0,
-	ZEND_NATIVE_SCALAR_BOOL = 1,
-	ZEND_NATIVE_SCALAR_LONG = 2,
-	ZEND_NATIVE_SCALAR_DOUBLE = 3
-} zend_native_scalar_kind;
-
-typedef struct _zend_native_scalar {
-	uint64_t payload_bits;
-	uint32_t kind;
-	uint32_t reserved;
-} zend_native_scalar;
 
 typedef enum _zend_native_status {
 	ZEND_NATIVE_RETURNED = 0,
@@ -158,21 +154,19 @@ typedef struct _zend_native_internal_call_binding {
 } zend_native_internal_call_binding;
 
 typedef enum _zend_native_source_effect_kind {
-	ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR = 1,
-	ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE = 2,
-	ZEND_NATIVE_SOURCE_EFFECT_DEBUG_PROBE = 3
+	ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE = 1,
+	ZEND_NATIVE_SOURCE_EFFECT_DEBUG_PROBE = 2
 } zend_native_source_effect_kind;
 
 /*
  * Source effects remain process-local compiler input. They augment a verified
- * MIR module without changing the persistent MIR contract.
- * source_position_id must identify exactly one scalar carrier instruction in
- * the module, preserving source order and its proven scalar type.
+ * MIR module without changing the persistent MIR contract: a debug probe
+ * marks the first instruction of a source position, an exception route names
+ * the handler block of a source position's executable instructions.
  */
 typedef struct _zend_native_source_effect {
 	zend_mir_source_position_id source_position_id;
 	zend_native_source_effect_kind kind;
-	zend_mir_scalar_type_mask exact_type;
 	zend_mir_block_id target_block_id;
 } zend_native_source_effect;
 
@@ -203,25 +197,10 @@ typedef struct _zend_native_component_member {
 } zend_native_component_member;
 
 /*
- * may supply an ABI-compatible table and every helper actually required by
- * the plan is resolved before an image can be returned.
+ * Compiles every member into one image. The runtime may supply an
+ * ABI-compatible table and every helper actually required by a plan is
+ * resolved before an image can be returned.
  */
-zend_result zend_tpde_compile_module_with_runtime(
-	zend_native_target target,
-	const zend_mir_view *module,
-	const zend_native_call_binding *user_bindings,
-	uint32_t user_binding_count,
-	const zend_native_internal_call_binding *internal_bindings,
-	uint32_t internal_binding_count,
-	const zend_native_source_effect *effects,
-	uint32_t effect_count,
-	uint32_t frame_argument_count,
-	const struct _zend_op_array *source_op_array,
-	const struct _zend_ssa *source_ssa,
-	const struct _zend_native_runtime_api *runtime,
-	zend_native_image **out_image,
-	zend_native_diagnostic *diag);
-
 zend_result zend_tpde_compile_component_with_runtime(
 	zend_native_target target,
 	const zend_native_component_member *members,

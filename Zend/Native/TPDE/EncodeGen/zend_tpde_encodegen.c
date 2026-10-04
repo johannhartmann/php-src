@@ -97,11 +97,6 @@ zend_native_u64 zend_native_load_u64(const zend_native_u64 *address)
 	return *address;
 }
 
-unsigned int zend_native_load_u32(const unsigned int *address)
-{
-	return *address;
-}
-
 void zend_native_store_u64(
 	zend_native_u64 *address, zend_native_u64 value)
 {

@@ -179,6 +179,10 @@ status=0
 debug_profile="$prefix-debug-nts"
 debug_binary=$(build_profile "$debug_profile" "$jobs")
 run_profile "$debug_profile" "$debug_binary" "$jobs" "${debug_paths[@]}" || status=1
+# A host builds only its own backend; keep the other one compiling.
+if [[ $prefix == linux-amd64-native ]]; then
+    "$SCRIPT_DIR/check-darwin-backend.sh" --profile "$debug_profile" || status=1
+fi
 
 if [[ $tier == full ]]; then
     half=$(( jobs > 1 ? jobs / 2 : 1 ))

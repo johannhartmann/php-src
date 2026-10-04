@@ -57,6 +57,12 @@ commit` (full debug suites) and `--tier full` (commit plus ASan and UBSan).
 Exit `0` only when no test fails, or, with `--baseline`, when no test fails
 that the baseline does not list.
 
+### `scripts/native/check-darwin-backend.sh`
+
+On a Linux host, syntax-check the Darwin arm64 backend with the configured
+profile's compile flags. Exit `0` when every Darwin source parses, `1` on a
+compile error, `3` when the profile is not configured.
+
 ## Changes
 
 Change commands, options and exit classes freely together with their callers

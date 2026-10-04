@@ -1170,7 +1170,7 @@
   *(.text.zend_native_compiler_execute_published_impl .text.hot.zend_native_compiler_execute_published_impl)
   *(.text.zend_native_compiler_enter .text.hot.zend_native_compiler_enter)
   *(.text.zend_native_compiler_session_get .text.hot.zend_native_compiler_session_get)
-  *(.text.zend_native_reentry_scope_enter_resolver_direct .text.hot.zend_native_reentry_scope_enter_resolver_direct)
+  *(.text.zend_native_reentry_scope_enter_resolver .text.hot.zend_native_reentry_scope_enter_resolver)
   *(.text.zend_native_reentry_scope_leave .text.hot.zend_native_reentry_scope_leave)
   *(.text.zend_native_dynamic_compiler_init .text.hot.zend_native_dynamic_compiler_init)
   *(.text.zend_native_dynamic_compiler_activate .text.hot.zend_native_dynamic_compiler_activate)

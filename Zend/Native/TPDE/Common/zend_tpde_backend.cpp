@@ -20,7 +20,7 @@ namespace {
 constexpr uint32_t MAX_RECORDS = UINT32_C(1) << 20;
 constexpr size_t MAX_NATIVE_IMAGE_BYTES = size_t{1} << 28;
 constexpr uint32_t NATIVE_IMAGE_ABI_VERSION = 6;
-constexpr uint32_t NATIVE_IMAGE_SERIAL_FORMAT = 4;
+constexpr uint32_t NATIVE_IMAGE_SERIAL_FORMAT = 5;
 constexpr uint64_t NATIVE_IMAGE_SERIAL_MAGIC = UINT64_C(0x003331474d494e5a);
 constexpr uint64_t NATIVE_IMAGE_BUILD_ID_SEED =
 	UINT64_C(0x5750313300000000)
@@ -37,16 +37,14 @@ struct zend_native_serial_image_header {
 	uint32_t runtime_abi;
 	uint64_t build_id;
 	uint64_t code_version;
-	uint32_t slot_count;
 	uint32_t argument_count;
 	uint32_t frame_variable_count;
 	uint32_t frame_temporary_count;
-	zend_native_image_metrics metrics;
-	uint64_t text_size;
 	uint32_t symbol_count;
 	uint32_t binding_count;
 	uint32_t component_count;
-	uint32_t reserved;
+	zend_native_image_metrics metrics;
+	uint64_t text_size;
 	uint64_t total_size;
 	uint64_t checksum;
 };
@@ -2692,7 +2690,6 @@ bool freeze_machine_plan_consumers(
 	}
 	plan->value_consumer_offsets[value_count] =
 		static_cast<uint32_t>(consumer_count);
-	plan->value_consumer_count = static_cast<uint32_t>(consumer_count);
 	plan->value_consumers = consumer_count == 0
 		? nullptr : static_cast<zend_tpde_machine_use *>(std::malloc(
 			static_cast<size_t>(consumer_count)
@@ -4180,15 +4177,7 @@ bool freeze_machine_references(
 	 */
 	for (uint32_t index = 0; index < plan->value_count; ++index) {
 		const zend_tpde_value &value = plan->values[index];
-		const zend_mir_storage_id storage_id =
-			zend_mir_id_is_valid(value.canonical_storage_id)
-				? value.canonical_storage_id
-				: value.argument_index >= 0
-					&& (plan->value_model_flags
-						& ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS) == 0
-					? static_cast<zend_mir_storage_id>(
-						value.argument_index)
-					: ZEND_MIR_ID_INVALID;
+		const zend_mir_storage_id storage_id = value.canonical_storage_id;
 		if (!zend_mir_id_is_valid(storage_id)) {
 			continue;
 		}
@@ -4214,8 +4203,6 @@ bool freeze_machine_references(
 		zend_tpde_instruction &instruction = plan->instructions[index];
 		instruction.source_op1_reference_index = UINT32_MAX;
 		instruction.source_op2_reference_index = UINT32_MAX;
-		instruction.source_result_reference_index = UINT32_MAX;
-		instruction.source_auxiliary_reference_index = UINT32_MAX;
 		instruction.operation_reference_index = UINT32_MAX;
 		if (!instruction.has_value_operation) {
 			continue;
@@ -4228,10 +4215,12 @@ bool freeze_machine_references(
 		instruction.source_op2_reference_index = operand_reference(
 			operation.op2, operation.op2_storage_id,
 			instruction.source_op2_binding);
-		instruction.source_result_reference_index = operand_reference(
+		/* The result and auxiliary slots stay in the reference table for
+		 * lookups by storage. */
+		operand_reference(
 			operation.result, operation.result_storage_id,
 			instruction.source_result_binding);
-		instruction.source_auxiliary_reference_index = operand_reference(
+		operand_reference(
 			operation.auxiliary, operation.auxiliary_storage_id,
 			instruction.source_auxiliary_binding);
 
@@ -4444,9 +4433,7 @@ bool freeze_generator_resume_liveness(
 		plan->generator_resume_exception_blocks[resume] = exception_block;
 	}
 
-	if (value_model == nullptr
-			|| value_model->contract_version != ZEND_MIR_CONTRACT_VERSION
-			|| value_model->suspend_live_value_count == nullptr
+	if (value_model->suspend_live_value_count == nullptr
 			|| value_model->suspend_live_value_at == nullptr) {
 		zend_tpde_set_diagnostic(diag,
 			ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
@@ -4504,9 +4491,7 @@ bool freeze_generator_resume_liveness(
 					* plan->generator_resume_live_word_count;
 		const uint32_t value = static_cast<uint32_t>(value_index);
 		const zend_tpde_value &semantic_value = plan->values[value];
-		if (!semantic_value.constant
-				&& zend_tpde_machine_value_is_register_authoritative(
-					semantic_value.machine_kind)) {
+		if (!semantic_value.constant) {
 			words[value / 64] |= uint64_t{1} << (value % 64);
 		}
 	}
@@ -4766,7 +4751,6 @@ bool freeze_statepoint_materializations(
 			|| record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
 			|| record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL
 			|| instruction.runtime_helper != ZEND_NATIVE_HELPER_COUNT
-			|| instruction.source_effect != 0
 			|| instruction.debug_probe)
 			&& !(record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE
 				&& instruction.zval_store_lazy_scalar);
@@ -5692,7 +5676,6 @@ bool initialize_plan(
 	uint32_t frame_argument_count,
 	const zend_op_array *source_op_array,
 	const zend_ssa *source_ssa,
-	bool inline_typed_argument_guards,
 	bool linux_inline_forms,
 	zend_tpde_plan *plan,
 	zend_native_diagnostic *diag) {
@@ -5787,11 +5770,6 @@ bool initialize_plan(
 				source.op1,
 				source_ssa != nullptr && source_ssa->ops != nullptr
 					? source_ssa->ops[index].op1_use : -1);
-			frozen.op2_may_be = source_operand_may_be(
-				source_op_array, source_ssa, index, source.op2_type,
-				source.op2,
-				source_ssa != nullptr && source_ssa->ops != nullptr
-					? source_ssa->ops[index].op2_use : -1);
 		}
 		plan->source_multi_branches =
 			static_cast<zend_tpde_source_multi_branch *>(std::calloc(
@@ -6187,8 +6165,7 @@ bool initialize_plan(
 		plan->block_count, &plan->block_index_capacity);
 	plan->values = static_cast<zend_tpde_value *>(
 		std::calloc(plan->value_count, sizeof(*plan->values)));
-	plan->argument_count =
-		frame_argument_count == UINT32_MAX ? 0 : frame_argument_count;
+	plan->argument_count = frame_argument_count;
 	plan->argument_value_indices = static_cast<int32_t *>(
 		std::malloc(
 			static_cast<size_t>(plan->argument_count)
@@ -6396,47 +6373,48 @@ bool initialize_plan(
 			return false;
 		}
 	}
-	if (value_model != nullptr) {
-		if (value_model->contract_version
-					!= ZEND_MIR_CONTRACT_VERSION
-				|| (value_model->model_flags
-					& ~ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS) != 0
-				|| value_model->value_location_count == nullptr
-				|| value_model->value_location_at == nullptr
-				|| value_model->executable_operation_count == nullptr
-				|| value_model->executable_operation_at == nullptr) {
+	/*
+	 * Value lowering always commits a canonical-location model; a module
+	 * without one cannot be compiled.
+	 */
+	if (value_model == nullptr
+			|| value_model->contract_version != ZEND_MIR_CONTRACT_VERSION
+			|| value_model->model_flags
+				!= ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS
+			|| value_model->value_location_count == nullptr
+			|| value_model->value_location_at == nullptr
+			|| value_model->executable_operation_count == nullptr
+			|| value_model->executable_operation_at == nullptr) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+			"executable value model lacks the machine-plan facts");
+		return false;
+	}
+	const uint32_t operation_count =
+		value_model->executable_operation_count(value_model->context);
+	if (!checked_count(operation_count)
+			|| operation_count > plan->instruction_count) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+			"executable value operation count is outside the MIR bound");
+		return false;
+	}
+	for (uint32_t i = 0; i < operation_count; ++i) {
+		zend_mir_executable_value_ref operation{};
+		int32_t instruction_index;
+		if (!value_model->executable_operation_at(
+				value_model->context, i, &operation)
+				|| (instruction_index =
+						zend_tpde_instruction_index(plan, operation.id)) < 0
+				|| plan->instructions[instruction_index]
+					.has_value_operation) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-				"executable value model lacks the machine-plan facts");
+				"executable value operation has an invalid instruction identity");
 			return false;
 		}
-		plan->value_model_flags = value_model->model_flags;
-		const uint32_t operation_count =
-			value_model->executable_operation_count(value_model->context);
-		if (!checked_count(operation_count)
-				|| operation_count > plan->instruction_count) {
-			zend_tpde_set_diagnostic(diag,
-				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-				"executable value operation count is outside the MIR bound");
-			return false;
-		}
-		for (uint32_t i = 0; i < operation_count; ++i) {
-			zend_mir_executable_value_ref operation{};
-			int32_t instruction_index;
-			if (!value_model->executable_operation_at(
-					value_model->context, i, &operation)
-					|| (instruction_index =
-							zend_tpde_instruction_index(plan, operation.id)) < 0
-					|| plan->instructions[instruction_index]
-						.has_value_operation) {
-				zend_tpde_set_diagnostic(diag,
-					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-					"executable value operation has an invalid instruction identity");
-				return false;
-			}
-			plan->instructions[instruction_index].value_operation = operation;
-			plan->instructions[instruction_index].has_value_operation = true;
-		}
+		plan->instructions[instruction_index].value_operation = operation;
+		plan->instructions[instruction_index].has_value_operation = true;
 	}
 	/*
 	 * A source-zval RETURN without an executable value operation has the same
@@ -6651,68 +6629,63 @@ bool initialize_plan(
 			.known_string_length = 0,
 		};
 	}
-	if (value_model != nullptr
-			&& (value_model->model_flags
-				& ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS) != 0) {
-		const uint32_t location_count =
-			value_model->value_location_count(value_model->context);
-		if (!checked_count(location_count)
-				|| location_count > plan->value_count) {
+	const uint32_t location_count =
+		value_model->value_location_count(value_model->context);
+	if (!checked_count(location_count)
+			|| location_count > plan->value_count) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+			"value-location table is outside the MIR value bound");
+		return false;
+	}
+	for (uint32_t i = 0; i < location_count; ++i) {
+		zend_mir_value_location_ref location{};
+		int32_t value_index;
+		if (!value_model->value_location_at(
+				value_model->context, i, &location)
+				|| !zend_mir_id_is_valid(location.storage_id)
+				|| (location.category
+							< ZEND_MIR_VALUE_NON_REFCOUNTED_SCALAR
+						|| location.category
+							> ZEND_MIR_VALUE_CATEGORY_UNKNOWN
+						|| location.refcount_state
+							< ZEND_MIR_REFCOUNT_IMMORTAL
+						|| location.refcount_state
+							> ZEND_MIR_REFCOUNT_UNKNOWN
+						|| (location.alias_observable
+							&& location.category
+								!= ZEND_MIR_VALUE_REFERENCE_CELL))
+				|| (value_index = zend_tpde_value_index(
+						plan, location.value_id)) < 0
+				|| zend_mir_id_is_valid(
+					plan->values[value_index].canonical_storage_id)) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-				"value-location table is outside the MIR value bound");
+				"value-location table is unreadable, duplicated, or invalid");
 			return false;
 		}
-		for (uint32_t i = 0; i < location_count; ++i) {
-			zend_mir_value_location_ref location{};
-			int32_t value_index;
-			if (!value_model->value_location_at(
-					value_model->context, i, &location)
-					|| !zend_mir_id_is_valid(location.storage_id)
-					|| (location.category
-								< ZEND_MIR_VALUE_NON_REFCOUNTED_SCALAR
-							|| location.category
-								> ZEND_MIR_VALUE_CATEGORY_UNKNOWN
-							|| location.refcount_state
-								< ZEND_MIR_REFCOUNT_IMMORTAL
-							|| location.refcount_state
-								> ZEND_MIR_REFCOUNT_UNKNOWN
-							|| (location.alias_observable
-								&& location.category
-									!= ZEND_MIR_VALUE_REFERENCE_CELL))
-					|| (value_index = zend_tpde_value_index(
-							plan, location.value_id)) < 0
-					|| zend_mir_id_is_valid(
-						plan->values[value_index].canonical_storage_id)) {
+		plan->values[value_index].canonical_storage_id =
+			location.storage_id;
+		plan->values[value_index].category = location.category;
+		plan->values[value_index].refcount_state =
+			location.refcount_state;
+		plan->values[value_index].canonical_alias_observable =
+			location.alias_observable;
+		if (location.frame_argument_ordinal_plus_one != 0) {
+			const uint32_t argument_index =
+				location.frame_argument_ordinal_plus_one - 1;
+			if (argument_index >= plan->argument_count
+					|| argument_index > static_cast<uint32_t>(INT32_MAX)
+					|| plan->argument_value_indices[argument_index] >= 0) {
 				zend_tpde_set_diagnostic(diag,
 					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-					"value-location table is unreadable, duplicated, or invalid");
+					"value-location table has an invalid or duplicate frame argument");
 				return false;
 			}
-			plan->values[value_index].canonical_storage_id =
-				location.storage_id;
-			plan->values[value_index].category = location.category;
-			plan->values[value_index].refcount_state =
-				location.refcount_state;
-			plan->values[value_index].canonical_alias_observable =
-				location.alias_observable;
-			if (location.frame_argument_ordinal_plus_one != 0) {
-				const uint32_t argument_index =
-					location.frame_argument_ordinal_plus_one - 1;
-				if (frame_argument_count == UINT32_MAX
-						|| argument_index >= plan->argument_count
-						|| argument_index > static_cast<uint32_t>(INT32_MAX)
-						|| plan->argument_value_indices[argument_index] >= 0) {
-					zend_tpde_set_diagnostic(diag,
-						ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-						"value-location table has an invalid or duplicate frame argument");
-					return false;
-				}
-				plan->argument_value_indices[argument_index] = value_index;
-				plan->values[value_index].argument_index =
-					static_cast<int32_t>(argument_index);
-				plan->values[value_index].constant = false;
-			}
+			plan->argument_value_indices[argument_index] = value_index;
+			plan->values[value_index].argument_index =
+				static_cast<int32_t>(argument_index);
+			plan->values[value_index].constant = false;
 		}
 	}
 	for (uint32_t i = 0; i < constant_count; ++i) {
@@ -7696,11 +7669,7 @@ bool initialize_plan(
 						: record.opcode
 								== ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM
 							? ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM_DIRECT
-							: ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_DIRECT);
-				if (record.opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM) {
-					require_runtime_helper(plan,
-						ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_ADDRESS);
-				}
+							: ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_ADDRESS);
 			}
 			if (plan->linux_inline_forms) {
 				/* The address forms of explicit-operand helpers. */
@@ -7932,8 +7901,6 @@ bool initialize_plan(
 				}
 				if (!helper_mutates_return_storage) {
 					instruction.direct_scalar_return = true;
-					instruction.direct_scalar_return_type =
-						plan->values[value_index].exact_type;
 					instruction.direct_scalar_return_offset =
 						static_cast<uint32_t>(source_offset);
 					instruction.runtime_helper = ZEND_NATIVE_HELPER_COUNT;
@@ -8847,8 +8814,7 @@ bool initialize_plan(
 							? exact_scalar_from_declared_type(*parameter_type)
 							: ZEND_MIR_SCALAR_TYPE_NONE;
 						const bool guarded_reference =
-							inline_typed_argument_guards
-							&& descriptor->arguments[n].mode
+							descriptor->arguments[n].mode
 								== ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
 							&& zend_mir_scalar_type_is_exact(parameter_exact_type);
 						if (guarded_reference) {
@@ -8856,8 +8822,7 @@ bool initialize_plan(
 							has_argument_guard_type = true;
 						}
 						const bool guarded_boxed_value =
-							inline_typed_argument_guards
-							&& descriptor->arguments[n].mode
+							descriptor->arguments[n].mode
 								== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
 							&& !zend_mir_scalar_type_is_exact(
 								descriptor->arguments[n].exact_type)
@@ -9607,12 +9572,7 @@ bool initialize_plan(
 		if (!zend_mir_id_is_valid(effect.source_position_id)
 				|| (effect.kind == ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE
 					? !zend_mir_id_is_valid(effect.target_block_id)
-					: (effect.kind == ZEND_NATIVE_SOURCE_EFFECT_DEBUG_PROBE
-						? false
-						: (effect.kind
-								!= ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR
-							|| !zend_mir_scalar_type_is_exact(
-								effect.exact_type))))) {
+					: effect.kind != ZEND_NATIVE_SOURCE_EFFECT_DEBUG_PROBE)) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
 				"source effect is invalid");
@@ -9687,27 +9647,10 @@ bool initialize_plan(
 				candidate.exception_block_id = effect.target_block_id;
 				exception_match = true;
 				continue;
-			} else if (effect.kind != ZEND_NATIVE_SOURCE_EFFECT_DEBUG_PROBE
-					&& candidate_record.opcode
-						!= ZEND_MIR_OPCODE_ECHO_SCALAR
-					&& candidate_record.opcode != ZEND_MIR_OPCODE_I1_NOT
-					&& candidate_record.opcode != ZEND_MIR_OPCODE_I64_TO_I1
-					&& candidate_record.opcode != ZEND_MIR_OPCODE_F64_TO_I1
-					&& candidate_record.opcode != ZEND_MIR_OPCODE_SCALAR_DROP) {
-				continue;
 			}
-			if (match != nullptr
-					&& effect.kind
-						!= ZEND_NATIVE_SOURCE_EFFECT_DEBUG_PROBE) {
-				zend_tpde_set_diagnostic(diag,
-					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-					"source effect maps to multiple MIR instructions");
-				return false;
+			if (match == nullptr) {
+				match = &candidate;
 			}
-			if (match != nullptr) {
-				continue;
-			}
-			match = &candidate;
 		}
 		if (effect.kind == ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE) {
 			if (!exception_match) {
@@ -9724,32 +9667,17 @@ bool initialize_plan(
 			}
 			continue;
 		}
-		if (match == nullptr
-				&& effect.kind == ZEND_NATIVE_SOURCE_EFFECT_DEBUG_PROBE) {
+		if (match == nullptr) {
 			continue;
 		}
-		if (match == nullptr
-				|| (effect.kind == ZEND_NATIVE_SOURCE_EFFECT_DEBUG_PROBE
-						? match->debug_probe
-						: (match->operand_count != 1
-						|| match->source_effect != 0))) {
+		if (match->debug_probe) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-				"echo source effect must map uniquely to a scalar value proof");
+				"debug-probe source effect is duplicated");
 			return false;
 		}
-		if (effect.kind == ZEND_NATIVE_SOURCE_EFFECT_DEBUG_PROBE) {
-			match->debug_probe = true;
-			require_runtime_helper(plan, ZEND_NATIVE_HELPER_SOURCE_PROBE);
-			continue;
-		}
-		match->source_effect = effect.kind;
-		match->source_effect_exact_type = effect.exact_type;
-		match->runtime_helper =
-			effect.exact_type == ZEND_MIR_SCALAR_TYPE_F64
-				? ZEND_NATIVE_HELPER_ECHO_DOUBLE
-				: ZEND_NATIVE_HELPER_ECHO_INTEGER;
-		require_runtime_helper(plan, match->runtime_helper);
+		match->debug_probe = true;
+		require_runtime_helper(plan, ZEND_NATIVE_HELPER_SOURCE_PROBE);
 	}
 	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
 		const zend_tpde_instruction &instruction = plan->instructions[i];
@@ -9779,41 +9707,6 @@ bool initialize_plan(
 		}
 	}
 
-	for (uint32_t i = 0; i < frame_slot_count; ++i) {
-		zend_mir_frame_slot_ref slot;
-		if (!view->frame_slot_at(view->context, i, &slot)) {
-			zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-				"MIR frame-slot table is unreadable");
-			return false;
-		}
-		bool frame_argument = frame_argument_count == UINT32_MAX
-			? (slot.kind == ZEND_MIR_FRAME_SLOT_KIND_ARGUMENT
-				|| slot.kind == ZEND_MIR_FRAME_SLOT_KIND_CV)
-			: slot.kind == ZEND_MIR_FRAME_SLOT_KIND_CV
-				&& slot.index < frame_argument_count;
-		if ((plan->value_model_flags
-					& ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS) == 0
-				&& frame_argument
-				&& slot.materialization == ZEND_MIR_MATERIALIZATION_MATERIALIZED
-				&& zend_mir_id_is_valid(slot.value_id)) {
-			int32_t value_index = zend_tpde_value_index(plan, slot.value_id);
-			if (value_index >= 0 && plan->values[value_index].argument_index < 0) {
-				plan->values[value_index].argument_index = static_cast<int32_t>(slot.index);
-				/* Frame arguments are invocation-local even when source analysis
-				 * inferred a constant at a particular call site. Native code is
-				 * compiled once per function and must load them from execute_data. */
-				plan->values[value_index].constant = false;
-				if (slot.index == UINT32_MAX) {
-					zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-						"MIR argument index overflows");
-					return false;
-				}
-				if (plan->argument_count <= slot.index) {
-					plan->argument_count = slot.index + 1;
-				}
-			}
-		}
-	}
 	if (!freeze_source_value_bindings(
 			plan, source_op_array, source_ssa, diag)) {
 		return false;
@@ -10103,7 +9996,6 @@ static bool freeze_typed_body_signature(
 		const zend_tpde_plan *const *component_plans,
 		uint32_t component_count,
 		const uint8_t *typed_body_candidates,
-		bool reject_variadic_receive,
 		zend_tpde_local_abi_type *return_type,
 		bool *may_fail) {
 	*may_fail = false;
@@ -10115,7 +10007,7 @@ static bool freeze_typed_body_signature(
 				&& plan->argument_value_indices == nullptr)) {
 		return false;
 	}
-	if (reject_variadic_receive && plan->source_opcodes != nullptr) {
+	if (plan->source_opcodes != nullptr) {
 		for (uint32_t source = 0;
 				source < plan->source_opcode_count; ++source) {
 			if (plan->source_opcodes[source].opcode == ZEND_RECV_VARIADIC) {
@@ -10377,9 +10269,7 @@ static bool freeze_typed_body_signature(
 				ZEND_TPDE_LOCAL_ABI_TRANSFER_NONE);
 			continue;
 		}
-		if (record.opcode == ZEND_MIR_OPCODE_ECHO_SCALAR
-				|| instruction.source_effect
-					== ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR) {
+		if (record.opcode == ZEND_MIR_OPCODE_ECHO_SCALAR) {
 			return false;
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
@@ -10669,8 +10559,7 @@ static bool freeze_typed_body_signature(
  */
 static bool machine_plan_prefers_effect_closed_inline(
 		const zend_tpde_instruction &call,
-		const zend_tpde_plan *callee,
-		bool allow_a64_extended_inline) {
+		const zend_tpde_plan *callee) {
 	zend_tpde_scalar_diamond diamond{};
 	if (call.direct_call == nullptr || callee == nullptr
 			|| (call.direct_call->receiver_kind
@@ -10690,8 +10579,7 @@ static bool machine_plan_prefers_effect_closed_inline(
 	}
 	const bool scalar_diamond = callee->block_count != 1;
 	if ((callee->block_count != 1
-			&& (!allow_a64_extended_inline
-				|| !zend_tpde_scalar_diamond_at(callee, &diamond)))) {
+			&& (!zend_tpde_scalar_diamond_at(callee, &diamond)))) {
 		return false;
 	}
 
@@ -10813,7 +10701,7 @@ static bool machine_plan_prefers_effect_closed_inline(
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_VALUE_BINARY_OP) {
 			const uint32_t checked_binary_limit =
-				allow_a64_extended_inline ? 8 : 1;
+				8;
 			if (scalar_diamond
 					|| checked_binary_count >= checked_binary_limit
 					|| !instruction.has_value_operation
@@ -10931,8 +10819,7 @@ static bool machine_plan_effect_closed_argument_is_used(
 static bool freeze_typed_component_calls(
 		zend_tpde_plan *plan,
 		const zend_tpde_plan *const *component_plans,
-		uint32_t component_count,
-		bool register_a64_value_transports) {
+		uint32_t component_count) {
 	plan->has_register_component_results = false;
 	if (plan->instruction_count == 0) {
 		return true;
@@ -11004,8 +10891,7 @@ static bool freeze_typed_component_calls(
 		}
 		const bool effect_closed_inline =
 			machine_plan_prefers_effect_closed_inline(
-				instruction, callee,
-				register_a64_value_transports)
+				instruction, callee)
 			&& !has_guarded_boxed_value_argument;
 		bool compatible = true;
 		for (uint32_t argument = 0;
@@ -11139,8 +11025,7 @@ static bool freeze_typed_component_calls(
 				&& boxed_read_reference->scale == sizeof(zval)
 				&& boxed_read_reference->access_width == sizeof(zval);
 			const bool guarded_boxed_pointer_transport =
-				register_a64_value_transports
-				&& !effect_closed_inline
+				!effect_closed_inline
 				&& callee_abi.valid
 				&& machine_value_kind_can_be_register_authoritative(
 					callee_abi.machine_kind)
@@ -11180,8 +11065,7 @@ static bool freeze_typed_component_calls(
 							guarded_integer_definition)])
 					: zend_mir_instruction_record{};
 			const bool guarded_boxed_integer_transport =
-				register_a64_value_transports
-				&& !effect_closed_inline
+				!effect_closed_inline
 				&& guarded_integer_source != nullptr
 				&& guarded_integer_source->representation
 					== ZEND_MIR_REPRESENTATION_ZVAL
@@ -11930,7 +11814,7 @@ static void freeze_machine_scalar_definitions(zend_tpde_plan *plan) {
 }
 
 static void freeze_machine_register_authority(
-		zend_tpde_plan *plan, bool register_direct_scalar_results) {
+		zend_tpde_plan *plan) {
 	freeze_machine_scalar_definitions(plan);
 	for (uint32_t index = 0; index < plan->value_count; ++index) {
 		zend_tpde_value &value = plan->values[index];
@@ -11997,8 +11881,7 @@ static void freeze_machine_register_authority(
 				zend_tpde_value &value = plan->values[result];
 				if (value.machine_kind
 						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-						|| (register_direct_scalar_results
-							&& zend_mir_scalar_type_is_exact(
+						|| (zend_mir_scalar_type_is_exact(
 								value.exact_type)
 							&& value.exact_type
 								!= ZEND_MIR_SCALAR_TYPE_NULL)) {
@@ -12072,13 +11955,11 @@ static bool machine_plan_local_abi_call_eligible(
 
 static bool machine_plan_call_arguments_require_values(
 		const zend_tpde_plan *plan,
-		uint32_t instruction_index,
-		bool register_a64_value_transports) {
+		uint32_t instruction_index) {
 	if (machine_plan_local_abi_call_eligible(plan, instruction_index)) {
 		return true;
 	}
-	if (!register_a64_value_transports
-			|| plan == nullptr
+	if (plan == nullptr
 			|| instruction_index >= plan->instruction_count) {
 		return false;
 	}
@@ -12336,7 +12217,6 @@ static bool freeze_machine_operand_transports(
 
 static bool freeze_machine_required_values(
 		zend_tpde_plan *plan,
-		bool register_a64_value_transports,
 		zend_native_diagnostic *diag) {
 	if (plan->value_count == 0) {
 		return true;
@@ -12358,8 +12238,7 @@ static bool freeze_machine_required_values(
 				instruction_index < plan->instruction_count;
 				++instruction_index) {
 			if (!machine_plan_call_arguments_require_values(
-					plan, instruction_index,
-					register_a64_value_transports)) {
+					plan, instruction_index)) {
 				continue;
 			}
 			const zend_tpde_instruction &instruction =
@@ -12742,18 +12621,6 @@ malformed:
 }
 
 /*
- * Register value transports (typed arguments/results, guarded boxed
- * arguments, pointer unboxing) and extended effect-closed inlining (checked
- * chains, scalar diamonds). Both need matching target emitters; the AArch64
- * and x86-64 backends implement them.
- */
-static bool zend_tpde_target_has_value_transports(zend_native_target target)
-{
-	return target == ZEND_NATIVE_TARGET_DARWIN_ARM64
-		|| target == ZEND_NATIVE_TARGET_LINUX_AMD64;
-}
-
-/*
  * A member returns a number when each of its returns yields a long or a
  * double. Results of calls to such members are numbers too, so arithmetic on
  * them cannot fail. Start from all members and drop those with another
@@ -12964,7 +12831,6 @@ static bool freeze_component_machine_plan(
 		zend_tpde_plan *plans,
 		const zend_tpde_plan *const *component_plans,
 		uint32_t component_count,
-		bool register_a64_value_transports,
 		zend_native_diagnostic *diag) {
 	freeze_component_numeric_operands(plans, component_count);
 	for (uint32_t component = 0;
@@ -12990,7 +12856,7 @@ static bool freeze_component_machine_plan(
 			bool may_fail;
 			if (!freeze_typed_body_signature(
 					&plans[index], component_plans, component_count,
-					candidates.data(), register_a64_value_transports,
+					candidates.data(),
 					&return_type, &may_fail)) {
 				candidates[index] = 0;
 				changed = true;
@@ -13004,7 +12870,7 @@ static bool freeze_component_machine_plan(
 			candidates[index] != 0
 			&& freeze_typed_body_signature(
 				&plans[index], component_plans, component_count,
-				candidates.data(), register_a64_value_transports,
+				candidates.data(),
 				&return_type, &may_fail);
 		plans[index].typed_body_may_fail =
 			plans[index].typed_body_eligible && may_fail;
@@ -13039,8 +12905,7 @@ static bool freeze_component_machine_plan(
 				plan.instructions[i].component_body_function_index;
 		}
 		bool all_typed = freeze_typed_component_calls(
-			&plan, component_plans, component_count,
-			register_a64_value_transports);
+			&plan, component_plans, component_count);
 		/* Only a Zend entry clones an effect-closed callee; a typed body
 		 * needs a typed call. */
 		for (uint32_t i = 0; all_typed && i < plan.instruction_count; ++i) {
@@ -13111,8 +12976,7 @@ static bool freeze_component_machine_plan(
 	}
 	for (uint32_t index = 0; index < component_count; ++index) {
 		if (!freeze_typed_component_calls(
-				&plans[index], component_plans, component_count,
-				register_a64_value_transports)) {
+				&plans[index], component_plans, component_count)) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
 				"unable to freeze component-local TPDE call plan");
@@ -13151,12 +13015,8 @@ static bool freeze_component_machine_plan(
 			plans[index].typed_body_eligible && typed_body_may_emit_calls;
 		plans[index].zend_entry_may_emit_calls =
 			plans[index].may_emit_calls || typed_body_may_emit_calls;
-		plans[index].typed_body_needs_unwind =
-			plans[index].typed_body_may_emit_calls;
-		plans[index].zend_entry_needs_unwind =
-			plans[index].zend_entry_may_emit_calls;
 		freeze_machine_register_authority(
-			&plans[index], register_a64_value_transports);
+			&plans[index]);
 		if (!freeze_machine_operand_transports(&plans[index], diag)) {
 			return false;
 		}
@@ -13164,7 +13024,7 @@ static bool freeze_component_machine_plan(
 			return false;
 		}
 		if (!freeze_machine_required_values(
-				&plans[index], register_a64_value_transports, diag)) {
+				&plans[index], diag)) {
 			return false;
 		}
 		if (!freeze_machine_cfg(
@@ -13522,37 +13382,6 @@ bool zend_tpde_image_resolve_symbol(
 	return true;
 }
 
-extern "C" zend_result zend_tpde_compile_module_with_runtime(
-	zend_native_target target,
-	const zend_mir_view *module,
-	const zend_native_call_binding *user_bindings,
-	uint32_t user_binding_count,
-	const zend_native_internal_call_binding *internal_bindings,
-	uint32_t internal_binding_count,
-	const zend_native_source_effect *effects,
-	uint32_t effect_count,
-	uint32_t frame_argument_count,
-	const zend_op_array *source_op_array,
-	const zend_ssa *source_ssa,
-	const zend_native_runtime_api *runtime,
-	zend_native_image **out_image,
-	zend_native_diagnostic *diag) {
-	const zend_native_component_member member{
-		.module = module,
-		.user_bindings = user_bindings,
-		.user_binding_count = user_binding_count,
-		.internal_bindings = internal_bindings,
-		.internal_binding_count = internal_binding_count,
-		.effects = effects,
-		.effect_count = effect_count,
-		.frame_argument_count = frame_argument_count,
-		.source_op_array = source_op_array,
-		.source_ssa = source_ssa,
-	};
-	return zend_tpde_compile_component_with_runtime(
-		target, &member, 1, runtime, out_image, diag);
-}
-
 extern "C" zend_result zend_tpde_compile_component_with_runtime(
 	zend_native_target target,
 	const zend_native_component_member *members,
@@ -13581,8 +13410,7 @@ extern "C" zend_result zend_tpde_compile_component_with_runtime(
 				|| !checked_count(member.user_binding_count)
 				|| !checked_count(member.internal_binding_count)
 				|| !checked_count(member.effect_count)
-				|| (member.frame_argument_count != UINT32_MAX
-					&& !checked_count(member.frame_argument_count))) {
+				|| !checked_count(member.frame_argument_count)) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
 				"native component member is invalid");
@@ -13590,10 +13418,9 @@ extern "C" zend_result zend_tpde_compile_component_with_runtime(
 		}
 	}
 	*out_image = nullptr;
-	if (target != ZEND_NATIVE_TARGET_DARWIN_ARM64
-			&& target != ZEND_NATIVE_TARGET_LINUX_AMD64) {
+	if (target != ZEND_NATIVE_HOST_TARGET) {
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_UNSUPPORTED_TARGET,
-			"only darwin-arm64-dev and linux-amd64-prod are supported");
+			"only the host target backend is built");
 		return FAILURE;
 	}
 
@@ -13619,7 +13446,6 @@ extern "C" zend_result zend_tpde_compile_component_with_runtime(
 				member.effects, member.effect_count,
 				member.frame_argument_count,
 				member.source_op_array, member.source_ssa,
-				zend_tpde_target_has_value_transports(target),
 				target == ZEND_NATIVE_TARGET_LINUX_AMD64,
 				&plans[initialized], diag)) {
 			break;
@@ -13643,8 +13469,7 @@ extern "C" zend_result zend_tpde_compile_component_with_runtime(
 		return FAILURE;
 	}
 	if (!freeze_component_machine_plan(
-			plans, plan_refs, member_count,
-			zend_tpde_target_has_value_transports(target), diag)) {
+			plans, plan_refs, member_count, diag)) {
 		for (uint32_t index = 0; index < member_count; ++index) {
 			destroy_plan(&plans[index]);
 		}
@@ -13670,9 +13495,6 @@ extern "C" zend_result zend_tpde_compile_component_with_runtime(
 	image->build_id = native_image_build_id(target);
 	image->code_version = next_native_code_version.fetch_add(
 		1, std::memory_order_relaxed);
-	/* TPDE liveness and register allocation own temporaries; the reserved ABI
-	 * pointer remains present for compatibility but no value-slot array is used. */
-	image->slot_count = 0;
 	image->argument_count = plans[0].argument_count;
 	image->frame_variable_count = members[0].source_op_array != nullptr
 		? static_cast<uint32_t>(members[0].source_op_array->last_var)
@@ -13733,11 +13555,7 @@ extern "C" zend_result zend_tpde_compile_component_with_runtime(
 		}
 	}
 	zend_result result = symbols_ready
-		? target == ZEND_NATIVE_TARGET_DARWIN_ARM64
-			? zend_tpde_emit_darwin_arm64(
-				plan_refs, member_count, image, diag)
-			: zend_tpde_emit_linux_x64(
-				plan_refs, member_count, image, diag)
+		? zend_tpde_emit_host(plan_refs, member_count, image, diag)
 		: FAILURE;
 	if (result == SUCCESS) {
 		uint32_t direct_count = 0;
@@ -13882,7 +13700,6 @@ extern "C" zend_result zend_native_image_serialize(
 	header.runtime_abi = image->runtime_abi_version;
 	header.build_id = image->build_id;
 	header.code_version = image->code_version;
-	header.slot_count = image->slot_count;
 	header.argument_count = image->argument_count;
 	header.frame_variable_count = image->frame_variable_count;
 	header.frame_temporary_count = image->frame_temporary_count;
@@ -14116,7 +13933,6 @@ extern "C" zend_result zend_native_image_deserialize(
 	image->runtime_abi_version = header.runtime_abi;
 	image->build_id = header.build_id;
 	image->code_version = header.code_version;
-	image->slot_count = header.slot_count;
 	image->argument_count = header.argument_count;
 	image->frame_variable_count = header.frame_variable_count;
 	image->frame_temporary_count = header.frame_temporary_count;
@@ -14445,11 +14261,9 @@ extern "C" zend_result zend_native_publish_image(
 			"publish target differs from compiled image target");
 		return FAILURE;
 	}
-	zend_result result = target == ZEND_NATIVE_TARGET_DARWIN_ARM64
-		? zend_native_publish_darwin_arm64(image, out_code, diag)
-		: target == ZEND_NATIVE_TARGET_LINUX_AMD64
-			? zend_native_publish_linux_x64(image, out_code, diag)
-			: FAILURE;
+	zend_result result = target == ZEND_NATIVE_HOST_TARGET
+		? zend_native_publish_host(image, out_code, diag)
+		: FAILURE;
 	if (result == SUCCESS && *out_code != nullptr
 			&& (*out_code)->unwind_registered) {
 		live_unwind_registrations.fetch_add(1, std::memory_order_relaxed);
@@ -14561,11 +14375,7 @@ extern "C" void zend_native_code_destroy(zend_native_code *code) {
 		ZEND_ASSERT(unwind_previous != 0);
 		owner->unwind_registered = false;
 	}
-	if (owner->target == ZEND_NATIVE_TARGET_DARWIN_ARM64) {
-		zend_native_unmap_darwin_arm64(owner);
-	} else if (owner->target == ZEND_NATIVE_TARGET_LINUX_AMD64) {
-		zend_native_unmap_linux_x64(owner);
-	}
+	zend_native_unmap_host(owner);
 	std::free(owner);
 }
 
@@ -14606,7 +14416,6 @@ extern "C" zend_result zend_native_code_component_view(
 	view->entry = owner->component_entries[component_index];
 	view->fast_call_entry = owner->component_fast_entries != nullptr
 		? owner->component_fast_entries[component_index] : nullptr;
-	view->slot_count = owner->slot_count;
 	view->argument_count =
 		owner->component_metadata[component_index].argument_count;
 	view->frame_variable_count =

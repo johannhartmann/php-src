@@ -1393,20 +1393,11 @@ static zend_native_entry_cell *zend_native_reentry_find(
 	zend_native_reentry_scope *current;
 
 	for (current = scope; current != NULL; current = current->previous) {
-		uint32_t index;
+		zend_native_entry_cell *cell = current->resolver(
+			current->resolver_context, function);
 
-		if (current->resolver != NULL) {
-			zend_native_entry_cell *cell = current->resolver(
-				current->resolver_context, function);
-
-			if (cell != NULL) {
-				return cell;
-			}
-		}
-		for (index = 0; index < current->binding_count; index++) {
-			if (current->bindings[index].function == function) {
-				return current->bindings[index].entry_cell;
-			}
+		if (cell != NULL) {
+			return cell;
 		}
 	}
 	return NULL;
@@ -1581,33 +1572,14 @@ void zend_native_reentry_shutdown(void)
 	zend_native_active_reentry_scope = NULL;
 }
 
-static zend_result zend_native_reentry_scope_enter_resolver_impl(
+zend_result zend_native_reentry_scope_enter_resolver(
 	zend_native_reentry_scope *scope,
-	const zend_native_reentry_binding *bindings,
-	uint32_t binding_count,
 	zend_native_reentry_resolver_t resolver,
 	void *resolver_context)
 {
-	uint32_t index;
-
-	if (scope == NULL
-			|| (binding_count != 0 && bindings == NULL)
-			|| (binding_count == 0 && resolver == NULL)) {
+	if (scope == NULL || resolver == NULL) {
 		return FAILURE;
 	}
-	for (index = 0; index < binding_count; index++) {
-		if (bindings[index].function == NULL
-				|| bindings[index].entry_cell == NULL
-				|| bindings[index].entry_cell->function
-					!= bindings[index].function
-				|| bindings[index].entry_cell->state
-					!= ZEND_NATIVE_ENTRY_READY
-				|| bindings[index].entry_cell->code == NULL) {
-			return FAILURE;
-		}
-	}
-	scope->bindings = bindings;
-	scope->binding_count = binding_count;
 	scope->resolver = resolver;
 	scope->resolver_context = resolver_context;
 	scope->previous = zend_native_active_reentry_scope;
@@ -1616,36 +1588,12 @@ static zend_result zend_native_reentry_scope_enter_resolver_impl(
 	return SUCCESS;
 }
 
-zend_result zend_native_reentry_scope_enter_resolver(
-	zend_native_reentry_scope *scope,
-	const zend_native_reentry_binding *bindings,
-	uint32_t binding_count,
-	zend_native_reentry_resolver_t resolver,
-	void *resolver_context)
-{
-	return zend_native_reentry_scope_enter_resolver_impl(
-		scope, bindings, binding_count, resolver, resolver_context);
-}
-
-zend_result zend_native_reentry_scope_enter_resolver_direct(
-	zend_native_reentry_scope *scope,
-	const zend_native_reentry_binding *bindings,
-	uint32_t binding_count,
-	zend_native_reentry_resolver_t resolver,
-	void *resolver_context)
-{
-	return zend_native_reentry_scope_enter_resolver_impl(
-		scope, bindings, binding_count, resolver, resolver_context);
-}
-
 void zend_native_reentry_scope_leave(zend_native_reentry_scope *scope)
 {
 	ZEND_ASSERT(scope != NULL && zend_native_active_reentry_scope == scope);
 	if (scope != NULL && zend_native_active_reentry_scope == scope) {
 		zend_native_reentry_cache_scope_epoch++;
 		zend_native_active_reentry_scope = scope->previous;
-		scope->bindings = NULL;
-		scope->binding_count = 0;
 		scope->resolver = NULL;
 		scope->resolver_context = NULL;
 		scope->previous = NULL;
