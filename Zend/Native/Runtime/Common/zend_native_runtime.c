@@ -1062,6 +1062,10 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 		(const void *) zend_native_call_fast_release_cv},
 	{ZEND_NATIVE_HELPER_CHAR_STRINGS, 0,
 		(const void *) zend_native_char_strings},
+	{ZEND_NATIVE_HELPER_CALL_RECEIVE_VARIADIC,
+		ZEND_NATIVE_EFFECT_CALL | ZEND_NATIVE_EFFECT_FRAME_READ
+			| ZEND_NATIVE_EFFECT_FRAME_WRITE,
+		(const void *) zend_native_call_receive_variadic},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {

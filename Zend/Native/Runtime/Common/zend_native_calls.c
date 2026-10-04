@@ -4714,15 +4714,16 @@ static void zend_native_call_fast_publish(
 		}
 	}
 	header->fast_flags |= static_mode;
-	/* A target that takes exactly the sent arguments by value, untyped,
-	 * is entered through its own fast-call entry. */
+	/* A target whose parameters the inline receive takes is entered
+	 * through its native call entry (ADR 0025 section 3), which checks the
+	 * argument count and types itself and hands any other frame to
+	 * zend_native_call_fast_do(). */
 	header->fast_do_entry = (void *) zend_native_call_fast_do;
-	if ((header->fast_flags & (ZEND_NATIVE_CALL_FAST_PREPARE
-				| ZEND_NATIVE_CALL_FAST_CHECK_ARGS
-				| ZEND_NATIVE_CALL_FAST_DEFAULTS
-				| ZEND_NATIVE_CALL_FAST_NO_CALL)) == 0
-			&& header->fast_ref_mask == 0
-			&& entry->argument_count == op_array->num_args) {
+	if (header->fast_receive->state == ZEND_NATIVE_CALL_FAST_RECEIVE_INLINE
+			&& (entry->argument_count <= op_array->num_args
+				|| (op_array->fn_flags & ZEND_ACC_VARIADIC) != 0)
+			&& (header->fast_flags & ZEND_NATIVE_CALL_FAST_NO_CALL) == 0
+			&& header->fast_ref_mask == 0) {
 		const zend_native_code *code =
 			zend_native_entry_cell_load(resolution->entry_cell);
 		void *fast_call_entry = code != NULL
@@ -4730,7 +4731,11 @@ static void zend_native_call_fast_publish(
 
 		if (fast_call_entry != NULL
 				&& zend_native_code_frame_entry(code) == header->fast_entry) {
-			header->fast_do_entry = fast_call_entry;
+			/* Exactly the declared, untyped parameters: no frame check. */
+			header->fast_do_entry = header->fast_flags == static_mode
+					&& entry->argument_count == op_array->num_args
+				? zend_native_code_exact_call_entry(code)
+				: fast_call_entry;
 		}
 	}
 	header->fast_epoch = zend_native_call_resolution_cache_epoch;
@@ -4763,6 +4768,9 @@ typedef struct _zend_native_call_recorded_target {
 	zend_function *function;
 	zend_class_entry *called_scope;
 	zend_native_frame_entry_t entry;
+	/* What the site's Do calls: the native call entry of the entry's code,
+	 * else zend_native_call_fast_do(). */
+	void *do_entry;
 	const zend_native_call_fast_receive *receive;
 	/* The target's entry cell, and whether the target outlives the request
 	 * that recorded it: an immutable function and class, and permanent
@@ -4897,6 +4905,17 @@ static void zend_native_call_recorded_target_record(
 	target->called_scope = kind == ZEND_NATIVE_CALL_RECORDED_STATIC
 		? (zend_class_entry *) resolution->object_or_called_scope : NULL;
 	target->entry = resolution->invoke_entry;
+	{
+		const zend_native_code *code =
+			zend_native_entry_cell_load(resolution->entry_cell);
+		void *native_entry = code != NULL
+			? zend_native_code_fast_call_entry(code) : NULL;
+
+		target->do_entry = native_entry != NULL
+				&& zend_native_code_frame_entry(code)
+					== resolution->invoke_entry
+			? native_entry : (void *) zend_native_call_fast_do;
+	}
 	target->receive = zend_native_call_fast_receive_prepare(
 		resolution->entry_cell, &resolution->function->op_array);
 	target->cell = resolution->entry_cell;
@@ -4960,10 +4979,11 @@ static zend_always_inline bool zend_native_call_recorded_target_current(
  * are then sent to EX(call) and the frame prepared generically. Returns the
  * target's entry, or NULL for the universal protocol with nothing changed.
  */
-zend_native_frame_entry_t zend_native_call_fast_dynamic_init(
+zend_native_call_dynamic_init_result zend_native_call_fast_dynamic_init(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor)
 {
+	const zend_native_call_dynamic_init_result miss = {NULL, NULL};
 	zend_native_call_recorded_target *target;
 	zend_function *function = NULL;
 	zend_object *owned = NULL;
@@ -4978,7 +4998,7 @@ zend_native_frame_entry_t zend_native_call_fast_dynamic_init(
 	if (ZEND_OBSERVER_ENABLED || EG(exception) != NULL
 			|| !zend_native_call_callable_location(
 				caller, descriptor, &receiver, &offset)) {
-		return NULL;
+		return miss;
 	}
 	slot = receiver == ZEND_NATIVE_CALL_RECEIVER_LITERAL
 		? &caller->func->op_array.literals[offset]
@@ -4991,7 +5011,7 @@ zend_native_frame_entry_t zend_native_call_fast_dynamic_init(
 		if (target->key != Z_STR_P(callable)
 				|| target->kind != ZEND_NATIVE_CALL_RECORDED_FUNCTION
 				|| !zend_native_call_recorded_target_current(target)) {
-			return NULL;
+			return miss;
 		}
 		function = target->function;
 	} else if (Z_TYPE_P(callable) == IS_OBJECT) {
@@ -5006,14 +5026,14 @@ zend_native_frame_entry_t zend_native_call_fast_dynamic_init(
 					& (ZEND_ACC_CLOSURE | ZEND_ACC_FAKE_CLOSURE))
 					!= ZEND_ACC_CLOSURE
 				|| RUN_TIME_CACHE(&function->op_array) == NULL) {
-			return NULL;
+			return miss;
 		}
 		target = zend_native_call_recorded_target_slot(
 			function->op_array.opcodes, NULL, NULL);
 		if (target->epoch != zend_native_call_resolution_cache_epoch
 				|| target->key != function->op_array.opcodes
 				|| target->kind != ZEND_NATIVE_CALL_RECORDED_CLOSURE) {
-			return NULL;
+			return miss;
 		}
 		call_info |= ZEND_CALL_CLOSURE;
 		if (bound != NULL) {
@@ -5030,14 +5050,14 @@ zend_native_frame_entry_t zend_native_call_fast_dynamic_init(
 
 		if (object == NULL || method == NULL
 				|| Z_TYPE_P(method) != IS_STRING) {
-			return NULL;
+			return miss;
 		}
 		if (Z_TYPE_P(object) == IS_OBJECT) {
 			key = Z_OBJCE_P(object);
 		} else if (Z_TYPE_P(object) == IS_STRING) {
 			key = Z_STR_P(object);
 		} else {
-			return NULL;
+			return miss;
 		}
 		target = zend_native_call_recorded_target_slot(
 			key, Z_STR_P(method), caller->func->common.scope);
@@ -5048,7 +5068,7 @@ zend_native_frame_entry_t zend_native_call_fast_dynamic_init(
 					? ZEND_NATIVE_CALL_RECORDED_METHOD
 					: ZEND_NATIVE_CALL_RECORDED_STATIC)
 				|| !zend_native_call_recorded_target_current(target)) {
-			return NULL;
+			return miss;
 		}
 		function = target->function;
 		if (Z_TYPE_P(object) == IS_OBJECT) {
@@ -5061,15 +5081,18 @@ zend_native_frame_entry_t zend_native_call_fast_dynamic_init(
 			if (Z_TYPE(caller->This) == IS_OBJECT
 					&& instanceof_function(
 						Z_OBJCE(caller->This), target->called_scope)) {
-				return NULL;
+				return miss;
 			}
 			object_or_called_scope = target->called_scope;
 		}
 	} else {
-		return NULL;
+		return miss;
 	}
-	if (RUN_TIME_CACHE(&function->op_array) == NULL) {
+	void **run_time_cache = RUN_TIME_CACHE(&function->op_array);
+
+	if (run_time_cache == NULL) {
 		zend_init_func_run_time_cache(&function->op_array);
+		run_time_cache = RUN_TIME_CACHE(&function->op_array);
 	}
 	call = zend_vm_stack_push_call_frame(call_info, function,
 		descriptor->initial_argument_count, object_or_called_scope);
@@ -5090,11 +5113,14 @@ zend_native_frame_entry_t zend_native_call_fast_dynamic_init(
 		GC_ADDREF(owned);
 	}
 	/* Until the Do, the frame's run-time cache slot carries how the
-	 * target receives its parameters (zend_native_call_fast_do()). */
+	 * target receives its parameters (zend_native_call_fast_do()) and
+	 * its return value slot the run-time cache (the native call entry). */
 	call->run_time_cache = (void **) target->receive;
+	call->return_value = (zval *) run_time_cache;
 	call->prev_execute_data = caller->call;
 	caller->call = call;
-	return target->entry;
+	return (zend_native_call_dynamic_init_result) {
+		target->entry, target->do_entry};
 }
 
 /* A literal, CV, temporary or VAR operand of a fast send; *temporary
@@ -8375,6 +8401,34 @@ static void zend_native_call_fast_copy_extra_args(
 			source--;
 		} while (--count);
 	}
+}
+
+void zend_native_call_receive_variadic(zend_execute_data *callee)
+{
+	const zend_op_array *op_array = &callee->func->op_array;
+	const uint32_t supplied = ZEND_CALL_NUM_ARGS(callee);
+	const uint32_t declared = op_array->num_args;
+	zval *parameters = ZEND_CALL_VAR_NUM(callee, declared);
+	zval *argument;
+	uint32_t count;
+
+	if (supplied <= declared) {
+		ZVAL_EMPTY_ARRAY(parameters);
+		return;
+	}
+	zend_native_call_fast_copy_extra_args(callee, op_array, supplied);
+	argument = ZEND_CALL_VAR_NUM(callee, op_array->last_var + op_array->T);
+	count = supplied - declared;
+	array_init_size(parameters, count);
+	zend_hash_real_init_packed(Z_ARRVAL_P(parameters));
+	ZEND_HASH_FILL_PACKED(Z_ARRVAL_P(parameters)) {
+		do {
+			ZEND_HASH_FILL_SET(argument);
+			Z_TRY_ADDREF_P(argument);
+			ZEND_HASH_FILL_NEXT();
+			argument++;
+		} while (--count);
+	} ZEND_HASH_FILL_END();
 }
 
 /*

@@ -5664,6 +5664,67 @@ static uint32_t source_operand_may_be(
 	return ssa->var_info[ssa_use].type;
 }
 
+/*
+ * The receive facts of the native call entry, as
+ * zend_native_call_fast_receive_prepare() derives the runtime's inline
+ * receive: false when that receive does not apply.
+ */
+bool freeze_fast_call_receive(
+	const zend_op_array *op_array, zend_tpde_plan *plan) {
+	const uint32_t scalar_types = (UINT32_C(1) << (IS_RESOURCE + 1)) - 1;
+
+	if (op_array->num_args > ZEND_NATIVE_CALL_FAST_RECEIVE_MAX
+			|| (op_array->num_args != 0 && op_array->arg_info == nullptr)) {
+		return false;
+	}
+	plan->fast_call_min_arguments = 0;
+	plan->fast_call_variadic =
+		(op_array->fn_flags & ZEND_ACC_VARIADIC) != 0;
+	if (plan->fast_call_variadic) {
+		if (op_array->arg_info == nullptr
+				|| op_array->num_args >= (uint32_t) op_array->last_var) {
+			return false;
+		}
+		const zend_arg_info *variadic = &op_array->arg_info[op_array->num_args];
+		if (ZEND_TYPE_IS_SET(variadic->type)
+				|| ZEND_ARG_SEND_MODE(variadic) != 0) {
+			return false;
+		}
+	}
+	for (uint32_t index = 0; index < op_array->num_args; ++index) {
+		const zend_op *opline = &op_array->opcodes[index];
+		const zend_arg_info *info = &op_array->arg_info[index];
+		const uint32_t mask = ZEND_TYPE_IS_SET(info->type)
+			? static_cast<uint32_t>(ZEND_TYPE_PURE_MASK(info->type))
+				& scalar_types
+			: UINT32_MAX;
+
+		plan->fast_call_type_masks[index] = mask;
+		plan->fast_call_default_literals[index] = UINT32_MAX;
+		if (ZEND_ARG_SEND_MODE(info) != 0) {
+			/* A by-reference parameter is received by the general Do. */
+			return false;
+		}
+		if (opline->opcode == ZEND_RECV) {
+			plan->fast_call_min_arguments = index + 1;
+			continue;
+		}
+		if (opline->opcode != ZEND_RECV_INIT
+				|| opline->op1.num != index + 1
+				|| opline->op2_type != IS_CONST) {
+			return false;
+		}
+		const zval *value = RT_CONSTANT(opline, opline->op2);
+		if (Z_TYPE_P(value) == IS_CONSTANT_AST || Z_REFCOUNTED_P(value)
+				|| (mask & (UINT32_C(1) << Z_TYPE_P(value))) == 0) {
+			return false;
+		}
+		plan->fast_call_default_literals[index] =
+			static_cast<uint32_t>(value - op_array->literals);
+	}
+	return true;
+}
+
 bool initialize_plan(
 	const zend_mir_view *view,
 	const zend_native_runtime_api *runtime,
@@ -5688,10 +5749,10 @@ bool initialize_plan(
 	plan->fast_call_eligible = linux_inline_forms
 		&& source_op_array != nullptr
 		&& source_op_array->function_name != nullptr
-		&& (source_op_array->fn_flags
-			& (ZEND_ACC_GENERATOR | ZEND_ACC_VARIADIC)) == 0
+		&& (source_op_array->fn_flags & ZEND_ACC_GENERATOR) == 0
 		&& source_op_array->last_var <= 64
-		&& source_op_array->num_args <= (uint32_t) source_op_array->last_var;
+		&& source_op_array->num_args <= (uint32_t) source_op_array->last_var
+		&& freeze_fast_call_receive(source_op_array, plan);
 	plan->source_literals =
 		source_op_array != nullptr ? source_op_array->literals : nullptr;
 	plan->source_literal_count = source_op_array != nullptr
@@ -12965,9 +13026,16 @@ static bool freeze_component_machine_plan(
 			plans[index].typed_body_eligible
 				? next_typed_body_function++ : UINT32_MAX;
 	}
-	/* A fast-call entry leaves through the shared leave. */
+	/* A native call entry leaves through the shared leave and hands any
+	 * other frame to the general fast Do. */
 	for (uint32_t index = 0; index < component_count; ++index) {
 		if (plans[index].fast_call_eligible) {
+			require_runtime_helper(
+				&plans[index], ZEND_NATIVE_HELPER_CALL_FAST_DO);
+			if (plans[index].fast_call_variadic) {
+				require_runtime_helper(&plans[index],
+					ZEND_NATIVE_HELPER_CALL_RECEIVE_VARIADIC);
+			}
 			require_runtime_helper(
 				&plans[index], ZEND_NATIVE_HELPER_CALL_FAST_LEAVE);
 			require_runtime_helper(
@@ -14368,6 +14436,7 @@ extern "C" void zend_native_code_destroy(zend_native_code *code) {
 	std::free(owner->owned_internal_call_cells);
 	std::free(owner->component_entries);
 	std::free(owner->component_fast_entries);
+	std::free(owner->component_exact_entries);
 	std::free(owner->component_metadata);
 	if (owner->unwind_registered) {
 		uint32_t unwind_previous = live_unwind_registrations.fetch_sub(
@@ -14416,6 +14485,8 @@ extern "C" zend_result zend_native_code_component_view(
 	view->entry = owner->component_entries[component_index];
 	view->fast_call_entry = owner->component_fast_entries != nullptr
 		? owner->component_fast_entries[component_index] : nullptr;
+	view->exact_call_entry = owner->component_exact_entries != nullptr
+		? owner->component_exact_entries[component_index] : nullptr;
 	view->argument_count =
 		owner->component_metadata[component_index].argument_count;
 	view->frame_variable_count =
@@ -14484,4 +14555,9 @@ extern "C" zend_native_frame_entry_t zend_native_code_frame_entry(
 extern "C" void *zend_native_code_fast_call_entry(
 	const zend_native_code *code) {
 	return code != nullptr ? code->fast_call_entry : nullptr;
+}
+
+extern "C" void *zend_native_code_exact_call_entry(
+	const zend_native_code *code) {
+	return code != nullptr ? code->exact_call_entry : nullptr;
 }

@@ -4,6 +4,7 @@
 #include "Zend/Native/TPDE/Common/zend_tpde_backend.h"
 #include "Zend/Native/MIR/zend_mir_call.h"
 #include "Zend/Native/MIR/zend_mir_values.h"
+#include "Zend/Native/Runtime/Common/zend_native_calls.h"
 #include "Zend/Native/Runtime/Common/zend_native_operands.h"
 #include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 #include "Zend/zend_compile.h"
@@ -2310,16 +2311,30 @@ struct zend_tpde_plan {
 	uint32_t number_argument_mask;
 	uint32_t typed_body_function_index;
 	/*
-	 * The fast-call entry (zend_native_code_fast_call_entry()): frameless
-	 * code placed before this member's Zend entry, with
-	 * zend_native_call_fast_do()'s signature, that initializes the frame
-	 * for exactly source_num_args arguments, calls the Zend entry and
-	 * leaves through zend_native_call_fast_leave(), as the fast Do does for
-	 * an untyped target. Only for functions, which are neither generators
-	 * nor variadic.
+	 * The native call entry (ADR 0025 section 3,
+	 * zend_native_code_fast_call_entry()): frameless code placed before this
+	 * member's Zend entry, with zend_native_call_fast_do()'s signature. It
+	 * checks the pushed frame against the facts below, initializes it as
+	 * i_init_func_execute_data() and the RECV/RECV_INIT of its parameters
+	 * do, calls the Zend entry and leaves inline; any other frame continues
+	 * in zend_native_call_fast_do(). Only for functions with at most
+	 * ZEND_NATIVE_CALL_FAST_RECEIVE_MAX parameters, which are neither
+	 * generators nor variadic by reference or with a type, and whose
+	 * defaults are literals the runtime's inline receive takes too.
 	 */
 	bool fast_call_eligible;
+	/* The entry collects extra arguments into an untyped, by-value
+	 * variadic parameter (zend_native_call_receive_variadic()). */
+	bool fast_call_variadic;
 	uint32_t source_num_args;
+	/* The fewest arguments the entry takes: one past the last parameter
+	 * without a default. */
+	uint32_t fast_call_min_arguments;
+	/* Per parameter: the literal index of its default, UINT32_MAX for none,
+	 * and the type bits an argument takes without a check or coercion
+	 * (UINT32_MAX untyped). */
+	uint32_t fast_call_default_literals[ZEND_NATIVE_CALL_FAST_RECEIVE_MAX];
+	uint32_t fast_call_type_masks[ZEND_NATIVE_CALL_FAST_RECEIVE_MAX];
 	zend_mir_function_record function;
 	zend_mir_block_id *block_ids;
 	uint32_t block_count;
@@ -2709,10 +2724,14 @@ struct zend_native_code {
 	size_t mapping_size;
 	zend_native_frame_entry_t entry;
 	zend_native_frame_entry_t *component_entries;
-	/* Each component's fast-call entry (zend_native_call_fast_do()'s
-	 * signature), NULL where the image has none. */
+	/* Each component's native call entry (zend_native_call_fast_do()'s
+	 * signature), which checks the frame, and the same entry past the
+	 * checks for a frame the call site proved; NULL where the image has
+	 * none. */
 	void *fast_call_entry;
+	void *exact_call_entry;
 	void **component_fast_entries;
+	void **component_exact_entries;
 	zend_native_component_entry *component_metadata;
 	uint32_t component_entry_count;
 	uint32_t argument_count;
