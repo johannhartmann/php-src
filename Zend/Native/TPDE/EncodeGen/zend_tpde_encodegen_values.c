@@ -525,6 +525,40 @@ uint64_t zend_native_array_isset_key(const zval *container, const zval *key)
 		zend_native_test_value(container, zend_native_key_deref(key), false));
 }
 
+/*
+ * The lookups of a runtime key the emitted code found to be a string (not
+ * a reference): the string path alone, so that the other key kinds' code
+ * stays out of the hot path (zend_native_array_*_key() serve them).
+ */
+uintptr_t zend_native_array_find_string_key(
+	const zval *container, const zval *key)
+{
+	const HashTable *table = zend_native_probe_array(container);
+
+	return table != NULL ? zend_native_find_string(table, Z_STR_P(key))
+		: ZEND_NATIVE_ELEMENT_UNKNOWN;
+}
+
+uintptr_t zend_native_array_test_string_key(
+	const zval *container, const zval *key)
+{
+	const HashTable *table = NULL;
+	uintptr_t answer = zend_native_test_table(container, &table);
+
+	return table != NULL ? zend_native_find_string(table, Z_STR_P(key))
+		: answer;
+}
+
+uint64_t zend_native_array_isset_string_key(
+	const zval *container, const zval *key)
+{
+	const HashTable *table = NULL;
+	uintptr_t answer = zend_native_test_table(container, &table);
+
+	return zend_native_element_isset(table != NULL
+		? zend_native_find_string(table, Z_STR_P(key)) : answer);
+}
+
 uint64_t zend_native_array_isset_literal(
 	const zval *container, const zval *key)
 {
