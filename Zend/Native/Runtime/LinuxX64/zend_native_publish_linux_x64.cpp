@@ -607,7 +607,15 @@ zend_result map_linux_x64_object(
 	code->component_fast_entries = static_cast<void **>(
 		std::calloc(image->component_entry_count,
 			sizeof(*code->component_fast_entries)));
-	if (code->component_fast_entries == nullptr) {
+	code->component_exact_entries = static_cast<void **>(
+		std::calloc(image->component_entry_count,
+			sizeof(*code->component_exact_entries)));
+	if (code->component_fast_entries == nullptr
+			|| code->component_exact_entries == nullptr) {
+		std::free(code->component_fast_entries);
+		code->component_fast_entries = nullptr;
+		std::free(code->component_exact_entries);
+		code->component_exact_entries = nullptr;
 		std::free(code->component_entries);
 		code->component_entries = nullptr;
 		destroy_linux_x64_published_state(state);
@@ -623,7 +631,23 @@ zend_result map_linux_x64_object(
 		if (name == nullptr || symbols[i].st_shndx == SHN_UNDEF) {
 			continue;
 		}
-		/* An optional fast-call entry: zend_native_fast_call_<index>. */
+		/* An optional native call entry, zend_native_fast_call_<index>,
+		 * and its exact entry, zend_native_fast_call_exact_<index>. */
+		static constexpr char exact_call_prefix[] =
+			"zend_native_fast_call_exact_";
+		if (std::strncmp(name, exact_call_prefix,
+				sizeof(exact_call_prefix) - 1) == 0) {
+			char *end = nullptr;
+			const unsigned long index = std::strtoul(
+				name + sizeof(exact_call_prefix) - 1, &end, 10);
+			if (end != nullptr && *end == '\0'
+					&& index < image->component_entry_count
+					&& code->component_exact_entries[index] == nullptr) {
+				code->component_exact_entries[index] =
+					reinterpret_cast<void *>(resolve_symbol(i));
+			}
+			continue;
+		}
 		static constexpr char fast_call_prefix[] = "zend_native_fast_call_";
 		if (std::strncmp(name, fast_call_prefix,
 				sizeof(fast_call_prefix) - 1) == 0) {
@@ -660,6 +684,8 @@ zend_result map_linux_x64_object(
 		code->component_entries = nullptr;
 		std::free(code->component_fast_entries);
 		code->component_fast_entries = nullptr;
+		std::free(code->component_exact_entries);
+		code->component_exact_entries = nullptr;
 		destroy_linux_x64_published_state(state);
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MAPPING_FAILED,
 			"Linux native image contains unresolved symbols or relocations");
@@ -737,6 +763,7 @@ zend_result map_linux_x64_object(
 	code->mapping_size = state->mapping_size;
 	code->entry = code->component_entries[0];
 	code->fast_call_entry = code->component_fast_entries[0];
+	code->exact_call_entry = code->component_exact_entries[0];
 	code->component_entry_count = image->component_entry_count;
 	code->unwind_registered = state->unwind_registered;
 	code->target_state = state;
@@ -776,6 +803,7 @@ zend_result zend_native_publish_linux_x64(
 	if (map_linux_x64_object(image, code, diag) == FAILURE) {
 		std::free(code->component_entries);
 		std::free(code->component_fast_entries);
+		std::free(code->component_exact_entries);
 		std::free(code);
 		return FAILURE;
 	}

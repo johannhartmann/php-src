@@ -843,10 +843,22 @@ zend_native_direct_call_result zend_native_call_direct_leave(
  * object (fast_function is NULL) and the Do calls nothing. */
 #define ZEND_NATIVE_CALL_FAST_NO_CALL UINT32_C(128)
 
+
 const uint64_t *zend_native_call_cache_epoch_address(void);
 uint32_t zend_native_call_fast_prepare(zend_execute_data *callee);
 void zend_native_call_fast_scalar_violation(void);
-zend_native_frame_entry_t zend_native_call_fast_dynamic_init(
+/*
+ * A dynamic site's Init: the recorded target's Zend entry, NULL on a miss,
+ * and the entry its Do calls with zend_native_call_fast_do()'s signature,
+ * the target's native call entry or zend_native_call_fast_do() itself.
+ * Until the Do, the pushed frame carries the target's receive in its
+ * run-time cache slot and its run-time cache in its return value slot.
+ */
+typedef struct _zend_native_call_dynamic_init_result {
+	zend_native_frame_entry_t entry;
+	void *do_entry;
+} zend_native_call_dynamic_init_result;
+zend_native_call_dynamic_init_result zend_native_call_fast_dynamic_init(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor);
 uint32_t zend_native_call_fast_send(
@@ -855,6 +867,10 @@ uint32_t zend_native_call_fast_send(
 	uint32_t index);
 uint32_t zend_native_call_fast_leave(
 	zend_execute_data *callee, uint32_t status, bool discard_result);
+/* The variadic parameter of a frame a native call entry receives: extra
+ * arguments move behind the temporaries and the parameter collects them,
+ * as RECV_VARIADIC does; without extra arguments it is the empty array. */
+void zend_native_call_receive_variadic(zend_execute_data *callee);
 /* A counted CV of a frame a fast-call entry leaves, as
  * zend_native_call_fast_leave() releases it, after the entry dropped its
  * reference: freed at zero, else checked as a possible GC root. */

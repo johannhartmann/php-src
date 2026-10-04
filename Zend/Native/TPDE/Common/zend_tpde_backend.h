@@ -271,6 +271,7 @@ zend_native_frame_entry_t zend_native_code_frame_entry(
 /* The generated fast-call entry of the code's function, with the signature
  * of zend_native_call_fast_do(); NULL when the image has none. */
 void *zend_native_code_fast_call_entry(const zend_native_code *code);
+void *zend_native_code_exact_call_entry(const zend_native_code *code);
 
 #ifdef __cplusplus
 }
