@@ -17,6 +17,9 @@
 #include "zend_system_id.h"
 #include "zend_extensions.h"
 #include "ext/standard/md5.h"
+#ifdef HAVE_NATIVE_ENGINE
+# include "Native/Runtime/Common/zend_native_runtime.h"
+#endif
 
 ZEND_API char zend_system_id[32];
 
@@ -44,6 +47,16 @@ void zend_startup_system_id(void)
 	PHP_MD5Update(&context, PHP_VERSION, sizeof(PHP_VERSION)-1);
 	PHP_MD5Update(&context, ZEND_EXTENSION_BUILD_ID, sizeof(ZEND_EXTENSION_BUILD_ID)-1);
 	PHP_MD5Update(&context, ZEND_BIN_ID, sizeof(ZEND_BIN_ID)-1);
+#ifdef HAVE_NATIVE_ENGINE
+	{
+		/* Native images persisted with a cached script follow the native
+		 * runtime ABI: a cache of another ABI is not this system's. */
+		static const uint32_t native_runtime_abi =
+			ZEND_NATIVE_RUNTIME_ABI_VERSION;
+		PHP_MD5Update(&context, &native_runtime_abi,
+			sizeof(native_runtime_abi));
+	}
+#endif
 	if (strstr(PHP_VERSION, "-dev") != 0) {
 		/* Development versions may be changed from build to build */
 		PHP_MD5Update(&context, __DATE__, sizeof(__DATE__)-1);
