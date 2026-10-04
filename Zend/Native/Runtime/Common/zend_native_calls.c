@@ -5097,47 +5097,80 @@ zend_native_frame_entry_t zend_native_call_fast_dynamic_init(
 	return target->entry;
 }
 
+/* A literal, CV, temporary or VAR operand of a fast send; *temporary
+ * tells whether the send consumes the slot. NULL for any other operand. */
+static zval *zend_native_call_fast_send_operand(
+	zend_execute_data *caller, const zend_mir_source_operand_ref *operand,
+	bool *temporary)
+{
+	const zend_op_array *op_array = &caller->func->op_array;
+
+	*temporary = false;
+	if (operand->kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+		return &op_array->literals[operand->index];
+	}
+	if (operand->kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+			&& operand->kind != ZEND_MIR_SOURCE_OPERAND_SSA) {
+		return NULL;
+	}
+	if (operand->slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+		return ZEND_CALL_VAR_NUM(caller, operand->index);
+	}
+	if (operand->slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+			|| operand->slot_kind == ZEND_MIR_SOURCE_SLOT_VAR) {
+		*temporary = true;
+		return ZEND_CALL_VAR_NUM(caller,
+			(uint32_t) op_array->last_var + operand->index);
+	}
+	return NULL;
+}
+
 /*
  * ZEND_SEND_ARRAY of a packed array without holes to a target taking every
- * one of its elements by value: each element, dereferenced, is copied into
- * the next argument as the VM copies it. Returns false with nothing changed
- * for any other array, operand or target.
+ * sent element by value: each element, dereferenced, is copied into the
+ * next argument as the VM copies it. The array_slice() form (an integer or
+ * null length, the skip in the extended value) sends the slice as the VM's
+ * handler computes it. Returns false with nothing changed for any other
+ * array, operand or target.
  */
 static bool zend_native_call_fast_send_packed(
 	zend_execute_data *caller,
 	const zend_native_direct_internal_call_argument *argument)
 {
-	const zend_mir_source_operand_ref *operand = &argument->source_operand;
-	const zend_op_array *op_array = &caller->func->op_array;
 	zend_execute_data *call = caller->call;
 	zend_function *function = call->func;
+	const bool slice = argument->auxiliary_operand.kind
+		!= ZEND_MIR_SOURCE_OPERAND_UNUSED;
 	zval *source;
+	zval *length_source = NULL;
+	zval *length_value = NULL;
 	zval *args;
 	zval *target;
 	HashTable *table;
 	uint32_t count;
+	uint32_t begin = 0;
+	uint32_t sent;
 	uint32_t first;
-	bool temporary = false;
+	bool temporary;
+	bool length_temporary = false;
 
-	if (operand->kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
-		if (operand->index >= (uint32_t) op_array->last_literal) {
+	source = zend_native_call_fast_send_operand(
+		caller, &argument->source_operand, &temporary);
+	if (source == NULL) {
+		return false;
+	}
+	if (slice) {
+		length_source = zend_native_call_fast_send_operand(
+			caller, &argument->auxiliary_operand, &length_temporary);
+		if (length_source == NULL) {
 			return false;
 		}
-		source = &op_array->literals[operand->index];
-	} else if ((operand->kind == ZEND_MIR_SOURCE_OPERAND_SLOT
-				|| operand->kind == ZEND_MIR_SOURCE_OPERAND_SSA)
-			&& operand->slot_kind == ZEND_MIR_SOURCE_SLOT_CV
-			&& operand->index < (uint32_t) op_array->last_var) {
-		source = ZEND_CALL_VAR_NUM(caller, operand->index);
-	} else if ((operand->kind == ZEND_MIR_SOURCE_OPERAND_SLOT
-				|| operand->kind == ZEND_MIR_SOURCE_OPERAND_SSA)
-			&& (operand->slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
-				|| operand->slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)
-			&& operand->index < op_array->T) {
-		source = ZEND_CALL_VAR_NUM(caller, op_array->last_var + operand->index);
-		temporary = true;
-	} else {
-		return false;
+		length_value = length_source;
+		ZVAL_DEREF(length_value);
+		if (Z_TYPE_P(length_value) != IS_LONG
+				&& Z_TYPE_P(length_value) != IS_NULL) {
+			return false;
+		}
 	}
 	args = source;
 	ZVAL_DEREF(args);
@@ -5150,27 +5183,46 @@ static bool zend_native_call_fast_send_packed(
 	if (!HT_IS_PACKED(table) || !HT_IS_WITHOUT_HOLES(table)) {
 		return false;
 	}
+	sent = count;
+	if (slice) {
+		const uint32_t skip = argument->extended_value;
+		const zend_long remaining =
+			skip < count ? (zend_long) (count - skip) : 0;
+		zend_long length = Z_TYPE_P(length_value) == IS_LONG
+			? Z_LVAL_P(length_value) : remaining;
+
+		if (length < 0) {
+			length += remaining;
+		}
+		begin = skip;
+		sent = skip < count && length > 0
+			? (uint32_t) MIN(length, remaining) : 0;
+	}
 	first = ZEND_CALL_NUM_ARGS(call);
-	for (uint32_t index = 0; index < count; index++) {
+	for (uint32_t index = 0; index < sent; index++) {
 		if (ARG_SHOULD_BE_SENT_BY_REF(function, first + index + 1)) {
 			return false;
 		}
 	}
-	if (count != 0) {
-		zend_vm_stack_extend_call_frame(&call, first, count);
+	if (sent != 0) {
+		zend_vm_stack_extend_call_frame(&call, first, sent);
 		caller->call = call;
 		target = ZEND_CALL_ARG(call, first + 1);
-		for (uint32_t index = 0; index < count; index++) {
-			zval *element = &table->arPacked[index];
+		for (uint32_t index = 0; index < sent; index++) {
+			zval *element = &table->arPacked[begin + index];
 
 			ZVAL_COPY_DEREF(target, element);
 			target++;
 		}
-		ZEND_CALL_NUM_ARGS(call) = first + count;
+		ZEND_CALL_NUM_ARGS(call) = first + sent;
 	}
 	if (temporary) {
 		zval_ptr_dtor_nogc(source);
 		ZVAL_UNDEF(source);
+	}
+	if (length_temporary) {
+		zval_ptr_dtor_nogc(length_source);
+		ZVAL_UNDEF(length_source);
 	}
 	return true;
 }
@@ -5190,8 +5242,6 @@ uint32_t zend_native_call_fast_send(
 			&caller->func->op_array.opcodes[argument->source_position];
 	}
 	if (argument->source_opcode == ZEND_SEND_ARRAY
-			&& argument->auxiliary_operand.kind
-				== ZEND_MIR_SOURCE_OPERAND_UNUSED
 			&& zend_native_call_fast_send_packed(caller, argument)) {
 		return ZEND_NATIVE_RETURNED;
 	}
