@@ -8842,6 +8842,54 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto key_address = key_literal
 			? address(literals_reg, key_offset)
 			: address(frame_reg, key_offset);
+		/*
+		 * A runtime key: a string looks up inline, any other key (an
+		 * integer, a reference) out of line, both into one register. Only
+		 * with a register to spare, so that neither lookup evicts.
+		 */
+		const bool split_string_key = !key_literal
+			&& unlocked_gp_registers() >= 10;
+		auto string_key_split = [&](auto &&string_lookup,
+				auto &&general_lookup, ValuePart &out) -> bool {
+			ScratchReg common{this};
+			const AsmReg common_reg = common.alloc_gp();
+			auto other = text_writer.label_create();
+			auto joined = text_writer.label_create();
+			ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(key_offset
+					+ offsetof(zval, u1.v.type))), IS_STRING);
+			generate_raw_jump(Jump::jne, other);
+			{
+				ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
+				if (!string_lookup(value)) {
+					return false;
+				}
+				mov(common_reg, value.cur_reg_or_load(this), 8);
+				value.reset(this);
+			}
+			const bool cold_other = !text_writer.in_cold_area();
+			if (cold_other) {
+				text_writer.begin_cold_area();
+			} else {
+				generate_raw_jump(Jump::jmp, joined);
+			}
+			label_place(other);
+			{
+				ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
+				if (!general_lookup(value)) {
+					return false;
+				}
+				mov(common_reg, value.cur_reg_or_load(this), 8);
+				value.reset(this);
+			}
+			if (cold_other) {
+				generate_raw_jump(Jump::jmp, joined);
+				text_writer.end_cold_area();
+			}
+			label_place(joined);
+			out.set_value(this, std::move(common));
+			return true;
+		};
 		/* isset() of an array element decides in one snippet: set, not
 		 * set, or the helper's. */
 		if (access == ElementAccess::Isset && !container_temporary) {
@@ -8866,6 +8914,18 @@ bool ZendCompilerX64::compile_inst_impl(
 				tested = EncodeBase::encode_zend_native_array_isset_literal(
 					std::move(container_address), std::move(key_address),
 					value);
+			} else if (split_string_key) {
+				tested = string_key_split(
+					[&](ValuePart &out) {
+						return EncodeBase::encode_zend_native_array_isset_string_key(
+							address(container_base, container_offset),
+							address(frame_reg, key_offset), out);
+					},
+					[&](ValuePart &out) {
+						return EncodeBase::encode_zend_native_array_isset_key(
+							address(container_base, container_offset),
+							address(frame_reg, key_offset), out);
+					}, value);
 			} else {
 				tested = EncodeBase::encode_zend_native_array_isset_key(
 					std::move(container_address), std::move(key_address),
@@ -8975,6 +9035,27 @@ bool ZendCompilerX64::compile_inst_impl(
 					: EncodeBase::encode_zend_native_array_find_key_w(
 						std::move(container_address), std::move(key_address),
 						element);
+			} else if (split_string_key) {
+				const bool testing = tests || access == ElementAccess::Coalesce;
+				found = string_key_split(
+					[&](ValuePart &out) {
+						return testing
+							? EncodeBase::encode_zend_native_array_test_string_key(
+								address(container_base, container_offset),
+								address(frame_reg, key_offset), out)
+							: EncodeBase::encode_zend_native_array_find_string_key(
+								address(container_base, container_offset),
+								address(frame_reg, key_offset), out);
+					},
+					[&](ValuePart &out) {
+						return testing
+							? EncodeBase::encode_zend_native_array_test_key(
+								address(container_base, container_offset),
+								address(frame_reg, key_offset), out)
+							: EncodeBase::encode_zend_native_array_find_key(
+								address(container_base, container_offset),
+								address(frame_reg, key_offset), out);
+					}, element);
 			} else if (tests || access == ElementAccess::Coalesce) {
 				/* An undefined or null container has no element to test. */
 				found = key_literal
