@@ -17437,22 +17437,13 @@ bool ZendCompilerX64::compile_inst_impl(
 										+ call.direct_call->result_operand.index)
 									* sizeof(zval)));
 						} else {
-							ScratchReg slot_index{this};
-							auto slot_index_reg = slot_index.alloc_gp();
-							ASM(MOV64rm, slot_index_reg,
-								FE_MEM(result_frame_reg, 0, FE_NOREG,
-									static_cast<int32_t>(
-										offsetof(zend_execute_data, func))));
-							ASM(MOV32rm, slot_index_reg,
-								FE_MEM(slot_index_reg, 0, FE_NOREG,
-									static_cast<int32_t>(
-										offsetof(zend_op_array, last_var))));
-							ASM(ADD64ri, slot_index_reg,
-								static_cast<int32_t>(
-									ZEND_CALL_FRAME_SLOT
-										+ call.direct_call->result_operand.index));
-							ASM(SHL64ri, slot_index_reg, 4);
-							ASM(ADD64rr, result_slot_reg, slot_index_reg);
+							/* The caller frame belongs to this function: its slot
+							 * layout is a compile-time constant. */
+							ASM(ADD64ri, result_slot_reg, static_cast<int32_t>(
+								(ZEND_CALL_FRAME_SLOT
+									+ adaptor->plan()->source_frame_variable_count
+									+ call.direct_call->result_operand.index)
+								* sizeof(zval)));
 						}
 						if (adaptor->machine_kind(node.result)
 								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
@@ -18011,8 +18002,7 @@ bool ZendCompilerX64::compile_inst_impl(
 							generate_raw_jump(Jump::je, stack_guarded);
 							ASM(MOV64rm, first_reg,
 								FE_MEM(first_reg, 0, FE_NOREG, 0));
-							ASM(MOV64rr, second_reg, FE_SP);
-							ASM(CMP64rr, second_reg, first_reg);
+							ASM(CMP64rr, FE_SP, first_reg);
 							generate_raw_jump(Jump::jbe, call_slow_target());
 							label_place(stack_guarded);
 						}
@@ -18302,23 +18292,13 @@ bool ZendCompilerX64::compile_inst_impl(
 												->result_operand.index)
 										* sizeof(zval)));
 							} else {
-								ScratchReg slot{this};
-								auto slot_reg = slot.alloc_gp();
-								ASM(MOV64rm, slot_reg,
-									FE_MEM(frame_reg, 0, FE_NOREG,
-										static_cast<int32_t>(offsetof(
-											zend_execute_data, func))));
-								ASM(MOV32rm, slot_reg,
-									FE_MEM(slot_reg, 0, FE_NOREG,
-										static_cast<int32_t>(offsetof(
-											zend_op_array, last_var))));
-								ASM(ADD64ri, slot_reg,
-									static_cast<int32_t>(
-										ZEND_CALL_FRAME_SLOT
-											+ call.direct_call
-												->result_operand.index));
-								ASM(SHL64ri, slot_reg, 4);
-								ASM(ADD64rr, second_reg, slot_reg);
+								/* The caller frame belongs to this function: its slot
+								 * layout is a compile-time constant. */
+								ASM(ADD64ri, second_reg, static_cast<int32_t>(
+									(ZEND_CALL_FRAME_SLOT
+										+ adaptor->plan()->source_frame_variable_count
+										+ call.direct_call->result_operand.index)
+									* sizeof(zval)));
 							}
 							ASM(MOV64mr,
 								FE_MEM(callee_reg, 0, FE_NOREG,
@@ -18539,9 +18519,7 @@ bool ZendCompilerX64::compile_inst_impl(
 							FE_MEM(first_reg, 0, FE_NOREG,
 								static_cast<int32_t>(offsetof(
 									zend_op_array, run_time_cache__ptr))));
-						ASM(MOV64rr, first_reg, cache_reg);
-						ASM(AND64ri, first_reg, 1);
-						ASM(TEST64rr, first_reg, first_reg);
+						ASM(TEST32ri, cache_reg, 1);
 						auto cache_resolved = text_writer.label_create();
 						generate_raw_jump(Jump::je, cache_resolved);
 						ASM(MOV64rm, first_reg,
@@ -18819,10 +18797,10 @@ bool ZendCompilerX64::compile_inst_impl(
 						if (local_component_call) {
 							emit_direct_call_stack_guard_position(
 								second_reg, call.component_target_index);
+							ASM(CMP64rr, second_reg, first_reg);
 						} else {
-							ASM(MOV64rr, second_reg, FE_SP);
+							ASM(CMP64rr, FE_SP, first_reg);
 						}
-						ASM(CMP64rr, second_reg, first_reg);
 						generate_raw_jump(Jump::jbe, call_slow_target());
 						label_place(stack_guarded);
 					}
@@ -18849,9 +18827,9 @@ bool ZendCompilerX64::compile_inst_impl(
 
 					auto callee_reg = fast_callee_argument_register.cur_reg();
 					ASM(MOV64rr, callee_reg, first_reg);
-					ASM(MOV64rr, second_reg, callee_reg);
-					ASM(ADD64ri, second_reg,
-						static_cast<int32_t>(reservation_size));
+					ASM(LEA64rm, second_reg,
+						FE_MEM(callee_reg, 0, FE_NOREG,
+							static_cast<int32_t>(reservation_size)));
 					{
 						ScratchReg address{this};
 						auto address_reg = address.alloc_gp();
@@ -19073,21 +19051,13 @@ bool ZendCompilerX64::compile_inst_impl(
 									+ call.direct_call->result_operand.index)
 								* sizeof(zval)));
 						} else {
-							ScratchReg slot{this};
-							auto slot_reg = slot.alloc_gp();
-							ASM(MOV64rm, slot_reg,
-								FE_MEM(frame_reg, 0, FE_NOREG,
-									static_cast<int32_t>(
-										offsetof(zend_execute_data, func))));
-							ASM(MOV32rm, slot_reg,
-								FE_MEM(slot_reg, 0, FE_NOREG,
-									static_cast<int32_t>(
-										offsetof(zend_op_array, last_var))));
-							ASM(ADD64ri, slot_reg, static_cast<int32_t>(
-								ZEND_CALL_FRAME_SLOT
-									+ call.direct_call->result_operand.index));
-							ASM(SHL64ri, slot_reg, 4);
-							ASM(ADD64rr, second_reg, slot_reg);
+							/* The caller frame belongs to this function: its slot
+							 * layout is a compile-time constant. */
+							ASM(ADD64ri, second_reg, static_cast<int32_t>(
+								(ZEND_CALL_FRAME_SLOT
+									+ adaptor->plan()->source_frame_variable_count
+									+ call.direct_call->result_operand.index)
+								* sizeof(zval)));
 						}
 					}
 					ASM(MOV64mr,
@@ -19596,45 +19566,100 @@ bool ZendCompilerX64::compile_inst_impl(
 					ScratchReg metadata_second{this};
 					auto metadata_first_reg = metadata_first.alloc_gp();
 					auto metadata_second_reg = metadata_second.alloc_gp();
-					ASM(MOV64rr, metadata_second_reg, callee_reg);
-					ASM(ADD64ri, metadata_second_reg,
-						static_cast<int32_t>(call.direct_call->frame_size));
+					/* The activation register is biased so that every field
+					 * is reachable with an 8-bit displacement. */
+					constexpr int32_t activation_bias = 0x80;
+					static_assert(sizeof(zend_native_direct_activation)
+						<= 2 * activation_bias);
+					const auto activation_field = [&](size_t field) {
+						return FE_MEM(metadata_second_reg, 0, FE_NOREG,
+							static_cast<int32_t>(field) - activation_bias);
+					};
+					ASM(LEA64rm, metadata_second_reg,
+						FE_MEM(callee_reg, 0, FE_NOREG,
+							static_cast<int32_t>(call.direct_call->frame_size)
+								+ activation_bias));
 					ASM(MOV64mr,
-						FE_MEM(metadata_second_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_direct_activation, caller))),
+						activation_field(offsetof(
+							zend_native_direct_activation, caller)),
 						frame_reg);
 					ASM(MOV64mr,
-						FE_MEM(metadata_second_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_direct_activation, callee))),
+						activation_field(offsetof(
+							zend_native_direct_activation, callee)),
 						callee_reg);
 					if (local_component_call) {
 						ASM(MOV64mi,
-							FE_MEM(metadata_second_reg, 0, FE_NOREG,
-								static_cast<int32_t>(offsetof(
-									zend_native_direct_activation, cell))),
+							activation_field(offsetof(
+								zend_native_direct_activation, cell)),
 							0);
 					} else {
 						ASM(MOV64mr,
-							FE_MEM(metadata_second_reg, 0, FE_NOREG,
-								static_cast<int32_t>(offsetof(
-									zend_native_direct_activation, cell))),
+							activation_field(offsetof(
+								zend_native_direct_activation, cell)),
 							cell_reg);
 					}
 					published_code_reg = published_code.alloc_gp();
 					ASM(MOV64rm, published_code_reg,
 						FE_MEM(FE_BP, 0, FE_NOREG, published_code_slot));
 					ASM(MOV64mr,
-						FE_MEM(metadata_second_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_direct_activation, code))),
+						activation_field(offsetof(
+							zend_native_direct_activation, code)),
 						published_code_reg);
 					ASM(MOV64mr,
-						FE_MEM(metadata_second_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_direct_activation, descriptor))),
+						activation_field(offsetof(
+							zend_native_direct_activation, descriptor)),
 						descriptor_reg);
+					/* status and the first four flags share one quadword,
+					 * the remaining flags (fiber_published is rewritten on
+					 * every suspend) the next one. */
+					static_assert(IS_UNDEF == 0);
+					static_assert(offsetof(zend_native_direct_activation,
+							status) % 8 == 0);
+					static_assert(offsetof(zend_native_direct_activation,
+							uses_discarded_return)
+						== offsetof(zend_native_direct_activation, status) + 4);
+					static_assert(offsetof(zend_native_direct_activation,
+							raw_arguments_owned)
+						== offsetof(zend_native_direct_activation, status) + 5);
+					static_assert(offsetof(zend_native_direct_activation,
+							frame_initialized)
+						== offsetof(zend_native_direct_activation, status) + 6);
+					static_assert(offsetof(zend_native_direct_activation,
+							frame_requires_finish)
+						== offsetof(zend_native_direct_activation, status) + 7);
+					static_assert(offsetof(zend_native_direct_activation,
+							cell_active)
+						== offsetof(zend_native_direct_activation, status) + 8);
+					static_assert(offsetof(zend_native_direct_activation,
+							fiber_published)
+						< offsetof(zend_native_direct_activation, status) + 16);
+					static_assert(sizeof(zend_native_direct_activation)
+						>= offsetof(zend_native_direct_activation, status) + 16);
+					ASM(MOV64ri, metadata_first_reg,
+						static_cast<int64_t>(
+							(uint64_t{result_unused ? 1u : 0u} << 32)
+							| (uint64_t{1} << 48) | (uint64_t{1} << 56)));
+					ASM(MOV64mr,
+						activation_field(offsetof(
+							zend_native_direct_activation, status)),
+						metadata_first_reg);
+					ASM(MOV64mi,
+						activation_field(offsetof(
+							zend_native_direct_activation, status) + 8),
+						generation_leased ? 0 : 1);
+					ASM(MOV64mi,
+						activation_field(offsetof(
+							zend_native_direct_activation, discarded_return)),
+						0);
+					ASM(MOV64mi,
+						activation_field(offsetof(
+							zend_native_direct_activation, discarded_return)
+							+ 8),
+						0);
+					ASM(MOV64mi,
+						activation_field(offsetof(
+							zend_native_direct_activation, pending_call)),
+						0);
 					ASM(MOV64rm, metadata_first_reg,
 						FE_MEM(context_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
@@ -19643,97 +19668,14 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(MOV64rm, descriptor_reg,
 						FE_MEM(metadata_first_reg, 0, FE_NOREG, 0));
 					ASM(MOV64mr,
-						FE_MEM(metadata_second_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_direct_activation, previous))),
+						activation_field(offsetof(
+							zend_native_direct_activation, previous)),
 						descriptor_reg);
-					ASM(MOV64mi,
-						FE_MEM(metadata_second_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_direct_activation,
-								discarded_return))),
-						0);
-					ASM(MOV64mi,
-						FE_MEM(metadata_second_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_direct_activation,
-								discarded_return) + 8)),
-						0);
-					ASM(MOV32mi,
-						FE_MEM(metadata_second_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_direct_activation,
-								discarded_return)
-								+ offsetof(zval, u1.type_info))),
-						IS_UNDEF);
-					ASM(MOV64mi,
-						FE_MEM(metadata_second_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_direct_activation, status))),
-						0);
-					ASM(MOV8mi,
-						FE_MEM(metadata_second_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_direct_activation,
-								uses_discarded_return))),
-						result_unused ? 1 : 0);
-					ASM(MOV8mi,
-						FE_MEM(metadata_second_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_direct_activation,
-								raw_arguments_owned))),
-						0);
-					ASM(MOV8mi,
-						FE_MEM(metadata_second_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_direct_activation,
-								frame_initialized))),
-						1);
-					ASM(MOV8mi,
-						FE_MEM(metadata_second_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_direct_activation,
-								frame_requires_finish))),
-						1);
-					ASM(MOV8mi,
-						FE_MEM(metadata_second_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_direct_activation,
-								cell_active))),
-						generation_leased ? 0 : 1);
-					ASM(MOV8mi,
-						FE_MEM(metadata_second_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_direct_activation,
-								dynamic_target))),
-						0);
-					ASM(MOV8mi,
-						FE_MEM(metadata_second_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_direct_activation,
-								internal_target))),
-						0);
-					ASM(MOV8mi,
-						FE_MEM(metadata_second_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_direct_activation,
-								generator_created))),
-						0);
-					ASM(MOV8mi,
-						FE_MEM(metadata_second_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_direct_activation,
-								setup_record))),
-						0);
-					ASM(MOV64mi,
-						FE_MEM(metadata_second_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_direct_activation,
-								pending_call))),
-						0);
+					ASM(LEA64rm, descriptor_reg,
+						activation_field(0));
 					ASM(MOV64mr,
 						FE_MEM(metadata_first_reg, 0, FE_NOREG, 0),
-						metadata_second_reg);
+						descriptor_reg);
 					ASM(MOV64rm, metadata_first_reg,
 						FE_MEM(context_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
@@ -19919,18 +19861,19 @@ bool ZendCompilerX64::compile_inst_impl(
 								active_direct_call))));
 					ASM(MOV64rm, activation_reg,
 						FE_MEM(probe_reg, 0, FE_NOREG, 0));
-					ASM(MOV32mr,
-						FE_MEM(activation_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_direct_activation, status))),
-						fast_status.cur_reg_or_load(this));
+					{
+						const auto status_reg =
+							fast_status.cur_reg_or_load(this);
+						ASM(MOV32mr,
+							FE_MEM(activation_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_native_direct_activation, status))),
+							status_reg);
+						static_assert(ZEND_NATIVE_RETURNED == 0);
+						ASM(TEST32rr, status_reg, status_reg);
+					}
 					fast_status.reset(this);
 					auto complete_fast = text_writer.label_create();
-					ASM(CMP32mi,
-						FE_MEM(activation_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_native_direct_activation, status))),
-						ZEND_NATIVE_RETURNED);
 					generate_raw_jump(Jump::jne, complete_fast);
 					ASM(MOV64rm, probe_reg,
 						FE_MEM(post_context_reg, 0, FE_NOREG,
@@ -19962,19 +19905,24 @@ bool ZendCompilerX64::compile_inst_impl(
 					generate_raw_jump(Jump::jne, complete_fast);
 					ASM(TEST32ri, probe_reg, ZEND_CALL_HAS_SYMBOL_TABLE);
 					generate_raw_jump(Jump::jne, complete_fast);
-					ASM(MOV64rm, probe_reg,
-						FE_MEM(post_callee_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_execute_data, return_value))));
+					const bool boxed_result_written =
+						!result_unused
+						&& ((call.direct_call->flags
+								& ZEND_NATIVE_DIRECT_CALL_REQUIRE_SCALAR_RESULT)
+								== 0
+							|| call.direct_call->result_type
+								== ZEND_MIR_SCALAR_TYPE_NONE);
+					if (!boxed_result_written) {
+						ASM(MOV64rm, probe_reg,
+							FE_MEM(post_callee_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_execute_data, return_value))));
+					}
 					if (result_unused) {
 						ASM(CMP32mi, FE_MEM(probe_reg, 0, FE_NOREG, 8),
 							IS_DOUBLE);
 						generate_raw_jump(Jump::ja, complete_fast);
-					} else if ((call.direct_call->flags
-								& ZEND_NATIVE_DIRECT_CALL_REQUIRE_SCALAR_RESULT)
-								== 0
-							|| call.direct_call->result_type
-								== ZEND_MIR_SCALAR_TYPE_NONE) {
+					} else if (boxed_result_written) {
 						/* The callee already wrote the complete boxed zval. */
 					} else if (call.direct_call->result_type
 							== ZEND_MIR_SCALAR_TYPE_I1) {
@@ -20012,13 +19960,11 @@ bool ZendCompilerX64::compile_inst_impl(
 							}
 							const int32_t offset = static_cast<int32_t>(
 								(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval));
-							ASM(MOV32rm, probe_reg,
+							ASM(TEST8mi,
 								FE_MEM(post_callee_reg, 0, FE_NOREG,
 									offset + static_cast<int32_t>(
-										offsetof(zval, u1.type_info))));
-							ASM(AND32ri, probe_reg,
-								IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-							ASM(TEST32rr, probe_reg, probe_reg);
+										offsetof(zval, u1.v.type_flags))),
+								IS_TYPE_REFCOUNTED);
 							auto released = text_writer.label_create();
 							generate_raw_jump(Jump::je, released);
 							ASM(MOV64rm, counted_reg,
@@ -20054,13 +20000,11 @@ bool ZendCompilerX64::compile_inst_impl(
 							const int32_t offset = static_cast<int32_t>(
 								(ZEND_CALL_FRAME_SLOT + frame_slot)
 									* sizeof(zval));
-							ASM(MOV32rm, probe_reg,
+							ASM(TEST8mi,
 								FE_MEM(post_callee_reg, 0, FE_NOREG,
 									offset + static_cast<int32_t>(
-										offsetof(zval, u1.type_info))));
-							ASM(AND32ri, probe_reg,
-								IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-							ASM(TEST32rr, probe_reg, probe_reg);
+										offsetof(zval, u1.v.type_flags))),
+								IS_TYPE_REFCOUNTED);
 							auto released = text_writer.label_create();
 							generate_raw_jump(Jump::je, released);
 							ASM(MOV64rm, counted_reg,
@@ -20415,23 +20359,13 @@ bool ZendCompilerX64::compile_inst_impl(
 										->result_operand.index)
 								* sizeof(zval)));
 					} else {
-						ScratchReg slot_index{this};
-						auto slot_index_reg = slot_index.alloc_gp();
-						ASM(MOV64rm, slot_index_reg,
-							FE_MEM(result_frame_reg, 0, FE_NOREG,
-								static_cast<int32_t>(
-									offsetof(zend_execute_data, func))));
-						ASM(MOV32rm, slot_index_reg,
-							FE_MEM(slot_index_reg, 0, FE_NOREG,
-								static_cast<int32_t>(
-									offsetof(zend_op_array, last_var))));
-						ASM(ADD64ri, slot_index_reg,
-							static_cast<int32_t>(
-								ZEND_CALL_FRAME_SLOT
-									+ call.direct_call
-										->result_operand.index));
-						ASM(SHL64ri, slot_index_reg, 4);
-						ASM(ADD64rr, result_slot_reg, slot_index_reg);
+						/* The caller frame belongs to this function: its slot
+						 * layout is a compile-time constant. */
+						ASM(ADD64ri, result_slot_reg, static_cast<int32_t>(
+							(ZEND_CALL_FRAME_SLOT
+								+ adaptor->plan()->source_frame_variable_count
+								+ call.direct_call->result_operand.index)
+							* sizeof(zval)));
 					}
 					auto result = result_ref(node.result);
 					const ValueParts parts = val_parts(node.result);
