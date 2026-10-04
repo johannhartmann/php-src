@@ -892,6 +892,10 @@ uint32_t zend_native_call_fast_leave(
 void zend_native_call_fast_release_cv(zval *variable);
 void zend_native_call_fast_undefined_argument(
 	zend_execute_data *caller, uint32_t variable, uint32_t source_position);
+/* The one-character strings as zvals, by byte: a string offset read in
+ * native code copies the element its byte selects. */
+extern zval zend_native_char_strings[256];
+
 void zend_native_execution_context_init(
 	zend_native_execution_context *context);
 /*

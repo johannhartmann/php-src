@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-#define ZEND_NATIVE_RUNTIME_ABI_VERSION 80u
+#define ZEND_NATIVE_RUNTIME_ABI_VERSION 81u
 
 typedef void (*zend_native_source_probe_t)(
 	void *context,
@@ -246,7 +246,10 @@ typedef enum _zend_native_runtime_helper_id {
 	ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY_ADDRESS = 214,
 	ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_ELEMENT_ADDRESS = 215,
 	ZEND_NATIVE_HELPER_CALL_FAST_RELEASE_CV = 216,
-	ZEND_NATIVE_HELPER_COUNT = 217
+	/* Data, not a function: the one-character string zvals (string
+	 * offset reads point at them). */
+	ZEND_NATIVE_HELPER_CHAR_STRINGS = 217,
+	ZEND_NATIVE_HELPER_COUNT = 218
 } zend_native_runtime_helper_id;
 
 /*

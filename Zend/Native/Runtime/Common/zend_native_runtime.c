@@ -1065,6 +1065,8 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 			| ZEND_NATIVE_RUNTIME_EFFECT_THROW
 			| ZEND_NATIVE_RUNTIME_EFFECT_BAILOUT,
 		(const void *) zend_native_call_fast_release_cv},
+	{ZEND_NATIVE_HELPER_CHAR_STRINGS, 0,
+		(const void *) zend_native_char_strings},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {

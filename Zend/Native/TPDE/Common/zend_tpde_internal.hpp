@@ -677,6 +677,7 @@ struct zend_tpde_long_incdec {
 	bool has_result;
 	bool increment;
 	bool post;
+	bool indirect;
 };
 
 struct zend_tpde_value_condition {
@@ -746,6 +747,10 @@ struct zend_tpde_source_opcode {
 	 * long or a double, IS_UNDEF otherwise. */
 	uint8_t op1_known_type;
 	uint8_t op2_known_type;
+	/* Zend's inferred MAY_BE_* mask of the operand (literals: the bit of
+	 * their type), UINT32_MAX when unknown. */
+	uint32_t op1_may_be;
+	uint32_t op2_may_be;
 	uint32_t op1_var;
 	uint32_t op2_var;
 	uint32_t result_var;
@@ -1890,7 +1895,7 @@ static inline bool zend_tpde_long_assign_op_at(
 
 static inline bool zend_tpde_long_incdec_at(
 	const zend_tpde_instruction &instruction,
-	zend_tpde_long_incdec *out)
+	zend_tpde_long_incdec *out, bool allow_indirect = false)
 {
 	const zend_mir_executable_value_ref &operation =
 		instruction.value_operation;
@@ -1906,7 +1911,9 @@ static inline bool zend_tpde_long_incdec_at(
 				&& operation.source_opcode != ZEND_POST_DEC)
 			|| (operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
 				&& operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
-			|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+			|| (operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+				&& (!allow_indirect
+					|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_VAR))
 			|| operation.op1_storage_id == ZEND_MIR_ID_INVALID) {
 		return false;
 	}
@@ -1942,6 +1949,8 @@ static inline bool zend_tpde_long_incdec_at(
 	out->operand_offset = static_cast<uint32_t>(operand_offset);
 	out->result_offset = static_cast<uint32_t>(result_offset);
 	out->has_result = has_result;
+	/* A VAR holds the INDIRECT a write fetch (FETCH_DIM_RW) left. */
+	out->indirect = operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR;
 	out->increment = operation.source_opcode == ZEND_PRE_INC
 		|| operation.source_opcode == ZEND_POST_INC;
 	out->post = operation.source_opcode == ZEND_POST_INC

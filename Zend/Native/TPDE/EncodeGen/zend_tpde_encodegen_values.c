@@ -585,6 +585,162 @@ uint64_t zend_native_array_isset_idx(const zval *container, uint64_t h)
 		? zend_native_find_index(table, h) : answer);
 }
 
+/*
+ * The lookups above for a container Zend's type inference proves to be an
+ * array, neither undefined nor a reference: the table directly. A test of
+ * such a container is its lookup; a write fetch still requires the table
+ * to have no other owner.
+ */
+ZEND_NATIVE_SNIPPET_INLINE const HashTable *zend_native_known_table(
+	const zval *container)
+{
+	__builtin_assume(Z_ARRVAL_P(container) != NULL);
+	return Z_ARRVAL_P(container);
+}
+
+ZEND_NATIVE_SNIPPET_INLINE const HashTable *zend_native_known_table_w(
+	const zval *container)
+{
+	return GC_REFCOUNT(Z_ARRVAL_P(container)) == 1
+		? zend_native_known_table(container) : NULL;
+}
+
+uintptr_t zend_native_known_find_literal(
+	const zval *container, const zval *key)
+{
+	return zend_native_find_value(zend_native_known_table(container),
+		(uint64_t) Z_LVAL_P(key), Z_TYPE_P(key), true);
+}
+
+uintptr_t zend_native_known_find_key(const zval *container, const zval *key)
+{
+	key = zend_native_key_deref(key);
+	return zend_native_find_value(zend_native_known_table(container),
+		(uint64_t) Z_LVAL_P(key), Z_TYPE_P(key), false);
+}
+
+uintptr_t zend_native_known_find_string_key(
+	const zval *container, const zval *key)
+{
+	return zend_native_find_string(zend_native_known_table(container),
+		Z_STR_P(key));
+}
+
+uintptr_t zend_native_known_find_str(
+	const zval *container, const zend_string *name, uint64_t h)
+{
+	return zend_native_find_string_h(zend_native_known_table(container),
+		name, h);
+}
+
+uintptr_t zend_native_known_find_idx(const zval *container, uint64_t h)
+{
+	return zend_native_find_index(zend_native_known_table(container), h);
+}
+
+uintptr_t zend_native_known_find_literal_w(
+	const zval *container, const zval *key)
+{
+	return zend_native_find_value(zend_native_known_table_w(container),
+		(uint64_t) Z_LVAL_P(key), Z_TYPE_P(key), true);
+}
+
+uintptr_t zend_native_known_find_key_w(
+	const zval *container, const zval *key)
+{
+	key = zend_native_key_deref(key);
+	return zend_native_find_value(zend_native_known_table_w(container),
+		(uint64_t) Z_LVAL_P(key), Z_TYPE_P(key), false);
+}
+
+uintptr_t zend_native_known_find_str_w(
+	const zval *container, const zend_string *name, uint64_t h)
+{
+	const HashTable *table = zend_native_known_table_w(container);
+
+	return table != NULL ? zend_native_find_string_h(table, name, h)
+		: ZEND_NATIVE_ELEMENT_UNKNOWN;
+}
+
+uintptr_t zend_native_known_find_idx_w(const zval *container, uint64_t h)
+{
+	const HashTable *table = zend_native_known_table_w(container);
+
+	return table != NULL ? zend_native_find_index(table, h)
+		: ZEND_NATIVE_ELEMENT_UNKNOWN;
+}
+
+uint64_t zend_native_known_isset_literal(
+	const zval *container, const zval *key)
+{
+	return zend_native_element_isset(zend_native_find_value(
+		zend_native_known_table(container), (uint64_t) Z_LVAL_P(key),
+		Z_TYPE_P(key), true));
+}
+
+uint64_t zend_native_known_isset_key(const zval *container, const zval *key)
+{
+	key = zend_native_key_deref(key);
+	return zend_native_element_isset(zend_native_find_value(
+		zend_native_known_table(container), (uint64_t) Z_LVAL_P(key),
+		Z_TYPE_P(key), false));
+}
+
+uint64_t zend_native_known_isset_string_key(
+	const zval *container, const zval *key)
+{
+	return zend_native_element_isset(zend_native_find_string(
+		zend_native_known_table(container), Z_STR_P(key)));
+}
+
+uint64_t zend_native_known_isset_str(
+	const zval *container, const zend_string *name, uint64_t h)
+{
+	return zend_native_element_isset(zend_native_find_string_h(
+		zend_native_known_table(container), name, h));
+}
+
+uint64_t zend_native_known_isset_idx(const zval *container, uint64_t h)
+{
+	return zend_native_element_isset(zend_native_find_index(
+		zend_native_known_table(container), h));
+}
+
+/*
+ * A string offset read: the one-character string a non-negative integer
+ * offset inside a string container selects, as a pointer into the runtime's
+ * table of one-character zvals (chars). Other offsets and containers are
+ * ZEND_NATIVE_ELEMENT_UNKNOWN: the helper warns or throws for them.
+ */
+ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_string_offset(
+	const zval *container, uint64_t offset, const zval *chars)
+{
+	if (Z_TYPE_P(container) == IS_REFERENCE) {
+		container = &Z_REF_P(container)->val;
+	}
+	if (Z_TYPE_P(container) != IS_STRING
+			|| offset >= (uint64_t) Z_STRLEN_P(container)) {
+		return ZEND_NATIVE_ELEMENT_UNKNOWN;
+	}
+	return (uintptr_t)
+		&chars[(unsigned char) Z_STRVAL_P(container)[offset]];
+}
+
+uintptr_t zend_native_string_offset_key(
+	const zval *container, const zval *key, const zval *chars)
+{
+	key = zend_native_key_deref(key);
+	return Z_TYPE_P(key) == IS_LONG
+		? zend_native_string_offset(container, (uint64_t) Z_LVAL_P(key), chars)
+		: ZEND_NATIVE_ELEMENT_UNKNOWN;
+}
+
+uintptr_t zend_native_string_offset_idx(
+	const zval *container, uint64_t offset, const zval *chars)
+{
+	return zend_native_string_offset(container, offset, chars);
+}
+
 /* The array of a container zval, through a reference, or NULL. */
 const HashTable *zend_native_zval_table(const zval *container)
 {
@@ -690,6 +846,61 @@ uint64_t zend_native_zval_identical(const zval *value, const zval *literal)
 	 * registers: two cursors and the remaining length. */
 	left = Z_STRVAL_P(value);
 	right = Z_STRVAL_P(literal);
+	for (; length >= sizeof(uint64_t); length -= sizeof(uint64_t)) {
+		if (*(const uint64_t *) left != *(const uint64_t *) right) {
+			return 0;
+		}
+		left += sizeof(uint64_t);
+		right += sizeof(uint64_t);
+	}
+	for (; length != 0; length--) {
+		if (*left++ != *right++) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+/*
+ * The same for two variables: the second operand is a CV, which may also
+ * hold a reference or be undefined (the helper warns about it).
+ */
+uint64_t zend_native_zval_identical_any(const zval *value, const zval *other)
+{
+	const char *left;
+	const char *right;
+	size_t length;
+
+	if (Z_TYPE_P(value) == IS_REFERENCE) {
+		value = &Z_REF_P(value)->val;
+	}
+	if (Z_TYPE_P(other) == IS_REFERENCE) {
+		other = &Z_REF_P(other)->val;
+	}
+	if (Z_TYPE_P(value) == IS_UNDEF || Z_TYPE_P(other) == IS_UNDEF) {
+		return ZEND_NATIVE_IDENTICAL_UNKNOWN;
+	}
+	if (Z_TYPE_P(value) != Z_TYPE_P(other)) {
+		return 0;
+	}
+	if (Z_TYPE_P(value) <= IS_TRUE) {
+		return 1;
+	}
+	if (Z_TYPE_P(value) == IS_LONG) {
+		return Z_LVAL_P(value) == Z_LVAL_P(other);
+	}
+	if (Z_TYPE_P(value) != IS_STRING) {
+		return ZEND_NATIVE_IDENTICAL_UNKNOWN;
+	}
+	if (Z_STR_P(value) == Z_STR_P(other)) {
+		return 1;
+	}
+	length = Z_STRLEN_P(value);
+	if (length != Z_STRLEN_P(other)) {
+		return 0;
+	}
+	left = Z_STRVAL_P(value);
+	right = Z_STRVAL_P(other);
 	for (; length >= sizeof(uint64_t); length -= sizeof(uint64_t)) {
 		if (*(const uint64_t *) left != *(const uint64_t *) right) {
 			return 0;
