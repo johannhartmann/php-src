@@ -37,6 +37,13 @@ public:
     return jt;
   }
 
+  /// Shortens jmp/jcc rel32 whose target lies within rel8 range and removes
+  /// jumps to the immediately following instruction. The function code must
+  /// be complete (cold area appended), the prologue not yet trimmed and the
+  /// fixups not yet handled. Code from \p body_begin on is compacted; labels,
+  /// fixups, jump tables and relocations follow it.
+  void relax_jumps(u32 body_begin);
+
 private:
   void handle_fixups();
 };

@@ -100,3 +100,18 @@ write code between `begin_func` and the prologue, such as an alternative
 entry with its own symbol, whose relocations keep their offsets.
 `FunctionWriterBase::begin_func_after_prefix()` then starts the function at
 the end of such code, which writes its own FDE first.
+
+## Short jumps (`src/x64/FunctionWriterX64.cpp`, `include/tpde/x64/FunctionWriterX64.hpp`, `include/tpde/x64/CompilerX64.hpp`, `include/tpde/Assembler.hpp`)
+
+Upstream encodes every forward jump with a 32-bit displacement. Here
+`CompilerX64::generate_raw_jump` always emits jmp/jcc rel32 with a label
+fixup, also to a label that is already placed, and the return sites of a
+function become fixups to a label in front of the epilogue.
+`FunctionWriterX64::relax_jumps`, called by `CompilerX64::finish_func` once
+the cold area is appended and before the prologue and epilogue are written,
+shortens every jump whose target lies within rel8 range to the 2-byte form
+and removes jumps to the next instruction. It iterates to a fixed point
+(shortening never lengthens another jump), compacts the code from the end of
+the reserved prologue on, and moves labels, the remaining fixups, jump
+tables and relocations (`DataSection::remap_relocation_offsets`) with it.
+Code before the prologue, such as an alternative entry, is not touched.

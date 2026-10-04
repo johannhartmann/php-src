@@ -4,6 +4,8 @@
 #include "tpde/x64/FunctionWriterX64.hpp"
 #include "fadec-enc2.h"
 
+#include <algorithm>
+
 namespace tpde::x64 {
 
 // TODO: use static constexpr array in C++23.
@@ -33,6 +35,156 @@ const FunctionWriterX64::TargetCIEInfo FunctionWriterX64::CIEInfo{
     .code_alignment_factor = 1, // ULEB128 1
     .data_alignment_factor = 120, // SLEB128 -8
 };
+
+void FunctionWriterX64::relax_jumps(u32 body_begin) {
+  assert(label_skew == 0 && !cold_active);
+  struct Jump {
+    u32 start;   ///< Offset of the jmp/jcc rel32 instruction.
+    u32 fixup;   ///< Index of its label fixup.
+    Label label; ///< Resolved target label.
+    u8 len;      ///< Current length: 5/6 (rel32), 2 (rel8) or 0 (removed).
+    u8 opcode;   ///< 0xeb for jmp, 0x70|cc for jcc.
+  };
+  util::SmallVector<Jump, 0> jumps;
+  for (u32 i = 0; i < label_fixups.size(); ++i) {
+    const LabelFixup &fixup = label_fixups[i];
+    if (fixup.kind != LabelFixupKind::X64_JMP_OR_MEM_DISP ||
+        fixup.off < body_begin + 2) {
+      continue;
+    }
+    const u8 *disp = begin_ptr() + fixup.off;
+    if (disp[-1] == 0xe9) {
+      jumps.push_back(Jump{fixup.off - 1, i, label_resolve_jump(fixup.label),
+                           5, 0xeb});
+    } else if (disp[-2] == 0x0f && (disp[-1] & 0xf0) == 0x80) {
+      jumps.push_back(Jump{fixup.off - 2, i, label_resolve_jump(fixup.label),
+                           6, u8(0x70 | (disp[-1] & 0x0f))});
+    }
+  }
+  if (jumps.empty()) {
+    return;
+  }
+  std::sort(jumps.begin(), jumps.end(),
+            [](const Jump &a, const Jump &b) { return a.start < b.start; });
+
+  // removed[k]: bytes removed by jumps[0..k-1]. Shortening a jump never
+  // lengthens another, so decisions taken with stale sums stay valid.
+  util::SmallVector<u32, 0> removed;
+  removed.resize(jumps.size() + 1);
+  const auto recount = [&] {
+    removed[0] = 0;
+    for (u32 k = 0; k < jumps.size(); ++k) {
+      const u32 full = jumps[k].opcode == 0xeb ? 5 : 6;
+      removed[k + 1] = removed[k] + (full - jumps[k].len);
+    }
+  };
+  // New offset of an old offset: bytes removed by jumps starting before it.
+  const auto map = [&](u32 off) -> u32 {
+    const auto it = std::lower_bound(
+        jumps.begin(), jumps.end(), off,
+        [](const Jump &jump, u32 value) { return jump.start < value; });
+    return off - removed[it - jumps.begin()];
+  };
+
+  recount();
+  for (bool changed = true; changed;) {
+    changed = false;
+    for (u32 k = 0; k < jumps.size(); ++k) {
+      Jump &jump = jumps[k];
+      if (jump.len <= 2) {
+        continue;
+      }
+      const u32 target = label_offsets[u32(jump.label)];
+      assert(target != ~0u && target < ColdAreaBase);
+      if (target == jump.start + jump.len) {
+        jump.len = 0;
+        changed = true;
+        continue;
+      }
+      const i64 delta = i64(map(target)) - (i64(jump.start - removed[k]) + 2);
+      if (delta >= -128 && delta <= 127) {
+        jump.len = 2;
+        changed = true;
+      }
+    }
+    recount();
+  }
+  if (removed[jumps.size()] == 0) {
+    return;
+  }
+
+  // Compact the code in place.
+  util::SmallVector<u32, 0> new_start;
+  new_start.resize(jumps.size());
+  u8 *const base = begin_ptr();
+  u32 read = jumps[0].start;
+  u32 write = read;
+  for (u32 k = 0; k < jumps.size(); ++k) {
+    const Jump &jump = jumps[k];
+    const u32 full = jump.opcode == 0xeb ? 5 : 6;
+    std::memmove(base + write, base + read, jump.start - read);
+    write += jump.start - read;
+    new_start[k] = write;
+    if (jump.len == 2) {
+      base[write] = jump.opcode;
+      base[write + 1] = 0;
+    } else if (jump.len == full) {
+      std::memmove(base + write, base + jump.start, full);
+    }
+    write += jump.len;
+    read = jump.start + full;
+  }
+  const u32 end = offset();
+  std::memmove(base + write, base + read, end - read);
+  write += end - read;
+  assert(end - write == removed[jumps.size()]);
+
+  for (u32 &off : label_offsets) {
+    if (off != ~0u && off >= body_begin) {
+      off = map(off);
+    }
+  }
+  util::SmallVector<u8, 0> is_jump;
+  is_jump.resize(label_fixups.size());
+  for (u32 k = 0; k < jumps.size(); ++k) {
+    is_jump[jumps[k].fixup] = 1;
+  }
+  util::SmallVector<LabelFixup, 0> kept;
+  for (u32 i = 0; i < label_fixups.size(); ++i) {
+    if (!is_jump[i]) {
+      LabelFixup fixup = label_fixups[i];
+      if (fixup.off >= body_begin) {
+        fixup.off = map(fixup.off);
+      }
+      kept.push_back(fixup);
+    }
+  }
+  for (u32 k = 0; k < jumps.size(); ++k) {
+    const Jump &jump = jumps[k];
+    if (jump.len == 2) {
+      const i64 delta =
+          i64(label_offsets[u32(jump.label)]) - (i64(new_start[k]) + 2);
+      assert(delta >= -128 && delta <= 127);
+      base[new_start[k] + 1] = u8(i8(delta));
+    } else if (jump.len != 0) {
+      // Keep the resolved target; handle_fixups resolves aliases again.
+      kept.push_back(LabelFixup{jump.label, new_start[k] + jump.len - 4u,
+                                LabelFixupKind::X64_JMP_OR_MEM_DISP});
+    }
+  }
+  label_fixups.clear();
+  for (const LabelFixup &fixup : kept) {
+    label_fixups.push_back(fixup);
+  }
+  for (JumpTable *jt : jump_tables) {
+    jt->off = map(jt->off);
+  }
+  section->remap_relocation_offsets(reloc_begin, body_begin,
+                                    [&](u64 off) { return u64(map(u32(off))); });
+  data_cur = base + write;
+  label_place_off = ~0u;
+  labels_at_place_off.clear();
+}
 
 void FunctionWriterX64::handle_fixups() {
   for (const LabelFixup &fixup : label_fixups) {

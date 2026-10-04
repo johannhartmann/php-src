@@ -156,6 +156,19 @@ public:
       }
     }
   }
+
+  /// Maps the offsets of relocations at or behind \p min_offset through
+  /// \p map, for code that was compacted in place.
+  template <typename Map>
+  void remap_relocation_offsets(const size_t reloc_start_off,
+                                const u64 min_offset,
+                                Map &&map) {
+    for (size_t i = reloc_start_off; i < relocs.size(); i++) {
+      if (relocs[i].offset >= min_offset) {
+        relocs[i].offset = map(relocs[i].offset);
+      }
+    }
+  }
 };
 
 /// Assembler base class.
