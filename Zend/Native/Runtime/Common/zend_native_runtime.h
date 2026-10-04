@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-#define ZEND_NATIVE_RUNTIME_ABI_VERSION 83u
+#define ZEND_NATIVE_RUNTIME_ABI_VERSION 84u
 
 typedef void (*zend_native_source_probe_t)(
 	void *context,

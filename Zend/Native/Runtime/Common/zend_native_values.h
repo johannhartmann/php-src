@@ -109,14 +109,11 @@ zend_native_status zend_native_value_assign(
  * offset or literal index (32-63). The result is unused.
  */
 zend_native_status zend_native_value_identical_direct(
-	zend_execute_data *execute_data, uint64_t encoded_op1,
-	uint64_t descriptor, uint64_t slots, uint64_t result_offset);
+	zend_execute_data *execute_data, uint64_t descriptor, uint64_t slots, uint64_t result_offset);
 zend_native_status zend_native_value_concat_direct(
-	zend_execute_data *execute_data, uint64_t encoded_op1,
-	uint64_t descriptor, uint64_t slots, uint64_t result_offset);
+	zend_execute_data *execute_data, uint64_t descriptor, uint64_t slots, uint64_t result_offset);
 zend_native_status zend_native_value_concat_assign_direct(
-	zend_execute_data *execute_data, uint64_t encoded_op1,
-	uint64_t descriptor, uint64_t slots);
+	zend_execute_data *execute_data, uint64_t descriptor, uint64_t slots);
 zend_native_status zend_native_value_assign_op(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,
@@ -202,8 +199,7 @@ ZEND_NATIVE_EXPLICIT_VALUE_HELPER(zend_native_value_fetch_dim_unset)
 
 ZEND_NATIVE_EXPLICIT_DIM_ASSIGN_HELPER(zend_native_value_assign_dim)
 zend_native_status zend_native_value_fetch_dim_r_direct(
-	zend_execute_data *execute_data, uint64_t encoded_op1,
-	uint64_t descriptor, uint64_t slots, uint64_t more_slots);
+	zend_execute_data *execute_data, uint64_t descriptor, uint64_t slots, uint64_t more_slots);
 /* ASSIGN_DIM of a CV (or FETCH_OBJ_W VAR) container from addresses: the
  * container slot, the key (NULL to append) and the value, and the direct
  * form's descriptor (kinds, flags, source position). */
@@ -211,8 +207,7 @@ zend_native_status zend_native_value_assign_dim_address(
 	zend_execute_data *execute_data, zval *container_slot, zval *key,
 	zval *value, uint64_t descriptor);
 zend_native_status zend_native_value_isset_isempty_dim_direct(
-	zend_execute_data *execute_data, uint64_t encoded_op1,
-	uint64_t descriptor, uint64_t slots, uint64_t more_slots);
+	zend_execute_data *execute_data, uint64_t descriptor, uint64_t slots, uint64_t more_slots);
 ZEND_NATIVE_EXPLICIT_DIM_ASSIGN_HELPER(zend_native_value_assign_dim_op)
 
 #undef ZEND_NATIVE_EXPLICIT_DIM_ASSIGN_HELPER

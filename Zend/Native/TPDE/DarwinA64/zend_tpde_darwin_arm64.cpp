@@ -62,6 +62,12 @@ public:
 
 private:
 	zend_native_image *image_;
+	/* A source operand in the runtime helpers' encoding. */
+	uint64_t encode_source_operand(const zend_mir_source_operand_ref &operand,
+			uint32_t unused_payload = ZEND_MIR_ID_INVALID) const {
+		return zend_tpde_encode_value_operand(operand,
+			adaptor->plan()->source_frame_variable_count, unused_payload);
+	}
 	std::vector<::tpde::SymRef> image_symbols_;
 	std::vector<::tpde::SymRef> image_slots_;
 	std::vector<::tpde::Label> generator_resume_labels_;
@@ -1142,13 +1148,13 @@ bool ZendCompilerA64::compile_boxed_cond_cold(IRInstRef instruction) {
 	builder.add_arg(CallArg{node.operands[0]});
 	const zend_mir_executable_value_ref &operation = mir.value_operation;
 	builder.add_arg(ValuePart{
-		zend_tpde_encode_value_operand(operation.op1), 8,
+		encode_source_operand(operation.op1), 8,
 		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 	builder.add_arg(ValuePart{
-		zend_tpde_encode_value_operand(operation.op2), 8,
+		encode_source_operand(operation.op2), 8,
 		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 	builder.add_arg(ValuePart{
-		zend_tpde_encode_value_operand(operation.result), 8,
+		encode_source_operand(operation.result), 8,
 		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 	builder.add_arg(ValuePart{operation.extended_value, 4,
 		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
@@ -2024,7 +2030,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				finally_call.add_arg(CallArg{
 					node.operands[dispatch_case.slow_frame_operand]});
 				finally_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.op1), 8,
+					encode_source_operand(operation.op1), 8,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				finally_call.add_arg(ValuePart{
 					operation.op2_unused_payload, 4,
@@ -2070,10 +2076,10 @@ bool ZendCompilerA64::compile_inst_impl(
 				catch_call.add_arg(
 					CallArg{node.operands[dispatch_case.frame_operand]});
 				catch_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.op1), 8,
+					encode_source_operand(operation.op1), 8,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				catch_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.result), 8,
+					encode_source_operand(operation.result), 8,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				catch_call.add_arg(ValuePart{
 					operation.extended_value, 4,
@@ -2116,14 +2122,14 @@ bool ZendCompilerA64::compile_inst_impl(
 					operation.op1_unused_payload, 4,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				receive_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(
+					encode_source_operand(
 						operation.op2, operation.op2_unused_payload),
 					8, DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				receive_call.add_arg(ValuePart{
 					operation.op2_unused_payload, 4,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				receive_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.result), 8,
+					encode_source_operand(operation.result), 8,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				receive_call.add_arg(ValuePart{
 					dispatch_case.source, 4, DarwinConfig::GP_BANK},
@@ -2151,21 +2157,21 @@ bool ZendCompilerA64::compile_inst_impl(
 					dispatch_case.target_opcode, 4, DarwinConfig::GP_BANK},
 					::tpde::CCAssignment{});
 				fragment_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(
+					encode_source_operand(
 						operation.op1, operation.op1_unused_payload),
 					8, DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				fragment_call.add_arg(ValuePart{
 					operation.op1_unused_payload, 4,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				fragment_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(
+					encode_source_operand(
 						operation.op2, operation.op2_unused_payload),
 					8, DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				fragment_call.add_arg(ValuePart{
 					operation.op2_unused_payload, 4,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				fragment_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(
+					encode_source_operand(
 						operation.result,
 						operation.result_unused_payload),
 					8, DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
@@ -2216,7 +2222,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					dispatch_case.source, 4, DarwinConfig::GP_BANK},
 					::tpde::CCAssignment{});
 				return_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.op1), 8,
+					encode_source_operand(operation.op1), 8,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				return_call.add_arg(ValuePart{
 					dispatch_case.target_opcode, 4, DarwinConfig::GP_BANK},
@@ -2240,7 +2246,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				throw_call.add_arg(
 					CallArg{node.operands[dispatch_case.frame_operand]});
 				throw_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.op1), 8,
+					encode_source_operand(operation.op1), 8,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				throw_call.add_arg(ValuePart{
 					dispatch_case.target_opcode, 4, DarwinConfig::GP_BANK},
@@ -2398,13 +2404,13 @@ bool ZendCompilerA64::compile_inst_impl(
 				branch_call.add_arg(
 					CallArg{node.operands[dispatch_case.frame_operand]});
 				branch_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.op1), 8,
+					encode_source_operand(operation.op1), 8,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				branch_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.op2), 8,
+					encode_source_operand(operation.op2), 8,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				branch_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.result), 8,
+					encode_source_operand(operation.result), 8,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				branch_call.add_arg(ValuePart{
 					operation.extended_value, 4, DarwinConfig::GP_BANK},
@@ -2458,9 +2464,9 @@ bool ZendCompilerA64::compile_inst_impl(
 			auto encode_operand = [&](const zend_mir_source_operand_ref &operand,
 					uint32_t unused_payload) {
 				return explicit_object_operands
-					? zend_tpde_encode_value_operand(
+					? encode_source_operand(
 						operand, unused_payload)
-					: zend_tpde_encode_value_operand(operand);
+					: encode_source_operand(operand);
 			};
 			zend::native::tpde::CCAssignerAppleA64 assigner;
 			CallBuilder operation_call{*this, assigner};
@@ -5045,8 +5051,8 @@ bool ZendCompilerA64::compile_inst_impl(
 		auto encode_operand = [&](const zend_mir_source_operand_ref &operand,
 				uint32_t unused_payload) {
 			return explicit_object_operands
-				? zend_tpde_encode_value_operand(operand, unused_payload)
-				: zend_tpde_encode_value_operand(operand);
+				? encode_source_operand(operand, unused_payload)
+				: encode_source_operand(operand);
 		};
 		builder.add_arg(ValuePart{
 			encode_operand(
@@ -9964,13 +9970,13 @@ bool ZendCompilerA64::compile_inst_impl(
 					const zend_mir_executable_value_ref &operation =
 						mir.value_operation;
 					builder.add_arg(ValuePart{
-						zend_tpde_encode_value_operand(operation.op1), 8,
+						encode_source_operand(operation.op1), 8,
 						DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 					builder.add_arg(ValuePart{
-						zend_tpde_encode_value_operand(operation.op2), 8,
+						encode_source_operand(operation.op2), 8,
 						DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 					builder.add_arg(ValuePart{
-						zend_tpde_encode_value_operand(operation.result), 8,
+						encode_source_operand(operation.result), 8,
 						DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 					builder.add_arg(ValuePart{operation.extended_value, 4,
 						DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
@@ -10336,13 +10342,13 @@ bool ZendCompilerA64::compile_inst_impl(
 					const zend_mir_executable_value_ref &operation =
 						mir.value_operation;
 					builder.add_arg(ValuePart{
-						zend_tpde_encode_value_operand(operation.op1), 8,
+						encode_source_operand(operation.op1), 8,
 						DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 					builder.add_arg(ValuePart{
-						zend_tpde_encode_value_operand(operation.op2), 8,
+						encode_source_operand(operation.op2), 8,
 						DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 					builder.add_arg(ValuePart{
-						zend_tpde_encode_value_operand(operation.result), 8,
+						encode_source_operand(operation.result), 8,
 						DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 					builder.add_arg(ValuePart{operation.extended_value, 4,
 						DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
@@ -10674,15 +10680,15 @@ bool ZendCompilerA64::compile_inst_impl(
 					const zend_mir_executable_value_ref &operation =
 						mir.value_operation;
 					builder.add_arg(ValuePart{
-						zend_tpde_encode_value_operand(operation.op1), 8,
+						encode_source_operand(operation.op1), 8,
 						DarwinConfig::GP_BANK},
 						::tpde::CCAssignment{});
 					builder.add_arg(ValuePart{
-						zend_tpde_encode_value_operand(operation.op2), 8,
+						encode_source_operand(operation.op2), 8,
 						DarwinConfig::GP_BANK},
 						::tpde::CCAssignment{});
 					builder.add_arg(ValuePart{
-						zend_tpde_encode_value_operand(operation.result), 8,
+						encode_source_operand(operation.result), 8,
 						DarwinConfig::GP_BANK},
 						::tpde::CCAssignment{});
 					builder.add_arg(ValuePart{operation.extended_value, 4,
@@ -10742,13 +10748,13 @@ bool ZendCompilerA64::compile_inst_impl(
 			const zend_mir_executable_value_ref &operation =
 				mir.value_operation;
 			builder.add_arg(ValuePart{
-				zend_tpde_encode_value_operand(operation.op1), 8,
+				encode_source_operand(operation.op1), 8,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.add_arg(ValuePart{
-				zend_tpde_encode_value_operand(operation.op2), 8,
+				encode_source_operand(operation.op2), 8,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.add_arg(ValuePart{
-				zend_tpde_encode_value_operand(operation.result), 8,
+				encode_source_operand(operation.result), 8,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.add_arg(ValuePart{operation.extended_value, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
@@ -13085,8 +13091,8 @@ bool ZendCompilerA64::compile_inst_impl(
 								UINT64_C(0), 4, DarwinConfig::GP_BANK},
 								::tpde::CCAssignment{});
 							receive_builder.add_arg(ValuePart{
-								static_cast<uint64_t>(ZEND_MIR_SOURCE_OPERAND_SLOT)
-									| (static_cast<uint64_t>(fixed_argument_count) << 16),
+								uint64_t{IS_CV} | ((uint64_t{ZEND_CALL_FRAME_SLOT}
+										+ fixed_argument_count) * sizeof(zval) << 8),
 								8, DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 							receive_builder.add_arg(ValuePart{
 								fixed_argument_count, 4, DarwinConfig::GP_BANK},
@@ -13860,7 +13866,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				CallBuilder result_builder{*this, result_assigner};
 				result_builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
 					result_builder.add_arg(ValuePart{
-						zend_tpde_encode_value_operand(call.call_site->result_operand), 8,
+						encode_source_operand(call.call_site->result_operand), 8,
 						DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 				result_builder.add_arg(ValuePart{
 					static_cast<uint32_t>(adaptor->exact_type(node.result)), 4,
@@ -14075,7 +14081,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					result_builder.add_arg(CallArg{
 						node.operands[frame_base + 2 + argument_count]});
 					result_builder.add_arg(ValuePart{
-						zend_tpde_encode_value_operand(
+						encode_source_operand(
 							call.call_site->result_operand),
 						8, DarwinConfig::GP_BANK},
 						::tpde::CCAssignment{});
@@ -14848,7 +14854,7 @@ bool ZendCompilerA64::compile_inst_impl(
 			builder.add_arg(ValuePart{record.source_position_id, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.add_arg(ValuePart{
-				zend_tpde_encode_value_operand(mir.value_operation.op1), 8,
+				encode_source_operand(mir.value_operation.op1), 8,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.add_arg(ValuePart{mir.value_operation.source_opcode, 4,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});

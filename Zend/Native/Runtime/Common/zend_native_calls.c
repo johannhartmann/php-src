@@ -1,6 +1,7 @@
 /* Native user-function calls over real Zend execution frames. */
 
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
+#include "Zend/Native/Runtime/Common/zend_native_operands.h"
 #include "Zend/Native/Runtime/Common/zend_native_values.h"
 
 #include "Zend/zend_exceptions.h"
@@ -535,69 +536,8 @@ static bool zend_native_frameless_decode_operand(
 	zend_execute_data *execute_data, uint64_t encoded,
 	uint8_t *operand_type, znode_op *operand)
 {
-	zend_mir_source_operand_kind kind =
-		(zend_mir_source_operand_kind) (encoded & UINT64_C(0xff));
-	zend_mir_source_slot_kind slot_kind =
-		(zend_mir_source_slot_kind) ((encoded >> 8) & UINT64_C(0xff));
-	uint32_t index = (uint32_t) (encoded >> 16);
-	uint32_t physical_slot;
-
-	if (execute_data == NULL || execute_data->func == NULL
-			|| !ZEND_USER_CODE(execute_data->func->type)
-			|| operand_type == NULL || operand == NULL) {
-		return false;
-	}
-	memset(operand, 0, sizeof(*operand));
-	if (kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
-		*operand_type = IS_UNUSED;
-		return index == ZEND_MIR_ID_INVALID;
-	}
-	if (kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
-		if (index >= execute_data->func->op_array.last_literal) {
-			return false;
-		}
-		*operand_type = IS_CONST;
-		operand->constant = index;
-		return true;
-	}
-	if (kind != ZEND_MIR_SOURCE_OPERAND_SLOT
-			&& kind != ZEND_MIR_SOURCE_OPERAND_SSA) {
-		return false;
-	}
-	switch (slot_kind) {
-		case ZEND_MIR_SOURCE_SLOT_CV:
-			if (index >= (uint32_t) execute_data->func->op_array.last_var) {
-				return false;
-			}
-			*operand_type = IS_CV;
-			physical_slot = index;
-			break;
-		case ZEND_MIR_SOURCE_SLOT_TMP:
-			if (index >= execute_data->func->op_array.T) {
-				return false;
-			}
-			*operand_type = IS_TMP_VAR;
-			physical_slot =
-				(uint32_t) execute_data->func->op_array.last_var + index;
-			break;
-		case ZEND_MIR_SOURCE_SLOT_VAR:
-			if (index >= execute_data->func->op_array.T) {
-				return false;
-			}
-			*operand_type = IS_VAR;
-			physical_slot =
-				(uint32_t) execute_data->func->op_array.last_var + index;
-			break;
-		default:
-			return false;
-	}
-	if (physical_slot > (UINT32_MAX / sizeof(zval))
-			- (uint32_t) ZEND_CALL_FRAME_SLOT) {
-		return false;
-	}
-	operand->var =
-		((uint32_t) ZEND_CALL_FRAME_SLOT + physical_slot) * sizeof(zval);
-	return true;
+	return zend_native_decode_explicit_operand(
+		execute_data, encoded, operand_type, operand);
 }
 
 zval *zend_native_call_explicit_slot(
@@ -924,8 +864,7 @@ static void zend_native_frameless_observed_call_explicit(
 
 static zend_never_inline zend_native_status
 zend_native_call_frameless_general(
-	zend_execute_data *execute_data, uint64_t encoded_op1,
-	uint64_t descriptor, uint64_t slots, uint64_t more_slots);
+	zend_execute_data *execute_data, uint64_t descriptor, uint64_t slots, uint64_t more_slots);
 
 static zend_always_inline zval *zend_native_call_frameless_argument(
 	zend_execute_data *execute_data, uint64_t descriptor, uint32_t index,
@@ -957,8 +896,7 @@ static zend_always_inline void zend_native_call_frameless_release(
  * take the general form below.
  */
 zend_native_status zend_native_call_frameless_direct(
-	zend_execute_data *execute_data, uint64_t encoded_op1,
-	uint64_t descriptor, uint64_t slots, uint64_t more_slots)
+	zend_execute_data *execute_data, uint64_t descriptor, uint64_t slots, uint64_t more_slots)
 {
 	const uint32_t handler_index = (uint32_t) (descriptor & 0xffff);
 	const uint32_t argument_count = (uint32_t) ((descriptor >> 16) & 3);
@@ -1010,14 +948,13 @@ zend_native_status zend_native_call_frameless_direct(
 				? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
 		}
 	}
-	return zend_native_call_frameless_general(execute_data, encoded_op1,
+	return zend_native_call_frameless_general(execute_data,
 		descriptor, slots, more_slots);
 }
 
 static zend_never_inline zend_native_status
 zend_native_call_frameless_general(
-	zend_execute_data *execute_data, uint64_t encoded_op1,
-	uint64_t descriptor, uint64_t slots, uint64_t more_slots)
+	zend_execute_data *execute_data, uint64_t descriptor, uint64_t slots, uint64_t more_slots)
 {
 	const uint32_t handler_index = (uint32_t) (descriptor & 0xffff);
 	const uint32_t argument_count = (uint32_t) ((descriptor >> 16) & 3);
@@ -1029,7 +966,6 @@ zend_native_call_frameless_general(
 	zval *arguments[3] = {NULL, NULL, NULL};
 	uint32_t index;
 
-	(void) encoded_op1;
 	ZEND_ASSERT(handler_index < zend_flf_count);
 	execute_data->opline = &op_array->opcodes[descriptor >> 32];
 	for (index = 0; index < argument_count; index++) {
@@ -1256,8 +1192,7 @@ zend_native_status zend_native_call_frameless_3_address(
  * undefined CV, which warns, and an observed function take the general form.
  */
 zend_native_status zend_native_call_frameless_1(
-	zend_execute_data *execute_data, uint64_t encoded_op1,
-	uint64_t descriptor, uint64_t slots, uint64_t more_slots)
+	zend_execute_data *execute_data, uint64_t descriptor, uint64_t slots, uint64_t more_slots)
 {
 	const uint32_t handler_index = (uint32_t) (descriptor & 0xffff);
 	zval *result = (zval *) ((char *) execute_data + (uint32_t) slots);
@@ -1274,7 +1209,7 @@ zend_native_status zend_native_call_frameless_1(
 #endif
 			) {
 		return zend_native_call_frameless_direct(
-			execute_data, encoded_op1, descriptor, slots, more_slots);
+			execute_data, descriptor, slots, more_slots);
 	}
 	execute_data->opline =
 		&execute_data->func->op_array.opcodes[descriptor >> 32];
@@ -7827,8 +7762,6 @@ uint64_t zend_native_call_invoke_finish(
 	return payload_bits;
 }
 
-static uint64_t zend_native_call_encode_source_operand(
-	const zend_mir_source_operand_ref *operand);
 
 zend_native_status zend_native_call_invoke_finish_source(
 	zend_execute_data *caller,
@@ -7863,8 +7796,8 @@ zend_native_status zend_native_call_invoke_finish_source(
 			caller,
 			descriptor->do_opcode,
 			descriptor->do_op1_payload,
-			zend_native_call_encode_source_operand(&descriptor->do_op2),
-			zend_native_call_encode_source_operand(&descriptor->do_result),
+			zend_native_encode_source_operand(caller, &descriptor->do_op2),
+			zend_native_encode_source_operand(caller, &descriptor->do_result),
 			descriptor->do_extended_value,
 			descriptor->do_source_position);
 	}
@@ -7905,29 +7838,6 @@ zend_native_status zend_native_call_invoke_finish_source(
 	return status;
 }
 
-static bool zend_native_call_decode_source_operand(
-	uint64_t encoded, zend_mir_source_operand_ref *operand)
-{
-	if (operand == NULL) {
-		return false;
-	}
-	memset(operand, 0, sizeof(*operand));
-	operand->kind = (zend_mir_source_operand_kind)
-		(encoded & UINT64_C(0xff));
-	operand->slot_kind = (zend_mir_source_slot_kind)
-		((encoded >> 8) & UINT64_C(0xff));
-	operand->index = (uint32_t) (encoded >> 16);
-	operand->ssa_variable_id = ZEND_MIR_ID_INVALID;
-	return operand->kind <= ZEND_MIR_SOURCE_OPERAND_SSA;
-}
-
-static uint64_t zend_native_call_encode_source_operand(
-	const zend_mir_source_operand_ref *operand)
-{
-	return ((uint64_t) operand->kind & UINT64_C(0xff))
-		| (((uint64_t) operand->slot_kind & UINT64_C(0xff)) << 8)
-		| ((uint64_t) operand->index << 16);
-}
 
 zend_native_status zend_native_call_convert_explicit(
 	zend_execute_data *caller,
@@ -7952,8 +7862,8 @@ zend_native_status zend_native_call_convert_explicit(
 			|| !ZEND_USER_CODE(caller->func->type)
 			|| (source_opcode != ZEND_CALLABLE_CONVERT
 				&& source_opcode != ZEND_CALLABLE_CONVERT_PARTIAL)
-			|| !zend_native_call_decode_source_operand(encoded_op2, &op2)
-			|| !zend_native_call_decode_source_operand(encoded_result, &result)) {
+			|| !zend_native_decode_source_operand(caller, encoded_op2, &op2)
+			|| !zend_native_decode_source_operand(caller, encoded_result, &result)) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	op_array = &caller->func->op_array;
@@ -8992,7 +8902,7 @@ zend_native_direct_call_result zend_native_call_fragment(
 				& ZEND_NATIVE_USER_CALL_REQUIRE_SCALAR_RESULT) != 0) {
 		result.payload = zend_native_call_read_source_scalar(
 			caller,
-			zend_native_call_encode_source_operand(&descriptor->do_result),
+			zend_native_encode_source_operand(caller, &descriptor->do_result),
 			descriptor->result_type);
 	}
 	return result;
@@ -9004,13 +8914,11 @@ static zend_native_status zend_native_call_check_func_arg_impl(
 	uint32_t arg_num)
 {
 	zend_execute_data *call = caller != NULL ? caller->call : NULL;
-	zend_mir_source_operand_kind op2_kind =
-		(zend_mir_source_operand_kind) (encoded_op2 & UINT64_C(0xff));
 
 	if (call == NULL || call->func == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	if (op2_kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+	if (ZEND_NATIVE_OPERAND_TYPE(encoded_op2) == IS_CONST) {
 		uint8_t operand_type;
 		zval *argument_name = zend_native_call_explicit_operand(
 			caller, encoded_op2, &operand_type);
@@ -9093,7 +9001,7 @@ zend_native_status zend_native_call_check_func_arg(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	return zend_native_call_check_func_arg_impl(
-		caller, encoded_op2, (uint32_t) (encoded_op2 >> 16));
+		caller, encoded_op2, ZEND_NATIVE_OPERAND_VALUE(encoded_op2));
 }
 
 zend_native_check_func_arg_result zend_native_call_check_func_arg_resolved(
@@ -9224,12 +9132,9 @@ zend_native_status zend_native_call_fragment_explicit(
 			caller, encoded_op2, op2_payload);
 	}
 	memset(&descriptor, 0, sizeof(descriptor));
-	if (!zend_native_call_decode_source_operand(
-			encoded_op1, &descriptor.init_op1)
-			|| !zend_native_call_decode_source_operand(
-				encoded_op2, &descriptor.init_op2)
-			|| !zend_native_call_decode_source_operand(
-				encoded_result, &descriptor.init_result)) {
+	if (!zend_native_decode_source_operand(caller, encoded_op1, &descriptor.init_op1)
+			|| !zend_native_decode_source_operand(caller, encoded_op2, &descriptor.init_op2)
+			|| !zend_native_decode_source_operand(caller, encoded_result, &descriptor.init_result)) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (init) {
