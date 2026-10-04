@@ -65,10 +65,18 @@ void zend_native_call_publish_moved_frame(
 	}
 }
 
+zval zend_native_char_strings[256];
+
 void zend_native_execution_context_init(
 	zend_native_execution_context *context)
 {
 	ZEND_ASSERT(context != NULL);
+	if (Z_TYPE(zend_native_char_strings[0]) != IS_STRING) {
+		for (uint32_t byte = 0; byte < 256; byte++) {
+			ZVAL_INTERNED_STR(&zend_native_char_strings[byte],
+				ZSTR_CHAR((zend_uchar) byte));
+		}
+	}
 	context->vm_stack = &EG(vm_stack);
 	context->vm_stack_top = &EG(vm_stack_top);
 	context->vm_stack_end = &EG(vm_stack_end);

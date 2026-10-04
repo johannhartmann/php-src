@@ -8773,6 +8773,26 @@ bool ZendCompilerX64::compile_inst_impl(
 			: frame_offset(operation.op2_storage_id);
 		const uint64_t result_offset =
 			frame_offset(operation.result_storage_id);
+		/* A CV container Zend's type inference proves to be an array,
+		 * neither undefined nor a reference: the known_* lookups take its
+		 * table without testing the zval. Some of them need one scratch
+		 * register more than the general lookups. */
+		const bool known_array = [&] {
+			const zend_tpde_plan *plan = adaptor->plan();
+			if (container_literal || container_temporary || container_var
+					|| unlocked_gp_registers() < 10
+					|| plan->source_opcodes == nullptr
+					|| operation.source_position_id
+						>= plan->source_opcode_count) {
+				return false;
+			}
+			const zend_tpde_source_opcode &source =
+				plan->source_opcodes[operation.source_position_id];
+			return source.op1_type == IS_CV
+				&& source.op1_var == container_offset
+				&& (source.op1_may_be & (MAY_BE_ANY | MAY_BE_UNDEF
+						| MAY_BE_REF | MAY_BE_INDIRECT)) == MAY_BE_ARRAY;
+		}();
 		/* The lookup snippets use up to seven scratch registers; with the
 		 * literal register held across them, one stays spare. */
 		if (container_offset > INT32_MAX - sizeof(zval)
@@ -8896,40 +8916,67 @@ bool ZendCompilerX64::compile_inst_impl(
 			ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
 			bool tested;
 			if (literal_key == LiteralKey::Index) {
-				tested = EncodeBase::encode_zend_native_array_isset_idx(
+				tested = (known_array
+				? EncodeBase::encode_zend_native_known_isset_idx(
 					std::move(container_address),
 					GenericValuePart{ValuePartRef{this, literal_key_value, 8,
-						tpde::x64::PlatformConfig::GP_BANK}}, value);
+						tpde::x64::PlatformConfig::GP_BANK}}, value)
+				: EncodeBase::encode_zend_native_array_isset_idx(
+					std::move(container_address),
+					GenericValuePart{ValuePartRef{this, literal_key_value, 8,
+						tpde::x64::PlatformConfig::GP_BANK}}, value));
 			} else if (literal_key == LiteralKey::String) {
 				ScratchReg name{this};
 				ASM(MOV64rm, name.alloc_gp(),
 					FE_MEM(literals_reg, 0, FE_NOREG,
 						static_cast<int32_t>(key_offset)));
-				tested = EncodeBase::encode_zend_native_array_isset_str(
+				tested = (known_array
+				? EncodeBase::encode_zend_native_known_isset_str(
 					std::move(container_address),
 					GenericValuePart{std::move(name)},
 					GenericValuePart{ValuePartRef{this, literal_key_value, 8,
-						tpde::x64::PlatformConfig::GP_BANK}}, value);
+						tpde::x64::PlatformConfig::GP_BANK}}, value)
+				: EncodeBase::encode_zend_native_array_isset_str(
+					std::move(container_address),
+					GenericValuePart{std::move(name)},
+					GenericValuePart{ValuePartRef{this, literal_key_value, 8,
+						tpde::x64::PlatformConfig::GP_BANK}}, value));
 			} else if (key_literal) {
-				tested = EncodeBase::encode_zend_native_array_isset_literal(
+				tested = (known_array
+				? EncodeBase::encode_zend_native_known_isset_literal(
 					std::move(container_address), std::move(key_address),
-					value);
+					value)
+				: EncodeBase::encode_zend_native_array_isset_literal(
+					std::move(container_address), std::move(key_address),
+					value));
 			} else if (split_string_key) {
 				tested = string_key_split(
 					[&](ValuePart &out) {
-						return EncodeBase::encode_zend_native_array_isset_string_key(
+						return (known_array
+				? EncodeBase::encode_zend_native_known_isset_string_key(
 							address(container_base, container_offset),
-							address(frame_reg, key_offset), out);
+							address(frame_reg, key_offset), out)
+				: EncodeBase::encode_zend_native_array_isset_string_key(
+							address(container_base, container_offset),
+							address(frame_reg, key_offset), out));
 					},
 					[&](ValuePart &out) {
-						return EncodeBase::encode_zend_native_array_isset_key(
+						return (known_array
+				? EncodeBase::encode_zend_native_known_isset_key(
 							address(container_base, container_offset),
-							address(frame_reg, key_offset), out);
+							address(frame_reg, key_offset), out)
+				: EncodeBase::encode_zend_native_array_isset_key(
+							address(container_base, container_offset),
+							address(frame_reg, key_offset), out));
 					}, value);
 			} else {
-				tested = EncodeBase::encode_zend_native_array_isset_key(
+				tested = (known_array
+				? EncodeBase::encode_zend_native_known_isset_key(
 					std::move(container_address), std::move(key_address),
-					value);
+					value)
+				: EncodeBase::encode_zend_native_array_isset_key(
+					std::move(container_address), std::move(key_address),
+					value));
 			}
 			if (!tested) {
 				return -1;
@@ -8997,25 +9044,46 @@ bool ZendCompilerX64::compile_inst_impl(
 						constant(), element);
 			} else if (writes) {
 				found = index
-					? EncodeBase::encode_zend_native_array_find_idx_w(
+					? (known_array
+				? EncodeBase::encode_zend_native_known_find_idx_w(
 						std::move(container_address), constant(), element)
-					: EncodeBase::encode_zend_native_array_find_str_w(
+				: EncodeBase::encode_zend_native_array_find_idx_w(
+						std::move(container_address), constant(), element))
+					: (known_array
+				? EncodeBase::encode_zend_native_known_find_str_w(
 						std::move(container_address), name_part(),
-						constant(), element);
+						constant(), element)
+				: EncodeBase::encode_zend_native_array_find_str_w(
+						std::move(container_address), name_part(),
+						constant(), element));
 			} else if (tests || access == ElementAccess::Coalesce) {
 				found = index
-					? EncodeBase::encode_zend_native_array_test_idx(
+					? (known_array
+				? EncodeBase::encode_zend_native_known_find_idx(
 						std::move(container_address), constant(), element)
-					: EncodeBase::encode_zend_native_array_test_str(
+				: EncodeBase::encode_zend_native_array_test_idx(
+						std::move(container_address), constant(), element))
+					: (known_array
+				? EncodeBase::encode_zend_native_known_find_str(
 						std::move(container_address), name_part(),
-						constant(), element);
+						constant(), element)
+				: EncodeBase::encode_zend_native_array_test_str(
+						std::move(container_address), name_part(),
+						constant(), element));
 			} else {
 				found = index
-					? EncodeBase::encode_zend_native_array_find_idx(
+					? (known_array
+				? EncodeBase::encode_zend_native_known_find_idx(
 						std::move(container_address), constant(), element)
-					: EncodeBase::encode_zend_native_array_find_str(
+				: EncodeBase::encode_zend_native_array_find_idx(
+						std::move(container_address), constant(), element))
+					: (known_array
+				? EncodeBase::encode_zend_native_known_find_str(
 						std::move(container_address), name_part(),
-						constant(), element);
+						constant(), element)
+				: EncodeBase::encode_zend_native_array_find_str(
+						std::move(container_address), name_part(),
+						constant(), element));
 			}
 		} else
 		{
@@ -9029,50 +9097,90 @@ bool ZendCompilerX64::compile_inst_impl(
 						element);
 			} else if (writes) {
 				found = key_literal
-					? EncodeBase::encode_zend_native_array_find_literal_w(
+					? (known_array
+				? EncodeBase::encode_zend_native_known_find_literal_w(
 						std::move(container_address), std::move(key_address),
 						element)
-					: EncodeBase::encode_zend_native_array_find_key_w(
+				: EncodeBase::encode_zend_native_array_find_literal_w(
 						std::move(container_address), std::move(key_address),
-						element);
+						element))
+					: (known_array
+				? EncodeBase::encode_zend_native_known_find_key_w(
+						std::move(container_address), std::move(key_address),
+						element)
+				: EncodeBase::encode_zend_native_array_find_key_w(
+						std::move(container_address), std::move(key_address),
+						element));
 			} else if (split_string_key) {
 				const bool testing = tests || access == ElementAccess::Coalesce;
 				found = string_key_split(
 					[&](ValuePart &out) {
 						return testing
-							? EncodeBase::encode_zend_native_array_test_string_key(
+							? (known_array
+				? EncodeBase::encode_zend_native_known_find_string_key(
 								address(container_base, container_offset),
 								address(frame_reg, key_offset), out)
-							: EncodeBase::encode_zend_native_array_find_string_key(
+				: EncodeBase::encode_zend_native_array_test_string_key(
 								address(container_base, container_offset),
-								address(frame_reg, key_offset), out);
+								address(frame_reg, key_offset), out))
+							: (known_array
+				? EncodeBase::encode_zend_native_known_find_string_key(
+								address(container_base, container_offset),
+								address(frame_reg, key_offset), out)
+				: EncodeBase::encode_zend_native_array_find_string_key(
+								address(container_base, container_offset),
+								address(frame_reg, key_offset), out));
 					},
 					[&](ValuePart &out) {
 						return testing
-							? EncodeBase::encode_zend_native_array_test_key(
+							? (known_array
+				? EncodeBase::encode_zend_native_known_find_key(
 								address(container_base, container_offset),
 								address(frame_reg, key_offset), out)
-							: EncodeBase::encode_zend_native_array_find_key(
+				: EncodeBase::encode_zend_native_array_test_key(
 								address(container_base, container_offset),
-								address(frame_reg, key_offset), out);
+								address(frame_reg, key_offset), out))
+							: (known_array
+				? EncodeBase::encode_zend_native_known_find_key(
+								address(container_base, container_offset),
+								address(frame_reg, key_offset), out)
+				: EncodeBase::encode_zend_native_array_find_key(
+								address(container_base, container_offset),
+								address(frame_reg, key_offset), out));
 					}, element);
 			} else if (tests || access == ElementAccess::Coalesce) {
 				/* An undefined or null container has no element to test. */
 				found = key_literal
-					? EncodeBase::encode_zend_native_array_test_literal(
+					? (known_array
+				? EncodeBase::encode_zend_native_known_find_literal(
 						std::move(container_address), std::move(key_address),
 						element)
-					: EncodeBase::encode_zend_native_array_test_key(
+				: EncodeBase::encode_zend_native_array_test_literal(
 						std::move(container_address), std::move(key_address),
-						element);
+						element))
+					: (known_array
+				? EncodeBase::encode_zend_native_known_find_key(
+						std::move(container_address), std::move(key_address),
+						element)
+				: EncodeBase::encode_zend_native_array_test_key(
+						std::move(container_address), std::move(key_address),
+						element));
 			} else {
 				found = key_literal
-					? EncodeBase::encode_zend_native_array_find_literal(
+					? (known_array
+				? EncodeBase::encode_zend_native_known_find_literal(
 						std::move(container_address), std::move(key_address),
 						element)
-					: EncodeBase::encode_zend_native_array_find_key(
+				: EncodeBase::encode_zend_native_array_find_literal(
 						std::move(container_address), std::move(key_address),
-						element);
+						element))
+					: (known_array
+				? EncodeBase::encode_zend_native_known_find_key(
+						std::move(container_address), std::move(key_address),
+						element)
+				: EncodeBase::encode_zend_native_array_find_key(
+						std::move(container_address), std::move(key_address),
+						element));
 			}
 		}
 		if (!found) {
@@ -9083,14 +9191,63 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto decision_reg = decision.alloc_gp();
 		auto answer_reg = answer.alloc_gp();
 		auto unknown = text_writer.label_create();
+		/* A read of a CV that is not an array may be a string offset: the
+		 * one-character string, looked up out of the hot code. */
+		const bool string_reads = access == ElementAccess::Read
+			&& !known_array && !container_literal && !container_temporary
+			&& (literal_key == LiteralKey::Index || !key_literal);
+		auto string_offset = text_writer.label_create();
+		auto element_found = text_writer.label_create();
 		ASM(CMP64ri, element_reg,
 			static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT));
 		generate_raw_jump(Jump::jb,
-			access == ElementAccess::Coalesce ? unknown : slow);
+			access == ElementAccess::Coalesce ? unknown
+				: string_reads ? string_offset : slow);
 		/* A read of a missing key warns and a write fetch inserts it; the
 		 * helper does that. */
 		generate_raw_jump(Jump::je,
 			access == ElementAccess::Read || writes ? slow : absent);
+		if (string_reads) {
+			const bool cold_string = !text_writer.in_cold_area();
+			if (cold_string) {
+				text_writer.begin_cold_area();
+			} else {
+				generate_raw_jump(Jump::jmp, element_found);
+			}
+			label_place(string_offset);
+			ValuePart chars = image_symbol_value(
+				ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER,
+				ZEND_NATIVE_HELPER_CHAR_STRINGS);
+			if (!chars.has_reg()) {
+				generate_raw_jump(Jump::jmp, slow);
+			} else {
+				auto chars_scratch = std::move(chars).into_scratch(this);
+				ValuePart offset_element{
+					tpde::x64::PlatformConfig::GP_BANK, 8};
+				const bool encoded = literal_key == LiteralKey::Index
+					? EncodeBase::encode_zend_native_string_offset_idx(
+						address(container_base, container_offset),
+						GenericValuePart{ValuePartRef{this, literal_key_value,
+							8, tpde::x64::PlatformConfig::GP_BANK}},
+						GenericValuePart{std::move(chars_scratch)}, offset_element)
+					: EncodeBase::encode_zend_native_string_offset_key(
+						address(container_base, container_offset),
+						address(frame_reg, key_offset),
+						GenericValuePart{std::move(chars_scratch)}, offset_element);
+				if (!encoded) {
+					return -1;
+				}
+				mov(element_reg, offset_element.cur_reg_or_load(this), 8);
+				offset_element.reset(this);
+				ASM(TEST64rr, element_reg, element_reg);
+				generate_raw_jump(Jump::je, slow);
+				generate_raw_jump(Jump::jmp, element_found);
+			}
+			if (cold_string) {
+				text_writer.end_cold_area();
+			}
+			label_place(element_found);
+		}
 		if (container_temporary) {
 			ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
 			if (!EncodeBase::encode_zend_native_container_shared(
@@ -9797,6 +9954,12 @@ bool ZendCompilerX64::compile_inst_impl(
 		const bool negated = operation.source_opcode == ZEND_IS_NOT_IDENTICAL;
 		const bool temporary = frame_slot(operation.op1)
 			&& operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP;
+		/* The second operand: a literal, or a CV compared through
+		 * zend_native_zval_identical_any(). */
+		const bool variable_other = frame_slot(operation.op2)
+			&& operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+			&& zend_mir_id_is_valid(operation.op2_storage_id)
+			&& operation.op2_storage_id != operation.result_storage_id;
 		if (!adaptor->plan()->linux_inline_forms
 				|| node.kind != Adaptor::InstKind::GuardedFast
 				|| !mir.has_value_operation
@@ -9804,7 +9967,8 @@ bool ZendCompilerX64::compile_inst_impl(
 				|| (operation.source_opcode != ZEND_IS_IDENTICAL && !negated)
 				|| node.control_block == UINT32_MAX
 				|| node.continuation_block == UINT32_MAX
-				|| operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+				|| (operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+					&& !variable_other)
 				|| !frame_slot(operation.op1)
 				|| (operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
 					&& !temporary)
@@ -9823,7 +9987,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		/* A temporary may be held boxed in registers: it is stored into its
 		 * slot first, and a register copy of the literal is not needed. */
-		const bool register_temporary = temporary
+		const bool register_temporary = temporary && !variable_other
 			&& node.operands.size() == 3
 			&& node.materialization_count == 0
 			&& node.operands[2] == IRValueRef{Adaptor::FRAME_VALUE}
@@ -9852,8 +10016,10 @@ bool ZendCompilerX64::compile_inst_impl(
 		const uint64_t value_offset =
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
 				* sizeof(zval);
-		const uint64_t literal_offset =
-			uint64_t{operation.op2.index} * sizeof(zval);
+		const uint64_t literal_offset = variable_other
+			? (uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op2_storage_id)
+				* sizeof(zval)
+			: uint64_t{operation.op2.index} * sizeof(zval);
 		const uint64_t result_offset =
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
 				* sizeof(zval);
@@ -9889,21 +10055,32 @@ bool ZendCompilerX64::compile_inst_impl(
 			}
 		}
 		ScratchReg literals{this};
-		auto literals_reg = literals.alloc_gp();
-		ASM(MOV64rm, literals_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zend_execute_data, func))));
-		ASM(MOV64rm, literals_reg,
-			FE_MEM(literals_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zend_op_array, literals))));
 		ValuePart matched{tpde::x64::PlatformConfig::GP_BANK, 8};
-		if (!EncodeBase::encode_zend_native_zval_identical(
-				GenericValuePart{GenericValuePart::Expr{frame_reg,
-					static_cast<int64_t>(value_offset)}},
-				GenericValuePart{GenericValuePart::Expr{literals_reg,
-					static_cast<int64_t>(literal_offset)}},
-				matched)) {
-			return -1;
+		if (variable_other) {
+			if (!EncodeBase::encode_zend_native_zval_identical_any(
+					GenericValuePart{GenericValuePart::Expr{frame_reg,
+						static_cast<int64_t>(value_offset)}},
+					GenericValuePart{GenericValuePart::Expr{frame_reg,
+						static_cast<int64_t>(literal_offset)}},
+					matched)) {
+				return -1;
+			}
+		} else {
+			auto literals_reg = literals.alloc_gp();
+			ASM(MOV64rm, literals_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_execute_data, func))));
+			ASM(MOV64rm, literals_reg,
+				FE_MEM(literals_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_op_array, literals))));
+			if (!EncodeBase::encode_zend_native_zval_identical(
+					GenericValuePart{GenericValuePart::Expr{frame_reg,
+						static_cast<int64_t>(value_offset)}},
+					GenericValuePart{GenericValuePart::Expr{literals_reg,
+						static_cast<int64_t>(literal_offset)}},
+					matched)) {
+				return -1;
+			}
 		}
 		literals.reset();
 		const AsmReg matched_reg = matched.cur_reg_or_load(this);
@@ -11087,6 +11264,113 @@ bool ZendCompilerX64::compile_inst_impl(
 						static_cast<int32_t>(boolean.result_offset
 							+ offsetof(zval, u1.type_info))), type_reg);
 				return true;
+			}
+			/*
+			 * ! and (bool) of an untyped null, boolean or integer decide
+			 * inline; an undefined variable (which warns), a reference and
+			 * any other type take the guarded cold block.
+			 */
+			if (boolean_layout && frame_only
+					&& node.kind == Adaptor::InstKind::GuardedFast
+					&& node.control_block != UINT32_MAX
+					&& node.continuation_block != UINT32_MAX
+					&& boolean.operand_offset <= INT32_MAX - sizeof(zval)
+					&& boolean.result_offset <= INT32_MAX - sizeof(zval)
+					&& (!node.has_result
+						|| val_parts(node.result).count() <= 2)) {
+				const auto successors =
+					adaptor->block_succs(IRBlockRef{node.control_block});
+				if (successors.size() >= 2
+						&& static_cast<uint32_t>(successors[0])
+							== node.continuation_block
+						&& static_cast<uint32_t>(successors[1])
+							== node.argument_index) {
+					auto slow = text_writer.label_create();
+					auto done = text_writer.label_create();
+					auto integer = text_writer.label_create();
+					auto decided = text_writer.label_create();
+					auto [frame_ref, frame] =
+						val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+					auto frame_scratch = frame_register(std::move(frame));
+					auto frame_reg = frame_scratch.cur_reg();
+					ScratchReg decision{this};
+					ScratchReg type{this};
+					ScratchReg truth{this};
+					auto decision_reg = decision.alloc_gp();
+					auto type_reg = type.alloc_gp();
+					auto truth_reg = truth.alloc_gp();
+					const int32_t operand =
+						static_cast<int32_t>(boolean.operand_offset);
+					ASM(MOVZXr32m8, type_reg,
+						FE_MEM(frame_reg, 0, FE_NOREG,
+							operand + static_cast<int32_t>(
+								offsetof(zval, u1.type_info))));
+					ASM(XOR32rr, truth_reg, truth_reg);
+					ASM(CMP32ri, type_reg, IS_LONG);
+					generate_raw_jump(Jump::je, integer);
+					ASM(CMP32ri, type_reg, IS_TRUE);
+					generate_raw_jump(Jump::ja, slow);
+					ASM(TEST32rr, type_reg, type_reg);
+					generate_raw_jump(Jump::je, slow);
+					ASM(CMP32ri, type_reg, IS_TRUE);
+					generate_raw_set(Jump::je, truth_reg);
+					generate_raw_jump(Jump::jmp, decided);
+					label_place(integer);
+					ASM(CMP64mi, FE_MEM(frame_reg, 0, FE_NOREG, operand), 0);
+					generate_raw_set(Jump::jne, truth_reg);
+					label_place(decided);
+					if (boolean.negate) {
+						ASM(XOR32ri, truth_reg, 1);
+					}
+					/* IS_FALSE + truth is IS_FALSE or IS_TRUE. */
+					ASM(LEA32rm, type_reg,
+						FE_MEM(truth_reg, 0, FE_NOREG, IS_FALSE));
+					ASM(MOV32mr,
+						FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(boolean.result_offset
+								+ offsetof(zval, u1.type_info))),
+						type_reg);
+					if (node.has_result
+							&& val_parts(node.result).count() == 1) {
+						auto [result_ref, result] =
+							result_ref_single(node.result);
+						mov(result.alloc_reg(), truth_reg, 8);
+						result.set_modified();
+					} else if (node.has_result) {
+						auto result = result_ref(node.result);
+						const ValueParts parts = val_parts(node.result);
+						for (uint32_t part = 0; part < parts.count(); ++part) {
+							auto result_part = result.part(part);
+							if (parts.representation.parts[part].semantic_role
+									== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
+								mov(result_part.alloc_reg(), type_reg, 4);
+							} else {
+								ASM(XOR32rr, result_part.alloc_reg(),
+									result_part.cur_reg());
+							}
+							result_part.set_modified();
+						}
+					}
+					truth.reset();
+					type.reset();
+					if (guarded_exit_can_jump_directly(
+							successors[1], successors[0])) {
+						decision.reset();
+						frame_scratch.reset();
+						generate_guarded_direct_exit(
+							slow, successors[1], successors[0]);
+						return true;
+					}
+					ASM(MOV32ri, decision_reg, 0);
+					generate_raw_jump(Jump::jmp, done);
+					label_place(slow);
+					ASM(MOV32ri, decision_reg, 1);
+					label_place(done);
+					frame_scratch.reset();
+					generate_guarded_decision_branch(
+						std::move(decision), successors[1], successors[0]);
+					return true;
+				}
 			}
 			return execute_value_operation();
 		}
@@ -12727,9 +13011,15 @@ bool ZendCompilerX64::compile_inst_impl(
 	auto long_incdec = [&]() {
 		zend_tpde_long_incdec layout;
 
-		if (!zend_tpde_long_incdec_at(mir, &layout)
+		if (!zend_tpde_long_incdec_at(mir, &layout, true)
 				|| layout.operand_offset > INT32_MAX - 8
-				|| layout.result_offset > INT32_MAX - 8) {
+				|| layout.result_offset > INT32_MAX - 8
+				|| (layout.indirect
+					&& (node.kind != Adaptor::InstKind::GuardedFast
+						|| node.mutation_result || mir.mutation_lazy_scalar
+						|| (!node.operands.empty()
+							&& node.operands[0]
+								!= IRValueRef{Adaptor::FRAME_VALUE})))) {
 			return branch_to_guarded_cold();
 		}
 		/* A result without a machine value is published to its slot. */
@@ -12793,6 +13083,47 @@ bool ZendCompilerX64::compile_inst_impl(
 			ASM(MOV64rr, value_reg, payload.load_to_reg());
 			ASM(CMP8ri, type_info.load_to_reg(), IS_LONG);
 			generate_raw_jump(Jump::jne, slow);
+		} else if (layout.indirect) {
+			/*
+			 * ++/-- through a write fetch (++$a[$k]): the VAR holds the
+			 * INDIRECT to the element. An integer or an untyped reference's
+			 * integer is updated in place; the helper does the rest.
+			 */
+			auto loaded = text_writer.label_create();
+			target_reg = target.alloc_gp();
+			ASM(CMP8mi,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						layout.operand_offset
+							+ offsetof(zval, u1.type_info))),
+				IS_INDIRECT);
+			generate_raw_jump(Jump::jne, slow);
+			ASM(MOV64rm, target_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(layout.operand_offset)));
+			ASM(MOVZXr32m8, type_reg,
+				FE_MEM(target_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zval, u1.type_info))));
+			ASM(CMP32ri, type_reg, IS_LONG);
+			generate_raw_jump(Jump::je, loaded);
+			ASM(CMP32ri, type_reg, IS_REFERENCE);
+			generate_raw_jump(Jump::jne, slow);
+			ASM(MOV64rm, target_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
+			ASM(CMP64mi,
+				FE_MEM(target_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_reference, sources.ptr))),
+				0);
+			generate_raw_jump(Jump::jne, slow);
+			ASM(ADD64ri, target_reg,
+				static_cast<int32_t>(offsetof(zend_reference, val)));
+			ASM(CMP8mi,
+				FE_MEM(target_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zval, u1.type_info))),
+				IS_LONG);
+			generate_raw_jump(Jump::jne, slow);
+			label_place(loaded);
+			ASM(MOV64rm, value_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
 		} else if (!(node.mutation_result && mir.mutation_lazy_scalar)) {
 			/*
 			 * The CV may hold a reference, as for an int &$value parameter.
