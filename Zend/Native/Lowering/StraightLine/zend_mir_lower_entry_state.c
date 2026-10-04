@@ -17,8 +17,7 @@
 static bool zend_mir_straight_line_uses_canonical_locations(
 	const zend_mir_lowering_context *context)
 {
-	return context != NULL && context->zend_source != NULL
-		&& context->zend_source->w11;
+	return context != NULL && context->zend_source != NULL;
 }
 
 static bool zend_mir_straight_line_mutator_has_frame_ops(

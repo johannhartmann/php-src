@@ -1,13 +1,9 @@
-# ZNMIR lowering contract
+# ZNMIR lowering
 
-This directory freezes the target-neutral W03 lowering boundary. The boundary
-consumes immutable, pointer-free source and fact records, dispatches through a
-deterministic provider registry, and emits canonical ZNMIR through the mutator
-contract.
+Lowering turns a Zend op_array with its SSA and type inference into canonical
+ZNMIR. It consumes process-local source views, dispatches every opline through
+a deterministic provider registry, and emits MIR through the mutator contract.
+Typing rules follow ADR 0024; frame states and speculation follow ADR 0025.
 
-The generated opcode profile is the acceptance authority. A conditional opcode
-is lowerable only when all listed proofs are available. Otherwise lowering must
-return a stable diagnostic and no module.
-
-Implementation is split into focused provider modules. These headers define
-interfaces and stable numeric identities only.
+An opline that no provider lowers fails the function with a stable diagnostic
+and no module; there is no VM fallback.

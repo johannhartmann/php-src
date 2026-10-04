@@ -909,27 +909,6 @@ const zend_mir_view *zend_mir_cfg_view(const zend_mir_cfg *cfg)
 	return cfg == NULL ? NULL : &cfg->view;
 }
 
-zend_mir_function_id zend_mir_cfg_function_id(const zend_mir_cfg *cfg)
-{
-	return cfg == NULL ? ZEND_MIR_ID_INVALID : cfg->function_id;
-}
-
-const char *zend_mir_cfg_status_name(zend_mir_cfg_status status)
-{
-	switch (status) {
-		case ZEND_MIR_CFG_STATUS_OK: return "ok";
-		case ZEND_MIR_CFG_STATUS_INVALID_ARGUMENT: return "invalid_argument";
-		case ZEND_MIR_CFG_STATUS_INCOMPATIBLE_CONTRACT: return "incompatible_contract";
-		case ZEND_MIR_CFG_STATUS_NOT_FOUND: return "not_found";
-		case ZEND_MIR_CFG_STATUS_DUPLICATE_EDGE: return "duplicate_edge";
-		case ZEND_MIR_CFG_STATUS_INVALID_CFG: return "invalid_cfg";
-		case ZEND_MIR_CFG_STATUS_INVALID_PHI: return "invalid_phi";
-		case ZEND_MIR_CFG_STATUS_ALLOCATION_FAILED: return "allocation_failed";
-		case ZEND_MIR_CFG_STATUS_CAPACITY_EXCEEDED: return "capacity_exceeded";
-	}
-	return "invalid_status";
-}
-
 zend_mir_cfg_status zend_mir_cfg_validate(const zend_mir_cfg *cfg)
 {
 	zend_mir_function_record function;

@@ -159,14 +159,13 @@ typedef struct _zend_native_internal_call_binding {
 
 typedef enum _zend_native_source_effect_kind {
 	ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR = 1,
-	ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE = 2,
-	ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE = 3,
-	ZEND_NATIVE_SOURCE_EFFECT_DEBUG_PROBE = 4
+	ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE = 2,
+	ZEND_NATIVE_SOURCE_EFFECT_DEBUG_PROBE = 3
 } zend_native_source_effect_kind;
 
 /*
- * W07/W08 source effects remain process-local compiler input. They augment a
- * verified W05/W06 module without changing either persistent MIR contract.
+ * Source effects remain process-local compiler input. They augment a verified
+ * MIR module without changing the persistent MIR contract.
  * source_position_id must identify exactly one scalar carrier instruction in
  * the module, preserving source order and its proven scalar type.
  */
@@ -203,53 +202,11 @@ typedef struct _zend_native_component_member {
 	bool entry_variant_numeric;
 } zend_native_component_member;
 
-zend_result zend_tpde_compile_module(
-	zend_native_target target,
-	const zend_mir_view *module,
-	zend_native_image **out_image,
-	zend_native_diagnostic *diag);
-
-zend_result zend_tpde_compile_module_bound(
-	zend_native_target target,
-	const zend_mir_view *module,
-	const zend_native_call_binding *bindings,
-	uint32_t binding_count,
-	zend_native_image **out_image,
-	zend_native_diagnostic *diag);
-
-zend_result zend_tpde_compile_module_w07(
-	zend_native_target target,
-	const zend_mir_view *module,
-	const zend_native_call_binding *bindings,
-	uint32_t binding_count,
-	const zend_native_source_effect *effects,
-	uint32_t effect_count,
-	uint32_t frame_argument_count,
-	zend_native_image **out_image,
-	zend_native_diagnostic *diag);
-
-zend_result zend_tpde_compile_module_w08(
-	zend_native_target target,
-	const zend_mir_view *module,
-	const zend_native_call_binding *user_bindings,
-	uint32_t user_binding_count,
-	const zend_native_internal_call_binding *internal_bindings,
-	uint32_t internal_binding_count,
-	const zend_native_source_effect *effects,
-	uint32_t effect_count,
-	uint32_t frame_argument_count,
-	const struct _zend_op_array *source_op_array,
-	const struct _zend_ssa *source_ssa,
-	zend_native_image **out_image,
-	zend_native_diagnostic *diag);
-
 /*
- * Compile against an explicit process-local runtime ABI. This is the same
- * production adaptor path used by zend_tpde_compile_module_w08(); embedders
  * may supply an ABI-compatible table and every helper actually required by
  * the plan is resolved before an image can be returned.
  */
-zend_result zend_tpde_compile_module_w08_with_runtime(
+zend_result zend_tpde_compile_module_with_runtime(
 	zend_native_target target,
 	const zend_mir_view *module,
 	const zend_native_call_binding *user_bindings,
@@ -265,7 +222,7 @@ zend_result zend_tpde_compile_module_w08_with_runtime(
 	zend_native_image **out_image,
 	zend_native_diagnostic *diag);
 
-zend_result zend_tpde_compile_component_w14_with_runtime(
+zend_result zend_tpde_compile_component_with_runtime(
 	zend_native_target target,
 	const zend_native_component_member *members,
 	uint32_t member_count,
@@ -295,13 +252,6 @@ zend_result zend_native_image_deserialize(
 	zend_native_diagnostic *diag);
 void zend_native_serialized_image_destroy(unsigned char *bytes);
 
-zend_result zend_native_execute(
-	const zend_native_code *code,
-	const zend_native_scalar *arguments,
-	uint32_t argument_count,
-	zend_native_scalar *result,
-	zend_native_diagnostic *diag);
-
 zend_native_status zend_native_execute_frame(
 	const zend_native_code *code,
 	zend_execute_data *execute_data,
@@ -329,7 +279,6 @@ const char *zend_native_target_id(zend_native_target target);
 const char *zend_native_target_triple(zend_native_target target);
 size_t zend_native_image_size(const zend_native_image *image);
 const unsigned char *zend_native_image_bytes(const zend_native_image *image);
-uint32_t zend_native_image_component_count(const zend_native_image *image);
 void zend_native_image_get_metrics(
 	const zend_native_image *image, zend_native_image_metrics *metrics);
 bool zend_native_code_is_writable(const zend_native_code *code);
@@ -343,7 +292,6 @@ zend_native_frame_entry_t zend_native_code_frame_entry(
 /* The generated fast-call entry of the code's function, with the signature
  * of zend_native_call_fast_do(); NULL when the image has none. */
 void *zend_native_code_fast_call_entry(const zend_native_code *code);
-uint32_t zend_native_code_argument_count(const zend_native_code *code);
 
 #ifdef __cplusplus
 }

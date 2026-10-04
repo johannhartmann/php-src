@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile the W02 semantic binding and compare it with the frozen W01 model."""
+"""Compile the MIR semantic binding and compare it with the effect model."""
 
 from __future__ import annotations
 
@@ -143,7 +143,7 @@ def main() -> int:
                     f"catalog mismatch at row {index}: expected {expected_row}, got {actual_row}"
                 )
         raise SystemExit(f"catalog row count differs: expected {len(expected)}, got {len(actual)}")
-    print(f"W02 semantic runtime passes ({len(actual)} frozen catalog rows)")
+    print(f"MIR semantic runtime passes ({len(actual)} frozen catalog rows)")
     return 0
 
 

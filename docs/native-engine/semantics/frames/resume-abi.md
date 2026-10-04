@@ -207,7 +207,7 @@ execution never repairs a resume by interpreting the saved opcode.
 
 A specialized code version ([ADR 0025](../../adr/0025-native-canonical-execution.md))
 produces the same request after moving ownership of every value its guard's
-frame-state map names into the frame slots. It uses the same baseline frame,
+frame-state map names into the frame slots. It uses the same frame,
 version identity, roots, cleanup, and single entry; there is no second resume
 ABI.
 

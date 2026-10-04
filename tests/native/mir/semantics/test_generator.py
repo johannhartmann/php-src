@@ -1,4 +1,4 @@
-"""Drift and determinism tests for the W02 semantic catalog generator."""
+"""Drift and determinism tests for the MIR semantic catalog generator."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ class GeneratorTest(unittest.TestCase):
 
     def test_checked_in_catalog_is_current(self) -> None:
         result = self.run_generator("--check")
-        self.assertIn("matches the frozen W01 model", result.stdout)
+        self.assertIn("matches the effect model", result.stdout)
 
     def test_generation_is_deterministic(self) -> None:
         with tempfile.TemporaryDirectory(prefix="zend-mir-generator-") as directory:

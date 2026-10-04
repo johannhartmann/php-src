@@ -9,7 +9,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 usage() {
     cat <<'EOF'
-Build and smoke-test the W00 sanitizer profiles.
+Build and smoke-test the sanitizer profiles.
 
 Usage: test-sanitizers.sh [--profile PROFILE] [--jobs N]
 

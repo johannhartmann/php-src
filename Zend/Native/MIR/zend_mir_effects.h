@@ -193,13 +193,13 @@ typedef uint16_t zend_mir_composition_rule_mask;
 #define ZEND_MIR_GUARD_FACT_MASK(fact) ((zend_mir_guard_fact_mask) (UINT16_C(1) << (fact)))
 #define ZEND_MIR_COMPOSITION_RULE_MASK(rule) ((zend_mir_composition_rule_mask) (UINT16_C(1) << (rule)))
 
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_EFFECT_COUNT <= 16, "effect mask contains the complete W01 catalog");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_MEMORY_DOMAIN_COUNT <= 32, "domain mask contains the complete W01 catalog");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OWNERSHIP_ACTION_COUNT <= 16, "action mask contains the complete W01 catalog");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_BARRIER_COUNT <= 8, "barrier mask contains the complete W01 catalog");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_PREDICATE_COUNT <= 8, "predicate mask contains the complete W01 catalog");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_GUARD_FACT_COUNT <= 16, "guard-fact mask contains the complete W01 catalog");
+ZEND_MIR_STATIC_ASSERT(ZEND_MIR_EFFECT_COUNT <= 16, "effect mask contains the complete effect catalog");
+ZEND_MIR_STATIC_ASSERT(ZEND_MIR_MEMORY_DOMAIN_COUNT <= 32, "domain mask contains the complete effect catalog");
+ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OWNERSHIP_ACTION_COUNT <= 16, "action mask contains the complete effect catalog");
+ZEND_MIR_STATIC_ASSERT(ZEND_MIR_BARRIER_COUNT <= 8, "barrier mask contains the complete effect catalog");
+ZEND_MIR_STATIC_ASSERT(ZEND_MIR_PREDICATE_COUNT <= 8, "predicate mask contains the complete effect catalog");
+ZEND_MIR_STATIC_ASSERT(ZEND_MIR_GUARD_FACT_COUNT <= 16, "guard-fact mask contains the complete effect catalog");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_COMPOSITION_RULE_COUNT <= 16,
-	"composition-rule mask contains the complete W01 catalog");
+	"composition-rule mask contains the complete effect catalog");
 
 #endif /* ZEND_MIR_EFFECTS_H */

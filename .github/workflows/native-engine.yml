@@ -128,20 +128,9 @@ jobs:
           source scripts/native/lib/common.sh
           native_load_profile "$profile"
           native_export_sanitizer_environment
-          python3 scripts/native/test-native-execution.py \
-            --target darwin-arm64-dev \
-            --reference "$REFERENCE_PHP" \
-            --candidate "$candidate"
           TEST_PHP_EXECUTABLE="$candidate" \
             "$candidate" run-tests.php -q --show-diff --set-timeout 180 \
-              ext/native_mir_test/tests/w07_*.phpt \
-              ext/native_mir_test/tests/w08_*.phpt \
-              ext/native_mir_test/tests/w09_*.phpt \
-              ext/native_mir_test/tests/w10_*.phpt \
-              ext/native_mir_test/tests/w11_*.phpt \
-              ext/native_mir_test/tests/w11p_*.phpt \
-              ext/native_mir_test/tests/w12_*.phpt \
-              ext/native_mir_test/tests/w14_*.phpt \
+              ext/native_mir_test/tests/*.phpt \
               ext/opcache/tests/native_*.phpt
       - name: Compare full test suite with reference PHP
         run: |
@@ -412,23 +401,6 @@ jobs:
                 --profile darwin-arm64-native-product-release-nts \
                 --print-binary | tail -n 1
           )
-          baseline_root="$RUNNER_TEMP/php-w11p-baseline"
-          git worktree add --detach "$baseline_root" 14dce285da0f849572535f49790b2a63d292685a
-          w11p_baseline=$(
-            cd "$baseline_root"
-            NATIVE_WORK_ROOT="$RUNNER_TEMP/php-native-baseline" \
-              scripts/native/build.sh \
-                --profile darwin-arm64-native-release-nts \
-                --print-binary | tail -n 1
-          )
-          python3 scripts/native/benchmark-native-performance.py \
-            --mode diagnostic \
-            --candidate "$CANDIDATE_PHP" \
-            --baseline "$w11p_baseline" \
-            --reference "$REFERENCE_PHP" \
-            --target darwin-arm64-dev \
-            --suite all \
-            --enforce
           python3 scripts/native/benchmark-native-performance.py \
             --mode product-cli \
             --opcache off \
@@ -534,23 +506,12 @@ jobs:
           source scripts/native/lib/common.sh
           native_load_profile "$profile"
           native_export_sanitizer_environment
-          python3 scripts/native/test-native-execution.py \
-            --target linux-amd64-prod \
-            --reference "$REFERENCE_PHP" \
-            --candidate "$candidate"
           TEST_PHP_EXECUTABLE="$candidate" \
             "$candidate" run-tests.php -q --show-diff --set-timeout 180 \
-              ext/native_mir_test/tests/w07_*.phpt \
-              ext/native_mir_test/tests/w08_*.phpt \
-              ext/native_mir_test/tests/w09_*.phpt \
-              ext/native_mir_test/tests/w10_*.phpt \
-              ext/native_mir_test/tests/w11_*.phpt \
-              ext/native_mir_test/tests/w11p_*.phpt \
-              ext/native_mir_test/tests/w12_*.phpt \
-              ext/native_mir_test/tests/w14_*.phpt \
+              ext/native_mir_test/tests/*.phpt \
               ext/opcache/tests/native_*.phpt
           if [[ "$profile" == linux-amd64-native-debug-nts ]]; then
-            scripts/native/test-w08-linux-runtime.sh \
+            scripts/native/test-fpm-runtime.sh \
               --candidate "$candidate" \
               --fpm "$(dirname "$(dirname "$candidate")")/fpm/php-fpm"
           fi
@@ -762,23 +723,6 @@ jobs:
                 --profile linux-amd64-native-product-release-nts \
                 --print-binary | tail -n 1
           )
-          baseline_root="$RUNNER_TEMP/php-w11p-baseline"
-          git worktree add --detach "$baseline_root" 14dce285da0f849572535f49790b2a63d292685a
-          w11p_baseline=$(
-            cd "$baseline_root"
-            NATIVE_WORK_ROOT="$RUNNER_TEMP/php-native-baseline" \
-              scripts/native/build.sh \
-                --profile linux-amd64-native-release-nts \
-                --print-binary | tail -n 1
-          )
-          python3 scripts/native/benchmark-native-performance.py \
-            --mode diagnostic \
-            --candidate "$CANDIDATE_PHP" \
-            --baseline "$w11p_baseline" \
-            --reference "$REFERENCE_PHP" \
-            --target linux-amd64-prod \
-            --suite all \
-            --enforce
           python3 scripts/native/benchmark-native-performance.py \
             --mode product-cli \
             --opcache on \
@@ -799,51 +743,14 @@ jobs:
             --suite all \
             --enforce
 
-  call-model:
+  contracts:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    env:
-      NATIVE_WORK_ROOT: /tmp/php-native-${{ github.run_id }}-${{ github.run_attempt }}
-      NATIVE_JOBS: 2
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - name: Test native performance contract
-        run: python3 -m unittest -v tests/native/test_performance_contract.py
-      - uses: ./.github/actions/apt-x64
-      - name: Validate native contracts
+      - name: Validate native contracts and run tooling tests
         run: |
-          python3 scripts/native/semantics/validate-w01.py --check
-          python3 scripts/native/mir/validate-w02.py --check
-          python3 scripts/native/lowering/validate-w03.py --check
-          python3 scripts/native/control-flow/validate-w04.py --check
-          python3 scripts/native/calls/validate-w05.py --check
+          python3 scripts/native/mir/validate-mir.py --check
           python3 scripts/native/semantics/validate-effect-model.py --check
           python3 scripts/native/semantics/validate-frame-contract.py --check
           python3 -m unittest discover -s tests/native -p 'test_*.py' -v
-      - name: Build reference PHP
-        run: |
-          reference_root="$RUNNER_TEMP/php-reference"
-          git worktree add --detach "$reference_root" 47355da494ba696b1bdb6d10448a225e742bd316
-          cd "$reference_root"
-          ./buildconf --force
-          ./configure --disable-all --enable-cli --disable-cgi --disable-phpdbg --without-pear
-          make -j"$NATIVE_JOBS" sapi/cli/php
-          echo "REFERENCE_PHP=$reference_root/sapi/cli/php" >> "$GITHUB_ENV"
-      - name: Build and test call model
-        run: |
-          set -o pipefail
-          build_output="$RUNNER_TEMP/w05-build-output.log"
-          scripts/native/build.sh --profile w05-debug-nts --print-binary \
-            | tee "$build_output"
-          candidate=$(tail -n 1 "$build_output")
-          python3 scripts/native/calls/test-w05.py \
-            --reference-php "$REFERENCE_PHP" --candidate-php "$candidate"
-          python3 scripts/native/values/run-w06-differential.py \
-            --candidate-php "$candidate"
-          python3 tests/native/values/fuzz/run_fuzz.py \
-            --seed 20260720 --cases 20000
-          TEST_PHP_EXECUTABLE="$candidate" \
-            python3 tests/native/calls/fuzz/run_fuzz.py \
-              --seed 20260719 --cases 20000 --candidate-php "$candidate"

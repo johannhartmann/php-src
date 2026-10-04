@@ -1,7 +1,7 @@
-# Native W00 reproducible build harness
+# Native reproducible build harness
 
-This harness provides repeatable commands and isolated build trees for the six
-mandatory W00 profiles. It records the source state, configure command,
+This harness provides repeatable commands and isolated build trees for the
+profiles in `profiles/*.env`. It records the source state, configure command,
 toolchain, flags, runtime properties, and binary digest. It does **not** claim
 that two binaries are bit-identical.
 
@@ -18,28 +18,22 @@ self-hosted runner can set `NATIVE_WORK_ROOT` and run the commands below.
 
 ## Profiles
 
-| Profile | Debug | Thread safety | Sanitizer |
-|---|---:|---:|---|
-| `debug-nts` | yes | NTS | none |
-| `release-nts` | no | NTS | none |
-| `debug-zts` | yes | ZTS | none |
-| `release-zts` | no | ZTS | none |
-| `asan-nts` | yes | NTS | AddressSanitizer + leak detection |
-| `ubsan-nts` | yes | NTS | UndefinedBehaviorSanitizer, no recovery |
-
-Profile definitions live in `profiles/*.env`. They use configure switches
-verified at the pinned php-src commit. OPcache has no enable switch there: it is
-an unconditional static extension, and each successful build checks that it is
-loaded.
+The native engine is developed with the `linux-amd64-native-*` profiles
+(`debug-nts`, `debug-zts`, `asan-nts`, `ubsan-nts`, `release-nts`,
+`product-release-nts` and the `app-*` variants). They build with clang
+(`PROFILE_CC`), compile debug builds at `-Og` and sanitizer builds at `-O1`
+(`PROFILE_EXTRA_CFLAGS`), and link with the function order in `layout/`
+(`PROFILE_FUNCTION_ORDER`). The plain `debug-nts`, `release-nts`, `debug-zts`,
+`release-zts`, `asan-nts` and `ubsan-nts` profiles build stock php-src.
+Profile definitions live in `profiles/*.env`.
 
 ## Usage
 
 ```bash
 scripts/native/configure-dev.sh
-scripts/native/build.sh --profile debug-nts --jobs 8
-scripts/native/build.sh --profile release-zts --print-binary
-scripts/native/test-smoke.sh --profile release-nts
-scripts/native/test-smoke.sh --php-binary /absolute/path/to/php
+scripts/native/build.sh --profile linux-amd64-native-debug-nts --print-binary
+scripts/native/test-phpt.sh --tier quick
+scripts/native/test-smoke.sh --profile linux-amd64-native-debug-nts
 scripts/native/test-sanitizers.sh
 ```
 
@@ -49,16 +43,16 @@ failure, PHPT failure, or sanitizer diagnostic returns non-zero.
 `NATIVE_JOBS` sets the default parallelism. `CC`, `CFLAGS`, `CPPFLAGS`, and
 `LDFLAGS` are honored and included in the configuration fingerprint and build
 manifest. `NATIVE_BASE_COMMIT` may explicitly override the worktree-ID input;
-by default the W00 base `47355da494ba696b1bdb6d10448a225e742bd316` is used,
+by default the baseline `47355da494ba696b1bdb6d10448a225e742bd316` is used,
 including in shallow CI checkouts.
 
 ## Isolation and artifacts
 
-The default work root is `${TMPDIR:-/tmp}/php-native-w00`. Set an absolute
+The default work root is `${TMPDIR:-/tmp}/php-native`. Set an absolute
 external location when persistent artifacts are wanted:
 
 ```bash
-export NATIVE_WORK_ROOT=/var/tmp/php-native-w00
+export NATIVE_WORK_ROOT=/var/tmp/php-native
 ```
 
 The layout is:

@@ -38,8 +38,5 @@ typedef struct _zend_mir_lowering_provider {
 bool zend_mir_lowering_registry_register(zend_mir_lowering_registry *registry,
 	const zend_mir_lowering_provider *provider,
 	zend_mir_lowering_diagnostic_code *diagnostic_out);
-uint32_t zend_mir_lowering_registry_provider_count(const zend_mir_lowering_registry *registry);
-bool zend_mir_lowering_registry_provider_at(const zend_mir_lowering_registry *registry,
-	uint32_t index, zend_mir_lowering_provider *out);
 
 #endif /* ZEND_MIR_LOWERING_REGISTRY_H */

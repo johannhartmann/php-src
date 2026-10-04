@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create and validate W00 native build state, manifests, and test summaries."""
+"""Create and validate native build state, manifests, and test summaries."""
 
 from __future__ import annotations
 
@@ -94,7 +94,7 @@ def command_write_state(args: argparse.Namespace) -> int:
         pathlib.Path(args.path),
         {
             "schema_version": 1,
-            "kind": "php-native-w00-configure-state",
+            "kind": "php-native-configure-state",
             "fingerprint": args.fingerprint,
             "profile": args.profile,
             "repository_commit": args.commit,
@@ -133,7 +133,7 @@ def command_write_manifest(args: argparse.Namespace) -> int:
     compiler_path = shutil.which(args.compiler) or args.compiler
     manifest = {
         "schema_version": 1,
-        "kind": "php-native-w00-build-manifest",
+        "kind": "php-native-build-manifest",
         "reproducibility": "command-and-environment-record; not a bit-identical-build claim",
         "repository": repository_state(repo),
         "worktree": {
@@ -230,7 +230,7 @@ def command_write_summary(args: argparse.Namespace) -> int:
         pathlib.Path(args.path),
         {
             "schema_version": 1,
-            "kind": "php-native-w00-smoke-summary",
+            "kind": "php-native-smoke-summary",
             "profile": args.profile,
             "binary": str(pathlib.Path(args.binary).resolve()),
             "sanitizer": args.sanitizer,

@@ -1,4 +1,4 @@
-/* Deterministic verifier fixtures built on the frozen W02 fixture host. */
+/* Deterministic verifier fixtures built on the fixture host. */
 
 #ifndef ZEND_MIR_VERIFY_FIXTURES_H
 #define ZEND_MIR_VERIFY_FIXTURES_H

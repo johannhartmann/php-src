@@ -31,8 +31,8 @@ def c_warning_flags(compiler: str) -> list[str]:
         timeout=10,
     )
     if "Apple clang" in version.stdout + version.stderr:
-        # Match the W01 contract compiler for the pinned UINT32_MAX enum
-        # sentinels without weakening diagnostics for the W02-E sources.
+        # Match the contract compiler for the pinned UINT32_MAX enum
+        # sentinels without weakening diagnostics for the text sources.
         flags.append("-Wno-c23-extensions")
     return flags
 

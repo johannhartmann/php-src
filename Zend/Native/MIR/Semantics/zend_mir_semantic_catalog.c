@@ -102,36 +102,36 @@ static const zend_mir_composition_rule_descriptor zend_mir_rules[] = {
 
 #define ZEND_MIR_ARRAY_COUNT(array) (sizeof(array) / sizeof((array)[0]))
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_ARRAY_COUNT(zend_mir_effect_names) == ZEND_MIR_EFFECT_COUNT,
-	"generated effect labels cover the frozen catalog");
+	"generated effect labels cover the effect catalog");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_ARRAY_COUNT(zend_mir_domain_names) == ZEND_MIR_MEMORY_DOMAIN_COUNT,
-	"generated domain labels cover the frozen catalog");
+	"generated domain labels cover the effect catalog");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_ARRAY_COUNT(zend_mir_state_names) == ZEND_MIR_OWNERSHIP_STATE_COUNT,
-	"generated ownership states cover the frozen catalog");
+	"generated ownership states cover the effect catalog");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_ARRAY_COUNT(zend_mir_action_names) == ZEND_MIR_OWNERSHIP_ACTION_COUNT,
-	"generated ownership actions cover the frozen catalog");
+	"generated ownership actions cover the effect catalog");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_ARRAY_COUNT(zend_mir_predicate_names) == ZEND_MIR_PREDICATE_COUNT,
-	"generated predicates cover the frozen catalog");
+	"generated predicates cover the effect catalog");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_ARRAY_COUNT(zend_mir_barrier_names) == ZEND_MIR_BARRIER_COUNT,
-	"generated barriers cover the frozen catalog");
+	"generated barriers cover the effect catalog");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_ARRAY_COUNT(zend_mir_guard_names) == ZEND_MIR_GUARD_FACT_COUNT,
-	"generated guard facts cover the frozen catalog");
+	"generated guard facts cover the effect catalog");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_ARRAY_COUNT(zend_mir_rule_names) == ZEND_MIR_COMPOSITION_RULE_COUNT,
-	"generated rules cover the frozen catalog");
+	"generated rules cover the effect catalog");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_ARRAY_COUNT(zend_mir_atomic_effects) == ZEND_MIR_EFFECT_COUNT,
-	"generated atomic effects cover the frozen catalog");
+	"generated atomic effects cover the effect catalog");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_ARRAY_COUNT(zend_mir_states) == ZEND_MIR_OWNERSHIP_STATE_COUNT,
-	"generated state descriptors cover the frozen catalog");
+	"generated state descriptors cover the effect catalog");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_ARRAY_COUNT(zend_mir_actions) == ZEND_MIR_OWNERSHIP_ACTION_COUNT,
-	"generated action descriptors cover the frozen catalog");
+	"generated action descriptors cover the effect catalog");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_ARRAY_COUNT(zend_mir_aliases)
 		== ZEND_MIR_GENERATED_ALIAS_RELATION_COUNT,
-	"generated aliases cover the frozen relations");
+	"generated aliases cover the alias relations");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_ARRAY_COUNT(zend_mir_predicates) == ZEND_MIR_PREDICATE_COUNT,
-	"generated predicate descriptors cover the frozen catalog");
+	"generated predicate descriptors cover the effect catalog");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_ARRAY_COUNT(zend_mir_guards) == ZEND_MIR_GUARD_FACT_COUNT,
-	"generated guard descriptors cover the frozen catalog");
+	"generated guard descriptors cover the effect catalog");
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_ARRAY_COUNT(zend_mir_rules) == ZEND_MIR_COMPOSITION_RULE_COUNT,
-	"generated rule descriptors cover the frozen catalog");
+	"generated rule descriptors cover the effect catalog");
 #undef ZEND_MIR_ARRAY_COUNT
 
 const char *zend_mir_semantic_model_sha256(void)

@@ -188,7 +188,7 @@ static bool zend_mir_constant_kind_is_valid(zend_mir_constant_kind kind)
 
 static bool zend_mir_opcode_is_valid(zend_mir_opcode opcode)
 {
-	return opcode >= 0 && opcode < ZEND_MIR_W12_OPCODE_COUNT;
+	return opcode >= 0 && opcode < ZEND_MIR_OPCODE_COUNT;
 }
 
 static void zend_mir_emit_diagnostic(zend_mir_diagnostic_sink *sink,
@@ -1244,7 +1244,7 @@ static bool zend_mir_core_stage_call_continuation(
 			|| continuation->id != staging->continuation_count
 			|| continuation->kind < 0
 			|| continuation->kind
-				> ZEND_MIR_CALL_CONTINUATION_OBSERVER_DEBT
+				> ZEND_MIR_CALL_CONTINUATION_OBSERVER
 			|| !zend_mir_core_grow_staging(
 				(void **) &staging->continuations,
 				staging->continuation_count,
@@ -1548,7 +1548,7 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 				> UINT32_MAX - staging->site_count) {
 		return zend_mir_module_fail(module,
 			ZEND_MIR_DIAGNOSTIC_INVALID_ID,
-			"invalid W05 call model");
+			"invalid call model");
 	}
 	for (site_index = 0; site_index < staging->site_count; site_index++) {
 		const zend_mir_call_site_ref *site = &staging->sites[site_index];
@@ -1562,7 +1562,7 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 				|| zend_mir_find_block(module, block_id) == NULL) {
 			return zend_mir_module_fail(module,
 				ZEND_MIR_DIAGNOSTIC_INVALID_ID,
-				"invalid W05 call-site shape");
+				"invalid call-site shape");
 		}
 		total_slots += site->arguments.count * 2 + 1;
 		if (site->continuations.count != 4
@@ -1577,7 +1577,7 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 			&staging->continuations[site->continuations.offset + 1];
 		if (zend_mir_id_is_valid(exception_continuation->block_id)) {
 			if (exception_continuation->kind
-					!= ZEND_MIR_CALL_CONTINUATION_EXCEPTION_DEBT
+					!= ZEND_MIR_CALL_CONTINUATION_EXCEPTION
 					|| !zend_mir_id_is_valid(
 						exception_continuation->source_opline_index)
 					|| zend_mir_find_block(
@@ -1916,7 +1916,7 @@ bool zend_mir_module_commit_empty_call_model(zend_mir_module *module)
 void zend_mir_module_init_call_mutator(zend_mir_module *module)
 {
 	memset(&module->call_mutator, 0, sizeof(module->call_mutator));
-	module->call_mutator.contract_version = ZEND_MIR_W05_CONTRACT_VERSION;
+	module->call_mutator.contract_version = ZEND_MIR_CONTRACT_VERSION;
 	module->call_mutator.context = module;
 	module->call_mutator.add_call_target =
 		zend_mir_core_stage_call_target;

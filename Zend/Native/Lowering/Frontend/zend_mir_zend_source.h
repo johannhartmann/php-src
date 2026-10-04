@@ -81,45 +81,24 @@ typedef struct _zend_mir_zend_source {
 	uint32_t call_target_count;
 	uint32_t call_argument_count;
 	uint32_t call_parameter_mode_count;
-	bool w04;
-	bool w05;
-	bool w08;
-	bool w09;
-	bool w10;
-	bool w11;
+	bool calls_enabled;
 	uint32_t initialized;
 } zend_mir_zend_source;
 
 void zend_mir_zend_source_reset(zend_mir_zend_source *source);
 
-zend_mir_lowering_status zend_mir_zend_source_init(
-	zend_mir_zend_source *source,
-	const struct _zend_op_array *op_array,
-	const struct _zend_ssa *ssa,
-	zend_mir_op_array_id op_array_id,
-	zend_mir_symbol_id file_symbol_id,
-	zend_mir_frontend_diagnostic *diagnostic);
-
-zend_mir_lowering_status zend_mir_zend_source_init_w04(
-	zend_mir_zend_source *source,
-	const struct _zend_op_array *op_array,
-	const struct _zend_ssa *ssa,
-	zend_mir_op_array_id op_array_id,
-	zend_mir_symbol_id file_symbol_id,
-	zend_mir_frontend_diagnostic *diagnostic);
-
 /*
- * Add the process-local W05 call inventory to an initialized W04 source.
+ * Add the process-local call inventory to an initialized source.
  * The original (unprojected) op-array and SSA remain borrowed until release.
  */
-zend_mir_lowering_status zend_mir_zend_source_enable_w05(
+zend_mir_lowering_status zend_mir_zend_source_enable(
 	zend_mir_zend_source *source,
 	const struct _zend_script *script,
 	const struct _zend_op_array *op_array,
 	const struct _zend_ssa *ssa,
 	zend_mir_frontend_diagnostic *diagnostic);
 
-void zend_mir_zend_source_release_w05(zend_mir_zend_source *source);
+void zend_mir_zend_source_release(zend_mir_zend_source *source);
 
 bool zend_mir_zend_source_call_view(
 	const zend_mir_zend_source *source,
@@ -129,21 +108,12 @@ bool zend_mir_zend_source_call_target_resolver(
 	const zend_mir_zend_source *source,
 	zend_mir_source_call_target_resolver *out);
 
-/* Proves that a W08 RETURN reads the exact source zval written by a direct
+/* Proves that a RETURN reads the exact source zval written by a direct
  * internal call. Protected handlers may lack optimizer SSA, so this proof is
  * intentionally based on original oplines and physical source slots. */
-bool zend_mir_zend_source_w08_return_source_zval(
+bool zend_mir_zend_source_return_source_zval(
 	const zend_mir_zend_source *source,
 	uint32_t return_opline_index);
-
-/*
- * Return the process-local function backing an exact internal target. The
- * pointer is valid only while the source adapter and its script are alive;
- * it is never copied into MIR or used as persistent identity.
- */
-const union _zend_function *zend_mir_zend_source_internal_function(
-	const zend_mir_zend_source *source,
-	zend_mir_source_call_target_id target_id);
 
 /* Resolve the innermost source-backed catch entry for a throwing opline. */
 bool zend_mir_zend_source_exception_handler(
@@ -162,16 +132,6 @@ union _zend_function *zend_mir_zend_source_resolve_internal_call(
 	const struct _zend_op_array *op_array,
 	const struct _zend_ssa *ssa,
 	uint32_t init_opline_index);
-
-/*
- * Return the exact declared type of a process-local W05 direct-user target.
- * This is source evidence for W06 planning only; no zend_function pointer is
- * exposed or retained by persistent MIR.
- */
-bool zend_mir_zend_source_w06_call_return_type(
-	const zend_mir_zend_source *source,
-	zend_mir_source_call_target_id target_id,
-	uint32_t *type_mask);
 
 bool zend_mir_zend_source_view(
 	const zend_mir_zend_source *source,

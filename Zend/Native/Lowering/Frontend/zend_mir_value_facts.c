@@ -99,58 +99,6 @@ bool zend_mir_frontend_fact_for_ssa_with_id(
 	return true;
 }
 
-zend_mir_lowering_status zend_mir_frontend_validate_facts(
-	const zend_op_array *op_array,
-	const zend_ssa *ssa,
-	zend_mir_op_array_id op_array_id,
-	zend_mir_frontend_diagnostic *diagnostic,
-	uint32_t *fact_count)
-{
-	uint32_t i;
-	zend_mir_value_fact_ref fact;
-
-	if (op_array == NULL || ssa == NULL || fact_count == NULL
-			|| (ssa->vars_count != 0 && ssa->var_info == NULL)) {
-		goto invalid;
-	}
-	*fact_count = 0;
-	for (i = 0; i < (uint32_t) ssa->vars_count; i++) {
-		if (zend_mir_frontend_has_reference_or_pointer_fact(
-				&ssa->vars[i], &ssa->var_info[i])) {
-			zend_mir_frontend_set_diagnostic(
-				diagnostic, ZEND_MIR_LOWERING_DEFERRED,
-				ZEND_MIRL_W06_REFERENCE_SEMANTICS_DEFERRED, op_array_id,
-				ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE, i);
-			return ZEND_MIR_LOWERING_DEFERRED;
-		}
-		if (ssa->var_info[i].has_range
-				&& !ssa->var_info[i].range.underflow
-				&& !ssa->var_info[i].range.overflow
-				&& ssa->var_info[i].range.min > ssa->var_info[i].range.max) {
-			zend_mir_frontend_set_diagnostic(
-				diagnostic, ZEND_MIR_LOWERING_REJECTED,
-				ZEND_MIRL_CONTRADICTORY_FACT, op_array_id,
-				ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE, i);
-			return ZEND_MIR_LOWERING_REJECTED;
-		}
-		if (zend_mir_frontend_fact_payload_for_ssa(
-				op_array, ssa, i, &fact)) {
-			if (*fact_count == ZEND_MIR_ID_MAX) {
-				goto invalid;
-			}
-			(*fact_count)++;
-		}
-	}
-	return ZEND_MIR_LOWERING_SUCCESS;
-
-invalid:
-	zend_mir_frontend_set_diagnostic(
-		diagnostic, ZEND_MIR_LOWERING_REJECTED, ZEND_MIRL_INVALID_SOURCE,
-		op_array_id, ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE,
-		ZEND_MIR_ID_INVALID);
-	return ZEND_MIR_LOWERING_REJECTED;
-}
-
 bool zend_mir_frontend_build_value_fact_index(
 	zend_mir_zend_source *source)
 {

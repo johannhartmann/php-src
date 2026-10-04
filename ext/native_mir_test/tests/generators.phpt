@@ -1,0 +1,267 @@
+--TEST--
+Native generator frames suspend, resume, delegate and return without VM dispatch
+--SKIPIF--
+<?php
+if (!function_exists('native_mir_test_compile_execute')) {
+    die('skip native_mir_test is not available');
+}
+?>
+--FILE--
+<?php
+$includeDirectory = sys_get_temp_dir() . '/native-generator-' . getmypid();
+$includePath = $includeDirectory . '/generator.php';
+mkdir($includeDirectory);
+file_put_contents($includePath, <<<'PHP'
+<?php
+function native_included_generator(int $value): Generator
+{
+    yield $value;
+    return $value + 1;
+}
+PHP);
+define('NATIVE_GENERATOR_INCLUDE_PATH', $includePath);
+
+$cases = [
+    'state' => <<<'PHP'
+<?php
+function native_state_generator(int $value): Generator
+{
+    $local = $value + 1;
+    yield $local;
+    $local += 2;
+    yield $local;
+    return $local + 3;
+}
+function native_state_root(): array
+{
+    $generator = native_state_generator(4);
+    $first = $generator->current();
+    $generator->next();
+    $second = $generator->current();
+    $generator->next();
+    return [$first, $second, $generator->getReturn()];
+}
+PHP,
+    'send-and-keys' => <<<'PHP'
+<?php
+function native_send_generator(): Generator
+{
+    $sent = yield 5 => 11;
+    yield $sent;
+    return $sent + 1;
+}
+function native_send_root(): array
+{
+    $generator = native_send_generator();
+    $first = [$generator->key(), $generator->current()];
+    $second = $generator->send(7);
+    $secondKey = $generator->key();
+    $generator->next();
+    return [$first, [$secondKey, $second], $generator->getReturn()];
+}
+PHP,
+    'delegation' => <<<'PHP'
+<?php
+function native_inner_generator(): Generator
+{
+    yield 4;
+    return 6;
+}
+function native_delegate_generator(): Generator
+{
+    yield from [1, 2];
+    $result = yield from native_inner_generator();
+    yield $result;
+    return 8;
+}
+function native_delegate_root(): array
+{
+    $generator = native_delegate_generator();
+    $values = [];
+    while ($generator->valid()) {
+        $values[] = $generator->current();
+        $generator->next();
+    }
+    $values[] = $generator->getReturn();
+    return $values;
+}
+PHP,
+    'throw' => <<<'PHP'
+<?php
+function native_throw_generator(): Generator
+{
+    try {
+        yield 'ready';
+    } catch (RuntimeException $exception) {
+        yield 'caught:' . $exception->getMessage();
+        return 17;
+    }
+    return -1;
+}
+function native_throw_root(): array
+{
+    $generator = native_throw_generator();
+    $first = $generator->current();
+    $second = $generator->throw(new RuntimeException('boom'));
+    $generator->next();
+    return [$first, $second, $generator->getReturn()];
+}
+PHP,
+    'by-reference' => <<<'PHP'
+<?php
+function &native_by_reference_generator(int &$value): Generator
+{
+    yield $value;
+    $value += 2;
+    yield $value;
+    return $value;
+}
+function native_by_reference_root(): array
+{
+    $value = 4;
+    $generator = native_by_reference_generator($value);
+    $trace = [];
+    foreach ($generator as &$yielded) {
+        $trace[] = [$value, $yielded];
+        $yielded += 10;
+        $trace[] = [$value, $yielded];
+    }
+    unset($yielded);
+    return [$value, $generator->getReturn(), $trace];
+}
+PHP,
+    'dynamic-owners' => <<<'PHP'
+<?php
+class NativeGeneratorOwner
+{
+    public function values(int $base): Generator
+    {
+        yield $base;
+        return $base + 1;
+    }
+}
+function native_dynamic_owners_root(): array
+{
+    $method = new NativeGeneratorOwner()->values(5);
+    $closureFactory = static fn (int $base): Generator => (function () use ($base): Generator {
+        yield $base;
+        return $base + 2;
+    })();
+    $closure = $closureFactory(7);
+    eval('function native_eval_generator(int $base): Generator {
+        yield $base;
+        return $base + 3;
+    }');
+    $evaluated = native_eval_generator(9);
+    $values = [
+        $method->current(),
+        $closure->current(),
+        $evaluated->current(),
+    ];
+    $method->next();
+    $closure->next();
+    $evaluated->next();
+    return [
+        $values,
+        $method->getReturn(),
+        $closure->getReturn(),
+        $evaluated->getReturn(),
+    ];
+}
+PHP,
+    'lifecycle' => <<<'PHP'
+<?php
+function native_cleanup_generator(array &$trace): Generator
+{
+    try {
+        try {
+            yield 'open';
+            $trace[] = 'after';
+        } finally {
+            $trace[] = 'inner';
+        }
+    } finally {
+        $trace[] = 'outer';
+    }
+}
+function native_escaping_generator(): Generator
+{
+    yield 'ready';
+    throw new RuntimeException('escaped');
+}
+function native_lifecycle_root(): array
+{
+    include NATIVE_GENERATOR_INCLUDE_PATH;
+
+    $trace = [];
+    $cleanup = native_cleanup_generator($trace);
+    $first = $cleanup->current();
+    unset($cleanup);
+    gc_collect_cycles();
+
+    $included = native_included_generator(8);
+    $includedFirst = $included->current();
+    $included->next();
+
+    $escaping = native_escaping_generator();
+    $escapingFirst = $escaping->current();
+    try {
+        $escaping->next();
+    } catch (RuntimeException $exception) {
+        $escapingResult = [
+            $escapingFirst,
+            $exception::class,
+            $exception->getMessage(),
+        ];
+    }
+
+    return [
+        $first,
+        $trace,
+        [$includedFirst, $included->getReturn()],
+        $escapingResult,
+    ];
+}
+PHP,
+];
+
+foreach ($cases as $name => $source) {
+    $function = 'native_' . match ($name) {
+        'state' => 'state_root',
+        'send-and-keys' => 'send_root',
+        'delegation' => 'delegate_root',
+        'throw' => 'throw_root',
+        'by-reference' => 'by_reference_root',
+        'dynamic-owners' => 'dynamic_owners_root',
+        'lifecycle' => 'lifecycle_root',
+    };
+    $result = native_mir_test_compile_execute(
+        $source,
+        "$name.php",
+        [],
+        ['function' => $function, 'stack_probe' => true],
+    );
+    printf(
+        "%s status=%s result=%s gateway=%s vm=%d execute_ex=%d handler=%d\n",
+        $name,
+        $result['status'],
+        json_encode($result['execution']['return_value']),
+        ($result['execution']['generator_reentry_gateway_calls'] ?? 0) > 0
+            ? 'yes' : 'no',
+        $result['execution']['vm_handler_calls'],
+        $result['execution']['execute_ex_calls'],
+        $result['execution']['opline_handler_calls'],
+    );
+}
+
+unlink($includePath);
+rmdir($includeDirectory);
+?>
+--EXPECT--
+state status=accepted result=[5,7,10] gateway=yes vm=0 execute_ex=0 handler=0
+send-and-keys status=accepted result=[[5,11],[6,7],8] gateway=yes vm=0 execute_ex=0 handler=0
+delegation status=accepted result=[1,2,4,6,8] gateway=yes vm=0 execute_ex=0 handler=0
+throw status=accepted result=["ready","caught:boom",17] gateway=yes vm=0 execute_ex=0 handler=0
+by-reference status=accepted result=[26,26,[[4,4],[14,14],[16,16],[26,26]]] gateway=yes vm=0 execute_ex=0 handler=0
+dynamic-owners status=accepted result=[[5,7,9],6,9,12] gateway=yes vm=0 execute_ex=0 handler=0
+lifecycle status=accepted result=["open",["inner","outer"],[8,9],["ready","RuntimeException","escaped"]] gateway=yes vm=0 execute_ex=0 handler=0

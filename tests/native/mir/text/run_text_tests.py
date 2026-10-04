@@ -45,8 +45,8 @@ def c_warning_flags(compiler: str) -> list[str]:
         timeout=10,
     )
     if "Apple clang" in version.stdout + version.stderr:
-        # The pinned W01 headers use UINT32_MAX enum sentinels. Apple Clang
-        # diagnoses those as a C23 extension, while the W01 contract compiler
+        # The MIR headers use UINT32_MAX enum sentinels. Apple Clang
+        # diagnoses those as a C23 extension, while the contract compiler
         # intentionally accepts them in C11 mode.
         flags.append("-Wno-c23-extensions")
     return flags

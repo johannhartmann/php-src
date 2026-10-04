@@ -2,9 +2,8 @@
 
 - Keep persistent lowering records independent of PHP runtime pointers. A
   process-local source view may inspect Zend structures while lowering.
-- Lower every valid operation in the active language scope to executable MIR.
-  Historical generated profiles, provider allowlists, wave ownership, and
-  `codegen_eligible` flags are not acceptance gates.
+- Lower every valid operation to executable MIR. Provider allowlists and
+  generated profiles are not acceptance gates.
 - Validate the facts required by the operation itself. Missing or contradictory
   semantic facts fail atomically; they must not be replaced by permissive
   defaults, model-only success, or VM fallback.
@@ -20,7 +19,7 @@
 - Speculative guards from type feedback (ADR 0025) carry the frame state their
   deoptimization needs; lowering must not drop a value, root or cleanup
   obligation that a deoptimization target reads.
-- Extend existing direct execution tests and CI. Do not introduce new wave
-  profiles, ownership manifests, gate frameworks, receipts, ledgers, or status
+- Extend existing direct execution tests and CI. Do not introduce profiles,
+  ownership manifests, gate frameworks, receipts, ledgers, or status
   dashboards.
 - Do not add a VM, opcode-dispatch helper, interpreter, or production fallback.

@@ -9,7 +9,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 usage() {
     cat <<'EOF'
-Run the focused W00 CLI, Zend, and OPcache smoke suite.
+Run the focused CLI, Zend, and OPcache smoke suite.
 
 Usage: test-smoke.sh [--profile PROFILE | --php-binary PATH] [--jobs N]
 
@@ -99,7 +99,7 @@ modules_status=$?
 set -e
 
 if ((modules_status == 0)) && ! grep -Fx 'Zend OPcache' "$modules_log" >/dev/null; then
-    printf 'native-w00: Zend OPcache is missing from php -m\n' >>"$modules_log"
+    printf 'native: Zend OPcache is missing from php -m\n' >>"$modules_log"
     modules_status=1
 fi
 

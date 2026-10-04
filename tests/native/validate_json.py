@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate a W00-C JSON result using the checked-in strict validators."""
+"""Validate a JSON result using the checked-in strict validators."""
 
 from __future__ import annotations
 

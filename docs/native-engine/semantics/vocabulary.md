@@ -1,9 +1,7 @@
 # Shared native-engine semantic vocabulary
 
-These identifiers are shared by the opcode inventory, effect model, MIR, and
-lowering. New identifiers require source-backed definitions. Existing
-identifiers must not be renamed or assigned a different meaning without a
-contract migration and compatibility tests.
+These identifiers are shared by the effect model, MIR, and lowering. New
+identifiers require source-backed definitions.
 
 ## Atomic effects
 
@@ -32,5 +30,4 @@ contract migration and compatibility tests.
 `interrupt`, and `suspend`.
 
 The effect model defines the observable meaning and conservative behavior of
-these identifiers. The opcode matrix may only reference registered IDs, and
-the semantic validator rejects unresolved mismatches.
+these identifiers.

@@ -3227,11 +3227,11 @@ public:
 				continue;
 			}
 			/*
-			 * W11P supplies canonical Zend-frame locations explicitly.  The
-			 * older W03-W10 scalar contracts predate that table, but their
-			 * argument values are still defined by the stable frame argument
-			 * ordinal.  Keep those compatibility entry points executable
-			 * without weakening the W11P location contract.
+			 * A value model with canonical locations supplies Zend-frame
+			 * locations explicitly.  Without that table, argument values are
+			 * defined by the stable frame argument ordinal.  A model that
+			 * declares canonical locations must name every location; it never
+			 * falls back to the ordinal.
 			 */
 			const zend_mir_storage_id storage_id =
 				zend_mir_id_is_valid(
@@ -7627,7 +7627,7 @@ public:
 					&& record.opcode < ZEND_MIR_OPCODE_SCALAR_DROP) {
 				continue;
 			}
-			/* W09 Pi nodes over canonical zvals preserve source SSA topology.
+			/* Pi nodes over canonical zvals preserve source SSA topology.
 			 * They are registerless only after the same physical-location proof
 			 * used for boxed PHIs. */
 			if (record.opcode == ZEND_MIR_OPCODE_COPY

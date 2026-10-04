@@ -1,12 +1,12 @@
 # Native frame semantics
 
-This directory freezes the W01 native baseline-frame, safepoint, bailout, and
-resume contracts. It specifies observable behavior and metadata; it does not
-add runtime code, public headers, or an optimizer ABI.
+These contracts define the frame layout, safepoints, bailout, exceptions,
+suspension and resume of native code under ADR 0025: what each observation
+point reads, where live values are, and how control continues.
 
 ## Contract map
 
-- [Baseline frame contract](baseline-frame-contract.md): physical frame and
+- [Frame contract](frame-contract.md): physical frame and
   slot layout, ownership, roots, and lifecycle.
 - [Safepoint contract](safepoint-contract.md): canonicalization boundaries and
   exact opline state before and after each boundary.
@@ -16,16 +16,19 @@ add runtime code, public headers, or an optimizer ABI.
   fields for one canonical frame.
 - [Frame-state examples](frame-state.examples.json): valid normal-call,
   exception, destructor, generator, and fiber states plus negative cases.
-- [ADR 0009](../../adr/0009-native-frame-state-and-safepoints.md) and
-  [ADR 0010](../../adr/0010-bailout-exception-suspend-resume-abi.md): accepted
-  architecture decisions.
+- [ADR 0025](../../adr/0025-native-canonical-execution.md) and
+  [ADR 0010](../../adr/0010-bailout-exception-suspend-resume-abi.md): the
+  architecture decisions behind them.
 
 ## Binding invariants
 
-1. Observable execution uses Zend-compatible `zend_execute_data` and VM-stack
-   slots. Native metadata supplements that ABI and cannot replace it.
-2. Every safepoint has canonical opline, parent chain, roots, ownership, and
-   cleanup state before control crosses the boundary.
+1. Native state is canonical. The frame header, arguments and parameter CVs
+   are always current in the Zend `zend_execute_data` frame; other CVs and
+   temporaries live in registers or native stack slots and are written to
+   their slots only where an observation point reads them.
+2. Every observation point has a verified machine frame-state map naming the
+   location of each live PHP value, root and cleanup obligation, and publishes
+   exactly the state its boundary class reads before control crosses it.
 3. Exceptions use `EG(exception)` plus explicit native control flow. Bailout is
    a nonlocal transfer.
 4. Suspension owns persistent rooted state. Resume has one version-checked

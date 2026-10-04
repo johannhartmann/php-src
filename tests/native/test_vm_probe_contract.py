@@ -143,7 +143,7 @@ class NativeVmProbeContractTest(unittest.TestCase):
 
     def test_phpt_requires_positive_runtime_counts(self) -> None:
         phpt = (
-            ROOT / "ext/native_mir_test/tests/w14_vm_probe_contract.phpt"
+            ROOT / "ext/native_mir_test/tests/vm_probe_contract.phpt"
         ).read_text()
 
         self.assertIn("$execution['vm_handler_calls'] > 0", phpt)

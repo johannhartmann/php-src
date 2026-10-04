@@ -37,8 +37,6 @@ zend_mir_cfg_status zend_mir_cfg_create(zend_mir_cfg **out,
 void zend_mir_cfg_destroy(zend_mir_cfg *cfg);
 
 const zend_mir_view *zend_mir_cfg_view(const zend_mir_cfg *cfg);
-zend_mir_function_id zend_mir_cfg_function_id(const zend_mir_cfg *cfg);
-const char *zend_mir_cfg_status_name(zend_mir_cfg_status status);
 
 zend_mir_cfg_status zend_mir_cfg_validate(const zend_mir_cfg *cfg);
 zend_mir_cfg_status zend_mir_cfg_add_edge(zend_mir_cfg *cfg,

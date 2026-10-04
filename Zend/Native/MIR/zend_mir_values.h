@@ -160,12 +160,12 @@ typedef struct _zend_mir_call_transfer_ref {
  * same storage across control-flow edges; machine-code lowering uses that
  * equality to prove when a boxed PHI requires no machine-register parallel
  * copy. storage_id is in the physical frame-slot namespace used by executable
- * operands, not an index into the independent W06 semantic-storage table.
+ * operands, not an index into the independent semantic-storage table.
  *
  * frame_argument_ordinal_plus_one explicitly identifies a value produced by
  * a source RECV/RECV_INIT. Zero means that the value is not a function input;
- * otherwise the encoded ordinal is one-based so zero-initialized legacy
- * records remain compatible. This is source-backed MIR metadata: target
+ * otherwise the encoded ordinal is one-based so a zero-initialized record
+ * means "not an argument". This is source-backed MIR metadata: target
  * adaptors must not recover argument identities by decoding Zend opcodes or
  * by guessing from later frame-slot states.
  */
@@ -251,9 +251,9 @@ typedef enum _zend_mir_value_model_flag {
 	ZEND_MIR_VALUE_MODEL_NONE = 0,
 	/*
 	 * The executable model contains canonical physical frame locations for
-	 * every original zval identity consumed by machine-code lowering. Legacy
-	 * W06–W08 models do not set this bit and retain their historical
-	 * registerless boxed values.
+	 * every original zval identity consumed by machine-code lowering. Models
+	 * without this bit keep registerless boxed values and identify argument
+	 * storage by the frame argument ordinal.
 	 */
 	ZEND_MIR_VALUE_MODEL_CANONICAL_LOCATIONS = 1u << 0,
 	/* Every core MIR value has exactly one immutable value-plan record. */
@@ -372,31 +372,28 @@ typedef struct _zend_mir_value_mutator {
 		const zend_mir_suspend_live_value_ref *record);
 } zend_mir_value_mutator;
 
-typedef enum _zend_mir_verify_w06_code {
-	ZEND_MIR_VERIFY_W06_OK = 0,
-	ZEND_MIR_VERIFY_W06_STORAGE_MISMATCH = 800,
-	ZEND_MIR_VERIFY_W06_REFERENCE_MISMATCH = 801,
-	ZEND_MIR_VERIFY_W06_INDIRECT_MISMATCH = 802,
-	ZEND_MIR_VERIFY_W06_TRANSITION_MISMATCH = 803,
-	ZEND_MIR_VERIFY_W06_ALIAS_MISMATCH = 804,
-	ZEND_MIR_VERIFY_W06_SEPARATION_MISMATCH = 805,
-	ZEND_MIR_VERIFY_W06_CALL_TRANSFER_MISMATCH = 806,
-	ZEND_MIR_VERIFY_W06_VALUE_PLAN_MISMATCH = 807,
-	ZEND_MIR_VERIFY_W06_BOUNDARY_PLAN_MISMATCH = 808,
-	ZEND_MIR_VERIFY_W06_CODE_INVALID = -1
-} zend_mir_verify_w06_code;
+typedef enum _zend_mir_verify_value_code {
+	ZEND_MIR_VERIFY_VALUE_OK = 0,
+	ZEND_MIR_VERIFY_STORAGE_MISMATCH = 800,
+	ZEND_MIR_VERIFY_REFERENCE_MISMATCH = 801,
+	ZEND_MIR_VERIFY_INDIRECT_MISMATCH = 802,
+	ZEND_MIR_VERIFY_TRANSITION_MISMATCH = 803,
+	ZEND_MIR_VERIFY_ALIAS_MISMATCH = 804,
+	ZEND_MIR_VERIFY_SEPARATION_MISMATCH = 805,
+	ZEND_MIR_VERIFY_CALL_TRANSFER_MISMATCH = 806,
+	ZEND_MIR_VERIFY_VALUE_PLAN_MISMATCH = 807,
+	ZEND_MIR_VERIFY_BOUNDARY_PLAN_MISMATCH = 808,
+	ZEND_MIR_VERIFY_VALUE_CODE_INVALID = -1
+} zend_mir_verify_value_code;
 
-#define ZEND_MIRV_TOKEN_W06_STORAGE_MISMATCH "[MIRV0800]"
-#define ZEND_MIRV_TOKEN_W06_REFERENCE_MISMATCH "[MIRV0801]"
-#define ZEND_MIRV_TOKEN_W06_INDIRECT_MISMATCH "[MIRV0802]"
-#define ZEND_MIRV_TOKEN_W06_TRANSITION_MISMATCH "[MIRV0803]"
-#define ZEND_MIRV_TOKEN_W06_ALIAS_MISMATCH "[MIRV0804]"
-#define ZEND_MIRV_TOKEN_W06_SEPARATION_MISMATCH "[MIRV0805]"
-#define ZEND_MIRV_TOKEN_W06_CALL_TRANSFER_MISMATCH "[MIRV0806]"
-#define ZEND_MIRV_TOKEN_W06_VALUE_PLAN_MISMATCH "[MIRV0807]"
-#define ZEND_MIRV_TOKEN_W06_BOUNDARY_PLAN_MISMATCH "[MIRV0808]"
-
-bool zend_mir_verify_w06_values(const zend_mir_view *view,
-	const zend_mir_value_view *values, zend_mir_diagnostic_sink *diagnostics);
+#define ZEND_MIRV_TOKEN_STORAGE_MISMATCH "[MIRV0800]"
+#define ZEND_MIRV_TOKEN_REFERENCE_MISMATCH "[MIRV0801]"
+#define ZEND_MIRV_TOKEN_INDIRECT_MISMATCH "[MIRV0802]"
+#define ZEND_MIRV_TOKEN_TRANSITION_MISMATCH "[MIRV0803]"
+#define ZEND_MIRV_TOKEN_ALIAS_MISMATCH "[MIRV0804]"
+#define ZEND_MIRV_TOKEN_SEPARATION_MISMATCH "[MIRV0805]"
+#define ZEND_MIRV_TOKEN_CALL_TRANSFER_MISMATCH "[MIRV0806]"
+#define ZEND_MIRV_TOKEN_VALUE_PLAN_MISMATCH "[MIRV0807]"
+#define ZEND_MIRV_TOKEN_BOUNDARY_PLAN_MISMATCH "[MIRV0808]"
 
 #endif /* ZEND_MIR_VALUES_H */

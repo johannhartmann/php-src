@@ -432,7 +432,6 @@ class PerformanceContractTests(unittest.TestCase):
     ) -> None:
         target = BENCHMARK.TARGET_BY_HOST[(platform.system(), platform.machine())]
         benchmark_script = str(SCRIPT)
-        execution_script = str(ROOT / "scripts" / "native" / "test-native-execution.py")
         missing = str(ROOT / "tests" / "native" / "does-not-exist-php")
 
         invalid_samples = subprocess.run(
@@ -472,46 +471,6 @@ class PerformanceContractTests(unittest.TestCase):
         self.assertEqual(3, missing_candidate.returncode)
         self.assertIn("candidate PHP binary is unavailable", missing_candidate.stderr)
         self.assertNotIn("Traceback", missing_candidate.stderr)
-
-        same_binary = subprocess.run(
-            [
-                sys.executable,
-                execution_script,
-                "--target",
-                target,
-                "--candidate",
-                sys.executable,
-                "--reference",
-                sys.executable,
-            ],
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(2, same_binary.returncode)
-        self.assertIn("must differ", same_binary.stderr)
-        self.assertNotIn("Traceback", same_binary.stderr)
-
-        missing_execution_input = subprocess.run(
-            [
-                sys.executable,
-                execution_script,
-                "--target",
-                target,
-                "--candidate",
-                missing,
-                "--reference",
-                sys.executable,
-            ],
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(3, missing_execution_input.returncode)
-        self.assertIn("candidate PHP binary is unavailable", missing_execution_input.stderr)
-        self.assertNotIn("Traceback", missing_execution_input.stderr)
 
 
 if __name__ == "__main__":

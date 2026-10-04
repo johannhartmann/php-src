@@ -162,7 +162,7 @@ static void zend_mir_verify_use(zend_mir_verify_context *context,
 	definition_index = definitions[value_index];
 	if (definition_index == UINT32_MAX) {
 		/*
-		 * The frozen opcode set has no ARG opcode. An undefined value is only
+		 * The MIR opcode set has no ARG opcode. An undefined value is only
 		 * well-formed when the function-entry STATEPOINT publishes it.
 		 */
 		use_block = zend_mir_verify_find_block(context, instruction->record.block_id);

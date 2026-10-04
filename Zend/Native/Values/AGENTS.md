@@ -5,11 +5,10 @@ execution. It must represent and execute canonical zvals, references, aliases,
 ownership transfers, separation, cleanup, strings, arrays, iterators, and
 argument containers. It is not a model-only layer.
 
-- Replace or simplify historical W06 records when they obstruct executable
-  semantics; do not create a second parallel value system.
-- Valid value and container operations in the active implementation scope must
-  lower to executable MIR. Modeling-only success, `codegen_eligible` barriers,
-  and deliberate compile rejection are not implementations.
+- Do not create a second parallel value system.
+- Valid value and container operations must lower to executable MIR.
+  Modeling-only success and deliberate compile rejection are not
+  implementations.
 - Keep persistent MIR identity pointer-free and target-neutral. Process-local
   runtime bindings may use Zend pointers while they are alive.
 - Preserve exact Zend addref, move, release, destructor, reference, COW, GC-root,
@@ -22,4 +21,4 @@ argument containers. It is not a model-only layer.
   pairs atomic during lowering and failure.
 - Production sources are C11. C ABI headers must also compile as C++20.
 - Extend direct execution tests and the existing native test matrix; do not add
-  wave profiles, ownership manifests, receipts, or value-specific gate systems.
+  profiles, ownership manifests, receipts, or value-specific gate systems.

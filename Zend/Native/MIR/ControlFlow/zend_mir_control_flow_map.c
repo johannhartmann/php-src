@@ -329,7 +329,7 @@ bool zend_mir_control_flow_map_storage_init(
 	storage->block_capacity = block_capacity;
 	storage->edge_capacity = edge_capacity;
 	storage->phi_capacity = phi_capacity;
-	storage->public_map.contract_version = ZEND_MIR_W04_CONTRACT_VERSION;
+	storage->public_map.contract_version = ZEND_MIR_CONTRACT_VERSION;
 	storage->public_map.context = storage;
 	storage->public_map.block_count = zend_mir_cf_block_count;
 	storage->public_map.block_at = zend_mir_cf_block_at;

@@ -237,7 +237,7 @@ static void assert_intern_rejected(zend_mir_frame_table *table,
 	assert(id == 1234);
 }
 
-static void test_w01_examples_and_deduplication(void)
+static void test_examples_and_deduplication(void)
 {
 	test_arena table_arena;
 	test_arena builder_arena;
@@ -759,7 +759,7 @@ static void test_source_maps(void)
 
 int main(void)
 {
-	test_w01_examples_and_deduplication();
+	test_examples_and_deduplication();
 	test_collisions_parents_and_negative_cases();
 	test_invalid_enum_sentinels_and_bailout_shape();
 	test_builder_failure_atomicity();

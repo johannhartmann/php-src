@@ -6,7 +6,7 @@
 #include "../../MIR/Semantics/zend_mir_effect_summary.h"
 #include "zend_mir_control_flow_internal.h"
 
-static bool zend_mir_w04_add_instruction(
+static bool zend_mir_cf_add_instruction(
 	zend_mir_mutator *mutator, zend_mir_block_id block_id,
 	zend_mir_opcode opcode, zend_mir_representation representation,
 	zend_mir_value_id result_id, zend_mir_source_position_id source_position_id,
@@ -25,7 +25,7 @@ static bool zend_mir_w04_add_instruction(
 		&& mutator->add_instruction(mutator->context, &record, out);
 }
 
-static bool zend_mir_w04_operand_value_fact(
+static bool zend_mir_operand_value_fact(
 	const zend_mir_lowering_context *context,
 	const zend_mir_source_operand_ref *operand,
 	zend_mir_value_id *value_id_out,
@@ -57,7 +57,7 @@ static bool zend_mir_w04_operand_value_fact(
 		&& *out != ZEND_MIR_REPRESENTATION_INVALID;
 }
 
-static bool zend_mir_w04_value_fact(
+static bool zend_mir_cf_value_fact(
 	const zend_mir_lowering_context *context, uint32_t ssa_variable_id,
 	zend_mir_value_fact_ref *fact_out, zend_mir_representation *out)
 {
@@ -66,20 +66,20 @@ static bool zend_mir_w04_value_fact(
 	memset(&operand, 0, sizeof(operand));
 	operand.kind = ZEND_MIR_SOURCE_OPERAND_SSA;
 	operand.ssa_variable_id = ssa_variable_id;
-	return zend_mir_w04_operand_value_fact(
+	return zend_mir_operand_value_fact(
 		context, &operand, &value_id, fact_out, out);
 }
 
-static bool zend_mir_w04_value_representation(
+static bool zend_mir_value_representation(
 	const zend_mir_lowering_context *context, uint32_t ssa_variable_id,
 	zend_mir_representation *out)
 {
 	zend_mir_value_fact_ref fact;
-	return zend_mir_w04_value_fact(
+	return zend_mir_cf_value_fact(
 		context, ssa_variable_id, &fact, out);
 }
 
-static bool zend_mir_w04_condition_value(
+static bool zend_mir_condition_value(
 	zend_mir_lowering_context *context, zend_mir_mutator *mutator,
 	const zend_mir_source_opcode_ref *opcode, zend_mir_value_id *out)
 {
@@ -95,7 +95,7 @@ static bool zend_mir_w04_condition_value(
 	uint32_t opcode_count;
 	uint32_t payload;
 	if (context == NULL || mutator == NULL || opcode == NULL || out == NULL
-			|| !zend_mir_w04_operand_value_fact(context, &opcode->op1,
+			|| !zend_mir_operand_value_fact(context, &opcode->op1,
 				&input, &input_fact, &input_representation)) {
 		return false;
 	}
@@ -140,7 +140,7 @@ static bool zend_mir_w04_condition_value(
 		constant.kind = ZEND_MIR_CONSTANT_KIND_SIGNED_INTEGER_BITS;
 		constant.symbol_id = ZEND_MIR_ID_INVALID;
 		if (!mutator->add_constant(mutator->context, &constant)
-				|| !zend_mir_w04_add_instruction(mutator,
+				|| !zend_mir_cf_add_instruction(mutator,
 					zend_mir_lowering_context_block_id(context),
 					ZEND_MIR_OPCODE_CONSTANT, ZEND_MIR_REPRESENTATION_I1,
 					result, opcode->source_position_id, &instruction_id)) {
@@ -154,7 +154,7 @@ static bool zend_mir_w04_condition_value(
 		: input_fact.exact_type == ZEND_MIR_SCALAR_TYPE_F64
 			? ZEND_MIR_OPCODE_F64_TO_I1 : ZEND_MIR_OPCODE_INVALID;
 	if (conversion == ZEND_MIR_OPCODE_INVALID
-			|| !zend_mir_w04_add_instruction(mutator,
+			|| !zend_mir_cf_add_instruction(mutator,
 				zend_mir_lowering_context_block_id(context), conversion,
 				ZEND_MIR_REPRESENTATION_I1, result,
 				opcode->source_position_id, &instruction_id)
@@ -167,7 +167,7 @@ static bool zend_mir_w04_condition_value(
 	return true;
 }
 
-static bool zend_mir_w04_source_block(
+static bool zend_mir_cf_source_block(
 	const zend_mir_lowering_source_view *source,
 	zend_mir_source_block_id id, zend_mir_source_block_ref *out)
 {
@@ -177,7 +177,7 @@ static bool zend_mir_w04_source_block(
 	return source->block_at(source->context, id, out) && out->id == id;
 }
 
-static bool zend_mir_w04_collect_current_slot_values(
+static bool zend_mir_collect_current_slot_values(
 	const zend_mir_lowering_context *context,
 	zend_mir_source_block_id at_block,
 	zend_mir_value_id *values_out, uint32_t slot_count)
@@ -251,7 +251,7 @@ static bool zend_mir_w04_collect_current_slot_values(
 	for (i = 0; i < block_count; i++) {
 		zend_mir_source_block_ref block;
 		if (current >= block_count || dominance_depth[current] != 0
-				|| !zend_mir_w04_source_block(source, current, &block)) {
+				|| !zend_mir_cf_source_block(source, current, &block)) {
 			goto done;
 		}
 		dominance_depth[current] = depth--;
@@ -266,7 +266,7 @@ static bool zend_mir_w04_collect_current_slot_values(
 	}
 	for (i = 0; i < block_count; i++) {
 		zend_mir_source_block_ref block;
-		if (!zend_mir_w04_source_block(source, i, &block)) {
+		if (!zend_mir_cf_source_block(source, i, &block)) {
 			goto done;
 		}
 		if ((block.flags & ZEND_MIR_SOURCE_BLOCK_ENTRY) != 0) {
@@ -327,7 +327,7 @@ static bool zend_mir_w04_collect_current_slot_values(
 				|| ssa.source_slot_kind > ZEND_MIR_SOURCE_SLOT_VAR) {
 			goto done;
 		}
-		if (!zend_mir_w04_value_fact(
+		if (!zend_mir_cf_value_fact(
 				context, ssa.ssa_variable_id, &fact, &representation)) {
 			continue;
 		}
@@ -387,7 +387,7 @@ done:
 	return success;
 }
 
-static zend_mir_frame_slot_kind zend_mir_w04_frame_slot_kind(
+static zend_mir_frame_slot_kind zend_mir_cf_frame_slot_kind(
 	zend_mir_source_slot_kind kind)
 {
 	switch (kind) {
@@ -402,7 +402,7 @@ static zend_mir_frame_slot_kind zend_mir_w04_frame_slot_kind(
 	}
 }
 
-static bool zend_mir_w10_add_effect(
+static bool zend_mir_object_add_effect(
 	zend_mir_effect_summary *summary, zend_mir_effect effect)
 {
 	zend_mir_effect_summary atomic;
@@ -417,7 +417,7 @@ static bool zend_mir_w10_add_effect(
 	return true;
 }
 
-static bool zend_mir_w10_throw_semantics(zend_mir_effect_summary *summary)
+static bool zend_mir_throw_semantics(zend_mir_effect_summary *summary)
 {
 	const zend_mir_memory_domain_mask frame_domains =
 		ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_FRAME_LOCALS)
@@ -430,11 +430,11 @@ static bool zend_mir_w10_throw_semantics(zend_mir_effect_summary *summary)
 		| ZEND_MIR_MEMORY_DOMAIN_MASK(ZEND_MIR_MEMORY_DOMAIN_ENGINE_EXCEPTION);
 
 	zend_mir_effect_summary_empty(summary);
-	if (!zend_mir_w10_add_effect(summary, ZEND_MIR_EFFECT_READ_MEMORY)
-			|| !zend_mir_w10_add_effect(summary, ZEND_MIR_EFFECT_WRITE_MEMORY)
-			|| !zend_mir_w10_add_effect(summary, ZEND_MIR_EFFECT_ALLOCATE)
-			|| !zend_mir_w10_add_effect(summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)
-			|| !zend_mir_w10_add_effect(summary, ZEND_MIR_EFFECT_THROW)) {
+	if (!zend_mir_object_add_effect(summary, ZEND_MIR_EFFECT_READ_MEMORY)
+			|| !zend_mir_object_add_effect(summary, ZEND_MIR_EFFECT_WRITE_MEMORY)
+			|| !zend_mir_object_add_effect(summary, ZEND_MIR_EFFECT_ALLOCATE)
+			|| !zend_mir_object_add_effect(summary, ZEND_MIR_EFFECT_RUN_DESTRUCTOR)
+			|| !zend_mir_object_add_effect(summary, ZEND_MIR_EFFECT_THROW)) {
 		return false;
 	}
 	summary->reads |= frame_domains | heap_domains;
@@ -443,7 +443,7 @@ static bool zend_mir_w10_throw_semantics(zend_mir_effect_summary *summary)
 		summary->reads, summary->writes, summary->barriers, 0, 0);
 }
 
-static bool zend_mir_w10_emit_throw_frame(
+static bool zend_mir_emit_throw_frame(
 	zend_mir_lowering_context *context, zend_mir_mutator *mutator,
 	const zend_mir_source_opcode_ref *opcode,
 	zend_mir_source_block_id source_block_id,
@@ -459,12 +459,12 @@ static bool zend_mir_w10_emit_throw_frame(
 	uint32_t first_slot = 0;
 	uint32_t materialized_slot_count = 0;
 	/*
-	 * W11P gives every SSA value a canonical Zend-frame storage location.
+	 * Every SSA value has a canonical Zend-frame storage location.
 	 * The physical frame is therefore already the authoritative state at a
 	 * throw boundary; repeating the whole frame in every MIR frame record is
 	 * redundant and makes large functions quadratic in frame size.
 	 */
-	uint32_t slot_count = zend_source != NULL && zend_source->w11
+	uint32_t slot_count = zend_source != NULL
 		? 0 : zend_mir_zend_source_slot_count(zend_source);
 	uint32_t i;
 	bool success = false;
@@ -479,7 +479,7 @@ static bool zend_mir_w10_emit_throw_frame(
 	if (slot_count != 0) {
 		slot_values = malloc(slot_count * sizeof(*slot_values));
 		if (slot_values == NULL
-				|| !zend_mir_w04_collect_current_slot_values(
+				|| !zend_mir_collect_current_slot_values(
 					context, source_block_id, slot_values, slot_count)) {
 			goto done;
 		}
@@ -499,7 +499,7 @@ static bool zend_mir_w10_emit_throw_frame(
 		memset(&frame_slot, 0, sizeof(frame_slot));
 		frame_slot.slot_id = source_slot.slot_id;
 		frame_slot.index = source_slot.kind_index;
-		frame_slot.kind = zend_mir_w04_frame_slot_kind(source_slot.kind);
+		frame_slot.kind = zend_mir_cf_frame_slot_kind(source_slot.kind);
 		frame_slot.representation =
 			ZEND_MIR_FRAME_SLOT_REPRESENTATION_CANONICAL_ZVAL;
 		frame_slot.materialization = ZEND_MIR_MATERIALIZATION_MATERIALIZED;
@@ -567,7 +567,7 @@ done:
 	return success;
 }
 
-static bool zend_mir_w04_emit_edge_statepoint(
+static bool zend_mir_emit_edge_statepoint(
 	zend_mir_lowering_context *context, zend_mir_mutator *mutator,
 	const zend_mir_source_opcode_ref *opcode,
 	zend_mir_source_block_id source_block_id,
@@ -586,11 +586,11 @@ static bool zend_mir_w04_emit_edge_statepoint(
 	uint32_t first_slot = 0;
 	uint32_t materialized_slot_count = 0;
 	/*
-	 * Canonical W11P locations keep interrupt-visible values in the Zend
+	 * Canonical frame locations keep interrupt-visible values in the Zend
 	 * frame. Empty statepoint snapshots avoid duplicating those same physical
 	 * locations in every loop edge while retaining the source/frame identity.
 	 */
-	uint32_t slot_count = zend_source != NULL && zend_source->w11
+	uint32_t slot_count = zend_source != NULL
 		? 0 : zend_mir_zend_source_slot_count(zend_source);
 	uint32_t i;
 	bool success = false;
@@ -604,7 +604,7 @@ static bool zend_mir_w04_emit_edge_statepoint(
 	if (slot_count != 0) {
 		slot_values = malloc(slot_count * sizeof(*slot_values));
 		if (slot_values == NULL
-				|| !zend_mir_w04_collect_current_slot_values(
+				|| !zend_mir_collect_current_slot_values(
 					context, source_block_id, slot_values, slot_count)) {
 			goto done;
 		}
@@ -623,7 +623,7 @@ static bool zend_mir_w04_emit_edge_statepoint(
 		memset(&frame_slot, 0, sizeof(frame_slot));
 		frame_slot.slot_id = source_slot.slot_id;
 		frame_slot.index = source_slot.kind_index;
-		frame_slot.kind = zend_mir_w04_frame_slot_kind(source_slot.kind);
+		frame_slot.kind = zend_mir_cf_frame_slot_kind(source_slot.kind);
 		frame_slot.representation =
 			ZEND_MIR_FRAME_SLOT_REPRESENTATION_CANONICAL_ZVAL;
 		frame_slot.materialization = ZEND_MIR_MATERIALIZATION_MATERIALIZED;
@@ -714,7 +714,7 @@ static bool zend_mir_w04_emit_edge_statepoint(
 			goto done;
 		}
 	}
-	if (!zend_mir_w04_add_instruction(mutator, edge_block,
+	if (!zend_mir_cf_add_instruction(mutator, edge_block,
 				ZEND_MIR_OPCODE_BRANCH, ZEND_MIR_REPRESENTATION_CONTROL,
 				ZEND_MIR_ID_INVALID, record.source_position_id, &branch_id)) {
 		goto done;
@@ -726,7 +726,7 @@ done:
 	return success;
 }
 
-static bool zend_mir_w04_edge_statepoint_opcode(
+static bool zend_mir_edge_statepoint_opcode(
 	const zend_mir_lowering_source_view *source,
 	const zend_mir_source_block_ref *block,
 	zend_mir_source_opcode_ref *opcode)
@@ -746,14 +746,14 @@ static bool zend_mir_w04_edge_statepoint_opcode(
 		&& source->opcode_at(source->context, opcode_index, opcode);
 }
 
-static bool zend_mir_w04_emit_terminator_edges(
+static bool zend_mir_emit_terminator_edges(
 	zend_mir_lowering_context *context,
 	zend_mir_mutator *mutator,
 	const zend_mir_source_opcode_ref *opcode,
 	const zend_mir_source_block_ref *block,
 	const zend_mir_source_edge_ref *edges,
 	zend_mir_control_flow_map_storage *map,
-	zend_mir_w04_branch_kind kind,
+	zend_mir_branch_kind kind,
 	zend_mir_instruction_id terminator,
 	uint32_t edge_count)
 {
@@ -774,7 +774,7 @@ static bool zend_mir_w04_emit_terminator_edges(
 		uint32_t mir_index = i;
 		zend_mir_block_id target;
 		if (edge_count == 2) {
-			mir_index = zend_mir_w04_mir_successor_for_source(kind, i);
+			mir_index = zend_mir_mir_successor_for_source(kind, i);
 			if (mir_index > 1) {
 				goto done;
 			}
@@ -798,7 +798,7 @@ static bool zend_mir_w04_emit_terminator_edges(
 			zend_mir_block_id edge_block;
 
 			if (statepoint_opcode == NULL
-					&& !zend_mir_w04_edge_statepoint_opcode(
+					&& !zend_mir_edge_statepoint_opcode(
 						context->source, block, &statepoint_source_opcode)) {
 				goto done;
 			}
@@ -808,7 +808,7 @@ static bool zend_mir_w04_emit_terminator_edges(
 			if (!mutator->add_block(mutator->context,
 					zend_mir_lowering_context_function_id(context),
 					&edge_block)
-					|| !zend_mir_w04_emit_edge_statepoint(
+					|| !zend_mir_emit_edge_statepoint(
 						context, mutator, statepoint_opcode, block->id,
 						edge_block,
 						&mappings[i].edge_statepoint_instruction_id)
@@ -843,7 +843,7 @@ done:
 	return success;
 }
 
-bool zend_mir_w04_emit_terminator(
+bool zend_mir_emit_terminator(
 	zend_mir_lowering_context *context,
 	zend_mir_mutator *mutator,
 	const zend_mir_source_opcode_ref *opcode,
@@ -855,36 +855,36 @@ bool zend_mir_w04_emit_terminator(
 {
 	zend_mir_instruction_id terminator;
 	zend_mir_value_id condition = ZEND_MIR_ID_INVALID;
-	zend_mir_w04_branch_kind kind = ZEND_MIR_W04_BRANCH_KIND_INVALID;
+	zend_mir_branch_kind kind = ZEND_MIR_BRANCH_KIND_INVALID;
 	bool source_condition = false;
 	if (context == NULL || mutator == NULL || block == NULL || map == NULL
 			|| (edge_count != 0 && edges == NULL)) {
 		return false;
 	}
 	if (opcode != NULL) {
-		kind = zend_mir_w04_branch_kind_for_opcode(opcode->zend_opcode_number);
+		kind = zend_mir_branch_kind_for_opcode(opcode->zend_opcode_number);
 	}
 	source_condition = context->zend_source != NULL
-		&& context->zend_source->w09 && edge_count == 2
+		&& edge_count == 2
 		&& (!machine_condition
-			|| kind == ZEND_MIR_W12_BRANCH_BIND_STATIC
-			|| kind == ZEND_MIR_W12_BRANCH_FRAMELESS)
-		&& kind != ZEND_MIR_W04_BRANCH_CATCH
-		&& kind != ZEND_MIR_W08_BRANCH_FINALLY_CALL
-		&& kind != ZEND_MIR_W09_BRANCH_ITERATOR
-		&& kind != ZEND_MIR_W12_BRANCH_MULTIWAY;
-	if (!zend_mir_w04_branch_edge_count_is_valid(
+			|| kind == ZEND_MIR_BRANCH_BIND_STATIC
+			|| kind == ZEND_MIR_BRANCH_FRAMELESS)
+		&& kind != ZEND_MIR_BRANCH_CATCH
+		&& kind != ZEND_MIR_BRANCH_FINALLY_CALL
+		&& kind != ZEND_MIR_BRANCH_ITERATOR
+		&& kind != ZEND_MIR_BRANCH_MULTIWAY;
+	if (!zend_mir_branch_edge_count_is_valid(
 			kind, opcode == NULL ? 0 : opcode->zend_opcode_number, edge_count)) {
 		return false;
 	}
-	if (kind == ZEND_MIR_W10_BRANCH_THROW) {
+	if (kind == ZEND_MIR_BRANCH_THROW) {
 		zend_mir_effect_summary summary;
 		zend_mir_frame_state_id frame_id;
 		zend_mir_instruction_record record;
 
 		if (opcode == NULL || block->opcode_count == 0
-				|| !zend_mir_w10_throw_semantics(&summary)
-				|| !zend_mir_w10_emit_throw_frame(
+				|| !zend_mir_throw_semantics(&summary)
+				|| !zend_mir_emit_throw_frame(
 					context, mutator, opcode, block->id, &frame_id)) {
 			return false;
 		}
@@ -904,49 +904,49 @@ bool zend_mir_w04_emit_terminator(
 			&& mutator->add_instruction(
 				mutator->context, &record, &terminator);
 	}
-	if (edge_count == 0 && kind != ZEND_MIR_W08_BRANCH_FINALLY_RETURN) {
+	if (edge_count == 0 && kind != ZEND_MIR_BRANCH_FINALLY_RETURN) {
 		if (opcode != NULL || block->opcode_count != 0) {
 			return true;
 		}
-		return zend_mir_w04_add_instruction(mutator,
+		return zend_mir_cf_add_instruction(mutator,
 			zend_mir_lowering_context_block_id(context),
 			ZEND_MIR_OPCODE_UNREACHABLE, ZEND_MIR_REPRESENTATION_CONTROL,
 			ZEND_MIR_ID_INVALID, ZEND_MIR_ID_INVALID, &terminator);
 	}
-	if (edge_count == 2 && kind != ZEND_MIR_W04_BRANCH_CATCH
-			&& kind != ZEND_MIR_W08_BRANCH_FINALLY_CALL
-			&& kind != ZEND_MIR_W09_BRANCH_ITERATOR
-			&& kind != ZEND_MIR_W12_BRANCH_MULTIWAY && !source_condition
-			&& !zend_mir_w04_condition_value(
+	if (edge_count == 2 && kind != ZEND_MIR_BRANCH_CATCH
+			&& kind != ZEND_MIR_BRANCH_FINALLY_CALL
+			&& kind != ZEND_MIR_BRANCH_ITERATOR
+			&& kind != ZEND_MIR_BRANCH_MULTIWAY && !source_condition
+			&& !zend_mir_condition_value(
 				context, mutator, opcode, &condition)) {
 		return false;
 	}
 	if (!source_condition
-			&& (kind == ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT
-				|| kind == ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT
-				|| kind == ZEND_MIR_W09_BRANCH_JMP_SET
-				|| kind == ZEND_MIR_W09_BRANCH_COALESCE
-				|| kind == ZEND_MIR_W10_BRANCH_JMP_NULL)) {
+			&& (kind == ZEND_MIR_BRANCH_IF_FALSE_WITH_RESULT
+				|| kind == ZEND_MIR_BRANCH_IF_TRUE_WITH_RESULT
+				|| kind == ZEND_MIR_BRANCH_JMP_SET
+				|| kind == ZEND_MIR_BRANCH_COALESCE
+				|| kind == ZEND_MIR_BRANCH_JMP_NULL)) {
 		zend_mir_instruction_id copy_id;
 		zend_mir_value_fact_ref input_fact;
 		zend_mir_value_id input;
 		zend_mir_representation input_representation;
 		zend_mir_representation representation;
 		const bool boolean_result =
-			kind == ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT
-			|| kind == ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT;
+			kind == ZEND_MIR_BRANCH_IF_FALSE_WITH_RESULT
+			|| kind == ZEND_MIR_BRANCH_IF_TRUE_WITH_RESULT;
 		if (opcode == NULL
 				|| opcode->op1.kind != ZEND_MIR_SOURCE_OPERAND_SSA
 				|| opcode->result.kind != ZEND_MIR_SOURCE_OPERAND_SSA
-				|| !zend_mir_w04_operand_value_fact(context, &opcode->op1,
+				|| !zend_mir_operand_value_fact(context, &opcode->op1,
 					&input, &input_fact, &input_representation)
-				|| !zend_mir_w04_value_representation(context,
+				|| !zend_mir_value_representation(context,
 					opcode->result.ssa_variable_id, &representation)
 				|| (boolean_result
 					? representation != ZEND_MIR_REPRESENTATION_I1
 					: representation != input_representation)
 				|| !zend_mir_id_is_valid(condition)
-				|| !zend_mir_w04_add_instruction(mutator,
+				|| !zend_mir_cf_add_instruction(mutator,
 					zend_mir_lowering_context_block_id(context),
 					ZEND_MIR_OPCODE_COPY, representation,
 					zend_mir_value_from_original_ssa(
@@ -957,21 +957,21 @@ bool zend_mir_w04_emit_terminator(
 			return false;
 		}
 	}
-	if (!zend_mir_w04_add_instruction(mutator,
+	if (!zend_mir_cf_add_instruction(mutator,
 			zend_mir_lowering_context_block_id(context),
-			kind == ZEND_MIR_W04_BRANCH_CATCH
+			kind == ZEND_MIR_BRANCH_CATCH
 				? ZEND_MIR_OPCODE_CATCH_ENTER
-				: kind == ZEND_MIR_W08_BRANCH_FINALLY_CALL
+				: kind == ZEND_MIR_BRANCH_FINALLY_CALL
 					? ZEND_MIR_OPCODE_FINALLY_CALL
-				: kind == ZEND_MIR_W08_BRANCH_FINALLY_RETURN
+				: kind == ZEND_MIR_BRANCH_FINALLY_RETURN
 					? ZEND_MIR_OPCODE_FINALLY_RETURN
-				: kind == ZEND_MIR_W09_BRANCH_ITERATOR
+				: kind == ZEND_MIR_BRANCH_ITERATOR
 					? ZEND_MIR_OPCODE_ITERATOR_BRANCH
-				: kind == ZEND_MIR_W12_BRANCH_MULTIWAY && edge_count > 1
+				: kind == ZEND_MIR_BRANCH_MULTIWAY && edge_count > 1
 					? ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH
-				: kind == ZEND_MIR_W12_BRANCH_BIND_STATIC
+				: kind == ZEND_MIR_BRANCH_BIND_STATIC
 					? ZEND_MIR_OPCODE_VALUE_BIND_STATIC_BRANCH
-				: kind == ZEND_MIR_W12_BRANCH_FRAMELESS
+				: kind == ZEND_MIR_BRANCH_FRAMELESS
 					? ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH
 				: source_condition
 					? ZEND_MIR_OPCODE_VALUE_COND_BRANCH
@@ -982,17 +982,17 @@ bool zend_mir_w04_emit_terminator(
 			&terminator)) {
 		return false;
 	}
-	if (edge_count == 2 && kind != ZEND_MIR_W04_BRANCH_CATCH
-			&& kind != ZEND_MIR_W08_BRANCH_FINALLY_CALL
-			&& kind != ZEND_MIR_W09_BRANCH_ITERATOR
-			&& kind != ZEND_MIR_W12_BRANCH_MULTIWAY && !source_condition) {
+	if (edge_count == 2 && kind != ZEND_MIR_BRANCH_CATCH
+			&& kind != ZEND_MIR_BRANCH_FINALLY_CALL
+			&& kind != ZEND_MIR_BRANCH_ITERATOR
+			&& kind != ZEND_MIR_BRANCH_MULTIWAY && !source_condition) {
 		if (!zend_mir_id_is_valid(condition)
 				|| !mutator->add_operand(
 					mutator->context, terminator, condition)) {
 			return false;
 		}
 	}
-	return zend_mir_w04_emit_terminator_edges(
+	return zend_mir_emit_terminator_edges(
 		context, mutator, opcode, block, edges, map, kind, terminator,
 		edge_count);
 }

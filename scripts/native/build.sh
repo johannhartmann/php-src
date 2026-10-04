@@ -10,7 +10,7 @@ trap native_release_lock EXIT
 
 usage() {
     cat <<'EOF'
-Build an isolated php-src W00 profile and write a JSON manifest.
+Build an isolated php-src native profile and write a JSON manifest.
 
 Usage: build.sh [--profile PROFILE] [--jobs N] [--force-configure] [--print-binary]
 

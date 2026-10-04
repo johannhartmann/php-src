@@ -122,7 +122,7 @@ typedef struct _zend_mir_numeric_provider_set {
 extern "C" {
 #endif
 
-/* Process-local accessors supplied by the W03 lowering core. */
+/* Process-local accessors supplied by the lowering core. */
 const void *zend_mir_lowering_context_provider_context(
 	const zend_mir_lowering_context *context);
 zend_mir_block_id zend_mir_lowering_context_block_id(
@@ -142,8 +142,6 @@ bool zend_mir_numeric_range_multiply(
 bool zend_mir_numeric_range_modulo(
 	zend_mir_numeric_range dividend, zend_mir_numeric_range divisor,
 	zend_mir_numeric_range *result);
-bool zend_mir_numeric_modulo_is_safe(
-	zend_mir_numeric_range dividend, zend_mir_numeric_range divisor);
 bool zend_mir_numeric_shift_left(
 	zend_mir_numeric_range value, zend_mir_numeric_range count,
 	zend_mir_numeric_range *result);

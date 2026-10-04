@@ -20,7 +20,7 @@ typedef struct _zend_mir_value_lowering_inventory_entry {
 } zend_mir_value_lowering_inventory_entry;
 
 /*
- * This is the process-local W06 per-opline lowering inventory. It is not the
+ * This is the process-local per-opline value-lowering inventory. It is not the
  * persistent per-value execution plan stored in the MIR value model.
  */
 typedef struct _zend_mir_value_lowering_inventory {

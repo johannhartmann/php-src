@@ -137,7 +137,7 @@ def nested(data: object, path: tuple[str, ...]) -> object:
     current = data
     for key in path:
         if not isinstance(current, dict) or key not in current:
-            raise ContractError(f"missing W01 schema path: {'/'.join(path)}")
+            raise ContractError(f"missing effect-model schema path: {'/'.join(path)}")
         current = current[key]
     return current
 
@@ -166,7 +166,7 @@ def validate_catalog_text(text: str, macro: str, expected: list[str]) -> None:
     labels = [label for label, _ in entries]
     values = [value for _, value in entries]
     if labels != expected:
-        raise ContractError(f"{macro} does not exactly match W01 order: {labels!r}")
+        raise ContractError(f"{macro} does not exactly match catalog order: {labels!r}")
     if values != list(range(len(expected))):
         raise ContractError(f"{macro} IDs must be unique and contiguous from zero: {values!r}")
     if len(values) != len(set(values)):
@@ -255,20 +255,20 @@ def validate_sources() -> None:
     effects = load_json(EFFECT_MODEL)
     frame = load_json(FRAME_SCHEMA)
     if not isinstance(effects, dict) or not isinstance(effects.get("catalog"), dict):
-        raise ContractError("invalid W01 effect model")
+        raise ContractError("invalid effect model")
 
     effect_header = sources["zend_mir_effects.h"]
     for macro, key in EFFECT_CATALOGS.items():
         expected = effects["catalog"].get(key)
         if not isinstance(expected, list) or not all(isinstance(item, str) for item in expected):
-            raise ContractError(f"invalid W01 catalog {key}")
+            raise ContractError(f"invalid catalog {key}")
         validate_catalog_text(effect_header, macro, expected)
 
     frame_header = sources["zend_mir_frame_state.h"]
     for macro, path in FRAME_CATALOG_PATHS.items():
         expected = nested(frame, path)
         if not isinstance(expected, list) or not all(isinstance(item, str) for item in expected):
-            raise ContractError(f"invalid W01 frame catalog {'/'.join(path)}")
+            raise ContractError(f"invalid frame catalog {'/'.join(path)}")
         validate_catalog_text(frame_header, macro, expected)
 
     opcode_header = sources["zend_mir_opcodes.h"]
@@ -356,7 +356,7 @@ def main() -> int:
     except (ContractError, OSError, json.JSONDecodeError) as error:
         print(f"ZNMIR contract check failed: {error}", file=sys.stderr)
         return 1
-    print("ZNMIR contract check passed: W01 catalogs, headers, and fixture host are valid")
+    print("ZNMIR contract check passed: catalogs, headers, and fixture host are valid")
     return 0
 
 

@@ -1,19 +1,19 @@
-# ADR 0011: Canonical ZNMIR core contract
+# ADR 0011: ZNMIR core contract
 
 ## Status
 
-Accepted on 2026-07-17.
+Accepted.
 
 ## Context
 
-W01 freezes semantic catalogs but does not define the C boundary used by the
-six W02 implementation tracks. Those tracks need stable identities, records,
-storage-independent traversal and construction, and a way to execute tests
-before the production arena exists.
+MIR producers (lowering), consumers (verifier, text dump, backend) and tests
+need stable identities, records, and storage-independent traversal and
+construction.
 
 ## Decision
 
-ZNMIR has one target-neutral internal C contract at version 1.1. Module,
+ZNMIR has one target-neutral internal C contract, versioned by
+`ZEND_MIR_CONTRACT_VERSION` in `zend_mir_ids.h` (same major, additive minor). Module,
 function, block, instruction, value, and frame-state storage stays opaque.
 Consumers use immutable record snapshots through `zend_mir_view`; construction
 uses `zend_mir_mutator`. Allocation is supplied by a context-bearing vtable and
@@ -21,8 +21,8 @@ does not prescribe Zend, arena, or test allocation.
 
 Text dumping writes through a process-local byte callback; parsing consumes a
 bounded byte span through the mutator. Stage-one verification consumes only the
-view. These signatures are frozen in the core header so the text and verifier
-tracks can build executable tests without the production arena.
+view. These signatures live in the core header so text and verifier tests run
+without the production arena.
 
 All identities are 32-bit. `0xffffffff` is the only invalid ID. Value IDs use
 the high bit as a stable namespace tag: low-half IDs preserve original Zend SSA
@@ -34,9 +34,9 @@ Catalog enums use contiguous non-negative values and the strictly C11-valid
 sentinel `-1`. Enum sentinels do not represent persistent identity and therefore
 remain distinct from the 32-bit ID sentinel.
 
-The initial opcode catalog contains constants, PHI, copy, canonicalization,
+The core opcode catalog contains constants, PHI, copy, canonicalization,
 statepoints, and the branch, conditional branch, return, throw, and unreachable
-terminators. Representations are void, control, fixed integer widths, double,
+terminators; PHP operations are appended to it. Representations are void, control, fixed integer widths, double,
 semantic pointer, and canonical zval. These are semantic values, not machine
 register classes. Later PHP opcodes and representations are additive only.
 
@@ -55,12 +55,11 @@ the invalid symbol ID; payload-free kinds also require zero payload. A
 `CONSTANT` instruction's result, constant entry, and value record must agree.
 
 Traversal order carries the minimum control-flow association needed by all
-tracks: PHI operand N belongs to predecessor N. An unconditional branch has one
+consumers: PHI operand N belongs to predecessor N. An unconditional branch has one
 successor, and a conditional branch has true successor 0 and false successor
 1. Return, throw, and unreachable have no successors.
 
-W01 catalog order is normative and becomes the exact numeric order for 15
-effects, 20 memory domains, 7 general ownership states, 10 ownership actions,
+The semantic catalogs have a fixed numeric order: 15 effects, 20 memory domains, 7 general ownership states, 10 ownership actions,
 7 predicates, 8 barriers, 12 guard facts, 11 composition rules, and the
 frame/safepoint/resume catalogs. Frame-slot ownership stays a separate
 six-value catalog because it describes materialized frame custody, not the
@@ -71,7 +70,7 @@ frame-state, source-position, cleanup, continuation, resume, and diagnostic
 locations contain IDs and scalar values only. No persistent identity contains
 a raw pointer.
 
-Version 1.1 adds an independent source-map record. It associates a stable
+An independent source-map record associates a stable
 source-position ID and op-array ID with an opline index, opline phase, and
 owning frame-state ID. The table contains neither a generated-code location
 nor a process address, and it does not alter the canonical 1.0 MIR text form.
@@ -81,22 +80,10 @@ A fixed-array fixture host implements the frozen callbacks under
 failure without partial mutation, and provides neither execution semantics nor
 opcode dispatch.
 
-## Decisions introduced beyond W01
-
-- The 32-bit invalid sentinel, high-bit value namespace, and exact maxima.
-- The `-1` invalid sentinel shared by the non-identity catalog enums.
-- Contract version 1.1 and the same-major/additive-minor compatibility rule;
-  1.1 adds the stable source-map view and mutator table.
-- The minimal core opcode and target-neutral representation catalogs.
-- The tagged target-neutral constant pool and CFG/PHI ordering rules.
-- Allocator, immutable view, controlled mutator, and opaque storage boundaries.
-- Fixed-size diagnostic messages and bounded process-local sinks.
-- The static-array test host and its explicit non-production status.
-
 ## Consequences
 
-- W02 tracks can compile and test against one header contract while storage is
-  implemented independently.
+- Producers, consumers and tests compile against one header contract while
+  storage stays an implementation detail.
 - IDs and serialized references remain stable across allocator and process
   boundaries.
 - Target lowering cannot leak register or instruction details back into MIR.
@@ -105,7 +92,7 @@ opcode dispatch.
 
 ## Alternatives
 
-Exposing arena structs was rejected because it couples all tracks to storage.
+Exposing arena structs would couple every component to storage.
 Using pointers as identity was rejected because dumps and persistent metadata
 would be process-dependent. A target-specific opcode or representation layer
 was rejected because ZNMIR must remain canonical before lowering. Linking a
@@ -114,6 +101,6 @@ production semantics.
 
 ## Verification impact
 
-The contract checker compares every W01 name and number, rejects duplicate IDs,
+The contract checker compares every catalog name and number, rejects duplicate IDs,
 invalid sentinel changes, raw pointers in serializable records, and target or
 TPDE includes. It compiles every header and the fixture host as C11 and C++20.

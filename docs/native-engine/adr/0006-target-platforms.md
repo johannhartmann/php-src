@@ -23,8 +23,8 @@ Keep ZNMIR architecture-independent and isolate target mechanics under
 
 ## Consequences
 
-- W00 infrastructure may document AArch64 requirements but must not claim that
-  the native engine already supports AArch64.
+- Documentation may describe AArch64 requirements but must not claim that the
+  native engine supports AArch64.
 - Cross-target semantics share one MIR and differential oracle while backend
   evidence remains target-specific.
 - New operating systems, object formats, and architectures require explicit

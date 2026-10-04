@@ -17,7 +17,7 @@
 
 #define ZEND_MIR_SCALAR_MAX_OPERANDS UINT32_C(2)
 #define ZEND_MIR_SCALAR_OPCODE_COUNT \
-	((uint32_t) (ZEND_MIR_OPCODE_COUNT - ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW))
+	((uint32_t) (ZEND_MIR_SCALAR_OPCODE_END - ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW))
 
 typedef uint16_t zend_mir_scalar_proof_mask;
 
@@ -59,7 +59,6 @@ extern "C" {
 
 const zend_mir_scalar_descriptor *zend_mir_scalar_descriptor_at(
 	zend_mir_opcode opcode);
-bool zend_mir_scalar_opcode_is_registered(zend_mir_opcode opcode);
 bool zend_mir_scalar_fact_is_well_formed(const zend_mir_value_fact_ref *fact);
 zend_mir_representation zend_mir_scalar_type_representation(
 	zend_mir_scalar_type_mask type);

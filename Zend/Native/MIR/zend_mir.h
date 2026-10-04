@@ -157,17 +157,17 @@ typedef struct _zend_mir_text_writer {
 	zend_mir_text_write_fn write;
 } zend_mir_text_writer;
 
-/* W02-E implements the strict canonical format frozen by ADR 0012. */
+/* Dumps and parses the strict canonical text format defined by ADR 0012. */
 bool zend_mir_dump_text(const zend_mir_view *view, zend_mir_text_writer *writer,
 	zend_mir_diagnostic_sink *diagnostics);
 bool zend_mir_parse_text(const char *text, size_t length, zend_mir_mutator *mutator,
 	zend_mir_diagnostic_sink *diagnostics);
 
-/* W02-F rejects malformed input before any target lowering. */
+/* Stage-1 verification rejects malformed input before any target lowering. */
 bool zend_mir_verify_stage1(const zend_mir_view *view, zend_mir_diagnostic_sink *diagnostics);
 
-/* W03-F implements the fail-closed scalar fact and opcode verifier. */
-bool zend_mir_verify_w03_scalar(const zend_mir_view *view,
+/* Fail-closed verifier for scalar facts and scalar opcodes. */
+bool zend_mir_verify_scalar_module(const zend_mir_view *view,
 	zend_mir_diagnostic_sink *diagnostics);
 
 static inline bool zend_mir_contract_is_compatible(uint32_t version)

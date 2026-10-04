@@ -123,39 +123,6 @@ bool zend_mir_frontend_canonical_literal_for_index(
 			&op_array->literals[index], index, out);
 }
 
-zend_mir_lowering_status zend_mir_frontend_validate_literals(
-	const zend_op_array *op_array,
-	zend_mir_op_array_id op_array_id,
-	zend_mir_frontend_diagnostic *diagnostic)
-{
-	uint32_t i;
-	zend_mir_source_literal_ref ignored;
-
-	if (op_array == NULL
-			|| (op_array->last_literal != 0 && op_array->literals == NULL)
-			|| op_array->last_literal > ZEND_MIR_ID_MAX) {
-		zend_mir_frontend_set_diagnostic(
-			diagnostic, ZEND_MIR_LOWERING_REJECTED, ZEND_MIRL_INVALID_SOURCE,
-			op_array_id, ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE,
-			ZEND_MIR_ID_INVALID);
-		return ZEND_MIR_LOWERING_REJECTED;
-	}
-
-	for (i = 0; i < op_array->last_literal; i++) {
-		if (!zend_mir_frontend_canonical_literal(
-				&op_array->literals[i], i, &ignored)) {
-			zend_mir_frontend_set_diagnostic(
-				diagnostic, ZEND_MIR_LOWERING_DEFERRED,
-				ZEND_MIRL_W06_REFERENCE_SEMANTICS_DEFERRED, op_array_id,
-				ZEND_MIR_ID_INVALID, ZEND_MIR_FRONTEND_OPERAND_NONE,
-				ZEND_MIR_ID_INVALID);
-			return ZEND_MIR_LOWERING_DEFERRED;
-		}
-	}
-
-	return ZEND_MIR_LOWERING_SUCCESS;
-}
-
 bool zend_mir_frontend_literal_at(
 	const zend_mir_zend_source *source,
 	uint32_t index,

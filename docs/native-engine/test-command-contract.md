@@ -34,8 +34,9 @@ the requested profile is identifiable for `build.sh`.
 
 ### `scripts/native/build.sh`
 
-Build the explicitly selected configured profile. Do not configure implicitly
-or reuse an incompatible profile. Exit `0` only when all requested build targets
+Build the selected profile. Configure is reused while its build-system inputs,
+profile, toolchain and flags are unchanged and rerun when they change; source
+edits rebuild incrementally. Exit `0` only when all requested build targets
 complete.
 
 ### `scripts/native/test-smoke.sh`
@@ -49,9 +50,14 @@ capabilities are failures.
 Build or select the declared sanitizer profile and run its required tests. Exit
 `0` only when tests pass and no required sanitizer diagnostic is present.
 
-## Compatibility
+### `scripts/native/test-phpt.sh`
 
-Keep these build/test paths and exit classes stable. Additive options
-must preserve non-interactive behavior. Any incompatible CLI, result-format, or
-exit-semantics change requires an ADR, coordinated consumer updates, and fixture
-coverage before integration.
+Run the PHPT tiers: `--tier quick` (native PHPTs plus given paths), `--tier
+commit` (full debug suites) and `--tier full` (commit plus ASan and UBSan).
+Exit `0` only when no test fails, or, with `--baseline`, when no test fails
+that the baseline does not list.
+
+## Changes
+
+Change commands, options and exit classes freely together with their callers
+(scripts, CI) in the same commit.

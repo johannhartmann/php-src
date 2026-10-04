@@ -1,4 +1,4 @@
-"""Black-box checks for the standalone W02-F verifier test driver."""
+"""Black-box checks for the standalone verifier test driver."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ class VerifyRunnerTest(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stdout)
         self.assertIn("verify tests: ok", completed.stdout)
-        self.assertIn("W02-F verifier tests passed", completed.stdout)
+        self.assertIn("verifier tests passed", completed.stdout)
 
     def test_required_passes_and_diagnostic_families_are_covered(self) -> None:
         verify_directory = (

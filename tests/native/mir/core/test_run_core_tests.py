@@ -1,4 +1,4 @@
-"""Integration test for the standalone W02-A test driver."""
+"""Integration test for the standalone MIR core test driver."""
 
 from __future__ import annotations
 

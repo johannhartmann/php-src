@@ -1,58 +1,35 @@
-# Native engine contracts
+# Native engine
 
-This directory records the architecture and working contracts for the native
-engine full-cutover project. It keeps architectural contracts and executable
-engine tests close to the implementation. Planning metadata, task receipts,
-path-ownership manifests, and generated status dashboards are deliberately not
-repository contracts.
-
-Repository-wide and path-specific agent rules live in:
-
-- [repository instructions](../../AGENTS.md)
-- [Zend native engine](../../Zend/Native/AGENTS.md)
-- [canonical MIR](../../Zend/Native/MIR/AGENTS.md)
-- [TPDE backend](../../Zend/Native/TPDE/AGENTS.md)
-- [native runtime](../../Zend/Native/Runtime/AGENTS.md)
-- [OPcache](../../ext/opcache/AGENTS.md)
-- [native tests](../../tests/native/AGENTS.md)
+The native engine replaces the Zend VM with native code generated through TPDE
+(Linux x86-64). This directory holds its architecture decisions and the
+semantic contracts the implementation follows. Agent rules live in the
+`AGENTS.md` files of the repository root and of `Zend/Native/**`.
 
 ## Architecture decisions
 
-1. [Atomic full cutover without production VM fallback](adr/0001-atomic-full-cutover.md)
-2. [One canonical ZNMIR](adr/0002-canonical-znmir.md)
-3. [Native baseline tier and resume targets](adr/0003-native-baseline-and-resume.md)
-4. [Zend-compatible baseline frames](adr/0004-zend-compatible-baseline-frame.md)
-5. [Immutable code versions and entry cells](adr/0005-immutable-code-and-entry-cells.md)
-6. [Primary and secondary target platforms](adr/0006-target-platforms.md)
-7. [Relocatable OPcache persistence](adr/0007-opcache-persistence.md)
-8. [Differential testing as the semantic oracle](adr/0008-differential-oracle.md)
-9. [Native frame state and safepoints](adr/0009-native-frame-state-and-safepoints.md)
-10. [Bailout, exception, suspend, and resume ABI](adr/0010-bailout-exception-suspend-resume-abi.md)
-11. [Canonical ZNMIR core contract](adr/0011-canonical-znmir-core-contract.md)
-12. [ZNMIR text, diagnostics, and verification](adr/0012-znmir-text-diagnostics-verification.md)
-13. [Proof-closed scalar lowering](adr/0013-w03-proof-closed-scalar-profile.md)
-14. [Deterministic lowering boundary](adr/0014-lowering-source-view-and-registry.md)
-15. [W04 control-flow source contract](adr/0015-w04-control-flow-source-contract.md)
-16. [Reducible CFGs and edge statepoints](adr/0016-w04-reducible-cfg-and-edge-statepoints.md)
-17. [W05 atomic call-sequence model](adr/0019-w05-call-sequence-model.md)
-18. [Named MIR capabilities instead of stage numbers](adr/0020-named-mir-capabilities.md)
-19. [W05 direct-call model corrections](adr/0021-w05-call-model-corrections.md)
-20. [W06 storage, reference, and alias model](adr/0022-w06-storage-reference-alias-model.md)
-21. [W06 separation protocol, not container clone](adr/0023-w06-separation-protocol-not-container-clone.md)
-22. [Typed lowering tier replaces the W11 scalar overlay](adr/0024-typed-lowering-tier.md)
-23. [Native state is canonical; Zend frames are observed, not mirrored](adr/0025-native-canonical-execution.md)
+- [0001 No production VM fallback](adr/0001-atomic-full-cutover.md)
+- [0002 One canonical ZNMIR](adr/0002-canonical-znmir.md)
+- [0003 Generic native code and resume targets](adr/0003-generic-native-code-and-resume.md)
+- [0005 Immutable code versions and entry cells](adr/0005-immutable-code-and-entry-cells.md)
+- [0006 Target platforms](adr/0006-target-platforms.md)
+- [0007 Relocatable OPcache persistence](adr/0007-opcache-persistence.md)
+- [0008 Differential testing against stock PHP](adr/0008-differential-oracle.md)
+- [0010 Bailout, exception, suspend and resume ABI](adr/0010-bailout-exception-suspend-resume-abi.md)
+- [0011 ZNMIR core contract](adr/0011-canonical-znmir-core-contract.md)
+- [0012 ZNMIR text, diagnostics and verification](adr/0012-znmir-text-diagnostics-verification.md)
+- [0024 Typed lowering](adr/0024-typed-lowering-tier.md)
+- [0025 Native state is canonical](adr/0025-native-canonical-execution.md)
 
-## Development contracts
+ADR 0025 defines the execution model: native state is canonical, Zend frames
+are built on demand where PHP state is observable, compiled functions call each
+other through a native convention, and speculation deoptimizes into the generic
+native version of a function.
 
-- [Native test-command contract](test-command-contract.md)
-- [Native frame semantics](semantics/frames/README.md)
-- [W03 lowering profile](lowering/README.md)
-- [W04 control-flow contracts](control-flow/contracts/source-cfg.md)
-- [W05 direct-user-call contracts](calls/contracts/call-sequence.md)
-- [W06 value and reference contracts](values/contracts/value-model.md)
-- [W06 separation and call-transfer contracts](values/contracts/separation-and-calls.md)
+## Contracts
 
-CI invokes these technical checks directly. A change is accepted when its
-applicable contract, unit, differential, sanitizer, and fuzz tests pass; it
-does not need a second layer of delivery receipts or generated validation
-evidence.
+- [Frame semantics](semantics/frames/README.md): frame layout, safepoints,
+  bailout, exceptions, suspension and resume.
+- [Effects and ownership](semantics/effects/README.md): effect, memory-domain
+  and ownership model of the MIR.
+- [MIR](mir/README.md) and its [text format](mir/text-format.md).
+- [Build and test commands](test-command-contract.md).

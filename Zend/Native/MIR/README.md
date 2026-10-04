@@ -1,24 +1,23 @@
 # Canonical ZNMIR contract
 
 This directory defines the single, target-neutral middle representation used
-by the native engine. The W02 contract is an internal C ABI: it lets core,
-analysis, text, frame-state, and verifier work proceed independently without
-exposing storage layout.
+by the native engine. Its contract is an internal C ABI that keeps lowering,
+analysis, text, frame-state, verifier and backend code independent of the
+storage layout.
 
 ## Contract layers
 
 - `zend_mir.h` exposes opaque entity types, immutable record snapshots, an
   allocator vtable, a read-only view, and the controlled mutator/builder API.
-  It also freezes storage-independent text dump/parser and stage-one verifier
-  entry points implemented by their owning W02 tracks.
-- `zend_mir_ids.h` owns contract version 1.0 and all 32-bit identity rules.
-- `zend_mir_opcodes.h` freezes the minimal core opcode, representation, and
-  target-neutral constant-kind catalogs. PHP-specific opcodes may only be
-  added later.
-- `zend_mir_effects.h` binds the W01 effect, domain, ownership, action, and
+  It also declares the storage-independent text dump/parser and verifier
+  entry points.
+- `zend_mir_ids.h` owns the contract version and all 32-bit identity rules.
+- `zend_mir_opcodes.h` holds the core opcode, representation, and
+  target-neutral constant-kind catalogs; PHP opcodes are appended to them.
+- `zend_mir_effects.h` binds the effect, domain, ownership, action, and
   barrier catalogs, plus predicates, guard facts, and composition rules, to
   exact numeric values.
-- `zend_mir_frame_state.h` binds the W01 frame, safepoint, continuation, and
+- `zend_mir_frame_state.h` binds the frame, safepoint, continuation, and
   resume enums and exposes immutable, ID-only references.
 - `zend_mir_diagnostic.h` defines stable codes, locations, fixed-size messages,
   and a bounded process-local sink.
@@ -58,10 +57,9 @@ Conditional branches use successor 0 for true and successor 1 for false.
 ## Versioning
 
 `ZEND_MIR_CONTRACT_VERSION` encodes a 16-bit major and 16-bit minor version.
-Version 1.1 adds a stable source-map table associating a source-position ID,
-op-array ID, opline index and phase with its owning frame-state ID. It carries
-no generated-code location and does not change the canonical 1.0 text grammar.
-Consumers accept the same major and a minor no newer than they implement.
+The source-map table associates a source-position ID, op-array ID, opline
+index and phase with its owning frame-state ID; it carries no generated-code
+location. Consumers accept the same major and a minor no newer than they implement.
 Within major version 1, extensions are additive only: existing numbers,
 meanings, callback signatures, and record fields cannot be removed, reordered,
 or reused. Adding an enum value, callback, or record field increments the minor

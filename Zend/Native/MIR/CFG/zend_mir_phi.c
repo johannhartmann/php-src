@@ -4,45 +4,6 @@
 
 #include <string.h>
 
-uint32_t zend_mir_phi_count(const zend_mir_cfg *cfg, zend_mir_block_id block_id)
-{
-	if (cfg == NULL || !zend_mir_cfg_block_is_selected(cfg, block_id)) {
-		return 0;
-	}
-	return zend_mir_cfg_phi_count_internal(cfg, block_id);
-}
-
-zend_mir_cfg_status zend_mir_phi_at(const zend_mir_cfg *cfg,
-		zend_mir_block_id block_id, uint32_t index, zend_mir_phi_record *out)
-{
-	uint32_t found = 0;
-	uint32_t i;
-
-	if (cfg == NULL || out == NULL) {
-		return ZEND_MIR_CFG_STATUS_INVALID_ARGUMENT;
-	}
-	if (!zend_mir_cfg_block_is_selected(cfg, block_id)) {
-		return ZEND_MIR_CFG_STATUS_NOT_FOUND;
-	}
-	for (i = 0; i < cfg->instruction_count; i++) {
-		const zend_mir_instruction_record *instruction = &cfg->instructions[i];
-		if (instruction->block_id == block_id
-				&& instruction->opcode == ZEND_MIR_OPCODE_PHI) {
-			if (found == index) {
-				out->instruction_id = instruction->id;
-				out->block_id = block_id;
-				out->result_id = instruction->result_id;
-				out->representation = instruction->representation;
-				out->incoming_count = zend_mir_cfg_predecessor_count_internal(
-					cfg, block_id);
-				return ZEND_MIR_CFG_STATUS_OK;
-			}
-			found++;
-		}
-	}
-	return ZEND_MIR_CFG_STATUS_NOT_FOUND;
-}
-
 zend_mir_cfg_status zend_mir_phi_incoming_at(const zend_mir_cfg *cfg,
 		zend_mir_instruction_id phi_instruction_id, uint32_t predecessor_slot,
 		zend_mir_block_id *predecessor_id, zend_mir_value_id *value_id)

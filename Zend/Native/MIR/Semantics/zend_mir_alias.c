@@ -37,7 +37,7 @@ zend_mir_alias_kind zend_mir_alias_relation(
 		}
 	}
 
-	/* Absence from W01 is not evidence that two domains are disjoint. */
+	/* A missing alias row is not evidence that two domains are disjoint. */
 	return ZEND_MIR_ALIAS_MAY_ALIAS;
 }
 

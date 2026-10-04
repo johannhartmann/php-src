@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile and run the standalone W02-D frame-state tests."""
+"""Compile and run the standalone frame-state tests."""
 
 from __future__ import annotations
 

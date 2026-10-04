@@ -8,8 +8,7 @@ applies to a changed path. Deeper instructions may add constraints for their
 scope; they do not relax repository-wide safety or testing rules.
 
 Keep changes focused and preserve unrelated work already present in the
-worktree. Repository paths are not assigned through persistent task, phase, or
-wave ownership manifests.
+worktree.
 
 ## Native-engine contracts
 
@@ -18,8 +17,7 @@ Use these pinned references when work depends on the native-engine design:
 - php-src baseline: `47355da494ba696b1bdb6d10448a225e742bd316`;
 - TPDE: current upstream `master`, pinned in
   `Zend/Native/TPDE/ThirdParty/tpde/REVISION` (local changes in `PATCHES.md`);
-  no compatibility with older TPDE revisions. The capability analysis in
-  `docs/native-engine/tpde` reviewed `338d41890e424b058e2053b6a5787e1348e3dd57`.
+  no compatibility with older TPDE revisions.
 
 Do not introduce a production VM fallback in native-engine code. Do not change
 public ABI, persistent formats, or dependencies without an explicit contract,
@@ -30,8 +28,7 @@ compatibility analysis, and the tests required by that contract.
 The goal is maximum execution performance for real PHP applications such as
 WordPress, measured on warm requests. ADR
 `docs/native-engine/adr/0025-native-canonical-execution.md` defines the
-execution model and supersedes the "no deoptimization / no speculation /
-no separate call ABI" rules of ADR 0024 and of earlier plans:
+execution model:
 
 - Native state (registers, native stack) is canonical. The Zend frame is
   reconstructed on demand from compiler frame-state metadata wherever PHP

@@ -23,6 +23,6 @@
 #define ZEND_MIR_TEXT_FORMAT_MAJOR 1
 #define ZEND_MIR_TEXT_FORMAT_MINOR 0
 
-/* The public entry point is frozen in zend_mir.h. */
+/* The public entry points are declared in zend_mir.h. */
 
 #endif /* ZEND_MIR_DUMP_H */

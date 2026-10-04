@@ -2,13 +2,13 @@
 
 ## Status
 
-Accepted on 2026-07-17.
+Accepted.
 
 ## Context
 
-W02 text and verifier tracks must produce identical observations over either
-the test fixture or production storage. Their output, rejection behavior, and
-diagnostic limits must therefore be fixed before either implementation starts.
+Text dumps and the verifier must produce identical observations over the test
+fixture and production storage, with fixed output, rejection behavior and
+diagnostic limits.
 
 ## Decision
 
@@ -77,19 +77,9 @@ domain, ownership, and barrier ranges; and frame-state/source/resume reference
 integrity. Arithmetic used for counts, spans, and diagnostics is checked before
 addition or multiplication. No malformed module may proceed to lowering.
 
-## Decisions introduced beyond W01
-
-- The canonical text header, typed decimal IDs, mask widths, ordering, and
-  strict byte-stable round-trip rule.
-- Strict parser rejection rather than permissive normalization.
-- Stable diagnostic code/location as the test oracle and the 192-byte message
-  capacity.
-- Bounded sink behavior and deterministic diagnostic ordering.
-- The minimum scope and fail-closed ordering of stage-one verification.
-
 ## Consequences
 
-- Text and verifier tracks can be tested against the fixture host without the
+- Text dumps and the verifier are tested against the fixture host without the
   production arena.
 - Dumps are reproducible and safe for semantic diffs.
 - Negative tests can assert stable codes and locations without depending on
@@ -107,7 +97,7 @@ because target code must never receive malformed canonical MIR.
 
 ## Verification impact
 
-The text track must include golden output, byte-identical round trips, overflow,
-unknown-field, duplicate-field, ordering, and trailing-data tests. The verifier
-track must cover every invariant with a stable diagnostic code/location and
+Text tests must include golden output, byte-identical round trips, overflow,
+unknown-field, duplicate-field, ordering, and trailing-data tests. Verifier tests must
+cover every invariant with a stable diagnostic code/location and
 must prove diagnostic limits are honored.

@@ -1,0 +1,40 @@
+--TEST--
+Native baseline compiles the selected root and static dependencies as one component
+--SKIPIF--
+<?php
+if (!function_exists('native_mir_test_compile_execute')) {
+    die('skip native_mir_test is not available');
+}
+?>
+--FILE--
+<?php
+$source = "<?php\n";
+for ($index = 0; $index < 1000; $index++) {
+    $source .= "function independent_$index(): int { return $index; }\n";
+}
+$source .= <<<'PHP'
+function selected_root(): int
+{
+    return independent_777() + independent_777();
+}
+PHP;
+
+$result = native_mir_test_compile_execute(
+    $source,
+    'lazy-codeunits.php',
+    [],
+    ['function' => 'selected_root'],
+);
+printf(
+    "%s return=%d codeunits=%d components=%d vm=%d execute_ex=%d handler=%d\n",
+    $result['status'],
+    $result['execution']['return_value'] ?? -1,
+    $result['execution']['native_codeunits'] ?? -1,
+    $result['execution']['native_components'] ?? -1,
+    $result['execution']['vm_handler_calls'] ?? -1,
+    $result['execution']['execute_ex_calls'] ?? -1,
+    $result['execution']['opline_handler_calls'] ?? -1,
+);
+?>
+--EXPECT--
+accepted return=1554 codeunits=2 components=1 vm=0 execute_ex=0 handler=0

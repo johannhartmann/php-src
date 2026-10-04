@@ -1,6 +1,6 @@
 # Native call-1-through-10 benchmark harness
 
-This W00 harness measures deterministic PHP workloads without depending on a
+This harness measures deterministic PHP workloads without depending on a
 future native engine. It does not claim that outer wall time is JIT compilation
 time, and it never invents native-code size when no source exists.
 
@@ -56,14 +56,14 @@ and unordered external data.
 |---|---|
 | `samples[].call_ns[0..9]` | `hrtime(true)` duration around each callable invocation in one PHP process. Checksum calculation is outside the timed interval. |
 | `samples[].steady_state_ns` | Optional calls after call 10, measured identically. Empty unless requested. |
-| `samples[].process.wall_ns` | Monotonic outer duration from spawning PHP until it terminates. This is the W00 `process_startup` measurement class despite covering the complete process lifetime; it includes PHP startup, script parsing, warmup, calls, JSON work, and teardown. |
+| `samples[].process.wall_ns` | Monotonic outer duration from spawning PHP until it terminates. This is the `process_startup` measurement class despite covering the complete process lifetime; it includes PHP startup, script parsing, warmup, calls, JSON work, and teardown. |
 | `samples[].process.user_ns` / `system_ns` | Child CPU time from `getrusage(RUSAGE_CHILDREN)` in a fresh probe process. |
 | `samples[].process.max_rss_bytes` | Per-child maximum resident set from the same fresh probe. Linux KiB and Darwin bytes are normalized to bytes. |
 | `samples[].compile_phase` | `null` in the included scenarios because they expose no independently verifiable compilation marker. The adjacent reason is mandatory. |
 | `samples[].opcache` | Named snapshots from `opcache_get_status(false)` before and after timed calls, or `null` when unavailable/disabled. These are not native-engine metrics. |
 | `code_size.binary_bytes` | Executable file size from `stat.st_size`. |
 | `code_size.elf_text` | Optional `.text` section size from `size -A`, including tool provenance or an unsupported reason. |
-| `native_code_size` | Always `{bytes: null, source: null, unsupported_reason: ...}` in W00. |
+| `native_code_size` | Always `{bytes: null, source: null, unsupported_reason: ...}`. |
 
 Host/kernel/CPU data appears once in `run_manifest`, never in each sample.
 Aggregates contain median, linearly interpolated p90/p95, min, max, and count.
@@ -71,10 +71,8 @@ All repetitions and every raw call remain in `samples`; no outlier is removed.
 Microbenchmark timings are host-, load-, build-, and clock-dependent and are not
 portable performance claims.
 
-Linux/ELF x86-64 is the W00 primary runner. Linux AArch64 is a documented
-secondary runner using the same CLI and schemas, but it was not executed for
-this implementation commit; AArch64 result comparison remains a later CI/wave
-gate and must not be inferred from x86-64 artifacts.
+Linux/ELF x86-64 is the primary runner. AArch64 results must not be inferred
+from x86-64 artifacts.
 
 The resource probe measures the PHP child, not its own Python startup. The outer
 wall metric cannot isolate PHP process startup, parsing, OPcache compilation,

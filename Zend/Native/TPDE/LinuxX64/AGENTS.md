@@ -3,22 +3,18 @@
 These instructions apply to `Zend/Native/TPDE/LinuxX64/**` in addition to
 `Zend/Native/TPDE/AGENTS.md`.
 
-The DarwinA64 backend is the validated reference; the common adaptor evolves
-with it first. Most LinuxX64 defects are incomplete or literal translations of
-AArch64 code. Check every port against this list:
+Linux x86-64 is the primary target. Known pitfalls of the x64 backend:
 
-- **Adaptor drift.** When the adaptor gains a node kind, operand form, or
-  operand index (for example `ZvalBoxedStore`, boxed boundary operands, the
-  boxed `VALUE_COND_BRANCH` form), grep both backends. A name that DarwinA64
-  handles and LinuxX64 does not is a missing lowering. Missing lowerings show
+- **Adaptor coverage.** When the common adaptor gains a node kind, operand
+  form, or operand index, the backend must handle it. Missing lowerings show
   up as "TPDE failed to compile", or, when an operand is silently ignored, as
   TPDE's "found non-freed ValueAssignment" assertion.
 - **Stack slots are negative.** TPDE indexes x64 frames downward
   (`FRAME_INDEXING_NEGATIVE`), so `allocate_stack_slot()` returns negative
-  offsets. Reject `slot >= 0`, never `slot < 0` as on AArch64.
-- **Two-operand arithmetic.** AArch64 `ADDx d, a, b` becomes
-  `mov(d, a, 8); ADD64rr d, b` on x64. Emitting `ADD64rr d, b` alone keeps
-  the old value of `d` and silently computes the wrong result.
+  offsets. Reject `slot >= 0`.
+- **Two-operand arithmetic.** A three-operand `d = a + b` is
+  `mov(d, a, 8); ADD64rr d, b`. Emitting `ADD64rr d, b` alone keeps the old
+  value of `d` and silently computes the wrong result.
 - **Call arguments must not be fixed elsewhere.** Do not hold a later call
   argument in a `ScratchReg` while `CallBuilder` places earlier arguments;
   the allocator may have given it an earlier argument's SysV register
@@ -29,6 +25,9 @@ AArch64 code. Check every port against this list:
   boxed value to the frame, reload parts whose assignment is `stack_valid()`
   from the stack instead of trusting the register.
 
-Validate every change with the native and partial-application PHPTs, and
-compare the failing set against the previous build (see the root
-`AGENTS.md`).
+- **Snippet register budget.** An EncodeGen snippet needs its scratch
+  registers plus the held values free at once; gate inline paths on
+  `unlocked_gp_registers()` or TPDE aborts in `select_reg_evict`.
+
+Validate every change with the test tiers and compare the failing set against
+the previous build (see the root `AGENTS.md`).

@@ -10,17 +10,17 @@ export TZ=UTC
 
 NATIVE_LIB_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 NATIVE_REPO_ROOT="$(git -C "$NATIVE_LIB_DIR" rev-parse --show-toplevel 2>/dev/null)" || {
-    printf 'native-w00: unable to locate the repository root\n' >&2
+    printf 'native: unable to locate the repository root\n' >&2
     exit 2
 }
 NATIVE_SCRIPTS_DIR="$NATIVE_REPO_ROOT/scripts/native"
 NATIVE_PROFILES_DIR="$NATIVE_SCRIPTS_DIR/profiles"
 NATIVE_HELPER="$NATIVE_SCRIPTS_DIR/capture-build-manifest.py"
-NATIVE_W00_BASE_COMMIT=47355da494ba696b1bdb6d10448a225e742bd316
+NATIVE_BASELINE_COMMIT=47355da494ba696b1bdb6d10448a225e742bd316
 export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git -C "$NATIVE_REPO_ROOT" show -s --format=%ct HEAD)}
 
 native_error() {
-    printf 'native-w00: %s\n' "$*" >&2
+    printf 'native: %s\n' "$*" >&2
 }
 
 native_die() {
@@ -79,7 +79,7 @@ native_base_commit() {
     if [[ -n ${NATIVE_BASE_COMMIT:-} ]]; then
         git -C "$NATIVE_REPO_ROOT" rev-parse --verify "${NATIVE_BASE_COMMIT}^{commit}"
     else
-        printf '%s\n' "$NATIVE_W00_BASE_COMMIT"
+        printf '%s\n' "$NATIVE_BASELINE_COMMIT"
     fi
 }
 
@@ -99,7 +99,7 @@ native_worktree_id() {
 }
 
 native_work_root() {
-    local root=${NATIVE_WORK_ROOT:-${TMPDIR:-/tmp}/php-native-w00}
+    local root=${NATIVE_WORK_ROOT:-${TMPDIR:-/tmp}/php-native}
     if [[ $root != /* ]]; then
         native_die "NATIVE_WORK_ROOT must be an absolute path: $root"
     fi

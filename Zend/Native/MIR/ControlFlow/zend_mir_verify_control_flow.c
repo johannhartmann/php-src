@@ -7,7 +7,7 @@
 #include "zend_mir_control_flow_internal.h"
 #include "../zend_mir_id_index.h"
 
-typedef struct _zend_mir_w04_verify_indexes {
+typedef struct _zend_mir_verify_indexes {
 	zend_mir_id_index_entry *blocks;
 	zend_mir_id_index_entry *instructions;
 	zend_mir_id_index_entry *frames;
@@ -29,10 +29,10 @@ typedef struct _zend_mir_w04_verify_indexes {
 	uint32_t source_pi_capacity;
 	bool map_sources_unique;
 	bool map_blocks_unique;
-} zend_mir_w04_verify_indexes;
+} zend_mir_verify_indexes;
 
-static void zend_mir_w04_verify_indexes_destroy(
-		zend_mir_w04_verify_indexes *indexes)
+static void zend_mir_verify_indexes_destroy(
+		zend_mir_verify_indexes *indexes)
 {
 	free(indexes->source_predecessor_indices);
 	free(indexes->source_predecessor_offsets);
@@ -51,8 +51,8 @@ static void zend_mir_w04_verify_indexes_destroy(
 	memset(indexes, 0, sizeof(*indexes));
 }
 
-static bool zend_mir_w04_verify_indexes_init(
-		zend_mir_w04_verify_indexes *indexes, const zend_mir_view *view,
+static bool zend_mir_verify_indexes_init(
+		zend_mir_verify_indexes *indexes, const zend_mir_view *view,
 		const zend_mir_lowering_source_view *source,
 		const zend_mir_control_flow_map *map)
 {
@@ -247,18 +247,18 @@ static bool zend_mir_w04_verify_indexes_init(
 
 failure:
 	free(cursors);
-	zend_mir_w04_verify_indexes_destroy(indexes);
+	zend_mir_verify_indexes_destroy(indexes);
 	return false;
 }
 
-static uint32_t zend_mir_w04_verify_cycle_block_count(const void *context)
+static uint32_t zend_mir_verify_cycle_block_count(const void *context)
 {
 	const zend_mir_lowering_source_view *source = context;
 
 	return source->block_count(source->context);
 }
 
-static bool zend_mir_w04_verify_cycle_block_at(
+static bool zend_mir_verify_cycle_block_at(
 	const void *context, uint32_t index, bool *irreducible)
 {
 	const zend_mir_lowering_source_view *source = context;
@@ -274,14 +274,14 @@ static bool zend_mir_w04_verify_cycle_block_at(
 	return true;
 }
 
-static uint32_t zend_mir_w04_verify_cycle_edge_count(const void *context)
+static uint32_t zend_mir_verify_cycle_edge_count(const void *context)
 {
 	const zend_mir_lowering_source_view *source = context;
 
 	return source->edge_count(source->context);
 }
 
-static bool zend_mir_w04_verify_cycle_edge_at(
+static bool zend_mir_verify_cycle_edge_at(
 	const void *context, uint32_t index,
 	uint32_t *from_block_id, uint32_t *to_block_id,
 	bool *requires_statepoint)
@@ -297,11 +297,11 @@ static bool zend_mir_w04_verify_cycle_edge_at(
 	}
 	*from_block_id = edge.from_block_id;
 	*to_block_id = edge.to_block_id;
-	*requires_statepoint = zend_mir_w04_edge_requires_statepoint(&edge);
+	*requires_statepoint = zend_mir_edge_requires_statepoint(&edge);
 	return true;
 }
 
-static bool zend_mir_w04_verify_analyze_cycles(
+static bool zend_mir_verify_analyze_cycles(
 	zend_mir_control_flow_cycle_analysis *analysis,
 	const zend_mir_lowering_source_view *source)
 {
@@ -309,65 +309,65 @@ static bool zend_mir_w04_verify_analyze_cycles(
 
 	memset(&graph, 0, sizeof(graph));
 	graph.context = source;
-	graph.block_count = zend_mir_w04_verify_cycle_block_count;
-	graph.block_at = zend_mir_w04_verify_cycle_block_at;
-	graph.edge_count = zend_mir_w04_verify_cycle_edge_count;
-	graph.edge_at = zend_mir_w04_verify_cycle_edge_at;
+	graph.block_count = zend_mir_verify_cycle_block_count;
+	graph.block_at = zend_mir_verify_cycle_block_at;
+	graph.edge_count = zend_mir_verify_cycle_edge_count;
+	graph.edge_at = zend_mir_verify_cycle_edge_at;
 	return zend_mir_control_flow_cycle_analysis_init(analysis, &graph);
 }
 
-static zend_mir_w04_branch_kind zend_mir_w04_verify_branch_kind(uint32_t opcode)
+static zend_mir_branch_kind zend_mir_verify_branch_kind(uint32_t opcode)
 {
 	switch (opcode) {
 		case 42:
-			return ZEND_MIR_W04_BRANCH_UNCONDITIONAL;
+			return ZEND_MIR_BRANCH_UNCONDITIONAL;
 		case 43:
-			return ZEND_MIR_W04_BRANCH_IF_FALSE;
+			return ZEND_MIR_BRANCH_IF_FALSE;
 		case 44:
-			return ZEND_MIR_W04_BRANCH_IF_TRUE;
+			return ZEND_MIR_BRANCH_IF_TRUE;
 		case 46:
-			return ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT;
+			return ZEND_MIR_BRANCH_IF_FALSE_WITH_RESULT;
 		case 47:
-			return ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT;
+			return ZEND_MIR_BRANCH_IF_TRUE_WITH_RESULT;
 		case 107:
-			return ZEND_MIR_W04_BRANCH_CATCH;
+			return ZEND_MIR_BRANCH_CATCH;
 		case 162:
-			return ZEND_MIR_W08_BRANCH_FINALLY_CALL;
+			return ZEND_MIR_BRANCH_FINALLY_CALL;
 		case 163:
-			return ZEND_MIR_W08_BRANCH_FINALLY_RETURN;
+			return ZEND_MIR_BRANCH_FINALLY_RETURN;
 		case 152:
-			return ZEND_MIR_W09_BRANCH_JMP_SET;
+			return ZEND_MIR_BRANCH_JMP_SET;
 		case 169:
-			return ZEND_MIR_W09_BRANCH_COALESCE;
+			return ZEND_MIR_BRANCH_COALESCE;
 		case 198:
-			return ZEND_MIR_W10_BRANCH_JMP_NULL;
+			return ZEND_MIR_BRANCH_JMP_NULL;
 		case 151:
-			return ZEND_MIR_W12_BRANCH_ASSERT_CHECK;
+			return ZEND_MIR_BRANCH_ASSERT_CHECK;
 		case 187:
 		case 188:
 		case 195:
-			return ZEND_MIR_W12_BRANCH_MULTIWAY;
+			return ZEND_MIR_BRANCH_MULTIWAY;
 		case 203:
-			return ZEND_MIR_W12_BRANCH_BIND_STATIC;
+			return ZEND_MIR_BRANCH_BIND_STATIC;
 		case 208:
-			return ZEND_MIR_W12_BRANCH_FRAMELESS;
+			return ZEND_MIR_BRANCH_FRAMELESS;
 		case 77:
 		case 78:
 		case 125:
 		case 126:
-			return ZEND_MIR_W09_BRANCH_ITERATOR;
+			return ZEND_MIR_BRANCH_ITERATOR;
 		default:
-			return ZEND_MIR_W04_BRANCH_KIND_INVALID;
+			return ZEND_MIR_BRANCH_KIND_INVALID;
 	}
 }
 
-static bool zend_mir_w04_emit_verify(
-	zend_mir_diagnostic_sink *sink, zend_mir_verify_w04_code code,
+static bool zend_mir_emit_verify(
+	zend_mir_diagnostic_sink *sink, zend_mir_verify_cf_code code,
 	const char *token, const char *detail)
 {
 	zend_mir_diagnostic diagnostic;
 	memset(&diagnostic, 0, sizeof(diagnostic));
-	diagnostic.code = code == ZEND_MIR_VERIFY_W04_PHI_MISMATCH
+	diagnostic.code = code == ZEND_MIR_VERIFY_PHI_MISMATCH
 		? ZEND_MIR_DIAGNOSTIC_INVALID_PHI : ZEND_MIR_DIAGNOSTIC_INVALID_CFG;
 	diagnostic.severity = ZEND_MIR_DIAGNOSTIC_ERROR;
 	diagnostic.location.module_id = ZEND_MIR_ID_INVALID;
@@ -382,8 +382,8 @@ static bool zend_mir_w04_emit_verify(
 	return false;
 }
 
-static bool zend_mir_w04_view_has_block(
-	const zend_mir_view *view, const zend_mir_w04_verify_indexes *indexes,
+static bool zend_mir_view_has_block(
+	const zend_mir_view *view, const zend_mir_verify_indexes *indexes,
 	zend_mir_block_id block_id)
 {
 	zend_mir_block_record block;
@@ -394,8 +394,8 @@ static bool zend_mir_w04_view_has_block(
 		&& block.id == block_id;
 }
 
-static bool zend_mir_w04_view_instruction(
-	const zend_mir_view *view, const zend_mir_w04_verify_indexes *indexes,
+static bool zend_mir_view_instruction(
+	const zend_mir_view *view, const zend_mir_verify_indexes *indexes,
 	zend_mir_instruction_id id,
 	zend_mir_instruction_record *out)
 {
@@ -406,8 +406,8 @@ static bool zend_mir_w04_view_instruction(
 		&& out->id == id;
 }
 
-static bool zend_mir_w04_view_frame_state(
-	const zend_mir_view *view, const zend_mir_w04_verify_indexes *indexes,
+static bool zend_mir_view_frame_state(
+	const zend_mir_view *view, const zend_mir_verify_indexes *indexes,
 	zend_mir_frame_state_id id,
 	zend_mir_frame_state_ref *out)
 {
@@ -418,7 +418,7 @@ static bool zend_mir_w04_view_frame_state(
 		&& out->id == id;
 }
 
-static bool zend_mir_w04_view_has_source_map(
+static bool zend_mir_view_has_source_map(
 	const zend_mir_view *view, zend_mir_frame_state_id frame_id,
 	zend_mir_source_position_id source_position_id, uint32_t opline_index)
 {
@@ -443,7 +443,7 @@ static bool zend_mir_w04_view_has_source_map(
 	return owner_maps == 1 && matches == 1;
 }
 
-static bool zend_mir_w04_verify_statepoint_frame(
+static bool zend_mir_verify_statepoint_frame(
 	const zend_mir_view *view,
 	const zend_mir_instruction_record *statepoint,
 	const zend_mir_frame_state_ref *frame,
@@ -461,9 +461,9 @@ static bool zend_mir_w04_verify_statepoint_frame(
 	if (frame->slots.offset > frame_slot_count
 			|| frame->slots.count
 				> frame_slot_count - frame->slots.offset) {
-		return zend_mir_w04_emit_verify(diagnostics,
-			ZEND_MIR_VERIFY_W04_EDGE_STATEPOINT_MISMATCH,
-			ZEND_MIRV_TOKEN_W04_EDGE_STATEPOINT_MISMATCH,
+		return zend_mir_emit_verify(diagnostics,
+			ZEND_MIR_VERIFY_EDGE_STATEPOINT_MISMATCH,
+			ZEND_MIRV_TOKEN_EDGE_STATEPOINT_MISMATCH,
 			"interrupt frame has an invalid slot span");
 	}
 	for (i = 0; i < frame->slots.count; i++) {
@@ -481,9 +481,9 @@ static bool zend_mir_w04_verify_statepoint_frame(
 				|| (i != 0 && (slot.kind < previous_kind
 					|| (slot.kind == previous_kind
 						&& slot.index <= previous_index)))) {
-			return zend_mir_w04_emit_verify(diagnostics,
-				ZEND_MIR_VERIFY_W04_EDGE_STATEPOINT_MISMATCH,
-				ZEND_MIRV_TOKEN_W04_EDGE_STATEPOINT_MISMATCH,
+			return zend_mir_emit_verify(diagnostics,
+				ZEND_MIR_VERIFY_EDGE_STATEPOINT_MISMATCH,
+				ZEND_MIRV_TOKEN_EDGE_STATEPOINT_MISMATCH,
 				"interrupt frame slot layout is not canonical");
 		}
 		for (j = 0; j < i; j++) {
@@ -491,9 +491,9 @@ static bool zend_mir_w04_verify_statepoint_frame(
 			if (!view->frame_slot_at(
 					view->context, frame->slots.offset + j, &earlier)
 					|| earlier.slot_id == slot.slot_id) {
-				return zend_mir_w04_emit_verify(diagnostics,
-					ZEND_MIR_VERIFY_W04_EDGE_STATEPOINT_MISMATCH,
-					ZEND_MIRV_TOKEN_W04_EDGE_STATEPOINT_MISMATCH,
+				return zend_mir_emit_verify(diagnostics,
+					ZEND_MIR_VERIFY_EDGE_STATEPOINT_MISMATCH,
+					ZEND_MIRV_TOKEN_EDGE_STATEPOINT_MISMATCH,
 					"interrupt frame contains a duplicate slot");
 			}
 		}
@@ -504,34 +504,34 @@ static bool zend_mir_w04_verify_statepoint_frame(
 					|| !view->instruction_operand_at(view->context,
 						statepoint->id, materialized_count, &operand)
 					|| operand != slot.value_id) {
-				return zend_mir_w04_emit_verify(diagnostics,
-					ZEND_MIR_VERIFY_W04_EDGE_STATEPOINT_MISMATCH,
-					ZEND_MIRV_TOKEN_W04_EDGE_STATEPOINT_MISMATCH,
+				return zend_mir_emit_verify(diagnostics,
+					ZEND_MIR_VERIFY_EDGE_STATEPOINT_MISMATCH,
+					ZEND_MIRV_TOKEN_EDGE_STATEPOINT_MISMATCH,
 					"interrupt frame operand differs from its slot value");
 			}
 			materialized_count++;
 		} else if (slot.materialization != ZEND_MIR_MATERIALIZATION_UNDEF
 				|| zend_mir_id_is_valid(slot.value_id)) {
-			return zend_mir_w04_emit_verify(diagnostics,
-				ZEND_MIR_VERIFY_W04_EDGE_STATEPOINT_MISMATCH,
-				ZEND_MIRV_TOKEN_W04_EDGE_STATEPOINT_MISMATCH,
+			return zend_mir_emit_verify(diagnostics,
+				ZEND_MIR_VERIFY_EDGE_STATEPOINT_MISMATCH,
+				ZEND_MIRV_TOKEN_EDGE_STATEPOINT_MISMATCH,
 				"interrupt frame has a noncanonical undefined slot");
 		}
 		previous_kind = slot.kind;
 		previous_index = slot.index;
 	}
 	if (materialized_count != operand_count) {
-		return zend_mir_w04_emit_verify(diagnostics,
-			ZEND_MIR_VERIFY_W04_EDGE_STATEPOINT_MISMATCH,
-			ZEND_MIRV_TOKEN_W04_EDGE_STATEPOINT_MISMATCH,
+		return zend_mir_emit_verify(diagnostics,
+			ZEND_MIR_VERIFY_EDGE_STATEPOINT_MISMATCH,
+			ZEND_MIRV_TOKEN_EDGE_STATEPOINT_MISMATCH,
 			"interrupt statepoint operand cardinality differs from its frame");
 	}
 	return true;
 }
 
-static bool zend_mir_w04_map_block(
+static bool zend_mir_map_block(
 	const zend_mir_control_flow_map *map,
-	const zend_mir_w04_verify_indexes *indexes,
+	const zend_mir_verify_indexes *indexes,
 	zend_mir_source_block_id source_id,
 	zend_mir_block_id *mir_id)
 {
@@ -547,11 +547,11 @@ static bool zend_mir_w04_map_block(
 	return true;
 }
 
-static bool zend_mir_w04_source_block(
+static bool zend_mir_cf_source_block(
 	const zend_mir_lowering_source_view *source,
 	zend_mir_source_block_id id, zend_mir_source_block_ref *out);
 
-static bool zend_mir_w04_statepoint_source_opcode(
+static bool zend_mir_statepoint_source_opcode(
 	const zend_mir_lowering_source_view *source,
 	const zend_mir_source_block_ref *block,
 	zend_mir_source_opcode_ref *opcode)
@@ -571,14 +571,14 @@ static bool zend_mir_w04_statepoint_source_opcode(
 		&& source->opcode_at(source->context, opcode_index, opcode);
 }
 
-static bool zend_mir_w04_expected_successor(
+static bool zend_mir_expected_successor(
 	const zend_mir_lowering_source_view *source,
-	const zend_mir_w04_verify_indexes *indexes,
+	const zend_mir_verify_indexes *indexes,
 	const zend_mir_source_edge_ref *edge, uint32_t *expected)
 {
 	zend_mir_source_block_ref block;
 	zend_mir_source_opcode_ref opcode;
-	if (!zend_mir_w04_source_block(source, edge->from_block_id, &block)
+	if (!zend_mir_cf_source_block(source, edge->from_block_id, &block)
 			|| indexes == NULL
 			|| indexes->source_successor_counts == NULL) {
 		return false;
@@ -592,28 +592,28 @@ static bool zend_mir_w04_expected_successor(
 		return false;
 	}
 	{
-		zend_mir_w04_branch_kind kind =
-			zend_mir_w04_verify_branch_kind(opcode.zend_opcode_number);
+		zend_mir_branch_kind kind =
+			zend_mir_verify_branch_kind(opcode.zend_opcode_number);
 		uint32_t successor_count =
 			indexes->source_successor_counts[edge->from_block_id];
-		if (kind == ZEND_MIR_W04_BRANCH_UNCONDITIONAL
-				|| kind == ZEND_MIR_W12_BRANCH_MULTIWAY
-				|| kind == ZEND_MIR_W04_BRANCH_KIND_INVALID) {
+		if (kind == ZEND_MIR_BRANCH_UNCONDITIONAL
+				|| kind == ZEND_MIR_BRANCH_MULTIWAY
+				|| kind == ZEND_MIR_BRANCH_KIND_INVALID) {
 			*expected = edge->successor_index;
 		} else if (successor_count == 1) {
 			*expected = 0;
 		} else {
-			*expected = zend_mir_w04_mir_successor_for_source(
+			*expected = zend_mir_mir_successor_for_source(
 				kind, edge->successor_index);
 		}
 	}
 	return *expected != UINT32_MAX;
 }
 
-static bool zend_mir_w04_verify_blocks(
+static bool zend_mir_verify_blocks(
 	const zend_mir_view *view, const zend_mir_lowering_source_view *source,
 	const zend_mir_control_flow_map *map,
-	const zend_mir_w04_verify_indexes *indexes,
+	const zend_mir_verify_indexes *indexes,
 	const zend_mir_control_flow_cycle_analysis *cycle_analysis,
 	zend_mir_diagnostic_sink *diagnostics)
 {
@@ -625,53 +625,53 @@ static bool zend_mir_w04_verify_blocks(
 		if (!map->block_at(map->context, i, &mapping)
 				|| !zend_mir_id_is_valid(mapping.source_block_id)
 				|| !zend_mir_id_is_valid(mapping.mir_block_id)
-				|| !zend_mir_w04_view_has_block(
+				|| !zend_mir_view_has_block(
 					view, indexes, mapping.mir_block_id)) {
-			return zend_mir_w04_emit_verify(diagnostics,
-				ZEND_MIR_VERIFY_W04_BLOCK_MISMATCH,
-				ZEND_MIRV_TOKEN_W04_BLOCK_MISMATCH,
+			return zend_mir_emit_verify(diagnostics,
+				ZEND_MIR_VERIFY_BLOCK_MISMATCH,
+				ZEND_MIRV_TOKEN_BLOCK_MISMATCH,
 				"block mapping contains an invalid record");
 		}
 	}
 	if (!indexes->map_sources_unique || !indexes->map_blocks_unique) {
-		return zend_mir_w04_emit_verify(diagnostics,
-			ZEND_MIR_VERIFY_W04_BLOCK_MISMATCH,
-			ZEND_MIRV_TOKEN_W04_BLOCK_MISMATCH,
+		return zend_mir_emit_verify(diagnostics,
+			ZEND_MIR_VERIFY_BLOCK_MISMATCH,
+			ZEND_MIRV_TOKEN_BLOCK_MISMATCH,
 			"block mapping is not one-to-one");
 	}
 	for (i = 0; i < source->block_count(source->context); i++) {
 		zend_mir_source_block_ref block;
 		zend_mir_block_id mir;
 		if (!source->block_at(source->context, i, &block)) {
-			return zend_mir_w04_emit_verify(diagnostics,
-				ZEND_MIR_VERIFY_W04_BLOCK_MISMATCH,
-				ZEND_MIRV_TOKEN_W04_BLOCK_MISMATCH,
+			return zend_mir_emit_verify(diagnostics,
+				ZEND_MIR_VERIFY_BLOCK_MISMATCH,
+				ZEND_MIRV_TOKEN_BLOCK_MISMATCH,
 				"source block enumeration changed");
 		}
 		if ((block.flags & ZEND_MIR_SOURCE_BLOCK_REACHABLE) == 0) {
 			continue;
 		}
 		expected++;
-		if (!zend_mir_w04_map_block(map, indexes, block.id, &mir)
-				|| !zend_mir_w04_view_has_block(view, indexes, mir)) {
-			return zend_mir_w04_emit_verify(diagnostics,
-				ZEND_MIR_VERIFY_W04_BLOCK_MISMATCH,
-				ZEND_MIRV_TOKEN_W04_BLOCK_MISMATCH,
+		if (!zend_mir_map_block(map, indexes, block.id, &mir)
+				|| !zend_mir_view_has_block(view, indexes, mir)) {
+			return zend_mir_emit_verify(diagnostics,
+				ZEND_MIR_VERIFY_BLOCK_MISMATCH,
+				ZEND_MIRV_TOKEN_BLOCK_MISMATCH,
 				"reachable source block lacks one MIR block");
 		}
 	}
 	if (map->block_count(map->context) != expected) {
-		return zend_mir_w04_emit_verify(diagnostics,
-			ZEND_MIR_VERIFY_W04_BLOCK_MISMATCH,
-			ZEND_MIRV_TOKEN_W04_BLOCK_MISMATCH,
+		return zend_mir_emit_verify(diagnostics,
+			ZEND_MIR_VERIFY_BLOCK_MISMATCH,
+			ZEND_MIRV_TOKEN_BLOCK_MISMATCH,
 			"block mapping cardinality differs from reachable source CFG");
 	}
 	for (i = 0; i < source->edge_count(source->context); i++) {
 		zend_mir_source_edge_ref edge;
 		if (!source->edge_at(source->context, i, &edge)) {
-			return zend_mir_w04_emit_verify(diagnostics,
-				ZEND_MIR_VERIFY_W04_BLOCK_MISMATCH,
-				ZEND_MIRV_TOKEN_W04_BLOCK_MISMATCH,
+			return zend_mir_emit_verify(diagnostics,
+				ZEND_MIR_VERIFY_BLOCK_MISMATCH,
+				ZEND_MIRV_TOKEN_BLOCK_MISMATCH,
 				"source edge enumeration changed");
 		}
 		if (zend_mir_control_flow_cycle_edge_requires_statepoint(
@@ -681,15 +681,15 @@ static bool zend_mir_w04_verify_blocks(
 	}
 	if (expected > UINT32_MAX - edge_blocks
 			|| view->block_count(view->context) != expected + edge_blocks) {
-		return zend_mir_w04_emit_verify(diagnostics,
-			ZEND_MIR_VERIFY_W04_BLOCK_MISMATCH,
-			ZEND_MIRV_TOKEN_W04_BLOCK_MISMATCH,
+		return zend_mir_emit_verify(diagnostics,
+			ZEND_MIR_VERIFY_BLOCK_MISMATCH,
+			ZEND_MIRV_TOKEN_BLOCK_MISMATCH,
 			"MIR block cardinality includes an unexpected block");
 	}
 	return true;
 }
 
-static uint32_t zend_mir_w04_statepoint_count_in_block(
+static uint32_t zend_mir_statepoint_count_in_block(
 	const zend_mir_view *view, zend_mir_block_id block_id, bool *valid)
 {
 	uint32_t count = 0;
@@ -709,18 +709,18 @@ static uint32_t zend_mir_w04_statepoint_count_in_block(
 	return count;
 }
 
-static bool zend_mir_w04_verify_edges(
+static bool zend_mir_cf_verify_edges(
 	const zend_mir_view *view, const zend_mir_lowering_source_view *source,
 	const zend_mir_control_flow_map *map,
-	const zend_mir_w04_verify_indexes *indexes,
+	const zend_mir_verify_indexes *indexes,
 	const zend_mir_control_flow_cycle_analysis *cycle_analysis,
 	zend_mir_diagnostic_sink *diagnostics)
 {
 	uint32_t i;
 	if (map->edge_count(map->context) != source->edge_count(source->context)) {
-		return zend_mir_w04_emit_verify(diagnostics,
-			ZEND_MIR_VERIFY_W04_EDGE_MISMATCH,
-			ZEND_MIRV_TOKEN_W04_EDGE_MISMATCH,
+		return zend_mir_emit_verify(diagnostics,
+			ZEND_MIR_VERIFY_CF_EDGE_MISMATCH,
+			ZEND_MIRV_TOKEN_EDGE_MISMATCH,
 			"edge mapping cardinality differs from source CFG");
 	}
 	for (i = 0; i < source->edge_count(source->context); i++) {
@@ -734,12 +734,12 @@ static bool zend_mir_w04_verify_edges(
 		if (!source->edge_at(source->context, i, &edge)
 				|| !map->edge_at(map->context, i, &mapping)
 				|| mapping.source_edge_id != edge.id
-				|| !zend_mir_w04_map_block(
+				|| !zend_mir_map_block(
 					map, indexes, edge.from_block_id, &source_from)
-				|| !zend_mir_w04_map_block(
+				|| !zend_mir_map_block(
 					map, indexes, edge.to_block_id, &source_to)
 				|| mapping.mir_from_block_id != source_from
-				|| !zend_mir_w04_expected_successor(
+				|| !zend_mir_expected_successor(
 					source, indexes, &edge, &expected_successor)
 				|| mapping.mir_successor_index != expected_successor
 				|| mapping.mir_successor_index
@@ -747,21 +747,21 @@ static bool zend_mir_w04_verify_edges(
 				|| !view->successor_at(view->context, source_from,
 					mapping.mir_successor_index, &actual_to)
 				|| actual_to != mapping.mir_to_block_id) {
-			return zend_mir_w04_emit_verify(diagnostics,
-				ZEND_MIR_VERIFY_W04_EDGE_MISMATCH,
-				ZEND_MIRV_TOKEN_W04_EDGE_MISMATCH,
+			return zend_mir_emit_verify(diagnostics,
+				ZEND_MIR_VERIFY_CF_EDGE_MISMATCH,
+				ZEND_MIRV_TOKEN_EDGE_MISMATCH,
 				"mapped edge target or successor ordinal differs");
 		}
 		{
 			zend_mir_source_block_ref source_block;
 			zend_mir_source_opcode_ref source_opcode;
-			zend_mir_w04_branch_kind branch_kind =
-				ZEND_MIR_W04_BRANCH_KIND_INVALID;
-			if (!zend_mir_w04_source_block(
+			zend_mir_branch_kind branch_kind =
+				ZEND_MIR_BRANCH_KIND_INVALID;
+			if (!zend_mir_cf_source_block(
 					source, edge.from_block_id, &source_block)) {
-				return zend_mir_w04_emit_verify(diagnostics,
-					ZEND_MIR_VERIFY_W04_BRANCH_MISMATCH,
-					ZEND_MIRV_TOKEN_W04_BRANCH_MISMATCH,
+				return zend_mir_emit_verify(diagnostics,
+					ZEND_MIR_VERIFY_BRANCH_MISMATCH,
+					ZEND_MIRV_TOKEN_BRANCH_MISMATCH,
 					"branch source terminator is unavailable");
 			}
 			if (source_block.opcode_count != 0) {
@@ -769,32 +769,32 @@ static bool zend_mir_w04_verify_edges(
 						source_block.first_opcode_ordinal
 							+ source_block.opcode_count - 1,
 						&source_opcode)) {
-					return zend_mir_w04_emit_verify(diagnostics,
-						ZEND_MIR_VERIFY_W04_BRANCH_MISMATCH,
-						ZEND_MIRV_TOKEN_W04_BRANCH_MISMATCH,
+					return zend_mir_emit_verify(diagnostics,
+						ZEND_MIR_VERIFY_BRANCH_MISMATCH,
+						ZEND_MIRV_TOKEN_BRANCH_MISMATCH,
 						"branch source terminator is unavailable");
 				}
-				branch_kind = zend_mir_w04_verify_branch_kind(
+				branch_kind = zend_mir_verify_branch_kind(
 					source_opcode.zend_opcode_number);
 			}
-			if (!zend_mir_w04_view_instruction(
+			if (!zend_mir_view_instruction(
 					view, indexes, mapping.terminator_instruction_id, &terminator)
 					|| terminator.block_id != source_from
-					|| (branch_kind == ZEND_MIR_W04_BRANCH_CATCH
+					|| (branch_kind == ZEND_MIR_BRANCH_CATCH
 						? terminator.opcode != ZEND_MIR_OPCODE_CATCH_ENTER
-						: branch_kind == ZEND_MIR_W08_BRANCH_FINALLY_CALL
+						: branch_kind == ZEND_MIR_BRANCH_FINALLY_CALL
 							? terminator.opcode != ZEND_MIR_OPCODE_FINALLY_CALL
-						: branch_kind == ZEND_MIR_W08_BRANCH_FINALLY_RETURN
+						: branch_kind == ZEND_MIR_BRANCH_FINALLY_RETURN
 							? terminator.opcode != ZEND_MIR_OPCODE_FINALLY_RETURN
-						: branch_kind == ZEND_MIR_W09_BRANCH_ITERATOR
+						: branch_kind == ZEND_MIR_BRANCH_ITERATOR
 							? terminator.opcode != ZEND_MIR_OPCODE_ITERATOR_BRANCH
-						: branch_kind == ZEND_MIR_W12_BRANCH_MULTIWAY
+						: branch_kind == ZEND_MIR_BRANCH_MULTIWAY
 							? terminator.opcode
 								!= ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH
-						: branch_kind == ZEND_MIR_W12_BRANCH_BIND_STATIC
+						: branch_kind == ZEND_MIR_BRANCH_BIND_STATIC
 							? terminator.opcode
 								!= ZEND_MIR_OPCODE_VALUE_BIND_STATIC_BRANCH
-						: branch_kind == ZEND_MIR_W12_BRANCH_FRAMELESS
+						: branch_kind == ZEND_MIR_BRANCH_FRAMELESS
 							? terminator.opcode
 								!= ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH
 						: (view->successor_count(view->context, source_from) == 1
@@ -802,15 +802,15 @@ static bool zend_mir_w04_verify_edges(
 							: terminator.opcode != ZEND_MIR_OPCODE_COND_BRANCH
 								&& terminator.opcode
 									!= ZEND_MIR_OPCODE_VALUE_COND_BRANCH))) {
-				return zend_mir_w04_emit_verify(diagnostics,
-					ZEND_MIR_VERIFY_W04_BRANCH_MISMATCH,
-					ZEND_MIRV_TOKEN_W04_BRANCH_MISMATCH,
+				return zend_mir_emit_verify(diagnostics,
+					ZEND_MIR_VERIFY_BRANCH_MISMATCH,
+					ZEND_MIRV_TOKEN_BRANCH_MISMATCH,
 					"terminator kind does not match source branch");
 			}
 			if (terminator.opcode != ZEND_MIR_OPCODE_VALUE_COND_BRANCH
-					&& (branch_kind == ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT
+					&& (branch_kind == ZEND_MIR_BRANCH_IF_FALSE_WITH_RESULT
 					|| branch_kind
-						== ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT)) {
+						== ZEND_MIR_BRANCH_IF_TRUE_WITH_RESULT)) {
 				zend_mir_value_id condition;
 				bool copy_found = false;
 				uint32_t instruction_index;
@@ -820,9 +820,9 @@ static bool zend_mir_w04_verify_edges(
 							view->context, terminator.id) != 1
 						|| !view->instruction_operand_at(
 							view->context, terminator.id, 0, &condition)) {
-					return zend_mir_w04_emit_verify(diagnostics,
-						ZEND_MIR_VERIFY_W04_BRANCH_MISMATCH,
-						ZEND_MIRV_TOKEN_W04_BRANCH_MISMATCH,
+					return zend_mir_emit_verify(diagnostics,
+						ZEND_MIR_VERIFY_BRANCH_MISMATCH,
+						ZEND_MIRV_TOKEN_BRANCH_MISMATCH,
 						"extended branch lacks its boolean condition");
 				}
 				for (instruction_index = 0;
@@ -852,17 +852,17 @@ static bool zend_mir_w04_verify_edges(
 							|| !view->instruction_operand_at(
 								view->context, candidate.id, 0, &operand)
 							|| operand != condition) {
-						return zend_mir_w04_emit_verify(diagnostics,
-							ZEND_MIR_VERIFY_W04_BRANCH_MISMATCH,
-							ZEND_MIRV_TOKEN_W04_BRANCH_MISMATCH,
+						return zend_mir_emit_verify(diagnostics,
+							ZEND_MIR_VERIFY_BRANCH_MISMATCH,
+							ZEND_MIRV_TOKEN_BRANCH_MISMATCH,
 							"extended branch result is not its boolean condition");
 					}
 					copy_found = true;
 				}
 				if (!copy_found) {
-					return zend_mir_w04_emit_verify(diagnostics,
-						ZEND_MIR_VERIFY_W04_BRANCH_MISMATCH,
-						ZEND_MIRV_TOKEN_W04_BRANCH_MISMATCH,
+					return zend_mir_emit_verify(diagnostics,
+						ZEND_MIR_VERIFY_BRANCH_MISMATCH,
+						ZEND_MIRV_TOKEN_BRANCH_MISMATCH,
 						"extended branch result copy is missing");
 				}
 			}
@@ -875,19 +875,19 @@ static bool zend_mir_w04_verify_edges(
 			zend_mir_source_opcode_ref source_opcode;
 			bool statepoint_enumeration_valid;
 			uint32_t statepoint_count =
-				zend_mir_w04_statepoint_count_in_block(
+				zend_mir_statepoint_count_in_block(
 					view, mapping.mir_to_block_id,
 					&statepoint_enumeration_valid);
 			if (!zend_mir_id_is_valid(
 					mapping.edge_statepoint_instruction_id)
 					|| !statepoint_enumeration_valid
 					|| statepoint_count != 1
-					|| !zend_mir_w04_view_instruction(view, indexes,
+					|| !zend_mir_view_instruction(view, indexes,
 						mapping.edge_statepoint_instruction_id, &statepoint)
 					|| statepoint.opcode != ZEND_MIR_OPCODE_STATEPOINT
 					|| statepoint.block_id != mapping.mir_to_block_id
 					|| !zend_mir_id_is_valid(statepoint.frame_state_id)
-					|| !zend_mir_w04_view_frame_state(
+					|| !zend_mir_view_frame_state(
 						view, indexes, statepoint.frame_state_id, &frame)
 					|| !frame.canonical
 					|| frame.safepoint_class
@@ -918,38 +918,38 @@ static bool zend_mir_w04_verify_edges(
 					|| !view->successor_at(view->context,
 						mapping.mir_to_block_id, 0, &actual_to)
 					|| actual_to != source_to
-					|| !zend_mir_w04_source_block(
+					|| !zend_mir_cf_source_block(
 						source, edge.from_block_id, &source_block)
-					|| !zend_mir_w04_statepoint_source_opcode(
+					|| !zend_mir_statepoint_source_opcode(
 						source, &source_block, &source_opcode)
 					|| statepoint.source_position_id
 						!= source_opcode.source_position_id
 					|| frame.opline_index != source_opcode.opline_index
-					|| !zend_mir_w04_view_has_source_map(
+					|| !zend_mir_view_has_source_map(
 						view, frame.id, statepoint.source_position_id,
 						source_opcode.opline_index)) {
-				return zend_mir_w04_emit_verify(diagnostics,
-					ZEND_MIR_VERIFY_W04_EDGE_STATEPOINT_MISMATCH,
-					ZEND_MIRV_TOKEN_W04_EDGE_STATEPOINT_MISMATCH,
+				return zend_mir_emit_verify(diagnostics,
+					ZEND_MIR_VERIFY_EDGE_STATEPOINT_MISMATCH,
+					ZEND_MIRV_TOKEN_EDGE_STATEPOINT_MISMATCH,
 					"interrupt edge lacks its mapped statepoint");
 			}
-			if (!zend_mir_w04_verify_statepoint_frame(
+			if (!zend_mir_verify_statepoint_frame(
 					view, &statepoint, &frame, diagnostics)) {
 				return false;
 			}
 		} else if (mapping.mir_to_block_id != source_to
 				|| zend_mir_id_is_valid(
 					mapping.edge_statepoint_instruction_id)) {
-			return zend_mir_w04_emit_verify(diagnostics,
-				ZEND_MIR_VERIFY_W04_EDGE_STATEPOINT_MISMATCH,
-				ZEND_MIRV_TOKEN_W04_EDGE_STATEPOINT_MISMATCH,
+			return zend_mir_emit_verify(diagnostics,
+				ZEND_MIR_VERIFY_EDGE_STATEPOINT_MISMATCH,
+				ZEND_MIRV_TOKEN_EDGE_STATEPOINT_MISMATCH,
 				"non-interrupt edge has an edge statepoint");
 		}
 	}
 	return true;
 }
 
-static bool zend_mir_w04_source_block(
+static bool zend_mir_cf_source_block(
 	const zend_mir_lowering_source_view *source,
 	zend_mir_source_block_id id, zend_mir_source_block_ref *out)
 {
@@ -958,7 +958,7 @@ static bool zend_mir_w04_source_block(
 		&& out->id == id;
 }
 
-static bool zend_mir_w04_source_dominates(
+static bool zend_mir_source_dominates(
 	const zend_mir_lowering_source_view *source,
 	zend_mir_source_block_id dominator, zend_mir_source_block_id block)
 {
@@ -968,7 +968,7 @@ static bool zend_mir_w04_source_dominates(
 		if (block == dominator) {
 			return true;
 		}
-		if (!zend_mir_w04_source_block(source, block, &record)
+		if (!zend_mir_cf_source_block(source, block, &record)
 				|| record.immediate_dominator == ZEND_MIR_ID_INVALID
 				|| record.immediate_dominator == block) {
 			return false;
@@ -978,7 +978,7 @@ static bool zend_mir_w04_source_dominates(
 	return false;
 }
 
-static bool zend_mir_w04_verify_loops(
+static bool zend_mir_verify_loops(
 	const zend_mir_lowering_source_view *source,
 	zend_mir_diagnostic_sink *diagnostics)
 {
@@ -987,31 +987,31 @@ static bool zend_mir_w04_verify_loops(
 		zend_mir_source_edge_ref edge;
 		zend_mir_source_block_ref header;
 		if (!source->edge_at(source->context, i, &edge)) {
-			return zend_mir_w04_emit_verify(diagnostics,
-				ZEND_MIR_VERIFY_W04_LOOP_MISMATCH,
-				ZEND_MIRV_TOKEN_W04_LOOP_MISMATCH,
+			return zend_mir_emit_verify(diagnostics,
+				ZEND_MIR_VERIFY_LOOP_MISMATCH,
+				ZEND_MIRV_TOKEN_LOOP_MISMATCH,
 				"source edge enumeration changed");
 		}
 		if ((edge.flags & ZEND_MIR_SOURCE_EDGE_BACKEDGE) == 0) {
 			continue;
 		}
 		if ((edge.flags & ZEND_MIR_SOURCE_EDGE_INTERRUPT_BOUNDARY) == 0
-				|| !zend_mir_w04_source_block(
+				|| !zend_mir_cf_source_block(
 					source, edge.to_block_id, &header)
 				|| (header.flags & ZEND_MIR_SOURCE_BLOCK_LOOP_HEADER) == 0
-				|| !zend_mir_w04_source_dominates(
+				|| !zend_mir_source_dominates(
 					source, edge.to_block_id, edge.from_block_id)) {
-			return zend_mir_w04_emit_verify(diagnostics,
-				ZEND_MIR_VERIFY_W04_LOOP_MISMATCH,
-				ZEND_MIRV_TOKEN_W04_LOOP_MISMATCH,
+			return zend_mir_emit_verify(diagnostics,
+				ZEND_MIR_VERIFY_LOOP_MISMATCH,
+				ZEND_MIRV_TOKEN_LOOP_MISMATCH,
 				"backedge is not a source-backed natural loop edge");
 		}
 	}
 	return true;
 }
 
-static bool zend_mir_w04_resolve_indexed_edge_pi_input(
-	const zend_mir_w04_verify_indexes *indexes,
+static bool zend_mir_resolve_indexed_edge_pi_input(
+	const zend_mir_verify_indexes *indexes,
 	const zend_mir_source_phi_ref *consumer,
 	const zend_mir_source_phi_input_ref *consumer_input,
 	uint32_t *source_ssa_variable_id)
@@ -1052,9 +1052,9 @@ static bool zend_mir_w04_resolve_indexed_edge_pi_input(
 	return true;
 }
 
-static bool zend_mir_w04_verify_phi_order(
+static bool zend_mir_verify_phi_order(
 	const zend_mir_view *view, const zend_mir_control_flow_map *map,
-	const zend_mir_w04_verify_indexes *indexes,
+	const zend_mir_verify_indexes *indexes,
 	zend_mir_diagnostic_sink *diagnostics)
 {
 	uint8_t *saw_non_phi;
@@ -1074,9 +1074,9 @@ static bool zend_mir_w04_verify_phi_order(
 				|| zend_mir_id_index_find(indexes->map_blocks,
 					indexes->map_capacity, mapping.mir_block_id) != (int32_t) i) {
 			free(saw_non_phi);
-			return zend_mir_w04_emit_verify(diagnostics,
-				ZEND_MIR_VERIFY_W04_PHI_MISMATCH,
-				ZEND_MIRV_TOKEN_W04_PHI_MISMATCH,
+			return zend_mir_emit_verify(diagnostics,
+				ZEND_MIR_VERIFY_PHI_MISMATCH,
+				ZEND_MIRV_TOKEN_PHI_MISMATCH,
 				"block mapping changed during PHI verification");
 		}
 	}
@@ -1086,9 +1086,9 @@ static bool zend_mir_w04_verify_phi_order(
 
 		if (!view->instruction_at(view->context, i, &instruction)) {
 			free(saw_non_phi);
-			return zend_mir_w04_emit_verify(diagnostics,
-				ZEND_MIR_VERIFY_W04_PHI_MISMATCH,
-				ZEND_MIRV_TOKEN_W04_PHI_MISMATCH,
+			return zend_mir_emit_verify(diagnostics,
+				ZEND_MIR_VERIFY_PHI_MISMATCH,
+				ZEND_MIRV_TOKEN_PHI_MISMATCH,
 				"instruction enumeration changed");
 		}
 		map_index = zend_mir_id_index_find(indexes->map_blocks,
@@ -1099,9 +1099,9 @@ static bool zend_mir_w04_verify_phi_order(
 		if (instruction.opcode == ZEND_MIR_OPCODE_PHI) {
 			if (saw_non_phi[map_index]) {
 				free(saw_non_phi);
-				return zend_mir_w04_emit_verify(diagnostics,
-					ZEND_MIR_VERIFY_W04_PHI_MISMATCH,
-					ZEND_MIRV_TOKEN_W04_PHI_MISMATCH,
+				return zend_mir_emit_verify(diagnostics,
+					ZEND_MIR_VERIFY_PHI_MISMATCH,
+					ZEND_MIRV_TOKEN_PHI_MISMATCH,
 					"regular PHI follows a non-PHI instruction");
 			}
 		} else {
@@ -1112,17 +1112,17 @@ static bool zend_mir_w04_verify_phi_order(
 	return true;
 }
 
-static bool zend_mir_w04_verify_phis(
+static bool zend_mir_verify_phis(
 	const zend_mir_view *view, const zend_mir_lowering_source_view *source,
 	const zend_mir_control_flow_map *map,
-	const zend_mir_w04_verify_indexes *indexes,
+	const zend_mir_verify_indexes *indexes,
 	zend_mir_diagnostic_sink *diagnostics)
 {
 	uint32_t i;
 	if (map->phi_count(map->context) != source->phi_count(source->context)) {
-		return zend_mir_w04_emit_verify(diagnostics,
-			ZEND_MIR_VERIFY_W04_PHI_MISMATCH,
-			ZEND_MIRV_TOKEN_W04_PHI_MISMATCH,
+		return zend_mir_emit_verify(diagnostics,
+			ZEND_MIR_VERIFY_PHI_MISMATCH,
+			ZEND_MIRV_TOKEN_PHI_MISMATCH,
 			"PHI mapping cardinality differs");
 	}
 	for (i = 0; i < source->phi_count(source->context); i++) {
@@ -1135,9 +1135,9 @@ static bool zend_mir_w04_verify_phis(
 		if (!source->phi_at(source->context, i, &phi)
 				|| !map->phi_at(map->context, i, &mapping)
 				|| mapping.source_phi_id != phi.id
-				|| !zend_mir_w04_view_instruction(
+				|| !zend_mir_view_instruction(
 					view, indexes, mapping.mir_phi_instruction_id, &instruction)
-				|| !zend_mir_w04_map_block(
+				|| !zend_mir_map_block(
 					map, indexes, phi.block_id, &expected_block)
 				|| instruction.block_id != expected_block
 				|| instruction.result_id != mapping.mir_result_value_id
@@ -1146,9 +1146,9 @@ static bool zend_mir_w04_verify_phis(
 						phi.result_ssa_variable_id)
 				|| instruction.opcode != (phi.kind == ZEND_MIR_SOURCE_PHI_MERGE
 					? ZEND_MIR_OPCODE_PHI : ZEND_MIR_OPCODE_COPY)) {
-			return zend_mir_w04_emit_verify(diagnostics,
-				ZEND_MIR_VERIFY_W04_PHI_MISMATCH,
-				ZEND_MIRV_TOKEN_W04_PHI_MISMATCH,
+			return zend_mir_emit_verify(diagnostics,
+				ZEND_MIR_VERIFY_PHI_MISMATCH,
+				ZEND_MIRV_TOKEN_PHI_MISMATCH,
 				"PHI/Pi instruction mapping differs");
 		}
 		for (j = indexes->source_phi_input_offsets[i];
@@ -1166,7 +1166,7 @@ static bool zend_mir_w04_verify_phis(
 				indexes->source_predecessor_offsets[phi.block_id + 1];
 
 			source_ssa_variable_id = input->source_ssa_variable_id;
-			(void) zend_mir_w04_resolve_indexed_edge_pi_input(
+			(void) zend_mir_resolve_indexed_edge_pi_input(
 				indexes, &phi, input, &source_ssa_variable_id);
 			for (k = predecessor_begin; k < predecessor_end; k++) {
 				const zend_mir_source_edge_ref *edge = &indexes->source_edges[
@@ -1187,40 +1187,40 @@ static bool zend_mir_w04_verify_phis(
 						instruction.id, expected_operands, &operand)
 					|| operand != zend_mir_value_from_original_ssa(
 						source_ssa_variable_id)) {
-				return zend_mir_w04_emit_verify(diagnostics,
-					ZEND_MIR_VERIFY_W04_PHI_MISMATCH,
-					ZEND_MIRV_TOKEN_W04_PHI_MISMATCH,
+				return zend_mir_emit_verify(diagnostics,
+					ZEND_MIR_VERIFY_PHI_MISMATCH,
+					ZEND_MIRV_TOKEN_PHI_MISMATCH,
 					"PHI/Pi operand does not match its source predecessor");
 			}
 			expected_operands++;
 		}
 		if (view->instruction_operand_count(view->context, instruction.id)
 				!= expected_operands) {
-			return zend_mir_w04_emit_verify(diagnostics,
-				ZEND_MIR_VERIFY_W04_PHI_MISMATCH,
-				ZEND_MIRV_TOKEN_W04_PHI_MISMATCH,
+			return zend_mir_emit_verify(diagnostics,
+				ZEND_MIR_VERIFY_PHI_MISMATCH,
+				ZEND_MIRV_TOKEN_PHI_MISMATCH,
 				"PHI operand cardinality differs");
 		}
 	}
-	return zend_mir_w04_verify_phi_order(view, map, indexes, diagnostics);
+	return zend_mir_verify_phi_order(view, map, indexes, diagnostics);
 }
 
-bool zend_mir_verify_w04_control_flow(
+bool zend_mir_verify_control_flow_tables(
 	const zend_mir_view *view,
 	const zend_mir_lowering_source_view *source,
 	const zend_mir_control_flow_map *map,
 	zend_mir_diagnostic_sink *diagnostics)
 {
 	zend_mir_control_flow_cycle_analysis cycle_analysis;
-	zend_mir_w04_verify_indexes indexes;
+	zend_mir_verify_indexes indexes;
 	bool verified;
 
 	memset(&cycle_analysis, 0, sizeof(cycle_analysis));
 	memset(&indexes, 0, sizeof(indexes));
 	if (view == NULL || source == NULL || map == NULL
 			|| view->contract_version != ZEND_MIR_CONTRACT_VERSION
-			|| source->contract_version != ZEND_MIR_W04_CONTRACT_VERSION
-			|| map->contract_version != ZEND_MIR_W04_CONTRACT_VERSION
+			|| source->contract_version != ZEND_MIR_CONTRACT_VERSION
+			|| map->contract_version != ZEND_MIR_CONTRACT_VERSION
 			|| view->block_count == NULL || view->block_at == NULL
 			|| view->instruction_count == NULL || view->instruction_at == NULL
 			|| view->instruction_operand_count == NULL
@@ -1239,32 +1239,32 @@ bool zend_mir_verify_w04_control_flow(
 			|| map->block_count == NULL || map->block_at == NULL
 			|| map->edge_count == NULL || map->edge_at == NULL
 			|| map->phi_count == NULL || map->phi_at == NULL) {
-		return zend_mir_w04_emit_verify(diagnostics,
-			ZEND_MIR_VERIFY_W04_BLOCK_MISMATCH,
-			ZEND_MIRV_TOKEN_W04_BLOCK_MISMATCH,
+		return zend_mir_emit_verify(diagnostics,
+			ZEND_MIR_VERIFY_BLOCK_MISMATCH,
+			ZEND_MIRV_TOKEN_BLOCK_MISMATCH,
 			"control-flow verifier contract is incomplete");
 	}
-	if (!zend_mir_w04_verify_indexes_init(&indexes, view, source, map)) {
-		return zend_mir_w04_emit_verify(diagnostics,
-			ZEND_MIR_VERIFY_W04_BLOCK_MISMATCH,
-			ZEND_MIRV_TOKEN_W04_BLOCK_MISMATCH,
+	if (!zend_mir_verify_indexes_init(&indexes, view, source, map)) {
+		return zend_mir_emit_verify(diagnostics,
+			ZEND_MIR_VERIFY_BLOCK_MISMATCH,
+			ZEND_MIRV_TOKEN_BLOCK_MISMATCH,
 			"control-flow verifier index construction failed");
 	}
-	if (!zend_mir_w04_verify_analyze_cycles(&cycle_analysis, source)) {
-		zend_mir_w04_verify_indexes_destroy(&indexes);
-		return zend_mir_w04_emit_verify(diagnostics,
-			ZEND_MIR_VERIFY_W04_LOOP_MISMATCH,
-			ZEND_MIRV_TOKEN_W04_LOOP_MISMATCH,
+	if (!zend_mir_verify_analyze_cycles(&cycle_analysis, source)) {
+		zend_mir_verify_indexes_destroy(&indexes);
+		return zend_mir_emit_verify(diagnostics,
+			ZEND_MIR_VERIFY_LOOP_MISMATCH,
+			ZEND_MIRV_TOKEN_LOOP_MISMATCH,
 			"source cycle analysis failed");
 	}
-	verified = zend_mir_w04_verify_blocks(
+	verified = zend_mir_verify_blocks(
 			view, source, map, &indexes, &cycle_analysis, diagnostics)
-		&& zend_mir_w04_verify_edges(
+		&& zend_mir_cf_verify_edges(
 			view, source, map, &indexes, &cycle_analysis, diagnostics)
-		&& zend_mir_w04_verify_phis(
+		&& zend_mir_verify_phis(
 			view, source, map, &indexes, diagnostics)
-		&& zend_mir_w04_verify_loops(source, diagnostics);
+		&& zend_mir_verify_loops(source, diagnostics);
 	zend_mir_control_flow_cycle_analysis_destroy(&cycle_analysis);
-	zend_mir_w04_verify_indexes_destroy(&indexes);
+	zend_mir_verify_indexes_destroy(&indexes);
 	return verified;
 }
