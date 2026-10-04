@@ -76,25 +76,49 @@ uses a native calling convention:
 - the call site checks its target inline (function pointer, class and
   method, closure code) against a per-site cache;
 - on a hit it bumps the VM stack, writes the callee frame header and the
-  arguments directly into the callee's parameter slots, and calls the native
-  entry with the frame and argument values in registers;
-- the result comes back in registers; the caller releases the frame.
+  arguments directly into the callee's parameter slots, and calls the
+  target's native call entry with the caller frame, the execution context
+  and the site descriptor in registers;
+- the native call entry is frameless code placed directly before the
+  target's body. It checks the pushed frame against facts the compiler
+  froze for the target (fewest and most arguments, no named or undefined
+  arguments, the type bits of typed parameters), initializes the frame as
+  `i_init_func_execute_data()` and the target's `RECV`, `RECV_INIT` and
+  `RECV_VARIADIC` do (literal defaults as immediates, an untyped by-value
+  variadic parameter collected by `zend_native_call_receive_variadic()`),
+  enters the body and leaves the frame inline for a plain return; `$this`
+  and closure releases, extra arguments and failures leave through the
+  shared `zend_native_call_fast_leave()`;
+- a site whose publication proved the argument count and untyped
+  parameters enters past the checks (the image's exact entry,
+  `zend_native_code_exact_call_entry()`);
+- the result is written to the caller's result slot, which the call
+  site's consumers read.
+
+Arguments and the result travel through the frame slots because the
+generic code keeps its values there (section 1); passing them in registers
+pays only where both sides keep values in registers, which the frame-state
+maps of section 1 allow, and is done with them. Typed component bodies
+already call each other with arguments and results in registers.
 
 The universal activation, `zend_native_call_resolve_user`,
 `zend_native_call_invoke_user` and per-argument
 `zend_native_call_set_explicit_argument` remain as the cold path for a cache
-miss and for the forms the fast path does not cover: named, variadic and
-by-reference arguments, magic `__call`, trampolines, observers.
+miss and for the forms the fast path does not cover: named and by-reference
+arguments, typed or by-reference variadic parameters, magic `__call`,
+trampolines, observers. Any frame a native call entry rejects continues,
+untouched, in `zend_native_call_fast_do()`, which receives it generically.
 
 Two WordPress forms are fast-path forms, not cold ones:
 
-- `call_user_func_array` / `SEND_ARRAY` with packed positional arguments and
-  no named or by-reference parameter: the argument array is copied directly
-  into the callee's parameter slots;
+- `call_user_func_array` / `SEND_ARRAY` with packed positional arguments,
+  also as `array_slice()` of them, and no named or by-reference parameter:
+  the argument array is copied directly into the callee's parameter slots;
 - hook dispatch sites with changing targets: an already resolved target
-  (entry cell, valid native binding) is invoked without re-running the
-  general resolution and activation machine; the per-site cache is only the
-  first level.
+  (entry cell, valid native binding) is found again by
+  `zend_native_call_fast_dynamic_init()` without the general resolution
+  and activation machine, and its native call entry is called; the
+  per-site cache is only the first level.
 
 The call fast path uses the same ownership, observation and suspension rules
 as section 1 (a caller's native-owned locals are described by the map at the
@@ -104,7 +128,9 @@ frame-state and cleanup work.
 The callee frame header stays eager (section 1), so extensions and runtime
 services keep a walkable `EX` chain. Building headers lazily as well, from the
 native stack, is only done when inlining requires it (section 5) or when
-measurements show that the header stores matter.
+measurements show that the header stores matter. Leaving `$this` and
+closures inline in every native call entry was measured slower than the
+shared leave (more executed bytes per function).
 
 ### 4. Speculation with deoptimization into generic native code
 
