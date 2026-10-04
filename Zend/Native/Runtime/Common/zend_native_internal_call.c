@@ -1,6 +1,7 @@
 /* Direct calls to compile-time resolved Zend internal functions. */
 
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
+#include "Zend/Native/Runtime/Common/zend_native_operands.h"
 #include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 #include "Zend/Native/Runtime/Common/zend_native_values.h"
 
@@ -32,14 +33,6 @@ typedef struct _zend_native_internal_top_execution_state {
 	bool observer_started;
 	bool observer_finished;
 } zend_native_internal_top_execution_state;
-
-static uint64_t zend_native_internal_encode_source_operand(
-	const zend_mir_source_operand_ref *operand)
-{
-	return ((uint64_t) operand->kind & UINT64_C(0xff))
-		| (((uint64_t) operand->slot_kind & UINT64_C(0xff)) << 8)
-		| ((uint64_t) operand->index << 16);
-}
 
 static bool zend_native_internal_call_preflight(
 	const zend_execute_data *caller, const zend_function *function)
@@ -2136,9 +2129,9 @@ zend_native_internal_call_direct_general(
 			caller,
 			descriptor->do_opcode,
 			descriptor->do_op1_payload,
-			zend_native_internal_encode_source_operand(&descriptor->do_op2),
-			zend_native_internal_encode_source_operand(
-				&descriptor->result_operand),
+			zend_native_encode_source_operand(caller, &descriptor->do_op2),
+			zend_native_encode_source_operand(
+				caller, &descriptor->result_operand),
 			descriptor->do_extended_value,
 			descriptor->do_source_position);
 		return result;
@@ -2264,9 +2257,9 @@ zend_native_status zend_native_internal_call_invoke_finish_source(
 			caller,
 			descriptor->do_opcode,
 			descriptor->do_op1_payload,
-			zend_native_internal_encode_source_operand(&descriptor->do_op2),
-			zend_native_internal_encode_source_operand(
-				&descriptor->result_operand),
+			zend_native_encode_source_operand(caller, &descriptor->do_op2),
+			zend_native_encode_source_operand(
+				caller, &descriptor->result_operand),
 			descriptor->do_extended_value,
 			descriptor->do_source_position);
 	}
@@ -2462,13 +2455,10 @@ zend_native_status zend_native_return_source_zval(
 				&& source_opcode != ZEND_RETURN_BY_REF)) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	memset(&operand, 0, sizeof(operand));
-	operand.kind = (zend_mir_source_operand_kind)
-		(encoded_operand & UINT64_C(0xff));
-	operand.slot_kind = (zend_mir_source_slot_kind)
-		((encoded_operand >> 8) & UINT64_C(0xff));
-	operand.index = (uint32_t) (encoded_operand >> 16);
-	operand.ssa_variable_id = ZEND_MIR_ID_INVALID;
+	if (!zend_native_decode_source_operand(
+			execute_data, encoded_operand, &operand)) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
 	source_slot = zend_native_explicit_operand(
 		execute_data, &operand, true, &mutable_value, &operand_type);
 	if (source_slot == NULL

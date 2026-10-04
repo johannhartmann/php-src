@@ -686,12 +686,10 @@ uint32_t zend_native_call_invoke_user(
 	zend_native_execution_context *context);
 /*
  * A frameless internal call whose operands the compiler resolved to frame
- * offsets (ZEND_NATIVE_FRAMELESS_DIRECT_*). The encoded first operand is
- * passed as in the general form and ignored.
+ * offsets (ZEND_NATIVE_FRAMELESS_DIRECT_*).
  */
 zend_native_status zend_native_call_frameless_direct(
-	zend_execute_data *execute_data, uint64_t encoded_op1,
-	uint64_t descriptor, uint64_t slots, uint64_t more_slots);
+	zend_execute_data *execute_data, uint64_t descriptor, uint64_t slots, uint64_t more_slots);
 /*
  * The same for two or three arguments with their addresses and the
  * result's computed by the caller: no operand is decoded. The descriptor
@@ -705,8 +703,7 @@ zend_native_status zend_native_call_frameless_3_address(
 	zval *second, zval *third, uint64_t descriptor);
 /* The same for a one-argument call, specialized like the VM's handler. */
 zend_native_status zend_native_call_frameless_1(
-	zend_execute_data *execute_data, uint64_t encoded_op1,
-	uint64_t descriptor, uint64_t slots, uint64_t more_slots);
+	zend_execute_data *execute_data, uint64_t descriptor, uint64_t slots, uint64_t more_slots);
 
 zend_native_status zend_native_call_frameless_internal(
 	zend_execute_data *execute_data,

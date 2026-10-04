@@ -4,6 +4,7 @@
 #include "Zend/Native/TPDE/Common/zend_tpde_backend.h"
 #include "Zend/Native/MIR/zend_mir_call.h"
 #include "Zend/Native/MIR/zend_mir_values.h"
+#include "Zend/Native/Runtime/Common/zend_native_operands.h"
 #include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 #include "Zend/zend_compile.h"
 #include "Zend/zend_execute.h"
@@ -176,25 +177,47 @@ struct zend_tpde_user_opcode_target {
 	zend_native_runtime_helper_id helper;
 };
 
+/*
+ * A source operand as runtime helpers take it (zend_native_operands.h):
+ * the VM operand type in bits 0-7 and the znode_op value in bits 8-39, the
+ * frame byte offset of a variable, the literal index of a constant or the
+ * payload of an unused operand. Temporaries follow the
+ * frame_variable_count CVs.
+ */
 static inline uint64_t zend_tpde_encode_value_operand(
-	const zend_mir_source_operand_ref &operand, uint32_t unused_payload)
+	const zend_mir_source_operand_ref &operand, uint32_t frame_variable_count,
+	uint32_t unused_payload)
 {
-	const uint32_t payload_or_index =
-		operand.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
-			? unused_payload : operand.index;
+	uint32_t type = ZEND_NATIVE_OPERAND_INVALID;
+	uint64_t value = 0;
 
-	return (static_cast<uint64_t>(
-			static_cast<uint32_t>(operand.kind) & UINT32_C(0xff)))
-		| (static_cast<uint64_t>(
-				static_cast<uint32_t>(operand.slot_kind) & UINT32_C(0xff))
-			<< 8)
-		| (static_cast<uint64_t>(payload_or_index) << 16);
-}
-
-static inline uint64_t zend_tpde_encode_value_operand(
-	const zend_mir_source_operand_ref &operand)
-{
-	return zend_tpde_encode_value_operand(operand, ZEND_MIR_ID_INVALID);
+	switch (operand.kind) {
+		case ZEND_MIR_SOURCE_OPERAND_UNUSED:
+			type = IS_UNUSED;
+			value = unused_payload == ZEND_MIR_ID_INVALID ? 0 : unused_payload;
+			break;
+		case ZEND_MIR_SOURCE_OPERAND_LITERAL:
+			type = IS_CONST;
+			value = operand.index;
+			break;
+		case ZEND_MIR_SOURCE_OPERAND_SLOT:
+		case ZEND_MIR_SOURCE_OPERAND_SSA:
+			if (operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+				type = IS_CV;
+				value = (uint64_t{ZEND_CALL_FRAME_SLOT} + operand.index)
+					* sizeof(zval);
+			} else if (operand.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+					|| operand.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR) {
+				type = operand.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+					? IS_TMP_VAR : IS_VAR;
+				value = (uint64_t{ZEND_CALL_FRAME_SLOT} + frame_variable_count
+					+ operand.index) * sizeof(zval);
+			}
+			break;
+		default:
+			break;
+	}
+	return type | ((value & UINT32_MAX) << 8);
 }
 
 /*

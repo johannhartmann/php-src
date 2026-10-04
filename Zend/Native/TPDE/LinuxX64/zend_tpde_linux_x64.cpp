@@ -38,6 +38,12 @@ class ZendCompilerX64 final
 	using EncodeBase = tpde_encodegen::EncodeCompiler<Adaptor, ZendCompilerX64,
 		::tpde::CompilerBase, ZendX64Config>;
 	zend_native_image *image_;
+	/* A source operand in the runtime helpers' encoding. */
+	uint64_t encode_source_operand(const zend_mir_source_operand_ref &operand,
+			uint32_t unused_payload = ZEND_MIR_ID_INVALID) const {
+		return zend_tpde_encode_value_operand(operand,
+			adaptor->plan()->source_frame_variable_count, unused_payload);
+	}
 	std::array<tpde::SymRef, ZEND_NATIVE_HELPER_COUNT> runtime_symbols_{};
 	std::vector<tpde::SymRef> image_symbols_;
 	std::vector<tpde::SymRef> image_slots_;
@@ -1058,7 +1064,7 @@ public:
 			zend_native_runtime_helper_id helper) {
 		for (const zend_mir_source_operand_ref *operand :
 				{&operation.op1, &operation.op2, &operation.result}) {
-			builder.add_arg(ValuePart{zend_tpde_encode_value_operand(*operand),
+			builder.add_arg(ValuePart{encode_source_operand(*operand),
 				8, tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 		}
 		for (uint32_t value : {operation.extended_value,
@@ -3750,7 +3756,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				finally_call.add_arg(CallArg{
 					node.operands[dispatch_case.slow_frame_operand]});
 				finally_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.op1), 8,
+					encode_source_operand(operation.op1), 8,
 					tpde::x64::PlatformConfig::GP_BANK},
 					tpde::CCAssignment{});
 				finally_call.add_arg(ValuePart{
@@ -3796,11 +3802,11 @@ bool ZendCompilerX64::compile_inst_impl(
 				catch_call.add_arg(
 					CallArg{node.operands[dispatch_case.frame_operand]});
 				catch_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.op1), 8,
+					encode_source_operand(operation.op1), 8,
 					tpde::x64::PlatformConfig::GP_BANK},
 					tpde::CCAssignment{});
 				catch_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.result), 8,
+					encode_source_operand(operation.result), 8,
 					tpde::x64::PlatformConfig::GP_BANK},
 					tpde::CCAssignment{});
 				catch_call.add_arg(ValuePart{
@@ -3849,7 +3855,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					tpde::x64::PlatformConfig::GP_BANK},
 					tpde::CCAssignment{});
 				receive_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(
+					encode_source_operand(
 						operation.op2, operation.op2_unused_payload),
 					8, tpde::x64::PlatformConfig::GP_BANK},
 					tpde::CCAssignment{});
@@ -3858,7 +3864,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					tpde::x64::PlatformConfig::GP_BANK},
 					tpde::CCAssignment{});
 				receive_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.result), 8,
+					encode_source_operand(operation.result), 8,
 					tpde::x64::PlatformConfig::GP_BANK},
 					tpde::CCAssignment{});
 				receive_call.add_arg(ValuePart{
@@ -3890,7 +3896,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					tpde::x64::PlatformConfig::GP_BANK},
 					tpde::CCAssignment{});
 				fragment_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(
+					encode_source_operand(
 						operation.op1, operation.op1_unused_payload),
 					8, tpde::x64::PlatformConfig::GP_BANK},
 					tpde::CCAssignment{});
@@ -3899,7 +3905,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					tpde::x64::PlatformConfig::GP_BANK},
 					tpde::CCAssignment{});
 				fragment_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(
+					encode_source_operand(
 						operation.op2, operation.op2_unused_payload),
 					8, tpde::x64::PlatformConfig::GP_BANK},
 					tpde::CCAssignment{});
@@ -3908,7 +3914,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					tpde::x64::PlatformConfig::GP_BANK},
 					tpde::CCAssignment{});
 				fragment_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(
+					encode_source_operand(
 						operation.result,
 						operation.result_unused_payload),
 					8, tpde::x64::PlatformConfig::GP_BANK},
@@ -3947,7 +3953,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					tpde::x64::PlatformConfig::GP_BANK},
 					tpde::CCAssignment{});
 				return_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.op1), 8,
+					encode_source_operand(operation.op1), 8,
 					tpde::x64::PlatformConfig::GP_BANK},
 					tpde::CCAssignment{});
 				return_call.add_arg(ValuePart{
@@ -3975,7 +3981,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				throw_call.add_arg(
 					CallArg{node.operands[dispatch_case.frame_operand]});
 				throw_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.op1), 8,
+					encode_source_operand(operation.op1), 8,
 					tpde::x64::PlatformConfig::GP_BANK},
 					tpde::CCAssignment{});
 				throw_call.add_arg(ValuePart{
@@ -4174,15 +4180,15 @@ bool ZendCompilerX64::compile_inst_impl(
 				branch_call.add_arg(
 					CallArg{node.operands[dispatch_case.frame_operand]});
 				branch_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.op1), 8,
+					encode_source_operand(operation.op1), 8,
 					tpde::x64::PlatformConfig::GP_BANK},
 					tpde::CCAssignment{});
 				branch_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.op2), 8,
+					encode_source_operand(operation.op2), 8,
 					tpde::x64::PlatformConfig::GP_BANK},
 					tpde::CCAssignment{});
 				branch_call.add_arg(ValuePart{
-					zend_tpde_encode_value_operand(operation.result), 8,
+					encode_source_operand(operation.result), 8,
 					tpde::x64::PlatformConfig::GP_BANK},
 					tpde::CCAssignment{});
 				branch_call.add_arg(ValuePart{
@@ -4241,9 +4247,9 @@ bool ZendCompilerX64::compile_inst_impl(
 			auto encode_operand = [&](const zend_mir_source_operand_ref &operand,
 					uint32_t unused_payload) {
 				return explicit_object_operands
-					? zend_tpde_encode_value_operand(
+					? encode_source_operand(
 						operand, unused_payload)
-					: zend_tpde_encode_value_operand(operand);
+					: encode_source_operand(operand);
 			};
 			tpde::x64::CCAssignerSysV assigner{false};
 			CallBuilder operation_call{*this, assigner};
@@ -7502,8 +7508,8 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto encode_operand = [&](const zend_mir_source_operand_ref &operand,
 				uint32_t unused_payload) {
 			return explicit_object_operands
-				? zend_tpde_encode_value_operand(operand, unused_payload)
-				: zend_tpde_encode_value_operand(operand);
+				? encode_source_operand(operand, unused_payload)
+				: encode_source_operand(operand);
 		};
 		/* ASSIGN_DIM takes the addresses of its container slot, key and
 		 * value: the helper decodes nothing. */
@@ -7564,12 +7570,14 @@ bool ZendCompilerX64::compile_inst_impl(
 				&address_result)
 			&& address_result.kind != ZEND_NATIVE_DIM_DIRECT_UNUSED
 			&& address_result.kind != ZEND_NATIVE_DIM_DIRECT_CONST;
-		if (!assign_dim_address && !frameless_address && !array_address) {
+		/* The generic form takes the encoded operands; the direct and
+		 * address forms below take offsets or addresses instead. */
+		auto add_encoded_op1 = [&] {
 			builder.add_arg(ValuePart{
 				encode_operand(
 					operation.op1, operation.op1_unused_payload), 8,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-		}
+		};
 		if (array_address) {
 			for (const ValueAddress *operand :
 					{&address_op1, &address_op2, &address_result}) {
@@ -7694,6 +7702,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			builder.call(runtime_symbol(
 				ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_ADDRESS));
 		} else if (const_include_once) {
+			add_encoded_op1();
 			builder.add_arg(ValuePart{operation.extended_value, 4,
 				tpde::x64::PlatformConfig::GP_BANK},
 				tpde::CCAssignment{});
@@ -7704,8 +7713,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				ZEND_NATIVE_HELPER_CONST_INCLUDE_ONCE));
 		} else if (helper == ZEND_NATIVE_HELPER_CALL_FRAMELESS_INTERNAL
 				&& zend_tpde_frameless_direct_at(mir, 0, &frameless_direct)) {
-			/* The encoded first operand above is ignored by this form.
-			 * Only ICALL_0 and ICALL_1 get here; ICALL_2 and ICALL_3 take
+			/* Only ICALL_0 and ICALL_1 get here; ICALL_2 and ICALL_3 take
 			 * the address form above. */
 			builder.add_arg(ValuePart{frameless_direct.descriptor, 8,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
@@ -7720,8 +7728,6 @@ bool ZendCompilerX64::compile_inst_impl(
 		} else if ((helper == ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R
 					|| helper == ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM)
 				&& zend_tpde_dim_direct_at(mir, &dim_direct)) {
-			/* The encoded first operand above is ignored by this form;
-			 * ASSIGN_DIM takes the address form above. */
 			builder.add_arg(ValuePart{dim_direct.descriptor, 8,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 			builder.add_arg(ValuePart{dim_direct.slots, 8,
@@ -7734,7 +7740,6 @@ bool ZendCompilerX64::compile_inst_impl(
 					: ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM_DIRECT));
 		} else if (helper == ZEND_NATIVE_HELPER_VALUE_BINARY_OP
 				&& zend_tpde_identical_direct_at(mir, &concat_direct)) {
-			/* The encoded first operand above is ignored by this form. */
 			builder.add_arg(ValuePart{concat_direct.descriptor, 8,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 			builder.add_arg(ValuePart{concat_direct.slots, 8,
@@ -7746,7 +7751,6 @@ bool ZendCompilerX64::compile_inst_impl(
 		} else if ((helper == ZEND_NATIVE_HELPER_VALUE_CONCAT
 					|| helper == ZEND_NATIVE_HELPER_VALUE_FAST_CONCAT)
 				&& zend_tpde_concat_direct_at(mir, &concat_direct)) {
-			/* The encoded first operand above is ignored by this form. */
 			builder.add_arg(ValuePart{concat_direct.descriptor, 8,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 			builder.add_arg(ValuePart{concat_direct.slots, 8,
@@ -7758,7 +7762,6 @@ bool ZendCompilerX64::compile_inst_impl(
 		} else if (helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_OP
 				&& zend_tpde_concat_assign_direct_at(
 					mir, &concat_assign_direct)) {
-			/* The encoded first operand above is ignored by this form. */
 			builder.add_arg(ValuePart{concat_assign_direct.descriptor, 8,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 			builder.add_arg(ValuePart{concat_assign_direct.slots, 8,
@@ -7766,6 +7769,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			builder.call(runtime_symbol(
 				ZEND_NATIVE_HELPER_VALUE_CONCAT_ASSIGN_DIRECT));
 		} else if (helper == ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL) {
+			add_encoded_op1();
 			builder.add_arg(ValuePart{source_opcode, 4,
 				tpde::x64::PlatformConfig::GP_BANK},
 				tpde::CCAssignment{});
@@ -7786,6 +7790,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			return_builder.ret();
 			return true;
 		} else {
+			add_encoded_op1();
 			builder.add_arg(ValuePart{
 				encode_operand(
 					operation.op2, operation.op2_unused_payload), 8,
@@ -19217,8 +19222,8 @@ bool ZendCompilerX64::compile_inst_impl(
 								UINT64_C(0), 4, tpde::x64::PlatformConfig::GP_BANK},
 								tpde::CCAssignment{});
 							receive_builder.add_arg(ValuePart{
-								static_cast<uint64_t>(ZEND_MIR_SOURCE_OPERAND_SLOT)
-									| (static_cast<uint64_t>(fixed_argument_count) << 16),
+								uint64_t{IS_CV} | ((uint64_t{ZEND_CALL_FRAME_SLOT}
+										+ fixed_argument_count) * sizeof(zval) << 8),
 								8, tpde::x64::PlatformConfig::GP_BANK},
 								tpde::CCAssignment{});
 							receive_builder.add_arg(ValuePart{
@@ -19912,7 +19917,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				CallBuilder result_builder{*this, result_assigner};
 				result_builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
 					result_builder.add_arg(ValuePart{
-						zend_tpde_encode_value_operand(call.call_site->result_operand), 8,
+						encode_source_operand(call.call_site->result_operand), 8,
 						tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 				result_builder.add_arg(ValuePart{
 					static_cast<uint32_t>(adaptor->exact_type(node.result)), 4,
@@ -20576,7 +20581,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					result_builder.add_arg(CallArg{
 						node.operands[frame_base + 2 + argument_count]});
 					result_builder.add_arg(ValuePart{
-						zend_tpde_encode_value_operand(
+						encode_source_operand(
 							call.call_site->result_operand),
 						8, tpde::x64::PlatformConfig::GP_BANK},
 						tpde::CCAssignment{});
@@ -21421,7 +21426,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			builder.add_arg(ValuePart{record.source_position_id, 4,
 				tpde::x64::PlatformConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.add_arg(ValuePart{
-				zend_tpde_encode_value_operand(mir.value_operation.op1), 8,
+				encode_source_operand(mir.value_operation.op1), 8,
 				tpde::x64::PlatformConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.add_arg(ValuePart{mir.value_operation.source_opcode, 4,
 				tpde::x64::PlatformConfig::GP_BANK}, ::tpde::CCAssignment{});

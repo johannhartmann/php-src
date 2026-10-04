@@ -2641,19 +2641,12 @@ zend_native_status zend_native_execute_object_fetch_this(
 	uint32_t extended_value, uint32_t actual_source_opcode,
 	uint32_t source_position_id)
 {
-	const uint32_t result_index = (uint32_t) (result >> 16);
-	const uint32_t result_slot = (uint32_t) ((result >> 8) & UINT64_C(0xff));
+	const uint8_t result_type = ZEND_NATIVE_OPERAND_TYPE(result);
 
 	if (actual_source_opcode == ZEND_FETCH_THIS
 			&& Z_TYPE(execute_data->This) == IS_OBJECT
-			&& ((result & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SLOT
-				|| (result & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SSA)
-			&& (result_slot == ZEND_MIR_SOURCE_SLOT_TMP
-				|| result_slot == ZEND_MIR_SOURCE_SLOT_VAR)
-			&& result_index < execute_data->func->op_array.T) {
-		ZVAL_OBJ_COPY(ZEND_CALL_VAR_NUM(execute_data,
-				(uint32_t) execute_data->func->op_array.last_var
-					+ result_index),
+			&& (result_type == IS_TMP_VAR || result_type == IS_VAR)) {
+		ZVAL_OBJ_COPY(ZEND_NATIVE_OPERAND_VAR(execute_data, result),
 			Z_OBJ(execute_data->This));
 		return ZEND_NATIVE_RETURNED;
 	}
@@ -2672,9 +2665,7 @@ static zend_always_inline bool zend_native_object_fetch_cached(
 	uint64_t result, uint32_t extended_value, int fetch_type)
 {
 	const zend_op_array *op_array = &execute_data->func->op_array;
-	const uint32_t op1_index = (uint32_t) (op1 >> 16);
-	const uint32_t result_index = (uint32_t) (result >> 16);
-	const uint32_t result_slot = (uint32_t) ((result >> 8) & UINT64_C(0xff));
+	const uint8_t result_type = ZEND_NATIVE_OPERAND_TYPE(result);
 	const uint32_t cache_offset = extended_value & ~ZEND_FETCH_OBJ_FLAGS;
 	zval *receiver;
 	zval *property;
@@ -2686,62 +2677,50 @@ static zend_always_inline bool zend_native_object_fetch_cached(
 
 	/* The compiler takes the cache offset and the operand indices from
 	 * the executing op array. */
-	ZEND_ASSERT((op2 & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_LITERAL
+	ZEND_ASSERT(ZEND_NATIVE_OPERAND_TYPE(op2) != IS_CONST
 		|| (cache_offset <= (uint32_t) op_array->cache_size
 			&& 3 * sizeof(void *)
 				<= (uint32_t) op_array->cache_size - cache_offset));
-	if ((op2 & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_LITERAL
+	if (ZEND_NATIVE_OPERAND_TYPE(op2) != IS_CONST
 			|| execute_data->run_time_cache == NULL) {
 		return false;
 	}
-	switch ((zend_mir_source_operand_kind) (op1 & UINT64_C(0xff))) {
-		case ZEND_MIR_SOURCE_OPERAND_UNUSED:
+	switch (ZEND_NATIVE_OPERAND_TYPE(op1)) {
+		case IS_UNUSED:
 			receiver = &execute_data->This;
 			break;
-		case ZEND_MIR_SOURCE_OPERAND_SLOT:
-		case ZEND_MIR_SOURCE_OPERAND_SSA:
-			if (((op1 >> 8) & UINT64_C(0xff)) == ZEND_MIR_SOURCE_SLOT_CV) {
-				ZEND_ASSERT(op1_index < (uint32_t) op_array->last_var);
-				receiver = ZEND_CALL_VAR_NUM(execute_data, op1_index);
-				ZVAL_DEREF(receiver);
-			} else if (((op1 >> 8) & UINT64_C(0xff))
-						== ZEND_MIR_SOURCE_SLOT_TMP
-					&& (fetch_type == BP_VAR_R || fetch_type == BP_VAR_IS)) {
-				ZEND_ASSERT(op1_index < op_array->T);
-				/* A temporary receiver is released after the read; only
-				 * when another reference keeps the object alive. */
-				receiver_slot = ZEND_CALL_VAR_NUM(execute_data,
-					(uint32_t) op_array->last_var + op1_index);
-				receiver = receiver_slot;
-				if (Z_TYPE_P(receiver) != IS_OBJECT
-						|| GC_REFCOUNT(Z_OBJ_P(receiver)) <= 1) {
-					return false;
-				}
-			} else {
+		case IS_CV:
+			receiver = ZEND_NATIVE_OPERAND_VAR(execute_data, op1);
+			ZVAL_DEREF(receiver);
+			break;
+		case IS_TMP_VAR:
+			if (fetch_type != BP_VAR_R && fetch_type != BP_VAR_IS) {
+				return false;
+			}
+			/* A temporary receiver is released after the read; only when
+			 * another reference keeps the object alive. */
+			receiver_slot = ZEND_NATIVE_OPERAND_VAR(execute_data, op1);
+			receiver = receiver_slot;
+			if (Z_TYPE_P(receiver) != IS_OBJECT
+					|| GC_REFCOUNT(Z_OBJ_P(receiver)) <= 1) {
 				return false;
 			}
 			break;
 		default:
 			return false;
 	}
-	if (((result & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_SLOT
-				&& (result & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_SSA)
-			|| Z_TYPE_P(receiver) != IS_OBJECT) {
+	if (Z_TYPE_P(receiver) != IS_OBJECT) {
 		return false;
 	}
-	if (result_slot == ZEND_MIR_SOURCE_SLOT_CV
+	if (result_type == IS_CV
 			&& (fetch_type == BP_VAR_R || fetch_type == BP_VAR_IS)) {
 		/* A read straight into a CV whose old value needs no release. */
-		ZEND_ASSERT(result_index < (uint32_t) op_array->last_var);
-		target = ZEND_CALL_VAR_NUM(execute_data, result_index);
+		target = ZEND_NATIVE_OPERAND_VAR(execute_data, result);
 		if (Z_REFCOUNTED_P(target)) {
 			return false;
 		}
-	} else if (result_slot == ZEND_MIR_SOURCE_SLOT_TMP
-			|| result_slot == ZEND_MIR_SOURCE_SLOT_VAR) {
-		ZEND_ASSERT(result_index < op_array->T);
-		target = ZEND_CALL_VAR_NUM(execute_data,
-			(uint32_t) op_array->last_var + result_index);
+	} else if (result_type == IS_TMP_VAR || result_type == IS_VAR) {
+		target = ZEND_NATIVE_OPERAND_VAR(execute_data, result);
 	} else {
 		return false;
 	}
@@ -2760,7 +2739,7 @@ static zend_always_inline bool zend_native_object_fetch_cached(
 		/* A dynamic property, found as zend_std_read_property() finds it:
 		 * at the cached bucket, else by its name. */
 		const zend_string *name =
-			Z_STR(op_array->literals[(uint32_t) (op2 >> 16)]);
+			Z_STR(op_array->literals[ZEND_NATIVE_OPERAND_VALUE(op2)]);
 		property = NULL;
 		if (!IS_UNKNOWN_DYNAMIC_PROPERTY_OFFSET(property_offset)) {
 			const uintptr_t index =
@@ -2925,29 +2904,16 @@ zend_native_status zend_native_execute_object_fetch_func_arg(
 static zend_always_inline zval *zend_native_object_assign_operand(
 	zend_execute_data *execute_data, uint64_t encoded, bool *temporary)
 {
-	const zend_op_array *op_array = &execute_data->func->op_array;
-	const uint32_t index = (uint32_t) (encoded >> 16);
-
 	*temporary = false;
-	switch ((zend_mir_source_operand_kind) (encoded & UINT64_C(0xff))) {
-		case ZEND_MIR_SOURCE_OPERAND_LITERAL:
-			ZEND_ASSERT(index < (uint32_t) op_array->last_literal);
-			return &op_array->literals[index];
-		case ZEND_MIR_SOURCE_OPERAND_SLOT:
-		case ZEND_MIR_SOURCE_OPERAND_SSA:
-			break;
-		default:
-			return NULL;
-	}
-	switch ((zend_mir_source_slot_kind) ((encoded >> 8) & UINT64_C(0xff))) {
-		case ZEND_MIR_SOURCE_SLOT_CV:
-			ZEND_ASSERT(index < (uint32_t) op_array->last_var);
-			return ZEND_CALL_VAR_NUM(execute_data, index);
-		case ZEND_MIR_SOURCE_SLOT_TMP:
-			ZEND_ASSERT(index < op_array->T);
+	switch (ZEND_NATIVE_OPERAND_TYPE(encoded)) {
+		case IS_CONST:
+			return &execute_data->func->op_array.literals[
+				ZEND_NATIVE_OPERAND_VALUE(encoded)];
+		case IS_CV:
+			return ZEND_NATIVE_OPERAND_VAR(execute_data, encoded);
+		case IS_TMP_VAR:
 			*temporary = true;
-			return ZEND_CALL_VAR_NUM(execute_data,
-				(uint32_t) op_array->last_var + index);
+			return ZEND_NATIVE_OPERAND_VAR(execute_data, encoded);
 		default:
 			return NULL;
 	}
@@ -2969,10 +2935,9 @@ zend_native_status zend_native_execute_object_assign(
 	 */
 	ZEND_ASSERT(source_opcode == ZEND_ASSIGN_OBJ
 		&& source_position_id < execute_data->func->op_array.last);
-	if ((result & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+	if (ZEND_NATIVE_OPERAND_TYPE(result) == IS_UNUSED) {
 		bool receiver_temporary, name_temporary, value_temporary;
-		zval *receiver = (op1 & UINT64_C(0xff))
-				== ZEND_MIR_SOURCE_OPERAND_UNUSED
+		zval *receiver = ZEND_NATIVE_OPERAND_TYPE(op1) == IS_UNUSED
 			? &execute_data->This
 			: zend_native_object_assign_operand(
 				execute_data, op1, &receiver_temporary);
@@ -2983,7 +2948,7 @@ zend_native_status zend_native_execute_object_assign(
 		zval *name_value = name;
 		zval *value = value_slot;
 
-		if ((op1 & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_UNUSED
+		if (ZEND_NATIVE_OPERAND_TYPE(op1) != IS_UNUSED
 				&& (receiver == NULL || receiver_temporary)) {
 			receiver = NULL;
 		}
@@ -2991,13 +2956,12 @@ zend_native_status zend_native_execute_object_assign(
 			receiver = Z_REFVAL_P(receiver);
 		}
 		/* A literal name is never a reference. */
-		if ((op2 & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_LITERAL
+		if (ZEND_NATIVE_OPERAND_TYPE(op2) != IS_CONST
 				&& name_value != NULL && Z_ISREF_P(name_value)) {
 			name_value = Z_REFVAL_P(name_value);
 		}
 		if (value != NULL && !value_temporary
-				&& (auxiliary & UINT64_C(0xff))
-					!= ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+				&& ZEND_NATIVE_OPERAND_TYPE(auxiliary) != IS_CONST) {
 			if (Z_TYPE_P(value) == IS_UNDEF) {
 				value = NULL;
 			} else {
@@ -3010,7 +2974,7 @@ zend_native_status zend_native_execute_object_assign(
 				&& Z_TYPE_P(value) != IS_INDIRECT) {
 			void **cache_slot = NULL;
 
-			if ((op2 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_LITERAL
+			if (ZEND_NATIVE_OPERAND_TYPE(op2) == IS_CONST
 					&& execute_data->run_time_cache != NULL) {
 				/* The compiler takes the offset from the op array. */
 				ZEND_ASSERT(extended_value
@@ -3041,8 +3005,7 @@ zend_native_status zend_native_execute_object_assign(
 
 					zend_assign_to_variable_ex(property_value, value,
 						value_temporary ? IS_TMP_VAR
-							: (auxiliary & UINT64_C(0xff))
-									== ZEND_MIR_SOURCE_OPERAND_LITERAL
+							: ZEND_NATIVE_OPERAND_TYPE(auxiliary) == IS_CONST
 								? IS_CONST : IS_CV,
 						ZEND_CALL_USES_STRICT_TYPES(execute_data), &garbage);
 					if (value_temporary) {
@@ -3121,37 +3084,19 @@ ZEND_NATIVE_OBJECT_EXPLICIT_ASSIGNMENT_HELPER(
 static zend_always_inline bool zend_native_object_long_operand(
 	zend_execute_data *execute_data, uint64_t encoded, zend_long *value)
 {
-	const zend_op_array *op_array = &execute_data->func->op_array;
-	const uint32_t index = (uint32_t) (encoded >> 16);
 	const zval *operand;
 
-	switch ((zend_mir_source_operand_kind) (encoded & UINT64_C(0xff))) {
-		case ZEND_MIR_SOURCE_OPERAND_LITERAL:
-			if (index >= (uint32_t) op_array->last_literal) {
-				return false;
-			}
-			operand = &op_array->literals[index];
+	switch (ZEND_NATIVE_OPERAND_TYPE(encoded)) {
+		case IS_CONST:
+			operand = &execute_data->func->op_array.literals[
+				ZEND_NATIVE_OPERAND_VALUE(encoded)];
 			break;
-		case ZEND_MIR_SOURCE_OPERAND_SLOT:
-		case ZEND_MIR_SOURCE_OPERAND_SSA:
-			switch ((zend_mir_source_slot_kind) ((encoded >> 8) & UINT64_C(0xff))) {
-				case ZEND_MIR_SOURCE_SLOT_CV:
-					if (index >= (uint32_t) op_array->last_var) {
-						return false;
-					}
-					operand = ZEND_CALL_VAR_NUM(execute_data, index);
-					ZVAL_DEREF(operand);
-					break;
-				case ZEND_MIR_SOURCE_SLOT_TMP:
-					if (index >= op_array->T) {
-						return false;
-					}
-					operand = ZEND_CALL_VAR_NUM(execute_data,
-						(uint32_t) op_array->last_var + index);
-					break;
-				default:
-					return false;
-			}
+		case IS_CV:
+			operand = ZEND_NATIVE_OPERAND_VAR(execute_data, encoded);
+			ZVAL_DEREF(operand);
+			break;
+		case IS_TMP_VAR:
+			operand = ZEND_NATIVE_OPERAND_VAR(execute_data, encoded);
 			break;
 		default:
 			return false;
@@ -3176,7 +3121,6 @@ zend_native_status zend_native_execute_object_assign_op(
 	uint32_t source_position_id)
 {
 	const zend_op_array *op_array = &execute_data->func->op_array;
-	const uint32_t op1_index = (uint32_t) (op1 >> 16);
 	zval *receiver = NULL;
 	zval *property;
 	zend_object *object;
@@ -3187,8 +3131,8 @@ zend_native_status zend_native_execute_object_assign_op(
 	const zend_op *data;
 
 	if ((extended_value != ZEND_ADD && extended_value != ZEND_SUB)
-			|| (op2 & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_LITERAL
-			|| (result & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_UNUSED
+			|| ZEND_NATIVE_OPERAND_TYPE(op2) != IS_CONST
+			|| ZEND_NATIVE_OPERAND_TYPE(result) != IS_UNUSED
 			|| execute_data->run_time_cache == NULL
 			|| source_position_id + 1 >= op_array->last) {
 		goto general;
@@ -3203,19 +3147,10 @@ zend_native_status zend_native_execute_object_assign_op(
 				> (uint32_t) op_array->cache_size - data->extended_value) {
 		goto general;
 	}
-	switch ((zend_mir_source_operand_kind) (op1 & UINT64_C(0xff))) {
-		case ZEND_MIR_SOURCE_OPERAND_UNUSED:
-			receiver = &execute_data->This;
-			break;
-		case ZEND_MIR_SOURCE_OPERAND_SLOT:
-		case ZEND_MIR_SOURCE_OPERAND_SSA:
-			if (((op1 >> 8) & UINT64_C(0xff)) == ZEND_MIR_SOURCE_SLOT_CV
-					&& op1_index < (uint32_t) op_array->last_var) {
-				receiver = ZEND_CALL_VAR_NUM(execute_data, op1_index);
-			}
-			break;
-		default:
-			break;
+	if (ZEND_NATIVE_OPERAND_TYPE(op1) == IS_UNUSED) {
+		receiver = &execute_data->This;
+	} else if (ZEND_NATIVE_OPERAND_TYPE(op1) == IS_CV) {
+		receiver = ZEND_NATIVE_OPERAND_VAR(execute_data, op1);
 	}
 	if (receiver == NULL || Z_TYPE_P(receiver) != IS_OBJECT
 			|| !zend_native_object_long_operand(
@@ -3268,9 +3203,7 @@ zend_native_status zend_native_execute_object_isset_isempty(
 	uint32_t source_position_id)
 {
 	const zend_op_array *op_array = &execute_data->func->op_array;
-	const uint32_t op1_index = (uint32_t) (op1 >> 16);
-	const uint32_t result_index = (uint32_t) (result >> 16);
-	const uint32_t result_slot = (uint32_t) ((result >> 8) & UINT64_C(0xff));
+	const uint8_t result_type = ZEND_NATIVE_OPERAND_TYPE(result);
 	const uint32_t cache_offset = extended_value & ~ZEND_ISEMPTY;
 	const bool isempty = (extended_value & ZEND_ISEMPTY) != 0;
 	zval *receiver = NULL;
@@ -3283,38 +3216,29 @@ zend_native_status zend_native_execute_object_isset_isempty(
 	bool answer;
 
 	if (actual_source_opcode != ZEND_ISSET_ISEMPTY_PROP_OBJ
-			|| (op2 & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| ZEND_NATIVE_OPERAND_TYPE(op2) != IS_CONST
 			|| execute_data->run_time_cache == NULL
 			|| cache_offset > (uint32_t) op_array->cache_size
 			|| 3 * sizeof(void *)
 				> (uint32_t) op_array->cache_size - cache_offset
-			|| ((result & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_SLOT
-				&& (result & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_SSA)
-			|| (result_slot != ZEND_MIR_SOURCE_SLOT_TMP
-				&& result_slot != ZEND_MIR_SOURCE_SLOT_VAR)
-			|| result_index >= op_array->T) {
+			|| (result_type != IS_TMP_VAR && result_type != IS_VAR)) {
 		goto general;
 	}
-	switch ((zend_mir_source_operand_kind) (op1 & UINT64_C(0xff))) {
-		case ZEND_MIR_SOURCE_OPERAND_UNUSED:
+	switch (ZEND_NATIVE_OPERAND_TYPE(op1)) {
+		case IS_UNUSED:
 			receiver = &execute_data->This;
 			break;
-		case ZEND_MIR_SOURCE_OPERAND_SLOT:
-		case ZEND_MIR_SOURCE_OPERAND_SSA:
-			if (((op1 >> 8) & UINT64_C(0xff)) == ZEND_MIR_SOURCE_SLOT_CV
-					&& op1_index < (uint32_t) op_array->last_var) {
-				receiver = ZEND_CALL_VAR_NUM(execute_data, op1_index);
-				ZVAL_DEREF(receiver);
-			} else if (((op1 >> 8) & UINT64_C(0xff)) == ZEND_MIR_SOURCE_SLOT_TMP
-					&& op1_index < op_array->T) {
-				/* A fetched object the test consumes, still shared, so
-				 * releasing it runs no destructor. */
-				temporary = ZEND_CALL_VAR_NUM(execute_data,
-					(uint32_t) op_array->last_var + op1_index);
-				if (Z_TYPE_P(temporary) == IS_OBJECT
-						&& GC_REFCOUNT(Z_OBJ_P(temporary)) > 1) {
-					receiver = temporary;
-				}
+		case IS_CV:
+			receiver = ZEND_NATIVE_OPERAND_VAR(execute_data, op1);
+			ZVAL_DEREF(receiver);
+			break;
+		case IS_TMP_VAR:
+			/* A fetched object the test consumes, still shared, so
+			 * releasing it runs no destructor. */
+			temporary = ZEND_NATIVE_OPERAND_VAR(execute_data, op1);
+			if (Z_TYPE_P(temporary) == IS_OBJECT
+					&& GC_REFCOUNT(Z_OBJ_P(temporary)) > 1) {
+				receiver = temporary;
 			}
 			break;
 		default:
@@ -3350,8 +3274,7 @@ zend_native_status zend_native_execute_object_isset_isempty(
 		ZVAL_UNDEF(temporary);
 	}
 	/* The result may reuse the receiver temporary. */
-	target = ZEND_CALL_VAR_NUM(execute_data,
-		(uint32_t) op_array->last_var + result_index);
+	target = ZEND_NATIVE_OPERAND_VAR(execute_data, result);
 	ZVAL_BOOL(target, answer);
 	return ZEND_NATIVE_RETURNED;
 general:
@@ -3387,11 +3310,8 @@ static zend_always_inline bool zend_native_object_incdec_cached(
 	uint64_t result, uint32_t cache_offset, bool post, bool decrement)
 {
 	const zend_op_array *op_array = &execute_data->func->op_array;
-	const uint32_t op1_index = (uint32_t) (op1 >> 16);
-	const uint32_t result_index = (uint32_t) (result >> 16);
-	const uint32_t result_slot = (uint32_t) ((result >> 8) & UINT64_C(0xff));
-	const bool has_result = (result & UINT64_C(0xff))
-		!= ZEND_MIR_SOURCE_OPERAND_UNUSED;
+	const uint8_t result_type = ZEND_NATIVE_OPERAND_TYPE(result);
+	const bool has_result = result_type != IS_UNUSED;
 	zval *receiver;
 	zval *property;
 	zval *target = NULL;
@@ -3402,51 +3322,33 @@ static zend_always_inline bool zend_native_object_incdec_cached(
 
 	/* The compiler takes the cache offset and the operand indices from
 	 * the executing op array. */
-	ZEND_ASSERT((op2 & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_LITERAL
+	ZEND_ASSERT(ZEND_NATIVE_OPERAND_TYPE(op2) != IS_CONST
 		|| (cache_offset <= (uint32_t) op_array->cache_size
 			&& 3 * sizeof(void *)
 				<= (uint32_t) op_array->cache_size - cache_offset));
-	if ((op2 & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_LITERAL
+	if (ZEND_NATIVE_OPERAND_TYPE(op2) != IS_CONST
 			|| execute_data->run_time_cache == NULL) {
 		return false;
 	}
-	switch ((zend_mir_source_operand_kind) (op1 & UINT64_C(0xff))) {
-		case ZEND_MIR_SOURCE_OPERAND_UNUSED:
-			receiver = &execute_data->This;
-			break;
-		case ZEND_MIR_SOURCE_OPERAND_SLOT:
-		case ZEND_MIR_SOURCE_OPERAND_SSA:
-			if (((op1 >> 8) & UINT64_C(0xff)) != ZEND_MIR_SOURCE_SLOT_CV
-					|| op1_index >= (uint32_t) op_array->last_var) {
-				return false;
-			}
-			receiver = ZEND_CALL_VAR_NUM(execute_data, op1_index);
-			break;
-		default:
-			return false;
+	if (ZEND_NATIVE_OPERAND_TYPE(op1) == IS_UNUSED) {
+		receiver = &execute_data->This;
+	} else if (ZEND_NATIVE_OPERAND_TYPE(op1) == IS_CV) {
+		receiver = ZEND_NATIVE_OPERAND_VAR(execute_data, op1);
+	} else {
+		return false;
 	}
 	if (Z_TYPE_P(receiver) != IS_OBJECT) {
 		return false;
 	}
 	if (has_result) {
 		/* A temporary, or a CV whose old value needs no release. */
-		if ((result & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_SLOT
-				&& (result & UINT64_C(0xff)) != ZEND_MIR_SOURCE_OPERAND_SSA) {
-			return false;
-		}
-		if (result_slot == ZEND_MIR_SOURCE_SLOT_CV) {
-			if (result_index >= (uint32_t) op_array->last_var) {
-				return false;
-			}
-			target = ZEND_CALL_VAR_NUM(execute_data, result_index);
+		if (result_type == IS_CV) {
+			target = ZEND_NATIVE_OPERAND_VAR(execute_data, result);
 			if (Z_REFCOUNTED_P(target)) {
 				return false;
 			}
-		} else if ((result_slot == ZEND_MIR_SOURCE_SLOT_TMP
-					|| result_slot == ZEND_MIR_SOURCE_SLOT_VAR)
-				&& result_index < op_array->T) {
-			target = ZEND_CALL_VAR_NUM(execute_data,
-				(uint32_t) op_array->last_var + result_index);
+		} else if (result_type == IS_TMP_VAR || result_type == IS_VAR) {
+			target = ZEND_NATIVE_OPERAND_VAR(execute_data, result);
 		} else {
 			return false;
 		}
@@ -3524,23 +3426,18 @@ zend_native_status zend_native_execute_static_fetch_r(
 	const uint32_t cache_offset = extended_value & ~ZEND_FETCH_OBJ_FLAGS;
 
 	if (actual_source_opcode == ZEND_FETCH_STATIC_PROP_R
-			&& (op1 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_LITERAL
+			&& ZEND_NATIVE_OPERAND_TYPE(op1) == IS_CONST
 			&& execute_data->run_time_cache != NULL
 			&& (uint64_t) cache_offset + 3 * sizeof(void *)
 				<= execute_data->func->op_array.cache_size
-			&& ((result & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SLOT
-				|| (result & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SSA)
-			&& ((result >> 8) & UINT64_C(0xff)) == ZEND_MIR_SOURCE_SLOT_TMP
-			&& (uint32_t) (result >> 16)
-				< (uint32_t) execute_data->func->op_array.T) {
+			&& ZEND_NATIVE_OPERAND_TYPE(result) == IS_TMP_VAR) {
 		void **cache_slot = (void **) ((char *) execute_data->run_time_cache
 			+ cache_offset);
 		zval *property = cache_slot[1];
 
 		if (property != NULL && Z_TYPE_P(property) != IS_UNDEF) {
-			ZVAL_COPY_DEREF(ZEND_CALL_VAR_NUM(execute_data,
-				execute_data->func->op_array.last_var
-					+ (uint32_t) (result >> 16)), property);
+			ZVAL_COPY_DEREF(ZEND_NATIVE_OPERAND_VAR(execute_data, result),
+				property);
 			return ZEND_NATIVE_RETURNED;
 		}
 	}
@@ -3648,18 +3545,14 @@ zend_native_status zend_native_execute_object_bind_static(
 
 	/* The compiler binds this helper to BIND_STATIC of a CV. */
 	ZEND_ASSERT(actual_source_opcode == ZEND_BIND_STATIC
-		&& ((op1 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SLOT
-			|| (op1 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_SSA)
-		&& ((op1 >> 8) & UINT64_C(0xff)) == ZEND_MIR_SOURCE_SLOT_CV
-		&& (uint32_t) (op1 >> 16)
-			< (uint32_t) execute_data->func->op_array.last_var);
-	if ((op2 & UINT64_C(0xff)) == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+		&& ZEND_NATIVE_OPERAND_TYPE(op1) == IS_CV);
+	if (ZEND_NATIVE_OPERAND_TYPE(op2) == IS_UNUSED) {
 		zend_op_array *op_array = &execute_data->func->op_array;
 		HashTable *static_variables =
 			ZEND_MAP_PTR_GET(op_array->static_variables_ptr);
 		uint32_t offset = extended_value
 			& ~(ZEND_BIND_REF | ZEND_BIND_IMPLICIT | ZEND_BIND_EXPLICIT);
-		zval *variable = ZEND_CALL_VAR_NUM(execute_data, (uint32_t) (op1 >> 16));
+		zval *variable = ZEND_NATIVE_OPERAND_VAR(execute_data, op1);
 
 		/* The offset comes from the compiler, as for ZEND_BIND_STATIC. */
 		ZEND_ASSERT(static_variables == NULL
