@@ -856,7 +856,8 @@ uint32_t zend_native_call_fast_send(
 uint32_t zend_native_call_fast_leave(
 	zend_execute_data *callee, uint32_t status, bool discard_result);
 /* A counted CV of a frame a fast-call entry leaves, as
- * zend_native_call_fast_leave() releases it. */
+ * zend_native_call_fast_leave() releases it, after the entry dropped its
+ * reference: freed at zero, else checked as a possible GC root. */
 void zend_native_call_fast_release_cv(zval *variable);
 void zend_native_call_fast_undefined_argument(
 	zend_execute_data *caller, uint32_t variable, uint32_t source_position);

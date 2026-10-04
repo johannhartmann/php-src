@@ -1715,6 +1715,11 @@ public:
 			}
 			return static_cast<uint32_t>(text_writer.offset());
 		};
+		auto branch_zero = [&]() {
+			text_writer.ensure_space(16);
+			ASMF(JZ, FE_JMPL, text_writer.cur_ptr());
+			return static_cast<uint32_t>(text_writer.offset());
+		};
 		auto patch = [&](uint32_t branch_end, uint32_t target) {
 			const int32_t displacement = static_cast<int32_t>(
 				static_cast<int64_t>(target) - branch_end);
@@ -1910,7 +1915,25 @@ public:
 		text_writer.eh_write_inst(
 			tpde::dwarf::DW_CFA_def_cfa_offset, area + 8);
 		for (const auto &[counted, next] : counted_branches) {
+			/* GC_DELREF(); a value still referenced that is no GC root
+			 * candidate (not collectable, already buffered, no reference)
+			 * needs nothing more, as gc_check_possible_root() decides. */
 			patch(counted, text_writer.offset());
+			ASM(MOV64rm, FE_R9, FE_MEM(FE_R10, 0, FE_NOREG, 0));
+			ASM(SUB32mi, FE_MEM(FE_R9, 0, FE_NOREG, member(
+				offsetof(zend_refcounted_h, refcount))), 1);
+			const uint32_t released = branch_zero();
+			ASM(MOV32rm, FE_AX, FE_MEM(FE_R9, 0, FE_NOREG, member(
+				offsetof(zend_refcounted_h, u.type_info))));
+			ASM(TEST32ri, FE_AX, static_cast<int32_t>(
+				GC_INFO_MASK | (GC_NOT_COLLECTABLE << GC_FLAGS_SHIFT)));
+			const uint32_t candidate = branch_zero();
+			ASM(AND32ri, FE_AX, GC_TYPE_MASK);
+			ASM(CMP32ri, FE_AX, GC_REFERENCE);
+			const uint32_t not_reference = branch(true);
+			patch(not_reference, next);
+			patch(released, text_writer.offset());
+			patch(candidate, text_writer.offset());
 			ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, 40), FE_R10);
 			ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, 48), FE_R11);
 			ASM(MOV64rr, FE_DI, FE_R10);
@@ -7480,6 +7503,46 @@ bool ZendCompilerX64::compile_inst_impl(
 			&& operation.result.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
 			&& (operation.extended_value == ZEND_INCLUDE_ONCE
 				|| operation.extended_value == ZEND_REQUIRE_ONCE);
+		/* CHECK_FUNC_ARG of a positional argument among the first
+		 * MAX_ARG_FLAG_NUM: the VM's quick test of the pending call's
+		 * function, which cannot fail. */
+		if (helper == ZEND_NATIVE_HELPER_VALUE_CHECK_FUNC_ARG
+				&& frame_argument == nullptr && !node.has_result
+				&& operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+				&& operation.op2_unused_payload >= 1
+				&& operation.op2_unused_payload <= MAX_ARG_FLAG_NUM) {
+			static_assert(ZEND_CALL_SEND_ARG_BY_REF == UINT32_C(1) << 31);
+			auto frame_use = val_ref(node.operands.back());
+			(void) frame_use;
+			const uint32_t mask = uint32_t{ZEND_SEND_BY_REF
+				| ZEND_SEND_PREFER_REF}
+				<< ((operation.op2_unused_payload + 3) * 2);
+			const int32_t call_info = static_cast<int32_t>(
+				offsetof(zend_execute_data, This)
+					+ offsetof(zval, u1.type_info));
+			ScratchReg call{this};
+			ScratchReg by_reference{this};
+			ScratchReg info{this};
+			auto call_reg = call.alloc_gp();
+			auto by_reference_reg = by_reference.alloc_gp();
+			auto info_reg = info.alloc_gp();
+			ASM(MOV64rm, call_reg, FE_MEM(canonical_frame_register(), 0,
+				FE_NOREG, static_cast<int32_t>(
+					offsetof(zend_execute_data, call))));
+			ASM(MOV64rm, by_reference_reg, FE_MEM(call_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_execute_data, func))));
+			ASM(TEST32mi, FE_MEM(by_reference_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_function, quick_arg_flags))),
+				static_cast<int32_t>(mask));
+			generate_raw_set(Jump::jne, by_reference_reg);
+			ASM(SHL32ri, by_reference_reg, 31);
+			ASM(MOV32rm, info_reg, FE_MEM(call_reg, 0, FE_NOREG, call_info));
+			ASM(AND32ri, info_reg, INT32_MAX);
+			ASM(OR32rr, info_reg, by_reference_reg);
+			ASM(MOV32mr, FE_MEM(call_reg, 0, FE_NOREG, call_info), info_reg);
+			return true;
+		}
 		tpde::x64::CCAssignerSysV assigner{false};
 		CallBuilder builder{*this, assigner};
 		zend_tpde_frameless_direct frameless_direct{};
