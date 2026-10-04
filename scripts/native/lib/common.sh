@@ -129,6 +129,7 @@ native_load_profile() {
     unset PROFILE_NAME PROFILE_BUILD_TYPE PROFILE_THREAD_SAFETY PROFILE_SANITIZER
     unset PROFILE_TARGET_ID PROFILE_TARGET_TRIPLE PROFILE_HOST_SYSTEM PROFILE_HOST_ARCH
     unset PROFILE_CONFIGURE_FLAGS PROFILE_CC PROFILE_CXX PROFILE_EXTRA_CFLAGS
+    unset PROFILE_FUNCTION_ORDER
     # Profile files are repository-owned declarative shell data.
     # shellcheck source=/dev/null
     source "$profile_file"
@@ -310,10 +311,33 @@ native_release_lock() {
 # Optimization flags appended after configure's own flags (a debug build
 # forces -O0). PHP's Makefile reads EXTRA_CFLAGS/EXTRA_CXXFLAGS from the
 # environment; a caller's own values are kept in front.
+#
+# A profile's PROFILE_FUNCTION_ORDER (relative to the repository root) places
+# the hot runtime functions first in .text, clustered by caller, through
+# ld --section-ordering-file (binutils 2.43+). Without it every change to an
+# earlier object file shifts the hot runtime code. A linker without the option
+# keeps the default layout. NATIVE_FUNCTION_ORDER_DIGEST lets the caller
+# rebuild when the order changes.
 native_export_build_flags() {
-    [[ -n ${PROFILE_EXTRA_CFLAGS:-} ]] || return 0
-    export EXTRA_CFLAGS="${EXTRA_CFLAGS:+$EXTRA_CFLAGS }$PROFILE_EXTRA_CFLAGS"
-    export EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:+$EXTRA_CXXFLAGS }$PROFILE_EXTRA_CFLAGS"
+    local flags=${PROFILE_EXTRA_CFLAGS:-}
+    unset NATIVE_FUNCTION_ORDER_DIGEST
+    if [[ -n ${PROFILE_FUNCTION_ORDER:-} ]]; then
+        local order_file="$NATIVE_REPO_ROOT/$PROFILE_FUNCTION_ORDER"
+        [[ -f $order_file ]] || native_die "function order file is missing: $order_file"
+        if printf 'int main(void) { return 0; }\n' \
+                | "${CC:-cc}" -x c - -o /dev/null \
+                    "-Wl,--section-ordering-file=$order_file" >/dev/null 2>&1; then
+            flags="${flags:+$flags }-ffunction-sections"
+            export EXTRA_CFLAGS="${EXTRA_CFLAGS:+$EXTRA_CFLAGS }-Wl,--section-ordering-file=$order_file"
+            NATIVE_FUNCTION_ORDER_DIGEST=$(sha256sum "$order_file" | cut -d' ' -f1)
+            export NATIVE_FUNCTION_ORDER_DIGEST
+        else
+            native_error "warning: linker lacks --section-ordering-file; keeping the default function layout"
+        fi
+    fi
+    [[ -n $flags ]] || return 0
+    export EXTRA_CFLAGS="${EXTRA_CFLAGS:+$EXTRA_CFLAGS }$flags"
+    export EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:+$EXTRA_CXXFLAGS }$flags"
 }
 
 native_print_command() {

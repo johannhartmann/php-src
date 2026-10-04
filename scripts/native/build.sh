@@ -74,7 +74,7 @@ build_log="$NATIVE_LOG_DIR/build.log"
 native_export_build_flags
 # make does not track flags: rebuild every object once when they change.
 flags_stamp="$NATIVE_BUILD_DIR/.native-extra-flags"
-build_flags="${EXTRA_CFLAGS:-}|${EXTRA_CXXFLAGS:-}"
+build_flags="${EXTRA_CFLAGS:-}|${EXTRA_CXXFLAGS:-}|${NATIVE_FUNCTION_ORDER_DIGEST:-}"
 if [[ ! -f $flags_stamp || $(<"$flags_stamp") != "$build_flags" ]]; then
     printf 'Build flags changed to %q; cleaning %s\n' "$build_flags" "$profile"
     make -C "$NATIVE_BUILD_DIR" clean >/dev/null
