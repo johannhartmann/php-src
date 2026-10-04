@@ -2041,6 +2041,7 @@ static zend_always_inline uint32_t zend_native_call_fast_leave_inline(
 {
 	zend_execute_data *caller = callee->prev_execute_data;
 	zend_object *release_object;
+	zval *result;
 	/* Read once: releasing the frame's values cannot change its flags,
 	 * as the dying frame is no longer current. */
 	uint32_t call_info = ZEND_CALL_INFO(callee);
@@ -2100,11 +2101,18 @@ static zend_always_inline uint32_t zend_native_call_fast_leave_inline(
 		? Z_OBJ(callee->This)
 		: (call_info & ZEND_CALL_CLOSURE) != 0
 			? ZEND_CLOSURE_OBJECT(callee->func) : NULL;
+	result = callee->return_value;
 	zend_vm_stack_free_call_frame_ex(call_info, callee);
 	if (release_object != NULL) {
 		OBJ_RELEASE(release_object);
+		/* A throwing destructor fails the call: its result dies, as
+		 * ZEND_HANDLE_EXCEPTION frees the throwing opline's result. */
 		if (status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
 			status = ZEND_NATIVE_EXCEPTION;
+			if (!discard_result && result != NULL) {
+				zval_ptr_dtor_nogc(result);
+				ZVAL_UNDEF(result);
+			}
 		}
 	}
 	return status;
@@ -7462,6 +7470,16 @@ zend_native_direct_call_result zend_native_call_direct_leave(
 	 * Zend's unfinished-execution cleanup interprets that field as pending call
 	 * setup, so restore the caller before selecting its catch/finally route. */
 	zend_native_call_direct_release(activation);
+	/* Releasing $this or the closure may run a destructor that throws, as
+	 * the VM's leave reports it to the call, whose result then dies as
+	 * ZEND_HANDLE_EXCEPTION frees the throwing opline's result. */
+	if (status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
+		status = ZEND_NATIVE_EXCEPTION;
+		if (return_value != NULL) {
+			zval_ptr_dtor_nogc(return_value);
+			ZVAL_UNDEF(return_value);
+		}
+	}
 	if (status == ZEND_NATIVE_EXCEPTION && EG(exception) != NULL) {
 		status = zend_native_prepare_finally_exception(
 			caller, descriptor->source_position) == SUCCESS
