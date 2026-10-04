@@ -125,8 +125,8 @@ extern "C" {
 
 /*
  * These process-local accessors are supplied by the lowering core.  Keeping
- * them out of the frozen public ABI lets the W03 integration track reconcile
- * provider-private context layouts without persisting a pointer in ZNMIR.
+ * them out of the public lowering header lets provider-private context
+ * layouts change without persisting a pointer in ZNMIR.
  */
 const void *zend_mir_lowering_context_provider_context(
 	const zend_mir_lowering_context *context);
@@ -151,10 +151,6 @@ bool zend_mir_straight_line_value_at(
 	const zend_mir_straight_line_lifetime *lifetime,
 	zend_mir_value_id value_id, zend_mir_straight_line_value *out);
 
-zend_mir_lowering_status zend_mir_lower_structural(
-	zend_mir_straight_line_provider_context *provider_context,
-	const zend_mir_source_opcode_ref *source_opcode,
-	zend_mir_lowering_diagnostic_code *diagnostic_out);
 zend_mir_lowering_status zend_mir_lower_copy_move(
 	zend_mir_lowering_context *context,
 	const zend_mir_source_opcode_ref *source_opcode,

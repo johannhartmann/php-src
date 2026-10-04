@@ -130,7 +130,7 @@ def validate_benchmark_result(value: Any) -> None:
         scenario_ids.add(item["scenario_id"])
         native_size = require_object(item["native_code_size"], where + ".native_code_size")
         if native_size.get("bytes") is not None or not native_size.get("unsupported_reason"):
-            raise ValidationError("{} native_code_size must be explicitly unsupported in W00".format(where))
+            raise ValidationError("{} native_code_size must be explicitly unsupported".format(where))
         samples = require_list(item["samples"], where + ".samples")
         if not samples:
             raise ValidationError("{} needs at least one sample".format(where))

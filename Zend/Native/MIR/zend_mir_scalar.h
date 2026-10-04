@@ -1,4 +1,4 @@
-/* Target-neutral scalar facts consumed by W03 lowering. */
+/* Target-neutral scalar facts consumed by scalar lowering. */
 
 #ifndef ZEND_MIR_SCALAR_H
 #define ZEND_MIR_SCALAR_H

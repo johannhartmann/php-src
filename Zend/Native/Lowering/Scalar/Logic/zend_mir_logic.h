@@ -20,7 +20,7 @@
 #define ZEND_MIR_LOGIC_PROVIDER_ID UINT32_C(4)
 #define ZEND_MIR_LOGIC_SEMANTIC_FAMILY_ID UINT32_C(4)
 
-/* Stable source-opcode numbers from the frozen W01 matrix. */
+/* Zend source-opcode numbers (zend_vm_opcodes.h values) of logic opcodes. */
 enum {
 	ZEND_MIR_LOGIC_ZEND_BOOL_NOT = 14,
 	ZEND_MIR_LOGIC_ZEND_BOOL_XOR = 15,

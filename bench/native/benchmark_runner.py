@@ -252,7 +252,7 @@ def run_scenario(
         "native_code_size": {
             "bytes": None,
             "source": None,
-            "unsupported_reason": "W00 has no native engine code-size source",
+            "unsupported_reason": "no native engine code-size source",
         },
         "samples": samples,
         "scenario_id": descriptor["scenario_id"],

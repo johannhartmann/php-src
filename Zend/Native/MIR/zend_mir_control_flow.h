@@ -27,8 +27,9 @@ typedef struct _zend_mir_control_flow_phi_mapping {
 } zend_mir_control_flow_phi_mapping;
 
 /*
- * Process-local mapping callbacks are valid only during W04 lowering and
- * stage-3 verification. No mapping record is part of persistent MIR.
+ * Process-local mapping callbacks are valid only during control-flow
+ * lowering and stage-3 verification. No mapping record is part of
+ * persistent MIR.
  */
 typedef struct _zend_mir_control_flow_map {
 	uint32_t contract_version;

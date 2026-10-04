@@ -574,7 +574,7 @@ static bool zend_mir_call_view_continuation_at(
 void zend_mir_module_init_call_view(zend_mir_module *module)
 {
 	memset(&module->call_view, 0, sizeof(module->call_view));
-	module->call_view.contract_version = ZEND_MIR_W05_CONTRACT_VERSION;
+	module->call_view.contract_version = ZEND_MIR_CONTRACT_VERSION;
 	module->call_view.context = module;
 	module->call_view.call_site_count = zend_mir_call_view_site_count;
 	module->call_view.call_site_at = zend_mir_call_view_site_at;
@@ -655,7 +655,7 @@ ZEND_MIR_VALUE_VIEW_ACCESSORS(
 void zend_mir_module_init_value_view(zend_mir_module *module)
 {
 	memset(&module->value_view, 0, sizeof(module->value_view));
-	module->value_view.contract_version = ZEND_MIR_W14_CONTRACT_VERSION;
+	module->value_view.contract_version = ZEND_MIR_CONTRACT_VERSION;
 	module->value_view.context = module;
 	module->value_view.storage_count = zend_mir_value_view_storage_count;
 	module->value_view.storage_at = zend_mir_value_view_storage_at;

@@ -13,9 +13,6 @@ typedef struct _zend_mir_phi_record {
 	uint32_t incoming_count;
 } zend_mir_phi_record;
 
-uint32_t zend_mir_phi_count(const zend_mir_cfg *cfg, zend_mir_block_id block_id);
-zend_mir_cfg_status zend_mir_phi_at(const zend_mir_cfg *cfg,
-	zend_mir_block_id block_id, uint32_t index, zend_mir_phi_record *out);
 zend_mir_cfg_status zend_mir_phi_incoming_at(const zend_mir_cfg *cfg,
 	zend_mir_instruction_id phi_instruction_id, uint32_t predecessor_slot,
 	zend_mir_block_id *predecessor_id, zend_mir_value_id *value_id);

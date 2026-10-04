@@ -150,7 +150,7 @@ static void zend_mir_verify_summary(
 			ZEND_MIR_DIAGNOSTIC_INVALID_EFFECTS,
 			zend_mir_verify_instruction_location(context, instruction),
 			ZEND_MIR_ID_INVALID,
-			"instruction summary is not closed under W01 composition rules");
+			"instruction summary is not closed under effect composition rules");
 	}
 	if ((instruction->opcode == ZEND_MIR_OPCODE_THROW
 			|| instruction->opcode == ZEND_MIR_OPCODE_THROW_SOURCE_ZVAL)
@@ -251,7 +251,7 @@ static void zend_mir_verify_ownership_action(
 				: ZEND_MIR_VERIFY_INVALID_OWNERSHIP,
 			ZEND_MIR_DIAGNOSTIC_INVALID_OWNERSHIP,
 			zend_mir_verify_instruction_location(context, &instruction->record),
-			source_id, "ownership transition is rejected by the W01 lattice");
+			source_id, "ownership transition is rejected by the ownership lattice");
 		return;
 	}
 	if (source_index != UINT32_MAX) {

@@ -10,4 +10,3 @@ instructions.
   cache-invalidation behavior before implementation.
 - Validate bounds, alignment, identity, and code-version provenance while
   loading persistent native metadata.
-- Keep OPcache/JIT behavior unchanged during W00 contract work.

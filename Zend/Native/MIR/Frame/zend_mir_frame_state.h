@@ -43,8 +43,8 @@ typedef struct _zend_mir_frame_continuation_spec {
 } zend_mir_frame_continuation_spec;
 
 /*
- * This is an immutable snapshot. The extra scalars retain W01 fields that do
- * not belong to the frozen 1.0 frame-state reference.
+ * This is an immutable snapshot. The extra scalars carry effect-model fields
+ * that are not part of the frame-state reference record.
  */
 typedef struct _zend_mir_frame_state_record {
 	zend_mir_frame_state_ref ref;

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strict standalone build and runtime driver for the W02-F verifier."""
+"""Strict standalone build and runtime driver for the verifier."""
 
 from __future__ import annotations
 
@@ -91,7 +91,7 @@ def main() -> int:
             environment,
         )
 
-    print("W02-F verifier tests passed")
+    print("verifier tests passed")
     return 0
 
 

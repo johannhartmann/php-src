@@ -418,7 +418,7 @@ static void zend_mir_scalar_verify_scope(
 			ZEND_MIR_SCALAR_VERIFY_INVALID_SCOPE,
 			ZEND_MIR_DIAGNOSTIC_INVALID_SCALAR_PROFILE, NULL,
 			ZEND_MIR_ID_INVALID,
-			"W03 scalar block must be straight-line and have no CFG edges");
+			"scalar block must be straight-line and have no CFG edges");
 	}
 	for (index = 0; index < context->instruction_count; index++) {
 		const zend_mir_instruction_record *instruction =
@@ -440,7 +440,7 @@ static void zend_mir_scalar_verify_scope(
 					ZEND_MIR_SCALAR_VERIFY_INVALID_SCOPE,
 					ZEND_MIR_DIAGNOSTIC_INVALID_SCALAR_PROFILE,
 					instruction, ZEND_MIR_ID_INVALID,
-					"W03 scalar block contains deferred control-flow semantics");
+					"scalar block contains deferred control-flow semantics");
 				break;
 			case ZEND_MIR_OPCODE_RETURN:
 				return_count++;
@@ -454,7 +454,7 @@ static void zend_mir_scalar_verify_scope(
 			ZEND_MIR_SCALAR_VERIFY_INVALID_SCOPE,
 			ZEND_MIR_DIAGNOSTIC_INVALID_SCALAR_PROFILE, NULL,
 			ZEND_MIR_ID_INVALID,
-			"W03 scalar block must end in exactly one return");
+			"scalar block must end in exactly one return");
 	}
 }
 
@@ -896,11 +896,11 @@ static void zend_mir_scalar_verify_instructions(
 		zend_mir_scalar_verify_emit(context,
 			ZEND_MIR_SCALAR_VERIFY_INVALID_SCOPE,
 			ZEND_MIR_DIAGNOSTIC_INVALID_SCALAR_PROFILE, NULL,
-			ZEND_MIR_ID_INVALID, "module contains no W03 scalar instruction");
+			ZEND_MIR_ID_INVALID, "module contains no scalar instruction");
 	}
 }
 
-bool zend_mir_verify_w03_scalar(
+bool zend_mir_verify_scalar_module(
 		const zend_mir_view *view, zend_mir_diagnostic_sink *diagnostics)
 {
 	zend_mir_scalar_verify_context context;
@@ -935,7 +935,7 @@ bool zend_mir_verify_w03_scalar(
 			ZEND_MIR_SCALAR_VERIFY_INVALID_SCOPE,
 			ZEND_MIR_DIAGNOSTIC_INVALID_SCALAR_PROFILE, NULL,
 			ZEND_MIR_ID_INVALID,
-			"W03 scalar module must contain exactly one function and block");
+			"scalar module must contain exactly one function and block");
 		goto done;
 	}
 	if (!zend_mir_scalar_load(&context)) {

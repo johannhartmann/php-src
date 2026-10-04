@@ -50,7 +50,6 @@ $arguments = json_decode(
     getenv("NATIVE_BENCH_ARGUMENTS"), true, 512, JSON_THROW_ON_ERROR
 );
 $options = [
-    "wave" => 11,
     "function" => getenv("NATIVE_BENCH_FUNCTION"),
     "target" => getenv("NATIVE_BENCH_TARGET"),
     "repeat" => (int) getenv("NATIVE_BENCH_REPEAT"),
@@ -1514,7 +1513,7 @@ def parse_args() -> argparse.Namespace:
         choices=("diagnostic", "product-cli", "product-fpm"),
         default="diagnostic",
         help=(
-            "diagnostic preserves the W12 bridge measurement; product modes "
+            "diagnostic measures through the native_mir_test bridge; product modes "
             "execute the benchmark as ordinary userland through the global "
             "native executor"
         ),
@@ -1539,16 +1538,6 @@ def parse_args() -> argparse.Namespace:
         "--cgi-fcgi",
         type=Path,
         help="cgi-fcgi client used for persistent FPM requests",
-    )
-    parser.add_argument(
-        "--w12-baseline",
-        action="store_true",
-        help="enforce the W13 retention limits against the exact W12 binary",
-    )
-    parser.add_argument(
-        "--w13-baseline",
-        action="store_true",
-        help="enforce the W14 retention and cutover limits against W13",
     )
     parser.add_argument("--target", choices=tuple(TARGET_BY_HOST.values()))
     parser.add_argument(
@@ -1618,8 +1607,6 @@ def main() -> int:
             verify_executable(binary, role)
     if args.mode == "diagnostic" and args.opcache != "off":
         raise UsageError("--opcache applies only to product-cli and product-fpm")
-    if args.w12_baseline and args.w13_baseline:
-        raise UsageError("--w12-baseline and --w13-baseline are exclusive")
     opcache = args.opcache == "on"
     fpm = args.fpm
     baseline_fpm = args.baseline_fpm
@@ -1912,21 +1899,475 @@ def main() -> int:
     ]
     if warm_speedups:
         summary["warm_geomean_speedup"] = geometric_mean(warm_speedups)
-    w14_cutover_cases = {
-        "scalar_return",
-        "call_in_loop",
-        "cv_assignment_loop",
-        "packed_array_read",
-        "standard_property_cached_read",
+    direct_scalar = next(
+        (record for record in records if record["case"] == "scalar_return"),
+        None,
+    )
+    if direct_scalar is not None:
+        if summary.get("direct_scalar_speedup", 0) < V1_MIN_BASELINE_SPEEDUP:
+            failures.append("direct scalar call regresses by more than 10%")
+        if (
+            summary.get("direct_scalar_vs_reference", 0)
+            < V1_MIN_DIRECT_REFERENCE_SPEEDUP
+        ):
+            failures.append("direct scalar call is less than 2.0x the reference VM")
+
+    hot_records = [record for record in records if record["suite"] == "hot"]
+    if hot_records:
+        if summary.get("hot_geomean_speedup", 0) < V1_MIN_BASELINE_SPEEDUP:
+            failures.append("hot corpus regresses by more than 10%")
+        if summary.get("hot_geomean_vs_reference", 0) < V1_MIN_HOT_REFERENCE_SPEEDUP:
+            failures.append("hot corpus geometric mean is below 1.25x the reference VM")
+
+    comparable = [
+        record for record in records if record["suite"] in {"direct", "hot", "scaling"}
+    ]
+    missing_cold_measurement = [
+        record["case"]
+        for record in comparable
+        if "baseline_error" not in record
+        if not isinstance(
+            record.get("product_cold_compile_latency_p95_ratio"), (int, float)
+        )
+    ]
+    if missing_cold_measurement:
+        failures.append(
+            "product cold compile latency p95 comparison missing for: "
+            + ", ".join(missing_cold_measurement)
+        )
+    cold_compile_regressions = [
+        record["case"]
+        for record in comparable
+        if isinstance(
+            record.get("product_cold_compile_latency_p95_ratio"), (int, float)
+        )
+        and float(record["product_cold_compile_latency_p95_ratio"])
+        > V1_MAX_RESOURCE_RATIO
+    ]
+    if cold_compile_regressions:
+        failures.append(
+            "product cold compile latency p95 regresses by more than 20% for: "
+            + ", ".join(cold_compile_regressions)
+        )
+
+    missing_rss = [
+        record["case"]
+        for record in comparable
+        if "baseline_error" not in record
+        if not isinstance(record.get("peak_rss_ratio"), (int, float))
+    ]
+    if missing_rss:
+        failures.append("peak RSS comparison missing for: " + ", ".join(missing_rss))
+    peak_rss_regressions = [
+        record["case"]
+        for record in comparable
+        if isinstance(record.get("peak_rss_ratio"), (int, float))
+        and float(record["peak_rss_ratio"]) > V1_MAX_RESOURCE_RATIO
+    ]
+    if peak_rss_regressions:
+        failures.append(
+            "peak RSS regresses by more than 20% for: "
+            + ", ".join(peak_rss_regressions)
+        )
+    return failures
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--candidate", type=Path, required=True)
+    parser.add_argument("--baseline", type=Path)
+    parser.add_argument("--reference", type=Path)
+    parser.add_argument(
+        "--mode",
+        choices=("diagnostic", "product-cli", "product-fpm"),
+        default="diagnostic",
+        help=(
+            "diagnostic measures through the native_mir_test bridge; product modes "
+            "execute the benchmark as ordinary userland through the global "
+            "native executor"
+        ),
+    )
+    parser.add_argument("--opcache", choices=("off", "on"), default="off")
+    parser.add_argument(
+        "--fpm",
+        type=Path,
+        help="php-fpm binary; inferred beside the candidate CLI binary",
+    )
+    parser.add_argument(
+        "--baseline-fpm",
+        type=Path,
+        help="baseline php-fpm binary; inferred beside the baseline CLI binary",
+    )
+    parser.add_argument(
+        "--reference-fpm",
+        type=Path,
+        help=("reference php-fpm binary; inferred beside the reference CLI binary"),
+    )
+    parser.add_argument(
+        "--cgi-fcgi",
+        type=Path,
+        help="cgi-fcgi client used for persistent FPM requests",
+    )
+    parser.add_argument("--target", choices=tuple(TARGET_BY_HOST.values()))
+    parser.add_argument(
+        "--suite",
+        choices=("all", "direct", "hot", "scaling"),
+        default="all",
+    )
+    parser.add_argument(
+        "--case",
+        action="append",
+        dest="cases",
+        help="run only the named benchmark case; may be repeated",
+    )
+    parser.add_argument("--samples", type=int, default=DEFAULT_SAMPLES)
+    parser.add_argument("--quick", action="store_true")
+    parser.add_argument("--enforce", action="store_true")
+    return parser.parse_args()
+
+
+def verify_target_host(target: str) -> None:
+    expected = next(
+        (host for host, identifier in TARGET_BY_HOST.items() if identifier == target),
+        None,
+    )
+    if expected is None:
+        raise UsageError(f"unknown benchmark target: {target}")
+    host = (platform.system(), platform.machine())
+    if host != expected:
+        raise PrerequisiteError(
+            f"{target} requires {expected[0]}/{expected[1]}; "
+            f"host is {host[0]}/{host[1]}"
+        )
+    if target == "darwin-arm64-dev":
+        translated = subprocess.run(
+            ["sysctl", "-in", "sysctl.proc_translated"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        value = translated.stdout.strip() if translated.returncode == 0 else "0"
+        if value != "0":
+            raise PrerequisiteError(
+                "darwin-arm64-dev cannot be benchmarked through Rosetta"
+            )
+
+
+def verify_executable(path: Path, role: str) -> None:
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise PrerequisiteError(f"{role} PHP binary is unavailable: {path}")
+
+
+def main() -> int:
+    args = parse_args()
+    host = (platform.system(), platform.machine())
+    target = args.target or TARGET_BY_HOST.get(host)
+    if target is None:
+        raise PrerequisiteError(
+            f"unsupported benchmark host {host[0]}/{host[1]}"
+        )
+    verify_target_host(target)
+    if args.samples < 1:
+        raise UsageError("--samples must be positive")
+    verify_executable(args.candidate, "candidate")
+    for role, binary in (("baseline", args.baseline), ("reference", args.reference)):
+        if binary is not None:
+            verify_executable(binary, role)
+    if args.mode == "diagnostic" and args.opcache != "off":
+        raise UsageError("--opcache applies only to product-cli and product-fpm")
+    opcache = args.opcache == "on"
+    fpm = args.fpm
+    baseline_fpm = args.baseline_fpm
+    reference_fpm = args.reference_fpm
+    cgi_fcgi = args.cgi_fcgi
+    if args.mode == "product-fpm":
+        if fpm is None:
+            fpm = args.candidate.parent.parent / "fpm" / "php-fpm"
+        if not fpm.is_file() or not os.access(fpm, os.X_OK):
+            raise PrerequisiteError(f"candidate php-fpm is unavailable: {fpm}")
+        if args.baseline is not None:
+            if baseline_fpm is None:
+                baseline_fpm = args.baseline.parent.parent / "fpm" / "php-fpm"
+            if not baseline_fpm.is_file() or not os.access(baseline_fpm, os.X_OK):
+                raise PrerequisiteError(
+                    f"baseline php-fpm is unavailable: {baseline_fpm}"
+                )
+        if args.reference is not None:
+            if reference_fpm is None:
+                reference_fpm = args.reference.parent.parent / "fpm" / "php-fpm"
+            if not reference_fpm.is_file() or not os.access(
+                reference_fpm, os.X_OK
+            ):
+                raise PrerequisiteError(
+                    f"reference php-fpm is unavailable: {reference_fpm}"
+                )
+        if cgi_fcgi is None:
+            located = shutil.which("cgi-fcgi")
+            if located is not None:
+                cgi_fcgi = Path(located)
+        if (
+            cgi_fcgi is None
+            or not cgi_fcgi.is_file()
+            or not os.access(cgi_fcgi, os.X_OK)
+        ):
+            raise PrerequisiteError(
+                "product-fpm requires executable --cgi-fcgi or cgi-fcgi on PATH"
+            )
+
+    direct_iterations = 2_000 if args.quick else 200_000
+    hot_iterations = 500 if args.quick else 50_000
+    with tempfile.TemporaryDirectory(prefix="php-native-benchmark-") as temp:
+        include_file = Path(temp) / "include-once.php"
+        include_file.write_text(
+            "<?php function included_once_value(): int { return 1; }\n"
+        )
+        benchmarks: tuple[Benchmark, ...] = ()
+        if args.suite in {"all", "direct"}:
+            benchmarks += direct_benchmarks(direct_iterations)
+        if args.suite in {"all", "hot"}:
+            benchmarks += hot_benchmarks(hot_iterations, include_file)
+        if args.suite in {"all", "scaling"}:
+            benchmarks += scaling_benchmarks(args.quick, Path(temp))
+        if args.cases:
+            selected = set(args.cases)
+            benchmarks = tuple(
+                benchmark for benchmark in benchmarks if benchmark.name in selected
+            )
+            missing = selected.difference(benchmark.name for benchmark in benchmarks)
+            if missing:
+                raise UsageError(
+                    "unknown benchmark cases: " + ", ".join(sorted(missing))
+                )
+
+        file_cache = Path(temp) / "opcache-file-cache"
+        file_cache.mkdir()
+        baseline_file_cache = Path(temp) / "baseline-opcache-file-cache"
+        baseline_file_cache.mkdir()
+        reference_file_cache = Path(temp) / "reference-opcache-file-cache"
+        reference_file_cache.mkdir()
+        product_sources: dict[str, Path] = {}
+        if args.mode != "diagnostic":
+            for benchmark in benchmarks:
+                source = Path(temp) / f"product-{benchmark.name}.php"
+                source.write_text(product_source(benchmark), encoding="utf-8")
+                product_sources[benchmark.name] = source
+
+        records = []
+
+        def run_benchmarks(
+            fpm_pool: FpmPool | None,
+            baseline_fpm_pool: FpmPool | None,
+            reference_fpm_pool: FpmPool | None,
+        ) -> None:
+            for benchmark in benchmarks:
+                cold = None
+                prime = None
+                baseline_error = None
+                baseline_cold = None
+                if args.mode == "diagnostic":
+                    candidate = measure(
+                        args.candidate,
+                        benchmark,
+                        target,
+                        args.samples,
+                        CANDIDATE_RUNNER,
+                    )
+                    if args.baseline is None:
+                        baseline = None
+                    else:
+                        try:
+                            baseline = measure(
+                                args.baseline,
+                                benchmark,
+                                target,
+                                args.samples,
+                                CANDIDATE_RUNNER,
+                            )
+                        except RuntimeError as error:
+                            baseline = None
+                            baseline_error = str(error)
+                    if args.reference is None:
+                        reference = None
+                    else:
+                        reference = measure(
+                            args.reference,
+                            benchmark,
+                            target,
+                            args.samples,
+                            REFERENCE_RUNNER,
+                        )
+                else:
+                    roles = [
+                        ProductRole(
+                            "candidate", args.candidate, file_cache, fpm_pool
+                        )
+                    ]
+                    if args.baseline is not None:
+                        roles.append(
+                            ProductRole(
+                                "baseline",
+                                args.baseline,
+                                baseline_file_cache,
+                                baseline_fpm_pool,
+                            )
+                        )
+                    if args.reference is not None:
+                        roles.append(
+                            ProductRole(
+                                "reference",
+                                args.reference,
+                                reference_file_cache,
+                                reference_fpm_pool,
+                            )
+                        )
+                    measurements, errors = measure_product_roles(
+                        tuple(roles),
+                        product_sources[benchmark.name],
+                        benchmark,
+                        target,
+                        args.samples,
+                        opcache,
+                        optional_roles=frozenset({"baseline"}),
+                    )
+                    candidate, cold, prime, warm_probe = measurements["candidate"]
+                    baseline_error = errors.get("baseline")
+                    if "baseline" in measurements:
+                        baseline, baseline_cold, _, baseline_warm_probe = (
+                            measurements["baseline"]
+                        )
+                    else:
+                        baseline = None
+                        baseline_warm_probe = None
+                    reference_cold = None
+                    if "reference" in measurements:
+                        reference, reference_cold, _, reference_warm_probe = (
+                            measurements["reference"]
+                        )
+                    else:
+                        reference = None
+                        reference_warm_probe = None
+                    for role_name, role_samples, role_cold, role_warm_probe in (
+                        ("candidate", candidate, cold, warm_probe),
+                        (
+                            "baseline",
+                            baseline,
+                            baseline_cold,
+                            baseline_warm_probe,
+                        ),
+                        (
+                            "reference",
+                            reference,
+                            reference_cold,
+                            reference_warm_probe,
+                        ),
+                    ):
+                        if role_samples is None:
+                            continue
+                        validate_product_opcache_samples(
+                            benchmark,
+                            f"{role_name} warm",
+                            role_samples,
+                            opcache,
+                            require_hit=opcache,
+                        )
+                        assert role_cold is not None
+                        validate_product_opcache_samples(
+                            benchmark,
+                            f"{role_name} cold",
+                            role_cold,
+                            opcache,
+                            require_hit=False,
+                        )
+                        if role_warm_probe is not None:
+                            validate_product_opcache_samples(
+                                benchmark,
+                                f"{role_name} warm probe",
+                                role_warm_probe,
+                                opcache,
+                                require_hit=True,
+                            )
+                record = summarize(
+                    benchmark,
+                    candidate,
+                    baseline,
+                    reference,
+                    cold,
+                    prime,
+                    baseline_cold,
+                    mode=args.mode,
+                    opcache=opcache,
+                    warm_probe=(warm_probe if args.mode != "diagnostic" else None),
+                )
+                if baseline_error is not None:
+                    record["baseline_error"] = baseline_error
+                records.append(record)
+                print(json.dumps(record, sort_keys=True), flush=True)
+
+        if args.mode == "product-fpm":
+            assert fpm is not None and cgi_fcgi is not None
+            with ExitStack() as stack:
+                fpm_directory = Path(temp) / "fpm"
+                fpm_directory.mkdir()
+                fpm_pool = stack.enter_context(
+                    FpmPool(fpm, cgi_fcgi, fpm_directory, opcache)
+                )
+                baseline_pool = None
+                if baseline_fpm is not None:
+                    baseline_fpm_directory = Path(temp) / "baseline-fpm"
+                    baseline_fpm_directory.mkdir()
+                    baseline_pool = stack.enter_context(
+                        FpmPool(
+                            baseline_fpm,
+                            cgi_fcgi,
+                            baseline_fpm_directory,
+                            opcache,
+                        )
+                    )
+                reference_pool = None
+                if reference_fpm is not None:
+                    reference_fpm_directory = Path(temp) / "reference-fpm"
+                    reference_fpm_directory.mkdir()
+                    reference_pool = stack.enter_context(
+                        FpmPool(
+                            reference_fpm,
+                            cgi_fcgi,
+                            reference_fpm_directory,
+                            opcache,
+                        )
+                    )
+                run_benchmarks(fpm_pool, baseline_pool, reference_pool)
+        else:
+            run_benchmarks(None, None, None)
+
+    summary: dict[str, Any] = {
+        "target": target,
+        "mode": args.mode,
+        "opcache": args.opcache,
+        "cases": len(records),
     }
-    w14_cutover_speedups = [
+    hot_speedups = [
         float(record["speedup"])
         for record in records
-        if record["case"] in w14_cutover_cases
-        and isinstance(record.get("speedup"), (int, float))
+        if record["suite"] == "hot" and "speedup" in record
     ]
-    if w14_cutover_speedups:
-        summary["w14_cutover_geomean_speedup"] = geometric_mean(w14_cutover_speedups)
+    if hot_speedups:
+        summary["hot_geomean_speedup"] = geometric_mean(hot_speedups)
+    hot_reference_speedups = [
+        float(record["candidate_vs_reference"])
+        for record in records
+        if record["suite"] == "hot"
+        and isinstance(record.get("candidate_vs_reference"), (int, float))
+    ]
+    if hot_reference_speedups:
+        summary["hot_geomean_vs_reference"] = geometric_mean(hot_reference_speedups)
+    warm_speedups = [
+        float(record["warm_vs_cold"])
+        for record in records
+        if isinstance(record.get("warm_vs_cold"), (int, float))
+    ]
+    if warm_speedups:
+        summary["warm_geomean_speedup"] = geometric_mean(warm_speedups)
     direct_scalar = next(
         (record for record in records if record["case"] == "scalar_return"),
         None,
@@ -1998,28 +2439,14 @@ def main() -> int:
         failures.append("--enforce requires --baseline and --reference")
     if direct_scalar is not None:
         if not product_mode:
-            minimum = 0.95 if args.w12_baseline else 0.97 if args.w13_baseline else 3.0
-            if summary.get("direct_scalar_speedup", 0) < minimum:
-                failures.append(
-                    "direct scalar call retains less than 95% of W12"
-                    if args.w12_baseline
-                    else "direct scalar call regresses by more than 3% from W13"
-                    if args.w13_baseline
-                    else "direct scalar call speedup is below 3.0x"
-                )
+            if summary.get("direct_scalar_speedup", 0) < 3.0:
+                failures.append("direct scalar call speedup is below 3.0x")
     elif args.suite in {"all", "direct"} and not args.cases:
         failures.append("direct scalar benchmark was not executed")
     if hot_speedups:
         if not product_mode:
-            minimum = 0.95 if args.w12_baseline else 0.97 if args.w13_baseline else 1.5
-            if summary.get("hot_geomean_speedup", 0) < minimum:
-                failures.append(
-                    "hot corpus retains less than 95% of W12"
-                    if args.w12_baseline
-                    else "hot corpus regresses by more than 3% from W13"
-                    if args.w13_baseline
-                    else "hot corpus geometric mean speedup is below 1.5x"
-                )
+            if summary.get("hot_geomean_speedup", 0) < 1.5:
+                failures.append("hot corpus geometric mean speedup is below 1.5x")
     elif args.suite in {"all", "hot"} and not args.cases:
         failures.append("hot corpus was not executed")
     if regressions:
@@ -2045,13 +2472,9 @@ def main() -> int:
         ]
         if not hit_growth:
             failures.append("FPM requests did not produce an OPcache hit")
-    if args.w13_baseline and w14_cutover_speedups:
-        if summary.get("w14_cutover_geomean_speedup", 0) <= 1.0:
-            failures.append("register-centered W14 cutover cases do not beat W13")
     if (
         independent_1000 is not None
         and args.mode == "diagnostic"
-        and not args.w13_baseline
     ):
         compiled = independent_1000.get("compiled_codeunits")
         if compiled != V1_LAZY_CODEUNITS:

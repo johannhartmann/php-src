@@ -72,11 +72,6 @@ bool zend_mir_frontend_indexed_dead_ssa_peer_slot(
 	const void *index, const zend_ssa *ssa, uint32_t ssa_variable_id,
 	uint32_t *slot, zend_mir_source_slot_kind *slot_kind);
 
-zend_mir_lowering_status zend_mir_frontend_validate_literals(
-	const zend_op_array *op_array,
-	zend_mir_op_array_id op_array_id,
-	zend_mir_frontend_diagnostic *diagnostic);
-
 bool zend_mir_frontend_literal_index(
 	const zend_op_array *op_array,
 	const zend_op *opline,
@@ -92,67 +87,6 @@ bool zend_mir_frontend_canonical_literal_for_index(
 	const zend_op_array *op_array,
 	uint32_t index,
 	zend_mir_source_literal_ref *out);
-
-zend_mir_lowering_status zend_mir_frontend_validate_operands(
-	const zend_op_array *op_array,
-	const zend_ssa *ssa,
-	zend_mir_op_array_id op_array_id,
-	zend_mir_frontend_diagnostic *diagnostic,
-	uint32_t *use_count,
-	uint32_t *def_count);
-zend_mir_lowering_status zend_mir_frontend_validate_operands_w04(
-	const zend_op_array *op_array,
-	const zend_ssa *ssa,
-	zend_mir_op_array_id op_array_id,
-	zend_mir_frontend_diagnostic *diagnostic,
-	uint32_t *use_count,
-	uint32_t *def_count);
-
-zend_mir_lowering_status zend_mir_frontend_validate_eligibility(
-	const zend_op_array *op_array,
-	const zend_ssa *ssa,
-	zend_mir_op_array_id op_array_id,
-	zend_mir_frontend_diagnostic *diagnostic);
-zend_mir_lowering_status zend_mir_frontend_validate_eligibility_w04(
-	const zend_op_array *op_array,
-	const zend_ssa *ssa,
-	zend_mir_op_array_id op_array_id,
-	zend_mir_frontend_diagnostic *diagnostic);
-zend_mir_lowering_status zend_mir_frontend_validate_eligibility_w08(
-	const zend_op_array *op_array,
-	const zend_ssa *ssa,
-	zend_mir_op_array_id op_array_id,
-	zend_mir_frontend_diagnostic *diagnostic);
-
-zend_mir_lowering_status zend_mir_frontend_validate_eligibility_w09(
-	const zend_op_array *op_array,
-	const zend_ssa *ssa,
-	const zend_op_array *original_op_array,
-	zend_mir_op_array_id op_array_id,
-	zend_mir_frontend_diagnostic *diagnostic);
-zend_mir_lowering_status zend_mir_frontend_validate_eligibility_w10(
-	const zend_op_array *op_array,
-	const zend_ssa *ssa,
-	const zend_op_array *original_op_array,
-	zend_mir_op_array_id op_array_id,
-	zend_mir_frontend_diagnostic *diagnostic);
-
-zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope(
-	const zend_op_array *op_array,
-	zend_mir_op_array_id op_array_id,
-	zend_mir_frontend_diagnostic *diagnostic);
-zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w04(
-	const zend_op_array *op_array,
-	zend_mir_op_array_id op_array_id,
-	zend_mir_frontend_diagnostic *diagnostic);
-zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w09(
-	const zend_op_array *op_array,
-	zend_mir_op_array_id op_array_id,
-	zend_mir_frontend_diagnostic *diagnostic);
-zend_mir_lowering_status zend_mir_frontend_validate_opcode_scope_w10(
-	const zend_op_array *op_array,
-	zend_mir_op_array_id op_array_id,
-	zend_mir_frontend_diagnostic *diagnostic);
 
 bool zend_mir_frontend_opcode_at(
 	const zend_mir_zend_source *source,
@@ -174,13 +108,6 @@ bool zend_mir_frontend_ssa_def_at(
 bool zend_mir_frontend_build_operand_index(zend_mir_zend_source *source);
 void zend_mir_frontend_release_operand_index(void *index);
 
-zend_mir_lowering_status zend_mir_frontend_validate_facts(
-	const zend_op_array *op_array,
-	const zend_ssa *ssa,
-	zend_mir_op_array_id op_array_id,
-	zend_mir_frontend_diagnostic *diagnostic,
-	uint32_t *fact_count);
-
 bool zend_mir_frontend_value_fact_at(
 	const zend_mir_zend_source *source,
 	uint32_t index,
@@ -191,38 +118,10 @@ bool zend_mir_frontend_build_value_fact_index(
 
 void zend_mir_frontend_release_value_fact_index(void *index);
 
-bool zend_mir_frontend_w05_result_fact_at(
+bool zend_mir_frontend_result_fact_at(
 	const zend_mir_zend_source *source,
 	uint32_t index,
 	zend_mir_value_fact_ref *out);
-
-zend_mir_lowering_status zend_mir_frontend_project_w05_result_facts(
-	const zend_script *script,
-	const zend_op_array *op_array,
-	const zend_ssa *ssa,
-	zend_ssa *projected_ssa,
-	zend_mir_frontend_diagnostic *diagnostic);
-
-zend_mir_lowering_status zend_mir_frontend_project_w08_result_facts(
-	const zend_script *script,
-	const zend_op_array *op_array,
-	const zend_ssa *ssa,
-	zend_ssa *projected_ssa,
-	zend_mir_frontend_diagnostic *diagnostic);
-
-zend_mir_lowering_status zend_mir_frontend_project_w09_result_facts(
-	const zend_script *script,
-	const zend_op_array *op_array,
-	const zend_ssa *ssa,
-	zend_ssa *projected_ssa,
-	zend_mir_frontend_diagnostic *diagnostic);
-
-zend_mir_lowering_status zend_mir_frontend_project_w10_result_facts(
-	const zend_script *script,
-	const zend_op_array *op_array,
-	const zend_ssa *ssa,
-	zend_ssa *projected_ssa,
-	zend_mir_frontend_diagnostic *diagnostic);
 
 bool zend_mir_frontend_fact_for_ssa_with_id(
 	const zend_op_array *op_array,
@@ -247,31 +146,7 @@ bool zend_mir_frontend_source_position_at(
 	uint32_t index,
 	zend_mir_source_position_ref *out);
 
-zend_mir_lowering_status zend_mir_zend_source_preflight_w05(
-	const zend_script *script,
-	const zend_op_array *op_array,
-	const zend_ssa *ssa,
-	zend_mir_frontend_diagnostic *diagnostic);
-
-zend_mir_lowering_status zend_mir_zend_source_preflight_w07(
-	const zend_script *script,
-	const zend_op_array *op_array,
-	const zend_ssa *ssa,
-	zend_mir_frontend_diagnostic *diagnostic);
-
-zend_mir_lowering_status zend_mir_zend_source_preflight_w08(
-	const zend_script *script,
-	const zend_op_array *op_array,
-	const zend_ssa *ssa,
-	zend_mir_frontend_diagnostic *diagnostic);
-
-zend_mir_lowering_status zend_mir_zend_source_preflight_w09(
-	const zend_script *script,
-	const zend_op_array *op_array,
-	const zend_ssa *ssa,
-	zend_mir_frontend_diagnostic *diagnostic);
-
-zend_mir_lowering_status zend_mir_zend_source_preflight_w10(
+zend_mir_lowering_status zend_mir_zend_source_preflight(
 	const zend_script *script,
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,
@@ -296,52 +171,12 @@ bool zend_mir_zend_source_direct_static_call_scope(
 	const zend_function *function,
 	bool *inherit_called_scope);
 
-zend_mir_lowering_status zend_mir_zend_source_init_w05_projection(
-	zend_mir_zend_source *source,
-	const zend_op_array *projected_op_array,
-	const zend_ssa *projected_ssa,
-	const zend_op_array *original_op_array,
-	const zend_ssa *original_ssa,
-	zend_mir_op_array_id op_array_id,
-	zend_mir_symbol_id file_symbol_id,
-	zend_mir_frontend_diagnostic *diagnostic);
-
-zend_mir_lowering_status zend_mir_zend_source_init_w08_projection(
-	zend_mir_zend_source *source,
-	const zend_op_array *projected_op_array,
-	const zend_ssa *projected_ssa,
-	const zend_op_array *original_op_array,
-	const zend_ssa *original_ssa,
-	zend_mir_op_array_id op_array_id,
-	zend_mir_symbol_id file_symbol_id,
-	zend_mir_frontend_diagnostic *diagnostic);
-
-zend_mir_lowering_status zend_mir_zend_source_init_w09_projection(
-	zend_mir_zend_source *source,
-	const zend_op_array *projected_op_array,
-	const zend_ssa *projected_ssa,
-	const zend_op_array *original_op_array,
-	const zend_ssa *original_ssa,
-	zend_mir_op_array_id op_array_id,
-	zend_mir_symbol_id file_symbol_id,
-	zend_mir_frontend_diagnostic *diagnostic);
-
-zend_mir_lowering_status zend_mir_zend_source_init_w10_projection(
-	zend_mir_zend_source *source,
-	const zend_op_array *projected_op_array,
-	const zend_ssa *projected_ssa,
-	const zend_op_array *original_op_array,
-	const zend_ssa *original_ssa,
-	zend_mir_op_array_id op_array_id,
-	zend_mir_symbol_id file_symbol_id,
-	zend_mir_frontend_diagnostic *diagnostic);
-
 /*
- * Initialize the W11 source adapter directly from optimizer-owned storage.
- * W11 prerequisite filtering is supplied by a thin source-view overlay; this
+ * Initialize the source adapter directly from optimizer-owned storage.
+ * Prerequisite filtering is supplied by a thin source-view overlay; this
  * constructor deliberately does not materialize or mutate an OpArray/SSA copy.
  */
-zend_mir_lowering_status zend_mir_zend_source_init_w11_direct(
+zend_mir_lowering_status zend_mir_zend_source_init_direct(
 	zend_mir_zend_source *source,
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,

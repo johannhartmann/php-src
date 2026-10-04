@@ -81,7 +81,7 @@ static bool name(void *context, const type *record) \
 			alignof(type))) { \
 		return zend_mir_module_fail(module, \
 			ZEND_MIR_DIAGNOSTIC_ALLOCATION_FAILED, \
-			"W06 value-model staging failed"); \
+			"value-model staging failed"); \
 	} \
 	staging->field[staging->count_field++] = *record; \
 	return true; \
@@ -1435,7 +1435,7 @@ bool zend_mir_module_commit_value_model(zend_mir_module *module)
 			|| !zend_mir_value_staging_counts_bounded(staging)) {
 		return zend_mir_module_fail(module,
 			ZEND_MIR_DIAGNOSTIC_INVALID_OWNERSHIP,
-			"invalid W06 value/reference model");
+			"invalid value/reference model");
 	}
 #if !defined(NDEBUG)
 	if (!zend_mir_value_validate_payloads(staging)
@@ -1450,13 +1450,13 @@ bool zend_mir_module_commit_value_model(zend_mir_module *module)
 			|| !zend_mir_value_validate_suspend_live_values(module, staging)) {
 		return zend_mir_module_fail(module,
 			ZEND_MIR_DIAGNOSTIC_INVALID_OWNERSHIP,
-			"invalid W06 value/reference model");
+			"invalid value/reference model");
 	}
 #endif
 	if (!zend_mir_value_compose_executable_operations(module, staging)) {
 		return zend_mir_module_fail(module,
 			ZEND_MIR_DIAGNOSTIC_INVALID_OWNERSHIP,
-			"invalid W06 value/reference model");
+			"invalid value/reference model");
 	}
 #define ZEND_MIR_VALUE_COPY(field, source_field, count_field, type) \
 	if (!zend_mir_value_copy_table(module, &module->field, \
@@ -1490,119 +1490,14 @@ bool zend_mir_module_commit_value_model(zend_mir_module *module)
 	return true;
 }
 
-typedef struct _zend_mir_w06_fingerprint_writer {
+typedef struct _zend_mir_value_fingerprint_writer {
 	uint32_t words[4];
-} zend_mir_w06_fingerprint_writer;
-
-static bool zend_mir_w06_fingerprint_write(
-	void *context, const char *bytes, size_t length)
-{
-	zend_mir_w06_fingerprint_writer *writer = context;
-	size_t index;
-
-	if (writer == NULL || (bytes == NULL && length != 0)) {
-		return false;
-	}
-	/* Keep the four independent FNV lanes together so debug and sanitizer
-	 * builds do not expand every emitted byte into sixteen scalar operations.
-	 * The per-lane byte sequence, and therefore the fingerprint, is unchanged. */
-#if defined(__GNUC__)
-	typedef uint32_t zend_mir_w06_fingerprint_vector
-		__attribute__((vector_size(4 * sizeof(uint32_t))));
-	zend_mir_w06_fingerprint_vector digest = {
-		writer->words[0], writer->words[1],
-		writer->words[2], writer->words[3]
-	};
-	static const zend_mir_w06_fingerprint_vector prime = {
-		UINT32_C(16777619), UINT32_C(16777619),
-		UINT32_C(16777619), UINT32_C(16777619)
-	};
-	static const zend_mir_w06_fingerprint_vector domain_bytes[4] = {
-		{UINT32_C(0x88), UINT32_C(0xd3),
-		 UINT32_C(0x2e), UINT32_C(0x44)},
-		{UINT32_C(0x6a), UINT32_C(0x08),
-		 UINT32_C(0x8a), UINT32_C(0x73)},
-		{UINT32_C(0x3f), UINT32_C(0xa3),
-		 UINT32_C(0x19), UINT32_C(0x70)},
-		{UINT32_C(0x24), UINT32_C(0x85),
-		 UINT32_C(0x13), UINT32_C(0x03)}
-	};
-	for (index = 0; index < length; index++) {
-		const uint32_t value = (unsigned char) bytes[index];
-		const zend_mir_w06_fingerprint_vector input = {
-			value, value, value, value
-		};
-
-		digest = (digest ^ input ^ domain_bytes[0]) * prime;
-		digest = (digest ^ domain_bytes[1]) * prime;
-		digest = (digest ^ domain_bytes[2]) * prime;
-		digest = (digest ^ domain_bytes[3]) * prime;
-	}
-	writer->words[0] = digest[0];
-	writer->words[1] = digest[1];
-	writer->words[2] = digest[2];
-	writer->words[3] = digest[3];
-#else
-#define W06_FINGERPRINT_BYTE_STEP(word, value) do { \
-	(word) ^= (uint32_t) (value); \
-	(word) *= UINT32_C(16777619); \
-} while (0)
-	for (index = 0; index < length; index++) {
-		const uint32_t value = (unsigned char) bytes[index];
-
-		W06_FINGERPRINT_BYTE_STEP(writer->words[0],
-			value ^ UINT32_C(0x88));
-		W06_FINGERPRINT_BYTE_STEP(writer->words[0], UINT32_C(0x6a));
-		W06_FINGERPRINT_BYTE_STEP(writer->words[0], UINT32_C(0x3f));
-		W06_FINGERPRINT_BYTE_STEP(writer->words[0], UINT32_C(0x24));
-		W06_FINGERPRINT_BYTE_STEP(writer->words[1],
-			value ^ UINT32_C(0xd3));
-		W06_FINGERPRINT_BYTE_STEP(writer->words[1], UINT32_C(0x08));
-		W06_FINGERPRINT_BYTE_STEP(writer->words[1], UINT32_C(0xa3));
-		W06_FINGERPRINT_BYTE_STEP(writer->words[1], UINT32_C(0x85));
-		W06_FINGERPRINT_BYTE_STEP(writer->words[2],
-			value ^ UINT32_C(0x2e));
-		W06_FINGERPRINT_BYTE_STEP(writer->words[2], UINT32_C(0x8a));
-		W06_FINGERPRINT_BYTE_STEP(writer->words[2], UINT32_C(0x19));
-		W06_FINGERPRINT_BYTE_STEP(writer->words[2], UINT32_C(0x13));
-		W06_FINGERPRINT_BYTE_STEP(writer->words[3],
-			value ^ UINT32_C(0x44));
-		W06_FINGERPRINT_BYTE_STEP(writer->words[3], UINT32_C(0x73));
-		W06_FINGERPRINT_BYTE_STEP(writer->words[3], UINT32_C(0x70));
-		W06_FINGERPRINT_BYTE_STEP(writer->words[3], UINT32_C(0x03));
-	}
-#undef W06_FINGERPRINT_BYTE_STEP
-#endif
-	return true;
-}
-
-bool zend_mir_value_compute_module_fingerprint(
-	const zend_mir_view *view,
-	zend_mir_diagnostic_sink *diagnostics,
-	uint32_t fingerprint[4])
-{
-	zend_mir_w06_fingerprint_writer digest = {{
-		UINT32_C(2166136261),
-		UINT32_C(3339451269),
-		UINT32_C(2593831049),
-		UINT32_C(1268118805)
-	}};
-	zend_mir_text_writer writer = {
-		&digest, zend_mir_w06_fingerprint_write
-	};
-
-	if (view == NULL || diagnostics == NULL || fingerprint == NULL
-			|| !zend_mir_dump_text(view, &writer, diagnostics)) {
-		return false;
-	}
-	memcpy(fingerprint, digest.words, sizeof(digest.words));
-	return true;
-}
+} zend_mir_value_fingerprint_writer;
 
 void zend_mir_module_init_value_mutator(zend_mir_module *module)
 {
 	memset(&module->value_mutator, 0, sizeof(module->value_mutator));
-	module->value_mutator.contract_version = ZEND_MIR_W14_CONTRACT_VERSION;
+	module->value_mutator.contract_version = ZEND_MIR_CONTRACT_VERSION;
 	module->value_mutator.context = module;
 	module->value_mutator.set_model_flags = zend_mir_value_set_model_flags;
 	module->value_mutator.add_storage = zend_mir_value_stage_storage;
@@ -1636,64 +1531,4 @@ zend_mir_value_mutator *zend_mir_module_get_value_mutator(
 	return zend_mir_module_require_building(module)
 		&& !module->value_staging.committed
 		? &module->value_mutator : NULL;
-}
-
-const zend_mir_value_view *zend_mir_module_get_value_view(
-	const zend_mir_module *module)
-{
-	return module != NULL && module->state != ZEND_MIR_MODULE_FAILED
-		&& module->value_staging.committed
-		? &module->value_view : NULL;
-}
-
-zend_mir_alias_relation zend_mir_value_merge_alias_relation(
-	zend_mir_alias_relation left, zend_mir_alias_relation right)
-{
-	if (left < ZEND_MIR_ALIAS_MUST || left > ZEND_MIR_ALIAS_NONE
-			|| right < ZEND_MIR_ALIAS_MUST || right > ZEND_MIR_ALIAS_NONE) {
-		return ZEND_MIR_ALIAS_RELATION_INVALID;
-	}
-	if (left == ZEND_MIR_ALIAS_MUST && right == ZEND_MIR_ALIAS_MUST) {
-		return ZEND_MIR_ALIAS_MUST;
-	}
-	/* A no-alias merge needs a proof that this helper does not carry. */
-	return ZEND_MIR_ALIAS_MAY;
-}
-
-zend_mir_refcount_state zend_mir_value_merge_refcount_state(
-	zend_mir_refcount_state left, zend_mir_refcount_state right)
-{
-	if (!zend_mir_value_refcount_valid(left)
-			|| !zend_mir_value_refcount_valid(right)) {
-		return ZEND_MIR_REFCOUNT_STATE_INVALID;
-	}
-	if (left == right) {
-		return left;
-	}
-	if ((left == ZEND_MIR_REFCOUNT_UNIQUE
-			&& right == ZEND_MIR_REFCOUNT_SHARED)
-			|| (left == ZEND_MIR_REFCOUNT_SHARED
-				&& right == ZEND_MIR_REFCOUNT_UNIQUE)) {
-		return ZEND_MIR_REFCOUNT_SHARED;
-	}
-	return ZEND_MIR_REFCOUNT_UNKNOWN;
-}
-
-bool zend_mir_value_merge_storage_state(
-	const zend_mir_storage_ref *left,
-	const zend_mir_storage_ref *right,
-	zend_mir_storage_ref *out)
-{
-	if (left == NULL || right == NULL || out == NULL
-			|| left->kind != right->kind
-			|| left->state != right->state
-			|| left->category != right->category
-			|| left->payload_id != right->payload_id
-			|| left->reference_cell_id != right->reference_cell_id
-			|| left->indirect_target_id != right->indirect_target_id) {
-		return false;
-	}
-	*out = *left;
-	out->id = ZEND_MIR_ID_INVALID;
-	return true;
 }

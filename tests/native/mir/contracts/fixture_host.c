@@ -324,7 +324,7 @@ static bool zend_mir_fixture_add_instruction(void *context,
 	if (requested == NULL || out == NULL
 			|| host->instruction_count >= ZEND_MIR_FIXTURE_MAX_INSTRUCTIONS
 			|| !zend_mir_fixture_find_block(host, requested->block_id)
-			|| requested->opcode >= ZEND_MIR_OPCODE_COUNT) {
+			|| requested->opcode >= ZEND_MIR_SCALAR_OPCODE_END) {
 		return false;
 	}
 	record = *requested;

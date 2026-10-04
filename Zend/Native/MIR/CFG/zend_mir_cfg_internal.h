@@ -1,4 +1,4 @@
-/* Private storage shared by the W02-B CFG and PHI implementation. */
+/* Private storage shared by the CFG and PHI implementation. */
 
 #ifndef ZEND_MIR_CFG_INTERNAL_H
 #define ZEND_MIR_CFG_INTERNAL_H

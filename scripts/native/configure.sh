@@ -10,7 +10,7 @@ trap native_release_lock EXIT
 
 usage() {
     cat <<'EOF'
-Configure an isolated php-src W00 build profile.
+Configure an isolated php-src native build profile.
 
 Usage: configure.sh [--profile PROFILE] [--force] [--print-build-dir]
 

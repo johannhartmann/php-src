@@ -130,7 +130,7 @@ static const zend_mir_scalar_descriptor zend_mir_scalar_descriptors[] = {
 ZEND_MIR_STATIC_ASSERT(
 	sizeof(zend_mir_scalar_descriptors) / sizeof(zend_mir_scalar_descriptors[0])
 		== ZEND_MIR_SCALAR_OPCODE_COUNT,
-	"every W03 scalar opcode has one descriptor");
+	"every scalar opcode has one descriptor");
 
 const zend_mir_scalar_descriptor *zend_mir_scalar_descriptor_at(
 		zend_mir_opcode opcode)
@@ -145,14 +145,6 @@ const zend_mir_scalar_descriptor *zend_mir_scalar_descriptor_at(
 		default:
 			return NULL;
 	}
-}
-
-bool zend_mir_scalar_opcode_is_registered(zend_mir_opcode opcode)
-{
-	const zend_mir_scalar_descriptor *descriptor =
-		zend_mir_scalar_descriptor_at(opcode);
-
-	return descriptor != NULL && descriptor->opcode == opcode;
 }
 
 zend_mir_representation zend_mir_scalar_type_representation(

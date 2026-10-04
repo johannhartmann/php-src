@@ -209,7 +209,7 @@ zend_mir_lowering_status zend_mir_lower_copy_move(
 			& (ZEND_MIR_STRAIGHT_LINE_HAZARD_REFERENCE
 				| ZEND_MIR_STRAIGHT_LINE_HAZARD_OLD_VALUE)) != 0) {
 		if (diagnostic_out != NULL) {
-			*diagnostic_out = ZEND_MIRL_W06_REFERENCE_SEMANTICS_DEFERRED;
+			*diagnostic_out = ZEND_MIRL_REFERENCE_SEMANTICS_DEFERRED;
 		}
 		return ZEND_MIR_LOWERING_DEFERRED;
 	}
@@ -221,7 +221,7 @@ zend_mir_lowering_status zend_mir_lower_copy_move(
 				| ZEND_MIR_STRAIGHT_LINE_HAZARD_INTERRUPT
 				| ZEND_MIR_STRAIGHT_LINE_HAZARD_EXCEPTION)) != 0) {
 		if (diagnostic_out != NULL) {
-			*diagnostic_out = ZEND_MIRL_W05_RUNTIME_EFFECT_DEFERRED;
+			*diagnostic_out = ZEND_MIRL_RUNTIME_EFFECT_DEFERRED;
 		}
 		return ZEND_MIR_LOWERING_DEFERRED;
 	}

@@ -29,65 +29,6 @@
 #define ZEND_MIR_CONTRACT_VERSION \
 	((ZEND_MIR_CONTRACT_VERSION_MAJOR << 16) | ZEND_MIR_CONTRACT_VERSION_MINOR)
 
-/*
- * W03 remains frozen at MIR contract 1.2. The additive W04 source/control-flow
- * boundary is 1.3 and is negotiated independently until W04 implementation
- * replaces the W03-only entry point.
- */
-#define ZEND_MIR_W04_CONTRACT_VERSION_MINOR UINT32_C(3)
-#define ZEND_MIR_W04_CONTRACT_VERSION \
-	((ZEND_MIR_CONTRACT_VERSION_MAJOR << 16) | ZEND_MIR_W04_CONTRACT_VERSION_MINOR)
-
-/*
- * W05 adds pointer-free call-model tables without changing W01-W04 records.
- * Minor 1.5 distinguishes final-module guarantees from prerequisite W04
- * verification and gives unlowered callees a stable declaration identity. Minor
- * 1.6 adds an original-opcode proof table to the process-local call source
- * view so W03 projection cannot erase the W05 call-sequence proof. Minor 1.7
- * carries compiler-preserved named-argument syntax into the pointer-free call
- * source view even when Zend normalizes the argument position. Minor 1.8 adds
- * the exact mapped scalar result ID to each immutable MIR call site. Minor 1.9
- * removes persisted capability and verifier records; verification is performed
- * directly before the module is returned.
- */
-#define ZEND_MIR_W05_CONTRACT_VERSION_MINOR UINT32_C(9)
-#define ZEND_MIR_W05_CONTRACT_VERSION \
-	((ZEND_MIR_CONTRACT_VERSION_MAJOR << 16) | ZEND_MIR_W05_CONTRACT_VERSION_MINOR)
-
-/*
- * W06 adds pointer-free storage, payload, reference, alias, ownership,
- * separation and parameter-mode identities. Existing W01-W05 identities and
- * record layouts remain unchanged.
- */
-#define ZEND_MIR_W06_CONTRACT_VERSION_MINOR UINT32_C(9)
-#define ZEND_MIR_W06_CONTRACT_VERSION \
-	((ZEND_MIR_CONTRACT_VERSION_MAJOR << 16) | ZEND_MIR_W06_CONTRACT_VERSION_MINOR)
-
-/*
- * W11P makes executable boxed-value instructions self-describing. Source
- * positions remain diagnostic identity; operand slots, literals, opcode flags
- * and modes are carried independently and never reconstructed from a source
- * instruction record.
- * Minor 13 also publishes the canonical Zend storage location of each
- * source-SSA value so boxed PHIs can be proven without a second IR. Minor 16
- * publishes the original op1 SSA definition of in-place mutations so the
- * machine-value-authoritative result can cross explicit fast/cold
- * continuations.
- */
-#define ZEND_MIR_W11P_CONTRACT_VERSION_MINOR UINT32_C(16)
-#define ZEND_MIR_W11P_CONTRACT_VERSION \
-	((ZEND_MIR_CONTRACT_VERSION_MAJOR << 16) | ZEND_MIR_W11P_CONTRACT_VERSION_MINOR)
-
-/*
- * W14 freezes source-backed suspend liveness at the target-neutral value-model
- * boundary. Native lowering consumes this table directly and never
- * reconstructs it from Zend SSA, projected instructions, or canonical frame
- * locations.
- */
-#define ZEND_MIR_W14_CONTRACT_VERSION_MINOR UINT32_C(17)
-#define ZEND_MIR_W14_CONTRACT_VERSION \
-	((ZEND_MIR_CONTRACT_VERSION_MAJOR << 16) | ZEND_MIR_W14_CONTRACT_VERSION_MINOR)
-
 #define ZEND_MIR_ID_INVALID UINT32_C(0xffffffff)
 #define ZEND_MIR_ID_MAX UINT32_C(0xfffffffe)
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile and run the standalone W02-A MIR core tests."""
+"""Compile and run the standalone MIR core tests."""
 
 from __future__ import annotations
 

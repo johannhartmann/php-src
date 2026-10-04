@@ -79,7 +79,7 @@ typedef struct _zend_native_compiled_function {
 	bool leaf_scalar_frame_known;
 	bool leaf_scalar_frame;
 	/*
-	 * Entry specialization (ADR 0024 amendment, concept.md package 4): a
+	 * Entry specialization (ADR 0024): a
 	 * function with untyped integer parameters also compiles a variant from
 	 * a private op array copy whose arg_info declares those parameters int.
 	 * The general entry checks the arguments once and jumps to the variant,
@@ -104,8 +104,6 @@ struct _zend_native_compiler {
 	zend_native_compile_observer_t observer;
 	void *observer_context;
 	zend_native_compile_fault fault;
-	uint32_t unavailable_runtime_helper;
-	bool abi_conformance_probe;
 	bool source_probe;
 	bool defer_publication;
 	bool direct_reentry;
@@ -746,63 +744,7 @@ static bool zend_native_compiler_verify_stage2(
 
 	return module_context->compiler->fault
 			!= ZEND_NATIVE_COMPILE_FAULT_STAGE2_VERIFY
-		&& zend_mir_verify_w03_scalar(view, diagnostics);
-}
-
-static zend_mir_scalar_type_mask zend_native_compiler_scalar_type_from_zval(
-	const zval *value)
-{
-	switch (Z_TYPE_P(value)) {
-		case IS_NULL:
-			return ZEND_MIR_SCALAR_TYPE_NULL;
-		case IS_FALSE:
-		case IS_TRUE:
-			return ZEND_MIR_SCALAR_TYPE_I1;
-		case IS_LONG:
-			return ZEND_MIR_SCALAR_TYPE_I64;
-		case IS_DOUBLE:
-			return ZEND_MIR_SCALAR_TYPE_F64;
-		default:
-			return ZEND_MIR_SCALAR_TYPE_NONE;
-	}
-}
-
-static zend_mir_scalar_type_mask zend_native_compiler_ssa_exact_type(
-	const zend_ssa *ssa, int variable)
-{
-	uint32_t type;
-
-	if (ssa == NULL || ssa->var_info == NULL || variable < 0
-			|| variable >= ssa->vars_count) {
-		return ZEND_MIR_SCALAR_TYPE_NONE;
-	}
-	type = ssa->var_info[variable].type;
-	switch (type) {
-		case MAY_BE_NULL:
-			return ZEND_MIR_SCALAR_TYPE_NULL;
-		case MAY_BE_FALSE:
-		case MAY_BE_TRUE:
-		case MAY_BE_BOOL:
-			return ZEND_MIR_SCALAR_TYPE_I1;
-		case MAY_BE_LONG:
-			return ZEND_MIR_SCALAR_TYPE_I64;
-		case MAY_BE_DOUBLE:
-			return ZEND_MIR_SCALAR_TYPE_F64;
-		default:
-			return ZEND_MIR_SCALAR_TYPE_NONE;
-	}
-}
-
-static zend_mir_scalar_type_mask zend_native_compiler_operand_exact_type(
-	const zend_op_array *op_array, const zend_ssa *ssa,
-	uint32_t opline_index, uint8_t operand_type, const znode_op *operand,
-	int ssa_use)
-{
-	if (operand_type == IS_CONST) {
-		return zend_native_compiler_scalar_type_from_zval(
-			RT_CONSTANT(&op_array->opcodes[opline_index], *operand));
-	}
-	return zend_native_compiler_ssa_exact_type(ssa, ssa_use);
+		&& zend_mir_verify_scalar_module(view, diagnostics);
 }
 
 static zend_native_compiled_function *zend_native_compiler_find_function(
@@ -1527,7 +1469,6 @@ static bool zend_native_compiler_prepare_source_effects(
 	zend_native_compiled_function *function)
 {
 	const zend_op_array *source = function->op_array;
-	uint32_t echo_count = 0;
 	uint32_t index;
 
 	if (source == NULL || function->ssa.ops == NULL
@@ -1536,26 +1477,18 @@ static bool zend_native_compiler_prepare_source_effects(
 					|| function->ssa.var_info == NULL))) {
 		return false;
 	}
-	if (compiler->abi_conformance_probe) {
-		for (index = 0; index < source->last; index++) {
-			if (source->opcodes[index].opcode == ZEND_ECHO) {
-				echo_count++;
-			}
-		}
-	}
 	/*
-	 * Echo effects exist only for the ABI probe and debug probes only for
-	 * the source probe. Exception routes need at most one effect per opline,
-	 * and only a function with a try/catch/finally region has any.
+	 * Debug probes exist only for the source probe. Exception routes need at
+	 * most one effect per opline, and only a function with a
+	 * try/catch/finally region has any.
 	 */
-	if ((uint64_t) echo_count
-			+ (compiler->source_probe ? source->last : 0)
+	if ((uint64_t) (compiler->source_probe ? source->last : 0)
 			+ (source->last_try_catch != 0 ? source->last : 0)
 			> UINT32_MAX) {
 		return false;
 	}
-	function->source_effect_capacity = echo_count
-		+ (compiler->source_probe ? source->last : 0)
+	function->source_effect_capacity =
+		(compiler->source_probe ? source->last : 0)
 		+ (source->last_try_catch != 0 ? source->last : 0);
 	if (function->source_effect_capacity != 0) {
 		function->source_effects = zend_native_compiler_alloc(
@@ -1563,34 +1496,6 @@ static bool zend_native_compiler_prepare_source_effects(
 			function->source_effect_capacity
 				* sizeof(*function->source_effects),
 			true);
-	}
-	for (index = 0; compiler->abi_conformance_probe
-			&& index < source->last; index++) {
-		const zend_op *original = &source->opcodes[index];
-		const zend_ssa_op *ssa_op = &function->ssa.ops[index];
-
-		if (original->opcode == ZEND_ECHO) {
-			zend_mir_scalar_type_mask type = zend_native_compiler_operand_exact_type(
-				source, &function->ssa, index, original->op1_type,
-				&original->op1, ssa_op->op1_use);
-
-			if (!zend_mir_scalar_type_is_exact(type)) {
-				zend_native_compiler_set_diagnostic(
-					compiler, NULL, ZEND_NATIVE_COMPILE_PHASE_LOWERING,
-					ZEND_MIRL_W05_RUNTIME_EFFECT_DEFERRED,
-					"native echo requires an exact scalar value");
-				return false;
-			}
-			if (compiler->abi_conformance_probe) {
-				zend_native_source_effect *effect =
-					&function->source_effects[function->source_effect_count++];
-
-				effect->source_position_id = index;
-				effect->kind = ZEND_NATIVE_SOURCE_EFFECT_ABI_CONFORMANCE;
-				effect->exact_type = type;
-				effect->target_block_id = ZEND_MIR_ID_INVALID;
-			}
-		}
 	}
 	for (index = 0; compiler->source_probe && index < source->last; index++) {
 		zend_native_source_effect *effect =
@@ -1799,7 +1704,7 @@ static bool zend_native_compiler_lower_function(
 	zend_native_compiler_module_context module_context;
 	zend_mir_lowering_module_ops module_ops;
 	zend_mir_diagnostic_sink diagnostics;
-	zend_mir_w08_lowering_result result;
+	zend_mir_lowering_result result;
 
 	if (!function->source_effects_prepared
 			&& !zend_native_compiler_prepare_source_effects(
@@ -1814,7 +1719,7 @@ static bool zend_native_compiler_lower_function(
 				compiler, function)) {
 		zend_native_compiler_set_diagnostic(
 			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_LOWERING,
-			ZEND_MIRL_W04_SOURCE_MIR_MAPPING_FAILED,
+			ZEND_MIRL_SOURCE_MIR_MAPPING_FAILED,
 			"cannot build native exception routes");
 		return false;
 	}
@@ -1840,12 +1745,13 @@ static bool zend_native_compiler_lower_function(
 		? zend_mir_lower_typed_zend_op_array(
 			compiler->script, function->op_array,
 			&function->ssa, &module_ops, &diagnostics)
-		: zend_mir_lower_w11_zend_op_array(
+		: zend_mir_lower_zend_op_array(
 			compiler->script, function->op_array,
 			&function->ssa, &module_ops, &diagnostics);
-	if (!zend_mir_lowering_result_is_w08_failure_atomic(&result)) {
-		if (result.lowering.module != NULL) {
-			zend_mir_module_destroy(result.lowering.module);
+	if (!zend_mir_lowering_result_is_failure_atomic(
+			&result, ZEND_MIR_LOWERING_GUARANTEE_FINALIZED)) {
+		if (result.module != NULL) {
+			zend_mir_module_destroy(result.module);
 		}
 		zend_native_compiler_set_diagnostic(
 			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_LOWERING,
@@ -1853,15 +1759,15 @@ static bool zend_native_compiler_lower_function(
 			"native lowering returned a non-atomic result");
 		return false;
 	}
-	if (result.lowering.status != ZEND_MIR_LOWERING_SUCCESS
-			|| result.lowering.module == NULL) {
+	if (result.status != ZEND_MIR_LOWERING_SUCCESS
+			|| result.module == NULL) {
 		char message[192];
 		const char *function_name = function->op_array->function_name != NULL
 			? ZSTR_VAL(function->op_array->function_name) : "{main}";
 
 		if (compiler->last_diagnostic.message[0] != '\0'
 				&& compiler->last_diagnostic.code
-					== result.lowering.diagnostic_code) {
+					== result.diagnostic_code) {
 			if (diagnostic != NULL) {
 				*diagnostic = compiler->last_diagnostic;
 			}
@@ -1869,18 +1775,18 @@ static bool zend_native_compiler_lower_function(
 		}
 		snprintf(message, sizeof(message),
 			"native lowering rejected reachable function %.96s (MIRL%04u)",
-			function_name, (unsigned int) result.lowering.diagnostic_code);
+			function_name, (unsigned int) result.diagnostic_code);
 		zend_native_compiler_set_diagnostic(
 			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_LOWERING,
-			result.lowering.diagnostic_code,
+			result.diagnostic_code,
 			message);
 		return false;
 	}
-	function->module = result.lowering.module;
+	function->module = result.module;
 	if (!zend_native_compiler_add_exception_routes(compiler, function)) {
 		zend_native_compiler_set_diagnostic(
 			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_LOWERING,
-			ZEND_MIRL_W04_SOURCE_MIR_MAPPING_FAILED,
+			ZEND_MIRL_SOURCE_MIR_MAPPING_FAILED,
 			"native exception route mapping failed");
 		return false;
 	}
@@ -3072,7 +2978,7 @@ static bool zend_native_compiler_discover_native_callees(
 					continue;
 				}
 				if (callback == NULL) {
-					/* W10 callback APIs resolve callable values at runtime.  The
+					/* Callback APIs resolve callable values at runtime.  The
 					 * request-local execute hook compiles an already loaded user
 					 * target on first reentry; invalid callables remain the internal
 					 * API's semantic error, not a native compile-time rejection. */
@@ -3413,9 +3319,6 @@ static bool zend_native_compiler_compile_shared_component(
 	zend_native_code *owner_code = NULL;
 	zend_native_diagnostic diagnostic;
 	const zend_native_runtime_api *runtime = zend_native_runtime_get();
-	zend_native_runtime_api injected_runtime;
-	zend_native_runtime_helper injected_helpers[
-		ZEND_NATIVE_HELPER_COUNT - 1];
 	uint32_t member_count = 0;
 	uint32_t index = 0;
 	uint32_t registry_index;
@@ -3466,29 +3369,6 @@ static bool zend_native_compiler_compile_shared_component(
 			goto failure;
 		}
 	}
-	if (compiler->unavailable_runtime_helper != 0) {
-		uint32_t helper_index;
-
-		if (runtime->helper_count > ZEND_NATIVE_HELPER_COUNT - 1) {
-			goto failure;
-		}
-		memcpy(injected_helpers, runtime->helpers,
-			runtime->helper_count * sizeof(*injected_helpers));
-		for (helper_index = 0;
-				helper_index < runtime->helper_count; helper_index++) {
-			if (injected_helpers[helper_index].id
-					== compiler->unavailable_runtime_helper) {
-				injected_helpers[helper_index].address = NULL;
-				break;
-			}
-		}
-		if (helper_index == runtime->helper_count) {
-			goto failure;
-		}
-		injected_runtime = *runtime;
-		injected_runtime.helpers = injected_helpers;
-		runtime = &injected_runtime;
-	}
 	backend_members = safe_emalloc(
 		member_count, sizeof(*backend_members), 0);
 	for (index = 0; index < member_count; index++) {
@@ -3514,7 +3394,7 @@ static bool zend_native_compiler_compile_shared_component(
 	}
 	memset(&diagnostic, 0, sizeof(diagnostic));
 	phase_started = zend_hrtime();
-	if (zend_tpde_compile_component_w14_with_runtime(
+	if (zend_tpde_compile_component_with_runtime(
 			compiler->target, backend_members, member_count,
 			runtime, &image, &diagnostic) == FAILURE) {
 		compiler->stats.codegen_ns += zend_hrtime() - phase_started;
@@ -3831,51 +3711,11 @@ static bool zend_native_compiler_compile_native_component(
 		function->internal_call_cell_count = internal_binding_count;
 		memset(&diagnostic, 0, sizeof(diagnostic));
 		const zend_native_runtime_api *runtime = zend_native_runtime_get();
-		zend_native_runtime_api injected_runtime;
 		zend_hrtime_t phase_started;
 		zend_result compile_result;
 		zend_native_image_metrics image_metrics;
-		zend_native_runtime_helper injected_helpers[
-			ZEND_NATIVE_HELPER_COUNT - 1];
-		if (compiler->unavailable_runtime_helper != 0) {
-			uint32_t helper_index;
-
-			if (runtime->helper_count > ZEND_NATIVE_HELPER_COUNT - 1) {
-				efree(bindings);
-				efree(internal_bindings);
-				zend_native_compiler_backend_failure(
-					compiler, product_diagnostic,
-					ZEND_NATIVE_COMPILE_PHASE_CODEGEN, NULL);
-				zend_native_compiler_fail_pending_component(
-					compiler, component_id);
-				return false;
-			}
-			memcpy(injected_helpers, runtime->helpers,
-				runtime->helper_count * sizeof(*injected_helpers));
-			for (helper_index = 0;
-					helper_index < runtime->helper_count; helper_index++) {
-				if (injected_helpers[helper_index].id
-						== compiler->unavailable_runtime_helper) {
-					injected_helpers[helper_index].address = NULL;
-					break;
-				}
-			}
-			if (helper_index == runtime->helper_count) {
-				efree(bindings);
-				efree(internal_bindings);
-				zend_native_compiler_backend_failure(
-					compiler, product_diagnostic,
-					ZEND_NATIVE_COMPILE_PHASE_CODEGEN, NULL);
-				zend_native_compiler_fail_pending_component(
-					compiler, component_id);
-				return false;
-			}
-			injected_runtime = *runtime;
-			injected_runtime.helpers = injected_helpers;
-			runtime = &injected_runtime;
-		}
 		phase_started = zend_hrtime();
-		compile_result = zend_tpde_compile_module_w08_with_runtime(
+		compile_result = zend_tpde_compile_module_with_runtime(
 				compiler->target,
 				zend_native_compiler_module_view(compiler, function->module),
 				bindings, binding_count,
@@ -4651,20 +4491,6 @@ zend_result zend_native_compiler_snapshot_publication_delta(
 	return result;
 }
 
-zend_native_codeunit_state zend_native_compiler_codeunit_state(
-	const zend_native_compiler *compiler, const zend_function *function)
-{
-	zend_native_compiled_function *compiled;
-
-	if (compiler == NULL || function == NULL
-			|| !ZEND_USER_CODE(function->type)) {
-		return ZEND_NATIVE_CODEUNIT_UNSEEN;
-	}
-	compiled = zend_native_compiler_find_function(
-		compiler, &function->op_array);
-	return compiled != NULL ? compiled->state : ZEND_NATIVE_CODEUNIT_UNSEEN;
-}
-
 uint32_t zend_native_compiler_codeunit_count(
 	const zend_native_compiler *compiler, zend_native_codeunit_state state)
 {
@@ -5093,39 +4919,6 @@ static zend_native_status zend_native_compiler_execute_published_impl(
 	return status;
 }
 
-zend_native_status zend_native_compiler_execute_published(
-	zend_native_compiler *compiler,
-	zend_native_entry_cell *entry_cell,
-	const zend_native_code *code,
-	zend_execute_data *execute_data,
-	zend_native_diagnostic *diagnostic)
-{
-	return zend_native_compiler_execute_published_impl(
-		compiler, entry_cell, code, execute_data, diagnostic, false);
-}
-
-zend_native_status zend_native_compiler_execute_observed_published(
-	zend_native_compiler *compiler,
-	zend_native_entry_cell *entry_cell,
-	const zend_native_code *code,
-	zend_execute_data *execute_data,
-	zend_native_diagnostic *diagnostic)
-{
-	return zend_native_compiler_execute_published_impl(
-		compiler, entry_cell, code, execute_data, diagnostic, true);
-}
-
-zend_native_status zend_native_compiler_execute_entry(
-	zend_native_compiler *compiler,
-	zend_native_entry_cell *entry_cell,
-	zend_execute_data *execute_data,
-	zend_native_diagnostic *diagnostic)
-{
-	return zend_native_compiler_execute_published(
-		compiler, entry_cell, zend_native_entry_cell_load(entry_cell),
-		execute_data, diagnostic);
-}
-
 static zend_native_status zend_native_compiler_execute_data_impl(
 	zend_native_compiler *compiler,
 	zend_execute_data *execute_data,
@@ -5166,15 +4959,6 @@ static zend_native_status zend_native_compiler_execute_data_impl(
 		execute_data, diagnostic, observer_already_started);
 }
 
-zend_native_status zend_native_compiler_execute_data(
-	zend_native_compiler *compiler,
-	zend_execute_data *execute_data,
-	zend_native_diagnostic *diagnostic)
-{
-	return zend_native_compiler_execute_data_impl(
-		compiler, execute_data, diagnostic, false);
-}
-
 zend_native_status zend_native_compiler_execute_observed_data(
 	zend_native_compiler *compiler,
 	zend_execute_data *execute_data,
@@ -5210,9 +4994,6 @@ zend_native_compiler *zend_native_compiler_create(
 	compiler->observer = config->observer;
 	compiler->observer_context = config->observer_context;
 	compiler->fault = config->fault;
-	compiler->unavailable_runtime_helper =
-		config->unavailable_runtime_helper;
-	compiler->abi_conformance_probe = config->abi_conformance_probe;
 	compiler->source_probe = config->source_probe;
 	compiler->defer_publication = config->defer_publication;
 	compiler->direct_reentry = config->direct_reentry;
@@ -6634,13 +6415,6 @@ const zend_native_code *zend_native_compiler_code_at(
 {
 	return compiler != NULL && index < compiler->function_count
 		? compiler->functions[index]->code : NULL;
-}
-
-const zend_native_image *zend_native_compiler_image_at(
-	const zend_native_compiler *compiler, uint32_t index)
-{
-	return compiler != NULL && index < compiler->function_count
-		? compiler->functions[index]->image : NULL;
 }
 
 const zend_native_image *zend_native_compiler_image_for(

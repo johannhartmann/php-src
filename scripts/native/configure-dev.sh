@@ -7,7 +7,7 @@ SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
 if [[ ${1:-} == -h || ${1:-} == --help ]]; then
     cat <<'EOF'
-Configure a php-src W00 developer build (debug-nts by default).
+Configure a php-src native developer build (debug-nts by default).
 
 Usage: configure-dev.sh [--profile PROFILE] [--force] [--print-build-dir]
 

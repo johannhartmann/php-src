@@ -43,7 +43,7 @@ are in the [safepoint contract](../semantics/frames/safepoint-contract.md).
 - Suspended state owns its values and code-version reference until resume or
   destruction.
 - Retired or mismatched code versions cannot be resumed.
-- Baseline and future optimized tiers share one resume entry and frame model.
+- Generic and specialized code versions share one resume entry and frame model.
 
 ## Alternatives
 

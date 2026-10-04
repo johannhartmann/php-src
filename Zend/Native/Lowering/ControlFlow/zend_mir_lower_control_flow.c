@@ -11,7 +11,7 @@
 #include "../../MIR/Scalar/zend_mir_scalar_descriptors.h"
 #include "zend_mir_control_flow_internal.h"
 
-typedef struct _zend_mir_w04_phi_analysis {
+typedef struct _zend_mir_phi_analysis {
 	uint32_t phi_count;
 	uint32_t input_count;
 	uint32_t block_count;
@@ -22,16 +22,16 @@ typedef struct _zend_mir_w04_phi_analysis {
 	uint32_t *edge_offsets;
 	zend_mir_source_edge_ref *edges;
 	bool *dynamic_members;
-} zend_mir_w04_phi_analysis;
+} zend_mir_phi_analysis;
 
-static uint32_t zend_mir_w04_cycle_block_count(const void *context)
+static uint32_t zend_mir_cycle_block_count(const void *context)
 {
 	const zend_mir_lowering_source_view *source = context;
 
 	return source->block_count(source->context);
 }
 
-static bool zend_mir_w04_cycle_block_at(
+static bool zend_mir_cycle_block_at(
 	const void *context, uint32_t index, bool *irreducible)
 {
 	const zend_mir_lowering_source_view *source = context;
@@ -47,14 +47,14 @@ static bool zend_mir_w04_cycle_block_at(
 	return true;
 }
 
-static uint32_t zend_mir_w04_cycle_edge_count(const void *context)
+static uint32_t zend_mir_cycle_edge_count(const void *context)
 {
 	const zend_mir_lowering_source_view *source = context;
 
 	return source->edge_count(source->context);
 }
 
-static bool zend_mir_w04_cycle_edge_at(
+static bool zend_mir_cycle_edge_at(
 	const void *context, uint32_t index,
 	uint32_t *from_block_id, uint32_t *to_block_id,
 	bool *requires_statepoint)
@@ -70,11 +70,11 @@ static bool zend_mir_w04_cycle_edge_at(
 	}
 	*from_block_id = edge.from_block_id;
 	*to_block_id = edge.to_block_id;
-	*requires_statepoint = zend_mir_w04_edge_requires_statepoint(&edge);
+	*requires_statepoint = zend_mir_edge_requires_statepoint(&edge);
 	return true;
 }
 
-static bool zend_mir_w04_analyze_cycles(
+static bool zend_mir_analyze_cycles(
 	zend_mir_control_flow_cycle_analysis *analysis,
 	const zend_mir_lowering_source_view *source)
 {
@@ -82,15 +82,15 @@ static bool zend_mir_w04_analyze_cycles(
 
 	memset(&graph, 0, sizeof(graph));
 	graph.context = source;
-	graph.block_count = zend_mir_w04_cycle_block_count;
-	graph.block_at = zend_mir_w04_cycle_block_at;
-	graph.edge_count = zend_mir_w04_cycle_edge_count;
-	graph.edge_at = zend_mir_w04_cycle_edge_at;
+	graph.block_count = zend_mir_cycle_block_count;
+	graph.block_at = zend_mir_cycle_block_at;
+	graph.edge_count = zend_mir_cycle_edge_count;
+	graph.edge_at = zend_mir_cycle_edge_at;
 	return zend_mir_control_flow_cycle_analysis_init(analysis, &graph);
 }
 
-static void zend_mir_w04_phi_analysis_destroy(
-	zend_mir_w04_phi_analysis *analysis)
+static void zend_mir_phi_analysis_destroy(
+	zend_mir_phi_analysis *analysis)
 {
 	if (analysis == NULL) {
 		return;
@@ -104,7 +104,7 @@ static void zend_mir_w04_phi_analysis_destroy(
 	memset(analysis, 0, sizeof(*analysis));
 }
 
-static zend_mir_lowering_result zend_mir_w04_result(
+static zend_mir_lowering_result zend_mir_cf_result(
 	zend_mir_lowering_status status, zend_mir_lowering_diagnostic_code code)
 {
 	zend_mir_lowering_result result;
@@ -114,25 +114,25 @@ static zend_mir_lowering_result zend_mir_w04_result(
 	return result;
 }
 
-static zend_mir_lowering_result zend_mir_w04_abort(
+static zend_mir_lowering_result zend_mir_abort(
 	zend_mir_lowering_context *context, zend_mir_module *module,
 	zend_mir_control_flow_map_storage *storage,
-	zend_mir_w04_phi_analysis *phi_analysis,
+	zend_mir_phi_analysis *phi_analysis,
 	zend_mir_lowering_status status, zend_mir_lowering_diagnostic_code code)
 {
 	if (module != NULL) {
 		context->module_ops.destroy(context->module_ops.context, module);
 	}
-	zend_mir_w04_phi_analysis_destroy(phi_analysis);
+	zend_mir_phi_analysis_destroy(phi_analysis);
 	zend_mir_control_flow_map_storage_destroy(storage);
 	context->busy = false;
 	context->current_provider = NULL;
 	context->current_opcode = NULL;
 	context->values_predeclared = false;
-	return zend_mir_w04_result(status, code);
+	return zend_mir_cf_result(status, code);
 }
 
-static bool zend_mir_w04_raw_fact_for_ssa(
+static bool zend_mir_raw_fact_for_ssa(
 	const zend_mir_lowering_context *context, uint32_t ssa_variable_id,
 	zend_mir_value_fact_ref *fact_out,
 	zend_mir_representation *representation_out)
@@ -152,7 +152,7 @@ static bool zend_mir_w04_raw_fact_for_ssa(
 	return *representation_out != ZEND_MIR_REPRESENTATION_INVALID;
 }
 
-static uint32_t zend_mir_w04_phi_component_find(
+static uint32_t zend_mir_phi_component_find(
 	uint32_t *parents, uint32_t member)
 {
 	uint32_t root = member;
@@ -167,11 +167,11 @@ static uint32_t zend_mir_w04_phi_component_find(
 	return root;
 }
 
-static void zend_mir_w04_phi_component_union(
+static void zend_mir_phi_component_union(
 	uint32_t *parents, uint8_t *ranks, uint32_t left, uint32_t right)
 {
-	uint32_t left_root = zend_mir_w04_phi_component_find(parents, left);
-	uint32_t right_root = zend_mir_w04_phi_component_find(parents, right);
+	uint32_t left_root = zend_mir_phi_component_find(parents, left);
+	uint32_t right_root = zend_mir_phi_component_find(parents, right);
 
 	if (left_root == right_root) {
 		return;
@@ -186,9 +186,9 @@ static void zend_mir_w04_phi_component_union(
 	}
 }
 
-static bool zend_mir_w09_phi_is_dynamic(
+static bool zend_mir_phi_is_dynamic(
 	const zend_mir_lowering_context *context,
-	const zend_mir_w04_phi_analysis *analysis,
+	const zend_mir_phi_analysis *analysis,
 	const zend_mir_source_phi_ref *phi)
 {
 	zend_mir_value_fact_ref result_fact;
@@ -197,7 +197,7 @@ static bool zend_mir_w09_phi_is_dynamic(
 
 	if (context == NULL || analysis == NULL || phi == NULL
 			|| phi->id >= analysis->phi_count
-			|| !zend_mir_w04_raw_fact_for_ssa(context,
+			|| !zend_mir_raw_fact_for_ssa(context,
 				phi->result_ssa_variable_id, &result_fact,
 				&result_representation)
 			|| result_representation == ZEND_MIR_REPRESENTATION_ZVAL) {
@@ -214,7 +214,7 @@ static bool zend_mir_w09_phi_is_dynamic(
 				analysis->input_indices[i], &input)) {
 			return true;
 		}
-		if (!zend_mir_w04_raw_fact_for_ssa(context,
+		if (!zend_mir_raw_fact_for_ssa(context,
 				input.source_ssa_variable_id, &input_fact,
 				&input_representation)
 				|| input_representation != result_representation
@@ -225,7 +225,7 @@ static bool zend_mir_w09_phi_is_dynamic(
 	return false;
 }
 
-static bool zend_mir_w04_phi_is_dead(
+static bool zend_mir_phi_is_dead(
 	const zend_mir_lowering_context *context, uint32_t ssa_variable_id)
 {
 	const zend_ssa *ssa = context->zend_source != NULL
@@ -237,9 +237,9 @@ static bool zend_mir_w04_phi_is_dead(
 		&& ssa->vars[ssa_variable_id].phi_use_chain == NULL;
 }
 
-static bool zend_mir_w04_phi_join_inputs(
+static bool zend_mir_phi_join_inputs(
 	const zend_mir_lowering_context *context,
-	const zend_mir_w04_phi_analysis *analysis, uint32_t phi_index,
+	const zend_mir_phi_analysis *analysis, uint32_t phi_index,
 	uint32_t ssa_count, uint32_t *parents, uint8_t *ranks, bool *members)
 {
 	zend_mir_source_phi_ref phi;
@@ -258,7 +258,7 @@ static bool zend_mir_w04_phi_join_inputs(
 			return false;
 		}
 		members[input.source_ssa_variable_id] = true;
-		zend_mir_w04_phi_component_union(
+		zend_mir_phi_component_union(
 			parents, ranks, phi.result_ssa_variable_id,
 			input.source_ssa_variable_id);
 	}
@@ -266,16 +266,16 @@ static bool zend_mir_w04_phi_join_inputs(
 }
 
 /*
- * W09 executes refcounted and dynamically typed value operations against the
+ * Refcounted and dynamically typed value operations execute against the
  * real source frame.  Zend SSA can still contain merge nodes for those slots
  * after the private scalar prerequisite projection removes the defining value
  * opcodes.  Keep the original PHI topology and stable IDs, but represent the
  * entire connected dynamic-PHI component as zvals without inventing scalar
  * facts for it.
  */
-static bool zend_mir_w04_phi_analysis_init(
+static bool zend_mir_phi_analysis_init(
 	const zend_mir_lowering_context *context,
-	zend_mir_w04_phi_analysis *analysis)
+	zend_mir_phi_analysis *analysis)
 {
 	uint32_t *parents = NULL;
 	uint32_t *cursors = NULL;
@@ -484,8 +484,7 @@ static bool zend_mir_w04_phi_analysis_init(
 	free(phi_by_result);
 	phi_by_result = NULL;
 
-	if (context->zend_source == NULL || !context->zend_source->w09
-			|| ssa_count == 0 || analysis->phi_count == 0) {
+	if (context->zend_source == NULL || ssa_count == 0 || analysis->phi_count == 0) {
 		return true;
 	}
 	parents = malloc((size_t) ssa_count * sizeof(*parents));
@@ -504,7 +503,6 @@ static bool zend_mir_w04_phi_analysis_init(
 	}
 	for (i = 0; i < analysis->phi_count; i++) {
 		zend_mir_source_phi_ref phi;
-		uint32_t j;
 		if (!context->source->phi_at(
 				context->source->context, i, &phi)
 				|| phi.id != i
@@ -516,10 +514,10 @@ static bool zend_mir_w04_phi_analysis_init(
 		 * merge after an outer loop) joins its inputs only below, when it
 		 * or one of them is dynamic: joining a scalar one would box every
 		 * value its inputs connect to. */
-		if (zend_mir_w04_phi_is_dead(context, phi.result_ssa_variable_id)) {
+		if (zend_mir_phi_is_dead(context, phi.result_ssa_variable_id)) {
 			continue;
 		}
-		if (!zend_mir_w04_phi_join_inputs(
+		if (!zend_mir_phi_join_inputs(
 				context, analysis, i, ssa_count, parents, ranks, members)) {
 			goto failed;
 		}
@@ -530,8 +528,8 @@ static bool zend_mir_w04_phi_analysis_init(
 				context->source->context, i, &phi)) {
 			goto failed;
 		}
-		if (zend_mir_w09_phi_is_dynamic(context, analysis, &phi)) {
-			component_dynamic[zend_mir_w04_phi_component_find(
+		if (zend_mir_phi_is_dynamic(context, analysis, &phi)) {
+			component_dynamic[zend_mir_phi_component_find(
 				parents, phi.result_ssa_variable_id)] = true;
 		}
 	}
@@ -550,11 +548,11 @@ static bool zend_mir_w04_phi_analysis_init(
 					context->source->context, i, &phi)) {
 				goto failed;
 			}
-			if (!zend_mir_w04_phi_is_dead(
+			if (!zend_mir_phi_is_dead(
 					context, phi.result_ssa_variable_id)) {
 				continue;
 			}
-			root = zend_mir_w04_phi_component_find(
+			root = zend_mir_phi_component_find(
 				parents, phi.result_ssa_variable_id);
 			dynamic = component_dynamic[root];
 			for (j = analysis->input_offsets[i];
@@ -566,7 +564,7 @@ static bool zend_mir_w04_phi_analysis_init(
 						|| input.source_ssa_variable_id >= ssa_count) {
 					goto failed;
 				}
-				dynamic = component_dynamic[zend_mir_w04_phi_component_find(
+				dynamic = component_dynamic[zend_mir_phi_component_find(
 					parents, input.source_ssa_variable_id)];
 			}
 			if (!dynamic) {
@@ -581,7 +579,7 @@ static bool zend_mir_w04_phi_analysis_init(
 						analysis->input_indices[j], &input)) {
 					goto failed;
 				}
-				input_root = zend_mir_w04_phi_component_find(
+				input_root = zend_mir_phi_component_find(
 					parents, input.source_ssa_variable_id);
 				if (root == input_root) {
 					continue;
@@ -590,9 +588,9 @@ static bool zend_mir_w04_phi_analysis_init(
 					changed = true;
 				}
 				members[input.source_ssa_variable_id] = true;
-				zend_mir_w04_phi_component_union(
+				zend_mir_phi_component_union(
 					parents, ranks, root, input_root);
-				root = zend_mir_w04_phi_component_find(
+				root = zend_mir_phi_component_find(
 					parents, phi.result_ssa_variable_id);
 				component_dynamic[root] = true;
 			}
@@ -602,7 +600,7 @@ static bool zend_mir_w04_phi_analysis_init(
 	for (i = 0; i < ssa_count; i++) {
 		if (members[i]) {
 			analysis->dynamic_members[i] =
-				component_dynamic[zend_mir_w04_phi_component_find(
+				component_dynamic[zend_mir_phi_component_find(
 					parents, i)];
 		}
 	}
@@ -619,13 +617,13 @@ failed:
 	free(ranks);
 	free(parents);
 	free(cursors);
-	zend_mir_w04_phi_analysis_destroy(analysis);
+	zend_mir_phi_analysis_destroy(analysis);
 	return false;
 }
 
-static bool zend_mir_w04_fact_for_ssa(
+static bool zend_mir_cf_fact_for_ssa(
 	const zend_mir_lowering_context *context,
-	const zend_mir_w04_phi_analysis *analysis,
+	const zend_mir_phi_analysis *analysis,
 	uint32_t ssa_variable_id,
 	zend_mir_value_fact_ref *fact_out,
 	zend_mir_representation *representation_out)
@@ -637,18 +635,19 @@ static bool zend_mir_w04_fact_for_ssa(
 				< context->source->ssa_count(context->source->context)
 			&& analysis->dynamic_members[ssa_variable_id])
 			|| (context != NULL && context->zend_source != NULL
-				&& context->zend_source->w09 && context->source != NULL
+				&& context->source != NULL
 				&& context->source->ssa_count != NULL
 				&& ssa_variable_id
 					< context->source->ssa_count(context->source->context)
-				&& !zend_mir_w04_raw_fact_for_ssa(context, ssa_variable_id,
+				&& !zend_mir_raw_fact_for_ssa(context, ssa_variable_id,
 					fact_out, representation_out))) {
 		/*
-		 * W09 executes the canonical source zval when Zend's analysis cannot
-		 * prove one exact non-refcounted scalar type.  Undefined CV inputs are
-		 * one important example: COALESCE must observe them without a warning,
-		 * and its merge result still needs a declared MIR value.  Predeclare all
-		 * such source SSA identities as zvals instead of silently omitting them.
+		 * Executable value operations act on the canonical source zval when
+		 * Zend's analysis cannot prove one exact non-refcounted scalar type.
+		 * Undefined CV inputs are one important example: COALESCE must observe
+		 * them without a warning, and its merge result still needs a declared
+		 * MIR value.  Predeclare all such source SSA identities as zvals
+		 * instead of silently omitting them.
 		 */
 		memset(fact_out, 0, sizeof(*fact_out));
 		fact_out->id = ZEND_MIR_ID_INVALID;
@@ -657,13 +656,13 @@ static bool zend_mir_w04_fact_for_ssa(
 		*representation_out = ZEND_MIR_REPRESENTATION_ZVAL;
 		return zend_mir_id_is_valid(fact_out->value_id);
 	}
-	return zend_mir_w04_raw_fact_for_ssa(
+	return zend_mir_raw_fact_for_ssa(
 		context, ssa_variable_id, fact_out, representation_out);
 }
 
-static bool zend_mir_w04_fact_for_operand(
+static bool zend_mir_fact_for_operand(
 	const zend_mir_lowering_context *context,
-	const zend_mir_w04_phi_analysis *analysis,
+	const zend_mir_phi_analysis *analysis,
 	const zend_mir_source_operand_ref *operand,
 	zend_mir_value_fact_ref *fact_out,
 	zend_mir_representation *representation_out)
@@ -674,7 +673,7 @@ static bool zend_mir_w04_fact_for_operand(
 		return false;
 	}
 	if (operand->kind == ZEND_MIR_SOURCE_OPERAND_SSA) {
-		return zend_mir_w04_fact_for_ssa(context, analysis,
+		return zend_mir_cf_fact_for_ssa(context, analysis,
 			operand->ssa_variable_id, fact_out, representation_out);
 	}
 	if (operand->kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
@@ -693,9 +692,9 @@ static bool zend_mir_w04_fact_for_operand(
 	return *representation_out != ZEND_MIR_REPRESENTATION_INVALID;
 }
 
-static bool zend_mir_w04_validate_branch_proofs(
+static bool zend_mir_validate_branch_proofs(
 	const zend_mir_lowering_context *context,
-	const zend_mir_w04_phi_analysis *analysis)
+	const zend_mir_phi_analysis *analysis)
 {
 	uint32_t opcode_count;
 	uint32_t literal_count;
@@ -715,19 +714,19 @@ static bool zend_mir_w04_validate_branch_proofs(
 	}
 	for (i = 0; i < opcode_count; i++) {
 		zend_mir_source_opcode_ref opcode;
-		zend_mir_w04_branch_kind kind;
+		zend_mir_branch_kind kind;
 		zend_mir_value_fact_ref input_fact;
 		zend_mir_representation input_representation;
 		if (!context->source->opcode_at(
 				context->source->context, i, &opcode)) {
 			return false;
 		}
-		kind = zend_mir_w04_branch_kind_for_opcode(
+		kind = zend_mir_branch_kind_for_opcode(
 			opcode.zend_opcode_number);
-		if (kind == ZEND_MIR_W04_BRANCH_KIND_INVALID) {
+		if (kind == ZEND_MIR_BRANCH_KIND_INVALID) {
 			continue;
 		}
-		if (kind == ZEND_MIR_W04_BRANCH_UNCONDITIONAL) {
+		if (kind == ZEND_MIR_BRANCH_UNCONDITIONAL) {
 			if (opcode.op1.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
 					|| opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
 					|| opcode.result.kind
@@ -736,7 +735,7 @@ static bool zend_mir_w04_validate_branch_proofs(
 			}
 			continue;
 		}
-		if (kind == ZEND_MIR_W10_BRANCH_THROW) {
+		if (kind == ZEND_MIR_BRANCH_THROW) {
 			if (opcode.op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
 					|| opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
 					|| opcode.result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED) {
@@ -744,7 +743,7 @@ static bool zend_mir_w04_validate_branch_proofs(
 			}
 			continue;
 		}
-		if (kind == ZEND_MIR_W12_BRANCH_ASSERT_CHECK) {
+		if (kind == ZEND_MIR_BRANCH_ASSERT_CHECK) {
 			if (opcode.op1.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
 					|| opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
 					|| (opcode.result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
@@ -754,7 +753,7 @@ static bool zend_mir_w04_validate_branch_proofs(
 			}
 			continue;
 		}
-		if (kind == ZEND_MIR_W12_BRANCH_MULTIWAY) {
+		if (kind == ZEND_MIR_BRANCH_MULTIWAY) {
 			if (opcode.op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
 					|| opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
 					|| opcode.result.kind
@@ -763,7 +762,7 @@ static bool zend_mir_w04_validate_branch_proofs(
 			}
 			continue;
 		}
-		if (kind == ZEND_MIR_W12_BRANCH_BIND_STATIC) {
+		if (kind == ZEND_MIR_BRANCH_BIND_STATIC) {
 			if ((opcode.op1.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
 					&& opcode.op1.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
 					|| opcode.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
@@ -774,7 +773,7 @@ static bool zend_mir_w04_validate_branch_proofs(
 			}
 			continue;
 		}
-		if (kind == ZEND_MIR_W12_BRANCH_FRAMELESS) {
+		if (kind == ZEND_MIR_BRANCH_FRAMELESS) {
 			if (opcode.op1.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
 					|| opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
 					|| opcode.result.kind
@@ -783,36 +782,36 @@ static bool zend_mir_w04_validate_branch_proofs(
 			}
 			continue;
 		}
-		if (kind == ZEND_MIR_W04_BRANCH_CATCH
-				|| kind == ZEND_MIR_W08_BRANCH_FINALLY_CALL
-				|| kind == ZEND_MIR_W08_BRANCH_FINALLY_RETURN
-				|| kind == ZEND_MIR_W09_BRANCH_ITERATOR) {
+		if (kind == ZEND_MIR_BRANCH_CATCH
+				|| kind == ZEND_MIR_BRANCH_FINALLY_CALL
+				|| kind == ZEND_MIR_BRANCH_FINALLY_RETURN
+				|| kind == ZEND_MIR_BRANCH_ITERATOR) {
 			/*
 			 * FAST_CALL/FAST_RET operands are Zend's private finally-state
 			 * slot and try-table index. They remain source-backed metadata,
 			 * not scalar MIR values.
 			 */
-			if (kind == ZEND_MIR_W04_BRANCH_CATCH
+			if (kind == ZEND_MIR_BRANCH_CATCH
 					&& (opcode.op1.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
 						|| opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
 						|| opcode.result.kind
 							!= ZEND_MIR_SOURCE_OPERAND_UNUSED)) {
 				return false;
 			}
-			if (kind == ZEND_MIR_W09_BRANCH_ITERATOR
+			if (kind == ZEND_MIR_BRANCH_ITERATOR
 					&& opcode.op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
 				return false;
 			}
 			continue;
 		}
-		if (context->zend_source != NULL && context->zend_source->w09) {
+		if (context->zend_source != NULL) {
 			if (opcode.op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
 					|| opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
-					|| ((kind == ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT
-							|| kind == ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT
-							|| kind == ZEND_MIR_W09_BRANCH_COALESCE
-							|| kind == ZEND_MIR_W09_BRANCH_JMP_SET
-							|| kind == ZEND_MIR_W10_BRANCH_JMP_NULL)
+					|| ((kind == ZEND_MIR_BRANCH_IF_FALSE_WITH_RESULT
+							|| kind == ZEND_MIR_BRANCH_IF_TRUE_WITH_RESULT
+							|| kind == ZEND_MIR_BRANCH_COALESCE
+							|| kind == ZEND_MIR_BRANCH_JMP_SET
+							|| kind == ZEND_MIR_BRANCH_JMP_NULL)
 						? opcode.result.kind != ZEND_MIR_SOURCE_OPERAND_SSA
 						: opcode.result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED)) {
 				return false;
@@ -820,7 +819,7 @@ static bool zend_mir_w04_validate_branch_proofs(
 			continue;
 		}
 		if (opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
-				|| !zend_mir_w04_fact_for_operand(
+				|| !zend_mir_fact_for_operand(
 					context, analysis, &opcode.op1,
 					&input_fact, &input_representation)
 				|| (input_fact.flags
@@ -830,12 +829,12 @@ static bool zend_mir_w04_validate_branch_proofs(
 						& ZEND_MIR_VALUE_FACT_FINITE) == 0)) {
 			return false;
 		}
-		if (kind == ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT
-				|| kind == ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT) {
+		if (kind == ZEND_MIR_BRANCH_IF_FALSE_WITH_RESULT
+				|| kind == ZEND_MIR_BRANCH_IF_TRUE_WITH_RESULT) {
 			zend_mir_value_fact_ref result_fact;
 			zend_mir_representation result_representation;
 			if (opcode.result.kind != ZEND_MIR_SOURCE_OPERAND_SSA
-					|| !zend_mir_w04_fact_for_ssa(context, analysis,
+					|| !zend_mir_cf_fact_for_ssa(context, analysis,
 						opcode.result.ssa_variable_id, &result_fact,
 						&result_representation)
 					|| result_fact.exact_type != ZEND_MIR_SCALAR_TYPE_I1
@@ -851,9 +850,9 @@ static bool zend_mir_w04_validate_branch_proofs(
 	return true;
 }
 
-static bool zend_mir_w04_predeclare_values(
+static bool zend_mir_predeclare_values(
 	zend_mir_lowering_context *context, zend_mir_mutator *mutator,
-	const zend_mir_w04_phi_analysis *analysis)
+	const zend_mir_phi_analysis *analysis)
 {
 	uint32_t i;
 	for (i = 0; i < context->source->ssa_count(context->source->context); i++) {
@@ -864,7 +863,7 @@ static bool zend_mir_w04_predeclare_values(
 		if (!context->source->ssa_at(context->source->context, i, &ssa)) {
 			return false;
 		}
-		if (!zend_mir_w04_fact_for_ssa(
+		if (!zend_mir_cf_fact_for_ssa(
 				context, analysis, ssa.ssa_variable_id,
 				&fact, &representation)) {
 			continue;
@@ -885,9 +884,9 @@ static bool zend_mir_w04_predeclare_values(
 	return true;
 }
 
-static bool zend_mir_w04_validate_scalar_phis(
+static bool zend_mir_validate_scalar_phis(
 	const zend_mir_lowering_context *context,
-	const zend_mir_w04_phi_analysis *analysis)
+	const zend_mir_phi_analysis *analysis)
 {
 	uint32_t i;
 	for (i = 0; i < analysis->phi_count; i++) {
@@ -896,7 +895,7 @@ static bool zend_mir_w04_validate_scalar_phis(
 		zend_mir_representation result_representation;
 		uint32_t j;
 		if (!context->source->phi_at(context->source->context, i, &phi)
-				|| !zend_mir_w04_fact_for_ssa(context, analysis,
+				|| !zend_mir_cf_fact_for_ssa(context, analysis,
 					phi.result_ssa_variable_id, &result_fact,
 					&result_representation)) {
 			return false;
@@ -911,7 +910,7 @@ static bool zend_mir_w04_validate_scalar_phis(
 					analysis->input_indices[j], &input)) {
 				return false;
 			}
-			if (!zend_mir_w04_fact_for_ssa(context, analysis,
+			if (!zend_mir_cf_fact_for_ssa(context, analysis,
 					input.source_ssa_variable_id, &input_fact,
 					&input_representation)
 					|| input_representation != result_representation
@@ -925,7 +924,6 @@ static bool zend_mir_w04_validate_scalar_phis(
 		}
 		if (phi.kind == ZEND_MIR_SOURCE_PHI_PI_RANGE
 				&& !(context->zend_source != NULL
-					&& context->zend_source->w09
 					&& result_representation == ZEND_MIR_REPRESENTATION_ZVAL)
 				&& !(result_fact.exact_type == ZEND_MIR_SCALAR_TYPE_F64
 					&& result_representation == ZEND_MIR_REPRESENTATION_DOUBLE)) {
@@ -962,10 +960,10 @@ static bool zend_mir_w04_validate_scalar_phis(
 	return true;
 }
 
-static bool zend_mir_w04_emit_phis(
+static bool zend_mir_emit_phis(
 	zend_mir_lowering_context *context, zend_mir_mutator *mutator,
 	zend_mir_control_flow_map_storage *storage,
-	const zend_mir_w04_phi_analysis *analysis)
+	const zend_mir_phi_analysis *analysis)
 {
 	uint32_t i;
 	for (i = 0; i < analysis->phi_count; i++) {
@@ -979,7 +977,7 @@ static bool zend_mir_w04_emit_phis(
 		if (!context->source->phi_at(context->source->context, i, &phi)
 				|| !zend_mir_control_flow_map_find_block(
 					&storage->public_map, phi.block_id, &block_id)
-				|| !zend_mir_w04_fact_for_ssa(context, analysis,
+				|| !zend_mir_cf_fact_for_ssa(context, analysis,
 					phi.result_ssa_variable_id, &result_fact,
 					&representation)) {
 			return false;
@@ -1016,9 +1014,9 @@ static bool zend_mir_w04_emit_phis(
 	return true;
 }
 
-static bool zend_mir_w04_emit_bool_identity(
+static bool zend_mir_emit_bool_identity(
 	zend_mir_lowering_context *context, zend_mir_mutator *mutator,
-	const zend_mir_w04_phi_analysis *analysis,
+	const zend_mir_phi_analysis *analysis,
 	const zend_mir_source_opcode_ref *opcode)
 {
 	zend_mir_value_fact_ref input_fact;
@@ -1033,10 +1031,10 @@ static bool zend_mir_w04_emit_bool_identity(
 			|| opcode->op1.kind != ZEND_MIR_SOURCE_OPERAND_SSA
 			|| opcode->op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
 			|| opcode->result.kind != ZEND_MIR_SOURCE_OPERAND_SSA
-			|| !zend_mir_w04_fact_for_operand(
+			|| !zend_mir_fact_for_operand(
 				context, analysis, &opcode->op1,
 				&input_fact, &input_representation)
-			|| !zend_mir_w04_fact_for_ssa(context, analysis,
+			|| !zend_mir_cf_fact_for_ssa(context, analysis,
 				opcode->result.ssa_variable_id, &result_fact,
 				&result_representation)
 			|| input_fact.exact_type != ZEND_MIR_SCALAR_TYPE_I1
@@ -1067,10 +1065,10 @@ static bool zend_mir_w04_emit_bool_identity(
 			mutator->context, instruction_id, input_id);
 }
 
-static bool zend_mir_w04_lower_blocks(
+static bool zend_mir_lower_blocks(
 	zend_mir_lowering_context *context, zend_mir_mutator *mutator,
 	zend_mir_control_flow_map_storage *storage,
-	const zend_mir_w04_phi_analysis *analysis)
+	const zend_mir_phi_analysis *analysis)
 {
 	uint32_t i;
 	for (i = 0; i < context->source->block_count(context->source->context); i++) {
@@ -1125,8 +1123,8 @@ static bool zend_mir_w04_lower_blocks(
 					block.first_opcode_ordinal + j, &opcode)) {
 				return false;
 			}
-			if (zend_mir_w04_branch_kind_for_opcode(opcode.zend_opcode_number)
-					!= ZEND_MIR_W04_BRANCH_KIND_INVALID) {
+			if (zend_mir_branch_kind_for_opcode(opcode.zend_opcode_number)
+					!= ZEND_MIR_BRANCH_KIND_INVALID) {
 				uint32_t trailing;
 
 				for (trailing = j + 1; trailing < block.opcode_count;
@@ -1138,7 +1136,7 @@ static bool zend_mir_w04_lower_blocks(
 							block.first_opcode_ordinal + trailing,
 							&trailing_opcode)
 							|| trailing_opcode.zend_opcode_number
-								!= ZEND_MIR_W03_OPCODE_NOP) {
+								!= ZEND_MIR_OPCODE_NOP) {
 						return false;
 					}
 				}
@@ -1146,7 +1144,7 @@ static bool zend_mir_w04_lower_blocks(
 				break;
 			}
 			if (opcode.zend_opcode_number == ZEND_MIR_LOGIC_ZEND_BOOL
-					&& zend_mir_w04_emit_bool_identity(
+					&& zend_mir_emit_bool_identity(
 						context, mutator, analysis, &opcode)) {
 				continue;
 			}
@@ -1171,44 +1169,45 @@ static bool zend_mir_w04_lower_blocks(
 					terminator_source->op1.ssa_variable_id)) {
 			zend_mir_value_fact_ref condition_fact;
 			zend_mir_representation condition_representation;
-			zend_mir_w04_branch_kind branch_kind;
+			zend_mir_branch_kind branch_kind;
 
-			machine_condition = zend_mir_w04_fact_for_operand(
+			machine_condition = zend_mir_fact_for_operand(
 				context, analysis, &terminator_source->op1,
 				&condition_fact, &condition_representation)
 				&& condition_fact.exact_type != ZEND_MIR_SCALAR_TYPE_F64
 				&& condition_representation != ZEND_MIR_REPRESENTATION_ZVAL
 				&& condition_representation != ZEND_MIR_REPRESENTATION_VOID
 				&& condition_representation != ZEND_MIR_REPRESENTATION_CONTROL;
-			branch_kind = zend_mir_w04_branch_kind_for_opcode(
+			branch_kind = zend_mir_branch_kind_for_opcode(
 				terminator_source->zend_opcode_number);
 			if (machine_condition
 					&& (branch_kind
-							== ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT
+							== ZEND_MIR_BRANCH_IF_FALSE_WITH_RESULT
 						|| branch_kind
-							== ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT
-						|| branch_kind == ZEND_MIR_W09_BRANCH_JMP_SET
-						|| branch_kind == ZEND_MIR_W09_BRANCH_COALESCE
-						|| branch_kind == ZEND_MIR_W10_BRANCH_JMP_NULL)
-					&& !(context->zend_source != NULL
-						&& context->zend_source->w11)) {
+							== ZEND_MIR_BRANCH_IF_TRUE_WITH_RESULT
+						|| branch_kind == ZEND_MIR_BRANCH_JMP_SET
+						|| branch_kind == ZEND_MIR_BRANCH_COALESCE
+						|| branch_kind == ZEND_MIR_BRANCH_JMP_NULL)
+					&& !(context->zend_source != NULL)) {
 				zend_mir_representation result_representation;
 				zend_mir_value_fact_ref result_fact;
 				const bool boolean_result = branch_kind
-						== ZEND_MIR_W04_BRANCH_IF_FALSE_WITH_RESULT
+						== ZEND_MIR_BRANCH_IF_FALSE_WITH_RESULT
 					|| branch_kind
-						== ZEND_MIR_W04_BRANCH_IF_TRUE_WITH_RESULT;
+						== ZEND_MIR_BRANCH_IF_TRUE_WITH_RESULT;
 
 				/*
 				 * Result-producing branches publish either the tested boolean or
 				 * their input into the result identity.  If a dynamic PHI requires
 				 * that identity to remain boxed, execute the source branch instead
-				 * of defining one MIR value with two representations.  W11 performs
-				 * its own boxed-result materialization around the machine branch.
+				 * of defining one MIR value with two representations.  With a Zend
+				 * source attached, the source-backed lowering materializes the
+				 * boxed result around the machine branch itself, so this check
+				 * applies only without one.
 				 */
 				if (terminator_source->result.kind
 						!= ZEND_MIR_SOURCE_OPERAND_SSA
-						|| !zend_mir_w04_fact_for_operand(
+						|| !zend_mir_fact_for_operand(
 							context,
 							analysis,
 							&terminator_source->result,
@@ -1221,7 +1220,7 @@ static bool zend_mir_w04_lower_blocks(
 				}
 			}
 		}
-		if (!zend_mir_w04_emit_terminator(
+		if (!zend_mir_emit_terminator(
 				context, mutator, terminator_source, &block,
 				edges, edge_count, machine_condition, storage)) {
 			return false;
@@ -1232,14 +1231,14 @@ static bool zend_mir_w04_lower_blocks(
 	return true;
 }
 
-zend_mir_lowering_result zend_mir_lower_w04_zend_source(
+zend_mir_lowering_result zend_mir_lower_control_flow_zend_source(
 	zend_mir_lowering_context *context,
 	zend_mir_mutator *requested_mutator,
 	zend_mir_control_flow_map *map)
 {
 	zend_mir_control_flow_map_storage storage;
-	zend_mir_w04_phi_analysis phi_analysis;
-	zend_mir_w04_validation validation;
+	zend_mir_phi_analysis phi_analysis;
+	zend_mir_validation validation;
 	zend_mir_module *module = NULL;
 	zend_mir_mutator *mutator;
 	const zend_mir_view *view;
@@ -1247,41 +1246,41 @@ zend_mir_lowering_result zend_mir_lower_w04_zend_source(
 	memset(&storage, 0, sizeof(storage));
 	memset(&phi_analysis, 0, sizeof(phi_analysis));
 	memset(&validation, 0, sizeof(validation));
-	validation.diagnostic = ZEND_MIRL_W04_MALFORMED_CFG;
+	validation.diagnostic = ZEND_MIRL_MALFORMED_CFG;
 	if (map != NULL) {
 		memset(map, 0, sizeof(*map));
 	}
 	if (context == NULL || map == NULL || context->busy
 			|| context->registry == NULL || !context->registry->complete) {
-		return zend_mir_w04_result(ZEND_MIR_LOWERING_REJECTED,
-			ZEND_MIRL_W04_MALFORMED_CFG);
+		return zend_mir_cf_result(ZEND_MIR_LOWERING_REJECTED,
+			ZEND_MIRL_MALFORMED_CFG);
 	}
 	if (!(context->shape.has_try_regions
-			? zend_mir_w04_validate_source_for_protected_control_flow(
+			? zend_mir_validate_source_for_protected_control_flow(
 				context->source, &validation)
-			: zend_mir_w04_validate_source(context->source, &validation))) {
-		return zend_mir_w04_result(
+			: zend_mir_validate_source(context->source, &validation))) {
+		return zend_mir_cf_result(
 			ZEND_MIR_LOWERING_REJECTED, validation.diagnostic);
 	}
-	if (!zend_mir_w04_phi_analysis_init(context, &phi_analysis)) {
-		return zend_mir_w04_result(ZEND_MIR_LOWERING_FAILED,
+	if (!zend_mir_phi_analysis_init(context, &phi_analysis)) {
+		return zend_mir_cf_result(ZEND_MIR_LOWERING_FAILED,
 			ZEND_MIRL_MUTATION_FAILED);
 	}
-	if (!zend_mir_w04_validate_scalar_phis(context, &phi_analysis)) {
-		zend_mir_w04_phi_analysis_destroy(&phi_analysis);
-		return zend_mir_w04_result(ZEND_MIR_LOWERING_REJECTED,
-			ZEND_MIRL_W04_UNSUPPORTED_PHI_PI);
+	if (!zend_mir_validate_scalar_phis(context, &phi_analysis)) {
+		zend_mir_phi_analysis_destroy(&phi_analysis);
+		return zend_mir_cf_result(ZEND_MIR_LOWERING_REJECTED,
+			ZEND_MIRL_UNSUPPORTED_PHI_PI);
 	}
-	if (!zend_mir_w04_validate_branch_proofs(context, &phi_analysis)) {
-		zend_mir_w04_phi_analysis_destroy(&phi_analysis);
-		return zend_mir_w04_result(ZEND_MIR_LOWERING_REJECTED,
-			ZEND_MIRL_W04_BRANCH_PROOF_FAILED);
+	if (!zend_mir_validate_branch_proofs(context, &phi_analysis)) {
+		zend_mir_phi_analysis_destroy(&phi_analysis);
+		return zend_mir_cf_result(ZEND_MIR_LOWERING_REJECTED,
+			ZEND_MIRL_BRANCH_PROOF_FAILED);
 	}
 	context->busy = true;
 	module = context->module_ops.create(
 		context->module_ops.context, context->module_id, context->diagnostics);
 	if (module == NULL) {
-		return zend_mir_w04_abort(context, NULL, &storage, &phi_analysis,
+		return zend_mir_abort(context, NULL, &storage, &phi_analysis,
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
 	}
 	mutator = context->module_ops.mutator(context->module_ops.context, module);
@@ -1291,11 +1290,11 @@ zend_mir_lowering_result zend_mir_lower_w04_zend_source(
 				context->source->block_count(context->source->context),
 				context->source->edge_count(context->source->context),
 				context->source->phi_count(context->source->context))
-			|| !zend_mir_w04_analyze_cycles(
+			|| !zend_mir_analyze_cycles(
 				&storage.cycle_analysis, context->source)
 			|| !mutator->add_function(mutator->context,
 				context->function_symbol_id, &context->function_id)) {
-		return zend_mir_w04_abort(
+		return zend_mir_abort(
 			context, module, &storage, &phi_analysis,
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
 	}
@@ -1303,7 +1302,7 @@ zend_mir_lowering_result zend_mir_lower_w04_zend_source(
 		zend_mir_source_block_ref source_block;
 		zend_mir_control_flow_block_mapping mapping;
 		if (!context->source->block_at(context->source->context, i, &source_block)) {
-			return zend_mir_w04_abort(
+			return zend_mir_abort(
 				context, module, &storage, &phi_analysis,
 				ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
 		}
@@ -1312,79 +1311,79 @@ zend_mir_lowering_result zend_mir_lower_w04_zend_source(
 		}
 		if (!mutator->add_block(mutator->context,
 				context->function_id, &mapping.mir_block_id)) {
-			return zend_mir_w04_abort(
+			return zend_mir_abort(
 				context, module, &storage, &phi_analysis,
 				ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
 		}
 		mapping.source_block_id = source_block.id;
 		if (!zend_mir_control_flow_map_add_block(&storage, &mapping)) {
-			return zend_mir_w04_abort(
+			return zend_mir_abort(
 				context, module, &storage, &phi_analysis,
 				ZEND_MIR_LOWERING_FAILED,
-				ZEND_MIRL_W04_SOURCE_MIR_MAPPING_FAILED);
+				ZEND_MIRL_SOURCE_MIR_MAPPING_FAILED);
 		}
 	}
-	if (!zend_mir_w04_predeclare_values(context, mutator, &phi_analysis)) {
-		return zend_mir_w04_abort(
+	if (!zend_mir_predeclare_values(context, mutator, &phi_analysis)) {
+		return zend_mir_abort(
 			context, module, &storage, &phi_analysis,
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
 	}
 	if (!zend_mir_control_flow_map_find_block(&storage.public_map,
 			validation.entry_block_id, &context->block_id)) {
-		return zend_mir_w04_abort(
+		return zend_mir_abort(
 			context, module, &storage, &phi_analysis,
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
 	}
-	if (!zend_mir_w04_emit_phis(
+	if (!zend_mir_emit_phis(
 			context, mutator, &storage, &phi_analysis)) {
-		return zend_mir_w04_abort(
+		return zend_mir_abort(
 			context, module, &storage, &phi_analysis,
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
 	}
 	if (!mutator->set_entry_block(mutator->context,
 			context->function_id, context->block_id)) {
-		return zend_mir_w04_abort(
+		return zend_mir_abort(
 			context, module, &storage, &phi_analysis,
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
 	}
-	if (!zend_mir_w04_lower_blocks(
+	if (!zend_mir_lower_blocks(
 			context, mutator, &storage, &phi_analysis)) {
-		return zend_mir_w04_abort(
+		return zend_mir_abort(
 			context, module, &storage, &phi_analysis,
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
 	}
 	if (!mutator->seal_function(mutator->context, context->function_id)) {
-		return zend_mir_w04_abort(
+		return zend_mir_abort(
 			context, module, &storage, &phi_analysis,
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_MUTATION_FAILED);
 	}
 	if (!context->module_ops.finalize(context->module_ops.context, module)) {
-		return zend_mir_w04_abort(
+		return zend_mir_abort(
 			context, module, &storage, &phi_analysis,
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_FINALIZE_FAILED);
 	}
 	view = context->module_ops.view(context->module_ops.context, module);
 	if (view == NULL) {
-		return zend_mir_w04_abort(
+		return zend_mir_abort(
 			context, module, &storage, &phi_analysis,
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_STAGE1_VERIFY_FAILED);
 	}
 #if !defined(NDEBUG)
 	if (!context->module_ops.verify_stage1(
 			context->module_ops.context, view, context->diagnostics)) {
-		return zend_mir_w04_abort(
+		return zend_mir_abort(
 			context, module, &storage, &phi_analysis,
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_STAGE1_VERIFY_FAILED);
 	}
 	if (!context->module_ops.verify_stage2(
 			context->module_ops.context, view, context->diagnostics)) {
-		return zend_mir_w04_abort(
+		return zend_mir_abort(
 			context, module, &storage, &phi_analysis,
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_STAGE2_VERIFY_FAILED);
 	}
-	if (!zend_mir_verify_w04_control_flow(
+	if (!zend_mir_verify_control_flow_tables(
 			view, context->source, &storage.public_map, context->diagnostics)) {
-		return zend_mir_w04_abort(
+		return zend_mir_abort(
 			context, module, &storage, &phi_analysis,
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_STAGE3_VERIFY_FAILED);
 	}
@@ -1393,11 +1392,11 @@ zend_mir_lowering_result zend_mir_lower_w04_zend_source(
 	context->values_predeclared = false;
 	{
 		zend_mir_lowering_result result =
-			zend_mir_w04_result(ZEND_MIR_LOWERING_SUCCESS, ZEND_MIRL_OK);
-		result.guarantees = ZEND_MIR_LOWERING_GUARANTEE_W04_ALL;
+			zend_mir_cf_result(ZEND_MIR_LOWERING_SUCCESS, ZEND_MIRL_OK);
+		result.guarantees = ZEND_MIR_LOWERING_GUARANTEE_VERIFIED;
 		result.module = module;
 		/* The mapping is deliberately invalidated immediately after stage 3. */
-		zend_mir_w04_phi_analysis_destroy(&phi_analysis);
+		zend_mir_phi_analysis_destroy(&phi_analysis);
 		zend_mir_control_flow_map_storage_destroy(&storage);
 		memset(map, 0, sizeof(*map));
 		return result;

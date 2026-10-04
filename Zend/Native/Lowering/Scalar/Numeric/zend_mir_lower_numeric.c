@@ -206,12 +206,12 @@ static zend_mir_lowering_status zend_mir_numeric_check_environment(
 	}
 	if ((provider_context->hazards & reference_hazards) != 0) {
 		zend_mir_numeric_set_diagnostic(
-			diagnostic_out, ZEND_MIRL_W06_REFERENCE_SEMANTICS_DEFERRED);
+			diagnostic_out, ZEND_MIRL_REFERENCE_SEMANTICS_DEFERRED);
 		return ZEND_MIR_LOWERING_DEFERRED;
 	}
 	if ((provider_context->hazards & runtime_hazards) != 0) {
 		zend_mir_numeric_set_diagnostic(
-			diagnostic_out, ZEND_MIRL_W05_RUNTIME_EFFECT_DEFERRED);
+			diagnostic_out, ZEND_MIRL_RUNTIME_EFFECT_DEFERRED);
 		return ZEND_MIR_LOWERING_DEFERRED;
 	}
 	return ZEND_MIR_LOWERING_SUCCESS;
@@ -311,7 +311,7 @@ static zend_mir_lowering_status zend_mir_numeric_prepare_arithmetic(
 			|| (facts[0].exact_type != ZEND_MIR_SCALAR_TYPE_I64
 				&& facts[0].exact_type != ZEND_MIR_SCALAR_TYPE_F64)) {
 		zend_mir_numeric_set_diagnostic(
-			diagnostic_out, ZEND_MIRL_W05_RUNTIME_EFFECT_DEFERRED);
+			diagnostic_out, ZEND_MIRL_RUNTIME_EFFECT_DEFERRED);
 		return ZEND_MIR_LOWERING_DEFERRED;
 	}
 	plan->exact_type = facts[0].exact_type;
@@ -376,7 +376,7 @@ static zend_mir_lowering_status zend_mir_numeric_prepare_integer(
 	if (facts[0].exact_type != ZEND_MIR_SCALAR_TYPE_I64
 			|| facts[1].exact_type != ZEND_MIR_SCALAR_TYPE_I64) {
 		zend_mir_numeric_set_diagnostic(
-			diagnostic_out, ZEND_MIRL_W05_RUNTIME_EFFECT_DEFERRED);
+			diagnostic_out, ZEND_MIRL_RUNTIME_EFFECT_DEFERRED);
 		return ZEND_MIR_LOWERING_DEFERRED;
 	}
 	if (!zend_mir_numeric_fact_range(&facts[0], &left)
@@ -434,7 +434,7 @@ static zend_mir_lowering_status zend_mir_numeric_prepare_bitwise(
 			|| (plan->operand_count == 2
 				&& facts[1].exact_type != ZEND_MIR_SCALAR_TYPE_I64)) {
 		zend_mir_numeric_set_diagnostic(
-			diagnostic_out, ZEND_MIRL_W05_RUNTIME_EFFECT_DEFERRED);
+			diagnostic_out, ZEND_MIRL_RUNTIME_EFFECT_DEFERRED);
 		return ZEND_MIR_LOWERING_DEFERRED;
 	}
 	plan->representation = ZEND_MIR_REPRESENTATION_I64;
@@ -673,7 +673,7 @@ zend_mir_lowering_status zend_mir_lower_numeric(
 	if (!zend_mir_numeric_is_supported(
 			source_opcode->zend_opcode_number)) {
 		zend_mir_numeric_set_diagnostic(
-			diagnostic_out, ZEND_MIRL_W05_RUNTIME_EFFECT_DEFERRED);
+			diagnostic_out, ZEND_MIRL_RUNTIME_EFFECT_DEFERRED);
 		return ZEND_MIR_LOWERING_DEFERRED;
 	}
 	if (mutator->add_value == NULL || mutator->add_instruction == NULL

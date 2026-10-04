@@ -29,7 +29,7 @@
       "aggregate": {"call_ns": {"count": 10, "max": 0, "median": 0, "min": 0, "p90": 0, "p95": 0}},
       "code_size": {"binary_bytes": 1, "binary_source": "synthetic", "elf_text": {"bytes": null, "source": null, "unsupported_reason": "synthetic"}},
       "descriptor": "synthetic.json",
-      "native_code_size": {"bytes": null, "source": null, "unsupported_reason": "W00 has no native engine code-size source"},
+      "native_code_size": {"bytes": null, "source": null, "unsupported_reason": "no native engine code-size source"},
       "samples": [
         {
           "call_ns": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],

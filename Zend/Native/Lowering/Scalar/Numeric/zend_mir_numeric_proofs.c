@@ -147,14 +147,6 @@ bool zend_mir_numeric_range_modulo(
 	return true;
 }
 
-bool zend_mir_numeric_modulo_is_safe(
-	zend_mir_numeric_range dividend, zend_mir_numeric_range divisor)
-{
-	zend_mir_numeric_range result;
-
-	return zend_mir_numeric_range_modulo(dividend, divisor, &result);
-}
-
 static bool zend_mir_numeric_power_of_two(
 	uint32_t count, int64_t *factor_out)
 {

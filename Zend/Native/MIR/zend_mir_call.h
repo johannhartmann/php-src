@@ -24,50 +24,11 @@ typedef enum _zend_mir_call_argument_ownership {
 
 typedef enum _zend_mir_call_continuation_kind {
 	ZEND_MIR_CALL_CONTINUATION_NORMAL = 0,
-	ZEND_MIR_CALL_CONTINUATION_EXCEPTION_DEBT = 1,
-	ZEND_MIR_CALL_CONTINUATION_BAILOUT_REENTRY_DEBT = 2,
-	ZEND_MIR_CALL_CONTINUATION_OBSERVER_DEBT = 3,
+	ZEND_MIR_CALL_CONTINUATION_EXCEPTION = 1,
+	ZEND_MIR_CALL_CONTINUATION_BAILOUT_REENTRY = 2,
+	ZEND_MIR_CALL_CONTINUATION_OBSERVER = 3,
 	ZEND_MIR_CALL_CONTINUATION_KIND_INVALID = -1
 } zend_mir_call_continuation_kind;
-
-enum {
-	ZEND_MIR_CAPABILITY_SCALAR_SEMANTICS = UINT32_C(1) << 0,
-	ZEND_MIR_CAPABILITY_REDUCIBLE_CONTROL_FLOW = UINT32_C(1) << 1,
-	ZEND_MIR_CAPABILITY_DIRECT_USER_CALL_MODEL = UINT32_C(1) << 2,
-	ZEND_MIR_CAPABILITY_CALLER_FRAME_MODEL = UINT32_C(1) << 3,
-	ZEND_MIR_CAPABILITY_CALLEE_ENTRY_MODEL = UINT32_C(1) << 4,
-	ZEND_MIR_CAPABILITY_DIRECT_INTERNAL_CALL = UINT32_C(1) << 5,
-	ZEND_MIR_CAPABILITY_RUNTIME_CUTOVER = UINT32_C(1) << 6
-};
-
-enum {
-	ZEND_MIR_DEBT_CALL_RUNTIME_BINDING = UINT32_C(1) << 0,
-	ZEND_MIR_DEBT_CALL_EXCEPTION_PROPAGATION = UINT32_C(1) << 1,
-	ZEND_MIR_DEBT_CALL_BAILOUT_REENTRY = UINT32_C(1) << 2,
-	ZEND_MIR_DEBT_CALL_OBSERVER_INTEGRATION = UINT32_C(1) << 3,
-	ZEND_MIR_DEBT_CALL_RESULT_OWNERSHIP = UINT32_C(1) << 4,
-	ZEND_MIR_DEBT_INTERNAL_C_ABI = UINT32_C(1) << 5
-};
-
-#define ZEND_MIR_W05_REQUIRED_CAPABILITIES \
-	(ZEND_MIR_CAPABILITY_SCALAR_SEMANTICS \
-	| ZEND_MIR_CAPABILITY_REDUCIBLE_CONTROL_FLOW \
-	| ZEND_MIR_CAPABILITY_DIRECT_USER_CALL_MODEL \
-	| ZEND_MIR_CAPABILITY_CALLER_FRAME_MODEL \
-	| ZEND_MIR_CAPABILITY_CALLEE_ENTRY_MODEL)
-
-#define ZEND_MIR_W05_REQUIRED_DEBTS \
-	(ZEND_MIR_DEBT_CALL_RUNTIME_BINDING \
-	| ZEND_MIR_DEBT_CALL_EXCEPTION_PROPAGATION \
-	| ZEND_MIR_DEBT_CALL_BAILOUT_REENTRY \
-	| ZEND_MIR_DEBT_CALL_OBSERVER_INTEGRATION \
-	| ZEND_MIR_DEBT_CALL_RESULT_OWNERSHIP \
-	| ZEND_MIR_DEBT_INTERNAL_C_ABI)
-
-#define ZEND_MIR_W08_REQUIRED_CAPABILITIES \
-	(ZEND_MIR_W05_REQUIRED_CAPABILITIES \
-	| ZEND_MIR_CAPABILITY_DIRECT_INTERNAL_CALL \
-	| ZEND_MIR_CAPABILITY_RUNTIME_CUTOVER)
 
 typedef struct _zend_mir_call_target_ref {
 	zend_mir_call_target_id id;
@@ -94,7 +55,7 @@ typedef struct _zend_mir_call_argument_ref {
  * function_id identifies a function with a lowered MIR body. It is valid for
  * the caller and invalid for an unlowered callee declaration.
  * function_symbol_id and op_array_id always identify the logical source
- * function; together they are the stable callee identity in W05.
+ * function; together they are the stable callee identity.
  */
 typedef struct _zend_mir_call_frame_descriptor {
 	zend_mir_frame_state_id frame_state_id;
@@ -111,7 +72,6 @@ typedef struct _zend_mir_call_continuation_ref {
 	zend_mir_call_continuation_kind kind;
 	zend_mir_block_id block_id;
 	uint32_t source_opline_index;
-	uint32_t semantic_debt;
 } zend_mir_call_continuation_ref;
 
 /*
@@ -165,28 +125,20 @@ typedef struct _zend_mir_call_mutator {
 	bool (*commit_call_model)(void *context);
 } zend_mir_call_mutator;
 
-typedef enum _zend_mir_verify_w05_code {
-	ZEND_MIR_VERIFY_W05_OK = 0,
-	ZEND_MIR_VERIFY_W05_SITE_MISMATCH = 700,
-	ZEND_MIR_VERIFY_W05_TARGET_MISMATCH = 701,
-	ZEND_MIR_VERIFY_W05_ARGUMENT_MISMATCH = 702,
-	ZEND_MIR_VERIFY_W05_FRAME_MISMATCH = 703,
-	ZEND_MIR_VERIFY_W05_CONTINUATION_MISMATCH = 704,
-	ZEND_MIR_VERIFY_W05_CAPABILITY_DEBT_MISMATCH = 705,
-	ZEND_MIR_VERIFY_W05_CODE_INVALID = -1
-} zend_mir_verify_w05_code;
+typedef enum _zend_mir_verify_call_code {
+	ZEND_MIR_VERIFY_CALL_OK = 0,
+	ZEND_MIR_VERIFY_SITE_MISMATCH = 700,
+	ZEND_MIR_VERIFY_TARGET_MISMATCH = 701,
+	ZEND_MIR_VERIFY_ARGUMENT_MISMATCH = 702,
+	ZEND_MIR_VERIFY_FRAME_MISMATCH = 703,
+	ZEND_MIR_VERIFY_CONTINUATION_MISMATCH = 704,
+	ZEND_MIR_VERIFY_CALL_CODE_INVALID = -1
+} zend_mir_verify_call_code;
 
-#define ZEND_MIRV_TOKEN_W05_SITE_MISMATCH "[MIRV0700]"
-#define ZEND_MIRV_TOKEN_W05_TARGET_MISMATCH "[MIRV0701]"
-#define ZEND_MIRV_TOKEN_W05_ARGUMENT_MISMATCH "[MIRV0702]"
-#define ZEND_MIRV_TOKEN_W05_FRAME_MISMATCH "[MIRV0703]"
-#define ZEND_MIRV_TOKEN_W05_CONTINUATION_MISMATCH "[MIRV0704]"
-#define ZEND_MIRV_TOKEN_W05_CAPABILITY_DEBT_MISMATCH "[MIRV0705]"
-
-bool zend_mir_verify_w05_calls(
-	const zend_mir_view *view,
-	const zend_mir_source_call_view *source_calls,
-	const zend_mir_call_view *calls,
-	zend_mir_diagnostic_sink *diagnostics);
+#define ZEND_MIRV_TOKEN_SITE_MISMATCH "[MIRV0700]"
+#define ZEND_MIRV_TOKEN_TARGET_MISMATCH "[MIRV0701]"
+#define ZEND_MIRV_TOKEN_ARGUMENT_MISMATCH "[MIRV0702]"
+#define ZEND_MIRV_TOKEN_FRAME_MISMATCH "[MIRV0703]"
+#define ZEND_MIRV_TOKEN_CONTINUATION_MISMATCH "[MIRV0704]"
 
 #endif /* ZEND_MIR_CALL_H */

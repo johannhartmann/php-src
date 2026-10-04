@@ -1,0 +1,64 @@
+--TEST--
+Native baseline exposes zero-cost structural and phase performance metrics
+--SKIPIF--
+<?php
+if (!function_exists('native_mir_test_compile_execute')) {
+    die('skip native_mir_test is not available');
+}
+?>
+--FILE--
+<?php
+$result = native_mir_test_compile_execute(
+    <<<'PHP'
+<?php
+function metrics_leaf(int $value): int
+{
+    return $value;
+}
+
+function metrics_root(int $count): int
+{
+    $value = $count;
+    for ($index = 0; $index < $count; $index++) {
+        $value = metrics_leaf($value);
+    }
+    return $value;
+}
+PHP,
+    'performance-metrics.php',
+    [100],
+    [
+        'function' => 'metrics_root',
+        'repeat' => 10,
+    ],
+);
+
+$performance = $result['execution']['performance'];
+printf(
+    "%s return=%d executions=%d registered=%d compiled=%d ready=%d failed=%d direct=%d "
+    . "leaf=%d typed=%d frame_bytes=%d "
+    . "decode=%d helper=%d heap=%d catcher=%d "
+    . "compile=%s execute=%s bytes=%s image=%s\n",
+    $result['status'],
+    $result['execution']['return_value'],
+    $performance['executions'],
+    $performance['registered_codeunits'],
+    $performance['compiled_codeunits'],
+    $performance['ready_codeunits'],
+    $result['execution']['failed_codeunits'],
+    $performance['direct_call_sites'],
+    $performance['direct_leaf_scalar_sites'],
+    $performance['direct_typed_body_sites'],
+    $performance['direct_call_frame_bytes'],
+    $performance['source_opline_decode_sites'],
+    $performance['inner_call_runtime_helper_calls'],
+    $performance['inner_call_heap_allocations'],
+    $performance['inner_call_catcher_boundaries'],
+    $performance['compile_ns'] > 0 ? 'yes' : 'no',
+    $performance['execute_ns'] > 0 ? 'yes' : 'no',
+    $performance['native_code_bytes'] > 0 ? 'yes' : 'no',
+    $result['execution']['machine_code'] !== null ? 'yes' : 'no',
+);
+?>
+--EXPECT--
+accepted return=100 executions=10 registered=3 compiled=2 ready=2 failed=0 direct=1 leaf=1 typed=0 frame_bytes=96 decode=0 helper=0 heap=0 catcher=0 compile=yes execute=yes bytes=yes image=yes

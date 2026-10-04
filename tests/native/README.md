@@ -1,6 +1,6 @@
 # Native differential and provenance harness
 
-These W00 tools establish an engine-independent oracle. Both PHP executables are
+These tools provide an engine-independent oracle. Both PHP executables are
 always explicit; using the same executable on both sides is the harness smoke
 test.
 
@@ -75,10 +75,9 @@ timestamps, process durations, and artifact locations when `--json-out` changes.
 Case IDs, hashes, lengths, termination state, ordering, and comparison status
 must remain stable for deterministic fixtures.
 
-The checked-in schemas are under `tests/native/schemas/`. Because W00 does not
-add a third-party JSON Schema package, `validate_json.py` is the authoritative
-strict runtime validator. The schemas document the same v1 interchange shape
-for external consumers such as W00-D.
+The checked-in schemas are under `tests/native/schemas/`. `validate_json.py` is
+the authoritative strict runtime validator; the schemas document the same
+interchange shape.
 
 ## Self-tests
 

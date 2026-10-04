@@ -139,7 +139,7 @@ class BenchmarkTests(unittest.TestCase):
             subprocess.run(["git", "init", "-q", str(repository)], check=True)
             subprocess.run(["git", "-C", str(repository), "add", "php"], check=True)
             subprocess.run(
-                ["git", "-C", str(repository), "-c", "user.name=W00 Test", "-c", "user.email=w00@example.invalid", "commit", "-q", "-m", "fixture"],
+                ["git", "-C", str(repository), "-c", "user.name=Native Test", "-c", "user.email=native@example.invalid", "commit", "-q", "-m", "fixture"],
                 check=True,
             )
             commit = subprocess.check_output(["git", "-C", str(repository), "rev-parse", "HEAD"], text=True).strip()

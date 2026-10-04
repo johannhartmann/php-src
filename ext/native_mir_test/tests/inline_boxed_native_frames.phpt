@@ -1,0 +1,76 @@
+--TEST--
+Native baseline carries boxed CV arguments through TPDE registers and native frames
+--SKIPIF--
+<?php
+if (!function_exists('native_mir_test_compile_execute')) {
+    die('skip native_mir_test is not available');
+}
+?>
+--FILE--
+<?php
+$source = <<<'PHP'
+<?php
+function inline_boxed_identity($value)
+{
+    return $value;
+}
+
+function inline_boxed_relay($value)
+{
+    return inline_boxed_identity($value);
+}
+
+function inline_boxed_produce(int $kind)
+{
+    if ($kind === 0) {
+        return "produced";
+    }
+    if ($kind === 1) {
+        return [7, 8];
+    }
+    return (object) ["value" => 9];
+}
+
+function inline_boxed_root()
+{
+    $string = "native";
+    $array = [1, 2, 3];
+    $object = (object) ["value" => 4];
+    $stringResult = inline_boxed_relay($string);
+    $arrayResult = inline_boxed_relay($array);
+    $objectResult = inline_boxed_relay($object);
+    return [
+        $string,
+        $stringResult,
+        $array,
+        $arrayResult,
+        $object->value,
+        $objectResult->value,
+        inline_boxed_relay(inline_boxed_produce(0)),
+        inline_boxed_relay(inline_boxed_produce(1)),
+        inline_boxed_relay(inline_boxed_produce(2))->value,
+    ];
+}
+PHP;
+
+$result = native_mir_test_compile_execute(
+    $source,
+    'inline-boxed-native-frames.php',
+    [],
+    [
+        'function' => 'inline_boxed_root',
+        'repeat' => 10,
+    ],
+);
+printf(
+    "%s return=%s vm=%d execute_ex=%d handler=%d active=%d\n",
+    $result['status'],
+    json_encode($result['execution']['return_value']),
+    $result['execution']['vm_handler_calls'],
+    $result['execution']['execute_ex_calls'],
+    $result['execution']['opline_handler_calls'],
+    $result['execution']['entry_active_calls'],
+);
+?>
+--EXPECT--
+accepted return=["native","native",[1,2,3],[1,2,3],4,4,"produced",[7,8],9] vm=0 execute_ex=0 handler=0 active=0

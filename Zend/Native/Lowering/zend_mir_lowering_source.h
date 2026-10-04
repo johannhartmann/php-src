@@ -33,8 +33,9 @@ typedef enum _zend_mir_source_literal_kind {
 typedef enum _zend_mir_source_literal_flag {
 	/*
 	 * The source table proved that this record is the complete, canonical
-	 * value of a non-refcounted scalar literal. W11 source-backed placeholder
-	 * records intentionally leave this bit clear.
+	 * value of a non-refcounted scalar literal. Placeholder records for
+	 * literals that are read from the op array intentionally leave this bit
+	 * clear.
 	 */
 	ZEND_MIR_SOURCE_LITERAL_CANONICAL_SCALAR = UINT32_C(1) << 0
 } zend_mir_source_literal_flag;

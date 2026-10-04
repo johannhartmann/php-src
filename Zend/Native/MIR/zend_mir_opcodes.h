@@ -141,7 +141,7 @@
 	X(DYNAMIC_DECLARE_ATTRIBUTED_CONSTANT, "dynamic_declare_attributed_constant", 149) \
 	X(DYNAMIC_INCLUDE_OR_EVAL, "dynamic_include_or_eval", 150)
 
-#define ZEND_MIR_W11P_OPCODE_CATALOG(X) \
+#define ZEND_MIR_ZVAL_OPCODE_CATALOG(X) \
 	X(ECHO_SCALAR, "echo_scalar", 151) \
 	X(VERIFY_RETURN_TYPE, "verify_return_type", 152) \
 	X(VALUE_ECHO, "value_echo", 153) \
@@ -157,7 +157,7 @@
 	X(ZVAL_GUARD_TYPE, "zval_guard_type", 163) \
 	X(SLOW_PATH_CALL, "slow_path_call", 164)
 
-#define ZEND_MIR_W12_OPCODE_CATALOG(X) \
+#define ZEND_MIR_RUNTIME_OPCODE_CATALOG(X) \
 	X(GENERATOR_CREATE, "generator_create", 165) \
 	X(GENERATOR_YIELD, "generator_yield", 166) \
 	X(GENERATOR_YIELD_FROM, "generator_yield_from", 167) \
@@ -230,21 +230,11 @@ typedef enum _zend_mir_opcode {
 	ZEND_MIR_ITERATOR_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
 	ZEND_MIR_OBJECT_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
 	ZEND_MIR_DYNAMIC_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
-	ZEND_MIR_W11P_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
-	ZEND_MIR_W12_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
-	/*
-	 * Keep the W03 scalar range boundary stable. W05 is modeling-only and
-	 * publishes its additive table boundary separately.
-	 */
-	ZEND_MIR_OPCODE_COUNT = 41,
-	ZEND_MIR_W05_OPCODE_COUNT = 42,
-	ZEND_MIR_W06_OPCODE_COUNT = 48,
-	ZEND_MIR_W08_OPCODE_COUNT = 54,
-	ZEND_MIR_W09_OPCODE_COUNT = 91,
-	ZEND_MIR_W10_OPCODE_COUNT = 137,
-	ZEND_MIR_W11_OPCODE_COUNT = 151,
-	ZEND_MIR_W11P_OPCODE_COUNT = 165,
-	ZEND_MIR_W12_OPCODE_COUNT = 193,
+	ZEND_MIR_ZVAL_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
+	ZEND_MIR_RUNTIME_OPCODE_CATALOG(ZEND_MIR_OPCODE_ENUM)
+	/* End of the scalar range; calls and value operations follow it. */
+	ZEND_MIR_SCALAR_OPCODE_END = 41,
+	ZEND_MIR_OPCODE_COUNT = 193,
 	ZEND_MIR_OPCODE_INVALID = -1
 } zend_mir_opcode;
 #undef ZEND_MIR_OPCODE_ENUM
@@ -328,70 +318,16 @@ static inline bool zend_mir_opcode_is_executable_value(
 		|| opcode == ZEND_MIR_OPCODE_FUNC_NUM_ARGS
 		|| opcode == ZEND_MIR_OPCODE_FUNC_GET_ARGS
 		|| (opcode >= ZEND_MIR_OPCODE_GENERATOR_CREATE
-			&& opcode < ZEND_MIR_W12_OPCODE_COUNT);
+			&& opcode < ZEND_MIR_OPCODE_COUNT);
 }
 
 ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_COUNT < UINT32_MAX,
 	"opcode invalid value remains unique");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_CALL_DIRECT_USER == ZEND_MIR_OPCODE_COUNT,
-	"W05 call opcode begins after the frozen W03 scalar range");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W05_OPCODE_COUNT == ZEND_MIR_OPCODE_CALL_DIRECT_USER + 1,
-	"W05 call opcode has an additive table boundary");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_STORAGE_BIND == ZEND_MIR_W05_OPCODE_COUNT,
-	"W06 value opcodes begin after the frozen W05 boundary");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W06_OPCODE_COUNT == ZEND_MIR_OPCODE_SEPARATION_PLAN + 1,
-	"W06 value opcodes have an additive table boundary");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL == ZEND_MIR_W06_OPCODE_COUNT,
-	"W08 internal-call opcode begins after the frozen W06 boundary");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_CATCH_ENTER == ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL + 1,
-	"W08 catch entry follows the internal-call opcode");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_FINALLY_ENTER == ZEND_MIR_OPCODE_CATCH_ENTER + 1,
-	"W08 finally entry follows catch entry");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_FINALLY_CALL == ZEND_MIR_OPCODE_FINALLY_ENTER + 1,
-	"W08 finally call follows finally entry");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_FINALLY_RETURN == ZEND_MIR_OPCODE_FINALLY_CALL + 1,
-	"W08 finally return follows finally call");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
-	== ZEND_MIR_OPCODE_FINALLY_RETURN + 1,
-	"W08 source-zval return follows finally return");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W08_OPCODE_COUNT
-	== ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL + 1,
-	"W08 opcodes have an additive table boundary");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_VALUE_MAKE_REF
-	== ZEND_MIR_W08_OPCODE_COUNT,
-	"executable value opcodes begin after the W08 boundary");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W09_OPCODE_COUNT
-	== ZEND_MIR_OPCODE_VALUE_INCDEC + 1,
-	"executable value opcodes have an additive table boundary");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_VALUE_COND_BRANCH
-	== ZEND_MIR_OPCODE_VALUE_FETCH_LIST + 1,
-	"source value branch follows executable value operations");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_VALUE_INCDEC
-	== ZEND_MIR_OPCODE_VALUE_COND_BRANCH + 1,
-	"increment and decrement extend the W09 value range");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_OBJECT_DECLARE_ANON_CLASS
-	== ZEND_MIR_W09_OPCODE_COUNT,
-	"object operations begin after the W09 boundary");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W10_OPCODE_COUNT
-	== ZEND_MIR_OPCODE_OBJECT_DECLARE_CLASS_DELAYED + 1,
-	"W10 object operations have an additive table boundary");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
-	== ZEND_MIR_W10_OPCODE_COUNT,
-	"W11 dynamic operations begin after the W10 boundary");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W11_OPCODE_COUNT
-	== ZEND_MIR_OPCODE_DYNAMIC_INCLUDE_OR_EVAL + 1,
-	"W11 dynamic operations have an additive table boundary");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_ECHO_SCALAR
-	== ZEND_MIR_W11_OPCODE_COUNT,
-	"W11P semantic echo begins after the frozen W11 boundary");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W11P_OPCODE_COUNT
-	== ZEND_MIR_OPCODE_SLOW_PATH_CALL + 1,
-	"W11P semantic operations have an additive table boundary");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_GENERATOR_CREATE
-	== ZEND_MIR_W11P_OPCODE_COUNT,
-	"W12 generator operations begin after the frozen W11P boundary");
-ZEND_MIR_STATIC_ASSERT(ZEND_MIR_W12_OPCODE_COUNT
+ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_CALL_DIRECT_USER
+	== ZEND_MIR_SCALAR_OPCODE_END,
+	"call opcodes begin after the scalar range");
+ZEND_MIR_STATIC_ASSERT(ZEND_MIR_OPCODE_COUNT
 	== ZEND_MIR_OPCODE_VALUE_CHECK_UNDEF_ARGS + 1,
-	"W12 baseline operations have an additive table boundary");
+	"the opcode count covers every catalog");
 
 #endif /* ZEND_MIR_OPCODES_H */

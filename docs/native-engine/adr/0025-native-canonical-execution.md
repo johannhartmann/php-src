@@ -2,55 +2,16 @@
 
 ## Status
 
-Accepted on 2026-09-30. Linux x64. Supersedes in part ADR 0004 (rejection of
-lazy frame reconstruction and of a separate native frame ABI), ADR 0009
-(every live value canonical in the Zend frame at every safepoint) and ADR 0024
-("there is no deoptimization"). The goal is maximum execution performance for
-real PHP applications such as WordPress.
+Accepted. Linux x64. The goal is maximum execution performance for real PHP
+applications such as WordPress, measured on warm requests.
 
 ## Context
 
-A warm WordPress front-page request executes 580M user instructions natively
-against 258M in stock PHP with OPcache. The shared runtime (hash tables,
-allocator, strings, libc, extensions) costs about the same in both (159M
-against 137M). The difference is the layer that replaces the interpreter:
-
-| Native layer | Instructions per request | Stock equivalent |
-|---|---|---|
-| Generated code | 170.5M | VM handlers: 115.1M in total |
-| Opcode-shaped value and object helpers | 126.3M | |
-| Call protocol (resolve, invoke, activation, frames, arguments) | 112.8M | |
-
-The generated code alone costs more than the whole stock interpreter. (The
-5.9M stock instructions in generated code are PCRE JIT code for regular
-expressions; stock runs without the PHP JIT. The native figure contains the
-same share.) Altogether the native execution layer, including the remaining
-native runtime, costs 420.5M against 121.0M in stock: 93 % of the extra
-instructions are in our own layer, 22M in the shared runtime. An empty
-integer loop takes 48 instructions per iteration against 54 in the VM. A method
-call takes 703 instructions against 285.
-
-The cause is the execution model of ADR 0004 and ADR 0009. The
-`zend_execute_data` frame with its zval slots is the only authoritative copy
-of PHP state, so native code keeps two representations in sync:
-
-- every CV and TMP write goes to its frame slot;
-- helpers receive encoded opcode operands and decode them against the frame
-  (`zend_native_value_init_explicit_operation`);
-- every call builds a universal activation (224 bytes, zeroed store by store)
-  before `zend_native_call_resolve_user` and `zend_native_call_invoke_user`;
-- guards branch through materialized decision registers;
-- nothing is specialized from runtime types, since there is no way to leave a
-  specialized body.
-
-Opcode-by-opcode snippets (commits d9a192011b6 through 709252f905a) removed
-about 13 % of the instructions; each further snippet is worth 1–3 %. Reaching
-and passing stock PHP needs the model itself to change.
-
-### What actually observes a frame
-
-The survey behind this ADR (Zend/Native as of 709252f905a) shows that most
-observers read much less than the complete frame:
+Keeping the `zend_execute_data` frame as the only authoritative copy of PHP
+state forces native code to write every CV and TMP to its slot, to pass
+encoded operands to helpers that decode them against the frame, to build a
+universal activation for every call, and to forgo specialization from runtime
+types. Most observers read much less than the complete frame:
 
 | Observer | Reads |
 |---|---|
@@ -64,10 +25,8 @@ observers read much less than the complete frame:
 | Generator and fiber suspension | The complete frame. |
 | Deoptimization (this ADR) | The complete frame at the guard. |
 
-ADR 0004 rejected lazy reconstruction because "asynchronous and exceptional
-observation points cannot tolerate missing state". This ADR keeps that
-requirement: reconstruction is exact and compiler-verified, never best effort.
-It only stops materializing state that no observer reads.
+Reconstruction is exact and compiler-verified, never best effort: native code
+only stops materializing state that no observer reads.
 
 ## Decision
 
@@ -95,8 +54,8 @@ extensions and runtime services, with this split:
 Every instruction keeps its MIR `frame_state_id`. The backend emits, per
 observation point, a frame-state map naming the machine location of every
 live PHP value, root and cleanup obligation (register, native stack slot,
-constant, or frame slot). The maps are verified before publication, as ADR
-0009 requires for frame states today. Materialization, deoptimization and
+constant, or frame slot). The maps are verified before publication.
+Materialization, deoptimization and
 later lazy frame construction all read the same map.
 
 ### 2. Helpers become semantic primitives
@@ -190,61 +149,37 @@ observers. This is exact reconstruction under the section 1 contract.
 
 ## Delivery
 
-The phase targets below are intermediate targets, not a budget for parity:
-with helper and call costs just below their targets and the shared runtime
-unchanged, 270M instructions would already be spent before any application
-code. The acceptance measure is the total per warm request against stock.
-
-Order (review of 2026-09-30): first the contract documents and the snippet
-regeneration build; then phases 1 and 2 together (native value handling for
-typed and untyped, boxed SSA values, targeted materialization with its
-reverse direction, native cleanup, value-based primitives); phase 3 in
-parallel with the shared state contract; then bounded speculation with
-deoptimization, then bounded inlining. The generic native baseline must be
-competitive on its own; speculation and inlining add to it and do not
-replace it. The existing mechanisms are extended rather than duplicated:
-frame states, entry cells, generations, the resume contract, and
-`generate_guarded_direct_exit` for guard exits instead of materialized
-decision registers. Code size is analysed (executed code, cold code, stubs,
-metadata, mapping) before the publisher is changed; W^X stays.
-
-Each phase is measured on the same warm WordPress request (retired
-instructions, cycles, L1i and iTLB misses, hot code size, cold compile time),
-with unchanged page output, and must pass the full PHPT tier. The loop, call
-and property targets use the micro-benchmark from this ADR's context.
+The acceptance measure is the total per warm request against stock PHP. The
+generic native code must be competitive on its own; speculation and inlining
+add to it. Existing mechanisms are extended rather than duplicated: frame
+states, entry cells, generations, the resume contract, and
+`generate_guarded_direct_exit` for guard exits. Each step is measured on the
+same warm WordPress request (cycles, instructions, L1i and iTLB misses, hot
+code size, compile time) with unchanged page output and the full PHPT tier.
 
 1. **Frame states as machine maps; lazy CV/TMP slots.** The backend emits
-   verified machine frame-state maps. Non-parameter CVs and TMPs stop being
-   store-through outside the materialization points of section 1, with the
+   verified machine frame-state maps. Non-parameter CVs and TMPs are written
+   to their slots only at the materialization points of section 1, under the
    single-owner rule of the safepoint contract (a native-owned value's slot
-   holds `IS_UNDEF`) and native exception cleanup for native-owned values.
-   Helpers declare the slots they read and write. The empty integer loop is a
-   focused regression target (48 instructions per iteration now), not the
-   proof of the phase; generated code on WordPress falls clearly below 170M.
-2. **Helper primitives.** Rewrite the helpers in instruction order of the
-   profile (`ASSIGN_DIM`, `ASSIGN`, `FETCH_DIM`, object read and write,
-   conditional branches, array construction, iteration) to take values, with
-   the shared release sequence. Array probes handle non-interned string keys
-   by hash, length and content (numeric strings and real collisions stay
-   correct) instead of leaving them to the operand-decoding helper. Target:
-   helper instructions per request from 126M to under 60M.
+   holds `IS_UNDEF`), with native exception cleanup for native-owned values.
+   Helpers declare the slots they read and write.
+2. **Helper primitives.** Helpers take values, with the shared release
+   sequence, in the order of the profile (`ASSIGN_DIM`, `ASSIGN`,
+   `FETCH_DIM`, object read and write, conditional branches, array
+   construction, iteration). Array probes handle non-interned string keys by
+   hash, length and content.
 3. **Native calls.** Section 3 for user functions, methods, static methods,
    closures, `new`, packed `call_user_func_array` and changing hook targets.
-   Target: a method call from 703 to under 150 instructions, the same order
-   for a hook site with changing targets; call protocol on WordPress from 113M
-   to under 40M.
 4. **Type feedback, specialization, deoptimization.** Section 4, starting
    with integer and float operations, packed arrays and property offsets.
-   Target: loops and property-heavy code run on unboxed values; every
-   deoptimization point has a PHPT that forces it.
-5. **Guarded inlining and lazy frames for inlined callees.** Section 5.
-   Target: fewer calls executed on WordPress, with backtraces, traces,
-   warnings and observers identical to stock inside inlined code.
+   Every deoptimization point has a PHPT that forces it.
+5. **Guarded inlining and lazy frames for inlined callees.** Section 5, with
+   backtraces, traces, warnings and observers identical to stock inside
+   inlined code.
 
-Phases 1 and 2 depend on each other, since a helper that reads frame slots
-forces their materialization. Phase 2 therefore goes before or together with
-the lazy-slot part of phase 1. Phase 3 is independent of both. Phase 4 needs
-the frame-state maps from phase 1. Phase 5 needs phases 3 and 4.
+Steps 1 and 2 go together, since a helper that reads frame slots forces their
+materialization. Step 3 is independent. Step 4 needs the frame-state maps of
+step 1, step 5 needs steps 3 and 4.
 
 ## Consequences
 
@@ -260,25 +195,20 @@ the frame-state maps from phase 1. Phase 5 needs phases 3 and 4.
 - Compile time grows with specialization and inlining. Compilation of the
   generic version stays single-pass TPDE; specialized versions are compiled
   only for hot functions.
-- ADR 0004's objection to a separate frame ABI remains valid for extensions.
-  It is answered by keeping the frame header eager and the `EX` chain valid
-  at every C transition, not by giving it up.
+- Extensions keep a valid `EX` chain at every C transition because the frame
+  header stays eager.
 
 ## Alternatives
 
-- **Keep the ADR 0009 model and add snippets per opcode.** Measured at 1–3 %
-  per step; it cannot remove the synchronization cost that makes the native
-  layer 3.5 times as expensive as the interpreter.
-- **Fully lazy frames from the start**, with no eager header. This makes every
-  C transition depend on native stack walking before any gain from the
-  cheaper parts is measured. It is deferred to phase 5, where inlining makes
-  it necessary.
-- **Deoptimization into the VM.** Simpler, but it contradicts the engine
-  replacement goal and keeps the VM in the production path. Rejected.
-- **Speculation without deoptimization, with guards only at function entry.**
-  Covers argument types, but not values loaded inside the function (array
-  elements, properties, call results), which dominate WordPress. Rejected as
-  the end state; entry variants remain as one form of specialization.
+- **Keeping every value in the Zend frame and adding inline forms per
+  opcode** cannot remove the synchronization cost of two representations.
+- **Fully lazy frames, without an eager header,** make every C transition
+  depend on native stack walking; they come with inlining (step 5).
+- **Deoptimization into the VM** keeps the VM in the production path and is
+  excluded.
+- **Guards only at function entry** cannot specialize values loaded inside a
+  function (array elements, properties, call results); entry variants remain
+  one form of specialization.
 
 ## Verification impact
 

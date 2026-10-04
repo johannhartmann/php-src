@@ -33,7 +33,7 @@ class ContractTests(unittest.TestCase):
                 list(CHECKER.load_json(CHECKER.EFFECT_MODEL)["catalog"]["effects"]),
             )
 
-    def test_missing_w01_catalog_entry_is_rejected(self) -> None:
+    def test_missing_catalog_entry_is_rejected(self) -> None:
         source = (ROOT / "Zend" / "Native" / "MIR" / "zend_mir_effects.h").read_text(encoding="utf-8")
         mutated = source.replace('\tX(TERMINATE, "terminate", 14)', "", 1)
         with self.assertRaises(CHECKER.ContractError):
@@ -43,12 +43,12 @@ class ContractTests(unittest.TestCase):
                 list(CHECKER.load_json(CHECKER.EFFECT_MODEL)["catalog"]["effects"]),
             )
 
-    def test_reordered_w01_guard_fact_is_rejected(self) -> None:
+    def test_reordered_guard_fact_is_rejected(self) -> None:
         source = (ROOT / "Zend" / "Native" / "MIR" / "zend_mir_effects.h").read_text(encoding="utf-8")
         first = '\tX(VALUE_TYPE, "value_type", 0) \\\n'
         second = '\tX(OBJECT_CLASS_IDENTITY, "object_class_identity", 1) \\\n'
         mutated = source.replace(first + second, second + first, 1)
-        with self.assertRaisesRegex(CHECKER.ContractError, "does not exactly match W01 order"):
+        with self.assertRaisesRegex(CHECKER.ContractError, "does not exactly match catalog order"):
             CHECKER.validate_catalog_text(
                 mutated,
                 "ZEND_MIR_GUARD_FACT_CATALOG",

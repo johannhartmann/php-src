@@ -83,9 +83,8 @@ static zend_mir_lowering_status zend_mir_lower_source_zval_return(
 			&& source_opcode->op1.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL) {
 		return ZEND_MIR_LOWERING_STATUS_INVALID;
 	}
-	if (context->zend_source == NULL || !context->zend_source->w08
-			|| !zend_mir_straight_line_has_cfg_proof(provider_context->proofs)
-			|| !zend_mir_zend_source_w08_return_source_zval(
+	if (context->zend_source == NULL || !zend_mir_straight_line_has_cfg_proof(provider_context->proofs)
+			|| !zend_mir_zend_source_return_source_zval(
 				context->zend_source, source_opcode->opline_index)) {
 		if (diagnostic_out != NULL) {
 			*diagnostic_out = ZEND_MIRL_MISSING_PROOF;
@@ -208,13 +207,13 @@ static zend_mir_lowering_status zend_mir_straight_line_check_hazards(
 				: (ZEND_MIR_STRAIGHT_LINE_HAZARD_REFERENCE
 					| ZEND_MIR_STRAIGHT_LINE_HAZARD_OLD_VALUE))) != 0) {
 		if (diagnostic_out != NULL) {
-			*diagnostic_out = ZEND_MIRL_W06_REFERENCE_SEMANTICS_DEFERRED;
+			*diagnostic_out = ZEND_MIRL_REFERENCE_SEMANTICS_DEFERRED;
 		}
 		return ZEND_MIR_LOWERING_DEFERRED;
 	}
 	if ((provider_context->hazards & runtime_hazards) != 0) {
 		if (diagnostic_out != NULL) {
-			*diagnostic_out = ZEND_MIRL_W05_RUNTIME_EFFECT_DEFERRED;
+			*diagnostic_out = ZEND_MIRL_RUNTIME_EFFECT_DEFERRED;
 		}
 		return ZEND_MIR_LOWERING_DEFERRED;
 	}
@@ -262,7 +261,6 @@ zend_mir_lowering_status zend_mir_lower_return(
 	}
 	if (source_opcode->op1.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
 			|| (context->zend_source != NULL
-				&& context->zend_source->w09
 				&& source_opcode->op1.kind
 					== ZEND_MIR_SOURCE_OPERAND_LITERAL)) {
 		return zend_mir_lower_source_zval_return(

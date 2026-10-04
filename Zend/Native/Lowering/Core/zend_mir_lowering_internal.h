@@ -28,9 +28,9 @@ struct _zend_ssa;
 
 typedef enum _zend_mir_lowering_profile_disposition {
 	ZEND_MIR_LOWERING_PROFILE_ACCEPTED = 0,
-	ZEND_MIR_LOWERING_PROFILE_DEFERRED_W04 = 1,
-	ZEND_MIR_LOWERING_PROFILE_DEFERRED_W05 = 2,
-	ZEND_MIR_LOWERING_PROFILE_DEFERRED_W06 = 3,
+	ZEND_MIR_LOWERING_PROFILE_DEFERRED_CONTROL_FLOW = 1,
+	ZEND_MIR_LOWERING_PROFILE_DEFERRED_CALL = 2,
+	ZEND_MIR_LOWERING_PROFILE_DEFERRED_VALUE = 3,
 	ZEND_MIR_LOWERING_PROFILE_DEFERRED_OTHER = 4,
 	ZEND_MIR_LOWERING_PROFILE_REJECTED = 5,
 	ZEND_MIR_LOWERING_PROFILE_DISPOSITION_INVALID = -1
@@ -52,9 +52,9 @@ typedef struct _zend_mir_lowering_provider_array {
 } zend_mir_lowering_provider_array;
 
 /*
- * The frozen source view contains the linear opcode and SSA records, while
- * front-end CFG facts remain process-local.  Supplying them separately keeps
- * the public source ABI stable and makes the W04 boundary explicit.
+ * The source view contains the linear opcode and SSA records, while
+ * front-end CFG facts remain process-local.  The lowering shape supplies
+ * those facts separately, so the source view does not have to carry them.
  */
 typedef struct _zend_mir_lowering_source_shape {
 	uint32_t reachable_block_count;
@@ -134,14 +134,9 @@ struct _zend_mir_lowering_context {
 bool zend_mir_lowering_registry_init(zend_mir_lowering_registry *registry,
 	const zend_mir_lowering_profile *profile,
 	zend_mir_lowering_diagnostic_code *diagnostic_out);
-bool zend_mir_lowering_registry_construct(zend_mir_lowering_registry *registry,
-	const zend_mir_lowering_profile *profile,
-	const zend_mir_lowering_provider_array *provider_arrays,
-	uint32_t provider_array_count,
-	zend_mir_lowering_diagnostic_code *diagnostic_out);
 bool zend_mir_lowering_registry_validate(zend_mir_lowering_registry *registry,
 	zend_mir_lowering_diagnostic_code *diagnostic_out);
-const zend_mir_lowering_profile *zend_mir_lowering_w03_profile(void);
+const zend_mir_lowering_profile *zend_mir_lowering_scalar_profile(void);
 const zend_mir_lowering_profile_entry *zend_mir_lowering_profile_find(
 	const zend_mir_lowering_profile *profile, uint32_t zend_opcode_number);
 const zend_mir_lowering_provider *zend_mir_lowering_registry_find(
@@ -180,12 +175,6 @@ bool zend_mir_lowering_context_set_post_call_composition(
 		zend_mir_module *module,
 		const zend_mir_control_flow_map *control_flow_map));
 
-zend_mir_w06_lowering_result zend_mir_lower_w06_zend_op_array(
-	const struct _zend_script *script,
-	const struct _zend_op_array *op_array,
-	const struct _zend_ssa *ssa,
-	const zend_mir_lowering_module_ops *module_ops,
-	zend_mir_diagnostic_sink *diagnostics);
 bool zend_mir_lowering_context_value_fact(
 	const zend_mir_lowering_context *context, zend_mir_value_id value_id,
 	zend_mir_value_fact_ref *fact_out);
@@ -193,13 +182,5 @@ bool zend_mir_lowering_context_set_provider_failure(
 	zend_mir_lowering_context *context,
 	zend_mir_lowering_status status,
 	zend_mir_lowering_diagnostic_code diagnostic);
-
-bool zend_mir_lowering_emit_diagnostic(zend_mir_lowering_context *context,
-	zend_mir_lowering_status status,
-	zend_mir_lowering_diagnostic_code code,
-	const zend_mir_source_opcode_ref *source_opcode,
-	const char *detail);
-const char *zend_mir_lowering_diagnostic_token(
-	zend_mir_lowering_diagnostic_code code);
 
 #endif /* ZEND_MIR_LOWERING_INTERNAL_H */

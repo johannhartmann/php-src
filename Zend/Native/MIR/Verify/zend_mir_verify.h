@@ -21,7 +21,7 @@
 #define ZEND_MIR_VERIFY_DOMINANCE_BLOCK_HARD_LIMIT UINT32_C(4096)
 
 /*
- * The generic diagnostic code remains the frozen W02 contract code. The
+ * The generic diagnostic code remains the MIR contract code. The
  * verifier-specific code below is emitted as the leading token in message.
  */
 typedef enum _zend_mir_verify_code {

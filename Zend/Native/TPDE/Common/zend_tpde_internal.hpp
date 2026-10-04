@@ -18,7 +18,7 @@ struct _zend_native_direct_call_descriptor;
 struct _zend_native_direct_internal_call_descriptor;
 struct _zend_native_user_call_descriptor;
 
-extern "C" zend_mir_opcode zend_mir_w12_executable_opcode(uint32_t opcode);
+extern "C" zend_mir_opcode zend_mir_executable_opcode(uint32_t opcode);
 
 enum zend_tpde_machine_value_kind : uint8_t {
 	ZEND_TPDE_MACHINE_VALUE_I64 = 0,

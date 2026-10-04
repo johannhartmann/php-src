@@ -12,5 +12,5 @@ These instructions apply to `Zend/Native/MIR/**`.
   effects rather than silently repairing them.
 - Keep the existing structural verifier coherent with executable MIR changes
   and prove observable semantics through the existing direct execution,
-  differential, PHPT, sanitizer, and target tests. Do not create per-wave
+  differential, PHPT, sanitizer, and target tests. Do not create staged
   verifier frameworks, gate manifests, receipts, or seal machinery.

@@ -557,10 +557,6 @@ void zend_native_entry_cell_set_frame_probe(
  */
 zend_result zend_native_reentry_startup(void);
 void zend_native_reentry_shutdown(void);
-zend_result zend_native_reentry_scope_enter(
-	zend_native_reentry_scope *scope,
-	const zend_native_reentry_binding *bindings,
-	uint32_t binding_count);
 zend_result zend_native_reentry_scope_enter_resolver(
 	zend_native_reentry_scope *scope,
 	const zend_native_reentry_binding *bindings,
@@ -847,16 +843,6 @@ zend_native_direct_call_result zend_native_call_direct_leave(
 	const zend_native_direct_call_descriptor *descriptor,
 	zend_native_execution_context *context,
 	zend_native_status status);
-zend_native_direct_call_entry zend_native_call_dynamic_enter(
-	zend_execute_data *caller,
-	zend_native_entry_cell *cell,
-	const zend_native_user_call_descriptor *descriptor,
-	zend_native_execution_context *context);
-zend_native_direct_call_result zend_native_call_dynamic_leave(
-	zend_execute_data *caller,
-	const zend_native_user_call_descriptor *descriptor,
-	zend_native_execution_context *context,
-	zend_native_status status);
 #define ZEND_NATIVE_CALL_FAST_PREPARE UINT32_C(1)
 #define ZEND_NATIVE_CALL_FAST_CHECK_ARGS UINT32_C(2)
 #define ZEND_NATIVE_CALL_FAST_DEFAULTS UINT32_C(4)
@@ -1123,39 +1109,6 @@ void zend_native_echo_integer(
 	zend_mir_scalar_type_mask exact_type);
 void zend_native_echo_double(
 	zend_execute_data *execute_data, double value);
-
-/*
- * Fixed-signature ABI probe used by the native integration extension. It is
- * bounded, cannot allocate, call user code, throw, bail out, or reenter PHP.
- * The wide signature deliberately crosses GP/FP register and stack argument
- * boundaries on both supported targets. A zero return reports a mismatch.
- */
-uint64_t zend_native_abi_conformance(
-	zend_execute_data *execute_data,
-	const zval *first_argument_slot,
-	uint64_t source_value,
-	uint8_t zext8,
-	int8_t sext8,
-	uint16_t zext16,
-	int16_t sext16,
-	uint32_t zext32,
-	int32_t sext32,
-	uint64_t unsigned64,
-	int64_t signed64,
-	uint64_t spill_a,
-	uint64_t spill_b,
-	double fp0,
-	double fp1,
-	double fp2,
-	double fp3,
-	double fp4,
-	double fp5,
-	double fp6,
-	double fp7,
-	double fp8,
-	double fp9);
-
-#define ZEND_NATIVE_ABI_CONFORMANCE_RESULT UINT64_C(1)
 
 #ifdef __cplusplus
 }
