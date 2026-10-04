@@ -50,7 +50,9 @@ General corrections:
   multi-function adaptor, so a release build never carries a stale pointer
   into the next function.
 - Long-lived multi-part values get a fixed register per part, as single-part
-  values do.
+  values do. Breaking a PHI cycle therefore moves every fixed part of the
+  temporary into its register and spills only the others, for two-part and
+  larger values alike.
 
 Support for machine-code branches inside one IR instruction. The PHP emitter
 still lowers some operations with a fast path and a slow path inside a single
