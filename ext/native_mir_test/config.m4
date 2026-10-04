@@ -45,26 +45,35 @@ AS_VAR_IF([PHP_NATIVE_ENGINE], [no], [], [
   dnl where a zend_object * is now expected, must fail the native build.
   PHP_NATIVE_MIR_TEST_CFLAGS="-Werror=incompatible-pointer-types -Werror=int-conversion"
 
-  AC_PATH_PROG([NATIVE_MIR_TEST_PYTHON], [python3])
-  AS_IF([test -z "$NATIVE_MIR_TEST_PYTHON"], [
-    AC_MSG_ERROR([python3 is required to generate the vendored TPDE/Fadec encoder])
-  ])
-  NATIVE_MIR_TEST_FADEC_BUILD_DIR="$abs_builddir/Zend/Native/TPDE/ThirdParty/tpde/fadec/generated"
-  AS_MKDIR_P([$NATIVE_MIR_TEST_FADEC_BUILD_DIR])
-  AC_MSG_NOTICE([generating the pinned TPDE/Fadec x86-64 encoder])
-  AS_IF([! "$NATIVE_MIR_TEST_PYTHON" \
-      "$abs_srcdir/Zend/Native/TPDE/ThirdParty/tpde/fadec/parseinstrs.py" \
-      encode2 \
-      "$abs_srcdir/Zend/Native/TPDE/ThirdParty/tpde/fadec/instrs.txt" \
-      "$NATIVE_MIR_TEST_FADEC_BUILD_DIR/fadec-encode2-public.inc" \
-      "$NATIVE_MIR_TEST_FADEC_BUILD_DIR/fadec-encode2-private.inc" \
-      --64], [
-    AC_MSG_ERROR([failed to generate the pinned TPDE/Fadec x86-64 encoder])
-  ])
-  PHP_ADD_INCLUDE([$abs_srcdir/Zend/Native/TPDE/ThirdParty/tpde/fadec])
-  PHP_ADD_INCLUDE([$abs_srcdir/Zend/Native/TPDE/ThirdParty/tpde/disarm])
+  dnl Each host builds only its own target backend (ADR 0006).
+  AS_CASE([$host_cpu-$host_os],
+    [x86_64-linux*], [PHP_NATIVE_TARGET=linux-x64],
+    [aarch64-darwin*|arm64-darwin*], [PHP_NATIVE_TARGET=darwin-a64],
+    [AC_MSG_ERROR([the native engine supports Linux x86-64 and Darwin arm64 hosts])])
+
   PHP_ADD_INCLUDE([$abs_srcdir/Zend/Native/TPDE/ThirdParty/tpde/include])
-  PHP_ADD_INCLUDE([$NATIVE_MIR_TEST_FADEC_BUILD_DIR])
+  AS_VAR_IF([PHP_NATIVE_TARGET], [linux-x64], [
+    AC_PATH_PROG([NATIVE_MIR_TEST_PYTHON], [python3])
+    AS_IF([test -z "$NATIVE_MIR_TEST_PYTHON"], [
+      AC_MSG_ERROR([python3 is required to generate the vendored TPDE/Fadec encoder])
+    ])
+    NATIVE_MIR_TEST_FADEC_BUILD_DIR="$abs_builddir/Zend/Native/TPDE/ThirdParty/tpde/fadec/generated"
+    AS_MKDIR_P([$NATIVE_MIR_TEST_FADEC_BUILD_DIR])
+    AC_MSG_NOTICE([generating the pinned TPDE/Fadec x86-64 encoder])
+    AS_IF([! "$NATIVE_MIR_TEST_PYTHON" \
+        "$abs_srcdir/Zend/Native/TPDE/ThirdParty/tpde/fadec/parseinstrs.py" \
+        encode2 \
+        "$abs_srcdir/Zend/Native/TPDE/ThirdParty/tpde/fadec/instrs.txt" \
+        "$NATIVE_MIR_TEST_FADEC_BUILD_DIR/fadec-encode2-public.inc" \
+        "$NATIVE_MIR_TEST_FADEC_BUILD_DIR/fadec-encode2-private.inc" \
+        --64], [
+      AC_MSG_ERROR([failed to generate the pinned TPDE/Fadec x86-64 encoder])
+    ])
+    PHP_ADD_INCLUDE([$abs_srcdir/Zend/Native/TPDE/ThirdParty/tpde/fadec])
+    PHP_ADD_INCLUDE([$NATIVE_MIR_TEST_FADEC_BUILD_DIR])
+  ], [
+    PHP_ADD_INCLUDE([$abs_srcdir/Zend/Native/TPDE/ThirdParty/tpde/disarm])
+  ])
 
   AS_VAR_IF([PHP_NATIVE_MIR_TEST], [no], [], [
     PHP_NEW_EXTENSION([native_mir_test],
@@ -77,37 +86,40 @@ AS_VAR_IF([PHP_NATIVE_ENGINE], [no], [], [
   PHP_ADD_BUILD_DIR([Zend/Native/TPDE/Common])
   PHP_ADD_SOURCES_X([Zend/Native/TPDE/Common], [zend_tpde_backend.cpp],
     [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
-  PHP_ADD_BUILD_DIR([Zend/Native/TPDE/DarwinA64])
-  PHP_ADD_SOURCES_X([Zend/Native/TPDE/DarwinA64],
-    [zend_tpde_darwin_arm64.cpp zend_tpde_darwin_assembler.cpp],
-    [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
-  PHP_ADD_BUILD_DIR([Zend/Native/TPDE/LinuxX64])
-  PHP_ADD_SOURCES_X([Zend/Native/TPDE/LinuxX64], [zend_tpde_linux_x64.cpp],
-    [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
-  PHP_ADD_BUILD_DIR([Zend/Native/TPDE/ThirdParty/tpde/fadec])
-  PHP_ADD_SOURCES([Zend/Native/TPDE/ThirdParty/tpde/fadec], [encode2.c],
-    [-Wno-overlength-strings])
-  PHP_ADD_BUILD_DIR([Zend/Native/TPDE/ThirdParty/tpde/disarm])
-  PHP_ADD_SOURCES([Zend/Native/TPDE/ThirdParty/tpde/disarm], [encode.c])
   PHP_ADD_BUILD_DIR([Zend/Native/TPDE/ThirdParty/tpde/src])
   PHP_ADD_SOURCES_X([Zend/Native/TPDE/ThirdParty/tpde/src],
-    [Assembler.cpp AssemblerElf.cpp ElfMapper.cpp FunctionWriter.cpp StringTable.cpp ValueAssignment.cpp base.cpp],
+    [Assembler.cpp AssemblerElf.cpp FunctionWriter.cpp StringTable.cpp ValueAssignment.cpp base.cpp],
     [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
   PHP_ADD_BUILD_DIR([Zend/Native/TPDE/ThirdParty/tpde/src/util])
   PHP_ADD_SOURCES_X([Zend/Native/TPDE/ThirdParty/tpde/src/util], [SmallVector.cpp],
     [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
-  PHP_ADD_BUILD_DIR([Zend/Native/TPDE/ThirdParty/tpde/src/x64])
-  PHP_ADD_SOURCES_X([Zend/Native/TPDE/ThirdParty/tpde/src/x64], [FunctionWriterX64.cpp],
-    [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
-  PHP_ADD_BUILD_DIR([Zend/Native/TPDE/ThirdParty/tpde/src/arm64])
-  PHP_ADD_SOURCES_X([Zend/Native/TPDE/ThirdParty/tpde/src/arm64], [FunctionWriterA64.cpp],
-    [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
-  PHP_ADD_BUILD_DIR([Zend/Native/Runtime/DarwinA64])
-  PHP_ADD_SOURCES_X([Zend/Native/Runtime/DarwinA64], [zend_native_publish_darwin_arm64.cpp],
-    [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
-  PHP_ADD_BUILD_DIR([Zend/Native/Runtime/LinuxX64])
-  PHP_ADD_SOURCES_X([Zend/Native/Runtime/LinuxX64], [zend_native_publish_linux_x64.cpp],
-    [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
+  AS_VAR_IF([PHP_NATIVE_TARGET], [linux-x64], [
+    PHP_ADD_BUILD_DIR([Zend/Native/TPDE/LinuxX64])
+    PHP_ADD_SOURCES_X([Zend/Native/TPDE/LinuxX64], [zend_tpde_linux_x64.cpp],
+      [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
+    PHP_ADD_BUILD_DIR([Zend/Native/TPDE/ThirdParty/tpde/fadec])
+    PHP_ADD_SOURCES([Zend/Native/TPDE/ThirdParty/tpde/fadec], [encode2.c],
+      [-Wno-overlength-strings])
+    PHP_ADD_BUILD_DIR([Zend/Native/TPDE/ThirdParty/tpde/src/x64])
+    PHP_ADD_SOURCES_X([Zend/Native/TPDE/ThirdParty/tpde/src/x64], [FunctionWriterX64.cpp],
+      [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
+    PHP_ADD_BUILD_DIR([Zend/Native/Runtime/LinuxX64])
+    PHP_ADD_SOURCES_X([Zend/Native/Runtime/LinuxX64], [zend_native_publish_linux_x64.cpp],
+      [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
+  ], [
+    PHP_ADD_BUILD_DIR([Zend/Native/TPDE/DarwinA64])
+    PHP_ADD_SOURCES_X([Zend/Native/TPDE/DarwinA64],
+      [zend_tpde_darwin_arm64.cpp zend_tpde_darwin_assembler.cpp],
+      [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
+    PHP_ADD_BUILD_DIR([Zend/Native/TPDE/ThirdParty/tpde/disarm])
+    PHP_ADD_SOURCES([Zend/Native/TPDE/ThirdParty/tpde/disarm], [encode.c])
+    PHP_ADD_BUILD_DIR([Zend/Native/TPDE/ThirdParty/tpde/src/arm64])
+    PHP_ADD_SOURCES_X([Zend/Native/TPDE/ThirdParty/tpde/src/arm64], [FunctionWriterA64.cpp],
+      [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
+    PHP_ADD_BUILD_DIR([Zend/Native/Runtime/DarwinA64])
+    PHP_ADD_SOURCES_X([Zend/Native/Runtime/DarwinA64], [zend_native_publish_darwin_arm64.cpp],
+      [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
+  ])
   PHP_ADD_BUILD_DIR([Zend/Native/Runtime/Common])
   PHP_ADD_SOURCES([Zend/Native/Runtime/Common],
     [zend_native_bindings.c zend_native_calls.c zend_native_execute.c zend_native_generators.c zend_native_internal_call.c zend_native_objects.c zend_native_runtime.c zend_native_values.c],

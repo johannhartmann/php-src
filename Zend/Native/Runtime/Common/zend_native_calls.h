@@ -119,17 +119,10 @@ static zend_always_inline void zend_native_entry_cell_release_suspended(
 	}
 }
 
-typedef struct _zend_native_reentry_binding {
-	zend_function *function;
-	zend_native_entry_cell *entry_cell;
-} zend_native_reentry_binding;
-
 typedef zend_native_entry_cell *(*zend_native_reentry_resolver_t)(
 	void *context, zend_function *function);
 
 typedef struct _zend_native_reentry_scope {
-	const zend_native_reentry_binding *bindings;
-	uint32_t binding_count;
 	zend_native_reentry_resolver_t resolver;
 	void *resolver_context;
 	struct _zend_native_reentry_scope *previous;
@@ -559,14 +552,6 @@ zend_result zend_native_reentry_startup(void);
 void zend_native_reentry_shutdown(void);
 zend_result zend_native_reentry_scope_enter_resolver(
 	zend_native_reentry_scope *scope,
-	const zend_native_reentry_binding *bindings,
-	uint32_t binding_count,
-	zend_native_reentry_resolver_t resolver,
-	void *resolver_context);
-zend_result zend_native_reentry_scope_enter_resolver_direct(
-	zend_native_reentry_scope *scope,
-	const zend_native_reentry_binding *bindings,
-	uint32_t binding_count,
 	zend_native_reentry_resolver_t resolver,
 	void *resolver_context);
 void zend_native_reentry_scope_leave(zend_native_reentry_scope *scope);

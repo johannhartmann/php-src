@@ -43,24 +43,10 @@ enum zend_tpde_machine_part_role : uint8_t {
 	ZEND_TPDE_MACHINE_PART_TYPE_INFO = 2,
 };
 
-enum zend_tpde_machine_abi_extension : uint8_t {
-	ZEND_TPDE_MACHINE_ABI_EXTENSION_NONE = 0,
-	ZEND_TPDE_MACHINE_ABI_EXTENSION_ZERO = 1,
-	ZEND_TPDE_MACHINE_ABI_EXTENSION_SIGN = 2,
-};
-
-enum zend_tpde_machine_part_ownership_role : uint8_t {
-	ZEND_TPDE_MACHINE_PART_OWNERSHIP_NONE = 0,
-	ZEND_TPDE_MACHINE_PART_OWNERSHIP_VALUE = 1,
-	ZEND_TPDE_MACHINE_PART_OWNERSHIP_METADATA = 2,
-};
-
 struct zend_tpde_machine_part_desc {
 	zend_tpde_machine_part_role semantic_role;
 	uint16_t bit_width;
 	zend_tpde_machine_register_bank register_bank;
-	zend_tpde_machine_abi_extension abi_extension;
-	zend_tpde_machine_part_ownership_role ownership_role;
 };
 
 struct zend_tpde_machine_representation_desc {
@@ -89,64 +75,26 @@ zend_tpde_machine_representation(
 	zend_tpde_machine_value_kind kind, bool register_authoritative)
 {
 	static constexpr zend_tpde_machine_part_desc gp_value[] = {{
-		ZEND_TPDE_MACHINE_PART_VALUE, 64, ZEND_TPDE_MACHINE_REGISTER_GP,
-		ZEND_TPDE_MACHINE_ABI_EXTENSION_NONE,
-		ZEND_TPDE_MACHINE_PART_OWNERSHIP_NONE}};
+		ZEND_TPDE_MACHINE_PART_VALUE, 64, ZEND_TPDE_MACHINE_REGISTER_GP}};
 	static constexpr zend_tpde_machine_part_desc fp_value[] = {{
-		ZEND_TPDE_MACHINE_PART_VALUE, 64, ZEND_TPDE_MACHINE_REGISTER_FP,
-		ZEND_TPDE_MACHINE_ABI_EXTENSION_NONE,
-		ZEND_TPDE_MACHINE_PART_OWNERSHIP_NONE}};
-	static constexpr zend_tpde_machine_part_desc pointer_value[] = {{
-		ZEND_TPDE_MACHINE_PART_VALUE, 64, ZEND_TPDE_MACHINE_REGISTER_GP,
-		ZEND_TPDE_MACHINE_ABI_EXTENSION_NONE,
-		ZEND_TPDE_MACHINE_PART_OWNERSHIP_VALUE}};
+		ZEND_TPDE_MACHINE_PART_VALUE, 64, ZEND_TPDE_MACHINE_REGISTER_FP}};
 	static constexpr zend_tpde_machine_part_desc boxed_zval[] = {
 		{ZEND_TPDE_MACHINE_PART_PAYLOAD, 64,
-			ZEND_TPDE_MACHINE_REGISTER_GP,
-			ZEND_TPDE_MACHINE_ABI_EXTENSION_NONE,
-			ZEND_TPDE_MACHINE_PART_OWNERSHIP_VALUE},
+			ZEND_TPDE_MACHINE_REGISTER_GP},
 		{ZEND_TPDE_MACHINE_PART_TYPE_INFO, 32,
-			ZEND_TPDE_MACHINE_REGISTER_GP,
-			ZEND_TPDE_MACHINE_ABI_EXTENSION_ZERO,
-			ZEND_TPDE_MACHINE_PART_OWNERSHIP_METADATA}};
+			ZEND_TPDE_MACHINE_REGISTER_GP}};
 
 	if (kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 			&& register_authoritative) {
 		return {2, boxed_zval};
-	}
-	if (kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-			|| kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-			|| kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-			|| kind == ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-			|| kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR) {
-		return {1, pointer_value};
 	}
 	return {1, kind == ZEND_TPDE_MACHINE_VALUE_F64 ? fp_value : gp_value};
 }
 
 enum zend_tpde_machine_location : uint8_t {
 	ZEND_TPDE_MACHINE_LOCATION_REGISTER = 0,
-	ZEND_TPDE_MACHINE_LOCATION_SPILL = 1,
 	ZEND_TPDE_MACHINE_LOCATION_CANONICAL_FRAME_SLOT = 2,
 };
-
-static inline bool zend_tpde_machine_value_is_register_authoritative(
-	zend_tpde_machine_value_kind kind)
-{
-	switch (kind) {
-		case ZEND_TPDE_MACHINE_VALUE_I64:
-		case ZEND_TPDE_MACHINE_VALUE_F64:
-		case ZEND_TPDE_MACHINE_VALUE_BOOL:
-		case ZEND_TPDE_MACHINE_VALUE_STRING_PTR:
-		case ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR:
-		case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
-		case ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR:
-		case ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL:
-		case ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR:
-			return true;
-	}
-	return false;
-}
 
 enum zend_tpde_canonical_slot_state : uint8_t {
 	ZEND_TPDE_CANONICAL_SLOT_UNMATERIALIZED = 0,
@@ -488,7 +436,6 @@ enum zend_tpde_source_call_phase : uint8_t {
 };
 
 enum zend_tpde_source_call_operand_flag : uint8_t {
-	ZEND_TPDE_SOURCE_CALL_OPERAND_NONE = 0,
 	ZEND_TPDE_SOURCE_CALL_OPERAND_DIRECT_VALUE = 1u << 0,
 	ZEND_TPDE_SOURCE_CALL_OPERAND_SOURCE = 1u << 1,
 	ZEND_TPDE_SOURCE_CALL_OPERAND_RUNTIME_EXPANSION = 1u << 2,
@@ -537,7 +484,6 @@ struct zend_tpde_instruction {
 	 */
 	zend_mir_scalar_type_mask *direct_call_argument_guard_types;
 	_zend_native_direct_internal_call_descriptor *direct_internal_call;
-	zend_native_source_effect_kind source_effect;
 	zend_mir_scalar_type_mask source_effect_exact_type;
 	bool debug_probe;
 	zend_mir_storage_id zval_store_storage_id;
@@ -583,7 +529,6 @@ struct zend_tpde_instruction {
 	bool user_opcode_call_fragments;
 	bool user_call_no_call;
 	bool direct_scalar_return;
-	zend_mir_scalar_type_mask direct_scalar_return_type;
 	uint32_t direct_scalar_return_offset;
 	uint32_t source_opline_index;
 	uint32_t dynamic_fetch_cv_index;
@@ -603,8 +548,6 @@ struct zend_tpde_instruction {
 	bool source_op1_reference_free;
 	uint32_t source_op1_reference_index;
 	uint32_t source_op2_reference_index;
-	uint32_t source_result_reference_index;
-	uint32_t source_auxiliary_reference_index;
 	uint32_t operation_reference_index;
 	bool local_abi_transport;
 	uint8_t machine_control_flow_flags;
@@ -747,10 +690,9 @@ struct zend_tpde_source_opcode {
 	 * long or a double, IS_UNDEF otherwise. */
 	uint8_t op1_known_type;
 	uint8_t op2_known_type;
-	/* Zend's inferred MAY_BE_* mask of the operand (literals: the bit of
-	 * their type), UINT32_MAX when unknown. */
+	/* Zend's inferred MAY_BE_* mask of op1 (literals: the bit of their
+	 * type), UINT32_MAX when unknown. */
 	uint32_t op1_may_be;
-	uint32_t op2_may_be;
 	uint32_t op1_var;
 	uint32_t op2_var;
 	uint32_t result_var;
@@ -917,62 +859,6 @@ static inline bool zend_tpde_array_read_at(
 		: (uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
 			* sizeof(zval);
 	/* A literal key has no frame slot; its fast path takes the key operand. */
-	key_offset = operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
-		? 0
-		: (uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op2_storage_id)
-			* sizeof(zval);
-	result_offset =
-		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
-			* sizeof(zval);
-	if (container_offset > UINT32_MAX || key_offset > UINT32_MAX
-			|| result_offset > UINT32_MAX) {
-		return false;
-	}
-	out->container_offset = static_cast<uint32_t>(container_offset);
-	out->key_offset = static_cast<uint32_t>(key_offset);
-	out->result_offset = static_cast<uint32_t>(result_offset);
-	return true;
-}
-
-/*
- * A read from a temporary container, such as the row of $m[$i][$k],
- * consumes the container. Only the frame-slot fast path takes it: it reads a
- * packed element by integer key and releases a container that has other
- * owners; a sole owner, which would be destroyed, keeps the helper.
- */
-static inline bool zend_tpde_temporary_container_array_read_at(
-	const zend_tpde_instruction &instruction,
-	zend_tpde_array_read *out)
-{
-	const zend_mir_executable_value_ref &operation =
-		instruction.value_operation;
-	uint64_t container_offset;
-	uint64_t key_offset;
-	uint64_t result_offset;
-
-	if (out == nullptr || !instruction.has_value_operation
-			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
-			|| operation.source_opcode != ZEND_FETCH_DIM_R
-			|| operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
-			|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
-			|| operation.op1_storage_id == ZEND_MIR_ID_INVALID
-			|| (operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
-				&& operation.op2.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
-				&& operation.op2.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP)
-			|| (operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
-				&& operation.op2_storage_id == ZEND_MIR_ID_INVALID)
-			|| (operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
-				&& operation.op2_storage_id != ZEND_MIR_ID_INVALID)
-			|| operation.result_storage_id == ZEND_MIR_ID_INVALID
-			|| operation.op1_storage_id == operation.op2_storage_id
-			|| operation.op1_storage_id == operation.result_storage_id
-			|| operation.op2_storage_id == operation.result_storage_id) {
-		return false;
-	}
-	out->container_literal = false;
-	container_offset =
-		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
-			* sizeof(zval);
 	key_offset = operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
 		? 0
 		: (uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op2_storage_id)
@@ -1838,9 +1724,9 @@ static inline bool zend_tpde_long_assign_op_at(
 	left_offset =
 		(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
 			* sizeof(zval);
-	if (operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
-			&& operation.op2_storage_id != ZEND_MIR_ID_INVALID) {
-		right_offset = operation.op2_storage_id * sizeof(zval);
+	if (operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+		/* A literal has no storage: its offset indexes the literal table. */
+		right_offset = uint64_t{operation.op2.index} * sizeof(zval);
 		out->right.literal = true;
 	} else if ((operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
 				|| operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
@@ -2447,7 +2333,6 @@ struct zend_tpde_plan {
 	int32_t *source_value_definition_instructions;
 	uint32_t *value_consumer_offsets;
 	zend_tpde_machine_use *value_consumers;
-	uint32_t value_consumer_count;
 	uint8_t *entry_value_required;
 	uint8_t *typed_body_value_required;
 	zend_tpde_id_index_entry *call_site_instruction_index;
@@ -2471,7 +2356,6 @@ struct zend_tpde_plan {
 	_zend_native_user_call_descriptor **user_calls;
 	uint32_t user_call_count;
 	uint32_t argument_count;
-	uint32_t value_model_flags;
 	uint64_t required_runtime_capabilities;
 	uint64_t required_runtime_helpers[ZEND_NATIVE_RUNTIME_HELPER_WORD_COUNT];
 	zend_mir_executable_value_ref *user_opcode_source_operations;
@@ -2511,8 +2395,6 @@ struct zend_tpde_plan {
 	bool may_emit_calls;
 	bool zend_entry_may_emit_calls;
 	bool typed_body_may_emit_calls;
-	bool zend_entry_needs_unwind;
-	bool typed_body_needs_unwind;
 	bool user_opcode_callbacks;
 };
 
@@ -2738,9 +2620,7 @@ enum zend_native_image_symbol_kind : uint32_t {
 	ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER = 1,
 	ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL = 2,
 	ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL = 3,
-	ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_API = 4,
 	ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR = 5,
-	ZEND_NATIVE_IMAGE_SYMBOL_SOURCE = 6,
 	ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR = 7,
 	ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR = 8,
 };
@@ -2780,7 +2660,6 @@ struct zend_native_image {
 	zend_native_image_symbol_binding *symbol_bindings;
 	uint32_t symbol_binding_count;
 	uint32_t symbol_binding_capacity;
-	uint32_t slot_count;
 	uint32_t argument_count;
 	uint32_t frame_variable_count;
 	uint32_t frame_temporary_count;
@@ -2813,7 +2692,6 @@ struct zend_native_code {
 	void **component_fast_entries;
 	zend_native_component_entry *component_metadata;
 	uint32_t component_entry_count;
-	uint32_t slot_count;
 	uint32_t argument_count;
 	uint32_t frame_variable_count;
 	uint32_t frame_temporary_count;
@@ -3125,3 +3003,14 @@ zend_result zend_native_publish_linux_x64(
 	zend_native_diagnostic *diag);
 void zend_native_unmap_darwin_arm64(zend_native_code *code);
 void zend_native_unmap_linux_x64(zend_native_code *code);
+
+/* The backend of the host target; only that one is built. */
+#if defined(__APPLE__) && defined(__aarch64__)
+# define zend_tpde_emit_host zend_tpde_emit_darwin_arm64
+# define zend_native_publish_host zend_native_publish_darwin_arm64
+# define zend_native_unmap_host zend_native_unmap_darwin_arm64
+#else
+# define zend_tpde_emit_host zend_tpde_emit_linux_x64
+# define zend_native_publish_host zend_native_publish_linux_x64
+# define zend_native_unmap_host zend_native_unmap_linux_x64
+#endif

@@ -106,7 +106,6 @@ struct _zend_native_compiler {
 	zend_native_compile_fault fault;
 	bool source_probe;
 	bool defer_publication;
-	bool direct_reentry;
 	bool lazy_source_index;
 	zend_native_external_reentry_resolver_t external_reentry_resolver;
 	void *external_reentry_context;
@@ -134,10 +133,6 @@ struct _zend_native_compiler {
 
 typedef struct _zend_native_compiler_session {
 	zend_native_compiler *compiler;
-	zend_native_reentry_binding *reentry_bindings;
-	uint32_t reentry_binding_capacity;
-	uint32_t reentry_binding_count;
-	uint32_t reentry_binding_function_count;
 	zend_native_reentry_scope reentry_scope;
 	zend_native_dynamic_compiler dynamic_compiler;
 	zend_script request_script;
@@ -362,7 +357,6 @@ static void zend_native_compiler_session_destroy(
 	ZEND_ASSERT(!session->dynamic_compiler_active);
 	zend_native_compiler_destroy(session->request_compiler);
 	zend_native_dynamic_compiler_destroy(&session->dynamic_compiler);
-	efree(session->reentry_bindings);
 	efree(session);
 }
 
@@ -519,7 +513,6 @@ static zend_native_compiler *zend_native_compiler_request_companion(
 	config.frame_probe = compiler->frame_probe;
 	config.frame_probe_context = compiler->frame_probe_context;
 	config.source_probe = compiler->source_probe;
-	config.direct_reentry = true;
 	session->request_compiler =
 		zend_native_compiler_create(&config, diagnostic);
 	return session->request_compiler;
@@ -1503,7 +1496,6 @@ static bool zend_native_compiler_prepare_source_effects(
 
 		effect->source_position_id = index;
 		effect->kind = ZEND_NATIVE_SOURCE_EFFECT_DEBUG_PROBE;
-		effect->exact_type = ZEND_MIR_SCALAR_TYPE_NONE;
 		effect->target_block_id = ZEND_MIR_ID_INVALID;
 	}
 	function->source_effects_prepared = true;
@@ -1689,7 +1681,6 @@ static bool zend_native_compiler_add_exception_routes(
 			&function->source_effects[function->source_effect_count++];
 		effect->source_position_id = instruction.source_position_id;
 		effect->kind = ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE;
-		effect->exact_type = ZEND_MIR_SCALAR_TYPE_NONE;
 		effect->target_block_id = target_block;
 	}
 	efree(handler_blocks);
@@ -3714,17 +3705,22 @@ static bool zend_native_compiler_compile_native_component(
 		zend_hrtime_t phase_started;
 		zend_result compile_result;
 		zend_native_image_metrics image_metrics;
+		zend_native_component_member member;
+		memset(&member, 0, sizeof(member));
+		member.module =
+			zend_native_compiler_module_view(compiler, function->module);
+		member.user_bindings = bindings;
+		member.user_binding_count = binding_count;
+		member.internal_bindings = internal_bindings;
+		member.internal_binding_count = internal_binding_count;
+		member.effects = function->source_effects;
+		member.effect_count = function->source_effect_count;
+		member.frame_argument_count = function->op_array->num_args;
+		member.source_op_array = function->op_array;
+		member.source_ssa = &function->ssa;
 		phase_started = zend_hrtime();
-		compile_result = zend_tpde_compile_module_with_runtime(
-				compiler->target,
-				zend_native_compiler_module_view(compiler, function->module),
-				bindings, binding_count,
-				internal_bindings, internal_binding_count,
-				function->source_effects, function->source_effect_count,
-				function->op_array->num_args,
-				function->op_array,
-				&function->ssa,
-				runtime,
+		compile_result = zend_tpde_compile_component_with_runtime(
+				compiler->target, &member, 1, runtime,
 				&function->image, &diagnostic);
 		compiler->stats.codegen_ns += zend_hrtime() - phase_started;
 		if (compile_result == FAILURE) {
@@ -4325,8 +4321,7 @@ zend_result zend_native_compiler_compile_dynamic_component(
 			first_class_bucket, component_compiler,
 			first_compiled_function, root_entry, diagnostic);
 	}
-	if (compiler->direct_reentry
-			&& compiler->script->function_table.pDestructor != NULL
+	if (compiler->script->function_table.pDestructor != NULL
 			&& compiler->script->class_table.pDestructor != NULL) {
 		/*
 		 * Dynamic include/eval may grow the request symbol tables before it
@@ -4642,68 +4637,15 @@ static zend_result zend_native_compiler_enter(
 {
 	zend_native_compiler_session *session =
 		zend_native_compiler_session_get(compiler);
-	zend_result entered;
 
 	if (session == NULL || session->reentry_active
 			|| session->dynamic_compiler_active) {
 		return FAILURE;
 	}
 	memset(&session->reentry_scope, 0, sizeof(session->reentry_scope));
-	if (compiler->direct_reentry) {
-		entered = zend_native_reentry_scope_enter_resolver_direct(
-			&session->reentry_scope, NULL, 0,
-			zend_native_compiler_resolve_reentry, compiler);
-	} else {
-		uint32_t binding_count = 0;
-
-		zend_native_compiler_mutation_lock(compiler);
-		if (compiler->function_count == 0) {
-			zend_native_compiler_mutation_unlock(compiler);
-			return FAILURE;
-		}
-		if (session->reentry_binding_function_count
-				!= compiler->function_count) {
-			if (session->reentry_binding_capacity
-					< compiler->function_count) {
-				session->reentry_bindings = safe_erealloc(
-					session->reentry_bindings,
-					compiler->function_count,
-					sizeof(*session->reentry_bindings), 0);
-				session->reentry_binding_capacity =
-					compiler->function_count;
-			}
-			for (uint32_t index = 0;
-					index < compiler->function_count; index++) {
-				zend_native_compiled_function *function =
-					compiler->functions[index];
-
-				/* A variant is entered only from its general entry. */
-				if (function->state == ZEND_NATIVE_CODEUNIT_FAILED
-						|| zend_native_compiler_is_variant(function)) {
-					continue;
-				}
-				if (function->entry_cell.state
-						!= ZEND_NATIVE_ENTRY_READY) {
-					zend_native_compiler_mutation_unlock(compiler);
-					return FAILURE;
-				}
-				session->reentry_bindings[binding_count].function =
-					(zend_function *) function->op_array;
-				session->reentry_bindings[binding_count].entry_cell =
-					&function->entry_cell;
-				binding_count++;
-			}
-			session->reentry_binding_count = binding_count;
-			session->reentry_binding_function_count =
-				compiler->function_count;
-		}
-		zend_native_compiler_mutation_unlock(compiler);
-		entered = zend_native_reentry_scope_enter_resolver(
-			&session->reentry_scope, session->reentry_bindings,
-			session->reentry_binding_count,
-			zend_native_compiler_resolve_reentry, compiler);
-	}
-	if (entered == FAILURE) {
+	if (zend_native_reentry_scope_enter_resolver(
+			&session->reentry_scope,
+			zend_native_compiler_resolve_reentry, compiler) == FAILURE) {
 		return FAILURE;
 	}
 	session->reentry_active = true;
@@ -4996,7 +4938,6 @@ zend_native_compiler *zend_native_compiler_create(
 	compiler->fault = config->fault;
 	compiler->source_probe = config->source_probe;
 	compiler->defer_publication = config->defer_publication;
-	compiler->direct_reentry = config->direct_reentry;
 	compiler->lazy_source_index = config->lazy_source_index;
 	compiler->external_reentry_resolver =
 		config->external_reentry_resolver;

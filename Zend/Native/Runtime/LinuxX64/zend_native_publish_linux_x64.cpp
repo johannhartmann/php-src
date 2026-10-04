@@ -770,7 +770,6 @@ zend_result zend_native_publish_linux_x64(
 		return FAILURE;
 	}
 	code->target = ZEND_NATIVE_TARGET_LINUX_AMD64;
-	code->slot_count = image->slot_count;
 	code->argument_count = image->argument_count;
 	code->frame_variable_count = image->frame_variable_count;
 	code->frame_temporary_count = image->frame_temporary_count;

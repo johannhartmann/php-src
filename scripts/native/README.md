@@ -35,7 +35,12 @@ scripts/native/build.sh --profile linux-amd64-native-debug-nts --print-binary
 scripts/native/test-phpt.sh --tier quick
 scripts/native/test-smoke.sh --profile linux-amd64-native-debug-nts
 scripts/native/test-sanitizers.sh
+scripts/native/check-darwin-backend.sh
 ```
+
+A host builds only its own target backend. On Linux,
+`check-darwin-backend.sh` syntax-checks the Darwin arm64 backend with the
+profile's compile flags; `test-phpt.sh` runs it after the debug build.
 
 Every public script supports `--help`. An unknown profile, missing tool, build
 failure, PHPT failure, or sanitizer diagnostic returns non-zero.

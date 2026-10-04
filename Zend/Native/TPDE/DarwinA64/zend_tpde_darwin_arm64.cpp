@@ -1229,8 +1229,6 @@ bool ZendCompilerA64::reload_generator_values(
 		const uint64_t offset =
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
 		if (!zend_mir_id_is_valid(storage)
-				|| !zend_tpde_machine_value_is_register_authoritative(
-					machine_kind)
 				|| offset + offsetof(zval, u1.type_info) > UINT32_MAX) {
 			return false;
 		}
@@ -4117,8 +4115,6 @@ bool ZendCompilerA64::compile_inst_impl(
 			const uint64_t offset =
 				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
 			if (!zend_mir_id_is_valid(storage)
-					|| !zend_tpde_machine_value_is_register_authoritative(
-						machine_kind)
 					|| offset + offsetof(zval, u1.type_info)
 						> UINT32_MAX) {
 				return false;
@@ -4777,8 +4773,7 @@ bool ZendCompilerA64::compile_inst_impl(
 		generate_switch(std::move(decision), 32, successors[0], cases);
 		return true;
 	}
-	if (record.opcode == ZEND_MIR_OPCODE_ECHO_SCALAR
-			|| mir.source_effect == ZEND_NATIVE_SOURCE_EFFECT_ECHO_SCALAR) {
+	if (record.opcode == ZEND_MIR_OPCODE_ECHO_SCALAR) {
 		zend_mir_scalar_type_mask exact_type = mir.source_effect_exact_type;
 		if (!zend_mir_scalar_type_is_exact(exact_type)
 				|| node.operands.empty()) {
@@ -5492,9 +5487,7 @@ bool ZendCompilerA64::compile_inst_impl(
 			!node.operands.empty()
 			&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
 			&& adaptor->machine_value_is_register_authoritative(
-				node.operands[0])
-			&& zend_tpde_machine_value_is_register_authoritative(
-				adaptor->machine_kind(node.operands[0]));
+				node.operands[0]);
 
 		if (register_source) {
 			const zend_tpde_machine_value_kind source_kind =
@@ -11033,18 +11026,12 @@ bool ZendCompilerA64::compile_inst_impl(
 						&& node.kind == Adaptor::InstKind::GuardedFast
 						&& !typed_body_call
 						&& !node.inlined_user_body) {
-					const uint32_t inline_operand_count =
-						node.inlined_user_body
-							? (node.inlined_checked_source_opcode
-									== UINT32_MAX ? 1 : 2)
-							: 0;
-					if (node.operands.size()
-							< context_operand + inline_operand_count) {
+					if (node.operands.size() < context_operand) {
 						return false;
 					}
 					const uint32_t context_use_count =
 						static_cast<uint32_t>(node.operands.size())
-						- context_operand - inline_operand_count;
+						- context_operand;
 					auto discard_operand = [&](uint32_t index) {
 						auto discarded = val_ref(node.operands[index]);
 						(void) discarded;
@@ -11215,11 +11202,16 @@ bool ZendCompilerA64::compile_inst_impl(
 								>= node.operands.size()) {
 						return false;
 					}
+					const auto checked_steps =
+						adaptor->inlined_checked_steps(node);
+					if (!checked_steps.empty()
+							&& node.inlined_checked_operand_count
+								!= checked_steps.size() + 1) {
+						return false;
+					}
 					const uint32_t inline_operand_count =
-						node.inlined_checked_source_opcode == UINT32_MAX
-							? 1
-							: node.inlined_checked_operand_count != 0
-								? node.inlined_checked_operand_count : 2;
+						checked_steps.empty()
+							? 1 : node.inlined_checked_operand_count;
 					if (node.operands.size() < inline_operand_count
 							|| node.inlined_operand_index
 							> node.operands.size()
@@ -11263,13 +11255,10 @@ bool ZendCompilerA64::compile_inst_impl(
 						generate_raw_jump(
 							Jump::Jne, call_slow_target());
 					}
-					if (node.inlined_checked_source_opcode != UINT32_MAX) {
-						const auto checked_steps =
-							adaptor->inlined_checked_steps(node);
+					if (!checked_steps.empty()) {
 						if (checked_steps.size() > 1) {
-							if (inline_operand_count != checked_steps.size() + 1
-									|| node.inlined_operand_index + 1
-										>= node.operands.size()) {
+							if (node.inlined_operand_index + 1
+									>= node.operands.size()) {
 								return false;
 							}
 							auto [left_ref, left] = val_ref_single(
@@ -11340,8 +11329,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						if (node.has_result) {
 							ScratchReg computed{this};
 							auto computed_reg = computed.alloc_gp();
-							switch (
-								node.inlined_checked_source_opcode) {
+							switch (checked_steps[0].source_opcode) {
 								case ZEND_ADD:
 									ASM(ADDSx, computed_reg,
 										left_reg, right_reg);
@@ -11543,10 +11531,9 @@ bool ZendCompilerA64::compile_inst_impl(
 									>= node.operands.size()) {
 								return false;
 							}
-							if (node.inlined_checked_source_opcode
-									!= UINT32_MAX) {
-								const auto checked_steps =
-									adaptor->inlined_checked_steps(node);
+							const auto checked_steps =
+								adaptor->inlined_checked_steps(node);
+							if (!checked_steps.empty()) {
 								if (checked_steps.size() > 1) {
 									const uint32_t checked_operand_count =
 										node.inlined_checked_operand_count;
@@ -11616,8 +11603,7 @@ bool ZendCompilerA64::compile_inst_impl(
 									auto [right_ref, right] = val_ref_single(
 										node.operands[
 											node.inlined_operand_index + 1]);
-									switch (
-										node.inlined_checked_source_opcode) {
+									switch (checked_steps[0].source_opcode) {
 										case ZEND_ADD:
 											ASM(ADDSx, first_reg,
 												left.load_to_reg(),
