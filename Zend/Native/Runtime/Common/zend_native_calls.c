@@ -2020,7 +2020,8 @@ void zend_native_call_fast_release_cv(zval *variable)
 {
 	zend_refcounted *counted = Z_COUNTED_P(variable);
 
-	if (!GC_DELREF(counted)) {
+	/* The fast-call leave already dropped the CV's reference. */
+	if (GC_REFCOUNT(counted) == 0) {
 		ZVAL_NULL(variable);
 		rc_dtor_func(counted);
 	} else {
