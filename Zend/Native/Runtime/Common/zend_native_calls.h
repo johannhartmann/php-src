@@ -871,6 +871,16 @@ uint32_t zend_native_call_fast_leave(
  * arguments move behind the temporaries and the parameter collects them,
  * as RECV_VARIADIC does; without extra arguments it is the empty array. */
 void zend_native_call_receive_variadic(zend_execute_data *callee);
+/*
+ * Deoptimization stress (debug builds, ZEND_NATIVE_DEOPT_STRESS=<period>):
+ * every period-th armed deoptimization point transfers its materialized
+ * frame to a new activation of `entry` at the resume ID of source position
+ * `position`; the points of an activation that resumed (`disarmed`) never
+ * do. Returns the activation's status with bit 32 set, or 0 when the point
+ * stays in the current activation.
+ */
+uint64_t zend_native_deopt_stress_reenter(zend_execute_data *execute_data,
+	uint32_t position, zend_native_frame_entry_t entry, uint32_t disarmed);
 /* A counted CV of a frame a fast-call entry leaves, as
  * zend_native_call_fast_leave() releases it, after the entry dropped its
  * reference: freed at zero, else checked as a possible GC root. */

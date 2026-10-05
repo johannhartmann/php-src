@@ -2410,6 +2410,14 @@ struct zend_tpde_plan {
 	uint32_t *generator_resume_landings;
 	zend_mir_block_id *generator_resume_exception_blocks;
 	uint64_t *generator_resume_live_values;
+	/*
+	 * Deoptimization resume IDs (ADR 0025 section 4): the source positions
+	 * a deoptimizing activation continues at, with the MIR instruction that
+	 * starts each.
+	 */
+	uint32_t deopt_resume_count;
+	uint32_t *deopt_resume_targets;
+	uint32_t *deopt_resume_instructions;
 	zend_tpde_materialization *materializations;
 	uint32_t materialization_count;
 	zend_tpde_machine_reference *machine_references;

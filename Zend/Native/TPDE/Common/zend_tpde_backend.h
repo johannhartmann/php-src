@@ -82,6 +82,9 @@ typedef struct _zend_native_execution_context {
 	/* The call-cache epoch that validates call-site fast paths. */
 	const uint64_t *call_cache_epoch;
 	bool observers_enabled;
+	/* Set by a deoptimization transfer for the one entry it makes: the
+	 * entry continues at the resume ID its frame's opline names. */
+	bool deopt_resume;
 } zend_native_execution_context;
 
 typedef zend_native_status (*zend_native_frame_entry_t)(

@@ -12,15 +12,17 @@ usage() {
 Run native PHPT suites in tiers, building profiles incrementally.
 
 Usage: test-phpt.sh [--tier quick|commit|full] [--jobs N] [--no-build]
-                    [--show-slow MS] [--baseline FILE] [PATH...]
+                    [--show-slow MS] [--baseline FILE]
+                    [--deopt-stress PERIOD] [PATH...]
 
 Tiers:
   quick   (default) debug profile: ext/native_mir_test/tests plus PATHs.
           Seconds; run it after every change.
   commit  debug profile: the native, Zend, OPcache, array, math, string,
           SPL and reflection suites plus PATHs. Run it before a commit.
-  full    commit, then ASan and UBSan, built concurrently and run one after
-          the other. Run it before a push.
+  full    commit, the commit suites under deoptimization stress (period 1),
+          then ASan and UBSan, built concurrently and run one after the
+          other. Run it before a push.
 
 Options:
   --jobs N         Worker count (default: NATIVE_JOBS or CPU count).
@@ -28,6 +30,12 @@ Options:
   --show-slow MS   Report tests slower than MS milliseconds (default 3000).
   --baseline FILE  Also list failures that are not in FILE, one test path
                    per line (as written to the failures file of a run).
+  --deopt-stress PERIOD
+                   Run the debug suites with ZEND_NATIVE_DEOPT_STRESS=PERIOD:
+                   every PERIOD-th deoptimization point of a guarded
+                   operation's slow path transfers its frame to a new
+                   activation (ADR 0025 section 4). Logs are named
+                   phpt-<tier>-deopt*.
 
 Environment:
   NATIVE_PHPT_RUNNER   Plain PHP CLI that runs run-tests.php (required; the
@@ -45,6 +53,7 @@ jobs=$(native_default_jobs)
 build=1
 show_slow=3000
 baseline=
+deopt_stress=
 extra_paths=()
 while (($#)); do
     case $1 in
@@ -72,6 +81,11 @@ while (($#)); do
             baseline=$2
             shift 2
             ;;
+        --deopt-stress)
+            (($# >= 2)) || native_die "--deopt-stress requires a value"
+            deopt_stress=$2
+            shift 2
+            ;;
         -h|--help)
             usage
             exit 0
@@ -88,6 +102,8 @@ while (($#)); do
 done
 native_validate_jobs "$jobs"
 [[ $show_slow =~ ^[0-9]+$ ]] || { native_error "--show-slow must be a number"; exit 2; }
+[[ -z $deopt_stress || $deopt_stress =~ ^[1-9][0-9]*$ ]] \
+    || { native_error "--deopt-stress must be a positive number"; exit 2; }
 case $tier in
     quick|commit|full) ;;
     *) native_error "unknown tier: $tier"; exit 2 ;;
@@ -133,17 +149,23 @@ build_profile() {
 }
 
 # Runs PHPT paths against one profile; returns run-tests' failure state.
+# A non-empty run_stress names the deoptimization stress period of the run.
+run_stress=
 run_profile() {
     local profile=$1 binary=$2 profile_jobs=$3
     shift 3
-    local log failures slow args=()
+    local log failures slow label=$tier args=()
+    [[ -n $run_stress ]] && label=$tier-deopt
     (
         native_load_profile "$profile"
         native_prepare_profile_paths "$profile"
         native_export_sanitizer_environment
-        log="$NATIVE_LOG_DIR/phpt-$tier.log"
-        failures="$NATIVE_LOG_DIR/phpt-$tier-failures.txt"
-        slow="$NATIVE_LOG_DIR/phpt-$tier-slow.txt"
+        if [[ -n $run_stress ]]; then
+            export ZEND_NATIVE_DEOPT_STRESS=$run_stress
+        fi
+        log="$NATIVE_LOG_DIR/phpt-$label.log"
+        failures="$NATIVE_LOG_DIR/phpt-$label-failures.txt"
+        slow="$NATIVE_LOG_DIR/phpt-$label-slow.txt"
         args=(-n "$NATIVE_REPO_ROOT/run-tests.php" -q -j"$profile_jobs"
             --no-progress --set-timeout 300 --show-slow "$show_slow")
         [[ $PROFILE_SANITIZER == address ]] && args+=(--asan)
@@ -156,7 +178,9 @@ run_profile() {
             | LC_ALL=C sort -u >"$failures"
         sed 's/\x1b\[[0-9;]*m//g' "$log" \
             | sed -n '/^SLOW TEST SUMMARY/,/^=*$/p' >"$slow"
-        printf '== %s: %s\n' "$profile" "$(sed 's/\x1b\[[0-9;]*m//g' "$log" \
+        printf '== %s%s: %s\n' "$profile" \
+            "${run_stress:+ (deoptimization stress $run_stress)}" \
+            "$(sed 's/\x1b\[[0-9;]*m//g' "$log" \
             | grep -E '^(Tests failed|Tests passed|Time taken)' | tr -s ' ' \
             | paste -sd ';' -)"
         if [[ -s $failures ]]; then
@@ -178,7 +202,14 @@ run_profile() {
 status=0
 debug_profile="$prefix-debug-nts"
 debug_binary=$(build_profile "$debug_profile" "$jobs")
+run_stress=$deopt_stress
 run_profile "$debug_profile" "$debug_binary" "$jobs" "${debug_paths[@]}" || status=1
+if [[ $tier == full && -z $deopt_stress ]]; then
+    run_stress=1
+    run_profile "$debug_profile" "$debug_binary" "$jobs" "${debug_paths[@]}" \
+        || status=1
+fi
+run_stress=
 # A host builds only its own backend; keep the other one compiling.
 if [[ $prefix == linux-amd64-native ]]; then
     "$SCRIPT_DIR/check-darwin-backend.sh" --profile "$debug_profile" || status=1

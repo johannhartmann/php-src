@@ -1066,6 +1066,10 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 		ZEND_NATIVE_EFFECT_CALL | ZEND_NATIVE_EFFECT_FRAME_READ
 			| ZEND_NATIVE_EFFECT_FRAME_WRITE,
 		(const void *) zend_native_call_receive_variadic},
+	{ZEND_NATIVE_HELPER_DEOPT_STRESS_REENTER,
+		ZEND_NATIVE_EFFECT_CALL | ZEND_NATIVE_EFFECT_FRAME_READ
+			| ZEND_NATIVE_EFFECT_FRAME_WRITE,
+		(const void *) zend_native_deopt_stress_reenter},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {

@@ -53,7 +53,10 @@ Build or select the declared sanitizer profile and run its required tests. Exit
 ### `scripts/native/test-phpt.sh`
 
 Run the PHPT tiers: `--tier quick` (native PHPTs plus given paths), `--tier
-commit` (full debug suites) and `--tier full` (commit plus ASan and UBSan).
+commit` (full debug suites) and `--tier full` (commit, the commit suites under
+deoptimization stress, ASan and UBSan). `--deopt-stress PERIOD` runs the debug
+suites with every PERIOD-th deoptimization point transferring its frame to a
+new activation.
 Exit `0` only when no test fails, or, with `--baseline`, when no test fails
 that the baseline does not list.
 
