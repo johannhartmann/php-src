@@ -4498,6 +4498,161 @@ bool freeze_generator_resume_liveness(
 	return true;
 }
 
+/* Deoptimization stress (debug builds, ZEND_NATIVE_DEOPT_STRESS=<period>):
+ * every non-generator function gets resume IDs, so the PHPT tiers exercise
+ * each guarded operation's transfer. */
+static bool deopt_stress_enabled() {
+#if ZEND_DEBUG
+	static const bool enabled = [] {
+		const char *setting = std::getenv("ZEND_NATIVE_DEOPT_STRESS");
+		return setting != nullptr && std::strtol(setting, nullptr, 10) > 0;
+	}();
+	return enabled;
+#else
+	return false;
+#endif
+}
+
+/* An operation a specialized version may guard, outside every pending
+ * call: the transfer moves frame slots, not the native state of a call
+ * under construction. */
+static bool deopt_resume_target(const zend_op_array *op_array,
+		const zend_ssa *ssa, uint32_t position, uint32_t call_depth) {
+	if (call_depth != 0 || position >= op_array->last
+			|| ssa->cfg.map == nullptr) {
+		return false;
+	}
+	const int block = ssa->cfg.map[position];
+	if (block < 0 || block >= ssa->cfg.blocks_count
+			|| (ssa->cfg.blocks[block].flags & ZEND_BB_REACHABLE) == 0) {
+		return false;
+	}
+	switch (op_array->opcodes[position].opcode) {
+		case ZEND_FETCH_DIM_R:
+		case ZEND_FETCH_DIM_IS:
+		case ZEND_FETCH_OBJ_R:
+		case ZEND_ISSET_ISEMPTY_DIM_OBJ:
+		case ZEND_ADD:
+		case ZEND_SUB:
+		case ZEND_MUL:
+		case ZEND_IS_EQUAL:
+		case ZEND_IS_NOT_EQUAL:
+		case ZEND_IS_IDENTICAL:
+		case ZEND_IS_NOT_IDENTICAL:
+		case ZEND_IS_SMALLER:
+		case ZEND_IS_SMALLER_OR_EQUAL:
+		case ZEND_ASSIGN_OP:
+			return true;
+		default:
+			return false;
+	}
+}
+
+/* The pending-call depth after the opcode at `position`; call sequences
+ * nest linearly in opline order. */
+static uint32_t deopt_call_depth_after(const zend_op_array *op_array,
+		uint32_t position, uint32_t call_depth) {
+	switch (op_array->opcodes[position].opcode) {
+		case ZEND_INIT_FCALL:
+		case ZEND_INIT_FCALL_BY_NAME:
+		case ZEND_INIT_NS_FCALL_BY_NAME:
+		case ZEND_INIT_DYNAMIC_CALL:
+		case ZEND_INIT_USER_CALL:
+		case ZEND_INIT_METHOD_CALL:
+		case ZEND_INIT_STATIC_METHOD_CALL:
+		case ZEND_INIT_PARENT_PROPERTY_HOOK_CALL:
+		case ZEND_NEW:
+			return call_depth + 1;
+		case ZEND_DO_FCALL:
+		case ZEND_DO_FCALL_BY_NAME:
+		case ZEND_DO_ICALL:
+		case ZEND_DO_UCALL:
+		case ZEND_CALLABLE_CONVERT:
+		case ZEND_CALLABLE_CONVERT_PARTIAL:
+			return call_depth != 0 ? call_depth - 1 : 0;
+		default:
+			return call_depth;
+	}
+}
+
+/*
+ * Deoptimization resume IDs. Under deoptimization stress every guardable
+ * operation outside a pending call is one: a transfer point in its cold
+ * path materializes the frame and a new activation resumes before it. The
+ * operation must start at a helper-backed MIR instruction, an observable
+ * boundary whose statepoint materializations publish the frame. The
+ * adaptor derives each landing's frame-state map from machine liveness.
+ */
+static bool freeze_deopt_resume_targets(
+	zend_tpde_plan *plan,
+	const zend_op_array *source_op_array,
+	const zend_ssa *source_ssa,
+	zend_native_diagnostic *diag)
+{
+	if (source_op_array == nullptr || source_ssa == nullptr
+			|| (source_op_array->fn_flags & ZEND_ACC_GENERATOR) != 0
+			|| plan->generator_resume_count != 0
+			|| plan->user_opcode_callbacks
+			|| !plan->linux_inline_forms
+			|| !deopt_stress_enabled()) {
+		return true;
+	}
+	std::vector<uint32_t> first_instruction(
+		source_op_array->last, UINT32_MAX);
+	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+		const uint32_t position =
+			plan->instructions[index].record.source_position_id;
+		if (position < source_op_array->last
+				&& first_instruction[position] == UINT32_MAX) {
+			first_instruction[position] = index;
+		}
+	}
+	std::vector<uint32_t> targets;
+	std::vector<uint32_t> instructions;
+	uint32_t call_depth = 0;
+	for (uint32_t position = 0; position < source_op_array->last;
+			++position) {
+		const uint32_t index = first_instruction[position];
+		if (deopt_resume_target(
+					source_op_array, source_ssa, position, call_depth)
+				&& index != UINT32_MAX
+				&& plan->instructions[index].has_value_operation
+				&& plan->instructions[index].runtime_helper
+					!= ZEND_NATIVE_HELPER_COUNT) {
+			targets.push_back(position);
+			instructions.push_back(index);
+		}
+		call_depth = deopt_call_depth_after(
+			source_op_array, position, call_depth);
+	}
+	if (targets.empty()) {
+		return true;
+	}
+	if (!checked_count(static_cast<uint32_t>(targets.size()))) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+			"deoptimization target count exceeds the executable bound");
+		return false;
+	}
+	plan->deopt_resume_count = static_cast<uint32_t>(targets.size());
+	plan->deopt_resume_targets = static_cast<uint32_t *>(
+		std::malloc(targets.size() * sizeof(uint32_t)));
+	plan->deopt_resume_instructions = static_cast<uint32_t *>(
+		std::malloc(targets.size() * sizeof(uint32_t)));
+	if (plan->deopt_resume_targets == nullptr
+			|| plan->deopt_resume_instructions == nullptr) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"unable to freeze deoptimization targets");
+		return false;
+	}
+	require_runtime_helper(plan, ZEND_NATIVE_HELPER_DEOPT_STRESS_REENTER);
+	std::copy(targets.begin(), targets.end(), plan->deopt_resume_targets);
+	std::copy(instructions.begin(), instructions.end(),
+		plan->deopt_resume_instructions);
+	return true;
+}
+
 bool freeze_statepoint_materializations(
 	zend_tpde_plan *plan,
 	const zend_mir_view *view,
@@ -5572,6 +5727,8 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->generator_resume_landings);
 	std::free(plan->generator_resume_exception_blocks);
 	std::free(plan->generator_resume_live_values);
+	std::free(plan->deopt_resume_targets);
+	std::free(plan->deopt_resume_instructions);
 	std::free(plan->materializations);
 	std::free(plan->machine_references);
 	std::free(plan->entry_undef_temporary_indices);
@@ -9785,6 +9942,10 @@ bool initialize_plan(
 	}
 	if (!freeze_generator_resume_liveness(
 			plan, source_op_array, value_model, diag)) {
+		return false;
+	}
+	if (!freeze_deopt_resume_targets(
+			plan, source_op_array, source_ssa, diag)) {
 		return false;
 	}
 	if (!freeze_statepoint_materializations(

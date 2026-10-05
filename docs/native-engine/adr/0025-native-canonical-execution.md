@@ -148,6 +148,27 @@ shared leave (more executed bytes per function).
   with resume entries for the deoptimization points (the resume ABI already
   reserves this, see `semantics/frames/resume-abi.md`). Execution never
   resumes in the VM.
+  - A resume ID names a guarded operation outside every pending call. Its
+    landing is the start of the operation's cold block, where the generic
+    operation begins. An entry whose context has `deopt_resume` set skips
+    the entry variant dispatch and the temporaries' initialization; a
+    gateway after the frame load dispatches on `EX(opline)` to the
+    landing's stub, which loads every value of the landing's map from its
+    canonical frame slot into the register or stack slot TPDE holds it in
+    at the block start and falls into the block.
+  - The landing's map is the machine liveness of the block start (TPDE
+    values, including unboxed arguments and hoisted payloads, not only MIR
+    SSA values), restricted to values defined on every path into the block.
+    A map value must be a MIR value its slot holds or a payload loaded from
+    its slot; otherwise the landing is dropped. The transferring slow path
+    first stores the map's register scalars to their slots (lazily written
+    CVs and typed values); pointers stay with their slots.
+  - Debug builds with `ZEND_NATIVE_DEOPT_STRESS=<period>` give every
+    non-generator function resume IDs and transfer every period-th cold
+    path of a guarded operation to a new activation of the same function
+    (`zend_native_deopt_stress_reenter()`), which disarms its own points.
+    `scripts/native/test-phpt.sh --deopt-stress` runs the debug suites so,
+    and the full tier includes period 1.
 - **Invalidation:** code that depends on a class layout, a function or
   constant binding, or a declaration epoch is registered with that
   dependency. Changing it retires the code through the existing entry-cell
@@ -198,7 +219,10 @@ code size, compile time) with unchanged page output and the full PHPT tier.
    closures, `new`, packed `call_user_func_array` and changing hook targets.
 4. **Type feedback, specialization, deoptimization.** Section 4, starting
    with integer and float operations, packed arrays and property offsets.
-   Every deoptimization point has a PHPT that forces it.
+   Every deoptimization point has a PHPT that forces it. Resume IDs,
+   landings with their frame-state maps and the transfer are in place and
+   forced at every guarded operation by the stress mode; specialized
+   versions, type feedback and recompilation follow.
 5. **Guarded inlining and lazy frames for inlined callees.** Section 5, with
    backtraces, traces, warnings and observers identical to stock inside
    inlined code.

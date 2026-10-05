@@ -48,6 +48,14 @@ class ZendCompilerX64 final
 	std::vector<tpde::SymRef> image_symbols_;
 	std::vector<tpde::SymRef> image_slots_;
 	std::vector<tpde::Label> generator_resume_labels_;
+	/* Deoptimization resume IDs (ADR 0025 section 4): the landing stubs'
+	 * labels and the stack slot that disarms the stress transfer points of
+	 * a resumed activation. */
+	std::vector<tpde::Label> deopt_resume_labels_;
+	int32_t deopt_disarmed_slot_ = 0;
+	int32_t deopt_frame_slot_ = 0;
+	int32_t deopt_context_slot_ = 0;
+	uint32_t current_function_index_ = 0;
 	std::vector<tpde::Label> user_opcode_labels_;
 	std::vector<tpde::Label> user_opcode_dispatch_labels_;
 	/* Per source call (MIR instruction), the stack slot recording whether
@@ -68,6 +76,334 @@ class ZendCompilerX64 final
 	};
 	using TargetBranchState = std::vector<TargetBranchAssignment>;
 	TargetBranchState generator_gateway_state_;
+
+	/*
+	 * The entry of a function with deoptimization resume IDs: an entry the
+	 * transfer makes (the context's deopt_resume) continues at the landing
+	 * its frame's opline names, with the stress transfer points disarmed.
+	 * Every other entry arms them and runs the function from the start.
+	 */
+	bool emit_deopt_gateway(const Adaptor::InstNode &node) {
+		const zend_tpde_plan *plan = adaptor->plan();
+		if (node.operands.size() != 2
+				|| node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
+				|| node.operands[1]
+					!= IRValueRef{Adaptor::EXECUTION_CONTEXT_ARGUMENT}
+				|| plan->deopt_resume_count == 0) {
+			return false;
+		}
+		while (deopt_resume_labels_.size() < plan->deopt_resume_count) {
+			deopt_resume_labels_.push_back(text_writer.label_create());
+		}
+		deopt_disarmed_slot_ = allocate_stack_slot(sizeof(uint32_t));
+		deopt_frame_slot_ = allocate_stack_slot(sizeof(void *));
+		deopt_context_slot_ = allocate_stack_slot(sizeof(void *));
+		auto normal = text_writer.label_create();
+		auto invalid = text_writer.label_create();
+		{
+			auto [frame_ref, frame] = val_ref_single(node.operands[0]);
+			auto [context_ref, context] = val_ref_single(node.operands[1]);
+			auto frame_reg = frame.load_to_reg();
+			auto context_reg = context.load_to_reg();
+			/* A landing stub restores every other value; the frame and
+			 * context stay where the entry put them. */
+			frame.set_modified();
+			spill(frame.assignment());
+			context.set_modified();
+			spill(context.assignment());
+			const int32_t resume_offset = static_cast<int32_t>(
+				offsetof(zend_native_execution_context, deopt_resume));
+			ASM(CMP8mi, FE_MEM(context_reg, 0, FE_NOREG, resume_offset), 0);
+			generate_raw_jump(Jump::je, normal);
+			ASM(MOV8mi, FE_MEM(context_reg, 0, FE_NOREG, resume_offset), 0);
+			ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, deopt_disarmed_slot_), 1);
+			/* The landing stubs restore the frame and context from here. */
+			ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, deopt_frame_slot_),
+				frame_reg);
+			ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, deopt_context_slot_),
+				context_reg);
+			ScratchReg opline{this};
+			ScratchReg target{this};
+			auto opline_reg = opline.alloc_gp();
+			auto target_reg = target.alloc_gp();
+			ASM(MOV64rm, opline_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_execute_data, opline))));
+			ASM(MOV64rm, target_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_execute_data, func))));
+			ASM(MOV64rm, target_reg,
+				FE_MEM(target_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_function, op_array.opcodes))));
+			ASM(SUB64rr, opline_reg, target_reg);
+			for (uint32_t index = 0; index < plan->deopt_resume_count;
+					++index) {
+				const uint64_t byte_offset =
+					uint64_t{plan->deopt_resume_targets[index]}
+						* sizeof(zend_op);
+				if (!adaptor->deopt_resume_landed(index)) {
+					continue;
+				}
+				if (byte_offset > INT32_MAX) {
+					return false;
+				}
+				ASM(CMP64ri, opline_reg, static_cast<int32_t>(byte_offset));
+				generate_raw_jump(Jump::je, deopt_resume_labels_[index]);
+			}
+			generate_raw_jump(Jump::jmp, invalid);
+		}
+		label_place(invalid);
+		{
+			RetBuilder return_builder{*this, *cur_cc_assigner()};
+			return_builder.add(ValuePart{ZEND_NATIVE_EXCEPTION, 4,
+				tpde::x64::PlatformConfig::GP_BANK},
+				tpde::CCAssignment{});
+			return_builder.ret();
+		}
+		label_place(normal);
+		ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, deopt_disarmed_slot_), 0);
+		return true;
+	}
+
+	/*
+	 * A stress transfer point before the helper of a guarded operation's
+	 * cold path, after its statepoint materializations: an armed point may
+	 * hand the frame to a new activation that resumes before the operation
+	 * (zend_native_deopt_stress_reenter()); its status is then the
+	 * function's. The call is unconditional, so the values it spills are
+	 * spilled on both paths.
+	 */
+	bool emit_deopt_stress_transfer(uint32_t mir_instruction_index) {
+		const uint32_t resume =
+			adaptor->deopt_resume_index(mir_instruction_index);
+		if (resume == UINT32_MAX) {
+			return true;
+		}
+		if (deopt_disarmed_slot_ == 0
+				|| current_function_index_ >= this->func_syms.size()) {
+			return false;
+		}
+		auto stay = text_writer.label_create();
+		tpde::x64::CCAssignerSysV assigner{false};
+		CallBuilder builder{*this, assigner};
+		{
+			ScratchReg frame{this};
+			mov(frame.alloc_gp(), canonical_frame_register(), 8);
+			ValuePart frame_part{tpde::x64::PlatformConfig::GP_BANK, 8};
+			frame_part.set_value(this, std::move(frame));
+			builder.add_arg(std::move(frame_part), tpde::CCAssignment{});
+		}
+		builder.add_arg(ValuePart{
+			adaptor->plan()->deopt_resume_targets[resume], 4,
+			tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+		{
+			ScratchReg self{this};
+			const AsmReg self_reg = self.alloc_gp();
+			text_writer.ensure_space(16);
+			ASM(LEA64rm, self_reg, FE_MEM(FE_IP, 0, FE_NOREG, -1));
+			reloc_text(this->func_syms[current_function_index_],
+				tpde::elf::R_X86_64_PC32, text_writer.offset() - 4, -4);
+			ValuePart self_part{tpde::x64::PlatformConfig::GP_BANK, 8};
+			self_part.set_value(this, std::move(self));
+			builder.add_arg(std::move(self_part), tpde::CCAssignment{});
+		}
+		{
+			ScratchReg disarmed{this};
+			ASM(MOV32rm, disarmed.alloc_gp(),
+				FE_MEM(FE_BP, 0, FE_NOREG, deopt_disarmed_slot_));
+			ValuePart disarmed_part{tpde::x64::PlatformConfig::GP_BANK, 4};
+			disarmed_part.set_value(this, std::move(disarmed));
+			builder.add_arg(std::move(disarmed_part), tpde::CCAssignment{});
+		}
+		builder.call(runtime_symbol(ZEND_NATIVE_HELPER_DEOPT_STRESS_REENTER));
+		ValuePart transfer{tpde::x64::PlatformConfig::GP_BANK, 8};
+		builder.add_ret(transfer, tpde::CCAssignment{});
+		const AsmReg transfer_reg = transfer.cur_reg_or_load(this);
+		ASM(BT64ri, transfer_reg, 32);
+		generate_raw_jump(Jump::jae, stay);
+		{
+			ScratchReg status{this};
+			mov(status.alloc_gp(), transfer_reg, 4);
+			transfer.reset(this);
+			ValuePart status_part{tpde::x64::PlatformConfig::GP_BANK, 4};
+			status_part.set_value(this, std::move(status));
+			RetBuilder return_builder{*this, *cur_cc_assigner()};
+			return_builder.add(std::move(status_part), tpde::CCAssignment{});
+			return_builder.ret();
+		}
+		label_place(stay);
+		return true;
+	}
+
+	/*
+	 * The landing stub of a deoptimization resume ID at the start of its
+	 * operation's cold block, out of the path that reaches the block: each
+	 * value of the landing's map is loaded from its canonical frame slot
+	 * into the register or stack slot TPDE holds it in at the block start;
+	 * the stub then falls into the block.
+	 */
+	bool emit_deopt_landing(uint32_t resume) {
+		if (resume >= deopt_resume_labels_.size() || deopt_frame_slot_ == 0) {
+			return false;
+		}
+		auto block = text_writer.label_create();
+		generate_raw_jump(Jump::jmp, block);
+		label_place(deopt_resume_labels_[resume]);
+		/* The stub uses scratch registers and explicit stores only: the
+		 * path that reaches the block does not run it, so TPDE's value
+		 * state must stay as the block start has it. */
+		ScratchReg frame{this};
+		const AsmReg frame_reg = frame.alloc_gp();
+		ASM(MOV64rm, frame_reg,
+			FE_MEM(FE_BP, 0, FE_NOREG, deopt_frame_slot_));
+		/* Write a part's value to each copy TPDE holds at the block start.
+		 * A value without an assignment is read by nothing after it; one
+		 * pending free keeps its place until its loop ends. */
+		auto place = [&](IRValueRef value, uint32_t part, AsmReg source) {
+			auto *assignment = val_assignment(adaptor->val_local_idx(value));
+			if (assignment == nullptr) {
+				return true;
+			}
+			tpde::AssignmentPartRef location{assignment, part};
+			if (location.variable_ref()) {
+				return false;
+			}
+			if (location.register_valid()) {
+				const AsmReg target{location.get_reg()};
+				if (target != source) {
+					if (location.bank() == tpde::x64::PlatformConfig::FP_BANK) {
+						ASM(SSE_MOVAPDrr, target, source);
+					} else {
+						mov(target, source, 8);
+					}
+				}
+			}
+			if (location.stack_valid()) {
+				spill_reg(source, location.frame_off(), location.part_size());
+			}
+			return location.register_valid() || location.stack_valid();
+		};
+		if (!place(IRValueRef{Adaptor::FRAME_VALUE}, 0, frame_reg)) {
+			return false;
+		}
+		{
+			ScratchReg context{this};
+			const AsmReg context_reg = context.alloc_gp();
+			ASM(MOV64rm, context_reg,
+				FE_MEM(FE_BP, 0, FE_NOREG, deopt_context_slot_));
+			if (!place(IRValueRef{Adaptor::EXECUTION_CONTEXT_ARGUMENT}, 0,
+					context_reg)) {
+				return false;
+			}
+		}
+		for (const IRValueRef value : adaptor->deopt_landing_values(resume)) {
+			const zend_mir_storage_id storage =
+				adaptor->canonical_storage(value);
+			const uint64_t offset =
+				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+			if (!zend_mir_id_is_valid(storage)
+					|| offset > INT32_MAX - sizeof(zval)) {
+				return false;
+			}
+			const int32_t payload = static_cast<int32_t>(offset);
+			const int32_t type_info = static_cast<int32_t>(
+				offset + offsetof(zval, u1.type_info));
+			const zend_tpde_machine_value_kind kind =
+				adaptor->machine_kind(value);
+			const ValueParts parts = val_parts(value);
+			for (uint32_t part = 0; part < parts.count(); ++part) {
+				const zend_tpde_machine_part_role role =
+					parts.representation.parts[part].semantic_role;
+				ScratchReg loaded{this};
+				const bool fp = kind == ZEND_TPDE_MACHINE_VALUE_F64
+					&& role == ZEND_TPDE_MACHINE_PART_VALUE;
+				const AsmReg target = fp
+					? loaded.alloc(tpde::x64::PlatformConfig::FP_BANK)
+					: loaded.alloc_gp();
+				if (kind == ZEND_TPDE_MACHINE_VALUE_BOOL
+						&& role == ZEND_TPDE_MACHINE_PART_VALUE) {
+					ASM(MOV32rm, target,
+						FE_MEM(frame_reg, 0, FE_NOREG, type_info));
+					ASM(CMP32ri, target, IS_TRUE);
+					generate_raw_set(Jump::je, target);
+				} else if (fp) {
+					ASM(SSE_MOVSDrm, target,
+						FE_MEM(frame_reg, 0, FE_NOREG, payload));
+				} else if (role == ZEND_TPDE_MACHINE_PART_VALUE
+						|| role == ZEND_TPDE_MACHINE_PART_PAYLOAD) {
+					ASM(MOV64rm, target,
+						FE_MEM(frame_reg, 0, FE_NOREG, payload));
+				} else if (role == ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
+					ASM(MOV32rm, target,
+						FE_MEM(frame_reg, 0, FE_NOREG, type_info));
+				} else {
+					return false;
+				}
+				if (!place(value, part, target)) {
+					return false;
+				}
+			}
+		}
+		frame.reset();
+		label_place(block);
+		return true;
+	}
+
+	/* The scalars a deoptimizing slow node stores to their slots before
+	 * its transfer point (Adaptor::add_deopt_stores()). */
+	bool emit_deopt_stores(IRInstRef instruction) {
+		const Adaptor::InstNode &node = adaptor->node(instruction);
+		if (node.deopt_store_operand_index == UINT32_MAX) {
+			return true;
+		}
+		if (node.deopt_store_operand_index + node.deopt_store_count
+				> node.liveness_operands.size()) {
+			return false;
+		}
+		const AsmReg frame_reg = canonical_frame_register();
+		for (uint32_t index = 0; index < node.deopt_store_count; ++index) {
+			const IRValueRef value = node.liveness_operands[
+				node.deopt_store_operand_index + index];
+			const zend_mir_storage_id storage =
+				adaptor->canonical_storage(value);
+			const uint64_t offset =
+				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+			if (!zend_mir_id_is_valid(storage)
+					|| offset > INT32_MAX - sizeof(zval)) {
+				return false;
+			}
+			const int32_t payload_offset = static_cast<int32_t>(offset);
+			const int32_t type_offset = static_cast<int32_t>(
+				offset + offsetof(zval, u1.type_info));
+			const zend_tpde_machine_value_kind kind =
+				adaptor->machine_kind(value);
+			auto value_ref = val_ref(value);
+			auto payload = value_ref.part(0);
+			const AsmReg payload_reg = payload.load_to_reg();
+			if (kind == ZEND_TPDE_MACHINE_VALUE_F64) {
+				ASM(SSE_MOVSDmr, FE_MEM(frame_reg, 0, FE_NOREG,
+					payload_offset), payload_reg);
+				ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG, type_offset),
+					IS_DOUBLE);
+			} else if (kind == ZEND_TPDE_MACHINE_VALUE_I64) {
+				ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG,
+					payload_offset), payload_reg);
+				ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG, type_offset),
+					IS_LONG);
+			} else if (kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
+				ScratchReg type_info{this};
+				const AsmReg type_info_reg = type_info.alloc_gp();
+				ASM(MOV64rr, type_info_reg, payload_reg);
+				ASM(ADD64ri, type_info_reg, IS_FALSE);
+				ASM(MOV32mr, FE_MEM(frame_reg, 0, FE_NOREG, type_offset),
+					type_info_reg);
+			} else {
+				return false;
+			}
+		}
+		return true;
+	}
 
 	int32_t fast_call_slot(uint32_t call_instruction) {
 		for (const auto &[instruction, slot] : fast_call_slots_) {
@@ -795,6 +1131,12 @@ public:
 	 */
 	bool materialized_operand(IRInstRef instruction, size_t index) {
 		const Adaptor::InstNode &node = adaptor->node(instruction);
+		if (node.deopt_store_operand_index != UINT32_MAX
+				&& index >= node.deopt_store_operand_index
+				&& index < node.deopt_store_operand_index
+					+ node.deopt_store_count) {
+			return true;
+		}
 		const auto resumed_values =
 			adaptor->generator_resume_values(instruction);
 		if (node.kind != Adaptor::InstKind::GeneratorResume
@@ -1668,6 +2010,11 @@ public:
 		current_direct_call_stack_guard_patches_.clear();
 		generator_resume_labels_.clear();
 		generator_gateway_state_.clear();
+		deopt_resume_labels_.clear();
+		deopt_disarmed_slot_ = 0;
+		deopt_frame_slot_ = 0;
+		deopt_context_slot_ = 0;
+		current_function_index_ = index;
 		user_opcode_labels_.clear();
 		user_opcode_dispatch_labels_.clear();
 		fast_call_slots_.clear();
@@ -2201,6 +2548,12 @@ public:
 		/* Before the first instruction only the prologue has run: RDI and
 		 * RSI still hold the entry's frame and execution context. */
 		auto general = text_writer.label_create();
+		if (plan->deopt_resume_count != 0) {
+			/* A deoptimization entry resumes this activation. */
+			ASM(CMP8mi, FE_MEM(FE_SI, 0, FE_NOREG, static_cast<int32_t>(
+				offsetof(zend_native_execution_context, deopt_resume))), 0);
+			generate_raw_jump(Jump::jne, general);
+		}
 		for (uint32_t argument = 0; argument < 32; ++argument) {
 			if (((plan->entry_variant_long_mask >> argument) & 1) == 0) {
 				continue;
@@ -3284,7 +3637,12 @@ bool ZendCompilerX64::compile_inst_impl(
 	IRInstRef instruction, InstRange remaining_instructions) {
 	const Adaptor::InstNode &node = adaptor->node(instruction);
 	std::vector<ValueRef> generator_reload_locks;
-	if (!emit_materializations(instruction)) {
+	if (node.deopt_landing != UINT32_MAX
+			&& !emit_deopt_landing(node.deopt_landing)) {
+		return false;
+	}
+	if (!emit_materializations(instruction)
+			|| !emit_deopt_stores(instruction)) {
 		return false;
 	}
 	if (node.kind != Adaptor::InstKind::GeneratorResume
@@ -3631,6 +3989,18 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto source_reg = source.load_to_reg();
 		auto result_reg = result.alloc_reg();
 		ASM(MOV64rr, result_reg, source_reg);
+		std::optional<tpde::Label> deopt_entry;
+		if (node.operands.size() == 2) {
+			/* A deoptimization entry continues a frame whose temporaries
+			 * are live. */
+			auto [context_ref, context] = val_ref_single(node.operands[1]);
+			deopt_entry = text_writer.label_create();
+			ASM(CMP8mi, FE_MEM(context.load_to_reg(), 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_native_execution_context, deopt_resume))),
+				0);
+			generate_raw_jump(Jump::jne, *deopt_entry);
+		}
 		if (adaptor->plan()->entry_undef_temporary_count != 0) {
 			auto initialized = text_writer.label_create();
 			/* A resumed generator frame keeps its temporaries; only a
@@ -3663,6 +4033,9 @@ bool ZendCompilerX64::compile_inst_impl(
 					FE_MEM(result_reg, 0, FE_NOREG, offset), 0);
 			}
 			label_place(initialized);
+		}
+		if (deopt_entry) {
+			label_place(*deopt_entry);
 		}
 		result.set_modified();
 		return true;
@@ -6511,6 +6884,10 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		return true;
 	}
+	if (node.kind == Adaptor::InstKind::GeneratorGateway
+			&& node.deopt_resume) {
+		return emit_deopt_gateway(node);
+	}
 	if (node.kind == Adaptor::InstKind::GeneratorGateway) {
 		if (node.operands.size() != 2
 				|| node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
@@ -7776,6 +8153,9 @@ bool ZendCompilerX64::compile_inst_impl(
 			ASM(OR32rr, info_reg, by_reference_reg);
 			ASM(MOV32mr, FE_MEM(call_reg, 0, FE_NOREG, call_info), info_reg);
 			return true;
+		}
+		if (!emit_deopt_stress_transfer(node.mir_instruction_index)) {
+			return false;
 		}
 		tpde::x64::CCAssignerSysV assigner{false};
 		CallBuilder builder{*this, assigner};

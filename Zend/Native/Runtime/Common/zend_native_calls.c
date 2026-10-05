@@ -94,6 +94,7 @@ void zend_native_execution_context_init(
 #endif
 	context->call_cache_epoch = zend_native_call_cache_epoch_address();
 	context->observers_enabled = ZEND_OBSERVER_ENABLED;
+	context->deopt_resume = false;
 }
 
 void *zend_native_call_fiber_suspend(void)
@@ -8419,6 +8420,40 @@ static void zend_native_call_fast_copy_extra_args(
 			source--;
 		} while (--count);
 	}
+}
+
+uint64_t zend_native_deopt_stress_reenter(zend_execute_data *execute_data,
+	uint32_t position, zend_native_frame_entry_t entry, uint32_t disarmed)
+{
+#if ZEND_DEBUG
+	static int64_t period = -1;
+	static uint64_t countdown;
+	zend_native_execution_context context;
+
+	if (period < 0) {
+		const char *setting = getenv("ZEND_NATIVE_DEOPT_STRESS");
+		period = setting != NULL ? ZEND_STRTOL(setting, NULL, 10) : 0;
+		if (period < 0) {
+			period = 0;
+		}
+	}
+	if (disarmed != 0 || period == 0 || ++countdown < (uint64_t) period) {
+		return 0;
+	}
+	countdown = 0;
+	ZEND_ASSERT(position < execute_data->func->op_array.last);
+	execute_data->opline = execute_data->func->op_array.opcodes + position;
+	/* The context holds request-global addresses only. */
+	zend_native_execution_context_init(&context);
+	context.deopt_resume = true;
+	return (UINT64_C(1) << 32) | (uint32_t) entry(execute_data, &context);
+#else
+	(void) execute_data;
+	(void) position;
+	(void) entry;
+	(void) disarmed;
+	return 0;
+#endif
 }
 
 void zend_native_call_receive_variadic(zend_execute_data *callee)

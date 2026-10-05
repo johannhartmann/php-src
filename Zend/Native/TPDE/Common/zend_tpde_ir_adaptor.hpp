@@ -146,6 +146,16 @@ public:
 		/* A BoxedCondGuard whose cold block carries the PHI inputs of the
 		 * branch: only the cold edges define them. */
 		bool cold_phi_inputs = false;
+		/* A GeneratorGateway of deoptimization resume IDs instead of
+		 * generator continuations. */
+		bool deopt_resume = false;
+		/* The first node of a deoptimization landing's block: the resume
+		 * index whose landing stub precedes it. */
+		uint32_t deopt_landing = UINT32_MAX;
+		/* The operands a deoptimizing slow node stores to their slots
+		 * before anything else (add_deopt_stores()). */
+		uint32_t deopt_store_operand_index = UINT32_MAX;
+		uint32_t deopt_store_count = 0;
 	};
 
 	struct DerivedValue {
@@ -346,6 +356,11 @@ private:
 	std::vector<uint32_t> user_opcode_next_landings_;
 	std::vector<uint32_t> user_opcode_dispatch_to_sources_;
 	std::vector<uint8_t> user_opcode_result_reload_sources_;
+	/* Per deoptimization resume ID: its landing exists in this function,
+	 * and the frame-state map of that landing. */
+	std::vector<uint8_t> deopt_resume_landed_;
+	std::vector<Slice> deopt_landing_slices_;
+	std::vector<IRValueRef> deopt_landing_values_;
 	zend_tpde_instruction synthetic_instruction_{};
 	bool valid_ = true;
 
@@ -1032,6 +1047,309 @@ private:
 	zend_mir_instruction_record instruction_record_at(uint32_t index) const {
 		return zend_tpde_instruction_record_at(
 			plan_, zend_tpde_instruction_at(plan_, index));
+	}
+
+	/*
+	 * The frame-state map of each deoptimization landing (ADR 0025 section
+	 * 1): every machine value live into the landing, which its stub loads
+	 * from the value's canonical frame slot into the place TPDE keeps it at
+	 * the block start. Machine liveness, not MIR liveness: values the MIR
+	 * does not name (unboxed arguments, loaded payloads) belong to the map
+	 * too. A landing with a live value that its slot cannot reproduce is
+	 * dropped: no transfer resumes there.
+	 */
+	void freeze_deopt_landing_values(
+			const std::vector<BlockItem<IRInstRef>> &block_instructions,
+			const std::vector<BlockItem<IRValueRef>> &block_phis,
+			uint32_t block_count) {
+		if (plan_->deopt_resume_count == 0 || !valid_
+				|| function_mode_ != FunctionMode::ZendEntry) {
+			return;
+		}
+		const uint32_t value_count = MIR_VALUE_BASE + plan_->value_count
+			+ static_cast<uint32_t>(derived_values_.size());
+		const uint32_t words = (value_count + 63) / 64;
+		if (uint64_t{words} * block_count > (uint64_t{1} << 22)) {
+			return;
+		}
+		auto tracked = [&](IRValueRef value) {
+			const uint32_t index = static_cast<uint32_t>(value);
+			uint64_t bits;
+			return index >= MIR_VALUE_BASE && index < value_count
+				&& !constant(value, &bits)
+				&& !machine_reference(value, nullptr);
+		};
+		std::vector<std::vector<uint32_t>> block_nodes(block_count);
+		for (const BlockItem<IRInstRef> &item : block_instructions) {
+			if (item.block < block_count) {
+				block_nodes[item.block].push_back(
+					static_cast<uint32_t>(item.value));
+			}
+		}
+		std::vector<uint8_t> definition_kind(value_count, UINT8_MAX);
+		std::vector<uint32_t> definition_node(value_count, UINT32_MAX);
+		auto node_operands = [&](const InstNode &current) {
+			return std::span<const IRValueRef>{operands_}.subspan(
+				current.operand_offset, current.operand_count);
+		};
+		std::vector<uint64_t> use(uint64_t{words} * block_count, 0);
+		std::vector<uint64_t> def(uint64_t{words} * block_count, 0);
+		std::vector<uint64_t> phi_def(uint64_t{words} * block_count, 0);
+		std::vector<uint64_t> phi_use(uint64_t{words} * block_count, 0);
+		auto set = [&](std::vector<uint64_t> &bits, uint32_t block,
+				IRValueRef value) {
+			const uint32_t index = static_cast<uint32_t>(value);
+			bits[uint64_t{block} * words + index / 64] |=
+				uint64_t{1} << (index % 64);
+		};
+		auto test = [&](const std::vector<uint64_t> &bits, uint32_t block,
+				uint32_t index) {
+			return (bits[uint64_t{block} * words + index / 64]
+				>> (index % 64)) & 1;
+		};
+		for (uint32_t block = 0; block < block_count; ++block) {
+			for (const uint32_t node_index : block_nodes[block]) {
+				const InstNode &current = nodes_[node_index];
+				for (const IRValueRef operand : node_operands(current)) {
+					if (tracked(operand)
+							&& !test(def, block,
+								static_cast<uint32_t>(operand))) {
+						set(use, block, operand);
+					}
+				}
+				if (current.has_result && tracked(current.result)) {
+					const uint32_t result =
+						static_cast<uint32_t>(current.result);
+					set(def, block, current.result);
+					definition_kind[result] =
+						static_cast<uint8_t>(current.kind);
+					definition_node[result] = node_index;
+				}
+			}
+		}
+		for (const BlockItem<IRValueRef> &phi : block_phis) {
+			if (phi.block >= block_count || !tracked(phi.value)) {
+				continue;
+			}
+			set(phi_def, phi.block, phi.value);
+			const Slice &slice =
+				phi_input_slices_[static_cast<uint32_t>(phi.value)];
+			for (uint32_t n = 0; n < slice.count; ++n) {
+				const PhiInput &input = phi_inputs_[slice.offset + n];
+				const uint32_t from = static_cast<uint32_t>(input.block);
+				if (from < block_count && tracked(input.value)) {
+					set(phi_use, from, input.value);
+				}
+			}
+		}
+		std::vector<uint64_t> live_in(uint64_t{words} * block_count, 0);
+		std::vector<uint64_t> live_out(uint64_t{words} * block_count, 0);
+		for (bool changed = true; changed;) {
+			changed = false;
+			for (uint32_t block = block_count; block-- > 0;) {
+				const Slice &slice = successor_slices_[block];
+				for (uint32_t word = 0; word < words; ++word) {
+					uint64_t out = phi_use[uint64_t{block} * words + word];
+					for (uint32_t n = 0; n < slice.count; ++n) {
+						const uint32_t successor = static_cast<uint32_t>(
+							successors_[slice.offset + n]);
+						out |= live_in[uint64_t{successor} * words + word]
+							& ~phi_def[uint64_t{successor} * words + word];
+					}
+					const uint64_t in =
+						use[uint64_t{block} * words + word]
+						| (out & ~def[uint64_t{block} * words + word]);
+					if (out != live_out[uint64_t{block} * words + word]
+							|| in != live_in[uint64_t{block} * words + word]) {
+						live_out[uint64_t{block} * words + word] = out;
+						live_in[uint64_t{block} * words + word] = in;
+						changed = true;
+					}
+				}
+			}
+		}
+		/* The values defined on every path into a block (must-available).
+		 * A value live into a block but not available there is used only
+		 * on a path that defines it first, such as an exception edge into
+		 * a finally block; no landing reproduces it. */
+		std::vector<uint64_t> available(uint64_t{words} * block_count,
+			~uint64_t{0});
+		std::vector<std::vector<uint32_t>> predecessors(block_count);
+		for (uint32_t block = 0; block < block_count; ++block) {
+			const Slice &slice = successor_slices_[block];
+			for (uint32_t n = 0; n < slice.count; ++n) {
+				const uint32_t successor = static_cast<uint32_t>(
+					successors_[slice.offset + n]);
+				if (successor < block_count) {
+					predecessors[successor].push_back(block);
+				}
+			}
+		}
+		const uint32_t entry_block = static_cast<uint32_t>(
+			block_index(plan_->function.entry_block_id));
+		for (bool changed = true; changed;) {
+			changed = false;
+			for (uint32_t block = 0; block < block_count; ++block) {
+				for (uint32_t word = 0; word < words; ++word) {
+					uint64_t in = block == entry_block
+							|| predecessors[block].empty()
+						? 0 : ~uint64_t{0};
+					for (const uint32_t predecessor : predecessors[block]) {
+						in &= available[uint64_t{predecessor} * words + word];
+					}
+					const uint64_t out = in
+						| def[uint64_t{block} * words + word]
+						| phi_def[uint64_t{block} * words + word];
+					if (out != available[uint64_t{block} * words + word]) {
+						available[uint64_t{block} * words + word] = out;
+						changed = true;
+					}
+				}
+			}
+		}
+		auto available_into = [&](uint32_t block, uint32_t index) {
+			if (block == entry_block || predecessors[block].empty()) {
+				return false;
+			}
+			for (const uint32_t predecessor : predecessors[block]) {
+				if (!test(available, predecessor, index)) {
+					return false;
+				}
+			}
+			return true;
+		};
+		/* A value the landing can define again from its frame slot: a MIR
+		 * value whose slot holds it (not through a reference), or a payload
+		 * loaded directly from its slot. */
+		auto reloadable = [&](uint32_t index) {
+			const IRValueRef value{index};
+			const zend_mir_storage_id storage = canonical_storage(value);
+			if (!zend_mir_id_is_valid(storage)) {
+				return false;
+			}
+			const zend_tpde_machine_value_kind kind = machine_kind(value);
+			if (index < MIR_VALUE_BASE + plan_->value_count) {
+				const zend_tpde_value &plan_value =
+					plan_->values[index - MIR_VALUE_BASE];
+				return !plan_value.canonical_alias_observable
+					|| kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+					|| kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR;
+			}
+			if (definition_kind[index]
+					!= static_cast<uint8_t>(InstKind::ZvalPayloadLoad)
+					|| definition_node[index] == UINT32_MAX) {
+				return false;
+			}
+			const InstNode &load = nodes_[definition_node[index]];
+			zend_mir_storage_id loaded = ZEND_MIR_ID_INVALID;
+			return load.operand_count == 1
+				&& frame_slot_reference(
+					operands_[load.operand_offset], &loaded)
+				&& loaded == storage;
+		};
+		/* The landing of a resume ID is the start of its operation's cold
+		 * block, where the generic operation begins; its map is the block's
+		 * live-in set. */
+		deopt_resume_landed_.assign(plan_->deopt_resume_count, 0);
+		deopt_landing_slices_.assign(plan_->deopt_resume_count, {});
+		for (uint32_t resume = 0; resume < plan_->deopt_resume_count;
+				++resume) {
+			const uint32_t instruction = plan_->deopt_resume_instructions[resume];
+			uint32_t cold_block = UINT32_MAX;
+			for (uint32_t block = 0; block < block_count
+					&& cold_block == UINT32_MAX; ++block) {
+				for (const uint32_t node_index : block_nodes[block]) {
+					const InstNode &current = nodes_[node_index];
+					if (current.kind == InstKind::GuardedCold
+							&& !current.synthetic
+							&& current.mir_instruction_index == instruction) {
+						cold_block = block;
+						break;
+					}
+				}
+			}
+			if (cold_block == UINT32_MAX || block_nodes[cold_block].empty()) {
+				continue;
+			}
+			const uint32_t offset =
+				static_cast<uint32_t>(deopt_landing_values_.size());
+			bool complete = true;
+			for (uint32_t index = 0; index < value_count && complete;
+					++index) {
+				if (!test(live_in, cold_block, index)
+						|| !available_into(cold_block, index)) {
+					continue;
+				}
+				if (!reloadable(index)) {
+					complete = false;
+					break;
+				}
+				deopt_landing_values_.push_back(IRValueRef{index});
+			}
+			if (!complete) {
+				deopt_landing_values_.erase(
+					deopt_landing_values_.begin() + offset,
+					deopt_landing_values_.end());
+				continue;
+			}
+			deopt_landing_slices_[resume] = {offset,
+				static_cast<uint32_t>(deopt_landing_values_.size()) - offset};
+			deopt_resume_landed_[resume] = 1;
+			nodes_[block_nodes[cold_block].front()].deopt_landing = resume;
+			add_deopt_stores(instruction,
+				std::span<const IRValueRef>{deopt_landing_values_}.subspan(
+					offset, deopt_landing_slices_[resume].count));
+		}
+	}
+
+	/*
+	 * A register scalar's slot may be stale where an operation deoptimizes
+	 * (a lazily written CV, a typed-tier value). The operation's slow node,
+	 * which runs the transfer, first stores every scalar of the landing's
+	 * map: a slot whose value is a scalar holds no counted value, so the
+	 * store is exact. Pointer values stay with their slots, which a
+	 * separating helper may have replaced.
+	 */
+	void add_deopt_stores(uint32_t instruction_index,
+			std::span<const IRValueRef> landing_values) {
+		std::vector<IRValueRef> stores;
+		for (const IRValueRef value : landing_values) {
+			const zend_tpde_machine_value_kind kind = machine_kind(value);
+			if (kind == ZEND_TPDE_MACHINE_VALUE_I64
+					|| kind == ZEND_TPDE_MACHINE_VALUE_F64
+					|| kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
+				stores.push_back(value);
+			}
+		}
+		if (stores.empty()) {
+			return;
+		}
+		for (InstNode &current : nodes_) {
+			if (current.mir_instruction_index != instruction_index
+					|| current.synthetic
+					|| current.kind != InstKind::GuardedCold) {
+				continue;
+			}
+			const uint32_t old_offset = current.operand_offset;
+			const uint32_t old_count = current.operand_count;
+			if (current.semantic_operand_count == UINT32_MAX) {
+				current.semantic_operand_count =
+					current.materialization_operand_index == UINT32_MAX
+						? old_count : current.materialization_operand_index;
+			}
+			const uint32_t new_offset =
+				static_cast<uint32_t>(operands_.size());
+			for (uint32_t operand = 0; operand < old_count; ++operand) {
+				operands_.push_back(operands_[old_offset + operand]);
+			}
+			operands_.insert(operands_.end(), stores.begin(), stores.end());
+			current.operand_offset = new_offset;
+			current.operand_count = old_count
+				+ static_cast<uint32_t>(stores.size());
+			current.deopt_store_operand_index = old_count;
+			current.deopt_store_count =
+				static_cast<uint32_t>(stores.size());
+		}
 	}
 
 	void add_node(
@@ -2565,6 +2883,11 @@ public:
 		}
 		if (function_mode_ == FunctionMode::ZendEntry) {
 			operands_.push_back(IRValueRef{EXECUTE_DATA_VALUE});
+			/* A deoptimization entry keeps the frame's temporaries: the
+			 * frame load reads the context's deopt_resume. */
+			if (plan_->deopt_resume_count != 0) {
+				operands_.push_back(IRValueRef{EXECUTION_CONTEXT_ARGUMENT});
+			}
 			add_node(block_instructions, static_cast<uint32_t>(entry), InstNode{
 				InstKind::LoadFrame,
 				UINT32_MAX,
@@ -2572,7 +2895,7 @@ public:
 				IRValueRef{FRAME_VALUE},
 				{},
 				0,
-				1,
+				static_cast<uint32_t>(operands_.size()),
 				true});
 			if (plan_->generator_resume_count != 0) {
 				uint32_t operand_offset =
@@ -2590,6 +2913,25 @@ public:
 						operand_offset,
 						2,
 						false});
+			}
+			if (plan_->deopt_resume_count != 0) {
+				uint32_t operand_offset =
+					static_cast<uint32_t>(operands_.size());
+				operands_.push_back(IRValueRef{FRAME_VALUE});
+				operands_.push_back(
+					IRValueRef{EXECUTION_CONTEXT_ARGUMENT});
+				InstNode gateway{
+					InstKind::GeneratorGateway,
+					UINT32_MAX,
+					UINT32_MAX,
+					INVALID_VALUE_REF,
+					{},
+					operand_offset,
+					2,
+					false};
+				gateway.deopt_resume = true;
+				add_node(block_instructions, static_cast<uint32_t>(entry),
+					std::move(gateway));
 			}
 			uint32_t guard_operand_offset =
 				static_cast<uint32_t>(operands_.size());
@@ -10068,6 +10410,8 @@ public:
 				!= generator_resume_emitted.end()) {
 			valid_ = false;
 		}
+		freeze_deopt_landing_values(
+			block_instructions, block_phis, tpde_block_count);
 		/*
 		 * Reloaded generator values are definitions at the continuation entry,
 		 * not uses there.  Reporting them as GeneratorResume operands makes a
@@ -10382,6 +10726,30 @@ public:
 	bool user_opcode_result_reload_source(uint32_t source) const {
 		return source < user_opcode_result_reload_sources_.size()
 			&& user_opcode_result_reload_sources_[source] != 0;
+	}
+	/* The deoptimization resume ID whose operation starts at MIR
+	 * instruction `index` and has a landing, or UINT32_MAX. */
+	uint32_t deopt_resume_index(uint32_t index) const {
+		for (uint32_t resume = 0; resume < deopt_resume_landed_.size();
+				++resume) {
+			if (deopt_resume_landed_[resume] != 0
+					&& plan_->deopt_resume_instructions[resume] == index) {
+				return resume;
+			}
+		}
+		return UINT32_MAX;
+	}
+	bool deopt_resume_landed(uint32_t resume) const {
+		return resume < deopt_resume_landed_.size()
+			&& deopt_resume_landed_[resume] != 0;
+	}
+	std::span<const IRValueRef> deopt_landing_values(uint32_t resume) const {
+		if (resume >= deopt_landing_slices_.size()) {
+			return {};
+		}
+		return std::span<const IRValueRef>{deopt_landing_values_}.subspan(
+			deopt_landing_slices_[resume].offset,
+			deopt_landing_slices_[resume].count);
 	}
 	std::span<const uint32_t> generator_resume_targets() const {
 		return {plan_->generator_resume_targets,
@@ -11132,6 +11500,15 @@ public:
 	}
 	std::span<const uint32_t> user_opcode_dispatch_to_sources() const {
 		return active_->user_opcode_dispatch_to_sources();
+	}
+	uint32_t deopt_resume_index(uint32_t index) const {
+		return active_->deopt_resume_index(index);
+	}
+	bool deopt_resume_landed(uint32_t resume) const {
+		return active_->deopt_resume_landed(resume);
+	}
+	std::span<const IRValueRef> deopt_landing_values(uint32_t resume) const {
+		return active_->deopt_landing_values(resume);
 	}
 	bool user_opcode_result_reload_source(uint32_t source) const {
 		return active_->user_opcode_result_reload_source(source);
