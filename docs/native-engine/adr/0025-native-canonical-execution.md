@@ -169,6 +169,23 @@ shared leave (more executed bytes per function).
     (`zend_native_deopt_stress_reenter()`), which disarms its own points.
     `scripts/native/test-phpt.sh --deopt-stress` runs the debug suites so,
     and the full tier includes period 1.
+  - A specialized version (`ZEND_NATIVE_SPECULATE=1` on Linux x64 while
+    feedback and recompilation are missing) is the function itself; the
+    compiler adds a hidden generic copy with landings at every guarded
+    operation. Each guarded operation of the specialized version whose
+    landing exists exits instead of running its cold path: the exit stores
+    the register scalars the continuation would carry, calls
+    `zend_native_deopt_transfer()` with the operation's source position and
+    returns the copy's status. The continuation copies the fast result; no
+    merge with a cold result remains. The machine CFG keeps the edge from
+    the exit to the continuation so that TPDE compiles the exit right after
+    the fast path, whose guards branch there with the fast path's register
+    state, and the fast path spills what the continuation reads before it
+    branches. File main code is not specialized (it runs once per
+    inclusion), and metrics count source sites, not the generic copy.
+  - The fast result's type does not yet narrow the types after the exit, so
+    a specialized version runs the same hot code as the generic one; that
+    narrowing, type feedback and recompilation by call count follow.
 - **Invalidation:** code that depends on a class layout, a function or
   constant binding, or a declaration epoch is registered with that
   dependency. Changing it retires the code through the existing entry-cell
@@ -222,7 +239,8 @@ code size, compile time) with unchanged page output and the full PHPT tier.
    Every deoptimization point has a PHPT that forces it. Resume IDs,
    landings with their frame-state maps and the transfer are in place and
    forced at every guarded operation by the stress mode; specialized
-   versions, type feedback and recompilation follow.
+   versions exit to their generic copy behind `ZEND_NATIVE_SPECULATE`; type
+   narrowing after exits, type feedback and recompilation follow.
 5. **Guarded inlining and lazy frames for inlined callees.** Section 5, with
    backtraces, traces, warnings and observers identical to stock inside
    inlined code.

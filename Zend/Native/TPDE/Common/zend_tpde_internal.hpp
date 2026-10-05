@@ -540,6 +540,9 @@ struct zend_tpde_instruction {
 	/* A Zend-entry typed call whose body may fail: a failed call takes the
 	 * canonical cold call instead. */
 	bool typed_call_may_fail;
+	/* A specialized member's guarded operation whose failed guard
+	 * deoptimizes into the generic copy: 1 + its resume index there. */
+	uint32_t deopt_exit_resume_plus_one;
 	bool transient_scalar_result;
 	zend_mir_representation transient_result_representation;
 	zend_mir_scalar_type_mask transient_result_exact_type;
@@ -717,6 +720,8 @@ struct zend_tpde_source_opcode {
 	/* Zend's inferred MAY_BE_* mask of op1 (literals: the bit of their
 	 * type), UINT32_MAX when unknown. */
 	uint32_t op1_may_be;
+	/* The same for op2. */
+	uint32_t op2_may_be;
 	uint32_t op1_var;
 	uint32_t op2_var;
 	uint32_t result_var;
@@ -2291,6 +2296,11 @@ struct zend_tpde_plan {
 	uint32_t wrapper_function_index;
 	/* See zend_native_component_member.entry_variant_member_plus_one. */
 	uint32_t entry_variant_member_plus_one;
+	/* See zend_native_component_member.deopt_generic_member_plus_one. */
+	uint32_t deopt_generic_member_plus_one;
+	bool deopt_landings;
+	/* The resume IDs are deoptimization stress targets. */
+	bool deopt_stress;
 	uint32_t entry_variant_long_mask;
 	bool entry_variant_numeric;
 	/* Every return of this member yields a long or a double. */

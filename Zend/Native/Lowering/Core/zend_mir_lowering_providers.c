@@ -2154,6 +2154,26 @@ static bool zend_mir_logic_result(
 	}
 }
 
+/* A copy into a component member lowers to a COPY, which stores an exact
+ * scalar source into the member's slot itself. */
+static bool zend_mir_copy_result(
+	const zend_op_array *op_array, const zend_ssa *ssa, uint32_t variable)
+{
+	const int definition = ssa->vars[variable].definition;
+
+	if (definition < 0 || (uint32_t) definition >= op_array->last) {
+		return false;
+	}
+	switch (op_array->opcodes[definition].opcode) {
+		case ZEND_QM_ASSIGN:
+			return ssa->ops[definition].result_def == (int) variable;
+		case ZEND_ASSIGN:
+			return ssa->ops[definition].op1_def == (int) variable;
+		default:
+			return false;
+	}
+}
+
 static uint32_t zend_mir_component_find(
 	uint32_t *parents, uint32_t member)
 {
@@ -2177,6 +2197,7 @@ static bool zend_mir_close_phi_components(
 {
 	const uint32_t count = (uint32_t) ssa->vars_count;
 	uint32_t *parents;
+	uint32_t *sizes;
 	uint8_t *invalid;
 	uint32_t index;
 	uint32_t block;
@@ -2185,9 +2206,11 @@ static bool zend_mir_close_phi_components(
 		return true;
 	}
 	parents = malloc((size_t) count * sizeof(*parents));
+	sizes = calloc(count, sizeof(*sizes));
 	invalid = calloc(count, sizeof(*invalid));
-	if (parents == NULL || invalid == NULL) {
+	if (parents == NULL || sizes == NULL || invalid == NULL) {
 		free(parents);
+		free(sizes);
 		free(invalid);
 		return false;
 	}
@@ -2233,10 +2256,16 @@ static bool zend_mir_close_phi_components(
 			root = parents[root];
 		}
 		parents[index] = root;
-		if (root != index || ssa->vars[index].definition_phi != NULL) {
-			if (!integration->overlay_inferred_fact_valid[index]) {
-				invalid[root] = 1;
-			}
+		sizes[root]++;
+	}
+	/* The root of a component is a member like any other: a component is
+	 * a PHI with its inputs, or a variable joined to one. */
+	for (index = 0; index < count; index++) {
+		const uint32_t root = parents[index];
+
+		if ((sizes[root] > 1 || ssa->vars[index].definition_phi != NULL)
+				&& !integration->overlay_inferred_fact_valid[index]) {
+			invalid[root] = 1;
 		}
 	}
 	/* A dead PHI joins its inputs once it or one of them is invalid, as in
@@ -2295,18 +2324,28 @@ static bool zend_mir_close_phi_components(
 			}
 		}
 	}
+	memset(sizes, 0, (size_t) count * sizeof(*sizes));
+	for (index = 0; index < count; index++) {
+		sizes[zend_mir_component_find(parents, index)]++;
+	}
 	for (index = 0; index < count; index++) {
 		const uint32_t root = zend_mir_component_find(parents, index);
 
+		/* The root of a component is a member like any other, but a copy
+		 * there keeps its exact fact and stores itself. */
 		if (invalid[root] && integration->overlay_inferred_fact_valid[index]
-				&& (root != index
+				&& (sizes[root] > 1
 					|| ssa->vars[index].definition_phi != NULL)
+				&& (root != index
+					|| ssa->vars[index].definition_phi != NULL
+					|| !zend_mir_copy_result(op_array, ssa, index))
 				&& !zend_mir_logic_result(op_array, ssa, index)) {
 			zend_mir_invalidate_inferred_fact(integration, (int) index);
 			*changed = true;
 		}
 	}
 	free(parents);
+	free(sizes);
 	free(invalid);
 	return true;
 }

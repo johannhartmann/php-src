@@ -881,6 +881,14 @@ void zend_native_call_receive_variadic(zend_execute_data *callee);
  */
 uint64_t zend_native_deopt_stress_reenter(zend_execute_data *execute_data,
 	uint32_t position, zend_native_frame_entry_t entry, uint32_t disarmed);
+/*
+ * Deoptimization (ADR 0025 section 4): a specialized version's failed
+ * guard hands its frame, whose slots it completed, to the generic copy
+ * `entry`, which resumes at source position `position`. Returns the
+ * frame's status.
+ */
+zend_native_status zend_native_deopt_transfer(zend_execute_data *execute_data,
+	uint32_t position, zend_native_frame_entry_t entry);
 /* A counted CV of a frame a fast-call entry leaves, as
  * zend_native_call_fast_leave() releases it, after the entry dropped its
  * reference: freed at zero, else checked as a possible GC root. */

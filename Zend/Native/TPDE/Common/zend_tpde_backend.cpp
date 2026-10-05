@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PHP-3.01
 
 #include "Zend/Native/TPDE/Common/zend_tpde_internal.hpp"
+#include "Zend/Native/TPDE/Common/zend_tpde_ir_adaptor.hpp"
 #include "Zend/Native/MIR/Core/zend_mir_module_internal.h"
 #include "Zend/Native/MIR/Scalar/zend_mir_scalar_descriptors.h"
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
@@ -4576,12 +4577,15 @@ static uint32_t deopt_call_depth_after(const zend_op_array *op_array,
 }
 
 /*
- * Deoptimization resume IDs. Under deoptimization stress every guardable
- * operation outside a pending call is one: a transfer point in its cold
- * path materializes the frame and a new activation resumes before it. The
- * operation must start at a helper-backed MIR instruction, an observable
- * boundary whose statepoint materializations publish the frame. The
- * adaptor derives each landing's frame-state map from machine liveness.
+ * Deoptimization resume IDs. The generic copy of a specialized function
+ * (deopt_landings) has one at every guarded operation outside a pending
+ * call, where the specialized version's failed guard resumes. Under
+ * deoptimization stress every guardable operation of the other functions is
+ * one: a transfer point in its cold path materializes the frame and a new
+ * activation resumes before it. The operation must start at a helper-backed
+ * MIR instruction, an observable boundary whose statepoint materializations
+ * publish the frame. The adaptor derives each landing's frame-state map
+ * from machine liveness.
  */
 static bool freeze_deopt_resume_targets(
 	zend_tpde_plan *plan,
@@ -4589,12 +4593,14 @@ static bool freeze_deopt_resume_targets(
 	const zend_ssa *source_ssa,
 	zend_native_diagnostic *diag)
 {
+	const bool stress = deopt_stress_enabled()
+		&& plan->deopt_generic_member_plus_one == 0;
 	if (source_op_array == nullptr || source_ssa == nullptr
 			|| (source_op_array->fn_flags & ZEND_ACC_GENERATOR) != 0
 			|| plan->generator_resume_count != 0
 			|| plan->user_opcode_callbacks
 			|| !plan->linux_inline_forms
-			|| !deopt_stress_enabled()) {
+			|| (!stress && !plan->deopt_landings)) {
 		return true;
 	}
 	std::vector<uint32_t> first_instruction(
@@ -4613,8 +4619,13 @@ static bool freeze_deopt_resume_targets(
 	for (uint32_t position = 0; position < source_op_array->last;
 			++position) {
 		const uint32_t index = first_instruction[position];
-		if (deopt_resume_target(
-					source_op_array, source_ssa, position, call_depth)
+		const bool guarded = index != UINT32_MAX
+			&& (plan->instructions[index].machine_control_flow_flags
+				& ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD) != 0;
+		if ((plan->deopt_landings
+					? guarded && call_depth == 0
+					: deopt_resume_target(source_op_array, source_ssa,
+						position, call_depth))
 				&& index != UINT32_MAX
 				&& plan->instructions[index].has_value_operation
 				&& plan->instructions[index].runtime_helper
@@ -4646,7 +4657,10 @@ static bool freeze_deopt_resume_targets(
 			"unable to freeze deoptimization targets");
 		return false;
 	}
-	require_runtime_helper(plan, ZEND_NATIVE_HELPER_DEOPT_STRESS_REENTER);
+	plan->deopt_stress = stress;
+	if (stress) {
+		require_runtime_helper(plan, ZEND_NATIVE_HELPER_DEOPT_STRESS_REENTER);
+	}
 	std::copy(targets.begin(), targets.end(), plan->deopt_resume_targets);
 	std::copy(instructions.begin(), instructions.end(),
 		plan->deopt_resume_instructions);
@@ -5388,6 +5402,28 @@ bool freeze_statepoint_materializations(
 	return true;
 }
 
+/* A keyed assignment whose key may be an integer and is never a string
+ * (by Zend's type inference) into a container that may be an array; Linux
+ * x64 lowers it inline and checks the key's type at run time. */
+static bool machine_cfg_integer_key_assignment(
+		const zend_tpde_plan *plan,
+		const zend_mir_executable_value_ref &operation) {
+	if (!plan->linux_inline_forms || plan->source_opcodes == nullptr
+			|| operation.source_position_id >= plan->source_opcode_count
+			|| (operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+				&& operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+				&& operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_SSA)) {
+		return false;
+	}
+	const zend_tpde_source_opcode &source =
+		plan->source_opcodes[operation.source_position_id];
+	return source.op2_may_be != UINT32_MAX
+		&& (source.op2_may_be & MAY_BE_LONG) != 0
+		&& (source.op2_may_be & MAY_BE_STRING) == 0
+		&& (source.op1_may_be == UINT32_MAX
+			|| (source.op1_may_be & MAY_BE_ARRAY) != 0);
+}
+
 void freeze_machine_control_flow(zend_tpde_plan *plan)
 {
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
@@ -5469,13 +5505,20 @@ void freeze_machine_control_flow(zend_tpde_plan *plan)
 						ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
 					break;
 				case ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM:
-					/* Only the append has an inline form worth its guard:
-					 * on applications the packed in-place replacement of a
-					 * keyed assignment almost never applies, and the helper
-					 * then repeats its checks. */
+					/* An append, and the replacement of an existing element
+					 * under an integer key, have inline forms. A key that
+					 * may be a string mostly inserts on applications, where
+					 * the guard would only repeat the helper's checks. */
 					if (operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
 						flags |=
 							ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
+					} else if (machine_cfg_integer_key_assignment(
+							plan, operation)) {
+						/* A missing key inserts out of line. */
+						flags |=
+							ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
+						require_runtime_helper(
+							plan, ZEND_NATIVE_HELPER_ARRAY_INSERT_INDEX);
 					}
 					break;
 				default:
@@ -5988,6 +6031,11 @@ bool initialize_plan(
 				source.op1,
 				source_ssa != nullptr && source_ssa->ops != nullptr
 					? source_ssa->ops[index].op1_use : -1);
+			frozen.op2_may_be = source_operand_may_be(
+				source_op_array, source_ssa, index, source.op2_type,
+				source.op2,
+				source_ssa != nullptr && source_ssa->ops != nullptr
+					? source_ssa->ops[index].op2_use : -1);
 		}
 		plan->source_multi_branches =
 			static_cast<zend_tpde_source_multi_branch *>(std::calloc(
@@ -8485,9 +8533,17 @@ bool initialize_plan(
 						}
 						const int32_t value_index = zend_tpde_value_index(
 							plan, argument.value_id);
-						if (value_index >= 0
+						/* A source-backed argument is proven by the type
+						 * Zend's inference gives its SEND. */
+						const bool known_long = plan->source_opcodes != nullptr
+							&& argument.send_opline_index
+								< plan->source_opcode_count
+							&& plan->source_opcodes[
+								argument.send_opline_index].op1_known_type
+								== IS_LONG;
+						if (known_long || (value_index >= 0
 								&& plan->values[value_index].exact_type
-									== ZEND_MIR_SCALAR_TYPE_I64) {
+									== ZEND_MIR_SCALAR_TYPE_I64)) {
 							proven |= UINT32_C(1) << argument.ordinal;
 						}
 					}
@@ -11457,10 +11513,16 @@ static bool retain_typed_call_materializations(
 	lazy_scalar_storages.erase(
 		std::unique(lazy_scalar_storages.begin(), lazy_scalar_storages.end()),
 		lazy_scalar_storages.end());
-	auto lazy_join_has_machine_source = [&](uint32_t value_index) -> bool {
-		if (value_index >= plan->value_count) {
+	/* A COPY or PHI joins a machine source directly or through other
+	 * joins, such as an outer loop's PHI over an inner loop's. */
+	std::vector<uint8_t> join_visited(plan->value_count, 0);
+	auto lazy_join_has_machine_source = [&](uint32_t value_index,
+			auto &&self) -> bool {
+		if (value_index >= plan->value_count
+				|| join_visited[value_index] != 0) {
 			return false;
 		}
+		join_visited[value_index] = 1;
 		const int32_t definition =
 			plan->value_definition_instructions == nullptr
 				? -1 : plan->value_definition_instructions[value_index];
@@ -11483,6 +11545,14 @@ static bool retain_typed_call_materializations(
 				zend_tpde_operand_at(plan, &instruction, operand);
 			if (machine_plan_value_has_result_representation(
 						plan, operand_id)) {
+				return true;
+			}
+			const int32_t operand_index =
+				zend_tpde_value_index(plan, operand_id);
+			if (operand_index >= 0
+					&& plan->values[operand_index].canonical_storage_id
+						== plan->values[value_index].canonical_storage_id
+					&& self(static_cast<uint32_t>(operand_index), self)) {
 				return true;
 			}
 		}
@@ -11563,8 +11633,10 @@ static bool retain_typed_call_materializations(
 					&& !value.canonical_alias_observable
 					&& (definition_opcode == ZEND_MIR_OPCODE_COPY
 						|| definition_opcode == ZEND_MIR_OPCODE_PHI)
-					&& lazy_join_has_machine_source(
-						materialization.value_index);
+					&& (std::ranges::fill(join_visited, 0),
+						lazy_join_has_machine_source(
+							materialization.value_index,
+							lazy_join_has_machine_source));
 				if (!lazy_scalar_join
 						&& !machine_plan_value_has_result_representation(
 							plan, value.id)) {
@@ -12699,6 +12771,10 @@ static bool freeze_machine_cfg(
 					|| (hot != UINT32_MAX
 						&& plan->instructions[index].typed_call_may_fail
 						&& !add_edge(hot, cold))
+					/* A deoptimization exit leaves the function, but keeps
+					 * the edge: TPDE then compiles its block right after the
+					 * fast path, whose guards branch there with the fast
+					 * path's register assignment. */
 					|| !add_edge(cold, continuation)) {
 				goto malformed;
 			}
@@ -13049,6 +13125,72 @@ static void freeze_component_numeric_operands(
 	}
 }
 
+/*
+ * The deoptimization exits of the specialized members (ADR 0025 section 4).
+ * A guarded operation exits where its generic copy has a landing (both
+ * members lower the same MIR; the copy's adaptor decides which resume IDs
+ * land). An exit's cold block leaves the function, so the specialized
+ * member's CFG is frozen again without its continuation edges.
+ */
+static bool freeze_deopt_exits(
+		zend_tpde_plan *plans,
+		const zend_tpde_plan *const *component_plans,
+		uint32_t component_count,
+		zend_native_diagnostic *diag) {
+	for (uint32_t index = 0; index < component_count; ++index) {
+		zend_tpde_plan &specialized = plans[index];
+		if (specialized.deopt_generic_member_plus_one == 0
+				|| specialized.deopt_generic_member_plus_one
+					> component_count) {
+			continue;
+		}
+		const zend_tpde_plan &generic =
+			plans[specialized.deopt_generic_member_plus_one - 1];
+		if (generic.deopt_resume_count == 0
+				|| generic.instruction_count != specialized.instruction_count
+				|| generic.value_count != specialized.value_count) {
+			continue;
+		}
+		zend::native::tpde::ZendIRAdaptor landings{&generic,
+			std::span<const zend_tpde_plan *const>{
+				component_plans, component_count}};
+		if (!landings.valid()) {
+			continue;
+		}
+		bool exits = false;
+		for (uint32_t resume = 0; resume < generic.deopt_resume_count;
+				++resume) {
+			const uint32_t instruction =
+				generic.deopt_resume_instructions[resume];
+			if (!landings.deopt_resume_landed(resume)
+					|| instruction >= specialized.instruction_count) {
+				continue;
+			}
+			zend_tpde_instruction &exit = specialized.instructions[instruction];
+			if (exit.record.opcode
+						!= generic.instructions[instruction].record.opcode
+					|| exit.record.source_position_id
+						!= generic.deopt_resume_targets[resume]
+					|| (exit.machine_control_flow_flags
+						& ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD) == 0) {
+				continue;
+			}
+			exit.deopt_exit_resume_plus_one = resume + 1;
+			exits = true;
+		}
+		if (!exits) {
+			continue;
+		}
+		require_runtime_helper(&specialized, ZEND_NATIVE_HELPER_DEOPT_TRANSFER);
+		destroy_machine_cfg(&specialized.entry_machine_cfg);
+		if (!freeze_machine_cfg(&specialized, false,
+				&specialized.entry_machine_cfg, diag)) {
+			return false;
+		}
+	}
+	return true;
+}
+
 static bool freeze_component_machine_plan(
 		zend_tpde_plan *plans,
 		const zend_tpde_plan *const *component_plans,
@@ -13267,7 +13409,7 @@ static bool freeze_component_machine_plan(
 			return false;
 		}
 	}
-	return true;
+	return freeze_deopt_exits(plans, component_plans, component_count, diag);
 }
 
 zend_native_image_metrics collect_plan_metrics(const zend_tpde_plan &plan) {
@@ -13668,6 +13810,11 @@ extern "C" zend_result zend_tpde_compile_component_with_runtime(
 	uint32_t initialized = 0;
 	for (; initialized < member_count; ++initialized) {
 		const zend_native_component_member &member = members[initialized];
+		/* The deoptimization pairing shapes the plan's resume IDs. */
+		plans[initialized].deopt_generic_member_plus_one =
+			member.deopt_generic_member_plus_one <= member_count
+				? member.deopt_generic_member_plus_one : 0;
+		plans[initialized].deopt_landings = member.deopt_landings;
 		if (!initialize_plan(
 				member.module, runtime,
 				member.user_bindings, member.user_binding_count,
@@ -13687,6 +13834,10 @@ extern "C" zend_result zend_tpde_compile_component_with_runtime(
 			member.entry_variant_long_mask;
 		plans[initialized].entry_variant_numeric =
 			member.entry_variant_numeric;
+		/* A generic copy is entered only by deoptimization. */
+		if (plans[initialized].deopt_landings) {
+			plans[initialized].fast_call_eligible = false;
+		}
 		plan_refs[initialized] = &plans[initialized];
 	}
 	if (initialized != member_count) {
@@ -13760,8 +13911,12 @@ extern "C" zend_result zend_tpde_compile_component_with_runtime(
 	}
 	bool symbols_ready = true;
 	for (uint32_t index = 0; index < member_count; ++index) {
+		/* Metrics count source sites: a specialized function's generic
+		 * copy repeats them. */
 		const zend_native_image_metrics metrics =
-			collect_plan_metrics(plans[index]);
+			plans[index].deopt_landings
+				? zend_native_image_metrics{}
+				: collect_plan_metrics(plans[index]);
 		image->metrics.runtime_helper_sites += metrics.runtime_helper_sites;
 		image->metrics.source_opline_decode_sites +=
 			metrics.source_opline_decode_sites;
