@@ -2338,30 +2338,46 @@ public:
 		}
 		ASM(MOV64mr, FE_MEM(FE_AX, 0, FE_NOREG,
 			member(offsetof(zend_execute_data, opline))), FE_R9);
-		/* The other CVs start undefined: a few stores, else a loop. A
+		/* The other CVs start undefined (IS_UNDEF is zero): a zero zval
+		 * per CV, a few stores straight, else four per loop iteration. A
 		 * variadic parameter holds its array already. */
 		const uint32_t first_local = num_args + (variadic ? 1 : 0);
+		const uint32_t locals = last_var - first_local;
 		const int32_t first_variable = static_cast<int32_t>(
-			(ZEND_CALL_FRAME_SLOT + first_local) * sizeof(zval)
-				+ offsetof(zval, u1.type_info));
-		if (last_var - first_local <= 6) {
-			for (uint32_t variable = 0; variable < last_var - first_local;
-					++variable) {
-				ASM(MOV32mi, FE_MEM(FE_AX, 0, FE_NOREG, first_variable
-					+ static_cast<int32_t>(variable * sizeof(zval))),
-					IS_UNDEF);
+			(ZEND_CALL_FRAME_SLOT + first_local) * sizeof(zval));
+		if (locals == 1) {
+			ASM(MOV32mi, FE_MEM(FE_AX, 0, FE_NOREG, first_variable
+				+ static_cast<int32_t>(offsetof(zval, u1.type_info))),
+				IS_UNDEF);
+		} else if (locals != 0) {
+			static_assert(IS_UNDEF == 0 && sizeof(zval) == 16);
+			ASM(SSE_XORPDrr, FE_XMM0, FE_XMM0);
+			uint32_t straight = locals;
+			int32_t straight_base = first_variable;
+			if (locals > 16) {
+				/* No labels before the prologue (remove_prologue_bytes()):
+				 * the backward branch is encoded directly. */
+				ASM(LEA64rm, FE_R9, FE_MEM(FE_AX, 0, FE_NOREG,
+					first_variable));
+				ASM(MOV32ri, FE_R10, static_cast<int32_t>(locals / 4));
+				const uint32_t loop = text_writer.offset();
+				for (int32_t store = 0; store < 4; ++store) {
+					ASM(SSE_MOVDQUmr, FE_MEM(FE_R9, 0, FE_NOREG,
+						store * static_cast<int32_t>(sizeof(zval))), FE_XMM0);
+				}
+				ASM(ADD64ri, FE_R9, static_cast<int32_t>(4 * sizeof(zval)));
+				ASM(SUB32ri, FE_R10, 1);
+				text_writer.ensure_space(16);
+				ASM(JNZ, text_writer.begin_ptr() + loop);
+				straight = locals % 4;
+				straight_base = first_variable + static_cast<int32_t>(
+					(locals - straight) * sizeof(zval));
 			}
-		} else {
-			/* No labels before the prologue (remove_prologue_bytes()):
-			 * the backward branch is encoded directly. */
-			ASM(LEA64rm, FE_R9, FE_MEM(FE_AX, 0, FE_NOREG, first_variable));
-			ASM(MOV32ri, FE_R10, static_cast<int32_t>(last_var - first_local));
-			const uint32_t loop = text_writer.offset();
-			ASM(MOV32mi, FE_MEM(FE_R9, 0, FE_NOREG, 0), IS_UNDEF);
-			ASM(ADD64ri, FE_R9, static_cast<int32_t>(sizeof(zval)));
-			ASM(SUB32ri, FE_R10, 1);
-			text_writer.ensure_space(16);
-			ASM(JNZ, text_writer.begin_ptr() + loop);
+			for (uint32_t variable = 0; variable < straight; ++variable) {
+				ASM(SSE_MOVDQUmr, FE_MEM(FE_AX, 0, FE_NOREG, straight_base
+					+ static_cast<int32_t>(variable * sizeof(zval))),
+					FE_XMM0);
+			}
 		}
 		/* A missing parameter takes its default literal, out of line. */
 		uint32_t to_defaults = UINT32_MAX;
@@ -2451,9 +2467,31 @@ public:
 				current_execute_data))));
 		ASM(MOV64mr, FE_MEM(FE_R11, 0, FE_NOREG, 0), FE_R10);
 		/* The CVs, as i_free_compiled_variables() releases them: a counted
-		 * one out of line, after which the cursor is reloaded. */
+		 * one out of line, after which the cursor is reloaded. Only CVs
+		 * Zend's type inference lets hold a counted value are tested; a
+		 * few of them each in turn, with the cursor set out of line. */
 		std::vector<std::pair<uint32_t, uint32_t>> counted_branches;
-		if (last_var != 0) {
+		std::vector<int32_t> counted_slots;
+		const uint64_t counted_cvs = plan->fast_call_counted_cvs
+			& (last_var >= 64 ? ~UINT64_C(0)
+				: (UINT64_C(1) << last_var) - 1);
+		const bool counted_straight =
+			std::popcount(counted_cvs) <= 8;
+		if (counted_straight) {
+			for (uint32_t variable = 0; variable < last_var; ++variable) {
+				if (((counted_cvs >> variable) & 1) == 0) {
+					continue;
+				}
+				const int32_t slot = static_cast<int32_t>(
+					(ZEND_CALL_FRAME_SLOT + variable) * sizeof(zval));
+				ASM(TEST8mi, FE_MEM(FE_DI, 0, FE_NOREG, slot
+					+ member(offsetof(zval, u1.v.type_flags))),
+					IS_TYPE_REFCOUNTED);
+				const uint32_t counted = branch(true);
+				counted_branches.emplace_back(counted, text_writer.offset());
+				counted_slots.push_back(slot);
+			}
+		} else if (last_var != 0) {
 			ASM(LEA64rm, FE_R10, FE_MEM(FE_DI, 0, FE_NOREG,
 				static_cast<int32_t>(ZEND_CALL_FRAME_SLOT * sizeof(zval))));
 			ASM(LEA64rm, FE_R11, FE_MEM(FE_DI, 0, FE_NOREG,
@@ -2487,11 +2525,17 @@ public:
 		text_writer.eh_advance(out_of_line - (epilogue + 4));
 		text_writer.eh_write_inst(
 			tpde::dwarf::DW_CFA_def_cfa_offset, area + 8);
-		for (const auto &[counted, next] : counted_branches) {
+		for (size_t branch_index = 0; branch_index < counted_branches.size();
+				++branch_index) {
+			const auto &[counted, next] = counted_branches[branch_index];
 			/* GC_DELREF(); a value still referenced that is no GC root
 			 * candidate (not collectable, already buffered, no reference)
 			 * needs nothing more, as gc_check_possible_root() decides. */
 			patch(counted, text_writer.offset());
+			if (counted_straight) {
+				ASM(LEA64rm, FE_R10, FE_MEM(FE_DI, 0, FE_NOREG,
+					counted_slots[branch_index]));
+			}
 			ASM(MOV64rm, FE_R9, FE_MEM(FE_R10, 0, FE_NOREG, 0));
 			ASM(SUB32mi, FE_MEM(FE_R9, 0, FE_NOREG, member(
 				offsetof(zend_refcounted_h, refcount))), 1);
@@ -2513,6 +2557,8 @@ public:
 			call_symbol(release_symbol);
 			ASM(MOV64rm, FE_R10, FE_MEM(FE_SP, 0, FE_NOREG, 40));
 			ASM(MOV64rm, FE_R11, FE_MEM(FE_SP, 0, FE_NOREG, 48));
+			/* The straight tests address the frame. */
+			ASM(MOV64rm, FE_DI, FE_MEM(FE_SP, 0, FE_NOREG, 0));
 			const uint32_t back = branch(false);
 			patch(back, next);
 		}

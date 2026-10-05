@@ -5953,6 +5953,24 @@ bool initialize_plan(
 		&& source_op_array->last_var <= 64
 		&& source_op_array->num_args <= (uint32_t) source_op_array->last_var
 		&& freeze_fast_call_receive(source_op_array, plan);
+	plan->fast_call_counted_cvs = ~UINT64_C(0);
+	if (plan->fast_call_eligible && source_ssa != nullptr
+			&& source_ssa->vars != nullptr
+			&& source_ssa->var_info != nullptr) {
+		uint64_t counted = 0;
+		for (int index = 0; index < source_ssa->vars_count; ++index) {
+			const int variable = source_ssa->vars[index].var;
+			if (variable < 0 || variable >= source_op_array->last_var) {
+				continue;
+			}
+			const uint32_t type = source_ssa->var_info[index].type;
+			if (type == 0 || (type & (MAY_BE_STRING | MAY_BE_ARRAY
+					| MAY_BE_OBJECT | MAY_BE_RESOURCE | MAY_BE_REF)) != 0) {
+				counted |= UINT64_C(1) << variable;
+			}
+		}
+		plan->fast_call_counted_cvs = counted;
+	}
 	plan->source_literals =
 		source_op_array != nullptr ? source_op_array->literals : nullptr;
 	plan->source_literal_count = source_op_array != nullptr
