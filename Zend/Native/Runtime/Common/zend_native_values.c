@@ -6261,6 +6261,15 @@ zend_native_value_assign_dim_address_general(
 		(uint32_t) (descriptor >> 32), false);
 }
 
+zval *zend_native_array_insert_index(zval *container, zend_ulong h)
+{
+	ZVAL_DEREF(container);
+	ZEND_ASSERT(Z_TYPE_P(container) == IS_ARRAY
+		&& GC_REFCOUNT(Z_ARRVAL_P(container)) == 1);
+	return zend_hash_index_add_new(
+		Z_ARRVAL_P(container), h, &EG(uninitialized_zval));
+}
+
 zend_native_status zend_native_value_assign_dim_address(
 	zend_execute_data *execute_data, zval *container_slot, zval *key,
 	zval *value, uint64_t descriptor)

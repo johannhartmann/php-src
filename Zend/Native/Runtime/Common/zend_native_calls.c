@@ -8456,6 +8456,19 @@ uint64_t zend_native_deopt_stress_reenter(zend_execute_data *execute_data,
 #endif
 }
 
+zend_native_status zend_native_deopt_transfer(zend_execute_data *execute_data,
+	uint32_t position, zend_native_frame_entry_t entry)
+{
+	zend_native_execution_context context;
+
+	ZEND_ASSERT(position < execute_data->func->op_array.last);
+	execute_data->opline = execute_data->func->op_array.opcodes + position;
+	/* The context holds request-global addresses only. */
+	zend_native_execution_context_init(&context);
+	context.deopt_resume = true;
+	return entry(execute_data, &context);
+}
+
 void zend_native_call_receive_variadic(zend_execute_data *callee)
 {
 	const zend_op_array *op_array = &callee->func->op_array;

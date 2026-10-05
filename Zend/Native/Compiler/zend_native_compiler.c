@@ -93,6 +93,16 @@ typedef struct _zend_native_compiled_function {
 	uint32_t variant_long_mask;
 	bool variant_numeric;
 	zend_arg_info *variant_arg_info;
+	/*
+	 * Speculation (ADR 0025 section 4): the function compiles as its
+	 * specialized version, whose failed guards deoptimize into a generic
+	 * copy compiled with resume IDs at every guarded operation.
+	 * deopt_generic_plus_one names that copy, deopt_generic_of_plus_one the
+	 * specialized function a copy belongs to. Like a variant, the copy is
+	 * reached only from its function's code.
+	 */
+	uint32_t deopt_generic_plus_one;
+	uint32_t deopt_generic_of_plus_one;
 } zend_native_compiled_function;
 
 struct _zend_native_compiler {
@@ -818,6 +828,16 @@ static bool zend_native_compiler_is_variant(
 	return function != NULL && function->variant_of_plus_one != 0;
 }
 
+/* Extra code of a function: a variant or a deoptimization copy. It owns
+ * a private op array copy, is no codeunit of its own and is published only
+ * as part of its function's image. */
+static bool zend_native_compiler_is_hidden(
+	const zend_native_compiled_function *function)
+{
+	return function != NULL && (function->variant_of_plus_one != 0
+		|| function->deopt_generic_of_plus_one != 0);
+}
+
 static void zend_native_compiler_release_function_transients(
 	zend_native_compiler *compiler,
 	zend_native_compiled_function *function);
@@ -826,8 +846,8 @@ static void zend_native_compiler_record_publication(
 	zend_native_compiler *compiler,
 	const zend_native_compiled_function *function)
 {
-	if (zend_native_compiler_is_variant(function)) {
-		/* A variant is reached only through its general entry. */
+	if (zend_native_compiler_is_hidden(function)) {
+		/* A variant or copy is reached only through its function. */
 		return;
 	}
 	ZEND_ASSERT(compiler->publication_count
@@ -1077,6 +1097,78 @@ static bool zend_native_compiler_add_variant(
 }
 
 /*
+ * Speculation (ADR 0025 section 4; ZEND_NATIVE_SPECULATE=1 while the
+ * feedback that selects functions is pending): the generic copy a
+ * function's specialized version deoptimizes into. A shallow op array copy
+ * like a variant's, with the original arg_info.
+ */
+static bool zend_native_compiler_speculation_enabled(void)
+{
+	static int enabled = -1;
+
+	if (enabled < 0) {
+		const char *setting = getenv("ZEND_NATIVE_SPECULATE");
+		enabled = setting != NULL && setting[0] == '1';
+	}
+	return enabled != 0;
+}
+
+static bool zend_native_compiler_speculates(
+	const zend_native_compiler *compiler,
+	const zend_native_compiled_function *function)
+{
+	const zend_op_array *op_array = function->op_array;
+
+	return zend_native_compiler_speculation_enabled()
+		&& compiler->target == ZEND_NATIVE_TARGET_LINUX_AMD64
+		&& !zend_native_compiler_is_hidden(function)
+		&& function->variant_plus_one == 0
+		&& function->deopt_generic_plus_one == 0
+		&& op_array->type == ZEND_USER_FUNCTION
+		/* A file's main code runs once per inclusion. */
+		&& op_array->function_name != NULL
+		&& (op_array->fn_flags & ZEND_ACC_GENERATOR) == 0;
+}
+
+static bool zend_native_compiler_add_deopt_generic(
+	zend_native_compiler *compiler,
+	zend_native_compiled_function *function)
+{
+	zend_native_compiled_function *copy_function;
+	zend_op_array *copy;
+
+	if (!zend_native_compiler_reserve_functions(
+			compiler, compiler->function_count + 1)) {
+		return false;
+	}
+	copy = zend_native_compiler_alloc(compiler, sizeof(*copy), false);
+	*copy = *function->op_array;
+	copy_function = zend_native_compiler_alloc(
+		compiler, sizeof(*copy_function), true);
+	copy_function->op_array = copy;
+	zend_native_op_array_identity_capture(
+		&copy_function->op_array_identity, copy);
+	copy_function->registry_index = compiler->function_count;
+	copy_function->state = ZEND_NATIVE_CODEUNIT_COMPILING;
+	copy_function->deopt_generic_of_plus_one = function->registry_index + 1;
+	zend_native_entry_cell_init(
+		&copy_function->entry_cell, (zend_function *) function->op_array);
+	copy_function->entry_cell.lease_managed = compiler->persistent;
+	if (zend_native_entry_cell_begin_compile(
+			&copy_function->entry_cell) == FAILURE
+			|| zend_hash_index_update_ptr(
+				&compiler->functions_by_op_array,
+				(zend_ulong) (uintptr_t) copy, copy_function) == NULL) {
+		zend_native_compiler_free(compiler, copy);
+		zend_native_compiler_free(compiler, copy_function);
+		return false;
+	}
+	compiler->functions[compiler->function_count++] = copy_function;
+	function->deopt_generic_plus_one = copy_function->registry_index + 1;
+	return true;
+}
+
+/*
  * A variant pays for its entry check when its body loops, or when every
  * recursive call passes the checked parameters as exact integers (numbers
  * for a numeric variant, including results of calls), which then call the
@@ -1177,12 +1269,12 @@ static bool zend_native_compiler_variant_pays_off(
 	return recursive;
 }
 
-/* The op array copy and arg_info a variant owns. */
+/* The op array copy and arg_info a variant or copy owns. */
 static void zend_native_compiler_free_variant_source(
 	const zend_native_compiler *compiler,
 	zend_native_compiled_function *function)
 {
-	if (!zend_native_compiler_is_variant(function)) {
+	if (!zend_native_compiler_is_hidden(function)) {
 		return;
 	}
 	zend_native_compiler_free(compiler, function->variant_arg_info);
@@ -3342,7 +3434,7 @@ static bool zend_native_compiler_compile_shared_component(
 				function = function->next_component_member) {
 			if (function->entry_cell.state == ZEND_NATIVE_ENTRY_READY
 					|| function->state == ZEND_NATIVE_CODEUNIT_FAILED
-					|| zend_native_compiler_is_variant(function)
+					|| zend_native_compiler_is_hidden(function)
 						!= (pass == 1)) {
 				continue;
 			}
@@ -3370,6 +3462,17 @@ static bool zend_native_compiler_compile_shared_component(
 		backend_members[index].entry_variant_member_plus_one = 0;
 		backend_members[index].entry_variant_long_mask = 0;
 		backend_members[index].entry_variant_numeric = false;
+		backend_members[index].deopt_generic_member_plus_one = 0;
+		backend_members[index].deopt_landings =
+			member_function->deopt_generic_of_plus_one != 0;
+		if (member_function->deopt_generic_plus_one != 0) {
+			const uint32_t generic_member = component_member_by_registry[
+				member_function->deopt_generic_plus_one - 1];
+
+			ZEND_ASSERT(generic_member != UINT32_MAX);
+			backend_members[index].deopt_generic_member_plus_one =
+				generic_member + 1;
+		}
 		if (member_function->variant_plus_one != 0) {
 			const uint32_t variant_member = component_member_by_registry[
 				member_function->variant_plus_one - 1];
@@ -4082,6 +4185,10 @@ static zend_result zend_native_compiler_compile_locked_impl(
 				(void) zend_native_compiler_add_variant(
 					compiler, function, variant_mask);
 			}
+			if (zend_native_compiler_speculates(compiler, function)) {
+				(void) zend_native_compiler_add_deopt_generic(
+					compiler, function);
+			}
 		}
 		if (!function->call_sites_indexed
 				&& !zend_native_compiler_index_call_sites(
@@ -4185,7 +4292,7 @@ static zend_result zend_native_compiler_compile_locked(
 			continue;
 		}
 		opcodes += function->op_array->last;
-		variants += zend_native_compiler_is_variant(function);
+		variants += zend_native_compiler_is_hidden(function);
 		failed += function->state == ZEND_NATIVE_CODEUNIT_FAILED;
 	}
 	zend_native_compile_trace_head(file, "compile");
@@ -4497,7 +4604,7 @@ uint32_t zend_native_compiler_codeunit_count(
 	}
 	for (index = 0; index < compiler->function_count; index++) {
 		if (compiler->functions[index]->state == state
-				&& !zend_native_compiler_is_variant(
+				&& !zend_native_compiler_is_hidden(
 					compiler->functions[index])) {
 			count++;
 		}
@@ -4581,7 +4688,7 @@ void zend_native_compiler_get_stats(
 	for (uint32_t function_index = 0;
 			function_index < compiler->function_count; function_index++) {
 		/* Variants are extra code of their function, not codeunits. */
-		if (!zend_native_compiler_is_variant(
+		if (!zend_native_compiler_is_hidden(
 				compiler->functions[function_index])) {
 			stats->native_codeunits++;
 		}
@@ -5511,14 +5618,14 @@ zend_result zend_native_compiler_serialize_bundle(
 		compiler->function_count, sizeof(*record_by_function));
 	for (index = 0; index < compiler->function_count; index++) {
 		record_by_function[index] = record_count;
-		if (!zend_native_compiler_is_variant(compiler->functions[index])) {
+		if (!zend_native_compiler_is_hidden(compiler->functions[index])) {
 			record_count++;
 		}
 	}
 	for (index = 0; index < compiler->function_count; index++) {
 		zend_native_compiled_function *function =
 			compiler->functions[index];
-		if (zend_native_compiler_is_variant(function)) {
+		if (zend_native_compiler_is_hidden(function)) {
 			continue;
 		}
 		if (function->state != ZEND_NATIVE_CODEUNIT_IMAGE_READY
@@ -5537,7 +5644,7 @@ zend_result zend_native_compiler_serialize_bundle(
 					&function_records[index].source_ordinal)) {
 			goto malformed;
 		}
-		if (zend_native_compiler_is_variant(
+		if (zend_native_compiler_is_hidden(
 				compiler->functions[function->image_owner_index])) {
 			goto malformed;
 		}
@@ -5563,7 +5670,7 @@ zend_result zend_native_compiler_serialize_bundle(
 	}
 	for (index = 0; index < compiler->function_count; index++) {
 		const uint32_t record = record_by_function[index];
-		if (zend_native_compiler_is_variant(compiler->functions[index])) {
+		if (zend_native_compiler_is_hidden(compiler->functions[index])) {
 			continue;
 		}
 		function_records[record] = function_records[index];
@@ -6338,7 +6445,7 @@ uint32_t zend_native_compiler_native_codeunit_count(
 
 	for (uint32_t index = 0;
 			compiler != NULL && index < compiler->function_count; index++) {
-		if (!zend_native_compiler_is_variant(compiler->functions[index])) {
+		if (!zend_native_compiler_is_hidden(compiler->functions[index])) {
 			count++;
 		}
 	}

@@ -69,6 +69,13 @@ class ZendCompilerX64 final
 	std::optional<tpde::Label> typed_failure_label_;
 	uint32_t current_continuation_block_ = UINT32_MAX;
 	bool continuation_edge_emitted_ = false;
+	/* The fast node of a deoptimization exit: TPDE compiles the exit's
+	 * slow block, which leaves the function, between the fast path and
+	 * the continuation, so the fast path's edge has no PHI move or
+	 * register state to carry its values there. */
+	bool deopt_exit_fast_ = false;
+	/* TPDE tracks its branch regions in debug builds only. */
+	bool in_branch_region_ = false;
 
 	struct TargetBranchAssignment {
 		::tpde::ValLocalIdx local_idx;
@@ -177,7 +184,7 @@ class ZendCompilerX64 final
 	bool emit_deopt_stress_transfer(uint32_t mir_instruction_index) {
 		const uint32_t resume =
 			adaptor->deopt_resume_index(mir_instruction_index);
-		if (resume == UINT32_MAX) {
+		if (resume == UINT32_MAX || !adaptor->plan()->deopt_stress) {
 			return true;
 		}
 		if (deopt_disarmed_slot_ == 0
@@ -347,6 +354,67 @@ class ZendCompilerX64 final
 		}
 		frame.reset();
 		label_place(block);
+		return true;
+	}
+
+	/*
+	 * A specialized member's failed guard (ADR 0025 section 4): the cold
+	 * block, its frame completed by the stores before it, hands the frame
+	 * to the generic copy at the operation's resume ID and returns its
+	 * status.
+	 */
+	bool emit_deopt_exit(IRInstRef instruction) {
+		const Adaptor::InstNode &node = adaptor->node(instruction);
+		const zend_tpde_plan *plan = adaptor->plan();
+		const uint32_t generic = plan->deopt_generic_member_plus_one;
+		const uint32_t position =
+			adaptor->mir_instruction(instruction).record.source_position_id;
+		if (generic == 0 || generic - 1 >= this->func_syms.size()
+				|| position == UINT32_MAX) {
+			return false;
+		}
+		const AsmReg frame_reg = canonical_frame_register();
+		tpde::x64::CCAssignerSysV assigner{false};
+		CallBuilder builder{*this, assigner};
+		{
+			ScratchReg frame{this};
+			mov(frame.alloc_gp(), frame_reg, 8);
+			ValuePart frame_part{tpde::x64::PlatformConfig::GP_BANK, 8};
+			frame_part.set_value(this, std::move(frame));
+			builder.add_arg(std::move(frame_part), tpde::CCAssignment{});
+		}
+		/* The exit uses none of its operands but the stored ones. */
+		for (size_t index = 0; index < node.liveness_operands.size();
+				++index) {
+			if (!materialized_operand(instruction, index)) {
+				auto consumed = val_ref(node.liveness_operands[index]);
+				(void) consumed;
+			}
+		}
+		builder.add_arg(ValuePart{position, 4,
+			tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+		{
+			ScratchReg entry{this};
+			const AsmReg entry_reg = entry.alloc_gp();
+			text_writer.ensure_space(16);
+			ASM(LEA64rm, entry_reg, FE_MEM(FE_IP, 0, FE_NOREG, -1));
+			reloc_text(this->func_syms[generic - 1],
+				tpde::elf::R_X86_64_PC32, text_writer.offset() - 4, -4);
+			ValuePart entry_part{tpde::x64::PlatformConfig::GP_BANK, 8};
+			entry_part.set_value(this, std::move(entry));
+			builder.add_arg(std::move(entry_part), tpde::CCAssignment{});
+		}
+		builder.call(runtime_symbol(ZEND_NATIVE_HELPER_DEOPT_TRANSFER));
+		ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
+		builder.add_ret(status, tpde::CCAssignment{});
+		/* The machine CFG keeps the edge to the continuation, which TPDE
+		 * compiles next with the state this block leaves: every value in
+		 * its stack slot, as after the branch of an ordinary slow path. */
+		const auto spilled = spill_before_branch(true);
+		RetBuilder return_builder{*this, *cur_cc_assigner()};
+		return_builder.add(std::move(status), tpde::CCAssignment{});
+		return_builder.ret();
+		release_spilled_regs(spilled);
 		return true;
 	}
 
@@ -1684,12 +1752,24 @@ public:
 	void generate_branch_to_block(
 			BranchJump jump, IRBlockRef target,
 			bool needs_split, bool last_inst) {
-		continuation_edge_emitted_ =
-			continuation_edge_emitted_
-			|| static_cast<uint32_t>(target)
-				== current_continuation_block_;
+		const bool continuation = static_cast<uint32_t>(target)
+			== current_continuation_block_;
+		continuation_edge_emitted_ = continuation_edge_emitted_
+			|| continuation;
+		/* Inside a branch region, the region's own spill came first. */
+		if (continuation && deopt_exit_fast_ && !in_branch_region_) {
+			(void) spill_before_branch();
+		}
 		Base::generate_branch_to_block(
 			jump, target, needs_split, last_inst);
+	}
+	void begin_branch_region() {
+		in_branch_region_ = true;
+		Base::begin_branch_region();
+	}
+	void end_branch_region() {
+		in_branch_region_ = false;
+		Base::end_branch_region();
 	}
 	void generate_uncond_branch(IRBlockRef target) {
 		continuation_edge_emitted_ =
@@ -3007,6 +3087,16 @@ bool ZendCompilerX64::emit_materializations(
 		const zend_tpde_machine_value_kind machine_kind =
 			adaptor->machine_kind(value);
 		auto value_ref = val_ref(value);
+		/* A value loaded from its own CV slot is still there: a write to
+		 * the CV defines a new value. The frame stands in for a value the
+		 * adaptor found in its slot. */
+		if (value == IRValueRef{Adaptor::FRAME_VALUE}
+				|| (materialization.storage_id
+						< adaptor->plan()->source_frame_variable_count
+					&& adaptor->slot_load_storage(value)
+						== materialization.storage_id)) {
+			continue;
+		}
 		auto payload = value_ref.part(0);
 		AsmReg boolean_payload_reg = AsmReg::make_invalid();
 		AsmReg payload_reg = AsmReg::make_invalid();
@@ -3644,6 +3734,9 @@ bool ZendCompilerX64::compile_inst_impl(
 	if (!emit_materializations(instruction)
 			|| !emit_deopt_stores(instruction)) {
 		return false;
+	}
+	if (node.kind == Adaptor::InstKind::GuardedCold && node.deopt_exit) {
+		return emit_deopt_exit(instruction);
 	}
 	if (node.kind != Adaptor::InstKind::GeneratorResume
 			&& !adaptor->generator_resume_values(instruction).empty()
@@ -8792,7 +8885,26 @@ bool ZendCompilerX64::compile_inst_impl(
 			auto consumed = val_ref(operand);
 			(void) consumed;
 		}
-		if (node.has_result) {
+		if (node.has_result && mir.deopt_exit_resume_plus_one != 0
+				&& !adaptor->typed_body()) {
+			/*
+			 * A deoptimization exit's continuation copies the fast result
+			 * (no PHI). The fast path always exits here; define the
+			 * unreachable result so the continuation compiles.
+			 */
+			auto result = result_ref(node.result);
+			const ValueParts parts = val_parts(node.result);
+			for (uint32_t part = 0; part < parts.count(); ++part) {
+				auto value = result.part(part);
+				const AsmReg value_reg = value.alloc_reg();
+				if (value.bank() == tpde::x64::PlatformConfig::FP_BANK) {
+					ASM(SSE_XORPDrr, value_reg, value_reg);
+				} else {
+					ASM(XOR32rr, value_reg, value_reg);
+				}
+				value.set_modified();
+			}
+		} else if (node.has_result) {
 			/*
 			 * Selection rejected the nominal fast implementation, so this
 			 * block has no executable edge to the continuation PHI. Retire
@@ -9337,7 +9449,7 @@ bool ZendCompilerX64::compile_inst_impl(
 	 * and UNSET, which return the INDIRECT of an existing element of an
 	 * unshared array. */
 	enum class ElementAccess : uint8_t {
-		Read, Coalesce, Write, Isset, Empty
+		Read, Coalesce, Write, Isset, Empty, Assign
 	};
 	auto array_element = [&](ElementAccess access) -> int {
 		const zend_mir_executable_value_ref &operation = mir.value_operation;
@@ -9362,7 +9474,9 @@ bool ZendCompilerX64::compile_inst_impl(
 				adaptor->machine_kind(operand);
 			if (!zend_mir_id_is_valid(storage)
 					|| (storage != operation.op1_storage_id
-						&& storage != operation.op2_storage_id)
+						&& storage != operation.op2_storage_id
+						&& !(access == ElementAccess::Assign
+							&& storage == operation.auxiliary_storage_id))
 					|| (kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 						? val_parts(operand).count() != 2
 						: kind != ZEND_TPDE_MACHINE_VALUE_BOOL
@@ -9397,7 +9511,10 @@ bool ZendCompilerX64::compile_inst_impl(
 			|| access == ElementAccess::Coalesce;
 		const bool tests = access == ElementAccess::Isset
 			|| access == ElementAccess::Empty;
-		const bool writes = access == ElementAccess::Write;
+		/* An assignment replaces an existing element in place: the write
+		 * fetch's lookup, then the value. */
+		const bool assigns = access == ElementAccess::Assign;
+		const bool writes = access == ElementAccess::Write || assigns;
 		const bool container_literal =
 			operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
 		const bool container_temporary =
@@ -9412,17 +9529,37 @@ bool ZendCompilerX64::compile_inst_impl(
 				|| (writes && (container_literal || container_temporary
 					|| node.has_result))
 				|| (!key_literal
-					&& slot_kind(operation.op2) != ZEND_MIR_SOURCE_SLOT_CV)
-				|| (slot_kind(operation.result) != ZEND_MIR_SOURCE_SLOT_TMP
+					&& slot_kind(operation.op2) != ZEND_MIR_SOURCE_SLOT_CV
+					&& slot_kind(operation.op2) != ZEND_MIR_SOURCE_SLOT_TMP)
+				|| (!assigns
+					&& slot_kind(operation.result) != ZEND_MIR_SOURCE_SLOT_TMP
 					&& slot_kind(operation.result)
 						!= ZEND_MIR_SOURCE_SLOT_VAR)
+				|| (assigns
+					&& (operation.result.kind
+							!= ZEND_MIR_SOURCE_OPERAND_UNUSED
+						|| (operation.auxiliary.kind
+								!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+							&& slot_kind(operation.auxiliary)
+								!= ZEND_MIR_SOURCE_SLOT_CV
+							&& slot_kind(operation.auxiliary)
+								!= ZEND_MIR_SOURCE_SLOT_TMP)
+						|| (operation.auxiliary.kind
+								!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+							&& (!zend_mir_id_is_valid(
+									operation.auxiliary_storage_id)
+								|| operation.auxiliary_storage_id
+									== operation.op1_storage_id))))
 				|| (!container_literal
 					&& !zend_mir_id_is_valid(operation.op1_storage_id))
 				|| (!key_literal
 					&& !zend_mir_id_is_valid(operation.op2_storage_id))
-				|| !zend_mir_id_is_valid(operation.result_storage_id)
-				|| operation.result_storage_id == operation.op1_storage_id
-				|| operation.result_storage_id == operation.op2_storage_id
+				|| (!assigns
+					&& (!zend_mir_id_is_valid(operation.result_storage_id)
+						|| operation.result_storage_id
+							== operation.op1_storage_id
+						|| operation.result_storage_id
+							== operation.op2_storage_id))
 				|| (node.has_result && reads
 					&& !((adaptor->machine_kind(node.result)
 								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
@@ -9448,8 +9585,24 @@ bool ZendCompilerX64::compile_inst_impl(
 		const uint64_t key_offset = key_literal
 			? uint64_t{operation.op2.index} * sizeof(zval)
 			: frame_offset(operation.op2_storage_id);
-		const uint64_t result_offset =
-			frame_offset(operation.result_storage_id);
+		const uint64_t result_offset = assigns
+			? 0 : frame_offset(operation.result_storage_id);
+		const bool value_literal = assigns
+			&& operation.auxiliary.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
+		/* An assignment's literal key is an integer (see
+		 * machine_cfg_integer_key_assignment()). */
+		if (assigns && key_literal
+				&& (adaptor->plan()->source_literals == nullptr
+					|| operation.op2.index
+						>= adaptor->plan()->source_literal_count
+					|| Z_TYPE(adaptor->plan()->source_literals[
+						operation.op2.index]) != IS_LONG)) {
+			return 0;
+		}
+		const uint64_t value_offset = !assigns ? 0
+			: value_literal
+				? uint64_t{operation.auxiliary.index} * sizeof(zval)
+				: frame_offset(operation.auxiliary_storage_id);
 		/* A CV container Zend's type inference proves to be an array,
 		 * neither undefined nor a reference: the known_* lookups take its
 		 * table without testing the zval. Some of them need one scratch
@@ -9475,6 +9628,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		if (container_offset > INT32_MAX - sizeof(zval)
 				|| key_offset > INT32_MAX - sizeof(zval)
 				|| result_offset > INT32_MAX - sizeof(zval)
+				|| value_offset > INT32_MAX - sizeof(zval)
 				|| unlocked_gp_registers() < 9) {
 			return 0;
 		}
@@ -9495,12 +9649,35 @@ bool ZendCompilerX64::compile_inst_impl(
 		ScratchReg decision{this};
 		ScratchReg answer{this};
 		/* A literal key the compiler can read is passed as what it is: an
-		 * integer index, or a string with its hash. */
-		enum class LiteralKey { None, Index, String };
+		 * integer index, or a string with its hash. A runtime key Zend's
+		 * type inference proves may be an integer and never a string is
+		 * passed as an index read from its slot; unless it is proven an
+		 * integer (neither undefined nor a reference), any other type
+		 * takes the helper. */
+		enum class LiteralKey { None, Index, String, Register };
 		LiteralKey literal_key = LiteralKey::None;
 		uint64_t literal_key_value = 0;
+		bool register_key_checked = false;
 		{
 			const zend_tpde_plan *plan = adaptor->plan();
+			if (!key_literal && unlocked_gp_registers() >= 10
+					&& plan->source_opcodes != nullptr
+					&& operation.source_position_id
+						< plan->source_opcode_count) {
+				const zend_tpde_source_opcode &source =
+					plan->source_opcodes[operation.source_position_id];
+				const uint32_t may_be = source.op2_may_be
+					& (MAY_BE_ANY | MAY_BE_UNDEF | MAY_BE_REF
+						| MAY_BE_INDIRECT);
+				if (source.op2_type != IS_CONST
+						&& source.op2_var == key_offset
+						&& source.op2_may_be != UINT32_MAX
+						&& (may_be & MAY_BE_LONG) != 0
+						&& (may_be & MAY_BE_STRING) == 0) {
+					literal_key = LiteralKey::Register;
+					register_key_checked = may_be != MAY_BE_LONG;
+				}
+			}
 			if (key_literal && plan->source_literals != nullptr
 					&& operation.op2.index < plan->source_literal_count) {
 				const zval *literal =
@@ -9518,7 +9695,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		ScratchReg literals{this};
 		AsmReg literals_reg = frame_reg;
-		if (container_literal
+		if (container_literal || value_literal
 				|| (key_literal && literal_key != LiteralKey::Index)) {
 			literals_reg = literals.alloc_gp();
 			ASM(MOV64rm, literals_reg,
@@ -9532,6 +9709,31 @@ bool ZendCompilerX64::compile_inst_impl(
 			return GenericValuePart{GenericValuePart::Expr{
 				base, static_cast<int64_t>(offset)}};
 		};
+		/* The operation consumes a temporary key: one that needs a release
+		 * (a counted string) takes the helper. */
+		if (slot_kind(operation.op2) == ZEND_MIR_SOURCE_SLOT_TMP) {
+			ASM(TEST32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(key_offset
+					+ offsetof(zval, u1.type_info))),
+				Z_TYPE_FLAGS_MASK);
+			generate_raw_jump(Jump::jne, slow);
+		}
+		/* An assignment may append to the array before it stores the
+		 * value, so the value is checked first: defined, not a reference
+		 * and not an array (which could be the container itself). */
+		if (assigns && !value_literal) {
+			ScratchReg value_type{this};
+			const AsmReg type_reg = value_type.alloc_gp();
+			ASM(MOVZXr32m8, type_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(value_offset
+					+ offsetof(zval, u1.v.type))));
+			ASM(CMP32ri, type_reg, IS_UNDEF);
+			generate_raw_jump(Jump::je, slow);
+			ASM(CMP32ri, type_reg, IS_ARRAY);
+			generate_raw_jump(Jump::je, slow);
+			ASM(CMP32ri, type_reg, IS_REFERENCE);
+			generate_raw_jump(Jump::je, slow);
+		}
 		const AsmReg container_base =
 			container_literal ? literals_reg : frame_reg;
 		ValuePart element{tpde::x64::PlatformConfig::GP_BANK, 8};
@@ -9698,11 +9900,25 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		bool found;
 		if (literal_key != LiteralKey::None) {
+			ScratchReg key_index{this};
+			if (register_key_checked) {
+				ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(key_offset
+						+ offsetof(zval, u1.v.type))), IS_LONG);
+				generate_raw_jump(Jump::jne, slow);
+			}
+			if (literal_key == LiteralKey::Register) {
+				ASM(MOV64rm, key_index.alloc_gp(), FE_MEM(frame_reg, 0,
+					FE_NOREG, static_cast<int32_t>(key_offset)));
+			}
 			auto constant = [&]() {
-				return GenericValuePart{ValuePartRef{this, literal_key_value,
-					8, tpde::x64::PlatformConfig::GP_BANK}};
+				return literal_key == LiteralKey::Register
+					? GenericValuePart{std::move(key_index)}
+					: GenericValuePart{ValuePartRef{this, literal_key_value,
+						8, tpde::x64::PlatformConfig::GP_BANK}};
 			};
-			const bool index = literal_key == LiteralKey::Index;
+			const bool index = literal_key == LiteralKey::Index
+				|| literal_key == LiteralKey::Register;
 			ScratchReg name{this};
 			if (!index) {
 				ASM(MOV64rm, name.alloc_gp(),
@@ -9712,7 +9928,15 @@ bool ZendCompilerX64::compile_inst_impl(
 			auto name_part = [&]() {
 				return GenericValuePart{std::move(name)};
 			};
-			if (container_var) {
+			if (assigns && !index) {
+				return -1;
+			} else if (assigns) {
+				found = container_var
+					? EncodeBase::encode_zend_native_indirect_assign_idx(
+						std::move(container_address), constant(), element)
+					: EncodeBase::encode_zend_native_array_assign_idx(
+						std::move(container_address), constant(), element);
+			} else if (container_var) {
 				found = index
 					? EncodeBase::encode_zend_native_indirect_find_idx_w(
 						std::move(container_address), constant(), element)
@@ -9764,7 +9988,17 @@ bool ZendCompilerX64::compile_inst_impl(
 			}
 		} else
 		{
-			if (container_var) {
+			if (assigns && key_literal) {
+				return -1;
+			} else if (assigns) {
+				found = container_var
+					? EncodeBase::encode_zend_native_indirect_assign_key(
+						std::move(container_address), std::move(key_address),
+						element)
+					: EncodeBase::encode_zend_native_array_assign_key(
+						std::move(container_address), std::move(key_address),
+						element);
+			} else if (container_var) {
 				found = key_literal
 					? EncodeBase::encode_zend_native_indirect_find_literal_w(
 						std::move(container_address), std::move(key_address),
@@ -9881,9 +10115,58 @@ bool ZendCompilerX64::compile_inst_impl(
 			access == ElementAccess::Coalesce ? unknown
 				: string_reads ? string_offset : slow);
 		/* A read of a missing key warns and a write fetch inserts it; the
-		 * helper does that. */
-		generate_raw_jump(Jump::je,
-			access == ElementAccess::Read || writes ? slow : absent);
+		 * helper does that. An assignment under an integer key into a CV's
+		 * unshared array inserts the null element out of line instead and
+		 * stores into it as into an existing one. */
+		const bool insert_index = assigns && !container_var
+			&& !container_temporary && !container_literal
+			&& (literal_key == LiteralKey::Index
+				|| literal_key == LiteralKey::Register)
+			&& runtime_symbol(ZEND_NATIVE_HELPER_ARRAY_INSERT_INDEX).valid();
+		auto insert = text_writer.label_create();
+		auto inserted = text_writer.label_create();
+		generate_raw_jump(Jump::je, insert_index ? insert
+			: access == ElementAccess::Read || writes ? slow : absent);
+		if (insert_index) {
+			const bool cold_insert = !text_writer.in_cold_area();
+			if (cold_insert) {
+				text_writer.begin_cold_area();
+			} else {
+				generate_raw_jump(Jump::jmp, inserted);
+			}
+			label_place(insert);
+			const uint64_t live_registers = static_cast<uint64_t>(
+				register_file.used) & ~(uint64_t{1} << element_reg.id());
+			emit_preserving_call(live_registers,
+				ZEND_NATIVE_HELPER_ARRAY_INSERT_INDEX, [&] {
+					const auto key_to_si = [&] {
+						if (literal_key == LiteralKey::Index) {
+							ASM(MOV64ri, FE_SI,
+								static_cast<int64_t>(literal_key_value));
+						} else {
+							ASM(MOV64rm, FE_SI, FE_MEM(frame_reg, 0, FE_NOREG,
+								static_cast<int32_t>(key_offset)));
+						}
+					};
+					/* The frame may sit in either argument register. */
+					if (frame_reg.id() == AsmReg{AsmReg::DI}.id()) {
+						key_to_si();
+						ASM(LEA64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(container_offset)));
+					} else {
+						ASM(LEA64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(container_offset)));
+						key_to_si();
+					}
+				}, [&] {
+					ASM(MOV64rr, element_reg, FE_AX);
+				});
+			generate_raw_jump(Jump::jmp, inserted);
+			if (cold_insert) {
+				text_writer.end_cold_area();
+			}
+			label_place(inserted);
+		}
 		if (string_reads) {
 			const bool cold_string = !text_writer.in_cold_area();
 			if (cold_string) {
@@ -10026,6 +10309,43 @@ bool ZendCompilerX64::compile_inst_impl(
 					IS_NULL);
 				label_place(answered);
 			}
+		} else if (assigns) {
+			/* The element's old value must need no release (an appended
+			 * element reads as null); the value, checked above, is copied,
+			 * a temporary moved. A literal is counted without opcache. */
+			const int32_t type_offset =
+				static_cast<int32_t>(offsetof(zval, u1.type_info));
+			ASM(TEST32mi, FE_MEM(element_reg, 0, FE_NOREG, type_offset),
+				Z_TYPE_FLAGS_MASK);
+			generate_raw_jump(Jump::jne, slow);
+			const AsmReg value_base = value_literal ? literals_reg : frame_reg;
+			ScratchReg value_type{this};
+			ScratchReg value_payload{this};
+			const AsmReg type_reg = value_type.alloc_gp();
+			const AsmReg payload_reg = value_payload.alloc_gp();
+			ASM(MOV32rm, type_reg, FE_MEM(value_base, 0, FE_NOREG,
+				static_cast<int32_t>(value_offset) + type_offset));
+			ASM(MOV64rm, payload_reg, FE_MEM(value_base, 0, FE_NOREG,
+				static_cast<int32_t>(value_offset)));
+			const zend_tpde_plan *value_plan = adaptor->plan();
+			const bool counted_literal = value_literal
+				&& (value_plan->source_literals == nullptr
+					|| operation.auxiliary.index
+						>= value_plan->source_literal_count
+					|| Z_REFCOUNTED(value_plan->source_literals[
+						operation.auxiliary.index]));
+			if (counted_literal || (!value_literal
+					&& slot_kind(operation.auxiliary)
+						== ZEND_MIR_SOURCE_SLOT_CV)) {
+				auto uncounted = text_writer.label_create();
+				ASM(TEST32ri, type_reg, Z_TYPE_FLAGS_MASK);
+				generate_raw_jump(Jump::je, uncounted);
+				ASM(ADD32mi, FE_MEM(payload_reg, 0, FE_NOREG, 0), 1);
+				label_place(uncounted);
+			}
+			ASM(MOV64mr, FE_MEM(element_reg, 0, FE_NOREG, 0), payload_reg);
+			ASM(MOV32mr, FE_MEM(element_reg, 0, FE_NOREG, type_offset),
+				type_reg);
 		} else if (writes) {
 			ASM(MOV64mr,
 				FE_MEM(frame_reg, 0, FE_NOREG,
@@ -11373,8 +11693,18 @@ bool ZendCompilerX64::compile_inst_impl(
 				|| layout.container_offset > INT32_MAX - 8
 				|| layout.value_offset > INT32_MAX - 8
 				|| layout.result_offset > INT32_MAX - 8) {
-			/* A keyed assignment, and an append without its inline layout,
-			 * call the helper (see freeze_machine_control_flow()). */
+			/* A keyed assignment replaces an existing element inline; an
+			 * append without its inline layout calls the helper (see
+			 * freeze_machine_control_flow()). */
+			if (node.kind == Adaptor::InstKind::GuardedFast
+					&& mir.value_operation.op2.kind
+						!= ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+				const int element = array_element(ElementAccess::Assign);
+				if (element != 0) {
+					return element > 0;
+				}
+				return branch_to_guarded_cold();
+			}
 			return execute_value_operation();
 		}
 		if (node.kind != Adaptor::InstKind::GuardedFast
@@ -22133,6 +22463,10 @@ bool ZendCompilerX64::compile_inst(
 	const Adaptor::InstNode &node = adaptor->node(instruction);
 	current_continuation_block_ = node.continuation_block;
 	continuation_edge_emitted_ = false;
+	deopt_exit_fast_ = node.kind == Adaptor::InstKind::GuardedFast
+		&& !adaptor->typed_body()
+		&& adaptor->mir_instruction(instruction).deopt_exit_resume_plus_one
+			!= 0;
 	const bool compiled =
 		compile_inst_impl(instruction, remaining_instructions);
 	if (!compiled || node.kind != Adaptor::InstKind::GuardedFast

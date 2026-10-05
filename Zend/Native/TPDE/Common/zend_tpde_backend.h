@@ -197,6 +197,11 @@ typedef struct _zend_native_component_member {
 	uint32_t entry_variant_long_mask;
 	/* The variant declares them int|float; the entry checks for numbers. */
 	bool entry_variant_numeric;
+	/* Speculation (ADR 0025 section 4): 1 + the member this specialized
+	 * member's failed guards deoptimize into, or 0; that member compiles
+	 * with resume IDs at its guarded operations (deopt_landings). */
+	uint32_t deopt_generic_member_plus_one;
+	bool deopt_landings;
 } zend_native_component_member;
 
 /*

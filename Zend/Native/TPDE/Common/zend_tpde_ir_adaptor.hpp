@@ -152,6 +152,9 @@ public:
 		/* The first node of a deoptimization landing's block: the resume
 		 * index whose landing stub precedes it. */
 		uint32_t deopt_landing = UINT32_MAX;
+		/* A GuardedCold node that deoptimizes into the generic copy
+		 * (zend_tpde_instruction::deopt_exit_resume_plus_one). */
+		bool deopt_exit = false;
 		/* The operands a deoptimizing slow node stores to their slots
 		 * before anything else (add_deopt_stores()). */
 		uint32_t deopt_store_operand_index = UINT32_MAX;
@@ -337,6 +340,8 @@ private:
 	std::vector<Slice> phi_input_slices_;
 	std::vector<PhiInput> phi_inputs_;
 	std::vector<InstNode> nodes_;
+	/* Per value, the frame slot a ZvalPayloadLoad read it from. */
+	std::vector<zend_mir_storage_id> slot_load_storage_;
 	std::vector<InlinedCheckedStep> inlined_checked_steps_;
 	std::vector<uint8_t> fused_instructions_;
 	std::vector<IRValueRef> operands_;
@@ -1062,7 +1067,9 @@ private:
 			const std::vector<BlockItem<IRInstRef>> &block_instructions,
 			const std::vector<BlockItem<IRValueRef>> &block_phis,
 			uint32_t block_count) {
-		if (plan_->deopt_resume_count == 0 || !valid_
+		const bool exits = std::ranges::any_of(nodes_,
+			[](const InstNode &current) { return current.deopt_exit; });
+		if ((plan_->deopt_resume_count == 0 && !exits) || !valid_
 				|| function_mode_ != FunctionMode::ZendEntry) {
 			return;
 		}
@@ -1219,8 +1226,11 @@ private:
 			return true;
 		};
 		/* A value the landing can define again from its frame slot: a MIR
-		 * value whose slot holds it (not through a reference), or a payload
-		 * loaded directly from its slot. */
+		 * value whose slot holds it (not through a reference), a payload
+		 * loaded directly from its slot, or a derived value of a CV, whose
+		 * slot assignments write (a scalar's the transfer stores). A derived
+		 * temporary is not: its slot may already be consumed, as by an
+		 * assignment that moved it into a CV the value now stands for. */
 		auto reloadable = [&](uint32_t index) {
 			const IRValueRef value{index};
 			const zend_mir_storage_id storage = canonical_storage(value);
@@ -1234,6 +1244,9 @@ private:
 				return !plan_value.canonical_alias_observable
 					|| kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 					|| kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR;
+			}
+			if (storage < plan_->source_frame_variable_count) {
+				return kind != ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR;
 			}
 			if (definition_kind[index]
 					!= static_cast<uint8_t>(InstKind::ZvalPayloadLoad)
@@ -1300,6 +1313,36 @@ private:
 				std::span<const IRValueRef>{deopt_landing_values_}.subspan(
 					offset, deopt_landing_slices_[resume].count));
 		}
+		/* A specialized member's exit stores the register scalars its frame
+		 * would carry into the operation's continuation: the generic copy's
+		 * landing reloads them from their slots. */
+		for (uint32_t block = 0; block < block_count; ++block) {
+			for (const uint32_t node_index : block_nodes[block]) {
+				InstNode &exit = nodes_[node_index];
+				if (!exit.deopt_exit
+						|| exit.continuation_block >= block_count) {
+					continue;
+				}
+				std::vector<IRValueRef> stores;
+				for (uint32_t index = 0; index < value_count; ++index) {
+					if ((!test(live_in, exit.continuation_block, index)
+								&& !test(live_in, block, index))
+							|| !available_into(block, index)
+							|| !zend_mir_id_is_valid(
+								canonical_storage(IRValueRef{index}))) {
+						continue;
+					}
+					const zend_tpde_machine_value_kind kind =
+						machine_kind(IRValueRef{index});
+					if (kind == ZEND_TPDE_MACHINE_VALUE_I64
+							|| kind == ZEND_TPDE_MACHINE_VALUE_F64
+							|| kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
+						stores.push_back(IRValueRef{index});
+					}
+				}
+				attach_deopt_stores(exit, stores);
+			}
+		}
 	}
 
 	/*
@@ -1321,35 +1364,40 @@ private:
 				stores.push_back(value);
 			}
 		}
+		for (InstNode &current : nodes_) {
+			if (current.mir_instruction_index == instruction_index
+					&& !current.synthetic
+					&& current.kind == InstKind::GuardedCold) {
+				attach_deopt_stores(current, stores);
+			}
+		}
+	}
+
+	/* Appends stores as liveness operands a node stores first
+	 * (deopt_store_operand_index). */
+	void attach_deopt_stores(InstNode &current,
+			const std::vector<IRValueRef> &stores) {
 		if (stores.empty()) {
 			return;
 		}
-		for (InstNode &current : nodes_) {
-			if (current.mir_instruction_index != instruction_index
-					|| current.synthetic
-					|| current.kind != InstKind::GuardedCold) {
-				continue;
-			}
-			const uint32_t old_offset = current.operand_offset;
-			const uint32_t old_count = current.operand_count;
-			if (current.semantic_operand_count == UINT32_MAX) {
-				current.semantic_operand_count =
-					current.materialization_operand_index == UINT32_MAX
-						? old_count : current.materialization_operand_index;
-			}
-			const uint32_t new_offset =
-				static_cast<uint32_t>(operands_.size());
-			for (uint32_t operand = 0; operand < old_count; ++operand) {
-				operands_.push_back(operands_[old_offset + operand]);
-			}
-			operands_.insert(operands_.end(), stores.begin(), stores.end());
-			current.operand_offset = new_offset;
-			current.operand_count = old_count
-				+ static_cast<uint32_t>(stores.size());
-			current.deopt_store_operand_index = old_count;
-			current.deopt_store_count =
-				static_cast<uint32_t>(stores.size());
+		const uint32_t old_offset = current.operand_offset;
+		const uint32_t old_count = current.operand_count;
+		if (current.semantic_operand_count == UINT32_MAX) {
+			current.semantic_operand_count =
+				current.materialization_operand_index == UINT32_MAX
+					? old_count : current.materialization_operand_index;
 		}
+		const uint32_t new_offset =
+			static_cast<uint32_t>(operands_.size());
+		for (uint32_t operand = 0; operand < old_count; ++operand) {
+			operands_.push_back(operands_[old_offset + operand]);
+		}
+		operands_.insert(operands_.end(), stores.begin(), stores.end());
+		current.operand_offset = new_offset;
+		current.operand_count = old_count
+			+ static_cast<uint32_t>(stores.size());
+		current.deopt_store_operand_index = old_count;
+		current.deopt_store_count = static_cast<uint32_t>(stores.size());
 	}
 
 	void add_node(
@@ -9123,6 +9171,15 @@ public:
 								MIR_VALUE_BASE + materialization.value_index};
 							const zend_mir_storage_id source_storage =
 								canonical_storage(canonical);
+							/* Reloading a slot only to store it back is no
+							 * materialization; the frame stands in for it. */
+							if (zend_mir_id_is_valid(source_storage)
+									&& source_storage
+										== materialization.storage_id) {
+								operands_.push_back(IRValueRef{FRAME_VALUE});
+								++operand_count;
+								continue;
+							}
 							const uint32_t reference =
 								zend_mir_id_is_valid(source_storage)
 									? machine_reference_index(
@@ -9539,6 +9596,12 @@ public:
 					machine_result ? result
 					: register_mutation_result
 						? mutation_result : INVALID_VALUE_REF;
+				/* A specialized member's operation whose failed guard
+				 * deoptimizes: the cold block leaves the function and the
+				 * continuation copies the fast result instead of merging. */
+				const bool deopt_exit =
+					function_mode_ == FunctionMode::ZendEntry
+					&& instruction.deopt_exit_resume_plus_one != 0;
 				const IRValueRef fast_result =
 					guarded_result != INVALID_VALUE_REF
 					? add_derived_value(
@@ -9548,7 +9611,7 @@ public:
 						machine_kind(guarded_result))
 					: INVALID_VALUE_REF;
 				const IRValueRef cold_result =
-					guarded_result != INVALID_VALUE_REF
+					guarded_result != INVALID_VALUE_REF && !deopt_exit
 					? add_derived_value(
 						representation(guarded_result),
 						exact_type(guarded_result),
@@ -9929,6 +9992,7 @@ public:
 				cold.mutation_result = register_mutation_result;
 				add_node(block_instructions, guarded_cold_block,
 					std::move(cold));
+				nodes_.back().deopt_exit = deopt_exit;
 				if (cold_boxed_op1_boundary_operand_index != UINT32_MAX
 						|| cold_boxed_op2_boundary_operand_index != UINT32_MAX) {
 					nodes_.back().semantic_operand_count =
@@ -9984,7 +10048,25 @@ public:
 							std::move(reload));
 					}
 				}
-				if (guarded_result != INVALID_VALUE_REF) {
+				if (guarded_result != INVALID_VALUE_REF && deopt_exit) {
+					const uint32_t copy_operand_offset =
+						static_cast<uint32_t>(operands_.size());
+					operands_.push_back(fast_result);
+					InstNode copy{InstKind::MIR, i, UINT32_MAX,
+						guarded_result, {}, copy_operand_offset, 1, true};
+					copy.synthetic = true;
+					copy.synthetic_record = record;
+					copy.synthetic_record.opcode = ZEND_MIR_OPCODE_COPY;
+					copy.synthetic_record.effects = 0;
+					copy.synthetic_record.reads = 0;
+					copy.synthetic_record.writes = 0;
+					copy.synthetic_record.barriers = 0;
+					copy.synthetic_record.ownership_actions = 0;
+					copy.control_block = continuation_block;
+					add_node(block_instructions, continuation_block,
+						std::move(copy));
+				}
+				if (guarded_result != INVALID_VALUE_REF && !deopt_exit) {
 					if (fast_result == INVALID_VALUE_REF
 							|| cold_result == INVALID_VALUE_REF
 							|| static_cast<uint32_t>(guarded_result)
@@ -10412,6 +10494,17 @@ public:
 		}
 		freeze_deopt_landing_values(
 			block_instructions, block_phis, tpde_block_count);
+		for (const InstNode &load : nodes_) {
+			if (load.kind != InstKind::ZvalPayloadLoad || !load.has_result
+					|| !zend_mir_id_is_valid(load.storage_id)) {
+				continue;
+			}
+			const uint32_t index = static_cast<uint32_t>(load.result);
+			if (index >= slot_load_storage_.size()) {
+				slot_load_storage_.resize(index + 1, ZEND_MIR_ID_INVALID);
+			}
+			slot_load_storage_[index] = load.storage_id;
+		}
 		/*
 		 * Reloaded generator values are definitions at the continuation entry,
 		 * not uses there.  Reporting them as GeneratorResume operands makes a
@@ -10765,6 +10858,12 @@ public:
 		return std::span<const IRValueRef>{generator_resume_values_}.subspan(
 			current.generator_resume_value_offset,
 			current.generator_resume_value_count);
+	}
+	/* The frame slot a value was loaded from, or ZEND_MIR_ID_INVALID. */
+	zend_mir_storage_id slot_load_storage(IRValueRef value) const {
+		const uint32_t index = static_cast<uint32_t>(value);
+		return index < slot_load_storage_.size()
+			? slot_load_storage_[index] : ZEND_MIR_ID_INVALID;
 	}
 	std::span<const zend_tpde_materialization>
 	materializations(IRInstRef inst) const {
@@ -11406,11 +11505,18 @@ public:
 	uint64_t inlined_user_body_count() const {
 		uint64_t count = 0;
 		for (const auto &member : members_) {
-			count += member->inlined_user_body_count();
+			/* Metrics count source sites: a specialized function's generic
+			 * copy repeats them. */
+			if (!member->plan()->deopt_landings) {
+				count += member->inlined_user_body_count();
+			}
 		}
 		return count;
 	}
 	void mark_typed_body_call(uint64_t frame_bytes) {
+		if (active_->plan()->deopt_landings) {
+			return;
+		}
 		++typed_body_call_site_count_;
 		typed_body_frame_bytes_elided_ += frame_bytes;
 	}
@@ -11526,6 +11632,9 @@ public:
 	std::span<const zend_tpde_materialization>
 	materializations(IRInstRef inst) const {
 		return active_->materializations(inst);
+	}
+	zend_mir_storage_id slot_load_storage(IRValueRef value) const {
+		return active_->slot_load_storage(value);
 	}
 	zend_mir_instruction_record instruction_record(IRInstRef inst) const {
 		return active_->instruction_record(inst);

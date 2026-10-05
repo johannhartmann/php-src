@@ -1070,6 +1070,13 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 		ZEND_NATIVE_EFFECT_CALL | ZEND_NATIVE_EFFECT_FRAME_READ
 			| ZEND_NATIVE_EFFECT_FRAME_WRITE,
 		(const void *) zend_native_deopt_stress_reenter},
+	{ZEND_NATIVE_HELPER_DEOPT_TRANSFER,
+		ZEND_NATIVE_EFFECT_CALL | ZEND_NATIVE_EFFECT_FRAME_READ
+			| ZEND_NATIVE_EFFECT_FRAME_WRITE,
+		(const void *) zend_native_deopt_transfer},
+	{ZEND_NATIVE_HELPER_ARRAY_INSERT_INDEX,
+		ZEND_NATIVE_EFFECT_ARRAY_SLOW_WRITE,
+		(const void *) zend_native_array_insert_index},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
