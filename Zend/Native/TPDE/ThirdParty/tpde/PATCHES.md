@@ -117,3 +117,16 @@ and removes jumps to the next instruction. It iterates to a fixed point
 the reserved prologue on, and moves labels, the remaining fixups, jump
 tables and relocations (`DataSection::remap_relocation_offsets`) with it.
 Code before the prologue, such as an alternative entry, is not touched.
+
+## Biased base register (`include/tpde/x64/CompilerX64.hpp`)
+
+- `CompilerX64::set_biased_reg(reg, off)` declares that `reg` holds its value
+  plus `off` until the next `start_func`/`prologue_begin`. `asm_helper`
+  then rewrites every encoding: memory operands based on the register get
+  `off` subtracted from their displacement; `MOV64rr`/`MOV64rm`/`LEA64rm`
+  into it add `off`, `MOV64rr`/`MOV64mr` out of it subtract it (stores
+  through flag-preserving `LEA`s); `PUSHr`/`POPr` pass unchanged. Any other
+  operand use of the register, including as an index, is a fatal error.
+  The PHP emitter biases its frame register RBX by 0x80, so that frame
+  offsets up to 0xff encode as disp8, and keeps RBX non-allocatable for the
+  rest of the function.

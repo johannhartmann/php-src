@@ -11,6 +11,8 @@
 #include "tpde/x64/FunctionWriterX64.hpp"
 
 #include <bit>
+#include <tuple>
+#include <type_traits>
 
 // Helper macros for assembling in the compiler
 #if defined(ASM) || defined(ASMF) || defined(ASMNC) || defined(ASME)
@@ -372,6 +374,121 @@ struct CompilerX64 : BaseTy<Adaptor, Derived, Config> {
     static_assert(std::is_base_of_v<CompilerX64, Derived>);
   }
 
+  /// Biased base register (local patch, see PATCHES.md): while
+  /// biased_reg is a register, it holds its value plus biased_off.
+  /// Memory operands based on it get biased_off subtracted from their
+  /// displacement, moves and loads into it add biased_off, moves and stores
+  /// out of it subtract it. Any other use of the register as an operand is
+  /// a fatal error.
+  FeRegGP biased_reg = FE_NOREG;
+  i32 biased_off = 0;
+
+  void set_biased_reg(FeRegGP reg, i32 off) {
+    biased_reg = reg;
+    biased_off = off;
+  }
+
+  template <typename T>
+  T biased_operand(T op) const {
+    if constexpr (std::is_same_v<T, FeMem> || std::is_same_v<T, FeMemV>) {
+      if (op.base.idx == biased_reg.idx) {
+        op.off -= biased_off;
+      }
+    }
+    return op;
+  }
+
+  template <typename T>
+  bool biased_reg_operand(const T &op) const {
+    if constexpr (std::is_same_v<T, FeRegGP>) {
+      return op.idx == biased_reg.idx;
+    } else if constexpr (std::is_same_v<T, FeRegGPLH>) {
+      return (op.idx & 0x1f) == biased_reg.idx;
+    } else if constexpr (std::is_same_v<T, FeMem>) {
+      return op.idx.idx == biased_reg.idx;
+    } else {
+      return false;
+    }
+  }
+
+  template <typename... Args>
+  void encode_biased(unsigned (*fn)(u8 *, int, Args...),
+                     int flags,
+                     Args... args) {
+    auto &writer = this->text_writer;
+    const auto emit = [&](auto enc, int enc_flags, auto... enc_args) {
+      unsigned n = enc(writer.cur_ptr(), enc_flags, enc_args...);
+      assert(n != 0);
+      writer.cur_ptr() += n;
+    };
+    if (!(biased_reg_operand(args) || ...)) {
+      emit(fn, flags, biased_operand(args)...);
+      return;
+    }
+    writer.ensure_space(48);
+    const FeRegGP reg = biased_reg;
+    const void *const raw = reinterpret_cast<const void *>(fn);
+    if constexpr (sizeof...(Args) == 2) {
+      using A0 = std::tuple_element_t<0, std::tuple<Args...>>;
+      using A1 = std::tuple_element_t<1, std::tuple<Args...>>;
+      const std::tuple<Args...> ops{args...};
+      if constexpr (std::is_same_v<A0, FeRegGP>
+                    && std::is_same_v<A1, FeRegGP>) {
+        if (raw == reinterpret_cast<const void *>(&fe64_MOV64rr)) {
+          const FeRegGP dst = std::get<0>(ops), src = std::get<1>(ops);
+          if (dst.idx == src.idx) {
+            return;
+          }
+          if (dst.idx == reg.idx) {
+            emit(fe64_LEA64rm, 0, dst, FE_MEM(src, 0, FE_NOREG, biased_off));
+          } else {
+            emit(fe64_LEA64rm, 0, dst, FE_MEM(src, 0, FE_NOREG, -biased_off));
+          }
+          return;
+        }
+      }
+      if constexpr (std::is_same_v<A0, FeRegGP>
+                    && std::is_same_v<A1, FeMem>) {
+        const FeRegGP dst = std::get<0>(ops);
+        const FeMem mem = std::get<1>(ops);
+        if (dst.idx == reg.idx && mem.idx.idx != reg.idx) {
+          if (raw == reinterpret_cast<const void *>(&fe64_MOV64rm)) {
+            emit(fn, flags, dst, biased_operand(mem));
+            emit(fe64_LEA64rm, 0, dst, FE_MEM(dst, 0, FE_NOREG, biased_off));
+            return;
+          }
+          if (raw == reinterpret_cast<const void *>(&fe64_LEA64rm)) {
+            FeMem adjusted = biased_operand(mem);
+            adjusted.off += biased_off;
+            emit(fn, flags, dst, adjusted);
+            return;
+          }
+        }
+      }
+      if constexpr (std::is_same_v<A0, FeMem>
+                    && std::is_same_v<A1, FeRegGP>) {
+        const FeMem mem = std::get<0>(ops);
+        const FeRegGP src = std::get<1>(ops);
+        if (raw == reinterpret_cast<const void *>(&fe64_MOV64mr)
+            && src.idx == reg.idx && mem.idx.idx != reg.idx) {
+          /* LEA keeps the flags; the store sees the unbiased value. */
+          emit(fe64_LEA64rm, 0, reg, FE_MEM(reg, 0, FE_NOREG, -biased_off));
+          emit(fn, flags, mem, src);
+          emit(fe64_LEA64rm, 0, reg, FE_MEM(reg, 0, FE_NOREG, biased_off));
+          return;
+        }
+      }
+    }
+    if constexpr (sizeof...(Args) == 1) {
+      if (raw == reinterpret_cast<const void *>(&fe64_PUSHr)
+          || raw == reinterpret_cast<const void *>(&fe64_POPr)) {
+        emit(fn, flags, args...);
+        return;
+      }
+    }
+    TPDE_FATAL("unsupported use of the biased base register");
+  }
+
   template <typename... Args>
   auto asm_helper(unsigned (*enc_fn)(u8 *, int, Args...)) {
     struct Helper {
@@ -380,6 +497,10 @@ struct CompilerX64 : BaseTy<Adaptor, Derived, Config> {
       void encode(unsigned reserve, int flags, Args... args) {
         if (reserve) {
           compiler->text_writer.ensure_space(reserve);
+        }
+        if (compiler->biased_off != 0) {
+          compiler->encode_biased(fn, flags, args...);
+          return;
         }
         unsigned n = fn(compiler->text_writer.cur_ptr(), flags, args...);
         assert(n != 0);
@@ -551,6 +672,7 @@ template <IRAdaptor Adaptor,
 void CompilerX64<Adaptor, Derived, BaseTy, Config>::start_func(
     const u32 /*func_idx*/) {
   this->preserve_flags = false;
+  set_biased_reg(FE_NOREG, 0);
 }
 
 template <IRAdaptor Adaptor,
@@ -560,6 +682,7 @@ template <IRAdaptor Adaptor,
 void CompilerX64<Adaptor, Derived, BaseTy, Config>::prologue_begin(
     CCAssigner *cc_assigner) {
   func_ret_offs.clear();
+  set_biased_reg(FE_NOREG, 0);
   func_start_off = this->text_writer.offset();
   scalar_arg_count = vec_arg_count = 0xFFFF'FFFF;
 
