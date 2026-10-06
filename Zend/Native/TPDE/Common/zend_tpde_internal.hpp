@@ -593,6 +593,9 @@ struct zend_tpde_packed_array_append {
 	uint32_t result_offset;
 	bool move_value;
 	bool has_result;
+	/* The container is a VAR holding an INDIRECT to the array's zval, as
+	 * a write fetch leaves it ($a[$k][] = $v); the append consumes it. */
+	bool indirect_container;
 };
 
 struct zend_tpde_array_isset {
@@ -1377,7 +1380,8 @@ static inline bool zend_tpde_packed_array_append_at(
 	if (out == nullptr || !instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM
 			|| operation.source_opcode != ZEND_ASSIGN_DIM
-			|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+			|| (operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+				&& operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_VAR)
 			|| operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
 			|| operation.op1_storage_id == ZEND_MIR_ID_INVALID
 			|| operation.auxiliary_storage_id == ZEND_MIR_ID_INVALID
@@ -1414,6 +1418,8 @@ static inline bool zend_tpde_packed_array_append_at(
 		operation.auxiliary.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP;
 	out->has_result =
 		operation.result_storage_id != ZEND_MIR_ID_INVALID;
+	out->indirect_container =
+		operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR;
 	return true;
 }
 

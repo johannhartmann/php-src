@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-#define ZEND_NATIVE_RUNTIME_ABI_VERSION 90u
+#define ZEND_NATIVE_RUNTIME_ABI_VERSION 91u
 
 typedef void (*zend_native_source_probe_t)(
 	void *context,
@@ -251,7 +251,8 @@ typedef enum _zend_native_runtime_helper_id {
 	ZEND_NATIVE_HELPER_DEOPT_STRESS_REENTER = 217,
 	ZEND_NATIVE_HELPER_DEOPT_TRANSFER = 218,
 	ZEND_NATIVE_HELPER_ARRAY_INSERT_INDEX = 219,
-	ZEND_NATIVE_HELPER_COUNT = 220
+	ZEND_NATIVE_HELPER_ARRAY_ASSIGN_LOOKUP = 220,
+	ZEND_NATIVE_HELPER_COUNT = 221
 } zend_native_runtime_helper_id;
 
 /*

@@ -1695,9 +1695,13 @@ public:
 	 * use; invalid when the image has no such symbol. */
 	tpde::SymRef image_symbol_slot(
 		zend_native_image_symbol_kind kind, uint32_t id) {
+		/* Runtime helpers are image-wide symbols (prepare_image_symbols()
+		 * registers them for function index 0), whichever component
+		 * member refers to them. */
 		const zend_native_image_symbol *symbol =
-			zend_tpde_image_symbol_find(
-				image_, kind, id, adaptor->current_function_index());
+			zend_tpde_image_symbol_find(image_, kind, id,
+				kind == ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER
+					? 0 : adaptor->current_function_index());
 		if (symbol == nullptr) {
 			return {};
 		}
@@ -2054,6 +2058,38 @@ public:
 			|| (adaptor->val_is_phi(value)
 				&& kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 				&& adaptor->machine_value_is_register_authoritative(value));
+	}
+	/*
+	 * The frame goes to RBX: frame-relative operands, the most frequent
+	 * memory operands, then need no SIB byte (R12 would). The other fixed
+	 * values leave RBX to it.
+	 */
+	AsmReg select_fixed_assignment_reg(
+			tpde::AssignmentPartRef part, IRValueRef value) {
+		constexpr uint64_t bx = uint64_t{1} << tpde::x64::AsmReg::BX;
+		if (value == IRValueRef{Adaptor::FRAME_VALUE}) {
+			if (part.bank() == tpde::x64::PlatformConfig::GP_BANK
+					&& (this->register_file.allocatable & bx) != 0
+					&& (this->register_file.used & bx) == 0
+					&& (this->fixed_assignment_nonallocatable_mask & bx) == 0
+					&& !this->stack.is_leaf_function
+					&& (this->cur_cc_assigner()->get_ccinfo()
+							.callee_saved_regs & bx) != 0) {
+				return AsmReg{tpde::x64::AsmReg::BX};
+			}
+			return Base::select_fixed_assignment_reg(part, value);
+		}
+		if (this->stack.is_leaf_function) {
+			return Base::select_fixed_assignment_reg(part, value);
+		}
+		const uint64_t saved = this->fixed_assignment_nonallocatable_mask;
+		this->fixed_assignment_nonallocatable_mask |= bx;
+		AsmReg reg = Base::select_fixed_assignment_reg(part, value);
+		this->fixed_assignment_nonallocatable_mask = saved;
+		if (!reg.valid()) {
+			reg = Base::select_fixed_assignment_reg(part, value);
+		}
+		return reg;
 	}
 	ValueParts val_parts(IRValueRef value) const {
 		const zend_tpde_machine_value_kind kind =
@@ -9149,7 +9185,32 @@ bool ZendCompilerX64::compile_inst_impl(
 			ASM(CMP32ri, source_type_reg, IS_UNDEF);
 			generate_raw_jump(Jump::je, slow);
 		}
-		if (!literal_source
+		if (!literal_source && !register_source && !move_source
+				&& source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+			/* A CV bound by global, static or & is read through its
+			 * reference and copied, as ZEND_ASSIGN dereferences it. */
+			auto plain_source = text_writer.label_create();
+			ASM(CMP8ri, source_type_reg, IS_REFERENCE);
+			generate_raw_jump(Jump::jne, plain_source);
+			ASM(MOV32rm, source_type_reg,
+				FE_MEM(source_payload_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_reference, val)
+						+ offsetof(zval, u1.type_info))));
+			ASM(MOV64rm, source_payload_reg,
+				FE_MEM(source_payload_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_reference, val))));
+			ASM(CMP8ri, source_type_reg, IS_UNDEF);
+			generate_raw_jump(Jump::je, slow);
+			/* The target may be the same reference, whose release must
+			 * not free the value copied: the helper handles that. */
+			if (!fresh_target) {
+				ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(target_offset
+						+ offsetof(zval, u1.v.type))), IS_REFERENCE);
+				generate_raw_jump(Jump::je, slow);
+			}
+			label_place(plain_source);
+		} else if (!literal_source
 				&& (source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
 					|| source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)) {
 			ASM(CMP8ri, source_type_reg, IS_REFERENCE);
@@ -9228,6 +9289,8 @@ bool ZendCompilerX64::compile_inst_impl(
 			 * collectable value that may leak; one already buffered or not
 			 * collectable needs nothing more. The helper does the rest.
 			 * This is the last check: the release follows directly.
+			 * A string's last owner frees it out of line, which runs no
+			 * code and raises nothing, before the store.
 			 */
 			auto release = text_writer.label_create();
 			ASM(MOV64rm, low_word_reg,
@@ -9237,7 +9300,32 @@ bool ZendCompilerX64::compile_inst_impl(
 					static_cast<int32_t>(
 						offsetof(zend_refcounted_h, refcount))));
 			ASM(CMP32ri, probe_reg, 1);
-			generate_raw_jump(Jump::jle, slow);
+			if (runtime_symbol(ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW).valid()) {
+				auto last_owner = text_writer.label_create();
+				generate_raw_jump(Jump::jle, last_owner);
+				const bool cold_free = !text_writer.in_cold_area();
+				auto freed_join = text_writer.label_create();
+				if (cold_free) {
+					text_writer.begin_cold_area();
+				} else {
+					generate_raw_jump(Jump::jmp, freed_join);
+				}
+				label_place(last_owner);
+				ASM(CMP8ri, target_type_reg, IS_STRING);
+				generate_raw_jump(Jump::jne, slow);
+				emit_preserving_call(static_cast<uint64_t>(
+						register_file.used),
+					ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW, [&] {
+						ASM(MOV64rr, FE_DI, target_reg);
+					}, [] {});
+				generate_raw_jump(Jump::jmp, target_released);
+				if (cold_free) {
+					text_writer.end_cold_area();
+				}
+				label_place(freed_join);
+			} else {
+				generate_raw_jump(Jump::jle, slow);
+			}
 			ASM(TEST32ri, target_type_reg,
 				IS_TYPE_COLLECTABLE << Z_TYPE_FLAGS_SHIFT);
 			generate_raw_jump(Jump::je, release);
@@ -9505,6 +9593,23 @@ bool ZendCompilerX64::compile_inst_impl(
 				|| node.continuation_block == UINT32_MAX) {
 			return 0;
 		}
+		/* A read's integer key may be a register value that its frame
+		 * slot does not canonically hold: the first operand, an exact
+		 * integer, used from its register. */
+		const bool register_key = (access == ElementAccess::Read
+				|| access == ElementAccess::Coalesce
+				|| access == ElementAccess::Write)
+			&& operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+			&& !node.operands.empty()
+			&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
+			&& !zend_mir_id_is_valid(
+				adaptor->canonical_storage(node.operands[0]))
+			&& adaptor->machine_kind(node.operands[0])
+				== ZEND_TPDE_MACHINE_VALUE_I64
+			&& adaptor->exact_type(node.operands[0])
+				== ZEND_MIR_SCALAR_TYPE_I64
+			&& adaptor->representation(node.operands[0])
+				== ZEND_MIR_REPRESENTATION_I64;
 		/* A container or key held as a machine value is published to its
 		 * frame slot first, as the helper of the cold block reads it. */
 		std::vector<std::pair<IRValueRef, zend_mir_storage_id>> published;
@@ -9512,6 +9617,24 @@ bool ZendCompilerX64::compile_inst_impl(
 			if (operand == IRValueRef{Adaptor::FRAME_VALUE}
 					|| operand == IRValueRef{
 						Adaptor::EXECUTION_CONTEXT_ARGUMENT}) {
+				continue;
+			}
+			/* An element reference only describes the packed form; the
+			 * constant of a literal integer key is read from the literal
+			 * table. */
+			uint64_t constant_bits = 0;
+			if ((register_key && operand == node.operands[0])
+					|| adaptor->machine_reference(operand, nullptr)
+					|| (operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+						&& adaptor->constant(operand, &constant_bits)
+						&& adaptor->plan()->source_literals != nullptr
+						&& operation.op2.index
+							< adaptor->plan()->source_literal_count
+						&& Z_TYPE(adaptor->plan()->source_literals[
+							operation.op2.index]) == IS_LONG
+						&& static_cast<zend_long>(constant_bits)
+							== Z_LVAL(adaptor->plan()->source_literals[
+								operation.op2.index]))) {
 				continue;
 			}
 			const zend_mir_storage_id storage =
@@ -9598,7 +9721,7 @@ bool ZendCompilerX64::compile_inst_impl(
 									== operation.op1_storage_id))))
 				|| (!container_literal
 					&& !zend_mir_id_is_valid(operation.op1_storage_id))
-				|| (!key_literal
+				|| (!key_literal && !register_key
 					&& !zend_mir_id_is_valid(operation.op2_storage_id))
 				|| (!assigns
 					&& (!zend_mir_id_is_valid(operation.result_storage_id)
@@ -9630,19 +9753,24 @@ bool ZendCompilerX64::compile_inst_impl(
 			: frame_offset(operation.op1_storage_id);
 		const uint64_t key_offset = key_literal
 			? uint64_t{operation.op2.index} * sizeof(zval)
+			: !zend_mir_id_is_valid(operation.op2_storage_id) ? 0
 			: frame_offset(operation.op2_storage_id);
 		const uint64_t result_offset = assigns
 			? 0 : frame_offset(operation.result_storage_id);
 		const bool value_literal = assigns
 			&& operation.auxiliary.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
-		/* An assignment's literal key is an integer (see
-		 * machine_cfg_integer_key_assignment()). */
+		/* An assignment's literal key is an integer or a string with its
+		 * hash, which the compiler made non-numeric. */
 		if (assigns && key_literal
 				&& (adaptor->plan()->source_literals == nullptr
 					|| operation.op2.index
 						>= adaptor->plan()->source_literal_count
-					|| Z_TYPE(adaptor->plan()->source_literals[
-						operation.op2.index]) != IS_LONG)) {
+					|| (Z_TYPE(adaptor->plan()->source_literals[
+							operation.op2.index]) != IS_LONG
+						&& (Z_TYPE(adaptor->plan()->source_literals[
+								operation.op2.index]) != IS_STRING
+							|| ZSTR_H(Z_STR(adaptor->plan()->source_literals[
+								operation.op2.index])) == 0)))) {
 			return 0;
 		}
 		const uint64_t value_offset = !assigns ? 0
@@ -9706,7 +9834,9 @@ bool ZendCompilerX64::compile_inst_impl(
 		bool register_key_checked = false;
 		{
 			const zend_tpde_plan *plan = adaptor->plan();
-			if (!key_literal && unlocked_gp_registers() >= 10
+			if (register_key) {
+				literal_key = LiteralKey::Register;
+			} else if (!key_literal && unlocked_gp_registers() >= 10
 					&& plan->source_opcodes != nullptr
 					&& operation.source_position_id
 						< plan->source_opcode_count) {
@@ -9757,16 +9887,20 @@ bool ZendCompilerX64::compile_inst_impl(
 		};
 		/* The operation consumes a temporary key: one that needs a release
 		 * (a counted string) takes the helper. */
-		if (slot_kind(operation.op2) == ZEND_MIR_SOURCE_SLOT_TMP) {
+		if (slot_kind(operation.op2) == ZEND_MIR_SOURCE_SLOT_TMP
+				&& !register_key) {
 			ASM(TEST32mi, FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(key_offset
 					+ offsetof(zval, u1.type_info))),
 				Z_TYPE_FLAGS_MASK);
 			generate_raw_jump(Jump::jne, slow);
 		}
-		/* An assignment may append to the array before it stores the
-		 * value, so the value is checked first: defined, not a reference
-		 * and not an array (which could be the container itself). */
+		/* An assignment may insert into the array before it stores the
+		 * value, so the value is checked first: defined and not a
+		 * reference. An array value is copied after the insertion as
+		 * ZEND_ASSIGN_DIM copies it: only the container's own zval holds
+		 * the unshared array, which is another storage (see above) or the
+		 * target of a VAR's INDIRECT, where the VM stores it the same. */
 		if (assigns && !value_literal) {
 			ScratchReg value_type{this};
 			const AsmReg type_reg = value_type.alloc_gp();
@@ -9774,8 +9908,6 @@ bool ZendCompilerX64::compile_inst_impl(
 				static_cast<int32_t>(value_offset
 					+ offsetof(zval, u1.v.type))));
 			ASM(CMP32ri, type_reg, IS_UNDEF);
-			generate_raw_jump(Jump::je, slow);
-			ASM(CMP32ri, type_reg, IS_ARRAY);
 			generate_raw_jump(Jump::je, slow);
 			ASM(CMP32ri, type_reg, IS_REFERENCE);
 			generate_raw_jump(Jump::je, slow);
@@ -9944,8 +10076,63 @@ bool ZendCompilerX64::compile_inst_impl(
 				std::move(decision), successors[1], successors[0]);
 			return 1;
 		}
+		/*
+		 * An assignment under a string key, or a key of unknown type, looks
+		 * its element up, or inserts it, in one call of
+		 * zend_native_array_assign_lookup(): a lookup inline would repeat
+		 * zend_hash_lookup() at every site for little gain. NULL (UNKNOWN)
+		 * takes the helper.
+		 */
+		const bool lookup_call = assigns
+			&& literal_key != LiteralKey::Index
+			&& literal_key != LiteralKey::Register
+			&& runtime_symbol(ZEND_NATIVE_HELPER_ARRAY_ASSIGN_LOOKUP).valid();
 		bool found;
-		if (literal_key != LiteralKey::None) {
+		if (lookup_call) {
+			if (container_var) {
+				ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(container_offset
+						+ offsetof(zval, u1.v.type))), IS_INDIRECT);
+				generate_raw_jump(Jump::jne, slow);
+			}
+			ScratchReg looked{this};
+			const AsmReg looked_reg = looked.alloc_gp();
+			const uint64_t live_registers = static_cast<uint64_t>(
+				register_file.used) & ~(uint64_t{1} << looked_reg.id());
+			emit_preserving_call(live_registers,
+				ZEND_NATIVE_HELPER_ARRAY_ASSIGN_LOOKUP, [&] {
+					/* The key's address first, through a caller-saved
+					 * register neither base uses, as the frame or the
+					 * literals may sit in either argument register. */
+					const AsmReg key_base =
+						key_literal ? literals_reg : frame_reg;
+					FeRegGP key_temp = FE_AX;
+					for (const auto &[id, reg] : {std::pair{AsmReg::AX, FE_AX},
+							std::pair{AsmReg::CX, FE_CX},
+							std::pair{AsmReg::DX, FE_DX}}) {
+						if (frame_reg.id() != id && key_base.id() != id) {
+							key_temp = reg;
+							break;
+						}
+					}
+					ASM(LEA64rm, key_temp, FE_MEM(key_base, 0, FE_NOREG,
+						static_cast<int32_t>(key_offset)));
+					/* The container's zval: the CV, or the target of the
+					 * VAR's INDIRECT. */
+					if (container_var) {
+						ASM(MOV64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(container_offset)));
+					} else {
+						ASM(LEA64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(container_offset)));
+					}
+					ASM(MOV64rr, FE_SI, key_temp);
+				}, [&] {
+					ASM(MOV64rr, looked_reg, FE_AX);
+				});
+			element.set_value(this, std::move(looked));
+			found = true;
+		} else if (literal_key != LiteralKey::None) {
 			ScratchReg key_index{this};
 			if (register_key_checked) {
 				ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
@@ -9953,7 +10140,10 @@ bool ZendCompilerX64::compile_inst_impl(
 						+ offsetof(zval, u1.v.type))), IS_LONG);
 				generate_raw_jump(Jump::jne, slow);
 			}
-			if (literal_key == LiteralKey::Register) {
+			if (register_key) {
+				auto [key_ref, key_part] = val_ref_single(node.operands[0]);
+				ASM(MOV64rr, key_index.alloc_gp(), key_part.load_to_reg());
+			} else if (literal_key == LiteralKey::Register) {
 				ASM(MOV64rm, key_index.alloc_gp(), FE_MEM(frame_reg, 0,
 					FE_NOREG, static_cast<int32_t>(key_offset)));
 			}
@@ -10152,6 +10342,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		 * one-character string, looked up out of the hot code. */
 		const bool string_reads = access == ElementAccess::Read
 			&& !known_array && !container_literal && !container_temporary
+			&& !register_key
 			&& (literal_key == LiteralKey::Index || !key_literal);
 		auto string_offset = text_writer.label_create();
 		auto element_found = text_writer.label_create();
@@ -10356,19 +10547,57 @@ bool ZendCompilerX64::compile_inst_impl(
 				label_place(answered);
 			}
 		} else if (assigns) {
-			/* The element's old value must need no release (an appended
-			 * element reads as null); the value, checked above, is copied,
-			 * a temporary moved. A literal is counted without opcache. */
+			/* The element's old value needs no release (an appended
+			 * element reads as null), or is a string, whose release runs
+			 * no code: dropped before the store, freed out of line by its
+			 * last owner. Anything else takes the helper. The value,
+			 * checked above, is copied, a temporary moved. A literal is
+			 * counted without opcache. */
 			const int32_t type_offset =
 				static_cast<int32_t>(offsetof(zval, u1.type_info));
-			ASM(TEST32mi, FE_MEM(element_reg, 0, FE_NOREG, type_offset),
-				Z_TYPE_FLAGS_MASK);
-			generate_raw_jump(Jump::jne, slow);
 			const AsmReg value_base = value_literal ? literals_reg : frame_reg;
 			ScratchReg value_type{this};
 			ScratchReg value_payload{this};
 			const AsmReg type_reg = value_type.alloc_gp();
 			const AsmReg payload_reg = value_payload.alloc_gp();
+			if (runtime_symbol(ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW).valid()) {
+				auto released = text_writer.label_create();
+				auto last_owner = text_writer.label_create();
+				ASM(MOV32rm, type_reg,
+					FE_MEM(element_reg, 0, FE_NOREG, type_offset));
+				ASM(TEST32ri, type_reg, Z_TYPE_FLAGS_MASK);
+				generate_raw_jump(Jump::je, released);
+				ASM(CMP8ri, type_reg, IS_STRING);
+				generate_raw_jump(Jump::jne, slow);
+				ASM(MOV64rm, payload_reg, FE_MEM(element_reg, 0, FE_NOREG, 0));
+				ASM(CMP32mi, FE_MEM(payload_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_refcounted_h, refcount))),
+					1);
+				generate_raw_jump(Jump::jle, last_owner);
+				ASM(SUB32mi, FE_MEM(payload_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_refcounted_h, refcount))),
+					1);
+				const bool cold_free = !text_writer.in_cold_area();
+				if (cold_free) {
+					text_writer.begin_cold_area();
+				} else {
+					generate_raw_jump(Jump::jmp, released);
+				}
+				label_place(last_owner);
+				emit_preserving_call(static_cast<uint64_t>(register_file.used),
+					ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW, [&] {
+						ASM(MOV64rr, FE_DI, element_reg);
+					}, [] {});
+				generate_raw_jump(Jump::jmp, released);
+				if (cold_free) {
+					text_writer.end_cold_area();
+				}
+				label_place(released);
+			} else {
+				ASM(TEST32mi, FE_MEM(element_reg, 0, FE_NOREG, type_offset),
+					Z_TYPE_FLAGS_MASK);
+				generate_raw_jump(Jump::jne, slow);
+			}
 			ASM(MOV32rm, type_reg, FE_MEM(value_base, 0, FE_NOREG,
 				static_cast<int32_t>(value_offset) + type_offset));
 			ASM(MOV64rm, payload_reg, FE_MEM(value_base, 0, FE_NOREG,
@@ -10995,12 +11224,17 @@ bool ZendCompilerX64::compile_inst_impl(
 		const bool negated = operation.source_opcode == ZEND_IS_NOT_IDENTICAL;
 		const bool temporary = frame_slot(operation.op1)
 			&& operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP;
-		/* The second operand: a literal, or a CV compared through
-		 * zend_native_zval_identical_any(). */
+		/* The second operand: a literal, or a CV or temporary compared
+		 * through zend_native_zval_identical_any(); a temporary is
+		 * consumed as the first one. */
+		const bool other_temporary = frame_slot(operation.op2)
+			&& operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP;
 		const bool variable_other = frame_slot(operation.op2)
-			&& operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+			&& (operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+				|| other_temporary)
 			&& zend_mir_id_is_valid(operation.op2_storage_id)
-			&& operation.op2_storage_id != operation.result_storage_id;
+			&& operation.op2_storage_id != operation.result_storage_id
+			&& operation.op2_storage_id != operation.op1_storage_id;
 		if (node.kind != Adaptor::InstKind::GuardedFast
 				|| !mir.has_value_operation
 				|| mir.fused_into_branch
@@ -11130,6 +11364,15 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto type_reg = type.alloc_gp();
 		ASM(CMP64ri, matched_reg, ZEND_NATIVE_IDENTICAL_UNKNOWN);
 		generate_raw_jump(Jump::je, slow);
+		/* A temporary second operand must need no release: a counted
+		 * one takes the helper. */
+		if (variable_other && other_temporary) {
+			ASM(TEST32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(literal_offset
+					+ offsetof(zval, u1.type_info))),
+				Z_TYPE_FLAGS_MASK);
+			generate_raw_jump(Jump::jne, slow);
+		}
 		if (temporary) {
 			ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
 			if (!EncodeBase::encode_zend_native_container_shared(
@@ -11728,14 +11971,18 @@ bool ZendCompilerX64::compile_inst_impl(
 			operation_machine_reference(
 				ZEND_TPDE_MACHINE_REFERENCE_PACKED_ELEMENT);
 
-		if (!zend_tpde_packed_array_append_at(mir, &layout)
-				|| element_reference == nullptr
-				|| !zend_mir_id_is_valid(
-					element_reference->base_value_id)
-				|| zend_mir_id_is_valid(
-					element_reference->index_value_id)
-				|| element_reference->scale != sizeof(zval)
-				|| element_reference->access_width != sizeof(zval)
+		const bool append_layout =
+			zend_tpde_packed_array_append_at(mir, &layout);
+		if (!append_layout
+				|| (!layout.indirect_container
+					&& (element_reference == nullptr
+						|| !zend_mir_id_is_valid(
+							element_reference->base_value_id)
+						|| zend_mir_id_is_valid(
+							element_reference->index_value_id)
+						|| element_reference->scale != sizeof(zval)
+						|| element_reference->access_width
+							!= sizeof(zval)))
 				|| layout.container_offset > INT32_MAX - 8
 				|| layout.value_offset > INT32_MAX - 8
 				|| layout.result_offset > INT32_MAX - 8) {
@@ -11805,9 +12052,21 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto high_word_reg = high_word.alloc_gp();
 		auto decision_reg = decision.alloc_gp();
 
-		load_array_container(frame_reg,
-			static_cast<int32_t>(layout.container_offset),
-			type_reg, array_reg, slow);
+		if (layout.indirect_container) {
+			/* The VAR addresses the array's zval, as ZEND_FETCH_DIM_W left
+			 * it; the helper handles any other VAR. */
+			ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.container_offset
+					+ offsetof(zval, u1.v.type))), IS_INDIRECT);
+			generate_raw_jump(Jump::jne, slow);
+			ASM(MOV64rm, element_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.container_offset)));
+			load_array_container(element_reg, 0, type_reg, array_reg, slow);
+		} else {
+			load_array_container(frame_reg,
+				static_cast<int32_t>(layout.container_offset),
+				type_reg, array_reg, slow);
+		}
 		ASM(MOV32rm, count_reg,
 			FE_MEM(array_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
@@ -11928,6 +12187,12 @@ bool ZendCompilerX64::compile_inst_impl(
 			FE_MEM(array_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(HashTable, nNextFreeElement))),
 			count_reg);
+		if (layout.indirect_container) {
+			/* The consumed VAR, as the helper leaves it. */
+			ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.container_offset
+					+ offsetof(zval, u1.type_info))), IS_UNDEF);
+		}
 		if (layout.has_result) {
 			ASM(MOV64mr,
 				FE_MEM(frame_reg, 0, FE_NOREG,
