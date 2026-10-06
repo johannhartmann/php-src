@@ -2933,7 +2933,8 @@ public:
 			operands_.push_back(IRValueRef{EXECUTE_DATA_VALUE});
 			/* A deoptimization entry keeps the frame's temporaries: the
 			 * frame load reads the context's deopt_resume. */
-			if (plan_->deopt_resume_count != 0) {
+			if (plan_->deopt_resume_count != 0
+					|| plan_->inline_host != nullptr) {
 				operands_.push_back(IRValueRef{EXECUTION_CONTEXT_ARGUMENT});
 			}
 			add_node(block_instructions, static_cast<uint32_t>(entry), InstNode{
@@ -11337,6 +11338,24 @@ public:
 	/* A guard's cold block: TPDE writes it to the cold area of the
 	 * function, behind the hot code. */
 	bool block_is_cold(IRBlockRef block) const {
+		/* So is an inlining host's bail block or fallback call. */
+		if (const zend_native_inline_host *host = plan_->inline_host;
+				host != nullptr && host->op_cold != nullptr) {
+			for (IRInstRef inst : block_insts(block)) {
+				const InstNode &instruction_node = node(inst);
+				if (instruction_node.synthetic
+						|| instruction_node.mir_instruction_index
+							>= plan_->instruction_count) {
+					continue;
+				}
+				const uint32_t position = instruction_record_at(
+					instruction_node.mir_instruction_index).source_position_id;
+				if (position < host->op_count && host->op_cold[position] != 0) {
+					return true;
+				}
+				break;
+			}
+		}
 		for (IRInstRef inst : block_insts(block)) {
 			const InstKind kind = node(inst).kind;
 			if (kind == InstKind::GuardedCold

@@ -6009,11 +6009,17 @@ bool initialize_plan(
 		|| (source_op_array->fn_flags & ZEND_ACC_GENERATOR) != 0;
 	plan->source_num_args =
 		source_op_array != nullptr ? source_op_array->num_args : 0;
+	/* A tier-2 inlining host's own variables: its regions' variables are
+	 * undefined whenever it returns. */
+	const uint32_t released_vars = source_op_array == nullptr ? 0
+		: plan->inline_host != nullptr
+			? plan->inline_host->original_last_var
+			: static_cast<uint32_t>(source_op_array->last_var);
 	plan->fast_call_eligible = linux_inline_forms
 		&& source_op_array != nullptr
 		&& source_op_array->function_name != nullptr
 		&& (source_op_array->fn_flags & ZEND_ACC_GENERATOR) == 0
-		&& source_op_array->last_var <= 64
+		&& released_vars <= 64
 		&& source_op_array->num_args <= (uint32_t) source_op_array->last_var
 		&& freeze_fast_call_receive(source_op_array, plan);
 	plan->fast_call_counted_cvs = ~UINT64_C(0);
@@ -6023,7 +6029,8 @@ bool initialize_plan(
 		uint64_t counted = 0;
 		for (int index = 0; index < source_ssa->vars_count; ++index) {
 			const int variable = source_ssa->vars[index].var;
-			if (variable < 0 || variable >= source_op_array->last_var) {
+			if (variable < 0
+					|| static_cast<uint32_t>(variable) >= released_vars) {
 				continue;
 			}
 			const uint32_t type = source_ssa->var_info[index].type;
@@ -13897,6 +13904,7 @@ extern "C" zend_result zend_tpde_compile_component_with_runtime(
 				? member.deopt_generic_member_plus_one : 0;
 		plans[initialized].deopt_landings = member.deopt_landings;
 		plans[initialized].call_count_cell = member.call_count_cell;
+		plans[initialized].inline_host = member.inline_host;
 		if (!initialize_plan(
 				member.module, runtime,
 				member.user_bindings, member.user_binding_count,

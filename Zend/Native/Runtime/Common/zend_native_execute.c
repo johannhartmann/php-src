@@ -27,36 +27,23 @@ typedef struct _zend_native_execution_state {
 } zend_native_execution_state;
 
 /*
- * A resumed generator's thawed call frames lie on the VM stack below this
- * boundary. Unwinding one of them resets vm_stack_top to that frame, which
- * would release a state stored above it, so generator frames keep their
- * state on the heap and leave the VM stack to their own frames.
+ * The state lives in the C frame of zend_native_execute_frame_impl(), not in
+ * the function that calls setjmp(), so the catcher never reads an
+ * indeterminate automatic after longjmp. It must not live on the VM stack:
+ * nothing may follow the newest frame there, because a tier-2 host entry grows
+ * that frame in place. A generator frame lies below its thawed call frames and
+ * leaves the VM stack to them.
  */
-static zend_always_inline zend_native_execution_state *
-zend_native_execution_state_alloc(bool generator_frame)
+static zend_always_inline void zend_native_execution_state_init(
+	zend_native_execution_state *state, bool generator_frame)
 {
-	const size_t size = ZEND_MM_ALIGNED_SIZE_EX(
-		sizeof(zend_native_execution_state), sizeof(zval));
-	zend_vm_stack previous_stack = EG(vm_stack);
-	zval *previous_stack_top = EG(vm_stack_top);
-	zend_native_execution_state *state;
-
 	if (UNEXPECTED(generator_frame)) {
-		state = emalloc(size);
 		state->previous_stack = NULL;
 		state->previous_stack_top = NULL;
-		return state;
+		return;
 	}
-	if (EXPECTED(size <= (size_t) (
-			(char *) EG(vm_stack_end) - (char *) previous_stack_top))) {
-		state = (zend_native_execution_state *) previous_stack_top;
-		EG(vm_stack_top) = (zval *) ((char *) previous_stack_top + size);
-	} else {
-		state = (zend_native_execution_state *) zend_vm_stack_extend(size);
-	}
-	state->previous_stack = previous_stack;
-	state->previous_stack_top = previous_stack_top;
-	return state;
+	state->previous_stack = EG(vm_stack);
+	state->previous_stack_top = EG(vm_stack_top);
 }
 
 static zend_always_inline void zend_native_execution_state_free(
@@ -66,7 +53,6 @@ static zend_always_inline void zend_native_execution_state_free(
 	zval *previous_stack_top = state->previous_stack_top;
 
 	if (UNEXPECTED(previous_stack == NULL)) {
-		efree(state);
 		return;
 	}
 	while (UNEXPECTED(EG(vm_stack) != previous_stack)) {
@@ -242,13 +228,13 @@ zend_native_status zend_native_execution_finish_direct_frame(
 	return status;
 }
 
-static zend_native_status zend_native_execute_frame_impl(
+static zend_never_inline zend_native_status zend_native_execute_frame_state(
 	const zend_native_code *code,
 	zend_execute_data *execute_data,
 	zend_native_diagnostic *diagnostic,
-	bool observer_already_started)
+	bool observer_already_started,
+	zend_native_execution_state *state)
 {
-	zend_native_execution_state *state;
 	zend_native_execution_context context;
 	zend_native_frame_entry_t entry;
 	bool frame_returned;
@@ -264,15 +250,9 @@ static zend_native_status zend_native_execute_frame_impl(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 
-	/*
-	 * State changed after setjmp lives in the Zend VM stack rather than in a C
-	 * automatic. The catcher therefore does not inspect an indeterminate
-	 * non-volatile automatic after longjmp, and only generator frames require
-	 * a general-purpose heap allocation.
-	 */
 	generator_frame =
 		(ZEND_CALL_INFO(execute_data) & ZEND_CALL_GENERATOR) != 0;
-	state = zend_native_execution_state_alloc(generator_frame);
+	zend_native_execution_state_init(state, generator_frame);
 	state->status = ZEND_NATIVE_BAILOUT;
 	state->original_return_value = execute_data->return_value;
 	state->observer_started = observer_already_started;
@@ -471,6 +451,18 @@ static zend_native_status zend_native_execute_frame_impl(
 		zend_native_execution_state_free(state);
 		return status;
 	}
+}
+
+static zend_native_status zend_native_execute_frame_impl(
+	const zend_native_code *code,
+	zend_execute_data *execute_data,
+	zend_native_diagnostic *diagnostic,
+	bool observer_already_started)
+{
+	zend_native_execution_state state;
+
+	return zend_native_execute_frame_state(code, execute_data, diagnostic,
+		observer_already_started, &state);
 }
 
 zend_native_status zend_native_execute_frame(

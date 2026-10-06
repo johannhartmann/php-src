@@ -214,6 +214,37 @@ the frame-state `parent_id` chain, and a Zend frame is built lazily from it
 when an observer needs one: backtraces, exception traces, warnings, and
 observers. This is exact reconstruction under the section 1 contract.
 
+- **Splicing (tier 2):** a hot function's tier-2 copy carries the bodies of
+  small callees at call sites outside other pending calls
+  (`zend_native_inline.c`). The copy keeps the host's operations at their
+  positions; a site's INIT jumps to an appended region, and its SEND and DO
+  become no-ops. A region guards its target (the fallback site's binding in
+  the current call-cache epoch, the receiver class for `$this` methods, or
+  the run-time cache of a directly bound member), runs the callee's
+  operations on the host frame with the callee's CVs and temporaries
+  renumbered after the host's, and exits to the operation after the DO.
+  CV arguments alias the host's variables; literal arguments and defaults
+  are assigned. The frame's run-time cache is the callee's inside a region.
+- **Bails before any observation:** until frames of inlined callees are
+  reconstructed lazily, no operation of a region may observe the frame. A
+  body operation whose slow path could warn, throw, run user code or a
+  destructor, or depends on the executing function or scope, sets the
+  region's bail flag instead of running; the test after the operation
+  releases the region's temporaries and variables, restores the host's
+  run-time cache and makes the original call, which then observes its own
+  frame exactly. Slow paths that observe nothing for the operand types at
+  hand run in place (an array element's `isset()` that hashes a string
+  key, for example). Fast paths that decide more cases inline (class
+  hierarchy tests, truthiness of strings and arrays) also cut bails.
+- **Frame growth:** the copy's frame is larger than the one its callers
+  push for the original function. The copy's entries grow the newest frame
+  in place when it ends at most a few slots below the VM stack top (frames
+  extended by `SEND_ARRAY` or sized for trampolines) and the page has room;
+  any other frame runs the original function's code. Nothing else may
+  follow the newest frame: direct-call activations lead their callee frame
+  (or live on the heap when the frame starts a fresh page), and the C
+  executor keeps its state on the machine stack.
+
 ### 6. Unchanged rules
 
 - No production VM fallback, no Zend VM opcode handler reuse, no Zend JIT IR,
@@ -256,7 +287,9 @@ code size, compile time) with unchanged page output and the full PHPT tier.
    narrowing after exits, type feedback and recompilation follow.
 5. **Guarded inlining and lazy frames for inlined callees.** Section 5, with
    backtraces, traces, warnings and observers identical to stock inside
-   inlined code.
+   inlined code. Splicing with bails before any observation is in place
+   behind `ZEND_NATIVE_TIER2_INLINE` (Linux x64); lazy frames for inlined
+   callees, which let observing slow paths run in place, follow.
 
 Steps 1 and 2 go together, since a helper that reads frame slots forces their
 materialization. Step 3 is independent. Step 4 needs the frame-state maps of

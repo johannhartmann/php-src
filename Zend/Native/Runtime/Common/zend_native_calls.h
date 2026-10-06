@@ -535,6 +535,10 @@ typedef struct _zend_native_direct_activation {
 	bool internal_target;
 	bool setup_record;
 	bool fiber_published;
+	/* Lives in emalloc() memory: its callee frame starts a fresh VM-stack
+	 * page, which must not carry a trailing record (a tier-2 host entry may
+	 * grow the frame). Generated code leaves it false. */
+	bool heap_allocated;
 } zend_native_direct_activation;
 
 typedef struct _zend_native_direct_call_result {

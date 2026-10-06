@@ -6979,6 +6979,29 @@ void zend_native_frame_activation_pop(
 	zend_vm_stack_free_call_frame(setup_frame);
 }
 
+/*
+ * A direct activation without a setup record leads its callee frame when the
+ * frame shares the current VM-stack page and lives in emalloc() memory when
+ * the frame starts a fresh page; Darwin's generated calls still append it to
+ * the frame. Free the callee and the activation, which must not be used
+ * afterwards.
+ */
+static void zend_native_direct_activation_free_callee(
+	zend_native_direct_activation *activation, zend_execute_data *callee)
+{
+	bool heap = activation->heap_allocated;
+	bool leads = !heap && !activation->setup_record
+		&& (char *) activation < (char *) callee;
+
+	zend_vm_stack_free_call_frame(callee);
+	if (leads) {
+		ZEND_ASSERT((zval *) callee == EG(vm_stack_top));
+		EG(vm_stack_top) = (zval *) activation;
+	} else if (heap) {
+		efree(activation);
+	}
+}
+
 static void zend_native_call_direct_release(
 	zend_native_direct_activation *activation)
 {
@@ -7054,7 +7077,7 @@ static void zend_native_call_direct_release(
 	EG(current_execute_data) = caller;
 	zend_native_active_direct_call = previous;
 	if (callee != NULL) {
-		zend_vm_stack_free_call_frame(callee);
+		zend_native_direct_activation_free_callee(activation, callee);
 	}
 	if (setup_record) {
 		zend_native_frame_activation_pop(activation);
@@ -7319,9 +7342,21 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 	call = zend_vm_stack_push_call_frame_ex(
 		used_stack + activation_size, call_info,
 		function, descriptor->frame_argument_count, object_or_called_scope);
-	activation = (zend_native_direct_activation *)
-		((char *) call + used_stack);
+	if ((ZEND_CALL_INFO(call) & ZEND_CALL_ALLOCATED) == 0) {
+		/* Lead the callee frame so it ends at the stack top, where a tier-2
+		 * host entry may grow it (zend_native_direct_activation_free_callee()). */
+		activation = (zend_native_direct_activation *) call;
+		call = (zend_execute_data *) ((char *) call + activation_size);
+		zend_vm_init_call_frame(call, call_info, function,
+			descriptor->frame_argument_count, object_or_called_scope);
+	} else {
+		/* A fresh VM-stack page must start with the frame it frees, and
+		 * nothing may follow the frame. */
+		activation = emalloc(sizeof(*activation));
+	}
 	memset(activation, 0, sizeof(*activation));
+	activation->heap_allocated =
+		(ZEND_CALL_INFO(call) & ZEND_CALL_ALLOCATED) != 0;
 	activation->caller = caller;
 	activation->callee = call;
 	activation->pending_call = caller->call;
@@ -7793,7 +7828,7 @@ static void zend_native_call_direct_abandon_activation(
 	EG(current_execute_data) = caller;
 	zend_native_active_direct_call = previous;
 	if (callee != NULL) {
-		zend_vm_stack_free_call_frame(callee);
+		zend_native_direct_activation_free_callee(activation, callee);
 	}
 	if (setup_record && setup_frame != NULL) {
 		zend_vm_stack_free_call_frame(setup_frame);

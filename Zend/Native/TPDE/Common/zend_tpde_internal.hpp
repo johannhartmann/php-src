@@ -2307,6 +2307,8 @@ struct zend_tpde_plan {
 	bool deopt_landings;
 	/* Tier 2 call counting (zend_native_component_member). */
 	zend_native_entry_cell *call_count_cell;
+	/* Tier-2 inlining host metadata (zend_native_inline.c), or NULL. */
+	const zend_native_inline_host *inline_host;
 	/* The resume IDs are deoptimization stress targets. */
 	bool deopt_stress;
 	uint32_t entry_variant_long_mask;

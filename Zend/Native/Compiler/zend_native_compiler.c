@@ -10,6 +10,8 @@
 #include "Zend/Optimizer/zend_optimizer.h"
 #include "Zend/Optimizer/zend_optimizer_internal.h"
 #include "Zend/Native/Compiler/zend_native_dynamic_code.h"
+#include "Zend/Native/Compiler/zend_native_inline.h"
+#include "Zend/Optimizer/zend_call_graph.h"
 #include "Zend/Native/Lowering/Core/zend_mir_lowering_internal.h"
 #include "Zend/Native/Lowering/Frontend/zend_mir_zend_source_internal.h"
 #include "Zend/Native/Lowering/zend_mir_lowering_zend.h"
@@ -114,6 +116,9 @@ typedef struct _zend_native_compiled_function {
 	/* During a tier-2 compilation: 1 + this function's copy in the batch,
 	 * which the other copies call component-locally. */
 	uint32_t tier2_batch_copy_plus_one;
+	/* A tier-2 copy whose call sites carry their callees' bodies
+	 * (zend_native_inline.c), or NULL. */
+	zend_native_inline_host *inline_host;
 } zend_native_compiled_function;
 
 struct _zend_native_compiler {
@@ -1307,6 +1312,21 @@ static void zend_native_compiler_free_variant_source(
 	if (!zend_native_compiler_is_hidden(function)) {
 		return;
 	}
+	if (function->inline_host != NULL) {
+		/* A spliced copy owns its operations, literals, names and live
+		 * ranges (zend_native_inline_splice()). */
+		zend_native_inline_host *host = function->inline_host;
+
+		zend_native_compiler_free(compiler, function->op_array->opcodes);
+		zend_native_compiler_free(compiler, function->op_array->vars);
+		zend_native_compiler_free(compiler, function->op_array->live_range);
+		zend_native_compiler_free(compiler, (void *) host->op_kinds);
+		zend_native_compiler_free(compiler, (void *) host->op_cold);
+		zend_native_compiler_free(compiler, (void *) host->op_regions);
+		zend_native_compiler_free(compiler, (void *) host->regions);
+		zend_native_compiler_free(compiler, host);
+		function->inline_host = NULL;
+	}
 	zend_native_compiler_free(compiler, function->variant_arg_info);
 	zend_native_compiler_free(compiler, function->op_array);
 	function->variant_arg_info = NULL;
@@ -1559,6 +1579,19 @@ static bool zend_native_compiler_build_ssa(
 	optimizer.arena = function->ssa_arena;
 	optimizer.script = compiler->script;
 	optimizer.optimization_level = ZEND_OPTIMIZER_PASS_6;
+	if (function->inline_host != NULL && zend_func_info_rid >= 0) {
+		/* The spliced copy's own call map: its oplines are not the host's. */
+		zend_func_info *info = zend_arena_calloc(
+			&optimizer.arena, 1, sizeof(zend_func_info));
+
+		/* ZEND_CALL_TREE: no caller lists of the (shared) callees point
+		 * into this arena. */
+		zend_analyze_calls(&optimizer.arena, compiler->script, ZEND_CALL_TREE,
+			function->op_array, info);
+		info->call_map = zend_build_call_map(
+			&optimizer.arena, info, function->op_array);
+		ZEND_SET_FUNC_INFO(function->op_array, info);
+	}
 	if (zend_dfa_analyze_op_array_with_dynamic_bindings(
 			function->op_array, &optimizer, &function->ssa) == FAILURE) {
 		function->ssa_arena = optimizer.arena;
@@ -1574,6 +1607,25 @@ static bool zend_native_compiler_build_ssa(
 			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_SSA,
 			1, "SSA inference rejected stable local dynamic reads");
 		return false;
+	}
+	if (function->inline_host != NULL && function->ssa.var_info != NULL) {
+		/* The bail flag is set by slow paths the op array does not show:
+		 * no test of it may fold. */
+		int variable;
+
+		for (variable = 0; variable < function->ssa.vars_count; variable++) {
+			const uint32_t var = (uint32_t) function->ssa.vars[variable].var;
+
+			if (var == function->inline_host->flag_var) {
+				function->ssa.var_info[variable].type =
+					MAY_BE_FALSE | MAY_BE_TRUE;
+				function->ssa.var_info[variable].has_range = 0;
+			} else if (var == function->inline_host->guard_var) {
+				function->ssa.var_info[variable].type = MAY_BE_UNDEF
+					| MAY_BE_NULL | MAY_BE_FALSE | MAY_BE_TRUE;
+				function->ssa.var_info[variable].has_range = 0;
+			}
+		}
 	}
 	function->ssa_arena = optimizer.arena;
 	return true;
@@ -3428,6 +3480,7 @@ static bool zend_native_compiler_prepare_component_member(
 	member->backend.source_ssa = &function->ssa;
 	member->backend.call_count_cell =
 		zend_native_compiler_call_count_cell(function);
+	member->backend.inline_host = function->inline_host;
 	return true;
 }
 
@@ -3865,6 +3918,7 @@ static bool zend_native_compiler_compile_native_component(
 		member.source_ssa = &function->ssa;
 		member.call_count_cell =
 			zend_native_compiler_call_count_cell(function);
+		member.inline_host = function->inline_host;
 		phase_started = zend_hrtime();
 		compile_result = zend_tpde_compile_component_with_runtime(
 				compiler->target, &member, 1, runtime,
@@ -4124,6 +4178,10 @@ static bool zend_native_compiler_compile_pending(
 					true);
 				function->variant_numeric = true;
 				general->variant_numeric = true;
+				if (function->inline_host != NULL
+						&& zend_func_info_rid >= 0) {
+					ZEND_SET_FUNC_INFO(function->op_array, NULL);
+				}
 				zend_arena_destroy(function->ssa_arena);
 				function->ssa_arena = NULL;
 				memset(&function->ssa, 0, sizeof(function->ssa));
@@ -4159,8 +4217,10 @@ static bool zend_native_compiler_compile_pending(
 			if (!phase_result) {
 				return false;
 			}
+			/* An inlining host's frame is its own: no variant shares it. */
 			variant_mask = zend_native_compiler_is_variant(function)
 					|| function->variant_plus_one != 0
+					|| function->inline_host != NULL
 				? 0
 				: zend_native_compiler_variant_long_mask(compiler, function);
 			if (variant_mask != 0) {
@@ -4445,22 +4505,39 @@ zend_native_entry_cell *zend_native_compiler_prepare_function(
 	return entry_cell;
 }
 
+static void *zend_native_compiler_inline_alloc(void *context, size_t size)
+{
+	return zend_native_compiler_alloc(context, size, false);
+}
+
 static zend_native_compiled_function *zend_native_compiler_add_tier2_copy(
 	zend_native_compiler *compiler,
 	zend_native_compiled_function *function)
 {
 	zend_native_compiled_function *copy_function;
+	zend_native_inline_host *inline_host = NULL;
 	zend_op_array *copy;
 
 	if (!zend_native_compiler_reserve_functions(
 			compiler, compiler->function_count + 1)) {
 		return NULL;
 	}
-	copy = zend_native_compiler_alloc(compiler, sizeof(*copy), false);
-	*copy = *function->op_array;
+	/* Small callees of known call sites inline into the copy. */
+	copy = function->code != NULL
+		? zend_native_inline_splice(function->op_array, compiler->persistent,
+			zend_native_compiler_inline_alloc, compiler, &inline_host)
+		: NULL;
+	if (copy != NULL) {
+		inline_host->fallback_entry =
+			(const void *) zend_native_code_frame_entry(function->code);
+	} else {
+		copy = zend_native_compiler_alloc(compiler, sizeof(*copy), false);
+		*copy = *function->op_array;
+	}
 	copy_function = zend_native_compiler_alloc(
 		compiler, sizeof(*copy_function), true);
 	copy_function->op_array = copy;
+	copy_function->inline_host = inline_host;
 	zend_native_op_array_identity_capture(
 		&copy_function->op_array_identity, copy);
 	copy_function->registry_index = compiler->function_count;
@@ -4573,6 +4650,14 @@ zend_native_tier2_result zend_native_compiler_recompile_tier2(
 				compiler->functions[index]->tier2_plus_one = 0;
 			}
 			zend_native_compiler_fail_pending_component(compiler, 0);
+			/* The failed copies keep no analysis: their SSA arenas live in
+			 * the request heap. */
+			for (index = existing; index < compiler->function_count; index++) {
+				if (compiler->functions[index] != NULL) {
+					zend_native_compiler_release_function_transients(
+						compiler, compiler->functions[index]);
+				}
+			}
 			zend_native_compiler_mutation_unlock(compiler);
 			return ZEND_NATIVE_TIER2_REJECTED;
 		}
@@ -6343,6 +6428,9 @@ static void zend_native_compiler_release_function_transients(
 		zend_native_compiler_module_reset(&function->module_host);
 	}
 	if (function->ssa_arena != NULL) {
+		if (function->inline_host != NULL && zend_func_info_rid >= 0) {
+			ZEND_SET_FUNC_INFO(function->op_array, NULL);
+		}
 		zend_arena_destroy(function->ssa_arena);
 		function->ssa_arena = NULL;
 	}
