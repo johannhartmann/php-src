@@ -55,6 +55,8 @@ class ZendCompilerX64 final
 	int32_t deopt_disarmed_slot_ = 0;
 	int32_t deopt_frame_slot_ = 0;
 	int32_t deopt_context_slot_ = 0;
+	int32_t lookup_reuse_slot_ = 0;
+	std::vector<uint32_t> lookup_reuse_reads_;
 	uint32_t current_function_index_ = 0;
 	std::vector<tpde::Label> user_opcode_labels_;
 	std::vector<tpde::Label> user_opcode_dispatch_labels_;
@@ -940,6 +942,135 @@ public:
 	AsmReg canonical_frame_register() {
 		return canonical_value_register(
 			IRValueRef{Adaptor::FRAME_VALUE});
+	}
+	/*
+	 * Lookup reuse: isset($a[$k]) whose true edge leads, through a block
+	 * holding only its branch, to a block that only this branch enters and
+	 * that starts with $a[$k] (FETCH_DIM_R of the same CV container and the
+	 * same CV or literal key). Nothing runs between the two, so the element
+	 * the isset found is the element the read finds. Returns the IRInstRef
+	 * of that read, or an invalid ref.
+	 */
+	IRInstRef lookup_reuse_consumer(IRInstRef producer_inst) {
+		const Adaptor::InstNode &producer = adaptor->node(producer_inst);
+		const zend_tpde_instruction &producer_mir =
+			adaptor->mir_instruction(producer_inst);
+		const zend_mir_executable_value_ref &isset =
+			producer_mir.value_operation;
+		auto slot_kind = [](const zend_mir_source_operand_ref &operand) {
+			return operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+					|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA
+				? operand.slot_kind : ZEND_MIR_SOURCE_SLOT_KIND_INVALID;
+		};
+		/* isset($a[$k]) names the container first, array_key_exists($k,
+		 * $a) the key. */
+		const bool key_exists = producer_mir.has_value_operation
+			&& isset.source_opcode == ZEND_ARRAY_KEY_EXISTS;
+		const zend_mir_source_operand_ref &container =
+			key_exists ? isset.op2 : isset.op1;
+		const zend_mir_source_operand_ref &key =
+			key_exists ? isset.op1 : isset.op2;
+		const zend_mir_storage_id container_storage =
+			key_exists ? isset.op2_storage_id : isset.op1_storage_id;
+		const zend_mir_storage_id key_storage =
+			key_exists ? isset.op1_storage_id : isset.op2_storage_id;
+		if (producer.kind != Adaptor::InstKind::GuardedFast
+				|| producer.continuation_block == UINT32_MAX
+				|| !producer_mir.has_value_operation
+				|| (!key_exists
+					&& (isset.opcode != ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM
+						|| (isset.extended_value & ZEND_ISEMPTY) != 0))
+				|| slot_kind(container) != ZEND_MIR_SOURCE_SLOT_CV
+				|| (key.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+					&& slot_kind(key) != ZEND_MIR_SOURCE_SLOT_CV)) {
+			return IRInstRef{UINT32_MAX};
+		}
+		const IRBlockRef branch_block{producer.continuation_block};
+		const auto branch_insts = adaptor->block_insts(branch_block);
+		const auto branch_succs = adaptor->block_succs(branch_block);
+		/* The branch block holds the loads of the isset's result and the
+		 * branch on it. */
+		if (branch_insts.empty() || branch_succs.size() != 2) {
+			return IRInstRef{UINT32_MAX};
+		}
+		for (size_t index = 0; index < branch_insts.size(); ++index) {
+			const Adaptor::InstNode &branch_node =
+				adaptor->node(branch_insts[index]);
+			const bool last = index + 1 == branch_insts.size();
+			if (last ? branch_node.kind != Adaptor::InstKind::MIR
+					|| adaptor->instruction_record(branch_insts[index]).opcode
+						!= ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				: (branch_node.kind != Adaptor::InstKind::ZvalPayloadLoad
+						&& branch_node.kind != Adaptor::InstKind::ZvalTypeLoad)
+					|| branch_node.mir_instruction_index
+						!= producer.mir_instruction_index) {
+				return IRInstRef{UINT32_MAX};
+			}
+		}
+		/* Successor 0 is the branch's true edge; only it may enter. */
+		const IRBlockRef read_block = branch_succs[0];
+		if (read_block == branch_succs[1]) {
+			return IRInstRef{UINT32_MAX};
+		}
+		uint32_t entries = 0;
+		for (IRBlockRef block : adaptor->cur_blocks()) {
+			for (IRBlockRef succ : adaptor->block_succs(block)) {
+				entries += succ == read_block;
+			}
+		}
+		const auto read_insts = adaptor->block_insts(read_block);
+		if (entries != 1 || read_insts.empty()) {
+			return IRInstRef{UINT32_MAX};
+		}
+		const IRInstRef consumer_inst = read_insts[0];
+		const Adaptor::InstNode &consumer = adaptor->node(consumer_inst);
+		const zend_tpde_instruction &consumer_mir =
+			adaptor->mir_instruction(consumer_inst);
+		const zend_mir_executable_value_ref &read =
+			consumer_mir.value_operation;
+		/* Literal keys match by value: the same string or integer. */
+		auto same_literal = [&](uint32_t left, uint32_t right) {
+			const zend_tpde_plan *plan = adaptor->plan();
+			if (plan->source_literals == nullptr
+					|| left >= plan->source_literal_count
+					|| right >= plan->source_literal_count) {
+				return false;
+			}
+			const zval *a = &plan->source_literals[left];
+			const zval *b = &plan->source_literals[right];
+			return Z_TYPE_P(a) == Z_TYPE_P(b)
+				&& ((Z_TYPE_P(a) == IS_LONG && Z_LVAL_P(a) == Z_LVAL_P(b))
+					|| (Z_TYPE_P(a) == IS_STRING
+						&& zend_string_equals(Z_STR_P(a), Z_STR_P(b))));
+		};
+		if (consumer.kind != Adaptor::InstKind::GuardedFast
+				|| consumer.synthetic || !consumer_mir.has_value_operation
+				|| (read.opcode != ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
+					&& read.opcode != ZEND_MIR_OPCODE_VALUE_FETCH_DIM_RW
+					&& read.opcode != ZEND_MIR_OPCODE_VALUE_FETCH_DIM_W)
+				|| slot_kind(read.op1) != ZEND_MIR_SOURCE_SLOT_CV
+				|| read.op1_storage_id != container_storage
+				|| read.op2.kind != key.kind
+				|| (key.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+					? !same_literal(read.op2.index, key.index)
+					: slot_kind(read.op2) != ZEND_MIR_SOURCE_SLOT_CV
+						|| read.op2_storage_id != key_storage)) {
+			return IRInstRef{UINT32_MAX};
+		}
+		return consumer_inst;
+	}
+	/* The stack slot holding the element an isset found for its read, and
+	 * the reads whose isset stores it (lookup_reuse_consumer()). */
+	int32_t lookup_reuse_slot() {
+		if (lookup_reuse_slot_ == 0) {
+			lookup_reuse_slot_ = allocate_stack_slot(sizeof(void *));
+		}
+		return lookup_reuse_slot_;
+	}
+	bool lookup_reuse_armed(IRInstRef inst) const {
+		return std::find(lookup_reuse_reads_.begin(),
+			lookup_reuse_reads_.end(), static_cast<uint32_t>(inst))
+			!= lookup_reuse_reads_.end();
 	}
 	/*
 	 * A typed body with an untyped result returns a scalar as a boxed zval:
@@ -2140,6 +2271,8 @@ public:
 		deopt_disarmed_slot_ = 0;
 		deopt_frame_slot_ = 0;
 		deopt_context_slot_ = 0;
+		lookup_reuse_slot_ = 0;
+		lookup_reuse_reads_.clear();
 		current_function_index_ = index;
 		user_opcode_labels_.clear();
 		user_opcode_dispatch_labels_.clear();
@@ -9654,6 +9787,8 @@ bool ZendCompilerX64::compile_inst_impl(
 	enum class ElementAccess : uint8_t {
 		Read, Coalesce, Write, Isset, Empty, Assign
 	};
+	/* The read of an isset's element (lookup_reuse_consumer()). */
+	IRInstRef reuse_read{UINT32_MAX};
 	auto array_element = [&](ElementAccess access) -> int {
 		const zend_mir_executable_value_ref &operation = mir.value_operation;
 		if (node.kind != Adaptor::InstKind::GuardedFast
@@ -10038,7 +10173,19 @@ bool ZendCompilerX64::compile_inst_impl(
 		};
 		/* isset() of an array element decides in one snippet: set, not
 		 * set, or the helper's. */
-		if (access == ElementAccess::Isset && !container_temporary) {
+		/* An isset whose element a read reuses finds it in the general
+		 * form, which also leaves its address; a read that reuses one skips
+		 * its own lookup. */
+		const bool reuse_store = access == ElementAccess::Isset
+			&& reuse_read != IRInstRef{UINT32_MAX} && !container_temporary
+			&& !register_key && literal_key != LiteralKey::Register;
+		const bool reuse_load = (access == ElementAccess::Read
+				|| (access == ElementAccess::Write && !container_var))
+			&& lookup_reuse_armed(instruction) && !register_key
+			&& literal_key != LiteralKey::Register
+			&& unlocked_gp_registers() >= 10;
+		if (access == ElementAccess::Isset && !container_temporary
+				&& !reuse_store) {
 			ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
 			bool tested;
 			if (literal_key == LiteralKey::Index) {
@@ -10152,6 +10299,38 @@ bool ZendCompilerX64::compile_inst_impl(
 		 * zend_hash_lookup() at every site for little gain. NULL (UNKNOWN)
 		 * takes the helper.
 		 */
+		auto reuse_cached = text_writer.label_create();
+		auto reuse_joined = text_writer.label_create();
+		if (reuse_store) {
+			ASM(MOV64mi, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()), 0);
+		} else if (reuse_load) {
+			/* A write fetch changes the found element in place only in an
+			 * array without another owner (zend_native_probe_array_w()); the
+			 * isset found it, so the CV holds an array, maybe through a
+			 * reference. */
+			auto shared = text_writer.label_create();
+			if (writes) {
+				ScratchReg table{this};
+				const AsmReg table_reg = table.alloc_gp();
+				auto direct = text_writer.label_create();
+				ASM(MOV64rm, table_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(container_offset)));
+				ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(container_offset
+						+ offsetof(zval, u1.v.type))), IS_REFERENCE);
+				generate_raw_jump(Jump::jne, direct);
+				ASM(MOV64rm, table_reg, FE_MEM(table_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_reference, val))));
+				label_place(direct);
+				ASM(CMP32mi, FE_MEM(table_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_refcounted_h,
+						refcount))), 1);
+				generate_raw_jump(Jump::jne, shared);
+			}
+			ASM(CMP64mi, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()), 0);
+			generate_raw_jump(Jump::jne, reuse_cached);
+			label_place(shared);
+		}
 		const bool lookup_call = assigns
 			&& literal_key != LiteralKey::Index
 			&& literal_key != LiteralKey::Register
@@ -10403,6 +10582,13 @@ bool ZendCompilerX64::compile_inst_impl(
 			return -1;
 		}
 		const AsmReg element_reg = element.cur_reg_or_load(this);
+		if (reuse_load) {
+			generate_raw_jump(Jump::jmp, reuse_joined);
+			label_place(reuse_cached);
+			ASM(MOV64rm, element_reg,
+				FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()));
+			label_place(reuse_joined);
+		}
 		/* Held from here on; the lookup needed the registers before. */
 		auto decision_reg = decision.alloc_gp();
 		auto answer_reg = answer.alloc_gp();
@@ -10433,6 +10619,11 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto inserted = text_writer.label_create();
 		generate_raw_jump(Jump::je, insert_index ? insert
 			: access == ElementAccess::Read || writes ? slow : absent);
+		if (reuse_store) {
+			ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()),
+				element_reg);
+			lookup_reuse_reads_.push_back(static_cast<uint32_t>(reuse_read));
+		}
 		if (insert_index) {
 			const bool cold_insert = !text_writer.in_cold_area();
 			if (cold_insert) {
@@ -11593,6 +11784,12 @@ bool ZendCompilerX64::compile_inst_impl(
 			return GenericValuePart{GenericValuePart::Expr{
 				base, static_cast<int64_t>(offset)}};
 		};
+		/* A read of the found element reuses it (lookup_reuse_consumer()). */
+		const IRInstRef reuse = temporary
+			? IRInstRef{UINT32_MAX} : lookup_reuse_consumer(instruction);
+		if (reuse != IRInstRef{UINT32_MAX}) {
+			ASM(MOV64mi, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()), 0);
+		}
 		ValuePart element{tpde::x64::PlatformConfig::GP_BANK, 8};
 		{
 			ScratchReg literals{this};
@@ -11626,6 +11823,12 @@ bool ZendCompilerX64::compile_inst_impl(
 		ASM(CMP64ri, element_reg,
 			static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT));
 		generate_raw_jump(Jump::jb, slow);
+		if (reuse != IRInstRef{UINT32_MAX}) {
+			/* ABSENT only reaches the false edge, where nothing reads it. */
+			ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()),
+				element_reg);
+			lookup_reuse_reads_.push_back(static_cast<uint32_t>(reuse));
+		}
 		/* ABSENT is 1 and an element pointer more: exists = element > 1. */
 		generate_raw_set(Jump::ja, answer_reg);
 		element.reset(this);
@@ -12026,6 +12229,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		return branch_to_guarded_cold();
 	};
 	auto isset_array = [&]() {
+		reuse_read = lookup_reuse_consumer(instruction);
 		const int element = array_element(
 			(mir.value_operation.extended_value & ZEND_ISEMPTY) != 0
 				? ElementAccess::Empty : ElementAccess::Isset);
