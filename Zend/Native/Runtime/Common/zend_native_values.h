@@ -210,6 +210,7 @@ zend_native_status zend_native_value_assign_dim_address(
  * unshared array of a CV container (possibly a reference) that has no
  * element there, as ZEND_ASSIGN_DIM's write fetch does. */
 zval *zend_native_array_insert_index(zval *container, zend_ulong h);
+zval *zend_native_array_assign_lookup(zval *container, const zval *key);
 zend_native_status zend_native_value_isset_isempty_dim_direct(
 	zend_execute_data *execute_data, uint64_t descriptor, uint64_t slots, uint64_t more_slots);
 ZEND_NATIVE_EXPLICIT_DIM_ASSIGN_HELPER(zend_native_value_assign_dim_op)

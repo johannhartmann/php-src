@@ -5832,13 +5832,15 @@ static zend_always_inline bool zend_native_value_assign_dim_store(
 		ZVAL_DEREF(value);
 	}
 	/* Scalars, strings, objects and other arrays are copied like
-	 * zend_assign_to_variable() copies them; the container's own array as
-	 * the value keeps the helper. */
+	 * zend_assign_to_variable() copies them. The container's own array as
+	 * the value keeps the helper unless the container separates from it
+	 * first, as ZEND_ASSIGN_DIM separates it. */
 	if (Z_TYPE_P(value) == IS_UNDEF
 			|| (Z_TYPE_P(value) > IS_STRING && Z_TYPE_P(value) != IS_ARRAY
 				&& Z_TYPE_P(value) != IS_OBJECT)
 			|| (Z_TYPE_P(value) == IS_ARRAY
-				&& Z_ARR_P(value) == Z_ARR_P(container))) {
+				&& Z_ARR_P(value) == Z_ARR_P(container)
+				&& GC_REFCOUNT(Z_ARR_P(container)) == 1)) {
 		return false;
 	}
 	SEPARATE_ARRAY(container);
@@ -6268,6 +6270,43 @@ zval *zend_native_array_insert_index(zval *container, zend_ulong h)
 		&& GC_REFCOUNT(Z_ARRVAL_P(container)) == 1);
 	return zend_hash_index_add_new(
 		Z_ARRVAL_P(container), h, &EG(uninitialized_zval));
+}
+
+/*
+ * The element an inline assignment under a string key, or a key of
+ * unknown type, stores into: the existing element or a null one inserted,
+ * as ZEND_ASSIGN_DIM's write fetch finds it in the separated array (the
+ * container zval, possibly a reference). NULL leaves the assignment to the
+ * helper: another container, key type, or an INDIRECT element (a symbol
+ * table's); an inserted null element is what the helper's fetch inserts.
+ */
+zval *zend_native_array_assign_lookup(zval *container, const zval *key)
+{
+	HashTable *table;
+	zend_ulong index;
+	zval *element;
+
+	ZVAL_DEREF(container);
+	if (UNEXPECTED(Z_TYPE_P(container) != IS_ARRAY)) {
+		return NULL;
+	}
+	/* A shared or immutable array separates first, as ZEND_ASSIGN_DIM
+	 * separates it before its write fetch; the value, checked by the
+	 * caller, keeps the old array. */
+	SEPARATE_ARRAY(container);
+	table = Z_ARRVAL_P(container);
+	ZVAL_DEREF(key);
+	if (EXPECTED(Z_TYPE_P(key) == IS_STRING)) {
+		element = ZEND_HANDLE_NUMERIC_STR(
+				Z_STRVAL_P(key), Z_STRLEN_P(key), index)
+			? zend_hash_index_lookup(table, index)
+			: zend_hash_lookup(table, Z_STR_P(key));
+	} else if (Z_TYPE_P(key) == IS_LONG) {
+		element = zend_hash_index_lookup(table, Z_LVAL_P(key));
+	} else {
+		return NULL;
+	}
+	return EXPECTED(Z_TYPE_P(element) != IS_INDIRECT) ? element : NULL;
 }
 
 zend_native_status zend_native_value_assign_dim_address(

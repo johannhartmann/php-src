@@ -5424,6 +5424,36 @@ static bool machine_cfg_integer_key_assignment(
 			|| (source.op1_may_be & MAY_BE_ARRAY) != 0);
 }
 
+/* A keyed assignment under a string literal with its hash, or a key slot
+ * that may be a string, into a container that may be an array. */
+static bool machine_cfg_string_key_assignment(
+		const zend_tpde_plan *plan,
+		const zend_mir_executable_value_ref &operation) {
+	if (!plan->linux_inline_forms || plan->source_opcodes == nullptr
+			|| operation.source_position_id >= plan->source_opcode_count) {
+		return false;
+	}
+	const zend_tpde_source_opcode &source =
+		plan->source_opcodes[operation.source_position_id];
+	if (source.op1_may_be != UINT32_MAX
+			&& (source.op1_may_be & MAY_BE_ARRAY) == 0) {
+		return false;
+	}
+	if (operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+		if (plan->source_literals == nullptr
+				|| operation.op2.index >= plan->source_literal_count) {
+			return false;
+		}
+		const zval *literal = &plan->source_literals[operation.op2.index];
+		return Z_TYPE_P(literal) == IS_STRING
+			&& ZSTR_H(Z_STR_P(literal)) != 0;
+	}
+	return (operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+			|| operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+		&& (source.op2_may_be == UINT32_MAX
+			|| (source.op2_may_be & (MAY_BE_STRING | MAY_BE_LONG)) != 0);
+}
+
 void freeze_machine_control_flow(zend_tpde_plan *plan)
 {
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
@@ -5455,6 +5485,9 @@ void freeze_machine_control_flow(zend_tpde_plan *plan)
 							== ZEND_MIR_SOURCE_SLOT_CV) {
 						flags |=
 							ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
+						/* A string's last owner is freed inline. */
+						require_runtime_helper(
+							plan, ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW);
 					}
 					break;
 				case ZEND_MIR_OPCODE_VALUE_UNARY_OP: {
@@ -5505,20 +5538,30 @@ void freeze_machine_control_flow(zend_tpde_plan *plan)
 						ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
 					break;
 				case ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM:
-					/* An append, and the replacement of an existing element
-					 * under an integer key, have inline forms. A key that
-					 * may be a string mostly inserts on applications, where
-					 * the guard would only repeat the helper's checks. */
+					/* An append, and the replacement or insertion of an
+					 * element under an integer or string key, have inline
+					 * forms; a missing key inserts out of line. */
 					if (operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
 						flags |=
 							ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
 					} else if (machine_cfg_integer_key_assignment(
 							plan, operation)) {
-						/* A missing key inserts out of line. */
 						flags |=
 							ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
 						require_runtime_helper(
 							plan, ZEND_NATIVE_HELPER_ARRAY_INSERT_INDEX);
+						require_runtime_helper(
+							plan, ZEND_NATIVE_HELPER_ARRAY_ASSIGN_LOOKUP);
+						require_runtime_helper(
+							plan, ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW);
+					} else if (machine_cfg_string_key_assignment(
+							plan, operation)) {
+						flags |=
+							ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
+						require_runtime_helper(
+							plan, ZEND_NATIVE_HELPER_ARRAY_ASSIGN_LOOKUP);
+						require_runtime_helper(
+							plan, ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW);
 					}
 					break;
 				default:
