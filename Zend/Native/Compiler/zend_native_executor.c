@@ -129,6 +129,8 @@ zend_native_executor_resolve_external_reentry(
 	void *context, zend_function *function);
 static void zend_native_executor_reap_retired_locked(void);
 static void zend_native_executor_deactivate_compiler(void);
+static bool zend_native_executor_recompile_tier2(
+	zend_native_entry_cell *cell);
 
 static bool zend_native_executor_capture_preload_root(
 	const zend_op_array *op_array)
@@ -1931,6 +1933,7 @@ zend_result zend_native_executor_startup(void)
 	zend_native_executor_generation_indexes_active = true;
 	zend_execute_ex = zend_native_executor_execute_ex;
 	zend_native_executor_installed = true;
+	zend_native_tier2_recompile_hook = zend_native_executor_recompile_tier2;
 	return SUCCESS;
 }
 
@@ -2049,8 +2052,76 @@ void zend_native_executor_prepare_shutdown(void)
 	}
 }
 
+/*
+ * Tier 2 (ADR 0025 section 4): recompiles a function whose countdown ran
+ * out in the persistent generation that owns its entry cell.
+ * ZEND_NATIVE_TIER2_TRACE lists the outcomes on stderr.
+ */
+static bool zend_native_executor_recompile_tier2(zend_native_entry_cell *cell)
+{
+	static int trace = -1;
+	const zend_function *function = cell->function;
+	zend_native_tier2_result result = ZEND_NATIVE_TIER2_NOT_OWNED;
+	zend_native_compile_diagnostic diagnostic;
+
+	memset(&diagnostic, 0, sizeof(diagnostic));
+	if (trace < 0) {
+		trace = getenv("ZEND_NATIVE_TIER2_TRACE") != NULL;
+	}
+	/* Persistent generations first, then the request's own. */
+	for (zend_native_executor_generation *generation =
+			zend_native_executor_persistent_generations;
+			generation != NULL && result == ZEND_NATIVE_TIER2_NOT_OWNED;
+			generation = generation->next) {
+		if (generation->compiler != NULL) {
+			result = zend_native_compiler_recompile_tier2(
+				generation->compiler, cell, &diagnostic);
+		}
+	}
+	for (zend_native_executor_generation *generation =
+			zend_native_executor_request_state.request_generations;
+			generation != NULL && result == ZEND_NATIVE_TIER2_NOT_OWNED;
+			generation = generation->next) {
+		if (generation->compiler != NULL) {
+			result = zend_native_compiler_recompile_tier2(
+				generation->compiler, cell, &diagnostic);
+		}
+	}
+	cell->tier2_state = result == ZEND_NATIVE_TIER2_RECOMPILED
+		? ZEND_NATIVE_TIER2_COMPILED : ZEND_NATIVE_TIER2_FAILED;
+	if (trace && function != NULL) {
+		fprintf(stderr, "tier2 %s %s%s%s%s%s\n",
+			result == ZEND_NATIVE_TIER2_RECOMPILED ? "recompiled"
+				: result == ZEND_NATIVE_TIER2_REJECTED ? "rejected"
+				: "not-owned",
+			function->common.scope
+				? ZSTR_VAL(function->common.scope->name) : "",
+			function->common.scope ? "::" : "",
+			function->common.function_name
+				? ZSTR_VAL(function->common.function_name) : "?",
+			diagnostic.message[0] != '\0' ? ": " : "",
+			diagnostic.message);
+	}
+	return true;
+}
+
+/* Recompiles the functions a countdown queued without recompiling. */
+static void zend_native_executor_drain_tier2(void)
+{
+	zend_native_entry_cell *cells[64];
+	uint32_t count;
+
+	while ((count = zend_native_tier2_take_queue(cells, 64)) != 0) {
+		for (uint32_t index = 0; index < count; index++) {
+			cells[index]->tier2_state = ZEND_NATIVE_TIER2_NONE;
+			(void) zend_native_executor_recompile_tier2(cells[index]);
+		}
+	}
+}
+
 void zend_native_executor_deactivate(void)
 {
+	zend_native_executor_drain_tier2();
 	zend_native_compile_trace_request_end("request_shutdown");
 	zend_native_executor_request_state.active = false;
 	zend_native_executor_request_state.pending_opcodes = NULL;

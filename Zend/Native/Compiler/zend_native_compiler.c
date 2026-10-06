@@ -103,6 +103,17 @@ typedef struct _zend_native_compiled_function {
 	 */
 	uint32_t deopt_generic_plus_one;
 	uint32_t deopt_generic_of_plus_one;
+	/*
+	 * Tier 2 (ADR 0025 section 4): a hot function recompiles from a private
+	 * op array copy as its own component; the function's entry cell then
+	 * publishes the copy's code. tier2_plus_one names the copy,
+	 * tier2_of_plus_one its function.
+	 */
+	uint32_t tier2_plus_one;
+	uint32_t tier2_of_plus_one;
+	/* During a tier-2 compilation: 1 + this function's copy in the batch,
+	 * which the other copies call component-locally. */
+	uint32_t tier2_batch_copy_plus_one;
 } zend_native_compiled_function;
 
 struct _zend_native_compiler {
@@ -135,6 +146,9 @@ struct _zend_native_compiler {
 	zend_native_compiler_stats stats;
 	bool failed;
 	bool transients_released;
+	/* A tier-2 compilation in progress: the image owner whose members the
+	 * batch copied (registry index + 1), or 0. */
+	uint32_t tier2_batch_image_owner_plus_one;
 	zend_native_compile_diagnostic last_diagnostic;
 #ifdef ZTS
 	MUTEX_T mutation_mutex;
@@ -835,12 +849,28 @@ static bool zend_native_compiler_is_hidden(
 	const zend_native_compiled_function *function)
 {
 	return function != NULL && (function->variant_of_plus_one != 0
-		|| function->deopt_generic_of_plus_one != 0);
+		|| function->deopt_generic_of_plus_one != 0
+		|| function->tier2_of_plus_one != 0);
 }
 
 static void zend_native_compiler_release_function_transients(
 	zend_native_compiler *compiler,
 	zend_native_compiled_function *function);
+
+/* Tier 2 (ADR 0025 section 4): a published named user function that is
+ * no generator counts its calls when a threshold is configured. */
+static zend_native_entry_cell *zend_native_compiler_call_count_cell(
+	zend_native_compiled_function *function)
+{
+	if (zend_native_tier2_threshold() == 0
+			|| zend_native_compiler_is_hidden(function)
+			|| function->op_array == NULL
+			|| function->op_array->function_name == NULL
+			|| (function->op_array->fn_flags & ZEND_ACC_GENERATOR) != 0) {
+		return NULL;
+	}
+	return &function->entry_cell;
+}
 
 static void zend_native_compiler_record_publication(
 	zend_native_compiler *compiler,
@@ -2952,6 +2982,10 @@ static zend_op_array *zend_native_compiler_retain_runtime_source(
 	return &retained->op_array;
 }
 
+static zend_native_compiled_function *zend_native_compiler_add_tier2_copy(
+	zend_native_compiler *compiler,
+	zend_native_compiled_function *function);
+
 static bool zend_native_compiler_discover_native_callees(
 	zend_native_compiler *compiler,
 	zend_native_compiled_function *function)
@@ -3327,6 +3361,12 @@ static bool zend_native_compiler_prepare_component_member(
 		callee = zend_native_compiler_resolve_native_target(
 			compiler, function, calls, &target);
 		native_callee = zend_native_compiler_find_function(compiler, callee);
+		if (native_callee != NULL
+				&& native_callee->tier2_batch_copy_plus_one != 0
+				&& function->tier2_of_plus_one != 0) {
+			native_callee = compiler->functions[
+				native_callee->tier2_batch_copy_plus_one - 1];
+		}
 		if (native_callee == NULL
 				|| native_callee->state == ZEND_NATIVE_CODEUNIT_FAILED) {
 			return false;
@@ -3386,6 +3426,8 @@ static bool zend_native_compiler_prepare_component_member(
 	member->backend.frame_argument_count = function->op_array->num_args;
 	member->backend.source_op_array = function->op_array;
 	member->backend.source_ssa = &function->ssa;
+	member->backend.call_count_cell =
+		zend_native_compiler_call_count_cell(function);
 	return true;
 }
 
@@ -3821,6 +3863,8 @@ static bool zend_native_compiler_compile_native_component(
 		member.frame_argument_count = function->op_array->num_args;
 		member.source_op_array = function->op_array;
 		member.source_ssa = &function->ssa;
+		member.call_count_cell =
+			zend_native_compiler_call_count_cell(function);
 		phase_started = zend_hrtime();
 		compile_result = zend_tpde_compile_component_with_runtime(
 				compiler->target, &member, 1, runtime,
@@ -4028,82 +4072,20 @@ binding_rejected:
 	return true;
 }
 
-static zend_result zend_native_compiler_compile_locked_impl(
+/*
+ * Lowers every registered codeunit that is neither published nor failed,
+ * discovers its static callees, and compiles and publishes the resulting
+ * components. Returns false with the pending component state left for
+ * zend_native_compiler_fail_pending_component().
+ */
+static bool zend_native_compiler_compile_pending(
 	zend_native_compiler *compiler,
-	zend_op_array *root,
-	const zend_mir_scalar_type_mask *supplied_argument_types,
-	uint32_t supplied_argument_count,
 	zend_native_compile_diagnostic *diagnostic)
 {
-	zend_native_compiled_function *root_function;
 	uint32_t component_count;
 	uint32_t component_id;
 	uint32_t index;
 
-	(void) supplied_argument_types;
-	(void) supplied_argument_count;
-	if (diagnostic != NULL) {
-		memset(diagnostic, 0, sizeof(*diagnostic));
-	}
-	if (compiler == NULL || root == NULL) {
-		zend_native_compiler_set_diagnostic(
-			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
-			ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
-			"invalid native compiler input");
-		return FAILURE;
-	}
-	/* A published root needs no source indexing or registration. */
-	root_function = zend_native_compiler_find_function(compiler, root);
-	if (root_function != NULL
-			&& root_function->entry_cell.state == ZEND_NATIVE_ENTRY_READY) {
-		return SUCCESS;
-	}
-	/*
-	 * Runtime declarations extend the script after compiler creation. Index
-	 * the selected root and its nested definitions before lowering so a
-	 * request-local Closure op_array can recover the source-backed call,
-	 * branch and value metadata owned by its declaration.
-	 */
-	root = zend_native_compiler_retain_runtime_source(compiler, root);
-	if (root == NULL || !zend_native_compiler_index_source_op_array(
-			compiler, root, 0)) {
-		zend_native_compiler_set_diagnostic(
-			compiler, diagnostic,
-			ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
-			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
-			"native source codeunit index cannot be extended");
-		return FAILURE;
-	}
-	root_function = zend_native_compiler_find_function(compiler, root);
-	if (root_function != NULL
-			&& root_function->state == ZEND_NATIVE_CODEUNIT_FAILED) {
-		zend_native_compiler_set_diagnostic(
-			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
-			ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
-			"native codeunit previously failed compilation");
-		return FAILURE;
-	}
-	if (root_function != NULL
-			&& root_function->entry_cell.state
-				== ZEND_NATIVE_ENTRY_READY) {
-		return SUCCESS;
-	}
-	if (root_function != NULL && compiler->defer_publication
-			&& root_function->state == ZEND_NATIVE_CODEUNIT_IMAGE_READY) {
-		return SUCCESS;
-	}
-	/*
-	 * A request starts with exactly the selected root. Static user-call
-	 * discovery below grows this component with transitively reachable
-	 * codeunits; unrelated script functions, methods and closures remain
-	 * absent from the native registry until reentry selects them.
-	 */
-	if (zend_native_compiler_add_function(
-			compiler, root, diagnostic) == NULL) {
-		goto failure;
-	}
-	root_function = zend_native_compiler_find_function(compiler, root);
-	ZEND_ASSERT(root_function != NULL);
 	for (index = 0; index < compiler->function_count; index++) {
 		zend_native_compiled_function *function =
 			compiler->functions[index];
@@ -4175,7 +4157,7 @@ static zend_result zend_native_compiler_compile_locked_impl(
 				compiler->stats.lowering_ns += zend_hrtime() - phase_started;
 			}
 			if (!phase_result) {
-				goto failure;
+				return false;
 			}
 			variant_mask = zend_native_compiler_is_variant(function)
 					|| function->variant_plus_one != 0
@@ -4197,14 +4179,14 @@ static zend_result zend_native_compiler_compile_locked_impl(
 				compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
 				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 				"native call-site index cannot be constructed");
-			goto failure;
+			return false;
 		}
 		if (!zend_native_compiler_discover_native_callees(
 				compiler, function)) {
 			if (diagnostic != NULL) {
 				*diagnostic = compiler->last_diagnostic;
 			}
-			goto failure;
+			return false;
 		}
 	}
 	if (!zend_native_compiler_assign_static_component(
@@ -4213,14 +4195,93 @@ static zend_result zend_native_compiler_compile_locked_impl(
 			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
 			ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 			"native static callgraph component cannot be constructed");
-		goto failure;
+		return false;
 	}
 	for (component_id = 1; component_id <= component_count;
 			component_id++) {
 		if (!zend_native_compiler_compile_native_component(
 				compiler, component_id, diagnostic)) {
-			goto failure;
+			return false;
 		}
+	}
+	return true;
+}
+
+static zend_result zend_native_compiler_compile_locked_impl(
+	zend_native_compiler *compiler,
+	zend_op_array *root,
+	const zend_mir_scalar_type_mask *supplied_argument_types,
+	uint32_t supplied_argument_count,
+	zend_native_compile_diagnostic *diagnostic)
+{
+	zend_native_compiled_function *root_function;
+
+	(void) supplied_argument_types;
+	(void) supplied_argument_count;
+	if (diagnostic != NULL) {
+		memset(diagnostic, 0, sizeof(*diagnostic));
+	}
+	if (compiler == NULL || root == NULL) {
+		zend_native_compiler_set_diagnostic(
+			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
+			ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
+			"invalid native compiler input");
+		return FAILURE;
+	}
+	/* A published root needs no source indexing or registration. */
+	root_function = zend_native_compiler_find_function(compiler, root);
+	if (root_function != NULL
+			&& root_function->entry_cell.state == ZEND_NATIVE_ENTRY_READY) {
+		return SUCCESS;
+	}
+	/*
+	 * Runtime declarations extend the script after compiler creation. Index
+	 * the selected root and its nested definitions before lowering so a
+	 * request-local Closure op_array can recover the source-backed call,
+	 * branch and value metadata owned by its declaration.
+	 */
+	root = zend_native_compiler_retain_runtime_source(compiler, root);
+	if (root == NULL || !zend_native_compiler_index_source_op_array(
+			compiler, root, 0)) {
+		zend_native_compiler_set_diagnostic(
+			compiler, diagnostic,
+			ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"native source codeunit index cannot be extended");
+		return FAILURE;
+	}
+	root_function = zend_native_compiler_find_function(compiler, root);
+	if (root_function != NULL
+			&& root_function->state == ZEND_NATIVE_CODEUNIT_FAILED) {
+		zend_native_compiler_set_diagnostic(
+			compiler, diagnostic, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
+			ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
+			"native codeunit previously failed compilation");
+		return FAILURE;
+	}
+	if (root_function != NULL
+			&& root_function->entry_cell.state
+				== ZEND_NATIVE_ENTRY_READY) {
+		return SUCCESS;
+	}
+	if (root_function != NULL && compiler->defer_publication
+			&& root_function->state == ZEND_NATIVE_CODEUNIT_IMAGE_READY) {
+		return SUCCESS;
+	}
+	/*
+	 * A request starts with exactly the selected root. Static user-call
+	 * discovery below grows this component with transitively reachable
+	 * codeunits; unrelated script functions, methods and closures remain
+	 * absent from the native registry until reentry selects them.
+	 */
+	if (zend_native_compiler_add_function(
+			compiler, root, diagnostic) == NULL) {
+		goto failure;
+	}
+	root_function = zend_native_compiler_find_function(compiler, root);
+	ZEND_ASSERT(root_function != NULL);
+	if (!zend_native_compiler_compile_pending(compiler, diagnostic)) {
+		goto failure;
 	}
 	root_function = zend_native_compiler_find_function(compiler, root);
 	if (root_function == NULL
@@ -4382,6 +4443,158 @@ zend_native_entry_cell *zend_native_compiler_prepare_function(
 		compiler, source_op_array, diagnostic);
 	zend_native_compiler_mutation_unlock(compiler);
 	return entry_cell;
+}
+
+static zend_native_compiled_function *zend_native_compiler_add_tier2_copy(
+	zend_native_compiler *compiler,
+	zend_native_compiled_function *function)
+{
+	zend_native_compiled_function *copy_function;
+	zend_op_array *copy;
+
+	if (!zend_native_compiler_reserve_functions(
+			compiler, compiler->function_count + 1)) {
+		return NULL;
+	}
+	copy = zend_native_compiler_alloc(compiler, sizeof(*copy), false);
+	*copy = *function->op_array;
+	copy_function = zend_native_compiler_alloc(
+		compiler, sizeof(*copy_function), true);
+	copy_function->op_array = copy;
+	zend_native_op_array_identity_capture(
+		&copy_function->op_array_identity, copy);
+	copy_function->registry_index = compiler->function_count;
+	copy_function->state = ZEND_NATIVE_CODEUNIT_COMPILING;
+	copy_function->tier2_of_plus_one = function->registry_index + 1;
+	zend_native_entry_cell_init(
+		&copy_function->entry_cell, (zend_function *) function->op_array);
+	copy_function->entry_cell.lease_managed = compiler->persistent;
+	if (zend_native_entry_cell_begin_compile(
+			&copy_function->entry_cell) == FAILURE
+			|| zend_hash_index_update_ptr(
+				&compiler->functions_by_op_array,
+				(zend_ulong) (uintptr_t) copy, copy_function) == NULL) {
+		zend_native_compiler_free(compiler, copy);
+		zend_native_compiler_free(compiler, copy_function);
+		return NULL;
+	}
+	compiler->functions[compiler->function_count++] = copy_function;
+	return copy_function;
+}
+
+zend_native_tier2_result zend_native_compiler_recompile_tier2(
+	zend_native_compiler *compiler,
+	zend_native_entry_cell *cell,
+	zend_native_compile_diagnostic *diagnostic)
+{
+	zend_native_compiled_function *function = NULL;
+	zend_native_compiled_function *copy;
+	uint32_t first_new_function;
+	uint32_t index;
+
+	if (diagnostic != NULL) {
+		memset(diagnostic, 0, sizeof(*diagnostic));
+	}
+	if (compiler == NULL || cell == NULL) {
+		return ZEND_NATIVE_TIER2_NOT_OWNED;
+	}
+	zend_native_compiler_mutation_lock(compiler);
+	for (index = 0; index < compiler->function_count; index++) {
+		if (&compiler->functions[index]->entry_cell == cell) {
+			function = compiler->functions[index];
+			break;
+		}
+	}
+	if (function == NULL) {
+		zend_native_compiler_mutation_unlock(compiler);
+		return ZEND_NATIVE_TIER2_NOT_OWNED;
+	}
+	if (zend_native_compiler_is_hidden(function)
+			|| function->tier2_plus_one != 0
+			|| function->state != ZEND_NATIVE_CODEUNIT_READY
+			|| function->entry_cell.state != ZEND_NATIVE_ENTRY_READY
+			|| compiler->defer_publication) {
+		zend_native_compiler_mutation_unlock(compiler);
+		return ZEND_NATIVE_TIER2_REJECTED;
+	}
+	first_new_function = compiler->function_count;
+	/*
+	 * The whole image recompiles: each published member gets a copy, the
+	 * copies call each other component-locally, and every member's entry
+	 * cell then publishes its copy, so that no hot code stays duplicated
+	 * in the first image.
+	 */
+	{
+		const uint32_t owner = function->image_owner_index;
+		const uint32_t existing = compiler->function_count;
+		bool compiled;
+
+		for (index = 0; index < existing; index++) {
+			zend_native_compiled_function *member =
+				compiler->functions[index];
+
+			if (member == NULL || member->image_owner_index != owner
+					|| zend_native_compiler_is_hidden(member)
+					|| member->tier2_plus_one != 0
+					|| member->state != ZEND_NATIVE_CODEUNIT_READY
+					|| member->entry_cell.state != ZEND_NATIVE_ENTRY_READY) {
+				continue;
+			}
+			copy = zend_native_compiler_add_tier2_copy(compiler, member);
+			if (copy == NULL) {
+				zend_native_compiler_fail_pending_component(compiler, 0);
+				zend_native_compiler_mutation_unlock(compiler);
+				return ZEND_NATIVE_TIER2_REJECTED;
+			}
+			member->tier2_batch_copy_plus_one = copy->registry_index + 1;
+		}
+		compiler->tier2_batch_image_owner_plus_one = owner + 1;
+		compiled = zend_native_compiler_compile_pending(compiler, diagnostic);
+		compiler->tier2_batch_image_owner_plus_one = 0;
+		for (index = 0; index < existing; index++) {
+			zend_native_compiled_function *member =
+				compiler->functions[index];
+
+			if (member == NULL || member->tier2_batch_copy_plus_one == 0) {
+				continue;
+			}
+			copy = compiler->functions[member->tier2_batch_copy_plus_one - 1];
+			member->tier2_batch_copy_plus_one = 0;
+			if (!compiled
+					|| copy->entry_cell.state != ZEND_NATIVE_ENTRY_READY
+					|| copy->entry_cell.code == NULL) {
+				compiled = false;
+				continue;
+			}
+			member->tier2_plus_one = copy->registry_index + 1;
+		}
+		if (!compiled) {
+			for (index = 0; index < existing; index++) {
+				compiler->functions[index]->tier2_plus_one = 0;
+			}
+			zend_native_compiler_fail_pending_component(compiler, 0);
+			zend_native_compiler_mutation_unlock(compiler);
+			return ZEND_NATIVE_TIER2_REJECTED;
+		}
+	}
+	/* Later calls through the cells, and re-armed call sites, enter the
+	 * copies; frames still running the first code finish there. */
+	for (index = 0; index < first_new_function; index++) {
+		zend_native_compiled_function *member = compiler->functions[index];
+
+		if (member != NULL && member->tier2_plus_one != 0
+				&& member->tier2_plus_one - 1 >= first_new_function) {
+			copy = compiler->functions[member->tier2_plus_one - 1];
+			__atomic_store_n(&member->entry_cell.code,
+				copy->entry_cell.code, __ATOMIC_RELEASE);
+			member->entry_cell.tier2_state = ZEND_NATIVE_TIER2_COMPILED;
+		}
+	}
+	zend_native_call_resolution_cache_invalidate();
+	zend_native_compiler_mutation_unlock(compiler);
+	zend_native_compiler_release_ready_transients(
+		compiler, first_new_function);
+	return ZEND_NATIVE_TIER2_RECOMPILED;
 }
 
 zend_result zend_native_compiler_compile_dynamic_component(

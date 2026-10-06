@@ -1080,6 +1080,8 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_ARRAY_ASSIGN_LOOKUP,
 		ZEND_NATIVE_EFFECT_ARRAY_SLOW_WRITE,
 		(const void *) zend_native_array_assign_lookup},
+	{ZEND_NATIVE_HELPER_TIER2_NOTE, 0,
+		(const void *) zend_native_tier2_note},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {

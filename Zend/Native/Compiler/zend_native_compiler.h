@@ -154,6 +154,21 @@ ZEND_API zend_native_entry_cell *zend_native_compiler_prepare_function(
  * Import performs only process-local reference binding, relocation, mapping
  * and atomic entry publication; it never rebuilds SSA, ZNMIR or machine code.
  */
+typedef enum _zend_native_tier2_result {
+	ZEND_NATIVE_TIER2_NOT_OWNED = 0,
+	ZEND_NATIVE_TIER2_RECOMPILED,
+	ZEND_NATIVE_TIER2_REJECTED
+} zend_native_tier2_result;
+
+/*
+ * Tier 2 (ADR 0025 section 4): recompiles the published function whose
+ * entry cell is cell from a private op array copy and publishes the copy's
+ * code through cell. NOT_OWNED when this compiler does not own the cell.
+ */
+ZEND_API zend_native_tier2_result zend_native_compiler_recompile_tier2(
+	zend_native_compiler *compiler,
+	zend_native_entry_cell *cell,
+	zend_native_compile_diagnostic *diagnostic);
 ZEND_API zend_result zend_native_compiler_serialize_bundle(
 	zend_native_compiler *compiler,
 	unsigned char **out_bytes,

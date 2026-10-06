@@ -186,6 +186,19 @@ shared leave (more executed bytes per function).
   - The fast result's type does not yet narrow the types after the exit, so
     a specialized version runs the same hot code as the generic one; that
     narrowing, type feedback and recompilation by call count follow.
+- **Recompilation (tier 2):** the published code of a named, non-generator
+  user function counts its calls in its entry cell; a function that
+  reaches the threshold is queued once. At request shutdown the worker
+  recompiles each queued function into a process-local component, with
+  the targets its call sites resolved (the site headers' function and
+  receiver class) bound as direct component-local calls, and publishes
+  the component through the function's entry cell, so that later calls
+  and re-armed sites enter it. Tier-2 code embeds process addresses
+  (functions, literals) and is never serialized. Its call sites keep a
+  target guard (the class for methods, the per-request name binding for
+  functions, checked once per call-cache epoch at the tier-2 entry); a
+  failed guard takes the site's generic call. Inlined callees (section 5)
+  and type specialization build on these components.
 - **Invalidation:** code that depends on a class layout, a function or
   constant binding, or a declaration epoch is registered with that
   dependency. Changing it retires the code through the existing entry-cell

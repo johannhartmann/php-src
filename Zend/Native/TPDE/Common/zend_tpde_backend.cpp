@@ -1522,6 +1522,26 @@ bool prepare_image_symbols(
 			return false;
 		}
 	}
+	if (plan->call_count_cell != nullptr
+			&& (!image_add_symbol(image,
+					ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
+					ZEND_NATIVE_TIER2_COUNT_SYMBOL_ID,
+					plan->symbol_namespace,
+					NATIVE_IMAGE_ABI_VERSION, 0,
+					plan->call_count_cell)
+				|| zend_native_runtime_helper_find(plan->runtime,
+					ZEND_NATIVE_HELPER_TIER2_NOTE) == nullptr
+				|| !image_add_symbol(image,
+					ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER,
+					ZEND_NATIVE_HELPER_TIER2_NOTE, 0,
+					plan->runtime->abi_version,
+					zend_native_runtime_helper_find(plan->runtime,
+						ZEND_NATIVE_HELPER_TIER2_NOTE)->effects))) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"unable to create the native image call-count symbols");
+		return false;
+	}
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
 		const zend_tpde_instruction &instruction = plan->instructions[index];
 		if (instruction.entry_cell != nullptr
@@ -13876,6 +13896,7 @@ extern "C" zend_result zend_tpde_compile_component_with_runtime(
 			member.deopt_generic_member_plus_one <= member_count
 				? member.deopt_generic_member_plus_one : 0;
 		plans[initialized].deopt_landings = member.deopt_landings;
+		plans[initialized].call_count_cell = member.call_count_cell;
 		if (!initialize_plan(
 				member.module, runtime,
 				member.user_bindings, member.user_binding_count,

@@ -4164,6 +4164,65 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto source_reg = source.load_to_reg();
 		auto result_reg = result.alloc_reg();
 		ASM(MOV64rr, result_reg, source_reg);
+		/* Tier 2 (ADR 0025 section 4): count the call down in the entry
+		 * cell; the last one queues the function for recompilation. */
+		if (adaptor->plan()->call_count_cell != nullptr
+				&& !adaptor->typed_body()
+				&& runtime_symbol(ZEND_NATIVE_HELPER_TIER2_NOTE).valid()) {
+			ValuePart cell = image_symbol_value(
+				ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
+				ZEND_NATIVE_TIER2_COUNT_SYMBOL_ID);
+			if (cell.has_reg()) {
+				auto cell_scratch = std::move(cell).into_scratch(this);
+				const AsmReg cell_reg = cell_scratch.cur_reg();
+				auto counted = text_writer.label_create();
+				auto queue = text_writer.label_create();
+				ASM(SUB32mi, FE_MEM(cell_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(
+						zend_native_entry_cell, tier2_countdown))), 1);
+				generate_raw_jump(Jump::je, queue);
+				const bool cold_queue = !text_writer.in_cold_area();
+				if (cold_queue) {
+					text_writer.begin_cold_area();
+				} else {
+					generate_raw_jump(Jump::jmp, counted);
+				}
+				label_place(queue);
+				{
+					/* The entry's stack may not be call-aligned yet: save
+					 * the caller-saved registers, align, call, restore. */
+					static constexpr FeRegGP saved[] = {
+						FE_AX, FE_CX, FE_DX, FE_SI, FE_DI,
+						FE_R8, FE_R9, FE_R10, FE_R11};
+					ASM(LEA64rm, FE_SP, FE_MEM(FE_SP, 0, FE_NOREG, -80));
+					for (int i = 0; i < 9; ++i) {
+						ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, 8 * i),
+							saved[i]);
+					}
+					ASM(MOV64rr, FE_DI, cell_reg);
+					ASM(MOV64rr, FE_AX, FE_SP);
+					ASM(AND64ri, FE_SP, -16);
+					ASM(PUSHr, FE_AX);
+					ASM(PUSHr, FE_AX);
+					text_writer.ensure_space(16);
+					ASM(CALL, text_writer.cur_ptr() + 5);
+					reloc_text(runtime_symbol(ZEND_NATIVE_HELPER_TIER2_NOTE),
+						tpde::elf::R_X86_64_PLT32,
+						text_writer.offset() - 4, -4);
+					ASM(MOV64rm, FE_SP, FE_MEM(FE_SP, 0, FE_NOREG, 0));
+					for (int i = 0; i < 9; ++i) {
+						ASM(MOV64rm, saved[i],
+							FE_MEM(FE_SP, 0, FE_NOREG, 8 * i));
+					}
+					ASM(LEA64rm, FE_SP, FE_MEM(FE_SP, 0, FE_NOREG, 80));
+				}
+				generate_raw_jump(Jump::jmp, counted);
+				if (cold_queue) {
+					text_writer.end_cold_area();
+				}
+				label_place(counted);
+			}
+		}
 		std::optional<tpde::Label> deopt_entry;
 		if (node.operands.size() == 2) {
 			/* A deoptimization entry continues a frame whose temporaries
