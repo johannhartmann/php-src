@@ -71,7 +71,30 @@ typedef struct _zend_native_entry_cell {
 	uint64_t fast_bound_epoch;
 	zend_native_frame_entry_t fast_bound_entry;
 	void **fast_bound_run_time_cache;
+	/* Tier 2 (ADR 0025 section 4): calls left until the function is
+	 * queued for recompilation, counted down by its published code
+	 * (zero when not counting), and its tier-2 state. */
+	uint32_t tier2_countdown;
+	uint32_t tier2_state;
 } zend_native_entry_cell;
+
+typedef enum _zend_native_tier2_state {
+	ZEND_NATIVE_TIER2_NONE = 0,
+	ZEND_NATIVE_TIER2_QUEUED = 1,
+	ZEND_NATIVE_TIER2_COMPILED = 2,
+	ZEND_NATIVE_TIER2_FAILED = 3
+} zend_native_tier2_state;
+
+/* Image symbol id of a counted function's own entry cell. */
+#define ZEND_NATIVE_TIER2_COUNT_SYMBOL_ID (UINT32_MAX - 1)
+
+uint32_t zend_native_tier2_threshold(void);
+/* The executor's recompilation of a function whose countdown ran out;
+ * returns false to queue it for request shutdown instead. */
+extern bool (*zend_native_tier2_recompile_hook)(zend_native_entry_cell *cell);
+void zend_native_tier2_note(zend_native_entry_cell *cell);
+uint32_t zend_native_tier2_take_queue(
+	zend_native_entry_cell **cells, uint32_t capacity);
 
 static zend_always_inline const zend_native_code *
 zend_native_entry_cell_load(const zend_native_entry_cell *cell)

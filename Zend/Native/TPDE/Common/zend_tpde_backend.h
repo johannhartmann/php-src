@@ -202,6 +202,9 @@ typedef struct _zend_native_component_member {
 	 * with resume IDs at its guarded operations (deopt_landings). */
 	uint32_t deopt_generic_member_plus_one;
 	bool deopt_landings;
+	/* Tier 2: the member's own entry cell, whose countdown its Zend entry
+	 * decrements (queueing the function at zero), or NULL. */
+	zend_native_entry_cell *call_count_cell;
 } zend_native_component_member;
 
 /*

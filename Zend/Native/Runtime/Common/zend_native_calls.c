@@ -1599,6 +1599,9 @@ zend_result zend_native_entry_cell_publish(
 		return FAILURE;
 	}
 	zend_native_perf_name_entry(cell, code);
+	if (cell->tier2_state == ZEND_NATIVE_TIER2_NONE) {
+		cell->tier2_countdown = zend_native_tier2_threshold();
+	}
 	cell->generation++;
 	cell->published_epoch = cell->generation;
 	cell->state = ZEND_NATIVE_ENTRY_READY;
@@ -9413,4 +9416,62 @@ void zend_native_echo_double(
 
 	ZVAL_DOUBLE(&value, payload);
 	zend_native_echo_zval(execute_data, &value);
+}
+
+/*
+ * Tier 2 (ADR 0025 section 4): ZEND_NATIVE_TIER2_THRESHOLD calls of a
+ * counted function queue it once for recompilation at request shutdown;
+ * 0 or unset counts nothing.
+ */
+static zend_native_entry_cell *zend_native_tier2_queue[256];
+static uint32_t zend_native_tier2_queue_length;
+
+uint32_t zend_native_tier2_threshold(void)
+{
+	static int64_t threshold = -1;
+
+	if (threshold < 0) {
+		const char *value = getenv("ZEND_NATIVE_TIER2_THRESHOLD");
+		long parsed = value != NULL ? strtol(value, NULL, 10) : 0;
+
+		threshold = parsed > 0 && parsed < INT32_MAX ? parsed : 0;
+	}
+	return (uint32_t) threshold;
+}
+
+bool (*zend_native_tier2_recompile_hook)(zend_native_entry_cell *cell);
+
+/*
+ * Called by a counted function's entry (a register-preserving call, the
+ * frame unpublished) when its countdown runs out: recompiles at once, like
+ * a lazy compilation, or queues the function for request shutdown.
+ */
+void zend_native_tier2_note(zend_native_entry_cell *cell)
+{
+	if (cell == NULL || cell->tier2_state != ZEND_NATIVE_TIER2_NONE) {
+		return;
+	}
+	if (zend_native_tier2_recompile_hook != NULL
+			&& EG(exception) == NULL
+			&& zend_native_tier2_recompile_hook(cell)) {
+		return;
+	}
+	if (zend_native_tier2_queue_length
+			< sizeof(zend_native_tier2_queue)
+				/ sizeof(zend_native_tier2_queue[0])) {
+		cell->tier2_state = ZEND_NATIVE_TIER2_QUEUED;
+		zend_native_tier2_queue[zend_native_tier2_queue_length++] = cell;
+	}
+}
+
+uint32_t zend_native_tier2_take_queue(
+	zend_native_entry_cell **cells, uint32_t capacity)
+{
+	uint32_t count = MIN(capacity, zend_native_tier2_queue_length);
+
+	memcpy(cells, zend_native_tier2_queue, count * sizeof(*cells));
+	memmove(zend_native_tier2_queue, zend_native_tier2_queue + count,
+		(zend_native_tier2_queue_length - count) * sizeof(*cells));
+	zend_native_tier2_queue_length -= count;
+	return count;
 }

@@ -2305,6 +2305,8 @@ struct zend_tpde_plan {
 	/* See zend_native_component_member.deopt_generic_member_plus_one. */
 	uint32_t deopt_generic_member_plus_one;
 	bool deopt_landings;
+	/* Tier 2 call counting (zend_native_component_member). */
+	zend_native_entry_cell *call_count_cell;
 	/* The resume IDs are deoptimization stress targets. */
 	bool deopt_stress;
 	uint32_t entry_variant_long_mask;
