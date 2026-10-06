@@ -2064,10 +2064,14 @@ public:
 	 * memory operands, then need no SIB byte (R12 would). The other fixed
 	 * values leave RBX to it.
 	 */
+	static constexpr int32_t frame_register_bias = 0x80;
 	AsmReg select_fixed_assignment_reg(
 			tpde::AssignmentPartRef part, IRValueRef value) {
 		constexpr uint64_t bx = uint64_t{1} << tpde::x64::AsmReg::BX;
 		if (value == IRValueRef{Adaptor::FRAME_VALUE}) {
+			if (this->biased_off != 0) {
+				return AsmReg{tpde::x64::AsmReg::BX};
+			}
 			if (part.bank() == tpde::x64::PlatformConfig::GP_BANK
 					&& (this->register_file.allocatable & bx) != 0
 					&& (this->register_file.used & bx) == 0
@@ -2075,6 +2079,12 @@ public:
 					&& !this->stack.is_leaf_function
 					&& (this->cur_cc_assigner()->get_ccinfo()
 							.callee_saved_regs & bx) != 0) {
+				/* RBX holds the frame plus 0x80: the frame's header and its
+				 * first slots up to offset 0xff are disp8 operands. No other
+				 * value may use RBX afterwards, even when the frame is dead:
+				 * the encoder rebiases every operand naming it. */
+				this->set_biased_reg(FE_BX, frame_register_bias);
+				this->register_file.allocatable &= ~bx;
 				return AsmReg{tpde::x64::AsmReg::BX};
 			}
 			return Base::select_fixed_assignment_reg(part, value);
