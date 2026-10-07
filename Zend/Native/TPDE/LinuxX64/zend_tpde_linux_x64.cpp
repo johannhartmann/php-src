@@ -6,6 +6,7 @@
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
 #include "Zend/zend_execute.h"
 #include "Zend/zend_object_handlers.h"
+#include "Zend/zend_observer.h"
 
 #include <tpde/x64/CompilerX64.hpp>
 #include <array>
@@ -3901,6 +3902,52 @@ public:
 	/* The Z_TYPE() bits a speculating tier-2 copy assumes for an
 	 * instruction's result (zend_native_compiler_tier2_speculate_results()),
 	 * or 0. */
+	/*
+	 * The handler a frameless call runs directly from generated code, or
+	 * nullptr for the runtime helper: no observer is registered, every CV
+	 * argument is defined and every temporary one holds no counted value,
+	 * so the call needs neither a warning, an observer nor a release.
+	 */
+	const void *frameless_inline_handler(
+			const zend_mir_executable_value_ref &operation,
+			const zend_tpde_frameless_direct &direct) const {
+		const zend_tpde_plan *plan = adaptor->plan();
+		const uint32_t position = operation.source_position_id;
+		const uint32_t count =
+			operation.source_opcode - ZEND_FRAMELESS_ICALL_0;
+		const uint32_t handler = static_cast<uint32_t>(
+			direct.descriptor & 0xffff);
+		if (ZEND_OBSERVER_ENABLED || plan->source_opcodes == nullptr
+				|| position >= plan->source_opcode_count
+				|| (count == 3 && position + 1 >= plan->source_opcode_count)
+				|| handler >= zend_flf_count
+				|| zend_flf_handlers[handler] == nullptr) {
+			return nullptr;
+		}
+		for (uint32_t index = 0; index < count; ++index) {
+			if (((direct.descriptor
+					>> (ZEND_NATIVE_FRAMELESS_DIRECT_CONST_SHIFT + index)) & 1)
+					!= 0) {
+				continue;
+			}
+			const uint32_t may_be = index == 0
+				? plan->source_opcodes[position].op1_may_be
+				: index == 1 ? plan->source_opcodes[position].op2_may_be
+				: plan->source_opcodes[position + 1].op1_may_be;
+			if (may_be == UINT32_MAX || (may_be & MAY_BE_UNDEF) != 0) {
+				return nullptr;
+			}
+			if (((direct.descriptor
+					>> (ZEND_NATIVE_FRAMELESS_DIRECT_TMP_SHIFT + index)) & 1)
+					!= 0
+					&& (may_be & (MAY_BE_STRING | MAY_BE_ARRAY
+						| MAY_BE_OBJECT | MAY_BE_RESOURCE | MAY_BE_REF))
+						!= 0) {
+				return nullptr;
+			}
+		}
+		return zend_flf_handlers[handler];
+	}
 	bool speculation_checked_ = false;
 	uint16_t speculated_result_types(IRInstRef instruction) {
 		const zend_tpde_plan *plan = adaptor->plan();
@@ -9578,6 +9625,12 @@ bool ZendCompilerX64::compile_inst_impl(
 		tpde::x64::CCAssignerSysV assigner{false};
 		CallBuilder builder{*this, assigner};
 		zend_tpde_frameless_direct frameless_direct{};
+		const void *frameless_handler =
+			helper == ZEND_NATIVE_HELPER_CALL_FRAMELESS_INTERNAL
+				&& frame_argument == nullptr
+				&& zend_tpde_frameless_direct_at(mir, 0, &frameless_direct)
+			? frameless_inline_handler(operation, frameless_direct)
+			: nullptr;
 		zend_tpde_concat_assign_direct concat_assign_direct{};
 		zend_tpde_concat_direct concat_direct{};
 		zend_tpde_dim_direct dim_direct{};
@@ -9594,7 +9647,11 @@ bool ZendCompilerX64::compile_inst_impl(
 					static_cast<int32_t>(result_offset)),
 				IS_UNDEF);
 		}
-		if (frame_argument != nullptr) {
+		if (frameless_handler != nullptr) {
+			/* The handler takes no frame. */
+			auto frame_use = val_ref(node.operands.back());
+			(void) frame_use;
+		} else if (frame_argument != nullptr) {
 			builder.add_arg(
 				std::move(*frame_argument), tpde::CCAssignment{});
 		} else {
@@ -9673,7 +9730,98 @@ bool ZendCompilerX64::compile_inst_impl(
 					operation.op1, operation.op1_unused_payload), 8,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 		};
-		if (array_address) {
+		if (frameless_handler != nullptr) {
+			/* zend_native_call_frameless_*(): the opline for warnings, a
+			 * null result, then the handler on the result and each
+			 * argument's (dereferenced) address. */
+			const uint64_t descriptor = frameless_direct.descriptor;
+			const uint32_t count =
+				operation.source_opcode - ZEND_FRAMELESS_ICALL_0;
+			const AsmReg frame_reg = canonical_frame_register();
+			const uint32_t result_offset =
+				static_cast<uint32_t>(frameless_direct.slots);
+			{
+				ScratchReg opline{this};
+				const AsmReg opline_reg = opline.alloc_gp();
+				const uint64_t opline_offset =
+					uint64_t{operation.source_position_id} * sizeof(zend_op);
+				if (opline_offset > INT32_MAX
+						|| result_offset > INT32_MAX - sizeof(zval)) {
+					return false;
+				}
+				ASM(MOV64rm, opline_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_execute_data, func))));
+				ASM(MOV64rm, opline_reg, FE_MEM(opline_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_op_array, opcodes))));
+				if (opline_offset != 0) {
+					ASM(ADD64ri, opline_reg,
+						static_cast<int32_t>(opline_offset));
+				}
+				ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_execute_data, opline))), opline_reg);
+				ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(result_offset
+						+ offsetof(zval, u1.type_info))), IS_NULL);
+			}
+			auto address_arg = [&](uint32_t offset, bool literal,
+					bool may_be_reference) {
+				ScratchReg address{this};
+				const AsmReg address_reg = address.alloc_gp();
+				if (literal) {
+					ASM(MOV64rm, address_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zend_execute_data, func))));
+					ASM(MOV64rm, address_reg, FE_MEM(address_reg, 0,
+						FE_NOREG, static_cast<int32_t>(
+							offsetof(zend_op_array, literals))));
+					ASM(LEA64rm, address_reg, FE_MEM(address_reg, 0,
+						FE_NOREG, static_cast<int32_t>(
+							offset * sizeof(zval))));
+				} else {
+					ASM(LEA64rm, address_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offset)));
+					if (may_be_reference) {
+						auto direct = text_writer.label_create();
+						ASM(CMP8mi, FE_MEM(address_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zval, u1.v.type))), IS_REFERENCE);
+						generate_raw_jump(Jump::jne, direct);
+						ASM(MOV64rm, address_reg,
+							FE_MEM(address_reg, 0, FE_NOREG, 0));
+						ASM(ADD64ri, address_reg, static_cast<int32_t>(
+							offsetof(zend_reference, val)));
+						label_place(direct);
+					}
+				}
+				ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
+				value.set_value(this, std::move(address));
+				builder.add_arg(std::move(value), tpde::CCAssignment{});
+			};
+			address_arg(result_offset, false, false);
+			const uint32_t offsets[3] = {
+				static_cast<uint32_t>(frameless_direct.slots >> 32),
+				static_cast<uint32_t>(frameless_direct.more_slots),
+				static_cast<uint32_t>(frameless_direct.more_slots >> 32)};
+			for (uint32_t index = 0; index < count; ++index) {
+				const bool literal = ((descriptor
+					>> (ZEND_NATIVE_FRAMELESS_DIRECT_CONST_SHIFT + index)) & 1)
+					!= 0;
+				const zend_tpde_source_opcode &source =
+					adaptor->plan()->source_opcodes[
+						operation.source_position_id + (index == 2 ? 1 : 0)];
+				const uint32_t may_be = index == 1
+					? source.op2_may_be : source.op1_may_be;
+				if (!literal && offsets[index] > INT32_MAX - sizeof(zval)) {
+					return false;
+				}
+				address_arg(offsets[index], literal,
+					!literal && (may_be & MAY_BE_REF) != 0);
+			}
+			builder.call(ValuePart{static_cast<uint64_t>(
+				reinterpret_cast<uintptr_t>(frameless_handler)), 8,
+				tpde::x64::PlatformConfig::GP_BANK});
+		} else if (array_address) {
 			for (const ValueAddress *operand :
 					{&address_op1, &address_op2, &address_result}) {
 				ScratchReg address{this};
@@ -9915,7 +10063,20 @@ bool ZendCompilerX64::compile_inst_impl(
 			builder.call(runtime_symbol(helper));
 		}
 		ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
-		builder.add_ret(status, tpde::CCAssignment{});
+		if (frameless_handler != nullptr) {
+			/* The handler returns nothing: an exception is the status. */
+			ScratchReg exception{this};
+			const AsmReg exception_reg = exception.alloc_gp();
+			ASM(MOV64ri, exception_reg, static_cast<int64_t>(
+				reinterpret_cast<uintptr_t>(&EG(exception))));
+			ASM(CMP64mi, FE_MEM(exception_reg, 0, FE_NOREG, 0), 0);
+			generate_raw_set(Jump::jne, exception_reg);
+			static_assert(ZEND_NATIVE_RETURNED == 0
+				&& ZEND_NATIVE_EXCEPTION == 1);
+			status.set_value(this, std::move(exception));
+		} else {
+			builder.add_ret(status, tpde::CCAssignment{});
+		}
 		emit_status_tail(std::move(status),
 			mir.exception_block_id, true);
 		/*
