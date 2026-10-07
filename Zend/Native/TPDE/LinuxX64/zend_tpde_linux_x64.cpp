@@ -1653,6 +1653,7 @@ public:
 	void emit_tier1_fallback_call(
 			AsmReg frame_reg, AsmReg context_reg, const void *entry,
 			uint32_t member_plus_one = 0) {
+		this->stack.generated_call = true;
 		if (const zend_native_inline_host *host = adaptor->plan()->inline_host;
 				host != nullptr) {
 			/* The tier-1 code runs the original function. */
@@ -2435,7 +2436,10 @@ public:
 	template <typename SetArguments, typename Check>
 	void emit_preserving_call(uint64_t live_registers,
 			zend_native_runtime_helper_id helper, SetArguments &&set_arguments,
-			Check &&check) {
+			Check &&check, const void *target = nullptr,
+			bool call_rax = false) {
+		/* A call TPDE does not see: the frame may not use the red zone. */
+		this->stack.generated_call = true;
 		static constexpr std::pair<uint32_t, FeRegGP> caller_saved_gp[] = {
 			{0, FE_AX}, {1, FE_CX}, {2, FE_DX}, {6, FE_SI}, {7, FE_DI},
 			{8, FE_R8}, {9, FE_R9}, {10, FE_R10}, {11, FE_R11}};
@@ -2469,10 +2473,20 @@ public:
 				xmm_base + static_cast<int32_t>(16 * i)), saved_xmm[i]);
 		}
 		set_arguments();
-		text_writer.ensure_space(16);
-		ASM(CALL, text_writer.cur_ptr() + 5);
-		reloc_text(runtime_symbol(helper), tpde::elf::R_X86_64_PLT32,
-			text_writer.offset() - 4, -4);
+		if (call_rax) {
+			/* The arguments loaded the target into RAX. */
+			ASM(CALLr, FE_AX);
+		} else if (target != nullptr) {
+			/* RAX is saved or free: the arguments never use it. */
+			ASM(MOV64ri, FE_AX, static_cast<int64_t>(
+				reinterpret_cast<uintptr_t>(target)));
+			ASM(CALLr, FE_AX);
+		} else {
+			text_writer.ensure_space(16);
+			ASM(CALL, text_writer.cur_ptr() + 5);
+			reloc_text(runtime_symbol(helper), tpde::elf::R_X86_64_PLT32,
+				text_writer.offset() - 4, -4);
+		}
 		check();
 		for (size_t i = 0; i < saved_xmm.size(); ++i) {
 			ASM(SSE_MOVDQUrm, saved_xmm[i], FE_MEM(FE_SP, 0, FE_NOREG,
@@ -3740,6 +3754,7 @@ public:
 		}
 		/* A terminal cold path: the raw call leaves the allocator state of
 		 * the general continuation untouched. */
+		this->stack.generated_call = true;
 		text_writer.ensure_space(16);
 		ASM(CALL, text_writer.cur_ptr() + 5);
 		reloc_text(this->func_syms[plan->entry_variant_member_plus_one - 1],
@@ -3939,14 +3954,16 @@ public:
 	 * instruction's result (zend_native_compiler_tier2_speculate_results()),
 	 * or 0. */
 	/*
-	 * The handler a frameless call runs directly from generated code, or
-	 * nullptr for the runtime helper: no observer is registered, every CV
+	 * Whether a frameless call runs its handler directly from generated
+	 * code: no observer is registered (part of the system id), every CV
 	 * argument is defined and every temporary one holds no counted value,
-	 * so the call needs neither a warning, an observer nor a release.
+	 * so the call needs neither a warning, an observer nor a release. The
+	 * handler comes from the context's table, as images outlive the
+	 * process (the OPcache file cache).
 	 */
-	const void *frameless_inline_handler(
+	bool frameless_inline_allowed(
 			const zend_mir_executable_value_ref &operation,
-			const zend_tpde_frameless_direct &direct) const {
+			const zend_tpde_frameless_direct &direct) {
 		const zend_tpde_plan *plan = adaptor->plan();
 		const uint32_t position = operation.source_position_id;
 		const uint32_t count =
@@ -3956,9 +3973,12 @@ public:
 		if (ZEND_OBSERVER_ENABLED || plan->source_opcodes == nullptr
 				|| position >= plan->source_opcode_count
 				|| (count == 3 && position + 1 >= plan->source_opcode_count)
-				|| handler >= zend_flf_count
-				|| zend_flf_handlers[handler] == nullptr) {
-			return nullptr;
+				|| uint64_t{handler} * sizeof(void *) > INT32_MAX
+				|| static_cast<uint32_t>(direct.slots) > INT32_MAX - sizeof(zval)
+				|| uint64_t{position} * sizeof(zend_op) > INT32_MAX
+				|| val_assignment(adaptor->val_local_idx(IRValueRef{
+					Adaptor::EXECUTION_CONTEXT_ARGUMENT})) == nullptr) {
+			return false;
 		}
 		for (uint32_t index = 0; index < count; ++index) {
 			if (((direct.descriptor
@@ -3971,7 +3991,7 @@ public:
 				: index == 1 ? plan->source_opcodes[position].op2_may_be
 				: plan->source_opcodes[position + 1].op1_may_be;
 			if (may_be == UINT32_MAX || (may_be & MAY_BE_UNDEF) != 0) {
-				return nullptr;
+				return false;
 			}
 			if (((direct.descriptor
 					>> (ZEND_NATIVE_FRAMELESS_DIRECT_TMP_SHIFT + index)) & 1)
@@ -3979,10 +3999,10 @@ public:
 					&& (may_be & (MAY_BE_STRING | MAY_BE_ARRAY
 						| MAY_BE_OBJECT | MAY_BE_RESOURCE | MAY_BE_REF))
 						!= 0) {
-				return nullptr;
+				return false;
 			}
 		}
-		return zend_flf_handlers[handler];
+		return true;
 	}
 	bool speculation_checked_ = false;
 	uint16_t speculated_result_types(IRInstRef instruction) {
@@ -5424,6 +5444,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				 * caller-saved registers, align, call, restore. */
 				auto preserving_call = [&](zend_native_runtime_helper_id helper,
 						bool with_frame) {
+					this->stack.generated_call = true;
 					static constexpr FeRegGP saved[] = {
 						FE_AX, FE_CX, FE_DX, FE_SI, FE_DI,
 						FE_R8, FE_R9, FE_R10, FE_R11};
@@ -9661,12 +9682,12 @@ bool ZendCompilerX64::compile_inst_impl(
 		tpde::x64::CCAssignerSysV assigner{false};
 		CallBuilder builder{*this, assigner};
 		zend_tpde_frameless_direct frameless_direct{};
-		const void *frameless_handler =
+		const bool frameless_inline =
 			helper == ZEND_NATIVE_HELPER_CALL_FRAMELESS_INTERNAL
-				&& frame_argument == nullptr
-				&& zend_tpde_frameless_direct_at(mir, 0, &frameless_direct)
-			? frameless_inline_handler(operation, frameless_direct)
-			: nullptr;
+			&& frame_argument == nullptr
+			&& zend_tpde_frameless_direct_at(mir, 0, &frameless_direct)
+			&& frameless_inline_allowed(operation, frameless_direct);
+		std::optional<ScratchReg> frameless_status;
 		zend_tpde_concat_assign_direct concat_assign_direct{};
 		zend_tpde_concat_direct concat_direct{};
 		zend_tpde_dim_direct dim_direct{};
@@ -9683,7 +9704,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					static_cast<int32_t>(result_offset)),
 				IS_UNDEF);
 		}
-		if (frameless_handler != nullptr) {
+		if (frameless_inline) {
 			/* The handler takes no frame. */
 			auto frame_use = val_ref(node.operands.back());
 			(void) frame_use;
@@ -9766,14 +9787,19 @@ bool ZendCompilerX64::compile_inst_impl(
 					operation.op1, operation.op1_unused_payload), 8,
 				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 		};
-		if (frameless_handler != nullptr) {
-			/* zend_native_call_frameless_*(): the opline for warnings, a
-			 * null result, then the handler on the result and each
-			 * argument's (dereferenced) address. */
+		if (frameless_inline) {
+			/*
+			 * zend_native_call_frameless_*(): the opline for warnings, a
+			 * null result, then the handler from the context's table on the
+			 * result and each argument's (dereferenced) address.
+			 */
 			const uint64_t descriptor = frameless_direct.descriptor;
 			const uint32_t count =
 				operation.source_opcode - ZEND_FRAMELESS_ICALL_0;
+			const uint32_t handler = static_cast<uint32_t>(descriptor & 0xffff);
 			const AsmReg frame_reg = canonical_frame_register();
+			const AsmReg context_reg = canonical_value_register(
+				IRValueRef{Adaptor::EXECUTION_CONTEXT_ARGUMENT});
 			const uint32_t result_offset =
 				static_cast<uint32_t>(frameless_direct.slots);
 			{
@@ -9781,10 +9807,6 @@ bool ZendCompilerX64::compile_inst_impl(
 				const AsmReg opline_reg = opline.alloc_gp();
 				const uint64_t opline_offset =
 					uint64_t{operation.source_position_id} * sizeof(zend_op);
-				if (opline_offset > INT32_MAX
-						|| result_offset > INT32_MAX - sizeof(zval)) {
-					return false;
-				}
 				ASM(MOV64rm, opline_reg, FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(offsetof(zend_execute_data, func))));
 				ASM(MOV64rm, opline_reg, FE_MEM(opline_reg, 0, FE_NOREG,
@@ -9854,9 +9876,28 @@ bool ZendCompilerX64::compile_inst_impl(
 				address_arg(offsets[index], literal,
 					!literal && (may_be & MAY_BE_REF) != 0);
 			}
-			builder.call(ValuePart{static_cast<uint64_t>(
-				reinterpret_cast<uintptr_t>(frameless_handler)), 8,
-				tpde::x64::PlatformConfig::GP_BANK});
+			/* After the arguments, which hold the argument registers. */
+			ScratchReg target{this};
+			const AsmReg target_reg = target.alloc_gp();
+			ASM(MOV64rm, target_reg, FE_MEM(context_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(
+					zend_native_execution_context, frameless_handlers))));
+			ASM(MOV64rm, target_reg, FE_MEM(target_reg, 0, FE_NOREG,
+				static_cast<int32_t>(handler * sizeof(void *))));
+			ValuePart target_part{tpde::x64::PlatformConfig::GP_BANK, 8};
+			target_part.set_value(this, std::move(target));
+			builder.call(std::move(target_part));
+			/* The handler returns nothing: an exception is the status.
+			 * The context stays in its callee-saved register. */
+			frameless_status.emplace(this);
+			const AsmReg status_reg = frameless_status->alloc_gp();
+			ASM(MOV64rm, status_reg, FE_MEM(context_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(
+					zend_native_execution_context, exception))));
+			ASM(CMP64mi, FE_MEM(status_reg, 0, FE_NOREG, 0), 0);
+			generate_raw_set(Jump::jne, status_reg);
+			static_assert(ZEND_NATIVE_RETURNED == 0
+				&& ZEND_NATIVE_EXCEPTION == 1);
 		} else if (array_address) {
 			for (const ValueAddress *operand :
 					{&address_op1, &address_op2, &address_result}) {
@@ -10099,17 +10140,8 @@ bool ZendCompilerX64::compile_inst_impl(
 			builder.call(runtime_symbol(helper));
 		}
 		ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
-		if (frameless_handler != nullptr) {
-			/* The handler returns nothing: an exception is the status. */
-			ScratchReg exception{this};
-			const AsmReg exception_reg = exception.alloc_gp();
-			ASM(MOV64ri, exception_reg, static_cast<int64_t>(
-				reinterpret_cast<uintptr_t>(&EG(exception))));
-			ASM(CMP64mi, FE_MEM(exception_reg, 0, FE_NOREG, 0), 0);
-			generate_raw_set(Jump::jne, exception_reg);
-			static_assert(ZEND_NATIVE_RETURNED == 0
-				&& ZEND_NATIVE_EXCEPTION == 1);
-			status.set_value(this, std::move(exception));
+		if (frameless_inline) {
+			status.set_value(this, std::move(*frameless_status));
 		} else {
 			builder.add_ret(status, tpde::CCAssignment{});
 		}
@@ -16769,8 +16801,8 @@ bool ZendCompilerX64::compile_inst_impl(
 	 * global's bucket offset in EG(symbol_table); while that bucket still
 	 * holds the name and a reference, the CV takes another reference to
 	 * it. Anything else, including a CV that holds a counted value, runs
-	 * the helper, which also refreshes the cached offset. The code is
-	 * process-local, so a non-ZTS build addresses EG(symbol_table) directly.
+	 * the helper, which also refreshes the cached offset. A non-ZTS build
+	 * reads EG(symbol_table)'s address from the execution context.
 	 */
 	auto bind_global_inline = [&]() {
 #ifdef ZTS
@@ -16796,10 +16828,16 @@ bool ZendCompilerX64::compile_inst_impl(
 		const uint64_t local_offset64 =
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
 				* sizeof(zval);
-		if (!frame_operands || local_offset64 > INT32_MAX - sizeof(zval)) {
+		/* Images outlive the process (the OPcache file cache): the symbol
+		 * table comes from the context. */
+		if (!frame_operands || local_offset64 > INT32_MAX - sizeof(zval)
+				|| val_assignment(adaptor->val_local_idx(IRValueRef{
+					Adaptor::EXECUTION_CONTEXT_ARGUMENT})) == nullptr) {
 			return execute_value_operation();
 		}
 		const int32_t local_offset = static_cast<int32_t>(local_offset64);
+		const AsmReg symbol_context_reg = canonical_value_register(
+			IRValueRef{Adaptor::EXECUTION_CONTEXT_ARGUMENT});
 		const auto spilled = spill_before_branch(true);
 		auto slow = text_writer.label_create();
 		auto done = text_writer.label_create();
@@ -16820,8 +16858,9 @@ bool ZendCompilerX64::compile_inst_impl(
 			ASM(MOV64rm, offset_reg, FE_MEM(offset_reg, 0, FE_NOREG,
 				static_cast<int32_t>(operation.extended_value)));
 			ASM(SUB64ri, offset_reg, 1);
-			ASM(MOV64ri, table_reg, static_cast<int64_t>(
-				reinterpret_cast<uintptr_t>(&EG(symbol_table))));
+			ASM(MOV64rm, table_reg, FE_MEM(symbol_context_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(
+					zend_native_execution_context, symbol_table))));
 			ASM(MOV32rm, bucket_reg, FE_MEM(table_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(HashTable, nNumUsed))));
 			ASM(SHL64ri, bucket_reg, 5);
@@ -23573,22 +23612,327 @@ bool ZendCompilerX64::compile_inst_impl(
 							ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL_SET_INTEGER_ARGUMENT));
 					}
 				}
-				tpde::x64::CCAssignerSysV assigner{false};
-				CallBuilder builder{*this, assigner};
-				builder.add_arg(CallArg{
-					node.operands[frame_base + 1 + argument_count]});
-				builder.add_arg(image_symbol_value(
-					ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL,
-					call.call_site->target_id, &assigner), tpde::CCAssignment{});
-				builder.add_arg(image_symbol_value(
-					ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
-					call.id, &assigner), tpde::CCAssignment{});
-				builder.call(runtime_symbol(plain_internal
-					? ZEND_NATIVE_HELPER_INTERNAL_CALL_DO_PLAIN
-					: ZEND_NATIVE_HELPER_INTERNAL_CALL_FINISH_SOURCE));
 				ValuePart status{
 					tpde::x64::PlatformConfig::GP_BANK, 4};
-				builder.add_ret(status, tpde::CCAssignment{});
+				const uint64_t do_opline_offset = plain_internal
+					? uint64_t{internal_descriptor->do_source_position}
+						* sizeof(zend_op)
+					: 0;
+				const bool unused_result =
+					internal_descriptor->result_operand.kind
+						== ZEND_MIR_SOURCE_OPERAND_UNUSED;
+				const uint64_t do_result_offset =
+					plain_internal && !unused_result
+					? (uint64_t{ZEND_CALL_FRAME_SLOT}
+						+ adaptor->plan()->source_frame_variable_count
+						+ internal_descriptor->result_operand.index)
+						* sizeof(zval)
+					: 0;
+				const tpde::SymRef do_descriptor_slot = image_symbol_slot(
+					ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
+					call.id);
+				/*
+				 * The Do of a plain site inline, as
+				 * zend_native_internal_call_do_plain() does with no observer
+				 * and no zend_execute_internal: the handler runs on the
+				 * pushed frame; a quiet return with uncounted arguments
+				 * pops it here, anything else finishes in
+				 * zend_native_internal_call_do_plain_finish().
+				 */
+				const bool do_context_held = val_assignment(
+						adaptor->val_local_idx(IRValueRef{
+							Adaptor::EXECUTION_CONTEXT_ARGUMENT})) != nullptr;
+				/* Images outlive the process (the OPcache file cache): the
+				 * code reaches globals and the handler through the context
+				 * and the call cell only. Observers and zend_execute_internal
+				 * are part of the system id. */
+				const bool inline_do = plain_internal && do_context_held
+					&& !ZEND_OBSERVER_ENABLED
+					&& zend_execute_internal == nullptr
+					&& do_descriptor_slot.valid()
+					&& image_symbol_slot(
+						ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL,
+						call.call_site->target_id).valid()
+					&& do_opline_offset <= INT32_MAX
+					&& do_result_offset <= INT32_MAX - sizeof(zval)
+					&& internal_descriptor->argument_count <= 8
+					&& runtime_symbol(
+						ZEND_NATIVE_HELPER_INTERNAL_CALL_DO_PLAIN_FINISH)
+						.valid();
+				if (inline_do) {
+					{
+						auto frame_use = val_ref(
+							node.operands[frame_base + 1 + argument_count]);
+						(void) frame_use;
+					}
+					const AsmReg frame_reg = canonical_frame_register();
+					const int32_t temporary_slot = unused_result
+						? allocate_stack_slot(sizeof(zval)) : 0;
+					const tpde::SymRef do_cell_slot = image_symbol_slot(
+						ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL,
+						call.call_site->target_id);
+					ScratchReg status_scratch{this};
+					ScratchReg callee{this};
+					ScratchReg work{this};
+					ScratchReg return_value{this};
+					const AsmReg status_reg = status_scratch.alloc_gp();
+					const AsmReg callee_reg = callee.alloc_gp();
+					const AsmReg work_reg = work.alloc_gp();
+					const AsmReg return_value_reg = return_value.alloc_gp();
+					auto general = text_writer.label_create();
+					auto finish = text_writer.label_create();
+					auto finished = text_writer.label_create();
+					const AsmReg context_reg = canonical_value_register(
+						IRValueRef{Adaptor::EXECUTION_CONTEXT_ARGUMENT});
+					auto context_global = [&](AsmReg target, size_t field) {
+						ASM(MOV64rm, target, FE_MEM(context_reg, 0, FE_NOREG,
+							static_cast<int32_t>(field)));
+					};
+					/* A pending exception (a send may leave one) takes the
+					 * helper, which finishes the call as the VM does. */
+					context_global(work_reg, offsetof(
+						zend_native_execution_context, exception));
+					ASM(CMP64mi, FE_MEM(work_reg, 0, FE_NOREG, 0), 0);
+					generate_raw_jump(Jump::jne, general);
+					ASM(MOV64rm, callee_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zend_execute_data, call))));
+					ASM(MOV64rm, work_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zend_execute_data, func))));
+					ASM(MOV64rm, work_reg, FE_MEM(work_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zend_op_array, opcodes))));
+					if (do_opline_offset != 0) {
+						ASM(ADD64ri, work_reg,
+							static_cast<int32_t>(do_opline_offset));
+					}
+					ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zend_execute_data, opline))),
+						work_reg);
+					ASM(MOV64rm, work_reg, FE_MEM(callee_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(
+							zend_execute_data, prev_execute_data))));
+					ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zend_execute_data, call))),
+						work_reg);
+					ASM(LEA64rm, work_reg, FE_MEM(frame_reg, 0, FE_NOREG, 0));
+					ASM(MOV64mr, FE_MEM(callee_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(
+							zend_execute_data, prev_execute_data))),
+						work_reg);
+					if (unused_result) {
+						ASM(LEA64rm, return_value_reg, FE_MEM(FE_BP, 0,
+							FE_NOREG, temporary_slot));
+					} else {
+						ASM(LEA64rm, return_value_reg, FE_MEM(frame_reg, 0,
+							FE_NOREG, static_cast<int32_t>(do_result_offset)));
+					}
+					ASM(MOV32mi, FE_MEM(return_value_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zval, u1.type_info))), IS_NULL);
+					context_global(work_reg, offsetof(
+						zend_native_execution_context, current_execute_data));
+					ASM(MOV64mr, FE_MEM(work_reg, 0, FE_NOREG, 0),
+						callee_reg);
+					/* The handler, with every live caller-saved register
+					 * kept: the value state stays as it is. */
+					emit_preserving_call(register_file.used,
+						ZEND_NATIVE_HELPER_COUNT,
+						[&] {
+							/* Either source may sit in the other's
+							 * argument register. */
+							const AsmReg di{AsmReg::DI};
+							const AsmReg si{AsmReg::SI};
+							if (return_value_reg != di) {
+								ASM(MOV64rr, FE_DI, callee_reg);
+								ASM(MOV64rr, FE_SI, return_value_reg);
+							} else if (callee_reg != si) {
+								ASM(MOV64rr, FE_SI, return_value_reg);
+								ASM(MOV64rr, FE_DI, callee_reg);
+							} else {
+								ASM(XCHG64rr, FE_DI, FE_SI);
+							}
+							/* The bound function's handler, through the
+							 * cell; the sources are read already. */
+							text_writer.ensure_space(16);
+							ASM(MOV64rm, FE_AX,
+								FE_MEM(FE_IP, 0, FE_NOREG, -1));
+							reloc_text(do_cell_slot,
+								tpde::elf::R_X86_64_PC32,
+								text_writer.offset() - 4, -4);
+							ASM(MOV64rm, FE_AX, FE_MEM(FE_AX, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_native_internal_call_cell,
+									function))));
+							ASM(MOV64rm, FE_AX, FE_MEM(FE_AX, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(
+									zend_internal_function, handler))));
+						},
+						[] {}, nullptr, true);
+					context_global(work_reg, offsetof(
+						zend_native_execution_context, vm_interrupt));
+					ASM(CMP8mi, FE_MEM(work_reg, 0, FE_NOREG, 0), 0);
+					generate_raw_jump(Jump::jne, finish);
+					context_global(work_reg, offsetof(
+						zend_native_execution_context, exception));
+					ASM(CMP64mi, FE_MEM(work_reg, 0, FE_NOREG, 0), 0);
+					generate_raw_jump(Jump::jne, finish);
+					ASM(CMP32mi, FE_MEM(callee_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_execute_data, This)
+							+ offsetof(zval, u2.num_args))),
+						static_cast<int32_t>(
+							internal_descriptor->argument_count));
+					generate_raw_jump(Jump::jne, finish);
+					/* zend_vm_stack_free_args(): a counted argument this
+					 * release would destroy takes the finish; the others
+					 * only lose the frame's reference (no GC root check,
+					 * as zval_ptr_dtor_nogc()). */
+					auto argument_offset = [&](uint32_t index, size_t field) {
+						return static_cast<int32_t>(
+							(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval)
+							+ field);
+					};
+					for (uint32_t index = 0;
+							index < internal_descriptor->argument_count;
+							++index) {
+						auto uncounted = text_writer.label_create();
+						ASM(TEST8mi, FE_MEM(callee_reg, 0, FE_NOREG,
+							argument_offset(index,
+								offsetof(zval, u1.v.type_flags))),
+							IS_TYPE_REFCOUNTED);
+						generate_raw_jump(Jump::je, uncounted);
+						ASM(MOV64rm, work_reg, FE_MEM(callee_reg, 0, FE_NOREG,
+							argument_offset(index, 0)));
+						ASM(CMP32mi, FE_MEM(work_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zend_refcounted_h, refcount))), 1);
+						generate_raw_jump(Jump::je, finish);
+						label_place(uncounted);
+					}
+					ASM(TEST32mi, FE_MEM(callee_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_execute_data, This)
+							+ offsetof(zval, u1.type_info))),
+						ZEND_CALL_ALLOCATED);
+					generate_raw_jump(Jump::jne, finish);
+					if (unused_result) {
+						ASM(TEST8mi, FE_MEM(FE_BP, 0, FE_NOREG,
+							temporary_slot + static_cast<int32_t>(
+								offsetof(zval, u1.v.type_flags))),
+							IS_TYPE_REFCOUNTED);
+						generate_raw_jump(Jump::jne, finish);
+					}
+					for (uint32_t index = 0;
+							index < internal_descriptor->argument_count;
+							++index) {
+						auto uncounted = text_writer.label_create();
+						ASM(TEST8mi, FE_MEM(callee_reg, 0, FE_NOREG,
+							argument_offset(index,
+								offsetof(zval, u1.v.type_flags))),
+							IS_TYPE_REFCOUNTED);
+						generate_raw_jump(Jump::je, uncounted);
+						ASM(MOV64rm, work_reg, FE_MEM(callee_reg, 0, FE_NOREG,
+							argument_offset(index, 0)));
+						ASM(SUB32mi, FE_MEM(work_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zend_refcounted_h, refcount))), 1);
+						label_place(uncounted);
+					}
+					/* EG(current_execute_data) and the VM stack top return
+					 * to the caller. */
+					context_global(work_reg, offsetof(
+						zend_native_execution_context, current_execute_data));
+					ASM(LEA64rm, status_reg,
+						FE_MEM(frame_reg, 0, FE_NOREG, 0));
+					ASM(MOV64mr, FE_MEM(work_reg, 0, FE_NOREG, 0),
+						status_reg);
+					context_global(work_reg, offsetof(
+						zend_native_execution_context, vm_stack_top));
+					ASM(MOV64mr, FE_MEM(work_reg, 0, FE_NOREG, 0),
+						callee_reg);
+					ASM(XOR32rr, status_reg, status_reg);
+					cold_begin();
+					const uint64_t live = register_file.used
+						& ~(uint64_t{1} << status_reg.id());
+					label_place(finish);
+					emit_preserving_call(live,
+						ZEND_NATIVE_HELPER_INTERNAL_CALL_DO_PLAIN_FINISH,
+						[&] {
+							ASM(PUSHr, callee_reg);
+							ASM(PUSHr, return_value_reg);
+							ASM(POPr, FE_DX);
+							ASM(POPr, FE_SI);
+							text_writer.ensure_space(16);
+							ASM(MOV64rm, FE_CX,
+								FE_MEM(FE_IP, 0, FE_NOREG, -1));
+							reloc_text(do_descriptor_slot,
+								tpde::elf::R_X86_64_PC32,
+								text_writer.offset() - 4, -4);
+							ASM(LEA64rm, FE_DI,
+								FE_MEM(frame_reg, 0, FE_NOREG, 0));
+						},
+						[&] { ASM(MOV32rr, status_reg, FE_AX); });
+					generate_raw_jump(Jump::jmp, finished);
+					label_place(general);
+					emit_preserving_call(live,
+						ZEND_NATIVE_HELPER_INTERNAL_CALL_DO_PLAIN,
+						[&] {
+							text_writer.ensure_space(32);
+							ASM(MOV64rm, FE_SI,
+								FE_MEM(FE_IP, 0, FE_NOREG, -1));
+							reloc_text(do_cell_slot,
+								tpde::elf::R_X86_64_PC32,
+								text_writer.offset() - 4, -4);
+							ASM(MOV64rm, FE_DX,
+								FE_MEM(FE_IP, 0, FE_NOREG, -1));
+							reloc_text(do_descriptor_slot,
+								tpde::elf::R_X86_64_PC32,
+								text_writer.offset() - 4, -4);
+							ASM(LEA64rm, FE_DI,
+								FE_MEM(frame_reg, 0, FE_NOREG, 0));
+						},
+						[&] { ASM(MOV32rr, status_reg, FE_AX); });
+					generate_raw_jump(Jump::jmp, finished);
+					cold_end();
+					label_place(finished);
+					callee.reset();
+					work.reset();
+					return_value.reset();
+					/* Both paths kept every value in its register; leave
+					 * the caller-saved ones free, as after a call, so that
+					 * the status tail's return path spills nothing the
+					 * continuation would then miss. */
+					{
+						const uint64_t callee_saved = cur_cc_assigner()
+							->get_ccinfo().callee_saved_regs;
+						const uint64_t evict = register_file.used
+							& ~callee_saved;
+						for (auto reg : tpde::util::BitSetIterator<>{evict}) {
+							if (!register_file.is_fixed(AsmReg{reg})) {
+								evict_reg(AsmReg{reg});
+							}
+						}
+					}
+					status.set_value(this, std::move(status_scratch));
+				} else {
+					tpde::x64::CCAssignerSysV assigner{false};
+					CallBuilder builder{*this, assigner};
+					builder.add_arg(CallArg{
+						node.operands[frame_base + 1 + argument_count]});
+					builder.add_arg(image_symbol_value(
+						ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL,
+						call.call_site->target_id, &assigner),
+						tpde::CCAssignment{});
+					builder.add_arg(image_symbol_value(
+						ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
+						call.id, &assigner), tpde::CCAssignment{});
+					builder.call(runtime_symbol(plain_internal
+						? ZEND_NATIVE_HELPER_INTERNAL_CALL_DO_PLAIN
+						: ZEND_NATIVE_HELPER_INTERNAL_CALL_FINISH_SOURCE));
+					builder.add_ret(status, tpde::CCAssignment{});
+				}
 				emit_status_tail(std::move(status),
 					call.exception_block_id);
 				if (node.has_result

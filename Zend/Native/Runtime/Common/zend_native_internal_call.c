@@ -2382,6 +2382,38 @@ zend_native_status zend_native_internal_call_do_plain(
 	return status;
 }
 
+zend_native_status zend_native_internal_call_do_plain_finish(
+	zend_execute_data *caller, zend_execute_data *call, zval *return_value,
+	const zend_native_direct_internal_call_descriptor *descriptor)
+{
+	zend_native_status status;
+
+	if (UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+		zend_fcall_interrupt(call);
+	}
+	EG(current_execute_data) = caller;
+	zend_vm_stack_free_args(call);
+	zend_vm_stack_free_call_frame(call);
+	/* Argument cleanup may invoke user destructors. */
+	status = EG(exception) == NULL
+		? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+	if (status != ZEND_NATIVE_RETURNED && !Z_ISUNDEF_P(return_value)) {
+		zval_ptr_dtor(return_value);
+		ZVAL_UNDEF(return_value);
+	}
+	if (status == ZEND_NATIVE_EXCEPTION) {
+		status = zend_native_prepare_finally_exception(
+			caller, descriptor->do_source_position) == SUCCESS
+			? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
+	}
+	if (descriptor->result_operand.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+			&& !Z_ISUNDEF_P(return_value)) {
+		zval_ptr_dtor(return_value);
+		ZVAL_UNDEF(return_value);
+	}
+	return status;
+}
+
 uint64_t zend_native_call_read_source_scalar(
 	zend_execute_data *caller,
 	uint64_t result_operand,

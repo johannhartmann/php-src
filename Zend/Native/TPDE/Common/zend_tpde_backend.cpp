@@ -9892,6 +9892,8 @@ bool initialize_plan(
 					require_runtime_helper(
 						plan, ZEND_NATIVE_HELPER_INTERNAL_CALL_DO_PLAIN);
 					require_runtime_helper(plan,
+						ZEND_NATIVE_HELPER_INTERNAL_CALL_DO_PLAIN_FINISH);
+					require_runtime_helper(plan,
 						ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL_SET_INTEGER_ARGUMENT);
 					require_runtime_helper(plan,
 						ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL_SET_DOUBLE_ARGUMENT);
@@ -10156,6 +10158,7 @@ bool source_opline_decoding_helper(zend_native_runtime_helper_id helper) {
 		case ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL_SET_SOURCE_ARGUMENT:
 		case ZEND_NATIVE_HELPER_INTERNAL_CALL_FINISH_SOURCE:
 		case ZEND_NATIVE_HELPER_INTERNAL_CALL_DO_PLAIN:
+		case ZEND_NATIVE_HELPER_INTERNAL_CALL_DO_PLAIN_FINISH:
 		case ZEND_NATIVE_HELPER_CALL_READ_SOURCE_SCALAR:
 		case ZEND_NATIVE_HELPER_USER_CALL_FINISH_SOURCE:
 			return true;
