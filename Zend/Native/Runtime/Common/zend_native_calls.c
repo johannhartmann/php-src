@@ -9225,6 +9225,12 @@ static zend_native_status zend_native_call_check_undef_args_impl(
 		? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
 }
 
+zend_native_status zend_native_call_check_undef_frame(
+	zend_execute_data *caller)
+{
+	return zend_native_call_check_undef_args_impl(caller);
+}
+
 zend_native_status zend_native_call_check_func_arg(
 	zend_execute_data *caller,
 	uint64_t encoded_op1,

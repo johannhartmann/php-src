@@ -1081,6 +1081,10 @@ zend_native_status zend_native_call_check_undef_args(
 	uint32_t extended_value,
 	uint32_t source_opcode,
 	uint32_t source_position);
+/* ZEND_CHECK_UNDEF_ARGS of the caller's pending call, whose frame may hold
+ * undefined arguments: generated code tests the flag first. */
+zend_native_status zend_native_call_check_undef_frame(
+	zend_execute_data *caller);
 zend_native_status zend_native_internal_call_invoke_finish(
 	zend_execute_data *caller,
 	const zend_native_internal_call_cell *cell,
