@@ -2307,8 +2307,14 @@ struct zend_tpde_plan {
 	bool deopt_landings;
 	/* Tier 2 call counting (zend_native_component_member). */
 	zend_native_entry_cell *call_count_cell;
+	zend_native_entry_cell *speculation_cell;
+	const uint16_t *deopt_landing_types;
 	/* Tier-2 inlining host metadata (zend_native_inline.c), or NULL. */
 	const zend_native_inline_host *inline_host;
+	/* Tier-2 argument guards (zend_native_component_member). */
+	uint8_t tier2_arg_guards[ZEND_NATIVE_TIER2_ARG_GUARDS];
+	const void *tier2_fallback_entry;
+	const uint16_t *tier2_result_types;
 	/* The resume IDs are deoptimization stress targets. */
 	bool deopt_stress;
 	uint32_t entry_variant_long_mask;

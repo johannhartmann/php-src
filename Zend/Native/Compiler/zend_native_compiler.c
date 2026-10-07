@@ -119,6 +119,17 @@ typedef struct _zend_native_compiled_function {
 	/* A tier-2 copy whose call sites carry their callees' bodies
 	 * (zend_native_inline.c), or NULL. */
 	zend_native_inline_host *inline_host;
+	/* A tier-2 copy whose parameters type feedback declared: their
+	 * guards and the function's tier-1 Zend entry for other arguments. */
+	uint8_t tier2_arg_guards[ZEND_NATIVE_TIER2_ARG_GUARDS];
+	const void *tier2_fallback_entry;
+	/* A tier-2 copy speculating on result type feedback: per opline the
+	 * Z_TYPE() bits its result is assumed to have (0: none); the copy's
+	 * failed checks deoptimize into its generic copy. */
+	uint16_t *tier2_result_types;
+	/* A copy with tier2_result_types: the function's entry cell, which
+	 * counts the copy's deoptimizations. */
+	zend_native_entry_cell *speculation_cell;
 } zend_native_compiled_function;
 
 struct _zend_native_compiler {
@@ -863,10 +874,16 @@ static void zend_native_compiler_release_function_transients(
 	zend_native_compiled_function *function);
 
 /* Tier 2 (ADR 0025 section 4): a published named user function that is
- * no generator counts its calls when a threshold is configured. */
+ * no generator counts its calls when a threshold is configured; its
+ * integer variant, which its entry calls, counts in the same cell. */
 static zend_native_entry_cell *zend_native_compiler_call_count_cell(
+	const zend_native_compiler *compiler,
 	zend_native_compiled_function *function)
 {
+	if (function != NULL && function->variant_of_plus_one != 0
+			&& function->variant_of_plus_one <= compiler->function_count) {
+		function = compiler->functions[function->variant_of_plus_one - 1];
+	}
 	if (zend_native_tier2_threshold() == 0
 			|| zend_native_compiler_is_hidden(function)
 			|| function->op_array == NULL
@@ -875,6 +892,23 @@ static zend_native_entry_cell *zend_native_compiler_call_count_cell(
 		return NULL;
 	}
 	return &function->entry_cell;
+}
+
+/* A tier-2 copy, or the integer variant or deoptimization generic copy of
+ * one: its calls enter the other copies of its batch. */
+static bool zend_native_compiler_is_tier2_code(
+	const zend_native_compiler *compiler,
+	const zend_native_compiled_function *function)
+{
+	uint32_t owner_plus_one = function->variant_of_plus_one != 0
+		? function->variant_of_plus_one
+		: function->deopt_generic_of_plus_one;
+
+	if (function->tier2_of_plus_one != 0) {
+		return true;
+	}
+	return owner_plus_one != 0 && owner_plus_one <= compiler->function_count
+		&& compiler->functions[owner_plus_one - 1]->tier2_of_plus_one != 0;
 }
 
 static void zend_native_compiler_record_publication(
@@ -1309,6 +1343,11 @@ static void zend_native_compiler_free_variant_source(
 	const zend_native_compiler *compiler,
 	zend_native_compiled_function *function)
 {
+	/* The cell's feedback, which its code recorded (persistent memory). */
+	if (function->entry_cell.tier2_result_feedback != NULL) {
+		pefree(function->entry_cell.tier2_result_feedback, 1);
+		function->entry_cell.tier2_result_feedback = NULL;
+	}
 	if (!zend_native_compiler_is_hidden(function)) {
 		return;
 	}
@@ -1328,8 +1367,10 @@ static void zend_native_compiler_free_variant_source(
 		function->inline_host = NULL;
 	}
 	zend_native_compiler_free(compiler, function->variant_arg_info);
+	zend_native_compiler_free(compiler, function->tier2_result_types);
 	zend_native_compiler_free(compiler, function->op_array);
 	function->variant_arg_info = NULL;
+	function->tier2_result_types = NULL;
 }
 
 static bool zend_native_compiler_source_position_dominates(
@@ -1553,6 +1594,12 @@ static zend_result zend_native_compiler_restore_stable_dynamic_read_ssa(
 	return zend_ssa_escape_analysis(optimizer->script, op_array, ssa);
 }
 
+static void zend_native_compiler_narrow_speculated_results(
+	zend_native_compiler *compiler, zend_native_compiled_function *function);
+static const uint16_t *zend_native_compiler_deopt_landing_types(
+	const zend_native_compiler *compiler,
+	const zend_native_compiled_function *function);
+
 static bool zend_native_compiler_build_ssa(
 	zend_native_compiler *compiler,
 	zend_native_compiled_function *function,
@@ -1628,6 +1675,7 @@ static bool zend_native_compiler_build_ssa(
 		}
 	}
 	function->ssa_arena = optimizer.arena;
+	zend_native_compiler_narrow_speculated_results(compiler, function);
 	return true;
 }
 
@@ -3415,9 +3463,11 @@ static bool zend_native_compiler_prepare_component_member(
 		native_callee = zend_native_compiler_find_function(compiler, callee);
 		if (native_callee != NULL
 				&& native_callee->tier2_batch_copy_plus_one != 0
-				&& function->tier2_of_plus_one != 0) {
-			native_callee = compiler->functions[
+				&& zend_native_compiler_is_tier2_code(compiler, function)) {
+			zend_native_compiled_function *copy = compiler->functions[
 				native_callee->tier2_batch_copy_plus_one - 1];
+
+			native_callee = copy;
 		}
 		if (native_callee == NULL
 				|| native_callee->state == ZEND_NATIVE_CODEUNIT_FAILED) {
@@ -3479,8 +3529,15 @@ static bool zend_native_compiler_prepare_component_member(
 	member->backend.source_op_array = function->op_array;
 	member->backend.source_ssa = &function->ssa;
 	member->backend.call_count_cell =
-		zend_native_compiler_call_count_cell(function);
+		zend_native_compiler_call_count_cell(compiler, function);
 	member->backend.inline_host = function->inline_host;
+	memcpy(member->backend.tier2_arg_guards, function->tier2_arg_guards,
+		sizeof(function->tier2_arg_guards));
+	member->backend.tier2_fallback_entry = function->tier2_fallback_entry;
+	member->backend.tier2_result_types = function->tier2_result_types;
+	member->backend.speculation_cell = function->speculation_cell;
+	member->backend.deopt_landing_types =
+		zend_native_compiler_deopt_landing_types(compiler, function);
 	return true;
 }
 
@@ -3917,8 +3974,15 @@ static bool zend_native_compiler_compile_native_component(
 		member.source_op_array = function->op_array;
 		member.source_ssa = &function->ssa;
 		member.call_count_cell =
-			zend_native_compiler_call_count_cell(function);
+			zend_native_compiler_call_count_cell(compiler, function);
 		member.inline_host = function->inline_host;
+		memcpy(member.tier2_arg_guards, function->tier2_arg_guards,
+			sizeof(function->tier2_arg_guards));
+		member.tier2_fallback_entry = function->tier2_fallback_entry;
+		member.tier2_result_types = function->tier2_result_types;
+		member.speculation_cell = function->speculation_cell;
+		member.deopt_landing_types =
+			zend_native_compiler_deopt_landing_types(compiler, function);
 		phase_started = zend_hrtime();
 		compile_result = zend_tpde_compile_component_with_runtime(
 				compiler->target, &member, 1, runtime,
@@ -4221,13 +4285,16 @@ static bool zend_native_compiler_compile_pending(
 			variant_mask = zend_native_compiler_is_variant(function)
 					|| function->variant_plus_one != 0
 					|| function->inline_host != NULL
+					|| function->tier2_fallback_entry != NULL
 				? 0
 				: zend_native_compiler_variant_long_mask(compiler, function);
 			if (variant_mask != 0) {
 				(void) zend_native_compiler_add_variant(
 					compiler, function, variant_mask);
 			}
-			if (zend_native_compiler_speculates(compiler, function)) {
+			if (zend_native_compiler_speculates(compiler, function)
+					|| (function->tier2_result_types != NULL
+						&& function->deopt_generic_plus_one == 0)) {
 				(void) zend_native_compiler_add_deopt_generic(
 					compiler, function);
 			}
@@ -4510,6 +4577,362 @@ static void *zend_native_compiler_inline_alloc(void *context, size_t size)
 	return zend_native_compiler_alloc(context, size, false);
 }
 
+/*
+ * Type feedback (ADR 0025 section 4): the required, untyped by-value
+ * parameters whose recorded arguments all had one type are declared with
+ * it in the tier-2 copy, so that inference specializes the copy; its entry
+ * guards them and runs the function's tier-1 code for other arguments.
+ */
+static void zend_native_compiler_tier2_specialize_arguments(
+	zend_native_compiler *compiler,
+	const zend_native_compiled_function *function,
+	zend_native_compiled_function *copy_function, zend_op_array *copy)
+{
+	const zend_op_array *op_array = function->op_array;
+	const uint32_t count = MIN(op_array->required_num_args,
+		ZEND_NATIVE_TIER2_ARG_GUARDS);
+	const uint32_t prefix =
+		(op_array->fn_flags & ZEND_ACC_HAS_RETURN_TYPE) != 0 ? 1 : 0;
+	uint8_t guards[ZEND_NATIVE_TIER2_ARG_GUARDS] = {0};
+	zend_arg_info *arg_info;
+	bool any = false;
+	uint32_t index;
+
+	/* An integer variant's typed calls are faster than checked
+	 * arguments: a function with one keeps it. */
+	if (compiler->target != ZEND_NATIVE_TARGET_LINUX_AMD64
+			|| function->code == NULL || op_array->arg_info == NULL
+			|| function->variant_plus_one != 0
+			|| (op_array->fn_flags
+				& (ZEND_ACC_VARIADIC | ZEND_ACC_GENERATOR)) != 0
+			|| op_array->last < count) {
+		return;
+	}
+	for (index = 0; index < count; index++) {
+		const zend_op *receive = &op_array->opcodes[index];
+		const zend_arg_info *info = &op_array->arg_info[index];
+		const uint16_t seen = function->entry_cell.tier2_arg_types[index];
+
+		if (receive->opcode != ZEND_RECV || receive->op1.num != index + 1
+				|| ZEND_TYPE_IS_SET(info->type)
+				|| ZEND_ARG_SEND_MODE(info) != 0) {
+			continue;
+		}
+		if (seen == (UINT16_C(1) << IS_LONG)) {
+			guards[index] = ZEND_NATIVE_ARG_GUARD_LONG;
+		} else if (seen == (UINT16_C(1) << IS_DOUBLE)) {
+			guards[index] = ZEND_NATIVE_ARG_GUARD_DOUBLE;
+		} else if (seen == ((UINT16_C(1) << IS_LONG)
+				| (UINT16_C(1) << IS_DOUBLE))) {
+			guards[index] = ZEND_NATIVE_ARG_GUARD_NUMBER;
+		} else if (seen != 0 && (seen & ~((UINT16_C(1) << IS_FALSE)
+				| (UINT16_C(1) << IS_TRUE))) == 0) {
+			guards[index] = ZEND_NATIVE_ARG_GUARD_BOOL;
+		} else if (seen == (UINT16_C(1) << IS_STRING)) {
+			guards[index] = ZEND_NATIVE_ARG_GUARD_STRING;
+		} else if (seen == (UINT16_C(1) << IS_ARRAY)) {
+			guards[index] = ZEND_NATIVE_ARG_GUARD_ARRAY;
+		} else if (seen == (UINT16_C(1) << IS_OBJECT)) {
+			guards[index] = ZEND_NATIVE_ARG_GUARD_OBJECT;
+		}
+		any = any || guards[index] != ZEND_NATIVE_ARG_GUARD_NONE;
+	}
+	if (!any) {
+		return;
+	}
+	arg_info = zend_native_compiler_alloc(compiler,
+		(op_array->num_args + prefix) * sizeof(*arg_info), false);
+	memcpy(arg_info, op_array->arg_info - prefix,
+		(op_array->num_args + prefix) * sizeof(*arg_info));
+	for (index = 0; index < count; index++) {
+		zend_type *type = &arg_info[prefix + index].type;
+
+		switch (guards[index]) {
+			case ZEND_NATIVE_ARG_GUARD_LONG:
+				*type = (zend_type) ZEND_TYPE_INIT_CODE(IS_LONG, 0, 0);
+				break;
+			case ZEND_NATIVE_ARG_GUARD_DOUBLE:
+				*type = (zend_type) ZEND_TYPE_INIT_CODE(IS_DOUBLE, 0, 0);
+				break;
+			case ZEND_NATIVE_ARG_GUARD_NUMBER:
+				*type = (zend_type) ZEND_TYPE_INIT_MASK(
+					MAY_BE_LONG | MAY_BE_DOUBLE);
+				break;
+			case ZEND_NATIVE_ARG_GUARD_BOOL:
+				*type = (zend_type) ZEND_TYPE_INIT_CODE(_IS_BOOL, 0, 0);
+				break;
+			case ZEND_NATIVE_ARG_GUARD_STRING:
+				*type = (zend_type) ZEND_TYPE_INIT_CODE(IS_STRING, 0, 0);
+				break;
+			case ZEND_NATIVE_ARG_GUARD_ARRAY:
+				*type = (zend_type) ZEND_TYPE_INIT_CODE(IS_ARRAY, 0, 0);
+				break;
+			case ZEND_NATIVE_ARG_GUARD_OBJECT:
+				*type = (zend_type) ZEND_TYPE_INIT_CODE(IS_OBJECT, 0, 0);
+				break;
+			default:
+				break;
+		}
+	}
+	copy->arg_info = arg_info + prefix;
+	copy->fn_flags |= ZEND_ACC_HAS_TYPE_HINTS;
+	copy_function->variant_arg_info = arg_info;
+	memcpy(copy_function->tier2_arg_guards, guards, sizeof(guards));
+	copy_function->tier2_fallback_entry =
+		(const void *) zend_native_code_frame_entry(function->code);
+}
+
+/*
+ * Result type feedback (ADR 0025 section 4): element and property reads
+ * whose recorded results had one type, or null and one type, are assumed
+ * to produce it; their checks deoptimize into the copy's generic copy.
+ */
+#define ZEND_NATIVE_TIER2_MIN_RESULT_SAMPLES 16
+
+static void zend_native_compiler_tier2_speculate_results(
+	zend_native_compiler *compiler,
+	zend_native_compiled_function *function,
+	zend_native_compiled_function *copy_function)
+{
+	const zend_op_array *op_array = function->op_array;
+	const uint32_t *feedback = function->entry_cell.tier2_result_feedback;
+	uint16_t *types = NULL;
+	uint32_t index;
+
+	if (compiler->target != ZEND_NATIVE_TARGET_LINUX_AMD64
+			|| feedback == NULL || op_array->function_name == NULL
+			|| (op_array->fn_flags & ZEND_ACC_GENERATOR) != 0
+			/* Opt-in: neither WordPress nor the bench.php kernels gain. */
+			|| getenv("ZEND_NATIVE_TIER2_SPECULATE") == NULL
+			|| getenv("ZEND_NATIVE_TIER2_SPECULATE")[0] != '1') {
+		return;
+	}
+	for (index = 0; index < op_array->last; index++) {
+		const uint32_t samples = feedback[index] >> 16;
+		uint16_t seen = (uint16_t) feedback[index];
+		const uint16_t value_types = seen & (uint16_t) ~(UINT16_C(1) << IS_NULL);
+
+		switch (op_array->opcodes[index].opcode) {
+			case ZEND_FETCH_DIM_R:
+			case ZEND_FETCH_DIM_IS:
+				break;
+			default:
+				continue;
+		}
+		if (samples < ZEND_NATIVE_TIER2_MIN_RESULT_SAMPLES || seen == 0
+				|| (seen & ((UINT16_C(1) << IS_UNDEF)
+					| (UINT16_C(1) << IS_REFERENCE)
+					| (UINT16_C(1) << IS_INDIRECT)
+					| (UINT16_C(1) << IS_PTR))) != 0) {
+			continue;
+		}
+		/* One type, null or false|true besides. */
+		if (value_types != 0 && (value_types & (value_types - 1)) != 0
+				&& value_types != ((UINT16_C(1) << IS_FALSE)
+					| (UINT16_C(1) << IS_TRUE))) {
+			continue;
+		}
+		if (types == NULL) {
+			types = zend_native_compiler_alloc(
+				compiler, op_array->last * sizeof(*types), true);
+		}
+		types[index] = seen;
+	}
+	if (types == NULL) {
+		return;
+	}
+	copy_function->tier2_result_types = types;
+	copy_function->speculation_cell = &function->entry_cell;
+	function->entry_cell.tier2_deopts = 0;
+	if (copy_function->tier2_fallback_entry == NULL) {
+		/* A copy retired by its deoptimizations runs the tier-1 code. */
+		copy_function->tier2_fallback_entry =
+			(const void *) zend_native_code_frame_entry(function->code);
+	}
+}
+
+/* The speculated result types whose positions a deoptimization generic
+ * copy needs landings at. */
+static const uint16_t *zend_native_compiler_deopt_landing_types(
+	const zend_native_compiler *compiler,
+	const zend_native_compiled_function *function)
+{
+	if (function->deopt_generic_of_plus_one == 0
+			|| function->deopt_generic_of_plus_one > compiler->function_count) {
+		return NULL;
+	}
+	return compiler->functions[function->deopt_generic_of_plus_one - 1]
+		->tier2_result_types;
+}
+
+/* The MAY_BE_* bits of values with the Z_TYPE() bits of types. */
+static uint32_t zend_native_compiler_may_be_types(uint16_t types)
+{
+	uint32_t may_be = 0;
+
+	if (types & (UINT16_C(1) << IS_NULL)) may_be |= MAY_BE_NULL;
+	if (types & (UINT16_C(1) << IS_FALSE)) may_be |= MAY_BE_FALSE;
+	if (types & (UINT16_C(1) << IS_TRUE)) may_be |= MAY_BE_TRUE;
+	if (types & (UINT16_C(1) << IS_LONG)) may_be |= MAY_BE_LONG;
+	if (types & (UINT16_C(1) << IS_DOUBLE)) may_be |= MAY_BE_DOUBLE;
+	if (types & (UINT16_C(1) << IS_STRING)) {
+		may_be |= MAY_BE_STRING | MAY_BE_RC1 | MAY_BE_RCN;
+	}
+	if (types & (UINT16_C(1) << IS_ARRAY)) {
+		may_be |= MAY_BE_ARRAY | MAY_BE_ARRAY_KEY_ANY | MAY_BE_ARRAY_OF_ANY
+			| MAY_BE_ARRAY_OF_REF | MAY_BE_RC1 | MAY_BE_RCN;
+	}
+	if (types & (UINT16_C(1) << IS_OBJECT)) {
+		may_be |= MAY_BE_OBJECT | MAY_BE_RC1 | MAY_BE_RCN;
+	}
+	if (types & (UINT16_C(1) << IS_RESOURCE)) {
+		may_be |= MAY_BE_RESOURCE | MAY_BE_RC1 | MAY_BE_RCN;
+	}
+	return may_be;
+}
+
+/*
+ * Narrows the inferred types of the speculated results and recomputes the
+ * operations that use them, and the phis, until nothing changes. Every
+ * step computes from sound operand types, so the types stay sound under
+ * the speculation.
+ */
+static void zend_native_compiler_narrow_speculated_results(
+	zend_native_compiler *compiler, zend_native_compiled_function *function)
+{
+	const zend_op_array *op_array = function->op_array;
+	zend_ssa *ssa = &function->ssa;
+	int *worklist;
+	uint8_t *queued;
+	uint32_t pending = 0;
+	uint32_t index;
+
+	if (function->tier2_result_types == NULL || ssa->var_info == NULL
+			|| ssa->ops == NULL || ssa->vars_count == 0) {
+		return;
+	}
+	worklist = safe_emalloc(ssa->vars_count, sizeof(int), 0);
+	queued = ecalloc(ssa->vars_count, 1);
+	for (index = 0; index < op_array->last; index++) {
+		const int result = ssa->ops[index].result_def;
+		uint32_t narrowed;
+
+		if (function->tier2_result_types[index] == 0 || result < 0) {
+			continue;
+		}
+		narrowed = ssa->var_info[result].type
+			& (zend_native_compiler_may_be_types(
+				function->tier2_result_types[index])
+				| ~(uint32_t) (MAY_BE_ANY | MAY_BE_REF | MAY_BE_UNDEF
+					| MAY_BE_ARRAY_KEY_ANY | MAY_BE_ARRAY_OF_ANY
+					| MAY_BE_ARRAY_OF_REF | MAY_BE_RC1 | MAY_BE_RCN
+					| MAY_BE_INDIRECT));
+		if ((narrowed & MAY_BE_ANY) == 0) {
+			function->tier2_result_types[index] = 0;
+			continue;
+		}
+		if ((narrowed & (MAY_BE_STRING | MAY_BE_ARRAY | MAY_BE_OBJECT
+				| MAY_BE_RESOURCE)) == 0) {
+			narrowed &= ~(uint32_t) (MAY_BE_RC1 | MAY_BE_RCN);
+		}
+		ssa->var_info[result].type = narrowed;
+		if (!queued[result]) {
+			queued[result] = 1;
+			worklist[pending++] = result;
+		}
+	}
+	while (pending != 0) {
+		const int variable = worklist[--pending];
+		int use;
+		zend_ssa_phi *phi;
+
+		queued[variable] = 0;
+		for (int next_use = ssa->vars[variable].use_chain; next_use >= 0;
+				next_use = zend_ssa_next_use(ssa->ops, variable, next_use)) {
+			/* An OP_DATA operand is its operation's. */
+			use = op_array->opcodes[next_use].opcode == ZEND_OP_DATA
+					&& next_use > 0
+				? next_use - 1 : next_use;
+			zend_ssa_op *ssa_op = &ssa->ops[use];
+			/* An operation with OP_DATA also defines that opline's. */
+			const zend_ssa_op *data_op = (uint32_t) use + 1 < op_array->last
+					&& op_array->opcodes[use + 1].opcode == ZEND_OP_DATA
+				? &ssa->ops[use + 1] : NULL;
+			const int defs[6] = {
+				ssa_op->result_def, ssa_op->op1_def, ssa_op->op2_def,
+				data_op ? data_op->result_def : -1,
+				data_op ? data_op->op1_def : -1,
+				data_op ? data_op->op2_def : -1};
+			uint32_t before[6];
+			int def;
+
+			for (def = 0; def < 6; def++) {
+				before[def] = defs[def] >= 0
+					? ssa->var_info[defs[def]].type : 0;
+			}
+			/* Recompute from the bottom: Zend's update only widens. */
+			for (def = 0; def < 6; def++) {
+				if (defs[def] >= 0) {
+					ssa->var_info[defs[def]].type = 0;
+				}
+			}
+			zend_update_type_info(op_array, ssa, compiler->script,
+				&op_array->opcodes[use], ssa_op, NULL,
+				ZEND_OPTIMIZER_PASS_6);
+			for (def = 0; def < 6; def++) {
+				if (defs[def] < 0) {
+					continue;
+				}
+				/* A speculated result keeps its assumption. */
+				if (function->tier2_result_types[use] != 0
+						&& defs[def] == ssa_op->result_def) {
+					ssa->var_info[defs[def]].type = before[def];
+					continue;
+				}
+				/* Never widen: the first inference was sound. */
+				ssa->var_info[defs[def]].type &= before[def];
+				if (ssa->var_info[defs[def]].type != before[def]
+						&& !queued[defs[def]]) {
+					queued[defs[def]] = 1;
+					worklist[pending++] = defs[def];
+				}
+			}
+		}
+		for (phi = ssa->vars[variable].phi_use_chain; phi != NULL;
+				phi = zend_ssa_next_use_phi(ssa, variable, phi)) {
+			const int target = phi->ssa_var;
+			uint32_t merged = 0;
+
+			if (phi->pi >= 0) {
+				merged = ssa->var_info[phi->sources[0]].type;
+				if (!phi->has_range_constraint) {
+					merged &= phi->constraint.type.type_mask;
+				}
+			} else {
+				int source;
+
+				for (source = 0; source < ssa->cfg.blocks[phi->block].predecessors_count;
+						source++) {
+					if (phi->sources[source] >= 0) {
+						merged |= ssa->var_info[phi->sources[source]].type;
+					}
+				}
+			}
+			merged &= ssa->var_info[target].type
+				| ~(uint32_t) (MAY_BE_ANY | MAY_BE_REF);
+			if (merged != ssa->var_info[target].type) {
+				ssa->var_info[target].type = merged;
+				if (!queued[target]) {
+					queued[target] = 1;
+					worklist[pending++] = target;
+				}
+			}
+		}
+	}
+	efree(queued);
+	efree(worklist);
+}
+
 static zend_native_compiled_function *zend_native_compiler_add_tier2_copy(
 	zend_native_compiler *compiler,
 	zend_native_compiled_function *function)
@@ -4538,6 +4961,16 @@ static zend_native_compiled_function *zend_native_compiler_add_tier2_copy(
 		compiler, sizeof(*copy_function), true);
 	copy_function->op_array = copy;
 	copy_function->inline_host = inline_host;
+	if (getenv("ZEND_NATIVE_TIER2_FEEDBACK") == NULL
+			|| getenv("ZEND_NATIVE_TIER2_FEEDBACK")[0] != '0') {
+		/* An inlining host's frame and entry are its own. */
+		if (inline_host == NULL) {
+			zend_native_compiler_tier2_specialize_arguments(
+				compiler, function, copy_function, copy);
+			zend_native_compiler_tier2_speculate_results(
+				compiler, function, copy_function);
+		}
+	}
 	zend_native_op_array_identity_capture(
 		&copy_function->op_array_identity, copy);
 	copy_function->registry_index = compiler->function_count;

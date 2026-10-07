@@ -76,7 +76,23 @@ typedef struct _zend_native_entry_cell {
 	 * (zero when not counting), and its tier-2 state. */
 	uint32_t tier2_countdown;
 	uint32_t tier2_state;
+	/* Type feedback of the last ZEND_NATIVE_TIER2_RECORD_CALLS counted
+	 * calls: per parameter, a bit per Z_TYPE() its argument had, and
+	 * ZEND_NATIVE_TIER2_ARG_MISSING when the call omitted it. */
+	uint16_t tier2_arg_types[8];
+	/* Per opline of the function, the result types (low 16 bits, a bit
+	 * per Z_TYPE()) and executions (high 16 bits) its tier-1 code
+	 * recorded in the same window; allocated by the first recorded call. */
+	uint32_t *tier2_result_feedback;
+	/* Deoptimizations of the tier-2 code speculating on that feedback:
+	 * from ZEND_NATIVE_TIER2_DEOPT_LIMIT on, its entry runs the tier-1
+	 * code instead. */
+	uint32_t tier2_deopts;
 } zend_native_entry_cell;
+
+#define ZEND_NATIVE_TIER2_RECORD_CALLS 64
+#define ZEND_NATIVE_TIER2_ARG_MISSING (UINT16_C(1) << 15)
+#define ZEND_NATIVE_TIER2_DEOPT_LIMIT 16
 
 typedef enum _zend_native_tier2_state {
 	ZEND_NATIVE_TIER2_NONE = 0,
@@ -87,12 +103,18 @@ typedef enum _zend_native_tier2_state {
 
 /* Image symbol id of a counted function's own entry cell. */
 #define ZEND_NATIVE_TIER2_COUNT_SYMBOL_ID (UINT32_MAX - 1)
+/* Image symbol id of the entry cell a speculating tier-2 copy counts its
+ * deoptimizations in. */
+#define ZEND_NATIVE_TIER2_SPECULATION_SYMBOL_ID (UINT32_MAX - 2)
 
 uint32_t zend_native_tier2_threshold(void);
 /* The executor's recompilation of a function whose countdown ran out;
  * returns false to queue it for request shutdown instead. */
 extern bool (*zend_native_tier2_recompile_hook)(zend_native_entry_cell *cell);
 void zend_native_tier2_note(zend_native_entry_cell *cell);
+/* Records the argument types of a counted call near its threshold. */
+void zend_native_tier2_record(
+	zend_native_entry_cell *cell, const zend_execute_data *frame);
 uint32_t zend_native_tier2_take_queue(
 	zend_native_entry_cell **cells, uint32_t capacity);
 
@@ -916,6 +938,11 @@ uint64_t zend_native_deopt_stress_reenter(zend_execute_data *execute_data,
  */
 zend_native_status zend_native_deopt_transfer(zend_execute_data *execute_data,
 	uint32_t position, zend_native_frame_entry_t entry);
+/* zend_native_deopt_transfer() for a tier-2 copy speculating on type
+ * feedback, which counts the deoptimization in the function's cell. */
+zend_native_status zend_native_deopt_speculation(
+	zend_execute_data *execute_data, uint32_t position,
+	zend_native_frame_entry_t entry, zend_native_entry_cell *cell);
 /* A counted CV of a frame a fast-call entry leaves, as
  * zend_native_call_fast_leave() releases it, after the entry dropped its
  * reference: freed at zero, else checked as a possible GC root. */

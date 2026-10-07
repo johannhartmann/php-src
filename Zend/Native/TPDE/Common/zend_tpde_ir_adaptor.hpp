@@ -2934,7 +2934,8 @@ public:
 			/* A deoptimization entry keeps the frame's temporaries: the
 			 * frame load reads the context's deopt_resume. */
 			if (plan_->deopt_resume_count != 0
-					|| plan_->inline_host != nullptr) {
+					|| plan_->inline_host != nullptr
+					|| plan_->tier2_fallback_entry != nullptr) {
 				operands_.push_back(IRValueRef{EXECUTION_CONTEXT_ARGUMENT});
 			}
 			add_node(block_instructions, static_cast<uint32_t>(entry), InstNode{

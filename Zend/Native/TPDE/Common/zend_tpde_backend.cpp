@@ -1536,10 +1536,30 @@ bool prepare_image_symbols(
 					ZEND_NATIVE_HELPER_TIER2_NOTE, 0,
 					plan->runtime->abi_version,
 					zend_native_runtime_helper_find(plan->runtime,
-						ZEND_NATIVE_HELPER_TIER2_NOTE)->effects))) {
+						ZEND_NATIVE_HELPER_TIER2_NOTE)->effects)
+				|| zend_native_runtime_helper_find(plan->runtime,
+					ZEND_NATIVE_HELPER_TIER2_RECORD) == nullptr
+				|| !image_add_symbol(image,
+					ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER,
+					ZEND_NATIVE_HELPER_TIER2_RECORD, 0,
+					plan->runtime->abi_version,
+					zend_native_runtime_helper_find(plan->runtime,
+						ZEND_NATIVE_HELPER_TIER2_RECORD)->effects))) {
 		zend_tpde_set_diagnostic(diag,
 			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
 			"unable to create the native image call-count symbols");
+		return false;
+	}
+	if (plan->speculation_cell != nullptr
+			&& !image_add_symbol(image,
+				ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
+				ZEND_NATIVE_TIER2_SPECULATION_SYMBOL_ID,
+				plan->symbol_namespace,
+				NATIVE_IMAGE_ABI_VERSION, 0,
+				plan->speculation_cell)) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"unable to create the native image speculation symbol");
 		return false;
 	}
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
@@ -4644,6 +4664,8 @@ static bool freeze_deopt_resume_targets(
 				& ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD) != 0;
 		if ((plan->deopt_landings
 					? guarded && call_depth == 0
+						&& (plan->deopt_landing_types == nullptr
+							|| plan->deopt_landing_types[position] != 0)
 					: deopt_resume_target(source_op_array, source_ssa,
 						position, call_depth))
 				&& index != UINT32_MAX
@@ -13255,6 +13277,15 @@ static bool freeze_deopt_exits(
 				continue;
 			}
 			zend_tpde_instruction &exit = specialized.instructions[instruction];
+			/* A tier-2 copy speculating on feedback deoptimizes only where
+			 * it speculates; its other operations run their cold paths. */
+			if (specialized.tier2_result_types != nullptr
+					&& (exit.record.source_position_id
+							>= specialized.source_opcode_count
+						|| specialized.tier2_result_types[
+							exit.record.source_position_id] == 0)) {
+				continue;
+			}
 			if (exit.record.opcode
 						!= generic.instructions[instruction].record.opcode
 					|| exit.record.source_position_id
@@ -13269,7 +13300,10 @@ static bool freeze_deopt_exits(
 		if (!exits) {
 			continue;
 		}
-		require_runtime_helper(&specialized, ZEND_NATIVE_HELPER_DEOPT_TRANSFER);
+		require_runtime_helper(&specialized,
+			specialized.speculation_cell != nullptr
+				? ZEND_NATIVE_HELPER_DEOPT_SPECULATION
+				: ZEND_NATIVE_HELPER_DEOPT_TRANSFER);
 		destroy_machine_cfg(&specialized.entry_machine_cfg);
 		if (!freeze_machine_cfg(&specialized, false,
 				&specialized.entry_machine_cfg, diag)) {
@@ -13904,7 +13938,13 @@ extern "C" zend_result zend_tpde_compile_component_with_runtime(
 				? member.deopt_generic_member_plus_one : 0;
 		plans[initialized].deopt_landings = member.deopt_landings;
 		plans[initialized].call_count_cell = member.call_count_cell;
+		plans[initialized].speculation_cell = member.speculation_cell;
+		plans[initialized].deopt_landing_types = member.deopt_landing_types;
 		plans[initialized].inline_host = member.inline_host;
+		memcpy(plans[initialized].tier2_arg_guards, member.tier2_arg_guards,
+			sizeof(member.tier2_arg_guards));
+		plans[initialized].tier2_fallback_entry = member.tier2_fallback_entry;
+		plans[initialized].tier2_result_types = member.tier2_result_types;
 		if (!initialize_plan(
 				member.module, runtime,
 				member.user_bindings, member.user_binding_count,
