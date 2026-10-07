@@ -13012,7 +13012,9 @@ bool ZendCompilerX64::compile_inst_impl(
 				|| !frame_slot(operation.result)
 				|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
 					&& operation.result.slot_kind
-						!= ZEND_MIR_SOURCE_SLOT_VAR)
+						!= ZEND_MIR_SOURCE_SLOT_VAR
+					&& operation.result.slot_kind
+						!= ZEND_MIR_SOURCE_SLOT_CV)
 				|| !zend_mir_id_is_valid(operation.result_storage_id)
 				|| (node.has_result && val_parts(node.result).count() > 2)
 				|| unlocked_gp_registers() < 6) {
@@ -13067,6 +13069,15 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto type_reg = type.alloc_gp();
 		ASM(CMP64ri, matched_reg, ZEND_NATIVE_TYPE_CHECK_UNDEFINED);
 		generate_raw_jump(Jump::je, slow);
+		/* A CV result is overwritten: its old value must need no
+		 * release (a counted one takes the helper). */
+		if (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+			ASM(TEST32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(result_offset
+					+ offsetof(zval, u1.type_info))),
+				Z_TYPE_FLAGS_MASK);
+			generate_raw_jump(Jump::jne, slow);
+		}
 		if (temporary) {
 			auto value_address = GenericValuePart{GenericValuePart::Expr{
 				frame_reg, static_cast<int64_t>(value_offset)}};
@@ -13422,7 +13433,9 @@ bool ZendCompilerX64::compile_inst_impl(
 				|| !frame_slot(operation.result)
 				|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
 					&& operation.result.slot_kind
-						!= ZEND_MIR_SOURCE_SLOT_VAR)
+						!= ZEND_MIR_SOURCE_SLOT_VAR
+					&& operation.result.slot_kind
+						!= ZEND_MIR_SOURCE_SLOT_CV)
 				|| !zend_mir_id_is_valid(operation.result_storage_id)
 				|| operation.result_storage_id == operation.op2_storage_id
 				|| (!key_literal
@@ -13522,6 +13535,15 @@ bool ZendCompilerX64::compile_inst_impl(
 		/* ABSENT is 1 and an element pointer more: exists = element > 1. */
 		generate_raw_set(Jump::ja, answer_reg);
 		element.reset(this);
+		/* A CV result is overwritten: its old value must need no
+		 * release (a counted one takes the helper). */
+		if (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+			ASM(TEST32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(result_offset
+					+ offsetof(zval, u1.type_info))),
+				Z_TYPE_FLAGS_MASK);
+			generate_raw_jump(Jump::jne, slow);
+		}
 		if (temporary) {
 			ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
 			if (!EncodeBase::encode_zend_native_container_shared(
@@ -13792,7 +13814,9 @@ bool ZendCompilerX64::compile_inst_impl(
 				|| !frame_slot(operation.result)
 				|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
 					&& operation.result.slot_kind
-						!= ZEND_MIR_SOURCE_SLOT_VAR)
+						!= ZEND_MIR_SOURCE_SLOT_VAR
+					&& operation.result.slot_kind
+						!= ZEND_MIR_SOURCE_SLOT_CV)
 				|| !zend_mir_id_is_valid(operation.result_storage_id)
 				|| operation.result_storage_id == operation.op1_storage_id
 				|| (node.has_result && val_parts(node.result).count() > 2)
@@ -13845,6 +13869,15 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto decision_reg = decision.alloc_gp();
 		ASM(CMP64ri, count_reg, -1);
 		generate_raw_jump(Jump::je, slow);
+		/* A CV result is overwritten: its old value must need no
+		 * release (a counted one takes the helper). */
+		if (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+			ASM(TEST32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(result_offset
+					+ offsetof(zval, u1.type_info))),
+				Z_TYPE_FLAGS_MASK);
+			generate_raw_jump(Jump::jne, slow);
+		}
 		if (temporary) {
 			ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
 			if (!EncodeBase::encode_zend_native_container_shared(
