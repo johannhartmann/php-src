@@ -3097,6 +3097,8 @@ public:
 			runtime_symbol(ZEND_NATIVE_HELPER_CALL_FAST_LEAVE);
 		const tpde::SymRef release_symbol =
 			runtime_symbol(ZEND_NATIVE_HELPER_CALL_FAST_RELEASE_CV);
+		const tpde::SymRef release_this_symbol =
+			runtime_symbol(ZEND_NATIVE_HELPER_CALL_FAST_RELEASE_THIS);
 		const tpde::SymRef general_symbol =
 			runtime_symbol(ZEND_NATIVE_HELPER_CALL_FAST_DO);
 		const bool variadic = plan->fast_call_variadic;
@@ -3106,6 +3108,7 @@ public:
 		if (num_args > last_var || function_index >= this->func_syms.size()
 				|| num_args > ZEND_NATIVE_CALL_FAST_RECEIVE_MAX
 				|| !leave_symbol.valid() || !release_symbol.valid()
+				|| !release_this_symbol.valid()
 				|| !general_symbol.valid()
 				|| (variadic && !variadic_symbol.valid())) {
 			return;
@@ -3428,7 +3431,7 @@ public:
 				+ offsetof(zval, u1.type_info))),
 			static_cast<int32_t>(ZEND_CALL_HAS_SYMBOL_TABLE
 				| ZEND_CALL_HAS_EXTRA_NAMED_PARAMS
-				| ZEND_CALL_RELEASE_THIS | ZEND_CALL_CLOSURE
+				| ZEND_CALL_CLOSURE
 				| ZEND_CALL_ALLOCATED | ZEND_CALL_FREE_EXTRA_ARGS));
 		to_general.push_back(branch(true));
 		/* An undefined result becomes null; a discarded counted result is
@@ -3516,6 +3519,24 @@ public:
 		ASM(MOV64rm, FE_R10, FE_MEM(FE_R9, 0, FE_NOREG,
 			member(offsetof(zend_native_execution_context, vm_stack_top))));
 		ASM(MOV64mr, FE_MEM(FE_R10, 0, FE_NOREG, 0), FE_DI);
+		/* OBJ_RELEASE($this): GC_DELREF(); a destroyed object or a
+		 * possible GC root continues out of line. */
+		ASM(TEST32mi, FE_MEM(FE_DI, 0, FE_NOREG,
+			member(offsetof(zend_execute_data, This)
+				+ offsetof(zval, u1.type_info))),
+			static_cast<int32_t>(ZEND_CALL_RELEASE_THIS));
+		const uint32_t no_this = branch_zero();
+		ASM(MOV64rm, FE_R9, FE_MEM(FE_DI, 0, FE_NOREG,
+			member(offsetof(zend_execute_data, This))));
+		ASM(SUB32mi, FE_MEM(FE_R9, 0, FE_NOREG, member(
+			offsetof(zend_refcounted_h, refcount))), 1);
+		const uint32_t this_released = branch_zero();
+		ASM(TEST32mi, FE_MEM(FE_R9, 0, FE_NOREG, member(
+			offsetof(zend_refcounted_h, u.type_info))),
+			static_cast<int32_t>(
+				GC_INFO_MASK | (GC_NOT_COLLECTABLE << GC_FLAGS_SHIFT)));
+		const uint32_t this_candidate = branch_zero();
+		patch(no_this, text_writer.offset());
 		ASM(XOR32rr, FE_AX, FE_AX);
 		const uint32_t epilogue = text_writer.offset();
 		ASM(ADD64ri, FE_SP, area);
@@ -3527,6 +3548,21 @@ public:
 		text_writer.eh_advance(out_of_line - (epilogue + 4));
 		text_writer.eh_write_inst(
 			tpde::dwarf::DW_CFA_def_cfa_offset, area + 8);
+		/* zend_native_call_fast_release_this(object, result, discarded),
+		 * whose status the entry returns. The frame's memory is free: its
+		 * result address is read before a destructor can reuse it. */
+		patch(this_released, text_writer.offset());
+		patch(this_candidate, text_writer.offset());
+		ASM(MOV64rr, FE_DI, FE_R9);
+		ASM(MOV64rm, FE_SI, FE_MEM(FE_SP, 0, FE_NOREG, 0));
+		ASM(MOV64rm, FE_SI, FE_MEM(FE_SI, 0, FE_NOREG,
+			member(offsetof(zend_execute_data, return_value))));
+		ASM(XOR32rr, FE_DX, FE_DX);
+		ASM(CMP32mi, FE_MEM(FE_SP, 0, FE_NOREG, 8), -1);
+		ASM(SETZ8r, FE_DX);
+		call_symbol(release_this_symbol);
+		text_writer.ensure_space(16);
+		ASMF(JMP, FE_JMPL, text_writer.begin_ptr() + epilogue);
 		for (size_t branch_index = 0; branch_index < counted_branches.size();
 				++branch_index) {
 			const auto &[counted, next] = counted_branches[branch_index];

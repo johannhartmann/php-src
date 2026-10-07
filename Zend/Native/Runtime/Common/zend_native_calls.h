@@ -947,6 +947,12 @@ zend_native_status zend_native_deopt_speculation(
  * zend_native_call_fast_leave() releases it, after the entry dropped its
  * reference: freed at zero, else checked as a possible GC root. */
 void zend_native_call_fast_release_cv(zval *variable);
+/* The rest of OBJ_RELEASE() for the object a fast-call entry's leave
+ * released (its reference already dropped): destroyed at zero, else a
+ * possible GC root. A throwing destructor fails the call and frees its
+ * kept result, as zend_native_call_fast_leave() does. */
+uint32_t zend_native_call_fast_release_this(
+	zend_object *object, zval *result, bool discard_result);
 void zend_native_call_fast_undefined_argument(
 	zend_execute_data *caller, uint32_t variable, uint32_t source_position);
 /* The one-character strings as zvals, by byte: a string offset read in
