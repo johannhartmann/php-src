@@ -183,9 +183,21 @@ shared leave (more executed bytes per function).
     state, and the fast path spills what the continuation reads before it
     branches. File main code is not specialized (it runs once per
     inclusion), and metrics count source sites, not the generic copy.
-  - The fast result's type does not yet narrow the types after the exit, so
-    a specialized version runs the same hot code as the generic one; that
-    narrowing, type feedback and recompilation by call count follow.
+  - A tier-2 copy speculates on recorded result types
+    (`ZEND_NATIVE_TIER2_SPECULATE=1`, Linux x64): element reads
+    (`FETCH_DIM_R`/`IS`) whose results had one type, or null and one type,
+    in at least 16 recorded executions check the element's type (through a
+    reference) on their fast path and exit on any other. The assumed type
+    narrows the inferred types of the result and, recomputed from the
+    bottom with Zend's inference, of every operation and phi using it (an
+    `OP_DATA` operand belongs to its operation). Only the speculated
+    positions exit; the generic copy lands only there, and its gateway
+    clears the isset lookup that a later element read reuses. The exits
+    count in the function's entry cell; from 16 on, the copy's entry calls
+    its generic copy, which shares the tier-2 image's call sites. Neither
+    WordPress nor the `bench.php` kernels gain from it (the generic fast
+    paths already check the types the speculation proves), so it is
+    opt-in.
 - **Recompilation (tier 2):** the published code of a named, non-generator
   user function counts its calls in its entry cell; a function that
   reaches the threshold is queued once. At request shutdown the worker
@@ -199,11 +211,22 @@ shared leave (more executed bytes per function).
   functions, checked once per call-cache epoch at the tier-2 entry); a
   failed guard takes the site's generic call. Inlined callees (section 5)
   and type specialization build on these components.
+  - The integer variant of a counted function counts in the function's
+    cell; a copy's variant and generic copy call the batch's other copies
+    component-locally, like the copy itself.
+  - The last 64 counted calls record their argument types in the cell and,
+    in a per-opline side array, the result types of element and property
+    reads and calls. A copy whose required untyped parameters each had one
+    type (or both numeric types) gets them as parameter types, with entry
+    guards that run the tier-1 code for other arguments; a function with
+    an integer variant, and an inlining host, keeps its entry.
 - **Invalidation:** code that depends on a class layout, a function or
   constant binding, or a declaration epoch is registered with that
   dependency. Changing it retires the code through the existing entry-cell
   generations, and active frames deoptimize at their next guard or return.
-- A site that deoptimizes repeatedly is recompiled without that assumption.
+- Code that deoptimizes repeatedly stops speculating: today its entry
+  hands every call to the generic copy; recompiling without the failed
+  assumption follows.
 
 ### 5. Inlining with guards
 
@@ -283,8 +306,10 @@ code size, compile time) with unchanged page output and the full PHPT tier.
    Every deoptimization point has a PHPT that forces it. Resume IDs,
    landings with their frame-state maps and the transfer are in place and
    forced at every guarded operation by the stress mode; specialized
-   versions exit to their generic copy behind `ZEND_NATIVE_SPECULATE`; type
-   narrowing after exits, type feedback and recompilation follow.
+   versions exit to their generic copy behind `ZEND_NATIVE_SPECULATE`.
+   Tier 2 records argument and result type feedback, specializes argument
+   types and, behind `ZEND_NATIVE_TIER2_SPECULATE`, element result types
+   with narrowing after the exits and retirement after repeated exits.
 5. **Guarded inlining and lazy frames for inlined callees.** Section 5, with
    backtraces, traces, warnings and observers identical to stock inside
    inlined code. Splicing with bails before any observation is in place

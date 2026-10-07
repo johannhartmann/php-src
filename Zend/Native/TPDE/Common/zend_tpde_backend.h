@@ -207,6 +207,19 @@ typedef struct _zend_native_inline_region {
 	bool this_method;
 } zend_native_inline_region;
 
+/* Argument guards of a tier-2 copy specialized by type feedback. */
+#define ZEND_NATIVE_TIER2_ARG_GUARDS 8
+typedef enum _zend_native_arg_guard {
+	ZEND_NATIVE_ARG_GUARD_NONE = 0,
+	ZEND_NATIVE_ARG_GUARD_LONG,
+	ZEND_NATIVE_ARG_GUARD_DOUBLE,
+	ZEND_NATIVE_ARG_GUARD_NUMBER,
+	ZEND_NATIVE_ARG_GUARD_BOOL,
+	ZEND_NATIVE_ARG_GUARD_STRING,
+	ZEND_NATIVE_ARG_GUARD_ARRAY,
+	ZEND_NATIVE_ARG_GUARD_OBJECT
+} zend_native_arg_guard;
+
 typedef struct _zend_native_inline_host {
 	/* The function the host copy replaces, which callers push frames
 	 * for: its frame size in slots and its parameter count. */
@@ -264,8 +277,25 @@ typedef struct _zend_native_component_member {
 	/* Tier 2: the member's own entry cell, whose countdown its Zend entry
 	 * decrements (queueing the function at zero), or NULL. */
 	zend_native_entry_cell *call_count_cell;
+	/* A tier-2 copy speculating on result feedback: the function's entry
+	 * cell counting its deoptimizations, or NULL. */
+	zend_native_entry_cell *speculation_cell;
+	/* A deoptimization generic copy: the result types its specialized
+	 * version speculates on per source position, whose positions alone
+	 * need landings; NULL lands at every guarded operation. */
+	const uint16_t *deopt_landing_types;
 	/* A tier-2 copy with inlined call sites, or NULL. */
 	const zend_native_inline_host *inline_host;
+	/* A tier-2 copy specialized by argument type feedback: per parameter
+	 * a zend_native_arg_guard code, and the original function's Zend entry,
+	 * which runs a frame whose arguments the guards reject. */
+	uint8_t tier2_arg_guards[ZEND_NATIVE_TIER2_ARG_GUARDS];
+	const void *tier2_fallback_entry;
+	/* Per opline (source_op_array->last of them) of a speculating tier-2
+	 * copy, the Z_TYPE() bits its result is assumed to have, or NULL. A
+	 * read whose element or property has another type takes its cold
+	 * path, which deoptimizes. */
+	const uint16_t *tier2_result_types;
 } zend_native_component_member;
 
 /*

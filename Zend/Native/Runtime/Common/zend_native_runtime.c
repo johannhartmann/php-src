@@ -1082,6 +1082,12 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 		(const void *) zend_native_array_assign_lookup},
 	{ZEND_NATIVE_HELPER_TIER2_NOTE, 0,
 		(const void *) zend_native_tier2_note},
+	{ZEND_NATIVE_HELPER_TIER2_RECORD, 0,
+		(const void *) zend_native_tier2_record},
+	{ZEND_NATIVE_HELPER_DEOPT_SPECULATION,
+		ZEND_NATIVE_EFFECT_CALL | ZEND_NATIVE_EFFECT_FRAME_READ
+			| ZEND_NATIVE_EFFECT_FRAME_WRITE,
+		(const void *) zend_native_deopt_speculation},
 };
 
 static const zend_native_runtime_api zend_native_runtime = {
