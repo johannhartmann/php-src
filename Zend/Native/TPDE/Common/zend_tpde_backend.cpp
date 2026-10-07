@@ -8144,6 +8144,11 @@ bool initialize_plan(
 					: ZEND_NATIVE_RUNTIME_CAP_OBJECT_OPERATION;
 			}
 			require_runtime_helper(plan, helper);
+			if (helper == ZEND_NATIVE_HELPER_VALUE_CHECK_UNDEF_ARGS) {
+				/* Generated code tests the frame's flag first. */
+				require_runtime_helper(
+					plan, ZEND_NATIVE_HELPER_CALL_CHECK_UNDEF_FRAME);
+			}
 			if (record.opcode == ZEND_MIR_OPCODE_DYNAMIC_INCLUDE_OR_EVAL) {
 				const zend_mir_executable_value_ref &operation =
 					plan->instructions[i].value_operation;
