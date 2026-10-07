@@ -13187,9 +13187,13 @@ bool ZendCompilerX64::compile_inst_impl(
 				|| !frame_slot(operation.result)
 				|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
 					&& operation.result.slot_kind
-						!= ZEND_MIR_SOURCE_SLOT_VAR)
+						!= ZEND_MIR_SOURCE_SLOT_VAR
+					&& operation.result.slot_kind
+						!= ZEND_MIR_SOURCE_SLOT_CV)
 				|| !zend_mir_id_is_valid(operation.result_storage_id)
 				|| operation.result_storage_id == operation.op1_storage_id
+				|| (variable_other && operation.result_storage_id
+					== operation.op2_storage_id)
 				|| (node.has_result && val_parts(node.result).count() > 2)
 				/* The snippet's seven scratch registers, the frame and the
 				 * literals. */
@@ -13301,6 +13305,15 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto type_reg = type.alloc_gp();
 		ASM(CMP64ri, matched_reg, ZEND_NATIVE_IDENTICAL_UNKNOWN);
 		generate_raw_jump(Jump::je, slow);
+		/* A CV result is overwritten: its old value must need no
+		 * release (a counted one takes the helper). */
+		if (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+			ASM(TEST32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(result_offset
+					+ offsetof(zval, u1.type_info))),
+				Z_TYPE_FLAGS_MASK);
+			generate_raw_jump(Jump::jne, slow);
+		}
 		/* A temporary second operand must need no release: a counted
 		 * one takes the helper. */
 		if (variable_other && other_temporary) {
