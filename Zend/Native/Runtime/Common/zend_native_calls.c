@@ -93,6 +93,8 @@ void zend_native_execution_context_init(
 	context->stack_limit = NULL;
 #endif
 	context->call_cache_epoch = zend_native_call_cache_epoch_address();
+	context->frameless_handlers = (void *const *) zend_flf_handlers;
+	context->symbol_table = &EG(symbol_table);
 	context->observers_enabled = ZEND_OBSERVER_ENABLED;
 	context->deopt_resume = false;
 }

@@ -81,6 +81,10 @@ typedef struct _zend_native_execution_context {
 	void **stack_limit;
 	/* The call-cache epoch that validates call-site fast paths. */
 	const uint64_t *call_cache_epoch;
+	/* zend_flf_handlers, which generated frameless calls index. */
+	void *const *frameless_handlers;
+	/* &EG(symbol_table), which generated BIND_GLOBAL reads. */
+	struct _zend_array *symbol_table;
 	bool observers_enabled;
 	/* Set by a deoptimization transfer for the one entry it makes: the
 	 * entry continues at the resume ID its frame's opline names. */

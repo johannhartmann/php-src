@@ -1101,6 +1101,12 @@ zend_native_status zend_native_internal_call_do_plain(
 	zend_execute_data *caller,
 	const zend_native_internal_call_cell *cell,
 	const zend_native_direct_internal_call_descriptor *descriptor);
+/* The rest of zend_native_internal_call_do_plain() after the handler of
+ * an inline plain Do returned, for anything but a quiet return: the
+ * interrupt, the arguments' and the frame's release and the status. */
+zend_native_status zend_native_internal_call_do_plain_finish(
+	zend_execute_data *caller, zend_execute_data *call, zval *return_value,
+	const zend_native_direct_internal_call_descriptor *descriptor);
 zend_native_direct_call_result zend_native_internal_call_direct(
 	zend_execute_data *caller,
 	const zend_native_internal_call_cell *cell,

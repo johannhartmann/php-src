@@ -26,6 +26,14 @@ or unverifiable image; never guess compatibility or partially activate it.
 - Loading has an explicit validation and relocation phase before publication.
 - Format evolution carries compatibility and invalidation rules.
 - Process-local native state is rebuilt rather than serialized by address.
+- Generated code of a persistable image embeds no process address: it
+  reaches executor globals (`EG(exception)`, `EG(current_execute_data)`, the
+  VM stack, the symbol table) and handler tables (`zend_flf_handlers`)
+  through the execution context, and call targets through relocated image
+  symbols. Code that relies on per-process state chosen at compile time
+  (observers, `zend_execute_internal`) is valid because that state is part
+  of the system id. Only tier-2 code, which is never serialized, may embed
+  process addresses.
 
 ## Alternatives
 

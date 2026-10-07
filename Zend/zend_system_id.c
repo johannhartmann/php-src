@@ -17,6 +17,7 @@
 #include "zend_system_id.h"
 #include "zend_extensions.h"
 #include "ext/standard/md5.h"
+#include "zend_observer.h"
 #ifdef HAVE_NATIVE_ENGINE
 # include "Native/Runtime/Common/zend_native_runtime.h"
 #endif
@@ -70,6 +71,7 @@ void zend_startup_system_id(void)
 #define ZEND_HOOK_EXECUTE_EX         (1 << 2)
 #define ZEND_HOOK_EXECUTE_INTERNAL   (1 << 3)
 #define ZEND_HOOK_INTERRUPT_FUNCTION (1 << 4)
+#define ZEND_HOOK_NATIVE_OBSERVERS   (1 << 5)
 
 void zend_finalize_system_id(void)
 {
@@ -91,6 +93,14 @@ void zend_finalize_system_id(void)
 	if (zend_interrupt_function) {
 		hooks |= ZEND_HOOK_INTERRUPT_FUNCTION;
 	}
+#ifdef HAVE_NATIVE_ENGINE
+	/* Native images call unobserved handlers directly when no observer is
+	 * registered: a cache of the other observer state is not this
+	 * system's. */
+	if (ZEND_OBSERVER_ENABLED) {
+		hooks |= ZEND_HOOK_NATIVE_OBSERVERS;
+	}
+#endif
 	PHP_MD5Update(&context, &hooks, sizeof hooks);
 
 	for (int16_t i = 0; i < 256; i++) {
