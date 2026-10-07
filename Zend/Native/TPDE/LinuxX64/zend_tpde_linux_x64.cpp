@@ -10562,6 +10562,72 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		return true;
 	};
+	/*
+	 * ROPE_INIT/ROPE_ADD of a literal piece, which is a string: the piece,
+	 * copied unless interned, goes into the rope's slot as the VM stores
+	 * it. The literal comes from the executing op array.
+	 */
+	auto rope_literal_inline = [&]() -> bool {
+		const zend_mir_executable_value_ref &operation = mir.value_operation;
+		const zend_tpde_plan *plan = adaptor->plan();
+		if (!mir.has_value_operation || node.has_result
+				|| inline_op_kind(instruction) == ZEND_NATIVE_INLINE_OP_BODY
+				|| operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+				|| plan->source_literals == nullptr
+				|| Z_TYPE(plan->source_literals[operation.op2.index])
+					!= IS_STRING
+				|| (operation.source_opcode != ZEND_ROPE_INIT
+					&& operation.source_opcode != ZEND_ROPE_ADD)) {
+			return false;
+		}
+		const bool initialize = operation.source_opcode == ZEND_ROPE_INIT;
+		const zend_mir_storage_id rope_storage = initialize
+			? operation.result_storage_id : operation.op1_storage_id;
+		if (!zend_mir_id_is_valid(rope_storage)) {
+			return false;
+		}
+		for (IRValueRef operand : node.operands) {
+			if (operand != IRValueRef{Adaptor::FRAME_VALUE}
+					&& operand != IRValueRef{
+						Adaptor::EXECUTION_CONTEXT_ARGUMENT}) {
+				return false;
+			}
+		}
+		const uint64_t piece_offset =
+			(uint64_t{ZEND_CALL_FRAME_SLOT} + rope_storage) * sizeof(zval)
+			+ (initialize ? 0 : uint64_t{operation.extended_value})
+				* sizeof(zend_string *);
+		const uint64_t literal_offset =
+			uint64_t{operation.op2.index} * sizeof(zval);
+		if (piece_offset > INT32_MAX - sizeof(void *)
+				|| literal_offset > INT32_MAX - sizeof(zval)) {
+			return false;
+		}
+		for (IRValueRef operand : node.operands) {
+			auto consumed = val_ref(operand);
+			(void) consumed;
+		}
+		const AsmReg frame_reg = canonical_frame_register();
+		ScratchReg piece{this};
+		const AsmReg piece_reg = piece.alloc_gp();
+		auto interned = text_writer.label_create();
+		ASM(MOV64rm, piece_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_execute_data, func))));
+		ASM(MOV64rm, piece_reg, FE_MEM(piece_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_op_array, literals))));
+		ASM(MOV64rm, piece_reg, FE_MEM(piece_reg, 0, FE_NOREG,
+			static_cast<int32_t>(literal_offset)));
+		ASM(TEST32mi, FE_MEM(piece_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_refcounted_h, u.type_info))),
+			static_cast<int32_t>(IS_STR_INTERNED << GC_FLAGS_SHIFT));
+		generate_raw_jump(Jump::jne, interned);
+		ASM(ADD32mi, FE_MEM(piece_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_refcounted_h, refcount))), 1);
+		label_place(interned);
+		ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(piece_offset)), piece_reg);
+		return true;
+	};
 	auto execute_value_operation = [&]() {
 		/* A body operation never runs its helper: it bails (a guarded fast
 		 * node reaches its cold block, which bails there). */
@@ -17848,6 +17914,11 @@ bool ZendCompilerX64::compile_inst_impl(
 					return false;
 				}
 			}
+			if ((record.opcode == ZEND_MIR_OPCODE_VALUE_ROPE_INIT
+						|| record.opcode == ZEND_MIR_OPCODE_VALUE_ROPE_ADD)
+					&& rope_literal_inline()) {
+				return true;
+			}
 			if (mir.has_value_operation
 					&& mir.value_operation.source_opcode == ZEND_ASSIGN_DIM_OP
 					&& (mir.value_operation.extended_value == ZEND_ADD
@@ -18308,8 +18379,10 @@ bool ZendCompilerX64::compile_inst_impl(
 		case ZEND_MIR_OPCODE_VALUE_FAST_CONCAT:
 			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_ROPE_INIT:
-			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_ROPE_ADD:
+			if (rope_literal_inline()) {
+				return true;
+			}
 			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_ROPE_END:
 			return execute_value_operation();
