@@ -2033,6 +2033,24 @@ void zend_native_call_fast_release_cv(zval *variable)
 	}
 }
 
+uint32_t zend_native_call_fast_release_this(
+	zend_object *object, zval *result, bool discard_result)
+{
+	if (GC_REFCOUNT(object) != 0) {
+		gc_possible_root((zend_refcounted *) object);
+		return ZEND_NATIVE_RETURNED;
+	}
+	zend_objects_store_del(object);
+	if (EG(exception) == NULL) {
+		return ZEND_NATIVE_RETURNED;
+	}
+	if (!discard_result && result != NULL) {
+		zval_ptr_dtor_nogc(result);
+		ZVAL_UNDEF(result);
+	}
+	return ZEND_NATIVE_EXCEPTION;
+}
+
 uint32_t zend_native_call_fast_leave(
 	zend_execute_data *callee, uint32_t status, bool discard_result)
 {
