@@ -7687,6 +7687,11 @@ static zend_native_status zend_native_call_dynamic_internal_entry(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	execute_data->prev_execute_data = activation->caller;
+	/* An exception before the handler leaves no result
+	 * (zend_native_call_direct_release() destroys a defined one). */
+	if (execute_data->return_value != NULL) {
+		ZVAL_UNDEF(execute_data->return_value);
+	}
 	if ((activation->resolution.placement_flags
 			& ZEND_NATIVE_USER_CALL_PLACEMENTS_METADATA_PREFLIGHT) == 0) {
 		EG(current_execute_data) = activation->caller;

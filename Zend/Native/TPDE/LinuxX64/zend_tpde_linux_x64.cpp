@@ -1662,8 +1662,10 @@ public:
 			ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG, static_cast<int32_t>(
 				offsetof(zend_execute_data, func))), original_reg);
 		}
+		/* Either register may be the other's argument register. */
+		ASM(MOV64rr, FE_AX, context_reg);
 		ASM(LEA64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG, 0));
-		ASM(MOV64rr, FE_SI, context_reg);
+		ASM(MOV64rr, FE_SI, FE_AX);
 		ASM(MOV64rr, FE_AX, FE_SP);
 		ASM(AND64ri, FE_SP, -16);
 		ASM(PUSHr, FE_AX);
@@ -5382,30 +5384,36 @@ bool ZendCompilerX64::compile_inst_impl(
 				label_place(counted);
 			}
 		}
+		/* The context operand is one use, whatever reads it below. */
+		std::optional<std::pair<ValueRef, ValuePartRef>> context_use;
+		AsmReg context_reg = AsmReg::make_invalid();
+		if (node.operands.size() == 2) {
+			context_use.emplace(val_ref_single(node.operands[1]));
+			/* Loaded before the first branch: past one the value state
+			 * may not change. */
+			context_reg = context_use->second.load_to_reg();
+		}
 		/* A tier-2 inlining host extends the frame its caller pushed for
 		 * the original function (emit_inline_host_entry()). */
 		if (adaptor->plan()->tier2_fallback_entry != nullptr
-				&& node.operands.size() == 2 && !adaptor->typed_body()) {
-			auto [context_ref, context] = val_ref_single(node.operands[1]);
-			if (!emit_tier2_arg_guards(result_reg, context.load_to_reg())) {
+				&& context_use.has_value() && !adaptor->typed_body()) {
+			if (!emit_tier2_arg_guards(result_reg, context_reg)) {
 				return false;
 			}
 		}
-		if (adaptor->plan()->inline_host != nullptr && node.operands.size() == 2
+		if (adaptor->plan()->inline_host != nullptr && context_use.has_value()
 				&& !adaptor->typed_body()) {
-			auto [context_ref, context] = val_ref_single(node.operands[1]);
-			if (!emit_inline_host_entry(result_reg, context.load_to_reg())) {
+			if (!emit_inline_host_entry(result_reg, context_reg)) {
 				return false;
 			}
 		}
 		std::optional<tpde::Label> deopt_entry;
-		if (node.operands.size() == 2
+		if (context_use.has_value()
 				&& adaptor->plan()->deopt_resume_count != 0) {
 			/* A deoptimization entry continues a frame whose temporaries
 			 * are live. */
-			auto [context_ref, context] = val_ref_single(node.operands[1]);
 			deopt_entry = text_writer.label_create();
-			ASM(CMP8mi, FE_MEM(context.load_to_reg(), 0, FE_NOREG,
+			ASM(CMP8mi, FE_MEM(context_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
 					offsetof(zend_native_execution_context, deopt_resume))),
 				0);
