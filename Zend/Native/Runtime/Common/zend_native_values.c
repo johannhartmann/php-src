@@ -687,7 +687,7 @@ static void zend_native_value_prepare_result(
 /*
  * The result slot of a decode-free fast path, with the rules of
  * zend_native_value_result(): an undefined temporary, or a CV whose old
- * value zend_native_fast_store() releases after the operands were read.
+ * value the caller releases after the operands were read.
  */
 static zend_always_inline zval *zend_native_fast_result(
 	zend_execute_data *execute_data, uint64_t result_operand, bool *is_cv)
@@ -3380,6 +3380,31 @@ static zend_string *zend_native_value_rope_piece(
 	return string;
 }
 
+/*
+ * The piece of a rope operand without decoding, as
+ * zend_native_value_rope_piece() makes it: a string (taken from a
+ * temporary, else copied) or an integer, null or bool converted. NULL
+ * for anything that may warn, call user code or read an ini setting
+ * (undefined, double, array, object).
+ */
+static zend_always_inline zend_string *zend_native_value_fast_rope_piece(
+	zval *value, bool tmp)
+{
+	switch (Z_TYPE_P(value)) {
+		case IS_STRING:
+			return tmp ? Z_STR_P(value) : zend_string_copy(Z_STR_P(value));
+		case IS_LONG:
+			return zend_long_to_str(Z_LVAL_P(value));
+		case IS_NULL:
+		case IS_FALSE:
+			return ZSTR_EMPTY_ALLOC();
+		case IS_TRUE:
+			return ZSTR_CHAR('1');
+		default:
+			return NULL;
+	}
+}
+
 static zend_native_status zend_native_value_rope_store(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result_operand,
@@ -3401,9 +3426,8 @@ static zend_native_status zend_native_value_rope_store(
 			execute_data, op2, &value_tmp);
 
 		if (fast_rope != NULL && rope_tmp && fast_value != NULL
-				&& Z_TYPE_P(fast_value) == IS_STRING) {
-			piece = value_tmp ? Z_STR_P(fast_value)
-				: zend_string_copy(Z_STR_P(fast_value));
+				&& (piece = zend_native_value_fast_rope_piece(
+					fast_value, value_tmp)) != NULL) {
 			((zend_string **) fast_rope)[initialize ? 0 : extended_value] =
 				piece;
 			return ZEND_NATIVE_RETURNED;
@@ -3471,6 +3495,46 @@ zend_native_status zend_native_value_rope_end(
 	uint32_t index;
 	char *target;
 
+	/* The last piece and the temporary result without decoding. */
+	if (source_opcode == ZEND_ROPE_END) {
+		bool rope_tmp, value_tmp, result_cv = false;
+		zval *fast_rope = zend_native_value_fast_operand(
+			execute_data, op1, &rope_tmp);
+		zval *fast_value = zend_native_value_fast_operand(
+			execute_data, op2, &value_tmp);
+		/* ROPE_END's result is a temporary, which it overwrites as the
+		 * VM does. */
+		zval *fast_result = ZEND_NATIVE_OPERAND_TYPE(result_operand)
+				== IS_TMP_VAR
+			? ZEND_NATIVE_OPERAND_VAR(execute_data, result_operand) : NULL;
+
+		(void) result_cv;
+		if (fast_rope != NULL && rope_tmp && fast_value != NULL
+				&& fast_result != NULL
+				&& (piece = zend_native_value_fast_rope_piece(
+					fast_value, value_tmp)) != NULL) {
+			rope = (zend_string **) fast_rope;
+			rope[extended_value] = piece;
+			for (index = 0; index <= extended_value; index++) {
+				if (length > ZSTR_MAX_LEN - ZSTR_LEN(rope[index])) {
+					zend_error_noreturn(E_ERROR,
+						"Integer overflow in memory allocation");
+				}
+				length += ZSTR_LEN(rope[index]);
+				flags &= ZSTR_GET_COPYABLE_CONCAT_PROPERTIES(rope[index]);
+			}
+			ZVAL_STR(fast_result, zend_string_alloc(length, false));
+			GC_ADD_FLAGS(Z_STR_P(fast_result), flags);
+			target = Z_STRVAL_P(fast_result);
+			for (index = 0; index <= extended_value; index++) {
+				memcpy(target, ZSTR_VAL(rope[index]), ZSTR_LEN(rope[index]));
+				target += ZSTR_LEN(rope[index]);
+				zend_string_release_ex(rope[index], false);
+			}
+			*target = '\0';
+			return ZEND_NATIVE_RETURNED;
+		}
+	}
 	if (!zend_native_value_init_explicit_operation(
 			execute_data, op1, op2, result_operand, extended_value,
 			source_opcode, source_position_id, ZEND_ROPE_END, &operation)
