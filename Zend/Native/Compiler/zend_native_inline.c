@@ -1301,22 +1301,31 @@ zend_op_array *zend_native_inline_splice(
 			builder.count * sizeof(uint32_t));
 		uint32_t literal = 0;
 
-		memcpy(literals, host->literals,
-			host->last_literal * sizeof(zval));
+		/* An op_array without literals or variables has NULL arrays. */
+		if (host->last_literal != 0) {
+			memcpy(literals, host->literals,
+				host->last_literal * sizeof(zval));
+		}
 		literal = host->last_literal;
 		for (region = 0; region < site_count; region++) {
 			const zend_op_array *callee = sites[region].callee;
 
-			memcpy(literals + literal, callee->literals,
-				callee->last_literal * sizeof(zval));
+			if (callee->last_literal != 0) {
+				memcpy(literals + literal, callee->literals,
+					callee->last_literal * sizeof(zval));
+			}
 			literal += callee->last_literal;
 		}
-		memcpy(vars, host->vars, host->last_var * sizeof(zend_string *));
+		if (host->last_var != 0) {
+			memcpy(vars, host->vars, host->last_var * sizeof(zend_string *));
+		}
 		for (region = 0; region < site_count; region++) {
 			const zend_op_array *callee = sites[region].callee;
 
-			memcpy(vars + sites[region].cv_base, callee->vars,
-				callee->last_var * sizeof(zend_string *));
+			if (callee->last_var != 0) {
+				memcpy(vars + sites[region].cv_base, callee->vars,
+					callee->last_var * sizeof(zend_string *));
+			}
 		}
 		vars[new_last_var - 3] = ZSTR_EMPTY_ALLOC();
 		vars[new_last_var - 2] = ZSTR_EMPTY_ALLOC();
