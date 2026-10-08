@@ -83,6 +83,8 @@ public:
 protected:
   /// Whether code is currently written to the cold area.
   bool cold_active = false;
+  /// Whether that code still counts as hot for layout decisions.
+  bool cold_layout_hot = false;
   /// Cold code of the current function; its size is the allocated space.
   util::SmallVector<u8, 0> cold_data;
   /// Bytes written to the cold area.
@@ -220,7 +222,11 @@ public:
   /// area.
   /// @{
   bool in_cold_area() const { return cold_active; }
-  void begin_cold_area();
+  /// Whether layout decisions (fall-through successors, the next block)
+  /// follow the cold area: code written there as layout_hot keeps those of
+  /// the hot code it was moved out of.
+  bool in_cold_layout() const { return cold_active && !cold_layout_hot; }
+  void begin_cold_area(bool layout_hot = false);
   void end_cold_area();
   /// Move the cold area behind the hot code and translate the labels,
   /// fixups, jump tables and relocations recorded in it.

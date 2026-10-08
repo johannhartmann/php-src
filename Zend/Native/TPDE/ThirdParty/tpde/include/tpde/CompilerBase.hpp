@@ -1622,7 +1622,7 @@ typename CompilerBase<Adaptor, Derived, Config>::RegisterFile::RegBitSet
       ++succ_count;
       BlockIndex succ_idx = analyzer.block_idx(succ);
       if (u32(succ_idx) == u32(cur_block_idx) + 1
-          && !this->text_writer.in_cold_area()) {
+          && !this->text_writer.in_cold_layout()) {
         next_block_is_succ = true;
         if (analyzer.block_has_multiple_incoming(succ)) {
           next_block_has_multiple_incoming = true;
@@ -2305,13 +2305,13 @@ typename CompilerBase<Adaptor, Derived, Config>::BlockIndex
   u32 next = static_cast<u32>(cur_block_idx) + 1;
   const u32 count = static_cast<u32>(analyzer.block_layout.size());
   if constexpr (requires(IRBlockRef b) { this->adaptor->block_is_cold(b); }) {
-    const bool cold = this->text_writer.in_cold_area();
+    const bool cold = this->text_writer.in_cold_layout();
     while (next < count
            && this->adaptor->block_is_cold(analyzer.block_ref(
                   static_cast<BlockIndex>(next))) != cold) {
       ++next;
     }
-  } else if (this->text_writer.in_cold_area()) {
+  } else if (this->text_writer.in_cold_layout()) {
     next = count;
   }
   return static_cast<BlockIndex>(next < count ? next : count);
