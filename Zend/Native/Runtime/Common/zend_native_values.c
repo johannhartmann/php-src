@@ -6062,10 +6062,13 @@ static uint64_t zend_native_value_address_encoding(
 					- (const char *) execute_data));
 }
 
-/* zend_native_array_add_fast() for operands given by address. */
+/*
+ * zend_native_array_add_fast() for operands given by address. A literal
+ * string offset is never numeric: the compiler turned those into integers.
+ */
 static zend_always_inline bool zend_native_array_add_fast_address(
 	HashTable *table, zval *value, bool value_tmp, zval *offset,
-	bool offset_tmp, uint32_t extended_value)
+	bool offset_tmp, bool offset_literal, uint32_t extended_value)
 {
 	zval copy;
 	zend_ulong index;
@@ -6083,8 +6086,9 @@ static zend_always_inline bool zend_native_array_add_fast_address(
 			index = (zend_ulong) Z_LVAL_P(offset);
 			by_index = true;
 		} else if (Z_TYPE_P(offset) == IS_STRING) {
-			by_index = ZEND_HANDLE_NUMERIC_STR(Z_STRVAL_P(offset),
-				Z_STRLEN_P(offset), index);
+			by_index = !offset_literal
+				&& ZEND_HANDLE_NUMERIC_STR(Z_STRVAL_P(offset),
+					Z_STRLEN_P(offset), index);
 		} else {
 			return false;
 		}
@@ -6140,7 +6144,8 @@ zend_native_status zend_native_value_init_array_address(
 				|| zend_native_array_add_fast_address(table, op1,
 					op1_kind == ZEND_NATIVE_DIM_DIRECT_TMP,
 					op2_kind == ZEND_NATIVE_DIM_DIRECT_UNUSED ? NULL : op2,
-					op2_kind == ZEND_NATIVE_DIM_DIRECT_TMP, extended_value)) {
+					op2_kind == ZEND_NATIVE_DIM_DIRECT_TMP,
+					op2_kind == ZEND_NATIVE_DIM_DIRECT_CONST, extended_value)) {
 			ZVAL_ARR(result, table);
 			return ZEND_NATIVE_RETURNED;
 		}
@@ -6168,7 +6173,8 @@ zend_native_status zend_native_value_add_array_element_address(
 				ZEND_NATIVE_VALUE_ADDRESS_KIND(descriptor, 0)
 					== ZEND_NATIVE_DIM_DIRECT_TMP,
 				op2_kind == ZEND_NATIVE_DIM_DIRECT_UNUSED ? NULL : op2,
-				op2_kind == ZEND_NATIVE_DIM_DIRECT_TMP, extended_value)) {
+				op2_kind == ZEND_NATIVE_DIM_DIRECT_TMP,
+				op2_kind == ZEND_NATIVE_DIM_DIRECT_CONST, extended_value)) {
 		return ZEND_NATIVE_RETURNED;
 	}
 	return zend_native_value_add_array_element(execute_data,
