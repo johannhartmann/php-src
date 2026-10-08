@@ -1897,6 +1897,9 @@ zend_native_entry_cell *zend_native_executor_resolve_cached_include(
 	return entry_cell;
 }
 
+/* Set by a server SAPI before its module startup. */
+static bool zend_native_executor_automatic_layout = false;
+
 zend_result zend_native_executor_startup(void)
 {
 	if (zend_native_executor_installed
@@ -1951,6 +1954,9 @@ zend_result zend_native_executor_startup(void)
 	zend_native_executor_generation_indexes_active = true;
 	zend_execute_ex = zend_native_executor_execute_ex;
 	zend_native_executor_installed = true;
+	if (zend_native_executor_automatic_layout) {
+		zend_tpde_layout_automatic();
+	}
 	zend_native_tier2_recompile_hook = zend_native_executor_recompile_tier2;
 	return SUCCESS;
 }
@@ -2182,6 +2188,11 @@ void zend_native_executor_deactivate(void)
 bool zend_native_executor_take_layout_restart(void)
 {
 	return zend_tpde_layout_take_restart();
+}
+
+void zend_native_executor_enable_automatic_layout(void)
+{
+	zend_native_executor_automatic_layout = true;
 }
 
 void zend_native_executor_invalidate(void)

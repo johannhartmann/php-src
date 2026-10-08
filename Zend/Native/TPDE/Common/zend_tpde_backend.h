@@ -243,6 +243,9 @@ bool zend_tpde_layout_switch(void);
 /* Whether this process finished the training and OPcache should recompile
  * the cached scripts with the profile; true once. */
 bool zend_tpde_layout_take_restart(void);
+/* A server process trains its layout by default (see
+ * zend_native_executor_enable_automatic_layout()). */
+void zend_tpde_layout_automatic(void);
 
 /* Compiles every member into one image. */
 zend_result zend_tpde_compile_component(

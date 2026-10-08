@@ -79,6 +79,9 @@ int __riscosify_control = __RISCOSIFY_STRICT_UNIX_SPECS;
 #include <php_config.h>
 #include "fpm.h"
 #include "fpm_main_arginfo.h"
+#ifdef HAVE_NATIVE_ENGINE
+# include "Zend/Native/Compiler/zend_native_executor.h"
+#endif
 #include "fpm_request.h"
 #include "fpm_status.h"
 #include "fpm_signals.h"
@@ -1741,6 +1744,11 @@ int main(int argc, char *argv[])
 
 	cgi_sapi_module.additional_functions = NULL;
 	cgi_sapi_module.executable_location = argv[0];
+
+#ifdef HAVE_NATIVE_ENGINE
+	/* A server trains its native branch layout, then compiles with it. */
+	zend_native_executor_enable_automatic_layout();
+#endif
 
 	/* startup after we get the above ini override se we get things right */
 	if (cgi_sapi_module.startup(&cgi_sapi_module) == FAILURE) {
