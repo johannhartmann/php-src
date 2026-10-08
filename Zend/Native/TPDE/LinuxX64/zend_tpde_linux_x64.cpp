@@ -12552,7 +12552,68 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		ScratchReg literals{this};
 		ValuePart matched{tpde::x64::PlatformConfig::GP_BANK, 8};
-		if (variable_other) {
+		/* A null, bool or integer literal compares by type byte and
+		 * payload; an undefined or referenced operand takes the cold
+		 * block. */
+		const zval *known_literal = !variable_other
+				&& adaptor->plan()->source_literals != nullptr
+				&& operation.op2.index
+					< adaptor->plan()->source_literal_count
+			? &adaptor->plan()->source_literals[operation.op2.index]
+			: nullptr;
+		const bool typed_literal = known_literal != nullptr
+			&& (Z_TYPE_P(known_literal) <= IS_TRUE
+				|| Z_TYPE_P(known_literal) == IS_LONG)
+			&& Z_TYPE_P(known_literal) != IS_UNDEF;
+		if (typed_literal) {
+			const uint32_t may_be = adaptor->plan()->source_opcodes != nullptr
+				? adaptor->plan()->source_opcodes[
+					operation.source_position_id].op1_may_be
+				: UINT32_MAX;
+			ScratchReg match{this};
+			ScratchReg value_type{this};
+			const AsmReg match_reg = match.alloc_gp();
+			const AsmReg value_type_reg = value_type.alloc_gp();
+			auto mismatch = text_writer.label_create();
+			const int32_t value_disp = static_cast<int32_t>(value_offset);
+			const bool may_be_undefined =
+				(may_be & (MAY_BE_UNDEF | MAY_BE_REF)) != 0;
+			ASM(XOR32rr, match_reg, match_reg);
+			ASM(MOVZXr32m8, value_type_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+				value_disp + static_cast<int32_t>(
+					offsetof(zval, u1.v.type))));
+			ASM(CMP32ri, value_type_reg, Z_TYPE_P(known_literal));
+			generate_raw_jump(Jump::jne, mismatch);
+			if (Z_TYPE_P(known_literal) == IS_LONG) {
+				const zend_long literal_value = Z_LVAL_P(known_literal);
+				if (literal_value >= INT32_MIN && literal_value <= INT32_MAX) {
+					ASM(CMP64mi, FE_MEM(frame_reg, 0, FE_NOREG, value_disp),
+						static_cast<int32_t>(literal_value));
+				} else {
+					ASM(MOV64ri, value_type_reg,
+						static_cast<int64_t>(literal_value));
+					ASM(CMP64rm, value_type_reg,
+						FE_MEM(frame_reg, 0, FE_NOREG, value_disp));
+				}
+				generate_raw_set(Jump::je, match_reg);
+			} else {
+				ASM(MOV32ri, match_reg, 1);
+			}
+			if (may_be_undefined) {
+				auto decided = text_writer.label_create();
+				generate_raw_jump(Jump::jmp, decided);
+				label_place(mismatch);
+				ASM(TEST32rr, value_type_reg, value_type_reg);
+				generate_raw_jump(Jump::je, slow);
+				ASM(CMP32ri, value_type_reg, IS_REFERENCE);
+				generate_raw_jump(Jump::je, slow);
+				label_place(decided);
+			} else {
+				label_place(mismatch);
+			}
+			value_type.reset();
+			matched.set_value(this, std::move(match));
+		} else if (variable_other) {
 			if (!EncodeBase::encode_zend_native_zval_identical_any(
 					GenericValuePart{GenericValuePart::Expr{frame_reg,
 						static_cast<int64_t>(value_offset)}},
@@ -12584,8 +12645,10 @@ bool ZendCompilerX64::compile_inst_impl(
 		ScratchReg type{this};
 		auto decision_reg = decision.alloc_gp();
 		auto type_reg = type.alloc_gp();
-		ASM(CMP64ri, matched_reg, ZEND_NATIVE_IDENTICAL_UNKNOWN);
-		generate_raw_jump(Jump::je, slow);
+		if (!typed_literal) {
+			ASM(CMP64ri, matched_reg, ZEND_NATIVE_IDENTICAL_UNKNOWN);
+			generate_raw_jump(Jump::je, slow);
+		}
 		/* A CV result is overwritten: its old value must need no
 		 * release (a counted one takes the helper). */
 		if (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
