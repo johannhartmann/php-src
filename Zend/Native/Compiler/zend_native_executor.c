@@ -1997,6 +1997,7 @@ void zend_native_executor_activate(void)
 	ZEND_ASSERT(!zend_native_executor_request_state.dispatch_active);
 	ZEND_ASSERT(!zend_native_executor_request_state.lookup_indexes_active);
 	ZEND_ASSERT(zend_native_executor_request_state.epoch == NULL);
+	(void) zend_tpde_layout_switch();
 	zend_native_executor_acquire_request_epoch();
 	if (previous_epoch
 			!= zend_native_executor_request_state.observed_epoch) {
@@ -2176,6 +2177,11 @@ void zend_native_executor_deactivate(void)
 	zend_native_executor_release_request_epoch();
 	zend_native_call_resolution_cache_destroy();
 	zend_native_compile_trace_request_end("request_end");
+}
+
+bool zend_native_executor_take_layout_restart(void)
+{
+	return zend_tpde_layout_take_restart();
 }
 
 void zend_native_executor_invalidate(void)

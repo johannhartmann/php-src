@@ -3067,6 +3067,13 @@ ZEND_RINIT_FUNCTION(zend_accelerator)
 			ZCG(native_generation) = native_generation;
 			zend_native_executor_invalidate();
 		}
+		/* A finished layout training: recompile with its profile. */
+		if (zend_native_executor_take_layout_restart()
+				&& ZCG(accelerator_enabled)) {
+			zend_shared_alloc_lock();
+			zend_accel_schedule_restart(ACCEL_RESTART_USER);
+			zend_shared_alloc_unlock();
+		}
 	}
 #endif
 
