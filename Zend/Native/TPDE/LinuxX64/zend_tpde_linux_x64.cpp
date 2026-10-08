@@ -3180,6 +3180,10 @@ public:
 		return true;
 	}
 	void finish_func(uint32_t index) {
+		/* Rare exits: in the cold area, so the epilogue follows the hot code. */
+		if (typed_failure_label_.has_value() || catch_dispatch_label_.has_value()) {
+			text_writer.begin_cold_area();
+		}
 		if (typed_failure_label_.has_value()) {
 			label_place(*typed_failure_label_);
 			ASM(XOR32rr, FE_AX, FE_AX);
@@ -3190,6 +3194,9 @@ public:
 			label_place(*catch_dispatch_label_);
 			emit_handler_dispatch(AsmReg{AsmReg::AX});
 			gen_func_epilog();
+		}
+		if (text_writer.in_cold_area()) {
+			text_writer.end_cold_area();
 		}
 		const uint32_t frame_size = machine_frame_size();
 		Base::finish_func(index);
