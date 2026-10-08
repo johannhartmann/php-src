@@ -8405,7 +8405,8 @@ bool ZendCompilerX64::compile_inst_impl(
 		builder.call(runtime_symbol(ZEND_NATIVE_HELPER_SOURCE_PROBE));
 	}
 	if (record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE) {
-		if (mir.zval_store_lazy_scalar) {
+		if (mir.zval_store_lazy_scalar
+				&& node.kind == Adaptor::InstKind::MIR) {
 			if (node.kind != Adaptor::InstKind::MIR
 					|| node.operands.size() != 1
 					|| node.operands[0]
@@ -8416,7 +8417,9 @@ bool ZendCompilerX64::compile_inst_impl(
 			(void) frame_value;
 			return true;
 		}
-		if (mir.zval_store_plain) {
+		/* A lazy store the adaptor kept eager overwrites a non-counted
+		 * value, as a plain store does. */
+		if (mir.zval_store_plain || mir.zval_store_lazy_scalar) {
 			const zend_mir_storage_id storage = mir.zval_store_storage_id;
 			const uint64_t offset =
 				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);

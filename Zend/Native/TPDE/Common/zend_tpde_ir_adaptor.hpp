@@ -4841,11 +4841,6 @@ public:
 			}
 			const uint32_t definition_index =
 				static_cast<uint32_t>(definition);
-			if (definition_index < transient_scalar_results.size()
-					&& transient_scalar_results[definition_index]
-						!= INVALID_VALUE_REF) {
-				return transient_scalar_results[definition_index];
-			}
 			/*
 			 * Boxed PHIs are selected before the instruction stream is built so
 			 * their incoming-edge conversions can be frozen. A statepoint may use
@@ -7728,9 +7723,34 @@ public:
 			 * importantly, would tempt target code to treat a scalar payload as a
 			 * complete zval.  The runtime helper needs only the frame pointer.
 			 */
+			/*
+			 * A lazy store leaves its CV slot to the boundaries, which store
+			 * the source's register value.  A source without one here, such
+			 * as a frame-published call result, is stored at once.
+			 */
+			bool lazy_store = false;
+			if (record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE
+					&& instruction.zval_store_lazy_scalar
+					&& instruction.operand_count >= 1) {
+				/* Consumers read the source itself, so it must be the
+				 * register value a boundary stores. */
+				const int32_t source_index = zend_tpde_value_index(plan_,
+					zend_tpde_operand_at(plan_, &instruction, 0));
+				const IRValueRef source = source_index < 0
+					? INVALID_VALUE_REF
+					: resolve_materializable_scalar(
+						static_cast<uint32_t>(source_index),
+						static_cast<uint32_t>(block), i, 0,
+						resolve_materializable_scalar);
+				lazy_store = source != INVALID_VALUE_REF
+					&& source == value_ref(zend_tpde_operand_at(
+						plan_, &instruction, 0))
+					&& machine_value_has_result_representation(source)
+					&& machine_value_has_register_definition(source);
+			}
 			uint32_t data_operand_count =
 				record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE
-					? instruction.zval_store_lazy_scalar ? 0 : 1
+					? lazy_store ? 0 : 1
 				: static_slot_isset_operand != INVALID_VALUE_REF
 					? 0
 				: register_bool_unary_operand != INVALID_VALUE_REF
@@ -9995,6 +10015,9 @@ public:
 						|| register_cond_branch
 						|| register_bool_unary_operand != INVALID_VALUE_REF
 					? InstKind::MIR
+					: record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE
+						&& !lazy_store
+					? InstKind::ZvalStore
 					: executable_kind(instruction, record),
 				i, UINT32_MAX, result, {},
 				operand_offset, operand_count, machine_result,

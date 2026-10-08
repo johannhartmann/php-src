@@ -2481,6 +2481,13 @@ struct zend_tpde_plan {
 	uint32_t deopt_resume_count;
 	uint32_t *deopt_resume_targets;
 	uint32_t *deopt_resume_instructions;
+	/*
+	 * Per CV, nonzero when its lazy scalar stores are observable only by an
+	 * operation that names the CV: no symbol table, parameter, catch,
+	 * generator or user-opcode observer can read the slot otherwise.
+	 */
+	uint8_t *operand_observed_storages;
+	uint32_t operand_observed_storage_count;
 	zend_tpde_materialization *materializations;
 	uint32_t materialization_count;
 	zend_tpde_machine_reference *machine_references;
