@@ -7276,27 +7276,32 @@ public:
 					&& machine_value_used[
 						static_cast<uint32_t>(result_index)] != 0;
 			}
+			/* The call descriptors are shared by the entry and the typed
+			 * body of a plan; the entry adaptor, built first, owns their
+			 * result contract. */
+			auto set_result_flag = [&](uint32_t &flags, uint32_t flag,
+					bool required) {
+				if (function_mode_ == FunctionMode::TypedBody) {
+					ZEND_ASSERT(((flags & flag) != 0) == required);
+					return;
+				}
+				flags = required ? (flags | flag) : (flags & ~flag);
+			};
 			if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
 					&& instruction.direct_call != nullptr) {
-				instruction.direct_call->flags &=
-					~ZEND_NATIVE_DIRECT_CALL_REQUIRE_SCALAR_RESULT;
-				if (machine_result
+				set_result_flag(instruction.direct_call->flags,
+					ZEND_NATIVE_DIRECT_CALL_REQUIRE_SCALAR_RESULT,
+					machine_result
 						&& zend_mir_scalar_type_is_exact(
 							exact_type(result))
 						&& exact_type(result)
-							!= ZEND_MIR_SCALAR_TYPE_NULL) {
-					instruction.direct_call->flags |=
-						ZEND_NATIVE_DIRECT_CALL_REQUIRE_SCALAR_RESULT;
-				}
+							!= ZEND_MIR_SCALAR_TYPE_NULL);
 			} else if (record.opcode
 						== ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL
 					&& instruction.direct_internal_call != nullptr) {
-				instruction.direct_internal_call->flags &=
-					~ZEND_NATIVE_DIRECT_INTERNAL_CALL_REQUIRE_SCALAR_RESULT;
-				if (machine_result) {
-					instruction.direct_internal_call->flags |=
-						ZEND_NATIVE_DIRECT_INTERNAL_CALL_REQUIRE_SCALAR_RESULT;
-				}
+				set_result_flag(instruction.direct_internal_call->flags,
+					ZEND_NATIVE_DIRECT_INTERNAL_CALL_REQUIRE_SCALAR_RESULT,
+					machine_result);
 			}
 			bool has_guarded_boxed_value_argument = false;
 			if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
@@ -11337,8 +11342,14 @@ public:
 			slice.offset, slice.count);
 	}
 	/* A guard's cold block: TPDE writes it to the cold area of the
-	 * function, behind the hot code. */
+	 * function, behind the hot code. Only the x64 compiler appends that
+	 * area to the function; arm64 keeps every block in line. */
 	bool block_is_cold(IRBlockRef block) const {
+		if constexpr (ZEND_NATIVE_HOST_TARGET
+				!= ZEND_NATIVE_TARGET_LINUX_AMD64) {
+			(void) block;
+			return false;
+		}
 		/* So is an inlining host's bail block or fallback call. */
 		if (const zend_native_inline_host *host = plan_->inline_host;
 				host != nullptr && host->op_cold != nullptr) {
