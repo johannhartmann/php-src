@@ -237,6 +237,12 @@ bool zend_tpde_layout_training(void);
 /* The training run's shared memory, which compiled code refers to, or 0. */
 uint64_t zend_tpde_layout_training_session(void);
 void zend_tpde_layout_training_flush(void);
+/* Switches a ZEND_NATIVE_LAYOUT run whose training finished to its
+ * profile; true when this process switched now. */
+bool zend_tpde_layout_switch(void);
+/* Whether this process finished the training and OPcache should recompile
+ * the cached scripts with the profile; true once. */
+bool zend_tpde_layout_take_restart(void);
 
 /* Compiles every member into one image. */
 zend_result zend_tpde_compile_component(

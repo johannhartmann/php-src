@@ -19,6 +19,9 @@ extern "C" {
  */
 ZEND_API zend_result zend_native_executor_startup(void);
 ZEND_API void zend_native_executor_shutdown(void);
+/* A finished layout training asks OPcache, once, to recompile the cached
+ * scripts with its profile. */
+ZEND_API bool zend_native_executor_take_layout_restart(void);
 ZEND_API void zend_native_executor_activate(void);
 ZEND_API void zend_native_executor_deactivate(void);
 void zend_native_executor_prepare_shutdown(void);

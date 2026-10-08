@@ -47,9 +47,12 @@ constexpr uint64_t layout_minimum_executions = 256;
 
 /*
  * ZEND_NATIVE_LAYOUT=path combines both: an existing path is the profile,
- * otherwise this run trains into it, so that a server trains when it first
- * starts and uses the profile from the next start on.
+ * otherwise this run trains into it. After ZEND_NATIVE_LAYOUT_REQUESTS
+ * requests (default layout_switch_requests) of all processes sharing the
+ * training memory, the profile is written and every process switches to
+ * it; OPcache then recompiles the cached scripts with it.
  */
+constexpr uint64_t layout_switch_requests = 128;
 const char *layout_environment(const char *name, bool profile) {
 	if (const char *value = std::getenv(name); value != nullptr
 			&& value[0] != '\0') {
@@ -67,8 +70,11 @@ struct LayoutProfile {
 	/* "*" moves every eligible region, to test the transformation. */
 	bool all = false;
 	LayoutProfile() {
-		const char *path =
-			layout_environment("ZEND_NATIVE_LAYOUT_PROFILE", true);
+		load(layout_environment("ZEND_NATIVE_LAYOUT_PROFILE", true));
+	}
+	void load(const char *path) {
+		jumps.clear();
+		all = false;
 		if (path == nullptr || path[0] == '\0') {
 			return;
 		}
@@ -121,7 +127,7 @@ struct LayoutProfile {
 		std::fclose(file);
 	}
 };
-const LayoutProfile layout_profile;
+LayoutProfile layout_profile;
 
 /*
  * Layout training (ZEND_NATIVE_LAYOUT_TRAIN=path): each eligible jump gets
@@ -146,11 +152,28 @@ struct LayoutTraining {
 	 * process that made it and when. */
 	uint64_t session = 0;
 	uint32_t requests = 0;
+	/* The shared request count at which a ZEND_NATIVE_LAYOUT run switches
+	 * to its profile, 0 for a run that only trains. counters[0].ordinal
+	 * counts the requests, counters[0].taken is the phase. */
+	uint64_t switch_requests = 0;
+	static constexpr uint64_t phase_training = 0;
+	static constexpr uint64_t phase_writing = 1;
+	static constexpr uint64_t phase_ready = 2;
+	/* This process uses the profile now. */
+	bool switched = false;
+	/* This process wrote the profile: OPcache recompiles with it. */
+	bool restart_wanted = false;
 	LayoutTraining() {
+		const char *train = std::getenv("ZEND_NATIVE_LAYOUT_TRAIN");
 		const char *name =
 			layout_environment("ZEND_NATIVE_LAYOUT_TRAIN", false);
 		if (name == nullptr || name[0] == '\0') {
 			return;
+		}
+		if (train == nullptr || train[0] == '\0') {
+			const char *limit = std::getenv("ZEND_NATIVE_LAYOUT_REQUESTS");
+			switch_requests = limit != nullptr && limit[0] != '\0'
+				? std::strtoull(limit, nullptr, 10) : layout_switch_requests;
 		}
 		void *memory = ::mmap(nullptr, capacity * sizeof(Counter),
 			PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
@@ -201,9 +224,13 @@ struct LayoutTraining {
 		std::fclose(file);
 		std::rename(name.c_str(), path);
 	}
-	/* A process that exits normally (the CLI) writes the last counts. */
+	/* A process that exits normally (the CLI) writes the last counts,
+	 * unless it switched to the profile already written. */
 	~LayoutTraining() {
-		if (path != nullptr) {
+		if (path != nullptr && !switched
+				&& (counters == nullptr
+					|| __atomic_load_n(&counters[0].taken, __ATOMIC_ACQUIRE)
+						== phase_training)) {
 			write();
 		}
 	}
@@ -3113,7 +3140,8 @@ public:
 	void generate_raw_jump(Jump jump, tpde::Label target) {
 		if (jump != Jump::jmp) {
 			const uint32_t ordinal = layout_jump_ordinal_++;
-			if (layout_training.path != nullptr && layout_in_inst_
+			if (layout_training.path != nullptr && !layout_training.switched
+					&& layout_in_inst_
 					&& !text_writer.in_cold_area()
 					&& text_writer.label_is_pending(target)) {
 				/* Both outcomes pass a counting stub in the cold area. */
@@ -24177,19 +24205,62 @@ zend_result zend_tpde_emit_linux_x64(
 
 extern "C" bool zend_tpde_layout_training(void)
 {
-	return layout_training.path != nullptr;
+	return layout_training.path != nullptr && !layout_training.switched;
 }
 
 extern "C" uint64_t zend_tpde_layout_training_session(void)
 {
-	return layout_training.session;
+	return layout_training.switched ? 0 : layout_training.session;
 }
 
-/* FPM workers exit without destructors: every sixteenth request writes. */
+/* FPM workers exit without destructors: every sixteenth request writes.
+ * The request that completes a switching run's training writes the
+ * profile and marks it ready for every process. */
 extern "C" void zend_tpde_layout_training_flush(void)
 {
-	if (layout_training.path != nullptr
-			&& ++layout_training.requests % 16 == 0) {
-		layout_training.write();
+	LayoutTraining &training = layout_training;
+	if (training.path == nullptr || training.switched) {
+		return;
 	}
+	const uint64_t total = __atomic_add_fetch(
+		&training.counters[0].ordinal, 1, __ATOMIC_RELAXED);
+	uint64_t phase = LayoutTraining::phase_training;
+	if (training.switch_requests != 0 && total >= training.switch_requests
+			&& __atomic_compare_exchange_n(&training.counters[0].taken,
+				&phase, LayoutTraining::phase_writing, false,
+				__ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+		training.write();
+		__atomic_store_n(&training.counters[0].taken,
+			LayoutTraining::phase_ready, __ATOMIC_RELEASE);
+		training.restart_wanted = true;
+		return;
+	}
+	if (++training.requests % 16 == 0) {
+		training.write();
+	}
+}
+
+/* At request start: a process whose run's profile is ready stops
+ * training and compiles with the profile from now on. */
+extern "C" bool zend_tpde_layout_switch(void)
+{
+	LayoutTraining &training = layout_training;
+	if (training.path == nullptr || training.switched
+			|| training.switch_requests == 0
+			|| __atomic_load_n(&training.counters[0].taken,
+				__ATOMIC_ACQUIRE) != LayoutTraining::phase_ready) {
+		return false;
+	}
+	training.switched = true;
+	layout_profile.load(training.path);
+	return true;
+}
+
+/* Whether this process wrote the profile and OPcache should recompile the
+ * cached scripts with it; asks once. */
+extern "C" bool zend_tpde_layout_take_restart(void)
+{
+	const bool wanted = layout_training.restart_wanted;
+	layout_training.restart_wanted = false;
+	return wanted;
 }

@@ -41,6 +41,16 @@ extern "C" void zend_tpde_layout_training_flush(void)
 {
 }
 
+extern "C" bool zend_tpde_layout_switch(void)
+{
+	return false;
+}
+
+extern "C" bool zend_tpde_layout_take_restart(void)
+{
+	return false;
+}
+
 extern "C" void __register_frame(void *);
 extern "C" void __deregister_frame(void *);
 extern "C" void __unw_add_dynamic_eh_frame_section(uintptr_t)
