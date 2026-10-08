@@ -8198,10 +8198,20 @@ bool initialize_plan(
 					case ZEND_MIR_OPCODE_VALUE_INIT_ARRAY:
 						require_runtime_helper(plan,
 							ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY_ADDRESS);
-						break;
+						require_runtime_helper(plan,
+							ZEND_NATIVE_HELPER_NEW_ARRAY);
+						require_runtime_helper(plan,
+							ZEND_NATIVE_HELPER_HASH_REAL_INIT_MIXED);
+						[[fallthrough]];
 					case ZEND_MIR_OPCODE_VALUE_ADD_ARRAY_ELEMENT:
 						require_runtime_helper(plan,
 							ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_ELEMENT_ADDRESS);
+						require_runtime_helper(plan,
+							ZEND_NATIVE_HELPER_HASH_UPDATE);
+						require_runtime_helper(plan,
+							ZEND_NATIVE_HELPER_HASH_INDEX_UPDATE);
+						require_runtime_helper(plan,
+							ZEND_NATIVE_HELPER_HASH_NEXT_INDEX_INSERT);
 						break;
 					case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R:
 						require_runtime_helper(plan,
@@ -8224,6 +8234,13 @@ bool initialize_plan(
 						plan->instructions[i], &concat_direct)) {
 				require_runtime_helper(
 					plan, ZEND_NATIVE_HELPER_VALUE_CONCAT_DIRECT);
+				for (const zend_native_runtime_helper_id strings : {
+						ZEND_NATIVE_HELPER_CONCAT_STRINGS_VV,
+						ZEND_NATIVE_HELPER_CONCAT_STRINGS_TV,
+						ZEND_NATIVE_HELPER_CONCAT_STRINGS_VT,
+						ZEND_NATIVE_HELPER_CONCAT_STRINGS_TT}) {
+					require_runtime_helper(plan, strings);
+				}
 			}
 			zend_tpde_concat_assign_direct concat_assign_direct{};
 			if (record.opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN_OP

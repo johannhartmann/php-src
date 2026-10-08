@@ -3158,17 +3158,18 @@ zend_native_status zend_native_value_verify_return_type(
  * operation, releasing temporary operands. Returns false, with nothing
  * changed, when an operand is no string.
  */
+static zend_always_inline zend_native_status zend_native_value_concat_string_values(
+	zend_execute_data *execute_data,
+	zval *fast_left, zval *left_value, bool left_tmp,
+	zval *fast_right, zval *right_value, bool right_tmp,
+	zval *fast_result, uint32_t source_position_id);
+
 static zend_always_inline bool zend_native_value_concat_strings(
 	zend_execute_data *execute_data,
 	zval *fast_left, bool left_tmp, zval *fast_right, bool right_tmp,
 	zval *fast_result, uint32_t source_position_id,
 	zend_native_status *out)
 {
-	zend_result status;
-	/* Only concat_function() can raise; releasing a temporary string
-	 * cannot, as ZEND_CONCAT's own result shows. */
-	bool may_raise = false;
-
 	zval *left_value = fast_left;
 	zval *right_value = fast_right;
 
@@ -3182,6 +3183,24 @@ static zend_always_inline bool zend_native_value_concat_strings(
 			|| Z_TYPE_P(right_value) != IS_STRING) {
 		return false;
 	}
+	*out = zend_native_value_concat_string_values(execute_data,
+		fast_left, left_value, left_tmp, fast_right, right_value, right_tmp,
+		fast_result, source_position_id);
+	return true;
+}
+
+/* Two strings, dereferenced: ZEND_CONCAT's string path. */
+static zend_always_inline zend_native_status zend_native_value_concat_string_values(
+	zend_execute_data *execute_data,
+	zval *fast_left, zval *left_value, bool left_tmp,
+	zval *fast_right, zval *right_value, bool right_tmp,
+	zval *fast_result, uint32_t source_position_id)
+{
+	zend_result status;
+	/* Only concat_function() can raise; releasing a temporary string
+	 * cannot, as ZEND_CONCAT's own result shows. */
+	bool may_raise = false;
+
 	{
 		zend_string *left_string = Z_STR_P(left_value);
 		zend_string *right_string = Z_STR_P(right_value);
@@ -3250,11 +3269,24 @@ static zend_always_inline bool zend_native_value_concat_strings(
 			zval_ptr_dtor_nogc(fast_right);
 			ZVAL_UNDEF(fast_right);
 		}
-		*out = status != SUCCESS ? ZEND_NATIVE_EXCEPTION
+		return status != SUCCESS ? ZEND_NATIVE_EXCEPTION
 			: may_raise ? zend_native_value_status() : ZEND_NATIVE_RETURNED;
-		return true;
 	}
 }
+
+#define ZEND_NATIVE_CONCAT_STRINGS(name, left_tmp, right_tmp) \
+	zend_native_status name(zend_execute_data *execute_data, \
+		zval *left, zval *right, zval *result, uint32_t source_position_id) \
+	{ \
+		return zend_native_value_concat_string_values(execute_data, \
+			left, left, left_tmp, right, right, right_tmp, result, \
+			source_position_id); \
+	}
+ZEND_NATIVE_CONCAT_STRINGS(zend_native_concat_strings_vv, false, false)
+ZEND_NATIVE_CONCAT_STRINGS(zend_native_concat_strings_tv, true, false)
+ZEND_NATIVE_CONCAT_STRINGS(zend_native_concat_strings_vt, false, true)
+ZEND_NATIVE_CONCAT_STRINGS(zend_native_concat_strings_tt, true, true)
+#undef ZEND_NATIVE_CONCAT_STRINGS
 
 static zend_native_status zend_native_value_concat_impl(
 	zend_execute_data *execute_data,
