@@ -14,7 +14,7 @@ extern "C" {
  * loaded: bump it whenever the helper ids, the execution context, the
  * persisted image layout or what generated code assumes about them change.
  */
-#define ZEND_NATIVE_RUNTIME_ABI_VERSION 96u
+#define ZEND_NATIVE_RUNTIME_ABI_VERSION 97u
 
 typedef void (*zend_native_source_probe_t)(
 	void *context,
@@ -250,7 +250,18 @@ typedef enum _zend_native_runtime_helper_id {
 	ZEND_NATIVE_HELPER_CALL_FAST_RELEASE_THIS = 223,
 	ZEND_NATIVE_HELPER_INTERNAL_CALL_DO_PLAIN_FINISH = 224,
 	ZEND_NATIVE_HELPER_CALL_CHECK_UNDEF_FRAME = 225,
-	ZEND_NATIVE_HELPER_COUNT = 226
+	/* Engine primitives the code calls with values: array literals. */
+	ZEND_NATIVE_HELPER_NEW_ARRAY = 226,
+	ZEND_NATIVE_HELPER_HASH_REAL_INIT_MIXED = 227,
+	ZEND_NATIVE_HELPER_HASH_UPDATE = 228,
+	ZEND_NATIVE_HELPER_HASH_INDEX_UPDATE = 229,
+	ZEND_NATIVE_HELPER_HASH_NEXT_INDEX_INSERT = 230,
+	/* Two checked strings: zend_native_concat_strings_{vv,tv,vt,tt}(). */
+	ZEND_NATIVE_HELPER_CONCAT_STRINGS_VV = 231,
+	ZEND_NATIVE_HELPER_CONCAT_STRINGS_TV = 232,
+	ZEND_NATIVE_HELPER_CONCAT_STRINGS_VT = 233,
+	ZEND_NATIVE_HELPER_CONCAT_STRINGS_TT = 234,
+	ZEND_NATIVE_HELPER_COUNT = 235
 } zend_native_runtime_helper_id;
 
 /*

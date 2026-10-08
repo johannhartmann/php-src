@@ -2152,6 +2152,422 @@ public:
 		ASM(LEA64rm, FE_SP, FE_MEM(FE_SP, 0, FE_NOREG, save_area));
 	}
 
+	/*
+	 * INIT_ARRAY and ADD_ARRAY_ELEMENT of a literal or missing key and a
+	 * literal, CV or temporary value into the literal's temporary: the
+	 * value is checked and its reference taken inline, then the engine's
+	 * own primitives build the array, as the VM handlers do. An undefined
+	 * or referenced CV, a persistent value or a full array takes the
+	 * address helper, which repeats the whole operation. Sets *handled
+	 * when it emitted; returns false on an emission error.
+	 */
+	bool emit_array_element_primitive(const Adaptor::InstNode &node,
+			const zend_tpde_instruction &mir,
+			const zend_mir_executable_value_ref &operation, bool init,
+			bool *handled) {
+		*handled = false;
+		const zend_tpde_plan *plan = adaptor->plan();
+		const uint32_t position = operation.source_position_id;
+		if ((operation.extended_value & ZEND_ARRAY_ELEMENT_REF) != 0
+				|| plan->source_opcodes == nullptr
+				|| plan->source_literals == nullptr
+				|| (operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+					&& operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
+				|| operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+				|| !zend_mir_id_is_valid(operation.result_storage_id)
+				|| plan->source_opcodes[position].result_type
+					!= IS_TMP_VAR) {
+			return true;
+		}
+		enum class ValueKind { Cv, Tmp, Literal };
+		ValueKind value_kind;
+		uint64_t value_offset;
+		if (operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+			if (operation.op1.index >= plan->source_literal_count
+					|| Z_REFCOUNTED(
+						plan->source_literals[operation.op1.index])) {
+				return true;
+			}
+			value_kind = ValueKind::Literal;
+			value_offset = uint64_t{operation.op1.index} * sizeof(zval);
+		} else if ((operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+					|| operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+				&& zend_mir_id_is_valid(operation.op1_storage_id)
+				&& ((operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+						&& plan->source_opcodes[position].op1_type == IS_CV)
+					|| (operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+						&& plan->source_opcodes[position].op1_type
+							== IS_TMP_VAR))
+				&& operation.op1_storage_id != operation.result_storage_id) {
+			value_kind = operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+				? ValueKind::Cv : ValueKind::Tmp;
+			value_offset = (uint64_t{ZEND_CALL_FRAME_SLOT}
+				+ operation.op1_storage_id) * sizeof(zval);
+		} else {
+			return true;
+		}
+		enum class KeyKind { Append, String, Long };
+		KeyKind key_kind;
+		uint64_t key_value = 0;
+		if (operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+			key_kind = KeyKind::Append;
+		} else if (operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+				&& operation.op2.index < plan->source_literal_count) {
+			const zval *key = &plan->source_literals[operation.op2.index];
+			if (Z_TYPE_P(key) == IS_STRING) {
+				key_kind = KeyKind::String;
+				key_value = uint64_t{operation.op2.index} * sizeof(zval);
+			} else if (Z_TYPE_P(key) == IS_LONG) {
+				key_kind = KeyKind::Long;
+				key_value = static_cast<uint64_t>(Z_LVAL_P(key));
+			} else {
+				return true;
+			}
+		} else {
+			return true;
+		}
+		const uint64_t result_offset = (uint64_t{ZEND_CALL_FRAME_SLOT}
+			+ operation.result_storage_id) * sizeof(zval);
+		if (value_offset > INT32_MAX - sizeof(zval)
+				|| result_offset > INT32_MAX - sizeof(zval)
+				|| key_value > (key_kind == KeyKind::String
+					? uint64_t{INT32_MAX} : UINT64_MAX)) {
+			return true;
+		}
+		*handled = true;
+		{
+			auto frame_use = val_ref(node.operands.back());
+			(void) frame_use;
+		}
+		const AsmReg frame_reg = canonical_frame_register();
+		const int32_t value_disp = static_cast<int32_t>(value_offset);
+		const int32_t result_disp = static_cast<int32_t>(result_offset);
+		const uint32_t may_be = plan->source_opcodes[position].op1_may_be;
+		auto general = text_writer.label_create();
+		auto joined = text_writer.label_create();
+		ScratchReg status_scratch{this};
+		const AsmReg status_reg = status_scratch.alloc_gp();
+		{
+			ScratchReg check{this};
+			const AsmReg check_reg = check.alloc_gp();
+			if (value_kind == ValueKind::Cv
+					&& (may_be & (MAY_BE_UNDEF | MAY_BE_REF)) != 0) {
+				ASM(MOVZXr32m8, check_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+					value_disp + static_cast<int32_t>(
+						offsetof(zval, u1.v.type))));
+				ASM(CMP32ri, check_reg, IS_REFERENCE);
+				generate_raw_jump(Jump::je, general);
+				ASM(TEST32rr, check_reg, check_reg);
+				generate_raw_jump(Jump::je, general);
+			}
+			if (key_kind == KeyKind::Append && !init) {
+				ScratchReg limit{this};
+				const AsmReg limit_reg = limit.alloc_gp();
+				ASM(MOV64rm, check_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+					result_disp));
+				ASM(MOV64ri, limit_reg, ZEND_LONG_MAX);
+				ASM(CMP64rm, limit_reg, FE_MEM(check_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(HashTable, nNextFreeElement))));
+				generate_raw_jump(Jump::je, general);
+			}
+			/* A CV's value gains a reference; a temporary moves. */
+			if (value_kind == ValueKind::Cv
+					&& (may_be & (MAY_BE_STRING | MAY_BE_ARRAY
+						| MAY_BE_OBJECT | MAY_BE_RESOURCE)) != 0) {
+				auto counted = text_writer.label_create();
+				ASM(TEST8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+					value_disp + static_cast<int32_t>(
+						offsetof(zval, u1.v.type_flags))),
+					IS_TYPE_REFCOUNTED);
+				generate_raw_jump(Jump::je, counted);
+				ASM(MOV64rm, check_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+					value_disp));
+				ASM(TEST32mi, FE_MEM(check_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_refcounted_h,
+						u.type_info))),
+					static_cast<int32_t>(GC_PERSISTENT << GC_FLAGS_SHIFT));
+				generate_raw_jump(Jump::jne, general);
+				ASM(ADD32mi, FE_MEM(check_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_refcounted_h,
+						refcount))), 1);
+				label_place(counted);
+			}
+		}
+		auto load_literals = [&](FeRegGP target) {
+			ASM(MOV64rm, target, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_execute_data, func))));
+			ASM(MOV64rm, target, FE_MEM(target, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_op_array, literals))));
+		};
+		const zend_native_runtime_helper_id insert =
+			key_kind == KeyKind::String ? ZEND_NATIVE_HELPER_HASH_UPDATE
+			: key_kind == KeyKind::Long ? ZEND_NATIVE_HELPER_HASH_INDEX_UPDATE
+			: ZEND_NATIVE_HELPER_HASH_NEXT_INDEX_INSERT;
+		auto set_insert_arguments = [&] {
+			FeRegGP value_reg = key_kind == KeyKind::Append ? FE_SI : FE_DX;
+			if (key_kind == KeyKind::String) {
+				load_literals(FE_SI);
+				ASM(MOV64rm, FE_SI, FE_MEM(FE_SI, 0, FE_NOREG,
+					static_cast<int32_t>(key_value)));
+			} else if (key_kind == KeyKind::Long) {
+				ASM(MOV64ri, FE_SI, static_cast<int64_t>(key_value));
+			}
+			if (value_kind == ValueKind::Literal) {
+				load_literals(value_reg);
+				ASM(LEA64rm, value_reg, FE_MEM(value_reg, 0, FE_NOREG,
+					static_cast<int32_t>(value_offset)));
+			} else {
+				ASM(LEA64rm, value_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+					value_disp));
+			}
+		};
+		auto after_insert = [&] {
+			if (value_kind == ValueKind::Tmp) {
+				ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+					value_disp + static_cast<int32_t>(
+						offsetof(zval, u1.type_info))), IS_UNDEF);
+			}
+		};
+		const uint64_t live = register_file.used
+			& ~(uint64_t{1} << status_reg.id());
+		if (init) {
+			const uint32_t size =
+				operation.extended_value >> ZEND_ARRAY_SIZE_SHIFT;
+			const bool mixed =
+				(operation.extended_value & ZEND_ARRAY_NOT_PACKED) != 0;
+			emit_preserving_call(live, ZEND_NATIVE_HELPER_NEW_ARRAY,
+				[&] { ASM(MOV32ri, FE_DI, static_cast<int32_t>(size)); },
+				[&] {
+					ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG, result_disp),
+						FE_AX);
+					ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+						result_disp + static_cast<int32_t>(
+							offsetof(zval, u1.type_info))), IS_ARRAY_EX);
+					if (mixed) {
+						ASM(MOV64rr, FE_DI, FE_AX);
+						emit_symbol_call(runtime_symbol(
+							ZEND_NATIVE_HELPER_HASH_REAL_INIT_MIXED));
+					}
+					ASM(MOV64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG,
+						result_disp));
+					set_insert_arguments();
+					emit_symbol_call(runtime_symbol(insert));
+					after_insert();
+				});
+		} else {
+			emit_preserving_call(live, insert,
+				[&] {
+					ASM(MOV64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG,
+						result_disp));
+					set_insert_arguments();
+				},
+				[&] { after_insert(); });
+		}
+		ASM(XOR32rr, status_reg, status_reg);
+		cold_begin();
+		label_place(general);
+		if (init && zend_tpde_helper_requires_undef_result(
+				ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY, operation)) {
+			ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				result_disp + static_cast<int32_t>(
+					offsetof(zval, u1.type_info))), IS_UNDEF);
+		}
+		emit_preserving_call(live,
+			init ? ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY_ADDRESS
+				: ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_ELEMENT_ADDRESS,
+			[&] {
+				ASM(LEA64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG, 0));
+				if (value_kind == ValueKind::Literal) {
+					load_literals(FE_SI);
+					ASM(LEA64rm, FE_SI, FE_MEM(FE_SI, 0, FE_NOREG,
+						static_cast<int32_t>(value_offset)));
+				} else {
+					ASM(LEA64rm, FE_SI, FE_MEM(frame_reg, 0, FE_NOREG,
+						value_disp));
+				}
+				if (key_kind == KeyKind::Append) {
+					ASM(XOR32rr, FE_DX, FE_DX);
+				} else {
+					load_literals(FE_DX);
+					ASM(LEA64rm, FE_DX, FE_MEM(FE_DX, 0, FE_NOREG,
+						static_cast<int32_t>(uint64_t{operation.op2.index}
+							* sizeof(zval))));
+				}
+				ASM(LEA64rm, FE_CX, FE_MEM(frame_reg, 0, FE_NOREG,
+					result_disp));
+				ASM(MOV32ri, FE_R8,
+					static_cast<int32_t>(operation.extended_value));
+				const uint64_t value_address_kind =
+					value_kind == ValueKind::Literal
+						? ZEND_NATIVE_DIM_DIRECT_CONST
+					: value_kind == ValueKind::Cv
+						? ZEND_NATIVE_DIM_DIRECT_CV
+						: ZEND_NATIVE_DIM_DIRECT_TMP;
+				const uint64_t key_address_kind =
+					key_kind == KeyKind::Append
+						? ZEND_NATIVE_DIM_DIRECT_UNUSED
+						: ZEND_NATIVE_DIM_DIRECT_CONST;
+				ASM(MOV64ri, FE_R9, static_cast<int64_t>(value_address_kind
+					| (key_address_kind << 2)
+					| (uint64_t{ZEND_NATIVE_DIM_DIRECT_TMP} << 4)
+					| (uint64_t{operation.source_opcode & 0xff} << 8)
+					| (uint64_t{position} << 32)));
+			},
+			[&] { ASM(MOV32rr, status_reg, FE_AX); });
+		generate_raw_jump(Jump::jmp, joined);
+		cold_end();
+		label_place(joined);
+		/* As after a call: the status tail's return path then spills
+		 * nothing the continuation would miss. */
+		const uint64_t callee_saved =
+			cur_cc_assigner()->get_ccinfo().callee_saved_regs;
+		for (auto reg : tpde::util::BitSetIterator<>{
+				register_file.used & ~callee_saved}) {
+			if (!register_file.is_fixed(AsmReg{reg})) {
+				evict_reg(AsmReg{reg});
+			}
+		}
+		ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
+		status.set_value(this, std::move(status_scratch));
+		emit_status_tail(std::move(status), mir.exception_block_id, true);
+		return true;
+	}
+
+	/*
+	 * CONCAT/FAST_CONCAT in the direct form: the string types are checked
+	 * inline (or proven by inference), then one of the
+	 * zend_native_concat_strings_*() primitives concatenates the operand
+	 * addresses without decoding. Anything else takes the direct helper.
+	 */
+	bool emit_concat_strings_primitive(const Adaptor::InstNode &node,
+			const zend_tpde_instruction &mir,
+			const zend_mir_executable_value_ref &operation,
+			zend_native_runtime_helper_id helper,
+			const zend_tpde_concat_direct &direct, bool *handled) {
+		*handled = false;
+		const zend_tpde_plan *plan = adaptor->plan();
+		const uint32_t position = operation.source_position_id;
+		if (plan->source_opcodes == nullptr
+				|| plan->source_literals == nullptr) {
+			return true;
+		}
+		struct Operand {
+			uint32_t kind;
+			uint32_t offset;
+			uint32_t may_be;
+		};
+		const Operand operands[2] = {
+			{static_cast<uint32_t>(direct.descriptor & 3),
+				static_cast<uint32_t>(direct.slots),
+				plan->source_opcodes[position].op1_may_be},
+			{static_cast<uint32_t>((direct.descriptor >> 2) & 3),
+				static_cast<uint32_t>(direct.slots >> 32),
+				plan->source_opcodes[position].op2_may_be},
+		};
+		for (const Operand &operand : operands) {
+			if (operand.kind == ZEND_NATIVE_DIM_DIRECT_CONST
+					? operand.offset >= plan->source_literal_count
+						|| Z_TYPE(plan->source_literals[operand.offset])
+							!= IS_STRING
+						|| uint64_t{operand.offset} * sizeof(zval)
+							> INT32_MAX
+					: (operand.kind != ZEND_NATIVE_DIM_DIRECT_CV
+							&& operand.kind != ZEND_NATIVE_DIM_DIRECT_TMP)
+						|| operand.offset > INT32_MAX - sizeof(zval)) {
+				return true;
+			}
+		}
+		if (direct.result_offset > INT32_MAX - sizeof(zval)) {
+			return true;
+		}
+		*handled = true;
+		{
+			auto frame_use = val_ref(node.operands.back());
+			(void) frame_use;
+		}
+		const AsmReg frame_reg = canonical_frame_register();
+		auto general = text_writer.label_create();
+		auto joined = text_writer.label_create();
+		ScratchReg status_scratch{this};
+		const AsmReg status_reg = status_scratch.alloc_gp();
+		for (const Operand &operand : operands) {
+			if (operand.kind == ZEND_NATIVE_DIM_DIRECT_CONST
+					|| (operand.may_be
+						& (MAY_BE_ANY | MAY_BE_UNDEF | MAY_BE_REF))
+						== MAY_BE_STRING) {
+				continue;
+			}
+			ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(operand.offset
+					+ offsetof(zval, u1.v.type))), IS_STRING);
+			generate_raw_jump(Jump::jne, general);
+		}
+		const bool left_tmp = operands[0].kind == ZEND_NATIVE_DIM_DIRECT_TMP;
+		const bool right_tmp = operands[1].kind == ZEND_NATIVE_DIM_DIRECT_TMP;
+		const zend_native_runtime_helper_id strings = left_tmp
+			? right_tmp ? ZEND_NATIVE_HELPER_CONCAT_STRINGS_TT
+				: ZEND_NATIVE_HELPER_CONCAT_STRINGS_TV
+			: right_tmp ? ZEND_NATIVE_HELPER_CONCAT_STRINGS_VT
+				: ZEND_NATIVE_HELPER_CONCAT_STRINGS_VV;
+		auto operand_address = [&](FeRegGP target, const Operand &operand) {
+			if (operand.kind == ZEND_NATIVE_DIM_DIRECT_CONST) {
+				ASM(MOV64rm, target, FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_execute_data, func))));
+				ASM(MOV64rm, target, FE_MEM(target, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_op_array, literals))));
+				ASM(LEA64rm, target, FE_MEM(target, 0, FE_NOREG,
+					static_cast<int32_t>(operand.offset * sizeof(zval))));
+			} else {
+				ASM(LEA64rm, target, FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(operand.offset)));
+			}
+		};
+		const uint64_t live = register_file.used
+			& ~(uint64_t{1} << status_reg.id());
+		emit_preserving_call(live, strings,
+			[&] {
+				ASM(LEA64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG, 0));
+				operand_address(FE_SI, operands[0]);
+				operand_address(FE_DX, operands[1]);
+				ASM(LEA64rm, FE_CX, FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(direct.result_offset)));
+				ASM(MOV32ri, FE_R8, static_cast<int32_t>(position));
+			},
+			[&] { ASM(MOV32rr, status_reg, FE_AX); });
+		cold_begin();
+		label_place(general);
+		if (zend_tpde_helper_requires_undef_result(helper, operation)) {
+			ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(direct.result_offset
+					+ offsetof(zval, u1.type_info))), IS_UNDEF);
+		}
+		emit_preserving_call(live, ZEND_NATIVE_HELPER_VALUE_CONCAT_DIRECT,
+			[&] {
+				ASM(LEA64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG, 0));
+				ASM(MOV64ri, FE_SI, static_cast<int64_t>(direct.descriptor));
+				ASM(MOV64ri, FE_DX, static_cast<int64_t>(direct.slots));
+				ASM(MOV32ri, FE_CX,
+					static_cast<int32_t>(direct.result_offset));
+			},
+			[&] { ASM(MOV32rr, status_reg, FE_AX); });
+		generate_raw_jump(Jump::jmp, joined);
+		cold_end();
+		label_place(joined);
+		const uint64_t callee_saved =
+			cur_cc_assigner()->get_ccinfo().callee_saved_regs;
+		for (auto reg : tpde::util::BitSetIterator<>{
+				register_file.used & ~callee_saved}) {
+			if (!register_file.is_fixed(AsmReg{reg})) {
+				evict_reg(AsmReg{reg});
+			}
+		}
+		ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
+		status.set_value(this, std::move(status_scratch));
+		emit_status_tail(std::move(status), mir.exception_block_id, true);
+		return true;
+	}
+
 	/* Defines a result from a helper's 8-byte payload return, moved into
 	 * an FP register for a double. */
 	void set_payload_result(IRValueRef value, ValuePart &&payload) {
@@ -9018,6 +9434,36 @@ bool ZendCompilerX64::compile_inst_impl(
 			status.set_value(this, std::move(status_scratch));
 			emit_status_tail(std::move(status), mir.exception_block_id, true);
 			return true;
+		}
+		if ((helper == ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY
+					|| helper == ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_ELEMENT)
+				&& frame_argument == nullptr && !node.has_result
+				&& node.operands.size() == 1) {
+			bool handled = false;
+			if (!emit_array_element_primitive(node, mir, operation,
+					helper == ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY,
+					&handled)) {
+				return false;
+			}
+			if (handled) {
+				return true;
+			}
+		}
+		if ((helper == ZEND_NATIVE_HELPER_VALUE_CONCAT
+					|| helper == ZEND_NATIVE_HELPER_VALUE_FAST_CONCAT)
+				&& frame_argument == nullptr && !node.has_result
+				&& node.operands.size() == 1) {
+			zend_tpde_concat_direct strings{};
+			if (zend_tpde_concat_direct_at(mir, &strings)) {
+				bool handled = false;
+				if (!emit_concat_strings_primitive(node, mir, operation,
+						helper, strings, &handled)) {
+					return false;
+				}
+				if (handled) {
+					return true;
+				}
+			}
 		}
 		tpde::x64::CCAssignerSysV assigner{false};
 		CallBuilder builder{*this, assigner};

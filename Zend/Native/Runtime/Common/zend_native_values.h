@@ -112,6 +112,19 @@ zend_native_status zend_native_value_identical_direct(
 	zend_execute_data *execute_data, uint64_t descriptor, uint64_t slots, uint64_t result_offset);
 zend_native_status zend_native_value_concat_direct(
 	zend_execute_data *execute_data, uint64_t descriptor, uint64_t slots, uint64_t result_offset);
+/*
+ * Two strings the caller checked into a temporary or an optimizer-named CV
+ * without an old value; the name says which operands are temporaries the
+ * concatenation consumes (t) and which it only reads (v).
+ */
+zend_native_status zend_native_concat_strings_vv(zend_execute_data *execute_data,
+	zval *left, zval *right, zval *result, uint32_t source_position_id);
+zend_native_status zend_native_concat_strings_tv(zend_execute_data *execute_data,
+	zval *left, zval *right, zval *result, uint32_t source_position_id);
+zend_native_status zend_native_concat_strings_vt(zend_execute_data *execute_data,
+	zval *left, zval *right, zval *result, uint32_t source_position_id);
+zend_native_status zend_native_concat_strings_tt(zend_execute_data *execute_data,
+	zval *left, zval *right, zval *result, uint32_t source_position_id);
 zend_native_status zend_native_value_concat_assign_direct(
 	zend_execute_data *execute_data, uint64_t descriptor, uint64_t slots);
 zend_native_status zend_native_value_assign_op(
