@@ -18377,19 +18377,25 @@ bool ZendCompilerX64::compile_inst_impl(
 						decision.reset(this);
 						generate_raw_jump(Jump::jne, truthy);
 						generate_raw_jump(Jump::jmp, falsey);
-						/* The truthy tail only forwards (jump threading
-						 * resolves the jumps to it to the block): it stays in
-						 * the cold area, so the inline code's last jump to the
-						 * falsey tail is one to the next instruction. */
+						/* One tail only forwards (jump threading resolves
+						 * the jumps to it to the block) and stays in the cold
+						 * area; the other follows the inline code, which
+						 * falls into it. The truthy one does when its block
+						 * comes next: the inline code's jump to the falsey
+						 * one then becomes the inverted branch to its block. */
 						const auto spilled = spill_before_branch();
 						begin_branch_region();
-						label_place(truthy);
+						const bool truthy_next =
+							this->analyzer.block_idx(successors[0])
+								== this->next_block();
+						const size_t cold_tail = truthy_next ? 1 : 0;
+						label_place(truthy_next ? falsey : truthy);
 						generate_branch_to_block(
-							Jump::jmp, successors[0], false, false);
+							Jump::jmp, successors[cold_tail], false, false);
 						cold_end();
-						label_place(falsey);
+						label_place(truthy_next ? truthy : falsey);
 						generate_branch_to_block(
-							Jump::jmp, successors[1], false, true);
+							Jump::jmp, successors[1 - cold_tail], false, true);
 						end_branch_region();
 						release_spilled_regs(spilled);
 						return true;

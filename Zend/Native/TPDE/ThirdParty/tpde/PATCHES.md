@@ -114,7 +114,9 @@ function become fixups to a label in front of the epilogue.
 the epilogue is written and the cold area appended, and before the prologue
 is written,
 shortens every jump whose target lies within rel8 range to the 2-byte form
-and removes jumps to the next instruction. It iterates to a fixed point
+and removes jumps to the next instruction. A conditional jump over an
+unconditional one (`jcc A; jmp B; A:`) becomes the inverted `jcc B` when no
+label is placed at the `jmp`, so nothing else can enter it. It iterates to a fixed point
 (shortening never lengthens another jump), compacts the code from the end of
 the reserved prologue on, and moves labels, the remaining fixups, jump
 tables and relocations (`DataSection::remap_relocation_offsets`) with it.

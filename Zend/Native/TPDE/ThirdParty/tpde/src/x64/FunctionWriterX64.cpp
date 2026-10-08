@@ -67,6 +67,31 @@ void FunctionWriterX64::relax_jumps(u32 body_begin) {
   std::sort(jumps.begin(), jumps.end(),
             [](const Jump &a, const Jump &b) { return a.start < b.start; });
 
+  // A conditional jump over an unconditional one, jcc A; jmp B; A:, becomes
+  // the inverted jcc B when nothing else enters the jmp: no label is placed
+  // at it.
+  util::SmallVector<u32, 0> placed;
+  for (u32 off : label_offsets) {
+    if (off != ~0u && off >= body_begin) {
+      placed.push_back(off);
+    }
+  }
+  std::sort(placed.begin(), placed.end());
+  for (u32 k = 0; k + 1 < jumps.size(); ++k) {
+    Jump &jcc = jumps[k];
+    Jump &jmp = jumps[k + 1];
+    if (jcc.opcode == 0xeb || jmp.opcode != 0xeb || jmp.len == 0 ||
+        jcc.start + jcc.len != jmp.start ||
+        label_offsets[u32(jcc.label)] != jmp.start + jmp.len ||
+        std::binary_search(placed.begin(), placed.end(), jmp.start)) {
+      continue;
+    }
+    jcc.opcode ^= 1;
+    jcc.label = jmp.label;
+    jmp.len = 0;
+    ++k;
+  }
+
   // removed[k]: bytes removed by jumps[0..k-1]. Shortening a jump never
   // lengthens another, so decisions taken with stale sums stay valid.
   util::SmallVector<u32, 0> removed;
@@ -130,6 +155,10 @@ void FunctionWriterX64::relax_jumps(u32 body_begin) {
       base[write + 1] = 0;
     } else if (jump.len == full) {
       std::memmove(base + write, base + jump.start, full);
+      if (full == 6) {
+        // The condition may have been inverted.
+        base[write + 1] = u8(0x80 | (jump.opcode & 0x0f));
+      }
     }
     write += jump.len;
     read = jump.start + full;
