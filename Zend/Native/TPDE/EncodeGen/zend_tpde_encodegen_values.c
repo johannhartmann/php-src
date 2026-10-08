@@ -45,20 +45,20 @@ zval *zend_native_property_slot(const zval *receiver, void *const *cache_slot)
 	uintptr_t offset;
 	zval *property;
 
-	if (Z_TYPE_P(receiver) != IS_OBJECT) {
+	if (UNEXPECTED(Z_TYPE_P(receiver) != IS_OBJECT)) {
 		return NULL;
 	}
 	object = Z_OBJ_P(receiver);
-	if (cache_slot[0] != object->ce) {
+	if (UNEXPECTED(cache_slot[0] != object->ce)) {
 		return NULL;
 	}
 	offset = (uintptr_t) cache_slot[1];
-	if (!IS_VALID_PROPERTY_OFFSET(offset)) {
+	if (UNEXPECTED(!IS_VALID_PROPERTY_OFFSET(offset))) {
 		return NULL;
 	}
 	property = OBJ_PROP(object, offset);
-	return Z_TYPE_P(property) == IS_UNDEF
-			|| Z_TYPE_P(property) == IS_REFERENCE
+	return UNEXPECTED(Z_TYPE_P(property) == IS_UNDEF
+			|| Z_TYPE_P(property) == IS_REFERENCE)
 		? NULL : property;
 }
 
@@ -74,22 +74,22 @@ zval *zend_native_property_read_slot(
 	uintptr_t offset;
 	zval *property;
 
-	if (Z_TYPE_P(receiver) != IS_OBJECT) {
+	if (UNEXPECTED(Z_TYPE_P(receiver) != IS_OBJECT)) {
 		return NULL;
 	}
 	object = Z_OBJ_P(receiver);
-	if (cache_slot[0] != object->ce) {
+	if (UNEXPECTED(cache_slot[0] != object->ce)) {
 		return NULL;
 	}
 	offset = (uintptr_t) cache_slot[1];
-	if (!IS_VALID_PROPERTY_OFFSET(offset)) {
+	if (UNEXPECTED(!IS_VALID_PROPERTY_OFFSET(offset))) {
 		return NULL;
 	}
 	property = OBJ_PROP(object, offset);
 	if (Z_TYPE_P(property) == IS_REFERENCE) {
 		return &Z_REF_P(property)->val;
 	}
-	return Z_TYPE_P(property) == IS_UNDEF ? NULL : property;
+	return UNEXPECTED(Z_TYPE_P(property) == IS_UNDEF) ? NULL : property;
 }
 
 /* ZVAL_COPY: the value with a new reference to a counted payload. */
@@ -129,7 +129,7 @@ ZEND_NATIVE_SNIPPET_INLINE const HashTable *zend_native_probe_array(
 	if (Z_TYPE_P(container) == IS_REFERENCE) {
 		container = &Z_REF_P(container)->val;
 	}
-	if (Z_TYPE_P(container) != IS_ARRAY) {
+	if (UNEXPECTED(Z_TYPE_P(container) != IS_ARRAY)) {
 		return NULL;
 	}
 	/* An array zval never holds a NULL table: the NULL above alone means
@@ -140,7 +140,7 @@ ZEND_NATIVE_SNIPPET_INLINE const HashTable *zend_native_probe_array(
 
 ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_probe_element(zval *element)
 {
-	return Z_TYPE_P(element) == IS_INDIRECT
+	return UNEXPECTED(Z_TYPE_P(element) == IS_INDIRECT)
 		? ZEND_NATIVE_ELEMENT_UNKNOWN : (uintptr_t) element;
 }
 
@@ -216,10 +216,10 @@ ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_string_h(
 		}
 		if (bucket->h == h && bucket->key != NULL) {
 			/* A true collision of the full hash is left to the helper. */
-			return ZSTR_LEN(bucket->key) == ZSTR_LEN(name)
+			return EXPECTED(ZSTR_LEN(bucket->key) == ZSTR_LEN(name)
 					&& ZSTR_LEN(name) <= 16
 					&& zend_native_short_key_equal(
-						bucket->key, name, ZSTR_LEN(name))
+						bucket->key, name, ZSTR_LEN(name)))
 				? zend_native_probe_element(&bucket->val)
 				: ZEND_NATIVE_ELEMENT_UNKNOWN;
 		}
@@ -233,7 +233,7 @@ ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_literal_string(
 {
 	zend_ulong h = ZSTR_H(name);
 
-	if (h == 0) {
+	if (UNEXPECTED(h == 0)) {
 		return ZEND_NATIVE_ELEMENT_UNKNOWN;
 	}
 	return zend_native_find_string_h(table, name, h);
@@ -249,11 +249,11 @@ ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_string(
 {
 	unsigned char first;
 
-	if (ZSTR_LEN(name) == 0) {
+	if (UNEXPECTED(ZSTR_LEN(name) == 0)) {
 		return ZEND_NATIVE_ELEMENT_UNKNOWN;
 	}
 	first = (unsigned char) ZSTR_VAL(name)[0];
-	if ((first >= '0' && first <= '9') || first == '-') {
+	if (UNEXPECTED((first >= '0' && first <= '9') || first == '-')) {
 		return ZEND_NATIVE_ELEMENT_UNKNOWN;
 	}
 	return zend_native_find_literal_string(table, name);
@@ -262,13 +262,13 @@ ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_string(
 ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_value(
 	const HashTable *table, uint64_t payload, uint32_t type, bool literal)
 {
-	if (table == NULL) {
+	if (UNEXPECTED(table == NULL)) {
 		return ZEND_NATIVE_ELEMENT_UNKNOWN;
 	}
 	if (type == IS_LONG) {
 		return zend_native_find_index(table, (zend_ulong) payload);
 	}
-	if (type != IS_STRING) {
+	if (UNEXPECTED(type != IS_STRING)) {
 		return ZEND_NATIVE_ELEMENT_UNKNOWN;
 	}
 	return literal
@@ -316,7 +316,7 @@ ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_test_value(
 		return Z_TYPE_P(key) == IS_UNDEF
 			? ZEND_NATIVE_ELEMENT_UNKNOWN : ZEND_NATIVE_ELEMENT_ABSENT;
 	}
-	if (Z_TYPE_P(container) != IS_ARRAY) {
+	if (UNEXPECTED(Z_TYPE_P(container) != IS_ARRAY)) {
 		return ZEND_NATIVE_ELEMENT_UNKNOWN;
 	}
 	__builtin_assume(Z_ARRVAL_P(container) != NULL);
@@ -349,8 +349,8 @@ ZEND_NATIVE_SNIPPET_INLINE const HashTable *zend_native_probe_array_w(
 	if (Z_TYPE_P(container) == IS_REFERENCE) {
 		container = &Z_REF_P(container)->val;
 	}
-	if (Z_TYPE_P(container) != IS_ARRAY
-			|| GC_REFCOUNT(Z_ARRVAL_P(container)) != 1) {
+	if (UNEXPECTED(Z_TYPE_P(container) != IS_ARRAY
+			|| GC_REFCOUNT(Z_ARRVAL_P(container)) != 1)) {
 		return NULL;
 	}
 	__builtin_assume(Z_ARRVAL_P(container) != NULL);
@@ -365,7 +365,7 @@ ZEND_NATIVE_SNIPPET_INLINE const HashTable *zend_native_probe_array_w(
 ZEND_NATIVE_SNIPPET_INLINE const HashTable *zend_native_probe_indirect_w(
 	const zval *var)
 {
-	return Z_TYPE_P(var) == IS_INDIRECT
+	return EXPECTED(Z_TYPE_P(var) == IS_INDIRECT)
 		? zend_native_probe_array_w(Z_INDIRECT_P(var)) : NULL;
 }
 
@@ -416,7 +416,7 @@ uintptr_t zend_native_indirect_find_key_w(const zval *var, const zval *key)
 ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_assign_index(
 	const HashTable *table, zend_ulong h)
 {
-	if (table == NULL) {
+	if (UNEXPECTED(table == NULL)) {
 		return ZEND_NATIVE_ELEMENT_UNKNOWN;
 	}
 	if (HT_IS_PACKED(table) && h == table->nNumUsed
@@ -458,7 +458,7 @@ ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_test_table(
 	if (Z_TYPE_P(container) <= IS_NULL) {
 		return ZEND_NATIVE_ELEMENT_ABSENT;
 	}
-	if (Z_TYPE_P(container) != IS_ARRAY) {
+	if (UNEXPECTED(Z_TYPE_P(container) != IS_ARRAY)) {
 		return ZEND_NATIVE_ELEMENT_UNKNOWN;
 	}
 	__builtin_assume(Z_ARRVAL_P(container) != NULL);
@@ -544,7 +544,7 @@ ZEND_NATIVE_SNIPPET_INLINE uint64_t zend_native_element_isset(
 {
 	const zval *value = (const zval *) element;
 
-	if (element == ZEND_NATIVE_ELEMENT_UNKNOWN) {
+	if (UNEXPECTED(element == ZEND_NATIVE_ELEMENT_UNKNOWN)) {
 		return ZEND_NATIVE_ISSET_UNKNOWN;
 	}
 	if (element == ZEND_NATIVE_ELEMENT_ABSENT) {
@@ -755,8 +755,8 @@ ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_string_offset(
 	if (Z_TYPE_P(container) == IS_REFERENCE) {
 		container = &Z_REF_P(container)->val;
 	}
-	if (Z_TYPE_P(container) != IS_STRING
-			|| offset >= (uint64_t) Z_STRLEN_P(container)) {
+	if (UNEXPECTED(Z_TYPE_P(container) != IS_STRING
+			|| offset >= (uint64_t) Z_STRLEN_P(container))) {
 		return ZEND_NATIVE_ELEMENT_UNKNOWN;
 	}
 	return (uintptr_t)
@@ -840,7 +840,7 @@ uint64_t zend_native_zval_identical(const zval *value, const zval *literal)
 	if (Z_TYPE_P(value) == IS_REFERENCE) {
 		value = &Z_REF_P(value)->val;
 	}
-	if (Z_TYPE_P(value) == IS_UNDEF) {
+	if (UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
 		return ZEND_NATIVE_IDENTICAL_UNKNOWN;
 	}
 	if (Z_TYPE_P(value) != Z_TYPE_P(literal)) {
@@ -852,7 +852,7 @@ uint64_t zend_native_zval_identical(const zval *value, const zval *literal)
 	if (Z_TYPE_P(value) == IS_LONG) {
 		return Z_LVAL_P(value) == Z_LVAL_P(literal);
 	}
-	if (Z_TYPE_P(value) != IS_STRING) {
+	if (UNEXPECTED(Z_TYPE_P(value) != IS_STRING)) {
 		return ZEND_NATIVE_IDENTICAL_UNKNOWN;
 	}
 	if (Z_STR_P(value) == Z_STR_P(literal)) {
@@ -897,7 +897,8 @@ uint64_t zend_native_zval_identical_any(const zval *value, const zval *other)
 	if (Z_TYPE_P(other) == IS_REFERENCE) {
 		other = &Z_REF_P(other)->val;
 	}
-	if (Z_TYPE_P(value) == IS_UNDEF || Z_TYPE_P(other) == IS_UNDEF) {
+	if (UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF
+			|| Z_TYPE_P(other) == IS_UNDEF)) {
 		return ZEND_NATIVE_IDENTICAL_UNKNOWN;
 	}
 	if (Z_TYPE_P(value) != Z_TYPE_P(other)) {
@@ -909,7 +910,7 @@ uint64_t zend_native_zval_identical_any(const zval *value, const zval *other)
 	if (Z_TYPE_P(value) == IS_LONG) {
 		return Z_LVAL_P(value) == Z_LVAL_P(other);
 	}
-	if (Z_TYPE_P(value) != IS_STRING) {
+	if (UNEXPECTED(Z_TYPE_P(value) != IS_STRING)) {
 		return ZEND_NATIVE_IDENTICAL_UNKNOWN;
 	}
 	if (Z_STR_P(value) == Z_STR_P(other)) {
@@ -945,7 +946,7 @@ uint64_t zend_native_zval_array_count(const zval *value)
 	if (Z_TYPE_P(value) == IS_REFERENCE) {
 		value = &Z_REF_P(value)->val;
 	}
-	return Z_TYPE_P(value) == IS_ARRAY
+	return EXPECTED(Z_TYPE_P(value) == IS_ARRAY)
 		? zend_hash_num_elements(Z_ARRVAL_P(value))
 		: ZEND_NATIVE_COUNT_UNKNOWN;
 }
@@ -956,7 +957,7 @@ uint64_t zend_native_zval_array_count(const zval *value)
  */
 uint64_t zend_native_zval_type_check(const zval *value, uint64_t mask)
 {
-	if (Z_TYPE_P(value) == IS_UNDEF) {
+	if (UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
 		return ZEND_NATIVE_TYPE_CHECK_UNDEFINED;
 	}
 	if (Z_TYPE_P(value) == IS_REFERENCE) {
