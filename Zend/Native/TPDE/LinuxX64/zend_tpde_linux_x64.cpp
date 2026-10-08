@@ -15531,15 +15531,12 @@ bool ZendCompilerX64::compile_inst_impl(
 			ASM(CMP64rm, table_reg, FE_MEM(bucket_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(Bucket, key))));
 			generate_raw_jump(Jump::jne, slow);
-			{
-				auto direct = text_writer.label_create();
-				ASM(CMP8mi, FE_MEM(bucket_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zval, u1.type_info))),
-					IS_INDIRECT);
-				generate_raw_jump(Jump::jne, direct);
+			ASM(CMP8mi, FE_MEM(bucket_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))),
+				IS_INDIRECT);
+			emit_cold_branch(Jump::je, text_writer.label_create(), [&] {
 				ASM(MOV64rm, bucket_reg, FE_MEM(bucket_reg, 0, FE_NOREG, 0));
-				label_place(direct);
-			}
+			});
 			ASM(CMP8mi, FE_MEM(bucket_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(zval, u1.type_info))),
 				IS_REFERENCE);
@@ -15636,17 +15633,17 @@ bool ZendCompilerX64::compile_inst_impl(
 				if (fetch == ZEND_FETCH_CLASS_STATIC) {
 					/* The called scope: $this's class or the class This
 					 * holds. */
-					auto have_scope = text_writer.label_create();
 					ASM(MOV64rm, scope_reg, FE_MEM(frame_reg, 0, FE_NOREG,
 						static_cast<int32_t>(
 							offsetof(zend_execute_data, This))));
 					ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
 						static_cast<int32_t>(offsetof(zend_execute_data, This)
 							+ offsetof(zval, u1.type_info))), IS_OBJECT);
-					generate_raw_jump(Jump::jne, have_scope);
-					ASM(MOV64rm, scope_reg, FE_MEM(scope_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zend_object, ce))));
-					label_place(have_scope);
+					/* Mostly a static method, whose This holds the class. */
+					emit_cold_branch(Jump::je, text_writer.label_create(), [&] {
+						ASM(MOV64rm, scope_reg, FE_MEM(scope_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(zend_object, ce))));
+					});
 				} else {
 					ASM(MOV64rm, scope_reg, FE_MEM(frame_reg, 0, FE_NOREG,
 						static_cast<int32_t>(
