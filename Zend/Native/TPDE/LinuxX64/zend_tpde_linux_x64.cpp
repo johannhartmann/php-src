@@ -12,6 +12,9 @@
 #include <array>
 #include <cstdlib>
 #include <cstring>
+#include <cstdio>
+#include <unordered_map>
+#include <unordered_set>
 #include <memory>
 #include <optional>
 #include <string>
@@ -25,6 +28,37 @@ using IRValueRef = zend::native::tpde::IRValueRef;
 using IRInstRef = zend::native::tpde::IRInstRef;
 using IRBlockRef = zend::native::tpde::IRBlockRef;
 using IRFuncRef = zend::native::tpde::IRFuncRef;
+
+/*
+ * Profile-guided layout (ZEND_NATIVE_LAYOUT_PROFILE): per function key, the
+ * ordinals of conditional jumps a profile found taken nearly always over
+ * code that rarely runs. Read when the binary loads, before FPM clears the
+ * environment of its workers.
+ */
+struct LayoutProfile {
+	std::unordered_map<uint64_t, std::unordered_set<uint32_t>> jumps;
+	/* "*" moves every eligible region, to test the transformation. */
+	bool all = false;
+	LayoutProfile() {
+		const char *path = std::getenv("ZEND_NATIVE_LAYOUT_PROFILE");
+		if (path == nullptr || path[0] == '\0') {
+			return;
+		}
+		if (path[0] == '*' && path[1] == '\0') {
+			all = true;
+			return;
+		}
+		if (FILE *file = std::fopen(path, "r"); file != nullptr) {
+			unsigned long long key;
+			unsigned int ordinal;
+			while (std::fscanf(file, "%llx %u", &key, &ordinal) == 2) {
+				jumps[key].insert(ordinal);
+			}
+			std::fclose(file);
+		}
+	}
+};
+const LayoutProfile layout_profile;
 
 struct ZendX64Config : tpde::x64::PlatformConfig {
 	static constexpr bool DEFAULT_VAR_REF_HANDLING = false;
@@ -2457,6 +2491,96 @@ public:
 		cold_end();
 		label_place(resume);
 	}
+	/*
+	 * Profile-guided layout: conditional jumps are numbered per function.
+	 * A profiled jump that is nearly always taken over code that rarely runs
+	 * becomes the inverted jump to that code, which goes to the cold area
+	 * up to the jump's target, so that the common path falls through. The
+	 * region ends at the target's placement or, the latest, at the end of
+	 * the instruction's code; the result is correct for any profile.
+	 */
+	uint64_t layout_function_key_ = 0;
+	uint32_t layout_jump_ordinal_ = 0;
+	bool layout_in_inst_ = false;
+	const std::unordered_set<uint32_t> *layout_jumps_ = nullptr;
+	struct {
+		bool active = false;
+		tpde::Label target{};
+		size_t cold_depth = 0;
+	} layout_region_;
+	void layout_start_function(uint32_t index) {
+		const zend_tpde_plan *plan = adaptor->plan();
+		uint64_t key = UINT64_C(14695981039346656037);
+		auto mix = [&](uint64_t value) {
+			key = (key ^ value) * UINT64_C(1099511628211);
+		};
+		mix(index);
+		mix(adaptor->typed_body() ? 1 : 0);
+		if (plan != nullptr) {
+			mix(plan->instruction_count);
+			for (uint32_t i = 0; i < plan->instruction_count; ++i) {
+				const zend_mir_instruction_record &record =
+					plan->instructions[i].record;
+				mix(record.opcode);
+				mix(record.source_position_id);
+			}
+		}
+		layout_function_key_ = key;
+		layout_jump_ordinal_ = 0;
+		layout_region_.active = false;
+		const auto found = layout_profile.jumps.find(key);
+		layout_jumps_ = found == layout_profile.jumps.end()
+			? nullptr : &found->second;
+	}
+	void generate_raw_jump(Jump jump, tpde::Label target) {
+		if (jump != Jump::jmp) {
+			const uint32_t ordinal = layout_jump_ordinal_++;
+			if ((layout_jumps_ != nullptr || layout_profile.all)
+					&& layout_in_inst_
+					&& !layout_region_.active
+					&& !text_writer.in_cold_area()
+					&& text_writer.label_is_pending(target)
+					&& (layout_profile.all
+						|| layout_jumps_->count(ordinal) != 0)) {
+				const tpde::Label rare = text_writer.label_create();
+				Base::generate_raw_jump(invert_jump(jump), rare);
+				layout_region_.active = true;
+				layout_region_.target = target;
+				layout_region_.cold_depth = cold_sections_.size();
+				/* Physically cold, but fall-through decisions stay those
+				 * of the hot code. */
+				text_writer.begin_cold_area(true);
+				Base::label_place(rare);
+				return;
+			}
+		}
+		Base::generate_raw_jump(jump, target);
+	}
+	void label_place(tpde::Label label) {
+		if (layout_region_.active && label == layout_region_.target
+				&& cold_sections_.size() == layout_region_.cold_depth) {
+			Base::generate_raw_jump(Jump::jmp, label);
+			text_writer.end_cold_area();
+			layout_region_.active = false;
+		}
+		Base::label_place(label);
+	}
+	/* The instruction's code ends inside a region: the rare code continues
+	 * after the instruction, the common path goes to the jump's target. */
+	void layout_end_inst() {
+		layout_in_inst_ = false;
+		if (!layout_region_.active) {
+			return;
+		}
+		/* An instruction leaves no cold section open. */
+		ZEND_ASSERT(cold_sections_.size() == layout_region_.cold_depth);
+		const tpde::Label resume = text_writer.label_create();
+		Base::generate_raw_jump(Jump::jmp, resume);
+		text_writer.end_cold_area();
+		Base::generate_raw_jump(Jump::jmp, layout_region_.target);
+		Base::label_place(resume);
+		layout_region_.active = false;
+	}
 	static constexpr int32_t frame_register_bias = 0x80;
 	AsmReg select_fixed_assignment_reg(
 			tpde::AssignmentPartRef part, IRValueRef value) {
@@ -2553,6 +2677,7 @@ public:
 		/* TPDE never fixes AX, DX and CX, so the status register of a body
 		 * that may fail stays free as well. */
 		Base::start_func(index);
+		layout_start_function(index);
 		entry_variant_dispatch_pending_ = has_entry_variant();
 		if (!adaptor->typed_body() && adaptor->plan() != nullptr
 				&& adaptor->plan()->fast_call_eligible) {
@@ -23278,8 +23403,10 @@ bool ZendCompilerX64::compile_inst(
 		&& !adaptor->typed_body()
 		&& adaptor->mir_instruction(instruction).deopt_exit_resume_plus_one
 			!= 0;
+	layout_in_inst_ = true;
 	const bool compiled =
 		compile_inst_impl(instruction, remaining_instructions);
+	layout_end_inst();
 	for (const auto &[slot, size] : inst_stack_slots_) {
 		free_stack_slot(static_cast<uint32_t>(slot), size);
 	}

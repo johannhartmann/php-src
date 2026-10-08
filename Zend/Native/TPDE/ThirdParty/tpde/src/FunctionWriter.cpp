@@ -65,8 +65,9 @@ void FunctionWriterBase::begin_func() {
   cold_relocs.clear();
 }
 
-void FunctionWriterBase::begin_cold_area() {
+void FunctionWriterBase::begin_cold_area(bool layout_hot) {
   assert(!cold_active);
+  cold_layout_hot = layout_hot;
   hot_data_begin = data_begin;
   hot_data_cur = data_cur;
   hot_data_reserve_end = data_reserve_end;
@@ -87,6 +88,7 @@ void FunctionWriterBase::end_cold_area() {
   data_cur = hot_data_cur;
   data_reserve_end = hot_data_reserve_end;
   cold_active = false;
+  cold_layout_hot = false;
 }
 
 void FunctionWriterBase::append_cold_area() {

@@ -20,9 +20,9 @@ Tiers:
           Seconds; run it after every change.
   commit  debug profile: the native, Zend, OPcache, array, math, string,
           SPL and reflection suites plus PATHs. Run it before a commit.
-  full    commit, the commit suites under deoptimization stress (period 1),
-          then ASan and UBSan, built concurrently and run one after the
-          other. Run it before a push.
+  full    commit, the commit suites under deoptimization stress (period 1)
+          and layout stress, then ASan and UBSan, built concurrently and
+          run one after the other. Run it before a push.
 
 Options:
   --jobs N         Worker count (default: NATIVE_JOBS or CPU count).
@@ -34,7 +34,9 @@ Options:
                    Run the debug suites with ZEND_NATIVE_DEOPT_STRESS=PERIOD:
                    every PERIOD-th deoptimization point of a guarded
                    operation's slow path transfers its frame to a new
-                   activation (ADR 0025 section 4). Logs are named
+                   activation (ADR 0025 section 4). The run also sets
+                   ZEND_NATIVE_LAYOUT_PROFILE='*', which moves every
+                   eligible branch region to the cold area. Logs are named
                    phpt-<tier>-deopt*.
 
 Environment:
@@ -162,6 +164,7 @@ run_profile() {
         native_export_sanitizer_environment
         if [[ -n $run_stress ]]; then
             export ZEND_NATIVE_DEOPT_STRESS=$run_stress
+            export ZEND_NATIVE_LAYOUT_PROFILE='*'
         fi
         log="$NATIVE_LOG_DIR/phpt-$label.log"
         failures="$NATIVE_LOG_DIR/phpt-$label-failures.txt"
@@ -179,7 +182,7 @@ run_profile() {
         sed 's/\x1b\[[0-9;]*m//g' "$log" \
             | sed -n '/^SLOW TEST SUMMARY/,/^=*$/p' >"$slow"
         printf '== %s%s: %s\n' "$profile" \
-            "${run_stress:+ (deoptimization stress $run_stress)}" \
+            "${run_stress:+ (deoptimization stress $run_stress, layout stress)}" \
             "$(sed 's/\x1b\[[0-9;]*m//g' "$log" \
             | grep -E '^(Tests failed|Tests passed|Time taken)' | tr -s ' ' \
             | paste -sd ';' -)"

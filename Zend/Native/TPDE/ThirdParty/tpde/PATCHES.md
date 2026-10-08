@@ -90,6 +90,12 @@ it is compiled in place, so the allocator state stays that of its position:
   (one past the last block if none), so no branch falls through into the
   other area; in the cold area `spill_before_branch` sees no fall-through
   successor.
+- `begin_cold_area(true)` writes to the cold area code that keeps the layout
+  decisions of the hot code it was moved out of: `in_cold_layout()`, which
+  `next_block()` and `spill_before_branch()` consult instead of
+  `in_cold_area()`, stays false, so fall-through successors remain those of
+  the hot stream. The PHP emitter moves profiled rare branch regions this
+  way.
 - An adaptor that provides `block_is_cold(IRBlockRef)` has those blocks
   written to the cold area by `CompilerBase::compile_block`; they are still
   compiled in layout order, so the allocator state is that of their
