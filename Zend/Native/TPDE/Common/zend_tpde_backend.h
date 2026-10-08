@@ -99,11 +99,9 @@ typedef struct zend_native_image zend_native_image;
 typedef struct zend_native_code zend_native_code;
 typedef struct _zend_native_entry_cell zend_native_entry_cell;
 typedef struct _zend_native_internal_call_cell zend_native_internal_call_cell;
-struct _zend_native_runtime_api;
 
 typedef struct _zend_native_image_metrics {
 	uint64_t runtime_helper_sites;
-	uint64_t source_opline_decode_sites;
 	uint64_t guard_sites;
 	uint64_t slow_path_sites;
 	uint64_t direct_call_sites;
@@ -111,8 +109,6 @@ typedef struct _zend_native_image_metrics {
 	uint64_t direct_typed_body_sites;
 	uint64_t direct_call_frame_bytes;
 	uint64_t inner_call_runtime_helper_calls;
-	uint64_t inner_call_heap_allocations;
-	uint64_t inner_call_catcher_boundaries;
 } zend_native_image_metrics;
 
 typedef enum _zend_native_image_reference_kind {
@@ -177,40 +173,6 @@ typedef struct _zend_native_source_effect {
 	zend_mir_block_id target_block_id;
 } zend_native_source_effect;
 
-/*
- * One function in a statically known native component.  The member borrows
- * all inputs for the duration of compilation; TPDE consumes the complete
- * array in one compile invocation and emits one relocatable object containing
- * every member function.
- */
-/*
- * Tier-2 inlining (ADR 0025 section 5): the role of each opline of a host
- * whose call sites carry their callees' bodies (zend_native_inline.c).
- */
-typedef enum _zend_native_inline_op_kind {
-	ZEND_NATIVE_INLINE_OP_HOST = 0,
-	/* An operation of an inlined body: its slow path sets the bail flag
-	 * and leaves a null result instead of running. */
-	ZEND_NATIVE_INLINE_OP_BODY,
-	/* ISSET of the bail flag at a region's start: true when the fallback
-	 * call site is not bound to the inlined callee in this epoch;
-	 * otherwise the callee's run-time cache becomes the frame's. */
-	ZEND_NATIVE_INLINE_OP_ENTRY_GUARD,
-	/* UNSET of the bail flag on every exit: the host's run-time cache is
-	 * restored first. */
-	ZEND_NATIVE_INLINE_OP_EXIT,
-	/* UNSET of a body's CV on an exit. */
-	ZEND_NATIVE_INLINE_OP_RELEASE
-} zend_native_inline_op_kind;
-
-typedef struct _zend_native_inline_region {
-	/* The inlined callee and the fallback call (INIT opline) whose site
-	 * the entry guard checks. */
-	const struct _zend_op_array *callee;
-	uint32_t fallback_init_opline;
-	bool this_method;
-} zend_native_inline_region;
-
 /* Argument guards of a tier-2 copy specialized by type feedback. */
 #define ZEND_NATIVE_TIER2_ARG_GUARDS 8
 typedef enum _zend_native_arg_guard {
@@ -224,37 +186,12 @@ typedef enum _zend_native_arg_guard {
 	ZEND_NATIVE_ARG_GUARD_OBJECT
 } zend_native_arg_guard;
 
-typedef struct _zend_native_inline_host {
-	/* The function the host copy replaces, which callers push frames
-	 * for: its frame size in slots and its parameter count. */
-	const struct _zend_op_array *original;
-	uint32_t original_frame_slots;
-	uint32_t original_last_var;
-	uint32_t original_num_args;
-	/* The copy itself and its frame size in slots. */
-	const struct _zend_op_array *copy;
-	uint32_t frame_slots;
-	/* Per opline of the host copy (op_count of them):
-	 * zend_native_inline_op_kind, the region index, and whether the opline
-	 * runs rarely (a bail block or fallback call), whose blocks the
-	 * backend places out of line. */
-	uint32_t op_count;
-	const uint8_t *op_kinds;
-	const uint32_t *op_regions;
-	const uint8_t *op_cold;
-	const zend_native_inline_region *regions;
-	uint32_t region_count;
-	/* CV numbers of the bail flag (false while a body runs, true once it
-	 * bailed), of the entry guards' operand and of the slot whose payload
-	 * keeps the host's run-time cache while a body runs. */
-	uint32_t flag_var;
-	uint32_t guard_var;
-	uint32_t cache_save_var;
-	/* The original function's Zend entry, which runs a frame the copy
-	 * cannot extend. */
-	const void *fallback_entry;
-} zend_native_inline_host;
-
+/*
+ * One function in a statically known native component.  The member borrows
+ * all inputs for the duration of compilation; TPDE consumes the complete
+ * array in one compile invocation and emits one relocatable object containing
+ * every member function.
+ */
 typedef struct _zend_native_component_member {
 	const zend_mir_view *module;
 	const zend_native_call_binding *user_bindings;
@@ -281,37 +218,18 @@ typedef struct _zend_native_component_member {
 	/* Tier 2: the member's own entry cell, whose countdown its Zend entry
 	 * decrements (queueing the function at zero), or NULL. */
 	zend_native_entry_cell *call_count_cell;
-	/* A tier-2 copy speculating on result feedback: the function's entry
-	 * cell counting its deoptimizations, or NULL. */
-	zend_native_entry_cell *speculation_cell;
-	/* A deoptimization generic copy: the result types its specialized
-	 * version speculates on per source position, whose positions alone
-	 * need landings; NULL lands at every guarded operation. */
-	const uint16_t *deopt_landing_types;
-	/* A tier-2 copy with inlined call sites, or NULL. */
-	const zend_native_inline_host *inline_host;
 	/* A tier-2 copy specialized by argument type feedback: per parameter
 	 * a zend_native_arg_guard code, and the original function's Zend entry,
 	 * which runs a frame whose arguments the guards reject. */
 	uint8_t tier2_arg_guards[ZEND_NATIVE_TIER2_ARG_GUARDS];
 	const void *tier2_fallback_entry;
-	/* Per opline (source_op_array->last of them) of a speculating tier-2
-	 * copy, the Z_TYPE() bits its result is assumed to have, or NULL. A
-	 * read whose element or property has another type takes its cold
-	 * path, which deoptimizes. */
-	const uint16_t *tier2_result_types;
 } zend_native_component_member;
 
-/*
- * Compiles every member into one image. The runtime may supply an
- * ABI-compatible table and every helper actually required by a plan is
- * resolved before an image can be returned.
- */
-zend_result zend_tpde_compile_component_with_runtime(
+/* Compiles every member into one image. */
+zend_result zend_tpde_compile_component(
 	zend_native_target target,
 	const zend_native_component_member *members,
 	uint32_t member_count,
-	const struct _zend_native_runtime_api *runtime,
 	zend_native_image **out_image,
 	zend_native_diagnostic *diag);
 

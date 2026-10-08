@@ -129,8 +129,6 @@ AS_VAR_IF([PHP_NATIVE_ENGINE], [no], [], [
     [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_SOURCES([Zend/Native/Compiler], [zend_native_compiler.c],
     [$PHP_NATIVE_MIR_TEST_CFLAGS])
-  PHP_ADD_SOURCES([Zend/Native/Compiler], [zend_native_inline.c],
-    [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_SOURCES([Zend/Native/Compiler], [zend_native_executor.c],
     [$PHP_NATIVE_MIR_TEST_CFLAGS])
   PHP_ADD_BUILD_DIR([Zend/Native/MIR/CFG])

@@ -4,7 +4,6 @@ Direct calls across VM stack pages: leading and heap activations under recursion
 opcache
 --ENV--
 ZEND_NATIVE_TIER2_THRESHOLD=3
-ZEND_NATIVE_TIER2_INLINE=1
 --INI--
 opcache.enable=1
 opcache.enable_cli=1

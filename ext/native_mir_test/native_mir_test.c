@@ -2356,8 +2356,6 @@ static void native_mir_test_build_result(
 				(zend_long) compiler_stats.published_components);
 			add_assoc_long(&performance, "runtime_helper_sites",
 				(zend_long) compiler_stats.runtime_helper_sites);
-			add_assoc_long(&performance, "source_opline_decode_sites",
-				(zend_long) compiler_stats.source_opline_decode_sites);
 			add_assoc_long(&performance, "guard_sites",
 				(zend_long) compiler_stats.guard_sites);
 			add_assoc_long(&performance, "slow_path_sites",
@@ -2372,10 +2370,6 @@ static void native_mir_test_build_result(
 				(zend_long) compiler_stats.direct_call_frame_bytes);
 			add_assoc_long(&performance, "inner_call_runtime_helper_calls",
 				(zend_long) compiler_stats.inner_call_runtime_helper_calls);
-			add_assoc_long(&performance, "inner_call_heap_allocations",
-				(zend_long) compiler_stats.inner_call_heap_allocations);
-			add_assoc_long(&performance, "inner_call_catcher_boundaries",
-				(zend_long) compiler_stats.inner_call_catcher_boundaries);
 			add_assoc_long(&performance, "executions",
 				(zend_long) compiler_stats.executions);
 			add_assoc_zval(&execution, "performance", &performance);

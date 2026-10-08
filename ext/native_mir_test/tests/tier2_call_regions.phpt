@@ -1,10 +1,9 @@
 --TEST--
-Tier 2 inlining: regions with defaults, bails, warnings, exceptions, instanceof, truthiness and isset, entered directly and through call_user_func(_array)
+Tier 2 copies: calls with defaults, warnings, exceptions, instanceof, truthiness and isset, entered directly and through call_user_func(_array)
 --EXTENSIONS--
 opcache
 --ENV--
 ZEND_NATIVE_TIER2_THRESHOLD=3
-ZEND_NATIVE_TIER2_INLINE=1
 --INI--
 opcache.enable=1
 opcache.enable_cli=1

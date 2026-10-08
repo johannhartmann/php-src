@@ -1315,7 +1315,6 @@ def summarize(
             "publish_ns",
             "native_code_bytes",
             "runtime_helper_sites",
-            "source_opline_decode_sites",
             "guard_sites",
             "slow_path_sites",
             "direct_call_sites",
@@ -1323,8 +1322,6 @@ def summarize(
             "direct_typed_body_sites",
             "direct_call_frame_bytes",
             "inner_call_runtime_helper_calls",
-            "inner_call_heap_allocations",
-            "inner_call_catcher_boundaries",
         ):
             record[key] = performance.get(key)
     if baseline:

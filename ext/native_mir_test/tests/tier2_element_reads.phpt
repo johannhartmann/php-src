@@ -1,10 +1,9 @@
 --TEST--
-Tier 2 result speculation: element reads deoptimize on other types, retire their copy, and keep isset reuse, references, ?? and warnings
+Tier 2 copies: element reads of changing types, isset reuse, references, ?? and warnings
 --EXTENSIONS--
 opcache
 --ENV--
 ZEND_NATIVE_TIER2_THRESHOLD=20
-ZEND_NATIVE_TIER2_SPECULATE=1
 --INI--
 opcache.enable=1
 opcache.enable_cli=1

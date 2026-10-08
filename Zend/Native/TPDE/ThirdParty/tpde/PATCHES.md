@@ -12,9 +12,6 @@ keeps no compatibility with older TPDE revisions.
   section list and relocation spans. The Darwin in-memory mapper needs this
   information to lay out TPDE output, apply AArch64 relocations, and enforce
   per-section final permissions without the ELF object model.
-- `include/tpde/util/AddressSanitizer.hpp` supplies the conventional false
-  fallback for Clang's `__has_feature` macro so the header also preprocesses
-  with GCC.
 
 ## Fadec
 

@@ -9,24 +9,17 @@
 extern "C" {
 #endif
 
-#define ZEND_NATIVE_RUNTIME_ABI_VERSION 94u
+/*
+ * Part of the system id, so persisted images of another version are never
+ * loaded: bump it whenever the helper ids, the execution context, the
+ * persisted image layout or what generated code assumes about them change.
+ */
+#define ZEND_NATIVE_RUNTIME_ABI_VERSION 96u
 
 typedef void (*zend_native_source_probe_t)(
 	void *context,
 	zend_execute_data *execute_data,
 	uint32_t source_position_id);
-
-typedef enum _zend_native_runtime_capability {
-	ZEND_NATIVE_RUNTIME_CAP_USER_CALL = UINT64_C(1) << 0,
-	ZEND_NATIVE_RUNTIME_CAP_INTERNAL_CALL = UINT64_C(1) << 1,
-	ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT = UINT64_C(1) << 2,
-	ZEND_NATIVE_RUNTIME_CAP_OBSERVER = UINT64_C(1) << 3,
-	ZEND_NATIVE_RUNTIME_CAP_INTERRUPT = UINT64_C(1) << 4,
-	ZEND_NATIVE_RUNTIME_CAP_BAILOUT_BOUNDARY = UINT64_C(1) << 5,
-	ZEND_NATIVE_RUNTIME_CAP_OBJECT_OPERATION = UINT64_C(1) << 6,
-	ZEND_NATIVE_RUNTIME_CAP_DYNAMIC_BINDING = UINT64_C(1) << 7,
-	ZEND_NATIVE_RUNTIME_CAP_SUSPEND = UINT64_C(1) << 8
-} zend_native_runtime_capability;
 
 typedef enum _zend_native_runtime_helper_id {
 	ZEND_NATIVE_HELPER_USER_CALL_BEGIN = 1,
@@ -254,11 +247,10 @@ typedef enum _zend_native_runtime_helper_id {
 	ZEND_NATIVE_HELPER_ARRAY_ASSIGN_LOOKUP = 220,
 	ZEND_NATIVE_HELPER_TIER2_NOTE = 221,
 	ZEND_NATIVE_HELPER_TIER2_RECORD = 222,
-	ZEND_NATIVE_HELPER_DEOPT_SPECULATION = 223,
-	ZEND_NATIVE_HELPER_CALL_FAST_RELEASE_THIS = 224,
-	ZEND_NATIVE_HELPER_INTERNAL_CALL_DO_PLAIN_FINISH = 225,
-	ZEND_NATIVE_HELPER_CALL_CHECK_UNDEF_FRAME = 226,
-	ZEND_NATIVE_HELPER_COUNT = 227
+	ZEND_NATIVE_HELPER_CALL_FAST_RELEASE_THIS = 223,
+	ZEND_NATIVE_HELPER_INTERNAL_CALL_DO_PLAIN_FINISH = 224,
+	ZEND_NATIVE_HELPER_CALL_CHECK_UNDEF_FRAME = 225,
+	ZEND_NATIVE_HELPER_COUNT = 226
 } zend_native_runtime_helper_id;
 
 /*
@@ -360,28 +352,13 @@ typedef struct _zend_native_runtime_helper {
 } zend_native_runtime_helper;
 
 /*
- * The table is process-local and never serialized into MIR. Generated code
- * binds stable helper IDs to these addresses while it is compiled in the
- * current process. Helper ID N occupies table slot N - 1, so symbol binding is
- * constant-time and independent of registration order. Appending fields
- * requires a minor ABI version bump.
+ * The helper table is process-local and never serialized into MIR.
+ * Generated code binds stable helper IDs to these addresses while it is
+ * compiled in the current process. Helper ID N occupies table slot N - 1.
  */
-typedef struct _zend_native_runtime_api {
-	uint32_t abi_version;
-	uint32_t struct_size;
-	uint64_t capabilities;
-	const zend_native_runtime_helper *helpers;
-	uint32_t helper_count;
-	uint32_t reserved;
-} zend_native_runtime_api;
-
-const zend_native_runtime_api *zend_native_runtime_get(void);
-zend_result zend_native_runtime_validate(
-	const zend_native_runtime_api *runtime,
-	uint64_t required_capabilities,
-	zend_native_diagnostic *diagnostic);
+/* Checks the table once, at engine startup. */
+zend_result zend_native_runtime_validate(void);
 const zend_native_runtime_helper *zend_native_runtime_helper_find(
-	const zend_native_runtime_api *runtime,
 	zend_native_runtime_helper_id id);
 void zend_native_runtime_set_source_probe(
 	zend_native_source_probe_t probe, void *context);
