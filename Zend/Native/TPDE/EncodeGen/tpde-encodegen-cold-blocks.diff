@@ -1,0 +1,134 @@
+diff --git a/tpde-encodegen/src/encode_gen.cpp b/tpde-encodegen/src/encode_gen.cpp
+index 1a5b774..b570a54 100644
+--- a/tpde-encodegen/src/encode_gen.cpp
++++ b/tpde-encodegen/src/encode_gen.cpp
+@@ -12,6 +12,8 @@
+ #include <unordered_set>
+ 
+ #include <llvm/ADT/DenseMap.h>
++#include <llvm/ADT/PostOrderIterator.h>
++#include <llvm/Support/CommandLine.h>
+ #include <llvm/CodeGen/AsmPrinter.h>
+ #include <llvm/CodeGen/LivePhysRegs.h>
+ #include <llvm/CodeGen/MachineConstantPool.h>
+@@ -39,8 +41,43 @@
+ 
+ using namespace tpde_encgen;
+ 
++namespace tpde_encgen {
++extern llvm::cl::opt<bool> cold_blocks;
++} // namespace tpde_encgen
++
+ namespace {
+ 
++/// Blocks reached with a probability below 1/100, from the branch
++/// probabilities and ignoring back edges: written to the cold area.
++static llvm::DenseMap<const llvm::MachineBasicBlock *, bool>
++    cold_block_set(llvm::MachineFunction *func) {
++  llvm::DenseMap<const llvm::MachineBasicBlock *, bool> cold;
++  llvm::ReversePostOrderTraversal<llvm::MachineFunction *> rpo(func);
++  llvm::DenseMap<const llvm::MachineBasicBlock *, unsigned> order;
++  for (const llvm::MachineBasicBlock *block : rpo) {
++    order[block] = order.size();
++  }
++  llvm::DenseMap<const llvm::MachineBasicBlock *, double> freq;
++  for (const llvm::MachineBasicBlock *block : rpo) {
++    double f = block == &func->front() ? 1.0 : 0.0;
++    for (const llvm::MachineBasicBlock *pred : block->predecessors()) {
++      if (!order.contains(pred) || order[pred] >= order[block]) {
++        continue;
++      }
++      for (auto it = pred->succ_begin(); it != pred->succ_end(); ++it) {
++        if (*it == block) {
++          const llvm::BranchProbability prob = pred->getSuccProbability(it);
++          f += freq[pred] * double(prob.getNumerator()) /
++               double(prob.getDenominator());
++        }
++      }
++    }
++    freq[block] = f;
++    cold[block] = block != &func->front() && f < 0.01;
++  }
++  return cold;
++}
++
+ static unsigned reg_size_bytes(llvm::MachineFunction *func,
+                                llvm::Register reg) {
+   const auto &target_reg_info = func->getSubtarget().getRegisterInfo();
+@@ -1112,6 +1149,24 @@ bool create_encode_function(llvm::MachineFunction *func,
+ 
+   const auto multiple_bbs = func->size() > 1;
+ 
++  llvm::DenseMap<const llvm::MachineBasicBlock *, bool> cold;
++  if (cold_blocks && multiple_bbs) {
++    cold = cold_block_set(func);
++  }
++  bool any_cold = false;
++  for (const auto &[block, is_cold] : cold) {
++    any_cold |= is_cold;
++  }
++  if (any_cold) {
++    // A snippet in code that is already cold stays in place.
++    os << "  const bool use_cold_area = "
++          "!derived()->text_writer.in_cold_area();\n";
++  }
++  bool in_cold = false;
++  const auto falls_through = [](const llvm::MachineBasicBlock *block) {
++    return block->empty() || !block->back().isBarrier();
++  };
++
+   if (multiple_bbs) {
+     write_buf += "\n    // Creating label for convergence point at the "
+                  "end of the function\n";
+@@ -1121,6 +1176,20 @@ bool create_encode_function(llvm::MachineFunction *func,
+   }
+ 
+   for (auto bb_it = func->begin(); bb_it != func->end(); ++bb_it) {
++    const bool want_cold = any_cold && cold.lookup(&*bb_it);
++    if (want_cold != in_cold) {
++      // Blocks are laid out per area: a fall-through into the other area
++      // becomes a jump.
++      if (bb_it != func->begin() && falls_through(&*std::prev(bb_it))) {
++        os << "  derived()->generate_raw_jump(Derived::Jump::jmp, block"
++           << bb_it->getNumber() << "_label);\n";
++      }
++      os << (want_cold ? "  if (use_cold_area) "
++                         "derived()->text_writer.begin_cold_area();\n"
++                       : "  if (use_cold_area) "
++                         "derived()->text_writer.end_cold_area();\n");
++      in_cold = want_cold;
++    }
+     if (multiple_bbs && !bb_it->pred_empty()) {
+       std::format_to(std::back_inserter(write_buf),
+                      "    tpde::Label block{}_label = "
+@@ -1165,6 +1234,15 @@ bool create_encode_function(llvm::MachineFunction *func,
+     }
+   }
+ 
++  if (in_cold) {
++    // The return of the last block falls through to the convergence point.
++    if (func->back().empty() || !func->back().back().isUnconditionalBranch()) {
++      os << "  derived()->generate_raw_jump(Derived::Jump::jmp, "
++            "ret_converge_label);\n";
++    }
++    os << "  if (use_cold_area) derived()->text_writer.end_cold_area();\n";
++  }
++
+   if (multiple_bbs) {
+     // separate block labels from ScratchRegs
+     write_buf += '\n';
+diff --git a/tpde-encodegen/src/main.cpp b/tpde-encodegen/src/main.cpp
+index d505283..721f50d 100644
+--- a/tpde-encodegen/src/main.cpp
++++ b/tpde-encodegen/src/main.cpp
+@@ -46,6 +46,10 @@ llvm::cl::list<std::string> input_filename(llvm::cl::Positional,
+                                            llvm::cl::ZeroOrMore,
+                                            llvm::cl::desc("<bitcode file>"),
+                                            llvm::cl::cat(tpde_category));
++llvm::cl::opt<bool> cold_blocks(
++    "cold-blocks",
++    llvm::cl::desc("Write rarely executed blocks to the TPDE cold area"),
++    llvm::cl::cat(tpde_category));
+ llvm::cl::opt<bool>
+     dumpIR("dump-ir",
+            llvm::cl::desc("Dump llvm-IR and Machine-IR to stdout"),

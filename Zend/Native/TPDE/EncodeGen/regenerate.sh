@@ -8,6 +8,10 @@
 #
 # It builds tpde_encodegen from the TPDE revision recorded in
 # ../ThirdParty/tpde/REVISION (TPDE_ENABLE_ENCODEGEN=ON, TPDE_ENABLE_LLVM=OFF)
+# with tpde-encodegen-cold-blocks.diff applied, which adds --cold-blocks:
+# snippet blocks reached with a probability below 1/100 (UNEXPECTED() in the
+# snippet sources) are written to the TPDE cold area. Only the x86-64 header
+# uses it; the arm64 compiler has no cold area. The build goes
 # into $ENCODEGEN_ROOT (default $NATIVE_WORK_ROOT/tpde-encodegen) and compiles
 # the snippets with the matching clang. zend_tpde_encodegen_values.c reads the
 # Zend layouts of a configured release build, so no debug-only expansion
@@ -41,6 +45,10 @@ fi
 git -C "$root/tpde" fetch -q origin "$revision" 2>/dev/null || true
 git -C "$root/tpde" checkout -q "$revision"
 git -C "$root/tpde" submodule update -q --init --recursive
+if ! git -C "$root/tpde" apply --reverse --check \
+		"$here/tpde-encodegen-cold-blocks.diff" 2>/dev/null; then
+	git -C "$root/tpde" apply "$here/tpde-encodegen-cold-blocks.diff"
+fi
 
 $toolchain bash -euo pipefail -c '
 root=$1; here=$2; repo=$3; build=$4
@@ -61,7 +69,7 @@ for source in zend_tpde_encodegen zend_tpde_encodegen_values; do
 		-I"$repo" -I"$repo/main" -I"$repo/Zend" -I"$repo/TSRM" \
 		-o "$root/${source}_x64.bc" "$here/$source.c"
 done
-"$root/build/tpde-encodegen/tpde_encodegen" \
+"$root/build/tpde-encodegen/tpde_encodegen" --cold-blocks \
 	-o "$root/zend_tpde_encodegen_x64.hpp" \
 	"$root/zend_tpde_encodegen_x64.bc" "$root/zend_tpde_encodegen_values_x64.bc" \
 	2> "$root/encodegen.log" || { cat "$root/encodegen.log" >&2; exit 1; }
