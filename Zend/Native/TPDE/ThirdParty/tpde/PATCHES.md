@@ -85,10 +85,12 @@ it is compiled in place, so the allocator state stays that of its position:
   restored registers), and `DW_CFA_restore_state` gives the cold code behind
   it the frame again.
 - `CompilerX64::generate_raw_jump` takes a fixup for a label in the other
-  area (`label_needs_fixup()`). `next_block()` names the next block in
-  layout order written to the same area, the one physically placed next
-  (one past the last block if none), so no branch falls through into the
-  other area; in the cold area `spill_before_branch` sees no fall-through
+  area (`label_needs_fixup()`). `next_block()` names the block physically
+  placed next (one past the last block if none), so no branch falls through
+  into the other area: for a hot block the next hot block in layout order,
+  across cold ones; for a cold block only an immediately following cold
+  block, because a hot block compiled in between may append its own cold
+  code. In the cold area `spill_before_branch` sees no fall-through
   successor.
 - `begin_cold_area(true)` writes to the cold area code that keeps the layout
   decisions of the hot code it was moved out of: `in_cold_layout()`, which

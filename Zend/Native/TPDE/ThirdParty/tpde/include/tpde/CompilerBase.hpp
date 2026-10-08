@@ -2302,14 +2302,25 @@ typename CompilerBase<Adaptor, Derived, Config>::BlockIndex
     CompilerBase<Adaptor, Derived, Config>::next_block() const {
   // The block placed next: the next one in layout order written to the same
   // area (see FunctionWriterBase::begin_cold_area()), else none.
+  // A hot block may append to the cold area (cold paths, exits), a cold
+  // block never writes hot code: hot blocks follow each other across cold
+  // ones, a cold block falls only into an immediately following cold one.
   u32 next = static_cast<u32>(cur_block_idx) + 1;
   const u32 count = static_cast<u32>(analyzer.block_layout.size());
   if constexpr (requires(IRBlockRef b) { this->adaptor->block_is_cold(b); }) {
     const bool cold = this->text_writer.in_cold_layout();
-    while (next < count
-           && this->adaptor->block_is_cold(analyzer.block_ref(
-                  static_cast<BlockIndex>(next))) != cold) {
-      ++next;
+    if (cold) {
+      if (next < count
+          && !this->adaptor->block_is_cold(
+              analyzer.block_ref(static_cast<BlockIndex>(next)))) {
+        next = count;
+      }
+    } else {
+      while (next < count
+             && this->adaptor->block_is_cold(
+                 analyzer.block_ref(static_cast<BlockIndex>(next)))) {
+        ++next;
+      }
     }
   } else if (this->text_writer.in_cold_layout()) {
     next = count;

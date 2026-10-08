@@ -65,8 +65,18 @@ const char *layout_environment(const char *name, bool profile) {
 	return (::access(both, R_OK) == 0) == profile ? both : nullptr;
 }
 
+/* Ordinals with this bit count the entries of a block: the rest is the
+ * adaptor's block index. */
+constexpr uint32_t layout_block_ordinal = UINT32_C(1) << 31;
+/* A block entered in fewer than one of a hundred calls of its function,
+ * over at least this many calls, goes to the cold area. */
+constexpr uint64_t layout_minimum_calls = 64;
+
 struct LayoutProfile {
 	std::unordered_map<uint64_t, std::unordered_set<uint32_t>> jumps;
+	/* Per function key, the entries of each counted block. */
+	std::unordered_map<uint64_t, std::unordered_map<uint32_t, uint64_t>>
+		blocks;
 	/* "*" moves every eligible region, to test the transformation. */
 	bool all = false;
 	using Counts = std::unordered_map<uint64_t,
@@ -78,6 +88,11 @@ struct LayoutProfile {
 	void select(const Counts &counts) {
 		for (const auto &[key, ordinals] : counts) {
 			for (const auto &[ordinal, outcome] : ordinals) {
+				if ((ordinal & layout_block_ordinal) != 0) {
+					blocks[key][ordinal & ~layout_block_ordinal] +=
+						outcome.first;
+					continue;
+				}
 				const uint64_t executions = outcome.first + outcome.second;
 				if (executions >= layout_minimum_executions
 						&& outcome.first * 10 >= executions * 9) {
@@ -88,6 +103,7 @@ struct LayoutProfile {
 	}
 	void load(const char *path) {
 		jumps.clear();
+		blocks.clear();
 		all = false;
 		if (path == nullptr || path[0] == '\0') {
 			return;
@@ -234,6 +250,7 @@ struct LayoutTraining {
 			outcome.second += counter.fallthrough;
 		}
 		profile.jumps.clear();
+		profile.blocks.clear();
 		profile.all = false;
 		profile.select(counts);
 	}
@@ -3131,6 +3148,7 @@ public:
 	 * the instruction's code; the result is correct for any profile.
 	 */
 	uint64_t layout_function_key_ = 0;
+	uint32_t layout_counted_block_ = UINT32_MAX;
 	uint32_t layout_jump_ordinal_ = 0;
 	bool layout_in_inst_ = false;
 	const std::unordered_set<uint32_t> *layout_jumps_ = nullptr;
@@ -3159,9 +3177,57 @@ public:
 		layout_function_key_ = key;
 		layout_jump_ordinal_ = 0;
 		layout_region_.active = false;
+		layout_counted_block_ = UINT32_MAX;
 		const auto found = layout_profile.jumps.find(key);
 		layout_jumps_ = found == layout_profile.jumps.end()
 			? nullptr : &found->second;
+		/* Rarely entered blocks go to the cold area; "*" moves every other
+		 * one, to test the placement. */
+		std::vector<uint8_t> cold;
+		const uint32_t entry =
+			static_cast<uint32_t>(adaptor->cur_entry_block());
+		uint32_t block_count = 0;
+		for (IRBlockRef block : adaptor->cur_blocks()) {
+			block_count = std::max(block_count,
+				static_cast<uint32_t>(block) + 1);
+		}
+		if (layout_profile.all) {
+			cold.assign(block_count, 0);
+			for (uint32_t block = 1; block < block_count; block += 2) {
+				cold[block] = block != entry ? 1 : 0;
+			}
+		} else if (const auto counted = layout_profile.blocks.find(key);
+				counted != layout_profile.blocks.end()) {
+			const auto calls = counted->second.find(entry);
+			if (calls != counted->second.end()
+					&& calls->second >= layout_minimum_calls) {
+				cold.assign(block_count, 0);
+				for (uint32_t block = 0; block < block_count; ++block) {
+					const auto entered = counted->second.find(block);
+					const uint64_t entries =
+						entered == counted->second.end()
+							? 0 : entered->second;
+					cold[block] = block != entry
+						&& entries * 100 < calls->second ? 1 : 0;
+				}
+			}
+		}
+		adaptor->set_profile_cold_blocks(std::move(cold));
+	}
+	/* Counts the entries of the block the next instruction begins. */
+	void layout_count_block() {
+		if (!layout_training.active()
+				|| static_cast<uint32_t>(cur_block_idx)
+					== layout_counted_block_) {
+			return;
+		}
+		layout_counted_block_ = static_cast<uint32_t>(cur_block_idx);
+		const uint32_t block = static_cast<uint32_t>(
+			analyzer.block_ref(cur_block_idx));
+		if (LayoutTraining::Counter *counter = layout_training.allocate(
+				layout_function_key_, layout_block_ordinal | block)) {
+			emit_layout_count(&counter->taken);
+		}
 	}
 	/* Adds one to *counter, preserving every register and the flags. */
 	void emit_layout_count(uint64_t *counter) {
@@ -24159,6 +24225,7 @@ bool ZendCompilerX64::compile_inst(
 			return false;
 		}
 	}
+	layout_count_block();
 	const Adaptor::InstNode &node = adaptor->node(instruction);
 	current_continuation_block_ = node.continuation_block;
 	continuation_edge_emitted_ = false;
