@@ -26,6 +26,21 @@
 # include <sys/mman.h>
 # include <unistd.h>
 
+/* The arm64 backend does no profile-guided layout. */
+extern "C" bool zend_tpde_layout_training(void)
+{
+	return false;
+}
+
+extern "C" uint64_t zend_tpde_layout_training_session(void)
+{
+	return 0;
+}
+
+extern "C" void zend_tpde_layout_training_flush(void)
+{
+}
+
 extern "C" void __register_frame(void *);
 extern "C" void __deregister_frame(void *);
 extern "C" void __unw_add_dynamic_eh_frame_section(uintptr_t)
