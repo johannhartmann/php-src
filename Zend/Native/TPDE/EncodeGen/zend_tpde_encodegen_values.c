@@ -86,7 +86,7 @@ zval *zend_native_property_read_slot(
 		return NULL;
 	}
 	property = OBJ_PROP(object, offset);
-	if (Z_TYPE_P(property) == IS_REFERENCE) {
+	if (UNEXPECTED(Z_TYPE_P(property) == IS_REFERENCE)) {
 		return &Z_REF_P(property)->val;
 	}
 	return UNEXPECTED(Z_TYPE_P(property) == IS_UNDEF) ? NULL : property;
@@ -126,7 +126,7 @@ double zend_native_load_f64(const double *address)
 ZEND_NATIVE_SNIPPET_INLINE const HashTable *zend_native_probe_array(
 	const zval *container)
 {
-	if (Z_TYPE_P(container) == IS_REFERENCE) {
+	if (UNEXPECTED(Z_TYPE_P(container) == IS_REFERENCE)) {
 		container = &Z_REF_P(container)->val;
 	}
 	if (UNEXPECTED(Z_TYPE_P(container) != IS_ARRAY)) {
@@ -292,7 +292,7 @@ uintptr_t zend_native_array_find_literal(
 /* The element under a runtime key of a container zval (see above). */
 uintptr_t zend_native_array_find_key(const zval *container, const zval *key)
 {
-	if (Z_TYPE_P(key) == IS_REFERENCE) {
+	if (UNEXPECTED(Z_TYPE_P(key) == IS_REFERENCE)) {
 		key = &Z_REF_P(key)->val;
 	}
 	return zend_native_find_value(zend_native_probe_array(container),
@@ -308,7 +308,7 @@ uintptr_t zend_native_array_find_key(const zval *container, const zval *key)
 ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_test_value(
 	const zval *container, const zval *key, bool literal)
 {
-	if (Z_TYPE_P(container) == IS_REFERENCE) {
+	if (UNEXPECTED(Z_TYPE_P(container) == IS_REFERENCE)) {
 		container = &Z_REF_P(container)->val;
 	}
 	if (Z_TYPE_P(container) <= IS_NULL) {
@@ -332,7 +332,7 @@ uintptr_t zend_native_array_test_literal(
 
 uintptr_t zend_native_array_test_key(const zval *container, const zval *key)
 {
-	if (Z_TYPE_P(key) == IS_REFERENCE) {
+	if (UNEXPECTED(Z_TYPE_P(key) == IS_REFERENCE)) {
 		key = &Z_REF_P(key)->val;
 	}
 	return zend_native_test_value(container, key, false);
@@ -346,7 +346,7 @@ uintptr_t zend_native_array_test_key(const zval *container, const zval *key)
 ZEND_NATIVE_SNIPPET_INLINE const HashTable *zend_native_probe_array_w(
 	const zval *container)
 {
-	if (Z_TYPE_P(container) == IS_REFERENCE) {
+	if (UNEXPECTED(Z_TYPE_P(container) == IS_REFERENCE)) {
 		container = &Z_REF_P(container)->val;
 	}
 	if (UNEXPECTED(Z_TYPE_P(container) != IS_ARRAY
@@ -371,7 +371,7 @@ ZEND_NATIVE_SNIPPET_INLINE const HashTable *zend_native_probe_indirect_w(
 
 ZEND_NATIVE_SNIPPET_INLINE const zval *zend_native_key_deref(const zval *key)
 {
-	return Z_TYPE_P(key) == IS_REFERENCE ? &Z_REF_P(key)->val : key;
+	return UNEXPECTED(Z_TYPE_P(key) == IS_REFERENCE) ? &Z_REF_P(key)->val : key;
 }
 
 /* The element a write fetch of a CV under a literal key returns. */
@@ -452,7 +452,7 @@ uintptr_t zend_native_indirect_assign_idx(const zval *var, uint64_t h)
 ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_test_table(
 	const zval *container, const HashTable **table)
 {
-	if (Z_TYPE_P(container) == IS_REFERENCE) {
+	if (UNEXPECTED(Z_TYPE_P(container) == IS_REFERENCE)) {
 		container = &Z_REF_P(container)->val;
 	}
 	if (Z_TYPE_P(container) <= IS_NULL) {
@@ -550,7 +550,7 @@ ZEND_NATIVE_SNIPPET_INLINE uint64_t zend_native_element_isset(
 	if (element == ZEND_NATIVE_ELEMENT_ABSENT) {
 		return 0;
 	}
-	if (Z_TYPE_P(value) == IS_REFERENCE) {
+	if (UNEXPECTED(Z_TYPE_P(value) == IS_REFERENCE)) {
 		value = &Z_REF_P(value)->val;
 	}
 	return Z_TYPE_P(value) > IS_NULL;
@@ -752,7 +752,7 @@ uint64_t zend_native_known_isset_idx(const zval *container, uint64_t h)
 ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_string_offset(
 	const zval *container, uint64_t offset, const zval *chars)
 {
-	if (Z_TYPE_P(container) == IS_REFERENCE) {
+	if (UNEXPECTED(Z_TYPE_P(container) == IS_REFERENCE)) {
 		container = &Z_REF_P(container)->val;
 	}
 	if (UNEXPECTED(Z_TYPE_P(container) != IS_STRING
@@ -837,7 +837,7 @@ uint64_t zend_native_zval_identical(const zval *value, const zval *literal)
 	const char *right;
 	size_t length;
 
-	if (Z_TYPE_P(value) == IS_REFERENCE) {
+	if (UNEXPECTED(Z_TYPE_P(value) == IS_REFERENCE)) {
 		value = &Z_REF_P(value)->val;
 	}
 	if (UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
@@ -891,10 +891,10 @@ uint64_t zend_native_zval_identical_any(const zval *value, const zval *other)
 	const char *right;
 	size_t length;
 
-	if (Z_TYPE_P(value) == IS_REFERENCE) {
+	if (UNEXPECTED(Z_TYPE_P(value) == IS_REFERENCE)) {
 		value = &Z_REF_P(value)->val;
 	}
-	if (Z_TYPE_P(other) == IS_REFERENCE) {
+	if (UNEXPECTED(Z_TYPE_P(other) == IS_REFERENCE)) {
 		other = &Z_REF_P(other)->val;
 	}
 	if (UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF
@@ -943,7 +943,7 @@ uint64_t zend_native_zval_identical_any(const zval *value, const zval *other)
  */
 uint64_t zend_native_zval_array_count(const zval *value)
 {
-	if (Z_TYPE_P(value) == IS_REFERENCE) {
+	if (UNEXPECTED(Z_TYPE_P(value) == IS_REFERENCE)) {
 		value = &Z_REF_P(value)->val;
 	}
 	return EXPECTED(Z_TYPE_P(value) == IS_ARRAY)
@@ -960,7 +960,7 @@ uint64_t zend_native_zval_type_check(const zval *value, uint64_t mask)
 	if (UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
 		return ZEND_NATIVE_TYPE_CHECK_UNDEFINED;
 	}
-	if (Z_TYPE_P(value) == IS_REFERENCE) {
+	if (UNEXPECTED(Z_TYPE_P(value) == IS_REFERENCE)) {
 		value = &Z_REF_P(value)->val;
 	}
 	return (mask >> Z_TYPE_P(value)) & 1;
@@ -972,7 +972,7 @@ uint64_t zend_native_zval_type_check(const zval *value, uint64_t mask)
  */
 uint64_t zend_native_zval_is_scalar(const zval *container)
 {
-	if (Z_TYPE_P(container) == IS_REFERENCE) {
+	if (UNEXPECTED(Z_TYPE_P(container) == IS_REFERENCE)) {
 		container = &Z_REF_P(container)->val;
 	}
 	return Z_TYPE_P(container) <= IS_DOUBLE;
@@ -1000,7 +1000,7 @@ void zend_native_release_shared(const zval *container)
 /* ZVAL_COPY_DEREF as two machine words. */
 zend_native_boxed zend_native_zval_copy_deref(const zval *value)
 {
-	if (Z_TYPE_P(value) == IS_REFERENCE) {
+	if (UNEXPECTED(Z_TYPE_P(value) == IS_REFERENCE)) {
 		value = &Z_REF_P(value)->val;
 	}
 	return zend_native_zval_copy(value);
@@ -1009,7 +1009,7 @@ zend_native_boxed zend_native_zval_copy_deref(const zval *value)
 /* isset() of an element: set and not null, looking through a reference. */
 uint64_t zend_native_zval_isset(const zval *value)
 {
-	if (Z_TYPE_P(value) == IS_REFERENCE) {
+	if (UNEXPECTED(Z_TYPE_P(value) == IS_REFERENCE)) {
 		value = &Z_REF_P(value)->val;
 	}
 	return Z_TYPE_P(value) > IS_NULL;
@@ -1022,7 +1022,7 @@ uint64_t zend_native_zval_isset(const zval *value)
  */
 uint64_t zend_native_zval_empty(const zval *value)
 {
-	if (Z_TYPE_P(value) == IS_REFERENCE) {
+	if (UNEXPECTED(Z_TYPE_P(value) == IS_REFERENCE)) {
 		value = &Z_REF_P(value)->val;
 	}
 	switch (Z_TYPE_P(value)) {
