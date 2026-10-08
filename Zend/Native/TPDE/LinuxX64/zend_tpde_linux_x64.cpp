@@ -22803,17 +22803,13 @@ bool ZendCompilerX64::compile_inst_impl(
 							mov(moved_callee_reg, received_callee_reg, 8);
 							received_callee = std::move(moved_callee);
 						}
+						/* The activation's code: the validated value, not
+						 * the cell, which may have been republished. */
 						if (!local_component_call) {
 							published_code_reg = published_code.alloc_gp();
-							auto receive_cell = image_symbol_value(
-								ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
-								call.call_site->target_id);
-							auto receive_cell_scratch =
-								std::move(receive_cell).into_scratch(this);
 							ASM(MOV64rm, published_code_reg,
-								FE_MEM(receive_cell_scratch.cur_reg(), 0, FE_NOREG,
-									static_cast<int32_t>(offsetof(
-										zend_native_entry_cell, code))));
+								FE_MEM(FE_BP, 0, FE_NOREG,
+									published_code_slot));
 						}
 						callee_value.set_value(
 							this, std::move(received_callee));

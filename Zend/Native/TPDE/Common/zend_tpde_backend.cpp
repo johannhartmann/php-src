@@ -6061,6 +6061,17 @@ bool initialize_plan(
 				counted |= UINT64_C(1) << variable;
 			}
 		}
+		/* A parameter the tier-2 entry guards holds any type when the
+		 * guard fails: the tier-1 code then runs the frame, which the
+		 * fast-call leave releases. */
+		for (uint32_t parameter = 0;
+				parameter < ZEND_NATIVE_TIER2_ARG_GUARDS
+					&& parameter < released_vars; ++parameter) {
+			if (plan->tier2_arg_guards[parameter]
+					!= ZEND_NATIVE_ARG_GUARD_NONE) {
+				counted |= UINT64_C(1) << parameter;
+			}
+		}
 		plan->fast_call_counted_cvs = counted;
 	}
 	plan->source_literals =
