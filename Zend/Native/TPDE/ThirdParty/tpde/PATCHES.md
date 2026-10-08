@@ -78,8 +78,12 @@ it is compiled in place, so the allocator state stays that of its position:
 - `append_cold_area()` moves the buffer behind the hot code of the function
   and translates label offsets, label fixups, jump tables and the deferred
   relocations; `translate_cold_offset()` maps other recorded offsets.
-  `CompilerX64::finish_func` appends the area first and translates its
-  return-patch offsets.
+  `CompilerX64::finish_func` writes the epilogue behind the hot code, then
+  appends the area and translates its return-patch offsets, so hot returns
+  never jump across the cold code. The FDE describes the epilogue exactly:
+  at its RET the frame is gone (`DW_CFA_remember_state`, CFA = RSP + 8,
+  restored registers), and `DW_CFA_restore_state` gives the cold code behind
+  it the frame again.
 - `CompilerX64::generate_raw_jump` takes a fixup for a label in the other
   area (`label_needs_fixup()`). `next_block()` names the next block in
   layout order written to the same area, the one physically placed next
@@ -107,7 +111,8 @@ Upstream encodes every forward jump with a 32-bit displacement. Here
 fixup, also to a label that is already placed, and the return sites of a
 function become fixups to a label in front of the epilogue.
 `FunctionWriterX64::relax_jumps`, called by `CompilerX64::finish_func` once
-the cold area is appended and before the prologue and epilogue are written,
+the epilogue is written and the cold area appended, and before the prologue
+is written,
 shortens every jump whose target lies within rel8 range to the 2-byte form
 and removes jumps to the next instruction. It iterates to a fixed point
 (shortening never lengthens another jump), compacts the code from the end of
