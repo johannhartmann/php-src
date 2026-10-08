@@ -1371,29 +1371,24 @@ public:
 	 */
 	void load_array_container(AsmReg base_reg, int32_t offset,
 			AsmReg type_reg, AsmReg array_reg, tpde::Label slow) {
-		auto loaded = text_writer.label_create();
-		auto direct = text_writer.label_create();
 		ASM(MOVZXr32m8, type_reg,
 			FE_MEM(base_reg, 0, FE_NOREG,
 				offset + static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		ASM(MOV64rm, array_reg, FE_MEM(base_reg, 0, FE_NOREG, offset));
 		ASM(CMP32ri, type_reg, IS_ARRAY);
-		generate_raw_jump(Jump::je, direct);
-		ASM(CMP32ri, type_reg, IS_REFERENCE);
-		generate_raw_jump(Jump::jne, slow);
-		ASM(MOV64rm, array_reg, FE_MEM(base_reg, 0, FE_NOREG, offset));
-		ASM(CMP8mi,
-			FE_MEM(array_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zend_reference, val)
-					+ offsetof(zval, u1.type_info))),
-			IS_ARRAY);
-		generate_raw_jump(Jump::jne, slow);
-		ASM(MOV64rm, array_reg,
-			FE_MEM(array_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zend_reference, val))));
-		generate_raw_jump(Jump::jmp, loaded);
-		label_place(direct);
-		ASM(MOV64rm, array_reg, FE_MEM(base_reg, 0, FE_NOREG, offset));
-		label_place(loaded);
+		emit_cold_branch(Jump::jne, text_writer.label_create(), [&] {
+			ASM(CMP32ri, type_reg, IS_REFERENCE);
+			generate_raw_jump(Jump::jne, slow);
+			ASM(CMP8mi,
+				FE_MEM(array_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_reference, val)
+						+ offsetof(zval, u1.type_info))),
+				IS_ARRAY);
+			generate_raw_jump(Jump::jne, slow);
+			ASM(MOV64rm, array_reg,
+				FE_MEM(array_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_reference, val))));
+		});
 	}
 	/*
 	 * Whether a liveness operand of a node was already consumed before its
@@ -1545,16 +1540,16 @@ public:
 			if (!operand.literal && !operand.temporary) {
 				auto plain = text_writer.label_create();
 				ASM(CMP32ri, type_reg, IS_REFERENCE);
-				generate_raw_jump(Jump::jne, plain);
-				ASM(MOVZXr32m8, type_reg,
-					FE_MEM(value_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zend_reference, val)
-							+ offsetof(zval, u1.type_info))));
-				ASM(MOV64rm, value_reg,
-					FE_MEM(value_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							offsetof(zend_reference, val))));
-				label_place(plain);
+				emit_cold_branch(Jump::je, plain, [&] {
+					ASM(MOVZXr32m8, type_reg,
+						FE_MEM(value_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(zend_reference, val)
+								+ offsetof(zval, u1.type_info))));
+					ASM(MOV64rm, value_reg,
+						FE_MEM(value_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zend_reference, val))));
+				});
 			}
 		};
 		load(layout.left, left_type, left_value);
@@ -2445,6 +2440,22 @@ public:
 		} else {
 			text_writer.end_cold_area();
 		}
+	}
+	/*
+	 * A rarely taken branch, such as to a reference's referent: jump leads
+	 * to body() in the cold area, which continues at resume unless it
+	 * leaves otherwise. resume is placed here, in the current area.
+	 */
+	template <typename Body>
+	void emit_cold_branch(Jump jump, tpde::Label resume, Body &&body) {
+		const auto cold = text_writer.label_create();
+		generate_raw_jump(jump, cold);
+		cold_begin();
+		label_place(cold);
+		body();
+		generate_raw_jump(Jump::jmp, resume);
+		cold_end();
+		label_place(resume);
 	}
 	static constexpr int32_t frame_register_bias = 0x80;
 	AsmReg select_fixed_assignment_reg(
@@ -5258,16 +5269,16 @@ bool ZendCompilerX64::compile_inst_impl(
 				begin_branch_region();
 				auto dereferenced = text_writer.label_create();
 				ASM(CMP32ri, type_reg, IS_REFERENCE);
-				generate_raw_jump(Jump::jne, dereferenced);
-				ASM(MOV64rm, slot_reg,
-					FE_MEM(slot_reg, 0, FE_NOREG, 0));
-				ASM(ADD64ri, slot_reg,
-					static_cast<int32_t>(offsetof(zend_reference, val)));
-				ASM(MOVZXr32m8, type_reg,
-					FE_MEM(slot_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							offsetof(zval, u1.type_info))));
-				label_place(dereferenced);
+				emit_cold_branch(Jump::je, dereferenced, [&] {
+					ASM(MOV64rm, slot_reg,
+						FE_MEM(slot_reg, 0, FE_NOREG, 0));
+					ASM(ADD64ri, slot_reg,
+						static_cast<int32_t>(offsetof(zend_reference, val)));
+					ASM(MOVZXr32m8, type_reg,
+						FE_MEM(slot_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zval, u1.type_info))));
+				});
 				if (layout.target_opcode != ZEND_SWITCH_STRING) {
 					ASM(CMP32ri, type_reg, IS_LONG);
 					generate_raw_jump(Jump::je, long_label);
@@ -5751,7 +5762,6 @@ bool ZendCompilerX64::compile_inst_impl(
 									FE_NOREG, static_cast<int32_t>(
 										offsetof(zend_execute_data, This))));
 						} else {
-							auto plain = text_writer.label_create();
 							ASM(LEA64rm, value_reg,
 								FE_MEM(canonical_frame_register(), 0,
 									FE_NOREG,
@@ -5763,13 +5773,15 @@ bool ZendCompilerX64::compile_inst_impl(
 										static_cast<int32_t>(
 											offsetof(zval, u1.type_info))),
 									IS_REFERENCE);
-								generate_raw_jump(Jump::jne, plain);
-								ASM(MOV64rm, value_reg,
-									FE_MEM(value_reg, 0, FE_NOREG, 0));
-								ASM(ADD64ri, value_reg, static_cast<int32_t>(
-									offsetof(zend_reference, val)));
+								emit_cold_branch(Jump::je,
+										text_writer.label_create(), [&] {
+									ASM(MOV64rm, value_reg,
+										FE_MEM(value_reg, 0, FE_NOREG, 0));
+									ASM(ADD64ri, value_reg,
+										static_cast<int32_t>(
+											offsetof(zend_reference, val)));
+								});
 							}
-							label_place(plain);
 							ASM(CMP8mi,
 								FE_MEM(value_reg, 0, FE_NOREG,
 									static_cast<int32_t>(
@@ -6295,14 +6307,14 @@ bool ZendCompilerX64::compile_inst_impl(
 						ASM(CMP32ri, payload_reg, IS_UNDEF);
 						generate_raw_jump(Jump::je, send_slow);
 						ASM(CMP32ri, payload_reg, IS_REFERENCE);
-						generate_raw_jump(Jump::jne, plain);
-						ASM(MOV64rm, source_reg, FE_MEM(source_reg, 0, FE_NOREG, 0));
-						ASM(ADD64ri, source_reg,
-							static_cast<int32_t>(offsetof(zend_reference, val)));
-						ASM(MOV32rm, type_reg,
-							FE_MEM(source_reg, 0, FE_NOREG,
-								static_cast<int32_t>(offsetof(zval, u1.type_info))));
-						label_place(plain);
+						emit_cold_branch(Jump::je, plain, [&] {
+							ASM(MOV64rm, source_reg, FE_MEM(source_reg, 0, FE_NOREG, 0));
+							ASM(ADD64ri, source_reg,
+								static_cast<int32_t>(offsetof(zend_reference, val)));
+							ASM(MOV32rm, type_reg,
+								FE_MEM(source_reg, 0, FE_NOREG,
+									static_cast<int32_t>(offsetof(zval, u1.type_info))));
+						});
 					} else if (send_tmp) {
 						ASM(CMP32ri, payload_reg, IS_REFERENCE);
 						generate_raw_jump(Jump::je, send_slow);
@@ -6488,11 +6500,11 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(CMP8mi, FE_MEM(table_reg, 0, FE_NOREG,
 						static_cast<int32_t>(offsetof(zval, u1.v.type))),
 						IS_REFERENCE);
-					generate_raw_jump(Jump::jne, direct);
-					ASM(MOV64rm, table_reg, FE_MEM(table_reg, 0, FE_NOREG, 0));
-					ASM(ADD64ri, table_reg, static_cast<int32_t>(
-						offsetof(zend_reference, val)));
-					label_place(direct);
+					emit_cold_branch(Jump::je, direct, [&] {
+						ASM(MOV64rm, table_reg, FE_MEM(table_reg, 0, FE_NOREG, 0));
+						ASM(ADD64ri, table_reg, static_cast<int32_t>(
+							offsetof(zend_reference, val)));
+					});
 				}
 				ASM(CMP8mi, FE_MEM(table_reg, 0, FE_NOREG,
 					static_cast<int32_t>(offsetof(zval, u1.v.type))),
@@ -6558,15 +6570,17 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(TEST32ri, work_reg, 0xff00);
 					generate_raw_jump(Jump::je, copy);
 					ASM(CMP8ri, work_reg, IS_REFERENCE);
-					generate_raw_jump(Jump::jne, counted);
-					ASM(MOV32rm, work_reg, FE_MEM(element_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zend_reference, val)
-							+ offsetof(zval, u1.type_info))));
-					ASM(MOV64rm, element_reg, FE_MEM(element_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zend_reference, val))));
-					ASM(TEST32ri, work_reg, 0xff00);
-					generate_raw_jump(Jump::je, copy);
-					label_place(counted);
+					emit_cold_branch(Jump::je, counted, [&] {
+						ASM(MOV32rm, work_reg, FE_MEM(element_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(zend_reference, val)
+								+ offsetof(zval, u1.type_info))));
+						ASM(MOV64rm, element_reg,
+							FE_MEM(element_reg, 0, FE_NOREG,
+								static_cast<int32_t>(
+									offsetof(zend_reference, val))));
+						ASM(TEST32ri, work_reg, 0xff00);
+						generate_raw_jump(Jump::je, copy);
+					});
 					ASM(ADD32mi, FE_MEM(element_reg, 0, FE_NOREG,
 						static_cast<int32_t>(
 							offsetof(zend_refcounted_h, refcount))), 1);
@@ -6694,16 +6708,19 @@ bool ZendCompilerX64::compile_inst_impl(
 						ASM(TEST32ri, work_reg, 0xff00);
 						generate_raw_jump(Jump::je, copy);
 						ASM(CMP8ri, work_reg, IS_REFERENCE);
-						generate_raw_jump(Jump::jne, counted);
-						ASM(MOV32rm, work_reg, FE_MEM(value_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(zend_reference, val)
-								+ offsetof(zval, u1.type_info))));
-						ASM(MOV64rm, value_reg, FE_MEM(value_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(zend_reference, val))));
-						ASM(TEST32ri, work_reg, 0xff00);
-						generate_raw_jump(Jump::je, copy);
-						label_place(counted);
+						emit_cold_branch(Jump::je, counted, [&] {
+							ASM(MOV32rm, work_reg,
+								FE_MEM(value_reg, 0, FE_NOREG,
+									static_cast<int32_t>(
+										offsetof(zend_reference, val)
+										+ offsetof(zval, u1.type_info))));
+							ASM(MOV64rm, value_reg,
+								FE_MEM(value_reg, 0, FE_NOREG,
+									static_cast<int32_t>(
+										offsetof(zend_reference, val))));
+							ASM(TEST32ri, work_reg, 0xff00);
+							generate_raw_jump(Jump::je, copy);
+						});
 						ASM(ADD32mi, FE_MEM(value_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
 								offsetof(zend_refcounted_h, refcount))), 1);
@@ -7003,12 +7020,12 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(CMP8mi,
 						FE_MEM(address_reg, 0, FE_NOREG, static_cast<int32_t>(
 							offsetof(zval, u1.type_info))), IS_REFERENCE);
-					generate_raw_jump(Jump::jne, plain);
-					ASM(MOV64rm, address_reg,
-						FE_MEM(address_reg, 0, FE_NOREG, 0));
-					ASM(ADD64ri, address_reg, static_cast<int32_t>(
-						offsetof(zend_reference, val)));
-					label_place(plain);
+					emit_cold_branch(Jump::je, plain, [&] {
+						ASM(MOV64rm, address_reg,
+							FE_MEM(address_reg, 0, FE_NOREG, 0));
+						ASM(ADD64ri, address_reg, static_cast<int32_t>(
+							offsetof(zend_reference, val)));
+					});
 				}
 				ASM(MOV64rm, payload_reg, FE_MEM(address_reg, 0, FE_NOREG, 0));
 				ASM(MOV32rm, type_reg,
@@ -8852,12 +8869,12 @@ bool ZendCompilerX64::compile_inst_impl(
 						ASM(CMP8mi, FE_MEM(address_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
 								offsetof(zval, u1.v.type))), IS_REFERENCE);
-						generate_raw_jump(Jump::jne, direct);
-						ASM(MOV64rm, address_reg,
-							FE_MEM(address_reg, 0, FE_NOREG, 0));
-						ASM(ADD64ri, address_reg, static_cast<int32_t>(
-							offsetof(zend_reference, val)));
-						label_place(direct);
+						emit_cold_branch(Jump::je, direct, [&] {
+							ASM(MOV64rm, address_reg,
+								FE_MEM(address_reg, 0, FE_NOREG, 0));
+							ASM(ADD64ri, address_reg, static_cast<int32_t>(
+								offsetof(zend_reference, val)));
+						});
 					}
 				}
 				ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
@@ -9679,27 +9696,26 @@ bool ZendCompilerX64::compile_inst_impl(
 				&& source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
 			/* A CV bound by global, static or & is read through its
 			 * reference and copied, as ZEND_ASSIGN dereferences it. */
-			auto plain_source = text_writer.label_create();
 			ASM(CMP8ri, source_type_reg, IS_REFERENCE);
-			generate_raw_jump(Jump::jne, plain_source);
-			ASM(MOV32rm, source_type_reg,
-				FE_MEM(source_payload_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zend_reference, val)
-						+ offsetof(zval, u1.type_info))));
-			ASM(MOV64rm, source_payload_reg,
-				FE_MEM(source_payload_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zend_reference, val))));
-			ASM(CMP8ri, source_type_reg, IS_UNDEF);
-			generate_raw_jump(Jump::je, slow);
-			/* The target may be the same reference, whose release must
-			 * not free the value copied: the helper handles that. */
-			if (!fresh_target) {
-				ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(target_offset
-						+ offsetof(zval, u1.v.type))), IS_REFERENCE);
+			emit_cold_branch(Jump::je, text_writer.label_create(), [&] {
+				ASM(MOV32rm, source_type_reg,
+					FE_MEM(source_payload_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_reference, val)
+							+ offsetof(zval, u1.type_info))));
+				ASM(MOV64rm, source_payload_reg,
+					FE_MEM(source_payload_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_reference, val))));
+				ASM(CMP8ri, source_type_reg, IS_UNDEF);
 				generate_raw_jump(Jump::je, slow);
-			}
-			label_place(plain_source);
+				/* The target may be the same reference, whose release must
+				 * not free the value copied: the helper handles that. */
+				if (!fresh_target) {
+					ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(target_offset
+							+ offsetof(zval, u1.v.type))), IS_REFERENCE);
+					generate_raw_jump(Jump::je, slow);
+				}
+			});
 		} else if (!literal_source
 				&& (source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
 					|| source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)) {
@@ -10575,10 +10591,10 @@ bool ZendCompilerX64::compile_inst_impl(
 				ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(container_offset
 						+ offsetof(zval, u1.v.type))), IS_REFERENCE);
-				generate_raw_jump(Jump::jne, direct);
-				ASM(MOV64rm, table_reg, FE_MEM(table_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zend_reference, val))));
-				label_place(direct);
+				emit_cold_branch(Jump::je, direct, [&] {
+					ASM(MOV64rm, table_reg, FE_MEM(table_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_reference, val))));
+				});
 				ASM(CMP32mi, FE_MEM(table_reg, 0, FE_NOREG,
 					static_cast<int32_t>(offsetof(zend_refcounted_h,
 						refcount))), 1);
@@ -13539,16 +13555,16 @@ bool ZendCompilerX64::compile_inst_impl(
 							&& storage == operation.result_storage_id)) {
 					auto plain = text_writer.label_create();
 					ASM(CMP32ri, type_reg, IS_REFERENCE);
-					generate_raw_jump(Jump::jne, plain);
-					ASM(MOVZXr32m8, type_reg,
-						FE_MEM(value_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(zend_reference, val)
-								+ offsetof(zval, u1.type_info))));
-					ASM(MOV64rm, value_reg,
-						FE_MEM(value_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(zend_reference, val))));
-					label_place(plain);
+					emit_cold_branch(Jump::je, plain, [&] {
+						ASM(MOVZXr32m8, type_reg,
+							FE_MEM(value_reg, 0, FE_NOREG,
+								static_cast<int32_t>(offsetof(zend_reference, val)
+									+ offsetof(zval, u1.type_info))));
+						ASM(MOV64rm, value_reg,
+							FE_MEM(value_reg, 0, FE_NOREG,
+								static_cast<int32_t>(
+									offsetof(zend_reference, val))));
+					});
 				}
 			};
 			load(left, left_type_reg, left_reg, left_known,
@@ -14335,24 +14351,24 @@ bool ZendCompilerX64::compile_inst_impl(
 				FE_MEM(target_reg, 0, FE_NOREG,
 					static_cast<int32_t>(offsetof(zval, u1.type_info))));
 			ASM(CMP32ri, type_reg, IS_LONG);
-			generate_raw_jump(Jump::je, loaded);
-			ASM(CMP32ri, type_reg, IS_REFERENCE);
-			generate_raw_jump(Jump::jne, slow);
-			ASM(MOV64rm, target_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
-			ASM(CMP64mi,
-				FE_MEM(target_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_reference, sources.ptr))),
-				0);
-			generate_raw_jump(Jump::jne, slow);
-			ASM(ADD64ri, target_reg,
-				static_cast<int32_t>(offsetof(zend_reference, val)));
-			ASM(CMP8mi,
-				FE_MEM(target_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zval, u1.type_info))),
-				IS_LONG);
-			generate_raw_jump(Jump::jne, slow);
-			label_place(loaded);
+			emit_cold_branch(Jump::jne, loaded, [&] {
+				ASM(CMP32ri, type_reg, IS_REFERENCE);
+				generate_raw_jump(Jump::jne, slow);
+				ASM(MOV64rm, target_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
+				ASM(CMP64mi,
+					FE_MEM(target_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zend_reference, sources.ptr))),
+					0);
+				generate_raw_jump(Jump::jne, slow);
+				ASM(ADD64ri, target_reg,
+					static_cast<int32_t>(offsetof(zend_reference, val)));
+				ASM(CMP8mi,
+					FE_MEM(target_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zval, u1.type_info))),
+					IS_LONG);
+				generate_raw_jump(Jump::jne, slow);
+			});
 			ASM(MOV64rm, value_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
 		} else if (!(node.mutation_result && mir.mutation_lazy_scalar)) {
 			/*
@@ -14360,40 +14376,34 @@ bool ZendCompilerX64::compile_inst_impl(
 			 * Update an untyped reference's integer in place; typed
 			 * references need the helper's type checks.
 			 */
-			auto direct = text_writer.label_create();
-			auto loaded = text_writer.label_create();
 			target_reg = target.alloc_gp();
 			ASM(MOVZXr32m8, type_reg,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(
 						layout.operand_offset
 							+ offsetof(zval, u1.type_info))));
-			ASM(CMP32ri, type_reg, IS_LONG);
-			generate_raw_jump(Jump::je, direct);
-			ASM(CMP32ri, type_reg, IS_REFERENCE);
-			generate_raw_jump(Jump::jne, slow);
-			ASM(MOV64rm, target_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.operand_offset)));
-			ASM(CMP64mi,
-				FE_MEM(target_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_reference, sources.ptr))),
-				0);
-			generate_raw_jump(Jump::jne, slow);
-			ASM(ADD64ri, target_reg,
-				static_cast<int32_t>(offsetof(zend_reference, val)));
-			ASM(MOVZXr32m8, type_reg,
-				FE_MEM(target_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zval, u1.type_info))));
-			ASM(CMP32ri, type_reg, IS_LONG);
-			generate_raw_jump(Jump::jne, slow);
-			generate_raw_jump(Jump::jmp, loaded);
-			label_place(direct);
 			ASM(LEA64rm, target_reg,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(layout.operand_offset)));
-			label_place(loaded);
+			ASM(CMP32ri, type_reg, IS_LONG);
+			emit_cold_branch(Jump::jne, text_writer.label_create(), [&] {
+				ASM(CMP32ri, type_reg, IS_REFERENCE);
+				generate_raw_jump(Jump::jne, slow);
+				ASM(MOV64rm, target_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
+				ASM(CMP64mi,
+					FE_MEM(target_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zend_reference, sources.ptr))),
+					0);
+				generate_raw_jump(Jump::jne, slow);
+				ASM(ADD64ri, target_reg,
+					static_cast<int32_t>(offsetof(zend_reference, val)));
+				ASM(MOVZXr32m8, type_reg,
+					FE_MEM(target_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zval, u1.type_info))));
+				ASM(CMP32ri, type_reg, IS_LONG);
+				generate_raw_jump(Jump::jne, slow);
+			});
 			ASM(MOV64rm, value_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
 		} else {
 			ASM(MOVZXr32m8, type_reg,
@@ -15756,13 +15766,13 @@ bool ZendCompilerX64::compile_inst_impl(
 				static_cast<int32_t>(offsetof(zval, u1.type_info))));
 			auto dereferenced = text_writer.label_create();
 			ASM(CMP32ri, type_reg, IS_REFERENCE);
-			generate_raw_jump(Jump::jne, dereferenced);
-			ASM(MOV64rm, value_reg, FE_MEM(value_reg, 0, FE_NOREG, 0));
-			ASM(LEA64rm, value_reg, FE_MEM(value_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zend_reference, val))));
-			ASM(MOVZXr32m8, type_reg, FE_MEM(value_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))));
-			label_place(dereferenced);
+			emit_cold_branch(Jump::je, dereferenced, [&] {
+				ASM(MOV64rm, value_reg, FE_MEM(value_reg, 0, FE_NOREG, 0));
+				ASM(LEA64rm, value_reg, FE_MEM(value_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_reference, val))));
+				ASM(MOVZXr32m8, type_reg, FE_MEM(value_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zval, u1.type_info))));
+			});
 			ASM(CMP32ri, type_reg, IS_OBJECT);
 			auto object = text_writer.label_create();
 			generate_raw_jump(Jump::je, object);
@@ -16142,12 +16152,12 @@ bool ZendCompilerX64::compile_inst_impl(
 							FE_MEM(frame_reg, 0, FE_NOREG, container_offset));
 						ASM(CMP8mi, FE_MEM(element_reg, 0, FE_NOREG, type_info),
 							IS_REFERENCE);
-						generate_raw_jump(Jump::jne, container_ready);
-						ASM(MOV64rm, element_reg,
-							FE_MEM(element_reg, 0, FE_NOREG, 0));
-						ASM(ADD64ri, element_reg, static_cast<int32_t>(
-							offsetof(zend_reference, val)));
-						label_place(container_ready);
+						emit_cold_branch(Jump::je, container_ready, [&] {
+							ASM(MOV64rm, element_reg,
+								FE_MEM(element_reg, 0, FE_NOREG, 0));
+							ASM(ADD64ri, element_reg, static_cast<int32_t>(
+								offsetof(zend_reference, val)));
+						});
 						ASM(CMP8mi, FE_MEM(element_reg, 0, FE_NOREG, type_info),
 							IS_ARRAY);
 						generate_raw_jump(Jump::jne, slow);
@@ -17143,16 +17153,16 @@ bool ZendCompilerX64::compile_inst_impl(
 			begin_branch_region();
 			auto dereferenced = text_writer.label_create();
 			ASM(CMP32ri, type_reg, IS_REFERENCE);
-			generate_raw_jump(Jump::jne, dereferenced);
-			ASM(MOV64rm, slot_reg,
-				FE_MEM(slot_reg, 0, FE_NOREG, 0));
-			ASM(ADD64ri, slot_reg,
-				static_cast<int32_t>(offsetof(zend_reference, val)));
-			ASM(MOVZXr32m8, type_reg,
-				FE_MEM(slot_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zval, u1.type_info))));
-			label_place(dereferenced);
+			emit_cold_branch(Jump::je, dereferenced, [&] {
+				ASM(MOV64rm, slot_reg,
+					FE_MEM(slot_reg, 0, FE_NOREG, 0));
+				ASM(ADD64ri, slot_reg,
+					static_cast<int32_t>(offsetof(zend_reference, val)));
+				ASM(MOVZXr32m8, type_reg,
+					FE_MEM(slot_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zval, u1.type_info))));
+			});
 			if (layout.source_opcode != ZEND_SWITCH_STRING) {
 				ASM(CMP32ri, type_reg, IS_LONG);
 				generate_raw_jump(Jump::je, long_label);
@@ -21624,16 +21634,16 @@ bool ZendCompilerX64::compile_inst_impl(
 						ASM(CMP32ri, payload_reg, IS_UNDEF);
 						generate_raw_jump(Jump::je, slow);
 						ASM(CMP32ri, payload_reg, IS_REFERENCE);
-						generate_raw_jump(Jump::jne, plain);
-						ASM(MOV64rm, source_reg,
-							FE_MEM(source_reg, 0, FE_NOREG, 0));
-						ASM(ADD64ri, source_reg,
-							static_cast<int32_t>(offsetof(zend_reference, val)));
-						ASM(MOV32rm, type_reg,
-							FE_MEM(source_reg, 0, FE_NOREG,
-								static_cast<int32_t>(
-									offsetof(zval, u1.type_info))));
-						label_place(plain);
+						emit_cold_branch(Jump::je, plain, [&] {
+							ASM(MOV64rm, source_reg,
+								FE_MEM(source_reg, 0, FE_NOREG, 0));
+							ASM(ADD64ri, source_reg,
+								static_cast<int32_t>(offsetof(zend_reference, val)));
+							ASM(MOV32rm, type_reg,
+								FE_MEM(source_reg, 0, FE_NOREG,
+									static_cast<int32_t>(
+										offsetof(zval, u1.type_info))));
+						});
 					} else if (from_tmp) {
 						ASM(CMP32ri, payload_reg, IS_REFERENCE);
 						generate_raw_jump(Jump::je, slow);
