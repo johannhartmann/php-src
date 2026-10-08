@@ -69,8 +69,22 @@ struct LayoutProfile {
 	std::unordered_map<uint64_t, std::unordered_set<uint32_t>> jumps;
 	/* "*" moves every eligible region, to test the transformation. */
 	bool all = false;
+	using Counts = std::unordered_map<uint64_t,
+		std::unordered_map<uint32_t, std::pair<uint64_t, uint64_t>>>;
 	LayoutProfile() {
 		load(layout_environment("ZEND_NATIVE_LAYOUT_PROFILE", true));
+	}
+	/* The jumps taken at least nine times in ten over enough runs. */
+	void select(const Counts &counts) {
+		for (const auto &[key, ordinals] : counts) {
+			for (const auto &[ordinal, outcome] : ordinals) {
+				const uint64_t executions = outcome.first + outcome.second;
+				if (executions >= layout_minimum_executions
+						&& outcome.first * 10 >= executions * 9) {
+					jumps[key].insert(ordinal);
+				}
+			}
+		}
 	}
 	void load(const char *path) {
 		jumps.clear();
@@ -82,8 +96,7 @@ struct LayoutProfile {
 			all = true;
 			return;
 		}
-		std::unordered_map<uint64_t,
-			std::unordered_map<uint32_t, std::pair<uint64_t, uint64_t>>> counts;
+		Counts counts;
 		read(path, counts);
 		const std::string pattern = std::string(path) + ".*";
 		glob_t files{};
@@ -93,15 +106,7 @@ struct LayoutProfile {
 			}
 		}
 		::globfree(&files);
-		for (const auto &[key, ordinals] : counts) {
-			for (const auto &[ordinal, outcome] : ordinals) {
-				const uint64_t executions = outcome.first + outcome.second;
-				if (executions >= layout_minimum_executions
-						&& outcome.first * 10 >= executions * 9) {
-					jumps[key].insert(ordinal);
-				}
-			}
-		}
+		select(counts);
 	}
 	void read(const char *path, std::unordered_map<uint64_t,
 			std::unordered_map<uint32_t, std::pair<uint64_t, uint64_t>>>
@@ -167,21 +172,36 @@ struct LayoutTraining {
 		const char *train = std::getenv("ZEND_NATIVE_LAYOUT_TRAIN");
 		const char *name =
 			layout_environment("ZEND_NATIVE_LAYOUT_TRAIN", false);
-		if (name == nullptr || name[0] == '\0') {
+		if (name == nullptr || name[0] == '\0'
+				|| std::strcmp(name, "off") == 0) {
 			return;
 		}
 		if (train == nullptr || train[0] == '\0') {
-			const char *limit = std::getenv("ZEND_NATIVE_LAYOUT_REQUESTS");
-			switch_requests = limit != nullptr && limit[0] != '\0'
-				? std::strtoull(limit, nullptr, 10) : layout_switch_requests;
+			switch_requests = requested_switch();
 		}
+		map(name);
+	}
+	static uint64_t requested_switch() {
+		const char *limit = std::getenv("ZEND_NATIVE_LAYOUT_REQUESTS");
+		return limit != nullptr && limit[0] != '\0'
+			? std::strtoull(limit, nullptr, 10) : layout_switch_requests;
+	}
+	/* Code compiled now counts its jumps. */
+	bool active() const {
+		return counters != nullptr && !switched;
+	}
+	/* The shared counters, and the file they go to (none: the profile
+	 * stays in memory). */
+	void map(const char *name) {
 		void *memory = ::mmap(nullptr, capacity * sizeof(Counter),
 			PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
 		if (memory != MAP_FAILED) {
 			counters = static_cast<Counter *>(memory);
 			counters[0].key = 1;
-			file = name;
-			path = file.c_str();
+			if (name != nullptr) {
+				file = name;
+				path = file.c_str();
+			}
 			timespec now{};
 			::clock_gettime(CLOCK_REALTIME, &now);
 			session = (static_cast<uint64_t>(
@@ -201,8 +221,27 @@ struct LayoutTraining {
 		counters[index].ordinal = ordinal;
 		return &counters[index];
 	}
+	/* The profile of the counts so far. */
+	void select(LayoutProfile &profile) const {
+		const uint64_t used = std::min<uint64_t>(
+			__atomic_load_n(&counters[0].key, __ATOMIC_RELAXED), capacity);
+		LayoutProfile::Counts counts;
+		for (uint64_t index = 1; index < used; ++index) {
+			const Counter &counter = counters[index];
+			auto &outcome = counts[counter.key][
+				static_cast<uint32_t>(counter.ordinal)];
+			outcome.first += counter.taken;
+			outcome.second += counter.fallthrough;
+		}
+		profile.jumps.clear();
+		profile.all = false;
+		profile.select(counts);
+	}
 	/* The counts so far replace the file, renamed into place. */
 	void write() const {
+		if (path == nullptr) {
+			return;
+		}
 		const uint64_t used = std::min<uint64_t>(
 			__atomic_load_n(&counters[0].key, __ATOMIC_RELAXED), capacity);
 		const std::string name = std::string(path) + ".tmp"
@@ -228,9 +267,8 @@ struct LayoutTraining {
 	 * unless it switched to the profile already written. */
 	~LayoutTraining() {
 		if (path != nullptr && !switched
-				&& (counters == nullptr
-					|| __atomic_load_n(&counters[0].taken, __ATOMIC_ACQUIRE)
-						== phase_training)) {
+				&& __atomic_load_n(&counters[0].taken, __ATOMIC_ACQUIRE)
+					== phase_training) {
 			write();
 		}
 	}
@@ -3140,8 +3178,7 @@ public:
 	void generate_raw_jump(Jump jump, tpde::Label target) {
 		if (jump != Jump::jmp) {
 			const uint32_t ordinal = layout_jump_ordinal_++;
-			if (layout_training.path != nullptr && !layout_training.switched
-					&& layout_in_inst_
+			if (layout_training.active() && layout_in_inst_
 					&& !text_writer.in_cold_area()
 					&& text_writer.label_is_pending(target)) {
 				/* Both outcomes pass a counting stub in the cold area. */
@@ -24205,7 +24242,7 @@ zend_result zend_tpde_emit_linux_x64(
 
 extern "C" bool zend_tpde_layout_training(void)
 {
-	return layout_training.path != nullptr && !layout_training.switched;
+	return layout_training.active();
 }
 
 extern "C" uint64_t zend_tpde_layout_training_session(void)
@@ -24219,7 +24256,7 @@ extern "C" uint64_t zend_tpde_layout_training_session(void)
 extern "C" void zend_tpde_layout_training_flush(void)
 {
 	LayoutTraining &training = layout_training;
-	if (training.path == nullptr || training.switched) {
+	if (!training.active()) {
 		return;
 	}
 	const uint64_t total = __atomic_add_fetch(
@@ -24245,15 +24282,38 @@ extern "C" void zend_tpde_layout_training_flush(void)
 extern "C" bool zend_tpde_layout_switch(void)
 {
 	LayoutTraining &training = layout_training;
-	if (training.path == nullptr || training.switched
-			|| training.switch_requests == 0
+	if (!training.active() || training.switch_requests == 0
 			|| __atomic_load_n(&training.counters[0].taken,
 				__ATOMIC_ACQUIRE) != LayoutTraining::phase_ready) {
 		return false;
 	}
 	training.switched = true;
-	layout_profile.load(training.path);
+	if (training.path != nullptr) {
+		layout_profile.load(training.path);
+	} else {
+		training.select(layout_profile);
+	}
 	return true;
+}
+
+/*
+ * A server (FPM) trains by default: the counters are mapped in its master,
+ * before the workers fork, and the profile stays in that memory. Not when
+ * the environment chose a profile, a training or ZEND_NATIVE_LAYOUT=off.
+ */
+extern "C" void zend_tpde_layout_automatic(void)
+{
+	const char *mode = std::getenv("ZEND_NATIVE_LAYOUT");
+	const char *profile = std::getenv("ZEND_NATIVE_LAYOUT_PROFILE");
+	if (layout_training.counters != nullptr
+			|| (mode != nullptr && mode[0] != '\0')
+			|| (profile != nullptr && profile[0] != '\0')) {
+		return;
+	}
+	layout_training.switch_requests = LayoutTraining::requested_switch();
+	if (layout_training.switch_requests != 0) {
+		layout_training.map(nullptr);
+	}
 }
 
 /* Whether this process wrote the profile and OPcache should recompile the

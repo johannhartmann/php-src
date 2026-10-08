@@ -22,6 +22,9 @@ ZEND_API void zend_native_executor_shutdown(void);
 /* A finished layout training asks OPcache, once, to recompile the cached
  * scripts with its profile. */
 ZEND_API bool zend_native_executor_take_layout_restart(void);
+/* A server SAPI, before its module startup: train the branch layout over
+ * the first requests, then recompile with it. */
+ZEND_API void zend_native_executor_enable_automatic_layout(void);
 ZEND_API void zend_native_executor_activate(void);
 ZEND_API void zend_native_executor_deactivate(void);
 void zend_native_executor_prepare_shutdown(void);
