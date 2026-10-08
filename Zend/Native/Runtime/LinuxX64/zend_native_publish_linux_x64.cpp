@@ -785,10 +785,6 @@ zend_result zend_native_publish_linux_x64(
 			"Linux x86-64 publisher requires a non-empty Linux image");
 		return FAILURE;
 	}
-	if (zend_native_runtime_validate(zend_native_runtime_get(),
-			ZEND_NATIVE_RUNTIME_CAP_BAILOUT_BOUNDARY, diag) == FAILURE) {
-		return FAILURE;
-	}
 	zend_native_code *code = static_cast<zend_native_code *>(
 		std::calloc(1, sizeof(*code)));
 	if (code == nullptr) {

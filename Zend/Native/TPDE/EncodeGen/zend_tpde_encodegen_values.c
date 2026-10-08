@@ -438,28 +438,10 @@ uintptr_t zend_native_array_assign_idx(const zval *container, uint64_t h)
 	return zend_native_assign_index(zend_native_probe_array_w(container), h);
 }
 
-uintptr_t zend_native_array_assign_key(const zval *container, const zval *key)
-{
-	key = zend_native_key_deref(key);
-	return Z_TYPE_P(key) == IS_LONG
-		? zend_native_assign_index(zend_native_probe_array_w(container),
-			(zend_ulong) Z_LVAL_P(key))
-		: ZEND_NATIVE_ELEMENT_UNKNOWN;
-}
-
 /* The same into the array a VAR's INDIRECT names (a nested assignment). */
 uintptr_t zend_native_indirect_assign_idx(const zval *var, uint64_t h)
 {
 	return zend_native_assign_index(zend_native_probe_indirect_w(var), h);
-}
-
-uintptr_t zend_native_indirect_assign_key(const zval *var, const zval *key)
-{
-	key = zend_native_key_deref(key);
-	return Z_TYPE_P(key) == IS_LONG
-		? zend_native_assign_index(zend_native_probe_indirect_w(var),
-			(zend_ulong) Z_LVAL_P(key))
-		: ZEND_NATIVE_ELEMENT_UNKNOWN;
 }
 
 /*

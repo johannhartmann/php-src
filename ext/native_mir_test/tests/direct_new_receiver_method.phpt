@@ -40,15 +40,13 @@ $result = native_mir_test_compile_execute(
 );
 $performance = $result['execution']['performance'];
 printf(
-    "%s return=%d runs=%d direct=%d inner_helpers=%d allocations=%d catchers=%d\n",
+    "%s return=%d runs=%d direct=%d inner_helpers=%d\n",
     $result['status'],
     $result['execution']['return_value'],
     $result['execution']['executions'],
     $performance['direct_call_sites'],
     $performance['inner_call_runtime_helper_calls'],
-    $performance['inner_call_heap_allocations'],
-    $performance['inner_call_catcher_boundaries'],
 );
 ?>
 --EXPECT--
-accepted return=1000 runs=10 direct=1 inner_helpers=0 allocations=0 catchers=0
+accepted return=1000 runs=10 direct=1 inner_helpers=0

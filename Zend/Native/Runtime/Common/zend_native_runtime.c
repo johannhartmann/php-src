@@ -1084,10 +1084,6 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 		(const void *) zend_native_tier2_note},
 	{ZEND_NATIVE_HELPER_TIER2_RECORD, 0,
 		(const void *) zend_native_tier2_record},
-	{ZEND_NATIVE_HELPER_DEOPT_SPECULATION,
-		ZEND_NATIVE_EFFECT_CALL | ZEND_NATIVE_EFFECT_FRAME_READ
-			| ZEND_NATIVE_EFFECT_FRAME_WRITE,
-		(const void *) zend_native_deopt_speculation},
 	{ZEND_NATIVE_HELPER_CALL_FAST_RELEASE_THIS,
 		ZEND_NATIVE_EFFECT_CALL | ZEND_NATIVE_EFFECT_FRAME_READ | ZEND_NATIVE_EFFECT_FRAME_WRITE
 			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
@@ -1113,84 +1109,27 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 		(const void *) zend_native_call_check_undef_frame},
 };
 
-static const zend_native_runtime_api zend_native_runtime = {
-	ZEND_NATIVE_RUNTIME_ABI_VERSION,
-	sizeof(zend_native_runtime_api),
-	ZEND_NATIVE_RUNTIME_CAP_USER_CALL
-		| ZEND_NATIVE_RUNTIME_CAP_INTERNAL_CALL
-		| ZEND_NATIVE_RUNTIME_CAP_ZVAL_SLOT
-		| ZEND_NATIVE_RUNTIME_CAP_OBSERVER
-		| ZEND_NATIVE_RUNTIME_CAP_INTERRUPT
-		| ZEND_NATIVE_RUNTIME_CAP_BAILOUT_BOUNDARY
-		| ZEND_NATIVE_RUNTIME_CAP_OBJECT_OPERATION
-		| ZEND_NATIVE_RUNTIME_CAP_DYNAMIC_BINDING
-		| ZEND_NATIVE_RUNTIME_CAP_SUSPEND,
-	zend_native_runtime_helpers,
-	(uint32_t) (sizeof(zend_native_runtime_helpers)
-		/ sizeof(zend_native_runtime_helpers[0])),
-	0
-};
-
-static void zend_native_runtime_diagnostic(
-	zend_native_diagnostic *diagnostic,
-	zend_native_diagnostic_code code,
-	const char *message)
-{
-	if (diagnostic == NULL) {
-		return;
-	}
-	diagnostic->code = code;
-	snprintf(diagnostic->message, sizeof(diagnostic->message), "%s", message);
-}
-
-const zend_native_runtime_api *zend_native_runtime_get(void)
-{
-	return &zend_native_runtime;
-}
+_Static_assert(sizeof(zend_native_runtime_helpers)
+		/ sizeof(zend_native_runtime_helpers[0])
+	== ZEND_NATIVE_HELPER_COUNT - 1,
+	"every helper id has its table slot");
 
 const zend_native_runtime_helper *zend_native_runtime_helper_find(
-	const zend_native_runtime_api *runtime,
 	zend_native_runtime_helper_id id)
 {
-	uint32_t index = (uint32_t) id;
-
-	if (runtime == NULL || runtime->helpers == NULL || index == 0
-			|| index > runtime->helper_count) {
+	if ((uint32_t) id == 0 || (uint32_t) id >= ZEND_NATIVE_HELPER_COUNT) {
 		return NULL;
 	}
-	index--;
-	if (runtime->helpers[index].id != (uint32_t) id) {
-		return NULL;
-	}
-	return &runtime->helpers[index];
+	return &zend_native_runtime_helpers[(uint32_t) id - 1];
 }
 
-zend_result zend_native_runtime_validate(
-	const zend_native_runtime_api *runtime,
-	uint64_t required_capabilities,
-	zend_native_diagnostic *diagnostic)
+zend_result zend_native_runtime_validate(void)
 {
 	uint32_t index;
 
-	if (runtime == NULL
-			|| runtime->abi_version != ZEND_NATIVE_RUNTIME_ABI_VERSION
-			|| runtime->struct_size < sizeof(zend_native_runtime_api)
-			|| runtime->helpers == NULL
-			|| runtime->helper_count != ZEND_NATIVE_HELPER_COUNT - 1) {
-		zend_native_runtime_diagnostic(diagnostic,
-			ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
-			"native runtime ABI version or size is incompatible");
-		return FAILURE;
-	}
-	if ((runtime->capabilities & required_capabilities)
-			!= required_capabilities) {
-		zend_native_runtime_diagnostic(diagnostic,
-			ZEND_NATIVE_DIAGNOSTIC_UNSUPPORTED_OPCODE,
-			"native runtime lacks a required capability");
-		return FAILURE;
-	}
-	for (index = 0; index < runtime->helper_count; index++) {
-		const zend_native_runtime_helper *helper = &runtime->helpers[index];
+	for (index = 0; index < ZEND_NATIVE_HELPER_COUNT - 1; index++) {
+		const zend_native_runtime_helper *helper =
+			&zend_native_runtime_helpers[index];
 
 		if (helper->id != index + 1
 				|| helper->address == NULL
@@ -1198,9 +1137,6 @@ zend_result zend_native_runtime_validate(
 				|| ((helper->effects & ZEND_NATIVE_RUNTIME_EFFECT_REENTER) != 0
 					&& (helper->effects
 						& ZEND_NATIVE_RUNTIME_EFFECT_USERLAND) == 0)) {
-			zend_native_runtime_diagnostic(diagnostic,
-				ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
-				"native runtime helper contract is invalid or contradictory");
 			return FAILURE;
 		}
 	}

@@ -16,10 +16,6 @@ zend_result zend_native_publish_darwin_arm64(
 			"Darwin A64 publisher requires a non-empty Darwin image");
 		return FAILURE;
 	}
-	if (zend_native_runtime_validate(zend_native_runtime_get(),
-			ZEND_NATIVE_RUNTIME_CAP_BAILOUT_BOUNDARY, diag) == FAILURE) {
-		return FAILURE;
-	}
 	zend_native_code *code = static_cast<zend_native_code *>(
 		std::calloc(1, sizeof(*code)));
 	if (code == nullptr) {

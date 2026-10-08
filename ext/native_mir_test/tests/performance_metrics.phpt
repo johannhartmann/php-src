@@ -37,7 +37,7 @@ $performance = $result['execution']['performance'];
 printf(
     "%s return=%d executions=%d registered=%d compiled=%d ready=%d failed=%d direct=%d "
     . "leaf=%d typed=%d frame_bytes=%d "
-    . "decode=%d helper=%d heap=%d catcher=%d "
+    . "helper=%d "
     . "compile=%s execute=%s bytes=%s image=%s\n",
     $result['status'],
     $result['execution']['return_value'],
@@ -50,10 +50,7 @@ printf(
     $performance['direct_leaf_scalar_sites'],
     $performance['direct_typed_body_sites'],
     $performance['direct_call_frame_bytes'],
-    $performance['source_opline_decode_sites'],
     $performance['inner_call_runtime_helper_calls'],
-    $performance['inner_call_heap_allocations'],
-    $performance['inner_call_catcher_boundaries'],
     $performance['compile_ns'] > 0 ? 'yes' : 'no',
     $performance['execute_ns'] > 0 ? 'yes' : 'no',
     $performance['native_code_bytes'] > 0 ? 'yes' : 'no',
@@ -61,4 +58,4 @@ printf(
 );
 ?>
 --EXPECT--
-accepted return=100 executions=10 registered=3 compiled=2 ready=2 failed=0 direct=1 leaf=1 typed=0 frame_bytes=96 decode=0 helper=0 heap=0 catcher=0 compile=yes execute=yes bytes=yes image=yes
+accepted return=100 executions=10 registered=3 compiled=2 ready=2 failed=0 direct=1 leaf=1 typed=0 frame_bytes=96 helper=0 compile=yes execute=yes bytes=yes image=yes

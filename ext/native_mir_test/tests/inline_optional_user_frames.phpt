@@ -39,16 +39,14 @@ $result = native_mir_test_compile_execute(
 );
 $performance = $result['execution']['performance'];
 printf(
-    "%s return=%d runs=%d codeunits=%d direct=%d helpers=%d allocations=%d "
-    . "catchers=%d vm=%d execute_ex=%d handler=%d active=%d\n",
+    "%s return=%d runs=%d codeunits=%d direct=%d helpers=%d "
+    . "vm=%d execute_ex=%d handler=%d active=%d\n",
     $result['status'],
     $result['execution']['return_value'],
     $result['execution']['executions'],
     $result['execution']['native_codeunits'],
     $performance['direct_call_sites'],
     $performance['inner_call_runtime_helper_calls'],
-    $performance['inner_call_heap_allocations'],
-    $performance['inner_call_catcher_boundaries'],
     $result['execution']['vm_handler_calls'],
     $result['execution']['execute_ex_calls'],
     $result['execution']['opline_handler_calls'],
@@ -56,4 +54,4 @@ printf(
 );
 ?>
 --EXPECT--
-accepted return=31 runs=10 codeunits=2 direct=2 helpers=0 allocations=0 catchers=0 vm=0 execute_ex=0 handler=0 active=0
+accepted return=31 runs=10 codeunits=2 direct=2 helpers=0 vm=0 execute_ex=0 handler=0 active=0

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: PHP-3.01
 #
-# Developer tool: regenerate the checked-in Linux x86-64 EncodeGen header
-# from zend_tpde_encodegen.c and zend_tpde_encodegen_values.c. Normal builds
-# never run this script; they use the checked-in header and need no LLVM.
+# Developer tool: regenerate the checked-in EncodeGen headers: Linux x86-64
+# from zend_tpde_encodegen.c and zend_tpde_encodegen_values.c, Darwin arm64
+# from zend_tpde_encodegen.c. Normal builds never run this script; they use
+# the checked-in headers and need no LLVM.
 #
 # It builds tpde_encodegen from the TPDE revision recorded in
 # ../ThirdParty/tpde/REVISION (TPDE_ENABLE_ENCODEGEN=ON, TPDE_ENABLE_LLVM=OFF)
@@ -68,9 +69,22 @@ if grep -q "Failed to generate" "$root/encodegen.log"; then
 	grep -B2 "Failed to generate" "$root/encodegen.log" >&2
 	exit 1
 fi
+# Darwin arm64: the target-neutral scalar snippets only.
+clang -c -emit-llvm -ffreestanding -O3 -fomit-frame-pointer -fno-math-errno \
+	--target=arm64-apple-darwin -fno-jump-tables -fno-builtin \
+	-o "$root/zend_tpde_encodegen_a64.bc" "$here/zend_tpde_encodegen.c"
+"$root/build/tpde-encodegen/tpde_encodegen" \
+	-o "$root/zend_tpde_encodegen_a64.hpp" "$root/zend_tpde_encodegen_a64.bc" \
+	2> "$root/encodegen_a64.log" || { cat "$root/encodegen_a64.log" >&2; exit 1; }
+if grep -q "Failed to generate" "$root/encodegen_a64.log"; then
+	grep -B2 "Failed to generate" "$root/encodegen_a64.log" >&2
+	exit 1
+fi
 ' _ "$root" "$here" "$repo" "$build"
 
 # The repository keeps generated headers free of trailing whitespace.
 sed -e 's/[[:space:]]*$//' "$root/zend_tpde_encodegen_x64.hpp" \
 	> "$here/../LinuxX64/zend_tpde_encodegen_x64.hpp"
-echo "regenerated Zend/Native/TPDE/LinuxX64/zend_tpde_encodegen_x64.hpp"
+sed -e 's/[[:space:]]*$//' "$root/zend_tpde_encodegen_a64.hpp" \
+	> "$here/../DarwinA64/zend_tpde_encodegen_a64.hpp"
+echo "regenerated the x86-64 and arm64 EncodeGen headers"

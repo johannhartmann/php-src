@@ -121,8 +121,6 @@ struct EncodeCompiler {
   bool encode_zend_native_mul_f64(GenericValuePart &&param_0, GenericValuePart &&param_1, ValuePart &&result_0) {  return encode_zend_native_mul_f64(std::move(param_0), std::move(param_1), result_0); }
   bool encode_zend_native_load_u64(GenericValuePart &&param_0, ValuePart &result_0);
   bool encode_zend_native_load_u64(GenericValuePart &&param_0, ValuePart &&result_0) {  return encode_zend_native_load_u64(std::move(param_0), result_0); }
-  bool encode_zend_native_load_u32(GenericValuePart &&param_0, ValuePart &result_0);
-  bool encode_zend_native_load_u32(GenericValuePart &&param_0, ValuePart &&result_0) {  return encode_zend_native_load_u32(std::move(param_0), result_0); }
   bool encode_zend_native_store_u64(GenericValuePart &&param_0, GenericValuePart &&param_1);
 
 
@@ -935,7 +933,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_load_u
     //
     // bb.0 (%ir-block.1):
     //   liveins: $x0
-    //   renamable $x0 = LDRXui killed renamable $x0, 0 :: (load (s64) from %ir.0, !tbaa !8)
+    //   renamable $x0 = LDRXui killed renamable $x0, 0 :: (load (s64) from %ir.0, !tbaa !3)
     //   RET undef $lr, implicit killed $x0
     //
     // # End machine code for function zend_native_load_u64.
@@ -945,7 +943,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_load_u
     ValuePart &scratch_x0 = result_0;
 
 
-    // renamable $x0 = LDRXui killed renamable $x0, 0 :: (load (s64) from %ir.0, !tbaa !8)
+    // renamable $x0 = LDRXui killed renamable $x0, 0 :: (load (s64) from %ir.0, !tbaa !3)
     do {
     {
     auto cond0 = encodeable_with_mem_uoff12(param_0, 0x0, 3);
@@ -981,65 +979,13 @@ template <typename Adaptor,
           template <typename, typename, typename>
           class BaseTy,
           typename Config>
-bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_load_u32(GenericValuePart &&param_0, ValuePart &result_0) {
-    // # Machine code for function zend_native_load_u32: NoPHIs, TracksLiveness, NoVRegs, TiedOpsRewritten, TracksDebugUserValues
-    // Function Live Ins: $x0
-    //
-    // bb.0 (%ir-block.1):
-    //   liveins: $x0
-    //   renamable $w0 = LDRWui killed renamable $x0, 0 :: (load (s32) from %ir.0, !tbaa !4)
-    //   RET undef $lr, implicit killed $w0
-    //
-    // # End machine code for function zend_native_load_u32.
-    //
-
-    // Mapping x0 to param_0
-    ValuePart &scratch_x0 = result_0;
-
-
-    // renamable $w0 = LDRWui killed renamable $x0, 0 :: (load (s32) from %ir.0, !tbaa !4)
-    do {
-    {
-    auto cond0 = encodeable_with_mem_uoff12(param_0, 0x0, 2);
-    if (cond0) {
-        // def x0 has not been allocated yet
-        scratch_x0.cur_reg_or_alloc(derived());
-    ASMD(LDRwu, scratch_x0.cur_reg(), (*cond0).first, (*cond0).second);
-        break;
-    }
-    }
-    {
-    if (1) {
-        AsmReg op1 = derived()->gval_as_reg_reuse(param_0, scratch_x0);
-        // def x0 has not been allocated yet
-        scratch_x0.cur_reg_or_alloc(derived());
-    ASMD(LDRwu, scratch_x0.cur_reg(), op1, 0);
-        break;
-    }
-    }
-    } while (false);
-    param_0.reset();
-
-
-    // RET undef $lr, implicit killed $w0
-  if (result_0.has_assignment())
-    result_0.unlock(derived());
-  return true;
-
-}
-
-template <typename Adaptor,
-          typename Derived,
-          template <typename, typename, typename>
-          class BaseTy,
-          typename Config>
 bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_store_u64(GenericValuePart &&param_0, GenericValuePart &&param_1) {
     // # Machine code for function zend_native_store_u64: NoPHIs, TracksLiveness, NoVRegs, TiedOpsRewritten, TracksDebugUserValues
     // Function Live Ins: $x0, $x1
     //
     // bb.0 (%ir-block.2):
     //   liveins: $x0, $x1
-    //   STRXui killed renamable $x1, killed renamable $x0, 0 :: (store (s64) into %ir.0, !tbaa !8)
+    //   STRXui killed renamable $x1, killed renamable $x0, 0 :: (store (s64) into %ir.0, !tbaa !3)
     //   RET undef $lr
     //
     // # End machine code for function zend_native_store_u64.
@@ -1051,7 +997,7 @@ bool EncodeCompiler<Adaptor, Derived, BaseTy, Config>::encode_zend_native_store_
     ScratchReg scratch_x1{derived()};
 
 
-    // STRXui killed renamable $x1, killed renamable $x0, 0 :: (store (s64) into %ir.0, !tbaa !8)
+    // STRXui killed renamable $x1, killed renamable $x0, 0 :: (store (s64) into %ir.0, !tbaa !3)
     do {
     {
     auto cond0 = encodeable_with_mem_uoff12(param_0, 0x0, 3);

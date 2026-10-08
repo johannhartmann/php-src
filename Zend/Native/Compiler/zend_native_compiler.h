@@ -65,7 +65,6 @@ typedef struct _zend_native_compiler_stats {
 	uint64_t last_execute_ns;
 	uint64_t native_code_bytes;
 	uint64_t runtime_helper_sites;
-	uint64_t source_opline_decode_sites;
 	uint64_t guard_sites;
 	uint64_t slow_path_sites;
 	uint64_t direct_call_sites;
@@ -73,8 +72,6 @@ typedef struct _zend_native_compiler_stats {
 	uint64_t direct_typed_body_sites;
 	uint64_t direct_call_frame_bytes;
 	uint64_t inner_call_runtime_helper_calls;
-	uint64_t inner_call_heap_allocations;
-	uint64_t inner_call_catcher_boundaries;
 	uint32_t registered_codeunits;
 	uint32_t native_codeunits;
 	uint32_t ready_codeunits;

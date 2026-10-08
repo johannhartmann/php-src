@@ -1882,7 +1882,8 @@ zend_native_entry_cell *zend_native_executor_resolve_cached_include(
 
 zend_result zend_native_executor_startup(void)
 {
-	if (zend_native_executor_installed) {
+	if (zend_native_executor_installed
+			|| zend_native_runtime_validate() == FAILURE) {
 		return FAILURE;
 	}
 	zend_native_compile_trace_startup();

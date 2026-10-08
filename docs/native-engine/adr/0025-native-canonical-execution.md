@@ -183,21 +183,11 @@ shared leave (more executed bytes per function).
     state, and the fast path spills what the continuation reads before it
     branches. File main code is not specialized (it runs once per
     inclusion), and metrics count source sites, not the generic copy.
-  - A tier-2 copy speculates on recorded result types
-    (`ZEND_NATIVE_TIER2_SPECULATE=1`, Linux x64): element reads
-    (`FETCH_DIM_R`/`IS`) whose results had one type, or null and one type,
-    in at least 16 recorded executions check the element's type (through a
-    reference) on their fast path and exit on any other. The assumed type
-    narrows the inferred types of the result and, recomputed from the
-    bottom with Zend's inference, of every operation and phi using it (an
-    `OP_DATA` operand belongs to its operation). Only the speculated
-    positions exit; the generic copy lands only there, and its gateway
-    clears the isset lookup that a later element read reuses. The exits
-    count in the function's entry cell; from 16 on, the copy's entry calls
-    its generic copy, which shares the tier-2 image's call sites. Neither
-    WordPress nor the `bench.php` kernels gain from it (the generic fast
-    paths already check the types the speculation proves), so it is
-    opt-in.
+  - Speculating on recorded result types (element reads assumed to keep
+    one type, exiting on any other) does not pay: the generic fast paths
+    already check the types such a speculation proves, and neither
+    WordPress nor the `bench.php` kernels gained. Tier 2 does not record
+    result types.
 - **Recompilation (tier 2):** the published code of a named, non-generator
   user function counts its calls in its entry cell; a function that
   reaches the threshold is queued once. At request shutdown the worker
@@ -209,24 +199,22 @@ shared leave (more executed bytes per function).
   (functions, literals) and is never serialized. Its call sites keep a
   target guard (the class for methods, the per-request name binding for
   functions, checked once per call-cache epoch at the tier-2 entry); a
-  failed guard takes the site's generic call. Inlined callees (section 5)
-  and type specialization build on these components.
+  failed guard takes the site's generic call. Type specialization and
+  inlining (section 5) build on these components.
   - The integer variant of a counted function counts in the function's
     cell; a copy's variant and generic copy call the batch's other copies
     component-locally, like the copy itself.
-  - The last 64 counted calls record their argument types in the cell and,
-    in a per-opline side array, the result types of element and property
-    reads and calls. A copy whose required untyped parameters each had one
-    type (or both numeric types) gets them as parameter types, with entry
-    guards that run the tier-1 code for other arguments; a function with
-    an integer variant, and an inlining host, keeps its entry.
+  - The last 64 counted calls record their argument types in the cell. A
+    copy whose required untyped parameters each had one type (or both
+    numeric types) gets them as parameter types, with entry guards that run
+    the tier-1 code for other arguments; a function with an integer
+    variant keeps its entry.
 - **Invalidation:** code that depends on a class layout, a function or
   constant binding, or a declaration epoch is registered with that
   dependency. Changing it retires the code through the existing entry-cell
   generations, and active frames deoptimize at their next guard or return.
-- Code that deoptimizes repeatedly stops speculating: today its entry
-  hands every call to the generic copy; recompiling without the failed
-  assumption follows.
+- Code that deoptimizes repeatedly must stop speculating: it is recompiled
+  without the failed assumption.
 
 ### 5. Inlining with guards
 
@@ -237,36 +225,13 @@ the frame-state `parent_id` chain, and a Zend frame is built lazily from it
 when an observer needs one: backtraces, exception traces, warnings, and
 observers. This is exact reconstruction under the section 1 contract.
 
-- **Splicing (tier 2):** a hot function's tier-2 copy carries the bodies of
-  small callees at call sites outside other pending calls
-  (`zend_native_inline.c`). The copy keeps the host's operations at their
-  positions; a site's INIT jumps to an appended region, and its SEND and DO
-  become no-ops. A region guards its target (the fallback site's binding in
-  the current call-cache epoch, the receiver class for `$this` methods, or
-  the run-time cache of a directly bound member), runs the callee's
-  operations on the host frame with the callee's CVs and temporaries
-  renumbered after the host's, and exits to the operation after the DO.
-  CV arguments alias the host's variables; literal arguments and defaults
-  are assigned. The frame's run-time cache is the callee's inside a region.
-- **Bails before any observation:** until frames of inlined callees are
-  reconstructed lazily, no operation of a region may observe the frame. A
-  body operation whose slow path could warn, throw, run user code or a
-  destructor, or depends on the executing function or scope, sets the
-  region's bail flag instead of running; the test after the operation
-  releases the region's temporaries and variables, restores the host's
-  run-time cache and makes the original call, which then observes its own
-  frame exactly. Slow paths that observe nothing for the operand types at
-  hand run in place (an array element's `isset()` that hashes a string
-  key, for example). Fast paths that decide more cases inline (class
-  hierarchy tests, truthiness of strings and arrays) also cut bails.
-- **Frame growth:** the copy's frame is larger than the one its callers
-  push for the original function. The copy's entries grow the newest frame
-  in place when it ends at most a few slots below the VM stack top (frames
-  extended by `SEND_ARRAY` or sized for trampolines) and the page has room;
-  any other frame runs the original function's code. Nothing else may
-  follow the newest frame: direct-call activations lead their callee frame
-  (or live on the heap when the frame starts a fresh page), and the C
-  executor keeps its state on the machine stack.
+- **Splicing does not pay.** Copying callee bodies into a tier-2 copy of
+  the caller at the source-opline level, with a bail to the original call
+  before any operation that could observe the frame, was correct but cost
+  1 to 5 million cycles per WordPress request: the bail tests and the
+  saved run-time cache outweigh the saved call. Inlining needs bail edges
+  in the machine IR, where the allocator sees them, and lazy frames for
+  inlined callees, so that observing slow paths run in place.
 
 ### 6. Unchanged rules
 
@@ -307,14 +272,10 @@ code size, compile time) with unchanged page output and the full PHPT tier.
    landings with their frame-state maps and the transfer are in place and
    forced at every guarded operation by the stress mode; specialized
    versions exit to their generic copy behind `ZEND_NATIVE_SPECULATE`.
-   Tier 2 records argument and result type feedback, specializes argument
-   types and, behind `ZEND_NATIVE_TIER2_SPECULATE`, element result types
-   with narrowing after the exits and retirement after repeated exits.
+   Tier 2 records argument type feedback and specializes argument types.
 5. **Guarded inlining and lazy frames for inlined callees.** Section 5, with
    backtraces, traces, warnings and observers identical to stock inside
-   inlined code. Splicing with bails before any observation is in place
-   behind `ZEND_NATIVE_TIER2_INLINE` (Linux x64); lazy frames for inlined
-   callees, which let observing slow paths run in place, follow.
+   inlined code, on bail edges in the machine IR.
 
 Steps 1 and 2 go together, since a helper that reads frame slots forces their
 materialization. Step 3 is independent. Step 4 needs the frame-state maps of

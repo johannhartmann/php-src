@@ -8532,16 +8532,6 @@ zend_native_status zend_native_deopt_transfer(zend_execute_data *execute_data,
 	return entry(execute_data, &context);
 }
 
-zend_native_status zend_native_deopt_speculation(
-	zend_execute_data *execute_data, uint32_t position,
-	zend_native_frame_entry_t entry, zend_native_entry_cell *cell)
-{
-	if (cell->tier2_deopts < ZEND_NATIVE_TIER2_DEOPT_LIMIT) {
-		cell->tier2_deopts++;
-	}
-	return zend_native_deopt_transfer(execute_data, position, entry);
-}
-
 void zend_native_call_receive_variadic(zend_execute_data *callee)
 {
 	const zend_op_array *op_array = &callee->func->op_array;
@@ -9522,40 +9512,8 @@ bool (*zend_native_tier2_recompile_hook)(zend_native_entry_cell *cell);
  * frame unpublished) when its countdown runs out: recompiles at once, like
  * a lazy compilation, or queues the function for request shutdown.
  */
-static void zend_native_tier2_dump_feedback(const zend_native_entry_cell *cell)
-{
-	static FILE *file;
-	const char *path = getenv("ZEND_NATIVE_FEEDBACK_DUMP");
-	const zend_op_array *op_array;
-	uint32_t index;
-
-	if (path == NULL || cell->function == NULL
-			|| cell->tier2_result_feedback == NULL) {
-		return;
-	}
-	if (file == NULL && (file = fopen(path, "a")) == NULL) {
-		return;
-	}
-	op_array = &cell->function->op_array;
-	for (index = 0; index < op_array->last; index++) {
-		const uint32_t feedback = cell->tier2_result_feedback[index];
-
-		if (feedback == 0) {
-			continue;
-		}
-		fprintf(file, "%s%s%s %u %s %u %04x\n",
-			op_array->scope ? ZSTR_VAL(op_array->scope->name) : "",
-			op_array->scope ? "::" : "",
-			op_array->function_name ? ZSTR_VAL(op_array->function_name) : "{main}",
-			index, zend_get_opcode_name(op_array->opcodes[index].opcode),
-			feedback >> 16, feedback & 0xffff);
-	}
-	fflush(file);
-}
-
 void zend_native_tier2_note(zend_native_entry_cell *cell)
 {
-	zend_native_tier2_dump_feedback(cell);
 	if (cell == NULL || cell->tier2_state != ZEND_NATIVE_TIER2_NONE) {
 		return;
 	}
@@ -9582,10 +9540,6 @@ void zend_native_tier2_record(
 
 	if (function == NULL || !ZEND_USER_CODE(function->type)) {
 		return;
-	}
-	if (cell->tier2_result_feedback == NULL && function->op_array.last != 0) {
-		cell->tier2_result_feedback = pecalloc(
-			function->op_array.last, sizeof(uint32_t), 1);
 	}
 	declared = MIN(function->op_array.num_args, 8);
 	passed = MIN(ZEND_CALL_NUM_ARGS(frame), declared);

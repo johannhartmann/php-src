@@ -72,6 +72,44 @@ struct zend_tpde_local_abi_type {
 	bool valid;
 };
 
+/* The Z_TYPE() of an exact scalar type, or IS_UNDEF. */
+inline uint32_t zend_tpde_zval_type(zend_mir_scalar_type_mask type)
+{
+	switch (type) {
+		case ZEND_MIR_SCALAR_TYPE_NULL: return IS_NULL;
+		case ZEND_MIR_SCALAR_TYPE_I1: return IS_FALSE;
+		case ZEND_MIR_SCALAR_TYPE_I64: return IS_LONG;
+		case ZEND_MIR_SCALAR_TYPE_F64: return IS_DOUBLE;
+		default: return IS_UNDEF;
+	}
+}
+
+inline bool operator==(const zend_tpde_local_abi_type &left,
+	const zend_tpde_local_abi_type &right)
+{
+	return left.valid == right.valid
+		&& left.representation == right.representation
+		&& left.exact_type == right.exact_type
+		&& left.machine_kind == right.machine_kind
+		&& left.transfer == right.transfer;
+}
+
+/* A scalar value of ABI value that boxes into the boxed zval ABI callee. */
+inline bool zend_tpde_abi_boxes_into(const zend_tpde_local_abi_type &value,
+	const zend_tpde_local_abi_type &callee)
+{
+	return value.valid && callee.valid
+		&& callee.machine_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+		&& callee.representation == ZEND_MIR_REPRESENTATION_ZVAL
+		&& value.transfer == ZEND_TPDE_LOCAL_ABI_TRANSFER_NONE
+		&& ((value.exact_type == ZEND_MIR_SCALAR_TYPE_I64
+				&& value.machine_kind == ZEND_TPDE_MACHINE_VALUE_I64)
+			|| (value.exact_type == ZEND_MIR_SCALAR_TYPE_F64
+				&& value.machine_kind == ZEND_TPDE_MACHINE_VALUE_F64)
+			|| (value.exact_type == ZEND_MIR_SCALAR_TYPE_I1
+				&& value.machine_kind == ZEND_TPDE_MACHINE_VALUE_BOOL));
+}
+
 static inline zend_tpde_machine_representation_desc
 zend_tpde_machine_representation(
 	zend_tpde_machine_value_kind kind, bool register_authoritative)
@@ -854,7 +892,7 @@ static inline bool zend_tpde_array_read_at(
 	uint64_t key_offset;
 	uint64_t result_offset;
 
-	if (out == nullptr || !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
 			|| operation.source_opcode != ZEND_FETCH_DIM_R
 			|| (operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
@@ -924,13 +962,12 @@ struct zend_tpde_frameless_direct {
 
 static inline bool zend_tpde_frameless_direct_at(
 	const zend_tpde_instruction &instruction,
-	uint32_t compiled_variable_count,
 	zend_tpde_frameless_direct *out)
 {
 	const zend_mir_executable_value_ref &operation =
 		instruction.value_operation;
 
-	if (out == nullptr || !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| operation.source_opcode < ZEND_FRAMELESS_ICALL_0
 			|| operation.source_opcode > ZEND_FRAMELESS_ICALL_3
 			|| operation.extended_value > 0xffff
@@ -940,7 +977,6 @@ static inline bool zend_tpde_frameless_direct_at(
 			|| !zend_mir_id_is_valid(operation.result_storage_id)) {
 		return false;
 	}
-	(void) compiled_variable_count;
 	const uint32_t argument_count =
 		operation.source_opcode - ZEND_FRAMELESS_ICALL_0;
 	const zend_mir_source_operand_ref *arguments[3] = {
@@ -1136,7 +1172,7 @@ static inline bool zend_tpde_dim_direct_at(
 			return false;
 		}
 	}
-	if (out == nullptr || !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| (!read && !write && !test)
 			|| operation.extended_value > 0xffff
 			|| (indirect_container == 0
@@ -1206,7 +1242,7 @@ static inline bool zend_tpde_concat_assign_direct_at(
 	uint64_t value_kind;
 	uint64_t value_offset;
 
-	if (out == nullptr || !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| operation.source_opcode != ZEND_ASSIGN_OP
 			|| operation.extended_value != ZEND_CONCAT
 			|| operation.result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
@@ -1285,7 +1321,7 @@ static inline bool zend_tpde_concat_direct_at(
 		instruction.value_operation;
 	uint64_t left_kind, left_offset, right_kind, right_offset;
 
-	if (out == nullptr || !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| (operation.opcode != ZEND_MIR_OPCODE_VALUE_CONCAT
 				&& operation.opcode != ZEND_MIR_OPCODE_VALUE_FAST_CONCAT)
 			|| (operation.source_opcode != ZEND_CONCAT
@@ -1332,7 +1368,7 @@ static inline bool zend_tpde_identical_direct_at(
 		instruction.value_operation;
 	uint64_t left_kind, left_offset, right_kind, right_offset;
 
-	if (out == nullptr || !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_BINARY_OP
 			|| (operation.source_opcode != ZEND_IS_IDENTICAL
 				&& operation.source_opcode != ZEND_IS_NOT_IDENTICAL)
@@ -1377,7 +1413,7 @@ static inline bool zend_tpde_packed_array_append_at(
 	uint64_t value_offset;
 	uint64_t result_offset = 0;
 
-	if (out == nullptr || !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM
 			|| operation.source_opcode != ZEND_ASSIGN_DIM
 			|| (operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
@@ -1434,7 +1470,7 @@ static inline bool zend_tpde_array_isset_at(
 	uint64_t key_offset;
 	uint64_t result_offset;
 
-	if (out == nullptr || !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| operation.opcode
 				!= ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM
 			|| operation.source_opcode != ZEND_ISSET_ISEMPTY_DIM_OBJ
@@ -1480,7 +1516,7 @@ static inline bool zend_tpde_string_length_at(
 	uint64_t operand_offset;
 	uint64_t result_offset;
 
-	if (out == nullptr || !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_UNARY_OP
 			|| operation.source_opcode != ZEND_STRLEN
 			|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
@@ -1518,7 +1554,7 @@ static inline bool zend_tpde_bool_unary_at(
 	uint64_t operand_offset;
 	uint64_t result_offset;
 
-	if (out == nullptr || !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_UNARY_OP
 			|| (operation.source_opcode != ZEND_BOOL
 				&& operation.source_opcode != ZEND_BOOL_NOT)
@@ -1564,7 +1600,7 @@ static inline bool zend_tpde_value_condition_at(
 	const bool has_result = operation.source_opcode == ZEND_JMPZ_EX
 		|| operation.source_opcode == ZEND_JMPNZ_EX;
 
-	if (out == nullptr || !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 			|| (operation.source_opcode != ZEND_JMPZ
 				&& operation.source_opcode != ZEND_JMPNZ
@@ -1605,7 +1641,7 @@ static inline bool zend_tpde_string_identity_at(
 	uint64_t right_offset;
 	uint64_t result_offset;
 
-	if (out == nullptr || !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_BINARY_OP
 			|| (operation.source_opcode != ZEND_IS_IDENTICAL
 				&& operation.source_opcode != ZEND_IS_NOT_IDENTICAL)
@@ -1646,9 +1682,6 @@ static inline bool zend_tpde_long_operand_at(
 {
 	uint64_t offset;
 
-	if (out == nullptr) {
-		return false;
-	}
 	if (operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
 		offset = uint64_t{operand.index} * sizeof(zval);
 		out->literal = true;
@@ -1677,7 +1710,7 @@ static inline bool zend_tpde_long_binary_at(
 		instruction.value_operation;
 	uint64_t result_offset;
 
-	if (out == nullptr || !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_BINARY_OP
 			|| (operation.source_opcode != ZEND_ADD
 				&& operation.source_opcode != ZEND_SUB
@@ -1743,7 +1776,7 @@ static inline bool zend_tpde_long_assign_op_at(
 	uint64_t result_offset = 0;
 	bool has_result;
 
-	if (out == nullptr || !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_ASSIGN_OP
 			|| (operation.extended_value != ZEND_ADD
 				&& operation.extended_value != ZEND_SUB
@@ -1824,7 +1857,7 @@ static inline bool zend_tpde_long_incdec_at(
 	uint64_t result_offset = 0;
 	bool has_result;
 
-	if (out == nullptr || !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_INCDEC
 			|| (operation.source_opcode != ZEND_PRE_INC
 				&& operation.source_opcode != ZEND_PRE_DEC
@@ -1888,7 +1921,7 @@ static inline bool zend_tpde_slot_isset_empty_at(
 	uint64_t operand_offset;
 	uint64_t result_offset;
 
-	if (out == nullptr || !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| operation.opcode
 				!= ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV
 			|| operation.source_opcode != ZEND_ISSET_ISEMPTY_CV
@@ -1933,7 +1966,7 @@ static inline bool zend_tpde_packed_iterator_fetch_at(
 	 * Zend foreach shape.  Targets may opt into the key temporary after they
 	 * implement the ownership rules for string keys.
 	 */
-	if (out == nullptr || !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_ITERATOR_BRANCH
 			|| operation.source_opcode != ZEND_FE_FETCH_R
 			|| (operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
@@ -2013,7 +2046,7 @@ static inline bool zend_tpde_array_iterator_reset_at(
 	const bool source_temporary = allow_literal
 		&& !source_literal
 		&& operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP;
-	if (out == nullptr || !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_ITERATOR_BRANCH
 			|| operation.source_opcode != ZEND_FE_RESET_R
 			|| (!source_literal
@@ -2063,7 +2096,7 @@ static inline bool zend_tpde_object_property_read_at(
 	uint64_t result_offset;
 	uint32_t cache_offset;
 
-	if (out == nullptr || !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_OBJECT_FETCH_R
 			|| operation.source_opcode != ZEND_FETCH_OBJ_R
 			|| (operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
@@ -2185,7 +2218,7 @@ static inline bool zend_tpde_object_property_write_at(
 	uint64_t receiver_offset;
 	uint64_t value_offset;
 
-	if (out == nullptr || !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_OBJECT_ASSIGN
 			|| operation.source_opcode != ZEND_ASSIGN_OBJ
 			|| (operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
@@ -2239,7 +2272,7 @@ static inline bool zend_tpde_dynamic_fetch_read_at(
 	uint64_t name_offset;
 	uint64_t result_offset;
 
-	if (out == nullptr || !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_DYNAMIC_FETCH_R
 			|| operation.source_opcode != ZEND_FETCH_R
 			|| operation.extended_value != ZEND_FETCH_LOCAL
@@ -2279,8 +2312,15 @@ struct zend_tpde_machine_cfg {
 	uint32_t *boxed_cond_cold_by_predecessor;
 };
 
+/*
+ * Linux x64 lowers forms DarwinA64 does not: array reads through temporary
+ * or literal keys, and inline call frames that move temporary arguments.
+ * Each host builds only its own target backend.
+ */
+inline constexpr bool zend_tpde_linux_inline_forms =
+	ZEND_NATIVE_HOST_TARGET == ZEND_NATIVE_TARGET_LINUX_AMD64;
+
 struct zend_tpde_plan {
-	const zend_native_runtime_api *runtime;
 	uint32_t source_ssa_variable_count;
 	uint32_t source_opcode_count;
 	zend_tpde_source_opcode *source_opcodes;
@@ -2307,14 +2347,9 @@ struct zend_tpde_plan {
 	bool deopt_landings;
 	/* Tier 2 call counting (zend_native_component_member). */
 	zend_native_entry_cell *call_count_cell;
-	zend_native_entry_cell *speculation_cell;
-	const uint16_t *deopt_landing_types;
-	/* Tier-2 inlining host metadata (zend_native_inline.c), or NULL. */
-	const zend_native_inline_host *inline_host;
 	/* Tier-2 argument guards (zend_native_component_member). */
 	uint8_t tier2_arg_guards[ZEND_NATIVE_TIER2_ARG_GUARDS];
 	const void *tier2_fallback_entry;
-	const uint16_t *tier2_result_types;
 	/* The resume IDs are deoptimization stress targets. */
 	bool deopt_stress;
 	uint32_t entry_variant_long_mask;
@@ -2423,7 +2458,6 @@ struct zend_tpde_plan {
 	_zend_native_user_call_descriptor **user_calls;
 	uint32_t user_call_count;
 	uint32_t argument_count;
-	uint64_t required_runtime_capabilities;
 	uint64_t required_runtime_helpers[ZEND_NATIVE_RUNTIME_HELPER_WORD_COUNT];
 	zend_mir_executable_value_ref *user_opcode_source_operations;
 	uint32_t user_opcode_source_operation_count;
@@ -2451,15 +2485,8 @@ struct zend_tpde_plan {
 	uint32_t materialization_count;
 	zend_tpde_machine_reference *machine_references;
 	uint32_t machine_reference_count;
-	uint32_t observers_enabled_reference_index;
 	uint32_t *entry_undef_temporary_indices;
 	uint32_t entry_undef_temporary_count;
-	/*
-	 * Linux x64 lowers forms DarwinA64 does not: array reads through
-	 * temporary or literal keys, and inline call frames that move temporary
-	 * arguments.
-	 */
-	bool linux_inline_forms;
 	/* The source op array is a generator: only then can an entry frame be
 	 * a generator frame. */
 	bool source_generator;
@@ -2485,7 +2512,7 @@ static inline const zend_tpde_source_call_phase_entry *
 zend_tpde_source_call_phase_at(
 	const zend_tpde_plan *plan, uint32_t source_position)
 {
-	if (plan == nullptr || plan->source_call_phases == nullptr
+	if (plan->source_call_phases == nullptr
 			|| source_position >= plan->source_opcode_count) {
 		return nullptr;
 	}
@@ -2497,8 +2524,7 @@ zend_tpde_source_call_phase_at(
 static inline bool zend_tpde_generator_resume_value_live(
 	const zend_tpde_plan *plan, uint32_t resume_index, uint32_t value_index)
 {
-	if (plan == nullptr
-			|| resume_index >= plan->generator_resume_count
+	if (resume_index >= plan->generator_resume_count
 			|| value_index >= plan->value_count
 			|| plan->generator_resume_live_values == nullptr) {
 		return false;
@@ -2528,7 +2554,7 @@ static inline bool zend_tpde_numeric_binary_proven(
 {
 	const zend_mir_executable_value_ref &operation =
 		instruction.value_operation;
-	if (plan == nullptr || !plan->linux_inline_forms
+	if (!zend_tpde_linux_inline_forms
 			|| !instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_BINARY_OP
 			|| (operation.source_opcode != ZEND_ADD
@@ -2600,8 +2626,7 @@ static inline bool zend_tpde_user_multi_branch_at(
 	uint32_t target_opcode,
 	zend_tpde_user_multi_branch *out)
 {
-	if (plan == nullptr || out == nullptr
-			|| plan->source_multi_branches == nullptr
+	if (plan->source_multi_branches == nullptr
 			|| operation.source_position_id >= plan->source_opcode_count
 			|| operation.op1_storage_id == ZEND_MIR_ID_INVALID
 			|| operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
@@ -2645,8 +2670,7 @@ static inline bool zend_tpde_multi_branch_at(
 	uint64_t operand_offset;
 	uint32_t expected_successors;
 
-	if (plan == nullptr || out == nullptr
-			|| !instruction.has_value_operation
+	if (!instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH
 			|| record.opcode != ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH
 			|| plan->source_multi_branches == nullptr
@@ -2704,8 +2728,6 @@ struct zend_native_image_symbol {
 	uint32_t kind;
 	uint32_t id;
 	uint32_t symbol_namespace;
-	uint32_t abi_version;
-	uint32_t effects;
 	char name[64];
 };
 
@@ -2722,10 +2744,7 @@ struct zend_native_component_entry {
 
 struct zend_native_image {
 	zend_native_target target;
-	uint32_t abi_version;
-	uint32_t runtime_abi_version;
 	uint64_t build_id;
-	uint64_t code_version;
 	unsigned char *text;
 	size_t text_size;
 	size_t text_capacity;
@@ -2818,7 +2837,7 @@ static inline bool zend_tpde_scalar_diamond_at(
 		const zend_tpde_plan *plan,
 		zend_tpde_scalar_diamond *out)
 {
-	if (plan == nullptr || out == nullptr || plan->block_count != 4
+	if (plan->block_count != 4
 			|| plan->block_ids == nullptr
 			|| plan->block_successor_offsets == nullptr
 			|| plan->block_successors == nullptr
@@ -2903,8 +2922,7 @@ static inline bool zend_tpde_scalar_diamond_frame_transport(
 		const zend_tpde_plan *plan,
 		const zend_tpde_instruction &instruction)
 {
-	if (plan == nullptr
-			|| instruction.record.opcode != ZEND_MIR_OPCODE_ZVAL_STORE
+	if (instruction.record.opcode != ZEND_MIR_OPCODE_ZVAL_STORE
 			|| instruction.operand_count != 2
 			|| !zend_mir_id_is_valid(instruction.zval_store_storage_id)) {
 		return false;
@@ -3031,11 +3049,79 @@ static inline bool zend_tpde_binding_is_number(
 		binding.value_index, binding.definition_instruction_index, 0);
 }
 
+/*
+ * The setup area a user call's Init reserves below the callee frame: the
+ * frame header, the activation, then a placement per argument and its
+ * target slots. False for an unsupported result operand or an offset above
+ * limit (the target's immediate range).
+ */
+struct zend_tpde_user_call_setup {
+	uint64_t argument_count;
+	uint64_t frame_header_size;
+	uint64_t activation_offset;
+	uint64_t placement_offset;
+	uint64_t setup_size;
+	uint64_t result_offset;
+	bool uses_discarded_return;
+};
+
+static inline bool zend_tpde_user_call_setup_layout(
+	const zend_tpde_plan *plan,
+	const zend_native_user_call_descriptor *call,
+	uint64_t limit,
+	zend_tpde_user_call_setup *out)
+{
+	const uint64_t argument_count = call->argument_count;
+	const uint64_t frame_header_size =
+		static_cast<uint64_t>(ZEND_CALL_FRAME_SLOT) * sizeof(zval);
+	const uint64_t activation_offset =
+		(frame_header_size + alignof(zend_native_direct_activation) - 1)
+		& ~(static_cast<uint64_t>(
+			alignof(zend_native_direct_activation)) - 1);
+	const uint64_t placement_offset = activation_offset
+		+ sizeof(zend_native_direct_activation);
+	const uint64_t target_count = argument_count * 2 + 1;
+	const uint64_t raw_setup_size = placement_offset
+		+ argument_count * sizeof(zend_native_user_call_placement)
+		+ target_count * sizeof(uint32_t);
+	const uint64_t setup_size =
+		(raw_setup_size + sizeof(zval) - 1)
+		& ~(static_cast<uint64_t>(sizeof(zval)) - 1);
+	const zend_mir_source_operand_ref &result_operand = call->do_result;
+	const bool uses_discarded_return = result_operand.kind
+		== ZEND_MIR_SOURCE_OPERAND_UNUSED;
+	uint64_t result_storage = 0;
+	if (!uses_discarded_return) {
+		if ((result_operand.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+				&& result_operand.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
+				|| (result_operand.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+					&& result_operand.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+					&& result_operand.slot_kind != ZEND_MIR_SOURCE_SLOT_VAR)) {
+			return false;
+		}
+		result_storage = result_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+			? result_operand.index
+			: static_cast<uint64_t>(plan->source_frame_variable_count)
+				+ result_operand.index;
+	}
+	const uint64_t result_offset =
+		(uint64_t{ZEND_CALL_FRAME_SLOT} + result_storage) * sizeof(zval);
+	if (setup_size > limit || activation_offset > limit
+			|| placement_offset - activation_offset > limit
+			|| argument_count > UINT32_MAX
+			|| (!uses_discarded_return && result_offset > limit)) {
+		return false;
+	}
+	*out = {argument_count, frame_header_size, activation_offset,
+		placement_offset, setup_size, result_offset, uses_discarded_return};
+	return true;
+}
+
 int32_t zend_tpde_instruction_index(
 	const zend_tpde_plan *plan, zend_mir_instruction_id id);
 const zend_tpde_instruction *zend_tpde_instruction_at(
 	const zend_tpde_plan *plan, uint32_t index);
-zend_mir_instruction_record zend_tpde_instruction_record_at(
+const zend_mir_instruction_record &zend_tpde_instruction_record_at(
 	const zend_tpde_plan *plan,
 	const zend_tpde_instruction *instruction);
 bool zend_tpde_call_argument_at(
