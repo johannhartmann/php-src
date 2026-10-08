@@ -2879,16 +2879,10 @@ public:
 				member(offsetof(zval, u1.type_info))), IS_NULL);
 			patch(defined, text_writer.offset());
 		}
+		/* A discarded result is checked out of line. */
 		ASM(CMP32mi, FE_MEM(FE_SP, 0, FE_NOREG, 8), -1);
-		{
-			text_writer.ensure_space(16);
-			ASMF(JNZ, FE_JMPL, text_writer.cur_ptr());
-			const uint32_t kept = text_writer.offset();
-			ASM(TEST8mi, FE_MEM(FE_R10, 0, FE_NOREG,
-				member(offsetof(zval, u1.v.type_flags))), IS_TYPE_REFCOUNTED);
-			to_general.push_back(branch(true));
-			patch(kept, text_writer.offset());
-		}
+		const uint32_t discarded = branch_zero();
+		const uint32_t discarded_checked = text_writer.offset();
 		/* A variable destructor may inspect the backtrace: the dying frame
 		 * is no longer current. */
 		ASM(MOV64rm, FE_R10, FE_MEM(FE_DI, 0, FE_NOREG,
@@ -2983,6 +2977,11 @@ public:
 		text_writer.eh_advance(out_of_line - (epilogue + 4));
 		text_writer.eh_write_inst(
 			tpde::dwarf::DW_CFA_def_cfa_offset, area + 8);
+		patch(discarded, text_writer.offset());
+		ASM(TEST8mi, FE_MEM(FE_R10, 0, FE_NOREG,
+			member(offsetof(zval, u1.v.type_flags))), IS_TYPE_REFCOUNTED);
+		to_general.push_back(branch(true));
+		patch(branch(false), discarded_checked);
 		/* zend_native_call_fast_release_this(object, result, discarded),
 		 * whose status the entry returns. The frame's memory is free: its
 		 * result address is read before a destructor can reuse it. */
@@ -17567,21 +17566,44 @@ bool ZendCompilerX64::compile_inst_impl(
 								static_cast<int32_t>(
 									offsetof(zval, u1.type_info))),
 							IS_UNDEF);
-						generate_raw_jump(Jump::jne, used);
+						/* A hole, and below an integer key of a hash, out
+						 * of the hot code. */
+						auto hole = text_writer.label_create();
+						generate_raw_jump(Jump::je, hole);
+						const bool cold_hash_paths = !text_writer.in_cold_area();
+						if (cold_hash_paths) {
+							cold_begin();
+						} else {
+							generate_raw_jump(Jump::jmp, used);
+						}
+						label_place(hole);
 						ASM(ADD32ri, position_reg, 1);
 						generate_raw_jump(Jump::jmp, scan);
+						if (cold_hash_paths) {
+							cold_end();
+						}
 						label_place(used);
 						if (layout.has_key) {
 							ASM(MOV64rm, key_payload_reg,
 								FE_MEM(element_reg, 0, FE_NOREG,
 									static_cast<int32_t>(offsetof(Bucket, key))));
 							ASM(TEST64rr, key_payload_reg, key_payload_reg);
-							generate_raw_jump(Jump::jne, string_key);
+							auto integer_key = text_writer.label_create();
+							generate_raw_jump(Jump::je, integer_key);
+							if (cold_hash_paths) {
+								cold_begin();
+							} else {
+								generate_raw_jump(Jump::jmp, string_key);
+							}
+							label_place(integer_key);
 							ASM(MOV64rm, key_payload_reg,
 								FE_MEM(element_reg, 0, FE_NOREG,
 									static_cast<int32_t>(offsetof(Bucket, h))));
 							ASM(MOV32ri, key_type_reg, IS_LONG);
 							generate_raw_jump(Jump::jmp, element_ready);
+							if (cold_hash_paths) {
+								cold_end();
+							}
 							/* A string key: interned or counted. */
 							label_place(string_key);
 							ASM(MOV32ri, key_type_reg, IS_STRING);
@@ -17748,13 +17770,14 @@ bool ZendCompilerX64::compile_inst_impl(
 									+ offsetof(zval, u1.type_info))),
 							key_type_reg);
 						ASM(CMP32ri, key_type_reg, IS_STRING_EX);
-						generate_raw_jump(Jump::jne, key_stored);
-						ASM(ADD32mi,
-							FE_MEM(key_payload_reg, 0, FE_NOREG,
-								static_cast<int32_t>(offsetof(
-									zend_refcounted_h, refcount))),
-							1);
-						label_place(key_stored);
+						/* Keys are mostly interned. */
+						emit_cold_branch(Jump::je, key_stored, [&] {
+							ASM(ADD32mi,
+								FE_MEM(key_payload_reg, 0, FE_NOREG,
+									static_cast<int32_t>(offsetof(
+										zend_refcounted_h, refcount))),
+								1);
+						});
 					}
 					if (direct_exits) {
 						exit_to(Jump::jmp, 0, true);
