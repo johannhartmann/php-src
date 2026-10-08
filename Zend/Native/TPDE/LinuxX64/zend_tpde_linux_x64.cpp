@@ -45,12 +45,30 @@ using IRFuncRef = zend::native::tpde::IRFuncRef;
  */
 constexpr uint64_t layout_minimum_executions = 256;
 
+/*
+ * ZEND_NATIVE_LAYOUT=path combines both: an existing path is the profile,
+ * otherwise this run trains into it, so that a server trains when it first
+ * starts and uses the profile from the next start on.
+ */
+const char *layout_environment(const char *name, bool profile) {
+	if (const char *value = std::getenv(name); value != nullptr
+			&& value[0] != '\0') {
+		return value;
+	}
+	const char *both = std::getenv("ZEND_NATIVE_LAYOUT");
+	if (both == nullptr || both[0] == '\0') {
+		return nullptr;
+	}
+	return (::access(both, R_OK) == 0) == profile ? both : nullptr;
+}
+
 struct LayoutProfile {
 	std::unordered_map<uint64_t, std::unordered_set<uint32_t>> jumps;
 	/* "*" moves every eligible region, to test the transformation. */
 	bool all = false;
 	LayoutProfile() {
-		const char *path = std::getenv("ZEND_NATIVE_LAYOUT_PROFILE");
+		const char *path =
+			layout_environment("ZEND_NATIVE_LAYOUT_PROFILE", true);
 		if (path == nullptr || path[0] == '\0') {
 			return;
 		}
@@ -129,7 +147,8 @@ struct LayoutTraining {
 	uint64_t session = 0;
 	uint32_t requests = 0;
 	LayoutTraining() {
-		const char *name = std::getenv("ZEND_NATIVE_LAYOUT_TRAIN");
+		const char *name =
+			layout_environment("ZEND_NATIVE_LAYOUT_TRAIN", false);
 		if (name == nullptr || name[0] == '\0') {
 			return;
 		}
