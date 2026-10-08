@@ -4727,6 +4727,24 @@ bool freeze_statepoint_materializations(
 					}
 					return found;
 				}
+				/* A non-lazy store or another writer leaves the slot
+				 * current. */
+				if (candidate.record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE
+						&& candidate.zval_store_storage_id == storage_id
+						&& !candidate.zval_store_lazy_scalar) {
+					return no_reaching_scalar;
+				}
+				if (candidate.has_value_operation
+						&& candidate.record.opcode
+							!= ZEND_MIR_OPCODE_VALUE_ASSIGN_OP
+						&& candidate.record.opcode
+							!= ZEND_MIR_OPCODE_VALUE_INCDEC
+						&& candidate.value_operation.op1_storage_id
+							== storage_id
+						&& candidate.value_operation
+							.op1_definition_ssa_variable_id_plus_one != 0) {
+					return no_reaching_scalar;
+				}
 				if (candidate.has_value_operation
 						&& candidate.record.opcode
 							== ZEND_MIR_OPCODE_VALUE_ASSIGN_REF
@@ -4856,6 +4874,83 @@ bool freeze_statepoint_materializations(
 				frames[index].id, index);
 		}
 	}
+	const bool operand_observed_plan = !ZEND_OBSERVER_ENABLED
+		&& plan->operand_observed_storages != nullptr
+		&& !plan->deopt_landings && !plan->deopt_stress
+		&& plan->deopt_generic_member_plus_one == 0
+		&& plan->tier2_fallback_entry == nullptr;
+	auto instruction_reads_storage = [&](
+			const zend_tpde_instruction &instruction,
+			const zend_mir_instruction_record &record,
+			zend_mir_storage_id storage_id) {
+		if (instruction.has_value_operation
+				&& (instruction.value_operation.op1_storage_id == storage_id
+					|| instruction.value_operation.op2_storage_id
+						== storage_id
+					|| instruction.value_operation.auxiliary_storage_id
+						== storage_id)) {
+			return true;
+		}
+		for (uint32_t operand = 0;
+				operand < instruction.operand_count; ++operand) {
+			const int32_t operand_index = zend_tpde_value_index(
+				plan, zend_tpde_operand_at(plan, &instruction, operand));
+			if (operand_index >= 0
+					&& plan->values[operand_index].canonical_storage_id
+						== storage_id) {
+				return true;
+			}
+		}
+		/* A direct call reads its source-backed arguments from the frame. */
+		if ((record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
+					|| record.opcode
+						== ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL)
+				&& instruction.call_argument_offset
+					<= plan->call_argument_count
+				&& instruction.call_argument_count
+					<= plan->call_argument_count
+						- instruction.call_argument_offset) {
+			for (uint32_t argument_index = 0;
+					argument_index < instruction.call_argument_count;
+					++argument_index) {
+				zend_mir_call_argument_ref argument{};
+				if (!zend_tpde_call_argument_at(plan,
+						instruction.call_argument_offset + argument_index,
+						&argument)
+						|| source_descriptor_storage(source_op_array,
+							argument.source_operand) == storage_id) {
+					return true;
+				}
+			}
+		}
+		/* A call reads its arguments through its frame state. */
+		if (zend_mir_id_is_valid(record.frame_state_id)) {
+			const int32_t frame_position = id_index_find(
+				frame_index.data(), frame_index_capacity,
+				record.frame_state_id);
+			if (frame_position < 0) {
+				return true;
+			}
+			const zend_mir_frame_state_ref &frame =
+				frames[static_cast<uint32_t>(frame_position)];
+			for (uint32_t slot_index = 0;
+					slot_index < frame.slots.count; ++slot_index) {
+				zend_mir_frame_slot_ref slot;
+				if (!view->frame_slot_at(view->context,
+						frame.slots.offset + slot_index, &slot)) {
+					return true;
+				}
+				const int32_t slot_value = zend_mir_id_is_valid(slot.value_id)
+					? zend_tpde_value_index(plan, slot.value_id) : -1;
+				if (slot_value >= 0
+						&& plan->values[slot_value].canonical_storage_id
+							== storage_id) {
+					return true;
+				}
+			}
+		}
+		return false;
+	};
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
 		zend_tpde_instruction &instruction = plan->instructions[index];
 		const zend_mir_instruction_record record =
@@ -4870,10 +4965,58 @@ bool freeze_statepoint_materializations(
 			&& !(record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE
 				&& instruction.zval_store_lazy_scalar);
 
+		/*
+		 * An inline form that reads a lazy CV from its frame slot observes
+		 * it like a helper: store the reaching value first.  Scalar machine
+		 * operations, joins and stores take the register value.
+		 */
+		std::vector<zend_mir_storage_id> read_storages;
+		auto add_read_storage = [&](zend_mir_storage_id storage_id) {
+			if (zend_mir_id_is_valid(storage_id)
+					&& std::binary_search(lazy_scalar_storages.begin(),
+						lazy_scalar_storages.end(), storage_id)
+					&& std::ranges::find(read_storages, storage_id)
+						== read_storages.end()) {
+				read_storages.push_back(storage_id);
+			}
+		};
+		if (!observable_boundary && !lazy_scalar_storages.empty()) {
+			if (instruction.has_value_operation) {
+				const zend_mir_executable_value_ref &operation =
+					instruction.value_operation;
+				if (!(instruction.mutation_lazy_scalar
+						&& instruction.mutation_storage_id
+							== operation.op1_storage_id)) {
+					add_read_storage(operation.op1_storage_id);
+				}
+				add_read_storage(operation.op2_storage_id);
+				add_read_storage(operation.auxiliary_storage_id);
+			}
+			const bool register_operation =
+				record.opcode == ZEND_MIR_OPCODE_PHI
+				|| record.opcode == ZEND_MIR_OPCODE_COPY
+				|| record.opcode == ZEND_MIR_OPCODE_CANONICALIZE
+				|| record.opcode == ZEND_MIR_OPCODE_CONSTANT
+				|| record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE
+				|| (record.opcode >= ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW
+					&& record.opcode <= ZEND_MIR_OPCODE_SCALAR_DROP);
+			if (!register_operation) {
+				for (uint32_t operand = 0;
+						operand < instruction.operand_count; ++operand) {
+					const int32_t operand_index = zend_tpde_value_index(
+						plan, zend_tpde_operand_at(plan, &instruction, operand));
+					if (operand_index >= 0) {
+						add_read_storage(plan->values[
+							operand_index].canonical_storage_id);
+					}
+				}
+			}
+		}
+
 		instruction.materialization_offset =
 			static_cast<uint32_t>(materializations.size());
 		instruction.materialization_count = 0;
-		if (!observable_boundary) {
+		if (!observable_boundary && read_storages.empty()) {
 			continue;
 		}
 
@@ -5026,6 +5169,23 @@ bool freeze_statepoint_materializations(
 			return int32_t{-1};
 		};
 
+		if (!observable_boundary) {
+			for (zend_mir_storage_id storage_id : read_storages) {
+				const reaching_scalar_definition reaching =
+					reaching_scalar(index, storage_id);
+				if (reaching.value_index >= 0) {
+					append_materialization(
+						reaching.instruction_index < 0
+							? static_cast<uint32_t>(reaching.value_index)
+							: UINT32_MAX,
+						storage_id,
+						plan->values[static_cast<uint32_t>(
+							reaching.value_index)].machine_kind,
+						reaching.value_index, reaching.instruction_index);
+				}
+			}
+			continue;
+		}
 		if (zend_mir_id_is_valid(record.frame_state_id)) {
 			const int32_t frame_index_value = id_index_find(
 				frame_index.data(), frame_index_capacity,
@@ -5106,7 +5266,22 @@ bool freeze_statepoint_materializations(
 				storage_id, value.machine_kind,
 				reaching.value_index, reaching.instruction_index);
 		};
+		/*
+		 * A helper or call observes an operand-observed CV only through
+		 * its operands; statepoints, returns and probes observe the frame.
+		 */
+		const bool operand_boundary = operand_observed_plan
+			&& !instruction.debug_probe
+			&& record.opcode != ZEND_MIR_OPCODE_STATEPOINT
+			&& record.opcode != ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL;
 		for (zend_mir_storage_id storage_id : lazy_scalar_storages) {
+			if (operand_boundary
+					&& storage_id < plan->operand_observed_storage_count
+					&& plan->operand_observed_storages[storage_id] != 0
+					&& !instruction_reads_storage(instruction, record,
+						storage_id)) {
+				continue;
+			}
 			append_reaching_scalar(storage_id);
 		}
 		/*
@@ -5761,6 +5936,7 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->generator_resume_live_values);
 	std::free(plan->deopt_resume_targets);
 	std::free(plan->deopt_resume_instructions);
+	std::free(plan->operand_observed_storages);
 	std::free(plan->materializations);
 	std::free(plan->machine_references);
 	std::free(plan->entry_undef_temporary_indices);
@@ -7302,6 +7478,93 @@ bool initialize_plan(
 			reference_assigned_storages.end(), storage_id);
 	};
 	/*
+	 * CVs that may hold a reference anywhere in the function or that Zend's
+	 * SSA does not prove unaliased: a by-reference send, yield or return,
+	 * ASSIGN_REF, global or static reads the slot without a boundary, so
+	 * their scalar stores stay eager.
+	 */
+	std::vector<uint8_t> storage_may_alias(
+		source_op_array != nullptr
+			? static_cast<size_t>(source_op_array->last_var) : 0, 0);
+	if (source_ssa != nullptr && source_ssa->vars != nullptr
+			&& source_ssa->var_info != nullptr) {
+		for (int ssa = 0; ssa < source_ssa->vars_count; ++ssa) {
+			const int variable = source_ssa->vars[ssa].var;
+			if (variable < 0
+					|| static_cast<size_t>(variable)
+						>= storage_may_alias.size()) {
+				continue;
+			}
+			/* Writers other than scalar assignment, compound assignment,
+			 * increments and parameters update the slot themselves. */
+			const int definition = source_ssa->vars[ssa].definition;
+			bool foreign_writer = false;
+			if (definition >= 0 && static_cast<uint32_t>(definition)
+					< source_op_array->last) {
+				switch (source_op_array->opcodes[definition].opcode) {
+					case ZEND_ASSIGN:
+					case ZEND_ASSIGN_OP:
+					case ZEND_PRE_INC:
+					case ZEND_PRE_DEC:
+					case ZEND_POST_INC:
+					case ZEND_POST_DEC:
+					case ZEND_RECV:
+					case ZEND_RECV_INIT:
+						foreign_writer = source_ssa->ops != nullptr
+							&& source_ssa->ops[definition].op1_def != ssa
+							&& source_ssa->ops[definition].result_def != ssa;
+						break;
+					default:
+						foreign_writer = true;
+						break;
+				}
+			}
+			if (foreign_writer || source_ssa->vars[ssa].alias != NO_ALIAS
+					|| (source_ssa->var_info[ssa].type & MAY_BE_REF) != 0) {
+				storage_may_alias[static_cast<size_t>(variable)] = 1;
+			}
+		}
+	} else {
+		std::fill(storage_may_alias.begin(), storage_may_alias.end(), 1);
+	}
+	/*
+	 * File code's CVs are globals; a generator resumes from its slots;
+	 * user opcode handlers observe every opline; catch and finally
+	 * dispatch re-enter code without the boundaries' register state.
+	 */
+	const bool lazy_capable_function = source_op_array != nullptr
+		&& source_op_array->function_name != nullptr
+		&& source_op_array->last_try_catch == 0
+		&& !plan->user_opcode_callbacks
+		&& (source_op_array->fn_flags & ZEND_ACC_GENERATOR) == 0;
+	auto storage_lazy_capable = [&](zend_mir_storage_id storage_id) {
+		return lazy_capable_function && zend_tpde_linux_inline_forms
+			&& storage_id < storage_may_alias.size()
+			&& storage_may_alias[storage_id] == 0
+			&& !storage_assigned_by_reference(storage_id);
+	};
+	/* Backtraces read parameters through the frame. */
+	const uint32_t parameter_storage_count = source_op_array == nullptr ? 0
+		: source_op_array->num_args
+			+ ((source_op_array->fn_flags & ZEND_ACC_VARIADIC) != 0 ? 1 : 0);
+	if (!storage_may_alias.empty()) {
+		plan->operand_observed_storages = static_cast<uint8_t *>(
+			std::calloc(storage_may_alias.size(), 1));
+		if (plan->operand_observed_storages == nullptr) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+				"unable to freeze operand-observed storages");
+			return false;
+		}
+		plan->operand_observed_storage_count =
+			static_cast<uint32_t>(storage_may_alias.size());
+		for (uint32_t storage = parameter_storage_count;
+				storage < storage_may_alias.size(); ++storage) {
+			plan->operand_observed_storages[storage] =
+				storage_lazy_capable(storage) ? 1 : 0;
+		}
+	}
+	/*
 	 * Per call site: 1 when its group of overlapping calls may use direct
 	 * calls, 0 when it may not, -1 before the group is examined.
 	 */
@@ -7543,8 +7806,19 @@ bool initialize_plan(
 				 * to the frame. Other PHI-backed stores remain materialized: their
 				 * selected source may not dominate every guarded continuation.
 				 */
+				/* A constant has no register definition that a boundary
+				 * could store. */
 				plan->instructions[i].zval_store_lazy_scalar =
-					block_is_cyclic(record.block_id)
+					!plan->values[source_index].constant
+					&& (block_is_cyclic(record.block_id)
+						|| (storage_lazy_capable(
+								plan->instructions[i].zval_store_storage_id)
+							&& plan->values[source_index].category
+								== ZEND_MIR_VALUE_NON_REFCOUNTED_SCALAR
+							&& zend_mir_scalar_type_is_exact(
+								plan->values[source_index].exact_type)
+							&& plan->values[source_index].exact_type
+								!= ZEND_MIR_SCALAR_TYPE_NULL))
 					&& (!phi_storage || loop_carried_integer_transport);
 			}
 			/*
@@ -7601,7 +7875,13 @@ bool initialize_plan(
 			if ((record.opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN_OP
 						|| record.opcode
 							== ZEND_MIR_OPCODE_VALUE_INCDEC)
-					&& block_is_cyclic(record.block_id)) {
+					&& (block_is_cyclic(record.block_id)
+						|| (plan->instructions[i].value_operation
+								.op1_storage_id
+								< storage_may_alias.size()
+							&& storage_lazy_capable(
+								plan->instructions[i].value_operation
+									.op1_storage_id)))) {
 				zend_tpde_long_assign_op long_assign{};
 				zend_tpde_long_incdec long_incdec{};
 				const zend_mir_executable_value_ref &operation =
@@ -11216,6 +11496,29 @@ static bool freeze_typed_component_calls(
 	return true;
 }
 
+/*
+ * Consumers of a slot-authoritative scalar load it from its canonical
+ * slot, so a lazy store of one must write the slot.  Lazy stores imply a
+ * non-counted previous value, which makes the plain form exact.
+ */
+static void demote_slot_backed_lazy_stores(zend_tpde_plan *plan) {
+	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+		zend_tpde_instruction &instruction = plan->instructions[index];
+		if (!instruction.zval_store_lazy_scalar
+				|| instruction.operand_count < 1) {
+			continue;
+		}
+		const int32_t source = zend_tpde_value_index(
+			plan, zend_tpde_operand_at(plan, &instruction, 0));
+		if (source < 0
+				|| (!plan->values[source].constant
+					&& !plan->values[source].register_authoritative)) {
+			instruction.zval_store_lazy_scalar = false;
+			instruction.zval_store_plain = true;
+		}
+	}
+}
+
 static bool retain_typed_call_materializations(
 		zend_tpde_plan *plan,
 		zend_native_diagnostic *diag) {
@@ -13116,6 +13419,7 @@ static bool freeze_component_machine_plan(
 			plans[index].may_emit_calls || typed_body_may_emit_calls;
 		freeze_machine_register_authority(
 			&plans[index]);
+		demote_slot_backed_lazy_stores(&plans[index]);
 		if (!freeze_machine_operand_transports(&plans[index], diag)) {
 			return false;
 		}
