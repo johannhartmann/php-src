@@ -225,6 +225,19 @@ typedef struct _zend_native_component_member {
 	const void *tier2_fallback_entry;
 } zend_native_component_member;
 
+/*
+ * Layout training (ZEND_NATIVE_LAYOUT_TRAIN=path): generated code counts the
+ * outcomes of its conditional jumps in shared memory that the process maps
+ * when it loads, so that the FPM workers forked from it share the counters
+ * at the same address. zend_tpde_layout_training_flush() writes them to
+ * path every few requests, for ZEND_NATIVE_LAYOUT_PROFILE=path. Code
+ * compiled then refers to that memory: its OPcache bundles are marked.
+ */
+bool zend_tpde_layout_training(void);
+/* The training run's shared memory, which compiled code refers to, or 0. */
+uint64_t zend_tpde_layout_training_session(void);
+void zend_tpde_layout_training_flush(void);
+
 /* Compiles every member into one image. */
 zend_result zend_tpde_compile_component(
 	zend_native_target target,

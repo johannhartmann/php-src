@@ -13,6 +13,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
+#include <deque>
+#include <glob.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <ctime>
 #include <unordered_map>
 #include <unordered_set>
 #include <memory>
@@ -30,11 +35,16 @@ using IRBlockRef = zend::native::tpde::IRBlockRef;
 using IRFuncRef = zend::native::tpde::IRFuncRef;
 
 /*
- * Profile-guided layout (ZEND_NATIVE_LAYOUT_PROFILE): per function key, the
- * ordinals of conditional jumps a profile found taken nearly always over
- * code that rarely runs. Read when the binary loads, before FPM clears the
- * environment of its workers.
+ * Profile-guided layout (ZEND_NATIVE_LAYOUT_PROFILE=path): per function key,
+ * the ordinals of conditional jumps nearly always taken over code that
+ * rarely runs. A line "key ordinal" names one; lines "key ordinal taken
+ * fallthrough" of path and of the training files path.* are summed and
+ * select the jumps taken at least nine times in ten over at least
+ * layout_minimum_executions runs. Read when the binary loads, before FPM
+ * clears the environment of its workers.
  */
+constexpr uint64_t layout_minimum_executions = 256;
+
 struct LayoutProfile {
 	std::unordered_map<uint64_t, std::unordered_set<uint32_t>> jumps;
 	/* "*" moves every eligible region, to test the transformation. */
@@ -48,17 +58,138 @@ struct LayoutProfile {
 			all = true;
 			return;
 		}
-		if (FILE *file = std::fopen(path, "r"); file != nullptr) {
-			unsigned long long key;
-			unsigned int ordinal;
-			while (std::fscanf(file, "%llx %u", &key, &ordinal) == 2) {
-				jumps[key].insert(ordinal);
+		std::unordered_map<uint64_t,
+			std::unordered_map<uint32_t, std::pair<uint64_t, uint64_t>>> counts;
+		read(path, counts);
+		const std::string pattern = std::string(path) + ".*";
+		glob_t files{};
+		if (::glob(pattern.c_str(), 0, nullptr, &files) == 0) {
+			for (size_t i = 0; i < files.gl_pathc; ++i) {
+				read(files.gl_pathv[i], counts);
 			}
-			std::fclose(file);
 		}
+		::globfree(&files);
+		for (const auto &[key, ordinals] : counts) {
+			for (const auto &[ordinal, outcome] : ordinals) {
+				const uint64_t executions = outcome.first + outcome.second;
+				if (executions >= layout_minimum_executions
+						&& outcome.first * 10 >= executions * 9) {
+					jumps[key].insert(ordinal);
+				}
+			}
+		}
+	}
+	void read(const char *path, std::unordered_map<uint64_t,
+			std::unordered_map<uint32_t, std::pair<uint64_t, uint64_t>>>
+				&counts) {
+		FILE *file = std::fopen(path, "r");
+		if (file == nullptr) {
+			return;
+		}
+		char line[128];
+		while (std::fgets(line, sizeof(line), file) != nullptr) {
+			unsigned long long key, taken, fallthrough;
+			unsigned int ordinal;
+			const int fields = std::sscanf(line, "%llx %u %llu %llu",
+				&key, &ordinal, &taken, &fallthrough);
+			if (fields == 2) {
+				jumps[key].insert(ordinal);
+			} else if (fields == 4) {
+				auto &outcome = counts[key][ordinal];
+				outcome.first += taken;
+				outcome.second += fallthrough;
+			}
+		}
+		std::fclose(file);
 	}
 };
 const LayoutProfile layout_profile;
+
+/*
+ * Layout training (ZEND_NATIVE_LAYOUT_TRAIN=path): each eligible jump gets
+ * a counter in shared memory mapped when the binary loads (in FPM's
+ * master, so that every worker shares it at the same address), which also
+ * records the jump's function key and ordinal.
+ */
+struct LayoutTraining {
+	struct Counter {
+		uint64_t key;
+		uint64_t ordinal;
+		uint64_t taken;
+		uint64_t fallthrough;
+	};
+	static constexpr size_t capacity = size_t{1} << 21;
+	/* A copy: FPM overwrites the environment with its process titles. */
+	std::string file;
+	const char *path = nullptr;
+	/* counters[0].key is the number of counters in use. */
+	Counter *counters = nullptr;
+	/* Tells this run's compiled code from another's: the mapping, the
+	 * process that made it and when. */
+	uint64_t session = 0;
+	uint32_t requests = 0;
+	LayoutTraining() {
+		const char *name = std::getenv("ZEND_NATIVE_LAYOUT_TRAIN");
+		if (name == nullptr || name[0] == '\0') {
+			return;
+		}
+		void *memory = ::mmap(nullptr, capacity * sizeof(Counter),
+			PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+		if (memory != MAP_FAILED) {
+			counters = static_cast<Counter *>(memory);
+			counters[0].key = 1;
+			file = name;
+			path = file.c_str();
+			timespec now{};
+			::clock_gettime(CLOCK_REALTIME, &now);
+			session = (static_cast<uint64_t>(
+					reinterpret_cast<uintptr_t>(memory))
+				^ (static_cast<uint64_t>(::getpid()) << 40)
+				^ static_cast<uint64_t>(now.tv_nsec)
+				^ (static_cast<uint64_t>(now.tv_sec) << 20)) | 1;
+		}
+	}
+	Counter *allocate(uint64_t key, uint32_t ordinal) {
+		const uint64_t index =
+			__atomic_fetch_add(&counters[0].key, 1, __ATOMIC_RELAXED);
+		if (index >= capacity) {
+			return nullptr;
+		}
+		counters[index].key = key;
+		counters[index].ordinal = ordinal;
+		return &counters[index];
+	}
+	/* The counts so far replace the file, renamed into place. */
+	void write() const {
+		const uint64_t used = std::min<uint64_t>(
+			__atomic_load_n(&counters[0].key, __ATOMIC_RELAXED), capacity);
+		const std::string name = std::string(path) + ".tmp"
+			+ std::to_string(static_cast<long>(::getpid()));
+		FILE *file = std::fopen(name.c_str(), "w");
+		if (file == nullptr) {
+			return;
+		}
+		for (uint64_t index = 1; index < used; ++index) {
+			const Counter &counter = counters[index];
+			if (counter.taken + counter.fallthrough != 0) {
+				std::fprintf(file, "%llx %u %llu %llu\n",
+					static_cast<unsigned long long>(counter.key),
+					static_cast<unsigned>(counter.ordinal),
+					static_cast<unsigned long long>(counter.taken),
+					static_cast<unsigned long long>(counter.fallthrough));
+			}
+		}
+		std::fclose(file);
+		std::rename(name.c_str(), path);
+	}
+	/* A process that exits normally (the CLI) writes the last counts. */
+	~LayoutTraining() {
+		if (path != nullptr) {
+			write();
+		}
+	}
+};
+LayoutTraining layout_training;
 
 struct ZendX64Config : tpde::x64::PlatformConfig {
 	static constexpr bool DEFAULT_VAR_REF_HANDLING = false;
@@ -2532,9 +2663,45 @@ public:
 		layout_jumps_ = found == layout_profile.jumps.end()
 			? nullptr : &found->second;
 	}
+	/* Adds one to *counter, preserving every register and the flags. */
+	void emit_layout_count(uint64_t *counter) {
+		ASM(LEA64rm, FE_SP, FE_MEM(FE_SP, 0, FE_NOREG, -128));
+		ASM(PUSHF);
+		ASM(PUSHr, FE_AX);
+		ASM(MOV64ri, FE_AX, static_cast<int64_t>(
+			reinterpret_cast<uintptr_t>(counter)));
+		ASM(ADD64mi, FE_MEM(FE_AX, 0, FE_NOREG, 0), 1);
+		ASM(POPr, FE_AX);
+		ASM(POPF);
+		ASM(LEA64rm, FE_SP, FE_MEM(FE_SP, 0, FE_NOREG, 128));
+	}
 	void generate_raw_jump(Jump jump, tpde::Label target) {
 		if (jump != Jump::jmp) {
 			const uint32_t ordinal = layout_jump_ordinal_++;
+			if (layout_training.path != nullptr && layout_in_inst_
+					&& !text_writer.in_cold_area()
+					&& text_writer.label_is_pending(target)) {
+				/* Both outcomes pass a counting stub in the cold area. */
+				LayoutTraining::Counter *counter = layout_training.allocate(
+					layout_function_key_, ordinal);
+				if (counter != nullptr) {
+					const tpde::Label taken = text_writer.label_create();
+					const tpde::Label fallthrough = text_writer.label_create();
+					const tpde::Label resume = text_writer.label_create();
+					Base::generate_raw_jump(jump, taken);
+					Base::generate_raw_jump(Jump::jmp, fallthrough);
+					text_writer.begin_cold_area();
+					Base::label_place(taken);
+					emit_layout_count(&counter->taken);
+					Base::generate_raw_jump(Jump::jmp, target);
+					Base::label_place(fallthrough);
+					emit_layout_count(&counter->fallthrough);
+					Base::generate_raw_jump(Jump::jmp, resume);
+					text_writer.end_cold_area();
+					Base::label_place(resume);
+					return;
+				}
+			}
 			if ((layout_jumps_ != nullptr || layout_profile.all)
 					&& layout_in_inst_
 					&& !layout_region_.active
@@ -23475,4 +23642,23 @@ zend_result zend_tpde_emit_linux_x64(
 	image->target_state = state.release();
 	image->destroy_target_state = destroy_x64_state;
 	return SUCCESS;
+}
+
+extern "C" bool zend_tpde_layout_training(void)
+{
+	return layout_training.path != nullptr;
+}
+
+extern "C" uint64_t zend_tpde_layout_training_session(void)
+{
+	return layout_training.session;
+}
+
+/* FPM workers exit without destructors: every sixteenth request writes. */
+extern "C" void zend_tpde_layout_training_flush(void)
+{
+	if (layout_training.path != nullptr
+			&& ++layout_training.requests % 16 == 0) {
+		layout_training.write();
+	}
 }

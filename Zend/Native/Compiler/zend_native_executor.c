@@ -367,21 +367,26 @@ static void zend_native_executor_persistent_dispatch_dtor(zval *value)
 }
 
 #define ZEND_NATIVE_OPCACHE_BUNDLE_MAGIC UINT64_C(0x313342434f4e5a)
-#define ZEND_NATIVE_OPCACHE_BUNDLE_FORMAT 2u
+#define ZEND_NATIVE_OPCACHE_BUNDLE_FORMAT 3u
 #define ZEND_NATIVE_OPCACHE_BUNDLE_HEAP 1u
 #define ZEND_NATIVE_OPCACHE_BUNDLE_PERSISTENT 2u
 #define ZEND_NATIVE_OPCACHE_BUNDLE_REQUEST_ARENA 3u
 #define ZEND_NATIVE_OPCACHE_BUNDLE_SOURCE_PROBE (1u << 0)
 #define ZEND_NATIVE_OPCACHE_BUNDLE_FRAME_PROBE (1u << 1)
+/* Code of a layout training run counts in that run's shared memory. */
+#define ZEND_NATIVE_OPCACHE_BUNDLE_LAYOUT_TRAINING (1u << 2)
 #define ZEND_NATIVE_OPCACHE_BUNDLE_KNOWN_FLAGS \
 	(ZEND_NATIVE_OPCACHE_BUNDLE_SOURCE_PROBE \
-		| ZEND_NATIVE_OPCACHE_BUNDLE_FRAME_PROBE)
+		| ZEND_NATIVE_OPCACHE_BUNDLE_FRAME_PROBE \
+		| ZEND_NATIVE_OPCACHE_BUNDLE_LAYOUT_TRAINING)
 
 typedef struct _zend_native_opcache_bundle {
 	uint64_t magic;
 	uint32_t format;
 	uint32_t storage;
 	uint32_t flags;
+	/* The layout training run whose counters the code updates, or 0. */
+	uint64_t training_session;
 	size_t size;
 	unsigned char bytes[1];
 } zend_native_opcache_bundle;
@@ -423,7 +428,19 @@ static uint32_t zend_native_executor_bundle_flags(void)
 	if (zend_native_executor_frame_probe != NULL) {
 		flags |= ZEND_NATIVE_OPCACHE_BUNDLE_FRAME_PROBE;
 	}
+	if (zend_tpde_layout_training()) {
+		flags |= ZEND_NATIVE_OPCACHE_BUNDLE_LAYOUT_TRAINING;
+	}
 	return flags;
+}
+
+/* A bundle another process compiled for its own layout training (through
+ * the file cache) would count in memory this one does not share. */
+static bool zend_native_executor_bundle_compatible(
+	const zend_native_opcache_bundle *bundle)
+{
+	return bundle->flags == zend_native_executor_bundle_flags()
+		&& bundle->training_session == zend_tpde_layout_training_session();
 }
 
 static size_t zend_native_executor_bundle_allocation_size(
@@ -1501,7 +1518,7 @@ zend_native_executor_create_generation(zend_op_array *root)
 		return NULL;
 	}
 	if (bundle != NULL && !generation->links_at_runtime
-			&& bundle->flags == zend_native_executor_bundle_flags()
+			&& zend_native_executor_bundle_compatible(bundle)
 			&& zend_native_compiler_import_bundle(
 				generation->compiler, bundle->bytes, bundle->size,
 				&diagnostic) == FAILURE) {
@@ -2123,6 +2140,7 @@ static void zend_native_executor_drain_tier2(void)
 void zend_native_executor_deactivate(void)
 {
 	zend_native_executor_drain_tier2();
+	zend_tpde_layout_training_flush();
 	zend_native_compile_trace_request_end("request_shutdown");
 	zend_native_executor_request_state.active = false;
 	zend_native_executor_request_state.pending_opcodes = NULL;
@@ -2372,7 +2390,7 @@ static zend_result zend_native_executor_prepare_script_impl(
 	}
 	if (zend_native_executor_bundle(&script->main_op_array) != NULL) {
 		bundle = zend_native_executor_bundle(&script->main_op_array);
-		if (bundle->flags == zend_native_executor_bundle_flags()
+		if (zend_native_executor_bundle_compatible(bundle)
 				|| bundle->storage
 					!= ZEND_NATIVE_OPCACHE_BUNDLE_HEAP) {
 			return SUCCESS;
@@ -2434,6 +2452,7 @@ static zend_result zend_native_executor_prepare_script_impl(
 	bundle->format = ZEND_NATIVE_OPCACHE_BUNDLE_FORMAT;
 	bundle->storage = ZEND_NATIVE_OPCACHE_BUNDLE_HEAP;
 	bundle->flags = zend_native_executor_bundle_flags();
+	bundle->training_session = zend_tpde_layout_training_session();
 	bundle->size = size;
 	memcpy(bundle->bytes, bytes, size);
 	zend_native_compiler_bundle_destroy(bytes);
