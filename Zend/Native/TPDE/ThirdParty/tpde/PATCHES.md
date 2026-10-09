@@ -124,8 +124,9 @@ is written,
 shortens every jump whose target lies within rel8 range to the 2-byte form
 and removes jumps to the next instruction. A conditional jump over an
 unconditional one (`jcc A; jmp B; A:`) becomes the inverted `jcc B` when no
-label is placed at the `jmp`, so nothing else can enter it. It iterates to a fixed point
-(shortening never lengthens another jump), compacts the code from the end of
+label is placed at the `jmp`, so nothing else can enter it. It starts with
+every jump short and lengthens those whose target lies out of rel8 range,
+iterating to a fixed point (lengthening never shortens another jump), compacts the code from the end of
 the reserved prologue on, and moves labels, the remaining fixups, jump
 tables and relocations (`DataSection::remap_relocation_offsets`) with it.
 Code before the prologue, such as an alternative entry, is not touched.

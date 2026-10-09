@@ -92,8 +92,10 @@ void FunctionWriterX64::relax_jumps(u32 body_begin) {
     ++k;
   }
 
-  // removed[k]: bytes removed by jumps[0..k-1]. Shortening a jump never
-  // lengthens another, so decisions taken with stale sums stay valid.
+  // removed[k]: bytes removed by jumps[0..k-1]. Every jump starts short
+  // (or removed when it targets the next instruction); a jump whose rel8
+  // displacement does not fit grows back to rel32. Growing never shortens
+  // another jump, so a few passes reach the fixed point.
   util::SmallVector<u32, 0> removed;
   removed.resize(jumps.size() + 1);
   const auto recount = [&] {
@@ -111,28 +113,32 @@ void FunctionWriterX64::relax_jumps(u32 body_begin) {
     return off - removed[it - jumps.begin()];
   };
 
+  for (Jump &jump : jumps) {
+    if (jump.len == 0) {
+      continue;
+    }
+    const u32 target = label_offsets[u32(jump.label)];
+    assert(target != ~0u && target < ColdAreaBase);
+    jump.len = target == jump.start + jump.len ? 0 : 2;
+  }
   recount();
   for (bool changed = true; changed;) {
     changed = false;
     for (u32 k = 0; k < jumps.size(); ++k) {
       Jump &jump = jumps[k];
-      if (jump.len <= 2) {
+      if (jump.len != 2) {
         continue;
       }
       const u32 target = label_offsets[u32(jump.label)];
-      assert(target != ~0u && target < ColdAreaBase);
-      if (target == jump.start + jump.len) {
-        jump.len = 0;
-        changed = true;
-        continue;
-      }
       const i64 delta = i64(map(target)) - (i64(jump.start - removed[k]) + 2);
-      if (delta >= -128 && delta <= 127) {
-        jump.len = 2;
+      if (delta < -128 || delta > 127) {
+        jump.len = jump.opcode == 0xeb ? 5 : 6;
         changed = true;
       }
     }
-    recount();
+    if (changed) {
+      recount();
+    }
   }
   if (removed[jumps.size()] == 0) {
     return;
