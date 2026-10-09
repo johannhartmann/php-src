@@ -447,6 +447,23 @@ static void zend_enum_register_func(zend_class_entry *ce, zend_known_string_id n
 	}
 }
 
+/* An enum served from the inheritance cache shares its internal methods with
+ * every request; each request gives them a run-time cache, as linking does. */
+void zend_enum_init_cached_funcs(zend_class_entry *ce)
+{
+	zend_function *func;
+
+	ZEND_HASH_MAP_FOREACH_PTR(&ce->function_table, func) {
+		if (func->type == ZEND_INTERNAL_FUNCTION
+				&& (func->common.fn_flags & ZEND_ACC_ARENA_ALLOCATED)
+				&& func->common.scope == ce
+				&& ZEND_MAP_PTR_GET(func->common.run_time_cache) == NULL) {
+			ZEND_MAP_PTR_SET(func->common.run_time_cache, zend_arena_calloc(
+				&CG(arena), 1, zend_internal_run_time_cache_reserved_size()));
+		}
+	} ZEND_HASH_FOREACH_END();
+}
+
 void zend_enum_register_funcs(zend_class_entry *ce)
 {
 	const uint32_t fn_flags =

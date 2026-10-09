@@ -3619,12 +3619,10 @@ ZEND_API zend_class_entry *zend_do_link_class(zend_class_entry *ce, zend_string 
 		}
 	}
 
-#ifndef ZEND_WIN32
-	if (ce->ce_flags & ZEND_ACC_ENUM) {
-		/* We will add internal methods. */
-		is_cacheable = false;
-	}
-#endif
+	/* An enum's internal methods (cases(), from(), tryFrom()) are
+	 * arena-allocated during linking; OPcache persists them with the linked
+	 * class (zend_persist_class_method()), so an enum is cacheable like any
+	 * other class and is no longer linked again by every request. */
 
 	if (ce->ce_flags & ZEND_ACC_IMMUTABLE && is_cacheable) {
 		if (zend_inheritance_cache_get && zend_inheritance_cache_add) {
@@ -3632,6 +3630,9 @@ ZEND_API zend_class_entry *zend_do_link_class(zend_class_entry *ce, zend_string 
 			if (ret) {
 				if (traits_and_interfaces) {
 					free_alloca(traits_and_interfaces, use_heap);
+				}
+				if (ret->ce_flags & ZEND_ACC_ENUM) {
+					zend_enum_init_cached_funcs(ret);
 				}
 				zv = zend_hash_find_known_hash(CG(class_table), key);
 				Z_CE_P(zv) = ret;
@@ -3840,6 +3841,9 @@ ZEND_API zend_class_entry *zend_do_link_class(zend_class_entry *ce, zend_string 
 			zv = zend_hash_find_known_hash(CG(class_table), key);
 			ce = new_ce;
 			Z_CE_P(zv) = ce;
+			if (ce->ce_flags & ZEND_ACC_ENUM) {
+				zend_enum_init_cached_funcs(ce);
+			}
 		}
 		if (ht) {
 			zend_hash_destroy(ht);

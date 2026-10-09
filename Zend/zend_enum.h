@@ -46,6 +46,7 @@ zend_result zend_enum_build_backed_enum_table(zend_class_entry *ce);
 zend_object *zend_enum_new(zval *result, zend_class_entry *ce, int case_id, zend_string *case_name, zval *backing_value_zv);
 void zend_verify_enum(const zend_class_entry *ce);
 void zend_enum_register_funcs(zend_class_entry *ce);
+void zend_enum_init_cached_funcs(zend_class_entry *ce);
 void zend_enum_register_props(zend_class_entry *ce);
 int zend_enum_next_case_id(zend_class_entry *enum_class);
 
