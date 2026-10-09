@@ -2413,6 +2413,8 @@ public:
 		std::vector<uint8_t> generator_resume_emitted;
 		std::vector<uint8_t> source_landing_emitted;
 		std::vector<uint32_t> source_landing_blocks;
+		/* The entry block lands no source opcode (see below). */
+		bool source_synthetic_entry = false;
 		std::vector<uint32_t> source_block_next;
 		const zend_tpde_machine_cfg &machine_cfg =
 			function_mode_ == FunctionMode::TypedBody
@@ -2759,13 +2761,46 @@ public:
 			} else {
 				source_block_next.resize(
 					plan_->source_block_count, UINT32_MAX);
+				/*
+				 * A loop back to the first opcode gets an entry block of its
+				 * own, whose arguments and constants name source position 0
+				 * while the opcode runs at the loop header: such an entry
+				 * lands no source opcode.
+				 */
+				bool synthetic_entry = plan_->source_opcode_count != 0
+					&& plan_->source_opcodes[0].opcode != ZEND_RECV
+					&& plan_->source_opcodes[0].opcode != ZEND_RECV_INIT
+					&& plan_->source_opcodes[0].opcode != ZEND_RECV_VARIADIC;
+				bool first_block_after_entry = false;
+				for (uint32_t instruction = 0; synthetic_entry
+						&& instruction < plan_->instruction_count;
+						++instruction) {
+					const zend_mir_instruction_record record =
+						instruction_record_at(instruction);
+					if (record.source_position_id
+							>= plan_->source_opcode_count) {
+						continue;
+					}
+					if (record.block_id == plan_->function.entry_block_id) {
+						synthetic_entry = record.source_position_id == 0;
+					} else if (plan_->source_opcode_block_indices[
+								record.source_position_id]
+							== plan_->source_opcode_block_indices[0]) {
+						first_block_after_entry = true;
+					}
+				}
+				synthetic_entry = synthetic_entry && first_block_after_entry;
+				source_synthetic_entry = synthetic_entry;
 				for (uint32_t instruction = 0;
 						instruction < plan_->instruction_count;
 						++instruction) {
 					const zend_mir_instruction_record record =
 						instruction_record_at(instruction);
 					if (record.source_position_id
-							>= plan_->source_opcode_count) {
+							>= plan_->source_opcode_count
+							|| (synthetic_entry
+								&& record.block_id
+									== plan_->function.entry_block_id)) {
 						continue;
 					}
 					const uint32_t source_block =
@@ -5910,7 +5945,10 @@ public:
 			if (source_landings
 					&& plan_->source_opcode_block_indices != nullptr
 					&& record.source_position_id
-						< plan_->source_opcode_count) {
+						< plan_->source_opcode_count
+					&& !(source_synthetic_entry
+						&& record.block_id
+							== plan_->function.entry_block_id)) {
 				const uint32_t source_block =
 					plan_->source_opcode_block_indices[
 						record.source_position_id];
