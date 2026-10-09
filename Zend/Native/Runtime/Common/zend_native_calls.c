@@ -1392,6 +1392,7 @@ void zend_native_reentry_invalidate_persistent(void)
 {
 	zend_native_reentry_persistent_epoch++;
 	zend_native_call_recorded_targets_forget(NULL, 0);
+	zend_native_value_forget_return_classes(NULL, 0);
 }
 
 void zend_native_reentry_forget_cells(
@@ -1412,6 +1413,20 @@ void zend_native_reentry_forget_cells(
 		}
 	}
 	zend_native_call_recorded_targets_forget(cells, count);
+	{
+		const zend_op *opcodes[64];
+		uint32_t known = 0;
+
+		for (uint32_t index = 0; index < count && known < 64; index++) {
+			if (cells[index]->function != NULL
+					&& ZEND_USER_CODE(cells[index]->function->type)) {
+				opcodes[known++] = cells[index]->function->op_array.opcodes;
+			}
+		}
+		if (known != 0) {
+			zend_native_value_forget_return_classes(opcodes, known);
+		}
+	}
 }
 
 static zend_always_inline uint64_t zend_native_reentry_cache_epoch(void)
@@ -4588,6 +4603,7 @@ zend_native_call_fast_receive_prepare(
 	}
 	receive->num_args = op_array->num_args;
 	receive->class_mask = 0;
+	receive->ast_mask = 0;
 	for (index = 0; index < op_array->num_args; index++) {
 		const zend_op *opline = &op_array->opcodes[index];
 		const zend_type type = op_array->arg_info[index].type;
@@ -4610,9 +4626,16 @@ zend_native_call_fast_receive_prepare(
 			return receive;
 		}
 		value = RT_CONSTANT(opline, opline->op2);
-		/* A constant expression, a counted value or one the parameter
-		 * type would coerce keeps the generic receive. */
-		if (Z_TYPE_P(value) == IS_CONSTANT_AST || Z_REFCOUNTED_P(value)
+		/* A constant expression is evaluated per request
+		 * (zend_native_call_fast_receive_ast_default()); a counted value
+		 * or one the parameter type would coerce keeps the generic
+		 * receive. */
+		if (Z_TYPE_P(value) == IS_CONSTANT_AST) {
+			receive->ast_mask |= UINT32_C(1) << index;
+			receive->defaults[index] = value;
+			continue;
+		}
+		if (Z_REFCOUNTED_P(value)
 				|| (receive->type_masks[index]
 					& (UINT32_C(1) << Z_TYPE_P(value))) == 0) {
 			return receive;
@@ -9425,13 +9448,18 @@ static bool zend_native_call_fast_receive_frame(
 		return false;
 	}
 	for (index = 0; index < received; index++) {
-		if ((receive->type_masks[index] & (UINT32_C(1) << Z_TYPE_P(
-				ZEND_CALL_ARG(callee, index + 1)))) == 0) {
+		const zval *argument = ZEND_CALL_ARG(callee, index + 1);
+
+		if ((receive->type_masks[index]
+					& (UINT32_C(1) << Z_TYPE_P(argument))) == 0
+				&& !zend_native_call_fast_receive_class_hit(
+					receive, index, argument)) {
 			return false;
 		}
 	}
 	for (index = supplied; index < declared; index++) {
-		if (receive->defaults[index] == NULL) {
+		if (receive->defaults[index] == NULL
+				|| (receive->ast_mask & (UINT32_C(1) << index)) != 0) {
 			return false;
 		}
 	}
@@ -9488,6 +9516,53 @@ static bool zend_native_call_fast_receive_frame(
  * site's Init resolved, NULL for a published one; result_offset is the
  * result slot's frame offset, UINT32_MAX for a discarded result.
  */
+/*
+ * A constant-expression default, as ZEND_RECV_INIT receives it: the value
+ * cached in the run-time cache, else evaluated (and cached when it is not
+ * counted and had no side effects). A value the parameter's type bits do not
+ * take is verified as the generic receive verifies a default.
+ */
+static zend_never_inline uint32_t zend_native_call_fast_receive_ast_default(
+	zend_execute_data *callee, const zend_native_call_fast_receive *receive,
+	uint32_t parameter, zval *argument)
+{
+	const zval *default_value = receive->defaults[parameter];
+	zval *cache_value = (zval *) ((char *) callee->run_time_cache
+		+ Z_CACHE_SLOT_P(default_value));
+	zend_ast_evaluate_ctx context = {0};
+
+	if (Z_TYPE_P(cache_value) != IS_UNDEF) {
+		ZVAL_COPY_VALUE(argument, cache_value);
+	} else {
+		callee->opline = &callee->func->op_array.opcodes[parameter];
+		ZVAL_COPY(argument, default_value);
+		if (UNEXPECTED(zval_update_constant_with_ctx(argument,
+				callee->func->op_array.scope, &context) != SUCCESS)) {
+			zval_ptr_dtor_nogc(argument);
+			ZVAL_UNDEF(argument);
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		if (!Z_REFCOUNTED_P(argument) && !context.had_side_effects) {
+			ZVAL_COPY_VALUE(cache_value, argument);
+		}
+	}
+	if ((receive->type_masks[parameter]
+			& (UINT32_C(1) << Z_TYPE_P(argument))) == 0) {
+		/* Verified as the generic receive verifies a default: coerced,
+		 * or reported. */
+		const zend_arg_info *info =
+			&callee->func->op_array.arg_info[parameter];
+
+		callee->opline = &callee->func->op_array.opcodes[parameter];
+		if (!zend_check_type_ex(&info->type, argument, false, false)) {
+			zend_verify_arg_error(
+				callee->func, info, parameter + 1, argument);
+			return ZEND_NATIVE_EXCEPTION;
+		}
+	}
+	return ZEND_NATIVE_RETURNED;
+}
+
 uint32_t zend_native_call_fast_do(
 	zend_execute_data *caller,
 	zend_native_execution_context *context,
@@ -9576,9 +9651,19 @@ uint32_t zend_native_call_fast_do(
 		} else if ((flags & ZEND_NATIVE_CALL_FAST_DEFAULTS) != 0) {
 			for (uint32_t index = 0; index < header->fast_default_count;
 					index++) {
-				ZVAL_COPY_VALUE(ZEND_CALL_ARG(callee,
-						argument_count + index + 1),
-					receive->defaults[argument_count + index]);
+				const uint32_t parameter = argument_count + index;
+				zval *argument = ZEND_CALL_ARG(callee, parameter + 1);
+
+				if (UNEXPECTED((receive->ast_mask
+						& (UINT32_C(1) << parameter)) != 0)) {
+					status = zend_native_call_fast_receive_ast_default(
+						callee, receive, parameter, argument);
+					if (status != ZEND_NATIVE_RETURNED) {
+						break;
+					}
+					continue;
+				}
+				ZVAL_COPY_VALUE(argument, receive->defaults[parameter]);
 			}
 		}
 	}
