@@ -761,10 +761,29 @@ class ZendCompilerX64 final
 	bool source_call_fast_dynamic(const zend_tpde_instruction &call) const {
 		const zend_native_user_call_descriptor *descriptor = call.user_call;
 		const zend_tpde_plan *plan = adaptor->plan();
+		/* $object->$method(...): a method named by a CV takes the
+		 * dynamic path (zend_native_call_fast_dynamic_init()). */
+		const bool variable_method = descriptor != nullptr
+			&& descriptor->init_opcode == ZEND_INIT_METHOD_CALL
+			&& (descriptor->init_op2.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| descriptor->init_op2.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& descriptor->init_op2.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+			&& (descriptor->init_op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+				|| ((descriptor->init_op1.kind
+							== ZEND_MIR_SOURCE_OPERAND_SLOT
+						|| descriptor->init_op1.kind
+							== ZEND_MIR_SOURCE_OPERAND_SSA)
+					&& (descriptor->init_op1.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_CV
+						|| descriptor->init_op1.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_TMP
+						|| descriptor->init_op1.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_VAR)));
 		if (!adaptor->generator_resume_targets().empty()
 				|| descriptor == nullptr || descriptor->flags != 0
 				|| (descriptor->init_opcode != ZEND_INIT_USER_CALL
-					&& descriptor->init_opcode != ZEND_INIT_DYNAMIC_CALL)
+					&& descriptor->init_opcode != ZEND_INIT_DYNAMIC_CALL
+					&& !variable_method)
 				|| (descriptor->do_opcode != ZEND_DO_UCALL
 					&& descriptor->do_opcode != ZEND_DO_FCALL
 					&& descriptor->do_opcode != ZEND_DO_FCALL_BY_NAME)
@@ -793,7 +812,9 @@ class ZendCompilerX64 final
 						&& argument.source_opcode != ZEND_SEND_VAR
 						&& argument.source_opcode != ZEND_SEND_VAR_EX
 						&& argument.source_opcode != ZEND_SEND_USER
-						&& argument.source_opcode != ZEND_SEND_ARRAY)
+						&& argument.source_opcode != ZEND_SEND_ARRAY
+						&& (argument.source_opcode != ZEND_SEND_UNPACK
+							|| !variable_method))
 					|| (argument.source_opcode != ZEND_SEND_ARRAY
 						&& argument.auxiliary_operand.kind
 							!= ZEND_MIR_SOURCE_OPERAND_UNUSED)
