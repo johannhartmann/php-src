@@ -815,6 +815,12 @@ uint32_t zend_native_call_fast_do(
 	const zend_native_user_call_descriptor *descriptor,
 	zend_native_frame_entry_t dynamic_entry,
 	uint32_t result_offset);
+uint32_t zend_native_call_fast_do_internal(
+	zend_execute_data *caller,
+	zend_native_execution_context *context,
+	const zend_native_user_call_descriptor *descriptor,
+	zend_native_frame_entry_t dynamic_entry,
+	uint32_t result_offset);
 typedef uint32_t (*zend_native_call_fast_do_t)(
 	zend_execute_data *caller,
 	zend_native_execution_context *context,
@@ -879,6 +885,9 @@ zend_native_direct_call_result zend_native_call_direct_leave(
 /* A new site of a class without a constructor: the Init only creates the
  * object (fast_function is NULL) and the Do calls nothing. */
 #define ZEND_NATIVE_CALL_FAST_NO_CALL UINT32_C(128)
+/* A by-name site of an internal function: the Do runs its handler as
+ * ZEND_DO_ICALL does (zend_native_call_fast_do_internal()). */
+#define ZEND_NATIVE_CALL_FAST_INTERNAL UINT32_C(256)
 
 
 const uint64_t *zend_native_call_cache_epoch_address(void);
