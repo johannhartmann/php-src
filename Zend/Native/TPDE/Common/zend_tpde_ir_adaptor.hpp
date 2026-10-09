@@ -4725,6 +4725,45 @@ public:
 			}
 			return canonical;
 		};
+		/*
+		 * A source binding without its own definition resolves through the
+		 * global override chain, which a reused SSA identity may have pointed
+		 * at a derived value defined on another path. A register operand is
+		 * usable only where one of its definitions dominates the use.
+		 */
+		auto register_operand_reaches = [&](IRValueRef value,
+				uint32_t use_block, uint32_t use_instruction) {
+			if (derived_value(value) == nullptr) {
+				return true;
+			}
+			bool defined = false;
+			for (uint32_t definition = 0;
+					definition < active_instruction_results().size();
+					++definition) {
+				if (active_instruction_results()[definition] != value) {
+					continue;
+				}
+				defined = true;
+				if (machine_block_dominates(
+							instruction_blocks[definition], use_block)
+						&& (instruction_blocks[definition] != use_block
+							|| definition < use_instruction)) {
+					return true;
+				}
+			}
+			for (uint32_t definition = 0;
+					definition < selected_phi_results.size(); ++definition) {
+				if (selected_phi_results[definition] != value) {
+					continue;
+				}
+				defined = true;
+				if (machine_block_dominates(
+						instruction_blocks[definition], use_block)) {
+					return true;
+				}
+			}
+			return !defined;
+		};
 		auto entry_argument_has_register_definition =
 				[&](IRValueRef value) {
 			if (function_mode_ != FunctionMode::ZendEntry) {
@@ -6154,6 +6193,8 @@ public:
 						&& exact_type(candidate) == ZEND_MIR_SCALAR_TYPE_I1
 						&& machine_value_is_register_authoritative(candidate)
 						&& machine_value_has_register_definition(candidate)
+						&& register_operand_reaches(candidate,
+							static_cast<uint32_t>(block), i)
 						&& machine_kind(candidate)
 							!= ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR) {
 					canonical_bool_unary_exact_type =
@@ -6179,7 +6220,9 @@ public:
 				}
 				if (candidate != INVALID_VALUE_REF
 						&& machine_value_is_register_authoritative(candidate)
-						&& machine_value_has_register_definition(candidate)) {
+						&& machine_value_has_register_definition(candidate)
+						&& register_operand_reaches(candidate,
+							static_cast<uint32_t>(block), i)) {
 					if (boxed_cond_branch
 							&& machine_kind(candidate)
 								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
